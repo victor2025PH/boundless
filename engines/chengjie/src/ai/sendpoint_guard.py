@@ -503,6 +503,18 @@ def presynth_text_guard(
         if not cfg.get("enabled", True):
             return src
         out = src
+        # 2026-09-12：系统标签绝不能被念出来（「[Voice message from our side]」经分条
+        # 语音真被 TTS 读成 "voice message from our side." ——ASR 回听实锤）。文本主链
+        # 的 apply_outbound_text_guard 已剥一遍，这里兜住不经主链的语音稿来源。
+        if cfg.get("system_label", True):
+            from src.ai.outbound_text_guard import strip_system_labels
+            out_l, lhits = strip_system_labels(out)
+            if lhits:
+                _bump("voice_system_label")
+                logger.warning(
+                    "[sendpoint] 语音念稿剥离系统标签 %r persona=%s: %r → %r",
+                    [h[:30] for h in lhits[:3]], persona_id, out[:50], out_l[:50])
+                out = out_l
         if cfg.get("vocative", True):
             names = resolve_sendpoint_names(
                 config, "", "", persona_id=str(persona_id or ""))

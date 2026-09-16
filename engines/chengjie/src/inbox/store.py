@@ -3992,6 +3992,25 @@ class InboxStore:
                 ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def list_outbound_bracket_rows(
+        self, *, since_ts: float, limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """巡检用（2026-09-12 标签泄漏事故）：``since_ts`` 之后、正文以方括号开头的**出站**行。
+
+        只回巡检/清理需要的列；判定（哪些是合法镜像占位、哪些是 LLM 照抄的系统标签）
+        在 ``label_leak_scan.classify_outbound_text``，本方法不带语义。软删/已撤回行不给。
+        """
+        limit = max(1, min(2000, int(limit or 500)))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT message_id, conversation_id, ts, text, media_type, sent_by "
+                "FROM messages WHERE direction = 'out' AND ts > ? "
+                "AND (text LIKE '[%' OR text LIKE '【%') "
+                "AND deleted_at = 0 AND revoked = 0 ORDER BY ts DESC LIMIT ?",
+                (float(since_ts or 0.0), limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def last_message_dirs(
         self, conversation_ids: Optional[List[str]] = None,
     ) -> Dict[str, Dict[str, Any]]:

@@ -99,6 +99,43 @@ def effective_clone_language(text: str, default: str = "zh") -> str:
 # 与后端无关的兜底保证（换任何克隆主机都有效）。短回复（≤N 字）单块直发，零行为变化。
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?…\n；;])")
 _CHUNK_SECONDARY_SEPS = "，,、：: "
+_LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+#: 拉丁主体文本的字符预算倍率（2026-09-12 实锤：英文分条按 36 字切成
+#: "Yeah, it's super calm here at the" / "dock this morning. Just me and the" /
+#: "coffee, watching the seagulls." 三条各 2 秒碎句）。CJK 一字≈一音节；拉丁文一词
+#: ≈5-6 字符——同样 36 字符中文≈9 秒、英文≈2 秒，按 3 倍折算才是同一时长口径。
+LATIN_BUDGET_SCALE = 3.0
+
+
+def latin_budget_scale(text: str) -> float:
+    """文字系统 → 字符预算倍率：拉丁主体（字母 ≥60% 且 CJK <20%）→ ``LATIN_BUDGET_SCALE``，
+    其余（含中英混排）→ 1.0。纯函数。"""
+    t = str(text or "")
+    letters = len(_LATIN_LETTER_RE.findall(t))
+    cjk = len(_CJK_CHAR_RE.findall(t))
+    total = letters + cjk
+    if total <= 0:
+        return 1.0
+    if cjk / total < 0.2 and letters / total >= 0.6:
+        return LATIN_BUDGET_SCALE
+    return 1.0
+
+
+def effective_min_total(text: str, min_total_chars: int) -> int:
+    """分条「总长门槛」按文字系统折算（英文 40 字符≈8 个词，切两条毫无意义）。"""
+    try:
+        return max(1, int(round(int(min_total_chars or 0) * latin_budget_scale(text))))
+    except (TypeError, ValueError):
+        return int(min_total_chars or 0)
+
+
+def _join_pieces(a: str, b: str) -> str:
+    """拼接两段文本：两侧都是 ASCII 字母/数字时补一个空格（"dock"+"at" 曾粘成 "dockat"），
+    CJK 直拼不留空格。"""
+    if a and b and a[-1].isascii() and a[-1].isalnum() and b[0].isascii() and b[0].isalnum():
+        return a + " " + b
+    return a + b
 
 
 def _split_sentences_keep(text: str) -> List[str]:
@@ -107,17 +144,28 @@ def _split_sentences_keep(text: str) -> List[str]:
     return [p for p in (x.strip() for x in parts) if p]
 
 
+_CHUNK_STRONG_SEPS = "，,、：:；;"
+
+
 def _hard_split_long(seg: str, max_chars: int) -> List[str]:
-    """单句仍超长 → 在逗号/顿号/空格等次级边界硬切，无边界则按 max_chars 硬切。"""
+    """单句仍超长 → 在逗号/顿号/空格等次级边界硬切，无边界则按 max_chars 硬切。
+
+    2026-09-12：优先子句标点（逗号/分号），只有标点太靠前（窗口前 40%）才退到空格
+    ——英文长句此前总在窗口末尾的空格处切，句子被截在 "on the dock at" 这种半截短语上。
+    """
     out: List[str] = []
     rest = seg.strip()
     while len(rest) > max_chars:
         window = rest[:max_chars]
         cut = -1
-        for sep in _CHUNK_SECONDARY_SEPS:
+        for sep in _CHUNK_STRONG_SEPS:
             idx = window.rfind(sep)
             if idx > cut:
                 cut = idx
+        if cut < int(max_chars * 0.4):
+            sp = window.rfind(" ")
+            if sp > cut:
+                cut = sp
         if cut <= 0:
             cut = max_chars - 1  # 无任何边界 → 硬切（含标点位）
         out.append(rest[:cut + 1].strip())
@@ -151,8 +199,8 @@ def split_text_for_clone(text: str, max_chars: int = 60) -> List[str]:
     for p in pieces:
         if not cur:
             cur = p
-        elif len(cur) + len(p) <= max_chars:
-            cur += p
+        elif len(_join_pieces(cur, p)) <= max_chars:
+            cur = _join_pieces(cur, p)
         else:
             chunks.append(cur)
             cur = p
@@ -163,7 +211,7 @@ def split_text_for_clone(text: str, max_chars: int = 60) -> List[str]:
 
 def pack_voice_parts(
     text: str, *, part_max_chars: int = 40, max_parts: int = 3,
-    min_tail_chars: int = 8,
+    min_tail_chars: int = 8, script_aware: bool = True,
 ) -> List[str]:
     """把长回复打包成 ≤``max_parts`` 条「语音条文本」（分条发送用，活人感设计）。
 
@@ -173,17 +221,26 @@ def pack_voice_parts(
     末条 < ``min_tail_chars`` 时并入前一条——孤零零的超短尾条（"哦～"）合成
     易出怪音、听感也做作（2026-07-15 乱码语音事故的放大器），0 关闭。
     短文本（切不出第二条）→ 单元素列表（调用方走原单条路径）。纯函数。
+
+    ``script_aware``（2026-09-12）：拉丁主体文本把 ``part_max_chars`` / ``min_tail_chars``
+    按 :func:`latin_budget_scale` 折算——字符预算是按 CJK「一字一音节」定的，直接套英文
+    会切出两秒一条的碎句；合并余量时拉丁词之间补空格（曾粘成 "dockat"）。
     """
-    chunks = split_text_for_clone(text, part_max_chars)
+    scale = latin_budget_scale(text) if script_aware else 1.0
+    pmax = max(1, int(round(int(part_max_chars) * scale)))
+    mtail = int(round(int(min_tail_chars) * scale)) if int(min_tail_chars or 0) > 0 else 0
+    chunks = split_text_for_clone(text, pmax)
     keep = max(1, int(max_parts))
     if len(chunks) > keep:
         head = chunks[: keep - 1]
-        tail = "".join(chunks[keep - 1:])
+        tail = chunks[keep - 1]
+        for extra in chunks[keep:]:
+            tail = _join_pieces(tail, extra)
         chunks = head + [tail]
-    if (len(chunks) >= 2 and min_tail_chars > 0
-            and len(chunks[-1]) < int(min_tail_chars)):
+    if (len(chunks) >= 2 and mtail > 0
+            and len(chunks[-1]) < mtail):
         tail = chunks.pop()
-        chunks[-1] = chunks[-1] + tail
+        chunks[-1] = _join_pieces(chunks[-1], tail)
     return chunks
 
 

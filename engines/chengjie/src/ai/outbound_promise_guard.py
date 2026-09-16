@@ -575,6 +575,25 @@ _SENT_CLAIM_IMG = [re.compile(p, re.IGNORECASE) for p in (
     r"\bit(?:'s|\s+is)?\s+still\s+loading\b",
     r"\bstill\s+loading\b",
     r"\bcheck\s+(?:your|ur)\s+(?:phone|chat|inbox|whatsapp|dms?|messages|gallery|notifications?)\b",
+    # #332（2026-09-17 Cameron 实录 00:56/00:59）：客户只发自拍，LLM 抄历史里的媒体
+    # 占位「[我方发出的图片] [图片]」+ 照片配文体「Just took this one, lazy night in」
+    # 「There's my face, now you owe me…」——句子本身**预设附了一张图**，却零
+    # send_media。配文体不带 sent 动词，旧词表全漏；这里把「附图预设句」收进
+    # sent-claim（真伪仍交近窗真发账本：刚真发过一张＝正常配文放行）。
+    #   ① 正文里残留的媒体占位（剥标签守卫在后 / 未装载时这里兜住）
+    r"^\s*\[(?:图片|圖片|image|photo|picture|pic|我方发出的图片|我方發出的圖片|"
+    r"image\s+sent\s+by\s+(?:me|us))\]",
+    #   ② en：(just) took/snapped this (one|pic|selfie) / there's my face / here's me /
+    #      found this (old) one of me / that's me in the pic
+    r"\b(?:just\s+)?(?:took|snapped|shot)\s+this\s+(?:one|pic\w*|photo|selfie|shot)?\b(?!\s*\?)",
+    r"\bthere(?:'s|’s|\s+is)\s+my\s+(?:face|selfie|mug)\b",
+    r"\bhere(?:'s|’s|\s+is)\s+(?:me|my\s+face|one\s+of\s+me|a\s+(?:pic\w*|photo|selfie)\s+of\s+me|"
+    r"(?:a|the|my)\s+(?:pic\w*|photo|selfie|shot))\b",
+    r"\bfound\s+(?:this|an?)\s+(?:old\s+|older\s+|random\s+)?(?:one|pic\w*|photo|selfie|shot)\s+of\s+me\b",
+    r"\bthat(?:'s|’s|\s+is)\s+me\s+(?:in\s+(?:the|this)\s+(?:pic\w*|photo|shot|one)|right\s+there)\b",
+    #   ③ zh：刚拍的（这张）/ 这张是我 / 给你看我的照片（完成态）
+    r"(?:刚|剛|刚刚|剛剛|刚才|剛才)\s*拍\s*的\s*(?:这张|這張|这个|這個|这一张|這一張|这|這)?(?![^，。！!\n]*(?:吗|嗎|？|\?))",
+    r"(?:这张|這張|这一张|這一張|这个|這個)\s*(?:照片|图|圖|自拍)?\s*(?:就是|是)\s*我(?:啦|哦|呀|哟)?(?:[，。！!\s]|$)",
     # zh：看手机（让对方查收＝自称已发）；「别看/少看/老看手机」由排除面挡
     r"(?:去|快|快去|你)?\s*看\s*(?:看|下|一下)?\s*(?:你的?)?\s*手机",
     # zh：已经/刚/刚刚/刚才 + (给你)发/传 + 你/过去/出去 (+了)
@@ -621,6 +640,11 @@ _SENT_CLAIM_EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
     r"\b(?:can|could|would|will|did|do|have|are|pls|please)\s+(?:you|u|ya)\s+(?:please\s+)?"
     r"(?:re-?send|send|forward|share|resent)\b",
     r"\b(?:you|u|he|she|they|we)\s+(?:just\s+|already\s+)?(?:sent|resent)\b",
+    # #332 配文体方向相反：「you took this one?」「love that you snapped this」是评论
+    # 对方的图；「that's you in the pic」同理
+    r"\b(?:you|u|he|she|they)\s+(?:just\s+|really\s+)?(?:took|snapped|shot)\s+(?:this|that|it)\b",
+    r"\bthat(?:'s|’s|\s+is)\s+(?:you|u|him|her)\s+in\s+the\b",
+    r"(?:你|您|他|她)\s*(?:刚|剛|刚刚|剛剛)?\s*拍\s*的",
     r"你\s*(?:再)?\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|过来|過來|给我|給我|了\s*(?:吗|嗎|没|沒))|"
     r"(?:你|他|她|他们|他們|你们|你們)\s*(?:刚|剛|已经|已經)?\s*(?:发|發|传|傳)\s*(?:给|給)?\s*我",
     # 第三方去向（发给别人不是发给对方）

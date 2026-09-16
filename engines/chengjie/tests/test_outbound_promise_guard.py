@@ -361,6 +361,16 @@ def test_context_prompt_scene_state_and_media_log_blocks():
     "我再发一次哈",
     "给你发过去了呀",
     "照片发你了哦",
+    # #332（2026-09-17 Cameron 00:56/00:59 实录）：占位残留 + 照片配文体，零 send_media
+    "[我方发出的图片] [图片] Just took this one, lazy night in 😉",
+    "[Image sent by me] [Image] There's my face, now you owe me something about your day 😜",
+    "Just took this one, lazy night in 😉",
+    "There's my face, now you owe me something about your day 😜",
+    "Found this old one of me, thought you'd like it",
+    "here's me after the gym lol",
+    "that's me in the pic, don't laugh",
+    "刚拍的，给你看～",
+    "这张就是我啦",
 ])
 def test_detect_sent_claim_positive(text):
     assert pg.detect_sent_claim(text) == "image"
@@ -400,6 +410,15 @@ def test_detect_sent_claim_voice(text):
     "哈哈你太逗了",
     "how was your day? I missed you",
     "I'll send you a photo in a sec",
+    # #332 配文体方向相反：评论**对方**发来的图，不是自称附图
+    "you just took this one? looks great",
+    "love that you snapped this at sunset",
+    "that's you in the pic? cute",
+    "这是你刚拍的吗，好看",
+    "你刚拍的？背景好美",
+    # 「took」不带指示词 / 泛指
+    "I took a nap after lunch",
+    "it took forever to get home",
 ])
 def test_detect_sent_claim_negative(text):
     assert pg.detect_sent_claim(text) == ""

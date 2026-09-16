@@ -281,11 +281,81 @@ def trim_stale_history(
     return out
 
 
-#: 出站非图片媒体的中文名（标签「[我方发出的X]」）；未列出的 media_type 原样带出。
+#: 出站非图片媒体的中文名（**空正文**出站媒体行的占位「[我方发出的X]」）；未列出的
+#: media_type 原样带出。
 _OUT_MEDIA_WORD = {
     "voice": "语音", "audio": "语音", "video": "视频", "video_note": "视频",
     "animation": "动图", "gif": "动图", "document": "文件", "file": "文件",
 }
+_IMAGE_KINDS = frozenset({"image", "photo", "picture", "sticker"})
+_VOICE_KINDS = frozenset({"voice", "audio"})
+_VIDEO_KINDS = frozenset({"video", "video_note", "animation", "gif"})
+#: 出站媒体行的带内标签前缀（事故期落库行仍带着它；归一时剥掉，见 strip_out_label）。
+#: 同时剥掉镜像占位「[图片] 配文」「[语音]×2 念稿」——形态已由 media 字段带外承载，
+#: 留在 assistant 内容里同样是 few-shot 模板。「[图片内容] 描述」是信息标记，保留。
+OUT_LABEL_PREFIX = "[我方发出的"
+_OUT_LABEL_RE = re.compile(
+    r"^\s*(?:\[我方发出的[^\]\n]{0,12}\]|\[(?:图片|语音|视频|贴纸|文件|媒体|动图|GIF)\](?:×\d+)?)\s*",
+    re.IGNORECASE,
+)
+# 历史里的「[图片内容] 描述」是信息标记，归一时必须保留；出稿口会剥，这里不剥。
+_HISTORY_KEEP_INNER = re.compile(
+    r"^(?:图片|視頻|视频|贴纸|貼紙)内容|"
+    r"^(?:image|photo|picture|video|sticker)\s+content\b",
+    re.IGNORECASE,
+)
+
+
+def media_form(media_type: str) -> str:
+    """media_type → 形态桶 ``voice`` / ``image`` / ``video`` / ``file`` / ``media``（空 → ''）。"""
+    mt = str(media_type or "").strip().lower()
+    if not mt:
+        return ""
+    if mt in _VOICE_KINDS:
+        return "voice"
+    if mt in _IMAGE_KINDS:
+        return "image"
+    if mt in _VIDEO_KINDS:
+        return "video"
+    if mt in ("document", "file"):
+        return "file"
+    return "media"
+
+
+def strip_out_label(text: str) -> str:
+    """剥掉出站正文开头的系统标签（可连剥）。
+
+    除事故期落库的「[我方发出的X]」和镜像占位「[图片]/[语音]×N」外，也剥 LLM
+    改写/翻译形态（「[我方语音消息]」「[Voice message from our side]」）——那些
+    纯文本泄漏行没有 media_type，旧实现根本不会进这条函数。``[图片内容]`` 描述
+    是信息标记，保留。纯函数。
+    """
+    t = str(text or "")
+    while True:
+        m = _OUT_LABEL_RE.match(t)
+        if m:
+            t = t[m.end():]
+            continue
+        try:
+            from src.ai.outbound_text_guard import (
+                leading_tag, peel_leading_system_label,
+            )
+            inner = leading_tag(t)
+            if inner and _HISTORY_KEEP_INNER.search(inner):
+                return t.strip()
+            rest = peel_leading_system_label(t)
+        except Exception:
+            rest = None
+        if rest is None:
+            return t.strip()
+        t = rest
+
+
+def _out_media_placeholder(media_type: str) -> str:
+    mt = str(media_type or "").lower()
+    if mt in _IMAGE_KINDS:
+        return "[我方发出的图片]"
+    return f"[我方发出的{_OUT_MEDIA_WORD.get(mt, mt or '媒体')}]"
 
 
 def normalize_history(
@@ -308,20 +378,30 @@ def normalize_history(
             continue
         t = str(m.get("text") or "").strip()
         is_in = m.get("direction") in ("in", "inbound")
+        # 所有出站行都剥句首系统标签——事故里 2 条泄漏是纯文本（无 media_type），
+        # 只扫媒体行会漏；改写形态「[我方语音消息]」旧正则也剥不到。
+        if not is_in:
+            t = strip_out_label(t)
         _has_media = bool(m.get("media_type") or m.get("media_ref"))
+        _mform = ""
         if _has_media and not is_in:
-            # Q-24 F（#298）：出站媒体（我们/坐席/手机端发的图）在上下文里必须标成
-            # 「我方发出的图片」——占位 [图片] 会让 LLM 把它当客户发的图去接话。
-            # 接力记忆 P0-1（2026-09-12）：**有配文 / 已回写识图描述**的出站图同样带
-            # 标签——此前配文裸当 assistant 文本，LLM 不知道那句话是随一张图发出的，
-            # 切回全自动后「你发的那张」接不上。标签后接配文与 ``[图片内容] 描述``。
+            # Q-24 F（#298）：**空正文**的出站媒体（我们/坐席/手机端发的图）在上下文里
+            # 标成「[我方发出的图片]」——占位 [图片] 会让 LLM 把它当客户发的图去接话，
+            # 而没有占位这一轮就从历史里消失（AI 不知道自己发过图）。
+            #
+            # 2026-09-12 标签泄漏事故后的口径：**有正文**的出站媒体行不再加带内标签。
+            # 接力记忆 P0-1 曾给所有出站媒体行加「[我方发出的语音] 念稿」——那是
+            # assistant 角色的内容，连续十轮语音后 LLM 把它当格式模板照抄进正文
+            # （「[我方语音消息] 天哪…」直发客户、「[Voice message from our side]」被
+            # TTS 念出）。语音行正文＝念稿，本就是「我说了什么」；图/视频行的配文与
+            # ``[图片内容] 描述`` 原样保留。**形态信息改带外**：行上挂 ``media`` 字段
+            # （LLM 组装只读 role/content），由 :func:`media_form_note` 汇成一句系统说明
+            # 经 extra_hint 注入。事故期落库的「[我方发出的…]」前缀在此剥掉，防污染行
+            # 继续教坏模型。
             _mt = str(m.get("media_type") or "").lower()
-            _lbl = ("[我方发出的图片]" if _mt in ("image", "photo", "picture", "sticker")
-                    else f"[我方发出的{_OUT_MEDIA_WORD.get(_mt, _mt or '媒体')}]")
+            _mform = media_form(_mt) or "media"
             if not t:
-                t = _lbl
-            elif not t.startswith("[我方发出的"):
-                t = f"{_lbl} {t}"
+                t = _out_media_placeholder(_mt)
         elif not t and _has_media:
             try:
                 from src.integrations.protocol_bridge import media_placeholder
@@ -341,12 +421,61 @@ def normalize_history(
                 row["ts"] = _ts
         except (TypeError, ValueError):
             pass
+        if _mform:
+            row["media"] = _mform          # 出站媒体形态（带外；见 media_form_note）
         history.append(row)
         if is_in:
             last_inbound = t
     if not last_inbound and history:
         last_inbound = history[-1]["content"]
     return history, last_inbound
+
+
+_FORM_WORD = {"voice": "语音", "image": "图片", "video": "视频", "file": "文件", "media": "媒体"}
+_NO_TAG_RULE = (
+    "这些只是发送形态说明，不是消息内容——你的回复正文里绝不能出现任何方括号系统标签"
+    "（例如 [我方…]、[语音…]、[图片内容]、[N天前]），直接写要说的话。"
+)
+
+
+def media_form_note(history: List[Dict[str, Any]], *, max_captions: int = 3) -> str:
+    """出站媒体形态的**带外**说明（注入 extra_hint / system 侧），替代带内标签。
+
+    统计 :func:`normalize_history` 挂在 assistant 行上的 ``media`` 字段：几条以语音发出、
+    几条随图/视频发出（附最近几条随图发出的话，让「你发的那张」接得上），并顺带钉一句
+    「正文禁出方括号标签」。窗口里没有出站媒体 → ''（零 token）。纯函数。
+    """
+    counts: Dict[str, int] = {}
+    captions: List[str] = []
+    for r in history or []:
+        if not isinstance(r, dict) or r.get("role") != "assistant":
+            continue
+        form = str(r.get("media") or "")
+        if not form:
+            continue
+        counts[form] = counts.get(form, 0) + 1
+        if form in ("image", "video"):
+            c = str(r.get("content") or "").strip()
+            if c and not c.startswith("["):
+                # 只取配文本身（剔掉尾随的 [图片内容] 描述）
+                j = c.find("[")
+                c = (c[:j] if j > 0 else c).strip()
+                if c:
+                    captions.append(c[:30])
+    if not counts:
+        return ""
+    parts: List[str] = []
+    nv = counts.get("voice", 0)
+    if nv:
+        parts.append(f"{nv} 条是以语音发出的（对方是听到、不是看到的）")
+    for form in ("image", "video", "file", "media"):
+        n = counts.get(form, 0)
+        if n:
+            parts.append(f"{n} 条是随{_FORM_WORD[form]}一起发出的")
+    line = "【消息形态说明】你上面的回复里有" + "；".join(parts) + "。"
+    if captions:
+        line += "随图/视频发出的话：" + "、".join(f"「{c}」" for c in captions[-max_captions:]) + "。"
+    return line + _NO_TAG_RULE
 
 
 def resolve_reply_language(
@@ -859,6 +988,15 @@ async def _generate_persona_reply_impl(
     _yh = yue_style_directive(resolved_lang)
     if _yh:
         _time_hint = f"{_time_hint}\n{_yh}" if _time_hint else _yh
+    # 2026-09-12 标签泄漏事故：出站媒体形态改**带外**说明（normalize_history 不再给
+    # 有正文的媒体行加「[我方发出的X]」带内标签）。同走 extra_hint 单一消费口 →
+    # 统一引擎 / 直连 / 兜底三条路径一处全覆盖；窗口无出站媒体时为空串零成本。
+    try:
+        _mfn = media_form_note(history)
+        if _mfn:
+            _time_hint = f"{_time_hint}\n{_mfn}" if _time_hint else _mfn
+    except Exception:
+        logger.debug("[persona_reply] media_form_note 跳过", exc_info=True)
 
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；

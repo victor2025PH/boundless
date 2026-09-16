@@ -660,6 +660,17 @@ def apply_outbound_humanize(
             logger.info(
                 "[persona-guard] service_tone=%d action=%s conv=%s stage=%s",
                 svc_n, svc_act, conversation_id or "-", stage or "-")
+        try:
+            from src.ai.outbound_text_guard import strip_system_labels
+            _pre2, _lhits = strip_system_labels(pre)
+            if _lhits:
+                logger.warning(
+                    "[outbound] conv=%s stage=%s 发送门剥离系统标签 %r",
+                    conversation_id or "-", stage or "-",
+                    [h[:40] for h in _lhits[:3]])
+                pre = _pre2
+        except Exception:
+            logger.debug("[outbound] strip_system_labels 异常（原文继续）", exc_info=True)
         out, st = humanize(pre, lg, cfg=cfg, mode=mode)
         logger.info(
             "[outbound] conv=%s stage=%s origin=%s lang=%s len=%d punct_fix=%d style_fix=%d "
@@ -734,6 +745,19 @@ def apply_draft_humanize(
                 conversation_id or "-", stage or "-", draft_id or "-", org, lg, len(src))
             return src, meta
         cur = src
+        # 2026-09-12 标签泄漏：人审稿落库前再剥一遍。A/B 出稿口已剥，这里兜住
+        # 不经 skill_manager 的 enrich / 模板稿；人工 bypass 上面已返回（所打即所发）。
+        try:
+            from src.ai.outbound_text_guard import strip_system_labels
+            _cur2, _lhits = strip_system_labels(cur)
+            if _lhits:
+                meta["system_label"] = [h[:40] for h in _lhits[:3]]
+                logger.warning(
+                    "[draft] conv=%s draft=%s 剥离系统标签 %r",
+                    conversation_id or "-", draft_id or "-", meta["system_label"])
+                cur = _cur2
+        except Exception:
+            logger.debug("[draft] strip_system_labels 异常（原文继续）", exc_info=True)
         # Q-1 C（#264 #270）：出站重复提问守卫——本稿问句与 24h 内我方问句相似（词干 + 同义 +
         # 槽位标签）≥0.8 → 删句 / 整稿只剩它则改非问句；挂在 claim_guard 之前（先去重问、再去谎）。
         # 绝不抛、原文放行；meta.repeat_q / repeat_q_stripped。

@@ -132,6 +132,54 @@ def _try_build_llm_generate_fn():
         return None
 
 
+def _try_build_llm_history_generate_fn():
+    """带历史的 generate_fn（格式诱导轨用）：``fn(user_message, history, system_hint) -> str``。
+
+    与 ``_try_build_llm_generate_fn`` 同一把 client / 同一 EVAL_LLM 闸；history 走
+    ``conversation_history``，system_hint 走 ``_topic_switch_hint``（与生产 persona_reply
+    的 extra_hint 消费口同一通道）。不满足条件返回 None。
+    """
+    if os.environ.get("EVAL_LLM") != "1":
+        return None
+    try:
+        import asyncio
+        from src.ai.ai_client import AIClient
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
+
+        cfg = load_runtime_config(None)
+
+        class _Cfg:
+            config = cfg
+            config_path = str(Path(runtime_config_source()) / "config" / "config.yaml")
+
+            def get_ai_config(self):
+                return cfg.get("ai", {})
+
+        client = AIClient(_Cfg())
+
+        def _gen(user_message: str, history, system_hint: str) -> str:
+            async def _run():
+                if hasattr(client, "initialize"):
+                    try:
+                        await client.initialize()
+                    except Exception:
+                        pass
+                ctx = {"reply_lang": "zh", "request_id": "eval-label-leak",
+                       "_conversation_history": list(history or [])}
+                if system_hint:
+                    ctx["_topic_switch_hint"] = system_hint
+                return await client.generate_reply(
+                    user_message, ctx, conversation_history=list(history or []),
+                    _skip_quality_check=True,
+                ) or ""
+            return asyncio.run(_run())
+
+        return _gen
+    except Exception as ex:
+        logger.warning("LLM history generate_fn 构造失败，跳过格式诱导轨: %s", ex)
+        return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="意图识别评测")
     ap.add_argument("--dataset", default="", help="标注集路径(YAML/JSONL)；空=内置种子")
@@ -205,6 +253,14 @@ def main(argv=None) -> int:
                     help="危机安全总览（L/O 主动抑制 + J 响应闭环 + Q 资源保障 串联回归）")
     ap.add_argument("--voice-language", action="store_true",
                     help="语音合成语言一致性评测（合成语言随文本语种，防中文声纹念英文）")
+    ap.add_argument("--asr", action="store_true",
+                    help="ASR 转写字错率评测（config/eval/asr_samples.jsonl + 坐席改正台账 → 生产同款"
+                         "转写链 → CER 按语种/时长桶；样本 <5 不裁决；--asr-base-url 可评另一端点）")
+    ap.add_argument("--asr-threshold", type=float, default=0.10, help="ASR 平均 CER PASS 阈值（默认 0.10）")
+    ap.add_argument("--asr-min-samples", type=int, default=5, help="ASR 裁决所需最少样本数（默认 5）")
+    ap.add_argument("--asr-base-url", default="",
+                    help="ASR A/B：改评这个 OpenAI 兼容端点（如候选 Qwen3-ASR 服务），不动生产配置")
+    ap.add_argument("--asr-model", default="", help="与 --asr-base-url 搭配的 model 名（服务端多半忽略）")
     ap.add_argument("--bazi", action="store_true",
                     help="命盘质量评测（四柱金标+十神交叉验证+强弱不变量+K线健全性；缺 lunar_python 跳过）")
     ap.add_argument("--bazi-reading", action="store_true",
@@ -231,7 +287,26 @@ def main(argv=None) -> int:
     ap.add_argument("--shared-past", action="store_true",
                     help="共同经历叙事锁评测（#110 海鲜店四连金标：初识期禁+"
                          "深阶段接地；纯函数常驻）")
+    ap.add_argument("--label-leak", action="store_true",
+                    help="系统标签泄漏评测（2026-09-12「[我方语音消息]」：出稿口金标+"
+                         "normalize_history 契约常驻；EVAL_LLM=1 加跑格式诱导轨）")
+    ap.add_argument("--label-leak-rounds", type=int, default=4,
+                    help="格式诱导轨每口径生成次数（默认 4）")
     args = ap.parse_args(argv)
+
+    if args.label_leak:
+        from src.eval.label_leak_eval import (
+            evaluate_label_leak, format_label_leak_report,
+        )
+        gen = _try_build_llm_history_generate_fn()
+        report = evaluate_label_leak(gen, rounds=max(1, int(args.label_leak_rounds)))
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_label_leak_report(report))
+            if gen is None:
+                print("[note] 格式诱导轨需 EVAL_LLM=1 且配好 ai；当前只跑了确定性轨。")
+        return 0 if report["passed"] else 1
 
     if args.lang_mix:
         from src.eval.lang_mix_eval import (
@@ -253,14 +328,6 @@ def main(argv=None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             print(format_sendpoint_guard_report(report))
-    ap.add_argument("--asr", action="store_true",
-                    help="ASR 转写字错率评测（config/eval/asr_samples.jsonl + 坐席改正台账 → 生产同款"
-                         "转写链 → CER 按语种/时长桶；样本 <5 不裁决；--asr-base-url 可评另一端点）")
-    ap.add_argument("--asr-threshold", type=float, default=0.10, help="ASR 平均 CER PASS 阈值（默认 0.10）")
-    ap.add_argument("--asr-min-samples", type=int, default=5, help="ASR 裁决所需最少样本数（默认 5）")
-    ap.add_argument("--asr-base-url", default="",
-                    help="ASR A/B：改评这个 OpenAI 兼容端点（如候选 Qwen3-ASR 服务），不动生产配置")
-    ap.add_argument("--asr-model", default="", help="与 --asr-base-url 搭配的 model 名（服务端多半忽略）")
         return 0 if report["passed"] else 1
 
     if args.recall_claim:
@@ -398,6 +465,42 @@ def main(argv=None) -> int:
             print(format_voice_language_report(report))
         return 0 if report["passed"] else 1
 
+    if args.asr:
+        from src.eval.asr_eval import (
+            DEFAULT_MANIFEST, build_transcribe_fn_from_config, evaluate_asr,
+            format_asr_report, load_asr_samples,
+        )
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
+        from src.inbox.asr_corrections import corrections_path
+        cfg = load_runtime_config(None)
+        corr = corrections_path(config_dir=str(Path(runtime_config_source()) / "config"))
+        loaded = load_asr_samples(args.dataset or DEFAULT_MANIFEST,
+                                  corrections_path=str(corr) if corr else None)
+        if args.asr_base_url:
+            vr = dict((cfg.get("voice_recognition") or {}))
+            vr.update({"enabled": True, "provider": "openai_compatible",
+                       "base_url": args.asr_base_url, "api_key": vr.get("api_key") or "local",
+                       "model": args.asr_model or vr.get("model") or "whisper-1",
+                       "fallback": []})
+            cfg = {**cfg, "voice_recognition": vr}
+            label = f"A/B {args.asr_base_url}"
+        else:
+            label = str(((cfg.get("voice_recognition") or {}).get("base_url")) or "production")
+        fn = build_transcribe_fn_from_config(cfg)
+        if fn is None:
+            print("ASR 评测：voice_recognition 未启用或转写链构建失败——SKIP")
+            return 0
+        report = evaluate_asr(loaded["samples"], fn, threshold=args.asr_threshold,
+                              min_samples=args.asr_min_samples, label=label)
+        if args.json:
+            report["skipped"] = loaded["skipped"]
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_asr_report(report, loaded["skipped"]))
+        if report.get("passed") is None:
+            return 0          # 无样本 / 样本不足：轨在场不裁决
+        return 0 if report["passed"] else 1
+
     if args.crisis_overview:
         from src.eval.crisis_safety_overview import (
             evaluate_crisis_safety_overview, format_crisis_safety_overview,
@@ -465,42 +568,6 @@ def main(argv=None) -> int:
             evaluate_assistant_qa,
             format_report as format_asb_report,
             targets as asb_targets,
-    if args.asr:
-        from src.eval.asr_eval import (
-            DEFAULT_MANIFEST, build_transcribe_fn_from_config, evaluate_asr,
-            format_asr_report, load_asr_samples,
-        )
-        from src.eval.eval_config import load_runtime_config, runtime_config_source
-        from src.inbox.asr_corrections import corrections_path
-        cfg = load_runtime_config(None)
-        corr = corrections_path(config_dir=str(Path(runtime_config_source()) / "config"))
-        loaded = load_asr_samples(args.dataset or DEFAULT_MANIFEST,
-                                  corrections_path=str(corr) if corr else None)
-        if args.asr_base_url:
-            vr = dict((cfg.get("voice_recognition") or {}))
-            vr.update({"enabled": True, "provider": "openai_compatible",
-                       "base_url": args.asr_base_url, "api_key": vr.get("api_key") or "local",
-                       "model": args.asr_model or vr.get("model") or "whisper-1",
-                       "fallback": []})
-            cfg = {**cfg, "voice_recognition": vr}
-            label = f"A/B {args.asr_base_url}"
-        else:
-            label = str(((cfg.get("voice_recognition") or {}).get("base_url")) or "production")
-        fn = build_transcribe_fn_from_config(cfg)
-        if fn is None:
-            print("ASR 评测：voice_recognition 未启用或转写链构建失败——SKIP")
-            return 0
-        report = evaluate_asr(loaded["samples"], fn, threshold=args.asr_threshold,
-                              min_samples=args.asr_min_samples, label=label)
-        if args.json:
-            report["skipped"] = loaded["skipped"]
-            print(json.dumps(report, ensure_ascii=False, indent=2))
-        else:
-            print(format_asr_report(report, loaded["skipped"]))
-        if report.get("passed") is None:
-            return 0          # 无样本 / 样本不足：轨在场不裁决
-        return 0 if report["passed"] else 1
-
         )
 
         res = evaluate_assistant_qa()

@@ -757,12 +757,123 @@ def sendpoint_lang_mix_pass(text: str) -> Tuple[str, str]:
         return src, ""
 
 
+# ── 系统标签泄漏（2026-09-12「[我方语音消息]」事故）────────────────────────────
+# 事故机制：上下文归一把系统标注写进 assistant 内容（「[我方发出的语音] 念稿」），
+# 连续十轮语音后 LLM 把它当格式模板——逐字照抄「[我方发出的语音]」→ 改写
+# 「[我方语音消息]」「[语音消息来自我们这边]」→ 翻译「[Voice message from our side]」，
+# 文本直发客户、英文那条还被 TTS 念了出来（ASR 回听实锤）。源头已改（normalize_history
+# 语音行不再带带内标签），本段是出稿口的最后一道：首/尾方括号标签命中「系统标注
+# 词表」即剥；正文中间只剥词表命中的标签。词表刻意只收「几乎不可能是人话」的系统
+# 标注用词（我方 / 发出的 / 图片内容 / N天前 / voice message / from our side …），
+# 普通括号补充语一律不动（宁可漏拦不误伤，与本模块其他守卫同哲学）。
+_SYS_LABEL_INNER_RE = re.compile(
+    r"我方|对方发(?:送|来)|對方發(?:送|來)|发出的|發出的|语音消息|語音消息|"
+    r"语音转录|語音轉錄|语音转写|語音轉寫|图片内容|圖片內容|视频内容|視頻內容|"
+    r"贴纸内容|貼紙內容|媒体消息|媒體消息|来自我们|來自我們|我们这边|我們這邊|"
+    r"系统标注|系統標注|系统消息|系統消息|系统提示|系統提示|补收的历史|補收的歷史|"
+    r"时间不详|時間不詳|很久以前|\d+\s*天前|\d+\s*小时前|\d+\s*小時前|"
+    r"^(?:语音|語音|图片|圖片|视频|視頻|贴纸|貼紙|文件|媒体|媒體|动图|動圖|GIF)(?:×\d+)?$|"
+    # 2026-09-17 #332：镜像占位「[图片]」经出站翻译变成「[Image]」/「[Photo]」（Cameron
+    # 会话实录 `[Image sent by me] [Image] There's my face…`）——整段只是一个媒体名词的
+    # 英文占位同样是系统标注，人话里不会单独写一个方括号「Image」。
+    r"^(?:image|photo|picture|pic|video|voice|audio|sticker|file|media|gif|attachment)"
+    r"(?:\s*(?:×|x)\s*\d+)?$|"
+    r"\b(?:voice|audio)\s+(?:message|note|clip|msg)\b|\bfrom\s+our\s+side\b|"
+    r"\bour\s+side\b|\bsent\s+by\s+(?:us|me)\b|\bsystem\s+(?:note|message|tag|label)\b|"
+    r"\b(?:image|photo|picture|video|sticker)\s+(?:content|sent|attached|message)\b|"
+    r"\btranscri(?:pt|ption)\b|\battachment\b|\bdays?\s+ago\b|\bhours?\s+ago\b",
+    re.IGNORECASE,
+)
+# 标签形状：半角/全角方括号，不跨行，限长防灾难回溯
+_SYS_TAG_RE = re.compile(r"\[([^\[\]\n]{1,60})\]|【([^【】\n]{1,60})】")
+_SYS_TAG_LEAD_RE = re.compile(
+    r"^\s*(?:\[([^\[\]\n]{1,60})\]|【([^【】\n]{1,60})】)[ \t]*(?:[:：\-—]\s*)?")
+_SYS_TAG_TAIL_RE = re.compile(r"\s*(?:\[([^\[\]\n]{1,60})\]|【([^【】\n]{1,60})】)\s*$")
+
+
+def _tag_inner(m: "re.Match[str]") -> str:
+    return str(m.group(1) or m.group(2) or "").strip()
+
+
+def is_system_label(inner: str) -> bool:
+    """方括号里的这段字是不是系统标注（词表命中）。纯函数。"""
+    s = str(inner or "").strip()
+    return bool(s) and bool(_SYS_LABEL_INNER_RE.search(s))
+
+
+def leading_tag(text: str) -> str:
+    """文本首个方括号标签的内文（没有 → ''）。供巡检 / 清理工具复用同一形状判定。"""
+    m = _SYS_TAG_LEAD_RE.match(str(text or ""))
+    return _tag_inner(m) if m else ""
+
+
+def peel_leading_system_label(text: str) -> Optional[str]:
+    """句首是系统标签 → 返回剥掉该标签后的剩余（可能仍带前导空白）；否则 None。
+
+    只动句首、不碰中间的 ``[图片内容]`` 描述——归一层要用这个，避免把信息标记
+    从历史里抠掉。出稿口仍走 :func:`strip_system_labels`（首/中/尾全剥）。
+    """
+    src = str(text or "")
+    m = _SYS_TAG_LEAD_RE.match(src)
+    if not m or not is_system_label(_tag_inner(m)):
+        return None
+    return src[m.end():]
+
+
+def strip_system_labels(text: str) -> Tuple[str, List[str]]:
+    """剥出站正文里的系统标签，返回 ``(清洗后文本, 命中标签列表)``。
+
+    - 句首/句尾标签：内文命中词表即剥（可连剥多个）；
+    - 正文中间：只剥词表命中的标签（「我买了新手机[iPhone]」这类不动）；
+    - 清洗后为空（整条只有标签）→ 回退原文，调用方按既有「空稿」语义处理。
+    确定性、零 LLM、绝不抛。
+    """
+    src = str(text or "")
+    if not src.strip() or ("[" not in src and "【" not in src):
+        return src, []
+    hits: List[str] = []
+    try:
+        out = src
+        # 句首连剥
+        while True:
+            m = _SYS_TAG_LEAD_RE.match(out)
+            if not m or not is_system_label(_tag_inner(m)):
+                break
+            hits.append(m.group(0).strip())
+            out = out[m.end():]
+        # 句尾连剥
+        while True:
+            m = _SYS_TAG_TAIL_RE.search(out)
+            if not m or not is_system_label(_tag_inner(m)):
+                break
+            hits.append(m.group(0).strip())
+            out = out[:m.start()]
+        # 中间：仅词表命中
+
+        def _mid(m: "re.Match[str]") -> str:
+            if is_system_label(_tag_inner(m)):
+                hits.append(m.group(0))
+                return " "
+            return m.group(0)
+
+        out = _SYS_TAG_RE.sub(_mid, out)
+        if hits:
+            out = _cleanup_spacing(out)
+            out = re.sub(r"^[，、。！？!?…~～:：\s]+", "", out)
+        if not out.strip():
+            return src, hits
+        return out, hits
+    except Exception:
+        return src, []
+
+
 # ── 编排入口 + 配置 + 观测 ───────────────────────────────────────────────────
 
 _STATS: Dict[str, int] = {"monologue": 0, "lang_mix_hard": 0, "lang_mix_soft": 0,
                           "unfounded_recall": 0, "recall_grounding": 0,
                           "shared_past": 0, "apology_dedup": 0,
                           "goal_meta": 0, "degenerate": 0,
+                          "system_label": 0,
                           "sendpoint_hard": 0, "sendpoint_kept": 0,
                           "sendpoint_soft": 0}
 
@@ -874,6 +985,8 @@ def _resolve_cfg_base(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
         "goal_meta": bool(raw.get("goal_meta", True)),
         # #152 F1：LLM 退化循环（同 n-gram 连续重复 ≥5）截断
         "degenerate": bool(raw.get("degenerate", True)),
+        # 2026-09-12：系统标签泄漏（[我方语音消息] 家族）剥离
+        "system_label": bool(raw.get("system_label", True)),
     }
 
 
@@ -894,7 +1007,8 @@ def apply_outbound_text_guard(
     ``user_turns``/``has_memory`` 供 B104；``user_texts``/``memory_text`` 供
     #91-A/#110 接地锁；``recent_assistant_texts`` 供 #91-C 口癖去重；
     ``relationship_stage`` 供 #110 关系阶段闸（各自缺料时对应守卫整体
-    不动手）。任何内部异常返回原文（调用方兜 try 双保险）。
+    不动手）。``conversation_id``（Q-36）供量词软改取 24h 内的入站图 caption
+    （KV；缺席时从 ``user_texts`` 里的「[图片内容] …」解析）。任何内部异常返回原文（调用方兜 try 双保险）。
     """
     meta: Dict[str, Any] = {"monologue_hits": [], "recall_hits": [],
                             "recall_grounding_hits": [],
@@ -920,6 +1034,13 @@ def apply_outbound_text_guard(
             if not out.strip():
                 meta["degenerate_empty"] = True
                 return "", meta
+    # 2026-09-12：系统标签泄漏放在旁白守卫之前——「[我方语音消息] 天哪…」这类
+    # 标签不是旁白词表能认的，先剥干净再让后面的守卫看正文。
+    if c.get("system_label", True):
+        out, lhits = strip_system_labels(out)
+        if lhits:
+            meta["system_label_hits"] = lhits
+            _STATS["system_label"] += 1
     if c.get("monologue", True):
         out, hits = sanitize_inner_monologue(out)
         if hits:

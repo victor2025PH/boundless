@@ -277,21 +277,34 @@ def test_store_append_outbound_media_desc_only_out_rows_idempotent(tmp_path):
     store.close()
 
 
-def test_normalize_history_labels_outbound_media_with_caption_and_desc():
-    from src.inbox.persona_reply import normalize_history
+def test_normalize_history_outbound_media_form_is_out_of_band():
+    """2026-09-12「[我方语音消息]」事故口径：有正文的出站媒体行**不加**带内标签（assistant
+    内容里的系统标注会被 LLM 当格式模板照抄进正文）；形态改挂行上 ``media`` 字段，由
+    media_form_note 带外说明；事故期落库的「[我方发出的…]」前缀归一时剥掉。"""
+    from src.inbox.persona_reply import media_form_note, normalize_history
     hist, last_in = normalize_history([
         {"direction": "in", "text": "在干嘛"},
         {"direction": "out", "text": "刚拍的\n[图片内容] 海边微笑", "media_type": "image",
          "media_ref": "/o.jpg"},
         {"direction": "out", "text": "晚安呀", "media_type": "voice", "media_ref": "/v.ogg"},
         {"direction": "out", "text": "[我方发出的图片] 已标", "media_type": "image"},
+        {"direction": "out", "text": "", "media_type": "image"},
         {"direction": "in", "text": "好看", "media_type": "image", "media_ref": "/i.jpg"},
     ])
-    assert hist[1] == {"role": "assistant", "content": "[我方发出的图片] 刚拍的\n[图片内容] 海边微笑"}
-    assert hist[2]["content"] == "[我方发出的语音] 晚安呀"
-    assert hist[3]["content"] == "[我方发出的图片] 已标"        # 不重复加标签
-    assert hist[4]["role"] == "user" and hist[4]["content"] == "好看"   # 入站 caption 原样
+    assert hist[1]["role"] == "assistant"
+    assert hist[1]["content"] == "刚拍的\n[图片内容] 海边微笑" and hist[1]["media"] == "image"
+    assert hist[2]["content"] == "晚安呀" and hist[2]["media"] == "voice"   # 语音行＝干净念稿
+    assert hist[3]["content"] == "已标"                                     # 污染行前缀剥掉
+    assert hist[4]["content"] == "[我方发出的图片]"                          # 空正文才占位
+    assert hist[5]["role"] == "user" and hist[5]["content"] == "好看" and "media" not in hist[5]
     assert last_in == "好看"
+    for r in hist:
+        if r["role"] == "assistant" and r["content"] != "[我方发出的图片]":
+            assert not r["content"].startswith("[我方"), r
+    note = media_form_note(hist)
+    assert "1 条是以语音发出的" in note and "3 条是随图片一起发出的" in note
+    assert "「刚拍的」" in note and "「已标」" in note and "方括号" in note
+    assert media_form_note([{"role": "assistant", "content": "纯文本"}]) == ""
 
 
 @pytest.mark.asyncio
@@ -393,10 +406,13 @@ async def test_describe_and_attach_outbound_video_writes_video_marker(tmp_path, 
     assert row["text"] == "看看这个\n[视频内容] 海边散步"
     assert ctx["_media_sent_log"][-1]["desc"] == "海边散步"
     assert "画面：海边散步" in hom.human_media_note(ctx)
-    # 历史标签：出站视频带内容
-    from src.inbox.persona_reply import normalize_history
+    # 历史：出站视频配文 + 描述原样进 assistant 内容，形态走带外 media 字段（2026-09-12
+    # 标签泄漏事故后不再加「[我方发出的视频]」带内标签）
+    from src.inbox.persona_reply import media_form_note, normalize_history
     hist, _ = normalize_history([dict(row)])
-    assert hist[0]["content"] == "[我方发出的视频] 看看这个\n[视频内容] 海边散步"
+    assert hist[0]["content"] == "看看这个\n[视频内容] 海边散步"
+    assert hist[0]["media"] == "video"
+    assert "1 条是随视频一起发出的" in media_form_note(hist) and "「看看这个」" in media_form_note(hist)
     # 语音：无描述标记 → 不回写
     assert await hom.describe_and_attach_outbound_media(
         st, "whatsapp", "17345893506", "13308422244", conversation_id=cid,

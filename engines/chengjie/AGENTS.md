@@ -271,6 +271,45 @@ python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异
  （drafts_routes 接线）；灰度复盘 CLI `python tools/spoken_style_obs.py`（只读：外语
  污染扫描 + 中文会话出站长度/语气词分布按灰度分界对比，多实例数据根自动发现）。
 
+**系统标签泄漏三层防线**（2026-09-12「[我方语音消息]」事故：接力记忆 P0-1 给所有出站
+媒体行加带内标签「[我方发出的语音] 念稿」，WhatsApp 会话连续十轮语音后 LLM 把它当格式
+模板——逐字照抄 → 改写「[我方语音消息]」「[语音消息来自我们这边]」→ 翻译「[Voice message
+from our side]」，7 分钟 4 例：文本直发客户、英文那条被 TTS 念出（ASR 回听实锤））：
+```bash
+python -m pytest tests/test_label_leak_guard.py tests/test_label_leak_watchdog.py \
+ tests/test_label_leak_eval.py tests/test_voice_split_latin.py \
+ tests/test_human_outbound_memory.py tests/test_outbound_text_guard.py -q --tb=line
+python -m scripts.run_eval --label-leak            # EVAL_LLM=1 加跑格式诱导轨
+python tools/strip_label_leaks.py [--apply]        # 已落库泄漏行清前缀（默认 dry-run + 备份）
+```
+预期：全绿。关键不变量（改 normalize_history / 历史标记 / prompt 结构前先读）：
+① **assistant 内容里不放系统标注**：``persona_reply.normalize_history`` 只给**空正文**的
+ 出站媒体行占位「[我方发出的X]」（否则那一轮从历史消失）；有正文的行原样（语音＝念稿、
+ 图＝配文+``[图片内容] 描述``），形态挂行上 ``media`` 字段（LLM 组装只读 role/content），
+ 由 ``media_form_note`` 汇成一句**带外**说明经 extra_hint 注入，并钉「正文禁出方括号标签」。
+ 事故期落库的「[我方发出的…]」前缀归一时剥掉（``strip_out_label``）。任何新的带内标记
+ （``[N天前]``/``[补收的历史消息…]`` 同属此类）都是 few-shot 模板，加之前先想带外能不能表达。
+② **出稿口兜底** ``outbound_text_guard.strip_system_labels``（``apply_outbound_text_guard``
+ 第二道，A/B 线同经 ``_apply_outbound_text_guard``；语音链 ``presynth_text_guard`` 再过一遍
+ ——音频合成后无法再改）：首/尾方括号标签命中系统标注词表即剥，正文中间只剥词表命中；
+ 词表只收「几乎不可能是人话」的系统用词（我方 / 发出的 / 图片内容 / N天前 / voice message /
+ from our side…），普通括号补充语不动。计数 ``metrics.outbound_text_guard.system_label`` /
+ ``sendpoint_guard.voice_system_label``。
+③ **巡检看见** ``HealthWatchdog._check_label_leak``（配置 ``health_watchdog.label_leak_remind``
+ 默认开，24h 回看 / 4h 重提 / 清零补恢复）→ 别名 ``label_leak``（technical，🔴 质量）；判定
+ 单源 ``label_leak_scan.classify_outbound_text``（合法镜像占位「[图片]/[语音]×N/[图片内容]」
+ 不算；``system_label`` 才响，``bracket_prefix`` 随附计数）。清理工具与巡检同一判定。
+④ **分条语音按文字系统折算**（同批实锤：英文按 36 字/条切成两秒碎句、余量合并粘成
+ "dockat"）：``voice_clone_client.latin_budget_scale``（拉丁主体 ×3）在 ``pack_voice_parts``
+ 内生效（``script_aware`` 默认开，A/B 线 + dialogue_planner 三处调用方同获益），
+ ``effective_min_total`` 折算总长门槛，``_join_pieces`` 拉丁词间补空格，硬切优先子句标点。
+⑤ 评测 ``src/eval/label_leak_eval.py``：确定性轨常驻；格式诱导轨（EVAL_LLM=1）对照组用事故
+ 口径复刻——**2026-09-12 首跑 deepseek-flash 8 轮对照 0/8 未复现**（生产事故有完整人设
+ prompt + 4 档深上下文），灵敏度未证实，扩场景（真人设 system + 20-30 轮）是下一步；
+ 守卫与源头两层不依赖它。
+⑥ 刻意未做：坐席侧「疑似泄漏」chip（``unified_inbox.html`` 当时被别的线活跃编辑，且
+ P0-3 巡检已把事故推给运维）；语音态一致性（连续语音中途被频率刹车切回文本）属 P2。
+
 **中文变体（繁体/粤语）翻译主线**（2026-08-29/30 四批：管道→引擎→UI→自动链→评测→
 变体客户发现；出向新增 zh-tw/yue/tl/ms，OpenCC 本地简繁引擎代码就绪未开闸）：
 ```bash
