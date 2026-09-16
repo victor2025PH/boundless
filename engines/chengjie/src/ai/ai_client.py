@@ -1846,7 +1846,13 @@ class AIClient(LoggerMixin):
         # ——它们都不在上表，超预算时会被当注入尾巴弹掉：英文客户「Why don't you
         # speak English anymore」与括号旁白（#275）就从这里漏出去。
         "【LANGUAGE RULE", "【多语言回复规则", "【回复硬约束】",
+        # #333（2026-09-17）：图中人物身份（persona_reply extra_hint 独立成段注入）——
+        # 「这是 TA 本人 / 不要猜是谁」被裁掉＝身份层白做。
+        "【图中人物身份",
     )
+    #: #333：入站媒体识别块头是「【<平台> 媒体消息·<类型>】」（平台名可变，startswith 钉不住）。
+    #: #277 GXRD67 实录：识图成功却被 inject_chars 裁到 22 字 → AI 三次自曝「看不到图」。
+    _PROTECTED_SYS_HEAD_SUBSTR = ("媒体消息·",)
     # 历史保底：预算再紧也先留最近这几条真实对话（丢完注入尾巴之后才动它们）
     _HIST_FLOOR_MSGS = 6
 
@@ -1859,6 +1865,9 @@ class AIClient(LoggerMixin):
         for j, p in enumerate(parts):
             head = (p or "").lstrip()
             if head.startswith(cls._PROTECTED_SYS_HEADS):
+                prot.add(j)
+            elif head.startswith("【") and any(
+                    s in head[:40] for s in cls._PROTECTED_SYS_HEAD_SUBSTR):
                 prot.add(j)
             if head.startswith("【后台人设定位"):
                 persona_start = j
