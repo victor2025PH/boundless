@@ -53,11 +53,21 @@ param(
     [int]   $BootWaitSec     = 120,
     # consecutive ssh_fail runs (5 min apart) before raising the "uplink down" alert; 3 = ~15 min
     [int]   $SshFailAlertAfter = 3,
+    # Aux-leg curl budget. 2026-09-18: IndexTTS-2 (104:7865) answers a cold "/" in ~6.0s, so the old
+    # -m 6 sat exactly on the boundary and produced a false "TTS leg DOWN" Telegram alert (recovered
+    # on the very next tick). Vision legs keep -m 6 (Ollama /api/tags is instant).
+    [int]   $AuxProbeSec     = 10,
+    # A leg must be dead on this many CONSECUTIVE ticks (5 min apart) before the leg alert fires.
+    # 2 = one confirmation tick: real outages (hours, see 2026-09-03) lose 5 min; one-tick blips
+    # (busy GPU, cold model) never page anyone.
+    [int]   $LegStrikeLimit  = 2,
     # Hard process-level cap on one ssh round-trip (see Invoke-Ssh, 2026-09-11). Worst honest case
-    # is ConnectTimeout(25) + four zombie legs x curl -m 6 = ~49s; 60s keeps a slow VPS from being
-    # misread as ssh_fail while still guaranteeing this task can never wedge.
-    [int]   $ProbeTimeoutSec = 60,
+    # is ConnectTimeout(25) + 2 vision legs x 6s + 3 aux legs x AuxProbeSec(10) = ~67s; 90s keeps a
+    # slow VPS from being misread as ssh_fail while still guaranteeing this task can never wedge.
+    [int]   $ProbeTimeoutSec = 90,
     [switch]$ForceRestart,
+    # -DryRun = probe only: never restarts the tunnel AND never sends Telegram (2026-09-18: a manual
+    # dry-run used to page the ops group on a one-tick blip). Verdicts are still logged.
     [switch]$DryRun,
     [string]$OpsDir          = "D:\chengjie-instances\.ops",
     # Single source of truth for the alert channel: reuse the site's notify_webhooks.json
@@ -92,6 +102,7 @@ function Send-Alert([string]$msg) {
     # Reuse the telegram channel from notify_webhooks.json (single source of truth); send DIRECTLY
     # via the Telegram Bot API so a down python service cannot swallow the alert. Always mirror to
     # the local alert log first (survives if Telegram is unreachable).
+    if ($DryRun) { Write-Log "ALERT" ("dry-run: alert suppressed (would send): " + $msg); return }
     Write-Alert $msg
     try {
         if (-not (Test-Path $NotifyWebhooksJson)) { Write-Log "ALERT" "no notify_webhooks.json; logged only"; return }
@@ -121,10 +132,12 @@ function Read-State {
         return @{ strikes = [int]$s.strikes; last_restart_epoch = [double]$s.last_restart_epoch;
                   alerted = [bool]$s.alerted;
                   ssh_fails = [int]$s.ssh_fails; uplink_alerted = [bool]$s.uplink_alerted;
-                  leg_alerted = [string]$s.leg_alerted }
+                  leg_alerted = [string]$s.leg_alerted;
+                  leg_dead_key = [string]$s.leg_dead_key; leg_strikes = [int]$s.leg_strikes }
     } catch {
         return @{ strikes = 0; last_restart_epoch = 0.0; alerted = $false;
-                  ssh_fails = 0; uplink_alerted = $false; leg_alerted = "" }
+                  ssh_fails = 0; uplink_alerted = $false; leg_alerted = "";
+                  leg_dead_key = ""; leg_strikes = 0 }
     }
 }
 function Save-State($st) { try { ($st | ConvertTo-Json -Compress) | Set-Content -Path $StatePath } catch {} }
@@ -173,7 +186,7 @@ function Get-TunnelHealth {
     # ASR/TTS legs have no cheap GET; any HTTP status from the forward (404/405/422) proves the leg
     # is alive end-to-end -- "000" means the forward is dead. Emits a compact machine-parsable block.
     # MUST be a single line: a multi-line here-string carries CRLF, and the CR breaks remote bash.
-    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done; for P in $PortAsr $PortTts $PortChatx; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/ 2>/dev/null); echo aux `$P listen=`$L http=`$H; done"
+    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done; for P in $PortAsr $PortTts $PortChatx; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m $AuxProbeSec -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/ 2>/dev/null); echo aux `$P listen=`$L http=`$H; done"
     $r = Invoke-Ssh $probe 25
     if (-not $r.ok -or -not $r.out) { return @{ verdict = "ssh_fail"; detail = "ssh to VPS failed" } }
 
@@ -206,19 +219,26 @@ function Get-TunnelHealth {
 }
 
 function Check-AuxLegs($h, $st) {
-    # ASR/TTS leg dead while tunnel is OK = GPU host behind it is down (restarting the tunnel would
-    # not help). Alert once per outage, clear once recovered. Mutates $st; caller saves.
+    # ASR/TTS/ChatX leg dead while tunnel is OK = GPU host behind it is down (restarting the tunnel
+    # would not help). Debounced: the same dead set must persist $LegStrikeLimit consecutive ticks
+    # before the alert fires (one-tick blips are logged, not paged). Alert once per outage, clear
+    # once recovered. Mutates $st; caller saves.
     $dead = @($h.aux_dead)
     $key = ($dead -join ",")
     if ($dead.Count -gt 0) {
-        if ($st.leg_alerted -ne $key) {
-            Write-Log "LEG" "aux leg(s) down: $key"
+        if ($st.leg_dead_key -eq $key) { $st.leg_strikes = [int]$st.leg_strikes + 1 }
+        else { $st.leg_dead_key = $key; $st.leg_strikes = 1 }
+        if ($st.leg_strikes -lt $LegStrikeLimit) {
+            Write-Log "LEG" "aux leg(s) down: $key (strike $($st.leg_strikes)/$LegStrikeLimit, confirming next tick)"
+        } elseif ($st.leg_alerted -ne $key) {
+            Write-Log "LEG" "aux leg(s) down: $key (confirmed x$($st.leg_strikes))"
             Send-Alert ($ALERT_LEG_DOWN -f $key)
             $st.leg_alerted = $key
         }
-    } elseif ($st.leg_alerted) {
-        Write-Log "LEG" "aux legs recovered ($($st.leg_alerted))"
-        $st.leg_alerted = ""
+    } else {
+        if ($st.leg_alerted) { Write-Log "LEG" "aux legs recovered ($($st.leg_alerted))"; $st.leg_alerted = "" }
+        elseif ([int]$st.leg_strikes -gt 0) { Write-Log "LEG" "aux leg blip cleared without alert ($($st.leg_dead_key))" }
+        $st.leg_dead_key = ""; $st.leg_strikes = 0
     }
 }
 
