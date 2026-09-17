@@ -1341,6 +1341,7 @@ class WhatsAppRpaRunner:
 
         if png_bytes:
             self._media_metrics["vision_attempts"] += 1
+            _crop_sink: Dict[str, Any] = {}
             desc, tag = await describe_wa_media(
                 png_bytes, media_msg.bounds, kind,
                 vision_cfg=vision_cfg,
@@ -1349,8 +1350,22 @@ class WhatsAppRpaRunner:
                 padding=padding,
                 max_image_dim=max_dim,
                 timeout_sec=timeout,
+                crop_sink=_crop_sink,
             )
             result["media_vision_backend"] = tag
+            # #333 P3-2（2026-09-18）：气泡裁图落盘 → ctx 有 _media_ref。RPA 线没有原图文件，
+            # 此前视觉身份层（face_identity）在本渠道拿不到文件、整体盲区（首验 no_path 计数
+            # 就是给这里的）。只对图片类落；贴纸/GIF/视频截帧无人脸语义，不落。任何失败忽略。
+            if kind in ("image", "photo") and _crop_sink.get("crop_bytes"):
+                try:
+                    import secrets as _secrets
+                    from src.integrations.protocol_bridge import media_paths
+                    _dest, _url = media_paths(
+                        "whatsapp", f"warpa_{int(time.time() * 1000)}_{_secrets.token_hex(3)}", ".jpg")
+                    _dest.write_bytes(_crop_sink["crop_bytes"])
+                    result["media_ref"] = _url
+                except Exception:
+                    logger.debug("[wa_rpa] 气泡裁图落盘失败（身份层本轮无图）", exc_info=True)
             if desc:
                 self._media_metrics["vision_ok"] += 1
                 result["media_desc"] = desc
@@ -3144,6 +3159,9 @@ class WhatsAppRpaRunner:
             ctx["_media_kind"] = result.get("media_kind", "")
             ctx["_media_desc"] = result.get("media_desc", "")
             ctx["_media_vision_backend"] = result.get("media_vision_backend", "")
+            # #333 P3-2：气泡裁图的 /static/protocol_media URL → skill_manager 身份层可解析到文件
+            if result.get("media_ref"):
+                ctx["_media_ref"] = str(result.get("media_ref") or "")
 
         # W4-Runner：ContactHooks inbound 入库 + portrait block 注入
         _journey_ctx = None

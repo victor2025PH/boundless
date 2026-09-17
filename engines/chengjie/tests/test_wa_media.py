@@ -294,3 +294,58 @@ class TestTryDescribeMediaDisabled:
         assert result.get("media_placeholder") is True
         assert r._media_metrics["placeholder"] == 1
         assert r._media_metrics["detected"] == 1
+
+    @pytest.mark.asyncio
+    async def test_image_crop_persisted_as_media_ref_for_identity_layer(self, tmp_path, monkeypatch):
+        """#333 P3-2：RPA 线无原图文件 → 气泡裁图落 protocol_media，result/ctx 得 _media_ref，
+        视觉身份层（face_identity）在 WhatsApp RPA 渠道不再是盲区。贴纸不落。"""
+        import asyncio
+        from src.integrations.whatsapp_rpa import media_vision, runner as runner_mod
+        from src.integrations.whatsapp_rpa.runner import WhatsAppRpaRunner
+        from src.integrations import protocol_bridge
+
+        monkeypatch.setattr(protocol_bridge, "protocol_media_root", lambda: tmp_path / "pm")
+
+        # crop_sink 契约：describe_wa_media 把裁图字节交出来；返回签名不变
+        monkeypatch.setattr(media_vision, "_crop_png", lambda *a, **k: b"\xff\xd8JPEGCROP")
+        monkeypatch.setattr(media_vision, "has_any_vision_backend", lambda *a: False, raising=False)
+        sink = {}
+        desc, tag = await media_vision.describe_wa_media(
+            b"png", (0, 0, 10, 10), "image", vision_cfg={}, global_vision={}, crop_sink=sink)
+        assert sink["crop_bytes"] == b"\xff\xd8JPEGCROP" and desc is None and isinstance(tag, str)
+
+        # runner：描述成功 → result.media_ref 指向落盘的 /static/protocol_media/whatsapp/warpa_*.jpg
+        async def _fake_describe(png, bounds, kind, *, crop_sink=None, **kw):
+            if isinstance(crop_sink, dict):
+                crop_sink["crop_bytes"] = b"\xff\xd8JPEGCROP"
+            return "类型=C 主体：自拍", "ollama_ok"
+        monkeypatch.setattr(media_vision, "describe_wa_media", _fake_describe)
+        monkeypatch.setattr(runner_mod.screen_ocr, "capture_screen_png", lambda serial, adb: b"png", raising=False)
+
+        r = WhatsAppRpaRunner.__new__(WhatsAppRpaRunner)
+        r._cfg = {"media_input": {"enabled": True, "use_vision": True}}
+        r._cm = None
+        r._media_metrics = {
+            "detected": 0, "vision_attempts": 0, "vision_ok": 0,
+            "vision_fail": 0, "placeholder": 0,
+            "kind_image": 0, "kind_video": 0, "kind_gif": 0,
+            "kind_sticker": 0, "kind_file": 0, "kind_other": 0,
+        }
+        r._serial = "device123"
+        r._cfg_get = lambda key, default=None: r._cfg.get(key, default)
+
+        result = {}
+        out = await r._try_describe_media(_xml(_IMG_NODE), 720, result)
+        assert out == "类型=C 主体：自拍"
+        ref = result.get("media_ref") or ""
+        assert ref.startswith("/static/protocol_media/whatsapp/warpa_") and ref.endswith(".jpg")
+        saved = list((tmp_path / "pm" / "whatsapp").glob("warpa_*.jpg"))
+        assert len(saved) == 1 and saved[0].read_bytes() == b"\xff\xd8JPEGCROP"
+        # 落盘 URL 能被身份层的路径解析回文件
+        assert protocol_bridge.static_media_ref_to_path(ref) == str(saved[0])
+
+        # 贴纸：描述照旧，但不落盘、无 media_ref
+        result2 = {}
+        out2 = await r._try_describe_media(_xml(_STICKER_NODE), 720, result2)
+        assert out2 and "media_ref" not in result2
+        assert len(list((tmp_path / "pm" / "whatsapp").glob("warpa_*.jpg"))) == 1

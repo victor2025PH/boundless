@@ -142,6 +142,7 @@ async def describe_wa_media(
     padding: int = 24,
     max_image_dim: int = 960,
     timeout_sec: float = 30.0,
+    crop_sink: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], str]:
     """裁剪截图 + 调用 VisionClient 描述 WhatsApp 媒体消息。
 
@@ -150,6 +151,11 @@ async def describe_wa_media(
     (description_text, backend_tag)
       description_text: None 表示 Vision 不可用或失败
       backend_tag: 供 metrics 使用，如 "ollama_ok" / "zhipu_only" / "vision_fail"
+
+    ``crop_sink``（#333 P3-2，2026-09-18）：传入 dict 时把裁好的气泡图字节放进
+    ``crop_sink["crop_bytes"]``——RPA 线没有原图文件，此前 ctx 只有 ``_media_desc`` 没有
+    ``_media_ref``，视觉身份层（face_identity）在 WhatsApp RPA 渠道整体是盲的；调用方
+    据此落盘到 protocol_media 并给 ctx 补 ``_media_ref``。返回签名不变，老调用方零感知。
     """
     if kind == "file":
         return _pick_prompt("file", lang), "placeholder_file"
@@ -158,6 +164,8 @@ async def describe_wa_media(
     if not crop_bytes:
         logger.debug("[media_vision] 裁剪失败，无法描述 kind=%s", kind)
         return None, "crop_fail"
+    if isinstance(crop_sink, dict):
+        crop_sink["crop_bytes"] = crop_bytes
 
     tmp_path: Optional[str] = None
     try:
