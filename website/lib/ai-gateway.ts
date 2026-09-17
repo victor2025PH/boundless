@@ -237,6 +237,125 @@ export async function proxyVision(
   throw lastErr || new Error("all_vision_relays_failed");
 }
 
+// ── ChatX 27B 中继（办公室 vLLM chatx / Qwen3-27B AWQ）────────────────
+// CHATX_RELAY_URLS 逗号列表，须含 /v1 后缀（与识图中继同形态）：
+//   例 http://127.0.0.1:18421/v1  （VPS 上 117 隧道转到 173:8001）
+// 未设 = ChatX 禁用：请求 model=chatx 必须 503，绝不能 clamp 成 DeepSeek。
+const CHATX_RELAY_URLS: string[] = (process.env.CHATX_RELAY_URLS || "")
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+const CHATX_RELAY_KEY = (process.env.CHATX_RELAY_KEY || "vllm").trim();
+const CHATX_MODEL = (process.env.CHATX_MODEL || "chatx").trim();
+/** ChatX 27B 一次调用的最低计额（字符）：GPU 串行、比 flash 贵，纯按短句会低估。 */
+export const CHATX_CHAR_MIN_COST = Number(process.env.AI_GATEWAY_CHATX_MIN_CHARS || 400);
+/** 同时打 173 vLLM 的上限；满了 503 chatx_busy，不把办公室直连也拖死。 */
+export const CHATX_MAX_INFLIGHT = Math.max(1, Number(process.env.CHATX_MAX_INFLIGHT || 4));
+let _chatxInflight = 0;
+
+export function isChatxModel(model: unknown): boolean {
+  const m = String(model || "").trim().toLowerCase();
+  return m === "chatx" || m.startsWith("chatx-");
+}
+
+export function chatxRelayEnabled(): boolean {
+  return CHATX_RELAY_URLS.length > 0;
+}
+
+export function chatxRelayStatus(): {
+  enabled: boolean;
+  inflight: number;
+  max_inflight: number;
+  relays: Array<{ url: string; cooling: boolean }>;
+} {
+  const now = Date.now();
+  return {
+    enabled: CHATX_RELAY_URLS.length > 0,
+    inflight: _chatxInflight,
+    max_inflight: CHATX_MAX_INFLIGHT,
+    relays: CHATX_RELAY_URLS.map((u) => ({
+      url: u,
+      cooling: (_relayCooldown.get(`chatx:${u}`) || 0) > now,
+    })),
+  };
+}
+
+export function chatxBusy(): boolean {
+  return _chatxInflight >= CHATX_MAX_INFLIGHT;
+}
+
+export function chatxThinkingOn(body: Record<string, unknown>): boolean {
+  if (body.enable_thinking === true) return true;
+  const t = body.thinking;
+  if (t === true) return true;
+  if (t && typeof t === "object" && (t as { type?: unknown }).type === "enabled") return true;
+  const kw = body.chat_template_kwargs;
+  if (kw && typeof kw === "object" && (kw as { enable_thinking?: unknown }).enable_thinking === true) {
+    return true;
+  }
+  return false;
+}
+
+export function buildChatxPayload(body: Record<string, unknown>): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...body };
+  delete rest.thinking;
+  delete rest.enable_thinking;
+  const think = chatxThinkingOn(body);
+  return {
+    ...rest,
+    model: CHATX_MODEL,
+    stream: false,
+    max_tokens: clampMaxTokens(body.max_tokens),
+    chat_template_kwargs: { enable_thinking: think },
+  };
+}
+
+export async function proxyChatx(
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Response> {
+  const now = Date.now();
+  const fresh: string[] = [];
+  const cooled: string[] = [];
+  for (const u of CHATX_RELAY_URLS) {
+    if ((_relayCooldown.get(`chatx:${u}`) || 0) > now) cooled.push(u);
+    else fresh.push(u);
+  }
+  const relays = [...fresh, ...cooled];
+  if (!relays.length) throw new Error("no_chatx_relay");
+  if (_chatxInflight >= CHATX_MAX_INFLIGHT) throw new Error("chatx_busy");
+  const payload = buildChatxPayload(body);
+  _chatxInflight += 1;
+  let lastErr: unknown = null;
+  try {
+    for (const base of relays) {
+      try {
+        const r = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${CHATX_RELAY_KEY}`,
+          },
+          body: JSON.stringify(payload),
+          signal,
+        });
+        if (r.status >= 500 && relays.length > 1) {
+          _relayCooldown.set(`chatx:${base}`, Date.now() + RELAY_COOLDOWN_MS);
+          lastErr = new Error(`relay_${r.status}`);
+          continue;
+        }
+        return r;
+      } catch (e) {
+        _relayCooldown.set(`chatx:${base}`, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("all_chatx_relays_failed");
+  } finally {
+    _chatxInflight = Math.max(0, _chatxInflight - 1);
+  }
+}
+
 // ── 语音中继（2026-08-03）：克隆 TTS 与 GPU ASR(8765) 经同一条 117→VPS
 //    反向隧道暴露到 VPS localhost，网关按设备令牌鉴权转发——把「非局域网机器用
 //    集群算力生成语音 / 听懂语音」补齐到与识图同一安全模型。
@@ -810,6 +929,9 @@ export function quotaSubject(claims: Pick<DeviceClaims, "mid" | "iid"> | string)
 
 /** model 钳制：白名单外一律回落默认（不拒——改造过的客户端也能用，只是用不了贵模型）。 */
 export function clampModel(m: unknown): string {
+  // ChatX 27B 不是 DeepSeek 白名单项：点名 chatx 必须原样留下，否则外网会话
+  // 会被静默改写成 flash（产品口径「同一 ChatX」直接破功）。
+  if (isChatxModel(m)) return "chatx";
   // 已发布客户端（≤1.0.79）令牌里缓存的是退役名 deepseek-chat / deepseek-v4-flash：
   // 先归一再查白名单，老客户端零改动即切到现役模型。
   const s = normalizeVendorModel(String(m || "").trim());

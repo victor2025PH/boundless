@@ -339,8 +339,9 @@ try {
 
   Write-Host '[4/4] 公网体检 ...'
   $h = Invoke-RestMethod "$SiteUrl/api/health" -TimeoutSec 20
-  Write-Host ("    healthy={0}  webhookSecret={1}  adminKey={2}  deepseek={3}" -f `
-      $h.healthy, $h.checks.env.webhookSecret, $h.checks.env.adminKey, $h.checks.env.deepseekKey)
+  Write-Host ("    healthy={0}  webhookSecret={1}  adminKey={2}  deepseek={3}  chatxRelay={4}" -f `
+      $h.healthy, $h.checks.env.webhookSecret, $h.checks.env.adminKey, $h.checks.env.deepseekKey,
+      $(if ($null -ne $h.checks.chatx) { "{0}(relays={1})" -f $h.checks.chatx.enabled, $h.checks.chatx.relays } else { 'n/a' }))
   if (-not $h.healthy) { throw '公网健康检查未通过' }
   Write-Host '部署完成 [OK]'
 }

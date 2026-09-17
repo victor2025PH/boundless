@@ -58,6 +58,27 @@ async function main() {
   assert.equal(gw.clampModel("deepseek-v4-pro"), "deepseek-v4-pro"); // 白名单内非退役名原样
   assert.equal(gw.clampModel("deepseek-reasoner"), "deepseek-flash"); // 白名单外回落默认
   assert.equal(gw.clampModel(undefined), "deepseek-flash");
+  assert.equal(gw.clampModel("chatx"), "chatx"); // 不得改写成 flash
+  assert.equal(gw.isChatxModel("chatx"), true);
+  assert.equal(gw.isChatxModel("deepseek-flash"), false);
+  assert.equal(gw.chatxRelayEnabled(), false); // 单测未配 CHATX_RELAY_URLS → 503 语义
+  const cxp = gw.buildChatxPayload({
+    model: "chatx", messages: [{ role: "user", content: "hi" }], max_tokens: 99999,
+    thinking: { type: "enabled" },
+  });
+  assert.equal(cxp.model, "chatx");
+  assert.equal(cxp.stream, false);
+  assert.deepEqual(cxp.chat_template_kwargs, { enable_thinking: true });
+  assert.equal("thinking" in cxp, false);
+  const cxOff = gw.buildChatxPayload({ model: "chatx", messages: [] });
+  assert.deepEqual(cxOff.chat_template_kwargs, { enable_thinking: false });
+  const st = gw.chatxRelayStatus();
+  assert.equal(st.enabled, false);
+  assert.equal(st.inflight, 0);
+  assert.ok(st.max_inflight >= 1);
+  assert.ok(gw.CHATX_CHAR_MIN_COST > 0);
+  assert.ok(gw.CHATX_MAX_INFLIGHT >= 1);
+  assert.equal(gw.chatxBusy(), false);
   assert.equal(gw.normalizeVendorModel("deepseek-chat", "https://api.siliconflow.cn/v1"), "deepseek-chat");
 
   // ── 按上游主机关思维链（与引擎 vendor_params 同口径）──

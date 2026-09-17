@@ -3,6 +3,7 @@ import path from "path";
 import { breakerState } from "./circuit-breaker";
 import { usageSnapshot } from "./chat-log";
 import { DATA_DIR } from "./data-dir";
+import { chatxRelayStatus } from "./ai-gateway";
 
 const DIR = DATA_DIR;
 
@@ -93,6 +94,17 @@ export async function gatherHealth(deep: boolean): Promise<HealthResult> {
       totalTrips: breaker.totalTrips,
     },
     usage: { ...usage, remaining: Math.max(0, usage.cap - usage.count) },
+  };
+  // ChatX 27B 中继（2026-09-18）：排障时能一眼看出「网关 503 chatx_unavailable」是 env 没配
+  // 还是中继全在冷却。公网 health 无鉴权，只报台数与水位，绝不带 127.0.0.1:184xx 地址。
+  // 只做观测不进 reasons：中继关着是运维档位，不该把官网 health 拉成 degraded（deploy.ps1 据此判失败）。
+  const cx = chatxRelayStatus();
+  checks.chatx = {
+    enabled: cx.enabled,
+    relays: cx.relays.length,
+    cooling: cx.relays.filter((r) => r.cooling).length,
+    inflight: cx.inflight,
+    max_inflight: cx.max_inflight,
   };
 
   if (deep) {

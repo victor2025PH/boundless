@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ROUTE_BUDGET_MS,
   VISION_CHAR_COST,
+  CHATX_CHAR_MIN_COST,
   consumeQuota,
   estimateRequestChars,
   extractUsage,
   gatewayEnabled,
   isVisionModel,
+  isChatxModel,
   logGateway,
   noteChatLatency,
   proxyChatCompletionsEx,
+  proxyChatx,
   proxyVision,
   quotaSnapshot,
   sanitizePurpose,
@@ -17,6 +20,8 @@ import {
   verifyDeviceToken,
   visionContextOverflow,
   visionRelayEnabled,
+  chatxRelayEnabled,
+  chatxBusy,
   type ChatUpstreamChoice,
   type VisionContextOverflow,
 } from "@/lib/ai-gateway";
@@ -102,11 +107,22 @@ export async function POST(req: NextRequest) {
 
     // 识图模型 → 路由到我们自己的 GPU VLM 中继（隧道），而非 DeepSeek（不做视觉）。
     const vision = isVisionModel(body.model);
+    const chatx = isChatxModel(body.model);
     if (vision && !visionRelayEnabled()) {
       return NextResponse.json({ error: { message: "vision_unavailable" } }, { status: 503 });
     }
-    // 识图按固定成本计额（图片 token 远超字符估算）；文本按 in+out 实计。
-    const inChars = vision ? VISION_CHAR_COST : estimateRequestChars(body);
+    if (chatx && !chatxRelayEnabled()) {
+      return NextResponse.json({ error: { message: "chatx_unavailable" } }, { status: 503 });
+    }
+    if (chatx && chatxBusy()) {
+      return NextResponse.json({ error: { message: "chatx_busy" } }, { status: 503 });
+    }
+    // 识图按固定成本计额；ChatX 27B 有最低计额（短句也占一整轮 GPU）。
+    const inChars = vision
+      ? VISION_CHAR_COST
+      : chatx
+        ? Math.max(estimateRequestChars(body), CHATX_CHAR_MIN_COST)
+        : estimateRequestChars(body);
     const snap = await quotaSnapshot(claims);
     if (snap.busy) {
       void logGateway({ ev: "reject", mid: claims.mid, why: "global" });
@@ -133,17 +149,23 @@ export async function POST(req: NextRequest) {
     try {
       if (vision) {
         upstream = await proxyVision(body, ac.signal);
+      } else if (chatx) {
+        upstream = await proxyChatx(body, ac.signal);
       } else {
         const r = await proxyChatCompletionsEx(body, ac.signal);
         upstream = r.res;
         choice = r.choice;
       }
-    } catch {
+    } catch (e) {
+      const why = e instanceof Error ? e.message : "";
+      if (chatx && why === "chatx_busy") {
+        return NextResponse.json({ error: { message: "chatx_busy" } }, { status: 503 });
+      }
       const ms = Date.now() - started;
       // 超时 / 连接失败也进慢模型观测：整包吃满 55s 预算就是「慢」的最强证据
       if (!vision) noteChatLatency(choice?.model || reqModel, ms);
       void logGateway({
-        ev: vision ? "vision_fail" : "upstream_fail", mid: claims.mid, ms,
+        ev: vision ? "vision_fail" : (chatx ? "chatx_fail" : "upstream_fail"), mid: claims.mid, ms,
         ...(vision ? {} : { model: choice?.model || reqModel, key: choice?.key || "primary", prompt_chars: inChars }),
       });
       return NextResponse.json({ error: { message: "upstream_error" } }, { status: 502 });
