@@ -14,10 +14,12 @@ import {
   KeyRound,
   MessageCircle,
   Monitor,
+  PlayCircle,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
+import { CHATX_TUTORIALS, CHATX_TUTORIALS_PATH, CHATX_TUTORIAL_COUNT, CHATX_TUTORIAL_TOTAL_SEC, fmtDuration } from "@/lib/chatx-tutorials";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
@@ -68,12 +70,24 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
       .catch(() => {});
   }, [d.manifestUrl]);
 
+  const installVideo = CHATX_TUTORIALS.find((e) => e.ep === 0);
+  const tutorialsHref = zh ? CHATX_TUTORIALS_PATH : `/en${CHATX_TUTORIALS_PATH}`;
   const quickNav = [
     {
       icon: HardDrive,
       title: zh ? "分步安装教程" : "Step-by-step install",
       desc: zh ? "五步从下载到开始接待" : "Five steps from download to first chat",
       href: "#install-guide",
+      external: false,
+    },
+    {
+      // 2026-09-17：视频教程合集（装完不会用是下载后最大流失点）
+      icon: PlayCircle,
+      title: zh ? "视频教程" : "Video tutorials",
+      desc: zh
+        ? `${CHATX_TUTORIAL_COUNT} 集约 ${Math.round(CHATX_TUTORIAL_TOTAL_SEC / 60)} 分钟学会`
+        : `${CHATX_TUTORIAL_COUNT} episodes · ~${Math.round(CHATX_TUTORIAL_TOTAL_SEC / 60)} min`,
+      href: tutorialsHref,
       external: false,
     },
     {
@@ -201,7 +215,7 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
 
         {/* 快速入口 */}
         <Reveal className="mt-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             {quickNav.map((q) => {
               const inner = (
                 <>
@@ -251,6 +265,50 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                 ? "全程约 10–15 分钟，零命令行。装完即是完整工作台，数据全部保存在本机。"
                 : "About 10–15 minutes, zero command line. You get the full workspace; all data stays on your machine."}
             </p>
+
+            {/* 2026-09-17：安装集视频（lib/chatx-tutorials.ts 单一真相）嵌在文字步骤之上；
+                不自动播、preload=none，只在用户点播时才拉流。全部 12 集去合集页。 */}
+            {installVideo && (
+              <div className="mt-5 grid gap-4 lg:grid-cols-[3fr,2fr]">
+                <div className="overflow-hidden rounded-xl border border-neon-cyan/25 bg-ink-950 shadow-[0_0_40px_rgba(34,211,238,0.08)]">
+                  <video
+                    className="aspect-video w-full"
+                    src={installVideo.src}
+                    poster={installVideo.poster}
+                    controls
+                    playsInline
+                    preload="none"
+                    aria-label={installVideo.title[lang]}
+                    onPlay={(e) => {
+                      const el = e.currentTarget;
+                      if (el.dataset.played) return;
+                      el.dataset.played = "1";
+                      track("tutorial_play", { ep: installVideo.id, lang, where: "download_page" });
+                    }}
+                  />
+                </div>
+                <div className="flex flex-col justify-center">
+                  <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-neon-cyan">
+                    <PlayCircle className="h-3.5 w-3.5" />
+                    {zh ? "视频版 · 安装集" : "Video · install episode"}
+                  </p>
+                  <div className="mt-1.5 text-base font-semibold text-white">
+                    {installVideo.title[lang]}
+                    <span className="ml-2 text-xs font-normal text-slate-500">{fmtDuration(installVideo.durationSec)}</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{installVideo.desc[lang]}</p>
+                  <a
+                    href={tutorialsHref}
+                    onClick={() => track("tutorial_entry_click", { where: "download_install_guide" })}
+                    className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-neon-cyan/40 px-4 py-1.5 text-xs text-neon-cyan transition hover:bg-neon-cyan/10"
+                  >
+                    {zh
+                      ? `装好之后怎么用？看全部 ${CHATX_TUTORIAL_COUNT} 集 →`
+                      : `Installed — now what? All ${CHATX_TUTORIAL_COUNT} episodes →`}
+                  </a>
+                </div>
+              </div>
+            )}
 
             <div className="mt-5 rounded-xl border border-white/10 bg-ink-950/40 p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-white">

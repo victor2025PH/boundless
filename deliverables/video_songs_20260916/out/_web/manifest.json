@@ -1,0 +1,348 @@
+{
+  "T1": {
+    "id": "T1",
+    "ep": 0,
+    "slug": "install",
+    "file": "chatx-t1-install.mp4",
+    "poster": "chatx-t1-install.jpg",
+    "title": "三分钟装好智聊",
+    "feature": "安装与首启",
+    "durationSec": 79.27,
+    "size": 6463822,
+    "sha256_16": "c686d2b1512e55f6",
+    "source": "T1/T1_install_zh.mp4",
+    "blurPartial": [],
+    "blurFull": []
+  },
+  "E1": {
+    "id": "E1",
+    "ep": 1,
+    "slug": "inbox",
+    "file": "chatx-e01-inbox.mp4",
+    "poster": "chatx-e01-inbox.jpg",
+    "title": "一个收件箱，接住所有平台",
+    "feature": "统一收件箱",
+    "durationSec": 50.2,
+    "size": 4169791,
+    "sha256_16": "b642af13545ef362",
+    "source": "E1/E1_h426_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        24.27
+      ],
+      [
+        27.15,
+        50.2
+      ]
+    ],
+    "blurFull": [
+      [
+        23.69,
+        27.73
+      ]
+    ]
+  },
+  "E2": {
+    "id": "E2",
+    "ep": 2,
+    "slug": "channels",
+    "file": "chatx-e02-channels.mp4",
+    "poster": "chatx-e02-channels.jpg",
+    "title": "扫码接入四个平台",
+    "feature": "渠道接入",
+    "durationSec": 40.6,
+    "size": 3238867,
+    "sha256_16": "edc744706b36426b",
+    "source": "E2/E2_h428_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        40.6
+      ]
+    ],
+    "blurFull": []
+  },
+  "E3": {
+    "id": "E3",
+    "ep": 3,
+    "slug": "translate",
+    "file": "chatx-e03-translate.mp4",
+    "poster": "chatx-e03-translate.jpg",
+    "title": "用客户的母语聊，像老乡一样",
+    "feature": "拟人互译",
+    "durationSec": 63.6,
+    "size": 7301282,
+    "sha256_16": "6ab99a55cd78064d",
+    "source": "E3/E3_h429_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        63.6
+      ]
+    ],
+    "blurFull": []
+  },
+  "E4": {
+    "id": "E4",
+    "ep": 4,
+    "slug": "ai-reply",
+    "file": "chatx-e04-ai-reply.mp4",
+    "poster": "chatx-e04-ai-reply.jpg",
+    "title": "仅建议、值守中、全自动",
+    "feature": "AI 拟稿与自动回复",
+    "durationSec": 40.9,
+    "size": 3170132,
+    "sha256_16": "aa3a600546703a59",
+    "source": "E4/E4_h430_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        40.9
+      ]
+    ],
+    "blurFull": []
+  },
+  "E5": {
+    "id": "E5",
+    "ep": 5,
+    "slug": "persona",
+    "file": "chatx-e05-persona.mp4",
+    "poster": "chatx-e05-persona.jpg",
+    "title": "造一个有人设的数字员工",
+    "feature": "人设工作室",
+    "durationSec": 38.4,
+    "size": 3307912,
+    "sha256_16": "602021d74c8ba343",
+    "source": "E5/E5_h431_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        1.88
+      ],
+      [
+        7.69,
+        9.88
+      ],
+      [
+        18.89,
+        21.33
+      ],
+      [
+        22.35,
+        30.66
+      ],
+      [
+        31.68,
+        38.4
+      ]
+    ],
+    "blurFull": [
+      [
+        20.75,
+        22.93
+      ],
+      [
+        30.08,
+        32.26
+      ]
+    ]
+  },
+  "E6": {
+    "id": "E6",
+    "ep": 6,
+    "slug": "knowledge",
+    "file": "chatx-e06-knowledge.mp4",
+    "poster": "chatx-e06-knowledge.jpg",
+    "title": "知识库：问什么答什么",
+    "feature": "知识库",
+    "durationSec": 41.9,
+    "size": 3874700,
+    "sha256_16": "2282d02504a2d3fc",
+    "source": "E6/E6_h432_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        1.62
+      ],
+      [
+        7.69,
+        9.61
+      ],
+      [
+        18.89,
+        20.54
+      ],
+      [
+        21.55,
+        31.73
+      ],
+      [
+        32.74,
+        41.9
+      ]
+    ],
+    "blurFull": [
+      [
+        19.95,
+        22.14
+      ],
+      [
+        31.15,
+        33.33
+      ]
+    ]
+  },
+  "E7": {
+    "id": "E7",
+    "ep": 7,
+    "slug": "voice",
+    "file": "chatx-e07-voice.mp4",
+    "poster": "chatx-e07-voice.jpg",
+    "title": "用你的声音发语音",
+    "feature": "克隆语音",
+    "durationSec": 52.6,
+    "size": 7213993,
+    "sha256_16": "bb4ee87b4185823e",
+    "source": "E7/E7_h433_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        52.57
+      ]
+    ],
+    "blurFull": []
+  },
+  "E8": {
+    "id": "E8",
+    "ep": 8,
+    "slug": "goals",
+    "file": "chatx-e08-goals.mp4",
+    "poster": "chatx-e08-goals.jpg",
+    "title": "每天十秒，今日拍",
+    "feature": "工作目标与今日拍",
+    "durationSec": 48.0,
+    "size": 6373717,
+    "sha256_16": "b210f71ea401a575",
+    "source": "E8/E8_h434_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        47.97
+      ]
+    ],
+    "blurFull": []
+  },
+  "E9": {
+    "id": "E9",
+    "ep": 9,
+    "slug": "care-memory",
+    "file": "chatx-e09-care-memory.mp4",
+    "poster": "chatx-e09-care-memory.jpg",
+    "title": "它记得你，也知道什么时候别吵你",
+    "feature": "主动关怀与记忆",
+    "durationSec": 53.6,
+    "size": 4300708,
+    "sha256_16": "fafc183a867a684d",
+    "source": "E9/E9_h435_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        1.88
+      ],
+      [
+        7.7,
+        9.88
+      ],
+      [
+        22.35,
+        24.8
+      ],
+      [
+        35.68,
+        39.99
+      ],
+      [
+        50.61,
+        53.57
+      ]
+    ],
+    "blurFull": []
+  },
+  "E10": {
+    "id": "E10",
+    "ep": 10,
+    "slug": "xiaozhi",
+    "file": "chatx-e10-xiaozhi.mp4",
+    "poster": "chatx-e10-xiaozhi.jpg",
+    "title": "不会用？问小智",
+    "feature": "小智助手球",
+    "durationSec": 42.0,
+    "size": 2748983,
+    "sha256_16": "2522b1cc9b29488f",
+    "source": "E10/E10_h436_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        42.0
+      ]
+    ],
+    "blurFull": []
+  },
+  "E11": {
+    "id": "E11",
+    "ep": 11,
+    "slug": "guardrails",
+    "file": "chatx-e11-guardrails.mp4",
+    "poster": "chatx-e11-guardrails.jpg",
+    "title": "该转人的它不乱答",
+    "feature": "风险与护栏",
+    "durationSec": 40.8,
+    "size": 2843586,
+    "sha256_16": "66f0338262e1ac43",
+    "source": "E11/E11_h437_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        25.87
+      ],
+      [
+        29.01,
+        35.73
+      ]
+    ],
+    "blurFull": []
+  },
+  "E12": {
+    "id": "E12",
+    "ep": 12,
+    "slug": "billing",
+    "file": "chatx-e12-billing.mp4",
+    "poster": "chatx-e12-billing.jpg",
+    "title": "免费开始，用多少充多少",
+    "feature": "充值与额度",
+    "durationSec": 41.6,
+    "size": 2807126,
+    "sha256_16": "7de48c973054f5a3",
+    "source": "E12/E12_h452_episode.mp4",
+    "blurPartial": [
+      [
+        0.0,
+        1.62
+      ],
+      [
+        7.69,
+        9.61
+      ],
+      [
+        18.89,
+        20.54
+      ],
+      [
+        29.81,
+        31.46
+      ]
+    ],
+    "blurFull": []
+  }
+}

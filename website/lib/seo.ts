@@ -29,6 +29,8 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/download/chatx", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/manual", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.5 },
   { slug: "/videos", bilingual: true, changeFrequency: "weekly", priority: 0.6, enPriority: 0.5 },
+  // 2026-09-17：智聊 12 集视频教程合集（lib/chatx-tutorials.ts 单一真相）；正片中文，英文页仅界面英文
+  { slug: "/chatx/tutorials", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.5 },
   { slug: "/film", bilingual: true, changeFrequency: "monthly", priority: 0.8, enPriority: 0.7 },
   { slug: "/brand", bilingual: true, changeFrequency: "monthly", priority: 0.5, enPriority: 0.45 },
   { slug: "/privacy", bilingual: true, changeFrequency: "yearly", priority: 0.3 },

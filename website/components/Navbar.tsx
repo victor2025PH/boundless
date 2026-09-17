@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Menu, X, Languages, ChevronDown, Download, ArrowRight, Tag } from "lucide-react";
+import { Menu, X, Languages, ChevronDown, Download, ArrowRight, Tag, PlayCircle } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useTelegram } from "./TelegramProvider";
 import { CONTACT_URL, localePath } from "@/lib/site";
@@ -289,7 +289,7 @@ export default function Navbar() {
                     <Download className="h-3.5 w-3.5 shrink-0 text-slate-600 transition group-hover/dl:text-neon-cyan" />
                   </a>
                 ))}
-                <div className="mt-1 border-t border-white/5 pt-1">
+                <div className="mt-1 grid grid-cols-2 border-t border-white/5 pt-1">
                   <a
                     href={localePath(lang, "/download")}
                     onClick={() => {
@@ -299,8 +299,20 @@ export default function Navbar() {
                     className="flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-neon-cyan transition hover:bg-white/5"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    {lang === "zh" ? "打开下载中心" : "Open Download Center"}
+                    {lang === "zh" ? "下载中心" : "Download Center"}
                     <ArrowRight className="h-3.5 w-3.5" />
+                  </a>
+                  {/* 2026-09-17：装完不会用是下载后最大的流失点——教程入口直接挂在下载菜单里 */}
+                  <a
+                    href={localePath(lang, "/chatx/tutorials")}
+                    onClick={() => {
+                      setDlOpen(false);
+                      track("download_menu_click", { client: "chatx_tutorials" });
+                    }}
+                    className="flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
+                  >
+                    <PlayCircle className="h-3.5 w-3.5" />
+                    {lang === "zh" ? "智聊视频教程" : "ChatX tutorials"}
                   </a>
                 </div>
               </div>
@@ -421,6 +433,17 @@ export default function Navbar() {
                   <Download className="h-3.5 w-3.5 shrink-0 text-slate-600" />
                 </a>
               ))}
+              <a
+                href={localePath(lang, "/chatx/tutorials")}
+                onClick={() => {
+                  setOpen(false);
+                  track("download_menu_click", { client: "chatx_tutorials", where: "mobile" });
+                }}
+                className="flex min-h-[44px] items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
+              >
+                <PlayCircle className="h-6 w-6 shrink-0 p-0.5 text-neon-cyan" />
+                <span className="flex-1">{lang === "zh" ? "智聊视频教程" : "ChatX video tutorials"}</span>
+              </a>
             </div>
           </div>
         );

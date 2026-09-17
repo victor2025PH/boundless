@@ -30,10 +30,13 @@ export interface OverlayPolicy {
 const INTERNATIONAL_ROUTE = /^\/(en|ko|ja|vi|th|id)(\/|$)/;
 /** GEO 落地页（zh 与 /en 两侧成对） */
 const GEO_LANDER = /^\/(en\/)?compare(\/|$)/;
+/** 学习页（2026-09-17 智聊视频教程）：访客在看教程，促销卡叠在播放器旁是抢戏；
+ *  页面自身在播放器下方与看完卡里已有下载 CTA，转化不靠浮层。 */
+const LEARNING_PAGE = /^\/(en\/)?chatx\/tutorials(\/|$)/;
 
 export function overlayPolicy(pathname: string | null | undefined): OverlayPolicy {
   const p = pathname || "/";
-  const quiet = INTERNATIONAL_ROUTE.test(p) || GEO_LANDER.test(p);
+  const quiet = INTERNATIONAL_ROUTE.test(p) || GEO_LANDER.test(p) || LEARNING_PAGE.test(p);
   return { promo: !quiet, gamification: !quiet };
 }
 
