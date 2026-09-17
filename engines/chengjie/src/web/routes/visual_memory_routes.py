@@ -77,7 +77,7 @@ def register_visual_memory_routes(app: Any, *, auth_dep: Any, audit_store: Any =
 
     @app.get("/api/visual-memory/status")
     async def vmem_status(request: Request, _=Depends(auth_dep)):
-        from src.companion.face_identity import FaceEmbedClient, face_cfg
+        from src.companion.face_identity import FaceEmbedClient, face_cfg, stats as _fi_stats
         cfg = face_cfg(_cfg())
         healthy: Optional[bool] = None
         if cfg["enabled"]:
@@ -88,8 +88,31 @@ def register_visual_memory_routes(app: Any, *, auth_dep: Any, audit_store: Any =
                 healthy = await asyncio.to_thread(cl.health)
             except Exception:
                 healthy = False
+        # 2026-09-18 首验沉淀：进程级退出原因计数 + 边车耗时分位。「calls 涨、face_ok/no_face 不涨、
+        # no_path 涨」= 平台落了图但身份层拿不到文件（渠道盲区）；「service_fail 涨」= 边车/隧道；
+        # 「calls 不涨」= 真没流量或接线没调到。三种此前长得一模一样。
+        try:
+            st = _fi_stats()
+        except Exception:
+            st = {}
+        # 库侧总量（跨重启）：观察行数 / 已确认实体数——「记忆到底攒了多少」
+        totals: Dict[str, Any] = {}
+        try:
+            store = _store()
+            if store is not None:
+                conn = getattr(store, "_conn", None)
+                lock = getattr(store, "_lock", None)
+                if conn is not None and lock is not None:
+                    with lock:
+                        r1 = conn.execute("SELECT COUNT(*), SUM(embedding<>''), SUM(confirmed) FROM visual_observations").fetchone()
+                        r2 = conn.execute("SELECT COUNT(*) FROM visual_entities WHERE retired=0 AND source='user_confirmed'").fetchone()
+                    totals = {"observations": int(r1[0] or 0), "with_face": int(r1[1] or 0),
+                              "confirmed_observations": int(r1[2] or 0), "confirmed_entities": int(r2[0] or 0)}
+        except Exception:
+            totals = {}
         return {"ok": True, "enabled": cfg["enabled"], "base_url": cfg["base_url"],
-                "hosted": cfg["hosted"], "timeout_sec": cfg["timeout_sec"], "service_healthy": healthy}
+                "hosted": cfg["hosted"], "timeout_sec": cfg["timeout_sec"], "service_healthy": healthy,
+                "stats": st, "totals": totals}
 
     @app.get("/api/visual-memory/{conversation_id}")
     async def vmem_get(conversation_id: str, request: Request, limit: int = 20, _=Depends(auth_dep)):

@@ -47,6 +47,74 @@ _FAIL_COOLDOWN_SEC = 60.0
 _last_fail_ts: float = 0.0
 
 
+# ── 进程级观测（2026-09-18 生产首验沉淀）────────────────────────────────────────
+# 首验前 17 小时 `[face_identity]` 日志 0 条、库 0 行——「没流量」和「链在哪一环静默断了」
+# 长得一模一样（本函数 7 个提前返回点全部返回 ''）。这里按**退出原因**计数 + 边车耗时分位，
+# 由 /api/visual-memory/status 暴露；``no_path`` 首次命中打 WARNING（带 ref 前缀，不带内容），
+# 因为那是「平台把图落了库但身份层拿不到文件」的唯一信号（WA RPA 线就是这种盲区）。
+_STAT_KEYS = ("calls", "enabled_off", "no_cid", "no_store", "not_image", "no_path", "service_fail",
+              "no_face", "face_ok", "persona", "customer_self", "known", "unknown",
+              "confirm_yes", "confirm_no", "relation", "proto_built", "proto_cached", "proto_none")
+_stats: Dict[str, int] = {k: 0 for k in _STAT_KEYS}
+_embed_ms: List[float] = []      # 最近 N 次边车往返耗时（滚动）
+_EMBED_MS_KEEP = 200
+_stats_lock = __import__("threading").Lock()
+_last_ok_ts: float = 0.0
+_last_error: str = ""
+_no_path_warned: bool = False
+
+
+def _bump(key: str, n: int = 1) -> None:
+    with _stats_lock:
+        _stats[key] = _stats.get(key, 0) + n
+
+
+def _note_embed_ms(ms: float) -> None:
+    global _last_ok_ts
+    with _stats_lock:
+        _embed_ms.append(float(ms))
+        if len(_embed_ms) > _EMBED_MS_KEEP:
+            del _embed_ms[: len(_embed_ms) - _EMBED_MS_KEEP]
+        _last_ok_ts = time.time()
+
+
+def _pct(sorted_vals: Sequence[float], q: float) -> float:
+    if not sorted_vals:
+        return 0.0
+    i = min(len(sorted_vals) - 1, max(0, int(round(q * (len(sorted_vals) - 1)))))
+    return float(sorted_vals[i])
+
+
+def stats() -> Dict[str, Any]:
+    """观测快照：各退出原因计数、边车耗时 p50/p95/max、最近成功时刻、最近错误、冷却状态。"""
+    with _stats_lock:
+        counts = dict(_stats)
+        ms = sorted(_embed_ms)
+        last_ok = _last_ok_ts
+        last_err = _last_error
+    now = time.time()
+    return {
+        "counts": counts,
+        "embed_ms": {"n": len(ms), "p50": round(_pct(ms, 0.5), 1), "p95": round(_pct(ms, 0.95), 1),
+                     "max": round(ms[-1], 1) if ms else 0.0},
+        "last_ok_age_sec": int(now - last_ok) if last_ok else None,
+        "last_error": last_err,
+        "cooldown_active": bool(_last_fail_ts and now - _last_fail_ts < _FAIL_COOLDOWN_SEC),
+    }
+
+
+def reset_stats() -> None:
+    """测试用。"""
+    global _last_ok_ts, _last_error, _no_path_warned
+    with _stats_lock:
+        for k in _STAT_KEYS:
+            _stats[k] = 0
+        _embed_ms.clear()
+        _last_ok_ts = 0.0
+        _last_error = ""
+    _no_path_warned = False
+
+
 # ── 配置 ────────────────────────────────────────────────────────────────────
 
 def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -105,7 +173,7 @@ class FaceEmbedClient:
         return h
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        global _last_fail_ts
+        global _last_fail_ts, _last_error
         if not self.base_url:
             return None
         if _last_fail_ts and time.time() - _last_fail_ts < _FAIL_COOLDOWN_SEC:
@@ -113,12 +181,15 @@ class FaceEmbedClient:
         req = urllib.request.Request(
             self.base_url + path, data=json.dumps(payload).encode("utf-8"),
             headers=self._headers({"Content-Type": "application/json"}), method="POST")
+        t0 = time.time()
         try:
             with self._open(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+            _note_embed_ms((time.time() - t0) * 1000.0)
             return data if isinstance(data, dict) else None
         except Exception as e:  # noqa: BLE001
             _last_fail_ts = time.time()
+            _last_error = f"{type(e).__name__}: {str(e)[:120]}"
             logger.info("[face_identity] embed call failed (%s) → cooldown %ss", type(e).__name__, int(_FAIL_COOLDOWN_SEC))
             return None
 
@@ -228,6 +299,7 @@ def persona_prototype(pid: str, config: Optional[Dict[str, Any]], client: FaceEm
     """人设人脸原型（L2 归一均值）。来源图 mtime 集合不变 → 读缓存；变了 → 重算。无脸 → None。"""
     srcs = persona_source_images(pid, config, config_path=config_path, max_n=max_n, store=store)
     if not srcs:
+        _bump("proto_none")
         return None
     sig = {str(p): int(p.stat().st_mtime) for p in srcs if p.exists()}
     cdir = Path(cache_dir) if cache_dir else _proto_cache_dir()
@@ -236,9 +308,11 @@ def persona_prototype(pid: str, config: Optional[Dict[str, Any]], client: FaceEm
         if cfile.is_file():
             cached = json.loads(cfile.read_text(encoding="utf-8"))
             if cached.get("sources") == sig and cached.get("vector"):
+                _bump("proto_cached")
                 return [float(x) for x in cached["vector"]]
     except Exception:
         pass
+    _bump("proto_built")
     vecs: List[List[float]] = []
     used: List[str] = []
     for p in srcs:
@@ -310,14 +384,19 @@ def annotate_inbound_sync(
     persona_store: Any = None, proto_cache_dir: Optional[Path] = None,
 ) -> str:
     """一轮入站 → 带外身份说明（'' = 无话可说 / 未启用 / 失败）。同步实现；异步侧 to_thread。"""
+    global _no_path_warned
+    _bump("calls")
     cfg = face_cfg(config)
     if not cfg["enabled"]:
+        _bump("enabled_off")
         return ""
     ck = str(conversation_id or "").strip()
     if not ck:
+        _bump("no_cid")
         return ""
     mem = memory if memory is not None else get_visual_memory_store()
     if mem is None:
+        _bump("no_store")
         return ""
     text = str(peer_text or "")
     is_image = str(media_type or "").lower() in ("image", "photo", "picture") or "[图片内容]" in text
@@ -328,23 +407,35 @@ def annotate_inbound_sync(
         yn = detect_self_confirmation(text)
         win = float(cfg["confirm_window_sec"])
         if rel and mem.confirm_relation(ck, rel, within_sec=win):
+            _bump("relation")
             logger.info("[face_identity] conv=%s relation confirmed=%s", ck, rel)
         elif yn == "yes" and mem.confirm_self(ck, within_sec=win):
+            _bump("confirm_yes")
             logger.info("[face_identity] conv=%s self confirmed by customer", ck)
         elif yn == "no" and mem.deny_self(ck, within_sec=win):
+            _bump("confirm_no")
             logger.info("[face_identity] conv=%s self denied by customer", ck)
     except Exception:
         logger.debug("[face_identity] confirmation step failed", exc_info=True)
 
     if not is_image:
+        _bump("not_image")
         return ""
     path = _resolve_media_path(media_ref)
     if not path:
+        _bump("no_path")
+        if not _no_path_warned:
+            # 只警一次/进程：平台已判定这是图片却给不出可读文件——身份层在该渠道整体是盲的。
+            _no_path_warned = True
+            _ref = str(media_ref or "")
+            logger.warning("[face_identity] conv=%s 入站图无法解析为本地文件（media_type=%s ref_prefix=%r len=%d）"
+                           "——该渠道身份层不工作，后续同类只计数不再告警", ck, media_type, _ref[:40], len(_ref))
         return ""
     cl = client or FaceEmbedClient(cfg["base_url"], timeout_sec=cfg["timeout_sec"],
                                    min_det_score=cfg["min_det_score"], api_key=cfg["api_key"])
     faces = cl.embed_path(path, max_faces=3)
     if faces is None:
+        _bump("service_fail")
         return ""   # 服务不可达 / 超时：拟稿照旧，不注入
 
     fields = vi.parse_caption_fields(caption)
@@ -354,9 +445,12 @@ def annotate_inbound_sync(
     except Exception:
         sha1 = ""
     if not faces:
+        _bump("no_face")
         mem.record_observation(ck, message_id=message_id, sha1=sha1, subject=fields.get("subject") or "",
                                summary=summary, label="no_face")
+        logger.info("[face_identity] conv=%s faces=0 label=no_face subject=%s", ck, fields.get("subject") or "-")
         return ""
+    _bump("face_ok")
 
     face_vec = [float(x) for x in faces[0]["embedding"]]
     persona_vec = None
@@ -386,6 +480,8 @@ def annotate_inbound_sync(
     mem.record_observation(ck, message_id=message_id, sha1=sha1, subject=fields.get("subject") or "",
                            summary=summary, label=label, matched=matched, score=score,
                            embedding=face_vec, source="ai_inferred", confirmed=False)
+    if label in _STAT_KEYS:
+        _bump(label)
     logger.info("[face_identity] conv=%s faces=%d label=%s matched=%s score=%.3f scores=%s",
                 ck, len(faces), label, matched or "-", score,
                 {k: round(v, 3) for k, v in scores.items()})
@@ -406,5 +502,5 @@ async def annotate_inbound(**kwargs: Any) -> str:
 
 __all__ = [
     "face_cfg", "FaceEmbedClient", "persona_source_images", "persona_prototype", "identify_face",
-    "annotate_inbound_sync", "annotate_inbound", "reset_fail_cooldown",
+    "annotate_inbound_sync", "annotate_inbound", "reset_fail_cooldown", "stats", "reset_stats",
 ]

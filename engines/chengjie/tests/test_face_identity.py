@@ -292,7 +292,8 @@ def test_annotate_persona_photo_and_stranger_and_relation(tmp_path):
     mem = vm.VisualMemoryStore(":memory:")
     note = _run(tmp_path, route=route, memory=mem, ref=str(mine),
                 caption="类型=C 主体：单人 人物：1 人，女性，粉色长发。场景：室内。")
-    assert "人设" in note and "自己的照片" in note
+    # 2026-09-18 生产首验后措辞改正向指令：小模型只认「该说什么」，禁项必须点名
+    assert "人设" in note and "你自己" in note and "禁止" in note
     note = _run(tmp_path, route=route, memory=mem, ref=str(group),
                 caption="类型=C 主体：多人 人物：两人，非自拍。场景：户外。")
     assert "不要猜" in note and "共 2 张脸" in note
@@ -325,6 +326,57 @@ def test_annotate_disabled_or_service_down_is_silent(tmp_path):
                                     media_type="image", media_ref=str(parts),
                                     caption="类型=C 主体：物品 人物：无 场景：金属零件", client=cl2, memory=mem) == ""
     assert mem.list_observations("c")[0]["label"] == "no_face"
+
+
+def test_stats_count_every_exit_reason_and_embed_latency(tmp_path, caplog):
+    """2026-09-18 首验沉淀：7 个提前返回点都得留下计数，否则「没流量」与「静默断链」不可分。
+    no_path 只 WARNING 一次/进程（带 ref 前缀不带内容）；边车耗时进滚动分位。"""
+    import logging
+    fi.reset_stats()
+    mem = vm.VisualMemoryStore(":memory:")
+    cfg = _cfg(tmp_path)
+    # enabled_off
+    fi.annotate_inbound_sync(config=_cfg(tmp_path, enabled=False), conversation_id="c", media_type="image",
+                             media_ref="x", memory=mem)
+    # no_cid
+    fi.annotate_inbound_sync(config=cfg, conversation_id="", media_type="image", media_ref="x", memory=mem)
+    # not_image（文字轮）
+    fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="", media_ref="", peer_text="hi", memory=mem)
+    # no_path ×2 → 只告警一次
+    with caplog.at_level(logging.WARNING, logger="src.companion.face_identity"):
+        fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="image",
+                                 media_ref="/static/protocol_media/whatsapp/missing.jpg", memory=mem)
+        fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="image",
+                                 media_ref="/static/protocol_media/whatsapp/missing2.jpg", memory=mem)
+    warns = [r for r in caplog.records if "无法解析为本地文件" in r.getMessage()]
+    assert len(warns) == 1 and "ref_prefix='/static/protocol_media/whatsapp/missing." in warns[0].getMessage()
+    assert "len=43" in warns[0].getMessage()      # 前缀 40 字 + 长度，够定位渠道不泄内容
+    # service_fail
+    def _boom(req, timeout=0):
+        raise OSError("down")
+    selfie = _img(tmp_path, "s.jpg", "CAMERON1")
+    fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="image", media_ref=str(selfie),
+                             client=fi.FaceEmbedClient("http://face.test:8767", opener=_boom), memory=mem)
+    st = fi.stats()
+    assert st["last_error"].startswith("OSError") and st["cooldown_active"] is True
+    fi.reset_fail_cooldown()
+    # no_face + face_ok(unknown)
+    op = _fake_opener({"PARTS!!!": [], "CAMERON1": [_face(CUSTOMER)]})
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    parts = _img(tmp_path, "parts.jpg", "PARTS!!!")
+    fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="image", media_ref=str(parts),
+                             caption="类型=C 主体：物品", client=cl, memory=mem)
+    fi.annotate_inbound_sync(config=cfg, conversation_id="c", media_type="image", media_ref=str(selfie),
+                             caption="类型=C 主体：多人 人物：两人", client=cl, memory=mem)
+    st = fi.stats()
+    c = st["counts"]
+    assert c["calls"] == 8
+    assert (c["enabled_off"], c["no_cid"], c["not_image"], c["no_path"], c["service_fail"]) == (1, 1, 1, 2, 1)
+    assert c["no_face"] == 1 and c["face_ok"] == 1 and c["unknown"] == 1
+    assert st["embed_ms"]["n"] == 2 and st["embed_ms"]["p95"] >= st["embed_ms"]["p50"] >= 0
+    assert st["last_ok_age_sec"] == 0 and st["cooldown_active"] is False
+    fi.reset_stats()
+    assert fi.stats()["counts"]["calls"] == 0
 
 
 def test_calibrate_tool_reports_and_suggests(tmp_path):

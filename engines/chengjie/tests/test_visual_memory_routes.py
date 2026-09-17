@@ -106,6 +106,26 @@ def test_status_reports_disabled_without_probing():
     assert r.json()["enabled"] is False and r.json()["service_healthy"] is None
 
 
+def test_status_exposes_process_stats_and_store_totals():
+    """2026-09-18 首验沉淀：status 带进程级退出原因计数 + 边车耗时分位 + 库侧总量（跨重启）。"""
+    from src.companion import face_identity as fi
+    fi.reset_stats()
+    st = vm.VisualMemoryStore(":memory:")
+    st.record_observation(CID, label="unknown", embedding=_vec(1))
+    st.record_observation(CID, label="no_face")
+    st.confirm_self(CID)
+    # 走一次 annotate 的 enabled_off 出口，让 calls 计数非零
+    fi.annotate_inbound_sync(config={"vision": {"face_identity": {"enabled": False}}}, conversation_id=CID,
+                             media_type="image", media_ref="x", memory=st)
+    c = _client(st, config={"vision": {"face_identity": {"enabled": False}}})
+    body = c.get("/api/visual-memory/status").json()
+    assert body["stats"]["counts"]["calls"] == 1 and body["stats"]["counts"]["enabled_off"] == 1
+    assert set(body["stats"]["embed_ms"]) == {"n", "p50", "p95", "max"}
+    assert body["totals"] == {"observations": 2, "with_face": 1, "confirmed_observations": 1,
+                              "confirmed_entities": 1}
+    fi.reset_stats()
+
+
 def test_i18n_pack_bilingual_and_keys_used():
     from src.web.i18n_packs import visual_memory as pack
     assert set(pack.ZH) == set(pack.EN) == set(pack.ZH_HANT)
