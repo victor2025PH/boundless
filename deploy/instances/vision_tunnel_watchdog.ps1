@@ -43,6 +43,10 @@ param(
     # vision legs AND logged ssh_fail as a silent WARN. Both gaps closed below.
     [int]   $PortAsr         = 18415,
     [int]   $PortTts         = 18413,
+    # 2026-09-18: ChatX 27B leg (173:8001 vLLM -> 18421). Gateway routes model=chatx here; a dead
+    # leg means every WAN client gets 502 on ChatX while vision/ASR look fine, so probe it like
+    # the other aux legs (any HTTP status = forward alive; vLLM "/" answers 404).
+    [int]   $PortChatx       = 18421,
     [string]$TunnelTask      = "VisionTunnel",
     [int]   $StrikeLimit     = 2,
     [int]   $RestartCooldownMin = 15,
@@ -107,7 +111,7 @@ function Send-Alert([string]$msg) {
 $U = [char]0x8bc6 + [char]0x56fe  # "shi tu" (image recognition)
 $ALERT_DOWN = "[ChatX] " + $U + [char]0x9694 + [char]0x79bb + " tunnel watchdog: restart did NOT recover. Image recognition is DOWN for all installed clients (gateway 502). Check 117->VPS tunnel / 176 / 140 GPU. Log: vision_tunnel_watchdog.log"
 $ALERT_OK   = "[ChatX] " + $U + " tunnel recovered; image recognition back to normal."
-$ALERT_UPLINK_DOWN = "[ChatX] 117 uplink DOWN: watchdog cannot reach VPS for 15+ min. ALL relay legs (vision/ASR/clone-TTS) are 502 for every installed client. Check 117 NIC/route (0827 + 0903 same signature). Log: vision_tunnel_watchdog.log / net_probe_117.log"
+$ALERT_UPLINK_DOWN = "[ChatX] 117 uplink DOWN: watchdog cannot reach VPS for 15+ min. ALL relay legs (vision/ASR/clone-TTS/ChatX 27B) are 502 for every installed client. Check 117 NIC/route (0827 + 0903 same signature). Log: vision_tunnel_watchdog.log / net_probe_117.log"
 $ALERT_UPLINK_OK   = "[ChatX] 117 uplink recovered; relay legs back."
 $ALERT_LEG_DOWN    = "[ChatX] relay leg DOWN (tunnel itself OK): {0}. That capability is 502 for all installed clients; check the GPU host behind it."
 
@@ -169,7 +173,7 @@ function Get-TunnelHealth {
     # ASR/TTS legs have no cheap GET; any HTTP status from the forward (404/405/422) proves the leg
     # is alive end-to-end -- "000" means the forward is dead. Emits a compact machine-parsable block.
     # MUST be a single line: a multi-line here-string carries CRLF, and the CR breaks remote bash.
-    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done; for P in $PortAsr $PortTts; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/ 2>/dev/null); echo aux `$P listen=`$L http=`$H; done"
+    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done; for P in $PortAsr $PortTts $PortChatx; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/ 2>/dev/null); echo aux `$P listen=`$L http=`$H; done"
     $r = Invoke-Ssh $probe 25
     if (-not $r.ok -or -not $r.out) { return @{ verdict = "ssh_fail"; detail = "ssh to VPS failed" } }
 
@@ -189,7 +193,7 @@ function Get-TunnelHealth {
         ForEach-Object { "p$($_.Key):listen=$($_.Value.listen),http=$($_.Value.http)" }) -join " "
     # aux legs: alive = any HTTP status (the forward reached a real server); 000 = dead leg
     $auxDead = @($aux.GetEnumerator() | Where-Object { $_.Value.http -eq 0 } | ForEach-Object {
-        if ($_.Key -eq $PortAsr) { "ASR:$($_.Key)" } elseif ($_.Key -eq $PortTts) { "TTS:$($_.Key)" } else { "aux:$($_.Key)" } })
+        if ($_.Key -eq $PortAsr) { "ASR:$($_.Key)" } elseif ($_.Key -eq $PortTts) { "TTS:$($_.Key)" } elseif ($_.Key -eq $PortChatx) { "ChatX:$($_.Key)" } else { "aux:$($_.Key)" } })
     $detail += " " + (($aux.GetEnumerator() | Sort-Object Name |
         ForEach-Object { "a$($_.Key):listen=$($_.Value.listen),http=$($_.Value.http)" }) -join " ")
 
