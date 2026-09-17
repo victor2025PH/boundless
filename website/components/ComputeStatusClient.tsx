@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hostTag } from "@/lib/compute-host-tag";
 
 // /admin/compute 看板本体（实施70 2026-08-27）：读 /api/admin/compute-status（5s 轮询）。
 // 鉴权与 PaymentSettingsClient 同款：cookie 直通，未登录落口令闸门（key 只存内存 state）。
@@ -16,14 +17,35 @@ interface ChainNode {
   endpoint?: string;
   loaded?: boolean;
   note?: string;
+  role?: string;
+  rank?: number;
+}
+// 出话链：pusher v3 起带 mode/lock/order/roles（顺序与厂商从实例 overlay 现读）；
+// v2 老快照只有 primary/pool/local —— 两种形状都要能画（官网与 pusher 不同步发版）。
+interface ChainBlock {
+  primary?: ChainNode;
+  cloud?: ChainNode;
+  pool?: ChainNode;
+  local?: ChainNode;
+  mode?: string;
+  mode_label?: string;
+  lock?: string | null;
+  order?: string[];
+  roles?: Record<string, string>;
+  primary_text?: string;
+  chain_text?: string;
+  source?: string;
 }
 interface HostRow {
   host?: string;
   ip?: string;
   total_gb?: number;
-  used_gb?: number;
+  used_gb?: number | null;
   reachable?: boolean;
-  models?: Array<{ name?: string; vram_gb?: number }>;
+  kind?: string;
+  note?: string;
+  kv_cache_pct?: number | null;
+  models?: Array<{ name?: string; vram_gb?: number | null }>;
 }
 interface FunctionRow {
   name?: string;
@@ -35,7 +57,7 @@ interface FunctionRow {
 interface Snapshot {
   ts?: number;
   src?: string;
-  chain?: { primary?: ChainNode; pool?: ChainNode; local?: ChainNode };
+  chain?: ChainBlock;
   functions?: FunctionRow[];
   engine?: {
     up?: boolean;
@@ -47,8 +69,8 @@ interface Snapshot {
   comfy?: { ok?: boolean; vram_free_gb?: number; vram_total_gb?: number; ip?: string };
   hub?: { ok?: boolean; mode?: string; held?: string[]; parked?: string[]; services_up?: number; services_total?: number };
   media?: {
-    asr?: { ok?: boolean; asr_loaded?: boolean; ser_loaded?: boolean };
-    tts104?: { ok?: boolean; models_loaded?: boolean };
+    asr?: { ok?: boolean; asr_loaded?: boolean; ser_loaded?: boolean; endpoint?: string };
+    tts104?: { ok?: boolean; models_loaded?: boolean; endpoint?: string };
     tts140?: { ok?: boolean; models_loaded?: boolean };
   };
 }
@@ -71,8 +93,27 @@ function fmtTs(ts?: number): string {
     return String(ts);
   }
 }
-function gb(n?: number): string {
+function gb(n?: number | null): string {
   return typeof n === "number" && isFinite(n) ? `${n.toFixed(1)}G` : "—";
+}
+
+// 三档卡的顺序与标题：v3 快照按 chain.order/roles；v2 老快照回落 08-27 的固定三档。
+function chainTiers(chain?: ChainBlock): Array<{ key: string; title: string; sub: string; node?: ChainNode; okKey: "ok" | "up" }> {
+  if (!chain) return [];
+  const cloud = chain.cloud || chain.primary;
+  const nodes: Record<string, ChainNode | undefined> = { cloud, pool: chain.pool, local: chain.local };
+  const subs: Record<string, string> = { cloud: "cloud", pool: "key pool", local: "LAN vLLM" };
+  const order = Array.isArray(chain.order) && chain.order.length ? chain.order : ["cloud", "pool", "local"];
+  const legacy: Record<string, string> = { cloud: "① 主胎 · 云端", pool: "② 备胎 · key 池", local: "③ 三线 · 局域网本地" };
+  return order
+    .filter((k) => k in nodes)
+    .map((k) => ({
+      key: k,
+      title: (chain.roles && chain.roles[k]) || legacy[k] || k,
+      sub: subs[k] || k,
+      node: nodes[k],
+      okKey: k === "local" ? ("up" as const) : ("ok" as const),
+    }));
 }
 
 function Dot({ on }: { on: boolean | null }) {
@@ -95,7 +136,7 @@ function ChainCard({ title, sub, node, okKey }: { title: string; sub: string; no
         {typeof node?.latency_ms === "number" && <div>探活延迟：{Math.round(node.latency_ms)} ms</div>}
         {node?.balance && <div>余额：<span className="text-emerald-300">{node.balance}</span></div>}
         {typeof node?.loaded === "boolean" && (
-          <div>模型驻留：{node.loaded ? "已加载（热）" : "未加载（冷启需 ~10s）"}</div>
+          <div>模型驻留：{node.loaded ? "已常驻（vLLM）" : "目录未挂载"}</div>
         )}
         {node?.note && <div className="text-slate-500">{node.note}</div>}
       </div>
@@ -214,12 +255,27 @@ export default function ComputeStatusClient() {
         </span>
       </div>
 
-      {/* 出话链三档 */}
-      <h2 className="mt-6 text-sm font-semibold text-slate-400">主对话链（按序降级）</h2>
+      {/* 出话链三档：顺序/标题来自快照 chain.order/roles（ai.primary 现值），不写死厂商 */}
+      <h2 className="mt-6 text-sm font-semibold text-slate-400">
+        主对话链（按序降级）
+        {s?.chain?.mode && (
+          <span className="ml-2 rounded-full bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">
+            档位 {s.chain.mode}{s.chain.mode_label ? ` · ${s.chain.mode_label}` : ""}
+            {s.chain.lock ? ` · 🔒 锁 ${s.chain.lock}` : " · 未设锁"}
+          </span>
+        )}
+      </h2>
+      {s?.chain?.chain_text && (
+        <div className="mt-1 text-xs text-slate-400">
+          降级链：<span className="text-slate-200">{s.chain.chain_text}</span>
+          {s.chain.source === "engine_summary" && <span className="ml-2 text-slate-600">（引擎单一口径）</span>}
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap gap-3">
-        <ChainCard title="① 主胎 · 硅基流动" sub="cloud" node={s?.chain?.primary} okKey="ok" />
-        <ChainCard title="② 备胎 · DeepSeek 官方" sub="key pool" node={s?.chain?.pool} okKey="ok" />
-        <ChainCard title="③ 三线 · 局域网本地" sub="LAN fallback" node={s?.chain?.local} okKey="up" />
+        {chainTiers(s?.chain).map((t) => (
+          <ChainCard key={t.key} title={t.title} sub={t.sub} node={t.node} okKey={t.okKey} />
+        ))}
+        {!chainTiers(s?.chain).length && <p className="text-xs text-slate-500">暂无出话链数据</p>}
       </div>
       {Object.keys(usage).length > 0 && (
         <div className="mt-2 text-xs text-slate-400">
@@ -273,12 +329,17 @@ export default function ComputeStatusClient() {
                   <span className="font-semibold text-slate-100">{h.host || h.ip || `host${i}`}</span>
                   <span className="text-slate-500">{h.ip}</span>
                 </div>
-                <div className="mt-1"><VramBar used={h.used_gb} total={h.total_gb} /></div>
+                {/* vLLM 主机预留式占显存、不按模型报字节：used_gb 为空时画 note（常驻模型 + KV cache 水位），不画 0% 假空卡 */}
+                {typeof h.used_gb === "number" ? (
+                  <div className="mt-1"><VramBar used={h.used_gb} total={h.total_gb} /></div>
+                ) : h.reachable ? (
+                  <div className="mt-1 text-xs text-slate-300">{h.note || "vLLM 常驻"} · 卡容量 {gb(h.total_gb)}</div>
+                ) : null}
                 {!!(h.models || []).length && (
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {(h.models || []).map((m, j) => (
                       <span key={j} className="rounded-md bg-white/5 px-2 py-0.5 text-[11px] text-slate-300">
-                        {m.name} · {gb(m.vram_gb)}
+                        {m.name}{typeof m.vram_gb === "number" ? ` · ${gb(m.vram_gb)}` : ""}
                       </span>
                     ))}
                   </div>
@@ -341,10 +402,10 @@ export default function ComputeStatusClient() {
                 {s?.engine?.degraded && <span className="text-amber-300">（降级中）</span>}
               </span>
               <span className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1">
-                <Dot on={typeof s?.media?.asr?.ok === "boolean" ? s.media.asr.ok : null} /> ASR/SER @176
+                <Dot on={typeof s?.media?.asr?.ok === "boolean" ? s.media.asr.ok : null} /> ASR/SER {hostTag(s?.media?.asr?.endpoint, "@176")}
               </span>
               <span className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1">
-                <Dot on={(s?.media?.tts104?.ok ?? s?.media?.tts140?.ok) ?? null} /> 克隆TTS @104
+                <Dot on={(s?.media?.tts104?.ok ?? s?.media?.tts140?.ok) ?? null} /> 克隆TTS {hostTag(s?.media?.tts104?.endpoint, "@104")}
               </span>
             </div>
           </div>
@@ -369,7 +430,7 @@ export default function ComputeStatusClient() {
 
       <p className="mt-4 text-[11px] leading-relaxed text-slate-600">
         数据由集群侧（117）每 ~10 秒推送一次；「上报中断」通常意味着 117 推送任务或公网出口异常，
-        而非集群本身故障。三档链语义：主胎不可达时引擎自动切备胎，再不可达落局域网本地模型，全灭才回占位应答。
+        而非集群本身故障。三档链按上方「①→②→③」顺序降级（顺序由实例 ai.primary 档位决定：本地主链档先走局域网 vLLM、失败回落云端；云端主链档先走云端、再 key 池、再本地），全灭才回占位应答。
       </p>
     </main>
   );

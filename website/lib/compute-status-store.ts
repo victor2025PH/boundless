@@ -56,15 +56,44 @@ function boolAt(o: unknown, ...keys: string[]): boolean | null {
   return typeof cur === "boolean" ? cur : null;
 }
 
+function strAt(o: unknown, ...keys: string[]): string {
+  let cur: unknown = o;
+  for (const k of keys) {
+    if (!cur || typeof cur !== "object") return "";
+    cur = (cur as Dict)[k];
+  }
+  return typeof cur === "string" ? cur : "";
+}
+
+// 出话链某档的人话标签：优先快照自带 role（① 主链 · 本地 vLLM …）+ 厂商，老快照回落固定词。
+// 08-27 起这里写死「主胎（硅基流动）/ 备胎（DeepSeek）」，09-17 主链改锁 local 后事件流仍在说老模式。
+function tierLabel(s: ComputeSnapshot | null, key: string, legacy: string): string {
+  const node = key === "cloud"
+    ? ((s?.chain as Dict | undefined)?.cloud ?? (s?.chain as Dict | undefined)?.primary)
+    : (s?.chain as Dict | undefined)?.[key];
+  const role = strAt(node, "role");
+  const vendor = strAt(node, "vendor") || strAt(node, "endpoint");
+  if (role) return vendor ? `${role}（${vendor}）` : role;
+  return vendor ? `${legacy}（${vendor}）` : legacy;
+}
+
+function cloudOk(s: ComputeSnapshot | null): boolean | null {
+  const v = boolAt(s, "chain", "cloud", "ok");
+  return v === null ? boolAt(s, "chain", "primary", "ok") : v;
+}
+
 // 「调动事件」判据：三档出话链 / 引擎 / 出图卡的可用性翻转。
 // [键, 取值, 掉线文案, 恢复文案]
 function flags(
   s: ComputeSnapshot | null
 ): Array<[string, boolean | null, string, string]> {
+  const c = tierLabel(s, "cloud", "云端主链档");
+  const p = tierLabel(s, "pool", "云端 key 池");
+  const l = tierLabel(s, "local", "本地 vLLM 档");
   return [
-    ["primary", boolAt(s, "chain", "primary", "ok"), "主胎（硅基流动）不可达", "主胎（硅基流动）恢复"],
-    ["pool", boolAt(s, "chain", "pool", "ok"), "备胎（DeepSeek 官方）不可达", "备胎（DeepSeek 官方）恢复"],
-    ["local", boolAt(s, "chain", "local", "up"), "本地三线（173）不可达", "本地三线（173）恢复"],
+    ["primary", cloudOk(s), `${c}不可达`, `${c}恢复`],
+    ["pool", boolAt(s, "chain", "pool", "ok"), `${p}不可达`, `${p}恢复`],
+    ["local", boolAt(s, "chain", "local", "up"), `${l}不可达`, `${l}恢复`],
     ["engine", boolAt(s, "engine", "up"), "智聊引擎（18799）不可达", "智聊引擎恢复"],
     ["comfy", boolAt(s, "comfy", "ok"), "出图 ComfyUI 不可达", "出图 ComfyUI 恢复"],
   ];
