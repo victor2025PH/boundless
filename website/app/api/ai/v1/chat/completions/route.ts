@@ -111,10 +111,15 @@ export async function POST(req: NextRequest) {
     if (vision && !visionRelayEnabled()) {
       return NextResponse.json({ error: { message: "vision_unavailable" } }, { status: 503 });
     }
+    // ChatX 的两种 503 也落流水（2026-09-18）：并发闸拒了多少、中继关着时有多少人在打，
+    // 是 scripts/ai-gateway-report.mjs 定 CHATX_MAX_INFLIGHT / 要不要第二台中继的唯一依据；
+    // 不落流水 = 观察一天什么都看不见。与额度拒绝同形态 ev:"reject"，只多 why/model。
     if (chatx && !chatxRelayEnabled()) {
+      void logGateway({ ev: "reject", mid: claims.mid, why: "chatx_unavailable", model: "chatx" });
       return NextResponse.json({ error: { message: "chatx_unavailable" } }, { status: 503 });
     }
     if (chatx && chatxBusy()) {
+      void logGateway({ ev: "reject", mid: claims.mid, why: "chatx_busy", model: "chatx" });
       return NextResponse.json({ error: { message: "chatx_busy" } }, { status: 503 });
     }
     // 识图按固定成本计额；ChatX 27B 有最低计额（短句也占一整轮 GPU）。
@@ -159,6 +164,7 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       const why = e instanceof Error ? e.message : "";
       if (chatx && why === "chatx_busy") {
+        void logGateway({ ev: "reject", mid: claims.mid, why: "chatx_busy", model: "chatx" });
         return NextResponse.json({ error: { message: "chatx_busy" } }, { status: 503 });
       }
       const ms = Date.now() - started;

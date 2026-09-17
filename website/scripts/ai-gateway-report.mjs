@@ -57,6 +57,11 @@ const byPurpose = new Map();
 let cooldowns = 0;
 let upstreamFail = 0;
 let backupHits = 0;
+// ChatX 27B 中继（2026-09-18）：办公室 173 vLLM 经隧道，GPU 串行 + 网关并发闸 CHATX_MAX_INFLIGHT。
+// 要回答的只有一个问题——「并发上限该不该抬 / 要不要第二台中继」：
+//   busy（闸拒）多 + p95 低 → 173 还有余量，抬闸；busy 多 + p95 高 → 173 饱和，加中继或限流；
+//   busy 少 + p95 高 → 不是并发问题，是 173 自己慢（别的负载）。route.ts 落 ev:"reject" why:chatx_*。
+const cx = { ok: 0, fail: 0, busy: 0, unavailable: 0, ms: [] };
 for (const ln of rows) {
   let r;
   try {
@@ -70,17 +75,28 @@ for (const ln of rows) {
     cooldowns++;
     continue;
   }
+  if (r.ev === "reject" && String(r.why || "").startsWith("chatx_")) {
+    if (r.why === "chatx_busy") cx.busy++;
+    else cx.unavailable++;
+    continue;
+  }
   if (r.ev === "upstream_fail") {
     upstreamFail++;
   }
-  if (r.ev !== "chat" && r.ev !== "upstream_fail") continue;
+  if (r.ev !== "chat" && r.ev !== "upstream_fail" && r.ev !== "chatx_fail") continue;
   if (r.vision) continue;
   const m = String(r.model || "legacy");
   const slot = byModel.get(m) || { n: 0, ok: 0, fail: 0, ms: [], prompt: [], backup: 0 };
   slot.n++;
-  if (r.ev === "upstream_fail") slot.fail++;
-  else if (r.ok === 1 || (r.ok === undefined && Number(r.status) === 200)) slot.ok++;
-  else slot.fail++;
+  const failed = r.ev === "upstream_fail" || r.ev === "chatx_fail" ||
+    !(r.ok === 1 || (r.ok === undefined && Number(r.status) === 200));
+  if (failed) slot.fail++;
+  else slot.ok++;
+  if (m === "chatx") {
+    if (failed) cx.fail++;
+    else cx.ok++;
+    if (Number.isFinite(Number(r.ms))) cx.ms.push(Number(r.ms));
+  }
   if (Number.isFinite(Number(r.ms))) slot.ms.push(Number(r.ms));
   if (Number.isFinite(Number(r.prompt_chars ?? r.in))) slot.prompt.push(Number(r.prompt_chars ?? r.in));
   if (r.key === "backup") {
@@ -178,6 +194,39 @@ const tokens = {
       share: tok.pt + tok.ct ? +((s.pt + s.ct) / (tok.pt + tok.ct)).toFixed(4) : 0 }))
     .sort((a, b) => b.prompt_tokens + b.completion_tokens - a.prompt_tokens - a.completion_tokens),
 };
+// ChatX 容量裁决（阈值可 env 调：CHATX_BUSY_RATE_HI 默认 5%，CHATX_P95_HI 默认 15s）
+const CX_BUSY_HI = Number(process.env.CHATX_BUSY_RATE_HI || 0.05);
+const CX_P95_HI = Number(process.env.CHATX_P95_HI_MS || 15000);
+const cxAttempts = cx.ok + cx.fail + cx.busy + cx.unavailable;
+const cxBusyRate = cxAttempts ? cx.busy / cxAttempts : 0;
+const cxP95 = pct(cx.ms, 0.95);
+let cxVerdict;
+if (!cxAttempts) cxVerdict = "no_calls";
+else if (cxBusyRate >= CX_BUSY_HI && cxP95 < CX_P95_HI) cxVerdict = "raise_inflight";
+else if (cxBusyRate >= CX_BUSY_HI) cxVerdict = "saturated_add_relay";
+else if (cxP95 >= CX_P95_HI * 2) cxVerdict = "relay_slow_not_busy";
+else cxVerdict = "ok";
+const CX_VERDICT_TEXT = {
+  no_calls: "窗口内无 ChatX 调用",
+  raise_inflight: "并发闸常满但 173 不慢 → 可抬 CHATX_MAX_INFLIGHT",
+  saturated_add_relay: "并发闸常满且 p95 高 → 173 饱和，加第二台中继或限流",
+  relay_slow_not_busy: "并发未满但 p95 高 → 不是闸的问题，是 173 自身慢（查同机其它负载）",
+  ok: "并发上限够用",
+};
+const chatx = {
+  attempts: cxAttempts,
+  ok: cx.ok,
+  fail: cx.fail,
+  busy: cx.busy,
+  unavailable: cx.unavailable,
+  busy_rate: cxAttempts ? +cxBusyRate.toFixed(4) : null,
+  p50_ms: pct(cx.ms, 0.5),
+  p95_ms: cxP95,
+  max_ms: cx.ms.length ? Math.max(...cx.ms) : 0,
+  verdict: cxVerdict,
+  verdict_text: CX_VERDICT_TEXT[cxVerdict],
+};
+
 const out = {
   window_h: HOURS,
   generated_at: new Date(NOW).toISOString(),
@@ -187,6 +236,7 @@ const out = {
   cooldowns,
   backup_hits: backupHits,
   models,
+  chatx,
   tokens,
   nginx: {
     ...ng,
@@ -209,7 +259,10 @@ const tokenLine = tokens.calls_with_usage
     `in/call=${tokens.prompt_per_call}${tokens.reasoning_tokens ? ` reasoning=${fmtK(tokens.reasoning_tokens)}` : ""} | ` +
     tokens.by_purpose.slice(0, 5).map((p) => `${p.purpose}=${pc(p.share)}`).join(" ")
   : "tokens: n/a (流水尚无 usage 字段)";
-const oneLine = `[ai-gw ${HOURS}h] calls=${totalN} upstream_fail=${upstreamFail} cooldowns=${cooldowns} | ${modelLine} | ${tokenLine} | ${nginxLine}`;
+const chatxLine = chatx.attempts
+  ? `chatx: attempts=${chatx.attempts} ok=${chatx.ok} fail=${chatx.fail} busy=${chatx.busy} (${pc(chatx.busy_rate)}) unavailable=${chatx.unavailable} p50=${sec(chatx.p50_ms)} p95=${sec(chatx.p95_ms)} → ${chatx.verdict}`
+  : "chatx: no calls";
+const oneLine = `[ai-gw ${HOURS}h] calls=${totalN} upstream_fail=${upstreamFail} cooldowns=${cooldowns} | ${modelLine} | ${chatxLine} | ${tokenLine} | ${nginxLine}`;
 
 if (flag("--json")) {
   console.log(JSON.stringify(out, null, 2));
@@ -220,6 +273,13 @@ if (flag("--json")) {
     console.log(`· ${m.model}：n=${m.n} 成功 ${pc(m.ok_rate)} p50 ${sec(m.p50_ms)} p95 ${sec(m.p95_ms)} 最慢 ${sec(m.max_ms)} 超40s ${m.over_40s} 次 prompt中位 ${m.prompt_chars_p50} 字`);
   }
   if (!models.length) console.log("· 窗口内无 chat 调用");
+  if (chatx.attempts) {
+    console.log(
+      `· ChatX 27B 中继：请求 ${chatx.attempts} · 成功 ${chatx.ok} · 上游失败 ${chatx.fail} · 并发闸拒 ${chatx.busy}（${pc(chatx.busy_rate)}）` +
+      ` · 中继未开被拒 ${chatx.unavailable} · p50 ${sec(chatx.p50_ms)} p95 ${sec(chatx.p95_ms)} 最慢 ${sec(chatx.max_ms)}`
+    );
+    console.log(`· ChatX 容量裁决：${chatx.verdict_text}`);
+  }
   if (tokens.calls_with_usage) {
     console.log(
       `· 真 token：输入 ${fmtK(tokens.prompt_tokens)} · 输出 ${fmtK(tokens.completion_tokens)} · 缓存命中 ${pc(tokens.cache_hit_rate)}` +
