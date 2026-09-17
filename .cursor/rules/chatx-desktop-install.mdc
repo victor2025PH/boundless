@@ -205,6 +205,12 @@ alwaysApply: false
 - push 整体失败→**立刻原样重推**（历史最多两轮必成）。install 是先卸旧再装新，失败时机器处于**无安装状态**，绝不能放着收工。
 - 别 RDP 手点安装、别中途 kill、别删脚本重试逻辑。
 
+### 173 第三坑：静默安装器卡死在 CopyFiles（2026-09-17 发 1.0.87 实测）
+
+- **与 System.dll 0xC0000005 是两码事**：进程不崩、CPU≈0、`Responding=True`，`$PLUGINSDIR\7z-out` 已解完（~9118 文件 / 1.28GB），却永远不写入 `%LOCALAPPDATA%\Programs\telegram-ai-desktop`。NSIS `CopyFiles` = `SHFileOperation(FO_COPY)`；同树 `robocopy` 6 秒完成。bisect：`locales` 55 文件 OK，`resources\backend`（2958）/`resources\services`（6077）对 SHFileOperation 挂死。Defender RTP 开关不影响。
+- **处置**：确认 7z-out 文件数/字节与 `build-info.json` version 对得上 → 杀所有 `ChatX-Setup*` → `robocopy` 进 INSTDIR → 写 HKCU Uninstall 的 DisplayVersion → 快捷方式 → `relaunch_chatx_node.ps1` + `verify_seat_backend_node.ps1`。**不要**再叠第四次 SSH `/S`（只会再攒一份 ns*.tmp，~20GB）。
+- 控制台会话 `/IT` 计划任务在 Win11 26200.9168 上也可能 LastResult=0x1 不跑；此坑不能再指望「静默 4 次失败后自动兜底」。
+
 ### 173 第二坑：装后「smoke 过 → 几分钟内 DOWN」＝残留旧后端抢端口（2026-08-13 发 1.0.25 实测两轮复现；**2026-08-17 已根修**）
 
 - **与上面的 NSIS 崩溃是两码事**（安装本身 exit=0）。机制：安装周期没杀干净**上一版的后端 sidecar**（`run_sentinel.json` 的 `started_at` 早于本次安装、`beat_at` 仍在跳＝铁证）→ 新壳的后端绑 18799 失败即退 → 旧后端随后寿终 → fleet 报 `exe only (backend not serving)`（沙箱 smoke 用随机端口看不见这病）。
