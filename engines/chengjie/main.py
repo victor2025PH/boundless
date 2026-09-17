@@ -154,6 +154,17 @@ class AIChatAssistant:
                     self.logger.info("AvatarHub 语音预热已调度（后台）")
             except Exception as ex:
                 self.logger.warning("AvatarHub 语音预热调度异常（忽略）: %s", ex)
+            # 2c'. #333 视觉身份层人设原型预热（vision.face_identity.enabled 时）：常驻人设的
+            #     人脸原型算好落 JSON 缓存，首图不再冷算 ~600ms。同 AvatarHub 模式：后台
+            #     daemon fire-and-forget，边车不健康直接放弃（入站时照旧现算），绝不挡启动。
+            try:
+                if (((self.config.config.get("vision") or {}).get("face_identity") or {}).get("enabled")):
+                    from src.companion.face_identity import warmup_persona_prototypes_async
+                    warmup_persona_prototypes_async(
+                        self.config.config, config_path=getattr(self.config, "config_path", None))
+                    self.logger.info("视觉身份层人设原型预热已调度（后台）")
+            except Exception as ex:
+                self.logger.warning("视觉身份层预热调度异常（忽略）: %s", ex)
             self._boot_mark("local_tts")
 
             # 2d. 协议媒体旧根迁移（账号资产 P0，2026-08-19）：媒体根迁实例数据根

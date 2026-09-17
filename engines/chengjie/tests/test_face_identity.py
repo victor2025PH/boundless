@@ -379,6 +379,52 @@ def test_stats_count_every_exit_reason_and_embed_latency(tmp_path, caplog):
     assert fi.stats()["counts"]["calls"] == 0
 
 
+def test_warmup_builds_prototypes_once_then_cache_hits(tmp_path):
+    """#333 P3-3：启动预热把相册根下每个人设的原型算好落缓存；第二次预热全部命中缓存（零边车调用）；
+    边车不健康 → 直接放弃；未启用 → 零动作。"""
+    fi.reset_stats()
+    album = tmp_path / "album"
+    (album / "mizuki").mkdir(parents=True)
+    (album / "haru").mkdir(parents=True)
+    (album / "_genpreview").mkdir(parents=True)        # 非人设目录：跳过
+    (album / "nofaces").mkdir(parents=True)           # 有目录无 face_ref/相册图：proto_none
+    _img(album / "mizuki", "face_ref.png", "PERSONA!")
+    _img(album / "haru", "face_ref.jpg", "HARU!!!!")
+    route = {"PERSONA!": [_face(PERSONA)], "HARU!!!!": [_face(SISTER)]}
+    op = _fake_opener(route)
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    cfg = _cfg(tmp_path)
+    class _NoAlbumStore:          # 隔离真实 persona_media 库
+        def list(self, *a, **k):
+            return []
+    _st = _NoAlbumStore()
+    ids = fi.warmup_persona_ids(cfg, config_path=str(tmp_path / "config" / "c.yaml"), store=_st)
+    assert ids == ["haru", "mizuki", "nofaces"]
+    out = fi.warmup_persona_prototypes(cfg, config_path=str(tmp_path / "config" / "c.yaml"), client=cl,
+                                       store=_st, cache_dir=tmp_path / "cache")
+    assert out == {"personas": 3, "built": 2, "cached": 0, "none": 1}
+    n_calls = len([u for u in op.calls if u.endswith("/v1/face/embed")])
+    assert n_calls == 2
+    assert sorted(p.name for p in (tmp_path / "cache").glob("persona_*.json")) == ["persona_haru.json", "persona_mizuki.json"]
+    # 第二次：全部缓存命中，边车零调用
+    out2 = fi.warmup_persona_prototypes(cfg, config_path=str(tmp_path / "config" / "c.yaml"), client=cl,
+                                        store=_st, cache_dir=tmp_path / "cache")
+    assert out2 == {"personas": 3, "built": 0, "cached": 2, "none": 1}
+    assert len([u for u in op.calls if u.endswith("/v1/face/embed")]) == n_calls
+    # 边车不健康 → 放弃
+    def _down(req, timeout=0):
+        raise OSError("down")
+    out3 = fi.warmup_persona_prototypes(cfg, client=fi.FaceEmbedClient("http://face.test:8767", opener=_down),
+                                        store=_st, cache_dir=tmp_path / "cache2")
+    assert out3["personas"] == 0 and not (tmp_path / "cache2").exists()
+    # 未启用 → 零动作
+    assert fi.warmup_persona_prototypes(_cfg(tmp_path, enabled=False), client=cl, store=_st)["personas"] == 0
+    t = fi.warmup_persona_prototypes_async(_cfg(tmp_path, enabled=False))
+    t.join(timeout=5)
+    assert not t.is_alive()
+    fi.reset_stats()
+
+
 def test_calibrate_tool_reports_and_suggests(tmp_path):
     """校准 CLI：样本不足只报分布；样本够时建议阈落在 [0.40, 0.65] 且异人 P99 之上。"""
     import importlib.util

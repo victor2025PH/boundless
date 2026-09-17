@@ -491,6 +491,85 @@ def annotate_inbound_sync(
     return note
 
 
+# ── 启动预热（#333 P3-3，2026-09-18）─────────────────────────────────────────────
+
+def warmup_persona_ids(config: Optional[Dict[str, Any]], *, config_path: Any = None,
+                       store: Any = None, max_n: int = 32) -> List[str]:
+    """要预热的人设：相册根下有目录的 + 注册相册里有已启用图的（去重、排序、封顶）。"""
+    ids: List[str] = []
+    seen: set = set()
+    try:
+        root = _album_root(config, config_path)
+        if root.is_dir():
+            for d in sorted(root.iterdir()):
+                if d.is_dir() and not d.name.startswith((".", "_")) and d.name not in seen:
+                    seen.add(d.name)
+                    ids.append(d.name)
+    except Exception:
+        pass
+    try:
+        st = store
+        if st is None:
+            from src.companion.persona_media_store import get_persona_media_store
+            st = get_persona_media_store()
+        rows = st.list(None, enabled_only=True) if st is not None else []
+        for r in rows or []:
+            pid = str(r.get("persona_id") or "").strip()
+            if pid and pid not in seen and str(r.get("media_type") or "").lower() in ("image", "photo", "picture"):
+                seen.add(pid)
+                ids.append(pid)
+    except Exception:
+        logger.debug("[face_identity] warmup persona listing via store failed", exc_info=True)
+    return ids[:max_n]
+
+
+def warmup_persona_prototypes(config: Optional[Dict[str, Any]], *, config_path: Any = None,
+                              client: Optional[FaceEmbedClient] = None, store: Any = None,
+                              cache_dir: Optional[Path] = None) -> Dict[str, int]:
+    """启动后把常驻人设的人脸原型算好落 JSON 缓存——首验实测首图 persona_prototype 冷算
+    ~600ms（6 张图各打一次边车），预热后首图只剩本图一次往返（~0.4s → ~0.15s）。
+
+    阻塞式（调用方放后台线程）。未启用 / 边车不健康 → 直接返回，不重试（下一次入站图会
+    照旧现算）。任何异常吞掉，只影响首图延迟。返回 {"personas": N, "built": n1, "cached": n2, "none": n3}。"""
+    out = {"personas": 0, "built": 0, "cached": 0, "none": 0}
+    try:
+        cfg = face_cfg(config)
+        if not cfg["enabled"]:
+            return out
+        cl = client or FaceEmbedClient(cfg["base_url"], timeout_sec=cfg["timeout_sec"],
+                                       min_det_score=cfg["min_det_score"], api_key=cfg["api_key"])
+        if not cl.health():
+            logger.info("[face_identity] warmup skipped: sidecar not healthy (%s)", cfg["base_url"])
+            return out
+        pids = warmup_persona_ids(config, config_path=config_path, store=store)
+        out["personas"] = len(pids)
+        t0 = time.time()
+        for pid in pids:
+            before = dict(_stats)
+            vec = persona_prototype(pid, config, cl, config_path=config_path,
+                                    max_n=int(cfg["persona_proto_max"]), store=store, cache_dir=cache_dir)
+            if vec is None:
+                out["none"] += 1
+            elif _stats.get("proto_cached", 0) > before.get("proto_cached", 0):
+                out["cached"] += 1
+            else:
+                out["built"] += 1
+        logger.info("[face_identity] warmup done personas=%d built=%d cached=%d none=%d in %.1fs",
+                    out["personas"], out["built"], out["cached"], out["none"], time.time() - t0)
+    except Exception:
+        logger.debug("[face_identity] warmup failed", exc_info=True)
+    return out
+
+
+def warmup_persona_prototypes_async(config: Optional[Dict[str, Any]], *, config_path: Any = None) -> Any:
+    """后台 daemon 线程 fire-and-forget（与 avatar_voice.warmup_personas_async 同模式）。返回线程句柄。"""
+    import threading
+    t = threading.Thread(target=lambda: warmup_persona_prototypes(config, config_path=config_path),
+                         name="face-identity-warmup", daemon=True)
+    t.start()
+    return t
+
+
 async def annotate_inbound(**kwargs: Any) -> str:
     """异步包装：同步 HTTP 放线程，任何异常回 ''。"""
     try:
