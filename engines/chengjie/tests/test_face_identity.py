@@ -379,6 +379,97 @@ def test_stats_count_every_exit_reason_and_embed_latency(tmp_path, caplog):
     assert fi.stats()["counts"]["calls"] == 0
 
 
+def _real_png(path: Path, seed: int, size=(96, 72), fmt="PNG", scale=1.0) -> Path:
+    """可被 PIL 解码的真图（pHash 需要）；seed 决定图案，scale/fmt 做「同图重编码」变体。"""
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, ((seed * 37) % 255, (seed * 91) % 255, (seed * 53) % 255))
+    d = ImageDraw.Draw(im)
+    rnd = __import__("random").Random(seed)
+    for _ in range(6):
+        x0, y0 = rnd.randint(0, size[0] - 20), rnd.randint(0, size[1] - 20)
+        d.rectangle([x0, y0, x0 + rnd.randint(8, 30), y0 + rnd.randint(8, 30)],
+                    fill=(rnd.randint(0, 255), rnd.randint(0, 255), rnd.randint(0, 255)))
+    if scale != 1.0:
+        im = im.resize((int(size[0] * scale), int(size[1] * scale)))
+    im.save(path, format=fmt, **({"quality": 80} if fmt == "JPEG" else {}))
+    return path
+
+
+def test_repeat_image_memory_by_phash_and_sha1(tmp_path):
+    """#333 P3-4：无脸图「TA 之前发过这张」——sha1 相等或 pHash 近重复（重编码/缩放）→ 带外说明；
+    不同图不误判；有脸图作后缀；人设自己的照片不加。观察行带 phash 落库。"""
+    pytest.importorskip("numpy")
+    fi.reset_stats()
+    mem = vm.VisualMemoryStore(":memory:")
+    cfg = _cfg(tmp_path)
+    ck = "whatsapp:19892968016:15635715247"
+    house = _real_png(tmp_path / "house.png", seed=7)
+    house_jpg = _real_png(tmp_path / "house_fwd.jpg", seed=7, fmt="JPEG", scale=0.75)   # 转发重编码 + 缩放
+    car = _real_png(tmp_path / "car.png", seed=11)
+    png_sig = house.read_bytes()[:8].decode("latin1")
+    jpg_sig = house_jpg.read_bytes()[:8].decode("latin1")
+    car_sig = car.read_bytes()[:8].decode("latin1")
+    op = _fake_opener({png_sig: [], jpg_sig: [], car_sig: []})     # 真图一律「无脸」
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+
+    def run(ref, mid, cap="类型=C 主体：房屋 场景：白色两层小楼，门前有车道"):
+        return fi.annotate_inbound_sync(config=cfg, conversation_id=ck, media_type="image", media_ref=str(ref),
+                                        message_id=mid, caption=cap, client=cl, memory=mem)
+
+    assert run(house, "m1") == ""                                   # 第一次：无话可说
+    obs = mem.list_observations(ck)
+    assert obs[0]["label"] == "no_face" and len(obs[0]["phash"]) == 16
+    n2 = run(house_jpg, "m2")                                       # 同图转发（JPEG+缩放）→ pHash 命中
+    assert "就发过一次" in n2 and "当时画面：房屋" in n2 and "不要当第一次见" in n2
+    assert "刚刚" in n2
+    assert run(car, "m3") == ""                                     # 不同图：不误判
+    assert fi.stats()["counts"]["repeat"] == 1
+    # 同一条消息自己不算复现（exclude_message_id）
+    prev = mem.find_repeat(ck, phash=obs[0]["phash"], exclude_message_id="m1")
+    assert prev is not None and prev["message_id"] == "m2" and prev["repeat_by"] == "phash"
+    assert mem.find_repeat(ck, phash="", sha1="") is None
+
+    # sha1 路径（PIL 解不开的伪图 → phash ''，字节级重传仍认）
+    parts = _img(tmp_path, "parts.jpg", "PARTS!!!")
+    op2 = _fake_opener({"PARTS!!!": [], "CAMERON1": [_face(CUSTOMER)]})
+    cl2 = fi.FaceEmbedClient("http://face.test:8767", opener=op2)
+    assert fi.annotate_inbound_sync(config=cfg, conversation_id=ck, media_type="image", media_ref=str(parts),
+                                    message_id="p1", caption="类型=C 主体：物品", client=cl2, memory=mem) == ""
+    n = fi.annotate_inbound_sync(config=cfg, conversation_id=ck, media_type="image", media_ref=str(parts),
+                                 message_id="p2", caption="类型=C 主体：物品", client=cl2, memory=mem)
+    assert "就发过一次" in n and mem.find_repeat(ck, sha1=mem.list_observations(ck)[0]["sha1"],
+                                                exclude_message_id="p2")["repeat_by"] == "sha1"
+    # 有脸图重发：身份说明在前，「发过」作后缀
+    selfie = _img(tmp_path, "s.jpg", "CAMERON1")
+    cap = "类型=C 主体：自拍 人物：1 人，正对镜头自拍。"
+    fi.annotate_inbound_sync(config=cfg, conversation_id=ck, media_type="image", media_ref=str(selfie),
+                             message_id="s1", caption=cap, client=cl2, memory=mem)
+    n_face = fi.annotate_inbound_sync(config=cfg, conversation_id=ck, media_type="image", media_ref=str(selfie),
+                                      message_id="s2", caption=cap, client=cl2, memory=mem)
+    assert n_face.startswith("图中") and n_face.endswith("不要当第一次见。）") and "又发这张" in n_face
+    fi.reset_stats()
+
+
+def test_visual_memory_migrates_old_db_adds_phash_column(tmp_path):
+    """老库（无 phash 列）打开即就地加列；老行 phash=''，新行可写。"""
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(str(p))
+    c.executescript(vm._DDL.replace("phash TEXT NOT NULL DEFAULT '',", ""))   # 防御：DDL 若含列也先去掉
+    c.execute("INSERT INTO visual_observations(conv_key, ts, label) VALUES('c', 1, 'no_face')")
+    c.commit()
+    cols_before = {r[1] for r in c.execute("PRAGMA table_info(visual_observations)")}
+    c.close()
+    assert "phash" not in cols_before
+    st = vm.VisualMemoryStore(p)
+    rows = st.list_observations("c")
+    assert rows and rows[0].get("phash") == ""
+    st.record_observation("c", label="no_face", phash="00ff00ff00ff00ff")
+    assert st.list_observations("c")[0]["phash"] == "00ff00ff00ff00ff"
+    assert st.find_repeat("c", phash="00ff00ff00ff00fe")["repeat_dist"] == 1
+    st.close()
+
+
 def test_warmup_builds_prototypes_once_then_cache_hits(tmp_path):
     """#333 P3-3：启动预热把相册根下每个人设的原型算好落缓存；第二次预热全部命中缓存（零边车调用）；
     边车不健康 → 直接放弃；未启用 → 零动作。"""

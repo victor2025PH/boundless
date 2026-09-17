@@ -53,7 +53,7 @@ _last_fail_ts: float = 0.0
 # 由 /api/visual-memory/status 暴露；``no_path`` 首次命中打 WARNING（带 ref 前缀，不带内容），
 # 因为那是「平台把图落了库但身份层拿不到文件」的唯一信号（WA RPA 线就是这种盲区）。
 _STAT_KEYS = ("calls", "enabled_off", "no_cid", "no_store", "not_image", "no_path", "service_fail",
-              "no_face", "face_ok", "persona", "customer_self", "known", "unknown",
+              "no_face", "face_ok", "persona", "customer_self", "known", "unknown", "repeat",
               "confirm_yes", "confirm_no", "relation", "proto_built", "proto_cached", "proto_none")
 _stats: Dict[str, int] = {k: 0 for k in _STAT_KEYS}
 _embed_ms: List[float] = []      # 最近 N 次边车往返耗时（滚动）
@@ -441,15 +441,33 @@ def annotate_inbound_sync(
     fields = vi.parse_caption_fields(caption)
     summary = vi.observation_summary(fields)
     try:
-        sha1 = hashlib.sha1(Path(path).read_bytes()).hexdigest()
+        raw = Path(path).read_bytes()
+        sha1 = hashlib.sha1(raw).hexdigest()
     except Exception:
-        sha1 = ""
+        raw, sha1 = b"", ""
+    # #333 P3-4：感知哈希 → 「这张图 TA 之前发过」（sha1 只认字节级重传；转发/截图/重编码靠 pHash）。
+    # 复用 image_phash（numpy DCT，无新依赖），任何失败 → ""＝不判复现。
+    phash = ""
+    try:
+        from src.companion.image_phash import phash_bytes
+        phash = phash_bytes(raw) if raw else ""
+    except Exception:
+        phash = ""
+    prev = mem.find_repeat(ck, sha1=sha1, phash=phash, exclude_message_id=message_id)
+    rep_note = ""
+    if prev is not None:
+        _bump("repeat")
+        from src.companion.visual_memory import _age_label
+        rep_note = vi.repeat_note(prev, age_label=_age_label(time.time() - float(prev.get("ts") or 0)),
+                                  has_face=bool(faces))
+        logger.info("[face_identity] conv=%s repeat by=%s dist=%s prev_ts=%.0f label=%s", ck,
+                    prev.get("repeat_by"), prev.get("repeat_dist"), float(prev.get("ts") or 0), prev.get("label"))
     if not faces:
         _bump("no_face")
         mem.record_observation(ck, message_id=message_id, sha1=sha1, subject=fields.get("subject") or "",
-                               summary=summary, label="no_face")
+                               summary=summary, label="no_face", phash=phash)
         logger.info("[face_identity] conv=%s faces=0 label=no_face subject=%s", ck, fields.get("subject") or "-")
-        return ""
+        return rep_note
     _bump("face_ok")
 
     face_vec = [float(x) for x in faces[0]["embedding"]]
@@ -479,7 +497,7 @@ def annotate_inbound_sync(
         relation = matched
     mem.record_observation(ck, message_id=message_id, sha1=sha1, subject=fields.get("subject") or "",
                            summary=summary, label=label, matched=matched, score=score,
-                           embedding=face_vec, source="ai_inferred", confirmed=False)
+                           embedding=face_vec, source="ai_inferred", confirmed=False, phash=phash)
     if label in _STAT_KEYS:
         _bump(label)
     logger.info("[face_identity] conv=%s faces=%d label=%s matched=%s score=%.3f scores=%s",
@@ -488,6 +506,9 @@ def annotate_inbound_sync(
     note = vi.identity_note(label, matched=matched, confirmed=confirmed, relation=relation)
     if len(faces) > 1 and note:
         note += f"（画面里共 {len(faces)} 张脸，以上说的是最大那张）"
+    if rep_note and label != "persona":
+        # 人设自己的照片被回传：身份说明已经含「多半是我方发过的」，再加「发过」反而混淆归属
+        note = f"{note}{rep_note}" if note else rep_note
     return note
 
 

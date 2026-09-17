@@ -202,13 +202,25 @@ class VisualMemoryStore:
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_DDL)
             self._conn.commit()
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """就地加列（老库 → 新列缺省空）。#333 P3-4：``phash``（64bit 感知哈希 16 hex）——
+        无脸图的「同一张图再发一次」记忆靠它（sha1 只认字节级重传；重编码/缩放/截图转发就变了）。"""
+        try:
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(visual_observations)").fetchall()}
+            if "phash" not in cols:
+                self._conn.execute("ALTER TABLE visual_observations ADD COLUMN phash TEXT NOT NULL DEFAULT ''")
+                self._conn.commit()
+        except Exception:
+            logger.debug("[visual_memory] migrate failed", exc_info=True)
 
     # ── 观察 ──
     def record_observation(
         self, conv_key: str, *, message_id: str = "", ts: Optional[float] = None, sha1: str = "",
         subject: str = "", summary: str = "", label: str = "", matched: str = "", score: float = 0.0,
         embedding: Optional[Sequence[float]] = None, source: str = "ai_inferred",
-        confirmed: bool = False, entity_id: int = 0,
+        confirmed: bool = False, entity_id: int = 0, phash: str = "",
     ) -> int:
         ck = str(conv_key or "").strip()
         if not ck:
@@ -217,18 +229,59 @@ class VisualMemoryStore:
             with self._lock:
                 cur = self._conn.execute(
                     "INSERT INTO visual_observations(conv_key, message_id, ts, sha1, subject, summary, label,"
-                    " matched, score, embedding, source, confirmed, entity_id)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " matched, score, embedding, source, confirmed, entity_id, phash)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (ck, str(message_id or ""), float(ts if ts is not None else time.time()), str(sha1 or ""),
                      str(subject or "")[:32], str(summary or "")[:240], str(label or ""), str(matched or "")[:64],
                      float(score or 0.0), _dump(embedding), str(source or "ai_inferred"),
-                     1 if confirmed else 0, int(entity_id or 0)),
+                     1 if confirmed else 0, int(entity_id or 0), str(phash or "")[:16]),
                 )
                 self._conn.commit()
                 return int(cur.lastrowid or 0)
         except Exception:
             logger.debug("[visual_memory] record_observation failed", exc_info=True)
             return 0
+
+    def find_repeat(self, conv_key: str, *, sha1: str = "", phash: str = "", max_dist: int = 8,
+                    exclude_message_id: str = "", limit: int = 80) -> Optional[Dict[str, Any]]:
+        """本会话里「同一张图」此前的观察（最近一条）：sha1 相等 **或** pHash 汉明距 ≤ max_dist。
+
+        阈值沿用 ``image_phash.NEAR_DUP_MAX_HAMMING``（8，重编码/缩放稳落带内，构图相似的不同图
+        一般 >16）。无 sha1 也无 phash → None。只看最近 ``limit`` 条（会话级，量级很小）。"""
+        ck = str(conv_key or "").strip()
+        s1 = str(sha1 or "").strip()
+        ph = str(phash or "").strip().lower()
+        if not ck or not (s1 or ph):
+            return None
+        try:
+            from src.companion.image_phash import hamming_hex
+        except Exception:
+            hamming_hex = None  # type: ignore[assignment]
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM visual_observations WHERE conv_key=? ORDER BY ts DESC, id DESC LIMIT ?",
+                    (ck, int(limit))).fetchall()
+            for r in rows:
+                if exclude_message_id and str(r["message_id"] or "") == str(exclude_message_id):
+                    continue
+                if s1 and str(r["sha1"] or "") == s1:
+                    d = self._obs(r)
+                    d["repeat_by"] = "sha1"
+                    d["repeat_dist"] = 0
+                    return d
+                rp = str(r["phash"] or "") if "phash" in r.keys() else ""
+                if ph and rp and hamming_hex is not None:
+                    dist = hamming_hex(ph, rp)
+                    if dist <= int(max_dist):
+                        d = self._obs(r)
+                        d["repeat_by"] = "phash"
+                        d["repeat_dist"] = int(dist)
+                        return d
+            return None
+        except Exception:
+            logger.debug("[visual_memory] find_repeat failed", exc_info=True)
+            return None
 
     def list_observations(self, conv_key: str, *, limit: int = 20, with_face_only: bool = False) -> List[Dict[str, Any]]:
         ck = str(conv_key or "").strip()

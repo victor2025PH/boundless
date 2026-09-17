@@ -203,6 +203,21 @@ def identity_note(label: str, *, matched: str = "", confirmed: bool = False,
     return ""
 
 
+def repeat_note(prev: Dict[str, Any], *, age_label: str, who: str = "TA", has_face: bool = False) -> str:
+    """#333 P3-4：这张图 {who} 此前发过（sha1 相等或 pHash 近重复）→ 一句带外说明。
+
+    无脸图（房子/车/宠物/食物/截图）此前在记忆层是零：只有 24h 文字便签，第二天再发同一张
+    AI 当第一次见。有脸图已由身份说明覆盖「是谁」，这里只补「发过」这一层，作后缀。"""
+    summ = str((prev or {}).get("summary") or "").strip()
+    if len(summ) > 50:
+        summ = summ[:49].rstrip("，,；;。 ") + "…"
+    tail = f"，当时画面：{summ}" if summ else ""
+    if has_face:
+        return f"（这张图{who}{age_label}发过一次{tail}——可以自然点出「又发这张」，不要当第一次见。）"
+    return (f"这张图{who}{age_label}就发过一次{tail}——按「TA 又发了上次那张」接话（比如「这不是上次那张…」），"
+            "不要当第一次见去重新描述；画面里没有的细节不要编。")
+
+
 def observation_summary(fields: Dict[str, Any], *, max_chars: int = 60) -> str:
     """caption 字段 → 一行短摘要（写入观察记录 / 日志用）。"""
     subj = str(fields.get("subject") or "")
@@ -217,6 +232,6 @@ def observation_summary(fields: Dict[str, Any], *, max_chars: int = 60) -> str:
 
 __all__ = [
     "INBOUND_IMAGE_PROMPT", "PROMPT_REQUIRED_CLAUSES",
-    "parse_caption_fields", "classify_identity", "identity_note", "observation_summary",
+    "parse_caption_fields", "classify_identity", "identity_note", "repeat_note", "observation_summary",
     "MATCH_THRESHOLD", "AMBIGUOUS_THRESHOLD", "LABELS",
 ]
