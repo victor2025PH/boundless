@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.0.88",
+    "date": "2026-09-18",
+    "title": {
+      "zh": "公网认人、跟图闸、免打扰原文、WA 边车进包",
+      "en": "Hosted face ID, follow-photo gate, quiet-hours verbatim, WA sidecar in the installer"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户发来带人脸的照片时，拟稿自动多一句内部说明（人设 / 本人 / 关系人 / 不要猜可以问）。外网走官网网关，不用开开关；对方说「是我」才记成事实。问小智「图中是谁怎么用」",
+        "客户只发图或回「好的」不再自动跟一张相册图；对方话里真要图或你已承诺才出图",
+        "关怀原文在免打扰时段按「保留」策略不会被挤出安静窗",
+        "WhatsApp 解密失败（Bad MAC）在工作台可见，边车已随本包"
+      ],
+      "en": [
+        "Customer photos with a face get one internal drafting note (persona / self / relation / don't guess). Hosted installs use the site gateway with no toggle; only that's me becomes a fact",
+        "Inbound photos or an ok no longer auto-follow with an album send; only a real ask or a kept promise fires the album",
+        "Verbatim care lines on keep-quiet-hours stay in the quiet window instead of being shifted out",
+        "WhatsApp decrypt failures (Bad MAC) are visible in the workspace; the sidecar ships in this build"
+      ]
+    }
+  },
+  {
     "version": "1.0.87",
     "date": "2026-09-17",
     "title": {
