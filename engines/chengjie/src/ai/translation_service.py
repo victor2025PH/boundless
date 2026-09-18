@@ -907,7 +907,10 @@ def _no_translatable_body(text: str) -> bool:
 # 拉丁语种关键词（小写子串匹配）。es 置于首位以保持既有行为；
 # 仅收录足够独特、不会成为英文常用词子串的词，避免误判。
 _LATIN_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("es", ("hola", "gracias", "estoy", "quiero", "buenos", "adios", "señor", "español")),
+    # ¿ / ¡ 是西语独有标点（葡/法/意都不用）：短句「Perfecto. ¿Cuánto tarda el envío?」
+    # 无关键词命中 → 判 en → 会话语言翻成 en → 中文回复被译成英文发给西语客户
+    # （2026-09-18 P1 重录实锤）。标点放关键词表同一层，仍是纯确定性。
+    ("es", ("hola", "gracias", "estoy", "quiero", "buenos", "adios", "señor", "español", "¿", "¡")),
     ("pt", ("olá", "obrigado", "obrigada", "quero", "você", "também", "português")),
     ("fr", ("bonjour", "merci", "veux", "avec", "pourquoi", "salut", "français")),
     ("de", ("hallo", "danke", "nicht", "bitte", "warum", "guten", "deutsch")),

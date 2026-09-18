@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-17 03:24:10 · OpenCC s2twp + 術語釘 · 17719 鍵（源 zh 全量 18181）
+生成: 2026-09-18 22:30:04 · OpenCC s2twp + 術語釘 · 17716 鍵（源 zh 全量 18329）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -2375,7 +2375,7 @@ ZH_HANT = {
     # ── bt_tpl_ack ──
     'bt_tpl_ack': '收到，正在排查，有結論第一時間在群裡同步。',
     # ── bt_tpl_fixed ──
-    'bt_tpl_fixed': '你反饋的問題已修復上線，方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
+    'bt_tpl_fixed': '問題：（一句話核心）\n修復：（改了什麼、怎麼拿到）\n已修復上線。方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
     # ── bt_tpl_label ──
     'bt_tpl_label': '快捷模板',
     # ── bt_tpl_logged ──
@@ -5045,42 +5045,18 @@ ZH_HANT = {
     'dv_js025': '路由結果',
     # ── dv_js026 ──
     'dv_js026': '匹配方式',
-    # ── dv_mr_btn_add ──
-    'dv_mr_btn_add': '新增模型檔',
     # ── dv_mr_btn_save ──
     'dv_mr_btn_save': '儲存並生效',
     # ── dv_mr_f_base ──
     'dv_mr_f_base': 'Base URL',
-    # ── dv_mr_f_model ──
-    'dv_mr_f_model': '模型',
-    # ── dv_mr_f_name ──
-    'dv_mr_f_name': '檔名',
-    # ── dv_mr_f_preset ──
-    'dv_mr_f_preset': '從預設新增',
     # ── dv_mr_js_dup ──
     'dv_mr_js_dup': '檔名重複：{name}',
-    # ── dv_mr_js_list_fail ──
-    'dv_mr_js_list_fail': '拉取失敗 {status} {msg}（檢查 Base URL / API Key）',
-    # ── dv_mr_js_list_ok ──
-    'dv_mr_js_list_ok': '拉到 {n} 個模型 id，在「模型」框裡下拉選擇',
     # ── dv_mr_js_listing ──
     'dv_mr_js_listing': '正在向端點拉取模型清單…',
     # ── dv_mr_js_loaded ──
     'dv_mr_js_loaded': '已裝載',
     # ── dv_mr_js_need_base ──
     'dv_mr_js_need_base': '先填 Base URL',
-    # ── dv_mr_js_need_fields ──
-    'dv_mr_js_need_fields': '檔名 / Base URL / 模型 都要填',
-    # ── dv_mr_js_none ──
-    'dv_mr_js_none': '還沒有模型檔：所有任務都用預設 ai.model。',
-    # ── dv_mr_js_preset_need_model ──
-    'dv_mr_js_preset_need_model': '已填好端點：填 API Key → 點「拉取模型列表」選一個現役模型 → 新增模型檔',
-    # ── dv_mr_js_preset_ready ──
-    'dv_mr_js_preset_ready': '已填好端點與模型，填 API Key 後點「新增模型檔」',
-    # ── dv_mr_js_summary ──
-    'dv_mr_js_summary': '已配置 {n} 個模型檔，{r} 條任務路由',
-    # ── dv_mr_js_task_default ──
-    'dv_mr_js_task_default': '預設模型（不路由）',
     # ── dv_mr_list_btn ──
     'dv_mr_list_btn': '拉取模型列表',
     # ── dv_mr_list_t ──
@@ -5089,20 +5065,10 @@ ZH_HANT = {
     'dv_mr_loading': '載入中…',
     # ── dv_mr_preset_anthropic ──
     'dv_mr_preset_anthropic': 'Claude · Anthropic（OpenAI 相容層）',
-    # ── dv_mr_preset_local ──
-    'dv_mr_preset_local': '本機 vLLM（173 chatx）',
-    # ── dv_mr_preset_pick ──
-    'dv_mr_preset_pick': '選擇廠商…（僅 OpenAI 相容協議）',
     # ── dv_mr_preset_qwen ──
-    'dv_mr_preset_qwen': '通義千問 · DashScope',
+    'dv_mr_preset_qwen': '通義千問',
     # ── dv_mr_preset_siliconflow ──
-    'dv_mr_preset_siliconflow': '矽基流動 SiliconFlow',
-    # ── dv_mr_routes_title ──
-    'dv_mr_routes_title': '任務 → 模型檔',
-    # ── dv_mr_sub ──
-    'dv_mr_sub': '像 Cursor 那樣按任務挑模型/端點：規劃用強模型、問答用便宜的、電腦操控用 VLM。儲存即熱生效。',
-    # ── dv_mr_sub_conv ──
-    'dv_mr_sub_conv': '這裡的每一檔也會出現在聊天工作台 composer「模型」面板裡，坐席可按會話切換（ChatGPT / Gemini / Grok / DeepSeek…）。',
+    'dv_mr_preset_siliconflow': '矽基流動',
     # ── dv_mr_title ──
     'dv_mr_title': '多模型路由（按任務挑模型）',
     # ── dv_s001 ──
@@ -15608,6 +15574,7 @@ ZH_HANT = {
     'oa.item': '提醒項',
     'oa.label.avatar_voice': '語音克隆服務',
     'oa.label.case_backlog': '案例無人跟進',
+    'oa.label.compute_lane': '三路算力（173 / DeepSeek / 矽基）',
     'oa.label.draft_backlog': '待審草稿積壓',
     'oa.label.lan_gpu': 'LAN GPU 主機',
     'oa.label.unanswered_inbound': '客戶在等（沒人回）',
@@ -21037,9 +21004,9 @@ ZH_HANT = {
     # ── psn_bulk_delete ──
     'psn_bulk_delete': '刪除選中',
     # ── psn_bulk_import_t ──
-    'psn_bulk_import_t': '批次 JSON 匯入',
+    'psn_bulk_import_t': '匯入人設包或文件',
     # ── psn_bulk_import_title ──
-    'psn_bulk_import_title': '批次匯入人設',
+    'psn_bulk_import_title': '匯入人設',
     # ── psn_bulk_rmtag_t ──
     'psn_bulk_rmtag_t': '從所有選中人設移除同一標籤',
     # ── psn_bulk_selected ──
@@ -21192,6 +21159,8 @@ ZH_HANT = {
     'psn_expand_to_load': '點選展開載入…',
     # ── psn_export ──
     'psn_export': '匯出',
+    # ── psn_export_csv ──
+    'psn_export_csv': '匯出 CSV',
     # ── psn_export_csv_t ──
     'psn_export_csv_t': '匯出當前篩選結果為 CSV',
     # ── psn_export_import_profiles ──
@@ -21286,6 +21255,8 @@ ZH_HANT = {
     'psn_imp_apply': '填入編輯器校對',
     # ── psn_imp_back ──
     'psn_imp_back': '返回上一步',
+    # ── psn_imp_bad_type ──
+    'psn_imp_bad_type': '不支援這種檔案。請用 .json / .yaml / .txt / .docx',
     # ── psn_imp_btn ──
     'psn_imp_btn': '從文件匯入',
     # ── psn_imp_btn_t ──
@@ -21304,12 +21275,20 @@ ZH_HANT = {
     'psn_imp_cov_scenes': '場景',
     # ── psn_imp_cov_tastes ──
     'psn_imp_cov_tastes': '喜好',
+    # ── psn_imp_detected ──
+    'psn_imp_detected': '檢測到 {fmt} · {n} 個人設',
     # ── psn_imp_disabled ──
     'psn_imp_disabled': '文件匯入未啟用（後端未開啟該功能）',
+    # ── psn_imp_dry_fail ──
+    'psn_imp_dry_fail': '解析成功，但預檢失敗：',
     # ── psn_imp_extract ──
     'psn_imp_extract': '開始 AI 提取',
+    # ── psn_imp_extract_cta ──
+    'psn_imp_extract_cta': '用 AI 從這篇文件提取',
     # ── psn_imp_fail ──
     'psn_imp_fail': '提取失敗',
+    # ── psn_imp_maybe_doc ──
+    'psn_imp_maybe_doc': '這份不像人設包。若是 Word / 長文，請用「從文件匯入」。',
     # ── psn_imp_need_input ──
     'psn_imp_need_input': '請先貼上文字或選擇檔案',
     # ── psn_imp_or_file ──
@@ -21324,6 +21303,8 @@ ZH_HANT = {
     'psn_imp_paste_lbl': '貼上文件文字',
     # ── psn_imp_paste_ph ──
     'psn_imp_paste_ph': '把人設文件全文貼上到這裡…',
+    # ── psn_imp_readonly ──
+    'psn_imp_readonly': '當前賬號不能匯入人設（只讀）。',
     # ── psn_imp_stage_queued ──
     'psn_imp_stage_queued': '排隊中…',
     # ── psn_imp_stage_running ──
@@ -21342,12 +21323,24 @@ ZH_HANT = {
     'psn_imp_title': '從文件匯入人設',
     # ── psn_imp_truncated ──
     'psn_imp_truncated': '文件過長，已截斷',
+    # ── psn_imp_voice_did_off ──
+    'psn_imp_voice_did_off': '已改為不發語音',
+    # ── psn_imp_voice_did_preset ──
+    'psn_imp_voice_did_preset': '已改為預置聲 {voice}',
+    # ── psn_imp_voice_did_strip ──
+    'psn_imp_voice_did_strip': '已去掉多餘預置聲名，克隆錄音保留',
+    # ── psn_imp_voice_strip ──
+    'psn_imp_voice_strip': '將去掉多餘的預置聲名，保留克隆錄音',
+    # ── psn_imp_voice_to_off ──
+    'psn_imp_voice_to_off': '語音配置不合法，將改為不發語音',
+    # ── psn_imp_voice_to_preset ──
+    'psn_imp_voice_to_preset': '語音將改為預置聲 {voice}',
     # ── psn_import ──
     'psn_import': '匯入',
     # ── psn_import_json_btn ──
     'psn_import_json_btn': '匯入 JSON',
     # ── psn_import_json_ph ──
-    'psn_import_json_ph': '貼上 JSON 陣列，格式：[{"id":"xxx","name":"xxx","role":"xxx",...}, ...]',
+    'psn_import_json_ph': '貼上 JSON / YAML 人設包，或長文。也可從檔案選擇 .json .yaml .docx .txt',
     # ── psn_import_mode ──
     'psn_import_mode': '匯入模式',
     # ── psn_import_rules_t ──
@@ -21397,7 +21390,7 @@ ZH_HANT = {
     # ── psn_ji_undone ──
     'psn_ji_undone': '已撤銷本次填充，表單恢復為填充前的值。',
     # ── psn_ji_unknown_fields ──
-    'psn_ji_unknown_fields': '已拒絕：JSON 裡有人設檔案不認識的欄位（{fields}）。請檢查是不是粘錯了內容。',
+    'psn_ji_unknown_fields': '已拒絕：內容裡有人設檔案不認識的欄位（{fields}）。請檢查是不是粘錯了內容。',
     # ── psn_js_001 ──
     'psn_js_001': '編輯人設',
     # ── psn_js_002 ──
@@ -21701,7 +21694,7 @@ ZH_HANT = {
     # ── psn_js_156 ──
     'psn_js_156': 'JSON 已解析並填充',
     # ── psn_js_157 ──
-    'psn_js_157': 'JSON 解析失敗: ',
+    'psn_js_157': 'JSON / YAML 解析失敗: ',
     # ── psn_js_158 ──
     'psn_js_158': '人設池還在載入，請稍候…',
     # ── psn_js_159 ──
@@ -21811,7 +21804,7 @@ ZH_HANT = {
     # ── psn_js_211 ──
     'psn_js_211': ' 個已繫結',
     # ── psn_js_212 ──
-    'psn_js_212': 'JSON 格式錯誤: ',
+    'psn_js_212': 'JSON / YAML 格式錯誤: ',
     # ── psn_js_213 ──
     'psn_js_213': '未找到有效人設資料（需要含 id 或 name 欄位）',
     # ── psn_js_214 ──
@@ -22117,7 +22110,7 @@ ZH_HANT = {
     # ── psn_json_data_lbl ──
     'psn_json_data_lbl': 'JSON 資料（貼上後點匯入，或點匯出後自動填充）',
     # ── psn_json_import_field ──
-    'psn_json_import_field': '從 JSON 匯入欄位…',
+    'psn_json_import_field': '從 JSON / YAML 匯入欄位…',
     # ── psn_kbd_help_t ──
     'psn_kbd_help_t': '快捷鍵速查',
     # ── psn_lang_zh ──
@@ -22263,7 +22256,7 @@ ZH_HANT = {
     # ── psn_parse_preview ──
     'psn_parse_preview': '解析預覽',
     # ── psn_paste_profile_json ──
-    'psn_paste_profile_json': '貼上 profile JSON',
+    'psn_paste_profile_json': '貼上 profile JSON 或 YAML',
     # ── psn_pers_notice ──
     'psn_pers_notice': '已將結構化格式轉換為可讀文字',
     # ── psn_pers_structured ──
@@ -22569,7 +22562,7 @@ ZH_HANT = {
     # ── psn_restore_add_h ──
     'psn_restore_add_h': '將新增：',
     # ── psn_restore_bad_json ──
-    'psn_restore_bad_json': '這個檔案不是合法的 JSON，無法恢復。',
+    'psn_restore_bad_json': '這個檔案不是合法的 JSON 或 YAML，無法恢復。',
     # ── psn_restore_bad_shape ──
     'psn_restore_bad_shape': '這個檔案不是人裝置份（缺少 profiles 列表）。',
     # ── psn_restore_confirm ──
@@ -26233,7 +26226,7 @@ ZH_HANT = {
     'setup.media.stage_off': '未開啟',
     'setup.media.warn_title': '已開開關，但以下後端還沒配好（可先開、後補）：',
     'setup.pool.saved': '備用 Key 池已儲存並生效',
-    'setup.routes.saved': '多模型路由已儲存並生效',
+    'setup.routes.saved': '已儲存並生效',
     # ── sf ──
     'sf.cap.ai_draft': 'AI 草稿/智慧回覆',
     'sf.cap.autosend': '全自動回覆',

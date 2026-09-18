@@ -1,5 +1,5 @@
 ---
-description: 智聊(ChatX)桌面包的打包与坐席机安装/发版 SOP。凡是「打包智聊 / 安装智聊 / 发版 / 装到 173/198/104/140 / push_chatx / 重装 / 清空重装」这类任务，先按本规则执行；173 的安装崩溃按既定处置，不要重新排查。
+description: 智聊(ChatX)桌面包的打包与坐席机安装/发版 SOP。凡是「打包智聊 / 安装智聊 / 发版 / 装到 173/198/104 / push_chatx / 重装 / 清空重装」这类任务，先按本规则执行；173 的安装崩溃按既定处置，不要重新排查。140 已改编记忆机、不是坐席。
 alwaysApply: false
 ---
 
@@ -25,9 +25,10 @@ alwaysApply: false
 常规发版只做三件事：打 `dist:win:clean` → `website/scripts/publish_chatx.ps1` 上官网
 （public；内测渠道仍按上节做同字节桥）→ 频道发版帖（遵守上文文案纪律，不附自动更新尾巴）。
 
-**不要**再 `push_chatx` / 重装到局域网坐席 **173/`yunsheng`、198/`kouxing`、104/`lianbei`、
-140/`tingxie`**，除非用户**当次**明确说「装到这几台 / 173 / 198 …」。这些机器走客户端
-对 `latest.yml` 的自动更新。下面「安装到这几台机器」的第 5–7 步仅在点名坐席机时才跑。
+**不要**再 `push_chatx` / 重装到局域网坐席 **173/`yunsheng`、198/`kouxing`、104/`lianbei`**
+（140/`tingxie` 已改编记忆机、不再是坐席，见下「机器映射」），除非用户**当次**明确说
+「装到这几台 / 173 / 198 …」。这些机器走客户端对 `latest.yml` 的自动更新。下面
+「安装到这几台机器」的第 5–7 步仅在点名坐席机时才跑。
 
 从 1.0.81 起 **R 批只出一个包 = clean 形态**（`npm run dist:win:clean` → `dist-clean\`），坐席机、内测机、
 公网用户装同一个 exe；`dist:win`（smart / internal，带「内测版」角标 + seed-data）**不再是发版产物**。
@@ -137,12 +138,18 @@ alwaysApply: false
 
 ## 机器映射（ssh config 由 deploy/machines.json 生成）
 
-| 说法 | 别名 | 系统 | 备注 |
-|---|---|---|---|
-| 173 | `yunsheng` | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
-| 198 | `kouxing` | Win10 | C 盘小；push <3GB 预检现自带**自动处方**（清旧包+陈旧 scoped_dir，见台账）；另有周清任务 `ChatXSeatTempClean`（SUN 06:40，脚本源 `deploy/desktop/seat_temp_clean.ps1`） |
-| 104 | `lianbei` | Win10 | |
-| 140 | `tingxie` | Win10 | 历史坐席节点 |
+坐席集合的单一源是 `deploy/machines.json` 里 `chatx_seat: true` 的机器（`monitor_seat_logs.py`
+也据此取名单与中文名）；改坐席编制先改台账。中文名用台账现名（2026-08-29 改编）。
+
+| 说法 | 别名（旧名仍可用） | 现名 | 系统 | 备注 |
+|---|---|---|---|---|
+| 173 | `yuyan` / `yunsheng` | 语言机 | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
+| 198 | `shijue` / `kouxing` | 视觉机 | Win10 | C 盘小；push <3GB 预检现自带**自动处方**（清旧包+陈旧 scoped_dir，见台账）；另有周清任务 `ChatXSeatTempClean`（SUN 06:40，脚本源 `deploy/desktop/seat_temp_clean.ps1`） |
+| 104 | `shengyin` / `lianbei` | 声音机 | Win10 | |
+
+**140（`jiyi` / `tingxie`，现名记忆机）已不是坐席**：2026-08-29 改编为算力节点（bge-m3 嵌入 :11434 +
+whisper STT :7854），智聊桌面版 2026-08-24 后未再运行、无自启，台账无 `chatx_seat`。不要往它推包，
+也不要把它加回坐席监控；若要重新启用为坐席，先在台账加 `chatx_seat: true`。
 
 ## 三档安装语义（都从 117 一条命令发起）
 

@@ -6,9 +6,10 @@
     "命名法：id=功能拼音（跟职能走，本次 v2 全员改名）；ssh[0]=主别名；ssh 其余=职能/统一别名；",
     "ssh_deprecated=旧名过渡别名（2026-11-05 日落删除）。角色权威源=engines/avatarhub cluster_map.json，本表 role_now 是其摘要。",
     "resolution=该机实际屏幕（壁纸按此渲染）；accent=机器识别色（壁纸/终端/主题统一用）；watch_ports=桌面哨兵看护的本机算力端口。",
-    "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。"
+    "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。",
+    "chatx_seat=true 表示该机跑智聊桌面版坐席（127.0.0.1:18799 桌面后端 + %APPDATA%\\telegram-ai-desktop 日志）；deploy/desktop/monitor_seat_logs.py 据此取坐席名单与中文名（zh），改编制只改本字段（2026-09-18 增列，此前脚本硬编码 140 听写 → 改编记忆机后连报假离线）。"
   ],
-  "version": "2026-08-29",
+  "version": "2026-09-18",
   "gateway": "192.168.0.1",
   "hub": {
     "id": "zhongshu",
@@ -115,6 +116,7 @@
       "user": "admin",
       "key": "cluster_controller",
       "role": "compute",
+      "chatx_seat": true,
       "role_short": "LAN唯一LLM",
       "role_now": "语言：vLLM chatx :8001（局域网唯一 LLM，口语化/内容兜底）+ ollama 容灾 :11434；IndexTTS :7865 已泊、智聊 TTS 主力迁 104（2026-08-29）",
       "gpu": "RTX 5090 32G",
@@ -226,6 +228,7 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "compute",
+      "chatx_seat": true,
       "role_short": "智聊语音唯一",
       "role_now": "声音：IndexTTS-2 :7865 智聊克隆唯一落点（IndexTTS104 开机任务+5min 看护已挂；faceswap 已停用 Disabled，2026-08-29）",
       "gpu": "RTX 4070 12G",
@@ -326,6 +329,7 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "dev",
+      "chatx_seat": true,
       "role_short": "识图·ASR+SER",
       "role_now": "视觉与听觉：qwen3-vl 识图 :11434（智聊识图单点）+ aitr_asr ASR+SER :8765（2026-08-29 迁入，asr_loaded+ser_loaded）；lipsync 热备退役",
       "gpu": "RTX 4070 12G",

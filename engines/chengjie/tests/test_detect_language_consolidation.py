@@ -37,3 +37,13 @@ def test_script_languages_now_detected():
 def test_thai_baht_symbol_not_misdetected():
     # 跨境 THB 报价：泰铢符号 ฿ 不应让纯英文消息被判成泰语（回落 zh，非 th）
     assert _detect_language("Price: 100฿ only, free shipping") != "th"
+
+
+def test_spanish_inverted_punctuation_is_strong_signal():
+    # 2026-09-18 P1 重录实锤：无关键词的短西语句被判 en → 会话语言翻成 en → 中文回复译成英文发给西语客户。
+    # ¿ / ¡ 是西语独有标点，确定性判 es；不含关键词/标点的英文句行为不变。
+    from src.ai.translation_service import detect_language
+    assert detect_language("Perfecto. ¿Cuánto tarda el envío y aceptan tarjeta?") == "es"
+    assert detect_language("¡Listo! Te confirmo el pedido.") == "es"
+    assert detect_language("Hi, my order #A1023 still hasn't arrived. It's been 12 days.") == "en"
+    assert detect_language("Olá, obrigado pela ajuda") == "pt"

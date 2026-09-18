@@ -997,8 +997,18 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 from src.client.reply_logic_gates import group_allowlist_blocked
                 _gr_cfg = self.config.get('telegram', {}).get('group_reply', {})
                 if group_allowlist_blocked(_gr_cfg, chat_id):
-                    self.logger.debug(
-                        "[群消息] 跳过: 不在灰度白名单 chat_id=%s", chat_id)
+                    # 2026-09-18 P6 排查实锤：这里 debug 级静默丢，排「群里刚发的消息工作台
+                    # 看不到」时被误当触发闸问题绕了一大圈。首见该群 INFO 一次并给出修法，
+                    # 之后同群 1h 内只记 debug（业务大群一天上千条，不刷屏）。
+                    if self._note_allowlist_skip(chat_id):
+                        self.logger.info(
+                            "[群消息] 跳过: 不在灰度白名单 chat_id=%s title=%s —— 该群消息"
+                            "不入工作台也不回复；要处理请把 chat_id 加进 "
+                            "telegram.group_reply.allowlist_chat_ids（同群 1h 内不再提示）",
+                            chat_id, getattr(message.chat, 'title', '') or '')
+                    else:
+                        self.logger.debug(
+                            "[群消息] 跳过: 不在灰度白名单 chat_id=%s", chat_id)
                     return
 
                 # P-1: 跳过 bot 启动之前的旧消息（防止重启后处理历史队列导致循环）
@@ -2782,6 +2792,31 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 self.logger.debug("[mirror] 收件箱镜像失败", exc_info=True)
             except Exception:
                 pass
+
+    #: 灰度白名单拦截提示节流窗（秒）：同一群首见 INFO，窗内再拦只记 debug。
+    _ALLOWLIST_SKIP_NOTE_SEC = 3600.0
+
+    def _note_allowlist_skip(self, chat_id: Any, now: Optional[float] = None) -> bool:
+        """白名单拦截是否该以 INFO 提示（同群 ``_ALLOWLIST_SKIP_NOTE_SEC`` 内只提示一次）。
+
+        纯记账，绝不抛；账本上限 500 群，溢出整体清空（下一轮重新提示即可）。
+        """
+        try:
+            ts = time.time() if now is None else float(now)
+            book = getattr(self, "_allowlist_skip_noted", None)
+            if book is None:
+                book = {}
+                self._allowlist_skip_noted = book
+            key = str(chat_id)
+            last = float(book.get(key) or 0.0)
+            if last and ts - last < self._ALLOWLIST_SKIP_NOTE_SEC:
+                return False
+            if len(book) >= 500:
+                book.clear()
+            book[key] = ts
+            return True
+        except Exception:
+            return True
 
     def _mirror_untriggered_group_message(self, message: Any) -> None:
         """未触发自动回复的群消息 → 只镜像进统一收件箱（不回复、不起草、不进 SLA）。

@@ -138,3 +138,16 @@ questions:
   - tag: face_identity
     q: "客户发自拍怎么认人？图中是谁怎么用？"
     must_any: ["人脸", "是我", "网关", "设置"]
+  # ── v1.0.89 发版批（群进工作台 / 间隔记忆 / 西语 / 媒体账本）──
+  - tag: group_inbox_mirror
+    q: "群里发的消息工作台看不到？群消息怎么进工作台？"
+    must_any: ["群", "工作台", "白名单"]
+  - tag: time_gap_memory
+    q: "隔很久再聊会不会乱记时间？"
+    must_any: ["间隔", "记忆", "设置"]
+  - tag: spanish_punct_lang
+    q: "西语客户为什么回成英文？"
+    must_any: ["西语", "英文", "翻译"]
+  - tag: media_ledger
+    q: "刚发过图为什么还说要发？"
+    must_any: ["图", "发", "设置"]

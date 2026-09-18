@@ -1803,6 +1803,51 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "图中是谁 人脸 自拍 是我 认人 视觉身份 face identity who",
         "/workspace",
     ),
+    # ── 1.0.89（群进工作台 / 间隔记忆 / 西语 / 媒体账本）──
+    (
+        "group-inbox-mirror",
+        "群里发的消息工作台看不到 / 群消息怎么进工作台",
+        "Group messages not showing in the inbox",
+        "不用设置。Telegram 群即使没人 @ 机器人、也没触发自动回复，消息也会进统一收件箱「群组动态」，会话名是群名。"
+        "某个群完全看不到：它可能不在灰度白名单。把该群 chat_id 加进 telegram.group_reply.allowlist_chat_ids 后才会进工作台并可回复。",
+        "No setting. Telegram group lines land in Group activity even when nobody @ the bot and auto-reply does not fire. The thread title is the group name. "
+        "If a group is missing entirely, it is probably outside the allowlist — add its chat_id to telegram.group_reply.allowlist_chat_ids.",
+        "群消息 群组动态 白名单 工作台看不到 group inbox allowlist",
+        "/workspace",
+    ),
+    (
+        "time-gap-memory",
+        "隔很久再聊会不会乱记时间 / 怎么让 AI 记得上次聊什么",
+        "Does a long gap scramble the time the AI remembers",
+        "不用设置。对方隔几天再来，拟稿按真实间隔说「好久没聊了」，不会把 5 天说成 50 天。"
+        "对方提过的具体事（吃撑、涮肉）会按关键词和近义再提起。记错了去「AI 记忆」页改或删。",
+        "No setting. After a few days away the draft uses the real gap instead of inflating it. "
+        "Specific things they said can come back by keyword. Fix or delete a wrong fact on the AI Memory page.",
+        "间隔 好久没聊 记忆 时间 乱记 time gap memory",
+        "/workspace",
+    ),
+    (
+        "spanish-punct-lang",
+        "西语客户为什么回成英文 / 西语短句被翻成英文",
+        "Why do Spanish customers get English replies",
+        "不用设置。带 ¿ / ¡ 的短西语句现在判成西班牙语；以前没关键词会被当成英文，再按「发→西语」把已经是西语的草稿译成英文。"
+        "仍不对时看工具条「发→X」是不是铆在 es。",
+        "No setting. Short Spanish lines with ¿ / ¡ are tagged Spanish so Send→Spanish no longer re-translates them into English. "
+        "If it still flips, check the toolbar Send→X pin is es.",
+        "西语 西班牙 英文 翻译 ¿ ¡ spanish english",
+        "/workspace",
+    ),
+    (
+        "media-ledger",
+        "刚发过图为什么还说要发 / 对方发了照片为什么装作没看见",
+        "Why does the AI promise another photo after one was just sent",
+        "不用设置。拟稿会看工作台里已经发出去的图，刚发过就不会再说「等我再发一张」。"
+        "对方发来的图也会记一笔，回复应提到照片而不是当纯文字。",
+        "No setting. Drafts see photos already sent from the workspace, so they should not promise another one immediately. "
+        "Inbound photos are noted so the reply can acknowledge the picture.",
+        "发图 再发一张 照片 账本 media ledger photo",
+        "/workspace",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请

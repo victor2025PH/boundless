@@ -1581,6 +1581,39 @@ HELP_TERMS: dict = {
         "desc_en": "When the clone voice cannot speak the chat language (e.g. Japanese), replies go as text by design — not a voice outage: the header shows Voice off for this chat (clone does not support ja), the same chat is not warned per message and it no longer counts toward voice outage alerts.",
         "usage": "看到该行不用处理；要让这个会话出语音需换支持该语种的克隆声或改人设语言。",
         "usage_en": "No action needed; to get voice in that chat, switch to a clone voice that supports the language or change the persona language."
+    },
+    # ── 1.0.89（群进工作台 / 间隔记忆 / 西语标点 / 媒体账本）───
+    "group_inbox_mirror": {
+        "zh": "群消息进工作台",
+        "en": "Group messages in the inbox",
+        "desc": "Telegram 群即使没触发自动回复，也会镜像进统一收件箱，会话名用群名而不是发言人。不在灰度白名单的群不进工作台也不回复。",
+        "desc_en": "Telegram group messages are mirrored into the unified inbox even when auto-reply does not fire. The thread keeps the group title, not the speaker name. Groups outside the allowlist stay out of the inbox and are not answered.",
+        "usage": "打开工作台 → 群组动态。要处理某个群：把该群 chat_id 加进 telegram.group_reply.allowlist_chat_ids。问小智「群消息怎么进工作台」。",
+        "usage_en": "Open the workspace → Group activity. To handle a group, add its chat_id to telegram.group_reply.allowlist_chat_ids."
+    },
+    "time_gap_memory": {
+        "zh": "隔很久再聊的时间记忆",
+        "en": "Time-gap memory",
+        "desc": "对方隔几天再来时，拟稿按真实间隔说话（好久没聊了），不会把几天说成几十天。对方提过的事（吃撑、涮肉）会按关键词和近义再提起。",
+        "desc_en": "When someone returns after days, drafts use the real gap (long time no chat) instead of inflating days into weeks. Things they mentioned (a huge meal, hotpot) can be brought back by keywords and near-synonyms.",
+        "usage": "不用设置。隔几天的会话看拟稿是否提间隔、是否接得上上次的事。问小智「隔很久再聊会乱记时间吗」。",
+        "usage_en": "No setting. After a multi-day gap, check whether the draft mentions the pause and picks up the last topic."
+    },
+    "spanish_punct_lang": {
+        "zh": "西语标点不再误判成英文",
+        "en": "Spanish punctuation is not misread as English",
+        "desc": "带 ¿ / ¡ 的短西语句会判成西班牙语。以前没关键词时会被当成英文，会话「发→西语」再把已经是西语的草稿译成英文发给客户。",
+        "desc_en": "Short Spanish lines with ¿ / ¡ are detected as Spanish. Without keywords they used to be tagged English, then Send→Spanish re-translated an already-Spanish draft into English.",
+        "usage": "不用设置。西语客户来一句带问号的短句时，看发出去的仍是西语。问小智「西语为什么回成英文」。",
+        "usage_en": "No setting. On a short Spanish question, the outbound line should stay Spanish."
+    },
+    "media_ledger": {
+        "zh": "已发图片账本",
+        "en": "Sent-photo ledger",
+        "desc": "拟稿认工作台里已经发出去的图，不会一边说「等我再发一张」一边其实刚发过。对方发来的图也会记一笔，回「收到照片」而不是装作没看见。",
+        "desc_en": "Drafts see photos already sent from the workspace, so they do not promise another picture right after one went out. Inbound photos are noted too, so the reply can acknowledge the picture instead of ignoring it.",
+        "usage": "不用设置。刚手发或自动发过图后，看下一条拟稿还说不说「等我发一张」。问小智「刚发过图为什么还说要发」。",
+        "usage_en": "No setting. After a photo just went out, the next draft should not say wait I will send one."
     }
 }
 

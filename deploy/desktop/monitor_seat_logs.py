@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""坐席机 ChatX 工作日志监控（198 智拓 / 104 幻颜，可扩展）。
+"""坐席机 ChatX 工作日志监控（名单来自 deploy/machines.json 的 ``chatx_seat`` 机器）。
 
 做什么
 ------
+0. 坐席名单与中文名从台账 ``deploy/machines.json`` 推导（``chatx_seat: true`` 的机器，
+   显示名 = ``IP尾段 zh(主别名)``，如 ``198 视觉机(shijue)``）。改编制只改台账。
 1. SSH 拉取每台坐席机的 ChatX 后端工作日志
    ``%APPDATA%\\telegram-ai-desktop\\logs\\backend.log``（远端 base64 回传，
    零 GBK 乱码），只取 ERROR/WARNING/Traceback 行 + app 版本 + 文件 mtime。
@@ -30,6 +32,7 @@
     python monitor_seat_logs.py --dry-run      # 只扫描打印，不发不改状态
     python monitor_seat_logs.py --include-benign  # 报告里也列良性噪声（排查用）
     python monitor_seat_logs.py --since-min 180   # 只看最近 N 分钟的日志行（默认全量按状态增量）
+    python monitor_seat_logs.py --baseline --note "…"  # 基线 + 一行说明（编制变更时告知群里为什么名单变了）
 
 退出码：0 正常（含无问题）；1 投递失败 / 实例不可达。
 """
@@ -51,15 +54,45 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# ── 坐席机清单（中文名: SSH 别名）──────────────────────────────────────────────
-# 2026-08-13 起补 173/140：fresh_guard 死锁事故证实四台同病，只盯两台=另两台盲飞。
-SEATS: Dict[str, str] = {
-    "198 智拓(kouxing)": "kouxing",
-    "104 幻颜(lianbei)": "lianbei",
-    "173 云升(yunsheng)": "yunsheng",
-    "140 听写(tingxie)": "tingxie",
-}
+# ── 坐席机清单：来自台账 deploy/machines.json（chatx_seat: true）────────────────
+# 2026-08-13 起曾在此硬编码四台（198 智拓 / 104 幻颜 / 173 云升 / 140 听写）。08-29
+# 全员改编（140 听写→记忆机，桌面版停用）后这份名单没跟着走 → 群里整点连报
+# 「140 听写 ping 不通」假离线 68 条。2026-09-18 改为读台账：名单、中文名、SSH 别名
+# 单一来源，改编制只改 machines.json 的 chatx_seat / zh。
+MACHINES_JSON = Path(__file__).parent.parent / "machines.json"
 LOG_REL = r"AppData\Roaming\telegram-ai-desktop\logs\backend.log"
+
+
+def load_seats(path: Path = MACHINES_JSON) -> List[Dict[str, str]]:
+    """从台账取坐席机：``[{id, name, alias, ip}]``，台账顺序。
+
+    - ``id``：台账 id，作状态文件键（增量水位 / 指纹）——与 08-13 起的旧别名键
+      （kouxing / lianbei / yunsheng）一致，改读台账不丢水位、不重报旧问题。
+    - ``alias``：SSH 连接用台账主别名 ``ssh[0]``（无则退回 id）。
+    - ``name``：``IP尾段 zh(alias)``，群里看到的名字，跟台账 zh 走。
+    读不到 / 解析失败 / 没有 chatx_seat 机器 → 抛 RuntimeError，由 scan() 上报
+    （静默变成「0 台受监控」比报错更糟）。
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"读台账失败 {path}: {str(exc)[:120]}") from exc
+    seats: List[Dict[str, str]] = []
+    for m in (data.get("machines") or []) if isinstance(data, dict) else []:
+        if not isinstance(m, dict) or not m.get("chatx_seat"):
+            continue
+        mid = str(m.get("id") or "").strip()
+        if not mid:
+            continue
+        ssh_aliases = [str(a) for a in (m.get("ssh") or []) if str(a).strip()]
+        alias = ssh_aliases[0] if ssh_aliases else mid
+        ip = str(m.get("ip") or "")
+        tail = ip.rsplit(".", 1)[-1] if ip else "?"
+        zh = str(m.get("zh") or mid)
+        seats.append({"id": mid, "name": f"{tail} {zh}({alias})", "alias": alias, "ip": ip})
+    if not seats:
+        raise RuntimeError(f"台账 {path} 里没有 chatx_seat=true 的机器")
+    return seats
 
 # ── 投递参数 ──────────────────────────────────────────────────────────────────
 # 主通道：@tgzkw_bot 投**运维群**（notify_webhooks.json 里名为 OPS_GROUP_CHANNEL 的
@@ -259,12 +292,14 @@ def seat_offline_reason(
     if mt is not None:
         age_h = max(0.0, (n - mt).total_seconds() / 3600.0)
         stale = age_h >= float(offline_after_h)
+    # 措辞点明「ping」是桌面后端的 /api/desktop/ping 活性探针，不是网络 ICMP——
+    # 2026-09-18 群里「140 ping 不通」被读成机器掉线，实为该机已改编算力节点、桌面版未跑。
     if not ver and stale:
-        return (f"坐席后端离线/未运行（ping 不通，日志已 {age_h:.0f}h 未更新）")
+        return (f"坐席桌面后端离线/未运行（/api/desktop/ping 无响应，日志已 {age_h:.0f}h 未更新）")
     if not ver:
-        return "坐席后端离线/未运行（ping 不通）"
+        return "坐席桌面后端离线/未运行（/api/desktop/ping 无响应）"
     if stale:
-        return (f"坐席后端疑似停摆（ping 有响应，但日志已 {age_h:.0f}h 未更新）")
+        return (f"坐席桌面后端疑似停摆（ping 有响应，但日志已 {age_h:.0f}h 未更新）")
     return None
 
 
@@ -283,10 +318,16 @@ def classify(line: str) -> Optional[Tuple[str, str, str]]:
 
 
 def signature(alias: str, why: str, line: str) -> str:
-    """问题指纹：同机同类只报一次（去掉时间戳与易变数字，抓稳定形态）。"""
+    """问题指纹：同机同类只报一次（去掉时间戳与易变数字，抓稳定形态）。
+
+    ``why`` 同样去数字：离线原因里带「日志已 604h 未更新」这种每小时 +1 的计数，
+    原先只对 ``line`` 去数字 → 指纹每小时变一次 → 同一台离线坐席被当新问题整点重报
+    （2026-09-16~18 对 140 连报 68 条）。
+    """
     body = _TS.sub("", line)
     body = re.sub(r"\d+", "#", body)[:120]
-    return f"{alias}|{why}|{body}"
+    why_n = re.sub(r"\d+", "#", why)
+    return f"{alias}|{why_n}|{body}"
 
 
 def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
@@ -301,10 +342,32 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
     now_alerted = {k: v for k, v in now_alerted.items() if v > cutoff}
     now_dt = datetime.now()
 
-    for name, alias in SEATS.items():
+    try:
+        seats = load_seats()
+    except RuntimeError as exc:
+        # 台账坏了不是「没问题」：当一条 critical 上报（同指纹 24h 一次），本轮 0 台巡检。
+        # 不动 last_seen / 指纹——台账恢复后水位还在，不会把旧日志全当新问题重报。
+        seats = []
+        why = "坐席台账不可用（本轮 0 台受监控）"
+        sig = signature("ledger", why, str(exc))
+        item = {"seat": "台账", "level": "critical", "why": why,
+                "ts": "", "line": str(exc)[:300], "sig": sig}
+        report["all_real"].append(item)
+        if sig not in now_alerted:
+            report["new_real"].append(item)
+            now_alerted[sig] = time.time()
+    else:
+        # 台账里已不是坐席的机器（如 140 听写→记忆机）：清掉其水位与指纹，不留幽灵
+        keep = {s["id"] for s in seats} | {"ledger"}
+        state["last_seen"] = {k: v for k, v in (state.get("last_seen") or {}).items() if k in keep}
+        now_alerted = {k: v for k, v in now_alerted.items() if k.split("|", 1)[0] in keep}
+
+    for s in seats:
+        sid, name, alias = s["id"], s["name"], s["alias"]
         seat = pull_seat(alias)
         seat["name"] = name
-        last_seen = state.get("last_seen", {}).get(alias, "")
+        seat["id"] = sid
+        last_seen = state.get("last_seen", {}).get(sid, "")
         floor = max([t for t in (last_seen, since_ts) if t], default="")
 
         seat_real: List[Dict[str, str]] = []
@@ -315,7 +378,7 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
         seat["offline"] = bool(offline_why)
         if offline_why:
             # 离线本身是真问题；旧日志里的 Traceback 不再当「新崩溃」刷屏
-            sig = signature(alias, offline_why, f"offline|{seat.get('mtime') or ''}|{seat.get('version') or ''}")
+            sig = signature(sid, offline_why, f"offline|{seat.get('mtime') or ''}|{seat.get('version') or ''}")
             item = {"seat": name, "level": "warn", "why": offline_why,
                     "ts": seat.get("mtime") or "", "line": offline_why, "sig": sig}
             report["all_real"].append(item)
@@ -337,7 +400,7 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
                     seat_benign += 1
                     report["benign_counts"][why] = report["benign_counts"].get(why, 0) + 1
                     continue
-                sig = signature(alias, why, line)
+                sig = signature(sid, why, line)
                 item = {"seat": name, "level": level, "why": why,
                         "ts": eff_ts or "", "line": line.strip()[:300], "sig": sig}
                 report["all_real"].append(item)
@@ -351,7 +414,7 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
         seat["max_ts"] = max_ts
         report["seats"].append(seat)
         if not dry_run:
-            state.setdefault("last_seen", {})[alias] = max_ts
+            state.setdefault("last_seen", {})[sid] = max_ts
 
     if not dry_run:
         state["alerted"] = now_alerted
@@ -378,6 +441,9 @@ def render_report(report: Dict[str, Any], baseline: bool) -> str:
                 i["level"] == "critical" and i["seat"] == seat["name"] for i in report["all_real"]) else "🟡")
         lines.append(f"{flag} {seat['name']}  {ver}  新真问题 {rc} · 良性噪声 {bc}")
 
+    if not report["seats"]:
+        lines.append("❌ 本轮 0 台坐席受监控（台账 deploy/machines.json 不可用，见下）")
+
     new = report["new_real"]
     if new:
         lines.append("")
@@ -388,7 +454,8 @@ def render_report(report: Dict[str, Any], baseline: bool) -> str:
             lines.append(f"    {it['ts']}  {it['line'][:160]}")
     elif baseline:
         lines.append("")
-        lines.append("✅ 当前无新真问题（监控已上线，两台坐席健康）。")
+        lines.append(f"✅ 当前无新真问题（监控已上线，{len(report['seats'])} 台坐席健康；"
+                     "名单来自 deploy/machines.json chatx_seat）。")
 
     if report.get("include_benign") and report.get("benign_counts"):
         lines.append("")
@@ -566,9 +633,11 @@ def _append_ledger(report: Dict[str, Any], sent: Optional[str]) -> None:
         + ("" if s.get("ok") else " [SSH不可达]")
         for s in report["seats"])
     if not LEDGER_PATH.exists():
+        names = " / ".join(s["name"] for s in report["seats"]) or "（台账不可用）"
         LEDGER_PATH.write_text(
             "# 坐席机工作日志监控台账\n\n"
-            "> 监控对象：198 智拓 / 104 幻颜 的 ChatX 后端 `backend.log`\n"
+            f"> 监控对象：`deploy/machines.json` 中 `chatx_seat: true` 的机器（当前 {names}）"
+            "的 ChatX 后端 `backend.log`\n"
             "> 工具：`monitor_seat_logs.py`（本机每 15 分钟巡检，真问题投递运维群 tg-ywqz）\n",
             encoding="utf-8")
     parts = [f"\n### {now}", f"- 巡检：{seats_line}"]
@@ -607,10 +676,13 @@ def main() -> int:
     ap.add_argument("--baseline", action="store_true", help="强制发一份健康基线（首次上线用）")
     ap.add_argument("--include-benign", action="store_true", help="报告含良性噪声统计")
     ap.add_argument("--since-min", type=int, default=0, help="只看最近 N 分钟（默认按状态增量）")
+    ap.add_argument("--note", default="", help="附加一行说明随本轮报告发出（如编制变更说明；需配 --baseline 或有新真问题才会投递）")
     args = ap.parse_args()
 
     report = scan(args.dry_run, args.since_min, args.include_benign)
     text = render_report(report, args.baseline)
+    if args.note.strip():
+        text += "\n\n📝 " + args.note.strip()
     print(text)
 
     if args.dry_run:
@@ -623,11 +695,11 @@ def main() -> int:
     if should_send:
         ok, msg = deliver(text)
         sent_status = "成功" if ok else f"失败：{msg}"
-        print(f"\n[deliver] @Sousaun：{sent_status}")
+        print(f"\n[deliver] 运维群 {OPS_GROUP_CHANNEL}：{sent_status}")
         if not ok:
             rc = 1
     else:
-        print("\n[deliver] 无新真问题，未打扰 @Sousaun（--baseline 可强制发健康摘要）。")
+        print(f"\n[deliver] 无新真问题，未打扰运维群 {OPS_GROUP_CHANNEL}（--baseline 可强制发健康摘要）。")
     _append_ledger(report, sent_status)
     return rc
 

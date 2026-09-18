@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.0.89",
+    "date": "2026-09-18",
+    "title": {
+      "zh": "群进工作台、间隔记忆、西语不再翻成英文、刚发过图不再空口承诺",
+      "en": "Group inbox, time-gap memory, Spanish stays Spanish, no empty photo promises"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "Telegram 群即使没触发自动回复也会进统一收件箱「群组动态」，会话名用群名。某个群完全看不到：把 chat_id 加进灰度白名单。问小智「群消息怎么进工作台」",
+        "对方隔几天再来，拟稿按真实间隔说话，并能接上上次提过的事。问小智「隔很久再聊会乱记时间吗」",
+        "带 ¿ / ¡ 的西语短句不再被当成英文再译成英文发出去。问小智「西语为什么回成英文」",
+        "刚从工作台发过图，下一条拟稿不再说「等我再发一张」；对方发来的图会认。问小智「刚发过图为什么还说要发」",
+        "本机模型偶发连不上时不再一冻两分钟，第一次毛刺会马上重试"
+      ],
+      "en": [
+        "Telegram group lines land in Group activity even when auto-reply does not fire; the thread keeps the group title. A missing group is usually off the allowlist",
+        "After a few days away, drafts use the real gap and can pick up the last topic",
+        "Short Spanish lines with ¿ / ¡ stay Spanish instead of being re-translated into English",
+        "Drafts see photos already sent, so they do not promise another one immediately",
+        "A brief local-model blip is retried instead of skipping the endpoint for two minutes"
+      ]
+    }
+  },
+  {
     "version": "1.0.88",
     "date": "2026-09-18",
     "title": {
