@@ -54,6 +54,7 @@ def test_select_chat_hydrates_conv_model_route():
 def test_inline_onclick_handlers_are_on_window():
     html = _html()
     for fn in ("toggleModelPop", "toggleModePop", "_mpPickOpen", "_mpToggleThinking", "_mpToggleSafety",
+               "_mpToggleConsistency",
                "_mpHealth", "_mpBackToStandard", "_mpPickBack", "_hydrateConvModelRoute"):
         assert re.search(rf"window\.{re.escape(fn)}\s*=", html), f"{fn} 未挂 window（inline onclick 会 ReferenceError）"
 
@@ -62,6 +63,7 @@ def test_api_contract_paths_match_backend_routes():
     html = _html()
     assert "/api/unified-inbox/conv-model-route" in html
     assert "/api/ai/model-route/health" in html
+    assert "/api/ai/model-route/stats" in html
     from src.web.routes import conv_model_route_routes as m
     src = pathlib.Path(m.__file__).read_text(encoding="utf-8")
     assert "/api/unified-inbox/conv-model-route" in src and "/api/ai/model-route/health" in src
@@ -149,6 +151,10 @@ def test_model_panel_wiring_uses_catalog_and_all_health():
     assert "/api/ai/model-route/health?all=1" in html
     assert "/api/ai/model-route/health?profile=" in html
     assert "/api/ai/prompt-inspect?conv=" in html
+    assert "/api/ai/model-route/stats" in html
+    assert "function _mvLoadUsage(" in html and "function _mvUsageBits(" in html
+    assert "inbox.mp.tag_seats" in html and "inbox.mp.tag_fail" in html
+    assert "_mvUsageBits(m)" in block
     # 400 unknown_model → 重拉目录而不是装成功
     k = html.index("async function _mpSet(patch)")
     setblk = html[k:html.index("window._mpSet=_mpSet", k)]
@@ -177,11 +183,12 @@ def test_model_panel_vendor_lock_counts_and_not_listed_warn():
     lastblk = html[m:html.index("async function _mpHealth(", m)]
     assert "&limit=50" in lastblk and "_mp.counts=" in lastblk
     css = CSS.read_text(encoding="utf-8")
-    for sel in (".mv-row.locked{", ".mv-tag.lock{", ".mv-tag.cnt{", ".mv-dot.warn{"):
+    for sel in (".mv-row.locked{", ".mv-tag.lock{", ".mv-tag.cnt{", ".mv-tag.seats{", ".mv-tag.fail{", ".mv-dot.warn{"):
         assert sel in css, sel
     import importlib
     pack = importlib.import_module("src.web.i18n_packs.inbox_workspace")
-    for key in ("inbox.mp.tag_locked", "inbox.mp.tag_used", "inbox.mp.h_not_listed", "inbox.mp.vendor_locked",
+    for key in ("inbox.mp.tag_locked", "inbox.mp.tag_used", "inbox.mp.tag_seats", "inbox.mp.tag_fail",
+                "inbox.mp.h_not_listed", "inbox.mp.vendor_locked",
                 "inbox.mp.tag_unrestricted", "inbox.mp.vendor_local"):
         assert pack.ZH[key] and pack.EN[key], key
     assert "27B" not in pack.ZH["inbox.mp.vendor_local"]

@@ -53,6 +53,26 @@ _STOP_CHARS = frozenset(
 )
 
 
+# 口头禅/话语标记（2026-09-18 「说真的」事故）：这些短语全由停用字组成或含停用字
+# （说/的/我/你/跟…），bigram 兜底在停用字处切段 → 「说真的」被切成「真」一个字，
+# 账本对它**完全失明**；人设 style/quirks/openers 三处又都在教它，vivid 改写档还点名
+# 推荐——一个会话里几乎条条「说真的」。按消息条数计，命中即报。
+_FILLER_PHRASES = (
+    "说真的", "說真的", "讲真", "講真", "说实话", "說實話", "老实说", "老實說", "不瞒你说",
+    "我跟你讲", "我跟你說", "我跟你说", "我告诉你", "你知道吗", "你知道嗎", "说来也巧",
+    "不得不说", "怎么说呢", "讲道理", "其实吧", "说白了", "坦白说", "坦白講", "真的是",
+    "话说", "話說", "对了", "對了", "哎呀", "天哪", "我的天", "不是我说", "认真的",
+    "真的假的", "你别说", "说起来", "老实讲", "实话说",
+)
+_FILLER_RE = re.compile("|".join(re.escape(p) for p in sorted(_FILLER_PHRASES, key=len, reverse=True)))
+
+# 句级复读：一条消息切成子句（句末标点 / 换行 / 逗号），归一后 ≥ 6 字的子句在
+# ≥ N 条消息里逐字重现即报——bigram 抓词，抓不到「57天没聊了真不好意思」这种整句模板。
+_CLAUSE_SPLIT_RE = re.compile(r"[。！？!?…\n;；，,]+")
+_CLAUSE_NORM_RE = re.compile(r"[\s～~、\"'“”‘’（）()\[\]【】]+")
+_CLAUSE_MIN_CHARS = 6
+
+
 def _norm_laugh(token: str) -> str:
     """把笑词变体归一（哈哈哈哈 → 哈哈；HAHAHA → haha），供 sample 展示。"""
     t = str(token or "").lower()
@@ -126,6 +146,27 @@ def _message_grams(text: str) -> set:
     return grams
 
 
+def message_fillers(text: str) -> List[str]:
+    """一条消息里命中的口头禅（去重、保序）。纯函数。"""
+    seen: List[str] = []
+    for m in _FILLER_RE.finditer(str(text or "")):
+        p = m.group(0)
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
+def message_clauses(text: str) -> set:
+    """一条消息的归一子句集合（≥ 6 字；剥 emoji/空白/引号/波浪）。纯函数。"""
+    s = _EMOJI_RE.sub("", str(text or ""))
+    out: set = set()
+    for part in _CLAUSE_SPLIT_RE.split(s):
+        c = _CLAUSE_NORM_RE.sub("", part).strip()
+        if len(c) >= _CLAUSE_MIN_CHARS:
+            out.add(c)
+    return out
+
+
 def collect_overused(
     recent_outbound: List[str],
     *,
@@ -135,6 +176,8 @@ def collect_overused(
     head_limit: int = 2,
     scene_limit: int = 2,
     keyword_limit: int = 3,
+    filler_limit: int = 2,
+    sentence_limit: int = 2,
 ) -> Dict[str, Any]:
     """统计最近出站回复里的超限口头禅，返回超限项（无超限返回 ``{}``）。
 
@@ -143,13 +186,39 @@ def collect_overused(
 
     ``{"laugh": {count, sample}, "tail": {count, sample},``
     `` "heads": [{head, count}], "scene": [{word, count}],``
-    `` "keywords": [{word, count}]}``
+    `` "keywords": [{word, count}], "fillers": [{word, count}],``
+    `` "sentences": [{text, count}]}``
     """
     msgs = [str(t or "").strip() for t in (recent_outbound or [])]
     msgs = [t for t in msgs if t]
     if not msgs:
         return {}
     out: Dict[str, Any] = {}
+
+    # a0) 口头禅短语（说真的 / 我跟你讲 …）——停用字切段对它们失明，单列账本
+    filler_counts: Counter = Counter()
+    for m in msgs:
+        for p in message_fillers(m):
+            filler_counts[p] += 1
+    fillers = [
+        {"word": p, "count": c} for p, c in filler_counts.most_common()
+        if filler_limit > 0 and c >= filler_limit
+    ]
+    if fillers:
+        out["fillers"] = fillers[:3]
+
+    # a1) 句级复读：同一子句在多条消息里逐字重现（模板句）
+    clause_counts: Counter = Counter()
+    for m in msgs:
+        for c in message_clauses(m):
+            clause_counts[c] += 1
+    sentences = [
+        {"text": c, "count": n} for c, n in clause_counts.most_common()
+        if sentence_limit > 0 and n >= sentence_limit
+    ]
+    if sentences:
+        sentences.sort(key=lambda d: (-d["count"], -len(d["text"])))
+        out["sentences"] = sentences[:2]
 
     # a) 笑词
     laugh_msgs = 0
@@ -244,6 +313,30 @@ def build_variety_hint(
     zh = not str(lang or "zh").lower().startswith("en")
     facts: List[str] = []
     acts: List[str] = []
+
+    # 口头禅短语与整句模板最显眼（「说真的」条条开口、同一句借口反复出现），排最前
+    fillers = [d for d in (overused.get("fillers") or []) if d.get("word")]
+    if fillers:
+        listed = "、".join(f"「{d['word']}」" for d in fillers[:3]) if zh else \
+            ", ".join(f'"{d["word"]}"' for d in fillers[:3])
+        n = fillers[0].get("count", 0)
+        if zh:
+            facts.append(f"有 {n} 条用了 {listed} 这类口头禅")
+            acts.append(f"这一轮一个字都不要出现 {listed}，也别换成同义的口头禅（「讲真」「老实说」）")
+        else:
+            facts.append(f"{n} messages used filler phrases like {listed}")
+            acts.append(f"do not use {listed} or any similar filler this turn")
+
+    sentences = [d for d in (overused.get("sentences") or []) if d.get("text")]
+    if sentences:
+        s0 = sentences[0]
+        snippet = str(s0["text"])[:24]
+        if zh:
+            facts.append(f"有 {s0.get('count', 0)} 条都出现了同一句「{snippet}」")
+            acts.append(f"「{snippet}」这句以及它的改写都不要再说")
+        else:
+            facts.append(f'{s0.get("count", 0)} messages repeated the same sentence "{snippet}"')
+            acts.append(f'do not repeat "{snippet}" or a paraphrase of it')
 
     laugh = overused.get("laugh") or {}
     if laugh.get("count"):
@@ -368,6 +461,8 @@ def parse_variety_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "head_limit": _i("head_limit", 2, lo=0, hi=50),
         "scene_limit": _i("scene_limit", 2, lo=0, hi=50),
         "keyword_limit": _i("keyword_limit", 3, lo=0, hi=50),
+        "filler_limit": _i("filler_limit", 2, lo=0, hi=50),
+        "sentence_limit": _i("sentence_limit", 2, lo=0, hi=50),
     }
 
 
@@ -376,4 +471,6 @@ __all__ = [
     "build_variety_hint",
     "extract_persona_words",
     "parse_variety_cfg",
+    "message_fillers",
+    "message_clauses",
 ]

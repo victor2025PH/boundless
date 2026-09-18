@@ -1,228 +1,822 @@
-{# 多模型路由卡：厂商端点 + API Key + 任务映射。消费 GET/POST /api/setup/model-routes。
-   独立页 /model-keys 引用；开发者页只留跳转，避免再过密码闸。 #}
-<div class="f-row" id="dvmr">
-  <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_mr_title', "多模型路由（按任务挑模型）") }}</div>
-  <div class="f-hint">{{ (i18n or {}).get('dv_mr_sub', "像 Cursor 那样按任务挑模型/端点：规划用强模型、问答用便宜的、电脑操控用 VLM。保存即热生效。") }} {{ (i18n or {}).get('dv_mr_sub_conv', "这里的每一档也会出现在聊天工作台 composer「模型」面板里，坐席可按会话切换（ChatGPT / Gemini / Grok / DeepSeek…）。") }}</div>
-  <div id="dvmr-status" style="margin:.5rem 0;font-size:.8rem;color:var(--t2)">{{ (i18n or {}).get('dv_mr_loading', "加载中…") }}</div>
-  <div id="dvmr-model-list" style="display:flex;flex-direction:column;gap:.4rem;margin:.4rem 0"></div>
-  <div class="f-row" style="margin:.2rem 0 .4rem">
-    <label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_preset', "从预设添加") }}</label>
-    <select class="f-inp" id="dvmr-preset" style="max-width:280px" onchange="mrApplyPreset(this.value)">
-      <option value="">{{ (i18n or {}).get('dv_mr_preset_pick', "选择厂商…（仅 OpenAI 兼容协议）") }}</option>
-      <option value="openai">ChatGPT · OpenAI</option>
-      <option value="gemini">Gemini · Google</option>
-      <option value="xai">Grok · xAI</option>
-      <option value="deepseek">DeepSeek</option>
-      <option value="anthropic">{{ (i18n or {}).get('dv_mr_preset_anthropic', "Claude · Anthropic（OpenAI 兼容层）") }}</option>
-      <option value="siliconflow">{{ (i18n or {}).get('dv_mr_preset_siliconflow', "硅基流动 SiliconFlow") }}</option>
-      <option value="qwen">{{ (i18n or {}).get('dv_mr_preset_qwen', "通义千问 · DashScope") }}</option>
-      <option value="kimi">Kimi · Moonshot</option>
-      <option value="openrouter">OpenRouter</option>
-      <option value="local">{{ (i18n or {}).get('dv_mr_preset_local', "本机 vLLM（173 chatx）") }}</option>
-    </select>
+{# 模型与密钥卡（2026-09-18 重排）：卡①「模型」（列表优先 + 添加/编辑抽屉）+ 卡②「用途分配」（默认折叠）
+   + 粘性保存条（只在有未保存更改时出现）。消费 GET/POST /api/setup/model-routes、
+   POST …/probe（体检**当前列表**，含未保存新档）、POST …/list-models。
+   独立页 /model-keys 引用（样式在 model_keys.html）；开发者页只留跳转，#dvmr 锚保留给旧书签。
+   纪律：密钥只以掩码上屏；删除必确认可撤销；离开前拦未保存；403 整卡锁定；内网地址不进模板。 #}
+<div id="dvmr" class="mk-root">
+  <div class="banner banner-warn mk-locked" id="dvmr-locked" hidden role="alert">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    <span>{{ (i18n or {}).get('mk_need_admin', "查看或修改模型与密钥需要管理员权限，请联系管理员。") }}</span>
   </div>
-  <div class="f-grid" style="grid-template-columns:1fr 1.6fr 1.2fr 1fr auto;gap:.4rem;align-items:end">
-    <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_name', "档名") }}</label>
-      <input class="f-inp" type="text" id="dvmr-new-name" placeholder="planner_local"></div>
-    <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_base', "Base URL") }}</label>
-      <input class="f-inp" type="text" id="dvmr-new-base" placeholder="https://api.openai.com/v1"></div>
-    <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_model', "模型") }} <button type="button" class="btn btn-s btn-sm" style="padding:0 .4rem;font-size:.7rem;margin-left:.3rem" onclick="mrListModels()" title="{{ (i18n or {}).get('dv_mr_list_t', "从该端点 /v1/models 拉现役模型 id 作候选（只读，不耗 token）") }}">{{ (i18n or {}).get('dv_mr_list_btn', "拉取模型列表") }}</button></label>
-      <input class="f-inp" type="text" id="dvmr-new-model" placeholder="chatx" list="dvmr-model-ids"><datalist id="dvmr-model-ids"></datalist></div>
-    <div class="f-row"><label class="f-lbl">API Key <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
-      <input class="f-inp" type="password" id="dvmr-new-key" placeholder="{{ (i18n or {}).get('dv_cc_inherit', "留空=继承主链") }}"></div>
-    <button class="btn btn-s btn-sm" style="margin-bottom:2px" onclick="mrAddModel()">＋ {{ (i18n or {}).get('dv_mr_btn_add', "添加模型档") }}</button>
-  </div>
-  <div class="f-lbl" style="margin-top:.6rem">{{ (i18n or {}).get('dv_mr_routes_title', "任务 → 模型档") }}</div>
-  <div id="dvmr-route-list" style="display:flex;flex-direction:column;gap:.3rem;margin:.3rem 0"></div>
-  <div class="save-bar">
-    <span class="save-result" id="dvmr-save-res"></span>
-    <button class="btn btn-s btn-sm" onclick="mrProbe()">{{ (i18n or {}).get('dv_cc_btn_probe', "立即体检") }}</button>
-    <button class="btn btn-p btn-sm" onclick="mrSave()">{{ (i18n or {}).get('dv_mr_btn_save', "保存并生效") }}</button>
+
+  <fieldset class="mk-fs" id="dvmr-fs">
+    {# ── 卡①：模型 ───────────────────────────────────────────── #}
+    <section class="mk-card" id="dvmr-models-card" aria-labelledby="dvmr-models-h">
+      <header class="mk-card-hd">
+        <span class="mk-ico" aria-hidden="true">{{ (nav_icons or {}).get('key', '')|safe }}</span>
+        <div class="mk-hd-txt">
+          <h2 class="mk-h" id="dvmr-models-h">{{ (i18n or {}).get('mk_models_title', "模型") }}</h2>
+          <p class="mk-hd-sub" id="dvmr-status" role="status" aria-live="polite">{{ (i18n or {}).get('dv_mr_loading', "加载中…") }}</p>
+        </div>
+        <div class="mk-hd-act">
+          <button type="button" class="btn btn-s btn-sm" id="dvmr-btn-probe" onclick="mrProbe()">{{ (i18n or {}).get('mk_btn_recheck', "重新体检") }}</button>
+          <button type="button" class="btn btn-p btn-sm" id="dvmr-btn-add" onclick="mrOpenAdd()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {{ (i18n or {}).get('mk_btn_add', "添加模型") }}
+          </button>
+        </div>
+      </header>
+
+      {# 添加 / 编辑抽屉（单实例；编辑时挪到被编辑行下方） #}
+      <div id="dvmr-editor" class="mk-editor" hidden>
+        <h3 class="mk-ed-title" id="dvmr-ed-title">{{ (i18n or {}).get('mk_ed_title_add', "添加模型") }}</h3>
+        <div class="mk-ed-sec" id="dvmr-ed-vendor-sec">
+          <div class="f-lbl mk-lbl" id="dvmr-ed-vendor-lbl">{{ (i18n or {}).get('mk_ed_vendor', "厂商") }}</div>
+          <div class="mk-vendors" id="dvmr-vendors" role="radiogroup" aria-labelledby="dvmr-ed-vendor-lbl">
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="openai" onclick="mrApplyPreset('openai')"><span class="mk-av" data-vendor="openai" aria-hidden="true">C</span>ChatGPT</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="gemini" onclick="mrApplyPreset('gemini')"><span class="mk-av" data-vendor="gemini" aria-hidden="true">G</span>Gemini</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="xai" onclick="mrApplyPreset('xai')"><span class="mk-av" data-vendor="xai" aria-hidden="true">X</span>Grok</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="deepseek" onclick="mrApplyPreset('deepseek')"><span class="mk-av" data-vendor="deepseek" aria-hidden="true">D</span>DeepSeek</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="anthropic" onclick="mrApplyPreset('anthropic')" title="{{ (i18n or {}).get('dv_mr_preset_anthropic', "Claude · Anthropic（OpenAI 兼容层）") }}"><span class="mk-av" data-vendor="anthropic" aria-hidden="true">A</span>Claude</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="siliconflow" onclick="mrApplyPreset('siliconflow')"><span class="mk-av" data-vendor="siliconflow" aria-hidden="true">S</span>{{ (i18n or {}).get('dv_mr_preset_siliconflow', "硅基流动") }}</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="qwen" onclick="mrApplyPreset('qwen')"><span class="mk-av" data-vendor="qwen" aria-hidden="true">Q</span>{{ (i18n or {}).get('dv_mr_preset_qwen', "通义千问") }}</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="kimi" onclick="mrApplyPreset('kimi')"><span class="mk-av" data-vendor="kimi" aria-hidden="true">K</span>Kimi</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="openrouter" onclick="mrApplyPreset('openrouter')"><span class="mk-av" data-vendor="openrouter" aria-hidden="true">O</span>OpenRouter</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="local" id="dvmr-vchip-local" hidden onclick="mrApplyPreset('local')"><span class="mk-av" data-vendor="local" aria-hidden="true">L</span>{{ (i18n or {}).get('mk_ed_vendor_local', "自有算力") }}</button>
+            <button type="button" class="mk-vchip" role="radio" aria-checked="false" data-preset="custom" onclick="mrApplyPreset('custom')"><span class="mk-av" data-vendor="other" aria-hidden="true">…</span>{{ (i18n or {}).get('mk_ed_vendor_custom', "自定义端点") }}</button>
+          </div>
+        </div>
+        <div class="mk-ed-grid">
+          <div class="f-row">
+            <label class="f-lbl mk-lbl" for="dvmr-new-key">{{ (i18n or {}).get('mk_ed_key', "API Key") }}</label>
+            <div class="mk-key-wrap">
+              <input class="f-inp" type="password" id="dvmr-new-key" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="{{ (i18n or {}).get('mk_ed_key_ph', "sk-…（留空＝沿用主链密钥）") }}">
+              <button type="button" class="mk-eye" id="dvmr-key-eye" onclick="mrToggleKey()" aria-pressed="false" aria-label="{{ (i18n or {}).get('mk_ed_key_show', "显示密钥") }}" title="{{ (i18n or {}).get('mk_ed_key_show', "显示密钥") }}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <div class="mk-field-hint" id="dvmr-key-hint"></div>
+          </div>
+          <div class="f-row">
+            <label class="f-lbl mk-lbl" for="dvmr-new-model">{{ (i18n or {}).get('mk_ed_model', "模型") }}
+              <button type="button" class="mk-lnk" id="dvmr-btn-list" onclick="mrListModels()" title="{{ (i18n or {}).get('dv_mr_list_t', "从该端点 /v1/models 拉现役模型 id 作候选（只读，不耗 token）") }}">{{ (i18n or {}).get('dv_mr_list_btn', "拉取模型列表") }}</button>
+            </label>
+            <input class="f-inp mk-mono" type="text" id="dvmr-new-model" list="dvmr-model-ids" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{{ (i18n or {}).get('mk_ed_model_ph', "拉取列表后选择，或直接输入模型 id") }}">
+            <datalist id="dvmr-model-ids"></datalist>
+            <div class="mk-field-hint" id="dvmr-model-hint"></div>
+          </div>
+        </div>
+        <details class="mk-adv-det" id="dvmr-adv">
+          <summary>{{ (i18n or {}).get('mk_ed_adv', "高级设置") }}</summary>
+          <div class="mk-ed-grid">
+            <div class="f-row">
+              <label class="f-lbl mk-lbl" for="dvmr-new-base">{{ (i18n or {}).get('dv_mr_f_base', "Base URL") }}</label>
+              <input class="f-inp mk-mono" type="url" id="dvmr-new-base" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="f-row">
+              <label class="f-lbl mk-lbl" for="dvmr-new-label">{{ (i18n or {}).get('mk_ed_label', "显示名") }}</label>
+              <input class="f-inp" type="text" id="dvmr-new-label" maxlength="40" placeholder="{{ (i18n or {}).get('mk_ed_label_ph', "坐席在会话里看到的名字；留空按厂商识别") }}">
+            </div>
+            <div class="f-row">
+              <label class="f-lbl mk-lbl" for="dvmr-new-name">{{ (i18n or {}).get('mk_ed_name', "档名（内部标识）") }}</label>
+              <input class="f-inp mk-mono" type="text" id="dvmr-new-name" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="chatgpt">
+            </div>
+            <div class="f-row">
+              <label class="f-lbl mk-lbl" for="dvmr-new-ctx">{{ (i18n or {}).get('mk_ed_ctx', "上下文窗口（token）") }}</label>
+              <input class="f-inp" type="number" id="dvmr-new-ctx" min="1" step="1" inputmode="numeric" placeholder="{{ (i18n or {}).get('mk_ed_ctx_ph', "留空＝按厂商默认") }}">
+            </div>
+            <div class="f-row">
+              <label class="f-lbl mk-lbl" for="dvmr-new-cost">{{ (i18n or {}).get('mk_ed_cost', "成本标签") }}</label>
+              <input class="f-inp" type="text" id="dvmr-new-cost" maxlength="24" placeholder="{{ (i18n or {}).get('mk_ed_cost_ph', "如 ¥2/M，仅展示") }}">
+            </div>
+            <div class="f-row mk-unr-row">
+              <label class="tog-wrap mk-unr-lbl" for="dvmr-new-unr">
+                <span class="tog"><input type="checkbox" id="dvmr-new-unr" onchange="mrToggleUnr()"><span class="tog-s"></span></span>
+                <span class="mk-unr-txt">{{ (i18n or {}).get('mk_ed_unr', "作为「无限制」入口") }}</span>
+              </label>
+              <div class="mk-field-hint" id="dvmr-unr-hint">{{ (i18n or {}).get('mk_ed_unr_d', "坐席点选该模型＝切到无限制模式：内容规则让路、不回落云端。只给私有模型开。") }}</div>
+            </div>
+          </div>
+        </details>
+        <div class="mk-ed-foot">
+          <span class="mk-ed-msg" id="dvmr-ed-msg" role="status" aria-live="polite"></span>
+          <button type="button" class="btn btn-s btn-sm" onclick="mrCloseEditor()">{{ (i18n or {}).get('mk_ed_cancel', "取消") }}</button>
+          <button type="button" class="btn btn-p btn-sm" id="dvmr-ed-submit" onclick="mrSubmitEditor()">{{ (i18n or {}).get('mk_ed_submit_add', "添加到列表") }}</button>
+        </div>
+      </div>
+
+      <div class="mk-undo" id="dvmr-undo" hidden>
+        <span id="dvmr-undo-txt"></span>
+        <button type="button" class="mk-lnk" onclick="mrUndoDelete()">{{ (i18n or {}).get('mk_js_undo', "撤销") }}</button>
+      </div>
+      <div id="dvmr-model-list" class="mk-list" role="list"></div>
+    </section>
+
+    {# ── 卡②：用途分配（高级，默认折叠） ─────────────────────────── #}
+    <section class="mk-card mk-card-fold" id="dvmr-routes-card">
+      <button type="button" class="mk-card-hd mk-card-toggle" id="dvmr-routes-toggle" aria-expanded="false" aria-controls="dvmr-routes-body" onclick="mrToggleRoutes()">
+        <span class="mk-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--card)"/><circle cx="15" cy="12" r="2" fill="var(--card)"/><circle cx="7" cy="18" r="2" fill="var(--card)"/></svg>
+        </span>
+        <span class="mk-hd-txt">
+          <span class="mk-h">{{ (i18n or {}).get('mk_routes_title', "用途分配") }} <span class="mk-adv-tag">{{ (i18n or {}).get('mk_adv', "高级") }}</span></span>
+          <span class="mk-hd-sub" id="dvmr-routes-sum"></span>
+        </span>
+        <span class="mk-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </button>
+      <div id="dvmr-routes-body" class="mk-routes-body" hidden>
+        <p class="mk-hint">{{ (i18n or {}).get('mk_routes_hint', "小智的后台任务默认都用主链；这里可以给单个用途指定别的模型。会话里「用谁答」由坐席在工作台按会话选择，不在此处。") }}</p>
+        <div id="dvmr-route-list" class="mk-routes"></div>
+      </div>
+    </section>
+  </fieldset>
+
+  <p class="mk-privacy">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    {{ (i18n or {}).get('mk_privacy', "密钥只保存在本机配置文件，页面仅显示掩码，不会上传。") }}
+  </p>
+
+  {# ── 粘性保存条：只在 dirty 时出现 ───────────────────────────── #}
+  <div class="mk-savebar" id="dvmr-savebar" hidden>
+    <div class="mk-savebar-in">
+      <span class="mk-savebar-txt" id="dvmr-dirty-txt"></span>
+      <span class="save-result" id="dvmr-save-res" role="status" aria-live="polite"></span>
+      <button type="button" class="btn btn-s btn-sm" id="dvmr-btn-discard" onclick="mrDiscard()">{{ (i18n or {}).get('mk_btn_discard', "放弃更改") }}</button>
+      <button type="button" class="btn btn-p btn-sm" id="dvmr-btn-save" onclick="mrSave()">{{ (i18n or {}).get('dv_mr_btn_save', "保存并生效") }}</button>
+    </div>
   </div>
 </div>
 <script>
-let _dvmrModels = [];
-let _dvmrRoutes = {};
-let _dvmrTasks = [];
-
-function _dvmrEsc(s){
-  const d = document.createElement('div');
-  d.textContent = String(s == null ? '' : s);
-  return d.innerHTML;
-}
-
-function _dvmrRenderModels(loaded){
-  loaded = loaded || [];
-  const box = document.getElementById('dvmr-model-list');
-  if(!box) return;
-  if(!_dvmrModels.length){
-    box.innerHTML = '<div style="font-size:.78rem;color:var(--t2)">' + window.T('dv_mr_js_none') + '</div>';
-    return;
-  }
-  box.innerHTML = _dvmrModels.map((m, i)=>{
-    const on = loaded.indexOf(m.name) >= 0;
-    let hc = '';
-    if(m.health){
-      hc = m.health.reachable
-        ? ('🟢' + (m.health.latency_ms ? (' ' + m.health.latency_ms + 'ms') : ''))
-        : '🔴';
-    }
-    return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
-      + '<b style="min-width:120px">' + _dvmrEsc(m.name) + '</b>'
-      + '<span style="flex:1;opacity:.75">' + _dvmrEsc(m.base_url || '') + ' · ' + _dvmrEsc(m.model || '') + '</span>'
-      + (hc ? '<span class="ai-pill">' + hc + '</span>' : '')
-      + (on ? '<span class="ai-pill">' + window.T('dv_mr_js_loaded') + '</span>' : '')
-      + '<code style="opacity:.7">' + _dvmrEsc(m.api_key || window.T('dv_cc_js_inherit')) + '</code>'
-      + '<button class="btn btn-s btn-sm" data-dvmr-del="' + i + '" title="del">✕</button></div>';
-  }).join('');
-}
-
-function _dvmrRenderRoutes(){
-  const box = document.getElementById('dvmr-route-list');
-  if(!box) return;
-  const base = '<option value="">' + window.T('dv_mr_js_task_default') + '</option>'
-    + _dvmrModels.map(m=>'<option value="' + _dvmrEsc(m.name) + '">' + _dvmrEsc(m.name) + '</option>').join('');
-  box.innerHTML = _dvmrTasks.map(t=>{
-    const cur = _dvmrRoutes[t] || '';
-    const sel = base.replace('value="' + _dvmrEsc(cur) + '"', 'value="' + _dvmrEsc(cur) + '" selected');
-    return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem">'
-      + '<code style="min-width:160px">' + _dvmrEsc(t) + '</code>'
-      + '<select class="f-inp" data-dvmr-task="' + _dvmrEsc(t) + '" style="max-width:220px">' + sel + '</select></div>';
-  }).join('');
-}
-
-async function mrLoad(probe){
-  const st = document.getElementById('dvmr-status');
-  if(!st) return;
-  try{
-    const r = await apiFetch('/api/setup/model-routes' + (probe ? '?probe=1' : ''),
-                             {credentials:'same-origin'}, {timeoutMs: probe ? 30000 : 15000});
-    if(r.status === 403){ st.textContent = window.T('mk_need_admin'); return; }
-    const d = await r.json();
-    if(!d.ok) throw new Error('bad response');
-    _dvmrModels = (d.models || []).map(m=>({
-      name: m.name, base_url: m.base_url || '', model: m.model || '',
-      api_key: m.api_key_masked || '', health: m.health || null,
-    }));
-    _dvmrRoutes = d.task_routes || {};
-    _dvmrTasks = d.known_tasks || [];
-    st.textContent = window.Tf('dv_mr_js_summary', {n: _dvmrModels.length, r: Object.keys(_dvmrRoutes).length});
-    _dvmrRenderModels(d.loaded || []);
-    _dvmrRenderRoutes();
-  }catch(e){
-    st.textContent = window.T('inbox.voice.unknown_err');
-  }
-}
-
-async function mrProbe(){
-  const st = document.getElementById('dvmr-status');
-  if(st){ st.textContent = window.T('dv_cc_js_probing'); }
-  await mrLoad(true);
-}
-
-function mrAddModel(){
-  const res = document.getElementById('dvmr-save-res');
-  const name = document.getElementById('dvmr-new-name').value.trim();
-  const base = document.getElementById('dvmr-new-base').value.trim();
-  const model = document.getElementById('dvmr-new-model').value.trim();
-  if(!name || !base || !model){ res.textContent = window.T('dv_mr_js_need_fields'); res.className = 'save-result err'; return; }
-  if(_dvmrModels.some(m=>m.name === name)){ res.textContent = window.Tf('dv_mr_js_dup', {name: name}); res.className = 'save-result err'; return; }
-  _dvmrModels.push({name: name, base_url: base, model: model,
-    api_key: document.getElementById('dvmr-new-key').value.trim()});
-  ['dvmr-new-name','dvmr-new-base','dvmr-new-model','dvmr-new-key'].forEach(id=>{
-    const el = document.getElementById(id); if(el) el.value = '';
-  });
-  res.textContent = ''; res.className = 'save-result';
-  _dvmrRenderModels(); _dvmrRenderRoutes();
-}
+/* ── 状态 ─────────────────────────────────────────────────────── */
+let _dvmrModels = [];        // [{name, base_url, model, api_key(掩码或新明文，绝不渲染), api_key_masked, has_key, label, max_ctx, cost_hint, display_label, vendor, public_host, private, via, internal, opens_unrestricted, _new}]
+let _dvmrRoutes = {};        // task -> profile name（'' = 跟随主链）
+let _dvmrTasks = [];         // [{key, label, desc, custom}]
+let _dvmrMain = {};          // 主链事实（label/model/host/public_host/vendor/base_url）
+let _dvmrUnr = 'unrestricted';
+let _dvmrLocal = null;       // ai.fallback 私网端点 {base_url, model} → 预设「自有算力」
+let _dvmrLoaded = [];        // 运行时已装载的档名
+let _dvmrHealth = {};        // name -> {online, latency_ms, error, warn, facts}；'' = 主链
+let _dvmrBaseline = '';      // 上次加载/保存后的快照（dirty 判定）
+let _dvmrProbing = false;
+let _dvmrLocked = false;
+let _dvmrEditing = null;     // null | {mode:'add'|'edit', index}
+let _dvmrLastDel = null;     // {model, index, routes:{task:name}, timer}
+let _dvmrResetTasks = {};    // 删档后被清回主链的用途（渲染一次提示）
+let _dvmrRoutesOpen = false;
+let _dvmrSavedTimer = null;
+let _dvmrUsage = {by_model: {}, model_convs: {}, unrestricted_convs: 0};
+let _dvmrShowInternal = false;
 
 const _DVMR_PRESETS = {
-  openai:      {name: 'chatgpt',    base_url: 'https://api.openai.com/v1'},
-  gemini:      {name: 'gemini',     base_url: 'https://generativelanguage.googleapis.com/v1beta/openai'},
-  xai:         {name: 'grok',       base_url: 'https://api.x.ai/v1'},
-  deepseek:    {name: 'deepseek',   base_url: 'https://api.deepseek.com/v1', model: 'deepseek-flash'},
-  anthropic:   {name: 'claude',     base_url: 'https://api.anthropic.com/v1'},
-  siliconflow: {name: 'siliconflow',base_url: 'https://api.siliconflow.cn/v1'},
-  qwen:        {name: 'qwen',       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1'},
-  kimi:        {name: 'kimi',       base_url: 'https://api.moonshot.cn/v1'},
-  openrouter:  {name: 'openrouter', base_url: 'https://openrouter.ai/api/v1'},
-  local:       {name: 'lan_chatx',  base_url: 'http://192.168.0.173:8001/v1', model: 'chatx'},
+  openai:      {name: 'chatgpt',    base_url: 'https://api.openai.com/v1', label: 'ChatGPT'},
+  gemini:      {name: 'gemini',     base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', label: 'Gemini'},
+  xai:         {name: 'grok',       base_url: 'https://api.x.ai/v1', label: 'Grok'},
+  deepseek:    {name: 'deepseek',   base_url: 'https://api.deepseek.com/v1', model: 'deepseek-flash', label: 'DeepSeek'},
+  anthropic:   {name: 'claude',     base_url: 'https://api.anthropic.com/v1', label: 'Claude'},
+  siliconflow: {name: 'siliconflow',base_url: 'https://api.siliconflow.cn/v1', label: 'SiliconFlow'},
+  qwen:        {name: 'qwen',       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', label: 'Qwen'},
+  kimi:        {name: 'kimi',       base_url: 'https://api.moonshot.cn/v1', label: 'Kimi'},
+  openrouter:  {name: 'openrouter', base_url: 'https://openrouter.ai/api/v1', label: 'OpenRouter'},
+  custom:      {name: 'custom',     base_url: ''},
+  // local：加载时由服务端 local_endpoint（ai.fallback 私网端点）填入；模板不写死内网地址。
 };
+const _DVMR_NAME_RE = /^[A-Za-z0-9_\-]{1,40}$/;
+
+/* ── 小工具 ───────────────────────────────────────────────────── */
+function _dvmrEl(id){ return document.getElementById(id); }
+function _dvmrEsc(s){ const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+function _dvmrV(id){ const el = _dvmrEl(id); return el ? String(el.value || '').trim() : ''; }
+function _dvmrSet(id, v){ const el = _dvmrEl(id); if(el) el.value = (v == null ? '' : v); }
+function _dvmrMask(k){ k = String(k || ''); return k.length > 12 ? (k.slice(0, 4) + '\u2026' + k.slice(-4)) : (k ? '\u2026' : ''); }
+function _dvmrHost(base){ let b = String(base || '').trim(); if(b.indexOf('://') >= 0) b = b.split('://')[1]; return b.split('/')[0].toLowerCase(); }
+function _dvmrIsPrivateHost(h){ h = String(h || '').replace(/:\d+$/, ''); return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h); }
+function _dvmrGuessVendor(base){
+  const h = _dvmrHost(base);
+  if(!h) return 'other';
+  if(_dvmrIsPrivateHost(h)) return 'local';
+  for(const k in _DVMR_PRESETS){ const p = _DVMR_PRESETS[k]; if(p.base_url && _dvmrHost(p.base_url) === h) return k; }
+  return 'other';
+}
+function _dvmrLabelOf(m){
+  if(!m) return '';
+  if(m.display_label) return m.display_label;
+  if(m.label) return m.label;
+  const v = m.vendor || _dvmrGuessVendor(m.base_url);
+  if(v === 'local') return window.T('mk_ed_vendor_local');
+  return (_DVMR_PRESETS[v] && _DVMR_PRESETS[v].label) || _dvmrHost(m.base_url) || m.model || m.name || '';
+}
+function _dvmrVia(m){
+  const v = m.vendor || _dvmrGuessVendor(m.base_url);
+  if(m.via === 'hosted') return window.T('mk_js_via_hosted');
+  if(m.via === 'lan' || m.private || v === 'local') return window.T('mk_js_via_lan');
+  return window.Tf('mk_js_via_cloud', {host: m.public_host || _dvmrHost(m.base_url)});
+}
+function _dvmrTag(txt, cls, title){
+  return '<span class="mk-tag' + (cls ? (' ' + cls) : '') + '"' + (title ? (' title="' + _dvmrEsc(title) + '"') : '') + '>' + _dvmrEsc(txt) + '</span>';
+}
+function _dvmrToast(msg, type){ if(typeof showToast === 'function') showToast(msg, type || 'ok'); }
+function _dvmrLocalizeTask(t){
+  // 页面语言（window.T）为准：API 可能跟 session/Accept-Language，和 ?lang= 不一致
+  const map = {assistant_planner: ['dv_mr_task_planner', 'dv_mr_task_planner_d'],
+               assistant_qa: ['dv_mr_task_qa', 'dv_mr_task_qa_d'],
+               memory_extract: ['dv_mr_task_memory', 'dv_mr_task_memory_d']};
+  const k = map[t && t.key];
+  if(!k) return t;
+  return {key: t.key, label: window.T(k[0]), desc: window.T(k[1]), custom: !!t.custom};
+}
+function _dvmrPickFacts(f){
+  if(!f) return {};
+  const o = {};
+  if(f.label) o.display_label = f.label;
+  if(f.vendor) o.vendor = f.vendor;
+  if(f.public_host) o.public_host = f.public_host;
+  if(typeof f.private === 'boolean') o.private = f.private;
+  if(f.via) o.via = f.via;
+  if(f.max_ctx) o.max_ctx_default = f.max_ctx;
+  return o;
+}
+
+/* ── 快照 / dirty ──────────────────────────────────────────────── */
+function _dvmrSnapModels(){
+  return _dvmrModels.map(m => [m.name, m.base_url, m.model, m.api_key || '', m.label || '', m.max_ctx || '', m.cost_hint || '']);
+}
+function _dvmrSnapRoutes(){
+  return Object.keys(_dvmrRoutes).filter(t => _dvmrRoutes[t]).sort().map(t => [t, _dvmrRoutes[t]]);
+}
+function _dvmrSnap(){ return JSON.stringify({m: _dvmrSnapModels(), r: _dvmrSnapRoutes()}); }
+function _dvmrIsDirty(){ return _dvmrSnap() !== _dvmrBaseline; }
+function _dvmrDirtySummary(){
+  let base = {m: [], r: []};
+  try{ base = JSON.parse(_dvmrBaseline || '{"m":[],"r":[]}'); }catch(e){}
+  const bm = {}; base.m.forEach(x => { bm[x[0]] = JSON.stringify(x); });
+  const cm = {}; _dvmrSnapModels().forEach(x => { cm[x[0]] = JSON.stringify(x); });
+  let add = 0, del = 0, mod = 0;
+  Object.keys(cm).forEach(n => { if(!(n in bm)) add++; else if(bm[n] !== cm[n]) mod++; });
+  Object.keys(bm).forEach(n => { if(!(n in cm)) del++; });
+  const br = {}; base.r.forEach(x => { br[x[0]] = x[1]; });
+  const cr = {}; _dvmrSnapRoutes().forEach(x => { cr[x[0]] = x[1]; });
+  let routes = 0;
+  const keys = {}; Object.keys(br).forEach(k => keys[k] = 1); Object.keys(cr).forEach(k => keys[k] = 1);
+  Object.keys(keys).forEach(k => { if((br[k] || '') !== (cr[k] || '')) routes++; });
+  const parts = [];
+  if(add) parts.push(window.Tf('mk_js_dirty_add', {n: add}));
+  if(del) parts.push(window.Tf('mk_js_dirty_del', {n: del}));
+  if(mod) parts.push(window.Tf('mk_js_dirty_mod', {n: mod}));
+  if(routes) parts.push(window.Tf('mk_js_dirty_routes', {n: routes}));
+  return window.T('mk_js_dirty') + (parts.length ? ('\uFF08' + parts.join(' \u00B7 ') + '\uFF09') : '');
+}
+function _dvmrAfterChange(){
+  const bar = _dvmrEl('dvmr-savebar'), txt = _dvmrEl('dvmr-dirty-txt'), res = _dvmrEl('dvmr-save-res');
+  if(!bar) return;
+  if(_dvmrSavedTimer){ clearTimeout(_dvmrSavedTimer); _dvmrSavedTimer = null; }
+  bar.classList.remove('saved');
+  const dirty = _dvmrIsDirty() && !_dvmrLocked;
+  bar.hidden = !dirty;
+  document.body.classList.toggle('mk-has-savebar', dirty);
+  if(txt) txt.textContent = dirty ? _dvmrDirtySummary() : '';
+  if(res && !dirty){ res.textContent = ''; res.className = 'save-result'; }
+  _dvmrStatus();
+}
+
+/* ── 渲染：状态行 / 模型列表 / 用途 ───────────────────────────── */
+function _dvmrVisibleModels(){
+  return _dvmrShowInternal ? _dvmrModels : _dvmrModels.filter(m => !m.internal);
+}
+function _dvmrStatus(){
+  const st = _dvmrEl('dvmr-status');
+  if(!st) return;
+  const vis = _dvmrVisibleModels();
+  const n = vis.length;
+  if(!_dvmrModels.length){ st.textContent = window.T('mk_js_summary_none'); return; }
+  if(_dvmrProbing){ st.textContent = window.Tf('mk_js_summary_checking', {n: n}); return; }
+  const on = vis.filter(m => (_dvmrHealth[m.name] || {}).online).length;
+  st.textContent = window.Tf('mk_js_summary', {n: n, on: on});
+}
+function _dvmrUsageBits(m, main){
+  const u = _dvmrUsage || {};
+  const key = main ? 'main' : (m.opens_unrestricted ? 'unrestricted' : (m.name || ''));
+  const bm = (u.by_model || {})[key] || {};
+  let convs = 0;
+  if(!main) convs = m.opens_unrestricted ? (u.unrestricted_convs || 0) : ((u.model_convs || {})[m.name] || 0);
+  let bits = '';
+  if(convs > 0) bits += _dvmrTag(window.Tf('mk_js_usage_convs', {n: convs}));
+  if((bm.fail || 0) > 0) bits += _dvmrTag(window.Tf('mk_js_usage_fail', {n: bm.fail}));
+  else if(convs <= 0 && (bm.calls || 0) > 0) bits += _dvmrTag(window.Tf('mk_js_usage_calls', {n: bm.calls}));
+  return bits;
+}
+function _dvmrHealthHtml(h){
+  if(!h){
+    if(_dvmrProbing) return '<i class="mk-dot pulse" aria-hidden="true"></i><span>' + window.T('mk_js_h_checking') + '</span>';
+    return '<i class="mk-dot" aria-hidden="true"></i><span>' + window.T('mk_js_h_unsaved') + '</span>';
+  }
+  if(h.online && h.warn === 'model_not_listed') return '<i class="mk-dot warn" aria-hidden="true"></i><span>' + window.T('mk_js_h_not_listed') + '</span>';
+  if(h.online) return '<i class="mk-dot ok" aria-hidden="true"></i><span>' + (h.latency_ms ? window.Tf('mk_js_h_online_ms', {ms: h.latency_ms}) : window.T('mk_js_h_online')) + '</span>';
+  const e = String(h.error || '');
+  let k = 'mk_js_h_offline';
+  if(e === 'http_401' || e === 'http_403') k = 'mk_js_h_auth';
+  else if(e === 'http_404') k = 'mk_js_h_notfound';
+  else if(e === 'http_429') k = 'mk_js_h_quota';
+  return '<i class="mk-dot off" aria-hidden="true"></i><span>' + window.T(k) + '</span>';
+}
+function _dvmrMainRow(){
+  const m = _dvmrMain || {};
+  return {name: '', base_url: '', model: m.model || '', display_label: m.label || '', vendor: m.vendor || 'other',
+          public_host: m.public_host || m.host || '', private: !!m.private, via: m.via || '', has_key: true, _main: true};
+}
+function _dvmrRowHtml(m, i){
+  const main = i < 0;
+  const h = _dvmrHealth[main ? '' : m.name];
+  const vendor = m.vendor || _dvmrGuessVendor(m.base_url);
+  const label = _dvmrLabelOf(m);
+  let tags = '';
+  if(main) tags += _dvmrTag(window.T('mk_js_main_tag'), 'is-main', window.T('mk_js_main_d'));
+  if(m.opens_unrestricted) tags += _dvmrTag(window.T('mk_js_tag_unr'), 'unr', window.T('mk_js_unr_row_d'));
+  else if(m.private || vendor === 'local') tags += _dvmrTag(window.T('mk_js_tag_private'), 'priv');
+  if(m.internal) tags += _dvmrTag(window.T('mk_js_tag_internal'), '', window.T('mk_js_internal_d'));
+  if(m.cost_hint) tags += _dvmrTag(m.cost_hint);
+  if(!main && !m._new && _dvmrLoaded.indexOf(m.name) >= 0) tags += _dvmrTag(window.T('dv_mr_js_loaded'), 'ok');
+  if(!main && !m.has_key) tags += _dvmrTag(window.T('mk_js_tag_nokey'));
+  tags += _dvmrUsageBits(m, main);
+  let sub = '<code>' + _dvmrEsc(m.model) + '</code> \u00B7 ' + _dvmrEsc(_dvmrVia(m));
+  if(main) sub += ' \u00B7 ' + _dvmrEsc(window.T('mk_js_main_d'));
+  else if(m.internal) sub += ' \u00B7 <code>' + _dvmrEsc(m.name) + '</code>';
+  else if(m.name && label !== m.name) sub += ' \u00B7 ' + _dvmrEsc(m.name);
+  const editing = !main && _dvmrEditing && _dvmrEditing.mode === 'edit' && _dvmrEditing.index === i;
+  const acts = main ? '' : '<div class="mk-row-act">'
+    + '<button type="button" class="btn btn-s btn-xs" data-dvmr-act="edit" data-idx="' + i + '">' + window.T('mk_js_edit') + '</button>'
+    + '<button type="button" class="btn btn-s btn-xs" data-dvmr-act="probe" data-idx="' + i + '">' + window.T('mk_js_probe_one') + '</button>'
+    + '<button type="button" class="btn btn-s btn-xs mk-del" data-dvmr-act="del" data-idx="' + i + '" aria-label="' + _dvmrEsc(window.T('mk_js_del') + ' ' + label) + '">' + window.T('mk_js_del') + '</button>'
+    + '</div>';
+  return '<div class="mk-row' + (main ? ' is-main' : '') + (m.internal ? ' is-internal' : '') + (m._new ? ' fresh' : '') + (editing ? ' editing' : '') + '" role="listitem" data-idx="' + i + '">'
+    + '<span class="mk-av lg" data-vendor="' + _dvmrEsc(vendor) + '" aria-hidden="true">' + _dvmrEsc((label || '?').charAt(0).toUpperCase()) + '</span>'
+    + '<div class="mk-row-main"><div class="mk-row-t"><span class="mk-row-name">' + _dvmrEsc(label) + '</span>' + tags + '</div><div class="mk-row-s">' + sub + '</div></div>'
+    + '<div class="mk-row-h">' + _dvmrHealthHtml(h) + '</div>'
+    + acts + '</div>';
+}
+function _dvmrRenderModels(){
+  const box = _dvmrEl('dvmr-model-list');
+  if(!box) return;
+  const ed = _dvmrEl('dvmr-editor');
+  if(ed && box.contains(ed)) box.parentNode.insertBefore(ed, box);   // 抽屉在列表里时先挪出，别被 innerHTML 冲掉
+  let html = '';
+  if(_dvmrMain && _dvmrMain.model) html += _dvmrRowHtml(_dvmrMainRow(), -1);
+  if(!_dvmrModels.length){
+    html += '<div class="empty-state mk-empty"><span class="es-ico" aria-hidden="true">'
+      + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7.5" cy="15.5" r="3.5"/><path d="M10.2 13.2L21 3"/><path d="M16 3h5v5"/></svg></span>'
+      + _dvmrEsc(window.T('mk_js_summary_none'))
+      + '<div class="es-hint">' + _dvmrEsc(window.T('mk_js_empty_h')) + '</div>'
+      + '<div class="mk-quick"><span class="mk-quick-lbl">' + _dvmrEsc(window.T('mk_js_quick')) + '</span>'
+      + ['openai', 'deepseek', 'gemini'].map(k => '<button type="button" class="mk-vchip" data-dvmr-quick="' + k + '"><span class="mk-av" data-vendor="' + k + '" aria-hidden="true">' + _DVMR_PRESETS[k].label.charAt(0) + '</span>' + _DVMR_PRESETS[k].label + '</button>').join('')
+      + '</div></div>';
+  }else{
+    _dvmrModels.forEach((m, i) => { if(_dvmrShowInternal || !m.internal) html += _dvmrRowHtml(m, i); });
+    const hidden = _dvmrModels.filter(m => m.internal).length;
+    if(hidden){
+      html += '<button type="button" class="mk-more" data-dvmr-act="internal" aria-expanded="'
+        + (_dvmrShowInternal ? 'true' : 'false') + '">'
+        + _dvmrEsc(_dvmrShowInternal ? window.T('mk_js_hide_internal') : window.Tf('mk_js_show_internal', {n: hidden}))
+        + '</button>';
+    }
+  }
+  box.innerHTML = html;
+  if(_dvmrEditing) _dvmrPlaceEditor();
+}
+function _dvmrRenderRoutes(){
+  const box = _dvmrEl('dvmr-route-list'), sum = _dvmrEl('dvmr-routes-sum');
+  if(!box) return;
+  const mainTxt = (_dvmrMain && _dvmrMain.model)
+    ? window.Tf('mk_js_route_follow_d', {model: _dvmrMain.model, host: _dvmrMain.public_host || _dvmrMain.host || ''})
+    : window.T('mk_js_route_follow');
+  const opts = _dvmrModels.filter(m => !m.internal).map(m => '<option value="' + _dvmrEsc(m.name) + '">' + _dvmrEsc(_dvmrLabelOf(m) + ' \u00B7 ' + m.model + ' \u00B7 ' + _dvmrVia(m)) + '</option>').join('');
+  box.innerHTML = _dvmrTasks.map(t => {
+    const sid = 'dvmr-route-' + String(t.key).replace(/[^A-Za-z0-9_\-]/g, '_');
+    const note = _dvmrResetTasks[t.key] ? '<div class="mk-route-note">' + _dvmrEsc(window.T('mk_js_route_reset')) + '</div>' : '';
+    return '<div class="mk-route' + (t.custom ? ' custom' : '') + '">'
+      + '<div class="mk-route-txt"><label class="mk-route-name" for="' + sid + '">' + _dvmrEsc(t.label) + (t.custom ? _dvmrTag(window.T('mk_js_tag_custom')) : '') + '</label>'
+      + '<div class="mk-route-d">' + _dvmrEsc(t.desc || '') + '</div>' + note + '</div>'
+      + '<select class="f-inp mk-route-sel" id="' + sid + '" data-dvmr-task="' + _dvmrEsc(t.key) + '"><option value="">' + _dvmrEsc(mainTxt) + '</option>' + opts + '</select>'
+      + '</div>';
+  }).join('');
+  box.querySelectorAll('select[data-dvmr-task]').forEach(s => {
+    const task = s.getAttribute('data-dvmr-task');
+    s.value = _dvmrRoutes[task] || '';
+    if(s.value !== (_dvmrRoutes[task] || '')) _dvmrRoutes[task] = '';     // 指向的档已不在 → 回主链
+    s.addEventListener('change', () => {
+      _dvmrRoutes[task] = s.value || '';
+      delete _dvmrResetTasks[task];
+      const note = s.parentNode ? s.parentNode.querySelector('.mk-route-note') : null; if(note) note.remove();
+      _dvmrAfterChange(); _dvmrRoutesSum();
+    });
+  });
+  _dvmrRoutesSum();
+}
+function _dvmrRoutesSum(){
+  const sum = _dvmrEl('dvmr-routes-sum');
+  const assigned = Object.keys(_dvmrRoutes).filter(t => _dvmrRoutes[t]).length;
+  if(sum) sum.textContent = window.Tf('mk_js_routes_sum', {n: _dvmrTasks.length, r: assigned});
+}
+function mrToggleInternal(){
+  _dvmrShowInternal = !_dvmrShowInternal;
+  try{ localStorage.setItem('mk_show_internal', _dvmrShowInternal ? '1' : '0'); }catch(e){}
+  if(!_dvmrShowInternal && _dvmrEditing && _dvmrEditing.mode === 'edit'){
+    const m = _dvmrModels[_dvmrEditing.index];
+    if(m && m.internal) mrCloseEditor();
+  }
+  _dvmrRenderModels(); _dvmrStatus();
+}
+function mrToggleRoutes(force){
+  _dvmrRoutesOpen = (typeof force === 'boolean') ? force : !_dvmrRoutesOpen;
+  const body = _dvmrEl('dvmr-routes-body'), btn = _dvmrEl('dvmr-routes-toggle'), card = _dvmrEl('dvmr-routes-card');
+  if(body) body.hidden = !_dvmrRoutesOpen;
+  if(btn) btn.setAttribute('aria-expanded', _dvmrRoutesOpen ? 'true' : 'false');
+  if(card) card.classList.toggle('open', _dvmrRoutesOpen);
+  try{ localStorage.setItem('mk_routes_open', _dvmrRoutesOpen ? '1' : '0'); }catch(e){}
+}
+
+/* ── 加载 / 体检 ──────────────────────────────────────────────── */
+function _dvmrLock(){
+  _dvmrLocked = true;
+  const b = _dvmrEl('dvmr-locked'), fs = _dvmrEl('dvmr-fs'), st = _dvmrEl('dvmr-status');
+  if(b) b.hidden = false;
+  if(fs) fs.disabled = true;
+  if(st) st.textContent = '';
+  mrCloseEditor();
+  _dvmrAfterChange();
+}
+async function mrLoad(opts){
+  opts = opts || {};
+  const st = _dvmrEl('dvmr-status');
+  try{
+    const r = await apiFetch('/api/setup/model-routes', {credentials: 'same-origin'}, {timeoutMs: 15000});
+    if(r.status === 403){ _dvmrLock(); return false; }
+    const d = await r.json();
+    if(!d.ok) throw new Error('bad response');
+    _dvmrModels = (d.models || []).map(m => ({
+      name: m.name, base_url: m.base_url || '', model: m.model || '',
+      api_key: m.api_key_masked || '', api_key_masked: m.api_key_masked || '',
+      has_key: (m.has_key != null) ? !!m.has_key : !!m.api_key_masked,
+      label: m.label || '', max_ctx: m.max_ctx || null, cost_hint: m.cost_hint || '',
+      display_label: m.display_label || '', vendor: m.vendor || '', public_host: m.public_host || '',
+      private: !!m.private, via: m.via || '', max_ctx_default: m.max_ctx_default || null,
+      internal: !!m.internal, opens_unrestricted: !!m.opens_unrestricted,
+    }));
+    _dvmrRoutes = {}; Object.keys(d.task_routes || {}).forEach(t => { _dvmrRoutes[t] = d.task_routes[t]; });
+    if(Array.isArray(d.tasks)) _dvmrTasks = d.tasks.map(_dvmrLocalizeTask);
+    else{
+      // 旧后端（热更新过渡期，进程未重启）：只给 known_tasks 名单 → 就地合成行，已配的用途不丢
+      const seen = {};
+      _dvmrTasks = (d.known_tasks || []).concat(Object.keys(_dvmrRoutes)).filter(t => t && !seen[t] && (seen[t] = 1))
+        .map(t => _dvmrLocalizeTask({key: t, label: t, desc: '', custom: false}));
+    }
+    _dvmrMain = d.main_chain || {};
+    _dvmrUnr = d.unrestricted_profile || 'unrestricted';
+    _dvmrLoaded = d.loaded || [];
+    _dvmrLocal = d.local_endpoint || null;
+    _dvmrUsage = d.usage || {by_model: {}, model_convs: {}, unrestricted_convs: 0};
+    if(_dvmrLocal && _dvmrLocal.base_url){
+      _DVMR_PRESETS.local = {name: 'lan_' + (_dvmrLocal.model || 'local').replace(/[^A-Za-z0-9_\-]/g, '_').slice(0, 20), base_url: _dvmrLocal.base_url, model: _dvmrLocal.model || '', label: window.T('mk_ed_vendor_local')};
+      const chip = _dvmrEl('dvmr-vchip-local'); if(chip) chip.hidden = false;
+    }
+    if(!opts.keepHealth) _dvmrHealth = {};
+    _dvmrResetTasks = {};
+    _dvmrBaseline = _dvmrSnap();
+    _dvmrRenderModels(); _dvmrRenderRoutes(); _dvmrAfterChange();
+    return true;
+  }catch(e){
+    if(st) st.textContent = window.T('mk_js_load_fail');
+    return false;
+  }
+}
+function _dvmrProbeRows(only){
+  const rows = [];
+  // 主链行只送 name:''，端点与密钥由服务端自己填（客户端不持有主链 base_url）
+  if(_dvmrMain && _dvmrMain.model && (only == null || only === '')) rows.push({name: ''});
+  _dvmrModels.forEach(m => {
+    if(only != null && only !== m.name) return;
+    rows.push({name: m.name, base_url: m.base_url, model: m.model, api_key: m.api_key || '', label: m.label || ''});
+  });
+  return rows;
+}
+async function _dvmrProbe(rows){
+  if(_dvmrLocked || !rows.length) return;
+  _dvmrProbing = true;
+  rows.forEach(r => { delete _dvmrHealth[r.name]; });
+  _dvmrRenderModels(); _dvmrStatus();
+  const btn = _dvmrEl('dvmr-btn-probe'); if(btn) btn.disabled = true;
+  try{
+    const r = await apiFetch('/api/setup/model-routes/probe', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({models: rows})}, {timeoutMs: 30000});
+    if(r.status === 403){ _dvmrLock(); return; }
+    const d = await r.json();
+    if(d && d.ok && d.health){
+      Object.keys(d.health).forEach(n => {
+        _dvmrHealth[n] = d.health[n] || {};
+        const m = _dvmrModels.find(x => x.name === n);
+        if(m && d.health[n] && d.health[n].facts) Object.assign(m, _dvmrPickFacts(d.health[n].facts));
+      });
+    }
+  }catch(e){ /* 网络抖动：保留旧结果，不打断页面 */ }
+  finally{
+    _dvmrProbing = false;
+    if(btn) btn.disabled = false;
+    _dvmrRenderModels(); _dvmrRenderRoutes(); _dvmrStatus();
+  }
+}
+function mrProbe(){ return _dvmrProbe(_dvmrProbeRows(null)); }
+function mrProbeOne(name){ return _dvmrProbe(_dvmrProbeRows(name)); }
+
+/* ── 抽屉：打开 / 预设 / 拉清单 / 提交 / 关闭 ───────────────────── */
+function _dvmrMarkVendor(kind){
+  document.querySelectorAll('#dvmr-vendors .mk-vchip').forEach(b => {
+    const on = b.getAttribute('data-preset') === kind;
+    b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+function _dvmrEdMsg(txt, cls){ const el = _dvmrEl('dvmr-ed-msg'); if(el){ el.textContent = txt || ''; el.className = 'mk-ed-msg' + (cls ? (' ' + cls) : ''); } }
+function _dvmrPlaceEditor(){
+  const ed = _dvmrEl('dvmr-editor'), list = _dvmrEl('dvmr-model-list');
+  if(!ed || !list || !_dvmrEditing) return;
+  ed.hidden = false;
+  if(_dvmrEditing.mode === 'edit'){
+    const row = list.querySelector('.mk-row[data-idx="' + _dvmrEditing.index + '"]');
+    if(row){ row.after(ed); return; }
+  }
+  list.parentNode.insertBefore(ed, list);
+}
+function _dvmrFillEditor(m){
+  const isEdit = !!m;
+  _dvmrSet('dvmr-new-key', '');
+  _dvmrSet('dvmr-new-model', isEdit ? m.model : '');
+  _dvmrSet('dvmr-new-base', isEdit ? m.base_url : '');
+  _dvmrSet('dvmr-new-label', isEdit ? (m.label || '') : '');
+  _dvmrSet('dvmr-new-name', isEdit ? m.name : '');
+  _dvmrSet('dvmr-new-ctx', isEdit && m.max_ctx ? m.max_ctx : '');
+  _dvmrSet('dvmr-new-cost', isEdit ? (m.cost_hint || '') : '');
+  const dl = _dvmrEl('dvmr-model-ids'); if(dl) dl.innerHTML = '';
+  const keyHint = _dvmrEl('dvmr-key-hint');
+  if(keyHint) keyHint.textContent = (isEdit && m.has_key) ? window.Tf('mk_ed_key_keep', {mask: m.api_key_masked || '\u2026'}) : '';
+  const mh = _dvmrEl('dvmr-model-hint'); if(mh) mh.textContent = '';
+  const unr = _dvmrEl('dvmr-new-unr'); if(unr){ unr.checked = isEdit ? !!m.opens_unrestricted : false; }
+  // 已保存档的档名是身份（服务端按名沿用旧密钥），不许改；未保存的新档可改
+  const nameEl = _dvmrEl('dvmr-new-name');
+  const lockName = isEdit && !m._new;
+  if(nameEl) nameEl.readOnly = lockName || (unr && unr.checked);
+  if(unr) unr.disabled = lockName;
+  const keyEl = _dvmrEl('dvmr-new-key'); if(keyEl && keyEl.type !== 'password') mrToggleKey(true);
+  const title = _dvmrEl('dvmr-ed-title'); if(title) title.textContent = window.T(isEdit ? 'mk_ed_title_edit' : 'mk_ed_title_add');
+  const sub = _dvmrEl('dvmr-ed-submit'); if(sub) sub.textContent = window.T(isEdit ? 'mk_ed_submit_edit' : 'mk_ed_submit_add');
+  const vsec = _dvmrEl('dvmr-ed-vendor-sec'); if(vsec) vsec.hidden = isEdit;
+  const adv = _dvmrEl('dvmr-adv'); if(adv) adv.open = isEdit ? (m.vendor === 'other' || !!m.label || !!m.max_ctx || !!m.cost_hint) : false;
+  _dvmrMarkVendor(isEdit ? (m.vendor || _dvmrGuessVendor(m.base_url)) : '');
+  _dvmrEdMsg('');
+}
+function mrOpenAdd(preset){
+  if(_dvmrLocked) return;
+  _dvmrEditing = {mode: 'add', index: -1};
+  _dvmrFillEditor(null);
+  _dvmrRenderModels();
+  if(preset) mrApplyPreset(preset);
+  const ed = _dvmrEl('dvmr-editor');
+  if(ed && ed.scrollIntoView) ed.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+}
+function mrOpenEdit(i){
+  if(_dvmrLocked) return;
+  const m = _dvmrModels[i]; if(!m) return;
+  _dvmrEditing = {mode: 'edit', index: i};
+  _dvmrFillEditor(m);
+  _dvmrRenderModels();
+  const k = _dvmrEl('dvmr-new-key'); if(k) k.focus();
+}
+function mrCloseEditor(){
+  _dvmrEditing = null;
+  const ed = _dvmrEl('dvmr-editor'), list = _dvmrEl('dvmr-model-list');
+  if(ed){ ed.hidden = true; if(list && list.contains(ed)) list.parentNode.insertBefore(ed, list); }
+  document.querySelectorAll('#dvmr-model-list .mk-row.editing').forEach(r => r.classList.remove('editing'));
+}
 function mrApplyPreset(kind){
   const p = _DVMR_PRESETS[kind];
   if(!p) return;
-  const setv = (id, v)=>{ const el = document.getElementById(id); if(el) el.value = v || ''; };
+  if(!_dvmrEditing){ mrOpenAdd(kind); return; }
+  _dvmrMarkVendor(kind);
   let name = p.name, n = 2;
-  while(_dvmrModels.some(m=>m.name === name)){ name = p.name + '_' + (n++); }
-  setv('dvmr-new-name', name);
-  setv('dvmr-new-base', p.base_url);
-  setv('dvmr-new-model', p.model || '');
-  const dl = document.getElementById('dvmr-model-ids'); if(dl) dl.innerHTML = '';
-  const res = document.getElementById('dvmr-save-res');
-  if(res){ res.textContent = window.T(p.model ? 'dv_mr_js_preset_ready' : 'dv_mr_js_preset_need_model'); res.className = 'save-result'; }
-  const k = document.getElementById('dvmr-new-key'); if(k && !p.model) k.focus();
+  while(_dvmrModels.some(m => m.name === name)){ name = p.name + '_' + (n++); }
+  _dvmrSet('dvmr-new-name', name);
+  _dvmrSet('dvmr-new-base', p.base_url || '');
+  _dvmrSet('dvmr-new-model', p.model || '');
+  const dl = _dvmrEl('dvmr-model-ids'); if(dl) dl.innerHTML = '';
+  const mh = _dvmrEl('dvmr-model-hint'); if(mh) mh.textContent = '';
+  const unr = _dvmrEl('dvmr-new-unr'); if(unr && unr.checked){ unr.checked = false; mrToggleUnr(); }
+  const adv = _dvmrEl('dvmr-adv'); if(adv) adv.open = (kind === 'custom');
+  _dvmrEdMsg('');
+  const focusId = kind === 'custom' ? 'dvmr-new-base' : (kind === 'local' ? 'dvmr-new-model' : 'dvmr-new-key');
+  const f = _dvmrEl(focusId); if(f) f.focus();
+}
+function mrToggleKey(forceHide){
+  const k = _dvmrEl('dvmr-new-key'), b = _dvmrEl('dvmr-key-eye');
+  if(!k) return;
+  const show = forceHide === true ? false : (k.type === 'password');
+  k.type = show ? 'text' : 'password';
+  if(b){
+    b.setAttribute('aria-pressed', show ? 'true' : 'false');
+    const t = window.T(show ? 'mk_ed_key_hide' : 'mk_ed_key_show');
+    b.setAttribute('aria-label', t); b.title = t; b.classList.toggle('on', show);
+  }
+}
+function mrToggleUnr(){
+  const unr = _dvmrEl('dvmr-new-unr'), nameEl = _dvmrEl('dvmr-new-name');
+  if(!unr || !nameEl) return;
+  if(unr.checked){
+    const taken = _dvmrModels.findIndex(m => m.name === _dvmrUnr);
+    if(taken >= 0 && !(_dvmrEditing && _dvmrEditing.mode === 'edit' && _dvmrEditing.index === taken)){
+      unr.checked = false;
+      _dvmrEdMsg(window.Tf('mk_js_unr_taken', {name: _dvmrLabelOf(_dvmrModels[taken])}), 'err');
+      return;
+    }
+    nameEl.dataset.prev = nameEl.value;
+    nameEl.value = _dvmrUnr; nameEl.readOnly = true;
+  }else{
+    nameEl.readOnly = false;
+    if(nameEl.dataset.prev != null){ nameEl.value = nameEl.dataset.prev; delete nameEl.dataset.prev; }
+  }
 }
 async function mrListModels(){
-  const res = document.getElementById('dvmr-save-res');
-  const base = document.getElementById('dvmr-new-base').value.trim();
-  const key = document.getElementById('dvmr-new-key').value.trim();
-  const name = document.getElementById('dvmr-new-name').value.trim();
-  if(!base){ if(res){ res.textContent = window.T('dv_mr_js_need_base'); res.className = 'save-result err'; } return; }
-  if(res){ res.textContent = window.T('dv_mr_js_listing'); res.className = 'save-result'; }
+  const base = _dvmrV('dvmr-new-base'), key = _dvmrV('dvmr-new-key');
+  const name = (_dvmrEditing && _dvmrEditing.mode === 'edit' && _dvmrModels[_dvmrEditing.index]) ? _dvmrModels[_dvmrEditing.index].name : '';
+  const mh = _dvmrEl('dvmr-model-hint'), btn = _dvmrEl('dvmr-btn-list');
+  if(!base){ _dvmrEdMsg(window.T('dv_mr_js_need_base'), 'err'); const adv = _dvmrEl('dvmr-adv'); if(adv) adv.open = true; const b = _dvmrEl('dvmr-new-base'); if(b) b.focus(); return; }
+  if(mh){ mh.textContent = window.T('dv_mr_js_listing'); mh.className = 'mk-field-hint'; }
+  if(btn) btn.disabled = true;
   try{
     const r = await apiFetch('/api/setup/model-routes/list-models', {method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({base_url: base, api_key: key, name: name})}, {timeoutMs: 15000});
+    if(r.status === 403){ _dvmrLock(); return; }
     const d = await r.json();
-    const dl = document.getElementById('dvmr-model-ids');
-    if(dl) dl.innerHTML = (d.ids || []).map(id=>'<option value="' + _dvmrEsc(id) + '"></option>').join('');
+    const dl = _dvmrEl('dvmr-model-ids');
+    if(dl) dl.innerHTML = (d.ids || []).map(id => '<option value="' + _dvmrEsc(id) + '"></option>').join('');
     if(!d.ok){
-      if(res){ res.textContent = window.Tf('dv_mr_js_list_fail', {status: d.status || '', msg: d.detail || ''}); res.className = 'save-result err'; }
+      const auth = d.status === 401 || d.status === 403;
+      if(mh){ mh.textContent = auth ? window.Tf('mk_js_list_fail_auth', {status: d.status}) : window.Tf('mk_js_list_fail', {msg: (d.detail || d.status || '')}); mh.className = 'mk-field-hint err'; }
       return;
     }
-    if(res){ res.textContent = window.Tf('dv_mr_js_list_ok', {n: d.n || 0}); res.className = 'save-result ok'; }
-    const inp = document.getElementById('dvmr-new-model');
+    if(mh){ mh.textContent = window.Tf('mk_js_list_ok', {n: d.n || 0}); mh.className = 'mk-field-hint ok'; }
+    const inp = _dvmrEl('dvmr-new-model');
     if(inp && !inp.value && d.ids && d.ids.length === 1) inp.value = d.ids[0];
     if(inp) inp.focus();
   }catch(e){
-    if(res){ res.textContent = window.Tf('dv_mr_js_list_fail', {status: '', msg: e.message || 'network'}); res.className = 'save-result err'; }
+    if(mh){ mh.textContent = window.Tf('mk_js_list_fail', {msg: e.message || 'network'}); mh.className = 'mk-field-hint err'; }
+  }finally{ if(btn) btn.disabled = false; }
+}
+function mrSubmitEditor(){
+  if(!_dvmrEditing || _dvmrLocked) return;
+  const base = _dvmrV('dvmr-new-base'), model = _dvmrV('dvmr-new-model'), key = _dvmrV('dvmr-new-key');
+  const label = _dvmrV('dvmr-new-label').slice(0, 40), cost = _dvmrV('dvmr-new-cost').slice(0, 24), ctxRaw = _dvmrV('dvmr-new-ctx');
+  const unrEl = _dvmrEl('dvmr-new-unr'), unr = !!(unrEl && unrEl.checked);
+  let name = unr ? _dvmrUnr : _dvmrV('dvmr-new-name');
+  const adv = _dvmrEl('dvmr-adv');
+  if(!base || base.indexOf('://') < 0){ _dvmrEdMsg(window.T('dv_mr_js_need_base'), 'err'); if(adv) adv.open = true; const b = _dvmrEl('dvmr-new-base'); if(b) b.focus(); return; }
+  if(!model){ _dvmrEdMsg(window.T('mk_js_need_model'), 'err'); const m = _dvmrEl('dvmr-new-model'); if(m) m.focus(); return; }
+  if(!name || !_DVMR_NAME_RE.test(name)){ _dvmrEdMsg(window.T('mk_js_need_name'), 'err'); if(adv) adv.open = true; const n = _dvmrEl('dvmr-new-name'); if(n) n.focus(); return; }
+  let ctx = null;
+  if(ctxRaw){ ctx = parseInt(ctxRaw, 10); if(isNaN(ctx) || ctx <= 0){ _dvmrEdMsg(window.T('mk_js_need_ctx'), 'err'); if(adv) adv.open = true; return; } }
+  const dup = _dvmrModels.findIndex(m => m.name === name);
+  const isEdit = _dvmrEditing.mode === 'edit';
+  if(dup >= 0 && !(isEdit && dup === _dvmrEditing.index)){ _dvmrEdMsg(window.Tf('dv_mr_js_dup', {name: name}), 'err'); return; }
+  const vendor = _dvmrGuessVendor(base);
+  if(isEdit){
+    const m = _dvmrModels[_dvmrEditing.index];
+    if(!m) return;
+    const oldName = m.name;
+    const baseChanged = m.base_url !== base;
+    m.name = name; m.base_url = base; m.model = model; m.label = label; m.cost_hint = cost; m.max_ctx = ctx;
+    m.opens_unrestricted = (name === _dvmrUnr);
+    m.internal = name.charAt(0) === '_';
+    if(baseChanged || oldName !== name){ m.vendor = vendor; m.display_label = ''; m.public_host = ''; m.private = vendor === 'local'; m.via = vendor === 'local' ? 'lan' : 'cloud'; }
+    if(key){ m.api_key = key; m.api_key_masked = _dvmrMask(key); m.has_key = true; }
+    if(oldName !== name){
+      Object.keys(_dvmrRoutes).forEach(t => { if(_dvmrRoutes[t] === oldName) _dvmrRoutes[t] = name; });
+      delete _dvmrHealth[oldName];
+    }
+    _dvmrToast(window.Tf('mk_js_updated', {name: _dvmrLabelOf(m)}), 'ok');
+  }else{
+    _dvmrModels.push({name: name, base_url: base, model: model, api_key: key, api_key_masked: key ? _dvmrMask(key) : '', has_key: !!key,
+      label: label, max_ctx: ctx, cost_hint: cost, display_label: '', vendor: vendor, public_host: '',
+      private: vendor === 'local', via: vendor === 'local' ? 'lan' : 'cloud', internal: name.charAt(0) === '_',
+      opens_unrestricted: name === _dvmrUnr, _new: true});
+    _dvmrToast(window.Tf('mk_js_added', {name: _dvmrLabelOf(_dvmrModels[_dvmrModels.length - 1])}), 'ok');
   }
+  if(name.charAt(0) === '_') _dvmrShowInternal = true;
+  mrCloseEditor();
+  _dvmrRenderModels(); _dvmrRenderRoutes(); _dvmrAfterChange();
+  mrProbeOne(name);
 }
 
+/* ── 删除 / 撤销 / 放弃 ────────────────────────────────────────── */
+async function mrDelete(i){
+  if(_dvmrLocked) return;
+  const m = _dvmrModels[i]; if(!m) return;
+  const used = Object.keys(_dvmrRoutes).filter(t => _dvmrRoutes[t] === m.name);
+  const label = _dvmrLabelOf(m);
+  const msg = used.length ? window.Tf('mk_js_del_confirm_used', {name: label, n: used.length}) : window.Tf('mk_js_del_confirm', {name: label});
+  const ok = (typeof confirmAction === 'function') ? await confirmAction(msg, {okText: window.T('mk_js_del'), danger: true}) : window.confirm(msg);
+  if(!ok) return;
+  if(_dvmrEditing && _dvmrEditing.mode === 'edit' && _dvmrEditing.index === i) mrCloseEditor();
+  else if(_dvmrEditing && _dvmrEditing.mode === 'edit' && _dvmrEditing.index > i) _dvmrEditing.index--;
+  _dvmrModels.splice(i, 1);
+  const routesBak = {};
+  used.forEach(t => { routesBak[t] = m.name; _dvmrRoutes[t] = ''; _dvmrResetTasks[t] = true; });
+  if(_dvmrLastDel && _dvmrLastDel.timer) clearTimeout(_dvmrLastDel.timer);
+  _dvmrLastDel = {model: m, index: i, routes: routesBak, timer: setTimeout(_dvmrHideUndo, 20000)};
+  const u = _dvmrEl('dvmr-undo'), ut = _dvmrEl('dvmr-undo-txt');
+  if(ut) ut.textContent = window.Tf('mk_js_del_ok', {name: label});
+  if(u) u.hidden = false;
+  if(used.length) mrToggleRoutes(true);
+  _dvmrRenderModels(); _dvmrRenderRoutes(); _dvmrAfterChange();
+}
+function _dvmrHideUndo(){ const u = _dvmrEl('dvmr-undo'); if(u) u.hidden = true; if(_dvmrLastDel && _dvmrLastDel.timer) clearTimeout(_dvmrLastDel.timer); _dvmrLastDel = null; }
+function mrUndoDelete(){
+  const d = _dvmrLastDel; if(!d) return;
+  _dvmrModels.splice(Math.min(d.index, _dvmrModels.length), 0, d.model);
+  Object.keys(d.routes).forEach(t => { _dvmrRoutes[t] = d.routes[t]; delete _dvmrResetTasks[t]; });
+  _dvmrHideUndo();
+  _dvmrRenderModels(); _dvmrRenderRoutes(); _dvmrAfterChange();
+}
+async function mrDiscard(){
+  mrCloseEditor(); _dvmrHideUndo();
+  await mrLoad({keepHealth: true});
+}
+
+/* ── 保存 ─────────────────────────────────────────────────────── */
 async function mrSave(){
-  const res = document.getElementById('dvmr-save-res');
+  if(_dvmrLocked) return;
+  const res = _dvmrEl('dvmr-save-res'), btn = _dvmrEl('dvmr-btn-save');
   const routes = {};
-  document.querySelectorAll('[data-dvmr-task]').forEach(sel=>{
-    const t = sel.getAttribute('data-dvmr-task');
-    const v = sel.value || '';
-    if(t && v) routes[t] = v;
-  });
-  res.textContent = window.T('ov_js_saving'); res.className = 'save-result';
+  Object.keys(_dvmrRoutes).forEach(t => { if(_dvmrRoutes[t]) routes[t] = _dvmrRoutes[t]; });
+  const models = _dvmrModels.map(m => ({name: m.name, base_url: m.base_url, model: m.model, api_key: m.api_key || '',
+    label: m.label || '', cost_hint: m.cost_hint || '', max_ctx: m.max_ctx ? m.max_ctx : ''}));
+  if(res){ res.textContent = window.T('mk_js_saving'); res.className = 'save-result'; }
+  if(btn && typeof btnLoading === 'function') btnLoading(btn, true);
   try{
-    const r = await apiFetch('/api/setup/model-routes', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({models: _dvmrModels, task_routes: routes}),
-    }, {timeoutMs: 60000});
-    if(r.status === 403){ res.textContent = window.T('mk_need_admin'); res.className = 'save-result err'; return; }
+    const r = await apiFetch('/api/setup/model-routes', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({models: models, task_routes: routes})}, {timeoutMs: 60000});
+    if(r.status === 403){ _dvmrLock(); return; }
     const d = await r.json();
-    if(!d.ok){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; return; }
-    res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
-    res.className = 'save-result ok';
-    await mrLoad();
+    if(!d.ok){ if(res){ res.textContent = d.detail || ''; res.className = 'save-result err'; } return; }
+    mrCloseEditor(); _dvmrHideUndo();
+    await mrLoad({keepHealth: true});
+    _dvmrShowSaved(!!d.ai_ready);
   }catch(e){
-    res.textContent = window.T('tg_js_011') + e.message; res.className = 'save-result err';
+    if(res){ res.textContent = window.Tf('mk_js_req_failed', {msg: e.message || 'network'}); res.className = 'save-result err'; }
+  }finally{
+    if(btn && typeof btnLoading === 'function') btnLoading(btn, false);
   }
 }
+function _dvmrShowSaved(ready){
+  const bar = _dvmrEl('dvmr-savebar'), txt = _dvmrEl('dvmr-dirty-txt'), res = _dvmrEl('dvmr-save-res');
+  if(!bar) return;
+  bar.hidden = false; bar.classList.add('saved'); bar.classList.toggle('warn', !ready);
+  document.body.classList.add('mk-has-savebar');
+  if(txt) txt.innerHTML = _dvmrEsc(window.T(ready ? 'mk_js_saved' : 'mk_js_saved_restart'))
+    + (ready ? ' <a class="mk-savebar-go" href="/workspace" target="_blank" rel="noopener">' + _dvmrEsc(window.T('mk_js_saved_go')) + ' \u2192</a>' : '');
+  if(res){ res.textContent = ''; res.className = 'save-result'; }
+  _dvmrToast(window.T(ready ? 'mk_js_saved' : 'mk_js_saved_restart'), ready ? 'ok' : 'info');
+  if(_dvmrSavedTimer) clearTimeout(_dvmrSavedTimer);
+  _dvmrSavedTimer = setTimeout(() => { _dvmrSavedTimer = null; if(!_dvmrIsDirty()){ bar.hidden = true; bar.classList.remove('saved', 'warn'); document.body.classList.remove('mk-has-savebar'); } }, ready ? 6000 : 12000);
+}
 
+/* ── 事件委托 + 启动 ─────────────────────────────────────────── */
 (function(){
-  const mbox = document.getElementById('dvmr-model-list');
-  if(mbox){
-    mbox.addEventListener('click', function(ev){
-      const b = ev.target && ev.target.closest ? ev.target.closest('[data-dvmr-del]') : null;
+  const list = _dvmrEl('dvmr-model-list');
+  if(list){
+    list.addEventListener('click', function(ev){
+      const q = ev.target && ev.target.closest ? ev.target.closest('[data-dvmr-quick]') : null;
+      if(q){ mrOpenAdd(q.getAttribute('data-dvmr-quick')); return; }
+      const b = ev.target && ev.target.closest ? ev.target.closest('[data-dvmr-act]') : null;
       if(!b) return;
-      const i = parseInt(b.getAttribute('data-dvmr-del'), 10);
-      if(!isNaN(i)){ _dvmrModels.splice(i, 1); _dvmrRenderModels(); _dvmrRenderRoutes(); }
+      const act = b.getAttribute('data-dvmr-act');
+      if(act === 'internal'){ mrToggleInternal(); return; }
+      const i = parseInt(b.getAttribute('data-idx'), 10);
+      if(isNaN(i)) return;
+      if(act === 'edit') mrOpenEdit(i);
+      else if(act === 'probe'){ const m = _dvmrModels[i]; if(m) mrProbeOne(m.name); }
+      else if(act === 'del') mrDelete(i);
     });
   }
-  mrLoad();
+  const ed = _dvmrEl('dvmr-editor');
+  if(ed){
+    ed.addEventListener('keydown', function(ev){
+      if(ev.key === 'Escape'){ ev.preventDefault(); mrCloseEditor(); }
+      else if(ev.key === 'Enter' && ev.target && ev.target.tagName === 'INPUT'){ ev.preventDefault(); mrSubmitEditor(); }
+    });
+    // 填完 Key 失焦 → 自动拉清单（已有厂商端点、模型还空着时）
+    const k = _dvmrEl('dvmr-new-key');
+    if(k) k.addEventListener('blur', function(){ if(k.value.trim() && _dvmrV('dvmr-new-base') && !_dvmrV('dvmr-new-model')) mrListModels(); });
+  }
+  window.addEventListener('beforeunload', function(ev){
+    if(!_dvmrIsDirty() || _dvmrLocked) return;
+    ev.preventDefault(); ev.returnValue = window.T('mk_js_leave'); return ev.returnValue;
+  });
+  try{ if(localStorage.getItem('mk_routes_open') === '1') mrToggleRoutes(true); }catch(e){}
+  try{ _dvmrShowInternal = localStorage.getItem('mk_show_internal') === '1'; }catch(e){}
+  mrLoad().then(function(ok){ if(ok) mrProbe(); });
 })();
 </script>

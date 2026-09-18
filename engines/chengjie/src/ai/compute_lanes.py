@@ -28,9 +28,15 @@ LANE_LABELS = {
     "pool": "硅基流动备用",
 }
 NAG_INTERVAL_SEC = 180.0
-# 欠费/鉴权：跳过这一档，直到探活或出话成功清掉；连接类短跳过，避免每句都先撞超时。
+# 欠费/鉴权：跳过这一档，直到探活或出话成功清掉。
 SKIP_QUOTA_SEC = 600.0
+# timeout / 5xx / 连续连接失败：短跳过，避免每句先撞死端点。
 SKIP_FAIL_SEC = 120.0
+# 173 keep-alive 毛刺（2026-09-18）：单次 Connection error 不是宕机。
+# 旧口径一次 connect 就冻 120s → 机子还在答、本进程已经改走云。
+# 第 1 次不跳过（调用方当场重试）；第 2 次短冻；第 3 次才按真故障冻 120s。
+SKIP_CONNECT_STREAK_SEC = 15.0
+CONNECT_STREAK_WINDOW_SEC = 45.0
 REMIND_KEY_PREFIX = "compute_lane:"
 
 _lock = threading.Lock()
@@ -52,7 +58,23 @@ def _blank(lane: str) -> Dict[str, Any]:
         "skip_until": 0.0,
         "last_ok_ts": 0.0,
         "last_fail_ts": 0.0,
+        "fail_streak": 0,
     }
+
+
+def skip_hold_sec(lane: str, kind: str, *, streak: int = 1) -> float:
+    """某次失败该跳过多久。纯函数，供 note_fail 与单测共用。"""
+    k = str(kind or "other").strip().lower() or "other"
+    if k in ("quota", "auth", "low"):
+        return SKIP_QUOTA_SEC
+    if str(lane) == "local" and k == "connect":
+        n = max(1, int(streak or 1))
+        if n <= 1:
+            return 0.0
+        if n == 2:
+            return SKIP_CONNECT_STREAK_SEC
+        return SKIP_FAIL_SEC
+    return SKIP_FAIL_SEC
 
 
 def snapshot(*, now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
@@ -84,6 +106,7 @@ def note_ok(lane: str, *, now: Optional[float] = None) -> None:
         st["detail"] = ""
         st["skip_until"] = 0.0
         st["last_ok_ts"] = ts
+        st["fail_streak"] = 0
 
 
 def note_fail(lane: str, kind: str, detail: str = "", *, now: Optional[float] = None,
@@ -93,14 +116,23 @@ def note_fail(lane: str, kind: str, detail: str = "", *, now: Optional[float] = 
         return
     ts = float(now if now is not None else time.time())
     k = str(kind or "other").strip().lower() or "other"
-    hold = SKIP_QUOTA_SEC if k in ("quota", "auth", "low") else SKIP_FAIL_SEC
     with _lock:
         st = _state.setdefault(str(lane), _blank(str(lane)))
+        prev_kind = str(st.get("kind") or "")
+        prev_ts = float(st.get("last_fail_ts") or 0.0)
+        streak = 1
+        if k == "connect" and prev_kind == "connect" and prev_ts > 0:
+            if (ts - prev_ts) <= CONNECT_STREAK_WINDOW_SEC:
+                streak = int(st.get("fail_streak") or 0) + 1
+        hold = skip_hold_sec(str(lane), k, streak=streak)
         st["ok"] = False
         st["kind"] = k
         st["detail"] = str(detail or "")[:200]
-        if skip:
+        st["fail_streak"] = streak
+        if skip and hold > 0:
             st["skip_until"] = ts + hold
+        elif skip and hold <= 0:
+            st["skip_until"] = 0.0
         st["last_fail_ts"] = ts
 
 
@@ -329,7 +361,8 @@ def healthy_labels(*, now: Optional[float] = None) -> List[str]:
 
 __all__ = [
     "LANES", "LANE_LABELS", "NAG_INTERVAL_SEC", "REMIND_KEY_PREFIX",
+    "SKIP_QUOTA_SEC", "SKIP_FAIL_SEC", "SKIP_CONNECT_STREAK_SEC",
     "reset_lanes", "snapshot", "should_skip", "note_ok", "note_fail",
-    "failover_order", "remind_enabled", "nag_interval_sec", "remind_key",
-    "kind_zh", "probe_lane", "apply_probe", "healthy_labels",
+    "skip_hold_sec", "failover_order", "remind_enabled", "nag_interval_sec",
+    "remind_key", "kind_zh", "probe_lane", "apply_probe", "healthy_labels",
 ]

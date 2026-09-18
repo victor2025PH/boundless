@@ -156,8 +156,94 @@ def vendor_of(base_url: Any) -> Dict[str, Any]:
             "default_ctx": DEFAULT_CLOUD_CTX}
 
 
+def is_ollama_endpoint(base_url: Any) -> bool:
+    """Ollama 端点（:11434 / 路径含 ollama）：runner 默认 ``-c 4096``，窗口靠 ``num_ctx`` 随请求下发。"""
+    b = str(base_url or "").strip().lower()
+    return ":11434" in b or "/ollama" in b
+
+
+#: Ollama 端点未显式配 ``num_ctx`` 时的保守窗口（历史默认；runner 按此装载）。
+DEFAULT_OLLAMA_CTX = 8_192
+
+
+def resolve_local_num_ctx(fb_cfg: Any, ai_cfg: Any = None) -> Tuple[int, str]:
+    """本地对话端点的**输入窗口**口径 → ``(num_ctx, 来源说明)``。
+
+    2026-09-18 实锤：``ai.fallback`` 没配 ``num_ctx`` 时一律落 8192——那是 Ollama 时代的
+    假设；现网 173:8001 是 vLLM ``max_model_len=24576``，同一端点在无限制路由按 24576 封顶、
+    在 ``ai.primary=local`` 主链却按 8192 裁，人设一个块就把历史裁到 2 条。解析顺序：
+
+    1. ``ai.fallback.num_ctx`` 显式给了 → 原样（运维手调永远优先）；
+    2. ``ai.unrestricted.max_ctx`` 显式给了 → 用它（同一台私有模型的窗口事实）；
+    3. Ollama 端点 → 8192（runner 要按 num_ctx 装载，不敢默认放大）；
+    4. 其余（vLLM / OpenAI 兼容私网）→ :data:`DEFAULT_PRIVATE_CTX`（24576，与 conv_route
+       ``endpoint_spec`` 缺省一致）。
+
+    纯函数、绝不抛；脏输入按缺省处理。
+    """
+    fb = fb_cfg if isinstance(fb_cfg, dict) else {}
+    ai = ai_cfg if isinstance(ai_cfg, dict) else {}
+    try:
+        n = int(fb.get("num_ctx") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n, "ai.fallback.num_ctx"
+    unr = ai.get("unrestricted") if isinstance(ai.get("unrestricted"), dict) else {}
+    try:
+        n = int((unr or {}).get("max_ctx") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n, "ai.unrestricted.max_ctx"
+    base = str(fb.get("base_url") or "").strip()
+    if is_ollama_endpoint(base):
+        return DEFAULT_OLLAMA_CTX, "ollama_default"
+    return DEFAULT_PRIVATE_CTX, "private_default"
+
+
+#: 本地出话预留的地板：回复实测均长 50 字（≈40 token），512 已够；再低会截断长答。
+LOCAL_OUTPUT_RESERVE_FLOOR = 512
+#: 模板/估算误差余量（与 conv_route.endpoint_prompt_cap 同口径）。
+LOCAL_CTX_HEADROOM = 128
+
+
+def fit_local_budget(prompt_tokens_est: int, num_ctx: int, max_tokens: int,
+                     *, floor: int = LOCAL_OUTPUT_RESERVE_FLOOR,
+                     headroom: int = LOCAL_CTX_HEADROOM) -> Tuple[int, int]:
+    """把「输入预算 / 输出上限」一起装进本地窗口 → ``(prompt_budget, max_tokens_to_send)``。
+
+    旧算法：预算 = num_ctx − max_tokens − 128，然后裁历史。``ai.max_tokens: 4096`` 在
+    8192 窗口上只给 prompt 留 3968，人设一个块就超——**先砍输出预留、再裁历史**：
+    输出预留 = min(max_tokens, max(floor, num_ctx − prompt_est − headroom))。
+    prompt 装得下就不动 max_tokens；装不下先把预留收到 floor，仍装不下才由调用方裁历史。
+    返回的 ``max_tokens_to_send`` 必须真的送给端点（vLLM 校验 prompt+max_tokens ≤ 窗口）。
+    纯函数、绝不抛。
+    """
+    try:
+        mt = int(max_tokens or 0)
+    except (TypeError, ValueError):
+        mt = 0
+    try:
+        ctx = int(num_ctx or 0)
+        est = max(0, int(prompt_tokens_est or 0))
+    except (TypeError, ValueError):
+        return 0, mt
+    if ctx <= 0:
+        return 0, mt
+    fl = max(1, min(int(floor or 1), ctx // 2))
+    if mt <= 0:
+        mt = fl
+    room_for_output = ctx - est - max(0, int(headroom or 0))
+    reserve = min(mt, max(fl, room_for_output))
+    budget = max(512, ctx - reserve - max(0, int(headroom or 0)))
+    return budget, reserve
+
+
 __all__ = [
     "DEEPSEEK_CURRENT_MODEL", "RETIRED_DEEPSEEK_ALIASES", "DEFAULT_CLOUD_CTX", "DEFAULT_PRIVATE_CTX",
-    "host_of", "is_deepseek_official", "is_siliconflow", "is_private_endpoint",
+    "DEFAULT_OLLAMA_CTX", "LOCAL_OUTPUT_RESERVE_FLOOR", "LOCAL_CTX_HEADROOM",
+    "host_of", "is_deepseek_official", "is_siliconflow", "is_private_endpoint", "is_ollama_endpoint",
     "normalize_model", "thinking_off_extra_body", "thinking_extra_body", "vendor_of",
+    "resolve_local_num_ctx", "fit_local_budget",
 ]

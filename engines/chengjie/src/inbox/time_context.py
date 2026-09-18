@@ -165,11 +165,18 @@ def classify_reply_anchor(
 
 
 def describe_age(age_sec: float) -> str:
-    """粗粒度时距（提示语用）：N 天 / N 小时 / 不到 1 小时。"""
+    """粗粒度时距（提示语用）：N 天 / N 小时 / 不到 1 小时。
+
+    2026-09-18 起 ≥14 天按真人口径模糊化（「两三周」「一个多月」「半年多」）：
+    实录里 LLM 把提示语中的精确天数原样念出（「57 天没聊」），没有人会这么说话，
+    这是最显眼的穿帮之一；≤13 天保留整数天（「十天没聊」真人也会说）。
+    """
     try:
         s = max(0.0, float(age_sec or 0))
     except (TypeError, ValueError):
         s = 0.0
+    if s >= 14 * 86400:
+        return humanize_long_span(s)
     if s >= 48 * 3600:
         return f"{int(s // 86400)} 天"
     if s >= 24 * 3600:
@@ -177,6 +184,106 @@ def describe_age(age_sec: float) -> str:
     if s >= 3600:
         return f"{int(s // 3600)} 小时"
     return "不到 1 小时"
+
+
+def humanize_long_span(sec: float) -> str:
+    """≥14 天的时距 → 真人口径（纯函数）。<14 天调用方自行处理（此处兜底给整数天）。"""
+    try:
+        d = max(0.0, float(sec or 0)) / 86400.0
+    except (TypeError, ValueError):
+        return ""
+    if d >= 365:
+        return "一年多"
+    if d >= 180:
+        return "半年多"
+    if d >= 90:
+        return "三四个月"
+    if d >= 60:
+        return "两个多月"
+    if d >= 30:
+        return "一个多月"
+    if d >= 21:
+        return "三周左右"
+    if d >= 14:
+        return "两周多"
+    return f"{int(d)} 天"
+
+
+#: 时间断层观测分桶（纯标签，供 metrics 名后缀）。与 build_time_gap_hint 的 6h/48h 档对齐：
+#: <6h 不出提示（桶名保留给未来），6h-1d 小时级提示，其余天级。
+GAP_BUCKETS = ("<6h", "6h-1d", "1-3d", "3-7d", "7-14d", "14-30d", "30d+")
+
+
+def gap_bucket(sec: Any) -> str:
+    """时间断层秒数 → 观测分桶名（纯函数；脏值 → ``"<6h"``）。
+
+    2026-09-18 观测先行：只有 time_hint_active 一个总数看不出「客户一般隔多久回来」，
+    而这直接决定 ≥14 天模糊化 / 记忆探针 / 深度档 keep_stale 值不值——分桶后
+    ``time_hint_gap:<桶>`` 在 inbox_draft 指标里逐桶累计。
+    """
+    try:
+        s = max(0.0, float(sec or 0))
+    except (TypeError, ValueError):
+        return GAP_BUCKETS[0]
+    if s < 6 * 3600:
+        return "<6h"
+    if s < 86400:
+        return "6h-1d"
+    if s < 3 * 86400:
+        return "1-3d"
+    if s < 7 * 86400:
+        return "3-7d"
+    if s < 14 * 86400:
+        return "7-14d"
+    if s < 30 * 86400:
+        return "14-30d"
+    return "30d+"
+
+
+def derive_turn_gap(
+    rows: Optional[List[Dict[str, Any]]],
+    current_text: Optional[str] = None,
+    *,
+    now: Optional[float] = None,
+) -> Optional[float]:
+    """从带 ts 的历史行推「本条入站与对方上一条消息隔了多久」（秒）；不可知 → None。
+
+    单一时钟（2026-09-18 「57 天没聊」事故沉淀）：B 线草稿链的时间感知曾有三处
+    各算一套——``classify_reply_anchor.prev_user_gap_sec``（inbox ts，对）、
+    ``inbound_enrich`` 内联循环（inbox ts，对）、``emotional_context`` 读持久
+    ``user_context.last_message_time``（只有 A 线写，B 线恒陈旧 → 5 天算成 57 天）。
+    三处现在都以本函数（或其等价 ``prev_user_gap_sec``）为准。
+
+    规则：
+    - 「当前条」＝最后一条用户行且正文 == ``current_text``（有 ts 则以它为「现在」，
+      迟回复时更准）；否则「现在」＝``now``/系统时钟，最后一条用户行即「上一条」。
+    - 「上一条」＝当前条之前最近一条 ts>0 的用户行；找不到 → None（无证据不猜）。
+    """
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    last_user_idx = -1
+    for i in range(len(items) - 1, -1, -1):
+        if _is_user_row(items[i]):
+            last_user_idx = i
+            break
+    if last_user_idx < 0:
+        return None
+    cur = str(current_text or "").strip()
+    last_txt = str(items[last_user_idx].get("content")
+                   or items[last_user_idx].get("text") or "").strip()
+    ref_ts = float(now or time.time())
+    start = last_user_idx
+    if cur and last_txt == cur:
+        _lts = _row_ts(items[last_user_idx])
+        if _lts > 0:
+            ref_ts = _lts
+        start = last_user_idx - 1
+    for i in range(start, -1, -1):
+        if not _is_user_row(items[i]):
+            continue
+        pts = _row_ts(items[i])
+        if pts > 0:
+            return max(0.0, ref_ts - pts)
+    return None
 
 
 def build_followup_note(anchor: Dict[str, Any]) -> str:
@@ -363,6 +470,10 @@ __all__ = [
     "resolve_time_context_cfg",
     "classify_reply_anchor",
     "describe_age",
+    "humanize_long_span",
+    "derive_turn_gap",
+    "gap_bucket",
+    "GAP_BUCKETS",
     "daypart_label",
     "build_followup_note",
     "build_late_reply_hint",

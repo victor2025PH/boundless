@@ -29,6 +29,13 @@
 
 消费方统一问 :func:`skip_guard` / :func:`bypass_safety_active`，不要各自读 KV。
 
+第三层：一致性（防穿帮）层（2026-09-18）
+=====================================
+质量层里有一小撮不管「尺度」只管「事实自洽」：:data:`CONSISTENCY_LAYERS`
+（凭空说做过 / 时区反 / 许图不发 / 承诺不兑现 / 原样复发……）。无限制＝内容不审查，
+不＝允许自相矛盾；实录该档模型又最弱，全让路是穿帮率最高的组合。所以这些层在无限制
+会话里**默认照拦**，``ai.unrestricted.keep_consistency_guards: false`` 回旧的一刀切。
+
 授权
 ====
 ``licensing.feature_gate`` 登记 ``unrestricted_model``（flagship）。闸门总开关默认关＝
@@ -92,6 +99,16 @@ QUALITY_LAYERS = frozenset({
     "risk_level", "risk_hold", "needs_human_tag", "skill_cooldown", "lang_mismatch",
     "outbound_dup", "stale_approve",
 })
+#: 一致性（防穿帮）层（2026-09-18 拆分）：QUALITY_LAYERS 的子集，管的不是「能不能说」
+#: 而是「说的事实对不对」——凭空说做过没做过的事 / 时区时段说反 / 许了图不发 / 承诺不兑现 /
+#: 发过的话原样再发。无限制模式的本意是**内容不受审查**，不是让模型可以自相矛盾；实录
+#: 173 abliterated 档同时又是三档里最弱的模型，把这些守卫一并让路＝穿帮率最高的组合。
+#: 默认在无限制会话里**照常拦**；``ai.unrestricted.keep_consistency_guards: false`` 回旧行为。
+CONSISTENCY_LAYERS = frozenset({
+    "fabrication_guard", "status_fabrication_guard", "world_clock_guard",
+    "media_promise_guard", "commitment_guard", "song_claim_guard",
+    "photo_capability_sanitize", "outbound_dup",
+})
 #: 安全刹车层：只有 bypass_safety 才跳。
 SAFETY_LAYERS = frozenset({
     "crisis_safety_net", "hard_stop", "kill_switch", "ban_signal", "send_gate_warmup",
@@ -122,6 +139,7 @@ class Route:
     effort: str = EFFORT_FOLLOW
     thinking: bool = False
     bypass_safety: bool = False
+    drop_consistency: bool = False
     model: str = MODEL_FOLLOW
     updated_by: str = ""
     updated_at: float = 0.0
@@ -137,7 +155,8 @@ class Route:
     @property
     def is_default(self) -> bool:
         return (self.profile == PROFILE_STANDARD and not self.depth and not self.effort
-                and not self.thinking and not self.bypass_safety and not self.model)
+                and not self.thinking and not self.bypass_safety
+                and not self.drop_consistency and not self.model)
 
     @property
     def route_key(self) -> str:
@@ -152,6 +171,7 @@ class Route:
         return {
             "profile": self.profile, "depth": self.depth, "effort": self.effort,
             "thinking": bool(self.thinking), "bypass_safety": bool(self.bypass_safety),
+            "drop_consistency": bool(self.drop_consistency),
             "model": self.model, "unrestricted": self.unrestricted,
             "updated_by": self.updated_by, "updated_at": self.updated_at,
         }
@@ -167,7 +187,7 @@ class Route:
         标准档只清键（防上一轮残留），不加任何东西＝逐字节旧行为。
         """
         for k in ("_route", "_route_strict", "_thinking", "_unrestricted",
-                  "_unrestricted_bypass_safety", "_conv_route"):
+                  "_unrestricted_bypass_safety", "_unrestricted_drop_consistency", "_conv_route"):
             ctx.pop(k, None)
         if self.is_default:
             return
@@ -180,6 +200,8 @@ class Route:
             ctx["_unrestricted"] = True
             if self.bypass_safety:
                 ctx["_unrestricted_bypass_safety"] = True
+            if self.drop_consistency:
+                ctx["_unrestricted_drop_consistency"] = True
         elif self.model:
             # 标准模式点名厂商模型：只换「主尝试」的端点，**不**严格——该档离线/失败
             # 照走 备用池 → 本地兜底 → canned 降级链（规则全开，与主链同一条命）。
@@ -222,7 +244,7 @@ def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None,
                     thinking=bool(UNRESTRICTED_DEFAULTS["thinking"]))
     elif switched_to_std:
         r = replace(r, profile=prof, depth=DEPTH_FOLLOW, effort=EFFORT_FOLLOW,
-                    thinking=False, bypass_safety=False)
+                    thinking=False, bypass_safety=False, drop_consistency=False)
     else:
         r = replace(r, profile=prof)
     if "depth" in payload:
@@ -237,14 +259,16 @@ def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None,
         r = replace(r, thinking=_truthy(payload.get("thinking")))
     if "bypass_safety" in payload:
         r = replace(r, bypass_safety=_truthy(payload.get("bypass_safety")))
+    if "drop_consistency" in payload:
+        r = replace(r, drop_consistency=_truthy(payload.get("drop_consistency")))
     if model_in:
         r = replace(r, model=model_v)
     if r.unrestricted:
         # 无限制的端点由模式自己定（ai.unrestricted.profile / ai.fallback），模型字段恒空
         r = replace(r, model=MODEL_FOLLOW)
     else:
-        # 安全刹车全关只对无限制会话有意义；标准档不许挂这把钥匙
-        r = replace(r, bypass_safety=False)
+        # 安全刹车全关 / 防穿帮让路只对无限制会话有意义；标准档不许挂
+        r = replace(r, bypass_safety=False, drop_consistency=False)
     return r
 
 
@@ -281,6 +305,14 @@ def enabled(config: Any = None) -> bool:
     """``ai.unrestricted.enabled``（默认 True：入口可见；无会话选它＝零行为变化）。"""
     try:
         return bool(_section(config).get("enabled", True))
+    except Exception:
+        return True
+
+
+def keep_consistency_guards(config: Any = None) -> bool:
+    """``ai.unrestricted.keep_consistency_guards``（默认 True）：无限制会话仍跑防穿帮层。"""
+    try:
+        return bool(_section(config).get("keep_consistency_guards", True))
     except Exception:
         return True
 
@@ -443,6 +475,15 @@ def main_chain_spec(config: Any = None) -> Dict[str, Any]:
     row = _spec_row(MODEL_FOLLOW, {"base_url": ai.get("base_url"), "model": ai.get("model"),
                                    "max_ctx": ai.get("max_ctx")}, source="ai")
     return row
+
+
+def describe_endpoint(base_url: str, model: str, label: str = "") -> Dict[str, Any]:
+    """裸端点 → 展示事实 ``{label, vendor, host, public_host, private, via, max_ctx}``（不查目录、
+    不读配置）。「模型与密钥」页给**尚未保存**的新档画厂商头像/数据去向时用——与目录行同一套
+    规则（:func:`_spec_row`），管理员看到的就是坐席保存后看到的。base/model 缺 → ``{}``。"""
+    row = _spec_row("", {"base_url": base_url, "model": model, "label": label}, source="")
+    return {k: row.get(k) for k in ("label", "vendor", "host", "public_host", "private", "via",
+                                    "max_ctx") if k in row}
 
 
 def model_catalog(config: Any = None) -> list:
@@ -689,10 +730,11 @@ def set(store: Any, cid: str, patch: Mapping[str, Any], *, by: str = "agent",   
     if prev.as_dict() != nxt.as_dict():
         # 审计：谁在何时给哪个会话开 / 关了无限制、动了哪把安全钥匙（合规与市场都要这条账）
         logger.info("[conv_route] conv=%s profile=%s->%s model=%s->%s depth=%s effort=%s "
-                    "thinking=%d bypass_safety=%d->%d by=%s",
+                    "thinking=%d bypass_safety=%d->%d drop_consistency=%d->%d by=%s",
                     cid, prev.profile, nxt.profile, prev.model or "main", nxt.model or "main",
                     nxt.depth or "follow", nxt.effort or "follow", int(nxt.thinking),
-                    int(prev.bypass_safety), int(nxt.bypass_safety), nxt.updated_by)
+                    int(prev.bypass_safety), int(nxt.bypass_safety),
+                    int(prev.drop_consistency), int(nxt.drop_consistency), nxt.updated_by)
     return nxt
 
 
@@ -799,6 +841,9 @@ def attach(user_context: Dict[str, Any], cid: str, *, store: Any = None,
                             max(0.0, time.time() - float(last.get("ts") or 0.0)))
                 return Route.standard()
         r.apply_context(user_context)
+        if r.unrestricted and not keep_consistency_guards(config):
+            # 2026-09-18 守卫分层：默认一致性层不让路；只有 YAML 明确关掉才折入「可跳」标记
+            user_context["_unrestricted_drop_consistency"] = True
         return r
     except Exception:
         try:
@@ -962,7 +1007,8 @@ def begin_fallback(user_context: Dict[str, Any], cid: str, *, reason: str = "",
 
 _LOCK = threading.Lock()
 _STATS: Dict[str, Any] = {"skipped_total": 0, "by_layer": {}, "offline_holds": 0,
-                          "safety_bypassed": 0, "by_model": {}}
+                          "safety_bypassed": 0, "by_model": {}, "consistency_kept": 0,
+                          "consistency_kept_by_layer": {}}
 
 
 def record_reply(route: Optional[Mapping[str, Any]], *, ok: bool = True,
@@ -999,8 +1045,18 @@ def _bump(layer: str, safety: bool) -> None:
             _STATS["safety_bypassed"] = int(_STATS["safety_bypassed"]) + 1
 
 
+def _bump_kept(layer: str) -> None:
+    """无限制会话里一致性层**没让路**的次数（观测「防穿帮层在无限制下拦了多少」），按层分计。"""
+    with _LOCK:
+        _STATS["consistency_kept"] = int(_STATS.get("consistency_kept", 0)) + 1
+        bl = _STATS.setdefault("consistency_kept_by_layer", {})
+        bl[layer] = int(bl.get(layer, 0)) + 1
+
+
 def skip_guard(user_context: Optional[Mapping[str, Any]], layer: str) -> bool:
     """本会话是否跳过某一层。质量层：``_unrestricted`` 即跳；安全层：还要 ``_unrestricted_bypass_safety``；
+    一致性层（:data:`CONSISTENCY_LAYERS`）：无限制也**不跳**，除非 ctx 带
+    ``_unrestricted_drop_consistency``（:func:`attach` 依 ``keep_consistency_guards: false`` 折入）；
     未登记的层名恒 False（新守卫忘了登记＝照常拦，安全默认）。绝不抛。"""
     try:
         ctx = user_context or {}
@@ -1008,6 +1064,9 @@ def skip_guard(user_context: Optional[Mapping[str, Any]], layer: str) -> bool:
             return False
         lyr = str(layer or "")
         if lyr in QUALITY_LAYERS:
+            if lyr in CONSISTENCY_LAYERS and not ctx.get("_unrestricted_drop_consistency"):
+                _bump_kept(lyr)
+                return False
             _bump(lyr, False)
             return True
         if lyr in SAFETY_LAYERS and ctx.get("_unrestricted_bypass_safety"):
@@ -1031,6 +1090,8 @@ def skip_for_conv(store: Any, cid: str, layer: str, config: Any = None) -> bool:
         ctx = {"_unrestricted": True}
         if r.bypass_safety or global_bypass_safety(config):
             ctx["_unrestricted_bypass_safety"] = True
+        if r.drop_consistency or not keep_consistency_guards(config):
+            ctx["_unrestricted_drop_consistency"] = True
         return skip_guard(ctx, layer)
     except Exception:
         return False
@@ -1047,6 +1108,8 @@ def stats_snapshot(store: Any = None) -> Dict[str, Any]:
             "skipped_total": int(_STATS["skipped_total"]),
             "safety_bypassed": int(_STATS["safety_bypassed"]),
             "offline_holds": int(_STATS["offline_holds"]),
+            "consistency_kept": int(_STATS.get("consistency_kept", 0)),
+            "consistency_kept_by_layer": dict(_STATS.get("consistency_kept_by_layer") or {}),
             "by_layer": dict(_STATS["by_layer"]),
             "by_model": {k: dict(v) for k, v in _STATS["by_model"].items()},
         }
@@ -1070,6 +1133,8 @@ def reset_for_tests() -> None:
         _STATS["skipped_total"] = 0
         _STATS["safety_bypassed"] = 0
         _STATS["offline_holds"] = 0
+        _STATS["consistency_kept"] = 0
+        _STATS.setdefault("consistency_kept_by_layer", {}).clear()
         _STATS["by_layer"].clear()
         _STATS["by_model"].clear()
     with _HEALTH_LOCK:
@@ -1111,13 +1176,35 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
         "profile": profile if profile is not None else profile_name(config),
     }
     api_key = _api_key_for(config, spec)
+    out.update(await probe_spec(spec["base_url"], spec["model"], api_key, timeout=timeout))
+    with _HEALTH_LOCK:
+        _HEALTH[ck] = dict(out)
+    return out
+
+
+async def probe_spec(base_url: str, model: str, api_key: str = "", *,
+                     timeout: float = 6.0) -> Dict[str, Any]:
+    """裸端点探活（不查目录、不进缓存）→ ``{online, latency_ms, error, status[, warn][, probe]}``。
+
+    :func:`probe_endpoint`（composer「模型」面板）与「模型与密钥」页体检共用这一套判定，
+    两处对同一份配置只许有一个结论（2026-09-18 收口前，设置页把 401 也画成 🟢）：
+    云厂商 GET /models（零 token；401/403＝密钥错、404/405＝不支持列表→回落 1-token ping）；
+    私网直接 1-token ping。``online`` 仅在 2xx/3xx 或非 401/403/404/429 的 4xx 为真；
+    ``warn=model_not_listed``＝能连但清单里没这个模型名。设置页探**未保存**的新档也走这里。绝不抛。
+    """
+    out: Dict[str, Any] = {"online": False, "latency_ms": 0, "error": "", "status": None}
+    base = str(base_url or "").strip().rstrip("/")
+    mdl = str(model or "").strip()
+    if not base or "://" not in base:
+        out["error"] = "bad_url"
+        return out
     headers = {"Authorization": f"Bearer {api_key or 'vllm'}"}
     try:
         import httpx
         private = True
         try:
             from src.ai.vendor_params import vendor_of as _vof
-            private = bool(_vof(spec["base_url"]).get("private"))
+            private = bool(_vof(base).get("private"))
         except Exception:
             private = True
         async with httpx.AsyncClient(timeout=timeout) as cli:
@@ -1128,31 +1215,31 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
                 # 404/405＝该厂商不支持列表 → 回落 1-token ping。
                 out["probe"] = "models"
                 t0 = time.monotonic()
-                resp = await cli.get(spec["base_url"] + "/models", headers=headers)
+                resp = await cli.get(base + "/models", headers=headers)
                 out["latency_ms"] = int((time.monotonic() - t0) * 1000)
                 sc = int(resp.status_code)
                 if sc == 200:
-                    listed = _model_listed(resp, spec["model"])
+                    listed = _model_listed(resp, mdl)
                 elif sc in (404, 405):
                     sc = -1  # 回落 ping
             if sc == -1:
                 # 本机私有（173 vLLM）/ 不支持列表的厂商：1-token ping，顺带量真实首字延迟
                 out["probe"] = "chat"
                 body: Dict[str, Any] = {
-                    "model": spec["model"], "max_tokens": 1, "temperature": 0,
+                    "model": mdl, "max_tokens": 1, "temperature": 0,
                     "messages": [{"role": "user", "content": "ping"}],
                 }
                 # 关思维链字段按厂商给（云厂商对未知顶层字段会 400，不能一律送 chat_template_kwargs）
                 try:
                     from src.ai.vendor_params import thinking_off_extra_body as _toff
-                    body.update(_toff(spec["base_url"], spec["model"]) or {})
+                    body.update(_toff(base, mdl) or {})
                 except Exception:
                     body["chat_template_kwargs"] = {"enable_thinking": False}
                 t0 = time.monotonic()
-                resp = await cli.post(spec["base_url"] + "/chat/completions", json=body,
-                                      headers=headers)
+                resp = await cli.post(base + "/chat/completions", json=body, headers=headers)
                 out["latency_ms"] = int((time.monotonic() - t0) * 1000)
                 sc = int(resp.status_code)
+        out["status"] = sc
         if sc < 500 and sc not in (401, 403, 404, 429):
             out["online"] = True
             if listed is False:
@@ -1163,8 +1250,6 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
             out["error"] = f"http_{sc}"
     except Exception as e:  # 连接拒绝 / 超时 / DNS
         out["error"] = type(e).__name__.lower()[:40]
-    with _HEALTH_LOCK:
-        _HEALTH[ck] = dict(out)
     return out
 
 
@@ -1319,7 +1404,7 @@ __all__ = [
     "FEATURE_NAME", "QUALITY_LAYERS", "SAFETY_LAYERS",
     "Route", "normalize", "enabled", "profile_name", "global_bypass_safety",
     "endpoint_spec", "main_chain_spec", "model_catalog", "model_spec", "active_endpoint",
-    "probe_catalog",
+    "probe_catalog", "probe_spec", "describe_endpoint",
     "endpoint_prompt_cap", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
     "VENDOR_FEATURE_NAME", "vendor_allowed", "record_reply",
     "conv_id", "get", "set", "clear", "all_routes", "is_unrestricted",

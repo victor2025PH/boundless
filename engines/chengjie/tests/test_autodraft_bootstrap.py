@@ -23,6 +23,8 @@ def test_autodraft_bootstrap_persists_auto_ai():
         app_config=app_config,
     )
     cb({"platform": "telegram", "conversation_id": "telegram:a:1"}, "hi")
-    store.set_automation_mode.assert_called_once_with("telegram:a:1", "auto_ai")
+    # D-M1 M-2 B（2026-09-07）起 bootstrap 落盘带来源标记 source="bootstrap"（账号级批量切档 /
+    # 自动降级要按来源区分）；旧 store 无该形参时 automation_mode 会回退到旧签名。
+    store.set_automation_mode.assert_called_once_with("telegram:a:1", "auto_ai", source="bootstrap")
     _, kw = ds.auto_generate_draft.call_args
     assert kw["automation_mode"] == "auto_ai"

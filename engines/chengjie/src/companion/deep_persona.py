@@ -296,7 +296,22 @@ _STOP = frozenset([
     "什么", "怎么", "这个", "那个", "我们", "你们", "然后", "就是", "还有", "但是",
     "可以", "不是", "这样", "知道", "觉得", "真的", "一个", "有点", "哈哈", "嗯嗯",
     "the", "and", "you", "that", "this", "for", "are", "was", "with", "have",
+    # 2026-09-18：请求/媒体/寒暄/质疑 AI 的高频词不是「梗」——实录 inside_jokes 里
+    # 躺着「给我/照片/语音」（客户在索要图和语音）与「你是ai」，被当默契注入 prompt。
+    "给我", "照片", "语音", "视频", "图片", "自拍", "发个", "发张", "发给", "在吗", "你好",
+    "早安", "晚安", "谢谢", "不要", "没有", "可不", "能不", "为什么", "怎么样", "多少",
+    "机器人", "骗子", "真人", "现在", "今天", "明天", "昨天", "时候", "东西", "感觉",
+    "喜欢", "想你", "宝贝", "亲爱", "老公", "老婆",
+    "photo", "picture", "voice", "video", "send", "please", "hello", "thanks", "bot",
+    "robot", "real", "human", "want", "give", "your", "just", "like", "what", "when",
 ])
+# 短语级黑名单：命中即整段不算梗（索要媒体 / 质疑 AI / 泛寒暄）
+_JOKE_BLOCK_RE = re.compile(
+    r"(给我|发(个|张|一张|一段)|照片|语音|视频|图片|自拍|看看你|你是(不是)?(ai|机器人|真人|人)|"
+    r"机器人|骗子|在吗|在不在|早安|晚安|你好|谢谢|多少钱|"
+    r"photo|pic|selfie|voice|video|send\s+me|are\s+you\s+(a\s+)?(bot|robot|real|ai|human)|hello|thanks)",
+    re.IGNORECASE,
+)
 
 
 def detect_recurring_phrases(
@@ -311,6 +326,10 @@ def detect_recurring_phrases(
 
     纯启发式：中文取 2..max_len 字滑窗、英文取单词，统计跨消息出现次数（同一条只计一次），
     过滤停用词与纯标点，返回出现≥min_count 的 top_k。空/异常 → []。
+
+    质量闸（2026-09-18）：索要媒体 / 质疑 AI / 寒暄类短语整段不算梗（:data:`_JOKE_BLOCK_RE`）
+    ——实录 inside_jokes 里躺着「给我/照片/语音/你是ai」。其余口径不变（2 字词 ≥min_count 即算，
+    漂移守卫 / 画像巩固都依赖这一契约）。
     """
     if not messages:
         return []
@@ -323,7 +342,7 @@ def detect_recurring_phrases(
         # 英文/数字 token
         for tok in re.findall(r"[A-Za-z][A-Za-z0-9']{2,}", s):
             k = tok.lower()
-            if k in _STOP or len(k) < 3:
+            if k in _STOP or len(k) < 3 or _JOKE_BLOCK_RE.search(k):
                 continue
             seen_in_msg.add(k)
         # 中文滑窗
@@ -333,11 +352,12 @@ def detect_recurring_phrases(
             for L in range(min_len, min(max_len, n) + 1):
                 for i in range(0, n - L + 1):
                     frag = run[i : i + L]
-                    if frag in _STOP:
+                    if frag in _STOP or _JOKE_BLOCK_RE.search(frag):
                         continue
                     seen_in_msg.add(frag)
         for k in seen_in_msg:
             counts[k] = counts.get(k, 0) + 1
+
     # 取高频；对中文优先较长的片段（更像"梗"而非碎词），做一次包含去冗
     cand = sorted(
         (k for k, c in counts.items() if c >= min_count),
@@ -353,8 +373,21 @@ def detect_recurring_phrases(
     return picked
 
 
+def clean_inside_jokes(jokes: Sequence[str]) -> List[str]:
+    """读侧过滤：库里并集累积的历史垃圾（「给我/照片/你是ai」）不再进 prompt。纯函数。"""
+    out: List[str] = []
+    for j in _as_list(jokes):
+        s = str(j or "").strip()
+        if not s or s in _STOP or _JOKE_BLOCK_RE.search(s):
+            continue
+        if len(s) <= 1:
+            continue
+        out.append(s)
+    return out
+
+
 def format_inside_jokes(jokes: Sequence[str]) -> str:
-    js = _as_list(jokes)
+    js = clean_inside_jokes(jokes)
     if not js:
         return ""
     return (
@@ -984,7 +1017,7 @@ def run_deep_persona_consolidation(
 __all__ = [
     "pick_life_beat", "format_life_context", "life_theme",
     "build_relationship_profile", "format_relationship_profile", "build_callback_opener",
-    "format_tastes", "detect_recurring_phrases", "format_inside_jokes",
+    "format_tastes", "detect_recurring_phrases", "format_inside_jokes", "clean_inside_jokes",
     "rank_by_affect", "to_experiential_recall",
     "temporal_anchor", "maybe_imperfection_hint",
     "build_deep_persona_block",

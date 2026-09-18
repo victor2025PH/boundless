@@ -343,3 +343,51 @@ def test_fewshot_part_detection():
     assert AIClient._is_fewshot_part("Few-shot examples:\n…")
     assert not AIClient._is_fewshot_part("【后台人设定位 · 须遵守】\n…")
     assert not AIClient._is_fewshot_part("")
+
+
+def test_lan_base_url_detects_173():
+    from src.ai.ai_client import _is_lan_base_url
+    assert _is_lan_base_url("http://192.168.0.173:8001/v1") is True
+    assert _is_lan_base_url("https://api.deepseek.com/v1") is False
+    assert _is_lan_base_url("http://127.0.0.1:8001/v1") is True
+
+
+async def test_local_connect_error_retried_once_then_ok(monkeypatch):
+    from src.ai import compute_lanes as cl
+
+    async def _nosleep(_s):
+        return None
+
+    monkeypatch.setattr("src.ai.ai_client.asyncio.sleep", _nosleep)
+    cl.reset_lanes()
+    fb = _FakeChatClient(errors=[_connect_error()], reply="在呀")
+    c = _client(_FakeChatClient(reply="不该走云"))
+    c._fb_client = fb
+    c._fb_model = "chatx"
+    c._primary_mode = "local"
+    out = await c._try_local_fallback_chat(
+        [{"role": "user", "content": "在吗"}],
+        0.7, 256, {"reply_lang": "zh"}, "r-lan", as_primary=True)
+    assert out == "在呀"
+    assert fb.calls == 2
+    assert not cl.should_skip("local")
+
+
+async def test_local_connect_error_twice_gives_up(monkeypatch):
+    from src.ai import compute_lanes as cl
+
+    async def _nosleep(_s):
+        return None
+
+    monkeypatch.setattr("src.ai.ai_client.asyncio.sleep", _nosleep)
+    cl.reset_lanes()
+    fb = _FakeChatClient(errors=[_connect_error(), _connect_error()])
+    c = _client(_FakeChatClient(reply="云"))
+    c._fb_client = fb
+    c._fb_model = "chatx"
+    out = await c._try_local_fallback_chat(
+        [{"role": "user", "content": "在吗"}],
+        0.7, 256, {"reply_lang": "zh"}, "r-lan2", as_primary=True)
+    assert out is None
+    assert fb.calls == 2
+    assert not cl.should_skip("local")  # 第一次登记 connect，不冻 120s

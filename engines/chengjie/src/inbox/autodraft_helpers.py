@@ -103,9 +103,15 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     # 行打「[补收的历史消息，时间不详]」，防 LLM 把补收当刚说的
                     "approx_ts": r.get("approx_ts") or 0,
                 })
-            # 时间断层修剪：隔了几天的旧对话只留少量并打「[N天前]」标记，
-            # 根治旧话题被当成刚说的（如 10 天前的英语梗 → "你突然换英语啦"幻觉）。
-            msgs = trim_stale_history(msgs)
+            # 时间断层修剪：隔了几天的旧对话打「[N天前]」标记，根治旧话题被当成刚说的
+            # （如 10 天前的英语梗 → "你突然换英语啦"幻觉）。保留条数随深度档抬
+            # （2026-09-18：最大档取 200 行却只留 3 条旧话，深度档形同虚设）。
+            try:
+                from src.ai.context_depth import stale_keep_msgs as _skm
+                _keep_stale = _skm(assistant.config.config or {}, 3)
+            except Exception:
+                _keep_stale = 3
+            msgs = trim_stale_history(msgs, keep_stale=_keep_stale)
             for r in reversed(msgs):
                 if str(r.get("direction") or "") == "in":
                     _peer_media_type = str(

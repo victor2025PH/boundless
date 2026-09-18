@@ -523,7 +523,8 @@ def test_http_health_and_stats_shapes():
     conv_route.set(st, CID, {"profile": "unrestricted"})
     s = cli.get("/api/ai/model-route/stats").json()
     assert s["ok"] and s["stats"]["unrestricted_convs"] == 1
-    assert {"skipped_total", "by_layer", "offline_holds", "global_bypass_safety"} <= set(s["stats"])
+    assert {"skipped_total", "by_layer", "offline_holds", "global_bypass_safety",
+            "by_model", "model_convs"} <= set(s["stats"])
 
 
 # ── 授权登记 / 会员矩阵 i18n ─────────────────────────────────────────────────

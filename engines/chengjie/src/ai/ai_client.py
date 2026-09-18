@@ -32,6 +32,39 @@ from src.utils.domain_policy import effective_domain_name
 # 事实锁（2026-07-15 事故修复）：防重复/角度系统只约束「表达要不一样」，
 # 没约束「事实要一致」——高温重生时 LLM 把"还没吃饭"改写成"刚吃了面包"。
 # 所有多样性压力提示（角度轮换/复读重试/重复消息话术）注入时统一追加本行。
+def _is_lan_base_url(url: str) -> bool:
+    """局域网端点（现网 173 / 140 / 本机）。keep-alive 复用死连接是 Connection error 主因。"""
+    try:
+        host = str(url or "").split("://", 1)[-1].split("/", 1)[0].split(":")[0].strip().lower()
+    except Exception:
+        return False
+    if host in ("localhost",):
+        return True
+    if host.startswith(("192.168.", "10.", "127.")):
+        return True
+    if host.startswith("172."):
+        parts = host.split(".")
+        try:
+            return 16 <= int(parts[1]) <= 31
+        except (TypeError, ValueError, IndexError):
+            return False
+    return False
+
+
+def _lan_httpx_async_client(timeout: Any) -> Any:
+    """LAN vLLM 专用 httpx：关掉 keep-alive。
+
+    uvicorn 默认 ``timeout_keep_alive=5``，httpx 复用已被收掉的 socket →
+    ``APIConnectionError: Connection error.``（vLLM 指标上看不到，因为请求没进引擎）。
+    LAN 握手 <1ms，关 keep-alive 比复用死连接便宜。
+    """
+    import httpx
+    return httpx.AsyncClient(
+        timeout=timeout,
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=16),
+    )
+
+
 FACT_LOCK_LINE = (
     "【事实锁——优先级高于换角度】只能换措辞、开头、语气、角度；"
     "绝不能改变你已说过的事实与状态（吃没吃饭、在哪里、正在做什么、"
@@ -525,13 +558,17 @@ class AIClient(LoggerMixin):
                 fb_base = fb_base + "/v1"
             fb_key = str(fb_cfg.get("api_key") or "ollama").strip() or "ollama"
             self._fb_timeout = float(fb_cfg.get("timeout", 90))
+            _fb_http = None
             try:
                 import httpx
                 _fb_to: Any = httpx.Timeout(self._fb_timeout, connect=5.0)
+                if _is_lan_base_url(fb_base):
+                    _fb_http = _lan_httpx_async_client(_fb_to)
             except Exception:
                 _fb_to = self._fb_timeout
             self._fb_client = AsyncOpenAI(
-                api_key=fb_key, base_url=fb_base, timeout=_fb_to, max_retries=0)
+                api_key=fb_key, base_url=fb_base, timeout=_fb_to, max_retries=0,
+                **({"http_client": _fb_http} if _fb_http is not None else {}))
             self._fb_model = str(fb_cfg.get("model") or "").strip()
             # 兜底默认按 think:false 处理（qwen3 思考系模型防慢答；instruct 系无感）
             if fb_cfg.get("think", False) is False:
@@ -545,17 +582,21 @@ class AIClient(LoggerMixin):
             # 后续热答秒级。Ollama 的 /v1 兼容层**不认** keep_alive/think（实测 0.31 直接忽略），
             # 故 Ollama 端点（:11434）改走原生 /api/chat（与主链 _ollama_native_chat 同策略）。
             self._fb_keep_alive = str(fb_cfg.get("keep_alive") or "30m").strip()
+            # 窗口口径（2026-09-18）：不再一律落 8192。显式 num_ctx > ai.unrestricted.max_ctx >
+            # Ollama 8192 > vLLM/私网 24576——同一台 173 在主链与无限制路由终于用同一个数。
             try:
-                self._fb_num_ctx = max(0, int(fb_cfg.get("num_ctx", 8192)))
+                from src.ai.vendor_params import resolve_local_num_ctx as _rlnc
+                self._fb_num_ctx, _fb_ctx_src = _rlnc(fb_cfg, ai_config)
             except Exception:
-                self._fb_num_ctx = 8192
+                self._fb_num_ctx, _fb_ctx_src = 8192, "legacy"
             _fb_root = fb_base[:-3].rstrip("/")
             if ai_config.get("fallback_native", True) and (":11434" in _fb_root or "/ollama" in _fb_root.lower()):
                 self._fb_native_base = _fb_root
             self.logger.info(
-                "本地兜底对话模型已配置: %s @ %s（主模型不可达/熔断时启用%s）",
+                "本地兜底对话模型已配置: %s @ %s（主模型不可达/熔断时启用%s）num_ctx=%d[%s]",
                 self._fb_model or "?", fb_base,
-                "，原生 /api/chat" if self._fb_native_base else "")
+                "，原生 /api/chat" if self._fb_native_base else "",
+                self._fb_num_ctx, _fb_ctx_src)
 
         # ── P1：本地优先 / 全本地模式（自托管 + 隐私敏感客户）───────────────────
         # ``ai.primary``：
@@ -1708,9 +1749,25 @@ class AIClient(LoggerMixin):
             # 内容一条不丢、相对顺序保留，任何模板都合法；钉子的「末位近因」
             # 优势由 27B 更强的指令跟随 + 下游语言守卫补偿。
             fb_messages = self._coalesce_system_head(fb_messages)
-            # 上下文预算裁剪（num_ctx 的客户端保险）：预算 = num_ctx - 出话预留 - 模板余量。
-            # 超预算时丢最旧历史（保 system 人设 + 最近轮次），绝不让整包被 400 拒掉。
-            _ctx_budget = max(512, (self._fb_num_ctx or 8192) - int(max_tokens) - 128)
+            # 上下文预算裁剪（num_ctx 的客户端保险）。2026-09-18 改口径：**先收输出预留、
+            # 再裁历史**——旧算法固定扣 max_tokens(4096)+128，8192 窗口只剩 3968 给 prompt，
+            # 人设一个块就把历史裁到 2 条（「脑子有点空」事故根因之一）。现在：prompt 估算
+            # 装得下就不动 max_tokens；装不下先把出话预留收到地板(512，均长 40 token 够用)，
+            # 仍装不下才丢最旧历史（保 system 人设 + 最近轮次），绝不让整包被 400 拒掉。
+            _num_ctx = int(self._fb_num_ctx or 8192)
+            try:
+                from src.ai.vendor_params import fit_local_budget as _flb
+                _est = sum(self._estimate_msg_tokens(m.get("content")) for m in fb_messages)
+                _ctx_budget, _send_max_tokens = _flb(_est, _num_ctx, int(max_tokens))
+            except Exception:
+                _ctx_budget = max(512, _num_ctx - int(max_tokens) - 128)
+                _send_max_tokens = int(max_tokens)
+            if _send_max_tokens < int(max_tokens):
+                self.logger.info(
+                    "本地%s出话预留收缩 max_tokens %d→%d 以保历史 num_ctx=%d request_id=%s",
+                    "主" if as_primary else "兜底", int(max_tokens), _send_max_tokens,
+                    _num_ctx, request_id or "n/a")
+            max_tokens = _send_max_tokens
             _before = len(fb_messages)
             fb_messages = self._trim_messages_to_budget(fb_messages, _ctx_budget)
             if len(fb_messages) < _before:
@@ -1718,34 +1775,64 @@ class AIClient(LoggerMixin):
                     "本地兜底裁剪历史 %d→%d 条以适配 num_ctx=%s request_id=%s",
                     _before, len(fb_messages), self._fb_num_ctx, request_id or "n/a")
             pt = ct = 0
-            if self._fb_native_base:
-                reply, pt, ct = await self._fb_native_chat(
-                    fb_messages, max_tokens=max_tokens, temperature=temperature,
-                    model=use_fb_model)
-            else:
-                kw: Dict[str, Any] = dict(
-                    model=use_fb_model,
-                    messages=fb_messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                if self._fb_extra_body:
-                    kw["extra_body"] = self._fb_extra_body
-                resp = await self._fb_client.chat.completions.create(**kw)
-                reply = ""
-                if resp and getattr(resp, "choices", None):
-                    _msg = resp.choices[0].message
-                    reply = (_msg.content or "").strip()
-                    if not reply:
-                        _extra = getattr(_msg, "model_extra", None) or {}
-                        reply = (_extra.get("reasoning") or "").strip()
+            _local_usage: Any = None
+            reply = ""
+            _kw: Dict[str, Any] = dict(
+                model=use_fb_model,
+                messages=fb_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if self._fb_extra_body:
+                _kw["extra_body"] = self._fb_extra_body
+            # keep-alive 毛刺：连接类 / 网关 5xx 当场重试 1 次（读超时不重试）。
+            for _attempt in range(2):
                 try:
-                    u = resp.usage
-                    if u:
-                        pt = getattr(u, "prompt_tokens", 0) or 0
-                        ct = getattr(u, "completion_tokens", 0) or 0
-                except Exception:
-                    pass
+                    if self._fb_native_base:
+                        reply, pt, ct = await self._fb_native_chat(
+                            fb_messages, max_tokens=max_tokens, temperature=temperature,
+                            model=use_fb_model)
+                        _local_usage = {
+                            "prompt_tokens": int(pt or 0), "completion_tokens": int(ct or 0)}
+                    else:
+                        resp = await self._fb_client.chat.completions.create(**_kw)
+                        reply = ""
+                        if resp and getattr(resp, "choices", None):
+                            _msg = resp.choices[0].message
+                            reply = (_msg.content or "").strip()
+                            if not reply:
+                                _extra = getattr(_msg, "model_extra", None) or {}
+                                reply = (_extra.get("reasoning") or "").strip()
+                        try:
+                            u = resp.usage
+                            if u:
+                                pt = getattr(u, "prompt_tokens", 0) or 0
+                                ct = getattr(u, "completion_tokens", 0) or 0
+                                _local_usage = u
+                        except Exception:
+                            pass
+                    break
+                except Exception as _e:
+                    _kind = self._classify_ai_error(_e)
+                    if _attempt == 0 and _kind in ("connect", "gateway_5xx"):
+                        self.logger.warning(
+                            "本地%s连接毛刺，0.2s 后重试 1 次: %s request_id=%s",
+                            "主" if as_primary else "兜底", _e, request_id or "n/a")
+                        await asyncio.sleep(0.2)
+                        continue
+                    raise
+            # prompt-inspect 留痕 + 前缀缓存命中统计（2026-09-18 N4）：此前只有云主链记，
+            # 173 实际收到什么 / vLLM prefix cache 命中多少（usage.prompt_tokens_details.
+            # cached_tokens）从来没人量——「人设块分层值不值」没有读数就只能靠猜。
+            # 预算字段用本地口径（num_ctx / 裁前裁后 / 实发 max_tokens），不与云链 _budget_stats 混。
+            _est_after = sum(self._estimate_msg_tokens(m.get("content")) for m in fb_messages)
+            self._trace_prompt(
+                fb_messages, model=use_fb_model, client=self._fb_client, context=context,
+                usage=_local_usage, latency_ms=int((time.time() - t0) * 1000), ok=bool(reply),
+                purpose="local_primary" if as_primary else "local_fallback",
+                budget_stats={"budget": int(_ctx_budget), "num_ctx": int(_num_ctx),
+                              "hist": max(0, _before - len(fb_messages)), "after": int(_est_after),
+                              "max_tokens_sent": int(max_tokens), "lane": "local"})
             if not reply:
                 self.logger.warning(
                     "本地%s模型返回空 request_id=%s",
@@ -2189,8 +2276,13 @@ class AIClient(LoggerMixin):
 
     def _trace_prompt(self, messages: List[Dict[str, Any]], *, model: str, client: Any,
                       context: Optional[Dict[str, Any]], usage: Any,
-                      latency_ms: int, ok: bool = True) -> None:
-        """主链一次调用的留痕（prompt-inspect）+ 缓存命中滚动统计。绝不抛。"""
+                      latency_ms: int, ok: bool = True, purpose: str = "",
+                      budget_stats: Optional[Dict[str, Any]] = None) -> None:
+        """一次模型调用的留痕（prompt-inspect）+ 缓存命中滚动统计。绝不抛。
+
+        云主链与本地链（2026-09-18 起）共用：``budget_stats`` 显式给时用它（本地 num_ctx 口径），
+        否则取云链裁剪留下的 ``_budget_stats``；``purpose`` 标 lane（local_primary / local_fallback）。
+        """
         try:
             from src.ai import prompt_trace
             host = ""
@@ -2200,8 +2292,10 @@ class AIClient(LoggerMixin):
                 host = ""
             _ctx = context or {}
             uf = prompt_trace.usage_fields(usage)
-            st = {}
-            if isinstance(_ctx.get("_budget_stats"), dict):
+            st: Dict[str, Any] = {}
+            if isinstance(budget_stats, dict):
+                st = dict(budget_stats)
+            elif isinstance(_ctx.get("_budget_stats"), dict):
                 st = dict(_ctx["_budget_stats"])
             elif getattr(self, "_last_budget_stats", None):
                 st = dict(self._last_budget_stats)
@@ -2212,7 +2306,7 @@ class AIClient(LoggerMixin):
                 conv=self._conv_label(context),
                 request_id=str(_ctx.get("request_id") or ""),
                 usage=usage, budget_stats=st or None,
-                latency_ms=int(latency_ms or 0), ok=ok,
+                latency_ms=int(latency_ms or 0), ok=ok, purpose=str(purpose or ""),
                 route=(_ctx.get("_conv_route") if isinstance(_ctx.get("_conv_route"), dict)
                        else None),
             )
@@ -2584,9 +2678,16 @@ class AIClient(LoggerMixin):
                             spec.get("reasoning", ai_config.get("reasoning"))))
                     except Exception:
                         m_extra = {}
+                    _m_http = None
+                    if _is_lan_base_url(m_base):
+                        try:
+                            _m_http = _lan_httpx_async_client(m_to)
+                        except Exception:
+                            _m_http = None
                     self._route_clients[str(name)] = {
-                        "client": AsyncOpenAI(api_key=m_key, base_url=m_base,
-                                              timeout=m_to, max_retries=0),
+                        "client": AsyncOpenAI(
+                            api_key=m_key, base_url=m_base, timeout=m_to, max_retries=0,
+                            **({"http_client": _m_http} if _m_http is not None else {})),
                         "model": m_model,
                         "label": f"{m_model} @ {m_host} ({name})",
                         "extra_body": m_extra,

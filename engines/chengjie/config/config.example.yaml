@@ -1705,6 +1705,9 @@ ai:
   #   api_key: ollama
   #   timeout: 120        # 首次载入大模型可到 ~60s，留足；连接失败 5s 快败
   #   think: false        # qwen3 思考系防慢答；instruct 系无感
+  #   # num_ctx: 24576    # 输入窗口（2026-09-18 起不再一律默认 8192）：显式给 > ai.unrestricted.max_ctx
+  #   #                   # > Ollama 端点 8192 > vLLM/私网 24576。曾因默认 8192 + max_tokens 4096
+  #   #                   # 把 173 主链的 prompt 预算压到 3968，人设块一装历史就被裁到 2 条。
   #   # 无兜底纪律（2026-08-17）：chat_fallback=false → 云主链失败不本地顶班出话
   #   # （不回消息 + 主机弹窗「AI 不可用」+ ERROR 日志），端点仍服务口语化/工具
   #   # 改写与 ai.primary=local* 主链身份（那些是指定链路非兜底）。默认 true=旧行为。
@@ -1791,6 +1794,9 @@ ai:
   #   profile: unrestricted         # 指向 ai.models 里的档名（缺席 → ai.fallback）
   #   max_ctx: 24576                # 端点上下文硬上限（与本机 vLLM max_model_len 对齐）
   #   bypass_safety_brakes: false   # 全局钥匙：true = 无限制会话连五条安全刹车也不拦（慎）
+  #   keep_consistency_guards: true # 2026-09-18 守卫分层：无限制会话仍跑「防穿帮」层
+  #                                 # （凭空说做过/时区反/许图不发/承诺不兑现/原样复发）；
+  #                                 # false = 回旧的一刀切全让路。无限制＝不审内容，不＝允许自相矛盾。
   # models:
   #   unrestricted: { base_url: http://192.168.0.173:8001/v1, model: chatx, api_key: vllm,
   #                   max_ctx: 24576, supports_thinking: true }

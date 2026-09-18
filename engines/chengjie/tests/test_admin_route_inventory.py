@@ -2246,6 +2246,12 @@ _ADDITIONS_2026_09_18_MODEL_KEYS_PAGE = """
 """
 _BASELINE += _ADDITIONS_2026_09_18_MODEL_KEYS_PAGE
 
+# 2026-09-18 模型与密钥页体检：探**页面当前列表**（含未保存新档），不再靠 GET ?probe=1 重载整页吞改动。
+_ADDITIONS_2026_09_18_MODEL_ROUTES_PROBE = """
+/api/setup/model-routes/probe	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_18_MODEL_ROUTES_PROBE
+
 
 def _parse_baseline():
     expected = set()

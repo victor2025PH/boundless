@@ -711,6 +711,8 @@
 .mv-tag.priv{border-color:color-mix(in srgb,var(--tk-ok-ink) 40%,transparent);color:var(--tk-ok-ink);}
 .mv-tag.lock{border-color:color-mix(in srgb,var(--tk-amber) 50%,transparent);color:var(--tk-warn-ink);background:color-mix(in srgb,var(--tk-amber) 12%,transparent);}
 .mv-tag.cnt{color:var(--xl-accent-strong);border-color:var(--xl-accent-border);background:var(--xl-accent-bg);}
+.mv-tag.seats{color:var(--text-sub);}
+.mv-tag.fail{border-color:color-mix(in srgb,var(--tk-danger) 45%,transparent);color:var(--tk-danger);background:color-mix(in srgb,var(--tk-danger) 10%,transparent);}
 /* 授权闸锁住的档：整行降透明、光标改禁止，但仍可聚焦（读得到它是什么 / 点了给升级提示） */
 .mv-row.locked{opacity:.62;cursor:not-allowed;}
 .mv-row.locked:hover{background:transparent;}

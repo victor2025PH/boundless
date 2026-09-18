@@ -997,6 +997,17 @@ def ingest_incoming(
     if _self_chat:
         src[SELF_CHAT_KEY] = 1
     _quiet = _backfill or _self_chat
+    # 群会话名护栏（2026-09-18 P6 实锤）：群入站的 ``name`` 若就是发言人名，不许当会话名。
+    # store upsert 对「非空且 ≠ chat_key」的显示名一律覆盖，A 线 @本账号 触发路径曾把
+    # 「2026社群聊天」改名成发言人 Katie。调用方已修，但本函数是所有入站路径唯一的落库口，
+    # 在这兜住：命中则退成裸 chat_key（store 的 CASE 不会用裸 chat_key 冲掉已存的真群名）。
+    # 判群用 ``infer_chat_type``（source.chat_type / 关键字 / TG 负数启发式）与 normalize_chat 同源。
+    if direction == "in" and _sender_name and name and str(name).strip() == _sender_name:
+        from src.inbox.normalizer import infer_chat_type
+        if infer_chat_type(platform, str(chat_key), src) == "group":
+            logger.debug("[protocol_bridge] 群入站显示名=发言人名，不作会话名 conv=%s:%s:%s name=%s",
+                         platform, account_id, chat_key, name)
+            name = ""
     chat = normalize_chat(
         platform=platform,
         platform_name=PLATFORM_DISPLAY.get(platform, platform.title()),

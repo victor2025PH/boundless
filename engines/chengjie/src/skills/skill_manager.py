@@ -584,6 +584,10 @@ class SkillManager(LoggerMixin):
                 self.logger.warning("情景记忆初始化失败（将禁用）: %s", _mem_err)
                 self._episodic_store = None
 
+        # 173 KV 并发约 5 路：抽取与出话叠打会把 keep-alive 连接挤爆。
+        # 抽取互相排队，出话不走这把锁。
+        self._episodic_extract_gate = asyncio.Lock()
+
         self._cpi = None  # S5: CrossPlatformIdentity
         try:
             from src.utils.cross_platform_identity import CrossPlatformIdentity
@@ -610,6 +614,34 @@ class SkillManager(LoggerMixin):
         except Exception as e:
             self.logger.debug("KB 侧载失败: %s", e)
             return None
+
+    # 陪聊域「防人设推销支付话术」闸的业务词（A 线 2552 段同表；B 线经 _companion_kb_should_skip）
+    _COMPANION_BIZ_KW = (
+        "通道", "订单", "查单", "费率", "代收", "代付", "成功率", "限额", "回调",
+        "转账", "支付", "channel", "order", "payment", "payin", "payout",
+    )
+    _COMPANION_CHAT_INTENTS = ("greeting", "small_talk", "direct_chat", "complaint")
+
+    def _companion_kb_should_skip(self, intent: str, text: str, *, chat_id: Any = None) -> bool:
+        """陪聊域 + 闲聊意图 + 无业务词 → 本轮不注 KB（报障群豁免）。任何异常 → False（不拦）。"""
+        try:
+            _cfg = self.config.config if hasattr(self.config, "config") else {}
+            if not (isinstance(_cfg, dict) and effective_domain_name(_cfg) == "conversion"):
+                return False
+            if str(intent or "") not in self._COMPANION_CHAT_INTENTS:
+                return False
+            _t = str(text or "")
+            if any(k in _t for k in self._COMPANION_BIZ_KW):
+                return False
+            try:
+                from src.ops.bug_intake import is_bug_group
+                if is_bug_group(_cfg, chat_id):
+                    return False
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     @staticmethod
     def _cr_skip(user_context: Optional[Dict[str, Any]], layer: str) -> bool:
@@ -2093,6 +2125,16 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("%s入站上下文补全跳过", log_prefix, exc_info=True)
 
+            # 已发媒体事实（与 B 线 generate_inbox_draft 同口径）：客户问「发过照片没」
+            # 以 inbox 为准，不依赖本进程 _media_sent_log。
+            try:
+                from src.inbox.media_ledger import apply_media_ledger_hint as _amlh_a
+                from src.ai.conv_route import conv_id_from_context as _ml_cid_a
+                from src.integrations.protocol_bridge import get_inbox_store as _ml_gis_a
+                _amlh_a(user_context, _ml_gis_a(), _ml_cid_a(context, user_id_str), text)
+            except Exception:
+                self.logger.debug("%s已发媒体事实跳过", log_prefix, exc_info=True)
+
             # #333 P0-2：入站图先对相册/本会话已发做 sha256。命中 →「这是我之前发的」，
             # 不跑人脸（避免回传人设照被自拍启发式判成客户）。身份层未开时这条仍生效。
             try:
@@ -3220,6 +3262,32 @@ class SkillManager(LoggerMixin):
         except Exception:
             user_context["_spoken_variant_request"] = False
 
+        # 单一时钟（2026-09-18 「57 天没聊」事故）：B 线 user_context 是持久的，
+        # last_message_time 只有 A 线才写 → 情感引擎的【时间感知】在草稿链读到恒陈旧值
+        # （真实 5.4 天 → 提示 57 天 → LLM 原样念出）。这里以 inbox 时间线为准**每稿覆盖**
+        # _turn_gap_sec（inbound_enrich / emotional_context 同源消费）；推不出（无 ts）
+        # 则清掉，宁可不提时间也不提错的。last_message_time 同步刷成本条入站时刻，
+        # 让其他只读它的旧消费者也不再看到几周前的值。
+        try:
+            from src.inbox.time_context import derive_turn_gap as _dtg
+            _g = _dtg(list(history or []), text)
+            if _g is not None:
+                user_context["_turn_gap_sec"] = max(1.0, float(_g))
+            else:
+                user_context.pop("_turn_gap_sec", None)
+            _cur_ts = 0.0
+            for _m in reversed(list(history or [])):
+                if isinstance(_m, dict) and _m.get("role") == "user" \
+                        and str(_m.get("content") or "").strip() == text:
+                    try:
+                        _cur_ts = float(_m.get("ts") or 0)
+                    except (TypeError, ValueError):
+                        _cur_ts = 0.0
+                    break
+            user_context["last_message_time"] = _cur_ts if _cur_ts > 0 else time.time()
+        except Exception:
+            self.logger.debug("%s时间断层推导跳过", log_prefix, exc_info=True)
+
         # 历史：以 inbox 为权威覆盖（去掉末条「待回复」锚点，避免与本轮 text 重复）
         _hist: List[Dict[str, Any]] = []
         for _m in (history or []):
@@ -3377,6 +3445,16 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("%s入站 enrich 跳过", log_prefix, exc_info=True)
 
+            # 3b1a. 已发媒体事实：inbox 出站行为唯一真相（A 线 _media_sent_log 只记本进程
+            # 自己发的，坐席手发 / 自动发都在 inbox）。相关问句一律注入，不再看日志空不空。
+            try:
+                from src.inbox.media_ledger import apply_media_ledger_hint as _amlh
+                from src.integrations.protocol_bridge import get_inbox_store as _ml_gis
+                if _amlh(user_context, _ml_gis(), str(conversation_id or ""), text):
+                    _metric("media_ledger_hint")
+            except Exception:
+                self.logger.debug("%s已发媒体事实跳过", log_prefix, exc_info=True)
+
             # 3b1b. 时间推理提示（P0 2026-08-12，persona_reply 锚点判定产物）：
             # 当前时刻锚点/迟回复时间感/复读重写指令，追加进 _topic_switch_hint
             # 单一消费口（在 enrich 之后追加，不覆盖其语言/断层等既有提示）。
@@ -3384,8 +3462,15 @@ class SkillManager(LoggerMixin):
             if _xh:
                 _prev_hint = str(
                     user_context.get("_topic_switch_hint") or "").strip()
-                user_context["_topic_switch_hint"] = (
-                    f"{_prev_hint}\n{_xh}" if _prev_hint else _xh)
+                # 单一时钟去重（2026-09-18）：persona_reply 锚点判定与 inbound_enrich
+                # 现在同源推 gap，两边都可能产【时间提示——重要】；同头块只留 enrich 那份。
+                if _prev_hint and "【时间提示——重要】" in _prev_hint:
+                    _xh = "\n".join(
+                        ln for ln in _xh.split("\n")
+                        if not ln.strip().startswith("【时间提示——重要】")).strip()
+                if _xh:
+                    user_context["_topic_switch_hint"] = (
+                        f"{_prev_hint}\n{_xh}" if _prev_hint else _xh)
                 _metric("time_hint_active")
 
             # 3b2. 发图协同 hint（文图一致性第一防线）：对方这条在要照片（或短肯定
@@ -3653,6 +3738,14 @@ class SkillManager(LoggerMixin):
             _kb_refs: list = []
             try:
                 _kb = self._kb_store_if_exists()
+                # 陪聊域闸（2026-09-18，与 A 线 2552 段同口径）：闲聊/问候/直聊且无业务词
+                # → 不注 KB。此前 B 线无此闸，陪聊人设会把支付 KB 条目当聊天素材塞进 prompt
+                # （与人设自相矛盾＝穿帮，且白吃 token）。报障群豁免同 A 线。
+                if _kb and self._companion_kb_should_skip(intent, text, chat_id=chat_key):
+                    self.logger.info(
+                        "%s companion: skip KB inject (intent=%s no biz kw)", log_prefix, intent)
+                    _kb = None
+                    user_context.pop("kb_context", None)
                 if _kb:
                     _lang = (user_context or {}).get("reply_lang", "zh")
                     _res = _kb.search(text, top_k=3, lang=_lang)
@@ -5829,10 +5922,18 @@ class SkillManager(LoggerMixin):
         )
 
         async def _run():
-            await self._episodic_memory_extract_async(
-                user_id, user_msg, reply, intent, chat_id, platform,
-                account_id=account_id,
-            )
+            _gate = getattr(self, "_episodic_extract_gate", None)
+            if _gate is None:
+                await self._episodic_memory_extract_async(
+                    user_id, user_msg, reply, intent, chat_id, platform,
+                    account_id=account_id,
+                )
+                return
+            async with _gate:
+                await self._episodic_memory_extract_async(
+                    user_id, user_msg, reply, intent, chat_id, platform,
+                    account_id=account_id,
+                )
 
         try:
             asyncio.get_running_loop().create_task(_run())
@@ -7667,6 +7768,8 @@ class SkillManager(LoggerMixin):
                         head_limit=vcfg["head_limit"],
                         scene_limit=vcfg["scene_limit"],
                         keyword_limit=vcfg["keyword_limit"],
+                        filler_limit=vcfg.get("filler_limit", 2),
+                        sentence_limit=vcfg.get("sentence_limit", 2),
                     )
                     if overused:
                         _vh = build_variety_hint(

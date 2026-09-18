@@ -31,10 +31,45 @@ def test_local_only_never_lists_cloud_or_pool():
 
 
 def test_note_ok_clears_skip():
+    cl.reset_lanes()
     cl.note_fail("cloud", "quota", now=10.0)
     assert cl.should_skip("cloud", now=11.0)
     cl.note_ok("cloud", now=12.0)
     assert not cl.should_skip("cloud", now=13.0)
+
+
+def test_skip_hold_local_connect_streak():
+    assert cl.skip_hold_sec("local", "connect", streak=1) == 0.0
+    assert cl.skip_hold_sec("local", "connect", streak=2) == cl.SKIP_CONNECT_STREAK_SEC
+    assert cl.skip_hold_sec("local", "connect", streak=3) == cl.SKIP_FAIL_SEC
+    assert cl.skip_hold_sec("cloud", "connect", streak=1) == cl.SKIP_FAIL_SEC
+    assert cl.skip_hold_sec("local", "timeout", streak=1) == cl.SKIP_FAIL_SEC
+
+
+def test_local_connect_blip_does_not_freeze_two_minutes():
+    """一次 Connection error 不该让后续每句都跳过 173。"""
+    cl.reset_lanes()
+    cl.note_fail("local", "connect", "Connection error.", now=100.0)
+    assert not cl.should_skip("local", now=100.1)
+    cl.note_fail("local", "connect", "Connection error.", now=101.0)
+    assert cl.should_skip("local", now=101.1)
+    assert not cl.should_skip("local", now=101.0 + cl.SKIP_CONNECT_STREAK_SEC + 0.1)
+    cl.note_fail("local", "connect", "Connection error.", now=102.0)
+    assert cl.should_skip("local", now=102.0 + 20)
+    assert cl.should_skip("local", now=102.0 + cl.SKIP_FAIL_SEC - 1)
+    assert not cl.should_skip("local", now=102.0 + cl.SKIP_FAIL_SEC + 0.1)
+
+
+def test_local_connect_streak_resets_after_ok_or_gap():
+    cl.reset_lanes()
+    cl.note_fail("local", "connect", now=10.0)
+    cl.note_ok("local", now=11.0)
+    cl.note_fail("local", "connect", now=12.0)
+    assert not cl.should_skip("local", now=12.1)
+    cl.reset_lanes()
+    cl.note_fail("local", "connect", now=10.0)
+    cl.note_fail("local", "connect", now=10.0 + cl.CONNECT_STREAK_WINDOW_SEC + 1)
+    assert not cl.should_skip("local", now=10.0 + cl.CONNECT_STREAK_WINDOW_SEC + 1.1)
 
 
 def test_classify_402_is_quota():

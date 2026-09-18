@@ -446,13 +446,36 @@ class MetricsStore:
             # 后者是「空草稿率」（生成失败信号）。漏列会让下游读到 None 误判为 0。
             for _k in ("memory_hit", "emotional_active", "companion_active",
                        "slow_think", "retry_applied", "persona_guard_intercept",
-                       "crisis_override", "fast_path", "empty"):
+                       "crisis_override", "fast_path", "empty",
+                       # 2026-09-18 观测先行：记忆/时间/媒体事实三类注入的触发率
+                       "time_hint_active", "memory_probe_hint", "media_ledger_hint"):
                 rates[_k] = round(int(out_total.get(_k, 0)) / gen, 4)
+        # 派生读数（2026-09-18）：
+        #   memory_probe_no_evidence_ratio —— 客户考记忆时「聊天记录里查不到」的占比。高＝检索层
+        #     不够（该上语义索引 / 放宽 scan_limit）或客户在编造往事（该走 false_premise），
+        #     两者处置完全不同，所以必须单独可见；
+        #   time_hint_gap —— 断层分桶（time_hint_gap:<桶> 计数汇成一张小表），回答「客户一般隔多久回来」。
+        derived: Dict[str, Any] = {}
+        _probe = int(out_total.get("memory_probe_hint", 0))
+        if _probe > 0:
+            derived["memory_probe_no_evidence_ratio"] = round(
+                int(out_total.get("memory_probe_no_evidence", 0)) / _probe, 4)
+            derived["memory_probe_semantic_assist_ratio"] = round(
+                int(out_total.get("memory_probe_semantic_assist", 0)) / _probe, 4)
+        _gap_tab = {k.split(":", 1)[1]: v for k, v in out_total.items()
+                    if k.startswith("time_hint_gap:")}
+        if _gap_tab:
+            derived["time_hint_gap"] = _gap_tab
+        _kind_tab = {k.split(":", 1)[1]: v for k, v in out_total.items()
+                     if k.startswith("memory_probe:")}
+        if _kind_tab:
+            derived["memory_probe_kinds"] = _kind_tab
         return {
             "total": out_total,
             "window": dict(window),
             "window_sec": int(window_sec or 3600.0),
             "rates_vs_generated": rates,
+            "derived": derived,
             "latency": latency,
         }
 

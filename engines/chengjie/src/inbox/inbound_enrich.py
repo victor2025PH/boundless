@@ -207,17 +207,23 @@ def build_time_gap_hint(gap_sec: float) -> str:
         return ""
     if gap < 6 * 3600:
         return ""
-    if gap >= 48 * 3600:
-        span = f"{int(gap // 86400)} 天"
-    elif gap >= 24 * 3600:
-        span = "1 天多"
-    else:
-        span = f"{int(gap // 3600)} 小时"
+    # 时距措辞单一来源（time_context.describe_age）：≥14 天模糊化成真人口径，
+    # 治「57 天没聊」这种把提示语精确天数原样念出的穿帮。
+    try:
+        from src.inbox.time_context import describe_age as _da
+        span = _da(gap)
+    except Exception:
+        span = f"{int(gap // 86400)} 天" if gap >= 48 * 3600 else f"{int(gap // 3600)} 小时"
+    fuzzy_rule = (
+        "提到间隔时说大概（「好久没聊」「一个多月了吧」），**不要报精确天数**。"
+        if gap >= 14 * 86400 else ""
+    )
     return (
         f"【时间提示——重要】距离你们上一次聊天已经过去约 {span}，对方刚回来。"
         "对话历史里的旧轮次是那时候的，**不是刚才**——绝对不要用「刚才/刚说/你刚才说」"
         "指代旧话题；旧话题要提就带时间感（「前几天你说…」「上次聊到…」），"
         "且只提对方**亲口说过**的内容。像真人一样自然地重新接上，别装作对话从未中断。"
+        + fuzzy_rule
     )
 
 
@@ -719,24 +725,24 @@ def apply_inbound_enrichments(
     # A 线显式写过（含 0）→ 不覆盖；无 ts 来源（工作台 DOM）→ 行为不变。
     if "_turn_gap_sec" not in user_context:
         try:
-            import time as _t
-            prev_ts = 0.0
-            for m in reversed(list(history or [])):
-                if not isinstance(m, dict) or m.get("role") != "user":
-                    continue
-                if str(m.get("content") or "").strip() == t:
-                    continue
-                _mts = float(m.get("ts") or 0)
-                if _mts > 0:
-                    prev_ts = _mts
-                    break
-            if prev_ts > 0:
-                user_context["_turn_gap_sec"] = max(0.0, _t.time() - prev_ts)
+            from src.inbox.time_context import derive_turn_gap as _dtg
+            _g = _dtg(list(history or []), t)
+            if _g is not None:
+                user_context["_turn_gap_sec"] = float(_g)
         except Exception:
             pass
     gap_hint = build_time_gap_hint(user_context.get("_turn_gap_sec") or 0)
     if gap_hint:
         hints.append(gap_hint)
+        # 观测先行（2026-09-18）：断层分桶累计，回答「客户一般隔多久回来」——
+        # 决定 ≥14 天模糊化 / 记忆探针 / keep_stale 抬档这些投入值不值。best-effort。
+        try:
+            from src.inbox.time_context import gap_bucket as _gb
+            from src.monitoring.metrics_store import get_metrics_store as _gms
+            _gms().record_inbox_draft_event(
+                "time_hint_gap:" + _gb(user_context.get("_turn_gap_sec") or 0))
+        except Exception:
+            pass
     # 虚假前提（客户声称往事）：与上面三条同一消费口。长期记忆此时已注入
     # （_inject_episodic_into_context 在本函数之前跑），拿它当核对底料；
     # 目录登记的商业事实一并作证据（真产品事实可能这轮还没提过）。

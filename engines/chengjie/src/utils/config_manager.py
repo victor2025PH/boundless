@@ -122,6 +122,11 @@ def set_yaml_key_preserving(p: Path, keys, value) -> bool:
 class ConfigManager:
     """配置管理器类"""
 
+    # overlay 深合并时这些点分路径按整树赋值（删掉的键必须真被删掉）。
+    # 模型与密钥页写的是完整 ai.models / ai.task_routes 快照；若走普通 dict 递归，
+    # 主 config.yaml 里的旧档会在合并后「删不掉」。
+    OVERLAY_REPLACE_PATHS = ("ai.models", "ai.task_routes")
+
     def __init__(self, config_path: str = None):
         """
         初始化配置管理器
@@ -1085,7 +1090,8 @@ class ConfigManager:
             with open(path, "r", encoding="utf-8") as f:
                 overlay = yaml.safe_load(f) or {}
             if isinstance(overlay, dict) and overlay:
-                self._deep_merge(self.config, overlay)
+                self._merge_patch_replace_aware(
+                    self.config, overlay, set(self.OVERLAY_REPLACE_PATHS))
                 self.logger.info("已合并凭证 overlay: %s", path)
         except Exception as exc:
             self.logger.warning("凭证 overlay 合并失败（忽略）: %s", exc)

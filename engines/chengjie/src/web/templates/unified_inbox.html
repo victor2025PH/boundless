@@ -1282,6 +1282,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                     <div class="mp-group"></div>
                     <button type="button" class="mp-row" id="mp-row-thinking" onclick="_mpToggleThinking()" title="思维链：开＝答得更周全但每轮多几秒。对无限制档和点名的厂商模型档生效；跟随主链时由全局 ai.reasoning 决定" data-i18n-title="inbox.mp.think_t"><span class="mp-lbl" data-i18n="inbox.mp.row_thinking">思考</span><span class="mp-val" id="mp-val-thinking"></span><span class="mp-switch" id="mp-sw-thinking" aria-hidden="true"></span></button>
                     <button type="button" class="mp-row mp-row-safety" id="mp-row-safety" onclick="_mpToggleSafety()" title="五条账号与人身保险丝：急停 / 封号信号、账号冷启动上限、停联冻结、危机自伤兜底、授权额度。保留＝无限制也不碰它们；全关＝连它们也不拦（仅本会话，有审计）" data-i18n-title="inbox.mp.safety_t"><span class="mp-lbl" data-i18n="inbox.mp.row_safety">安全刹车</span><span class="mp-val" id="mp-val-safety"></span><span class="mp-switch" id="mp-sw-safety" aria-hidden="true"></span></button>
+                    <button type="button" class="mp-row" id="mp-row-consist" onclick="_mpToggleConsistency()" title="防穿帮层：凭空说做过、时区说反、许了图不发、承诺不兑现、原样复发。无限制默认仍拦；让路＝本会话连这些也不拦（有审计）" data-i18n-title="inbox.mp.consist_t"><span class="mp-lbl" data-i18n="inbox.mp.row_consistency">防穿帮</span><span class="mp-val" id="mp-val-consist"></span><span class="mp-switch" id="mp-sw-consist" aria-hidden="true"></span></button>
                     <!-- 无限制端点离线：只在此时显示，给「重试 / 改回标准」两个出口（在线态在「模型」面板里看） -->
                     <div class="mp-health" id="mp-health" style="display:none;">
                       <span class="mp-health-dot" id="mp-health-dot" aria-hidden="true"></span>
@@ -20513,6 +20514,7 @@ var _dpickTick=null;             // 250ms 心跳：计秒+相位推进+慢提示
 var _dpickPhaseN=0;
 var _dpickMinimized=false;       // 「收起后台等」胶囊态
 var _dpickMeta=null;             // 采纳归因 {text,source}：发送/填入时随既有 copilot_meta 链落审计
+var _dpickTextLang='';           // 本轮草稿正文语言（服务端 reply_lang 决策 / 译文则为目标语）：逐条发送随 source_lang 带给出站翻译
 var _DPICK_PHASE_KEYS=['inbox.dpick.phase1','inbox.dpick.phase2','inbox.dpick.phase3'];   // 相位文案（查表，勿字符串拼键名）
 var _DPICK_MAX_ROWS=10;          // 再多合并进末条：一次连发 10+ 条像刷屏机器人
 var _DPICK_WORD_LEAD_RE=/^[0-9A-Za-z\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
@@ -20657,6 +20659,7 @@ async function _dpickGenerate(c, msgs, opts){
     if(!d.ok || !d.reply){ _dpickShowError((d&&d.detail)||'',opts); return; }
     _noteGoalApplied(cid, d.goal_applied);          // #152 F2：目标注没注入亮到英雄行
     var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
+    _dpickTextLang=d.translated?String(lang||''):String(d.reply_lang||'');
     // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
     // 复用 P0 的 chip+浮层，零新增 UI；无引用则清空 chip 防串会话残留。
     try{
@@ -21081,6 +21084,11 @@ async function _sendDraftParts(parts){
         text:text, client_msg_id:_newClientMsgId(), bubbles:0,   // 已经是短句，禁二次拆
       };
       if(_xlateOut) body.target_lang=_xlateOut;   // 出向翻译沿用会话设置（直发口径，逐条预览会把人逼疯）
+      // 2026-09-18 P1 实锤：AI 草稿正文已按 reply_lang 决策写成客户语言（西语），逐条发送再过一遍
+      // 出站翻译时服务端要自检源语言——短西语句「Sí, enviamos a Chile en 7 a 10 días.」无关键词被判 en
+      // → 「en→es」把西语「译」成英文发给西语客户。这里把草稿语言随发作 source_lang：同语种服务端直通
+      // （target==source 不译），异语种翻译方向也对。含 CJK 的正文不带——服务端 CJK 护栏钉 zh，交给它。
+      if(body.target_lang && _dpickTextLang && !/[\u3400-\u9fff]/.test(text)) body.source_lang=_dpickTextLang;
       if(_xlBatchConfirmed) body.xl_confirmed=1;  // #276 Q-16：已人工确认 → 服务端 [manual_xlate] confirmed=1
       // C3（#148）：整批沿用的 force 标志是「链路自带」不是本条人点——服务端日志按 src 区分
       if(forceLang){ body.force_lang=1; body.force_src='batch_confirm'; body._force_used=true; }
@@ -23065,9 +23073,9 @@ document.addEventListener('click',function(e){
      「标签 · 当前值 ›」信息架构；选项第二屏 #mp-pick 复用翻译弹层 .xl-pick-* 骨架，is-pick 互斥）。
    两个入口按钮（.cmp-sel）自带当前值，尺寸同款；无限制＝紫（--tk-violet，全站唯一用紫的功能）
    只染「模式」按钮，不再两处同时变色；首次切无限制 confirm 一次（本机记忆）。 */
-var _mp={cid:'',data:null,health:null,healthAll:{},busy:false,pick:'',last:null,counts:{},sup:null};
+var _mp={cid:'',data:null,health:null,healthAll:{},busy:false,pick:'',last:null,counts:{},usage:null,sup:null};
 var _MP_CONFIRM_KEY='ws_mp_unr_confirmed_v1';
-function _mpRoute(){ return (_mp.data&&_mp.data.route)||{profile:'standard',depth:'',effort:'',thinking:false,bypass_safety:false,model:'',unrestricted:false}; }
+function _mpRoute(){ return (_mp.data&&_mp.data.route)||{profile:'standard',depth:'',effort:'',thinking:false,bypass_safety:false,drop_consistency:false,model:'',unrestricted:false}; }
 function _mpConvOk(c){ return !!(c&&c.platform&&c.chat_key); }
 function _mpParams(c){ return {platform:c.platform,account_id:c.account_id||'default',chat_key:c.chat_key}; }
 /* 键表显式列出（i18n 覆盖门禁按字面量抓 window.T 键，拼接键抓不到） */
@@ -23133,11 +23141,14 @@ function _mpRender(){
   var thinkable=unr||!!r.model;   // 思考开关只对显式路由档（无限制 / 点名模型）生效
   setv('mp-val-thinking',thinkable?window.T(r.thinking?'inbox.mp.on':'inbox.mp.off'):window.T('inbox.mp.think_follow'));
   setv('mp-val-safety',window.T(r.bypass_safety?'inbox.mp.safety_off':'inbox.mp.safety_keep'));
+  setv('mp-val-consist',window.T(r.drop_consistency?'inbox.mp.consist_off':'inbox.mp.consist_keep'));
   var sw1=document.getElementById('mp-sw-thinking'); if(sw1){ sw1.classList.toggle('on',thinkable&&!!r.thinking); sw1.style.display=thinkable?'':'none'; }
   var sw2=document.getElementById('mp-sw-safety'); if(sw2) sw2.classList.toggle('on',!!r.bypass_safety);
+  var sw3=document.getElementById('mp-sw-consist'); if(sw3) sw3.classList.toggle('on',!!r.drop_consistency);
   var rowM=document.getElementById('mp-row-model'); if(rowM) rowM.classList.toggle('vio',unr);
   var rowT=document.getElementById('mp-row-thinking'); if(rowT) rowT.classList.toggle('dim',!thinkable);
   var rowS=document.getElementById('mp-row-safety'); if(rowS){ rowS.style.display=unr?'':'none'; rowS.classList.toggle('danger',!!r.bypass_safety); }
+  var rowC=document.getElementById('mp-row-consist'); if(rowC){ rowC.style.display=unr?'':'none'; rowC.classList.toggle('danger',!!r.drop_consistency); }
   _mpRenderHealth();
   _mvRender();
 }
@@ -23158,6 +23169,17 @@ function _mpRenderHealth(){
   if(std) std.style.display=offline?'':'none';
 }
 /* 模型面板：目录列表 + 提示条 + 数据去向 + 管理入口 + 上一条回复 */
+function _mvUsageBits(m){
+  /* 进程内 by_model + 当前有多少会话点名了某档（GET /api/ai/model-route/stats）。零不画。 */
+  var u=_mp.usage||{}, opens=!!(m&&m.opens_unrestricted), name=(m&&m.name)||'';
+  var key=opens?'unrestricted':(name||'main');
+  var bm=(u.by_model&&u.by_model[key])||{};
+  var convs=opens?(u.unrestricted_convs||0):((u.model_convs&&name&&u.model_convs[name])||0);
+  var bits='';
+  if(convs>0) bits+='<span class="mv-tag seats">'+esc(window.Tf('inbox.mp.tag_seats',{n:convs}))+'</span>';
+  if((bm.fail||0)>0) bits+='<span class="mv-tag fail">'+esc(window.Tf('inbox.mp.tag_fail',{n:bm.fail}))+'</span>';
+  return bits;
+}
 function _mvRender(){
   var host=document.getElementById('mv-list'); if(!host) return;
   var r=_mpRoute(), unr=!!r.unrestricted, d=_mp.data||{}, ms=_mpModels(), html='';
@@ -23183,6 +23205,7 @@ function _mvRender(){
     if(locked) tags+='<span class="mv-tag lock">'+esc(window.T('inbox.mp.tag_locked'))+'</span>';
     var n=counts[(m.model||'')+'@'+(m.host||'')]||0;
     if(n) tags+='<span class="mv-tag cnt">'+esc(window.Tf('inbox.mp.tag_used',{n:n}))+'</span>';
+    tags+=_mvUsageBits(m);
     var hh;
     if(!h) hh='<i class="mv-dot" aria-hidden="true"></i>';
     else if(h.online&&h.warn==='model_not_listed') hh='<i class="mv-dot warn" aria-hidden="true"></i>'+esc(window.T('inbox.mp.h_not_listed'));
@@ -23248,6 +23271,15 @@ async function _mvLoadLast(){
   }catch(_){ _mp.last=null; _mp.counts={}; }
   _mvRender();
 }
+async function _mvLoadUsage(){
+  try{
+    var resp=await apiFetch('/api/ai/model-route/stats',{},{timeoutMs:8000});
+    var d=resp.ok?await resp.json():null;
+    var s=(d&&d.stats)||{};
+    _mp.usage={by_model:s.by_model||{}, model_convs:s.model_convs||{}, unrestricted_convs:s.unrestricted_convs||0};
+  }catch(_){ /* 保已有快照；首次失败则无标签 */ }
+  _mvRender();
+}
 async function _mpHealth(force){
   var r=_mpRoute(); if(!r.unrestricted) return;
   if(force){ _mp.health=null; _mpRenderHealth(); }
@@ -23304,6 +23336,8 @@ async function _hydrateConvModelRoute(c){
       _mp.data=d; _mpRender();
       if(d.route&&d.route.unrestricted) _mpHealth(false);
       else _mpHealthOne((d.route&&d.route.model)||'');
+      var mp=document.getElementById('model-pop');
+      if(mp&&mp.classList.contains('show')) _mvLoadUsage();
     }
   }catch(_){ /* 增强层：拉不到按标准档画，不打扰 */ }
 }
@@ -23324,7 +23358,7 @@ function _mpTogglePop(popId,btnId,onOpen){
 }
 function toggleModelPop(){
   _mpTogglePop('model-pop','model-btn',function(){
-    _mpHealthAll(false); _mvLoadLast();
+    _mpHealthAll(false); _mvLoadLast(); _mvLoadUsage();
     try{ _uiBeacon('cmpz_vendor_open'); }catch(_){}
   });
 }
@@ -23416,6 +23450,12 @@ async function _mpSet(patch){
         okText:window.T('inbox.mp.confirm_safety_ok')});
       if(!ok2) return;
     }
+    if(patch.drop_consistency===true && !r.drop_consistency){
+      var ok3=await _appConfirm(window.T('inbox.mp.confirm_consist'),{
+        title:window.T('inbox.mp.confirm_consist_hd'), iconName:'alert', tone:'danger',
+        okText:window.T('inbox.mp.confirm_consist_ok')});
+      if(!ok3) return;
+    }
     var body=Object.assign({},_mpParams(c),patch);
     var resp=await apiFetch('/api/unified-inbox/conv-model-route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var d=null; try{ d=await resp.json(); }catch(_){ d=null; }
@@ -23445,10 +23485,12 @@ async function _mpSet(patch){
       if(r.unrestricted&&!nr.unrestricted) _toast(window.T('inbox.mp.left_unr'),'#7c3aed');
       try{ _uiBeacon('cmpz_vendor_set'); }catch(_){}
       _mpHealthOne(nr.model||'');
+      _mvLoadUsage();
     } else {
       _toast(window.Tf('inbox.mp.saved',{label:_mpProfLabel(nr.profile)+(nr.depth?' · '+_mpDepthLabel(nr.depth):'')+(nr.effort?' · '+_mpEffortLabel(nr.effort):'')}),nr.unrestricted?'#7c3aed':'#16a34a');
       try{ _uiBeacon(nr.unrestricted?'cmpz_model_unr_on':'cmpz_model_set'); }catch(_){}
       if(nr.unrestricted) _mpHealth(true); else _mpHealthOne(nr.model||'');
+      if('profile' in patch) _mvLoadUsage();
     }
   }catch(_){ _toast(window.Tf('inbox.mp.fail',{msg:'network'}),'#dc2626'); }
   finally{ _mp.busy=false; }
@@ -23462,6 +23504,8 @@ function _mpToggleThinking(){
 window._mpToggleThinking=_mpToggleThinking;
 function _mpToggleSafety(){ var r=_mpRoute(); if(!r.unrestricted) return; _mpSet({bypass_safety:!r.bypass_safety}); }
 window._mpToggleSafety=_mpToggleSafety;
+function _mpToggleConsistency(){ var r=_mpRoute(); if(!r.unrestricted) return; _mpSet({drop_consistency:!r.drop_consistency}); }
+window._mpToggleConsistency=_mpToggleConsistency;
 function _mpBackToStandard(){ _mpSet({profile:'standard'}); }
 window._mpBackToStandard=_mpBackToStandard;
 window._mpHealth=_mpHealth;

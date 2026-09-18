@@ -260,6 +260,26 @@ def memory_limits(config: Any, legacy_items: int, legacy_chars: int) -> Tuple[in
         return items, chars
 
 
+def stale_keep_msgs(config: Any, legacy: int = 3) -> int:
+    """时间断层之前最多保留多少条旧历史（``persona_reply.trim_stale_history`` 的 keep_stale）。
+
+    2026-09-18 「脑子有点空」事故：最大档从库里取 200 行，但断层修剪一刀只留 3 条旧消息，
+    深度档等于白开——客户隔 5 天回来问「还记得我们第一次聊什么」，窗口里只剩 3 条旧话。
+    旧消息**已带「[N天前]」时间标**，多留不会再造「把旧话当刚才」的幻觉（那是时间标 +
+    【时间提示】的活）；真正的上限交给发送前的 prompt 预算裁剪（最旧先丢）。
+    standard → legacy 原值（零行为变化）；deep/max/ultra → max(legacy, history_msgs)。
+    """
+    d = resolve(config)
+    n = _lift(legacy, None if d.is_standard else d.history_msgs)
+    if _economy_bypassed():
+        return n
+    try:
+        from src.ai.usage_economy import cap_history
+        return cap_history(n, config)
+    except Exception:
+        return n
+
+
 def history_fetch_limit(config: Any, legacy: int = 30) -> int:
     """从库里取多少行历史（各拟稿入口 list_recent_messages 的 limit）。"""
     d = resolve(config)

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 
@@ -227,36 +227,99 @@ def _require_supervisor_or_shell(request: Request) -> None:
         _require_supervisor(request)
 
 
-def _probe_model_endpoint(base_url: str, api_key: str = "", timeout: float = 3.0) -> Dict[str, Any]:
-    """轻量探活模型端点（GET {base}/v1/models，OpenAI 兼容）：只读、不耗 token、短超时。
-
-    返回 ``{reachable, status, latency_ms}``。主机应答 4xx/5xx（如 401 鉴权）仍算
-    ``reachable=True``（端点在线，只是鉴权/路径问题）；连接失败/超时/坏 URL=False。
-    任何异常都不抛（体检不能把设置页打崩）。
-    """
-    import time as _t
-    import urllib.error
-    import urllib.request
+def _v1_base(base_url: Any) -> str:
+    """与 ``AIClient._build_route_clients`` 同口径补 ``/v1``（探活/拉清单必须打运行时真正会打的地址）。"""
     b = str(base_url or "").strip().rstrip("/")
-    if not b or "://" not in b:
-        return {"reachable": False, "status": None, "latency_ms": 0, "error": "bad_url"}
-    if not b.endswith("/v1"):
+    if b and "://" in b and not b.endswith("/v1"):
         b = b + "/v1"
-    url = b + "/models"
-    headers = {"Authorization": "Bearer " + (api_key or "probe")}
-    t0 = _t.time()
+    return b
+
+
+async def _probe_model_endpoint(base_url: str, model: str = "", api_key: str = "",
+                                timeout: float = 5.0) -> Dict[str, Any]:
+    """模型端点探活（async；与 composer「模型」面板共用 :func:`conv_route.probe_spec` 一套判定）。
+
+    返回 ``{online, status, latency_ms, error[, warn][, probe]}``：``online`` 只在端点真能用时
+    为真——401/403（密钥错）、404（模型不存在）、429（额度）一律 ``online=False`` 并带
+    ``error=http_<code>``；``warn=model_not_listed``＝在线但 /models 清单里没这个模型名。
+    2026-09-18 前此处是同步 urllib 且把 401 也画 🟢（阻塞事件循环 + 绿灯说谎）。绝不抛。
+    """
     try:
-        req = urllib.request.Request(url, headers=headers, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return {"reachable": True,
-                    "status": int(getattr(resp, "status", 200) or 200),
-                    "latency_ms": int((_t.time() - t0) * 1000)}
-    except urllib.error.HTTPError as he:
-        return {"reachable": True, "status": int(getattr(he, "code", 0) or 0),
-                "latency_ms": int((_t.time() - t0) * 1000)}
+        from src.ai.conv_route import probe_spec
+        return await probe_spec(_v1_base(base_url), model, api_key, timeout=timeout)
     except Exception as ex:
-        return {"reachable": False, "status": None,
-                "latency_ms": int((_t.time() - t0) * 1000), "error": str(ex)[:80]}
+        return {"online": False, "status": None, "latency_ms": 0,
+                "error": type(ex).__name__.lower()[:40]}
+
+
+async def _probe_models_concurrently(rows: List[Dict[str, Any]], *, timeout: float = 5.0,
+                                     limit: int = 5) -> Dict[str, Dict[str, Any]]:
+    """``[{name, base_url, model, api_key}]`` → ``{name: health}``，并发上限 ``limit``。"""
+    import asyncio
+    sem = asyncio.Semaphore(max(1, int(limit)))
+
+    async def _one(r: Dict[str, Any]) -> Dict[str, Any]:
+        async with sem:
+            return await _probe_model_endpoint(str(r.get("base_url") or ""),
+                                               str(r.get("model") or ""),
+                                               str(r.get("api_key") or ""), timeout=timeout)
+
+    results = await asyncio.gather(*(_one(r) for r in rows), return_exceptions=True)
+    out: Dict[str, Dict[str, Any]] = {}
+    for r, h in zip(rows, results):
+        out[str(r.get("name") or "")] = (h if isinstance(h, dict)
+                                          else {"online": False, "status": None, "latency_ms": 0,
+                                                "error": "probe_failed"})
+    return out
+
+
+# ai.models.<name> 里除 base_url/model/api_key 外，设置页可读可写的元数据（composer「模型」面板
+# 消费 label/max_ctx/cost_hint/supports_thinking；ai_client 消费 reasoning）。2026-09-18 前 POST
+# 整体替换 ai.models 时把这些全部抹掉——YAML 手配一次、页面保存一次就丢。
+_MODEL_EXTRA_KEYS = ("label", "max_ctx", "cost_hint", "supports_thinking", "reasoning")
+
+# 「用途分配」注册表：只列**代码里真有消费方**的任务名。
+#   assistant_planner ← assistant_action_routes（小智「替我做」规划）
+#   assistant_qa      ← assistant_routes（小智问答）
+#   memory_extract    ← ai_client 记忆抽取（不配＝有本地兜底就自动走 LAN）
+# 旧表的 computer_use / chat 全仓无 route= 消费方（chat 的会话级选择由 composer conv_route 承担）→ 下线；
+# YAML 里仍配着的自定义任务名由 GET 以 custom=True 原样带出，UI 不会静默丢掉。
+_MODEL_ROUTE_TASKS = (
+    ("assistant_planner", "dv_mr_task_planner", "dv_mr_task_planner_d"),
+    ("assistant_qa", "dv_mr_task_qa", "dv_mr_task_qa_d"),
+    ("memory_extract", "dv_mr_task_memory", "dv_mr_task_memory_d"),
+)
+
+
+def _mask_key(k: Any) -> str:
+    k = str(k or "")
+    return (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("…" if k.strip() else "")
+
+
+def _coerce_model_extras(item: Dict[str, Any], spec: Dict[str, Any]) -> Optional[str]:
+    """把 body 里显式带的元数据写进 spec（空值＝删该键）；返回错误码或 None。"""
+    for k in _MODEL_EXTRA_KEYS:
+        if k not in item:
+            continue
+        v = item.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            spec.pop(k, None)
+            continue
+        if k == "max_ctx":
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                return "max_ctx"
+            if n <= 0 or n > 50_000_000:
+                return "max_ctx"
+            spec[k] = n
+        elif k in ("supports_thinking", "reasoning"):
+            if isinstance(v, str):
+                v = v.strip().lower() in ("1", "true", "yes", "on")
+            spec[k] = bool(v)
+        else:
+            spec[k] = str(v).strip()[:40 if k == "label" else 24]
+    return None
 
 
 async def reload_ai_runtime(app, config_manager) -> bool:
@@ -1071,34 +1134,151 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "detail": tr(request, "setup.pool.saved"),
                 "count": len(cleaned), "ai_ready": bool(ai_ready)}
 
+    def _catalog_rows(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """``conv_route.model_catalog`` 按档名索引（厂商/数据去向/显示名与 composer 同源）；失败＝空。"""
+        try:
+            from src.ai.conv_route import model_catalog
+            return {str(r.get("name") or ""): r for r in model_catalog(config)}
+        except Exception:
+            logger.debug("model_catalog 不可用（忽略）", exc_info=True)
+            return {}
+
+    def _main_chain_row(config: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from src.ai.conv_route import main_chain_spec
+            row = main_chain_spec(config) or {}
+        except Exception:
+            row = {}
+        return {k: row.get(k) for k in ("label", "model", "host", "public_host", "vendor",
+                                        "private", "via", "max_ctx") if k in row}
+
+    def _unrestricted_profile(config: Dict[str, Any]) -> str:
+        try:
+            from src.ai.conv_route import profile_name
+            return str(profile_name(config) or "unrestricted")
+        except Exception:
+            return "unrestricted"
+
+    def _local_endpoint(ai_cfg: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """``ai.fallback`` 私网端点 → 预设「自有算力」的真值来源（模板里不再写死内网 IP）。"""
+        fb = ai_cfg.get("fallback") if isinstance(ai_cfg.get("fallback"), dict) else {}
+        base = str((fb or {}).get("base_url") or "").strip()
+        if not base or (fb or {}).get("enabled", True) is False:
+            return None
+        try:
+            from src.ai.vendor_params import is_private_endpoint
+            if not is_private_endpoint(base):
+                return None
+        except Exception:
+            return None
+        return {"base_url": base, "model": str((fb or {}).get("model") or "")}
+
+    def _model_rows(config: Dict[str, Any], ai_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """ai.models → 页面行（密钥打码；带 composer 同源的厂商/去向/显示名与可编辑元数据）。"""
+        cat = _catalog_rows(config)
+        unr = _unrestricted_profile(config)
+        out_models: List[Dict[str, Any]] = []
+        models_cfg = ai_cfg.get("models") or {}
+        if not isinstance(models_cfg, dict):
+            return out_models
+        for name, spec in models_cfg.items():
+            if not isinstance(spec, dict):
+                continue
+            n = str(name)
+            base = str(spec.get("base_url") or "")
+            crow = cat.get(n) or {}
+            if not crow:
+                # 目录不列的档（``_`` 内部档 / 非法名）也要有厂商与去向事实，页面才画得一致
+                try:
+                    from src.ai.conv_route import describe_endpoint
+                    crow = describe_endpoint(base, str(spec.get("model") or ""), str(spec.get("label") or ""))
+                except Exception:
+                    crow = {}
+            row: Dict[str, Any] = {
+                "name": n,
+                "base_url": base,
+                "model": str(spec.get("model") or ""),
+                "api_key_masked": _mask_key(spec.get("api_key")),
+                "has_key": bool(str(spec.get("api_key") or "").strip()),
+                # 可编辑元数据：只回**配置里真有的**值（缺省不回填，免得保存把默认值固化进 YAML）
+                "label": str(spec.get("label") or ""),
+                "max_ctx": spec.get("max_ctx") if isinstance(spec.get("max_ctx"), int) else None,
+                "cost_hint": str(spec.get("cost_hint") or ""),
+                "supports_thinking": bool(spec.get("supports_thinking", True)),
+                "reasoning": bool(spec.get("reasoning", False)),
+                # 展示态（与 composer「模型」面板同源）
+                "display_label": str(crow.get("label") or ""),
+                "vendor": str(crow.get("vendor") or ""),
+                "public_host": str(crow.get("public_host") or ""),
+                "private": bool(crow.get("private", False)),
+                "via": str(crow.get("via") or ""),
+                "max_ctx_default": crow.get("max_ctx"),
+                "internal": n.startswith("_"),
+                "opens_unrestricted": n == unr,
+            }
+            out_models.append(row)
+        return out_models
+
+    def _task_rows(request: Request, task_routes: Dict[str, str]) -> List[Dict[str, Any]]:
+        rows = [{"key": k, "label": tr(request, lk), "desc": tr(request, dk), "custom": False}
+                for k, lk, dk in _MODEL_ROUTE_TASKS]
+        known = {r["key"] for r in rows}
+        for t in task_routes:
+            if t not in known:
+                rows.append({"key": t, "label": t, "desc": tr(request, "dv_mr_task_custom_d"),
+                             "custom": True})
+        return rows
+
+    def _usage_snapshot(request: Request) -> Dict[str, Any]:
+        """进程内 by_model 计数 + 当前有多少会话点名了某档（失败则空；页面有数才画）。"""
+        try:
+            from src.ai import conv_route
+            snap = conv_route.stats_snapshot(_inbox_store(request))
+        except Exception:
+            return {"by_model": {}, "model_convs": {}, "unrestricted_convs": 0}
+        bm: Dict[str, Any] = {}
+        for k, v in (snap.get("by_model") or {}).items():
+            if not isinstance(v, dict):
+                continue
+            calls = int(v.get("calls") or 0)
+            if calls <= 0:
+                continue
+            bm[str(k)] = {"calls": calls, "ok": int(v.get("ok") or 0),
+                          "fail": int(v.get("fail") or 0)}
+        convs = {}
+        for k, n in (snap.get("model_convs") or {}).items():
+            try:
+                c = int(n or 0)
+            except (TypeError, ValueError):
+                c = 0
+            if c > 0:
+                convs[str(k)] = c
+        try:
+            unr = int(snap.get("unrestricted_convs") or 0)
+        except (TypeError, ValueError):
+            unr = 0
+        return {"by_model": bm, "model_convs": convs, "unrestricted_convs": max(0, unr)}
+
     @app.get("/api/setup/model-routes")
     async def api_setup_model_routes_get(request: Request, probe: int = 0):
-        """多模型路由总览（ai.models + ai.task_routes）：模型档（密钥打码）+ 任务映射 +
-        已认任务名 + 运行态（哪些档已装载）。``probe=1`` 时逐档探活端点（🟢/🔴，只读不耗
-        token）。密钥绝不回显全量。
+        """多模型路由总览（ai.models + ai.task_routes）：模型档（密钥打码 + composer 同源的
+        厂商/去向/显示名 + 可编辑元数据）+ 任务映射 + 用途注册表 + 主链事实 + 运行态（哪些档
+        已装载）。``probe=1`` 时并发探活各档（async，不阻塞事件循环）。密钥绝不回显全量。
         """
         api_auth(request)
         _require_supervisor_or_shell(request)
         config = getattr(config_manager, "config", None) or {}
         ai_cfg = config.get("ai") or {}
-        out_models = []
-        models_cfg = ai_cfg.get("models") or {}
-        if isinstance(models_cfg, dict):
-            for name, spec in models_cfg.items():
-                if not isinstance(spec, dict):
-                    continue
-                k = str(spec.get("api_key") or "")
-                base = str(spec.get("base_url") or "")
-                row = {
-                    "name": str(name),
-                    "base_url": base,
-                    "model": str(spec.get("model") or ""),
-                    "api_key_masked": (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("…" if k.strip() else ""),
-                }
-                if probe:
-                    real_key = str(spec.get("api_key") or ai_cfg.get("api_key") or "")
-                    row["health"] = _probe_model_endpoint(base, real_key)
-                out_models.append(row)
+        out_models = _model_rows(config, ai_cfg)
+        if probe and out_models:
+            models_cfg = ai_cfg.get("models") or {}
+            probe_rows = [{"name": r["name"], "base_url": r["base_url"], "model": r["model"],
+                           "api_key": str(((models_cfg.get(r["name"]) or {}).get("api_key"))
+                                          or ai_cfg.get("api_key") or "")}
+                          for r in out_models]
+            health = await _probe_models_concurrently(probe_rows)
+            for r in out_models:
+                r["health"] = health.get(r["name"]) or {"online": False, "error": "probe_failed"}
         routes_cfg = ai_cfg.get("task_routes") or {}
         task_routes = ({str(t): str(p) for t, p in routes_cfg.items()}
                        if isinstance(routes_cfg, dict) else {})
@@ -1113,17 +1293,77 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             "ok": True,
             "models": out_models,
             "task_routes": task_routes,
-            "known_tasks": ["assistant_planner", "assistant_qa", "computer_use", "chat"],
+            "known_tasks": [k for k, _l, _d in _MODEL_ROUTE_TASKS],
+            "tasks": _task_rows(request, task_routes),
+            "main_chain": _main_chain_row(config),
+            "unrestricted_profile": _unrestricted_profile(config),
+            "local_endpoint": _local_endpoint(ai_cfg),
             "loaded": loaded,
+            "usage": _usage_snapshot(request),
         }
+
+    @app.post("/api/setup/model-routes/probe")
+    async def api_setup_model_routes_probe(request: Request):
+        """体检**页面当前列表**（含尚未保存的新档）：body ``{models:[{name, base_url, model, api_key?}]}``。
+
+        api_key 明文 → 直接用（新档）；掩码/空 → 同名已存档真值 → ``ai.api_key``（与 list-models
+        同规则）。并发探活，返回 ``{ok, health:{name: {online, status, latency_ms, error, warn}}}``；
+        不改配置、不回显密钥。2026-09-18 前「立即体检」是重载整页 → 把未保存的改动全吞掉。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        raw = (body or {}).get("models")
+        if not isinstance(raw, list):
+            return {"ok": False, "detail": tr(request, "err.setup.routes_models_required")}
+        cfg = getattr(config_manager, "config", None) or {}
+        ai_cfg = cfg.get("ai") or {}
+        stored = ai_cfg.get("models") if isinstance(ai_cfg.get("models"), dict) else {}
+        rows: List[Dict[str, Any]] = []
+        for item in raw[:21]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:40]
+            if not name:
+                # ``name: ""`` ＝ 主链行：端点/密钥由服务端自己填（客户端拿不到主链 base_url，
+                # 主链若是私网地址也不外露），与 composer 目录里 name="" 的语义一致
+                mb = str(ai_cfg.get("base_url") or "").strip()
+                if mb and not any(r["name"] == "" for r in rows):
+                    rows.append({"name": "", "base_url": mb, "model": str(ai_cfg.get("model") or ""),
+                                 "api_key": str(ai_cfg.get("api_key") or ""), "label": ""})
+                continue
+            key = str(item.get("api_key") or "").strip()
+            if not key or ("…" in key) or key.endswith("***"):
+                key = (str(((stored or {}).get(name) or {}).get("api_key") or "")
+                       or str(ai_cfg.get("api_key") or ""))
+            rows.append({"name": name, "base_url": str(item.get("base_url") or "").strip()[:300],
+                         "model": str(item.get("model") or "").strip()[:120], "api_key": key,
+                         "label": str(item.get("label") or "").strip()[:40]})
+        health = await _probe_models_concurrently(rows)
+        # 顺带把展示事实（厂商/数据去向/显示名）带回去：未保存的新档也能画得和保存后一样
+        try:
+            from src.ai.conv_route import describe_endpoint
+            for r in rows:
+                h = health.get(r["name"])
+                if isinstance(h, dict):
+                    h["facts"] = describe_endpoint(r["base_url"], r["model"], r.get("label") or "")
+        except Exception:
+            logger.debug("describe_endpoint 不可用（忽略）", exc_info=True)
+        return {"ok": True, "health": health, "n": len(health)}
 
     @app.post("/api/setup/model-routes")
     async def api_setup_model_routes_save(request: Request):
         """保存多模型路由到 overlay（ai.models + ai.task_routes）并热重建 AI 运行时。
 
-        - body: ``{models: [{name, base_url, model, api_key?}], task_routes: {task: profile}}``；
+        - body: ``{models: [{name, base_url, model, api_key?, label?, max_ctx?, cost_hint?,
+          supports_thinking?, reasoning?}], task_routes: {task: profile}}``；
         - base_url/model 必填；掩码回传的 api_key 沿用同名旧真值；空 api_key 允许（本地端点
           无鉴权，运行时自动填占位）；task_routes 指向不存在的档直接拒绝（防「路由到空气」）。
+        - 同名旧档的**其余键原样保留**（label/max_ctx/cost_hint/supports_thinking/reasoning 与任何
+          YAML 手配的未知键）；body 显式带出的元数据才覆盖（空值＝删）。2026-09-18 前整体替换＝抹掉。
         """
         api_auth(request)
         _require_supervisor_or_shell(request)
@@ -1138,13 +1378,13 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "detail": tr(request, "err.setup.routes_models_required")}
         if len(raw_models) > 20:
             return {"ok": False, "detail": tr(request, "err.setup.routes_too_many", max=20)}
-        old_by_name: Dict[str, str] = {}
+        old_by_name: Dict[str, Dict[str, Any]] = {}
         _m = (((getattr(config_manager, "config", None) or {}).get("ai") or {})
               .get("models")) or {}
         if isinstance(_m, dict):
             for nm, sp in _m.items():
                 if isinstance(sp, dict):
-                    old_by_name[str(nm)] = str(sp.get("api_key") or "")
+                    old_by_name[str(nm)] = dict(sp)
         cleaned: Dict[str, Any] = {}
         seen_names: set = set()
         for i, item in enumerate(raw_models):
@@ -1162,10 +1402,16 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             model = str(item.get("model") or "").strip()[:120]
             if not model:
                 return {"ok": False, "detail": tr(request, "err.setup.routes_model_empty", name=name)}
-            spec: Dict[str, Any] = {"base_url": base, "model": model}
+            old = old_by_name.get(name) or {}
+            spec: Dict[str, Any] = {k: v for k, v in old.items() if k != "api_key"}
+            spec["base_url"] = base
+            spec["model"] = model
+            bad = _coerce_model_extras(item, spec)
+            if bad:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_bad_field", name=name, field=bad)}
             key = str(item.get("api_key") or "").strip()
             if ("…" in key) or key.endswith("***"):
-                key = old_by_name.get(name, "")   # 掩码回传 → 沿用旧真值
+                key = str(old.get("api_key") or "")   # 掩码回传 → 沿用旧真值
             if key:
                 spec["api_key"] = key[:512]
             cleaned[name] = spec
@@ -1181,12 +1427,17 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     return {"ok": False,
                             "detail": tr(request, "err.setup.routes_unknown_profile", task=t, name=p)}
                 routes[t] = p
-        ok1, msg1 = config_manager.set_overlay_flag("ai.models", cleaned)
-        if not ok1:
-            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason=msg1)}
-        ok2, msg2 = config_manager.set_overlay_flag("ai.task_routes", routes)
-        if not ok2:
-            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason=msg2)}
+        ok = config_manager.save_overlay_patch(
+            {"ai": {"models": cleaned, "task_routes": routes}},
+            replace_paths=getattr(config_manager, "OVERLAY_REPLACE_PATHS",
+                                  ("ai.models", "ai.task_routes")))
+        if not ok:
+            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason="overlay")}
+        # save_overlay_patch 已按 replace 刷新内存；再赋一次防止旧桩/热重载竞态把删档合回来
+        ai_live = (getattr(config_manager, "config", None) or {}).setdefault("ai", {})
+        if isinstance(ai_live, dict):
+            ai_live["models"] = cleaned
+            ai_live["task_routes"] = routes
         ai_ready = await reload_ai_runtime(request.app, config_manager)
         return {"ok": True, "detail": tr(request, "setup.routes.saved"),
                 "models": len(cleaned), "routes": len(routes), "ai_ready": bool(ai_ready)}
@@ -1208,8 +1459,7 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         base = str((body or {}).get("base_url") or "").strip().rstrip("/")[:300]
         if not base or "://" not in base:
             return {"ok": False, "detail": tr(request, "err.setup.routes_base_invalid", name="-")}
-        if not base.endswith("/v1"):
-            base = base + "/v1"
+        base = _v1_base(base)
         key = str((body or {}).get("api_key") or "").strip()
         cfg = getattr(config_manager, "config", None) or {}
         ai_cfg = cfg.get("ai") or {}

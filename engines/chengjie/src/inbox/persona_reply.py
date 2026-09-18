@@ -913,6 +913,53 @@ async def _generate_persona_reply_impl(
     except Exception:
         logger.debug("[persona_reply] 交接提醒跳过", exc_info=True)
 
+    # 记忆探针（2026-09-18，「还记得我们第一次聊什么吗」→「脑子有点空」事故）：客户在考
+    # 记忆时按问题从 inbox 时间线取**原文证据**注入（最早几条 / 关键词命中行 / 自报名字），
+    # 查不到就注「坦白说记不清，别编」。保守词表，普通聊天零触发零 token；store 缺席
+    # （工作台 DOM 抓取无 conversation_id）→ 静默跳过。与时间锚点共用 extra_hint 消费口。
+    try:
+        from src.inbox.memory_probe import probe_detail_from_store as _mp_probe
+        _ibx_mp = getattr(state, "inbox_store", None)
+        _cid_mp = str(conversation_id or "").strip()
+        if not _cid_mp and platform and _acct and chat_key:
+            try:
+                from src.inbox.normalizer import conv_id as _conv_id_fn2
+                _cid_mp = _conv_id_fn2(platform, _acct, str(chat_key))
+            except Exception:
+                _cid_mp = ""
+        _mpb, _mp_kind, _mp_n = ("", "", 0)
+        _sem_rows = None
+        if _ibx_mp is not None and _cid_mp:
+            _mp_text = str(last_inbound or "")
+            # 语义兜底（2026-09-18 N2）：关键词子串对同义改写无能为力（「火锅」→「涮肉」）；
+            # 探针命中且是 recall 类时，用 inbox 侧库向量索引补召回行再合并进证据。
+            # 嵌入未配置 / 熔断 / 超时 → 静默只用关键词证据，绝不阻塞出稿。
+            try:
+                from src.inbox.memory_probe import detect_memory_probe as _mp_detect
+                if _mp_detect(_mp_text) == "recall":
+                    from src.inbox.semantic_recall import recall_rows_async as _sem_recall
+                    _cm_sr = getattr(state, "config_manager", None)
+                    _sem_rows = await _sem_recall(
+                        _ibx_mp, _cid_mp, _mp_text, ai_client=ai,
+                        config=getattr(_cm_sr, "config", None) or {})
+            except Exception:
+                logger.debug("[persona_reply] 语义召回跳过", exc_info=True)
+                _sem_rows = None
+            _mpb, _mp_kind, _mp_n = _mp_probe(
+                _ibx_mp, _cid_mp, _mp_text, semantic_rows=_sem_rows or None)
+        if _mpb:
+            _tc_metric("memory_probe_hint")
+            # 观测先行（2026-09-18）：按类型计数 + 「查无证据」占比——占比高＝检索层不够
+            # （该上语义索引）或客户在编造往事（该走 false_premise），两者处置完全不同。
+            _tc_metric(f"memory_probe:{_mp_kind or 'unknown'}")
+            if _mp_n <= 0:
+                _tc_metric("memory_probe_no_evidence")
+            if _sem_rows:
+                _tc_metric("memory_probe_semantic_assist")
+            _time_hint = f"{_time_hint}\n{_mpb}" if _time_hint else _mpb
+    except Exception:
+        logger.debug("[persona_reply] 记忆探针跳过", exc_info=True)
+
     # P-1 C（#259 #254 · 34585H E/F）：生成侧「AI 指纹」硬禁 + few-shot——禁破折号 / 分号 /
     # 列表、不引用上下文没有的「对方说过」、无历史不假装熟悉、一两句。与时间锚点共用
     # extra_hint 单一消费口 → 统一引擎 / 直连 / 兜底三条路径一处全覆盖。后处理

@@ -39,6 +39,17 @@ _stats: Dict[str, Any] = {
     "calls": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
     "completion_tokens": 0, "reasoning_tokens": 0, "since_ts": time.time(),
 }
+_STAT_KEYS = ("prompt_tokens", "cache_hit_tokens", "cache_miss_tokens",
+              "completion_tokens", "reasoning_tokens")
+#: 按 lane 分桶（2026-09-18）：本地 173（vLLM prefix cache）与云端（DeepSeek 缓存）的命中率
+#: 是两件事，混成一个总数谁也读不出「人设块分层在 173 上值不值」。键＝purpose（local_primary /
+#: local_fallback），云主链未标 purpose → "cloud"。
+_stats_by_lane: Dict[str, Dict[str, int]] = {}
+
+
+def _lane_of(purpose: str) -> str:
+    p = str(purpose or "").strip()
+    return p if p.startswith("local") else "cloud"
 
 
 def _clip(s: Any, n: int = MAX_TEXT_CHARS) -> str:
@@ -137,9 +148,12 @@ def record(*, messages: List[Dict[str, Any]], model: str, host: str = "",
             _entries.append(entry)
             if ok and uf["prompt_tokens"]:
                 _stats["calls"] += 1
-                for k in ("prompt_tokens", "cache_hit_tokens", "cache_miss_tokens",
-                          "completion_tokens", "reasoning_tokens"):
+                lane = _stats_by_lane.setdefault(
+                    _lane_of(purpose), {"calls": 0, **{k: 0 for k in _STAT_KEYS}})
+                lane["calls"] += 1
+                for k in _STAT_KEYS:
                     _stats[k] += uf[k]
+                    lane[k] += uf[k]
             seq = _seq
         try:  # 按模型档分桶（conv_route stats「谁在花哪家的钱」）
             from src.ai import conv_route as _cr
@@ -241,10 +255,16 @@ load_summaries()
 
 
 def cache_stats() -> Dict[str, Any]:
+    """滚动缓存统计：总计 + ``by_lane``（cloud / local_primary / local_fallback 各自的命中率）。"""
     with _lock:
         s = dict(_stats)
+        lanes = {k: dict(v) for k, v in _stats_by_lane.items()}
     pt = s.get("prompt_tokens") or 0
     s["hit_ratio"] = round(s["cache_hit_tokens"] / pt, 4) if pt else 0.0
+    for v in lanes.values():
+        lp = v.get("prompt_tokens") or 0
+        v["hit_ratio"] = round(v["cache_hit_tokens"] / lp, 4) if lp else 0.0
+    s["by_lane"] = lanes
     return s
 
 
@@ -286,3 +306,4 @@ def reset() -> None:
                   "completion_tokens", "reasoning_tokens"):
             _stats[k] = 0
         _stats["since_ts"] = time.time()
+        _stats_by_lane.clear()

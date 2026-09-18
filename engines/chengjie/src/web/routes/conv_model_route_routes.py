@@ -112,7 +112,7 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
             return out
 
         patch = {k: body[k] for k in ("profile", "depth", "effort", "thinking", "bypass_safety",
-                                      "model")
+                                      "drop_consistency", "model")
                  if k in body}
         if not patch:
             out = conv_route.describe(ibx, cid, cfg)
