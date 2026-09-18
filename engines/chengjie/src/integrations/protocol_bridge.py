@@ -892,6 +892,7 @@ def ingest_incoming(
     sender_name: str = "",
     backfill: bool = False,
     backfill_source: str = "",
+    decrypt_fail: bool = False,
 ) -> Optional[str]:
     """把一条 protocol 消息落库到统一收件箱。返回 conversation_id（失败返回 None）。
 
@@ -978,13 +979,20 @@ def ingest_incoming(
         src.setdefault("chat_type", str(chat_type))
     # P-2 A / F：回填 / 自聊 → source 打标（ingest_collected_chats 据此跳过自动化）+ 不计未读
     from src.inbox.normalizer import (
-        BACKFILL_KEY, BACKFILL_SOURCE_KEY, SELF_CHAT_KEY, is_self_chat,
+        BACKFILL_KEY, BACKFILL_SOURCE_KEY, DECRYPT_FAIL_KEY, SELF_CHAT_KEY,
+        is_decrypt_fail_source, is_self_chat,
     )
     _backfill = bool(backfill) or bool(src.get(BACKFILL_KEY))
     if _backfill:
         src[BACKFILL_KEY] = 1
         if backfill_source:
             src[BACKFILL_SOURCE_KEY] = str(backfill_source)[:32]
+    _decrypt_fail = bool(decrypt_fail) or is_decrypt_fail_source(src)
+    if _decrypt_fail:
+        src[DECRYPT_FAIL_KEY] = 1
+        # 不用 backfill：要未读 + SSE；起草由 ingest._skip_autodraft 拦
+        _backfill = False
+        src.pop(BACKFILL_KEY, None)
     _self_chat = is_self_chat(platform, str(account_id), str(chat_key), src)
     if _self_chat:
         src[SELF_CHAT_KEY] = 1
@@ -1022,6 +1030,9 @@ def ingest_incoming(
             and str(chat.get("chat_type") or "") == "group"):
         _base = str(chat.get("last_msg") or "")
         chat["last_msg"] = f"{_sender_name}：{_base}" if _base else _sender_name
+    if _decrypt_fail and direction == "in":
+        from src.inbox.decrypt_fail_marker import LIST_PREVIEW as _df_preview
+        chat["last_msg"] = _df_preview
     try:
         _n = ingest_collected_chats(
             store, [chat], publish_events=(direction == "in" and not _quiet))
@@ -1033,7 +1044,21 @@ def ingest_incoming(
                 1 if _backfill else 0, 1 if _self_chat else 0,
                 str(src.get(BACKFILL_SOURCE_KEY) or "-"),
                 chat.get("conversation_id"), int(float(ts or 0)), int(_n or 0))
-        if _backfill and not _self_chat and _n > 0:
+        if _decrypt_fail and direction == "in":
+            # #279：占位可见（未读+SSE）；黄条；明文到了再清。不起草。
+            try:
+                from src.inbox.decrypt_fail_marker import mark as _mark_df
+                _mark_df(str(chat.get("conversation_id") or ""), store=store)
+            except Exception:
+                logger.debug("[protocol_bridge] decrypt_fail_marker 失败", exc_info=True)
+            if _n > 0:
+                try:
+                    from src.inbox.dormant_review import note_real_inbound
+                    note_real_inbound(store, str(chat["conversation_id"]),
+                                      inbound_ts=float(ts or 0))
+                except Exception:
+                    logger.debug("[protocol_bridge] decrypt_fail note_real 失败", exc_info=True)
+        elif _backfill and not _self_chat and _n > 0:
             # P-2 D / E：回填结算观察者——同步静默后跑停联登录扫描 + 沉寂清单 + 登录确认框
             try:
                 from src.inbox.dormant_review import note_backfill
@@ -1051,6 +1076,11 @@ def ingest_incoming(
                 note_real_inbound(store, str(chat["conversation_id"]), inbound_ts=float(ts or 0))
             except Exception:
                 logger.debug("[protocol_bridge] note_real_inbound 失败", exc_info=True)
+            try:
+                from src.inbox.decrypt_fail_marker import clear as _clear_df
+                _clear_df(str(chat.get("conversation_id") or ""), store=store)
+            except Exception:
+                logger.debug("[protocol_bridge] decrypt_fail_marker clear 失败", exc_info=True)
         # P2-2（2026-07-23）：出站镜像也发 SSE 事件（独立类型 outbound_message，不复用
         # inbox_message——前端对后者会给非选中会话 unread+1，出站消息不该点未读）。
         # 条件 _n>0 =「真的新插入」：编排器镜像与 worker fromMe 回显同 msg_id 落同键，

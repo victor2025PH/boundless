@@ -1014,6 +1014,16 @@ def maybe_auto_create_goal(
         # 自己不是获客对象）。
         if str(chat_key or "").strip().lower() == "me":
             return None
+        # 夜跑演练号段（990001xxx）排除（2026-09-13 实锤：duel 假会话被当成
+        # 新好友建了 auto 获客目标 → 拍排了发不出 → 运维群「服务器常备循环停摆」）。
+        try:
+            from src.utils.case_center import is_drill_uid
+            if (is_drill_uid(str(chat_key or ""))
+                    or is_drill_uid(str(conversation_id or ""))
+                    or is_drill_uid(str(uc.get("chat_id") or ""))):
+                return None
+        except Exception:
+            pass
         personas = [str(x).strip() for x in (ac.get("personas") or [])
                     if str(x).strip()]
         if not personas:
@@ -1572,6 +1582,29 @@ def persona_topic_pool(persona: Any) -> List[str]:
     return uniq
 
 
+_WEATHER_TOPIC_MARKS = ("天气", "weather", "晴天", "雨天", "sun or rain")
+_WEATHER_DONE_MARKS = (
+    "天气", "weather", "下雨", "下雨了", "raining", "rainy", "sunny", "how was the weather",
+)
+
+
+def _topic_is_weather(topic: str) -> bool:
+    t = str(topic or "").lower()
+    return any(m.lower() in t for m in _WEATHER_TOPIC_MARKS)
+
+
+def _conv_weather_answered(inbox_store: Any, conversation_id: str) -> bool:
+    """近史里已经聊过天气 → 兜底话题不再问天气。"""
+    try:
+        hist = recent_history(inbox_store, conversation_id, limit=16) or []
+    except Exception:
+        return False
+    blob = " ".join(str((m or {}).get("text") or "") for m in hist).lower()
+    if not blob:
+        return False
+    return any(m.lower() in blob for m in _WEATHER_DONE_MARKS)
+
+
 def pick_proactive_topic(
     conversation_id: str, persona: Any, *, inbox_store: Any = None, now: Optional[float] = None,
     lang: str = "zh",
@@ -1596,6 +1629,14 @@ def pick_proactive_topic(
             if not fb:
                 fb = list(_FALLBACK_TOPICS)
             pool = [e if en else zh for zh, e in fb]
+        if _conv_weather_answered(inbox_store, conversation_id):
+            pool = [t for t in pool if not _topic_is_weather(t)]
+            if not pool:
+                fb = [(zh, e) for zh, e in _FALLBACK_TOPICS
+                      if not _topic_is_weather(zh) and not _topic_is_weather(e)]
+                pool = [e if en else zh for zh, e in fb if (e if en else zh) not in used]
+                if not pool:
+                    pool = [e if en else zh for zh, e in fb]
         if not pool:
             return ""
         day = time.strftime("%Y-%m-%d", time.localtime(n))

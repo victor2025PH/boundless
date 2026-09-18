@@ -666,7 +666,7 @@
 /* ── 会话级模型路由（conv_route，2026-09-12）：composer「模型」「模式」双入口（.cmp-sel）+ 双面板（mv- / mp-）──
    两个入口同一个组件：26px 高、7px 圆角、「图标 · 标签 · 当前值 · ▾」，像素级等尺寸；不再挂独立状态胶囊。
    无限制态用 --tk-violet（全站唯一拿紫的功能：不与蓝主操作 / 红危险 / 琥珀提醒撞色），且只染「模式」
-   按钮——「模型」按钮永远中性，两处同时变紫是噪音。只用 --tk-* / --xl-* / --bg-* 令牌，零裸色。 */
+   按钮——「模型」按钮保持可点（ChatX 行就在模型面板里）。只用 --tk-* / --xl-* / --bg-* 令牌，零裸色。 */
 .cmp-sel{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;max-width:230px;border:1px solid var(--btn-border);border-radius:7px;background:var(--bg-elev);font:inherit;font-size:11px;line-height:1;color:var(--text-sub);white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s;}
 .cmp-sel:hover,.cmp-sel[aria-expanded="true"]{border-color:var(--accent);color:var(--accent);background:var(--bg-soft);}
 .cmp-sel:focus-visible{outline:2px solid var(--xl-accent);outline-offset:1px;}
@@ -678,7 +678,8 @@
 .cmp-sel .cmp-sel-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--btn-border);}
 .cmp-sel .cmp-sel-dot.ok{background:var(--tk-ok-ink);}
 .cmp-sel .cmp-sel-dot.off{background:var(--tk-danger);}
-.cmp-sel.dim .cmp-sel-val{opacity:.6;}                       /* 无限制态：模型按钮退为「只读展示」 */
+.cmp-sel.dim .cmp-sel-val{opacity:.6;}
+.mv-tag.unr{border-color:color-mix(in srgb,var(--tk-violet) 45%,transparent);color:var(--tk-vio-ink);background:color-mix(in srgb,var(--tk-violet) 12%,transparent);}
 .cmp-sel.warn{border-color:color-mix(in srgb,var(--tk-amber) 60%,transparent);}
 #mode-btn.vio{border-color:color-mix(in srgb,var(--tk-violet) 60%,transparent);background:color-mix(in srgb,var(--tk-violet) 14%,transparent);color:var(--tk-vio-ink);}
 #mode-btn.vio .cmp-sel-val,#mode-btn.vio .rt-ic{color:var(--tk-vio-ink);}

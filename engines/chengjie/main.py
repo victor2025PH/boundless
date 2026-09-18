@@ -154,15 +154,13 @@ class AIChatAssistant:
                     self.logger.info("AvatarHub 语音预热已调度（后台）")
             except Exception as ex:
                 self.logger.warning("AvatarHub 语音预热调度异常（忽略）: %s", ex)
-            # 2c'. #333 视觉身份层人设原型预热（vision.face_identity.enabled 时）：常驻人设的
-            #     人脸原型算好落 JSON 缓存，首图不再冷算 ~600ms。同 AvatarHub 模式：后台
-            #     daemon fire-and-forget，边车不健康直接放弃（入站时照旧现算），绝不挡启动。
+            # 2c'. #333 视觉身份层人设原型预热：常驻人设的人脸原型算好落 JSON 缓存，
+            #     首图不再冷算 ~600ms。同 AvatarHub 模式：后台 daemon fire-and-forget。
+            #     未启用 / 边车不健康由 warmup 自己放弃（入站时照旧现算），绝不挡启动。
             try:
-                if (((self.config.config.get("vision") or {}).get("face_identity") or {}).get("enabled")):
-                    from src.companion.face_identity import warmup_persona_prototypes_async
-                    warmup_persona_prototypes_async(
-                        self.config.config, config_path=getattr(self.config, "config_path", None))
-                    self.logger.info("视觉身份层人设原型预热已调度（后台）")
+                from src.companion.face_identity import warmup_persona_prototypes_async
+                warmup_persona_prototypes_async(
+                    self.config.config, config_path=getattr(self.config, "config_path", None))
             except Exception as ex:
                 self.logger.warning("视觉身份层预热调度异常（忽略）: %s", ex)
             self._boot_mark("local_tts")
@@ -223,7 +221,7 @@ class AIChatAssistant:
                 from src.ai.hosted_gateway import (
                     ensure_hosted_ai, ensure_hosted_asr, ensure_hosted_embed,
                     ensure_hosted_telegram, ensure_hosted_vision,
-                    ensure_hosted_voice, start_refresh_daemon)
+                    ensure_hosted_voice, ensure_hosted_chatx, start_refresh_daemon)
                 if await asyncio.to_thread(ensure_hosted_ai, self.config):
                     self.logger.info("托管 AI 网关已就绪（设备令牌）")
                 # 托管 Telegram 凭据：用户只登录、不填 api_id/hash（池未配则静默跳过）
@@ -242,6 +240,8 @@ class AIChatAssistant:
                 # 里按当时的 ai.embedding_* 一次性建好，之后改配置不重建）。
                 if await asyncio.to_thread(ensure_hosted_embed, self.config):
                     self.logger.info("托管嵌入已就绪（LAN 不可达时经网关，语义记忆不降级）")
+                if await asyncio.to_thread(ensure_hosted_chatx, self.config):
+                    self.logger.info("托管 ChatX 27B 已就绪（LAN 不可达时经网关，不改写成云厂商）")
                 start_refresh_daemon(self.config)
             except Exception as _hg:
                 self.logger.debug("托管网关跳过: %s", _hg)

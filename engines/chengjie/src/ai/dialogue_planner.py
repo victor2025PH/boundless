@@ -126,7 +126,12 @@ def plan_voice_performance(
     # 分条决策（短回复/切不出第二条 → 单条，与原路径同口径）
     parts_txt: List[str] = [core] if core else []
     should_split = False
-    if core and len(core) >= min_total:
+    try:
+        from src.ai.voice_clone_client import effective_min_total as _emt
+        _min_total_eff = _emt(core, min_total)      # 2026-09-12：拉丁文按 3 倍字符折算
+    except Exception:
+        _min_total_eff = min_total
+    if core and len(core) >= _min_total_eff:
         try:
             from src.ai.voice_clone_client import pack_voice_parts
             packed = pack_voice_parts(

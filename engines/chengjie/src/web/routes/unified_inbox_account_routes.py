@@ -1495,6 +1495,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         # P-2 A（#259）：边车打的回填标记（history_set / resync / upsert_append）——落库不触发
         _backfill = bool((body or {}).get("backfill"))
         _backfill_source = str((body or {}).get("backfill_source") or "")
+        _decrypt_fail = bool((body or {}).get("decrypt_fail")) or _backfill_source == "decrypt_fail"
         _contact_name = ""
         if not _raw_name or _raw_name == _ck:
             try:
@@ -1660,6 +1661,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             sender_name=_sender_name,
             backfill=_backfill,
             backfill_source=_backfill_source,
+            decrypt_fail=_decrypt_fail,
         )
         # Q-24 A/C（#298）：边车出站回抄的来源标记 ``origin``——
         #   external    手机端 Messenger 发出的消息回抄（sender_id="external" 已随落库，
@@ -1689,7 +1691,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         # 旧口径 `!= "group"` 会把 channel / supergroup / LINE room 全放进来）。
         # spam 类陌生人请求只入收件箱、不自动回。
         # P-2 A / F：回填历史 / 自聊会话不进协议链直发（与 B 线拟稿同口径）。
-        if direction == "in" and _one_to_one and not _is_spam_request and not _backfill:
+        if direction == "in" and _one_to_one and not _is_spam_request and not _backfill and not _decrypt_fail:
             from src.inbox.normalizer import is_self_chat as _is_self_chat
             if _is_self_chat(_plat, _acct, _ck):
                 logger.info("[inbound] self_chat=1 conv=%s:%s:%s skipped_autoreply=1",
@@ -3213,8 +3215,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             loop = getattr(pyro, "loop", None)
             if pyro is None or loop is None or not loop.is_running():
                 return {"ok": False, "reason": "client_unavailable"}
+            # from_latest：从云端最新往回拉。默认锚点语义只取比库内最旧 id 更早的，
+            # 群消息实时入站又会被「未触发不处理」闸掉 → 刚进群的询价永远补不进工作台
+            # （2026-09-18 P6 社群舞台实锤）。坐席刷新 / 录屏 incoming 传 from_latest=true。
+            from_latest = bool((body or {}).get("from_latest"))
             offset_id = 0
-            if anchor:
+            if anchor and not from_latest:
                 try:
                     offset_id = int(str(anchor.get("platform_msg_id") or "0"))
                 except (TypeError, ValueError):
@@ -3732,8 +3738,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
         cid = f"telegram:{account_id}:{chat_key}"
         anchor = store.get_oldest_message(cid)
+        # from_latest：从云端最新往回拉。默认锚点语义只取比库内最旧 id 更早的，
+        # 群消息实时入站又会被「未触发不处理」闸掉 → 刚进群的询价永远补不进工作台
+        # （2026-09-18 P6 社群舞台实锤）。坐席刷新 / 录屏 incoming 传 from_latest=true。
+        from_latest = bool((body or {}).get("from_latest"))
         offset_id = 0
-        if anchor:
+        if anchor and not from_latest:
             try:
                 offset_id = int(str(anchor.get("platform_msg_id") or "0"))
             except (TypeError, ValueError):

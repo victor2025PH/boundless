@@ -226,6 +226,103 @@ def synth_gate(vp: Any, *, check_files: bool = False) -> Dict[str, Any]:
     }
 
 
+_PRESET_KEEP_KEYS = ("instruct_style", "emotion", "format", "enabled")
+
+
+def _preset_backend_for_voice(voice: str) -> str:
+    v = _s(voice)
+    if not v:
+        return "edge_tts"
+    try:
+        from src.ai.edge_voice_catalog import OPENAI_VOICES
+        if v.lower() in OPENAI_VOICES:
+            return "openai"
+    except Exception:
+        pass
+    return "edge_tts"
+
+
+def _clone_has_identity(vp: Dict[str, Any]) -> bool:
+    ref = _s(vp.get("reference_audio_path"))
+    spk = _s(vp.get("speaker_id"))
+    has_ref = bool(ref) and any(ch.isalnum() for ch in ref)
+    has_spk = bool(spk) and any(ch.isalnum() for ch in spk)
+    return has_ref or has_spk
+
+
+def _preset_voice_from_illegal(vp: Dict[str, Any]) -> Dict[str, Any]:
+    voice = _s(vp.get("voice"))
+    out: Dict[str, Any] = {k: vp[k] for k in _PRESET_KEEP_KEYS if k in vp and vp[k] not in (None, "")}
+    out["voice_mode"] = VOICE_MODE_PRESET
+    out["backend"] = _preset_backend_for_voice(voice)
+    out["voice"] = voice
+    if "enabled" not in out:
+        out["enabled"] = True
+    return out
+
+
+def coerce_voice_profile_for_import(
+    vp: Any, *, check_files: bool = False,
+) -> Tuple[Any, Dict[str, Any]]:
+    """导入收口：非法 ``voice_profile`` → 可保存的合法档。不改入参。
+
+    保存闸（PUT）仍拒绝非法组合（#205）。导入不能把「解析过了、写入 400」留给用户，
+    也不能把还能用的克隆录音降成预置声。
+
+    返回 ``(vp_out, info)``。``info`` 空＝未改写（含仅 warning）。改写时::
+
+        {action, voice_problems, voice}
+
+    ``action``：
+
+    - ``preset``：克隆无录音但带了预置声名（Claire / skuio Mizuki）→ Edge/OpenAI 预置；
+    - ``strip_preset_voice``：克隆身份齐备、只多了残留 Neural 名 → 清空 ``voice``、保留克隆；
+    - ``off``：其余无法推断的非法档 → 不发语音。
+    """
+    problems = validate_voice_profile(vp, check_files=check_files)
+    errs, _warns = split_problems(problems)
+    if not errs:
+        return vp, {}
+    codes = [str(p.get("code") or "") for p in errs]
+    src = dict(vp) if isinstance(vp, dict) else {}
+    info_base = {"voice_problems": codes, "voice": _s(src.get("voice"))}
+
+    if (
+        "clone_missing_reference" not in codes
+        and "clone_with_preset_voice" in codes
+        and _clone_has_identity(src)
+    ):
+        out = dict(src)
+        out["voice"] = ""
+        out["voice_mode"] = VOICE_MODE_CLONE
+        still, _ = split_problems(validate_voice_profile(out, check_files=False))
+        if not still:
+            return out, {**info_base, "action": "strip_preset_voice", "voice": ""}
+
+    if _s(src.get("voice")) and _looks_like_preset_voice_name(_s(src.get("voice"))):
+        candidate = _preset_voice_from_illegal(src)
+        still, _ = split_problems(validate_voice_profile(candidate, check_files=False))
+        if not still:
+            return candidate, {**info_base, "action": "preset", "voice": candidate["voice"]}
+
+    return dict(DEFAULT_NEW_VOICE_PROFILE), {**info_base, "action": "off", "voice": ""}
+
+
+def apply_import_voice_coerce(
+    persona: Dict[str, Any], *, check_files: bool = False,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """对人设文档做导入语音收口。未改写时返回原对象；改写时浅拷贝并替换 ``voice_profile``。"""
+    if not isinstance(persona, dict):
+        return persona, {}
+    new_vp, info = coerce_voice_profile_for_import(
+        persona.get("voice_profile"), check_files=check_files)
+    if not info:
+        return persona, {}
+    out = dict(persona)
+    out["voice_profile"] = new_vp
+    return out, info
+
+
 def apply_new_persona_voice_default(persona: Dict[str, Any]) -> Dict[str, Any]:
     """新建人设：没带任何语音配置 → 写入 ``{voice_mode: off}``（D-L4）。
 
@@ -279,7 +376,8 @@ __all__ = [
     "BLOCKING_PROBLEM_CODES",
     "DEFAULT_NEW_VOICE_PROFILE", "PRESET_BACKENDS", "VOICE_MODES",
     "VOICE_MODE_CLONE", "VOICE_MODE_OFF", "VOICE_MODE_PRESET",
-    "apply_new_persona_voice_default", "binding_summary", "derive_voice_mode",
+    "apply_import_voice_coerce", "apply_new_persona_voice_default",
+    "binding_summary", "coerce_voice_profile_for_import", "derive_voice_mode",
     "resolve_clone_backend", "split_problems", "synth_gate", "validate_voice_profile",
     "voice_mode_is_off",
 ]

@@ -4,6 +4,7 @@
   GET  /developer
   POST /developer/auth
   POST /developer/logout
+  GET  /model-keys   （登录即可，不走开发者密码闸）
 
 依赖：templates / require_auth / config_manager（经 AdminRouteContext）。
 """
@@ -62,6 +63,12 @@ def register_developer_page_routes(app, ctx) -> None:
             "dev_unlocked": False,
             "dev_error": "密码错误，请重试",
         })
+
+    @app.get("/model-keys", response_class=HTMLResponse)
+    async def model_keys_page(request: Request):
+        """厂商模型档与密钥：登录即可，不走开发者密码闸。"""
+        _require_auth(request)
+        return templates.TemplateResponse(request, "model_keys.html", {})
 
     @app.post("/developer/logout")
     async def developer_logout(request: Request):

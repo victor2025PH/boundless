@@ -48,6 +48,14 @@ def _clip(s: Any, n: int = MAX_TEXT_CHARS) -> str:
     return t[:n] + f"\n…[已截断，原长 {len(t)} 字符]"
 
 
+def _public_host(host: str, model: str) -> str:
+    try:
+        from src.ai.conv_route import public_host_for
+        return public_host_for(host, model)
+    except Exception:
+        return ""
+
+
 def usage_fields(usage: Any) -> Dict[str, int]:
     """从 OpenAI SDK usage 对象 / dict 抽 tokens（含 DeepSeek 缓存字段与推理 token）。绝不抛。"""
     out = {"prompt_tokens": 0, "completion_tokens": 0,
@@ -112,7 +120,9 @@ def record(*, messages: List[Dict[str, Any]], model: str, host: str = "",
                     if ln.strip().startswith("【") and "】" in ln]
         entry = {
             "ts": time.time(), "conv": conv or "", "request_id": request_id or "",
-            "model": model, "host": host, "purpose": purpose, "ok": bool(ok),
+            "model": model, "host": host,
+            "public_host": _public_host(host, model),
+            "purpose": purpose, "ok": bool(ok),
             "latency_ms": int(latency_ms or 0),
             "system_chars": len(sys_txt), "history_msgs": max(0, len(hist) - 1),
             "system_sections": sections[:60],

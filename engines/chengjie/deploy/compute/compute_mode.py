@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 """compute_mode.py — 智聊算力模式工具（ai.primary 的薄壳，README 同目录）。
 
-⛔ 2026-08-22 老板指令：``local`` / ``local_only`` 档**已从本工具移除**——
+📌 **现行档位（2026-09-17 03:15 起，R88 老板拍板）：``ai.primary=local`` +
+   ``ai.primary_lock=local``——主链是 173 vLLM ``chatx``，云端（DeepSeek）只是回落。**
+   切换经治理接口 ``POST /api/setup/ai-primary`` 完成、审计台账 `lock_changed` /
+   `switch_saved`（actor=r88_followup）可查。锁值不再是 cloud，因此：
+   - 本工具 ``cloud`` 档会被锁拒跑（见 main）——**这是预期**，不是故障；要回 cloud 先
+     由老板改锁；
+   - health_watchdog 的「:8001 连败自动热切 cloud」保险在锁=local 时只报不切
+     （切了会被锁打回，只制造噪音）；
+   - 所有对外表述（运维群告警文案 / 日报「主链」/ 官网算力看板）以 ``ai.primary`` +
+     ``ai.primary_lock`` **现值**为准，不得写死档位——下面 08-22 一段是**锁机制的由来**，
+     不是当前档位。
+
+⛔ 2026-08-22 老板指令（锁机制由来）：``local`` / ``local_only`` 档**已从本工具移除**——
    2026-08-21 05:49 老板令主链回 cloud 后数小时内被「切回 local_only」类自动化
    翻回，直接导致 08-22 凌晨客服链三连 45s 超时静默不回。现：
    - 主链档位由 ``ai.primary_lock``（老板锁）治理，引擎装载点强制执行 + 全程审计
      （src/ai/ai_primary_audit.py，台账=实例 logs/ai_primary_audit.jsonl）；
    - 本工具只保留 status / cloud（回滚方向）/ prep / cleanup——**只能向云端方向走**；
-   - 恢复本地档＝老板拍板 → overlay 改 ai.primary_lock → 治理接口切换，
-     任何执行器不得自动切回。
+   - 改档＝老板拍板 → overlay 改 ai.primary_lock → 治理接口切换，
+     任何执行器不得自动切档（两个方向都不许）。
 
 用法（默认 dry-run 只打印 diff，--apply 才落盘；绝不重启进程）：
 
@@ -194,7 +206,13 @@ def cmd_status(overlay: Path) -> None:
     eps = col.get("llm_endpoints") or []
     print(f"overlay        : {overlay}")
     print(f"ai.primary     : {ai.get('primary') or 'cloud（未设=默认）'}")
-    print(f"云主链         : {ai.get('model')} @ {ai.get('base_url')}")
+    print(f"ai.primary_lock: {ai.get('primary_lock') or '（未设锁）'}")
+    _p = str(ai.get('primary') or 'cloud').lower()
+    print("主链落点       : " + ("本地 vLLM（ai.fallback 端点）" if _p in ("local", "local_only")
+                                else "云端（ai.base_url）")
+          + ("，本地失败不回落云端" if _p == "local_only" else ""))
+    print(f"云端端点       : {ai.get('model')} @ {ai.get('base_url')}"
+          + ("（回落）" if _p in ("local", "local_only") else "（主链）"))
     print(f"ai.fallback    : {fb.get('model')} @ {fb.get('base_url')} (enabled={fb.get('enabled')})")
     for i, ep in enumerate(eps):
         print(f"colloquial[{i}]  : {ep.get('model')} @ {ep.get('base_url')}")

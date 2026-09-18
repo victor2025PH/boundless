@@ -30,7 +30,8 @@ KEY = "abort_ledger:v1"
 MAX_ROWS = 200
 # 「今日拦截」卡的原因码表（顺序 = 卡片展示顺序）
 REASONS = ("adult", "risk_hold", "needs_human", "agent_sent", "agent_typing",
-           "mode_changed", "work_schedule", "dup_suppressed")
+           "mode_changed", "work_schedule", "dup_suppressed",
+           "risk_recorded")   # R88：敏感话题命中但类别未锁定——**只记录**，AI 照常回（不是拦截）
 _ALIASES = {
     "agent_send": "agent_sent",
     "mode_switch": "mode_changed",

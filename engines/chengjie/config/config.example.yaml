@@ -1660,7 +1660,7 @@ ai:
     rewrite: false        # L4 口语化改写：本地小模型整段重写+事实锁把关，失败原句直通。
                           # 需 role 在包内 speech_prints.json 有说话指纹；会增加约 1~5s 出口延迟
                           # （文字聊天可接受再开；与 voice_colloquial_llm 只开一个）
-    rewrite_llm: ""       # 改写后端（OpenAI 兼容 chat/completions；空=包缺省 .173 qwen14b）
+    rewrite_llm: ""       # 改写后端（OpenAI 兼容 chat/completions；空=包缺省 .173:8001 chatx / Qwen3-27B AWQ）
     rewrite_model: ""     # 改写模型名（空=包缺省）
     # #40 地区语气档（2026-09-04，随 enabled 总闸）：让中文回复「像本地人说话」
     # ——zh-TW 台灣口語（啦/耶/喔/欸 + 禁大陸/北方口語與網路詞）、zh-HK 港式粵文
@@ -2919,16 +2919,18 @@ vision:
   # empty_failover_rescued（挽回数）——rescued/try 即挽回率，接近 0 说明空答是确定性的，建议关掉。
   empty_retry:
     enabled: false
-  # 视觉身份层（#333 EREM2H，2026-09-17；默认关）：客户发的图里**是谁**——人脸嵌入（176 边车
-  # scripts/face176，CPU ArcFace，端口 8767）比 人设原型（相册 face_ref + 本人照）/ 客户本人原型
-  # （客户亲口确认过的自拍）/ 已确认关系人 → 一句带外说明进拟稿 prompt（「这是 TA 本人」「不要猜
-  # 是谁，可以问」），并把观察落 <config_dir>/visual_memory.db（跨轮/跨天）。AI 推断永远只算
-  # observation；客户「是我 / 这是我妹妹」才升事实（user_confirmed 压过 ai_inferred）。
+  # 视觉身份层（#333 EREM2H，2026-09-17）：客户发的图里**是谁**——人脸嵌入（176 边车
+  # scripts/face176，CPU ArcFace，端口 8767；外网走官网 /api/ai/v1/face/embed）比 人设原型
+  # （相册 face_ref + 本人照）/ 客户本人原型（客户亲口确认过的自拍）/ 已确认关系人 → 一句带外
+  # 说明进拟稿 prompt（「这是 TA 本人」「不要猜是谁，可以问」），并把观察落
+  # <config_dir>/visual_memory.db（跨轮/跨天）。AI 推断永远只算 observation；客户「是我 /
+  # 这是我妹妹」才升事实（user_confirmed 压过 ai_inferred）。
   # 边车不可达 / 超时 / 无脸 → 空串零成本，拟稿零阻断；失败后 60s 不再打。
   # 只存 512 维向量不存脸图；删会话 = VisualMemoryStore.delete_conv。
+  # 干净包不写本段：托管识图（_hosted_vision）即开。显式 enabled: false 或 hosted_opt_out: true 关。
   face_identity:
     enabled: false
-    base_url: ""              # 如 http://192.168.0.176:8767（LAN）；外网坐席需网关路由（待接）
+    base_url: ""              # LAN 如 http://192.168.0.176:8767；空则跟随托管识图网关
     timeout_sec: 8
     min_det_score: 0.5        # 检测置信地板（小脸/侧脸低于此不算）
     persona_proto_max: 6      # 人设原型最多取 face_ref + 几张已启用本人照
@@ -4482,6 +4484,15 @@ bug_intake:
   # 不劣化）。置 false＝纯用户账号旧链。bot 消息回流观察管线时由自咬环守卫
   # 硬压制（防公示里的 bug 词被自己登记成新工单）。
   bot_send: true
+
+# ── 无界玩家数据网关（只读，菲律宾 UHost）────────────────────────
+# 客户消息里出现手机号 / 玩家 UID 时，向网关查余额·充提·打码，注入拟稿上下文。
+# 默认关。运营方接口只认 UID；手机号需在网关页与 UID 绑过一次。
+player_gateway:
+  enabled: false
+  url: "http://165.154.233.219"
+  key: ""
+  timeout_sec: 8
 
 # ── 出站策略单一开关（2026-09-04）──────────────────────────────────
 # unlimited_mode: true ＝「有 token 就全自动发」——一键短路所有**业务频控**层：

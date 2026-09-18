@@ -649,10 +649,46 @@ def register_reply_settings_routes(
             from src.inbox.risk_grader import risk_overrides_of
             for pid in (pm.list_profile_ids() or []):
                 p = pm.get_persona_by_id(pid) or {}
-                out.append({"id": str(pid), "name": str(p.get("name") or pid),
-                            "overrides": risk_overrides_of(p)})
+                row = {"id": str(pid), "name": str(p.get("name") or pid),
+                       "overrides": risk_overrides_of(p)}
+                # Q-26 #301（只读）：人设本身的成人 / 见面政策——回复设置页「成人 / 见面政策」
+                # 卡逐人设列出并深链回人设工坊对应格；空串 = 跟随域默认
+                try:
+                    b = p.get("boundaries") if isinstance(p.get("boundaries"), dict) else {}
+                    from src.inbox.adult_grader import normalize_policy as _np
+                    row["adult_policy"] = str(_np((b or {}).get("adult_policy")) or "")
+                    from src.inbox.commitment_guard import meeting_policy_of as _mp
+                    _pol, _months = _mp(p)
+                    row["meeting_policy"] = str(_pol or "never")
+                    row["meeting_months"] = int(_months or 0)
+                except Exception:
+                    row.setdefault("adult_policy", "")
+                    row.setdefault("meeting_policy", "never")
+                    row.setdefault("meeting_months", 0)
+                out.append(row)
         except Exception:
             logger.debug("[rk] 人设清单读取失败（忽略）", exc_info=True)
+        return out
+
+    def _rk_policy_defaults() -> dict:
+        """Q-26 #301（只读）：成人 / 见面政策的**域默认**——人设未显式设时实际生效的值。
+        成人：陪聊域 soft_reply、其余 human（adult_grader.default_policy）；见面：never。"""
+        out = {"adult": "human", "adult_source": "default", "domain": "", "meeting": "never",
+               "adult_policies": [], "meeting_policies": ["never", "after_months", "handoff"]}
+        try:
+            from src.inbox import adult_grader as ag
+            cfg = getattr(config_manager, "config", None) or {}
+            out["adult"] = str(ag.default_policy(cfg) or "human")
+            out["adult_source"] = ("default_companion" if out["adult"] == ag.DEFAULT_POLICY_COMPANION
+                                   else "default")
+            out["adult_policies"] = list(ag.POLICIES)
+            try:
+                from src.utils.business_domain import active_business_domain
+                out["domain"] = str(active_business_domain(cfg) or "")
+            except Exception:
+                pass
+        except Exception:
+            logger.debug("[rk] 政策默认读取失败（忽略）", exc_info=True)
         return out
 
     @app.get("/api/reply-settings/risk-grader")
@@ -663,13 +699,53 @@ def register_reply_settings_routes(
         pm = _rk_pm()
         pid = str(persona or "").strip()
         per = pm.get_persona_by_id(pid) if pid else None
+        _cfg = getattr(request.app.state, "config_manager", None) or config_manager
+        _cfg_d = getattr(_cfg, "config", None) or {}
         return {
             "ok": True, "enabled": True, "persona_id": pid if per else "",
             "levels": list(rg.LEVELS), "overridable": list(rg.OVERRIDABLE),
+            # R88：可锁类别 + 当前锁定（缺省空＝全部只记录、AI 照常回）
+            "lockable": list(rg.LOCKABLE), "locked": rg.locked_categories(_cfg_d),
             "cooldown_min": int(__import__("src.inbox.risk_hold", fromlist=["DEFAULT_COOLDOWN_MIN"]).DEFAULT_COOLDOWN_MIN),
-            "categories": rg.public_table(per),
+            "categories": rg.public_table(per, _cfg_d),
             "personas": _rk_personas(pm),
+            # Q-26 #301：成人 / 见面政策域默认（只读）——「自动化与风控」组「成人 / 见面政策」卡用
+            "policy_defaults": _rk_policy_defaults(),
         }
+
+    @app.post("/api/reply-settings/risk-grader/locks")
+    async def api_reply_settings_risk_grader_locks(
+        request: Request, _=Depends(api_auth),
+    ):
+        """R88：写「敏感话题」卡的锁定集合 ``inbox.risk_grading.locked``（overlay，保注释；免重启——
+        risk_grader 每次判定现读配置）。body ``{locked: [category, …]}``；只收 :data:`LOCKABLE`，其余 400。"""
+        from src.inbox import risk_grader as rg
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        raw = (body or {}).get("locked")
+        if not isinstance(raw, (list, tuple)):
+            return {"ok": False, "errors": [{"field": "locked", "code": "bad_value",
+                                            "message": tr(request, "rps_err_bad_value", field="locked")}]}
+        bad = [str(x) for x in raw if str(x or "").strip().lower() not in rg.LOCKABLE]
+        if bad:
+            return {"ok": False, "errors": [{"field": "locked", "code": "bad_enum",
+                                            "message": tr(request, "rps_err_bad_value", field=",".join(bad))}]}
+        clean = rg.normalize_locked(raw)
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        old = rg.locked_categories(getattr(cm, "config", None) or {})
+        ok, msg = cm.set_overlay_flag(rg.LOCK_CFG_PATH, list(clean))
+        try:
+            actor = str(request.session.get("username") or "web")
+        except Exception:
+            actor = "web"
+        logger.info("[risk] locks by=%s old=%s new=%s ok=%s msg=%s", actor, old, clean, ok, msg)
+        if not ok:
+            return {"ok": False, "errors": [{"field": "locked", "code": "save_failed", "message": str(msg or "")}]}
+        _append_audit(cm, actor=actor, changes={rg.LOCK_CFG_PATH: clean}, old_values={rg.LOCK_CFG_PATH: old})
+        return {"ok": True, "locked": clean, "lockable": list(rg.LOCKABLE),
+                "categories": rg.public_table(None, getattr(cm, "config", None) or {})}
 
     @app.get("/api/reply-settings/abort-ledger")
     async def api_reply_settings_abort_ledger(

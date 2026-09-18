@@ -188,6 +188,25 @@ def test_ticket_status_machine_and_list(bi):
     assert "1.0.39" in row["body"]
 
 
+def test_merge_ticket_closes_child_and_is_idempotent(bi):
+    a = bi.record_bug_ticket(chat_id=-100123, account_id="", reporter_id="u1",
+                             reporter_name="skuio", text="自拍回了 [Image] 没图")
+    b = bi.record_bug_ticket(chat_id=-100123, account_id="", reporter_id="u1",
+                             reporter_name="skuio", text="值守核对题：同一条 Cameron 线")
+    parent, child = a["ticket_id"], b["ticket_id"]
+    r = bi.merge_ticket(child, parent, note="并入真洞 #父 不单独修", by="p2-1")
+    assert r["ok"] and r["parent_id"] == parent and not r.get("already")
+    ch = bi.get_ticket(child)
+    pa = bi.get_ticket(parent)
+    assert int(ch["dup_of"]) == parent and ch["status"] == "closed"
+    assert "并入" in (ch.get("fix_note") or "")
+    assert f"#{child}" in (pa.get("body") or "")
+    r2 = bi.merge_ticket(child, parent, note="再并一次")
+    assert r2["ok"] and r2.get("already")
+    assert bi.merge_ticket(parent, parent)["ok"] is False
+    assert bi.merge_ticket(99999, parent)["ok"] is False
+
+
 # ── 触发三态 ───────────────────────────────────────────────────────────────────
 def test_verdict_none_outside_bug_group(bi):
     assert bi.trigger_verdict(CFG, -999, "u1", "报错了") is None
@@ -316,6 +335,7 @@ def test_fix_notify_text_mention_and_escape(bi):
     txt = bi.build_fix_notify_text(row)
     assert 'tg://user?id=12345' in txt
     assert "#12" in txt and "已修复" in txt
+    assert "问题：语音&lt;b&gt;发送失败" in txt
     assert "<b>" not in txt and "张&lt;三&gt;" in txt  # HTML 注入被转义
     # reporter_id 非数字 → 退化纯文本，不带深链
     row2 = {"id": 3, "reporter_id": "tg:abc", "reporter_name": "李四",

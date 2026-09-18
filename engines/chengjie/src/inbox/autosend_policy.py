@@ -27,10 +27,9 @@
 **09-04 放行的两条豁免（O-1 A · #252 #253 · D-O1，2026-09-08）**——不看 policy_mode：
 
 1. ``stop_contact`` / ``self_harm`` 命中（:data:`HARD_STOP_REASONS`）→ **硬停**。auto_ai 且
-   会话尚未冻结：本轮只放一条告别（``farewell=True``，level L2，正文由 ``drafts.py`` 换成
-   ``stop_contact.farewell_text``，不经 AI 生成），随后会话冻结（``hard_stop`` 非空 →
-   调用方 ``freeze_conversation``）；已冻结 / self_harm：AI 稿一律不自动发（stop_contact →
-   L4，self_harm → L1 人审）。review / manual 档保留其档位，但同样 ``hard_stop`` 冻结。
+   会话尚未冻结：不回客户（``farewell=False``，level L1，``review_required=True``），
+   调用方 ``freeze_conversation`` 只提醒坐席（需人工 + 通知中心）。已冻结：stop_contact →
+   L4，self_harm → L1 人审。review / manual 档保留其档位，同样 ``hard_stop`` 冻结、无出站。
    影子记录照常产出（台账要有这一行、值守群要收即时告警），去向行会如实写成未发。
 2. ``risk=high``（非停联）在 auto_ai + shadow 档 → **转人工审**（``review_required=True``，
    level L1，hold_reason ``risk_high_review``），不再直发；medium 仍放行进台账。
@@ -144,7 +143,7 @@ class Decision:
     automation_mode: str = "review"
     # O-1 A（D-O1）：硬停原因（stop_contact / self_harm / 空）——非空＝调用方须冻结会话
     hard_stop: str = ""
-    # 本轮放行的是「唯一一条告别」（level=L2 但正文必须换成 farewell_text，不发 AI 稿）
+    # 历史字段：锁定硬停不再出站（恒 False）。保留给旧草稿 / 测试兼容。
     farewell: bool = False
     # risk=high 非停联 → 转人工审（level=L1）
     review_required: bool = False
@@ -301,12 +300,11 @@ def decide(
     不传 platform 逐字节旧行为。
 
     ``conversation_frozen``（O-1 A）：调用方读到的 ``stop_contact.frozen_reason`` 非空——
-    已冻结的会话不再给第二条告别。
+    已冻结的会话不再出站。
 
-    - **硬停先于一切**（D-O1）：``peer_reasons`` 含 stop_contact / self_harm → 一律
+    - **硬停先于一切**（D-O1 / R88 锁定）：``peer_reasons`` 含 stop_contact / self_harm → 一律
       ``hard_stop=<reason>``（调用方据此冻结会话，不看 policy_mode / 档位）。level：
-      shadow × auto_ai × 未冻结 → L2「最多一条」（stop_contact 带 ``farewell=True``＝告别
-      模板；self_harm＝AI 那一句陪伴照发），shadow 记录照常产出＝台账 + 即时告警；
+      shadow × auto_ai × 未冻结 → L1 人审（``farewell=False``，不回客户，坐席消息提醒）；
       shadow × auto_ai × 已冻结 → stop_contact L4 / self_harm L1 人审（带 shadow 记录）；
       enforce → 旧表逐字 L4（shadow=None）；非 auto_ai → 保留档位（人已在环，不进台账）。
     - 非 ``auto_ai`` 档（review / manual / multi_choice）：用户显式选的人审/手动档，
@@ -481,9 +479,9 @@ def _decide_base(
     hits_l = [str(h) for h in (risk_hits or []) if str(h)]
     effective = max_risk(peer_risk or "low", reply_risk or "low")
 
-    # ── 硬停（D-O1 豁免①）：``hard_stop`` 冻结不看 policy_mode / 档位；
-    #    「唯一一条告别」只在 shadow × auto_ai × 未冻结 时给（enforce 档＝旧表逐字 L4，
-    #    review/manual 档＝人已在环，不代人说再见）。
+    # ── 硬停（D-O1 豁免① / R88 锁定）：``hard_stop`` 冻结不看 policy_mode / 档位；
+    #    未冻结也不回客户（无告别、无陪伴稿），只 L1 + 坐席提醒。enforce 档＝旧表逐字 L4，
+    #    review/manual 档＝人已在环，同样不代人出站。
     hard = hard_stop_reason(peer_reasons_l)
     if hard:
         if pm == POLICY_ENFORCE:
@@ -506,13 +504,10 @@ def _decide_base(
             risk_hits=hits_l,
         )
         if not conversation_frozen:
-            # 「最多一条」：level L2 让 worker 投这一条，随后调用方冻结会话。
-            # stop_contact → 正文由调用方换成 farewell_text（告别，不发 AI 稿）；
-            # self_harm → AI 那一句陪伴照发（与 R8「危机穿透照发」同向：零回应比一句陪伴更糟），
-            #             发完即冻结切人工——今天的差别是之后不再有第二条。
-            return Decision(level="L2", hold_reason="", shadow=rec,
+            # 锁定命中：不回客户（无告别、无固定稿），L1 挂起 + 调用方冻结/提醒坐席。
+            return Decision(level="L1", hold_reason=hard, shadow=rec,
                             policy_mode=pm, automation_mode=mode,
-                            hard_stop=hard, farewell=(hard == "stop_contact"))
+                            hard_stop=hard, farewell=False, review_required=True)
         lvl = "L4" if hard == "stop_contact" else "L1"
         return Decision(level=lvl, hold_reason=hard, shadow=rec,
                         policy_mode=pm, automation_mode=mode, hard_stop=hard)

@@ -377,6 +377,14 @@ ok(
   "main.js 防白闪三件套缺失（backgroundColor 深空底 / show:false / ready-to-show 再亮窗）"
 );
 ok(
+  /second-instance/.test(mainJs)
+    && /_focusExistingWindow/.test(mainJs)
+    && /second-instance createWindow/.test(mainJs)
+    && /_windowBootStarted/.test(mainJs)
+    && /no window 12s after taking single-instance lock/.test(mainJs),
+  "main.js 单实例无窗恢复缺失（二次启动须能补开窗；持锁 12s 无窗须退出放锁——2026-09-12 117 无窗僵尸）"
+);
+ok(
   (shellI18nSrcForSplash.match(/'splash\.amb\.engine\.0':/g) || []).length === 2,
   "shell-i18n.js 丢失「唤醒量子计算机群」氛围词条（zh/en 各一处）"
 );

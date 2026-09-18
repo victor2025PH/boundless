@@ -124,6 +124,12 @@ def _analyze_file(path: Path) -> Tuple[List[Tuple[int, str]], List[str], Set[str
                 if isinstance(sub, ast.Constant):
                     frag_ids.add(id(sub))
     dyn_tables: Set[str] = set()
+    # 表名也是变量的全动态迁移 f-string：``f"ALTER TABLE {table} ADD COLUMN {col} {decl}"``
+    # ——常量片段只剩 "ALTER TABLE "，_DYN_ALTER_RE 抓不到表名。这类文件通常配一张
+    # 迁移元组表 ``(("t", "col", "DECL"), …)`` 驱动循环（tiktok_huoke_bridge._MIGRATIONS
+    # 实锤：kind / last_seen_ts 被判幽灵 72h）。检测到该形状 → 把文件里所有三元字符串
+    # 元组合成完整 ALTER 收进 DDL，让联合库学到真列集（比整表豁免更保强度）。
+    table_driven_alter = False
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr):
             for piece in node.values:
@@ -131,8 +137,23 @@ def _analyze_file(path: Path) -> Tuple[List[Tuple[int, str]], List[str], Set[str
                     m = _DYN_ALTER_RE.search(piece.value)
                     if m:
                         dyn_tables.add(m.group(1).lower())
+            vals = node.values
+            for i, piece in enumerate(vals[:-1]):
+                if (isinstance(piece, ast.Constant) and isinstance(piece.value, str)
+                        and re.search(r"ALTER\s+TABLE\s*$", piece.value, re.I)
+                        and isinstance(vals[i + 1], ast.FormattedValue)):
+                    table_driven_alter = True
     dml: List[Tuple[int, str]] = []
     ddl: List[str] = []
+    if table_driven_alter:
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Tuple, ast.List)) or len(node.elts) != 3:
+                continue
+            if all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                   for e in node.elts):
+                t, c, d = (e.value.strip() for e in node.elts)  # type: ignore[union-attr]
+                if re.fullmatch(r"\w+", t) and re.fullmatch(r"\w+", c) and d:
+                    ddl.append(f"ALTER TABLE {t} ADD COLUMN {c} {d}")
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
             continue
@@ -362,6 +383,29 @@ def test_false_positive_classes_excluded(tmp_path):
     lits, _ddl, dyn = _analyze_file(planted)
     assert lits == []
     assert dyn == {"kb_entries"}
+
+
+def test_table_driven_migration_tuples_harvested(tmp_path):
+    """``f\"ALTER TABLE {t} ADD COLUMN {c} {d}\"`` + 三元迁移表 → DDL 收割到列。
+
+    2026-09 tiktok_huoke_bridge._MIGRATIONS 形状：表名变量导致 _DYN_ALTER_RE
+    抓不到表名、整表又不该豁免——只能把元组合成完整 ALTER 灌进联合库。
+    """
+    planted = tmp_path / "mig.py"
+    planted.write_text(
+        '_MIGRATIONS = (\n'
+        '    ("lead_accounts", "last_seen_ts", "REAL NOT NULL DEFAULT 0"),\n'
+        '    ("outbound", "kind", "TEXT NOT NULL DEFAULT \'comment\'"),\n'
+        ')\n'
+        'def migrate(conn, table, col, decl):\n'
+        '    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")\n',
+        encoding="utf-8",
+    )
+    _lits, ddl, dyn = _analyze_file(planted)
+    assert dyn == set()  # 表名是变量，不能走整表豁免
+    joined = "\n".join(ddl).lower()
+    assert "lead_accounts" in joined and "last_seen_ts" in joined
+    assert "outbound" in joined and "add column kind" in joined
 
 
 def test_union_schema_harvest_and_poisoning(tmp_path, corpus):

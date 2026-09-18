@@ -76,6 +76,9 @@ EMBED_ENV_BASE = "AITR_HOSTED_EMBED_BASE_URL"
 EMBED_ENV_MODEL = "AITR_HOSTED_EMBED_MODEL"
 #: 网关侧规范嵌入模型（服务端也会强制改写，此处只为客户端「模型名非空」前提）
 HOSTED_EMBED_MODEL = "bge-m3"
+#: 办公室 ChatX 27B（vLLM chatx）LAN 不可达时改写 ``ai.fallback`` 走官网网关。
+#: 热重载靠 ``AITR_HOSTED_CHATX`` 回放，否则 overlay 一写就把 173 地址抹回来。
+CHATX_ENV = "AITR_HOSTED_CHATX"
 #: 注入 voice_recognition 用的 api_key 占位值：OpenAITranscriber 在**调用时**把它
 #: 解析为当前设备令牌（AITR_HOSTED_AI_KEY）——转写器构建一次常驻，令牌 30 天
 #: 换新不能把旧值钉死在已构建实例里。
@@ -940,6 +943,111 @@ def ensure_hosted_embed(
     return True
 
 
+def _fallback_is_lan_chatx(fb: Any) -> bool:
+    if not isinstance(fb, dict) or fb.get("enabled") is False:
+        return False
+    base = str(fb.get("base_url") or "").strip()
+    if not base or not is_private_endpoint(base):
+        return False
+    return str(fb.get("model") or "").strip().lower() == "chatx"
+
+
+def apply_hosted_chatx(cfg: Dict[str, Any], gw_base: str) -> bool:
+    """把 ``ai.fallback`` 从 LAN chatx 改写到官网网关（纯内存，可逆）。
+
+    只动私网 ``model=chatx`` 的 fallback；公网/自建域名与非 chatx LAN 一律不碰。
+    ``api_key`` 刻意不写：对话客户端继承 ``ai.api_key``（设备令牌）。
+    """
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai:
+        return False
+    gw = str(gw_base or "").rstrip("/")
+    if not gw:
+        return False
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else None
+    if ai.get("_hosted_chatx") and fb and str(fb.get("base_url") or "").rstrip("/") == gw:
+        return True
+    if not _fallback_is_lan_chatx(fb):
+        return False
+    if not ai.get("_hosted_chatx"):
+        ai["_lan_chatx"] = {
+            "base_url": fb.get("base_url"),
+            "api_key": fb.get("api_key"),
+        }
+    fb["base_url"] = gw
+    fb.pop("api_key", None)
+    ai["_hosted_chatx"] = True
+    return True
+
+
+def restore_lan_chatx(cfg: Dict[str, Any]) -> bool:
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai or not ai.get("_hosted_chatx"):
+        return False
+    stash = ai.get("_lan_chatx") if isinstance(ai.get("_lan_chatx"), dict) else {}
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else None
+    if fb is None:
+        fb = {}
+        ai["fallback"] = fb
+    if stash.get("base_url"):
+        fb["base_url"] = stash["base_url"]
+    key = stash.get("api_key")
+    if key in (None, ""):
+        fb.pop("api_key", None)
+    else:
+        fb["api_key"] = key
+    ai.pop("_hosted_chatx", None)
+    ai.pop("_lan_chatx", None)
+    return True
+
+
+def ensure_hosted_chatx(
+    config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
+) -> bool:
+    """托管 ChatX 27B：LAN vLLM 不可达时 ``ai.fallback`` 改走官网 ``/api/ai/v1``。
+
+    办公室直连低延迟；外网同一产品名、同一 model=chatx，由网关 ``CHATX_RELAY_URLS``
+    转到同一台 173。未配中继时网关必须 503，不得把 chatx 钳成 DeepSeek。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai:
+        return False
+    if not str(ai.get("api_key") or "").startswith("cx."):
+        return False
+    gw = _gateway_base(cfg)
+    chk = probe or lan_alive
+
+    def _stamp_env() -> None:
+        os.environ[CHATX_ENV] = "1"
+
+    if ai.get("_hosted_chatx"):
+        stash = ai.get("_lan_chatx") if isinstance(ai.get("_lan_chatx"), dict) else {}
+        lan = str(stash.get("base_url") or "")
+        if lan and chk(lan):
+            restore_lan_chatx(cfg)
+            os.environ.pop(CHATX_ENV, None)
+            logger.info("[hosted-chatx] LAN ChatX 已恢复 → 还原直连")
+            return False
+        _stamp_env()
+        return True
+
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else None
+    if not _fallback_is_lan_chatx(fb):
+        return False
+    if chk(str(fb.get("base_url") or "")):
+        return False
+    if not apply_hosted_chatx(cfg, gw):
+        return False
+    _stamp_env()
+    logger.info(
+        "[hosted-chatx] LAN ChatX 不可达（%s）→ 改走网关 %s model=chatx",
+        fb.get("base_url"), gw)
+    return True
+
+
 def ensure_hosted_asr(
     config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
 ) -> bool:
@@ -1268,6 +1376,7 @@ def refresh_once(config_manager: Any) -> None:
         ensure_hosted_voice(config_manager)
         ensure_hosted_asr(config_manager)
         ensure_hosted_embed(config_manager)
+        ensure_hosted_chatx(config_manager)
     except Exception:
         logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
     try:

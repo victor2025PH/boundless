@@ -232,6 +232,51 @@ class AIClient(LoggerMixin):
         self._cb_half_open: bool = False
         self.logger.info("AI 客户端初始化")
 
+    def _notify_primary_switch(self, prev: Dict[str, Any], ai_config: Dict[str, Any],
+                               pa_append) -> None:
+        """装载点切档通知（2026-09-17）：本次解析的 (effective, lock) 与台账上一次生效态不同
+        → EventBus ``ai_primary_guard_alert kind=mode_switched``（tg-ywqz 订阅 ai_primary_guard）
+        + 台账 ``switch_notified``。上一次生效态未知（首次/台账空）不发——海量测试构造与
+        全新实例不该刷群。best-effort，绝不伤初始化。"""
+        try:
+            prev_eff = prev.get("effective") if isinstance(prev, dict) else None
+            if prev_eff is None:
+                return
+            prev_lock = (prev.get("lock") or None) if isinstance(prev, dict) else None
+            now_eff = self._primary_mode
+            now_lock = self._primary_lock or None
+            if prev_eff == now_eff and prev_lock == now_lock:
+                return
+            from src.ai.ai_primary_summary import build_summary
+            summary = build_summary({"ai": ai_config}, effective=now_eff, lock=now_lock or "")
+            payload = {
+                "kind": "mode_switched",
+                "from_mode": prev_eff,
+                "to_mode": now_eff,
+                "lock_from": prev_lock,
+                "lock": now_lock,
+                "effective": now_eff,
+                "primary_text": summary.get("primary_text"),
+                "chain_text": summary.get("chain_text"),
+                "mode_label": summary.get("mode_label"),
+                "via": "ai_client_init",
+                "rate_key": f"ai_primary_guard:switched:{now_eff}:{now_lock or '-'}",
+            }
+            if pa_append:
+                pa_append("switch_notified", mode_from=prev_eff, mode_to=now_eff,
+                          lock_from=prev_lock, lock=now_lock, via="ai_client_init")
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("ai_primary_guard_alert", payload)
+            try:
+                from src.ai.ai_primary_summary import nudge_compute_board
+                nudge_compute_board()
+            except Exception:
+                pass
+            self.logger.info("主链档位变化已通知运维群：%s/%s → %s/%s",
+                             prev_eff, prev_lock or "-", now_eff, now_lock or "-")
+        except Exception:
+            self.logger.debug("切档通知失败（已忽略）", exc_info=True)
+
     async def initialize(self, *, defer_probe: bool = False) -> bool:
         """初始化 AI 客户端。
 
@@ -563,6 +608,15 @@ class AIClient(LoggerMixin):
                 "严格隐私：本地失败也不回落云端"
                 if self._primary_mode == "local_only" else "本地失败可回落云端")
         # 审计 + 回写 + 告警（终态确定后做；全部 best-effort，绝不伤初始化主链）
+        # 切档通知（2026-09-17）：与台账里上一次生效态比对——档位或锁变了就通知运维群。
+        # 挂在装载点而非切换接口：09-17 的 cloud→local 是直接改 overlay 完成的，没走接口。
+        _prev_state: Dict[str, Any] = {"effective": None, "lock": None}
+        if _pa_append:
+            try:
+                from src.ai.ai_primary_audit import last_state as _pa_last
+                _prev_state = _pa_last()
+            except Exception:
+                _prev_state = {"effective": None, "lock": None}
         if _lock_enforced:
             if _pa_append:
                 _pa_append(
@@ -596,6 +650,7 @@ class AIClient(LoggerMixin):
                 "resolve", configured=_lock_cfg_mode,
                 effective=self._primary_mode,
                 lock=self._primary_lock or None, via="ai_client_init")
+        self._notify_primary_switch(_prev_state, ai_config, _pa_append)
 
         # 云端 Key 备用池：主 Key 坏了先切备用云 Key（质量与主链同级），全池失败才落本地。
         # 池条目缺省继承主链 base_url/model → 「同厂商备用号」只填 api_key 即可。
@@ -1064,26 +1119,50 @@ class AIClient(LoggerMixin):
         messages = self._apply_prompt_budget(messages, context)
 
         request_id = (context or {}).get("request_id", "")
+        _skip_cloud = self._lane_should_skip("cloud")
+        _skip_local = self._lane_should_skip("local")
         # P1 本地优先：本地模型即主链，在**所有云端逻辑之前**短路（云端熔断态与它无关）。
+        # 已登记掉线/欠费的档跳过探测，立刻让还能用的那一档顶上（三路互相顶）。
         if _local_primary:
-            local_reply = await self._try_local_fallback_chat(
-                messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check, as_primary=True,
-                model_override=use_local_model,
-            )
+            local_reply = None
+            if not _skip_local:
+                local_reply = await self._try_local_fallback_chat(
+                    messages, use_temperature, use_max_tokens, context, request_id,
+                    skip_quality_check=_skip_quality_check, as_primary=True,
+                    model_override=use_local_model,
+                )
+            elif self._primary_mode != "local_only":
+                self.logger.warning(
+                    "本地主链冷却中 → 跳过本轮探测，直走云端/备用池 request_id=%s",
+                    request_id or "n/a")
             if local_reply:
+                self._lane_note_ok("local")
                 return local_reply
+            if not _skip_local:
+                self._lane_note_fail("local", "connect")
             if self._primary_mode == "local_only":
                 # 严格隐私：绝不把用户内容发往云端 —— 宁可不回复，也不泄数据/乱回复。
                 self.logger.warning(
                     "本地主模型失败且 local_only（不回落云端）→ 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
-            if not self._oa_client:
+            if not self._oa_client and not self._pool_entries:
                 self.logger.warning(
                     "本地主模型失败且未配置云端主链 → 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
+            if _skip_cloud and self._pool_entries:
+                self.logger.warning(
+                    "本地主模型失败且云端主链欠费/失效冷却中 → 先试备用池 request_id=%s",
+                    request_id or "n/a")
+                pool_reply = await self._try_key_pool_chat(
+                    messages, use_temperature, use_max_tokens, context, request_id,
+                    skip_quality_check=_skip_quality_check,
+                )
+                if pool_reply:
+                    self._lane_note_ok("pool")
+                    return pool_reply
+                self._lane_note_fail("pool", "other")
             self.logger.warning(
                 "本地主模型失败 → 回落云端主链 request_id=%s", request_id or "n/a")
         if _cb_blocked:
@@ -1118,6 +1197,26 @@ class AIClient(LoggerMixin):
             self.logger.warning(
                 "Token enforce 降级失败（本地无话）→ 照走云端主链（永不断线优先）"
                 " request_id=%s", request_id or "n/a")
+        if (not _local_primary and not _cb_blocked and not _token_degraded
+                and _skip_cloud and (self._pool_entries or (self._fb_client and self._fb_model))):
+            self.logger.warning(
+                "云端主链欠费/失效冷却中 → 先试备用池/本地 request_id=%s",
+                request_id or "n/a")
+            pool_reply = await self._try_key_pool_chat(
+                messages, use_temperature, use_max_tokens, context, request_id,
+                skip_quality_check=_skip_quality_check,
+            )
+            if pool_reply:
+                self._lane_note_ok("pool")
+                return pool_reply
+            fb_reply = await self._try_local_fallback_chat(
+                messages, use_temperature, use_max_tokens, context, request_id,
+                skip_quality_check=_skip_quality_check,
+                model_override=use_local_model,
+            )
+            if fb_reply:
+                self._lane_note_ok("local")
+                return fb_reply
         last_error = None
         start_time = time.time()
         _attempts_made = 0
@@ -1258,6 +1357,7 @@ class AIClient(LoggerMixin):
                             _ms.record_ai_success()
                         except Exception:
                             pass
+                    self._lane_note_ok("cloud")
                     return reply
                 # finish=length 且推理 token 占满 = 思维链耗光 max_tokens 预算
                 # （非网络/密钥问题）——带上三元组，下次这类问题看一行日志即定位。
@@ -1311,6 +1411,8 @@ class AIClient(LoggerMixin):
             except Exception:
                 pass
             return self._fallback_reply(_fb_lang)
+        self._lane_note_fail("cloud", _fail_reason if last_error is not None else "empty",
+                             last_error)
         self._alert_key_failure_if_matches(last_error)
         pool_reply = await self._try_key_pool_chat(
             messages, use_temperature, use_max_tokens, context, request_id,
@@ -1326,6 +1428,28 @@ class AIClient(LoggerMixin):
         if fb_reply:
             return fb_reply
         return self._fallback_reply(_fb_lang)
+
+    def _lane_should_skip(self, lane: str) -> bool:
+        try:
+            from src.ai.compute_lanes import should_skip
+            return bool(should_skip(lane))
+        except Exception:
+            return False
+
+    def _lane_note_ok(self, lane: str) -> None:
+        try:
+            from src.ai.compute_lanes import note_ok
+            note_ok(lane)
+        except Exception:
+            pass
+
+    def _lane_note_fail(self, lane: str, kind: str, err: Any = None) -> None:
+        try:
+            from src.ai.compute_lanes import note_fail
+            detail = str(err)[:200] if err is not None else ""
+            note_fail(lane, str(kind or "other"), detail)
+        except Exception:
+            pass
 
     def _alert_label(self) -> str:
         """告警里的可读身份：``model @ host``（如 deepseek-chat @ api.deepseek.com），
@@ -1478,6 +1602,7 @@ class AIClient(LoggerMixin):
                 self.logger.warning(
                     "主 Key 不可用 → 备用 Key 已出话 key=%s model=%s elapsed=%.1fs request_id=%s",
                     entry["name"], entry["model"], elapsed, request_id or "n/a")
+                self._lane_note_ok("pool")
                 try:
                     from src.utils.host_alert import notify_host
                     notify_host(
@@ -1510,6 +1635,7 @@ class AIClient(LoggerMixin):
                         notify_key_failure(entry["label"], str(e)[:200])
                 except Exception:
                     pass
+        self._lane_note_fail("pool", "other")
         return None
 
     async def _try_local_fallback_chat(
@@ -1626,9 +1752,11 @@ class AIClient(LoggerMixin):
                     "主" if as_primary else "兜底", request_id or "n/a")
                 if not as_primary:
                     self._record_local_fallback_metric(False)
+                self._lane_note_fail("local", "empty")
                 return None
             elapsed = time.time() - t0
             self._fb_ok += 1
+            self._lane_note_ok("local")
             if as_primary:
                 self._last_primary_ok_ts = time.time()
             else:
@@ -1690,6 +1818,7 @@ class AIClient(LoggerMixin):
                 _body = ""
             self.logger.warning(
                 "本地兜底模型也失败: %s%s", e, f" | body={_body}" if _body else "")
+            self._lane_note_fail("local", self._classify_ai_error(e), e)
             return None
 
     @staticmethod
@@ -1744,6 +1873,8 @@ class AIClient(LoggerMixin):
             sc = 0
         if sc in (502, 503, 504) or "internalservererror" in joined or sc >= 500:
             return "gateway_5xx"
+        if sc == 402 or "insufficient" in msg or "余额不足" in msg or "arrears" in msg:
+            return "quota"
         if sc in (401, 403) or "authenticationerror" in joined or "permissiondeniederror" in joined:
             return "auth"
         if "502" in msg or "503" in msg or "bad gateway" in msg or "service unavailable" in msg:
@@ -3925,6 +4056,9 @@ class AIClient(LoggerMixin):
         _known_prof = (context.get("_known_profile_block") or "").strip()
         if _known_prof:
             prompt_parts.append(_known_prof)
+        _player_data = (context.get("_player_data_block") or "").strip()
+        if _player_data:
+            prompt_parts.append(_player_data)
         # B52（实施64 P1-2）：人设自述近况衔接（要睡了/去健身…TTL 窗内有块即消费）
         _self_state = (context.get("_self_state_block") or "").strip()
         if _self_state:

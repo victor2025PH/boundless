@@ -124,4 +124,28 @@ def read_tail(limit: int = 50) -> List[Dict[str, Any]]:
         return []
 
 
-__all__ = ["resolve_lock", "audit_path", "append_event", "read_tail", "AUDIT_FILENAME"]
+def last_state(limit: int = 200) -> Dict[str, Any]:
+    """台账里**上一次已知的生效态**：``{"effective": ..., "lock": ...}``（缺则键为 None）。
+
+    取最近一行带 ``effective`` 的 resolve/lock_enforced 行（装载点写的才是真生效值；
+    switch_saved 只是「保存了」）。用于装载点判断「这次解析与上次相比档位/锁变了没」——
+    切档通知（2026-09-17）挂在这里而不是切换接口：09-17 的 cloud→local 是直接改 overlay
+    完成的，根本没走接口；只有装载点是所有途径的必经之路。
+    """
+    out: Dict[str, Any] = {"effective": None, "lock": None}
+    try:
+        for row in reversed(read_tail(limit)):
+            if not isinstance(row, dict) or "effective" not in row:
+                continue
+            if str(row.get("event") or "") not in ("resolve", "lock_enforced"):
+                continue
+            out["effective"] = row.get("effective")
+            out["lock"] = row.get("lock")
+            return out
+    except Exception:
+        pass
+    return out
+
+
+__all__ = ["resolve_lock", "audit_path", "append_event", "read_tail", "last_state",
+           "AUDIT_FILENAME"]

@@ -297,6 +297,16 @@ _EMITTED_ALERTS = [
       "reminder": False, "rate_key": "draft_backlog:remind"}),
     ("draft_backlog", "draft_backlog_alert",
      {"recovered": True, "rate_key": "draft_backlog:recovered"}),
+    # 系统标签泄漏（2026-09-12「[我方语音消息]」事故）：告警态 + 恢复态
+    ("label_leak", "label_leak_alert",
+     {"count": 4, "system_label": 4, "bracket_prefix": 0, "conversations": 1,
+      "top_conversations": [["whatsapp:639270135480:639273815533", 4]],
+      "sample_tags": ["[我方发出的语音]", "[Voice message from our side]", "[我方语音消息]"],
+      "lookback_hours": 24, "latest_ts": 1789217241.0,
+      "latest_text": "[我方语音消息] 天哪，我这边说英语。", "latest_media": "",
+      "reminder": False, "unchanged": False, "rate_key": "label_leak:remind"}),
+    ("label_leak", "label_leak_alert",
+     {"recovered": True, "lookback_hours": 24, "rate_key": "label_leak:recovered"}),
     # 前端脚本 bug（2026-09-15 `_psnArRender` 人设工坊 3.5 天不可用零告警）：告警态 + 恢复态
     ("frontend_error", "frontend_error_alert",
      {"symbols": 1, "hits": 7, "pages": ["/personas"],
@@ -417,6 +427,15 @@ _EMITTED_ALERTS = [
      {"recovered": True, "host": "192.168.0.176:11434",
       "url": "http://192.168.0.176:11434",
       "rate_key": "lan_gpu:192.168.0.176:11434:recovered"}),
+    ("compute_lane", "compute_lane_alert",
+     {"lane": "cloud", "label": "DeepSeek 官方", "kind": "quota",
+      "kind_zh": "没有费用 / 余额不可用", "detail": "余额为 0",
+      "standins": ["173 本地 vLLM"], "down_minutes": 6, "reminder": False,
+      "remind_key": "compute_lane:cloud",
+      "rate_key": "compute_lane:cloud:0"}),
+    ("compute_lane", "compute_lane_alert",
+     {"recovered": True, "lane": "cloud", "label": "DeepSeek 官方",
+      "rate_key": "compute_lane:cloud:recovered"}),
     ("colloquial_llm", "colloquial_llm_alert",
      {"down_minutes": 45, "fail_streak": 5, "reminder": False,
       "rate_key": "colloquial_llm:remind"}),
@@ -433,6 +452,14 @@ _EMITTED_ALERTS = [
     ("ai_primary_guard", "ai_primary_guard_alert",
      {"kind": "lock_rejected", "requested": "local_only", "lock": "cloud",
       "actor": "user:admin", "rate_key": "ai_primary_guard:lock"}),
+    # 装载点切档通知（2026-09-17）：overlay/接口任一途径改档，运维群都要收到
+    ("ai_primary_guard", "ai_primary_guard_alert",
+     {"kind": "mode_switched", "from_mode": "cloud", "to_mode": "local",
+      "lock_from": "cloud", "lock": "local", "effective": "local",
+      "primary_text": "本地 vLLM chatx（档位 local，锁 local）",
+      "chain_text": "本地 LAN .173 vLLM chatx → 回落 deepseek-official deepseek-chat → canned",
+      "mode_label": "本地主链（可回落云端）", "via": "ai_client_init",
+      "rate_key": "ai_primary_guard:switched:local:local"}),
     # 入站漏球（P0 2026-08-05：客户最后一句既没被回也没拟稿——draft_backlog 只看
     # 「有稿没人处理」，「压根没稿」此前零信号）：告警态 + 恢复态各过一遍
     ("unanswered_inbound", "unanswered_inbound_alert",
@@ -531,6 +558,14 @@ _EMITTED_ALERTS = [
     ("scan_stall", "scan_loop_stall_alert",
      {"loop": "goal_sprint_sends", "recovered": True,
       "rate_key": "scan_stall:goal_sprint_sends:recovered"}),
+    # M-7 D：单目标 stalled 点名——旧文案套成「常备循环停摆：goal_sprint_goal」
+    ("scan_stall", "scan_loop_stall_alert",
+     {"loop": "goal_sprint_goal", "goal_id": "52d57b432fab410b",
+      "conversation_id": "telegram:8244899900:990001088", "title": "",
+      "reminder": False, "rate_key": "scan_stall:goal:52d57b432fab410b"}),
+    ("scan_stall", "scan_loop_stall_alert",
+     {"loop": "goal_sprint_goal", "recovered": True,
+      "rate_key": "scan_stall:goal:52d57b432fab410b:recovered"}),
     # 内嵌网页端选择器失配（2026-08-10）：三类症状文案各不相同（元素找不到 vs
     # 找到了取不出内容 vs 取不到消息 id），全过一遍防某一支渲染成空文案。
     ("inject_health", "inject_health_alert",

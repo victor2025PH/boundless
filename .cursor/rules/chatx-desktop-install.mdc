@@ -20,6 +20,15 @@ alwaysApply: false
 
 ## 单一版本（D-Q11，2026-09-11 老板「不要内测版，只要一个版本」）
 
+## 发版通道（2026-09-18 老板）
+
+常规发版只做三件事：打 `dist:win:clean` → `website/scripts/publish_chatx.ps1` 上官网
+（public；内测渠道仍按上节做同字节桥）→ 频道发版帖（遵守上文文案纪律，不附自动更新尾巴）。
+
+**不要**再 `push_chatx` / 重装到局域网坐席 **173/`yunsheng`、198/`kouxing`、104/`lianbei`、
+140/`tingxie`**，除非用户**当次**明确说「装到这几台 / 173 / 198 …」。这些机器走客户端
+对 `latest.yml` 的自动更新。下面「安装到这几台机器」的第 5–7 步仅在点名坐席机时才跑。
+
 从 1.0.81 起 **R 批只出一个包 = clean 形态**（`npm run dist:win:clean` → `dist-clean\`），坐席机、内测机、
 公网用户装同一个 exe；`dist:win`（smart / internal，带「内测版」角标 + seed-data）**不再是发版产物**。
 - 一个 semver 只对应一个包：不许同号重切不同内容（1.0.80 两包同号 → 坐席机停在无 P0 修复的旧内容，
@@ -208,8 +217,10 @@ alwaysApply: false
 ### 173 第三坑：静默安装器卡死在 CopyFiles（2026-09-17 发 1.0.87 实测）
 
 - **与 System.dll 0xC0000005 是两码事**：进程不崩、CPU≈0、`Responding=True`，`$PLUGINSDIR\7z-out` 已解完（~9118 文件 / 1.28GB），却永远不写入 `%LOCALAPPDATA%\Programs\telegram-ai-desktop`。NSIS `CopyFiles` = `SHFileOperation(FO_COPY)`；同树 `robocopy` 6 秒完成。bisect：`locales` 55 文件 OK，`resources\backend`（2958）/`resources\services`（6077）对 SHFileOperation 挂死。Defender RTP 开关不影响。
-- **处置**：确认 7z-out 文件数/字节与 `build-info.json` version 对得上 → 杀所有 `ChatX-Setup*` → `robocopy` 进 INSTDIR → 写 HKCU Uninstall 的 DisplayVersion → 快捷方式 → `relaunch_chatx_node.ps1` + `verify_seat_backend_node.ps1`。**不要**再叠第四次 SSH `/S`（只会再攒一份 ns*.tmp，~20GB）。
-- 控制台会话 `/IT` 计划任务在 Win11 26200.9168 上也可能 LastResult=0x1 不跑；此坑不能再指望「静默 4 次失败后自动兜底」。
+- **已内建自愈（2026-09-17 当晚落 `install_chatx_node.ps1` 步骤 4）**：安装器不再 `-Wait` 死等，改 watchdog 轮询——7z-out 与 INSTDIR 字节、stub CPU 三者同时 **120s 不变** 且 7z-out 非空 ＝ CopyFiles 挂死 → `Complete-FromExtracted`：核 `build-info.json` version == 安装包版本、树体积 ≥ 压缩包（半棵树不装）、树 5s 内不再变 → 杀 stub → `robocopy /MIR` 进 INSTDIR（旧文件镜像掉）→ 核文件数/字节相等 → 写 HKCU `Uninstall\1c379198-…`（= uuid5(appId)，与安装器同键；不写悬空 UninstallString，落 `ChatXManualInstall` 标记）→ 桌面/开始菜单快捷方式 → 清本次 `ns*.tmp`。日志行 `installer exit=(bypassed: robocopy from extracted tree)` 与末尾 `install path: robocopy bypass` 即走了旁路。完全无解包 20 分钟 ＝ 杀掉当作一次崩溃重试。静态不变量：`tests/test_install_node_script_invariants.py`；行为用临时 harness 抽真函数体/真 for 循环对假 stub 验过（旁路三态 + 硬顶杀四轮）。
+- 人工处置（脚本旁路也失败时）：同上逻辑手做——确认 7z-out 对版 → 杀所有 `ChatX-Setup*` → `robocopy` → 注册表 → 快捷方式 → `relaunch_chatx_node.ps1` + `verify_seat_backend_node.ps1`。**不要**再叠第四次 SSH `/S`（只会再攒一份 ns*.tmp，~20GB）。
+- 控制台会话 `/IT` 计划任务在 Win11 26200.9168 上也可能 LastResult=0x1 不跑；此坑不能指望「静默 4 次失败后自动兜底」，靠的是上面的旁路。
+- 旁路装出的机器**没有 Uninstall 智聊.exe**：下次升级 `uninstallOldVersion` 找不到卸载器会跳过并直接覆盖（脚本步骤 3 也是 `uninstaller missing, skip`），若再挂死则再次旁路 `/MIR`——语义仍正确。
 
 ### 173 第二坑：装后「smoke 过 → 几分钟内 DOWN」＝残留旧后端抢端口（2026-08-13 发 1.0.25 实测两轮复现；**2026-08-17 已根修**）
 

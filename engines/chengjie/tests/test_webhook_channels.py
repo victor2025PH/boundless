@@ -159,6 +159,10 @@ def test_event_severity_taxonomy():
         assert event_severity(et) == "info", et
     assert event_severity("ai_cost_report") == "report"
     assert event_severity("never_registered_event") == "info"
+    # scan_loop_stall：ticker 心跳仍 critical；目标有货零真发降 warning
+    assert event_severity("scan_loop_stall_alert") == "critical"
+    assert event_severity("scan_loop_stall_alert",
+                          {"loop": "goal_sprint_sends"}) == "warning"
     assert severity_allows("info", "info") and severity_allows("critical", "critical")
     assert not severity_allows("warning", "info") and not severity_allows("critical", "warning")
     # 日报 / 业务不受门槛影响（靠订阅选择）

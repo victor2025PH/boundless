@@ -2211,7 +2211,9 @@ function wireEditContextMenu(wc) {
   });
 }
 
+let _windowBootStarted = false;
 async function createWindow() {
+  _windowBootStarted = true;
   for (const acc of config.accounts || []) {
     await applyProxyForAccount(acc);
     await applyWhatsappSessionUa(acc);
@@ -3619,16 +3621,32 @@ function setupVersionTelemetry() {
 // 单实例锁（双实例竞态根治）：多开桌面壳会各自 backendManager.start() → 各自探活后
 // 各自 spawn 后端，端口先到者赢、后到者绑定失败成僵尸实例（曾观测到双 python main.py）。
 // 第二个实例直接退出，并把已有窗口唤到前台（符合「再次启动=聚焦既有窗口」的预期）。
+function _focusExistingWindow() {
+  const w = BrowserWindow.getAllWindows()[0];
+  if (!w) return false;
+  try { if (w.isMinimized()) w.restore(); w.show(); w.focus(); } catch (e) { /* ignore */ }
+  return true;
+}
 const _gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!_gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const w = BrowserWindow.getAllWindows()[0];
-    if (w) {
-      try { if (w.isMinimized()) w.restore(); w.show(); w.focus(); } catch (e) { /* ignore */ }
+    if (_focusExistingWindow()) return;
+    // 持锁进程还没亮窗（或窗已毁）：再点图标以前是空操作。whenReady 已过后补开一扇。
+    if (app.isReady()) {
+      try { createWindow(); } catch (e) { console.log("[boot] second-instance createWindow:", e); }
     }
   });
+  // 2026-09-12 117：两枚 3.6MB 无窗 智聊.exe 占着单实例锁，再点快捷方式无响应。
+  // createWindow 开头会 await 代理，这里绝不重入开窗（会双窗）；只退出放锁，下次点击冷启动。
+  // whenReady 已进 createWindow（_windowBootStarted）时放行：多账号代理探测可能超过 12s。
+  setTimeout(() => {
+    if (BrowserWindow.getAllWindows().length) return;
+    if (_windowBootStarted) return;
+    console.log("[boot] no window 12s after taking single-instance lock; exiting so next launch can recover");
+    try { app.exit(1); } catch (e) { /* ignore */ }
+  }, 12000);
 
   // 托管版令牌硬化：首次托管启动把出厂默认 "admin" 换成每机随机值（客户全程无感）。
   // 必须发生在 backendManager.start **之前**——spawn 时经 AITR_WEB_TOKEN 注入新令牌。

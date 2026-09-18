@@ -550,6 +550,7 @@ class ConfigManager:
         hosted_voice = (os.environ.get("AITR_HOSTED_VOICE_BASE_URL") or "").strip()
         hosted_asr = (os.environ.get("AITR_HOSTED_ASR_BASE_URL") or "").strip()
         hosted_embed = (os.environ.get("AITR_HOSTED_EMBED_BASE_URL") or "").strip()
+        hosted_chatx = (os.environ.get("AITR_HOSTED_CHATX") or "").strip()
         if desktop or host or port or token:
             web = self.config.get("web_admin")
             if not isinstance(web, dict):
@@ -574,6 +575,8 @@ class ConfigManager:
             self._apply_hosted_media_env(hosted_voice, hosted_asr)
         if hosted_embed:
             self._apply_hosted_embed_env(hosted_embed)
+        if hosted_chatx:
+            self._apply_hosted_chatx_env()
 
     def _apply_hosted_ai_env(self, hosted_key: str) -> None:
         """把 ``AITR_HOSTED_AI_*`` 注入内存中的 ``ai.*``（用户自有 Key 不覆盖）。"""
@@ -703,6 +706,16 @@ class ConfigManager:
                               exc_info=True)
             return
         apply_hosted_embed(self.config, gw_base)
+
+    def _apply_hosted_chatx_env(self) -> None:
+        """回放托管 ChatX fallback 改写（LAN 不可达时改走网关）。"""
+        try:
+            from src.ai.hosted_gateway import apply_hosted_chatx, _gateway_base
+        except Exception:
+            self.logger.debug("托管 ChatX 回放不可用（hosted_gateway 导入失败）",
+                              exc_info=True)
+            return
+        apply_hosted_chatx(self.config, _gateway_base(self.config))
 
     def _ensure_baseline(self) -> None:
         """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。

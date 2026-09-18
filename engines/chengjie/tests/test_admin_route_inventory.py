@@ -795,6 +795,7 @@ _BASELINE = """
 /api/setup/ai-key	POST
 /api/setup/ai-primary	POST
 /api/setup/ai-primary/audit	GET
+/api/setup/ai-primary/summary	GET
 /api/setup/deploy-profile	GET
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
@@ -2149,6 +2150,12 @@ _ADDITIONS_2026_09_11_Q17_RISK_GRADER = """
 """
 _BASELINE += _ADDITIONS_2026_09_11_Q17_RISK_GRADER
 
+# R88（2026-09-17）：「敏感话题」卡默认只记录；锁定集合 inbox.risk_grading.locked 写 overlay（reply_settings_routes.py）。
+_ADDITIONS_2026_09_17_R88_RISK_LOCKS = """
+/api/reply-settings/risk-grader/locks	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_17_R88_RISK_LOCKS
+
 # Q-26 #301 #302（2026-09-12，A）：会话「AI 会不会回」单一状态（src/inbox/conv_state.compute 六源
 # 只读聚合：档位 / 需人工·风控持有 / 边车 / 作息外 / 让位 / 语言 / 起草失败）——会话头状态带
 # 45s 轮询 + 动作后即刷；/thread 响应顺带 conv_state。unified_inbox_read_routes.py。
@@ -2231,6 +2238,13 @@ _ADDITIONS_2026_09_17_VISUAL_MEMORY = """
 /api/visual-memory/{conversation_id}/entities/{entity_id}/retire	POST
 """
 _BASELINE += _ADDITIONS_2026_09_17_VISUAL_MEMORY
+
+# 2026-09-18 模型选择器：密钥管理从 /developer 密码墙拆到登录即可进的 /model-keys
+# （developer_page_routes.py GET；写接口仍走既有 /api/setup/model-routes）。
+_ADDITIONS_2026_09_18_MODEL_KEYS_PAGE = """
+/model-keys	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_18_MODEL_KEYS_PAGE
 
 
 def _parse_baseline():

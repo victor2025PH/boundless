@@ -372,7 +372,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Ctrl+V 粘贴进输入区做图片翻译。",
         "Open the image in the inbox viewer and hit Translate (OCR + "
         "translation); you can also paste a screenshot into the composer.",
-        "图片翻译 OCR 翻译图片 截图翻译 识别",
+        "图片翻译 OCR 翻译图片 截图翻译 识别 看不懂 什么意思 发的图",
         "/workspace",
     ),
     (
@@ -384,7 +384,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "With outbound auto-translate enabled, autosend and proactive messages "
         "are translated into the customer's language first (skipped when "
         "already in it). Admins enable it in config.",
-        "自动翻译 出站翻译 翻译 客户语言 外语",
+        "自动翻译 出站翻译 翻译 客户语言 外语 外国人 打中文 行不行",
         "",
     ),
     (
@@ -488,7 +488,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Proactive check-ins, morning/night rituals and care messages are "
         "supported with cooldown and quiet-hour guards; admins configure them "
         "and the ops board shows volume and reply rates.",
-        "主动 主动触达 问候 打招呼 主动消息 关怀",
+        "主动 主动触达 问候 打招呼 主动消息 关怀 别自己发 自己发消息 不要主动 关掉主动",
         "",
     ),
     (
@@ -792,7 +792,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Sources: repeated KB misses, negative feedback, and manually queued "
         "questions. Approve, reject or edit each draft. It improves future "
         "answers; conversations needing a human right now live in Cases.",
-        "学习队列 学习 训练 变聪明 草稿 审核 入库 未命中 knowledge",
+        "学习队列 学习 训练 变聪明 草稿 审核 入库 未命中 knowledge 答得更准 更准",
         "/learner",
     ),
     (
@@ -929,19 +929,35 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "developer-page",
         "开发者工具是什么 / 我进不去",
         "What the Developer tools page is",
-        "「开发者工具」放的是敏感配置：AI 接口与密钥、备用 Key 池、Bot 行为、"
-        "内部界面显隐等，因此在登录之外还有一道**独立的开发者密码**门"
+        "「开发者工具」放的是敏感配置：备用 Key 池、Bot 行为、内部界面显隐等，"
+        "因此在登录之外还有一道**独立的开发者密码**门"
         "（需要时请向技术支持索取，不要在聊天里传）。"
+        "日常要加 ChatGPT / Gemini 等厂商密钥，走侧栏「模型与密钥」即可，登录就能改。"
         "**这页不是给日常运营用的**——里面的开关配错可能让全站异常；"
         "需要改的东西大多在「系统设置」或「自动回复设置」里就有。",
-        "Developer tools holds sensitive configuration: AI endpoints and keys, "
-        "the backup key pool, bot behaviour and internal UI visibility, so it "
-        "sits behind a separate developer password (ask technical support when "
-        "you need it). It is not meant for day-to-day operations — a wrong "
-        "toggle here can break the whole site; most things you need are in "
+        "Developer tools holds sensitive configuration: the backup key pool, bot "
+        "behaviour and internal UI visibility, so it sits behind a separate "
+        "developer password (ask technical support when you need it). To add "
+        "ChatGPT / Gemini vendor keys, use Models & keys in the sidebar — sign in, "
+        "no developer password. This page is not meant for day-to-day operations — "
+        "a wrong toggle here can break the whole site; most things you need are in "
         "Settings or Reply settings.",
-        "开发者 开发者工具 developer 进不去 密码 高级 API key",
+        "开发者 开发者工具 developer 进不去 密码 高级",
         "/developer",
+    ),
+    (
+        "model-keys-page",
+        "怎么添加 ChatGPT / Gemini 密钥 / 模型面板为什么没有云厂商",
+        "How to add ChatGPT / Gemini keys / why cloud vendors are missing from Model",
+        "侧栏「模型与密钥」（登录即可，无需开发者密码）：选厂商预设、填 API Key、点「添加模型档」并保存。"
+        "保存后聊天工作台输入框上方「模型」面板就能按会话切换。ChatX聊天模型是本机/托管档，选它＝无限制（规则让路）。"
+        "坐席改不了时请管理员打开本页。",
+        "Sidebar Models & keys (signed-in; no developer password): pick a vendor preset, "
+        "paste the API key, add the profile and save. It then appears in the chat composer "
+        "Model panel per thread. ChatX chat model is the local/hosted row; picking it turns "
+        "on Unrestricted (rules step aside). If you cannot edit the page, ask an admin.",
+        "密钥 API Key ChatGPT Gemini Grok DeepSeek 模型与密钥 厂商 端点 model keys",
+        "/model-keys",
     ),
     # ── 总览缺口（2026-08-29，老板实测「回复的内容没一点帮助」）───────────────
     # 44 条 how-to 全是**具体任务**，没有一条讲「整体怎么用、我该从哪开始」——
@@ -1649,14 +1665,14 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "composer-model-mode",
         "会话里模型和模式有什么区别 / 怎么选上下文深度",
         "What is the difference between Model and Mode / how to set context depth",
-        "打开会话，输入框上方两个等宽按钮。「模型」选本会话用谁答（实例主链 / 已配置的 ChatGPT · Gemini · Grok · DeepSeek 等 / 本机私有），"
-        "只换端点，人设与风控规则照常。「模式」选按什么规矩答：标准（规则全开）或无限制（本机私有模型直答，规则让路），"
-        "并可调上下文深度、力度、思考。无限制要本机私有模型在线；选完应有保存提示。",
-        "Open a thread: two equal buttons sit above the composer. Model picks who answers (instance default / configured "
-        "ChatGPT · Gemini · Grok · DeepSeek / local private) and only changes the endpoint. Mode picks the rules: "
-        "Standard (all persona and risk rules) or Unrestricted (local private model, rules stand down), plus context "
-        "depth, effort and thinking. Unrestricted needs the local private model online; a toast confirms the save.",
-        "模型 模式 上下文深度 无限制 本机 私有 composer model mode unrestricted depth",
+        "打开会话，输入框上方两个等宽按钮。「模型」选谁来答：云厂商＝标准模式（规则全开）；"
+        "ChatX聊天模型＝无限制（规则让路）。「模式」可再调上下文深度、力度、思考，或从无限制改回标准。"
+        "密钥在侧栏「模型与密钥」，登录即可改。选完应有保存提示。",
+        "Open a thread: two equal buttons sit above the composer. Model picks who answers: a cloud vendor = Standard "
+        "(all rules on); ChatX chat model = Unrestricted (rules step aside). Mode still adjusts context "
+        "depth, effort and thinking, or switches Unrestricted back to Standard. Keys live under Models & keys "
+        "in the sidebar. A toast confirms the save.",
+        "模型 模式 上下文深度 无限制 ChatX聊天模型 模型与密钥 composer model mode unrestricted depth",
         "/workspace",
     ),
     (
@@ -1718,14 +1734,14 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     # ── 1.0.87（R87：#330 无限制离线 / #329 配文语言·生成图 / #331 拦截人话 / 语音语种旁注）──
     (
         "route-offline-fallback",
-        "选了无限制模式全自动为什么不回 / 本机模型离线怎么办",
-        "Unrestricted mode auto-reply is silent / what if the local model is offline",
-        "本机私有模型端点连不上时不再静默：这一轮按标准档代答，会话头黄条「本机模型离线 · 已按标准档回复」，"
-        "点「切回标准」永久切回，不点则端点恢复后自动回无限制。AI 体检面板「为什么没回」会列「本机模型离线」。",
-        "When the local private model endpoint is unreachable the AI no longer goes silent: it answers on the standard "
-        "profile, the header shows Local model offline · answered on standard; tap Switch back to standard to make it "
-        "permanent, otherwise it resumes Unrestricted once the endpoint is back. AI diagnosis lists Local model offline.",
-        "无限制 本机模型 离线 不回 标准档 切回标准 unrestricted offline fallback route",
+        "选了无限制模式全自动为什么不回 / ChatX 离线怎么办",
+        "Unrestricted mode auto-reply is silent / what if ChatX chat model is offline",
+        "ChatX聊天模型端点连不上时不再静默：这一轮按标准档代答，会话头黄条「ChatX聊天模型离线 · 已按标准档回复」，"
+        "点「切回标准」永久切回，不点则端点恢复后自动回无限制。AI 体检面板「为什么没回」会列「ChatX聊天模型离线」。",
+        "When the ChatX chat model endpoint is unreachable the AI no longer goes silent: it answers on the standard "
+        "profile, the header shows ChatX chat model offline · answered on standard; tap Switch back to standard to make it "
+        "permanent, otherwise it resumes Unrestricted once the endpoint is back. AI diagnosis lists ChatX chat model offline.",
+        "无限制 ChatX 离线 不回 标准档 切回标准 unrestricted offline fallback route",
         "/workspace",
     ),
     (
@@ -1771,6 +1787,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "for this chat; it is not an outage and the chat is not warned per message. Switch to a clone voice that supports "
         "the language to get voice.",
         "语音不可用 克隆声 不支持 日语 语种 断档 voice clone language unsupported",
+        "/workspace",
+    ),
+    # ── 1.0.88（#333 公网开脸 / #332 跟图闸 / #265 免打扰原文）──
+    (
+        "face-identity",
+        "客户发自拍怎么认人 / 图中是谁怎么用",
+        "How does the AI know who is in a customer photo",
+        "不用设置。客户发来带人脸的照片时，拟稿会多一句内部说明：这是人设、客户本人、已确认的关系人，或不要猜是谁可以问。"
+        "外网安装走官网网关，办公室机器也可直连本机边车。系统猜的只作参考；客户说「是我 / 这是我妹妹」才记成事实。"
+        "识图摘要仍只给坐席看，不会把「这是谁」发给对方。要关掉：配置里 vision.face_identity.enabled: false。",
+        "No setting. Photos with a face get one internal drafting note: persona, the customer, a confirmed relation, or don't guess / ask. "
+        "Hosted installs use the site gateway; office machines can talk to the local sidecar. Guesses stay observations until they say that's me. "
+        "Vision captions stay agent-only. Off: vision.face_identity.enabled: false.",
+        "图中是谁 人脸 自拍 是我 认人 视觉身份 face identity who",
         "/workspace",
     ),
 ]

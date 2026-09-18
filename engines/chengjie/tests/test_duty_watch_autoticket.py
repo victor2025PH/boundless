@@ -434,6 +434,26 @@ def test_followup_marker_and_entities(dat):
     assert not (dat.note_entities("evelyn(12137839654)×Martin") & dat.note_entities("Vanessa(17345893728)×Sinue(12134989840)"))
 
 
+def test_inspection_note_attaches_or_skips_never_new(dat, tmp_path):
+    """P2-1：值守核对题挂窗口内开放单；没有开放单也不新立修复线。"""
+    con = _mk_db(tmp_path / "b.db")
+    diag = tmp_path / "diag"
+    _write_report(diag, "K1K1K1", "值守核对题：自拍回了没图，同一条 Cameron 线")
+    h = _head(dat, diag, "K1K1K1")
+    _ticket(con, 332, "客户自拍后跟发相册图", ts=h["ts"] - 120)
+    dec = dat.decide(h, con, [], {"K1K1K1"}, diag)
+    assert dec["action"] == "attach" and dec["ticket"] == 332 and dec.get("via") == "inspection"
+    # 窗口外 / 无开放单 → skip，不是 new
+    _write_report(diag, "K2K2K2", "【核对】first_send 预览是设计不是洞")
+    h2 = _head(dat, diag, "K2K2K2")
+    con.execute("UPDATE bug_tickets SET created_ts=?, updated_ts=? WHERE id=332",
+                (h2["ts"] - 10_000, h2["ts"] - 10_000))
+    con.commit()
+    dec2 = dat.decide(h2, con, [], {"K2K2K2"}, diag)
+    assert dec2["action"] == "skip" and dec2["ticket"] == 0
+    assert dat.inspection_note("值守核对题：x") and not dat.inspection_note("核实 派发循环")
+
+
 def test_decide_verify_and_summary_never_create(dat, tmp_path):
     con = _mk_db(tmp_path / "b.db")
     _ticket(con, 188, "手动发送双显")
@@ -464,6 +484,17 @@ def test_receipt_item_carries_ticket_number(dat):
         "TUC9EH（x）→ 复验记录已挂 #188"
     # 工具失败 → 回落成无单号回执（绝不丢回执）
     assert dat.receipt_item("XXXXXX", "主题", None) == "XXXXXX（主题）"
+    # 工单已有修复说明 → 另起一行「修复：」，问题核心仍在括号里
+    assert dat.receipt_item(
+        "32PTMK", "GXP 条目已清",
+        {"action": "attach", "ticket": 241, "fix_note": "1.0.80 内测包已含，手装后重启"},
+    ) == "32PTMK（GXP 条目已清）→ 已挂 #241\n修复：1.0.80 内测包已含，手装后重启"
+    # 工单标题优先于报告备注当问题核心（挂到已有单时备注常是「关联 #N」）
+    assert dat.receipt_item(
+        "MJGHKQ", "关联 #241",
+        {"action": "attach", "ticket": 241, "title": "GXP 条目已清",
+         "fix_note": "1.0.80 内测包已含，手装后重启"},
+    ) == "MJGHKQ（GXP 条目已清）→ 已挂 #241\n修复：1.0.80 内测包已含，手装后重启"
 
 
 def test_ticket_txt_roundtrip_last_line_wins(dat, tmp_path):

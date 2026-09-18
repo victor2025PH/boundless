@@ -5,8 +5,8 @@
 
 1. ``fix_note``（修复说明）——标 fixed 顺手写一句改了什么，回访文案引用；
    空值不得抹掉已写说明（回访重试场景）。
-2. ``build_fix_notify_text`` 向后兼容：无 fix_note/update_hint 时文案形状不变
-   （老部署零感知）；有则出「本次改动/获取方式」段且 HTML 转义。
+2. ``build_fix_notify_text``：无 fix_note/update_hint 时仍带「问题：」段；
+   有则出「修复：/获取方式」段且 HTML 转义。
 3. ``resolve_update_hint``＝配置单点（bug_intake.update_hint），缺省空串＝
    回访**不带**更新段（服务端修复即时生效，硬塞「请更新」是误导）。
 4. ``build_reply_text``：@报障人深链 + 工单号 footer 由代码拼（LLM/人抄编号
@@ -72,9 +72,10 @@ def test_notify_text_backward_compatible(bi):
     row = {"id": 7, "reporter_name": "张三", "reporter_id": "42",
            "title": "发不出消息"}
     txt = bi.build_fix_notify_text(row)
-    assert "（#7）已修复上线。" in txt
+    assert "#7 已修复上线" in txt
+    assert "问题：发不出消息" in txt
     assert 'tg://user?id=42' in txt
-    assert "本次改动" not in txt and "获取方式" not in txt
+    assert "修复：" not in txt and "获取方式" not in txt
     assert txt.endswith("谢谢反馈！")
 
 
@@ -82,10 +83,11 @@ def test_notify_text_with_fix_note_and_hint(bi):
     row = {"id": 7, "reporter_name": "张三", "reporter_id": "42",
            "title": "发不出消息", "fix_note": "重写了<发送>链"}
     txt = bi.build_fix_notify_text(row, update_hint="重启智聊即生效")
-    assert "本次改动：重写了&lt;发送&gt;链" in txt      # HTML 转义
-    assert "📦 获取方式：重启智聊即生效。" in txt
-    # 段落顺序：修复说明先于获取方式先于「帮忙验证」
-    assert txt.index("本次改动") < txt.index("获取方式") < txt.index("帮忙验证")
+    assert "问题：发不出消息" in txt
+    assert "修复：重写了&lt;发送&gt;链" in txt      # HTML 转义
+    assert "📦 获取方式：重启智聊即生效" in txt
+    # 段落顺序：问题 → 修复 → 获取方式 → 「帮忙验证」
+    assert txt.index("问题：") < txt.index("修复：") < txt.index("获取方式") < txt.index("帮忙验证")
 
 
 def test_resolve_update_hint(bi):
@@ -180,8 +182,9 @@ def test_status_endpoint_accepts_fix_note_and_hint(bi, client):
     assert r.status_code == 200 and r.json()["notified"] is True
     row = bi.get_ticket(tid)
     assert row["fix_note"] == "改了重试"
-    # 回访文案带两段
-    assert sent and "本次改动：改了重试" in sent[-1][1]
+    # 回访文案带问题核心 + 修复方法
+    assert sent and "问题：" in sent[-1][1]
+    assert "修复：改了重试" in sent[-1][1]
     assert "获取方式：重启即生效" in sent[-1][1]
     # 实施82：bot 出站消息 id 落库（reaction 验证/编辑消息的锚）
     assert row["notify_msg_id"] == 321

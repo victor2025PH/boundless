@@ -39,6 +39,7 @@ ZH = {
     "oa.label.unanswered_inbound": "客户在等（没人回）",
     "oa.label.avatar_voice": "语音克隆服务",
     "oa.label.lan_gpu": "LAN GPU 主机",
+    "oa.label.compute_lane": "三路算力（173 / DeepSeek / 硅基）",
 }
 
 EN = {
@@ -74,4 +75,5 @@ EN = {
     "oa.label.unanswered_inbound": "Customers waiting (no reply)",
     "oa.label.avatar_voice": "Voice clone service",
     "oa.label.lan_gpu": "LAN GPU host",
+    "oa.label.compute_lane": "Compute lanes (173 / DeepSeek / SiliconFlow)",
 }

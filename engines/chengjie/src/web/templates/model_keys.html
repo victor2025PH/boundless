@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('nav_model_keys', "模型与密钥") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('nav_model_keys', "模型与密钥") }}{% endblock %}
+{% block head %}
+<style>
+.mk-wrap{max-width:min(920px,96vw);margin:0 auto;padding-bottom:3rem}
+.mk-sub{color:var(--t2);font-size:.88rem;margin:-.35rem 0 1.1rem;line-height:1.55}
+.mk-card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:1.1rem 1.25rem}
+.f-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+@media(max-width:560px){.f-grid{grid-template-columns:1fr}}
+.f-row{margin-bottom:.85rem}
+.f-row:last-child{margin-bottom:0}
+.f-lbl{display:flex;align-items:center;gap:.35rem;font-size:.78rem;font-weight:600;
+  color:var(--t2);margin-bottom:.3rem}
+.f-lbl .badge-opt{font-size:.62rem;padding:.08rem .4rem;border-radius:10px;
+  background:var(--bd);color:var(--t3);font-weight:500;margin-left:auto}
+.f-inp{width:100%;padding:.5rem .8rem;border:1.5px solid var(--bd);border-radius:9px;
+  font-size:.85rem;font-family:inherit;background:var(--input);color:var(--t);
+  outline:none;transition:all .2s}
+.f-inp:focus{border-color:var(--p);box-shadow:0 0 0 3px var(--ps)}
+.f-hint{font-size:.8rem;color:var(--t2);margin-top:.25rem;line-height:1.45}
+.save-bar{display:flex;align-items:center;gap:.6rem;justify-content:flex-end;margin-top:.9rem;
+  padding-top:.75rem;border-top:1px solid var(--bd)}
+.save-result{font-size:.8rem;flex:1}
+.save-result.ok{color:var(--green)}.save-result.err{color:var(--red)}
+.ai-pill{font-size:.65rem;color:var(--t2);border:1px solid var(--bd);border-radius:999px;padding:.1rem .45rem}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="model_keys" %}
+<div class="mk-wrap">
+  <p class="mk-sub">{{ (i18n or {}).get('mk_sub', "添加 ChatGPT / Gemini / Grok / DeepSeek 等厂商端点与密钥；保存后聊天工作台「模型」面板即可按会话切换。登录即可改，无需开发者密码。") }}</p>
+  <div class="mk-card">
+    {% include "_model_routes_card.html" %}
+  </div>
+</div>
+{% endblock %}

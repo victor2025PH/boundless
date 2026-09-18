@@ -229,6 +229,31 @@ def test_translated_lang_mix_also_strips_system_label():
     assert out == _CLEAN[1]
 
 
+def test_translated_mix_strips_sent_claim_after_label():
+    """#332：译文剥完 [Image sent by me] 后，无图配文「Just took this」一并剥掉。"""
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+
+    class _A:
+        class config:
+            config = {"companion": {"outbound_text_guard": {"lang_mix": False}}}
+
+        class logger:
+            @staticmethod
+            def warning(*_a, **_k):
+                pass
+
+            @staticmethod
+            def debug(*_a, **_k):
+                pass
+
+    src = "[我方发出的图片] [图片] Just took this one. How was your day?"
+    tx = "[Image sent by me] [Image] Just took this one. How was your day?"
+    out = _guard_translated_lang_mix(_A(), src, tx)
+    assert "Just took" not in out
+    assert "Image sent" not in out
+    assert "How was your day" in out
+
+
 def test_safe_voice_inbox_text_strips_label_keeps_plain():
     from src.inbox.autosend_helpers import _safe_voice_inbox_text
     assert _safe_voice_inbox_text(_LEAKS[1]) == _CLEAN[1]

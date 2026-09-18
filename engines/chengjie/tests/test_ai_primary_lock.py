@@ -19,7 +19,9 @@ from pathlib import Path
 import pytest
 
 from src.ai.ai_client import AIClient
-from src.ai.ai_primary_audit import append_event, audit_path, read_tail, resolve_lock
+from src.ai.ai_primary_audit import (
+    append_event, audit_path, last_state, read_tail, resolve_lock,
+)
 from tests.test_ai_client_chat_fallback import _Cfg
 
 
@@ -251,6 +253,53 @@ def test_audit_endpoint_returns_rows(tmp_path, monkeypatch):
     assert r["ok"] is True
     assert r["lock"] == "cloud" and r["locked"] is True
     assert any(row["event"] == "switch_saved" for row in r["rows"])
+
+
+def test_last_state_uses_resolve_not_switch_saved(monkeypatch, tmp_path):
+    """切档通知只认装载点生效行；switch_saved 是「写了 overlay」不是生效态。"""
+    monkeypatch.setenv("AITR_DATA_DIR", str(tmp_path))
+    assert last_state() == {"effective": None, "lock": None}
+    append_event("switch_saved", mode_from="cloud", mode_to="local", lock="local")
+    assert last_state()["effective"] is None
+    append_event("resolve", configured="local", effective="local", lock="local",
+                 via="ai_client_init")
+    assert last_state() == {"effective": "local", "lock": "local"}
+    append_event("lock_enforced", configured="cloud", effective="local", lock="local",
+                 via="ai_client_init")
+    assert last_state()["effective"] == "local" and last_state()["lock"] == "local"
+
+
+async def test_mode_switch_notifies_ops_then_silent_on_same_mode(monkeypatch, tmp_path):
+    """装载点：台账里上次是 cloud，本次解析成 local → 发 mode_switched；同档再启不刷群。"""
+    monkeypatch.setenv("AITR_DATA_DIR", str(tmp_path))
+    _patch_probes(monkeypatch, local_ok=True, cloud_ok=True)
+    events = []
+
+    class _Bus:
+        def publish(self, name, payload):
+            events.append((name, payload))
+
+    monkeypatch.setattr("src.integrations.shared.event_bus.get_event_bus", lambda: _Bus())
+    nudge = tmp_path / "compute_pusher.nudge"
+    monkeypatch.setattr("src.ai.ai_primary_summary.BOARD_NUDGE_PATH", nudge)
+    append_event("resolve", configured="cloud", effective="cloud", lock="cloud",
+                 via="ai_client_init")
+    c = AIClient(_probe_cfg("local", lock="local"))
+    assert await c.initialize() is True
+    switched = [p for n, p in events
+                if n == "ai_primary_guard_alert" and (p or {}).get("kind") == "mode_switched"]
+    assert len(switched) == 1
+    assert switched[0]["from_mode"] == "cloud" and switched[0]["to_mode"] == "local"
+    assert switched[0]["lock"] == "local"
+    assert "本地 vLLM" in str(switched[0].get("primary_text") or "")
+    assert any(r["event"] == "switch_notified" for r in read_tail(20))
+    assert nudge.exists()
+
+    events.clear()
+    c2 = AIClient(_probe_cfg("local", lock="local"))
+    assert await c2.initialize() is True
+    assert not [p for n, p in events
+                if (p or {}).get("kind") == "mode_switched"]
 
 
 # ── compute_mode CLI：local 档已移除 ──────────────────────────────────────

@@ -435,7 +435,14 @@ $gates = @(
     # keyword-only 永不单独 L1、adult explicit 中级不持有不打标、TTL 2h、摘标/手发/切全自动/低级入站/到期
     # 任一即 clear by=、保持行必带类别。三条回放（Jeeo cum reply L0 / 华哥旧 hold 后下一条发出 /
     # bank card number 仍 L1+needs_human+2h）分布在 test_risk_grader_gate；risk_hold API + 切档路由释放钉在此。
-    'tests/test_risk_hold_q3.py'
+    'tests/test_risk_hold_q3.py',
+    # 坐席安装脚本不变量（2026-09-17 .173 第三坑）：NSIS CopyFiles 挂死必须走
+    # watchdog + robocopy 旁路，ASCII-only / GUID==uuid5(appId) / 禁止 -Wait /
+    # 半棵树不装 / 结果不走输出流。别的线改 install_chatx_node.ps1 时 sweep 要红。
+    'tests/test_install_node_script_invariants.py',
+    # gate_sweep 自身（同日）：pytest-timeout 线程杀 worker 会把同 worker 其他用例
+    # 株连成红；重跑必须按文件分进程，超时随生产在线拉到 180s。
+    'tests/test_gate_sweep_invariants.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -461,10 +468,37 @@ if ($prodUp) {
     Write-Output '  [sweep] production instance online -> BelowNormal + workers capped at 4'
 }
 $nWorkers = if ($prodUp) { '4' } else { 'auto' }
+# pytest-timeout on Windows only has the THREAD method, and that method ends a
+# timed-out test by os._exit()-ing the whole worker: xdist then reports "node
+# down" and EVERY other test that worker was mid-way through is marked failed
+# ("worker crashed while running") - guilt by association, not a real red. The
+# R87 sweep (2026-09-17, prod online, 4 workers at BelowNormal) lost 7 workers
+# that way and 8 of its 22 "reds" were crash-connected. With production online
+# the box is deliberately slower for us, so give heavy gates (sql_phantom_columns,
+# workspace_i18n_render, wechat_e2e_parity) 180s instead of 90s.
+$gateTimeout = if ($prodUp) { 180 } else { 90 }
 # Tee stdout so the red-ledger below can parse FAILED lines; stderr stays
 # untouched (PS5.1 wraps piped stderr into red ErrorRecords = console noise).
-python -m pytest @gates -n $nWorkers -q --tb=line --timeout=90 --timeout-method=thread | Tee-Object -Variable sweepLines
+python -m pytest @gates -n $nWorkers -q --tb=line --timeout=$gateTimeout --timeout-method=thread | Tee-Object -Variable sweepLines
 $code = $LASTEXITCODE
+
+# --- crash-connected reds (2026-09-17) -----------------------------------------
+# Separate "this test's worker died" from "this test's assertion failed" BEFORE
+# anyone triages: xdist names the victims in full on their own lines
+# (`worker 'gwN' crashed while running 'file::test'`), while the FAILED summary
+# truncates the reason to "worke...". The serial re-run below is what settles them.
+$crashConnected = @()
+$script:crashHealed = @()
+foreach ($l in @($sweepLines)) {
+    $m = [regex]::Match("$l", "^worker '\S+' crashed while running '([^']+)'")
+    if ($m.Success) { $crashConnected += $m.Groups[1].Value }
+}
+$crashConnected = @($crashConnected | Sort-Object -Unique)
+if ($crashConnected.Count -gt 0) {
+    Write-Output ''
+    Write-Output ("--- crash-connected: {0} test(s) died WITH their worker (pytest-timeout thread kill / native crash), not by assertion; settled by the serial re-run below ---" -f $crashConnected.Count)
+    $crashConnected | ForEach-Object { Write-Output ("  " + $_) }
+}
 
 # --- transient-red auto-requeue (2026-08-12 evening) -------------------------
 # Sweeps on the shared tree scan files WHILE sibling lines are mid-save; twice
@@ -484,14 +518,50 @@ if ($code -ne 0) {
         Where-Object { $_ -and (Test-Path (Join-Path $engineRoot $_)) })
     if ($failedFiles.Count -gt 0) {
         Write-Output ''
-        Write-Output ("--- transient check: re-running {0} failed gate file(s) once (mid-save scans heal; real reds stay red) ---" -f $failedFiles.Count)
-        python -m pytest @failedFiles -q --tb=line --timeout=90 --timeout-method=thread | Tee-Object -Variable rerunLines
-        if ($LASTEXITCODE -eq 0) {
-            Write-Output '  re-run GREEN: first-pass reds were transient (sibling mid-save scan); verdict flips to green.'
+        Write-Output ("--- transient check: re-running {0} failed gate file(s) once, serial, ONE PROCESS PER FILE (mid-save scans heal; real reds stay red) ---" -f $failedFiles.Count)
+        # One pytest process per file (2026-09-17): the R87 re-run put all 14 files in
+        # ONE serial process, a single 90s timeout os._exit()-ed it mid-way, and the
+        # authoritative pass ended with no summary at all - the ledger read a partial
+        # list and the remaining files were never re-proven. Per-file processes bound
+        # the blast radius to that file, and a file whose process dies before printing
+        # a summary gets a synthesized FAILED line so the ledger records it honestly.
+        $rerunLines = @()
+        $rerunRed = $false
+        foreach ($ff in $failedFiles) {
+            $fileLines = @(python -m pytest $ff -q --tb=line --timeout=$gateTimeout --timeout-method=thread | ForEach-Object { "$_" })
+            $frc = $LASTEXITCODE
+            $fileLines | ForEach-Object { Write-Output $_ }
+            $rerunLines += $fileLines
+            if ($frc -ne 0) {
+                $rerunRed = $true
+                if (-not ($fileLines | Where-Object { $_ -match '^FAILED\s' })) {
+                    $syn = ("FAILED {0} - process died before summary (pytest-timeout thread kill or crash), exit={1}" -f $ff, $frc)
+                    Write-Output ("  " + $syn)
+                    $rerunLines += $syn
+                }
+            }
+        }
+        if (-not $rerunRed) {
+            Write-Output '  re-run GREEN: first-pass reds were transient (sibling mid-save scan / worker crash); verdict flips to green.'
             $code = 0
             $script:transientHealed = $true
         } else {
             Write-Output '  re-run still RED: reds are real (not mid-save transients).'
+        }
+        if ($crashConnected.Count -gt 0) {
+            $rerunReds = @($rerunLines | Where-Object { $_ -match '^FAILED\s+\S' } |
+                ForEach-Object { ($_ -replace '^FAILED\s+', '').Split(' ')[0].Trim() })
+            function Test-StillRed($id) {
+                $file = $id.Split('::')[0]
+                foreach ($r in $rerunReds) {
+                    if ($r -eq $id -or $r -eq $file -or $r.StartsWith($file + '::')) { return $true }
+                }
+                return $false
+            }
+            $script:crashHealed = @($crashConnected | Where-Object { -not (Test-StillRed $_) })
+            $crashReal = @($crashConnected | Where-Object { Test-StillRed $_ })
+            Write-Output ("  crash-connected settled: {0} healed on serial re-run (worker death, not a red), {1} still red (real)." -f $script:crashHealed.Count, $crashReal.Count)
+            $crashReal | ForEach-Object { Write-Output ("    still red: " + $_) }
         }
         $sweepLines = $rerunLines   # red ledger below reads the authoritative pass
     }
@@ -1263,6 +1333,8 @@ try {
             passed           = $passedN
             failed           = @($curReds | Where-Object { $_ })
             transient_healed = [bool]$script:transientHealed
+            crash_connected  = @($crashConnected).Count
+            crash_healed     = @($script:crashHealed).Count
             full             = [bool]$Full
             duration_sec     = [int]((Get-Date) - $sweepStart).TotalSeconds
         }

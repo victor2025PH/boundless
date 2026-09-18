@@ -14,7 +14,9 @@
 #      have an old per-machine install under C:\Program Files while the current
 #      build ships per-user -- without this you end up with two copies and two
 #      shortcuts, the stale one still auto-starting)
-#   4. install silently (/S)
+#   4. install silently (/S) under a watchdog: crash => retry; idle stub with the
+#      payload fully extracted (NSIS CopyFiles hang, .173 2026-09-17) => finish by
+#      hand from the extracted tree (robocopy + registry + shortcuts)
 #   5. report where it landed + version, so the caller can verify
 #
 # Exit codes: 0 ok / 2 bad setup file / 3 install failed / 4 post-install missing
@@ -222,23 +224,52 @@ foreach ($orphan in @(
 # session is therefore a last-resort extra life, not the explanation. Root cause
 # remains inside the third-party stub; do not rewrite these notes as a diagnosis
 # without new measurement.
-if ($found) { Start-Sleep -Seconds 8 }
-$code = $null
-for ($attempt = 1; $attempt -le 4; $attempt++) {
-  Say ("installing (silent), attempt $attempt ...")
-  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -Wait -PassThru
-  $code = $p.ExitCode
-  Say ("installer exit=" + $code)
-  if ($code -eq 0) { break }
-  if ($attempt -lt 4) {
-    Say "  attempt crashed (known NSIS System.dll flake) -- retrying in 10s"
-    Start-Sleep -Seconds 10
-  }
-}
+#
+# 2026-09-17, .173 (Win11 26200.9168), 1.0.87: a THIRD failure shape, distinct from
+# the crash above. The stub does not die - it goes idle forever: CPU flat,
+# Responding=True, $PLUGINSDIR\7z-out fully extracted (9118 files / 1.28 GB, CRC
+# checked by Nsis7z), yet INSTDIR stays empty for 7+ hours. NSIS `CopyFiles`
+# (= SHFileOperation FO_COPY) hangs on this box for ANY large tree (bisected:
+# locales/55 files OK, resources\backend/2958 HANG, resources\services/6077 HANG);
+# robocopy of the same tree takes 6 s. Defender RTP on/off did not matter. The
+# console-session task fallback below cannot help (same copy engine, and /IT tasks
+# returned LastResult=0x1 on that build). The old `Start-Process -Wait` waited
+# forever and the seat sat with NO app installed. Now: a watchdog polls the stub;
+# when the extracted tree is complete and both it and INSTDIR stop changing while
+# the stub burns no CPU, finish the install BY HAND from the extracted tree
+# (robocopy /MIR + the registry entry the stub would have written + shortcuts).
+# The tree is the stub's own CRC-verified output, so the bytes are identical to a
+# normal install; only the uninstaller exe is missing (never written by NSIS), and
+# uninstallOldVersion tolerates that on the next upgrade.
 $cands = @(
   (Join-Path $env:LOCALAPPDATA 'Programs\telegram-ai-desktop'),
   'C:\Program Files\telegram-ai-desktop'
 )
+$instDir = $cands[0]
+# electron-builder per-user uninstall key = UUID v5(appId, electron-builder ns);
+# appId com.telegram-mtproto-ai.desktop is frozen (upgrade-chain identity), so the
+# GUID is a constant. Pinned by tests/test_install_node_script_invariants.py.
+$uninstallGuid = '1c379198-1526-5b8e-9781-a53ed585cb26'
+$productName = [string][char]0x667A + [char]0x804A   # CJK product name, built from code points (ASCII-only file)
+$setupVersion = ''
+if ((Split-Path $Setup -Leaf) -match '(\d+\.\d+\.\d+)') { $setupVersion = $matches[1] }
+
+function Measure-Tree($dir) {
+  if (-not $dir -or -not (Test-Path $dir)) { return @{ files = 0; bytes = [long]0 } }
+  $f = @(Get-ChildItem $dir -Recurse -File -Force -ErrorAction SilentlyContinue)
+  $b = [long]0
+  foreach ($x in $f) { $b += $x.Length }
+  return @{ files = $f.Count; bytes = $b }
+}
+function Get-Newest7zOut([datetime]$since) {
+  $d = Get-ChildItem $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
+    Where-Object { $_.CreationTime -ge $since.AddSeconds(-5) } |
+    Sort-Object CreationTime -Descending | Select-Object -First 1
+  if (-not $d) { return $null }
+  $o = Join-Path $d.FullName '7z-out'
+  if (Test-Path $o) { return $o }
+  return $null
+}
 function Get-InstalledApp {
   foreach ($d in $cands) {
     if (-not (Test-Path $d)) { continue }
@@ -247,6 +278,140 @@ function Get-InstalledApp {
     if ($e) { return $e }
   }
   return $null
+}
+
+# Finish the install from the stub's extracted tree. Sets $script:bypassOk = $true
+# only when the tree proves it is the complete payload of THIS setup exe; any doubt
+# => $false (caller kills the stub and retries normally). Never touches user data.
+# Result goes through a script variable, NOT the output stream: Say() writes to
+# stdout, and assigning the call result would swallow those log lines into it.
+function Complete-FromExtracted([string]$outDir, [string]$archive) {
+  $script:bypassOk = $false
+  $appExe = Get-ChildItem $outDir -Filter *.exe -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
+  $biPath = Join-Path $outDir 'resources\build-info.json'
+  if (-not $appExe -or -not (Test-Path $biPath)) { Say "  bypass: extracted tree lacks app exe / build-info.json"; $script:bypassOk = $false; return }
+  $bi = Get-Content $biPath -Raw -ErrorAction SilentlyContinue
+  if ($setupVersion -and ($bi -notmatch ('"version"\s*:\s*"' + [regex]::Escape($setupVersion) + '"'))) {
+    Say ("  bypass: build-info version does not match setup " + $setupVersion); $script:bypassOk = $false; return
+  }
+  $exeVer = $appExe.VersionInfo.ProductVersion
+  if ($setupVersion -and $exeVer -and ($exeVer -notlike ($setupVersion + '*'))) {
+    Say ("  bypass: app exe version " + $exeVer + " does not match setup " + $setupVersion); $script:bypassOk = $false; return
+  }
+  $m1 = Measure-Tree $outDir
+  Start-Sleep -Seconds 5
+  $m2 = Measure-Tree $outDir
+  if ($m1.files -ne $m2.files -or $m1.bytes -ne $m2.bytes) { Say "  bypass: extracted tree still changing"; $script:bypassOk = $false; return }
+  if ($archive -and (Test-Path $archive)) {
+    # 7z payload inflates ~2.8x (490 MB -> 1.37 GB measured); a tree smaller than the
+    # archive itself means Nsis7z bailed midway -- do not ship half a tree.
+    $arcLen = (Get-Item $archive).Length
+    if ($m2.bytes -lt $arcLen) { Say ("  bypass: tree " + $m2.bytes + " B smaller than archive " + $arcLen + " B (partial extraction)"); $script:bypassOk = $false; return }
+  }
+  Say ("  bypass: extracted tree verified: files=" + $m2.files + " bytes=" + $m2.bytes + " version=" + $exeVer)
+
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path -like ($instDir + '\*') } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  if (-not (Test-Path $instDir)) { New-Item -ItemType Directory -Path $instDir -Force | Out-Null }
+  # /MIR: INSTDIR must equal the payload (stale files from a skipped uninstall go away).
+  $rcp = Start-Process -FilePath 'robocopy.exe' -ArgumentList @(
+    ('"' + $outDir + '"'), ('"' + $instDir + '"'), '/MIR', '/COPY:DAT', '/DCOPY:T', '/R:3', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'
+  ) -Wait -PassThru -NoNewWindow
+  if ($rcp.ExitCode -ge 8) { Say ("  bypass: robocopy reported failures exit=" + $rcp.ExitCode); $script:bypassOk = $false; return }
+  $m3 = Measure-Tree $instDir
+  if ($m3.files -ne $m2.files -or $m3.bytes -ne $m2.bytes) {
+    Say ("  bypass: INSTDIR mismatch after copy files=" + $m3.files + " bytes=" + $m3.bytes); $script:bypassOk = $false; return
+  }
+  Say ("  bypass: robocopy ok (" + $m3.files + " files)")
+
+  # Registry entry electron-builder's stub writes (registryAddInstallInfo), minus the
+  # uninstaller strings (the exe does not exist; a dangling UninstallString makes the
+  # next installer ExecWait a missing file and Apps&Features show a dead entry).
+  $target = Join-Path $instDir $appExe.Name
+  $regKey = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + $uninstallGuid
+  try {
+    if (-not (Test-Path $regKey)) { New-Item -Path $regKey -Force | Out-Null }
+    Set-ItemProperty -Path $regKey -Name 'DisplayName' -Value ($productName + ' ChatX ' + $setupVersion)
+    Set-ItemProperty -Path $regKey -Name 'DisplayVersion' -Value $setupVersion
+    Set-ItemProperty -Path $regKey -Name 'InstallLocation' -Value $instDir
+    Set-ItemProperty -Path $regKey -Name 'DisplayIcon' -Value ($target + ',0')
+    Set-ItemProperty -Path $regKey -Name 'NoModify' -Value 1 -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'NoRepair' -Value 1 -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'ChatXManualInstall' -Value ('robocopy bypass ' + (Get-Date -Format 's') + ' (NSIS CopyFiles hang)')
+    Remove-ItemProperty -Path $regKey -Name 'UninstallString' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $regKey -Name 'QuietUninstallString' -ErrorAction SilentlyContinue
+    Say "  bypass: registry entry written"
+  } catch { Say ("  bypass: registry write failed (non-fatal): " + $_.Exception.Message) }
+  try {
+    $ws = New-Object -ComObject WScript.Shell
+    foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))) {
+      $lnk = Join-Path $dir ($productName + '.lnk')
+      $s = $ws.CreateShortcut($lnk); $s.TargetPath = $target; $s.WorkingDirectory = $instDir; $s.IconLocation = $target; $s.Save()
+    }
+    Say "  bypass: shortcuts written"
+  } catch { Say ("  bypass: shortcut write failed (non-fatal): " + $_.Exception.Message) }
+  $script:bypassOk = $true
+}
+
+if ($found) { Start-Sleep -Seconds 8 }
+$code = $null
+$bypassed = $false
+$HangIdleSec = 120     # tree + INSTDIR + CPU all flat this long => CopyFiles hang
+$HardCapSec = 1200     # nothing at all for 20 min (hidden dialog etc.) => kill + retry
+for ($attempt = 1; $attempt -le 4; $attempt++) {
+  Say ("installing (silent), attempt $attempt ...")
+  $tStart = Get-Date
+  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -PassThru
+  $lastSig = ''
+  $flatSince = Get-Date
+  $lastCpu = 0.0
+  $outDir = $null
+  while (-not $p.HasExited) {
+    Start-Sleep -Seconds 5
+    $p.Refresh()
+    if ($p.HasExited) { break }
+    if (-not $outDir) { $outDir = Get-Newest7zOut $tStart }
+    $mo = Measure-Tree $outDir
+    $mi = Measure-Tree $instDir
+    $cpu = 0.0
+    try { $cpu = [double]$p.TotalProcessorTime.TotalSeconds } catch {}
+    $sig = ('{0}/{1}|{2}/{3}' -f $mo.files, $mo.bytes, $mi.files, $mi.bytes)
+    if ($sig -ne $lastSig -or ($cpu - $lastCpu) -gt 0.5) { $lastSig = $sig; $lastCpu = $cpu; $flatSince = Get-Date }
+    $flat = ((Get-Date) - $flatSince).TotalSeconds
+    if ($flat -ge $HangIdleSec -and $mo.bytes -gt 0) {
+      Say ("  installer idle " + [int]$flat + "s with payload extracted (" + $mo.files + " files) and INSTDIR frozen -- NSIS CopyFiles hang; finishing from the extracted tree")
+      $archive = Join-Path (Split-Path $outDir -Parent) 'app-64.7z'
+      Complete-FromExtracted $outDir $archive
+      Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+      if ($script:bypassOk) { $bypassed = $true; $code = 0 } else { $code = -3 }
+      break
+    }
+    if (((Get-Date) - $tStart).TotalSeconds -ge $HardCapSec) {
+      Say ("  installer made no progress for " + $HardCapSec + "s (no extraction) -- killing this attempt")
+      Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+      $code = -2
+      break
+    }
+  }
+  if ($p.HasExited -and $null -eq $code) { $code = $p.ExitCode }
+  # Killed/bypassed stubs never clean their $PLUGINSDIR (~1.3 GB each; .173 had 114 of them = 20 GB).
+  if ($code -ne 0 -or $bypassed) {
+    Get-ChildItem $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
+      Where-Object { $_.CreationTime -ge $tStart.AddSeconds(-5) } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if ($bypassed) { Say "installer exit=(bypassed: robocopy from extracted tree)"; break }
+  Say ("installer exit=" + $code)
+  if ($code -eq 0) { break }
+  if ($attempt -lt 4) {
+    Say "  attempt crashed/hung (known NSIS flakes) -- retrying in 10s"
+    Start-Sleep -Seconds 10
+    $code = $null
+  }
 }
 
 # --- 4b. console-session fallback (see note above) -------------------------
@@ -299,6 +464,7 @@ Say ("installed at: " + $dir)
 Say ("version: " + $app.VersionInfo.ProductVersion + " (file " + $app.VersionInfo.FileVersion + ")")
 $res = Join-Path $dir 'resources\backend\backend.exe'
 Say ("backend bundled: " + (Test-Path $res))
+if ($bypassed) { Say "install path: robocopy bypass (NSIS CopyFiles hang) -- no uninstaller exe on this node, see deploy notes" }
 if (-not $KeepSetup) { Remove-Item $Setup -Force -ErrorAction SilentlyContinue }
 Say "OK"
 exit 0

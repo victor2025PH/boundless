@@ -60,6 +60,86 @@ def test_stall_verdict_only_when_engine_live_and_inventory_old():
     assert stall_verdict(eng, None) is None
 
 
+def test_collect_skips_drill_uids():
+    """演练号段不算自动跟进库存——两条 duel 目标不得撑起 stalled。"""
+    gs = _store()
+    _auto(gs, age_h=40, chat="990001088")
+    _auto(gs, age_h=40, chat="990001099")
+    snap = collect_send_liveness(gs, now=NOW)
+    assert snap["active_auto"] == 0
+    assert snap["stalled_goals"] == []
+    _auto(gs, age_h=40, chat="8017135513")
+    snap2 = collect_send_liveness(gs, now=NOW)
+    assert snap2["active_auto"] == 1
+    assert all(
+        "990001" not in str(s.get("conversation_id") or "")
+        for s in snap2["stalled_goals"])
+
+
+def test_collect_skips_structural_beat_blocked():
+    """人审档 / 冻结等结构性拦拍：不算 stalled，也不撑起全局有货零真发。"""
+    from src.companion.goals.sprint_ticker import record_beat_blocked
+
+    gs = _store()
+    g1 = _auto(gs, age_h=40, chat="jerry")
+    g2 = _auto(gs, age_h=40, chat="cooper")
+    record_beat_blocked(gs, g1["goal_id"], "automation_mode",
+                        slot="d2026-09-14", now=NOW - 3600)
+    record_beat_blocked(gs, g2["goal_id"], "automation_mode",
+                        slot="d2026-09-15", now=NOW - 1800)
+    snap = collect_send_liveness(gs, now=NOW)
+    assert snap["active_auto"] == 2
+    assert snap["sent_24h"] == 0
+    assert snap["structural_blocked"] == 2
+    assert snap["stalled_goals"] == []
+    eng = {"sprint_effective": True}
+    assert stall_verdict(eng, snap, min_active=2, min_age_sec=4 * 3600) is None
+
+    # 节奏闸（silence）仍算真 stalled——引擎想发、只是等窗口
+    g3 = _auto(gs, age_h=40, chat="real")
+    record_beat_blocked(gs, g3["goal_id"], "silence",
+                        slot="d2026-09-15", now=NOW - 600)
+    snap2 = collect_send_liveness(gs, now=NOW)
+    assert snap2["structural_blocked"] == 2
+    assert [s["goal_id"] for s in snap2["stalled_goals"]] == [g3["goal_id"]]
+
+
+def test_goal_sprint_goal_alert_wording_not_scan_stall():
+    from src.inbox.webhook_notifier import _build_message
+    title, text = _build_message("scan_loop_stall_alert", {
+        "loop": "goal_sprint_goal",
+        "goal_id": "52d57b432fab410b",
+        "conversation_id": "telegram:8244899900:990001088",
+        "title": "",
+        "reminder": False,
+    })
+    assert "常备循环停摆" not in title
+    assert "自动跟进停住" in title
+    assert "990001088" in text
+    t2, _ = _build_message("scan_loop_stall_alert", {
+        "loop": "goal_sprint_goal", "recovered": True,
+        "rate_key": "scan_stall:goal:x:recovered",
+    })
+    assert "常备循环已恢复" not in t2
+    assert "自动跟进已恢复" in t2
+
+
+def test_goal_sprint_sends_severity_is_warning_not_critical():
+    from src.inbox.webhook_notifier import _build_card, event_severity
+
+    assert event_severity("scan_loop_stall_alert") == "critical"
+    assert event_severity("scan_loop_stall_alert", {
+        "loop": "goal_sprint"}) == "critical"
+    assert event_severity("scan_loop_stall_alert", {
+        "loop": "goal_sprint_sends"}) == "warning"
+    assert event_severity("scan_loop_stall_alert", {
+        "loop": "goal_sprint_goal"}) == "warning"
+    card = _build_card("scan_loop_stall_alert", {
+        "loop": "goal_sprint_sends", "active_auto": 2, "sent_24h": 0,
+    }, "自动推进有货零真发", "判定")
+    assert card.startswith("🟠 警告 · 运营")
+
+
 class _Bus:
     def __init__(self) -> None:
         self.events: List[tuple] = []
@@ -68,7 +148,7 @@ class _Bus:
         self.events.append((name, payload))
 
 
-def _wd(monkeypatch, store, cfg_extra=None):
+def _wd(monkeypatch, store, cfg_extra=None, config_path=None):
     bus = _Bus()
     monkeypatch.setattr(
         "src.integrations.shared.event_bus.get_event_bus", lambda: bus)
@@ -93,9 +173,11 @@ def _wd(monkeypatch, store, cfg_extra=None):
     if cfg_extra:
         conf["health_watchdog"]["goal_sprint_liveness"].update(cfg_extra)
     w = hw.HealthWatchdog.__new__(hw.HealthWatchdog)
-    w._config_manager = SimpleNamespace(config=conf, config_path=None)
-    w._goal_sprint_stall_alerted = 0.0
+    w._config_manager = SimpleNamespace(config=conf, config_path=config_path)
     w.total_goal_sprint_stall_alerts = 0
+    # 无落盘路径时清空内存账本；有路径时保留（模拟重启读 health_remind_state.json）
+    if not config_path:
+        w._goal_sprint_stall_alerted = 0.0
     return w, bus
 
 
@@ -129,6 +211,28 @@ def test_watchdog_alerts_then_throttles_then_recovers(monkeypatch):
            if n == "scan_loop_stall_alert" and p.get("recovered")]
     assert rec and rec[0]["rate_key"].endswith(":recovered")
     assert w._goal_sprint_stall_alerted == 0.0
+
+
+def test_watchdog_goal_stall_throttle_survives_restart(monkeypatch, tmp_path):
+    """节流落盘：假「重启」后同内容不得立刻重发（2026-09-16 运维群噪声）。"""
+    gs = _store()
+    _auto(gs, age_h=30, chat="a")
+    _auto(gs, age_h=32, chat="b")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("x: 1\n", encoding="utf-8")
+    w1, bus1 = _wd(monkeypatch, gs, config_path=str(cfg_file))
+    w1._check_goal_sprint_liveness(now=NOW)
+    assert sum(1 for n, p in bus1.events
+               if n == "scan_loop_stall_alert"
+               and p.get("loop") == "goal_sprint_sends"
+               and not p.get("recovered")) == 1
+    # 新实例、同一账本路径 → 视为进程重启
+    w2, bus2 = _wd(monkeypatch, gs, config_path=str(cfg_file))
+    w2._check_goal_sprint_liveness(now=NOW + 60)
+    assert bus2.events == []
+    # 过常规间隔仍会因指纹未变走 unchanged（默认 24h）→ 仍 HOLD
+    w2._check_goal_sprint_liveness(now=NOW + 241 * 60)
+    assert bus2.events == []
 
 
 def test_watchdog_silent_when_engine_off_or_switch_off(monkeypatch):

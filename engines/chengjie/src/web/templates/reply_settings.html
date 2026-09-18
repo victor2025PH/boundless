@@ -280,6 +280,15 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
 @keyframes rpsFlash{0%{background:color-mix(in srgb, var(--p) 20%, transparent);box-shadow:0 0 0 1px color-mix(in srgb, var(--p) 45%, transparent)}100%{background:transparent;box-shadow:none}}
 .rps-flash{animation:rpsFlash 1.6s ease-out 1;border-radius:10px}
 .rps-anchors a.active{border-color:var(--p);color:var(--p);background:color-mix(in srgb, var(--p) 10%, transparent)}
+/* ── Q-26 #301（rps-ar-）：「自动化与风控」分组头 + 深链落点高亮（data-goto 跳转后 2.4s 描边脉冲） ── */
+.rps-grp-head{margin:0 0 .8rem}
+.rps-grp-head .rps-grp-title{margin:0 0 .25rem;font-size:1.02rem;font-weight:800;color:var(--t)}
+.rps-grp-head .rps-hint{margin:0}
+@keyframes rpsHl{0%{box-shadow:0 0 0 3px color-mix(in srgb, var(--p) 55%, transparent);background:color-mix(in srgb, var(--p) 12%, transparent)}70%{box-shadow:0 0 0 3px color-mix(in srgb, var(--p) 35%, transparent)}100%{box-shadow:none;background:transparent}}
+.rps-hl{animation:rpsHl 2.4s ease-out 1;border-radius:12px}
+.rps-goto{color:var(--p);font-weight:600;text-decoration:underline dotted;text-underline-offset:2px;cursor:pointer;white-space:nowrap}
+.rps-goto:hover{text-decoration-style:solid}
+.rps-goto+.rps-goto{margin-left:.45rem}
 /* ── P0-caps（2026-08-03）：平台能力清单 chips / 档位封顶提示 / 保存条改动明细 ── */
 .rps-caps{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
 .rps-caps-lbl{font-size:.74rem;color:var(--t3);font-weight:600}
@@ -330,6 +339,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
   <!-- 锚点导航：四组 sticky 直达（顶栏 --th:58px / z-index 50，本条 z-index 40） -->
   <nav class="rps-anchors" aria-label="{{ (i18n or {}).get('rps_title', "自动回复设置") }}">
     <a href="#rps-sec-gates">{{ (i18n or {}).get('rps_master_title', "AI 接管") }}</a>
+    <a href="#rps-grp-auto">{{ (i18n or {}).get('rps_nav_grp_auto', "自动化与风控") }}</a>
     <a href="#rps-grp-quota">{{ (i18n or {}).get('rps_nav_quota', "额度") }}</a>
     <a href="#rps-grp-pace">{{ (i18n or {}).get('rps_nav_grp_pace', "节奏") }}</a>
     <a href="#rps-grp-plat">{{ (i18n or {}).get('rps_nav_grp_plat', "平台") }}</a>
@@ -457,30 +467,140 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     </details>
   </div>
 
+  <!-- Q-26 #301（rps-ar-，2026-09-12）「自动化与风控」顶级分组：把「AI 为什么没回」的全部开关收成一组
+       ——兜底档位（自节奏组移入）/ 让位规则（只读 60s）/ 风控分级（Q-17）/ 成人·见面政策（域默认 + 逐人设只读表，
+       行尾深链人设工坊对应格）/ 今日拦截（Q-18）/ 暂停摸底（复用 GET/POST /api/goals/discovery-pause）。
+       人设级覆写只在人设工坊本人设「档案」页签；两边 data-goto 互链，tests/test_settings_deeplinks.py 保证必可达。 -->
+  <div class="rps-grp" id="rps-grp-auto">
+  <div class="rps-grp-head" id="rps-ar-head">
+    <h2 class="rps-grp-title">{{ (i18n or {}).get('rps_ar_grp_title', "自动化与风控 · AI 什么时候回、什么话会拦") }}</h2>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_ar_grp_hint', "「AI 为什么没回」的所有开关都在这一组：兜底档位 → 让位规则 → 风控分级 → 成人 / 见面政策 → 今日拦截 → 暂停摸底。人设级覆写在人设工坊本人设「档案」页签，两边互链直达。") }}</p>
+  </div>
+  <!-- 默认自动化档位（HEEEN9 / Q-4 #267：三层语义——会话 > 账号 > 本页兜底） -->
+  <div class="rps-card" id="rps-sec-mode">
+    <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "未设置账号的兜底档位") }}
+      <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span>
+      <span class="rps-chip" id="rps-mode-tiers" style="display:none;background:var(--input);color:var(--t2)"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_mode_hint', "三层优先级：会话里手选的档位 ＞ 账号菜单「此账号全部会话 →」设的档位 ＞ 本页兜底。只有既没按会话选、账号也没设过的会话，才用这里的档位。本页即使选「全自动」，账号未在账号菜单确认「此账号全部会话 → 全自动」之前，该账号的会话仍按拟稿人审落地，不会自动发出。") }}</p>
+    <p class="rps-hint" id="rps-mode-tiers-line" style="margin-top:-.2rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.74rem">{{ (i18n or {}).get('rps_mode_tiers_diagram', "会话手选 ▶ 账号设定 ▶ 本页兜底 ｜ 前面有值就不再往后看") }}</p>
+    <div class="rps-modes" id="rps-modes">
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="manual" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">✍️</span>{{ (i18n or {}).get('rps_mode_manual', "手动") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_manual_d', "不生成草稿，完全人工回复") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="review" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">📝</span>{{ (i18n or {}).get('rps_mode_review', "拟稿人审") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_review_d', "AI 写草稿，坐席通过后发出") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="multi_choice" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">🔀</span>{{ (i18n or {}).get('rps_mode_multi', "多选一") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_multi_d', "AI 给多个候选，坐席挑一条") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="auto_ai" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">🚀</span>{{ (i18n or {}).get('rps_mode_auto', "全自动") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_auto_d', "AI 直接回复，低风险草稿自动发出；高风险（危机 / 投诉 / 金额 / 政策类）转人工审核") }}</span>
+        </span>
+      </label>
+    </div>
+    <div class="rps-mode-capnote" id="rps-cap-note" style="display:none"></div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度") }}
+        <span class="rps-chip" data-hot-chip="inbox.auto_draft.min_text_len"></span></span>
+      <input type="number" class="rps-num" id="rps-minlen" min="0" max="500" step="1" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_minlen_hint', "短于此字数的入站不生成草稿（0 = 不限制）") }}</span>
+    </div>
+    <!-- HEEEN9（Q-4 #267）：「新会话自动沿用此档位」→ 高级折叠 + 大白话 + 出厂关。
+         开着＝新会话第一条消息到时把兜底档位**写死**进该会话，之后改本页也不跟；
+         关着＝会话不写死，始终跟随三层实时算。 -->
+    <details class="rps-guard-adv" style="margin-top:.5rem">
+      <summary>{{ (i18n or {}).get('rps_mode_adv', "高级：把兜底档位写死到新会话") }}</summary>
+      <div class="rps-row" style="border-top:none">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_bootstrap_label', "新会话第一条消息到时，把当时的兜底档位写死进这个会话") }}
+          <span class="rps-chip" data-hot-chip="inbox.auto_draft.bootstrap_automation_mode"></span></span>
+        <label class="rps-switch"><input type="checkbox" id="rps-bootstrap" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bootstrap_hint', "出厂关。关着：会话不写死档位，之后改本页或账号菜单，这些会话立刻跟着变。开着：写死之后改本页不再影响它们，得逐个会话或按账号重设——只在「希望老会话锁住当时档位」时才开。") }}</span>
+      </div>
+    </details>
+  </div>
+
+  <!-- 让位规则（Q-18 #292 窗长写死 autosend_policy.AGENT_YIELD_WINDOW_SEC=60；本卡只读，不造写入口） -->
+  <div class="rps-card" id="rps-sec-yield">
+    <h3>{{ (i18n or {}).get('rps_ar_yield_title', "🤝 让位规则 · 坐席刚发过，AI 先等一等") }}</h3>
+    <p class="rps-hint" id="rps-ar-yield-hint">{{ (i18n or {}).get('rps_ar_yield_hint', "坐席在会话里手发或打字后 {n} 秒内，AI 待发稿延后不丢（窗过自动复检再发）；切全自动或点会话头「立即接回」可跳过等待。窗长固定 {n} 秒，不开放调节（多坐席同守一个会话时防互相抢话）。")|replace('{n}', '60') }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ar_yield_row', "让位窗") }}</span>
+      <span class="rps-chip" id="rps-ar-yield-val">{{ (i18n or {}).get('rps_ar_yield_val', "{n} 秒 · 固定")|replace('{n}', '60') }}</span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ar_yield_band', "会话头状态带在让位期间显示琥珀「AI N 秒后接回 · 坐席刚发过」。") }}</span>
+    </div>
+  </div>
+
   <!-- Q-17 #277②（rk-，2026-09-11）「风控分级」：数据源 GET /api/reply-settings/risk-grader
        （类别 / 词表摘要 / 默认级别 / 动作 只读，事实源 src/inbox/risk_grader.CATEGORIES）；
        人设级覆写 boundaries.risk_overrides 走 POST .../risk-grader/overrides（PersonaManager 同一落盘口）。
        高风险类别不可调低（地板）；成人类别沿用 Q-15 人设工坊「成人内容政策」。旧后端 404 → 整卡隐藏。 -->
+  <!-- R88（2026-09-17）「敏感话题」卡：三色只表示敏感度，默认全部「继续回复 · 记一笔」；每行「锁定」开关
+       （POST /api/reply-settings/risk-grader/locks → overlay inbox.risk_grading.locked，即存即生效）决定命中后
+       AI 是否停下交给人。人设列只调「记录级别」（标签颜色 / 记录），不影响拦不拦。 -->
   <div class="rps-card" id="rps-sec-risk" style="display:none">
-    <h3>{{ (i18n or {}).get('rps_rk_title', "🧯 风控分级 · 什么话会拦、拦到什么程度") }}
-      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:rgba(245,158,11,.14);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的覆写") }}</span></h3>
-    <p class="rps-hint" id="rps-rk-hint">{{ (i18n or {}).get('rps_rk_hint', "客户来话先过三级分级：高风险 → 停自动回复、转人工并保持（现状不变）；中风险 → 按人设政策软拒或冻结，只打「风险·中」标签不转人工；低风险 → 只记日志。摘掉「需人工」后同类别 {n} 分钟内不再重打。") }}</p>
+    <h3>{{ (i18n or {}).get('rps_rk_title', "🧯 敏感话题 · AI 遇到这些话会怎么做") }}
+      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:rgba(245,158,11,.14);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的改动") }}</span></h3>
+    <p class="rps-hint" id="rps-rk-hint">{{ (i18n or {}).get('rps_rk_hint', "客户说到下面这些话，AI 默认都会继续回复，只在会话上记一笔。想让某类话 AI 停下来交给人，打开那一行的「锁定」。全球客户同一套规则，不分昼夜。摘掉「需人工」后同类 {n} 分钟内不再重打。") }}</p>
+    <div class="rps-row" style="flex-wrap:wrap;gap:.4rem .6rem" id="rps-rk-legend"></div>
     <div class="rps-row">
-      <span class="rps-row-label">{{ (i18n or {}).get('rps_rk_persona', "人设覆写") }}</span>
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_rk_persona', "按人设调记录级别") }}</span>
       <select id="rps-rk-persona" onchange="rpsRkLoad(this.value)"></select>
-      <button type="button" class="rps-btn rps-btn-save" id="rps-rk-save" onclick="rpsRkSave()" style="display:none">{{ (i18n or {}).get('rps_rk_save', "保存人设覆写") }}</button>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_rk_note', "高风险类别（自杀 / 未成年 / 威胁 / 要钱 / 诈骗 / 支付词）不可调低；「成人」走人设工坊的成人内容政策。") }}</span>
+      <button type="button" class="rps-btn rps-btn-save" id="rps-rk-save" onclick="rpsRkSave()" style="display:none">{{ (i18n or {}).get('rps_rk_save', "保存人设记录级别") }}</button>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_rk_note', "记录级别只影响标签颜色和记录，不影响拦不拦。") }}</span>
     </div>
     <table class="rps-po-table" id="rps-rk-table">
       <thead><tr>
-        <th>{{ (i18n or {}).get('rps_rk_col_cat', "类别") }}</th>
-        <th>{{ (i18n or {}).get('rps_rk_col_words', "大概会中的词") }}</th>
-        <th>{{ (i18n or {}).get('rps_rk_col_level', "默认级别") }}</th>
-        <th>{{ (i18n or {}).get('rps_rk_col_action', "动作") }}</th>
-        <th>{{ (i18n or {}).get('rps_rk_col_override', "这个人设") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_cat', "客户说了什么") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_words', "例句") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_action', "AI 会怎么做") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_lock', "锁定（命中就停 AI）") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_override', "这个人设的记录级别") }}</th>
       </tr></thead>
       <tbody id="rps-rk-tbody"></tbody>
     </table>
+    <p class="rps-hint" id="rps-rk-lock-hint" style="margin-top:.4rem">{{ (i18n or {}).get('rps_rk_lock_hint', "建议至少锁定「自伤 / 自杀」和「要求停联」。") }}</p>
+  </div>
+
+
+  <!-- 成人 / 见面政策（Q-26 #301）：域默认 + 逐人设只读表（数据随 GET /api/reply-settings/risk-grader 的
+       personas[].adult_policy / meeting_policy + policy_defaults）；行尾 data-goto 深链人设工坊对应格
+       （#profile=<id>&tab=profile&focus=ad-row / mp-row）。本卡零写入口——改政策只在人设工坊。 -->
+  <div class="rps-card" id="rps-sec-policy" style="display:none">
+    <h3>{{ (i18n or {}).get('rps_ar_pol_title', "🔞 成人 / 见面政策 · 域默认与各人设") }}</h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_ar_pol_hint', "成人内容命中后怎么办、客户约见面怎么答——默认跟业务域，人设可覆写。这里只看全景；要改某个人设，点行尾直达人设工坊对应格（自动高亮）。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ar_pol_default_adult', "成人内容 · 域默认") }}</span>
+      <span class="rps-chip" id="rps-ar-pol-adult-def"></span>
+      <span class="rps-row-hint" id="rps-ar-pol-adult-src"></span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ar_pol_default_meet', "见面 · 域默认") }}</span>
+      <span class="rps-chip" id="rps-ar-pol-meet-def"></span>
+    </div>
+    <table class="rps-po-table" id="rps-ar-pol-table"><thead><tr>
+        <th>{{ (i18n or {}).get('rps_ar_pol_col_persona', "人设") }}</th>
+        <th>{{ (i18n or {}).get('rps_ar_pol_col_adult', "成人内容") }}</th>
+        <th>{{ (i18n or {}).get('rps_ar_pol_col_meet', "见面") }}</th>
+        <th>{{ (i18n or {}).get('rps_ar_pol_col_risk', "风控覆写") }}</th>
+        <th>{{ (i18n or {}).get('rps_ar_pol_col_go', "去调") }}</th>
+      </tr></thead><tbody id="rps-ar-pol-tbody"></tbody></table>
+    <p class="rps-hint" id="rps-ar-pol-empty" style="display:none">{{ (i18n or {}).get('rps_ar_pol_empty', "还没有人设。先去人设工坊建一个。") }}
+      <a href="/personas" data-goto="/personas">{{ (i18n or {}).get('rps_ar_pol_go_personas', "去人设工坊 →") }}</a></p>
   </div>
 
   <!-- Q-18 #293（rps-al-，2026-09-11）「今日拦截」台账：GET /api/reply-settings/abort-ledger → 24h 按原因码计数 +
@@ -510,6 +630,20 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span class="rps-row-hint" id="rps-ms-row-hint">{{ (i18n or {}).get('rps_ms_row_hint', "开＝一直按多坐席显示（团队固定多人）。关＝自动判：单人时收起认领 / 处理中 / 「我的」，多人同时在线时自动出现。保存后收件箱最迟 1 分钟刷新即生效。") }}</span>
     </div>
     <p class="rps-hint" id="rps-ms-eff-line" style="display:none"></p>
+  </div>
+
+  <!-- 暂停摸底总开关（Q-26 #301）：复用 GET/POST /api/goals/discovery-pause（工作目标线既有写入口，与收件箱目标卡同源）；
+       功能关 / 旧后端 404 → 整卡隐藏。 -->
+  <div class="rps-card" id="rps-sec-dpause" style="display:none">
+    <h3>{{ (i18n or {}).get('rps_ar_dp_title', "🧭 暂停摸底 · 总开关") }}
+      <span class="rps-chip" id="rps-ar-dp-state"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_ar_dp_hint', "开着＝所有会话的摸底类目标（带档案槽位的目标）都不再向 AI 注入「必问」指令，目标卡与进度照常显示；关掉即恢复。同一开关也在收件箱目标卡上。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ar_dp_row', "暂停全部摸底目标") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ar-dp-toggle" onchange="rpsArDpToggle(this)"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint" id="rps-ar-dp-hint"></span>
+    </div>
+  </div>
   </div>
 
   <div class="rps-grp" id="rps-grp-quota">
@@ -679,64 +813,6 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "选一档即把回复节奏（先读、再想、按手速打字，发出前停一下「正在输入」）、已读 / 打字气泡、长度、语音触发一键填成该档——先填进表单，看清底部改动数再保存；表情、风格要求等个性化项不受影响。专家参数在下方「高级参数」里。") }}</p>
     <div class="rps-modes" id="rps-presets"></div>
     <div class="rps-preset-state" id="rps-preset-state"></div>
-  </div>
-
-  <!-- 默认自动化档位（HEEEN9 / Q-4 #267：三层语义——会话 > 账号 > 本页兜底） -->
-  <div class="rps-card" id="rps-sec-mode">
-    <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "未设置账号的兜底档位") }}
-      <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span>
-      <span class="rps-chip" id="rps-mode-tiers" style="display:none;background:var(--input);color:var(--t2)"></span></h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_mode_hint', "三层优先级：会话里手选的档位 ＞ 账号菜单「此账号全部会话 →」设的档位 ＞ 本页兜底。只有既没按会话选、账号也没设过的会话，才用这里的档位。本页即使选「全自动」，账号未在账号菜单确认「此账号全部会话 → 全自动」之前，该账号的会话仍按拟稿人审落地，不会自动发出。") }}</p>
-    <p class="rps-hint" id="rps-mode-tiers-line" style="margin-top:-.2rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.74rem">{{ (i18n or {}).get('rps_mode_tiers_diagram', "会话手选 ▶ 账号设定 ▶ 本页兜底 ｜ 前面有值就不再往后看") }}</p>
-    <div class="rps-modes" id="rps-modes">
-      <label class="rps-mode">
-        <input type="radio" name="rps-mode" value="manual" onchange="rpsMarkDirty()">
-        <span class="rps-mode-box">
-          <span class="rps-mode-name"><span class="rps-mode-emoji">✍️</span>{{ (i18n or {}).get('rps_mode_manual', "手动") }}</span>
-          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_manual_d', "不生成草稿，完全人工回复") }}</span>
-        </span>
-      </label>
-      <label class="rps-mode">
-        <input type="radio" name="rps-mode" value="review" onchange="rpsMarkDirty()">
-        <span class="rps-mode-box">
-          <span class="rps-mode-name"><span class="rps-mode-emoji">📝</span>{{ (i18n or {}).get('rps_mode_review', "拟稿人审") }}</span>
-          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_review_d', "AI 写草稿，坐席通过后发出") }}</span>
-        </span>
-      </label>
-      <label class="rps-mode">
-        <input type="radio" name="rps-mode" value="multi_choice" onchange="rpsMarkDirty()">
-        <span class="rps-mode-box">
-          <span class="rps-mode-name"><span class="rps-mode-emoji">🔀</span>{{ (i18n or {}).get('rps_mode_multi', "多选一") }}</span>
-          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_multi_d', "AI 给多个候选，坐席挑一条") }}</span>
-        </span>
-      </label>
-      <label class="rps-mode">
-        <input type="radio" name="rps-mode" value="auto_ai" onchange="rpsMarkDirty()">
-        <span class="rps-mode-box">
-          <span class="rps-mode-name"><span class="rps-mode-emoji">🚀</span>{{ (i18n or {}).get('rps_mode_auto', "全自动") }}</span>
-          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_auto_d', "AI 直接回复，低风险草稿自动发出；高风险（危机 / 投诉 / 金额 / 政策类）转人工审核") }}</span>
-        </span>
-      </label>
-    </div>
-    <div class="rps-mode-capnote" id="rps-cap-note" style="display:none"></div>
-    <div class="rps-row">
-      <span class="rps-row-label">{{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度") }}
-        <span class="rps-chip" data-hot-chip="inbox.auto_draft.min_text_len"></span></span>
-      <input type="number" class="rps-num" id="rps-minlen" min="0" max="500" step="1" oninput="rpsMarkDirty()">
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_minlen_hint', "短于此字数的入站不生成草稿（0 = 不限制）") }}</span>
-    </div>
-    <!-- HEEEN9（Q-4 #267）：「新会话自动沿用此档位」→ 高级折叠 + 大白话 + 出厂关。
-         开着＝新会话第一条消息到时把兜底档位**写死**进该会话，之后改本页也不跟；
-         关着＝会话不写死，始终跟随三层实时算。 -->
-    <details class="rps-guard-adv" style="margin-top:.5rem">
-      <summary>{{ (i18n or {}).get('rps_mode_adv', "高级：把兜底档位写死到新会话") }}</summary>
-      <div class="rps-row" style="border-top:none">
-        <span class="rps-row-label">{{ (i18n or {}).get('rps_bootstrap_label', "新会话第一条消息到时，把当时的兜底档位写死进这个会话") }}
-          <span class="rps-chip" data-hot-chip="inbox.auto_draft.bootstrap_automation_mode"></span></span>
-        <label class="rps-switch"><input type="checkbox" id="rps-bootstrap" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bootstrap_hint', "出厂关。关着：会话不写死档位，之后改本页或账号菜单，这些会话立刻跟着变。开着：写死之后改本页不再影响它们，得逐个会话或按账号重设——只在「希望老会话锁住当时档位」时才开。") }}</span>
-      </div>
-    </details>
   </div>
 
   <!-- 工作时间班表（P0-ws，2026-08-04）：非工作时间不自动回复。后端未装载
@@ -1595,30 +1671,78 @@ var RPS_AL_I18N = {
   goConv: {{ (i18n or {}).get('rps_al_go_conv', "去会话处理")|tojson }},
   goConvT: {{ (i18n or {}).get('rps_al_go_conv_t', "打开该会话：会话头有「需人工」原因与出路（摘标 / 重拟 / 手发）")|tojson }}
 };
+/* Q-26 #301（rps-ar-）「自动化与风控」组词条：成人 / 见面政策表 + 暂停摸底开关 + 互链（i18n 包 automation_risk_q26.py） */
+var RPS_AR_I18N = {
+  follow: {{ (i18n or {}).get('rps_ar_pol_follow', "跟随域默认（{v}）")|tojson }},
+  srcCompanion: {{ (i18n or {}).get('rps_ar_pol_src_companion', "陪聊域")|tojson }},
+  srcDefault: {{ (i18n or {}).get('rps_ar_pol_src_default', "销售 / 客服域")|tojson }},
+  adult: {
+    soft_reply: {{ (i18n or {}).get('rps_ar_pol_adult_soft_reply', "软回应")|tojson }},
+    human: {{ (i18n or {}).get('rps_ar_pol_adult_human', "转人工")|tojson }},
+    mark_only: {{ (i18n or {}).get('rps_ar_pol_adult_mark_only', "只标记")|tojson }}
+  },
+  meet: {
+    never: {{ (i18n or {}).get('rps_ar_pol_meet_never', "永不")|tojson }},
+    after_months: {{ (i18n or {}).get('rps_ar_pol_meet_after_months', "熟悉 {n} 月后交人工")|tojson }},
+    handoff: {{ (i18n or {}).get('rps_ar_pol_meet_handoff', "交人工")|tojson }}
+  },
+  riskN: {{ (i18n or {}).get('rps_ar_pol_risk_n', "{n} 项")|tojson }},
+  riskNone: {{ (i18n or {}).get('rps_ar_pol_risk_none', "无")|tojson }},
+  goAdult: {{ (i18n or {}).get('rps_ar_pol_go_adult', "成人")|tojson }},
+  goMeet: {{ (i18n or {}).get('rps_ar_pol_go_meet', "见面")|tojson }},
+  goRisk: {{ (i18n or {}).get('rps_ar_pol_go_risk', "风控")|tojson }},
+  gotoPersona: {{ (i18n or {}).get('rps_ar_goto_persona', "本人设覆写 →")|tojson }},
+  dpOn: {{ (i18n or {}).get('rps_ar_dp_on', "已暂停（所有会话）")|tojson }},
+  dpOff: {{ (i18n or {}).get('rps_ar_dp_off', "运行中")|tojson }},
+  dpToastOn: {{ (i18n or {}).get('rps_ar_dp_toast_on', "已暂停全部摸底目标")|tojson }},
+  dpToastOff: {{ (i18n or {}).get('rps_ar_dp_toast_off', "已恢复摸底")|tojson }},
+  dpFail: {{ (i18n or {}).get('rps_ar_dp_fail', "切换失败：{detail}")|tojson }},
+  dpNa: {{ (i18n or {}).get('rps_ar_dp_na', "工作目标功能未启用（或旧后端）——本开关不可用。")|tojson }}
+};
 /* Q-17 #277②（rk-）「风控分级」卡词条：类别 / 级别 / 动作 查表（与 inbox.risk.* 同一 i18n 包 risk_grader.py） */
 var RPS_RK_I18N = {
-  personaNone: {{ (i18n or {}).get('rps_rk_persona_none', "（只看默认级别）")|tojson }},
+  personaNone: {{ (i18n or {}).get('rps_rk_persona_none', "先选一个人设")|tojson }},
   ovDefault: {{ (i18n or {}).get('rps_rk_ov_default', "跟默认")|tojson }},
-  ovLocked: {{ (i18n or {}).get('rps_rk_ov_locked', "不可调")|tojson }},
-  ovAdult: {{ (i18n or {}).get('rps_rk_ov_adult', "在人设工坊「成人内容政策」调")|tojson }},
+  ovLocked: {{ (i18n or {}).get('rps_rk_ov_locked', "—")|tojson }},
+  ovAdult: {{ (i18n or {}).get('rps_rk_ov_adult', "去「成人 / 见面政策」卡调 →")|tojson }},
   floor: {{ (i18n or {}).get('rps_rk_floor', "最低 {lv}")|tojson }},
-  saved: {{ (i18n or {}).get('rps_rk_saved', "✅ 已保存：{name} 的风控覆写（{n} 项）")|tojson }},
+  saved: {{ (i18n or {}).get('rps_rk_saved', "✅ 已保存：{name} 的记录级别（{n} 项）")|tojson }},
   saveFail: {{ (i18n or {}).get('rps_rk_save_fail', "保存失败：")|tojson }},
   unpersisted: {{ (i18n or {}).get('rps_rk_unpersisted', "（内存已更新，磁盘未写，重启会回退）")|tojson }},
-  loadFail: {{ (i18n or {}).get('rps_rk_load_fail', "风控分级读取失败")|tojson }},
+  loadFail: {{ (i18n or {}).get('rps_rk_load_fail', "敏感话题读取失败")|tojson }},
+  wordsMore: {{ (i18n or {}).get('rps_rk_words_more', "看例句")|tojson }},
+  lockOn: {{ (i18n or {}).get('rps_rk_lock_on', "已锁定：命中就停 AI")|tojson }},
+  lockOff: {{ (i18n or {}).get('rps_rk_lock_off', "未锁定：继续回复，只记录")|tojson }},
+  lockNa: {{ (i18n or {}).get('rps_rk_lock_na', "—")|tojson }},
+  lockSaved: {{ (i18n or {}).get('rps_rk_lock_saved', "🔒 已更新：{n} 类话会让 AI 停下（{names}）")|tojson }},
+  lockSavedNone: {{ (i18n or {}).get('rps_rk_lock_saved_none', "🔓 已更新：所有话题都继续回复，只记录")|tojson }},
+  lockFail: {{ (i18n or {}).get('rps_rk_lock_fail', "锁定保存失败：")|tojson }},
   levels: {
-    high: {{ (i18n or {}).get('rps_rk_lv_high', "高")|tojson }},
-    medium: {{ (i18n or {}).get('rps_rk_lv_medium', "中")|tojson }},
-    low: {{ (i18n or {}).get('rps_rk_lv_low', "低")|tojson }}
+    high: {{ (i18n or {}).get('rps_rk_lv_high', "高敏")|tojson }},
+    medium: {{ (i18n or {}).get('rps_rk_lv_medium', "中敏")|tojson }},
+    low: {{ (i18n or {}).get('rps_rk_lv_low', "低敏")|tojson }}
   },
+  /* 结果 chip 文案（risk_grader.outcome_of 的结果码 → 一句人话） */
+  outcomes: {
+    record: {{ (i18n or {}).get('rps_rk_out_record', "继续回复 · 记一笔")|tojson }},
+    stop: {{ (i18n or {}).get('rps_rk_out_stop', "留白，交给人")|tojson }},
+    freeze: {{ (i18n or {}).get('rps_rk_out_freeze', "留白，提醒坐席，不回客户")|tojson }},
+    adult: {{ (i18n or {}).get('rps_rk_out_adult', "按成人政策卡处理")|tojson }},
+    persona: {{ (i18n or {}).get('rps_rk_out_persona', "继续回复 · 按人设边界委婉答")|tojson }},
+    accept: {{ (i18n or {}).get('rps_rk_out_accept', "继续回复 · 「发来看看」")|tojson }},
+    review: {{ (i18n or {}).get('rps_rk_out_review', "继续回复 · 记一笔 + 进人审候选")|tojson }}
+  },
+  /* 动作长说明（chip 的 title 悬浮） */
   actions: {
-    hard_stop: {{ (i18n or {}).get('rps_rk_act_hard_stop', "一条告别 + 冻结会话")|tojson }},
-    needs_human: {{ (i18n or {}).get('rps_rk_act_needs_human', "停自动回复 → 需人工 + 风险保持")|tojson }},
-    adult_policy: {{ (i18n or {}).get('rps_rk_act_adult_policy', "按人设「成人内容政策」（Q-15）")|tojson }},
-    freeze: {{ (i18n or {}).get('rps_rk_act_freeze', "冻结会话，不再主动发")|tojson }},
-    persona_policy: {{ (i18n or {}).get('rps_rk_act_persona_policy', "按人设边界软拒 / 软延迟（Q-2）")|tojson }},
-    shadow_log: {{ (i18n or {}).get('rps_rk_act_shadow_log', "记日志 + 标「风险·中」，正常拟稿")|tojson }},
-    log_only: {{ (i18n or {}).get('rps_rk_act_log_only', "只记日志")|tojson }}
+    hard_stop: {{ (i18n or {}).get('rps_rk_act_hard_stop', "锁定后：留白，提醒坐席，不回客户")|tojson }},
+    needs_human: {{ (i18n or {}).get('rps_rk_act_needs_human', "锁定后：留白，标「需人工」交给坐席")|tojson }},
+    adult_policy: {{ (i18n or {}).get('rps_rk_act_adult_policy', "按本页「成人 / 见面政策」卡处理（人设可覆写）")|tojson }},
+    freeze: {{ (i18n or {}).get('rps_rk_act_freeze', "锁定后：留白，提醒坐席，不回客户")|tojson }},
+    persona_policy: {{ (i18n or {}).get('rps_rk_act_persona_policy', "继续回复，按人设的边界政策委婉答")|tojson }},
+    shadow_log: {{ (i18n or {}).get('rps_rk_act_shadow_log', "继续回复，会话标「风险·中」")|tojson }},
+    mark_review: {{ (i18n or {}).get('rps_rk_act_mark_review', "继续回复，会话标「风险·中」并进人审候选")|tojson }},
+    accept_expect: {{ (i18n or {}).get('rps_rk_act_accept_expect', "继续回复，AI 会说「发来看看」")|tojson }},
+    log_only: {{ (i18n or {}).get('rps_rk_act_log_only', "继续回复，只记日志")|tojson }}
   },
   cats: {
     self_harm: {{ (i18n or {}).get('inbox.risk.cat_self_harm', "自伤 / 自杀")|tojson }},
@@ -4175,18 +4299,62 @@ function rpsRkOnChange(sel){
   if (v) rpsRkState.overrides[cid] = v; else delete rpsRkState.overrides[cid];
   rpsRkPaintDirty();
 }
+/* R88：敏感度三色（红 / 橙 / 绿）只表示「多敏感」，chip 文案才是「AI 会怎么做」 */
+function rpsRkLevelColor(lv){
+  return lv === 'high' ? 'var(--red, #dc2626)' : (lv === 'medium' ? 'var(--amber, #d97706)' : 'var(--green, #16a34a)');
+}
+function rpsRkLevelIcon(lv){ return lv === 'high' ? '🔴' : (lv === 'medium' ? '🟠' : '🟢'); }
+function rpsRkOutcomeChip(c){
+  var eff = c.effective_level || c.level;
+  var col = rpsRkLevelColor(eff);
+  var key = c.outcome || 'record';
+  var txt = RPS_RK_I18N.outcomes[key] || RPS_RK_I18N.outcomes.record;
+  var title = RPS_RK_I18N.actions[c.action] || '';
+  var stopsAi = (key === 'stop' || key === 'freeze');
+  // 停 AI 的结果用实底提醒；继续回复的用淡底
+  var style = stopsAi
+    ? 'background:' + col + ';color:#fff'
+    : 'background:color-mix(in srgb, ' + col + ' 14%, transparent);color:' + col;
+  var chip = '<span class="rps-chip" style="' + style + '" title="' + rpsEsc(title) + '">' + rpsRkLevelIcon(eff) + ' ' + rpsEsc(txt) + '</span>';
+  if (key === 'adult'){
+    chip = '<a class="rps-goto" href="#rps-sec-policy" data-goto="#rps-sec-policy" style="text-decoration:none">' + chip + '</a>';
+  }
+  return chip;
+}
+function rpsRkLegend(){
+  var el = document.getElementById('rps-rk-legend'); if (!el) return;
+  el.innerHTML = ['high', 'medium', 'low'].map(function(lv){
+    var col = rpsRkLevelColor(lv);
+    return '<span class="rps-chip" style="background:color-mix(in srgb, ' + col + ' 14%, transparent);color:' + col + '">' + rpsRkLevelIcon(lv) + ' ' + rpsEsc(rpsRkLevelLabel(lv)) + '</span>';
+  }).join('') + '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.outcomes.record) + '</span>';
+}
+function rpsRkWordsCell(c){
+  var lang = String(document.documentElement.lang || navigator.language || 'zh').toLowerCase();
+  var w = c.words || {};
+  var list = (lang.indexOf('zh') === 0 ? (w.zh || []) : (w.en || []));
+  if (!list.length) list = (w.zh || []).concat(w.en || []);
+  if (!list.length) return '<span class="rps-row-hint" style="margin:0">—</span>';
+  var items = list.slice(0, 6).map(function(x){ return '<li>' + rpsEsc(x) + '</li>'; }).join('');
+  return '<details class="rps-rk-words"><summary class="rps-row-hint" style="margin:0;cursor:pointer">' + rpsEsc(RPS_RK_I18N.wordsMore) + '</summary><ul style="margin:.3rem 0 0;padding-left:1.1rem;color:var(--t2);font-size:.8rem">' + items + '</ul></details>';
+}
+function rpsRkLockCell(c){
+  if (!c.lockable) return '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.lockNa) + '</span>';
+  var on = !!c.locked;
+  return '<label class="rps-switch" title="' + rpsEsc(on ? RPS_RK_I18N.lockOn : RPS_RK_I18N.lockOff) + '">'
+    + '<input type="checkbox" data-rk-lock="' + rpsEsc(c.id) + '"' + (on ? ' checked' : '') + ' onchange="rpsRkLockToggle(this)">'
+    + '<span class="rps-slider"></span></label>';
+}
 function rpsRkRender(d){
   var tb = document.getElementById('rps-rk-tbody'); if (!tb) return;
   var rows = d.categories || [];
   var hasPersona = !!rpsRkState.personaId;
   var levelOrder = ['high', 'medium', 'low'];
+  rpsRkLegend();
   tb.innerHTML = rows.map(function(c){
-    var words = ((c.words || {}).zh || []).concat((c.words || {}).en || []).slice(0, 6).join(' · ');
-    var eff = c.effective_level || c.level;
-    var lvCls = eff === 'high' ? 'var(--red, #dc2626)' : (eff === 'medium' ? 'var(--amber)' : 'var(--t2)');
     var ov;
     if (c.id === 'adult'){
-      ov = '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.ovAdult) + '</span>';
+      // Q-26 #301：本页「成人 / 见面政策」卡直达 + 高亮（rpsGoto）
+      ov = '<a class="rps-goto rps-row-hint" style="margin:0" href="#rps-sec-policy" data-goto="#rps-sec-policy">' + rpsEsc(RPS_RK_I18N.ovAdult) + '</a>';
     } else if (!c.overridable){
       ov = '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.ovLocked) + '</span>';
     } else if (!hasPersona){
@@ -4197,22 +4365,59 @@ function rpsRkRender(d){
       var opts = '<option value=""' + (cur ? '' : ' selected') + '>' + rpsEsc(RPS_RK_I18N.ovDefault + '（' + rpsRkLevelLabel(c.level) + '）') + '</option>';
       levelOrder.forEach(function(lv, i){
         if (i > floorIdx) return;   // 地板以下不给选
-        opts += '<option value="' + lv + '"' + (cur === lv ? ' selected' : '') + '>' + rpsEsc(rpsRkLevelLabel(lv)) + '</option>';
+        opts += '<option value="' + lv + '"' + (cur === lv ? ' selected' : '') + '>' + rpsEsc(rpsRkLevelIcon(lv) + ' ' + rpsRkLevelLabel(lv)) + '</option>';
       });
       ov = '<select data-rk-cat="' + rpsEsc(c.id) + '" onchange="rpsRkOnChange(this)">' + opts + '</select>'
         + (c.floor && c.floor !== 'low' ? ' <span class="rps-row-hint" style="margin:0">' + rpsEsc(String(RPS_RK_I18N.floor).replace('{lv}', rpsRkLevelLabel(c.floor))) + '</span>' : '');
     }
     return '<tr>'
       + '<td><b>' + rpsEsc(RPS_RK_I18N.cats[c.id] || c.id) + '</b></td>'
-      + '<td style="color:var(--t2)">' + rpsEsc(words) + '</td>'
-      + '<td><span class="rps-chip" style="background:color-mix(in srgb, ' + lvCls + ' 14%, transparent);color:' + lvCls + '">' + rpsEsc(rpsRkLevelLabel(eff)) + '</span>'
-      + (c.override ? ' <span class="rps-row-hint" style="margin:0">(' + rpsEsc(rpsRkLevelLabel(c.level)) + ')</span>' : '') + '</td>'
-      + '<td>' + rpsEsc(RPS_RK_I18N.actions[c.action] || c.action || '') + '</td>'
+      + '<td>' + rpsRkWordsCell(c) + '</td>'
+      + '<td>' + rpsRkOutcomeChip(c) + '</td>'
+      + '<td>' + rpsRkLockCell(c) + '</td>'
       + '<td>' + ov + '</td>'
       + '</tr>';
   }).join('');
   rpsRkPaintDirty();
 }
+/* R88：锁定开关即存即生效（overlay 免重启）；失败回滚勾选态 */
+async function rpsRkLockToggle(inp){
+  var cid = String(inp && inp.getAttribute('data-rk-lock') || ''); if (!cid) return;
+  var locked = {};
+  (rpsRkState.rows || []).forEach(function(c){ if (c.lockable && c.locked) locked[c.id] = true; });
+  if (inp.checked) locked[cid] = true; else delete locked[cid];
+  var list = Object.keys(locked);
+  inp.disabled = true;
+  try {
+    var r = await apiFetch('/api/reply-settings/risk-grader/locks', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({locked: list})
+    });
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error((d && d.errors && d.errors[0] && d.errors[0].message) || ('HTTP ' + r.status));
+    var names = (d.locked || []).map(function(id){ return RPS_RK_I18N.cats[id] || id; }).join(' / ');
+    var msg = (d.locked || []).length
+      ? String(RPS_RK_I18N.lockSaved).replace('{n}', (d.locked || []).length).replace('{names}', names)
+      : RPS_RK_I18N.lockSavedNone;
+    rpsToast(rpsEsc(msg));
+    // 用服务端回传的表重绘（outcome / locked 同源），不动人设覆写的未保存改动
+    if (Array.isArray(d.categories)){
+      var ovByCat = {};
+      (rpsRkState.rows || []).forEach(function(c){ ovByCat[c.id] = c; });
+      rpsRkState.rows = d.categories.map(function(c){
+        var old = ovByCat[c.id] || {};
+        c.override = old.override || ''; c.effective_level = old.effective_level || c.level;
+        return c;
+      });
+      rpsRkRender({categories: rpsRkState.rows});
+    }
+  } catch (e){
+    inp.checked = !inp.checked;
+    rpsToast(rpsEsc(RPS_RK_I18N.lockFail + ((e && e.message) || '')), 'err');
+  } finally {
+    inp.disabled = false;
+  }
+}
+window.rpsRkLockToggle = rpsRkLockToggle;
 async function rpsRkLoad(personaId){
   var card = document.getElementById('rps-sec-risk');
   if (!card) return;
@@ -4240,8 +4445,140 @@ async function rpsRkLoad(personaId){
     }
     rpsRkRender(d);
     card.style.display = '';
+    try { rpsArPolRender(d); } catch (_e2){}   // Q-26 #301：成人 / 见面政策全景表随同一响应装载
   } catch (_e){ card.style.display = 'none'; }
 }
+/* ── Q-26 #301（rps-ar-）「自动化与风控」组：成人 / 见面政策全景（只读）+ 暂停摸底开关 + 深链 ── */
+function rpsArAdultLabel(v){ v = String(v || ''); return (RPS_AR_I18N.adult && RPS_AR_I18N.adult[v]) || v; }
+function rpsArMeetLabel(v, n){
+  v = String(v || 'never');
+  var t = (RPS_AR_I18N.meet && RPS_AR_I18N.meet[v]) || v;
+  return String(t).replace('{n}', String(n || 3));
+}
+function rpsArPersonaGoto(pid, focus){
+  return '/personas#profile=' + encodeURIComponent(String(pid || '')) + '&tab=profile&focus=' + focus;
+}
+function rpsArPolRender(d){
+  var card = document.getElementById('rps-sec-policy'); if (!card) return;
+  var pd = (d && d.policy_defaults) || null;
+  if (!pd){ card.style.display = 'none'; return; }   // 旧后端无 policy_defaults → 整卡隐藏
+  var adultDef = String(pd.adult || 'human');
+  var el;
+  el = document.getElementById('rps-ar-pol-adult-def'); if (el) el.textContent = rpsArAdultLabel(adultDef);
+  el = document.getElementById('rps-ar-pol-adult-src'); if (el) el.textContent = (pd.adult_source === 'default_companion') ? RPS_AR_I18N.srcCompanion : RPS_AR_I18N.srcDefault;
+  el = document.getElementById('rps-ar-pol-meet-def'); if (el) el.textContent = rpsArMeetLabel(pd.meeting || 'never');
+  var rows = (d && d.personas) || [];
+  var tb = document.getElementById('rps-ar-pol-tbody');
+  var empty = document.getElementById('rps-ar-pol-empty');
+  var table = document.getElementById('rps-ar-pol-table');
+  if (!rows.length){
+    if (tb) tb.innerHTML = '';
+    if (table) table.style.display = 'none';
+    if (empty) empty.style.display = '';
+  } else {
+    if (table) table.style.display = '';
+    if (empty) empty.style.display = 'none';
+    if (tb) tb.innerHTML = rows.map(function(p){
+      var pid = String(p.id || '');
+      var ad = String(p.adult_policy || '');
+      var adTxt = ad ? rpsArAdultLabel(ad) : String(RPS_AR_I18N.follow).replace('{v}', rpsArAdultLabel(adultDef));
+      var nOv = Object.keys(p.overrides || {}).length;
+      var riskTxt = nOv ? String(RPS_AR_I18N.riskN).replace('{n}', String(nOv)) : RPS_AR_I18N.riskNone;
+      var go = '<a class="rps-goto" href="' + rpsEsc(rpsArPersonaGoto(pid, 'ad-row')) + '" data-goto="' + rpsEsc(rpsArPersonaGoto(pid, 'ad-row')) + '">' + rpsEsc(RPS_AR_I18N.goAdult) + '</a>'
+        + '<a class="rps-goto" href="' + rpsEsc(rpsArPersonaGoto(pid, 'mp-row')) + '" data-goto="' + rpsEsc(rpsArPersonaGoto(pid, 'mp-row')) + '">' + rpsEsc(RPS_AR_I18N.goMeet) + '</a>'
+        + '<a class="rps-goto" href="#rps-sec-risk" data-goto="#rps-sec-risk" data-rk-persona="' + rpsEsc(pid) + '">' + rpsEsc(RPS_AR_I18N.goRisk) + '</a>';
+      return '<tr>'
+        + '<td><b>' + rpsEsc(p.name || pid) + '</b></td>'
+        + '<td' + (ad ? '' : ' style="color:var(--t2)"') + '>' + rpsEsc(adTxt) + '</td>'
+        + '<td>' + rpsEsc(rpsArMeetLabel(p.meeting_policy, p.meeting_months)) + '</td>'
+        + '<td' + (nOv ? '' : ' style="color:var(--t2)"') + '>' + rpsEsc(riskTxt) + '</td>'
+        + '<td>' + go + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+  card.style.display = '';
+}
+/* 暂停摸底总开关：复用工作目标线 GET/POST /api/goals/discovery-pause；功能关 / 404 → 整卡隐藏 */
+var rpsArDpBusy = false;
+function rpsArDpPaint(paused){
+  var st = document.getElementById('rps-ar-dp-state');
+  var tg = document.getElementById('rps-ar-dp-toggle');
+  if (tg) tg.checked = !!paused;
+  if (st){
+    st.textContent = paused ? RPS_AR_I18N.dpOn : RPS_AR_I18N.dpOff;
+    st.style.background = paused ? 'color-mix(in srgb, var(--amber) 14%, transparent)' : 'color-mix(in srgb, var(--green) 12%, transparent)';
+    st.style.color = paused ? 'var(--amber)' : 'var(--green)';
+  }
+}
+async function rpsArDpLoad(){
+  var card = document.getElementById('rps-sec-dpause'); if (!card) return;
+  try {
+    var r = await apiFetch('/api/goals/discovery-pause');
+    if (!r.ok){ card.style.display = 'none'; return; }
+    var d = await r.json();
+    if (!d || typeof d.paused === 'undefined'){ card.style.display = 'none'; return; }
+    rpsArDpPaint(!!d.paused);
+    card.style.display = '';
+  } catch (_e){ card.style.display = 'none'; }
+}
+async function rpsArDpToggle(el){
+  if (rpsArDpBusy) return;
+  var want = !!(el && el.checked);
+  rpsArDpBusy = true; if (el) el.disabled = true;
+  try {
+    var r = await apiFetch('/api/goals/discovery-pause', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paused: want})});
+    var d = {}; try { d = await r.json(); } catch (_e){ d = {}; }
+    if (!r.ok || d.ok === false) throw new Error(String((d && (d.detail || d.message)) || ('HTTP ' + r.status)));
+    rpsArDpPaint(!!d.paused);
+    rpsToast(rpsEsc(want ? RPS_AR_I18N.dpToastOn : RPS_AR_I18N.dpToastOff), 'ok');
+  } catch (e){
+    rpsArDpPaint(!want);
+    rpsToast(rpsEsc(String(RPS_AR_I18N.dpFail).replace('{detail}', String(e && e.message || e))), 'err');
+  } finally { rpsArDpBusy = false; if (el) el.disabled = false; }
+}
+/* 深链：data-goto="#id"（本页：滚到 + 2.4s 描边高亮）/ "/path#…"（跨页：整页跳转，目标页自己高亮）。
+   进入本页带 #hash → 卡片异步装载完再定位（两拍重试：600ms / 1800ms）；?persona=<id> → 风控分级卡预选该人设。 */
+function rpsGoto(target, opts){
+  opts = opts || {};
+  var t = String(target || '');
+  if (!t) return false;
+  if (t.charAt(0) !== '#'){ window.location.href = t; return true; }
+  var id = t.slice(1);
+  var el = document.getElementById(id);
+  if (!el) return false;
+  if (el.style.display === 'none' && !opts.force) return false;   // 卡还没装载 → 让调用方稍后重试
+  if (opts.persona){
+    var sel = document.getElementById('rps-rk-persona');
+    if (sel && sel.value !== opts.persona){ sel.value = opts.persona; try { rpsRkLoad(opts.persona); } catch (_e){} }
+  }
+  try { el.scrollIntoView({behavior: 'smooth', block: 'start'}); } catch (_e){ el.scrollIntoView(); }
+  el.classList.remove('rps-hl'); void el.offsetWidth; el.classList.add('rps-hl');
+  setTimeout(function(){ el.classList.remove('rps-hl'); }, 2600);
+  return true;
+}
+function rpsGotoFromUrl(){
+  var h = String(window.location.hash || '');
+  var q = new URLSearchParams(window.location.search || '');
+  var persona = String(q.get('persona') || '');
+  if (!h && !persona) return;
+  var target = h || '#rps-sec-risk';
+  var tries = 0;
+  (function attempt(){
+    tries += 1;
+    if (rpsGoto(target, {persona: persona, force: tries >= 3}) || tries >= 3) return;
+    setTimeout(attempt, tries === 1 ? 600 : 1200);
+  })();
+}
+document.addEventListener('click', function(ev){
+  var a = ev.target && ev.target.closest ? ev.target.closest('[data-goto]') : null;
+  if (!a) return;
+  var t = String(a.getAttribute('data-goto') || '');
+  if (t.charAt(0) !== '#') return;   // 跨页链接走浏览器默认 href
+  ev.preventDefault();
+  var persona = String(a.getAttribute('data-rk-persona') || '');
+  if (!rpsGoto(t, {persona: persona, force: true})) window.location.hash = t;
+});
+window.addEventListener('hashchange', function(){ rpsGoto(String(window.location.hash || ''), {force: true}); });
 /* Q-18 #293（rps-al-）「今日拦截」：独立端点异步装载；旧后端 404 / store 缺席 → 整卡隐藏 */
 function rpsAlReason(code){ code = String(code || ''); return (RPS_AL_I18N.reasons && RPS_AL_I18N.reasons[code]) || code || '-'; }
 /* R87 #331：子原因人话（reason 列原码 → 句子；命中词若不是原因码则原样当命中词）+ dup 细节行 */
@@ -4396,7 +4733,11 @@ async function rpsLoad(){
     rpsRkLoad(rpsRkState.personaId);
     // Q-18 #293（rps-al-）今日拦截台账：独立端点异步装载，旧后端 404 整卡隐藏
     rpsAlLoad();
+    // Q-26 #301（rps-ar-）暂停摸底总开关：复用 /api/goals/discovery-pause，功能关 / 404 整卡隐藏
+    rpsArDpLoad();
     rpsFill(rpsBaseline);
+    // Q-26 #301：带 #hash / ?persona= 进来 → 卡片装载后定位 + 高亮（人设工坊「去调」互链落点）
+    try { rpsGotoFromUrl(); } catch (_e){}
   } catch (e) {
     rpsToast(rpsEsc(RPS_I18N.loadFailed), 'err');
   }

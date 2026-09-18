@@ -94,6 +94,7 @@ def normalize_chat_key(platform: str, chat_key: str) -> str:
 BACKFILL_KEY = "backfill"
 BACKFILL_SOURCE_KEY = "backfill_source"
 SELF_CHAT_KEY = "self_chat"
+DECRYPT_FAIL_KEY = "decrypt_fail"
 
 
 def is_backfill_source(source: Any) -> bool:
@@ -111,6 +112,19 @@ def backfill_source_of(source: Any) -> str:
     if not isinstance(source, dict):
         return ""
     return str(source.get(BACKFILL_SOURCE_KEY) or "").strip()[:32]
+
+
+def is_decrypt_fail_source(source: Any) -> bool:
+    """Bad MAC 占位入站：落库、计未读、发 SSE，但不起草（#279 可见但不起草）。"""
+    if not isinstance(source, dict):
+        return False
+    v = source.get(DECRYPT_FAIL_KEY)
+    if isinstance(v, str):
+        if v.strip().lower() in ("1", "true", "yes"):
+            return True
+    elif v:
+        return True
+    return backfill_source_of(source) == "decrypt_fail"
 
 
 def is_self_chat(platform: str, account_id: str, chat_key: str,

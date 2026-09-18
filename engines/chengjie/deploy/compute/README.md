@@ -24,17 +24,32 @@
 
 | 173 端口 | 服务 | 消费方 | 重装后去向 |
 |---|---|---|---|
-| :11434 | Ollama `qwen14b-fallback` | zhiliao `ai.fallback` + `avatar_voice.colloquial.llm_endpoints[0]`；**192.168.0.198 也在调**（LiveX/口型线，归属待确认） | **不重建**。zhiliao 侧由 `compute_mode.py` 改指 vLLM `/v1`；198 消费方需知会其负责线改指 vLLM 或 198 本机 |
+| :11434 | Ollama（现役**不**再跑对话 14B） | 视觉/工具若仍有人打此口需改指 :8001；智聊 `ai.fallback` 与口语化已改 vLLM `/v1` `chatx` 27B | **不重建 14B**。对话一律 173:8001 chatx |
 | :7852 | CosyVoice 情感 TTS | zhiliao `avatar_voice.base_urls` 三号位；**192.168.0.176 高频调用**（幻影 LiveX 线） | 短期：从 zhiliao 列表摘除（117/140 双点仍在）；**动手前必须知会 LiveX 线**；长期可在 Linux 重建（见 RUNBOOK §8） |
 | WSL :8000 (loopback) | vLLM 0.27 试验体 | 无（未对 LAN） | 由原生 Linux vLLM 取代，对 LAN 开 :8000 |
-| （监控） | `ops.gpu_watermark` 173-5090 走 :11434 | zhiliao ops 卡 | `compute_mode.py cleanup` 摘除该条目（vLLM 用 :8000/metrics，后续再接） |
+| （监控） | `ops.gpu_watermark` 173-5090 走 :11434（画成「空卡 0 GB」） | zhiliao ops 卡 | 2026-09-17 引擎已支持 `kind: vllm`（探 /v1/models + /metrics `kv_cache_usage_perc`；显存量不猜，可选 `resident_gb` 按 vLLM 启动参数填）。**overlay 条目待下次实例重启后改** `base_url: http://192.168.0.173:8001` + `kind: vllm`（旧代码打 :8001 会 404 画黄，条目上已留注释） |
 
 模型资产：已从 WSL VHDX 撤离到 173 的 **D:\models\**（NTFS 数据盘，878G，重装时勿动），
 含 `qwen25-abl-awq`（19G 主力）与 `qwen3awq`（17G，官方 Qwen3-30B AWQ，留作 A/B）。
 
 ## 统一契约（2026-08-13 起生效，改动先改这里）
 
-> ⛔⛔ **2026-08-22 02:27 老板指令（最高优先，覆盖本节全部契约）：主链锁定云端，
+> 📌📌 **现行档位（2026-09-17 03:15 起，R88 老板拍板）：`ai.primary=local`、
+> `ai.primary_lock=local`——主链＝173 vLLM `chatx`（:8001），云端 DeepSeek 仅作回落。**
+> - 切换途径合规：治理接口 `POST /api/setup/ai-primary`，审计台账 `lock_changed cloud→local`
+>   + `switch_saved cloud→local`（actor=r88_followup）；活体 `/api/setup/cloud-credentials`
+>   `primary.{configured,effective,lock}=local`、`/api/workspace/ai-runtime-status primary=local`。
+> - 下方 08-22 一段是**锁机制的由来与语义**（老板锁 + 全程审计 + 禁止执行器自动切档），
+>   **不是当前档位**。锁值已从 cloud 改为 local；"锁 cloud"、"仍在 cloud 档"、"三线 173"
+>   这类字眼不得再出现在任何告警文案 / 日报 / 看板里——一律取 `ai.primary` / `ai.primary_lock`
+>   现值渲染（09-17 事故：配置层已切档 12 小时，运维群五个出口仍用 08-22 叙事描述系统）。
+> - 锁=local 的派生规则：`compute_mode.py cloud` 被锁拒跑是预期；health_watchdog
+>   「:8001 连败热切 cloud」保险只报不切（`ai_primary_guard_alert kind=probe_fail_locked`）；
+>   要降级回 cloud＝老板改锁 → 治理接口。
+> - 监控口径：`ops.gpu_watermark` 支持 `kind: vllm`（探 /v1/models + /metrics KV cache），
+>   173 条目随下次重启改指 :8001；官网 `compute_status_report.py` 三档顺序/厂商按 overlay 现读。
+>
+> ⛔⛔ **2026-08-22 02:27 老板指令（锁机制由来；锁值现已改 local，见上）：主链锁定云端，
 > 「自动切回 local_only」永久废止。**
 > - 事故链：08-21 05:49 老板令主链回 cloud（已执行验证）→ 数小时内被翻回
 >   `local_only`（切换当时无审计，翻回方无法定位；中枢执行器的「起本地端点后切回

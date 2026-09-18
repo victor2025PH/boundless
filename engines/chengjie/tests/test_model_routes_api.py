@@ -239,21 +239,27 @@ def test_list_models_uses_stored_or_primary_key_and_dedups(tmp_path, monkeypatch
 
 
 def test_developer_page_presets_and_anchor():
-    """开发者页：多模型路由卡有 #dvmr 锚（composer「管理模型与密钥 →」跳转目标）、厂商预设
-    只填端点不写死模型版本号、「拉取模型列表」接 list-models。"""
+    """模型与密钥页：多模型路由卡有 #dvmr 锚（composer「管理模型与密钥 →」跳转目标）、厂商预设
+    只填端点不写死模型版本号、「拉取模型列表」接 list-models。开发者页只留跳转，旧锚 #dvmr 仍在。"""
     import pathlib
     import re
-    html = pathlib.Path("src/web/templates/developer.html").read_text(encoding="utf-8")
-    assert 'class="f-row" id="dvmr"' in html
-    assert "/api/setup/model-routes/list-models" in html
-    assert 'onchange="mrApplyPreset(this.value)"' in html and "function mrApplyPreset(" in html
-    i = html.index("const _DVMR_PRESETS")
-    block = html[i:html.index("};", i)]
+    card = pathlib.Path("src/web/templates/_model_routes_card.html").read_text(encoding="utf-8")
+    page = pathlib.Path("src/web/templates/model_keys.html").read_text(encoding="utf-8")
+    dev = pathlib.Path("src/web/templates/developer.html").read_text(encoding="utf-8")
+    assert 'id="dvmr"' in card and "{% include \"_model_routes_card.html\" %}" in page
+    assert "/api/setup/model-routes/list-models" in card
+    assert 'onchange="mrApplyPreset(this.value)"' in card and "function mrApplyPreset(" in card
+    i = card.index("const _DVMR_PRESETS")
+    block = card[i:card.index("};", i)]
     for base in ("https://api.openai.com/v1", "https://generativelanguage.googleapis.com/v1beta/openai",
                  "https://api.x.ai/v1", "https://api.deepseek.com/v1"):
         assert base in block
     # 云厂商预设不写死会过期的模型版本号（DeepSeek 官方唯一现役 deepseek-flash 例外）
     assert not re.search(r"model:\s*'(gpt|gemini|grok|claude)-", block)
+    assert 'id="dvmr"' in dev and 'href="/model-keys"' in dev
+    assert "function mrApplyPreset(" not in dev
+    assert "location.hash==='#dvmr'" in dev
     from src.web.i18n_packs import developer_page as dp
-    for k in ("dv_mr_f_preset", "dv_mr_list_btn", "dv_mr_js_list_ok", "dv_mr_js_list_fail", "dv_mr_sub_conv"):
+    for k in ("dv_mr_f_preset", "dv_mr_list_btn", "dv_mr_js_list_ok", "dv_mr_js_list_fail", "dv_mr_sub_conv",
+              "nav_model_keys", "dv_mr_moved", "dv_mr_moved_btn", "mk_need_admin"):
         assert k in dp.ZH and k in dp.EN, k

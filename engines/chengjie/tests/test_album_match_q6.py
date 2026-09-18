@@ -118,3 +118,23 @@ def test_miss_notes_and_consume(monkeypatch):
     rec = ia.consume_album_miss("wa:a:miss")
     assert rec and rec.get("scene") == "outdoor"
     assert ia.consume_album_miss("wa:a:miss") == {}
+
+
+def test_picture_of_you_falls_back_to_enabled_selfie(monkeypatch, caplog):
+    from src.inbox import image_autosend as ia
+
+    class _St:
+        def list(self, *a, **k):
+            return [_row(1, triggers=[], tags=["kind:selfie"])]
+
+        def sent_history(self, *a, **k):
+            return {"ids": set(), "series": set(), "file_keys": set(), "items": []}
+
+    monkeypatch.setattr("src.companion.persona_media_store.get_persona_media_store", lambda: _St())
+    cfg = {"companion": {"selfie": {"enabled": True, "consistency": {"enabled": False}}}}
+    caplog.set_level(logging.INFO)
+    row = ia.pick_registered_media(
+        cfg, "nori", "can I see a picture of you", conv_key="wa:a:picyou")
+    assert row and row["id"] == "1"
+    joined = "\n".join(r.message for r in caplog.records)
+    assert "selfie_fallback=1" in joined

@@ -90,6 +90,32 @@ async def test_verbatim_defer_shifts_to_quiet_end():
     assert rec[0]["extra"]["quiet_policy"] == "defer"
 
 
+async def test_deliver_text_keep_does_not_shift_in_quiet_hours():
+    """#265：改稿点「发出」对 keep 原文不得再顺延到 08:00。"""
+    s, (rid,) = _store(("u1", "晚安 keep", "keep"))
+    rec = []
+    d = CareDispatcher(store=s, ai_client=_AI(), send_callback=_sender(rec),
+                       quiet_start_hour=23, quiet_end_hour=8)
+    item = s.get(rid)
+    res = await d.deliver_text(item, "改过的晚安", now=LATE)
+    assert res["ok"] and abs(res["defer_until"] - LATE) < 1
+    assert rec[0]["defer_until"] == LATE
+    assert rec[0]["extra"]["ignore_quiet"] is True
+    assert rec[0]["extra"]["quiet_policy"] == "keep"
+
+
+async def test_deliver_text_defer_still_shifts():
+    s, (rid,) = _store(("u1", "晚安 defer", "defer"))
+    rec = []
+    d = CareDispatcher(store=s, ai_client=_AI(), send_callback=_sender(rec),
+                       quiet_start_hour=23, quiet_end_hour=8)
+    res = await d.deliver_text(s.get(rid), "改过的晚安", now=LATE)
+    assert res["ok"]
+    du = datetime.fromtimestamp(res["defer_until"])
+    assert du.hour >= 8
+    assert rec[0]["extra"]["ignore_quiet"] is False
+
+
 async def test_two_deferred_rows_are_staggered_at_least_5min():
     s, ids = _store(("u1", "晚安 a", "defer"), ("u2", "晚安 b", "defer"))
     rec = []

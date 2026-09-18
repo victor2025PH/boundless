@@ -6933,16 +6933,21 @@ async function loadGpuWatermark(){
     opsSetCardLight('gpuwm', hosts.some(function(h){ return h.level==='high'; })
       ? 'red' : (hosts.some(function(h){ return h.level==='warn' || h.level==='unknown' || !h.reachable; }) ? 'yellow' : ''));
     kp.innerHTML = hosts.map(function(h){
-      var v = h.reachable ? (h.used_gb+' / '+h.total_gb+' GB') : window.T('ov2_js_gpuwm_unreach');
+      // vLLM 主机（kind=vllm）预留式占显存，未配 resident_gb 时 used_gb=null：
+      // 显示后端给的 note（常驻模型 + KV cache 水位），不画「null / 32 GB」
+      var v = !h.reachable ? window.T('ov2_js_gpuwm_unreach')
+        : ((h.used_gb===null||h.used_gb===undefined) ? esc(h.note||'—') : (h.used_gb+' / '+h.total_gb+' GB'));
       var pct = (h.used_pct===null||h.used_pct===undefined) ? '' :
         '<span class="muted" style="font-size:12px;margin-left:6px;">'+h.used_pct+'%</span>';
+      if(h.used_gb===null||h.used_gb===undefined){ v = '<span style="font-size:14px;">'+v+'</span>'; }
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+(lvIcon[h.level]||'⚪')+' '+h.name+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+v+pct+'</div></div>';
     }).join('') || '';
       var rows = [];
     hosts.forEach(function(h){
       (h.models||[]).forEach(function(m){
-        rows.push('<tr><td>'+esc(h.name)+'</td><td>'+esc(m.name)+'</td><td>'+m.size_gb+' GB</td></tr>');
+        rows.push('<tr><td>'+esc(h.name)+'</td><td>'+esc(m.name)+'</td><td>'
+          +((m.size_gb===null||m.size_gb===undefined) ? esc(m.until||'—') : (m.size_gb+' GB'))+'</td></tr>');
       });
       if(!h.reachable){
         rows.push('<tr><td>'+esc(h.name)+'</td><td colspan="2" class="muted">'+window.T('ov2_js_gpuwm_unreach')+' '+esc(h.error||'')+'</td></tr>');

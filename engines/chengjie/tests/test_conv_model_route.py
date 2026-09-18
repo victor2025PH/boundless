@@ -157,6 +157,8 @@ def test_endpoint_spec_prefers_models_profile_then_fallback():
     spec = conv_route.endpoint_spec(cfg)
     assert spec["source"] == "ai.fallback" and spec["model"] == "chatx"
     assert spec["host"] == "192.168.0.173:8001" and spec["max_ctx"] == 8192
+    assert spec["via"] == "lan" and spec["public_host"] == conv_route.PUBLIC_HOST_LAN_CHATX
+    assert spec["label"] == conv_route.CHATX_DISPLAY_LABEL and spec["private"] is True
     assert "api_key" not in spec
     cfg["ai"]["models"] = {"unrestricted": {"base_url": "http://10.0.0.9:8010/v1/",
                                             "model": "coder", "max_ctx": 65536}}
@@ -348,7 +350,7 @@ def test_policy_unrestricted_hard_stop_is_safety_brake():
     st = _KV()
     conv_route.set(st, CID, {"profile": "unrestricted"})
     d = _decide(st, peer_reasons=["stop_contact"])
-    assert d.hard_stop == "stop_contact" and d.farewell is True         # 刹车保留：告别一条
+    assert d.hard_stop == "stop_contact" and d.farewell is False         # 刹车保留：不回客户，只提醒坐席
     conv_route.set(st, CID, {"bypass_safety": True})
     d2 = _decide(st, peer_reasons=["stop_contact"])
     assert d2.level == "L2" and not d2.hard_stop
@@ -564,6 +566,20 @@ def test_model_field_normalize_and_context_non_strict():
     assert conv_route.normalize({"model": ""}, base=r).is_default
 
 
+def test_chatx_catalog_name_opens_unrestricted():
+    """点 ChatX 目录行（档名＝unrestricted）＝开无限制，不是「规则全开的自有算力」。"""
+    r = conv_route.normalize({"model": "unrestricted"})
+    assert r.unrestricted and r.model == ""
+    r2 = conv_route.normalize({"model": "gpt"}, base=r)
+    assert r2.profile == "standard" and r2.model == "gpt"
+    # 自定义 ai.unrestricted.profile 同样认
+    cfg = {"ai": {"unrestricted": {"profile": "lan_chatx"}}}
+    r3 = conv_route.normalize({"model": "lan_chatx"}, config=cfg)
+    assert r3.unrestricted and r3.model == ""
+    assert conv_route.model_opens_unrestricted("lan_chatx", cfg) is True
+    assert conv_route.model_opens_unrestricted("gpt", cfg) is False
+
+
 def test_model_and_unrestricted_are_mutually_exclusive():
     unr = conv_route.normalize({"profile": "unrestricted"})
     # 无限制会话里点选云厂商（未显式给 profile）→ 视为改回标准模式，旋钮清空
@@ -586,6 +602,12 @@ def test_model_catalog_main_first_vendor_labels_and_lan_row():
     assert by["gpt"]["label"] == "ChatGPT" and by["gpt"]["private"] is False
     assert by["gem"]["max_ctx"] == 200000                   # 显式 max_ctx 优先于厂商缺省
     assert by["unrestricted"]["private"] is True and by["unrestricted"]["source"] == "ai.fallback"
+    assert by["unrestricted"]["label"] == conv_route.CHATX_DISPLAY_LABEL
+    assert by["unrestricted"]["via"] == "lan" and by["unrestricted"]["public_host"] == conv_route.PUBLIC_HOST_LAN_CHATX
+    assert by["unrestricted"]["vendor"] == "local"
+    assert by["unrestricted"]["opens_unrestricted"] is True
+    assert by["gpt"]["opens_unrestricted"] is False
+    assert by[""]["opens_unrestricted"] is False
     for row in cat:
         assert "api_key" not in row
     # allowed_depths 按档窗口筛：gpt 缺省 128k → 不放 ultra；主链不筛（四档全放）
@@ -597,6 +619,24 @@ def test_model_catalog_main_first_vendor_labels_and_lan_row():
     assert conv_route.active_endpoint(conv_route.normalize({"model": "gpt"}), _CFG_VENDORS)["model"] == "gpt-x"
     assert conv_route.active_endpoint(conv_route.normalize({"profile": "unrestricted"}),
                                       _CFG_VENDORS)["host"] == "192.168.0.173:8001"
+
+
+def test_model_catalog_hosted_chatx_uses_public_path_not_rfc1918():
+    cfg = {"ai": {
+        "base_url": "https://bd2026.cc/api/ai/v1", "model": "deepseek-flash",
+        "fallback": {"enabled": True, "base_url": "https://bd2026.cc/api/ai/v1", "model": "chatx",
+                     "num_ctx": 24576},
+    }}
+    by = {row["name"]: row for row in conv_route.model_catalog(cfg)}
+    row = by["unrestricted"]
+    assert row["label"] == conv_route.CHATX_DISPLAY_LABEL and row["via"] == "hosted"
+    assert row["public_host"] == "经官网" and row["private"] is False
+    assert row["vendor"] == "local"
+    assert row["opens_unrestricted"] is True
+    spec = conv_route.endpoint_spec(cfg)
+    assert spec["via"] == "hosted" and spec["public_host"] == "经官网"
+    assert conv_route.public_host_for("192.168.0.173:8001", "chatx") == conv_route.PUBLIC_HOST_LAN_CHATX
+    assert conv_route.public_host_for("https://api.deepseek.com/v1", "deepseek-flash") == "api.deepseek.com"
 
 
 def test_http_model_roundtrip_unknown_400_and_catalog_shape():
@@ -615,6 +655,12 @@ def test_http_model_roundtrip_unknown_400_and_catalog_shape():
     # 切无限制 → model 清空；再点云厂商 → 回标准
     r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "profile": "unrestricted"}).json()
     assert r["route"]["unrestricted"] and r["route"]["model"] == ""
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gem"}).json()
+    assert r["route"]["profile"] == "standard" and r["route"]["model"] == "gem"
+    # 目录行 model=unrestricted → 开无限制（不是标准档点名）；再切回 gem 继续测缺失档
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "unrestricted"}).json()
+    assert r["ok"] and r["route"]["unrestricted"] is True and r["route"]["model"] == ""
+    assert conv_route.get(st, CID).unrestricted
     r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gem"}).json()
     assert r["route"]["profile"] == "standard" and r["route"]["model"] == "gem"
     # 目录里删掉该档 → model_missing 如实报
@@ -742,6 +788,14 @@ def test_http_vendor_gate_locks_named_model_but_not_main_chain():
     cli2, _ = _app({**_CFG_VENDORS, "licensing": {"feature_gate": {"enabled": True, "plan_override": "pro"}}})
     r2 = cli2.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gpt"}).json()
     assert r2["ok"] and r2["route"]["model"] == "gpt" and r2["vendor_allowed"] is True
+    # ChatX 目录行走无限制闸，不走 vendor_locked（basic 档 feature_locked）
+    r3 = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "unrestricted"})
+    assert r3.status_code == 403 and r3.headers.get("X-Deny-Reason") == "feature_locked"
+    cli3, st3 = _app({**_CFG_VENDORS, "licensing": {"feature_gate": {"enabled": True,
+                                                                    "plan_override": "flagship"}}})
+    r4 = cli3.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "unrestricted"}).json()
+    assert r4["ok"] and r4["route"]["unrestricted"] is True and r4["route"]["model"] == ""
+    assert conv_route.get(st3, CID).unrestricted
 
 
 def test_stats_by_model_buckets_and_model_convs():

@@ -17,6 +17,9 @@
 # v5 (telemetry watchdog, 2026-08-07): this minute-task also keeps telemetry_agent.ps1
 # alive (second-level GPU stats feeder for the live HUD; agent self-guards against
 # double-start via pid file). No extra scheduled task - the sentinel IS the watchdog.
+# v7 (livewp drift watchdog, 2026-09-17): when the Lively player is not rendering
+# livewp/index.html, dispatch livewp_ensure.ps1 (detached, <=1 per 10 min). See the
+# v7 block at the bottom for the 173 SAM0FEE/SAM0FEF incident that motivated it.
 [CmdletBinding()]
 param(
   [string]$ConfigPath = ""
@@ -287,5 +290,48 @@ if (Test-Path (Join-Path $lwDir 'index.html')) {
     $lwJs = 'window.HUD_DATA={self:' + $lwSelf + ',hist:' + $histRaw + '};'
     [IO.File]::WriteAllText((Join-Path $lwDir 'data.js'), $lwJs, [Text.UTF8Encoding]::new($false))
   } catch {}
+
+  # ---------- v7: livewp drift watchdog (2026-09-17) ----------
+  # Lively restores wallpapers per display DeviceId. 173's Samsung 4K re-enumerates as
+  # SAM0FEE or SAM0FEF between boots; livewp was saved under one id, the stock "Fluids"
+  # under the other -> after a reboot Lively logged "Screen missing, skipping restoration
+  # of boundless-livewp" and showed Fluids for two days while data.js kept updating
+  # underneath. This box-local check closes that gap for any cause (display id drift,
+  # WebView crash, someone picking another wallpaper in the Lively UI): if no player is
+  # rendering livewp/index.html, dispatch livewp_ensure.ps1 detached (it is idempotent and
+  # re-applies via Lively CLI), at most once per 10 min so a headless/monitor-off box does
+  # not thrash. The ensure script runs hidden through run_hidden.vbs (same as this task).
+  $ensure = Join-Path $Base 'livewp_ensure.ps1'
+  if (Test-Path $ensure) {
+    $lwIndex = Join-Path $lwDir 'index.html'
+    $showing = $false
+    try {
+      Get-CimInstance Win32_Process -Filter "name='Lively.Player.WebView2.exe'" -ErrorAction Stop | ForEach-Object {
+        if ([string]$_.CommandLine -like ('*' + $lwIndex + '*')) { $showing = $true }
+      }
+    } catch {}
+    if (-not $showing) {
+      $dispatchPath = Join-Path $Base 'livewp_dispatch.last'
+      $lastDispatch = 0
+      if (Test-Path $dispatchPath) { try { $lastDispatch = [int64](Get-Content $dispatchPath -Raw) } catch {} }
+      $nowEpoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+      if (($nowEpoch - $lastDispatch) -gt 600) {
+        [IO.File]::WriteAllText($dispatchPath, [string]$nowEpoch, [Text.ASCIIEncoding]::new())
+        $vbs = Join-Path $Base 'run_hidden.vbs'
+        # wscript is the 32-bit SysWOW64 copy (System32 one is stripped on 117), so the child
+        # must be named via Sysnative to get 64-bit PowerShell (Sysnative is only visible to
+        # 32-bit processes - do not Test-Path it from here, this sentinel runs 64-bit).
+        $ps64 = 'C:\Windows\Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path $vbs) {
+          Start-Process -WindowStyle Hidden -FilePath 'C:\Windows\SysWOW64\wscript.exe' -ArgumentList @(
+            '//B', '//Nologo', $vbs, $ps64, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ensure)
+        } else {
+          Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $ensure)
+        }
+        Log 'livewp drift: player not on livewp -> livewp_ensure dispatched'
+      }
+    }
+  }
 }
 exit 0

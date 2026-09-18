@@ -45,9 +45,12 @@ class _CM:
         return True, ""
 
 
-def _cfg(primary="local_only", base_url="http://192.168.0.173:8001/v1", guard=None):
+def _cfg(primary="local_only", base_url="http://192.168.0.173:8001/v1", guard=None, lock=None):
+    ai = {"primary": primary, "fallback": {"base_url": base_url}}
+    if lock is not None:
+        ai["primary_lock"] = lock
     return {
-        "ai": {"primary": primary, "fallback": {"base_url": base_url}},
+        "ai": ai,
         "health_watchdog": {"ai_primary_guard": guard if guard is not None else {
             "fail_streak": 2, "min_span_sec": 240}},
     }
@@ -64,6 +67,7 @@ def _wd(monkeypatch, cfg, probe_seq, *, overlay_ok=True):
     wd._apg_fail_count = 0
     wd._apg_first_fail_ts = 0.0
     wd._apg_switched = False
+    wd._apg_locked_alerted = False
     wd.total_ai_primary_guard_switches = 0
     seq = list(probe_seq)
 
@@ -174,6 +178,57 @@ def test_one_way_semantics_never_writes_local(monkeypatch):
     wd._check_ai_primary_guard(now=1600.0)
     wd._check_ai_primary_guard(now=1900.0)
     assert all(v == "cloud" for _, v in cm.writes)
+
+
+# ── 老板锁在本地档（2026-09-17 R88：lock=local）：只报不切 ─────────────
+# 锁=local 时写 ai.primary=cloud 会在 AIClient 装载点被锁打回并再发「越权改档」
+# 告警——运维群看到「已热切 cloud → 锁强制纠正」成对刷屏，误以为主链仍在 cloud 体制。
+
+def test_lock_local_never_writes_cloud_only_alerts_once(monkeypatch):
+    wd, cm, bus = _wd(monkeypatch, _cfg(primary="local", lock="local"),
+                      probe_seq=[False] * 8)
+    wd._check_ai_primary_guard(now=1000.0)
+    wd._check_ai_primary_guard(now=1300.0)   # 达阈值
+    assert cm.writes == []                   # 绝不写 cloud
+    assert wd._apg_switched is False and wd.total_ai_primary_guard_switches == 0
+    assert len(bus.events) == 1
+    etype, data = bus.events[0]
+    assert etype == "ai_primary_guard_alert"
+    assert data["kind"] == "probe_fail_locked"
+    assert data["lock"] == "local" and data["from_mode"] == "local"
+    assert data["fail_count"] == 2 and data["rate_key"] == "ai_primary_guard:probe_fail_locked"
+    # 端点持续死：不重复刷同一告警
+    wd._check_ai_primary_guard(now=1600.0)
+    wd._check_ai_primary_guard(now=1900.0)
+    assert len(bus.events) == 1 and cm.writes == []
+
+
+def test_lock_local_recovery_notice_once_then_silent(monkeypatch):
+    wd, cm, bus = _wd(monkeypatch, _cfg(primary="local_only", lock="local_only"),
+                      probe_seq=[False, False, False, False, True, True])
+    wd._check_ai_primary_guard(now=1000.0)
+    wd._check_ai_primary_guard(now=1300.0)
+    assert bus.events[-1][1]["kind"] == "probe_fail_locked"
+    wd._check_ai_primary_guard(now=1600.0)   # 端点回来
+    assert len(bus.events) == 2
+    etype, data = bus.events[1]
+    assert data.get("recovered") is True and data["kind"] == "probe_recovered_locked"
+    assert data["lock"] == "local_only" and data["effective"] == "local_only"
+    assert wd._apg_locked_alerted is False
+    wd._check_ai_primary_guard(now=1900.0)   # 再一 tick 不重发
+    assert len(bus.events) == 2 and cm.writes == []
+
+
+def test_lock_cloud_or_unlocked_keeps_legacy_switch(monkeypatch):
+    # 锁=cloud（08-22 体制）/ 未设锁：保险仍单向热切 cloud，事件带 lock 字段供文案渲染
+    for lock, expect in ((None, None), ("cloud", "cloud")):
+        wd, cm, bus = _wd(monkeypatch, _cfg(primary="local", lock=lock),
+                          probe_seq=[False] * 4)
+        wd._check_ai_primary_guard(now=1000.0)
+        wd._check_ai_primary_guard(now=1300.0)
+        assert cm.writes == [("ai.primary", "cloud")]
+        assert bus.events[0][1].get("kind") is None
+        assert bus.events[0][1].get("lock") == expect
 
 
 # ── fail-open ────────────────────────────────────────────────────

@@ -57,6 +57,11 @@ _REMIND_CARDS = [
     ("lan_gpu_alert", {"remind_key": "lan_gpu:http://192.168.0.176:11434", "host": "192.168.0.176:11434",
                        "url": "http://192.168.0.176:11434", "error": "timeout", "down_minutes": 65,
                        "reminder": True, "unchanged": True}),
+    ("compute_lane_alert", {"remind_key": "compute_lane:cloud", "lane": "cloud",
+                            "label": "DeepSeek 官方", "kind": "quota",
+                            "kind_zh": "没有费用 / 余额不可用", "detail": "余额为 0",
+                            "standins": ["173 本地 vLLM"], "down_minutes": 9,
+                            "reminder": True, "unchanged": True}),
 ]
 
 

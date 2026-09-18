@@ -100,7 +100,7 @@ _FULL_CFG = {
 def test_build_probe_specs_full_config():
     specs = build_probe_specs(_FULL_CFG)
     domains = [s["domain"] for s in specs]
-    assert domains == ["tts", "translate", "vision", "asr"]
+    assert domains == ["tts_hub", "translate", "vision", "asr"]
     tts = specs[0]
     assert tts["url"] == "http://hub:9000/api/tts_only"
     assert tts["json"]["tts_engine"] == "index_tts"   # 引擎显式钉，禁隐式路由
@@ -212,8 +212,8 @@ def test_probe_specs_carry_content_assertions():
     assert "红" in specs["vision"]["expect_any"]
     assert specs["translate"]["expect_latin"] is True
     assert "今天" in specs["asr"]["expect_any"]
-    # tts 验的是 magic bytes + 引擎归属，不该被误挂文本断言
-    assert "expect_any" not in specs["tts"] and "expect_latin" not in specs["tts"]
+    # tts_hub 验的是 magic bytes + 引擎归属，不该被误挂文本断言
+    assert "expect_any" not in specs["tts_hub"] and "expect_latin" not in specs["tts_hub"]
 
 
 def test_asr_expect_tokens_calibrated_against_known_bad_sample():
@@ -337,12 +337,15 @@ def test_selfcheck_cli_contract(tmp_path, monkeypatch):
     assert rep["gaps"] == {} and len(rep["failures"]) == 2
     assert "含 红" in rep["specs"][0]["assertion"]        # 断言必须对人可见
 
-    # 默认选域＝「除 tts 全跑」而非白名单：tts 真烧 hub GPU 须显式 --all；而后加的
+    # 默认选域＝「除 tts* 全跑」而非白名单：tts 真烧 hub GPU 须显式 --all；而后加的
     # 域（识图备胎）必须默认被覆盖——白名单会让新能力默认漏检，那是探针最爱长的盲区。
+    # 2026-09-16：tts 拆成 tts_hub / tts_index，仍用 startswith("tts") 统一排除。
     assert mod.selected("vision", [], False) is True
     assert mod.selected("vision_backup1", [], False) is True
     assert mod.selected("tts", [], False) is False
-    assert mod.selected("tts", [], True) is True
+    assert mod.selected("tts_hub", [], False) is False
+    assert mod.selected("tts_index", [], False) is False
+    assert mod.selected("tts_hub", [], True) is True
     assert mod.selected("vision", ["asr"], False) is False   # 显式 --domain 优先
 
 
@@ -503,7 +506,56 @@ def test_build_probe_specs_hub_without_profile_skipped():
         "hub_fish": {"enabled": True, "base_url": "http://hub:9000",
                      "profile_map": {}},
     }
-    assert "tts" not in [s["domain"] for s in build_probe_specs(cfg)]
+    assert "tts_hub" not in [s["domain"] for s in build_probe_specs(cfg)]
+
+
+def test_tts_hub_and_index_are_separate_strike_domains(tmp_path, monkeypatch):
+    """hub 与 IndexTTS-2 不得共用 domain=tts（2026-09-16 运维群事故）。
+
+    两条链并存时若同键，后一条 ok 会把前一条连败清零——hub 合成失败被掩盖、
+    strike 永远卡在 1、运维群永不告警。拆成 tts_hub / tts_index 后 strike 独立。
+    """
+    from src.ops import true_probe as tp
+
+    # 夹具存在才出 tts_index 规格
+    fixture = tmp_path / "asr_probe.wav"
+    fixture.write_bytes(b"RIFF" + b"\x00" * 40)
+    monkeypatch.setattr(tp, "ASR_FIXTURE", fixture)
+
+    cfg = {
+        "avatar_voice": {
+            "enabled": True,
+            "hub_fish": {
+                "enabled": True,
+                "base_url": "http://hub:9000",
+                "tts_engine": "index_tts",
+                "profile_map": {"p": "demo"},
+            },
+        },
+        "minicpm_clone": {
+            "enabled": True,
+            "base_url": "http://104:7865",
+        },
+    }
+    specs = build_probe_specs(cfg)
+    domains = [s["domain"] for s in specs]
+    assert domains.count("tts_hub") == 1
+    assert domains.count("tts_index") == 1
+    assert "tts" not in domains  # 旧共用键不得再出现
+
+    by = {s["domain"]: s for s in specs}
+    assert by["tts_hub"]["url"].endswith("/api/tts_only")
+    assert by["tts_index"]["url"].endswith("/v1/tts/clone")
+
+    # strike 独立：hub 连败该告警，index 成功不得把它清零
+    st = {}
+    st, a1 = next_strike_state(st, "tts_hub", False, fail_strikes=2, now=1.0)
+    assert a1 == ""
+    st, _ = next_strike_state(st, "tts_index", True, fail_strikes=2, now=1.5)
+    st, a2 = next_strike_state(st, "tts_hub", False, fail_strikes=2, now=2.0)
+    assert a2 == "alert"
+    assert st["tts_hub"]["fails"] == 2 and st["tts_hub"]["alerted"] is True
+    assert st["tts_index"]["fails"] == 0
 
 
 # ── true_probe：连败状态机 ──────────────────────────────────────────

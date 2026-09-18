@@ -8,13 +8,14 @@ Supports:
 - Runtime persona override via Web admin API
 """
 
+import json
 import logging
 import copy
 import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
@@ -143,6 +144,91 @@ def known_persona_top_keys() -> List[str]:
     keys = {f.split(".", 1)[0] for f in PERSONA_SCHEMA_FIELDS} | set(_EXTRA_TOP_KEYS)
     return sorted(k for k in keys if k and not k.startswith("_"))
 
+
+# Studio 导入曾经只走浏览器 JSON.parse（没有 YAML 解析器），所以 UI 只收 JSON；
+# 磁盘真相却是 YAML（profiles_runtime.yaml / persona_packs/*.yaml）。下面把两种
+# 互换格式收成同一份 profile 列表，导入预览与备份恢复共用。
+_IMPORT_ENVELOPE_KEYS = frozenset({
+    "format", "version", "exported_at", "count", "album_refs",
+    "bindings", "chat_bindings", "default_persona", "default_profile",
+    "_history",
+})
+_PERSONA_HINT_KEYS = frozenset({
+    "id", "name", "role", "personality", "speaking", "background",
+    "tags", "life_arc", "tastes", "appearance", "gender", "age",
+})
+_IMPORT_TEXT_MAX = 2_000_000
+
+
+def _looks_like_persona_doc(d: Mapping[str, Any]) -> bool:
+    return bool(set(d.keys()) & _PERSONA_HINT_KEYS)
+
+
+def _profiles_from_id_map(mapping: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for key, val in mapping.items():
+        if str(key) in _IMPORT_ENVELOPE_KEYS or not isinstance(val, dict):
+            continue
+        if not _looks_like_persona_doc(val):
+            continue
+        entry = dict(val)
+        if not str(entry.get("id") or "").strip():
+            entry["id"] = str(key).strip()
+        out.append(entry)
+    return out
+
+
+def coerce_persona_import_docs(loaded: Any) -> List[Dict[str, Any]]:
+    """把 JSON/YAML 解析结果收成 persona dict 列表。
+
+    接受：数组；``{persona:{...}}``；备份信封 ``{profiles:[...]}``；
+    runtime / pack 映射 ``{profiles:{id:{...}}}``；单个人设对象；顶层 id→人设映射。
+    """
+    if isinstance(loaded, list):
+        return [x for x in loaded if isinstance(x, dict)]
+    if not isinstance(loaded, dict):
+        return []
+    wrapped = loaded.get("persona")
+    if isinstance(wrapped, dict) and _looks_like_persona_doc(wrapped):
+        return [wrapped]
+    prof = loaded.get("profiles")
+    if isinstance(prof, list):
+        return [x for x in prof if isinstance(x, dict)]
+    if isinstance(prof, dict):
+        return _profiles_from_id_map(prof)
+    if _looks_like_persona_doc(loaded):
+        return [loaded]
+    return _profiles_from_id_map(loaded)
+
+
+def parse_persona_import_text(raw: str) -> Tuple[List[Dict[str, Any]], str, Dict[str, Any]]:
+    """解析 JSON 或 YAML 人设文本。返回 ``(profiles, format, extras)``。
+
+    ``format`` 为 json|yaml。``extras`` 可能含备份信封的 ``album_refs``。
+    空文本 / 解析失败 / 抽不出人设 → ``ValueError``（code 在 ``args[0]``）。
+    """
+    text = str(raw or "").lstrip("\ufeff").strip()
+    if not text:
+        raise ValueError("empty")
+    if len(text) > _IMPORT_TEXT_MAX:
+        raise ValueError("too_large")
+    fmt = "json"
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        fmt = "yaml"
+        try:
+            loaded = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError("invalid_text") from exc
+    profiles = coerce_persona_import_docs(loaded)
+    if not profiles:
+        raise ValueError("no_profiles")
+    extras: Dict[str, Any] = {}
+    if isinstance(loaded, dict) and isinstance(loaded.get("album_refs"), dict):
+        extras["album_refs"] = loaded["album_refs"]
+    return profiles, fmt, extras
+
 # emoji_level 别名归一：低/中档历史上写法不一（low/medium 曾整档静默失效——
 # chen_meiling=low、su_wan=medium 在旧 if/elif 链里一个分支都不命中）。
 _EMOJI_LEVEL_ALIASES = {
@@ -191,6 +277,15 @@ _INNER_MONOLOGUE_BAN = (
     " \"*sighs*\" — anything in brackets or asterisks describing your tone,"
     " actions or feelings is forbidden; output only the spoken line itself."
 )
+
+
+def _conv_unrestricted() -> bool:
+    """当前生成作用域是否为「无限制」会话（``conv_route.generation_scope``）。绝不抛。"""
+    try:
+        from src.ai.conv_route import active_unrestricted
+        return bool(active_unrestricted())
+    except Exception:
+        return False
 
 
 def _join_text_items(v: Any) -> str:
@@ -1913,6 +2008,10 @@ class PersonaManager:
                 "绝不认领或当现状提起；对方提到就轻巧澄清（你是不是记成别人啦）"
                 "再带回当下，历史消息里的旧说法一律作废。"
             )
+        # 无限制会话（conv_route，2026-09-12）：以下全是「规则」层（能力边界 / 联系方式 /
+        # 见面政策 / 成人政策 / 回复硬约束 / 内心独白禁令）——身份与性格保留，规则整段让路。
+        if _conv_unrestricted():
+            return "\n".join(lines)
         _caps_c = persona.get("capabilities") or {}
         if not (isinstance(_caps_c, dict) and _caps_c.get("video_call")):
             lines.append(
@@ -2413,6 +2512,13 @@ class PersonaManager:
                 "你是不是记成别人啦哈哈」），然后把话题接回当下。"
                 "对方聊这类话题本身没问题，正常参与就好，只是别说那是你的。"
             )
+        # 无限制会话（conv_route，2026-09-12）：与 compact 同一切口——身份 / 性格 / 作废纠错
+        # 保留，能力边界起的全部规则块让路（emotion 是性格描述，单独补回）。
+        if _conv_unrestricted():
+            e = persona.get("emotion", {})
+            if e.get("frustrated_response"):
+                lines.append(f"用户着急时：{e['frustrated_response']}。")
+            return "\n".join(lines)
         # A2（2026-07-22）：能力边界——陪聊人设默认不能视频/语音通话（无此能力，
         # 应允=穿帮）。人设可显式声明 capabilities.video_call: true 关闭本约束。
         _caps = persona.get("capabilities") or {}

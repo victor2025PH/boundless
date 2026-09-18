@@ -192,6 +192,16 @@ def _quiet_inbound(conv: InboxConversation, lm: Dict[str, Any]) -> bool:
         return False
 
 
+def _skip_autodraft(lm: Dict[str, Any]) -> bool:
+    """可见入站但不触发 new_inbound 回调（起草 / 关怀 / 学习）。Bad MAC 占位走这里。"""
+    try:
+        from .normalizer import is_decrypt_fail_source
+        src = lm.get("source") if isinstance(lm.get("source"), dict) else {}
+        return is_decrypt_fail_source(src)
+    except Exception:
+        return False
+
+
 def _publish_inbox_message(conv: InboxConversation) -> None:
     """有新入站消息时，向全局事件总线发 inbox_message（SSE 实时推送给工作台）。"""
     try:
@@ -258,6 +268,8 @@ def ingest_collected_chats(
                 logger.debug("clear_snooze 失败（已忽略）", exc_info=True)
             if publish_events:
                 _publish_inbox_message(conv)
+            if _skip_autodraft(lm):
+                continue
             # E2：通知已注册的入站新消息回调（auto-draft 生成等），best-effort
             msg_text = str(lm.get("text") or "").strip()
             if not msg_text:

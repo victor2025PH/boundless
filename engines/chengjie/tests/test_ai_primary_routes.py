@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import src.web.routes.unified_inbox_setup_routes as setup_mod
@@ -93,6 +95,7 @@ def test_ai_primary_route_registered():
             for meth in (getattr(r, "methods", None) or set())
             if meth not in {"HEAD", "OPTIONS"}}
     assert ("/api/setup/ai-primary", "POST") in live
+    assert ("/api/setup/ai-primary/summary", "GET") in live
 
 
 def test_get_setup_ai_includes_primary(tmp_path):
@@ -102,6 +105,20 @@ def test_get_setup_ai_includes_primary(tmp_path):
     assert r["primary"]["configured"] == "cloud"
     assert r["primary"]["local_ready"] is True
     assert r["primary"]["local_model"] == "qwen3:30b"
+
+
+def test_get_ai_primary_summary_is_single_source(tmp_path):
+    """2026-09-17：所有表达层共用这一份，零密钥、带降级链。"""
+    client, m = _client_mgr(tmp_path, primary="local", with_fallback=True)
+    m.config["ai"]["primary_lock"] = "local"
+    m.config["ai"]["model"] = "deepseek-chat"
+    r = client.get("/api/setup/ai-primary/summary").json()
+    assert r["ok"] is True
+    assert r["effective"] == "local" and r["lock"] == "local"
+    assert r["order"][0] == "local"
+    assert "本地 vLLM" in r["primary_text"]
+    assert "api_key" not in json.dumps(r)
+    assert "sk-" not in json.dumps(r)
 
 
 def test_post_rejects_invalid_and_unready(tmp_path, monkeypatch):

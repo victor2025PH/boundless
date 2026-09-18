@@ -2,7 +2,7 @@
 
 覆盖四条新链路：
 - **auto_create**（service.maybe_auto_create_goal + build_block_for_chat 接线）：
-  人设 allowlist 必填 / 群聊不建 / 平台过滤 / 幂等（建过任何目标不再建）/
+  人设 allowlist 必填 / 群聊不建 / 演练号段不建 / 平台过滤 / 幂等（建过任何目标不再建）/
   每日预算（进库计数）/ 首条消息当轮建成即出块。
 - **profile_llm**（摘录式 LLM 补槽）：解析（栅栏/坏 JSON/未知槽位）、
   摘录接地（编造必丢、数字组、CJK bigram 容差）、run_llm_capture 端到端
@@ -197,6 +197,18 @@ class TestAutoCreate:
         assert maybe_auto_create_goal(
             mem_store, _ac_cfg(), platform="telegram", chat_key="100",
             account_id="a1", user_context=_uc(is_group=True), now=NOW) is None
+
+    def test_drill_uid_never_creates(self, mem_store, su_wan_persona):
+        # 2026-09-13：夜跑演练 990001xxx 被当成新好友建 auto 目标 → 运维群误报
+        assert maybe_auto_create_goal(
+            mem_store, _ac_cfg(), platform="telegram", chat_key="990001088",
+            account_id="a1",
+            conversation_id="telegram:a1:990001088",
+            user_context=_uc(chat_id="990001088"), now=NOW) is None
+        g = maybe_auto_create_goal(
+            mem_store, _ac_cfg(), platform="telegram", chat_key="100",
+            account_id="a1", user_context=_uc(), now=NOW)
+        assert g is not None and g["created_by"] == "auto_create"
 
     def test_platform_filter(self, mem_store, su_wan_persona):
         cfg = _ac_cfg(platforms=["whatsapp"])

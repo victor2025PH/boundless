@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from src.ai import prompt_trace
+from src.ai import conv_route, prompt_trace
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +68,19 @@ def test_record_list_get_and_cache_ratio():
     assert cs["calls"] == 1 and cs["hit_ratio"] == 0.8
     assert prompt_trace.get_entry(99) is None
     assert prompt_trace.list_entries(conv="nope") == []
+
+
+def test_record_chatx_exposes_public_host_not_rfc1918():
+    prompt_trace.record(messages=[{"role": "user", "content": "hi"}],
+                        model="chatx", host="192.168.0.173:8001",
+                        conv="telegram:1:1", ok=True, latency_ms=12)
+    it = prompt_trace.list_entries()[0]
+    assert it["host"] == "192.168.0.173:8001"
+    assert it["public_host"] == conv_route.PUBLIC_HOST_LAN_CHATX
+    prompt_trace.reset()
+    prompt_trace.record(messages=[{"role": "user", "content": "hi"}],
+                        model="chatx", host="bd2026.cc", conv="c", ok=True)
+    assert prompt_trace.list_entries()[0]["public_host"] == "经官网"
 
 
 def test_ring_buffer_bounded_and_long_system_clipped():

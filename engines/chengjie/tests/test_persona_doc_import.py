@@ -543,7 +543,8 @@ async def test_routes_flag_off(app_off):
 
         r = await c.post("/api/personas/import-doc/parse",
                          headers=_JSON_HDRS, json={"text": "hello"})
-        assert r.status_code == 403
+        assert r.status_code == 200
+        assert r.json()["ok"] is True and r.json()["text"] == "hello"
 
         r = await c.post("/api/personas/import-doc/extract",
                          headers=_JSON_HDRS, json={"text": "hello"})

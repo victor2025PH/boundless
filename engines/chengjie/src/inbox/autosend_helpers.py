@@ -1402,6 +1402,47 @@ def _is_desktop_account(platform, account_id) -> bool:
         return False
 
 
+def _src_has_media_placeholder(src_text: str) -> bool:
+    s = str(src_text or "")
+    if not s:
+        return False
+    return any(m in s for m in (
+        "[我方发出的图片]", "[我方發出的圖片]", "[图片]", "[圖片]",
+        "[Image sent by me]", "[Image]", "[Photo]",
+    ))
+
+
+def _scrub_unsent_photo_talk(assistant, src_text: str, text: str, *, had_labels: bool) -> str:
+    """译文在剥标签之后：若原文/译文仍是「刚拍的」配文体，句级剥 sent-claim。
+
+    只在标签泄漏或原文带媒体占位时动手，避免误伤客户真在要图、配文合法的轮次。
+    剥空则原样返回（空串会让翻译链语义变 HOLD）；完整撤回改写仍在 send_cb。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return text
+    if not (had_labels or _src_has_media_placeholder(src_text)):
+        return text
+    try:
+        from src.ai.outbound_promise_guard import detect_sent_claim, strip_sent_claims
+        if not detect_sent_claim(t):
+            return text
+        stripped = strip_sent_claims(t)
+        if stripped and stripped.strip() and stripped != t:
+            try:
+                assistant.logger.warning(
+                    "[autosend] 译文无图配文已剥 sent-claim：%r → %r", t[:80], stripped[:80])
+            except Exception:
+                pass
+            return stripped
+    except Exception:
+        try:
+            assistant.logger.debug("译文 sent-claim 剥离跳过", exc_info=True)
+        except Exception:
+            pass
+    return text
+
+
 def _guard_translated_lang_mix(assistant, src_text: str, out_text):
     """译文出口再过一次混语守卫（B125，2026-08-28）。
 
@@ -1443,7 +1484,15 @@ def _guard_translated_lang_mix(assistant, src_text: str, out_text):
                 assistant.logger.warning(
                     "[autosend] 译文混语已剥除（%s）：%r → %r（源文 %r）",
                     _meta.get("lang_mix") or "hard", out_text, _cleaned, src_text)
-            return _cleaned
+            # #332：标签剥完后常剩「Just took this one / There's my face」配文体
+            # ——翻译发生在 send_cb 承诺链之前，这里先把无图预设句剥掉，真发图
+            # 仍由投递链按入站索图 / 回执决定，不靠这句配文。
+            return _scrub_unsent_photo_talk(
+                assistant, src_text, _cleaned, had_labels=bool(_meta.get("system_label_hits")))
+        _maybe = _scrub_unsent_photo_talk(
+            assistant, src_text, out_text, had_labels=False)
+        if _maybe != out_text:
+            return _maybe
         if _meta.get("lang_mix") == "hard_kept":
             # 剥后残句会更糟（守卫的安全阀），如实留痕便于回看 MT 质量
             assistant.logger.warning(

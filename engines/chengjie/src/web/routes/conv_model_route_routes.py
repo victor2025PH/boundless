@@ -126,11 +126,14 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
             if want and not conv_route.model_spec(cfg, want):
                 raise HTTPException(400, "unknown model profile",
                                     headers={"X-Deny-Reason": "unknown_model"})
-            # 授权闸 multi_vendor_model（pro 起）：主链 "" 恒可选，点名任何一档才过闸
-            if want and not conv_route.vendor_allowed(cfg):
+            opens_unr = conv_route.model_opens_unrestricted(want, cfg)
+            # ChatX 目录行走无限制闸（flagship），不走 multi_vendor_model。
+            if want and not opens_unr and not conv_route.vendor_allowed(cfg):
                 _lock_hit(conv_route.VENDOR_FEATURE_NAME)
                 raise HTTPException(403, "per-chat vendor model requires a higher plan",
                                     headers={"X-Deny-Reason": "vendor_locked"})
+            if opens_unr and "profile" not in patch:
+                patch["profile"] = conv_route.PROFILE_UNRESTRICTED
 
         wants_unrestricted = (
             str(patch.get("profile") or "").strip().lower() == conv_route.PROFILE_UNRESTRICTED
@@ -145,7 +148,7 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
                 raise HTTPException(403, "unrestricted model requires a higher plan",
                                     headers={"X-Deny-Reason": "feature_locked"})
 
-        route = conv_route.set(ibx, cid, patch, by=by)
+        route = conv_route.set(ibx, cid, patch, by=by, config=cfg)
         if route is None:
             return {"ok": False, "error": "store_write_failed"}
         out = conv_route.describe(ibx, cid, cfg)

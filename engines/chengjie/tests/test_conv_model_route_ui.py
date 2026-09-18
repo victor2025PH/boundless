@@ -140,6 +140,11 @@ def test_model_panel_wiring_uses_catalog_and_all_health():
     block = html[i:j]
     assert "choices" in html[html.index("function _mpModels("):html.index("function _mpModelRow(")]
     assert "_mpSet({model:v})" in block
+    assert "_mpSet({profile:'unrestricted'})" in block
+    assert "opens_unrestricted" in block
+    assert "inbox.mp.tag_unrestricted" in block
+    assert 'href="/model-keys"' in html
+    assert "/developer#dvmr" not in html
     assert "inbox.mp.unr_notice" in block and "inbox.mp.model_missing" in block and "inbox.mp.empty" in block
     assert "/api/ai/model-route/health?all=1" in html
     assert "/api/ai/model-route/health?profile=" in html
@@ -148,6 +153,8 @@ def test_model_panel_wiring_uses_catalog_and_all_health():
     k = html.index("async function _mpSet(patch)")
     setblk = html[k:html.index("window._mpSet=_mpSet", k)]
     assert "unknown_model" in setblk
+    assert "_mvPath(" in html and "inbox.mp.tag_hosted" in block and "inbox.mp.flow_hosted" in block
+    assert "m.model+' @ '+m.host" not in block
 
 
 def test_model_panel_vendor_lock_counts_and_not_listed_warn():
@@ -174,8 +181,12 @@ def test_model_panel_vendor_lock_counts_and_not_listed_warn():
         assert sel in css, sel
     import importlib
     pack = importlib.import_module("src.web.i18n_packs.inbox_workspace")
-    for key in ("inbox.mp.tag_locked", "inbox.mp.tag_used", "inbox.mp.h_not_listed", "inbox.mp.vendor_locked"):
+    for key in ("inbox.mp.tag_locked", "inbox.mp.tag_used", "inbox.mp.h_not_listed", "inbox.mp.vendor_locked",
+                "inbox.mp.tag_unrestricted", "inbox.mp.vendor_local"):
         assert pack.ZH[key] and pack.EN[key], key
+    assert "27B" not in pack.ZH["inbox.mp.vendor_local"]
+    assert "办公室" not in pack.ZH["inbox.mp.tag_private"]
+    assert "ChatX 27B" not in html and "办公室直连" not in html
 
 
 def test_md_i18n_keys_present_in_both_langs():

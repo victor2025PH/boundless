@@ -22,6 +22,7 @@ ZH = {
     "rps_al_r_mode_changed": "档位切换",
     "rps_al_r_work_schedule": "班表休息",
     "rps_al_r_dup_suppressed": "同一句只发一次 · 已拦第二条",
+    "rps_al_r_risk_recorded": "敏感话题 · 已记录（AI 照常回，没拦）",
 }
 
 EN = {
@@ -42,6 +43,7 @@ EN = {
     "rps_al_r_mode_changed": "Mode switched",
     "rps_al_r_work_schedule": "Off-hours schedule",
     "rps_al_r_dup_suppressed": "Same sentence sent once · second copy blocked",
+    "rps_al_r_risk_recorded": "Sensitive topic · recorded only (AI replied as usual)",
 }
 
 ZH_HANT = {
@@ -62,4 +64,5 @@ ZH_HANT = {
     "rps_al_r_mode_changed": "檔位切換",
     "rps_al_r_work_schedule": "班表休息",
     "rps_al_r_dup_suppressed": "同一句只發一次 · 已攔第二條",
+    "rps_al_r_risk_recorded": "敏感話題 · 已記錄（AI 照常回，沒攔）",
 }

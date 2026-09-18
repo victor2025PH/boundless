@@ -49,6 +49,18 @@ export function isPeerPlaintext(msg) {
   return !(msg.key && msg.key.fromMe);
 }
 
+/** 收件箱占位正文：CIPHERTEXT stub 没有 message 体，不能当客户原话喂自动回复。 */
+export const DECRYPT_FAIL_PLACEHOLDER = "[无法解密的消息 · 会话将自动重建]";
+
+/** Bad MAC stub → 落库字段。非 stub 返 null。backfill_source=decrypt_fail 跳过自动起草。 */
+export function decryptFailIngestFields(msg) {
+  if (!isBadMacStub(msg)) return null;
+  return {
+    text: DECRYPT_FAIL_PLACEHOLDER,
+    decrypt_fail: true,
+  };
+}
+
 const _USER_JID_RE = /^[^@\s]+@(s\.whatsapp\.net|lid|hosted)$/;
 
 /**

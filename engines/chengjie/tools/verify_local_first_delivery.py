@@ -10,8 +10,8 @@ verify_instance.ps1 与生产实例覆盖；为验收再起一个常驻进程既
 用法：
   python tools/verify_local_first_delivery.py            # 离线段（零网络零 GPU）
   python tools/verify_local_first_delivery.py --live     # + 打真实本地 LLM 端点出话
-  python tools/verify_local_first_delivery.py --live --base http://192.168.0.176:11434 \
-      --model qwen3:30b-a3b-instruct
+  python tools/verify_local_first_delivery.py --live --base http://192.168.0.173:8001/v1 \
+      --model chatx
 
 约定：环境缺失（--live 端点不通/模型未备）一律 SKIP exit 0（gate 信号不被
 「主机当时没开」污染）；断言失败 exit 1。
@@ -111,32 +111,43 @@ async def _run(args: argparse.Namespace) -> int:
     # ── 5) --live：端点可达性预检（缺环境 SKIP，不污染 gate 信号）───────────
     import httpx
     root = args.base.rstrip("/")
+    openai = root.endswith("/v1") or ":8001" in root
+    v1 = root if root.endswith("/v1") else (root + "/v1" if openai else root)
     try:
         async with httpx.AsyncClient(timeout=3.0) as hc:
-            tags = (await hc.get(f"{root}/api/tags")).json()
-        names = [str(m.get("name") or "") for m in (tags.get("models") or [])]
+            if openai:
+                tags = (await hc.get(f"{v1}/models")).json()
+                names = [str(m.get("id") or "") for m in (tags.get("data") or [])]
+            else:
+                tags = (await hc.get(f"{root}/api/tags")).json()
+                names = [str(m.get("name") or "") for m in (tags.get("models") or [])]
     except Exception as e:
         _say("live", "SKIP", f"本地端点不可达（{e!r}）——环境缺失非验收失败")
         return 0
     # 只认精确 tag（含 :latest 别名）。首版前缀匹配踩过坑：176 有 qwen3-vl/qwen3:32b
     # 时 "qwen3" 前缀误放行，跑到 /api/chat 才 404 —— 预检必须与真实调用同名。
-    if not any(n == args.model or n == f"{args.model}:latest" for n in names):
+    if not any(n == args.model or n == f"{args.model}:latest" or n.endswith("/" + args.model)
+               for n in names):
         _say("live", "SKIP",
-             f"端点无模型 {args.model}（在位: {', '.join(names[:6])}…先 ollama pull）")
+             f"端点无模型 {args.model}（在位: {', '.join(names[:6])}…）")
         return 0
 
-    # ── 5b) --live：显式预热（native /api/chat 一句话）。新交付机器首聊必冷
-    #（实测 .173 qwen14b 冷载 ~69s，与 AIClient 90s 兜底超时同量级会撞线）；
-    # 验收工具自己暖场并如实报冷载时长，而不是抬大生产超时假装没有冷启动。
-    # 端点在位、模型在册、chat 却拉不起 ＝ 真交付缺陷 → FAIL（不是环境 SKIP）。
+    # ── 5b) --live：显式预热。vLLM 27B 常驻毫秒级；旧 ollama 冷载曾 ~69s。
     t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=float(args.warmup_timeout)) as hc:
-            wr = await hc.post(f"{root}/api/chat", json={
-                "model": args.model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": False, "think": False,
-                "options": {"num_predict": 8}, "keep_alive": "30m"})
+            if openai:
+                wr = await hc.post(f"{v1}/chat/completions", json={
+                    "model": args.model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 8, "temperature": 0,
+                    "chat_template_kwargs": {"enable_thinking": False}})
+            else:
+                wr = await hc.post(f"{root}/api/chat", json={
+                    "model": args.model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False, "think": False,
+                    "options": {"num_predict": 8}, "keep_alive": "30m"})
             wr.raise_for_status()
     except Exception as e:
         raise _fail("live-warmup", f"模型在册但 chat 拉不起: {e!r}")
@@ -179,14 +190,12 @@ async def _run(args: argparse.Namespace) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="本地化交付端到端验收（P2）")
     ap.add_argument("--live", action="store_true", help="打真实本地 LLM 端点出话")
-    # 默认对准 .173 常暖 qwen14b（与生产 zhiliao ai.fallback 同址同模型，2026-08-01
-    # 改道后的现实）：176 的 qwen3:30b 17G 按集群显存纪律不可加载，拿它当默认
-    # 会让验收自己触发显存挤兑。
-    ap.add_argument("--base", default="http://192.168.0.173:11434",
-                    help="本地 LLM 端点（默认 LAN .173 常暖 qwen14b）")
-    ap.add_argument("--model", default="qwen14b-fallback")
-    ap.add_argument("--warmup-timeout", type=float, default=240.0,
-                    help="预热步骤超时秒（覆盖大模型冷载；14B 实测 ~69s）")
+    # 默认对准 .173 vLLM chatx（Qwen3-27B AWQ，与生产 zhiliao ai.fallback 同址同模型）。
+    ap.add_argument("--base", default="http://192.168.0.173:8001/v1",
+                    help="本地 LLM 端点（默认 LAN .173 vLLM chatx 27B）")
+    ap.add_argument("--model", default="chatx")
+    ap.add_argument("--warmup-timeout", type=float, default=60.0,
+                    help="预热步骤超时秒（vLLM 常驻应秒回；旧 ollama 冷载才需要更长）")
     ap.add_argument("--keep", action="store_true", help="保留临时数据根供排查")
     args = ap.parse_args(argv)
     try:

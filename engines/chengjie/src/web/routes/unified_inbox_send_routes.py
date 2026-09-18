@@ -2040,6 +2040,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         _msg = tr(request, "err.voice.hub_source_down")
                     elif _cls == "profile_not_ready":
                         _msg = tr(request, "err.voice.profile_not_ready")
+                    elif _cls == "clone_engine_offline":
+                        _msg = tr(request, "err.voice.clone_engine_offline")
                 except Exception:
                     _msg = ""
                 return {"ok": False, "reason": _err,

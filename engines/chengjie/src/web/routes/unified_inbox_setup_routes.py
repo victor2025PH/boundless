@@ -633,6 +633,21 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             "primary": _ai_primary_snapshot(config_manager, ai_client),
         }
 
+    @app.get("/api/setup/ai-primary/summary")
+    async def api_setup_ai_primary_summary(request: Request):
+        """主链档位**单一口径**（2026-09-17 沉淀）：档位/锁/实际降级顺序/各档角色/主链一句话/
+        回落链一句话/云端计费厂商，零密钥。运维通报、官网算力推送器、告警文案全部消费这一份，
+        不再各自读 overlay 或账本——09-17 配置切 local 后五个出口仍说 cloud 叙事的根因就是
+        「没有共用真相」。形状见 ``src/ai/ai_primary_summary.build_summary``。"""
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        from src.ai.ai_primary_summary import build_summary
+        config = (getattr(config_manager, "config", None) or {}) if config_manager else {}
+        snap = _ai_primary_snapshot(config_manager, getattr(request.app.state, "ai_client", None))
+        out = build_summary(config, effective=snap.get("effective"), lock=snap.get("lock") or "")
+        out["local_ready"] = bool(snap.get("local_ready"))
+        return out
+
     @app.get("/api/setup/ai-primary/audit")
     async def api_setup_ai_primary_audit(request: Request):
         """主链切换审计台账（最近 50 行）+ 当前锁态（supervisor/壳专属）。

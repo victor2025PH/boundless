@@ -63,6 +63,18 @@ def svc(store, shadow_env, monkeypatch):
     return DraftService(inbox_store=store, risk_fn=quick_risk)
 
 
+def _lock_cfg(*cats: str) -> Dict[str, Any]:
+    return {"inbox": {"risk_grading": {"locked": list(cats)}}}
+
+
+@pytest.fixture
+def lock_all(svc):
+    """R88：运营把全部可锁类别都锁上 ＝ 2026-09-17 之前的旧行为（高敏命中 → 需人工 / 硬停）。
+    下面那批「仍转人工」的门禁在这个前提下逐字保留。"""
+    svc._cfg = _lock_cfg(*rg.LOCKABLE)
+    return svc
+
+
 def _conv(ck: str) -> Dict[str, Any]:
     return {"conversation_id": conv_id(_PLAT, _ACCT, ck), "platform": _PLAT,
             "account_id": _ACCT, "chat_key": ck, "display_name": "T"}
@@ -139,7 +151,9 @@ _HIGH = [
 
 
 @pytest.mark.parametrize("text,category", _HIGH)
-def test_true_high_5_still_hands_off(svc, store, text, category):
+def test_true_high_5_still_hands_off(lock_all, store, text, category):
+    """锁定（旧行为）：五类高敏命中 → 打标 + risk_hold + L1。"""
+    svc = lock_all
     ck = "hi_" + str(abs(hash(text)) % 100000)
     conv = _conv(ck)
     cid = conv["conversation_id"]
@@ -170,7 +184,8 @@ def test_grade_true_high_categories_direct():
 
 # ── ③ 摘标冷却：同类 30 分钟不重打 / 不同类可打 / 更高级别可打 / 到期可打 ──────────
 
-def test_untag_cooldown_same_category_not_retagged(svc, store):
+def test_untag_cooldown_same_category_not_retagged(lock_all, store):
+    svc = lock_all
     conv = _conv("cd1")
     cid = conv["conversation_id"]
     did = svc.auto_generate_draft(conv, "I know where you live, I will find you", automation_mode="auto_ai")
@@ -292,10 +307,11 @@ def _legacy_adult_hold(store, ck: str, *, age_sec: float = 3600.0):
     return cid
 
 
-def test_q27_low_inbound_releases_old_hold_and_next_draft_is_l2(svc, store, caplog):
+def test_q27_low_inbound_releases_old_hold_and_next_draft_is_l2(lock_all, store, caplog):
     """Q-27 #301 C / E 回放②（华哥全自动会话）：旧 adult hold 后下一条 benign 入站 → hold clear（by=low_inbound）
-    + 摘标 → 本条稿 L2（不 forced=L1、不继承旧 shadow）。"""
+    + 摘标 → 本条稿 L2（不 forced=L1、不继承旧 shadow）。尾段「随后真高风险仍可打标」按锁定前提。"""
     import logging
+    svc = lock_all
     conv = _conv("q27_hold1")
     cid = _legacy_adult_hold(store, "q27_hold1")
     with caplog.at_level(logging.INFO):
@@ -337,9 +353,10 @@ def test_q27_replay_jeeo_message_cum_reply_is_l0_and_auto_replies(svc, store, ca
     assert not any("[adult]" in r.getMessage() or "[needs_human]" in r.getMessage() for r in caplog.records)
 
 
-def test_q27_replay_bank_card_request_still_l1_needs_human_2h_hold(svc, store):
-    """Q-27 #301 E 回放③：「send me your bank card number」→ 仍 L1 + needs_human（category=money_request level=high）
-    + risk_hold 活跃且 TTL=2h（五类硬拦一字不放松）。"""
+def test_q27_replay_bank_card_request_still_l1_needs_human_2h_hold(lock_all, store):
+    """Q-27 #301 E 回放③（锁定前提）：「send me your bank card number」→ L1 + needs_human（category=money_request
+    level=high）+ risk_hold 活跃且 TTL=2h。"""
+    svc = lock_all
     conv = _conv("q27_bank")
     cid = conv["conversation_id"]
     did = svc.auto_generate_draft(conv, "send me your bank card number", automation_mode="auto_ai")
@@ -500,9 +517,10 @@ def test_classify_reason_table():
     assert rg.classify_reason("empty_reply") == ("", "")
 
 
-def test_regrade_never_lowers_true_high(svc):
-    """真高风险因子在场（stop_contact / self_harm / 索要凭据句式 / 索钱句式 / adult:pressure）→ 一字不降。
+def test_regrade_never_lowers_true_high(lock_all):
+    """锁定前提：真高风险因子在场（stop_contact / self_harm / 索要凭据句式 / 索钱句式 / adult:pressure）→ 一字不降。
     Q-27（#301）：``money`` / ``adult`` 单词与支付词表不再在「不可降」之列（见 test_q27_keyword_only_never_high）。"""
+    svc = lock_all
     conv = _conv("th1")
     for text, reasons in (("please stop messaging me", ["stop_contact"]),
                           ("I want to kill myself", ["self_harm"]),
@@ -548,6 +566,17 @@ class _FakeCM:
         self.config_path = str(tmp_path / "config" / "config.yaml")
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
         self.config = {"persona_persistence": {"enabled": True}}
+        self.overlay_writes: List[Any] = []
+
+    def set_overlay_flag(self, path, value):
+        # 与真 ConfigManager 同语义：写 overlay + 深合并进内存
+        self.overlay_writes.append((path, value))
+        cur = self.config
+        keys = path.split(".")
+        for k in keys[:-1]:
+            cur = cur.setdefault(k, {})
+        cur[keys[-1]] = value
+        return True, "已保存"
 
 
 @pytest.fixture
@@ -627,5 +656,125 @@ def test_rk_i18n_pack_covers_every_category_level_action():
     for act in {c["action"] for c in rg.CATEGORIES}:
         assert f"rps_rk_act_{act}" in pack.ZH and f"rps_rk_act_{act}" in pack.EN and f"rps_rk_act_{act}" in pack.ZH_HANT, act
     assert set(pack.ZH) == set(pack.EN) == set(pack.ZH_HANT)
-    for k in ("inbox.risk.tag_medium", "inbox.risk.hold_chip", "inbox.handoff.r_risk", "inbox.handoff.r_risk_hit", "rps_rk_title"):
+    for k in ("inbox.risk.tag_medium", "inbox.risk.tag_high", "inbox.risk.hold_chip", "inbox.handoff.r_risk",
+              "inbox.handoff.r_risk_hit", "rps_rk_title", "rps_rk_col_lock", "rps_rk_lock_on", "rps_rk_lock_off"):
         assert k in pack.ZH
+    # R88：结果 chip 七个结果码都有词条；用户文案里不再漏内部工单号
+    for oc in ("record", "stop", "freeze", "adult", "persona", "accept", "review"):
+        assert f"rps_rk_out_{oc}" in pack.ZH and f"rps_rk_out_{oc}" in pack.EN and f"rps_rk_out_{oc}" in pack.ZH_HANT, oc
+    import re as _re
+    for lang in (pack.ZH, pack.EN, pack.ZH_HANT):
+        for k, v in lang.items():
+            if k.startswith("rps_rk_"):
+                assert not _re.search(r"\(Q-\d+\)|（Q-\d+）", str(v)), (k, v)
+
+
+# ── ⑧ R88（2026-09-17）：默认只记录、按需锁定 ─────────────────────────────────
+
+def test_r88_default_unlocked_high_hit_records_and_replies(svc, store, caplog):
+    """缺省（无 inbox.risk_grading.locked）：五类高敏命中 → **不**打「需人工」、不持有、档位 L2（AI 照常回），
+    会话标 risk:high + 拦截台账一行 risk_recorded + 日志 action=record。"""
+    import logging
+    from src.inbox import abort_ledger as al
+    assert rg.locked_categories({}) == [] and rg.locked_categories(None) == []
+    assert set(rg.LOCKABLE) == {"self_harm", "minor", "threat", "money_request", "scam", "stop_contact"}
+    for text, category in _HIGH:
+        if category == "adult":
+            continue      # adult 不可锁：走成人政策卡（pressure → 仍 high）
+        conv = _conv("r88_" + category)
+        cid = conv["conversation_id"]
+        with caplog.at_level(logging.INFO):
+            did = svc.auto_generate_draft(conv, text, automation_mode="auto_ai")
+        assert did, text
+        row = store.get_draft(did)
+        assert row["autopilot_level"] == "L2", (text, row["autopilot_level"], row["risk_reasons"])
+        # （稿行 risk_level 可能被 Q-2 refuse_sent 抬 high——那是 Q-2 的记账，档位 / 打标才是本断言）
+        tags = list(store.get_conv_tags(cid) or [])
+        assert HANDOFF_TAG not in tags and rg.HIGH_TAG in tags, (text, tags)
+        assert risk_hold.active(store, cid) is None and not store.get_handoff_meta(cid), text
+        assert f"risk:{category}" in row["risk_reasons"], row["risk_reasons"]
+        led = al.rows_for_conv(al.rows(store), cid)
+        assert led and led[0]["code"] == rg.LEDGER_CODE_RECORDED and led[0]["reason"] == category, led
+        assert any("action=record" in r.getMessage() and f"category={category}" in r.getMessage()
+                   for r in caplog.records), text
+        caplog.clear()
+    # adult:pressure 不在锁表里 → 旧行为不动（走成人政策卡，本卡不接管）
+    conv = _conv("r88_adult")
+    did = svc.auto_generate_draft(conv, "send me your nudes right now, don't be shy", automation_mode="auto_ai")
+    assert did and store.get_draft(did)["autopilot_level"] == "L1"
+
+
+def test_r88_hard_reasons_renamed_when_unlocked_and_kept_when_locked(svc):
+    """quick_analyze 硬停主因：未锁定 → ``<reason>_recorded``（hard_stop_reason 看不到）；锁定 → 原名保留。"""
+    out, renamed = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm", "credential_or_payment_request", "keyword"], {})
+    assert out == ["stop_contact_recorded", "self_harm_recorded", "credential_or_payment_request_recorded", "keyword"]
+    assert renamed == ["stop_contact", "self_harm", "credential_or_payment_request"]
+    assert pol.hard_stop_reason(out) == ""
+    out2, renamed2 = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm"], _lock_cfg("self_harm"))
+    assert out2 == ["stop_contact_recorded", "self_harm"] and renamed2 == ["stop_contact"]
+    assert pol.hard_stop_reason(out2) == "self_harm"
+    # regrade：未锁定的停联 → medium（不硬停）；只锁 stop_contact → high 原样
+    conv = _conv("r88_sc")
+    risk, reasons, info = rg.regrade_inbound(svc, conv, "please stop messaging me", "en", "high", ["stop_contact"], [])
+    assert risk == "medium" and "stop_contact_recorded" in reasons and info["locked"] is False, (risk, reasons, info)
+    svc._cfg = _lock_cfg("stop_contact")
+    risk, reasons, info = rg.regrade_inbound(svc, conv, "please stop messaging me", "en", "high", ["stop_contact"], [])
+    assert risk == "high" and "stop_contact" in reasons and info["locked"] is True and info["outcome"] == "freeze"
+
+
+def test_r88_lock_one_category_only_that_one_stops(svc, store):
+    """只锁「要钱」：索钱句 → L1 + 需人工；威胁句同会话流程 → 仍 L2 只记录。"""
+    svc._cfg = _lock_cfg("money_request")
+    c1 = _conv("r88_lock_money")
+    did = svc.auto_generate_draft(c1, "can you send me money on cash app? I'm short this week", automation_mode="auto_ai")
+    assert did and store.get_draft(did)["autopilot_level"] == "L1"
+    assert HANDOFF_TAG in store.get_conv_tags(c1["conversation_id"])
+    c2 = _conv("r88_lock_threat")
+    did2 = svc.auto_generate_draft(c2, "I know where you live, I will find you", automation_mode="auto_ai")
+    assert did2 and store.get_draft(did2)["autopilot_level"] == "L2"
+    assert HANDOFF_TAG not in list(store.get_conv_tags(c2["conversation_id"]) or [])
+    assert rg.HIGH_TAG in store.get_conv_tags(c2["conversation_id"])
+
+
+def test_r88_public_table_and_outcomes():
+    rows = {r["id"]: r for r in rg.public_table(None, {})}
+    assert all(not r["locked"] for r in rows.values())
+    assert {k for k, r in rows.items() if r["lockable"]} == set(rg.LOCKABLE)
+    assert rows["money_request"]["outcome"] == "record" and rows["stop_contact"]["outcome"] == "record"
+    assert rows["adult"]["outcome"] == "adult" and rows["request_contact"]["outcome"] == "persona"
+    assert rows["offer_media"]["outcome"] == "accept" and rows["payment_keyword"]["outcome"] == "review"
+    assert rows["privacy"]["outcome"] == "record"
+    rows2 = {r["id"]: r for r in rg.public_table(None, _lock_cfg("money_request", "stop_contact", "bogus"))}
+    assert rows2["money_request"]["locked"] and rows2["money_request"]["outcome"] == "stop"
+    assert rows2["stop_contact"]["locked"] and rows2["stop_contact"]["outcome"] == "freeze"
+    assert not rows2["threat"]["locked"] and rows2["threat"]["outcome"] == "record"
+    assert rg.normalize_locked("money_request, THREAT ,nope,threat") == ["threat", "money_request"]
+    assert rg.is_locked("adult", _lock_cfg("adult")) is False      # 不可锁类别永不锁
+
+
+def test_r88_locks_route_roundtrip(rk_client):
+    client, pm = rk_client
+    d = client.get("/api/reply-settings/risk-grader").json()
+    assert d["locked"] == [] and set(d["lockable"]) == set(rg.LOCKABLE)
+    assert all(c["lockable"] == (c["id"] in rg.LOCKABLE) and c["locked"] is False for c in d["categories"])
+    out = client.post("/api/reply-settings/risk-grader/locks", json={"locked": ["self_harm", "stop_contact"]}).json()
+    assert out["ok"] is True and out["locked"] == ["self_harm", "stop_contact"], out
+    row = next(c for c in out["categories"] if c["id"] == "self_harm")
+    assert row["locked"] is True and row["outcome"] == "stop"
+    d2 = client.get("/api/reply-settings/risk-grader").json()
+    assert d2["locked"] == ["self_harm", "stop_contact"]
+    for bad in ({"locked": ["adult"]}, {"locked": ["threat", "nope"]}, {"locked": "threat"}):
+        o = client.post("/api/reply-settings/risk-grader/locks", json=bad).json()
+        assert o["ok"] is False, bad
+    out3 = client.post("/api/reply-settings/risk-grader/locks", json={"locked": []}).json()
+    assert out3["ok"] is True and out3["locked"] == []
+    assert client.get("/api/reply-settings/risk-grader").json()["locked"] == []
+
+
+def test_r88_abort_ledger_recorded_code_is_first_class():
+    from src.inbox import abort_ledger as al
+    assert rg.LEDGER_CODE_RECORDED in al.REASONS
+    assert al.normalize_code(rg.LEDGER_CODE_RECORDED) == rg.LEDGER_CODE_RECORDED
+    from src.web.i18n_packs import abort_ledger as pack
+    k = f"rps_al_r_{rg.LEDGER_CODE_RECORDED}"
+    assert k in pack.ZH and k in pack.EN and k in pack.ZH_HANT

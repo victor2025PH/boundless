@@ -693,13 +693,22 @@ def _send_result(res: Any) -> Tuple[bool, str]:
 def note_media_receipt(
     conv_key: str, *, media_id: str = "", path: str = "", url: str = "",
     media_type: str = "image", mid: str = "", now: Optional[float] = None,
+    sha256: str = "",
 ) -> None:
     if not conv_key or not (path or url):
         return
+    digest = str(sha256 or "").strip()
+    if not digest and path:
+        try:
+            from src.companion.media_ownership import sha256_path as _sha
+            digest = _sha(path)
+        except Exception:
+            digest = ""
     rec = {
         "media_id": str(media_id or ""), "path": str(path or ""),
         "url": str(url or ""), "media_type": str(media_type or "image"),
         "mid": str(mid or ""),
+        "sha256": digest,
         "ts": float(now if now is not None else time.time()),
     }
     with _LAST_SENT_LOCK:
@@ -1193,6 +1202,37 @@ def pick_registered_media(
                       if cc.get("place_gate") else ""),
         allow_random=_allow_random, suggest_ok=_suggest_ok,
         required_scene_kind=_scene_kind, trace=_trace)
+    # P1-3 KBYW8V：客户说 can I see a picture of you —— 整句对不上标签，
+    # 通用池又被「索图则关随机」挡住。标签 0 命中时用 selfie 标准查询兜底一张
+    # 已启用本人照；仍 0 才记 miss（诚实文字，而不是 Sure 空头）。
+    if row is None and generic_ok and not _scene_kind:
+        try:
+            from src.ai.companion_selfie import detect_selfie_request as _dsr_fb
+            _selfie_ask = bool(_dsr_fb(str(peer_text or "")))
+        except Exception:
+            _selfie_ask = False
+        if _selfie_ask:
+            _tr2: Dict[str, Any] = {}
+            row = pick_media(
+                store, str(persona_id or ""), "selfie 自拍",
+                generic_ok=True, avoid_id=avoid_id, bond_level=bond_level,
+                conv_key=conv_key, resend_after_days=_resend_days,
+                now_hour=cc["now_hour"], required_scene_class="",
+                resend_cooldown_hours=cc["resend_cooldown_hours"],
+                continuity_minutes=cc["continuity_minutes"],
+                no_resend=bool(cc.get("no_resend")),
+                now_season=(str(_geo.get("season") or "")
+                            if cc.get("season_gate") else ""),
+                home_country=(str(_geo.get("country") or "")
+                              if cc.get("place_gate") else ""),
+                allow_random=True, suggest_ok=_suggest_ok,
+                required_scene_kind="", trace=_tr2)
+            if row is not None:
+                _trace = _tr2
+                logger.info(
+                    "[album_match] conv=%s selfie_fallback=1 query=%s picked=%s",
+                    conv_key or "-", str(peer_text or "").replace("\n", " ")[:60],
+                    str(row.get("id") or "-"))
     _picked = str((row or {}).get("id") or "-")
     _fb = str(_trace.get("fallback") or "none")
     if _fb not in ("none", "random"):
@@ -1481,6 +1521,8 @@ async def run_autosend_image(
         return False
     # Q-39 A②：同会话图片跟随冷却（非显式索图触发）+ 每日上限（全部出图）
     _fb_reason = _isg.follow_budget_check(ck, config, _gate.trigger)
+    if not _fb_reason and _isg.promise_streak_blocks_follow(ck, _gate.trigger):
+        _fb_reason = _isg.REASON_PROMISE_STREAK
     if _fb_reason:
         _fs = _isg.follow_stats(ck)
         record_image_fallback(_fb_reason, detail=_gate.trigger)

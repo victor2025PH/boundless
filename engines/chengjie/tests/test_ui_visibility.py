@@ -331,7 +331,7 @@ _AUDIENCE_DECLARED = frozenset({
     "developer", "diff", "episodic", "escalation", "funnel", "group_show", "help",
     "import", "knowledge", "learner", "line_rpa", "logs", "membership",
     "messenger_rpa", "monetization", "ops", "personal_settings", "personas",
-    "relations_health", "reply_settings", "rpa_overview", "settings",
+    "relations_health", "reply_settings", "model_keys", "rpa_overview", "settings",
     # 代理商面深链（L-4 A 2026-09-06）：PARTNER_ONLY_ITEM_IDS，client 形态剔除
     "settings_brand", "settings_demo", "settings_license",
     # singing / voice_eval / help / strategies：2026-09-06 L-4 A（D-L6）改判客户

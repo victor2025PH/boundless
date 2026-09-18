@@ -147,7 +147,7 @@ def vendor_of(base_url: Any) -> Dict[str, Any]:
     h = host_of(base_url)
     hostname = h.rsplit(":", 1)[0] if ":" in h else h
     if is_private_endpoint(base_url):
-        return {"key": "local", "label": "本机私有", "private": True,
+        return {"key": "local", "label": "自有算力", "private": True,
                 "default_ctx": DEFAULT_PRIVATE_CTX}
     for suffix, key, label, ctx in _VENDORS:
         if hostname == suffix or hostname.endswith("." + suffix):

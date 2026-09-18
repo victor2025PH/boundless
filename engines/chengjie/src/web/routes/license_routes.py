@@ -442,7 +442,7 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
 
             from src.ai.hosted_gateway import (
                 ensure_hosted_ai, ensure_hosted_asr, ensure_hosted_telegram,
-                ensure_hosted_vision, ensure_hosted_voice)
+                ensure_hosted_vision, ensure_hosted_voice, ensure_hosted_chatx)
             from src.utils.golive import _is_placeholder
 
             # Telegram 托管凭据独立于 AI Key 状态尝试（池未配则静默跳过）——
@@ -479,6 +479,10 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
                     await asyncio.to_thread(ensure_hosted_asr, _CONFIG_MANAGER)
                 except Exception:
                     logger.debug("[hosted-asr] claim 后接入语音识别失败（忽略）", exc_info=True)
+                try:
+                    await asyncio.to_thread(ensure_hosted_chatx, _CONFIG_MANAGER)
+                except Exception:
+                    logger.debug("[hosted-chatx] claim 后接入 ChatX 失败（忽略）", exc_info=True)
 
             ai = (_cfg_or_none().get("ai") or {})
             if not _is_placeholder(ai.get("api_key")):

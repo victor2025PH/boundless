@@ -125,4 +125,4 @@ def test_sidecar_and_tg_backfill_flag_wiring_static():
     assert 'payload["backfill"] = True' in pb and '"tg_dialogs"' in pb
     rt = (_ROOT / "src" / "web" / "routes" / "unified_inbox_account_routes.py").read_text(
         encoding="utf-8")
-    assert "backfill=_backfill," in rt and "and not _backfill:" in rt
+    assert "backfill=_backfill," in rt and "and not _backfill and not _decrypt_fail:" in rt

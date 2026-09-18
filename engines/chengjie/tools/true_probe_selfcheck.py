@@ -74,7 +74,7 @@ def _assertion_label(spec: Dict[str, Any]) -> str:
         return "含 " + "/".join(str(x) for x in spec["expect_any"])
     if spec.get("expect_latin"):
         return "须为拉丁文且无 CJK"
-    if spec.get("domain") == "tts":
+    if str(spec.get("domain") or "").startswith(TTS_PREFIX):
         return "magic bytes + 引擎归属"
     return "仅非空（弱）"
 
@@ -94,7 +94,7 @@ def run_root(root: Path, wanted: List[str], rounds: int,
     # 这起事故的代价来源。
     gaps = {d: why for d, why in probe_gap_reasons(cfg).items()
             if selected(d, wanted, include_tts)}
-    disabled = [d for d in ("tts", "translate", "vision", "asr")
+    disabled = [d for d in ("tts_hub", "tts_index", "translate", "vision", "asr", "ser")
                 if selected(d, wanted, include_tts)
                 and d not in have and d not in gaps]
     results: List[Dict[str, Any]] = []

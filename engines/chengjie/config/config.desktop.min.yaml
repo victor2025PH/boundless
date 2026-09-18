@@ -62,6 +62,14 @@ ai:
   max_tokens: 1024
   timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
   prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
+  # ChatX 27B：与办公室同一产品。干净包零 RFC1918；打官网 /api/ai/v1 model=chatx。
+  # 聊天主链不拿它顶话（chat_fallback: false）；目录 / 无限制档走这条。
+  fallback:
+    enabled: true
+    base_url: https://bd2026.cc/api/ai/v1
+    model: chatx
+    timeout: 90
+    chat_fallback: false
 
 # 技能集（回复产线用；与 example 同款默认，不含 test 技能）
 skills:
@@ -219,10 +227,13 @@ avatar_voice:
 voice_recognition:
   _hosted_auto: true
 
-# 托管识图预授权标记（2026-08-22 外网机实测「发图即拦」后进基线，与
-# avatar_voice._hosted_auto 同构）：客户档不配 LAN VLM，持设备令牌的部署由
-# hosted_gateway.ensure_hosted_vision 运行时纯内存接入官网识图网关。
-# 用户退出：vision.hosted_opt_out: true。
+    # 托管识图预授权标记（2026-08-22 外网机实测「发图即拦」后进基线，与
+    # avatar_voice._hosted_auto 同构）：客户档不配 LAN VLM，持设备令牌的部署由
+    # hosted_gateway.ensure_hosted_vision 运行时纯内存接入官网识图网关。
+    # 用户退出：vision.hosted_opt_out: true。
+    # 视觉身份（#333）：干净包不写 face_identity.enabled。ensure_hosted_vision 置
+    # _hosted_vision 后 face_cfg 自动走官网 /api/ai/v1/face/embed。退出：
+    # vision.face_identity.hosted_opt_out: true（或 enabled: false）。
 vision:
   _hosted_auto: true
   # #333 R7775K（2026-09-17）：网关识图单端点无备胎，代码默认 timeout=120 → 端点卡死时

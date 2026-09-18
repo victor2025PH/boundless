@@ -87,3 +87,24 @@ def test_digest_survives_broken_cost_module(monkeypatch):
     rep = w._maybe_daily_digest(now=_at("2026-09-12", 1, 0))
     assert rep is not None and rep["cost"] is None and rep["open"] == []
     assert bus.events[-1][0] == "ops_digest_report"
+
+
+def test_digest_carries_primary_from_overlay(monkeypatch):
+    """2026-09-17：每日摘要必须带主链档位一行（数据面），文案层另测 copy gate。"""
+    w, bus = _wd(monkeypatch, {"enabled": True, "hour": 0, "minute": 0})
+    w._config_manager = SimpleNamespace(config={
+        "health_watchdog": {"daily_digest": {"enabled": True, "hour": 0, "minute": 0}},
+        "ai": {
+            "primary": "local", "primary_lock": "local",
+            "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat",
+            "fallback": {"enabled": True, "base_url": "http://192.168.0.173:8001/v1",
+                         "model": "chatx"},
+        },
+    })
+    w._app = SimpleNamespace(state=SimpleNamespace(
+        ai_client=SimpleNamespace(_primary_mode="local", _primary_lock="local")))
+    rep = w._maybe_daily_digest(now=_at("2026-09-18", 1, 0))
+    assert rep is not None
+    assert rep["primary"]["effective"] == "local"
+    assert "本地 vLLM chatx" in (rep["primary"] or {}).get("primary_text", "")
+    assert bus.events[-1][0] == "ops_digest_report"

@@ -15,9 +15,10 @@ chip（ay- 让位 / rk- 风控 / aif- 起草失败 / ms- 边车 / lp- 语言）�
         action:     resume | ack | retry | confirm_pin | none
         params:     dict                       # 文案插值 + 动作参数（draft_id / message_id …）
         sources:    dict                       # 六源原始快照（详情面板 / 门禁断言用）
-        notes:      list                       # Q-35 #306 / R87 P2-2：不改状态的旁注
+        notes:      list                       # Q-35 #306 / R87 P2-2 / #279：不改状态的旁注
                                                #   album_no_match：相册无命中 {query, persona_id, n, hhmm, link, text_key}
                                                #   voice_clone_lang：克隆声不支持该会话语种 {lang, n, text_key}
+                                               #   decrypt_fail：WA Bad MAC 占位入站 {n, hhmm, text_key}
     }
 
 六源（全部**只读**，任一源异常 → 视为该源无信号，绝不抛、绝不写 KV）：
@@ -382,6 +383,21 @@ def _src_voice_clone_lang(store: Any, cid: str, now: float) -> Optional[Dict[str
         return None
 
 
+def _src_decrypt_fail(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
+    """#279 P2-2：Bad MAC 占位入站 note。不改状态——自动链已跳过占位，只让坐席看见。"""
+    try:
+        from src.inbox.decrypt_fail_marker import DEFAULT_TTL_SEC, get as _get, hhmm as _hhmm
+        rec = _get(cid, store=store, now=now, ttl_sec=DEFAULT_TTL_SEC) if store is not None else None
+        if not rec:
+            return None
+        ts = float(rec.get("ts") or 0.0)
+        return {"kind": "decrypt_fail", "n": int(rec.get("n") or 1), "ts": ts,
+                "hhmm": _hhmm(ts), "ago_sec": round(max(0.0, now - ts), 0),
+                "text_key": "inbox.cs.note.decrypt_fail"}
+    except Exception:
+        return None
+
+
 def _src_xlate_hold(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
     """Q-39 B（#326）：出站翻译 HOLD note（``xlate_hold_marker``，24h 内有效）。同引擎重试 +
     换引擎 + 重起草三步都没救回来才写；同会话下一次翻译成功即清。"""
@@ -479,9 +495,10 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         "reason_code": "", "reason_text_key": "inbox.cs.human", "until_ts": None,
         "action": "none", "params": {}, "sources": src, "ts": ts_now,
     }
-    # Q-35 #306 / R87 P2-2：旁注源＝相册无命中 + 克隆声语种缺口。**不参与状态判定**、不进 sources。
+    # Q-35 #306 / R87 P2-2 / #279：旁注源＝相册无命中 + 克隆声语种缺口 + 解密失败。
     out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),
-                                _src_voice_clone_lang(store, cid, ts_now)) if n]
+                                _src_voice_clone_lang(store, cid, ts_now),
+                                _src_decrypt_fail(store, cid, ts_now)) if n]
     out["ext"] = {"xlate_hold": xh, "route_offline": ro}
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",

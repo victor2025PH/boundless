@@ -378,10 +378,16 @@ def test_watchdog_names_stalled_goal_throttles_and_recovers():
         assert len(hits) == 1
         assert hits[0]["loop"] == "goal_sprint_goal" and hits[0]["goal_id"] == "g1"
         assert hits[0]["conversation_id"] == CONV and hits[0]["rate_key"] == "scan_stall:goal:g1"
-        w._note_goal_stalled(stalled, now=NOW + 241 * 60, interval_min=240)  # 过节流窗再提醒
+        w._note_goal_stalled(stalled, now=NOW + 241 * 60, interval_min=240)  # 过节流窗
+        # 指纹未变 → unchanged 间隔（默认 24h）仍 HOLD；再拉到 25h 才重提
+        assert len([p for n, p in bus.events if n == "scan_loop_stall_alert"]) == 1
+        w._note_goal_stalled(stalled, now=NOW + 25 * 3600, interval_min=240)
         hits = [p for n, p in bus.events if n == "scan_loop_stall_alert"]
         assert len(hits) == 2 and hits[1]["reminder"] is True
-        w._note_goal_stalled([], now=NOW + 300 * 60, interval_min=240)       # 恢复清位
+        w._note_goal_stalled([], now=NOW + 26 * 3600, interval_min=240)       # 恢复清位
         assert "g1" not in w._goal_stalled_alerted
+        rec = [p for n, p in bus.events
+               if n == "scan_loop_stall_alert" and p.get("recovered")]
+        assert rec and rec[0]["goal_id"] == "g1"
     finally:
         eb.get_event_bus = orig

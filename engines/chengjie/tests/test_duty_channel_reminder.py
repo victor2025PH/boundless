@@ -181,3 +181,59 @@ def test_source_keeps_l7_and_n5_wiring():
     assert 'st["receipt_attempts"]' in src
     body = src.split("def check_new_reports", 1)[1]
     assert "if send_group(text, 0, dry_run=dry_run):" in body and "下一轮重试" in body
+    assert "不必再在群里贴同一件" not in src
+    assert "进展会按单回访" not in src
+    assert 'DEFAULT_RECEIPT = "{name} 报告已收到：\\n{items}"' in src
+    assert '"\\n".join(items)' in src
+
+
+def test_default_receipt_omits_process_lecture(rem):
+    assert "不必再在群里贴同一件" not in rem.DEFAULT_RECEIPT
+    assert "验收清单" not in rem.DEFAULT_RECEIPT
+    assert "进展会按单回访" not in rem.DEFAULT_RECEIPT
+    assert "{name}" in rem.DEFAULT_RECEIPT and "{items}" in rem.DEFAULT_RECEIPT
+    assert "{detail}" in rem.DEFAULT_REMIND
+
+
+def test_receipt_text_has_no_process_lecture(no_inbox, rem, monkeypatch):
+    _pack(rem.DIAG, "32PTMK", "GXP 条目已清")
+    _watch(rem, ["32PTMK"])
+    sent = []
+    monkeypatch.setattr(rem, "send_group", lambda text, ticket, dry_run: (sent.append(text), True)[1])
+    rem.check_new_reports(_state(), dry_run=False)
+    assert sent
+    assert sent[0].startswith("skuio 花无缺 报告已收到：\n")
+    assert "32PTMK（GXP 条目已清）" in sent[0]
+    assert "不必再在群里贴同一件" not in sent[0]
+    assert "验收清单" not in sent[0]
+    assert "进展会按单回访" not in sent[0]
+
+
+def test_receipt_includes_problem_core_and_fix_method(tmp_path, monkeypatch):
+    """真 _receipt_item：括号里是问题核心，工单有修复说明则另起一行。"""
+    spec = importlib.util.spec_from_file_location(
+        "duty_channel_reminder_live", TOOLS / "duty_channel_reminder.py")
+    rem = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rem)
+    rem.DIAG = tmp_path / "diag"
+    rem.WATCH_STATE = tmp_path / "watch.json"
+    rem.LOG = tmp_path / "rem.log"
+    rem.ALERTS = tmp_path / "alerts.log"
+    monkeypatch.setattr(rem, "_auto_ticket",
+                        lambda code, dry_run: {"action": "attach", "ticket": 241})
+    monkeypatch.setattr(
+        rem, "_ticket_public",
+        lambda tid: {"title": "GXP 条目已清", "fix_note": "1.0.80 内测包已含，手装后重启"})
+    monkeypatch.setattr(rem, "_order_pending", lambda codes: list(codes))
+    monkeypatch.setattr(rem, "_register_skip", lambda code, reason: None)
+    monkeypatch.setattr(rem, "already_in_inbox", lambda text, **kw: "")
+    sent = []
+    monkeypatch.setattr(rem, "send_group",
+                        lambda text, ticket, dry_run: (sent.append(text), True)[1])
+    _pack(rem.DIAG, "32PTMK", "【BUG】关联 #241")
+    _watch(rem, ["32PTMK"])
+    rem.check_new_reports(_state(), dry_run=False)
+    assert sent
+    assert "32PTMK（GXP 条目已清）→ 已挂 #241" in sent[0]
+    assert "修复：1.0.80 内测包已含，手装后重启" in sent[0]
+    assert "不必再在群里贴同一件" not in sent[0]

@@ -39,6 +39,16 @@ def store(tmp_path):
     s.close()
 
 
+# R88（2026-09-17）：硬停只对运营**锁定**的类别执行（缺省全部只记录、AI 照常回）。
+# 锁定后的语义：不回客户、只冻结 + 坐席提醒。DraftService / 协议链带「全部锁定」配置验这条。
+# 「未锁定 → 继续回复」由文末 R88 用例与 test_risk_grader_gate 覆盖。
+def _lock_all_cfg(**extra):
+    from src.inbox.risk_grader import LOCKABLE
+    cfg = {"inbox": {"risk_grading": {"locked": list(LOCKABLE)}}}
+    cfg.update(extra)
+    return cfg
+
+
 CID = "telegram:acct1:u1"
 
 
@@ -215,63 +225,50 @@ def test_frozen_reason_tolerates_mock_store():
 # ④ DraftService 回放 XAM4KV 三条入站：一条告别 → 冻结 → 零草稿
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_replay_xam4kv_one_farewell_then_silence(store):
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+def test_replay_xam4kv_notify_then_silence(store):
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     store.set_automation_mode(CID, "auto_ai", source="human")
     conv = _conv()
     d1 = svc.auto_generate_draft(conv, "please stop", automation_mode="auto_ai", enrich=True)
-    assert d1
-    row = store.get_draft(d1)
-    assert row["autopilot_level"] == "L2" and row["status"] == "pending"   # 不停泊、不经 AI 补全
-    assert row["draft_text"] == sc.farewell_text("en"), row["draft_text"]
-    assert sc.is_farewell_draft(row)
+    assert d1 is None
     assert sc.frozen_reason(store, CID) == "stop_contact"
     assert store.get_automation_mode_if_set(CID) == "manual"
-    # enrich 对已 pending 的告别稿无效（AI 稿不会覆盖告别）
-    assert svc.enrich_draft(d1, reply_text="I hear you, and I'll stop here. Take care.",
-                            automation_mode="auto_ai") is False
-    assert store.get_draft(d1)["draft_text"] == sc.farewell_text("en")
-    # 第二、三条：不起草
+    # 第二、三条：不起草、不出站
     d2 = svc.auto_generate_draft(conv, "so stop writing to me", automation_mode="auto_ai", enrich=True)
     d3 = svc.auto_generate_draft(conv, "Never write me again, please", automation_mode="auto_ai", enrich=True)
     assert d2 is None and d3 is None
     pend = [d for d in store.list_drafts(conversation_id=CID, limit=20)
             if d.get("status") in ("pending", "enriching")]
-    assert [d["draft_id"] for d in pend] == [d1]
+    assert pend == []
 
 
-def test_replay_self_harm_one_reply_then_human(store):
-    """自伤：AI 那一句陪伴放行（与危机穿透同向），随即冻结切人工；第二条零草稿。"""
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+def test_replay_self_harm_notify_then_human(store):
+    """自伤锁定：不回客户，只冻结切人工；第二条零草稿。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     store.set_automation_mode(CID, "auto_ai", source="human")
     conv = _conv()
     d1 = svc.auto_generate_draft(conv, "I want to kill myself", automation_mode="auto_ai", enrich=True)
-    row = store.get_draft(d1)
-    assert row["autopilot_level"] == "L2" and row["status"] == "enriching"   # 照常走人设产线
-    assert sc.is_hard_stop_pass_draft(row) and not sc.is_farewell_draft(row)
+    assert d1 is None
     assert sc.frozen_reason(store, CID) == "self_harm"
     assert store.get_automation_mode_if_set(CID) == "manual"
     assert sc.STOP_CONTACT_TAG not in store.get_conv_tags(CID)
-    assert svc.enrich_draft(d1, reply_text="我在，别怕。", automation_mode="auto_ai") is True
-    row = store.get_draft(d1)
-    assert row["autopilot_level"] == "L2" and row["status"] == "pending" and row["draft_text"] == "我在，别怕。"
     assert svc.auto_generate_draft(conv, "nobody cares anyway", automation_mode="auto_ai", enrich=True) is None
 
 
 def test_review_mode_stop_contact_freezes_without_farewell(store):
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     did = svc.auto_generate_draft(_conv(), "leave me alone", automation_mode="review")
-    row = store.get_draft(did)
-    assert row["autopilot_level"] == "L1" and not sc.is_farewell_draft(row)
+    assert did is None
     assert sc.frozen_reason(store, CID) == "stop_contact"
     assert store.get_automation_mode_if_set(CID) == "manual"
 
 
 def test_high_risk_non_stop_goes_to_review_and_tags(store):
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     did = svc.auto_generate_draft(_conv(), "send me your bank card number", automation_mode="auto_ai")
     row = store.get_draft(did)
     assert row["autopilot_level"] == "L1" and row["risk_level"] == "high"
+    assert not str(row.get("draft_text") or "").strip()   # 锁定留白，无固定话术
     from src.integrations.protocol_autoreply import HANDOFF_TAG
     assert HANDOFF_TAG in store.get_conv_tags(CID)
     assert store.get_handoff_meta(CID)["reason"] == "high_risk"
@@ -421,7 +418,7 @@ async def test_protocol_autoreply_stop_contact_farewell_then_silence(store, monk
     async def _send(**kw):
         sent.append(kw["text"])
 
-    cfg = {"protocol_autoreply": {"enabled": True}}
+    cfg = _lock_all_cfg(protocol_autoreply={"enabled": True})
 
     def _mode(p, a, c):
         from src.inbox.automation_mode import resolve_automation_mode
@@ -431,8 +428,9 @@ async def test_protocol_autoreply_stop_contact_farewell_then_silence(store, monk
                "chat_key": "u1", "text": "Never write me again, please"}
     res = await pa.run_autoreply(payload, registry=_Reg(), cfg=cfg, generate=_gen,
                                  send=_send, inbox_mode_fn=_mode, now=1000.0)
-    assert res["reason"] == "stop_contact" and res.get("sent") is True and res.get("farewell") is True
-    assert sent == [sc.farewell_text("en")] and generated == []
+    assert res["reason"] == "stop_contact" and res.get("sent") is not True
+    assert not res.get("farewell")
+    assert sent == [] and generated == []
     assert sc.frozen_reason(store, CID) == "stop_contact"
     assert pa.record_decision_audit is not None and "stop_contact" in pa.AUDIT_REASONS
     # 第二条：档位已 manual → 直发链早退，零出站、零生成
@@ -440,4 +438,63 @@ async def test_protocol_autoreply_stop_contact_farewell_then_silence(store, monk
     res2 = await pa.run_autoreply(payload2, registry=_Reg(), cfg=cfg, generate=_gen,
                                   send=_send, inbox_mode_fn=_mode, now=1100.0)
     assert res2.get("sent") is not True and res2["reason"] == "inbox_manual"
-    assert sent == [sc.farewell_text("en")] and generated == []
+    assert sent == [] and generated == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ⑦ R88（2026-09-17）：未锁定 ＝ 只记录——停联 / 自伤入站 AI 照常生成 / 发送、不冻结
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_r88_protocol_autoreply_unlocked_stop_contact_keeps_replying(store, monkeypatch, caplog):
+    import logging
+    from src.integrations import protocol_autoreply as pa
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "get_inbox_store", lambda: store)
+    pa._last_reply.clear()
+    pa._last_sent.clear()
+    sent, generated = [], []
+
+    class _Reg:
+        def get(self, p, a):
+            return {"meta": {"auto_reply": True}}
+
+    async def _gen(**kw):
+        generated.append(kw.get("text"))
+        return "Of course, I'll give you space. Take care."
+
+    async def _send(**kw):
+        sent.append(kw["text"])
+
+    cfg = {"protocol_autoreply": {"enabled": True}}      # 缺省：无 inbox.risk_grading.locked
+
+    def _mode(p, a, c):
+        from src.inbox.automation_mode import resolve_automation_mode
+        return resolve_automation_mode(store, f"{p}:{a}:{c}", cfg)
+
+    payload = {"direction": "in", "platform": "telegram", "account_id": "acct1",
+               "chat_key": "u1", "text": "Never write me again, please"}
+    with caplog.at_level(logging.INFO):
+        res = await pa.run_autoreply(payload, registry=_Reg(), cfg=cfg, generate=_gen,
+                                     send=_send, inbox_mode_fn=_mode, now=1000.0)
+    assert res.get("sent") is True and res["reason"] != "stop_contact", res
+    assert generated == [payload["text"]] and sent == ["Of course, I'll give you space. Take care."]
+    assert sc.frozen_reason(store, CID) == ""
+    assert store.get_automation_mode_if_set(CID) is None
+    assert any("hard_stop=stop_contact" in r.getMessage() and "unlocked" in r.getMessage() for r in caplog.records)
+
+
+def test_r88_draft_service_unlocked_stop_contact_and_self_harm_not_frozen(store):
+    """B 线缺省：停联 / 自伤入站 → 普通 L2 稿（不是告别稿、不带硬停标记），会话不冻结、档位不动。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    store.set_automation_mode(CID, "auto_ai", source="human")
+    d1 = svc.auto_generate_draft(_conv(), "please stop", automation_mode="auto_ai", enrich=True)
+    row = store.get_draft(d1)
+    assert row["autopilot_level"] == "L2" and not sc.is_farewell_draft(row) and not sc.is_hard_stop_pass_draft(row)
+    assert sc.frozen_reason(store, CID) == "" and store.get_automation_mode_if_set(CID) == "auto_ai"
+    assert "stop_contact_recorded" in row["risk_reasons"] and "stop_contact" not in row["risk_reasons"], row["risk_reasons"]
+    d2 = svc.auto_generate_draft(_conv(), "I want to kill myself", automation_mode="auto_ai", enrich=True)
+    row2 = store.get_draft(d2)
+    assert d2 and row2["autopilot_level"] == "L2" and not sc.is_hard_stop_pass_draft(row2)
+    assert sc.frozen_reason(store, CID) == ""
+    assert "self_harm_recorded" in row2["risk_reasons"]

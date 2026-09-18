@@ -4,7 +4,8 @@
 Endpoints（全部 ``Depends(auth_dep)``）：
 - GET  /api/personas/import-doc/status          — flag 探测（不因 flag 关而 403）
 - POST /api/personas/import-doc/parse           — 上传 .docx/.txt（multipart）或 JSON
-  ``{"text": ...}`` → 提取/清洗文本预览
+  ``{"text": ...}`` → 提取/清洗文本预览（**不**受 ``doc_import.enabled`` 拦截：
+  只抽文本，无 LLM；开关只拦下面的 extract）
 - POST /api/personas/import-doc/extract         — 提交抽取任务（后台线程两段 LLM），
   满载 429；返回 ``{ok, job_id}``
 - GET  /api/personas/import-doc/jobs/{job_id}   — 任务轮询（status/stage/progress/result）；
@@ -12,7 +13,8 @@ Endpoints（全部 ``Depends(auth_dep)``）：
 - POST /api/personas/{profile_id}/bio-doc/reembed — 给缺向量的块/句补嵌（后台任务），
   无库存 409、满载 429；返回 ``{ok, job_id, chunks}``
 
-Feature flag：``personas.doc_import.enabled``（默认关；生产在 config.local.yaml 开）。
+Feature flag：``personas.doc_import.enabled``（默认关；生产在 config.local.yaml 开）
+只拦 LLM ``extract`` / finalize，不拦 ``parse``（docx→文本）。
 LLM 经 ``AIClient.rewrite_cloud``（system+user → 原始回复的低层工具口，不走
 generate_reply 全链）在请求所在事件循环上 marshalling——任务线程经
 ``run_coroutine_threadsafe`` 把协程投回 web loop，与 autosend_helpers 同口径，
@@ -168,16 +170,18 @@ def register_persona_import_routes(app, auth_dep, audit_store=None,
     @app.get("/api/personas/import-doc/status")
     async def api_persona_doc_import_status(request: Request,
                                             _=Depends(auth_dep)):
-        """Flag 探测端点：不因 flag 关而 403，前端据此显隐入口。"""
+        """Flag 探测：LLM 提取是否开启。不因 flag 关而 403；前端用它决定能否走 AI 提取，不藏导入入口。"""
         return {"ok": True, "enabled": _flag_enabled(request)}
 
     @app.post("/api/personas/import-doc/parse")
     async def api_persona_doc_import_parse(request: Request,
                                            _=Depends(auth_dep)):
-        """上传 .docx/.txt（multipart ``file``）或 JSON ``{"text"}`` → 文本预览。"""
+        """上传 .docx/.txt（multipart ``file``）或 JSON ``{"text"}`` → 文本预览。
+
+        不受 ``personas.doc_import.enabled`` 拦截：这是抽文本，不是 LLM。
+        """
         from src.utils import persona_doc_import as pdi
 
-        _require_enabled(request)
         was_docx = False
         ctype = (request.headers.get("content-type") or "").lower()
         if "multipart/form-data" in ctype:

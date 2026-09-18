@@ -116,7 +116,40 @@ async def test_dry_run_reports_invalid_and_warnings(app_on):
         codes = {w["id"]: w for w in d["warnings"]}
         assert codes["newbie"]["unknown_keys"] == ["totally_unknown"]
         assert "clone_missing_reference" in codes["badvoice"]["voice_problems"]
+        assert codes["badvoice"]["voice_rewrite"] == "preset"
+        assert codes["badvoice"]["voice_rewrite_voice"] == "ja-JP-NanamiNeural"
         assert PersonaManager.get_instance().get_persona_by_id("newbie") is None
+
+
+@pytest.mark.asyncio
+async def test_import_coerces_illegal_voice_then_put_ok(app_on):
+    """批量导入收口非法语音；同一份文档走 PUT 仍 400（编辑器闸不放）。"""
+    illegal = {
+        "id": "badvoice", "name": "坏声",
+        "voice_profile": {"backend": "avatar_clone", "voice": "ja-JP-NanamiNeural"},
+    }
+    async with _client(app_on) as c:
+        r = await c.put("/api/personas/profiles/badvoice", headers=_HDRS,
+                        json={"persona": illegal})
+        assert r.status_code == 400
+        assert "clone_missing_reference" in [
+            p["code"] for p in (r.json().get("voice_problems") or [])]
+
+        r = await c.post("/api/personas/profiles/import", headers=_HDRS,
+                         json={"profiles": [illegal], "mode": "merge"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["ok"] and d["imported"] == 1
+        w = {x["id"]: x for x in d["warnings"]}
+        assert w["badvoice"]["voice_rewrite"] == "preset"
+        stored = PersonaManager.get_instance().get_persona_by_id("badvoice")
+        assert stored["voice_profile"]["voice_mode"] == "preset"
+        assert stored["voice_profile"]["backend"] == "edge_tts"
+        assert stored["voice_profile"]["voice"] == "ja-JP-NanamiNeural"
+
+        r = await c.put("/api/personas/profiles/badvoice", headers=_HDRS,
+                        json={"persona": {"name": "坏声", "voice_profile": stored["voice_profile"]}})
+        assert r.status_code == 200
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 """托管 AI 网关客户端门禁：设备令牌注入 / env 存活 / base_url 自算 / 资格闸 / 缓存回落。"""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import time
@@ -28,7 +29,8 @@ def _reset_module_state():
     for key in (hg.VOICE_ENV_BASE, hg.VOICE_ENV_FIRST, hg.VOICE_ENV_HUBFISH_OFF,
                 hg.VOICE_ENV_AUTO, hg.ASR_ENV_BASE, hg.ASR_ENV_FIRST,
                 hg.ASR_ENV_AUTO, hg.VISION_ENV_BASE, hg.VISION_ENV_MODEL,
-                hg.VISION_ENV_AUTO, hg.EMBED_ENV_BASE, hg.EMBED_ENV_MODEL):
+                hg.VISION_ENV_AUTO, hg.EMBED_ENV_BASE, hg.EMBED_ENV_MODEL,
+                hg.CHATX_ENV):
         os.environ.pop(key, None)
 
 
@@ -1135,3 +1137,61 @@ def test_is_private_endpoint():
     assert hg.is_private_endpoint("https://bd2026.cc/api/ai/v1") is False
     assert hg.is_private_endpoint("") is False
     assert hg.is_private_endpoint("not a url") is False
+
+
+_LAN_CHATX = {
+    "fallback": {
+        "enabled": True,
+        "base_url": "http://192.168.0.173:8001/v1",
+        "model": "chatx",
+        "api_key": "vllm",
+        "chat_fallback": False,
+    },
+}
+
+
+def test_hosted_chatx_lan_dead_switches_to_gateway(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=copy.deepcopy(_LAN_CHATX))
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: False) is True
+    fb = cm.config["ai"]["fallback"]
+    assert fb["base_url"] == _GW and fb["model"] == "chatx"
+    assert "api_key" not in fb
+    assert cm.config["ai"]["_hosted_chatx"] is True
+    assert os.environ.get(hg.CHATX_ENV) == "1"
+
+
+def test_hosted_chatx_lan_alive_leaves_config_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=copy.deepcopy(_LAN_CHATX))
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: True) is False
+    assert cm.config["ai"]["fallback"]["base_url"] == _LAN_CHATX["fallback"]["base_url"]
+    assert "_hosted_chatx" not in cm.config["ai"]
+
+
+def test_hosted_chatx_back_on_lan_restores(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=copy.deepcopy(_LAN_CHATX))
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: False) is True
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: True) is False
+    fb = cm.config["ai"]["fallback"]
+    assert fb["base_url"] == _LAN_CHATX["fallback"]["base_url"]
+    assert fb["api_key"] == "vllm"
+    assert "_hosted_chatx" not in cm.config["ai"]
+    assert not os.environ.get(hg.CHATX_ENV)
+
+
+def test_hosted_chatx_never_touches_public_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra={"fallback": {
+        "enabled": True, "base_url": "https://bd2026.cc/api/ai/v1", "model": "chatx",
+    }})
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: False) is False
+    assert cm.config["ai"]["fallback"]["base_url"] == "https://bd2026.cc/api/ai/v1"
+
+
+def test_config_manager_replays_hosted_chatx_flag():
+    src = (Path(__file__).resolve().parents[1] / "src" / "utils"
+           / "config_manager.py").read_text(encoding="utf-8")
+    assert "AITR_HOSTED_CHATX" in src
+

@@ -136,6 +136,7 @@ def test_ops_digest_card_empty_day_says_so():
 
 @pytest.mark.parametrize("etype,data", [
     ("lan_gpu_alert", {"recovered": True, "host": "h", "url": "u"}),
+    ("compute_lane_alert", {"recovered": True, "lane": "cloud", "label": "DeepSeek 官方"}),
     ("avatar_voice_alert", {"recovered": True}),
     ("draft_backlog_alert", {"recovered": True}),
     ("case_backlog_alert", {"recovered": True}),

@@ -43,7 +43,7 @@ import {
 import { shouldMarkScanned, pairingObservation } from "./scan-signal.js";
 import {
   badMacConfig, BadMacTracker, isBadMacStub, isPeerPlaintext, peerSessionJids, maskJid,
-  badMacDetailTag,
+  badMacDetailTag, decryptFailIngestFields,
 } from "./bad-mac-heal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
@@ -1014,7 +1014,10 @@ function ephemeralOpts(entry, jid, extra) {
  *  backfill_source——后端照常落库（历史要看得见），但不当「新入站」触发起草 / 关怀 / 目标 / 未读。
  *  此前登录后每个会话的最后一条历史消息都被当新入站推给后端，3 秒内对 6 个老会话批量起草。 */
 async function pushWaMessage(entry, msg, skipEmpty, backfillSource) {
-  if (!msg || !msg.message) return false;
+  if (!msg) return false;
+  // #279：Bad MAC stub 没有 message 体。占位入站 + decrypt_fail（未读可见、不起草）。
+  const decryptFields = decryptFailIngestFields(msg);
+  if (!msg.message && !decryptFields) return false;
   // P3-198：remoteJid 去设备后缀再入镜像——否则同一客户裂成 'num:0'/'num' 两个会话
   const jid = normalizeUserJid((msg.key && msg.key.remoteJid) || "");
   if (!jid) return false;
@@ -1032,9 +1035,10 @@ async function pushWaMessage(entry, msg, skipEmpty, backfillSource) {
   // fromMe：手机端/其他关联设备自己发的消息 → 镜像为出站，使会话线程两头一致。
   // 与 Python 编排器发送后的出站回写用同一 wamid 去重（INSERT OR IGNORE），不会重复。
   const fromMe = !!(msg.key && msg.key.fromMe);
-  let text = extractText(msg);
-  const media = await downloadWaMedia(entry, msg);
-  const replyTo = extractReplyTo(msg);
+  let text = decryptFields ? decryptFields.text : extractText(msg);
+  const media = decryptFields ? { media_type: "", media_ref: "" }
+    : await downloadWaMedia(entry, msg);
+  const replyTo = decryptFields ? "" : extractReplyTo(msg);
   if (skipEmpty && !text && !media.media_ref) return false;
   const ts = Number(msg.messageTimestamp || 0) || Math.floor(Date.now() / 1000);
   // LID→PN（Baileys 7）：私聊若 remoteJid 是 @lid（隐藏号标识），会话 chat_key 优先解析成真实号码，
@@ -1102,6 +1106,7 @@ async function pushWaMessage(entry, msg, skipEmpty, backfillSource) {
     sender_name: senderName || undefined,
     backfill: backfillSource ? true : undefined,
     backfill_source: backfillSource || undefined,
+    decrypt_fail: decryptFields ? true : undefined,
   });
   return true;
 }

@@ -1576,21 +1576,61 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         from src.utils.persona_manager import known_persona_top_keys
         return {"ok": True, "keys": known_persona_top_keys()}
 
+    @app.post("/api/personas/profiles/parse")
+    async def api_profiles_parse(request: Request, _=Depends(auth_dep)):
+        """把粘贴/上传的 JSON 或 YAML 收成 profile 列表（只解析不写库）。
+
+        Body: ``{text: "..."}``。磁盘人设是 YAML（packs / profiles_runtime），工作室
+        导入曾经只走浏览器 JSON.parse，所以 UI 看起来「只支持 JSON」。本接口补上 YAML。
+        """
+        data = await request.json()
+        raw = data.get("text") if isinstance(data, dict) else None
+        from src.utils.persona_manager import parse_persona_import_text
+        try:
+            profiles, fmt, extras = parse_persona_import_text(
+                "" if raw is None else str(raw)
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc.args[0] if exc.args else exc))
+        return {"ok": True, "format": fmt, "count": len(profiles),
+                "profiles": profiles, "album_refs": extras.get("album_refs") or {}}
+
     @app.post("/api/personas/profiles/import")
     async def api_profiles_import(request: Request, dry_run: int = 0, _=Depends(auth_dep)):
-        """从备份恢复 / 批量导入（master only）。
+        """从备份恢复 / 批量导入人设包。
 
         Body: ``{profiles: [...], mode: 'merge'|'replace'}``（备份信封整份贴进来也行——
-        只读 ``profiles`` 键）。``?dry_run=1`` 或 body ``dry_run: true``（L-2 #202）→ 只算不写：
+        只读 ``profiles`` 键；``profiles`` 也可以是 runtime/pack 的 id→人设映射）。
+        也可 ``{text: "<json or yaml>"}``。``?dry_run=1`` 或 body ``dry_run: true``（L-2 #202）→ 只算不写：
         ``{dry_run: true, add: N, overwrite: N, add_ids, overwrite_ids, invalid: [...],
         warnings: [...]}``，前端据此出「新增 N · 覆盖 N」预览 + 确认。
-        merge（缺省）：逐个新增/覆盖，其余不动；replace：先清空再装载（危险，前端不暴露）。
+        merge（缺省）：逐个新增/覆盖，其余不动——与 PUT 同级写权限（运营装人设包）。
+        replace：先清空再装载（危险，前端不暴露）——仍限 master。
+        非法 ``voice_profile`` 在写入前收口为可保存档（预置 / 剥残留 Neural / off），
+        不静默留下 PUT 会 400 的组合；改写记入 ``warnings[].voice_rewrite``。
         """
-        _check_master_role(request)
         data = await request.json()
+        from src.utils.persona_manager import (
+            coerce_persona_import_docs, parse_persona_import_text,
+        )
         profiles_in = data.get("profiles")
         mode = data.get("mode", "merge")
+        if mode == "replace":
+            _check_master_role(request)
+        else:
+            _check_write_role(request)
         dry = bool(dry_run) or bool(data.get("dry_run"))
+        text = data.get("text") if isinstance(data.get("text"), str) else ""
+        if text.strip():
+            try:
+                profiles_in, _fmt, _extras = parse_persona_import_text(text)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc.args[0] if exc.args else exc))
+        elif isinstance(profiles_in, dict):
+            coerced = coerce_persona_import_docs({"profiles": profiles_in})
+            if not coerced:
+                raise HTTPException(400, "profiles must be a JSON array")
+            profiles_in = coerced
         if not isinstance(profiles_in, list):
             raise HTTPException(400, "profiles must be a JSON array")
         if mode not in ("merge", "replace"):
@@ -1609,16 +1649,29 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             if not pid:
                 invalid.append({"index": i, "reason": "missing_id", "name": str(entry.get("name") or "")})
                 continue
+            warn: dict = {"id": pid}
             unknown = sorted(k for k in entry.keys() if k not in known and not str(k).startswith("_"))
             if unknown:
-                warnings.append({"id": pid, "unknown_keys": unknown})
+                warn["unknown_keys"] = unknown
             try:
-                from src.ai.voice_tristate import split_problems, validate_voice_profile
-                _verr, _ = split_problems(validate_voice_profile(entry.get("voice_profile"), check_files=False))
-                if _verr:
-                    warnings.append({"id": pid, "voice_problems": [x.get("code") for x in _verr]})
+                from src.ai.voice_tristate import (
+                    apply_import_voice_coerce, split_problems, validate_voice_profile)
+                entry, vinfo = apply_import_voice_coerce(entry, check_files=False)
+                if vinfo:
+                    warn["voice_problems"] = list(vinfo.get("voice_problems") or [])
+                    warn["voice_rewrite"] = str(vinfo.get("action") or "")
+                    if vinfo.get("voice"):
+                        warn["voice_rewrite_voice"] = str(vinfo.get("voice") or "")
+                else:
+                    _verr, _vwarn = split_problems(validate_voice_profile(
+                        entry.get("voice_profile"), check_files=False))
+                    leftover = [x.get("code") for x in (_verr + _vwarn) if x.get("code")]
+                    if leftover:
+                        warn["voice_problems"] = leftover
             except Exception:
                 pass
+            if len(warn) > 1:
+                warnings.append(warn)
             valid.append((pid, entry))
         existing_ids = set(pm.list_profile_ids())
         add_ids = [pid for pid, _e in valid if pid not in existing_ids]

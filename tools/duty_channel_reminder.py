@@ -10,8 +10,8 @@
      不要贴群」。同一报障人 6 小时内只提醒一次（连发 20 张图也只提醒一次）；bot 已立单则带
      --ticket（@报障人 + 工单 footer），否则正文自带称呼。
   ② 报告回执：watch_loop 新下载到的 field-agent 报告（report 类；verify / 远程 diag 不发）→
-     群里回一条「收到 <码>（<主题>）→ 已立/已挂 #N」，同一轮多份合并成一条。没有这条，把人推去
-     Cursor 就是再演一次 09-05 的零回音（52 份报告只立 29 份）。
+     群里回一条「收到 <码>（问题核心）→ 已立/已挂 #N」，工单已有修复说明则另起一行「修复：…」；
+     同一轮多份合并成一条。没有这条，把人推去 Cursor 就是再演一次 09-05 的零回音（52 份报告只立 29 份）。
      单号来自 tools/duty_auto_ticket.py（L-7 A，2026-09-06）：回执前先跑它的判定+落库，
      结果接进同一条回执；它失败/超时就回落成无单号的「收到 <码>」，绝不因它丢回执。
 
@@ -23,7 +23,7 @@
   - 发送走 engines/chengjie/tools/duty_reply.py（token 从实例配置读、对外红线闸门、回复台账）；
   - 任何异常只写日志，绝不抛出；--dry-run 只打印不发不写状态；
   - 文案可被 D:\\chengjie-instances\\.ops\\channel_reminder_text.txt / channel_receipt_text.txt 覆盖
-    （占位符 {name} {ticket_clause} / {name} {items}），改文案不用改代码。
+    （占位符 {name} {detail} {ticket_clause} / {name} {items}），改文案不用改代码。
 
 用法：python tools/duty_channel_reminder.py [--dry-run] [--cooldown-hours 6] [--no-receipt]
         python tools/duty_channel_reminder.py --dry-run --replay-events 30   # 拿最近 30 条事件演练
@@ -75,16 +75,10 @@ FP_OWNER: Dict[str, str] = {
 SUBMIT_KINDS = ("bug_new", "photo_report", "screenshot", "rate_capped_report")
 
 DEFAULT_REMIND = (
-    "{name} 新规矩（老板定的，从这条起执行）：bug 请让你本机的 Cursor 助手提交报告，不要贴到群里。\n"
-    "为什么：群里的图我们只能看现象；Cursor 报告自带那一刻的日志、运行状态和你助手的分析，"
-    "是能直接查根因的证据——之前 28 份报告漏立单，也是两条渠道并行、我们只盯了群造成的。\n"
-    "怎么做：对 Cursor 说一句现象（例如「批量挂链弹层看不清，跑 report」），它会打包上传并给你一个 6 位码；"
-    "复验旧问题就在里面带上单号 #N。报告到达后群里会自动回一条「收到 <码>，已立/已挂 #N」；"
-    "群里只用来回答我们的追问。\n"
-    "你刚发的这条{ticket_clause}。"
+    "{name} 看到了「{detail}」{ticket_clause}。"
+    "请让本机 Cursor 提交一份带日志的报告（说一声现象即可，会给你 6 位码；复验带上单号 #N）。"
 )
-DEFAULT_RECEIPT = ("{name} 报告已收到：{items}。不必再在群里贴同一件；"
-                   "复验请对着单号看我们发的验收清单，进展会按单回访。")
+DEFAULT_RECEIPT = "{name} 报告已收到：\n{items}"
 
 
 def log(msg: str) -> None:
@@ -276,6 +270,7 @@ def check_group_submissions(st: dict, *, cooldown_h: float, dry_run: bool,
                       if tid else " 我先收下，麻烦让 Cursor 补一份带日志的报告")
             tpl = read_template(TEXT_REMIND, DEFAULT_REMIND)
             text = tpl.replace("{ticket_clause}", clause)
+            text = text.replace("{detail}", (detail or "这条").strip() or "这条")
             # /reply 端点自己会 @报障人；send 路径要自带称呼
             text = text.replace("{name}", "" if tid else name).lstrip()
             log(f"REMIND {name}: trigger={kind} {detail} ticket={tid or '-'}")
@@ -320,10 +315,35 @@ def _register_skip(code: str, reason: str) -> None:
         log(f"register skip {code} failed: {type(exc).__name__}: {exc}")
 
 
+def _ensure_auto_ticket():
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import duty_auto_ticket as dat  # noqa: E402
+    return dat
+
+
+def _ticket_public(tid: int) -> dict:
+    """工单标题 / 修复说明（给回执「问题核心 + 修复方法」用）。失败返空，不挡回执。"""
+    if not tid:
+        return {}
+    try:
+        return _ensure_auto_ticket().ticket_public(int(tid))
+    except Exception:
+        return {}
+
+
 def _receipt_item(code: str, topic: str, res: Optional[dict]) -> str:
     try:
-        import duty_auto_ticket as dat  # noqa: E402
-        return dat.receipt_item(code, topic, res)
+        dat = _ensure_auto_ticket()
+        payload = dict(res or {})
+        if payload.get("ticket"):
+            pub = _ticket_public(int(payload["ticket"]))
+            if pub.get("fix_note") and not str(payload.get("fix_note") or "").strip():
+                payload["fix_note"] = pub["fix_note"]
+            if pub.get("title") and not str(payload.get("title") or "").strip():
+                payload["title"] = pub["title"]
+        return dat.receipt_item(code, topic, payload or None)
     except Exception:
         return f"{code}（{topic}）"
 
@@ -407,12 +427,12 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
                 log(f"pack {code} kind=verify 无 #N — 不回执")
                 continue
             owner = FP_OWNER.get(fp4, f"机器 {fp4}*")
-            topic = re.sub(r"^【[^】]+】", "", note).strip()[:36] or EMPTY_NOTE_MARK
+            topic = re.sub(r"^【[^】]+】", "", note).strip()[:80] or EMPTY_NOTE_MARK
             by_owner.setdefault(owner, []).append(_receipt_item(code, topic, res))
             owner_codes.setdefault(owner, []).append(code)
         for owner, items in by_owner.items():
             tpl = read_template(TEXT_RECEIPT, DEFAULT_RECEIPT)
-            text = tpl.replace("{name}", owner).replace("{items}", "、".join(items))
+            text = tpl.replace("{name}", owner).replace("{items}", "\n".join(items))
             batch = owner_codes.get(owner, [])
             # P-5 B 幂等：上一轮 502 可能是假失败（09-08 13:47 实锤：适配器回 delivered=False 无原因，
             # 消息其实到了群）——收件箱里已有同文本带 mid 的 out 行就是已发，直接标 receipted

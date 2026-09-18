@@ -108,6 +108,12 @@ SAFETY_LAYERS = frozenset({
 MODEL_FOLLOW = ""
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,40}$")
 
+#: 坐席可见的 ChatX 产品名（不再带参数规模「27B」）。前端 i18n ``inbox.mp.vendor_local``
+#: 会覆盖展示；本常量是目录 / 端点事实 / 无 i18n 消费方的兜底。
+CHATX_DISPLAY_LABEL = "ChatX聊天模型"
+#: 局域网 ChatX 的路径标签：不暴露 RFC1918，也不再用客户词「办公室」。
+PUBLIC_HOST_LAN_CHATX = "局域网直连"
+
 
 @dataclass(frozen=True)
 class Route:
@@ -180,15 +186,20 @@ class Route:
             ctx["_route"] = "profile:" + self.model
 
 
-def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None) -> Route:
+def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None,
+              config: Any = None) -> Route:
     """宽松归一：非法值回落到 base（或默认）。``profile`` 切到无限制且未显式给旋钮
-    → 灌 :data:`UNRESTRICTED_DEFAULTS`；切回标准 → 旋钮清空（跟随全局）。"""
+    → 灌 :data:`UNRESTRICTED_DEFAULTS`；切回标准 → 旋钮清空（跟随全局）。
+
+    ``model`` 若是无限制档名（默认 ``unrestricted``，或 ``ai.unrestricted.profile``）
+    且没显式给 ``profile`` → 视为切到无限制（ChatX 目录行＝无限制，不再当「规则全开
+    的自有算力档」）。无限制会话里点选云厂商且没显式给 profile → 改回标准。"""
     r = base or Route.standard()
     prof = str(payload.get("profile", r.profile) or PROFILE_STANDARD).strip().lower()
     if prof not in PROFILES:
         prof = r.profile
-    # 模型字段：非法名回落 base；「无限制会话里点选了云厂商」且没显式给 profile
-    # → 视为改回标准模式（云端不会替你跑去审查内容，两者天然互斥；前端会提示）。
+    # 模型字段：非法名回落 base；「点了 ChatX 目录行」→ 开无限制；
+    # 「无限制会话里点选了云厂商」且没显式给 profile → 改回标准（两者天然互斥）。
     model_in = "model" in payload
     model_v = r.model
     if model_in:
@@ -197,7 +208,11 @@ def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None) -> Ro
             model_v = MODEL_FOLLOW
         elif _MODEL_NAME_RE.match(mv):
             model_v = mv
-        if model_v and "profile" not in payload and r.unrestricted:
+        if model_opens_unrestricted(model_v, config):
+            if "profile" not in payload:
+                prof = PROFILE_UNRESTRICTED
+            model_v = MODEL_FOLLOW
+        elif model_v and "profile" not in payload and r.unrestricted:
             prof = PROFILE_STANDARD
     switched_to_unr = prof == PROFILE_UNRESTRICTED and r.profile != PROFILE_UNRESTRICTED
     switched_to_std = prof == PROFILE_STANDARD and r.profile != PROFILE_STANDARD
@@ -278,6 +293,22 @@ def profile_name(config: Any = None) -> str:
         return PROFILE_UNRESTRICTED
 
 
+def model_opens_unrestricted(name: str, config: Any = None) -> bool:
+    """该 ``ai.models`` 档名是否就是无限制入口（ChatX 目录行）。
+
+    认两件事：字面量 ``unrestricted``，或配置里 ``ai.unrestricted.profile`` 指向的档。
+    其它也叫 chatx 的局域网档（例如预设 ``lan_chatx``）不自动开无限制。"""
+    n = str(name or "").strip()
+    if not n:
+        return False
+    if n.lower() == PROFILE_UNRESTRICTED:
+        return True
+    try:
+        return n == profile_name(config)
+    except Exception:
+        return False
+
+
 def global_bypass_safety(config: Any = None) -> bool:
     """全局钥匙 ``ai.unrestricted.bypass_safety_brakes``（默认 false）。"""
     try:
@@ -316,10 +347,16 @@ def endpoint_spec(config: Any = None) -> Dict[str, Any]:
         max_ctx = int(spec.get("max_ctx") or _section(root).get("max_ctx") or 24_576)
     except (TypeError, ValueError):
         max_ctx = 24_576
+    via = _path_via(base)
+    chatx = model.lower() == "chatx"
     return {
         "base_url": base, "model": model, "source": source, "host": host,
         "max_ctx": max_ctx,
         "supports_thinking": bool(spec.get("supports_thinking", True)),
+        "via": via,
+        "public_host": public_host_for(base, model),
+        "private": via == "lan",
+        "label": CHATX_DISPLAY_LABEL if chatx else "",
     }
 
 
@@ -335,6 +372,35 @@ def _vendor(base_url: str) -> Dict[str, Any]:
         return {"key": "other", "label": "", "private": False, "default_ctx": 128_000}
 
 
+def _path_via(base: str) -> str:
+    """流量怎么走：lan＝RFC1918 直连；hosted＝官网 /api/ai/v1 中继；cloud＝公网厂商。"""
+    b = str(base or "").lower()
+    if "/api/ai/v1" in b or "bd2026.cc" in b:
+        return "hosted"
+    try:
+        from src.ai.vendor_params import is_private_endpoint
+        if is_private_endpoint(base):
+            return "lan"
+    except Exception:
+        pass
+    return "cloud"
+
+
+def public_host_for(host_or_base: str, model: str = "") -> str:
+    """给坐席看的路径：不暴露 RFC1918。host 或完整 base_url 都能吃。"""
+    raw = str(host_or_base or "").strip()
+    if not raw:
+        return ""
+    base = raw if "://" in raw else f"http://{raw}"
+    via = _path_via(base)
+    chatx = str(model or "").strip().lower() == "chatx"
+    if via == "lan":
+        return PUBLIC_HOST_LAN_CHATX if chatx else "自有算力"
+    if via == "hosted":
+        return "经官网"
+    return raw.split("://", 1)[-1].split("/", 1)[0]
+
+
 def _spec_row(name: str, spec: Mapping[str, Any], *, source: str, label: str = "") -> Dict[str, Any]:
     base = str(spec.get("base_url") or "").strip().rstrip("/")
     model = str(spec.get("model") or "").strip()
@@ -348,10 +414,22 @@ def _spec_row(name: str, spec: Mapping[str, Any], *, source: str, label: str = "
     if max_ctx <= 0:
         max_ctx = int(v.get("default_ctx") or 128_000)
     host = base.split("://", 1)[-1].split("/", 1)[0]
+    via = _path_via(base)
+    chatx = model.lower() == "chatx"
+    shown = label or str(spec.get("label") or "").strip()
+    if chatx:
+        shown = shown or CHATX_DISPLAY_LABEL
+    elif via == "lan":
+        shown = shown or str(v.get("label") or "") or "自有算力"
+    else:
+        shown = shown or str(v.get("label") or "") or host
+    public_host = public_host_for(base, model)
     return {
-        "name": name, "label": label or str(spec.get("label") or "").strip() or v.get("label") or host,
-        "vendor": v.get("key") or "other", "model": model, "host": host, "base_url": base,
-        "private": bool(v.get("private")), "max_ctx": max_ctx, "source": source,
+        "name": name, "label": shown,
+        "vendor": "local" if (chatx or via == "lan") else (v.get("key") or "other"),
+        "model": model, "host": host, "base_url": base,
+        "private": via == "lan", "via": via, "public_host": public_host,
+        "max_ctx": max_ctx, "source": source,
         "cost_hint": str(spec.get("cost_hint") or "").strip()[:24],
         "supports_thinking": bool(spec.get("supports_thinking", True)),
     }
@@ -368,12 +446,13 @@ def main_chain_spec(config: Any = None) -> Dict[str, Any]:
 
 
 def model_catalog(config: Any = None) -> list:
-    """标准模式可点名的模型档：主链（name=""）+ ``ai.models`` 每档（跳过 ``_`` 前缀内部档）。
+    """可点名的模型档：主链（name=""）+ ``ai.models`` 每档（跳过 ``_`` 前缀内部档）。
 
-    无限制档名（``ai.unrestricted.profile``）若在 ``ai.models`` 里显式配了，也列出——
-    它只是「本机私有模型」的端点事实，标准模式点它＝私有模型 + 规则全开（合法用法）；
-    ``ai.models`` 没配而 ``ai.fallback`` 有 LAN 端点时，ai_client 也会把该名绑到 LAN，
-    这里同样列出（``source=ai.fallback``），前端按 ``private`` 画「数据不出内网」。
+    无限制档名（``ai.unrestricted.profile``）若在 ``ai.models`` 里显式配了，也列出，
+    并打 ``opens_unrestricted=true``——点它＝切到无限制（ChatX 直答、规则让路），
+    不再当「标准模式下的自有算力档」。``ai.models`` 没配而 ``ai.fallback`` 有端点时
+    同样列出（``source=ai.fallback``）。前端按 ``via``（lan/hosted/cloud）画数据
+    路径，不把 RFC1918 地址亮给坐席。
     """
     root = _root(config)
     ai = root.get("ai") or {}
@@ -401,6 +480,8 @@ def model_catalog(config: Any = None) -> list:
                             source="ai.fallback")
             if row:
                 out.append(row)
+    for row in out:
+        row["opens_unrestricted"] = bool(row.get("name") and row["name"] == unr)
     return out
 
 
@@ -587,14 +668,15 @@ def get(store: Any, cid: str) -> Route:
 
 
 def set(store: Any, cid: str, patch: Mapping[str, Any], *, by: str = "agent",   # noqa: A001
-        now: Optional[float] = None) -> Optional[Route]:
+        now: Optional[float] = None, config: Any = None) -> Optional[Route]:
     """按 patch 归一后落库；结果为默认路由 → 删键。返回生效路由；store 缺席 → None。绝不抛。"""
     cid = str(cid or "").strip()
     if not cid or store is None or not hasattr(store, "set_app_setting"):
         return None
     prev = get(store, cid)
     ts = float(now if now is not None else time.time())
-    nxt = replace(normalize(patch, base=prev), updated_by=str(by or "agent"), updated_at=ts)
+    nxt = replace(normalize(patch, base=prev, config=config),
+                  updated_by=str(by or "agent"), updated_at=ts)
     try:
         if nxt.is_default:
             store.set_app_setting(_key(cid), "", updated_by="conv_route")
@@ -1231,7 +1313,9 @@ def describe(store: Any, cid: str, config: Any = None) -> Dict[str, Any]:
 
 __all__ = [
     "KEY_PREFIX", "PROFILES", "PROFILE_STANDARD", "PROFILE_UNRESTRICTED",
+    "CHATX_DISPLAY_LABEL", "PUBLIC_HOST_LAN_CHATX",
     "DEPTH_CHOICES", "EFFORT_CHOICES", "EFFORT_PARAMS", "UNRESTRICTED_DEFAULTS", "MODEL_FOLLOW",
+    "model_opens_unrestricted",
     "FEATURE_NAME", "QUALITY_LAYERS", "SAFETY_LAYERS",
     "Route", "normalize", "enabled", "profile_name", "global_bypass_safety",
     "endpoint_spec", "main_chain_spec", "model_catalog", "model_spec", "active_endpoint",

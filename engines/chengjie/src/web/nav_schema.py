@@ -85,6 +85,7 @@ NAV_ICONS = {
     "film": _STROKE % '<rect x="2" y="2" width="20" height="20" rx="2.5"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/>',
     # 2026-08-20：voice_eval 项引用 mic 却没登记 SVG（图标门禁红），侧栏渲染空白格子
     "mic": _STROKE % '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>',
+    "key": _STROKE % '<circle cx="7.5" cy="15.5" r="3.5"/><path d="M10.2 13.2L21 3"/><path d="M16 3h5v5"/>',
     # 2026-08-28 实施81：报障工单处置台（bug_tickets）专属图标（可见项图标去重门禁）
     "bug": _STROKE % '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M8 9H4M8 13H4M8 17H5M16 9h4M16 13h4M16 17h3M9 6a3 3 0 016 0"/>',
 }
@@ -186,6 +187,10 @@ NAV_ITEMS = {
                            cmd_keys="reply settings 自动回复 回复速度 档位 延迟 打字 "
                                     "拟人 全自动 速度 autosend delay pacing mode "
                                     "长度 风格 内容 语气 emoji 句数 length style tone"),
+    "model_keys": dict(key="model_keys", path="/model-keys", icon="key",
+                       label_key="nav_model_keys", label_zh="模型与密钥",
+                       cmd_keys="model keys 模型 密钥 API key openai gemini grok deepseek "
+                                "chatgpt 多模型路由 dvmr 厂商 端点 管理模型 密钥管理"),
     "strategy_analytics": dict(feature="ai_autosend", key="strategy-analytics", path="/strategy-analytics",
                                icon="target", label_key="strategy_analytics",
                                label_zh="策略效果", help="nav_strategy_analytics",
@@ -378,7 +383,7 @@ NAV_GROUPS_FULL = [
                 "whatsapp_rpa", "group_show"]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
          note_key="section_note_ai_kb", note_zh="教 AI 怎么说话",
-         items=["personas", "voice_eval", "singing", "reply_settings",
+         items=["personas", "voice_eval", "singing", "reply_settings", "model_keys",
                 "strategies", "knowledge", "learner", "episodic"]),
     dict(label_key="section_insights", label_zh="数据洞察",
          note_key="section_note_insights", note_zh="只看数，不改配置",
@@ -403,7 +408,7 @@ NAV_GROUPS_FULL = [
 # 只在完整模式渲染；URL 不封（书签/深链仍可达），命令面板按 simple 标注兜底可搜。
 # 客户安全预警（原危机审计）刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
 SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
-               "reply_settings", "escalation"]
+               "reply_settings", "model_keys", "escalation"]
 # usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」
 # 必须在简洁模式可达；折叠区尺寸棘轮 ≤6，本项恰好用满——再加需先精简。
 SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",

@@ -40,6 +40,13 @@ GOAL_STALL_WINDOW_SEC = 86400.0
 # 新目标宽限：建目标当天（<24h）不判 stalled——自然档主动拍从第二天起才排
 GOAL_STALL_MIN_AGE_SEC = 86400.0
 
+# 结构性闸（配置/策略）：近窗有这类 beat_blocked 说明引擎在干活、只是不让发——
+# 不算「链断了」。2026-09-16 运维群噪声：auto 目标挂在人审会话上，天天
+# automation_mode 拦拍却仍被喊 stalled。frozen/crisis/optout 同属故意不发。
+STRUCTURAL_BLOCK_REASONS = frozenset({
+    "automation_mode", "frozen", "crisis", "optout",
+})
+
 
 def first_eligible_delay_sec(goal: Any) -> float:
     """建目标后多久才到「第一个可出手时刻」：自然档 ``GOAL_STALL_MIN_AGE_SEC``
@@ -70,15 +77,41 @@ def _count_sent_since(store: Any, gid: str, since_ts: float) -> int:
     return len(evs)
 
 
+def _structural_block_reason(store: Any, gid: str, since_ts: float) -> str:
+    """近窗内若有结构性 ``beat_blocked``，返回原因名；否则空串。绝不抛。"""
+    try:
+        evs = store.list_events(gid, limit=80, kinds=("beat_blocked",),
+                                since_ts=since_ts) or []
+    except TypeError:
+        try:
+            evs = [e for e in (store.list_events(gid, limit=80) or [])
+                   if str((e or {}).get("kind") or "") == "beat_blocked"
+                   and float((e or {}).get("ts") or 0) >= since_ts]
+        except Exception:
+            evs = []
+    except Exception:
+        evs = []
+    for e in evs:
+        detail = str((e or {}).get("detail") or "")
+        reason = detail.split("@", 1)[0].strip()
+        if reason in STRUCTURAL_BLOCK_REASONS:
+            return reason
+    return ""
+
+
 def collect_send_liveness(store: Any, *, now: float,
                           lookback_sec: float = 86400.0) -> Dict[str, Any]:
     """活跃 auto 目标盘点 + 近窗真发条数。读失败回空快照，绝不抛。
 
     M-7：附 ``stalled_goals``——逐目标 ``goal_stall_verdict`` 为 stalled 的
-    ``{goal_id, conversation_id, title}`` 清单（看门狗告警点名到目标）。"""
+    ``{goal_id, conversation_id, title}`` 清单（看门狗告警点名到目标）。
+
+    2026-09-16：近窗有结构性 ``beat_blocked``（人审档 / 冻结等）的目标不进
+    ``stalled_goals``，计入 ``structural_blocked``——告警层不当成链断。"""
     out: Dict[str, Any] = {
         "active_auto": 0, "sent_24h": 0, "oldest_age_sec": 0.0,
         "oldest_eligible_sec": 0.0, "stalled_goals": [],
+        "structural_blocked": 0,
     }
     try:
         goals = store.list_goals(status="active", limit=200) or []
@@ -88,11 +121,24 @@ def collect_send_liveness(store: Any, *, now: float,
     oldest = 0.0
     oldest_eligible = 0.0
     auto_n = 0
+    structural_n = 0
     stalled = []
+    since = now - lookback_sec
+    try:
+        from src.utils.case_center import is_drill_uid as _is_drill
+    except Exception:
+        def _is_drill(uid: str) -> bool:  # type: ignore[misc]
+            return False
     for g in goals:
         if not isinstance(g, dict):
             continue
         if str(g.get("autonomy") or "") != "auto":
+            continue
+        # 演练号段不是获客对象：计入库存会把「有货零真发」告警打到运维群
+        # （2026-09-13：990001088/099 两条 duel 目标撑起 stalled）。
+        conv = str(g.get("conversation_id") or "")
+        chat = str(g.get("chat_key") or "")
+        if _is_drill(conv) or _is_drill(chat):
             continue
         auto_n += 1
         try:
@@ -107,27 +153,36 @@ def collect_send_liveness(store: Any, *, now: float,
         gid = str(g.get("goal_id") or "")
         if not gid:
             continue
-        n_sent = _count_sent_since(store, gid, now - lookback_sec)
+        n_sent = _count_sent_since(store, gid, since)
         sent += n_sent
-        if goal_stall_verdict(g, sent_in_window=n_sent, now=now) == "stalled":
-            conv = str(g.get("conversation_id") or "")
-            stalled.append({
-                "goal_id": gid,
-                "conversation_id": conv,
-                "title": str(g.get("title") or "")[:40],
-            })
-            # O-3 A（#236）：升 WARNING——「有排期却 24h 零真发」是要人看的事故，
-            # 不该埋在 INFO 里等人翻。看门狗那条 INFO + 事件总线照旧。
-            logger.warning(
-                "[goal-liveness] stalled goal=%s conv=%s title=%r age_h=%.1f "
-                "sent_24h=0 ——auto 档、建 ≥24h、期限未到，仍一拍未发；卡片已标红",
-                gid[:12], conv, str(g.get("title") or "")[:30],
-                (now - born) / 3600.0 if born > 0 else -1.0)
+        if goal_stall_verdict(g, sent_in_window=n_sent, now=now) != "stalled":
+            continue
+        block_why = _structural_block_reason(store, gid, since)
+        if block_why:
+            structural_n += 1
+            logger.info(
+                "[goal-liveness] skip stall (structural %s) goal=%s conv=%s",
+                block_why, gid[:12], conv)
+            continue
+        conv = str(g.get("conversation_id") or "")
+        stalled.append({
+            "goal_id": gid,
+            "conversation_id": conv,
+            "title": str(g.get("title") or "")[:40],
+        })
+        # O-3 A（#236）：升 WARNING——「有排期却 24h 零真发」是要人看的事故，
+        # 不该埋在 INFO 里等人翻。看门狗那条 INFO + 事件总线照旧。
+        logger.warning(
+            "[goal-liveness] stalled goal=%s conv=%s title=%r age_h=%.1f "
+            "sent_24h=0 ——auto 档、建 ≥24h、期限未到，仍一拍未发；卡片已标红",
+            gid[:12], conv, str(g.get("title") or "")[:30],
+            (now - born) / 3600.0 if born > 0 else -1.0)
     out["active_auto"] = auto_n
     out["sent_24h"] = sent
     out["oldest_age_sec"] = oldest
     out["oldest_eligible_sec"] = max(0.0, oldest_eligible)
     out["stalled_goals"] = stalled
+    out["structural_blocked"] = structural_n
     return out
 
 
@@ -141,13 +196,19 @@ def stall_verdict(
     """``sprint_effective`` + 够老的 auto 目标 + 近窗零真发 → ``\"stalled\"``。
 
     O-3 A：「够老」按 ``oldest_eligible_sec``（自第一个可出手时刻起）判；旧快照
-    没有该键时回落 ``oldest_age_sec``。自然档建目标当天不再触发全局告警。"""
+    没有该键时回落 ``oldest_age_sec``。自然档建目标当天不再触发全局告警。
+
+    2026-09-16：``structural_blocked``（人审档等故意不发）从 ``active_auto`` 里
+    扣掉——全是配置不一致时不拉全局「有货零真发」。"""
     if not isinstance(engine, dict) or not engine.get("sprint_effective"):
         return None
     if not isinstance(snap, dict):
         return None
     try:
-        if int(snap.get("active_auto") or 0) < int(min_active):
+        auto_n = int(snap.get("active_auto") or 0)
+        blocked = int(snap.get("structural_blocked") or 0)
+        unexplained = max(0, auto_n - blocked)
+        if unexplained < int(min_active):
             return None
         age_key = ("oldest_eligible_sec" if "oldest_eligible_sec" in snap
                    else "oldest_age_sec")
@@ -206,6 +267,7 @@ __all__ = [
     "GOAL_STALL_MIN_AGE_SEC",
     "GOAL_STALL_WINDOW_SEC",
     "SENT_KINDS",
+    "STRUCTURAL_BLOCK_REASONS",
     "collect_send_liveness",
     "first_eligible_delay_sec",
     "goal_stall_verdict",

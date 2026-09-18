@@ -602,26 +602,33 @@ async def run_autoreply(
     except Exception:
         persona_id = str((row.get("meta") or {}).get("persona_id") or "")
 
-    # O-1 A（#252 #253 · D-O1）停联 / 自伤硬停「最多一条」——本链此前对入站零分析（peer_risk
-    # 恒 low），客户说「别再写了」照样生成照发。现在：入站命中 stop_contact → **不生成 AI 稿**，
-    # 只发唯一一条人设口吻告别（stop_contact.farewell_text，按入站语言）并冻结会话（需人工 +
-    # 「客户要求停联」+ 档位 manual）；self_harm → 冻结转人工，AI 那一句陪伴照常往下走
-    # （与 R8 危机穿透同向），发完即因档位 manual 再无第二条。冻结后下一条入站在上方
-    # inbox_mode_fn（档位已 manual）处早退。判定异常一律放行（不做新的静默故障源）。
+    # R88 锁定：入站命中已锁定的硬停 / 需人工类别 → **不生成、不回客户**，只冻结或打标
+    # 并提醒坐席。未锁定 → 只记日志，AI 照常往下生成 / 发送。判定异常一律放行。
     _hard = ""
-    _hard_lang = ""
     _hard_hits: List[str] = []
+    _peer_reasons: List[str] = []
     if text:
         try:
             from src.ai.chat_assistant_service import quick_analyze as _qa
             from src.inbox.autosend_policy import hard_stop_reason as _hsr
             _a = _qa(text)
-            _hard = _hsr(list(_a.get("risk_reasons") or []))
-            _hard_lang = str(_a.get("language") or "")
+            _peer_reasons = [str(r) for r in (_a.get("risk_reasons") or [])]
+            _hard = _hsr(_peer_reasons)
             _hard_hits = [str(h) for h in (_a.get("risk_hits") or [])]
         except Exception:
             logger.debug("[protocol-autoreply] 停联判定异常（放行）", exc_info=True)
             _hard = ""
+    if _hard:
+        # R88（2026-09-17）：硬停只对运营在「敏感话题」卡**锁定**的类别执行；未锁定 → 只记日志，
+        # AI 照常往下生成 / 发送（与 B 线 risk_grader.regrade_inbound 同一把锁 inbox.risk_grading.locked）
+        try:
+            from src.inbox.risk_grader import is_locked as _rk_locked
+            if not _rk_locked(_hard, cfg):
+                logger.info("[protocol-autoreply] hard_stop=%s conv=%s unlocked → record only, reply continues hits=%s",
+                            _hard, key, "|".join(_hard_hits[:4]) or "-")
+                _hard = ""
+        except Exception:
+            logger.debug("[protocol-autoreply] 锁定读取异常（按锁定处理）", exc_info=True)
     if _hard:
         _store_sc = None
         try:
@@ -632,7 +639,7 @@ async def run_autoreply(
         _was_frozen = ""
         try:
             from src.inbox.stop_contact import (
-                farewell_text as _sc_farewell, freeze_conversation as _sc_freeze,
+                freeze_conversation as _sc_freeze,
                 frozen_reason as _sc_frozen, log_action as _sc_log,
             )
             from src.inbox.normalizer import conv_id as _sc_cid
@@ -642,40 +649,49 @@ async def run_autoreply(
                        conversation_id=_cid_sc, reason=_hard, hits=_hard_hits)
         except Exception:
             logger.debug("[protocol-autoreply] 停联冻结失败（继续硬停）", exc_info=True)
-            _sc_farewell = None  # type: ignore[assignment]
             _sc_log = None  # type: ignore[assignment]
             _cid_sc = key
-        if _hard == "stop_contact" and not _was_frozen and _sc_farewell is not None:
-            _farewell = _sc_farewell(_hard_lang)
-            try:
-                await send(platform=platform, account_id=account_id,
-                           chat_key=chat_key, text=_farewell)
-            except Exception as _fw_ex:
-                logger.warning("[protocol-autoreply] 告别发送失败 %s", key, exc_info=True)
-                if _sc_log is not None:
-                    _sc_log("farewell_failed", conversation_id=_cid_sc, reason=_hard,
-                            hits=_hard_hits, extra=f"stage=protocol err={str(_fw_ex)[:60]}")
-                return _result("stop_contact", text=_farewell, inbound=text, hard_stop=_hard,
-                               error=str(_fw_ex)[:200])
-            _send_ts_fw = ts if now is not None else time.time()
-            _last_reply[key] = (dedup_text, _send_ts_fw)
-            _last_sent[key] = _send_ts_fw
-            if limiter is not None:
-                limiter.record_sent(account_key, _send_ts_fw)
-            if _sc_log is not None:
-                _sc_log("farewell", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
-                        extra=f"stage=protocol lang={_hard_lang or '-'}")
-            return _result("stop_contact", sent=True, text=_farewell, inbound=text,
-                           hard_stop=_hard, farewell=True)
-        if _hard == "stop_contact" or _was_frozen:
-            if _sc_log is not None:
-                _sc_log("skipped", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
-                        extra=f"stage=protocol was_frozen={_was_frozen or '-'}")
-            return _result(_hard, inbound=text, hard_stop=_hard)
-        # self_harm 首次：已冻结切人工，这一句陪伴照常生成 / 发送（下方主流程）
         if _sc_log is not None:
-            _sc_log("one_reply", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
-                    extra="stage=protocol")
+            _sc_log("held", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
+                    extra=f"stage=protocol notify_only was_frozen={_was_frozen or '-'}")
+        return _result(_hard, inbound=text, hard_stop=_hard)
+
+    # 锁定的需人工类（索钱 / 诈骗 / 威胁 / 未成年）：不回客户，只打标提醒坐席。
+    _lock_cat = ""
+    if _peer_reasons:
+        try:
+            from src.inbox.risk_grader import first_locked_hit as _rk_hit
+            _lock_cat = _rk_hit(_peer_reasons, cfg)
+        except Exception:
+            logger.debug("[protocol-autoreply] 锁定类别读取异常（放行）", exc_info=True)
+            _lock_cat = ""
+    if _lock_cat:
+        try:
+            from src.integrations.protocol_bridge import get_inbox_store as _gis2
+            _store_lk = _gis2()
+        except Exception:
+            _store_lk = None
+        try:
+            tag_needs_human(
+                _store_lk,
+                {"platform": platform, "account_id": account_id, "chat_key": chat_key},
+                reason="high_risk", source="system",
+                level="high", category=_lock_cat, hits=_hard_hits[:4])
+            from src.integrations.shared.event_bus import get_event_bus as _geb
+            from src.inbox.normalizer import conv_id as _lk_cid
+            _cid_lk = _lk_cid(platform, account_id, chat_key)
+            _geb().publish("escalation", {
+                "conversation_id": _cid_lk, "platform": platform,
+                "account_id": account_id, "chat_key": chat_key,
+                "reason": _lock_cat, "risk_hits": _hard_hits[:6],
+                "agent_id": "", "agent_name": "system", "wait_sec": 0,
+                "assigned_to": "", "ts": time.time(),
+            })
+        except Exception:
+            logger.debug("[protocol-autoreply] 锁定需人工提醒失败（已忽略）", exc_info=True)
+        logger.info("[protocol-autoreply] locked=%s conv=%s notify only, no customer reply hits=%s",
+                    _lock_cat, key, "|".join(_hard_hits[:4]) or "-")
+        return _result(_lock_cat, inbound=text)
 
     try:
         reply = await generate(

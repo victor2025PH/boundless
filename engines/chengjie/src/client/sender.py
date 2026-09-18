@@ -1750,8 +1750,9 @@ class TelegramSenderMixin:
                                 "gap_jitter_sec": list(_script.gap_jitter)}
                     except Exception:
                         parts = None
-                    if parts is None and len(synth_source) >= int(
-                            split_cfg.get("min_total_chars", 24) or 24):
+                    from src.ai.voice_clone_client import effective_min_total as _emt
+                    if parts is None and len(synth_source) >= _emt(
+                            synth_source, int(split_cfg.get("min_total_chars", 24) or 24)):
                         from src.ai.voice_clone_client import pack_voice_parts
                         _p = pack_voice_parts(
                             synth_source,

@@ -659,6 +659,65 @@ def set_ticket_status(ticket_id: int, status: str,
         return False
 
 
+def merge_ticket(child_id: int, parent_id: int, *, note: str = "",
+                 by: str = "") -> Dict[str, Any]:
+    """把子单并入主单：``dup_of=parent``、``status=closed``、写 ``fix_note``、落 ``merge`` 事件。
+
+    P2-1（#334/#335 巡检单进修复队列）：值守核对题不应各开一条修复线。
+    已并入同一父单 → 幂等 ``ok``。子/父不存在、自并、环 → ``ok=False``。
+    """
+    try:
+        cid, pid = int(child_id), int(parent_id)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad_id"}
+    if cid <= 0 or pid <= 0 or cid == pid:
+        return {"ok": False, "error": "bad_id"}
+    child = get_ticket(cid)
+    parent = get_ticket(pid)
+    if not child:
+        return {"ok": False, "error": "child_missing"}
+    if not parent:
+        return {"ok": False, "error": "parent_missing"}
+    # 父单若已是别人的子单，跟到真正的主单
+    root = pid
+    seen = {cid}
+    while True:
+        prow = get_ticket(root)
+        if not prow:
+            return {"ok": False, "error": "parent_missing"}
+        d = int(prow.get("dup_of") or 0)
+        if d <= 0:
+            break
+        if d in seen:
+            return {"ok": False, "error": "cycle"}
+        seen.add(d)
+        root = d
+    if int(child.get("dup_of") or 0) == root and str(child.get("status") or "") == "closed":
+        return {"ok": True, "ticket_id": cid, "parent_id": root, "already": True}
+    why = str(note or "").strip()[:300] or f"并入 #{root}"
+    ts = time.time()
+    try:
+        con = _db()
+        with _LOCK:
+            con.execute(
+                "UPDATE bug_tickets SET dup_of=?, status='closed', fix_note=?,"
+                " updated_ts=? WHERE id=?",
+                (root, why, ts, cid))
+            extra = f"\n[+merge #{cid} {by or ''}] {why}".strip()
+            con.execute(
+                "UPDATE bug_tickets SET body=substr(body || ?, 1, 4000), updated_ts=?"
+                " WHERE id=?",
+                (extra, ts, root))
+            con.commit()
+        _record_event(str(child.get("chat_id") or ""), "merge",
+                      str(child.get("reporter_id") or ""),
+                      f"#{cid}→#{root} {why}"[:500])
+        return {"ok": True, "ticket_id": cid, "parent_id": root, "already": False}
+    except Exception:
+        logger.debug("[bug_intake] merge_ticket 失败", exc_info=True)
+        return {"ok": False, "error": "db"}
+
+
 def get_ticket(ticket_id: int) -> Optional[Dict[str, Any]]:
     try:
         con = _db()
@@ -702,22 +761,24 @@ def build_fix_notify_text(row: Dict[str, Any], update_hint: str = "") -> str:
     """修复回访文案（HTML parse mode；@报障人用 tg://user 深链 mention）。
 
     刻意由代码拼（与回执 footer 同理由：编号/@目标必须确定性正确）。
-    ``fix_note``（工单行内，P1-4）→ 「本次改动」段；``update_hint``（P0-3，
-    配置或调用方传入）→ 「获取方式」段——两段都可缺省，缺省即旧文案。
+    群里要能直接看到「问题核心 + 修复方法」：标题 → 「问题：」段，
+    ``fix_note``（工单行内，P1-4）→ 「修复：」段；``update_hint``（P0-3，
+    配置或调用方传入）→ 「获取方式」段——后两段可缺省。
     """
     tid = int(row.get("id") or 0)
     mention = _mention_html(row)
-    title = _html_esc(str(row.get("title") or "").strip()[:60])
-    parts = [f"🔧 {mention} 你反馈的「{title}」（#{tid}）已修复上线"]
+    title = _html_esc(str(row.get("title") or "").strip()[:80])
+    lines = [f"🔧 {mention} #{tid} 已修复上线"]
+    if title:
+        lines.append(f"问题：{title}")
     fix_note = str(row.get("fix_note") or "").strip()
     if fix_note:
-        parts.append(f"（本次改动：{_html_esc(fix_note[:200])}）")
-    parts.append("。")
+        lines.append(f"修复：{_html_esc(fix_note[:200])}")
     hint = str(update_hint or "").strip()
     if hint:
-        parts.append(f"📦 获取方式：{_html_esc(hint[:200])}。")
-    parts.append("方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！")
-    return "".join(parts)
+        lines.append(f"📦 获取方式：{_html_esc(hint[:200])}")
+    lines.append("方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！")
+    return "\n".join(lines)
 
 
 def build_reply_text(row: Dict[str, Any], text: str, mention: bool = True) -> str:
@@ -1914,7 +1975,7 @@ def dump_stats() -> Dict[str, Any]:
 __all__ = [
     "parse_cfg", "is_bug_group", "voice_suppressed", "classify_message",
     "classify_severity", "is_crisis", "normalize_title", "titles_similar",
-    "record_bug_ticket", "append_ticket_note", "set_ticket_status",
+    "record_bug_ticket", "append_ticket_note", "set_ticket_status", "merge_ticket",
     "list_tickets", "get_ticket", "build_fix_notify_text", "build_reply_text",
     "resolve_update_hint", "mark_notified",
     "detect_verify_intent", "pending_verify_ticket", "candidate_verify_tickets",

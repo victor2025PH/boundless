@@ -671,6 +671,8 @@ class HealthWatchdog:
         # 首次取用从账本回灌、每次改动直写账本（见 _lan_gpu_host_state / _lan_gpu_persist）。
         self._lan_gpu_state: Dict[str, Dict[str, float]] = {}
         self.total_lan_gpu_reminders: int = 0
+        self._last_compute_lane_ts: float = 0.0
+        self.total_compute_lane_reminders: int = 0
         # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故）：状态镜像 avatar hang
         self._colloquial_down_since: float = 0.0
         self._colloquial_alerted: bool = False
@@ -681,6 +683,8 @@ class HealthWatchdog:
         self._apg_fail_count: int = 0
         self._apg_first_fail_ts: float = 0.0
         self._apg_switched: bool = False
+        # 锁在本地档期间已发过「连败未切档」告警（端点恢复时补一次恢复通知后清位）
+        self._apg_locked_alerted: bool = False
         self.total_ai_primary_guard_switches: int = 0
         # 托管代理生命周期巡检（一键代理 P2）：稀疏节流（默认 1h）+ 低库存签名去重
         # （持续态每轮都会算出来，签名变了才重发，防每小时复读同一份缺货单）。
@@ -720,6 +724,10 @@ class HealthWatchdog:
         # （见 _check_draft_backlog），而 L1 恰恰是「必须人来处理」的那一档。
         # _db_alerted / _db_last_remind 是账本属性（键 draft_backlog）。
         self.total_draft_backlog_alerts: int = 0
+        # 系统标签泄漏巡检（2026-09-12「[我方语音消息]」事故）：按落库出站行兜底看见
+        # 「LLM 把上下文系统标注照抄进正文并发给了客户」——出稿口守卫漏了/别的生成链
+        # 没过守卫/老进程未装载新代码，都在这里现形。账本键 label_leak。
+        self.total_label_leak_alerts: int = 0
         self.total_frontend_error_alerts: int = 0
         # 账号真相真幽灵巡检（2026-08-17 P4b）：会话库有、注册表没有、且不是
         # web 工作台。desktop 镜像号在册，不算泄漏；已登出未读被 summary 清零，
@@ -824,8 +832,7 @@ class HealthWatchdog:
         self.total_goal_orders_settled: int = 0
         # 流失挽回扫描（goals winback）：小时级节流。默认关。
         self._last_goal_winback_ts: float = 0.0
-        # D1b P0-5：自动推进有货零真发（与 scan_loop 心跳停走正交）
-        self._goal_sprint_stall_alerted: float = 0.0
+        # D1b P0-5：自动推进有货零真发计数（节流位已迁 remind_ledger，见 _RK_GOAL_SENDS）
         self.total_goal_sprint_stall_alerts: int = 0
         self.last_check_ts: float = 0.0
         self.last_light: str = "green"
@@ -841,18 +848,39 @@ class HealthWatchdog:
             return
         except asyncio.TimeoutError:
             pass
+        lane_task = asyncio.create_task(self._compute_lane_loop())
+        try:
+            while not self._stop_evt.is_set():
+                try:
+                    await asyncio.get_event_loop().run_in_executor(None, self._tick)
+                except Exception:
+                    logger.debug("HealthWatchdog tick 异常（已忽略）", exc_info=True)
+                try:
+                    await asyncio.wait_for(self._stop_evt.wait(), timeout=self._interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            lane_task.cancel()
+            try:
+                await lane_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._running = False
+            logger.info("HealthWatchdog 已停止")
+
+    async def _compute_lane_loop(self) -> None:
+        """三路算力探活：独立于 5 分钟健康拍，约每分钟一圈，欠费/故障每 3 分钟催运维群。"""
         while not self._stop_evt.is_set():
             try:
-                await asyncio.get_event_loop().run_in_executor(None, self._tick)
+                await asyncio.get_event_loop().run_in_executor(None, self._check_compute_lanes)
             except Exception:
-                logger.debug("HealthWatchdog tick 异常（已忽略）", exc_info=True)
+                logger.debug("算力三路巡检异常（已忽略）", exc_info=True)
             try:
-                await asyncio.wait_for(self._stop_evt.wait(), timeout=self._interval)
-                break
+                await asyncio.wait_for(self._stop_evt.wait(), timeout=60.0)
+                return
             except asyncio.TimeoutError:
                 pass
-        self._running = False
-        logger.info("HealthWatchdog 已停止")
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -904,11 +932,51 @@ class HealthWatchdog:
 
     # 旧属性名保留为账本视图（巡检代码 / 单测沿用 `_db_alerted` 等写法零改动）
     _RK_DRAFT = "draft_backlog"
+    _RK_LABEL = "label_leak"
     _RK_FE = "frontend_error"
     _RK_CASE = "case_backlog"
     _RK_UNANSWERED = "unanswered_inbound"
     _RK_AVATAR = "avatar_voice"
     _RK_LAN_GPU = "lan_gpu:"
+    # 2026-09-16：goal stall 节流落盘——重启不再 1 分钟内整轮重发
+    _RK_GOAL_SENDS = "goal_sprint_sends"
+    _RK_GOAL_STALL = "goal_sprint_goal:"
+
+    @property
+    def _goal_sprint_stall_alerted(self) -> float:
+        """兼容旧单测/日志：账本已告过警时返回 last_remind，否则 0。"""
+        return (self._remind.last_remind(self._RK_GOAL_SENDS)
+                if self._remind.alerted(self._RK_GOAL_SENDS) else 0.0)
+
+    @_goal_sprint_stall_alerted.setter
+    def _goal_sprint_stall_alerted(self, v: float) -> None:
+        ts = float(v or 0.0)
+        if ts <= 0:
+            self._remind.resolve(self._RK_GOAL_SENDS)
+            return
+        self._remind.mark_sent(self._RK_GOAL_SENDS, now=ts)
+
+    @property
+    def _goal_stalled_alerted(self) -> Dict[str, float]:
+        """单目标 stall 节流视图：goal_id → last_remind（只读快照，写入走账本）。"""
+        prefix = self._RK_GOAL_STALL
+        out: Dict[str, float] = {}
+        for key in self._remind.keys():
+            if not str(key).startswith(prefix):
+                continue
+            if not self._remind.alerted(key):
+                continue
+            out[str(key)[len(prefix):]] = self._remind.last_remind(key)
+        return out
+
+    @_goal_stalled_alerted.setter
+    def _goal_stalled_alerted(self, v: Any) -> None:
+        # 旧测试偶发整表赋值；新路径以账本为准，赋值仅用于清零兼容。
+        if not v:
+            prefix = self._RK_GOAL_STALL
+            for key in list(self._remind.keys()):
+                if str(key).startswith(prefix):
+                    self._remind.resolve(key)
 
     @property
     def _db_alerted(self) -> bool:
@@ -1231,6 +1299,10 @@ class HealthWatchdog:
             self._check_lan_gpu_hosts()
         except Exception:
             logger.debug("LAN GPU 主机巡检异常（已忽略）", exc_info=True)
+        try:
+            self._check_compute_lanes()
+        except Exception:
+            logger.debug("算力三路巡检异常（已忽略）", exc_info=True)
 
         # 人工通过投递链静默断裂（坐席点了「发送」但一条都没真发出去）——
         # 这条链曾整条不存在过（实测 14 天零人工投递），且注入是静默的，值得主动探。
@@ -1244,6 +1316,13 @@ class HealthWatchdog:
             self._check_draft_backlog()
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
+
+        # 系统标签泄漏：AI 出站正文以「[我方语音消息]」类系统标注开头＝已发给客户的穿帮
+        # （2026-09-12 事故 7 分钟 4 例，靠坐席截图才发现）
+        try:
+            self._check_label_leak()
+        except Exception:
+            logger.debug("标签泄漏巡检异常（已忽略）", exc_info=True)
 
         # 前端脚本 bug（ReferenceError / SyntaxError beacon）：模板热更新直上生产，坏符号
         # 一出现全体坐席同时踩；beacon 与 ops 卡早就有，缺的是「有人被叫醒」这一环
@@ -2922,6 +3001,100 @@ class HealthWatchdog:
                 self.total_proxy_managed_alerts += 1
         except Exception:
             logger.debug("proxy_managed 告警发布失败（忽略）", exc_info=True)
+
+    def _check_label_leak(self, *, now: Optional[float] = None) -> None:
+        """AI 出站正文带系统标签（「[我方语音消息] …」）→ 主动告警（2026-09-12 事故沉淀）。
+
+        事故：normalize_history 把「[我方发出的语音]」写进 assistant 内容，LLM 连续十轮后
+        照抄/改写/翻译进正文，文本直发客户、语音被念出，7 分钟 4 例，全靠坐席截图才发现。
+        出稿口守卫（outbound_text_guard.strip_system_labels）负责拦，本巡检负责**看见**：
+        按落库的出站行扫（判定单源 ``label_leak_scan``），守卫漏了 / 别的生成链没过守卫 /
+        老进程没装载新代码，都在这里现形。只有高置信 ``system_label`` 才触发；
+        ``bracket_prefix``（AI 出站以其它方括号开头）随附计数不单独响。
+
+        配置 ``health_watchdog.label_leak_remind.{enabled,lookback_hours,interval_min,limit}``
+        （默认开：回看 24h，4h 重提，同一批行一天最多一次，窗口清零补恢复通知）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("label_leak_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None or not hasattr(store, "list_outbound_bracket_rows"):
+            return
+        ts = float(now if now is not None else time.time())
+        lookback_h = max(1.0, float(br.get("lookback_hours", 24) or 24))
+        try:
+            from src.inbox.label_leak_scan import (
+                KIND_SYSTEM_LABEL, scan_store, summarize,
+            )
+            findings = scan_store(
+                store, lookback_hours=lookback_h,
+                limit=int(br.get("limit", 500) or 500), now=ts)
+        except Exception:
+            logger.debug("标签泄漏巡检取数失败（忽略）", exc_info=True)
+            return
+        hard = [f for f in findings if f.get("kind") == KIND_SYSTEM_LABEL]
+        if not hard:
+            if self._remind.resolve(self._RK_LABEL):
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("label_leak_alert", {
+                        "recovered": True,
+                        "lookback_hours": lookback_h,
+                        "rate_key": "label_leak:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出标签泄漏恢复通知")
+                except Exception:
+                    logger.debug("label_leak recovery 发布失败（忽略）", exc_info=True)
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp
+        fp = _rl_fp(sorted(str(f.get("message_id") or "") for f in hard))
+        prev_fp = str(self._remind.get(self._RK_LABEL).get("fingerprint") or "")
+        since = float(hard[0].get("ts") or 0.0) or None
+        verdict = self._remind.decide(
+            self._RK_LABEL, now=ts, interval_sec=interval_sec, fp=fp, since=since,
+            unchanged_interval_sec=self._unchanged_interval_sec(br, interval_sec, 1440))
+        if verdict == _RL_HOLD:
+            return
+        is_reminder = verdict == _RL_REMIND
+        summ = summarize(findings)
+        latest = hard[-1]
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("label_leak_alert", {
+                "remind_key": self._RK_LABEL,
+                "count": int(summ.get("count") or 0),
+                "system_label": int(summ.get("system_label") or 0),
+                "bracket_prefix": int(summ.get("bracket_prefix") or 0),
+                "conversations": int(summ.get("conversations") or 0),
+                "top_conversations": [list(kv) for kv in (summ.get("top_conversations") or [])],
+                "sample_tags": list(summ.get("sample_tags") or []),
+                "lookback_hours": lookback_h,
+                "latest_ts": float(latest.get("ts") or 0.0),
+                "latest_text": str(latest.get("text") or "")[:80],
+                "latest_media": str(latest.get("media_type") or ""),
+                "reminder": is_reminder,
+                "unchanged": bool(is_reminder and prev_fp and prev_fp == fp),
+                "since_ts": self._remind.first_seen(self._RK_LABEL),
+                "rate_key": "label_leak:remind",
+            })
+        except Exception:
+            logger.debug("label_leak alert 发布失败（忽略）", exc_info=True)
+            return
+        self._remind.mark_sent(
+            self._RK_LABEL, now=ts, fp=fp,
+            summary=f"AI 出站带系统标签 {len(hard)} 条（{summ.get('conversations')} 个会话）")
+        self.total_label_leak_alerts += 1
+        logger.warning(
+            "标签泄漏巡检：近 %.0fh AI 出站正文带系统标签 %d 条（会话 %d 个，样本 %s；"
+            "另 %d 条以其它方括号开头）最近一条=%r",
+            lookback_h, len(hard), summ.get("conversations"),
+            "、".join(summ.get("sample_tags") or [])[:80], summ.get("bracket_prefix"),
+            str(latest.get("text") or "")[:60])
 
     def _check_frontend_errors(self, *, now: Optional[float] = None) -> None:
         """前端脚本 bug beacon（ReferenceError / SyntaxError）→ 主动告警（2026-09-15 事故沉淀）。
@@ -5464,6 +5637,82 @@ class HealthWatchdog:
                 "已静默转移备点，本地冗余归零）%s",
                 host, int(down_sec // 60), "（重提）" if was_reminder else "")
 
+    def _check_compute_lanes(self, *, now: Optional[float] = None) -> None:
+        """三路算力（173 / DeepSeek / 硅基）欠费或故障：立刻报运维群，每 3 分钟催一次。
+
+        停催条件只有两个：运维群卡片点「已处理 / 静音」，或探活恢复（发恢复通知）。
+        内容不变也按 3 分钟重提——这是费用/算力事故，不是草稿积压那种「一天一次」。
+        """
+        from src.ai import compute_lanes as cl
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not cl.remind_enabled(cfg if isinstance(cfg, dict) else {}):
+            return
+        ts = float(now if now is not None else time.time())
+        if now is None and self._last_compute_lane_ts and (ts - self._last_compute_lane_ts) < 45.0:
+            return
+        self._last_compute_lane_ts = ts
+        interval = cl.nag_interval_sec(cfg if isinstance(cfg, dict) else {})
+        for lane in cl.LANES:
+            try:
+                result = cl.probe_lane(lane, cfg if isinstance(cfg, dict) else {})
+            except Exception:
+                result = {"ok": False, "kind": "other", "detail": "探针异常"}
+            cl.apply_probe(lane, result, now=ts)
+            key = cl.remind_key(lane)
+            if result.get("ok"):
+                if self._remind.resolve(key):
+                    try:
+                        from src.integrations.shared.event_bus import get_event_bus
+                        get_event_bus().publish("compute_lane_alert", {
+                            "recovered": True,
+                            "lane": lane,
+                            "label": cl.LANE_LABELS.get(lane, lane),
+                            "rate_key": f"compute_lane:{lane}:recovered",
+                        })
+                        logger.info("算力三路已恢复：%s", cl.LANE_LABELS.get(lane, lane))
+                    except Exception:
+                        logger.debug("compute_lane recovery 发布失败（已忽略）", exc_info=True)
+                continue
+            kind = str(result.get("kind") or "other")
+            from src.inbox.remind_ledger import fingerprint as _rl_fp
+            fp = _rl_fp(lane, kind, str(result.get("detail") or "")[:80])
+            decision = self._remind.decide(
+                key, now=ts, after_sec=0.0, interval_sec=interval, fp=fp,
+                unchanged_interval_sec=interval,
+            )
+            if decision == "hold":
+                continue
+            standins = [x for x in cl.healthy_labels(now=ts)
+                        if x != cl.LANE_LABELS.get(lane, lane)]
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("compute_lane_alert", {
+                    "remind_key": key,
+                    "lane": lane,
+                    "label": cl.LANE_LABELS.get(lane, lane),
+                    "kind": kind,
+                    "kind_zh": cl.kind_zh(kind),
+                    "detail": str(result.get("detail") or "")[:160],
+                    "standins": standins,
+                    "down_minutes": int(self._remind.active_seconds(key, now=ts) // 60),
+                    "reminder": decision == "remind",
+                    "unchanged": decision == "remind",
+                    "rate_key": f"compute_lane:{lane}:{int(ts // interval)}",
+                })
+            except Exception:
+                logger.debug("compute_lane alert 发布失败（已忽略）", exc_info=True)
+                continue
+            self._remind.mark_sent(
+                key, now=ts, fp=fp,
+                summary=f"{cl.LANE_LABELS.get(lane, lane)} {cl.kind_zh(kind)}")
+            self.total_compute_lane_reminders += 1
+            logger.warning(
+                "算力三路异常：%s %s（%s）standins=%s%s",
+                cl.LANE_LABELS.get(lane, lane), cl.kind_zh(kind),
+                str(result.get("detail") or "")[:80],
+                "、".join(standins) or "无",
+                "（重提）" if decision == "remind" else "")
+
     def _check_trial_fulfiller(self, *, now: Optional[float] = None) -> None:
         """试用履约端（厂商机）停摆的升级式提醒。
 
@@ -5915,6 +6164,13 @@ class HealthWatchdog:
         智聊切 cloud → 本检查在 cloud 档天然不动作。fail-open：任何内部异常绝不
         改配置。配置 ``health_watchdog.ai_primary_guard.{enabled,fail_streak,
         min_span_sec,probe_timeout_sec}``（默认 开/2/240/4）。
+
+        **老板锁（``ai.primary_lock``）优先（2026-09-17 R88 解锁后补）**：锁值为
+        ``local``/``local_only`` 时本保险**不再写 ``ai.primary=cloud``**——写了也会
+        在 AIClient 装载点被锁强制打回并发「越权改档」告警，只会在运维群制造
+        「已热切 cloud → 锁强制纠正」的成对噪音，让人误以为主链仍在 cloud 体制。
+        锁在场时达到触发阈值只发 ``kind=probe_fail_locked`` 告警（端点连败、档位
+        未动、请查 173），端点恢复发一次 ``kind=probe_recovered_locked``。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         if not isinstance(cfg, dict):
@@ -5928,6 +6184,14 @@ class HealthWatchdog:
         base_url = str(fb.get("base_url") or "").strip()
         ts = float(now if now is not None else time.time())
         probe_to = float(gcfg.get("probe_timeout_sec", 4) or 4)
+        try:
+            from src.ai.ai_primary_audit import resolve_lock as _resolve_lock
+            lock = _resolve_lock(ai_cfg)
+        except Exception:
+            lock = ""
+        # 锁在本地档：保险改档必被锁打回 → 只报不切
+        lock_holds_local = lock in ("local", "local_only")
+        locked_alerted = bool(getattr(self, "_apg_locked_alerted", False))
 
         if primary not in ("local", "local_only") or not base_url:
             # cloud 档 / 未配本地端点：只负责「已降级后的恢复通知」，其余状态归零
@@ -5938,10 +6202,12 @@ class HealthWatchdog:
                     get_event_bus().publish("ai_primary_guard_alert", {
                         "recovered": True,
                         "base_url": base_url,
+                        "lock": lock or None,
                         "rate_key": "ai_primary_guard:recovered",
                     })
                     logger.info(
-                        "本地主链已恢复可用（保险早前已切 cloud）——待执行器/人工切回 local_only")
+                        "本地主链已恢复可用（保险早前已切 cloud）——恢复本地档需按 "
+                        "ai.primary_lock 治理经治理接口切换")
                 except Exception:
                     logger.debug("ai_primary_guard recovery 发布失败（已忽略）",
                                  exc_info=True)
@@ -5957,6 +6223,24 @@ class HealthWatchdog:
         if ok:
             self._apg_fail_count = 0
             self._apg_first_fail_ts = 0.0
+            if locked_alerted:
+                # 锁在场期间报过「连败未切档」→ 端点回来补一次恢复通知（只一次）
+                self._apg_locked_alerted = False
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("ai_primary_guard_alert", {
+                        "recovered": True,
+                        "kind": "probe_recovered_locked",
+                        "base_url": base_url,
+                        "lock": lock or None,
+                        "effective": primary,
+                        "rate_key": "ai_primary_guard:recovered",
+                    })
+                    logger.info("本地主链端点已恢复可达（锁 %s 在场，档位 %s 未曾变动）",
+                                lock, primary)
+                except Exception:
+                    logger.debug("ai_primary_guard locked-recovery 发布失败（已忽略）",
+                                 exc_info=True)
             return
 
         self._apg_fail_count += 1
@@ -5966,6 +6250,40 @@ class HealthWatchdog:
         span_need = max(0.0, float(gcfg.get("min_span_sec", 240) or 240))
         if (self._apg_fail_count < streak_need
                 or (ts - self._apg_first_fail_ts) < span_need):
+            return
+
+        if lock_holds_local:
+            # 锁在本地档：不写配置、不热重建；只报一次「端点连败、档位未动」
+            if locked_alerted:
+                return
+            self._apg_locked_alerted = True
+            down_min = int((ts - self._apg_first_fail_ts) // 60)
+            try:
+                from src.ai.ai_primary_audit import append_event as _pa_append
+                _pa_append(
+                    "guard_probe_fail_locked", mode=primary, lock=lock,
+                    base_url=base_url, fail_count=int(self._apg_fail_count),
+                    via="health_watchdog")
+            except Exception:
+                pass
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("ai_primary_guard_alert", {
+                    "kind": "probe_fail_locked",
+                    "from_mode": primary,
+                    "lock": lock,
+                    "base_url": base_url,
+                    "fail_count": int(self._apg_fail_count),
+                    "down_minutes": down_min,
+                    "rate_key": "ai_primary_guard:probe_fail_locked",
+                })
+            except Exception:
+                logger.debug("ai_primary_guard locked alert 发布失败（已忽略）",
+                             exc_info=True)
+            logger.warning(
+                "本地主链端点 %s 连续 %d 次探测失败（档位 %s，锁 %s 在场）→ 不自动切 cloud"
+                "（锁会打回；要降级需老板改 ai.primary_lock），请查 173 vLLM :8001",
+                base_url, self._apg_fail_count, primary, lock)
             return
 
         cm = self._config_manager
@@ -6003,6 +6321,7 @@ class HealthWatchdog:
             get_event_bus().publish("ai_primary_guard_alert", {
                 "from_mode": primary,
                 "base_url": base_url,
+                "lock": lock or None,
                 "fail_count": int(self._apg_fail_count),
                 "down_minutes": down_min,
                 "rate_key": "ai_primary_guard:switched",
@@ -6575,7 +6894,11 @@ class HealthWatchdog:
         ``beat_sent``」——线程活着但一条都没出去（会话全是人审档 / 排拍后被吞 /
         代码没装载）。引擎没开、目标太新、已经有真发 → 静默。
         配置 ``health_watchdog.goal_sprint_liveness.{enabled,min_active,
-        min_age_hours,interval_min}``（默认开 / 2 / 4 / 240）。
+        min_age_hours,interval_min,unchanged_interval_min}``（默认开 / 2 / 4 /
+        240 / 1440）。
+
+        2026-09-16：节流位迁 ``remind_ledger``（跨重启不重发）；结构性
+        ``beat_blocked`` 已在 liveness 层剔除。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         if not isinstance(cfg, dict):
@@ -6610,6 +6933,7 @@ class HealthWatchdog:
             interval_min = float(lr.get("interval_min", 240) or 240)
         except (TypeError, ValueError):
             interval_min = 240.0
+        interval_sec = max(60.0, interval_min * 60.0)
         store = get_configured_store(
             cfg, getattr(self._config_manager, "config_path", None))
         snap = collect_send_liveness(store, now=ts)
@@ -6619,78 +6943,122 @@ class HealthWatchdog:
         # （带 goal_id / 会话 / 标题），卡片同步红字（sprint_live.stalled）。
         try:
             self._note_goal_stalled(snap.get("stalled_goals") or [], now=ts,
-                                    interval_min=interval_min)
+                                    interval_min=interval_min, block=lr)
         except Exception:
             logger.debug("goal stalled 点名异常（已忽略）", exc_info=True)
         kind = stall_verdict(
             es, snap, min_active=min_active,
             min_age_sec=max(0.0, min_age_h) * 3600.0)
-        alerted_at = float(getattr(self, "_goal_sprint_stall_alerted", 0) or 0)
+        rk = self._RK_GOAL_SENDS
+        from src.inbox.remind_ledger import (
+            HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp,
+        )
         if not kind:
-            if alerted_at:
-                self._goal_sprint_stall_alerted = 0.0
+            if self._remind.resolve(rk):
                 logger.info(
-                    "goal_sprint_liveness recovered: auto=%s sent_24h=%s",
-                    snap.get("active_auto"), snap.get("sent_24h"))
+                    "goal_sprint_liveness recovered: auto=%s sent_24h=%s "
+                    "structural=%s",
+                    snap.get("active_auto"), snap.get("sent_24h"),
+                    snap.get("structural_blocked"))
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
                     get_event_bus().publish("scan_loop_stall_alert", {
                         "loop": "goal_sprint_sends",
                         "recovered": True,
+                        "remind_key": rk,
                         "rate_key": "scan_stall:goal_sprint_sends:recovered",
                     })
                 except Exception:
                     logger.debug("goal_sprint_liveness recovery 发布失败",
                                  exc_info=True)
             return
-        if alerted_at and (ts - alerted_at) < interval_min * 60.0:
+        stalled_ids = sorted(
+            str(s.get("goal_id") or "")
+            for s in (snap.get("stalled_goals") or [])
+            if isinstance(s, dict) and s.get("goal_id"))
+        fp = _rl_fp(stalled_ids or ["fleet"])
+        verdict = self._remind.decide(
+            rk, now=ts, interval_sec=interval_sec, fp=fp,
+            unchanged_interval_sec=self._unchanged_interval_sec(
+                lr, interval_sec, 1440))
+        if verdict == _RL_HOLD:
             return
-        self._goal_sprint_stall_alerted = ts
         self.total_goal_sprint_stall_alerts += 1
         logger.info(
             "goal_sprint_liveness stalled: auto=%s sent_24h=%s oldest_h=%.1f "
-            "——引擎能发但 24h 零真发，卡片可能仍写着下一拍",
+            "structural=%s ——引擎能发但 24h 零真发，卡片可能仍写着下一拍",
             snap.get("active_auto"), snap.get("sent_24h"),
-            float(snap.get("oldest_age_sec") or 0) / 3600.0)
+            float(snap.get("oldest_age_sec") or 0) / 3600.0,
+            snap.get("structural_blocked"))
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("scan_loop_stall_alert", {
                 "loop": "goal_sprint_sends",
                 "active_auto": snap.get("active_auto"),
                 "sent_24h": snap.get("sent_24h"),
+                "structural_blocked": snap.get("structural_blocked"),
                 "oldest_hours": round(
                     float(snap.get("oldest_age_sec") or 0) / 3600.0, 1),
-                "reminder": bool(alerted_at),
+                "reminder": verdict == _RL_REMIND,
+                "remind_key": rk,
                 "rate_key": "scan_stall:goal_sprint_sends",
             })
         except Exception:
             logger.debug("goal_sprint_liveness 告警发布失败", exc_info=True)
+            return
+        self._remind.mark_sent(
+            rk, now=ts, fp=fp,
+            summary=(f"自动推进有货零真发 auto={snap.get('active_auto')} "
+                     f"sent_24h={snap.get('sent_24h')}"))
 
     def _note_goal_stalled(self, stalled: list, *, now: float,
-                           interval_min: float = 240.0) -> None:
+                           interval_min: float = 240.0,
+                           block: Optional[Dict[str, Any]] = None) -> None:
         """单目标 stalled 点名（M-7 D #236）：每目标一条 INFO + 一条
         ``scan_loop_stall_alert``（loop=goal_sprint_goal，带 goal_id/会话/标题），
-        按目标 ``interval_min`` 节流；目标恢复（不再在名单里）时清节流位并记 recovered。"""
-        seen = getattr(self, "_goal_stalled_alerted", None)
-        if not isinstance(seen, dict):
-            seen = {}
-            self._goal_stalled_alerted = seen
+        按目标经 ``remind_ledger`` 节流（跨重启）；目标恢复时清账本并发 recovered。"""
+        from src.inbox.remind_ledger import (
+            HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp,
+        )
+        interval_sec = max(60.0, float(interval_min) * 60.0)
+        br = block if isinstance(block, dict) else {}
+        unchanged = self._unchanged_interval_sec(br, interval_sec, 1440)
+        prefix = self._RK_GOAL_STALL
         cur = {str(s.get("goal_id") or ""): s for s in (stalled or [])
                if isinstance(s, dict) and s.get("goal_id")}
-        # 恢复：上次点过名、这次不在名单 → 记一行 recovered
-        for gid in [g for g in list(seen) if g not in cur]:
-            seen.pop(gid, None)
-            logger.info("goal_sprint_liveness goal_recovered: goal=%s", gid)
+        # 恢复：账本里点过名、这次不在名单 → resolve + recovered
+        for key in list(self._remind.keys()):
+            if not str(key).startswith(prefix):
+                continue
+            gid = str(key)[len(prefix):]
+            if gid in cur:
+                continue
+            if self._remind.resolve(key):
+                logger.info("goal_sprint_liveness goal_recovered: goal=%s", gid)
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("scan_loop_stall_alert", {
+                        "loop": "goal_sprint_goal",
+                        "goal_id": gid,
+                        "recovered": True,
+                        "remind_key": key,
+                        "rate_key": f"scan_stall:goal:{gid}:recovered",
+                    })
+                except Exception:
+                    logger.debug("goal_stalled recovery 发布失败", exc_info=True)
         try:
             from src.integrations.shared.event_bus import get_event_bus
             bus = get_event_bus()
         except Exception:
             bus = None
         for gid, s in cur.items():
-            last = float(seen.get(gid) or 0)
-            if last and (now - last) < float(interval_min) * 60.0:
+            key = f"{prefix}{gid}"
+            fp = _rl_fp(gid, str(s.get("conversation_id") or ""))
+            verdict = self._remind.decide(
+                key, now=now, interval_sec=interval_sec, fp=fp,
+                unchanged_interval_sec=unchanged)
+            if verdict == _RL_HOLD:
                 continue
-            seen[gid] = now
             conv = str(s.get("conversation_id") or "")
             title = str(s.get("title") or "")
             logger.info(
@@ -6704,12 +7072,16 @@ class HealthWatchdog:
                         "goal_id": gid,
                         "conversation_id": conv,
                         "title": title,
-                        "reminder": bool(last),
+                        "reminder": verdict == _RL_REMIND,
+                        "remind_key": key,
                         "rate_key": f"scan_stall:goal:{gid}",
                     })
                 except Exception:
                     logger.debug("goal_stalled 告警发布失败", exc_info=True)
-
+                    continue
+            self._remind.mark_sent(
+                key, now=now, fp=fp,
+                summary=f"目标 {gid[:12]} 24h 零真发（{title[:20]}）")
     def _check_license_quota(self, *, now: Optional[float] = None) -> None:
         """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。
 
@@ -7609,9 +7981,23 @@ class HealthWatchdog:
                           for base, st in snap.items()}
         except Exception:
             public = None
+        # 主链档位一行（2026-09-17）：单一口径 build_summary，effective 取活体 AIClient
+        primary: Optional[Dict[str, Any]] = None
+        try:
+            from src.ai.ai_primary_summary import build_summary as _pm_summary
+            cfg = getattr(self._config_manager, "config", None) or {}
+            _cli = getattr(getattr(self._app, "state", None), "ai_client", None)
+            _eff = getattr(_cli, "_primary_mode", None) if _cli is not None else None
+            _lock = getattr(_cli, "_primary_lock", None) if _cli is not None else None
+            s = _pm_summary(cfg if isinstance(cfg, dict) else {}, effective=_eff,
+                            lock=(_lock if _lock is not None else None))
+            primary = {k: s.get(k) for k in ("effective", "lock", "primary_text",
+                                             "chain_text", "billing_provider", "mode_label")}
+        except Exception:
+            logger.debug("每日摘要主链段装配失败（已忽略）", exc_info=True)
         day = time.strftime("%Y-%m-%d", time.localtime(ts))
         return {"day": day, "open": open_items, "probes": probes, "cost": cost,
-                "public_link": public, "rate_key": f"ops_digest:{day}"}
+                "public_link": public, "primary": primary, "rate_key": f"ops_digest:{day}"}
 
     def _maybe_daily_digest(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         dc = self._digest_cfg()

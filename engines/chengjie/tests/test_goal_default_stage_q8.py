@@ -232,6 +232,19 @@ def test_pick_proactive_topic_prefers_persona_pool_and_avoids_recent():
         e for _z, e in svc._FALLBACK_TOPICS]
 
 
+def test_pick_proactive_topic_skips_weather_already_answered():
+    inbox = _Inbox()
+    inbox.msgs[CONV] = [{"direction": "in", "text": "weather is crazy here, raining all day", "ts": 1.0}]
+    assert svc._conv_weather_answered(inbox, CONV)
+    persona = {"topics": [
+        "问TA那边今天天气怎么样、平时喜欢晴天还是雨天",
+        "问TA周末一般怎么过",
+    ]}
+    for _ in range(6):
+        t = svc.pick_proactive_topic(CONV, persona, inbox_store=inbox, now=2000.0)
+        assert t and "天气" not in t
+
+
 # ── C：有目标摸底路 must 升级 ───────────────────────────────────────────────────
 
 def test_discovery_goal_probe_escalates_to_must_on_no_new_info(monkeypatch, caplog):

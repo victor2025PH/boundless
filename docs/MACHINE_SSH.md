@@ -33,7 +33,7 @@
   `chat_template_kwargs:{"enable_thinking":false}` 为 0.6s 直答档。契约详情：
   `engines/chengjie/deploy/compute/README.md` §编码模式）
 - 节点：幻颜 `.104:8000` · 通传 STT `.140:7854` · 通译 TTS `.117:7852/7858` · 幻影 GLM-4-Voice `.173:8888/10011`
-- LAN LLM（Ollama 11434）：幻影 `.173`（qwen14b-fallback，智聊兜底+口语化主）· 智拓 `.198`（qwen3:8b，口语化备；2026-08-01 起，ICMP 禁 ping、探活走 `/api/version`）· 通传 `.140`（bge-m3 嵌入/qwen3-vl 视觉/hy-mt 翻译）· 幻声 `.176`（宕机中，修复后回归）
+- LAN LLM：幻影 `.173:8001/v1`（vLLM ``chatx``＝Qwen3-27B AWQ，智聊主链兜底 + 口语化；08-28 起不再用 ollama 14B）· 通传 `.140:11434`（bge-m3 嵌入 / qwen3-vl 视觉）· 幻声 `.176:11434`（qwen3-vl / hy-mt2 / 嵌入备）
 - 拓扑：`engines/avatarhub/cluster_map.json`
 - 调用方式：业务经 Hub HTTP + service token（非 CUDA 直连）
 

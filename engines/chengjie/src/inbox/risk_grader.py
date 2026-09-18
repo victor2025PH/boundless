@@ -31,6 +31,17 @@ money_request（含验证码 / 凭据索要句式）/ scam``（+ ``stop_contact`
   · **任何 keyword-only 命中不得单独把全自动改 L1**：高级必须是「类别 + 句式 / 施压第二信号」，
     ``TRUE_HIGH_REASONS`` 只剩 self_harm / stop_contact / credential_or_payment_request（句式）+
     Q-15 ``adult:pressure`` 标记；原 high 若无这些因子撑着一律降到分级结论。
+
+R88（2026-09-17，老板拍板「规则太严、全是误报」）**默认只记录、按需锁定**：
+  · 三级只表示敏感度（红 / 橙 / 绿），**不再自动决定拦不拦**；所有类别缺省都「继续回复 + 记一笔」
+    （会话标签 ``risk:high`` / ``risk:medium`` + 拦截台账 ``risk_recorded`` + ``[risk]`` 日志）；
+  · 拦截动作（needs_human / hard_stop / freeze）只对**运营显式锁定**的类别执行——
+    ``inbox.risk_grading.locked: [self_harm, stop_contact, …]``（overlay，回复设置页「锁定」开关写入）；
+    可锁的只有本表 ``action ∈ {hard_stop, needs_human, freeze}`` 的六类（:data:`LOCKABLE`），
+    成人走 adult_policy 卡、索要类走人设边界政策、其余本来就不拦；
+  · 未锁定类别命中时把 quick_analyze 的硬停主因改名 ``<reason>_recorded``（``self_harm`` /
+    ``stop_contact`` / ``credential_or_payment_request``），下游 ``hard_stop_reason`` / 人审判定
+    看不到它们 → 档位按 medium 走 L2；影子台账照常记「本会被扣」。不分昼夜 / 时区——全球客户同一规则。
 """
 from __future__ import annotations
 
@@ -44,6 +55,10 @@ logger = logging.getLogger(__name__)
 LEVELS: Tuple[str, ...] = ("low", "medium", "high")
 _RANK = {"low": 1, "medium": 2, "high": 3}
 MEDIUM_TAG = "risk:medium"           #: 中级命中只打这一枚会话标签（不进 needs_human）
+HIGH_TAG = "risk:high"               #: R88：高敏命中但类别**未锁定** → 只打这一枚标签 + 台账（AI 照常回）
+LOCK_CFG_PATH = "inbox.risk_grading.locked"   #: overlay 键：显式锁定的类别 id 列表（缺省空＝全部只记录）
+RECORDED_SUFFIX = "_recorded"        #: 未锁定类别的硬停主因改名后缀（self_harm → self_harm_recorded）
+LEDGER_CODE_RECORDED = "risk_recorded"        #: 拦截台账原因码：敏感话题已记录、未拦（abort_ledger.REASONS）
 REASON_PREFIX = "risk:"              #: 本模块补进 peer_reasons 的细因前缀（risk:<category>）
 PRIVACY_MENTION_REASON = "privacy_mention"   #: 被降为叙述的 quick_analyze ``privacy`` 主因改名，防下游按 privacy 处置
 MONEY_MENTION_REASON = "money_mention"       #: Q-27：quick_analyze ``money`` 单词（无索要句式）降为叙述后的改名，同上
@@ -162,21 +177,104 @@ CATEGORIES: List[Dict[str, Any]] = [
 _CAT_BY_ID: Dict[str, Dict[str, Any]] = {c["id"]: c for c in CATEGORIES}
 _CAT_ORDER: Dict[str, int] = {c["id"]: i for i, c in enumerate(CATEGORIES)}
 OVERRIDABLE: Tuple[str, ...] = tuple(c["id"] for c in CATEGORIES if c.get("overridable"))
+#: R88：会真的让 AI 停下的动作——只有这些类别有「锁定」开关可打；其余动作本来就是继续回复。
+_BLOCKING_ACTIONS = frozenset({"hard_stop", "needs_human", "freeze"})
+LOCKABLE: Tuple[str, ...] = tuple(c["id"] for c in CATEGORIES if c.get("action") in _BLOCKING_ACTIONS)
+#: quick_analyze 硬停主因 → 所属类别（未锁定时改名 ``<reason>_recorded``，让 hard_stop_reason / 人审判定看不到）
+_HARD_REASON_CATEGORY = {"self_harm": "self_harm", "stop_contact": "stop_contact",
+                         "credential_or_payment_request": "money_request"}
 
 
 def category_def(cid: str) -> Dict[str, Any]:
     return dict(_CAT_BY_ID.get(str(cid or ""), {}))
 
 
+# ── R88 锁定（默认只记录）───────────────────────────────────────────────────
+
+def _cfg_dict(cfg: Any) -> Dict[str, Any]:
+    """``cfg`` 可能是 dict / 带 ``.config`` 的 ConfigManager / None（None → 进程全局配置）。绝不抛。"""
+    try:
+        if isinstance(cfg, dict):
+            return cfg
+        inner = getattr(cfg, "config", None)
+        if isinstance(inner, dict):
+            return inner
+        if cfg is None:
+            from src.utils.config_manager import config_manager
+            inner = getattr(config_manager, "config", None)
+            return inner if isinstance(inner, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def normalize_locked(raw: Any) -> List[str]:
+    """``inbox.risk_grading.locked`` 原值（list / 逗号串 / None）→ 去重、只保留 :data:`LOCKABLE`，按表序。"""
+    if isinstance(raw, str):
+        items: Iterable[Any] = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        items = raw
+    else:
+        items = ()
+    seen = set()
+    for it in items:
+        cid = str(it or "").strip().lower()
+        if cid in LOCKABLE and cid not in seen:
+            seen.add(cid)
+    return [c for c in LOCKABLE if c in seen]
+
+
+def locked_categories(cfg: Any = None) -> List[str]:
+    """运营显式锁定（命中就执行拦截动作）的类别。缺省 **空**＝全部只记录、AI 照常回复。绝不抛。"""
+    try:
+        d = _cfg_dict(cfg)
+        sec = d.get("inbox") if isinstance(d.get("inbox"), dict) else {}
+        rg = (sec or {}).get("risk_grading") if isinstance((sec or {}).get("risk_grading"), dict) else {}
+        return normalize_locked((rg or {}).get("locked"))
+    except Exception:
+        return []
+
+
+def is_locked(category: str, cfg: Any = None) -> bool:
+    """该类别是否被锁定（命中要停 AI）。不可锁 / 未知类别 / 空 → False。"""
+    cid = str(category or "").strip().lower()
+    return bool(cid) and cid in LOCKABLE and cid in locked_categories(cfg)
+
+
+def outcome_of(category: str, *, locked: Optional[bool] = None, cfg: Any = None) -> str:
+    """一个类别命中后「AI 会怎么做」的结果码（回复设置页 chip 文案键，不是判定）：
+
+    ``stop``（锁定：AI 停下交给人）/ ``freeze``（锁定的停联：停下并提醒坐席，不回客户）/
+    ``adult``（按成人政策卡）/ ``persona``（继续回复，按人设边界委婉答）/ ``accept``（发来看看）/
+    ``review``（继续回复 + 进人审候选）/ ``record``（继续回复，只记一笔）。
+    """
+    c = _CAT_BY_ID.get(str(category or ""), {})
+    act = str(c.get("action") or "")
+    if not c:
+        return "record"
+    if act in _BLOCKING_ACTIONS:
+        lk = is_locked(c["id"], cfg) if locked is None else bool(locked)
+        if not lk:
+            return "record"
+        return "freeze" if act == "freeze" else "stop"
+    return {"adult_policy": "adult", "persona_policy": "persona", "accept_expect": "accept",
+            "mark_review": "review"}.get(act, "record")
+
+
 def public_table(persona: Any = None, cfg: Any = None) -> List[Dict[str, Any]]:
-    """回复设置页「风控分级」卡数据：类别 / 词表摘要 / 级别 / 动作 / 是否可覆写 / 人设覆写后的有效级别。"""
+    """回复设置页「敏感话题」卡数据：类别 / 词表摘要 / 级别 / 动作 / 是否可覆写 / 人设覆写后的有效级别
+    + R88 ``lockable`` / ``locked`` / ``outcome``。"""
     ov = risk_overrides_of(persona)
+    locked = set(locked_categories(cfg))
     out: List[Dict[str, Any]] = []
     for c in CATEGORIES:
         row = dict(c)
         row["words"] = {k: list(v) for k, v in (c.get("words") or {}).items()}
         row["effective_level"] = ov.get(c["id"], c["level"]) if c.get("overridable") else c["level"]
         row["override"] = ov.get(c["id"], "") if c.get("overridable") else ""
+        row["lockable"] = c["id"] in LOCKABLE
+        row["locked"] = c["id"] in locked
+        row["outcome"] = outcome_of(c["id"], locked=row["locked"])
         out.append(row)
     return out
 
@@ -404,6 +502,23 @@ def classify_reason(reason: Any) -> Tuple[str, str]:
     return "", ""
 
 
+def first_locked_hit(reasons: Iterable[str], cfg: Any = None) -> str:
+    """第一条已锁定的可锁类别。未锁定 / 无命中 → 空串。绝不抛。"""
+    try:
+        for r in reasons or []:
+            key = str(r or "").strip().lower()
+            if not key:
+                continue
+            cat = _HARD_REASON_CATEGORY.get(key, "")
+            if not cat:
+                cat, _ = classify_reason(key)
+            if cat and is_locked(cat, cfg):
+                return cat
+    except Exception:
+        return ""
+    return ""
+
+
 def _downgradable(reasons: Sequence[str], text: str) -> bool:
     """原 high 是否**只**由可降因子撑起：无真高风险主因（``TRUE_HIGH_REASONS``）、无 Q-15 施压标记。
 
@@ -457,19 +572,58 @@ def release_hold_on_low(store: Any, cid: str, *, category: str = "", hits: Any =
         return ""
 
 
-def _tag_medium(store: Any, cid: str) -> bool:
+def _tag_conv(store: Any, cid: str, tag: str) -> bool:
     try:
         if store is None or not cid or not hasattr(store, "get_conv_tags"):
             return False
         tags = list(store.get_conv_tags(cid) or [])
-        if MEDIUM_TAG in tags:
+        if tag in tags:
             return False
-        tags.append(MEDIUM_TAG)
+        tags.append(tag)
         store.set_conv_tags(cid, tags)
         return True
     except Exception:
-        logger.debug("[risk] risk:medium 打标失败（忽略）", exc_info=True)
+        logger.debug("[risk] %s 打标失败（忽略）", tag, exc_info=True)
         return False
+
+
+def _tag_medium(store: Any, cid: str) -> bool:
+    return _tag_conv(store, cid, MEDIUM_TAG)
+
+
+def rename_unlocked_hard_reasons(reasons: Sequence[str], cfg: Any = None) -> Tuple[List[str], List[str]]:
+    """R88：quick_analyze 的硬停主因（self_harm / stop_contact / credential_or_payment_request）所属类别
+    **未锁定** → 改名 ``<reason>_recorded``。返回 ``(新 reasons, 被改名的原主因)``。
+
+    下游 ``autosend_policy.hard_stop_reason`` / ``_downgradable`` 只认原名，改名后：不再硬停、不再撑 high、
+    档位按分级结论走；原主因仍可从 ``_recorded`` 后缀追溯（日志 / 影子台账）。绝不抛。
+    """
+    out: List[str] = []
+    renamed: List[str] = []
+    try:
+        for r in reasons:
+            s = str(r)
+            cat = _HARD_REASON_CATEGORY.get(s)
+            if cat and not is_locked(cat, cfg):
+                out.append(s + RECORDED_SUFFIX)
+                renamed.append(s)
+            else:
+                out.append(s)
+    except Exception:
+        return [str(r) for r in reasons], []
+    return out, renamed
+
+
+def _record_only(store: Any, cid: str, category: str, hits: Sequence[str], *, level: str = "high") -> bool:
+    """R88 未锁定的高敏命中：会话标签 ``risk:high`` + 拦截台账一行 ``risk_recorded``（AI 照常回）。绝不抛。"""
+    tagged = _tag_conv(store, cid, HIGH_TAG if level == "high" else MEDIUM_TAG)
+    try:
+        from src.inbox import abort_ledger as _al
+        _al.record(store, conversation_id=cid, code=LEDGER_CODE_RECORDED, stage="grade",
+                   hit=list(hits or [])[:4], source="risk_grader", reason=str(category or ""))
+    except Exception:
+        logger.debug("[risk] risk_recorded 台账写入失败（忽略）", exc_info=True)
+    return tagged
 
 
 def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_level: str,
@@ -510,8 +664,13 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         level = str(g.get("level") or "low")
         cat = str(g.get("category") or "")
         ghits = [str(h) for h in (g.get("hits") or [])]
+        # R88：未锁定类别的硬停主因改名（grade 已消费过原名；下游 hard_stop_reason / _downgradable 只认原名）
+        reasons, _renamed = rename_unlocked_hard_reasons(reasons, cfg)
+        locked = is_locked(cat, cfg) if cat else False
         info: Dict[str, Any] = {"level": level, "category": cat, "hits": ghits, "action": g.get("action") or "",
-                                "downgraded": False, "from": str(risk_level or "low")}
+                                "downgraded": False, "from": str(risk_level or "low"),
+                                "locked": locked, "outcome": outcome_of(cat, locked=locked) if cat else "record",
+                                "unlocked_reasons": _renamed}
         if isinstance(risk_hits, list):
             for h in ghits:
                 if h not in risk_hits:
@@ -532,12 +691,31 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                 info["hold_released"] = release_hold_on_low(store, cid, category="", hits=list(risk_hits or []), now=now)
             return risk_level, reasons, info
         if level == "high":
-            new = _max_level(cur, "high")
             tag = REASON_PREFIX + cat
             if tag not in reasons:
                 reasons.append(tag)
-            logger.info("[risk] high conv=%s category=%s hits=%s action=%s from=%s",
-                        cid or "-", cat, "|".join(ghits[:4]) or "-", info["action"], cur)
+            if locked or cat not in LOCKABLE:
+                # 锁定（运营要停 AI）或不可锁的高敏（adult:pressure 走成人政策卡）→ 原行为：撑 high、人审 / 硬停
+                new = _max_level(cur, "high")
+                logger.info("[risk] high conv=%s category=%s hits=%s action=%s from=%s locked=%s",
+                            cid or "-", cat, "|".join(ghits[:4]) or "-", info["action"], cur, locked)
+                return new, reasons, info
+            # R88 未锁定：只记录（标签 risk:high + 台账 risk_recorded），档位按 medium 走 L2、AI 照常回。
+            # 原 high 若仍被别的真高因子（adult:pressure / 锁定类别的主因）撑着 → 不降，那是它们的决定。
+            if cur == "high" and _downgradable(reasons, text):
+                new = "medium"
+                info["downgraded"] = True
+                reasons = [PRIVACY_MENTION_REASON if r == "privacy" else (MONEY_MENTION_REASON if r == "money" else r)
+                           for r in reasons]
+            elif cur == "high":
+                new = "high"
+            else:
+                new = "medium"
+            info["recorded"] = True
+            tagged = _record_only(store, cid, cat, ghits, level="high")
+            logger.info("[risk] high conv=%s category=%s hits=%s action=record from=%s risk=%s tagged=%s"
+                        "（未锁定：继续回复，只记录；要停 AI 到回复设置「敏感话题」卡打开该类锁定）",
+                        cid or "-", cat, "|".join(ghits[:4]) or "-", cur, new, tagged)
             return new, reasons, info
         new = cur
         if cur == "high" and _downgradable(reasons, text):
@@ -567,9 +745,11 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
 
 
 __all__ = [
-    "LEVELS", "MEDIUM_TAG", "REASON_PREFIX", "PRIVACY_MENTION_REASON", "MONEY_MENTION_REASON",
-    "TRUE_HIGH_REASONS", "ADULT_PRESSURE_REASON",
-    "CATEGORIES", "OVERRIDABLE", "category_def", "public_table", "normalize_level",
+    "LEVELS", "MEDIUM_TAG", "HIGH_TAG", "REASON_PREFIX", "PRIVACY_MENTION_REASON", "MONEY_MENTION_REASON",
+    "TRUE_HIGH_REASONS", "ADULT_PRESSURE_REASON", "LOCK_CFG_PATH", "RECORDED_SUFFIX", "LEDGER_CODE_RECORDED",
+    "CATEGORIES", "OVERRIDABLE", "LOCKABLE", "category_def", "public_table", "normalize_level",
+    "normalize_locked", "locked_categories", "is_locked", "outcome_of", "first_locked_hit",
+    "rename_unlocked_hard_reasons",
     "risk_overrides_of", "resolve_persona", "grade", "classify_reason", "regrade_inbound",
     "release_hold_on_low",
 ]

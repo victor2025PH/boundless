@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   STUB_CIPHERTEXT, BAD_MAC_DEFAULT, badMacConfig, isBadMacStub, isPeerPlaintext,
   peerSessionJids, maskJid, BadMacTracker, badMacDetailTag,
+  decryptFailIngestFields, DECRYPT_FAIL_PLACEHOLDER,
 } from "../bad-mac-heal.js";
 
 const badMac = (jid, extra = {}) => ({
@@ -30,6 +31,15 @@ test("isBadMacStub: only CIPHERTEXT + Bad MAC text", () => {
   assert.equal(isBadMacStub({ ...badMac("1@s.whatsapp.net"), messageStubType: 1 }), false);
   assert.equal(isBadMacStub(plain("1@s.whatsapp.net")), false);
   assert.equal(isBadMacStub(null), false);
+});
+
+test("decryptFailIngestFields: stub → placeholder + decrypt_fail; plaintext → null", () => {
+  const f = decryptFailIngestFields(badMac("1@s.whatsapp.net"));
+  assert.equal(f.text, DECRYPT_FAIL_PLACEHOLDER);
+  assert.equal(f.decrypt_fail, true);
+  assert.equal(f.backfill, undefined);
+  assert.equal(decryptFailIngestFields(plain("1@s.whatsapp.net")), null);
+  assert.equal(decryptFailIngestFields(null), null);
 });
 
 test("isPeerPlaintext: decrypted, not fromMe, not stub", () => {

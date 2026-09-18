@@ -47,8 +47,29 @@ def test_streak_counts_within_window_and_expires():
     assert g.promise_streak_hint(CK, now=t0 + g.PROMISE_STREAK_WINDOW_SEC + 120) == ""
 
 
-def test_streak_ignores_empty_key():
-    assert g.note_promise_retracted("") == 0 and g.promise_streak("") == 0
+def test_streak_pauses_follow_not_explicit_ask():
+    t0 = time.time()
+    g.note_promise_retracted(CK, now=t0)
+    g.note_promise_retracted(CK, now=t0 + 10)
+    assert g.promise_streak_blocks_follow(CK, g.TRIGGER_COMMITMENT, now=t0 + 11)
+    assert g.promise_streak_blocks_follow(CK, g.TRIGGER_DIRECTIVE, now=t0 + 11)
+    assert not g.promise_streak_blocks_follow(CK, g.TRIGGER_ASK, now=t0 + 11)
+    assert not g.promise_streak_blocks_follow(CK, g.TRIGGER_KEYWORD, now=t0 + 11)
+
+
+def test_streak_survives_reload_from_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DATA_DIR", str(tmp_path))
+    g.reset_promise_streak_for_tests()
+    t0 = time.time()
+    assert g.note_promise_retracted(CK, now=t0) == 1
+    assert g.note_promise_retracted(CK, now=t0 + 8) == 2
+    led = tmp_path / "logs" / "promise_streak_ledger.json"
+    assert led.is_file()
+    with g._PROMISE_LOCK:
+        g._PROMISE_RETRACTS.clear()
+        g._PROMISE_LOADED = False
+    assert g.promise_streak(CK, now=t0 + 9) == 2
+    assert g.promise_streak_blocks_follow(CK, g.TRIGGER_COMMITMENT, now=t0 + 9)
 
 
 # ── B ────────────────────────────────────────────────────────────────────────
@@ -61,6 +82,8 @@ def test_wiring_helpers_and_skill_manager():
     assert i_retract < i_note < h.index('if _pact == "review" or not str(_new_text or "").strip():')
     s = (_ROOT / "src" / "skills" / "skill_manager.py").read_text(encoding="utf-8", errors="ignore")
     assert "promise_streak_hint as _psh" in s
+    ia = (_ROOT / "src" / "inbox" / "image_autosend.py").read_text(encoding="utf-8", errors="ignore")
+    assert "promise_streak_blocks_follow" in ia and "REASON_PROMISE_STREAK" in ia
     assert 'user_context["_media_coherence_hint"] = (\n                        (str(user_context.get("_media_coherence_hint") or "") + "\\n" + _ps_hint).strip())' in s
 
 

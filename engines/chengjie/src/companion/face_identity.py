@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """人脸身份客户端 + 入站接线（#333 EREM2H · 2026-09-17）。
 
-链路（B 线 ``persona_reply`` 的 extra_hint 单一消费口接入，默认关）：
+链路（B 线 ``persona_reply`` 的 extra_hint 单一消费口接入）：
 
-    入站图 → 176 边车 ``/v1/face/embed``（CPU ArcFace 512 维）
+    入站图 → 176 边车 ``/v1/face/embed``（CPU ArcFace 512 维；外网走官网网关同路径）
         → 与 **人设原型**（相册 face_ref + 已启用本人照的均值，JSON 缓存）比
         → 与 **客户本人原型**（visual_memory 已确认 / ≥2 张一致推断自拍）比
         → 与 **已确认关系人** 比
@@ -11,7 +11,7 @@
         → ``visual_memory.record_observation`` 落库（跨轮 / 跨天 / 跨重启）
     文字入站「是我 / that's me / 这是我妹妹」 → 升最近一张带脸观察为 user_confirmed。
 
-配置 ``vision.face_identity``：``enabled``（默认 false）/ ``base_url``（如 http://192.168.0.176:8767）/
+配置 ``vision.face_identity``：``enabled``（未写时：有 LAN ``base_url`` 或托管识图网关即开；显式 false / ``hosted_opt_out`` 关）/ ``base_url``（如 http://192.168.0.176:8767）/
 ``timeout_sec``（8）/ ``min_det_score``（0.5）/ ``persona_proto_max``（6，人设原型最多取几张图）/
 ``confirm_window_sec``（86400，客户确认只作用于这么久之内的最近一张带脸图）。
 
@@ -117,6 +117,19 @@ def reset_stats() -> None:
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
 
+def _tri_bool(val: Any) -> Optional[bool]:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("false", "0", "no", "off"):
+        return False
+    if s in ("true", "1", "yes", "on"):
+        return True
+    return None
+
+
 def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """``vision.face_identity`` 归一（缺省全给）。"""
     v = ((config or {}).get("vision") or {}) if isinstance(config, dict) else {}
@@ -143,8 +156,15 @@ def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         min_det = float(raw.get("min_det_score", 0.5) or 0.5)
     except (TypeError, ValueError):
         min_det = 0.5
+    explicit = _tri_bool(raw.get("enabled")) if "enabled" in raw else None
+    opt_out = bool(_tri_bool(raw.get("hosted_opt_out")) is True)
+    # 干净包不写 enabled：有 LAN 边车或托管网关即开。显式 false / hosted_opt_out 关。
+    if explicit is False or opt_out:
+        on = False
+    else:
+        on = bool(base)
     return {
-        "enabled": bool(raw.get("enabled", False)) and bool(base),
+        "enabled": on,
         "base_url": base,
         "api_key": api_key,
         "hosted": bool(not str(raw.get("base_url") or "").strip() and v.get("_hosted_vision") and base),
@@ -153,6 +173,11 @@ def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "persona_proto_max": int(raw.get("persona_proto_max", 6) or 6),
         "confirm_window_sec": float(raw.get("confirm_window_sec", 86400) or 86400),
     }
+
+
+def face_on(config: Optional[Dict[str, Any]]) -> bool:
+    """接线口用：与 ``face_cfg`` 同一套门禁（托管自动开，不读 yaml 裸 ``enabled``）。"""
+    return bool(face_cfg(config).get("enabled"))
 
 
 # ── HTTP 客户端（stdlib，同步；调用侧 to_thread）───────────────────────────────
@@ -601,6 +626,6 @@ async def annotate_inbound(**kwargs: Any) -> str:
 
 
 __all__ = [
-    "face_cfg", "FaceEmbedClient", "persona_source_images", "persona_prototype", "identify_face",
+    "face_cfg", "face_on", "FaceEmbedClient", "persona_source_images", "persona_prototype", "identify_face",
     "annotate_inbound_sync", "annotate_inbound", "reset_fail_cooldown", "stats", "reset_stats",
 ]

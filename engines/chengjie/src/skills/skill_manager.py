@@ -1405,6 +1405,7 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("known_profile inject skipped", exc_info=True)
             self._inject_self_state(user_context)
+            self._inject_player_gateway(user_context, text)
 
             # 3a3. 用户侧在地化（P2，默认关）：对方当地时间 + 对方那边的节日。
             # 不受 selfie 开关影响（3a2 是 selfie-gated 的），故单独一跳。
@@ -2092,13 +2093,37 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("%s入站上下文补全跳过", log_prefix, exc_info=True)
 
+            # #333 P0-2：入站图先对相册/本会话已发做 sha256。命中 →「这是我之前发的」，
+            # 不跑人脸（避免回传人设照被自拍启发式判成客户）。身份层未开时这条仍生效。
+            try:
+                if not user_context.get("_group_chat_hint"):
+                    from src.ai.conv_route import conv_id_from_context as _own_cid
+                    from src.companion.media_ownership import annotate_hash_ownership as _hash_own
+                    _own_note = _hash_own(
+                        conversation_id=_own_cid(context, user_id_str),
+                        persona_id=str(user_context.get("account_persona_id")
+                                       or context.get("account_persona_id") or ""),
+                        media_type=str(context.get("media_type") or context.get("_media_kind") or ""),
+                        media_ref=str(context.get("media_ref") or context.get("_media_ref") or ""),
+                    )
+                    if _own_note:
+                        _own_prev = str(user_context.get("_topic_switch_hint") or "").strip()
+                        _own_block = f"【图中人物身份】{_own_note}"
+                        user_context["_topic_switch_hint"] = (
+                            f"{_own_prev}\n\n{_own_block}" if _own_prev else _own_block)
+                        user_context["_media_ownership"] = "persona"
+            except Exception:
+                self.logger.debug("%smedia_ownership 跳过", log_prefix, exc_info=True)
+
             # #333 视觉身份层（A 线：TG 原生 / 协议直发；B 线在 persona_reply extra_hint 接）：
             # 客户发的图里是谁 → 一句带外说明独立成段进 _topic_switch_hint（头在 ai_client
-            # 预算保护表里）；文字轮「是我 / 这是我妹妹」同入口升记忆。vision.face_identity
-            # 默认关；HTTP 放线程；任何失败静默，拟稿零阻断。群聊不做（多人脸无归属语义）。
+            # 预算保护表里）；文字轮「是我 / 这是我妹妹」同入口升记忆。门禁用 face_on
+            # （托管识图即开）；HTTP 放线程；任何失败静默，拟稿零阻断。群聊不做。
             try:
                 _fi_cfg = (self.config.config if hasattr(self.config, "config") else {}) or {}
-                if ((((_fi_cfg.get("vision") or {}).get("face_identity") or {}).get("enabled"))
+                from src.companion.face_identity import face_on as _fi_on
+                if (not user_context.get("_media_ownership")
+                        and _fi_on(_fi_cfg)
                         and not user_context.get("_group_chat_hint")):
                     from src.ai.conv_route import conv_id_from_context as _fi_cid
                     from src.companion.face_identity import annotate_inbound as _fi_annotate
@@ -3524,6 +3549,7 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("%s已知画像注入跳过", log_prefix, exc_info=True)
             self._inject_self_state(user_context)
+            self._inject_player_gateway(user_context, text)
 
             # 3b4. 用户侧在地化（P2，默认关，与 A 线 3a3 同口径）。
             self._inject_peer_locale(user_context, user_id, chat_id, platform)
@@ -5433,6 +5459,15 @@ class SkillManager(LoggerMixin):
                     bool(meta.get("degenerate_empty")), reply[:60])
                 if meta.get("degenerate_empty"):
                     return ""
+            if meta.get("system_label_hits"):
+                # 2026-09-12「[我方语音消息]」事故：上下文系统标注被 LLM 照抄进正文。
+                # 源头（normalize_history）已改，这里仍命中＝模型在模仿别的带内标记，
+                # 值得 WARNING 点名（巡检 _check_label_leak 按落库行兜底）。
+                self.logger.warning(
+                    "%s[outbound_text_guard] 剥离系统标签 %r（标签泄漏）出站前=%r",
+                    log_prefix, [h[:40] for h in meta["system_label_hits"][:3]],
+                    reply[:60],
+                )
             if meta.get("monologue_hits"):
                 self.logger.warning(
                     "%s[outbound_text_guard] 拦截内心独白/旁白 %r（B118）",
@@ -8872,6 +8907,15 @@ class SkillManager(LoggerMixin):
         except Exception:
             self.logger.debug("_inject_known_profile failed", exc_info=True)
 
+    def _inject_player_gateway(self, user_context: Dict[str, Any], text: str) -> None:
+        """无界玩家网关：对话里出现手机号/UID 时注入只读后台资料。失败忽略。"""
+        try:
+            from src.integrations.wujie_player import inject_player_block
+            cfg = self.config.config if hasattr(self.config, "config") else {}
+            inject_player_block(user_context, text, cfg)
+        except Exception:
+            self.logger.debug("player_gateway inject skipped", exc_info=True)
+
     def _inject_self_state(self, user_context: Dict[str, Any]) -> None:
         """B52（`_287`）：人设自述近况（要睡了/去健身…）在 TTL 窗内注入衔接指令。
 
@@ -8886,9 +8930,11 @@ class SkillManager(LoggerMixin):
             # 同一注入口，A/B 两线同经此处，ai_client 零改动。
             try:
                 from src.inbox.human_outbound_memory import (
-                    human_media_note, human_said_note,
+                    human_media_note, human_said_note, self_out_note,
                 )
-                _hn = human_said_note(user_context)
+                _hn = "\n".join(
+                    x for x in (human_said_note(user_context), self_out_note(user_context))
+                    if x)
                 # 接力记忆 P0-1：坐席替人设发过的图。selfie 链的「你最近发过的照片」块
                 # （_media_sent_note，_inject_scene_state 先于本方法跑）已含全部条目时
                 # 不重复；selfie 关着（客服场景）→ 这里是唯一注入口。
@@ -12006,6 +12052,11 @@ class SkillManager(LoggerMixin):
         try:
             from src.companion.self_state import record_self_state
             record_self_state(user_context, reply)
+        except Exception:
+            pass
+        try:
+            from src.inbox.human_outbound_memory import record_ai_self_out
+            record_ai_self_out(user_context, reply)
         except Exception:
             pass
         # J-10 二期（#177/#171）：出站承诺账本——「明天给你打电话 / 下次拍给你看」这类

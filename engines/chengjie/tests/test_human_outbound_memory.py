@@ -527,3 +527,17 @@ def test_skill_manager_inject_self_state_consumes_human_said_note():
     assert m, "_inject_self_state 不存在"
     body = m.group(0)
     assert "human_said_note" in body and "_self_state_block" in body
+    assert "self_out_note" in body
+
+
+def test_relation_self_out_extract_and_note():
+    assert hom.extract_relation_self_out("我想当你女朋友呀")
+    assert hom.extract_relation_self_out("I'd like to be your girlfriend")
+    assert hom.extract_relation_self_out("I like you so much")
+    assert hom.extract_relation_self_out("你想当我女朋友吗？") == []
+    ctx = {}
+    assert hom.record_ai_self_out(ctx, "I want to be your girlfriend.") == 1
+    note = hom.self_out_note(ctx)
+    assert "girlfriend" in note.lower()
+    assert "不得否认" in note
+    assert hom.record_ai_self_out(ctx, "I want to be your girlfriend.") == 0  # 去重

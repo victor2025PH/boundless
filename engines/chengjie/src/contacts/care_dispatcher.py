@@ -1494,10 +1494,11 @@ class CareDispatcher:
                            now: Optional[float] = None) -> Dict[str, Any]:
         """J-8 #182「改一改再发」：运营在预览上手改的终稿**直接**送出站队列。
 
-        与派发同一条 ``_send``（deferred 队列 gate / pacing / kill-switch 全享），
-        安静时段同样顺延；成功 → 该 care 行 mark_sent（note=``manual:deferred:<id>``，
-        话术快照留档）+ sent_hook 落触达账本。不经 LLM、不过拟稿守卫（人写的话
-        人负责）。返回 ``{"ok", "reason", "row_id"}``，绝不抛。
+        与派发同一条 ``_send``（deferred 队列 gate / pacing / kill-switch 全享）。
+        安静时段：verbatim ``keep`` 照发（#265，与 ``_dispatch_one`` 同一口径）；
+        ``defer`` / 非原文行仍顺延。成功 → 该 care 行 mark_sent
+        （note=``manual:deferred:<id>``，话术快照留档）+ sent_hook 落触达账本。
+        不经 LLM、不过拟稿守卫（人写的话人负责）。返回 ``{"ok", "reason", "row_id"}``，绝不抛。
         """
         n = float(now if now is not None else time.time())
         sid = int(item.get("id") or 0)
@@ -1511,17 +1512,22 @@ class CareDispatcher:
         if not chat_key or not platform:
             return {"ok": False, "reason": "missing_route"}
         _clock, _ = self._resolve_clock(item)
-        # N-1 C（D-N4 ③）：人工改稿点「发出」是人工时刻——零错峰（此前还加 60–120s
-        # 抖动）；安静时段顺延保留（面板提示语本就写着「安静时段照常顺延」）。
-        defer_until = shift_out_of_quiet_hours(
-            n, start_hour=self._quiet_start, end_hour=self._quiet_end, clock=_clock)
+        _vq = verbatim_quiet_policy(item)
+        # N-1 C：人工改稿点「发出」零错峰。#265 / Q-4：原文 keep 不得再顺延到 08:00；
+        # 选了 defer 的原文、以及自动关怀，仍走安静窗。
+        _skip_quiet = _vq == "keep"
+        defer_until = n
+        if not _skip_quiet:
+            defer_until = shift_out_of_quiet_hours(
+                n, start_hour=self._quiet_start, end_hour=self._quiet_end, clock=_clock)
         try:
             row_id = await self._send(
                 platform, account_id, chat_key, body, defer_until,
                 "care:manual", self._staleness,
                 {"care": True, "care_id": sid, "contact_key": contact_key,
                  "topic": str(item.get("topic") or ""), "crisis_care": False,
-                 "manual_rewrite": True},
+                 "manual_rewrite": True, "quiet_policy": _vq or "",
+                 "ignore_quiet": bool(_skip_quiet)},
             )
         except Exception:
             logger.warning("care deliver_text 失败 id=%s", sid, exc_info=True)

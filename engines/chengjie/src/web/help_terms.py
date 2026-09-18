@@ -1261,6 +1261,14 @@ HELP_TERMS: dict = {
         "usage": "点「展开全文」看完整识别；对图片点「问这张图」可就画面追问",
         "usage_en": "Click expand for the full text; use \"Ask about this image\" to probe the picture"
     },
+    "face_identity": {
+        "zh": "图中是谁",
+        "en": "Who is in the photo",
+        "desc": "客户发来带人脸的照片时，系统会比对人设相册、客户本人和已确认的关系人，给拟稿一句内部说明（这是 TA 本人 / 不要猜是谁、可以问）。坐席不用开开关：外网走官网网关，内网可直连边车。推断只作参考，客户亲口说「是我 / 这是我妹妹」才记成事实。关：config 里 vision.face_identity.enabled: false。",
+        "desc_en": "When a customer sends a photo with a face, the AI compares persona album, confirmed self, and known relations, then adds one internal note for drafting (this is them / don't guess, ask). No toggle for operators: hosted installs use the site gateway; LAN can talk to the sidecar. Inferences stay observations until they say that's me / this is my sister. Off: vision.face_identity.enabled: false.",
+        "usage": "不用设置。对方发自拍或合影后看拟稿是否认人；对方说「是我」后下次同脸会按本人处理。问小智「图中是谁怎么用」。",
+        "usage_en": "No setting. After a selfie or group photo, check whether the draft recognizes the person; after they say that's me, the same face is treated as self next time."
+    },
     "voice_fallback_note": {
         "zh": "标准音色回落",
         "en": "Standard-voice fallback",
@@ -1488,10 +1496,10 @@ HELP_TERMS: dict = {
     "composer_model_mode": {
         "zh": "会话模型与模式",
         "en": "Per-thread model and mode",
-        "desc": "输入框上方两个等宽按钮：「模型」选本会话用谁答（实例主链 / 已配置的各厂商档 / 本机私有），只换端点、规则照常；「模式」选按什么规矩答（标准 / 无限制，以及上下文深度、力度、思考）。无限制要本机私有模型在线才可用。",
-        "desc_en": "Above the composer are two equal buttons. Model picks who answers this thread (instance default / configured vendor profiles / local private) and only changes the endpoint. Mode picks the rules (Standard / Unrestricted, plus context depth, effort, thinking). Unrestricted needs the local private model online.",
-        "usage": "打开会话 → 输入框上方点「模型」选端点，点「模式」选标准或无限制、再调上下文深度。保存后应有提示。",
-        "usage_en": "Open a thread → above the composer, Model picks the endpoint and Mode picks Standard or Unrestricted plus context depth. A toast confirms the save."
+        "desc": "输入框上方两个等宽按钮。「模型」选谁来答：云厂商＝标准模式（规则全开）；ChatX聊天模型＝无限制（规则让路）。「模式」可再调上下文深度、力度、思考，或从无限制改回标准。密钥在侧栏「模型与密钥」，登录即可改。",
+        "desc_en": "Above the composer are two equal buttons. Model picks who answers: a cloud vendor = Standard (all rules on); ChatX chat model = Unrestricted (rules step aside). Mode still adjusts context depth, effort and thinking, or switches Unrestricted back to Standard. Keys live under Models & keys in the sidebar — sign in to edit.",
+        "usage": "打开会话 → 输入框上方点「模型」选 ChatX聊天模型或云厂商；点「模式」调上下文深度。保存后应有提示。",
+        "usage_en": "Open a thread → above the composer, Model picks ChatX chat model or a cloud vendor; Mode adjusts context depth. A toast confirms the save."
     },
     "image_send_gate": {
         "zh": "跟图与要图意图闸",
@@ -1535,12 +1543,12 @@ HELP_TERMS: dict = {
     },
     # ── 1.0.87（R87：无限制离线回退 / 配文语言 / 生成图归属 / 拦截人话 / 语音语种旁注）───
     "route_offline_fallback": {
-        "zh": "本机模型离线自动回标准档",
-        "en": "Local model offline falls back to standard",
-        "desc": "会话选了「无限制」（本机私有模型）而端点连不上时，不再静默不回：这一轮按标准档（规则全开、走主链）代答，会话头出黄条「本机模型离线 · 已按标准档回复」+「切回标准」；模式菜单里离线项淡显带原因。端点恢复出话即自动回到无限制。",
-        "desc_en": "If a chat is on Unrestricted (local private model) and the endpoint is unreachable, the AI no longer goes silent: it answers on the standard profile (all rules on, main chain), the header shows Local model offline · answered on standard + Switch back to standard, and the offline option is dimmed in the mode menu. It returns to Unrestricted once the endpoint responds again.",
-        "usage": "会话头黄条 → 点「切回标准」永久切回；不点则端点恢复后自动回无限制。全自动不回时先看 AI 体检里的「本机模型离线」。",
-        "usage_en": "Header band → tap Switch back to standard to make it permanent; otherwise it resumes Unrestricted when the endpoint is back. If auto-reply is silent, check Local model offline in AI diagnosis first."
+        "zh": "ChatX聊天模型离线自动回标准档",
+        "en": "ChatX chat model offline falls back to standard",
+        "desc": "会话选了「无限制」（ChatX聊天模型）而端点连不上时，不再静默不回：这一轮按标准档（规则全开、走主链）代答，会话头出黄条「ChatX聊天模型离线 · 已按标准档回复」+「切回标准」；模式菜单里离线项淡显带原因。端点恢复出话即自动回到无限制。",
+        "desc_en": "If a chat is on Unrestricted (ChatX chat model) and the endpoint is unreachable, the AI no longer goes silent: it answers on the standard profile (all rules on, main chain), the header shows ChatX chat model offline · answered on standard + Switch back to standard, and the offline option is dimmed in the mode menu. It returns to Unrestricted once the endpoint responds again.",
+        "usage": "会话头黄条 → 点「切回标准」永久切回；不点则端点恢复后自动回无限制。全自动不回时先看 AI 体检里的「ChatX聊天模型离线」。",
+        "usage_en": "Header band → tap Switch back to standard to make it permanent; otherwise it resumes Unrestricted when the endpoint is back. If auto-reply is silent, check ChatX chat model offline in AI diagnosis first."
     },
     "caption_lang_pin": {
         "zh": "配图文案跟会话语言",

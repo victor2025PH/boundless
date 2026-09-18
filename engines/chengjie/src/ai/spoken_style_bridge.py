@@ -268,7 +268,8 @@ _REWRITE_UNCONFIGURED_LOGGED = False
 def rewrite_backend_available(config) -> bool:
     """L4 改写后端是否可用（L-6 B，2026-09-06）。
 
-    包内缺省后端是办公室内网 ``192.168.0.173``（qwen14b，同 LAN 零 API 费）——桌面客户机
+    包内缺省后端是办公室内网 ``192.168.0.173:8001``（vLLM ``chatx`` / Qwen3-27B AWQ，
+    同 LAN 零 API 费）——桌面客户机
     上永远探不通，开了 ``rewrite`` 就等于每条回复白吃一次超时再直通。桌面态必须显式
     配 ``ai.spoken_style.rewrite_llm`` 才算「已配置」；未配置 → False（调用方原句直通），
     每进程只提示一次。非桌面部署行为不变。
@@ -292,7 +293,7 @@ async def rewrite_reply(config, reply: str, role: str = "", *, context=None) -> 
 
     前提（都写在 config 注释里）：ai.spoken_style.rewrite: true，且 role 在包内
     data/speech_prints.json 有说话指纹（改写提示按指纹分流，无指纹不开——文本×
-    声学要配套是包侧拍板）。改写后端缺省 192.168.0.173 qwen14b（同 LAN 零 API 费），
+    声学要配套是包侧拍板）。改写后端缺省 192.168.0.173:8001 chatx（Qwen3-27B AWQ，同 LAN 零 API 费），
     rewrite_llm / rewrite_model 可换成任何 OpenAI 兼容端点。
     非中文主体回复直接跳过（改写器是中文口语手艺）。
     ``role`` 同 system_block：会话人设口称名优先，缺省回落配置静态 role。

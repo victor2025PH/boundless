@@ -1020,6 +1020,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/ai-studio": "ai_studio",
         "/membership": "membership",
         "/reply-settings": "reply_settings",
+        "/model-keys": "model_keys",
         "/personal-settings": "personal_settings",
         # 账号资产中心（账号资产保全 P1，2026-08-19）
         "/workspace/assets": "asset_center",

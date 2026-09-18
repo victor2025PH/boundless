@@ -91,6 +91,54 @@ def _cost_summary(tok: str) -> Dict[str, Any]:
     return s
 
 
+def _primary_status(tok: str) -> Dict[str, Any]:
+    """主链**当前路由**（不是账本厂商）。首选单一口径 ``/api/setup/ai-primary/summary``
+    （档位/锁/主链一句话/降级链，2026-09-17 起所有出口共用）；老引擎没有该接口时回落
+    ``/api/setup/cloud-credentials`` 的 primary 段。成本摘要的 provider 永远是云端计费
+    厂商，主链切 local 后通报曾写「主链厂商 deepseek」——运维群据此以为主链还在云端。
+    两个接口都打不开返回空 dict，通报退回只报计费厂商。"""
+    try:
+        s = _api("/api/setup/ai-primary/summary", tok)
+        if isinstance(s, dict) and s.get("ok") and s.get("primary_text"):
+            return s
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        cc = _api("/api/setup/cloud-credentials", tok)
+        p = cc.get("primary") if isinstance(cc, dict) else None
+        return p if isinstance(p, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def primary_line(primary: Dict[str, Any], summary: Dict[str, Any]) -> str:
+    """通报「主链」一行（纯函数）。优先直接用单一口径的 ``primary_text``/``chain_text``；
+    老形状（cloud-credentials.primary）本地档写本地端点/模型并把云端厂商降为「回落/计费」；
+    云档写云端厂商；拿不到路由信息只写计费厂商（并标明口径）。"""
+    if primary.get("primary_text"):
+        eff = str(primary.get("effective") or "").lower()
+        ready = (primary.get("local") or {}).get("ready") if isinstance(primary.get("local"), dict) else None
+        if "local_ready" in primary:
+            ready = primary.get("local_ready")
+        warn = "" if (ready is None or eff == "cloud") else ("" if ready else " ⚠️ 本地端点不可达")
+        chain = str(primary.get("chain_text") or "").strip()
+        return (f"• 主链：{html.escape(str(primary['primary_text']))}{warn}"
+                + (f" · 降级链：{html.escape(chain)}" if chain else ""))
+    prov = html.escape(str(summary.get("provider") or "—"))
+    eff = str(primary.get("effective") or "").strip().lower()
+    lock = str(primary.get("lock") or "").strip().lower()
+    lock_txt = f"锁 {lock}" if lock else "未设锁"
+    if eff in ("local", "local_only"):
+        model = html.escape(str(primary.get("local_model") or "本地模型"))
+        ready = primary.get("local_ready")
+        ready_txt = "" if ready is None else ("，端点可达" if ready else "，⚠️ 端点不可达")
+        tail = ("不回落云端（隐私档）" if eff == "local_only" else f"云端回落/计费厂商 {prov}")
+        return f"• 主链：本地 vLLM {model}（档位 {eff}，{lock_txt}{ready_txt}）· {tail}"
+    if eff == "cloud":
+        return f"• 主链：云端 {prov}（档位 cloud，{lock_txt}）"
+    return f"• 主链：计费厂商 {prov}（路由档位未取到，按账本口径）"
+
+
 def load_release_notes(path: Optional[Path]) -> List[str]:
     """「本次上线」要点：一行一条，# 开头为注释；文件不存在 → 空（该段整段不出现）。"""
     p = path or RELEASE_NOTES_DEFAULT
@@ -217,13 +265,17 @@ def probe_status_text(state_path: Optional[Path] = None) -> str:
 
 def build_ops_message(tok: str, summary: Dict[str, Any], *, notes: Optional[List[str]] = None,
                       open_items: Optional[List[Dict[str, Any]]] = None,
-                      probe_txt: Optional[str] = None, now: Optional[float] = None) -> str:
-    """运维通报：本次上线（有才出现）→ 当前状态 → 仍未处理 → 需要管理员做（按数据推导）。"""
+                      probe_txt: Optional[str] = None, now: Optional[float] = None,
+                      primary: Optional[Dict[str, Any]] = None) -> str:
+    """运维通报：本次上线（有才出现）→ 当前状态 → 仍未处理 → 需要管理员做（按数据推导）。
+
+    ``primary``＝主链当前路由（见 ``_primary_status``）；None 时现读接口。"""
     ts = float(now if now is not None else time.time())
     now_txt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
     probe_txt = probe_status_text() if probe_txt is None else probe_txt
     notes = load_release_notes(None) if notes is None else notes
     open_items = load_open_items(now=ts) if open_items is None else open_items
+    primary = _primary_status(tok) if primary is None else primary
     cost_ok = bool(summary.get("available"))
     budget = summary.get("budget") or {}
     lines = [
@@ -238,12 +290,14 @@ def build_ops_message(tok: str, summary: Dict[str, Any], *, notes: Optional[List
     lines.append("<b>当前状态</b>")
     lines.append(f"• 真活探针：{html.escape(probe_txt)}")
     if cost_ok:
+        lines.append(primary_line(primary, summary))
         lines.append(
-            f"• 主链厂商：{html.escape(str(summary.get('provider') or '—'))} · "
-            f"价格表：{'已配置' if summary.get('pricing_configured') else '未配置'}")
-        lines.append(f"• 成本账本：今日 {(summary.get('today') or {}).get('calls', 0)} 次云端调用已入账"
-                     + (f"，日预算 ¥{_f(budget.get('daily'))}" if budget.get("daily") else ""))
+            f"• 云端价格表：{'已配置' if summary.get('pricing_configured') else '未配置'} · "
+            f"成本账本：今日 {(summary.get('today') or {}).get('calls', 0)} 次云端调用已入账"
+            + (f"，日预算 ¥{_f(budget.get('daily'))}" if budget.get("daily") else ""))
     else:
+        if primary:
+            lines.append(primary_line(primary, summary))
         lines.append(f"• 成本账本：⚠️ {html.escape(str(summary.get('error') or '不可用'))}")
     lines.append(SEP)
     if open_items:
@@ -317,7 +371,8 @@ def build_cost_message(summary: Dict[str, Any]) -> str:
     day = t.get("day", "")
     lines = [
         f"💴 <b>AI 花费日报 · {day}</b>",
-        f"<i>厂商：{html.escape(str(summary.get('provider') or ''))} · 币种 CNY · 内部按 token 估算</i>",
+        f"<i>云端计费厂商：{html.escape(str(summary.get('provider') or ''))} · 币种 CNY · 内部按 token 估算"
+        "（本地 vLLM 调用不计费、不在此表）</i>",
         SEP,
         f"<b>今天已花</b>　{cur}{_f(t.get('cost'))}　（{t.get('calls', 0)} 次调用，日预算 {cur}{_f(dbud)} 已用 {used_pct}）",
         f"<b>昨天</b>　　　{cur}{_f(y.get('cost'))}" + (f"　账单 {cur}{_f(y.get('truth'))}" if y.get("truth") is not None else ""),
@@ -364,7 +419,7 @@ def render_cost_card(summary: Dict[str, Any]) -> bytes:
     fig = plt.figure(figsize=(9, 6.2), dpi=160, facecolor="#0f172a")
     gs = fig.add_gridspec(3, 4, height_ratios=[1.1, 1.3, 1.9], hspace=0.55, wspace=0.35,
                           left=0.06, right=0.97, top=0.9, bottom=0.1)
-    fig.text(0.06, 0.95, f"AI 花费日报 · {t.get('day', '')} · {summary.get('provider', '')}",
+    fig.text(0.06, 0.95, f"AI 花费日报 · {t.get('day', '')} · 云端计费 {summary.get('provider', '')}",
              color="#e2e8f0", fontsize=15, fontweight="bold", va="center")
 
     def kpi(col: int, big: str, small: str, color: str = "#38bdf8") -> None:

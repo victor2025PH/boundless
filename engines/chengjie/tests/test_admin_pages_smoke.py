@@ -51,3 +51,9 @@ def test_diff_page(auth_client):
 def test_developer_page(auth_client):
     r = auth_client.get("/developer")
     assert r.status_code == 200
+
+
+def test_model_keys_page(auth_client):
+    r = auth_client.get("/model-keys")
+    assert r.status_code == 200
+    assert 'id="dvmr"' in r.text

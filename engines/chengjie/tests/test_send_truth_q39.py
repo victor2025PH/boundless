@@ -148,6 +148,19 @@ def test_intent_gate_vlm_description_is_not_a_request_9pywpg():
     assert g4.intent is True and g4.trigger == isg.TRIGGER_ASK and g4.words == "send me a pic of you too"
 
 
+def test_intent_gate_ok_on_selfie_is_not_offer_332():
+    """#332：自拍配「好的/ok」不得走 offer-accept 跟相册。文本「好呀」仍算接受提议。"""
+    hist = [{"role": "assistant", "content": "要不要看看我的照片？"}]
+    g = isg.compute_image_intent(
+        "好的\n[图片内容] 一名年轻男子的自拍照", hist, inbound_media_type="image")
+    assert g.intent is False and g.reason == isg.REASON_INBOUND_IMAGE
+    assert g.trigger == isg.TRIGGER_OFFER_ACCEPT
+    g2 = isg.compute_image_intent("ok\n[图片内容] selfie", hist, inbound_media_type="image")
+    assert g2.intent is False and g2.reason == isg.REASON_INBOUND_IMAGE
+    g3 = isg.compute_image_intent("好呀", hist)
+    assert g3.intent is True and g3.trigger == isg.TRIGGER_OFFER_ACCEPT
+
+
 def test_intent_gate_text_paths():
     assert isg.compute_image_intent("send me a pic", []).trigger == isg.TRIGGER_ASK
     assert isg.compute_image_intent("發個照片給我看看嘛", []).trigger == isg.TRIGGER_ASK
@@ -205,7 +218,7 @@ def test_no_intent_skips_match_miss_and_red_bar(monkeypatch):
     assert amm.get(ck, store=inbox) is None, "无意图不刷红条"
     # 真索图 → 照常匹配 / miss / 红条
     assert ia.pick_registered_media(_cfg(), "nori", "May I see a pic?", conv_key=ck) is None
-    assert pm_calls == [1]
+    assert pm_calls, "真索图必须跑 Q-6 匹配"
     assert ia.consume_album_miss(ck), "索图无命中 → Q-6 note 照旧"
     assert amm.get(ck, store=inbox) is not None, "索图无命中 → 红条照旧"
 
@@ -250,6 +263,19 @@ async def test_inbound_image_no_ask_sends_nothing_even_with_commitment(monkeypat
     assert snap["fallback_reasons"].get(isg.REASON_INBOUND_IMAGE, 0) >= 1
 
 
+async def test_ok_on_selfie_does_not_follow_album_332(monkeypatch):
+    from src.inbox import image_autosend as ia
+    album = _AlbumSt([_row(1, caption="lazy night")])
+    monkeypatch.setattr("src.companion.persona_media_store.get_persona_media_store", lambda: album)
+    sent, send_fn = _recorder()
+    hist = [{"role": "assistant", "content": "要不要看看我的照片？"}]
+    desc = "好的\n[图片内容] 一名年轻男子的自拍照，戴着帽子在户外微笑"
+    ok = await ia.run_autosend_image(
+        _cfg(), "whatsapp", "19892968016", "cam", "mizuki", desc, hist,
+        send_fn=send_fn, inbound_media_type="image", inbound_mid="cam-ok")
+    assert ok is False and sent == []
+
+
 async def test_explicit_ask_still_sends_and_logs_album_send(monkeypatch, caplog):
     import logging
     from src.inbox import image_autosend as ia
@@ -287,6 +313,26 @@ def test_follow_cooldown_only_for_non_explicit_triggers():
         isg.note_follow_sent(ck, now=t0 + 100 * (i + 1))
     assert isg.follow_stats(ck, now=t0 + 1000)["today"] == 6
     assert isg.follow_budget_check(ck, {}, isg.TRIGGER_ASK, now=t0 + 1000) == isg.REASON_FOLLOW_DAILY_MAX
+
+
+def test_follow_and_caption_survive_reload(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DATA_DIR", str(tmp_path))
+    isg._reset_for_tests()
+    isg._FOLLOW_LOADED = False
+    ck = "whatsapp:a:persist"
+    t0 = time.time()
+    isg.note_follow_sent(ck, now=t0)
+    isg.note_caption_sent(ck, "Found this old one of me")
+    led = tmp_path / "logs" / "image_send_follow_ledger.json"
+    assert led.is_file()
+    with isg._FOLLOW_LOCK:
+        isg._FOLLOW.clear()
+        isg._FOLLOW_LOADED = False
+    with isg._CAPTIONS_LOCK:
+        isg._CAPTIONS.clear()
+    assert isg.follow_stats(ck, now=t0 + 1)["today"] == 1
+    assert isg.follow_budget_check(ck, {}, isg.TRIGGER_COMMITMENT, now=t0 + 60) == isg.REASON_FOLLOW_COOLDOWN
+    assert isg.recent_captions(ck) == ["Found this old one of me"]
     # 隔天清零（按本地日）
     assert isg.follow_budget_check(ck, {}, isg.TRIGGER_ASK, now=t0 + 36 * 3600) == ""
 

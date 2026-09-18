@@ -9,6 +9,8 @@
 2. 逐行分类：**良性噪声**（已知、有兜底、不用管）vs **真问题**（会影响收发/崩溃/
    会话失效）。良性清单与真问题规则见 ``BENIGN`` / ``REAL``。
 3. 去重：状态文件按「问题指纹」记已报过的项（默认 24h 窗），只对**新出现**的真问题告警。
+   无时间戳的 Traceback 续行继承上一行 ts（否则绕过增量 floor，每天幽灵重报）；
+   ping 不通或日志 mtime 过旧时改报「坐席离线」，不再逐行当崩溃。
 4. 投递：把「本轮新真问题 + 健康摘要」经 ``@tgzkw_bot`` 发到**运维群**（tg-ywqz）；
    bot 不可用时回落本机智聊实例 ``POST /api/unified-inbox/send``，account_id=8244899900
    （@Sousaun 本人）chat_key='me'（发到该账号自己的「收藏消息」）。
@@ -138,6 +140,10 @@ REAL: List[Tuple[str, str, str]] = [
 _ERR_LINE = re.compile(r"\[(ERROR|WARNING|CRITICAL)\]|Traceback|Exception in ASGI|not iterable")
 _TS = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 
+# 坐席 ping 不通 / 日志长期不写 → 报「离线」而不是把旧 Traceback 当新崩溃
+# （2026-09-16：198/104/173 自 09-13 起 ping 不通，每天 10:07 重报幽灵 Traceback）。
+OFFLINE_AFTER_HOURS = 6.0
+
 
 def _remote_ps(alias: str, script: str, timeout: int = 40) -> str:
     """在远端跑 PowerShell（EncodedCommand，防引号/GBK 坑），返回 stdout。"""
@@ -202,6 +208,66 @@ def line_ts(line: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def assign_line_timestamps(lines: List[str]) -> List[Tuple[Optional[str], str]]:
+    """给每行一个有效时间戳：自身有则用，没有则继承上一条有戳行的 ts。
+
+    Traceback 续行 / ``Traceback (most recent call last):`` 本身通常无 ``[ts]``，
+    旧逻辑 ``ts is None`` 直接绕过 floor → 同一段堆栈每 15 分钟当新问题。
+    """
+    last: Optional[str] = None
+    out: List[Tuple[Optional[str], str]] = []
+    for line in lines:
+        ts = line_ts(line)
+        if ts:
+            last = ts
+        out.append((ts or last, line))
+    return out
+
+
+def parse_mtime(mtime: str) -> Optional[datetime]:
+    """解析远端 ``Get-Item.LastWriteTime.ToString("s")``（``2026-09-13T14:52:00``）。"""
+    s = str(mtime or "").strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def seat_offline_reason(
+    seat: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+    offline_after_h: float = OFFLINE_AFTER_HOURS,
+) -> Optional[str]:
+    """SSH 通但后端未跑：返回人话原因；在线 / SSH 失败 → None。
+
+    判据：``ping`` 解析不出 version（``/api/desktop/ping`` 不通），或日志 mtime
+    超过 ``offline_after_h`` 小时未更新。两者满足其一即可——ping 空是「进程没了」，
+    mtime 陈旧是「进程假活但不写日志」。
+    """
+    if not seat.get("ok"):
+        return None
+    n = now or datetime.now()
+    ver = str(seat.get("version") or "").strip()
+    mt = parse_mtime(str(seat.get("mtime") or ""))
+    stale = False
+    age_h = 0.0
+    if mt is not None:
+        age_h = max(0.0, (n - mt).total_seconds() / 3600.0)
+        stale = age_h >= float(offline_after_h)
+    if not ver and stale:
+        return (f"坐席后端离线/未运行（ping 不通，日志已 {age_h:.0f}h 未更新）")
+    if not ver:
+        return "坐席后端离线/未运行（ping 不通）"
+    if stale:
+        return (f"坐席后端疑似停摆（ping 有响应，但日志已 {age_h:.0f}h 未更新）")
+    return None
+
+
 def classify(line: str) -> Optional[Tuple[str, str, str]]:
     """返回 (kind, level, why)；benign→('benign','info',why)；real→('real',level,why)；
     未命中任何真问题规则、且不是良性、但是 ERROR → 归 ('real','warn','未分类 ERROR')。"""
@@ -233,6 +299,7 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
     now_alerted = dict(state.get("alerted", {}))
     cutoff = time.time() - 24 * 3600  # 指纹 24h 过期
     now_alerted = {k: v for k, v in now_alerted.items() if v > cutoff}
+    now_dt = datetime.now()
 
     for name, alias in SEATS.items():
         seat = pull_seat(alias)
@@ -243,28 +310,42 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
         seat_real: List[Dict[str, str]] = []
         seat_benign = 0
         max_ts = last_seen
-        for line in seat.get("lines", []):
-            ts = line_ts(line)
-            if ts and floor and ts <= floor:
-                continue
-            if ts and (not max_ts or ts > max_ts):
-                max_ts = ts
-            c = classify(line)
-            if not c:
-                continue
-            kind, level, why = c
-            if kind == "benign":
-                seat_benign += 1
-                report["benign_counts"][why] = report["benign_counts"].get(why, 0) + 1
-                continue
-            sig = signature(alias, why, line)
-            item = {"seat": name, "level": level, "why": why,
-                    "ts": ts or "", "line": line.strip()[:300], "sig": sig}
+
+        offline_why = seat_offline_reason(seat, now=now_dt)
+        seat["offline"] = bool(offline_why)
+        if offline_why:
+            # 离线本身是真问题；旧日志里的 Traceback 不再当「新崩溃」刷屏
+            sig = signature(alias, offline_why, f"offline|{seat.get('mtime') or ''}|{seat.get('version') or ''}")
+            item = {"seat": name, "level": "warn", "why": offline_why,
+                    "ts": seat.get("mtime") or "", "line": offline_why, "sig": sig}
             report["all_real"].append(item)
             seat_real.append(item)
             if sig not in now_alerted:
                 report["new_real"].append(item)
                 now_alerted[sig] = time.time()
+        else:
+            for eff_ts, line in assign_line_timestamps(seat.get("lines", [])):
+                if eff_ts and floor and eff_ts <= floor:
+                    continue
+                if eff_ts and (not max_ts or eff_ts > max_ts):
+                    max_ts = eff_ts
+                c = classify(line)
+                if not c:
+                    continue
+                kind, level, why = c
+                if kind == "benign":
+                    seat_benign += 1
+                    report["benign_counts"][why] = report["benign_counts"].get(why, 0) + 1
+                    continue
+                sig = signature(alias, why, line)
+                item = {"seat": name, "level": level, "why": why,
+                        "ts": eff_ts or "", "line": line.strip()[:300], "sig": sig}
+                report["all_real"].append(item)
+                seat_real.append(item)
+                if sig not in now_alerted:
+                    report["new_real"].append(item)
+                    now_alerted[sig] = time.time()
+
         seat["real_count"] = len(seat_real)
         seat["benign_count"] = seat_benign
         seat["max_ts"] = max_ts
@@ -290,8 +371,11 @@ def render_report(report: Dict[str, Any], baseline: bool) -> str:
         ver = seat.get("version") or "?"
         rc = seat.get("real_count", 0)
         bc = seat.get("benign_count", 0)
-        flag = "🟢" if rc == 0 else ("🔴" if any(
-            i["level"] == "critical" and i["seat"] == seat["name"] for i in report["all_real"]) else "🟡")
+        if seat.get("offline"):
+            flag = "⚫"
+        else:
+            flag = "🟢" if rc == 0 else ("🔴" if any(
+                i["level"] == "critical" and i["seat"] == seat["name"] for i in report["all_real"]) else "🟡")
         lines.append(f"{flag} {seat['name']}  {ver}  新真问题 {rc} · 良性噪声 {bc}")
 
     new = report["new_real"]

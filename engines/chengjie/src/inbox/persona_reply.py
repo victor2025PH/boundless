@@ -998,14 +998,32 @@ async def _generate_persona_reply_impl(
     except Exception:
         logger.debug("[persona_reply] media_form_note 跳过", exc_info=True)
 
-    # #333 视觉身份层（vision.face_identity，默认关）：客户发的图里是谁——人脸嵌入比人设原型 /
+    try:
+        from src.companion.media_ownership import annotate_hash_ownership as _hash_own
+        _own = _hash_own(
+            conversation_id=str(conversation_id or ""),
+            persona_id=str(persona_id or ""),
+            media_type=str(media_type or ""),
+            media_ref=str(media_ref or ""),
+        )
+        if _own:
+            _own_block = f"【图中人物身份】{_own}"
+            _time_hint = f"{_time_hint}\n\n{_own_block}" if _time_hint else _own_block
+    except Exception:
+        logger.debug("[persona_reply] media_ownership 跳过", exc_info=True)
+        _own = ""
+
+    # #333 视觉身份层（vision.face_identity）：客户发的图里是谁——人脸嵌入比人设原型 /
     # 客户本人原型 / 已确认关系人 → 一句带外说明（「这是 TA 本人」「不要猜是谁，可以问」），
     # 同走 extra_hint 单一消费口；文字轮「是我 / 这是我妹妹」在同一入口升记忆。服务不可达 /
-    # 无脸 / 未启用 → 空串零成本，绝不阻断拟稿。
+    # 无脸 / 未启用 → 空串零成本，绝不阻断拟稿。字节指纹已命中「我方照片」时跳过，
+    # 避免自拍启发式把回传的人设照判成客户本人。门禁用 face_on（托管识图即开，不读裸 enabled）。
     try:
         _cm_fi = getattr(state, "config_manager", None)
         _cfg_fi = getattr(_cm_fi, "config", None) or {}
-        if ((((_cfg_fi.get("vision") or {}).get("face_identity") or {}).get("enabled"))
+        from src.companion.face_identity import face_on as _fi_on
+        if (not _own
+                and _fi_on(_cfg_fi)
                 and str(conversation_id or "").strip()):
             from src.companion.face_identity import annotate_inbound as _fi_annotate
             _fi_note = await _fi_annotate(

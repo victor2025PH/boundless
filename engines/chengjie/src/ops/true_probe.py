@@ -208,7 +208,10 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             if _eng:
                 body["tts_engine"] = _eng
             specs.append({
-                "domain": "tts", "kind": "hub_tts",
+                # 2026-09-16：与 minicpm 拆成 tts_hub / tts_index——此前同 domain="tts"
+                # 时 strike 按域键存，第二条 ok 会把第一条连败清零（hub 合成失败被掩盖）。
+                # 拆分口径对齐 vision / vision_backup*。
+                "domain": "tts_hub", "kind": "hub_tts",
                 "url": str(hf.get("base_url")).rstrip("/") + "/api/tts_only",
                 "json": body, "timeout": _tts_probe_timeout(hf),
                 # 引擎归属判据（2026-08-22）：探针**刻意要 wav**——采样率是引擎身份证，
@@ -217,7 +220,7 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "engine": _eng,
             })
 
-    # ── tts：智聊专属 IndexTTS-2 节点真合成（minicpm_clone /v1/tts/clone）──────
+    # ── tts_index：智聊专属 IndexTTS-2 节点真合成（minicpm_clone /v1/tts/clone）──
     # 2026-08-29 补：上面那个分支闸在 `hub_fish.enabled` 上，而智聊的语音主力已迁到
     # 自建 104:7865（老板指令「所有音色都要 IndexTTS-2」+「不用 176 角色库」）——
     # hub_fish 一关，tts 域**整域从探针消失**，恰恰是最不该没有监控的那条链：
@@ -232,7 +235,7 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     _mc_base = str(mc.get("base_url") or "").strip()
     if mc.get("enabled") and _mc_base and not ASR_FIXTURE.is_file():
         logger.warning(
-            "[true_probe] tts 域（minicpm_clone）缺参考音夹具，该域不参与探针：%s",
+            "[true_probe] tts_index 域（minicpm_clone）缺参考音夹具，该域不参与探针：%s",
             ASR_FIXTURE)
     if mc.get("enabled") and _mc_base and ASR_FIXTURE.is_file():
         _ref_txt = ""
@@ -243,7 +246,7 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             except OSError:
                 _ref_txt = ""
         specs.append({
-            "domain": "tts", "kind": "hub_tts",
+            "domain": "tts_index", "kind": "hub_tts",
             "url": _mc_base.rstrip("/") + "/v1/tts/clone",
             "json": {
                 "text": "好的呀",
@@ -506,18 +509,18 @@ def probe_gap_reasons(cfg: Dict[str, Any]) -> Dict[str, str]:
 
     av = cfg.get("avatar_voice") or {}
     hf = av.get("hub_fish") if isinstance(av.get("hub_fish"), dict) else {}
-    if av.get("enabled") and hf.get("enabled") and "tts" not in got:
-        gaps["tts"] = ("hub_fish 已启用但推不出规格（缺 base_url 或 profile_map 为空）"
-                       if str(hf.get("base_url") or "").strip()
-                       else "hub_fish 已启用但缺 base_url")
+    if av.get("enabled") and hf.get("enabled") and "tts_hub" not in got:
+        gaps["tts_hub"] = ("hub_fish 已启用但推不出规格（缺 base_url 或 profile_map 为空）"
+                           if str(hf.get("base_url") or "").strip()
+                           else "hub_fish 已启用但缺 base_url")
 
     # minicpm_clone（智聊专属 IndexTTS-2 节点）同样要报缺口——否则「配了却没探针」
     # 这个状态本身是静默的，而它是 strict/不回落的单点。
     mc = cfg.get("minicpm_clone") if isinstance(cfg.get("minicpm_clone"), dict) else {}
-    if mc.get("enabled") and "tts" not in got:
-        gaps["tts"] = (f"minicpm_clone 已启用但参考音夹具缺失：{ASR_FIXTURE}"
-                       if str(mc.get("base_url") or "").strip()
-                       else "minicpm_clone 已启用但缺 base_url")
+    if mc.get("enabled") and "tts_index" not in got:
+        gaps["tts_index"] = (f"minicpm_clone 已启用但参考音夹具缺失：{ASR_FIXTURE}"
+                             if str(mc.get("base_url") or "").strip()
+                             else "minicpm_clone 已启用但缺 base_url")
 
     # translate 没有 enabled 开关，「启用」的真信号是**它在不在引擎链里**——
     # 光看「配置里有没有 ollama_mt 这个键」会把 config.yaml 自带的空脚手架

@@ -405,6 +405,9 @@ def test_dispatch_without_deliver_cb_or_loop_is_noop(store):
 def test_prompt_block_only_when_explicit_policy():
     assert ag.prompt_block(_persona()) == ""
     assert "只标记" in ag.prompt_block(_persona("mark_only"))
+    # 只标记不改写成人向：出站跟人设，不塞「带过换话题」罐头
+    _mark = ag.prompt_block(_persona("mark_only"))
+    assert "按人设" in _mark and "换话题" not in _mark
     assert "软回应" in ag.prompt_block(_persona("soft_reply"), compact=True)
     assert "转人工" in ag.prompt_block(_persona("human"))
 

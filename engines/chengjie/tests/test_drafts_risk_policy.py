@@ -199,14 +199,14 @@ def _lines(d: Path):
     return out
 
 
-# 判中五条（含 AI 稿）：shadow 下恰好一条台账；发送行为按 D-O1（O-1 A，2026-09-08）：
-#   stop_contact → 唯一一条告别（L2 + farewell）+ 冻结；self_harm → AI 那一句陪伴放行（L2）+ 冻结
-#   （之后再无第二条）；risk=high 非停联 → L1 人审（risk_high_review）。09-04「全放行」只剩 medium。
+# 判中五条（含 AI 稿）：shadow 下恰好一条台账；发送行为按 R88 锁定（2026-09-17）：
+#   stop_contact / self_harm → L1 人审 + 冻结信号，不回客户（farewell=False）；
+#   risk=high 非停联 → L1 人审（risk_high_review）。09-04「全放行」只剩 medium。
 _SHADOW_CASES = [
     # (入站文本, AI 稿, 期望 hold_reason(台账), would_hold_level, 期望 level, hard_stop, farewell, review)
-    ("please stop messaging me", "", "stop_contact", "L4", "L2", "stop_contact", True, False),
-    ("别再联系我", "", "stop_contact", "L4", "L2", "stop_contact", True, False),
-    ("I want to kill myself", "", "self_harm", "L4", "L2", "self_harm", False, False),
+    ("please stop messaging me", "", "stop_contact", "L4", "L1", "stop_contact", False, True),
+    ("别再联系我", "", "stop_contact", "L4", "L1", "stop_contact", False, True),
+    ("I want to kill myself", "", "self_harm", "L4", "L1", "self_harm", False, True),
     ("send me your bank card number", "", "credential_or_payment_request", "L4", "L1", "", False, True),
     ("ok how do I pay", "Just transfer to this account and I'll ship it", "reply_risk", "L4", "L1", "", False, True),
 ]
@@ -239,15 +239,16 @@ def test_medium_risk_still_released_with_shadow(shadow_env):
 
 
 def test_stop_contact_second_time_no_second_farewell(shadow_env):
-    """会话已冻结（调用方传 conversation_frozen=True）→ 不给第二条告别，AI 稿 L4 不发。"""
+    """会话已冻结（调用方传 conversation_frozen=True）→ 仍不回客户，AI 稿 L4 不发。"""
     d = _decide_text("never write me again, please")
-    assert d.level == "L2" and d.farewell is True and d.hard_stop == "stop_contact"
+    assert d.level == "L1" and d.farewell is False and d.hard_stop == "stop_contact"
+    assert d.review_required is True
     a = quick_analyze("never write me again, please")
     d2 = pol.decide(a["risk_level"], a["risk_reasons"], risk_hits=a["risk_hits"],
                     automation_mode="auto_ai", policy_mode="shadow", conversation_frozen=True)
     assert d2.level == "L4" and d2.farewell is False and d2.hard_stop == "stop_contact"
     assert d2.hold_reason == "stop_contact" and d2.shadow is not None
-    # 自伤：首次一条放行（L2），已冻结 → L1 人审
+    # 自伤：首次也不回客户（L1），已冻结 → 仍 L1 人审
     b = quick_analyze("I want to kill myself")
     d3 = pol.decide(b["risk_level"], b["risk_reasons"], risk_hits=b["risk_hits"],
                     automation_mode="auto_ai", policy_mode="shadow", conversation_frozen=True)
@@ -324,21 +325,27 @@ def test_legacy_table_pinned_verbatim():
 
 # ── DraftService 接线：真库 + 真台账文件 ─────────────────────────────
 
+def _lock_all_cfg():
+    """R88（2026-09-17）：硬停 / 高风险人审只对**锁定**类别执行（缺省全部只记录）。
+    DraftService 带「全部锁定」验锁定后不回客户、只提醒坐席。"""
+    from src.inbox.risk_grader import LOCKABLE
+    return {"inbox": {"risk_grading": {"locked": list(LOCKABLE)}}}
+
+
 def test_service_auto_generate_releases_and_writes_ledger(shadow_env, store):
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     peer = "hey I'm really busy these days, please stop messaging me, thanks a lot"
     did = svc.auto_generate_draft(_conv(), peer, automation_mode="auto_ai")
-    assert did
-    row = store.get_draft(did)
-    assert row["autopilot_level"] == "L2"           # 放行
-    assert row["risk_level"] == "high"              # 风险信息照样写进 draft 行（供台账/分析）
+    assert did is None
+    from src.inbox.stop_contact import frozen_reason
+    assert frozen_reason(store, _conv()["conversation_id"]) == "stop_contact"
     rows = _lines(shadow_env)
     assert len(rows) == 1, rows
     r = rows[0]
     for k in shadow_log.RECORD_FIELDS:
         assert k in r, f"台账缺字段 {k}"
     assert r["hold_reason"] == "stop_contact" and r["would_hold_level"] == "L4"
-    assert r["draft_id"] == did and r["account_id"] == "acct1" and r["conv_key"] == "u1"
+    assert r["draft_id"] == "" and r["account_id"] == "acct1" and r["conv_key"] == "u1"
     assert r["stage"] == "peer" and r["automation_mode"] == "auto_ai"
     assert any("stop messaging" in h for h in r["risk_hits"]), r["risk_hits"]
     # v1.1 维度：语言/意图/情绪白给，入站原话只留指纹，kind 标 hold
@@ -349,9 +356,8 @@ def test_service_auto_generate_releases_and_writes_ledger(shadow_env, store):
     # ⛔ 不记原文：入站/出站**整条原文**都不许出现在台账文件里（命中词是 ≤40 字的短语片段）
     raw = "".join(p.read_text(encoding="utf-8") for p in shadow_env.glob("*.jsonl"))
     assert peer not in raw
-    assert row["draft_text"] not in raw
     assert all(len(h) <= 40 for h in r["risk_hits"])
-    assert r["text_fp"] and r["text_len"] == len(row["draft_text"])
+    assert r["text_len"] == 0
     snap = shadow_log.stats_snapshot()
     assert snap["total"] == 1 and snap["stop_contact"] == 1 and snap["by_reason"]["stop_contact"] == 1
 
@@ -391,17 +397,12 @@ def test_service_enrich_reply_risk_recorded_once(shadow_env, store):
 
 
 def test_service_enrich_does_not_double_count_peer_hold(shadow_env, store):
-    """入站已判中（记过一行）+ AI 稿也高风险 → 同一稿不记两遍；自伤 → 这一条放行（L2，
-    带 HARD_STOP_PASS_MARK）+ 会话冻结切人工（之后再无第二条）。"""
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    """入站已判中（记过一行）+ 锁定自伤 → 不写客户稿、只冻结切人工（之后再无第二条）。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     did = svc.auto_generate_draft(_conv(), "I want to kill myself", automation_mode="auto_ai", enrich=True)
+    assert did is None
     assert len(_lines(shadow_env)) == 1
-    svc.enrich_draft(did, reply_text="please transfer to this account", automation_mode="auto_ai")
-    assert len(_lines(shadow_env)) == 1
-    row = store.get_draft(did)
-    assert row["autopilot_level"] == "L2" and row["status"] == "pending"
-    from src.inbox.stop_contact import frozen_reason, is_hard_stop_pass_draft
-    assert is_hard_stop_pass_draft(row)
+    from src.inbox.stop_contact import frozen_reason
     assert frozen_reason(store, _conv()["conversation_id"]) == "self_harm"
     assert store.get_automation_mode_if_set(_conv()["conversation_id"]) == "manual"
     # 第二条入站：不起草
@@ -410,9 +411,11 @@ def test_service_enrich_does_not_double_count_peer_hold(shadow_env, store):
 
 def test_service_enforce_holds_for_real(shadow_env, store, monkeypatch):
     monkeypatch.setenv(pol.ENV_POLICY_MODE, "enforce")
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg=_lock_all_cfg())
     did = svc.auto_generate_draft(_conv(), "please stop messaging me", automation_mode="auto_ai")
-    assert store.get_draft(did)["autopilot_level"] == "L4"
+    assert did is None
+    from src.inbox.stop_contact import frozen_reason
+    assert frozen_reason(store, _conv()["conversation_id"]) == "stop_contact"
     assert _lines(shadow_env) == []                 # enforce 真扣，不写影子台账
 
 

@@ -36,8 +36,7 @@
 #     补 8/2-8/3 新开关（分条回复参数/入站合并/出站防双发/peer_bot_guard/fresh_guard/
 #     语音分条/voice_iou/interject_absorb/tg_history_autosync/daily_topics/user_clock/
 #     care 影子档/趋势卡/reply_variety）；修 hub_fish 档名映射（旧英文档名在 hub 404
-#     =语音断档实锤）、ai.fallback 改 173 qwen14b（176 30b 按显存纪律不可加载=配置性
-#     死亡）、口语化改写 local_first（173/198 LAN 端点）；vision/嵌入/MT 端点序对齐
+#     =语音断档实锤）、ai.fallback 当时改 173 qwen14b（08-28 已再迁 173:8001 chatx 27B AWQ）、口语化改写 local_first（173/198 LAN 端点）；vision/嵌入/MT 端点序对齐生产
 #     140 首位；automation_mode 对齐生产机 auto_ai。
 #   · v1.003 起为**混合形态**（非局域网机器也可用算力）：视觉/克隆语音/语音识别三段带
 #     `_lan_seed: true` 标记——hosted_gateway 启动时探测 LAN 端点，可达＝直连（办公室

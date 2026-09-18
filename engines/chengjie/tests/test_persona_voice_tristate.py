@@ -101,6 +101,55 @@ def test_validate_preset_rules():
     assert _codes(vt.validate_voice_profile({"voice_mode": "loud"})) == ["invalid_mode"]
 
 
+def test_import_coerce_mizuki_pack_becomes_preset():
+    """克隆无录音 + Neural 名（Claire / skuio Mizuki 包）→ 预置声，不丢音色名。"""
+    vp, info = vt.coerce_voice_profile_for_import(_MIZUKI_VP)
+    assert info["action"] == "preset"
+    assert "clone_missing_reference" in info["voice_problems"]
+    assert vp["voice_mode"] == "preset" and vp["backend"] == "edge_tts"
+    assert vp["voice"] == "ja-JP-NanamiNeural"
+    assert vt.validate_voice_profile(vp) == []
+    # 不改入参
+    assert _MIZUKI_VP["backend"] == "avatar_clone"
+
+
+def test_import_coerce_clone_without_voice_goes_off():
+    vp, info = vt.coerce_voice_profile_for_import({"backend": "avatar_clone"})
+    assert info["action"] == "off"
+    assert vp == {"voice_mode": "off"}
+    assert vt.validate_voice_profile(vp) == []
+
+
+def test_import_coerce_strips_stray_neural_on_registered_clone(tmp_path):
+    """有录音的克隆只多了残留 Neural 名：剥声名、保留克隆，不能降成预置。"""
+    ref = tmp_path / "s.wav"
+    ref.write_bytes(b"RIFF")
+    src = _enrolled_vp(reference_audio_path=str(ref), voice="ja-JP-NanamiNeural")
+    vp, info = vt.coerce_voice_profile_for_import(src, check_files=False)
+    assert info["action"] == "strip_preset_voice"
+    assert vp["voice"] == "" and vp["voice_mode"] == "clone"
+    assert vp["backend"] == "avatar_clone" and vp["speaker_id"] == "steven"
+    assert src["voice"] == "ja-JP-NanamiNeural"
+    assert vt.split_problems(vt.validate_voice_profile(vp, check_files=False))[0] == []
+
+
+def test_import_coerce_legal_unchanged():
+    legal = {"voice_mode": "preset", "backend": "edge_tts", "voice": "en-US-AvaMultilingualNeural"}
+    vp, info = vt.coerce_voice_profile_for_import(legal)
+    assert info == {} and vp is legal
+
+
+def test_apply_import_voice_coerce_on_persona():
+    raw = {"id": "claire", "name": "Claire", "voice_profile": dict(_MIZUKI_VP)}
+    out, info = vt.apply_import_voice_coerce(raw)
+    assert info["action"] == "preset" and out is not raw
+    assert out["name"] == "Claire"
+    assert out["voice_profile"]["voice_mode"] == "preset"
+    keep = {"id": "ok", "voice_profile": {"voice_mode": "off"}}
+    out2, info2 = vt.apply_import_voice_coerce(keep)
+    assert info2 == {} and out2 is keep
+
+
 def test_new_persona_default_off():
     out = vt.apply_new_persona_voice_default({"name": "新人设"})
     assert out["voice_profile"] == {"voice_mode": "off"}

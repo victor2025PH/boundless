@@ -1322,9 +1322,39 @@ class DraftService:
                 conversation_id=conv_id, store=self._store,
             )
             autopilot = _decision.level
+            # R88 锁定硬停：不写客户稿、不发告别，只冻结 + 坐席提醒 + 台账。
+            _hard_early = str(getattr(_decision, "hard_stop", "") or "")
+            if _hard_early:
+                try:
+                    from src.inbox.stop_contact import freeze_conversation, log_action as _sc_log2
+                    _sc_log2("held", conversation_id=conv_id, reason=_hard_early,
+                             hits=_risk_hits, extra=f"level={autopilot} notify_only")
+                    freeze_conversation(
+                        self._store, platform=platform, account_id=account_id,
+                        chat_key=chat_key, conversation_id=conv_id, reason=_hard_early,
+                        hits=_risk_hits, chat_name=chat_name)
+                    if _decision.shadow is not None:
+                        self._record_shadow(
+                            _decision, stage="peer", platform=platform, account_id=account_id,
+                            conv_key=chat_key or conv_id, draft_id="", text="",
+                            lang=str(lang or ""), intent=str(intent or ""),
+                            emotion=str(emotion or ""), peer_text=t,
+                            peer_msg=self._latest_inbound_msg_id(conv_id, t),
+                        )
+                except Exception:
+                    logger.debug("auto_generate_draft 锁定硬停落点失败（已忽略）", exc_info=True)
+                return None
 
             suggestions = _suggestions(t, lang=lang, intent=intent, emotion=emotion, risk=risk_level)
             draft_text = suggestions[0].text if suggestions else "感谢您的消息，我们稍后为您回复。"
+            # 锁定的需人工类：回复留白，不写建议句 / 「感谢您的消息」罐头。
+            if getattr(_decision, "review_required", False):
+                try:
+                    from src.inbox.risk_grader import first_locked_hit as _flh
+                    if _flh(_peer_reasons, self._cfg):
+                        draft_text = ""
+                except Exception:
+                    logger.debug("锁定留白判定失败（忽略）", exc_info=True)
 
             # S3: 从 conv_meta 继承 trace_id，传播到草稿
             _trace_id = ""
@@ -1335,7 +1365,10 @@ class DraftService:
                 pass
 
             # enrich=True：停泊态落库，待人设产线补全后再翻 pending（见 enrich_draft）。
+            # 锁定留白的稿不进 enrich，避免人设产线再填进固定话术。
             _status = "enriching" if enrich else "pending"
+            if getattr(_decision, "review_required", False) and not str(draft_text or "").strip():
+                _status = "pending"
             # Q-2 C：命中承诺 → 罐头委婉延后、跳过 enrich（仿 stop_contact farewell）；
             # 审核稿 2–3 条拒绝候选写进 risk_reasons commitment_alt:…
             _cdec = str((_cmt or {}).get("decision") or "clean")
@@ -1355,22 +1388,7 @@ class DraftService:
                     _a = str(_alt or "").strip()
                     if _a:
                         _peer_reasons.append("commitment_alt:" + _a[:80])
-            # O-1 A（D-O1）「最多一条」：硬停放行的这一条稿在 risk_reasons 带 HARD_STOP_PASS_MARK
-            # （worker / enrich 对冻结会话只认它）。stop_contact → 正文换成 farewell_text（人设
-            # 口吻一句话，不经 AI 生成：「I hear you… Take care」正是 AI 稿），直接 pending 不停泊
-            # 不补全，另带 FAREWELL_MARK；self_harm → 照常停泊补全，AI 那一句陪伴发完即冻结。
-            if getattr(_decision, "hard_stop", "") and autopilot == "L2":
-                from src.inbox.stop_contact import (
-                    FAREWELL_MARK, HARD_STOP_PASS_MARK, farewell_text,
-                )
-                _peer_reasons = list(_peer_reasons)
-                if HARD_STOP_PASS_MARK not in _peer_reasons:
-                    _peer_reasons.append(HARD_STOP_PASS_MARK)
-                if getattr(_decision, "farewell", False):
-                    draft_text = farewell_text(lang)
-                    _status = "pending"
-                    if FAREWELL_MARK not in _peer_reasons:
-                        _peer_reasons.append(FAREWELL_MARK)
+            # 锁定硬停已在 decide 之后早退（不写客户稿）。这里不再注入告别 / 陪伴正文。
             draft_id = self._store.upsert_draft({
                 "source_kind": "inbox",
                 "source_id": conv_id,  # 用 conv_id 作为 source_id 保证每会话唯一幂等键
@@ -1420,22 +1438,12 @@ class DraftService:
                 (_sh.hold_reason if _sh else "-"),
                 ("|".join(_sh.risk_hits[:4]) if _sh and _sh.risk_hits else "-"),
             )
-            # O-1 A（D-O1）：硬停 → 冻结会话（需人工 + 「客户要求停联」+ 档位 manual + 通知）；
-            # 告别稿已在上面落库为 L2 pending，worker 放行它一条后本会话再无自动出站。
-            # risk=high 非停联 → 稿已是 L1 人审，再打「需人工」让列表可见。全部 best-effort。
+            # 锁定硬停已在拟稿前冻结。risk=high 非停联 → 稿已是 L1 人审，再打「需人工」
+            # 并推一条坐席提醒（不回客户）。全部 best-effort。
             try:
-                _hard = str(getattr(_decision, "hard_stop", "") or "")
-                if _hard:
-                    from src.inbox.stop_contact import freeze_conversation, log_action as _sc_log2
-                    _sc_log2("farewell" if getattr(_decision, "farewell", False) else "held",
-                             conversation_id=conv_id, reason=_hard, draft_id=str(draft_id),
-                             hits=_risk_hits, extra=f"level={autopilot} lang={lang}")
-                    freeze_conversation(
-                        self._store, platform=platform, account_id=account_id,
-                        chat_key=chat_key, conversation_id=conv_id, reason=_hard,
-                        hits=_risk_hits, chat_name=chat_name)
-                elif getattr(_decision, "review_required", False):
+                if getattr(_decision, "review_required", False):
                     from src.integrations.protocol_autoreply import tag_needs_human
+                    from src.integrations.shared.event_bus import get_event_bus
                     tag_needs_human(
                         self._store,
                         {"platform": platform, "account_id": account_id, "chat_key": chat_key},
@@ -1443,6 +1451,18 @@ class DraftService:
                         level=str((_rk or {}).get("level") or "high"),       # Q-17 #277②：打标带级别 / 类别
                         category=str((_rk or {}).get("category") or ""),     # （日志 level= category= + 摘标冷却「同类」判据）
                         hits=list((_rk or {}).get("hits") or _risk_hits or [])[:4])
+                    try:
+                        get_event_bus().publish("escalation", {
+                            "conversation_id": conv_id, "platform": platform,
+                            "account_id": account_id, "chat_key": chat_key,
+                            "name": chat_name, "chat_name": chat_name, "display_name": chat_name,
+                            "reason": str((_rk or {}).get("category") or "high_risk"),
+                            "risk_hits": list(_risk_hits or [])[:6],
+                            "agent_id": "", "agent_name": "system", "wait_sec": 0,
+                            "assigned_to": "", "ts": time.time(),
+                        })
+                    except Exception:
+                        logger.debug("review_required 坐席提醒发布失败（已忽略）", exc_info=True)
                     logger.info(
                         "[stop-contact] conv=%s action=review reason=risk_high draft=%s hits=%s",
                         conv_id, draft_id, "|".join(_risk_hits[:4]) or "-")

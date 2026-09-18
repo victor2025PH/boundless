@@ -263,7 +263,7 @@ python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异
 ④ **L4（rewrite）默认关**，开启前置＝L1-L3 灰度两天读数干净 + 与 `voice_colloquial_llm`
  **二选一**（后者改 TTS 前语音稿、L4 改文本主回复出口，叠开＝冗余+双份改写延迟；本机
  语音链正在用前者——见上方坐席语音主线）。开法＝overlay `ai.spoken_style.rewrite: true`
- （后端缺省 .173 qwen14b，`rewrite_llm`/`rewrite_model` 可换任意 OpenAI 兼容端点）；
+ （后端缺省 .173:8001 chatx / Qwen3-27B AWQ，`rewrite_llm`/`rewrite_model` 可换任意 OpenAI 兼容端点）；
  开后盯 INFO「spoken_style L4 汇总」（每 20 次尝试一行），直通率 >30%＝事实锁大量拒绝
  或后端超时，把读数反馈 AvatarHub 线调包，**别自己改提示词**。无指纹的 role 不改写。
 ⑤ **观测**：`spoken_style_bridge.stats()`（`l1_inject`/`l2_inject`/`l2_skip_lang`/

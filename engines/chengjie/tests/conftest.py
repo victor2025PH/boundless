@@ -87,6 +87,17 @@ from src.web.admin import create_app
 # 写到了本机真 lic_id 上，之后本地激活的授权凭空多出 10 万额度。
 # 额度是要拿来对外收钱的数，绝不能被测试污染，故按用例隔离到 tmp。
 @pytest.fixture(autouse=True)
+def _reset_compute_lanes():
+    try:
+        from src.ai.compute_lanes import reset_lanes
+        reset_lanes()
+        yield
+        reset_lanes()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_license_quota_db(tmp_path_factory):
     try:
         from src.licensing.quota_store import (

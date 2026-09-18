@@ -701,14 +701,13 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
         {{ (i18n or {}).get('psn_reload','重载') }}
       </button>
-      <button class="btn btn-sm" onclick="_toggleImportPanel()" id="import-toggle-btn" title="{{ (i18n or {}).get('psn_bulk_import_t','批量 JSON 导入') }}">
+      <button class="btn btn-sm" onclick="_toggleImportPanel()" id="import-toggle-btn" title="{{ (i18n or {}).get('psn_bulk_import_t','导入人设包或文档') }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="16 7 12 3 8 7"/><line x1="12" y1="3" x2="12" y2="15"/><path d="M20 21H4"/></svg>
         {{ (i18n or {}).get('psn_import','导入') }}
       </button>
-      <button class="btn btn-sm" id="doc-import-toolbar-btn" style="display:none" onclick="openNewProfile();openDocImport()" title="{{ (i18n or {}).get('psn_imp_btn_t','上传人设文档（.docx/.txt），AI 自动提取人设字段') }}">📄 {{ (i18n or {}).get('psn_imp_btn','从文档导入') }}</button>
       <button class="btn btn-sm" onclick="_exportFilteredCSV()" title="{{ (i18n or {}).get('psn_export_csv_t','导出当前筛选结果为 CSV') }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="21" x2="12" y2="9"/><path d="M20 3H4"/></svg>
-        {{ (i18n or {}).get('psn_export','导出') }}
+        {{ (i18n or {}).get('psn_export_csv','导出 CSV') }}
       </button>
       <button class="btn btn-sm" id="bulk-toggle-btn" onclick="_toggleBulkMode()" title="{{ (i18n or {}).get('psn_multiselect_t','批量选择人设进行操作') }}">☐ {{ (i18n or {}).get('psn_multiselect','多选') }}</button>
       <button class="btn btn-sm btn-primary" onclick="openCreateFlow()">
@@ -771,23 +770,25 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   <!-- ── P10-3 Bulk import panel ── -->
   <div id="import-panel" class="import-panel">
     <div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.7rem">
-      <span style="font-size:.84rem;font-weight:700">{{ (i18n or {}).get('psn_bulk_import_title','批量导入人设') }}</span>
+      <span style="font-size:.84rem;font-weight:700">{{ (i18n or {}).get('psn_bulk_import_title','导入人设') }}</span>
+      <span id="import-fmt-badge" style="display:none;font-size:.68rem;color:var(--t2)"></span>
       <label class="btn btn-sm" style="cursor:pointer;font-size:.73rem">
-        <input type="file" accept=".json" id="import-file-input" onchange="_onImportFile(this)" style="display:none">
+        <input type="file" accept=".json,.yaml,.yml,.txt,.docx,application/json,text/yaml,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" id="import-file-input" onchange="_onImportFile(this)" style="display:none">
         📂 {{ (i18n or {}).get('psn_from_file','从文件') }}
       </label>
       <button class="btn btn-sm" onclick="_closeImportPanel()" style="margin-left:auto;font-size:.72rem;color:var(--t2)">✕ {{ (i18n or {}).get('psn_close','关闭') }}</button>
     </div>
-    <textarea id="import-json" rows="5" style="width:100%;font-family:monospace;font-size:.73rem;resize:vertical;box-sizing:border-box;background:var(--bg);border:1px solid var(--bd);border-radius:7px;padding:.5rem .65rem;color:var(--t)" placeholder='{{ (i18n or {}).get('psn_import_json_ph','粘贴 JSON 数组，格式：[{"id":"xxx","name":"xxx","role":"xxx",...}, ...]') }}'></textarea>
+    <textarea id="import-json" rows="5" style="width:100%;font-family:monospace;font-size:.73rem;resize:vertical;box-sizing:border-box;background:var(--bg);border:1px solid var(--bd);border-radius:7px;padding:.5rem .65rem;color:var(--t)" placeholder="{{ (i18n or {}).get('psn_import_json_ph','粘贴 JSON / YAML 人设包，或长文。也可从文件选择 .json .yaml .docx .txt') }}"></textarea>
     <div style="margin-top:.5rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm btn-primary" onclick="_parseImport()">🔍 {{ (i18n or {}).get('psn_parse_preview','解析预览') }}</button>
-      <button class="btn btn-sm btn-danger" id="import-confirm-btn" style="display:none" onclick="_executeImport()">▶ {{ (i18n or {}).get('psn_start_import','开始导入') }}</button>
+      <button class="btn btn-sm btn-primary" id="import-confirm-btn" style="display:none" onclick="_executeImport()">▶ {{ (i18n or {}).get('psn_start_import','开始导入') }}</button>
+      <button class="btn btn-sm" id="import-extract-btn" style="display:none" onclick="_importStartExtractFromPanel()">{{ (i18n or {}).get('psn_imp_extract_cta','用 AI 从这篇文档提取') }}</button>
       <button class="btn btn-sm" id="import-clear-btn" style="display:none" onclick="_resetImport()">{{ (i18n or {}).get('psn_reset','重置') }}</button>
       <span id="import-status" style="font-size:.75rem;color:var(--t2)"></span>
     </div>
     <div id="import-preview" style="display:none;max-height:220px;overflow-y:auto;margin-top:.55rem;border:1px solid var(--bd);border-radius:8px">
       <table class="import-preview-table">
-        <thead><tr><th>ID</th><th>{{ (i18n or {}).get('psn_th_name','名称') }}</th><th>{{ (i18n or {}).get('psn_th_role','角色') }}</th><th style="width:60px">{{ (i18n or {}).get('psn_th_status','状态') }}</th></tr></thead>
+        <thead><tr><th>ID</th><th>{{ (i18n or {}).get('psn_th_name','名称') }}</th><th>{{ (i18n or {}).get('psn_th_role','角色') }}</th><th style="min-width:120px">{{ (i18n or {}).get('psn_th_status','状态') }}</th></tr></thead>
         <tbody id="import-preview-body"></tbody>
       </table>
     </div>
@@ -819,7 +820,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       {% if user_role == 'master' %}
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn btn-sm" id="pb-backup-btn" onclick="pbBackupAll()">⬇ {{ (i18n or {}).get('psn_backup_all','备份全部人设') }}</button>
-        <label class="btn btn-sm" style="cursor:pointer;margin:0">⬆ {{ (i18n or {}).get('psn_restore_from','从备份恢复…') }}<input type="file" id="pb-restore-file" accept=".json,application/json" style="display:none" onchange="pbPickRestore(this)"></label>
+        <label class="btn btn-sm" style="cursor:pointer;margin:0">⬆ {{ (i18n or {}).get('psn_restore_from','从备份恢复…') }}<input type="file" id="pb-restore-file" accept=".json,.yaml,.yml,application/json,text/yaml" style="display:none" onchange="pbPickRestore(this)"></label>
         <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('psn_backup_single_hint','单个人设：卡片右上「导出」') }}</span>
       </div>
       {% else %}
@@ -1087,7 +1088,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <button class="btn btn-sm" onclick="_applyTemplate('service')">🎯 {{ (i18n or {}).get('psn_tpl_service','客服型') }}</button>
         <button class="btn btn-sm" onclick="_applyTemplate('sales')">💼 {{ (i18n or {}).get('psn_tpl_sales','销售型') }}</button>
         <button class="btn btn-sm" onclick="_applyTemplate('consultant')">📋 {{ (i18n or {}).get('psn_tpl_consultant','咨询师型') }}</button>
-        <button class="btn btn-sm" id="doc-import-tpl-btn" style="display:none" onclick="openDocImport()" title="{{ (i18n or {}).get('psn_imp_btn_t','上传人设文档（.docx/.txt），AI 自动提取人设字段') }}">📄 {{ (i18n or {}).get('psn_imp_btn','从文档导入') }}</button>
+        <button class="btn btn-sm" id="doc-import-tpl-btn" onclick="openDocImport()" title="{{ (i18n or {}).get('psn_imp_btn_t','上传人设文档（.docx/.txt），AI 自动提取人设字段') }}">📄 {{ (i18n or {}).get('psn_imp_btn','从文档导入') }}</button>
       </div>
     </div>
     <div id="pe-wizard" class="pe-wizard" style="display:none"></div>
@@ -1107,9 +1108,9 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
          开发者模式（ui_client_hide，L-4 契约）整块不渲染；内部/开发者模式下折叠常闭，且
          「解析并填充」改为「解析并预览」→ 逐字段对照勾选 → 二次确认 → 30s 可撤销。 -->
     <details class="json-import-wrap" id="pe-json-import-wrap">
-      <summary>&#128203; {{ (i18n or {}).get('psn_json_import_field','从 JSON 导入字段…') }} <span class="ji-dev-tag">{{ (i18n or {}).get('psn_ji_dev_tag','开发者') }}</span></summary>
+      <summary>&#128203; {{ (i18n or {}).get('psn_json_import_field','从 JSON / YAML 导入字段…') }} <span class="ji-dev-tag">{{ (i18n or {}).get('psn_ji_dev_tag','开发者') }}</span></summary>
       <div class="field-row" style="margin-top:.5rem">
-        <label>{{ (i18n or {}).get('psn_paste_profile_json','粘贴 profile JSON') }}</label>
+        <label>{{ (i18n or {}).get('psn_paste_profile_json','粘贴 profile JSON 或 YAML') }}</label>
         <textarea id="pe-json-import" rows="4" placeholder='{"name":"...","role":"...","personality":"...","tags":["vip"]}'></textarea>
       </div>
       <div style="display:flex;gap:.4rem;align-items:center;margin-top:.28rem;flex-wrap:wrap">
@@ -4548,6 +4549,19 @@ function _pbAlbumRefCount(parsed) {
   if (!refs || typeof refs !== 'object') return 0;
   return Object.keys(refs).reduce(function (n, k) { return n + (Array.isArray(refs[k]) ? refs[k].length : 0); }, 0);
 }
+async function _parsePersonaText(raw) {
+  var r = await apiFetch('/api/personas/profiles/parse', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: String(raw || '')})
+  }, {timeoutMs: 30000});
+  var d = await r.json().catch(function () { return {}; });
+  if (!r.ok || !d.ok) {
+    var detail = d.detail;
+    if (detail && typeof detail === 'object') detail = detail.msg || JSON.stringify(detail);
+    throw new Error(detail || ('HTTP ' + r.status));
+  }
+  return d;
+}
 function pbPickRestore(input) {
   var f = input && input.files && input.files[0];
   if (!f) return;
@@ -4556,9 +4570,9 @@ function pbPickRestore(input) {
     try { input.value = ''; } catch (e) {}
     var box = document.getElementById('pb-restore-preview');
     var parsed;
-    try { parsed = JSON.parse(String(reader.result || '')); } catch (e) { _pbStatus(window.T('psn_restore_bad_json'), 'err'); return; }
-    var profiles = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.profiles) ? parsed.profiles : null);
-    if (!profiles) { _pbStatus(window.T('psn_restore_bad_shape'), 'err'); return; }
+    try { parsed = await _parsePersonaText(String(reader.result || '')); } catch (e) { _pbStatus(window.T('psn_restore_bad_json'), 'err'); return; }
+    var profiles = parsed && Array.isArray(parsed.profiles) ? parsed.profiles : null;
+    if (!profiles || !profiles.length) { _pbStatus(window.T('psn_restore_bad_shape'), 'err'); return; }
     _pbStatus(window.T('psn_restore_previewing'));
     try {
       var r = await apiFetch('/api/personas/profiles/import?dry_run=1', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -4578,6 +4592,13 @@ function pbPickRestore(input) {
       }
       if (d.invalid && d.invalid.length) html += '<div style="font-size:.72rem;color:var(--t3)">' + _escHtml(window.Tf('psn_restore_invalid', {n: String(d.invalid.length)})) + '</div>';
       if (d.warnings && d.warnings.length) html += '<div style="font-size:.72rem;color:var(--th-ink-amber7,#b45309)">' + _escHtml(window.Tf('psn_restore_warnings', {n: String(d.warnings.length)})) + '</div>';
+      var rew = (d.warnings || []).filter(function (w) { return w && w.voice_rewrite; });
+      if (rew.length) {
+        html += '<ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem;color:var(--th-ink-amber7,#b45309)">'
+          + rew.map(function (w) {
+            return '<li><b>' + _escHtml(w.id) + '</b> ' + _escHtml(_impVoiceNote(w, false)) + '</li>';
+          }).join('') + '</ul>';
+      }
       html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="pbConfirmRestore()"' + ((d.add + d.overwrite) ? '' : ' disabled') + '>' + _escHtml(window.T('psn_restore_confirm')) + '</button>'
         + '<button type="button" class="btn btn-sm" onclick="pbCancelRestore()">' + _escHtml(window.T('psn_ji_cancel')) + '</button>'
         + '<span style="font-size:.7rem;color:var(--t3)">' + _escHtml(window.T('psn_restore_note')) + '</span></div>';
@@ -6473,6 +6494,15 @@ async function _importFromJson() {
   if (!raw) { _toast(window.T('psn_js_155'), 'err'); return; }
   var known = await _jiLoadKnownKeys();
   var res = _jiParse(raw, known);
+  if (!res.ok && res.error === 'invalid_json') {
+    try {
+      var parsedYaml = await _parsePersonaText(raw);
+      var first = (parsedYaml.profiles || [])[0];
+      if (first) res = _jiParse(JSON.stringify(first), known);
+    } catch (e) {
+      res = {ok: false, error: 'invalid_json', detail: (e && e.message) || e};
+    }
+  }
   if (!res.ok) {
     var msg = res.error === 'unknown_fields'
       ? window.Tf('psn_ji_unknown_fields', {fields: res.unknown.join(', ')})
@@ -6555,21 +6585,20 @@ function _jiUndoApply() {
 
 // ── C 线：文档导入向导（PSDocImport；配合 B 线 /api/personas/import-doc/*）────
 //    三步态：① 粘贴/选文件 → parse ② extract → 轮询 job ③ 结果 → 填入编辑器校对。
-//    功能开关来自 status API；旧后端（404/异常）保持入口隐藏。
+//    status.enabled 只决定能否 AI 提取；导入入口始终可见。
 var _pdiParsedText = '';
 var _pdiResult = null;
 var _pdiJobTimer = null;
 var _pdiSrcKeys = [];       // C2 线：结果步可溯源字段键（sources 里数组非空的键，序号即链接参数）
 var _pdiPendingBio = null;  // C2 线：{text, ts} —— apply 时暂存解析原文，saveProfile 成功后入长传记库
+var _docImportEnabled = false;
 
 async function _initDocImport() {
   try {
     const r = await apiFetch('/api/personas/import-doc/status');
-    if (!r.ok) return;
-    const d = await r.json();
-    if (d && d.enabled === true) {
-      var b1 = document.getElementById('doc-import-tpl-btn'); if (b1) b1.style.display = '';
-      var b2 = document.getElementById('doc-import-toolbar-btn'); if (b2) b2.style.display = '';
+    if (r.ok) {
+      const d = await r.json();
+      _docImportEnabled = !!(d && d.enabled === true);
     }
   } catch (e) {}
 }
@@ -8240,8 +8269,9 @@ function _renderUsageChart() {
   if (sub) sub.textContent = window.T('psn_js_210') + profWithBindings.length + window.T('psn_js_211');
   wrap.innerHTML = html;
 }
-// ── P10-3: Bulk JSON import ───────────────────────────────────────────────────
+// ── P10-3: Bulk JSON / YAML import ────────────────────────────────────────────
 var _importData = [];  // parsed profile array
+var _importExtractText = '';
 
 function _toggleImportPanel() {
   var panel = document.getElementById('import-panel');
@@ -8249,6 +8279,7 @@ function _toggleImportPanel() {
   if (!panel) return;
   var open = panel.classList.toggle('open');
   if (btn) btn.classList.toggle('btn-primary', open);
+  if (open) _bindImportDrop(panel);
   if (!open) _resetImport();
 }
 function _closeImportPanel() {
@@ -8258,26 +8289,110 @@ function _closeImportPanel() {
   if (btn) btn.classList.remove('btn-primary');
   _resetImport();
 }
+function _openImportPanel() {
+  var panel = document.getElementById('import-panel');
+  var btn = document.getElementById('import-toggle-btn');
+  if (!panel) return;
+  panel.classList.add('open');
+  if (btn) btn.classList.add('btn-primary');
+  _bindImportDrop(panel);
+}
 function _resetImport() {
   _importData = [];
+  _importExtractText = '';
   var ta = document.getElementById('import-json'); if (ta) ta.value = '';
   var st = document.getElementById('import-status'); if (st) st.textContent = '';
   var cb = document.getElementById('import-confirm-btn'); if (cb) cb.style.display = 'none';
   var rb = document.getElementById('import-clear-btn'); if (rb) rb.style.display = 'none';
+  var xb = document.getElementById('import-extract-btn'); if (xb) xb.style.display = 'none';
   var pv = document.getElementById('import-preview'); if (pv) pv.style.display = 'none';
+  var badge = document.getElementById('import-fmt-badge'); if (badge) { badge.style.display = 'none'; badge.textContent = ''; }
+  var fi = document.getElementById('import-file-input'); if (fi) fi.value = '';
+}
+function _bindImportDrop(panel) {
+  if (!panel || panel._dropBound) return;
+  panel._dropBound = true;
+  panel.addEventListener('dragover', function (e) { e.preventDefault(); });
+  panel.addEventListener('drop', function (e) {
+    e.preventDefault();
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) _ingestImportFile(f);
+  });
 }
 function _onImportFile(input) {
   var file = input.files && input.files[0];
   if (!file) return;
+  _ingestImportFile(file);
+}
+function _importLooksLikeDoc(raw) {
+  var t = String(raw || '').trim();
+  if (t.length < 80) return false;
+  if (t.charAt(0) === '{' || t.charAt(0) === '[') return false;
+  return !/(^|\n)\s*(id|name|profiles)\s*:/.test(t);
+}
+async function _ingestImportFile(file) {
+  var name = String(file && file.name || '').toLowerCase();
+  var st = document.getElementById('import-status');
+  if (!/\.(json|ya?ml|txt|docx)$/i.test(name)) {
+    if (st) { st.textContent = window.T('psn_imp_bad_type'); st.style.color = '#ef4444'; }
+    return;
+  }
+  _openImportPanel();
+  if (name.endsWith('.docx')) {
+    await _ingestDocxFile(file);
+    return;
+  }
   var reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = function (e) {
     var ta = document.getElementById('import-json');
-    if (ta) { ta.value = e.target.result; }
+    if (ta) ta.value = e.target.result;
     _parseImport();
   };
   reader.readAsText(file, 'utf-8');
 }
-function _parseImport() {
+async function _ingestDocxFile(file) {
+  var st = document.getElementById('import-status');
+  var ta = document.getElementById('import-json');
+  try {
+    var fd = new FormData();
+    fd.append('file', file);
+    var r = await apiFetch('/api/personas/import-doc/parse', {method: 'POST', body: fd}, {timeoutMs: 60000});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.ok) {
+      if (st) { st.textContent = window.T('psn_imp_parse_fail') + ' ' + (_impDetail(d) || ('HTTP ' + r.status)); st.style.color = '#ef4444'; }
+      return;
+    }
+    if (ta) ta.value = d.text || '';
+    await _parseImport();
+  } catch (e) {
+    if (st) { st.textContent = window.T('psn_imp_parse_fail') + ' ' + ((e && e.message) || e); st.style.color = '#ef4444'; }
+  }
+}
+function _showExtractCta(raw) {
+  _importExtractText = String(raw || '');
+  var xb = document.getElementById('import-extract-btn');
+  if (xb) xb.style.display = 'inline-flex';
+  var rb = document.getElementById('import-clear-btn');
+  if (rb) rb.style.display = 'inline-flex';
+}
+function _importStartExtractFromPanel() {
+  var ta = document.getElementById('import-json');
+  _importStartExtract(_importExtractText || (ta && ta.value) || '');
+}
+function _importStartExtract(text) {
+  var raw = String(text || '').trim();
+  if (!_docImportEnabled) {
+    _toast(window.T('psn_imp_disabled'), 'err', 8000);
+    return;
+  }
+  if (!raw) { _toast(window.T('psn_imp_need_input'), 'err'); return; }
+  _closeImportPanel();
+  openDocImport();
+  var t = document.getElementById('pdi-text');
+  if (t) t.value = raw;
+  _pdiParse();
+}
+async function _parseImport() {
   var ta = document.getElementById('import-json');
   var st = document.getElementById('import-status');
   var cb = document.getElementById('import-confirm-btn');
@@ -8288,17 +8403,23 @@ function _parseImport() {
   var raw = ta.value.trim();
   if (!raw) { if (st) { st.textContent = window.T('psn_js_155'); st.style.color = '#ef4444'; } return; }
   var parsed;
+  var fmt = '';
   try {
-    parsed = JSON.parse(raw);
+    var d = await _parsePersonaText(raw);
+    parsed = Array.isArray(d.profiles) ? d.profiles : [];
+    fmt = d.format || '';
   } catch(e) {
-    if (st) { st.textContent = window.T('psn_js_212') + e.message; st.style.color = '#ef4444'; }
+    var hint = '';
+    if (_importLooksLikeDoc(raw)) {
+      hint = ' ' + window.T('psn_imp_maybe_doc');
+      _showExtractCta(raw);
+    }
+    if (st) { st.textContent = window.T('psn_js_212') + ((e && e.message) || e) + hint; st.style.color = '#ef4444'; }
     return;
   }
-  // Normalise: single object, {persona:...} wrapper, or array
-  if (!Array.isArray(parsed)) {
-    if (parsed && parsed.persona) parsed = [parsed.persona];
-    else parsed = [parsed];
-  }
+  var xbHide = document.getElementById('import-extract-btn');
+  if (xbHide) xbHide.style.display = 'none';
+  _importExtractText = '';
   // Filter valid (must have id)
   _importData = parsed.filter(function(p) { return p && (p.id || p.name); });
   // Auto-generate id from name if missing
@@ -8309,20 +8430,71 @@ function _parseImport() {
     if (st) { st.textContent = window.T('psn_js_213'); st.style.color = '#ef4444'; }
     return;
   }
-  var existingIds = new Set((_allProfiles || []).map(function(p){ return p.id; }));
+  var dry = null;
+  var allowWrite = false;
+  try {
+    var dr = await apiFetch('/api/personas/profiles/import?dry_run=1', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({profiles: _importData, mode: 'merge', dry_run: true})
+    }, {timeoutMs: 60000});
+    var dd = await dr.json().catch(function () { return {}; });
+    if (dr.status === 403) {
+      if (st) { st.textContent = _impDetail(dd) || window.T('psn_imp_readonly'); st.style.color = '#ef4444'; }
+    } else if (!dr.ok || !dd.ok) {
+      if (st) { st.textContent = window.T('psn_imp_dry_fail') + (_impDetail(dd) || ('HTTP ' + dr.status)); st.style.color = '#ef4444'; }
+    } else {
+      dry = dd;
+      allowWrite = true;
+    }
+  } catch (e) {
+    if (st) { st.textContent = window.T('psn_imp_dry_fail') + ((e && e.message) || e); st.style.color = '#ef4444'; }
+  }
+  var warnById = {};
+  ((dry && dry.warnings) || []).forEach(function (w) { if (w && w.id) warnById[w.id] = w; });
+  var overSet = {};
+  ((dry && dry.overwrite_ids) || []).forEach(function (id) { overSet[id] = true; });
+  if (!dry) {
+    (_allProfiles || []).forEach(function (p) { overSet[p.id] = true; });
+  }
   pb.innerHTML = _importData.map(function(p) {
-    var conflict = existingIds.has(p.id);
+    var conflict = !!overSet[p.id];
+    var w = warnById[p.id] || {};
+    var note = _impVoiceNote(w, false);
+    var status = (conflict ? window.T('psn_js_214') : window.T('psn_js_215'))
+      + (note ? '<div style="font-size:.68rem;color:var(--th-ink-amber7,#b45309);margin-top:.15rem">' + _escHtml(note) + '</div>' : '');
     return '<tr class="' + (conflict ? 'conflict' : '') + '">'
-      + '<td style="font-family:monospace;font-size:.7rem">' + (p.id || '—') + '</td>'
-      + '<td>' + (p.name || p.id || '—') + '</td>'
-      + '<td style="color:var(--t2)">' + (p.role || '') + '</td>'
-      + '<td style="font-size:.68rem;color:' + (conflict ? 'var(--th-ink-amber6,#92400e)' : 'var(--th-ink-emerald5,#047857)') + '">'
-      + (conflict ? window.T('psn_js_214') : window.T('psn_js_215')) + '</td></tr>';
+      + '<td style="font-family:monospace;font-size:.7rem">' + _escHtml(p.id || '—') + '</td>'
+      + '<td>' + _escHtml(p.name || p.id || '—') + '</td>'
+      + '<td style="color:var(--t2)">' + _escHtml(p.role || '') + '</td>'
+      + '<td style="font-size:.68rem;color:' + (conflict || note ? 'var(--th-ink-amber6,#92400e)' : 'var(--th-ink-emerald5,#047857)') + '">'
+      + status + '</td></tr>';
   }).join('');
   if (pv) pv.style.display = 'block';
-  if (st) { st.textContent = window.T('psn_js_216') + _importData.length + window.T('psn_js_217') + (_importData.filter(function(p){ return existingIds.has(p.id); }).length) + window.T('psn_js_218'); st.style.color = 'var(--t2)'; }
-  if (cb) cb.style.display = 'inline-flex';
+  var overN = dry ? Number(dry.overwrite || 0) : _importData.filter(function(p){ return overSet[p.id]; }).length;
+  if (st && dry) {
+    st.textContent = window.T('psn_js_216') + _importData.length + window.T('psn_js_217') + overN + window.T('psn_js_218');
+    st.style.color = 'var(--t2)';
+  }
+  var badge = document.getElementById('import-fmt-badge');
+  if (badge && fmt) {
+    badge.textContent = window.Tf('psn_imp_detected', {fmt: String(fmt).toUpperCase(), n: String(_importData.length)});
+    badge.style.display = '';
+  }
+  if (cb) cb.style.display = allowWrite ? 'inline-flex' : 'none';
   if (rb) rb.style.display = 'inline-flex';
+}
+function _impVoiceNote(w, done) {
+  if (!w || !w.voice_rewrite) return '';
+  var v = w.voice_rewrite_voice || '';
+  if (w.voice_rewrite === 'preset') return window.Tf(done ? 'psn_imp_voice_did_preset' : 'psn_imp_voice_to_preset', {voice: v});
+  if (w.voice_rewrite === 'off') return window.T(done ? 'psn_imp_voice_did_off' : 'psn_imp_voice_to_off');
+  if (w.voice_rewrite === 'strip_preset_voice') return window.T(done ? 'psn_imp_voice_did_strip' : 'psn_imp_voice_strip');
+  return '';
+}
+function _impDetail(d) {
+  var detail = d && d.detail;
+  if (detail && typeof detail === 'object') detail = detail.msg || JSON.stringify(detail);
+  return detail ? String(detail) : '';
 }
 async function _executeImport() {
   if (!_importData.length) return;
@@ -8331,29 +8503,56 @@ async function _executeImport() {
   var pb = document.getElementById('import-preview-body');
   if (cb) { cb.disabled = true; cb.textContent = window.T('psn_js_219'); }
   var rows = pb ? pb.querySelectorAll('tr') : [];
-  var ok = 0, fail = 0;
-  for (var i = 0; i < _importData.length; i++) {
-    var p = _importData[i];
-    var pid = p.id;
-    try {
-      var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
-        method: 'PUT', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({persona: p})
-      }, {timeoutMs: 60000});
-      var d = await r.json();
-      if (d.ok) {
-        ok++;
-        if (rows[i]) { rows[i].className = 'ok'; var tc = rows[i].cells[3]; if (tc) tc.textContent = window.T('psn_js_220'); }
-      } else {
-        fail++;
-        if (rows[i]) { rows[i].className = 'err'; var tc2 = rows[i].cells[3]; if (tc2) tc2.textContent = window.T('psn_js_221'); }
-      }
-    } catch(e) {
-      fail++;
-      if (rows[i]) { rows[i].className = 'err'; var tc3 = rows[i].cells[3]; if (tc3) tc3.textContent = window.T('psn_js_222'); }
+  var ok = 0, fail = 0, detail = '';
+  try {
+    var r = await apiFetch('/api/personas/profiles/import', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({profiles: _importData, mode: 'merge'})
+    }, {timeoutMs: 120000});
+    var d = await r.json().catch(function () { return {}; });
+    if (r.status === 403) {
+      fail = _importData.length;
+      detail = _impDetail(d) || window.T('psn_imp_readonly');
+    } else if (!r.ok || !d.ok) {
+      fail = _importData.length;
+      detail = _impDetail(d) || ('HTTP ' + r.status);
+    } else {
+      ok = Number(d.imported != null ? d.imported : 0);
+      var skipped = (d.invalid && d.invalid.length) || 0;
+      fail = skipped;
+      var warnById = {};
+      (d.warnings || []).forEach(function (w) { if (w && w.id) warnById[w.id] = w; });
+      var invalidIdx = {};
+      (d.invalid || []).forEach(function (x) { if (x && x.index != null) invalidIdx[x.index] = x; });
+      _importData.forEach(function (p, i) {
+        var cell = rows[i] && rows[i].cells[3];
+        if (invalidIdx[i]) {
+          if (rows[i]) rows[i].className = 'err';
+          if (cell) cell.textContent = window.T('psn_js_221') + (invalidIdx[i].reason ? ' (' + invalidIdx[i].reason + ')' : '');
+          return;
+        }
+        if (rows[i]) rows[i].className = 'ok';
+        var note = _impVoiceNote(warnById[p.id] || {}, true);
+        if (cell) cell.innerHTML = window.T('psn_js_220')
+          + (note ? '<div style="font-size:.68rem;color:var(--th-ink-amber7,#b45309);margin-top:.15rem">' + _escHtml(note) + '</div>' : '');
+      });
     }
+  } catch (e) {
+    fail = _importData.length;
+    detail = (e && e.message) || String(e);
   }
-  if (st) { st.textContent = window.T('psn_js_223') + ok + window.T('psn_js_224') + (fail ? '，' + fail + window.T('psn_js_192') : ''); st.style.color = ok ? '#10b981' : '#ef4444'; }
+  if (fail && rows.length) {
+    Array.prototype.forEach.call(rows, function (row) {
+      if (row.className === 'ok') return;
+      row.className = 'err';
+      var cell = row.cells[3];
+      if (cell && fail === _importData.length) cell.textContent = window.T('psn_js_221') + (detail ? ' · ' + detail : '');
+    });
+  }
+  if (st) {
+    st.textContent = window.T('psn_js_223') + ok + window.T('psn_js_224') + (fail ? '，' + fail + window.T('psn_js_192') : '');
+    st.style.color = ok ? '#10b981' : '#ef4444';
+  }
   if (cb) { cb.disabled = false; cb.textContent = window.T('psn_js_225'); cb.style.display = 'none'; }
   _importData = [];
   if (ok > 0) { setTimeout(function(){ loadProfileList(); _renderUsageChart(); }, 500); }
@@ -9020,7 +9219,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   } catch (e) { /* 老浏览器无 URLSearchParams：忽略深链参数 */ }
   _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）
-  _initDocImport();                  // C 线：文档导入功能开关探测（旧后端 404 = 保持隐藏）
+  _initDocImport();                  // C 线：探测 LLM 提取开关（不藏导入入口）
   _initQuizStatus();                 // C2 线：一致性考题开关探测（false/404 = 整块隐藏）
   _initBioInventory();               // M9 收尾：孤儿传记库存横幅（404/无孤儿 = 隐藏）
   loadProfileList();
@@ -9749,7 +9948,7 @@ function openCreateFlow() {
 <script>window.CP_LANG = document.documentElement.getAttribute('lang') || 'zh';</script>
 <script src="/copilot/i18n/cp-i18n.js?v=20260908b"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912a"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912b"></script>
 {% endif %}
 <script src="/copilot/client/copilot-client.js?v=20260830y"></script>
 <script src="/copilot/components/cp-voice.js?v=20260908a"></script>

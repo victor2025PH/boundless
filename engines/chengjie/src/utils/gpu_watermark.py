@@ -18,11 +18,22 @@
         hosts:
           - {name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}
           - {name: "140-4070", base_url: "http://192.168.0.140:11434", vram_gb: 12}
+          - {name: "173-5090", base_url: "http://192.168.0.173:8001", vram_gb: 32,
+             kind: vllm, resident_gb: 28}
+
+``kind: vllm``（2026-09-17）：173 出话口 08-28 已从 Ollama :11434 迁到 vLLM :8001，
+条目若仍指 :11434 会把「主链正在服务的 5090」画成**空卡 0 GB / 无模型**（Ollama 守护
+进程还活着但不管这张卡）。vLLM 没有 ``/api/ps``：改探 ``/v1/models``（驻留模型目录）
++ ``/metrics`` 的 ``vllm:kv_cache_usage_perc``（KV cache 水位）。vLLM 启动即按
+``gpu_memory_utilization`` 一次性预留显存、不按模型逐个算，显存占用量本模块**不猜**：
+配置给了 ``resident_gb``（运维按 vLLM 启动参数填）才显示占用，否则 used_gb=None、
+卡面只显「常驻 · 模型名 · KV cache x%」。
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -62,11 +73,22 @@ def parse_hosts(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         base = str(h.get("base_url") or "").strip().rstrip("/")
         if not base or "://" not in base:
             continue
-        out.append({
+        kind = str(h.get("kind") or "ollama").strip().lower()
+        if kind not in ("ollama", "vllm"):
+            kind = "ollama"
+        row: Dict[str, Any] = {
             "name": str(h.get("name") or base),
             "base_url": base,
             "vram_gb": float(h.get("vram_gb") or 0),
-        })
+            "kind": kind,
+        }
+        if kind == "vllm":
+            try:
+                rg = float(h.get("resident_gb") or 0)
+            except (TypeError, ValueError):
+                rg = 0.0
+            row["resident_gb"] = rg if rg > 0 else None
+        out.append(row)
     return out
 
 
@@ -103,6 +125,80 @@ def summarize_host(name: str, vram_gb: float,
             "used_pct": round(pct, 1), "level": level, "models": models}
 
 
+_KV_CACHE_RE = re.compile(r"^vllm:kv_cache_usage_perc(?:\{[^}]*\})?\s+([0-9.eE+-]+)", re.M)
+
+
+def parse_vllm_kv_cache_pct(metrics_text: Optional[str]) -> Optional[float]:
+    """从 vLLM ``/metrics`` 文本取 KV cache 占用百分比（0–100）；缺失/不可解析 → None。
+
+    vLLM 该指标是 0–1 小数（``vllm:kv_cache_usage_perc{...} 0.03``），这里换成百分比
+    与 ``used_pct`` 同单位；多引擎行取最大（最挤的那个才是水位）。
+    """
+    if not metrics_text:
+        return None
+    vals: List[float] = []
+    for m in _KV_CACHE_RE.finditer(metrics_text):
+        try:
+            vals.append(float(m.group(1)))
+        except ValueError:
+            continue
+    if not vals:
+        return None
+    v = max(vals)
+    # 兼容将来直接给百分比的版本：>1 视作已是百分比
+    return round(v * 100.0 if v <= 1.0 else v, 1)
+
+
+def summarize_vllm_host(name: str, vram_gb: float,
+                        models_payload: Optional[Dict[str, Any]],
+                        *, metrics_text: Optional[str] = None,
+                        resident_gb: Optional[float] = None,
+                        error: str = "") -> Dict[str, Any]:
+    """vLLM 主机 → 水位行（纯函数，形状与 ``summarize_host`` 同款，前端同一渲染）。
+
+    - ``models_payload=None`` → 不可达（与 Ollama 行同语义）。
+    - 可达但 ``/v1/models`` 目录为空 → ``level=warn``（进程活着模型没挂，出话会 404）。
+    - 显存占用：只有配置 ``resident_gb`` 才填 used_gb/used_pct（vLLM 预留式占用不猜数）；
+      分级优先看 KV cache 水位（真正会挤爆的是它），其次看 resident/vram。
+    - ``note`` 供卡面显示（used_gb=None 时前端用它代替「x / y GB」）。
+    """
+    if models_payload is None:
+        row = {"name": name, "reachable": False, "error": error[:120],
+               "total_gb": vram_gb, "used_gb": None, "used_pct": None,
+               "level": "unknown", "models": [], "kind": "vllm"}
+        return row
+    ids: List[str] = []
+    for m in (models_payload.get("data") or []):
+        if isinstance(m, dict) and m.get("id"):
+            ids.append(str(m["id"]))
+    kv_pct = parse_vllm_kv_cache_pct(metrics_text)
+    used_gb: Optional[float] = None
+    used_pct: Optional[float] = None
+    if resident_gb and resident_gb > 0:
+        used_gb = round(float(resident_gb), 1)
+        used_pct = round(used_gb / vram_gb * 100.0, 1) if vram_gb > 0 else 0.0
+    # 分级：模型没挂=warn；KV cache 水位有则按它分级；否则按预留占比（有则）分级
+    if not ids:
+        level = "warn"
+    else:
+        gauge = kv_pct if kv_pct is not None else used_pct
+        if gauge is None:
+            level = "ok"
+        else:
+            level = "high" if gauge >= HIGH_PCT else ("warn" if gauge >= WARN_PCT else "ok")
+    per_model = (round(used_gb / len(ids), 1) if (used_gb and ids) else None)
+    models = [{"name": i, "size_gb": per_model, "until": "常驻（vLLM）"} for i in ids]
+    note_parts = ["vLLM 常驻" if ids else "vLLM 进程在、模型目录为空"]
+    if ids:
+        note_parts.append("、".join(ids[:3]))
+    if kv_pct is not None:
+        note_parts.append(f"KV cache {kv_pct:g}%")
+    return {"name": name, "reachable": True, "error": "",
+            "total_gb": vram_gb, "used_gb": used_gb, "used_pct": used_pct,
+            "level": level, "models": models, "kind": "vllm",
+            "kv_cache_pct": kv_pct, "note": " · ".join(note_parts)}
+
+
 def summarize_fleet(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """整队汇总：整体 level 取最差（unknown 视作 warn——探不到该报修不该装绿）。"""
     rank = {"ok": 0, "warn": 1, "unknown": 1, "high": 2}
@@ -135,6 +231,24 @@ async def probe_hosts(config: Dict[str, Any], *, force: bool = False) -> Optiona
     import httpx
 
     async def _one(h: Dict[str, Any]) -> Dict[str, Any]:
+        if h.get("kind") == "vllm":
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as hc:
+                    resp = await hc.get(h["base_url"] + "/v1/models")
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    metrics_text: Optional[str] = None
+                    try:
+                        mr = await hc.get(h["base_url"] + "/metrics")
+                        if mr.status_code == 200:
+                            metrics_text = mr.text
+                    except Exception:
+                        metrics_text = None   # 指标口关着不算不可达
+                return summarize_vllm_host(
+                    h["name"], h["vram_gb"], payload, metrics_text=metrics_text,
+                    resident_gb=h.get("resident_gb"))
+            except Exception as e:
+                return summarize_vllm_host(h["name"], h["vram_gb"], None, error=str(e))
         try:
             async with httpx.AsyncClient(timeout=3.0) as hc:
                 resp = await hc.get(h["base_url"] + "/api/ps")

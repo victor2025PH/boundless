@@ -112,6 +112,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     # LAN GPU 主机整机下线（嵌入/视觉/兜底 LLM/本地 MT 静默转移备点 → 冗余归零无人知，
     # 2026-08-01 176 两小时静默宕机实锤）
     "lan_gpu": {"types": {"lan_gpu_alert"}, "levels": None},
+    # 三路算力互相顶班（2026-09-18）：173 / DeepSeek / 硅基任一欠费或出错，
+    # 其余顶上的同时每 3 分钟催运维群，直到认领或修好
+    "compute_lane": {"types": {"compute_lane_alert"}, "levels": None},
     # 人工通过投递链静默断裂（坐席点了「发送」，一条都没真投递 → 客户什么也没收到）
     "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
     # 报障群 AI 值守（2026-08-18）：新 P0/P1 工单 / 危机词压制转人工
@@ -120,6 +123,11 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "assistant_report": {"types": {"assistant_report_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
     "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
+    # 系统标签泄漏（2026-09-12「[我方语音消息]」事故）：AI 出站正文以上下文系统标注开头
+    # ＝穿帮已发给客户，靠坐席截图才发现 → 按落库行巡检主动响
+    "label_leak": {"types": {"label_leak_alert"}, "levels": None},
+    # 事故讨论里的旧名；与 label_leak 同事件，方便按「tag_leak」订阅
+    "tag_leak": {"types": {"label_leak_alert"}, "levels": None},
     # 前端脚本 bug（2026-09-15 `_psnArRender` 人设工坊 3.5 天不可用零告警）：ReferenceError /
     # SyntaxError beacon 按 (page, type, fn) 三元组聚合，坏符号被反复踩才响
     "frontend_error": {"types": {"frontend_error_alert"}, "levels": None},
@@ -300,6 +308,7 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     # 从未出现在面板。voice_outage 尤其讽刺——它正是为「音色档 404 → 整链拒发 5 天
     # 零告警」建的告警，自己却也没有订阅入口。
     "lan_gpu":             "cp.alert.lan_gpu",
+    "compute_lane":        "cp.alert.compute_lane",
     "voice_outage":        "cp.alert.voice_outage",
     # 常备循环心跳停走＝基建自愈信号（开发/技术支持处置），terminal 运营看不懂
     "scan_stall":          "cp.alert.scan_stall",
@@ -312,6 +321,9 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     # #159 幽灵未读：徽标口径差额是可量化的卫生指标，修法在数据层（技术支持动作）。
     # （0908 补登：与 autosend_gate 同批，别名进了 _EVENT_ALIASES 却没归类）
     "phantom_unread":      "cp.alert.phantom_unread",
+    # 2026-09-12 标签泄漏：修法在生成链/守卫（代码与 prompt 结构），终端运营无从处置 → technical
+    "label_leak":          "cp.alert.label_leak",
+    "tag_leak":            "cp.alert.label_leak",
     "frontend_error":      "cp.alert.frontend_error",
 }
 
@@ -913,7 +925,9 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
         # AI 花费日报（成本对账 P1）：面向老板/运营的 5 行以内摘要——今天花了多少、
         # 花在哪、和账单对得上吗、余额还能撑几天、有没有要处理的事。
         _light = str(data.get("light") or "⚪")
-        _prov = str(data.get("provider") or "云端")
+        # provider 是账本的**云端计费厂商**，不是主链当前路由（主链 local 时本地调用
+        # 不计费、不入账）——标题写明口径，别让运维把「计费 deepseek」读成「主链 deepseek」
+        _prov = "云端计费 " + str(data.get("provider") or "云端")
         _internal = data.get("internal")
         _truth = data.get("truth")
         _bp = data.get("by_purpose") or {}
@@ -970,6 +984,14 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 _lines.append(f"- …另 {len(_open) - 6} 项见运营总览")
         else:
             _lines.append("**未处理**: 无 ✅")
+        # 主链档位一行（2026-09-17）：每日摘要是运维群每天必看的一条，档位口径放这里
+        # 让「现在主链在哪」天天可见，不再依赖有人去翻配置
+        _prim = data.get("primary")
+        if isinstance(_prim, dict) and _prim.get("primary_text"):
+            _lines.append(f"**主链**: {str(_prim['primary_text'])}"
+                          + (f"；云端计费 {_prim['billing_provider']}"
+                             if _prim.get("billing_provider") and
+                             str(_prim.get("effective") or "") in ("local", "local_only") else ""))
         _pr = data.get("probes")
         if isinstance(_pr, dict) and _pr.get("total"):
             _bad = [str(b) for b in (_pr.get("bad") or [])]
@@ -1445,6 +1467,35 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "compute_lane_alert":
+        label = str(data.get("label") or data.get("lane") or "算力")
+        if data.get("recovered"):
+            title = f"✅ {label} 已恢复"
+            text = (
+                "**状态**: 探活已通过，这一档重新加入顶班顺序\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            down_min = int(data.get("down_minutes") or 0)
+            down_txt = _minutes_txt(down_min) if down_min else "刚发现"
+            prefix = "⏰" if data.get("reminder") else "🖥️"
+            kind_zh = str(data.get("kind_zh") or "出错")
+            same = "（重提，仍未处理）" if data.get("unchanged") else (
+                "（重提）" if data.get("reminder") else "")
+            title = f"{prefix} {label}：{kind_zh}（已 {down_txt}）{same}"
+            standins = data.get("standins") or []
+            if isinstance(standins, str):
+                standins = [standins]
+            standin_txt = "、".join(str(x) for x in standins if x) or "无（三路都有问题）"
+            _err = str(data.get("detail") or "").strip()[:150]
+            text = (
+                f"**问题**: {kind_zh}\n"
+                f"**顶班**: {standin_txt}\n"
+                + (f"**详情**: {_err}\n" if _err else "")
+                + "没费用或这档算力出错会每 3 分钟催一次，直到有人点已处理或探活恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "case_backlog_alert":
         if data.get("recovered"):
             title = "✅ 案例积压已清"
@@ -1759,30 +1810,52 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                        # D1b P0-5：自动推进的两条腿
                        "goal_sprint": "目标冲刺推进器（自动推进排拍）",
                        "care_dispatch": "主动派发循环（自动推进真发）",
-                       "goal_sprint_sends": "自动推进真发（有货却 24h 零出站）"}
+                       "goal_sprint_sends": "自动推进真发（有货却 24h 零出站）",
+                       "goal_sprint_goal": "单目标自动跟进"}
         _loop_impact = {
             "goal_scan": "目标完成不被发现/提醒不发",
             "workflow_autorun": "工作链步骤不推进",
             "goal_sprint": "「自动推进」目标一拍都不排——卡片仍写着下一拍时间",
             "care_dispatch": "已排好的主动拍/约定回访一条都不发出去",
             "goal_sprint_sends": "库里有够老的自动跟进目标，24 小时却一条都没发出去",
+            "goal_sprint_goal": "这一张目标卡写着自动跟进，实际 24h 一拍没发出去",
         }
         _lk = str(data.get("loop") or "")
         _ln = _loop_names.get(_lk, _lk or "?")
         if data.get("recovered"):
-            title = f"✅ 常备循环已恢复：{_ln}"
-            if _lk == "goal_sprint_sends":
+            if _lk == "goal_sprint_goal":
+                title = f"✅ 自动跟进已恢复出手：{_ln}"
+                text = (
+                    "**状态**: 该目标近窗已有真发出站\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
+            elif _lk == "goal_sprint_sends":
+                title = f"✅ 常备循环已恢复：{_ln}"
                 text = (
                     "**状态**: 近窗已有真发出站（care_sent / beat_sent）\n"
                     "[📊 查看运营总览](/admin/ops)"
                 )
             else:
+                title = f"✅ 常备循环已恢复：{_ln}"
                 text = "**状态**: 心跳恢复跳动\n[📊 查看运营总览](/admin/ops)"
         else:
             _sm = float(data.get("stalled_min") or 0)
             _mounted = data.get("mounted")
             prefix = "⏰" if data.get("reminder") else "🚨"
-            if _lk == "goal_sprint_sends":
+            if _lk == "goal_sprint_goal":
+                _gid = str(data.get("goal_id") or "")[:12]
+                _conv = str(data.get("conversation_id") or "")
+                _gt = str(data.get("title") or "").strip() or "（无标题）"
+                title = f"{prefix} 自动跟进停住：{_gt}（目标 {_gid} 24h 零真发）"
+                text = (
+                    f"**会话**: {_conv or '—'}\n"
+                    f"**判定**: auto 档、建了超过 24h、期限未到，近 24h 没有 beat_sent\n"
+                    f"**影响**: {_loop_impact['goal_sprint_goal']}——卡片可能仍写着下一拍时间\n"
+                    "**处置**: 先看会话是不是演练号段（990001xxx）或人审档；"
+                    "真客户再查排拍是否被 automation_mode 拦住\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
+            elif _lk == "goal_sprint_sends":
                 _auto = int(data.get("active_auto") or 0)
                 _sent = int(data.get("sent_24h") or 0)
                 _oh = float(data.get("oldest_hours") or 0)
@@ -1991,6 +2064,43 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "label_leak_alert":
+        # 2026-09-12「[我方语音消息]」事故：上下文系统标注被 LLM 照抄进正文发给客户。
+        if data.get("recovered"):
+            title = "✅ AI 出站已无系统标签泄漏"
+            text = (
+                f"**状态**: 近 {float(data.get('lookback_hours') or 24):.0f}h 的 AI 出站正文"
+                "不再以系统标签开头\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            n = int(data.get("system_label") or data.get("count") or 0)
+            convs = int(data.get("conversations") or 0)
+            tags = "、".join(str(t) for t in (data.get("sample_tags") or [])[:5]) or "—"
+            extra = int(data.get("bracket_prefix") or 0)
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            _same = "（重提，与上次相同）" if data.get("unchanged") else (
+                "（重提）" if data.get("reminder") else "")
+            _tops = data.get("top_conversations") or []
+            tops_txt = "、".join(
+                f"{str(kv[0])}×{kv[1]}" for kv in _tops if isinstance(kv, (list, tuple)) and len(kv) >= 2
+            ) or "—"
+            latest = str(data.get("latest_text") or "").replace("\n", " ")[:80]
+            title = (f"{prefix} AI 出站正文带系统标签 {n} 条（{convs} 个会话）"
+                     f"{_same}")
+            text = (
+                f"**样本标签**: {tags}\n"
+                f"**涉及会话**: {tops_txt}\n"
+                f"**最近一条**: {latest or '—'}\n"
+                f"**含义**: 客户已经看到/听到「[我方…]」这类内部标注＝当场穿帮；"
+                "多半是 LLM 把上下文里的系统标注当格式模板照抄了\n"
+                "**排查**: `/api/workspace/metrics` 看 `outbound_text_guard.system_label`"
+                "（守卫是否在拦）；确认实例已装载 2026-09-12 之后的 normalize_history；"
+                "已落库行用 `python tools/strip_label_leaks.py --apply` 清前缀\n"
+                + (f"（另有 {extra} 条 AI 出站以其它方括号开头，未计入）\n" if extra else "")
+                + "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "frontend_error_alert":
         # 2026-09-15 `_psnArRender`：模板半成品热更上生产，人设工坊整体 ReferenceError 3.5 天。
         if data.get("recovered"):
@@ -2123,13 +2233,18 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
 
     elif event_type == "ai_primary_guard_alert":
+        # 文案全部取自事件字段（锁值/档位/端点），不写死任何档位或日期——
+        # 2026-08-22 起锁 cloud、2026-09-17 R88 改锁 local，硬编码一次就过时一次。
         _apg_kind = str(data.get("kind") or "")
+        _apg_lock = str(data.get("lock") or "").strip()
+        _apg_lock_txt = f"primary_lock={_apg_lock}" if _apg_lock else "未设锁"
+        _apg_mode_txt = str(data.get("effective") or data.get("from_mode") or "?")
         if _apg_kind == "lock_enforced":
-            # 老板锁（2026-08-22）：配置被越权改动 → 装载点强制回锁值
+            # 老板锁：配置被越权改动 → 装载点强制回锁值
             title = "🔒 主链锁生效：越权改档已被强制纠正"
             text = (
                 f"**检测**: ai.primary 被改为 {str(data.get('from_mode') or '?')}，"
-                f"与 primary_lock={str(data.get('lock') or '?')} 不符\n"
+                f"与 {_apg_lock_txt} 不符\n"
                 f"**处置**: 装载时按锁强制生效（现 {str(data.get('effective') or '?')}）"
                 "并回写 overlay\n"
                 "**追责**: 见实例 logs/ai_primary_audit.jsonl（谁在何时经何途径改的）\n"
@@ -2140,18 +2255,64 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             text = (
                 f"**请求**: 切到 {str(data.get('requested') or '?')}"
                 f"（操作者: {str(data.get('actor') or '?')}）\n"
-                f"**锁**: primary_lock={str(data.get('lock') or '?')}"
-                "（老板令 2026-08-22；解除需老板拍板）\n"
+                f"**锁**: {_apg_lock_txt}（老板锁；改锁需老板拍板，改后经治理接口切换）\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif _apg_kind == "mode_switched":
+            # 装载点检测到档位/锁与上次生效态不同（任何途径：接口 / 改 overlay / 保险）
+            _from = str(data.get("from_mode") or "?")
+            _to = str(data.get("to_mode") or data.get("effective") or "?")
+            _lf = str(data.get("lock_from") or "") or "未设"
+            _lk = _apg_lock or "未设"
+            if _from != _to:
+                title = f"🔁 主链档位已切换：{_from} → {_to}"
+            else:
+                title = f"🔁 主链锁已变更：{_lf} → {_lk}（档位 {_to} 不变）"
+            text = (
+                f"**现在**: {str(data.get('primary_text') or _to)}"
+                f"{'' if not data.get('mode_label') else ' · ' + str(data.get('mode_label'))}\n"
+                f"**降级链**: {str(data.get('chain_text') or '—')}\n"
+                f"**锁**: {_lf} → {_lk}\n"
+                f"**途径**: 装载点解析（via={str(data.get('via') or '?')}）；谁改的见 "
+                "logs/ai_primary_audit.jsonl\n"
+                "**表达层**: 运维通报 / 每日摘要 / 官网算力看板 / GPU 水位卡均按新档位渲染，"
+                "看到与此不一致的字眼请报告\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif _apg_kind == "probe_fail_locked":
+            # 锁在本地档：保险不切 cloud（切了会被锁打回），只报端点连败
+            title = (f"⚠️ 本地主链端点连败（档位 {_apg_mode_txt} 未动，{_apg_lock_txt}）")
+            _apg_effect = (
+                "严格隐私档：本地失败**不回落云端**，客户消息会落 canned 占位"
+                if _apg_mode_txt == "local_only"
+                else "每条请求先撞本地超时再回落云端，回复明显变慢")
+            text = (
+                f"**端点**: {str(data.get('base_url') or '?')} 连续 "
+                f"{int(data.get('fail_count') or 0)} 次探测失败"
+                f"（首败至今 ~{int(data.get('down_minutes') or 0)} 分钟）\n"
+                f"**影响**: {_apg_effect}\n"
+                "**为何未切档**: 锁在本地档，保险不越锁自动降级（要降级需老板改 "
+                "ai.primary_lock 后经治理接口切换）\n"
+                "**排查**: 173 vLLM :8001（systemctl status vllm / journalctl -u vllm / "
+                "WSL VM 是否被回收）、中枢 176 keepwarm 日志\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
         elif data.get("recovered"):
-            title = "✅ 本地主链已恢复可用（仍在 cloud 档）"
-            text = (
-                "**状态**: 本地端点探测恢复；保险为单向降级，未自动切回\n"
-                "**下一步**: 主链档位由 ai.primary_lock 治理（2026-08-22 起锁 cloud），"
-                "恢复本地档需老板解锁后经治理接口切换，严禁自动切回\n"
-                "[📊 查看运营总览](/admin/ops)"
-            )
+            if _apg_kind == "probe_recovered_locked":
+                title = f"✅ 本地主链端点已恢复可达（档位 {_apg_mode_txt}）"
+                text = (
+                    f"**状态**: 本地端点探测恢复；{_apg_lock_txt}，期间档位未曾变动，"
+                    "主链请求已自动重新走本地\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
+            else:
+                title = "✅ 本地主链端点已恢复可达（主链仍在 cloud 档）"
+                text = (
+                    "**状态**: 本地端点探测恢复；保险为单向降级，未自动切回\n"
+                    f"**下一步**: 主链档位由 ai.primary_lock 治理（当前 {_apg_lock_txt}），"
+                    "恢复本地档需老板拍板改锁后经治理接口切换，严禁自动切回\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
         else:
             title = "🛟 本地主链保险触发：已热切 cloud"
             text = (
@@ -2160,7 +2321,7 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"**端点**: {str(data.get('base_url') or '?')} 连续 "
                 f"{int(data.get('fail_count') or 0)} 次探测失败"
                 f"（首败至今 ~{int(data.get('down_minutes') or 0)} 分钟）\n"
-                "**影响**: 用户内容临时走云端；本地隐私档待人工/执行器恢复\n"
+                "**影响**: 用户内容临时走云端；本地档待人工经治理接口恢复\n"
                 "**排查**: 173 vLLM（journalctl -u vllm / WSL VM 是否被回收）、"
                 "keepwarm 日志（176）\n"
                 "[📊 查看运营总览](/admin/ops)"
@@ -2401,6 +2562,7 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "human_deliver_alert": ("🔴 严重", "运营"),
     "draft_sla_escalated": ("🔴 严重", "运营"),
     "lan_gpu_alert": ("🟠 警告", "算力"),
+    "compute_lane_alert": ("🟠 警告", "算力"),
     "avatar_voice_alert": ("🟠 警告", "算力"),
     "image_models_alert": ("🟠 警告", "算力"),
     "hub_engine_alert": ("🟠 警告", "算力"),
@@ -2451,6 +2613,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "draft_quality_alert": ("🟠 警告", "质量"),
     "ai_quality_alert": ("🟠 警告", "质量"),
     "media_promise_alert": ("🟠 警告", "质量"),
+    # 严重：不是「可能出问题」而是「穿帮已经发给客户」
+    "label_leak_alert": ("🔴 严重", "质量"),
     # 前端脚本 bug：整页功能对全体坐席同时失效，且热更新无部署缓冲
     "frontend_error_alert": ("🟠 警告", "技术"),
     "voice_burst_alert": ("🟠 警告", "质量"),
@@ -2469,10 +2633,18 @@ _SEV_RANK: Dict[str, int] = {"info": 0, "warning": 1, "critical": 2}
 SEVERITY_LEVELS = ("info", "warning", "critical")
 
 
-def event_severity(event_type: str) -> str:
+def event_severity(event_type: str, data: Optional[Dict[str, Any]] = None) -> str:
     """事件的严重度等级：critical / warning / info / report / business（未登记的事件按 info）。
-    恢复通知沿用原事件等级——某渠道收不到那条告警，也不该收到它的恢复。"""
+    恢复通知沿用原事件等级——某渠道收不到那条告警，也不该收到它的恢复。
+
+    2026-09-16：``scan_loop_stall_alert`` 里「自动推进有货零真发 / 单目标点名」
+    是业务卫生项（常为人审档），降为 warning；ticker 心跳停走仍 critical。
+    """
     sev, _cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
+    if event_type == "scan_loop_stall_alert" and isinstance(data, dict):
+        loop = str(data.get("loop") or "")
+        if loop in ("goal_sprint_sends", "goal_sprint_goal"):
+            sev = "🟠 警告"
     return _SEV_LEVEL.get(sev, "info")
 
 
@@ -2518,6 +2690,10 @@ def _build_card(event_type: str, data: Dict[str, Any], title: str, text: str,
     不改各事件正文语义。``links`` 透传 ``_plainify``（login / magic / off，见其说明）。
     """
     sev, cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
+    if event_type == "scan_loop_stall_alert":
+        loop = str(data.get("loop") or "")
+        if loop in ("goal_sprint_sends", "goal_sprint_goal"):
+            sev, cat = "🟠 警告", "运营"
     if data.get("recovered"):
         sev = "✅ 恢复"
     base_url, link_note = _effective_base(base_url, links)
@@ -2671,7 +2847,7 @@ class WebhookNotifier:
             for x in (data.get("extra_chat_ids") or [])
             if str(x or "").strip()][:5]
 
-        sev_level = event_severity(etype)
+        sev_level = event_severity(etype, data)
         for m in self._matchers:
             # 匹配 event type
             if m["types"] is not None and etype not in m["types"]:

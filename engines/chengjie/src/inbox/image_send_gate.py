@@ -30,12 +30,15 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,7 @@ REASON_INBOUND_IMAGE = "inbound_image_no_intent"
 REASON_DUP_MID = "dup_mid"
 REASON_FOLLOW_COOLDOWN = "follow_cooldown"
 REASON_FOLLOW_DAILY_MAX = "follow_daily_max"
+REASON_PROMISE_STREAK = "promise_streak_pause"
 
 DEFAULT_FOLLOW_COOLDOWN_MIN = 30.0
 DEFAULT_FOLLOW_DAILY_MAX = 6
@@ -239,7 +243,8 @@ def compute_image_intent(
     """出图意图闸（纯函数，只读词表）。
 
     - 入站是图：只看客户自己敲的配文；识图描述里的「自拍 / 海边」一个字都不算。
-      配文里也没索图 → **任何路径**（承诺兑现 / offer / LLM 指令）都不放行——承诺交撤回改写。
+      配文里也没索图词 → **任何路径**（承诺兑现 / offer-accept「好的/ok」 / LLM 指令）
+      都不放行——承诺交撤回改写。短肯定配自拍是在回自己的图，不是要我方相册（#332）。
     - 入站是文本：``detect_selfie_request`` ∨ 严格场景 kind ∨ 触发词 ∨ offer-accept 之一 → 显式索图；
       否则 ``assume_intent``（承诺兑现）/ ``directive_override``（LLM 指令）照旧放行。
     """
@@ -272,10 +277,13 @@ def compute_image_intent(
                         words, list(history or []), generic_request=False))
                 except Exception:
                     pass
-    explicit = ask or bool(kind) or kw or offer
-    if img and not explicit:
+    asked_on_caption = ask or bool(kind) or kw
+    # 入站是图时 offer-accept 不算索图：「好的」配自拍常是回应自己刚发的图，
+    # 不是接受上一轮「要不要看我的照片」（#332 / 9PYWPG 复验）。
+    if img and not asked_on_caption:
         trig = (TRIGGER_DIRECTIVE if directive_override
-                else (TRIGGER_COMMITMENT if assume_intent else TRIGGER_NONE))
+                else (TRIGGER_COMMITMENT if assume_intent
+                      else (TRIGGER_OFFER_ACCEPT if offer else TRIGGER_NONE)))
         return IntentGate(False, trig, REASON_INBOUND_IMAGE, words, True, kind)
     if directive_override:
         return IntentGate(True, TRIGGER_DIRECTIVE, "", words, img, kind)
@@ -367,6 +375,7 @@ def follow_stats(conv_key: str, *, now: Optional[float] = None) -> Dict[str, Any
     t = float(now if now is not None else time.time())
     day0 = _day_start(t)
     with _FOLLOW_LOCK:
+        _load_follow_ledger_unlocked()
         arr = list(_FOLLOW.get(str(conv_key or ""), []) or [])
     today = [x for x in arr if x >= day0]
     return {"today": len(today), "last_ts": (max(arr) if arr else 0.0)}
@@ -401,6 +410,7 @@ def note_follow_sent(conv_key: str, *, now: Optional[float] = None) -> None:
         return
     t = float(now if now is not None else time.time())
     with _FOLLOW_LOCK:
+        _load_follow_ledger_unlocked()
         arr = list(_FOLLOW.get(ck, []) or [])
         arr = [x for x in arr if t - x < 48 * 3600.0]
         arr.append(t)
@@ -408,6 +418,71 @@ def note_follow_sent(conv_key: str, *, now: Optional[float] = None) -> None:
         _FOLLOW.move_to_end(ck)
         while len(_FOLLOW) > _FOLLOW_CAP:
             _FOLLOW.popitem(last=False)
+        _save_follow_ledger_unlocked()
+
+
+_FOLLOW_LOADED = False
+
+
+def _follow_ledger_path() -> Optional[Path]:
+    try:
+        base = str(os.environ.get("AITR_DATA_DIR") or "").strip()
+        if not base:
+            return None
+        return Path(base) / "logs" / "image_send_follow_ledger.json"
+    except Exception:
+        return None
+
+
+def _load_follow_ledger_unlocked() -> None:
+    global _FOLLOW_LOADED
+    if _FOLLOW_LOADED:
+        return
+    _FOLLOW_LOADED = True
+    p = _follow_ledger_path()
+    if p is None or not p.is_file():
+        return
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for ck, arr in (raw.get("follow") or {}).items():
+            ts = [float(x) for x in (arr or []) if now - float(x) < 48 * 3600.0]
+            if ts:
+                _FOLLOW[str(ck)] = ts
+        for ck, arr in (raw.get("captions") or {}).items():
+            caps = [str(x) for x in (arr or []) if str(x).strip()][-CAPTION_HISTORY_N:]
+            if caps:
+                with _CAPTIONS_LOCK:
+                    _CAPTIONS[str(ck)] = caps
+    except Exception:
+        logger.debug("[image_send_gate] follow ledger 读取失败", exc_info=True)
+
+
+def _save_follow_ledger_unlocked() -> None:
+    p = _follow_ledger_path()
+    if p is None:
+        return
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        follow_out: Dict[str, List[float]] = {}
+        for ck, arr in _FOLLOW.items():
+            ts = [float(x) for x in arr if now - float(x) < 48 * 3600.0]
+            if ts:
+                follow_out[str(ck)] = ts[-48:]
+        cap_out: Dict[str, List[str]] = {}
+        with _CAPTIONS_LOCK:
+            items = list(_CAPTIONS.items())
+        for ck, arr in items:
+            caps = [str(x) for x in arr if str(x).strip()][-CAPTION_HISTORY_N:]
+            if caps:
+                cap_out[str(ck)] = caps
+        p.write_text(json.dumps({"follow": follow_out, "captions": cap_out},
+                                ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.debug("[image_send_gate] follow ledger 写入失败", exc_info=True)
 
 
 # ── 承诺发图未兑现的跟轮账（R87 P1-3，X9B22T 15:09–15:50「Sure, give me a second, I'll take one now」×4）──
@@ -417,8 +492,55 @@ def note_follow_sent(conv_key: str, *, now: Optional[float] = None) -> None:
 _PROMISE_RETRACTS: "OrderedDict[str, List[float]]" = OrderedDict()
 _PROMISE_CAP = 4000
 _PROMISE_LOCK = threading.Lock()
+_PROMISE_LOADED = False
 PROMISE_STREAK_WINDOW_SEC = 30 * 60.0
 PROMISE_STREAK_HINT_N = 2
+
+
+def _promise_ledger_path() -> Optional[Path]:
+    try:
+        base = str(os.environ.get("AITR_DATA_DIR") or "").strip()
+        if not base:
+            return None
+        return Path(base) / "logs" / "promise_streak_ledger.json"
+    except Exception:
+        return None
+
+
+def _load_promise_ledger_unlocked(now: float) -> None:
+    """持锁调用。缺文件 / 坏 JSON → 空账本。"""
+    global _PROMISE_LOADED
+    if _PROMISE_LOADED:
+        return
+    _PROMISE_LOADED = True
+    p = _promise_ledger_path()
+    if p is None or not p.is_file():
+        return
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        items = raw.items() if isinstance(raw, dict) else []
+        for ck, arr in items:
+            ts = [float(x) for x in (arr or []) if now - float(x) < PROMISE_STREAK_WINDOW_SEC]
+            if ts:
+                _PROMISE_RETRACTS[str(ck)] = ts
+    except Exception:
+        logger.debug("[image_send_gate] promise ledger 读取失败", exc_info=True)
+
+
+def _save_promise_ledger_unlocked(now: float) -> None:
+    p = _promise_ledger_path()
+    if p is None:
+        return
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        out: Dict[str, List[float]] = {}
+        for ck, arr in _PROMISE_RETRACTS.items():
+            ts = [float(x) for x in arr if now - float(x) < PROMISE_STREAK_WINDOW_SEC]
+            if ts:
+                out[str(ck)] = ts[-20:]
+        p.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.debug("[image_send_gate] promise ledger 写入失败", exc_info=True)
 
 
 def note_promise_retracted(conv_key: str, *, now: Optional[float] = None) -> int:
@@ -428,21 +550,35 @@ def note_promise_retracted(conv_key: str, *, now: Optional[float] = None) -> int
         return 0
     t = float(now if now is not None else time.time())
     with _PROMISE_LOCK:
+        _load_promise_ledger_unlocked(t)
         arr = [x for x in (_PROMISE_RETRACTS.get(ck) or []) if t - x < PROMISE_STREAK_WINDOW_SEC]
         arr.append(t)
         _PROMISE_RETRACTS[ck] = arr
         _PROMISE_RETRACTS.move_to_end(ck)
         while len(_PROMISE_RETRACTS) > _PROMISE_CAP:
             _PROMISE_RETRACTS.popitem(last=False)
-        return len(arr)
+        n = len(arr)
+        _save_promise_ledger_unlocked(t)
+        return n
 
 
 def promise_streak(conv_key: str, *, now: Optional[float] = None) -> int:
     """窗内撤回次数（无记录 = 0）。"""
     t = float(now if now is not None else time.time())
     with _PROMISE_LOCK:
+        _load_promise_ledger_unlocked(t)
         arr = _PROMISE_RETRACTS.get(str(conv_key or "").strip()) or []
     return len([x for x in arr if t - x < PROMISE_STREAK_WINDOW_SEC])
+
+
+def promise_streak_blocks_follow(conv_key: str, trigger: str, *, now: Optional[float] = None) -> bool:
+    """#332：同会话连续假发图/空头承诺 ≥2 → 暂停**非显式索图**的自动出图。
+
+    客户亲口再要一张（ask/keyword）仍放行——暂停的是跟发/兑现/指令，不是拒绝真人请求。
+    """
+    if str(trigger or "") in EXPLICIT_TRIGGERS:
+        return False
+    return promise_streak(conv_key, now=now) >= PROMISE_STREAK_HINT_N
 
 
 def promise_streak_hint(conv_key: str, *, now: Optional[float] = None) -> str:
@@ -458,8 +594,10 @@ def promise_streak_hint(conv_key: str, *, now: Optional[float] = None) -> str:
 
 
 def reset_promise_streak_for_tests() -> None:
+    global _PROMISE_LOADED
     with _PROMISE_LOCK:
         _PROMISE_RETRACTS.clear()
+        _PROMISE_LOADED = True  # 测试不从磁盘灌回；persist 用例会再翻回 False
 
 
 # ── 配文近重复 ─────────────────────────────────────────────────────────────
@@ -483,6 +621,8 @@ def caption_similarity(a: str, b: str) -> float:
 
 
 def recent_captions(conv_key: str) -> List[str]:
+    with _FOLLOW_LOCK:
+        _load_follow_ledger_unlocked()
     with _CAPTIONS_LOCK:
         return list(_CAPTIONS.get(str(conv_key or ""), []) or [])
 
@@ -492,13 +632,16 @@ def note_caption_sent(conv_key: str, caption: str) -> None:
     cap = str(caption or "").strip()
     if not ck or not cap:
         return
-    with _CAPTIONS_LOCK:
-        arr = list(_CAPTIONS.get(ck, []) or [])
-        arr.append(cap)
-        _CAPTIONS[ck] = arr[-CAPTION_HISTORY_N:]
-        _CAPTIONS.move_to_end(ck)
-        while len(_CAPTIONS) > _CAPTIONS_CAP:
-            _CAPTIONS.popitem(last=False)
+    with _FOLLOW_LOCK:
+        _load_follow_ledger_unlocked()
+        with _CAPTIONS_LOCK:
+            arr = list(_CAPTIONS.get(ck, []) or [])
+            arr.append(cap)
+            _CAPTIONS[ck] = arr[-CAPTION_HISTORY_N:]
+            _CAPTIONS.move_to_end(ck)
+            while len(_CAPTIONS) > _CAPTIONS_CAP:
+                _CAPTIONS.popitem(last=False)
+        _save_follow_ledger_unlocked()
 
 
 def dedup_caption(
@@ -557,10 +700,12 @@ def format_album_send_log(
 
 
 def _reset_for_tests() -> None:
+    global _FOLLOW_LOADED
     with _SEEN_LOCK:
         _SEEN.clear()
     with _FOLLOW_LOCK:
         _FOLLOW.clear()
+        _FOLLOW_LOADED = True
     with _CAPTIONS_LOCK:
         _CAPTIONS.clear()
 
@@ -571,11 +716,12 @@ __all__ = [
     "album_match_seen", "mark_album_match",
     "follow_cfg", "follow_stats", "follow_budget_check", "note_follow_sent",
     "note_promise_retracted", "promise_streak", "promise_streak_hint",
+    "promise_streak_blocks_follow",
     "reset_promise_streak_for_tests", "PROMISE_STREAK_WINDOW_SEC", "PROMISE_STREAK_HINT_N",
     "dedup_caption", "note_caption_sent", "recent_captions", "caption_similarity",
     "format_album_send_log",
     "TRIGGER_ASK", "TRIGGER_KEYWORD", "TRIGGER_OFFER_ACCEPT", "TRIGGER_COMMITMENT",
     "TRIGGER_DIRECTIVE", "TRIGGER_NONE", "EXPLICIT_TRIGGERS",
     "REASON_NO_INTENT", "REASON_INBOUND_IMAGE", "REASON_DUP_MID",
-    "REASON_FOLLOW_COOLDOWN", "REASON_FOLLOW_DAILY_MAX",
+    "REASON_FOLLOW_COOLDOWN", "REASON_FOLLOW_DAILY_MAX", "REASON_PROMISE_STREAK",
 ]

@@ -36,6 +36,11 @@ ZH = {
     "dv_mr_js_listing": "正在向端点拉取模型清单…",
     "dv_mr_js_list_ok": "拉到 {n} 个模型 id，在「模型」框里下拉选择",
     "dv_mr_js_list_fail": "拉取失败 {status} {msg}（检查 Base URL / API Key）",
+    "nav_model_keys": "模型与密钥",
+    "mk_sub": "添加 ChatGPT / Gemini / Grok / DeepSeek 等厂商端点与密钥；保存后聊天工作台「模型」面板即可按会话切换。登录即可改，无需开发者密码。",
+    "dv_mr_moved": "多模型路由已移到侧栏「模型与密钥」，登录即可进入，无需开发者密码。",
+    "dv_mr_moved_btn": "前往模型与密钥",
+    "mk_need_admin": "查看或修改密钥需要管理员权限，请联系管理员。此页已不再需要开发者密码。",
     "dv_cc_f_name": "名称",
     "dv_cc_inherit": "留空=继承主链",
     "dv_cc_js_bal": "余额",
@@ -331,6 +336,11 @@ EN = {
     "dv_mr_js_listing": "Fetching the model list from the endpoint…",
     "dv_mr_js_list_ok": "Got {n} model ids; pick one from the dropdown in “Model”",
     "dv_mr_js_list_fail": "Fetch failed {status} {msg} (check Base URL / API key)",
+    "nav_model_keys": "Models & keys",
+    "mk_sub": "Add ChatGPT / Gemini / Grok / DeepSeek endpoints and keys. They then appear in the chat composer Model panel per thread. Signed-in users can edit this page — no developer password.",
+    "dv_mr_moved": "Multi-model routing now lives under Models & keys in the sidebar. Sign in to open it — no developer password.",
+    "dv_mr_moved_btn": "Go to Models & keys",
+    "mk_need_admin": "Viewing or changing keys needs an admin. Ask a manager. This page no longer requires the developer password.",
     "dv_mr_js_loaded": "loaded",
     "dv_cc_f_name": "Name",
     "dv_cc_inherit": "Empty = inherit primary",
@@ -592,4 +602,13 @@ EN = {
     # ── Session secret state (L-6 D 2026-09-06: desktop first boot auto-generates a random secret_key) ──
     "dv_secret_set": "Auto-generated; leave empty to keep",
     "dv_secret_default": "Still the factory default (desktop edition generates one on first boot)",
+}
+
+# 新键尚未 regen 进 zh_hant_auto；手写繁体，不与生成物撞键。
+ZH_HANT = {
+    "nav_model_keys": "模型與金鑰",
+    "mk_sub": "新增 ChatGPT / Gemini / Grok / DeepSeek 等廠商端點與金鑰；儲存後聊天工作台「模型」面板即可按會話切換。登入即可改，無需開發者密碼。",
+    "dv_mr_moved": "多模型路由已移到側欄「模型與金鑰」，登入即可進入，無需開發者密碼。",
+    "dv_mr_moved_btn": "前往模型與金鑰",
+    "mk_need_admin": "查看或修改金鑰需要管理員權限，請聯絡管理員。此頁已不再需要開發者密碼。",
 }

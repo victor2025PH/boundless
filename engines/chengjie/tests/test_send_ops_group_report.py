@@ -55,12 +55,19 @@ def test_open_items_from_remind_ledger_json(mod, tmp_path):
     assert mod.load_open_items(tmp_path / "nope.json") == []
 
 
+_PRIMARY_CLOUD = {"configured": "cloud", "effective": "cloud", "lock": "cloud"}
+_PRIMARY_LOCAL = {"configured": "local", "effective": "local", "lock": "local",
+                  "local_model": "chatx", "local_ready": True}
+
+
 def test_ops_message_is_data_driven(mod):
     notes = ["成本计量落盘", "演练降频"]
     items = [{"label": "待审草稿", "summary": "待审草稿 5 条无人处理（最久 30 天）", "hours": 712.0},
              {"label": "LAN GPU", "summary": "173 探测失败", "hours": 30.0 * 24}]
     msg = mod.build_ops_message("tok", _summary_ok(), notes=notes, open_items=items,
-                                probe_txt="8/8 域正常", now=1_757_500_000.0)
+                                probe_txt="8/8 域正常", now=1_757_500_000.0,
+                                primary=_PRIMARY_CLOUD)
+    assert "• 主链：云端 siliconflow（档位 cloud，锁 cloud）" in msg
     assert "<b>本次上线</b>" in msg and "• 成本计量落盘" in msg and "• 演练降频" in msg
     assert "07:31 按预检流程重启" not in msg        # 09-09 写死的老文案不许再出现
     assert "真活探针：8/8 域正常" in msg and "412 次云端调用已入账" in msg
@@ -75,15 +82,39 @@ def test_ops_message_is_data_driven(mod):
     # 没有 notes → 「本次上线」整段不出现；余额与真值都有 → 不再催
     msg2 = mod.build_ops_message(
         "tok", _summary_ok(balance=88.0, last_recon={"truth": 3.1, "internal": 3.0, "verdict": "ok"}),
-        notes=[], open_items=[], probe_txt="8/8 域正常")
+        notes=[], open_items=[], probe_txt="8/8 域正常", primary=_PRIMARY_CLOUD)
     assert "本次上线" not in msg2 and "仍未处理</b>　无 ✅" in msg2
     assert "需要管理员做</b>　无" in msg2
+
+
+def test_ops_message_primary_line_follows_live_routing_not_ledger(mod):
+    """2026-09-17：主链切 local 后通报仍写「主链厂商 deepseek」——账本 provider 永远是
+    云端计费厂商，主链一行必须按 /api/setup/cloud-credentials 的 primary 段现读。"""
+    msg = mod.build_ops_message("tok", _summary_ok(provider="deepseek"), notes=[], open_items=[],
+                                probe_txt="8/8 域正常", primary=_PRIMARY_LOCAL)
+    assert "• 主链：本地 vLLM chatx（档位 local，锁 local，端点可达）· 云端回落/计费厂商 deepseek" in msg
+    assert "主链厂商" not in msg and "主链：云端" not in msg
+    # local_only：不回落云端；端点不可达要亮警
+    p = dict(_PRIMARY_LOCAL, effective="local_only", lock="local_only", local_ready=False)
+    line = mod.primary_line(p, _summary_ok(provider="deepseek"))
+    assert line == "• 主链：本地 vLLM chatx（档位 local_only，锁 local_only，⚠️ 端点不可达）· 不回落云端（隐私档）"
+    # 路由接口拿不到 → 退回账本口径并标明
+    assert mod.primary_line({}, _summary_ok(provider="deepseek")) == \
+        "• 主链：计费厂商 deepseek（路由档位未取到，按账本口径）"
+    # 未设锁
+    assert "未设锁" in mod.primary_line({"effective": "cloud"}, _summary_ok())
 
 
 def test_ops_message_survives_cost_api_down(mod):
     msg = mod.build_ops_message(
         "tok", {"available": False, "error": "成本页路由未装载（404）——实例需重启以挂上 /workspace/cost"},
-        notes=[], open_items=[], probe_txt="7/8 域正常，异常：vision")
+        notes=[], open_items=[], probe_txt="7/8 域正常，异常：vision", primary=_PRIMARY_LOCAL)
     assert "成本账本：⚠️ 成本页路由未装载（404）" in msg
     assert "1. 成本页打不开：按重启纪律重启实例后再发成本日报" in msg
     assert "主链厂商" not in msg
+    # 成本接口挂了主链一行照样有（路由信息不依赖成本页）
+    assert "• 主链：本地 vLLM chatx（档位 local，锁 local，端点可达）· 云端回落/计费厂商 —" in msg
+    # 两个接口都拿不到 → 主链一行不出现（不编）
+    msg2 = mod.build_ops_message("tok", {"available": False, "error": "x"}, notes=[], open_items=[],
+                                 probe_txt="—", primary={})
+    assert "• 主链" not in msg2

@@ -155,6 +155,18 @@ def test_face_cfg_defaults_and_disabled_without_base_url():
     c = fi.face_cfg({"vision": {"face_identity": {"enabled": True, "base_url": "http://x/", "timeout_sec": 999}}})
     assert c["enabled"] and c["base_url"] == "http://x" and c["timeout_sec"] == 60.0
     assert fi.face_cfg(None)["enabled"] is False
+    # 干净包：托管识图已指网关、yaml 不写 enabled → 仍开（公网用户与本机 LAN overlay 同链）
+    hosted_auto = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
+                                          "api_key": "cx.abc"}})
+    assert hosted_auto["enabled"] and hosted_auto["hosted"] and hosted_auto["base_url"] == "https://bd2026.cc/api/ai"
+    assert hosted_auto["api_key"] == "cx.abc"
+    assert fi.face_on({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1"}})
+    off = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
+                                  "face_identity": {"enabled": False}}})
+    assert off["enabled"] is False
+    opt = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
+                                  "face_identity": {"hosted_opt_out": True}}})
+    assert opt["enabled"] is False
     # 托管形态：识图已指网关（_hosted_vision）→ 人脸走同网关 /api/ai（去尾 /v1），令牌同源
     hosted = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
                                      "api_key": "cx.abc", "face_identity": {"enabled": True}}})
@@ -630,7 +642,7 @@ def test_skill_manager_a_line_wiring_static():
 def test_persona_reply_wiring_static():
     src = (Path(__file__).resolve().parents[1] / "src" / "inbox" / "persona_reply.py").read_text(encoding="utf-8")
     assert "from src.companion.face_identity import annotate_inbound" in src
-    assert '"face_identity"' in src and 'get("enabled")' in src
+    assert "face_on as _fi_on" in src and "_fi_on(_cfg_fi)" in src
     i_face = src.index("face_identity import annotate_inbound")
     i_mfn = src.index("_mfn = media_form_note(history)")
     assert i_mfn < i_face          # 在 media_form_note 之后、同一 extra_hint 消费口

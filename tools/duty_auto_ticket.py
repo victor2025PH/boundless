@@ -17,6 +17,8 @@
      b. **同主题**：note 首句与单标题主题词重叠 ≥ 0.45（L-7 原规则，窗口 30 → 90 分钟）
      c. **引导段带跟进词**：note 前 40 字到第一个冒号 / 】为止含 复查 / 核实 / 补证 / 复核 / 补 <码> / 第 N 次
         → 挂该报障人窗口内最近一张开放单（没有实体、没有主题重叠时的兜底）
+     d. **值守核对题**（值守核对 / 核对题 / 【核对 / 不是新洞）：窗口内有开放单 → 挂最近一张，
+        **不新立修复线**；窗口内没有开放单 → skip（P2-1，#334/#335）
   ④ 都不命中                                    → 自动新立单（record_bug_ticket；标题＝note
                                                   首句 ≤80 字，正文全文，reporter_version=app）
   ``*:verify`` 报告不立单（带 #N 时只补一条复验记录）；``【汇总`` 总表不立单，推值守人工。
@@ -85,6 +87,9 @@ _SUMMARY_RE = re.compile(r"^\s*【\s*汇总")
 _LEAD_TAG_RE = re.compile(r"^\s*【[^】]{1,24}】\s*")
 # 跟进词（③c）：只看 note 引导段（前 40 字、到第一个冒号 / 】为止），正文里的「核实：…」不算
 _FOLLOWUP_MARK_RE = re.compile(r"复查|核实|补证|复核|补\s*[A-Z0-9]{6}\b|第\s*[一二三四五六七八九十两\d]+\s*次")
+# ③d：值守核对 / 巡检题——是挂单材料，不是新洞（P2-1）。不认单独的「核实」（那是 ③c）。
+_INSPECTION_RE = re.compile(
+    r"值守核对|核对题|【\s*核对|巡检题|不是新洞|不立修复")
 _LEAD_SEG_SPLIT_RE = re.compile(r"[：:】]")
 # 实体（③a）
 _CONV_ID_RE = re.compile(r"\b([a-z]+:\d{5,}:\d{5,})\b")
@@ -330,7 +335,16 @@ def followup_candidate(con: sqlite3.Connection, reporter_id: str, ts: float,
         best = _pick(cands)
         return {"ticket": best["id"], "rank": _status_rank(best["status"]), "via": "marker",
                 "reason": f"跟进类报告「{mark}」→ 90 分钟内同报障人最近单 #{best['id']}"}
+    if inspection_note(note):
+        best = _pick(cands)
+        return {"ticket": best["id"], "rank": _status_rank(best["status"]), "via": "inspection",
+                "reason": f"值守核对题 → 挂窗口内开放单 #{best['id']}（不新立修复线）"}
     return None
+
+
+def inspection_note(note: str) -> bool:
+    """③d：值守核对题 / 巡检对照，不是独立修复线。"""
+    return bool(_INSPECTION_RE.search(str(note or "")))
 
 
 # ── 反查：报告码 → 工单 ──────────────────────────────────────────────────────
@@ -478,6 +492,9 @@ def _decide_without_refs(head: Dict[str, Any], con: sqlite3.Connection, ledger: 
     if follow:
         return {"action": "attach", "ticket": follow["ticket"], "reason": follow["reason"],
                 "refs": [follow["ticket"]], "via": follow["via"]}
+    if inspection_note(note):
+        return {"action": "skip", "ticket": 0,
+                "reason": "值守核对题且窗口内无开放单 → 不立修复线", "refs": []}
     why = "无 #N / 无已知码 / 90 分钟内无同实体·同主题·跟进类单 → 新立单"
     if _ATTACH_PREFIX_RE.match(note):
         why = "写的是复验/关联但码对不上任何单 → 新立单（值守复核）"
@@ -650,21 +667,46 @@ def auto_ticket(code: str, *, dry_run: bool = False) -> Optional[Dict[str, Any]]
         return None
 
 
+def ticket_public(tid: int) -> Dict[str, str]:
+    """工单对外可见字段（标题 / 修复说明）。失败返空 dict，不抛。"""
+    if not tid:
+        return {}
+    try:
+        row = _bi().get_ticket(int(tid)) or {}
+        return {
+            "title": str(row.get("title") or "").strip()[:80],
+            "fix_note": str(row.get("fix_note") or "").strip()[:160],
+            "status": str(row.get("status") or ""),
+        }
+    except Exception:
+        return {}
+
+
 def receipt_item(code: str, topic: str, res: Optional[Dict[str, Any]]) -> str:
-    """回执里一份报告的那一截：「<码>（主题）→ 已立 #N」。"""
+    """回执里一份报告的那一截：「<码>（问题核心）→ 已立 #N」；有修复说明则另起一行。"""
+    topic = str(topic or "").strip() or "（无备注）"
+    if res:
+        title = str(res.get("title") or "").strip()
+        if title:
+            topic = title[:80]
     base = f"{code}（{topic}）"
     if not res:
         return base
     act, tid = res.get("action"), int(res.get("ticket") or 0)
     if act == "new" and tid:
-        return f"{base}→ 已立 #{tid}"
-    if act == "attach" and tid:
-        return f"{base}→ 已挂 #{tid}"
-    if act == "verify":
-        return f"{base}→ 复验记录" + (f"已挂 #{tid}" if tid else "已收")
-    if act == "summary":
-        return f"{base}→ 总表，值守人工逐项对"
-    return base
+        line = f"{base}→ 已立 #{tid}"
+    elif act == "attach" and tid:
+        line = f"{base}→ 已挂 #{tid}"
+    elif act == "verify":
+        line = f"{base}→ 复验记录" + (f"已挂 #{tid}" if tid else "已收")
+    elif act == "summary":
+        line = f"{base}→ 总表，值守人工逐项对"
+    else:
+        line = base
+    fix = str(res.get("fix_note") or "").strip()
+    if fix:
+        line += f"\n修复：{fix[:160]}"
+    return line
 
 
 def order_by_report_time(codes: List[str], diag_root: Path = DIAG) -> List[str]:

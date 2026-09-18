@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 LINK_TTL_SEC = 24 * 3600      # 卡片链接：值班的人可能几小时后才看到卡
 ACTION_TTL_SEC = 15 * 60      # 页面上的动作表单
 _MUTE_CHOICES = (4.0, 24.0, 72.0)
-_LABEL_PREFIXES = ("draft_backlog", "case_backlog", "unanswered_inbound", "avatar_voice", "lan_gpu")
+_LABEL_PREFIXES = ("draft_backlog", "case_backlog", "unanswered_inbound", "avatar_voice", "lan_gpu", "compute_lane")
 
 
 def link_target(key: str) -> str:

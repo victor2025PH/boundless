@@ -813,7 +813,9 @@ async def stage_voice_parts(
     if not sp["enabled"]:
         return None
     core = str(text or "").strip()
-    if len(core) < sp["min_total_chars"]:
+    # 2026-09-12：总长门槛按文字系统折算（英文 40 字符≈8 个词，切两条毫无意义）
+    from src.ai.voice_clone_client import effective_min_total as _emt
+    if len(core) < _emt(core, sp["min_total_chars"]):
         return None
     od = out_dir or str(Path(tempfile.gettempdir()) / "autosend_voice")
 

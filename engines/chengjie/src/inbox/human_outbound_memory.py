@@ -630,8 +630,108 @@ async def describe_and_attach_outbound_media(
         return ""
 
 
+SELF_OUT_KEY = "_self_out_log"
+_SELF_OUT_CAP = 12
+
+_REL_OUT_RE = [
+    re.compile(
+        r"(?:想|想要|愿意|願意)(?:当|當|做|成为|成為)\s*(?:你的?)?(?:女朋友|男朋友|女友|男友)"),
+    re.compile(
+        r"\b(?:i(?:'d|’d| would)?\s+(?:like|love|want)\s+to\s+be\s+(?:your\s+)?(?:girl|boy)friend)\b",
+        re.I),
+    re.compile(r"\bbe(?:come)?\s+your\s+(?:girl|boy)friend\b", re.I),
+    re.compile(r"我(?:真的|好|超)?(?:喜欢|喜歡|爱|愛)\s*你(?:啊|呀|啦|哦)?"),
+    re.compile(r"\bi\s+(?:really\s+|so\s+)?(?:like|love)\s+you\b", re.I),
+]
+
+
+def extract_relation_self_out(text: str) -> List[str]:
+    """AI/人设出站里的关系表态（想当女朋友 / I like you）。宁漏勿错；疑问句不要。"""
+    t = str(text or "").strip()
+    if not t or len(t) > _TEXT_MAX:
+        return []
+    out: List[str] = []
+    seen = set()
+    for clause in _clauses(t):
+        if _QUESTION_TAIL_RE.search(clause) or _EXCLUDE_RE.search(clause):
+            continue
+        if not any(rx.search(clause) for rx in _REL_OUT_RE):
+            continue
+        key = re.sub(r"\s+", "", clause).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clause.strip()[:_QUOTE_MAX])
+    return out
+
+
+def record_self_out(
+    user_context: Dict[str, Any], facts: List[str], *, quote: str = "",
+    now: Optional[float] = None,
+) -> int:
+    """把关系表态写入 ``_self_out_log``（去重、bounded）。返回新增条数。"""
+    if not isinstance(user_context, dict) or not facts:
+        return 0
+    ts = float(now if now is not None else time.time())
+    log = user_context.get(SELF_OUT_KEY)
+    if not isinstance(log, list):
+        log = []
+    known = {re.sub(r"\s+", "", str((e or {}).get("fact") or "")).lower() for e in log}
+    added = 0
+    for f in facts:
+        f = str(f or "").strip()[:_QUOTE_MAX]
+        if not f:
+            continue
+        k = re.sub(r"\s+", "", f).lower()
+        if k in known:
+            continue
+        known.add(k)
+        log.append({"ts": ts, "fact": f, "quote": str(quote or "")[:_QUOTE_MAX]})
+        added += 1
+    if added:
+        user_context[SELF_OUT_KEY] = log[-_SELF_OUT_CAP:]
+    return added
+
+
+def self_out_note(user_context: Dict[str, Any]) -> str:
+    """注入：已发送的关系表态是既定事实，客户提起时先检索原文，禁止无证据否认。"""
+    try:
+        log = user_context.get(SELF_OUT_KEY) if isinstance(user_context, dict) else None
+        if not isinstance(log, list) or not log:
+            return ""
+        lines: List[str] = []
+        for e in log[-8:]:
+            f = str((e or {}).get("fact") or "").strip()
+            if f:
+                lines.append(f"- {f}")
+        if not lines:
+            return ""
+        return (
+            "【你亲口对 TA 做过的关系表态（已发出，是你们之间的既定事实）】\n"
+            + "\n".join(lines)
+            + "\n客户提起或引用时必须认账、可复述原话；没有新证据不得否认、改口说没说过。"
+            "对方纠正时先记下待核实，不要争辩。有人问 Are you using AI 则转人工。"
+        )
+    except Exception:
+        return ""
+
+
+def record_ai_self_out(user_context: Dict[str, Any], reply: str,
+                       *, now: Optional[float] = None) -> int:
+    """出站后调用：抽关系表态并落账。零阻断。"""
+    try:
+        facts = extract_relation_self_out(reply)
+        if not facts:
+            return 0
+        return record_self_out(user_context, facts, quote=reply, now=now)
+    except Exception:
+        return 0
+
+
 __all__ = [
     "LOG_KEY", "extract_self_facts", "record_human_said", "human_said_note",
+    "SELF_OUT_KEY", "extract_relation_self_out", "record_self_out",
+    "self_out_note", "record_ai_self_out",
     "human_media_note", "attach_human_media_desc", "describe_and_attach_outbound_media",
     "on_human_outbound", "record_human_outbound", "resolve_skill_manager",
 ]
