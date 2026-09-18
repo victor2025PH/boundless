@@ -1101,6 +1101,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         "触发方式: 回复我们的消息 / @本账号 / 关键词或图片+文字 / 追问或会话窗口内L2",
                         text[:50] if text else "(无文本)", mode, "开" if trigger_on else "关"
                     )
+                    # 2026-09-18 P6 社群舞台实锤：「不自动回复」≠「不让坐席看见」。此前
+                    # 未触发的群消息在这里整条消失，工作台「群组」视图要等历史自动同步 /
+                    # 手动 from_latest 才滞后出现。这里只镜像进收件箱（群组动态分流，
+                    # 不进 SLA / 起草 / 自动回复），触发裁决一字不改。
+                    self._mirror_untriggered_group_message(message)
                     return
 
                 # 满足条件，处理消息
@@ -2728,7 +2733,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     media_type: str = "", media_ref: str = "",
                     username: str = "", phone: str = "",
                     sender_id: str = "", sender_name: str = "",
-                    ts: Optional[float] = None) -> None:
+                    ts: Optional[float] = None, chat_type: str = "") -> None:
         """N4b：companion 运行时把 A 线收/发的消息镜像进统一收件箱（坐席台可见）。
 
         默认关（``self._mirror_inbox`` False）→ standalone main.py 零影响。仅 emit 到
@@ -2742,6 +2747,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         ``ts``：消息真实发生时间（epoch 秒）。缺省 None＝落 ``time.time()``（实时
         路径「此刻」即消息时刻）。轮询兜底镜像手机已发消息时会传 ``message.date``，
         否则会话 last_ts 被抬到「发现时刻」而与客户入站消息错序。
+
+        ``chat_type``：显式会话类型（``group`` / ``channel``），经 ``source`` 透传给
+        ``infer_chat_type``。缺省空＝沿用 normalizer 的负数 chat_id 启发式（旧调用方不变）。
         """
         if not getattr(self, "_mirror_inbox", False):
             return
@@ -2751,6 +2759,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             if sender_id or sender_name:
                 _src = {"sender_id": str(sender_id or ""),
                         "sender_name": str(sender_name or "")}
+            if chat_type:
+                _src = dict(_src or {})
+                _src["chat_type"] = str(chat_type)
             emit_incoming(make_message(
                 platform="telegram",
                 account_id=getattr(self, "account_id", "default"),
@@ -2771,6 +2782,69 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 self.logger.debug("[mirror] 收件箱镜像失败", exc_info=True)
             except Exception:
                 pass
+
+    def _mirror_untriggered_group_message(self, message: Any) -> None:
+        """未触发自动回复的群消息 → 只镜像进统一收件箱（不回复、不起草、不进 SLA）。
+
+        2026-09-18 P6 社群舞台实锤：群里刚发的询价在工作台「群组」视图里看不到——
+        实时 handler 在触发裁决处整条 return，未触发消息从未落库，只能等
+        ``tg_history_autosync`` / 手动 ``from_latest`` 补拉，画面滞后几十秒到几分钟。
+        「不自动回复」与「不让坐席看见」是两件事，这里补上后者：
+
+        - 文本 / caption 原样；纯媒体**不下载本体**（群里图/视频体量大、风控敏感），
+          只落 ``media_type`` + 占位文——与 ``history_message_obj`` 历史同步同口径，
+          工作台按形态卡渲染，原件走「拉取原件」按需补。
+        - ``msg_id`` 随行 → 与后续历史同步产出同一去重主键，不落重复行。
+        - ``name`` 用**群名**（不是发言人名，否则会把群会话改名成发言人）；发言人走
+          ``sender_id`` / ``sender_name`` 结构化字段；``chat_type=group`` 显式带。
+        - 开关 ``telegram.group_reply.mirror_untriggered``（缺省开）；standalone
+          （``_mirror_inbox`` 关）时 ``_emit_inbox`` 自身 no-op。
+        best-effort：任何异常只记 debug，绝不影响群 handler。
+        """
+        try:
+            if not getattr(self, "_mirror_inbox", False):
+                return
+            _gr = self.config.get('telegram', {}).get('group_reply', {}) or {}
+            if not bool(_gr.get('mirror_untriggered', True)):
+                return
+            chat = getattr(message, 'chat', None)
+            chat_id = getattr(chat, 'id', None)
+            if chat_id is None:
+                return
+            from src.integrations.protocol_bridge import media_placeholder, tg_media_meta
+            raw_text = getattr(message, 'text', None) or getattr(message, 'caption', None)
+            text = _normalize_message_text(raw_text) if raw_text else ""
+            _meta = tg_media_meta(message)
+            media_type = _meta[0] if _meta else ""
+            if not text and media_type:
+                text = media_placeholder(media_type)
+            if not text:
+                return
+            peer = getattr(message, 'from_user', None)
+            sender_id = ""
+            sender_name = ""
+            if peer is not None:
+                sender_name = ((getattr(peer, 'first_name', '') or '') + ' '
+                               + (getattr(peer, 'last_name', '') or '')).strip()
+                _uname = str(getattr(peer, 'username', '') or '').lstrip('@')
+                if not sender_name and _uname:
+                    sender_name = '@' + _uname
+                sender_id = str(getattr(peer, 'id', '') or '')
+            _date = getattr(message, 'date', None)
+            _ts = _date.timestamp() if hasattr(_date, 'timestamp') else None
+            self._emit_inbox(
+                chat_id=chat_id, text=text, direction="in",
+                name=str(getattr(chat, 'title', '') or ''),
+                msg_id=str(getattr(message, 'id', '') or ''),
+                media_type=media_type,
+                sender_id=sender_id, sender_name=sender_name,
+                ts=_ts, chat_type="group",
+            )
+            self.logger.info(
+                "[群组监控] 未触发消息已镜像进收件箱 chat=%s mid=%s sender=%s",
+                chat_id, getattr(message, 'id', ''), sender_name or sender_id or '-')
+        except Exception:
+            self.logger.debug("[群组监控] 未触发消息镜像失败（忽略）", exc_info=True)
 
     async def _process_message_async(self, message_data: Dict[str, Any]):
         """异步处理消息"""
@@ -2894,9 +2968,16 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             _mirror_text = _inbound_mirror_text(
                 _media_type, text,
                 _normalize_message_text(getattr(message, "text", None) or ""))
+            # 群会话名＝群名，不是发言人名（2026-09-18 P6 实锤：@本账号触发的群消息
+            # 把「2026社群聊天」会话改名成了发言人 Katie——store upsert 对非空显示名
+            # 一律覆盖）。发言人已走 sender_id/sender_name 结构化字段。
+            _mirror_name = _peer_name
+            if _mirror_is_group:
+                _mirror_name = str(getattr(getattr(message, 'chat', None), 'title', '')
+                                   or '') or _peer_name
             self._emit_inbox(
                 chat_id=chat_id, text=_mirror_text, direction="in",
-                name=_peer_name,
+                name=_mirror_name,
                 msg_id=str(getattr(message, 'id', '') or ''),
                 media_type=_media_type,
                 media_ref=_media_ref,
