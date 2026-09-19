@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.91",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "电脑微信一键副驾、可发语音、接管即停（安装包重打）",
+      "en": "WeChat PC copilot, outbound voice, takeover late gate (rebuild)"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "电脑微信：工作台 → 账号管理 → 个人微信 · PC 副驾，三步检测/选档/启动。问小智「个人微信怎么用」",
+        "全自动档可发人设语音（电脑微信 4.1.9+，引导第①步 VB-CABLE）。对方语音听不到会请打字。问小智「微信怎么发语音」",
+        "点接管或切手动后，还在路上的那一稿也会弃发。问小智「点了接管为什么还在自动发」",
+        "人设工坊成人政策「不设限」：未见该档=部署未开启。问小智「不设限怎么用」"
+      ],
+      "en": [
+        "Personal WeChat: Accounts → Personal WeChat · PC copilot, three steps detect / pick tier / Start",
+        "Full-auto can send clone-voice clips (WeChat 4.1.9+, VB-CABLE in step 1); inbound voice asks them to type",
+        "Take over drops a draft still waiting to send",
+        "Persona studio Unrestricted adult policy; missing option means the deployment has not enabled it"
+      ]
+    }
+  },
+  {
     "version": "1.0.90",
     "date": "2026-09-19",
     "title": {
