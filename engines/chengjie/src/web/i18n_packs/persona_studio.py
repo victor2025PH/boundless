@@ -1125,6 +1125,8 @@ ZH = {
     # #239（N-2 B）：登记后常驻「已登记 X · ▶ 试听 · 解绑」+ 登记即生效明示 + 可关闭 toast
     "psn_vc_enrolled_ok": "已登记 {file}，本人设的语音将用这把声音。登记已写入人设并生效，无需再点底部「保存」（表单里其它改动仍需保存）。",
     "psn_vc_persist_note": "登记成功即写入人设并立即生效，不需要再点底部「保存」。",
+    # 2026-09-19：复用已有音色成功后抽屉回灌三态并明示「已生效」
+    "psn_vc_rebound_ok": "已复用「{from}」的音色，本人设的语音将用这把声音。已写入人设并生效，无需再点底部「保存」（表单里其它改动仍需保存）。",
     "psn_vc_audition_of": "试听：{file}",
     # #250（N-4 B）：试听终审回填「音色体检」行——与业务助手结论行同源（voice_meta.verdict）
     "psn_vq_aud_ok": "最近试听 {time}：✅ 已核有声（{basis}）",
@@ -2363,6 +2365,7 @@ EN = {
     "psn_vc_bound": "Enrolled {voice}",
     "psn_vc_enrolled_ok": "Enrolled {file} — this persona now speaks with that voice. The enrollment is already saved and live; no need to click Save at the bottom (other form edits still need saving).",
     "psn_vc_persist_note": "A successful enrollment is written to the persona and takes effect immediately — no need to click Save at the bottom.",
+    "psn_vc_rebound_ok": "Reused \"{from}\" voice — this persona now speaks with it. Already saved and live; no need to click Save at the bottom (other form edits still need saving).",
     "psn_vc_audition_of": "Audition: {file}",
     "psn_vq_aud_ok": "Last audition {time}: ✅ speech verified ({basis})",
     "psn_vq_aud_silent": "Last audition {time}: ❌ silent (server confirmed no energy in the output) — check the reference recording or enroll again",

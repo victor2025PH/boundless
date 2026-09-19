@@ -1150,6 +1150,17 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_cp_voice_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # cp-voice mode="enroll" (persona drawer clone-enrol / reuse-voice, 2026-09-19):
+    # the "copied but the text vanished in 200ms" incident lived in the host<->component
+    # handshake - success -> cp-voice-rebound -> drawer re-syncs host.client -> the old
+    # setter re-rendered the whole shadow DOM and wiped hint/selection/audition. Also pins
+    # the clone/preset/not-ready option tags (from /api/voice/profiles) and the fallback
+    # when profiles are unavailable. Same fixture style; missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: persona drawer voice enrol/reuse survives host sync, fixture browser (tools\verify_cp_voice_enroll_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_cp_voice_enroll_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # cp-image panel (P0 2026-08-28): the three same-screen "do not trust this UI"
     # defects were all invisible to static gates - album thumbnails 400'd and left
     # broken-image boxes while the card still claimed "4 photos, click to send";

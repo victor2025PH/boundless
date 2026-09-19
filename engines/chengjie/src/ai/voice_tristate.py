@@ -58,6 +58,10 @@ def _looks_like_preset_voice_name(voice: str) -> bool:
         return False
 
 
+#: 对外别名（voice_enroll.copy_voice_profile 复用收口用）
+looks_like_preset_voice_name = _looks_like_preset_voice_name
+
+
 def derive_voice_mode(vp: Any) -> Tuple[str, str]:
     """voice_profile → ``(mode, basis)``。
 

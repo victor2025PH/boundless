@@ -246,13 +246,30 @@
         color:var(--cp-text-tiny,#94a3b8); }`;
     }
 
+    static get observedAttributes() { return ["persona"]; }
+
     set client(c) {
+      const prev = this._client;
       this._client = c;
-      // 登记专用档没有 context 喂入时机：赋 client 即渲染（重复赋值幂等重渲）。
-      if (c && this._mode() === "enroll") this._renderEnrollOnly();
+      if (!c || this._mode() !== "enroll") return;
+      // 登记专用档没有 context 喂入时机：首次赋 client（或换了客户端实例）整体渲染。
+      // 同一客户端重复赋值（宿主 peVcSync 每次同步都会赋）只就地刷新人设下拉——
+      // 2026-09-19 实录：复用成功的回显只活了 200ms，就是被这里的无条件重渲抹掉的
+      // （宿主收到 cp-voice-rebound → peVcSync → set client → innerHTML 整段替换，
+      // 提示/下拉选择/试听一起归零）；登记成功的 ✅ 同样一直被这样抹掉。
+      if (prev !== c || !this.shadowRoot.querySelector('[data-role="enroll"]')) this._renderEnrollOnly();
+      else this._refreshEnrollPersonas();
     }
     get client() { return this._client; }
     _mode() { return (this.getAttribute("mode") || "").trim(); }
+
+    attributeChangedCallback(name, oldV, newV) {
+      if (name !== "persona" || oldV === newV) return;
+      // 宿主换了人设（抽屉切档）：就地同步登记/复用的目标下拉，并清掉上一位人设的
+      // 瞬态回显（登记/复用提示、试听）——不整体重渲。
+      if (this._mode() !== "enroll" || !this.shadowRoot.querySelector('[data-role="enroll"]')) return;
+      this._syncEnrollTarget(String(newV || "").trim(), { clearTransient: true });
+    }
     set context(ctx) {
       this._ctx = ctx;
       this._persona = this._loadPersona();
@@ -266,22 +283,60 @@
        （少打一格字；仍可改）。 */
     async _renderEnrollOnly() {
       this._enrollOpen = true;
+      this._enrollNameAuto = "";
       this.shadowRoot.innerHTML = `<style>${this._css()}</style>
         <div class="wrap"><div data-role="enroll">${this._enrollHtml()}</div></div>`;
       await this._loadEnrollPersonas();
+      // 属性在 await 之后再读：渲染途中宿主切了人设也以最新值为准
       const pid = (this.getAttribute("persona") || "").trim();
-      if (pid) {
-        const sel = this.shadowRoot.querySelector('[data-role="epersona"]');
-        if (sel) {
-          sel.value = pid;
-          const opt = sel.selectedOptions && sel.selectedOptions[0];
-          const nameEl = this.shadowRoot.querySelector('[data-role="ename"]');
-          if (opt && opt.value === pid && nameEl && !nameEl.value) {
-            nameEl.value = (opt.textContent || "").replace(/\s*🎤$/, "").trim();
-          }
+      if (pid) this._syncEnrollTarget(pid);
+      this._reconcile();
+    }
+
+    /* 目标人设就地同步：登记目标 / 「复用已有音色」目标都预选本人设（在谁的抽屉里操作，
+       就是给谁操作）。显示名只在「空」或「仍是上次自动预填的值」时跟随人设，人手改过的不动。
+       clearTransient：换人设时清掉上一位的瞬态回显（提示 / 试听），同人设同步不清。 */
+    _syncEnrollTarget(pid, opts) {
+      const sr = this.shadowRoot;
+      const has = (sel, v) => !!(sel && v && Array.from(sel.options).some((o) => o.value === v));
+      const eSel = sr.querySelector('[data-role="epersona"]');
+      if (has(eSel, pid)) {
+        eSel.value = pid;
+        const opt = eSel.selectedOptions && eSel.selectedOptions[0];
+        const label = this._stripVoiceTag(opt && opt.textContent);
+        const nameEl = sr.querySelector('[data-role="ename"]');
+        if (nameEl && label && (!nameEl.value || nameEl.value === this._enrollNameAuto)) {
+          nameEl.value = label;
+          this._enrollNameAuto = label;
         }
       }
-      this._reconcile();
+      const rto = sr.querySelector('[data-role="rto"]');
+      if (has(rto, pid)) rto.value = pid;
+      if (opts && opts.clearTransient) {
+        // 上一位人设留下的「源」若正好是现在的目标，源=目标没有意义，清掉让人重选
+        const rfrom = sr.querySelector('[data-role="rfrom"]');
+        if (rfrom && rfrom.value === pid) rfrom.value = "";
+        const rh = sr.querySelector('[data-role="rhint"]'); if (rh) rh.textContent = "";
+        const eh = sr.querySelector('[data-role="ehint"]'); if (eh) eh.textContent = this._t("cp.voice.enroll_hint");
+        const au = sr.querySelector('[data-role="audition"]'); if (au) au.textContent = "";
+      }
+    }
+
+    /* 人设下拉软刷新（🎤 标记随登记/复用结果变）：重填 option 会把三个下拉的选择清零，
+       这里先记再还原；空选择回落到宿主给的 persona（登记目标 / 复用目标）。 */
+    async _refreshEnrollPersonas() {
+      const sr = this.shadowRoot;
+      const roles = ["epersona", "rfrom", "rto"];
+      const keep = {};
+      roles.forEach((r) => { const el = sr.querySelector(`[data-role="${r}"]`); keep[r] = el ? el.value : ""; });
+      await this._loadEnrollPersonas();
+      const pid = (this.getAttribute("persona") || "").trim();
+      roles.forEach((r) => {
+        const el = sr.querySelector(`[data-role="${r}"]`);
+        if (!el) return;
+        const want = keep[r] || (r === "rfrom" ? "" : pid);
+        if (want && Array.from(el.options).some((o) => o.value === want)) el.value = want;
+      });
     }
 
     _convKey() {
@@ -670,12 +725,14 @@
         <div data-role="audition"></div>
         <div class="panel">
           <h5>${this._ic("refresh", 12)} ${this._t("cp.voice.reuse_h")}</h5>
+          <div data-role="rlegend" class="hint">${this._t("cp.voice.tag_legend")}</div>
           <div class="row">
             <select data-role="rfrom"><option value="">${this._t("cp.voice.src_persona_opt")}</option></select>
             <span>→</span>
             <select data-role="rto"><option value="">${this._t("cp.voice.dst_persona_opt")}</option></select>
             <button data-act="rebind">${this._t("cp.voice.copy_btn")}</button>
           </div>
+          <div data-role="rhint" class="hint"></div>
         </div>
         <div class="panel">
           <h5>${this._t("cp.voice.recon_h")}</h5>
@@ -687,18 +744,44 @@
         </div>`;
     }
 
+    /* 下拉 option 末尾的音色形态标记（🎤 克隆 / 🔊 预置 / ⚠ 未就绪）不属于显示名 */
+    _stripVoiceTag(label) {
+      return String(label || "").replace(/[\s\u26A0\uFE0F🎤🔊]+$/u, "").trim();
+    }
+
+    /* 人设在登记/复用下拉里的音色形态标记。以 /api/voice/profiles 的 is_clone/ready 为准——
+       summary.has_voice 分不出克隆声与预置声（2026-09-19 实录：Claire 挂着预置声也标 🎤，
+       复制陈美玲的克隆声过去前后下拉毫无变化；选一个预置声当「源」也看不出来）。
+       profiles 拉不到（旧后端 / 壳未暴露）→ 退回 summary.voice_mode，再退回 has_voice=🎤 旧口径。 */
+    _voiceTag(s, byId, haveProfiles) {
+      const p = byId[String(s.id)];
+      if (p) return p.is_clone ? (p.ready ? " 🎤" : " 🎤⚠") : " 🔊";
+      if (!s.has_voice) return "";
+      const m = String(s.voice_mode || "").trim().toLowerCase();
+      if (m === "preset") return " 🔊";
+      if (m === "clone") return " 🎤";
+      return haveProfiles ? " 🔊" : " 🎤";
+    }
+
     async _loadEnrollPersonas() {
       if (!this._client || !this._client.listPersonas) return;
       try {
-        const d = await this._client.listPersonas();
+        // 两路并行：summary 给人设全集，profiles 给每个有声人设的形态/就绪度
+        const [d] = await Promise.all([this._client.listPersonas(), this._loadProfiles()]);
         const list = (d && d.summary) || [];
+        const byId = {};
+        (this._profiles || []).forEach((p) => { if (p && p.persona_id) byId[String(p.persona_id)] = p; });
+        const haveProfiles = Object.keys(byId).length > 0;
         const fill = (sel, filterVoice) => {
           if (!sel) return;
           let h = sel === this.shadowRoot.querySelector('[data-role="epersona"]')
             ? `<option value="">${this._t("cp.voice.target_persona_opt")}</option>`
             : (sel.getAttribute("data-role") === "rfrom" ? `<option value="">${this._t("cp.voice.src_persona_opt")}</option>` : `<option value="">${this._t("cp.voice.dst_persona_opt")}</option>`);
           list.filter((s) => !filterVoice || s.has_voice).forEach((s) => {
-            h += `<option value="${this._esc(s.id)}">${this._esc(s.name || s.id)}${s.has_voice ? " 🎤" : ""}</option>`;
+            const p = byId[String(s.id)];
+            // 源下拉：未就绪的克隆声（缺授权/缺参考音）复制过去也只是再造一份坏档 → 置灰
+            const dis = (filterVoice && p && p.is_clone && !p.ready) ? " disabled" : "";
+            h += `<option value="${this._esc(s.id)}"${dis}>${this._esc(s.name || s.id)}${this._voiceTag(s, byId, haveProfiles)}</option>`;
           });
           sel.innerHTML = h;
         };
@@ -1592,9 +1675,8 @@
           hint.textContent = this._t("cp.voice.enroll_ok") + (bits.length ? " · " + bits.join(" · ") : "");
           this._persona = persona;
           this._savePersona(persona);
-          await this._loadProfiles();
-          const sel = this.shadowRoot.querySelector('[data-role="persona"]');
-          if (sel) sel.value = persona;
+          // 目标人设的下拉标记随登记结果变（🔊/无 → 🎤），并保留三个下拉的当前选择
+          await this._refreshEnrollPersonas();
           /* #149（2026-09-02）：登记成功广播给宿主——人设工作室抽屉据此回灌
              voice_profile/rev（否则抽屉「保存」会拿登记前的空 backend 把刚登记
              的克隆档顶掉，服务端另有守卫兜底，这里让界面同步不撒谎）。 */
@@ -1636,24 +1718,62 @@
     }
 
     async _audition(persona_id) {
-      const box = this.shadowRoot.querySelector('[data-role="audition"]');
+      // 合成期间面板可能被重渲/换人设：结果写回时重新取节点，别写进已脱离文档的旧节点
+      const boxNow = () => this.shadowRoot.querySelector('[data-role="audition"]');
+      const box = boxNow();
       if (!box) return;
       box.textContent = this._t("cp.voice.gen_audition");
       try {
         const d = await this._client.voiceTts({ text: this._t("cp.voice.audition_sample"), persona_id });
         const url = d.dataUrl || d.audio_url || "";
-        box.innerHTML = url
+        const out = boxNow();
+        if (!out) return;
+        out.innerHTML = url
           ? `${this._ic("volume", 13)} <audio controls src="${url}" style="max-width:100%;"></audio>${this._metaLine(d)}`
           : this._t("cp.voice.audition_fail");
-      } catch (e) { box.textContent = this._t("cp.voice.audition_unavailable"); }
+      } catch (e) { const out = boxNow(); if (out) out.textContent = this._t("cp.voice.audition_unavailable"); }
     }
 
+    /* 复用已有音色（2026-09-19 陈美玲→Claire 实录）：此前成功/失败都无任何回显，
+       宿主（人设工作室抽屉）也收不到通知——抽屉仍拿登记前的 voice_profile 校验，
+       点「保存」报「选了用我上传的录音但还没有录音」。现在：失败把服务端原因写在
+       面板里；成功广播 cp-voice-rebound（与 cp-voice-enrolled 同族），宿主据此回灌
+       voice_profile/rev 并重装三态。 */
     async _rebind() {
-      const from = this.shadowRoot.querySelector('[data-role="rfrom"]').value;
-      const to = this.shadowRoot.querySelector('[data-role="rto"]').value;
-      if (!from || !to || from === to) return;
-      const d = await this._client.voiceRebind({ from_persona_id: from, to_persona_id: to });
-      if (d && d.ok) { await this._loadProfiles(); await this._audition(to); }
+      const fromSel = this.shadowRoot.querySelector('[data-role="rfrom"]');
+      const toSel = this.shadowRoot.querySelector('[data-role="rto"]');
+      const hint = this.shadowRoot.querySelector('[data-role="rhint"]');
+      const from = fromSel ? fromSel.value : "";
+      const to = toSel ? toSel.value : "";
+      const optText = (sel) => {
+        const o = sel && sel.options ? sel.options[sel.selectedIndex] : null;
+        return o ? this._stripVoiceTag(o.textContent) : "";
+      };
+      const fromName = optText(fromSel) || from;
+      if (!from || !to || from === to) {
+        if (hint) hint.textContent = this._t("cp.voice.rebind_pick");
+        return;
+      }
+      if (hint) hint.textContent = this._t("cp.voice.rebind_busy");
+      let d;
+      try {
+        d = await this._client.voiceRebind({ from_persona_id: from, to_persona_id: to });
+      } catch (e) {
+        d = { ok: false, error: String((e && e.message) || e || "") };
+      }
+      if (!(d && d.ok)) {
+        const why = (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.req_fail");
+        if (hint) hint.textContent = "❌ " + this._t("cp.voice.rebind_fail", { msg: why });
+        return;
+      }
+      if (hint) hint.textContent = this._t("cp.voice.rebind_ok", { from: fromName });
+      // 🎤 标记随复制结果变；软刷新保留这次的下拉选择（否则成功即清空，像什么都没发生）
+      await this._refreshEnrollPersonas();
+      this.dispatchEvent(new CustomEvent("cp-voice-rebound", {
+        bubbles: true, composed: true,
+        detail: { from_persona_id: from, from_name: fromName, to_persona_id: to },
+      }));
+      await this._audition(to);
     }
 
     async _reconcile() {

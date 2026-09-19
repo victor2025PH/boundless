@@ -353,6 +353,44 @@ async def test_put_explicit_clone_clears_stray_voice_and_warns_missing_file(app_
 
 
 @pytest.mark.asyncio
+async def test_rebind_reuses_legacy_clone_as_valid_clone_and_next_save_passes(app_on):
+    """复用已有音色（2026-09-19 陈美玲→Claire 实录）：源是存量克隆档（无显式 voice_mode、
+    残留 zh-CN-XiaoxiaoNeural），目标是预置声人设。POST /api/voice/rebind 后目标必须是
+    合法克隆档（显式 clone、录音在、预置声名清掉），随后编辑器「没碰语音」的 merge 保存
+    （原样回传 voice_profile）必须 200——此前会被 clone_with_preset_voice 拒绝。"""
+    pm = PersonaManager.get_instance()
+    pm.upsert_profile("chen_meiling", {"id": "chen_meiling", "name": "陈美玲", "voice_profile": {
+        "enabled": True, "owner_consent": True, "backend": "avatar_clone", "instruct_style": "温柔",
+        "reference_audio_path": "config/voice_refs/chen_meiling.wav",
+        "voice": "zh-CN-XiaoxiaoNeural", "format": "mp3", "emotion": "serious",
+    }}, _track_history=False)
+    pm.upsert_profile("claire_brennan", {"id": "claire_brennan", "name": "Claire", "language": "en",
+                                         "voice_profile": {"voice_mode": "preset", "backend": "edge_tts",
+                                                           "voice": "en-US-AvaMultilingualNeural"}},
+                      _track_history=False)
+    async with _client(app_on) as c:
+        r = await c.post("/api/voice/rebind", headers=_HDRS,
+                         json={"from_persona_id": "chen_meiling", "to_persona_id": "claire_brennan"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"ok": True, "from_persona_id": "chen_meiling", "to_persona_id": "claire_brennan"}
+        vp = pm.get_persona_by_id("claire_brennan")["voice_profile"]
+        assert vp["voice_mode"] == "clone" and vp["backend"] == "avatar_clone"
+        assert vp["reference_audio_path"] == "config/voice_refs/chen_meiling.wav"
+        assert vp["voice"] == "", "残留预置声名不得跟着复制过去"
+        assert pm.get_persona_by_id("claire_brennan")["language"] == "en", "只换 voice_profile，其它字段不动"
+        # 源人设原样（复用不是搬走）
+        assert pm.get_persona_by_id("chen_meiling")["voice_profile"]["voice"] == "zh-CN-XiaoxiaoNeural"
+        # 编辑器抽屉回灌后「没碰语音」保存：voice_profile 原样回传 → 200
+        r2 = await c.put("/api/personas/profiles/claire_brennan", headers=_HDRS,
+                         json={"persona": {"name": "Claire", "voice_profile": dict(vp)}, "merge": True})
+        assert r2.status_code == 200, r2.text
+        assert [w["code"] for w in r2.json().get("voice_warnings", [])] == ["clone_reference_file_missing"]
+        # 汇总里目标人设已是克隆态
+        rows = {s["id"]: s for s in pm.list_profiles_summary()}
+        assert rows["claire_brennan"]["has_voice"] is True and rows["claire_brennan"]["voice_mode"] == "clone"
+
+
+@pytest.mark.asyncio
 async def test_preset_catalog_endpoint(app_on):
     async with _client(app_on) as c:
         r = await c.get("/api/voice/preset-catalog", headers=_HDRS)

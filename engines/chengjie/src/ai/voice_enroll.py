@@ -403,12 +403,42 @@ def without_voice_profile(persona: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def copy_voice_profile(src: Dict[str, Any], dst: Dict[str, Any]) -> Dict[str, Any]:
-    """把 src 人设的 voice_profile 复制到 dst 人设副本（改绑/复用已登记音色，免重复上传）。"""
+    """把 src 人设的 voice_profile 复制到 dst 人设副本（改绑/复用已登记音色，免重复上传）。
+
+    复制件按三态收口（2026-09-19 陈美玲→Claire 实录）：源档是存量克隆档时常带
+    残留预置声名（``avatar_clone + reference_audio_path + voice: zh-CN-XiaoxiaoNeural``）
+    且无显式 ``voice_mode``——原样复制后目标人设下一次「保存」会被 #205 校验以
+    ``clone_with_preset_voice`` 拒绝，界面又只显示「配置需修正」。复用的语义是
+    「用这把录音」，故：克隆源 → 显式 ``voice_mode: clone``、后端按登记来源解析、
+    清掉预置声名；预置源 → 显式 ``voice_mode: preset``。其余键（授权、风格、格式）
+    照旧带过去。
+    """
     out = dict(dst or {})
     vp = (src or {}).get("voice_profile")
     if isinstance(vp, dict):
-        out["voice_profile"] = dict(vp)
+        out["voice_profile"] = normalize_copied_voice_profile(vp)
     return out
+
+
+def normalize_copied_voice_profile(vp: Dict[str, Any]) -> Dict[str, Any]:
+    """复用/改绑时的 voice_profile 收口（纯函数，不改入参）。"""
+    new = dict(vp or {})
+    try:
+        from src.ai.voice_tristate import (
+            VOICE_MODE_CLONE, VOICE_MODE_PRESET, derive_voice_mode,
+            looks_like_preset_voice_name, resolve_clone_backend,
+        )
+    except Exception:  # noqa: BLE001 — 三态模块不可用时退回原样复制
+        return new
+    mode, _basis = derive_voice_mode(new)
+    if mode == VOICE_MODE_CLONE:
+        new["voice_mode"] = VOICE_MODE_CLONE
+        new["backend"] = resolve_clone_backend(new)
+        if looks_like_preset_voice_name(str(new.get("voice") or "")):
+            new["voice"] = ""
+    elif mode == VOICE_MODE_PRESET and not str(new.get("voice_mode") or "").strip():
+        new["voice_mode"] = VOICE_MODE_PRESET
+    return new
 
 
 def normalize_cloud_voice_entry(item: Any) -> Optional[Dict[str, Any]]:
