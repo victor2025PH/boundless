@@ -349,6 +349,18 @@ def test_check_is_wired_into_watchdog_tick():
         "巡检没接进 _tick → 永远不会跑（本仓有过同类漏接线）")
 
 
+def test_autosend_status_exposes_voice_outage():
+    """B 线看板读 /api/drafts/autosend-status.voice_outage，不新开端点、不依赖 AvatarHub。"""
+    root = Path(__file__).parent.parent / "src"
+    drafts = (root / "web" / "routes" / "drafts_routes.py").read_text(encoding="utf-8")
+    assert "get_voice_outage().outage_snapshot()" in drafts
+    assert 'snap["voice_outage"]' in drafts.replace("'", '"')
+    html = (root / "web" / "templates" / "ops_overview.html").read_text(encoding="utf-8")
+    assert "function voiceOutageKpi" in html
+    assert "w.voice_outage || d.voice_outage" in html
+    assert "voiceOutageKpi(og)" in html
+
+
 def test_ab_line_exits_feed_ledger():
     """埋点接线静态钉：A 线 sender / B 线 voice_autosend 都必须喂 voice_outage。"""
     root = Path(__file__).parent.parent / "src"
@@ -370,6 +382,24 @@ def test_bline_single_exits_record(monkeypatch):
     assert snap["attempts_24h"] == 2 and snap["ok_24h"] == 1
     assert snap["fail_reasons"] == {"7852_unready": 1}
     assert snap["by_source"]["autosend"]["attempts"] == 2
+
+
+def test_desktop_bridge_tagged_as_own_source():
+    """桌面桥成功/失败单独成链，不被其它 autosend 成功盖住断档灯（P3-2）。"""
+    vo.reset_for_test()
+    from src.inbox.voice_autosend import record_voice_fallback, record_voice_sent
+    record_voice_sent(900, synth_meta={"provider": "desktop_bridge"})
+    record_voice_fallback("driver_record")
+    record_voice_fallback("driver_play")
+    # 占麦/配额是业务态，台账按设计跳过——确认不会冒充断档
+    record_voice_fallback("driver_mic_busy")
+    record_voice_fallback("driver_voice_daily_cap")
+    snap = vo.get_voice_outage().outage_snapshot()
+    assert snap["attempts_24h"] == 3 and snap["ok_24h"] == 1
+    db = snap["by_source"]["desktop_bridge"]
+    assert db["attempts"] == 3 and db["ok"] == 1
+    assert db["fail_reasons"] == {"driver_record": 1, "driver_play": 1}
+    assert "autosend" not in snap["by_source"]
 
 
 def test_webhook_alias_and_message():

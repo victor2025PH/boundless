@@ -679,8 +679,13 @@ def register_reply_settings_routes(
             from src.inbox import adult_grader as ag
             cfg = getattr(config_manager, "config", None) or {}
             out["adult"] = str(ag.default_policy(cfg) or "human")
-            out["adult_source"] = ("default_companion" if out["adult"] == ag.DEFAULT_POLICY_COMPANION
-                                   else "default")
+            # 机器级 adult_grader.default_policy（2026-09-19）压过业务域 → source=config，
+            # 人设工坊「跟随域默认」卡据此显示「本机默认：不设限」而不是业务域文案
+            if ag.configured_default_policy(cfg):
+                out["adult_source"] = "config"
+            else:
+                out["adult_source"] = ("default_companion" if out["adult"] == ag.DEFAULT_POLICY_COMPANION
+                                       else "default")
             out["adult_policies"] = list(ag.POLICIES)
             try:
                 from src.utils.business_domain import active_business_domain
@@ -706,6 +711,8 @@ def register_reply_settings_routes(
             "levels": list(rg.LEVELS), "overridable": list(rg.OVERRIDABLE),
             # R88：可锁类别 + 当前锁定（缺省空＝全部只记录、AI 照常回）
             "lockable": list(rg.LOCKABLE), "locked": rg.locked_categories(_cfg_d),
+            # 成人不设限（人设或本机默认）⇒ minor 隐含锁定：不在 locked 里但同样会停 AI，UI 要显示出来
+            "implied_locked": rg.implied_locked(_cfg_d, per),
             "cooldown_min": int(__import__("src.inbox.risk_hold", fromlist=["DEFAULT_COOLDOWN_MIN"]).DEFAULT_COOLDOWN_MIN),
             "categories": rg.public_table(per, _cfg_d),
             "personas": _rk_personas(pm),

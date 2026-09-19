@@ -89,13 +89,25 @@ _THREAT = [_rx(p) for p in (
     r"殺す|見つけ出す|晒す|住所知ってる",
 )]
 _MINOR = [_rx(p) for p in (
-    _LB + r"i(?:'m| am)\s+(?:only\s+|just\s+)?1[0-7](?:\s+(?:years?\s+old|yo|y/o|yrs?))?" + _RB,
-    _LB + r"i(?:'m| am)\s+(?:a\s+)?minor" + _RB,
-    _LB + r"i(?:'m| am)\s+under\s*(?:age|18)" + _RB,
-    _LB + r"(?:turning|turn)\s+1[0-7]\s+(?:next|this)" + _RB,
-    _LB + r"i(?:'m| am)\s+(?:still\s+)?in\s+(?:middle|junior\s+high|8th|9th|10th)\s+(?:school|grade)" + _RB,
-    r"我(今年|才|刚|只有|还)?(?:1[0-7])岁|我未成年|我(还)?是未成年|我(还)?在(读|上)(初中|初一|初二|初三)|我(还)?是(初中生|小学生)",
-    r"(?:1[0-7])歳(です|なんだ)|未成年(です|なんだ)|中学生(です|なんだ)",
+    # 「I'm 16」「I am 16」「im 16」「I'm 17yo / 17 y/o / 17yrs / 17 years old」（yo 紧贴数字也算）；
+    # 排除计量 / 相对年龄：「I'm 15 minutes away」「I'm 16 years older than you」「I'm 17k in debt」
+    _LB + r"i(?:['’]m| am|m)\s+(?:only\s+|just\s+)?1[0-7]"
+    r"(?!\s*(?:years?\s+(?:older|younger|ago|later|apart|into)|minutes?|mins?|hours?|hrs?|days?|weeks?|months?"
+    r"|km|miles?|kg|lbs?|cm|bucks|dollars|percent|%|k|th|st|nd|rd)\b)"
+    r"(?:\s*(?:years?\s+old|years?|yo|y/o|yrs?))?" + _RB,
+    # 拼写年龄「I'm sixteen」
+    _LB + r"i(?:['’]m| am|m)\s+(?:only\s+|just\s+)?(?:thirteen|fourteen|fifteen|sixteen|seventeen)" + _RB,
+    _LB + r"i(?:['’]m| am|m)\s+(?:a\s+)?minor" + _RB,
+    _LB + r"i(?:['’]m| am|m)\s+(?:still\s+)?under\s*(?:age|18)" + _RB,
+    _LB + r"(?:not|ain'?t)\s+(?:even\s+)?18\s+(?:yet|till|until)" + _RB,
+    _LB + r"i(?:['’]m| am|m)\s+still\s+1[0-7]" + _RB,
+    _LB + r"(?:turning|turn)\s+1[0-7]\s+(?:next|this|in)" + _RB,
+    _LB + r"(?:just\s+)?turned\s+1[0-7]\s+(?:last|this|a|yesterday|today|recently)" + _RB,
+    _LB + r"i(?:['’]m| am|m)\s+(?:still\s+)?in\s+(?:middle|junior\s+high|high|8th|9th|10th|11th)\s*(?:school|grade)" + _RB,
+    _LB + r"i(?:['’]m| am|m)\s+(?:still\s+)?(?:a\s+)?(?:high\s*school(?:er)?|highschooler|middle\s*schooler)" + _RB,
+    r"我(今年|才|刚|只有|还)?(?:1[0-7])岁|我今年(?:才|刚)?1[0-7](?![0-9号点月日])|我未成年|我(还)?是未成年|我(还)?没成年|我(还)?不到18"
+    r"|我(还)?在(读|上)(初中|初一|初二|初三|高一|高二|高中)|我(还)?是(初中生|小学生|高中生|高一|高二)",
+    r"(?:1[0-7])歳(です|なんだ|だよ)|未成年(です|なんだ|だよ)|中学生(です|なんだ|だよ)|高校生(です|なんだ|だよ)",
 )]
 _SCAM = [_rx(p) for p in (
     _LB + r"guaranteed\s+(?:returns?|profits?|income)" + _RB,
@@ -241,6 +253,36 @@ def is_locked(category: str, cfg: Any = None) -> bool:
     return bool(cid) and cid in LOCKABLE and cid in locked_categories(cfg)
 
 
+#: 成人不设限（adult_policy=open）时**隐含锁定**的类别：``minor``。
+#: 放开成人的代价是未成年必停——不依赖运营记得去回复设置页勾「锁定」，也不依赖 prompt 里那句
+#: 「疑似未成年立刻停」（那只是给模型的提示，不是闸）。
+IMPLIED_LOCKED_WHEN_ADULT_OPEN: Tuple[str, ...] = ("minor",)
+
+
+def implied_locked(cfg: Any = None, persona: Any = None) -> List[str]:
+    """按有效成人政策推出的隐含锁定类别（当前只有 open → minor）。绝不抛。"""
+    try:
+        from src.inbox.adult_grader import adult_open
+        if adult_open(persona, cfg):
+            return [c for c in IMPLIED_LOCKED_WHEN_ADULT_OPEN if c in LOCKABLE]
+    except Exception:
+        pass
+    return []
+
+
+def is_locked_effective(category: str, cfg: Any = None, persona: Any = None) -> Tuple[bool, str]:
+    """``(locked, by)``：``by`` ∈ ``config``（运营显式锁定）/ ``adult_open``（成人不设限隐含）/ ``""``。
+    判定钩子用这个；UI 锁定开关仍读 :func:`is_locked`（显式那份）。"""
+    cid = str(category or "").strip().lower()
+    if not cid or cid not in LOCKABLE:
+        return False, ""
+    if is_locked(cid, cfg):
+        return True, "config"
+    if cid in implied_locked(cfg, persona):
+        return True, "adult_open"
+    return False, ""
+
+
 def outcome_of(category: str, *, locked: Optional[bool] = None, cfg: Any = None) -> str:
     """一个类别命中后「AI 会怎么做」的结果码（回复设置页 chip 文案键，不是判定）：
 
@@ -266,6 +308,7 @@ def public_table(persona: Any = None, cfg: Any = None) -> List[Dict[str, Any]]:
     + R88 ``lockable`` / ``locked`` / ``outcome``。"""
     ov = risk_overrides_of(persona)
     locked = set(locked_categories(cfg))
+    implied = set(implied_locked(cfg, persona))
     out: List[Dict[str, Any]] = []
     for c in CATEGORIES:
         row = dict(c)
@@ -273,8 +316,11 @@ def public_table(persona: Any = None, cfg: Any = None) -> List[Dict[str, Any]]:
         row["effective_level"] = ov.get(c["id"], c["level"]) if c.get("overridable") else c["level"]
         row["override"] = ov.get(c["id"], "") if c.get("overridable") else ""
         row["lockable"] = c["id"] in LOCKABLE
+        # ``locked`` = 运营显式勾的那份（开关状态）；``locked_by`` 说明真正让它停的来源——
+        # 成人不设限隐含锁定的类别开关显示为「强制锁定」，chip 按会停 AI 画。
         row["locked"] = c["id"] in locked
-        row["outcome"] = outcome_of(c["id"], locked=row["locked"])
+        row["locked_by"] = "config" if c["id"] in locked else ("adult_open" if c["id"] in implied else "")
+        row["outcome"] = outcome_of(c["id"], locked=bool(row["locked_by"]))
         out.append(row)
     return out
 
@@ -502,8 +548,8 @@ def classify_reason(reason: Any) -> Tuple[str, str]:
     return "", ""
 
 
-def first_locked_hit(reasons: Iterable[str], cfg: Any = None) -> str:
-    """第一条已锁定的可锁类别。未锁定 / 无命中 → 空串。绝不抛。"""
+def first_locked_hit(reasons: Iterable[str], cfg: Any = None, persona: Any = None) -> str:
+    """第一条已锁定的可锁类别（显式锁定或成人不设限隐含锁定）。未锁定 / 无命中 → 空串。绝不抛。"""
     try:
         for r in reasons or []:
             key = str(r or "").strip().lower()
@@ -512,7 +558,7 @@ def first_locked_hit(reasons: Iterable[str], cfg: Any = None) -> str:
             cat = _HARD_REASON_CATEGORY.get(key, "")
             if not cat:
                 cat, _ = classify_reason(key)
-            if cat and is_locked(cat, cfg):
+            if cat and is_locked_effective(cat, cfg, persona)[0]:
                 return cat
     except Exception:
         return ""
@@ -666,10 +712,12 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         ghits = [str(h) for h in (g.get("hits") or [])]
         # R88：未锁定类别的硬停主因改名（grade 已消费过原名；下游 hard_stop_reason / _downgradable 只认原名）
         reasons, _renamed = rename_unlocked_hard_reasons(reasons, cfg)
-        locked = is_locked(cat, cfg) if cat else False
+        # 显式锁定（inbox.risk_grading.locked）或隐含锁定（成人不设限 → minor 必停）
+        locked, locked_by = is_locked_effective(cat, cfg, persona) if cat else (False, "")
         info: Dict[str, Any] = {"level": level, "category": cat, "hits": ghits, "action": g.get("action") or "",
                                 "downgraded": False, "from": str(risk_level or "low"),
-                                "locked": locked, "outcome": outcome_of(cat, locked=locked) if cat else "record",
+                                "locked": locked, "locked_by": locked_by,
+                                "outcome": outcome_of(cat, locked=locked) if cat else "record",
                                 "unlocked_reasons": _renamed}
         if isinstance(risk_hits, list):
             for h in ghits:
@@ -697,8 +745,9 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
             if locked or cat not in LOCKABLE:
                 # 锁定（运营要停 AI）或不可锁的高敏（adult:pressure 走成人政策卡）→ 原行为：撑 high、人审 / 硬停
                 new = _max_level(cur, "high")
-                logger.info("[risk] high conv=%s category=%s hits=%s action=%s from=%s locked=%s",
-                            cid or "-", cat, "|".join(ghits[:4]) or "-", info["action"], cur, locked)
+                logger.info("[risk] high conv=%s category=%s hits=%s action=%s from=%s locked=%s%s",
+                            cid or "-", cat, "|".join(ghits[:4]) or "-", info["action"], cur, locked,
+                            (" by=" + locked_by) if locked_by else "")
                 return new, reasons, info
             # R88 未锁定：只记录（标签 risk:high + 台账 risk_recorded），档位按 medium 走 L2、AI 照常回。
             # 原 high 若仍被别的真高因子（adult:pressure / 锁定类别的主因）撑着 → 不降，那是它们的决定。
@@ -749,6 +798,7 @@ __all__ = [
     "TRUE_HIGH_REASONS", "ADULT_PRESSURE_REASON", "LOCK_CFG_PATH", "RECORDED_SUFFIX", "LEDGER_CODE_RECORDED",
     "CATEGORIES", "OVERRIDABLE", "LOCKABLE", "category_def", "public_table", "normalize_level",
     "normalize_locked", "locked_categories", "is_locked", "outcome_of", "first_locked_hit",
+    "IMPLIED_LOCKED_WHEN_ADULT_OPEN", "implied_locked", "is_locked_effective",
     "rename_unlocked_hard_reasons",
     "risk_overrides_of", "resolve_persona", "grade", "classify_reason", "regrade_inbound",
     "release_hold_on_low",

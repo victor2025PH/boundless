@@ -38,13 +38,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
     _cfg = assistant.config.config or {}
     from src.inbox.voice_autosend import (
         resolve_voice_autosend_cfg,
-        decide_voice, stage_voice_file,
         effective_voice_block,
-        record_voice_sent, record_voice_fallback,
-        record_voice_decision,
-        persona_allowed_for_voice,
-        pop_synth_failure_reason,
-        resolve_defer_during_image,
     )
     # 平台触发覆写（P1）：voice.platform_triggers = {platform: trigger}——
     # 在唯一决策点套用，Messenger 置 never 即只关一个平台的语音。
@@ -59,13 +53,282 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         get_orchestrator as _go,
     )
     _orch = _go(_cfg)
+    _desk = None
     if not _orch.owns_media(platform, account_id):
+        # 桌面桥账号（wechat_pc 驱动经虚拟声卡录入，2026-09-19 P0-4）：bridge 开 ∧ 桌面模式 ∧
+        # 驱动活着且心跳报 voice_ready → 走桥链；否则一律文字（老驱动/声卡没就绪不冒险）。
+        _desk = _desktop_voice_bridge_ctx(_cfg, platform, account_id)
+        if _desk is None:
+            return False
+    from src.inbox.voice_session_guard import mark_voice_delivered as _mvd
+    _gate = await _voice_gate(
+        assistant, platform, account_id, chat_key, text, sent_text=sent_text, vb=_vb)
+    if _gate is None:
         return False
+    _real_pid, _cid = _gate
+    if _desk is not None:
+        return await _deliver_voice_via_desktop_bridge(
+            assistant, platform, account_id, chat_key, text,
+            vb=_vb, real_pid=_real_pid, cid=_cid, bridge_cfg=_desk, mark_delivered=_mvd)
+    return await _deliver_voice_via_orchestrator(
+        assistant, _orch, platform, account_id, chat_key, text,
+        vb=_vb, real_pid=_real_pid, cid=_cid, mark_delivered=_mvd)
+
+
+#: 桌面桥语音单条硬顶（微信录音硬顶 60s；留 5s 给点按/UI 延迟）。可由
+#: ``inbox.l2_autosend.desktop_bridge.voice_max_seconds`` 覆写。
+DESKTOP_VOICE_MAX_SEC = 55.0
+
+
+def _desktop_voice_bridge_ctx(cfg, platform, account_id):
+    """桌面桥语音可行性预检（同步、零 IO 之外只读 registry 一行）。
+
+    返回 bridge 配置块＝可走桥链；None＝不可（bridge 关 / 非桌面账号 / 驱动没心跳或过期 /
+    驱动没报 voice_ready）。任何异常都按 None 处理——语音是可选能力，绝不阻断文字。
+    """
+    try:
+        _br = ((cfg.get("inbox", {}) or {}).get("l2_autosend", {}) or {}).get(
+            "desktop_bridge", {}) or {}
+        if not isinstance(_br, dict) or not _br.get("enabled", False):
+            return None
+        if _br.get("voice_enabled", True) is False:
+            return None
+        from src.integrations.account_registry import get_account_registry as _gar
+        row = _gar().get(platform, account_id) or {}
+        if str(row.get("mode") or "") != "desktop":
+            return None
+        from src.web.desktop_bridge_presence import bridge_voice_ready
+        if not bridge_voice_ready(row.get("meta") or {}):
+            return None
+        return _br
+    except Exception:
+        return None
+
+
+def _desktop_voice_max_sec(bridge_cfg) -> float:
+    try:
+        v = float((bridge_cfg or {}).get("voice_max_seconds") or DESKTOP_VOICE_MAX_SEC)
+    except (TypeError, ValueError):
+        v = DESKTOP_VOICE_MAX_SEC
+    return v if v > 0 else DESKTOP_VOICE_MAX_SEC
+
+
+def _probe_ms(path: str) -> int:
+    try:
+        from src.client.voice_sender import probe_audio_duration_ms as _probe
+        return int(_probe(path) or 0)
+    except Exception:
+        return 0
+
+
+def _force_split_cfg(cfg, *, text_len: int = 0, dur_ms: int = 0, max_ms: int = 0):
+    """给 stage_voice_parts 用的配置覆盖：强制开 split_send 且总长门槛归 1（只在「单条超硬顶」时用一次）。
+
+    给了实测 ``dur_ms``（整段音频）与 ``max_ms``（硬顶）时，按**实测语速**反推每条字数上限与条数：
+    ``part_max_chars = text_len × (max_ms/dur_ms) × 0.8``（留 20% 余量给条间语速抖动与录音多出来的 1–3s），
+    ``max_parts`` 至少够把整段切完。否则沿用常规分条参数——常规参数（36 字/3 条）是为「读起来舒服」
+    定的，不保证切出来的每条都在硬顶内（2026-09-19 真机：短稿慢语速强制分条切不出 ≥2 条 → 只能回落文字）。
+    浅拷贝到 voice 块为止，不动原 config。
+    """
+    import copy
+    import math
+    root = dict(cfg or {})
+    inbox = dict(root.get("inbox") or {})
+    l2 = dict(inbox.get("l2_autosend") or {})
+    voice = dict(l2.get("voice") or {})
+    sp = copy.deepcopy(voice.get("split_send")) if isinstance(voice.get("split_send"), dict) else {}
+    sp["enabled"] = True
+    sp["min_total_chars"] = 1
+    if text_len > 0 and dur_ms > 0 and max_ms > 0 and dur_ms > max_ms:
+        fit = int(text_len * (max_ms / float(dur_ms)) * 0.8)
+        cur = sp.get("part_max_chars")
+        try:
+            cur = int(cur) if cur is not None else 36
+        except (TypeError, ValueError):
+            cur = 36
+        sp["part_max_chars"] = max(6, min(cur, fit))
+        need = int(math.ceil(text_len / float(sp["part_max_chars"]))) + 1
+        try:
+            cur_parts = int(sp.get("max_parts") or 3)
+        except (TypeError, ValueError):
+            cur_parts = 3
+        sp["max_parts"] = max(cur_parts, need)
+        try:
+            tail = int(sp.get("min_tail_chars") or 8)
+        except (TypeError, ValueError):
+            tail = 8
+        sp["min_tail_chars"] = max(1, min(tail, sp["part_max_chars"] // 3))
+    voice["split_send"] = sp
+    l2["voice"] = voice
+    inbox["l2_autosend"] = l2
+    root["inbox"] = inbox
+    return root
+
+
+async def _deliver_voice_via_desktop_bridge(assistant, platform, account_id, chat_key, text,
+                                            *, vb, real_pid, cid, bridge_cfg, mark_delivered) -> bool:
+    """桌面桥链（wechat_pc：驱动经虚拟声卡把合成音「录」进微信）的语音投递（P0-4，2026-09-19）。
+
+    与协议直发链的差别：这里**不直接发**，而是把合成好的音频以 ``kind=voice`` 落受控出站队列，
+    由驱动认领 → 五步守卫（record/play/send/echo）→ ack。因此：
+
+    - **真实时长判定**：staging 后 ffprobe 探每条时长，任一条 > ``voice_max_seconds``（默认 55s，
+      微信硬顶 60s）→ 若还是单条，就**强制分条重合成一次**；仍超 → 回落文字（``too_long_audio``）。
+      字数（decide_voice 的 max_chars）只是粗筛，语速/语言差异下 200 字可能就是 60s+，必须看音频本身。
+    - **分条**：逐条入队，驱动按队列顺序发（条间节奏由驱动侧负责）。首条入队被闸门拦 → 回落文字；
+      后续条被拦 → 已入队算数（与协议链「已发算数、剩余丢弃」同义——绝不重排已出口的条目）。
+    - **指标**：这里只算「已排队」；真正的 ``record_voice_sent`` 在驱动 ack 成功时记（P0-6）。
+      连发熔断（note_voice_send）按排队即记——决策时保守，避免同一轮连续两条回复都排成语音。
+    - 人审模式（``review_mode``）：语音命令与文字同款落 ``held``，运营在人审台听转写后放行。
+    """
+    _cfg = assistant.config.config or {}
+    _vb = vb
+    _real_pid = real_pid
+    from src.inbox.voice_autosend import (
+        stage_voice_file, stage_voice_parts,
+        record_voice_fallback, pop_synth_failure_reason,
+    )
+    max_sec = _desktop_voice_max_sec(bridge_cfg)
+    max_ms = int(max_sec * 1000)
+
+    async def _stage_parts(cfg_for_parts):
+        try:
+            return await stage_voice_parts(
+                cfg_for_parts, platform, account_id, _real_pid, text,
+                contact_key=str(chat_key))
+        except Exception:
+            assistant.logger.debug(
+                "[autosend voice/desktop] 分条 staging 异常", exc_info=True)
+            return None
+
+    def _drop(items):
+        import os
+        for _l, _u, _m in items or ():
+            try:
+                if _l and os.path.isfile(_l):
+                    os.remove(_l)
+            except Exception:
+                pass
+
+    # ① 优先分条（配置开着才会切；不满足 → None），否则单条整段。
+    staged = await _stage_parts(_cfg)
+    forced_split = False
+    if not staged or len(staged) < 2:
+        _drop(staged)
+        one = await stage_voice_file(
+            _cfg, platform, account_id, _real_pid, text, contact_key=str(chat_key))
+        if not one:
+            reason = pop_synth_failure_reason()
+            record_voice_fallback(reason)
+            assistant.logger.info(
+                "[autosend voice/desktop] 合成失败回落文本 reason=%s platform=%s acct=%s",
+                reason, platform, account_id)
+            return False
+        staged = [one]
+    # ② 真实时长门：任一条超硬顶 → 单条时强制分条重合成一次；仍超 → 回落文字。
+    durs = [_probe_ms(_l) for _l, _u, _m in staged]
+    if any(d > max_ms for d in durs) and len(staged) == 1:
+        assistant.logger.info(
+            "[autosend voice/desktop] 单条 %sms 超硬顶 %ss → 强制分条重合成 platform=%s acct=%s",
+            durs[0], max_sec, platform, account_id)
+        _drop(staged)
+        forced_split = True
+        staged = await _stage_parts(_force_split_cfg(
+            _cfg, text_len=len(str(text or "").strip()), dur_ms=int(durs[0]), max_ms=max_ms))
+        if not staged:
+            record_voice_fallback("too_long_audio")
+            assistant.logger.info(
+                "[autosend voice/desktop] 强制分条失败 → 回落文本 platform=%s acct=%s",
+                platform, account_id)
+            return False
+        durs = [_probe_ms(_l) for _l, _u, _m in staged]
+    if any(d > max_ms for d in durs):
+        _drop(staged)
+        record_voice_fallback("too_long_audio")
+        assistant.logger.info(
+            "[autosend voice/desktop] 分条后仍有 %sms 超硬顶 %ss → 回落文本 platform=%s acct=%s",
+            max(durs), max_sec, platform, account_id)
+        return False
+    # ③ 逐条入受控出站队列（kind=voice；text=念稿给人审看；media_ref=同机路径驱动直读，media_url 兜底）。
+    from src.inbox.desktop_outbound import get_desktop_outbound_queue as _gdoq
+    from src.integrations.account_registry import get_account_registry as _gar
+    from src.ai.persona_voice import persona_display_name as _pdn
+    sender = _pdn(_real_pid)
+    hold = bool((bridge_cfg or {}).get("review_mode", False))
+    q = _gdoq()
+    reg = _gar()
+    queued = 0
+    ids = []
+    total_ms = 0
+    # 同一稿子的所有分条共用一个组号：驱动据此把条间间隔从 min_gap 换成几秒的连发节奏（P2-4）
+    import uuid as _uuid
+    reply_group = "vg-" + _uuid.uuid4().hex[:12] if len(staged) > 1 else ""
+    for idx, ((_l, _u, _m), _d) in enumerate(zip(staged, durs)):
+        part_text = _safe_voice_inbox_text(
+            str((_m or {}).get("part_text") or "").strip() or str(text))
+        res = q.enqueue(
+            platform, account_id, chat_key, part_text, kind="voice",
+            config=_cfg, registry=reg, hold=hold,
+            media_url=str(_u or ""), media_ref=str(_l or ""), duration_ms=int(_d or 0),
+            inbox_text=part_text, sender_name=sender, reply_group=reply_group)
+        if not res.get("enqueued"):
+            if queued == 0:
+                _drop(staged)
+                record_voice_fallback("bridge_blocked")
+                assistant.logger.info(
+                    "[autosend voice/desktop] 入队被拦 %s → 回落文本 platform=%s acct=%s",
+                    res.get("blocked"), platform, account_id)
+                return False
+            _drop(staged[idx:])
+            assistant.logger.warning(
+                "[autosend voice/desktop] 分条第 %d/%d 条入队被拦 %s（已排 %d 条算数，剩余丢弃）"
+                " platform=%s acct=%s",
+                idx + 1, len(staged), res.get("blocked"), queued, platform, account_id)
+            break
+        queued += 1
+        ids.append(res.get("id"))
+        total_ms += int(_d or 0)
+    first_meta = dict(staged[0][2] or {})
+    assistant.logger.info(
+        "[autosend voice/desktop] 已排队语音 parts=%d/%d%s total_dur=%sms status=%s ids=%s "
+        "provider=%s pid=%s platform=%s acct=%s",
+        queued, len(staged), "(forced_split)" if forced_split else "", total_ms,
+        "held" if hold else "pending", ids,
+        first_meta.get("provider") or "?", _real_pid or "-", platform, account_id)
+    vk = cid or f"{platform}:{account_id}:{chat_key}"
+    mark_delivered(vk)
+    try:
+        from src.client.voice_burst_guard import note_voice_send as _nvs
+        for _ in range(queued):
+            _nvs(vk, {
+                "burst_alert": (_vb.get("burst_alert")
+                               if isinstance(_vb.get("burst_alert"), dict)
+                               else {"enabled": True}),
+            })
+    except Exception:
+        pass
+    return True
+
+
+async def _voice_gate(assistant, platform, account_id, chat_key, text, *, sent_text, vb):
+    """语音决策闸（协议直发链与桌面桥链**共用**，2026-09-19 从 autosend_voice 原样抽出、行为不变）。
+
+    采集会话信号（对方是否刚发语音 / 频率 / 情绪 / 危机 / 亲密度）→ 连发熔断 → 静默窗 → 语言闸 →
+    ``decide_voice`` → 出图 defer → 解析真实人设 → 人设灰度。返回 ``(real_pid, cid)``＝该发语音；None＝发文字。
+    """
+    _cfg = assistant.config.config or {}
+    _vb = vb
+    from src.inbox.voice_autosend import (
+        decide_voice,
+        record_voice_fallback,
+        record_voice_decision,
+        persona_allowed_for_voice,
+        resolve_defer_during_image,
+    )
     from src.inbox.voice_session_guard import (
         resolve_voice_session_cfg as _rvsc,
         should_quiet_after_voice as _sqav,
         voice_peer_lang_conflict as _vplc,
-        mark_voice_delivered as _mvd,
     )
     _session_cfg = _rvsc(_vb)
     # 上下文信号采集：when_peer_voice 用 peer_voice;
@@ -178,7 +441,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         assistant.logger.warning(
             "[autosend voice] 判文字 reason=%s（语音连发熔断，降级文字）"
             "platform=%s acct=%s", _burst_why, platform, account_id)
-        return False
+        return None
     if _sqav(
         conv_key=_vk0, recent_messages=_recent,
         quiet_after_sec=_session_cfg.get("quiet_after_sec", 90),
@@ -187,7 +450,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         assistant.logger.info(
             "[autosend voice] 判文字 reason=voice_quiet（语音已达无新入站）"
             "platform=%s acct=%s", platform, account_id)
-        return False
+        return None
     # 语言闸门：出站翻译生效（实际发出的译文 ≠ 人设原文 → 客户语言 ≠ 人设语言）时，
     # 仅当对方上一条也是语音（对等回应，说明对方听得懂人设语言）才继续；否则回落译文
     # 文本——给只打外语文字的客户发人设母语语音只会露馅。
@@ -198,7 +461,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         assistant.logger.debug(
             "[autosend voice] 判文字 reason=lang_mismatch（出站翻译生效且对方"
             "未发语音）platform=%s acct=%s", platform, account_id)
-        return False
+        return None
     # peer 语种硬闸（翻译关/失败时的盲区）：外语客户 + 念稿实质中文 → 拒语音。
     if _session_cfg.get("peer_lang_gate", True) and not _peer_voice:
         _pl_why = _vplc(str(text or ""), _peer_lang)
@@ -207,7 +470,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             assistant.logger.info(
                 "[autosend voice] 判文字 reason=%s peer_lang=%s platform=%s acct=%s",
                 _pl_why, _peer_lang or "?", platform, account_id)
-            return False
+            return None
     # 客户点名要语音/唱歌（复用 wants_media 的 voice 轴）→ 强制语音（P0-5）。
     _peer_req_voice = False
     try:
@@ -236,7 +499,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             "len=%d platform=%s acct=%s",
             _vdec.reason, _vdec.score, _peer_voice,
             len(str(text or "").strip()), platform, account_id)
-        return False
+        return None
     # GPU 出图进行中 → defer 语音（防 7852/显存争用；回落文字，下轮可再试语音）
     if resolve_defer_during_image(_cfg, _vb):
         try:
@@ -247,7 +510,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                     "[autosend voice] 发图进行中 defer 语音 → 回落文字 "
                     "inflight=%d platform=%s acct=%s",
                     _igi(), platform, account_id)
-                return False
+                return None
         except Exception:
             pass
     # 生效人设（声音克隆 voice_profile 来源）。编排器
@@ -285,7 +548,23 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             "[autosend voice] 人设 %s 不在灰度白名单 → 回落"
             "文本 platform=%s acct=%s", _real_pid or "?",
             platform, account_id)
-        return False
+        return None
+    return _real_pid, _cid
+
+
+async def _deliver_voice_via_orchestrator(assistant, _orch, platform, account_id, chat_key, text,
+                                          *, vb, real_pid, cid, mark_delivered) -> bool:
+    """协议直发链的语音投递（分条 / 单条），从 autosend_voice 原样抽出、行为不变。"""
+    _vb = vb
+    _real_pid = real_pid
+    _cid = cid
+    _mvd = mark_delivered
+    _cfg = assistant.config.config or {}
+    from src.inbox.voice_autosend import (
+        stage_voice_file,
+        record_voice_sent, record_voice_fallback,
+        pop_synth_failure_reason,
+    )
     # ── P0-4 分条语音（2026-08-03）：像真人一样连发 2-3 条短语音，替代 20-30s
     # 一整条。stage_voice_parts 不满足（未开/文本短/切不出两条/任一条合成失败）
     # → None → 走下方单条整段旧路径，行为绝不劣化。条间等待=「下一条要录完才能

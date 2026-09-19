@@ -720,6 +720,19 @@ def test_score_answers_cjk_and_latin_case():
     assert [it["pass"] for it in out["items"]] == [True, True, False, True]
     assert out["items"][1]["answer"] == answers[1]
     assert out["items"][3]["expect"] == ["看书", "旅游"]
+    # 出题元数据透传：提案诊断卡靠 field/src 对字段，不能再被 score 丢掉
+    assert [it.get("src") for it in out["items"]] == ["memory", "memory", "age", "tastes"]
+    assert all("field" not in it for it in out["items"])  # 本题没带 field 就不造空键
+
+
+def test_score_answers_keeps_field_and_src():
+    quiz = [{
+        "q": "你今年多大？", "expect": ["32"], "src": "age", "field": "age",
+    }]
+    out = pq.score_answers(quiz, ["我三十五了"])
+    item = out["items"][0]
+    assert item["pass"] is False
+    assert item["field"] == "age" and item["src"] == "age"
 
 
 def test_normalize_for_match_pure_function():
@@ -930,7 +943,7 @@ def test_score_answers_without_judge_is_unchanged():
     assert plain == explicit_none
     assert "judged" not in plain
     assert all("judged" not in it for it in plain["items"])
-    assert list(plain["items"][0]) == ["q", "answer", "expect", "pass"]
+    assert list(plain["items"][0]) == ["q", "answer", "expect", "pass", "src"]
     assert plain["passed"] == 1 and plain["score"] == 50
 
 

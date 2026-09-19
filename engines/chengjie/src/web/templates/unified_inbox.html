@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260918mp1">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260919pc1">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -3275,7 +3275,10 @@ function _bridgePresence(h){
   return {cls:'off', text:window.Tf('inbox.acct.bridge_off',{m:m}), tip:window.T('inbox.acct.bridge_off_t')};
 }
 /* 实施97 线 B：抽屉里的「个人微信 · PC 副驾」准入卡。未接入＝六步引导入口；已接入＝每个副驾账号一行
-   （心跳胶囊 + 查看会话 + 接入流程）。数据源同 accounts_summary（histAccts 里 status==='desktop' 的 wechat 行）。 */
+   （心跳胶囊 + 查看会话 + 接入流程）。数据源同 accounts_summary（histAccts 里 status==='desktop' 的 wechat 行）。
+   2026-09-19：离线/看不到窗口时主 CTA 换成就地「启动副驾」/「还原微信窗口」（主管专属；复用引导页第 ③ 步
+   的 copilot/start、launch-wechat 端点），不再让人为了一个按钮跳去引导页。 */
+const _PC_CARD_SUP={{ 'true' if is_supervisor else 'false' }};
 function _pcCopilotCardHtml(hist){
   const rows=(hist||[]).filter(h=>h&&h.platform==='wechat'&&String(h.status||'')==='desktop');
   const pc=platColor('wechat');
@@ -3285,6 +3288,18 @@ function _pcCopilotCardHtml(hist){
       const bp=_bridgePresence(h);
       const pill=bp?`<span class="acct-pill ${bp.cls==='on'?'hist-live':(bp.cls==='blind'?'hist-blind':'hist-out')}" title="${esc(bp.tip)}">${esc(bp.text)}</span>`
                    :`<span class="acct-pill hist-reg" title="${esc(window.T('inbox.acct.desk_tag_t'))}">${esc(window.T('inbox.acct.desk_tag'))}</span>`;
+      // 主 CTA 与状态相称：离线 → 启动；看不到窗口 → 还原微信；在线/无桥 → 查看会话。
+      // 动作行恒 3 控件：主 CTA 变成动作时「查看会话」退居次要、「接入流程」缩成图标，主按钮才有整字的宽度
+      let primary=`<button type="button" class="acct-btn primary" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}<span class="lbl">${esc(window.T('inbox.acct.hist_view'))}</span></button>`;
+      let view='';
+      let guide=`<button type="button" class="acct-btn ghost" onclick="openConnect('wechat')">${uiIcon('help',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_flow'))}</span></button>`;
+      if(_PC_CARD_SUP&&bp&&(bp.cls==='off'||bp.cls==='blind')){
+        primary=(bp.cls==='off')
+          ?`<button type="button" class="acct-btn hist-relogin" title="${esc(bp.tip)}" onclick="startPcCopilot(this)">${uiIcon('zap',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_start'))}</span></button>`
+          :`<button type="button" class="acct-btn hist-relogin" title="${esc(bp.tip)}" onclick="focusPcWechat(this)">${uiIcon('refresh',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_focus'))}</span></button>`;
+        view=`<button type="button" class="acct-btn ghost iconly" title="${esc(window.T('inbox.acct.hist_view'))}" aria-label="${esc(window.T('inbox.acct.hist_view'))}" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}</button>`;
+        guide=`<button type="button" class="acct-btn ghost iconly" title="${esc(window.T('inbox.acct.pc_flow'))}" aria-label="${esc(window.T('inbox.acct.pc_flow'))}" onclick="openConnect('wechat')">${uiIcon('help',14)}</button>`;
+      }
       return `<div class="acct-card ${bp&&bp.cls==='on'?'on':'off'}" data-plat="wechat" data-aid="${esc(h.account_id)}" style="--acct-accent:${pc};">
         <div class="acct-card-head">
           ${_acctAvatar('wechat',h.account_id,h.label||_acctLabel('wechat',h.account_id),36,'')}
@@ -3296,8 +3311,7 @@ function _pcCopilotCardHtml(hist){
           ${pill}
         </div>
         <div class="acct-actions">
-          <button type="button" class="acct-btn primary" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}<span class="lbl">${esc(window.T('inbox.acct.hist_view'))}</span></button>
-          <button type="button" class="acct-btn ghost" onclick="openConnect('wechat')">${uiIcon('help',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_flow'))}</span></button>
+          ${primary}${view}${guide}
         </div>
       </div>`;
     }).join('');
@@ -7836,8 +7850,8 @@ function _fetchWithTimeout(url, ms){
 
 /* ===== 数据加载 ===== */
 /* 连接三态正反馈（P0，2026-07-23）：
-   单次轮询失败 → 黄「连接波动」；连续 ≥3 次**且持续 ≥45s** → 红「连接中断」；恢复 → 绿「已恢复」2.5s 自动隐去。
-   45s 时长门槛（2026-09-02，WEXX7E 诊断）：后端重启瞬断 10-25s 就能攒满 3 次失败，
+   单次轮询失败 → 黄「连接波动」；连续 ≥3 次**且持续 ≥60s** → 红「连接中断」；恢复 → 绿「已恢复」2.5s 自动隐去。
+   时长门槛（2026-09-02 定 45s，WEXX7E 诊断；2026-09-19 按实测停机窗放到 60s，见 _setConnBanner）：后端重启瞬断 10-25s 就能攒满 3 次失败，
    旧规则纯按次数升红＝把例行重启误报成「连接中断」红条吓坐席（黄条本身就在说
    「正在重试」，且恢复后自动消失）；真断站 45s 后照旧升红 + 自诊断，如实报警不打折。
    重启冷却窗内（workspace_base 的 __wsRestartCool）文案切「维护窗口」——把"为什么断"讲清楚。
@@ -7955,9 +7969,12 @@ function _setConnBanner(on){
     if(_connRestoreTimer){ clearTimeout(_connRestoreTimer); _connRestoreTimer=null; }
     _connFailStreak+=1;
     if(!_connFirstFailTs) _connFirstFailTs=Date.now();
-    // 升红双门槛：次数（≥3，排除单次抖动）+ 时长（≥45s，排除后端重启瞬断）。
-    // 判定在每次失败轮询时重算——45s 后的下一轮失败即升红，无需额外定时器。
-    const _sustained=_connFailStreak>=3 && (Date.now()-_connFirstFailTs)>=45000;
+    // 升红双门槛：次数（≥3，排除单次抖动）+ 时长（≥60s，排除后端重启瞬断）。
+    // 判定在每次失败轮询时重算——60s 后的下一轮失败即升红，无需额外定时器。
+    // 45s→60s（2026-09-19）：09 月实测 restart_instance 停机窗 21–39s（stop→/login 200），
+    // 叠加轮询相位（5–20s）与就绪后的暖机尾巴，坐席侧可见断连常落在 45–60s——45s 门槛把
+    // 例行重启照旧误报成红条（09-19 12:23 实锤）。真断站 60s 升红 + 自诊断，报警不打折。
+    const _sustained=_connFailStreak>=3 && (Date.now()-_connFirstFailTs)>=60000;
     _renderConnBanner(_sustained?'down':'soft');
     // 连败＝网络断过的正面证据：SSE 可能正卡在半开连接上装健康，
     // 强制重建（函数内 30s 节流），恢复后即时推送不缺席。
@@ -14715,6 +14732,11 @@ function _failReasonText(code){
   const c=String(code||'');
   if(!c) return '';
   const low=c.toLowerCase();
+  /* 微信 PC 副驾语音（P2）：须在 send_gate:daily_cap / session 通配之前——
+     policy:voice_daily_cap 含 daily_cap、guard:record:mic_busy 不含 session，但 raw code 给坐席看不友好 */
+  if(low.indexOf('mic_busy')>=0) return window.T('inbox.failr.voice_mic_busy');
+  if(low.indexOf('voice_daily_cap')>=0) return window.T('inbox.failr.voice_daily_cap');
+  if(low.indexOf('voice_per_peer')>=0) return window.T('inbox.failr.voice_per_peer');
   if(low.indexOf('send_gate:daily_cap')>=0||low.indexOf('warmup_cap')>=0) return window.T('inbox.failr.daily_cap');
   if(low.indexOf('send_gate:health_red')>=0) return window.T('inbox.failr.health_red');
   if(low.indexOf('send_gate:banned')>=0) return window.T('inbox.failr.banned');
@@ -18006,6 +18028,25 @@ async function _refreshComposerDraft(c){
     _cdraft.count=mine.length;
     _cdraftRender();
   }catch(_){ /* 静默：草稿条是增强层，失败不打扰 */ }
+}
+/* 2026-09-19（F2 录制实锤）：auto_generate_draft 先把稿停泊成 enriching 并发 draft_created，人设正文
+   8~20s 后才翻 pending；只在事件那一刻拉一次 status=pending 必拿空、草稿条收起，之后再无刷新——坐席
+   开着会话永远等不到稿，切走再切回才出现。新引擎在翻 pending 时发 draft_ready；这里是旧引擎 / 丢事件的
+   兜底：同一会话仍选中且还没拿到稿时，按退避再拉几次。 */
+var _cdraftRetryTimers=[];
+function _cdraftRetryLater(c, data){
+  try{ _cdraftRetryTimers.forEach(clearTimeout); }catch(_){}
+  _cdraftRetryTimers=[];
+  if(!c || !c.chat_key) return;
+  if(data && data.conversation_id && c.conversation_id && data.conversation_id!==c.conversation_id) return;
+  const key=convKey(c);
+  [6000,12000,20000,32000,48000].forEach(function(ms){
+    _cdraftRetryTimers.push(setTimeout(function(){
+      if(!selectedChat || convKey(selectedChat)!==key) return;
+      if(_cdraft.draft) return;
+      _refreshComposerDraft(selectedChat);
+    }, ms));
+  });
 }
 function acceptComposerDraft(){
   const d=_cdraft.draft;
@@ -26255,6 +26296,39 @@ async function restoreAcct(pl,aid,btn){
   }catch(e){ _acctOpFail(e,res,'inbox.acct.hist_restore_fail'); }
   _acctBtnBusy(btn,false);
 }
+// 个人微信 PC 副驾：账号卡就地启动 / 还原微信窗口（2026-09-19）。与引导页第 ③ 步同一端点、同一
+// 错误口径（409 detail：driver_not_ready / admin_token_missing / 其它）。成功后不立即改卡——
+// 心跳 ~10 秒内到，accounts_summary 轮询自然把胶囊变绿；按钮驻留「启动中…」给第二反馈面。
+async function startPcCopilot(btn){
+  _acctBtnBusy(btn,true);
+  const lbl=btn&&btn.querySelector('.lbl'); if(lbl) lbl.textContent=window.T('inbox.acct.pc_starting');
+  let res=null;
+  try{
+    res=await _acctFetch('/api/setup/wechat_pc/copilot/start',{method:'POST'},20000);
+    if(!res.okHttp||!(res.data&&res.data.ok)){
+      const why=String((res.data&&res.data.detail)||'');
+      const key=why.indexOf('driver_not_ready')>=0?'inbox.acct.pc_start_no_driver'
+        :why.indexOf('admin_token_missing')>=0?'inbox.acct.pc_start_no_token':'inbox.acct.pc_start_fail';
+      _toast(window.T(key),'#dc2626'); _uiBeacon('acct_pc_start_fail'); _acctBtnBusy(btn,false);
+      if(lbl) lbl.textContent=window.T('inbox.acct.pc_start');
+      return;
+    }
+    _toast(window.T('inbox.acct.pc_start_ok'),'#16a34a');
+    _uiBeacon(res.data.action==='attach'?'acct_pc_start_attach':'acct_pc_start_ok');
+    setTimeout(loadChats,12000);
+  }catch(e){ _acctOpFail(e,res,'inbox.acct.pc_start_fail'); _acctBtnBusy(btn,false); if(lbl) lbl.textContent=window.T('inbox.acct.pc_start'); }
+}
+async function focusPcWechat(btn){
+  _acctBtnBusy(btn,true);
+  let res=null;
+  try{
+    res=await _acctFetch('/api/setup/wechat_pc/launch-wechat',{method:'POST'});
+    if(!res.okHttp||!(res.data&&res.data.ok)){ _toast(window.T('inbox.acct.pc_focus_fail'),'#dc2626'); _uiBeacon('acct_pc_focus_fail'); _acctBtnBusy(btn,false); return; }
+    _toast(window.T('inbox.acct.pc_focus_ok'),'#16a34a'); _uiBeacon('acct_pc_focus_ok');
+    setTimeout(loadChats,8000);
+  }catch(e){ _acctOpFail(e,res,'inbox.acct.pc_focus_fail'); }
+  _acctBtnBusy(btn,false);
+}
 // P2 账号真相闭环（2026-08-17）：按账号批量清未读（历史/已退出号的存量未读清账）。
 // 与逐会话已读同一水位机制（服务端 mark_account_read 推 last_read_ts），永不回弹；
 // 成功后刷新会话列表让 rail 灰角标与抽屉行同步消失。
@@ -29883,10 +29957,14 @@ function initSSE(){
           loadThread(selectedChat, true);
         }
         _patchChatInList(data, {bumpUnread:false});
-      } else if(t==='draft_created'){
+      } else if(t==='draft_created' || t==='draft_ready'){
+        // draft_created 时稿还是 enriching（status=pending 拉不到）；draft_ready 是人设正文落成
+        // pending 的那一刻——两次都刷，草稿条才会在坐席开着会话时自己长出来
         if(aiDraftOn && selectedChat) loadDrafts(selectedChat);
         if(selectedChat) _refreshComposerDraft(selectedChat);   // 二期：草稿就绪即在输入区渐进呈现
         _refreshChatsBadges();
+        // 引擎没升到会发 draft_ready 的版本（或事件丢了）时的兜底：按退避补拉几次，拿到稿即停
+        if(t==='draft_created' && selectedChat) _cdraftRetryLater(selectedChat, data);
       } else if(t==='conversation_claim'){
         // 十三期：认领/转派/释放事件 → claimMap 即时更新，「谁在处理」徽章与
         // 「我的」筛选免等 8s 节流轮询（全员生效，不止操作者本人）

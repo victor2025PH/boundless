@@ -1695,7 +1695,30 @@ class DraftService:
                 (_sh.hold_reason if _sh else "-"),
                 ("|".join(_reply_hits[:4]) if _reply_hits else "-"),
             )
+            self._publish_draft_ready(draft, draft_id, autopilot, effective_risk)
         return ok
+
+    def _publish_draft_ready(self, draft: Dict[str, Any], draft_id: str,
+                             autopilot: str, risk_level: str) -> None:
+        """停泊稿翻 pending 的那一刻再推一次事件（2026-09-19 F2 录制实锤）。
+
+        ``draft_created`` 在 ``auto_generate_draft`` 里发布时草稿还是 ``enriching``——工作台收到后
+        拉 ``/api/drafts?status=pending`` 拿到空集、把草稿条收起；人设正文 8~20s 后落成 pending 时
+        再没有任何事件，正开着该会话的坐席看不到草稿条，要切走再切回才出现。
+        单独用 ``draft_ready`` 而不复用 ``draft_created``：webhook_notifier 按 ``draft_created`` 推
+        L2/L3 提醒，复用会让每条稿外推两次。best-effort，任何异常吞掉。"""
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("draft_ready", {
+                "draft_id": draft_id,
+                "conversation_id": str(draft.get("conversation_id") or ""),
+                "platform": str(draft.get("platform") or ""),
+                "chat_key": str(draft.get("chat_key") or ""),
+                "autopilot_level": autopilot,
+                "risk_level": risk_level,
+            })
+        except Exception:
+            logger.debug("draft_ready 事件发布失败", exc_info=True)
 
     def _record_shadow(
         self, decision: _PolicyDecision, *, stage: str, platform: str,
@@ -1787,12 +1810,17 @@ class DraftService:
         draft = self._store.get_draft(draft_id)
         if draft is None or str(draft.get("status") or "") != "enriching":
             return False
-        return self._store.finalize_draft_enrichment(
+        ok = self._store.finalize_draft_enrichment(
             draft_id,
             draft_text=str(draft.get("draft_text") or ""),
             autopilot_level=str(draft.get("autopilot_level") or "L1"),
             status="pending",
         )
+        if ok:
+            self._publish_draft_ready(
+                draft, draft_id, str(draft.get("autopilot_level") or "L1"),
+                str(draft.get("risk_level") or "low"))
+        return ok
 
     # ── 统计 ─────────────────────────────────────────────────
 

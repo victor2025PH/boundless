@@ -12,7 +12,7 @@ streak 新鲜度（默认 20min）」，对「低流量下几天里零星请求�
 
 风格对齐 ``avatar_voice_stats``：无新增依赖、线程安全；record 任何异常都吞掉，
 绝不阻塞语音主链路；**绝不记录文本原文**，只记 (ts, ok, source, reason)。
-``source`` ∈ aline|autosend|manual|wa_rpa|mr_rpa（不硬校验，小写归一后原样入账；
+``source`` ∈ aline|autosend|manual|wa_rpa|mr_rpa|desktop_bridge（不硬校验，小写归一后原样入账；
 新链请走模块级 ``note_voice_attempt`` 一行式入口，别各自复制 try/except）。
 """
 from __future__ import annotations
@@ -271,10 +271,17 @@ class VoiceOutageLedger:
         return "\n".join(lines) + "\n"
 
 
+#: 按设计回落文字的「正常业务态」原因（不入断档台账）：
+#: - 语种能力缺口（克隆声不支持 / 成品念错该语种，R87）
+#: - 桌面桥（2026-09-19 P2）：坐席正在用麦（开会/通话）、语音专属配额到顶——回复本身照发（文字），不是链路断
+_DESIGNED_SKIP_MARKERS = ("clone_lang_unsupported", "clone_lang_garbled",
+                          "mic_busy", "voice_daily_cap", "voice_per_peer_daily_cap")
+
+
 def is_capability_skip(reason: str) -> bool:
-    """语种能力缺口（克隆声不支持 / 成品念错该语种）≠ 语音链路断档。"""
+    """按设计回落文字的原因 ≠ 语音链路断档（详见 ``_DESIGNED_SKIP_MARKERS``）。"""
     r = str(reason or "").lower()
-    return "clone_lang_unsupported" in r or "clone_lang_garbled" in r
+    return any(m in r for m in _DESIGNED_SKIP_MARKERS)
 
 
 _SINGLETON: Optional[VoiceOutageLedger] = None

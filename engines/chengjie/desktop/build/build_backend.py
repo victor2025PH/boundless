@@ -381,7 +381,10 @@ COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
 # 软依赖处静默降级成恒等 → 桌面端繁简归一（synth_verify CER / 克隆发音输入 t2s /
 # zh-tw 出向翻译 OpenCCEngine）在坐席机上全部失效（2026-09-12 GWJ2RZ 钧机
 # 整晚克隆被繁体转写误判「念错」）。--collect-all 连数据一并收进包。
-COLLECT_ALL = ["uvicorn", "okline", "opencc"]
+# uiautomation（个人微信 PC 副驾读屏，2026-09-19 1.0.90 进包）：包内 bin/UIAutomationClient_VC140_*.dll
+# 是数据文件，静态分析只带 .py → 冻结后 ctypes 找不到 DLL 即 import 失败 → driver_ready.ok=False →
+# 引导页退回「手动命令行」（而那条命令又要求装 Python）——外部用户点「启动副驾」是坏的。
+COLLECT_ALL = ["uvicorn", "okline", "opencc", "uiautomation"]
 
 # 重量级可选软依赖：默认排除以控包体（缺失时后端对应能力软降级）。
 #
@@ -391,10 +394,13 @@ COLLECT_ALL = ["uvicorn", "okline", "opencc"]
 # import**），其余（ctranslate2/av/transformers/scipy/sklearn/onnxruntime/numba/llvmlite/
 # pyarrow/pandas/playwright…）都是这两个「根」的传递依赖——排除它们不碰后端启动链，
 # 缺失时对应可选功能在惰性 import 处软降级（已有 try/except）。
-# 保留：numpy（众多库基础依赖）/ jieba（中文分词，KB 可能用）/ PIL（收件箱图片）。
+# 保留：numpy（众多库基础依赖）/ jieba（中文分词，KB 可能用）/ PIL（收件箱图片）/
+# sounddevice + soundfile（2026-09-19 起是个人微信 PC 副驾「发语音」的音频通路：播/录 VB-CABLE、
+# 解码合成音；两者带的 portaudio / libsndfile DLL 合计 <3MB，hooks-contrib 自带 hook 会收进包；
+# 排掉它们副驾就永远 voice_ready=False 只发文字，坐席机上没人能补装）。
 EXCLUDES = [
     # 本地 ASR / 音频声学（桌面走云或 LAN GPU faster-whisper 服务，不做本地转写/分析）
-    "whisper", "faster_whisper", "ctranslate2", "av", "librosa", "soundfile",
+    "whisper", "faster_whisper", "ctranslate2", "av", "librosa",
     "torch", "torchaudio",
     # 本地向量嵌入 / ML / 评测（桌面 embedding 走云 API；eval/训练不随桌面分发）
     "sentence_transformers", "transformers", "tokenizers", "onnxruntime",

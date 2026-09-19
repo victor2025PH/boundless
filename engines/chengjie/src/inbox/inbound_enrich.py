@@ -73,6 +73,13 @@ def _match_media_prefix(text: str) -> tuple:
     if m_cap:
         return "video", (m_cap.group(1) or "").strip()
     if not t.startswith("["):
+        # 电脑微信屏上占位没有方括号：「语音11秒」「Voice 11s」
+        try:
+            from src.inbox.media_enrich import is_voice_duration_placeholder
+            if is_voice_duration_placeholder(t):
+                return "voice", ""
+        except Exception:
+            pass
         return "", ""
     if t in _PLACEHOLDER_KIND:
         return _PLACEHOLDER_KIND[t], ""

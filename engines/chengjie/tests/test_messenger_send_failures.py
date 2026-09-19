@@ -135,7 +135,8 @@ def test_bubble_failr_keys_exist_bilingual():
     """失败留痕气泡的三个新短文案键同样双语齐备（前端 _failReasonText 消费）。"""
     from src.web.i18n_packs.inbox_workspace import EN, ZH
     for key in ("inbox.failr.rate_limited", "inbox.failr.platform_block",
-                "inbox.failr.channel"):
+                "inbox.failr.channel", "inbox.failr.voice_mic_busy",
+                "inbox.failr.voice_daily_cap", "inbox.failr.voice_per_peer"):
         assert key in ZH, f"缺简体键 {key}"
         assert key in EN, f"缺英文键 {key}"
 

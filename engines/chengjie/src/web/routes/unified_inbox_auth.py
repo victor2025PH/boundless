@@ -36,7 +36,12 @@ def _session_agent(request: Request) -> Dict[str, str]:
 
 
 def _is_supervisor(request: Request) -> bool:
-    """主管能力 = 角色属于 master/admin（管理向功能的统一门槛）。"""
+    """主管能力 = session 角色属于 master/admin/supervisor，或请求持有管理员 Bearer 令牌
+    （桌面壳托盘 / 本机脚本走令牌、没有 cookie；``_api_auth`` 命中令牌时打
+    ``request.state.auth_via_admin_token``）。"""
+    # 测试/内部调用的轻量假 Request 可能没有 .state：按「未持令牌」处理，别抛
+    if getattr(getattr(request, "state", None), "auth_via_admin_token", False):
+        return True
     return _session_agent(request).get("role", "") in _SUPERVISOR_ROLES
 
 

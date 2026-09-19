@@ -1225,12 +1225,16 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     </div>
     <!-- Q-15 #271：成人话题政策一格四选（ad- 前缀；空值=跟随业务域默认：陪聊 soft_reply / 销售 human） -->
     <div class="field-row" id="ad-row">
-      <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span></label>
+      <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span>
+        <!-- 2026-09-19：机器级 adult_grader.default_policy 已配置时亮出来——否则运营以为「跟随域默认」还有人工闸 -->
+        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:rgba(255,120,60,.14);color:#e0783c;vertical-align:middle"></span>
+      </label>
       <div class="opt-cards" id="ad-cards">
         <div class="opt-card" data-val="" onclick="_selAdultPolicy(this)"><span class="oc-ico">🧭</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_default','跟随域默认') }}</span></div>
         <div class="opt-card" data-val="soft_reply" onclick="_selAdultPolicy(this)"><span class="oc-ico">💬</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_soft','软回应') }}</span></div>
         <div class="opt-card" data-val="human" onclick="_selAdultPolicy(this)"><span class="oc-ico">🙋</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_human','转人工') }}</span></div>
         <div class="opt-card" data-val="mark_only" onclick="_selAdultPolicy(this)"><span class="oc-ico">🏷️</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_mark','只标记') }}</span></div>
+        <div class="opt-card" data-val="open" onclick="_selAdultPolicy(this)"><span class="oc-ico">🔥</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_open','不设限') }}</span></div>
       </div>
       <input type="hidden" id="ad-policy" value="">
       <div id="ad-preview" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
@@ -1447,6 +1451,15 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <div id="pe-quiz-hist-list"></div>
         <div id="pe-quiz-hist-view" style="margin-top:.45rem"></div>
       </details>
+    </div>
+    <div id="pe-prop-block" style="display:none;margin-top:.42rem;border:1px solid var(--bd);border-radius:10px;padding:.6rem .75rem;background:var(--input)">
+      <div style="display:flex;align-items:center;gap:.55rem;flex-wrap:wrap">
+        <span style="font-size:.78rem;font-weight:600;color:var(--t)">{{ (i18n or {}).get('psn_prop_title','人设补丁') }}</span>
+        <button class="btn btn-sm btn-primary" id="pe-prop-gen" type="button" onclick="_propGenerate()">{{ (i18n or {}).get('psn_prop_gen','生成补丁') }}</button>
+        <span id="pe-prop-cnt" style="font-size:.68rem;color:var(--t2)"></span>
+      </div>
+      <div style="font-size:.68rem;color:var(--t2);margin-top:.2rem;line-height:1.45">{{ (i18n or {}).get('psn_prop_sub','完善度缺口与退役冲突生成提案，人审后才写入；姓名/年龄/边界政策不会自动改。') }}</div>
+      <div id="pe-prop-list" style="margin-top:.45rem"></div>
     </div>
     <!-- 2026-08-03 内容排查：删掉设定后自证「这个词还在哪」（档案全字段+记忆+历史+出站）-->
     <details id="pe-scan-block" style="margin-top:.42rem;border:1px solid var(--bd);border-radius:10px;padding:.6rem .75rem;background:var(--input)">
@@ -1937,16 +1950,50 @@ function _setMpStyle(raw){
   _mpPreview();
 }
 // ── Q-15 #271 ad-：成人话题政策（空=跟随业务域默认） ──────────────────────────
+// 2026-09-19：机器级默认（config adult_grader.default_policy）——「跟随域默认」的实际含义由它决定。
+// 只读一次（/api/reply-settings/risk-grader 的 policy_defaults），失败静默：徽章不亮、文案回落域默认。
+var _adMachine = null;   // {policy, source} | null
+function _adPolicyLabel(v){
+  var k = {soft_reply: 'psn_pf_ad_soft', human: 'psn_pf_ad_human', mark_only: 'psn_pf_ad_mark', open: 'psn_pf_ad_open'}[v];
+  return k ? window.T(k) : String(v || '');
+}
+async function _adLoadMachineDefault(){
+  if (_adMachine !== null) return _adMachine;
+  _adMachine = {policy: '', source: ''};
+  try {
+    var r = await apiFetch('/api/reply-settings/risk-grader');
+    var d = await r.json();
+    var pd = (d && d.policy_defaults) || {};
+    _adMachine = {policy: String(pd.adult || ''), source: String(pd.adult_source || '')};
+  } catch (e) { /* 锦上添花：读不到就不显示 */ }
+  var badge = document.getElementById('ad-machine-badge');
+  if (badge) {
+    if (_adMachine.source === 'config' && _adMachine.policy) {
+      badge.textContent = window.Tf('psn_pf_ad_machine', {policy: _adPolicyLabel(_adMachine.policy)});
+      badge.title = window.Tf('psn_pf_ad_machine_hint', {policy: _adPolicyLabel(_adMachine.policy)});
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  _adPreview();
+  return _adMachine;
+}
 function _adPreview(){
   var v = _pfStr('ad-policy') || '';
   var map = {
     '': window.T('psn_pf_ad_ex_default'),
     soft_reply: window.T('psn_pf_ad_ex_soft'),
     human: window.T('psn_pf_ad_ex_human'),
-    mark_only: window.T('psn_pf_ad_ex_mark')
+    mark_only: window.T('psn_pf_ad_ex_mark'),
+    open: window.T('psn_pf_ad_ex_open')
   };
+  if (v === '' && _adMachine && _adMachine.source === 'config' && _adMachine.policy) {
+    map[''] = window.Tf('psn_pf_ad_ex_default_machine', {policy: _adPolicyLabel(_adMachine.policy)});
+  }
   var el = document.getElementById('ad-preview');
   if (el) el.textContent = map[v] || map[''] || '';
+  if (_adMachine === null) { try { _adLoadMachineDefault(); } catch (e) {} }
 }
 function _selAdultPolicy(el){
   _selOpt(el, 'ad-policy', 'ad-cards');
@@ -1958,6 +2005,7 @@ function _setAdultPolicy(raw){
   if (s === 'soft_reply' || s === 'soft') v = 'soft_reply';
   else if (s === 'human' || s === 'handoff') v = 'human';
   else if (s === 'mark_only' || s === 'mark') v = 'mark_only';
+  else if (s === 'open' || s === 'none' || s === 'off' || s === 'unrestricted') v = 'open';   // 成人不设限（2026-09-19）
   var hid = document.getElementById('ad-policy'); if (hid) hid.value = v;
   _setOptCard('ad-cards', v);
   _adPreview();
@@ -4700,7 +4748,10 @@ async function loadProfileList() {
       return;
     }
     const d = await r.json();
-    _allProfiles = d.summary || [];
+    _allProfiles = (d.summary || []).map(function(p) {
+      p.tags = (typeof _coerceProfileTags === 'function') ? _coerceProfileTags(p.tags) : (p.tags || []);
+      return p;
+    });
     // P11：默认兜底人设近7日回复数（不属任何 profile 卡；供活跃排行呈现「兜底也在干活」）
     _usage7dDefault = d.usage_7d_default || 0;
     _usage7dTotal = d.usage_7d_total || 0;
@@ -5896,7 +5947,7 @@ function _collectProfileTabPatch() {
   bndOut.commitment_style = (st === 'direct') ? 'direct' : 'soft';
   // ad- Q-15：空=跟随业务域默认 → 不落键（缺省语义由 adult_grader.adult_policy_of 决定）
   var adp = _pfStr('ad-policy') || '';
-  if (adp === 'soft_reply' || adp === 'human' || adp === 'mark_only') bndOut.adult_policy = adp;
+  if (adp === 'soft_reply' || adp === 'human' || adp === 'mark_only' || adp === 'open') bndOut.adult_policy = adp;
   else delete bndOut.adult_policy;
   if (Object.keys(bndOut).length) patch.boundaries = bndOut;
   // personality 三补充：由 saveProfile 做对象/字符串形态特殊融合
@@ -5995,6 +6046,8 @@ async function editProfile(pid) {
     _resetEditorExtras();
     _resetQuiz();        // C2 线：清上一个人设的考题结果/轮询，按开关显隐区块
     if (_quizEnabled) _quizLoadHistory();  // H4 线：预览页签考题历史
+    _refreshPropBlock();
+    if (_propEnabled) _propLoad();
     _loadBioStatus();    // C2 线：异步拉长传记入库状态（旧后端 404 = 未入库）
     _openDrawer(p.name || pid);
     history.replaceState(null, '', '#profile=' + encodeURIComponent(pid));
@@ -6192,6 +6245,8 @@ async function saveProfile() {
       _checkUndoAvailable(pid);
       _loadCanonicalBanner(pid);
       _refreshQuizBlock();          // C2 线：新建保存后进入「编辑已有」态，考题区可见
+      _refreshPropBlock();
+      if (_propEnabled) _propLoad();
       _stashPendingBioDoc(pid);     // C2 线：向导解析原文入长传记库（无 pending 则只刷状态行）
     } else {
       var _detail = (typeof d.detail === 'string') ? d.detail : JSON.stringify(d.detail || '');
@@ -7401,6 +7456,130 @@ async function _initQuizStatus() {
 function _refreshQuizBlock() {
   var blk = document.getElementById('pe-quiz-block');
   if (blk) blk.style.display = (_quizEnabled && _editingProfileId) ? '' : 'none';
+}
+
+var _propEnabled = false;
+async function _initPropStatus() {
+  try {
+    const r = await apiFetch('/api/personas/proposals/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && d.enabled === true) {
+      _propEnabled = true;
+      _refreshPropBlock();
+      if (_editingProfileId) _propLoad();
+    }
+  } catch (e) {}
+}
+function _refreshPropBlock() {
+  var blk = document.getElementById('pe-prop-block');
+  if (blk) blk.style.display = (_propEnabled && _editingProfileId) ? '' : 'none';
+}
+function _propEsc(s) {
+  return (typeof _escHtml === 'function') ? _escHtml(String(s == null ? '' : s))
+    : String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function _propRender(proposals) {
+  var box = document.getElementById('pe-prop-list');
+  var cnt = document.getElementById('pe-prop-cnt');
+  if (cnt) {
+    var n = (proposals || []).length;
+    cnt.textContent = n ? window.Tf('psn_prop_pending_n', {n: String(n)}) : '';
+  }
+  if (!box) return;
+  if (!proposals || !proposals.length) {
+    box.innerHTML = '<div style="font-size:.72rem;color:var(--t2)">' + _propEsc(window.T('psn_prop_empty')) + '</div>';
+    return;
+  }
+  box.innerHTML = proposals.map(function(p) {
+    var kindLbl = p.kind === 'retire' ? window.T('psn_prop_retire') : window.T('psn_prop_fill');
+    var ev = (p.evidence && p.evidence[0]) || {};
+    var hint = p.rationale || '';
+    var input = (p.kind === 'fill')
+      ? '<textarea id="pe-prop-in-' + p.id + '" rows="2" style="width:100%;margin:.3rem 0;font-size:.72rem" placeholder="' + _propEsc(window.T('psn_prop_ph')) + '"></textarea>'
+      : '';
+    return '<div class="pe-prop-card" data-pid="' + p.id + '" style="border:1px solid var(--bd);border-radius:8px;padding:.45rem .55rem;margin:.35rem 0">'
+      + '<div style="font-size:.72rem;font-weight:600">' + _propEsc(kindLbl) + ' · ' + _propEsc(window.T('psn_prop_field')) + ' <code>' + _propEsc(p.field) + '</code></div>'
+      + '<div style="font-size:.68rem;color:var(--t2);margin:.15rem 0;line-height:1.4">' + _propEsc(hint) + (ev.path ? ' · ' + _propEsc(ev.path) : '') + '</div>'
+      + input
+      + '<div style="display:flex;gap:.35rem;flex-wrap:wrap">'
+      + '<button type="button" class="btn btn-sm btn-primary" onclick="_propAccept(' + p.id + ')">' + _propEsc(window.T('psn_prop_accept')) + '</button>'
+      + '<button type="button" class="btn btn-sm" onclick="_propReject(' + p.id + ')">' + _propEsc(window.T('psn_prop_reject')) + '</button>'
+      + '</div></div>';
+  }).join('');
+}
+async function _propLoad() {
+  if (!_propEnabled || !_editingProfileId) return;
+  try {
+    var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_editingProfileId) + '/proposals?status=pending');
+    if (!r.ok) return;
+    var d = await r.json();
+    _propRender(d.proposals || []);
+  } catch (e) {}
+}
+async function _propGenerate() {
+  if (!_propEnabled || !_editingProfileId) return;
+  var btn = document.getElementById('pe-prop-gen');
+  if (btn) btn.disabled = true;
+  try {
+    var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_editingProfileId) + '/proposals/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+    }, {timeoutMs: 30000});
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) {
+      _toast(window.Tf('psn_prop_fail', {err: String(d.detail || r.status)}), 'err');
+      return;
+    }
+    _propRender(d.proposals || []);
+  } catch (e) {
+    _toast(window.Tf('psn_prop_fail', {err: String(e)}), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+async function _propAccept(id) {
+  if (!_editingProfileId) return;
+  var inp = document.getElementById('pe-prop-in-' + id);
+  var body = {};
+  if (inp) {
+    var val = (inp.value || '').trim();
+    if (!val) { _toast(window.T('psn_prop_need_value'), 'err'); return; }
+    body.proposed = val;
+  }
+  try {
+    var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_editingProfileId) + '/proposals/' + id + '/accept', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }, {timeoutMs: 30000});
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) {
+      _toast(window.Tf('psn_prop_fail', {err: String(d.detail || r.status)}), 'err');
+      return;
+    }
+    _toast(window.Tf('psn_prop_ok', {field: String(d.field || '')}), 'ok');
+    if (d.rev && typeof _loadedRev !== 'undefined') _loadedRev = d.rev;
+    await _propLoad();
+    loadProfileList();
+  } catch (e) {
+    _toast(window.Tf('psn_prop_fail', {err: String(e)}), 'err');
+  }
+}
+async function _propReject(id) {
+  if (!_editingProfileId) return;
+  try {
+    var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_editingProfileId) + '/proposals/' + id + '/reject', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+    }, {timeoutMs: 15000});
+    if (!r.ok) {
+      var d = await r.json().catch(function(){ return {}; });
+      _toast(window.Tf('psn_prop_fail', {err: String(d.detail || r.status)}), 'err');
+      return;
+    }
+    _toast(window.T('psn_prop_rejected'), 'ok');
+    await _propLoad();
+  } catch (e) {
+    _toast(window.Tf('psn_prop_fail', {err: String(e)}), 'err');
+  }
 }
 function _quizStopPoll() {
   if (_quizJobTimer) { clearInterval(_quizJobTimer); _quizJobTimer = null; }
@@ -9224,6 +9403,7 @@ document.addEventListener('DOMContentLoaded', function() {
   _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）
   _initDocImport();                  // C 线：探测 LLM 提取开关（不藏导入入口）
   _initQuizStatus();                 // C2 线：一致性考题开关探测（false/404 = 整块隐藏）
+  _initPropStatus();
   _initBioInventory();               // M9 收尾：孤儿传记库存横幅（404/无孤儿 = 隐藏）
   loadProfileList();
   _reloadBindingsList();
@@ -9939,7 +10119,7 @@ function openCreateFlow() {
 }
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
-<script src="/static/js/persona_studio_core.js?v=20260905a"></script>
+<script src="/static/js/persona_studio_core.js?v=20260918a"></script>
 <script src="/static/js/persona_apply_modal.js?v=p3"></script>
 <script src="/static/js/persona_create_wizard.js?v=20260916a"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>

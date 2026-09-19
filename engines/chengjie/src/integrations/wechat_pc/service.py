@@ -30,9 +30,9 @@ from src.integrations.wechat_pc.backend import Bubble, WeChatPcBackend
 from src.integrations.wechat_pc.identity import (
     ChatIdentityCache, chat_key_kind, is_group_title, normalize_display_name,
 )
-from src.integrations.wechat_pc.policy import PcPolicy, may_send, resolve_policy
+from src.integrations.wechat_pc.policy import PcPolicy, caps_relaxed, may_send, resolve_policy
 from src.integrations.wechat_pc.risk_screens import NONE, assess
-from src.integrations.wechat_pc.send_guard import GuardedSender, SendOutcome
+from src.integrations.wechat_pc.send_guard import GuardedSender, SendOutcome, verify_title
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,30 @@ class BridgeClient:
         items = d.get("items") or []
         return [x for x in items if isinstance(x, dict)]
 
-    def ack(self, item_id: int, ok: bool, error: str = "") -> bool:
-        st, d = self._call("POST", "/api/desktop/outbound/ack", {"id": int(item_id), "ok": bool(ok), "error": error[:200]})
+    def ack(self, item_id: int, ok: bool, error: str = "", extra: Optional[Dict[str, Any]] = None) -> bool:
+        body: Dict[str, Any] = {"id": int(item_id), "ok": bool(ok), "error": error[:200]}
+        if extra:
+            body.update(extra)
+        st, d = self._call("POST", "/api/desktop/outbound/ack", body)
         return st == 200 and bool(d.get("ok"))
+
+    def fetch_media(self, url: str) -> Optional[bytes]:
+        """拉取出站媒体（``/static/...`` 相对 URL 或绝对 URL）；失败 None。带 Bearer（static 通常不鉴权，带上无害）。"""
+        u = str(url or "")
+        if not u:
+            return None
+        if u.startswith("/"):
+            u = self.base_url + u
+        req = _urlreq.Request(u, method="GET")
+        req.add_header("Authorization", f"Bearer {self.token}")
+        try:
+            with _urlreq.urlopen(req, timeout=max(self.timeout_sec, 30.0)) as resp:  # noqa: S310
+                if resp.status != 200:
+                    return None
+                return resp.read()
+        except Exception:  # noqa: BLE001
+            logger.warning("[wechat_pc.bridge] 拉取媒体失败 %s", u[:120])
+            return None
 
     def thread_texts(self, account_id: str, chat_key: str, limit: int = 80) -> Optional[Set[Tuple[str, str]]]:
         """后端线程里已有的 ``(direction, 归一正文)`` 集合——可见区顶部没有时间条的旧气泡靠它去重。
@@ -99,6 +120,30 @@ class BridgeClient:
             if isinstance(m, dict):
                 out.add((str(m.get("direction") or "in"), " ".join(str(m.get("text") or "").split())))
         return out
+
+    def thread_last_inbound_ts(self, account_id: str, chat_key: str, limit: int = 40) -> Optional[float]:
+        """后端线程里对方最近一条来信的时间戳；线程取不到 → None，线程里没有来信 → 0.0。
+
+        驱动重启后 ``_last_inbound`` 是空的，而「仅回复」档要看「对方说过话」——会话没有未读就不会再被
+        扫屏，重启前的来信全部忘光，排到该联系人的回复一律 ``no_inbound_from_peer``。后端收件箱里有驱动自己
+        之前入站的那些消息，问一次就够。"""
+        from urllib.parse import quote
+        st, d = self._call("GET", f"/api/unified-inbox/thread?platform={PLATFORM}&account_id={quote(account_id)}"
+                                  f"&chat_key={quote(chat_key, safe='')}&limit={int(limit)}")
+        if st != 200:
+            return None
+        msgs = d.get("messages") if isinstance(d.get("messages"), list) else d.get("items")
+        if not isinstance(msgs, list):
+            return None
+        last = 0.0
+        for m in msgs:
+            if not isinstance(m, dict) or str(m.get("direction") or "in") != "in":
+                continue
+            try:
+                last = max(last, float(m.get("ts") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        return last
 
     def heartbeat(self, account_id: str, *, tier: str, readonly: bool, stats: Dict[str, Any],
                   label: str = "") -> bool:
@@ -202,6 +247,13 @@ class ServiceStats:
     last_disposition: str = NONE
     frozen_until: float = 0.0
     offline: bool = False
+    voice_ready: bool = False     # 「发语音」锚点在 + 虚拟声卡通路就绪（后端据此决定要不要给这台机排语音）
+    voice_sent: int = 0
+    voice_failed: int = 0
+    voice_mic_busy: bool = False  # 坐席麦克风正被别的程序录着（开会/通话）→ 后端暂不排语音、驱动不切麦
+    voice_mic_busy_by: str = ""   # 占用进程名（逗号分隔）
+    #: 因瞬态原因（同一联系人最小间隔未到）本地挂起、稍后再试的出站命令数
+    deferred: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
         return dict(self.__dict__)
@@ -226,11 +278,18 @@ class WeChatPcService:
         lookup_wxid: bool = True,
         seen_store: Optional["SeenStore"] = None,
         account_label: str = "",
+        voice: Any = None,
+        media_dir: str = "",
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.backend = backend
         self.bridge = bridge
+        self._sleep = sleep
         self.account_id = str(account_id or "").strip() or "wechat-pc"
         self.account_label = str(account_label or "").strip()
+        # 语音通路句柄（audio_cable.VoiceCable 同形：ready() / mic_switched() / prepare(path)）；None＝本机不发语音
+        self.voice = voice
+        self.media_dir = str(media_dir or "")
         self.policy = policy or resolve_policy(config)
         # 注意不能写 ``identity or ChatIdentityCache()``：空缓存 __len__==0 为假，会把传入的落盘缓存丢掉
         self.identity = identity if identity is not None else ChatIdentityCache()
@@ -245,22 +304,71 @@ class WeChatPcService:
         self._seen: Dict[str, Set[str]] = {}
         self._seen_store = seen_store or SeenStore("")
         self._last_inbound: Dict[str, float] = {}
+        self._inbound_recover_at: Dict[str, float] = {}
         self._sent_day = ""
         self._sent_today = 0
         self._sent_today_peer: Dict[str, int] = {}
         self._last_sent_peer: Dict[str, float] = {}
+        # 语音单独计数（同时也计入上面两项）；对该联系人上一条已发出命令的 reply_group（分条节奏用）
+        self._voice_sent_today = 0
+        self._voice_sent_today_peer: Dict[str, int] = {}
+        self._last_sent_group: Dict[str, str] = {}
         self._group_mentioned: Dict[str, bool] = {}
         self._visible_name_counts: Dict[str, int] = {}
         self._wxid_verified_at: Dict[str, float] = {}
         self._minimized_notified = False
         self._hb_thread = None
         self._hb_stop = None
+        # 刚发出的语音 → 等它的回显气泡（「语音N秒」）被扫到时用念稿/音频 URL/人设名充实镜像行
+        self._pending_voice_mirror: Dict[str, List[Dict[str, Any]]] = {}
+        self._voice_ready_checked = 0.0
+        self._a11y_rebuild_at = 0.0
+        # 已认领但被 min_gap 挡住的出站命令：本地挂起等间隔过去（id → item / 首次挂起时刻）。
+        # 2026-09-19 真机：分条语音两条同一轮被认领，第二条紧跟第一条 → min_gap 拒发 → 回执失败进人审，
+        # 分条形同虚设。min_gap 是「等一会就行」的瞬态原因，不该当永久失败。
+        self._deferred: Dict[int, Dict[str, Any]] = {}
+        self._deferred_since: Dict[int, float] = {}
+
+    #: 瞬态拒发本地挂起的上限：队列对「认领未回执」的命令 180s 后自动回收重派，挂起必须明显短于它，
+    #: 否则同一条命令会被驱动与队列两头处理。超过上限仍发不出去 → 按原样回执 policy:min_gap。
+    DEFER_MAX_SEC = 150.0
+    #: 会被挂起而非立即失败的拒发原因（其余：档位/日上限/非工作时段/对方没来过信 → 等也没用，照旧失败）
+    TRANSIENT_DENIALS = frozenset({"min_gap"})
+
+    #: 空壳无障碍树自愈（隐藏→托盘单击）最短间隔：失败不狂点托盘
+    A11Y_REBUILD_COOLDOWN_SEC = 300.0
+
+    def _maybe_rebuild_accessibility(self) -> None:
+        """窗口可见、已登录，但自检仍缺 session_list → 多半是 ShowWindow 拉回的空壳树（4.1.13 实锤），
+        走托盘单击让微信重建。带冷却；托盘图标找不到就不动窗口。"""
+        if self._now() - self._a11y_rebuild_at < self.A11Y_REBUILD_COOLDOWN_SEC:
+            return
+        hwnd_fn = getattr(self.backend, "main_hwnd", None)
+        hwnd = 0
+        try:
+            hwnd = int(hwnd_fn() or 0) if callable(hwnd_fn) else 0
+        except Exception:
+            hwnd = 0
+        if not hwnd:
+            return
+        self._a11y_rebuild_at = self._now()
+        try:
+            from src.integrations.wechat_pc.env_check import accessibility_tree_empty, rebuild_accessibility_via_tray
+            if accessibility_tree_empty(hwnd) is not True:
+                return
+            res = rebuild_accessibility_via_tray(hwnd)
+            logger.warning("[wechat_pc] 主窗无障碍树为空壳（ShowWindow 拉回）→ 托盘重建：%s", res)
+            if res.get("tree_rebuilt"):
+                self._emit_notify("a11y_rebuilt", res.get("via") or "")
+        except Exception:
+            logger.debug("[wechat_pc] 无障碍树重建异常", exc_info=True)
 
     # ── 巡检 ──
     def _roll_day(self) -> None:
         day = datetime.fromtimestamp(self._now()).strftime("%Y-%m-%d")
         if day != self._sent_day:
             self._sent_day, self._sent_today, self._sent_today_peer = day, 0, {}
+            self._voice_sent_today, self._voice_sent_today_peer = 0, {}
 
     def _emit_notify(self, kind: str, detail: str) -> None:
         if self._notify is None:
@@ -303,6 +411,8 @@ class WeChatPcService:
                 rep = self.backend.self_check()
                 if not getattr(self.backend, "readonly", True):
                     logger.info("[wechat_pc] 微信窗口回来了，锚点自检通过，解除只读：%s", rep)
+                elif "session_list" in (rep.get("missing") or []):
+                    self._maybe_rebuild_accessibility()
             except Exception:
                 logger.debug("[wechat_pc] 重新自检失败", exc_info=True)
         return readable
@@ -426,6 +536,14 @@ class WeChatPcService:
             if is_group and b.sender:
                 payload["sender_name"] = b.sender
                 payload["chat_type"] = "group"
+            if b.is_self and media_type == "voice":
+                # 服务自己刚发出的语音：后端在 ack 时已镜像了带念稿/音频/人设名的出站行（P0-6），
+                # 屏上这颗「语音N秒」占位气泡不再落第二行——命中待回显记录即只标已见。
+                # 没命中（坐席亲手发的语音 / 驱动重启丢了记录）照常按占位入站。
+                if self._pop_voice_mirror(chat_key, now):
+                    self._seen_store.add(cfp)
+                    self.stats.self_mirrored += 1
+                    continue
             if self.bridge.ingest(payload):
                 n += 1
                 self._seen_store.add(cfp)
@@ -478,6 +596,112 @@ class WeChatPcService:
         return handled
 
     # ── 出站 ──
+    #: 语音回显最多等多久被扫到（超过就当丢了，不再充实后来的语音）
+    VOICE_MIRROR_TTL_SEC = 600.0
+
+    def _pop_voice_mirror(self, chat_key: str, now: float) -> Optional[Dict[str, Any]]:
+        q = self._pending_voice_mirror.get(chat_key) or []
+        q = [m for m in q if now - float(m.get("ts") or 0.0) <= self.VOICE_MIRROR_TTL_SEC]
+        hit = q.pop(0) if q else None
+        if q:
+            self._pending_voice_mirror[chat_key] = q
+        else:
+            self._pending_voice_mirror.pop(chat_key, None)
+        return hit
+
+    def _refresh_voice_ready(self) -> bool:
+        """语音能力＝后端有「发语音」锚点 ∧ 声卡通路就绪；每 60s 复查一次（心跳带给后端）。"""
+        now = self._now()
+        if now - self._voice_ready_checked < 60.0 and self._voice_ready_checked > 0:
+            return self.stats.voice_ready
+        self._voice_ready_checked = now
+        ready = False
+        try:
+            probe = getattr(self.backend, "voice_ready", None)
+            ready = bool(self.voice is not None and self.voice.ready() and callable(probe) and probe())
+        except Exception:
+            ready = False
+        self.stats.voice_ready = ready
+        return ready
+
+    def _resolve_voice_media(self, it: Dict[str, Any]) -> str:
+        """出站语音的本地文件：``media_ref`` 是同机路径直接用；否则按 ``media_url`` 拉到 media_dir。空串＝拿不到。"""
+        ref = str(it.get("media_ref") or "")
+        if ref:
+            try:
+                import os
+                if os.path.isfile(ref):
+                    return ref
+            except Exception:
+                pass
+        url = str(it.get("media_url") or "")
+        fetch = getattr(self.bridge, "fetch_media", None)
+        if not url or not callable(fetch):
+            return ""
+        data = fetch(url)
+        if not data:
+            return ""
+        try:
+            import os
+            d = self.media_dir or os.path.join(os.environ.get("TEMP") or ".", "chatx_wechat_pc_voice")
+            os.makedirs(d, exist_ok=True)
+            ext = os.path.splitext(url.split("?", 1)[0])[1] or ".bin"
+            path = os.path.join(d, f"out_{int(it.get('id') or 0)}{ext}")
+            with open(path, "wb") as fh:
+                fh.write(data)
+            return path
+        except Exception:
+            logger.debug("[wechat_pc] 落语音媒体失败", exc_info=True)
+            return ""
+
+    def _refresh_mic_busy(self) -> Dict[str, Any]:
+        """坐席麦克风是否正被别的程序录着（开会/通话）。每次调用都问系统（COM 枚举 ≈10ms）；
+        空闲→占用的那一刻通知主人一次。检测不了（COM 不可用/异常）按不占用，不能因为看不见就一直不发语音。"""
+        probe = getattr(self.voice, "mic_busy", None) if self.voice is not None else None
+        res: Dict[str, Any] = {"busy": False, "sessions": []}
+        if callable(probe):
+            try:
+                res = dict(probe() or {})
+            except Exception:
+                logger.debug("[wechat_pc] 麦克风占用检测异常", exc_info=True)
+                res = {"busy": False, "sessions": []}
+        busy = bool(res.get("busy"))
+        procs = sorted({str(s.get("process") or s.get("pid") or "?") for s in (res.get("sessions") or [])})
+        if busy and not self.stats.voice_mic_busy:
+            logger.warning("[wechat_pc] 坐席麦克风被占用（%s）→ 语音暂改文字", ",".join(procs) or "?")
+            self._emit_notify("voice_mic_busy", ",".join(procs))
+        elif not busy and self.stats.voice_mic_busy:
+            logger.info("[wechat_pc] 坐席麦克风已空闲，恢复语音")
+        self.stats.voice_mic_busy = busy
+        self.stats.voice_mic_busy_by = ",".join(procs)[:80]
+        return res
+
+    def _send_voice_item(self, it: Dict[str, Any], target: str, expected_wxid: str) -> SendOutcome:
+        """一条 voice 命令：解析媒体 → 切默认麦克风到声卡 → 五步守卫（record/play/send/echo）→ 还麦克风。
+
+        切麦克风之前先看坐席是否正在用麦（开会/通话）：是 → ``record/mic_busy:<进程>`` 失败（能力型，server 端
+        同稿改发文字），**不切默认设备**——跟随「默认设备」的软件会在切换瞬间把对方听到的换成我们的合成音。
+        """
+        if self.voice is None or not self._refresh_voice_ready():
+            return SendOutcome(False, "record", "voice_not_ready")
+        busy = self._refresh_mic_busy()
+        if busy.get("busy"):
+            return SendOutcome(False, "record", f"mic_busy:{self.stats.voice_mic_busy_by or '?'}"[:120])
+        path = self._resolve_voice_media(it)
+        if not path:
+            return SendOutcome(False, "record", "media_unavailable")
+        try:
+            play, dur = self.voice.prepare(path)
+        except Exception as exc:  # noqa: BLE001
+            return SendOutcome(False, "record", f"prepare_failed:{exc}"[:120])
+        expected_sec = int(round(dur)) if dur > 0 else None
+        try:
+            with self.voice.mic_switched():
+                return self.sender.send_voice(target, play, expected_wxid=expected_wxid, expected_sec=expected_sec)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[wechat_pc] 语音发送异常：%s", exc)
+            return SendOutcome(False, "record", f"mic_switch_failed:{exc}"[:120])
+
     def _display_name_for(self, chat_key: str) -> str:
         name = self.identity.display_name_for(chat_key)
         if name:
@@ -488,22 +712,122 @@ class WeChatPcService:
             return body.split("#", 1)[0]
         return ""
 
+    def _defer(self, item_id: int, it: Dict[str, Any], reason: str) -> bool:
+        """瞬态拒发 → 本地挂起到下轮（不回执、命令保持认领态）。超过 DEFER_MAX_SEC 仍不行 → False（调用方照旧回执失败）。"""
+        now = self._now()
+        since = self._deferred_since.get(item_id)
+        if since is not None and now - since > self.DEFER_MAX_SEC:
+            self._deferred.pop(item_id, None)
+            self._deferred_since.pop(item_id, None)
+            return False
+        if since is None:
+            self._deferred_since[item_id] = now
+            self.stats.deferred += 1
+            logger.info("[wechat_pc] 挂起 id=%s chat=%s reason=%s（同联系人间隔未到，下轮再试）",
+                        item_id, it.get("chat_key"), reason)
+        self._deferred[item_id] = it
+        return True
+
+    def _forget_deferred(self, item_id: int) -> None:
+        self._deferred.pop(item_id, None)
+        self._deferred_since.pop(item_id, None)
+
+    #: 分条连发的条间抖动：真人连发几条语音，间隔不会精确一样
+    PART_GAP_JITTER = (0.0, 1.2)
+
+    #: 同一联系人向后端补查「最近来信」的最小间隔（后端线程里也没有 → 别每轮都问）
+    INBOUND_RECOVER_RETRY_SEC = 120.0
+    #: 同一稿子的下一条分条：上一条刚核对过身份并发出，多久内不再开资料卡复核
+    PART_IDENTITY_TTL_SEC = 60.0
+
+    def _identity_fresh_for_part(self, chat_key: str, group: str, target: str) -> bool:
+        """同一 reply_group 的后续分条要不要跳过资料卡核对（同名歧义联系人每条都核对 → 每条多 6–8s，
+        真机 2026-09-19：5s 语音端到端 15.6s，其中 open 7.6s；三条分条之间被拉成 18s 一条，毫无连发感）。
+
+        条件全满足才跳：本条是上一条已发出命令的同组分条、上一条发出不到 :attr:`PART_IDENTITY_TTL_SEC`、
+        **当前打开的会话标题就是目标**（同一 tick 内顺序处理、中间不扫屏，选中的会话格就是刚核对过的那个人；
+        ``open_session`` 对同名多格也优先用已选中的格，不会再按列表位置去点另一个同名人）。
+        """
+        if not group or self._last_sent_group.get(chat_key) != group:
+            return False
+        last = self._last_sent_peer.get(chat_key, 0.0)
+        if last <= 0 or self._now() - last > self.PART_IDENTITY_TTL_SEC:
+            return False
+        try:
+            return verify_title(self.backend.current_title(), target)
+        except Exception:
+            return False
+
+    def _recover_last_inbound(self, chat_key: str) -> None:
+        """驱动重启后 ``_last_inbound`` 为空：先问后端线程补回「对方最近来信时间」，再做仅回复判定。
+        重启前来信的会话没有未读就不会再被扫屏——不补的话排给它的回复全被 ``no_inbound_from_peer`` 拒掉
+        （2026-09-19 真机验收撞上）。取不到/没有来信都不改判定，只是记一下时间别每轮重复问。"""
+        last_try = self._inbound_recover_at.get(chat_key, 0.0)
+        if last_try and self._now() - last_try < self.INBOUND_RECOVER_RETRY_SEC:
+            return
+        self._inbound_recover_at[chat_key] = self._now()
+        fn = getattr(self.bridge, "thread_last_inbound_ts", None)
+        if not callable(fn):
+            return
+        try:
+            ts = fn(self.account_id, chat_key)
+        except Exception:
+            logger.debug("[wechat_pc] 补查最近来信失败 chat=%s", chat_key, exc_info=True)
+            return
+        if ts:
+            self._last_inbound[chat_key] = float(ts)
+            logger.info("[wechat_pc] 重启后从后端补回对方最近来信时间 chat=%s ts=%.0f", chat_key, float(ts))
+
+    def _pace_between_parts(self, chat_key: str) -> None:
+        """同一稿子的下一条分条：距上一条发出不足 ``voice_part_gap_sec`` 就在本轮**原地等**到点（加一点抖动），
+        而不是挂起到下轮——下轮先扫会话再发，条间会被拉到 5–8s，像隔了一轮对话；这里等出来的是「几秒一条」的连发感。
+        等待上限就是 gap 本身（间隔已过就不等）。"""
+        last = self._last_sent_peer.get(chat_key, 0.0)
+        if last <= 0:
+            return
+        gap = float(self.policy.voice_part_gap_sec)
+        remain = gap - (self._now() - last)
+        if remain <= 0 or remain > gap:
+            return
+        import random
+        wait = remain + random.uniform(*self.PART_GAP_JITTER)
+        logger.debug("[wechat_pc] 分条节奏：等 %.1fs 再发下一条 chat=%s", wait, chat_key)
+        try:
+            self._sleep(wait)
+        except Exception:
+            pass
+
     def _drain_outbound(self) -> int:
         if not self.policy.sends_allowed or self.frozen():
+            if self._deferred and self.frozen():
+                # 冻结期可长达 1 小时，远超队列回收窗：挂起的命令立刻回执进人审，别让两头各处理一次
+                for item_id in sorted(self._deferred):
+                    self.bridge.ack(item_id, False, "guard:frozen")
+                self._deferred.clear()
+                self._deferred_since.clear()
             return 0
-        items = self.bridge.pull_outbound(self.account_id, limit=3)
+        pulled = self.bridge.pull_outbound(self.account_id, limit=3)
+        # 挂起的先于新认领的，按 id（入队顺序）；队列若已把挂起项回收重派，按 id 去重只处理一份
+        items = [self._deferred[i] for i in sorted(self._deferred)]
+        items += [it for it in pulled if int(it.get("id") or 0) not in self._deferred]
         done = 0
         for pos, it in enumerate(items):
             item_id = int(it.get("id") or 0)
             if self.frozen():
                 # 本轮前面的命令触发了守卫冻结：已认领的剩余命令立刻回执失败进人审队列，
                 # 而不是等 180s 自动回收再盲重试
+                self._forget_deferred(item_id)
                 self.bridge.ack(item_id, False, "guard:frozen")
                 continue
             chat_key = str(it.get("chat_key") or "")
             text = str(it.get("text") or "")
             kind = str(it.get("kind") or "text")
             self._roll_day()
+            group = str(it.get("reply_group") or "")
+            if group and self._last_sent_group.get(chat_key) == group:
+                self._pace_between_parts(chat_key)
+            if self.policy.reply_only and chat_key not in self._last_inbound:
+                self._recover_last_inbound(chat_key)
             verdict = may_send(
                 self.policy, kind=kind, now=datetime.fromtimestamp(self._now()),
                 connected_at=self.connected_at, sent_today=self._sent_today,
@@ -512,12 +836,19 @@ class WeChatPcService:
                 last_inbound_from_peer_ts=self._last_inbound.get(chat_key, 0.0),
                 is_group=chat_key_kind(chat_key) == "group",
                 mentioned=self._group_mentioned.get(chat_key, False),
+                voice_sent_today=self._voice_sent_today,
+                voice_sent_today_to_peer=self._voice_sent_today_peer.get(chat_key, 0),
+                continues_last_group=bool(group) and self._last_sent_group.get(chat_key) == group,
             )
             if not verdict.allowed:
+                if verdict.reason in self.TRANSIENT_DENIALS and self._defer(item_id, it, verdict.reason):
+                    continue
+                self._forget_deferred(item_id)
                 self.stats.denied += 1
                 logger.warning("[wechat_pc] 拒发 id=%s chat=%s reason=%s", item_id, chat_key, verdict.reason)
                 self.bridge.ack(item_id, False, f"policy:{verdict.reason}")
                 continue
+            self._forget_deferred(item_id)
             target = self._display_name_for(chat_key)
             if not target:
                 self.stats.denied += 1
@@ -529,7 +860,13 @@ class WeChatPcService:
             expected_wxid = chat_key[len("wx:id:"):] if chat_key_kind(chat_key) == "id" else ""
             if expected_wxid and not self._needs_wxid_lookup(target):
                 expected_wxid = ""
-            out: SendOutcome = self.sender.send(target, text, expected_wxid=expected_wxid)
+            if expected_wxid and self._identity_fresh_for_part(chat_key, group, target):
+                expected_wxid = ""
+            is_voice = kind == "voice"
+            if is_voice:
+                out: SendOutcome = self._send_voice_item(it, target, expected_wxid)
+            else:
+                out = self.sender.send(target, text, expected_wxid=expected_wxid)
             if out.ok and expected_wxid:
                 self._wxid_verified_at[normalize_display_name(target)] = self._now()
             if out.ok:
@@ -537,16 +874,37 @@ class WeChatPcService:
                 self._sent_today += 1
                 self._sent_today_peer[chat_key] = self._sent_today_peer.get(chat_key, 0) + 1
                 self._last_sent_peer[chat_key] = self._now()
+                self._last_sent_group[chat_key] = group
                 self._group_mentioned[chat_key] = False
-                self.bridge.ack(item_id, True, "")
+                if is_voice:
+                    self.stats.voice_sent += 1
+                    self._voice_sent_today += 1
+                    self._voice_sent_today_peer[chat_key] = self._voice_sent_today_peer.get(chat_key, 0) + 1
+                    self._pending_voice_mirror.setdefault(chat_key, []).append({
+                        "inbox_text": str(it.get("inbox_text") or text), "media_url": str(it.get("media_url") or ""),
+                        "sender_name": str(it.get("sender_name") or ""), "ts": self._now()})
+                    # 语音一天几十条，成功也留一行（trace 里有 play 秒数 / 尾部静音 tail=…ms / echo 命中轮次）——
+                    # 真机验收与日后「语音为什么慢」都靠这行，不用复现
+                    logger.info("[wechat_pc] 语音已发 id=%s chat=%s group=%s elapsed=%sms trace=%s",
+                                item_id, chat_key, group or "-", out.elapsed_ms, out.trace)
+                    self.bridge.ack(item_id, True, "", {"delivered_as": "voice", "echo": out.echo_text[:40]})
+                else:
+                    self.bridge.ack(item_id, True, "")
                 done += 1
                 continue
             self.stats.send_failed += 1
+            if is_voice:
+                self.stats.voice_failed += 1
+            logger.warning("[wechat_pc] 发送失败 id=%s kind=%s chat=%s stage=%s reason=%s elapsed=%sms trace=%s",
+                           item_id, kind, chat_key, out.stage, out.reason, out.elapsed_ms, out.trace)
             self.bridge.ack(item_id, False, f"guard:{out.stage}:{out.reason}")
-            if out.stage in ("title", "send", "echo"):
+            # 语音的 record/play 步失败（声卡没就绪/媒体拿不到/进不了录音态）是本机能力问题、没碰到会话，不冻结；
+            # ``cancel`` 步失败＝录音态卡住，之后连文字都发不出去 → 与 title/send/echo 同等冻结并通知主人
+            if out.stage in ("title", "send", "echo", "cancel"):
                 self.stats.guard_freezes += 1
                 self.freeze(self.freeze_on_guard_fail_sec, f"guard_{out.stage}")
-                self._emit_notify("guard_freeze", f"{out.stage}:{out.reason}")
+                self._emit_notify("guard_freeze" if out.stage != "cancel" else "voice_recording_stuck",
+                                  f"{out.stage}:{out.reason}")
         return done
 
     # ── 一轮 ──
@@ -556,13 +914,21 @@ class WeChatPcService:
         if not callable(hb):
             return
         try:
+            if self.stats.voice_ready:
+                self._refresh_mic_busy()   # 每轮问一次（≈10ms）：后端据此决定这一刻要不要给这台机排语音
             st = self.stats.as_dict()
+            stats = {k: st.get(k) for k in ("ticks", "inbound", "sent", "denied", "deferred", "send_failed",
+                                             "unknown_direction", "frozen_until", "last_disposition", "offline",
+                                             "last_readable", "voice_ready", "voice_sent", "voice_failed",
+                                             "voice_mic_busy", "voice_mic_busy_by")}
+            # 语音配额用量（今日已发 / 日上限）：工作台据此提示「今天语音快用完了」
+            stats["voice_today"] = int(self._voice_sent_today)
+            stats["voice_daily_cap"] = int(self.policy.voice_daily_cap)
+            # 比默认宽松的配额项（测试值）：上客户前还回的提醒，随心跳给工作台
+            stats["caps_relaxed"] = ",".join(sorted(caps_relaxed(self.policy)))
             ok = hb(self.account_id, tier=self.policy.tier,
                     readonly=bool(getattr(self.backend, "readonly", False)) or not self.policy.sends_allowed,
-                    stats={k: st.get(k) for k in ("ticks", "inbound", "sent", "denied", "send_failed",
-                                                   "unknown_direction", "frozen_until", "last_disposition", "offline",
-                                                   "last_readable")},
-                    label=self.account_label)
+                    stats=stats, label=self.account_label)
             if not ok:
                 self.stats.heartbeat_failed += 1
         except Exception:
@@ -576,6 +942,7 @@ class WeChatPcService:
             summary["readable"] = readable
             self.stats.last_readable = bool(readable)
             if readable:
+                self._refresh_voice_ready()
                 summary["inbound"] = self._scan_inbound()
                 summary["sent"] = self._drain_outbound()
         except Exception:

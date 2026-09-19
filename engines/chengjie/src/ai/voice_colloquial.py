@@ -141,6 +141,15 @@ def _is_chinese_dominant(text: str, *, min_ratio: float = 0.3) -> bool:
     return (cjk / letters) >= min_ratio
 
 
+def _is_english_dominant(text: str) -> bool:
+    """拉丁字母为主、可走英文口语化（Claire 等）。假名/谚文直接否。"""
+    if not text or _KANA_HANGUL_RE.search(text):
+        return False
+    latin = sum(1 for ch in text if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
+    cjk = len(_CJK_RE.findall(text))
+    return latin >= 8 and latin > cjk * 2
+
+
 def normalize_colloquial_emotion(spec: Any) -> Tuple[str, float]:
     """从 EmotionSpec/字符串/None 提取 (emotion, intensity)。防御式 duck-typing。"""
     if spec is None:
@@ -440,6 +449,43 @@ def _thinking_repeat(
     return out, True
 
 
+_EN_VOCAL_LEADS = ("mm, ", "honestly, ")
+_EN_LEAD_SKIP = (
+    "mm", "mhm", "honestly", "anyway", "haha", "hah", "heh", "lol",
+    "hey", "oh", "ahh", "aww",
+)
+
+
+def _colloquialize_english(
+    text: str, *, spec: Any = None, enable_lead: bool = True,
+    lead_prob: float = 0.4,
+) -> str:
+    """英文轻度口语化：只在句首加气声/口头禅，不加中文词、不改事实。"""
+    t = str(text or "")
+    core = t.strip()
+    if not core:
+        return t
+    emotion, _ = normalize_colloquial_emotion(spec)
+    if emotion in _FORMAL:
+        return t
+    low = core.lower()
+    if any(low.startswith(p) for p in _EN_LEAD_SKIP):
+        return t
+    if not enable_lead or emotion not in ("warm", "playful", "happy", "calm", "neutral"):
+        return t
+    seed = zlib.crc32(core.encode("utf-8"))
+    if (seed % 100) >= int(min(0.8, max(0.0, float(lead_prob))) * 100):
+        return t
+    lead = _EN_VOCAL_LEADS[seed % len(_EN_VOCAL_LEADS)]
+    rest = core
+    if rest[:1].isupper() and rest[:2] != "I " and rest[:3] != "I'm":
+        rest = rest[:1].lower() + rest[1:]
+    out = lead + rest
+    if t[:1].isspace():
+        return t[: len(t) - len(t.lstrip())] + out
+    return out
+
+
 def colloquialize(
     text: str,
     spec: Any = None,
@@ -476,8 +522,12 @@ def colloquialize(
         core = t.strip()
         if len(core) < max(1, int(min_chars)):
             return t                        # 短句 no-op（保预渲染 + 短句本就口语）
+        if _is_english_dominant(core):
+            return _colloquialize_english(
+                t, spec=spec, enable_lead=enable_fillers,
+                lead_prob=lead_prob)
         if not _is_chinese_dominant(core):
-            return t                        # 非中文文本 → 跳过（中文口语词会 garble 外语）
+            return t                        # 其它外语 → 跳过（中文口语词会 garble）
         emotion, _inten = normalize_colloquial_emotion(spec)
         formal = emotion in _FORMAL
         seed = zlib.crc32(core.encode("utf-8"))

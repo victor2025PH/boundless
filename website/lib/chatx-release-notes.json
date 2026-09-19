@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.0.90",
+    "date": "2026-09-19",
+    "title": {
+      "zh": "电脑微信一键副驾、可发语音、接管即停、人设可开不设限",
+      "en": "WeChat PC copilot in one click, outbound voice, takeover stops in-flight sends, Unrestricted adult policy"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "电脑微信不用再复制启动命令：工作台 → 账号管理 → 个人微信 · PC 副驾，三步检测/选档/启动。开「微信登录后自动启动」后扫码登录即开始。问小智「个人微信怎么用」",
+        "全自动档可发人设语音（电脑微信 4.1.9+，引导第①步装/检测 VB-CABLE）。对方发来的语音听不到，人设会请打字。问小智「微信怎么发语音」",
+        "会话点接管或切手动后，还在等待发出的那一稿也会弃发。问小智「点了接管为什么还在自动发」",
+        "人设工坊成人政策多一档「不设限」：按人设接住露骨话题；自称未成年仍转人工。未见该档=部署未开启。问小智「不设限怎么用」",
+        "安装包里的后端可自己拉起副驾（不必另装 Python）；用户端打不开开发者工具"
+      ],
+      "en": [
+        "Personal WeChat no longer needs a pasted PowerShell command: Accounts → Personal WeChat · PC copilot, three steps detect / pick tier / Start. Auto-start after WeChat signs in",
+        "Full-auto can send clone-voice clips (WeChat 4.1.9+, VB-CABLE in step 1). Inbound voice cannot be heard; the persona asks them to type",
+        "Take over or Manual drops a draft still waiting to send",
+        "Persona studio adds Unrestricted adult policy; self-identified minors still hand off. Missing option means the deployment has not enabled it",
+        "The packaged backend can spawn the copilot without a system Python; DevTools stay off in the shipped app"
+      ]
+    }
+  },
+  {
     "version": "1.0.89",
     "date": "2026-09-18",
     "title": {

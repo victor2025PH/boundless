@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -41,15 +42,34 @@ _PLACEHOLDER_TEXTS = frozenset({
     "[文件]", "[媒体]", "[表情]", "[动态表情]",
 })
 
+# 电脑微信入站语音气泡（无声音文件、也不是 ASR）：「语音」「语音11秒」「[语音] 11 秒」
+# 「Voice 11s」。英文裸词 Voice 不算——那是客户可能真打的字。
+_VOICE_DURATION_PLACEHOLDER_RE = re.compile(
+    r"^(?:"
+    r"\[语音\](?:\s*\d{1,3}\s*(?:秒|\"|″|''|s|sec))?|"
+    r"语音(?:\s*\d{1,3}\s*(?:秒|\"|″|''|s|sec))?|"
+    r"\[Voice(?:\s+message)?\](?:\s*\d{1,3}\s*(?:s|sec|秒))?|"
+    r"Voice(?:\s+message)\s+\d{1,3}\s*(?:s|sec|秒)|"
+    r"Voice\s+\d{1,3}\s*(?:s|sec|秒)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
 
 def media_placeholder(media_type: str) -> str:
     return _PLACEHOLDER.get(str(media_type or "").lower(), "[媒体]")
+
+
+def is_voice_duration_placeholder(text: str) -> bool:
+    """电脑微信「语音N秒」族占位（无转写、无音频文件）。"""
+    return bool(_VOICE_DURATION_PLACEHOLDER_RE.match(str(text or "").strip()))
 
 
 def is_placeholder_only(text: str) -> bool:
     """入站文本是否只是裸媒体占位（无实质内容）——需要识别补全的信号。
 
     识别结果（``[图片内容] …`` / ``[视频内容] …`` 等带描述的）不算占位。
+    电脑微信屏上的「语音11秒」同属占位：没有声音文件，不能当已转写正文。
     """
     t = str(text or "").strip()
     if not t:
@@ -57,7 +77,9 @@ def is_placeholder_only(text: str) -> bool:
     if t in _PLACEHOLDER_TEXTS:
         return True
     # 形如 [xxx] 的短裸占位（≤8 字符、不含描述）
-    return t.startswith("[") and t.endswith("]") and len(t) <= 8
+    if t.startswith("[") and t.endswith("]") and len(t) <= 8:
+        return True
+    return is_voice_duration_placeholder(t)
 
 
 # --- 识别产物质量闸门（P0 2026-08-19，「乱码识图」事故沉淀） -------------------
@@ -722,6 +744,7 @@ __all__ = [
     "enrich_inbound_media_text",
     "honest_image_ask",
     "is_placeholder_only",
+    "is_voice_duration_placeholder",
     "lazy_voice_transcriber",
     "media_placeholder",
     "media_wait_sec_from_cfg",

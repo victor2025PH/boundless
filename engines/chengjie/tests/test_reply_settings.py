@@ -1349,6 +1349,22 @@ class TestPlatformExpert:
         clean, errors = rps.sanitize_patch({_PH: {"line": {}}})
         assert errors == [] and clean[_PH] == {}   # 条目清空=删除
 
+    def test_voice_platform_triggers_accept_wechat_desktop_bridge_only(self):
+        # 2026-09-19 P1：微信电脑副驾只在语音触发表放行；档位封顶/拟人表仍拒（对副驾无意义）
+        clean, errors = rps.sanitize_patch({_PVT: {"wechat": "never", "Telegram": "smart"}})
+        assert errors == [] and clean[_PVT] == {"wechat": "never", "telegram": "smart"}
+        _, errors = rps.sanitize_patch({_PM: {"wechat": "review"}})
+        assert errors and errors[0]["code"] == "bad_platform"
+        _, errors = rps.sanitize_patch({_PH: {"wechat": {"typing": True}}})
+        assert errors and errors[0]["code"] == "bad_platform"
+        meta = rps.field_meta()
+        assert "wechat" in meta[_PVT]["keys"] and "wechat" not in meta[_PM]["keys"]
+        assert "wechat" not in rps.PLATFORMS and rps.VOICE_TRIGGER_PLATFORMS[-1] == "wechat"
+        # 消费端：wechat 的覆写真的会改 trigger
+        from src.inbox.voice_autosend import effective_voice_block
+        vb = effective_voice_block({"trigger": "always", "platform_triggers": {"wechat": "never"}}, "wechat")
+        assert vb["trigger"] == "never" and "platform_triggers" not in vb
+
     def test_sanitize_voice_platform_triggers(self):
         clean, errors = rps.sanitize_patch({_PVT: {"messenger": "Never"}})
         assert errors == [] and clean[_PVT] == {"messenger": "never"}

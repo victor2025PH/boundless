@@ -108,6 +108,21 @@ def test_prompt_no_clarify_without_suspect():
     assert "语音听不清" not in out
 
 
+def test_prompt_untranscribed_voice_asks_to_type():
+    """未转写入站语音（电脑微信「语音N秒」）→ 请打字，不装听过。"""
+    from src.ai.ai_client import AIClient
+    client = AIClient(_cfg())
+    out = client._build_context_prompt({
+        "platform": "wechat",
+        "_peer_message_is_media": True,
+        "_media_kind": "voice",
+    })
+    assert "请对方打字" in out
+    assert "不要假装听过" in out
+    assert "已转文字" not in out
+    assert "语音听不清" not in out
+
+
 # ── A 线接线钉（防止锚被静默摘除） ───────────────────────────────────────────
 
 def test_static_wiring_pin_process_message():

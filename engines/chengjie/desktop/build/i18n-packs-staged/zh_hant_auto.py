@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-13 01:56:44 · OpenCC s2twp + 術語釘 · 17699 鍵（源 zh 全量 18045）
+生成: 2026-09-17 03:24:10 · OpenCC s2twp + 術語釘 · 17719 鍵（源 zh 全量 18181）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -235,6 +235,14 @@ ZH_HANT = {
     'al_count_confirmed': '已確認',
     # ── al_count_none ──
     'al_count_none': '無建議',
+    # ── al_del_sel ──
+    'al_del_sel': '刪除所選',
+    # ── al_del_sel_confirm ──
+    'al_del_sel_confirm': '刪除選中的 {n} 項？檔案會一併刪除，不可恢復',
+    # ── al_del_sel_fail ──
+    'al_del_sel_fail': '已刪除 {ok} 項，{fail} 項失敗（已重新載入相簿）',
+    # ── al_del_sel_ok ──
+    'al_del_sel_ok': '已刪除 {n} 項',
     # ── al_kind_food ──
     'al_kind_food': '美食',
     # ── al_kind_indoor ──
@@ -6322,6 +6330,7 @@ ZH_HANT = {
     'err.pmedia.ext_not_allowed': '不支援的檔案型別：{ext}（圖片支援 jpg/png/webp/gif，影片支援 mp4/mov/webm/m4v）',
     'err.pmedia.file_required': 'file（媒體檔案）必填',
     'err.pmedia.gate_not_writable': '配置寫入能力不可用，無法切換全域性發圖總閘',
+    'err.pmedia.heic_export_jpeg': '暫不能直接接收 {ext}（iPhone HEIC）：請在手機相簿「分享 → 匯出為 JPEG」或在設定裡改「相容性最好」後重新上傳',
     'err.pmedia.not_found': '媒體條目不存在',
     'err.pmedia.persona_not_found': '人設 {name} 不存在',
     'err.pmedia.save_failed': '媒體儲存失敗：{err}',
@@ -6488,6 +6497,7 @@ ZH_HANT = {
     'err.svc.config_manager_not_ready': 'config_manager 不可用',
     'err.svc.context_store_not_ready': '上下文儲存不可用',
     'err.svc.diag_bundle_failed': '診斷包在本機生成失敗，請稍後重試；若持續失敗請截圖聯絡客服。',
+    'err.svc.diag_local_error': '本機傳送報障時出錯（不是網路問題，重試無效）：請點「複製全部資訊」發給客服，並附上這句提示。',
     'err.svc.diag_upload_rejected': '官網收包被拒（{status}）：已自動精簡重傳仍未成功，請稍後重試或聯絡客服。',
     'err.svc.draft_service_disabled': '草稿服務未啟用',
     'err.svc.handoff_store_not_ready': '人工轉接儲存未初始化',
@@ -6742,7 +6752,8 @@ ZH_HANT = {
     'fc_title': '功能總覽',
     # ── fe ──
     'fe.guard.net_retry': '連線中，正在重試…恢復後本提示自動消失',
-    'fe.guard.page_error': '頁面指令碼出錯，部分功能可能失效',
+    'fe.guard.page_error': '這個頁面剛出了點問題，部分操作可能沒反應——先重新整理試試；還不行就點「報障」',
+    'fe.guard.reload': '重新整理',
     # ── fn_cta_title ──
     'fn_cta_title': '🔗 追蹤連結 發→點：',
     # ── fn_export_csv ──
@@ -10179,7 +10190,7 @@ ZH_HANT = {
     'inbox.masterauto.p3': '之後可在「AI 值守」膠囊或自動回覆設定頁隨時調整',
     'inbox.masterauto.title': '新版支援一鍵全自動',
     'inbox.md.btn': '模式',
-    'inbox.md.btn_t': '本會話按什麼規矩答：標準（人設規則 / 風控 / 稽核全開）或 無限制（本機私有模型直答 · 規則讓路）；再調上下文 / 力度 / 思考',
+    'inbox.md.btn_t': '本會話按什麼規矩答：標準（人設規則 / 風控 / 稽核全開）或 無限制（ChatX聊天模型直答 · 規則讓路）；再調上下文 / 力度 / 思考',
     'inbox.md.hd': '模式 · 本會話',
     'inbox.media.ai_desc_less': '收起',
     'inbox.media.ai_desc_more': '展開全文',
@@ -10188,6 +10199,7 @@ ZH_HANT = {
     'inbox.media.ai_video': 'AI 識影片',
     'inbox.media.ai_voice': 'AI 轉寫',
     'inbox.media.cancel': '取消傳送媒體',
+    'inbox.media.cap_hint': '本會話最多 {mb} MB（{plat}）',
     'inbox.media.caption_ph': '配文（可選）· 會隨圖一起進 AI 記憶',
     'inbox.media.clear_failed_n': '清除 {n} 個失敗附件',
     'inbox.media.err_format': '格式不支援',
@@ -10226,11 +10238,16 @@ ZH_HANT = {
     'inbox.media.send_result_unknown': '沒拿到傳送結果（可能是網路或檔案較大超時）；已自動核對對話記錄，確認沒發出再點傳送重試',
     'inbox.media.sending': '📤 傳送中：{name}',
     'inbox.media.sent': '✅ 媒體已傳送',
+    'inbox.media.shrink_fail': '壓縮沒成功，仍按原圖傳送',
+    'inbox.media.shrink_send': '壓後傳送',
+    'inbox.media.shrink_send_title': '把這張圖壓到長邊 2560 / JPEG 0.82 再發（預設發原圖）',
+    'inbox.media.shrunk': '已壓縮 {from}→{to}',
     'inbox.media.sticker': '😊 貼紙',
     'inbox.media.sticker_alt': '貼紙',
     'inbox.media.sticker_animated': '動圖貼紙',
     'inbox.media.target_to': '發往 {target}',
     'inbox.media.too_large': '檔案過大（上限 25MB）',
+    'inbox.media.too_large_over': '檔案 {size} MB 超過本會話上限 {mb} MB（{plat}），還差 {over} MB——請換更小的檔案或壓縮後再選',
     'inbox.media.type_chatshot': '聊天截圖',
     'inbox.media.type_doc': '單據',
     'inbox.media.unsupported': '⚠ 當前賬號不支援收件箱直髮媒體（需協議多開且線上）',
@@ -10307,7 +10324,7 @@ ZH_HANT = {
     'inbox.mp.back': '返回',
     'inbox.mp.back_std': '改回標準',
     'inbox.mp.btn': '模型',
-    'inbox.mp.btn_t': '本會話用哪個模型回覆：例項主鏈 / 已配置的各廠商模型（ChatGPT · Gemini · Grok · DeepSeek…）/ 本機私有模型；只換端點，規則照常',
+    'inbox.mp.btn_t': '本會話用誰答：雲廠商＝標準模式（規則全開）；ChatX聊天模型＝無限制（規則讓路）',
     'inbox.mp.checking': '探測中…',
     'inbox.mp.confirm_safety': '連五條賬號與人身保險絲（急停 / 封號訊號、賬號冷啟動上限、停聯凍結、危機自傷兜底、授權額度）也一起關閉。僅本會話，操作會記審計。',
     'inbox.mp.confirm_unr': '本會話改走區域網私有模型 {model}（不經雲端）。本會話的人設規則、出站改寫、風控分級、稽核攔截全部關閉。',
@@ -10333,14 +10350,14 @@ ZH_HANT = {
     'inbox.mp.effort_medium': '中',
     'inbox.mp.effort_medium_sub': '1024 tokens · 溫度 0.7',
     'inbox.mp.effort_note': '力度 ≈ 答覆長度與溫度，不是推理力度',
-    'inbox.mp.empty': '還沒有可切換的廠商模型——在開發者頁「多模型路由」新增 ChatGPT / Gemini / Grok / DeepSeek 等端點後，這裡就能按會話切換。',
-    'inbox.mp.empty_agent': '還沒有可切換的廠商模型，請聯絡管理員在開發者頁新增。',
+    'inbox.mp.empty': '還沒有可切換的廠商模型——在側欄「模型與金鑰」新增 ChatGPT / Gemini / Grok / DeepSeek 等端點後，這裡就能按會話切換。',
+    'inbox.mp.empty_agent': '還沒有可切換的廠商模型，請聯絡管理員在「模型與金鑰」新增。',
     'inbox.mp.err_auth': '金鑰無效',
     'inbox.mp.err_model': '模型名不存在',
     'inbox.mp.err_quota': '限流 / 額度',
     'inbox.mp.fail': '儲存失敗：{msg}',
     'inbox.mp.flow_cloud': '本會話內容發往雲端 {host}',
-    'inbox.mp.flow_private': '資料不出內網（{host}）',
+    'inbox.mp.flow_private': '資料走區域網 ChatX（{host}）',
     'inbox.mp.h_not_listed': '線上 · 列表裡沒有這個模型名',
     'inbox.mp.h_online': '線上',
     'inbox.mp.hd': '模型 · 本會話',
@@ -10348,7 +10365,7 @@ ZH_HANT = {
     'inbox.mp.left_unr': '已改回標準模式（雲廠商模型不跑無限制）',
     'inbox.mp.locked': '「無限制模型」需旗艦版授權',
     'inbox.mp.manage': '管理模型與金鑰 →',
-    'inbox.mp.manage_t': '開發者頁 · 多模型路由：新增 / 修改各廠商端點與金鑰',
+    'inbox.mp.manage_t': '模型與金鑰：新增 / 修改各廠商端點與金鑰（登入即可，無需開發者密碼）',
     'inbox.mp.model_follow': '跟隨主鏈',
     'inbox.mp.model_gone': '該模型檔已不存在，已重新整理目錄，請重選',
     'inbox.mp.model_missing': '原先選的模型檔「{name}」已被刪除，本會話現按主鏈回覆；請重新選擇。',
@@ -10364,9 +10381,9 @@ ZH_HANT = {
     'inbox.mp.pick_model': '選擇模式',
     'inbox.mp.prof_standard': '標準',
     'inbox.mp.prof_standard_sub': '雲端主鏈 + 備用池；人設規則 / 風控分級 / 稽核攔截照常',
-    'inbox.mp.prof_unrestricted': '無限制（本地直答）',
-    'inbox.mp.prof_unrestricted_noep': '未配置區域網端點（ai.models.unrestricted / ai.fallback）',
-    'inbox.mp.prof_unrestricted_sub': '區域網私有模型 {model} @ {host}，只走該端點、不回落雲端；本會話人設規則 / 出站改寫 / 風控分級 / 手發護欄全部讓路',
+    'inbox.mp.prof_unrestricted': '無限制（ChatX聊天模型）',
+    'inbox.mp.prof_unrestricted_noep': '未配置 ChatX聊天模型端點（ai.models.unrestricted / ai.fallback）',
+    'inbox.mp.prof_unrestricted_sub': 'ChatX聊天模型 {model} @ {host}，只走該端點、不回落雲廠商；本會話人設規則 / 出站改寫 / 風控分級 / 手發護欄全部讓路',
     'inbox.mp.retry': '重試',
     'inbox.mp.row_depth': '上下文',
     'inbox.mp.row_effort': '力度',
@@ -10383,13 +10400,13 @@ ZH_HANT = {
     'inbox.mp.status_unr': '無限制',
     'inbox.mp.tag_locked': '升級解鎖',
     'inbox.mp.tag_main': '主鏈',
-    'inbox.mp.tag_private': '內網',
+    'inbox.mp.tag_private': '區域網',
     'inbox.mp.tag_used': '本會話 {n} 條',
     'inbox.mp.think_follow': '跟隨全域性',
     'inbox.mp.think_follow_hint': '跟隨主鏈時思考由全域性 ai.reasoning 決定；點名一個模型或切到無限制後可按會話開關',
     'inbox.mp.think_t': '思維鏈：開＝答得更周全但每輪多幾秒。對無限制檔和點名的廠商模型檔生效；跟隨主鏈時由全域性 ai.reasoning 決定',
-    'inbox.mp.unr_notice': '本會話正走「無限制」模式的本機私有模型；選下面任一模型會改回標準模式（規則全開）。',
-    'inbox.mp.vendor_local': '本機私有',
+    'inbox.mp.unr_notice': '本會話正走「無限制」（ChatX聊天模型）。選下面其他模型會改回標準模式（規則全開）。',
+    'inbox.mp.vendor_local': 'ChatX聊天模型',
     'inbox.mp.vendor_locked': '按會話切換廠商模型需要專業版及以上套餐；主鏈仍可用',
     'inbox.msearch.fail': '搜尋失敗，請重試',
     'inbox.msearch.found': '找到 {n} 條含 "{q}" 的訊息',
@@ -20602,6 +20619,8 @@ ZH_HANT = {
     'pma_fr_ext': '型別不支援（{ext}）——手機 HEIC 請先轉 JPG',
     # ── pma_fr_forbidden ──
     'pma_fr_forbidden': '只讀賬號不能上傳',
+    # ── pma_fr_heic ──
+    'pma_fr_heic': 'iPhone HEIC 這台電腦解不開——請在手機相簿「分享 → 匯出為 JPEG」或相機設定改「相容性最好」後再傳',
     # ── pma_fr_network ──
     'pma_fr_network': '網路中斷（可重試）',
     # ── pma_fr_server ──
@@ -20610,6 +20629,8 @@ ZH_HANT = {
     'pma_fr_timeout': '超時（網路慢或檔案太大，可重試）',
     # ── pma_fr_too_large ──
     'pma_fr_too_large': '太大（上限 {mb}MB）',
+    # ── pma_fr_too_large_detail ──
+    'pma_fr_too_large_detail': '太大：{size}MB 超過上限 {mb}MB（超出 {over}MB）',
     # ── pma_fr_too_long ──
     'pma_fr_too_long': '影片太長（上限 {sec} 秒）',
     # ── pma_fr_unknown ──
@@ -20656,6 +20677,8 @@ ZH_HANT = {
     'pma_guide_vision_retry': '服務恢復後點「AI 補標」即可補識別：',
     # ── pma_hits ──
     'pma_hits': '命中',
+    # ── pma_lb_close ──
+    'pma_lb_close': '關閉（Esc）',
     # ── pma_load_fail ──
     'pma_load_fail': '載入失敗：',
     # ── pma_loading ──
@@ -20764,6 +20787,10 @@ ZH_HANT = {
     'pma_up_fail_toggle_hide': '收起',
     # ── pma_up_first_face_toast ──
     'pma_up_first_face_toast': '第一批照片已上傳。建議先設定「錨臉基準照」，AI 識別會據此核對每張是否本人。',
+    # ── pma_up_live_prep ──
+    'pma_up_live_prep': '預處理中…',
+    # ── pma_up_live_server ──
+    'pma_up_live_server': '服務端處理中…',
     # ── pma_up_retry_btn ──
     'pma_up_retry_btn': '重試失敗項（{n}）',
     # ── pma_up_retry_gone ──
@@ -22085,6 +22112,8 @@ ZH_HANT = {
     'psn_js_362': '確認刪除選中的 {n} 個人設？\n\n{list}\n\n此操作不可撤銷。',
     # ── psn_js_363 ──
     'psn_js_363': '從選中 {n} 個人設中移除標籤\n可用標籤: {tags}',
+    # ── psn_js_load_fail_hint ──
+    'psn_js_load_fail_hint': '先重新整理頁面再試；反覆出現請點右上「求助」報障',
     # ── psn_json_data_lbl ──
     'psn_json_data_lbl': 'JSON 資料（貼上後點匯入，或點匯出後自動填充）',
     # ── psn_json_import_field ──
@@ -23117,6 +23146,8 @@ ZH_HANT = {
     'psn_wiz_create': '建立人設',
     # ── psn_wiz_created ──
     'psn_wiz_created': '已建立「{name}」，接下來補上頭像和聲音吧',
+    # ── psn_wiz_created_editor_failed ──
+    'psn_wiz_created_editor_failed': '「{name}」已建立成功，但編輯器沒能開啟——重新整理頁面後在列表裡點開它即可',
     # ── psn_wiz_creating ──
     'psn_wiz_creating': '建立中…',
     # ── psn_wiz_id ──

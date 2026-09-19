@@ -7250,7 +7250,9 @@ class HealthWatchdog:
         判定口径＝兜底出话计数增量（``AIClient.get_stats().local_fallback_calls``）：
         两个巡检周期间有增量 = 云端仍不可用且有真实流量在被兜底扛着。连续 2 个无增量
         周期（约 10 分钟无兜底出话）重置顶班计时——宁可少弹不多弹（无流量期误重置的
-        代价只是下次重新起算 after_min）。配置
+        代价只是下次重新起算 after_min）。``ai.primary=local*`` 时本地就是指定主链，
+        文案「云端主模型不可用」不成立，整段静默（2026-09-18 误报：本地主链出话被
+        当成顶班）。配置
         ``health_watchdog.fallback_duty_remind.{enabled,after_min,interval_min}``（默认开）。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
@@ -7263,8 +7265,15 @@ class HealthWatchdog:
         if ai is None:
             return
         try:
-            calls = int((ai.get_stats() or {}).get("local_fallback_calls") or 0)
+            stats = ai.get_stats() or {}
+            calls = int(stats.get("local_fallback_calls") or 0)
+            primary_mode = str(stats.get("primary_mode") or "cloud").strip().lower()
         except Exception:
+            return
+        if primary_mode in ("local", "local_only"):
+            self._fb_duty_last_calls = calls
+            self._fb_duty_since_ts = 0.0
+            self._fb_duty_idle_ticks = 0
             return
         prev = self._fb_duty_last_calls
         self._fb_duty_last_calls = calls

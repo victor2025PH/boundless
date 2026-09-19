@@ -24,6 +24,9 @@ ZH = {
     "draft.bulk.fail": "批量发送失败",
     "draft.bulk.fail2": "{label}失败",
     "draft.bulk.reject": "批量拒绝",
+    "draft.bulk.clear_stale": "清空 {n} 条超龄稿",
+    "draft.bulk.clear_stale_t": "只作废已超龄、点通过会被拦的未发稿，不影响新鲜稿",
+    "draft.bulk.clear_stale_confirm": "清空 {n} 条超龄草稿？只作废未发稿，不影响已批准或在途。",
     "draft.bulk_l2": "一键发所有 L2",
     "draft.cancel_edit": "取消编辑",
     "draft.chk_title": "选择此草稿",
@@ -178,6 +181,9 @@ EN = {
     "draft.bulk.fail": "Bulk send failed",
     "draft.bulk.fail2": "{label} failed",
     "draft.bulk.reject": "Bulk reject",
+    "draft.bulk.clear_stale": "Clear {n} stale draft(s)",
+    "draft.bulk.clear_stale_t": "Rejects only overdue unsent drafts that approve would block; fresh drafts stay",
+    "draft.bulk.clear_stale_confirm": "Clear {n} stale draft(s)? Only discards unsent drafts; approved or in-flight items are untouched.",
     "draft.bulk_l2": "Send all L2",
     "draft.cancel_edit": "Cancel edit",
     "draft.chk_title": "Select this draft",
@@ -307,4 +313,10 @@ EN = {
     "draft.trans.title": "Translate to customer language",
     "draft.trans.translating": "Translating…",
     "draft.untitled": "Untitled",
+}
+
+ZH_HANT = {
+    "draft.bulk.clear_stale": "清空 {n} 條超齡稿",
+    "draft.bulk.clear_stale_t": "只作廢已超齡、點通過會被攔的未發稿，不影響新鮮稿",
+    "draft.bulk.clear_stale_confirm": "清空 {n} 條超齡草稿？只作廢未發稿，不影響已批准或在途。",
 }

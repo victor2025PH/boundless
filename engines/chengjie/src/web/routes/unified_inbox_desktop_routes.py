@@ -683,8 +683,12 @@ def register_desktop_routes(app, *, api_auth) -> None:
     async def api_desktop_outbound_ack(request: Request, _=Depends(api_auth)):
         """桌面壳 / 扩展发完一条出站命令后回执（D4）：claimed→sent/failed。
 
-        body: {id, ok?, error?}
-        返回: {ok, acked}
+        body: {id, ok?, error?, delivered_as?, echo?}
+        返回: {ok, acked, voice?}
+
+        ``kind=voice`` 命令（P0-6）：回执**首次命中**时顺带 ①成功→镜像出站语音行到收件箱
+        （念稿/音频/人设名）+ 打 record_voice_sent；②能力型失败（record/play）→ 同念稿回落一条
+        文字命令。见 :mod:`src.inbox.desktop_voice_ack`。
         """
         try:
             body = await request.json()
@@ -699,8 +703,32 @@ def register_desktop_routes(app, *, api_auth) -> None:
         ok = bool((body or {}).get("ok", True))
         error = str((body or {}).get("error") or "")
         from src.inbox.desktop_outbound import get_desktop_outbound_queue
-        acked = get_desktop_outbound_queue().ack(item_id, ok=ok, error=error)
-        return {"ok": True, "acked": acked}
+        q = get_desktop_outbound_queue()
+        item = None
+        try:
+            item = q.get(item_id)
+        except Exception:
+            item = None
+        acked = q.ack(item_id, ok=ok, error=error)
+        resp: dict = {"ok": True, "acked": acked}
+        if acked and isinstance(item, dict) and str(item.get("kind") or "") == "voice":
+            try:
+                from src.inbox.desktop_voice_ack import handle_voice_ack
+                cm = getattr(request.app.state, "config_manager", None)
+                _cfg = getattr(cm, "config", None) or {}
+                try:
+                    from src.integrations.account_registry import get_account_registry
+                    _reg = get_account_registry()
+                except Exception:
+                    _reg = None
+                resp["voice"] = handle_voice_ack(
+                    q, item, ok=ok, error=error,
+                    store=getattr(request.app.state, "inbox_store", None),
+                    config=_cfg, registry=_reg,
+                    extra={k: (body or {}).get(k) for k in ("delivered_as", "echo")})
+            except Exception:
+                logger.debug("[desktop] voice ack 处置失败（已忽略）", exc_info=True)
+        return resp
 
     @app.post("/api/desktop/outbound/action")
     async def api_desktop_outbound_action(request: Request, _=Depends(api_auth)):

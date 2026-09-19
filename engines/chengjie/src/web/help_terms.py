@@ -1614,6 +1614,39 @@ HELP_TERMS: dict = {
         "desc_en": "Drafts see photos already sent from the workspace, so they do not promise another picture right after one went out. Inbound photos are noted too, so the reply can acknowledge the picture instead of ignoring it.",
         "usage": "不用设置。刚手发或自动发过图后，看下一条拟稿还说不说「等我发一张」。问小智「刚发过图为什么还说要发」。",
         "usage_en": "No setting. After a photo just went out, the next draft should not say wait I will send one."
+    },
+    # ── 1.0.90（电脑微信副驾进包 / 发语音 / 接管迟到闸 / 成人不设限）───
+    "wechat_pc_copilot": {
+        "zh": "个人微信 · PC 副驾",
+        "en": "Personal WeChat · PC copilot",
+        "desc": "读取本机已登录的电脑微信窗口，把私聊同步进工作台。半自动只发你批准的稿；全自动需在引导页勾风险知情同意后可代发。不是微信官方接口，不保存微信密码。",
+        "desc_en": "Reads the signed-in WeChat for Windows window and mirrors chats into the workspace. Semi-auto sends only approved drafts; full-auto can send after a risk acknowledgement. Not an official WeChat API; the password is never stored.",
+        "usage": "工作台 → 账号管理 → 个人微信 · PC 副驾 → 查看接入流程。三步：检测微信并扫码 → 选档位并保存 → 点「启动副驾」。问小智「个人微信怎么用」。",
+        "usage_en": "Workspace → Accounts → Personal WeChat · PC copilot → guide. Three steps: detect and scan → pick a tier → Start copilot."
+    },
+    "wechat_pc_voice": {
+        "zh": "微信副驾发语音",
+        "en": "WeChat copilot voice replies",
+        "desc": "全自动档可用人设克隆声发微信语音：电脑微信 4.1.9+、免费 VB-CABLE、两端采样率一致。单条约 55 秒，超长分条；麦被占用或通路未就绪改发文字。对方发来的语音听不到（只有「语音N秒」占位），人设请对方打字。",
+        "desc_en": "On full-auto the copilot can send clone-voice clips: WeChat 4.1.9+, free VB-CABLE, matching sample rates. Clips ~55 s, longer ones split; mic busy or path not ready falls back to text. Inbound voice cannot be heard (duration placeholder only); the persona asks them to type.",
+        "usage": "引导第 ① 步看「语音回复」一行（下载 VB-CABLE / 对齐采样率 / 自测）。第 ② 步选全自动。人设绑克隆音色。问小智「微信怎么发语音」。",
+        "usage_en": "Step 1 of the guide: Voice replies line (download VB-CABLE / align sample rate / self-test). Step 2: full-auto. Bind a clone voice on the persona."
+    },
+    "takeover_late_gate": {
+        "zh": "接管迟到闸",
+        "en": "Takeover late gate",
+        "desc": "点接管或把会话切到人工后，还在拟人等待里的那一稿会弃发，避免「按钮已变人工、消息仍自动出去」。已经出现在对方聊天里的那条收不回来。",
+        "desc_en": "After Take over or switching the thread to Manual, a draft still waiting in the humanize delay is dropped so a send cannot land after the button already shows Manual. A line already delivered cannot be recalled.",
+        "usage": "会话头切「人工」或点接管。若仍发出去，把会话和时间发到报障群。问小智「点了接管为什么还在自动发」。",
+        "usage_en": "Switch the thread header to Manual or click Take over. If a send still goes out, report the thread and time."
+    },
+    "adult_policy_open": {
+        "zh": "人设成人政策 · 不设限",
+        "en": "Persona adult policy · Unrestricted",
+        "desc": "开黄腔、露骨按人设口吻接住，不软回应、不因成人内容转人工。本机配置 adult_grader.default_policy=open 时，「跟随域默认」也按不设限。对方自称或明显未成年仍强制转人工。",
+        "desc_en": "Flirty or explicit lines stay in character; no soft-reply and no hand-off for adult content. If the machine sets adult_grader.default_policy=open, Follow domain default uses Unrestricted too. Self-identified or obvious minors still hand off.",
+        "usage": "人设工坊 → 打开人设 → 边界 / 成人政策 →「不设限」。未见该档=当前部署未开启。问小智「不设限怎么用」。",
+        "usage_en": "Persona studio → open a persona → Boundaries / adult policy → Unrestricted. Missing option means this deployment does not enable that tier."
     }
 }
 

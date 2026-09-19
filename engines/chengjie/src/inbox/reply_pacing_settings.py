@@ -60,6 +60,12 @@ SEAT_MODE_CHOICES = ("", "single", "multi")
 # 2026-09-07：qq（协议登录个人号，Milky）进能力矩阵 → 键域同步扩（typing 是协议层硬限制，
 # 开了会被 validate_platform_flags_caps 如实提示不支持）。
 PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq")
+# 只对「语音触发覆写」额外放行的桌面桥平台（2026-09-19 P1）：微信 PC 副驾经虚拟声卡发语音，
+# 与协议 worker 无关，不进 PLATFORMS（那张表与能力矩阵 WORKERS 钉死），但运营要能单独关掉
+# 微信的语音（微信语音一旦发错人/发错内容没法撤回文字那样快）。其余平台表（档位封顶/延迟/拟人）
+# 对微信无意义，仍只认 PLATFORMS。
+VOICE_TRIGGER_EXTRA_PLATFORMS = ("wechat",)
+VOICE_TRIGGER_PLATFORMS = PLATFORMS + VOICE_TRIGGER_EXTRA_PLATFORMS
 # 平台拟人开关覆写的可编辑键（platform_humanize 条目白名单）
 HUMANIZE_FLAG_KEYS = ("mark_read", "typing")
 
@@ -206,6 +212,7 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     # 活读 config（effective_voice_block）→ hot=True。
     "inbox.l2_autosend.voice.platform_triggers": {
         "type": "platform_enum_map", "choices": VOICE_TRIGGERS,
+        "keys": VOICE_TRIGGER_PLATFORMS,
         "default": {}, "hot": True,
     },
     # ── 工作时间班表（P0-ws，2026-08-04；判定核心 work_hours_gate.py）────
@@ -797,7 +804,8 @@ def sanitize_patch(
                 clean[key] = ov
         elif t == "platform_enum_map":
             ov, ov_errors = _sanitize_platform_enum_map(
-                raw_val, spec["choices"], field=key)
+                raw_val, spec["choices"], field=key,
+                allowed=tuple(spec.get("keys") or PLATFORMS))
             if ov_errors:
                 errors.extend(ov_errors)
             else:
@@ -1052,11 +1060,12 @@ def _sanitize_schedule_overrides(
 
 def _sanitize_platform_enum_map(
     raw: Any, choices: Tuple[str, ...], *, field: str,
+    allowed: Tuple[str, ...] = PLATFORMS,
 ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
     """校验平台→枚举标量表（档位封顶 / 语音触发覆写共用）。
 
-    平台键归一小写且必须在 ``PLATFORMS``；值归一小写且必须在 ``choices``；
-    空串值＝删除该平台（UI「跟随全局」）。空表 {} 合法＝全部清除。
+    平台键归一小写且必须在 ``allowed``（缺省 ``PLATFORMS``；语音触发表额外放行桌面桥平台）；
+    值归一小写且必须在 ``choices``；空串值＝删除该平台（UI「跟随全局」）。空表 {} 合法＝全部清除。
     """
     errors: List[Dict[str, str]] = []
     if not isinstance(raw, Mapping):
@@ -1064,7 +1073,7 @@ def _sanitize_platform_enum_map(
     out: Dict[str, str] = {}
     for plat_raw, v in raw.items():
         plat = str(plat_raw or "").strip().lower()
-        if plat not in PLATFORMS:
+        if plat not in allowed:
             errors.append({"field": field, "code": "bad_platform"})
             continue
         s = str(v or "").strip().lower()
@@ -1456,7 +1465,8 @@ __all__ = [
     "AUTOMATION_MODES", "VOICE_TRIGGERS", "FIELDS",
     "REPLY_LENGTH_CHOICES", "EMOJI_LEVEL_CHOICES", "TONE_HINT_MAXLEN",
     "OVERRIDE_EDITABLE_KEYS", "REPLACE_PATHS", "PRESETS",
-    "PLATFORMS", "HUMANIZE_FLAG_KEYS", "SCHEDULE_EDITABLE_KEYS",
+    "PLATFORMS", "VOICE_TRIGGER_EXTRA_PLATFORMS", "VOICE_TRIGGER_PLATFORMS",
+    "HUMANIZE_FLAG_KEYS", "SCHEDULE_EDITABLE_KEYS",
     "BUBBLE_GAP_LO_DEFAULT", "BUBBLE_GAP_HI_DEFAULT",
     "BUBBLE_CJK_PER_CHAR_DEFAULT", "BUBBLE_LATIN_PER_CHAR_DEFAULT",
     "BUBBLE_MAX_GAP_DEFAULT", "BUBBLE_TOTAL_BUDGET_DEFAULT",

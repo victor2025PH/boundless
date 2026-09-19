@@ -469,6 +469,8 @@ def test_wechat_kf_connect_guide_backend(wx_env, monkeypatch):
     client, cm, fake, app = wx_env["client"], wx_env["cm"], wx_env["fake"], wx_env["app"]
     import src.web.routes.wechat_kf_setup_routes as R
     from src.integrations.account_registry import get_account_registry
+    from src.integrations.wechat_kf_setup import reset_egress_cache
+    reset_egress_cache()
     monkeypatch.setattr(R, "fetch_egress_ip", lambda: {"ok": True, "ip": "8.8.8.8", "source": "test"})
 
     # ① 出站 IP
@@ -520,20 +522,61 @@ def test_wechat_kf_connect_guide_backend(wx_env, monkeypatch):
 
     # 个人微信：环境 / 档位 / 启动命令
     r = client.get("/api/setup/wechat_pc/env")
-    assert r.status_code == 200 and {"os_windows", "running", "version_ok", "copilot"} <= set(r.json())
+    assert r.status_code == 200 and {"os_windows", "running", "version_ok", "copilot", "can_manage", "driver",
+                                     "installed", "supervisor", "voice"} <= set(r.json())
+    # 2026-09-19 P1 语音通路：/env 并入 voice 静态探测（可选能力：字段齐、绝不抛，非 Windows 也返回骨架）
+    v = r.json()["voice"]
+    assert v is None or {"voice_version_ok", "audio_libs", "cable", "ready", "min_version"} <= set(v), v
+    # 回环自测 / 采样率对齐：主管专属；打桩 env_check / audio_cable，CI 没有声卡也能验路由契约
+    import src.integrations.wechat_pc.env_check as _envmod
+    import src.integrations.wechat_pc.audio_cable as _cable
+    calls = {}
+
+    def _fake_voice_env(**kw):
+        calls["selftest"] = kw
+        return {"voice_version_ok": True, "audio_libs": True, "ready": True,
+                "cable": {"present": True, "rates_match": True,
+                          "selftest": {"ok": True, "dominant_hz": 1000.2, "rms": 0.21}}}
+    monkeypatch.setattr(_envmod, "voice_environment", _fake_voice_env)
+    r = client.post("/api/setup/wechat_pc/voice/selftest")
+    d = r.json()
+    assert r.status_code == 200 and d["ok"] is True and d["selftest"]["dominant_hz"] == 1000.2, d
+    assert calls["selftest"] == {"selftest": True}, "自测端点必须真跑回环（selftest=True），不是复用静态探测"
+    monkeypatch.setattr(_cable, "available", lambda: True)
+    monkeypatch.setattr(_cable, "align_formats", lambda *a, **k: {"ok": True, "before": 44100, "after": 48000, "render_sr": 48000})
+    monkeypatch.setattr(_cable, "cable_status", lambda **k: {"present": True, "rates_match": True, "ready": True})
+    r = client.post("/api/setup/wechat_pc/voice/align")
+    d = r.json()
+    assert r.status_code == 200 and d["ok"] is True and d["align"]["after"] == 48000 and d["cable"]["ready"] is True, d
+    monkeypatch.setattr(_cable, "available", lambda: False)
+    d = client.post("/api/setup/wechat_pc/voice/align").json()
+    assert d["ok"] is False and d["error"] == "audio_libs_missing", "缺音频库 → 明确原因，不是 500"
     r = client.get("/api/setup/wechat_pc/policy")
     assert r.status_code == 200 and r.json()["tier"] in ("copilot", "semi", "auto_reply")
     r = client.post("/api/setup/wechat_pc/policy", json={"tier": "auto_reply"})
     assert r.status_code == 400 and "risk_ack_required" in r.text, "全自动必须知情同意（服务端强制）"
+    # 模拟出厂态（fixture 为线 B 其他用例预开了桥）：桥关 → 页面能看见「出站通道未开」
+    assert cm.save_overlay_patch({"inbox": {"l2_autosend": {"desktop_bridge": {"enabled": False}}}})
+    assert client.get("/api/setup/wechat_pc/policy").json()["bridge_enabled"] is False, "出厂桥关"
     r = client.post("/api/setup/wechat_pc/policy", json={"tier": "auto_reply", "risk_ack": True, "work_hours": [9, 21]})
     d = r.json()
     assert r.status_code == 200 and d["tier"] == "auto_reply" and d["risk_ack"] is True and d["work_hours"] == [9, 21]
-    assert d["restart_required"] is True and d["risk_ack_at"] > 0
+    assert d["restart_required"] is False and d["hot_reload"] is True and d["risk_ack_at"] > 0, "驱动按配置文件热生效"
+    assert d["saved_at"] > 0 and client.get("/api/setup/wechat_pc/policy").json()["saved_at"] == d["saved_at"], \
+        "保存时间落 overlay：页面刷新/深链到第③步也能把第②步标为真完成"
     blk = ((cm.config.get("platform_login") or {}).get("wechat_pc")) or {}
     assert blk.get("tier") == "auto_reply" and blk.get("risk_ack") is True and blk.get("risk_ack_at")
+    # 2026-09-19：发送档位必须同时打开桌面桥出站通道，否则手发 400 / 全自动只拟稿（实测缺口）
+    assert d["bridge_saved"] is True and d["bridge_enabled"] is True
+    assert ((cm.config.get("inbox") or {}).get("l2_autosend") or {}).get("desktop_bridge", {}).get("enabled") is True
+    r = client.post("/api/setup/wechat_pc/policy", json={"tier": "copilot"})
+    assert r.json()["bridge_saved"] is None and r.json()["bridge_enabled"] is True, "降回只读不关桥（别的桌面账号在用）"
+    r = client.post("/api/setup/wechat_pc/policy", json={"tier": "auto_reply"})
+    assert r.status_code == 200 and r.json()["bridge_saved"] is None, "桥已开不重复写"
     r = client.get("/api/setup/wechat_pc/start-command?account_id=my-wx")
     d = r.json()
-    assert "wechat_pc_devlink.ps1" in d["command"] and "-AccountId my-wx" in d["command"] and "-Tier auto_reply" in d["command"]
+    assert "wechat_pc_devlink.ps1" in d["command"] and "-AccountId my-wx" in d["command"]
+    assert "-Tier" not in d["command"] and "-Tier" not in d["autostart_command"], "档位不再写死进命令行（配置文件权威）"
     assert d["prepared"] is False and "<" not in d["command"], "命令里是真实路径，不再有占位符"
     # 主管点第 ③ 步：后端把管理员令牌落到数据目录，之后 prepared=True
     r = client.post("/api/setup/wechat_pc/prepare", json={})
@@ -544,6 +587,70 @@ def test_wechat_kf_connect_guide_backend(wx_env, monkeypatch):
     assert str(wx_env["config_dir"]) in tf, "令牌文件落在后端配置目录下的 wechat_pc/"
     d = client.get("/api/setup/wechat_pc/start-command").json()
     assert d["prepared"] is True and tf in d["command"] and tf in d["autostart_command"]
+
+    # 一键启停（2026-09-19 P1）：后端托管驱动子进程——用假 Popen，不真拉 python
+    from src.web.routes.wechat_pc_setup_routes import get_or_create_supervisor
+
+    class _P:
+        def __init__(self, cmd, **kw):
+            self.cmd, self.kw, self.pid, self._rc = list(cmd), kw, 5150, None
+
+        def poll(self):
+            return self._rc
+
+        def kill(self):
+            self._rc = 1
+
+        def wait(self, timeout=None):
+            return self._rc
+
+    spawned: List[Any] = []
+
+    def _popen(cmd, **kw):
+        p = _P(cmd, **kw)
+        spawned.append(p)
+        return p
+
+    app.state.wechat_pc_supervisor = None
+    sup = get_or_create_supervisor(app, popen=_popen)
+    sup.driver_ready_provider = lambda: {"ok": True, "uiautomation": True}
+    sup._assign_job = lambda pid: None
+    sup._kill_tree = lambda proc: proc.kill()
+    import src.integrations.wechat_pc.env_check as _ec
+    monkeypatch.setattr(_ec, "driver_ready", lambda: {"ok": True, "uiautomation": True, "os_windows": True, "python": "py"})
+    try:
+        st = client.get("/api/setup/wechat_pc/copilot/status").json()
+        assert st["ok"] and st["state"] in ("idle", "offline") and st["managed"] is False
+        r = client.post("/api/setup/wechat_pc/copilot/start")
+        d = r.json()
+        assert r.status_code == 200 and d["ok"] and d["action"] == "start" and d["state"] == "starting" and d["pid"] == 5150
+        cmd = spawned[0].cmd
+        assert "src.integrations.wechat_pc" in cmd and "--tier" not in cmd and "--token" not in cmd
+        env = spawned[0].kw["env"]
+        assert env["CHATX_ADMIN_TOKEN"] == (cm.config.get("web_admin") or {}).get("auth_token"), "令牌走环境变量"
+        assert str(wx_env["config_dir"]) in d["log_path"], "驱动日志落在后端数据目录 wechat_pc/ 下"
+        assert client.post("/api/setup/wechat_pc/copilot/start").json()["action"] == "already_running"
+        st = client.get("/api/setup/wechat_pc/copilot/status").json()
+        assert st["state"] == "starting" and st["managed"] is True and st["pid"] == 5150
+        r = client.post("/api/setup/wechat_pc/copilot/restart").json()
+        assert r["ok"] and r["action"] == "start" and len(spawned) == 2 and spawned[0]._rc == 1
+        r = client.post("/api/setup/wechat_pc/copilot/stop").json()
+        assert r["ok"] and r["action"] == "stop" and r["state"] == "offline" and spawned[1]._rc == 1
+        # 自启开关落 overlay 并即时生效
+        r = client.post("/api/setup/wechat_pc/autostart", json={"enabled": True}).json()
+        assert r["ok"] and r["autostart"] is True and sup.autostart is True
+        assert ((cm.config.get("platform_login") or {}).get("wechat_pc") or {}).get("autostart") is True
+        assert client.get("/api/setup/wechat_pc/policy").json()["autostart"] is True
+        r = client.post("/api/setup/wechat_pc/autostart", json={"enabled": False}).json()
+        assert r["autostart"] is False and sup.autostart is False
+        # env 带上 supervisor 摘要
+        e = client.get("/api/setup/wechat_pc/env").json()
+        assert e["supervisor"]["state"] == "offline" and e["supervisor"]["autostart"] is False
+    finally:
+        try:
+            asyncio.run(sup.shutdown())
+        except Exception:
+            pass
 
     # 两张引导页 + 未知平台 404
     r = client.get("/workspace/connect/wechat_kf")

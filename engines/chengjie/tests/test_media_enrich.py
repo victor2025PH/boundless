@@ -25,6 +25,19 @@ def test_is_placeholder_only():
     assert not is_placeholder_only("[视频内容] 画面：海边")
 
 
+def test_wechat_voice_duration_is_placeholder():
+    """电脑微信入站气泡「语音N秒」不是转写正文（P3-1，2026-09-19）。"""
+    from src.inbox.media_enrich import is_voice_duration_placeholder
+    for t in ("语音", "语音11秒", "语音 11秒", "语音11\"", "[语音] 11 秒",
+              "Voice 11s", "Voice 11 sec", "Voice message 8s"):
+        assert is_voice_duration_placeholder(t), t
+        assert is_placeholder_only(t), t
+    # 英文裸词 / 真转写 / 普通聊天不能误杀
+    for t in ("Voice", "hello", "来聊一聊今天的新闻", "语音发我一下",
+              "[语音转录] 明天三点见"):
+        assert not is_voice_duration_placeholder(t), t
+
+
 def test_media_placeholder():
     assert media_placeholder("image") == "[图片]"
     assert media_placeholder("voice") == "[语音]"

@@ -26,6 +26,15 @@ if sys.platform == "win32":
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent))
 
+# 打包态副驾驱动分流（2026-09-19，个人微信 PC 副驾 1.0.90 进包）：PyInstaller 产物 backend.exe
+# 没有 `python -m`，supervisor 在 frozen 态用 `backend.exe --wechat-pc-driver <args>` 拉驱动子进程
+#（见 src/integrations/wechat_pc/supervisor.py build_driver_command）。首参命中即整段转交驱动入口，
+# 放在重 import（AIClient/SkillManager）之前——驱动进程不该为后端主链的 import 付费，也绝不
+# 走到下面的后端启动（否则就是第二个后端抢 18799）。源码态 `-m src.integrations.wechat_pc` 不受影响。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "--wechat-pc-driver":
+    from src.integrations.wechat_pc.__main__ import main as _wechat_pc_driver_main
+    sys.exit(_wechat_pc_driver_main(sys.argv[2:]))
+
 # P3-2（2026-08-12 可靠性复盘）：TelegramClient 顶层 import 已移除——它是死代码
 # （构造点在 bootstrap/services.py::setup_telegram_clients，人家自己函数内 import），
 # 却把 pyrogram 的 ~5s import（raw.types 生成为主，-X importtime 实测 6.98s 链）

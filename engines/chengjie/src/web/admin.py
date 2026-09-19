@@ -1412,6 +1412,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             raise HTTPException(status_code=401, detail="Unauthorized")
         auth_header = request.headers.get("Authorization", "")
         if hmac.compare_digest(auth_header, f"Bearer {token}"):
+            # 管理员令牌 = 本机桌面壳 / 运维脚本的主管身份。不写 session（无 cookie），
+            # 由 _is_supervisor 认 request.state.auth_via_admin_token，否则启停副驾等
+            # 主管端点会对 Bearer 一律 403（2026-09-19 托盘联调实锤）。
+            try:
+                request.state.auth_via_admin_token = True
+            except Exception:
+                pass
             return
         # worker 窄令牌：只放行 /api/internal/*（协议侧车的全部所需），其余一律 403。
         # 刻意用 403 而不是 401：令牌是真的、只是越权，说「没认证」会让排障的人去查
@@ -1960,6 +1967,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_pq
         _log_pq.getLogger("admin").debug("Persona 考题路由注册跳过", exc_info=True)
+
+    try:
+        from src.web.routes.persona_proposal_routes import register_persona_proposal_routes
+        register_persona_proposal_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pp
+        _log_pp.getLogger("admin").debug("Persona 补丁提案路由注册跳过", exc_info=True)
 
     try:
         from src.web.routes.persona_media_routes import register_persona_media_routes

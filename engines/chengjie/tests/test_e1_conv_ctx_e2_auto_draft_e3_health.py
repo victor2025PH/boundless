@@ -486,6 +486,9 @@ class TestE3HealthAPIs:
         c = self._client(tmp_store)
         d = c.get("/api/drafts/autosend-status").json()
         assert "worker" in d  # None when not started, dict when started
+        # worker 未起也要带 24h 台账（B 线卡 / 重启后仍能看断档）
+        assert "voice_outage" in d
+        assert "attempts_24h" in (d.get("voice_outage") or {})
 
     def test_risk_summary_has_sla_overdue(self, tmp_store):
         """risk-summary（主管）包含 sla_overdue 字段。"""

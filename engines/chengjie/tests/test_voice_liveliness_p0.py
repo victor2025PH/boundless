@@ -348,7 +348,10 @@ def test_autosend_helpers_split_wiring_present():
     import inspect
 
     from src.inbox import autosend_helpers as ah
-    src = inspect.getsource(ah.autosend_voice)
+    # 2026-09-19 投递逻辑抽到 _deliver_voice_via_orchestrator（决策闸 _voice_gate 与桌面桥共用）；
+    # 钉子看「入口 + 投递」两段合体源码，语义不变。
+    src = inspect.getsource(ah.autosend_voice) + inspect.getsource(ah._deliver_voice_via_orchestrator)
+    assert "_voice_gate" in src
     assert "stage_voice_parts" in src
     assert "part_gap_seconds" in src
     assert "stage_voice_file" in src          # 单条旧路径仍在（回落）

@@ -86,6 +86,9 @@ def test_facts_block_carries_boundaries_in_both_langs():
         # 不支持清单是重点：只说支持什么，用户仍会追问「那抖音呢」
         assert "抖音" in blk or "抖音" in "".join(UNSUPPORTED_CHANNELS)
         assert ("不支持" in blk) or ("Not supported" in blk)
+    # PC 副驾入站语音听不到 → 请打字（P3-1，防小智答「能听微信语音」）
+    zh = product_facts_block("zh")
+    assert "打字" in zh and ("听不到" in zh or "语音N秒" in zh)
 
 
 def test_docless_prompt_wires_facts_and_keeps_red_lines():

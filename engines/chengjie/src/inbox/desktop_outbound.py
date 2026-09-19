@@ -131,7 +131,13 @@ class DesktopOutboundQueue:
                     attempts INTEGER DEFAULT 0,
                     created_at REAL,
                     claimed_at REAL,
-                    acked_at REAL
+                    acked_at REAL,
+                    media_url TEXT DEFAULT '',
+                    media_ref TEXT DEFAULT '',
+                    duration_ms INTEGER DEFAULT 0,
+                    inbox_text TEXT DEFAULT '',
+                    sender_name TEXT DEFAULT '',
+                    reply_group TEXT DEFAULT ''
                 )
                 """
             )
@@ -166,6 +172,20 @@ class DesktopOutboundQueue:
                         + _col + " TEXT DEFAULT ''")
                 except Exception:
                     pass  # 已存在 → 忽略
+            # 媒体命令（2026-09-19 微信 PC 语音）：``kind='voice'`` 时 ``text`` 是念稿（转写/预览），
+            # 音频在 ``media_url``（后端 /static URL，驱动按 token 拉取）/ ``media_ref``（同机本地路径）。
+            # ``duration_ms`` 由 staging 探测（微信 60s 硬顶在入队前按真实时长判，不按字数）；
+            # ``inbox_text``/``sender_name`` 是 ack 成功后镜像进收件箱出站行用的（谁的音色念了什么）。
+            # ``reply_group``（P2 分条节奏）：同一稿子拆出的多条命令共享一个组号；驱动据此把条间间隔从
+            # min_gap（20s）换成几秒的「连发」节奏。空＝独立命令。
+            for _col, _decl in (("media_url", "TEXT DEFAULT ''"), ("media_ref", "TEXT DEFAULT ''"),
+                                ("duration_ms", "INTEGER DEFAULT 0"), ("inbox_text", "TEXT DEFAULT ''"),
+                                ("sender_name", "TEXT DEFAULT ''"), ("reply_group", "TEXT DEFAULT ''")):
+                try:
+                    self._conn.execute(
+                        "ALTER TABLE desktop_outbound ADD COLUMN " + _col + " " + _decl)
+                except Exception:
+                    pass
 
     # ── 写入：受控入队 ────────────────────────────────────────────────
     def enqueue(
@@ -183,12 +203,21 @@ class DesktopOutboundQueue:
         guard: Optional[GuardFn] = None,
         hold: bool = False,
         now: Optional[float] = None,
+        media_url: str = "",
+        media_ref: str = "",
+        duration_ms: int = 0,
+        inbox_text: str = "",
+        sender_name: str = "",
+        reply_group: str = "",
     ) -> Dict[str, Any]:
         """受控入队：先过闸门，通过才落库。
 
         ``hold=False``（默认）→ 落 ``pending``（可被 pull 自动发）；
         ``hold=True``（人审模式 review_mode）→ 落 ``held``（pull 不认领，等运营「放行」才转 pending）。
         **闸门恒在入队前执行**（即便 hold）——held 命令也是已过 Kill-Switch/反封号的，放行=发送已审命令。
+
+        ``kind="voice"``：``text`` 为念稿（人审看的转写），必须带 ``media_url`` 或 ``media_ref``
+        （否则 ``blocked="voice_missing_media"``）；``duration_ms`` 是 staging 探到的真实时长。
 
         返回 ``{"enqueued": True, "id": <int>, "status": "pending"|"held"}``，或被拦截时
         ``{"enqueued": False, "blocked": "kill_switch:.../send_gate:..."}``。
@@ -198,10 +227,19 @@ class DesktopOutboundQueue:
         a = str(account_id or "")
         ck = str(chat_key or "")
         body = str(text or "").strip()
+        k = str(kind or "text").strip().lower() or "text"
+        murl = str(media_url or "").strip()
+        mref = str(media_ref or "").strip()
         if not p or not a or not ck:
             return {"enqueued": False, "blocked": "missing_key"}
         if not body:
             return {"enqueued": False, "blocked": "empty_text"}
+        if k == "voice" and not (murl or mref):
+            return {"enqueued": False, "blocked": "voice_missing_media"}
+        try:
+            dur = max(0, int(duration_ms or 0))
+        except (TypeError, ValueError):
+            dur = 0
         # ★ 受控不变式：入队前必过闸门（Kill-Switch 恒查 + 反封号闸门按开关）
         g = guard or _default_guard
         try:
@@ -219,10 +257,12 @@ class DesktopOutboundQueue:
             cur = self._conn.execute(
                 "INSERT INTO desktop_outbound "
                 "(platform, account_id, chat_key, conversation_id, text, kind, "
-                " draft_id, status, attempts, created_at) "
-                "VALUES (?,?,?,?,?,?,?, ?, 0, ?)",
-                (p, a, ck, str(conversation_id or ""), body, str(kind or "text"),
-                 str(draft_id or ""), status, ts),
+                " draft_id, status, attempts, created_at, "
+                " media_url, media_ref, duration_ms, inbox_text, sender_name, reply_group) "
+                "VALUES (?,?,?,?,?,?,?, ?, 0, ?, ?,?,?,?,?,?)",
+                (p, a, ck, str(conversation_id or ""), body, k,
+                 str(draft_id or ""), status, ts,
+                 murl, mref, dur, str(inbox_text or ""), str(sender_name or ""), str(reply_group or "")),
             )
             rid = int(cur.lastrowid or 0)
         return {"enqueued": True, "id": rid, "status": status}
@@ -585,7 +625,15 @@ class DesktopOutboundQueue:
     # ── 内部 ─────────────────────────────────────────────────────────
     @staticmethod
     def _row_to_item(r: sqlite3.Row) -> Dict[str, Any]:
-        return {
+        keys = set(r.keys())
+
+        def _col(name: str, default: Any = "") -> Any:
+            if name not in keys:
+                return default
+            v = r[name]
+            return default if v is None else v
+
+        item = {
             "id": int(r["id"]),
             "platform": r["platform"],
             "account_id": r["account_id"],
@@ -597,7 +645,17 @@ class DesktopOutboundQueue:
             "status": r["status"],
             "attempts": int(r["attempts"] or 0),
             "created_at": r["created_at"],
+            "media_url": str(_col("media_url")),
+            "media_ref": str(_col("media_ref")),
+            "inbox_text": str(_col("inbox_text")),
+            "sender_name": str(_col("sender_name")),
+            "reply_group": str(_col("reply_group")),
         }
+        try:
+            item["duration_ms"] = int(_col("duration_ms", 0) or 0)
+        except (TypeError, ValueError):
+            item["duration_ms"] = 0
+        return item
 
     def _prune(self, now: float) -> None:
         """清理超龄终态记录（best-effort，调用方已持/未持锁均安全：内部自锁）。"""

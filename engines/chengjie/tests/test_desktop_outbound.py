@@ -108,6 +108,48 @@ def test_ack_unknown_id_returns_false():
     assert q.ack(999999, ok=True) is False
 
 
+# ── 媒体命令（微信 PC 语音，2026-09-19）─────────────────────────────
+def test_voice_kind_requires_media_and_carries_media_fields():
+    q = _q()
+    r = q.enqueue("wechat", "wx1", "c1", "念稿", kind="voice", guard=_allow)
+    assert r["enqueued"] is False and r["blocked"] == "voice_missing_media"
+    assert q.pending_count() == 0
+    r = q.enqueue("wechat", "wx1", "c1", "念稿", kind="voice", guard=_allow,
+                  media_url="/static/outbound/wechat/wx1/a.ogg", media_ref=r"D:\x\a.ogg",
+                  duration_ms=8600, inbox_text="念稿", sender_name="Claire")
+    assert r["enqueued"] is True
+    it = q.pull("wechat", "wx1")[0]
+    assert it["kind"] == "voice"
+    assert it["media_url"].endswith("a.ogg") and it["media_ref"].endswith("a.ogg")
+    assert it["duration_ms"] == 8600 and it["inbox_text"] == "念稿" and it["sender_name"] == "Claire"
+    # 文本命令媒体字段为空值而非缺键（老客户端按 text 处理不受影响）
+    q.enqueue("wechat", "wx1", "c1", "文字", guard=_allow)
+    t = q.pull("wechat", "wx1")[0]
+    assert t["kind"] == "text" and t["media_url"] == "" and t["duration_ms"] == 0
+    assert q.get(it["id"])["media_url"] == it["media_url"]
+
+
+def test_legacy_schema_is_migrated_with_media_columns(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE desktop_outbound (id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,"
+        " account_id TEXT NOT NULL, chat_key TEXT NOT NULL, conversation_id TEXT DEFAULT '',"
+        " text TEXT NOT NULL, kind TEXT DEFAULT 'text', draft_id TEXT DEFAULT '', status TEXT DEFAULT 'pending',"
+        " reason TEXT DEFAULT '', attempts INTEGER DEFAULT 0, created_at REAL, claimed_at REAL, acked_at REAL)")
+    conn.execute("INSERT INTO desktop_outbound (platform, account_id, chat_key, text, created_at) "
+                 "VALUES ('wechat','wx1','c1','老命令', 1.0)")
+    conn.commit()
+    conn.close()
+    q = DesktopOutboundQueue(db)
+    old = q.pull("wechat", "wx1")[0]
+    assert old["text"] == "老命令" and old["media_url"] == "" and old["duration_ms"] == 0
+    r = q.enqueue("wechat", "wx1", "c1", "新语音", kind="voice", guard=_allow, media_url="/static/v.ogg")
+    assert r["enqueued"] is True
+    q.close()
+
+
 # ── 超时回收 ────────────────────────────────────────────────────────
 def test_stale_claimed_is_reclaimed_on_pull():
     q = _q()

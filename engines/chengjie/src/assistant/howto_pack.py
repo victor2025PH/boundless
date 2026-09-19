@@ -1163,18 +1163,21 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Which platforms are supported / is Douyin (TikTok) supported",
         "当前支持：Telegram、WhatsApp、LINE、Messenger（Facebook）、Instagram、Zalo，"
         "以及微信客服（企业微信官方通道，工作台「账号管理 → 微信客服 → 接入」五步引导，填企微自建应用凭证、"
-        "不用扫码，微信用户扫客服二维码咨询）。个人微信不作为自动聊天渠道接入，但提供「PC 副驾」："
-        "读取电脑上已登录的微信、AI 给建议、半自动代发（Windows，入口在账号管理的「个人微信 · PC 副驾」卡，"
-        "教程 /help/onboarding/wechat_pc）。账号接入在坐席工作台的账号抽屉或「接入向导」完成。"
+        "不用扫码，微信用户扫客服二维码咨询）。个人微信没有官方接口，走「PC 副驾」读电脑上已登录的微信："
+        "工作台「账号管理 → 个人微信 · PC 副驾」三步（检测微信 → 选档位 → 点启动），半自动只发你批准的稿，"
+        "全自动需勾风险知情同意后可代发文字；全自动档还可发人设语音（电脑微信 4.1.9+ + VB-CABLE，引导第 ① 步检测）。"
+        "教程 /help/onboarding/wechat_pc。账号接入在坐席工作台的账号抽屉或「接入向导」完成。"
         "抖音官方私信仍在接入中（默认关）。TikTok：**个人号没有官方私信接口**；可选获客真机"
         "（非官方、默认关）接管对方开口之后的对话，不代发首触。TikTok Shop 店铺客服走官方 API（默认关）。"
         "官方 Business Messaging 等权限，个人号不在范围内。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
         "Supported today: Telegram, WhatsApp, LINE, Messenger (Facebook), Instagram, Zalo, "
         "and WeChat Customer Service (the WeCom official channel — a 5-step guide under Accounts → "
         "WeChat Service → Connect; enter your WeCom self-built app credentials, no QR login; WeChat users "
-        "scan the service QR to chat). Personal WeChat is not an auto-chat channel, but a PC copilot is "
-        "available: it reads the signed-in WeChat on the PC, drafts suggestions and can semi-auto send "
-        "(Windows; see the Personal WeChat · PC copilot card and /help/onboarding/wechat_pc). Accounts "
+        "scan the service QR to chat). Personal WeChat has no official API; use the PC copilot that reads "
+        "the signed-in WeChat window (Accounts → Personal WeChat · PC copilot, three steps: detect → pick "
+        "tier → Start). Semi-auto sends only approved drafts; full-auto can send text after risk ack, and "
+        "voice in the persona's voice (WeChat 4.1.9+ and VB-CABLE, detected in step 1). See "
+        "/help/onboarding/wechat_pc. Accounts "
         "are connected from the account drawer or the Setup Wizard. Douyin official DMs are still being "
         "wired (off by default). TikTok: there is no official DM API for personal accounts; an optional "
         "capture-phone path (unofficial, off by default) can take over a chat after the other person writes "
@@ -1847,6 +1850,50 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Inbound photos are noted so the reply can acknowledge the picture.",
         "发图 再发一张 照片 账本 media ledger photo",
         "/workspace",
+    ),
+    (
+        "wechat-pc-voice",
+        "微信怎么给人设发语音 / 客户发语音为什么听不到",
+        "How personal WeChat sends voice / why inbound voice is not heard",
+        "工作台 → 账号管理 → 个人微信 · PC 副驾 → 接入流程。第 ① 步看「语音回复」一行："
+        "电脑微信 4.1.9 以上、装免费 VB-CABLE、两端采样率一致（有「对齐采样率」和「自测」）。"
+        "第 ② 步选全自动并勾风险知情同意后保存。人设要绑克隆音色。发出去的是合成音经虚拟声卡录进微信，"
+        "单条大约 55 秒，超长会分条，麦被占用或通路未就绪会改发文字。"
+        "对方发来的语音目前听不到（屏上只有「语音N秒」、没有声音文件），人设会请对方打字，不要假装听过。",
+        "Workspace → Accounts → Personal WeChat · PC copilot → guide. Step 1: Voice replies line needs "
+        "WeChat 4.1.9+, free VB-CABLE, matching sample rates (Align / Self-test buttons). Step 2: full-auto "
+        "plus risk ack. Bind a clone voice to the persona. Outbound voice is synthesized audio recorded "
+        "through the virtual cable; clips over ~55 s split; mic busy or path not ready falls back to text. "
+        "Inbound customer voice cannot be heard yet (duration placeholder only); the persona asks them to type.",
+        "微信 语音 副驾 VB-CABLE 打字 听不到 wechat voice copilot",
+        "/workspace/connect/wechat_pc",
+    ),
+    (
+        "takeover-late-gate",
+        "点了接管为什么还在自动发 / 切手动后 AI 又回了一句",
+        "Why did AI still send after I clicked Take over",
+        "会话头切「人工」或点接管后，正在拟人等待的那一稿也会弃发（迟到闸），不会再发出去。"
+        "已经出现在对方聊天里的那条收不回来。下一条客户消息按你现在的档位走。",
+        "After you switch the thread to Manual or Take over, a draft still in the humanize wait is dropped "
+        "(late gate) and will not send. A line already delivered cannot be recalled. The next inbound follows "
+        "the mode you just set.",
+        "接管 迟到 还在发 切手动 takeover abort late gate",
+        "/workspace",
+    ),
+    (
+        "adult-policy-open",
+        "人设成人政策「不设限」怎么用 / 开了还会转人工吗",
+        "How persona adult policy Unrestricted works",
+        "人设工坊 → 打开人设 → 边界 / 成人政策选「不设限」。开黄腔、露骨按人设口吻接住，不软回应、不因成人内容转人工。"
+        "本机若配置了 adult_grader.default_policy=open，选「跟随域默认」的人设也按不设限。"
+        "对方自称或明显未成年仍会转人工（强制锁定，风控页关不掉）。未见「不设限」选项=当前包未开此档。",
+        "Persona studio → open a persona → Boundaries / adult policy → Unrestricted. Flirty or explicit "
+        "lines stay in character; no soft-reply and no hand-off for adult content. If this machine sets "
+        "adult_grader.default_policy=open, Follow domain default uses Unrestricted too. Self-identified or "
+        "obvious minors still hand off (locked; cannot be turned off on the risk page). No Unrestricted "
+        "option means this build does not ship that tier.",
+        "不设限 成人 黄腔 未成年 人设政策 adult open unrestricted",
+        "/workspace/personas",
     ),
 ]
 

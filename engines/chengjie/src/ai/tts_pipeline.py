@@ -3016,6 +3016,23 @@ class TTSPipeline:
                     spec, default="neutral", strong_threshold=_thr)
             except Exception:
                 emotion = ""
+        emo_text = ""
+        emo_alpha = None
+        if spec is not None:
+            try:
+                from src.ai.voice_emotion import (
+                    indextts_emo_alpha,
+                    to_indextts_emo_text,
+                )
+                emo_text = to_indextts_emo_text(
+                    spec, language=language,
+                    style=str((self.voice_profile or {}).get("instruct_style") or ""),
+                    seed_text=text)
+                if emo_text:
+                    emo_alpha = indextts_emo_alpha(spec)
+                    rv.extra["hub_emo_text"] = emo_text
+            except Exception:
+                emo_text = ""
 
         # 落盘后缀按**实际返回格式**起（默认 wav；请求 ogg 而 hub 回退 wav 时仍落 .wav）
         synth: Dict[str, Any] = {"path": out.with_suffix(".wav"), "fmt": "wav"}
@@ -3033,7 +3050,8 @@ class TTSPipeline:
                 audio, fmt = hub_fish_synthesize(
                     base_url, profile, text, language=language, emotion=emotion,
                     best_of=best_of, timeout_sec=timeout_sec,
-                    audio_format=response_format, tts_engine=hub_engine)
+                    audio_format=response_format, tts_engine=hub_engine,
+                    emo_text=emo_text, emo_alpha=emo_alpha)
                 fmt = str(fmt or "wav").strip().lower() or "wav"
                 if detect_silent_audio(audio, fmt) is True:
                     rv.extra["hub_silent_audio"] = _attempt
@@ -3050,6 +3068,16 @@ class TTSPipeline:
                 profile=profile, base_url=base_url)
             synth["fmt"] = fmt
             synth["path"] = out.with_suffix(f".{fmt}")
+            if fmt == "wav":
+                try:
+                    from src.ai.voice_bursts import decorate_clone_wav
+                    audio = decorate_clone_wav(
+                        audio, text=text,
+                        emotion=str(getattr(spec, "emotion", "") or emotion or ""),
+                        voice_profile=self.voice_profile or {})
+                    rv.extra["vocal_bursts"] = True
+                except Exception:
+                    pass
             synth["path"].write_bytes(audio)
 
         # 音色一致性 strict（2026-07-27）：该人设的音色事实源＝hub 档。hub 挂了就**不许**
@@ -3350,11 +3378,28 @@ class TTSPipeline:
 
         def _synth_chunk(chunk_text: str, chunk_emo: str) -> bytes:
             from src.ai.avatar_voice import hub_fish_synthesize
+            _chunk_emo_text = ""
+            _chunk_alpha = None
+            if spec is not None:
+                try:
+                    from src.ai.voice_emotion import (
+                        indextts_emo_alpha,
+                        to_indextts_emo_text,
+                    )
+                    _chunk_emo_text = to_indextts_emo_text(
+                        spec, language=language,
+                        style=str(vp.get("instruct_style") or ""),
+                        seed_text=chunk_text)
+                    if _chunk_emo_text:
+                        _chunk_alpha = indextts_emo_alpha(spec)
+                except Exception:
+                    _chunk_emo_text = ""
             audio, fmt = hub_fish_synthesize(
                 base_url, profile, chunk_text, language=language,
                 emotion=chunk_emo, best_of=best_of_chunk,
                 timeout_sec=chunk_timeout, audio_format="wav",
-                tts_engine=hub_engine)
+                tts_engine=hub_engine,
+                emo_text=_chunk_emo_text, emo_alpha=_chunk_alpha)
             if str(fmt or "").lower() != "wav":
                 raise vpac.PacingSkip(f"chunk format {fmt} != wav")
             self._engine_gate(
@@ -3905,6 +3950,31 @@ class TTSPipeline:
             except Exception:
                 emotion = emotion_default
 
+        clone_lang = "zh"
+        emo_text = ""
+        emo_alpha = None
+        try:
+            from src.ai.voice_clone_client import effective_clone_language
+            clone_lang = effective_clone_language(
+                synth_text, default=str(vp.get("language") or "zh")) or "zh"
+        except Exception:
+            clone_lang = str(vp.get("language") or "zh") or "zh"
+        if spec is not None:
+            try:
+                from src.ai.voice_emotion import (
+                    indextts_emo_alpha,
+                    to_indextts_emo_text,
+                )
+                emo_text = to_indextts_emo_text(
+                    spec, language=clone_lang,
+                    style=str(vp.get("instruct_style") or ""),
+                    seed_text=rv.text)
+                if emo_text:
+                    emo_alpha = indextts_emo_alpha(spec)
+                    rv.extra["indextts_emo_text"] = emo_text
+            except Exception:
+                emo_text = ""
+
         # 副语言标记注入（仅实证 CosyVoice 形状的上游）：基于**口语化后**的 synth_text。
         # hub 路径已在上方返回，不会走到这里。标记在 CosyVoice3 tokenizer 层消费
         # 绝不读出（2026-07-13 真机 STT 回转验证）。
@@ -3940,9 +4010,32 @@ class TTSPipeline:
                 audio = client.tts_instruct(
                     synth_text, reference_audio_b64=ref_b64, instruct=instruct)
             else:
+                emo_b64 = ""
+                emo_vec = None
+                if str(clone_lang or "").lower().startswith("en"):
+                    try:
+                        if spec is not None and getattr(spec, "emotion", "") in (
+                            "playful", "happy", "excited",
+                        ):
+                            # IndexTTS-2.5: happy, angry, sad, afraid, disgusted,
+                            # melancholic, surprised, calm
+                            emo_vec = [0.88, 0.0, 0.0, 0.0, 0.0, 0.0, 0.18, 0.08]
+                    except Exception:
+                        emo_vec = None
                 audio = client.tts(
                     synth_text, reference_audio_b64=ref_b64,
-                    reference_text=ref_text, emotion=emotion, speed=speed)
+                    reference_text=ref_text, emotion=emotion, speed=speed,
+                    language=clone_lang, emo_text=emo_text, emo_alpha=emo_alpha,
+                    emo_audio_b64=emo_b64, emo_vector=emo_vec)
+            try:
+                from src.ai.voice_bursts import decorate_clone_wav
+                audio = decorate_clone_wav(
+                    audio, text=synth_text,
+                    emotion=str(getattr(spec, "emotion", "") or ""),
+                    voice_profile=vp)
+                rv.extra["vocal_bursts"] = True
+            except Exception:
+                pass
             av_out.write_bytes(audio)
 
         def _record_avatar(ok: bool, latency_ms: int = 0) -> None:

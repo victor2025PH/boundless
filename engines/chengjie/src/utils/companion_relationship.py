@@ -41,6 +41,20 @@ INTIMACY_BAND_DEFAULTS: Dict[str, float] = {
 }
 
 
+def _cfg_flag(v: Any, default: bool = True) -> bool:
+    """配置布尔归一（bool 原样；字符串 false/off/no/0 → False；None → default）。"""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on", "y"):
+        return True
+    if s in ("0", "false", "no", "off", "n", ""):
+        return False
+    return default
+
+
 def chat_storage_key(chat_id: Any) -> str:
     s = str(chat_id).strip() if chat_id is not None else ""
     return s if s else "_default"
@@ -221,7 +235,10 @@ def build_natural_dialogue_prompt_addon(
         "句式上避免连续堆砌「呀～」「是不是…呀」同质化反问；陈述、接梗、偶尔一问交替即可。"
     )
 
-    if ex <= strict_max or stage == "initial":
+    # ``companion.stage_lock: false``（2026-09-19，173 陪伴机）：尺度不看关系阶段——「关系仍偏新·
+    # 克制撒娇与关系宣示」这条按阶段收尺度的约束整段不注入（自然化其余各条照旧）。
+    _stage_locked = _cfg_flag(companion_cfg.get("stage_lock"), default=True)
+    if _stage_locked and (ex <= strict_max or stage == "initial"):
         lines.append(
             f"【本场约束 · 关系仍偏新（助手已完成轮数={ex}，阶段={STAGE_LABEL_ZH.get(stage, stage)}）】"
             "语气像正常私聊刚认识：克制撒娇与关系宣示，不要为了「可爱」而演。"

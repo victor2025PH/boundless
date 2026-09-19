@@ -196,7 +196,11 @@ async def test_local_fallback_still_reported_as_degraded():
 
 
 async def test_local_primary_skips_fallback_duty_counter(monkeypatch):
-    """本地转正不得计入 local_llm_fallback「顶班」计数（否则告警长期误鸣）。"""
+    """本地转正不得计入顶班计数（否则告警长期误鸣：2026-09-18 实锤）。
+
+    两层都要钉：metrics_store.local_llm_fallback **和** get_stats().local_fallback_calls
+    （看门狗 ``_check_local_fallback_duty`` 读的是后者）。
+    """
     rec = []
     c = _client(None, _FakeChatClient(reply="ok"), "local_only")
     monkeypatch.setattr(
@@ -204,3 +208,18 @@ async def test_local_primary_skips_fallback_duty_counter(monkeypatch):
         lambda ok, latency_ms=0.0: rec.append(ok))
     await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
     assert rec == [], "as_primary 不该记顶班 metric"
+    assert c._fb_calls == 0 and c._fb_ok == 0
+    stats = c.get_stats()
+    assert stats["local_fallback_calls"] == 0
+    assert stats["local_fallback_ok"] == 0
+    assert stats["primary_mode"] == "local_only"
+
+
+async def test_local_fallback_still_counts_duty():
+    """对照组：cloud 模式下本地兜底出话仍须进 local_fallback_*。"""
+    cloud = _FakeChatClient(fail=True)
+    local = _FakeChatClient(reply="兜底出话")
+    c = _client(cloud, local, "cloud")
+    await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
+    assert c._fb_calls == 1 and c._fb_ok == 1
+    assert c.get_stats()["local_fallback_calls"] == 1

@@ -78,7 +78,7 @@ ZH = {
     "bt_tpl_label": "快捷模板",
     "bt_tpl_ack": "收到，正在排查，有结论第一时间在群里同步。",
     "bt_tpl_logged": "收到，已登记改进单，会跟「回复节奏」这批一起排期处理。",
-    "bt_tpl_fixed": "你反馈的问题已修复上线，方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！",
+    "bt_tpl_fixed": "问题：（一句话核心）\n修复：（改了什么、怎么拿到）\n已修复上线。方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！",
     "bt_tpl_need_info": "为了定位问题，麻烦提供一下：当前版本号 + 复现步骤（截图更好）。",
 }
 
@@ -147,6 +147,6 @@ EN = {
     "bt_tpl_label": "Quick templates",
     "bt_tpl_ack": "Got it — investigating now, will report back in this group.",
     "bt_tpl_logged": "Received and logged as an improvement ticket; it will be scheduled with the related batch.",
-    "bt_tpl_fixed": "The issue you reported is fixed and live — please verify when convenient; we will close the ticket once confirmed. Thanks!",
+    "bt_tpl_fixed": "Issue: (one-line core)\nFix: (what changed, how to get it)\nThis is live. Please verify when convenient; we will close the ticket once confirmed. Thanks!",
     "bt_tpl_need_info": "To locate the issue, please share: your current version + reproduction steps (a screenshot helps).",
 }

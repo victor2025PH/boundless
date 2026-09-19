@@ -4,14 +4,16 @@
 #   powershell -ExecutionPolicy Bypass -File tools\wechat_pc_devlink.ps1 -ProbeOnly      # 只跑探针 + 自检
 #   powershell -ExecutionPolicy Bypass -File tools\wechat_pc_devlink.ps1 -Tier semi      # 半自动（只发人审通过的）
 # 前置：PC 微信已由主人登录并保持窗口可见；联调后端已起（默认 D:\wxpc_dev 实例，端口 18898）。
-# 安全：默认 copilot 只读档；auto_reply 需同时给 -RiskAck。永不把主号当测试号。
+# 安全：档位以 -ConfigFile 里 platform_login.wechat_pc 为准（引导页保存即热生效）；-Tier 只在显式给出时覆盖；
+#       auto_reply 需同时给 -RiskAck（或配置里已 risk_ack）。永不把主号当测试号。
+# 注意：本脚本是联调/无头部署入口；正常使用请在引导页点「启动副驾」（后端 supervisor 托管，无需命令行）。
 [CmdletBinding()]
 param(
     [string]$BackendUrl = 'http://127.0.0.1:18898',
     [string]$TokenFile  = 'D:\wxpc_dev\TOKEN.txt',
     [string]$AccountId  = 'wxpc-dev-1',
-    [ValidateSet('copilot', 'semi', 'auto_reply')]
-    [string]$Tier       = 'copilot',
+    [ValidateSet('', 'copilot', 'semi', 'auto_reply')]
+    [string]$Tier       = '',
     [switch]$RiskAck,
     [switch]$ProbeOnly,
     [double]$Interval   = 3.0,
@@ -54,11 +56,14 @@ try {
     Write-Host "[devlink] 后端不可达 $BackendUrl ：$($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
-$args_ = @('-u', '-m', 'src.integrations.wechat_pc', '--backend-url', $BackendUrl, '--token', $token,
-           '--account-id', $AccountId, '--tier', $Tier, '--interval', "$Interval",
+# 令牌走文件路径而不是明文参数：同机其他用户 Get-Process 看不到令牌
+$args_ = @('-u', '-m', 'src.integrations.wechat_pc', '--backend-url', $BackendUrl, '--token-file', $TokenFile,
+           '--account-id', $AccountId, '--interval', "$Interval",
            '--state-dir', $StateDir, '--connected-days', "$ConnectedDays")
+if ($Tier) { $args_ += @('--tier', $Tier) }
 if (Test-Path $ConfigFile) { $args_ += @('--config', $ConfigFile) }
 if ($RiskAck) { $args_ += '--risk-ack' }
-Write-Host ("[devlink] ④ 启动副驾服务 tier={0} account={1}（Ctrl+C 停止）" -f $Tier, $AccountId)
+$tierShown = if ($Tier) { $Tier } else { '(按配置文件，热生效)' }
+Write-Host ("[devlink] ④ 启动副驾服务 tier={0} account={1}（Ctrl+C 停止；关闭本窗口副驾即停止）" -f $tierShown, $AccountId)
 Write-Host ("[devlink]    工作台: {0}/workspace  （令牌见 {1}）" -f $BackendUrl, $TokenFile)
 python @args_

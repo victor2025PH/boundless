@@ -74,9 +74,47 @@ _FEWSHOT_BLOCK = (
 )
 
 
+def _build_colloquial_prompt_en(
+    emotion: str, lead: bool, style: str, disfluency: bool, lvl: str,
+) -> str:
+    """English spoken-rewrite prompt (Claire / US companion). No Chinese particles."""
+    tone = {
+        "playful": "teasing, a little spoiled, a soft laugh in the voice",
+        "happy": "light and smiling",
+        "excited": "brighter, almost laughing",
+        "warm": "close and easy",
+        "calm": "unhurried, a little breathy",
+        "empathetic": "soft, a quiet breath first",
+        "sad": "quieter, a small sigh",
+        "serious": "plain and direct",
+        "apologetic": "sincere and smaller",
+        "angry": "shorter, a bit sharp",
+    }.get(str(emotion or "").strip().lower(), "natural, like a real American woman texting a voice note")
+    parts = [
+        "You rewrite the user's sentence so it sounds like a spoken American-English voice note, not a script.",
+        "Hard rules:",
+        "1. Keep every fact: numbers, times, names, places, promises — same values.",
+        "2. Do not invent facts. Vocalizations are ok (mm, hah, a small laugh written as 'haha' once).",
+        "3. Stay in English. No Chinese. No customer-service tone.",
+        "4. Short spoken beats. Contractions are good (gonna, kinda, that's).",
+        "5. You may add at most one of: mm / hah / a breathy 'oh' — only if it fits.",
+        "6. Do NOT write [laughter] [breath] [sigh] tags. Those get read aloud as English words.",
+        f"Tone: {tone}.",
+    ]
+    if str(style or "").strip():
+        parts.append(f"Speaking style: {str(style).strip()}.")
+    if not lead:
+        parts.append("Do not add an opener. Start with the content.")
+    if disfluency and lvl != "light":
+        parts.append("At most one tiny self-correction, not near a number or name.")
+    parts.append("Output only the rewritten line. No quotes, no explanation.")
+    return "\n".join(parts)
+
+
 def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
                             style: str = "", disfluency: bool = False,
-                            intensity: str = "natural") -> str:
+                            intensity: str = "natural",
+                            language: str = "") -> str:
     """构建口语化系统提示（纯函数）。
 
     ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6，2026-07-24）：
@@ -87,6 +125,9 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
     lvl = str(intensity or "natural").strip().lower()
     if lvl not in _INTENSITY:
         lvl = "natural"
+    if str(language or "").strip().lower().startswith("en"):
+        return _build_colloquial_prompt_en(
+            emotion, lead, style, disfluency, lvl)
     tone = _EMOTION_TONE.get(str(emotion or "").strip().lower(), "自然放松")
     if lvl == "vivid":
         # 陪伴态口语重塑：像真人随口说，而不是念稿——红线不变，放开主观口吻/停顿。
@@ -163,13 +204,41 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
 _SCRIPT_PROMPT_VERSION = 5
 
 
+def _build_speech_script_prompt_en(
+    emotion: str, style: str, disfluency: bool,
+) -> str:
+    tone = {
+        "playful": "teasing, spoiled, a soft laugh",
+        "happy": "smiling",
+        "warm": "close and easy",
+        "calm": "breathy and slow",
+    }.get(str(emotion or "").strip().lower(), "natural spoken American English")
+    parts = [
+        "You write a one-line spoken script for an American woman sending a voice note.",
+        "Format: 2-8 beats separated by ‖短 / ‖中 / ‖长. No mark after the last beat.",
+        "Hard rules: keep numbers, names, places, promises. Same language (English). No new facts.",
+        "Laugh with the word 'haha' at most once. Do not write [laughter] [breath] [sigh] — engines read those tags as English words.",
+        "[breath] is allowed only at the start of a longer beat if she needs a real inhale.",
+        f"Tone: {tone}.",
+    ]
+    if str(style or "").strip():
+        parts.append(f"Speaking style: {str(style).strip()}.")
+    if disfluency:
+        parts.append("At most one tiny self-correction, not next to a number or name.")
+    parts.append("Output only the script line.")
+    return "\n".join(parts)
+
+
 def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
-                               disfluency: bool = False) -> str:
+                               disfluency: bool = False,
+                               language: str = "") -> str:
     """语音剧本系统提示（纯函数）：vivid 口语重塑 + 语义化停顿/呼吸/思考/口误标记。
 
     与 build_colloquial_prompt(vivid) 的关系＝超集：同一套事实红线，多出剧本标记
     协议。停顿标记只许出现在**意群边界**（格式上即段尾），这是实施65 的核心不变量。
     """
+    if str(language or "").strip().lower().startswith("en"):
+        return _build_speech_script_prompt_en(emotion, style, disfluency)
     tone = _EMOTION_TONE.get(str(emotion or "").strip().lower(), "自然放松")
     parts = [
         "你是「语音剧本」助手：把 AI 写的回复改成真人发微信语音时随口说的话，"
@@ -443,8 +512,13 @@ def sanitize_llm_output(
         return None
     if len(t) > len(core) * float(max_expand) + 8:
         return None
-    # 语言守卫：原文中文而输出串了别的语言 → 拒（防 garble）
-    if not _is_chinese_dominant(t):
+    # 语言守卫：原文中文而输出串了别的语言 → 拒（防 garble）；
+    # 英文原文必须仍是英文（Claire），不能被改成中文。
+    src_zh = _is_chinese_dominant(core)
+    out_zh = _is_chinese_dominant(t)
+    if src_zh and not out_zh:
+        return None
+    if (not src_zh) and out_zh:
         return None
     # 事实锚点守卫：数字/金额/型号丢了或被改 → 拒（红线，零误伤的那一半；
     # 语义漂移那一半在 llm_colloquialize 里用嵌入余弦兜，见该函数注释）
@@ -909,10 +983,11 @@ async def llm_colloquialize(
     temperature: float = 0.5,
     min_similarity: float = DEFAULT_MIN_SIMILARITY,
     script: bool = False,
+    language: str = "",
 ) -> Optional[str]:
     """本地 LLM 口语化。命中缓存直接返回；失败/超时/熔断/校验不过 → None（回落规则档）。
 
-    短句（<min_chars）/ 非中文 → None（与规则档同口径 no-op）。
+    短句（<min_chars）/ 非中文且非英文 → None（与规则档同口径 no-op）。
     ``disfluency``＝本条允许一处轻口误自纠（⑥，调用方按 crc 低频开启；进缓存键）。
     ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6）：vivid 允许主观
     口吻框架/停顿，输出会比原文长一些 → 自动放宽长度上限（红线仍由 sanitize 守）。
@@ -932,9 +1007,12 @@ async def llm_colloquialize(
     core = str(text or "").strip()
     if len(core) < max(1, int(min_chars)):
         return None
-    from src.ai.voice_colloquial import _is_chinese_dominant
-    if not _is_chinese_dominant(core):
+    from src.ai.voice_colloquial import _is_chinese_dominant, _is_english_dominant
+    src_en = _is_english_dominant(core)
+    if not _is_chinese_dominant(core) and not src_en:
         return None
+    if src_en:
+        language = language or "en"
     # 粤语语音稿不过 LLM 口语化（2026-08-30 粤语人设 verifier 抓缝）：粤文本身
     # 就是口语书写形，改写零增益；而改写 prompt 只约束「同一种语言」、消毒器
     # _is_chinese_dominant 分不出粤/普、语义地板拦不住同义「粤转普」——粤文会被
@@ -947,7 +1025,12 @@ async def llm_colloquialize(
     except Exception:
         pass
     _bump("attempts")
-    if is_interrogative_dominant(core):
+    if src_en:
+        # 英文全问句：中文疑问词检测失效，改用标点——全是问号、没有陈述就跳过。
+        if core.count("?") >= 1 and core.count(".") + core.count("!") == 0:
+            _bump("skipped_interrogative")
+            return None
+    elif is_interrogative_dominant(core):
         _bump("skipped_interrogative")
         return None      # 问句主导：跳过 LLM 档（见 is_interrogative_dominant 注释）
 
@@ -992,12 +1075,13 @@ async def llm_colloquialize(
         "local_first": ("local", "cloud"),
     }.get(prov, ("local",))
     if script:
-        system = build_speech_script_prompt(emotion, style,
-                                            disfluency=bool(disfluency))
+        system = build_speech_script_prompt(
+            emotion, style, disfluency=bool(disfluency), language=language)
     else:
-        system = build_colloquial_prompt(emotion, bool(lead), style,
-                                         disfluency=bool(disfluency),
-                                         intensity=intensity)
+        system = build_colloquial_prompt(
+            emotion, bool(lead), style,
+            disfluency=bool(disfluency), intensity=intensity,
+            language=language)
     raw = None
     for _p in order:
         if raw:

@@ -11,6 +11,7 @@ Supports:
 import json
 import logging
 import copy
+import re
 import threading
 import time
 from collections import deque
@@ -286,6 +287,40 @@ def _conv_unrestricted() -> bool:
         return bool(active_unrestricted())
     except Exception:
         return False
+
+
+def _cfg_truthy(v: Any, default: bool = True) -> bool:
+    """配置布尔归一：bool 原样；字符串 true/yes/on/1 → True、false/no/off/0 → False；None → default。"""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on", "y"):
+        return True
+    if s in ("0", "false", "no", "off", "n", ""):
+        return False
+    return default
+
+
+# 成人政策 open 时从 topics_to_avoid 里剔除的条目（2026-09-19）：命中即视为「成人类回避」。
+# 只删成人条目——政治 / 诈骗赌博 / 宗教等其它回避原样保留。
+_ADULT_TOPIC_RE = re.compile(
+    r"成人|色情|黄色|黄腔|性爱|性话题|性内容|性暗示|情色|露骨|裸照|约炮|开黄|涉黄|"
+    r"adult|sex(?:ual)?|porn|nsfw|nude|erotic|explicit",
+    re.IGNORECASE,
+)
+
+
+def _filter_adult_topics(items: Any) -> List[str]:
+    """``topics_to_avoid`` 去掉成人类条目（保序、其它条目逐字不动）。"""
+    out: List[str] = []
+    for x in (items or []):
+        s = str(x or "").strip()
+        if not s or _ADULT_TOPIC_RE.search(s):
+            continue
+        out.append(s)
+    return out
 
 
 def _join_text_items(v: Any) -> str:
@@ -762,6 +797,41 @@ class PersonaManager:
         cm = self._app_config_ref
         cfg = getattr(cm, "config", None) if cm is not None else None
         return resolve_reply_defaults(cfg)
+
+    def _live_config(self) -> Dict[str, Any]:
+        """当前生效的合并配置 dict：config_manager 活读 → 进程级运行时配置 → {}。绝不抛。"""
+        cm = self._app_config_ref
+        cfg = getattr(cm, "config", None) if cm is not None else None
+        if isinstance(cfg, dict):
+            return cfg
+        try:
+            from src.compliance.runtime import runtime_config
+            rc = runtime_config()
+            return rc if isinstance(rc, dict) else {}
+        except Exception:
+            return {}
+
+    def _adult_open(self, persona: Any) -> bool:
+        """成人政策是否 ``open``（人设 ``boundaries.adult_policy`` 或机器级
+        ``adult_grader.default_policy``，2026-09-19）。open 时：话题回避里的成人条目不进 prompt、
+        尺度红线文案去掉「性内容」。绝不抛。"""
+        try:
+            from src.inbox.adult_grader import adult_open
+            return bool(adult_open(persona, self._live_config()))
+        except Exception:
+            return False
+
+    def _stage_locked(self) -> bool:
+        """``companion.stage_lock``（默认 True）——脾气 / 口头脏话等「有棱角」行为是否看关系阶段
+        （只在 intimate / steady 放开）。173 陪伴机置 False：第一句就按人设全量说话，不等
+        漏斗升到 intimate。绝不抛。"""
+        try:
+            c = self._live_config().get("companion")
+            if isinstance(c, dict) and "stage_lock" in c:
+                return _cfg_truthy(c.get("stage_lock"), default=True)
+        except Exception:
+            pass
+        return True
 
     def count_speaking_overrides(self) -> Dict[str, int]:
         """人设「说话方式」显式覆写计数（回复设置页「N 个人设自定义」提示）。
@@ -1425,6 +1495,31 @@ class PersonaManager:
             pass
         return self._profile_personas.get(str(profile_id))
 
+    @staticmethod
+    def coerce_profile_tags(tags: Any) -> List[str]:
+        """YAML 未加引号的数字/布尔标签收成字符串，供 Studio 筛选与标签云使用。
+
+        ``profiles: tags: - 30`` 被 PyYAML 解析成 int；前端 ``t.toLowerCase()``
+        对非字符串抛 TypeError，整个人设池搜索静默失效。嵌套 list/dict 丢掉，
+        空白丢掉，大小写重复保留第一次出现的写法。
+        """
+        if not isinstance(tags, list):
+            return []
+        out: List[str] = []
+        seen: set = set()
+        for t in tags:
+            if t is None or isinstance(t, (dict, list, tuple, set)):
+                continue
+            s = str(t).strip()
+            if not s:
+                continue
+            key = s.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
+        return out
+
     def list_profile_ids(self) -> List[str]:
         """Return all registered profile ids."""
         return list(self._profile_personas.keys())
@@ -1469,7 +1564,7 @@ class PersonaManager:
                 "id": pid,
                 "name": p.get("name") or pid,
                 "role": p.get("role") or "",
-                "tags": list(p.get("tags") or []),
+                "tags": PersonaManager.coerce_profile_tags(p.get("tags")),
                 # L-2 #205 三态：显式「不发语音」→ 卡片无试听键；其余沿旧判据
                 "has_voice": (
                     str(vp.get("voice_mode") or "").strip().lower() != "off"
@@ -1832,12 +1927,16 @@ class PersonaManager:
           - personality 是字符串（rich/自由格式人设）→ 收敛为 {'style': <原文>}；
           - personality / speaking / identity / boundaries / emotion / context
             非 dict（None、list、str 等）→ 统一兜成 {} 或对应收敛。
+          - tags 里 YAML 未加引号的数字（``- 30`` → int）一律收成字符串；
+            工作室搜索对 tag 调 ``toLowerCase()``，非字符串会把整个人设池筛掉。
         """
         if not isinstance(persona, dict):
             return {}
         out = dict(persona)
         # 只就「已存在且类型错误」的键做收敛——绝不注入缺失键，
         # 以保「存入==取出」的数据保真（persist/diff/相等断言依赖此）。
+        if "tags" in out:
+            out["tags"] = PersonaManager.coerce_profile_tags(out.get("tags"))
         if "personality" in out:
             pers = out["personality"]
             if isinstance(pers, str):
@@ -1992,6 +2091,10 @@ class PersonaManager:
         # A2/A3（2026-07-22）compact 安全网：边界话题完整策略 + 通话能力边界
         # （full 模式有对应完整版；compact 是生产主用格式，缺了就是真缺）。
         _avoid_c = (persona.get("boundaries") or {}).get("topics_to_avoid") or []
+        # 成人政策 open（2026-09-19）：「成人内容 / 色情」这类回避条目与政策直接冲突——写进去
+        # 模型就按「立即换话题」执行，不设限等于没开。只剔成人条目，其它回避照旧。
+        if _avoid_c and self._adult_open(persona):
+            _avoid_c = _filter_adult_topics(_avoid_c)
         if _avoid_c:
             lines.append(
                 f"避开话题：{'、'.join(_avoid_c[:8])}——轻巧带过后立即换话题，"
@@ -2039,11 +2142,30 @@ class PersonaManager:
         # Q-15 #271：成人话题政策显式配置才注入（缺省按业务域在 adult_grader 判，不占 prompt）
         try:
             from src.inbox.adult_grader import prompt_block as _adult_block
-            _ab = _adult_block(persona, compact=True)
+            _ab = _adult_block(persona, compact=True, cfg=self._live_config())
             if _ab:
                 lines.append(_ab)
         except Exception:
             pass
+        # 尺度锁关（companion.stage_lock=false，2026-09-19）：compact 也带一行脾气 / 口头脏话——
+        # 生产主用 compact 之前整段缺失，长会话被裁剪后人设立刻回到「客气客服」。full 仍是完整段，
+        # 这里只给一句紧凑版；stage_lock 开着时维持旧行为（compact 不带，与之前一致）。
+        if not self._stage_locked():
+            _pc = persona.get("personality") or {}
+            _temper_c = str(_pc.get("temperament") or "").strip() if isinstance(_pc, dict) else ""
+            if _temper_c:
+                lines.append(
+                    f"【真实性情】{_temper_c[:120]}——可以有小情绪：吃醋、俏皮反击、拌嘴、撒娇式抱怨；"
+                    "被无端辱骂就按性格顶回去，绝不用客服式安抚。"
+                )
+            if s.get("banter_profanity"):
+                _rl_c = ("不人身攻击、不辱骂贬低对方、不涉歧视/仇恨"
+                         if self._adult_open(persona) else
+                         "不人身攻击、不辱骂贬低对方、不涉歧视/仇恨/性内容")
+                lines.append(
+                    f"【尺度·亲密闲聊】对方情绪轻松时可偶尔带轻度口头脏话增加真人感；红线：{_rl_c}；"
+                    "对方低落/认真/生气时立刻收起。"
+                )
         lines.append(
             "回复硬约束：先正面回答用户问的问题再扩展；不要用 () [] 描写动作"
             "或列举要点（如 (微笑) (1)(2)），用自然句子。"
@@ -2338,7 +2460,13 @@ class PersonaManager:
 
         # 关系是否已足够熟（intimate/steady）——脾气/口头脏话等「有棱角」行为的闸门。
         # 生人/暖场阶段先收着，避免一上来就没大没小。
+        # ``companion.stage_lock: false``（2026-09-19，173 陪伴机）：闸门常开——陪伴向人设第一句
+        # 就按全量性情说话，不等漏斗判到 intimate（漏斗靠消息量 / 情绪词推进，成人向客户往往
+        # 前几句就直奔主题，等不到那一档）。
         _intimate_stage = (funnel_stage or "").strip().lower() in ("intimate", "steady")
+        if not self._stage_locked():
+            _intimate_stage = True
+        _adult_open_p = self._adult_open(persona)
 
         # Personality
         p = persona.get("personality", {})
@@ -2451,12 +2579,16 @@ class PersonaManager:
         # 硬红线永不松动：不人身攻击、不辱骂贬低对方本人、不涉歧视/仇恨/性；对方一旦情绪
         # 低落/认真求助/生气/谈正事，立即收起脏话换回温柔认真。生人阶段完全不放开。
         if s.get("banter_profanity") and _intimate_stage:
+            # 成人政策 open 时红线去掉「性内容」——否则这一句会把上面「成人话题·不设限」段整个抵消
+            # （模型遇到冲突指令取保守一侧）。其余红线（人身攻击 / 辱骂 / 歧视仇恨 / 痛处）不动。
+            _redline = ("不人身攻击、不辱骂或贬低对方本人、不涉及歧视/仇恨、不针对对方痛处"
+                        if _adult_open_p else
+                        "不人身攻击、不辱骂或贬低对方本人、不涉及歧视/仇恨/性内容、不针对对方痛处")
             lines.append(
                 "【尺度·亲密闲聊】关系已很亲密且对方情绪轻松时，允许偶尔用轻度口头脏话/粗话"
                 "增加真人感（如「靠」「我勒个去」「笨蛋」「神经病啦」这类朋友/情侣间的口癖）。"
-                "但硬红线绝不触碰：不人身攻击、不辱骂或贬低对方本人、不涉及歧视/仇恨/性内容、"
-                "不针对对方痛处；一旦对方情绪低落、认真求助、生气或在谈正事，立刻收起脏话、"
-                "换回温柔认真。脏话是玩笑调味，绝不是攻击。"
+                f"但硬红线绝不触碰：{_redline}；一旦对方情绪低落、认真求助、生气或在谈正事，"
+                "立刻收起脏话、换回温柔认真。脏话是玩笑调味，绝不是攻击。"
             )
 
         # Identity（WP-4 诚实身份开时 deny_ai/claim_human 按 False 折算，档案不动）
@@ -2485,6 +2617,9 @@ class PersonaManager:
         # Boundaries
         b = persona.get("boundaries", {})
         avoid = b.get("topics_to_avoid", [])
+        if avoid and _adult_open_p:
+            # 成人政策 open（2026-09-19）：剔除成人类回避条目（与 compact 同源 _filter_adult_topics）
+            avoid = _filter_adult_topics(avoid)
         if avoid:
             # A3（2026-07-22 真机复盘）：只写"避免讨论"不够——实测 AI 回避了正面
             # 接话，却在句尾反问「是不是有什么好片单想分享给我呀？😏」把话题邀请
@@ -2553,7 +2688,7 @@ class PersonaManager:
         # Q-15 #271：成人话题政策（与 compact 同源 adult_grader.prompt_block；缺省不注入）
         try:
             from src.inbox.adult_grader import prompt_block as _adult_block
-            _ab = _adult_block(persona, compact=False)
+            _ab = _adult_block(persona, compact=False, cfg=self._live_config())
             if _ab:
                 lines.append(_ab)
         except Exception:

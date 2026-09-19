@@ -293,9 +293,15 @@ def diagnose_conversation(
         from src.integrations.account_registry import peek_account as _peek
         peer_row = _peek(platform, chat_key) if chat_key else None
         if peer_row:
-            _finding(findings, "warn", "managed_peer",
-                     peer_account_id=chat_key,
-                     peer_status=str(peer_row.get("status") or ""))
+            # 运营在 peer_bot_guard.never_auto_reply.exempt_peers 里显式豁免的对端（排演舞台扮客户的
+            # 本租户账号）：guard 已放行、不再当同事拦，这里也不再举「互聊环」黄牌——否则教学片里
+            # 「AI 状态」面板永远挂一条留意项，和实际放行行为对不上。判定源同 peer_bot_guard。
+            from src.inbox.peer_bot_guard import never_auto_reply_ids as _na_ids
+            _exempt = (_na_ids(cfg) or {}).get("exempt") or frozenset()
+            if str(chat_key).lstrip("@").lower() not in _exempt:
+                _finding(findings, "warn", "managed_peer",
+                         peer_account_id=chat_key,
+                         peer_status=str(peer_row.get("status") or ""))
     except Exception:
         pass
 

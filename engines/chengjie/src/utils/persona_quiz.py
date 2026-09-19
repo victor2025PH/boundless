@@ -1184,6 +1184,14 @@ def score_answers(quiz: List[Dict[str, Any]], answers: List[str],
         q = str(item.get("q") or "")
         ok = any(_keyword_hit(ans, kw) for kw in expect)
         row: Dict[str, Any] = {"q": q, "answer": ans, "expect": expect, "pass": ok}
+        # 出题时的 field/src 必须进报告：补丁提案要拿失败题对齐档案点路径。
+        # 旧卷没有这两键；缺则不补空串，避免把「没登记」和「空字段」混在一起。
+        field = str(item.get("field") or "").strip()
+        src = str(item.get("src") or "").strip()
+        if field:
+            row["field"] = field
+        if src:
+            row["src"] = src
         if (not ok and judge_fn is not None and ans.strip() and expect
                 and _judge_pass(judge_fn, q, expect, ans)):
             ok = True

@@ -64,6 +64,7 @@ ZH = {
     "mb_feat_monetization": "变现营收",
     "mb_feat_white_label": "白标品牌",
     "mb_feat_unrestricted_model": "无限制模型（本地直答）",
+    "mb_feat_multi_vendor_model": "多厂商模型按会话切换",
     "mb_locked_row": "未包含",
     "mb_unlocked_row": "已解锁",
     # 升级引导
@@ -284,6 +285,7 @@ EN = {
     "mb_feat_monetization": "Monetization",
     "mb_feat_white_label": "White label",
     "mb_feat_unrestricted_model": "Unrestricted model (local direct)",
+    "mb_feat_multi_vendor_model": "Per-chat vendor model switching",
     "mb_locked_row": "Not included",
     "mb_unlocked_row": "Unlocked",
     "mb_upgrade_title": "Upgrade plan",

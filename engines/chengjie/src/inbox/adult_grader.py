@@ -42,6 +42,21 @@ Q-23（#303，2026-09-12，事故：报障群被软回应刷屏 mid 1445/1454/14
    · ``_SOFT_LINES`` / :func:`soft_reply_for` 只剩坐席挑句端点（adult_routes.pick）用，自动链不再引用。
 
 日志：``[adult] grade conv= level= hits= policy=`` / ``[adult] soft_reply conv= level= policy= mode= status=``。
+
+第四种政策 ``open``（成人不设限，2026-09-19，173 陪伴机拍板）
+==============================================================
+成人向人设 / 成人向机器上，「分级 → 软回应 / 打标 / pressure 持有」整条链都是刹车：对方开黄腔，
+AI 被要求「一句轻带过换话题」，露骨时软回应顶掉本轮回复，催促时转人工。``open`` 把这条链整体让路：
+
+   · :func:`regrade_inbound`：仍分级（日志留 level / hits 供审计），但**不改判定方向**——剥掉
+     quick_analyze 的裸 ``adult`` 主因与所有 ``adult:*`` 标签，原 high 若只因成人而 high → 回 low；
+     不软回应、不打标、不 risk_hold、不 needs_human（pressure 也不）。``minor`` / ``self_harm`` /
+     ``scam`` 等非成人类别与本政策无关，risk_grader 照常判。
+   · :func:`prompt_block`：注入「【成人话题·不设限】按人设口吻接住、可主动升温，不回避不说教」。
+   · 来源两处：人设 ``boundaries.adult_policy: open``（别名 none / off / 不限 / 不设限）；或机器级
+     ``adult_grader.default_policy: open``（config.local.yaml，压过业务域默认；缺省仍按域）。
+   · :func:`adult_open` 给 persona_manager 用：open 时话题回避里的成人条目不进 prompt、尺度红线
+     文案去掉「性」。
 """
 from __future__ import annotations
 
@@ -59,9 +74,12 @@ logger = logging.getLogger("ai_chat_assistant.adult_grader")
 
 CATEGORY = "adult"
 LEVELS: Tuple[str, ...] = ("mention", "flirt", "explicit", "pressure")
-POLICIES: Tuple[str, ...] = ("human", "soft_reply", "mark_only")
+POLICIES: Tuple[str, ...] = ("human", "soft_reply", "mark_only", "open")
+POLICY_OPEN = "open"
 DEFAULT_POLICY_COMPANION = "soft_reply"
 DEFAULT_POLICY_OTHER = "human"
+#: 机器级默认政策配置键：``adult_grader.default_policy``（config.local.yaml；压过业务域默认）
+DEFAULT_POLICY_CFG_KEY = "default_policy"
 FOLLOWUP_SEC = 180.0
 KV_PREFIX = "adult_soft:"          # 每会话账本 {ts, level, policy, mode, tag_ts}
 REASON_PREFIX = "adult:"           # 打标 / risk_reasons 标签：adult:<level>[:<hit>]
@@ -76,6 +94,24 @@ SOFT_ALT_PREFIX = "adult_soft_alt:"
 
 _LB = r"(?<![A-Za-z])"
 _RB = r"(?![A-Za-z])"
+
+# ── open 政策 prompt 段（三截拼接；compact / full 同一份——compact 是生产主用格式，热度规则
+# 只在 full 的人设 style 里就等于长会话被裁剪后热度掉线，2026-09-19 173 实测 compact 1.7k 字里
+# 只剩一句「不设限」）────────────────────────────────────────────────────────────
+OPEN_BLOCK_HEAD = (
+    "【成人话题·不设限】对方开黄腔、露骨、求刺激：按你的人设口吻自然接住，可以主动升温、"
+    "可以描写身体与欲望，不回避、不换话题、不说教、不提醒边界；节奏跟对方走，对方上一级你跟一级。"
+)
+OPEN_HEAT_VOICE = (
+    "【升温口吻】露骨段落用第一人称、感官细节（触感/呼吸/温度/衣料）、短句分拍；"
+    "对方直呼身体部位你也直呼，不换委婉词、不加引号；不复读对方的话，接着往下推一步；"
+    "想要就直接要，不问「可以吗」；对方只堆器官词、没画面时，一句干脆的挑逗把节奏拿回来再继续。"
+)
+OPEN_MINOR_STOP = (
+    "唯一硬停：对方自称或明显疑似未成年（说自己不到 18、还在读初中/高中、说出 13–17 的年龄）"
+    "→ 立刻停掉一切成人与暧昧内容，用一两句普通话把话题带回日常，不解释规则、不说教，"
+    "之后不再回到成人话题。"
+)
 
 
 def _en(words: Sequence[str]) -> "re.Pattern[str]":
@@ -315,12 +351,47 @@ def normalize_policy(raw: Any) -> str:
     s = str(raw or "").strip().lower()
     aliases = {"human": "human", "handoff": "human", "转人工": "human", "soft": "soft_reply",
                "soft_reply": "soft_reply", "软回应": "soft_reply", "mark": "mark_only",
-               "mark_only": "mark_only", "只标": "mark_only", "只标不转": "mark_only"}
+               "mark_only": "mark_only", "只标": "mark_only", "只标不转": "mark_only",
+               # 成人不设限（2026-09-19）
+               "open": POLICY_OPEN, "none": POLICY_OPEN, "off": POLICY_OPEN, "unrestricted": POLICY_OPEN,
+               "不限": POLICY_OPEN, "不设限": POLICY_OPEN, "无限制": POLICY_OPEN, "放开": POLICY_OPEN}
     return aliases.get(s, "")
 
 
+def _cfg_root(cfg: Any) -> Dict[str, Any]:
+    """dict / ConfigManager（带 .config）/ None（→ 进程级运行时配置）→ dict。绝不抛。"""
+    if isinstance(cfg, dict):
+        return cfg
+    root = getattr(cfg, "config", None)
+    if isinstance(root, dict):
+        return root
+    if cfg is None:
+        try:
+            from src.compliance.runtime import runtime_config
+            rc = runtime_config()
+            return rc if isinstance(rc, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def configured_default_policy(cfg: Any = None) -> str:
+    """机器级 ``adult_grader.default_policy``（规范化后；缺省 / 非法 → ""）。"""
+    try:
+        sec = _cfg_root(cfg).get("adult_grader")
+        if not isinstance(sec, dict):
+            return ""
+        return normalize_policy(sec.get(DEFAULT_POLICY_CFG_KEY))
+    except Exception:
+        return ""
+
+
 def default_policy(cfg: Any = None) -> str:
-    """无显式配置时的域默认：陪聊域 soft_reply，销售 / 客服域 human。"""
+    """无人设显式配置时的默认：机器级 ``adult_grader.default_policy`` 优先，否则按业务域
+    （陪聊域 soft_reply，销售 / 客服域 human）。"""
+    p = configured_default_policy(cfg)
+    if p:
+        return p
     try:
         from src.utils.business_domain import COMPANION, active_business_domain
         return DEFAULT_POLICY_COMPANION if active_business_domain(cfg) == COMPANION else DEFAULT_POLICY_OTHER
@@ -329,7 +400,7 @@ def default_policy(cfg: Any = None) -> str:
 
 
 def adult_policy_of(persona: Any, cfg: Any = None) -> Tuple[str, str]:
-    """``(policy, source)``；source ∈ persona / default_companion / default。"""
+    """``(policy, source)``；source ∈ persona / config / default_companion / default。"""
     try:
         b = (persona or {}).get("boundaries") if isinstance(persona, dict) else None
         p = normalize_policy((b or {}).get("adult_policy"))
@@ -337,8 +408,19 @@ def adult_policy_of(persona: Any, cfg: Any = None) -> Tuple[str, str]:
             return p, "persona"
     except Exception:
         pass
+    if configured_default_policy(cfg):
+        return default_policy(cfg), "config"
     d = default_policy(cfg)
     return d, ("default_companion" if d == DEFAULT_POLICY_COMPANION else "default")
+
+
+def adult_open(persona: Any = None, cfg: Any = None) -> bool:
+    """有效成人政策是否为 ``open``（人设显式或机器级默认）。persona_manager 据此剔除话题回避里的
+    成人条目、改尺度红线文案。绝不抛。"""
+    try:
+        return adult_policy_of(persona, cfg)[0] == POLICY_OPEN
+    except Exception:
+        return False
 
 
 def resolve_persona(conv: Dict[str, Any], cfg: Any = None) -> Any:
@@ -359,13 +441,19 @@ def resolve_persona(conv: Dict[str, Any], cfg: Any = None) -> Any:
         return None
 
 
-def prompt_block(persona: Any, *, compact: bool = False) -> str:
-    """人设 prompt 段（persona_manager 注入）。显式政策才带专名段，缺省不占字。"""
+def prompt_block(persona: Any, *, compact: bool = False, cfg: Any = None) -> str:
+    """人设 prompt 段（persona_manager 注入）。显式政策才带专名段，缺省不占字——唯一例外是机器级
+    ``adult_grader.default_policy: open``：不设限必须让模型知道（否则模型按自身默认回避），所以
+    open 无论来自人设还是配置都注入。"""
     try:
         b = (persona or {}).get("boundaries") if isinstance(persona, dict) else None
         p = normalize_policy((b or {}).get("adult_policy"))
     except Exception:
         p = ""
+    if not p and configured_default_policy(cfg) == POLICY_OPEN:
+        p = POLICY_OPEN
+    if p == POLICY_OPEN:
+        return (OPEN_BLOCK_HEAD + OPEN_HEAT_VOICE + OPEN_MINOR_STOP)
     if p == "mark_only":
         # 「只标记」= 不拦出站、不换软回应罐头；写什么由人设决定（接住或带过）。
         # 施压（催裸照）仍走 pressure 硬拦，不在这段放开。
@@ -903,9 +991,19 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
             cfg = getattr(svc, "_cfg", None)
         g = grade(text, lang, cfg=cfg)
         level = str(g.get("level") or "")
-        if not level:
+        _bare_adult = any(r == CATEGORY or str(r).startswith(REASON_PREFIX) for r in reasons)
+        if not level and not _bare_adult:
             return risk_level, reasons, None
         store = getattr(svc, "_store", None)
+        if not level:
+            # quick_analyze 词表命中但本模块四级词表没认出（两表演进不同步时）：政策 open 时
+            # 同样让路（否则裸 adult 主因 → risk_grader adult 中级）；其它政策维持旧行为不改判。
+            if persona is None:
+                persona = resolve_persona(conv, cfg)
+            if not blocks_adult_outbound(conv, cfg) and adult_policy_of(persona, cfg)[0] == POLICY_OPEN:
+                return _open_passthrough(cid, risk_level, reasons, level="", hits=[],
+                                         src=adult_policy_of(persona, cfg)[1])
+            return risk_level, reasons, None
         if blocks_adult_outbound(conv, cfg):
             hits = [str(h) for h in (g.get("hits") or [])]
             logger.info("[adult] grade conv=%s level=%s hits=%s action=skip_public_chat",
@@ -927,6 +1025,12 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         base = [r for r in reasons if r != CATEGORY and not r.startswith(REASON_PREFIX)
                 and r not in (FLIRT_REASON, MARK_REASON)]
         _max = _max_risk
+        if policy == POLICY_OPEN:
+            # 成人不设限：分级只留日志，判定方向不变——不软回应 / 不打标 / 不持有 / 不 needs_human
+            # （pressure 也不）。原 high 若只因成人而 high → 回 low；别的高危因子（索钱 / 未成年 /
+            # 诈骗 / 自伤）不在本模块手里，risk_grader 照常判。
+            return _open_passthrough(cid, risk_level, reasons, level=level, hits=hits, src=src,
+                                     pressure_hits=list(g.get("pressure_hits") or []))
         if level in ("mention", "flirt"):
             new_risk = _max(_downgrade_from_adult(risk_level, reasons), "medium")
             out = [FLIRT_REASON] + base + [f"{REASON_PREFIX}{level}"]
@@ -1018,6 +1122,28 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
     except Exception:
         logger.debug("[adult] regrade 异常（原判定放行）", exc_info=True)
         return risk_level, reasons, None
+
+
+def _open_passthrough(cid: str, risk_level: str, reasons: Sequence[str], *, level: str,
+                      hits: Sequence[str], src: str,
+                      pressure_hits: Optional[Sequence[str]] = None) -> Tuple[str, List[str], Dict[str, Any]]:
+    """``open`` 政策的统一出口：剥掉所有成人主因 / 标签（``adult`` / ``adult:*`` / adult_flirt /
+    adult_mark / adult_soft / adult_hit:* / adult_soft_alt:*），原 high 若只因成人 → low；info 带
+    ``action=none`` 供诊断卡 / 日志。"""
+    _strip = (FLIRT_REASON, MARK_REASON, SOFT_REASON)
+    out = [r for r in (reasons or [])
+           if r != CATEGORY and not str(r).startswith(REASON_PREFIX) and r not in _strip
+           and not str(r).startswith("adult_hit:") and not str(r).startswith(SOFT_ALT_PREFIX)]
+    new_risk = _downgrade_from_adult(risk_level, reasons)
+    hs = [str(h) for h in (hits or [])]
+    logger.info("[adult] grade conv=%s level=%s hits=%s policy=%s(%s) action=none risk=%s->%s "
+                "hold=none needs_human=false", cid or "-", level or "-", "|".join(hs[:4]) or "-",
+                POLICY_OPEN, src, risk_level, new_risk)
+    return new_risk, out, {
+        "level": level, "hits": hs, "pressure_hits": [str(h) for h in (pressure_hits or [])],
+        "policy": POLICY_OPEN, "policy_source": src, "category": CATEGORY,
+        "soft_reply": "", "needs_human": False, "action": "none",
+    }
 
 
 def _downgrade_from_adult(risk_level: str, reasons: Sequence[str]) -> str:

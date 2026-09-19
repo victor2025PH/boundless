@@ -220,7 +220,13 @@ def never_auto_reply_ids(config: Optional[Dict[str, Any]]) -> Dict[str, "frozens
     node = (((config or {}).get("inbox") or {}).get("peer_bot_guard") or {}).get("never_auto_reply")
     accounts |= _never_auto_extra(node, "accounts")
     groups |= _never_auto_extra(node, "groups")
-    out = {"accounts": frozenset(a.lower() for a in accounts), "groups": frozenset(groups)}
+    # exempt_peers（2026-09-19）：显式豁免的**对端**——排演舞台用本租户账号扮客户（Katie 8244899900
+    # 给 智聊支持 发询盘）时，「本租户账号=同事」的零配置推导把它拦成 colleague，全自动教学片永远录不到
+    # 真发。只豁免「作为对端」这一侧：豁免账号自己那条镜像会话里对端仍是同事 → 仍拦，两侧不会互相自动回
+    # 成死循环。默认空 = 行为不变；不豁免 groups（报障群 / 运维群闸不放）。
+    exempt = _never_auto_extra(node, "exempt_peers")
+    out = {"accounts": frozenset(a.lower() for a in accounts), "groups": frozenset(groups),
+           "exempt": frozenset(exempt)}
     _NEVER_AUTO_CACHE.update({"ts": now, "key": _key, "ids": out})
     return out
 
@@ -235,7 +241,8 @@ def never_auto_reply_reason(config: Optional[Dict[str, Any]], *, platform: str =
     / ``ops_group:<id>``（报障群 / 运维群 / 通知目标群）。
 
     ``chat_key`` 与 ``sender_id`` 任一命中即拦；私聊里对端 chat_key 就是发送方。``account_id``
-    本身（自己）不算同事——自己给自己发不经这里。
+    本身（自己）不算同事——自己给自己发不经这里。``never_auto_reply.exempt_peers`` 里的对端
+    不算同事（排演舞台，见 :func:`never_auto_reply_ids`）；群名单不受豁免影响。
     """
     ids = never_auto_reply_ids(config)
     ck = str(chat_key or "").strip()
@@ -243,9 +250,10 @@ def never_auto_reply_reason(config: Optional[Dict[str, Any]], *, platform: str =
     me = str(account_id or "").strip()
     if ck and ck in ids["groups"]:
         return f"ops_group:{ck}"
+    exempt = ids.get("exempt") or frozenset()
     for cand in (sid, ck):
         c = cand.lstrip("@").lower()
-        if c and c != me.lower() and c in ids["accounts"]:
+        if c and c != me.lower() and c in ids["accounts"] and c not in exempt:
             return f"colleague:{cand}"
     return ""
 

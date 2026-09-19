@@ -154,3 +154,33 @@ def test_tags_persist_through_history_and_revert():
     restored = pm.get_persona_by_id("p")
     assert restored["tags"] == ["old"]
     assert restored["name"] == "V1"
+
+
+# ── YAML 未加引号的数字标签（Claire 包 tags: - 30 → int）────────────────
+
+def test_normalize_coerces_numeric_and_bool_tags():
+    out = PersonaManager.normalize_profile_shape({
+        "name": "Claire",
+        "tags": ["female", 30, "30", True, "", None, ["nested"], {"k": 1}],
+    })
+    assert out["tags"] == ["female", "30", "True"]
+    assert all(isinstance(t, str) for t in out["tags"])
+
+
+def test_upsert_coerces_numeric_tags_for_search():
+    pm = _pm()
+    pm.upsert_profile("claire", {"name": "Claire", "tags": ["female", 30, "american"]})
+    stored = pm.get_persona_by_id("claire")
+    assert stored["tags"] == ["female", "30", "american"]
+    assert pm.list_profiles_summary()[0]["tags"] == ["female", "30", "american"]
+    assert len(pm.get_profiles_by_tag("30")) == 1
+
+
+def test_summary_coerces_numeric_tags_even_if_memory_dirty():
+    """热加载/旧进程内存里仍可能是 int；概览接口不能把非字符串透给前端。"""
+    pm = _pm()
+    pm.upsert_profile("claire", {"name": "Claire", "tags": ["female"]})
+    pm._profile_personas["claire"]["tags"] = ["female", 30, "american"]
+    tags = pm.list_profiles_summary()[0]["tags"]
+    assert tags == ["female", "30", "american"]
+    assert all(isinstance(t, str) for t in tags)

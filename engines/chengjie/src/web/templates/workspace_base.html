@@ -1310,7 +1310,10 @@
   /* ── 开发者模式（老板令 2026-08-22）：devtools 对所有人隐藏（原生菜单与页内
      视图菜单均无此项）；帮助菜单底部版本行**连点 12 次**解锁（localStorage
      aitr.devmode），解锁后视图菜单注入「开发者工具 / 关闭开发者模式」，
-     Ctrl+Shift+I 同步生效。词条全部来自 spec.extras（SHELL_STR 单源，零兜底文案）。 */
+     Ctrl+Shift+I 同步生效。词条全部来自 spec.extras（SHELL_STR 单源，零兜底文案）。
+     2026-09-19 加严：壳 spec.devtools_allowed===false（用户端/打包态，Chromium 层已封
+     DevTools）→ 整套解锁不接线：版本行只是版本行，不计数不注入不劫持快捷键。
+     旧壳不带该字段 → 视为允许（行为不变）。 */
   var DEVMODE_KEY='aitr.devmode';
   function _devOn(){ try{ return localStorage.getItem(DEVMODE_KEY)==='1'; }catch(_){ return false; } }
   function _tbToast(msg){
@@ -1340,12 +1343,21 @@
   }
   function _wireDevmode(spec){
     var ex=(spec&&spec.extras)||{};
+    var allowDt=!(spec&&spec.devtools_allowed===false);
     var hp=panels.help;
+    var ver=null;
     if(hp&&spec.version){
       var sep=document.createElement('div'); sep.className='wam-sep'; hp.appendChild(sep);
-      var ver=document.createElement('div'); ver.className='wam-ver';
+      ver=document.createElement('div'); ver.className='wam-ver';
       ver.textContent=(ex.version_label||'Version')+' v'+String(spec.version);
       hp.appendChild(ver);
+    }
+    if(!allowDt){
+      /* 用户端：残留的旧解锁态一并清掉，别让「关闭开发者模式」孤零零挂在视图菜单 */
+      try{ localStorage.removeItem(DEVMODE_KEY); }catch(_){ }
+      return;
+    }
+    if(ver){
       var n=0,timer=null;
       ver.addEventListener('click',function(ev){
         ev.stopPropagation();                       /* 连点期间菜单不许被外点逻辑关掉 */

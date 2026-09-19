@@ -12,8 +12,8 @@ param(
     [switch]$Install,
     [switch]$Uninstall,
     [switch]$Status,
-    [ValidateSet('copilot', 'semi', 'auto_reply')]
-    [string]$Tier = 'copilot',
+    [ValidateSet('', 'copilot', 'semi', 'auto_reply')]
+    [string]$Tier = '',            # 空 = 以 ConfigFile 的 platform_login.wechat_pc 为准（引导页改档热生效）
     [switch]$RiskAck,
     [string]$BackendUrl = 'http://127.0.0.1:18898',
     [string]$TokenFile  = 'D:\wxpc_dev\TOKEN.txt',
@@ -54,9 +54,11 @@ if ($Tier -eq 'auto_reply' -and -not $RiskAck) {
     exit 1
 }
 $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$devlink`"",
-             '-Tier', $Tier, '-BackendUrl', $BackendUrl, '-TokenFile', "`"$TokenFile`"", '-AccountId', $AccountId,
+             '-BackendUrl', $BackendUrl, '-TokenFile', "`"$TokenFile`"", '-AccountId', $AccountId,
              '-ConfigFile', "`"$ConfigFile`"", '-StateDir', "`"$StateDir`"")
+if ($Tier) { $argList += @('-Tier', $Tier) }
 if ($RiskAck) { $argList += '-RiskAck' }
+$tierShown = if ($Tier) { $Tier } else { 'config' }
 $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($argList -join ' ') -WorkingDirectory $engine
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $trigger.Delay = 'PT{0}S' -f [Math]::Max(0, $DelaySec)
@@ -67,5 +69,5 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Description "智聊 · 个人微信 PC 副驾（tier=$Tier）登录后自启；进程退出 2 分钟内自动拉起" | Out-Null
-Write-Host ("[autostart] 已注册 {0}：登录后 {1}s 启动 tier={2}，退出自动拉起。立即试跑：Start-ScheduledTask -TaskName '{0}'" -f $TaskName, $DelaySec, $Tier)
+    -Description "智聊 · 个人微信 PC 副驾（tier=$tierShown）登录后自启；进程退出 2 分钟内自动拉起" | Out-Null
+Write-Host ("[autostart] 已注册 {0}：登录后 {1}s 启动 tier={2}，退出自动拉起。立即试跑：Start-ScheduledTask -TaskName '{0}'" -f $TaskName, $DelaySec, $tierShown)

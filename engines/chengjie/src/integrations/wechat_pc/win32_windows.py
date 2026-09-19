@@ -25,6 +25,9 @@ class TopWindow:
     title: str
     visible: bool
     process: str = ""
+    #: 窗口外框尺寸（最小化态为 0×0——那时 GetWindowRect 给的是 -32000 处的占位框，不能拿来分类）
+    width: int = 0
+    height: int = 0
 
 
 def _proc_name(pid: int) -> str:
@@ -62,7 +65,12 @@ def enum_top_windows(process_names: Optional[tuple] = None, *, visible_only: boo
             user32.GetClassNameW(hwnd, buf, 256)
             tbuf = ctypes.create_unicode_buffer(512)
             user32.GetWindowTextW(hwnd, tbuf, 512)
-            out.append(TopWindow(int(hwnd), p, buf.value, tbuf.value, visible, pid_cache.get(p, "")))
+            w = h = 0
+            if not user32.IsIconic(hwnd):
+                rc = wintypes.RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rc)):
+                    w, h = max(0, rc.right - rc.left), max(0, rc.bottom - rc.top)
+            out.append(TopWindow(int(hwnd), p, buf.value, tbuf.value, visible, pid_cache.get(p, ""), w, h))
         except Exception:
             pass
         return True

@@ -51,6 +51,10 @@ _SSE_EVENT_TYPES = frozenset({
     "agent_presence",
     "conversation_claim", "conversation_assigned", "follow_up",
     "draft_created",
+    # 2026-09-19：停泊稿（enriching）人设正文落成 pending 的那一刻——draft_created 发布时
+    # 状态还是 enriching，前端拉 status=pending 为空把草稿条收起，之后再无事件；
+    # 开着该会话的坐席要切走再切回才看到稿。前端按 draft_created 同路径刷新草稿条。
+    "draft_ready",
     "draft_sla_breach",
     "draft_reassigned",
     "typing",

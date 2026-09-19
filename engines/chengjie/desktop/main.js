@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, session, clipboard, Menu, Notification, shell, dialog, nativeImage, powerMonitor } = require("electron");
+const { app, BrowserWindow, ipcMain, session, clipboard, Menu, Notification, shell, dialog, nativeImage, powerMonitor, Tray } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn, exec } = require("child_process");
@@ -14,6 +14,7 @@ const winFit = require("./win-fit.js");
 const hotpatchApply = require("./hotpatch-apply.js");
 const hotpatchStage = require("./hotpatch-stage.js");
 const shellLangSync = require("./shell-lang-sync.js");
+const wechatPcTray = require("./wechat-pc-tray.js");
 
 // 本机已落地的热补丁（resources/hotpatch.json，由 apply_chatx_hotpatch_node.ps1 写）。
 // 进程内只读一次：该文件只在「本进程已退出、helper 正在替换文件」时变，读到的永远是
@@ -68,6 +69,16 @@ if (process.argv.includes("--first-run")) process.env.AITR_FORCE_FIRSTRUN = "1";
 // （托管版/onboarding 72h 窗/频控/feed…），内部老机器永远不合格，每次发版都在问
 // 「为什么没弹」。与 --first-run 同款走 env 让 preload 同步读到。
 if (process.argv.includes("--poster-preview")) process.env.AITR_POSTER_PREVIEW = "1";
+
+// 开发者工具准入（老板令 2026-09-19，承接 2026-08-22「对所有人隐藏」）：
+// 用户/坐席端＝打包态，DevTools **一律不可开**——不再只靠菜单隐藏这种 UI 层遮挡，
+// 而是给每个 BrowserWindow / webview 下 webPreferences.devTools=false，在 Chromium 层
+// 封死：openDevTools / toggleDevTools / 任何快捷键全部哑掉，页内「版本号连点 12 次」
+// 解锁态也拿不到 DevTools。源码开发态（!isPackaged）才允许；且**不再随 --dev 自动弹窗**
+// （2026-09-19 事故：一条 `electron . --dev --inspect` 起的调试实例把独立 DevTools 窗
+// 甩在坐席眼前），要弹必须显式 `--devtools`（npm run dev 带它）。
+const DEVTOOLS_ALLOWED = !app.isPackaged;
+const DEVTOOLS_AUTO_OPEN = DEVTOOLS_ALLOWED && process.argv.includes("--devtools");
 
 // D3：每账号确定性指纹缓存（account_id → fingerprint）。启动/运行时新增账号前拉取，
 // 供 session UA / Accept-Language / webview additionalArguments 注入，使多号内嵌互不关联。
@@ -1783,6 +1794,7 @@ function openBackendPopup(url, from) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      devTools: DEVTOOLS_ALLOWED,
       // B54：焦点自愈桥（confirm/alert 后焦点态失步的主进程复位通道）
       preload: path.join(__dirname, "renderer", "popup-preload.js"),
     },
@@ -1937,6 +1949,7 @@ function openCopilotPipWindow(sender, opts) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      devTools: DEVTOOLS_ALLOWED,
     },
   };
   if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
@@ -2211,6 +2224,41 @@ function wireEditContextMenu(wc) {
   });
 }
 
+let _wechatPcTrayCtl = null;
+function startWechatPcTray() {
+  return wechatPcTray.start({
+    platform: process.platform,
+    Tray,
+    Menu,
+    nativeImage,
+    iconPath: DEFAULT_BRAND_ICON,
+    getLang: shellLang,
+    fetchJson: async (method, path, body) => {
+      const { base_url, token } = config.backend || {};
+      if (!base_url) throw new Error("no backend");
+      const r = await fetch(String(base_url).replace(/\/$/, "") + path, {
+        method,
+        headers: { Authorization: `Bearer ${token || ""}`, "Content-Type": "application/json" },
+        body: method === "GET" ? undefined : JSON.stringify(body || {}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((d && (d.detail || d.message)) || String(r.status));
+      return d;
+    },
+    onAction: (id) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      if (!w) { createWindow(); return; }
+      try { if (w.isMinimized()) w.restore(); w.show(); w.focus(); } catch (e) { /* 置前失败仍尝试导航 */ }
+      if (id === "guide") {
+        const { base_url } = config.backend || {};
+        if (base_url) {
+          try { w.loadURL(String(base_url).replace(/\/$/, "") + "/workspace/connect/wechat_pc#s3"); } catch (e) { /* 导航失败不阻断 */ }
+        }
+      }
+    },
+  });
+}
+
 let _windowBootStarted = false;
 async function createWindow() {
   _windowBootStarted = true;
@@ -2241,6 +2289,7 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       webviewTag: true,
+      devTools: DEVTOOLS_ALLOWED,
     },
   };
   // ── 融合标题栏（titlebar merge P2 2026-08-22）────────────────────────────
@@ -2332,6 +2381,8 @@ async function createWindow() {
   // 沙箱，使 preload 能加载选择器档案/媒体格式化模块（DOM 注入与 ipcRenderer 不受影响）。
   win.webContents.on("will-attach-webview", (_e, webPreferences) => {
     webPreferences.sandbox = false;
+    // 工作台/官方网页 webview 的 guest webContents 同样封 DevTools（用户端不可开）
+    webPreferences.devTools = DEVTOOLS_ALLOWED;
   });
   win.webContents.setWindowOpenHandler(makeBackendPopupHandler());
   wireEditContextMenu(win.webContents);   // 主窗 chrome（首跑向导等原生输入件）
@@ -2357,7 +2408,7 @@ async function createWindow() {
   // ?tb=1＝融合标题栏点亮信号（renderer.initTitlebar 按它加 body.cx-tb-on）：主进程
   // 是「开没开融合」的唯一权威，renderer 不做平台猜测；lang 必须保持首位（i18n 门禁钉）。
   win.loadFile(path.join(__dirname, "renderer", "index.html"), { query: { lang: shellLang(), tb: TB_MERGED ? "1" : "0" } });
-  if (process.argv.includes("--dev")) win.webContents.openDevTools({ mode: "detach" });
+  if (DEVTOOLS_AUTO_OPEN) win.webContents.openDevTools({ mode: "detach" });
 }
 
 // 「关于」弹窗（应用菜单内迁 P0 2026-08-22 抽出为共用函数：原生帮助菜单与
@@ -2435,9 +2486,10 @@ function buildAppMenu() {
         { type: "separator" },
         { label: SS("menu.fullscreen"), role: "togglefullscreen" },
         // 开发者工具对所有人隐藏（老板令 2026-08-22）：菜单项与 Ctrl+Shift+I role
-        // 快捷键一并消失；工程调试走 --dev 启动参，坐席解锁走页内「版本号连点 12 次」
-        // 开发者模式（appMenuSpec extras 供词条，页面注入菜单项经 desktop:app-menu-action
-        // 的 devtools 分支执行——分支保留，入口全部收进解锁态）。
+        // 快捷键一并消失；工程调试走 `--devtools` 启动参（仅源码态，见 DEVTOOLS_ALLOWED），
+        // 页内「版本号连点 12 次」开发者模式只在源码态可解锁（appMenuSpec extras 供词条，
+        // 页面注入菜单项经 desktop:app-menu-action 的 devtools 分支执行——分支保留）。
+        // 打包态（用户端）webPreferences.devTools=false，Chromium 层封死，任何入口都无效。
       ],
     },
     {
@@ -2501,6 +2553,7 @@ function applyShellLangFromNavigation(rawUrl) {
   const after = shellLang();
   console.log(`[i18n] shell lang synced from workspace: ${JSON.stringify(patch.lang)} (${before} -> ${after})`);
   if (after !== before) rebuildAppMenu();
+  if (after !== before) { try { if (_wechatPcTrayCtl) _wechatPcTrayCtl.refresh(); } catch (e) { /* 托盘刷新失败不阻断切语言 */ } }
   // 第二参=配置原值（""=跟随系统）：renderer 据此重算收件箱 homeUrl/登录回跳的 ?lang=
   // （2026-09-12：此前只回推壳语言码，homeUrl 停在启动那一刻，回「家」被钉回旧语）。
   for (const w of BrowserWindow.getAllWindows()) {
@@ -2573,6 +2626,9 @@ function appMenuSpec() {
     // 连点 12 次解锁「开发者模式」（localStorage，页面侧注入 devtools 菜单项）。
     // 词条全部单源 SHELL_STR——页面零兜底文案，与五菜单同一纪律。
     version: displayVersion(),
+    // 用户端（打包态）DevTools 已在 Chromium 层封死（DEVTOOLS_ALLOWED=false）：告知页面
+    // 别再提供「连点 12 次」解锁与 DevTools 菜单项——解锁出来也点不开，只会让人以为坏了。
+    devtools_allowed: DEVTOOLS_ALLOWED,
     extras: {
       version_label: SS("about.version"),
       devtools: SS("menu.devtools"),
@@ -2627,7 +2683,11 @@ ipcMain.handle("desktop:app-menu-action", (e, rawId) => {
       case "zoom_in": wc.setZoomLevel(Math.min(wc.getZoomLevel() + 0.5, 5)); return { ok: true };
       case "zoom_out": wc.setZoomLevel(Math.max(wc.getZoomLevel() - 0.5, -5)); return { ok: true };
       case "fullscreen": if (win) win.setFullScreen(!win.isFullScreen()); return { ok: true };
-      case "devtools": wc.toggleDevTools(); return { ok: true };
+      case "devtools":
+        // 打包态 devTools=false 时 toggle 本就是哑操作，这里显式回执让页面不至于
+        // 以为「点了没反应」是坏了。
+        if (!DEVTOOLS_ALLOWED) return { ok: false, error: "devtools_disabled" };
+        wc.toggleDevTools(); return { ok: true };
       case "minimize": if (win) win.minimize(); return { ok: true };
       case "close_win": if (win) win.close(); return { ok: true };
       case "about": showAboutDialog(win).catch(() => {}); return { ok: true };
@@ -3681,6 +3741,7 @@ if (!_gotSingleInstanceLock) {
     // maybeRotateManagedToken 换过。同样不阻塞开窗（登录成功前没有任何回推流量）。
     sidecars.startAll(config).catch((e) => console.log(`[sidecar] start error: ${e}`));
     createWindow();
+    try { _wechatPcTrayCtl = startWechatPcTray(); } catch (e) { console.log("[wxpc-tray] start failed: " + ((e && e.message) || e)); }
     setupAutoUpdate();
     setupHotpatch(); // 整包之后：热补丁按 _latestFullVersion 让路，先后顺序有意义
     setupAnnouncements();
@@ -3701,6 +3762,7 @@ async function shutdownBackendAndWait() {
   _backendStopped = true;
   try { await backendManager.stopAndWait(8000); } catch (e) { /* 回收失败不阻断退出 */ }
   try { sidecars.stopAll(); } catch (e) { /* 同上：边车残留不该阻断退出 */ }
+  try { if (_wechatPcTrayCtl) _wechatPcTrayCtl.destroy(); } catch (e) { /* 托盘残留不该阻断退出 */ }
 }
 app.on("before-quit", (e) => {
   if (_backendStopped) return;

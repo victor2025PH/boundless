@@ -71,6 +71,9 @@ _CHANNEL_CAVEATS_ZH = (
     "个人微信不作为自动聊天渠道接入（无官方接口，有封号与法律风险），但提供「PC 副驾」：读取电脑上"
     "已登录的微信 4.x 窗口，把消息同步进工作台、AI 给建议；半自动档只发坐席批准的回复，全自动档需"
     "在引导页确认风险；仅 Windows，接入流程在工作台「账号管理 → 个人微信 · PC 副驾」。"
+    "PC 副驾在全自动档还能用人设音色发**语音**消息：需电脑微信 4.1.9 以上并安装免费的 VB-CABLE 虚拟声卡"
+    "（引导页第 ① 步会检测并可自测）；单条语音最长约 55 秒，超长自动分条，通路未就绪时自动改发文字。"
+    "对方发来的语音目前听不到（屏上只有「语音N秒」占位、没有声音文件），人设会请对方打字说，不要假装听过。"
 )
 _CHANNEL_CAVEATS_EN = (
     "QQ Bot (QQ Open Platform official API) is passive-only: at most 4 replies within "
@@ -88,7 +91,12 @@ _CHANNEL_CAVEATS_EN = (
     "Personal WeChat is not an auto-chat channel (no official API; ban and legal risk), but a "
     "\"PC copilot\" is available: it reads the signed-in WeChat 4.x window on the PC, mirrors messages "
     "into the workspace and drafts suggestions; semi-auto sends only agent-approved replies, full-auto "
-    "requires a risk acknowledgement in the guide; Windows only, set up under Accounts → Personal WeChat · PC copilot."
+    "requires a risk acknowledgement in the guide; Windows only, set up under Accounts → Personal WeChat · PC copilot. "
+    "On full-auto the PC copilot can also send VOICE messages in the persona's voice: needs WeChat for Windows "
+    "4.1.9+ and the free VB-CABLE virtual audio device (step 1 of the guide detects and self-tests it); each clip "
+    "is capped at about 55 s, longer replies are split automatically, and it falls back to text when the path isn't ready. "
+    "Inbound customer voice cannot be heard yet (the window only shows a duration placeholder, no audio file); "
+    "the persona asks them to type and must never pretend to have heard it."
 )
 
 _FACTS_ZH = f"""【本产品是什么】

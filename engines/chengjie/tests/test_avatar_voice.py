@@ -366,6 +366,50 @@ def test_post_with_retry_gives_up_after_retries():
     assert mock_post.call_count == 2  # 1 原始 + 1 重试，不无限重试
 
 
+def _http_error(code: int, body: bytes):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("http://x/v1/tts/clone", code, "Bad Gateway", {}, io.BytesIO(body))
+
+
+def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
+    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功；emotion 档保留。"""
+    from src.ai.avatar_voice import is_emo_text_infer_error
+    c = _client(retries=0)
+    seen: list = []
+    wav = _wav_bytes()
+    bad = b'{"detail":"IndexTTS2 infer failed: ValueError: QwenEmotion returned a non-numeric emotion score \'\xe8\x87\xaa\xe7\x84\xb6\'. Please retry the request."}'
+
+    def fake_post(url, payload, *, timeout, headers=None):
+        body = json.loads(payload)
+        seen.append(body)
+        if body.get("emo_text"):
+            raise _http_error(502, bad)
+        return json.dumps({"audio_base64": base64.b64encode(wav).decode()}).encode()
+
+    with patch.object(AvatarVoiceClient, "_post", side_effect=fake_post):
+        out = c.tts("你好呀", reference_audio_b64="QQ==", emotion="happy", emo_text="轻松愉快地说", emo_alpha=0.6)
+    assert out == wav and len(seen) == 2
+    assert seen[0].get("emo_text") == "轻松愉快地说" and seen[0].get("use_emo_text") is True
+    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "happy"
+    # 指纹判定：只认 5xx + QwenEmotion/emotion score/Please retry；4xx / 别的 5xx 不算
+    assert is_emo_text_infer_error(_http_error(502, bad))
+    assert not is_emo_text_infer_error(_http_error(400, bad))
+    assert not is_emo_text_infer_error(_http_error(500, b'{"detail":"CUDA out of memory"}'))
+    assert not is_emo_text_infer_error(OSError("dead"))
+
+
+def test_tts_emo_text_unrelated_5xx_is_not_retried():
+    """没带 emo_text 或 5xx 不是引导层的锅 → 照旧抛出（不吞引擎离线）。"""
+    c = _client(retries=0)
+    import urllib.error
+    with patch.object(AvatarVoiceClient, "_post", side_effect=lambda *a, **k: (_ for _ in ()).throw(
+            _http_error(500, b'{"detail":"CUDA out of memory"}'))) as mock_post:
+        with pytest.raises(urllib.error.HTTPError):
+            c.tts("你好", reference_audio_b64="QQ==", emo_text="开心")
+    assert mock_post.call_count == 1
+
+
 # ── B1+ 忙碌感知多端点路由（2026-07-21 三端点扩容）─────────────────────────
 def _fake_audio_post(seen):
     wav = _wav_bytes()

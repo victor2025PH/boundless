@@ -124,6 +124,18 @@ def test_peer_media_voice_placeholder_still_media():
     assert ctx.get("_media_kind") == "voice"
 
 
+def test_peer_media_wechat_duration_is_untranscribed():
+    """电脑微信「语音11秒」不得当已转写（否则模型会把占位当对方说的话）。"""
+    ctx = peer_media_context("语音11秒", media_type="voice")
+    assert ctx.get("_peer_message_is_media") is True
+    assert ctx.get("_media_kind") == "voice"
+    assert ctx.get("_peer_message_is_voice") is not True
+    # 无 media_type 时也能从占位文案认出语音（UIA 类名偶尔认不出）
+    ctx2 = peer_media_context("语音9秒")
+    assert ctx2.get("_media_kind") == "voice"
+    assert ctx2.get("_peer_message_is_media") is True
+
+
 def test_language_switch_hint_en_to_ja():
     hist = [
         {"role": "user", "content": "How are you today?"},

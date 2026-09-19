@@ -283,7 +283,9 @@ def record_voice_sent(
     # 顺带喂 voice_outage（低流量下连续失败的看门狗判据）。best-effort 绝不阻塞。
     try:
         from src.ai.voice_outage import get_voice_outage
-        get_voice_outage().record_voice_attempt(True, "autosend")
+        # 桌面桥（wechat_pc 虚拟声卡）单独成链，避免被其它 autosend 成功盖住断档灯
+        src = "desktop_bridge" if prov == "desktop_bridge" else "autosend"
+        get_voice_outage().record_voice_attempt(True, src)
     except Exception:
         pass
 
@@ -298,7 +300,9 @@ def record_voice_fallback(reason: str) -> None:
     # 语音断档台账（2026-08-02）：B 线「已决定发语音但失败回落文字」的单一出口。
     try:
         from src.ai.voice_outage import get_voice_outage
-        get_voice_outage().record_voice_attempt(False, "autosend", r)
+        # driver_* = 桌面桥守卫/配额（mic_busy / voice_daily_cap / record / play）
+        src = "desktop_bridge" if r.startswith("driver_") else "autosend"
+        get_voice_outage().record_voice_attempt(False, src, r)
     except Exception:
         pass
 

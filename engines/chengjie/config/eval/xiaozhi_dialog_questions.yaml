@@ -151,3 +151,16 @@ questions:
   - tag: media_ledger
     q: "刚发过图为什么还说要发？"
     must_any: ["图", "发", "设置"]
+  # ── v1.0.90 发版批（电脑微信副驾进包 / 发语音 / 接管迟到闸 / 成人不设限）──
+  - tag: wechat_pc_start
+    q: "个人微信怎么用？PC 副驾怎么启动？"
+    must_any: ["副驾", "账号", "启动", "微信"]
+  - tag: wechat_pc_voice
+    q: "微信怎么给人设发语音？客户发语音为什么听不到？"
+    must_any: ["语音", "打字", "VB-CABLE", "副驾"]
+  - tag: takeover_late_gate
+    q: "点了接管为什么还在自动发？"
+    must_any: ["接管", "弃发", "人工", "档位"]
+  - tag: adult_policy_open
+    q: "人设成人政策不设限怎么用？开了还会转人工吗？"
+    must_any: ["不设限", "人设", "未成年"]

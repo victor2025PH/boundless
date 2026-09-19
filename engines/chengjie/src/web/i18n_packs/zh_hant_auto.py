@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-18 22:30:04 · OpenCC s2twp + 術語釘 · 17716 鍵（源 zh 全量 18329）
+生成: 2026-09-19 21:08:04 · OpenCC s2twp + 術語釘 · 17833 鍵（源 zh 全量 18447）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1461,6 +1461,12 @@ ZH_HANT = {
     'aud_act_profile_import_extract': '文件提取人設',
     # ── aud_act_profile_promote ──
     'aud_act_profile_promote': '人設檔案設為常用',
+    # ── aud_act_profile_proposal_apply ──
+    'aud_act_profile_proposal_apply': '接受人設補丁提案',
+    # ── aud_act_profile_proposal_generate ──
+    'aud_act_profile_proposal_generate': '生成人設補丁提案',
+    # ── aud_act_profile_proposal_reject ──
+    'aud_act_profile_proposal_reject': '駁回人設補丁提案',
     # ── aud_act_profile_quiz_run ──
     'aud_act_profile_quiz_run': '人設一致性測驗',
     # ── aud_act_profile_retired_quiz_run ──
@@ -2853,6 +2859,7 @@ ZH_HANT = {
     'cg.error_generic': '出錯了：{why}',
     'cg.eta': '預計 {n} 分鐘',
     'cg.finish': '完成，去工作台',
+    'cg.in_progress': '進行中',
     'cg.invite_body': '把下面的連結發給管理員，他在這裡填好之後，你這邊會自動變綠。',
     'cg.invite_title': '邀請管理員完成這一步',
     'cg.kf.acct_bound': '已接入',
@@ -2934,71 +2941,141 @@ ZH_HANT = {
     'cg.kf.welcome_ph': '例：您好，我是××的客服助手，請問有什麼可以幫您？',
     'cg.loading': '載入中…',
     'cg.next': '下一步',
-    'cg.pc.autostart_lead': '要開機自啟，再執行這條註冊計劃任務：',
+    'cg.pc.adv_autostart_lead': '開機自啟（註冊計劃任務）：',
+    'cg.pc.adv_lead': '在微信所在的 Windows 電腦上開啟 PowerShell，貼上執行。關閉視窗副駕即停止；要常駐請再執行第二條註冊開機自啟。',
+    'cg.pc.adv_load_fail': '命令載入失敗：{why}',
+    'cg.pc.adv_retry': '重試',
+    'cg.pc.adv_title': '高階：手動命令列（後端不在這台電腦上時）',
+    'cg.pc.adv_token_note': '命令裡的令牌檔案由後端自動生成，僅本機當前使用者可讀，不要轉發。',
+    'cg.pc.agent_wait': '副駕由管理員啟動；啟動後這裡會自動變綠',
+    'cg.pc.autostart': '微信登入後自動啟動副駕',
+    'cg.pc.autostart_d': '以後開機只要電腦微信登入了，智聊就自動開始同步，不必再開啟本頁',
+    'cg.pc.autostart_off': '已關閉',
+    'cg.pc.autostart_on': '已開啟',
+    'cg.pc.btn_log': '檢視日誌',
+    'cg.pc.btn_restart': '重啟',
+    'cg.pc.btn_retry': '重新啟動',
+    'cg.pc.btn_retry_in': '{n} 秒後可重試',
+    'cg.pc.btn_start': '啟動副駕',
+    'cg.pc.btn_starting': '啟動中…',
+    'cg.pc.btn_stop': '停止',
     'cg.pc.copy_autostart': '複製自啟命令',
     'cg.pc.copy_cmd': '複製啟動命令',
     'cg.pc.download': '下載電腦版微信 ↗',
-    'cg.pc.env_hidden': '視窗不可見：微信可能最小化到了托盤，請點開還原',
-    'cg.pc.env_login': '登入窗開啟中：請在手機微信上掃碼並確認',
-    'cg.pc.env_main': '微信主窗已登入',
+    'cg.pc.env_hidden': '微信視窗不可見：可能收進了托盤，請點開還原',
+    'cg.pc.env_installed': '已安裝電腦微信，但還沒執行',
+    'cg.pc.env_login': '微信在等你掃碼登入',
+    'cg.pc.env_main': '微信已登入',
+    'cg.pc.env_no_driver': '後端缺少讀屏元件（uiautomation），副駕無法在這台電腦啟動——請更新智聊桌面端或聯絡管理員',
+    'cg.pc.env_not_installed': '這台電腦還沒安裝電腦微信',
     'cg.pc.env_not_running': '沒檢測到電腦微信在執行',
     'cg.pc.env_not_windows': '當前後端不在 Windows 上，副駕只支援 Windows',
     'cg.pc.env_running': '電腦微信正在執行',
     'cg.pc.env_version': '版本 {v}',
     'cg.pc.env_version_bad': '版本過低（需 4.0 以上）',
     'cg.pc.env_version_unknown': '版本未知',
+    'cg.pc.err_driver': '後端缺少讀屏元件（uiautomation），無法啟動副駕',
+    'cg.pc.err_start': '啟動失敗：{why}',
+    'cg.pc.err_token': '後端還沒配置管理員令牌，無法啟動副駕',
     'cg.pc.faq_cause': '可能原因',
     'cg.pc.faq_fix': '處理',
     'cg.pc.faq_symptom': '症狀',
-    'cg.pc.faq_title': '常見問題',
-    'cg.pc.presence_blind': '副駕程序線上，但讀不到微信主窗：請把電腦微信從托盤點開還原（不要最小化）',
-    'cg.pc.presence_off': '副駕離線 {m} 分：請檢查驅動程序是否在執行',
-    'cg.pc.presence_on': '副駕線上 · {tier}',
-    'cg.pc.presence_waiting': '等待心跳…（啟動後約 10 秒）',
+    'cg.pc.faq_title': '遇到問題？',
+    'cg.pc.focus_wechat': '把微信視窗放到最前',
+    'cg.pc.live_attached': '由計劃任務或手動命令啟動',
+    'cg.pc.live_blind': '副駕線上，但看不到微信視窗',
+    'cg.pc.live_blind_d': '微信可能收進了托盤或已退出登入。請把微信視窗還原到桌面（不要最小化）',
+    'cg.pc.live_error': '副駕啟動失敗',
+    'cg.pc.live_error_exit': '程序退出（程式碼 {code}）。{n} 秒後可重試；日誌見下方',
+    'cg.pc.live_error_nohb': '程序在執行，但一直沒有線上訊號：看看下面的日誌，或重新啟動',
+    'cg.pc.live_idle': '副駕未啟動',
+    'cg.pc.live_idle_d': '微信已登入，點「啟動副駕」即開始同步訊息',
+    'cg.pc.live_idle_nowx': '微信還沒登入：先回第 1 步登入電腦微信',
+    'cg.pc.live_idle_tray': '微信視窗收進了托盤：先把視窗還原到桌面，副駕才能讀屏',
+    'cg.pc.live_manual': '後端不在這台電腦上，無法一鍵啟動',
+    'cg.pc.live_manual_d': '請在微信所在的電腦上執行下方「高階」裡的命令；啟動後這裡會自動變綠',
+    'cg.pc.live_offline': '副駕已停止',
+    'cg.pc.live_offline_d': '上次線上 {m} 分鐘前',
+    'cg.pc.live_online': '副駕線上 · {tier}',
+    'cg.pc.live_online_d': '最近讀取 {s} 秒前 · 傳送時段 {a}–{b} 點',
+    'cg.pc.live_starting': '正在啟動…',
+    'cg.pc.live_starting_d': '檢查微信視窗 → 連線後端 → 等待首個線上訊號（約 10–30 秒）',
+    'cg.pc.live_voice_busy': '麥克風被 {p} 佔用 · 語音暫改文字',
+    'cg.pc.live_voice_off': '語音未就緒 · 自動改發文字',
+    'cg.pc.live_voice_ok': '語音就緒',
+    'cg.pc.live_voice_quota': '今日語音 {n}/{cap}',
+    'cg.pc.log_empty': '還沒有日誌',
+    'cg.pc.login_detected': '已檢測到微信登入，正在進入下一步…',
+    'cg.pc.meta_pid': '程序 {pid} · 已執行 {t}',
+    'cg.pc.open_wechat': '開啟電腦微信',
+    'cg.pc.opening_wechat': '正在開啟…',
+    'cg.pc.privacy_title': '關於安全與隱私',
     'cg.pc.recent_none': '還沒有訊息進來',
     'cg.pc.recheck': '重新檢測',
     'cg.pc.risk_a': '個人微信沒有官方自動化介面，用自動化工具代發可能觸發微信風控，最壞情況是賬號被限制或封禁。',
     'cg.pc.risk_b': '由 AI 代表你與他人對話，產生的表述與承諾由你承擔責任；請為人設配置準確的業務資訊。',
     'cg.pc.risk_c': '系統內建了日配額、工作時段、僅回覆、敏感詞等守衛，但不能保證零風險。',
     'cg.pc.risk_check': '我已瞭解並自願承擔以上風險',
+    'cg.pc.risk_d': '開啟語音回覆後，每條語音傳送的幾秒內系統預設麥克風會臨時切到虛擬音效卡，期間這台電腦上其他軟體的通話/錄音會受影響；對方聽到的是人設的合成音色，且以你的微信身份發出——請確保音色來源已獲授權。',
     'cg.pc.risk_required': '選擇全自動檔必須先勾選知情同意',
     'cg.pc.risk_title': '知情同意（全自動檔）',
-    'cg.pc.s1': '安裝電腦版微信',
-    'cg.pc.s1_lead': '副駕需要 Windows 電腦上的微信 4.0 以上版本。下面是自動檢測結果：',
-    'cg.pc.s2': '掃碼登入微信',
-    'cg.pc.s2_a': '智聊不儲存你的微信密碼，只讀取已登入的視窗。',
+    'cg.pc.s1': '連線電腦微信',
+    'cg.pc.s1_lead': '副駕讀取的是這台電腦上已登入的微信（4.0 以上）。先讓電腦微信登入——智聊不經手密碼，只看已登入的視窗：',
+    'cg.pc.s2': '設定副駕',
+    'cg.pc.s2_a': '智聊不儲存你的微信密碼，只讀取已登入的視窗；不使用微信協議、不注入。',
     'cg.pc.s2_b': '視窗可以被別的視窗擋住，但不要最小化——最小化時副駕讀不到訊息方向，會暫停並提醒你。',
     'cg.pc.s2_c': '深色/淺色主題都可以；多顯示器也可以。',
-    'cg.pc.s2_lead': '這是微信自己的登入：在電腦微信的登入窗用手機微信掃碼，並在手機上確認。',
-    'cg.pc.s3': '啟動副駕',
-    'cg.pc.s3_lead': '複製下面的命令，在執行智聊後端的這台電腦上開啟 PowerShell 貼上執行：',
-    'cg.pc.s3_note': '下一版本會把「啟動/停止」做進桌面端按鈕，不再需要命令列。',
-    'cg.pc.s4': '選擇檔位',
-    'cg.pc.s4_lead': '副駕能做到什麼程度，由你決定：',
-    'cg.pc.s5': '等待副駕線上',
-    'cg.pc.s5_lead': '副駕啟動後每 10 秒上報一次心跳，這裡會自動變綠：',
-    'cg.pc.s6': '發一條測試訊息',
-    'cg.pc.s6_lead': '用另一個微訊號給這個號發一句話，幾秒後會出現在工作台；下面實時顯示最近一條：',
-    'cg.pc.save_tier': '儲存檔位',
+    'cg.pc.s2_lead': '副駕能做到什麼程度，由你決定。儲存後立即生效，不用重啟：',
+    'cg.pc.s3': '啟動並驗證',
+    'cg.pc.s3_lead': '點一下啟動副駕，幾秒後這裡會顯示線上狀態：',
+    'cg.pc.save_tier': '儲存設定',
+    'cg.pc.scan_hint': '用手機微信掃電腦螢幕上的二維碼，並在手機上點「確認登入」。登入完成後這裡會自動進入下一步。',
+    'cg.pc.test_go_ws': '去工作台看看 →',
+    'cg.pc.test_got': '收到了 ✓ 接入完成',
+    'cg.pc.test_got_d': '這條訊息已同步到工作台，之後的訊息都會這樣進來。',
+    'cg.pc.test_lead': '用另一個微訊號給這個號發一句話，幾秒後會出現在工作台；下面實時顯示最近一條：',
+    'cg.pc.test_title': '發一條測試訊息',
+    'cg.pc.test_wait_online': '副駕線上後，這裡會實時顯示新進來的訊息',
+    'cg.pc.test_waiting': '等待新訊息進來…',
     'cg.pc.tier_auto': '全自動',
     'cg.pc.tier_auto_d': 'AI 直接代發（高風險，需知情同意）',
     'cg.pc.tier_copilot': '只讀建議',
     'cg.pc.tier_copilot_d': '只同步訊息、AI 給建議，絕不代發',
-    'cg.pc.tier_current': '當前檔位：{tier}',
-    'cg.pc.tier_saved': '已儲存；重啟副駕程序後生效',
+    'cg.pc.tier_current': '當前：{tier}',
+    'cg.pc.tier_saved': '已儲存，立即生效',
     'cg.pc.tier_semi': '半自動',
     'cg.pc.tier_semi_d': '只發你在工作台批准的回覆',
-    'cg.pc.token_missing': '令牌檔案還沒生成：請管理員開啟本頁第 ③ 步一次（會自動生成），或手動把管理員令牌存為命令裡的 TOKEN.txt',
-    'cg.pc.token_ready': '令牌檔案已就位：{path}（僅本機當前使用者可讀，不要轉發）',
+    'cg.pc.token_missing': '令牌檔案還沒生成：請管理員展開本區一次（會自動生成），或手動把管理員令牌存為命令裡的 TOKEN.txt',
+    'cg.pc.voice_align': '對齊取樣率',
+    'cg.pc.voice_align_fail': '對齊失敗：{why}——請以管理員身份執行智聊，或在 Windows 聲音設定裡把 CABLE Output 的格式改成與 CABLE Input 一致',
+    'cg.pc.voice_align_ok': '取樣率已對齊',
+    'cg.pc.voice_download': '下載 VB-CABLE',
+    'cg.pc.voice_no_cable': '語音回覆（可選）：沒檢測到虛擬音效卡 VB-CABLE，只發文字——安裝後重啟微信再點「重新檢測」',
+    'cg.pc.voice_no_libs': '語音回覆（可選）：後端缺少音訊元件（sounddevice / soundfile），只發文字——請更新智聊桌面端',
+    'cg.pc.voice_rates': '語音回覆：虛擬音效卡兩端取樣率不一致（播放 {a} / 錄音 {b} Hz），點「對齊取樣率」（需要管理員權限）',
+    'cg.pc.voice_ready': '語音通路就緒（VB-CABLE · {rate} Hz）',
+    'cg.pc.voice_selftest': '自測語音通路',
+    'cg.pc.voice_selftest_fail': '迴環自測未透過：{why}',
+    'cg.pc.voice_selftest_ok': '迴環自測透過：{f} Hz 播進虛擬音效卡、錄回來了（不經過微信，對方不會收到）',
+    'cg.pc.voice_testing': '自測中…',
+    'cg.pc.voice_version_low': '語音回覆（可選）：微信需 {v} 以上才有「發語音」按鈕，當前版本只發文字',
+    'cg.pc.voice_where': '語音只在全自動檔、且人設與「回覆設定 → 平台覆寫 → 微信 · 語音觸發」允許時傳送；通路未就緒時自動改發文字。',
     'cg.pc.work_hours': '傳送時段',
     'cg.pc.work_hours_hint': '只在這個時段內傳送（24 小時制）',
     'cg.prev': '上一步',
+    'cg.rail.done_env': '微信 {v}',
+    'cg.rail.done_live': '線上',
+    'cg.rail.done_live_msg': '線上 · 已收到訊息',
+    'cg.rail.done_tier': '{tier} · {a}–{b} 點',
     'cg.step_of': '第 {i} 步 / 共 {n} 步',
     'cg.sub_wechat_kf': '微信使用者掃你的客服二維碼即可諮詢，不用加好友；用你自己企業的企微，填憑證即接通',
     'cg.sub_wechat_pc': '讀取你電腦上已登入的微信，AI 給建議或代發；預設只讀，全自動需確認風險',
     'cg.supervisor_only': '這一步需要主管權限',
     'cg.title_wechat_kf': '接入微信客服（企業微信）',
     'cg.title_wechat_pc': '接入個人微信 · PC 副駕',
+    'cg.trust_a': '不碰微信協議',
+    'cg.trust_b': '不經手密碼',
+    'cg.trust_c': '預設只讀',
     'cg.tutorial': '完整教程與排障 ↗',
     'cg.waiting_admin': '等待管理員配置…',
     # ── change_pwd ──
@@ -6321,6 +6398,13 @@ ZH_HANT = {
     'err.psn.finalize_bad_body': 'finalize 需要 profile_id 與非空 persona 字典',
     'err.psn.job_not_found': '抽取任務不存在（可能已過期）',
     'err.psn.jobs_busy': '抽取任務繁忙，請稍後再試',
+    'err.psn.proposal_hard_lock': '硬核身份欄位不能透過補丁寫入',
+    'err.psn.proposal_needs_value': '這條補丁需要運營填寫內容後再接受',
+    'err.psn.proposal_not_found': '補丁提案不存在',
+    'err.psn.proposal_not_pending': '該補丁已處理或已過期',
+    'err.psn.proposal_stale': '人設在提案生成後已被改過，請重新生成補丁',
+    'err.psn.proposals_off': '人設補丁提案未啟用',
+    'err.psn.proposals_store': '補丁提案庫不可用',
     'err.psn.quiz_not_enough': '人設資料太薄，可出題不足 3 道，暫無法生成考題',
     'err.psn.quiz_off': '人設一致性考題未啟用',
     'err.psn.quiz_report_not_found': '考題報告不存在',
@@ -7740,10 +7824,10 @@ ZH_HANT = {
     'inbox.acct.bd_others': '另有：{list}',
     'inbox.acct.bd_private': '私聊 {n}',
     'inbox.acct.bd_title': '角標 = {scope}裡能點開的未讀數',
-    'inbox.acct.bridge_blind': '副駕線上 · 微信視窗不可見',
+    'inbox.acct.bridge_blind': '視窗不可見',
     'inbox.acct.bridge_blind_t': '副駕程序在跑，但讀不到微信主窗（收進托盤或已退出登入）：此刻訊息進不來、回覆發不出，請把電腦微信點開還原',
     'inbox.acct.bridge_off': '副駕離線 {m} 分',
-    'inbox.acct.bridge_off_t': 'PC 副駕驅動程序已無心跳：新訊息不會進來、回覆不會發出，請在電腦上重啟副駕（tools\\wechat_pc_devlink.ps1）',
+    'inbox.acct.bridge_off_t': 'PC 副駕驅動程序已無心跳：新訊息不會進來、回覆不會發出。點本卡「檢視接入流程」，在第 ③ 步點「啟動副駕」',
     'inbox.acct.bridge_on': '副駕線上 · {tier}',
     'inbox.acct.bridge_on_t': 'PC 副駕驅動程序正在讀屏收發（90 秒內有心跳）',
     'inbox.acct.bridge_tier_auto_reply': '全自動',
@@ -7903,7 +7987,17 @@ ZH_HANT = {
     'inbox.acct.pc_cta': '檢視接入流程',
     'inbox.acct.pc_desc': '讀取你電腦上已登入的微信，AI 給建議或按你批准代發；預設只讀，全自動需確認風險。僅支援 Windows + 微信 4.x。',
     'inbox.acct.pc_flow': '接入流程',
+    'inbox.acct.pc_focus': '還原微信',
+    'inbox.acct.pc_focus_fail': '沒找到可還原的微信視窗：請在電腦上手動開啟微信並登入',
+    'inbox.acct.pc_focus_ok': '已把微信視窗放到最前，幾秒後副駕恢復讀屏',
     'inbox.acct.pc_lead': '個人微信 · PC 副駕',
+    'inbox.acct.pc_start': '啟動副駕',
+    'inbox.acct.pc_start_fail': '副駕啟動失敗',
+    'inbox.acct.pc_start_no_driver': '後端缺少讀屏元件（uiautomation），請先更新智聊',
+    'inbox.acct.pc_start_no_token': '後端還沒配置管理員令牌，無法啟動副駕',
+    'inbox.acct.pc_start_not_here': '後端不在微信所在的電腦上：請到「接入流程」第 ③ 步的高階區用手動命令啟動',
+    'inbox.acct.pc_start_ok': '副駕正在啟動，幾秒後賬號卡會變綠',
+    'inbox.acct.pc_starting': '啟動中…',
     'inbox.acct.pc_sub_off': '未接入 · 讀屏輔助，非官方介面',
     'inbox.acct.persona_fill': '從人設填充',
     'inbox.acct.persona_fill_t': '用人設的名稱與形象照填充下方表單，儲存後賬號官方資料與人設對齊',
@@ -9258,6 +9352,9 @@ ZH_HANT = {
     'inbox.failr.platform_block': '平台風控暫時限制傳送（自動凍結中）',
     'inbox.failr.rate_limited': '平台限頻，自動降速中，稍後可重發',
     'inbox.failr.session': '平台會話失效，需重新登入',
+    'inbox.failr.voice_daily_cap': '今日語音條數已用完，這條已改發文字',
+    'inbox.failr.voice_mic_busy': '坐席麥克風正被佔用（開會/通話），這條已改發文字',
+    'inbox.failr.voice_per_peer': '對該聯絡人今日語音已達上限，這條已改發文字',
     'inbox.fallback.unavailable': '該功能暫不可用（已記錄），請重新整理或聯絡管理員',
     'inbox.file.cancel_upload': '取消上傳',
     'inbox.file.canceled': '已取消傳送',
@@ -22275,16 +22372,26 @@ ZH_HANT = {
     'psn_pf_ad_default': '跟隨域預設',
     # ── psn_pf_ad_ex_default ──
     'psn_pf_ad_ex_default': '例：陪聊域＝軟回應，銷售/客服域＝轉人工（未設即按業務域）。',
+    # ── psn_pf_ad_ex_default_machine ──
+    'psn_pf_ad_ex_default_machine': '本機已配置預設＝「{policy}」（config.local.yaml adult_grader.default_policy）：選「跟隨域預設」即按此處理，不再看業務域。',
     # ── psn_pf_ad_ex_human ──
     'psn_pf_ad_ex_human': '例：露骨時攔下轉人工；3 分鐘沒人接手，替你發一句人設口吻的軟回應。',
     # ── psn_pf_ad_ex_mark ──
     'psn_pf_ad_ex_mark': '例：露骨只在卡片上標出類別，不轉人工不代發；施壓仍轉人工。',
+    # ── psn_pf_ad_ex_open ──
+    'psn_pf_ad_ex_open': '例：成人向人設——開黃腔、露骨、催促一律按人設口吻接住、可主動升溫；不分級不軟回應不轉人工。唯一硬停：對方自稱/疑似未成年 → 自動轉人工（不設限時「未成年」類別強制鎖定，不用去風控頁勾）。',
     # ── psn_pf_ad_ex_soft ──
     'psn_pf_ad_ex_soft': '例：露骨時立刻用人設口吻一句帶過（不迎合也不生硬），同時掛需人工，後續自動稿停。',
     # ── psn_pf_ad_human ──
     'psn_pf_ad_human': '轉人工',
+    # ── psn_pf_ad_machine ──
+    'psn_pf_ad_machine': '本機預設：{policy}',
+    # ── psn_pf_ad_machine_hint ──
+    'psn_pf_ad_machine_hint': '配置 adult_grader.default_policy 已壓過業務域預設——「跟隨域預設」的人設一律按「{policy}」處理。',
     # ── psn_pf_ad_mark ──
     'psn_pf_ad_mark': '只標記',
+    # ── psn_pf_ad_open ──
+    'psn_pf_ad_open': '不設限',
     # ── psn_pf_ad_soft ──
     'psn_pf_ad_soft': '軟回應',
     # ── psn_pf_adult ──
@@ -22457,6 +22564,36 @@ ZH_HANT = {
     'psn_prompt_preview': 'Prompt 預覽',
     # ── psn_prompt_preview_sub ──
     'psn_prompt_preview_sub': '（AI 實際收到的人設指令塊）',
+    # ── psn_prop_accept ──
+    'psn_prop_accept': '接受',
+    # ── psn_prop_empty ──
+    'psn_prop_empty': '沒有待處理補丁。點「生成補丁」根據完善度缺口和退役衝突出卡。',
+    # ── psn_prop_fail ──
+    'psn_prop_fail': '補丁失敗：{err}',
+    # ── psn_prop_field ──
+    'psn_prop_field': '欄位',
+    # ── psn_prop_fill ──
+    'psn_prop_fill': '填空',
+    # ── psn_prop_gen ──
+    'psn_prop_gen': '生成補丁',
+    # ── psn_prop_need_value ──
+    'psn_prop_need_value': '先填寫要補上的內容',
+    # ── psn_prop_ok ──
+    'psn_prop_ok': '已寫入 {field}',
+    # ── psn_prop_pending_n ──
+    'psn_prop_pending_n': '{n} 條待審',
+    # ── psn_prop_ph ──
+    'psn_prop_ph': '寫一句要補進這個欄位的內容（須是已知事實，不要編）',
+    # ── psn_prop_reject ──
+    'psn_prop_reject': '駁回',
+    # ── psn_prop_rejected ──
+    'psn_prop_rejected': '已駁回',
+    # ── psn_prop_retire ──
+    'psn_prop_retire': '退役釘住',
+    # ── psn_prop_sub ──
+    'psn_prop_sub': '完善度缺口與退役衝突生成提案，人審後才寫入；姓名/年齡/邊界政策不會自動改。',
+    # ── psn_prop_title ──
+    'psn_prop_title': '人設補丁',
     # ── psn_px_humor ──
     'psn_px_humor': '幽默：',
     # ── psn_px_quirks ──
@@ -22985,6 +23122,8 @@ ZH_HANT = {
     'psn_vc_preserved': '已保留本人設的克隆音色登記（表單裡的空語音設定不會覆蓋它）',
     # ── psn_vc_purge_q ──
     'psn_vc_purge_q': '是否連雲端聲紋一併永久刪除（不可恢復）？\n「確定」＝一併刪除；「取消」＝僅解綁（聲紋保留，可改綁其他人設）。',
+    # ── psn_vc_rebound_ok ──
+    'psn_vc_rebound_ok': '已複用「{from}」的音色，本人設的語音將用這把聲音。已寫入人設並生效，無需再點底部「儲存」（表單裡其它改動仍需儲存）。',
     # ── psn_vc_req_fail ──
     'psn_vc_req_fail': '請求失敗，請稍後重試',
     # ── psn_vc_res_fail ──
@@ -24311,6 +24450,10 @@ ZH_HANT = {
     'rps_plat_title': '平台專家覆寫',
     # ── rps_plat_unsupported ──
     'rps_plat_unsupported': '該平台協議/鏈路不支援此能力',
+    # ── rps_plat_voice_only ──
+    'rps_plat_voice_only': '電腦副駕只支援語音觸發覆寫，其餘列跟隨全域性',
+    # ── rps_plat_wechat_pc ──
+    'rps_plat_wechat_pc': '微信（電腦副駕）',
     # ── rps_po_adaptive ──
     'rps_po_adaptive': '自適應',
     # ── rps_po_add ──

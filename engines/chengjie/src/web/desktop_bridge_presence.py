@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Optional
 ALIVE_WITHIN_SEC = 90.0
 TIERS = ("copilot", "semi", "auto_reply")
 _STAT_KEYS = ("ticks", "inbound", "sent", "denied", "send_failed", "unknown_direction",
-              "frozen_until", "last_disposition", "offline", "last_readable")
+              "frozen_until", "last_disposition", "offline", "last_readable",
+              "voice_ready", "voice_sent", "voice_failed",
+              # P2（2026-09-19）：麦克风被坐席占用（开会/通话）/ 今日语音配额用量 / 比默认宽松的配额项
+              "voice_mic_busy", "voice_mic_busy_by", "voice_today", "voice_daily_cap", "caps_relaxed")
 
 
 def heartbeat_meta(body: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
@@ -54,6 +57,8 @@ def bridge_presence(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
     stats = hb.get("stats") if isinstance(hb.get("stats"), dict) else {}
     # 进程活着 ≠ 能干活：微信最小化到托盘 / 退出登录时驱动仍在心跳，但读不到屏——单独给一位
     readable = stats.get("last_readable")
+    voice_ready = stats.get("voice_ready")
+    mic_busy = stats.get("voice_mic_busy")
     return {
         "kind": str(hb.get("kind") or "desktop"),
         "tier": str(hb.get("tier") or "copilot"),
@@ -62,8 +67,21 @@ def bridge_presence(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
         "age_sec": int(age),
         "ts": ts,
         "readable": (bool(readable) if isinstance(readable, bool) else None),
+        # 这台机能不能发语音（「发语音」锚点 + 虚拟声卡通路）；老驱动没这项 → None
+        "voice_ready": (bool(voice_ready) if isinstance(voice_ready, bool) else None),
+        # 坐席此刻正用麦（开会/通话）：能力在、但这一刻不该排语音；老驱动没这项 → False
+        "voice_mic_busy": bool(mic_busy) if isinstance(mic_busy, bool) else False,
+        "voice_mic_busy_by": str(stats.get("voice_mic_busy_by") or ""),
         "stats": stats,
     }
+
+
+def bridge_voice_ready(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
+                       alive_within_sec: float = ALIVE_WITHIN_SEC) -> bool:
+    """后端排语音前问一句：该桌面账号的驱动**活着、报了 voice_ready、且坐席此刻没在用麦**。
+    没心跳/过期/老驱动一律 False（改发文字）；麦克风被占用也 False（省一次白合成，驱动侧同样会拒）。"""
+    pres = bridge_presence(meta, now=now, alive_within_sec=alive_within_sec)
+    return bool(pres and pres["alive"] and pres.get("voice_ready") is True and not pres.get("voice_mic_busy"))
 
 
 #: 心跳过期多久算「真实掉线」（fail）；之前算 warn（可能在重启/长轮次）
@@ -111,10 +129,10 @@ def bridge_driver_problems(rows: List[Dict[str, Any]], now: Optional[float] = No
             "kind": "bridge_offline",
             "age_sec": age,
             "detail": (f"副驾驱动 {max(1, age // 60)} 分钟无心跳（{tier}档）：新消息不会进来、回复不会发出，"
-                       f"请在电脑上重启副驾（tools\\wechat_pc_devlink.ps1）"),
+                       f"请到「账号管理 → 个人微信 · PC 副驾 → 接入流程」第 ③ 步点「启动副驾」"),
         })
     return out
 
 
 __all__ = ["ALIVE_WITHIN_SEC", "FAIL_AFTER_SEC", "TIERS", "heartbeat_meta", "bridge_presence",
-           "bridge_driver_problems"]
+           "bridge_voice_ready", "bridge_driver_problems"]

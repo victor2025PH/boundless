@@ -144,8 +144,19 @@ def build_clone_payload(
     emotion: str = DEFAULT_EMOTION, speed: float = 1.0,
     flow_temperature: float = 0.0, llm_top_k: int = 0,
     prosody_variation: bool = True,
+    language: str = "",
+    emo_text: str = "",
+    use_emo_text: Optional[bool] = None,
+    emo_alpha: Optional[float] = None,
+    emo_audio_b64: str = "",
+    emo_vector: Optional[list] = None,
 ) -> bytes:
-    """7852 /v1/tts/clone 请求体（JSON bytes）。"""
+    """7852 / 104:7865 ``/v1/tts/clone`` 请求体（JSON bytes）。
+
+    ``language`` / ``emo_text`` / ``emo_audio_b64`` / ``emo_vector`` 是
+    IndexTTS-2 字段。现网 104 未开 QwenEmotion 时 ``emo_text`` 是空操作；
+    笑声/喘息要靠 ``emo_audio_b64``（真笑参考）+ 合成后拼接 burst。
+    """
     body: Dict[str, Any] = {
         "text": str(text or ""),
         "reference_audio_b64": reference_audio_b64,
@@ -156,6 +167,31 @@ def build_clone_payload(
     }
     if reference_text:
         body["reference_text"] = reference_text
+    lang = str(language or "").strip()
+    if lang:
+        body["language"] = lang
+    et = str(emo_text or "").strip()
+    if et:
+        body["emo_text"] = et
+        body["use_emo_text"] = True if use_emo_text is None else bool(use_emo_text)
+        if emo_alpha is not None:
+            try:
+                body["emo_alpha"] = max(0.15, min(0.85, float(emo_alpha)))
+            except (TypeError, ValueError):
+                pass
+    ea = str(emo_audio_b64 or "").strip()
+    if ea:
+        body["emo_audio_b64"] = ea
+        if emo_alpha is not None:
+            try:
+                body["emo_alpha"] = max(0.15, min(0.85, float(emo_alpha)))
+            except (TypeError, ValueError):
+                pass
+    if emo_vector:
+        try:
+            body["emo_vector"] = [float(x) for x in list(emo_vector)[:8]]
+        except (TypeError, ValueError):
+            pass
     ft = float(flow_temperature or 0)
     if ft > 0:
         body["flow_temperature"] = max(1.0, min(1.18, ft))
@@ -239,6 +275,7 @@ def parse_audio_response(body: bytes) -> bytes:
 def build_tts_only_payload(
     profile: str, text: str, *, language: str = "", emotion: str = "",
     best_of: int = 1, audio_format: str = "", tts_engine: str = "",
+    emo_text: str = "", emo_alpha: Optional[float] = None,
 ) -> bytes:
     """hub ``/api/tts_only`` 请求体（JSON bytes）。纯函数、可单测。
 
@@ -270,7 +307,47 @@ def build_tts_only_payload(
     eng = str(tts_engine or "").strip()
     if eng:
         body["tts_engine"] = eng
+    et = str(emo_text or "").strip()
+    if et:
+        body["emo_text"] = et
+        body["use_emo_text"] = True
+        if emo_alpha is not None:
+            try:
+                body["emo_alpha"] = max(0.15, min(0.85, float(emo_alpha)))
+            except (TypeError, ValueError):
+                pass
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
+#: IndexTTS2 情绪文本引导层（QwenEmotion）失败时引擎 5xx 响应体里的指纹
+_EMO_TEXT_INFER_MARKERS = ("QwenEmotion", "emotion score", "Please retry the request")
+
+
+def is_emo_text_infer_error(exc: BaseException) -> bool:
+    """引擎 5xx 是否是「情绪文本引导层」的锅（去掉 ``emo_text`` 重试即可），而不是引擎离线。
+
+    2026-09-19 真机：IndexTTS2 ``/v1/tts/clone`` 回 502
+    ``IndexTTS2 infer failed: ValueError: QwenEmotion returned a non-numeric emotion score '自然'``——
+    引擎健康、同稿不带 emo_text 秒过。只认 5xx + 指纹；响应体只读一次（HTTPError 的 body 读过就空）。
+    """
+    code = getattr(exc, "code", None)
+    if not isinstance(code, int) or code < 500:
+        return False
+    body = getattr(exc, "_emo_probe_body", None)
+    if body is None:
+        try:
+            body = exc.read()  # type: ignore[attr-defined]
+        except Exception:
+            body = b""
+        try:
+            setattr(exc, "_emo_probe_body", body)
+        except Exception:
+            pass
+    try:
+        txt = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    except Exception:
+        txt = ""
+    return any(m in txt for m in _EMO_TEXT_INFER_MARKERS)
 
 
 def sniff_audio_format(audio: bytes, default: str = "wav") -> str:
@@ -1231,6 +1308,7 @@ def hub_fish_synthesize(
     base_url: str, profile: str, text: str, *, language: str = "",
     emotion: str = "", best_of: int = 1, timeout_sec: float = 30.0,
     audio_format: str = "", tts_engine: str = "",
+    emo_text: str = "", emo_alpha: Optional[float] = None,
 ) -> Tuple[bytes, str]:
     """调用幻声 hub ``/api/tts_only`` 合成一句 → (音频字节, 实际格式)（同步；供 to_thread 包裹）。
 
@@ -1240,7 +1318,8 @@ def hub_fish_synthesize(
     url = str(base_url or "").rstrip("/") + "/api/tts_only"
     payload = build_tts_only_payload(
         profile, text, language=language, emotion=emotion, best_of=best_of,
-        audio_format=audio_format, tts_engine=tts_engine)
+        audio_format=audio_format, tts_engine=tts_engine,
+        emo_text=emo_text, emo_alpha=emo_alpha)
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"}, method="POST")
@@ -1756,11 +1835,17 @@ class AvatarVoiceClient:
         prosody_variation: Optional[bool] = None,
         flow_temperature: Optional[float] = None,
         llm_top_k: Optional[int] = None,
+        language: str = "",
+        emo_text: str = "",
+        emo_alpha: Optional[float] = None,
+        emo_audio_b64: str = "",
+        emo_vector: Optional[list] = None,
     ) -> bytes:
         """情感克隆合成 → WAV 字节。长文本自动按句切块逐块合成再拼接。失败抛。
 
         ``prosody_variation``/``flow_temperature``/``llm_top_k``：per-call 覆盖
         （None=实例配置）。探针 A/B（固定噪声 vs fresh noise 对照）用。
+        ``language`` / ``emo_text``：IndexTTS-2.5 英文表现力（笑声/气声/撒娇）。
         """
         emo = normalize_avatar_emotion(emotion, self.default_emotion)
         spd = float(speed if speed is not None else self.speed)
@@ -1779,9 +1864,29 @@ class AvatarVoiceClient:
             payload = build_clone_payload(
                 text=ch, reference_audio_b64=reference_audio_b64,
                 reference_text=reference_text, emotion=emo, speed=spd,
-                flow_temperature=ft, llm_top_k=tk, prosody_variation=pv)
-            body = self._post_any(
-                "/v1/tts/clone", payload, timeout=self.synth_timeout_sec)
+                flow_temperature=ft, llm_top_k=tk, prosody_variation=pv,
+                language=language, emo_text=emo_text, emo_alpha=emo_alpha,
+                emo_audio_b64=emo_audio_b64, emo_vector=emo_vector)
+            try:
+                body = self._post_any(
+                    "/v1/tts/clone", payload, timeout=self.synth_timeout_sec)
+            except urllib.error.HTTPError as exc:
+                if not (emo_text and is_emo_text_infer_error(exc)):
+                    raise
+                # IndexTTS2 的情绪文本引导（QwenEmotion）偶发吐非数值分数 → 引擎 502
+                # 「Please retry」。这是引导层的锅不是引擎离线：同稿去掉 emo_text 立刻重试
+                # （情绪档 ``emotion`` 仍保留），否则一句话就把端点打进冷却、整条语音链改发文字
+                # （2026-09-19 真机：每条带 emo_text 的稿子都 502，语音全断）。
+                logger.warning(
+                    "[avatar_voice] 情绪文本引导合成失败(%s) → 去掉 emo_text 重试一次", exc)
+                payload = build_clone_payload(
+                    text=ch, reference_audio_b64=reference_audio_b64,
+                    reference_text=reference_text, emotion=emo, speed=spd,
+                    flow_temperature=ft, llm_top_k=tk, prosody_variation=pv,
+                    language=language, emo_audio_b64=emo_audio_b64,
+                    emo_vector=emo_vector)
+                body = self._post_any(
+                    "/v1/tts/clone", payload, timeout=self.synth_timeout_sec)
             audio = parse_audio_response(body)
             if not audio:
                 raise RuntimeError("avatar_voice: decoded empty audio")
@@ -1789,7 +1894,9 @@ class AvatarVoiceClient:
         return self._merge(parts, text, lambda t: self.tts(
             t, reference_audio_b64=reference_audio_b64,
             reference_text=reference_text, emotion=emo, speed=spd,
-            prosody_variation=pv, flow_temperature=ft, llm_top_k=tk))
+            prosody_variation=pv, flow_temperature=ft, llm_top_k=tk,
+            language=language, emo_text=emo_text, emo_alpha=emo_alpha,
+            emo_audio_b64=emo_audio_b64, emo_vector=emo_vector))
 
     def tts_instruct(
         self, text: str, *, reference_audio_b64: str, instruct: str,

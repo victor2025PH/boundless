@@ -199,7 +199,7 @@ class AIClient(LoggerMixin):
         # num_ctx 随请求下发让 runner 以更大窗口装载；配合 _trim_messages_to_budget 双保险。
         self._fb_num_ctx: int = 8192
         self._oa_num_ctx: int = 0  # 主链原生 /api/chat 的 num_ctx（0=不下发，维持端侧默认）
-        self._fb_calls = 0
+        self._fb_calls = 0   # 仅兜底身份（as_primary=False）；本地主链不计
         self._fb_ok = 0
         # P1（本地优先 / 全本地）：ai.primary ∈ cloud（默认，行为不变）| local | local_only。
         # 此处先置默认，保证**任何构造路径**下该字段都存在；真实解析放在 fallback 配置
@@ -1706,6 +1706,8 @@ class AIClient(LoggerMixin):
           - 成功记进 ``_last_primary_ok_ts``（本地就是主链）而非 ``_last_fb_ok_ts``；
           - 成本记 tier=``local_primary`` 而非 ``local_fallback``（出话分布看板才不失真）；
           - **不**记 ``local_llm_fallback``「顶班」计数（与 ``_local_tool_chat`` 同款克制）；
+          - **不**累加 ``_fb_calls`` / ``_fb_ok``（``get_stats().local_fallback_*``
+            是看门狗「云端挂了本地顶班」判据，本地主链出话算进去会 30min 误弹）；
           - 日志降为 INFO（正常运行，不是事故）。
         """
         if not (self._fb_client and self._fb_model):
@@ -1730,7 +1732,8 @@ class AIClient(LoggerMixin):
                 self.logger.debug("delivery_block 上报失败", exc_info=True)
             return None
         use_fb_model = str(model_override or "").strip() or self._fb_model
-        self._fb_calls += 1
+        if not as_primary:
+            self._fb_calls += 1
         t0 = time.time()
         try:
             fb_messages = list(messages)
@@ -1842,7 +1845,8 @@ class AIClient(LoggerMixin):
                 self._lane_note_fail("local", "empty")
                 return None
             elapsed = time.time() - t0
-            self._fb_ok += 1
+            if not as_primary:
+                self._fb_ok += 1
             self._lane_note_ok("local")
             if as_primary:
                 self._last_primary_ok_ts = time.time()
@@ -3988,6 +3992,7 @@ class AIClient(LoggerMixin):
                 "telegram": "Telegram", "whatsapp": "WhatsApp",
                 "whatsapp_rpa": "WhatsApp", "messenger": "Messenger",
                 "messenger_rpa": "Messenger", "line": "LINE", "inbox": "收件箱",
+                "wechat": "微信", "wechat_pc": "微信",
             }.get(_plat, "聊天")
             # B117（实施74，0826 _576 实录「贴纸被当娃照评论」）：贴纸/GIF 是
             # **表达心情**的符号，不是真实生活照片——识图描述只作语义参考，
@@ -4026,11 +4031,22 @@ class AIClient(LoggerMixin):
                     + (f"\n{_cap_rule}" if _cap_rule else "")
                 )
             else:
-                prompt_parts.append(
-                    f"【{_plat_label} 媒体消息·{_kind_hint}】对方发来了一条{_kind_hint}消息，"
-                    "内容暂无法识别。请自然承认收到了，并温和追问对方想表达或想了解什么；"
-                    "贴纸/表情宜轻松口语，一两句即可。"
-                )
+                if _mkind == "voice":
+                    # 电脑微信入站语音没有声音文件/转写（屏上只有「语音N秒」）。
+                    # 旧口径「温和追问想表达什么」会让模型装听过或猜内容；
+                    # 这里钉死：承认收到 + 请打字，绝不假装听过。
+                    prompt_parts.append(
+                        f"【{_plat_label} 媒体消息·语音】对方发来语音，但你听不到内容"
+                        "（只有时长占位，没有声音文件、也没有转写）。"
+                        "自然承认收到了语音，请对方打字说；不要假装听过、不要猜内容、"
+                        "不要说「语音有点听不清」。"
+                    )
+                else:
+                    prompt_parts.append(
+                        f"【{_plat_label} 媒体消息·{_kind_hint}】对方发来了一条{_kind_hint}消息，"
+                        "内容暂无法识别。请自然承认收到了，并温和追问对方想表达或想了解什么；"
+                        "贴纸/表情宜轻松口语，一两句即可。"
+                    )
         # B104（实施74 三批）生成端第一道：初次对话防编造引用——出稿守卫
         # （outbound_text_guard.strip_unfounded_recall）是兜底，这里在源头消掉。
         # 三重保守判据：**必须显式带 _conversation_history 键**（试聊/copilot 等
@@ -5970,7 +5986,7 @@ class AIClient(LoggerMixin):
             "model": self.model,
             "temperature": self.temperature,
             "provider": self._provider,
-            # 主对话位置（ai.primary）；local_* 时 local_fallback_* 计数含「本地主链」调用
+            # 主对话位置（ai.primary）。local_fallback_* 只计兜底身份，不含本地主链。
             "primary_mode": getattr(self, "_primary_mode", None) or "cloud",
             # 老板锁（2026-08-22）：非空=主链档位被锁死，越权切换会被强制回锁值
             "primary_lock": getattr(self, "_primary_lock", "") or None,

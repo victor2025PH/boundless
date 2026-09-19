@@ -152,6 +152,22 @@ async function _playVoicePreview(pid, btn) {
 // data-tag，点击从 dataset 取——旧写法把标签拼进 onclick 单引号串，含引号/尖括号的标签会炸。
 var TAG_CLOUD_TOP = 12;
 var _tagCloudExpanded = false;
+function _tagText(t) {
+  return String(t == null ? '' : t);
+}
+function _coerceProfileTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  var out = [], seen = {};
+  tags.forEach(function(t) {
+    var s = _tagText(t).trim();
+    if (!s) return;
+    var k = s.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(s);
+  });
+  return out;
+}
 function _tcAttr(s) {
   s = String(s == null ? '' : s);
   return (typeof _escAttr === 'function') ? _escAttr(s)
@@ -161,7 +177,7 @@ function renderTagCloud(profiles) {
   const cloud = document.getElementById('tag-cloud');
   if (!cloud) return;
   const tmap = {};
-  profiles.forEach(function(p) { (p.tags || []).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
+  profiles.forEach(function(p) { _coerceProfileTags(p.tags).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
   const all = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1] || String(a[0]).localeCompare(String(b[0])); });
   let show = all;
   const hidden = Math.max(0, all.length - TAG_CLOUD_TOP);
@@ -254,7 +270,7 @@ function renderProfileList(profiles) {
       : '';
     var tagHtml = '';
     if (_q && p.tags && p.tags.length) {
-      var matchedTags = p.tags.filter(function(t){ return t.toLowerCase().includes(_q); });
+      var matchedTags = _coerceProfileTags(p.tags).filter(function(t){ return t.toLowerCase().includes(_q); });
       if (matchedTags.length) {
         tagHtml = matchedTags.map(function(t){ return '<span class="tag" style="font-size:.61rem">' + _hl(t, _q) + '</span>'; }).join('');
       }
@@ -334,10 +350,12 @@ function _applyFilter() {
       return (p.name || '').toLowerCase().includes(q) ||
              (p.role || '').toLowerCase().includes(q) ||
              (p.id || '').toLowerCase().includes(q) ||
-             (p.tags || []).some(function(t){ return t.toLowerCase().includes(q); });
+             _coerceProfileTags(p.tags).some(function(t){ return t.toLowerCase().includes(q); });
     });
   }
-  if (_activeTag) filtered = filtered.filter(function(p){ return (p.tags || []).includes(_activeTag); });
+  if (_activeTag) filtered = filtered.filter(function(p){
+    return _coerceProfileTags(p.tags).indexOf(_activeTag) >= 0;
+  });
   if (_healthTierFilter !== null) {
     var _tBounds = [[0,49],[50,74],[75,89],[90,100]][_healthTierFilter];
     filtered = filtered.filter(function(p){ var s=_profileCompleteness(p); return s>=_tBounds[0]&&s<=_tBounds[1]; });

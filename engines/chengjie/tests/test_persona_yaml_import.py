@@ -73,6 +73,11 @@ def test_parse_claire_brennan_pack():
     p = profiles[0]
     assert p["id"] == "claire_brennan" and p["name"] == "Claire"
     assert p.get("location") == "los_angeles"
+    assert p.get("tags") == [
+        "female", "30", "american", "los_angeles", "designer",
+        "apparel", "adult", "english",
+    ]
+    assert all(isinstance(t, str) for t in p["tags"])
     from src.ai.voice_tristate import split_problems, validate_voice_profile
     errs, _ = split_problems(validate_voice_profile(p.get("voice_profile")))
     assert errs == [], errs

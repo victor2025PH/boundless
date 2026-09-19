@@ -62,11 +62,39 @@ ANCHORS: Dict[str, Dict[str, Any]] = {
     "profile_popup": {"class": [PROFILE_POPUP_CLASS]},
     "profile_wxid_key": {"name": ["微信号：", "微信号:", "WeChat ID:", "WeChat ID："], "type": "TextControl"},
     "profile_value": {"class": ["mmui::ProfileTextView"], "type": "TextControl"},
+    # ── 语音（2026-09-19 微信 4.1.13 真机探针）──
+    # 输入区右侧工具栏 aid ``tool_bar_accessible.chatinput_toolbar_right_view``（``mmui::ChatInputToolbarRightView``），
+    # 闲态含「发语音 ( 按住右 Alt )」（``mmui::XButton``，Name 带热键文案随语言/版本变 → 按前缀匹配，
+    # 兜底取工具栏里除「发送」外的 XButton）与「发送」（``mmui::XOutlineButton``）。
+    # 点「发语音」后工具栏被 ``mmui::ChatVoiceRecordView`` 替换（**类名与语言无关＝录音态最稳的判据**），
+    # 其内「取消」（XButton）、「发送语音」（``mmui::XMouseEventView`` ButtonControl）、波形 aid ``wave view``。
+    # 点「取消」/「发送语音」后 ChatVoiceRecordView 消失、工具栏恢复闲态。
+    # fast_class：只给 provider 侧 FindFirst 用的精确类名（_matches 不看它；命中后仍按 aid 复核，版本变了回落遍历）
+    "voice_toolbar": {"aid": ["chatinput_toolbar_right_view"], "fast_class": ["mmui::ChatInputToolbarRightView"]},
+    "voice_button": {"name_prefix": ["发语音", "發語音", "Voice", "Hold"], "type": "ButtonControl"},
+    "voice_record_view": {"class": ["mmui::ChatVoiceRecordView"]},
+    "voice_cancel": {"name": ["取消", "Cancel"], "type": "ButtonControl"},
+    "voice_send": {"name": ["发送语音", "發送語音", "Send Voice", "Send voice", "Send Voice Message", "Send"],
+                   "type": "ButtonControl"},
 }
 REQUIRED_FOR_READ = ("main_window", "session_list")
 #: 发送必需：会话列表 + 消息列表 + 输入框 + 标题（消息列表/输入框/标题只有打开会话后才存在——
 #: self_check 会先点开列表第一项再判）
 REQUIRED_FOR_SEND = ("main_window", "session_list", "message_list", "composer", "chat_title", "send_button")
+#: 语音必需（可选能力：缺了只是 voice_ready=False，不影响文字收发；4.1.9 以下客户端没有「发语音」按钮）
+REQUIRED_FOR_VOICE = ("voice_toolbar", "voice_button")
+#: 录音态确认 / 退出的等待上限（点按后 UI 切换约 0.3–0.9s）
+VOICE_STATE_TIMEOUT = 3.0
+#: 录音态相关点按的点后等待（uiautomation 默认 0.5s；录音期间点后等待都是录进去的静音）
+CLICK_WAIT_SEC = 0.05
+#: 播放期间缓存的「发送语音」控件最多用多久（微信语音硬顶 60s；超过说明不是这一条的录音态）
+PRIMED_CONTROL_TTL_SEC = 90.0
+#: 快速点按（缓存控件、不平滑移动）后等录音态退出的窗口；没退出就回落「重新定位 + 平滑点按」
+PRIMED_CLICK_CONFIRM_SEC = 1.0
+#: UIA TreeScope_Descendants（uiautomation 包没导出这个枚举）
+_TREESCOPE_DESCENDANTS = 0x4
+#: 证明 provider 侧 FindFirst 在当前主窗可用的探针类名（正常态主窗必有 QWidget 子树 / 聊天主视图）
+FAST_FIND_PROBE_CLASSES = ("mmui::ChatMasterView", "QWidget")
 
 #: 气泡类名 → 收件箱 media 类别（未知 Chat*ItemView 一律 unknown，正文取 Name）
 _BUBBLE_KINDS = (
@@ -126,6 +154,8 @@ def _matches(ctrl: Any, spec: Dict[str, Any]) -> bool:
             return False
         if spec.get("name") and name not in spec["name"]:
             return False
+        if spec.get("name_prefix") and not any(name.startswith(p) for p in spec["name_prefix"]):
+            return False
         return True
     except Exception:
         return False
@@ -144,6 +174,31 @@ def _walk(ctrl: Any, max_depth: int = 26):
             kids = []
         for k in reversed(kids):
             stack.append((k, d + 1))
+
+
+def _find_first_by_class(root: Any, class_names: List[str]) -> Optional[Any]:
+    """provider 侧原生 ``FindFirst(Descendants, ClassName==x)``：一趟 COM 调用，比 :func:`_walk` 逐节点跨进程
+    读属性快一个量级（真机 mmui 主窗全树 miss ≈250ms → ≈10ms）。录音态确认要每 100ms 轮询一次，走这条。
+
+    只认**精确**类名；返回 None 既可能是「没有」也可能是「不支持」——调用方自行决定是否回落 walk。
+    """
+    if not available() or root is None:
+        return None
+    try:
+        import uiautomation as auto  # type: ignore
+        import uiautomation.uiautomation as _impl  # type: ignore
+        client = _impl._AutomationClient.instance().IUIAutomation  # noqa: SLF001
+        el = getattr(root, "Element", None)
+        if el is None:
+            return None
+        for cls in class_names:
+            cond = client.CreatePropertyCondition(auto.PropertyId.ClassNameProperty, cls)
+            hit = el.FindFirst(_TREESCOPE_DESCENDANTS, cond)
+            if hit:   # NULL 指针为假
+                return auto.Control.CreateControlFromElement(hit)
+    except Exception:
+        logger.debug("[wechat_pc.uia] FindFirst(ClassName) 不可用", exc_info=True)
+    return None
 
 
 def parse_session_cell_name(raw: str) -> Tuple[str, str, str, int]:
@@ -330,6 +385,10 @@ class UiaBackend:
         self._last_raw_names: set = set()
         self._main_hwnd = 0
         self._last_check = 0.0
+        # 播放期间提前定位到的「发送语音」按钮（控件, 定位时刻）；finish_voice_record 先点它，省掉播完后的 UIA 遍历
+        self._primed_voice_send: Optional[Tuple[Any, float]] = None
+        # provider 侧 FindFirst 在本进程里命中过录音态视图 → 之后 miss 不再回落全树遍历
+        self._fast_find_proven = False
 
     # ── 窗口发现（Win32 → UIA） ──
     def _qt_windows(self) -> List[Any]:
@@ -414,6 +473,10 @@ class UiaBackend:
         self.readonly = bool(missing)
         rep["missing"] = missing
         rep["readonly"] = self.readonly
+        # 语音是可选能力：只报状态不锁只读（老版本微信没有「发语音」按钮照常收发文字）
+        rep["voice_ready"] = bool(not missing and self._voice_button(win) is not None)
+        rep["voice_missing"] = [] if rep["voice_ready"] else [
+            k for k in REQUIRED_FOR_VOICE if not self._find(win, k)]
         self._last_check = time.time()
         return rep
 
@@ -490,6 +553,12 @@ class UiaBackend:
                 candidates = [c] + [x for x in candidates if x is not c]
         if not candidates:
             return False
+        if len(candidates) > 1 and index < 0:
+            # 同名多格且没指定格：**已选中**的那格排最前——它就是当前打开的会话（刚核对过身份、刚发过上一条
+            # 分条的那个人）；否则按列表位置先点第一格会把会话切到同名的另一个人身上
+            sel = [c for c in candidates if self._cell_selected(c)]
+            if sel:
+                candidates = sel + [x for x in candidates if x not in sel]
         self._activate(main)
         for cell in candidates:
             try:
@@ -528,6 +597,17 @@ class UiaBackend:
     def current_title(self) -> str:
         main = self._main_window()
         return self._title_text(main) if main is not None else ""
+
+    def main_hwnd(self) -> int:
+        """当前主窗句柄（没有 → 0）；service 的无障碍树空壳自愈用。"""
+        try:
+            hwnd = self._main_hwnd
+            if not hwnd:
+                main = self._main_window()
+                hwnd = self._main_hwnd if main is not None else 0
+            return int(hwnd or 0)
+        except Exception:
+            return 0
 
     def window_minimized(self) -> bool:
         """主窗最小化（PrintWindow 取不到内容 → 判不了方向 → 消息不入站）。"""
@@ -685,6 +765,207 @@ class UiaBackend:
         except Exception:
             logger.debug("[wechat_pc.uia] press_send 失败", exc_info=True)
         return False
+
+    # ── 语音 ──
+    def _voice_toolbar(self, main: Any) -> Optional[Any]:
+        spec = self.anchors.get("voice_toolbar", {})
+        hit = _find_first_by_class(main, list(spec.get("fast_class") or []))
+        if hit is not None and _matches(hit, spec):
+            return hit
+        tbs = self._find(main, "voice_toolbar")
+        return tbs[0] if tbs else None
+
+    def _voice_button(self, main: Any) -> Optional[Any]:
+        """闲态「发语音」按钮：工具栏内按名字前缀找；找不到兜底取工具栏里不是「发送」的 XButton。"""
+        tb = self._voice_toolbar(main)
+        if tb is None:
+            return None
+        hits = self._find(tb, "voice_button", max_depth=6)
+        if hits:
+            return hits[0]
+        send_names = set(self.anchors.get("send_button", {}).get("name") or [])
+        for c in _walk(tb, 6):
+            try:
+                if (getattr(c, "ControlTypeName", "") == "ButtonControl" and "XButton" in _s(c.ClassName)
+                        and _s(c.Name) and _s(c.Name) not in send_names):
+                    return c
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _visible(c: Any) -> bool:
+        try:
+            r = c.BoundingRectangle
+            return (r.right - r.left) > 0 and (r.bottom - r.top) > 0
+        except Exception:
+            return True
+
+    def _record_view(self, main: Any) -> Optional[Any]:
+        """录音态视图（``mmui::ChatVoiceRecordView``）。先走 provider 侧 FindFirst（真机 ≈15ms，全树遍历 ≈150–400ms）。
+
+        FindFirst 没找到时先用一个**必然存在**的类名（:data:`FAST_FIND_PROBE_CLASSES`）证明这条路在当前窗口上可用：
+        能找到探针却找不到录音视图＝确实不在录音态，直接返回，不回落遍历——录音态确认/退出都是 100ms 轮询，
+        点下「发语音」之后每一次遍历都是录进去的几百毫秒开头静音。探针也找不到（无障碍树空壳/老版本）才遍历。
+        """
+        classes = list(self.anchors.get("voice_record_view", {}).get("class") or [])
+        hit = _find_first_by_class(main, classes)
+        if hit is not None:
+            self._fast_find_proven = True
+            return hit if self._visible(hit) else None
+        if not self._fast_find_proven and _find_first_by_class(main, list(FAST_FIND_PROBE_CLASSES)) is not None:
+            self._fast_find_proven = True
+        if self._fast_find_proven:
+            return None
+        for c in self._find(main, "voice_record_view"):
+            if self._visible(c):
+                return c
+        return None
+
+    def _wait_recording(self, main: Any, want: bool, timeout: float = VOICE_STATE_TIMEOUT) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            if (self._record_view(main) is not None) == want:
+                return True
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.1)
+
+    @staticmethod
+    def _activate_for_click(win: Any) -> None:
+        """点按前置前：主窗已在前台就不等（``_activate`` 固定睡 250ms——录音态里每一毫秒都是录进去的静音）。"""
+        try:
+            import ctypes
+            fg = int(ctypes.windll.user32.GetForegroundWindow() or 0)
+            if fg and fg == int(getattr(win, "NativeWindowHandle", 0) or 0):
+                return
+        except Exception:
+            pass
+        UiaBackend._activate(win)
+
+    def voice_ready(self) -> bool:
+        if self.readonly:
+            return False
+        main = self._main_window()
+        return main is not None and self._voice_button(main) is not None
+
+    def voice_recording(self) -> bool:
+        main = self._main_window()
+        return main is not None and self._record_view(main) is not None
+
+    def start_voice_record(self) -> bool:
+        """点「发语音」并确认进入录音态（ChatVoiceRecordView 出现）。已在录音态直接 True。"""
+        if self.readonly:
+            return False
+        main = self._main_window()
+        if main is None:
+            return False
+        self._primed_voice_send = None
+        try:
+            if self._record_view(main) is not None:
+                return True
+            btn = self._voice_button(main)
+            if btn is None:
+                return False
+            self._activate_for_click(main)
+            # waitTime≈0：uiautomation 点完默认再睡 0.5s——录音已经开始，这 0.5s 全是录进去的开头静音
+            btn.Click(simulateMove=True, waitTime=CLICK_WAIT_SEC)
+            return self._wait_recording(main, True)
+        except Exception:
+            logger.debug("[wechat_pc.uia] start_voice_record 失败", exc_info=True)
+            return False
+
+    def _locate_in_record_view(self, main: Any, key: str, *, fallback_named: bool) -> Optional[Any]:
+        rv = self._record_view(main)
+        if rv is None:
+            return None
+        hits = self._find(rv, key, max_depth=8)
+        if not hits and fallback_named:
+            # 英文/新版本名字对不上：录音态里除「取消」外唯一带名字的按钮就是「发送语音」
+            cancel_names = set(self.anchors.get("voice_cancel", {}).get("name") or [])
+            for c in _walk(rv, 8):
+                try:
+                    if (getattr(c, "ControlTypeName", "") == "ButtonControl" and _s(c.Name)
+                            and _s(c.Name) not in cancel_names):
+                        hits = [c]
+                        break
+                except Exception:
+                    continue
+        return hits[0] if hits else None
+
+    def _click_in_record_view(self, main: Any, key: str, *, fallback_named: bool) -> bool:
+        ctl = self._locate_in_record_view(main, key, fallback_named=fallback_named)
+        if ctl is None:
+            return False
+        self._activate_for_click(main)
+        ctl.Click(simulateMove=True, waitTime=CLICK_WAIT_SEC)
+        return True
+
+    def prime_voice_send(self) -> bool:
+        """录音态里提前定位「发送语音」按钮并缓存（send_guard 在**播放期间**调用，把 UIA 遍历藏进播放窗口）。"""
+        self._primed_voice_send = None
+        if self.readonly:
+            return False
+        main = self._main_window()
+        if main is None:
+            return False
+        try:
+            ctl = self._locate_in_record_view(main, "voice_send", fallback_named=True)
+        except Exception:
+            logger.debug("[wechat_pc.uia] prime_voice_send 失败", exc_info=True)
+            return False
+        if ctl is None:
+            return False
+        self._primed_voice_send = (ctl, time.monotonic())
+        return True
+
+    def finish_voice_record(self) -> bool:
+        """点「发送语音」结束录音并发出；确认录音态退出。不在录音态 → False。
+
+        先点播放期间缓存的按钮（不再遍历 UIA；控件失效/过期 → 重新定位），播完到点下去的尾部静音目标 ≤200ms。
+        """
+        if self.readonly:
+            return False
+        main = self._main_window()
+        if main is None:
+            return False
+        primed, self._primed_voice_send = self._primed_voice_send, None
+        fast_clicked = False
+        try:
+            if primed is not None and time.monotonic() - primed[1] <= PRIMED_CONTROL_TTL_SEC:
+                try:
+                    ctl = primed[0]
+                    if self._visible(ctl):
+                        self._activate_for_click(main)
+                        # 直接落点不做平滑移动（平滑移动按距离要 100–300ms，都是录进去的尾部静音）
+                        ctl.Click(simulateMove=False, waitTime=CLICK_WAIT_SEC)
+                        fast_clicked = True
+                        if self._wait_recording(main, False, timeout=PRIMED_CLICK_CONFIRM_SEC):
+                            return True
+                        logger.debug("[wechat_pc.uia] 快速点发送语音未退出录音态，回落重新定位+平滑点按")
+                except Exception:
+                    logger.debug("[wechat_pc.uia] 缓存的发送语音按钮失效，重新定位", exc_info=True)
+            if not self._click_in_record_view(main, "voice_send", fallback_named=True):
+                # 录音视图已经不在：快速点按其实生效、只是退出慢了一步（不能判失败——已发出的语音会被人再发一次）
+                return fast_clicked and self._record_view(main) is None
+            return self._wait_recording(main, False)
+        except Exception:
+            logger.debug("[wechat_pc.uia] finish_voice_record 失败", exc_info=True)
+            return False
+
+    def cancel_voice_record(self) -> bool:
+        """点「取消」放弃录音；返回是否已**确认**退出录音态（不在录音态即 True）。**绝不发 Esc**（会把主窗藏进托盘）。"""
+        main = self._main_window()
+        if main is None:
+            return False
+        try:
+            if self._record_view(main) is None:
+                return True
+            self._click_in_record_view(main, "voice_cancel", fallback_named=False)
+            return self._wait_recording(main, False)
+        except Exception:
+            logger.debug("[wechat_pc.uia] cancel_voice_record 失败", exc_info=True)
+            return False
 
     # ── 资料卡 ──
     def _ensure_chat_info_panel(self, main: Any) -> Optional[Any]:

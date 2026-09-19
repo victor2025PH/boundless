@@ -2,6 +2,9 @@
 """errors_stock 域词条(由 tools/i18n_migrate_domain.py 从单体迁移)。结构见包 docstring。"""
 
 ZH = {
+    "err.asr.message_not_found": "消息不存在或不属于该会话",
+    "err.asr.not_voice": "该消息不是客户发来的语音消息",
+    "err.asr.text_too_long": "改正文本过长（上限 2000 字）",
     "err.auth.already_initialized": "系统已初始化，请通过用户管理页面操作",
     "err.auth.api_key_required": "API Key 不能为空",
     "err.auth.bad_credentials": "用户名或密码错误",
@@ -179,6 +182,7 @@ ZH = {
     "err.persona.save_unavailable": "ConfigManager.save_personas 不可用",
     "err.pmedia.bad_body": "请求体格式错误",
     "err.pmedia.ext_not_allowed": "不支持的文件类型：{ext}（图片支持 jpg/png/webp/gif，视频支持 mp4/mov/webm/m4v）",
+    "err.pmedia.heic_export_jpeg": "暂不能直接接收 {ext}（iPhone HEIC）：请在手机相册「分享 → 导出为 JPEG」或在设置里改「兼容性最好」后重新上传",
     "err.pmedia.file_required": "file（媒体文件）必填",
     "err.pmedia.not_found": "媒体条目不存在",
     "err.pmedia.gate_not_writable": "配置写入能力不可用，无法切换全局发图总闸",
@@ -309,6 +313,7 @@ ZH = {
     "err.svc.inbox_not_ready": "inbox_store 未就绪",
     "err.svc.kb_not_ready": "kb_store 未就绪",
     "err.svc.diag_bundle_failed": "诊断包在本机生成失败，请稍后重试；若持续失败请截图联系客服。",
+    "err.svc.diag_local_error": "本机发送报障时出错（不是网络问题，重试无效）：请点「复制全部信息」发给客服，并附上这句提示。",
     "err.svc.diag_upload_rejected": "官网收包被拒（{status}）：已自动精简重传仍未成功，请稍后重试或联系客服。",
     "err.svc.upstream_unreachable": "连不上官网服务，请检查网络后重试。",
     "err.svc.upstream_unreachable_staged": "暂时连不上官网服务：报障内容已在本机暂存，网络恢复后会自动补传给客服，无需重复提交。",
@@ -412,6 +417,9 @@ ZH = {
 }
 
 EN = {
+    "err.asr.message_not_found": "Message not found in this conversation",
+    "err.asr.not_voice": "That message is not an inbound voice message",
+    "err.asr.text_too_long": "Corrected text is too long (max 2000 characters)",
     "err.auth.already_initialized": "System already initialized; please use the User Management page",
     "err.auth.api_key_required": "API Key is required",
     "err.auth.bad_credentials": "Incorrect username or password",
@@ -591,6 +599,7 @@ EN = {
     "err.pmedia.bad_body": "Malformed request body",
     "err.pmedia.bad_content": "File content failed validation ({why}): the file may be corrupted — please retry with the original image",
     "err.pmedia.ext_not_allowed": "Unsupported file type: {ext} (images: jpg/png/webp/gif, videos: mp4/mov/webm/m4v)",
+    "err.pmedia.heic_export_jpeg": "Cannot accept {ext} (iPhone HEIC) directly: in Photos use Share → Export as JPEG, or set Camera → Formats → Most Compatible, then upload again",
     "err.pmedia.file_required": "file (media) is required",
     "err.pmedia.not_found": "Media item not found",
     "err.pmedia.gate_not_writable": "Config overlay is not writable; cannot switch the global photo gate",
@@ -720,6 +729,7 @@ EN = {
     "err.svc.inbox_not_ready": "Inbox store is not ready",
     "err.svc.kb_not_ready": "Knowledge base store is not ready",
     "err.svc.diag_bundle_failed": "Failed to build the diagnostic bundle locally. Please retry later; if it persists, contact support with a screenshot.",
+    "err.svc.diag_local_error": "This machine failed while sending the report (not a network issue; retrying won’t help). Use “Copy all details”, send it to support, and include this message.",
     "err.svc.diag_upload_rejected": "The vendor site rejected the upload ({status}); the automatic slim retry also failed. Please try again later or contact support.",
     "err.svc.upstream_unreachable": "Couldn’t reach the vendor site. Check your network and try again.",
     "err.svc.upstream_unreachable_staged": "The vendor site is unreachable right now. Your report has been saved on this machine and will be re-sent automatically once the network recovers — no need to submit again.",

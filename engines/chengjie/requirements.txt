@@ -120,3 +120,11 @@ opencc-python-reimplemented>=0.1.7
 # （pc_runner._UIA_OK=False，侦察返回 degraded、服务不崩）。故用平台标记，
 # 非 win32 环境 pip 直接跳过、CI 相关门禁软依赖 skip。
 uiautomation>=2.0.18 ; sys_platform == "win32"
+
+# 个人微信 PC 副驾「发语音」音频通路（2026-09-19，src/integrations/wechat_pc/audio_cable.py）：
+# sounddevice 播/录虚拟声卡（VB-CABLE），soundfile 解码合成音；comtypes 随 uiautomation 带入
+#（IPolicyConfig 对齐采样率 / 切默认麦克风）。全部函数内惰性 import，缺库 → voice_ready=False、
+# 副驾照常发文字。同 uiautomation 只在 Windows 装；PyInstaller 由 hooks-contrib 自带 hook 收
+# portaudio / libsndfile DLL（build_backend.py 已把 soundfile 从 EXCLUDES 摘掉）。
+sounddevice>=0.4.6 ; sys_platform == "win32"
+soundfile>=0.12.1 ; sys_platform == "win32"

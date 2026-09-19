@@ -1601,10 +1601,24 @@ class SkillManager(LoggerMixin):
             # W3-3M：RelationshipStager — 跨域轻量语气指令
             # 与 companion_relationship 互不干扰：conversion 域有完整关系块，
             # 其他域（或 companion 未启用时）通过此注入获得漏斗语气校准。
+            # ``companion.funnel_directive: false``（2026-09-19，173 陪伴机）：整段不注入——
+            # INITIAL「不主动宣示亲密关系」/ 暖场「克制过度撒娇」对成人向陪伴人设是反向指令。
             try:
                 _fstage = (context or {}).get("funnel_stage") or ""
                 _fscore = (context or {}).get("intimacy_score")
-                if _fstage:
+                _fd_on = True
+                try:
+                    _cfg_fd = self.config.config if hasattr(self.config, "config") else {}
+                    _comp_fd = (_cfg_fd.get("companion") or {}) if isinstance(_cfg_fd, dict) else {}
+                    if isinstance(_comp_fd, dict) and "funnel_directive" in _comp_fd:
+                        _fd_on = _comp_fd.get("funnel_directive") not in (False, 0, "0", "false", "off", "no")
+                except Exception:
+                    _fd_on = True
+                if not _fd_on:
+                    user_context.pop("_funnel_directive", None)
+                    self.logger.debug("[3M] funnel_directive off (companion.funnel_directive=false) stage=%s",
+                                      _fstage or "-")
+                elif _fstage:
                     from src.contacts.relationship_stager import stage_directive
                     _directive = stage_directive(_fstage, _fscore)
                     if _directive:

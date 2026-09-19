@@ -461,5 +461,37 @@ ok(
   /version:\s*displayVersion\(\)/.test(mainJs) && /devmode_hint/.test(mainJs),
   "main.js appMenuSpec 丢失 version/extras（帮助菜单版本行与解锁词条无源——彩蛋整链哑掉）"
 );
+// ⑱c 用户端 DevTools 封死（老板令 2026-09-19）：打包态一律不可开，源码态不随 --dev 自动弹。
+//     ① 准入常量必须绑定 !app.isPackaged；② 每个 BrowserWindow webPreferences 与
+//     will-attach-webview 都下 devTools 准入；③ 自动弹窗只认 --devtools；④ devtools 分支
+//     在不准入时回执 devtools_disabled；⑤ spec 带 devtools_allowed 让页面不接线解锁。
+ok(
+  /const DEVTOOLS_ALLOWED\s*=\s*!app\.isPackaged;/.test(mainJs),
+  "main.js 丢失 DEVTOOLS_ALLOWED = !app.isPackaged（用户端 DevTools 准入常量）"
+);
+ok(
+  (mainJs.match(/devTools:\s*DEVTOOLS_ALLOWED/g) || []).length >= 3
+    && (mainJs.match(/new BrowserWindow\(/g) || []).length === (mainJs.match(/devTools:\s*DEVTOOLS_ALLOWED/g) || []).length,
+  "main.js 有 BrowserWindow 的 webPreferences 未下 devTools: DEVTOOLS_ALLOWED（用户端 DevTools 可被打开）"
+);
+ok(
+  /will-attach-webview[\s\S]{0,400}webPreferences\.devTools\s*=\s*DEVTOOLS_ALLOWED/.test(mainJs),
+  "main.js will-attach-webview 未给 webview guest 下 devTools 准入（工作台/官方页 webview 可开 DevTools）"
+);
+ok(
+  !/argv\.includes\("--dev"\)/.test(mainJs)
+    && /const DEVTOOLS_AUTO_OPEN\s*=\s*DEVTOOLS_ALLOWED\s*&&\s*process\.argv\.includes\("--devtools"\)/.test(mainJs)
+    && /if \(DEVTOOLS_AUTO_OPEN\) win\.webContents\.openDevTools/.test(mainJs)
+    && (mainJs.match(/openDevTools\(/g) || []).length === 1,
+  "main.js DevTools 自动弹窗回归：只许 --devtools（且源码态）触发，唯一一处 openDevTools"
+);
+ok(
+  /case "devtools":[\s\S]{0,300}if \(!DEVTOOLS_ALLOWED\) return \{ ok: false, error: "devtools_disabled" \}/.test(mainJs),
+  "main.js app-menu-action devtools 分支丢失打包态拒绝回执（devtools_disabled）"
+);
+ok(
+  /devtools_allowed:\s*DEVTOOLS_ALLOWED/.test(mainJs),
+  "main.js appMenuSpec 丢失 devtools_allowed（页面无从得知用户端不许解锁，会注入点不开的 DevTools 项）"
+);
 
 console.log("renderer-boot-invariants.test.js: " + passed + " passed");

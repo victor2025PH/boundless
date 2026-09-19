@@ -41,7 +41,7 @@ def test_tag_cloud_collapses_to_top_n_with_more_toggle():
     # 静态 JS 改了要 bump 缓存戳
     tpl = _TPL.read_text(encoding="utf-8")
     assert "persona_studio_core.js?v=20260730a" not in tpl
-    assert re.search(r"persona_studio_core\.js\?v=2026090[5-9]", tpl)
+    assert re.search(r"persona_studio_core\.js\?v=202609\d{2}", tpl)
 
 
 def test_tag_keys_bilingual():

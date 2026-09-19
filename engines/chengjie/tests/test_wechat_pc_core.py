@@ -38,6 +38,7 @@ def test_never_actions_are_hard_denied():
               "AUTO_LOGIN", "join_group"):
         assert P.action_allowed(a) is False
     assert P.action_allowed("read_messages") and P.action_allowed("send_text_reply")
+    assert P.action_allowed("send_voice_reply"), "语音回复是显式加白的动作"
     assert P.action_allowed("something_new") is False, "不在白名单即拒"
 
 
@@ -48,6 +49,17 @@ def test_kind_gating_by_tier():
     assert not P.kind_allowed(semi, "text"), "半自动不发未经人确认的自动稿"
     assert P.kind_allowed(auto, "text") and P.kind_allowed(auto, "manual")
     assert not P.kind_allowed(P.resolve_policy({}), "manual"), "副驾永不发"
+    # 语音：仅全自动档；kind 绑定的白名单动作被摘掉时同样拒（防新 kind 绕白名单）
+    assert P.kind_allowed(auto, "voice") and not P.kind_allowed(semi, "voice")
+    assert not P.kind_allowed(P.resolve_policy({}), "voice")
+    assert P.KIND_ACTIONS["voice"] == "send_voice_reply"
+    orig = P.ALLOWED_ACTIONS
+    try:
+        P.ALLOWED_ACTIONS = frozenset(orig - {"send_voice_reply"})
+        assert not P.kind_allowed(auto, "voice")
+        assert P.kind_allowed(auto, "text")
+    finally:
+        P.ALLOWED_ACTIONS = orig
 
 
 def test_may_send_judgement_order():
@@ -194,6 +206,255 @@ def test_guarded_send_happy_path_and_each_failure_stage():
     assert _sender(_with()).send("张三", "   ").reason == "empty_text"
 
 
+# ── 语音五步（2026-09-19）────────────────────────────────────────────────────
+def _voice_backend(sec=9) -> FakeBackend:
+    fb = FakeBackend()
+    fb.sessions = [SessionRow("张三")]
+    fb.recorded_seconds = sec
+    return fb
+
+
+def test_voice_helpers_parse_seconds_and_find_echo():
+    from src.integrations.wechat_pc.send_guard import find_voice_echo, parse_voice_seconds
+    assert parse_voice_seconds("语音11秒") == 11
+    assert parse_voice_seconds('语音 7"') == 7 and parse_voice_seconds("Voice 12s") == 12
+    assert parse_voice_seconds("[语音] 3 秒") == 3 and parse_voice_seconds("你好") is None
+    v = Bubble("语音11秒", is_self=True, kind="voice")
+    assert find_voice_echo([], [v], 9) is not None, "录音比音频长 2s 在容忍内"
+    assert find_voice_echo([], [v], 30) is None, "秒数差太多＝别人的语音"
+    assert find_voice_echo([v], [v], 11) is None, "数量没增加不算新增"
+    assert find_voice_echo([], [Bubble("语音11秒", is_self=False, kind="voice")], 11) is None, "对方语音不算"
+    assert find_voice_echo([], [Bubble("语音", is_self=True, kind="voice")], 11) is not None, "没秒数只按数量"
+    assert find_voice_echo([], [Bubble("语音5秒", is_self=True, kind="unknown")], 5) is not None, "类名认不出按占位文案"
+
+
+def test_find_voice_echo_tail_run_survives_top_scroll_out():
+    """2026-09-19 真机：分条第二条发出后，顶部最老的语音滚出可视区 → 总数不变；尾部连续数 1→2 仍能认出新增。"""
+    from src.integrations.wechat_pc.send_guard import find_voice_echo
+    v = lambda: Bubble('语音7"秒', is_self=True, kind="voice")  # noqa: E731
+    sep = Bubble("17:59", kind="system")
+    peer = Bubble("你在哪里")
+    before = [v(), peer, Bubble("在", is_self=True), sep, v()]
+    after = [peer, Bubble("在", is_self=True), sep, v(), v()]          # 顶部 v 滚出，尾部多一条
+    assert find_voice_echo(before, after, 5) is not None
+    # 尾部连续数没变、总数也没变 → 仍不算（例如只是列表上下抖动）
+    assert find_voice_echo(before, before, 5) is None
+    # 尾部连续数增加但秒数离谱 → 不是我们的
+    after_bad = [peer, sep, v(), Bubble("语音40秒", is_self=True, kind="voice")]
+    assert find_voice_echo(before, after_bad, 5) is None
+    # 对方在中间插了一句：总数增加仍能认（尾部连续数被打断也无妨）
+    after_peer_mid = before + [Bubble("嗯", is_self=False), v()]
+    assert find_voice_echo(before, after_peer_mid, 5) is not None
+
+
+def test_guarded_sender_voice_echo_window_is_longer_than_text():
+    from src.integrations.wechat_pc.send_guard import GuardedSender
+    g = GuardedSender(FakeBackend(), sleep=lambda s: None)
+    assert g.voice_echo_retries >= 8 and g.voice_echo_retries >= g.echo_retries
+    g2 = GuardedSender(FakeBackend(), sleep=lambda s: None, echo_retries=10, voice_echo_retries=2)
+    assert g2.voice_echo_retries == 10, "语音窗口不短于文字窗口"
+
+
+def test_guarded_send_voice_happy_path_and_failures_always_cancel():
+    played = []
+    fb = _voice_backend(9)
+
+    def _play():
+        played.append(1)
+        return 8.6
+
+    out = _sender(fb).send_voice("张三", _play, expected_sec=9)
+    assert out.ok and out.stage == "echo" and "语音9秒" in out.echo_text and played
+    assert not fb.recording and ("start_voice_record", "张三") in fb.actions and ("finish_voice_record", "张三") in fb.actions
+    # 每步带 @累计ms 时间轴（真机排「一条 5s 语音为什么要 17s」用）
+    assert any(t.startswith("record ok @") and t.endswith("ms") for t in out.trace), out.trace
+    assert any(t.startswith("play ok") for t in out.trace)
+    # 老版本没有「发语音」→ record 步失败，没碰任何按钮
+    fb2 = _voice_backend(); fb2.voice_supported = False
+    r2 = _sender(fb2).send_voice("张三", _play)
+    assert r2.stage == "record" and r2.reason == "voice_not_ready" and not any(a[0] == "open_session" for a in fb2.actions)
+    # 进不了录音态
+    fb3 = _voice_backend(); fb3.fail_start_record = True
+    assert _sender(fb3).send_voice("张三", _play).reason == "start_record_failed"
+    # 播放炸了 → 必取消，退出录音态
+    fb4 = _voice_backend()
+
+    def _boom():
+        raise RuntimeError("device gone")
+
+    r4 = _sender(fb4).send_voice("张三", _boom)
+    assert r4.stage == "play" and r4.reason.startswith("play_failed") and not fb4.recording
+    assert ("cancel_voice_record", "张三") in fb4.actions and "cancel ok" in r4.trace
+    # 「发送语音」点不到 → 取消
+    fb5 = _voice_backend(); fb5.fail_finish_record = True
+    r5 = _sender(fb5).send_voice("张三", _play)
+    assert r5.stage == "send" and r5.reason == "finish_record_failed" and not fb5.recording
+    # 取消也失败＝录音态卡住 → stage=cancel（service 据此冻结）
+    fb6 = _voice_backend(); fb6.fail_finish_record = True; fb6.fail_cancel_record = True
+    r6 = _sender(fb6).send_voice("张三", _play)
+    assert r6.stage == "cancel" and r6.reason == "finish_record_failed" and fb6.recording
+    # 录音期间标题被顶走 → 取消，不发到别人会话
+    class _Drift(FakeBackend):
+        def current_title(self):
+            return "王五" if self.recording else self.current
+    fb7 = _Drift(); fb7.sessions = [SessionRow("张三")]
+    r7 = _sender(fb7).send_voice("张三", _play)
+    assert r7.stage == "send" and r7.reason == "title_changed_before_send" and not fb7.recording
+    assert ("finish_voice_record", "张三") not in fb7.actions
+    # 无回显
+    fb8 = _voice_backend(); fb8.voice_echo_on_finish = False
+    assert _sender(fb8).send_voice("张三", _play).stage == "echo"
+
+
+class _Playback:
+    """audio_cable.Playback 同形：warmup / __call__(during) / close，记调用顺序。"""
+
+    def __init__(self, dur=8.6, fail=False):
+        self.dur = dur
+        self.fail = fail
+        self.events: List[str] = []
+
+    @property
+    def duration(self):
+        return self.dur
+
+    def warmup(self):
+        self.events.append("warmup")
+        return True
+
+    def __call__(self, during=None):
+        self.events.append("play")
+        if during is not None:
+            during()
+        if self.fail:
+            raise RuntimeError("device gone")
+        return self.dur
+
+    def close(self):
+        self.events.append("close")
+
+
+def test_send_voice_warms_up_before_record_primes_send_button_during_play_and_always_closes():
+    """P2 静音收窄：warmup 在进录音态之前；prime 在播放期间（录音态里）；close 成败都要跑。"""
+    fb = _voice_backend(9)
+    pb = _Playback()
+    out = _sender(fb).send_voice("张三", pb, expected_sec=9)
+    assert out.ok and pb.events == ["warmup", "play", "close"]
+    names = [a[0] for a in fb.actions]
+    i_start, i_prime, i_finish = names.index("start_voice_record"), names.index("prime_voice_send"), names.index("finish_voice_record")
+    assert i_start < i_prime < i_finish, "提前定位必须发生在录音态里、点发送之前"
+    assert any(t.startswith("send ok tail=") and t.endswith("ms") for t in out.trace), out.trace
+    # 播放炸了：仍然取消录音、仍然 close
+    fb2 = _voice_backend()
+    pb2 = _Playback(fail=True)
+    r2 = _sender(fb2).send_voice("张三", pb2)
+    assert r2.stage == "play" and not fb2.recording and pb2.events[-1] == "close"
+    # 进不了录音态：warmup 已做、也要 close，但不会 prime
+    fb3 = _voice_backend(); fb3.fail_start_record = True
+    pb3 = _Playback()
+    assert _sender(fb3).send_voice("张三", pb3).reason == "start_record_failed"
+    assert pb3.events == ["warmup", "close"] and "prime_voice_send" not in [a[0] for a in fb3.actions]
+    # 老式无参闭包照旧可用（不传 during）
+    fb4 = _voice_backend()
+    assert _sender(fb4).send_voice("张三", lambda: 3.0).ok
+
+
+def test_send_voice_prime_retries_within_play_window_only(monkeypatch):
+    """「发送语音」按钮晚挂名字：定位失败隔 0.25s 再试，但预算卡在音频结束前 0.4s（短音频只试一次）。"""
+    import src.integrations.wechat_pc.send_guard as sg
+
+    class _LatePrime(FakeBackend):
+        def __init__(self, ok_at):
+            super().__init__()
+            self.ok_at, self.prime_calls = ok_at, 0
+
+        def prime_voice_send(self):
+            self.prime_calls += 1
+            return self.prime_calls >= self.ok_at
+
+    now = [1000.0]
+    monkeypatch.setattr(sg.time, "monotonic", lambda: now[0])
+    slept: List[float] = []
+
+    def _sleep(s):
+        slept.append(s)
+        now[0] += s
+
+    # 8.6s 音频：预算 3s → 第 3 次才定位到也来得及
+    fb = _LatePrime(ok_at=3); fb.sessions = [SessionRow("张三")]; fb.recorded_seconds = 9
+    g = GuardedSender(fb, sleep=_sleep, read_pause_sec=0, echo_wait_sec=0, echo_retries=2)
+    assert g.send_voice("张三", _Playback(dur=8.6), expected_sec=9).ok
+    assert fb.prime_calls == 3 and slept.count(0.25) == 2
+    # 0.5s 音频：预算 0.1s → 只试一次，不睡；发送仍成功（finish 自己重新定位）
+    fb2 = _LatePrime(ok_at=99); fb2.sessions = [SessionRow("张三")]; fb2.recorded_seconds = 1
+    slept.clear()
+    g2 = GuardedSender(fb2, sleep=_sleep, read_pause_sec=0, echo_wait_sec=0, echo_retries=2)
+    assert g2.send_voice("张三", _Playback(dur=0.5), expected_sec=1).ok
+    assert fb2.prime_calls == 1 and 0.25 not in slept
+
+
+def test_audio_trim_and_loudness_normalisation():
+    np = pytest.importorskip("numpy")
+    from src.integrations.wechat_pc import audio_cable as ac
+    sr = 16000
+    t = np.arange(int(sr * 1.0)) / sr
+    tone = (0.05 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)   # 峭峰 -26 dBFS、RMS ≈ -29 dBFS 的小声稿子
+    sig = np.concatenate([np.zeros(int(sr * 0.4)), tone, np.zeros(int(sr * 0.3))]).astype(np.float32)
+    x = np.stack([sig, sig], axis=1)
+    y = ac.trim_silence(x, sr)
+    # 两头 0.4s/0.3s 静音只剩各 60ms 呼吸感
+    assert abs(len(y) / sr - (1.0 + 0.12)) < 0.01
+    # 全静音不裁（上层判 too_short）
+    z = np.zeros((sr, 2), dtype=np.float32)
+    assert len(ac.trim_silence(z, sr)) == sr
+    # 响度归一：有声 RMS → -18 dBFS（正弦 RMS = 峰值/√2），峰值不越 -3 dBFS
+    n, gain_db = ac.normalize_loudness(y, sr)
+    rms_db = 20 * np.log10(ac.active_rms(n, sr))
+    peak_db = 20 * np.log10(float(np.max(np.abs(n))))
+    assert abs(rms_db - (-18.0)) < 0.6, rms_db
+    assert peak_db <= -3.0 + 1e-3 and gain_db > 0
+    # 峭峰稿子：响度目标够不到就以峰值上限为准（不削波）
+    spiky = np.zeros((sr, 2), dtype=np.float32)
+    spiky[::400] = 0.9          # 稀疏尖峰：峰值高、RMS 极低
+    spiky[:, :] += 0.001 * np.sin(2 * np.pi * 220 * np.arange(sr) / sr)[:, None]
+    m, g2 = ac.normalize_loudness(spiky, sr)
+    assert float(np.max(np.abs(m))) <= 10 ** (-3.0 / 20) + 1e-4 and g2 < 0
+    # 增益上限：几乎听不见的稿子最多放大 MAX_GAIN
+    faint = (x * 0.0001).astype(np.float32)
+    f, g3 = ac.normalize_loudness(faint, sr)
+    assert abs(g3 - 20 * np.log10(ac.MAX_GAIN)) < 1e-3
+
+
+def test_playback_runs_during_hook_and_swallows_its_errors(monkeypatch):
+    np = pytest.importorskip("numpy")
+    from src.integrations.wechat_pc import audio_cable as ac
+    calls: List[str] = []
+
+    class _SD:
+        @staticmethod
+        def play(data, samplerate, device, blocking):
+            calls.append(f"play blocking={blocking}")
+
+        @staticmethod
+        def wait():
+            calls.append("wait")
+
+    monkeypatch.setattr(ac, "_sd", _SD)
+    pb = ac.Playback(np.zeros((1600, 2), dtype=np.float32), 16000, 3)
+    assert abs(pb.duration - 0.1) < 1e-9
+
+    def _boom():
+        calls.append("during")
+        raise RuntimeError("uia hiccup")
+
+    assert abs(pb(during=_boom) - 0.1) < 1e-9
+    assert calls == ["play blocking=False", "during", "wait"], "during 在播放窗口内跑、异常不外抛"
+    calls.clear()
+    pb()
+    assert calls == ["play blocking=True"]
+    pb.close()   # 没 warmup 过：no-op
+
+
 # ── service ─────────────────────────────────────────────────────────────────
 
 class FakeBridge(BridgeClient):
@@ -202,13 +463,18 @@ class FakeBridge(BridgeClient):
         self.ingested: List[Dict[str, Any]] = []
         self.queue: List[Dict[str, Any]] = []
         self.acks: List[Tuple[int, bool, str]] = []
+        self.heartbeats: List[Dict[str, Any]] = []
 
     def _http(self, method, url, body):
         if url.endswith("/api/desktop/ingest"):
             self.ingested.append(body)
             return 200, {"ok": True, "conversation_id": "c"}
+        if url.endswith("/api/desktop/heartbeat"):
+            self.heartbeats.append(dict(body))
+            return 200, {"ok": True}
         if "/api/desktop/outbound/ack" in url:
             self.acks.append((body["id"], body["ok"], body["error"]))
+            self.ack_bodies = getattr(self, "ack_bodies", []) + [dict(body)]
             return 200, {"ok": True, "acked": True}
         if "/api/desktop/outbound" in url:
             items, self.queue = self.queue, []
@@ -307,6 +573,288 @@ def test_auto_reply_requires_recent_inbound_and_freezes_on_guard_failure():
     assert fb.messages["张三"][-1].text == "在的", "冻结期间没有再往微信里发任何字"
     clock["t"] += 700
     assert not svc.frozen()
+
+
+class FakeVoice:
+    """audio_cable.VoiceCable 同形：ready / mic_switched / prepare。"""
+
+    def __init__(self, ready=True, dur=8.6, fail_prepare=False, fail_switch=False):
+        self._ready = ready
+        self.dur = dur
+        self.fail_prepare = fail_prepare
+        self.fail_switch = fail_switch
+        self.switch_log: List[str] = []
+        self.prepared: List[str] = []
+        self.played = 0
+
+    def ready(self):
+        return self._ready
+
+    def mic_switched(self):
+        outer = self
+
+        class _Ctx:
+            def __enter__(self_inner):
+                if outer.fail_switch:
+                    raise RuntimeError("set_default_mic_failed")
+                outer.switch_log.append("on")
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                outer.switch_log.append("off")
+
+        return _Ctx()
+
+    def prepare(self, path):
+        self.prepared.append(path)
+        if self.fail_prepare:
+            raise RuntimeError("audio_too_long:70.0s")
+
+        def _play():
+            self.played += 1
+            return self.dur
+
+        return _play, self.dur
+
+
+def _voice_item(iid=11, **kw):
+    it = {"id": iid, "chat_key": "wx:name:张三", "text": "念稿", "kind": "voice",
+          "media_ref": __file__, "media_url": "/static/outbound/wechat/wx-a/v.ogg",
+          "inbox_text": "念稿文本", "sender_name": "Claire", "duration_ms": 8600}
+    it.update(kw)
+    return it
+
+
+def test_service_sends_voice_item_and_skips_placeholder_echo():
+    voice = FakeVoice()
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=voice)
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    assert svc.stats.voice_ready is True
+    br.queue = [_voice_item()]
+    clock["t"] += 30
+    svc.tick()
+    assert any(a[0] == 11 and a[1] is True for a in br.acks)
+    # ack 带 delivered_as/echo（后端据此镜像出站行 + 打 record_voice_sent，P0-6）
+    body = next(b for b in br.ack_bodies if b["id"] == 11)
+    assert body["delivered_as"] == "voice" and "echo" in body
+    assert voice.switch_log == ["on", "off"] and voice.played == 1 and voice.prepared == [__file__]
+    assert svc.stats.voice_sent == 1 and svc.stats.sent == 1 and not fb.recording
+    # 下一轮扫到回显「语音9秒」占位气泡：后端已在 ack 时镜像了带念稿/音频的行 → 驱动**不落第二行**
+    fb.sessions[0].unread = 1
+    clock["t"] += 5
+    before = len(br.ingested)
+    svc.tick()
+    assert not [p for p in br.ingested[before:] if p["direction"] == "out" and p.get("media_type") == "voice"]
+    assert svc.stats.self_mirrored >= 1
+    # 同一颗占位气泡再扫不会重复计（已标已见）
+    fb.sessions[0].unread = 1
+    clock["t"] += 5
+    n = svc.stats.self_mirrored
+    svc.tick()
+    assert svc.stats.self_mirrored == n
+    assert svc.stats.voice_failed == 0
+
+
+def test_service_mic_busy_fails_voice_before_switching_mic_and_notifies_once():
+    """P2-3：坐席正在用麦（开会/通话）→ 不切默认麦克风、不进录音态，ack ``guard:record:mic_busy:<进程>``
+    （server 端同稿改发文字）；心跳带 voice_mic_busy/by；空闲→占用只通知一次；空闲后恢复发语音。"""
+    voice = FakeVoice()
+    busy = {"v": {"busy": True, "sessions": [{"pid": 4242, "process": "Zoom.exe"}]}}
+    voice.mic_busy = lambda: busy["v"]
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=voice)
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    assert svc.stats.voice_ready is True
+    br.queue = [_voice_item()]
+    clock["t"] += 30
+    svc.tick()
+    a = next(x for x in br.acks if x[0] == 11)
+    assert a[1] is False and a[2].startswith("guard:record:mic_busy:Zoom.exe")
+    assert voice.switch_log == [] and voice.played == 0 and not fb.recording
+    assert svc.stats.voice_mic_busy is True and svc.stats.voice_mic_busy_by == "Zoom.exe"
+    assert [n for n in notes if n[0] == "voice_mic_busy"] == [("voice_mic_busy", "Zoom.exe")]
+    hb = [b for b in br.heartbeats if b.get("stats", {}).get("voice_mic_busy") is True]
+    assert hb and hb[-1]["stats"]["voice_mic_busy_by"] == "Zoom.exe"
+    # 仍占用：不重复打扰
+    br.queue = [_voice_item(iid=12)]
+    clock["t"] += 30
+    svc.tick()
+    assert len([n for n in notes if n[0] == "voice_mic_busy"]) == 1
+    # 麦克风空闲 → 恢复语音
+    busy["v"] = {"busy": False, "sessions": []}
+    br.queue = [_voice_item(iid=13)]
+    clock["t"] += 30
+    svc.tick()
+    assert any(x[0] == 13 and x[1] is True for x in br.acks)
+    assert voice.switch_log == ["on", "off"] and svc.stats.voice_mic_busy is False
+    # 文字命令不受麦克风占用影响
+    busy["v"] = {"busy": True, "sessions": [{"pid": 1, "process": "Teams.exe"}]}
+    br.queue = [{"id": 14, "chat_key": "wx:name:张三", "text": "文字照发", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    assert any(x[0] == 14 and x[1] is True for x in br.acks)
+
+
+def test_service_recovers_last_inbound_from_backend_thread_after_restart():
+    """驱动重启后 _last_inbound 为空：仅回复档先问后端线程补回「对方最近来信」，不再把回复一律拒成
+    no_inbound_from_peer；线程里没有来信照旧拒；同一联系人 120s 内不重复问。"""
+    svc, fb, br, notes, clock = _svc("auto_reply")
+    fb.sessions = [SessionRow("张三", unread=0)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    calls: List[str] = []
+    br.thread_last_inbound_ts = lambda acc, ck: (calls.append(ck), clock["t"] - 300)[1]
+    br.queue = [{"id": 61, "chat_key": "wx:name:张三", "text": "回你", "kind": "text"}]
+    svc.tick()
+    assert (61, True, "") in br.acks and calls == ["wx:name:张三"]
+    assert svc._last_inbound["wx:name:张三"] == clock["t"] - 300
+    # 线程里没有来信（0.0）→ 仍拒；同一联系人 120s 内只问一次
+    svc2, fb2, br2, _, clock2 = _svc("auto_reply")
+    fb2.sessions = [SessionRow("李四", unread=0)]
+    n = {"c": 0}
+
+    def _none(acc, ck):
+        n["c"] += 1
+        return 0.0
+
+    br2.thread_last_inbound_ts = _none
+    br2.queue = [{"id": 62, "chat_key": "wx:name:李四", "text": "x", "kind": "text"}]
+    svc2.tick()
+    assert (62, False, "policy:no_inbound_from_peer") in br2.acks and n["c"] == 1
+    br2.queue = [{"id": 63, "chat_key": "wx:name:李四", "text": "y", "kind": "text"}]
+    clock2["t"] += 30
+    svc2.tick()
+    assert (63, False, "policy:no_inbound_from_peer") in br2.acks and n["c"] == 1
+    clock2["t"] += 200
+    br2.queue = [{"id": 64, "chat_key": "wx:name:李四", "text": "z", "kind": "text"}]
+    svc2.tick()
+    assert n["c"] == 2
+
+
+def test_service_mic_busy_probe_errors_do_not_block_voice():
+    """检测本身异常/COM 不可用 → 按不占用（看不见不能当成一直被占用）。"""
+    voice = FakeVoice()
+
+    def _boom():
+        raise RuntimeError("com")
+
+    voice.mic_busy = _boom
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=voice)
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    br.queue = [_voice_item()]
+    clock["t"] += 30
+    svc.tick()
+    assert any(x[0] == 11 and x[1] is True for x in br.acks)
+    assert svc.stats.voice_mic_busy is False and voice.played == 1
+
+
+def test_voice_send_is_atomic_within_tick_no_scan_between_record_and_finish():
+    """D7：录音态期间绝不能 list_sessions/open_session 别的会话（语音会发进错的聊天）。
+    tick 单线程：_scan_inbound 先完整跑完，再 _drain_outbound；录音 → 灌音 → 发送在一次 send_voice 里原子完成。"""
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=FakeVoice())
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1), SessionRow("李四", unread=3)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    fb.messages["李四"] = [Bubble("你好", runtime_id="9")]
+    svc.tick()
+    br.queue = [_voice_item()]
+    clock["t"] += 30
+    fb.actions.clear()
+    fb.sessions[1].unread = 2          # 本轮仍有别的会话待扫
+    svc.tick()
+    names = [a[0] for a in fb.actions]
+    i0, i1 = names.index("start_voice_record"), names.index("finish_voice_record")
+    between = fb.actions[i0 + 1:i1]
+    assert not [a for a in between if a[0] in ("list_sessions", "open_session", "read_visible_messages")], between
+    # 扫描（含李四）全部发生在录音开始之前
+    assert names.index("list_sessions") < i0
+    assert any(a[0] == "open_session" and a[1] == "李四" for a in fb.actions[:i0])
+
+
+def test_service_manual_voice_bubble_still_mirrored_as_placeholder():
+    # 坐席亲手在微信里发的语音（没有待回显记录）→ 照常按「语音N秒」占位镜像为 out 行
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=FakeVoice())
+    fb.recorded_seconds = 6
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1"), Bubble("语音6秒", is_self=True, kind="voice", runtime_id="2")]
+    svc.tick()
+    outs = [p for p in br.ingested if p["direction"] == "out"]
+    assert len(outs) == 1 and outs[0].get("media_type") == "voice" and outs[0]["media_ref"] == ""
+
+
+def test_service_voice_failures_do_not_freeze_unless_recording_stuck():
+    # 1) 本机没声卡 → 拒发不冻结，ack 带原因
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=FakeVoice(ready=False))
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    br.queue = [_voice_item(12)]
+    clock["t"] += 30
+    svc.tick()
+    a = next(x for x in br.acks if x[0] == 12)
+    assert a[1] is False and a[2] == "guard:record:voice_not_ready" and not svc.frozen()
+    assert svc.stats.voice_failed == 1 and svc.stats.voice_ready is False
+    # 2) 音频超长（prepare 拒）→ 同样不冻结，没进录音态
+    svc2, fb2, br2, _, clock2 = _svc("auto_reply", voice=FakeVoice(fail_prepare=True))
+    fb2.sessions = [SessionRow("张三", unread=1)]
+    fb2.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc2.tick()
+    br2.queue = [_voice_item(13)]
+    clock2["t"] += 30
+    svc2.tick()
+    a2 = next(x for x in br2.acks if x[0] == 13)
+    assert a2[1] is False and a2[2].startswith("guard:record:prepare_failed") and not svc2.frozen()
+    assert not any(x[0] == "start_voice_record" for x in fb2.actions)
+    # 3) 录音态卡住（取消失败）→ 冻结 + 专门通知
+    svc3, fb3, br3, notes3, clock3 = _svc("auto_reply", voice=FakeVoice())
+    fb3.sessions = [SessionRow("张三", unread=1)]
+    fb3.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    fb3.fail_finish_record = True
+    fb3.fail_cancel_record = True
+    svc3.tick()
+    br3.queue = [_voice_item(14)]
+    clock3["t"] += 30
+    svc3.tick()
+    a3 = next(x for x in br3.acks if x[0] == 14)
+    assert a3[2] == "guard:cancel:finish_record_failed" and svc3.frozen()
+    assert notes3[-1][0] == "voice_recording_stuck"
+    # 4) 半自动档不认 voice（自动链语音仅全自动）
+    svc4, fb4, br4, _, clock4 = _svc("semi", voice=FakeVoice())
+    fb4.sessions = [SessionRow("张三", unread=1)]
+    fb4.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc4.tick()
+    br4.queue = [_voice_item(15)]
+    clock4["t"] += 30
+    svc4.tick()
+    assert next(x for x in br4.acks if x[0] == 15)[2] == "policy:tier_forbids_kind"
+
+
+def test_bridge_presence_carries_voice_ready():
+    from src.web.desktop_bridge_presence import bridge_presence, bridge_voice_ready, heartbeat_meta
+    meta = {"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "wechat_pc", "tier": "auto_reply", "stats": {"voice_ready": True, "voice_sent": 2}}, now=1000.0)}
+    pres = bridge_presence(meta, now=1010.0)
+    assert pres["voice_ready"] is True and pres["stats"]["voice_sent"] == 2
+    assert bridge_voice_ready(meta, now=1010.0) is True
+    assert bridge_voice_ready(meta, now=1000.0 + 500) is False, "心跳过期＝不排语音"
+    old = {"bridge_heartbeat": heartbeat_meta({"bridge": "wechat_pc", "tier": "auto_reply", "stats": {}}, now=1000.0)}
+    assert bridge_presence(old, now=1001.0)["voice_ready"] is None and bridge_voice_ready(old, now=1001.0) is False
+    # P2-3：坐席正用麦 → 能力在但此刻不排语音（省一次白合成）；占用进程名 + 配额用量随 presence 透出
+    busy = {"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "wechat_pc", "tier": "auto_reply",
+         "stats": {"voice_ready": True, "voice_mic_busy": True, "voice_mic_busy_by": "Zoom.exe",
+                   "voice_today": 3, "voice_daily_cap": 30, "caps_relaxed": ""}}, now=1000.0)}
+    pres = bridge_presence(busy, now=1005.0)
+    assert pres["voice_ready"] is True and pres["voice_mic_busy"] is True and pres["voice_mic_busy_by"] == "Zoom.exe"
+    assert pres["stats"]["voice_today"] == 3 and pres["stats"]["voice_daily_cap"] == 30
+    assert bridge_voice_ready(busy, now=1005.0) is False
 
 
 def test_screen_disposition_freezes_and_notifies():
@@ -763,3 +1311,261 @@ def test_unknown_direction_bubbles_are_skipped_not_guessed():
     fb.messages["张三"].append(b4); fb.sessions[0].unread = 1
     svc.tick()
     assert sum(1 for k, _ in notes if k == "window_minimized") == 2
+
+
+# ── 无障碍树空壳自愈（2026-09-19：ShowWindow 拉回的主窗 UIA 树为空 → 托盘单击重建）──
+def test_a11y_rebuild_only_when_tree_empty_with_cooldown(monkeypatch):
+    from src.integrations.wechat_pc import env_check as EC
+    svc, fb, br, notes, clock = _svc()
+    fb.main_hwnd = lambda: 4242
+    calls = {"empty": 0, "rebuild": 0}
+    state = {"empty": True}
+    monkeypatch.setattr(EC, "accessibility_tree_empty", lambda h: (calls.__setitem__("empty", calls["empty"] + 1), state["empty"])[1])
+    monkeypatch.setattr(EC, "rebuild_accessibility_via_tray",
+                        lambda h: (calls.__setitem__("rebuild", calls["rebuild"] + 1), {"ok": True, "tree_rebuilt": True, "via": "tray"})[1])
+    svc._maybe_rebuild_accessibility()
+    assert calls == {"empty": 1, "rebuild": 1}
+    assert ("a11y_rebuilt", "tray") in notes
+    # 冷却期内再叫：什么都不做（失败不狂点托盘）
+    svc._maybe_rebuild_accessibility()
+    assert calls == {"empty": 1, "rebuild": 1}
+    # 冷却过了、树不空 → 只探不重建
+    clock["t"] += svc.A11Y_REBUILD_COOLDOWN_SEC + 1
+    state["empty"] = False
+    svc._maybe_rebuild_accessibility()
+    assert calls == {"empty": 2, "rebuild": 1}
+
+
+def test_a11y_rebuild_noop_without_hwnd_or_capability(monkeypatch):
+    from src.integrations.wechat_pc import env_check as EC
+    svc, fb, br, notes, clock = _svc()
+    boom = lambda h: (_ for _ in ()).throw(AssertionError("不该探树"))
+    monkeypatch.setattr(EC, "accessibility_tree_empty", boom)
+    svc._maybe_rebuild_accessibility()          # FakeBackend 没有 main_hwnd → 直接返回
+    fb.main_hwnd = lambda: 0
+    svc._maybe_rebuild_accessibility()          # 句柄 0 → 直接返回
+    assert not notes
+
+
+def test_readable_check_triggers_a11y_rebuild_when_session_list_missing(monkeypatch):
+    from src.integrations.wechat_pc import env_check as EC
+    svc, fb, br, notes, clock = _svc()
+    fb.main_hwnd = lambda: 4242
+    fb.readonly = True
+    fb.self_check = lambda: {"ok": False, "missing": ["session_list"], "readonly": True}
+    hits = []
+    monkeypatch.setattr(EC, "accessibility_tree_empty", lambda h: True)
+    monkeypatch.setattr(EC, "rebuild_accessibility_via_tray",
+                        lambda h: (hits.append(h), {"ok": True, "tree_rebuilt": True, "via": "tray"})[1])
+    svc.tick()
+    assert hits == [4242]
+    # 只缺 composer（会话没点开）不算空壳 → 不动托盘
+    fb.self_check = lambda: {"ok": False, "missing": ["composer"], "readonly": True}
+    clock["t"] += svc.A11Y_REBUILD_COOLDOWN_SEC + 1
+    svc.tick()
+    assert hits == [4242]
+
+
+def test_tray_match_icon_prefers_pid_then_name():
+    from src.integrations.wechat_pc.win32_tray import TrayIcon, match_icon
+    a = TrayIcon("visible", 0, "微信", 111, False, (0, 0, 1, 1), 1)
+    b = TrayIcon("overflow", 3, "WeChat", 222, True, (0, 0, 1, 1), 2)
+    c = TrayIcon("visible", 5, "QQ", 333, False, (0, 0, 1, 1), 1)
+    assert match_icon([c, b, a], pids=(222,)) is b
+    assert match_icon([c, a, b], pids=(999,), names=("WeChat",)) is b, "pid 没命中回落 tooltip"
+    assert match_icon([c, a], names=("微信",)) is a
+    assert match_icon([c], pids=(111,), names=("微信",)) is None
+
+
+# ── min_gap 瞬态拒发 → 本地挂起（2026-09-19 真机：分条语音第二条被 min_gap 判失败进人审）──
+def test_min_gap_denial_defers_instead_of_failing_and_sends_next_round():
+    svc, fb, br, notes, clock = _svc("auto_reply")
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    br.queue = [{"id": 21, "chat_key": "wx:name:张三", "text": "第一条", "kind": "text"},
+                {"id": 22, "chat_key": "wx:name:张三", "text": "第二条", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    assert (21, True, "") in br.acks
+    assert not [a for a in br.acks if a[0] == 22], "第二条 min_gap 未到：不回执、不算失败"
+    assert svc.stats.deferred == 1 and svc.stats.denied == 0 and 22 in svc._deferred
+    # 间隔仍未到：继续挂着（不重复计数），队列里也没有它（保持认领态，不被重复认领）
+    clock["t"] += 5
+    svc.tick()
+    assert not [a for a in br.acks if a[0] == 22] and svc.stats.deferred == 1
+    # 间隔过去 → 本轮先发挂起的，再处理新认领的
+    br.queue = [{"id": 23, "chat_key": "wx:name:李四", "text": "别人的", "kind": "text"}]
+    svc._last_inbound["wx:name:李四"] = clock["t"]
+    fb.sessions.append(SessionRow("李四"))
+    clock["t"] += svc.policy.min_gap_sec
+    svc.tick()
+    assert (22, True, "") in br.acks and (23, True, "") in br.acks
+    assert [a[0] for a in br.acks if a[0] in (22, 23)] == [22, 23], "挂起项先于新认领项"
+    assert not svc._deferred and svc.stats.sent == 3
+    assert fb.messages["张三"][-1].text == "第二条"
+
+
+def test_policy_voice_quota_and_part_gap():
+    """P2：语音同时计入总配额且单独更保守；同一 reply_group 的分条条间只吃 voice_part_gap_sec。"""
+    pol = P.resolve_policy({"platform_login": {"wechat_pc": {
+        "tier": "auto_reply", "risk_ack": True, "work_hours": [0, 24],
+        "voice_daily_cap": 5, "voice_per_peer_daily_cap": 2, "voice_part_gap_sec": 2.0}}})
+    assert (pol.voice_daily_cap, pol.voice_per_peer_daily_cap, pol.voice_part_gap_sec) == (5, 2, 2.0)
+    # 默认值 + 夹逼
+    d = P.resolve_policy({"platform_login": {"wechat_pc": {"voice_daily_cap": 9999, "voice_part_gap_sec": 0.01}}})
+    assert (d.voice_daily_cap, d.voice_per_peer_daily_cap, d.voice_part_gap_sec) == (200, 6, 0.5)
+    now = datetime(2026, 9, 19, 12, 0, 0)
+    base = dict(now=now, connected_at=now.timestamp() - 30 * 86400, sent_today=0, sent_today_to_peer=0,
+                last_sent_to_peer_ts=0.0, last_inbound_from_peer_ts=now.timestamp() - 60)
+    assert P.may_send(pol, kind="voice", **base).allowed
+    assert P.may_send(pol, kind="voice", voice_sent_today=5, **base).reason == "voice_daily_cap"
+    assert P.may_send(pol, kind="voice", voice_sent_today_to_peer=2, **base).reason == "voice_per_peer_daily_cap"
+    # 文字不受语音配额影响
+    assert P.may_send(pol, kind="text", voice_sent_today=99, voice_sent_today_to_peer=99, **base).allowed
+    # 总配额先于语音配额
+    assert P.may_send(pol, kind="voice", voice_sent_today=5, **dict(base, sent_today_to_peer=15)).reason == "per_peer_daily_cap"
+    # 分条节奏：同组 3s 前发过 → 放行；不同组照旧 min_gap（20s）
+    recent = dict(base, last_sent_to_peer_ts=now.timestamp() - 3)
+    assert P.may_send(pol, kind="voice", continues_last_group=True, **recent).allowed
+    assert P.may_send(pol, kind="voice", **recent).reason == "min_gap"
+    assert P.may_send(pol, kind="voice", continues_last_group=True,
+                      **dict(base, last_sent_to_peer_ts=now.timestamp() - 1)).reason == "min_gap"
+    assert P.VOICE_QUOTA_DENIALS == {"voice_daily_cap", "voice_per_peer_daily_cap"}
+
+
+def test_service_sends_split_voice_parts_back_to_back_with_part_gap():
+    """同一 reply_group 的 3 条语音一轮内连发：条间原地等 voice_part_gap_sec（不挂起到下轮）；随后的独立文字仍吃 min_gap。"""
+    slept: List[float] = []
+    voice = FakeVoice()
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=voice)
+    svc._sleep = lambda s: (slept.append(s), clock.__setitem__("t", clock["t"] + s))
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    br.queue = [_voice_item(41, reply_group="vg-1"), _voice_item(42, reply_group="vg-1"), _voice_item(43, reply_group="vg-1"),
+                {"id": 44, "chat_key": "wx:name:张三", "text": "独立文字", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    oks = [a[0] for a in br.acks if a[1]]
+    assert oks == [41, 42, 43], br.acks
+    gap = svc.policy.voice_part_gap_sec
+    assert len(slept) == 2 and all(gap <= s <= gap + svc.PART_GAP_JITTER[1] + 1e-6 for s in slept), slept
+    assert svc.stats.deferred == 1 and 44 in svc._deferred, "组外的文字紧跟其后 → 照旧 min_gap 挂起"
+    assert svc._voice_sent_today == 3 and svc._voice_sent_today_peer["wx:name:张三"] == 3
+    assert voice.played == 3
+
+
+def test_split_parts_to_ambiguous_name_verify_identity_once_per_group():
+    """同名歧义联系人：同一 reply_group 的首条带 expected_wxid 逐格核对；后续分条在 60s 内、当前会话标题仍是目标
+    → 不再开资料卡（真机每次核对 6–8s，三条分条被拉成 18s 一条）；组外/超时的命令照旧核对。"""
+    slept: List[float] = []
+    voice = FakeVoice()
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=voice)
+    svc._sleep = lambda s: (slept.append(s), clock.__setitem__("t", clock["t"] + s))
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1, index=0), SessionRow("张三", unread=1, index=1)]
+    fb.wxids_by_index = {0: "zhangsan_1", 1: "zhangsan_2"}
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    opens = lambda: [a for a in fb.actions if a[0] == "open_session"]  # noqa: E731
+    n0 = len(opens())
+    br.queue = [_voice_item(71, chat_key="wx:id:zhangsan_2", reply_group="vg-9"),
+                _voice_item(72, chat_key="wx:id:zhangsan_2", reply_group="vg-9"),
+                _voice_item(73, chat_key="wx:id:zhangsan_2", reply_group="vg-9")]
+    fb.sessions = [SessionRow("张三", index=0), SessionRow("张三", index=1)]
+    clock["t"] += 30
+    svc.tick()
+    assert [a[0] for a in br.acks if a[1]] == [71, 72, 73], br.acks
+    wx = [a[2] for a in opens()[n0:]]
+    assert wx == ["zhangsan_2", "", ""], wx
+    assert fb.current_index == 1, "后续分条仍停在第二个张三的会话上"
+    # 组外命令（另一稿子）→ 重新核对
+    br.queue = [_voice_item(74, chat_key="wx:id:zhangsan_2", reply_group="vg-10")]
+    clock["t"] += 30
+    svc.tick()
+    assert opens()[-1][2] == "zhangsan_2"
+    # 同组但距上一条已超 TTL → 也重新核对
+    br.queue = [_voice_item(75, chat_key="wx:id:zhangsan_2", reply_group="vg-10")]
+    clock["t"] += svc.PART_IDENTITY_TTL_SEC + 5
+    svc.tick()
+    assert opens()[-1][2] == "zhangsan_2"
+
+
+def test_service_voice_quota_denial_is_policy_ack_and_text_still_flows():
+    svc, fb, br, notes, clock = _svc("auto_reply", voice=FakeVoice())
+    fb.recorded_seconds = 9
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    svc._roll_day()
+    svc._voice_sent_today_peer["wx:name:张三"] = svc.policy.voice_per_peer_daily_cap
+    br.queue = [_voice_item(51)]
+    clock["t"] += 30
+    svc.tick()
+    assert (51, False, "policy:voice_per_peer_daily_cap") in br.acks and svc.stats.denied == 1
+    # 语音配额不影响文字
+    br.queue = [{"id": 52, "chat_key": "wx:name:张三", "text": "文字照发", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    assert (52, True, "") in br.acks
+    # 心跳带配额用量（今日语音 / 日上限）
+    seen: List[Dict[str, Any]] = []
+    br.heartbeat = lambda account_id, **kw: (seen.append(kw), True)[1]
+    svc._voice_sent_today = 4
+    svc._heartbeat()
+    assert seen and seen[-1]["stats"]["voice_today"] == 4
+    assert seen[-1]["stats"]["voice_daily_cap"] == svc.policy.voice_daily_cap
+    # 心跳 stats 只收标量（presence 端 heartbeat_meta 非标量会被 str()）→ 逗号串
+    assert seen[-1]["stats"]["caps_relaxed"] == ""
+    from dataclasses import replace
+    svc.policy = replace(svc.policy, voice_daily_cap=100, min_gap_sec=5.0)
+    svc._heartbeat()
+    assert seen[-1]["stats"]["caps_relaxed"] == "min_gap_sec,voice_daily_cap"
+
+
+def test_caps_relaxed_lists_only_looser_than_default():
+    assert P.caps_relaxed(P.PcPolicy()) == {}
+    loose = P.resolve_policy({"platform_login": {"wechat_pc": {
+        "daily_cap": 200, "per_peer_daily_cap": 100, "min_gap_sec": 5, "voice_per_peer_daily_cap": 50,
+        "daily_cap_new": 10, "voice_part_gap_sec": 4.0}}})
+    r = P.caps_relaxed(loose)
+    assert set(r) == {"daily_cap", "per_peer_daily_cap", "min_gap_sec", "voice_per_peer_daily_cap"}
+    assert r["daily_cap"] == (200, 80) and r["min_gap_sec"] == (5.0, 20.0)
+
+
+def test_deferred_item_dedups_against_requeued_pull_and_expires_to_policy_failure():
+    svc, fb, br, notes, clock = _svc("auto_reply")
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    svc._last_sent_peer["wx:name:张三"] = clock["t"]
+    item = {"id": 31, "chat_key": "wx:name:张三", "text": "x", "kind": "text"}
+    br.queue = [dict(item)]
+    svc.tick()
+    assert 31 in svc._deferred and not br.acks
+    # 队列 180s 回收后又派回来同一条：按 id 去重，不会两份都处理
+    svc._last_sent_peer["wx:name:张三"] = clock["t"]
+    br.queue = [dict(item)]
+    svc.tick()
+    assert list(svc._deferred) == [31] and svc.stats.deferred == 1
+    # 一直发不出去（每轮都被 min_gap 挡）超过 DEFER_MAX_SEC → 照旧回执 policy:min_gap
+    clock["t"] += svc.DEFER_MAX_SEC + 1
+    svc._last_sent_peer["wx:name:张三"] = clock["t"]
+    svc.tick()
+    assert (31, False, "policy:min_gap") in br.acks and not svc._deferred and svc.stats.denied == 1
+
+
+def test_deferred_items_are_failed_out_when_service_freezes():
+    svc, fb, br, notes, clock = _svc("auto_reply")
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    svc._last_sent_peer["wx:name:张三"] = clock["t"]
+    br.queue = [{"id": 41, "chat_key": "wx:name:张三", "text": "x", "kind": "text"}]
+    svc.tick()
+    assert 41 in svc._deferred
+    svc.freeze(600, "test")
+    svc.tick()
+    assert (41, False, "guard:frozen") in br.acks and not svc._deferred

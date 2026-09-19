@@ -58,6 +58,14 @@ class WeChatPcBackend(Protocol):
     def press_send(self) -> bool: ...
     def read_profile_wxid(self, display_name: str = "") -> str: ...
     def peer_typing(self) -> bool: ...
+    # ── 语音（2026-09-19，可选能力：没有的后端 voice_ready() 恒 False，其余方法不会被调）──
+    # 语音消息在 4.1.9+ 客户端里是「点『发语音』进入录音态 → 麦克风录入 → 点『发送语音』」；
+    # 音频由调用方经虚拟声卡当麦克风灌入（见 audio_cable），后端只负责三个按钮与状态确认。
+    def voice_ready(self) -> bool: ...
+    def voice_recording(self) -> bool: ...
+    def start_voice_record(self) -> bool: ...
+    def finish_voice_record(self) -> bool: ...
+    def cancel_voice_record(self) -> bool: ...
 
 
 class FakeBackend:
@@ -82,6 +90,14 @@ class FakeBackend:
         self.fail_set_composer = False
         self.fail_send = False
         self.echo_on_send = True   # 回车后把输入框内容作为己方气泡追加（模拟真实客户端）
+        # 语音：voice_supported=False 模拟老版本微信（无「发语音」按钮）
+        self.voice_supported = True
+        self.recording = False
+        self.fail_start_record = False
+        self.fail_finish_record = False
+        self.fail_cancel_record = False
+        self.recorded_seconds = 0      # finish 时己方语音气泡显示的秒数（0=按调用方 set_recorded 传入）
+        self.voice_echo_on_finish = True
 
     def screen_state(self) -> ScreenState:
         return ScreenState(self.present, self.window_class, self.logged_in, list(self.dialogs),
@@ -103,6 +119,9 @@ class FakeBackend:
         candidates = [i for i, s in enumerate(self.sessions) if s.display_name == display_name]
         if 0 <= index < len(self.sessions) and self.sessions[index].display_name == display_name:
             candidates = [index] + [i for i in candidates if i != index]
+        elif len(candidates) > 1 and self.current == display_name and self.current_index in candidates:
+            # 与真机后端同款：同名多格且没指定格 → 已选中（当前打开）的那格优先
+            candidates = [self.current_index] + [i for i in candidates if i != self.current_index]
         if not candidates:
             return False
         by_idx = getattr(self, "wxids_by_index", {})
@@ -162,6 +181,44 @@ class FakeBackend:
         if idx in by_idx:
             return by_idx[idx]
         return self.wxids.get(display_name or self.current, "")
+
+    # ── 语音 ──
+    def voice_ready(self) -> bool:
+        return bool(self.voice_supported)
+
+    def voice_recording(self) -> bool:
+        return bool(self.recording)
+
+    def start_voice_record(self) -> bool:
+        self.actions.append(("start_voice_record", self.current))
+        if not self.voice_supported or self.fail_start_record:
+            return False
+        self.recording = True
+        return True
+
+    def prime_voice_send(self) -> bool:
+        """（可选协议）播放期间提前定位「发送语音」按钮；假后端只记账，录音态里才算定位到。"""
+        self.actions.append(("prime_voice_send", self.current))
+        return bool(self.recording)
+
+    def finish_voice_record(self) -> bool:
+        self.actions.append(("finish_voice_record", self.current))
+        if not self.recording or self.fail_finish_record:
+            return False
+        self.recording = False
+        if self.voice_echo_on_finish:
+            lst = self.messages.setdefault(self.current, [])
+            sec = int(self.recorded_seconds or 0)
+            lst.append(Bubble(f"语音{sec}秒" if sec else "语音", is_self=True, kind="voice", ts_hint=time.time(),
+                              runtime_id=f"rt{len(lst) + 1}", index=len(lst)))
+        return True
+
+    def cancel_voice_record(self) -> bool:
+        self.actions.append(("cancel_voice_record", self.current))
+        if self.fail_cancel_record:
+            return False
+        self.recording = False
+        return True
 
 
 __all__ = ["SessionRow", "Bubble", "ScreenState", "WeChatPcBackend", "FakeBackend"]

@@ -44,12 +44,14 @@ _LOAD_TRIGGER: Dict[str, float] = {}
 def build_clone_payload(
     *, text: str, reference_audio_b64: str, reference_text: str = "",
     language: str = "zh", instructions: str = "",
+    emo_text: str = "", emo_alpha: Optional[float] = None,
 ) -> bytes:
     """零样本克隆请求体（JSON bytes）。fish_speech 与 MiniCPM-o 等主机共用本契约。
 
     - reference_text（参考音频里说的原文）填了效果更好；空则省略。
     - instructions（情感/语气自然语言指令，如「用温暖略带笑意的语气说」）是**结构化字段**，
       主机据此调情绪但**绝不会被读出来**（与内联标记不同，零 garble）；不支持的主机忽略即可。
+    - emo_text / emo_alpha：IndexTTS-2.5 情感描述（笑声/气声）；空则不下发。
     """
     body: Dict[str, Any] = {
         "text": text,
@@ -61,6 +63,15 @@ def build_clone_payload(
         body["reference_text"] = reference_text
     if instructions:
         body["instructions"] = instructions
+    et = str(emo_text or "").strip()
+    if et:
+        body["emo_text"] = et
+        body["use_emo_text"] = True
+        if emo_alpha is not None:
+            try:
+                body["emo_alpha"] = max(0.15, min(0.85, float(emo_alpha)))
+            except (TypeError, ValueError):
+                pass
     return json.dumps(body).encode()
 
 

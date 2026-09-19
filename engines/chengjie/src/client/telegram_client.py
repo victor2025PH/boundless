@@ -2818,6 +2818,41 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         except Exception:
             return True
 
+    def _aline_direct_send_allowed(self, chat_id: Any) -> Optional[Tuple[bool, str, str]]:
+        """此刻这条会话的收件箱档位（含封顶）是否允许 A 线直发。
+
+        返回 ``(allowed, mode, effective_mode)``；镜像关 / store 未就绪 / 求值异常 → ``None``
+        （调用方按放行处理，fail-open 与生成前的档位闸一致）。生成前的闸与这里同一判定源
+        （resolve_automation_mode + apply_mode_caps）；本方法供**生成后 / 拟人延迟后 / 分条间**
+        复读——坐席在那十几秒里点【接管】（档位切 manual）必须能拦住在途回复。"""
+        if not getattr(self, "_mirror_inbox", False):
+            return None
+        try:
+            from src.integrations.protocol_bridge import get_inbox_store
+            from src.inbox.normalizer import conv_id as _conv_id
+            from src.inbox.automation_mode import (
+                allows_direct_autosend,
+                resolve_automation_mode,
+            )
+            _ibx = get_inbox_store()
+            if _ibx is None:
+                return None
+            _acct = str(getattr(self, "account_id", "default") or "default")
+            _cid = _conv_id("telegram", _acct, str(chat_id))
+            _cfg_root = self.config.config if hasattr(self.config, "config") else {}
+            _mode = resolve_automation_mode(_ibx, _cid, _cfg_root)
+            _eff = _mode
+            try:
+                from src.inbox.effective_automation import apply_mode_caps, compute_mode_caps
+                _eff, _ = apply_mode_caps(
+                    _mode, compute_mode_caps(platform="telegram", account_id=_acct, config=_cfg_root))
+            except Exception:
+                _eff = _mode
+            return bool(allows_direct_autosend(_eff)), str(_mode), str(_eff)
+        except Exception:
+            self.logger.debug("[automation] 迟到档位闸求值失败（放行）", exc_info=True)
+            return None
+
     def _mirror_untriggered_group_message(self, message: Any) -> None:
         """未触发自动回复的群消息 → 只镜像进统一收件箱（不回复、不起草、不进 SLA）。
 
@@ -3994,6 +4029,49 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
                 if _interject_stale_abort("pre_humanize"):
                     return
+
+                def _takeover_abort(where: str) -> bool:
+                    """接管迟到闸（2026-09-19 F1 教学片实锤）：档位闸在**生成前**过了一次，
+                    生成 + 拟人思考延迟要走十几秒，坐席这期间点【接管】（takeover.start 已把
+                    档位切 manual、取消的只是 B 线 store 草稿）→ A 线这条在途回复照发，
+                    「接管即停」不成立（12:50:56 接管，12:51:08 AI 仍发出 US$35.9 折扣报价）。
+                    发送前 / 分条间再读一次档位，非全自动即弃：回滚冷却记账 + 撤 dup-guard
+                    登记（与 interject 弃稿同一收尾）。判定 fail-open（读不到=放行）。"""
+                    try:
+                        _late = self._aline_direct_send_allowed(chat_id)
+                        if _late is None or _late[0]:
+                            return False
+                        self.logger.info(
+                            "[automation] A线让位（迟到闸 %s）mode=%s effective=%s "
+                            "chat=%s account=%s（生成/延迟期间坐席接管或切档，弃发）",
+                            where, _late[1], _late[2], chat_id,
+                            getattr(self, "account_id", "default"))
+                        try:
+                            from src.client.gate_stats import bump as _gate_bump
+                            _gate_bump("automation_mode_late")
+                        except Exception:
+                            pass
+                        if _dg_reg_token:
+                            try:
+                                from src.inbox.outbound_dup_guard import (
+                                    outbound_registry as _tk_dg_reg,
+                                )
+                                _tk_dg_reg.unregister(_dg_reg_cid, _dg_reg_token)
+                            except Exception:
+                                pass
+                        try:
+                            if _acct_snap is not None and \
+                                    self.skill_manager.rollback_reply_accounting(
+                                        _acct_snap):
+                                self.logger.info(
+                                    "[automation] 已回滚未发出回复的冷却记账 chat=%s",
+                                    chat_id)
+                        except Exception:
+                            pass
+                        return True
+                    except Exception:
+                        return False
+
                 # 发送前拟人序列（已读 → 正在输入 → 思考延迟）：与全自动 autosend 共用
                 # humanize 协作器。默认 thinking_delay=0 → 仅已读、近即时（不改现手感），
                 # 运营灰度打开后文本回复才有「思考+打字」节奏。只在整段回复前跑一次
@@ -4015,6 +4093,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     self.logger.debug("[prereply_humanize] 调度失败（忽略）", exc_info=True)
                 # 插话吸收·关口②：humanize 思考延迟 sleep 期间对方补话 → 同样中止
                 if _interject_stale_abort("post_humanize"):
+                    return
+                # 接管迟到闸·关口②：同一段延迟期间坐席接管 / 切档 → 弃发
+                if _takeover_abort("post_humanize"):
                     return
                 sent_text_for_context = reply_final
                 split_cfg = self.config.get("reply", {}).get("split_send", {})
@@ -4148,6 +4229,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                     "%d/%d 条 chat=%s",
                                     len(chunks) - len(_sent_chunks),
                                     len(chunks), chat_id)
+                                _bubbles_interrupted = True
+                                break
+                            _late_bub = self._aline_direct_send_allowed(chat_id)
+                            if _late_bub is not None and not _late_bub[0]:
+                                # 分条间坐席接管：已发的留着（对方已收到），剩余条不再发
+                                self.logger.info(
+                                    "[automation] 分条间坐席接管/切档 mode=%s，停发剩余 "
+                                    "%d/%d 条 chat=%s", _late_bub[1],
+                                    len(chunks) - len(_sent_chunks), len(chunks), chat_id)
                                 _bubbles_interrupted = True
                                 break
                         await self._send_reply(message, chunk, parse_mode=_parse_mode)

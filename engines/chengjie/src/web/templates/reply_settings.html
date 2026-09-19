@@ -1454,6 +1454,8 @@ var RPS_I18N = {
   poMax: {{ (i18n or {}).get('rps_po_max', "最慢（秒）")|tojson }},
   poAdaptive: {{ (i18n or {}).get('rps_po_adaptive', "自适应")|tojson }},
   platUnsupported: {{ (i18n or {}).get('rps_plat_unsupported', "该平台协议/链路不支持此能力")|tojson }},
+  platWechatPc: {{ (i18n or {}).get('rps_plat_wechat_pc', "微信（电脑副驾）")|tojson }},
+  platVoiceOnly: {{ (i18n or {}).get('rps_plat_voice_only', "电脑副驾只支持语音触发覆写，其余列跟随全局")|tojson }},
   presetMeta: {
     // O-1 D（D-O4）「拟人程度」三档：偏慢 / 自然（默认推荐）/ 偏快——每档带 deliver_delay.profile，
     // humanize 走读 / 想 / 打字分量模型；文案以 i18n 包 reply_settings_page 为准，此处为回落
@@ -1713,6 +1715,7 @@ var RPS_RK_I18N = {
   wordsMore: {{ (i18n or {}).get('rps_rk_words_more', "看例句")|tojson }},
   lockOn: {{ (i18n or {}).get('rps_rk_lock_on', "已锁定：命中就停 AI")|tojson }},
   lockOff: {{ (i18n or {}).get('rps_rk_lock_off', "未锁定：继续回复，只记录")|tojson }},
+  lockImplied: {{ (i18n or {}).get('rps_rk_lock_implied', "强制锁定：成人政策「不设限」时未成年必停，这里关不掉")|tojson }},
   lockNa: {{ (i18n or {}).get('rps_rk_lock_na', "—")|tojson }},
   lockSaved: {{ (i18n or {}).get('rps_rk_lock_saved', "🔒 已更新：{n} 类话会让 AI 停下（{names}）")|tojson }},
   lockSavedNone: {{ (i18n or {}).get('rps_rk_lock_saved_none', "🔓 已更新：所有话题都继续回复，只记录")|tojson }},
@@ -1902,6 +1905,10 @@ function rpsFieldHost(def){
    宁可少说，绝不再手写平台名（旧 hint「当前 Telegram 协议号支持」已实证烂掉）。 */
 var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger"};
 var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger"];
+/* 只有语音触发列可编辑的桌面桥平台（微信电脑副驾）：后端 meta[voice.platform_triggers].keys 含该平台才渲染
+   （老后端白名单不认 wechat → 不出这一行，避免提交被拒）。其余列按「跟随全局」禁用。 */
+var RPS_PLAT_VOICE_ONLY = ["wechat"];
+var rpsPlatVoiceKeys = [];
 
 function rpsRenderCaps(caps){
   [["rps-caps-markread", "mark_read"], ["rps-caps-typing", "typing"]].forEach(function(pair){
@@ -2046,10 +2053,32 @@ function rpsPlatRow(p){
     + '</tr>';
 }
 
+function rpsPlatVoiceOnlyRow(p){
+  var gVoiceSel = document.getElementById('rps-voice-mode');
+  var gVoice = gVoiceSel ? (gVoiceSel.options[gVoiceSel.selectedIndex] || {}).text || '' : '';
+  var na = RPS_I18N.platVoiceOnly;
+  function offCell(th, attr){
+    return '<td data-th="' + rpsEsc(th) + '">' + rpsPlatSelect(attr, [], '', RPS_I18N.poFollow, true, na) + '</td>';
+  }
+  var name = p === 'wechat' ? RPS_I18N.platWechatPc : (RPS_PLAT_NAMES[p] || p);
+  return '<tr data-plat-row="' + rpsEsc(p) + '" data-plat-voice-only="1" title="' + rpsEsc(na) + '">'
+    + '<td class="rps-plat-name">' + rpsEsc(name) + '</td>'
+    + offCell(RPS_I18N.platColCap, 'cap')
+    + '<td data-th="' + rpsEsc(RPS_I18N.poMin) + '"><input type="number" data-plat="min_sec" value="" disabled title="' + rpsEsc(na) + '"></td>'
+    + '<td data-th="' + rpsEsc(RPS_I18N.poMax) + '"><input type="number" data-plat="max_sec" value="" disabled title="' + rpsEsc(na) + '"></td>'
+    + offCell(RPS_I18N.poAdaptive, 'adaptive')
+    + offCell(RPS_I18N.obsRead, 'mark_read') + offCell(RPS_I18N.obsTyping, 'typing')
+    + '<td data-th="' + rpsEsc(RPS_I18N.platColVoice) + '">' + rpsPlatSelect('voice',
+        RPS_VT_VALUES.map(function(t){ return {v: t, t: RPS_I18N.vtShort[t] || t}; }),
+        rpsPlatState.voices[p] || '', rpsFollowLabel(gVoice)) + '</td>'
+    + '</tr>';
+}
+
 function rpsPlatRender(){
   var body = document.getElementById('rps-plat-body');
   if (!body || !rpsPlatEnabled) return;
-  body.innerHTML = RPS_PLAT_ORDER.map(rpsPlatRow).join('');
+  var extra = RPS_PLAT_VOICE_ONLY.filter(function(p){ return rpsPlatVoiceKeys.indexOf(p) >= 0; });
+  body.innerHTML = RPS_PLAT_ORDER.map(rpsPlatRow).join('') + extra.map(rpsPlatVoiceOnlyRow).join('');
 }
 
 function rpsPlatCollect(){
@@ -4339,6 +4368,12 @@ function rpsRkWordsCell(c){
 }
 function rpsRkLockCell(c){
   if (!c.lockable) return '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.lockNa) + '</span>';
+  if (!c.locked && c.locked_by === 'adult_open'){
+    // 成人不设限 ⇒ 未成年隐含锁定：开关画成开着且不可关（不是运营勾的，POST locks 也不会带它）
+    return '<label class="rps-switch" title="' + rpsEsc(RPS_RK_I18N.lockImplied) + '" style="opacity:.75">'
+      + '<input type="checkbox" checked disabled data-rk-lock-implied="' + rpsEsc(c.id) + '">'
+      + '<span class="rps-slider"></span></label>';
+  }
   var on = !!c.locked;
   return '<label class="rps-switch" title="' + rpsEsc(on ? RPS_RK_I18N.lockOn : RPS_RK_I18N.lockOff) + '">'
     + '<input type="checkbox" data-rk-lock="' + rpsEsc(c.id) + '"' + (on ? ' checked' : '') + ' onchange="rpsRkLockToggle(this)">'
@@ -4683,6 +4718,7 @@ async function rpsLoad(){
     // 平台专家矩阵（P1）：后端白名单含平台字段才启用（旧进程整卡隐藏防假脏）
     rpsPlatEnabled = !!((d.meta || {})[RPS_PM_KEY]);
     rpsPlatState.caps = d.platform_caps || null;
+    rpsPlatVoiceKeys = (((d.meta || {})[RPS_PVT_KEY] || {}).keys) || [];
     var platCard = document.getElementById('rps-sec-plat');
     if (platCard) platCard.style.display = rpsPlatEnabled ? '' : 'none';
     // 工作时间班表（P0-ws）：同款特性探测（旧进程整卡隐藏防假脏/保存被拒）

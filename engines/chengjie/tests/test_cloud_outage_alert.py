@@ -7,7 +7,8 @@
 - 熔断开路（含无 key 特征的网络黑洞）→ notify_cloud_outage，文案区分兜底就绪与否；
 - 告警标签可读（model @ host，而非裸 provider 名）；
 - HealthWatchdog：余额低水位 → notify_balance_low；余额接口 401 → notify_key_failure；
-  本地兜底长期顶班 → 升级提醒（首个周期只建基线、after_min 前不提醒、idle 重置）。
+  本地兜底长期顶班 → 升级提醒（首个周期只建基线、after_min 前不提醒、idle 重置；
+  ai.primary=local* 时不把本地主链出话当顶班）。
 
 不触网：主链客户端用假对象，探针/notify 全 monkeypatch。
 """
@@ -309,6 +310,23 @@ def test_fallback_duty_disabled(monkeypatch):
     wd._check_local_fallback_duty(now=1.0)
     wd._check_local_fallback_duty(now=99999.0)
     assert not called and wd._fb_duty_last_calls is None
+
+
+def test_fallback_duty_skips_when_local_is_primary(monkeypatch):
+    """ai.primary=local* 时本地就是主链，计数增量不得当「云端顶班」弹窗。"""
+    stats = {"local_fallback_calls": 0, "primary_mode": "local"}
+    wd = _watchdog({}, ai_stats=stats)
+    seen = []
+    monkeypatch.setattr(host_alert, "notify_host",
+                        lambda *a, **kw: seen.append(1) or True)
+    t0 = 40000.0
+    wd._check_local_fallback_duty(now=t0)
+    stats["local_fallback_calls"] = 80
+    wd._check_local_fallback_duty(now=t0 + 300)
+    wd._check_local_fallback_duty(now=t0 + 300 + 1900)
+    assert seen == []
+    assert wd.total_fallback_duty_reminders == 0
+    assert wd._fb_duty_since_ts == 0.0
 
 
 def test_fallback_duty_no_ai_client():

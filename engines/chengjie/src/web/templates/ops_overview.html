@@ -8099,6 +8099,45 @@ async function loadProactiveEngagement(){
     det.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
 }
+function voiceOutageKpi(og){
+  // AvatarHub 卡与 B 线自动媒体卡共用：24h 台账灯（attempts≥3 且 0 成功＝断档红）。
+  og = og || {};
+  var ogAtt = Number(og.attempts_24h)||0, ogOk = Number(og.ok_24h)||0;
+  var ogRed = ogAtt >= 3 && ogOk === 0;
+  var ogDead = [];
+  var ogBy = og.by_source || {};
+  Object.keys(ogBy).forEach(function(k){
+    var s = ogBy[k] || {};
+    if((Number(s.attempts)||0) >= 3 && (Number(s.ok)||0) === 0){ ogDead.push(k); }
+  });
+  var vsrcLabel = function(k){
+    var t = window.T('ov2_av_vsrc_'+k);
+    return (!t || t.indexOf('ov2_av_vsrc_') === 0) ? k : t;
+  };
+  var ogVal;
+  if(!ogAtt){ ogVal = '<span class="muted">'+window.T('ov2_av_outage_none')+'</span>'; }
+  else if(ogRed){
+    var ogReasons = Object.keys(og.fail_reasons||{}).slice(0,2).join('/').slice(0,40).replace(/</g,'&lt;');
+    ogVal = '<span style="color:var(--th-ink-red5,#b91c1c)">⛔ '+fmt(ogOk)+' / '+fmt(ogAtt)
+      +' '+window.T('ov2_av_outage_bad')+(ogReasons?(' · '+ogReasons):'')+'</span>';
+  } else if(ogDead.length){
+    ogVal = fmt(ogOk)+' / '+fmt(ogAtt)
+      +' <span style="color:var(--th-ink-red5,#b91c1c)">⛔ '
+      +ogDead.map(vsrcLabel).join('、').slice(0,60).replace(/</g,'&lt;')
+      +' '+window.T('ov2_av_outage_chain')+'</span>';
+  } else {
+    ogVal = fmt(ogOk)+' / '+fmt(ogAtt)
+      +((og.consecutive_fails||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠×'+fmt(og.consecutive_fails)+'</span>'):'');
+  }
+  var ogLabel = window.T('ov2_av_outage');
+  if(og.truncated){
+    var ogEff = Math.round(Number(og.effective_window_hours)||0);
+    ogLabel += ' <span style="color:var(--th-ink-amber5,#92400e)" title="'
+      +window.T('ov2_av_outage_trunc_tip')+'">⚠'
+      +window.T('ov2_av_outage_trunc')+' '+ogEff+'h</span>';
+  }
+  return {label:ogLabel, value:ogVal, att:ogAtt, red:ogRed, dead:ogDead};
+}
 async function loadAutosendMedia(){
   var sec = document.getElementById('autosendMediaSection');
   var kp = document.getElementById('autosendMediaKpis');
@@ -8113,7 +8152,8 @@ async function loadAutosendMedia(){
     var w = d.worker || {};
     var vo = w.voice || d.voice || {};
     var im = w.image || d.image || {};
-    var active = (Number(vo.sent||0)+Number(vo.fallback||0)+Number(im.sent||0)+Number(im.fallback||0)) > 0;
+    var og = w.voice_outage || d.voice_outage || {};
+    var active = (Number(vo.sent||0)+Number(vo.fallback||0)+Number(im.sent||0)+Number(im.fallback||0)+Number(og.attempts_24h||0)) > 0;
     if(!active && !d.worker){ opsHideCardEl(sec, 'asmedia', 'disabled'); return; }
     sec.style.display='';
     var provParts = [];
@@ -8173,6 +8213,7 @@ async function loadAutosendMedia(){
         return '<span style="color:'+(erN>0?'var(--th-ink-amber5,#92400e)':'inherit')+'">'+fmt(okN)+(erN>0?(' / ✗'+fmt(erN)):'')+'</span>';
       })()},
       {label:window.T('ov2_asm_raced'), value:fmt(w.total_skipped_raced||0)},
+      voiceOutageKpi(og),
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -8191,7 +8232,23 @@ async function loadAutosendMedia(){
       + (vFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
         + window.T('ov2_asm_voice_fb_dist')+': '+vFbParts.join(' · ')+'</div>' : '')
       + (imgFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
-        + window.T('ov2_asm_img_fb_dist')+': '+imgFbParts.join(' · ')+'</div>' : '');
+        + window.T('ov2_asm_img_fb_dist')+': '+imgFbParts.join(' · ')+'</div>' : '')
+      + (function(){
+          var fr = og.fail_reasons || {};
+          var parts = Object.keys(fr).sort(function(a,b){ return (fr[b]||0)-(fr[a]||0); }).slice(0,6)
+            .map(function(k){ return k+' '+fmt(fr[k]); });
+          var by = og.by_source || {};
+          var srcParts = Object.keys(by).sort(function(a,b){ return (by[b].attempts||0)-(by[a].attempts||0); })
+            .map(function(k){
+              var s = by[k] || {};
+              return k+' '+fmt(s.ok||0)+'/'+fmt(s.attempts||0);
+            });
+          if(!parts.length && !srcParts.length) return '';
+          return '<div class="muted" style="font-size:12px;margin-top:4px;">'
+            +(srcParts.length? (window.T('ov2_av_outage')+': '+srcParts.join(' · ')) : '')
+            +(parts.length? ((srcParts.length?' &nbsp;|&nbsp; ':'')+window.T('ov2_asm_voice_fb_dist')+'(24h): '+parts.join(' · ')) : '')
+            +'</div>';
+        })();
   }catch(e){
     det.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
@@ -8248,51 +8305,10 @@ async function loadAvatarVoice(){
     // 全绿但真实发送全败——2026-08-02 hub 档 404 断 5 天零告警的事故面，阈值与
     // watchdog voice_outage_remind.min_attempts 默认一致）。
     var og = d.outage || {};
-    var ogAtt = Number(og.attempts_24h)||0, ogOk = Number(og.ok_24h)||0;
-    var ogRed = ogAtt >= 3 && ogOk === 0;
-    // 单链全灭（2026-08-22，接进 wa_rpa/mr_rpa 同批）：全局口径「窗内 0 成功」
-    // 在多链下会被一条健康链盖住——WhatsApp 语音全发不出而 Telegram 正常时，
-    // 上面那盏灯是绿的。它对那个平台的客户来说就是「语音功能没有了」，所以
-    // 逐链判同一把尺子（≥3 次尝试 0 成功），任一条全灭即红并点名。
-    var ogDead = [];
-    var ogBy = og.by_source || {};
-    Object.keys(ogBy).forEach(function(k){
-      var s = ogBy[k] || {};
-      if((Number(s.attempts)||0) >= 3 && (Number(s.ok)||0) === 0){ ogDead.push(k); }
-    });
-    var vsrcLabel = function(k){
-      var t = window.T('ov2_av_vsrc_'+k);
-      return (!t || t.indexOf('ov2_av_vsrc_') === 0) ? k : t;
-    };
-    opsSetCardLight('avatar', (!hp(h.cosyvoice) || ogRed || ogDead.length) ? 'red'
+    var ogK = voiceOutageKpi(og);
+    opsSetCardLight('avatar', (!hp(h.cosyvoice) || ogK.red || ogK.dead.length) ? 'red'
       : ((((d.prerender_inventory||{}).stale||0) > 0) ? 'yellow' : ''));
-    var ogVal;
-    if(!ogAtt){ ogVal = '<span class="muted">'+window.T('ov2_av_outage_none')+'</span>'; }
-    else if(ogRed){
-      var ogReasons = Object.keys(og.fail_reasons||{}).slice(0,2).join('/').slice(0,40).replace(/</g,'&lt;');
-      ogVal = '<span style="color:var(--th-ink-red5,#b91c1c)">⛔ '+fmt(ogOk)+' / '+fmt(ogAtt)
-        +' '+window.T('ov2_av_outage_bad')+(ogReasons?(' · '+ogReasons):'')+'</span>';
-    }
-    else if(ogDead.length){
-      // 汇总数字照实给（它是绿的，别粉饰），红字点名死掉的那几条链
-      ogVal = dot(true)+fmt(ogOk)+' / '+fmt(ogAtt)
-        +' <span style="color:var(--th-ink-red5,#b91c1c)">⛔ '
-        +ogDead.map(vsrcLabel).join('、').slice(0,60).replace(/</g,'&lt;')
-        +' '+window.T('ov2_av_outage_chain')+'</span>';
-    } else {
-      ogVal = dot(ogOk>0)+fmt(ogOk)+' / '+fmt(ogAtt)
-        +((og.consecutive_fails||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠×'+fmt(og.consecutive_fails)+'</span>'):'');
-    }
-    // 「(24h)」这个标签在事件挤满台账时会撒谎——真实覆盖只到最老那条事件为止，
-    // 而「窗内 0 成功」的分母正是这些事件：窗一缩，断档判据就随流量悄悄闭嘴。
-    // 台账已自陈 truncated/effective_window_hours，这里照实改写标签。
-    var ogLabel = window.T('ov2_av_outage');
-    if(og.truncated){
-      var ogEff = Math.round(Number(og.effective_window_hours)||0);
-      ogLabel += ' <span style="color:var(--th-ink-amber5,#92400e)" title="'
-        +window.T('ov2_av_outage_trunc_tip')+'">⚠'
-        +window.T('ov2_av_outage_trunc')+' '+ogEff+'h</span>';
-    }
+    var ogLabel = ogK.label, ogVal = ogK.value;
     var kpis = [
       {label:window.T('ov2_av_cosy'), value:dot(hp(h.cosyvoice))+(hp(h.cosyvoice)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_qwen'), value:dot(hp(h.qwen3))+(hp(h.qwen3)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},

@@ -238,12 +238,21 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             _hd_wired = None
         worker = getattr(request.app.state, "autosend_worker", None)
+        # 语音出站 24h 台账（跨重启）：B 线卡复用，不依赖 AvatarHub 开关。
+        _voice_outage = {}
+        try:
+            from src.ai.voice_outage import get_voice_outage
+            _voice_outage = get_voice_outage().outage_snapshot()
+        except Exception:
+            _voice_outage = {}
         if worker is None:
             return {"ok": True, "worker": None,
                     "human_deliver_wired": _hd_wired,
                     "stale_approve_hours": _stale_h,
+                    "voice_outage": _voice_outage,
                     "note": tr(request, "err.draft.autosend_worker_off")}
         snap = worker.status_snapshot()
+        snap["voice_outage"] = _voice_outage
         try:
             from src.inbox.voice_autosend import metrics_snapshot as _vms
             snap["voice"] = _vms()  # 全自动语音：sent/fallback/last_reason/last_duration_ms

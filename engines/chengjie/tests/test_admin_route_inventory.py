@@ -1366,6 +1366,16 @@ _ADDITIONS_2026_07_28_PERSONA_QUIZ_TREND = """
 """
 _BASELINE += _ADDITIONS_2026_07_28_PERSONA_QUIZ_TREND
 
+# 2026-09-19 人设补丁提案（完善度缺口 / 退役冲突 → 人审后 merge）
+_ADDITIONS_2026_09_19_PERSONA_PROPOSALS = """
+/api/personas/proposals/status	GET
+/api/personas/profiles/{profile_id}/proposals/generate	POST
+/api/personas/profiles/{profile_id}/proposals	GET
+/api/personas/profiles/{profile_id}/proposals/{proposal_id}/accept	POST
+/api/personas/profiles/{profile_id}/proposals/{proposal_id}/reject	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_19_PERSONA_PROPOSALS
+
 # 2026-07-28 P17 营销目标「今日工作清单」（goal_routes.py）：把看板的计数变成坐席能
 # 照着干的点名单（今天该推谁 / 谁还没人审 / 谁让路了）。只读端点（viewer 也能看），
 # 逐条走 GET /api/goals 同一条 settle-on-read 口径，不另开第二条结算路。
@@ -2251,6 +2261,26 @@ _ADDITIONS_2026_09_18_MODEL_ROUTES_PROBE = """
 /api/setup/model-routes/probe	POST
 """
 _BASELINE += _ADDITIONS_2026_09_18_MODEL_ROUTES_PROBE
+
+# 2026-09-19 个人微信 PC 副驾一键启停（`wechat_pc_setup_routes.py` + `wechat_pc/supervisor.py`）：引导页不再让用户复制
+# PowerShell 命令——后端托管驱动子进程（start/stop/restart/status）、微信登录后自启开关、拉起/置前电脑微信。
+_ADDITIONS_2026_09_19_WECHAT_PC_ONECLICK = """
+/api/setup/wechat_pc/copilot/status	GET
+/api/setup/wechat_pc/copilot/start	POST
+/api/setup/wechat_pc/copilot/stop	POST
+/api/setup/wechat_pc/copilot/restart	POST
+/api/setup/wechat_pc/autostart	POST
+/api/setup/wechat_pc/launch-wechat	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_19_WECHAT_PC_ONECLICK
+
+# 2026-09-19 副驾「发语音」引导（P1）：虚拟声卡回环自测（不碰微信）+ 一键对齐两端采样率（IPolicyConfig，需管理员）。
+# 环境探测本身并入既有 /api/setup/wechat_pc/env 的 ``voice`` 字段，不新开端点。
+_ADDITIONS_2026_09_19_WECHAT_PC_VOICE = """
+/api/setup/wechat_pc/voice/selftest	POST
+/api/setup/wechat_pc/voice/align	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_19_WECHAT_PC_VOICE
 
 
 def _parse_baseline():

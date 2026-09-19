@@ -79,8 +79,15 @@ rail 标签：
 ```bash
 cd desktop
 npm install
-npm start        # 或 npm run dev 打开 DevTools
+npm start        # 或 npm run dev（= electron . --dev --devtools，弹出 DevTools）
 ```
+
+> **DevTools 准入（2026-09-19）**：只有**显式 `--devtools`** 才会自动弹 DevTools，`--dev` 单独不再弹
+> （此前 `electron . --dev --inspect` 起的调试实例会把独立 DevTools 窗留在坐席眼前）。
+> **打包态（用户/坐席端）一律不可开**：主窗 / 后台弹窗 / 悬浮副驾 / 所有 webview 都下了
+> `webPreferences.devTools=false`，Chromium 层封死——菜单、快捷键、页内「版本号连点 12 次」
+> 解锁全部无效（壳经 `app-menu-spec.devtools_allowed=false` 通知页面不再接线解锁）。
+> 打包态排查主进程用 `--inspect`（Node inspector），渲染层看 `userData/logs/` 与「上传诊断」。
 
 ## 打包分发（双击安装 / 自动更新）
 

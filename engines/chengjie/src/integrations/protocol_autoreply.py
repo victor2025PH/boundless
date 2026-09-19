@@ -657,11 +657,31 @@ async def run_autoreply(
         return _result(_hard, inbound=text, hard_stop=_hard)
 
     # 锁定的需人工类（索钱 / 诈骗 / 威胁 / 未成年）：不回客户，只打标提醒坐席。
+    # 2026-09-19：未成年不能只靠 quick_analyze 的 reason 名（它没有 minor 词表）——
+    # 与 B 线 drafts 同走 risk_grader.grade + is_locked_effective，人设/机器 open 都算隐含锁。
+    _persona = None
+    if persona_id:
+        try:
+            from src.utils.persona_manager import PersonaManager
+            _persona = PersonaManager.get_instance().get_persona_by_id(str(persona_id))
+        except Exception:
+            _persona = None
     _lock_cat = ""
-    if _peer_reasons:
+    if text:
+        try:
+            from src.inbox.risk_grader import grade as _rk_grade, is_locked_effective as _rk_eff
+            _g = _rk_grade(text, "in", _persona, cfg=cfg)
+            _cat = str(_g.get("category") or "")
+            if _cat and _rk_eff(_cat, cfg, _persona)[0]:
+                _lock_cat = _cat
+                if _g.get("hits"):
+                    _hard_hits = [str(h) for h in _g["hits"]]
+        except Exception:
+            logger.debug("[protocol-autoreply] risk_grader 锁定判定异常（回落 reason 名）", exc_info=True)
+    if not _lock_cat and _peer_reasons:
         try:
             from src.inbox.risk_grader import first_locked_hit as _rk_hit
-            _lock_cat = _rk_hit(_peer_reasons, cfg)
+            _lock_cat = _rk_hit(_peer_reasons, cfg, _persona)
         except Exception:
             logger.debug("[protocol-autoreply] 锁定类别读取异常（放行）", exc_info=True)
             _lock_cat = ""
