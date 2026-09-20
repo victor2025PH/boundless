@@ -44,4 +44,13 @@ emotion_enhancer_skip:
 #       db_path: ""                        # 空 → contacts.db_path → <配置目录>/contacts.db
 #       dormant_after_days: 7              # 沉默超过 N 天 → dormant；再来消息回到原阶段
 #       active_min_deposit_days: 2         # 不同自然日充值 ≥ N 次 → active
+#     sync:                                # B3：巡检里定时拉活跃联系人网关资料写画像（仅 domain=player_care 实例跑）
+#       enabled: true
+#       interval_min: 30                   # 节流 + 同一画像两次 lookup 最小间隔（下限 5）
+#       active_days: 7                     # 只刷 last_seen 在 N 天内、有手机号/UID 的画像
+#       batch: 50                          # 每轮最多查多少个
+#       goals:                             # 沉默→player_reengage、新充值→player_after_deposit（需 companion.goals.enabled）
+#         enabled: true
+#         autonomy: auto
+#         max_per_day: 20
 # 日报：.venv\Scripts\python.exe -m domains.player_care.report --config config_player\config.yaml [--day YYYY-MM-DD] [--json]

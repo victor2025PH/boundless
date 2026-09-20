@@ -77,9 +77,20 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - 日报：`python -m domains.player_care.report --config config_player\config.yaml [--day] [--json]` → 按我方账号 × 阶段快照 + 当日入站 / 查网关 / 查到 / 明用 / 数字闸 / 新增 / 升阶。
 - 测试 `tests/test_player_care_profile.py`。
 
-## 6b. 尚未做（B3–B6，按序）
+## 6a. B3 player_sync（已做）
 
-2. **B3 player_sync**：每 30 min 拉一遍活跃联系人的网关资料写画像（照 `health_watchdog._check_goal_order_pull` 的样子），充值 / 沉默事件驱动 goals；
+- `domains/player_care/sync.py::run_player_sync`，由 `health_watchdog._check_player_sync` 在巡检 tick 里稀疏节流调（仿 `_check_goal_order_pull`）；
+  **只有 `domain: player_care` 的实例跑**，story_matrix 实例直接返回。配置 `player_care.sync.{enabled=true, interval_min=30(下限 5), active_days=7, batch=50, goals.{enabled, autonomy=auto, max_per_day=20, reengage_days=7, after_deposit_days=3}}`。
+- 一轮：① `dormant_sweep` 沉默 > N 天 → dormant，每个**新**置入的起 `player_reengage` 目标；② last_seen 在 active_days 内、有手机号/UID、上次 lookup 距今 ≥ interval 的画像逐个 `gateway.lookup` →
+  `PlayerProfileService.record_sync`（不动 last_seen / inbound_count，dormant 不唤醒只刷 `stage_before_dormant`）；事实里**新**出现充值（`detect_deposit`，换日才算新）→ 起 `player_after_deposit` 目标。
+- goals 护栏：`companion.goals.enabled` 关一律不建；同会话（`platform:account_id:external_id`）已有 active 目标不重建；每日预算（`created_by=player_sync` 进库计数）。
+- 模板在 `domains/player_care/goal_templates.py`（`player_reengage` / `player_after_deposit`，`push_curve` 全 none：不催充不提优惠不承诺赢不报数字），
+  `register_goal_templates()` 以 setdefault 挂进 `src/companion/goals/templates.TEMPLATES`（核心模板表源码不改；只在本域 hook 随真实配置装载 / sync 跑时才挂）。
+- 网关数字只原样落 `facts_text`，不算不推；失败全吞，不影响巡检主流程。watchdog 侧 `total_player_sync_runs / last_player_sync` 留给 B6 看板。
+- 测试 `tests/test_player_care_sync.py`。
+
+## 6b. 尚未做（B4–B6，按序）
+
 3. **B4 commandbus**：智聊向智拓发 `reengage / stop / note`（契约已在智拓仓 `CHATX_COMMANDBUS_CONTRACT.md`，智拓侧 executor 在另一条对话做）；
 4. **B5 handoff**：Messenger → WA/TG 迁移用 `handoff_tokens` 合并身份，手机号是主键；
 5. **B6 看板**：每实例 `/player-care/overview`（联系人数 / 阶段分布 / 明用命中 / 数字闸命中 / 网关健康），上报智控。

@@ -251,23 +251,78 @@ class PlayerProfileService:
             self.store.upsert_player_profile(key, gate_hits=int(prev.get("gate_hits") or 0) + 1)
         self.store.bump_player_daily(day_key(now), acct, gate_hits=1)
 
+    # ── B3 同步：不算入站，只刷网关事实 ────────────────────────────────
+    def record_sync(self, key: str, facts: Dict[str, Any], *, now: Optional[float] = None) -> Dict[str, Any]:
+        """player_sync 拉到的一次 lookup 结果写回画像。返回
+        ``{"row": 新行, "events": ["registered"|"deposit"...], "stage_before": ...}``；
+        不动 last_seen / inbound_count（这不是对方在说话），dormant 不唤醒。"""
+        now = float(now if now is not None else time.time())
+        prev = self.store.get_player_profile(key)
+        if prev is None:
+            return {"row": None, "events": [], "stage_before": ""}
+        stage_before = str(prev.get("stage") or STAGE_NEW_FRIEND)
+        found = bool(facts.get("found"))
+        fields: Dict[str, Any] = {
+            "lookups": int(prev.get("lookups") or 0) + 1,
+            "last_lookup_at": int(now),
+            "last_found": found,
+            "last_error": "" if found else str(facts.get("error") or ""),
+        }
+        events: List[str] = []
+        live = stage_before if stage_before != STAGE_DORMANT else str(prev.get("stage_before_dormant") or STAGE_CHATTING)
+        stage = live
+        if found:
+            ftext = str(facts.get("text") or "")
+            fields["facts_text"] = ftext
+            if facts.get("games"):
+                fields["games"] = facts["games"]
+            if facts.get("agent"):
+                fields["agent"] = str(facts["agent"])
+            if facts.get("uid") and not prev.get("uid"):
+                fields["uid"] = str(facts["uid"])
+            stage = advance(stage, STAGE_REGISTERED)
+            if not prev.get("registered_at"):
+                fields["registered_at"] = int(now)
+                events.append("registered")
+            if detect_deposit(ftext):
+                day = day_key(now)
+                if str(prev.get("deposit_last_day") or "") != day:
+                    events.append("deposit")
+                stage, dep = self._apply_deposit(prev, stage, day, now)
+                fields.update(dep)
+        if stage_before == STAGE_DORMANT:
+            # 沉默中：网关事实只刷「唤醒后该回到的阶段」，人仍算 dormant
+            if stage != live:
+                fields["stage_before_dormant"] = stage
+        elif stage != stage_before:
+            fields["stage"] = stage
+            fields["stage_changed_at"] = int(now)
+            self.store.bump_player_daily(day_key(now), str(prev.get("account_id") or ""), stage_ups=1)
+        row = self.store.upsert_player_profile(key, **fields)
+        self.store.bump_player_daily(day_key(now), str(prev.get("account_id") or ""),
+                                     lookups=1, found=1 if found else 0)
+        return {"row": row, "events": events, "stage_before": stage_before}
+
     # ── 沉默 → dormant（B3 sync 定时调；日报前也顺手扫一遍）──────────────
-    def apply_dormancy(self, *, now: Optional[float] = None) -> int:
+    def dormant_sweep(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
+        """把沉默超期的画像置为 dormant，返回本次新置入的行（已 dormant 的不重复）。"""
         if self.dormant_after_sec <= 0:
-            return 0
+            return []
         now = float(now if now is not None else time.time())
         cutoff = int(now - self.dormant_after_sec)
-        n = 0
+        out: List[Dict[str, Any]] = []
         for row in self.store.list_player_profiles(seen_before=cutoff, limit=5000):
             if row.get("stage") == STAGE_DORMANT:
                 continue
-            self.store.upsert_player_profile(
+            out.append(self.store.upsert_player_profile(
                 row["profile_key"], stage=STAGE_DORMANT,
                 stage_before_dormant=str(row.get("stage") or STAGE_NEW_FRIEND),
                 stage_changed_at=int(now),
-            )
-            n += 1
-        return n
+            ))
+        return out
+
+    def apply_dormancy(self, *, now: Optional[float] = None) -> int:
+        return len(self.dormant_sweep(now=now))
 
     # ── 日报：按我方账号 × 阶段 ───────────────────────────────────────────
     def daily_report(self, day: Optional[str] = None, *, now: Optional[float] = None) -> Dict[str, Any]:

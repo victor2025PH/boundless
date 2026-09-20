@@ -832,6 +832,10 @@ class HealthWatchdog:
         self.total_goal_orders_settled: int = 0
         # 流失挽回扫描（goals winback）：小时级节流。默认关。
         self._last_goal_winback_ts: float = 0.0
+        # player_care 域 player_sync（B3）：仅 domain=player_care 实例跑；默认 30min 节流。
+        self._last_player_sync_ts: float = 0.0
+        self.total_player_sync_runs: int = 0
+        self.last_player_sync: Dict[str, Any] = {}
         # D1b P0-5：自动推进有货零真发计数（节流位已迁 remind_ledger，见 _RK_GOAL_SENDS）
         self.total_goal_sprint_stall_alerts: int = 0
         self.last_check_ts: float = 0.0
@@ -1604,6 +1608,13 @@ class HealthWatchdog:
             self._check_goal_sprint_liveness()
         except Exception:
             logger.debug("自动推进真发巡检异常（已忽略）", exc_info=True)
+
+        # player_care 域定时同步（B3）：拉活跃联系人网关资料写画像 + 沉默/充值事件起 goals。
+        # 非 player_care 域实例（story_matrix 等）直接返回。
+        try:
+            self._check_player_sync()
+        except Exception:
+            logger.debug("player_sync 巡检异常（已忽略）", exc_info=True)
 
         # 运维卫生：按保留期清理已关闭事件（每日节流一次）。
         try:
@@ -6845,6 +6856,41 @@ class HealthWatchdog:
                 summary.get("pulled"), summary.get("candidates"), settled,
                 summary.get("dup"), summary.get("unmatched"),
                 summary.get("errors"))
+
+    def _check_player_sync(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """player_care 域 player_sync（B3，默认开、30min 节流；非本域实例静默）。
+
+        仿 ``_check_goal_order_pull``：巡检 tick 里稀疏节流调
+        ``domains.player_care.sync.run_player_sync``——沉默画像置 dormant 起轻触目标、
+        活跃联系人逐个 lookup 刷画像、新充值事实起玩后关心目标。配置
+        ``player_care.sync.{enabled,interval_min,active_days,batch,goals}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return None
+        from src.utils.domain_policy import effective_domain_name
+        if effective_domain_name(cfg) != "player_care":
+            return None
+        from domains.player_care.sync import resolve_sync_cfg, run_player_sync
+        sc = resolve_sync_cfg(cfg)
+        if not sc["enabled"]:
+            return None
+        ts = float(now if now is not None else time.time())
+        interval_sec = sc["interval_min"] * 60.0
+        if self._last_player_sync_ts and (ts - self._last_player_sync_ts) < interval_sec:
+            return None
+        self._last_player_sync_ts = ts
+        summary = run_player_sync(
+            self._config_manager, getattr(self._config_manager, "config_path", None), now=ts)
+        self.total_player_sync_runs += 1
+        self.last_player_sync = dict(summary, ts=ts)
+        if summary.get("looked_up") or summary.get("dormant") or summary.get("errors"):
+            logger.info(
+                "player_sync: 扫描=%s 查网关=%s 查到=%s 充值=%s 沉默=%s 起目标=%s 错误=%s %s",
+                summary.get("scanned"), summary.get("looked_up"), summary.get("found"),
+                summary.get("deposits"), summary.get("dormant"), summary.get("goals"),
+                summary.get("errors"), summary.get("skipped") or "")
+        return summary
 
     def _check_goal_winback(self, *, now: Optional[float] = None) -> None:
         """流失挽回扫描（goals P6，默认关）。

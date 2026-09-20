@@ -33,6 +33,7 @@ from .gateway import (
     numbers_not_in_facts,
     resolve_gateway_cfg,
 )
+from .goal_templates import register_goal_templates
 from .profile import PlayerProfileService, get_profile_service
 
 logger = logging.getLogger("PlayerCareHook")
@@ -88,6 +89,10 @@ class PlayerCareDomainHook(DomainHook):
         self._gateway_override = gateway
         self._gateway: Optional[PlayerGateway] = gateway
         self._gateway_sig: str = ""
+        # 本域 goals 模板只在本域 hook 随真实实例装载时挂进注册表（story_matrix 实例不装本域 →
+        # 看不到；裸 dict / None 配置的单测不挂，免得污染核心模板表断言）
+        if getattr(config, "config_path", None):
+            register_goal_templates()
 
     # ── 网关实例（配置变了就重建；测试可注入）────────────────────────────
     def gateway(self) -> PlayerGateway:
