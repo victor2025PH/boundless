@@ -1,5 +1,38 @@
 [
   {
+    "version": "1.0.94",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "「从旧版升上来」这一跳也不弹了：移除旧版改由新安装包自己做",
+      "en": "The upgrade hop itself no longer prompts: setup removes the old version itself"
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "1.0.93 的说明里我们留了一句实话：从旧版升到 1.0.93 的过程本身仍可能弹一次「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」，因为执行「移除旧版」的是旧版自带的卸载程序，修复进不去那里。这一版把那句实话消掉了",
+        "旧卸载程序为什么会失败：它移除旧版的做法是把安装目录里约 9400 个文件逐个改名，任何一个改名失败就整树回滚并报错——杀毒软件扫描时打开其中任意一个就足够；安装器框架会重试 5 次，第 5 次失败才弹出那个窗口，所以看起来随机、点「重试」有时又好了",
+        "我们先试过一版「升级前先把安装目录清空，让旧卸载程序只剩几个文件要改名」。实测不行：被占用的那个文件我们同样删不掉，它留在原地照样否决整次操作——对照实验的原始数据写进了发版对账文档。缩小范围只对「随机扫到」有用，对「某个文件被一直按住」无用",
+        "本版改成由新安装包自己移除旧版：删得掉的删掉，删不掉的留着（新版本随后覆盖写进同一目录），再把旧版的卸载入口按「卸载成功后本该的样子」清掉，于是安装器框架直接跳过运行旧卸载程序这一步——不再有整树改名，也就不再存在「一个文件被占用否决整次升级」这条路。结果不再取决于运气",
+        "实测对照：同一个文件全程被独占锁住、从 1.0.92 升级——旧路径报错 5 次、609 秒、弹窗；本版 283 秒直接装完，而那个文件依然锁着。升级后的卸载入口、卸载功能、两个数据目录均逐项验过",
+        "代价说清楚：移除旧版这一步现在不可回滚。万一安装在这一步之后失败，旧版程序文件已被清空（数据与各平台登录状态不受影响，重新运行安装包即可装好）。安装器框架原本成功的路径也是同样后果",
+        "诊断信息仍写入 %TEMP%\\chatx_install_reap.log，报障带上这个文件即可直接定位",
+        "数据、各平台登录状态一律不受影响"
+      ],
+      "en": [
+        "The 1.0.93 notes admitted one thing straight: upgrading from an older build to 1.0.93 could still prompt \"ChatX cannot be closed - close it manually and click Retry\" once, because the step that removes the old version is performed by the OLD version's own uninstaller, where our fix cannot reach. This release removes that caveat",
+        "Why that old uninstaller fails: it removes the old version by renaming every one of the ~9,400 files we ship, and if even one rename fails the whole tree is rolled back and the step reports failure - an antivirus scan holding any single file is enough. The framework retries five times and only then shows the dialog, which is why it looked random and why clicking Retry sometimes worked",
+        "We first tried shrinking the exposure: empty the install folder before the old uninstaller runs, so it has a handful of files to rename instead of 9,400. Measured, and it does not work - the file that is held is the file we cannot delete either, so it stays and vetoes the operation just the same. The raw A/B data is in the release ledger; shrinking the candidate set only helps a random scan, not a file that is held throughout",
+        "So setup now removes the old version itself: delete what can be deleted, leave what cannot (the new version overwrites that same folder next), then clear the old uninstall entry exactly as a successful uninstall would have - and the framework skips running the old uninstaller entirely. No tree-wide rename, therefore no path from one busy file to a failed upgrade. The outcome no longer depends on luck",
+        "Measured, same file locked exclusively for the whole upgrade, starting from 1.0.92: the old path failed five times over 609s and showed the dialog; this build finished in 283s with that file still locked. Uninstall entry, uninstallability and both data folders were each verified afterwards",
+        "The trade-off, plainly: removing the old version is no longer rollback-able. If the install fails after that point, the old program files are already gone - your data and logins are untouched, just run the installer again. The framework's own success path had the same consequence",
+        "Diagnostics still land in %TEMP%\\chatx_install_reap.log - send that file with any report and we can pinpoint it",
+        "Your data and account logins are untouched"
+      ]
+    }
+  },
+  {
     "version": "1.0.93",
     "date": "2026-09-20",
     "title": {
