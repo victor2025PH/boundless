@@ -1,11 +1,12 @@
-﻿name: story_matrix
+name: story_matrix
 display_name: "故事共创矩阵（菲律宾 Taglish）"
 version: "1.0"
 description: >
-  智拓 ReachX「AI 故事共创矩阵」四个正能量故事频道的 Messenger 前台自由聊天域。
+  智拓 ReachX「AI 故事共创矩阵」五个正能量故事频道的 Messenger 前台自由聊天域。
   本域只负责流程外的自由聊天（replybus.decide）；投票 / 投稿七步 / 同意 / opt-in / STOP /
-  危机转人工由智拓前台状态机处理，不会进到这里。四位主持为 personas.profiles 的四个 id：
-  ate_liza / kuya_miguel / tita_bebang / manang_grace（见 domains/story_matrix/personas.example.yaml）。
+  危机转人工由智拓前台状态机处理，不会进到这里。五位主持为 personas.profiles 的五个 id：
+  ate_liza / kuya_miguel / tita_bebang / manang_grace / ate_mia（2026-09-18 加，Kwentong Trabaho）
+  （见 domains/story_matrix/personas.example.yaml）。
 
 skills: []
 

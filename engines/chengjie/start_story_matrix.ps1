@@ -22,7 +22,7 @@ $py = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if ($Background) {
     $p = Start-Process -FilePath $py -ArgumentList 'main.py' -WorkingDirectory $PSScriptRoot -WindowStyle Minimized -PassThru `
         -RedirectStandardOutput logs\story_matrix_local.log -RedirectStandardError logs\story_matrix_local.err.log
-    "started pid=$($p.Id)  http://127.0.0.1:18797"
+    "started pid=$($p.Id)  http://127.0.0.1:18796"
 } else {
     & $py main.py
 }

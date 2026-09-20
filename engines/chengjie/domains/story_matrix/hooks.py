@@ -28,6 +28,7 @@ _SAFE_LINE = {
     "kuya_miguel": "Nandito lang ako para sa mga kwento natin. Ano sa tingin mo, A o B para sa susunod?",
     "tita_bebang": "Hay naku, dito lang tayo sa kwento ha! Ano sa tingin mo, A o B para sa susunod?",
     "manang_grace": "Nandito lang ako para sa mga kwento natin, anak. Ano sa tingin mo, A o B para sa susunod?",
+    "ate_mia": "Uy, dito lang ako para sa kwento natin ha! Ano sa tingin mo, A o B para sa susunod?",
 }
 _DEFAULT_SAFE = _SAFE_LINE["ate_liza"]
 
