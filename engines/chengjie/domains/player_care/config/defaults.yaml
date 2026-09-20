@@ -37,3 +37,11 @@ emotion_enhancer_skip:
 #     cache_ttl_sec: 60                  # 同一联系人短缓存，一句话里多次触发不重复打网关
 #     lookup_path: /lookup
 # 域激活：domain: player_care（一个实例只能激活一个域——本域跑在与 story_matrix 不同的实例）
+# player_care.profile（B2 画像 + 阶段旁表 player_profiles，写在 contacts.db 同一文件；默认开）：
+#   player_care:
+#     profile:
+#       enabled: true
+#       db_path: ""                        # 空 → contacts.db_path → <配置目录>/contacts.db
+#       dormant_after_days: 7              # 沉默超过 N 天 → dormant；再来消息回到原阶段
+#       active_min_deposit_days: 2         # 不同自然日充值 ≥ N 次 → active
+# 日报：.venv\Scripts\python.exe -m domains.player_care.report --config config_player\config.yaml [--day YYYY-MM-DD] [--json]

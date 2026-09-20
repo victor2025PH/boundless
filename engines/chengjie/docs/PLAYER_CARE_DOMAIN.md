@@ -62,9 +62,23 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 
 基类默认返回 None / 原文 → 无域包或域包未覆写时逐字节零影响。**副作用**：story 实例升级到本分支后，story_matrix 的 post hook 开始真的生效（更严：识别到 AI 字样 / 链接 / 号码的回复会被换成频道安全句）。
 
-## 6. 尚未做（B2–B6，按序）
+## 6. B2 画像 + 阶段（已做）
 
-1. **B2 画像 + 阶段**：`_player_facts` → contacts 表 / 阶段机（`new_friend → chatting → mentioned_game → registered → depositing → active → dormant`），日报表；
+- 旁表 `player_profiles` / `player_daily_stats`（`src/contacts/store.py`，与 contacts.db 同文件，`CREATE IF NOT EXISTS` 幂等）：
+  `profile_key`（手机号 639… 主键；没手机号时 `platform:external_id` 占位，拿到后 `rebind_player_profile` 合并）、
+  `phone_e164 / uid / agent / account_id(owner_slot) / games_json / stage / first_seen / last_seen / inbound_count /
+  registered_at / deposit_days / lookups / visible_hits / gate_hits / facts_text`。
+- `domains/player_care/profile.py`：`PlayerProfileService.record_inbound` 由 hook 每轮入站调（查不查网关都记，失败吃掉不影响回复）；
+  阶段只前进：`chatting`=第 2 条入站；`mentioned_game`=对方自己聊到游戏 / 无聊（`GAME_MENTION_RE`）；`registered`=网关查到；
+  `depositing`=事实里有充值记录（`detect_deposit` 保守正则，B1.5 真样例后定稿）或 B3 `note_deposit`；`active`=不同自然日充值 ≥ 2；
+  `dormant`=`apply_dormancy` 扫到沉默 > 7 天（再来消息回原阶段）。一切信号只来自对方原话或网关事实，不推断。
+- 配置 `player_care.profile.{enabled,db_path,dormant_after_days,active_min_deposit_days}`（见 defaults.yaml 注释）；无 `config_path` 的裸 dict / None 不落盘。
+- A 线 hook ctx.extra 补 `platform / account_id / chain`，与 B 线同口径（owner_slot 才有来源）。
+- 日报：`python -m domains.player_care.report --config config_player\config.yaml [--day] [--json]` → 按我方账号 × 阶段快照 + 当日入站 / 查网关 / 查到 / 明用 / 数字闸 / 新增 / 升阶。
+- 测试 `tests/test_player_care_profile.py`。
+
+## 6b. 尚未做（B3–B6，按序）
+
 2. **B3 player_sync**：每 30 min 拉一遍活跃联系人的网关资料写画像（照 `health_watchdog._check_goal_order_pull` 的样子），充值 / 沉默事件驱动 goals；
 3. **B4 commandbus**：智聊向智拓发 `reengage / stop / note`（契约已在智拓仓 `CHATX_COMMANDBUS_CONTRACT.md`，智拓侧 executor 在另一条对话做）；
 4. **B5 handoff**：Messenger → WA/TG 迁移用 `handoff_tokens` 合并身份，手机号是主键；

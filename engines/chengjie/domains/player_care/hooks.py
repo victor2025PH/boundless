@@ -33,6 +33,7 @@ from .gateway import (
     numbers_not_in_facts,
     resolve_gateway_cfg,
 )
+from .profile import PlayerProfileService, get_profile_service
 
 logger = logging.getLogger("PlayerCareHook")
 
@@ -58,6 +59,7 @@ _SAFE_LINE = {
 _FACTS_KEY = "_player_facts"
 _VISIBLE_KEY = "_player_facts_visible"
 _ROUND_KEY = "_player_facts_round"
+_PROFILE_KEY = "_player_profile_key"
 
 
 def _reply_lang(ctx: HookContext) -> str:
@@ -158,8 +160,50 @@ class PlayerCareDomainHook(DomainHook):
             "不要报任何数字。】对方近期玩过：" + "、".join(names[:5])
         )
 
-    # ── hook 1：入站预处理 → 查网关、决定明用 / 暗用 ───────────────────────
+    # ── 画像落库（B2）：每轮入站都记，查不查网关都记；失败不影响回复 ────────
+    def _profile(self) -> Optional[PlayerProfileService]:
+        try:
+            return get_profile_service(self._config)
+        except Exception:
+            logger.debug("[player_care] profile service 不可用", exc_info=True)
+            return None
+
+    def _persist_round(self, ctx: HookContext, ident: Dict[str, str], *, looked_up: bool) -> None:
+        svc = self._profile()
+        if svc is None:
+            return
+        uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
+        extra = ctx.extra or {}
+        platform = str(extra.get("platform") or uc.get("platform") or "")
+        account_id = str(extra.get("account_id") or uc.get("account_id") or "")
+        external_id = str(ctx.user_id or ctx.chat_id or "")
+        try:
+            key = svc.resolve_key(
+                phone=ident.get("phone", ""), platform=platform, external_id=external_id,
+                prev_key=str(uc.get(_PROFILE_KEY) or ""),
+            )
+            uc[_PROFILE_KEY] = key
+            facts = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else None
+            svc.record_inbound(
+                key=key, text=str(ctx.text or ""), platform=platform, account_id=account_id,
+                external_id=external_id, phone=ident.get("phone", ""), uid=ident.get("uid", ""),
+                contact_id=str(uc.get("contact_id") or ""),
+                facts=facts, looked_up=looked_up, round_kind=str(uc.get(_ROUND_KEY) or ""),
+            )
+        except Exception:
+            logger.debug("[player_care] 画像落库失败（忽略）", exc_info=True)
+
+    # ── hook 1：入站预处理 → 查网关、决定明用 / 暗用，再落画像 ────────────────
     async def on_message_pre_process(self, ctx: HookContext) -> Optional[Dict[str, Any]]:
+        uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
+        prev_ts = float((uc.get(_FACTS_KEY) or {}).get("ts") or 0) if isinstance(uc.get(_FACTS_KEY), dict) else 0.0
+        result = await self._decide(ctx)
+        facts = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
+        looked_up = float((facts or {}).get("ts") or 0) > prev_ts
+        self._persist_round(ctx, self.resolve_identity(ctx), looked_up=looked_up)
+        return result
+
+    async def _decide(self, ctx: HookContext) -> Optional[Dict[str, Any]]:
         uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
         uc[_VISIBLE_KEY] = False
         uc[_ROUND_KEY] = ""
@@ -234,6 +278,7 @@ class PlayerCareDomainHook(DomainHook):
             if bad:
                 logger.info("[player_care] 数字闸：回复含事实外数字 %s → 安全句", bad[:5])
                 uc["_player_numeric_gate_hits"] = int(uc.get("_player_numeric_gate_hits") or 0) + 1
+                self._record_gate_hit(ctx)
                 return _SAFE_LINE[lang]
         elif round_kind in ("missing", "need_identity", "unconfigured"):
             # 没资料那一轮：任何 ≥3 位数字都是编的
@@ -241,8 +286,22 @@ class PlayerCareDomainHook(DomainHook):
             if bad:
                 logger.info("[player_care] 数字闸（无资料轮）：%s → 安全句", bad[:5])
                 uc["_player_numeric_gate_hits"] = int(uc.get("_player_numeric_gate_hits") or 0) + 1
+                self._record_gate_hit(ctx)
                 return _SAFE_LINE[lang]
         return reply
+
+    def _record_gate_hit(self, ctx: HookContext) -> None:
+        svc = self._profile()
+        if svc is None:
+            return
+        uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
+        key = str(uc.get(_PROFILE_KEY) or "")
+        if not key:
+            return
+        try:
+            svc.record_gate_hit(key, str((ctx.extra or {}).get("account_id") or ""))
+        except Exception:
+            logger.debug("[player_care] gate_hit 落库失败（忽略）", exc_info=True)
 
     def get_escalation_line(self) -> str:
         # 基类默认是中文客服话术；朋友人设绝不能带出去。

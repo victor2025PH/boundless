@@ -1958,7 +1958,12 @@ class SkillManager(LoggerMixin):
                 last_reply=user_context.get("last_reply", ""),
                 reply_lang=user_context.get("reply_lang", "zh"),
                 user_context=user_context,
-                extra={"available_skills": set(self.skills.keys())},
+                extra={"available_skills": set(self.skills.keys()),
+                       "platform": str(user_context.get("platform")
+                                       or context.get("platform") or ""),
+                       "account_id": str(user_context.get("account_id")
+                                         or context.get("account_id") or ""),
+                       "chain": "process"},
             )
             # 域包 pre-process hook（2026-09-20 接线，与 B 线 generate_inbox_draft 3f
             # 同口径）：返回 dict 合并进 user_context，`_domain_context_block` 由

@@ -256,7 +256,70 @@ CREATE TABLE IF NOT EXISTS contact_memory_imports (
     revoked_at       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cmi_contact ON contact_memory_imports(contact_id, created_at DESC);
+
+-- player_care 域旁表（B2）：玩家画像 + 阶段。profile_key = 手机号 639… 为主键，
+-- 没拿到手机号前用 platform:external_id 占位，拿到后 rebind 合并（B5 handoff 同此键）。
+-- 只存网关给的只读事实与我们自己的计数，绝不存推断出来的数字。
+CREATE TABLE IF NOT EXISTS player_profiles (
+    profile_key          TEXT PRIMARY KEY,
+    contact_id           TEXT NOT NULL DEFAULT '',
+    platform             TEXT NOT NULL DEFAULT '',
+    account_id           TEXT NOT NULL DEFAULT '',   -- owner_slot：我方哪个 WA / TG 号在聊
+    external_id          TEXT NOT NULL DEFAULT '',
+    phone_e164           TEXT NOT NULL DEFAULT '',
+    uid                  TEXT NOT NULL DEFAULT '',
+    agent                TEXT NOT NULL DEFAULT '',   -- 网关代理号字段（有则归因用）
+    games_json           TEXT NOT NULL DEFAULT '[]',
+    stage                TEXT NOT NULL DEFAULT 'new_friend',
+    stage_before_dormant TEXT NOT NULL DEFAULT '',
+    stage_changed_at     INTEGER NOT NULL DEFAULT 0,
+    first_seen           INTEGER NOT NULL DEFAULT 0,
+    last_seen            INTEGER NOT NULL DEFAULT 0,
+    inbound_count        INTEGER NOT NULL DEFAULT 0,
+    mentioned_game_at    INTEGER NOT NULL DEFAULT 0,
+    registered_at        INTEGER NOT NULL DEFAULT 0,
+    deposit_seen_at      INTEGER NOT NULL DEFAULT 0,
+    deposit_days         INTEGER NOT NULL DEFAULT 0,
+    deposit_last_day     TEXT NOT NULL DEFAULT '',
+    last_lookup_at       INTEGER NOT NULL DEFAULT 0,
+    last_found           INTEGER NOT NULL DEFAULT 0,
+    last_error           TEXT NOT NULL DEFAULT '',
+    lookups              INTEGER NOT NULL DEFAULT 0,
+    visible_hits         INTEGER NOT NULL DEFAULT 0,
+    gate_hits            INTEGER NOT NULL DEFAULT 0,
+    facts_text           TEXT NOT NULL DEFAULT '',
+    updated_at           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pp_phone ON player_profiles(phone_e164) WHERE phone_e164 <> '';
+CREATE INDEX IF NOT EXISTS idx_pp_stage ON player_profiles(stage);
+CREATE INDEX IF NOT EXISTS idx_pp_account ON player_profiles(account_id, stage);
+CREATE INDEX IF NOT EXISTS idx_pp_last_seen ON player_profiles(last_seen DESC);
+
+-- player_care 每日计数（按我方账号）：日报表 / 看板直接读，不扫全表。
+CREATE TABLE IF NOT EXISTS player_daily_stats (
+    day           TEXT NOT NULL,       -- YYYY-MM-DD（本地时区）
+    account_id    TEXT NOT NULL DEFAULT '',
+    inbound       INTEGER NOT NULL DEFAULT 0,
+    lookups       INTEGER NOT NULL DEFAULT 0,
+    found         INTEGER NOT NULL DEFAULT 0,
+    visible       INTEGER NOT NULL DEFAULT 0,
+    gate_hits     INTEGER NOT NULL DEFAULT 0,
+    new_profiles  INTEGER NOT NULL DEFAULT 0,
+    stage_ups     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, account_id)
+);
 """
+
+PLAYER_PROFILE_COLUMNS = (
+    "contact_id", "platform", "account_id", "external_id", "phone_e164", "uid", "agent",
+    "games_json", "stage", "stage_before_dormant", "stage_changed_at", "first_seen",
+    "last_seen", "inbound_count", "mentioned_game_at", "registered_at", "deposit_seen_at",
+    "deposit_days", "deposit_last_day", "last_lookup_at", "last_found", "last_error",
+    "lookups", "visible_hits", "gate_hits", "facts_text", "updated_at",
+)
+PLAYER_DAILY_COUNTERS = (
+    "inbound", "lookups", "found", "visible", "gate_hits", "new_profiles", "stage_ups",
+)
 
 
 class ContactStore:
@@ -2713,8 +2776,204 @@ class ContactStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    # ── player_care 旁表（B2）：画像 / 阶段 / 日计数 ─────────────────────
+    def get_player_profile(self, profile_key: str) -> Optional[Dict[str, Any]]:
+        k = str(profile_key or "").strip()
+        if not k:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM player_profiles WHERE profile_key=?", (k,)
+            ).fetchone()
+        return _row_to_player_profile(row) if row else None
+
+    def get_player_profile_by_phone(self, phone_e164: str) -> Optional[Dict[str, Any]]:
+        p = str(phone_e164 or "").strip()
+        if not p:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM player_profiles WHERE phone_e164=? "
+                "ORDER BY last_seen DESC LIMIT 1", (p,)
+            ).fetchone()
+        return _row_to_player_profile(row) if row else None
+
+    def upsert_player_profile(self, profile_key: str, **fields: Any) -> Dict[str, Any]:
+        """按 profile_key 写画像；只接受 PLAYER_PROFILE_COLUMNS 里的列，其余忽略。
+        新建行 first_seen 缺省 = now。返回写后的整行。"""
+        k = str(profile_key or "").strip()
+        if not k:
+            raise ValueError("profile_key required")
+        now = self._now()
+        cols: Dict[str, Any] = {}
+        for c, v in fields.items():
+            if c in PLAYER_PROFILE_COLUMNS and v is not None:
+                cols[c] = int(bool(v)) if c == "last_found" else v
+        if "games" in fields and fields["games"] is not None:
+            cols["games_json"] = json.dumps(list(fields["games"]), ensure_ascii=False)
+        cols["updated_at"] = now
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM player_profiles WHERE profile_key=?", (k,)
+            ).fetchone()
+            if exists:
+                sets = ", ".join(f"{c}=?" for c in cols)
+                self._conn.execute(
+                    f"UPDATE player_profiles SET {sets} WHERE profile_key=?",
+                    (*cols.values(), k),
+                )
+            else:
+                cols.setdefault("first_seen", now)
+                cols.setdefault("last_seen", now)
+                cols.setdefault("stage_changed_at", now)
+                names = ", ".join(["profile_key", *cols])
+                marks = ", ".join("?" * (len(cols) + 1))
+                self._conn.execute(
+                    f"INSERT INTO player_profiles ({names}) VALUES ({marks})",
+                    (k, *cols.values()),
+                )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM player_profiles WHERE profile_key=?", (k,)
+            ).fetchone()
+        return _row_to_player_profile(row)
+
+    def rebind_player_profile(self, old_key: str, new_key: str) -> Optional[Dict[str, Any]]:
+        """占位键（platform:external_id）拿到手机号后并到手机号键。
+
+        目标键不存在 → 直接改主键；已存在 → 计数相加、时间取早 / 晚、阶段取更靠后的
+        一方（由调用方按阶段序决定，这里只比较 stage_changed_at 较新者），删旧行。"""
+        ok, nk = str(old_key or "").strip(), str(new_key or "").strip()
+        if not ok or not nk or ok == nk:
+            return self.get_player_profile(nk or ok)
+        with self._lock:
+            old = self._conn.execute(
+                "SELECT * FROM player_profiles WHERE profile_key=?", (ok,)
+            ).fetchone()
+            if not old:
+                self._conn.commit()
+            else:
+                new = self._conn.execute(
+                    "SELECT * FROM player_profiles WHERE profile_key=?", (nk,)
+                ).fetchone()
+                if not new:
+                    self._conn.execute(
+                        "UPDATE player_profiles SET profile_key=? WHERE profile_key=?", (nk, ok)
+                    )
+                else:
+                    o, n = dict(old), dict(new)
+                    newer = n if int(n["stage_changed_at"]) >= int(o["stage_changed_at"]) else o
+                    merged = {
+                        "contact_id": n["contact_id"] or o["contact_id"],
+                        "platform": n["platform"] or o["platform"],
+                        "account_id": n["account_id"] or o["account_id"],
+                        "external_id": n["external_id"] or o["external_id"],
+                        "phone_e164": n["phone_e164"] or o["phone_e164"],
+                        "uid": n["uid"] or o["uid"],
+                        "agent": n["agent"] or o["agent"],
+                        "games_json": n["games_json"] if n["games_json"] not in ("", "[]") else o["games_json"],
+                        "stage": newer["stage"],
+                        "stage_before_dormant": newer["stage_before_dormant"],
+                        "stage_changed_at": max(int(n["stage_changed_at"]), int(o["stage_changed_at"])),
+                        "first_seen": min(x for x in (int(n["first_seen"]), int(o["first_seen"])) if x) if (n["first_seen"] or o["first_seen"]) else 0,
+                        "last_seen": max(int(n["last_seen"]), int(o["last_seen"])),
+                        "inbound_count": int(n["inbound_count"]) + int(o["inbound_count"]),
+                        "mentioned_game_at": max(int(n["mentioned_game_at"]), int(o["mentioned_game_at"])),
+                        "registered_at": max(int(n["registered_at"]), int(o["registered_at"])),
+                        "deposit_seen_at": max(int(n["deposit_seen_at"]), int(o["deposit_seen_at"])),
+                        "deposit_days": max(int(n["deposit_days"]), int(o["deposit_days"])),
+                        "deposit_last_day": max(str(n["deposit_last_day"]), str(o["deposit_last_day"])),
+                        "last_lookup_at": max(int(n["last_lookup_at"]), int(o["last_lookup_at"])),
+                        "last_found": int(n["last_found"] if int(n["last_lookup_at"]) >= int(o["last_lookup_at"]) else o["last_found"]),
+                        "last_error": n["last_error"] if int(n["last_lookup_at"]) >= int(o["last_lookup_at"]) else o["last_error"],
+                        "lookups": int(n["lookups"]) + int(o["lookups"]),
+                        "visible_hits": int(n["visible_hits"]) + int(o["visible_hits"]),
+                        "gate_hits": int(n["gate_hits"]) + int(o["gate_hits"]),
+                        "facts_text": n["facts_text"] or o["facts_text"],
+                        "updated_at": self._now(),
+                    }
+                    sets = ", ".join(f"{c}=?" for c in merged)
+                    self._conn.execute(
+                        f"UPDATE player_profiles SET {sets} WHERE profile_key=?",
+                        (*merged.values(), nk),
+                    )
+                    self._conn.execute("DELETE FROM player_profiles WHERE profile_key=?", (ok,))
+                self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM player_profiles WHERE profile_key=?", (nk,)
+            ).fetchone()
+        return _row_to_player_profile(row) if row else None
+
+    def list_player_profiles(
+        self, *, stage: Optional[str] = None, account_id: Optional[str] = None,
+        seen_since: int = 0, seen_before: int = 0, limit: int = 500, offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        where: List[str] = []
+        params: List[Any] = []
+        if stage:
+            where.append("stage=?"); params.append(stage)
+        if account_id is not None and account_id != "":
+            where.append("account_id=?"); params.append(account_id)
+        if seen_since:
+            where.append("last_seen>=?"); params.append(int(seen_since))
+        if seen_before:
+            where.append("last_seen<?"); params.append(int(seen_before))
+        sql = "SELECT * FROM player_profiles"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY last_seen DESC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [_row_to_player_profile(r) for r in rows]
+
+    def count_player_profiles_by_stage(self) -> Dict[str, Dict[str, int]]:
+        """``{account_id: {stage: n}}``（account_id 空串 = 未知槽位）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT account_id, stage, COUNT(*) AS n FROM player_profiles "
+                "GROUP BY account_id, stage"
+            ).fetchall()
+        out: Dict[str, Dict[str, int]] = {}
+        for r in rows:
+            out.setdefault(str(r["account_id"]), {})[str(r["stage"])] = int(r["n"])
+        return out
+
+    def bump_player_daily(self, day: str, account_id: str, **counters: int) -> None:
+        """日计数自增（只认 PLAYER_DAILY_COUNTERS 里的键）。"""
+        inc = {k: int(v) for k, v in counters.items() if k in PLAYER_DAILY_COUNTERS and int(v)}
+        if not inc:
+            return
+        cols = ", ".join(inc)
+        marks = ", ".join("?" * len(inc))
+        sets = ", ".join(f"{k}={k}+excluded.{k}" for k in inc)
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO player_daily_stats (day, account_id, {cols}) VALUES (?, ?, {marks}) "
+                f"ON CONFLICT(day, account_id) DO UPDATE SET {sets}",
+                (str(day), str(account_id or ""), *inc.values()),
+            )
+            self._conn.commit()
+
+    def player_daily_stats(self, day: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM player_daily_stats WHERE day=? ORDER BY account_id", (str(day),)
+            ).fetchall()
+        return [{k: r[k] for k in r.keys()} for r in rows]
+
 
 # ── row → dataclass helpers ─────────────────────────────────
+def _row_to_player_profile(row: sqlite3.Row) -> Dict[str, Any]:
+    d = {k: row[k] for k in row.keys()}
+    try:
+        d["games"] = json.loads(d.get("games_json") or "[]")
+    except Exception:
+        d["games"] = []
+    d["last_found"] = bool(d.get("last_found"))
+    return d
+
+
 def _row_to_contact(row: sqlite3.Row) -> Contact:
     return Contact(
         contact_id=row["contact_id"],
