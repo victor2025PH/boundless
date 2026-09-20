@@ -120,8 +120,7 @@ ok(/!insertmacro cxRmDirRetry "\$APPDATA\\\$\{APP_FILENAME\}"/.test(uninst), "�
 ok(/-updater"/.test(uninst), "缺少 electron-updater 缓存目录删除（wipe_chatx_data_node.ps1 口径）");
 
 // ---- C4: 进程收割按路径 + 自杀防护 -------------------------------------------
-ok(uninst.includes("Stop-Process"), "customUnInstall 缺少进程收割（后端/sidecar 锁住 db 时 RMDir 会静默残留）");
-ok(uninst.includes("-notlike '*Uninstall*'"), "进程收割必须排除 '*Uninstall*'（_?= 原地运行时会杀掉卸载器自己）");
+ok(uninst.includes("!insertmacro cxReapFamily"), "customUnInstall 缺少进程收割（后端/sidecar 锁住 db 时 RMDir 会静默残留）");
 ok(!/taskkill[^\n]*智/.test(text), "禁止按 CJK 进程名杀进程");
 
 // ---- C5: 删后校验 + 如实报告 --------------------------------------------------
@@ -164,6 +163,38 @@ ok(reap.includes("Stop-Process"), "cxReapFamily 缺少 Stop-Process 收割");
 ok(reap.includes("-notlike '*Uninstall*'"), "cxReapFamily 必须排除 '*Uninstall*'（C4 教训：卸载器 _?= 原地运行会杀自己）");
 ok(reap.includes("-notlike '*-updater*'"), "cxReapFamily 必须排除 '*-updater*'（自动更新的安装器本体在 updater 缓存目录里运行，杀了=自杀）");
 ok(reap.includes("'*\\${APP_PACKAGE_NAME}\\*'"), "cxReapFamily 路径必须反斜杠界定 ${APP_PACKAGE_NAME}（裸 '*name*' 会误匹配 -updater 兄弟目录）");
+// 2026-09-20 实弹根因：Get-Process().Path 走 Process.MainModule，需要目标进程的
+// PROCESS_VM_READ；从 per-user 安装器起的 PowerShell 里 342 个进程只有 18 个读得到
+// .Path，谓词命中 0 —— 整张 C6 收割网从写下那天起就是空转。必须走 WMI 的
+// ExecutablePath（内核侧取值，不需要句柄）。
+ok(
+  reap.includes("Win32_Process") && reap.includes("ExecutablePath"),
+  "cxReapFamily 必须用 Win32_Process.ExecutablePath 匹配（Get-Process().Path 在安装器上下文读不到，收割会静默空转）"
+);
+// 只看可执行行：本条教训写在注释里，别让门禁把自己的血泪注释判成违规
+const codeOnly = text.split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join("\n");
+ok(!/Get-Process\s*\|/.test(codeOnly), "禁止用 `Get-Process |` 按 .Path 筛进程（安装器上下文里 .Path 基本全空）");
+ok(
+  reap.includes("$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"),
+  "cxReapFamily 必须用 PowerShell 绝对路径（powershell.exe 不在 System32 下，裸名字只能靠 PATH 解析，PATH 一坏收割就静默失效）"
+);
+ok(
+  /exit 0/.test(reap) && /exit 1/.test(reap) && /while/.test(reap),
+  "cxReapFamily 必须杀完复验并循环到真死（固定 Sleep 不是死亡证据，下一步模板就要逐个改名 $INSTDIR 的文件）"
+);
+
+// ---- C8: 旧版卸载失败必须可恢复，且绝不阻塞静默通道（2026-09-20） -------------
+// 模板 handleUninstallResult 的收尾是「无 /SD 的 MessageBox + SetErrorLevel 2 +
+// Quit」：交互态把用户顶在「升级失败」上，静默态（/S = 运维推机与热更新通道）
+// 直接永久挂起（实测挂了 18 分钟）。定义 customUnInstallCheck 接管这段。
+const unCheck = macroBody("cxUnInstallCheckBody");
+ok(unCheck.length > 0, "缺少 cxUnInstallCheckBody（旧版卸载失败的接管逻辑）");
+ok(text.includes("!macro customUnInstallCheck"), "必须定义 customUnInstallCheck 接管模板的卸载失败收尾");
+ok(text.includes("!macro customUnInstallCheckCurrentUser"), "必须同时接管 HKEY_CURRENT_USER 侧（installMode=all 走这条）");
+ok(unCheck.includes("!insertmacro cxReapFamily"), "卸载失败接管必须先重新收割进程（失败的唯一成因就是文件还被占用）");
+ok(unCheck.includes("Call uninstallOldVersion"), "卸载失败接管必须再给一轮卸载重试");
+ok(!/\bQuit\b/.test(unCheck), "卸载失败接管禁止 Quit（就地覆盖安装远好过升级直接死掉）");
+ok(/MessageBox[^\n]*\/SD /.test(unCheck), "卸载失败接管的弹窗必须带 /SD 默认值（无 /SD 的 MessageBox 会把静默安装永久挂死）");
 // 定义 customCheckAppRunning 会让模板跳过它自己的 getProcessInfo/Var pid（
 // allowOnlyOneInstallerInstance.nsh 的 ifmacrondef 守卫），必须自带补齐：
 ok(text.includes('!include "getProcessInfo.nsh"'), "定义 customCheckAppRunning 后必须自带 !include getProcessInfo.nsh（模板会跳过）");

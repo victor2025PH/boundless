@@ -1,5 +1,30 @@
 [
   {
+    "version": "1.0.92",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "修复升级安装卡「智聊无法关闭」「卸载旧版失败: 2」",
+      "en": "Fix upgrades stalling on \"cannot close ChatX\" / \"uninstall old files: 2\""
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "升级安装不再卡在「智聊 无法关闭，请手动关闭」或「Failed to uninstall old application files: 2」，不用再点重试、也不用重启电脑",
+        "根因：安装器清理后台进程那一步按进程路径匹配，而该路径在安装器环境下读不到，等于一直空转；1.0.90 起随包的电脑微信副驾后台进程因此一直占着安装目录",
+        "旧版本万一仍被占用，现在会自动清理重试，再不行就直接覆盖安装并如实告知，不会再让升级中途失败",
+        "数据、账号登录状态一律不受影响"
+      ],
+      "en": [
+        "Upgrades no longer stall on \"ChatX cannot be closed\" or \"Failed to uninstall old application files: 2\" - no retry clicking, no reboot",
+        "Root cause: the installer's background-process sweep matched on a process path that is unreadable from an installer context, so it never killed anything; since 1.0.90 the bundled WeChat PC copilot backend kept the install folder busy",
+        "If the old version is still busy, setup now clears it, retries, and finally installs over it while saying so - instead of failing mid-upgrade",
+        "Your data and account logins are untouched"
+      ]
+    }
+  },
+  {
     "version": "1.0.91",
     "date": "2026-09-20",
     "title": {
