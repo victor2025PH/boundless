@@ -109,8 +109,10 @@ for (const line of text.split(/\r?\n/)) {
   const isDeleteLine = /^\s*RMDir/i.test(line) || /^\s*!insertmacro\s+cxRmDirRetry/.test(line);
   // 唯一豁免：`RMDir /r $INSTDIR` 是模板 un.install 自己的收尾行，我们在
   // customRemoveFiles 里原样保留它（C9：接管 atomicRMDir 的 Abort）。$INSTDIR 是
-  // 程序目录不是数据目录，推导它反而会偏离模板语义。
+  // 程序目录不是数据目录，推导它反而会偏离模板语义。C10 的预清空同理：
+  // `RMDir /r "$INSTDIR\$R2"` 只在 cxPreCleanSweep 里逐条删程序目录的顶层项。
   if (isDeleteLine && /^\s*RMDir \/r \$INSTDIR\s*$/.test(line)) continue;
+  if (isDeleteLine && /^\s*RMDir \/r "\$INSTDIR\\\$R2"\s*$/.test(line)) continue;
   if (isDeleteLine) {
     ok(!cjk.test(line), "删除行出现 CJK 字面路径（必须用 ${APP_FILENAME} 族宏）: " + line.trim());
     ok(
@@ -288,6 +290,27 @@ ok(
   !text.includes('!include "getProcessInfo.nsh"') && !/^Var pid\r?$/m.test(text),
   "不再插入库存 _CHECK_APP_RUNNING 后，getProcessInfo.nsh 与 Var pid 必须一并删掉（未引用变量在 -WX 下是硬编译失败）"
 );
+
+// ---- C10: 旧卸载器开跑前先由我们非原子清空 $INSTDIR（2026-09-20，1.0.92→1.0.93 这一跳）--
+// C9 住在「我们发出去的」卸载器里，只保下一跳；本跳仍由旧版卸载器带 --updated 走
+// un.atomicRMDir 逐个改名 9429 个文件、任一失败即回滚+Abort。我们能控的只有它开跑时
+// 看到什么：customCheckAppRunning 末尾（家族已收割、模板 uninstallOldVersion 之前）先用
+// Delete/RMDir /r 忽略错误地清空 $INSTDIR，只留旧卸载器 exe（模板要 `_?=` 原地跑它）。
+const preclean = macroBody("cxPreCleanOldInstall");
+const sweep = macroBody("cxPreCleanSweep");
+ok(preclean.length > 0 && sweep.length > 0, "缺 cxPreCleanOldInstall / cxPreCleanSweep（C10 升级前非原子预清空）");
+const precleanCode = (preclean + "\n" + sweep).split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join("\n");
+ok(/!ifndef BUILD_UNINSTALLER[\s\S]*?!insertmacro cxPreCleanOldInstall[\s\S]*?!endif/.test(checkRunning), "customCheckAppRunning 必须在 !ifndef BUILD_UNINSTALLER 内、末尾调用 cxPreCleanOldInstall（卸载器单元也展开该宏，那边没有旧版可清）");
+ok(checkRunning.indexOf("cxReapFamily") < checkRunning.indexOf("cxPreCleanOldInstall"), "预清空必须排在进程收割之后（家族没清空前删文件只会撞同一批占用）");
+ok(/\$\{If\} \$\{FileExists\} "\$INSTDIR\\\$\{UNINSTALL_FILENAME\}"/.test(precleanCode), "升级判据必须是「$INSTDIR 下存在旧卸载器 exe」——全新安装（目录不存在）无害早退");
+ok(/\$R2 != "\$\{UNINSTALL_FILENAME\}"/.test(precleanCode), "预清空必须跳过旧卸载器 exe（模板随后要 _?= 原地跑它）");
+ok(/RMDir \/r "\$INSTDIR\\\$R2"/.test(precleanCode) && /Delete "\$INSTDIR\\\$R2"/.test(precleanCode), "预清空必须用 Delete / RMDir /r 非原子删除（忽略错误、删不掉的留着）");
+ok(!/\/REBOOTOK|RunOnce|PendingFileRenameOperations|MoveFileEx/i.test(precleanCode), "预清空禁止把 $INSTDIR 残留排进 REBOOTOK / RunOnce / 登录后删除队列（新版本马上装进这个目录）");
+ok(!/APPDATA|LOCALAPPDATA|telegram-ai-desktop/.test(precleanCode), "预清空禁止触碰数据目录（%APPDATA%\\智聊、%APPDATA%\\telegram-ai-desktop）");
+ok(!/--updated|--delete-app-data|ExecWait/.test(precleanCode), "预清空不得调用旧卸载器、不得触碰 --updated（它同时是「升级不删数据」的判据）");
+ok(!/\b(Abort|Quit)\b/.test(precleanCode), "预清空禁止 Abort/Quit（失败只许留残留给模板路径）");
+ok(/chatx_install_reap\.log/.test(preclean) && /preclean start[^']*files=/.test(preclean) && /preclean done leftovers=/.test(preclean) && /LOCKED/.test(preclean), "预清空必须把清空前文件数、清空后残留数与残留项锁状态写进 %TEMP%\\chatx_install_reap.log");
+ok(preclean.includes("!insertmacro cxReapFamily") && (preclean.match(/!insertmacro cxPreCleanSweep/g) || []).length >= 2, "有残留时必须再收割一次进程并重扫一次（刚杀掉的句柄需要片刻才释放）");
 
 // ---- C7: 安装侧「保留/清空数据」页 + 执行闸 -----------------------------------
 // 2026-09-05 起数据页注册在 customWelcomePage（欢迎页之后、须知页之前），不再挂
