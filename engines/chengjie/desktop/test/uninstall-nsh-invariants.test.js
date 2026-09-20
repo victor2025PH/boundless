@@ -109,7 +109,8 @@ for (const line of text.split(/\r?\n/)) {
   const isDeleteLine = /^\s*RMDir/i.test(line) || /^\s*!insertmacro\s+cxRmDirRetry/.test(line);
   // 唯一豁免：`RMDir /r $INSTDIR` 是模板 un.install 自己的收尾行，我们在
   // customRemoveFiles 里原样保留它（C9：接管 atomicRMDir 的 Abort）。$INSTDIR 是
-  // 程序目录不是数据目录，推导它反而会偏离模板语义。
+  // 程序目录不是数据目录，推导它反而会偏离模板语义。C11 的清扫不需要豁免：
+  // 它的删除行走宏形参 ${TARGET_DIR}，本来就满足下面「必须由宏推导」那条。
   if (isDeleteLine && /^\s*RMDir \/r \$INSTDIR\s*$/.test(line)) continue;
   if (isDeleteLine) {
     ok(!cjk.test(line), "删除行出现 CJK 字面路径（必须用 ${APP_FILENAME} 族宏）: " + line.trim());
@@ -287,6 +288,86 @@ ok(/MessageBox[^\n]*\/SD /.test(unCheck), "卸载失败接管的弹窗必须带 
 ok(
   !text.includes('!include "getProcessInfo.nsh"') && !/^Var pid\r?$/m.test(text),
   "不再插入库存 _CHECK_APP_RUNNING 后，getProcessInfo.nsh 与 Var pid 必须一并删掉（未引用变量在 -WX 下是硬编译失败）"
+);
+
+// ---- C11: 「移除旧版」整步由新安装包接管，旧卸载器根本不跑（2026-09-20 四轮）----
+// 那个弹窗出自 installUtil.nsh 的 UninstallLoop（重试 5 次后 MessageBox
+// appCannotBeClosed），在 handleUninstallResult 之前——customUnInstallCheck 拦不到。
+// C10（缩小暴露面：先清空 $INSTDIR 只留旧卸载器）已被实弹否掉：被锁的那个文件预清空
+// 同样删不掉，留成残留后照样否决原子改名（A 92→93 old-uninstall-failed=1；
+// B 92→94 带 C10 preclean 9429→leftovers=2，old-uninstall-failed 仍=1）。缩小候选集
+// 只对「随机瞬时占用」有用，对现场「某文件被按住」无效。
+// 确定性做法：uninstallOldVersion 在注册表读不到 UninstallString 时 ClearErrors +
+// Return（$R0 已置 0＝按成功），于是我们自己非原子清掉旧目录 + 删掉卸载入口，模板
+// 压根不跑旧卸载器——没有 atomicRMDir、没有 Abort、没有重试循环，且与有没有文件被
+// 占用完全无关。删卸载入口正是成功卸载本该做的事（uninstaller.nsh 自己就
+// DeleteRegKey UNINSTALL_REGISTRY_KEY），新版安装尾声会重写，不留悬空条目。
+const oldrm = macroBody("cxTakeOverOldUninstall");
+const perRoot = macroBody("cxOldRemoveForRoot");
+const sweep = macroBody("cxSweepDirNonAtomic");
+ok(
+  oldrm.length > 0 && perRoot.length > 0 && sweep.length > 0,
+  "缺 cxTakeOverOldUninstall / cxOldRemoveForRoot / cxSweepDirNonAtomic（C11 接管移除旧版）"
+);
+const oldrmCode = [oldrm, perRoot, sweep].join("\n").split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join("\n");
+ok(
+  /!ifndef BUILD_UNINSTALLER[\s\S]*?!insertmacro cxTakeOverOldUninstall[\s\S]*?!endif/.test(checkRunning),
+  "customCheckAppRunning 必须在 !ifndef BUILD_UNINSTALLER 内、末尾调用 cxTakeOverOldUninstall（卸载器单元也展开该宏，那边没有旧版可移除）"
+);
+ok(
+  checkRunning.indexOf("cxReapFamily") < checkRunning.indexOf("cxTakeOverOldUninstall"),
+  "接管必须排在进程收割之后（家族没清空前删文件只会撞同一批占用）"
+);
+// 决定性的一条：不删掉卸载入口，模板就会进那个重试 5 次的循环，弹窗照旧
+ok(
+  /DeleteRegKey \$\{ROOT_KEY\} "\$\{UNINSTALL_REGISTRY_KEY\}"/.test(perRoot),
+  "必须删除旧版 UninstallString 所在的卸载注册项（这是让 uninstallOldVersion 提前 Return 的唯一开关；不删＝照样进 UninstallLoop 弹窗）"
+);
+ok(
+  /ReadRegStr \$R5 \$\{ROOT_KEY\} "\$\{INSTALL_REGISTRY_KEY\}" "InstallLocation"/.test(perRoot),
+  "旧目录必须按注册表 InstallLocation 取（只认 $INSTDIR 会漏掉用户自选过的安装目录）"
+);
+// 安全命门：外来/损坏的 InstallLocation（想象 "C:\"）绝不许进 RMDir /r
+ok(
+  /\$\{If\} \$\{FileExists\} "\$R5\\\$\{UNINSTALL_FILENAME\}"/.test(perRoot),
+  "只许清扫「自证是我们的」目录：必须先确认该目录下存在我们的卸载器 exe 才清（这是本宏全部的安全性所在）"
+);
+ok(
+  /\$\{If\} \$R3 == 0[\s\S]*?\$\{OrIf\} \$R5 == \$INSTDIR[\s\S]*?DeleteRegKey/.test(perRoot),
+  "清不干净且又不是本次目标目录时必须保留注册项（否则孤立一棵旧树且再也无法卸载）"
+);
+ok(
+  oldrm.includes("cxOldRemoveForRoot SHELL_CONTEXT") && oldrm.includes("cxOldRemoveForRoot HKEY_CURRENT_USER"),
+  "两个根键都要处理（模板自己就为 SHELL_CONTEXT 与 HKEY_CURRENT_USER 各跑一次 uninstallOldVersion）"
+);
+ok(
+  /RMDir \/r "\$\{TARGET_DIR\}\\\$R2"/.test(sweep) && /Delete "\$\{TARGET_DIR\}\\\$R2"/.test(sweep),
+  "清扫必须用 Delete / RMDir /r 非原子删除、且路径由宏形参推导（忽略错误、删不掉的留着当残留）"
+);
+ok(
+  !/\$R2 != "\$\{UNINSTALL_FILENAME\}"/.test(sweep),
+  "C11 不再保留旧卸载器 exe（没人会去跑它；保留它反而给模板留了走原子路径的机会）"
+);
+ok(
+  !/\/REBOOTOK|RunOnce|PendingFileRenameOperations|MoveFileEx/i.test(oldrmCode),
+  "禁止把残留排进 REBOOTOK / RunOnce / 登录后删除队列（新版本马上装进这个目录，排了就是删新装的）"
+);
+ok(
+  !/APPDATA|LOCALAPPDATA|telegram-ai-desktop/.test(oldrmCode),
+  "禁止触碰数据目录（%APPDATA%\\智聊、%APPDATA%\\telegram-ai-desktop）"
+);
+ok(
+  !/--updated|--delete-app-data|ExecWait/.test(oldrmCode),
+  "禁止调用旧卸载器、禁止触碰 --updated（我们压根不跑它，数据保全不再依赖它的判据）"
+);
+ok(
+  !/\b(Abort|Quit)\b/.test(oldrmCode),
+  "禁止 Abort/Quit（清不掉只许留残留，后面 extractAppPackage 覆盖写就是为这个准备的）"
+);
+ok(
+  /chatx_install_reap\.log/.test(oldrm) && /oldrm start[^']*files=/.test(oldrm) &&
+    /oldrm done leftovers=/.test(oldrm) && /LOCKED/.test(oldrm),
+  "必须把清扫前文件数、清扫后残留数与残留项锁状态写进 %TEMP%\\chatx_install_reap.log（C10 就是靠这几行被实弹否掉的）"
 );
 
 // ---- C7: 安装侧「保留/清空数据」页 + 执行闸 -----------------------------------
