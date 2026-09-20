@@ -543,7 +543,7 @@ UninstallCaption "$(cxUnCaption)"
 ; is ours (same predicate as cxOldRemoveForRoot), and nothing is queued for reboot.
 !macro cxSweepLongPaths TARGET_DIR
   ${If} ${FileExists} "${TARGET_DIR}\*.*"
-    nsExec::Exec `${CX_PS} "$$d='${TARGET_DIR}'; $$n=0; $$f=0; Get-ChildItem -LiteralPath $$d -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object { $$_.FullName.Length } -Descending | ForEach-Object { try { if ($$_.PSIsContainer) { [IO.Directory]::Delete('\\?\' + $$_.FullName, $$true) } else { [IO.File]::Delete('\\?\' + $$_.FullName) }; $$n++ } catch { $$f++ } }; ('[{0}] [oldrm] longpath pass under {1}: removed={2} failed={3}' -f (Get-Date -Format s),$$d,$$n,$$f) | Add-Content -Path (Join-Path $$env:TEMP 'chatx_install_reap.log') -ErrorAction SilentlyContinue"`
+    nsExec::Exec `${CX_PS} "$$d='${TARGET_DIR}'; $$L=0; $$n=0; $$f=0; $$items=@(Get-ChildItem -LiteralPath $$d -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $$_.FullName.Length -gt 259 } | Sort-Object { $$_.FullName.Length } -Descending); $$L=$$items.Count; if ($$L -gt 0) { $$items | ForEach-Object { try { if ($$_.PSIsContainer) { [IO.Directory]::Delete('\\?\' + $$_.FullName, $$true) } else { [IO.File]::Delete('\\?\' + $$_.FullName) }; $$n++ } catch { $$f++ } }; Get-ChildItem -LiteralPath $$d -Recurse -Force -Directory -ErrorAction SilentlyContinue | Sort-Object { $$_.FullName.Length } -Descending | ForEach-Object { try { [IO.Directory]::Delete('\\?\' + $$_.FullName, $$false) } catch { } } }; ('[{0}] [oldrm] longpath pass under {1}: long={2} removed={3} failed={4}' -f (Get-Date -Format s),$$d,$$L,$$n,$$f) | Add-Content -Path (Join-Path $$env:TEMP 'chatx_install_reap.log') -ErrorAction SilentlyContinue"`
     Pop $R3
   ${EndIf}
 !macroend
