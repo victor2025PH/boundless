@@ -394,6 +394,85 @@ UninstallCaption "$(cxUnCaption)"
 ; actually works now), give it one more round, and if it STILL will not go,
 ; carry on with an in-place overwrite -- extractUsing7za overwrites the tree
 ; anyway, and a refreshed-in-place install beats a dead upgrade.
+; ---- C9: one busy file must not kill the upgrade (2026-09-20, round 3) --------
+; This is the stage the field screenshots actually show. Chain, measured on 117:
+;   installUtil.nsh::uninstallOldVersion runs the OLD uninstaller as
+;   `/S /KEEP_APP_DATA /currentuser --updated _?=<dir>`, and retries it FIVE times
+;   before giving up with MessageBox appCannotBeClosed (MB_RETRYCANCEL) -- the
+;   「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」 dialog, appearing mid-progress,
+;   which is exactly where the screenshots show it (the app-running check runs
+;   much earlier, and 1.0.93 owns that step anyway). Clicking 重试 = one more
+;   uninstall attempt, which is why 「再点一次就装完了」 works.
+;   `--updated` makes uninstaller.nsh take the un.atomicRMDir path: rename EVERY
+;   file in $INSTDIR into $PLUGINSDIR, and if even ONE rename fails, restore the
+;   whole tree and `Abort` -> uninstaller exit code 2 -> that is also the source
+;   of 「Failed to uninstall old application files ... : 2」.
+; So a single transiently-held file out of the 9429 we ship fails the entire
+; upgrade. It does not take a bug to hold one: an antivirus mid-scan opens files
+; without FILE_SHARE_DELETE, which blocks Rename. Reproduced 2026-09-20 in an
+; isolated test user -- 5 aborts over 132s with NO process of ours alive and
+; nothing locked among the files we probe; the same uninstaller run without
+; `--updated` (= no atomic path) exits 0 and clears 9428/9429 files.
+; Defining customRemoveFiles replaces that abort-or-nothing block. We keep the
+; atomic fast path (it IS the clean way when it works), but a busy file now costs
+; a retry and a log line instead of the upgrade.
+!macro cxLogLine TEXT
+  ; NSIS-side logging on purpose: the uninstaller must not depend on PowerShell,
+  ; and this lands in the same %TEMP%\chatx_install_reap.log timeline the
+  ; installer writes, so one file tells the whole upgrade story.
+  ; $R9/$R8 are free this early in un.install (only setLinkVars ran, named vars).
+  ClearErrors
+  FileOpen $R9 "$TEMP\chatx_install_reap.log" a
+  ${IfNot} ${Errors}
+    FileSeek $R9 0 END
+    FileWrite $R9 "${TEXT}$\r$\n"
+    FileClose $R9
+  ${EndIf}
+!macroend
+
+!macro customRemoveFiles
+  ; Silent = the upgrade path and ops pushes, and uninstaller.nsh only calls
+  ; un.checkAppRunning when NOT silent -- so in exactly the case that matters
+  ; nothing has closed the app yet unless the installer did it for us. Cheap when
+  ; there is nothing to close (one WMI query), decisive when there is.
+  ${If} ${Silent}
+    !insertmacro cxCloseAppNicely 15
+    Pop $R8
+    !insertmacro cxReapFamily 20
+    Pop $R8
+  ${EndIf}
+
+  ${If} ${isUpdated}
+    CreateDirectory "$PLUGINSDIR\old-install"
+    Push ""
+    Call un.atomicRMDir
+    Pop $R0
+    ${If} $R0 != 0
+      ; atomicRMDir hands back the exact file it could not rename -- the single
+      ; most useful line in a field report, and until now nobody ever saw it.
+      DetailPrint "$(cxStUnBusyFile)"
+      !insertmacro cxLogLine "[uninst] busy file blocked atomic removal: $R0"
+      Sleep 2000
+      Push ""
+      Call un.atomicRMDir
+      Pop $R0
+      ${If} $R0 != 0
+        !insertmacro cxLogLine "[uninst] still busy after retry: $R0 -- falling back to non-atomic removal"
+      ${EndIf}
+    ${EndIf}
+    ; deliberately NOT calling un.restoreFiles: whatever was already moved into
+    ; $PLUGINSDIR is exactly what we wanted gone, and it dies with $PLUGINSDIR.
+  ${EndIf}
+
+  ; The template's own last resort, reached without Abort: RMDir /r ignores
+  ; errors, so a held file becomes one stale file instead of a failed upgrade,
+  ; and uninstallOldVersion returns 0 -> no retry loop, no dialog.
+  ; NEVER schedule leftovers for deletion at next reboot/logon here (unlike
+  ; cxRmDirRetry for data dirs): $INSTDIR is where the NEW version is about to
+  ; be installed, and a queued `rd /s /q` would erase the fresh install.
+  RMDir /r $INSTDIR
+!macroend
+
 !macro cxUnInstallCheckBody ROOT_KEY
   IfErrors 0 +3
   DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
@@ -520,6 +599,7 @@ UninstallCaption "$(cxUnCaption)"
   LangString cxStReap        ${LANG_ENGLISH} "Stopping leftover ChatX background services..."
   LangString cxStReapLeft    ${LANG_ENGLISH} "A background service would not stop; installing over it..."
   LangString cxAppBusy       ${LANG_ENGLISH} "Some ChatX background processes are still running and could not be closed automatically (usually because ChatX was started as administrator, or antivirus is holding a file).$\r$\n$\r$\nSetup will carry on and install over them. Your data and account logins are untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more.$\r$\n$\r$\nDetails were written to %TEMP%\chatx_install_reap.log"
+  LangString cxStUnBusyFile  ${LANG_ENGLISH} "A file of the previous version is busy - retrying, then removing it the direct way..."
   LangString cxStUnRetry     ${LANG_ENGLISH} "Previous version files are still in use - clearing them and retrying..."
   LangString cxStUnBusy      ${LANG_ENGLISH} "Previous version could not be removed cleanly; installing over it."
   LangString cxUnOldBusy     ${LANG_ENGLISH} "Some files of the previous version are still in use, so they could not be removed first. Setup will install over them - this is safe, and your data is untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more."
@@ -560,6 +640,7 @@ UninstallCaption "$(cxUnCaption)"
   LangString cxStReap        ${LANG_SIMPCHINESE} "正在停止残留的智聊后台服务…"
   LangString cxStReapLeft    ${LANG_SIMPCHINESE} "有后台服务未能结束，将直接覆盖安装…"
   LangString cxAppBusy       ${LANG_SIMPCHINESE} "智聊仍有后台进程在运行，自动关闭未成功（常见原因：智聊是以管理员身份启动的，或杀毒软件正占用文件）。$\r$\n$\r$\n安装将继续，直接覆盖安装——您的数据与各平台登录状态不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。$\r$\n$\r$\n诊断信息已记录在 %TEMP%\chatx_install_reap.log"
+  LangString cxStUnBusyFile  ${LANG_SIMPCHINESE} "旧版本有文件被占用，正在重试，随后改用直接删除…"
   LangString cxStUnRetry     ${LANG_SIMPCHINESE} "旧版本文件仍被占用，正在清理并重试…"
   LangString cxStUnBusy      ${LANG_SIMPCHINESE} "旧版本未能完全移除，将直接覆盖安装。"
   LangString cxUnOldBusy     ${LANG_SIMPCHINESE} "旧版本仍有文件被占用，无法先行移除。安装程序将直接覆盖安装——这是安全的，您的数据不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。"

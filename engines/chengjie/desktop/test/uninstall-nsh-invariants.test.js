@@ -107,6 +107,10 @@ ok(uninst.includes('${If} $cxWipeGo == "1"'), "wipe 执行闸必须读 $cxWipeGo
 const cjk = /[\u4e00-\u9fff]/;
 for (const line of text.split(/\r?\n/)) {
   const isDeleteLine = /^\s*RMDir/i.test(line) || /^\s*!insertmacro\s+cxRmDirRetry/.test(line);
+  // 唯一豁免：`RMDir /r $INSTDIR` 是模板 un.install 自己的收尾行，我们在
+  // customRemoveFiles 里原样保留它（C9：接管 atomicRMDir 的 Abort）。$INSTDIR 是
+  // 程序目录不是数据目录，推导它反而会偏离模板语义。
+  if (isDeleteLine && /^\s*RMDir \/r \$INSTDIR\s*$/.test(line)) continue;
   if (isDeleteLine) {
     ok(!cjk.test(line), "删除行出现 CJK 字面路径（必须用 ${APP_FILENAME} 族宏）: " + line.trim());
     ok(
@@ -228,6 +232,40 @@ ok(
 ok(
   /exit 0/.test(reap) && /exit 1/.test(reap) && /while/.test(reap),
   "cxReapFamily 必须杀完复验并循环到真死（固定 Sleep 不是死亡证据，下一步模板就要逐个改名 $INSTDIR 的文件）"
+);
+
+// ---- C9: 单个被占用的文件不许否决整次升级（2026-09-20 三轮实弹） ---------------
+// 现场截图那个弹窗就出在这一步：installUtil.nsh 的 uninstallOldVersion 把旧卸载器
+// 以 `--updated` 跑，uninstaller.nsh 于是走 un.atomicRMDir——逐个改名 $INSTDIR 全部
+// 文件，任一改名失败就整树回滚并 Abort（退出码 2＝「Failed to uninstall old
+// application files ... : 2」）；模板再重试 5 次才弹 appCannotBeClosed（＝「智聊
+// 无法关闭」，出现在进度条中段）。我们随包 9429 个文件，杀软扫到任意一个就够了。
+const removeFiles = macroBody("customRemoveFiles");
+ok(
+  text.includes("!macro customRemoveFiles"),
+  "必须定义 customRemoveFiles 接管模板的 atomicRMDir+Abort（单个被占用文件否决整次升级）"
+);
+ok(
+  removeFiles.includes("Call un.atomicRMDir"),
+  "customRemoveFiles 要保留原子改名快路径（能成功时它才是干净卸载）"
+);
+// 只看可执行行：血泪注释里必然出现 Abort / REBOOTOK 这些词，别让门禁判自己
+const removeFilesCode = removeFiles.split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join("\n");
+ok(
+  !/\bAbort\b/.test(removeFilesCode) && /RMDir \/r \$INSTDIR/.test(removeFilesCode),
+  "customRemoveFiles 禁止 Abort：占用文件必须降级为非原子删除并让卸载器返回 0，否则重试 5 次后就是现场那个弹窗"
+);
+ok(
+  !/REBOOTOK|RunOnce|cxRmDirRetry/.test(removeFilesCode),
+  "customRemoveFiles 里禁止把 $INSTDIR 残留排进重启/登录后删除队列（新版本马上要装进这个目录，排了就是删新装的）"
+);
+ok(
+  removeFiles.includes("cxLogLine"),
+  "customRemoveFiles 必须把 atomicRMDir 回吐的占用文件名写进日志（这是现场唯一能定位元凶的一行）"
+);
+ok(
+  removeFiles.indexOf("${If} ${Silent}") >= 0 && removeFiles.includes("cxReapFamily"),
+  "静默卸载（升级链与运维推机）必须自己先收割：uninstaller.nsh 只在非静默时调 un.checkAppRunning"
 );
 
 // ---- C8: 旧版卸载失败必须可恢复，且绝不阻塞静默通道（2026-09-20） -------------
