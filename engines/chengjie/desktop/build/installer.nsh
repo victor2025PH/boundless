@@ -251,12 +251,11 @@ UninstallCaption "$(cxUnCaption)"
 ;
 ; Defining customCheckAppRunning makes the template skip its own
 ; `!include getProcessInfo.nsh` + `Var pid` (allowOnlyOneInstallerInstance.nsh
-; guards on !ifmacrondef), so we provide both here. $pid is referenced in BOTH
-; compile units (installer + uninstaller insert CHECK_APP_RUNNING), so the
-; top-level Var is safe under -WX (unlike the page Vars, see note above).
+; guards on !ifmacrondef). We used to insert _CHECK_APP_RUNNING ourselves and so
+; needed both; since 1.0.93 we own the whole "close the app" step (see below) and
+; never insert it, so neither is included -- an unreferenced `Var pid` is a
+; warning and makensis runs with -WX.
 ; -----------------------------------------------------------------------------
-!include "getProcessInfo.nsh"
-Var pid
 
 ; 2026-09-20 live-fire root cause (the reason this macro is what it is):
 ; the first version matched processes with `Get-Process | Where $_.Path -like`.
@@ -275,33 +274,112 @@ Var pid
 ; an isolated test user).
 ; Win32_Process.ExecutablePath comes from the kernel via WMI and needs no
 ; handle on the target, so it sees everything the user owns.
-!macro cxReapFamily
-  ; Kill by PATH under the package dir, then VERIFY, and keep at it until the
-  ; family is actually gone -- a fixed Sleep is not evidence of death, and the
-  ; very next thing the template does is rename every file in $INSTDIR.
-  ; Backslash-bounded pattern so the sibling `<package>-updater` cache dir
-  ; (which contains the RUNNING auto-update installer!) never matches;
-  ; '*Uninstall*' excluded because the uninstaller runs in place under `_?=`
-  ; (C4 lesson, would kill itself).
-  ; Absolute interpreter path on purpose: powershell.exe lives in
-  ; System32\WindowsPowerShell\v1.0, NOT System32, so a bare `powershell` only
-  ; resolves through PATH -- a broken/trimmed PATH would silently disarm this.
-  ; Pushes an exit code: 0 = family clear, 1 = something outlived the budget.
-  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$$d=(Get-Date).AddSeconds(20); do { $$p=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $$_.ExecutablePath -like '*\${APP_PACKAGE_NAME}\*' -and $$_.ExecutablePath -notlike '*Uninstall*' -and $$_.ExecutablePath -notlike '*-updater*' }); if ($$p.Count -eq 0) { exit 0 }; $$p | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 400 } while ((Get-Date) -lt $$d); exit 1"`
+;
+; 2026-09-20 round 2 (field reports on 1.0.92 -- the fix above was necessary but
+; NOT sufficient): the 「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」 dialog
+; does not come from our code at all, it comes from the STOCK
+; _CHECK_APP_RUNNING, which 1.0.92 still ran FIRST. Read its loop
+; (node_modules/app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh):
+;   taskkill /im (graceful) -> Sleep 300 -> [find -> Sleep 1000 -> taskkill /f ->
+;   find AGAIN WITH NO SETTLE TIME -> Sleep 2000] x2 -> MessageBox appCannotBeClosed
+; i.e. ~6.3s of total budget, and the decisive re-check happens in the same
+; instant the force-kill was issued. Our family cannot meet that: main.js's
+; before-quit deliberately preventDefault()s and waits for
+; shutdownBackendAndWait() = backendManager.stopAndWait(8000) + sidecars.stopAll()
+; -- 8s+ by design (B57: a half-dead backend racing the new one costs every
+; Telegram account a re-login). Since 1.0.90 the family also includes the frozen
+; backend.exe and its WeChat PC driver child, so teardown got slower still. The
+; app that behaves exactly as designed therefore loses a race the template never
+; documented, on the machines where teardown is slowest -- which is why it looks
+; random, why clicking 重试 eventually works (by then the family IS gone), and why
+; rebooting "fixes" it. Under /S it is worse than a dialog: appCannotBeClosed
+; carries /SD IDCANCEL, so an unattended upgrade just Quits.
+;
+; So we no longer insert the stock macro. We own the sequence, and the shape of
+; it is the lesson: ASK NICELY, THEN WAIT FOR PROOF OF DEATH, THEN FORCE, THEN
+; VERIFY -- never a fixed sleep, never a budget shorter than our own shutdown
+; path, and never a dead end for the user.
+
+; Family predicate, single-sourced (both commands below must agree, and drift
+; between "what we kill" and "what we verify" is how round 1 stayed invisible):
+;   - anything running out of $INSTDIR (the REAL target dir -- ${APP_PACKAGE_NAME}
+;     alone misses a custom install folder, which the wizard lets the user pick)
+;   - anything under the default package dir (catches a stale install elsewhere)
+;   - anything with the app's image name in OUR session (what the stock check
+;     covered; session-scoped so another user's copy is reported, never fought)
+;   - minus '*Uninstall*' (the uninstaller runs in place under `_?=` and would
+;     kill itself -- C4 lesson) and '*-updater*' (that cache dir holds the
+;     RUNNING auto-update installer)
+!define CX_FAM_FILTER `Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath -notlike '*Uninstall*' -and $$_.ExecutablePath -notlike '*-updater*' -and (($$_.ExecutablePath -like '$INSTDIR\*') -or ($$_.ExecutablePath -like '*\${APP_PACKAGE_NAME}\*') -or ($$_.Name -eq '${APP_EXECUTABLE_FILENAME}' -and $$_.SessionId -eq $$sid)) }`
+; Absolute interpreter path on purpose: powershell.exe lives in
+; System32\WindowsPowerShell\v1.0, NOT System32, so a bare `powershell` only
+; resolves through PATH -- a broken/trimmed PATH would silently disarm all of
+; this. (makensis here is the large-strings build, NSIS_MAX_STRLEN=8192, so these
+; long -Command strings are nowhere near truncation.)
+!define CX_PS `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command`
+
+; Step 1 -- ask nicely, then wait for the family to actually leave.
+; CloseMainWindow() = WM_CLOSE, which is what lets before-quit run and take the
+; backend + sidecars down cleanly. Then POLL: exit 0 the moment the family is
+; empty, so a closed app costs no extra install time. ${SECS} must stay > our
+; own shutdown budget (8s stopAndWait + sidecars) or we recreate the stock bug.
+; Pushes 0 = family gone, 1 = still there (caller escalates).
+!macro cxCloseAppNicely SECS
+  nsExec::Exec `${CX_PS} "$$sid=(Get-Process -Id $$PID).SessionId; $$f={ @(${CX_FAM_FILTER}) }; if ((&$$f).Count -eq 0) { exit 0 }; (&$$f) | ForEach-Object { try { $$q=Get-Process -Id $$_.ProcessId -ErrorAction Stop; if ($$q.MainWindowHandle -ne 0) { $$null=$$q.CloseMainWindow() } } catch {} }; $$d=(Get-Date).AddSeconds(${SECS}); while ((Get-Date) -lt $$d) { if ((&$$f).Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 300 }; exit 1"`
+!macroend
+
+; Step 2 -- force, and keep verifying until the family is really gone. A fixed
+; Sleep is not evidence of death and the very next thing the template does is
+; rename every file in $INSTDIR. Survivors are written to
+; %TEMP%\chatx_install_reap.log with pid/name/path: when this net fails in the
+; field again, that file is the evidence instead of another round of guessing.
+; Pushes 0 = family clear, 1 = something outlived the budget.
+!macro cxReapFamily SECS
+  nsExec::Exec `${CX_PS} "$$sid=(Get-Process -Id $$PID).SessionId; $$f={ @(${CX_FAM_FILTER}) }; $$d=(Get-Date).AddSeconds(${SECS}); while ($$true) { $$p=&$$f; if ($$p.Count -eq 0) { exit 0 }; if ((Get-Date) -ge $$d) { break }; $$p | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 400 }; (&$$f) | ForEach-Object { '{0} survivor pid={1} {2} {3}' -f (Get-Date -Format s),$$_.ProcessId,$$_.Name,$$_.ExecutablePath } | Add-Content -Path (Join-Path $$env:TEMP 'chatx_install_reap.log') -ErrorAction SilentlyContinue; exit 1"`
+!macroend
+
+; Step 3 -- the black box. `${APP_EXECUTABLE_FILENAME} 无法关闭` is NOT one
+; failure: app-builder-lib prints that same LangString (appCannotBeClosed) from
+; THREE different places, and a screenshot cannot tell them apart --
+;   allowOnlyOneInstallerInstance.nsh : could not kill the app (we no longer run it)
+;   installUtil.nsh UninstallLoop     : old uninstaller failed 5x (customUnInstallCheck)
+;   extractAppPackage.nsh             : CopyFiles into $INSTDIR hit in-use files,
+;                                       5 retries x Sleep 1000 = ~5s of tolerance,
+;                                       and clicking 重试 is what falls through to
+;                                       the non-atomic overwrite that finally works
+;                                       (= the boss's 「再点一次继续才装完」).
+; The last two are inside macros we cannot override (customFiles_* is only a
+; POST-decompression hook), and the template runs `SetDetailsPrint none` in the
+; assisted wizard, so the field has zero evidence to send us. So: write our own.
+; One line per install with the stage, the process family, and which files under
+; $INSTDIR are actually locked right before the template takes over -- next field
+; report is read off this file instead of guessed at for a day.
+!macro cxLogState TAG
+  nsExec::Exec `${CX_PS} "$$sid=(Get-Process -Id $$PID).SessionId; $$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$o=@('[{0}] ${TAG} v${VERSION} INSTDIR=$INSTDIR' -f (Get-Date -Format s)); (${CX_FAM_FILTER}) | ForEach-Object { $$o+=('  proc pid={0} {1} {2}' -f $$_.ProcessId,$$_.Name,$$_.ExecutablePath) }; @('${APP_EXECUTABLE_FILENAME}','resources\app.asar','resources\backend\backend.exe') | ForEach-Object { $$p=Join-Path '$INSTDIR' $$_; if (Test-Path $$p) { try { $$h=[IO.File]::Open($$p,'Open','ReadWrite','None'); $$h.Close() } catch { $$o+=('  LOCKED {0}' -f $$p) } } }; $$o | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
+  Pop $0
 !macroend
 
 !macro customCheckAppRunning
-  ; Stock check FIRST on purpose: it closes the shell gracefully, which lets the
-  ; app's own before-quit stopAndWait take the backend down cleanly (B57 --
-  ; a half-dead backend racing the new one costs every Telegram account a
-  ; re-login). Only then sweep whatever the shell left behind.
-  !insertmacro _CHECK_APP_RUNNING
-  DetailPrint "$(cxStReap)"
-  !insertmacro cxReapFamily
+  ; Graceful first (B57), force second, and whatever survives BOTH does not get
+  ; to fail the upgrade: extractUsing7za already retries and finally overwrites
+  ; in place, and customUnInstallCheck (below) recovers the old-version uninstall
+  ; the same way. A truthful note beats「点重试」 with nothing to retry, and the
+  ; /SD keeps unattended installs moving instead of Quitting like the stock path.
+  DetailPrint "$(cxStClose)"
+  !insertmacro cxCloseAppNicely 15
   Pop $0
   ${If} $0 != 0
-    DetailPrint "$(cxStReapLeft)"
+    DetailPrint "$(cxStReap)"
+    !insertmacro cxReapFamily 20
+    Pop $0
+    ${If} $0 != 0
+      DetailPrint "$(cxStReapLeft)"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "$(cxAppBusy)" /SD IDOK
+    ${EndIf}
   ${EndIf}
+  ; Always, not only on failure: "family empty and nothing locked" is exactly the
+  ; line that proves the next dialog came from the extract stage instead of here.
+  !insertmacro cxLogState "pre-uninstall"
 !macroend
 
 ; ---- old-version uninstall: recover instead of dying (2026-09-20) ------------
@@ -323,7 +401,7 @@ Var pid
 
   ${If} $R0 != 0
     DetailPrint "$(cxStUnRetry)"
-    !insertmacro cxReapFamily
+    !insertmacro cxReapFamily 20
     Pop $0
     Sleep 1500
     ; forward Call: Function uninstallOldVersion is defined later in installUtil.nsh
@@ -331,6 +409,7 @@ Var pid
     Call uninstallOldVersion
     ${If} $R0 != 0
       DetailPrint "$(cxStUnBusy)"
+      !insertmacro cxLogState "old-uninstall-failed"
       MessageBox MB_OK|MB_ICONEXCLAMATION "$(cxUnOldBusy)" /SD IDOK
     ${EndIf}
   ${EndIf}
@@ -437,8 +516,10 @@ Var pid
   LangString cxUnFinText     ${LANG_ENGLISH} "The program has been removed from this computer.$\r$\n$\r$\nIf you chose to keep your data, account logins, chat history and settings come back automatically after a reinstall."
   LangString cxUnFinLink     ${LANG_ENGLISH} "Download again or contact support: bd2026.cc"
   LangString cxStInstalling  ${LANG_ENGLISH} "Installing ChatX components (about 1.3 GB) - this usually takes 1-3 minutes, please keep this window open..."
+  LangString cxStClose       ${LANG_ENGLISH} "Closing ChatX and waiting for it to shut down..."
   LangString cxStReap        ${LANG_ENGLISH} "Stopping leftover ChatX background services..."
   LangString cxStReapLeft    ${LANG_ENGLISH} "A background service would not stop; installing over it..."
+  LangString cxAppBusy       ${LANG_ENGLISH} "Some ChatX background processes are still running and could not be closed automatically (usually because ChatX was started as administrator, or antivirus is holding a file).$\r$\n$\r$\nSetup will carry on and install over them. Your data and account logins are untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more.$\r$\n$\r$\nDetails were written to %TEMP%\chatx_install_reap.log"
   LangString cxStUnRetry     ${LANG_ENGLISH} "Previous version files are still in use - clearing them and retrying..."
   LangString cxStUnBusy      ${LANG_ENGLISH} "Previous version could not be removed cleanly; installing over it."
   LangString cxUnOldBusy     ${LANG_ENGLISH} "Some files of the previous version are still in use, so they could not be removed first. Setup will install over them - this is safe, and your data is untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more."
@@ -475,8 +556,10 @@ Var pid
   LangString cxUnFinText     ${LANG_SIMPCHINESE} "程序已从本机移除。$\r$\n$\r$\n若您选择了保留数据，重新安装后账号登录、聊天记录与设置会自动恢复。"
   LangString cxUnFinLink     ${LANG_SIMPCHINESE} "重新下载或联系客服：bd2026.cc"
   LangString cxStInstalling  ${LANG_SIMPCHINESE} "正在安装智聊组件（约 1.3 GB），通常需要 1–3 分钟，请勿关闭此窗口…"
+  LangString cxStClose       ${LANG_SIMPCHINESE} "正在关闭智聊并等待其退出…"
   LangString cxStReap        ${LANG_SIMPCHINESE} "正在停止残留的智聊后台服务…"
   LangString cxStReapLeft    ${LANG_SIMPCHINESE} "有后台服务未能结束，将直接覆盖安装…"
+  LangString cxAppBusy       ${LANG_SIMPCHINESE} "智聊仍有后台进程在运行，自动关闭未成功（常见原因：智聊是以管理员身份启动的，或杀毒软件正占用文件）。$\r$\n$\r$\n安装将继续，直接覆盖安装——您的数据与各平台登录状态不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。$\r$\n$\r$\n诊断信息已记录在 %TEMP%\chatx_install_reap.log"
   LangString cxStUnRetry     ${LANG_SIMPCHINESE} "旧版本文件仍被占用，正在清理并重试…"
   LangString cxStUnBusy      ${LANG_SIMPCHINESE} "旧版本未能完全移除，将直接覆盖安装。"
   LangString cxUnOldBusy     ${LANG_SIMPCHINESE} "旧版本仍有文件被占用，无法先行移除。安装程序将直接覆盖安装——这是安全的，您的数据不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。"
@@ -714,7 +797,7 @@ Var pid
     ; touch '*Uninstall*'. Same Process.Path -> Win32_Process.ExecutablePath fix
     ; as cxReapFamily (see the note there): the old predicate matched nothing
     ; from an installer context, so every RMDir below was racing live handles.
-    !insertmacro cxReapFamily
+    !insertmacro cxReapFamily 20
     Pop $0
     FileWrite $R6 "reap exit=[$0] (0=family clear)$\r$\n"
 

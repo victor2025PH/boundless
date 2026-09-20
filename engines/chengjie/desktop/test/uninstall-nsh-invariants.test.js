@@ -57,11 +57,22 @@ ok(raw.length > 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf, "ins
 const text = raw.toString("utf8").replace(/^\uFEFF/, "");
 
 // ---- 三个宏齐备 --------------------------------------------------------------
+// 进程家族谓词与 PowerShell 前缀是 !define 单一事实源（两条命令必须同口径——「杀什么」
+// 与「验什么」一旦漂移，就是 2026-09-20 一轮那种「网早就空转了却没人发现」）。断言
+// 要看展开后的实际命令，所以这里把 define 先内联回去。
+function expandDefines(s) {
+  for (const name of ["CX_FAM_FILTER", "CX_PS"]) {
+    const d = text.match(new RegExp("^!define\\s+" + name + "\\s+`([\\s\\S]*?)`\\s*$", "m"));
+    ok(d, "缺少 !define " + name);
+    if (d) s = s.split("${" + name + "}").join(d[1]);
+  }
+  return s;
+}
 function macroBody(name) {
   // \b：customInstall 不得误配 customInstallMode（2026-09-05 加模式页宏时踩到）
   const m = text.match(new RegExp("!macro\\s+" + name + "\\b[\\s\\S]*?!macroend"));
   ok(m, "缺少 !macro " + name);
-  return m ? m[0] : "";
+  return m ? expandDefines(m[0]) : "";
 }
 const header = macroBody("customHeader");
 const welcome = macroBody("customUnWelcomePage");
@@ -153,12 +164,48 @@ ok(
 // PyInstaller backend.exe 不在覆盖面——旧后端孤儿抱着 18799 与 pyrogram 会话文件
 // 不放，新后端一起来就撞 AuthKeyDuplicated → 全账号被强制注销（升级必重登根因）。
 const checkRunning = macroBody("customCheckAppRunning");
-ok(checkRunning.includes("_CHECK_APP_RUNNING"), "customCheckAppRunning 必须先插入库存 _CHECK_APP_RUNNING（保留优雅关闭+用户提示语义）");
+// 2026-09-20 二轮实弹：库存 _CHECK_APP_RUNNING 的总预算只有 ~6.3s，且决定性的那次
+// 复查紧贴 taskkill /f 之后、零沉降时间；而 main.js 的 before-quit 故意
+// preventDefault + 等 stopAndWait(8000)+sidecars.stopAll（B57 要求），按设计就要 8s+。
+// 于是「按设计正常退出」的应用必输这场没人写下来的竞速 →「智聊 无法关闭」弹窗（静默
+// 态更糟：appCannotBeClosed 带 /SD IDCANCEL＝直接 Quit，升级中止）。所以整段关闭由
+// 我们自己按「先请、再等实证、后强杀、再复验」的顺序接管，绝不再插库存那段。
 ok(
-  checkRunning.indexOf("_CHECK_APP_RUNNING") < checkRunning.indexOf("cxReapFamily"),
-  "收割必须在库存检查之后（先优雅关壳——让 before-quit stopAndWait 带走后端——再扫孤儿）"
+  !checkRunning.includes("_CHECK_APP_RUNNING"),
+  "customCheckAppRunning 禁止插入库存 _CHECK_APP_RUNNING（它 ~6.3s 的预算短于本应用 8s+ 的 before-quit 关停，必弹「无法关闭」；静默态 /SD IDCANCEL 直接中止升级）"
+);
+ok(
+  checkRunning.indexOf("cxCloseAppNicely") >= 0 &&
+    checkRunning.indexOf("cxCloseAppNicely") < checkRunning.indexOf("cxReapFamily"),
+  "必须先优雅关闭再强杀（WM_CLOSE 让 before-quit 干净带走后端，B57：半死的后端抢会话=全账号重登）"
+);
+ok(
+  !/\bQuit\b/.test(checkRunning) && /MessageBox[^\n]*\/SD /.test(checkRunning),
+  "关闭失败禁止 Quit、弹窗必须带 /SD（覆盖安装远好过让升级死在这里；无 /SD 会挂死静默安装）"
+);
+const nicely = macroBody("cxCloseAppNicely");
+ok(
+  nicely.includes("CloseMainWindow"),
+  "cxCloseAppNicely 必须用 CloseMainWindow（WM_CLOSE 才会触发 before-quit 的后端清退；强杀跳过它=孤儿后端）"
+);
+ok(
+  /while/.test(nicely) && /exit 0/.test(nicely) && /exit 1/.test(nicely),
+  "cxCloseAppNicely 必须轮询等到家族真的清空（固定 Sleep 就是库存那段的原罪）"
+);
+ok(
+  /!insertmacro cxCloseAppNicely\s+(\d+)/.test(checkRunning) &&
+    Number(/!insertmacro cxCloseAppNicely\s+(\d+)/.exec(checkRunning)[1]) >= 12,
+  "优雅关闭的等待预算必须 >= 12s（stopAndWait 自己就是 8s，再加 sidecars.stopAll；预算短于关停耗时=复刻库存 bug）"
 );
 const reap = macroBody("cxReapFamily");
+ok(
+  reap.includes("'$INSTDIR\\*'"),
+  "cxReapFamily 必须按 $INSTDIR 匹配（只认 ${APP_PACKAGE_NAME} 会漏掉用户在向导里自选的安装目录）"
+);
+ok(
+  reap.includes("chatx_install_reap.log"),
+  "cxReapFamily 必须把幸存进程写进日志（现场再炸时要有证据，不能再靠猜）"
+);
 ok(reap.includes("Stop-Process"), "cxReapFamily 缺少 Stop-Process 收割");
 ok(reap.includes("-notlike '*Uninstall*'"), "cxReapFamily 必须排除 '*Uninstall*'（C4 教训：卸载器 _?= 原地运行会杀自己）");
 ok(reap.includes("-notlike '*-updater*'"), "cxReapFamily 必须排除 '*-updater*'（自动更新的安装器本体在 updater 缓存目录里运行，杀了=自杀）");
@@ -196,9 +243,13 @@ ok(unCheck.includes("Call uninstallOldVersion"), "卸载失败接管必须再给
 ok(!/\bQuit\b/.test(unCheck), "卸载失败接管禁止 Quit（就地覆盖安装远好过升级直接死掉）");
 ok(/MessageBox[^\n]*\/SD /.test(unCheck), "卸载失败接管的弹窗必须带 /SD 默认值（无 /SD 的 MessageBox 会把静默安装永久挂死）");
 // 定义 customCheckAppRunning 会让模板跳过它自己的 getProcessInfo/Var pid（
-// allowOnlyOneInstallerInstance.nsh 的 ifmacrondef 守卫），必须自带补齐：
-ok(text.includes('!include "getProcessInfo.nsh"'), "定义 customCheckAppRunning 后必须自带 !include getProcessInfo.nsh（模板会跳过）");
-ok(/^Var pid\r?$/m.test(text), "定义 customCheckAppRunning 后必须自带 Var pid（$pid 在两个编译单元的 CHECK 里都被引用，顶层安全）");
+// allowOnlyOneInstallerInstance.nsh 的 ifmacrondef 守卫）。1.0.93 起我们不再插库存
+// 那段，$pid 也就没人引用了——留着 `Var pid` 会被 makensis -WX 判成未引用变量而直接
+// 编译失败，所以两者必须一起消失。
+ok(
+  !text.includes('!include "getProcessInfo.nsh"') && !/^Var pid\r?$/m.test(text),
+  "不再插入库存 _CHECK_APP_RUNNING 后，getProcessInfo.nsh 与 Var pid 必须一并删掉（未引用变量在 -WX 下是硬编译失败）"
+);
 
 // ---- C7: 安装侧「保留/清空数据」页 + 执行闸 -----------------------------------
 // 2026-09-05 起数据页注册在 customWelcomePage（欢迎页之后、须知页之前），不再挂
