@@ -180,3 +180,62 @@ async def test_autosend_voice_quiet_blocks_second(monkeypatch):
     ok = await ah.autosend_voice(
         assistant, "whatsapp", "acct", "tom", "Hey there friend")
     assert ok is False
+
+
+def test_new_inbound_after_voice_wins_over_a_restaled_mirror_row():
+    """电脑微信重扫把旧语音占位当新出站行入库，不许因此吞掉真来信。
+
+    2026-09-20 实锤：12:58 发出的两条语音，屏上那颗「语音5″秒」占位直到
+    13:21:28 才被扫进来，于是库里出现一条 ingested_at=13:21:28 的出站语音行；
+    客户 13:21 的新来信同批入库。旧实现取「翻库」与「进程内登记」的 max，
+    被污染的 13:21:28 赢了 13:20:47 的真实投递时刻 → in_ts 不大于 voice_ts
+    → 13:21:45 已经写好的英文草稿在 13:22:09 被判成孤儿二稿，客户什么也没收到。
+
+    进程内登记是一手事实（本进程真的发出去了），翻库只在没登记时兜底。
+    """
+    from src.inbox.voice_session_guard import clear_voice_marks_for_tests
+
+    clear_voice_marks_for_tests()
+    cid = "wechat:wechat-pc:wx:id:peer"
+    delivered = 1000.0
+    rows = [
+        # 12:58 真发的语音（ack 镜像，时间准）
+        {"direction": "out", "media_type": "voice", "ts": 400.0, "ingested_at": 400.0},
+        # 同两条语音的屏上占位，重扫时才入库 —— 展示时间旧、入库时间新
+        {"direction": "out", "media_type": "voice", "ts": 402.0, "ingested_at": 1041.0},
+        # 客户的新来信：展示时间来自时间条（更早），入库时间才是真相
+        {"direction": "in", "ts": 405.0, "ingested_at": 1041.0, "text": "还在吗"},
+        # 13:20:47 真发的那条
+        {"direction": "out", "media_type": "voice", "ts": delivered,
+         "ingested_at": delivered, "text": "I am still here."},
+    ]
+    mark_voice_delivered(cid, now=delivered)
+    assert should_quiet_after_voice(
+        conv_key=cid, recent_messages=rows, quiet_after_sec=90, now=delivered + 82,
+    ) == "", "客户在语音之后说了新话，这一轮必须发出去"
+
+    # 反向：客户没再说话时守卫照旧生效，别把 2026-08-04 的孤儿二稿闸修没了
+    clear_voice_marks_for_tests()
+    mark_voice_delivered(cid, now=delivered)
+    silent = [r for r in rows if float(r.get("ingested_at") or 0) <= delivered]
+    assert should_quiet_after_voice(
+        conv_key=cid, recent_messages=silent, quiet_after_sec=90, now=delivered + 10,
+    ) == "voice_quiet"
+    clear_voice_marks_for_tests()
+
+
+def test_ingested_at_beats_a_stale_display_timestamp():
+    """``ts`` 是展示时间，电脑微信取自气泡上方的时间条，可能比真实到达早几分钟。"""
+    from src.inbox.voice_session_guard import clear_voice_marks_for_tests
+
+    clear_voice_marks_for_tests()
+    # 展示时间说来信在语音之前，入库时间说在之后 —— 以入库时间为准
+    rows = [
+        {"direction": "out", "media_type": "voice", "ts": 200.0, "ingested_at": 200.0},
+        {"direction": "in", "ts": 150.0, "ingested_at": 230.0, "text": "在吗"},
+    ]
+    assert should_quiet_after_voice(
+        recent_messages=rows, quiet_after_sec=90, now=250.0,
+    ) == ""
+    # 没有 ingested_at 的行（非本平台/老数据）照旧读 ts，向后兼容
+    assert last_inbound_ts([{"direction": "in", "ts": 150.0}]) == 150.0

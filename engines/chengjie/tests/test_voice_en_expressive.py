@@ -163,6 +163,61 @@ def test_vocal_bursts_lengthen_speech_when_cues_hit(tmp_path):
     assert burst_cues_from_text("color review in ten", "serious") == (False, False)
 
 
+def test_breath_never_lands_before_the_first_word(tmp_path):
+    """Every line used to open with the canned stem, then a gap, then words.
+
+    ``find_pause`` scored the leading silence as the best valley, and when it
+    found nothing at all the old code forced a splice at a fixed 60ms — so the
+    stem sat at offset 0 of the output, bit for bit (0.9955 correlation on a
+    real IndexTTS-2 clip), detached from the speech. It read as a glitch.
+    """
+    import struct
+    import wave
+
+    from src.ai.voice_bursts import apply_vocal_bursts, speech_onset
+
+    sr = 22050
+
+    def _write(path, segments):
+        frames = b""
+        for sec, amp, freq in segments:
+            frames += b"".join(
+                struct.pack("<h", int(
+                    amp * __import__("math").sin(2 * 3.1416 * freq * i / sr)))
+                for i in range(int(sr * sec))
+            )
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(sr)
+            w.writeframes(frames)
+
+    speech = tmp_path / "s.wav"
+    breath = tmp_path / "b.wav"
+    # lead-in silence, a phrase, a real rest, another phrase
+    _write(speech, [(0.20, 0, 1), (0.50, 12000, 180),
+                    (0.30, 0, 1), (1.50, 12000, 180)])
+    _write(breath, [(0.35, 9000, 90)])
+
+    raw = speech.read_bytes()
+    out = apply_vocal_bursts(raw, breath_path=str(breath), want_breath=True)
+    assert out.startswith(b"RIFF")
+    assert len(out) > len(raw), "a real rest exists, the breath should splice"
+
+    head = int(0.20 * sr) * 2  # the lead-in, in bytes
+    assert out[44:44 + head] == raw[44:44 + head], "stem landed before the first word"
+    assert speech_onset(
+        __import__("numpy").frombuffer(raw[44:], dtype="<i2").astype("float32")
+        / 32768.0, sr) >= int(0.15 * sr)
+
+    # no rest anywhere → skip rather than fabricate a slot at the head
+    flat = tmp_path / "flat.wav"
+    _write(flat, [(1.50, 12000, 180)])
+    same = apply_vocal_bursts(
+        flat.read_bytes(), breath_path=str(breath), want_breath=True)
+    assert same == flat.read_bytes()
+
+
 def test_hush_laugh_stem_is_rejected(tmp_path):
     """The 2s glitch: a near-silent fragment gained up mid-line."""
     import struct

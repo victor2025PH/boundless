@@ -81,6 +81,31 @@ def test_anchor_covers_latin_product_token():
     assert lost_anchors("走 autochat-team 这档", "走那个便宜档就行") != []
 
 
+# ── 英文原文：锚点不能退化成「每个单词」─────────────────────────────────
+# 2026-09-20 实录：英文人设的口语化改写连续被拒，丢失锚点报的是 ['in','is']、
+# ['am'] 这类虚词——「≥2 字母即锚点」在英文原文下等于禁止一切改写。
+EN_CORE = "Honestly, you have a lot of nerve saying that after going quiet."
+
+
+def test_english_rewrite_is_not_blocked_by_function_words():
+    good = "honestly, the nerve on you, going quiet like that and coming back"
+    assert lost_anchors(EN_CORE, good) == []
+    assert sanitize_llm_output(good, EN_CORE) == good
+
+
+def test_english_numbers_are_still_red_lines():
+    """窄词表只放过普通单词，数字仍是红线——报价被改/说没了照样拒。"""
+    core = "The team plan is 198 dollars a month."
+    assert lost_anchors(core, "the team plan runs 168 bucks a month") == ["198"]
+    assert lost_anchors(core, "the team plan is like 198 bucks a month") == []
+
+
+def test_english_identifiers_stay_anchored():
+    """带数字的标识与全大写缩写仍算事实（型号/机构名不能被改写吃掉）。"""
+    assert lost_anchors("I redid three PDPs before lunch", "I redid a few pages") != []
+    assert lost_anchors("she's at UCSB now", "she's at school now") != []
+
+
 # ── 第二层：语义地板（fail-closed）────────────────────────────────────────
 class _FakeEmbedder:
     """确定性假嵌入：按预置相似度表返回可控向量（CI 不碰局域网 GPU）。"""

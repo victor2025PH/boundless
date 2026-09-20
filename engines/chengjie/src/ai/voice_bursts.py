@@ -150,6 +150,16 @@ def find_pause(speech: np.ndarray, sr: int, *, after_sec: float = 0.55,
     return int(best_i * hop)
 
 
+def speech_onset(x: np.ndarray, sr: int) -> int:
+    """Sample index of the first word. Leading silence is not a pause."""
+    env, hop = _envelope(x, sr, 0.015)
+    if env.size == 0:
+        return 0
+    thr = max(0.012, float(env.max()) * 0.12)
+    on = np.where(env >= thr)[0]
+    return int(on[0] * hop) if on.size else 0
+
+
 def _insert(speech: np.ndarray, burst: np.ndarray, at: int, sr: int) -> np.ndarray:
     if burst.size == 0:
         return speech
@@ -199,12 +209,18 @@ def apply_vocal_bursts(
     if want_breath and breath_path:
         br = load_burst(breath_path, sr, kind="breath")
         if br is not None:
-            # first micro-pause in the opening 0.45s, else a short lead-in
-            at = find_pause(out, sr, after_sec=0.04, before_frac=0.18)
-            if at >= int(0.45 * sr):
-                at = int(0.06 * sr)
-            out = _insert(out, br, at, sr)
-            applied = True
+            # Only inside the line, at a rest the speaker actually took. The
+            # old code searched from 0.04s — the leading silence before the
+            # first word scored as the best valley — and fell back to a fixed
+            # 60ms when it found nothing. Either way every line opened with
+            # 140ms of canned breath, a 50ms gap, then the words; detached
+            # from the speech like that it reads as a glitch, not a breath.
+            at = find_pause(out, sr,
+                            after_sec=speech_onset(out, sr) / sr + 0.25,
+                            before_frac=0.45)
+            if at < out.size:
+                out = _insert(out, br, at, sr)
+                applied = True
     if want_laugh and laugh_path:
         lg = load_burst(laugh_path, sr, kind="laugh")
         if lg is not None:

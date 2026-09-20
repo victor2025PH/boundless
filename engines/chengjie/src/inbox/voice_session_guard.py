@@ -70,7 +70,19 @@ def voice_peer_lang_conflict(voice_text: str, peer_lang: str) -> str:
 
 
 def _msg_ts(row: Dict[str, Any]) -> float:
-    for k in ("ts", "created_ts", "created_at", "timestamp"):
+    """本条消息**我们何时看见**它；``ingested_at`` 优先于 ``ts``。
+
+    ``ts`` 是展示时间，各平台精度不一，个别平台还会**比真实到达早很多**：
+    电脑微信的气泡自己不带时间，驱动只能取气泡上方那条时间分隔条
+    （``ts_hint``），于是 13:21 到达的消息被打上 13:19。拿它和出站语音的
+    真实投递时刻比，``in_ts > voice_ts`` 恒为假 → 明明是新来信，却被判成
+    「语音后的孤儿二稿」整轮抑制（2026-09-20 实锤：客户 13:21 来信，
+    13:21:45 英文草稿已生成，13:22:09 被 voice_quiet 吞掉，客户什么也没收到）。
+
+    ``ingested_at`` 是入库墙钟，与 :func:`mark_voice_delivered` 的墙钟同量纲，
+    也正是本守卫真正要问的「客户是不是在我们发完语音之后又说话了」。
+    """
+    for k in ("ingested_at", "ts", "created_ts", "created_at", "timestamp"):
         try:
             v = float(row.get(k) or 0)
             if v > 0:
@@ -156,10 +168,14 @@ def should_quiet_after_voice(
     if window <= 0:
         return ""
     ts_now = float(now if now is not None else time.time())
-    voice_ts = max(
-        last_outbound_voice_ts(list(recent_messages or [])),
-        marked_voice_ts(conv_key),
-    )
+    # 进程内投递登记是**本进程真的发出去了**的一手事实，优先于翻库。
+    # 取 max 会被镜像行污染：电脑微信屏上那颗「语音5″秒」占位在重扫时可能
+    # 被当成新的出站语音行入库（2026-09-20 实锤：12:58 发的两条语音，占位
+    # 直到 13:21:28 才扫进来），于是 max 把「刚发过语音」推到了新来信之后，
+    # 真来信被判成孤儿二稿吞掉。翻库只在没有登记时兜底（进程刚重启）。
+    voice_ts = marked_voice_ts(conv_key)
+    if voice_ts <= 0:
+        voice_ts = last_outbound_voice_ts(list(recent_messages or []))
     if voice_ts <= 0:
         return ""
     if ts_now - voice_ts > window:

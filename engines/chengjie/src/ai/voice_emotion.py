@@ -98,14 +98,57 @@ _INTENT_EMOTION = {
     "farewell": "warm", "告别": "warm", "再见": "warm",
 }
 
+# 线索词表中英并重（2026-09-20）。此前英文侧只有 sorry/apolog、haha 族、thank、字面
+# "!!" 四处，于是**整条英文人设永远撞不到线索**，五级瀑布一路滑到 default——实测
+# "Oh my god, I'm so happy right now!" 与 "I am still here." 派生出完全相同的
+# warm/0.6，老板一耳朵听出「太AI化」：每句话都是同一个语气。
+#
+# 收词标准：只收**说话人自述情绪**的强口语搭配，不收话题词。"happy" 单字不收——
+# "happy to help" 是客套不是开心；"are you happy with it" 问的是对方。宁可漏，
+# 不可错：判错情绪比没情绪更出戏。
 _TEXT_CUES = (
-    # (子串元组, 情绪)；命中即取，顺序=优先级
-    (("对不起", "不好意思", "抱歉", "sorry", "apolog"), "apologetic"),
-    (("哈哈", "嘻嘻", "haha", "hehe", "lol", "lmao", "😄", "😂", "🤣", "笑死"), "playful"),
-    (("谢谢", "感谢", "thank", "❤", "🥰", "么么"), "warm"),
-    (("太好了", "棒", "恭喜", "🎉", "！！", "!!"), "excited"),
-    (("难过", "伤心", "唉", "😢", "😭", "可惜"), "sad"),
+    # (子串元组, 情绪)；命中即取，顺序=优先级——具体在前，宽泛在后
+    (("对不起", "不好意思", "抱歉", "sorry", "apolog", "my bad",
+      "my fault", "i feel terrible"), "apologetic"),
+    (("哈哈", "嘻嘻", "haha", "hehe", "lol", "lmao", "😄", "😂", "🤣", "笑死",
+      "just kidding", "kidding", "you wish", "very funny", "😜", "😏"), "playful"),
+    (("难过", "伤心", "唉", "😢", "😭", "可惜",
+      "i'm sad", "im sad", "so sad", "heartbroken", "miss you so much",
+      "bummed", "gutted", "feel awful"), "sad"),
+    (("太好了", "棒", "恭喜", "🎉", "！！", "!!",
+      "oh my god", "omg", "can't wait", "cant wait", "so excited",
+      "i'm thrilled", "im thrilled", "congrats", "congratulations",
+      "finally!", "no way!", "🤩", "🥳"), "excited"),
+    (("开心", "高兴", "😊", "😁",
+      "so happy", "i'm happy", "im happy", "made my day", "love it",
+      "so glad", "i'm glad", "im glad", "turned out great"), "happy"),
+    (("谢谢", "感谢", "thank", "❤", "🥰", "么么",
+      "appreciate it", "you're the best", "youre the best", "means a lot",
+      "take care", "get some rest"), "warm"),
+    (("生气", "烦死", "别烦我", "无语",
+      "seriously?", "are you kidding me", "the nerve", "a lot of nerve",
+      "don't talk to me", "dont talk to me", "fed up", "had enough",
+      "😠", "😡"), "angry"),
+    (("累了", "好累", "撑不住",
+      "i'm exhausted", "im exhausted", "so tired", "worn out",
+      "long day", "my eyes hurt", "drained"), "calm"),
 )
+
+
+def text_cue_emotion(text: Optional[str]) -> Optional[str]:
+    """文本线索命中的情绪；没命中 → None（纯函数）。
+
+    单独暴露是为了让调用方能问「这句话的情绪是**读出来的**，还是兜底基线」——
+    LLM 兜底层只在没读出来时才值得花一次模型调用（见 voice_emotion_llm）。
+    """
+    t = str(text or "")
+    if not t:
+        return None
+    tl = t.lower()
+    for cues, val in _TEXT_CUES:
+        if any(c in t or c in tl for c in cues):
+            return val
+    return None
 
 
 def derive_emotion(
@@ -160,13 +203,8 @@ def derive_emotion(
                 break
 
     # 3) 文本线索
-    if emo is None and text:
-        t = str(text)
-        tl = t.lower()
-        for cues, val in _TEXT_CUES:
-            if any(c in t or c in tl for c in cues):
-                emo = val
-                break
+    if emo is None:
+        emo = text_cue_emotion(text)
 
     # 4) 关系阶段微调（亲密阶段更暖更俏皮）
     rs = str(rel_stage or "").strip().lower()

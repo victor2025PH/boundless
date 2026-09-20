@@ -362,15 +362,30 @@ _QUOTE_CHARS = "「」『』“”\"'‘’"
 
 
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
-# 事实锚点：≥2 位数字 与 ≥2 字母的拉丁 token（金额/型号/品牌/套餐名）。
+# 事实锚点（中文原文）：≥2 位数字 与 ≥2 字母的拉丁 token（金额/型号/品牌/套餐名）。
 # 单位数/单字母噪声大（「一」「3点」的 3 常被合法改写成汉字）故不入锚点集。
 _ANCHOR_RE = re.compile(r"\d[\d,.]*\d|[A-Za-z]{2,}")
+# 事实锚点（拉丁原文）：只认**数字与带数字的标识**，外加全大写缩写。
+# 上面那条在中文里成立是因为拉丁 token 稀少且多半真是型号；一旦原文本身是英文，
+# 「≥2 字母」等于把**每个单词**都当成事实，而口语化改写必然换词——2026-09-20 实测
+# Claire 的英文回复连续被拒，丢失锚点报的是 ['in','is']、['am'] 这种虚词，即英文
+# 改写**结构上永远过不了**，于是全程回落原文照念：听上去是「写的英语」不是「说的英语」。
+_ANCHOR_LATIN_RE = re.compile(
+    r"\d[\d,.]*\d"          # 198 / 1,280 / 3.14
+    r"|\b\w*\d\w*\b"        # A4 / iphone15 / 24h —— 带数字即标识
+    r"|\b[A-Z]{2,}s?\b"     # PDP / DTLA / UCSB（含复数 PDPs）
+)
 
 
-def _anchor_set(text: str) -> set:
-    """文本里的事实锚点（数字串归一去掉千分位/尾点，拉丁统一小写）。"""
+def _anchor_set(text: str, *, latin_source: bool = False) -> set:
+    """文本里的事实锚点（数字串归一去掉千分位/尾点，拉丁统一小写）。
+
+    ``latin_source``：原文是拉丁文字时换用窄词表（见 ``_ANCHOR_LATIN_RE``）。
+    两侧必须用同一把尺，否则集合差没有意义——所以开关由**原文**定，调用方传下来。
+    """
+    rx = _ANCHOR_LATIN_RE if latin_source else _ANCHOR_RE
     out = set()
-    for tok in _ANCHOR_RE.findall(str(text or "")):
+    for tok in rx.findall(str(text or "")):
         t = tok.strip().lower().rstrip(".")
         if t and t[0].isdigit():
             t = t.replace(",", "").replace("，", "")
@@ -385,11 +400,20 @@ def lost_anchors(original: str, rewritten: str) -> list:
     口语化的书面契约里第一条红线就是「数字/金额/型号原样保留」，但此前**从未校验**
     ——2026-07-28 实录：本地模型把「团队版198美金」改写成「168美金」这类篡改，
     只要长度落在 0.6~1.8 倍就一路放行。锚点是确定性的、零误伤的那一半。
+
+    语种由**原文**判定并对两侧一致取用：改写把 198 说成 one ninety-eight 仍算丢锚点
+    （数字是红线，宁可拒），但把 "you have a lot of nerve" 改成 "honestly, the nerve"
+    不再算——后者是口语化的本职工作。
+
+    判据是「原文有没有汉字」而非孰多孰寡：宽词表之所以成立，正是因为拉丁 token 对
+    中文而言是**外来标识**。按字符数投票会把「走 autochat-team 这档」判成拉丁文
+    （拉丁字符确实更多），套餐名反而失去保护——那是这条守卫最初要拦的东西。
     """
-    o = _anchor_set(original)
+    latin = not _CJK_RUN_RE.search(str(original or ""))
+    o = _anchor_set(original, latin_source=latin)
     if not o:
         return []
-    return sorted(o - _anchor_set(rewritten))
+    return sorted(o - _anchor_set(rewritten, latin_source=latin))
 
 
 # ── 餐食自述守卫（#92，0830 实锤「晚餐自述矛盾」）───────────────────────────

@@ -212,6 +212,27 @@ def preflight_voice_synth(
     return None
 
 
+async def _refine_emotion(voice_ctx: Dict[str, Any], text: str) -> Any:
+    """关键词读不出情绪时让小模型补判一次（见 voice_emotion_llm 的三条自我约束）。
+
+    默认关；出任何岔子都退回 ``resolve_effective_voice_context`` 的确定性结果——
+    这层的上限是「语气更贴」，下限必须是「和没有它时一样」。
+    """
+    spec = voice_ctx.get("emotion")
+    try:
+        from src.ai.voice_emotion_llm import refine_emotion
+        vc = voice_ctx.get("voice_cfg") or {}
+        # 端点借口语化链的（``avatar_voice.colloquial.llm_endpoints``，与
+        # TTSPipeline.prepass_colloquial_llm 同一处取值）；老形状也认一下
+        av = vc.get("avatar_voice") if isinstance(vc.get("avatar_voice"), dict) else {}
+        col = av.get("colloquial") or vc.get("colloquial")
+        return await refine_emotion(
+            spec, text, voice_cfg=vc, colloquial_cfg=col)
+    except Exception:
+        logger.debug("[voice_autosend] 情绪补判异常（忽略）", exc_info=True)
+        return spec
+
+
 def _reject_edge_fallback(meta: VoiceStageMeta, no_edge: bool) -> bool:
     """True=应拒发（克隆不可达却走了 edge 兜底）。"""
     if not no_edge:
@@ -537,6 +558,7 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         logger.debug("[voice_autosend] resolve_voice_cfg 失败", exc_info=True)
         _set_synth_failure("resolve_voice_failed")
         return None, meta
+    voice_ctx["emotion"] = await _refine_emotion(voice_ctx, text)
     # L-2 #205 三态「不发语音」（D-L4 新建人设缺省）：合成前就判文字，不打引擎、
     # 不算合成失败（metrics 原因=persona_voice_off，与引擎故障分开看）。
     if str((voice_cfg.get("voice_profile") or {}).get("voice_mode") or "").lower() == "off":
@@ -836,6 +858,7 @@ async def stage_voice_parts(
         logger.debug("[voice_autosend] 分条 resolve_voice_cfg 失败 → 回落单条",
                      exc_info=True)
         return None
+    voice_ctx["emotion"] = await _refine_emotion(voice_ctx, core)
     try:
         from src.ai.lang_voice_route import is_reject_tag, route_voice_cfg_for_text
         voice_cfg, _route = route_voice_cfg_for_text(voice_cfg, core, config)
