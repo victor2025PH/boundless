@@ -32,6 +32,12 @@
 ;       itself mid-wipe.
 ;   C5  After wiping we verify and report honestly (locked leftovers are named,
 ;       never silently ignored).
+;   C10 UPGRADE PRE-CLEAN (installer unit, end of customCheckAppRunning): once
+;       the family is reaped we empty $INSTDIR ourselves, non-atomically, keeping
+;       only the old uninstaller exe -- so the OLD version's atomicRMDir (which
+;       C9 cannot reach) renames a handful of entries instead of 9429. Template
+;       call and `--updated` untouched; nothing queued for REBOOTOK/RunOnce;
+;       %APPDATA% never looked at; fresh install returns without side effects.
 ;   KEEP-LIST DOC: the "what is kept" copy below must stay in sync with
 ;   deploy/desktop/restore_chatx_accounts_node.ps1 (the authoritative
 ;   login/account artifact list) -- both sides carry a cross-reference note.
@@ -380,6 +386,90 @@ UninstallCaption "$(cxUnCaption)"
   ; Always, not only on failure: "family empty and nothing locked" is exactly the
   ; line that proves the next dialog came from the extract stage instead of here.
   !insertmacro cxLogState "pre-uninstall"
+  ; C10 -- installer unit only: the uninstaller expands this macro too (via
+  ; un.checkAppRunning) and there is no "old version" for it to pre-clean.
+  !ifndef BUILD_UNINSTALLER
+    !insertmacro cxPreCleanOldInstall
+  !endif
+!macroend
+
+; ---- C10: empty $INSTDIR ourselves BEFORE the old uninstaller runs (2026-09-20) --
+; C9 (customRemoveFiles) lives in the uninstaller we SHIP, so it only protects the
+; NEXT upgrade. The hop that installs it (1.0.92 -> 1.0.93) still runs the OLD
+; uninstaller with `--updated`, i.e. un.atomicRMDir over 9429 files, and any one
+; busy file there = rollback + Abort(2) x5 = 「智聊 无法关闭」 from inside
+; installUtil.nsh -- before customUnInstallCheck can act. The field's 「点两次取消
+; 就能装完」 is exactly two uninstallOldVersion rounds each giving up.
+; What we DO control is what the old uninstaller finds when it starts. This macro
+; runs at the end of customCheckAppRunning (family already reaped, installer unit,
+; before uninstallOldVersion) and empties $INSTDIR NON-atomically: Delete /
+; RMDir /r, errors ignored, whatever will not go is left in place. The old
+; uninstaller itself stays (the template runs it in place via `_?=`), so its
+; atomic pass then has a handful of entries to rename instead of 9429 -- the
+; window in which a transient AV/indexer lock can veto the upgrade shrinks by
+; four orders of magnitude, and its 5x1s retry now covers a stragglers list
+; instead of a whole tree. `--updated` is NOT touched (it is also the
+; "upgrade never wipes data" evidence for both uninstaller-side guards), nothing
+; under %APPDATA% is looked at, and nothing is queued for REBOOTOK/RunOnce (the
+; new version lands in this very directory next).
+; Trade-off, stated plainly: after this ran, an install that fails mid-way leaves
+; the old program dir already empty (old version unusable, user data intact).
+; The template's own atomicRMDir success path has the same consequence (it
+; moves the whole tree away), so this is not a new failure mode.
+; Upgrade detection = the old uninstaller exists in $INSTDIR. Fresh install (dir
+; missing or without it) returns without touching anything.
+!macro cxPreCleanOldInstall
+  ${If} ${FileExists} "$INSTDIR\${UNINSTALL_FILENAME}"
+    DetailPrint "$(cxStPreClean)"
+    ; before/after evidence in the same black box (best effort, PowerShell)
+    nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$n=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue).Count; ('[{0}] preclean start INSTDIR=$INSTDIR files={1}' -f (Get-Date -Format s),$$n) | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
+    Pop $R3
+    !insertmacro cxPreCleanSweep
+    ; leftovers = files a process or a scanner still holds; sweep the family once
+    ; more and retry ONCE (a handle we just killed needs a moment to go away)
+    ${If} $R3 != 0
+      !insertmacro cxReapFamily 10
+      Pop $R4
+      Sleep 1500
+      !insertmacro cxPreCleanSweep
+    ${EndIf}
+    nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$r=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $$_.Name -ne '${UNINSTALL_FILENAME}' }); $$o=@('[{0}] preclean done leftovers={1}' -f (Get-Date -Format s),$$r.Count); $$r | Select-Object -First 20 | ForEach-Object { $$s='?'; try { $$h=[IO.File]::Open($$_.FullName,'Open','ReadWrite','None'); $$h.Close(); $$s='free' } catch { $$s='LOCKED' }; $$o+=('  left {0} {1}' -f $$s,$$_.FullName) }; $$o | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
+    Pop $R3
+  ${Else}
+    !insertmacro cxLogLine "[preclean] skipped: no ${UNINSTALL_FILENAME} in $INSTDIR (fresh install)"
+  ${EndIf}
+!macroend
+
+; One non-atomic pass over the top level of $INSTDIR. Everything except the old
+; uninstaller: directories via RMDir /r, files via Delete, both ignore errors
+; and leave stragglers. Sets $R3 = number of top-level entries that survived
+; (0 = clean). Enumerating while deleting is fine for FindFirst/FindNext (a
+; vanished entry just fails its own Delete).
+!macro cxPreCleanSweep
+  StrCpy $R3 0
+  ClearErrors
+  FindFirst $R1 $R2 "$INSTDIR\*.*"
+  ${IfNot} ${Errors}
+    ${Do}
+      ${If} $R2 != "."
+      ${AndIf} $R2 != ".."
+      ${AndIf} $R2 != "${UNINSTALL_FILENAME}"
+        ${If} ${FileExists} "$INSTDIR\$R2\*.*"
+          RMDir /r "$INSTDIR\$R2"
+        ${Else}
+          Delete "$INSTDIR\$R2"
+        ${EndIf}
+        ${If} ${FileExists} "$INSTDIR\$R2"
+          IntOp $R3 $R3 + 1
+        ${EndIf}
+      ${EndIf}
+      ClearErrors
+      FindNext $R1 $R2
+    ${LoopUntil} ${Errors}
+    FindClose $R1
+  ${EndIf}
+  ClearErrors
+  !insertmacro cxLogLine "[preclean] sweep done, top-level entries left: $R3"
 !macroend
 
 ; ---- old-version uninstall: recover instead of dying (2026-09-20) ------------
@@ -601,6 +691,7 @@ UninstallCaption "$(cxUnCaption)"
   LangString cxAppBusy       ${LANG_ENGLISH} "Some ChatX background processes are still running and could not be closed automatically (usually because ChatX was started as administrator, or antivirus is holding a file).$\r$\n$\r$\nSetup will carry on and install over them. Your data and account logins are untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more.$\r$\n$\r$\nDetails were written to %TEMP%\chatx_install_reap.log"
   LangString cxStUnBusyFile  ${LANG_ENGLISH} "A file of the previous version is busy - retrying, then removing it the direct way..."
   LangString cxStUnRetry     ${LANG_ENGLISH} "Previous version files are still in use - clearing them and retrying..."
+  LangString cxStPreClean    ${LANG_ENGLISH} "Clearing the previous version's files..."
   LangString cxStUnBusy      ${LANG_ENGLISH} "Previous version could not be removed cleanly; installing over it."
   LangString cxUnOldBusy     ${LANG_ENGLISH} "Some files of the previous version are still in use, so they could not be removed first. Setup will install over them - this is safe, and your data is untouched. If ChatX misbehaves afterwards, restart the computer and run this installer once more."
   LangString cxStWipe        ${LANG_ENGLISH} "Erasing user data..."
@@ -642,6 +733,7 @@ UninstallCaption "$(cxUnCaption)"
   LangString cxAppBusy       ${LANG_SIMPCHINESE} "智聊仍有后台进程在运行，自动关闭未成功（常见原因：智聊是以管理员身份启动的，或杀毒软件正占用文件）。$\r$\n$\r$\n安装将继续，直接覆盖安装——您的数据与各平台登录状态不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。$\r$\n$\r$\n诊断信息已记录在 %TEMP%\chatx_install_reap.log"
   LangString cxStUnBusyFile  ${LANG_SIMPCHINESE} "旧版本有文件被占用，正在重试，随后改用直接删除…"
   LangString cxStUnRetry     ${LANG_SIMPCHINESE} "旧版本文件仍被占用，正在清理并重试…"
+  LangString cxStPreClean    ${LANG_SIMPCHINESE} "正在清理旧版本文件…"
   LangString cxStUnBusy      ${LANG_SIMPCHINESE} "旧版本未能完全移除，将直接覆盖安装。"
   LangString cxUnOldBusy     ${LANG_SIMPCHINESE} "旧版本仍有文件被占用，无法先行移除。安装程序将直接覆盖安装——这是安全的，您的数据不受影响。若安装后使用异常，请重启电脑再运行一次本安装包。"
   LangString cxStWipe        ${LANG_SIMPCHINESE} "正在清除用户数据…"
