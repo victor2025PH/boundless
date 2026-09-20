@@ -451,6 +451,7 @@ UninstallCaption "$(cxUnCaption)"
   ${If} ${FileExists} "$INSTDIR\${UNINSTALL_FILENAME}"
     !insertmacro cxSweepDirNonAtomic $INSTDIR
   ${EndIf}
+  !insertmacro cxSweepLongPaths $INSTDIR
   ; after-state: what survived and whether it is actually locked. When this net
   ; fails in the field again, THIS is the evidence instead of another round of
   ; guessing -- exactly how C10 was disproved.
@@ -525,6 +526,26 @@ UninstallCaption "$(cxUnCaption)"
   ${EndIf}
   ClearErrors
   !insertmacro cxLogLine "[oldrm] swept ${TARGET_DIR}, top-level entries left: $R3"
+!macroend
+
+; C12 (2026-09-20): NSIS Delete/RMDir stop at MAX_PATH. Measured with the very
+; makensis electron-builder uses (3.0.4.1): a 259-char path is removed, 262 stays.
+; 1.0.93/1.0.94 shipped Playwright's headless shell whose deepest file sits at
+; 264-269 chars under the default per-user $INSTDIR, so cxSweepDirNonAtomic
+; leaves it behind ("left free" in the reap log -- not locked, just unreachable)
+; and extractUsing7za's CopyFiles then fails to overwrite it -> 5 silent retries
+; -> the appCannotBeClosed box in the middle of the progress bar. 1.0.95 no longer
+; ships that tree (after-pack.js PRUNE_GLOB + path-length gate), but every machine
+; upgrading FROM 1.0.93/1.0.94 still has it on disk, so the sweep gets a second
+; pass through .NET with the \?\ prefix, which has no MAX_PATH limit. Deepest
+; entries first; a genuinely locked file still stays and is reported as LOCKED by
+; the after-state probe below. Files only ever live under a dir we already proved
+; is ours (same predicate as cxOldRemoveForRoot), and nothing is queued for reboot.
+!macro cxSweepLongPaths TARGET_DIR
+  ${If} ${FileExists} "${TARGET_DIR}\*.*"
+    nsExec::Exec `${CX_PS} "$$d='${TARGET_DIR}'; $$n=0; $$f=0; Get-ChildItem -LiteralPath $$d -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object { $$_.FullName.Length } -Descending | ForEach-Object { try { if ($$_.PSIsContainer) { [IO.Directory]::Delete('\\?\' + $$_.FullName, $$true) } else { [IO.File]::Delete('\\?\' + $$_.FullName) }; $$n++ } catch { $$f++ } }; ('[{0}] [oldrm] longpath pass under {1}: removed={2} failed={3}' -f (Get-Date -Format s),$$d,$$n,$$f) | Add-Content -Path (Join-Path $$env:TEMP 'chatx_install_reap.log') -ErrorAction SilentlyContinue"`
+    Pop $R3
+  ${EndIf}
 !macroend
 
 ; ---- old-version uninstall: recover instead of dying (2026-09-20) ------------

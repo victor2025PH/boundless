@@ -247,6 +247,28 @@ for (const rel of ["backend/_internal/config/fatex.db", "seed-data/config/fatex.
   "seed-data/config/knowledge_base.db"]) {
   ok(forbiddenRels.includes(rel), `after-pack.js FORBIDDEN 未点名 ${rel}（「必须不在」清单漏项）`);
 }
+// C12：随包 Playwright 浏览器的剪除表与路径长度门禁（2026-09-20）。
+// 发版 worktree 的 services/*/node_modules 是 junction，electron-builder 的 filter 对它
+// 形同虚设（1.0.93/1.0.94 都把 chromium_headless_shell-* 原样打进了包 → 264 字符路径 →
+// 升级弹「无法关闭」）；after-pack 现在实体化链接、剪掉这两棵树、再量最长路径。
+ok(Array.isArray(afterPack.PRUNE_GLOB), "after-pack.js 未导出 PRUNE_GLOB（长路径子树剪除表）");
+const pruneKeys = afterPack.PRUNE_GLOB.map((r) => toPosix(String(r[0])) + "/" + r[1]);
+for (const k of ["services/messenger-web/node_modules/playwright-core/.local-browsers/chromium_headless_shell-",
+  "services/messenger-web/node_modules/playwright-core/.local-browsers/ffmpeg-"]) {
+  ok(pruneKeys.includes(k), `after-pack.js PRUNE_GLOB 未点名 ${k}*`);
+}
+ok(!pruneKeys.some((k) => k.endsWith("/chromium-")),
+  "PRUNE_GLOB 不得剪掉完整 chromium-*（Messenger 没装 Chrome 的客户机靠它回落；server.js BUNDLED_CHANNEL 显式点名 channel:\"chromium\"）");
+ok(typeof afterPack.MAX_REL_PATH === "number" && afterPack.MAX_REL_PATH >= 180 && afterPack.MAX_REL_PATH <= 190,
+  `after-pack.js MAX_REL_PATH=${afterPack.MAX_REL_PATH} 偏离 259-（C:\\Users\\<20 字符用户名>\\AppData\\Local\\Programs\\<包名>\\）预算`);
+ok(typeof afterPack.materializeLinks === "function" && typeof afterPack.walkRelLengths === "function",
+  "after-pack.js 未导出 materializeLinks / walkRelLengths（门禁自检靶）");
+// messenger-web 回落必须点名完整 chromium（channel 为空 + headless 时 Playwright 会挑已被剪掉的 headless shell）
+const msgServer = fs.readFileSync(path.join(repoRoot, "services", "messenger-web", "server.js"), "utf8");
+ok(/const BUNDLED_CHANNEL = "chromium";/.test(msgServer) &&
+  /launchOptions\(proxyUrl, BUNDLED_CHANNEL, headless, extraArgs, humanWindow\)/.test(msgServer),
+  "services/messenger-web/server.js 回落分支必须用 BUNDLED_CHANNEL=\"chromium\"（包里已无 chromium_headless_shell-*，channel 留空 + headless 会找不到浏览器）");
+
 // 随包 YAML 零内网地址（config.desktop.min / handoff 两 yaml / profiles/*.yaml）
 const PRIVATE_IP = /\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/;
 const shippedYaml = ["config/config.desktop.min.yaml", "config/handoff_scripts.yaml", "config/handoff_compliance.yaml"]

@@ -370,6 +370,33 @@ ok(
   "必须把清扫前文件数、清扫后残留数与残留项锁状态写进 %TEMP%\\chatx_install_reap.log（C10 就是靠这几行被实弹否掉的）"
 );
 
+// ---- C12: 超 MAX_PATH 的旧文件由 .NET \\?\ 通道补删（2026-09-20 五轮）--------------
+// 1.0.94 现场：C11 清扫后 leftovers=1 且 `left free`（没被占用），是 headless shell 里一条
+// 264 字符的路径——NSIS 的 Delete/RMDir 到 MAX_PATH 就停（makensis 3.0.4.1 实测 259 可删、
+// 262 留下），随后 extractUsing7za 的 CopyFiles 覆盖它失败 → 重试 5 次 → 弹窗。新包不再带
+// 那棵树（after-pack.js），但从 1.0.93/1.0.94 升上来的机器盘上还有，所以清扫要补一遍长路径。
+const longSweep = macroBody("cxSweepLongPaths");
+ok(longSweep.length > 0, "缺 cxSweepLongPaths（C12 长路径补删）");
+ok(
+  oldrm.indexOf("cxSweepLongPaths $INSTDIR") > oldrm.indexOf("cxOldRemoveForRoot HKEY_CURRENT_USER") &&
+    oldrm.indexOf("cxSweepLongPaths $INSTDIR") < oldrm.indexOf("oldrm done leftovers="),
+  "cxSweepLongPaths 必须在两个根键的非原子清扫之后、after-state 记录之前对 $INSTDIR 跑一遍（否则记录的残留数不是最终值）"
+);
+ok(
+  /\[IO\.File\]::Delete\('\\\\\?\\' \+/.test(longSweep) && /\[IO\.Directory\]::Delete\('\\\\\?\\' \+/.test(longSweep),
+  "长路径补删必须走 .NET 且带 \\\\?\\ 前缀（NSIS 自己的 Delete/RMDir 与不带前缀的 Remove-Item 都到 MAX_PATH 即止）"
+);
+ok(
+  /\$\{If\} \$\{FileExists\} "\$\{TARGET_DIR\}\\\*\.\*"/.test(longSweep),
+  "长路径补删只在目录仍有内容时才拉 PowerShell（首装/已清空不付启动成本）"
+);
+ok(
+  !/\/REBOOTOK|RunOnce|PendingFileRenameOperations|MoveFileEx|APPDATA|--updated|ExecWait|\b(Abort|Quit)\b/i
+    .test(longSweep.split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join("\n")),
+  "长路径补删沿用 C11 纪律：不排重启队列、不碰数据目录、不跑旧卸载器、不 Abort/Quit"
+);
+ok(/longpath pass under[^']*removed=/.test(longSweep), "长路径补删必须把删除/失败计数写进 chatx_install_reap.log");
+
 // ---- C7: 安装侧「保留/清空数据」页 + 执行闸 -----------------------------------
 // 2026-09-05 起数据页注册在 customWelcomePage（欢迎页之后、须知页之前），不再挂
 // customPageAfterChangeDir：NSIS 只给「物理上紧邻 instfiles 的那一页」标「安装」按钮，

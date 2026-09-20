@@ -1264,6 +1264,12 @@ const TZ = process.env.MSG_TZ || "Asia/Shanghai";
 // 也是「账密+验证码都对却被弹回登录页、cookie 只剩 datr」的成因。
 // 置空串可强制用捆绑 Chromium；机器没装 Chrome 时 launchContext 会自动回落。
 const BROWSER_CHANNEL = process.env.MSG_BROWSER_CHANNEL ?? "chrome";
+// 回落用的捆绑通道。Playwright 在 channel 为空且 headless 时会挑 chromium_headless_shell-*，
+// 而 channel:"chromium" 无论 headless 与否都用完整的 chromium-*（getExecutableName）。
+// 安装包只随包交付 chromium-*（headless shell 那棵树的路径最长 269 字符，超 MAX_PATH，
+// 曾让 NSIS 升级覆盖失败弹「无法关闭」；见 desktop/build/after-pack.js），所以回落
+// 必须显式点名 "chromium"，否则没装 Chrome 的客户机 restore 流会找不到浏览器。
+const BUNDLED_CHANNEL = "chromium";
 
 /** 浏览器启动参数（一号一代理 + 反自动化检测）。
  *  Facebook/Meta 会检测自动化浏览器（navigator.webdriver、AutomationControlled、
@@ -1295,7 +1301,7 @@ function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS,
   // UA 只在显式指定、或回落到捆绑 Chromium 时才覆盖：真 Chrome 自带的 UA 与它发出的
   // Client Hints 本就一致，此时再伪造只会重新制造上面那条矛盾。
   if (process.env.MSG_UA) opts.userAgent = process.env.MSG_UA;
-  else if (!channel) opts.userAgent = REAL_UA;
+  else if (!channel || channel === BUNDLED_CHANNEL) opts.userAgent = REAL_UA;
   if (proxyUrl) opts.proxy = { server: proxyUrl };
   return opts;
 }
@@ -1323,7 +1329,7 @@ async function launchPersistent(userDataDir, proxyUrl, headless = HEADLESS, extr
     logger.warn({ e: String(e), channel: BROWSER_CHANNEL },
       "channel unavailable on this host → falling back to bundled chromium (weaker stealth)");
     return await chromium.launchPersistentContext(
-      userDataDir, launchOptions(proxyUrl, "", headless, extraArgs, humanWindow));
+      userDataDir, launchOptions(proxyUrl, BUNDLED_CHANNEL, headless, extraArgs, humanWindow));
   }
 }
 

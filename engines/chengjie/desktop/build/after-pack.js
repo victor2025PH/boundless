@@ -14,6 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const pkg = require("../package.json");
 
 /** 产物内 resources 目录（mac 在 .app 内，其余在 appOutDir 下）。 */
 function resourcesDir(context) {
@@ -158,6 +159,116 @@ const REQUIRED_GLOB = [
   ],
 ];
 
+// C12（2026-09-20）随包 Playwright 浏览器里**不需要**、且会把安装路径顶过 MAX_PATH 的
+// 子树：[所在目录, 目录名前缀, 说明]。package.json extraResources 的 filter 早就写了
+// `!…/.local-browsers/chromium_headless_shell-*/**`，却从 1.0.93 起一直没生效——根因
+// 是发版 worktree（boundless-r93 / boundless-c10）的 services/*/node_modules 是指回
+// 主工作区的 junction：electron-builder 把 junction 原样放进 win-unpacked（filter
+// 根本没遍历到里面），NSIS 打 7z 时才顺着 junction 把整棵真 node_modules 打进包。
+// 后果：headless shell 里最长一条相对路径 203 字符，Administrator 账户下全路径 269；
+// NSIS 的 Delete/RMDir 到 MAX_PATH 就停（本机 makensis 3.0.4.1 实测：259 可删、262
+// 留下），升级时旧文件删不掉 → extractUsing7za 的 CopyFiles 覆盖失败 → 重试 5 次 →
+// 弹「无法关闭」（1.0.94 现场截图）。所以这里先把产物里的 junction/符号链接**实体化**
+// （边拷边跳过 PRUNE_GLOB），再对实体目录补一次剪除，最后由 REQUIRED_GLOB 复核完整
+// chromium-* 还在、由路径门禁复核最长路径。
+//   · chromium_headless_shell-*：Playwright 只在 channel 为空且 headless 时选它；
+//     messenger-web 回落已显式 channel:"chromium"（server.js BUNDLED_CHANNEL），用不上。
+//   · ffmpeg-*：只服务 recordVideo，messenger-web 不录屏。
+const PRUNE_GLOB = [
+  [
+    path.join("services", "messenger-web", "node_modules", "playwright-core",
+      ".local-browsers"),
+    "chromium_headless_shell-",
+    "Playwright headless shell（回落链已改走完整 chromium-*）",
+  ],
+  [
+    path.join("services", "messenger-web", "node_modules", "playwright-core",
+      ".local-browsers"),
+    "ffmpeg-",
+    "Playwright 录屏用 ffmpeg（边车不录屏；语音转码用的是 resources/ffmpeg/）",
+  ],
+];
+exports.PRUNE_GLOB = PRUNE_GLOB;
+
+// C12 路径长度门禁。安装器（NSIS，无 longPathAware 清单）能处理的全路径上限是
+// MAX_PATH-1=259；客户机的安装前缀是
+//   C:\Users\<用户名>\AppData\Local\Programs\<APP_PACKAGE_NAME>\
+// 用户名按 20 字符预算（Windows 本地账户上限），于是包内相对路径（相对 $INSTDIR，
+// 即 appOutDir）必须 ≤ 259 - 前缀。1.0.94 的 headless shell 子树最长 203 → 越线；
+// 剪掉之后最长 173（chromium-*/…/privacy-sandbox-attestations.dat）。超线即打包
+// 失败，比在客户机上弹「无法关闭」再猜一轮便宜得多。
+const INSTALL_PREFIX_BUDGET =
+  "C:\\Users\\".length + 20 + "\\AppData\\Local\\Programs\\".length + pkg.name.length + 1;
+const MAX_FULL_PATH = 259;
+exports.MAX_REL_PATH = MAX_FULL_PATH - INSTALL_PREFIX_BUDGET;
+
+/** 遍历 root，返回 [相对路径长度, 相对路径] 按长度倒序（目录与文件都算）。 */
+function walkRelLengths(root) {
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+    for (const ent of ents) {
+      const abs = path.join(dir, ent.name);
+      const rel = path.relative(root, abs);
+      out.push([rel.length, rel]);
+      if (ent.isDirectory()) stack.push(abs);
+    }
+  }
+  out.sort((a, b) => b[0] - a[0]);
+  return out;
+}
+exports.walkRelLengths = walkRelLengths;
+
+/** rel（相对 resources）是否落在 PRUNE_GLOB 命中的子树里。 */
+function isPruned(rel) {
+  const norm = rel.split("/").join(path.sep);
+  return PRUNE_GLOB.some(([dir, prefix]) => {
+    const head = dir + path.sep;
+    if (!norm.startsWith(head)) return false;
+    const rest = norm.slice(head.length);
+    const first = rest.split(path.sep)[0];
+    return first.startsWith(prefix);
+  });
+}
+exports.isPruned = isPruned;
+
+/** 把 root 下所有指向目录的 junction/符号链接替换成真实拷贝（dereference），拷贝时跳过
+ *  PRUNE_GLOB。返回被实体化的相对路径列表。产物里绝不能留链接：NSIS 会顺着它把开发机
+ *  的整棵树打进包（filter 形同虚设），而 fs.rm 顺着它删则会伤到开发机源码树。 */
+function materializeLinks(root, res) {
+  const done = [];
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+    for (const ent of ents) {
+      const abs = path.join(dir, ent.name);
+      if (ent.isSymbolicLink()) {
+        let target;
+        try { target = fs.realpathSync(abs); } catch (e) { continue; }
+        if (!fs.statSync(target).isDirectory()) continue;
+        const relLink = path.relative(res, abs);
+        try { fs.unlinkSync(abs); } catch (e) { fs.rmdirSync(abs); }
+        fs.cpSync(target, abs, {
+          recursive: true,
+          dereference: true,
+          filter: (src) => !isPruned(path.join(relLink, path.relative(target, src))),
+        });
+        done.push(`${relLink} ← ${target}`);
+        stack.push(abs);
+      } else if (ent.isDirectory()) {
+        stack.push(abs);
+      }
+    }
+  }
+  return done;
+}
+exports.materializeLinks = materializeLinks;
+
 // 绝不能随包的东西：本机生产号的登录凭据 / 日志。随包＝把自己的 WhatsApp 账号
 // 连同会话密钥发给每一个下载用户（同 protocol_media 那次隐私事故）。
 const FORBIDDEN = [
@@ -211,6 +322,22 @@ const SEED_REQUIRED = [
 exports.default = async function afterPack(context) {
   const res = resourcesDir(context);
   const missing = [];
+  for (const line of materializeLinks(context.appOutDir, res)) {
+    console.log(`[after-pack] ⇢ 实体化链接 ${line}`);
+  }
+  for (const [dir, prefix, what] of PRUNE_GLOB) {
+    const abs = path.join(res, dir);
+    let names = [];
+    try { names = fs.readdirSync(abs).filter((n) => n.startsWith(prefix)); } catch (e) { names = []; }
+    for (const n of names) {
+      const victim = path.join(abs, n);
+      if (fs.lstatSync(victim).isSymbolicLink()) {
+        throw new Error(`[after-pack] ${path.join(dir, n)} 仍是链接，拒绝顺着它删开发机文件`);
+      }
+      fs.rmSync(victim, { recursive: true, force: true });
+      console.log(`[after-pack] ✂ 剪掉 ${path.join(dir, n)}（${what}）`);
+    }
+  }
   for (const [rel, what, impact] of REQUIRED) {
     if (!fs.existsSync(path.join(res, rel))) {
       missing.push(`  · 缺 ${rel}（${what}）→ ${impact}`);
@@ -281,5 +408,17 @@ exports.default = async function afterPack(context) {
       `resources=${res}`
     );
   }
+  const lengths = walkRelLengths(context.appOutDir);
+  const tooLong = lengths.filter(([n]) => n > exports.MAX_REL_PATH);
+  if (tooLong.length) {
+    throw new Error(
+      `[after-pack] ${tooLong.length} 条包内路径超过 ${exports.MAX_REL_PATH} 字符` +
+      `（安装前缀预算 ${INSTALL_PREFIX_BUDGET} + 相对路径 > ${MAX_FULL_PATH}，NSIS 升级时删不掉 → 弹「无法关闭」）：\n` +
+      tooLong.slice(0, 10).map(([n, rel]) => `  · ${n} ${rel}`).join("\n") + "\n" +
+      "剪掉该子树（PRUNE_GLOB）或缩短路径，不要放行。"
+    );
+  }
+  const longest = lengths.length ? lengths[0] : [0, ""];
+  console.log(`[after-pack] ✓ 路径长度门禁：最长 ${longest[0]}/${exports.MAX_REL_PATH}（${longest[1]}）`);
   console.log(`[after-pack] ✓ 随包交付物齐备（${REQUIRED.length} 项）：${res}`);
 };
