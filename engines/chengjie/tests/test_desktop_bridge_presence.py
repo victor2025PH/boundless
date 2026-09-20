@@ -58,6 +58,21 @@ def test_bridge_presence_carries_readable_bit():
     assert bridge_presence(meta_old, now=1001.0)["readable"] is None
 
 
+def test_bridge_presence_carries_freeze_reason_and_identity():
+    """「副驾在线但不回」要能说成人话：冻结原因 / 剩余秒数 / 会话级冻结数；双开时靠昵称/微信号分账号。"""
+    st = {"frozen_until": 1600.0, "freeze_reason": "logged_out", "chat_frozen": 2,
+          "account_nick": "小北", "account_wxid": "xb_2020"}
+    meta = {"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "auto_reply", "stats": st}, now=1000.0)}
+    p = bridge_presence(meta, now=1000.0)
+    assert p["frozen"] is True and p["freeze_reason"] == "logged_out" and p["freeze_remaining_sec"] == 600
+    assert p["chat_frozen"] == 2 and p["account_nick"] == "小北" and p["account_wxid"] == "xb_2020"
+    # 冻结到期 → 原因清空（老心跳里残留的 reason 不再展示）
+    p2 = bridge_presence(meta, now=1700.0)
+    assert p2["frozen"] is False and p2["freeze_reason"] == "" and p2["freeze_remaining_sec"] == 0
+    old = bridge_presence({"bridge_heartbeat": heartbeat_meta({"bridge": "pcui"}, now=1000.0)}, now=1001.0)
+    assert old["frozen"] is False and old["chat_frozen"] == 0 and old["account_nick"] == ""
+
+
 def test_bridge_presence_alive_window():
     meta = {"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "semi"}, now=1000.0)}
     fresh = bridge_presence(meta, now=1000.0 + 30)

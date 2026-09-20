@@ -31,7 +31,7 @@ from src.integrations.wechat_pc.identity import (
     ChatIdentityCache, chat_key_kind, is_group_title, normalize_display_name,
 )
 from src.integrations.wechat_pc.policy import PcPolicy, caps_relaxed, may_send, resolve_policy
-from src.integrations.wechat_pc.risk_screens import NONE, assess
+from src.integrations.wechat_pc.risk_screens import NONE, assess, disposition_for
 from src.integrations.wechat_pc.send_guard import GuardedSender, SendOutcome, verify_title
 
 logger = logging.getLogger(__name__)
@@ -246,6 +246,9 @@ class ServiceStats:
     errors: int = 0
     last_disposition: str = NONE
     frozen_until: float = 0.0
+    freeze_reason: str = ""         # 当前生效的账号级冻结原因（登录窗 / guard_echo / limit …）；"" ＝ 未冻结
+    chat_freezes: int = 0           # 会话级冻结次数（单个会话守卫失败，只停这个人）
+    chat_frozen: int = 0            # 此刻仍在冻结中的会话数
     offline: bool = False
     voice_ready: bool = False     # 「发语音」锚点在 + 虚拟声卡通路就绪（后端据此决定要不要给这台机排语音）
     voice_sent: int = 0
@@ -328,6 +331,16 @@ class WeChatPcService:
         # 分条形同虚设。min_gap 是「等一会就行」的瞬态原因，不该当永久失败。
         self._deferred: Dict[int, Dict[str, Any]] = {}
         self._deferred_since: Dict[int, float] = {}
+        # 账号级冻结按来源分别记到期时刻（reason → until）：登录窗这类「状态解除即恢复」的来源可以单独解冻，
+        # 不会顺手把限频 2h / 环境异常 24h 这种真风控信号也解掉
+        self._freezes: Dict[str, float] = {}
+        # 会话级冻结（chat_key → until）与近期守卫失败时刻：单个会话发不出去只停它，多个会话接连失败才停账号
+        self._chat_frozen_until: Dict[str, float] = {}
+        self._guard_fail_at: List[float] = []
+
+    #: 守卫失败升级为账号级冻结的判据：GUARD_FAIL_WINDOW_SEC 内 ≥ GUARD_FAIL_ESCALATE 个**不同会话**失败
+    GUARD_FAIL_ESCALATE = 2
+    GUARD_FAIL_WINDOW_SEC = 900.0
 
     #: 瞬态拒发本地挂起的上限：队列对「认领未回执」的命令 180s 后自动回收重派，挂起必须明显短于它，
     #: 否则同一条命令会被驱动与队列两头处理。超过上限仍发不出去 → 按原样回执 policy:min_gap。
@@ -378,31 +391,99 @@ class WeChatPcService:
         except Exception:
             logger.debug("[wechat_pc] notify 失败", exc_info=True)
 
+    def _sync_freeze_stats(self) -> None:
+        now = self._now()
+        for k in [k for k, until in self._freezes.items() if until <= now]:
+            self._freezes.pop(k, None)
+        if self._freezes:
+            reason, until = max(self._freezes.items(), key=lambda kv: kv[1])
+            self.stats.frozen_until, self.stats.freeze_reason = until, reason
+        else:
+            self.stats.frozen_until, self.stats.freeze_reason = 0.0, ""
+        for k in [k for k, until in self._chat_frozen_until.items() if until <= now]:
+            self._chat_frozen_until.pop(k, None)
+        self.stats.chat_frozen = len(self._chat_frozen_until)
+
     def frozen(self) -> bool:
+        self._sync_freeze_stats()
         return self._now() < self.stats.frozen_until
 
     def freeze(self, seconds: float, reason: str) -> None:
         if seconds <= 0:
             return
-        self.stats.frozen_until = max(self.stats.frozen_until, self._now() + float(seconds))
+        reason = str(reason or "manual")[:64]
+        until = self._now() + float(seconds)
+        self._freezes[reason] = max(self._freezes.get(reason, 0.0), until)
+        self._sync_freeze_stats()
         logger.warning("[wechat_pc] 自动发送冻结 %.0fs（%s）", seconds, reason)
+
+    def release_freeze(self, reason: str) -> bool:
+        """解除某一来源的账号级冻结（登录窗关了 / 手机确认完了）；其它来源不受影响。返回是否真有东西被解掉。"""
+        hit = self._freezes.pop(str(reason or "")[:64], None) is not None
+        self._sync_freeze_stats()
+        if hit:
+            logger.info("[wechat_pc] 解除冻结（%s）", reason)
+        return hit
+
+    def chat_frozen(self, chat_key: str) -> bool:
+        until = self._chat_frozen_until.get(chat_key, 0.0)
+        if until and self._now() < until:
+            return True
+        if until:
+            self._chat_frozen_until.pop(chat_key, None)
+            self.stats.chat_frozen = len(self._chat_frozen_until)
+        return False
+
+    def freeze_chat(self, chat_key: str, seconds: float, reason: str) -> None:
+        if seconds <= 0 or not chat_key:
+            return
+        self._chat_frozen_until[chat_key] = max(self._chat_frozen_until.get(chat_key, 0.0), self._now() + float(seconds))
+        self.stats.chat_freezes += 1
+        self.stats.chat_frozen = len(self._chat_frozen_until)
+        logger.warning("[wechat_pc] 会话冻结 %.0fs chat=%s（%s）", seconds, chat_key, reason)
+
+    def _on_guard_failure(self, chat_key: str, stage: str, reason: str) -> None:
+        """守卫失败的处置。``cancel``（录音态卡住，之后连文字都发不出去）→ 账号级冻结；
+        title/send/echo 只证明**这个会话**发不出去/发错 → 先冻这个会话；窗口内多个不同会话接连失败
+        才说明是整个微信出了问题（窗口被挡 / 版本变了 / 控件树坏了）→ 升级为账号级冻结。"""
+        self.stats.guard_freezes += 1
+        if stage == "cancel":
+            self.freeze(self.freeze_on_guard_fail_sec, f"guard_{stage}")
+            self._emit_notify("voice_recording_stuck", f"{stage}:{reason}")
+            return
+        now = self._now()
+        self.freeze_chat(chat_key, self.freeze_on_guard_fail_sec, f"guard_{stage}")
+        self._guard_fail_at = [t for t in self._guard_fail_at if now - t <= self.GUARD_FAIL_WINDOW_SEC] + [now]
+        distinct = len([k for k in self._chat_frozen_until if k != chat_key]) + 1
+        if len(self._guard_fail_at) >= self.GUARD_FAIL_ESCALATE and distinct >= self.GUARD_FAIL_ESCALATE:
+            self.freeze(self.freeze_on_guard_fail_sec, f"guard_{stage}")
+            self._emit_notify("guard_freeze", f"{stage}:{reason}")
+        else:
+            self._emit_notify("guard_chat_freeze", f"{chat_key}:{stage}:{reason}")
 
     def _inspect_screen(self) -> bool:
         """返回是否可以继续读屏（窗口在且已登录）。"""
         st = self.backend.screen_state()
         disp = assess(st.dialog_texts, window_class=st.window_class)
-        if disp.kind != NONE and disp.kind != self.stats.last_disposition:
+        prev = self.stats.last_disposition
+        if disp.kind != NONE and disp.kind != prev:
             self.stats.screen_events += 1
             if disp.freeze_sends:
-                # TTL=0 的（登录窗/手机确认/需更新）按「直到状态解除」处理：先冻 1h，下轮仍在则续
+                # TTL=0 的（登录窗/手机确认/需更新）＝「直到状态解除」：先冻 1h，状态还在就续，状态解除即解冻
                 self.freeze(disp.freeze_ttl_sec or 3600.0, disp.kind)
             if disp.mark_offline:
                 self.stats.offline = True
             if disp.notify_owner:
                 self._emit_notify(disp.kind, " | ".join(st.dialog_texts)[:200])
-        if disp.kind == NONE and self.stats.last_disposition != NONE:
+        elif disp.kind != NONE and disp.freeze_sends and not disp.freeze_ttl_sec:
+            self.freeze(3600.0, disp.kind)
+        if disp.kind == NONE and prev != NONE:
             self.stats.offline = False
-            self._emit_notify("recovered", self.stats.last_disposition)
+            prev_disp = disposition_for(prev)
+            if prev_disp.freeze_sends and not prev_disp.freeze_ttl_sec:
+                # 登录窗关了 / 手机确认完了：解除的是这一来源的冻结，限频/环境异常等带 TTL 的风控信号照旧等到期
+                self.release_freeze(prev)
+            self._emit_notify("recovered", prev)
         self.stats.last_disposition = disp.kind
         readable = bool(st.window_present and st.logged_in and not disp.readonly)
         # 启动时微信收在托盘/未登录 → 自检失败被锁只读；之后窗口回来了要重新自检解锁（否则永远只读）
@@ -813,13 +894,13 @@ class WeChatPcService:
         done = 0
         for pos, it in enumerate(items):
             item_id = int(it.get("id") or 0)
-            if self.frozen():
-                # 本轮前面的命令触发了守卫冻结：已认领的剩余命令立刻回执失败进人审队列，
+            chat_key = str(it.get("chat_key") or "")
+            if self.frozen() or self.chat_frozen(chat_key):
+                # 本轮前面的命令触发了守卫冻结（账号级或就这个会话）：已认领的剩余命令立刻回执失败进人审队列，
                 # 而不是等 180s 自动回收再盲重试
                 self._forget_deferred(item_id)
                 self.bridge.ack(item_id, False, "guard:frozen")
                 continue
-            chat_key = str(it.get("chat_key") or "")
             text = str(it.get("text") or "")
             kind = str(it.get("kind") or "text")
             self._roll_day()
@@ -898,13 +979,9 @@ class WeChatPcService:
             logger.warning("[wechat_pc] 发送失败 id=%s kind=%s chat=%s stage=%s reason=%s elapsed=%sms trace=%s",
                            item_id, kind, chat_key, out.stage, out.reason, out.elapsed_ms, out.trace)
             self.bridge.ack(item_id, False, f"guard:{out.stage}:{out.reason}")
-            # 语音的 record/play 步失败（声卡没就绪/媒体拿不到/进不了录音态）是本机能力问题、没碰到会话，不冻结；
-            # ``cancel`` 步失败＝录音态卡住，之后连文字都发不出去 → 与 title/send/echo 同等冻结并通知主人
+            # 语音的 record/play 步失败（声卡没就绪/媒体拿不到/进不了录音态）是本机能力问题、没碰到会话，不冻结
             if out.stage in ("title", "send", "echo", "cancel"):
-                self.stats.guard_freezes += 1
-                self.freeze(self.freeze_on_guard_fail_sec, f"guard_{out.stage}")
-                self._emit_notify("guard_freeze" if out.stage != "cancel" else "voice_recording_stuck",
-                                  f"{out.stage}:{out.reason}")
+                self._on_guard_failure(chat_key, out.stage, out.reason)
         return done
 
     # ── 一轮 ──
@@ -916,9 +993,11 @@ class WeChatPcService:
         try:
             if self.stats.voice_ready:
                 self._refresh_mic_busy()   # 每轮问一次（≈10ms）：后端据此决定这一刻要不要给这台机排语音
+            self._sync_freeze_stats()
             st = self.stats.as_dict()
             stats = {k: st.get(k) for k in ("ticks", "inbound", "sent", "denied", "deferred", "send_failed",
-                                             "unknown_direction", "frozen_until", "last_disposition", "offline",
+                                             "unknown_direction", "frozen_until", "freeze_reason", "chat_frozen",
+                                             "last_disposition", "offline",
                                              "last_readable", "voice_ready", "voice_sent", "voice_failed",
                                              "voice_mic_busy", "voice_mic_busy_by")}
             # 语音配额用量（今日已发 / 日上限）：工作台据此提示「今天语音快用完了」

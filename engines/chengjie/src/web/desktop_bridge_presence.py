@@ -15,7 +15,8 @@ from typing import Any, Dict, List, Optional
 ALIVE_WITHIN_SEC = 90.0
 TIERS = ("copilot", "semi", "auto_reply")
 _STAT_KEYS = ("ticks", "inbound", "sent", "denied", "send_failed", "unknown_direction",
-              "frozen_until", "last_disposition", "offline", "last_readable",
+              "frozen_until", "freeze_reason", "chat_frozen", "last_disposition", "offline", "last_readable",
+              "account_nick", "account_wxid", "window_hwnd", "window_pid",
               "voice_ready", "voice_sent", "voice_failed",
               # P2（2026-09-19）：麦克风被坐席占用（开会/通话）/ 今日语音配额用量 / 比默认宽松的配额项
               "voice_mic_busy", "voice_mic_busy_by", "voice_today", "voice_daily_cap", "caps_relaxed")
@@ -59,6 +60,11 @@ def bridge_presence(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
     readable = stats.get("last_readable")
     voice_ready = stats.get("voice_ready")
     mic_busy = stats.get("voice_mic_busy")
+    try:
+        frozen_until = float(stats.get("frozen_until") or 0.0)
+    except Exception:
+        frozen_until = 0.0
+    frozen = frozen_until > t
     return {
         "kind": str(hb.get("kind") or "desktop"),
         "tier": str(hb.get("tier") or "copilot"),
@@ -72,6 +78,14 @@ def bridge_presence(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
         # 坐席此刻正用麦（开会/通话）：能力在、但这一刻不该排语音；老驱动没这项 → False
         "voice_mic_busy": bool(mic_busy) if isinstance(mic_busy, bool) else False,
         "voice_mic_busy_by": str(stats.get("voice_mic_busy_by") or ""),
+        # 自动发送是否被冻结、为什么、还要多久：工作台据此把「副驾在线但不回」说成人话，而不是默默不发
+        "frozen": frozen,
+        "freeze_reason": str(stats.get("freeze_reason") or "") if frozen else "",
+        "freeze_remaining_sec": int(frozen_until - t) if frozen else 0,
+        "chat_frozen": int(stats.get("chat_frozen") or 0) if isinstance(stats.get("chat_frozen"), (int, float)) else 0,
+        # 真实登录身份（驱动从微信窗口读到的昵称/微信号）：双开时靠这个分清哪个账号；老驱动没有 → ""
+        "account_nick": str(stats.get("account_nick") or ""),
+        "account_wxid": str(stats.get("account_wxid") or ""),
         "stats": stats,
     }
 

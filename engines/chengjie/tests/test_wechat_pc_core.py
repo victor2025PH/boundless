@@ -567,12 +567,35 @@ def test_auto_reply_requires_recent_inbound_and_freezes_on_guard_failure():
     svc.tick()
     ack3 = next(a for a in br.acks if a[0] == 3)
     assert ack3[1] is False and ack3[2].startswith("guard:echo:")
-    assert svc.frozen() and svc.stats.guard_freezes == 1 and notes[-1][0] == "guard_freeze"
+    # 单个会话守卫失败 → 只冻这个会话，账号级不冻（别的人还能回）
+    assert svc.chat_frozen("wx:name:张三") and not svc.frozen()
+    assert svc.stats.guard_freezes == 1 and svc.stats.chat_freezes == 1 and notes[-1][0] == "guard_chat_freeze"
     ack4 = next(a for a in br.acks if a[0] == 4)
-    assert ack4 == (4, False, "guard:frozen"), "冻结后已认领的剩余命令立刻回执失败进人审"
+    assert ack4 == (4, False, "guard:frozen"), "冻结后这个会话已认领的剩余命令立刻回执失败进人审"
     assert fb.messages["张三"][-1].text == "在的", "冻结期间没有再往微信里发任何字"
+    svc.tick()
+    assert br.heartbeats[-1]["stats"]["chat_frozen"] == 1 and br.heartbeats[-1]["stats"]["freeze_reason"] == ""
     clock["t"] += 700
-    assert not svc.frozen()
+    assert not svc.chat_frozen("wx:name:张三") and not svc.frozen()
+
+
+def test_guard_failures_on_two_chats_escalate_to_account_freeze():
+    svc, fb, br, notes, clock = _svc("auto_reply")
+    fb.sessions = [SessionRow("张三", unread=1), SessionRow("李四", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    fb.messages["李四"] = [Bubble("在吗", runtime_id="2")]
+    svc.tick()
+    fb.echo_on_send = False
+    br.queue = [{"id": 1, "chat_key": "wx:name:张三", "text": "a", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    assert svc.chat_frozen("wx:name:张三") and not svc.frozen()
+    # 另一个会话也发不出去 → 不是某个人的问题，是整个微信的问题 → 升级账号级冻结并通知主人
+    br.queue = [{"id": 2, "chat_key": "wx:name:李四", "text": "b", "kind": "text"}]
+    clock["t"] += 30
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == "guard_echo" and notes[-1][0] == "guard_freeze"
+    assert br.heartbeats[-1]["stats"]["freeze_reason"] == "guard_echo"
 
 
 class FakeVoice:
@@ -866,16 +889,33 @@ def test_screen_disposition_freezes_and_notifies():
     assert s["readable"] is False and svc.stats.offline and svc.frozen()
     assert notes and notes[-1][0] == R.LOGGED_OUT
     # 登录恢复 → 解除 offline，通知恢复
+    assert svc.stats.freeze_reason == R.LOGGED_OUT and br.heartbeats[-1]["stats"]["freeze_reason"] == R.LOGGED_OUT
     fb.logged_in = True
     fb.window_class = "mmui::MainWindow"
     fb.dialogs = []
+    clock["t"] += 20
     svc.tick()
     assert not svc.stats.offline and notes[-1][0] == "recovered"
+    # 登录窗关了 → 那 1h 冻结随之解除（不再静默停发一小时）
+    assert not svc.frozen() and svc.stats.freeze_reason == ""
     # 限频弹窗：仍可读屏，但冻结发送 2h
     fb.dialogs = ["操作过于频繁，请稍后再试"]
     clock["t"] += 5000
     s2 = svc.tick()
     assert s2["readable"] is True and svc.stats.frozen_until >= clock["t"] + 7000
+    # 限频带 TTL（真风控信号）：弹窗消失也不提前解冻；中途再弹登录窗并恢复，只解登录窗那一份
+    fb.dialogs = []
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == R.LIMIT
+    fb.logged_in = False
+    fb.window_class = "mmui::LoginWindow"
+    fb.dialogs = ["进入WeChat"]
+    svc.tick()
+    fb.logged_in = True
+    fb.window_class = "mmui::MainWindow"
+    fb.dialogs = []
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == R.LIMIT
 
 
 def test_bubble_fingerprint_is_content_based_not_runtime_id():
