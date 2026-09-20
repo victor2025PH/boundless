@@ -62,6 +62,8 @@ ANCHORS: Dict[str, Dict[str, Any]] = {
     "profile_popup": {"class": [PROFILE_POPUP_CLASS]},
     "profile_wxid_key": {"name": ["微信号：", "微信号:", "WeChat ID:", "WeChat ID："], "type": "TextControl"},
     "profile_value": {"class": ["mmui::ProfileTextView"], "type": "TextControl"},
+    # 左侧导航栏本人头像（点开是本人资料卡）：类名/aid 随版本变，按包含匹配；不中时回落几何（会话列表左侧最上方的按钮）
+    "self_avatar": {"class": ["Avatar", "HeadImage", "HeadView", "Portrait"], "type": "ButtonControl"},
     # ── 语音（2026-09-19 微信 4.1.13 真机探针）──
     # 输入区右侧工具栏 aid ``tool_bar_accessible.chatinput_toolbar_right_view``（``mmui::ChatInputToolbarRightView``），
     # 闲态含「发语音 ( 按住右 Alt )」（``mmui::XButton``，Name 带热键文案随语言/版本变 → 按前缀匹配，
@@ -372,7 +374,8 @@ def classify_bubble_direction(ref: Optional[int], left_zone: List[int], right_zo
 class UiaBackend:
     """真机后端。构造不触碰 UIA；首次调用时枚举。"""
 
-    def __init__(self, anchors: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
+    def __init__(self, anchors: Optional[Dict[str, Dict[str, Any]]] = None, *,
+                 hwnd: int = 0, pid: int = 0) -> None:
         self.anchors = dict(ANCHORS)
         if anchors:
             for k, v in anchors.items():
@@ -384,6 +387,13 @@ class UiaBackend:
         # 按位置记基线时新顶上来的格没有基线、被顶下去的格反而误报——真机实锤）
         self._last_raw_names: set = set()
         self._main_hwnd = 0
+        # 窗口绑定（2026-09-21 P0-2，双开微信串号事故）：一个驱动实例只看**一个** weixin.exe 的窗口。
+        # ``bind_hwnd``/``bind_pid`` 是启动时显式绑的（不命中就当没窗，绝不换号）；都没绑时首次看到主窗就锤定它的
+        # pid（``_main_pid``），之后另一个微信启动/枚举次序变化都不会把它带到别人的窗口上；那个进程没了（微信重启）才重新锚定。
+        self.bind_hwnd = int(hwnd or 0)
+        self.bind_pid = int(pid or 0)
+        self._main_pid = 0
+        self.main_window_count = 0
         self._last_check = 0.0
         # 播放期间提前定位到的「发送语音」按钮（控件, 定位时刻）；finish_voice_record 先点它，省掉播完后的 UIA 遍历
         self._primed_voice_send: Optional[Tuple[Any, float]] = None
@@ -391,15 +401,49 @@ class UiaBackend:
         self._fast_find_proven = False
 
     # ── 窗口发现（Win32 → UIA） ──
-    def _qt_windows(self) -> List[Any]:
-        if not available():
-            return []
+    @property
+    def bound(self) -> bool:
+        """启动时显式绑了窗口/进程（双开时没绑 = 靠首见锚定，工作台要提醒主人绑一下）。"""
+        return bool(self.bind_hwnd or self.bind_pid)
+
+    def _target_pid(self, wins: List[Any]) -> int:
+        """这轮枚举里本实例该看的进程；0 = 不限（还没主窗，如只有登录窗）；-1 = 绑了但目标不在（什么都不看）。"""
+        from src.integrations.wechat_pc.win32_windows import main_windows
+        mains = main_windows(wins)
+        self.main_window_count = len(mains)
+        if self.bind_hwnd:
+            hit = next((w for w in wins if w.hwnd == self.bind_hwnd), None)
+            if hit is not None:
+                self.bind_pid = self.bind_pid or hit.pid   # 句柄会随退登/重登换，进程不会：首次命中就记下 pid
+                return hit.pid
+            if not self.bind_pid:
+                return -1
+        if self.bind_pid:
+            return self.bind_pid
+        if self._main_pid and any(w.pid == self._main_pid for w in wins):
+            return self._main_pid
+        self._main_pid = mains[0].pid if mains else 0
+        return self._main_pid
+
+    def _bound_windows(self) -> List[Any]:
+        """可见的微信顶层窗（:class:`TopWindow`），已按绑定过滤到单个进程。"""
         try:
             from src.integrations.wechat_pc.win32_windows import find_wechat_windows
         except Exception:
             return []
+        wins = find_wechat_windows(visible_only=True)
+        pid = self._target_pid(wins)
+        if pid < 0:
+            return []
+        if pid:
+            wins = [w for w in wins if w.pid == pid]
+        return wins
+
+    def _qt_windows(self) -> List[Any]:
+        if not available():
+            return []
         out: List[Any] = []
-        for w in find_wechat_windows(visible_only=True):
+        for w in self._bound_windows():
             if not w.class_name.startswith("Qt"):
                 continue
             try:
@@ -419,6 +463,14 @@ class UiaBackend:
                     pass
                 return c
         return None
+
+    def main_pid(self) -> int:
+        """当前盯的 weixin.exe 进程号（没有 → 0）；心跳带给工作台分账号用。"""
+        return int(self.bind_pid or self._main_pid or 0)
+
+    def window_binding(self) -> Dict[str, Any]:
+        return {"window_hwnd": int(self._main_hwnd or 0), "window_pid": self.main_pid(),
+                "window_bound": self.bound, "main_windows": int(self.main_window_count)}
 
     def _find(self, root: Any, key: str, limit: int = 1, max_depth: int = 26) -> List[Any]:
         spec = self.anchors.get(key) or {}
@@ -450,6 +502,7 @@ class UiaBackend:
             return rep
         win = self._main_window()
         rep["window"] = win is not None
+        rep.update(self.window_binding())
         if win is None:
             self.missing_anchors = list(REQUIRED_FOR_SEND)
             rep["missing"] = self.missing_anchors
@@ -1039,6 +1092,90 @@ class UiaBackend:
             except Exception:
                 pass
         return wxid
+
+    def _self_avatar(self, main: Any) -> Optional[Any]:
+        """导航栏本人头像按钮：必须在会话列表左侧（排除会话格内头像与右侧资料栏的对方头像），取最上方的一个。"""
+        lists = self._find(main, "session_list")
+        try:
+            limit_x = int(lists[0].BoundingRectangle.left) if lists else int(main.BoundingRectangle.left) + 90
+        except Exception:
+            return None
+
+        def _left_of_list(c: Any) -> Optional[Tuple[int, int]]:
+            try:
+                r = c.BoundingRectangle
+                if r.right <= limit_x and r.right > r.left and r.bottom > r.top:
+                    return (int(r.top), int(r.left))
+            except Exception:
+                pass
+            return None
+
+        best: List[Tuple[Tuple[int, int], Any]] = []
+        for c in self._find(main, "self_avatar", limit=8):
+            pos = _left_of_list(c)
+            if pos is not None:
+                best.append((pos, c))
+        if not best:
+            deadline = time.monotonic() + UIA_OP_TIMEOUT
+            for c in _walk(main, 12):
+                if time.monotonic() > deadline:
+                    break
+                if getattr(c, "ControlTypeName", "") != "ButtonControl":
+                    continue
+                pos = _left_of_list(c)
+                if pos is not None:
+                    best.append((pos, c))
+        return min(best, key=lambda x: x[0])[1] if best else None
+
+    def read_self_identity(self) -> Dict[str, str]:
+        """登录微信的昵称/微信号（点导航栏头像 → 本人资料卡）；读不到的键为空串。弹窗用完即关。"""
+        out = {"nick": "", "wxid": ""}
+        main = self._main_window()
+        if main is None:
+            return out
+        before = set()
+        for c in self._qt_windows():
+            try:
+                before.add(int(c.NativeWindowHandle))
+            except Exception:
+                pass
+        avatar = self._self_avatar(main)
+        if avatar is None:
+            return out
+        try:
+            self._activate(main)
+            avatar.Click(simulateMove=True)
+            time.sleep(1.2)
+            popup = None
+            for c in self._qt_windows():
+                try:
+                    h = int(c.NativeWindowHandle)
+                except Exception:
+                    continue
+                if h not in before and (_s(getattr(c, "ClassName", "")) == PROFILE_POPUP_CLASS or popup is None):
+                    popup = c
+            if popup is not None:
+                out["wxid"] = self._wxid_from_profile(popup)
+                out["nick"] = self._nick_from_profile(popup, out["wxid"])
+        except Exception:
+            logger.debug("[wechat_pc.uia] 读本人资料卡失败", exc_info=True)
+        finally:
+            self._close_popups(before)
+        return out
+
+    def _nick_from_profile(self, popup: Any, wxid: str) -> str:
+        """资料卡里的昵称：第一条既不是字段标签（「微信号：」…）也不是微信号本身的非空文本。"""
+        labels = set(self.anchors["profile_wxid_key"]["name"])
+        for c in _walk(popup, 24):
+            if getattr(c, "ControlTypeName", "") != "TextControl":
+                continue
+            name = _s(getattr(c, "Name", "")).strip()
+            if not name or name in labels or name.rstrip("：:").endswith(("微信号", "WeChat ID", "地区", "Region")):
+                continue
+            if wxid and parse_wxid(name) == wxid:
+                continue
+            return name[:64]
+        return ""
 
     def _wxid_from_profile(self, popup: Any) -> str:
         nodes = [c for c in _walk(popup, 24) if getattr(c, "ControlTypeName", "") == "TextControl"]

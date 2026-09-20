@@ -58,6 +58,19 @@ def test_bridge_presence_carries_readable_bit():
     assert bridge_presence(meta_old, now=1001.0)["readable"] is None
 
 
+def test_bridge_presence_flags_multi_wechat_without_binding():
+    """桌面上两个微信主窗而驱动没绑 → 工作台该提醒主人绑窗；绑了 / 单开 → 不提醒。"""
+    def _p(st):
+        return bridge_presence({"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "stats": st}, now=1000.0)}, now=1001.0)
+    p = _p({"window_hwnd": 1001, "window_pid": 501, "window_bound": False, "main_windows": 2})
+    assert p["window_pid"] == 501 and p["main_windows"] == 2 and p["window_bound"] is False
+    assert p["multi_wechat_unbound"] is True
+    assert _p({"window_pid": 501, "window_bound": True, "main_windows": 2})["multi_wechat_unbound"] is False
+    assert _p({"window_pid": 501, "window_bound": False, "main_windows": 1})["multi_wechat_unbound"] is False
+    old = _p({})
+    assert old["window_pid"] == 0 and old["main_windows"] == 0 and old["multi_wechat_unbound"] is False
+
+
 def test_bridge_presence_carries_freeze_reason_and_identity():
     """「副驾在线但不回」要能说成人话：冻结原因 / 剩余秒数 / 会话级冻结数；双开时靠昵称/微信号分账号。"""
     st = {"frozen_until": 1600.0, "freeze_reason": "logged_out", "chat_frozen": 2,
@@ -71,6 +84,12 @@ def test_bridge_presence_carries_freeze_reason_and_identity():
     assert p2["frozen"] is False and p2["freeze_reason"] == "" and p2["freeze_remaining_sec"] == 0
     old = bridge_presence({"bridge_heartbeat": heartbeat_meta({"bridge": "pcui"}, now=1000.0)}, now=1001.0)
     assert old["frozen"] is False and old["chat_frozen"] == 0 and old["account_nick"] == ""
+    assert old["account_bound_wxid"] == "" and old["account_mismatch"] is False
+    # 窗里登的不是绑定的号 → 工作台要能指出来（并说明发送已冻结）
+    st2 = {"account_wxid": "xn_1999", "account_bound_wxid": "xb_2020", "account_mismatch": True,
+           "frozen_until": 4600.0, "freeze_reason": "account_mismatch"}
+    p3 = bridge_presence({"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "stats": st2}, now=1000.0)}, now=1000.0)
+    assert p3["account_mismatch"] is True and p3["account_bound_wxid"] == "xb_2020" and p3["freeze_reason"] == "account_mismatch"
 
 
 def test_bridge_presence_alive_window():

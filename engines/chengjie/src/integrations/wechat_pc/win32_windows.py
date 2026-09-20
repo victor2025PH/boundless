@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 WECHAT_PROCESS_NAMES = ("weixin.exe", "wechat.exe")
+MAIN_WINDOW_CLASS = "mmui::MainWindow"
 
 
 @dataclass
@@ -83,12 +84,33 @@ def find_wechat_windows(*, visible_only: bool = False) -> List[TopWindow]:
     return enum_top_windows(WECHAT_PROCESS_NAMES, visible_only=visible_only)
 
 
-def find_wechat_main_hwnd() -> int:
-    """可见的 ``mmui::MainWindow``（多个时取第一个）；没有返回 0。"""
-    for w in find_wechat_windows(visible_only=True):
-        if w.class_name == "mmui::MainWindow":
-            return w.hwnd
-    return 0
+def main_windows(windows: List[TopWindow]) -> List[TopWindow]:
+    return [w for w in windows if w.class_name == MAIN_WINDOW_CLASS]
+
+
+def select_main_window(windows: List[TopWindow], *, hwnd: int = 0, pid: int = 0) -> Optional[TopWindow]:
+    """在枚举结果里挑**这一个**驱动实例该盯的主窗（纯函数）。
+
+    双开微信 = 两个 ``weixin.exe`` 各一个 ``mmui::MainWindow``。绑定优先级：``hwnd`` 精确命中 → ``pid``
+    同进程的主窗 → 都没绑才回落「第一个」（单开兼容）。绑了但没命中 → None（绝不悄悄换到另一个账号的窗口）。
+    """
+    mains = main_windows(windows)
+    if hwnd:
+        return next((w for w in mains if w.hwnd == int(hwnd)), None)
+    if pid:
+        return next((w for w in mains if w.pid == int(pid)), None)
+    return mains[0] if mains else None
+
+
+def find_wechat_main_windows() -> List[TopWindow]:
+    """所有可见的 ``mmui::MainWindow``（一个进程一个）——个数 >1 即双开。"""
+    return main_windows(find_wechat_windows(visible_only=True))
+
+
+def find_wechat_main_hwnd(*, hwnd: int = 0, pid: int = 0) -> int:
+    """可见的 ``mmui::MainWindow`` 句柄；可按 ``hwnd``/``pid`` 绑定（见 :func:`select_main_window`）；没有返回 0。"""
+    w = select_main_window(find_wechat_windows(visible_only=True), hwnd=hwnd, pid=pid)
+    return w.hwnd if w else 0
 
 
 def find_wechat_login_hwnd() -> int:
@@ -99,4 +121,5 @@ def find_wechat_login_hwnd() -> int:
 
 
 __all__ = ["TopWindow", "enum_top_windows", "find_wechat_windows", "find_wechat_main_hwnd",
-           "find_wechat_login_hwnd", "WECHAT_PROCESS_NAMES"]
+           "find_wechat_main_windows", "select_main_window", "main_windows",
+           "find_wechat_login_hwnd", "WECHAT_PROCESS_NAMES", "MAIN_WINDOW_CLASS"]

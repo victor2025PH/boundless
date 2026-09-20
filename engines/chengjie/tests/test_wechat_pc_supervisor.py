@@ -63,6 +63,19 @@ def test_build_driver_command_has_no_tier_and_no_token():
                                                         config_file="", state_dir="s", connected_days=30)
 
 
+def test_build_driver_command_passes_window_binding_only_when_given():
+    kw = dict(python_exe="p", backend_url="u", account_id="a", label="l", config_file="", state_dir="s", frozen=False)
+    cmd = S.build_driver_command(**kw)
+    assert "--hwnd" not in cmd and "--pid" not in cmd
+    cmd = S.build_driver_command(window_pid=502, **kw)
+    assert cmd[cmd.index("--pid") + 1] == "502" and "--hwnd" not in cmd
+    cmd = S.build_driver_command(window_hwnd=1001, **kw)
+    assert cmd[cmd.index("--hwnd") + 1] == "1001" and "--pid" not in cmd
+    assert "--expect-wxid" not in S.build_driver_command(expect_wxid="  ", **kw)
+    cmd = S.build_driver_command(expect_wxid="xb_2020", **kw)
+    assert cmd[cmd.index("--expect-wxid") + 1] == "xb_2020"
+
+
 def test_build_driver_command_frozen_uses_backend_exe_flag_not_dash_m():
     """打包态（PyInstaller backend.exe）没有 `python -m`：命令必须是 `backend.exe --wechat-pc-driver …`，
     且 main.py 首参分流到驱动入口（否则起出来的是第二个后端）。"""

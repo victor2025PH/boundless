@@ -333,6 +333,25 @@ def test_first_reply_cfg_defaults_follow_profile():
     assert c["enabled"] and c["silence_hours"] == 2.0 and c["min_sec"] == 10.0 and c["max_sec"] == 10.0
 
 
+def test_first_reply_wechat_pc_defaults_to_fast_hold_unless_configured():
+    """微信 PC 副驾（platform=wechat）全自动档：首回 hold 出厂 5–20s（其它渠道仍 60–300s）；
+    显式 first_reply / platform_overrides.wechat.first_reply 仍优先。"""
+    blk = {"profile": "natural"}
+    wx = resolve_first_reply_cfg(blk, platform="wechat")
+    assert wx["enabled"] and (wx["min_sec"], wx["max_sec"], wx["silence_hours"]) == (5.0, 20.0, 6.0)
+    tg = resolve_first_reply_cfg(blk, platform="telegram")
+    assert (tg["min_sec"], tg["max_sec"]) == (60.0, 300.0)
+    assert resolve_first_reply_cfg(blk)["min_sec"] == 60.0
+    for i in range(20):
+        assert 5.0 <= first_reply_hold_sec(wx, silence_sec=None, key=f"wx#{i}") <= 20.0
+    # 主人显式配了就听主人的（全局 first_reply / 平台覆写层）
+    c = resolve_first_reply_cfg({"profile": "natural", "first_reply": {"min_sec": 30, "max_sec": 90}}, platform="wechat")
+    assert (c["min_sec"], c["max_sec"]) == (30.0, 90.0)
+    c2 = resolve_first_reply_cfg(
+        {"profile": "natural", "platform_overrides": {"wechat": {"first_reply": {"enabled": False}}}}, platform="wechat")
+    assert c2["enabled"] is False
+
+
 def test_silence_before_inbound_cases():
     t0 = 1_700_000_000.0
     # 首次接触：只有入站

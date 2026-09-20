@@ -104,7 +104,8 @@ FROZEN_DRIVER_FLAG = "--wechat-pc-driver"
 
 def build_driver_command(*, python_exe: str, backend_url: str, account_id: str, label: str, config_file: str,
                          state_dir: str, interval: float = 3.0, connected_days: float = -1.0,
-                         frozen: Optional[bool] = None) -> List[str]:
+                         frozen: Optional[bool] = None, window_hwnd: int = 0, window_pid: int = 0,
+                         expect_wxid: str = "") -> List[str]:
     """驱动子进程命令行（纯函数）：不带 ``--tier``（配置文件权威 + 热生效）、不带令牌（环境变量）。
 
     ``frozen``（默认取 ``sys.frozen``）：打包态 ``sys.executable`` 是 PyInstaller 的 ``backend.exe``，
@@ -123,6 +124,13 @@ def build_driver_command(*, python_exe: str, backend_url: str, account_id: str, 
         cmd += ["--config", config_file]
     if connected_days >= 0:
         cmd += ["--connected-days", str(float(connected_days))]
+    # 双开微信：每个驱动实例绑死一个窗/进程（不绑时驱动首见主窗即锚定）
+    if int(window_hwnd or 0) > 0:
+        cmd += ["--hwnd", str(int(window_hwnd))]
+    if int(window_pid or 0) > 0:
+        cmd += ["--pid", str(int(window_pid))]
+    if str(expect_wxid or "").strip():
+        cmd += ["--expect-wxid", str(expect_wxid).strip()]
     return cmd
 
 
@@ -135,6 +143,7 @@ class WeChatPcSupervisor:
                  env_provider: Optional[Callable[[], Dict[str, Any]]] = None,
                  driver_ready_provider: Optional[Callable[[], Dict[str, Any]]] = None,
                  python_exe: str = "", autostart: bool = False, interval: float = 3.0,
+                 window_hwnd: int = 0, window_pid: int = 0, expect_wxid: str = "",
                  popen: Callable[..., Any] = subprocess.Popen, now: Callable[[], float] = time.time) -> None:
         self.engine_root = str(engine_root)
         self.backend_url = str(backend_url).rstrip("/")
@@ -149,6 +158,9 @@ class WeChatPcSupervisor:
         self.python_exe = str(python_exe or sys.executable)
         self.autostart = bool(autostart)
         self.interval = float(interval)
+        self.window_hwnd = int(window_hwnd or 0)
+        self.window_pid = int(window_pid or 0)
+        self.expect_wxid = str(expect_wxid or "").strip()
         self._popen = popen
         self._now = now
 
@@ -241,6 +253,10 @@ class WeChatPcSupervisor:
             "failures": self._failures,
             "last_error": self._last_error,
             "autostart": self.autostart,
+            "account_id": self.account_id,
+            "label": self.label,
+            "binding": {"window_hwnd": self.window_hwnd, "window_pid": self.window_pid,
+                        "expect_wxid": self.expect_wxid},
             "log_path": self.log_path,
             "log_tail": self.log_tail(12),
             "events": list(self._events)[-8:],
@@ -293,7 +309,9 @@ class WeChatPcSupervisor:
             pass
         cmd = build_driver_command(python_exe=self.python_exe, backend_url=self.backend_url,
                                    account_id=self.account_id, label=self.label, config_file=self.config_file,
-                                   state_dir=self.state_dir, interval=self.interval)
+                                   state_dir=self.state_dir, interval=self.interval,
+                                   window_hwnd=self.window_hwnd, window_pid=self.window_pid,
+                                   expect_wxid=self.expect_wxid)
         env = dict(os.environ)
         env[TOKEN_ENV] = token
         env["PYTHONIOENCODING"] = "utf-8"

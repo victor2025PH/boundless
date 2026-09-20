@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -262,6 +263,42 @@ class ServiceStats:
         return dict(self.__dict__)
 
 
+class AccountBinding:
+    """account_id ↔ 登录微信真实身份（微信号）的落盘绑定（JSON）。``path`` 为空＝仅进程内。
+
+    首次读到微信号即绑定；之后读到别的微信号 → 说明这个驱动盯的窗口里登的是另一个账号（双开互换 / 换号登录），
+    工作台上会两个账号混成一个、回复发进错的微信 → service 据此冻结发送并提醒主人。"""
+
+    def __init__(self, path: str = "", expected_wxid: str = "") -> None:
+        self.path = str(path or "")
+        self.wxid = str(expected_wxid or "").strip()
+        self.nick = ""
+        self.bound_at = 0.0
+        if self.path and not self.wxid:
+            try:
+                with open(self.path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    self.wxid = str(data.get("wxid") or "").strip()
+                    self.nick = str(data.get("nick") or "")
+                    self.bound_at = float(data.get("bound_at") or 0.0)
+            except Exception:
+                self.wxid = ""
+
+    def bind(self, wxid: str, nick: str, now: float) -> None:
+        self.wxid, self.nick, self.bound_at = str(wxid or "").strip(), str(nick or ""), float(now)
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"wxid": self.wxid, "nick": self.nick, "bound_at": self.bound_at}, fh, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except Exception:
+            logger.debug("[wechat_pc] 账号绑定落盘失败", exc_info=True)
+
+
 class WeChatPcService:
     def __init__(
         self,
@@ -284,6 +321,7 @@ class WeChatPcService:
         voice: Any = None,
         media_dir: str = "",
         sleep: Callable[[float], None] = time.sleep,
+        account_binding: Optional[AccountBinding] = None,
     ) -> None:
         self.backend = backend
         self.bridge = bridge
@@ -337,6 +375,19 @@ class WeChatPcService:
         # 会话级冻结（chat_key → until）与近期守卫失败时刻：单个会话发不出去只停它，多个会话接连失败才停账号
         self._chat_frozen_until: Dict[str, float] = {}
         self._guard_fail_at: List[float] = []
+        # 登录微信的真实身份（昵称/微信号）：从资料卡读；与 account_binding 里绑定的微信号不一致＝串号
+        self.account_binding = account_binding if account_binding is not None else AccountBinding()
+        self.account_nick = ""
+        self.account_wxid = ""
+        self._identity_read_at = 0.0
+        self._identity_dirty = True
+
+    #: 登录身份复核间隔（秒）；登录窗关闭后（可能换了号）立即复核
+    ACCOUNT_IDENTITY_RECHECK_SEC = 1800.0
+    #: 读不到身份（资料卡没打开）时的重试间隔：每次读都要点头像开弹窗，不能每轮点
+    ACCOUNT_IDENTITY_RETRY_SEC = 120.0
+    #: 串号冻结的来源名（无 TTL：身份对上即解除）
+    ACCOUNT_MISMATCH = "account_mismatch"
 
     #: 守卫失败升级为账号级冻结的判据：GUARD_FAIL_WINDOW_SEC 内 ≥ GUARD_FAIL_ESCALATE 个**不同会话**失败
     GUARD_FAIL_ESCALATE = 2
@@ -483,6 +534,8 @@ class WeChatPcService:
             if prev_disp.freeze_sends and not prev_disp.freeze_ttl_sec:
                 # 登录窗关了 / 手机确认完了：解除的是这一来源的冻结，限频/环境异常等带 TTL 的风控信号照旧等到期
                 self.release_freeze(prev)
+                # 重新登录过 → 可能换了号，下一轮立即复核身份
+                self._identity_dirty, self._identity_read_at = True, 0.0
             self._emit_notify("recovered", prev)
         self.stats.last_disposition = disp.kind
         readable = bool(st.window_present and st.logged_in and not disp.readonly)
@@ -1005,6 +1058,8 @@ class WeChatPcService:
             stats["voice_daily_cap"] = int(self.policy.voice_daily_cap)
             # 比默认宽松的配额项（测试值）：上客户前还回的提醒，随心跳给工作台
             stats["caps_relaxed"] = ",".join(sorted(caps_relaxed(self.policy)))
+            stats.update(self._window_binding_stats())
+            stats.update(self._account_identity_stats())
             ok = hb(self.account_id, tier=self.policy.tier,
                     readonly=bool(getattr(self.backend, "readonly", False)) or not self.policy.sends_allowed,
                     stats=stats, label=self.account_label)
@@ -1012,6 +1067,64 @@ class WeChatPcService:
                 self.stats.heartbeat_failed += 1
         except Exception:
             self.stats.heartbeat_failed += 1
+
+    @property
+    def account_mismatch(self) -> bool:
+        return bool(self.account_wxid and self.account_binding.wxid and self.account_wxid != self.account_binding.wxid)
+
+    def _refresh_account_identity(self) -> None:
+        """读登录微信的昵称/微信号（后端可选能力 ``read_self_identity``）并与绑定核对。
+
+        首次读到 → 绑定（落盘）；读到别的微信号 → 冻结发送（``account_mismatch``，直到身份对上）并提醒主人；
+        读不到（资料卡打不开）→ 保留上次结果，不冻结。"""
+        fn = getattr(self.backend, "read_self_identity", None)
+        if not callable(fn):
+            return
+        now = self._now()
+        wait = self.ACCOUNT_IDENTITY_RETRY_SEC if self._identity_dirty else self.ACCOUNT_IDENTITY_RECHECK_SEC
+        if self._identity_read_at and now - self._identity_read_at < wait:
+            return
+        self._identity_read_at = now
+        try:
+            ident = fn() or {}
+        except Exception:
+            logger.debug("[wechat_pc] 读登录身份失败", exc_info=True)
+            return
+        wxid = str(ident.get("wxid") or "").strip()
+        nick = str(ident.get("nick") or "").strip()
+        if not wxid and not nick:
+            return
+        self._identity_dirty = False
+        if nick:
+            self.account_nick = nick
+        if not wxid:
+            return
+        self.account_wxid = wxid
+        if not self.account_binding.wxid:
+            self.account_binding.bind(wxid, nick, now)
+            logger.info("[wechat_pc] 账号 %s 绑定登录微信：%s（%s）", self.account_id, nick, wxid)
+            return
+        if self.account_mismatch:
+            self.freeze(3600.0, self.ACCOUNT_MISMATCH)
+            self._emit_notify(self.ACCOUNT_MISMATCH, f"{self.account_binding.wxid}->{wxid}:{nick}"[:200])
+        else:
+            self.release_freeze(self.ACCOUNT_MISMATCH)
+
+    def _account_identity_stats(self) -> Dict[str, Any]:
+        return {"account_nick": self.account_nick, "account_wxid": self.account_wxid,
+                "account_bound_wxid": self.account_binding.wxid, "account_mismatch": self.account_mismatch}
+
+    def _window_binding_stats(self) -> Dict[str, Any]:
+        """驱动盯的微信窗口/进程、是否显式绑定、桌面上有几个微信主窗（>1 且没绑 → 工作台提醒主人）。后端没这能力 → 空。"""
+        fn = getattr(self.backend, "window_binding", None)
+        if not callable(fn):
+            return {}
+        try:
+            b = fn() or {}
+            return {"window_hwnd": int(b.get("window_hwnd") or 0), "window_pid": int(b.get("window_pid") or 0),
+                    "window_bound": bool(b.get("window_bound")), "main_windows": int(b.get("main_windows") or 0)}
+        except Exception:
+            return {}
 
     def tick(self) -> Dict[str, Any]:
         self.stats.ticks += 1
@@ -1021,6 +1134,9 @@ class WeChatPcService:
             summary["readable"] = readable
             self.stats.last_readable = bool(readable)
             if readable:
+                self._refresh_account_identity()
+                if self.account_mismatch and self._freezes.get(self.ACCOUNT_MISMATCH, 0.0) <= self._now():
+                    self.freeze(3600.0, self.ACCOUNT_MISMATCH)
                 self._refresh_voice_ready()
                 summary["inbound"] = self._scan_inbound()
                 summary["sent"] = self._drain_outbound()
@@ -1067,5 +1183,5 @@ class WeChatPcService:
             self.stop_heartbeat_thread()
 
 
-__all__ = ["BridgeClient", "WeChatPcService", "ServiceStats", "SeenStore", "bubble_fingerprint",
+__all__ = ["AccountBinding", "BridgeClient", "WeChatPcService", "ServiceStats", "SeenStore", "bubble_fingerprint",
            "content_fingerprint", "time_unknown"]

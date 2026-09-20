@@ -16,7 +16,8 @@ ALIVE_WITHIN_SEC = 90.0
 TIERS = ("copilot", "semi", "auto_reply")
 _STAT_KEYS = ("ticks", "inbound", "sent", "denied", "send_failed", "unknown_direction",
               "frozen_until", "freeze_reason", "chat_frozen", "last_disposition", "offline", "last_readable",
-              "account_nick", "account_wxid", "window_hwnd", "window_pid",
+              "account_nick", "account_wxid", "account_bound_wxid", "account_mismatch",
+              "window_hwnd", "window_pid", "window_bound", "main_windows",
               "voice_ready", "voice_sent", "voice_failed",
               # P2（2026-09-19）：麦克风被坐席占用（开会/通话）/ 今日语音配额用量 / 比默认宽松的配额项
               "voice_mic_busy", "voice_mic_busy_by", "voice_today", "voice_daily_cap", "caps_relaxed")
@@ -86,8 +87,20 @@ def bridge_presence(meta: Optional[Dict[str, Any]], now: Optional[float] = None,
         # 真实登录身份（驱动从微信窗口读到的昵称/微信号）：双开时靠这个分清哪个账号；老驱动没有 → ""
         "account_nick": str(stats.get("account_nick") or ""),
         "account_wxid": str(stats.get("account_wxid") or ""),
+        # 这个 account_id 绑定的微信号；窗里登的不是它（双开互换 / 换号登录）→ 驱动已冻结发送，工作台提醒主人
+        "account_bound_wxid": str(stats.get("account_bound_wxid") or ""),
+        "account_mismatch": bool(stats.get("account_mismatch")) if isinstance(stats.get("account_mismatch"), bool) else False,
+        # 驱动盯的 weixin.exe 进程；桌面上多个微信主窗而未显式绑定 → 工作台提醒「请绑定账号窗口」
+        "window_pid": _int(stats.get("window_pid")),
+        "window_bound": bool(stats.get("window_bound")) if isinstance(stats.get("window_bound"), bool) else False,
+        "main_windows": _int(stats.get("main_windows")),
+        "multi_wechat_unbound": _int(stats.get("main_windows")) > 1 and not stats.get("window_bound"),
         "stats": stats,
     }
+
+
+def _int(v: Any) -> int:
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
 def bridge_voice_ready(meta: Optional[Dict[str, Any]], now: Optional[float] = None,

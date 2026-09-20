@@ -147,6 +147,22 @@ def test_pc_manual_commands_and_paths_are_tier_free():
     assert copilot_presence(None, "x") is None
 
 
+def test_pc_supervisor_binding_kwargs_from_config_block():
+    """双开微信：``platform_login.wechat_pc.{window_hwnd,window_pid,expect_wxid}`` 直达驱动命令行；缺省/非法不绑。"""
+    from src.integrations.wechat_pc.supervisor import build_driver_command
+    from src.web.routes.wechat_pc_setup_routes import supervisor_binding_kwargs
+
+    assert supervisor_binding_kwargs({}) == {"window_hwnd": 0, "window_pid": 0, "expect_wxid": ""}
+    assert supervisor_binding_kwargs({"window_pid": "abc", "window_hwnd": -3, "expect_wxid": None}) == {
+        "window_hwnd": 0, "window_pid": 0, "expect_wxid": ""}
+    kw = supervisor_binding_kwargs({"window_pid": "502", "expect_wxid": " xb_2020 "})
+    assert kw == {"window_hwnd": 0, "window_pid": 502, "expect_wxid": "xb_2020"}
+    cmd = build_driver_command(python_exe="p", backend_url="u", account_id="a", label="l", config_file="",
+                               state_dir="s", frozen=False, **kw)
+    assert cmd[cmd.index("--pid") + 1] == "502" and cmd[cmd.index("--expect-wxid") + 1] == "xb_2020"
+    assert "--hwnd" not in cmd
+
+
 def test_pc_registry_value_to_exe_path():
     from src.integrations.wechat_pc.env_check import resolve_exe_from_registry_value as R
     assert R(r'"C:\Program Files\Tencent\Weixin\Weixin.exe"', "") == r"C:\Program Files\Tencent\Weixin\Weixin.exe"

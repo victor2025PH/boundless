@@ -146,6 +146,19 @@ def copilot_presence(registry: Any, account_id: str = "") -> Optional[Dict[str, 
     return first
 
 
+def supervisor_binding_kwargs(blk: Dict[str, Any]) -> Dict[str, Any]:
+    """配置块 → 驱动的窗口/身份绑定参数（纯函数）：``window_hwnd`` / ``window_pid``（双开微信时绑死一个窗/进程）
+    与 ``expect_wxid``（这个 account_id 应登的微信号；窗里不是它 → 驱动冻结发送）。非法/缺省 → 不绑。"""
+    def _i(k: str) -> int:
+        try:
+            v = int(blk.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return v if v > 0 else 0
+    return {"window_hwnd": _i("window_hwnd"), "window_pid": _i("window_pid"),
+            "expect_wxid": str(blk.get("expect_wxid") or "").strip()[:64]}
+
+
 def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]] = None) -> Any:
     """``app.state.wechat_pc_supervisor`` 懒创建（测试可传假 ``popen``）。"""
     sup = getattr(app.state, "wechat_pc_supervisor", None)
@@ -189,7 +202,8 @@ def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]
                               account_id=account_id, label=str(blk.get("label") or DEFAULT_LABEL),
                               presence_provider=presence, env_provider=env, driver_ready_provider=ready,
                               autostart=bool(blk.get("autostart", False)),
-                              interval=float(blk.get("interval_sec") or 3.0))
+                              interval=float(blk.get("interval_sec") or 3.0),
+                              **supervisor_binding_kwargs(blk))
     if popen is not None:
         kw["popen"] = popen
     sup = WeChatPcSupervisor(**kw)
@@ -448,4 +462,4 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
 
 
 __all__ = ["register_wechat_pc_setup_routes", "policy_view", "validate_policy_change", "TIERS", "bridge_paths_for",
-           "manual_commands", "copilot_presence", "get_or_create_supervisor"]
+           "manual_commands", "copilot_presence", "supervisor_binding_kwargs", "get_or_create_supervisor"]

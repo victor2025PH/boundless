@@ -86,6 +86,11 @@ def main(argv=None) -> int:
     ap.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help=f"令牌环境变量名（默认 {DEFAULT_TOKEN_ENV}）")
     ap.add_argument("--account-id", default="wechat-pc")
     ap.add_argument("--label", default="个人微信 · PC 副驾", help="工作台里显示的账号名（心跳带上，纠正首见入站用联系人名当账号名）")
+    ap.add_argument("--hwnd", type=int, default=0,
+                    help="绑定到这个微信主窗句柄（双开微信时一个驱动只看一个窗；首次命中后自动改按进程跟随）")
+    ap.add_argument("--pid", type=int, default=0, help="绑定到这个 weixin.exe 进程（与 --hwnd 二选一；都不绑时首见主窗即锚定）")
+    ap.add_argument("--expect-wxid", default="",
+                    help="这个 account_id 应该对应的登录微信号；不传则首次读到即绑定并落盘。窗里登的不是它 → 冻结发送并提醒")
     ap.add_argument("--tier", default=None, choices=["copilot", "semi", "auto_reply"],
                     help="显式覆盖档位（不传则以配置文件为准并热生效）")
     ap.add_argument("--risk-ack", action="store_true")
@@ -110,14 +115,17 @@ def main(argv=None) -> int:
     if not available():
         print("需要 Windows + uiautomation（pip install uiautomation）", file=sys.stderr)
         return 2
-    backend = UiaBackend()
+    backend = UiaBackend(hwnd=args.hwnd, pid=args.pid)
     rep = backend.self_check()
     print(json.dumps(rep, ensure_ascii=False))
+    if int(rep.get("main_windows") or 0) > 1 and not backend.bound:
+        log.warning("[window] 桌面上有 %s 个微信主窗而本驱动未绑定：已锚定 pid=%s hwnd=%s；要盯另一个账号请用 --pid/--hwnd",
+                    rep.get("main_windows"), rep.get("window_pid"), rep.get("window_hwnd"))
     if args.self_check:
         return 0 if rep.get("window") else 1
 
     from src.integrations.wechat_pc.policy import resolve_policy
-    from src.integrations.wechat_pc.service import BridgeClient, SeenStore, WeChatPcService
+    from src.integrations.wechat_pc.service import AccountBinding, BridgeClient, SeenStore, WeChatPcService
 
     def _policy_from_disk():
         return resolve_policy({"platform_login": {"wechat_pc": build_policy_cfg(
@@ -133,6 +141,7 @@ def main(argv=None) -> int:
     seen = SeenStore(os.path.join(state_dir, f"seen_{args.account_id}.json"))
     from src.integrations.wechat_pc.identity import ChatIdentityCache
     identity = ChatIdentityCache(path=os.path.join(state_dir, f"identity_{args.account_id}.json"))
+    binding = AccountBinding(os.path.join(state_dir, f"account_{args.account_id}.json"), expected_wxid=args.expect_wxid)
     token = resolve_token(args.token, args.token_file, args.token_env)
     # 语音通路（可选）：虚拟声卡在且两端采样率一致才挂上；启动即自愈上次没还回去的默认麦克风
     voice = None
@@ -153,9 +162,11 @@ def main(argv=None) -> int:
     svc = WeChatPcService(backend, BridgeClient(args.backend_url, token),
                           account_id=args.account_id, policy=policy, seen_store=seen, identity=identity,
                           connected_at=connected_at, account_label=args.label, voice=voice,
-                          media_dir=os.path.join(state_dir, "voice_out"),
+                          media_dir=os.path.join(state_dir, "voice_out"), account_binding=binding,
                           notify=lambda k, d: log.warning("[通知主人] %s %s", k, d))
     print(f"运行中：tier={policy.tier} readonly={backend.readonly} account={args.account_id} "
+          f"bound_wxid={binding.wxid or '-'} "
+          f"window=pid:{rep.get('window_pid')}/hwnd:{rep.get('window_hwnd')}{'(bound)' if backend.bound else ''} "
           f"work_hours={policy.work_hours} reply_only={policy.reply_only} {voice_note}", flush=True)
     from src.integrations.wechat_pc.policy import caps_relaxed
     relaxed = caps_relaxed(policy)

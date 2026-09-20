@@ -58,6 +58,8 @@ class WeChatPcBackend(Protocol):
     def press_send(self) -> bool: ...
     def read_profile_wxid(self, display_name: str = "") -> str: ...
     def peer_typing(self) -> bool: ...
+    # ── 登录身份（可选能力：service 用 getattr 探；返回 {"nick", "wxid"}，读不到的键为空串）──
+    def read_self_identity(self) -> Dict[str, str]: ...
     # ── 语音（2026-09-19，可选能力：没有的后端 voice_ready() 恒 False，其余方法不会被调）──
     # 语音消息在 4.1.9+ 客户端里是「点『发语音』进入录音态 → 麦克风录入 → 点『发送语音』」；
     # 音频由调用方经虚拟声卡当麦克风灌入（见 audio_cable），后端只负责三个按钮与状态确认。
@@ -98,6 +100,9 @@ class FakeBackend:
         self.fail_cancel_record = False
         self.recorded_seconds = 0      # finish 时己方语音气泡显示的秒数（0=按调用方 set_recorded 传入）
         self.voice_echo_on_finish = True
+        # 登录微信的身份（空＝资料卡读不到）
+        self.self_nick = ""
+        self.self_wxid = ""
 
     def screen_state(self) -> ScreenState:
         return ScreenState(self.present, self.window_class, self.logged_in, list(self.dialogs),
@@ -181,6 +186,10 @@ class FakeBackend:
         if idx in by_idx:
             return by_idx[idx]
         return self.wxids.get(display_name or self.current, "")
+
+    def read_self_identity(self) -> Dict[str, str]:
+        self.actions.append(("read_self_identity",))
+        return {"nick": self.self_nick, "wxid": self.self_wxid}
 
     # ── 语音 ──
     def voice_ready(self) -> bool:

@@ -502,6 +502,13 @@ def resolve_min_gap_sec(
 # ——串行投递下那会堵住其他会话；hold 按 (会话, 沉寂后首条入站 ts) 确定性取值，
 # 同一轮连发的多条草稿同一时刻放行，且 tick 间重算不抖。
 FIRST_REPLY_DEFAULTS: Dict[str, float] = dict(silence_hours=6.0, min_sec=60.0, max_sec=300.0)
+# 渠道级出厂缺省（显式 ``first_reply.*`` / ``platform_overrides.<plat>.first_reply.*`` 优先）。
+# wechat（PC 副驾·全自动档才走 autosend）：驱动 3s 轮询 + 五步守卫 + 拟人投递 + 同联系人间隔
+# 本身已是分钟级链路，再叠 1–5 min 首回 hold 就是主人眼里的「全自动半天不回」→ 极速档
+# （5–20s：仍不秒回，但不再「晾」）。其它渠道零变化。
+FIRST_REPLY_PLATFORM_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "wechat": dict(min_sec=5.0, max_sec=20.0),
+}
 
 
 def resolve_first_reply_cfg(
@@ -511,6 +518,7 @@ def resolve_first_reply_cfg(
     b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
     node = b.get("first_reply") if isinstance(b.get("first_reply"), dict) else {}
     out: Dict[str, Any] = dict(FIRST_REPLY_DEFAULTS)
+    out.update(FIRST_REPLY_PLATFORM_DEFAULTS.get(str(platform or "").lower(), {}))
     for k in ("silence_hours", "min_sec", "max_sec"):
         try:
             if node.get(k) is not None:
@@ -738,6 +746,6 @@ __all__ = [
     # O-1 D 三档
     "PACING_PROFILES", "PACING_PROFILE_NAMES", "HumanPacing",
     "resolve_profile", "estimate_human_pacing", "count_words",
-    "FIRST_REPLY_DEFAULTS", "resolve_first_reply_cfg",
+    "FIRST_REPLY_DEFAULTS", "FIRST_REPLY_PLATFORM_DEFAULTS", "resolve_first_reply_cfg",
     "silence_before_inbound", "first_reply_hold_sec",
 ]

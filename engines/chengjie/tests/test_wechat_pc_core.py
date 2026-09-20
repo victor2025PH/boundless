@@ -941,6 +941,156 @@ def test_uia_backend_importable_and_readonly_without_window():
     assert b.set_composer("x") is False and b.press_send() is False
 
 
+# ── 窗口绑定（2026-09-21 P0-2：双开微信，驱动不能再「取第一个 MainWindow」）──────────
+
+def _two_wechats():
+    from src.integrations.wechat_pc.win32_windows import TopWindow
+    a_main = TopWindow(1001, 501, "mmui::MainWindow", "微信", True, "weixin.exe", 900, 700)
+    a_dlg = TopWindow(1002, 501, "Qt51514QWindowToolSaveBits", "", True, "weixin.exe", 300, 200)
+    b_main = TopWindow(2001, 502, "mmui::MainWindow", "微信", True, "weixin.exe", 900, 700)
+    b_login = TopWindow(2002, 502, "mmui::LoginWindow", "", True, "weixin.exe", 300, 400)
+    return a_main, a_dlg, b_main, b_login
+
+
+def test_select_main_window_binds_by_hwnd_then_pid_and_never_switches_accounts():
+    from src.integrations.wechat_pc.win32_windows import select_main_window
+    a_main, a_dlg, b_main, b_login = _two_wechats()
+    wins = [b_login, a_dlg, b_main, a_main]
+    assert select_main_window(wins) is b_main, "没绑：单开兼容，取第一个主窗"
+    assert select_main_window(wins, hwnd=1001) is a_main
+    assert select_main_window(wins, pid=501) is a_main
+    assert select_main_window(wins, hwnd=1002) is None, "句柄命中的不是主窗 → 不算"
+    assert select_main_window(wins, hwnd=9999) is None and select_main_window(wins, pid=999) is None, "绑了没命中 → 绝不换号"
+    assert select_main_window([b_login]) is None
+
+
+def test_uia_backend_unbound_anchors_to_first_process_and_sticks(monkeypatch):
+    """没绑时首见主窗锤定其 pid：之后枚举次序变化/另一个微信启动都不换窗；那个进程没了才重新锚定。"""
+    from src.integrations.wechat_pc import uia_backend as U
+    from src.integrations.wechat_pc import win32_windows as W
+    a_main, a_dlg, b_main, b_login = _two_wechats()
+    state = {"wins": [a_main, a_dlg]}
+    monkeypatch.setattr(W, "find_wechat_windows", lambda **kw: list(state["wins"]))
+    b = U.UiaBackend()
+    assert not b.bound
+    assert [w.hwnd for w in b._bound_windows()] == [1001, 1002] and b.main_pid() == 501
+    # 第二个微信登上来并排在前面：仍只看 501 的窗（B 的登录窗/主窗文本不会喂进风控分类）
+    state["wins"] = [b_login, b_main, a_dlg, a_main]
+    assert [w.hwnd for w in b._bound_windows()] == [1002, 1001]
+    assert b.main_pid() == 501 and b.main_window_count == 2
+    assert b.window_binding() == {"window_hwnd": 0, "window_pid": 501, "window_bound": False, "main_windows": 2}
+    # A 退登只剩登录窗：还是盯 501（不跳去 B）
+    a_login = W.TopWindow(1003, 501, "mmui::LoginWindow", "", True, "weixin.exe", 300, 400)
+    state["wins"] = [b_main, a_login]
+    assert [w.hwnd for w in b._bound_windows()] == [1003]
+    # A 进程整个没了（微信重启）→ 重新锚定到现存主窗
+    state["wins"] = [b_main]
+    assert [w.hwnd for w in b._bound_windows()] == [2001] and b.main_pid() == 502
+
+
+def test_uia_backend_explicit_binding_follows_process_and_goes_blind_if_target_gone(monkeypatch):
+    from src.integrations.wechat_pc import uia_backend as U
+    from src.integrations.wechat_pc import win32_windows as W
+    a_main, a_dlg, b_main, b_login = _two_wechats()
+    state = {"wins": [b_login, b_main, a_dlg, a_main]}
+    monkeypatch.setattr(W, "find_wechat_windows", lambda **kw: list(state["wins"]))
+    # --pid
+    bp = U.UiaBackend(pid=502)
+    assert bp.bound and [w.hwnd for w in bp._bound_windows()] == [2002, 2001] and bp.main_pid() == 502
+    state["wins"] = [a_main, a_dlg]
+    assert bp._bound_windows() == [] and bp.screen_state().window_present is False, "目标进程不在 → 当没窗，绝不去看 A"
+    # --hwnd：首次命中记下进程；退登重登句柄换了仍跟着进程走
+    state["wins"] = [b_login, b_main, a_dlg, a_main]
+    bh = U.UiaBackend(hwnd=1001)
+    assert [w.hwnd for w in bh._bound_windows()] == [1002, 1001] and bh.main_pid() == 501
+    a_main2 = W.TopWindow(1777, 501, "mmui::MainWindow", "微信", True, "weixin.exe", 900, 700)
+    state["wins"] = [b_main, a_main2]
+    assert [w.hwnd for w in bh._bound_windows()] == [1777]
+    # --hwnd 从没命中过 → 什么都不看（不回落到 B）
+    bh2 = U.UiaBackend(hwnd=4242)
+    assert bh2._bound_windows() == [] and bh2.main_pid() == 0
+
+
+def test_heartbeat_carries_window_binding_when_backend_supports_it():
+    svc, fb, br, notes, clock = _svc()
+    svc.tick()
+    assert "window_pid" not in br.heartbeats[-1]["stats"], "FakeBackend 没这能力 → 不带"
+    fb.window_binding = lambda: {"window_hwnd": 1001, "window_pid": 501, "window_bound": False, "main_windows": 2}
+    svc.tick()
+    st = br.heartbeats[-1]["stats"]
+    assert (st["window_hwnd"], st["window_pid"], st["window_bound"], st["main_windows"]) == (1001, 501, False, 2)
+
+
+# ── P0-3 account_id ↔ 登录微信真实身份 ─────────────────────────────────────
+
+def test_account_identity_binds_on_first_read_and_persists(tmp_path):
+    from src.integrations.wechat_pc.service import AccountBinding
+    path = str(tmp_path / "account_wx-a.json")
+    svc, fb, br, notes, clock = _svc(account_binding=AccountBinding(path))
+    fb.self_nick, fb.self_wxid = "小北", "xb_2020"
+    svc.tick()
+    st = br.heartbeats[-1]["stats"]
+    assert (st["account_nick"], st["account_wxid"], st["account_bound_wxid"], st["account_mismatch"]) == (
+        "小北", "xb_2020", "xb_2020", False)
+    assert not svc.frozen()
+    # 落盘：重启后的驱动直接带着绑定起来
+    again = AccountBinding(path)
+    assert again.wxid == "xb_2020" and again.nick == "小北"
+    # 显式 --expect-wxid 优先于落盘值
+    assert AccountBinding(path, expected_wxid="other_9").wxid == "other_9"
+
+
+def test_account_mismatch_freezes_sends_and_recovers_when_identity_matches_again():
+    from src.integrations.wechat_pc.service import AccountBinding
+    svc, fb, br, notes, clock = _svc("auto_reply", account_binding=AccountBinding(expected_wxid="xb_2020"))
+    fb.self_nick, fb.self_wxid = "小南", "xn_1999"
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    br.queue = [{"id": 1, "chat_key": "wx:name:张三", "text": "在的", "kind": "manual"}]
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == svc.ACCOUNT_MISMATCH
+    assert ("account_mismatch", "xb_2020->xn_1999:小南") in notes
+    st = br.heartbeats[-1]["stats"]
+    assert st["account_mismatch"] is True and st["account_wxid"] == "xn_1999" and st["account_bound_wxid"] == "xb_2020"
+    assert not any(a[0] == "press_send" for a in fb.actions), "窗里登的是别的号：一条都不能发"
+    # 冻结到期但身份仍不对 → 续冻（不会静默恢复发送）
+    clock["t"] += 3601
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == svc.ACCOUNT_MISMATCH
+    # 换回正确的号（登录窗出现又消失 → 立即复核）
+    fb.logged_in, fb.window_class, fb.dialogs = False, "mmui::LoginWindow", ["进入WeChat"]
+    svc.tick()
+    fb.logged_in, fb.window_class, fb.dialogs = True, "mmui::MainWindow", []
+    fb.self_nick, fb.self_wxid = "小北", "xb_2020"
+    svc.tick()
+    assert not svc.frozen() and svc.account_wxid == "xb_2020"
+    assert br.heartbeats[-1]["stats"]["account_mismatch"] is False
+
+
+def test_account_identity_read_is_rate_limited_and_rechecked_after_relogin():
+    svc, fb, br, notes, clock = _svc()
+    reads = lambda: sum(1 for a in fb.actions if a[0] == "read_self_identity")  # noqa: E731
+    svc.tick()
+    svc.tick()
+    assert reads() == 1, "读不到（资料卡没开）也不能每轮点头像"
+    clock["t"] += svc.ACCOUNT_IDENTITY_RETRY_SEC + 1
+    fb.self_wxid = "xb_2020"
+    svc.tick()
+    assert reads() == 2 and svc.account_wxid == "xb_2020"
+    clock["t"] += 600
+    svc.tick()
+    assert reads() == 2, "读到了就按长周期复核"
+    clock["t"] += svc.ACCOUNT_IDENTITY_RECHECK_SEC
+    svc.tick()
+    assert reads() == 3
+    # 登录窗出现又消失（可能换号）→ 下一轮立即复核
+    fb.logged_in, fb.window_class, fb.dialogs = False, "mmui::LoginWindow", ["进入WeChat"]
+    svc.tick()
+    fb.logged_in, fb.window_class, fb.dialogs = True, "mmui::MainWindow", []
+    svc.tick()
+    assert reads() == 4
+
+
 # ── 真机锚点对应的纯函数（2026-09-08 微信 4.1.12.55 探针实录） ──────────────
 
 def test_session_cell_name_parsing_matches_probe_samples():
