@@ -1,0 +1,4 @@
+greeting: "Hey, how's it going"
+farewell: "Take care"
+error: "Something glitched, let's get back to it later"
+not_found: "Couldn't check that yet"

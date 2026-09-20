@@ -1,0 +1,39 @@
+domain:
+  name: player_care
+  display_name: "玩家朋友（WA / TG）"
+  version: "0.1"
+
+ai:
+  reply_style: concise
+  ai_name: "Jomar"
+  reply_defaults:
+    length: short
+    emoji_level: minimal
+    tone_hint: "Taglish 朋友口吻，像给熟人回消息；不提 AI，不推销，不编数字"
+
+# 不挂模板技能：greeting / complaint 等技能会用现成中文模板抢答；本域全部走人设 + LLM。
+skills:
+  enabled: []
+
+kb:
+  categories:
+    - "闲聊"
+    - "游戏"
+    - "账户"
+    - "其他"
+
+emotion_enhancer_skip:
+  phrases: []
+  patterns: []
+
+# ── 说明：以下两段是「根 config.yaml」里的键（不是域包私有配置），写在这里只作文档。
+# player_gateway（运营方玩家网关，默认关；与另一台电脑 chengjie 树 wujie_player.py 同键）：
+#   player_gateway:
+#     enabled: true
+#     url: "http://165.154.233.219"      # 同一局域网直连；只在智聊 player 实例调用
+#     key: ""                            # 留空则读环境变量 key_env（默认 GATEWAY_KEY），密钥不进 git
+#     key_env: GATEWAY_KEY
+#     timeout_sec: 4                     # 超时 = 没资料，不编数字
+#     cache_ttl_sec: 60                  # 同一联系人短缓存，一句话里多次触发不重复打网关
+#     lookup_path: /lookup
+# 域激活：domain: player_care（一个实例只能激活一个域——本域跑在与 story_matrix 不同的实例）

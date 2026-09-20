@@ -1,0 +1,31 @@
+name: player_care
+display_name: "玩家朋友（WA / TG 普通人设 + 玩家网关只读事实）"
+version: "0.1"
+description: >
+  智拓故事矩阵闭环的第二个智聊实例所用域：Messenger 前台（story_matrix 域）把点头同意的人
+  迁到 WhatsApp / Telegram 后，由这里的「普通朋友」人设继续聊。人设不是客服：一个也在玩的
+  普通人，游戏只作为自己在玩的东西在对话里自然出现，只在对方先聊到游戏时才推荐。
+  运营方玩家网关（player_gateway，POST /lookup）返回的 chatx_text 是唯一的只读事实来源：
+  对方主动问自己的余额 / 打码 / 充提 / 玩过的游戏时才明说（platform=厂商，game=游戏名），
+  查不到或超时就当没资料、不编数字；其余时候只作隐藏画像（不含数字）。
+  与故事频道完全隔离：本域只装在 WA / TG 实例，永不接 Messenger 频道号。
+
+skills: []
+
+config_files:
+  - defaults.yaml
+
+kb:
+  categories: kb/categories.yaml
+  seeds: kb/seeds.yaml
+
+prompts:
+  system_prompt: prompts/system_prompt.txt
+
+hooks: true
+
+i18n:
+  zh: i18n/zh.yaml
+  en: i18n/en.yaml
+
+web_routes: false

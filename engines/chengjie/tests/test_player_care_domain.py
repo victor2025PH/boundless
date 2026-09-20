@@ -1,0 +1,438 @@
+"""player_care 域包（WA / TG 普通朋友 + 玩家网关只读事实）单测。
+
+锁定契约：
+  - 手机号归一：9… / 09… / 639… / +63 9… / WA JID → 639xxxxxxxxx；非菲律宾移动号 → 空
+  - 会员号只在带 uid / member id 前缀时抽取，手机号样式不算
+  - 网关客户端：默认关不发请求；401 / 超时 / bad json 收敛为 ok=False；404 = 通但没资料；
+    成功取 chatx_text；同联系人 TTL 缓存
+  - hook 明用 / 暗用 / 无资料 / 未知身份四分支的提示块与 user_context 画像
+  - 数字闸：问账户那一轮回复里出现事实外 ≥3 位数字 → 安全句；日常 1–2 位数字放行
+  - 域包可被 DomainLoader 加载，hook 类名正确
+  - SkillManager.generate_inbox_draft 真的派发 pre / post hook（2026-09-20 接线）
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+import yaml
+
+from domains.player_care.gateway import (
+    LookupResult,
+    PlayerGateway,
+    extract_games,
+    extract_phone,
+    extract_uid,
+    normalize_ph_phone,
+    numbers_not_in_facts,
+    phone_variants,
+    resolve_gateway_cfg,
+)
+from domains.player_care.hooks import ACCOUNT_QUERY_RE, PlayerCareDomainHook, _SAFE_LINE
+from src.hooks.base import HookContext
+
+
+# ── 归一 / 抽取 ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw,exp", [
+    ("9171234567", "639171234567"),
+    ("09171234567", "639171234567"),
+    ("639171234567", "639171234567"),
+    ("+63 917 123 4567", "639171234567"),
+    ("0917-123-4567", "639171234567"),
+    ("639171234567@s.whatsapp.net", "639171234567"),
+    ("8123456", ""),          # 座机样式
+    ("1234567890", ""),       # 不是 9 开头
+    ("", ""),
+    (None, ""),
+])
+def test_normalize_ph_phone(raw, exp):
+    assert normalize_ph_phone(raw) == exp
+
+
+def test_phone_variants():
+    assert phone_variants("09171234567") == ("9171234567", "09171234567", "639171234567")
+    assert phone_variants("abc") == ("", "", "")
+
+
+def test_extract_phone_from_text():
+    assert extract_phone("number ko 0917 123 4567 po") == "639171234567"
+    assert extract_phone("+639171234567 yan") == "639171234567"
+    assert extract_phone("wala akong number") == ""
+    # 金额不是号码
+    assert extract_phone("nag-deposit ako 9000") == ""
+
+
+def test_extract_uid_requires_prefix():
+    assert extract_uid("uid: A12345") == "A12345"
+    assert extract_uid("member id 778899") == "778899"
+    assert extract_uid("my account no. 55667788") == "55667788"
+    assert extract_uid("balance ko 12345") == ""            # 无前缀
+    assert extract_uid("id 09171234567") == ""              # 手机号样式不算
+    assert extract_uid("") == ""
+
+
+def test_numbers_not_in_facts():
+    facts = "balance: 1,250.50 PHP; last deposit 500 on 2026-09-18"
+    assert numbers_not_in_facts("Tinanong ko, 1,250.50 ang balance mo, 500 last deposit", facts) == []
+    assert numbers_not_in_facts("balance mo 1250.50", facts) == []       # 千分位差异放行
+    assert numbers_not_in_facts("mga 1,300 na yata", facts) == ["1300"]
+    assert numbers_not_in_facts("2 araw lang, 3 games", "") == []         # 1–2 位日常数字放行
+    assert numbers_not_in_facts("₱2,000 ang bonus mo", "") == ["2000"]
+
+
+def test_extract_games():
+    txt = "platform: JILI, game: Super Ace | platform: PG, game: Mahjong Ways; balance 120"
+    assert extract_games(txt) == [
+        {"platform": "JILI", "game": "Super Ace"},
+        {"platform": "PG", "game": "Mahjong Ways"},
+    ]
+    assert extract_games("游戏：Fortune Gems") == [{"platform": "", "game": "Fortune Gems"}]
+    assert extract_games("balance 120") == []
+
+
+def test_account_query_regex():
+    assert ACCOUNT_QUERY_RE.search("pwede mo ba i-check balance ko")
+    assert ACCOUNT_QUERY_RE.search("na-deposit ko kanina hindi pumasok")
+    assert ACCOUNT_QUERY_RE.search("我的余额多少")
+    assert not ACCOUNT_QUERY_RE.search("boring dito sa office haha")
+    assert not ACCOUNT_QUERY_RE.search("kumain ka na ba")
+
+
+# ── 配置 ───────────────────────────────────────────────────────────────────
+
+def test_resolve_gateway_cfg_defaults_off_and_env_key(monkeypatch):
+    assert resolve_gateway_cfg({})["enabled"] is False
+    monkeypatch.setenv("GATEWAY_KEY", "env-secret")
+    cfg = resolve_gateway_cfg({"player_gateway": {"enabled": True, "url": "http://gw/"}})
+    assert cfg == {
+        "enabled": True, "url": "http://gw", "key": "env-secret", "key_env": "GATEWAY_KEY",
+        "timeout_sec": 4.0, "cache_ttl_sec": 60.0, "lookup_path": "/lookup",
+    }
+    cfg2 = resolve_gateway_cfg({"player_gateway": {"enabled": True, "url": "http://gw", "key": "cfg-key", "timeout_sec": -1}})
+    assert cfg2["key"] == "cfg-key" and cfg2["timeout_sec"] == 4.0
+
+    class _CM:  # ConfigManager 形态
+        config = {"player_gateway": {"enabled": True, "url": "http://gw", "key": "k"}}
+    assert resolve_gateway_cfg(_CM())["key"] == "k"
+
+
+# ── 网关客户端 ─────────────────────────────────────────────────────────────
+
+def _gw(transport, **over):
+    cfg = {"enabled": True, "url": "http://gw", "key": "k", "timeout_sec": 1, "cache_ttl_sec": 60, "lookup_path": "/lookup"}
+    cfg.update(over)
+    return PlayerGateway(cfg, transport=transport)
+
+
+def test_gateway_not_configured_never_calls_transport():
+    calls = []
+    gw = _gw(lambda *a: calls.append(a) or (200, b"{}"), enabled=False)
+    r = gw.lookup("balance", phone="09171234567")
+    assert r.configured is False and r.ok is False and r.usable is False
+    assert calls == []
+
+
+def test_gateway_success_payload_and_headers():
+    seen = {}
+
+    def _t(url, headers, body, timeout):
+        seen.update(url=url, headers=headers, body=json.loads(body), timeout=timeout)
+        return 200, json.dumps({"chatx_text": "balance: 1,250 PHP; platform: JILI, game: Super Ace"}).encode()
+
+    gw = _gw(_t)
+    r = gw.lookup("balance ko?", phone="0917 123 4567", uid="A1")
+    assert r.ok and r.found and r.usable
+    assert "1,250" in r.chatx_text
+    assert seen["url"] == "http://gw/lookup"
+    assert seen["headers"]["X-Gateway-Key"] == "k"
+    assert seen["body"] == {"q": "balance ko?", "phone": "639171234567", "uid": "A1"}
+    assert seen["timeout"] == 1
+    assert gw.calls == 1
+
+
+def test_gateway_cache_by_identity():
+    n = {"c": 0}
+
+    def _t(url, headers, body, timeout):
+        n["c"] += 1
+        return 200, b'{"chatx_text": "x"}'
+
+    gw = _gw(_t)
+    a = gw.lookup("q1", phone="09171234567")
+    b = gw.lookup("q2 different text", phone="9171234567")   # 同人不同写法 → 命中缓存
+    assert n["c"] == 1 and a.cached is False and b.cached is True
+    gw.lookup("q", phone="09181234567")                        # 另一个人 → 新请求
+    assert n["c"] == 2
+
+
+@pytest.mark.parametrize("status,body,exp_ok,exp_found,exp_err", [
+    (401, b"unauthorized", False, False, "http_401"),
+    (403, b"", False, False, "http_403"),
+    (404, b"", True, False, ""),
+    (500, b"boom", False, False, "http_500"),
+    (200, b"not json", False, False, "bad_json"),
+    (200, b'{"chatx_text": ""}', True, False, ""),
+    (200, b'{"ok": false, "error": "no player", "chatx_text": "x"}', True, False, "no player"),
+])
+def test_gateway_error_shapes(status, body, exp_ok, exp_found, exp_err):
+    gw = _gw(lambda *a: (status, body))
+    r = gw.lookup("q", phone="09171234567")
+    assert (r.ok, r.found, r.error) == (exp_ok, exp_found, exp_err)
+    assert r.usable is False
+
+
+def test_gateway_timeout_is_swallowed():
+    import socket
+
+    def _t(*a):
+        raise socket.timeout("timed out")
+
+    r = _gw(_t).lookup("q", phone="09171234567")
+    assert r.ok is False and r.error == "timeout" and r.usable is False
+
+
+# ── hook ───────────────────────────────────────────────────────────────────
+
+class _FakeGW:
+    def __init__(self, result, configured=True):
+        self.result = result
+        self.configured = configured
+        self.calls = []
+
+    def lookup(self, q, *, phone="", uid=""):
+        self.calls.append({"q": q, "phone": phone, "uid": uid})
+        return self.result
+
+
+def _ctx(text, chat_id="", history=None, reply_lang="tl", uc=None):
+    uc = uc if uc is not None else {}
+    if history is not None:
+        uc["_conversation_history"] = history
+    return HookContext(text=text, user_id=chat_id, chat_id=chat_id, reply_lang=reply_lang, user_context=uc)
+
+
+FOUND = LookupResult(ok=True, found=True, chatx_text="balance: 1,250 PHP; platform: JILI, game: Super Ace")
+MISSING = LookupResult(ok=True, found=False)
+
+
+@pytest.mark.asyncio
+async def test_hook_visible_when_asking_account_with_wa_phone():
+    gw = _FakeGW(FOUND)
+    hook = PlayerCareDomainHook(gateway=gw)
+    ctx = _ctx("pwede mo ba i-check balance ko?", chat_id="639171234567@s.whatsapp.net")
+    inj = await hook.on_message_pre_process(ctx)
+    assert gw.calls == [{"q": "pwede mo ba i-check balance ko?", "phone": "639171234567", "uid": ""}]
+    blk = inj["_domain_context_block"]
+    assert "只读事实" in blk and "1,250 PHP" in blk and "Super Ace" in blk
+    facts = ctx.user_context["_player_facts"]
+    assert facts["found"] is True and facts["phone"] == "639171234567"
+    assert facts["games"] == [{"platform": "JILI", "game": "Super Ace"}]
+    assert ctx.user_context["_player_facts_visible"] is True
+
+    # 数字闸：照抄放行，编数字换安全句
+    ok = await hook.on_reply_post_process("Tinanong ko, 1,250 PHP ang balance mo sa Super Ace.", ctx)
+    assert ok.startswith("Tinanong ko")
+    bad = await hook.on_reply_post_process("Mga 1,300 PHP yata, tapos may 500 bonus.", ctx)
+    assert bad == _SAFE_LINE["tl"]
+    assert ctx.user_context["_player_numeric_gate_hits"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hook_missing_facts_says_not_found_and_gates_numbers():
+    hook = PlayerCareDomainHook(gateway=_FakeGW(MISSING))
+    ctx = _ctx("check mo balance ko, number ko 09171234567", reply_lang="en")
+    inj = await hook.on_message_pre_process(ctx)
+    assert "无结果" in inj["_domain_context_block"]
+    assert ctx.user_context["_player_facts"]["found"] is False
+    assert ctx.user_context["_player_facts_visible"] is False
+    assert await hook.on_reply_post_process("Your balance is 2,000.", ctx) == _SAFE_LINE["en"]
+    assert (await hook.on_reply_post_process("Couldn't check yet, I'll get back to you.", ctx)).startswith("Couldn't")
+
+
+@pytest.mark.asyncio
+async def test_hook_asks_account_without_identity_does_not_call_gateway_for_tg_id():
+    gw = _FakeGW(FOUND)
+    hook = PlayerCareDomainHook(gateway=gw)
+    # Telegram 数字 id 归一失败 → 没身份；但问了账户 → q-only 查询 + 让人设问号码
+    ctx = _ctx("balance ko?", chat_id="123456789")
+    inj = await hook.on_message_pre_process(ctx)
+    assert gw.calls and gw.calls[0]["phone"] == "" and gw.calls[0]["uid"] == ""
+    assert "还不知道对方的手机号" in inj["_domain_context_block"]
+    assert ctx.user_context["_player_facts_round"] == "need_identity"
+    # 即使网关按 q 命中了，也不明用（没核对身份不给数字）
+    assert "1,250" not in inj["_domain_context_block"]
+
+
+@pytest.mark.asyncio
+async def test_hook_hidden_profile_when_not_asking_account():
+    gw = _FakeGW(FOUND)
+    hook = PlayerCareDomainHook(gateway=gw)
+    ctx = _ctx("boring dito sa office haha", chat_id="639171234567")
+    inj = await hook.on_message_pre_process(ctx)
+    blk = inj["_domain_context_block"]
+    assert "隐藏画像" in blk and "Super Ace" in blk
+    assert "1,250" not in blk                        # 暗用绝不带数字
+    assert ctx.user_context["_player_facts_round"] == "hidden"
+    # 暗用轮不启数字闸（日常数字放行）
+    assert (await hook.on_reply_post_process("Haha same, 300 pesos lang ulam ko kanina.", ctx)).startswith("Haha")
+
+
+@pytest.mark.asyncio
+async def test_hook_no_identity_no_account_question_skips_gateway():
+    gw = _FakeGW(FOUND)
+    hook = PlayerCareDomainHook(gateway=gw)
+    ctx = _ctx("kumain ka na ba", chat_id="123456789")
+    assert await hook.on_message_pre_process(ctx) is None
+    assert gw.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hook_phone_from_history_and_uid_from_text():
+    gw = _FakeGW(FOUND)
+    hook = PlayerCareDomainHook(gateway=gw)
+    hist = [{"role": "user", "content": "eto number ko 0917 123 4567"}, {"role": "assistant", "content": "sige"}]
+    ctx = _ctx("uid: A778 — nag-deposit ako hindi pumasok", history=hist)
+    await hook.on_message_pre_process(ctx)
+    assert gw.calls[0]["phone"] == "639171234567" and gw.calls[0]["uid"] == "A778"
+
+
+@pytest.mark.asyncio
+async def test_hook_unconfigured_gateway_stays_honest():
+    hook = PlayerCareDomainHook(gateway=_FakeGW(FOUND, configured=False))
+    ctx = _ctx("balance ko?", chat_id="639171234567")
+    inj = await hook.on_message_pre_process(ctx)
+    assert "无结果" in inj["_domain_context_block"]
+    assert await hook.on_reply_post_process("Balance mo 5,000.", ctx) == _SAFE_LINE["tl"]
+    assert await hook.on_message_pre_process(_ctx("musta", chat_id="639171234567")) is None
+
+
+def test_hook_escalation_line_is_empty_and_gateway_rebuilds_on_config_change():
+    class _CM:
+        config = {"player_gateway": {"enabled": True, "url": "http://gw", "key": "k"}}
+    cm = _CM()
+    hook = PlayerCareDomainHook(config=cm)
+    assert hook.get_escalation_line() == ""
+    g1 = hook.gateway()
+    assert g1.configured
+    assert hook.gateway() is g1
+    cm.config["player_gateway"]["url"] = "http://gw2"
+    g2 = hook.gateway()
+    assert g2 is not g1 and g2.cfg["url"] == "http://gw2"
+
+
+# ── 域包可加载 ──────────────────────────────────────────────────────────────
+
+def test_domain_pack_loads_with_hook():
+    from src.utils.domain_loader import DomainLoader, DomainPack
+    root = Path(__file__).parent.parent
+    domains_dir = root / "domains"
+    manifest = yaml.safe_load((domains_dir / "player_care" / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["name"] == "player_care" and manifest["hooks"] is True and manifest["skills"] == []
+    pack = DomainPack("player_care", domains_dir / "player_care", manifest)
+    DomainLoader(domains_dir)._load_hooks(pack, None)
+    assert pack.hook_class is not None and pack.hook_class.__name__ == "PlayerCareDomainHook"
+    for rel in ("persona.yaml", "personas.example.yaml", "config/defaults.yaml",
+                "prompts/system_prompt.txt", "kb/categories.yaml", "kb/seeds.yaml",
+                "i18n/zh.yaml", "i18n/en.yaml"):
+        assert (domains_dir / "player_care" / rel).exists(), rel
+    persona = yaml.safe_load((domains_dir / "player_care" / "persona.yaml").read_text(encoding="utf-8"))
+    assert "customer service" in persona["speaking"]["forbidden_phrases"]
+    assert "sure win" in persona["speaking"]["forbidden_phrases"]
+
+
+# ── SkillManager 接线：generate_inbox_draft 真的派发 pre / post hook ────────
+
+async def _make_cm(tmp_path: Path):
+    from src.utils.config_manager import ConfigManager
+    cfg = {
+        "telegram": {"api_id": "1", "api_hash": "x", "phone_number": "+1"},
+        "ai": {"api_key": "k"},
+        "skills": {"enabled": []},
+        "intent": {"keywords": {}, "patterns": {}},
+        "reply": {},
+        "context_store": {"ttl_days": 30},
+        "memory": {"enabled": False},
+    }
+    (tmp_path / "config.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+    (tmp_path / "templates.yaml").write_text("greeting: hi\n", encoding="utf-8")
+    (tmp_path / "exchange_rates.yaml").write_text("channels: {}\n", encoding="utf-8")
+    cm = ConfigManager(str(tmp_path / "config.yaml"))
+    await cm.load()
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_generate_inbox_draft_dispatches_domain_hooks(tmp_path):
+    from src.hooks.registry import HookRegistry
+    from src.skills.skill_manager import SkillManager
+
+    cm = await _make_cm(tmp_path)
+    seen = {}
+
+    async def _gen(**kw):
+        seen["block"] = str((kw["user_context"] or {}).get("_domain_context_block") or "")
+        return "Mga 1,300 PHP yata."   # 编数字 → 应被 post hook 换掉
+
+    ai = MagicMock()
+    ai.generate_reply_with_intent = AsyncMock(side_effect=_gen)
+    sm = SkillManager(cm, ai)
+
+    reg = HookRegistry.get_instance()
+    prev_hook, prev_dom = reg._hook, getattr(reg, "_domain_name", "")
+    reg.register(PlayerCareDomainHook(gateway=_FakeGW(FOUND)), "player_care")
+    try:
+        out = await sm.generate_inbox_draft(
+            text="pwede mo ba i-check balance ko?",
+            chat_key="639171234567",
+            platform="whatsapp",
+            history=[{"role": "user", "content": "pwede mo ba i-check balance ko?"}],
+        )
+    finally:
+        reg.register(prev_hook, prev_dom)
+    assert out is not None
+    assert "1,250 PHP" in seen["block"], "pre hook 的事实块必须进 LLM 的 user_context"
+    assert out["reply"] == _SAFE_LINE["tl"], "post hook 数字闸必须拦下编造数字"
+    # 每轮结束后事实块不残留在持久 user_context
+    uc = sm._get_user_context("639171234567", account_id="")
+    assert "_domain_context_block" not in uc
+    assert uc["_player_facts"]["found"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_message_dispatches_domain_hooks(tmp_path):
+    """A 线（协议号 7×24 自动回复 = WA / TG companion_runtime 走的路）同样接了 pre / post hook。"""
+    from src.hooks.registry import HookRegistry
+    from src.skills.skill_manager import SkillManager, SmallTalkSkill
+
+    cm = await _make_cm(tmp_path)
+    cm.config["skills"]["cooldown"] = {"global": 0, "per_user": 0, "per_content": 0, "per_chat_user": 0}
+    seen = {}
+
+    async def _gen(**kw):
+        seen["block"] = str((kw["user_context"] or {}).get("_domain_context_block") or "")
+        return "Mga 1,300 PHP yata."
+
+    ai = MagicMock()
+    ai.generate_reply_with_intent = AsyncMock(side_effect=_gen)
+    ai.embed = AsyncMock(return_value=[[0.01] * 16])
+    sm = SkillManager(cm, ai)
+    # A 线要有技能承接 direct_chat 才会走到 LLM（player_care 预设 skills.enabled: [small_talk]）
+    sm.skills["small_talk"] = SmallTalkSkill(cm, sm.ai_client)
+
+    reg = HookRegistry.get_instance()
+    prev_hook, prev_dom = reg._hook, getattr(reg, "_domain_name", "")
+    reg.register(PlayerCareDomainHook(gateway=_FakeGW(FOUND)), "player_care")
+    try:
+        out = await sm.process_message(
+            "pwede mo ba i-check balance ko?", "639171234567",
+            {"_trigger_path": "mention", "chat_id": 639171234567},
+        )
+    finally:
+        reg.register(prev_hook, prev_dom)
+    assert "1,250 PHP" in seen.get("block", ""), "A 线 pre hook 的事实块必须进 LLM 的 user_context"
+    # A 线自己决定 reply_lang（Taglish 短句可能判成 en）→ 安全句跟随该语言即可
+    assert out in _SAFE_LINE.values(), "A 线 post hook 数字闸必须拦下编造数字"
+    assert "_domain_context_block" not in sm._get_user_context("639171234567")

@@ -1,0 +1,127 @@
+# 场景预设：玩家朋友 · WA / TG 普通人设 + 玩家网关只读事实（player_care 域）
+# ─────────────────────────────────────────────────────────────────────
+# 适用：智拓故事矩阵闭环的「第二个智聊实例」。Messenger 前台（story_matrix 域，另一个实例）
+#   把点头同意的人迁到 WhatsApp / Telegram 后，本实例用「也在玩的普通朋友」人设继续聊；
+#   运营方玩家网关 POST /lookup 的 chatx_text 是唯一只读事实（余额 / 打码 / 充提 / 玩过的游戏），
+#   对方主动问自己账户才明说，查不到就说没查到，绝不编数字。
+# 与 story_matrix 实例的关系：同一台机器、同一份代码、不同 --config 目录（数据完全隔离）：
+#   python main.py --init player_care --config config_player\config.yaml
+#   python main.py --check          --config config_player\config.yaml
+#   python main.py                  --config config_player\config.yaml      （端口 18797）
+# 隔离铁律：本实例永不接 Messenger 频道号；story 实例永不装本域。频道 ≠ 游戏。
+#
+# 开局只需填：① ai.api_key / base_url（173 集群 vLLM）② player_gateway.key（或环境变量 GATEWAY_KEY）
+#   ③ telegram（走 API）/ whatsapp（网页版扫码）账号 ④ personas（从 domains/player_care/personas.example.yaml 复制并填真实在玩的游戏）
+# ─────────────────────────────────────────────────────────────────────
+
+domain: player_care
+
+ai:
+  provider: openai_compatible
+  primary: cloud
+  api_key: "YOUR_API_KEY"                 # ← 必填（173 集群 vLLM 的 key；无鉴权也要填占位）
+  base_url: "http://192.168.0.173:8001/v1"
+  model: "chatx"                          # 173 集群 Qwen 27B，关思考
+  think: false
+  temperature: 0.8
+  max_tokens: 220                         # 朋友短句：1–3 句、≤220 字符
+  timeout: 12
+  reply_defaults:
+    length: short
+    emoji_level: minimal
+
+# 玩家网关（运营方，同一局域网直连；智聊不直连运营方业务库）
+player_gateway:
+  enabled: true
+  url: "http://165.154.233.219"
+  key: ""                                 # 留空 → 读环境变量 key_env；密钥不进 git
+  key_env: GATEWAY_KEY
+  timeout_sec: 4                          # 超时 = 没资料，不编数字
+  cache_ttl_sec: 60
+  lookup_path: /lookup
+
+telegram:
+  api_id: "YOUR_API_ID"                   # ← 必填（TG 走 API）
+  api_hash: "YOUR_API_HASH"               # ← 必填
+  phone_number: "+639000000000"           # ← 必填：本实例的 TG 号
+  session_name: player_care
+  process_private: true
+  process_groups: false                   # 一对一私聊为主
+
+# A 线（协议号 7×24 自动回复）要有技能承接 direct_chat 才会走到 LLM；
+# 只挂 small_talk（纯 LLM），不挂 greeting / complaint（会用中文模板抢答）。
+skills:
+  enabled: [small_talk]
+  cooldown:
+    global: 0
+    per_user: 0
+    per_content: 0
+    per_chat_user: 0
+
+# ── 协议多开登录：TG 协议号 + WhatsApp 网页版扫码 ─────────────────────
+platform_login:
+  enabled: true
+  orchestrator_enabled: true
+  telegram:
+    protocol_enabled: true
+    companion_runtime: true               # 协议号跑 A 线全功能（记忆 / 人设 / 情绪 / 收发镜像）
+    backfill_dialogs: 20
+    contacts_recording: true
+  whatsapp:
+    protocol_enabled: true                # 网页版扫码登录
+
+# ── 7×24 自动回复（双闸门：全局 enabled + 账号 meta.auto_reply 皆开才发）──
+# 首周建议：enabled 保持 true 但只给 1 个测试号开 meta.auto_reply，盯数字闸命中率再扩面。
+protocol_autoreply:
+  enabled: true
+  delay:
+    min_sec: 4
+    max_sec: 25
+  hours:
+    enabled: false
+
+# 收件箱（B 线草稿 / 人审 / 智能回复面板）；L2 自动发送首周关（先人审看几天）
+inbox:
+  enabled: true
+  read_from_store: true
+  l2_autosend:
+    enabled: false
+    deliver: false
+
+# 记忆：开（朋友要「越聊越记得」）；向量检索关（不配 GPU，省 embedding 调用）
+memory:
+  enabled: true
+  vector:
+    enabled: false
+
+personas:
+  default: jomar
+  profiles: []                            # ← 从 domains/player_care/personas.example.yaml 复制 jomar / kath，填真实在玩的游戏
+
+web_admin:
+  enabled: true
+  site_name: "智聊 · 玩家朋友实例"
+  host: 127.0.0.1
+  port: 18797                             # story_matrix 实例用 18796，不要撞
+  auth_token: "CHANGE_ME"                 # ← 必填
+  secret_key: "CHANGE_ME"                 # ← 必填
+
+# 本实例不接 Messenger / LINE RPA；replybus 只服务 story_matrix 实例，这里不开白名单直发。
+messenger_rpa:
+  enabled: false
+line_rpa:
+  enabled: false
+
+licensing:
+  enforce: false
+  hosted_ai:
+    enabled: false
+  trial:
+    enabled: false
+    enforce: false
+
+# 09-06 拍板：不做 AI 披露（代码基线也是关）
+compliance:
+  disclosure:
+    notice: false
+    honest_identity: false

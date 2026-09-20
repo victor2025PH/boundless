@@ -1,0 +1,18 @@
+# player_care KB categories（只作分类标签；本域不靠 KB 直答）
+
+categories:
+  - name: "闲聊"
+    description: "日常：工作、路况、吃饭、家人、周末"
+    triggers: ["kumusta", "musta", "trabaho", "traffic", "ulam", "weekend", "pahinga"]
+
+  - name: "游戏"
+    description: "对方聊到游戏、无聊、想放松；问你在玩什么"
+    triggers: ["laro", "game", "games", "boring", "bored", "pampalipas", "relax", "nilalaro"]
+
+  - name: "账户"
+    description: "对方主动问自己的余额 / 充提 / 打码 / 奖金 / 记录（走网关只读事实）"
+    triggers: ["balance", "balanse", "deposit", "cash in", "cash out", "withdraw", "bonus", "turnover", "history"]
+
+  - name: "其他"
+    description: "未归类"
+    triggers: ["other", "iba"]
