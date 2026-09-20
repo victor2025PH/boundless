@@ -3,25 +3,29 @@
     "version": "1.0.93",
     "date": "2026-09-20",
     "title": {
-      "zh": "升级安装再修一刀：关闭旧版由安装器自己接管，不再弹「无法关闭」",
-      "en": "Upgrade install, round two: setup now closes the old version itself"
+      "zh": "彻底解决升级弹「智聊 无法关闭」：一个被杀软扫到的文件不再否决整次升级",
+      "en": "Upgrades no longer fail because a single file was busy"
     },
     "tags": [
       "fix"
     ],
     "highlights": {
       "zh": [
-        "1.0.92 之后仍有用户装到一半弹「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」——这个弹窗来自安装器框架自带的那段检查，它留给关闭程序的时间只有约 6 秒，而智聊退出时要先把后端与边车干净带走（按设计最多 8 秒，电脑微信副驾在跑时更久），于是慢一点的电脑必然超时",
-        "本版把「关闭旧版」整段收归自己做：先正常请求关闭（让后端干净退出，账号不用重登），再按实际安装目录强制清理，每一步都轮询确认真的退干净了才继续，不再用固定等待赌运气",
-        "自选过安装目录的用户以前不在清理范围内（只认默认目录），本版按真实安装路径匹配，这个漏洞一并补上",
-        "万一仍有进程关不掉（例如智聊是以管理员身份启动的），安装继续进行并如实说明，不再把人顶在「点重试」上；诊断信息写入 %TEMP%\\chatx_install_reap.log，报障时带上这个文件即可定位",
+        "1.0.92 之后仍有用户装到一半弹「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」，点重试或重启后再点「继续」才装完。真正的原因这次找到了，而且和「关没关程序」无关",
+        "根因：安装新版前要先移除旧版，而移除的做法是把安装目录里的文件逐个改名，任何一个文件改名失败就整树回滚并报错——我们随包约 9400 个文件，杀毒软件扫描时打开其中任意一个，就足以让整次升级失败；框架会重试 5 次，第 5 次失败才弹出那个「无法关闭」的窗口，所以看起来随机、点重试有时又好了",
+        "本版接管了这一步：某个文件被占用时先重试一轮，仍被占用就直接删除其余文件继续安装，绝不再中止升级；同时把「到底是哪个文件被占用」写进日志",
+        "顺带把「关闭旧版」也收归自己做：先正常请求关闭（让后端干净退出、账号不用重登），再按真实安装目录强制清理并轮询确认退干净；自选过安装目录的用户以前不在清理范围内，这个漏洞一并补上",
+        "说明一句实话：升级时执行「移除旧版」的是旧版本自带的卸载程序，所以本次从 1.0.92 升到 1.0.93 的过程本身仍有可能提示一次，点「重试」即可继续、安装一定能完成；装上 1.0.93 之后，此类提示不再出现",
+        "诊断信息写入 %TEMP%\\chatx_install_reap.log，日后报障带上这个文件即可直接定位",
         "数据、各平台登录状态一律不受影响"
       ],
       "en": [
-        "Some users still hit \"ChatX cannot be closed - close it manually and click Retry\" after 1.0.92. That dialog comes from the installer framework's own check, which allows only ~6s for the app to go away, while ChatX deliberately takes up to 8s (longer with the WeChat PC copilot running) to shut its backend and sidecars down cleanly - so slower machines always lost that race",
-        "Setup now owns the whole \"close the old version\" step: ask nicely first (so the backend exits cleanly and accounts never need to log in again), then force by the real install directory, polling for proof at every step instead of sleeping a fixed amount and hoping",
-        "Custom install folders were previously outside the sweep (only the default folder matched); it now matches the actual install path",
-        "If something truly cannot be closed (for example ChatX was started as administrator), setup carries on and says so instead of parking you on a Retry button; details go to %TEMP%\\chatx_install_reap.log for support",
+        "Some users still hit \"ChatX cannot be closed - close it manually and click Retry\" after 1.0.92, and only got through after a reboot and another click. The real cause turned out to have nothing to do with whether the app was closed",
+        "Root cause: before installing the new version, setup removes the old one by renaming every file in the install folder - and if even one rename fails, the whole tree is rolled back and the step reports failure. We ship about 9,400 files, so an antivirus scan holding any single one of them is enough to fail the upgrade. The framework retries five times and only then shows that dialog, which is why it looked random and why clicking Retry sometimes worked",
+        "Setup now owns that step: a busy file costs one retry, then the remaining files are removed directly and the install continues - the upgrade is never aborted. Which file was busy is written to the log",
+        "The \"close the old version\" step is now ours too: ask nicely first (so the backend exits cleanly and accounts never need to log in again), then force by the real install directory, polling for proof. Custom install folders were previously outside that sweep; fixed",
+        "To be straight with you: the \"remove the old version\" step is performed by the OLD version's own uninstaller, so this one upgrade from 1.0.92 to 1.0.93 can still prompt once - click Retry and it will finish. Once you are on 1.0.93, the prompt is gone for good",
+        "Diagnostics land in %TEMP%\\chatx_install_reap.log - send that file with any report and we can pinpoint it",
         "Your data and account logins are untouched"
       ]
     }
