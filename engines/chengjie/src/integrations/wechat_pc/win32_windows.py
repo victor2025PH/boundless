@@ -14,6 +14,8 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from typing import List, Optional
 
+from src.integrations.wechat_pc.env_check import classify_window
+
 WECHAT_PROCESS_NAMES = ("weixin.exe", "wechat.exe")
 MAIN_WINDOW_CLASS = "mmui::MainWindow"
 
@@ -85,7 +87,9 @@ def find_wechat_windows(*, visible_only: bool = False) -> List[TopWindow]:
 
 
 def main_windows(windows: List[TopWindow]) -> List[TopWindow]:
-    return [w for w in windows if w.class_name == MAIN_WINDOW_CLASS]
+    """主窗：3.x 顶层类名就是 ``mmui::MainWindow``；4.x 顶层是 Qt 窗（``Qt51514QWindowIcon``，标题「微信」），
+    ``mmui::MainWindow`` 只在 UIA 树里——按标题+尺寸分（:func:`env_check.classify_window`），否则 4.1.13 真机永远数到 0 个主窗。"""
+    return [w for w in windows if classify_window(w.class_name, w.title, w.width, w.height) == "main"]
 
 
 def select_main_window(windows: List[TopWindow], *, hwnd: int = 0, pid: int = 0) -> Optional[TopWindow]:

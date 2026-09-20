@@ -1115,17 +1115,30 @@ class UiaBackend:
             pos = _left_of_list(c)
             if pos is not None:
                 best.append((pos, c))
-        if not best:
-            deadline = time.monotonic() + UIA_OP_TIMEOUT
-            for c in _walk(main, 12):
-                if time.monotonic() > deadline:
-                    break
-                if getattr(c, "ControlTypeName", "") != "ButtonControl":
-                    continue
-                pos = _left_of_list(c)
-                if pos is not None:
-                    best.append((pos, c))
         return min(best, key=lambda x: x[0])[1] if best else None
+
+    def _self_avatar_point(self, main: Any) -> Optional[Tuple[int, int]]:
+        """4.1.13 真机：头像不在 UIA 树里，但它就在左侧 ``mmui::MainTabBar`` 顶部、第一个 ``XTabBarItem``（「微信」）之上的空白带；
+        点那一带的中心就弹本人资料卡。没有那带（不足 40px）就不猜。"""
+        bar = None
+        deadline = time.monotonic() + UIA_OP_TIMEOUT
+        for c in _walk(main, 8):
+            if time.monotonic() > deadline:
+                return None
+            if _s(getattr(c, "ClassName", "")) == "mmui::MainTabBar":
+                bar = c
+                break
+        if bar is None:
+            return None
+        try:
+            r = bar.BoundingRectangle
+            first_tab = min((int(t.BoundingRectangle.top) for t in _walk(bar, 6)
+                             if _s(getattr(t, "ClassName", "")) == "mmui::XTabBarItem"), default=0)
+            if first_tab - int(r.top) < 40 or r.right <= r.left:
+                return None
+            return (int(r.left + r.right) // 2, (int(r.top) + first_tab) // 2)
+        except Exception:
+            return None
 
     def read_self_identity(self) -> Dict[str, str]:
         """登录微信的昵称/微信号（点导航栏头像 → 本人资料卡）；读不到的键为空串。弹窗用完即关。"""
@@ -1140,11 +1153,15 @@ class UiaBackend:
             except Exception:
                 pass
         avatar = self._self_avatar(main)
-        if avatar is None:
+        point = None if avatar is not None else self._self_avatar_point(main)
+        if avatar is None and point is None:
             return out
         try:
             self._activate(main)
-            avatar.Click(simulateMove=True)
+            if avatar is not None:
+                avatar.Click(simulateMove=True)
+            else:
+                _uia.Click(point[0], point[1])
             time.sleep(1.2)
             popup = None
             for c in self._qt_windows():

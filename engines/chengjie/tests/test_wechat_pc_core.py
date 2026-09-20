@@ -991,6 +991,21 @@ def test_select_main_window_binds_by_hwnd_then_pid_and_never_switches_accounts()
     assert select_main_window([b_login]) is None
 
 
+def test_main_windows_recognises_wechat_4x_qt_top_level():
+    """4.1.13 真机（2026-09-21 实锤）：顶层类名是 Qt51514QWindowIcon、标题「微信」，mmui::MainWindow 只在 UIA 树里；
+    只按类名筛 → 0 个主窗 → 未绑定锚定失效、设置页选不到窗口。"""
+    from src.integrations.wechat_pc.win32_windows import TopWindow, main_windows, select_main_window
+    qt_main = TopWindow(14880096, 17468, "Qt51514QWindowIcon", "微信", True, "weixin.exe", 916, 668)
+    qt_main_min = TopWindow(14880097, 17469, "Qt51514QWindowIcon", "WeChat", True, "weixin.exe", 0, 0)
+    qt_login = TopWindow(3001, 17470, "Qt51514QWindowIcon", "WeChat", True, "weixin.exe", 280, 380)
+    qt_chat = TopWindow(3002, 17468, "Qt51514QWindowIcon", "张三", True, "weixin.exe", 700, 600)
+    old_main = TopWindow(1001, 501, "mmui::MainWindow", "微信", True, "weixin.exe", 900, 700)
+    mains = main_windows([qt_login, qt_chat, qt_main, qt_main_min, old_main])
+    assert [w.hwnd for w in mains] == [14880096, 14880097, 1001]
+    assert select_main_window([qt_login, qt_main], pid=17468) is qt_main
+    assert select_main_window([qt_login], pid=17470) is None
+
+
 def test_uia_backend_unbound_anchors_to_first_process_and_sticks(monkeypatch):
     """没绑时首见主窗锤定其 pid：之后枚举次序变化/另一个微信启动都不换窗；那个进程没了才重新锚定。"""
     from src.integrations.wechat_pc import uia_backend as U
