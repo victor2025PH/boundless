@@ -28,10 +28,23 @@ if (-not (Get-NetFirewallRule -DisplayName 'AITR ASR 8765' -ErrorAction Silently
     Write-Output 'firewall: rule exists'
 }
 
-# 4) scheduled task: autostart at boot as SYSTEM (GPU compute works under SYSTEM)
-schtasks /Create /F /TN 'AITR_ASR_176' /SC ONSTART /RU SYSTEM /RL HIGHEST `
-    /TR "powershell -NoProfile -ExecutionPolicy Bypass -File $base\start_asr.ps1" | Out-Null
-Write-Output 'task: AITR_ASR_176 registered'
+# 4) scheduled task: autostart at boot as SYSTEM (GPU compute works under SYSTEM).
+# ExecutionTimeLimit MUST be 0: schtasks /Create defaults to PT72H, which closes
+# the console and aborts ctranslate2 (Intel Fortran "window-CLOSE event").
+# 2026-09-18 19:37 on 198: started 09-15 19:36, killed at 72h, ASR down until restart.
+$taskName = 'AITR_ASR_176'
+$tr = "powershell -NoProfile -ExecutionPolicy Bypass -File $base\start_asr.ps1"
+schtasks /Create /F /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $tr | Out-Null
+try {
+    $t = Get-ScheduledTask -TaskName $taskName
+    $t.Settings.ExecutionTimeLimit = 'PT0S'
+    $t.Settings.DisallowStartIfOnBatteries = $false
+    $t.Settings.StopIfGoingOnBatteries = $false
+    Set-ScheduledTask -InputObject $t | Out-Null
+    Write-Output 'task: AITR_ASR_176 registered (ExecutionTimeLimit=PT0S)'
+} catch {
+    Write-Output ("task: AITR_ASR_176 registered but failed to lift 72h limit: " + $_)
+}
 
 # 5) (re)start now via the task so it runs in the same context as after reboot
 schtasks /End /TN 'AITR_ASR_176' 2>$null | Out-Null

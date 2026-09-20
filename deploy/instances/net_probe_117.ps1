@@ -122,6 +122,22 @@ if ($zombieN -ge 2 -and (-not $lastHeal -or ($now - $lastHeal).TotalMinutes -ge 
 $cur.zombieN = $zombieN
 if ($lastHeal) { $cur.lastHeal = $lastHeal.ToString('yyyy-MM-dd HH:mm:ss') }
 
+# ---- ZeroTier 兜底默认路由自愈（2026-09-19，08-27 事故遗留项落地）----
+# ZT 虚拟网卡上会出现 0.0.0.0/0 via 25.255.255.254（ZT 假网关）metric 9999 的路由。它平时不生效，
+# 但开机 DHCP 未完成、或 USB 网卡抖动导致真默认路由消失的那几十秒里，它就成了唯一默认路由：
+# 流量进 ZT 黑洞（SYN 超时而不是立刻 network unreachable），隧道/坐席重连被拖慢 20s+，
+# 探针本身也记成 GATEWAY LOST (gw=25.255.255.254)。allowDefault 已是 0 仍会出现，故每拍巡检删除。
+# 只删「默认路由 + 下一跳=ZT 假网关」这一条；ZT 自身的 10.x/24 子网路由不碰，远程运维不受影响。
+try {
+  $ztDef = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq '25.255.255.254' })
+  if ($ztDef.Count -gt 0) {
+    $ztDef | Remove-NetRoute -Confirm:$false -ErrorAction Stop
+    $events += "SELF-HEAL: 删除 ZeroTier 兜底默认路由 0.0.0.0/0 via 25.255.255.254（{0} 条；开机/网卡抖动时它会把出口流量引进黑洞）" -f $ztDef.Count
+  }
+} catch {
+  $events += "SELF-HEAL-FAILED: 删除 ZeroTier 默认路由失败：{0}" -f $_.Exception.Message
+}
+
 if (-not $prev) {
   $events += "probe v2 started: $line"
 } else {

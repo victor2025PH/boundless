@@ -8,8 +8,14 @@ alwaysApply: false
 
 碰 `engines/chengjie` 或 `deploy/instances` 时：
 
-- 重启唯一入口：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi`
+- 重启唯一入口：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi -Reason "batch: <装的什么>"`
+- **`-Reason` 必填**（2026-09-19 起脚本强制，`-Force` 也不能绕；watchdog/`-Advise`/`-DryRun` 免）：
+  9 月 19 天 61 次重启里 28 次人工、带默认 reason 的账本无法复盘。reason 会落
+  `restart_events.jsonl` + ops 告警 + 坐席蓝条。
 - 先 `-Advise`；禁止 `scripts\restart_main.ps1` / 引擎根裸起 / 乱 `taskkill`
+- **生产机 = 渲染/重活禁区**（2026-09-19 实锤：ffmpeg + 3 个 headless chrome 把 8 核打满，
+  坐席轮询超时→「连接中断」）：`ffmpeg.exe / ffmpeg-win64.exe / chrome-headless-shell.exe`
+  已经 IFEO `PerfOptions\CpuPriorityClass=5` 机器级强制 BelowNormal；批量渲染放低峰或别的机器。
 - 机器级冷却目录：`D:\chengjie-instances\.ops\restart_cooldown\`（与 watchdog 共用）
 - **手动重启间隔 ≥30 分钟**（2026-07-31 起，脚本强制；`-Force` 穿越会在事件账本打
   `[forced]` 标记）。停机前脚本会自动向在线工作台广播「维护窗口」蓝条（SSE），

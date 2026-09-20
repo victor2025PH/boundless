@@ -61,7 +61,7 @@ _log "compile gate clean ($($files.Count) dirty .py)"
 
 # ── 护栏 3：唯一入口重启 ────────────────────────────────────────────────────
 & powershell -ExecutionPolicy Bypass -File (
-    Join-Path $repo "deploy\instances\restart_instance.ps1") -Instance zhiliao 2>&1 |
+    Join-Path $repo "deploy\instances\restart_instance.ps1") -Instance zhiliao -Reason 'ensure_restart_once: nightly .py load' 2>&1 |
     Out-File -Append -Encoding utf8 $log
 if ($LASTEXITCODE -eq 0) {
     _log "restart OK - P23 .py loaded"

@@ -7,12 +7,13 @@
 #   - Optional ops alert on success/fail (EVENT_INGEST_KEY, same relay as watchdog)
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao
-#   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance tongyi -Force
+#   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao -Reason "batch: <what>"
+#   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance tongyi -Force -Reason "<why>"
 #   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao -DryRun
 #   powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao -Advise
+#   -Reason is REQUIRED for manual restarts since 2026-09-19 (watchdog/Advise/DryRun exempt).
 #
-# Exit: 0=ready (or Advise/DryRun ok)  1=fail/cooldown/hot-only  2=probe/config fault
+# Exit: 0=ready (or Advise/DryRun ok)  1=fail/cooldown/hot-only/no-reason  2=probe/config fault
 # ASCII-only messages (PS 5.1 GBK decode pit).
 
 [CmdletBinding()]
@@ -56,6 +57,19 @@ if ($FromWatchdog) {
     $AllowHotOnly = $true
     $NoAlert = $true
     if ($Reason -eq 'restart_instance') { $Reason = 'watchdog' }
+}
+
+# Reason gate (2026-09-19): 61 zhiliao restarts in 19 days (28 manual, 5 on 09-18 alone) and
+# every seat sees a 20-40s outage banner per restart. Entries logged with the default reason
+# ("restart_instance", e.g. 09-19 12:23) make restart_events.jsonl useless for the weekly
+# "why are we restarting so much" review. Manual/agent callers MUST say what they are loading.
+# -Force does NOT bypass this (a reason costs nothing); watchdog/Advise/DryRun are exempt.
+if (-not $FromWatchdog -and -not $Advise -and -not $DryRun -and
+    ([string]$Reason).Trim() -in @('', 'restart_instance')) {
+    Write-Host ("[restart-{0}] -Reason is required for manual restarts. Say WHAT you are loading, e.g." -f $Instance) -ForegroundColor Red
+    Write-Host ('   -Reason "batch: <feature/fix>; piggyback: <sibling batches>"') -ForegroundColor Yellow
+    Write-Host '   (reason lands in restart_events.jsonl + ops alert + the blue maintenance banner seats see)' -ForegroundColor DarkGray
+    exit 1
 }
 
 $PortMap = @{
@@ -191,8 +205,8 @@ if ($Advise) {
     Write-Host ("    powershell -ExecutionPolicy Bypass -File engines\chengjie\scripts\restart_preflight.ps1 -Instance {0}" -f $Instance)
     Write-Host '  Declare the batch so siblings can piggyback (and -Done when finished):'
     Write-Host '    powershell -ExecutionPolicy Bypass -File engines\chengjie\scripts\agent_probe.ps1 -Intent "batch: <what>"'
-    Write-Host '  Command (only after preflight GO):'
-    Write-Host ("    powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance {0}" -f $Instance)
+    Write-Host '  Command (only after preflight GO; -Reason is mandatory):'
+    Write-Host ("    powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance {0} -Reason `"batch: <what>`"" -f $Instance)
     Write-Host '  Forbidden: scripts\restart_main.ps1 , mass taskkill , bare python main.py at engine root'
     Write-Host ("  Now: port={0} listening={1} login_ready={2}" -f $effPort, $listenTxt, $loginTxt)
     Write-Host ("  Dirty gate: kind={0} py={1} hot={2} other={3}" -f $dirty.kind, $dirty.py.Count, $dirty.hot.Count, $dirty.other.Count)
@@ -323,7 +337,15 @@ if ($listenPids.Count) {
             -Method Post -ContentType 'application/json' -Body $noticeBody -TimeoutSec 3 `
             -Headers @{ Authorization = 'Bearer restart-orchestrator' } | Out-Null
         Say ("maintenance notice broadcast to open workbenches (window<={0}s)" -f $noticeSec)
-        Start-Sleep -Seconds 2   # let SSE flush before the stop cuts the streams
+        # Pre-stop grace (2026-09-19, was 2s): the inbox SSE client reconnects with a 6s backoff
+        # after any stream error, and /api/workspace/stream replays the last 30 bus events to a
+        # fresh subscriber. A 2s grace skipped every page that happened to be inside that backoff
+        # (or a throttled background tab) -> those seats never learned "this is maintenance" and
+        # rendered the red "server unreachable" banner for a planned restart (09-19 12:23 case).
+        # 8s covers one full reconnect cycle + replay. Seats are still fully served during the
+        # grace; only the operator waits 6s longer.
+        Say 'pre-stop grace 8s (covers one SSE reconnect cycle so late/reconnecting tabs get the notice)...'
+        Start-Sleep -Seconds 8
     } catch {
         Say ("maintenance notice skipped ({0})" -f $_.Exception.Message) 'DarkYellow'
     }

@@ -40,6 +40,12 @@ ONSTART 任务只保开机,白天崩了没人管会静默降级 CPU 兜底,看�
   部署：`scp scripts\asr176\asr_server.py asr198:C:/aitr_asr/asr_server.py` →
   `ssh asr198 powershell -NoProfile -ExecutionPolicy Bypass -File C:\aitr_asr\restart_asr_198.ps1`
   （本目录 `restart_asr_198.ps1` 即该脚本）→ `/health` 出 `asr_loaded=true`（~15s）。
+- **72h 自杀（2026-09-18）**：`schtasks /Create` 默认 `ExecutionTimeLimit=PT72H`。
+  `AITR_ASR_198` 于 09-15 19:36 启动，09-18 19:37 被关控制台，日志末行
+  `forrtl: error (200): program aborting due to window-CLOSE event`，之后 8765 无监听、
+  看门狗任务也没装到 198。处置：`fix_asr_198_task.ps1` 把时限改成 `PT0S` 再重启；
+  `register_watchdog.ps1` 挂 `AITR_ASR_WATCHDOG`（`watchdog_asr.ps1` 优先打 198 任务）。
+  `deploy_asr.ps1` 建任务后必须写 `ExecutionTimeLimit=PT0S`，否则三天后再死一次。
 - `asr_server.py` 09-12 变更：`condition_on_previous_text=False`；whisper 自带三阈值显式钉住；
   接 OpenAI 标准 `prompt` 字段作 initial_prompt；`verbose_json` 多回
   `language_probability / avg_logprob / no_speech_prob / compression_ratio / vad / rescue`
