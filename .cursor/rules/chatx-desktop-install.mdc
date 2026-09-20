@@ -161,6 +161,38 @@ whisper STT :7854），智聊桌面版 2026-08-24 后未再运行、无自启，
 
 `_bak` 恢复副本只许人工删除（wipe 脚本会跳过 `*bak20*`）；节点确认健康后再清。
 
+## 升级安装弹「无法关闭」：三处同文，先定位打印者（2026-09-20 三轮才修对，v1.0.93）
+
+`智聊 无法关闭。请手动关闭它，然后单击重试以继续。`＝ app-builder-lib 的 `appCannotBeClosed`，
+**三个地方都打印同一句**，截图分辨不出来。凭症状改代码＝修错地方（1.0.92 白发一版）：
+
+| 出处 | 触发 | 出现时机 |
+|---|---|---|
+| `allowOnlyOneInstallerInstance.nsh`（`_CHECK_APP_RUNNING`） | 杀不掉应用 | 很早，进度条之前 |
+| `installUtil.nsh` UninstallLoop | 旧卸载器连失败 5 次 | **进度条中段**（现场截图都是这个） |
+| `extractAppPackage.nsh` | CopyFiles 撞占用文件（5×1s） | 进度条中后段 |
+
+两个真因（都已在 1.0.93 接管，改 `installer.nsh` 前先读其头部注释）：
+
+1. **库存检查预算 ~6.3s < 本应用关停 8s+**：`main.js` 的 `before-quit` 按设计 `preventDefault` +
+   `stopAndWait(8000)` + `sidecars.stopAll`（B57：后端必须干净退，半死后端抢会话＝全账号重登）。
+   库存那段决定性复查紧贴 `taskkill /f`、零沉降 → **按设计正常退出的应用必输**。现由
+   `cxCloseAppNicely`（WM_CLOSE + 轮询）→ `cxReapFamily`（强杀 + 复验）整段接管，**永不再插库存那段**
+   （连带 `getProcessInfo.nsh` / `Var pid` 一起删，否则 `-WX` 判未引用变量直接编译失败）。
+2. **单个被占用文件否决整次升级**：升级把旧卸载器以 `/S --updated` 跑 → `un.atomicRMDir` 逐个改名
+   `$INSTDIR` 全部文件，**任一失败即整树回滚 + `Abort`（退出码 2＝「Failed to uninstall old
+   application files … : 2」）**；模板重试 5 次才弹窗。随包 9429 个文件，杀软以不带 `FILE_SHARE_DELETE`
+   打开任意一个就够了（实测元凶：`playwright-core` 的 `privacy-sandbox-attestations.dat`）。现由
+   `customRemoveFiles` 接管：点名占用文件 → 重试一次 → 降级 `RMDir /r $INSTDIR` → 卸载器返回 0。
+   **绝不把 `$INSTDIR` 残留排进重启/登录后删除队列**（新版本马上装进这个目录）。
+
+- **报障第一件事要 `%TEMP%\chatx_install_reap.log`**：`cxLogState` 每次安装都写（不只失败时），
+  一行区分「进程没退」/「哪个文件被锁」/「解包阶段撞占用」。
+- 卸载器语义的实弹验证走隔离测试用户（见下节）；`probe_*` 的坑：测试应用若复用宿主后端会秒退，
+  **探针不复现≠没问题**，先确认被测应用真的自己带后端。
+- 边界：执行「移除旧版」的是**旧版本自带**的卸载器，所以修复只对「装上本版之后的下一次升级」
+  完全生效；发版文案必须如实写这一跳仍可能提示一次，否则必收「还是有问题」。
+
 ## 用户侧卸载语义（desktop >= 1.0.45，`build/installer.nsh`）
 
 交互式卸载器新增「数据处置」页：**保留数据（默认）** / **彻底删除**（需勾选不可恢复确认，
