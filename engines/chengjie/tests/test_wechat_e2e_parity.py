@@ -646,9 +646,60 @@ def test_wechat_kf_connect_guide_backend(wx_env, monkeypatch):
         # env 带上 supervisor 摘要
         e = client.get("/api/setup/wechat_pc/env").json()
         assert e["supervisor"]["state"] == "offline" and e["supervisor"]["autostart"] is False
+        assert e["accounts"] == [sup.account_id] and "main_windows" in e
+
+        # 多账号（2026-09-20 P1）：加一个 B 号 → 池里两个 supervisor，各绑各的 pid，老端点不带 account_id 仍是主账号
+        import src.integrations.wechat_pc.win32_windows as _ww
+
+        class _W:
+            def __init__(self, hwnd, pid, title):
+                self.hwnd, self.pid, self.title, self.width, self.height = hwnd, pid, title, 1000, 700
+
+        monkeypatch.setattr(_ww, "find_wechat_main_windows", lambda: [_W(11, 101, "微信"), _W(22, 202, "微信")])
+        w = client.get("/api/setup/wechat_pc/windows").json()
+        assert w["ok"] and [x["pid"] for x in w["windows"]] == [101, 202] and all(not x["bound_account_id"] for x in w["windows"])
+        r = client.post("/api/setup/wechat_pc/accounts", json={"account_id": "wx-b", "label": "B 号", "window_pid": 202}).json()
+        assert r["ok"] and r["added"] == ["wx-b"] and r["account"]["account_id"] == "wx-b" and r["account"]["binding"]["window_pid"] == 202
+        pool = app.state.wechat_pc_supervisors
+        assert pool.account_ids == [sup.account_id, "wx-b"] and app.state.wechat_pc_supervisor is sup, "主账号单例不变"
+        saved_accounts = ((cm.config.get("platform_login") or {}).get("wechat_pc") or {}).get("accounts")
+        assert saved_accounts and saved_accounts[0]["account_id"] == "wx-b" and saved_accounts[0]["window_pid"] == 202
+        supb = pool.get("wx-b")
+        supb.driver_ready_provider = sup.driver_ready_provider
+        supb._assign_job = lambda pid: None
+        supb._kill_tree = lambda proc: proc.kill()
+        r = client.post("/api/setup/wechat_pc/copilot/start?account_id=wx-b").json()
+        assert r["ok"] and r["action"] == "start" and "--pid" in spawned[-1].cmd and spawned[-1].cmd[spawned[-1].cmd.index("--pid") + 1] == "202"
+        assert spawned[-1].cmd[spawned[-1].cmd.index("--account-id") + 1] == "wx-b"
+        assert "copilot.wx-b.log" in r["log_path"]
+        assert client.get("/api/setup/wechat_pc/copilot/status").json()["managed"] is False, "不带 account_id = 主账号，没在跑"
+        assert client.get("/api/setup/wechat_pc/copilot/status?account_id=wx-b").json()["managed"] is True
+        assert client.get("/api/setup/wechat_pc/copilot/status?account_id=nope").status_code == 404
+        acc = client.get("/api/setup/wechat_pc/accounts").json()
+        assert acc["primary_account_id"] == sup.account_id and [a["account_id"] for a in acc["accounts"]] == [sup.account_id, "wx-b"]
+        w = client.get("/api/setup/wechat_pc/windows").json()
+        assert [x["bound_account_id"] for x in w["windows"]] == ["", "wx-b"]
+        # 同一个窗口不能绑给两个账号；非法 id 拒绝
+        assert client.post("/api/setup/wechat_pc/accounts", json={"window_pid": 202}).status_code == 400
+        assert client.post("/api/setup/wechat_pc/accounts", json={"account_id": "a b"}).status_code == 400
+        # 改 B 的绑定，进程在跑 → 自动重拉一次（新 pid 进命令行）
+        n = len(spawned)
+        r = client.post("/api/setup/wechat_pc/accounts", json={"account_id": "wx-b", "window_pid": 101}).json()
+        assert r["ok"] and r["updated"] == ["wx-b"] and r["restarted"] is True and len(spawned) == n + 1
+        assert spawned[-1].cmd[spawned[-1].cmd.index("--pid") + 1] == "101"
+        # B 号自启开关落到 accounts[]，不碰主账号顶层
+        r = client.post("/api/setup/wechat_pc/autostart?account_id=wx-b", json={"enabled": True}).json()
+        assert r["ok"] and supb.autostart is True and sup.autostart is False
+        blk = (cm.config.get("platform_login") or {}).get("wechat_pc") or {}
+        assert blk.get("autostart") is False and blk["accounts"][0]["autostart"] is True
+        # 删 B → 进程停、池里没了；主账号不能删
+        assert client.delete(f"/api/setup/wechat_pc/accounts/{sup.account_id}").status_code == 400
+        r = client.delete("/api/setup/wechat_pc/accounts/wx-b").json()
+        assert r["ok"] and r["removed"] == ["wx-b"] and spawned[-1]._rc == 1 and pool.account_ids == [sup.account_id]
+        assert client.get("/api/setup/wechat_pc/copilot/status?account_id=wx-b").status_code == 404
     finally:
         try:
-            asyncio.run(sup.shutdown())
+            asyncio.run(app.state.wechat_pc_supervisors.shutdown())
         except Exception:
             pass
 

@@ -143,7 +143,7 @@ class WeChatPcSupervisor:
                  env_provider: Optional[Callable[[], Dict[str, Any]]] = None,
                  driver_ready_provider: Optional[Callable[[], Dict[str, Any]]] = None,
                  python_exe: str = "", autostart: bool = False, interval: float = 3.0,
-                 window_hwnd: int = 0, window_pid: int = 0, expect_wxid: str = "",
+                 window_hwnd: int = 0, window_pid: int = 0, expect_wxid: str = "", log_name: str = "copilot.log",
                  popen: Callable[..., Any] = subprocess.Popen, now: Callable[[], float] = time.time) -> None:
         self.engine_root = str(engine_root)
         self.backend_url = str(backend_url).rstrip("/")
@@ -161,6 +161,7 @@ class WeChatPcSupervisor:
         self.window_hwnd = int(window_hwnd or 0)
         self.window_pid = int(window_pid or 0)
         self.expect_wxid = str(expect_wxid or "").strip()
+        self.log_name = str(log_name or "copilot.log")
         self._popen = popen
         self._now = now
 
@@ -179,7 +180,7 @@ class WeChatPcSupervisor:
     # ── 观察 ──
     @property
     def log_path(self) -> str:
-        return os.path.join(self.state_dir, "copilot.log")
+        return os.path.join(self.state_dir, self.log_name)
 
     def _proc_alive(self) -> bool:
         p = self._proc
@@ -377,6 +378,19 @@ class WeChatPcSupervisor:
         self.autostart = bool(enabled)
         self._event("autostart", "on" if enabled else "off")
 
+    def set_binding(self, *, window_hwnd: int = 0, window_pid: int = 0, expect_wxid: str = "",
+                    label: Optional[str] = None) -> bool:
+        """改窗口/身份绑定（下次 start 生效；返回是否有变化——变了且进程在跑时调用方应 restart）。"""
+        new = (int(window_hwnd or 0), int(window_pid or 0), str(expect_wxid or "").strip())
+        old = (self.window_hwnd, self.window_pid, self.expect_wxid)
+        if label is not None and str(label) != self.label:
+            self.label = str(label)
+        if new == old:
+            return False
+        self.window_hwnd, self.window_pid, self.expect_wxid = new
+        self._event("rebind", f"hwnd={new[0]} pid={new[1]} wxid={new[2]}")
+        return True
+
     def reset_backoff(self) -> None:
         self._failures = 0
         self._backoff_until = 0.0
@@ -540,7 +554,147 @@ class WeChatPcSupervisor:
             self._logf = None
 
 
-__all__ = ["WeChatPcSupervisor", "derive_state", "decide_autostart", "next_backoff", "build_driver_command",
+def account_log_name(account_id: str, primary_id: str) -> str:
+    """每个账号一份驱动日志：主账号沿用 ``copilot.log``（老路径、老「查看日志」链接不变），其余 ``copilot.<id>.log``。"""
+    aid = str(account_id or "")
+    if not aid or aid == str(primary_id or ""):
+        return "copilot.log"
+    safe = "".join(ch if (ch.isalnum() or ch in "-_.") else "_" for ch in aid)[:40]
+    return f"copilot.{safe}.log"
+
+
+def normalize_accounts(blk: Dict[str, Any], *, default_account_id: str, default_label: str) -> List[Dict[str, Any]]:
+    """``platform_login.wechat_pc`` 配置块 → 账号列表（纯函数）。第一项永远是「主账号」（块顶层的
+    ``account_id/label/window_*/expect_wxid/autostart``——单账号老配置零改动）；``accounts[]`` 里每一项再各一个，
+    与主账号同 id 的项按主账号的补丁合并（不重复），空 id / 重复 id 跳过。"""
+    def _i(d: Dict[str, Any], k: str) -> int:
+        try:
+            v = int(d.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return v if v > 0 else 0
+
+    def _row(d: Dict[str, Any], aid: str, label_default: str) -> Dict[str, Any]:
+        return {"account_id": aid, "label": str(d.get("label") or label_default),
+                "window_hwnd": _i(d, "window_hwnd"), "window_pid": _i(d, "window_pid"),
+                "expect_wxid": str(d.get("expect_wxid") or "").strip()[:64],
+                "autostart": bool(d.get("autostart", False))}
+
+    blk = dict(blk or {})
+    primary_id = str(blk.get("account_id") or default_account_id).strip()[:40] or default_account_id
+    out = [_row(blk, primary_id, default_label)]
+    seen = {primary_id}
+    for item in (blk.get("accounts") or []):
+        if not isinstance(item, dict):
+            continue
+        aid = str(item.get("account_id") or "").strip()[:40]
+        if not aid:
+            continue
+        if aid in seen:
+            if aid == primary_id:
+                # 主账号也可写在 accounts[] 里：以列表项为准覆盖绑定字段（引导页统一走 accounts 端点写）
+                merged = dict(blk)
+                merged.update({k: v for k, v in item.items() if k != "account_id"})
+                out[0] = _row(merged, primary_id, default_label)
+            continue
+        seen.add(aid)
+        out.append(_row(item, aid, f"{default_label} {len(out) + 1}"))
+    return out
+
+
+class WeChatPcSupervisorPool:
+    """多账号：每个 ``account_id`` 一个 :class:`WeChatPcSupervisor`（= 一个驱动子进程，各绑各的微信窗口）。
+
+    ``factory(account_row) -> WeChatPcSupervisor`` 由调用方提供（注入 token/presence/env 等回调）。第一项为主账号，
+    对外 ``primary`` 保持旧的单例语义（``app.state.wechat_pc_supervisor``、不带 account_id 的旧端点）。
+    """
+
+    def __init__(self, factory: Callable[[Dict[str, Any]], WeChatPcSupervisor]) -> None:
+        self._factory = factory
+        self._sups: Dict[str, WeChatPcSupervisor] = {}
+        self._order: List[str] = []
+
+    def sync(self, accounts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """按配置对齐：新增的建、已有的改绑定/自启、配置里没了的停掉并移除。返回 ``{added, updated, removed}``。"""
+        added: List[str] = []
+        updated: List[str] = []
+        want = [str(a.get("account_id") or "") for a in accounts if a.get("account_id")]
+        for row in accounts:
+            aid = str(row.get("account_id") or "")
+            if not aid:
+                continue
+            sup = self._sups.get(aid)
+            if sup is None:
+                try:
+                    sup = self._factory(row)
+                except Exception:
+                    logger.debug("[wechat_pc.pool] 建 supervisor 失败 %s", aid, exc_info=True)
+                    continue
+                self._sups[aid] = sup
+                added.append(aid)
+            else:
+                changed = sup.set_binding(window_hwnd=row.get("window_hwnd", 0), window_pid=row.get("window_pid", 0),
+                                          expect_wxid=row.get("expect_wxid", ""), label=row.get("label"))
+                if bool(row.get("autostart", False)) != sup.autostart:
+                    sup.set_autostart(bool(row.get("autostart", False)))
+                if changed:
+                    updated.append(aid)
+        removed = [aid for aid in self._order if aid not in want]
+        for aid in removed:
+            sup = self._sups.pop(aid, None)
+            if sup is not None:
+                try:
+                    sup.stop()
+                except Exception:
+                    pass
+                task = getattr(sup, "_task", None)
+                if task is not None:
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
+        self._order = want
+        return {"added": added, "updated": updated, "removed": removed}
+
+    @property
+    def primary(self) -> Optional[WeChatPcSupervisor]:
+        return self._sups.get(self._order[0]) if self._order else None
+
+    @property
+    def account_ids(self) -> List[str]:
+        return list(self._order)
+
+    def get(self, account_id: str = "") -> Optional[WeChatPcSupervisor]:
+        aid = str(account_id or "").strip()
+        return self._sups.get(aid) if aid else self.primary
+
+    def all(self) -> List[WeChatPcSupervisor]:
+        return [self._sups[a] for a in self._order if a in self._sups]
+
+    def status_all(self) -> List[Dict[str, Any]]:
+        out = []
+        for sup in self.all():
+            try:
+                out.append(sup.status())
+            except Exception:
+                out.append({"account_id": sup.account_id, "label": sup.label, "state": STATE_ERROR,
+                            "reason": "status_failed"})
+        return out
+
+    def ensure_loops(self, poll_sec: float = 15.0) -> None:
+        for sup in self.all():
+            if sup.autostart:
+                sup.ensure_loop(poll_sec)
+
+    async def shutdown(self) -> None:
+        for sup in self.all():
+            try:
+                await sup.shutdown()
+            except Exception:
+                pass
+
+
+__all__ = ["WeChatPcSupervisor", "WeChatPcSupervisorPool", "normalize_accounts", "account_log_name", "derive_state", "decide_autostart", "next_backoff", "build_driver_command",
            "STATE_IDLE", "STATE_STARTING", "STATE_ONLINE", "STATE_BLIND", "STATE_OFFLINE", "STATE_ERROR",
            "ACT_SKIP", "ACT_START", "ACT_WAIT_WECHAT", "ACT_BACKOFF", "ACT_NO_DRIVER", "TOKEN_ENV",
            "FROZEN_DRIVER_FLAG",

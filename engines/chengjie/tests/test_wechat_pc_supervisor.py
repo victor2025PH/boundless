@@ -286,3 +286,62 @@ def test_log_tail_reads_last_lines(world):
     (world.tmp / "state" / "copilot.log").write_text("a\n\nb\nc\n", encoding="utf-8")
     assert sup.log_tail(2) == ["b", "c"] and sup.log_tail(10) == ["a", "b", "c"]
     assert world.sup(state_dir=str(world.tmp / "nope")).log_tail() == []
+
+
+# ── 多账号：配置归一化 + 池 ─────────────────────────────────────────────────
+
+def test_normalize_accounts_primary_first_and_dedup():
+    blk = {"account_id": "wx-a", "label": "A", "window_pid": 111, "expect_wxid": "wxid_a",
+           "accounts": [{"account_id": "wx-b", "window_hwnd": 222, "autostart": True},
+                        {"account_id": "wx-a", "window_pid": 333},  # 同主账号 id → 合并进主账号，不重复
+                        {"account_id": ""}, "junk", {"account_id": "wx-b"}]}
+    rows = S.normalize_accounts(blk, default_account_id="wechat-pc", default_label="副驾")
+    assert [r["account_id"] for r in rows] == ["wx-a", "wx-b"]
+    assert rows[0]["window_pid"] == 333 and rows[0]["expect_wxid"] == "wxid_a" and rows[0]["label"] == "A"
+    assert rows[1]["window_hwnd"] == 222 and rows[1]["autostart"] is True and rows[1]["label"] == "副驾 2"
+    # 老单账号配置：块顶层零改动 → 恰好一行、默认 id
+    one = S.normalize_accounts({"tier": "semi"}, default_account_id="wechat-pc", default_label="副驾")
+    assert one == [{"account_id": "wechat-pc", "label": "副驾", "window_hwnd": 0, "window_pid": 0,
+                    "expect_wxid": "", "autostart": False}]
+    assert S.normalize_accounts({"window_hwnd": "abc", "window_pid": -3}, default_account_id="x", default_label="L")[0][
+        "window_hwnd"] == 0
+
+
+def test_account_log_name_primary_keeps_legacy_path():
+    assert S.account_log_name("wechat-pc", "wechat-pc") == "copilot.log"
+    assert S.account_log_name("", "wechat-pc") == "copilot.log"
+    assert S.account_log_name("wx b/2", "wechat-pc") == "copilot.wx_b_2.log"
+
+
+def test_pool_one_process_per_account_and_sync(world):
+    made: List[str] = []
+
+    def factory(row):
+        made.append(row["account_id"])
+        return world.sup(account_id=row["account_id"], label=row["label"], window_hwnd=row["window_hwnd"],
+                         window_pid=row["window_pid"], expect_wxid=row["expect_wxid"],
+                         log_name=S.account_log_name(row["account_id"], "wx-a"))
+
+    pool = S.WeChatPcSupervisorPool(factory)
+    rows = S.normalize_accounts({"account_id": "wx-a", "window_pid": 11,
+                                 "accounts": [{"account_id": "wx-b", "window_pid": 22}]},
+                                default_account_id="wechat-pc", default_label="L")
+    r = pool.sync(rows)
+    assert r["added"] == ["wx-a", "wx-b"] and pool.account_ids == ["wx-a", "wx-b"] and made == ["wx-a", "wx-b"]
+    assert pool.primary is pool.get("") is pool.get("wx-a") and pool.get("nope") is None
+    # 两个账号各拉一个子进程，命令行各绑各的 pid，日志各一份
+    pool.get("wx-a").start(); pool.get("wx-b").start()
+    cmds = [" ".join(s["cmd"]) for s in world.spawned]
+    assert len(cmds) == 2 and "--pid 11" in cmds[0] and "--pid 22" in cmds[1]
+    assert "--account-id wx-a" in cmds[0] and "--account-id wx-b" in cmds[1]
+    assert str(pool.get("wx-a").log_path).endswith("copilot.log") and str(pool.get("wx-b").log_path).endswith("copilot.wx-b.log")
+    sts = pool.status_all()
+    assert [s["account_id"] for s in sts] == ["wx-a", "wx-b"] and all(s["managed"] for s in sts)
+    # 改 B 的绑定 → updated（进程不自动重启，由调用方决定）；删 B → 停进程
+    rows2 = S.normalize_accounts({"account_id": "wx-a", "window_pid": 11,
+                                  "accounts": [{"account_id": "wx-b", "window_pid": 23}]},
+                                 default_account_id="wechat-pc", default_label="L")
+    assert pool.sync(rows2)["updated"] == ["wx-b"] and pool.get("wx-b").window_pid == 23
+    r3 = pool.sync(rows2[:1])
+    assert r3["removed"] == ["wx-b"] and pool.account_ids == ["wx-a"] and world.procs[1].killed
+    assert len(made) == 2, "改绑定 / 删除都不重建 supervisor 对象"

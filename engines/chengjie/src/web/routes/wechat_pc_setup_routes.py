@@ -11,6 +11,10 @@
 - ``GET  /api/setup/wechat_pc/copilot/status``  状态机（idle/starting/online/blind/offline/error）+ 日志尾
 - ``POST /api/setup/wechat_pc/autostart``  ``{enabled}`` 微信登录后自动拉起（落 overlay ``autostart``）
 - ``GET  /api/setup/wechat_pc/start-command`` 手动命令（局域网部署 / 高级折叠区；令牌只给文件路径，不回显）
+- 多账号（双开微信，2026-09-20 P1）：``platform_login.wechat_pc.accounts[]`` 每项一个 supervisor 子进程，
+  ``copilot/*`` 端点带 ``?account_id=`` 指定哪一个（不带 = 主账号，老页面零改动）：
+  ``GET /api/setup/wechat_pc/accounts`` 全部账号状态卡；``POST`` 新增/改绑定；``DELETE /{account_id}`` 移除；
+  ``GET /api/setup/wechat_pc/windows`` 桌面上的微信主窗（hwnd/pid/标题 + 已绑给谁）——设置页「从窗口里选一个」。
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
@@ -127,8 +131,9 @@ def manual_commands(*, engine_root: str, account_id: str, backend_url: str, toke
     }
 
 
-def copilot_presence(registry: Any, account_id: str = "") -> Optional[Dict[str, Any]]:
-    """注册表 → 副驾心跳 presence（优先匹配 ``account_id``，否则取第一个有心跳的 wechat 桌面桥账号）。"""
+def copilot_presence(registry: Any, account_id: str = "", *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    """注册表 → 副驾心跳 presence（优先匹配 ``account_id``，否则取第一个有心跳的 wechat 桌面桥账号；
+    ``strict=True`` 不回落——多账号时 B 号的卡片绝不能借 A 号的心跳显示「在线」）。"""
     try:
         from src.web.desktop_bridge_presence import bridge_presence
         rows = registry.list(platform="wechat") or []
@@ -143,7 +148,7 @@ def copilot_presence(registry: Any, account_id: str = "") -> Optional[Dict[str, 
         if account_id and str(row.get("account_id")) == str(account_id):
             return item
         first = first or item
-    return first
+    return None if strict else first
 
 
 def supervisor_binding_kwargs(blk: Dict[str, Any]) -> Dict[str, Any]:
@@ -159,12 +164,101 @@ def supervisor_binding_kwargs(blk: Dict[str, Any]) -> Dict[str, Any]:
             "expect_wxid": str(blk.get("expect_wxid") or "").strip()[:64]}
 
 
-def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]] = None) -> Any:
-    """``app.state.wechat_pc_supervisor`` 懒创建（测试可传假 ``popen``）。"""
-    sup = getattr(app.state, "wechat_pc_supervisor", None)
-    if sup is not None:
-        return sup
-    from src.integrations.wechat_pc.supervisor import WeChatPcSupervisor
+def accounts_from_cfg(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """配置 → 账号行列表（第一项主账号）；见 :func:`supervisor.normalize_accounts`。"""
+    from src.integrations.wechat_pc.supervisor import normalize_accounts
+    return normalize_accounts(_pc_block(cfg), default_account_id=DEFAULT_ACCOUNT_ID, default_label=DEFAULT_LABEL)
+
+
+def validate_account_change(body: Dict[str, Any], existing_ids: List[str], *, primary_id: str) -> Dict[str, Any]:
+    """校验「新增/改绑定」请求（纯函数）→ 要写进 ``accounts[]`` 的一行；非法 → ``ValueError(reason_code)``。
+
+    - ``account_id``：1–40 字符，只允许字母数字 ``-_.``（要进命令行与文件名）；缺省 = 主账号；
+    - ``window_hwnd`` / ``window_pid``：非负整数，0 = 不绑；``expect_wxid`` ≤ 64 字符；
+    - 同一个 hwnd/pid 不能绑给两个账号（``binding_conflict`` 由调用方按现有行判断，这里只做形状）。
+    """
+    body = dict(body or {})
+    aid = str(body.get("account_id") or primary_id).strip()[:40]
+    if not aid or not all(ch.isalnum() or ch in "-_." for ch in aid):
+        raise ValueError("bad_account_id")
+    row: Dict[str, Any] = {"account_id": aid}
+    for k in ("window_hwnd", "window_pid"):
+        if k in body:
+            try:
+                v = int(body.get(k) or 0)
+            except (TypeError, ValueError):
+                raise ValueError(f"bad_{k}")
+            if v < 0:
+                raise ValueError(f"bad_{k}")
+            row[k] = v
+    if "expect_wxid" in body:
+        row["expect_wxid"] = str(body.get("expect_wxid") or "").strip()[:64]
+    if "label" in body:
+        row["label"] = str(body.get("label") or "").strip()[:60]
+    if "autostart" in body:
+        row["autostart"] = bool(body.get("autostart"))
+    return row
+
+
+def merge_account_row(accounts: List[Dict[str, Any]], row: Dict[str, Any], *, primary_id: str) -> List[Dict[str, Any]]:
+    """把一行合进 ``accounts[]``（纯函数，返回新列表）：同 id 覆盖给到的字段，其它保留；主账号也存在列表里
+    （``normalize_accounts`` 会把它并回顶层）。别的账号已经绑了同一个 hwnd/pid → ``ValueError("binding_conflict")``。"""
+    aid = row["account_id"]
+    hw, pd = int(row.get("window_hwnd") or 0), int(row.get("window_pid") or 0)
+    for a in accounts:
+        if str(a.get("account_id")) == aid:
+            continue
+        if (hw and int(a.get("window_hwnd") or 0) == hw) or (pd and int(a.get("window_pid") or 0) == pd):
+            raise ValueError("binding_conflict")
+    out: List[Dict[str, Any]] = []
+    hit = False
+    for a in accounts:
+        if str(a.get("account_id")) == aid:
+            hit = True
+            merged = dict(a)
+            merged.update(row)
+            out.append(merged)
+        else:
+            out.append(dict(a))
+    if not hit:
+        out.append(dict(row))
+    return out
+
+
+def windows_view(wins: List[Any], accounts: List[Dict[str, Any]], statuses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """桌面上的微信主窗 + 已绑给哪个账号 + 那个账号驱动实际读到的昵称/微信号（纯函数）——设置页「选一个窗口」。"""
+    by_hwnd: Dict[int, str] = {}
+    by_pid: Dict[int, str] = {}
+    for a in accounts:
+        if int(a.get("window_hwnd") or 0):
+            by_hwnd[int(a["window_hwnd"])] = str(a["account_id"])
+        if int(a.get("window_pid") or 0):
+            by_pid[int(a["window_pid"])] = str(a["account_id"])
+    hb_by_pid: Dict[int, Dict[str, Any]] = {}
+    for st in statuses:
+        hb = st.get("heartbeat") if isinstance(st.get("heartbeat"), dict) else None
+        if hb and int(hb.get("window_pid") or 0):
+            hb_by_pid[int(hb["window_pid"])] = {"account_id": st.get("account_id"), "nick": hb.get("account_nick", ""),
+                                                 "wxid": hb.get("account_wxid", "")}
+    out = []
+    for w in wins:
+        hwnd, pid = int(getattr(w, "hwnd", 0)), int(getattr(w, "pid", 0))
+        bound = by_hwnd.get(hwnd) or by_pid.get(pid) or ""
+        seen = hb_by_pid.get(pid) or {}
+        out.append({"hwnd": hwnd, "pid": pid, "title": str(getattr(w, "title", "") or ""),
+                    "width": int(getattr(w, "width", 0) or 0), "height": int(getattr(w, "height", 0) or 0),
+                    "bound_account_id": bound, "seen_by_account_id": str(seen.get("account_id") or ""),
+                    "nick": str(seen.get("nick") or ""), "wxid": str(seen.get("wxid") or "")})
+    return out
+
+
+def get_or_create_pool(app: FastAPI, *, popen: Optional[Callable[..., Any]] = None) -> Any:
+    """``app.state.wechat_pc_supervisors``（多账号池）懒创建；``app.state.wechat_pc_supervisor`` 始终指向主账号那个
+    （老代码 / 测试把它置 None 即重建整池）。测试可传假 ``popen``。"""
+    pool = getattr(app.state, "wechat_pc_supervisors", None)
+    if pool is not None and getattr(app.state, "wechat_pc_supervisor", None) is not None:
+        return pool
+    from src.integrations.wechat_pc.supervisor import WeChatPcSupervisor, WeChatPcSupervisorPool, account_log_name
     cm = getattr(app.state, "config_manager", None)
 
     def cfg() -> Dict[str, Any]:
@@ -176,17 +270,11 @@ def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]
     c0 = cfg()
     blk = _pc_block(c0)
     port = int((c0.get("web_admin") or {}).get("port") or 18799)
+    accounts = accounts_from_cfg(c0)
+    primary_id = accounts[0]["account_id"]
 
     def token() -> str:
         return str((cfg().get("web_admin") or {}).get("auth_token") or "").strip()
-
-    def presence() -> Optional[Dict[str, Any]]:
-        try:
-            from src.integrations import account_registry as _ar
-            reg = getattr(_ar, "_registry", None)
-            return copilot_presence(reg, account_id) if reg is not None else None
-        except Exception:
-            return None
 
     def env() -> Dict[str, Any]:
         from src.integrations.wechat_pc.env_check import check_environment
@@ -196,30 +284,78 @@ def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]
         from src.integrations.wechat_pc.env_check import driver_ready
         return driver_ready()
 
-    account_id = str(blk.get("account_id") or DEFAULT_ACCOUNT_ID).strip()[:40] or DEFAULT_ACCOUNT_ID
-    kw: Dict[str, Any] = dict(engine_root=paths["engine_root"], backend_url=f"http://127.0.0.1:{port}",
-                              token_provider=token, config_file=paths["config_file"], state_dir=paths["state_dir"],
-                              account_id=account_id, label=str(blk.get("label") or DEFAULT_LABEL),
-                              presence_provider=presence, env_provider=env, driver_ready_provider=ready,
-                              autostart=bool(blk.get("autostart", False)),
-                              interval=float(blk.get("interval_sec") or 3.0),
-                              **supervisor_binding_kwargs(blk))
-    if popen is not None:
-        kw["popen"] = popen
-    sup = WeChatPcSupervisor(**kw)
-    app.state.wechat_pc_supervisor = sup
-    return sup
+    def factory(row: Dict[str, Any]) -> Any:
+        account_id = str(row["account_id"])
+
+        def presence() -> Optional[Dict[str, Any]]:
+            try:
+                from src.integrations import account_registry as _ar
+                reg = getattr(_ar, "_registry", None)
+                if reg is None:
+                    return None
+                # 只有一个账号时沿用「借用任一心跳」（计划任务 / 手动命令起的驱动 account_id 可能不同）
+                strict = len(pool_ref[0].account_ids) > 1 if pool_ref else False
+                return copilot_presence(reg, account_id, strict=strict)
+            except Exception:
+                return None
+
+        kw: Dict[str, Any] = dict(engine_root=paths["engine_root"], backend_url=f"http://127.0.0.1:{port}",
+                                  token_provider=token, config_file=paths["config_file"], state_dir=paths["state_dir"],
+                                  account_id=account_id, label=str(row.get("label") or DEFAULT_LABEL),
+                                  presence_provider=presence, env_provider=env, driver_ready_provider=ready,
+                                  autostart=bool(row.get("autostart", False)),
+                                  interval=float(blk.get("interval_sec") or 3.0),
+                                  window_hwnd=int(row.get("window_hwnd") or 0), window_pid=int(row.get("window_pid") or 0),
+                                  expect_wxid=str(row.get("expect_wxid") or ""),
+                                  log_name=account_log_name(account_id, primary_id))
+        if popen is not None:
+            kw["popen"] = popen
+        return WeChatPcSupervisor(**kw)
+
+    pool_ref: List[Any] = []
+    pool = WeChatPcSupervisorPool(factory)
+    pool_ref.append(pool)
+    pool.sync(accounts)
+    app.state.wechat_pc_supervisors = pool
+    app.state.wechat_pc_supervisor = pool.primary
+    return pool
+
+
+def get_or_create_supervisor(app: FastAPI, *, popen: Optional[Callable[..., Any]] = None, account_id: str = "") -> Any:
+    """某个账号的 supervisor（不带 ``account_id`` = 主账号；未知 id → None）。"""
+    pool = get_or_create_pool(app, popen=popen)
+    return pool.get(account_id)
 
 
 def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
     from src.web.routes.unified_inbox_auth import _require_supervisor
 
+    def _pool(request: Request) -> Any:
+        return get_or_create_pool(request.app)
+
     def _sup(request: Request) -> Any:
-        return get_or_create_supervisor(request.app)
+        """``?account_id=`` 指定的账号；不带 = 主账号；带了但池里没有 → 404。"""
+        q = str(request.query_params.get("account_id") or "").strip()[:40]
+        sup = _pool(request).get(q)
+        if sup is None:
+            raise HTTPException(404, "unknown_account")
+        return sup
 
     def _account_id(request: Request) -> str:
+        """手动命令用：``?account_id=`` 任意值（局域网手起的驱动可以不在池里），不带 = 主账号。"""
         q = str(request.query_params.get("account_id") or "").strip()[:40]
-        return q or _sup(request).account_id
+        primary = _pool(request).primary
+        return q or (primary.account_id if primary is not None else DEFAULT_ACCOUNT_ID)
+
+    def _resync_pool(request: Request) -> Dict[str, Any]:
+        """overlay 写完后按新配置对齐池（新增建、改绑定、删掉的停）。"""
+        try:
+            r = _pool(request).sync(accounts_from_cfg(_cfg(request)))
+            request.app.state.wechat_pc_supervisor = _pool(request).primary
+            return r
+        except Exception:
+            logger.debug("[pc_setup] 池对齐失败", exc_info=True)
+            return {"added": [], "updated": [], "removed": []}
 
     @app.get("/api/setup/wechat_pc/env")
     async def api_pc_env(request: Request, _=Depends(api_auth)):
@@ -257,6 +393,14 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
             env["supervisor"] = {k: st.get(k) for k in ("state", "reason", "attached", "managed", "pid", "autostart")}
         except Exception:
             env["supervisor"] = None
+        # 双开：桌面上有几个微信主窗、配置里有几个账号——页面据此提示「第二个窗口还没绑账号」
+        try:
+            from src.integrations.wechat_pc.win32_windows import find_wechat_main_windows
+            mains = await asyncio.get_event_loop().run_in_executor(None, find_wechat_main_windows)
+            env["main_windows"] = len(mains)
+        except Exception:
+            env["main_windows"] = 1 if env.get("main_window") else 0
+        env["accounts"] = _pool(request).account_ids
         return {"ok": True, **env}
 
     @app.get("/api/setup/wechat_pc/policy")
@@ -317,8 +461,14 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         except Exception:
             body = {}
         enabled = bool((body or {}).get("enabled", False))
-        saved = _save_patch(request, {"autostart": enabled})
         sup = _sup(request)
+        primary = _pool(request).primary
+        if primary is not None and sup.account_id == primary.account_id:
+            saved = _save_patch(request, {"autostart": enabled})
+        else:
+            rows = merge_account_row(accounts_from_cfg(_cfg(request)), {"account_id": sup.account_id, "autostart": enabled},
+                                     primary_id=primary.account_id if primary else DEFAULT_ACCOUNT_ID)
+            saved = _save_patch(request, {"accounts": [r for r in rows if r["account_id"] != (primary.account_id if primary else "")]})
         sup.set_autostart(enabled)
         if enabled:
             sup.reset_backoff()
@@ -365,6 +515,86 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         import asyncio
         st = await asyncio.get_event_loop().run_in_executor(None, _sup(request).status)
         return {"ok": True, **st}
+
+    # ── 多账号（双开微信）──
+    def _extra_rows(request: Request, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """账号行列表 → 要写进 overlay 的补丁：主账号的绑定写回块顶层，其余进 ``accounts[]``。"""
+        primary_id = accounts_from_cfg(_cfg(request))[0]["account_id"]
+        patch: Dict[str, Any] = {"accounts": []}
+        for r in rows:
+            if r["account_id"] == primary_id:
+                for k in ("window_hwnd", "window_pid", "expect_wxid", "label", "autostart"):
+                    if k in r:
+                        patch[k] = r[k]
+            else:
+                patch["accounts"].append(r)
+        return patch
+
+    @app.get("/api/setup/wechat_pc/accounts")
+    async def api_pc_accounts(request: Request, _=Depends(api_auth)):
+        import asyncio
+        pool = _pool(request)
+        rows = await asyncio.get_event_loop().run_in_executor(None, pool.status_all)
+        primary = pool.primary
+        return {"ok": True, "primary_account_id": primary.account_id if primary else "", "accounts": rows}
+
+    @app.post("/api/setup/wechat_pc/accounts")
+    async def api_pc_accounts_upsert(request: Request, _=Depends(api_auth)):
+        """新增账号或改某账号的窗口/身份绑定：``{account_id?, label?, window_hwnd?, window_pid?, expect_wxid?, autostart?}``。
+        进程在跑且绑定变了 → 自动 restart 让新绑定生效（``restarted=true``）。"""
+        _require_supervisor(request)
+        import asyncio
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        accounts = accounts_from_cfg(_cfg(request))
+        primary_id = accounts[0]["account_id"]
+        try:
+            row = validate_account_change(body or {}, [a["account_id"] for a in accounts], primary_id=primary_id)
+            rows = merge_account_row(accounts, row, primary_id=primary_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        saved = _save_patch(request, _extra_rows(request, rows))
+        sync = _resync_pool(request)
+        sup = _pool(request).get(row["account_id"])
+        restarted = False
+        if sup is not None and row["account_id"] in sync.get("updated", []) and sup.status().get("managed"):
+            await asyncio.get_event_loop().run_in_executor(None, sup.restart)
+            restarted = True
+        st = await asyncio.get_event_loop().run_in_executor(None, sup.status) if sup is not None else {}
+        return {"ok": True, "saved": saved, "restarted": restarted, **sync, "account": st}
+
+    @app.delete("/api/setup/wechat_pc/accounts/{account_id}")
+    async def api_pc_accounts_delete(account_id: str, request: Request, _=Depends(api_auth)):
+        _require_supervisor(request)
+        accounts = accounts_from_cfg(_cfg(request))
+        primary_id = accounts[0]["account_id"]
+        aid = str(account_id or "").strip()[:40]
+        if aid == primary_id:
+            raise HTTPException(400, "cannot_remove_primary")
+        if aid not in [a["account_id"] for a in accounts]:
+            raise HTTPException(404, "unknown_account")
+        rows = [a for a in accounts if a["account_id"] != aid]
+        saved = _save_patch(request, {"accounts": [r for r in rows if r["account_id"] != primary_id]})
+        sync = _resync_pool(request)
+        return {"ok": True, "saved": saved, **sync}
+
+    @app.get("/api/setup/wechat_pc/windows")
+    async def api_pc_windows(request: Request, _=Depends(api_auth)):
+        """桌面上可见的微信主窗（一个进程一个）+ 各自绑给了哪个账号、驱动读到的昵称/微信号。"""
+        import asyncio
+        try:
+            from src.integrations.wechat_pc.win32_windows import find_wechat_main_windows
+            wins = await asyncio.get_event_loop().run_in_executor(None, find_wechat_main_windows)
+        except Exception:
+            wins = []
+        pool = _pool(request)
+        statuses = await asyncio.get_event_loop().run_in_executor(None, pool.status_all)
+        return {"ok": True, "windows": windows_view(wins, accounts_from_cfg(_cfg(request)), statuses),
+                "accounts": [{"account_id": a["account_id"], "label": a["label"], "window_hwnd": a["window_hwnd"],
+                              "window_pid": a["window_pid"], "expect_wxid": a["expect_wxid"]}
+                             for a in accounts_from_cfg(_cfg(request))]}
 
     @app.post("/api/setup/wechat_pc/copilot/start")
     async def api_pc_copilot_start(request: Request, _=Depends(api_auth)):
@@ -445,21 +675,25 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         # 自启轮询只在配置开了 autostart 且后端在 Windows 时挂（纯 Win32 枚举，15 秒一拍，几毫秒）
         try:
             cfg = dict(getattr(getattr(app.state, "config_manager", None), "config", None) or {})
-            if os.name == "nt" and _pc_block(cfg).get("autostart"):
-                get_or_create_supervisor(app).ensure_loop()
+            if os.name == "nt" and any(a.get("autostart") for a in accounts_from_cfg(cfg)):
+                get_or_create_pool(app).ensure_loops()
                 logger.info("个人微信 PC 副驾：已开启「微信登录后自动启动」轮询")
         except Exception:
             logger.debug("[pc_setup] 自启轮询挂载跳过", exc_info=True)
 
     @app.on_event("shutdown")
     async def _wechat_pc_supervisor_shutdown():
+        pool = getattr(app.state, "wechat_pc_supervisors", None)
         sup = getattr(app.state, "wechat_pc_supervisor", None)
-        if sup is not None:
-            try:
+        try:
+            if pool is not None:
+                await pool.shutdown()
+            elif sup is not None:
                 await sup.shutdown()
-            except Exception:
-                pass
+        except Exception:
+            pass
 
 
 __all__ = ["register_wechat_pc_setup_routes", "policy_view", "validate_policy_change", "TIERS", "bridge_paths_for",
-           "manual_commands", "copilot_presence", "supervisor_binding_kwargs", "get_or_create_supervisor"]
+           "manual_commands", "copilot_presence", "supervisor_binding_kwargs", "get_or_create_supervisor",
+           "get_or_create_pool", "accounts_from_cfg", "validate_account_change", "merge_account_row", "windows_view"]
