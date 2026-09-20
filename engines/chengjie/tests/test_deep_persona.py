@@ -354,13 +354,21 @@ def test_full_assembly_layers_composed():
         "open_loops": [{"topic": "换工作", "ts": "2026-07-01T10:00:00", "salience": 0.9}],
         "suppress_callbacks": False,
     }
-    cfg = {"enabled": True, "life_line": True, "tastes": True, "relationship": True,
-           "inside_jokes": True, "experiential": True, "texture": True}
+    cfg = {"enabled": True, "life_line": True, "tastes": True, "tastes_repeat": True,
+           "relationship": True, "inside_jokes": True, "experiential": True, "texture": True}
     out = build_deep_persona_block(persona, now=NOW, cfg=cfg, stage="intimate",
                                    deep_ctx=ctx, imperfection_roll=0.9)
     for needle in ["深度人设增强", "便利店忙", "抹茶", "养猫", "撸串", "露营那次",
                    "换工作", "此刻"]:
         assert needle in out, needle
+
+
+def test_tastes_dedup_skips_duplicate_block():
+    """B6：默认去重，不双写【稳定口味】——人设块已有【好恶与观点】。"""
+    persona = {"id": "lin", "tastes": {"likes": ["抹茶"], "dislikes": ["香菜"]}}
+    cfg = {"enabled": True, "tastes": True}
+    out = build_deep_persona_block(persona, now=NOW, cfg=cfg)
+    assert "稳定口味与立场" not in out and "抹茶" not in out
 
 
 def test_assembler_suppresses_callback_on_crisis():

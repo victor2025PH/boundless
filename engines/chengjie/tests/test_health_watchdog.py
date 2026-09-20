@@ -214,6 +214,53 @@ def test_orchestrator_worker_transient_is_yellow(monkeypatch):
     assert len(hits) == 1 and hits[0]["light"] == "yellow"  # restarts<3
 
 
+def test_bridge_driver_heartbeat_loss_alerts_via_orchestrator_worker_channel(monkeypatch, tmp_path):
+    """实施97 线 B：PC 副驾心跳过期 → 并入 orchestrator_worker_alert（无编排器的部署也要能报）；心跳恢复 → 恢复通知。"""
+    import time as _t
+    published = _patch_bus(monkeypatch)
+    import src.integrations.account_orchestrator as ao
+    monkeypatch.setattr(ao, "get_orchestrator_if_running", lambda: None)
+    from src.integrations import account_registry as ar
+    from src.web.desktop_bridge_presence import heartbeat_meta
+    reg = ar.AccountRegistry(tmp_path / "reg.db")
+    monkeypatch.setattr(ar, "_registry", reg)
+    wd = _wd(monkeypatch)
+    # 无桥接账号：和以前一样静默
+    wd._check_orchestrator_workers()
+    assert not [1 for t, _ in published if t == "orchestrator_worker_alert"]
+    # 心跳新鲜：不报
+    reg.upsert("wechat", "wxpc-1", mode="desktop", label="个人微信 · PC 副驾", status="online",
+               meta={"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "copilot"})})
+    wd._check_orchestrator_workers()
+    assert not [1 for t, _ in published if t == "orchestrator_worker_alert"]
+    # 只读档心跳 4 分钟前 → warn（yellow）告警一次，含账号名与人话
+    reg.upsert("wechat", "wxpc-1", meta={"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "pcui", "tier": "copilot"}, now=_t.time() - 240)}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    wd._check_orchestrator_workers()   # 同签名不重复
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 1 and hits[0]["light"] == "yellow" and hits[0]["recovered"] is False
+    p = hits[0]["problems"][0]
+    assert p["id"] == "wechat:wxpc-1" and p["kind"] == "bridge_offline" and "个人微信 · PC 副驾" in p["name"]
+    assert "4 分钟无心跳" in p["detail"] and "只读建议" in p["detail"]
+    # 半自动档（该发消息的）断了 → 直接 fail（red），签名变了再报一次
+    reg.upsert("wechat", "wxpc-1", meta={"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "pcui", "tier": "semi"}, now=_t.time() - 240)}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 2 and hits[1]["light"] == "red"
+    # 运营把账号登出 → 不再算问题 → 恢复通知
+    reg.set_status("wechat", "wxpc-1", "offline")
+    wd._check_orchestrator_workers()
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 3 and hits[2]["recovered"] is True
+    # 心跳回来（重新在线）→ 不报；再断 → 再报
+    reg.upsert("wechat", "wxpc-1", status="online",
+               meta={"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "semi"})}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    assert len([1 for t, _ in published if t == "orchestrator_worker_alert"]) == 3
+
+
 def test_orchestrator_worker_alert_in_sse_whitelists():
     """P9：worker 告警须在 SSE 流白名单 + 通知中心白名单，否则前端 EventSource 收不到。"""
     from src.web.routes.unified_inbox_realtime_routes import (
@@ -775,3 +822,95 @@ def test_realtime_voice_reconciles_stale_incident_on_startup(monkeypatch):
     wd._check_realtime_voice()
     assert inbox.resolved == ["realtime_voice"]
     assert all(t != "realtime_voice_alert" for t, _ in published)
+
+
+# ── 日志巡检（triage）看门狗接入门禁（2026-07-23） ─────────────────────
+
+def _triage_cm(log_file, *, enabled=True, **extra):
+    lt = {"enabled": enabled, "log_file": str(log_file), "window_hours": 24}
+    lt.update(extra)
+    return _CM({"ai": {"provider": "openai", "api_key": "x"},
+                "health_watchdog": {"log_triage": lt}})
+
+
+def _write_triage_log(tmp_path, content):
+    d = tmp_path / "logs"; d.mkdir(parents=True, exist_ok=True)
+    p = d / "app.log"; p.write_text(content, encoding="utf-8")
+    return p
+
+
+_TLOG = ("[2026-07-23 05:00:00] [WARNING] net: timeout id=aaa\n"
+         "[2026-07-23 05:01:00] [WARNING] net: timeout id=bbb\n"
+         "[2026-07-23 05:02:00] [INFO] app: started ok\n")
+_TLOG2 = _TLOG + "[2026-07-23 05:30:00] [ERROR] db: no such column: xyz\n"
+
+
+def _patch_since(monkeypatch):
+    import scripts.triage_watch as tw
+    monkeypatch.setattr(tw, "window_since", lambda h, now=None: "2026-07-23 00:00:00")
+
+
+def test_triage_disabled_by_default(tmp_path, monkeypatch):
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    app = _fake_app()
+    wd = HealthWatchdog(app=app, config_manager=_triage_cm(log, enabled=False), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    assert fired == []
+    assert not (log.parent / "triage" / "baseline.json").exists()
+
+
+def test_triage_first_run_seeds_no_alert(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    assert fired == []                                    # 首跑不告警
+    assert (log.parent / "triage" / "baseline.json").exists()  # 但建立了基线
+    assert wd.total_log_triage_alerts == 0
+
+
+def test_triage_second_run_alerts_new_error(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host",
+                        lambda title, msg, **k: fired.append((title, msg, k)) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)                      # 首跑建基线
+    log.write_text(_TLOG2, encoding="utf-8")               # 新增 ERROR
+    wd._check_log_triage(now=1000.0 + 6 * 3600 + 1)        # 越过节流窗
+    assert len(fired) == 1
+    title, msg, k = fired[0]
+    assert "错误" in title and k.get("key", "").startswith("triage:")
+    assert wd.total_log_triage_alerts == 1
+
+
+def test_triage_throttled_within_interval(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    calls = {"n": 0}
+    import scripts.triage_watch as tw
+    orig = tw.scan_once
+    monkeypatch.setattr(tw, "scan_once",
+                        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or orig(*a, **k))
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    wd._check_log_triage(now=1000.0 + 60)                  # 6h 内 → 跳过
+    assert calls["n"] == 1
+
+
+def test_triage_missing_log_no_crash(tmp_path, monkeypatch):
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    wd = HealthWatchdog(app=_fake_app(),
+                        config_manager=_triage_cm(tmp_path / "nope.log"), interval_sec=60)
+    wd._check_log_triage(now=1000.0)                       # 不应抛异常
+    assert fired == []

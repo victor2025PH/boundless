@@ -264,6 +264,7 @@ _INTENT_ZH = {
     "tiktok_live_engage": "直播间互动", "tiktok_comment_engage": "评论区互动",
     "tiktok_campaign_run": "完整获客剧本", "tiktok_check_inbox": "收件箱",
     "tiktok_send_dm": "发私信", "tiktok_chat": "私信引流",
+    "tiktok_chengjie_handback": "智聊回传发出",  # TK-3
     "tiktok_keyword_follow": "关键词关注",
     # ★ P3-3
     "comment_monitor_on": "开启评论监控", "comment_monitor_off": "关闭评论监控",

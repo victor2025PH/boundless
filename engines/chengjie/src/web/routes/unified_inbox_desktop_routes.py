@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -89,6 +90,19 @@ _ROBOTIC_PHRASES = (
 def register_desktop_routes(app, *, api_auth) -> None:
     """挂载桌面壳 smart-reply / guard-check / ingest 端点。"""
 
+    @app.get("/api/desktop/ping")
+    async def api_desktop_ping():
+        """后端身份探针（**刻意免鉴权**——壳要在登录之前判断这个端口上是不是自家后端）。
+
+        桌面壳原本只判「有没有 HTTP 响应」就复用外部后端，端口被别的程序或上一版本的
+        残留后端占用时，壳会连上去当自己的用：工作台打得开、部分页面 404/500，
+        极难排查。有了这个端点，壳可以在复用前核对 app 与版本。
+
+        只回 ``{ok, app, version}``——不含主机名/路径/进程号（见 app_identity 文档）。
+        """
+        from src.utils.app_identity import identity_payload
+        return identity_payload()
+
     @app.post("/api/desktop/smart-reply")
     async def api_desktop_smart_reply(request: Request, _=Depends(api_auth)):
         """桌面壳（嵌官方 web 客户端）专用：**人设化**智能回复。
@@ -98,8 +112,13 @@ def register_desktop_routes(app, *, api_auth) -> None:
         （domain ``conversion`` 的「线上陪伴」或 account_persona_id 指定的画像），
         因此回复带人设口吻、禁用「作为AI」等机器措辞、并融合知识库——而非通用提示词。
 
-        body: {messages:[{direction,text}], persona_id?, platform?, chat_key?, target_lang?}
-        返回: {ok, reply, persona?, intent?, translated?}
+        body: {messages:[{direction,text}], persona_id?, platform?, chat_key?,
+               target_lang?, conversation_id?, account_id?, mode?, instruction?}
+        mode: "reply"(默认)=承接客户最后一条；"opener"=主动开启新话题
+              （P1-198：无入站消息也可生成，走 generate_topic_opener 开场产线）。
+        instruction: 坐席显式指令（P22「采纳并拟稿」/缺口追问）。进 prompt 高权重
+              【坐席指令】块；空=旧行为。绝不写入客户消息历史。
+        返回: {ok, reply, persona?, persona_tier?, intent?, translated?}
         """
         body = await request.json()
         msgs = body.get("messages") if isinstance(body.get("messages"), list) else []
@@ -107,14 +126,113 @@ def register_desktop_routes(app, *, api_auth) -> None:
         persona_id = str(body.get("persona_id") or "").strip()
         platform = str(body.get("platform") or "telegram").strip()
         chat_key = str(body.get("chat_key") or "").strip()
+        conversation_id = str(body.get("conversation_id") or "").strip()
+        account_id = str(body.get("account_id") or "").strip()
+        mode = str(body.get("mode") or "reply").strip().lower()
+        # P2-198 直出模式：坐席 UI 语言（正文按客户语言直出时附对照译文，只读）
+        gloss_lang = str(body.get("gloss_lang") or "").strip().lower()
+        # P22：坐席显式指令（目标今日拍 / 画像缺口追问）。封顶防 prompt 灌水。
+        instruction = str(body.get("instruction") or "").strip()[:400]
+        # P23：指令来源归属（beat/hero/slot）+ 所属目标——耐久漏斗与抽检样本用。
+        instr_source = str(body.get("instruction_source") or "").strip()[:16]
+        instr_goal_id = str(body.get("goal_id") or "").strip()[:64]
+        # 兼容旧前端：只给 conversation_id 时反解 platform/account/chat_key
+        if conversation_id and conversation_id.count(":") >= 2 and not chat_key:
+            _p3 = conversation_id.split(":", 2)
+            platform = platform or _p3[0]
+            account_id = account_id or _p3[1]
+            chat_key = _p3[2]
 
         # 归一对话历史（OpenAI 风格）+ 取最后一条入站消息作为「待回复」
         history, last_inbound = normalize_history(msgs)
+        _t0 = time.monotonic()
+
+        def _log_usage(out_: dict) -> None:
+            # 观察期读数（chatx_readout 远程统计）：模式用量 / 直出注解命中 / 耗时。
+            # 单行 ASCII 锚点，随日志持久，重启不清零。
+            # 2026-08-01 分段补齐：gen/xlate/gloss_ms + path（unified/direct/fallback）
+            # ——「尖峰慢在生成还是翻译」从猜变成读日志。timings 在 try 外 pop：
+            # 只进日志不回客户端（响应契约不变），日志失败也不泄漏。
+            tm = out_.pop("timings", None)
+            tm = tm if isinstance(tm, dict) else {}
+            try:
+                _ta = out_.get("time_anchor") or {}
+                logger.info(
+                    "[smart_reply] mode=%s ok=%s gloss=%s instr=%s ms=%d "
+                    "gen=%s xlate=%s gloss_ms=%s path=%s anchor=%s conv=%s",
+                    mode, "1" if out_.get("ok") else "0",
+                    "1" if out_.get("gloss") else "0",
+                    "1" if instruction else "0",
+                    int((time.monotonic() - _t0) * 1000),
+                    tm.get("gen_ms", "-"), tm.get("xlate_ms", "-"),
+                    tm.get("gloss_ms", "-"), tm.get("gen_path", "-"),
+                    (f"{_ta.get('kind')}"
+                     + ("+followup" if _ta.get("followup") else "")
+                     + (f"@{_ta.get('source')}" if _ta.get("source") else ""))
+                    if _ta else "-",
+                    conversation_id or f"{platform}:{account_id}:{chat_key}")
+            except Exception:
+                pass
+            _track_instruction_use(out_)
+
+        def _track_instruction_use(out_: dict) -> None:
+            """P23：坐席指令使用的**耐久**观测（进程 ui-event 计数重启即清零，
+            8/8 周审只能信 DB/文件口径）。两路都 best-effort，绝不影响主链：
+            - goal_id 在 → goal_events 落 ``drive_draft``（detail=beat/hero/slot），
+              peek_goal_store 只取既有单例（goals 关 = None = 零成本跳过）；
+            - 生成成功 → (指令, 产出) 进 JSONL 留样 ring（人耳抽检「照做没有」，
+              刻意不含客户原文）。
+            """
+            if not instruction:
+                return
+            try:
+                if instr_goal_id:
+                    from src.companion.goals.store import peek_goal_store
+                    _gs = peek_goal_store()
+                    if _gs is not None:
+                        _gs.add_event(
+                            instr_goal_id, "drive_draft", instr_source or "-")
+            except Exception:
+                pass
+            try:
+                _reply_txt = str(out_.get("reply") or "").strip()
+                if out_.get("ok") and _reply_txt:
+                    from src.inbox.instr_samples import record_instr_sample
+                    record_instr_sample(
+                        instruction=instruction, reply=_reply_txt,
+                        conv=conversation_id
+                        or f"{platform}:{account_id}:{chat_key}",
+                        source=instr_source, mode=mode,
+                        persona=str(out_.get("persona") or ""),
+                    )
+            except Exception:
+                pass
+
+        if mode == "opener":
+            from src.inbox.persona_reply import generate_topic_opener
+            out = await generate_topic_opener(
+                app=request.app,
+                platform=platform,
+                chat_key=chat_key,
+                history=history,
+                persona_id=persona_id,
+                target_lang=target_lang,
+                conversation_id=conversation_id,
+                account_id=account_id,
+                gloss_lang=gloss_lang,
+                agent_instruction=instruction,
+            )
+            out.pop("detail", None)
+            _log_usage(out)
+            return out
+
         if not last_inbound:
             return {"ok": False, "detail": tr(request, "err.ws.no_conversation_context")}
 
         # 人设化回复走单一事实源（persona_reply.generate_persona_reply）：
         # 与收件箱全自动草稿 / 协议自动回复同一条产线，避免逻辑分叉。
+        # persona_id 为空时由 generate_persona_reply 内部按
+        # 会话覆写 > 账号人设 > legacy 统一解析（与出站链同一 resolver）。
         out = await generate_persona_reply(
             app=request.app,
             platform=platform,
@@ -123,16 +241,21 @@ def register_desktop_routes(app, *, api_auth) -> None:
             history=history,
             persona_id=persona_id,
             target_lang=target_lang,
+            conversation_id=conversation_id,
+            account_id=account_id,
+            gloss_lang=gloss_lang,
+            agent_instruction=instruction,
         )
         out.pop("detail", None)
+        _log_usage(out)
         return out
 
     @app.post("/api/desktop/guard-check")
     async def api_desktop_guard_check(request: Request, _=Depends(api_auth)):
         """桌面壳「填入并发送」前风控护栏（规则层，零 LLM 成本，毫秒级）。
 
-        复用 ``src.inbox.drafts.keyword_risk_level``（支付/密码/账号安全=high→拦截；
-        优惠/投诉/法律=medium→提醒），并检测「作为AI」等机器措辞（可能露馅）。
+        复用 ``src.inbox.drafts.keyword_risk_level``。2026-09-04 起 ``block`` 恒
+        False（与自动链影子档同口径：风险只记台账+回 hits 画黄条，不拦发送）。
         body: {text}
         返回: {ok, risk: high|medium|low, block, hits:[{term,level}], robotic:[...]}
         """
@@ -156,7 +279,34 @@ def register_desktop_routes(app, *, api_auth) -> None:
         for ph in _ROBOTIC_PHRASES:
             if ph in text:
                 robotic.append(ph)
-        return {"ok": True, "risk": risk, "block": risk == "high",
+        # 2026-09-04 老板拍板：桌面「填入并发送」与自动链同口径——风险只记不拦。
+        # block 恒 False；hits/risk 仍回给前端画黄条，坐席看见但不被二次确认挡住。
+        if risk == "high" or hits or robotic:
+            try:
+                from src.inbox.autosend_shadow_log import record as _shadow_rec
+                _shadow_rec({
+                    "ts": time.time(),
+                    "platform": "desktop",
+                    "account_id": "",
+                    "conv_key": "",
+                    "draft_id": "",
+                    "would_hold_level": "L4" if risk == "high" else "L3",
+                    "hold_reason": "desktop_guard",
+                    "peer_risk": "",
+                    "peer_reasons": [],
+                    "reply_risk": risk,
+                    "reply_reasons": [h.get("level") for h in hits if isinstance(h, dict)],
+                    "risk_hits": [h.get("term") for h in hits if isinstance(h, dict)][:8],
+                    "text_fp": "",
+                    "text_len": len(text),
+                    "stage": "desktop_guard",
+                    "automation_mode": "manual",
+                    "policy_mode": "shadow",
+                    "kind": "hold",
+                }, track_outcome=False)
+            except Exception:
+                logger.debug("[desktop] guard-check 影子台账失败", exc_info=True)
+        return {"ok": True, "risk": risk, "block": False,
                 "hits": hits, "robotic": robotic}
 
     @app.post("/api/desktop/ingest")
@@ -214,6 +364,43 @@ def register_desktop_routes(app, *, api_auth) -> None:
             media_ref=str((body or {}).get("media_ref") or ""),
         )
         return {"ok": bool(cid), "conversation_id": cid or ""}
+
+    @app.post("/api/desktop/heartbeat")
+    async def api_desktop_heartbeat(request: Request, _=Depends(api_auth)):
+        """桥接驱动进程（个人微信 PC 副驾等）的存活心跳（实施97 线 B 第三轮）。
+
+        desktop 账号没有 worker，registry 状态只在首见入站时写一次 ``online``，驱动进程挂了工作台
+        看不出来。驱动每轮 tick 调本端点，把 ``{bridge, tier, readonly, stats}`` 记进 registry
+        ``meta.bridge_heartbeat``；accounts_summary 据 ``ts`` 新鲜度给出 ``bridge.alive``。
+        **不改 status**：运营已登出/移除的账号不被心跳复活（只在账号不存在时按首见登记）。
+        body: {platform, account_id, bridge?, tier?, readonly?, stats?}
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").lower()
+        account_id = str((body or {}).get("account_id") or "")
+        if not platform or not account_id:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="platform / account_id"))
+        from src.web.desktop_bridge_presence import heartbeat_meta
+        meta = heartbeat_meta(body or {})
+        # 账号标签：ingest 首见用的是**联系人**名（对桌面壳镜像账号够用，对 PC 副驾会把账号叫成第一个客户）
+        # → 驱动可带 label 纠正；空则不动
+        label = str((body or {}).get("label") or "").strip()[:64] or None
+        try:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+            row = reg.get(platform, account_id)
+            if not row:
+                reg.upsert(platform, account_id, mode="desktop", label=label or account_id, status="online",
+                           meta={"bridge_heartbeat": meta})
+            else:
+                reg.upsert(platform, account_id, label=label, meta={"bridge_heartbeat": meta}, merge_meta=True)
+        except Exception:
+            logger.debug("[desktop] heartbeat registry 写入失败（已忽略）", exc_info=True)
+            return {"ok": False}
+        return {"ok": True, "ts": meta.get("ts")}
 
     @app.get("/api/desktop/selector-profiles")
     async def api_desktop_selector_profiles(request: Request, _=Depends(api_auth)):
@@ -288,6 +475,13 @@ def register_desktop_routes(app, *, api_auth) -> None:
             body = {}
         from src.web.desktop_inject_health import get_inject_health_store
         rec = get_inject_health_store().record(body or {})
+        # 抽取率趋势旁路（默认关；供「归零判 → 比率阈值」校准攒分布）。record 内部
+        # 自带闸门与吞异常，这里再兜一层防 import 期意外拖垮健康上报主链。
+        try:
+            from src.web.inject_extract_trend import record_inject_extract_trend
+            record_inject_extract_trend(rec)
+        except Exception:
+            logger.debug("[desktop] extract 趋势落库失败（已忽略）", exc_info=True)
         return {"ok": True, "status": rec.get("status")}
 
     @app.get("/api/desktop/inject-health")
@@ -342,6 +536,40 @@ def register_desktop_routes(app, *, api_auth) -> None:
                 "alerts": alerts,
                 "selector_diagnosis": selector_failure_breakdown(alerts),
                 "events": store.recent_events(limit=limit)}
+
+    @app.get("/api/desktop/inject-health/extract-trend")
+    async def api_desktop_inject_health_extract_trend(
+            request: Request, _=Depends(api_auth)):
+        """抽取率按日聚合（阈值校准数据面）：近 N 天各平台装饰率分布 + 回流归零率。
+
+        为「归零判 → 比率阈值」升级攒真实分布（详见 ``inject_extract_trend`` 模块
+        docstring）。未开启趋势落库（inbox.desktop_inject.trend_log=false）→ 返回
+        enabled:false + 空序列，消费方（校准工具/诊断读数）据此提示先开闸。
+        ``calibration`` 是**建议阈值**（不改告警行为）：数据攒够即逐平台给出可安全从
+        「归零判」升级到的比率阈值（详见 ``inject_extract_trend.suggest_extract_threshold``），
+        样本不足时 status=insufficient——运营看数后再显式决定是否切换。
+        query: days?（默认 14，上限 120）
+        返回: {ok, enabled, days:[{day,platform,accounts,reports,decorated_rate,
+               zero_rate,ratio_b0..b4,ingest_zero_rate,...}],
+               calibration:[{platform,status,threshold,samples,...}]}
+        """
+        from src.web.inject_extract_trend import (
+            get_inject_extract_trend_store, suggest_extract_thresholds,
+        )
+        store = get_inject_extract_trend_store()
+        if store is None:
+            return {"ok": True, "enabled": False, "days": [], "calibration": []}
+        try:
+            days = int(request.query_params.get("days") or 14)
+        except Exception:
+            days = 14
+        try:
+            store.prune()
+        except Exception:
+            logger.debug("[desktop] extract 趋势 prune 失败（已忽略）", exc_info=True)
+        rows = store.daily(days=days)
+        return {"ok": True, "enabled": True, "days": rows,
+                "calibration": suggest_extract_thresholds(rows)}
 
     @app.get("/api/desktop/outbound")
     async def api_desktop_outbound_pull(request: Request, _=Depends(api_auth)):
@@ -455,8 +683,12 @@ def register_desktop_routes(app, *, api_auth) -> None:
     async def api_desktop_outbound_ack(request: Request, _=Depends(api_auth)):
         """桌面壳 / 扩展发完一条出站命令后回执（D4）：claimed→sent/failed。
 
-        body: {id, ok?, error?}
-        返回: {ok, acked}
+        body: {id, ok?, error?, delivered_as?, echo?}
+        返回: {ok, acked, voice?}
+
+        ``kind=voice`` 命令（P0-6）：回执**首次命中**时顺带 ①成功→镜像出站语音行到收件箱
+        （念稿/音频/人设名）+ 打 record_voice_sent；②能力型失败（record/play）→ 同念稿回落一条
+        文字命令。见 :mod:`src.inbox.desktop_voice_ack`。
         """
         try:
             body = await request.json()
@@ -471,8 +703,32 @@ def register_desktop_routes(app, *, api_auth) -> None:
         ok = bool((body or {}).get("ok", True))
         error = str((body or {}).get("error") or "")
         from src.inbox.desktop_outbound import get_desktop_outbound_queue
-        acked = get_desktop_outbound_queue().ack(item_id, ok=ok, error=error)
-        return {"ok": True, "acked": acked}
+        q = get_desktop_outbound_queue()
+        item = None
+        try:
+            item = q.get(item_id)
+        except Exception:
+            item = None
+        acked = q.ack(item_id, ok=ok, error=error)
+        resp: dict = {"ok": True, "acked": acked}
+        if acked and isinstance(item, dict) and str(item.get("kind") or "") == "voice":
+            try:
+                from src.inbox.desktop_voice_ack import handle_voice_ack
+                cm = getattr(request.app.state, "config_manager", None)
+                _cfg = getattr(cm, "config", None) or {}
+                try:
+                    from src.integrations.account_registry import get_account_registry
+                    _reg = get_account_registry()
+                except Exception:
+                    _reg = None
+                resp["voice"] = handle_voice_ack(
+                    q, item, ok=ok, error=error,
+                    store=getattr(request.app.state, "inbox_store", None),
+                    config=_cfg, registry=_reg,
+                    extra={k: (body or {}).get(k) for k in ("delivered_as", "echo")})
+            except Exception:
+                logger.debug("[desktop] voice ack 处置失败（已忽略）", exc_info=True)
+        return resp
 
     @app.post("/api/desktop/outbound/action")
     async def api_desktop_outbound_action(request: Request, _=Depends(api_auth)):
@@ -568,7 +824,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
                 from src.inbox.normalizer import conv_id
                 cid = (cmd.get("conversation_id")
                        or conv_id(platform, account_id, chat_key))
-                rows = store.list_recent_messages(cid, limit=30)
+                from src.ai.context_depth import history_fetch_limit as _hfl
+                rows = store.list_recent_messages(cid, limit=_hfl(None, 30))
                 history, last_inbound = normalize_history(_msgs_from_store_rows(rows))
             except Exception:
                 logger.debug("[desktop] rewrite 取会话上下文失败", exc_info=True)
@@ -579,6 +836,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
         out = await generate_persona_reply(
             app=request.app, platform=platform, chat_key=chat_key,
             last_inbound=last_inbound, history=history,
+            conversation_id=str(cmd.get("conversation_id") or ""),
+            account_id=account_id,
         )
         if not (out.get("ok") and out.get("reply")):
             return {"ok": False, "detail": str(out.get("detail") or "生成失败")}

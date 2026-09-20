@@ -10,6 +10,7 @@ import {
   getChannelAccountStats,
   listChannelAccounts,
 } from "@/lib/channels";
+import { CHANNEL_PLATFORM_LABEL, CHANNEL_STATUS_LABEL } from "../labels";
 import { EditChannelAccountControl, NewChannelAccountForm } from "./ui";
 import {
   Card,
@@ -32,20 +33,8 @@ export const dynamic = "force-dynamic";
 
 const LIMIT = 50;
 
-const PLATFORM_LABEL: Record<string, string> = {
-  telegram: "Telegram",
-  whatsapp: "WhatsApp",
-  messenger: "Messenger",
-  line: "LINE",
-  web: "web 客服",
-  other: "其他",
-};
-const STATUS_LABEL: Record<string, string> = {
-  active: "在用",
-  pending: "待启用",
-  paused: "已暂停",
-  revoked: "已弃用",
-};
+const PLATFORM_LABEL = CHANNEL_PLATFORM_LABEL;
+const STATUS_LABEL = CHANNEL_STATUS_LABEL;
 /** 状态展示顺序（在用优先，弃用沉底）。 */
 const STATUS_ORDER = ["active", "pending", "paused", "revoked"] as const;
 
@@ -158,12 +147,12 @@ export default function ChannelsPage({
               ? ["调整搜索或平台/状态筛选试试。"]
               : [
                   <span key="first">
-                    第一个应登记的号：<b className="text-amber-300">官方总机 +639757135247</b>
-                    （telegram · zhiliao 实例 · 总机接待）—— session 已找回，登录态在智聊实例数据根。
+                    从<b className="text-amber-300">官方总机</b>开始登记（平台 · 实例 · 用途 · 保管人四项填全），
+                    后续封号换号有账可查。
                   </span>,
                   canWrite
-                    ? "点右上角「登记账号」录入；平台/实例/用途/保管人填全，后续封号换号有账可查。"
-                    : "登记需要 admin 及以上角色 —— 请联系管理员录入。",
+                    ? "点右上角「登记账号」录入；纪律：新号先登记、一号一实例、不存任何密钥。"
+                    : "登记需要运营或主账号 —— 请联系管理员录入。",
                   "web 官网客服 widget 无账号概念，也建议登记一条（platform=web），保持台账全貌。",
                 ]
           }
@@ -172,7 +161,7 @@ export default function ChannelsPage({
         <Card className="p-0">
           <DataTable head={["账号", "平台", "实例", "用途", "状态", "保管人", "登录态位置", "更新时间", ""]}>
             {rows.map((a) => (
-              <tr key={a.id} className="hover:bg-slate-800/40">
+              <tr key={a.id} className="hover:bg-ink-700/40">
                 <Td>
                   <span className="font-medium text-slate-100" title={a.notes ?? undefined}>
                     {a.label}

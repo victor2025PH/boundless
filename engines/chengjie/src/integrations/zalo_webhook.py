@@ -71,6 +71,38 @@ def extract_zalo_messages(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [{"sender": sender, "text": text, "msg_id": str(msg.get("msg_id") or "")}]
 
 
+#: Zalo 媒体事件名 → 收件箱媒体类型（与 official_inbound.media_placeholder 词表对齐）
+_ZALO_MEDIA_EVENTS = {
+    "user_send_image": "image", "user_send_sticker": "sticker",
+    "user_send_gif": "gif", "user_send_audio": "audio",
+    "user_send_video": "video", "user_send_file": "file",
+    "user_send_location": "location",
+}
+
+
+def extract_zalo_media(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """解析 Zalo 媒体事件 → ``[{sender, msg_id, media_type, url}]``。
+
+    与 :func:`extract_zalo_messages` 刻意分离（那边有门禁钉死「仅 user_send_text」）：
+    文字走回复产线，媒体只做收件箱可见化。此前这些事件被整体忽略——客户发图，
+    坐席端连占位都没有。
+    """
+    media_type = _ZALO_MEDIA_EVENTS.get(str(body.get("event_name") or ""))
+    if not media_type:
+        return []
+    sender = str((body.get("sender") or {}).get("id") or "")
+    if not sender:
+        return []
+    msg = body.get("message") or {}
+    url = ""
+    atts = msg.get("attachments")
+    if isinstance(atts, list) and atts:
+        payload = (atts[0] or {}).get("payload") or {}
+        url = str(payload.get("url") or payload.get("thumbnail") or "")
+    return [{"sender": sender, "msg_id": str(msg.get("msg_id") or ""),
+             "media_type": media_type, "url": url}]
+
+
 async def zalo_send_text(
     user_id: str,
     text: str,
@@ -148,7 +180,10 @@ def register_zalo_routes(
     oa_secret = (cfg.get("oa_secret") or "").strip()
     oa_account_id = str(cfg.get("oa_id") or "").strip() or "official"
     message_type = str(cfg.get("message_type") or "cs").strip().lower() or "cs"
-    unsupported = (cfg.get("unsupported_type_reply") or "").strip() or "目前仅支持文字消息。"
+    # 显式空串 = 运营选择对媒体消息保持沉默；键缺席才落默认话术
+    _raw_unsup = cfg.get("unsupported_type_reply")
+    unsupported = ("目前仅支持文字消息。" if _raw_unsup is None
+                   else str(_raw_unsup).strip())
     try:
         from src.integrations.official_api_worker import official_pipeline_enabled
         use_pipeline = official_pipeline_enabled(getattr(config_manager, "config", None) or {})
@@ -161,6 +196,7 @@ def register_zalo_routes(
     app.state.zalo_webhook_path = path
 
     async def zalo_webhook_event(request: Request) -> Response:
+        from src.integrations.official_webhook_stats import record_error, record_event
         raw = await request.body()
         # 配了 oa_secret 才验签（留空跳过——仅开发期；生产强烈建议配）
         if oa_secret:
@@ -168,11 +204,15 @@ def register_zalo_routes(
                    or request.headers.get("x-zevent-signature") or "")
             if not verify_zalo_signature(raw, sig, oa_secret):
                 logger.warning("Zalo Webhook 签名校验失败")
+                record_error("zalo", "bad_signature")
                 return Response(status_code=403, content=b"invalid signature")
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception:
+            record_error("zalo", "bad_json")
             return Response(status_code=400, content=b"invalid json")
+        # 到达即记（Zalo 无 GET 握手，事件是唯一的可达性证据）
+        record_event("zalo")
 
         for m in extract_zalo_messages(data):
             try:
@@ -182,10 +222,45 @@ def register_zalo_routes(
                     message_type=message_type, use_pipeline=use_pipeline)
             except Exception as e:  # noqa: BLE001
                 logger.exception("Zalo 事件处理异常: %s", e)
+        # 媒体事件：镜像占位进收件箱（坐席可见可接管）+ 可选「暂不支持」回复
+        for mm in extract_zalo_media(data):
+            try:
+                await _handle_zalo_media(
+                    item=mm, access_token=access_token,
+                    oa_account_id=oa_account_id, message_type=message_type,
+                    unsupported=unsupported)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Zalo 媒体事件处理异常: %s", e)
         return Response(status_code=200, content=b"OK")
 
     app.add_api_route(path, zalo_webhook_event, methods=["POST"], name="zalo_webhook_event")
     logger.info("Zalo Webhook 已注册: POST %s (oa_id=%s)", path, oa_account_id)
+
+
+async def _handle_zalo_media(
+    *, item: Dict[str, Any], access_token: str, oa_account_id: str,
+    message_type: str = "cs", unsupported: str = "",
+) -> None:
+    """单条 Zalo 媒体入站 → 收件箱占位镜像 + 可选「暂不支持」回复。
+
+    与 IG/Messenger 官方链同款语义；绝不喂 SkillManager（媒体无可靠文字语义）。
+    """
+    sender = str(item.get("sender") or "")
+    if not sender:
+        return
+    chat_key = f"zalo:user:{sender}"
+    try:
+        from src.integrations.shared.official_inbound import mirror_inbound_media
+        mirror_inbound_media(
+            platform="zalo", account_id=oa_account_id, chat_key=chat_key,
+            media_type=str(item.get("media_type") or "file"),
+            name=sender, msg_id=str(item.get("msg_id") or ""),
+            media_ref=str(item.get("url") or ""))
+    except Exception:  # noqa: BLE001
+        logger.debug("Zalo 媒体镜像失败（已忽略）", exc_info=True)
+    if unsupported:
+        await zalo_send_text(sender, unsupported, access_token,
+                             message_type=message_type, account_id=oa_account_id)
 
 
 async def _handle_zalo_message(
@@ -227,5 +302,5 @@ async def _handle_zalo_message(
 
 __all__ = [
     "zalo_send_text", "verify_zalo_signature", "extract_zalo_messages",
-    "register_zalo_routes",
+    "extract_zalo_media", "register_zalo_routes",
 ]

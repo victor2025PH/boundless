@@ -33,8 +33,9 @@ default:
   delay_between_adds_sec: [30, 90]
   max_friends_per_session: 6
 
-  # ─── L1 过滤 ───
-  min_l1_score: 20
+  # ─── L1 过滤 ─── 见上方「分层阈值」的 min_l1_score
+  # （2026-08-28：此处原有一个重复的 `min_l1_score: 20`，与上方同值同层级。YAML
+  #  重复键由后者覆盖前者，故行为一直没变，但 check-yaml 会红。删重复项不删语义。）
 
   # ─── 内容评分 ───
   use_content_scoring: true

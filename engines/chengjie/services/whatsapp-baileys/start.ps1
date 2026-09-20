@@ -13,6 +13,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 # 服务监听端口（须与主进程 platform_login.whatsapp.baileys_url 一致）
 $env:PORT = "8790"
+$env:BIND_HOST = "127.0.0.1"   # 入站无鉴权，只许本机引擎调；放开前先加鉴权（server.js 同注）
 # 入站桥：Baileys 收到的消息 push 进统一收件箱（web 后台 18799）
 $env:PY_INGEST_URL = "http://127.0.0.1:18799/api/internal/protocol/ingest"
 # 会话健康桥：连上/被登出/重连放弃等状态转移主动 push（不配则由 PY_INGEST_URL 自动推导）
@@ -58,9 +59,23 @@ $env:WA_SYNC_REACTIONS = "1"
 $env:WA_SYNC_RECEIPTS = "1"
 $env:WA_SYNC_PRESENCE = "1"
 $env:WA_SYNC_EDITS = "1"
-# 媒体落地到 Python 静态目录（前端按 /static URL 加载）
-$env:WA_MEDIA_DIR = "$root\src\web\static\protocol_media\whatsapp"
+# 媒体落地目录：必须与 Python 侧 protocol_bridge.protocol_media_root() 同址，否则
+# 「边车写 A、引擎读 B」＝入站媒体后端识别链全断（ASR/图片 VLM/视频/OCR/声纹/贴纸），
+# 而 UI 因 ProtocolMediaStatic 双根兜底照样能播 → 症状只表现为「AI 突然不回话」，
+# 极难查。2026-08-20 实锤：客户语音落旧引擎树、ASR 在数据根找不到 → 无兜底纪律拦下
+# 整条回复（delivery_block asr:enrich_failed）。
+# 故解析顺序与 protocol_media_root() 逐字对齐：AITR_DATA_DIR（计划任务经
+# autostart-run.ps1 注入，与上面 auth_token 同一契约）→ 无则回落旧引擎树 static
+# （裸开发机：那边 Python 也回落同一处，仍然同址）。
+if ($env:AITR_DATA_DIR) {
+  $mediaRoot = Join-Path $env:AITR_DATA_DIR "protocol_media"
+} else {
+  $mediaRoot = Join-Path $root "src\web\static\protocol_media"
+}
+$env:WA_MEDIA_DIR = Join-Path $mediaRoot "whatsapp"
 $env:WA_MEDIA_URL_BASE = "/static/protocol_media/whatsapp"
+New-Item -ItemType Directory -Force -Path $env:WA_MEDIA_DIR | Out-Null
+Write-Host ("[wa-baileys] media dir = " + $env:WA_MEDIA_DIR)
 $env:LOG_LEVEL = "info"
 
 Write-Host "[wa-baileys] starting on :$($env:PORT) (ingest=$($env:PY_INGEST_URL))"
@@ -81,4 +96,9 @@ if (-not $nodeExe) {
 }
 Add-Content -LiteralPath $log -Value ("[wa-baileys] " + (Get-Date -Format o) + " launching node=" + ($(if ($nodeExe) { $nodeExe } else { "<NOT FOUND>" })) + " server=" + $serverJs)
 if (-not $nodeExe) { Add-Content -LiteralPath $log -Value "[wa-baileys] FATAL: node.exe not found on PATH nor common install dirs"; exit 1 }
-& $nodeExe $serverJs *>> $log
+# 日志编码修复（P2）：PowerShell 5.1 下 `*>> $log` 会把 node stdout 按 UTF-16LE 落盘，
+# 与上面 Add-Content 写入的单字节行混在同一文件 → 乱码且排障工具读不了（2026-07-22
+# 事故排查即受害于此）。不能用 `Out-File -Append`：它全程独占文件句柄，服务在跑时
+# 任何人都读不了日志（排障反而更瞎）。用逐行 Add-Content（UTF-8）：每行写完即释放
+# 句柄，tail/Get-Content 随时可读；Baileys info 级日志量小，逐行开销可忽略。
+& $nodeExe $serverJs 2>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value $_ -Encoding UTF8 }

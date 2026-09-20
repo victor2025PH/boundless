@@ -113,6 +113,18 @@ class ContactHooks(Protocol):
         """W3-3M：查 journeys.funnel_stage，供 RelationshipStager 语气指令注入。"""
         ...
 
+    def on_language_preference(
+        self, *, channel: str, account_id: str, external_id: str,
+        lang: str, trace_id: str = "",
+    ) -> None:
+        """lang_policy：用户明确要求回复语言 → 写回联系人画像 + 打标签。
+
+        「主动提语言要求」是高价值信号（认真对话的客户才会提），除会话级生效外
+        还应沉淀到 CRM：language_hint 供跨渠道/再营销复用，lang_pref:<code> 标签
+        供运营筛选分层。lang 传空 = 偏好释放（清 lang_pref: 标签，保留 language_hint）。
+        """
+        ...
+
     def maybe_before_reply(
         self, *, account_id: str, external_id: str,
         ai_reply: str, latest_in_text: str = "", trace_id: str = "",
@@ -277,6 +289,34 @@ class GatewayContactHooks:
             logger.debug("hook get_journey_funnel_stage failed: %s", e)
             return None
 
+    def on_language_preference(
+        self, *, channel: str, account_id: str, external_id: str,
+        lang: str, trace_id: str = "",
+    ) -> None:
+        """明确语言请求 → contact.language_hint + lang_pref:<code> 标签（吞异常）。"""
+        try:
+            ci = self._gw.find_channel_identity(
+                channel=channel, account_id=account_id, external_id=external_id,
+            )
+            if ci is None:
+                return
+            store = getattr(self._gw, "_store", None)
+            if store is None:
+                return
+            code = str(lang or "").strip().lower()
+            tags = [t for t in (store.get_contact_tags(ci.contact_id) or [])
+                    if not str(t).startswith("lang_pref:")]
+            if code:
+                store.update_contact(ci.contact_id, language_hint=code)
+                tags.append(f"lang_pref:{code}")
+            store.set_contact_tags(ci.contact_id, tags)
+            logger.info(
+                "hook on_language_preference: contact=%s lang=%s",
+                ci.contact_id, code or "(released)",
+            )
+        except Exception as e:
+            logger.warning("hook on_language_preference failed: %s", e)
+
     # ── W4-Handoff-Auto-Inject ─────────────────────────────
     def maybe_before_reply(
         self, *, account_id: str, external_id: str,
@@ -344,6 +384,7 @@ class NoopContactHooks:
     def on_story_complete(self, **_: object) -> None: return None
     def get_journey_intimacy(self, **_: object) -> None: return None
     def get_journey_funnel_stage(self, **_: object) -> None: return None
+    def on_language_preference(self, **_: object) -> None: return None
 
     def maybe_before_reply(self, *, ai_reply: str = "", **_: object) -> BeforeReplyDecision:
         return BeforeReplyDecision(

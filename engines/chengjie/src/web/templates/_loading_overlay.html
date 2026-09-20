@@ -1,0 +1,136 @@
+{# ── 早绘制载入层（P0 感知性能，2026-08-07）─────────────────────────────────
+   背景：工作台大页是「HTML 全内联」的服务端渲染页（unified_inbox 15k 行），
+   托管形态经反向 SSH 隧道传输（实测有效吞吐 ~30KB/s），gzip 后仍要 10s+ 才到齐。
+   此前这段时间是**纯白屏**——页面内部任何 spinner 都救不了（HTML 都还没到）。
+
+   做法：本层放 <body> 最顶部 + **纯内联样式**（不依赖任何后加载的 CSS）。
+   浏览器流式渲染：HTML 第一个数据块（几 KB）到达即可绘制本层（<1s），
+   其余内容在层背后继续流入，DOM 就绪后淡出。白屏 → 品牌载入动画。
+
+   ⚠ 三重防卡死（模板热更新直上生产，绝不能把坐席锁在遮罩后）：
+     ① DOM 就绪 / window.load 隐藏（正常路径）
+     ② 12s JS 定时兜底（正常路径异常时）
+     ③ 25s 纯 CSS 动画兜底（JS 整体挂掉也会自动散开）
+   刻意不做「假进度百分比」——不欺骗用户，用不确定态滑块 + 阶段文案降低焦虑。 #}
+<div id="blLoad" role="status" aria-live="polite">
+  <div class="blLoad-in">
+    <div class="blLoad-mark">{{ (i18n or {}).get('ldov_title', '智聊 ChatX') }}</div>
+    <div class="blLoad-bar"><i></i></div>
+    <div class="blLoad-tip" id="blLoadTip">{{ (i18n or {}).get('ldov_s1', '正在连接…') }}</div>
+    <div class="blLoad-sub" id="blLoadSub"></div>
+  </div>
+</div>
+<style>
+#blLoad{position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(1200px 600px at 50% 40%,#131c33 0%,#0b1020 70%);
+  opacity:1;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  animation:blLoadEsc 25s linear forwards}
+#blLoad.blLoad-done{animation:none!important;opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .32s ease}
+.blLoad-in{text-align:center;padding:24px}
+.blLoad-mark{font-size:22px;font-weight:800;letter-spacing:.5px;color:#dbe7ff;
+  background:linear-gradient(90deg,#5eead4,#818cf8);-webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;animation:blLoadPulse 2.2s ease-in-out infinite}
+.blLoad-bar{width:190px;height:3px;border-radius:3px;background:rgba(255,255,255,.13);
+  overflow:hidden;margin:18px auto 12px}
+.blLoad-bar i{display:block;width:40%;height:100%;border-radius:3px;
+  background:linear-gradient(90deg,transparent,var(--tk-brand,#4f8cff),transparent);
+  animation:blLoadSlide 1.15s ease-in-out infinite}
+.blLoad-tip{font-size:13px;color:#9fb0d0;letter-spacing:.3px}
+.blLoad-sub{font-size:12px;color:#6b7c9c;margin-top:8px;min-height:16px}
+@keyframes blLoadSlide{0%{transform:translateX(-110%)}100%{transform:translateX(310%)}}
+@keyframes blLoadPulse{0%,100%{opacity:1}50%{opacity:.62}}
+@keyframes blLoadEsc{0%,96%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
+@media (prefers-reduced-motion:reduce){
+  .blLoad-bar i,.blLoad-mark{animation:none}
+}
+</style>
+<script>
+(function(){
+  var el=document.getElementById('blLoad'); if(!el) return;
+  var tip=document.getElementById('blLoadTip'), sub=document.getElementById('blLoadSub');
+  var STAGES={{ [ (i18n or {}).get('ldov_s1','正在连接…'),
+                  (i18n or {}).get('ldov_s2','载入界面…'),
+                  (i18n or {}).get('ldov_s3','准备数据…') ]|tojson }};
+  var SLOW={{ (i18n or {}).get('ldov_slow','首次载入较慢，再次打开会快很多')|tojson }};
+  var NAVFAIL={{ (i18n or {}).get('ldov_navfail','页面未能打开')|tojson }};
+  var NAVRETRY={{ (i18n or {}).get('ldov_navfail_retry','重试打开')|tojson }};
+  var rot=null, slowT=null, hardT=null, navDest='';
+
+  function cycle(){
+    var i=0;
+    if(tip) tip.textContent=STAGES[0]||'';
+    if(sub) sub.textContent='';
+    clearInterval(rot); clearTimeout(slowT);
+    rot=setInterval(function(){ i++; if(i<STAGES.length){ if(tip) tip.textContent=STAGES[i]; }
+                                else clearInterval(rot); },1800);
+    // 超过 5s 还没好 → 明说「首次慢、下次快」，消除「是不是卡了」的焦虑
+    slowT=setTimeout(function(){ if(sub) sub.textContent=SLOW; },5000);
+  }
+  function hide(){
+    clearInterval(rot); clearTimeout(slowT); clearTimeout(hardT);
+    if(el && el.className.indexOf('blLoad-done')<0) el.className+=' blLoad-done';
+  }
+  // B95（实施68 P1-14）：L2 遮罩超时散开时若还停在原文档＝这次点击的导航被
+  // 吞掉/被登录跳转打断（skuio 实录「正在连接…→ 弹回后台首页」零报错）。
+  // 禁止静默——顶部出显式提示条：目标路径 + 重试 + 可关。导航最终真完成时
+  // 本文档整个被替换，条随之消亡，不会误留。
+  function navFailNote(){
+    if(!navDest) return;
+    var old=document.getElementById('blNavFail'); if(old) old.remove();
+    var n=document.createElement('div');
+    n.id='blNavFail';
+    n.setAttribute('style','position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99997;'
+      +'display:flex;align-items:center;gap:10px;max-width:92vw;padding:8px 14px;border-radius:10px;'
+      +'background:#2a1520;border:1px solid #a4485c;color:#ffd7de;font-size:13px;'
+      +'font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;'
+      +'box-shadow:0 6px 24px rgba(0,0,0,.45);');
+    var txt=document.createElement('span');
+    txt.textContent=NAVFAIL+': '+navDest;
+    var btn=document.createElement('button');
+    btn.textContent=NAVRETRY;
+    btn.setAttribute('style','border:1px solid #a4485c;background:transparent;color:#ffd7de;'
+      +'border-radius:8px;padding:3px 10px;cursor:pointer;font-size:12px;');
+    btn.onclick=function(){ var d=navDest; n.remove(); if(d) location.assign(d); };
+    var x=document.createElement('span');
+    x.textContent='\u2715';
+    x.setAttribute('style','cursor:pointer;opacity:.7;padding:2px 4px;');
+    x.onclick=function(){ n.remove(); };
+    n.appendChild(txt); n.appendChild(btn); n.appendChild(x);
+    if(document.body) document.body.appendChild(n);
+  }
+  function show(dest){
+    if(!el) return;
+    navDest=(typeof dest==='string')?dest:'';
+    el.className=el.className.replace(/\s*blLoad-done/g,'');
+    cycle();
+    clearTimeout(hardT);
+    // 导航被取消/失败时不能把人锁住；但散开必须带解释（见 navFailNote）
+    hardT=setTimeout(function(){ hide(); navFailNote(); },15000);
+  }
+
+  cycle();
+  hardT=setTimeout(hide,12000);                 // 兜底②
+  if(document.readyState==='complete'||document.readyState==='interactive'){ setTimeout(hide,60); }
+  else { document.addEventListener('DOMContentLoaded',function(){ setTimeout(hide,60); }); }
+  window.addEventListener('load',hide);
+  window.addEventListener('pageshow',hide);     // bfcache 返回
+
+  // ── L2：跨页导航先亮遮罩 ──
+  // 点导航链接后浏览器会停在当前页十几秒才跳，此前无任何反馈（第二段白等）。
+  window.__blLoadShow=show;
+  document.addEventListener('click',function(e){
+    if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey) return;
+    var a=e.target&&e.target.closest?e.target.closest('a[href]'):null; if(!a) return;
+    if(a.hasAttribute('download')) return;
+    if(a.target&&a.target!=='_self') return;
+    var h=a.getAttribute('href')||'';
+    if(!h||h.charAt(0)==='#'||/^(javascript|mailto|tel|blob|data):/i.test(h)) return;
+    var u; try{ u=new URL(a.href,location.href); }catch(_){ return; }
+    if(u.origin!==location.origin) return;
+    if(u.pathname===location.pathname&&u.search===location.search) return;  // 同页锚点
+    // winname 链接经 __openUnique 开命名窗口（本文档不导航）：不记 dest，防误报「未打开」
+    show(a.hasAttribute('data-winname')?'':(u.pathname+u.search));
+  },true);
+})();
+</script>

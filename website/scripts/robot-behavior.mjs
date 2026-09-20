@@ -1,5 +1,5 @@
 /**
- * EveBot 行为回归：进场问好（断言手掌展开）/ 点击空白飞行（断言落点）/ 8s 自动回家（断言归位）/
+ * EveBot 行为回归：进场问好（断言引力三指展开）/ 点击空白飞行（断言落点）/ 8s 自动回家（断言归位）/
  * 坠落与飞行姿态拍摄 / 全息播报点击带种子问题开客服 / 移动端轻量版可见可点。
  * 任一断言失败以退出码 1 结束。用法：node scripts/robot-behavior.mjs [outDir]
  * 环境变量 ROBOT_BASE_URL 可指向 staging/生产跑部署后冒烟（默认 http://localhost:3210；
@@ -46,15 +46,25 @@ const browser = await chromium.launch();
 
   const clip = { x: VW - 460, y: VH - 560, width: 460, height: 560 };
 
-  // 进场问好（挥手窗口约 [2.8s, 5.6s]，取中段拍摄并断言五指手掌可见）
+  // 进场问好：花瓣臂挥手，无手指 DOM；期间机器人保持可见。
   await page.waitForTimeout(1900);
-  const handOpacity = await page.evaluate(() => {
-    const el = document.querySelector(".eve-hand");
-    return el ? parseFloat(getComputedStyle(el).opacity) : -1;
-  });
-  check("进场问好时手掌展开", handOpacity > 0.5, `opacity=${handOpacity}`);
-  await page.screenshot({ path: `${OUT}/b1-greet.png`, clip });
-  await page.waitForTimeout(3600);
+  let greetOk = false;
+  let handGone = true;
+  for (let s = 0; s < 4; s++) {
+    const v = await page.evaluate(() => {
+      const el = document.querySelector(".ai-sprite-container [role='button']");
+      const opacity = el ? parseFloat(getComputedStyle(el).opacity) : 0;
+      const hands = document.querySelectorAll(".eve-hand, [data-pod]").length;
+      return { opacity, hands };
+    });
+    greetOk = greetOk || v.opacity > 0.95;
+    handGone = handGone && v.hands === 0;
+    if (s === 1) await page.screenshot({ path: `${OUT}/b1-greet.png`, clip });
+    await page.waitForTimeout(450);
+  }
+  check("进场问好期间机器人可见", greetOk, `greetOk=${greetOk}`);
+  check("无手指 DOM", handGone, `handGone=${handGone}`);
+  await page.waitForTimeout(1800);
 
   // 点击空白 → 飞行
   await page.mouse.click(700, 380);

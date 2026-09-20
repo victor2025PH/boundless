@@ -145,19 +145,25 @@ _ADMIN_SEALED_PAGES = {"cases.html": 0, "logs.html": 0, "analytics.html": 0, "pe
                        "rpa_overview.html": 0,
                        # ③-S9b：Messenger RPA 运营台（静态 468 处 → Jinja get；JS 1102 唯一裸串 →
                        # window.T/Tf，msg_s*/msg_js* 键；CSS ::before content + 日期解析正则 \u53f7 收口）。
-                       "messenger_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_messenger.html（cap 沿用）。
+                       "_channel_body_messenger.html": 0,
                        # ③-S9c：WhatsApp RPA 运营台（静态 221 处 → Jinja get + 158 wa_s* 键；JS 227 处 →
                        # window.T + 13 window.Tf，109 wa_js*/wa_js_p* 键；余 118 处按 zh 复用既有键，
                        # 全站复用率 52%——用 scripts/i18n_htmlconv + i18n_jsconv 两把可复用扫描器收口）。
-                       "whatsapp_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_whatsapp.html（cap 沿用）。
+                       "_channel_body_whatsapp.html": 0,
                        # ③-S9d：LINE RPA 运营台（静态 172 处 → Jinja get + 70 ln_s* 键；JS 160 处 →
                        # window.T + 7 window.Tf，81 ln_js*/ln_js_p* 键；余 142 处按 zh 复用既有键，
                        # 静/动复用率 60%/53%——同两把扫描器收口；title site_name 默认复用 msg_s444）。
-                       "line_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_line.html（cap 沿用）。
+                       "_channel_body_line.html": 0,
                        # ③-S9e：Telegram 原生（mtproto）运营台（静态 161 处 → Jinja get + 130 tg_s* 键；
                        # JS 70 处 → window.T + 8 window.Tf，43 tg_js*/tg_js_p* 键 + 单/双声道 2 键；
                        # 基线复用仅 21%（原生 console 术语独立）；日期解析正则内 CJK(小時分秒)→\u 转义收口）。
-                       "telegram.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_telegram.html（cap 沿用）。
+                       "_channel_body_telegram.html": 0,
+                       # 渠道中心壳页（工作台壳 + 渠道 tab + 变量桥；正文见上四个 partial）。
+                       "workspace_channels.html": 0,
                        # ③-S9f：落地首屏 Dashboard（静态 104 处 → Jinja get + 51 db_s* 键；JS 167 处（5 个
                        # 分散 <script>）→ window.T + 4 window.Tf，102 db_js*/db_js_p* 键；title {% if %}双态
                        # 分支 + 成功判定逻辑 '成功' in msg → \u 转义、status 默认值复用 status_running；
@@ -190,6 +196,10 @@ _ADMIN_SEALED_PAGES = {"cases.html": 0, "logs.html": 0, "analytics.html": 0, "pe
                        # + JS 64→lr_js*/lr_*，知识草稿审核/批量通过拒绝/相似去重）。title site_name default 复用
                        # msg_s444；label 动词经 window.T 派生入 Tf；次→kb_js_174(' times') 纠反 runs 复用。
                        "episodic_memory.html": 0, "learner.html": 0,
+                       # 自动回复设置（2026-08-02 可读性/信息架构改版随批收口）：全部可见文案走
+                       # Jinja get（rps_* 键，zh/en 镜像有专项门禁），JS 文案经服务端注入的
+                       # RPS_I18N 消费；源码层 cap-0 与下方 EN 渲染门禁双锁。
+                       "reply_settings.html": 0,
                        # ③-S9n：关系/转化运营两页——relations_health（静态 40→rh_s* + JS 78→rh_js*，流失预警榜/
                        # 跨域归档回填/单人健康卡）；monetization（静态 114→mo_s* + JS 111→mo_js*，端变现营收/
                        # 挽回榜/漏斗/出图预算/权益开通/门控预览）。title site_name default 复用 msg_s444；
@@ -392,8 +402,13 @@ def test_admin_content_pages_no_untagged_regression(name, cap):
 #    键由 key-def 门禁保证存在，故无需中文兜底。cases/logs/analytics 走 T(key,'中文默认') 防御式
 #    默认值写法（属另一种可接受约定），不在本门禁；如日后亦改全键化可并入。
 _SCRIPT_CJK_ZERO_PAGES = ("personas.html", "_rpa_shared_funnel.html", "_rpa_shared_scripts.html",
-                          "rpa_overview.html", "messenger_rpa.html", "whatsapp_rpa.html",
-                          "line_rpa.html", "telegram.html", "dashboard.html", "settings.html",
+                          "rpa_overview.html",
+                          # 渠道中心融合：四渠道正文迁 _channel_body_*.html（门禁语义沿用），
+                          # 壳页 workspace_channels.html 一并纳管。
+                          "_channel_body_messenger.html", "_channel_body_whatsapp.html",
+                          "_channel_body_line.html", "_channel_body_telegram.html",
+                          "workspace_channels.html",
+                          "dashboard.html", "settings.html",
                           "knowledge.html",
                           # ③-S9i：坐席绩效看板（工作台家族首页）JS 层零裸 CJK（ap_js*/ap_js_p* 键）。
                           "agent_perf.html",
@@ -492,6 +507,44 @@ def test_template_window_t_keys_resolve(name):
     assert not missing, (
         f"{name} 里 window.T/Tf 引用了译表中不存在的静态键（会把裸 key 显示给用户，"
         f"请在 web_i18n.py 补 zh/en）: {missing}"
+    )
+
+
+def _static_js_with_window_t():
+    """src/web/static 下含 window.T/Tf 调用的 JS 文件（相对路径），供参数化。"""
+    from scripts.i18n_scan import _TPL_DIR
+    static_dir = _TPL_DIR.parent / "static"
+    out = []
+    for p in sorted(static_dir.rglob("*.js")):
+        try:
+            src = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if "window.T" in src or ".Tf(" in src:
+            out.append(p.relative_to(static_dir).as_posix())
+    return out
+
+
+@pytest.mark.parametrize("relname", _static_js_with_window_t())
+def test_static_js_window_t_keys_resolve(relname):
+    """P2-3（2026-08-02）：模板 JS 外迁到 ``src/web/static/**/*.js`` 后，
+    ``window.T('k')`` 的键保护不得随迁移丢失——本门禁把
+    :func:`test_template_window_t_keys_resolve` 同款检查扩到静态 JS。
+
+    历史盲区实锤：persona_studio_core.js（第五批瘦身外迁）带 39+ 处 window.T
+    却一直不在键门禁内。取键前先 ``_strip_comments``（cmdk.js 文档注释里的
+    ``window.T('ws.cmdk.*')`` 通配示例属说明文字，不是真调用）。"""
+    from scripts.i18n_scan import _TPL_DIR, _strip_comments, window_t_static_keys
+    from src.web.web_i18n import get_translations
+
+    zh = get_translations("zh")
+    src = (_TPL_DIR.parent / "static" / relname).read_text(
+        encoding="utf-8", errors="replace")
+    missing = sorted(
+        k for k in window_t_static_keys(_strip_comments(src)) if k not in zh)
+    assert not missing, (
+        f"static/{relname} 里 window.T/Tf 引用了译表中不存在的静态键"
+        f"（会把裸 key 显示给用户，请在对应 i18n pack 补 zh/en）: {missing}"
     )
 
 
@@ -764,19 +817,16 @@ def test_base_chrome_i18n_keys_all_defined(name):
 
 
 def test_base_tour_and_help_bilingual():
-    """③-S4：引导(tour) + 全局 tooltip 引擎 + nav_* 帮助词条已双语。
-    tour 仍是 JS 内联数据（中英并存、显示按 WS_LANG 客户端切换、缺英文回落中文），
-    悬浮词条已迁至 help_terms.py；此处做「数据层完整性 + 引擎确实按语言取 en 字段」的断言。"""
+    """③-S4：全局 tooltip 引擎 + nav_* 帮助词条已双语。
+    引导(tour)已于 2026-08-31 随新手引导整体退役（防复活门禁见
+    test_onboarding_retired.py），本用例只守 tooltip 引擎与词条数据层。"""
     from pathlib import Path
 
     base = Path(__file__).resolve().parents[1] / "src" / "web" / "templates" / "base.html"
     text = base.read_text(encoding="utf-8")
-    # tooltip / tour 引擎须按语言取 en 字段（缺则回落中文）
-    for needle in ("d.en", "d.desc_en", "d.usage_en", "_TOUR_EN"):
-        assert needle in text, f"tooltip/tour 引擎未接语言开关: {needle}"
-    # 引导英文文案在位（证明 tour 已双语）
-    for needle in ("Command Palette (Ctrl+K)", "This is your control center"):
-        assert needle in text, f"tour 英文缺失: {needle!r}"
+    # tooltip 引擎须按语言取 en 字段（缺则回落中文）
+    for needle in ("d.en", "d.desc_en", "d.usage_en"):
+        assert needle in text, f"tooltip 引擎未接语言开关: {needle}"
     # ③-S4b：全部悬浮词条（不止 nav_*）须含 en + desc_en（术语表整表收口）。
     # 词典已迁出 base.html 内联 → src/web/help_terms.py 单源(模板经 help_terms|tojson 消费),
     # 断言从"正则扫模板源码"升级为"直接校验数据结构"(更强:不受格式化影响)。
@@ -852,21 +902,17 @@ SEALED_PAGES = (
     # rpa_overview.html（③-S9a-2）：标题/检索/KPI/意图字典/设备管理/统计/SSE 全量接 i18n
     # （静态 Jinja get + JS window.T/Tf，ov_*/ov_js_* 键）。正文无 ui_mode 分支，一态即可。
     ("rpa_overview.html", {"ui_mode": "full"}),
-    # messenger_rpa.html（③-S9b）：Hero/KPI/六大 tab（总览/线索/人设/账号/审批/数据）/策略配置/
-    # 应急停发/设备抽屉/人设编辑 modal 全量接 i18n（静态 Jinja get + JS window.T/Tf，msg_s*/msg_js* 键）。
-    # 正文无 ui_mode 分支，一态即可。
-    ("messenger_rpa.html", {"ui_mode": "full"}),
-    # whatsapp_rpa.html（③-S9c）：Hero/KPI/五大 tab（对话/待审/模板分析/配置/运维）/策略轮换/语音·媒体/
-    # 表情控制/设备抽屉/语言锁定 全量接 i18n（静态 Jinja get + JS window.T/Tf，wa_s*/wa_js* 键）。
-    # 正文无 ui_mode 分支，一态即可。
-    ("whatsapp_rpa.html", {"ui_mode": "full"}),
-    # line_rpa.html（③-S9d）：Hero/KPI/会话流/通知栏对账/时间轴/审计/审批/节奏与服务配置/语言锁定
-    # 全量接 i18n（静态 Jinja get + JS window.T/Tf，ln_s*/ln_js* 键）。正文无 ui_mode 分支，一态即可。
-    ("line_rpa.html", {"ui_mode": "full"}),
-    # telegram.html（③-S9e）：Telegram 原生运营台——场景预设/消息处理/语音识别(ASR)/语音回复(TTS)/
-    # 声音克隆/Edge TTS 声线/账号状态/配置摘要/版本快照 全量接 i18n（静态 Jinja get + JS window.T/Tf，
-    # tg_s*/tg_js* 键）。正文无 ui_mode 分支，一态即可。
-    ("telegram.html", {"ui_mode": "full"}),
+    # 渠道中心（渠道融合）：四渠道正文 partial 装进工作台壳渲染（壳 chrome + 原页正文
+    # 一次覆盖；原 messenger_rpa/whatsapp_rpa/line_rpa/telegram 四页渲染门禁语义不变，
+    # 仅渲染入口从旧独立页换成 workspace_channels.html?channel=*）。
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="messenger")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="whatsapp")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="line")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="telegram")),
     # dashboard.html（③-S9f）：落地首屏——KPI 卡/运维可靠性/系统告警/快捷入口/实时性能/待审话术/
     # 主动消息质量/触发器决策/知识库状态/回复质量 全量接 i18n（静态 Jinja get + JS window.T/Tf，
     # db_s*/db_js* 键）。title/page_title 有 ui_mode 双态分支 → 两态都渲染验证。
@@ -901,6 +947,15 @@ SEALED_PAGES = (
     ("workspace_dashboard.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin",
                                       funnel_done_stages=[])),
     ("draft_review.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
+    # WP-9（2026-08-17）对外英文走查收编：老板日报（WP-3，老板每日一屏）。
+    # 首启向导 welcome.html 已随新手引导退役删除（2026-08-31），条目一并移除。
+    ("boss.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
+    # 自动回复设置（2026-08-02）：可见文案全走服务端 (i18n or {}).get(rps_*)；JS 文案经
+    # RPS_I18N（Jinja 按渲染语言注入）而非 window.T——<script> 源码里的中文是 get 默认值、
+    # 随语言被 Jinja 消费，故**刻意不入** _SCRIPT_CJK_ZERO_PAGES（那是 window.T 架构的门禁）；
+    # EN 正确性由本渲染门禁 + rps pack 双语镜像（test_reply_settings.test_i18n_pack_bilingual）
+    # 共同证明。正文无 ui_mode 分支，一态即可。
+    ("reply_settings.html", {"ui_mode": "full"}),
     # ③-S9k：ops 运营家族三页——原 contacts_routes._load_ops_html 直出原始 HTML（不过 Jinja），本轮
     # 升级为 templates.TemplateResponse 渲染（i18n_render 注入 i18n/ui_lang）+ {% include
     # _i18n_bootstrap %}（拿 window.T/Tf + wsFmt*，退役 /static/ops_locale.js）+ {% include
@@ -1040,13 +1095,16 @@ def _strip_client_swapped(html: str) -> str:
     # 1) data-i18n（换 textContent）叶子元素的内文（``data-i18n="k"`` 精确匹配，不含 -title/-placeholder）
     html = _re.sub(r'(<(\w+)\b[^>]*\bdata-i18n="[^"]*"[^>]*>).*?(</\2>)', r"\1\3", html, flags=_re.S)
 
-    # 2) 挂了 data-i18n-title / -placeholder 的标签，其 title / placeholder 属性值加载时会被覆盖
+    # 2) 挂了 data-i18n-title / -placeholder / -label 的标签，其 title / placeholder /
+    #    label 属性值加载时会被覆盖（label：optgroup 分组名，2026-08-29 应用器同步扩展）
     def _blank(m):
         tag = m.group(0)
         if "data-i18n-title" in tag:
             tag = _re.sub(r'\btitle="[^"]*"', 'title=""', tag)
         if "data-i18n-placeholder" in tag:
             tag = _re.sub(r'\bplaceholder="[^"]*"', 'placeholder=""', tag)
+        if "data-i18n-label" in tag:
+            tag = _re.sub(r'\blabel="[^"]*"', 'label=""', tag)
         return tag
 
     return _re.sub(r"<\w+\b[^>]*>", _blank, html)
@@ -1088,7 +1146,8 @@ def test_admin_chrome_nav_keys_present_and_translated():
     from src.web.web_i18n import get_translations
 
     zh, en = get_translations("zh"), get_translations("en")
-    same_ok = {"messenger_rpa"}  # 品牌名两语一致，豁免
+    # 品牌名两语一致，豁免（真机矩阵更名后四渠道菜单项=裸品牌名，品牌不翻译）
+    same_ok = {"telegram_settings", "line_rpa", "messenger_rpa", "whatsapp_rpa"}
     missing, untranslated = [], []
     for k in _ADMIN_CHROME_NAV_KEYS:
         if k not in zh or k not in en:
@@ -1187,7 +1246,8 @@ def test_tr_localizes_by_request_lang():
     assert tr(zh_req, "err.case.not_found", case_id="C3") == "Case C3 不存在"
     assert tr(en_req, "err.ec.tools_disabled") == "E-commerce tools are not enabled"
     assert tr(zh_req, "err.tg.save_config_failed") == "保存配置失败"
-    assert tr(en_req, "err.ca.event_not_found") == "Event not found or crisis audit is not enabled"
+    # 2026-09-05 #185：「危机审计」→「客户安全预警」人话化，文案随之改
+    assert tr(en_req, "err.ca.event_not_found") == "Event not found or safety-alert logging is not enabled"
     # P43b：messenger_rpa——{dep}/{field}/{key} 参数化归一 + 复用 op_failed/service_not_started
     assert tr(zh_req, "err.rpa.dep_not_injected", dep="state_store") == "state_store 未注入"
     assert tr(en_req, "err.rpa.dep_not_injected", dep="messenger_rpa state_store") == \

@@ -1,0 +1,354 @@
+{
+  "schema": 1,
+  "platforms": [
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "name_zh": "Telegram",
+      "family": "telegram",
+      "color": "#229ED9",
+      "modes": [
+        "protocol",
+        "device",
+        "phone"
+      ],
+      "default_mode": "protocol",
+      "compliance": "main",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [
+        "id",
+        "message_id"
+      ],
+      "console_url": "https://my.telegram.org/",
+      "region_aware": false,
+      "facts_label": "Telegram",
+      "icon": "telegram",
+      "sort": 10,
+      "note": ""
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "name_zh": "WhatsApp",
+      "family": "meta",
+      "color": "#25D366",
+      "modes": [
+        "protocol",
+        "web",
+        "device",
+        "official"
+      ],
+      "default_mode": "protocol",
+      "compliance": "mixed",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [
+        "wamid",
+        "message_id",
+        "msg_id"
+      ],
+      "console_url": "https://developers.facebook.com/apps/",
+      "region_aware": false,
+      "facts_label": "WhatsApp",
+      "icon": "whatsapp",
+      "sort": 20,
+      "note": ""
+    },
+    {
+      "id": "line",
+      "name": "LINE",
+      "name_zh": "LINE",
+      "family": "line",
+      "color": "#06C755",
+      "modes": [
+        "protocol",
+        "device",
+        "official"
+      ],
+      "default_mode": "protocol",
+      "compliance": "mixed",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [
+        "message_id",
+        "server_id"
+      ],
+      "console_url": "https://developers.line.biz/console/",
+      "region_aware": false,
+      "facts_label": "LINE",
+      "icon": "line",
+      "sort": 30,
+      "note": ""
+    },
+    {
+      "id": "messenger",
+      "name": "Messenger",
+      "name_zh": "Messenger",
+      "family": "meta",
+      "color": "#0084FF",
+      "modes": [
+        "web",
+        "device",
+        "official"
+      ],
+      "default_mode": "web",
+      "compliance": "mixed",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [
+        "mid",
+        "message_id",
+        "msg_id"
+      ],
+      "console_url": "https://developers.facebook.com/apps/",
+      "region_aware": false,
+      "facts_label": "Facebook Messenger",
+      "icon": "messenger",
+      "sort": 40,
+      "note": ""
+    },
+    {
+      "id": "instagram",
+      "name": "Instagram",
+      "name_zh": "Instagram",
+      "family": "meta",
+      "color": "#E1306C",
+      "modes": [
+        "official",
+        "web"
+      ],
+      "default_mode": "official",
+      "compliance": "mixed",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [],
+      "console_url": "https://developers.facebook.com/apps/",
+      "region_aware": false,
+      "facts_label": "Instagram",
+      "icon": "instagram",
+      "sort": 50,
+      "note": ""
+    },
+    {
+      "id": "zalo",
+      "name": "Zalo",
+      "name_zh": "Zalo",
+      "family": "zalo",
+      "color": "#0068FF",
+      "modes": [
+        "official",
+        "web"
+      ],
+      "default_mode": "official",
+      "compliance": "mixed",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [],
+      "console_url": "https://oa.zalo.me/",
+      "region_aware": false,
+      "facts_label": "Zalo",
+      "icon": "zalo",
+      "sort": 60,
+      "note": ""
+    },
+    {
+      "id": "qqbot",
+      "name": "QQ Bot",
+      "name_zh": "QQ 机器人",
+      "family": "tencent",
+      "color": "#1E63FF",
+      "modes": [
+        "official"
+      ],
+      "default_mode": "official",
+      "compliance": "main",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [],
+      "console_url": "https://q.qq.com/",
+      "region_aware": false,
+      "facts_label": "QQ 机器人",
+      "icon": "qqbot",
+      "sort": 70,
+      "note": "QQ 开放平台官方 API；与个人号协议登录（qq）是两个平台"
+    },
+    {
+      "id": "qq",
+      "name": "QQ",
+      "name_zh": "QQ 个人号",
+      "family": "tencent",
+      "color": "#1EBAFC",
+      "modes": [
+        "protocol"
+      ],
+      "default_mode": "protocol",
+      "compliance": "restricted",
+      "implemented": true,
+      "driver_state": "mock",
+      "driver_note": "边车已装 · 驱动未接入（演示态）：扫码与收发均为演示数据，尚不能真收发",
+      "msg_id_fields": [],
+      "console_url": "",
+      "region_aware": false,
+      "facts_label": "QQ 个人号（协议登录）",
+      "icon": "qq",
+      "sort": 71,
+      "note": "QQ 双轨 P2（2026-09-07 落地）：个人号经 Milky 接口（route-1 自带边车 services/qq-personal，亦可指向自装协议端），准入区、默认关"
+    },
+    {
+      "id": "wechat_kf",
+      "name": "WeChat Service",
+      "name_zh": "微信客服",
+      "family": "tencent",
+      "color": "#07C160",
+      "modes": [
+        "official"
+      ],
+      "default_mode": "official",
+      "compliance": "main",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [],
+      "console_url": "https://work.weixin.qq.com/wework_admin/frame#apps",
+      "region_aware": false,
+      "facts_label": "微信客服（企业微信）",
+      "icon": "wechat",
+      "sort": 75,
+      "note": "企业微信官方通道；凭证在企微管理后台「应用管理」取（与 channel_setup 同一入口）；与个人微信（wechat）是两个平台"
+    },
+    {
+      "id": "wechat",
+      "name": "WeChat",
+      "name_zh": "个人微信",
+      "family": "tencent",
+      "color": "#07C160",
+      "modes": [
+        "device"
+      ],
+      "default_mode": "device",
+      "compliance": "restricted",
+      "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
+      "msg_id_fields": [],
+      "console_url": "",
+      "region_aware": false,
+      "facts_label": "个人微信",
+      "icon": "wechat",
+      "sort": 76,
+      "note": "实施97 线 B：PC 副驾（桌面桥接账号 mode=desktop，非编排器 worker → implemented 保持 False）；接入引导 /workspace/connect/wechat_pc"
+    },
+    {
+      "id": "douyin",
+      "name": "Douyin",
+      "name_zh": "抖音",
+      "family": "bytedance",
+      "color": "#FE2C55",
+      "modes": [
+        "official",
+        "web",
+        "device"
+      ],
+      "default_mode": "official",
+      "compliance": "mixed",
+      "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
+      "msg_id_fields": [
+        "server_message_id",
+        "msg_id"
+      ],
+      "console_url": "https://developer.open-douyin.com/",
+      "region_aware": false,
+      "facts_label": "抖音",
+      "icon": "douyin",
+      "sort": 80,
+      "note": "实施96：official＝企业主体小程序 IM（主站）；web/device＝网页/真机托管（准入区）"
+    },
+    {
+      "id": "tiktok",
+      "name": "TikTok",
+      "name_zh": "TikTok",
+      "family": "bytedance",
+      "color": "#25F4EE",
+      "modes": [
+        "official",
+        "web",
+        "personal_rpa"
+      ],
+      "default_mode": "official",
+      "compliance": "mixed",
+      "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
+      "msg_id_fields": [
+        "message_id",
+        "msg_id"
+      ],
+      "console_url": "https://business-api.tiktok.com/",
+      "region_aware": true,
+      "facts_label": "TikTok",
+      "icon": "tiktok",
+      "sort": 85,
+      "note": "指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region。TK-3：personal_rpa＝huoke 真机私信（非官方 notice_unofficial，默认关）；web＝网页托管边车（阶段 1 未开工）。个人号无私信官方接口，implemented=False 不变"
+    },
+    {
+      "id": "web",
+      "name": "Web",
+      "name_zh": "官网网页聊天",
+      "family": "web",
+      "color": "#3B82F6",
+      "modes": [],
+      "default_mode": "",
+      "compliance": "main",
+      "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
+      "msg_id_fields": [
+        "message_id",
+        "id"
+      ],
+      "console_url": "",
+      "region_aware": false,
+      "facts_label": "官网网页聊天",
+      "icon": "web",
+      "sort": 90,
+      "note": ""
+    }
+  ],
+  "aliases": {
+    "aweme": "douyin",
+    "dy": "douyin",
+    "facebook": "messenger",
+    "facebook_messenger": "messenger",
+    "fb": "messenger",
+    "ig": "instagram",
+    "inbox": "web",
+    "line_rpa": "line",
+    "musically": "tiktok",
+    "qq-bot": "qqbot",
+    "qq_bot": "qqbot",
+    "qq_official": "qqbot",
+    "qq_protocol": "qq",
+    "qqofficial": "qqbot",
+    "tencentqq": "qq",
+    "tg": "telegram",
+    "trill": "tiktok",
+    "tt": "tiktok",
+    "wa": "whatsapp",
+    "web_chat": "web",
+    "website": "web",
+    "wecom_kf": "wechat_kf",
+    "weixin": "wechat",
+    "widget": "web",
+    "wxkf": "wechat_kf"
+  }
+}

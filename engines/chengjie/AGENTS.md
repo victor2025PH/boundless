@@ -7,6 +7,23 @@
 
 `main.py` 启 FastAPI，内嵌：contacts/handoff 子系统 + Telegram/LINE/Messenger 三端 RPA runner + skill_manager / KB / 回复生成 / 语言守卫 + Web 后台 + observability。
 
+## 四平台能力差异（别再通读四个 worker 源码）
+
+被问「telegram / whatsapp / line / messenger 的聊天逻辑和能力一不一样」时，答案在
+[`docs/平台能力矩阵.md`](docs/平台能力矩阵.md)——由 `scripts/platform_matrix.py` **从代码
+生成**，门禁 `tests/test_platform_matrix.py` 钉住与代码一致，**勿手改**（改了 worker 就重跑
+`python -m scripts.platform_matrix --out docs/平台能力矩阵.md`）。
+
+- **回复生成逻辑四平台共用**（A 线 `process_message` / B 线 `generate_inbox_draft`，按会话
+  automation_mode 互斥切换，与平台无关）；差异只在**收发管道能力**。
+- 看本机实况 + 核对「代码说支持的、实际到货了吗」：
+  `python -m scripts.platform_matrix --with-live-data`
+- 出站记账口径专项（媒体发了却只记成文字占位）：`python tools/check_outbound_media_mirror.py`
+- LINE 媒体链路真机探针（默认只读，`--confirm` 才发且只发给自己）：`python tools/probe_line_media.py`
+
+⚠ **别信散落在 worker 里的能力注释**：2026-07-31 实测有三处是错的或已过期（`mark_read`
+的 docstring 写「WA 暂无」而 WhatsApp 早就实现了）。以矩阵为准。
+
 ## Codex 在本 repo 工作时的约定
 
 ### 回归命令
@@ -64,7 +81,7 @@ cd desktop && npm test
 （`getElementById('x').prop` 直接解引用但 `id="x"` 全站不存在 → null.prop 必崩）+ **动态点属性拼接门禁**
 （字符串里 `X.name'+var` 拼点属性名，var 含连字符时被当减法 → ReferenceError）：
 ```bash
-python -m pytest tests/test_inbox_inline_handlers_exported.py tests/test_rpa_inline_handlers_exposed.py tests/test_template_unique_ids.py tests/test_template_orphan_refs.py tests/test_template_dynamic_dot_access.py -q --tb=line
+python -m pytest tests/test_inbox_inline_handlers_exported.py tests/test_rpa_inline_handlers_exposed.py tests/test_template_unique_ids.py tests/test_template_orphan_refs.py tests/test_template_dynamic_dot_access.py tests/test_template_free_capture.py tests/test_static_js_free_capture.py -q --tb=line
 ```
 预期：全绿。扫描/作用域分析共享核心在 `tests/_inline_handler_scan.py`——会**跳过字符串/模板字面量/注释/正则**
 的掩码器算括号深度，可靠区分「IIFE 内定义（不可达除非挂 window）」vs「顶层全局定义（可达）」，任意架构零假阳性；
@@ -105,6 +122,482 @@ personas 的 `previewTTS` 死代码（从不被调用、引用不存在的 `vp-*
 改**事件委托 + `data-rpa-ck` 属性**（结果容器一次绑定处理所有动态行，彻底去掉「每输入框全局函数+dot 访问」脆弱模式）。
 `_ALLOWLIST`（良性命中，如字面量以 `.ext` 结尾再拼变量的文件名串）当前为空，`test_allowlist_not_stale` 防过期。
 
+**工作目标「建目标弹层」草稿幸存 + 编辑防打断主线**（2026-08-04/05 P0-P3，修坐席实录
+「弹层误触即丢内容 / 没动鼠标编辑中也消失 / 丢了无法恢复」三连）：
+```bash
+python -m pytest tests/test_goal_ui_revamp.py -q --tb=line
+python tools/verify_goal_form_ui.py   # fixture 真浏览器 22 场景（零实例依赖/零遥测污染）
+```
+预期：全绿。关键不变量（改 cp-goal.js / cp-panel-base.js / syncWsCopilot 前先读）：
+① 第二步弹层输入逐键快照 sessionStorage（键=会话 id，24h TTL），任何整块重渲染后
+ `_applyFormDraft` 原样回填；创建成功/「清空重填」才清；重开表单断点续写直跳第二步。
+② **编辑期同会话的宿主 context 重喂一律挂起**（cp-goal `set context` 覆写，关表单补刷）；
+ 宿主 `syncWsCopilot` 同 cid 一律不重喂右栏组件（轮询身份合并/peer 解析回调/回前台补轮
+ 是三大核爆源；内联组件不消费昵称/头像，同会话重喂＝纯破坏；App 模式按身份指纹判）。
+③ 退出语义：背板判脏（有输入不关闭只提示已暂存）；×＝关闭整表单；「返回」/Esc＝回第一步。
+④ renderData 的 error/active 分支不得顶掉打开中的表单（冲突交后端 active_limit 409 就地报错）。
+⑤ 基类 `CpPanelBase.refresh` 同会话刷新不清屏（换会话仍先清屏防串数据；无旧数据保 loading 反馈）。
+⑥ 发布纪律：改共享组件必须 bump `?v=`（unified_inbox.html + shared/copilot/app.html 两处）
+ + ui-build.txt + desktop/renderer 镜像同步（test_goal_ui_revamp 钉版本戳前缀，双树门禁钉同步）。
+观测：ops-overview 🎯 卡「🛟 表单体验」行＝进程口径 + 14 天趋势（`/api/admin/ui-event-trend
+?prefix=goal_`，zhiliao 已开 ops.ui_event_trend）；核心埋点 goal_ctx_deferred（编辑被外部刷新
+打断-已挡）/ goal_form_backdrop_dirty（背板误触-已拦）/ goal_form_draft_restore（断点续写）。
+
+**右栏「语音克隆/发送」cp-voice 状态机主线**（2026-08-05 P0，修坐席实录「生成的试听
+清不掉 / 想再来一条找不到生成按钮」两连报障 + 连点双发隐患）：
+```bash
+python -m pytest tests/test_cp_voice_ui_revamp.py -q --tb=line
+python tools/verify_cp_voice_ui.py   # fixture 真浏览器 27 断言（stub client：零实例依赖/零 TTS 消耗）
+```
+预期：全绿。关键不变量（改 cp-voice.js 前先读）：
+① 生成按钮动词化（`cp.voice.tts_btn`＝「🎙️ 生成语音」）+ 请求期 busy 互斥（`_setBusy`，
+ 连点＝双烧 GPU/给客户双发）；预览区常驻「🔁 重新生成 / ✕ 清除」，**错误态同样带重试/✕**
+ （错误文案赖着不走与旧预览赖着不走是同一个病）。
+② 发送成功即复位（清预览+清文字+「已发送」驻留后自动恢复引导语）——与主输入框
+ `sendVoiceReply` 行为对齐；发送带幂等键 `client_msg_id=cpv-*`（`send_dedup.reserve`
+ 对空键直接放行，右栏此前裸奔；主输入框链早已带键）。
+③ 过期守卫：文字/音色偏离生成基准（`_previewText`/`_previewPersona`）→ 预览标 stale +
+ 发送禁用（发送是服务端按**当前**文本重新合成，不拦＝发出从未试听过的内容）；
+ cp-fill 程序化填入不触发 input 事件，组件内已补 `_syncStale()`。
+④ `_epoch` 渲染代际：在途请求跨会话切换一律作废（防「已发送/预览」串会话回写）。
+⑤ 宿主消费 `cp-voice-sent`（unified_inbox `__cpVoiceSentBound`）→ toast + loadThread +
+ loadChats，修「发完消息流不动，坐席以为没发出去再点一次」（此前事件发了没人听）。
+⑥ 回落警示：`voice_meta.fallback_from` 非空 → 黄字「标准音色（非人设克隆声）」——克隆链
+ 掉线时试听/发出的不是人设的声音，对客户是「换人了」级破绽，必须显式而非灰字黑话。
+发布纪律照旧（双树镜像 + `?v=` 两处 + ui-build.txt，本批 `20260805c`）；浏览器门禁已挂
+`gate_sweep -Full`。与同日并行线的「试听带会话上下文（试听=发送契约）」「`__system__`
+系统音色三档」互补共存，双方契约由 `test_cp_voice_ui_revamp` 一并钉住。
+**P1 增量（同日，所听即所发闭环）**：
+```bash
+python -m pytest tests/test_tts_preview_reuse.py -q --tb=line   # 契约 18 例
+```
+⑦ **试听产物复用**：tts-test 落盘时写 `<音频名>.json` sidecar（文本 sha1+音色键+
+ 元数据，`src/integrations/shared/tts_preview.py::record_preview_meta`）；send-voice
+ 带 `preview_filename` 且校验通过（同文本指纹/同音色键/未过期/非空壳/文件名白名单
+ 防穿越）→ **复制后**把试听音频直接送出站管线（原件保留，发送失败重试仍可用）——
+ 客户听到的与坐席试听的逐字节一致，且省一次合成/字符额度；任何校验不过回落现场
+ 合成（`resolve_reusable_preview` 返回 miss 原因进 INFO 日志）。复用分支**刻意跳过**
+ 时长质量闸门（坐席耳朵已把关）；响应带 `reused_preview`，宿主埋点 `cpv_sent_reuse`
+ 分桶。persona_key 用**请求侧** persona_id（含空串），依赖同并行线的「试听=发送
+ 同入参解析」契约。
+⑧ **取消生成**＝`_cancelGen`：epoch 代际+1 复用「切会话作废」同一机制——零服务端
+ 桥接、桌面壳零改动，在途结果回来即静默丢弃；**计秒 tick 只更新 span 不整块重写**
+ （否则取消按钮每秒被销毁重建，点不中）。
+⑨ **字数计 400**（`_syncCounter`，与 tts-test 上限同口径）：超限红字+生成禁用+
+ 前端先拦；`_setBusy` 解除 busy 时保留超限禁用（否则清 busy 会点亮超限按钮）。
+⑩ **复用观测三暴露面**（P2 同日）：计数器长在契约模块（`tts_preview.reuse_stats_snapshot`
+ ——recorded/hits/misses{原因}/hit_rate，resolve 入口自动计数）→ `/api/voice/avatar-status.
+ preview_reuse` + `/api/workspace/metrics.voice_preview_reuse` + ops「🎙️ AvatarHub 语音」卡
+ 「所听即所发」行（`ov2_av_reuse*`，零流量不占版面）。调参读法：misses 里 expired 多
+ → 放宽 REUSE_MAX_AGE_SEC；text_mismatch 多 → 坐席改稿没重生成，强化前端引导。
+⑪ **两个数据否决的「刻意不做」**（2026-08-05 生产日志实测，~52MB 窗口）：语音流量
+ 主力=A 线 TG 原生 voice_reply（有 prerender 命中层，单次合成无浪费）；**B 线 autosend
+ 语音≈0、坐席手动 send-voice=0** ⇒ B 线复用接线无数据支撑不做；composer 内联语音路径
+ 合流（genVoiceReply/sendVoiceReply 接 preview_filename）**服务端已就绪、纯前端接线**，
+ 但该链当前零流量 + unified_inbox.html 属多线活跃热区，等右栏语音真实用量起来后再合流。
+⑫ **线上冒烟工具** `python tools/smoke_voice_reuse.py`（2026-08-05 已实弹验证 8/8：
+ S1 观测装载 → S1.5 自动发现可发语音的协议账号（'default' 不是受管账号，owns_media
+ 要确切 id）→ S2 试听+sidecar → S3 复用发送 reused_preview=true → S4 计数+1 →
+ S5 收藏消息镜像）。**只发账号自己的收藏消息**（chat_key 钉死 'me'）；`--dry-run`
+ 零发送零合成。**刻意不进计划任务/gate_sweep**（每周真发=收藏消息积杂物，与 multiwin
+ 周批同决策：被动观测走 ops 卡计数）。实测复用命中 `dur=0ms`（发送侧零合成延迟）。
+ 附带教训：改 `.py` 后先看重启冷却账本（`-Advise` 显示 last restart）——本批代码被
+ 并行线 10:48 的重启顺路装载，读探针验证即可，不必再吃一次重启窗口。
+
+**坐席语音手动链「所打即所念 / 所听即所发」主线**（2026-08-10/11，修实录「手打
+『你晚上吃饭了吗，晚上有什么安排』，语音念出的是**对它的回答**」+「11 字 40 秒」）：
+```bash
+python -m pytest tests/test_voice_send_verbatim.py tests/test_voice_send_status.py \
+ tests/test_voice_colloquial_llm.py tests/test_voice_content_preservation.py -q --tb=line
+```
+预期：全绿。关键不变量（改 send-voice / tts-test / voice_colloquial_llm / 收件箱
+composer 语音区前先读）：
+① **手动链原文直念**：send-voice 与 tts-test 的 synthesize 必传
+ `pre_colloquialized=True + interactive=True + total_budget_sec`（试听=发送**全同参**，
+ 试听产物经 preview_filename 复用为出站音频时零分叉）；interactive 同时把 hub 候选
+ 封顶 1（synth_verify 已兜坏 take，第二候选对交互路径是纯延迟税）并**豁免开场词
+ 去重剥词**——手打文字一个字不动；TTS 缓存键含改写变体维度（verbatim 与改写链
+ 同文本不是同一份音频，不分键会跨链串播旧「改过词」音频）。
+② **LLM 口语化只属自动链兜底**，三道枷锁（2026-08-10 答话式漏网后加）：问句主导
+ 跳过 LLM 档（`is_interrogative_dominant` 子句级判定——「把问句答掉」是小模型最高发
+ 翻车，答话与原问同话题余弦天然偏高，语义守卫拦不稳）；语义地板 0.78→0.84（当日
+ 生产漂移已爬到 0.746/0.774）；语义校验不成立＝**fail-closed** 拒用 LLM 稿（不投毒
+ 缓存不推熔断——嵌入侧故障不冤枉改写端点）。`guard_stats` 计数经 health_signal →
+ avatar-status.colloquial → ops「改写守卫」行（`ov2_av_guard*`）。
+③ **前端超时 ≠ 发送失败**：send-voice 各阶段/终局落 `src/inbox/voice_send_tracker`
+ （终局后迟到的 stage 更新一律忽略），前端超时走 `GET /api/unified-inbox/
+ send-voice-status` 对账（sent/failed/unknown 三态；unknown＝保守提示+刷新会话，
+ 绝不诱导重发——幂等键拦不住人工重试的新键）；等待期渲染秒表+真实阶段；合成前后
+ 各挂一次 `record_audio` 会话状态（orch.send_chat_action，best-effort）；成功日志带
+ `stage_ms=synth/conv/send`。
+④ **音色偏好带身份快照**：localStorage 会话音色偏好为 `{v, ident}`（旧裸字符串
+ 兼容），会话换绑人设 → 快照失配 → 旧选择自动作废（「换了身份还粘着旧音色」的
+ 源头）；语音人设≠会话身份时 `voice-eff-risk` 行出「换人」警示（`__system__` 系统
+ 通用音色是刻意中性选择，不警）。
+⑤ 发布纪律照旧：模板/i18n 热更新直上生产，每批 bump ui-build.txt；`.py` 改动攒批
+ 重启（本主线代码 2026-08-10 23:56 / 08-11 00:28 两批已装载 zhiliao）。
+
+**真人感文本层 spoken_style 主线**（2026-08-11 收编 AvatarHub 交付包 PR#21/22；包本体
+`platform/spoken_style/`（仓根），桥接 `src/ai/spoken_style_bridge.py`；L1-L3 已在 zhiliao
+灰度（overlay `ai.spoken_style: {enabled, level: 2, zh_only: true}`），L4 刻意未开）：
+```bash
+python tests/test_spoken_style_bridge.py          # 桥接契约 10 例，零依赖可直跑
+python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异常先跑它分锅：包坏 vs 接入姿势不对）
+```
+预期：全绿。关键不变量（改 spoken_style_bridge / speech_prints.json / ai.spoken_style 前先读）：
+① **分工边界**：包本体（L1-L4 模板/事实锁判据/`colloquial_rewrite.py`/`emo_tag.py`）＝
+ AvatarHub 线，后两个文件是 avatarhub 仓**字节拷贝件勿本地改**（要改提示词走 avatarhub
+ 线同步）；指纹的角色化内容/档位缺省/灰度决策＝本线。桥接挂 ai_client 三处（L1 稳定
+ system 段 / L2 轮变尾注 / L3 出口清洁）+ L4 改写出口，包缺席/加载失败/开关关＝全链
+ no-op 绝不伤主链；**不注入包内人设卡**（chengjie 自有 persona 体系，只取正交层）。
+② **指纹键契约**：`platform/spoken_style/data/speech_prints.json` 键＝人设**口称名**
+ （`persona_manager.resolve_spoken_name` 输出**逐字一致**，含全角括号如
+ `Marcus Wei（韦明远）`）；桥接按会话人设动态分流（`context._resolved_persona_name`
+ → role 透传），配置静态 `role` 只是回落。**`profiles_runtime.yaml` 新增常驻人设必须
+ 同步加指纹条目**（漏了＝该人设只剩通用口语层没有指纹）；话少/播报型人设必须自带
+ `guide` 覆盖默认碎句风格（反例样板＝包内「秦震」条目）。未绑定人设的会话走全局
+ `ai_name`（顾嘉）条目。
+③ **zh_only 必须开**（默认开）：L2 模板是中文口语指令，非中文主体消息（han <40% 或
+ <2 字）不注入并计 `l2_skip_lang`——外语污染的直接读数；灰度验收＝外语会话出站不得
+ 出现「嘛/呢/啦」式中文语气尾。
+④ **L4（rewrite）默认关**，开启前置＝L1-L3 灰度两天读数干净 + 与 `voice_colloquial_llm`
+ **二选一**（后者改 TTS 前语音稿、L4 改文本主回复出口，叠开＝冗余+双份改写延迟；本机
+ 语音链正在用前者——见上方坐席语音主线）。开法＝overlay `ai.spoken_style.rewrite: true`
+ （后端缺省 .173:8001 chatx / Qwen3-27B AWQ，`rewrite_llm`/`rewrite_model` 可换任意 OpenAI 兼容端点）；
+ 开后盯 INFO「spoken_style L4 汇总」（每 20 次尝试一行），直通率 >30%＝事实锁大量拒绝
+ 或后端超时，把读数反馈 AvatarHub 线调包，**别自己改提示词**。无指纹的 role 不改写。
+⑤ **观测**：`spoken_style_bridge.stats()`（`l1_inject`/`l2_inject`/`l2_skip_lang`/
+ `l3_changed`/`l4_attempt|applied|passthrough`）→ `/api/workspace/metrics.spoken_style`
+ （drafts_routes 接线）；灰度复盘 CLI `python tools/spoken_style_obs.py`（只读：外语
+ 污染扫描 + 中文会话出站长度/语气词分布按灰度分界对比，多实例数据根自动发现）。
+
+**系统标签泄漏三层防线**（2026-09-12「[我方语音消息]」事故：接力记忆 P0-1 给所有出站
+媒体行加带内标签「[我方发出的语音] 念稿」，WhatsApp 会话连续十轮语音后 LLM 把它当格式
+模板——逐字照抄 → 改写「[我方语音消息]」「[语音消息来自我们这边]」→ 翻译「[Voice message
+from our side]」，7 分钟 4 例：文本直发客户、英文那条被 TTS 念出（ASR 回听实锤））：
+```bash
+python -m pytest tests/test_label_leak_guard.py tests/test_label_leak_watchdog.py \
+ tests/test_label_leak_eval.py tests/test_voice_split_latin.py \
+ tests/test_human_outbound_memory.py tests/test_outbound_text_guard.py -q --tb=line
+python -m scripts.run_eval --label-leak            # EVAL_LLM=1 加跑格式诱导轨
+python tools/strip_label_leaks.py [--apply]        # 已落库泄漏行清前缀（默认 dry-run + 备份）
+```
+预期：全绿。关键不变量（改 normalize_history / 历史标记 / prompt 结构前先读）：
+① **assistant 内容里不放系统标注**：``persona_reply.normalize_history`` 只给**空正文**的
+ 出站媒体行占位「[我方发出的X]」（否则那一轮从历史消失）；有正文的行原样（语音＝念稿、
+ 图＝配文+``[图片内容] 描述``），形态挂行上 ``media`` 字段（LLM 组装只读 role/content），
+ 由 ``media_form_note`` 汇成一句**带外**说明经 extra_hint 注入，并钉「正文禁出方括号标签」。
+ 事故期落库的「[我方发出的…]」前缀归一时剥掉（``strip_out_label``）。任何新的带内标记
+ （``[N天前]``/``[补收的历史消息…]`` 同属此类）都是 few-shot 模板，加之前先想带外能不能表达。
+② **出稿口兜底** ``outbound_text_guard.strip_system_labels``（``apply_outbound_text_guard``
+ 第二道，A/B 线同经 ``_apply_outbound_text_guard``；语音链 ``presynth_text_guard`` 再过一遍
+ ——音频合成后无法再改）：首/尾方括号标签命中系统标注词表即剥，正文中间只剥词表命中；
+ 词表只收「几乎不可能是人话」的系统用词（我方 / 发出的 / 图片内容 / N天前 / voice message /
+ from our side…），普通括号补充语不动。计数 ``metrics.outbound_text_guard.system_label`` /
+ ``sendpoint_guard.voice_system_label``。
+③ **巡检看见** ``HealthWatchdog._check_label_leak``（配置 ``health_watchdog.label_leak_remind``
+ 默认开，24h 回看 / 4h 重提 / 清零补恢复）→ 别名 ``label_leak``（technical，🔴 质量）；判定
+ 单源 ``label_leak_scan.classify_outbound_text``（合法镜像占位「[图片]/[语音]×N/[图片内容]」
+ 不算；``system_label`` 才响，``bracket_prefix`` 随附计数）。清理工具与巡检同一判定。
+④ **分条语音按文字系统折算**（同批实锤：英文按 36 字/条切成两秒碎句、余量合并粘成
+ "dockat"）：``voice_clone_client.latin_budget_scale``（拉丁主体 ×3）在 ``pack_voice_parts``
+ 内生效（``script_aware`` 默认开，A/B 线 + dialogue_planner 三处调用方同获益），
+ ``effective_min_total`` 折算总长门槛，``_join_pieces`` 拉丁词间补空格，硬切优先子句标点。
+⑤ 评测 ``src/eval/label_leak_eval.py``：确定性轨常驻；格式诱导轨（EVAL_LLM=1）对照组用事故
+ 口径复刻——**2026-09-12 首跑 deepseek-flash 8 轮对照 0/8 未复现**（生产事故有完整人设
+ prompt + 4 档深上下文），灵敏度未证实，扩场景（真人设 system + 20-30 轮）是下一步；
+ 守卫与源头两层不依赖它。
+⑥ 刻意未做：坐席侧「疑似泄漏」chip（``unified_inbox.html`` 当时被别的线活跃编辑，且
+ P0-3 巡检已把事故推给运维）；语音态一致性（连续语音中途被频率刹车切回文本）属 P2。
+
+**中文变体（繁体/粤语）翻译主线**（2026-08-29/30 四批：管道→引擎→UI→自动链→评测→
+变体客户发现；出向新增 zh-tw/yue/tl/ms，OpenCC 本地简繁引擎代码就绪未开闸）：
+```bash
+python -m pytest tests/test_translation_engines.py tests/test_translation_service.py \
+ tests/test_translation_confidence.py tests/test_outbound_translate.py \
+ tests/test_translation_memory.py -q --tb=line
+python tools/verify_xlate_ui.py   # 真浏览器 77 断言（登录已预置跳过 cp-tour 遮罩）
+```
+预期：全绿。关键不变量（改翻译语言语义前先读）：
+① **zh-tw 是一等目标语**：`normalize_lang` 不折叠 zh-tw（zh-hant/zh-hk 归一到 zh-tw）；
+ `outbound_translate.normalize_target` 同口径保留变体；前端 `_sameLang` 变体豁免
+ （zh-tw≠zh、zh-cn 仍=zh）。**三处口径联动**，改一处必同改——折叠回去=简→繁在
+ identity 短路里恒原样返回（一个字不变）。
+② **CJK 语种集合三处同步**：`_CJK_TARGETS`(engines)/`_CJK_LANGS`(outbound_translate，
+ 语音守卫 voice_peer_lang_conflict 同消费)/`_TARGET_SCRIPT`(confidence) 都含 yue/zh-tw
+ ——漏一处＝「中文→粤语」被 lang_mismatch 409 误拦或置信度缺 script 维度。
+③ **检测刻意不产出变体码**：`detect_language` 对繁/粤文本仍判 zh —— auto 档与会话
+ 语言投票**永远不会**自己变成 yue/zh-tw；自动链跟随变体**只靠 B67 explicit**
+ （「发→X」会话级事实源，`get_outbound_lang_if_set`）。弹层的变体提示（模式 2.5
+ 建议/模式三保持手动）因此存在，别当冗余删掉。
+④ **同形句豁免**：`_ZH_FAMILY_TARGETS`（zh/zh-tw/yue）家族互译 translated==text 不算
+ 「未真译」不 HOLD（「一起加油」简繁同形＝正确结果）；ja/ko 目标原样回吐仍照 HOLD。
+⑤ **LLM 线变体钉子** `variant_style_hint`：yue=口语粤文+**繁体字形**（实弹实锤不点名
+ 会出「有冇/食饭」简体粤文混排）；zh-tw=禁简体字。AIEngine 与 OpenAICompatEngine
+ 同源消费；HY-MT 线走官方中文 prompt（`_HYMT_ZH_NAME` 含 zh-tw/yue）不吃钉子。
+⑥ **OpenCC 引擎**（s2twp，零 token 微秒级）：仅吃「中文源→zh-tw」，非中文源让位下游；
+ 库缺失 available=False。开闸=order 加 opencc + per_lang_order（config.example 配方）。
+⑦ **前端变体发现** `_detectZhVariant`：保守字表 ≥2 特征字、先粤后繁；繁体表已剔日文
+ 同形字（時間問題現後誰給貨還——「時間の問題」误判实锤）；字表必须 `\u` 转义
+ （script 内 CJK 门禁不豁免字面量）；建议式（人确认），绝不自动改会话语言。
+⑧ **评测**：宽集含 zh→zh-tw/yue 各 3 条（yue 字符轨天然低，以语义轨为主判）；
+ evaluator 的 openai 探针 /v1/models 失败自动降级 1-token chat ping（173:8001 网关
+ 只透传 chat/completions，GET models 直接 RST——8-28 换 vLLM 落点后本地 MT 评测轨
+ 曾静默全 skip 的根因）。
+观测：`xlt_out_zhtw|yue|tl|ms`（采用量）/`xlt_variant_shown|accept`（发现转化）经
+`/api/admin/ui-event-trend?prefix=xlt_`；周批回译趋势 `logs/eval/translation_trend.jsonl`。
+
+**收件箱筛选区去噪主线**（2026-08-11 P0-P4，修实录「红框里按钮太多、还显示不全，
+不知道点哪」——405px 桌面壳下筛选区堆到 7 行占掉 196px 首屏，首屏只剩 6-7 条会话）：
+```bash
+python -m pytest tests/test_inbox_filter_usage_report.py -q --tb=line
+python tools/verify_inbox_density.py        # 17/17，含 390x844 窄屏档
+python tools/inbox_filter_usage_report.py   # 只读裁决（2026-08-25 起样本足）
+```
+预期：全绿。改 `unified_inbox.html` 筛选区 / `unified-inbox.css` chip 段前先读这九条：
+① **「需人工」chip 与 rail 徽标同口径**：前端 `_STALE_ATTN_SEC = 72*3600` 必须与服务端
+ `_ATTN_LOOKBACK_SEC` 同值——crit SLA 半边过 72h 窗，needs-human **标签**半边刻意
+ 不设窗（标签是人显式打的，不该自动过期）。**任一常量改动必须同改另一处**，否则
+ rail 说 7 条、chip 说 33 条，坐席不知道信谁（上线前实况就是 33 vs 7）。crit 超 72h
+ 渲染中性灰 `.sla-chip.stale`，红色只留给真紧急——全红＝没有重点。
+② **主筛选行单行横滚**：`.filter-tabs-primary.p0r` 必须 `flex-wrap:nowrap`（退回 wrap
+ 就是 7 行堆叠的老病）；左右溢出暗示靠 `.has-ovf-l/-r` 渐隐，`_syncFtabOverflow`
+ 必须两端都判（只判右侧时左边滚出去的 chip 毫无痕迹）。
+③ **面板＝二级筛选唯一入口**（状态/目标议程/标签/排序四组）：即点即生效，**只有外点
+ 才关**——别再在 `setFilter` 里调 `_closeFtabMore`（连选多个条件时面板每次自关＝退回
+ 旧体验）；目标议程/标签/排序的 **DOM id 必须保留**，计数回填与 `_syncPanelUi` 靠它们。
+ 主行滚出视野的条件（如「我的」）必须在面板里有镜像入口 + 计入 `_FTAB_MORE`（否则
+ 筛选生效而入口不可见＝坐席以为坏了）。
+④ **chip 规格单源**：六家族（ftab / goal-af / fp-chip / tag-strip / sla / badge）共用一份
+ 度量与 active 处理；`attn` 危险色靠属性选择器特异度存活。别再造第七套尺寸。
+⑤ **窄屏抽屉 `bottom:64px`**：让开 56px 移动平台条 + 8px 间隙——8px 曾把「清空/完成」
+ footer 埋在平台条下（静态门禁看不见，截图 QA 才抓到）；标签库下拉同为底部抽屉
+ （一个抽屉一个顶部锚定＝同一手势两种去处）。
+⑥ **内联 onclick 调的函数必须挂 window**：本区一天内两次实锤（`_uiBeacon` /
+ `_closeFtabMore` 定义在 IIFE 内 → 点击抛 ReferenceError）。模板热更新直上生产，
+ 写完立刻补 `window.x = x`，别等哑按钮门禁。
+⑦ **`resetAllFilters` 必须清 `_goalAgendaFilter`**：否则「清空筛选」后可见条件全清、
+ 目标议程还在暗处滤（幽灵筛选，坐席只会觉得列表数据丢了）。
+⑧ **埋点前缀 `iflt_`**：新增筛选入口一律带 beacon，否则该入口**无法参与裁决**（标签
+ strip / 原生排序 / 存视图三处就是事后补的）；`inbox_filter_usage_report.IFLT_EPOCH_DAY`
+ 是观察窗起点——**零点击本身是证据**，所以不能拿「数据首见日」当起点；改分桶要同步
+ 更新该常量。裁决口径与样本闸门全在该 CLI，别在看板里另算一套。
+⑨ 发布纪律：css `?v=` + `ui-build.txt` **双戳**；密度 ratchet 天花板**只降不升**
+ （当前 header 134 / 窄屏 149 / 单行 ftab 46 / 扁平会话行 74）。窄屏会话行 flatten
+ 后首屏 6-7 → 9 条，这是本主线的净收益，别让新徽标把它吃回去。
+
+**A 线「被吞回复」补答/回滚主线**（2026-08-09，修 198↔104 实录「回复等了 11 分钟」三连）：
+```bash
+python -m pytest tests/test_reply_swallow_fix.py tests/test_message_dedup.py \
+ tests/test_interject_absorb.py tests/test_telegram_outgoing_mirror.py -q --tb=line
+```
+预期：全绿。事故机制＝冷却/interject 静默吞回复且无补救调度 → 被吞消息只能等去重
+TTL（600s）被轮询兜底碰巧重拾（实测表现「隔 10-11 分钟才回」）。三层不变量（改
+telegram_client 回复管线 / skill_manager 冷却记账前先读）：
+① 冷却拦截必须发跳过信号（`_note_reply_skip`/`consume_reply_skip`，取走即删）——
+ 上层才能区分「刻意不回」vs「被冷却吃了」；`_cooldown_remaining` 报**全部失败桶
+ 的最大剩余**（重试只有一次机会，只看首桶会撞上更长的 per_content 桶）；
+ `_check_cooldown` 布尔壳签名被 test_group_context_split 钉住，勿动。
+② client 两处冷却吞没点（回复逻辑闸 / skill 冷却信号）→ `_defer_swallowed_inbound`
+ 把该 mid 的去重寿命缩短到冷却结束后不久（`MessageDedup.reschedule` **只提前不
+ 延后**），轮询兜底按时重拾补答；水位闸保证至多重试一次绝不循环。开关
+ `telegram.poll_fallback.swallow_reschedule`（默认开，随 poll_fallback 总闸）。
+③ interject 丢弃已生成回复必须回滚 skill 侧冷却记账（生成前 `snapshot_reply_accounting`
+ → 丢弃时 `rollback_reply_accounting`，只动时间戳 >= 快照时刻的本轮写入）——幻影
+ 回复不得占冷却位（否则补话本身也被吞、整个爆发窗全灭）、不得留在 last_reply/
+ 防复读环（防「AI 说过对方从没收到的话」穿帮）。`_update_after_reply` 三个记账
+ 写点被 `test_update_after_reply_stamp_contract_pinned` 钉住——挪写点先红。
+
+**回复时延 SLO**（P1-8 2026-08-09，「被吞回复」事故的量化闭环）：
+```bash
+python -m pytest tests/test_reply_latency.py tests/test_ops_overview.py -q --tb=line
+```
+`src/ops/reply_latency.py`＝inbox 持久库口径（等待段=连续入站 burst → 下一条出站，
+按**首条**入站计等待=客户视角最坏值；只算私聊、剔 bot/群/系统会话；出站不分
+AI/人工——SLO 是客户体验口径）→ `/api/workspace/metrics.reply_latency`（300s TTL
+缓存防 ops 轮询全扫消息表）+ Prom `ws_reply_latency_p50/p95_seconds`、
+`ws_reply_unanswered_24h` + ops-overview「⏱️ 回复时延 SLO」卡（boss 组，
+`ov2_s_rlat`/`ov2_rl_*` zh+en，零流量整卡隐藏）。「零回复」＝入站超宽限
+（600s）无任何出站——与轮询兜底 TTL 同刻度，修复回归时此数先涨。
+
+**回复额度守卫「设置页收口」主线**（P0 2026-08-12 已上线 zhiliao：peer_bot_guard 的
+配置/救济/观测三合一进 `/reply-settings`「🛡️ 回复额度守卫」卡，此前配置只能改 YAML、
+豁免只在收件箱触顶横幅；方案 `docs/REPLY_BUDGET_SETTINGS_PLAN.md`。P1（并行线交付：
+spec 扩到全部 8 键→高级折叠可编辑、`budget_flags.near`≥80% 预警、watchdog 聚合告警
+别名 `reply_budget` 带恢复通知、豁免撤销同端点 revoke）已随 2026-08-12 22:55 窗内
+重启装载，只读互验 4/4（meta 8 键/缺省值/budget-today 行级 near）；回归命令追加
+`tests/test_reply_budget_watchdog.py`）：
+```bash
+python -m pytest tests/test_reply_settings.py tests/test_peer_bot_guard_budget.py \
+ tests/test_reply_budget_route.py -q --tb=line
+```
+预期：全绿。关键不变量（改 `peer_bot_guard.budget_flags` / 设置页守卫卡 /
+budget-today 端点前先读）：
+① **状态位语义单点**＝`peer_bot_guard.budget_flags`（纯函数）：`budget_state`（收件箱
+ 横幅/relief API）与 `GET /api/reply-settings/budget-today`（设置页「今日额度状态」表）
+ 都由它推导——两个消费面绝不各算一套（exhausted/hard_stopped 语义分叉＝坐席看到的
+ 与拦截行为对不上，比没有列表更糟）。
+② **`daily_reply_budget=0`＝不限额**（evaluate 的 `budget>0` 闸 + `budget_flags.enabled`），
+ **不是全拦**——门禁 `test_budget_flags_zero_budget_means_unlimited` 钉死。设置页 spec
+ 白名单刻意 clamp [5,500]：0 只许 YAML 配（防运营把 0 当全拦/把全拦当 0 误设；0 时
+ 触顶判定与收件箱横幅整体熄灭）。
+③ **豁免（今日继续）单写入口**＝`POST /api/unified-inbox/reply-budget/relief`——收件箱
+ 横幅与设置页列表共用同一端点（列表端点逐行回传 platform/account_id/chat_key 三元组
+ 正是为直投它），勿造第二个豁免写入口。
+④ **旧后端兼容＝feat 特性探测**：守卫字段挂 `feat:"guard"`（GET 快照 meta 缺键 → 整卡
+ 隐藏+收集/回填全跳过）——模板热更先于重启上线的中间态必须自洽；关总开关走
+ confirm+审计（防轰炸防线整组失守，2026-08-03 实录 80 秒 78 轮空转）。
+⑤ 台账批量口径＝`store.list_reply_budget_today`（LEFT JOIN conversations；used 跨日清零
+ 与 get_auto_reply_ledger 同口径；台账孤儿行如实回空三元组=前端豁免按钮不亮）。
+
+**多开治理 / 防双发主线**（2026-07-29，修「同一坐席开两个窗口 → 客户收到两条一样的话」）：
+```bash
+python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.py \
+ tests/test_live_drill_guards.py tests/test_settings_overlay_persistence.py \
+ tests/test_workspace_home_nav_dedup.py tests/test_multiwin_review.py -q --tb=line
+```
+预期：全绿。三层防线（服务端兜底优先——前端协调只管同一浏览器，管不了第二台电脑）：
+① **草稿处置原子闸门**：`update_draft_status` 带 `WHERE status IN ('pending','enriching')`，
+ 双窗口/人工×AutosendWorker 竞态只有一方成功，另一方拿 **409**（`already_resolved`）；
+ worker 撞 409 计 `total_skipped_raced` **不计 error**（竞态非故障，不喂熔断器）。
+ 同批修掉两个休眠断链：`list_drafts(platform=X)` 此前排除 inbox 源草稿（坐席**看不见**待审草稿，
+ 实测积压 199h）；人工点「发送」此前**只标记不发送**（全库无人消费 approved 的 inbox 草稿）→
+ 现经 `DraftService.set_inbox_deliver_callback` → `AutosendWorker.deliver_human_approved`
+ 复用出站翻译/发图指令/桌面受控出站同一条投递链（bootstrap 仅在 `deliver=true` 时注入）。
+② **发送幂等** `src/inbox/send_dedup.py`：前端每次提交带 `client_msg_id`，服务端按
+ `(会话, id)` TTL 窗去重；**仅首见占坑**（重复命中记 duplicate 不新增 reserved），
+ 失败释放占位（同 id 显式重试仍可发）。覆盖 send / send-media / send-voice 三路由。
+ **它只防「同一请求被重放」**（网络层重试等 → 同 id）；「用户连按两次」是两次独立提交、
+ id 不同，服务端抓不住 → 客户端 `_sendInFlight` 闸门拦（发送按钮请求期已 disabled，但
+ **Enter 键路径直接调 sendMsg 绕过按钮**，实测缺口；媒体路径另有 `_mediaSending`）。
+ 「两台设备各自输入同一句话分别发出」**刻意不防**——那是两次真实意图，改成内容级去重
+ 会误伤聊天里正常的重复短语（「好」「在吗」）。
+③ **前端多窗口协调器** `workspace_base.html::__wsMultiWin`：坐席页单主控（localStorage
+ 主控位 + storage 事件；刻意不用 Web Locks——LAN http 下无安全上下文不可用），第二窗口出
+ 「在此使用/保持待机」，待机窗口停轮询断 SSE 全静音，主控崩溃 15s 内自动接管；
+ 全局**提示音领导权**顺带修掉「收件箱+看板两页同时响铃」。
+ **保证边界（别误解成全局互斥）**：localStorage 只在**同一浏览器 profile 内**共享 →
+ 「桌面壳(Electron webview) + 浏览器标签页」「两台电脑」「Chrome + Edge」这些组合
+ 协调器互不感知，仍会各自响铃、各自可操作。跨设备真正兜住的是 ①（**草稿处置**的
+ DB 级原子闸门，与进程/设备数无关）；② 的幂等键是**进程内**表（当前单实例成立，
+ 将来若多进程负载均衡需改共享存储）。③ 只负责同一浏览器内的体验（少噪音、少误操作）。
+ 跨进程互斥若将来真要做，数据地基已在：presence 心跳携窗口指纹 → `AgentCoordinator`
+ 按坐席聚合 `windows/standby_windows`（进程内 TTL 90s）。
+④ **「返回工作台」去重**（P1-③ 2026-08-11，修老板实录「还会出现两个智聊坐席工作台」；
+ 遥测 mw.takeover_auto/reclaim 坐实同 profile 双坐席，源头＝子页/辅助窗的裸
+ `location.href='/workspace'`（顶栏「聊天」/「← 返回工作台」/SSE toast/铃铛兜底）把 wsub
+ 辅助窗原地导航成第二个坐席）：`_win_unique.html::__wsGoHome`＝「别处有活跃坐席就交接
+ （opener 直连 → BC 探活 250ms，cid 经 open-conv 送达 + toast `base.winuniq.switched`），
+ 没有才本窗原地导航」；消费面＝捕获相位委托拦截器（同标签 `<a href="/workspace">` 零接线
+ 自动获益）+ workspace_base 全部 SSE/铃铛兜底 + 四个子页 JS 跳转。三条硬不变量：
+ ① 拦截器必须**捕获相位**且 _win_unique 保持在 <head>（先于 body 顶部 _loading_overlay
+ 注册）——否则「留在原页」也会点亮 15s 全屏加载遮罩（真浏览器门禁 8b 实锤）；真导航一律走
+ `_navWithFeedback`（先 `__blLoadShow` 再跳，保住慢链路 L2 反馈）；② 普通 /workspace 入口
+ 与深链同走 BC 判重（`_bcHandoff` allowPlain；桌面壳普通入口不再每点弹一个新壳窗）；
+ ③ 新增裸 `/workspace` JS 导航由静态 ratchet `tests/test_workspace_home_nav_dedup.py` 点名，
+ 行为由 `tools/verify_multiwin_ui.py` 场景 8（47 断言，场景 4 前先关坐席窗——普通入口探活
+ 后「首开」前提变了）钉住。PWA 应用窗维持 08-03 原地导航语义（app 窗自己是首选坐席容器）。
+ **P2 增量**（同日）：① 耐心探活——探活 miss 先读坐席「在场心跳」（__wsMultiWin 主控位
+ `aitr.mw.primary::/workspace`，5s 续租/15s 过期，键名跨文件契约有门禁）：心跳新鲜＝坐席
+ 在忙/被 Chrome 内存节省器冻结（冻结页答不了 BC ping，此前唯一漏判面），再等一轮
+ （waitMs 800）；两轮静默且心跳仍新鲜 → 视同在场（frozen）提示切换，绝不双开。
+ ② 交接 toast 中央化——`aitr:ws-handoff` 统一由 _win_unique 中央监听渲染
+ （`_notifySwitched` 单一调用点有门禁），自带提示的页面置 `__aitrWsHandoffToastOwned`
+ 让行（cases）；修掉「入口页交接成功但静默＝用户以为没点上再点一次」的窗口翻倍诱因。
+ ③ 验收周读 CLI `python tools/multiwin_review.py`（只读、多实例数据根、修复日切段判词：
+ 修复后 takeover_auto+reclaim 归零＝坐实；门禁 tests/test_multiwin_review.py）。
+ ops goalRptLink 已接 winname 复用辅助窗。
+**乐观锁**（防长编辑表单丢更新）：`persona_manager.profile_rev` 通用内容指纹 → 人设档案 /
+ 全局规则 / 意图关键词三处 `GET 回 rev → PUT 带 expected_rev → 不一致 409 → 前端确认后免键覆盖`。
+ 判据＝**整文档替换才需要**；字段级 patch 端点（`/api/settings/save`）刻意**不**加，
+ 否则「A 改 temperature、B 改 max_tokens」这类合法并发会被误判冲突（有反向门禁钉住）。
+**观测**：`autosend-status` / `/api/workspace/metrics` 出 `total_human_delivered` /
+ `total_skipped_raced` / `send_dedup`；Prom 5 个 gauge；ops「全自动媒体」卡两行 KPI。
+**真机演练（运维显式跑，非 pytest）**：
+```bash
+python tools/live_multiwin_drill.py                 # 只读预检，不发消息
+python tools/live_multiwin_drill.py --confirm        # 真发（目标=账号自己的 Saved Messages）
+python tools/verify_multiwin_ui.py --shots out/      # 双标签页验协调器（只读，21 项）
+```
+`verify_multiwin_ui.py` 已挂进 `gate_sweep.ps1 -Full`（协调器是纯前端逻辑，静态门禁只能证
+「函数挂了 window」、证不了「两标签页互斥成立」，而模板热更新直上生产）；缺 playwright
+或实例不可达一律 **SKIP exit 0**，不污染回归信号。
+**周批真发刻意不做**（每周往收藏消息累积杂物），改用**被动观测**：watchdog
+`_check_human_deliver_chain`（webhook 别名 `human_deliver`）——同进程窗口内「有人真的通过过
+草稿」却「投递计数恒 0 且零失败」＝一次都没尝试投递＝链断了。三个前提缺一不告警
+（`deliver_enabled` / 人工通过数 ≥ min_approvals / 零投递且零失败），零成本且比周批更早。
+门禁 `tests/test_human_deliver_watchdog.py`（15 例，重点覆盖「不该告警」的路径）。
+⚠️ 统计人工通过数**必须查 `reply_drafts` 表而非 `draft_audit_log`**：`resolve_with_audit`
+只在 L3/L4 或 autosend 时写审计，**L1/L2 的人工通过根本不落审计行**。
+
+**被服务静态资产的落盘路径不变量**（`tests/test_static_asset_paths.py`，2026-07-29 实锤）：
+凡「写了之后要经 `/static` 被访问」的目录**必须是 `Path(__file__)` 推的绝对路径**，绝不能用
+CWD 相对路径——双实例部署的进程 CWD 是**实例数据根**，相对路径会把文件写进
+`<数据根>/src/web/static/...`（web 服务从不挂载那里）→ URL 永久 404。实锤：
+`account_self_profile._DEFAULT_AVATAR_DIR` 曾是相对路径，LINE 账号自身头像永久裂图，
+且因指纹去重（`avatar_needs_refresh`）**不会重下、404 永久固化**；迁移前 CWD 恰好是代码根，
+所以故障只在迁移后新登录的号上出现。门禁含全站扫描（禁 `"src/web/static/..."` 字面量）。
+
+**相对路径并非一概有害**——落点该在哪取决于那东西是「数据」还是「代码」，用
+`python tools/audit_relative_paths.py [--strict]` 分类审阅（A 被服务静态资产 / B 代码根资源
+＝真缺陷；C 数据类 logs/config/*.db/tmp_* 落**实例数据根恰是想要的**＝无害）。
+当前 A 类 0 处、C 类 32 处、B 类仅 1 处**刻意例外**：
+`voice_prerender.DEFAULT_BASE_DIR = "assets/voices"`——写入方 CLI 显式按
+`resolve_data_roots()` 逐根解析、读取方靠「引擎 CWD == 实例数据根」的启动契约与之同址
+（实测 112 clip 全在数据根、引擎根 0）；两侧错开时失效是**软的**（回落现场合成
+~7s vs ~200ms，不报错）**且已被 `prerender_coverage`/`prerender_miss` 观测覆盖**，
+故刻意不重接管路。该例外由 `test_static_asset_paths.py` 里成对的两条门禁守住
+（写入方必须保持显式 + 该处必须带「为什么刻意如此」的说明），别顺手「修」掉它。
+`live_multiwin_drill` 四道护栏：默认只允许 `chat_key='me'`、真人会话须显式 `--allow-peer`、
+无 `--confirm` 只预检、判定以 prometheus 增量为权威。护栏与判定算式有纯函数门禁
+（`test_live_drill_guards.py`，含首次实施踩过的两个断言坑：reserved 增量算错 / 判定未按
+本轮 TAG 限定导致误判双发）。真发落**生产账号的收藏消息**是刻意选择——隔离 dev 实例禁了
+telegram 就发不出去（send 返 503），真发必须有真账号。
+⚠️ **测试绝不能写仓库 `config/`**（该类事故已三次咬到生产，conftest 现有四层 autouse 隔离）：
+`_isolated_account_registry`（假账号写进注册表 → 编排器当真账号无限重启 + 告警刷屏）、
+`_isolated_global_rules`（路由测试把 13 条回复硬约束清成 `[]`，含「不要自称AI」这类安全项）、
+`_isolated_audit_stores`（`autoreply_audit` / `ops_events` / `vision_metrics` 三个台账被掺测试
+数据——运维靠 ops_events 判断「这号这周被风控几次」，掺假比没有更糟）、以及 import 期把
+**`AITR_DATA_DIR` 指向进程级 tmp**（只剥不设会让所有按该约定定位数据的模块回落
+`Path.cwd()/config`＝引擎根仓库目录；一次设定即隔离 persona_usage / telemetry /
+desktop_selectors / licensing.data_paths / instance_restart_status 整个家族）+
+`REUNION_PROMPTS_PATH` 指向 tmp（拷仓库真值过去，读到的内容与生产一致、只有写落 tmp）。
+**新增测试若要写配置，一律重定向到 `tmp_path`，别改仓库文件、别加豁免。**
+
+**怎么审计「有没有测试在写生产文件」**（比写通用守卫可靠）：跑一轮全量，然后按**回归时间窗**
+比对 `config/` 的文件 mtime/size——落在窗口内的就是违规清单，精确且零假阳性。
+⚠️ 别做「每个测试前后快照 config/ 目录、变了就点名」的 autouse 守卫：实测 243 个假阳性——
+`-n auto` 并行下 worker A 的窗口会把 worker B 的写入算到 A 头上，`*.db` 被连接即改 mtime，
+且共享工作树上**其他 agent 线**正在编辑 config 文件。精度 > 覆盖：走「按写入口精确重定向」。
+`INTENT_TAGS_PATH` 亦已在 conftest 指向 tmp（拷仓库真值）：意图词表后台有整套写栈+备份轮转，
+当前无测试真调那些端点（`test_admin_route_inventory` 只静态列 URL），这是**防以后**——
+谁加一个真打 `/api/rpa/intent-tags/write` 的路由测试，生产词表就会被覆盖 + 备份轮转挤走真值。
+
+**global_rules 落盘＝overlay 模式**（P7-1，2026-07-29；`test_global_rules_overlay.py` 9 例）：
+旧实现读写同一个 `<repo>/config/global_rules.yaml`——那是**共享只读代码根**且被 git 跟踪，
+于是运营在 UI 改全局规则就把仓库改脏（可能撞 `restart_instance.ps1` 脏树闸门）、打包态那是
+只读安装目录根本存不下，也正是上面那起事故的土壤。现在：
+**读**＝可写数据区（`AITR_CONFIG_PATH` 父 → `AITR_DATA_DIR/config` → 仓内，顺序复用唯一事实源
+`licensing.data_paths.config_dir()`）那份存在就用它，否则回落仓库那份＝**出厂默认**；
+**写**＝只写可写数据区，首次保存把出厂内容迁过去并进 `.bak.1`（运营点「恢复槽位1」＝回出厂）。
+安全底线：读永远有回落，最坏「读到出厂默认」，**绝不读成空**（空＝所有人设丢硬约束）。
+`GET /api/persona/global-rules` 多回 `source`（读/写落点 + `is_instance_override`），
+把「出厂默认 vs 实例覆盖」的分叉对运维显式可见。
+⚠️ 两个坑已踩过并有回归钉住：① `_global_rules_path` 现在**只表示显式覆写**，自动解析每次重算——
+旧实现把解析结果缓存进该字段，首存后读路径仍钉在仓库那份 → 「运营改了却读不到」；
+② 本机 `D:\boundless` 是指向 `D:\workspace\boundless` 的**目录联接**，出厂路径用 `resolve()`
+而 `data_paths` 用 `abspath()` → 同一物理文件被算成两个路径 → 首存种子拷贝对同一文件调
+`shutil.copy2` 抛 `SameFileError` → **保存静默失败**。两边统一 resolve + `os.path.samefile` 兜底。
+
+**防双发防线周批**（P7-3）：`scripts\multiwin_drill_weekly.ps1` 把真发演练接成周期任务
+（**刻意不进 `gate_sweep -Full`**——它真发消息）。实例不在线＝SKIP exit 0（不把「服务当时没起」
+变成红告警），演练断言失败＝非零退出便于外部告警；UTF-8 日志落 `logs/multiwin_drill/` 保留 14 份。
+`-DryRun` 只跑只读预检可验接线。注册（未自动建，需人工决定）：
+```
+schtasks /Create /TN MultiwinDrillWeekly /SC WEEKLY /D SAT /ST 07:10 /F ^
+  /TR "powershell -ExecutionPolicy Bypass -File D:\boundless\engines\chengjie\scripts\multiwin_drill_weekly.ps1"
+```
+
 **陪伴能力「分阶段开启」主线**（看→校→开→观测→纠偏 闭环；纯函数 core 在 `src/companion/`，
 路由 `src/web/routes/companion_capability_routes.py` 挂 `/api/companion/capabilities*`，
 看板卡片在 `rpa_overview.html`，配置体检接进 `ops-overview`）：
@@ -142,7 +635,115 @@ skill_manager `_handle_persona_media_request`）；关键词池独立于自拍/�
 `/api/workspace/metrics.persona_media` + Prometheus `ws_persona_media_*` + ops-overview「🖼️ 人设相册」卡。
 总开关沿用 `companion.selfie.enabled`。
 
-**出站媒体承诺守卫 + 文图一致性主线**（2026-07-13/14：修「嘴上说发照片实际没发」与「发图后失忆」）：
+**图文一致性 P0 主线**（2026-07-27，修「发的图和说的话/时间/衣服对不上」四类实录事故）：
+```bash
+python -m pytest tests/test_persona_media_consistency.py tests/test_persona_media.py \
+ tests/test_image_autosend.py tests/test_selfie_wiring.py tests/test_scene_state.py \
+ tests/test_outbound_promise_guard.py tests/test_media_consistency_eval.py \
+ tests/test_outfit_state.py tests/test_media_gap.py tests/test_media_restock.py \
+ tests/test_image_gate.py -q --tb=line
+```
+预期：全绿。四层护栏（`companion.selfie.consistency` 默认开，`enabled:false` 一键回旧行为；
+默认值集中在 `image_autosend.resolve_consistency_cfg`，A 线 skill_manager / B 线 autosend 同口径）：
+① **场景硬匹配**——客户点名（`extract_requested_scene`）/承诺句点名（`outbound_promise_guard.
+promised_scene`，兑现层升为硬要求）→ 注册相册 `pick_media(required_scene_class=)`（仅通用池受限，
+运营触发词池最高优先）与文件系统相册 `_pick_from_album(required_scene=)`（挑不到 →
+`album_scene_mismatch` 如实失败交诚实文字）**绝不顶包**；物体图生成失败绝不拿人像相册顶包
+（`generate(allow_album_fallback=False)`，「要海景发车内自拍」收口）。② **时段软过滤**——
+`tod:day|night`（DB tags / 相册目录 `_meta.json` sidecar，`album_file_meta` sidecar 优先于
+文件名约定）与当前小时硬冲突剔除（22-6 不发白天照、6-17 不发夜景照、17-22 傍晚放行、无标注不判；
+`tod_conflicts_with_hour` 纯函数）；剔空放行但 `extra["tod_softened"]=True`，配文层按旧照口径兜底。
+③ **重发冷却 + 服装连续窗**——`persona_media_sends` 账本（A/B 线同一张表）推导：冷却窗（默认 24h）
+内同图硬排除（`select_media(hard_exclude_ids=)` 任何回落层不放宽，全排除→拒发）；连续窗（默认
+90min）内优先同系列未发图（`prefer_series`，防「30 秒换一身衣服」瞬移换装）；`pick_media(now=)`
+与账本衰减同时钟。④ **配文诚实**——相册存货 freshness=old：LLM 配文指令显式禁「刚拍」
+（`build_photo_caption_instruction(freshness=)`）、固定兜底走 `caption_album` 配置/双语变体池
+（`_fixed_caption`，**绝不**回落「刚拍」口径的全局 `caption`；video 无旧照池只认配置）。
+**跨人设隔离**：多人设分册布局下相册根目录不参与兜底（`_list_album`——根目录散图来源不明，
+静默发出=「换脸换人」；显式共享走 `default_album_key` 语义不变；单人设平铺布局不受影响）。
+**质疑观测**：`detect_media_complaint`（repeat/not_you/fake 保守词表）→ A/B 线
+`_maybe_flag_media_complaint`（24h 内真发过媒体才采信）→ `record_media_complaint` →
+autosend-status `complaints`/`last_complaint` + 回应纠偏 hint（别争辩/别再发同图）。
+**元数据回填**：`scripts/persona_media_backfill_meta.py`（纯核心
+`src/companion/persona_media_meta_backfill.py`）＝manifest/文件名/已有 sidecar 三源归并（人工值
+优先）+ VLM（qwen3-vl，176/140 双活）昼夜**保守**分类（室内歧义=不打标）→ 写 `_meta.json` +
+DB `tod:` 标签（幂等）；默认 dry-run 且 DB 走只读连接（对活体生产库零写事务），`--vlm --apply`
+才写。门禁 `tests/test_persona_media_consistency.py`（32 例）。
+**P1 增量**（同日，衣着状态机+生成链时段+缺口闭环；门禁 `tests/test_outfit_state.py` +
+`tests/test_media_gap.py`）：① **今日衣着状态** `src/companion/outfit_state.py`——与
+`resolve_current_scene`/`meal_state` 同哲学：crc32(persona#日期) 从衣橱池确定性取「今天穿什么」
+（跨请求/跨 A、B 链同日恒定、明天自动换、零 LLM 零存储）；衣橱池优先级＝人设 `outfits` 字段 →
+`consistency.outfit.pool` → **相册衣橱**（注册相册+FS 相册系列 slug 里认得出服装词的，
+`series_outfit_phrase("white-dress")→"white dress"`，token 级词表防 rooftop→top 误命中；600s TTL，
+尊重跨人设隔离）→ 内置中性便装池，首个非空层胜出；**连续性覆盖**＝媒体日志连续窗（90min）内刚发过
+相册衣着系列 → 衣着跟随该系列（照片事实>每日默认，「再拍一张」不换装，`current_outfit(recent_series=)`
+单一入口）。接线：A 线 Stage A/photo_directive + B 线 `stage_image_file` 生成 prompt 注入
+`wearing <outfit>`（`build_selfie_prompt(outfit=)`）+ 聊天状态块同源（`scene_chat_note(outfit=)`
+「你今天穿着…被问到与之一致」）；**媒体日志记 series**（`_record_media_sent(series=)`/B 线
+`_notify_sent` 回调第三参）：相册图记条目系列、生成图记 `outfit_slug(衣着)`——生成↔相册跨链同一
+连续性命名空间。开关 `consistency.outfit`（bool 或 `{enabled,pool}`，随 P0 总闸）。
+② **生成链时段光线**：`ensure_time_of_day` 补齐 A/B 生成 prompt 的 `scene_hint`（深夜要图不再出
+正午大太阳自拍；相册 `album_scene` 保持 raw 不受影响）。③ **投诉/需求分维观测**：
+`record_media_complaint(kind=,persona_id=)` 分类型/人设计数 + `record_scene_request(scene,unmet=)`
+（点名场景硬要求的 demand/unmet，A 线成功/发送失败/生成失败 + B 线全路径都记，认不出归 other）→
+metrics `complaints_by_kind/complaints_by_persona/scene_demand/scene_unmet`。④ **相册缺口报告**
+`src/companion/media_gap.py`：供给侧 `collect_scene_supply`（注册相册 DB enabled 图 + FS 相册
+按 persona×场景类盘点，meta sidecar 优先，根目录平铺记 "" 共享池，300s TTL）× 需求侧（③ 的进程级
+计数）→ 纯函数 `scene_gap_report`（未兑现↓→需求↓排序、共享池有货不算缺、`missing_personas`=有库存
+但该场景 0 张的人设）→ `GET /api/admin/media-consistency`（?force=1 重扫）→ ops-overview
+「🧷 图文一致性」卡（i18n `ov2_s_mconsist`/`ov2_mc_*` zh+en；零流量整卡隐藏）——「客户要什么场景、
+缺什么」从翻日志变成看板照单补货。
+**P2 增量**（同日，场景×衣着联动+出图后验+缺口自动补货；门禁 `tests/test_outfit_state.py`（P2 段）+
+`tests/test_image_gate.py`（后验段）+ `tests/test_media_restock.py`）：① **场景×衣着联动 + 季节**
+（`outfit_state`——衣着类别词表 `outfit_categories`（swim/sleep/sport/work/dressy/outer/light）×
+场景规则表 `_SCENE_OUTFIT_RULES`（exclude=高置信违和：泳装进咖啡馆/办公室、睡衣进健身房、海边裹毛衣；
+prefer=场景优先类：gym→运动装/beach→裙装轻装/office→通勤，衣橱有货才换）× 季节排除 `season_of`
+（夏排重外套/冬排泳装/冬季**户外**再排短袖吊带——室内暖气吊带合理不动；`hemisphere: south` 倒扣）：
+`adapt_outfit_to_scene` 纯函数＝换装（真实行为，确定性同日同场景恒定）或**放弃注入**（全池违和→
+生图模型按场景自由穿，比硬注入冲突衣着诚实）；`current_outfit(scene=)` 单一入口内生效——A 线
+Stage A/photo_directive/聊天状态块 + B 线 `stage_image_file` + 补货渲染六个消费口零改动自动获益，
+连续窗衣着同样过闸（照片事实也不能泳装进办公室）。开关 `consistency.outfit.{season,hemisphere}`。
+② **出图后验**（`image_gate`——`build_gate_prompt(scene_check/tod_check)` 在**同一次** VLM 体检
+JSON 里顺带取 `scene`（14 类词表 `_GATE_SCENE_CLASSES` + 等价组 `scenes_equivalent`：home/bedroom/
+kitchen 互认、cafe/restaurant 互认防误拒）与 `time_of_day`（day|night|unclear），零额外 GPU 往返；
+`gate_verdict(expect_scene_class=,expect_tod=)` 只拒「VLM 明确判了不同」——`scene_mismatch`（点名
+海边生成出健身房，prompt 层管不住的最后防线）/`tod_mismatch`（深夜要图出正午烈日照；`expected_tod`
+仅无争议区间 8-16=day/20-4=night 才校验，晨昏两可不判），other/unclear/词表外一律放行不误伤；
+不合格走既有换种子重试。接线 `generate_with_gate(expect_scene=,expect_hour=)`（A 线 Stage A/
+photo_directive + B 线 + 补货渲染），开关 `vision_gate.{scene_check,tod_check}` 默认开。
+③ **缺口自动补货**（`src/companion/media_restock.py` + CLI `scripts/album_restock.py`，与语音侧
+auto_stock→夜间渲染同哲学；配置 `consistency.auto_restock` **默认关**）：watchdog
+`_check_media_restock`（每小时 + 每日预算 max_per_day + pending 去重）把「P1 缺口报告里 unmet ≥
+min_unmet 且该人设该场景零备货」（`qualify_restock_targets`；单人设布局补根册）写**计划文件**
+`config/album_restock_plan.json`；渲染在**独立进程** CLI（建议夜间低峰）逐项真出图——衣着走 ①
+场景联动（健身房补运动装图）、体检走 ② 全套含场景后验（补进相册的图保证真是该场景）、随机种子
+（备货要多样性，stable_seed 会全长一样）、`allow_album_fallback=False`（补相册不许从相册自我复制）
+→ 策展命名 `<场景>_<系列>_<nn>.jpg` 落 `album_dir/<persona>/` + 登记 `_meta.json`（scene/tod/
+series）→ 供给/衣橱缓存失效——「看缺口→补图→下次有货」零人工。逐项落盘（中途崩溃已完成项不重跑）；
+0 张也标 done 防死循环（重试由运营改回 pending）。观测：ops 卡 restock 行（`ov2_mc_restock*`）。
+**P3 增量**（2026-08-08，配文诚实化——实录：自拍被配成「给你瞅瞅我卧室的样子」
+「之前拍的存货，家里随便吃吃嘛」，画面里只有人脸。前面四层护栏管的是**挑哪张图**，
+配文这条链一直是「LLM 看不到图、只顺着对话编」，所以图对了文照样穿帮）：
+```bash
+python -m pytest tests/test_caption_truthfulness.py -q --tb=line
+```
+① **P0 配文硬约束**（`build_photo_caption_instruction`，默认生效无开关）：人像类配文
+ 指令钉死「画面里只有你，没有食物/房间/物品」并显式禁「这是我做的 XX / 家里的存货」；
+ 相册分支此前**只传 freshness 不传 scene**（断链点）——现在把条目真实 `scene:*` 标签
+ 与 `wanted_subject` 一起喂进去，LLM 不必再猜。
+② **P1 无货不发**（`outbound_promise_guard.wanted_media_subject`）：把「对方这次想看的
+ **非人像主体**」从客户原话（「燕窝粥的照片」「给我看看你卧室」）与 **AI 自己的 offer**
+ （「我煮了燕窝粥，要不要看看」→ 客户「好呀」）里抽出来——**offer 主体此前在
+ offer-accept 桥上全程丢失，只剩一个 'image'**，这就是拿随机自拍顶包的根因。抽到主体后
+ `pick_registered_media(deny_generic=True)` 关掉通用人像池（能归场景类的如「卧室」改走
+ 场景硬匹配）；相册后端无货 → **不发图**交诚实文字（`wanted_subject_no_stock`），真出图
+ 后端 → 改按物体图出该主体走 `image_gate` 后验。抽取宁缺勿滥（功能字/量词/人像词一律
+ 弃权，误抽会误拦正常自拍）。
+③ **P2 出站前 VLM 图文核对**（`src/ai/caption_image_guard.py`，`companion.selfie.
+ caption_guard` example 默认关 / zhiliao 已开）：只核 **LLM 现写的**配文（运营配文与固定
+ 池不声称画面内容），VLM 明确判「配文声称的东西画面里没有」才换诚实兜底配文，
+ parse 失败/超时/无视觉后端一律放行原配文——**绝不阻塞发图**。观测
+ `metrics_snapshot().caption_guard` + fallback 原因 `caption_guard_rewrite`。
 ```bash
 python -m pytest tests/test_outbound_promise_guard.py tests/test_selfie_wiring.py \
  tests/test_image_autosend.py tests/test_autosend_helpers.py \
@@ -210,6 +811,39 @@ LLM 出站文本却可能自己承诺「等我拍一张给你」，两边从不�
   发出（改自洽搪塞 + `record_image_fallback("a_line_send_failed")`）；免费额度只在**真送达**时消耗；
   Stage 短路搪塞/兜底/配文全套 zh/en 双语（`selfie_stage_text`，按会话语言取——英文会话不再蹦中文）。
 观测：`metrics_snapshot()` 增 `promise_detected/fulfilled/retracted/offer_accept`（autosend-status image 段）。
+
+**主动关怀（proactive_care）主线**（2026-08-01 当日 P0-P5 闭环，两条 agent 线接力；详版 DEVLOG §94）：
+```bash
+python -m pytest tests/test_care_routes.py tests/test_care_schedule.py \
+ tests/test_care_dispatcher.py tests/test_care_commitment.py \
+ tests/test_care_engine_hot_gate.py tests/test_care_extract_llm.py \
+ tests/test_care_shadow_scan.py tests/test_care_shadow_report.py \
+ tests/test_care_p2.py tests/test_care_budget.py \
+ tests/test_overlay_comment_preserve.py -q --tb=line
+```
+预期全绿。关键不变量（改 care 前先读）：
+- **常备接线 + 配置热闸**：捕获回调/派发循环/LLM 影子扫描无条件启动、内部按实时配置
+ 自闸——开关经 overlay 热重载 ~30s 生效**免重启**；`/api/care/engine` 三档
+ `enable_dry→go_live`（强制先灰度）`→pause`；`/api/care/health` 四灯=唯一状态入口。
+- **预览=派发同源**：`build_care_prompt` 单一入口，`/preview` 与真发一句 prompt 口径；
+ dry_run 只拟稿不发送、样本进 `/api/care/dry-run-samples` 审核（👎 进全局黑名单）。
+- **每联系人主动预算**（`contact_budget` 默认开，只拦真发）：**outreach_log 即共享账本**
+ （proactive_topic 真发本就落账、care 真发经 sent_hook 落 `batch_id=care:*`），
+ min_gap 4h + 本地日 2 次含本次；dry_run 不拦、危机关怀豁免、fail-open。
+ 反向让路（topic/ritual/milestone → pending care）由既有 `has_pending_care` 承担。
+- **LLM 抽取双闸**（`llm_extract`）：`shadow`=影子对照只写 `logs/care_shadow/*.jsonl`
+ （计数器随重启清零，JSONL 才是持久口径）；`enabled`=真实捕获**只收 llm_only**（正则
+ 优先）+ 同联系人**同事件日**日历去重（刻意不用语义嵌入——「一天一件事一条关怀」）。
+ 周审 `python -m scripts.care_shadow_report`；切主判据=llm_only 复核正确率 ≥80% 且
+ 样本 ≥20，且 health.shadow 快照含 `captured` 字段（=捕获代码已装载）。
+- **overlay 写入必须保注释**：`set_overlay_flag`/`save_overlay_patch` 已走 ruamel
+ round-trip（`set_yaml_key_preserving`/`merge_yaml_patch_preserving`，失败回落旧 dump）；
+ **别再新增裸 yaml.dump 整写 overlay 的路径**（2026-08-01 实锤：一次 enable_dry 剃光
+ config.local.yaml ~30 行运维注释，值无损但注释史没了）。
+- 前端：页面词条全在 `i18n_packs/care_page.py`（`cs2_*`）；浏览器只读门禁
+ `tools/verify_care_ui.py`（gate_sweep -Full 已挂，首跑即抓到 onboard-modal 拦点击）；
+ ops 卡 `loadCare()` 读 health 零新后端。派发上下文用 `list_recent_messages`
+ （**别改回 list_messages**——那是取最旧 N 条，「最近对话要点」喂成开场白的历史 bug）。
 
 **外部 worker 会话健康 + Messenger 受控降级主线**（2026-07：网页链路不稳的止血与自愈闭环）：
 ```bash
@@ -842,6 +1476,189 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
 接受好友 → 入队 companion 问候（send_queue 投递）；`line_rpa.auto_accept.welcome.enabled`；
 幂等 `line_rpa_meta friend_welcome:{peer}`；接受后 `_trigger_evt` 加速投递。
 
+### 主动触达 Phase19-P0（2026-07-29，「好久没联系」连发复读事故三修）
+
+生产实锤（智聊近 14 天出站探针）：42 条「好久没联系/还好吗」问候、**100% gentle_checkin**
+（outreach_log 48/48，富开场全没触发）、**45% 是「上条没回又发下一条」**（中位间隔 10.6h≈
+冷却下限）、同句式 x3/x2/x2 近逐字复读、48h 回复率 36%。三修（全默认开，只减发送不增）：
+① **未回退避** `no_reply_backoff`（`proactive_pacing.parse_no_reply_backoff_cfg/
+unanswered_streak/backoff_cooldown_hours/backoff_exhausted` 纯函数 + 规划器接线）——
+上条主动没回 → 冷却 ×multiplier^streak（3^n）封顶 720h 月频，对方一开口即复位；判据=
+快照新增 `last_in_ts`（store 新批量口 `last_inbound_ts_map`，fail→0=保守退避）；
+冷却表升级 **JsonProactiveLedger**（`{ts,streak,last_text}`，旧 float 文件透明升级、
+streak 保守按 1；`mark_send` 记响应语义与文案 / `mark_attempt` 只推时间防重烧 LLM）。
+② **措辞对齐事实**：`silence_gap_bucket`（<24h/1-3天/3-14天/≥14天四档）——gentle_checkin
+指令按档发（`_CHECKIN_DIRECTIVES`，**「好久没联系」只许 ≥14 天档说**，短档明令禁 +
+要求带具体小事替代「最近怎么样」模板壳）；`build_proactive_prompt` 框定层同步分档
+（`_silence_header` 按 plan.gap_bucket/silent_hours，无档位信息保守按「几天没聊」，
+真实间隔 `silence_gap_phrase` 进 prompt）；profile_collect ask 指令去掉「好久没聊了」硬前缀。
+③ **变体守卫** `variety`（`src/utils/proactive_variety.py` 纯函数）：生成文案 vs
+「账本 last_text + 末尾未回连发尾 `trailing_unanswered_texts`」相似度 ≥0.6 → 带负样本
+重写一次，仍雷同 → `mark_attempt` 后放弃本轮（宁可不发不做复读机）。相似度=归一化
+（去标点/emoji/**中文语气助词**——「换个语气词」是实锤伪多样性）difflib；阈值 0.6 按
+生产语料校准（近重复对 0.667~1.0 / 真新开场 ≤0.242，落干净分隔带）。顺带：
+`_gen_text` 上下文改 `format_recent_context`（方向「你/TA」+相对时间——LLM 此前分不清
+「上条是我发的且没被回」）+ 人设风格注入 `_persona_style`（personality.style+style_hint，
+修「七个人设同一句问候」）。观测：plan/preview 带 `unanswered_streak/gap_bucket`、
+preview 顶层带 `no_reply_backoff/variety_guard` 配置回显。频控 overlay 同步收紧
+（24h/48h、at0=48h/96h、max_per_tick 2）。门禁 `tests/test_proactive_no_reply_backoff.py`
+（纯函数/账本双格式/规划器接线/store 判据）+ `test_proactive_variety.py`（生产金标）+
+`test_proactive_topic.py`/`test_proactive_prompt.py` 分档段。
+### 主动触达 Phase19-P1（2026-07-29，富开场复活 + 出圈 + 可观测）
+
+承接 P0「只减发送」：P1 让**还能发的那几条**更像真人、并把观测盲区关掉。六项（默认开）：
+① **life_beat 死路径修复**——`select_proactive_topic` 沉默达标时必返 `gentle_checkin`
+（mode 恒非空），旧 `if not mode` 永假 → 生活分享/天气开场从未触发（outreach 48/48
+全 checkin 根因）。改为 gentle_checkin 先试 `_life_beat_opener(record=False)` →
+`_weather_opener`，都无货再落回问候；**规划不扣周配额**，真发成功经
+`mark_life_share_sent` 落账（防规划器扫候选烧光每周 2 次配额）。
+② **切入点轮换池** `_CHECKIN_ANGLES`/`checkin_angle(variety_key=contact)`——同用户
+同天恒定、隔天换（天气/吃的/路上小事…），附进 gentle_checkin directive。
+③ **从未回复出圈** `stop_after_never_replied`（默认 2）——`last_in_ts==0` + streak≥N
+→ `never_replied_exhausted` 彻底停；0 互动不属陪伴回访语义，对方开口即恢复。
+④ **opt-out** `src/utils/proactive_optout.py`——保守词表识「别再发了/stop messaging me」
+→ 静默 `mute_days`（默认 30）只拦主动；对方回归（last_in > 静默 ts）自动解除；
+落盘 `companion_optout_mute.json`。
+⑤ **媒体透传归因** `voice_gate_verdict`/`photo_share_verdict` + `record_media_skip`
+——每个早退口记 reason（probability/min_intimacy/length…），修「配置 50%/25% 实际
+6%/0% 无人知晓」；照片 0 张经归因坐实多为生客 `min_intimacy` 正确拦截。
+⑥ **ops 卡**——mode 分布 / 未回退避 streak 直方图 / opt-out 静默数 / 媒体跳过 Top /
+候选表带 `unanswered_streak`+`gap_bucket`；status API 回显 backoff/variety/optout 配置。
+门禁 `tests/test_proactive_p1.py`。
+
+### 主动触达 Phase19-P2（2026-07-29，回复率反哺 + 事实轮换 + attempt 误伤修复）
+
+四项（默认开；relax 提频档默认 1.0=关，overlay 0.85）：
+① **账本 v3**（`JsonProactiveLedger`）：`sent_ts`（真实发送）与 `ts`（冷却戳）分离
+——**修 P0 真 bug**：`mark_attempt`（变体守卫/opt-out 拦下）推高 ts 后，旧实现拿它判
+「回没回」，用户明明回过话也会被自己一次被拦的尝试误判「未回」继续退避；v3 响应
+语义（streak/回复率）只对照 sent_ts，冷却窗仍看 ts（防每 tick 重烧 LLM）。「只
+attempt 过」条目 sent_ts 显式 0，重载不回落（防幻影观察）。新增 `obs_n/obs_replied`
+半衰滑窗（窗口 20 即双双减半——近期回应习惯权重更高，账本体积恒定）累计
+「发送→是否得到回应」长期观察。
+② **回复率反哺** `response_pacing`（`parse_response_pacing_cfg`/`response_rate_factor`
+纯函数 + 规划器 `response_pacing_cfg` 接线）：streak 是急性信号，长期回复率是慢性
+信号——rate≤low_rate(0.15) 冷却×stretch(1.5)；rate≥high_rate(0.6) ×relax（夹
+[0.5,1]，默认 1.0 不提频=只减不增）；样本 <min_obs(4) 不判。先缩放基础冷却，
+streak 退避在其上翻倍并封顶 720h（两信号正交叠加）。plan 带
+`response_obs/response_factor` 观测。
+③ **follow_up 事实轮换**：`select_proactive_topic` 旧 argmax 恒 top-1（「上次你说
+在备考」问八遍）→ 有 `variety_key` 时在得分 Top-K(≤3) 内 crc32(key#日期) 当日恒定
+轮换（今天问备考明天问旅行，都是真事实不降置信门槛）；无 key=旧行为；选中事实
+不进 context_facts。
+④ **mode 分布落库口径**：`store.outreach_mode_histogram(batch_prefix, days)`（
+outreach_log note=mode，仅 sent + 时间窗）→ status API `sent_modes_14d` → ops 卡
+优先消费（进程计数重启即清零——本机重启频繁，DB 口径重启后照样能回看「checkin
+是否还占 100%」）；status config 回显 `response_pacing`。
+门禁 `tests/test_proactive_p2.py`（17 例：账本 v3 语义/幻影观察/半衰/规划器接线/
+attempt 误伤回归钉/轮换确定性/直方图）。
+
+### 主动触达 Phase19-P3（2026-07-29，媒体形态反哺 + 语料实证收尾）
+
+① **媒体形态反哺** `src/companion/proactive_media_feedback.py`（纯函数核心）：
+voice/photo 发送概率不再拍脑袋——`factor=clamp(sqrt(kind回复率/text回复率),
+max_cut(0.5), max_boost(1.5))`，有效概率=配置×factor 夹 [0.02,0.95]（下限保探索
+形态永不死、上限防每条都发语音的机械感）。**只换形态不换总量**（消息数由 pacing
+层定）；min_intimacy/modes/daily_cap/length 护栏全不动（P3 门禁复核）；双臂各≥
+min_sent_per_arm(8) 才动，冷启动照配置探索无死锁；只看近 lookback_days(14) 触达
+（store `outreach_response_stats` 增量 `lookback_days` 参数，默认 0=全历史旧行为）。
+已知偏差如实记录：photo 只发熟客回复率天然偏高，boost 后仍过亲密度闸，风险有界。
+接线＝编排器 30min TTL 缓存 `_media_fb_snapshot`/`_fb_probability` → `_try_send_voice`
+/`_plan_photo` 的 probability；`collect_media_feedback` 编排器与 status 路由同口径
+（看板读数即真值）→ status `media_feedback` 段 + ops 卡「媒体反哺」行
+（`ov2_pe_media_fb`）。配置 `media_feedback`（example 默认关守新子系统约定，
+zhiliao overlay 开）。门禁 `tests/test_proactive_p3.py`（10 例）。
+② **opt-out 词表语料实证**（不改代码的结论也是交付物）：30 天 839 条入站 0 命中
+0 误判，4 条近似词全是刻意排除的场景（「滚珠的」语音转录/「好的闭嘴吧」打趣/
+「滚犊子」宣泄）——保守词表校准正确，**不扩表**；扩表在本语料上只会新增误伤。
+③ **few_shot 判定**：接线已齐（真发/试发都落 `companion_samples.db`，
+`build_few_shot_block` 注入已挂 `_gen_text`），生产样本 0 条评分 → 开关继续关，
+是「运营去评分」不是「缺代码」。
+
+### 主动触达 Phase19-P4（2026-07-29，mode 级回复率观测 + 验收工具化，零新旋钮）
+
+刻意**只观测不动作**（mode 门控/选型反哺等 14 天数据说话——P1 后 life_share 才
+开始流动，拿修复前 100% checkin 的混杂数据做门控判据是伪科学）：
+① **mode 级回复率** `store.outreach_note_response_stats(batch_prefix,
+response_window_days, lookback_days)`——与 outreach_response_stats 同判定口径
+（触达后窗口内有入站=回复、仅 sent、lookback 截窗），按 note(=mode) 分桶 →
+status API `mode_ab` + ops 卡「开场 mode 回复率（14天）」行（`ov2_pe_mode_ab`）。
+② **few_shot 就绪度**：status `few_shot`（enabled/total/rated/up/down/
+ready_threshold=15）+ ops 卡「已评 n/15」提示行（`ov2_pe_fs_hint`）——评分攒够
+前开开关是空转，看板告诉运营差多少。
+③ **验收周报 CLI** `python -m scripts.proactive_review [--data-root] [--days 14]
+[--json] [--out-jsonl]`（只读：inbox.db 走 mode=ro URI 零写风险；多实例自动逐根，
+`scripts/_data_root.py` 契约）：mode/形态发送与回复率 + **事故原话指标**（出站
+「好久没/还好吗/最近怎么样」模板句本窗 vs 上一窗）+ 退避账本直方图 + opt-out 数。
+计划任务 **ProactiveReviewWeekly**（周六 07:10，`scripts/proactive_review_weekly.ps1`，
+趋势行落 `logs/eval/proactive_trend.jsonl`）。CLI 与 store 口径由 P4 门禁用同一批
+种子数据双向钉住。门禁 `tests/test_proactive_p4.py`。
+**2026-07-29 首跑基线**（修复当天，含修复前存量）：48 发 100% gentle_checkin
+35.4% 回、text45/voice3/photo0、模板句本窗 44 vs 前窗 9（事故爆发段）、账本 24 条
+全 streak1、opt-out 0——下周批读数应看到：模板句坍缩、life_share/follow_up 出现、
+streak 分布右移。
+
+### 主动触达 Phase19-P5（2026-07-29，checkin 效能门控 + 趋势判词）
+
+「等两周数据再做 mode 门控」升级为「**机制先上线，样本门槛就是等待期**」（与
+media_feedback 同哲学，全程无需人回来拍参数）：
+① **checkin 效能门控** `src/companion/proactive_mode_gate.py`（纯函数核心）：
+数据证明裸 checkin（升级链 life_share/weather/画像采集都没接住的「什么钩子都
+没有」开场）回复率远低于富开场 → `skip=clamp(1-checkin率/富开场率, 0, max_skip
+(0.5))` 按比例本日跳过——没话找话不如今天不说。**只减发送不增**；富开场基线=
+follow_up/life_share/weather_hook/story_invite/story_teaser 合计（仪式/纪念日
+时点驱动、ask_* 采集意图，回复动力学不同不入基线）；两臂样本不足（checkin≥30
+且富臂≥15）恒 0——修复初期富开场未流动时机制在场但不动作，等数据到位自动激活；
+max_skip 封顶保探索（checkin 回复率永远可被重新测量）；富臂 0 回复不迁怒
+（no_signal）。**确定性掷签** `should_skip_checkin`＝crc32(cid#日期)——同会话
+同日恒定（15min tick 重掷会把「跳过」磨成「延迟 15 分钟」，必须日级确定才是
+真降频），明日自动重掷。接线在 `_opener` 尾（画像采集升级之后）返回空 opener
+→ 规划器自然跳过（**LLM 生成之前**零成本；预览走同一 _opener 与真发口径一致）。
+观测：stats `checkin_gate_skips` + status `mode_gate` 段（两臂+skip_prob+reason，
+`collect_mode_gate` 引擎/看板同口径）+ ops 卡「checkin 效能门控」行
+（`ov2_pe_checkin_gate*`）。配置 `mode_gate`（example 默认关，zhiliao overlay 开）。
+② **趋势判词** `proactive_review --trend [FILE]`：周批 JSONL → 周环比表（模板句/
+总发/checkin 占比/富开场/streak3+/text·voice 回复率）+ 自动判词（「模板句收敛/
+⚠回潮查变体守卫」「⚠streak3+ 增多=死联系人仍被触达」）——验收从看数变成读结论。
+门禁 `tests/test_proactive_p5.py`（8 例）。
+**共享树并发实录教训**（当日）：conftest 的 repo-config 写入守卫会把**另一条
+agent 线并发跑测试/等值重写 config**（mtime 变内容不变）误归因到本会话正在跑的
+测试——teardown ERROR 而测试本体全过 + `git diff` 零变化 = 并发噪声，重跑即清；
+判定前先查 `git diff` 与 agent_probe，别对着幻影修自己的代码。
+### 主动触达 Phase19-P6（2026-07-29，分位阈值自适应——最后一批拍脑袋数字交给数据）
+
+**response_pacing 阈值自适应** `auto_thresholds`（example 默认关，zhiliao overlay 开）：
+low/high 不再用冷启动固定值 0.15/0.6，改按**账本人群**（obs_n≥min_obs 的会话，
+与 response_rate_factor 同一适用人群）长期回复率分布的分位数校准——
+`calibrate_response_thresholds(observations, cfg)` 纯函数（`proactive_pacing.py`，
+自带零依赖 `_percentile` 线性插值）：low=P25 / high=P75（分位可配并夹紧
+[5,45]/[55,95]），三重回落守卫＝合格人群 < min_population(12) → 配置值（冷启动期）、
+分布同质（P75-P25 < min_separation(0.15)）→ 配置值（**同质人群上分层=追噪声**）、
+分位塌缩强制间隔保底。**接线在规划器内部**（`plan_proactive_sends` 每次从
+`cooldown_map` 现算——账本在长大，阈值随之漂移；零 loop 构造改动、零编排器缓存、
+预览天然同口径）。观测：status `response_thresholds`（low/high/source=
+config|percentile/population，与规划器同函数同数据）+ ops 卡「回复率阈值（生效值）」
+行（`ov2_pe_resp_thr`）+ 周报 CLI「长期回复率分布 n/P25/P50/P75」行（判据可见化，
+趋势行自动携带看阈值周漂移）。门禁 `tests/test_proactive_p6.py`（8 例：夹紧/
+人群-同质-塌缩三守卫/合格筛选/规划器用校准值分层的判别样本/周报分布段）。
+**backlog（P7，全部数据/时间闸口，无需新代码）**：8/1 首次周批读数复核（--trend
+四判词）、photo 熟客档位（media_feedback photo 臂 ≥8 自动接管）、few_shot 开闸
+（评分 ≥15，看板倒计时）、mode_gate 首周激活复核（富臂 ≥15 后 skip_prob 应 >0）。
+
+**AI 价值周报**（2026-08-06，「AI 本周替你干了什么」总账单一口径）：聚合纯函数
+`src/ops/value_report.py::build_weekly_value`（reply_drafts / outreach_log / messages
+**持久库 7 天窗**，重启不清零；触达回复判定与 `outreach_response_stats` 同款、剔 bot；
+by_batch 分布与主计数同一 bot 剔除 SQL——首跑曾 159 vs 157 口径分裂）。消费面四路同源：
+`GET /api/report/weekly` 的 `value` 段（F4 周报路由）、`_weekly_report_loop` 推送摘要
+（`text_lines`）、ops-overview「🧾 AI 价值周报」卡（boss 组，`loadValueWeekly`，零流量
+整卡隐藏）、**watchdog `ops_report` 事件 `value_lines`**（formatter 上限 6 行）。
+⚠ 周报推送是**双栈**：F4 legacy 循环只走 `config.yaml::webhook` 旧栈（默认关）；
+运营按推荐路径（告警渠道面板 → notify_webhooks.json）接通后收到的是 watchdog 的
+`ops_report`（别名同名，`health_watchdog.weekly_report_enabled` 默认关）——价值行两条链
+都在。门禁 `tests/test_value_report.py`（含三消费面接线断言）+ `test_ops_incidents.py`
+（emit 携带 value_lines / formatter 渲染+上限）+ `test_ops_overview.py` 卡片三件套断言
+（section/loader/注册表缺一＝静默缺陷）。
+
 ### i18n 施工约定（后台路由 CJK 收口 + 前端裸键）
 
 **词条单源规则（P4 起，先读这条）**：
@@ -901,10 +1718,28 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
 - 验证类改动先跑 pytest（测试自建 app/store，不依赖常驻服务），别用「重启生产看效果」当测试。
 
 **必须重启时**（业务 .py 改动）：
-- 用 `scripts\restart_main.ps1`（停旧→起新→**轮询 /login 到 200**→报告窗口耗时；
-  起失败会大声报错而非静默死机）；
-- **攒批重启**：多项改动合一次重启，别每改一行重启一次（2026-07-12 曾一天重启 13 次，
+- ⛔ **本机已迁双实例部署（2026-07 起），禁止再用 `scripts\restart_main.ps1` / `start_main.ps1`**——
+  它们的「杀所有 main.py + 引擎根老配置起单实例」语义会**同时杀死智聊/通译两个生产实例**并起一个
+  抢同一 Telegram 账号的 18787 幽灵实例（2026-07-22 18:53 实锤事故：全站断连 + 看门狗被幽灵骗过）。
+  两脚本已加双实例检测护栏（拒跑 exit 1），别绕过；
+- **重启前先跑预检**（2026-08-06 沉淀）：`scripts\restart_preflight.ps1`——五步只读
+  GO/NO-GO（10min 树静默+意向板 / 全量 dirty .py 语法 / app 装配测试 / -Advise /
+  30min 手动间隔），任一红即 NO-GO（并按失败项给出下一步：`-Intent` / 修语法 / 搭便车验证）；
+  全绿才给出重启命令。共享树重启装载**所有线**的落盘代码，预检是防「把 sibling 半存盘
+  文件重启进生产」的机制化闸门；`-Advise` 本身也会指路先跑预检（三者互相引用，不靠记）；
+- **正确重启（唯一入口）**：
+  `powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao`
+  （通译改 `-Instance tongyi`）。脚本自带：只动一台、**机器级** 10min 冷却（与 watchdog 共用
+  `D:\chengjie-instances\.ops\restart_cooldown\`）、仅模板/i18n 脏树时拒重启、清 exit 哨兵、等 `/login` 200、
+  可选 ops 告警。不确定先 `-Advise`；应急 `-Force`；热文件仍要硬重启 `-AllowHotOnly`。
+  ops 卡「实例重启冷却」=`GET /api/admin/instance-restart-status`。看门狗假活强制重启读同一冷却（冷却中跳过）；
+  **不要**把 watchdog 当「改完代码必重启」；
+- **攒批重启**：多项改动合一次重启，别每改一行重启一次（2026-07-12 / 2026-07-22 曾连环重启 →
   坐席端反复撞「加载超时」红屏——前端虽已有自动退避重连自愈，但窗口本身应尽量少出现）；
+- **重启窗口**（2026-08-12 可靠性复盘 P0-3）：非紧急批次收敛到每日三窗
+  **04:00 / 12:30 / 22:30（±45min）**——账本基线平均 8.4 次重启/天、88% 为开发批次，
+  每次都是坐席 15-30s 断窗。`restart_preflight` 窗外会提示下一窗时间（仅提醒不拦截）；
+  紧急修复 / watchdog 自愈不受窗口限制。
 - 多 agent 并发**必须 worktree 隔离**（见 Git workflow），只有负责生产机的那条线才碰常驻服务。
 
 ### Git workflow
@@ -916,6 +1751,291 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
   同一工作目录 → 文件互相串改、`index.lock` 互撞（本仓曾反复踩）。各 agent 各开
   `git worktree add -b feat-xxx ../telegram-mtproto-ai-xxx <base>`（独立工作目录 +
   独立 index、共用 .git refs），冲突只在 merge 时显式解决；收尾 `git worktree remove`。
+
+### CWD 相对路径＝迁移后的静默失真（2026-07-29，双实例迁移遗留病）
+
+生产进程的 **CWD 是实例数据根**（`D:\chengjie-instances\<inst>\data`），不是引擎根。
+于是同一句 `open("config/config.yaml")` 在**服务进程**里恰好正确（落实例配置），在
+**从引擎根跑的 CLI**（`python -m scripts.run_eval`、周批 `Set-Location` 落点）里却读到
+迁移时刻遗留的旧副本。这类缺陷**不报错、不变红**，只是「用的不是在跑的那份」。
+
+- **实锤 A（静态资产）**：自身头像 `_DEFAULT_AVATAR_DIR` 相对 → 写进
+  `<数据根>/src/web/static/…`（**不被服务**）→ 永久 404，且 `avatar_needs_refresh`
+  指纹去重不再重下，问题被永久藏住。改绝对路径 + 迁移错位文件。
+- **实锤 B（评测配置）**：`src/eval/*` 四处 + `scripts/run_eval.py` 各自 CWD 相对读配置。
+  与实例在跑的配置 **4/9 个关键键不一致**（`ollama_mt` 端点拓扑：引擎根 `base_urls=[140,176]`
+  双活 vs 实例 `base_url=176` 单点；`per_lang_order` 引擎根有 hi 覆写 vs 实例已下线；
+  嵌入端点 140 vs 176 优先）。A/B 实证：同命令仅数据根不同 → **38.0s vs 15.1s**（耗时差
+  就是「先打 140」的证据），**两次都 10/10 PASS** ⇒ 光看报告永远发现不了。代价是归因
+  失真：「弱语对该不该进 `per_lang_order`」正是读这些数字决策的。
+  `run_eval` 的 `EVAL_LLM` 链更狠——**完全不合并 overlay**，而真 key 只在实例 overlay
+  （实例 base 是 `YOUR_API_KEY` 占位），它读的是引擎根里的**另一把旧 key**。
+- **收口**：`src/eval/eval_config.py::load_runtime_config`（复用 `scripts/_data_root`
+  的唯一事实源：CLI 值 → `AITR_DATA_ROOT` → 自动发现活跃实例 → 引擎根；软回落不抛）。
+  **注意别用** `licensing.data_paths.config_dir()`：它只认 `AITR_CONFIG_PATH`/`AITR_DATA_DIR`
+  两个 env，CLI 场景两者都没设 → 仍回落仓内。
+- **门禁**：`tests/test_eval_runtime_config.py`（禁 `src/eval` 再出现 CWD 相对读配置）
+  + `tests/test_static_asset_paths.py`（已进 `gate_sweep`；内含 AST 全站扫描，复用
+  `tools/audit_relative_paths` 的分类器当单一事实源，A/B 类零未登记条目）。
+  自查：`python tools/audit_relative_paths.py --strict`。
+- **分类口径**（工具 C 桶的前提）：`config/`、`logs/` 这类相对路径对**服务进程**无害
+  （CWD 就是数据根），只对**从引擎根跑的 CLI** 有害——判风险要先问「谁在什么 CWD 下跑」。
+- **优先级顺序本身就是那个模块的全部价值**（首版踩过，见 `load_runtime_config` docstring）：
+  无条件走数据根解析会让 `monkeypatch.chdir(tmp)` 的单测**静默去读生产实例配置**，
+  于是同一份测试「本机红、CI 绿」——与 global_rules 那次「测试写生产」同一类互串事故
+  （`test_embedding_providers` 两条就是这么红的）。正确序＝显式实参 → **CWD 有 config 且
+  CWD 不是引擎根**（保测试密闭 + 尊重「从某实例数据根直接跑」）→ 数据根契约（修「引擎根
+  读旧副本」）→ CWD 兜底。第 2/3 条的唯一分界就是「CWD 是不是引擎根」。
+- **影响面筛选别按文件名正则挑**（本轮唯一漏网根因）：我用
+  `test_(autosend|draft|inbox|human|bazi|…)` 挑测试，漏掉了**直接测试我改过的模块**的
+  `test_embedding_providers.py`，两条红要等 55 分钟的全量才暴露。改过 `src/X.py` 之后，
+  按**导入关系**找测试（`rg -l "import .*X|from .*X import" tests/`）比按名字猜可靠。
+
+**连带修好的评测保真度缺口**：修完配置解析后 `EVAL_LLM=1 --bazi-reading` 才真跑起来，
+随即暴露「我明年运势如何？」两次稳定不合格（失地）。根因**不是模型退化**，是评测的
+prompt 只喂四柱+大运，**缺聊天链才有的流年注入**（`extract_target_year` →
+`liunian_detail` → `format_liunian_line`，那条防线本就是为「防 LLM 徒手编干支」建的）
+——盘面里没有所问年份的干支可引用，LLM 只能泛泛而谈。既冤枉了产品，又让这条评测
+**从没覆盖到那道防线**。补齐后 **9/9 PASS**（与 7/13 基线一致）。同步了 skill_manager
+的「所问年==生年不注入」护栏与 `chart["day_master"][0]` 取法（别用 `day_gan`，键不存在）。
+
+### 人工通过 ≠ AI 自动发（2026-07-29，错闸门）
+
+`inbox.l2_autosend.deliver` 管的是「**AI 可否自己发**」；坐席点「通过」是**人的明示决定**。
+把后者闸在前者上会让「AI 拟稿 + 人审后发」这个**最谨慎、最常被推荐的档位**里发送按钮
+空转（`approveDraft` 只调 `/api/drafts/{id}/resolve`，**不走** send 端点；坐席以为发了、
+客户什么也没收到，两端都看不出区别）。**决定性论据**：手动发送端点
+`/api/unified-inbox/send` 本就不受 `deliver` 约束，用它闸人工通过自相矛盾。
+
+- 缺陷面＝**出货默认档**：`config/config.example.yaml:2369` 就是
+  `l2_autosend.enabled: true` + `deliver: false`（示例为安全起见默认不让 AI 自己发）
+  ⇒ **worker 在跑、人工投递却没有发送能力**。换句话说「示例文件为安全而推荐的那个
+  默认档，恰恰是坏的那个」，照抄示例部署的客户点通过全是空转。本机 zhiliao overlay
+  置了 `deliver=true` 故一直正常，掩盖了这个默认档缺陷（通译实例已退役，不构成证据）。
+- 修法：`AutosendWorker(human_send_callback=…)` 与自动链分开——deliver=false 时自动链
+  `send_callback=None`（语义不变），人工链仍拿到真发回调（bootstrap 以
+  `deliver_enabled=True` 另建一份）。注入改由 `inbox.auto_draft.human_deliver`
+  控制（**默认开**；置 false 恢复「仅标记」旧语义）。
+- 附带修真 bug：`_send_cb_kwargs` 原硬探 `self._send_callback`，deliver=false 时它是
+  `None` → `inspect.signature(None)` 抛 TypeError → 缓存 `False` → 人工链**永久丢
+  `original_text`**（语音分支据原文合成，丢了就用译文发声＝念错语言）。改为按**实际
+  调用的回调**分别探测缓存。
+- **接线状态可观测**（解掉「注入本身是静默的」这个盲区）：`DraftService.inbox_deliver_wired`
+  → `/api/drafts/autosend-status.human_deliver_wired`（**worker=None 分支也给**——那正是
+  最可能断的形态）。零流量即可判「链路在不在」，不必等真有坐席点过通过。重启后实测
+  zhiliao=`True`。
+- **看门狗判据同步升级为两档**（`_check_human_deliver_chain`）：接线状态**已知**时按它判
+  （**不再看 `deliver_enabled`**——旧闸门会恰好在新能力所在的人审档闭嘴，这是本次改动
+  带来的连带不一致，一起修了）；未接线＝确定性根因（告警带 `not_wired:true`，文案直接
+  指路配置与 bootstrap 注入）；接线状态**未知**（读不到 draft_service，多见于测试/异常态）
+  → 退回旧的保守闸门，信息不足宁可漏报不误报。运营显式 `human_deliver=false` 时全程静默。
+- **`l2_autosend.enabled=false` 的人审档已闭环**：worker 整体不创建时，bootstrap 兜底建一个
+  `deliver_only=True` 实例（**不 run() 自动循环**，只作人工投递载体）。刻意仍放
+  `app.state.autosend_worker` 键——autosend-status / Prometheus gauge / 看门狗 / 报表都从
+  那里读，塞同一键可让人工投递观测链**零改动全通**（比另起键+到处加回落更省更一致）；
+  语义歧义由快照里的 `deliver_only` + `running/enabled` 显式消掉，另加正交字段
+  `human_deliver_enabled`（人工链能力，与 `deliver_enabled` 互不代表）。
+  人工发送不属 `ai_autosend` 授权范畴（手动发送端点本就不受其约束）。
+
+**工作台预判徽标**（2026-07-30）：护栏只在**点下去之后**才说话，坐席撞 409 才知道
+「这稿不能原样发」。故把判定收成 `DraftService._approve_block_reason` **单一入口**，
+`/api/drafts` 每行带 `approve_blocked`（`""`/`age`/`replied`）→ 草稿卡显示**稿龄 chip**
+（`_draftAgeText`：<1h 分钟 / <48h 小时 / 更久按天）+ 拦截 chip + 一句人话解释，
+并把「发送」置灰、把「编辑」标成建议出路。**核心不变量＝预判必须与护栏行为完全一致**
+（徽标另算一套 → 坐席看到「没标记」却被拦，比没徽标更糟），门禁用 8 组
+(稿龄×是否回过) 交叉断言 `approve_block_reason == _stale_check 的 stale_reason`。
+判定内部按稿龄短路（≤grace 不查会话、超龄直接定案），列表接口零 N+1 压力。
+线上实测（重启后）：7 条待审里 6 条超龄被正确置灰、17.1h 那条正常可发。
+
+**「已经回过了」是比年龄更准的判据**（同一护栏第二档）：坐席常走「采用文案 → 改写 →
+手动发送」，而**发送路由不处置草稿行**（实测确认 `unified_inbox_send_routes.py` 里没有任何
+resolve），那行于是永远 pending；投递接通后任何窗口点「通过」＝**再发一遍**（多开重复提交
+的又一个入口）。故 `_replied_after` 走既有 `list_recent_messages`（DESC 取尾，不必改
+他线在编辑的 store.py）判「草稿生成后是否已发出过回复」，命中且稿龄 >2h(grace) 即拦，
+文案与「单纯过期」分开（`err.draft.stale_replied` vs `err.draft.too_stale`——一个是会重复、
+一个是会脱节，坐席该做的事不同）。**刻意只认出站**：客户连发两条（纯入站推进）只说明
+回复迟了，原样发仍合理，拦它只会白挡坐席；读消息异常一律放行。
+2026-07-29 抽查生产 7 条待审：**0 例孤儿**（假设被证伪，没去修不存在的问题），但机制活着
+且投递已接通，故按「已回过」直接拦。
+
+**同轮必须配的陈旧护栏**（`inbox.auto_draft.stale_approve_hours`，默认 24h）：修好断链＝
+把队列里的老稿子**变成实弹**。生产实测待审年龄 **5.0h ～ 213.1h（8.9 天）**、5/7 超 24h，
+内容又极度依赖当下情境（「我刚到家，娃正在客厅拼乐高」「我现在就在 Seawall 这边」）——
+隔周原样发出不是尴尬，是**当场穿帮**。故 `DraftService._stale_check` 在**处置之前**拦
+（拦在 resolve 之后就又变成「标记了没发」）：只拦 `approve`（原样发）；`edit_send` 放行
+（终稿是人写的）、`reject` 永不拦（要能清积压）、无 `created_ts` 不拦（宁可放过不误拦）、
+未接线不拦（压根不会发）、`force_override` 是主管逃生门。阈值随投递回调同参注入
+（`set_inbox_deliver_callback(stale_approve_hours=)`）——「能真发」与「需要护栏」是同一件事。
+路由把**两种 409 分开**：`too_stale`（重新生成）vs `already_resolved`（刷新即可），坐席该做的
+事完全不同，混成一句话等于误导。门禁 `tests/test_draft_stale_guard.py`（12 例，重点是
+那些**不该误拦**的边界）。
+- 门禁 `tests/test_human_deliver_independent_of_autosend.py`（deliver 关仍真发 / 无路径
+  如实失败不静默成功 / 签名探测跟随实际回调且两回调缓存不串味 / 构造契约 / 静态接线
+  不得再被 `if _deliver:` 包住 / 看门狗四档语义：已接线忽略 deliver、未接线带确定性根因、
+  运营选择只标记则静默、接线未知退保守）。
+
+### 草稿告警的 L1 盲区（2026-07-29，214 小时积压的真因）
+
+生产待审队列实测 7 条、最老 **214h（8.9 天）**，其中 **6 条是 L1**。翻代码才发现三档
+各有归宿、唯独 L1 掉在缝里：
+
+| 档位 | 归宿 | 没人管会怎样 |
+|---|---|---|
+| L2（auto_ai + low） | AutosendWorker 自动发 | 照样发出去 |
+| L3 / L4（medium/high） | `SLAWatcher` 逐条 `draft_sla_breach` | 会响 |
+| **L1（review + low）** | **无自动发、无任何告警** | **无声烂掉** |
+
+`SLAWatcher._check_sla_breach` 明确 `autopilot_level not in ("L3","L4") → continue`，
+而 L1 恰恰是**唯一「必须人来处理」**的一档——告警洞正好开在最需要人的地方。
+（那条 L3 也烂了 167h，说明还有第二层：SLA 只推工作台铃铛，`notify_webhooks.json`
+默认 `enabled:false`，没人盯铃铛就等于没告警。）
+
+修法＝`HealthWatchdog._check_draft_backlog`（**不动 SLA 那个较复杂的状态机**；
+「没人在处理队列」是排班/注意力问题，属 ops 告警而非逐条草稿事件）：
+- 聚合信号而非逐条（L1 是低风险日常稿，逐条＝噪音）：默认 ≥3 条超 24h 触发，4h 重提，
+  队列**清空**才补恢复通知（部分消化不发，否则谎报「已处理完」）；
+- 告警里单独点名 `sla_uncovered`＝其中多少条**不在** SLA 逐条覆盖内（本检查的存在理由）；
+- 零误报前提：无 `created_ts` 的行不参与、取数异常静默、拿不到 draft_service 不猜；
+- webhook 别名 `draft_backlog`，文案带分级分布 + 最老稿龄 + 处置建议（含
+  `inbox.sla_watcher.auto_expire_hours` 这个长期缺人时的自动作废开关）。
+配置 `health_watchdog.draft_backlog_remind.{enabled,min_age_hours,min_count,interval_min}`。
+门禁 `tests/test_draft_backlog_watchdog.py` + `test_alert_delivery_e2e` 两个新 payload。
+
+**精度：数「客户在等」而不是「草稿行还挂着」**。坐席走「采用文案→手动发送」时发送路由
+不处置草稿行 → 那行一直 pending；把它算进「无人处理」就是**虚报**，运维开工作台一看
+「其实已经回过了」就再也不信这个告警了。故 `DraftService.conversation_replied_after`
+（护栏与巡检共用的公开入口）把两者分开：告警按「在等」触发，孤儿数走
+`already_replied` 另报（清账即可，不是客户在等）；`by_level`/`oldest_hours` 同样只算
+在等那批（否则孤儿会把最老稿龄撑大）。逐条要查一次会话消息 → `_BACKLOG_REPLY_PROBE_CAP`
+（50）封顶，**预算外与判定异常一律算在等**（宁可多报不漏报，漏报＝客户真的没人回）。
+旧 DraftService 无该方法时自动退化为纯年龄口径。
+
+**线上实弹验证**（2026-07-29 19:52:55，搭他线重启的便车装载后 73 秒）：
+`待审草稿积压：6 条超过 24h 无人处理（最老 215h，分级 {'L1': 5, 'L3': 1}；
+其中 5 条不在 SLA 逐条告警覆盖内）`——与独立探针数据完全吻合，整条链端到端跑通。
+
+### ⚠️ 告警出口当前为零（2026-07-29 实测，需运营决策）
+
+启动日志实证：`WebhookNotifier 已启动（**0 个 webhook**）`。`config/notify_webhooks.json`
+在**引擎根与实例数据根都不存在**，`config.yaml::notify.webhooks` 也是空、`webhook.enabled=False`。
+即：本仓所有 EventBus 告警（SLA 越线、草稿积压、人工投递断链、host_alert、avatar_voice…）
+**只进日志 + 工作台铃铛，没有任何外发通道**。那条 L3 草稿在 SLA 覆盖内却烂了 167h，
+根因就是「报进了虚空」——**告警链的最后一公里从未接通**。
+
+开通道需要 Telegram bot token + chat_id（属运营凭据，代码侧无法自造）。推荐路径：
+后台「告警渠道」面板（`GET/POST /api/accounts/auto-reply/webhooks` + `.../webhooks/test`）
+→ 写 `notify_webhooks.json` 覆盖层 + **热更 notifier 免重启**，不必碰 YAML。
+建议先只订阅高价值别名（`draft_backlog` / `human_deliver` / `host_alert`）再逐步放开，
+避免一次性把所有订阅事件推成告警风暴。
+
+**自检面已闭环（2026-08-02）**：`GET /api/admin/alert-link-status`（文件真相×进程真相×
+指纹分歧×引擎根诱饵检测，verdict＝no_channel/not_running/divergent/uncovered/healthy，
+零密钥字段）→ ops-overview「🔔 告警链路」卡（未接通=红+接通 CTA；端点未装载=整卡隐藏）；
+进程外文件口径用 `python tools/alert_link_selfcheck.py`。配套地基：`notify_webhooks_store`
+缓存改按 **mtime 失效**（手改 JSON 下次 load 即见、删文件回 None——此前缓存永不失效，
+自检会对着陈旧数据说一致）；`WebhookNotifier.status_snapshot()` 带非密钥字段 `config_fp`
+（`alert_link_audit.config_fingerprint`，比对「磁盘 vs 进程装载」内容级分歧——手改文件
+不经面板不会热更，一比即现形）。聚合逻辑单一事实源＝`alert_link_status.collect_alert_link_status`
+（路由薄包装 + 健康灯 `health_watchdog.probe_alert_link` 同源消费）；**健康灯组件已接**
+（`ops.alert_link_health` 默认开，0 通道/分歧/停摆＝黄灯软性绝不红灯，且 warn 不经
+health_alert 外发——无循环告警）。门禁 `tests/test_alert_link_status_route.py` +
+`tests/test_alert_link_health.py`。
+
+### 多 agent 共享工作树并发协议（2026-07-28，当日三线并发实录教训）
+
+worktree 隔离是理想态（见上），但实践中多条 agent 线常共用主工作树（生产实例共享
+代码根 + 模板热更新的便利让隔离名存实亡）。当日实录踩过：同实例被两线各自重启触发
+FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生产**变死按钮、
+`unified_inbox.html` 三线先后编辑、ops 卡两线险些同时动工。共享树并发按以下四条，
+每条都有当日实证：
+
+1. **动手前探活**：`powershell -ExecutionPolicy Bypass -File scripts\agent_probe.ps1`
+   ——列最近 30min 内变动的 dirty 文件（≤10min 标 ACTIVE=别人正在写）+ 高冲突热区
+   标记 + 实例重启冷却状态。目标文件 ACTIVE（尤其热区）→ 避让或先协商，别开工。
+   热区清单（历史互踩多发，工具内维护）：`unified_inbox.html`、`ops_overview.html`、
+   `shared/copilot/**`、`skill_manager.py`、`src/web/i18n_packs/*.py`。
+2. **热更新＝直接上生产**：模板 / i18n pack / 共享组件保存即生效（Jinja auto_reload
+   + mtime 热加载），没有「未部署」缓冲。分步保存时**每一步都必须自洽**——当日实录：
+   `onclick="_openGoalQuick()"` 的函数定义了、window 暴露块没挂，死按钮在生产工作台
+   存活到广域门禁扫出为止。
+2b. **注释里不能出现你正要禁掉的那个字面序列**（2026-08-27 一天内连踩两次，两次都是
+   「解释这个坑」的注释自己触发了坑）：① `unified_inbox.html` 一条注释里写通配符码
+   `send_gate:*` 紧跟 `/kill_switch`，那两个字符**提前闭合了块注释**，后半段中文变成
+   裸代码 → 整个 `<script>` 块 `Unexpected token '*'` 全死（模板热更新直上生产）；
+   修它时我在注释里又原样引用了一次该序列，当场复现。② `_support.html` 的日期门禁是
+   对**渲染后 HTML** 做正则，注释会原样进页面，于是注释里引用 `new Date(..).toLocale`
+   同样把门禁打红。**规避**：描述而不是复刻（写「星号紧跟斜杠」「内联 Date 直接调
+   toLocale* 系方法」），或用「、」分隔通配符枚举。CSS 侧同类陷阱另见
+   `tests/test_css_comment_trap.py`。
+3. **重启搭便车**：代码根共享 → 任何一次实例重启装载**所有线**已落盘的 .py。重启前
+   看冷却（probe 第 2 段）：30min 内别人刚重启 → 你的改动大概率已被装载，用只读探针
+   验证（打一发新路由 / readiness 看新字段）而不是再吃一次重启窗口（当日实录：11:57
+   对方重启已装载本线 P15 代码，12:40 又重启一次即触发 FLAP 告警）。
+4. **收口跑广域门禁，不只跑自己的**：一条命令
+   `powershell -ExecutionPolicy Bypass -File scripts\gate_sweep.ps1`（清单在脚本内
+   维护：前端接线全套 + i18n 契约 + 共享组件双树同步/主题 token + 路由契约；
+   `-Full` 追加全量回归）。当日两例跨线 bug（哑按钮、暗色 token 缺口）都是甲改
+   乙扫出来的——门禁互验是共享树上唯一可靠的「代码评审」。别人文件红了先报告，
+   别在对方活跃编辑窗内默默替改。**红灯账本**（2026-08-12 加，「5 个既有红互相
+   指认 other owners 挂了 24h+ 无人修」事故沉淀）：sweep 自动把每个失败门禁的
+   首见时间记进 `D:\chengjie-instances\.ops\gate_reds.json` 并在输出里带 age，
+   **>48h 亮 `UNCLAIMED` 点名**——看到点名就三选一：修掉 / 按台账语义登记留债 /
+   意向板认领；绿了自动销账。**瞬态红自动复跑**（同日晚加）：sweep 与 sibling
+   保存并发时会扫到半写文件（当日两例实锤：ui-build 新鲜度/时间炸弹门禁各红了
+   恰好一轮）——第一轮有红时 sweep 自动把失败门禁**文件**串行复跑一次，第二轮
+   为权威（自愈=verdict 转绿并注明 transient；仍红=真红），账本只记权威轮。
+   夹具时间炸弹（硬日期跌出 now 窗自爆，duel 实锤）有专项门禁
+   `tests/test_fixture_time_bombs.py`：trend 夹具日期一律锚 now。
+5. **前端批次双戳**（2026-07-29 账号 rail 事故沉淀）：模板/CSS/i18n 热更新后，
+   **开着的旧标签页仍跑旧 JS**。每批前端落地必须同时改两处——
+   `src/web/static/workspace/ui-build.txt` 首行（陈旧页横幅轮询此文件）+ 相关
+   CSS 的 `?v=` 缓存戳（如 `unified-inbox.css?v=`）。只改功能不 bump =
+   「修好了坐席还在踩」。`-Full` 含三个收件箱真浏览器门禁：
+   `tools/verify_account_rail_ui.py`（账号视角不变量）、`verify_inbox_density.py`
+   （会话面板密度预算 + 「可见但空」扫描，2026-07-30）、`verify_inbox_identity.py`
+   （人设身份真相：回复区身份条会话覆写/TTL 缓存/换绑即时校正 + 行徽章行级
+   eff_persona，route mock 零生产写入，2026-07-30）。三者环境缺失一律 SKIP exit 0。
+6. **意向板**（2026-08-05 沉淀：两条线同小时内为同一事故各建了几乎相同的验证工具，
+   靠代码注释里的工具名才避免重复上线——mtime 探活只能看见「在哪打字」，看不见
+   「在追什么」）：开工时 `scripts\agent_probe.ps1 -Intent "主题 (涉及文件/区域)"`
+   登记（建议 ASCII），收工 `-Intent "同主题" -Done` 清除；探针 [3/4] 段展示各线
+   24h 内的在册意向（过期自清）。登记落 `D:\chengjie-instances\.ops\agent_intents\`。
+   动手前先看意向板：主题撞车 → 先合流（复用/增强对方产出）再动工。登记成功后提示
+   指向 `restart_preflight`；预检 NO-GO / `-Advise` 也会回指意向板——形成闭环。
+7. **index 使用协议**（2026-08-27 沉淀：同一天被卡两次）：git 暂存区是**整个工作树
+   共用的一个槽**，不像 dirty 文件那样能各写各的。任一条线有文件 staged 期间，别的线
+   要么干等、要么在 `git add -A` / `git commit -a` 时**把对方的文件顺手扫进自己的提交**
+   （当天真发生过，事后要用 plumbing 才拆得开）。三条：
+   - **暂存后几分钟内必须提交或 `git reset` 释放**。「先 stage 着，等下再说」＝在锁着
+     全楼的门。忘了释放的多半是自己，不是别人。
+   - **`stage_hunks` 发现外来暂存直接拒绝**（已实现，`--allow-foreign-staged` 是逃生门，
+     用之前先确认那些文件真不是别人在途的）。
+   - **大批收口安排独占时段**：几十个文件的整理别和别人的日常提交挤在一起。
+   探针 `[1/4]` 段直接报 index 是空闲还是被占（含文件清单）——被卡时先看它，别猜。
+   ⚠ 提交一律**显式列文件**：`git add <明确路径>`，永远不要 `-A` / `commit -a`。
+8. **绝对禁止全树回退命令：`git reset --hard` / `git checkout .` / `git restore .` /
+   裸 `git stash push`（不带 `-- <明确路径>`）**（2026-08-29 06:26 实锤，代价最大的
+   一次）：这棵树上常年有 100+ 个 dirty 文件、属于**多条并行线**，工作树是共用的一个。
+   复盘更正（07:5x，肇事线自查自首）：真凶不是 reset --hard，是 wsroute 线验证
+   「某测试在 HEAD 是否也红」时执行的 `git stash push -m "probe"`——没带路径参数＝
+   把**所有线** 169 个未提交文件一次卷进 stash、工作树全部回到 HEAD（stash 内部
+   实现正是 reflog 里那条 `reset: moving to HEAD`，事后极易误判成 reset --hard）；
+   untracked 新文件侥幸存活。
+   - **最阴险的地方是当时看不出来**：常驻进程内存里还是好代码，线上一切正常，
+     故障要等到**下一次重启**才装载回滚后的磁盘并静默复发。所以它不是「当场
+     报错」而是**定时炸弹**，谁重启谁背。肇事线自己几分钟后跑门禁仍是绿的
+     （各门禁恰好测的都不是被回退的那一面），自查都难。
+   - 本次**已恢复**（07:5x）：stash@{0}（06:26:32，消息 "probe"）完整保有全部
+     169 个文件——103 个事后无人再动的已原样恢复（含小智线 admin.py 与教学埋点，
+     3 条持续红门禁随恢复转绿）；65 个事后已被各线重新编辑的**刻意不动**，清单与
+     自查方法见 `D:\chengjie-instances\.ops\INCIDENT_0626_stash_recovery_20260829.md`；
+     **stash@{0} 在各线确认前禁止 drop**。
+   - 若真凶是 `reset --hard` 则**无任何 git 手段可救**（reflog 只记 HEAD 移动，
+     未提交工作树内容不在 git 里）——禁令的分量不因本次侥幸走了 stash 而减轻。
+   - 只回滚**自己的**文件：`git checkout -- <明确路径>`（逐个列，别用 `.`）；
+     要临时收起自己的改动用 `git stash push -- <明确路径>`（路径必须显式列）。
+   - 推论（这次的真正教训）：**在这棵树上不要长时间留未提交的工作**。做完一批、
+     门禁绿了就显式列文件提交；提交是这里唯一可靠的保险，不是流程洁癖。
 
 ### 崩溃恢复提示
 

@@ -9,6 +9,7 @@ const {
   resolveIconAction,
   shouldCheckBrand,
 } = require("../brand-util.js");
+const brandUtil = require("../brand-util.js");
 
 let n = 0;
 const t = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -76,6 +77,44 @@ t(isDefaultMark(null) === false, "null mark not default");
   const b = pickBrandLocal({}, null);
   t(b.product === BRAND_FALLBACK.product, "hardcoded fallback product");
   t(b.mark === null, "hardcoded fallback mark null");
+}
+
+// ── 语言感知（2026-08-19 i18n）──────────────────────────────────────
+// brand.json 早就是 zh/en 双列，旧实现只读 zh → 英文壳照样显示中文产品名。
+const REAL_JSON = require("../renderer/brand/brand.json");
+{
+  const zh = pickBrandLocal({}, REAL_JSON, null, "zh");
+  const en = pickBrandLocal({}, REAL_JSON, null, "en");
+  t(zh.product === "智聊" && zh.company === "无界科技", "zh 取 brand.json 中文列（行为不变）");
+  t(en.product === "ChatX" && en.company === "BOUNDLESS", "en 取 brand.json 英文列");
+  t(zh.website === en.website && zh.mark === en.mark, "website/mark 与语言无关");
+}
+{
+  // 缺 en 列时回落该字段的中文真名，而非兜底常量——白标客户的真名比 ChatX 更对
+  const b = pickBrandLocal({}, { product: { zh: "某白标" }, company: { zh: "某公司" } }, null, "en");
+  t(b.product === "某白标" && b.company === "某公司", "en 缺列回落 zh 真名（不掉回 ChatX）");
+}
+{
+  // config.brand=部署方显式覆写，语言无关，永远最高优先
+  const b = pickBrandLocal({ product: "白标X" }, REAL_JSON, null, "en");
+  t(b.product === "白标X", "config.brand 覆写不受语言影响");
+}
+{
+  const fbEn = brandUtil.brandFallback("en-US");
+  t(fbEn.product === "ChatX" && fbEn.company === "BOUNDLESS", "en-US 家族归 en 兜底");
+  t(brandUtil.brandFallback("ja").product === "智聊", "未知语言保守回中文兜底");
+  t(brandUtil.brandFallback("").website === BRAND_FALLBACK.website, "兜底 website 不随语言变");
+  t(pickBrandLocal({}, null, null, "en").product === "ChatX", "皆空 + en → 英文兜底");
+}
+{
+  // zh_hant P3：繁体列（含 zh-TW/zh-HK 别名）；vi/th/id 归拉丁列
+  const hant = pickBrandLocal({}, REAL_JSON, null, "zh_hant");
+  t(hant.company === "無界科技" && hant.product === "智聊", "zh_hant 取 brand.json 繁体列");
+  t(pickBrandLocal({}, REAL_JSON, null, "zh-TW").company === "無界科技", "zh-TW 别名归繁体");
+  t(brandUtil.brandFallback("zh-HK").company === "無界科技", "zh-HK 兜底归繁体");
+  t(pickBrandLocal({}, { company: { zh: "某司" } }, null, "zh_hant").company === "某司",
+    "繁体缺列回落 zh 真名（不掉回英文）");
+  t(pickBrandLocal({}, REAL_JSON, null, "vi").product === "ChatX", "vi 归拉丁品牌列");
 }
 
 // ── resolveIconAction ───────────────────────────────────────────────

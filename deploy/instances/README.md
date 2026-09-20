@@ -72,11 +72,26 @@ deploy/instances/
 ├─ preflight_instance.ps1     ← 拉起前预检（python/依赖/全链导入/端口/数据根可写；退出码 0/1）
 ├─ start_zhiliao.ps1          ← 智聊实例启动（防呆：config 缺失即报错，绝不自动建/覆盖）
 ├─ start_tongyi.ps1           ← 通译实例启动（同上）
-├─ stop_instance.ps1          ← 按实例停止（防呆：验明端口持有者是引擎 main.py 才杀进程树）
-├─ status_instances.ps1       ← 双实例健康探测（端口 + HTTP + 数据目录体检；数据根自动探测见脚本头注）
-├─ watchdog_instances.ps1     ← 双实例探活自愈（实施29；DOWN 即拉起/假活三轮强制重启/外占只告警；
-│                                装成 \Boundless\Boundless-chengjie-watchdog 每 5 分钟，S4U 账户 session 0，
-│                                开机与宕机 ≤1 节拍自恢复，经 /api/ops/alert 告警）
+├─ stop_instance.ps1          ← 按实例停止（防呆：验明 main.py 才杀；先 soft `taskkill /T` 再 hard `/F`；清哨兵）
+├─ _restart_cooldown.ps1      ← 机器级冷却共享库（`D:\chengjie-instances\.ops\restart_cooldown\`；
+│                                SYSTEM 看门狗与人工重启共用，防 LOCALAPPDATA 分家）
+├─ restart_instance.ps1       ← **生产重启唯一入口**（只动一台 + 10min 冷却 + 脏树闸门 + 清哨兵 +
+│                                等 /login 200 + ops 告警；`-Advise`/`-DryRun`/`-Force`/`-AllowHotOnly`/
+│                                `-FromWatchdog`）
+├─ publish_gate.ps1           ← 发布前只读闸门（两边 `-Advise`；提示热更新 vs 必须重启 + 冷却态）
+├─ cutover_merge.ps1          ← **融合切换一键编排**（通译并库进智聊；缺省只预检干跑，`-Execute` 真切，
+│                                `-Rollback` 镜像还原；备份→合并→收敛校验→退役旗标→拉起，见 §12）
+├─ smoke_restart_resilience.ps1 ← 只读冒烟（phase/cooldown/flap/`note_en`；不杀进程）
+├─ probe_ops_surface.ps1      ← 只读：探测进程是否已装载 quiet_poll/http_phase（缺则等冷却后重启）
+├─ drill_restart_resilience.ps1 ← 韧性演练（默认 DRY；`-Live -Instance` 经唯一入口真重启一台）
+├─ prometheus_alerts_chengjie_restart.yml ← Grafana/Alertmanager 规则（冷却/抖动/假活）
+├─ prometheus_scrape_chengjie.yml ← Prometheus scrape 片段（双实例 metrics + bearer 文件）
+├─ grafana_dashboard_restart.json ← Grafana 看板（冷却/FLAP/phase/age，可 Import）
+├─ probe_prom_restart.ps1     ← 只读校验 Prom 文本含 restart gauges；`-WriteCredStubs` 写刮取令牌文件
+├─ status_instances.ps1       ← 双实例健康探测（+ `http_phase`；**UTF-8 快照** `last_status.json`，
+│                                `note` 中文 + **`note_en` ASCII** 双轨，ops 优先读 note_en）
+├─ watchdog_instances.ps1     ← 双实例探活自愈（读快照；告警文案优先 `note_en`；DOWN/假活经
+│                                `restart_instance -FromWatchdog`；每 5 分钟计划任务）
 ├─ verify_instance.ps1        ← 生产验收一键校验（只读；HTTP/品牌/health/数据根/授权；-Json/-WhatIf）
 ├─ migrate_117.ps1            ← .117 生产迁移编排骨架（缺省 -DryRun；破坏性动作不入脚本，见 §11）
 ├─ migrate_117_runbook.md     ← .117 生产迁移作战手册（分阶段时序 + 回滚点 + 应急速查，见 §11）
@@ -171,11 +186,21 @@ powershell -ExecutionPolicy Bypass -File D:\workspace\boundless\deploy\instances
 | 操作 | 命令 |
 |---|---|
 | 预检 | `powershell -ExecutionPolicy Bypass -File deploy\instances\preflight_instance.ps1 [-DataDir <数据根>] [-Ports 18899,18887]`（退出码 0=可拉起 1=有 FAIL） |
+| **重启（首选）** | `powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao`（或 `tongyi`；**只动一台** + 机器级 10min 冷却（与 watchdog 共用 `D:\chengjie-instances\.ops\restart_cooldown\`）+ 脏树闸门 + 清哨兵 + 等 `/login` 200 + ops 告警。`-Advise` / `-Force` / `-AllowHotOnly` / `-DryRun` / `-FromWatchdog`） |
+| **停止** | `stop_instance.ps1 -Instance …`：soft kill → grace → hard `/F`；hard 后清 `run_sentinel.json` |
+| 重启冷却观测 | ops-overview 卡「实例重启冷却」或 `GET /api/admin/instance-restart-status` |
+| 韧性冒烟（只读） | `smoke_restart_resilience.ps1`（phase / flap / `note_en` ASCII） |
+| 进程面探针（只读） | `probe_ops_surface.ps1`（`quiet_poll`/`http_phase` 是否已装进进程；缺字段=等冷却后 `restart_instance`，勿 `-Force`。**Phase12b 起顺带打印本实例启动分段**：`boot total/seat-ready/slowest` + 逐阶段耗时——进程跑在 Phase11 前代码时显示 `n/a`，下次自然重启后出真数字） |
+| 启动分段归因 | `initialize()` 内 `BootTimer` 逐阶段计时（config/ai_client/telegram_clients/web_app…）→ app.log 一行 `boot phases:` + `GET /api/admin/instance-restart-status` 的 `boot_timing`/`boot_seat_ready_sec` + Prom `chengjie_instance_boot_{total,seat_ready,phase}_seconds` + ops-overview 重启卡「本实例启动分段」行。**这些 gauge 是可选的**（进程首次以 Phase11+ 代码启动后才出现），监控别把它设为必需指标 |
+| 韧性演练 | `drill_restart_resilience.ps1`（默认 DRY；低峰且冷却空闲才加 `-Live -Instance tongyi`） |
+| Grafana 接线 | ① `probe_prom_restart.ps1 -WriteCredStubs` ② 合并 `prometheus_scrape_chengjie.yml` ③ 加载 `prometheus_alerts_chengjie_restart.yml` ④ Import `grafana_dashboard_restart.json`（FLAP 另有 webhook 通道，不依赖 Prom） |
 | 启动智聊 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_zhiliao.ps1 [-DataDir <数据根>]` |
 | 启动通译 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_tongyi.ps1 [-DataDir <数据根>]` |
 | 健康检查 | `powershell -ExecutionPolicy Bypass -File deploy\instances\status_instances.ps1`（`-Json` 供监控；退出码 0=全 GO 1=部分 2=全 DOWN；数据根自动探测：参数>进程>生产缺省>仓库缺省，异形部署才需 `-ZhiliaoData`/`-TongyiData`） |
 | 探活自愈 | `powershell -ExecutionPolicy Bypass -File deploy\instances\watchdog_instances.ps1 [-NoSelfHeal]`（生产由计划任务 `\Boundless\Boundless-chengjie-watchdog` 每 5 分钟跑；DOWN 即幂等拉起、假活连续 3 轮才 stop+start、端口被外占只告警绝不清杀；动作/失败经 `/api/ops/alert` 告警） |
-| 停止 | `powershell -ExecutionPolicy Bypass -File deploy\instances\stop_instance.ps1 -Instance tongyi`（或 `zhiliao`；防呆=只停「持有实例端口且命令行含 main.py」的进程树，幂等）。也可走 `deploy\deploy.ps1 -Action down -Only chengjie_zhiliao -Force`（stack.json 已登记，条目默认 enabled=false，需 `-Only` 显式点名） |
+| 停止 | `powershell -ExecutionPolicy Bypass -File deploy\instances\stop_instance.ps1 -Instance tongyi`（或 `zhiliao`；防呆=只停「持有实例端口且命令行含 main.py」的进程树，幂等；故意强停后清 `logs\run_sentinel.json`）。也可走 `deploy\deploy.ps1 -Action down -Only chengjie_zhiliao -Force`（stack.json 已登记，条目默认 enabled=false，需 `-Only` 显式点名） |
+| **融合切换** | `powershell -ExecutionPolicy Bypass -File deploy\instances\cutover_merge.ps1`（缺省只预检+干跑零副作用；低峰窗口加 `-Execute` 真切；`-Rollback` 还原，见 §12） |
+| ⛔ 禁止 | `engines\chengjie\scripts\restart_main.ps1` / `start_main.ps1`（双实例机会误杀两台并起幽灵；脚本已拒跑并改口指向 `restart_instance.ps1`） |
 
 启动脚本防呆行为（两个 start 脚本一致）：
 
@@ -347,6 +372,38 @@ powershell -ExecutionPolicy Bypass -File deploy\instances\migrate_117.ps1 -Execu
 # 随时只读验收：
 powershell -ExecutionPolicy Bypass -File deploy\instances\verify_instance.ps1 -Base http://127.0.0.1:18899 -Instance tongyi -DataDir <数据根>
 ```
+
+---
+
+## 12. 融合实例切换（P2 cutover：通译 LingoX 并库进 智聊 ChatX）
+
+> 背景：融合方案定案「方案B 单实例 + 档位区分功能」（见 `docs/融合方案_*.md`）。
+> 数据面由 `engines/chengjie/scripts/merge_instance_data.py` 承担（幂等「不存在才插入」、
+> 凭证按目标 registry.key 换密、导入账号打 `business_line=translation` 标签、messages 同步 FTS）；
+> `cutover_merge.ps1` 是它的**生产编排壳**：把「停机→备份→合并→校验→退役→拉起」串成一键。
+
+```powershell
+# 任意时间：预检 + 干跑（只读零副作用；出 待插入行数 + overlay 键差异提示）
+powershell -ExecutionPolicy Bypass -File deploy\instances\cutover_merge.ps1
+# 低峰窗口（02:00-03:00）真切（要敲 MERGE 确认；-Force 免确认）
+powershell -ExecutionPolicy Bypass -File deploy\instances\cutover_merge.ps1 -Execute
+# 观察期内如需回滚（缺省最新备份；-BackupId 指定时点）
+powershell -ExecutionPolicy Bypass -File deploy\instances\cutover_merge.ps1 -Rollback
+```
+
+关键语义（防呆点）：
+
+- **通译数据根全程只读**——合并只从它读，回滚天然无损；备份目录
+  `D:\chengjie-instances\.ops\cutover_backup\<ts>\` 含两边 config 全量 + merge 报告，永不自动删。
+- **收敛校验**：`--apply` 后复跑干跑，待插入必须归零，否则按失败处理（提示回滚命令）。
+- **退役旗标**：成功后写 `D:\chengjie-instances\.ops\retired\tongyi.flag`；
+  `watchdog_instances.ps1` 见旗标即跳过该实例（否则 5min 节拍会把已并库的通译拉活 →
+  同一批平台账号被两个实例双拉双发）。复活 = 删旗标（`-Rollback` 自动删）。
+- **看门狗暂停**：真切段先 `schtasks /DISABLE` 看门狗、finally 恢复；暂停失败即中止（生产未动）。
+- **config 不随数据走**：预检会打印「通译 overlay 独有键」，其中裁剪键（`*.enabled: false`）
+  是关功能语义**不要并入**；只评估真正的运营配置（`translation.engines` 端点、glossary 等）。
+- 收尾人工项（脚本结束时打印清单）：通译坐席改登智聊地址、18899 入口下线/改指、
+  观察期后 stack.json 的 `chengjie_tongyi` 条目 `enabled=false`。
 
 ---
 

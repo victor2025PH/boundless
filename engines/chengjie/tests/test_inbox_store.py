@@ -284,3 +284,205 @@ def test_update_message_text_empty_transcript_noop(tmp_path):
         "telegram:acc:c", media_ref="/x/1.ogg", text="   ") is False
     assert store.update_message_text("telegram:acc:c", text="有内容但无定位键") is False
     store.close()
+
+
+# ── P0 未读可信化：已读水位 + 有效未读 ────────────────────────────────────────
+
+def test_mark_read_sets_water_and_clears_effective_unread(tmp_path):
+    """打开会话 → 已读水位推到末条 → 有效未读归零；原始 unread（同步值）保留。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=5))
+    water = store.mark_conversation_read("whatsapp:wa1:c")
+    assert water == 100.0
+    row = store.get_conversation("whatsapp:wa1:c")
+    assert row["last_read_ts"] == 100.0
+    assert row["unread"] == 5                       # 原始同步值不动
+    assert store.effective_unread(row) == 0          # 有效未读归零
+    store.close()
+
+
+def test_effective_unread_rebounds_only_on_newer_message(tmp_path):
+    """已读后同步覆盖 unread（手机端数字回来）不该复燃；真有更新的消息才重新未读。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=3))
+    store.mark_conversation_read("whatsapp:wa1:c")
+    # 模拟协议号下一轮 upsert_protocol_chats：同一末条时间戳，unread 被手机端数字覆盖回 3
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=3))
+    row = store.get_conversation("whatsapp:wa1:c")
+    assert store.effective_unread(row) == 0          # 末条未变 → 不复燃
+    # 来了真正更新的消息（last_ts 前进）→ 重新算未读
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=200.0, unread=4))
+    row2 = store.get_conversation("whatsapp:wa1:c")
+    assert store.effective_unread(row2) == 4         # last_ts>last_read → 复现未读
+    store.close()
+
+
+def test_mark_read_monotonic_and_clears_mention(tmp_path):
+    """水位单调不回退；打开会话一并清「@我」旗标。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:g", platform="whatsapp",
+                                    account_id="wa1", chat_key="g",
+                                    last_ts=300.0, unread=1, chat_type="group"))
+    store.set_conversation_mentioned("whatsapp:wa1:g", True)
+    store.mark_conversation_read("whatsapp:wa1:g")
+    row = store.get_conversation("whatsapp:wa1:g")
+    assert row["last_read_ts"] == 300.0
+    assert row["mentioned_unread"] == 0              # @我 旗标随打开清零
+    # 显式回退到更早水位 → 不生效（单调）
+    store.mark_conversation_read("whatsapp:wa1:g", read_ts=50.0)
+    assert store.get_conversation("whatsapp:wa1:g")["last_read_ts"] == 300.0
+    store.close()
+
+
+def test_mark_read_missing_conversation_is_noop(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    assert store.mark_conversation_read("nope:x:y") == 0.0
+    store.close()
+
+
+def test_effective_unread_zero_when_no_raw_unread(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    assert store.effective_unread(
+        {"unread": 0, "last_ts": 10, "last_read_ts": 0}) == 0
+    assert store.effective_unread(
+        {"unread": 4, "last_ts": 10, "last_read_ts": 20}) == 0   # 已读覆盖
+    assert store.effective_unread(
+        {"unread": 4, "last_ts": 30, "last_read_ts": 20}) == 4   # 末条更新
+    store.close()
+
+
+# ── 群内发言台账（群脉暴露度量的真账来源） ──────────────────────────────────
+
+
+def _speech_fixture(store):
+    """两个号在两个群发过言 + 一堆**不该被算进去**的干扰行。"""
+    rows = [
+        ("telegram:a1:g1", "telegram", "a1", "g1", "group",  "out", 1000.0),
+        ("telegram:a2:g1", "telegram", "a2", "g1", "group",  "out", 1000.0),
+        ("telegram:a1:g2", "telegram", "a1", "g2", "group",  "out", 1000.0),
+        ("telegram:a2:g2", "telegram", "a2", "g2", "group",  "in",  1000.0),  # 只收没发
+        ("telegram:a3:p1", "telegram", "a3", "p1", "private", "out", 1000.0),  # 私聊
+        ("telegram:a4:g3", "telegram", "a4", "g3", "group",  "out", 10.0),     # 太久以前
+    ]
+    for cid, plat, acct, key, ctype, direction, ts in rows:
+        store.upsert_conversation(_conv(cid=cid, platform=plat, account_id=acct,
+                                        chat_key=key, chat_type=ctype, last_ts=ts))
+        store.ingest_message(InboxMessage(
+            conversation_id=cid, platform_msg_id=f"{cid}:{direction}",
+            text="x", ts=ts, direction=direction))
+
+
+def test_group_speech_ledger_counts_only_outbound_group_messages(tmp_path):
+    """台账要回答「平台能看见哪个号在哪个群说过话」——进向与私聊都不算暴露。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    led = store.group_speech_ledger()
+    assert sorted(led.get("g1") or []) == ["a1", "a2"]
+    assert (led.get("g2") or []) == ["a1"]      # a2 在 g2 只收没发
+    assert "p1" not in led                       # 私聊里同框对平台没意义
+    store.close()
+
+
+def test_group_speech_ledger_honours_the_time_window(tmp_path):
+    """共现必须随时间淡出，否则跑几个月每一对都饱和，这个数就没有分辨力了。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    assert "g3" in store.group_speech_ledger()
+    assert "g3" not in store.group_speech_ledger(since_ts=500.0)
+    store.close()
+
+
+def test_group_speech_ledger_can_narrow_by_platform(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    assert store.group_speech_ledger(platform="telegram")
+    assert store.group_speech_ledger(platform="line") == {}
+    store.close()
+
+
+def test_group_speech_ledger_shape_feeds_the_co_occurrence_matrix(tmp_path):
+    """形状必须与 ``GroupShowStore.performance_ledger`` 一致，才能直接进共现矩阵。"""
+    from src.companion.group_show.performance import performance_metrics
+
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    assert performance_metrics(store.group_speech_ledger())["max_pair_co"] == 1
+    store.close()
+
+
+def test_group_last_spoke_at_takes_the_newest_group_message_per_account(tmp_path):
+    """跨群间隔闸门问的是「这个号离上次冒头过了多久」，只有最新那一刻算数。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    store.upsert_conversation(_conv(cid="telegram:a1:g9", platform="telegram",
+                                    account_id="a1", chat_key="g9",
+                                    chat_type="group", last_ts=8000.0))
+    store.ingest_message(InboxMessage(conversation_id="telegram:a1:g9",
+                                      platform_msg_id="telegram:a1:g9:out",
+                                      text="x", ts=8000.0, direction="out"))
+    assert store.group_last_spoke_at()["a1"] == 8000.0
+    store.close()
+
+
+def test_group_last_spoke_at_ignores_inbound_and_private(tmp_path):
+    """只收没发、私聊里说话，平台都看不到这个号在群里冒头，不该占用冷却窗。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    seen = store.group_last_spoke_at()
+    assert "a2" in seen and seen["a2"] == 1000.0   # a2 只在 g1 发过
+    assert "a3" not in seen                        # a3 只发过私聊
+    store.close()
+
+
+def test_group_last_spoke_at_honours_window_and_platform(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    assert "a4" in store.group_last_spoke_at()                 # ts=10 的老号
+    assert "a4" not in store.group_last_spoke_at(since_ts=500.0)
+    assert store.group_last_spoke_at(platform="line") == {}
+
+
+def test_group_last_spoke_at_can_leave_the_target_group_out(tmp_path):
+    """闸门问的是「有没有在**别的**群刚冒过头」。
+
+    同一个群里连着回两句是正常对话，不是跨群编排的痕迹。不排除本群的话，刚在这个群
+    自动回复过的号会被自己挡住——这条拦截毫无风险意义，只会让运营把闸门关掉。
+    """
+    store = InboxStore(tmp_path / "inbox.db")
+    _speech_fixture(store)
+    assert store.group_last_spoke_at()["a1"] == 1000.0
+    assert "a1" in store.group_last_spoke_at(exclude_group="g1")   # a1 还在 g2 说过
+    assert "a2" not in store.group_last_spoke_at(exclude_group="g1")  # a2 只在 g1
+    store.close()
+
+
+def test_group_inbound_since_returns_humans_in_time_order(tmp_path):
+    """真发让路要吃进向消息——只看本群、升序、可排除演员号。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="telegram:bot:g1", platform="telegram",
+                                    account_id="bot", chat_key="g1",
+                                    chat_type="group", last_ts=2000.0))
+    for i, (sid, name, ts, text) in enumerate([
+        ("u1", "老王", 1500.0, "这是啥"),
+        ("u2", "小李", 1600.0, "多少钱"),
+        ("bot", "我方号", 1700.0, "镜像误标"),  # exclude
+    ]):
+        store.ingest_message(InboxMessage(
+            conversation_id="telegram:bot:g1",
+            platform_msg_id=f"in-{i}", text=text, ts=ts, direction="in",
+            sender_id=sid, sender_name=name))
+    rows = store.group_inbound_since("g1", since_ts=1400.0,
+                                     exclude_senders=["bot"])
+    assert [(r["sender_name"], r["text"]) for r in rows] == [
+        ("老王", "这是啥"), ("小李", "多少钱")]
+    assert store.group_inbound_since("g1", since_ts=1550.0)[0]["text"] == "多少钱"
+    assert store.group_inbound_since("") == []
+    store.close()

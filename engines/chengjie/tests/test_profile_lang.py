@@ -27,8 +27,11 @@ def test_set_lang_roundtrip_and_validation(tmp_path):
 
     # 非法值拒绝，且不覆盖已存的 en
     assert store.set_lang("amy", "fr") is False
-    assert store.set_lang("amy", "") is False
     assert store.get_user("amy")["lang"] == "en"
+    # 空串=清除偏好（/set_lang?lang=auto 回到「跟随系统」，2026-08-27 契约）
+    assert store.set_lang("amy", "") is True
+    assert store.get_user("amy")["lang"] == ""
+    assert store.set_lang("amy", "en") is True
 
     # 可切回 zh
     assert store.set_lang("amy", "zh") is True

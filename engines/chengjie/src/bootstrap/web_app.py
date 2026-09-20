@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -20,13 +21,111 @@ from starlette.requests import Request
 from src.utils.net_helpers import is_bind_address_in_use_error
 
 
+def classify_web_serve_outcome(
+    exc: BaseException | None,
+    started: bool,
+    should_exit: bool,
+    web_port: int,
+) -> str | None:
+    """serve() 结束后的定性（纯函数，可测）：返回 None=合法退出，否则返回致命原因。
+
+    幽灵实例事故（2026-07-22 18:53）取证：uvicorn 绑定失败在 startup() 内部
+    `sys.exit(1)`——SystemExit 是 BaseException，旧代码 `except OSError/Exception`
+    全接不住；非主线程里 SystemExit 只杀线程本身，于是进程带着 Telegram 客户端
+    继续裸奔（对看门狗/坐席完全不可见，却抢同一个 TG 会话）。
+
+    合法退出只有一种：lifecycle 优雅停机（should_exit=True）。其余任何
+    「web 没起来/中途死了」都按致命处理。
+    """
+    if should_exit:
+        return None
+    if exc is None:
+        if started:
+            # 已成功启动且非异常返回：uvicorn 实现上只在 should_exit 时返回，
+            # 走到这里多半是竞态（should_exit 刚被清）；保守放行不误杀。
+            return None
+        return f"web 服务从未完成启动（疑似端口 {web_port} 绑定失败，被 uvicorn 内部吞掉）"
+    if isinstance(exc, SystemExit):
+        return (
+            f"uvicorn 启动失败 sys.exit(code={exc.code})"
+            f"（通常=端口 {web_port} 被占用；本进程疑似重复启动的幽灵实例）"
+        )
+    if isinstance(exc, OSError) and is_bind_address_in_use_error(exc):
+        return f"端口 {web_port} 已被占用（本进程疑似重复启动的幽灵实例）"
+    return f"web 服务异常终止: {exc!r}"
+
+
+def insecure_default_secret_exposed(secret: Any, host: Any, *, allow_insecure: str | None = None) -> bool:
+    """S2/S4 fail-safe 判定（纯函数）：出厂默认 session 密钥 + 绑定非本地地址 → True（应改绑回环）。
+
+    语义与 2026-09 前的内联判定**逐字相同**：只认字面 ``change-me-in-production``（键缺失按
+    默认算；空串/其它值不触发——服务器实例既有行为不变）。``allow_insecure`` 缺省读 env
+    ``ALLOW_INSECURE``；为 "1" 时永不触发（运维显式放行）。
+    """
+    from src.utils.config_manager import ConfigManager
+
+    flag = os.getenv("ALLOW_INSECURE") if allow_insecure is None else allow_insecure
+    if str(flag or "") == "1":
+        return False
+    exposed = str(host or "") not in ("127.0.0.1", "::1", "localhost", "")
+    value = ConfigManager.DEFAULT_WEB_SECRET if secret is None else str(secret)
+    return exposed and value == ConfigManager.DEFAULT_WEB_SECRET
+
+
+def handle_web_fatal(assistant: Any, reason: str, web_port: int, *, _exit=os._exit) -> None:
+    """web 管理后台致命失败的处置：默认整进程立刻退出（幽灵纵深防御）。
+
+    没有 web 的实例 = 看门狗探活/坐席/重启脚本都找不到它，却仍占着 Telegram
+    会话收发消息。与其留一个不可见的幽灵，不如立刻退出让 watchdog/操作员
+    走正规重启路径。`web_admin.exit_on_bind_fail: false` 可退回旧「只告警」
+    行为（不建议，仅留给特殊部署逃生）。
+    """
+    try:
+        cfg = (getattr(assistant.config, "config", {}) or {}).get("web_admin", {}) or {}
+    except Exception:
+        cfg = {}
+    if not cfg.get("exit_on_bind_fail", True):
+        assistant.logger.warning(
+            "Web 管理后台未启动（%s）；exit_on_bind_fail=false，按旧行为继续运行（进程将对看门狗不可见）",
+            reason,
+        )
+        return
+    try:
+        assistant.logger.critical(
+            "Web 管理后台致命失败（%s）——为防幽灵实例抢占 Telegram 会话，进程立即退出（exit 78）。"
+            "如确需换端口请改 web_admin.port；旧行为可用 web_admin.exit_on_bind_fail: false 恢复。",
+            reason,
+        )
+    except Exception:
+        pass
+    try:
+        from src.utils.host_alert import notify_host
+
+        notify_host(
+            "实例启动失败已自杀（防幽灵）",
+            f"web 端口 {web_port} 启动失败：{reason}",
+            key=f"web_bind_fatal:{web_port}",
+        )
+    except Exception:
+        pass
+    try:
+        import logging
+
+        logging.shutdown()
+    except Exception:
+        pass
+    _exit(78)
+
+
 def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port: int) -> threading.Thread:
     """在独立线程 + 独立 event loop 里跑 uvicorn server，避免与主 loop 抢占。
 
-    从 main.py 的 initialize() 原样抽出（行为不变）：主 loop 上的同步阻塞
-    （SQLite 写、BM25 全表扫描）不再卡 web 请求。绑定失败只告警、不挡启动。
+    主 loop 上的同步阻塞（SQLite 写、BM25 全表扫描）不再卡 web 请求。
+    2026-07-26 起：绑定失败不再「只告警继续跑」——那正是幽灵实例的温床，
+    见 classify_web_serve_outcome / handle_web_fatal。
     """
     def _run_web_in_thread():
+        exc: BaseException | None = None
         try:
             web_loop = asyncio.new_event_loop()
             assistant._web_loop = web_loop
@@ -38,17 +137,17 @@ def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port
                     web_loop.close()
                 except Exception:
                     pass
-        except OSError as e:
-            if is_bind_address_in_use_error(e):
-                assistant.logger.warning(
-                    "Web 管理后台未启动: 端口 %s 已被占用（通常为先前未退出的本程序实例）。"
-                    "请先结束占用进程: taskkill /F /IM python.exe 或修改 config.yaml 中 web_admin.port",
-                    web_port,
-                )
-            else:
-                assistant.logger.warning("Web 管理后台启动失败: %s", e)
-        except Exception as ex:
-            assistant.logger.warning("Web 管理后台启动跳过: %s", ex)
+        except BaseException as e:  # 必须含 SystemExit：uvicorn bind 失败的真实路径
+            exc = e
+        reason = classify_web_serve_outcome(
+            exc,
+            bool(getattr(server, "started", False)),
+            bool(getattr(server, "should_exit", False)),
+            web_port,
+        )
+        if reason is None:
+            return
+        handle_web_fatal(assistant, reason, web_port)
 
     web_thread = threading.Thread(
         target=_run_web_in_thread,
@@ -221,6 +320,21 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     web_app.state.inbox_store = assistant.inbox_store
                     assistant.logger.info("统一收件箱持久层已挂载（%s）", _inbox_db)
 
+                    # #155（2026-09-03 人设归属层级）：把人设档里的双向称呼
+                    # 一次性落成其已绑定会话的**联系人级默认值**——爱称是客户
+                    # 关系属性，此后各会话可独立改。幂等（联系人级已有值不覆盖）、
+                    # 只搬同一个值，迁移前后生效爱称逐字节一致。
+                    try:
+                        from src.inbox.contact_names import migrate_all_personas
+                        _cn_n = migrate_all_personas(assistant.inbox_store)
+                        if _cn_n:
+                            assistant.logger.info(
+                                "#155 联系人级称呼存量迁移完成：%d 个会话", _cn_n)
+                    except Exception:
+                        assistant.logger.debug(
+                            "#155 联系人级称呼迁移跳过（不影响启动）",
+                            exc_info=True)
+
                     # ── Phase B：统一草稿/审批层（read-through 聚合 4 平台源表） ──
                     from src.inbox.drafts import DraftService
                     from src.web.routes.drafts_routes import register_drafts_routes
@@ -247,7 +361,20 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         _as_cfg = (assistant.config.config or {}).get(
                             "inbox", {}
                         ).get("l2_autosend", {}) or {}
-                        if _as_cfg.get("enabled", True):
+                        # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
+                        # 档位不含 ai_autosend → worker 不启（AI 拟稿/自动发送属 pro+）。
+                        try:
+                            from src.licensing.feature_gate import (
+                                feature_enabled as _feat_on,
+                            )
+                            _autosend_allowed = _feat_on(
+                                "ai_autosend", assistant.config.config or {})
+                        except Exception:
+                            _autosend_allowed = True
+                        if not _autosend_allowed:
+                            assistant.logger.info(
+                                "AutosendWorker 跳过：授权档位未含 ai_autosend（feature gate）")
+                        elif _as_cfg.get("enabled", True):
                             # H3：合并 auto_draft 清理配置到 worker cfg
                             _ad_cleanup = (assistant.config.config or {}).get(
                                 "inbox", {}
@@ -267,41 +394,155 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 build_autosend_typing_cb,
                             )
                             _send_cb, _translate_cb = build_autosend_callbacks(assistant, web_app, _deliver)
+                            # 人工通过专用真发回调：deliver=false 时自动链 _send_cb=None，
+                            # 但坐席点「通过」是人的明示决定（手动发送端点本就不受 deliver
+                            # 约束），必须能真发——否则「AI 拟稿 + 人审后发」这个最谨慎档位
+                            # 里发送按钮空转。
+                            # P1 2026-08-12：人工链一律独立构建 origin="manual"——
+                            # 人工预留额度（reserve_for_manual）下，坐席通过的草稿与
+                            # 手动发送同待遇（用满额度），不再与自动链共享让路口径；
+                            # 构建失败回落共享自动链回调（能力不丢，只丢 manual 待遇）。
+                            try:
+                                _human_send_cb, _ = build_autosend_callbacks(
+                                    assistant, web_app, True, origin="manual")
+                            except Exception:
+                                _human_send_cb = _send_cb
+                                assistant.logger.debug(
+                                    "人工通过真发回调构建失败（回落自动链回调）",
+                                    exc_info=True)
                             # 拟人已读回执 + 打字状态：仅真投递模式需要（DB-only 不碰平台）。
+                            # always=True：开关（mark_read_before_reply / typing_indicator）
+                            # 由 worker 运行时自持（apply_humanize_flags 可热更）——这里只
+                            # 决定「能力在不在」，不再把开关冻进「回调建不建」。
                             _mark_read_cb = (
-                                build_autosend_mark_read_cb(assistant)
+                                build_autosend_mark_read_cb(assistant, always=True)
                                 if _deliver else None
                             )
                             _typing_cb = (
-                                build_autosend_typing_cb(assistant)
+                                build_autosend_typing_cb(assistant, always=True)
                                 if _deliver else None
                             )
-                            # 人设解析器（人设化节奏参数 + 观测分维）：按 (platform,account_id)
-                            # 解析账号人设 id。仅投递模式需要；失败/未就绪回落空（顶层默认）。
+                            # 人设解析器（人设化节奏参数 + 观测分维）：按 (platform,
+                            # account_id, chat_key) 解析生效人设 id（含会话级覆写，
+                            # 节奏参数跟随实际说话的人设）。仅投递模式需要；
+                            # 失败/未就绪回落空（顶层默认）。
                             _persona_resolver = None
                             if _deliver:
-                                def _persona_resolver(platform, account_id, _cfg=assistant.config.config or {}):
+                                def _persona_resolver(platform, account_id, chat_key="", _cfg=assistant.config.config or {}):
                                     try:
                                         from src.ai.persona_voice import (
-                                            resolve_account_persona_id as _rapi,
+                                            resolve_effective_persona_id as _repi,
                                         )
-                                        return _rapi(_cfg, platform, account_id) or ""
+                                        return _repi(
+                                            _cfg, platform, account_id,
+                                            str(chat_key or ""),
+                                        ) or ""
                                     except Exception:
                                         return ""
+                            # 出站近重复守卫配置（inbox.outbound_dup_guard，默认关）：
+                            # worker 只收 l2_autosend 子段拿不到全局树，这里解析注入。
+                            try:
+                                from src.inbox.outbound_dup_guard import (
+                                    attach_rewrite_fn as _dup_attach_rw,
+                                    resolve_guard_cfg as _dup_cfg_fn,
+                                )
+                                _dup_guard_cfg = _dup_attach_rw(
+                                    _dup_cfg_fn(assistant.config.config or {}),
+                                    getattr(assistant, "ai_client", None))
+                            except Exception:
+                                _dup_guard_cfg = None
+                            # 新入站过期守卫配置（inbox.l2_autosend.fresh_guard，默认关）：
+                            # 完整树解析（含 auto_draft.min_text_len 镜像——判「新入站会不会
+                            # 触发新拟稿」用），worker 只收 l2_autosend 子段拿不到，这里注入。
+                            try:
+                                from src.inbox.draft_fresh_guard import (
+                                    parse_fresh_guard_cfg as _fresh_cfg_fn,
+                                )
+                                _fresh_guard_cfg = _fresh_cfg_fn(
+                                    assistant.config.config or {})
+                            except Exception:
+                                _fresh_guard_cfg = None
+                            # 工作时间班表 provider（inbox.work_schedule，默认关）：
+                            # 每次调用活读 config 根（overlay 热重载就地 merge，
+                            # 闭包持 config_manager 引用天然看到新值）——班表改动
+                            # 免重启生效。worker 只收 l2_autosend 子段拿不到全局树，
+                            # 与 dup/fresh 注入同因，但作息要热调所以给闭包不给快照。
+                            def _ws_provider(_cm=assistant.config):
+                                try:
+                                    from src.inbox.work_hours_gate import (
+                                        work_schedule_cfg,
+                                    )
+                                    return work_schedule_cfg(
+                                        getattr(_cm, "config", None) or {})
+                                except Exception:
+                                    return {}
+                            # 驾驶权互斥锁 guard（surface_fusion P0，默认关）：
+                            # 闭包活读 config 根（与 _ws_provider 同因）——overlay
+                            # 开关/切换驾驶权免重启即时生效；判定 fail-open 在模块内。
+                            def _pilot_guard(platform, account_id,
+                                             _cm=assistant.config):
+                                try:
+                                    from src.integrations.surface_fusion import (
+                                        autosend_blocked,
+                                        note_pilot_yield,
+                                    )
+                                    blocked = autosend_blocked(
+                                        getattr(_cm, "config", None) or {},
+                                        platform, account_id)
+                                    if blocked:
+                                        # 让位观测（P4）：与 A 线同一读数面
+                                        note_pilot_yield(
+                                            platform, account_id, "autosend")
+                                    return blocked
+                                except Exception:
+                                    return False
                             _as_worker = AutosendWorker(
                                 draft_service=draft_svc,
                                 config=_merged_as_cfg,
                                 send_callback=_send_cb,
+                                human_send_callback=_human_send_cb,
                                 translate_callback=_translate_cb,
                                 mark_read_callback=_mark_read_cb,
                                 typing_callback=_typing_cb,
                                 persona_resolver=_persona_resolver,
+                                dup_guard_cfg=_dup_guard_cfg,
+                                fresh_guard_cfg=_fresh_guard_cfg,
+                                work_schedule_provider=_ws_provider,
+                                pilot_guard=_pilot_guard,
+                                app=web_app,   # Q-23 #303：软回应人设口吻短生成要拿 skill_manager
                             )
                             web_app.state.autosend_worker = _as_worker
                             # C3：注册 L2 事件驱动钩子，新草稿落库时立即唤醒
                             assistant.inbox_store.register_l2_callback(
                                 _as_worker.notify_new_l2
                             )
+                            # 2026-07-29：人工通过 inbox 草稿 → 经同一投递链真发送
+                            # （修「坐席点发送只标记不发」断链）。**刻意不受 deliver 闸门**
+                            # ——deliver 管「AI 可否自己发」，人工通过是人的明示决定；
+                            # 想恢复「仅标记」旧语义置 inbox.auto_draft.human_deliver=false。
+                            _human_deliver_on = bool(
+                                ((assistant.config.config or {}).get("inbox", {})
+                                 .get("auto_draft", {}) or {}).get("human_deliver", True))
+                            # 陈旧草稿护栏：太老的稿子原样发＝穿帮（实测队列里有 8.9 天的
+                            # 「我刚到家娃在拼乐高」）。0 = 关闭。见 DraftService._stale_check。
+                            _stale_h = float(
+                                ((assistant.config.config or {}).get("inbox", {})
+                                 .get("auto_draft", {}) or {}).get(
+                                    "stale_approve_hours", 24) or 0)
+                            if _human_deliver_on and _human_send_cb is not None:
+                                try:
+                                    # Q-23 #303：守卫软回应改走 stage=soft_reply 单一闸门
+                                    # （policy(kind=soft_reply) + 人工优先闸 + 场景闸），不再复用人工通过直投。
+                                    draft_svc.set_inbox_deliver_callback(
+                                        _as_worker.deliver_human_approved,
+                                        stale_approve_hours=_stale_h,
+                                        soft_reply_cb=_as_worker.deliver_soft_reply)
+                                except Exception:
+                                    assistant.logger.debug(
+                                        "人工通过投递回调注入失败", exc_info=True)
+                            elif not _human_deliver_on:
+                                assistant.logger.info(
+                                    "人工通过投递已按配置关闭（human_deliver=false，仅 DB 标记）")
                             asyncio.ensure_future(_as_worker.run())
                             assistant.logger.info(
                                 "AutosendWorker 已启动（min=%ss max=%ss deliver=%s）",
@@ -311,6 +552,66 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             )
                     except Exception:
                         assistant.logger.debug("AutosendWorker 启动跳过", exc_info=True)
+
+                    # ── 人审档兜底：worker 没创建时，仍要有人消费「人工通过」──────
+                    # `l2_autosend.enabled=false`（或授权档位不含 ai_autosend）时上面
+                    # 整块跳过 ⇒ 坐席点「通过」只把 DB 标成 approved，**没有任何消费者
+                    # 真发出去**（客户什么也没收到、坐席以为发了）。而「AI 拟稿 + 人审后发、
+                    # 不要任何自动发送」恰恰是最谨慎客户最可能选的部署形态。
+                    # 这里建一个 deliver_only 实例：**不 run() 自动循环**，只作人工投递载体。
+                    # 放同一 state 键是刻意的（观测链零改动全通，见 AutosendWorker.__init__）。
+                    # 人工发送不属 ai_autosend 授权范畴——手动发送端点本就不受其约束。
+                    try:
+                        if getattr(web_app.state, "autosend_worker", None) is None:
+                            _ib_cfg = (assistant.config.config or {}).get("inbox", {}) or {}
+                            _ad_cfg = _ib_cfg.get("auto_draft", {}) or {}
+                            if (_ad_cfg.get("enabled", True)
+                                    and bool(_ad_cfg.get("human_deliver", True))):
+                                from src.inbox.autosend_worker import (
+                                    AutosendWorker as _AW,
+                                )
+                                from src.inbox.autosend_helpers import (
+                                    build_autosend_callbacks as _bac,
+                                )
+                                _hs_cb, _htr_cb = _bac(
+                                    assistant, web_app, True, origin="manual")
+                                if _hs_cb is not None:
+                                    _do_worker = _AW(
+                                        draft_service=draft_svc,
+                                        config={"enabled": False},
+                                        send_callback=None,      # 自动链刻意无能力
+                                        human_send_callback=_hs_cb,
+                                        translate_callback=_htr_cb,
+                                        deliver_only=True,
+                                        app=web_app,
+                                    )
+                                    web_app.state.autosend_worker = _do_worker
+                                    # Q-23 #303：deliver_only 实例同样承载软回应闸门——档位非 auto_ai
+                                    # 时闸内即转审核候选，不会因「自动发送未启用」而绕闸直投。
+                                    draft_svc.set_inbox_deliver_callback(
+                                        _do_worker.deliver_human_approved,
+                                        stale_approve_hours=float(
+                                            _ad_cfg.get("stale_approve_hours", 24) or 0),
+                                        soft_reply_cb=_do_worker.deliver_soft_reply)
+                                    assistant.logger.info(
+                                        "人工通过投递已接线（deliver_only；自动发送未启用）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "人工投递兜底接线跳过", exc_info=True)
+
+                    # ── P1 2026-08-22「一键全自动」热接线闭包 ─────────────
+                    # deliver/worker 此前构造期冻结（开关写完 overlay 要等重启）。
+                    # 路由（值守三档/能力看板/向导档位）写完 overlay 后调它，
+                    # 真发能力就地武装/撤除——「点了全自动」当场生效。
+                    try:
+                        from src.inbox.autosend_helpers import (
+                            make_autosend_rewire,
+                        )
+                        web_app.state.autosend_rewire = make_autosend_rewire(
+                            assistant, web_app)
+                    except Exception:
+                        assistant.logger.debug(
+                            "autosend 热接线闭包注册跳过", exc_info=True)
 
                     # ── K1+K2：SLAWatcher 草稿 SLA 预警 + 自动再分配 ──
                     try:
@@ -420,6 +721,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 incident_retention_days=float(_hw_cfg.get("incident_retention_days", 30)),
                                 weekly_report_enabled=bool(_hw_cfg.get("weekly_report_enabled", False)),
                                 weekly_interval_sec=float(_hw_cfg.get("weekly_interval_sec", 604800)),
+                                daily_report_enabled=bool(_hw_cfg.get("daily_report_enabled", False)),
+                                daily_interval_sec=float(_hw_cfg.get("daily_interval_sec", 86400)),
                             )
                             web_app.state.health_watchdog = _hw
                             asyncio.ensure_future(_hw.run())
@@ -430,6 +733,25 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             )
                     except Exception:
                         assistant.logger.debug("HealthWatchdog 启动跳过", exc_info=True)
+
+                    # ── 实施97：官网中继设备端（relay.enabled）——把企微回调/成员登录回跳带进 NAT 后的本实例 ──
+                    try:
+                        from src.integrations.relay_client import RelayClient, ensure_identity, relay_config
+                        _rc = relay_config(assistant.config.config or {})
+                        if _rc["enabled"]:
+                            _dev_id, _dev_secret = ensure_identity(assistant.config)
+                            _web = (assistant.config.config or {}).get("web_admin") or {}
+                            _relay = RelayClient(
+                                relay_url=_rc["url"], device_id=_dev_id, secret=_dev_secret,
+                                local_base=f"http://127.0.0.1:{int(_web.get('port') or 18799)}",
+                                register_key=_rc["register_key"], ping_sec=_rc["ping_sec"],
+                                app_version=str(getattr(web_app.state, "version", "") or ""),
+                            )
+                            web_app.state.relay_client = _relay
+                            asyncio.ensure_future(_relay.run_forever())
+                            assistant.logger.info("官网中继设备端已启动：%s → 公网前缀 %s", _rc["url"], _relay.public_base)
+                    except Exception:
+                        assistant.logger.debug("官网中继设备端启动跳过", exc_info=True)
 
                     # ── N2：ScheduledReporter 定时简报推送 ─────────────
                     try:
@@ -454,9 +776,69 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     except Exception:
                         assistant.logger.debug("ScheduledReporter 启动跳过", exc_info=True)
 
+                    # ── P2 2026-08-09：目标结算/提醒扫描（常备循环）─────────
+                    # 刻意不搭 ScheduledReporter 便车——那个调度器受 report.enabled
+                    # 闸（生产常年关），P0 首版挂那里导致扫描从未运行（实锤见
+                    # goals/notify.py 模块注释）。与 care 引擎同哲学：循环无条件
+                    # 启动、每 tick 现读配置自闸（goals/sweep/notify 全关＝零开销），
+                    # 开关经 overlay 热重载免重启。state 挂 app.state 当心跳快照。
+                    try:
+                        from src.companion.goals.notify import run_scan_loop
+                        _gscan_state: dict = {}
+                        web_app.state.goal_scan_state = _gscan_state
+                        asyncio.ensure_future(run_scan_loop(
+                            assistant.config,
+                            inbox_store=web_app.state.inbox_store,
+                            state=_gscan_state,
+                        ))
+                        assistant.logger.info(
+                            "目标结算/提醒扫描循环已挂载（常备接线，配置热自闸）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "目标扫描循环启动跳过", exc_info=True)
+
+                    # ── P3 2026-08-09：工作链推进常备循环 ────────────────
+                    # 同一次事故的同类病：链推进原挂 ScheduledReporter
+                    # （report.enabled 闸，生产常年关）＝坐席点「启动工作链」
+                    # 后步骤永不推进。迁到常备循环（inbox.workflows.autorun
+                    # 默认开可热关）。生产现状 4 条种子链 0 执行 → 迁移当天
+                    # 零行为变化，链从此「点了真会走」。
+                    try:
+                        from src.inbox.workflow_autorun import run_workflow_loop
+                        _wfrun_state: dict = {}
+                        web_app.state.workflow_autorun_state = _wfrun_state
+                        asyncio.ensure_future(run_workflow_loop(
+                            web_app.state, state=_wfrun_state))
+                        assistant.logger.info(
+                            "工作链推进循环已挂载（常备接线，配置热自闸）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "工作链推进循环启动跳过", exc_info=True)
+
                     # E2/F2：按 auto_draft 配置注册入站新消息 → 自动草稿生成回调
                     from src.inbox.autodraft_helpers import setup_auto_draft
                     setup_auto_draft(assistant, draft_svc, web_app)
+
+                    # 复班补觉重拟接线（work_schedule.off_hours.catch_up）：
+                    # setup_auto_draft 把拟稿回调存进 app.state.auto_draft_cb 后，
+                    # 回填给 AutosendWorker——重拟走**原拟稿产线**（enrich/人设/
+                    # 档位封顶全生效）。skip_companion_yield=True：补觉重拟的消息
+                    # A 线早已跳过（当时休息中），双轨互斥的「让位」在此必须旁路，
+                    # 否则 TG 陪伴号的隔夜消息作废后无人重拟=静默丢回复。
+                    # 任一句柄缺席（auto_draft 关/worker 没建）→ 不接线，
+                    # worker 侧「未注入就绝不作废」的铁律兜底。
+                    try:
+                        _adc = getattr(web_app.state, "auto_draft_cb", None)
+                        _asw = getattr(web_app.state, "autosend_worker", None)
+                        if callable(_adc) and _asw is not None and hasattr(
+                                _asw, "set_catchup_regenerate_cb"):
+                            def _catchup_regen(conv, text, _cb=_adc):
+                                _cb(conv, text, skip_companion_yield=True)
+                                return True
+                            _asw.set_catchup_regenerate_cb(_catchup_regen)
+                    except Exception:
+                        assistant.logger.debug(
+                            "补觉重拟回调接线跳过", exc_info=True)
 
                     # I3：预置回复模板库（幂等，id 冲突则跳过）
                     try:
@@ -654,6 +1036,16 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                 web_app.state.skill_manager = assistant.skill_manager
             web_port = int(web_cfg.get("port", 8080))
             web_host = web_cfg.get("host", "127.0.0.1")
+            # S2/S4 fail-safe：默认 secret_key + 绑定非本地地址 = 危险暴露（session 可伪造）。
+            # 除非显式 ALLOW_INSECURE=1，否则降级绑回 127.0.0.1 并告警（不 crash 整进程）。
+            # 桌面态走不到这里：ConfigManager._ensure_web_secret_key 首启已随机生成（L-6 D）。
+            if insecure_default_secret_exposed(web_cfg.get("secret_key"), web_host):
+                assistant.logger.error(
+                    "[SECURITY] 检测到默认 secret_key 且绑定非本地地址 %s；为防不安全暴露，"
+                    "Web 后台改绑 127.0.0.1。请配置随机 web_admin.secret_key，或设 ALLOW_INSECURE=1。",
+                    web_host,
+                )
+                web_host = "127.0.0.1"
             uvi_config = uvicorn.Config(web_app, host=web_host, port=web_port, log_level="warning")
             server = uvicorn.Server(uvi_config)
             assistant._web_server = server

@@ -19,7 +19,7 @@
   },
   "unified_inbox": {
     "enabled": true,
-    "label": "统一收件箱",
+    "label": "",
     "path": "/workspace",
     "lang": ""
   },
@@ -27,10 +27,11 @@
     "enabled": true
   },
   "embedded_official_pages": {
-    "enabled": false,
-    "_note": "桌面默认仅显示统一收件箱（与网页同源同款）。置 true 可恢复左侧账号栏 + 内嵌官方 Telegram/WhatsApp 网页 Tab（免安卓真机扫码 + 注入翻译/智能回复）。"
+    "enabled": true,
+    "_note": "桌面默认仅显示统一收件箱（与网页同源同款）。置 true 启用内嵌官方网页能力（免安卓真机扫码 + 注入翻译/智能回复）。2026-08-11 为验收 P0-P3（双语气泡/FAB/账号栏健康点）临时开启；同日双栏融合后本开关的界面代价≈0——左侧账号栏已改为 stage 顶部按需标签条（零内嵌标签时自动隐藏，与网页版零差异），入口在收件箱账号抽屉「打开官方网页版」。2026-08-13：Messenger/IG/X/Zalo 内嵌标「人工」（platform-caps assistOnly）——本页可聊/翻译，全自动只认统一收件箱+sidecar；勿把官方网页登录当成收件箱会话。"
   },
   "debug": false,
+  "_onboarding_note": "首启完成后向导会写入 onboarding:{completed,completed_at,edition}；打包态默认 managed（见 main.js AITR_MANAGED_EDITION），开发态 npm start 为自建。勿在此种子写 managed:true，否则开发态也会藏掉 AI/令牌调试字段。",
   "platforms": [
     {
       "id": "telegram",

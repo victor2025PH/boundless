@@ -1,0 +1,92 @@
+# 获客系 · 智控 MatrixX —— 「多号管理切到崩溃」痛点线
+#
+# 弧线设计（这是整套模板的范式，改剧本请照此结构）：
+#   吐槽痛点 → 有人附和（不是一个人的问题）→ 有人问怎么解 → 种草者浮出
+#   → 质疑（会不会封号）→ 化解 → 追问细节 → 给具体体感 → 半信半疑但记住了 → 自然散场
+#
+# 三条硬规矩：
+#   1) intent 写**意图**不写台词——台词由各号人设 LLM 现场生成，同一剧本每次演出都不同，
+#      这是反「模板化识别」的根本（写死台词＝给平台送特征）。
+#   2) soft 前低后高再回落——一上来就推＝广告，一路推到底＝更像广告。
+#   3) 必须有 skeptic 且质疑要真的扎人——全员好评是最容易被识破的结构。
+id: growth_matrixx
+name: 多号管理痛点 · 智控 MatrixX
+system: growth
+products:
+  - matrixx
+soft_ad_level: 4
+
+roles:
+  - slot: asker
+    desc: 抛痛点的人。语气是吐槽/求助，不懂产品，不要替产品说话。
+  - slot: advocate
+    desc: 真在用的人。分享体感而非参数，不背话术，不发链接。
+  - slot: bystander
+    desc: 围观附和的人。补充自己踩过的坑，让痛点显得普遍。
+  - slot: skeptic
+    desc: 泼冷水的人。质疑要具体到能扎人（封号、挂机、价格），被化解后也别秒变吹捧。
+
+beats:
+  - id: b1_pain
+    role: asker
+    intent: 吐槽手上账号越来越多，来回切换很容易把消息发错人。用自己刚踩坑的口吻抱怨，绝对不要提任何工具或产品。
+    soft: 0
+    pace: chatty
+
+  - id: b2_echo
+    role: bystander
+    intent: 附和这个痛点，补一个自己踩过的具体小事故（比如把给A客户的话发给了B）。不要提解决方案。
+    soft: 0
+    pace: chatty
+
+  - id: b3_ask_how
+    role: asker
+    intent: 问大家平时都怎么管这么多号的，是不是只能靠手机排一排硬切。
+    soft: 0
+    pace: normal
+
+  - id: b4_reveal
+    role: advocate
+    intent: 顺着说自己现在把所有号的消息收在一个后台里看，不用来回切。像随口分享，不要介绍功能清单，不要说产品全名之外的宣传语。
+    product: matrixx
+    soft: 3
+    pace: normal
+
+  - id: b5_doubt
+    role: skeptic
+    intent: 质疑这类工具的风险——会不会被判定为机器人挂机导致封号。语气是真的担心，不是抬杠。
+    soft: 0
+    pace: chatty
+
+  - id: b6_resolve
+    role: advocate
+    intent: 化解这个担心——说明它不是群发机器人，消息还是一条条正常发，只是聚在一个地方看和回。承认风险取决于怎么用，不要打包票。
+    product: matrixx
+    soft: 4
+    pace: slow
+
+  - id: b7_detail
+    role: bystander
+    intent: 被说动一点，追问实际能同时带多少个号、会不会卡。
+    soft: 1
+    pace: normal
+
+  - id: b8_proof
+    role: advocate
+    intent: 给一个具体的使用体感（比如一个人看十几个号的消息不乱、谁该回一眼能看到），可以提到有个总览界面。避免数字堆砌和参数表。
+    product: matrixx
+    media: matrixx_dashboard
+    soft: 5
+    pace: normal
+
+  - id: b9_reserve
+    role: skeptic
+    intent: 承认听起来有点意思，但保留态度，说还是得自己看过才知道。不要转变成吹捧。
+    soft: 1
+    pace: chatty
+
+  - id: b10_close
+    role: asker
+    intent: 说改天去了解一下，把话题自然收住。不要发链接，不要喊人私聊，不要总结陈词。
+    soft: 2
+    pace: slow

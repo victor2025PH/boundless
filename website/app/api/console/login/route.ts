@@ -5,6 +5,7 @@
 // 防爆破沿用单 IP 滑动窗口（10 分钟内最多 8 次失败）。
 // ⚠️ 皇冠资产入口：生产必须独立设置 CONSOLE_KEY 并在反代层配 IP 白名单。
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { CONSOLE_COOKIE, consoleKeys } from "@/lib/console-auth";
 import {
   SESSION_TTL_MS,
@@ -24,12 +25,6 @@ export const dynamic = "force-dynamic";
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_FAILS = 8;
 const fails = new Map<string, number[]>();
-
-function clientIp(req: NextRequest): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
-}
 
 function tooMany(ip: string): boolean {
   const now = Date.now();

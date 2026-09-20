@@ -1,0 +1,48 @@
+---
+description: 二进制媒体落盘必须验 magic bytes——HTTP 200 + 文件尺寸不是验证（2026-08-13 盲测包 JSON 冒充 wav 事故沉淀）
+alwaysApply: true
+---
+
+# 媒体产物验证纪律（2026-08-13 事故沉淀）
+
+## 事故
+
+盲测包两批共 18 个「.wav」全是 JSON：`/api/tts_only` 返回的是
+**JSON 信封 `{ok, audio_base64, format, profile, elapsed_ms}`**（content-type
+`application/json`），不是原始音频流；`Invoke-WebRequest -OutFile x.wav`
+把信封原样落盘。「验证」只看了 HTTP 200 + 文件 KB 数——对 base64 信封同样
+成立（比真音频还大 1/3），零鉴别力。首个样本没验出来后，同一坏模式复制了
+20+ 个文件（QA 批、恢复验证、两批盲测）才被另一条线发现。
+
+## 铁律
+
+1. **凡 HTTP 拉取媒体（音频/图片/视频）落盘，先看 `Content-Type`**：
+   `application/json` = 信封，音频在字段里（hub tts_only 是 `audio_base64`，
+   base64 解码后落盘）；绝不 `-OutFile` 直存未确认过 content-type 的响应。
+2. **落盘后必验 magic bytes 才许报 OK**：WAV=`RIFF`、OGG=`OggS`、MP3=`ID3`/0xFFFB、
+   PNG=`\x89PNG`、JPEG=0xFFD8。尺寸/HTTP 状态码/耗时都不构成内容验证。
+3. **首个样本验通过前，禁止批量生产**：验证方法本身错了，批量只会复制错误。
+4. 采样批用现成工具别手搓内联命令：`engines/chengjie/tools/hub_tts_fetch.py`
+   （tts_only 信封解码 + RIFF 验证 + 最小尺寸守卫，任一步失败即非零退出）。
+
+## hub TTS 契约备忘（176:9000）
+
+- `POST /api/tts_only` → JSON 信封，音频字段 `audio_base64`（`format` 参数只
+  决定信封内音频的编码，不改变信封本身）。
+- 引擎侧真相（合成是否发生/用哪个引擎/耗时）看 hub 日志与 `elapsed_ms`，
+  与「产物文件是否有效」是两回事，**分别验证**。
+
+## 引擎归属纪律（同日第二起事故沉淀）
+
+「合成成功」≠「目标引擎合成」。hub 引擎解析是 **prefer 语义**：voice_route
+质量轨引擎离线（如被闲时泊车）→ **静默回落 fish**，响应无引擎标签——
+2026-08-13 「index 对照组」6 样全是 fish 冒充（44.1kHz），老板耳朵才发现。
+
+1. 采样批必须显式带 `tts_engine`（index_tts/moss_ttsd/fish_speech），
+   并在合成前 probe 目标引擎在线。
+2. 产物验**采样率指纹**定归属：IndexTTS-2=22050 / MOSS=24000 / fish=44100。
+3. 情绪不是默认送的：`emotion` 不传 = 全程平直（档上情绪参考音再全也不用）；
+   带情绪的句子必须显式传 emotion。
+4. 给人耳前先机筛：`best_of>1` 信封自带 `picked_cosine`，或独立
+   `POST /api/clone_score {profile, audio_base64}`——声纹分不过地板（0.80）
+   的样本不许进裁决轮，人耳裁决轮次是稀缺资源。

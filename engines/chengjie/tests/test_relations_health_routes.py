@@ -588,3 +588,71 @@ def test_health_board_payer_sort_disabled_by_default(client):
     _attach_entitlements(client)
     r = client.get("/api/relations/health-board?limit=5&scan=50")
     assert r.json().get("payer_sort_priority") is False
+
+
+# ── RH-P2：挽回效果统计（reactivation_sent → 窗口内 msg_in）────────
+
+def _event_at(client, jid, etype, ts):
+    store = client.store
+    with store._lock:  # noqa: SLF001
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO journey_events(event_id, journey_id, trace_id, "
+            "event_type, payload_json, ts) VALUES (?, ?, '', ?, '{}', ?)",
+            (f"wb_{jid}_{etype}_{int(ts)}", jid, etype, int(ts)),
+        )
+        store._conn.commit()  # noqa: SLF001
+
+
+def test_winback_stats_empty(client):
+    d = client.get("/api/relations/winback-stats").json()
+    assert d["ok"] is True
+    assert d["sent"] == 0 and d["replied"] == 0 and d["pending"] == 0
+    assert d["rate"] is None
+
+
+def test_winback_replied_pending_and_rate(client):
+    now = _t.time()
+    # A：10 天前发、9 天前客户回话 → 挽回成功（matured+replied）
+    ja = _seed_journey(client.store, client.gateway, "wb_a",
+                       in_n=10, out_n=10, last_offset_days=12)
+    _event_at(client, ja, "reactivation_sent", now - 10 * 86400)
+    _event_at(client, ja, "msg_in", now - 9 * 86400)
+    # B：8 天前发、无回话 → 观察窗已满，计失败（matured 不 replied）
+    jb = _seed_journey(client.store, client.gateway, "wb_b",
+                       in_n=10, out_n=10, last_offset_days=10)
+    _event_at(client, jb, "reactivation_sent", now - 8 * 86400)
+    # C：1 天前发、无回话 → 窗未满，pending 不进分母
+    jc = _seed_journey(client.store, client.gateway, "wb_c",
+                       in_n=10, out_n=10, last_offset_days=10)
+    _event_at(client, jc, "reactivation_sent", now - 1 * 86400)
+
+    d = client.get(
+        "/api/relations/winback-stats?days=30&reply_window_days=7").json()
+    assert d["sent"] == 3
+    assert d["replied"] == 1
+    assert d["matured"] == 2
+    assert d["pending"] == 1
+    assert d["rate"] == 0.5
+
+
+def test_winback_reply_outside_window_not_counted(client):
+    now = _t.time()
+    jd = _seed_journey(client.store, client.gateway, "wb_d",
+                       in_n=10, out_n=10, last_offset_days=25)
+    _event_at(client, jd, "reactivation_sent", now - 18 * 86400)
+    _event_at(client, jd, "msg_in", now - 10 * 86400)  # 发送后第 8 天才回（>7 窗）
+    d = client.get(
+        "/api/relations/winback-stats?days=30&reply_window_days=7").json()
+    assert d["sent"] == 1
+    assert d["replied"] == 0
+    assert d["matured"] == 1
+    assert d["rate"] == 0.0
+
+
+def test_winback_days_window_filters_old_sends(client):
+    now = _t.time()
+    je = _seed_journey(client.store, client.gateway, "wb_e",
+                       in_n=10, out_n=10, last_offset_days=45)
+    _event_at(client, je, "reactivation_sent", now - 40 * 86400)
+    d = client.get("/api/relations/winback-stats?days=30").json()
+    assert d["sent"] == 0

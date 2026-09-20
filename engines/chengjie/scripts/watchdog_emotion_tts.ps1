@@ -27,7 +27,7 @@
 
 param(
     [string]$BaseUrl         = "http://127.0.0.1:7852",
-    [string]$RefWav          = "D:\workspace\telegram-mtproto-ai\config\voice_refs\lin_xiaoyu.wav",
+    [string]$RefWav          = "D:\chengjie-instances\zhiliao\data\config\voice_refs\lin_xiaoyu.wav",
     [int]   $SynthTimeoutSec = 120,
     [int]   $StrikeLimit     = 2,
     [int]   $RestartCooldownMin = 30,

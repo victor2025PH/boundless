@@ -1,0 +1,509 @@
+<script>
+/* ── 窗口唯一性 helper（P0-A 入口收敛，2026-08-03）────────────────────────────
+   目标：管理后台 / 坐席工作台各自只保留一个窗口——入口点击「复用并聚焦」已开的
+   那个，而不是每次 target=_blank 新开一个标签页（窗口越积越多、双响铃、多份轮询
+   负载、multiwin 弹窗的共同根源）。
+
+   机制＝HTML 命名窗口（window.name 自报 + window.open('', name) 句柄查找）：
+   · 三个稳定窗口名（带 host 防智聊/通译双实例串扰），窗口总数就此封顶：
+       aitr_workspace::<host> ＝ 坐席收件箱（仅精确路径 /workspace）——聊天现场
+         （滚动位/输入草稿）是全站最贵的状态，绝不被子页跳转挤占；
+       aitr_wsub::<host>      ＝ 工作台子页共用辅助窗（/workspace/drafts、/tasks、
+         /dash…）——待办药丸这类子页深链全进同一个标签页轮换，不再每点一个新开一个；
+       aitr_admin::<host>     ＝ 管理后台（base.html 外壳任意页）。
+     目标窗口按 URL 路径自动路由（调用方只声明 workspace/admin 两类语义即可）。
+   · 点击入口 → 取既有句柄：
+       已在目标页面 → 只 focus() 不重载；
+       深链（带 ?/#，如 ?conv=）→ 导航该命名窗口再聚焦（复用标签页，不新开）；
+       拿不到句柄（弹窗拦截等）→ 返回默认行为，优雅降级回旧体验
+       （_blank / 本页跳转），绝不吞点击；桌面壳/iframe 在入口处整体退出（见下）；
+       PWA 应用窗（任务栏固定的「坐席工作台」）内主入口改为本窗原地导航（见下）。
+   · 修饰键/中键点击（用户明确要新开）不拦截。
+
+   边界（如实声明）：命名查找只在同一浏览上下文组内成立——手动输网址开出的孤儿
+   窗口彼此找不到，那一层由 workspace_base 的 __wsMultiWin 协调器兜底（自动接管/
+   待机，见该文件 v2 注释）。iframe 内嵌（AI Studio 等）不参与，防止把宿主页当
+   命名窗口劫持。 */
+(function(){
+  /* 兜底桩先行：任何环境下这些函数都可调（onclick 引用它们，缺定义会抛 ReferenceError
+     触发 dead-click 红条）。降级环境（iframe / 桌面壳）保持桩＝一律走链接默认行为。 */
+  window.__openUniqueUrl = function(){ return false; };
+  window.__openUnique = function(){ return true; };
+  window.__wsGoHome = function(){ return false; };
+
+  if (window.top !== window) return;   /* iframe 内嵌（AI Studio 等）不参与命名与复用 */
+
+  /* 桌面壳判定 + 壳能力标记（2026-08-29）：wsRoute＝壳主进程已把「打开 /workspace」
+     收敛到主窗收件箱标签（openBackendPopup 特判：聚焦主窗 + cx-open-workspace 转深链）。
+     有能力＝工作台入口直接 window.open 交壳路由（确定性把主窗拉到前台，零探活等待，
+     也不再有「探活 miss 一次就漏一个弹窗」的残余）；无能力（旧壳）＝维持既有 BC 探活链。
+     模板热更新先于壳更新到达时旧壳零行为变化——这个标记就是分体部署的版本闸。 */
+  var IS_SHELL = false;
+  try { IS_SHELL = /\bElectron\//.test(navigator.userAgent || ''); } catch(_) {}
+  function _shellWsRoute(){
+    try { return !!(window.__chatxCaps && window.__chatxCaps.wsRoute); } catch(_) { return false; }
+  }
+
+  /* ── 「返回工作台」去重（P1-③ 2026-08-11，修「还是会出现两个坐席工作台」实录）────
+     入口收敛（上方 P0-A）只管「从后台/看板点进来」那个方向；反方向一直漏着：子页
+     （报表/任务/客户档案/渠道中心…按设计落在 aitr_wsub 辅助窗）里的「返回工作台」
+     链接、顶栏「聊天」标签、SSE toast / 铃铛点击的 location.href='/workspace' 兜底，
+     全是**原地导航**——辅助窗被就地变成第二个坐席工作台（协调器只能把旧的降为待机，
+     窗口本身留着，遥测 mw.takeover_auto/reclaim 全由此来）。
+
+     语义＝「别处已有活跃坐席就交给它，没有才把本窗导航过去」：
+     ① 已在坐席页：有 cid 走站内切会话，否则交回默认行为；
+     ② PWA 应用窗：保持 08-03「本窗原地导航」语义（app 窗自己就是首选坐席容器）；
+     ③ opener 直连：wsub 由坐席窗口开出（同组、同源句柄）→ 直接 focus + postMessage
+        切会话，零延迟零探活；
+     ④ BC 探活（跨组/壳内通用）：250ms 内有主控坐席应答 → cid 经 open-conv 送达对方，
+        本窗留在原页 + toast 提示切换（浏览器不允许替用户聚焦别组窗口，明说）；
+        无应答 → 本窗原地导航成为唯一坐席（旧行为，极端竞态由协调器兜底）。
+     消费面：window.__wsGoHome(opts) 程序化入口（SSE toast / 铃铛 / 子页 JS），外加
+     下方的**委托点击拦截器**——任何同标签导航到 /workspace 的 <a> 自动走同一条链，
+     新增返回链接零接线自动获益（这一族裸链接正是逐页手写导致漏网的根源）。 */
+  function _isAppWin(){
+    try {
+      return !!(window.matchMedia
+        && (window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: minimal-ui)').matches
+            || window.matchMedia('(display-mode: window-controls-overlay)').matches));
+    } catch(_) { return false; }
+  }
+  /* 点击链路埋点（2026-08-31「点了没反应」修复）：verdict 计数进既有 ui_events 通道
+     （/api/admin/ui-event-trend?prefix=wsentry_ 可读），关键路径不再是观测盲区。 */
+  function _bcn(action){
+    try {
+      var body = JSON.stringify({page: location.pathname || '/', action: String(action || '')});
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob([body], {type: 'application/json'}));
+    } catch(_) {}
+  }
+  function _t(key){
+    /* i18n 纪律：不留中文兜底——T 缺席（理论上只在极早期）回落裸键名，键恒在由 pack 保证 */
+    try {
+      if (typeof window.T === 'function') {
+        var s = window.T(key);
+        if (s && s !== key) return s;
+      }
+    } catch(_) {}
+    return key;
+  }
+  /* 可操作提示条（2026-08-31 重做）：旧版是 3.2s 小 toast——「工作台在别处」却不给
+     任何出口，浏览器又不允许替用户聚焦别组窗口，坐席体感=点了没反应。现在：
+     ① 带 [在此打开] 逃生门（当前窗口直接导航，别处那个由多窗协调器自动转待机）；
+     ② 驻留 8s + 可手关；③ token 双回落（--card=后台壳 / --tk-*=工作台壳——旧版
+     在后台暗色壳里弹白胶囊就是只认 --tk-* 的锅）。detail.url 缺失时退化为纯文案条。 */
+  function _notifySwitched(detail){
+    try {
+      detail = detail || {};
+      var old = document.getElementById('winuniq-snack');
+      if (old) { try { old.remove(); } catch(_) {} }
+      var wrap = document.createElement('div');
+      wrap.id = 'winuniq-snack';
+      wrap.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99991;'
+        + 'display:flex;align-items:center;gap:10px;max-width:min(92vw,560px);'
+        + 'background:var(--card,var(--tk-surface,#fff));color:var(--t,var(--tk-text,#0f172a));'
+        + 'border:1px solid var(--bd,var(--tk-border,#e5e6ea));border-radius:12px;'
+        + 'box-shadow:0 8px 28px rgba(15,27,45,.18);padding:9px 12px 9px 16px;font-size:12.5px;line-height:1.5;';
+      var txt = document.createElement('span');
+      txt.textContent = _t('base.winuniq.switched');
+      wrap.appendChild(txt);
+      var url = String(detail.url || '');
+      if (url && url.charAt(0) === '/' && url.charAt(1) !== '/') {
+        var go = document.createElement('button');
+        go.type = 'button';
+        go.textContent = _t('base.winuniq.open_here');
+        go.style.cssText = 'flex-shrink:0;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;'
+          + 'font-size:12px;font-weight:600;background:var(--p,var(--tk-brand,#1e8cf2));color:#fff;';
+        go.addEventListener('click', function(){
+          try { wrap.remove(); } catch(_) {}
+          _bcn('wsentry_openhere');
+          _navWithFeedback(url);
+        });
+        wrap.appendChild(go);
+      }
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.setAttribute('aria-label', 'close');
+      x.textContent = '\u2715';
+      x.style.cssText = 'flex-shrink:0;border:none;background:transparent;cursor:pointer;'
+        + 'font-size:12px;padding:4px 6px;color:inherit;opacity:.55;';
+      x.addEventListener('click', function(){ try { wrap.remove(); } catch(_) {} });
+      wrap.appendChild(x);
+      (document.body || document.documentElement).appendChild(wrap);
+      setTimeout(function(){ try { wrap.remove(); } catch(_) {} }, 8000);
+    } catch(_) {}
+  }
+  /* 坐席「在场心跳」（P2 冻结标签页补丁）：__wsMultiWin 的主控位记录
+     aitr.mw.primary::/workspace 由主控坐席每 5s 续租、15s 过期——被 Chrome 内存节省器
+     冻结的坐席页答不了 BC ping（定时器/事件全暂停），但冻结前的心跳还躺在 localStorage
+     里。探活 miss 时读它：心跳新鲜＝坐席「在但没应上」（忙/刚冻结），再等一轮而不是
+     立刻双开；两轮都静默且心跳仍新鲜 → 视同在场（frozen），宁可提示切换也不制造第二个
+     坐席（键名/15s 与 workspace_base.html::__wsMultiWin 的 K_PRIMARY/STALE_MS 是跨文件
+     契约，静态门禁钉住）。 */
+  function _seatLikelyAlive(){
+    try {
+      var rec = JSON.parse(localStorage.getItem('aitr.mw.primary::/workspace') || 'null');
+      return !!(rec && rec.id && (Date.now() - (rec.ts || 0)) < 15000);
+    } catch(_) { return false; }
+  }
+  /* 耐心探活：done(verdict) — 'hit'＝活坐席应答（open-conv 已送，_bcHandoff 已派发
+     aitr:ws-handoff）｜'frozen'＝两轮静默但心跳新鲜（视同在场，调用方自行派发事件）
+     ｜'none'＝确无坐席。返回 false＝BC 不可用，调用方走默认路径。 */
+  function _probeSeat(url, done){
+    return _bcHandoff(url, {
+      allowPlain: true,
+      hit: function(){ done('hit'); },
+      miss: function(){
+        if (!_seatLikelyAlive()) { done('none'); return; }
+        var again = _bcHandoff(url, {
+          allowPlain: true,
+          waitMs: 800,
+          hit: function(){ done('hit'); },
+          miss: function(){ done(_seatLikelyAlive() ? 'frozen' : 'none'); }
+        });
+        if (!again) done('none');
+      }
+    });
+  }
+  function _emitHandoff(cid, extra){
+    try {
+      var d = extra || {};
+      d.cid = String(cid || '');
+      window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: d}));
+    } catch(_) {}
+  }
+  /* 点击即时反馈（2026-08-31）：探活期（250–1050ms）链接降透明+进度光标——
+     此前这段时间零反馈，是「点了没反应」体感的第一层。 */
+  function _busy(el, on){
+    try {
+      if (!el || !el.style) return;
+      if (on) { el.style.opacity = '.55'; el.style.cursor = 'progress'; el.setAttribute('aria-busy', 'true'); }
+      else { el.style.opacity = ''; el.style.cursor = ''; el.removeAttribute('aria-busy'); }
+    } catch(_) {}
+  }
+  function _goHome(opts){
+    try {
+      opts = opts || {};
+      var cid = String(opts.cid || '');
+      var el = opts.el || null;
+      var url = String(opts.url || '') || ('/workspace' + (cid ? ('?conv=' + encodeURIComponent(cid)) : ''));
+      if (_pathOf(location.pathname) === '/workspace') {
+        if (cid && typeof window.__wsFocusConv === 'function') {
+          try { window.__wsFocusConv(cid); return true; } catch(_) {}
+        }
+        return false;             /* 已在坐席页：交回调用方（默认＝原地重载） */
+      }
+      if (IS_SHELL && _shellWsRoute()) {
+        /* 新壳：window.open 经 setWindowOpenHandler → 主进程聚焦主窗收件箱并转深链，
+           本窗留在原页（wsub 弹窗/后台页不再被原地导航成第二个坐席）。 */
+        try { window.open(url, '_blank'); return true; } catch(_) {}
+      }
+      if (_isAppWin()) { _navWithFeedback(url); return true; }
+      try {                       /* ③ opener 直连 */
+        var op = window.opener;
+        if (op && !op.closed) {
+          var opPath = null;      /* null＝跨源读不到（opener 去了外站）→ 走探活 */
+          try { opPath = _pathOf(op.location.pathname || ''); } catch(_) { opPath = null; }
+          if (opPath === '/workspace') {
+            try { op.focus(); } catch(_) {}
+            if (cid) _tryHandoff(op, url);   /* ack 站内切会话；未 ack 350ms 导航兜底 */
+            _bcn('wsentry_opener');
+            _emitHandoff(cid, {opener: true, url: url});   /* 提示统一走中央监听 */
+            return true;
+          }
+        }
+      } catch(_) {}
+      _busy(el, true);
+      var took = _probeSeat(url, function(verdict){   /* ④ 耐心探活（allowPlain） */
+        _busy(el, false);
+        _bcn('wsentry_' + verdict);
+        if (verdict === 'none') { _navWithFeedback(url); return; }
+        if (verdict === 'frozen') _emitHandoff(cid, {frozen: true, url: url});
+        /* 'hit'：事件已由 _bcHandoff 派发（detail 带 url），中央监听出提示条 */
+      });
+      if (took) return true;
+      _busy(el, false);
+      _bcn('wsentry_fallback');
+      _navWithFeedback(url);      /* BC 不可用（极老内核）→ 旧行为原地导航 */
+      return true;
+    } catch(_) { return false; }
+  }
+  /* 真导航前点亮 _loading_overlay 的跨页遮罩（若在）：拦截器抢在它的 L2 捕获监听
+     之前 preventDefault（见下），慢链路导航反馈由这里补回——「留在原页」不亮遮罩、
+     「真的走」才亮，语义各归各。 */
+  function _navWithFeedback(url){
+    try { if (typeof window.__blLoadShow === 'function') window.__blLoadShow(); } catch(_) {}
+    location.href = url;
+  }
+  window.__wsGoHome = _goHome;
+  /* 中央交接提示（P2 收口「点了像没反应」）：BC 交接命中/冻结在场都会派发
+     aitr:ws-handoff——此前只有 cases 页自己监听 toast，其余入口页静默（用户以为点击
+     无效再点一次＝窗口翻倍诱因）。中央监听统一出 toast；自带提示的页面（cases）置
+     window.__aitrWsHandoffToastOwned=true 声明「我自己渲染」，中央让行防双弹。
+     _notifySwitched 仅此一个调用点（单一渲染路径，静态门禁钉住）。 */
+  window.addEventListener('aitr:ws-handoff', function(ev){
+    if (window.__aitrWsHandoffToastOwned) return;
+    _notifySwitched((ev && ev.detail) || {});
+  });
+  /* 委托拦截器：仅左键、无修饰键、无 target/download、站内精确 /workspace（含 ?/#）。
+     **捕获相位**且本 include 位于 <head>（先于 body 顶部的 _loading_overlay 注册）→
+     preventDefault 先落地，遮罩的 L2「跨页导航先亮」捕获监听按 defaultPrevented 让行
+     ——否则「留在原页」也会亮 15s 全屏加载遮罩（真浏览器门禁 8b 抓过的实锤）。
+     带内联 onclick 的入口（__openUnique 族均配 target=_blank）由 target 检查天然放行。 */
+  document.addEventListener('click', function(ev){
+    try {
+      if (ev.defaultPrevented) return;
+      if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+      var a = (ev.target && ev.target.closest) ? ev.target.closest('a[href]') : null;
+      if (!a || a.hasAttribute('download')) return;
+      var tgt = (a.getAttribute('target') || '').toLowerCase();
+      if (tgt && tgt !== '_self') return;
+      var href = a.getAttribute('href') || '';
+      if (href !== '/workspace' && href.indexOf('/workspace?') !== 0
+          && href.indexOf('/workspace#') !== 0) return;
+      var p = _deepLinkParts(href) || {};
+      if (_goHome({cid: p.cid || '', url: href, el: a})) ev.preventDefault();
+    } catch(_) {}
+  }, true);
+  /* 桌面壳（Electron webview，UA 含 Electron/，壳 webview 开了 allowpopups）：
+     壳内 window.open 不是「找同名标签页」而是交给壳主进程 setWindowOpenHandler。
+     2026-08-29 起按壳能力分流（_shellWsRoute，见顶部）：
+     · 新壳（wsRoute）：/workspace 一律直接 window.open 交主进程——openBackendPopup
+       特判聚焦主窗收件箱标签并转深链，不再开原生弹窗；探活环节整体取消（探活 miss
+       一次就漏一个弹窗、命中又只弹提示不切换，两头都是「还是多开/没反应」的残余源）。
+     · 旧壳（无能力标记）：维持 2026-08-11 语义——先 BC 探活（壳内工作台 webview 同
+       partition 可达 → 站内切会话零弹窗），确无坐席才 window.open 弹壳窗，零回归。
+     其余入口（管理后台等）保持默认行为（主进程 admin 槽自会去重）。壳自身已有
+     app 级单实例锁。 */
+  try {
+    if (IS_SHELL) {
+      window.__openUniqueUrl = function(url, kind){
+        try {
+          url = String(url || '');
+          if (!url || url.charAt(0) !== '/') return false;
+          if (kind === 'admin') return false;
+          var path0 = (url.split('#')[0].split('?')[0].replace(/\/+$/, '')) || '/';
+          if (path0 !== '/workspace') return false;
+          if (_shellWsRoute()) {
+            /* 新壳：确定性路由主窗，无需探活 */
+            try { window.open(url, '_blank'); return true; } catch(_) { return false; }
+          }
+          /* 旧壳回落：耐心探活（普通入口与深链同判重）；确无坐席才弹壳窗。
+             提示统一走中央 aitr:ws-handoff 监听（自带提示的页面置 owned 旗标让行）。 */
+          return _probeSeat(url, function(verdict){
+            _bcn('wsentry_' + verdict);
+            if (verdict === 'none') { try { window.open(url, '_blank'); } catch(_) {} return; }
+            if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true, url: url});
+          });
+        } catch(_) { return false; }
+      };
+      return;
+    }
+  } catch(_) {}
+  /* 已安装 PWA 应用窗（任务栏「坐席工作台」图标，display-mode: standalone/minimal-ui）：
+     app 窗自成一个浏览上下文组，window.open 按名寻址够不到组外窗口 → 每次都新开，
+     且 Chrome 会把它落成**普通浏览器标签页**——实测＝在 app 窗里点「坐席工作台/
+     管理后台」被踢出应用窗变「网页版」，任务栏身份丢失（2026-08-03 老板反馈）。
+     app 窗内主入口改「本窗原地导航」＝与桌面壳同语义：管理后台/坐席工作台在同一个
+     有任务栏图标的窗口里互切；仅 wsub 子页深链维持 _blank 落浏览器（子页挤占本窗
+     会顶掉聊天/后台现场，浏览器标签页反而是更好的去处）。 */
+  var APP_WIN = _isAppWin();
+  var HOST = location.host;
+  function _name(slot){ return 'aitr_' + slot + '::' + HOST; }
+  function _pathOf(url){
+    return (String(url).split('#')[0].split('?')[0].replace(/\/+$/, '')) || '/';
+  }
+  /* 目标窗口槽位：admin 语义原样；workspace 语义按路径细分——精确 /workspace＝坐席
+     收件箱专窗，/workspace/* 子页共用 wsub 辅助窗（防「打开草稿页」把收件箱挤掉）。 */
+  function _slotFor(url, kind){
+    if (kind === 'admin') return 'admin';
+    return _pathOf(url) === '/workspace' ? 'workspace' : 'wsub';
+  }
+
+  /* 自报家门：让「回程」可寻址。例：后台(未命名) → 开工作台 → 工作台点「管理后台」
+     需要能找回原后台标签页；不自报就只能再开一个，回到窗口翻倍的老路。
+     已持 aitr_* 名的标签页不改名（坐席专窗在壳内导航到子页时必须保住自己的名）。 */
+  try {
+    var p = (location.pathname || '/').replace(/\/+$/, '') || '/';
+    var named = String(window.name || '').indexOf('aitr_') === 0;
+    if (p === '/workspace') {
+      if (window.name !== _name('workspace')) window.name = _name('workspace');
+    } else if (p.indexOf('/workspace') === 0) {
+      if (!named) window.name = _name('wsub');
+    } else if (p !== '/login') {
+      if (!named || window.name === _name('workspace') || window.name === _name('wsub')) window.name = _name('admin');
+    }
+  } catch(_) {}
+
+  /* 深链参数拆包（conv/mid/flag/case）：postMessage 与 BroadcastChannel 两条
+     交接路共用同一份口径，别让「案例条只在其中一条路上生效」这种口径分裂出现。 */
+  function _deepLinkParts(url){
+    var m = /[?&](?:conv|focus)=([^&#]+)/.exec(url);
+    if (!m) return null;
+    var cid = m[1];
+    try { cid = decodeURIComponent(cid); } catch(_) {}
+    var mid = '', flag = '', caseId = '';
+    try {
+      var usp = new URLSearchParams(url.slice(url.indexOf('?') + 1).split('#')[0]);
+      mid = usp.get('mid') || ''; flag = usp.get('flag') || '';
+      caseId = usp.get('case') || '';
+    } catch(_) {}
+    return {cid: cid, mid: mid, flag: flag, caseId: caseId};
+  }
+
+  /* 会话深链免刷新（P1-②）：目标是「已在坐席页的收件箱窗口」且 URL 带 ?conv=/?focus=
+     时，点对点 postMessage 让它站内切会话；~350ms 收到 ack → 只聚焦零刷新，
+     没等到（旧版收件箱无监听器 / 消息丢失）→ 整页导航兜底。返回 true=已接手异步收尾。 */
+  function _tryHandoff(w, url){
+    var p = _deepLinkParts(url);
+    if (!p || typeof w.postMessage !== 'function') return false;
+    var token = 'hk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var acked = false;
+    function onAck(ev){
+      try {
+        if (ev.origin === location.origin && ev.data && ev.data.aitr === 'open-conv-ack'
+            && ev.data.token === token) acked = true;
+      } catch(_) {}
+    }
+    window.addEventListener('message', onAck);
+    try { w.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}, location.origin); }
+    catch(_) { window.removeEventListener('message', onAck); return false; }
+    setTimeout(function(){
+      window.removeEventListener('message', onAck);
+      if (!acked) { try { w.location.href = url; } catch(_) {} }
+      try { w.focus(); } catch(_) {}   /* 兜底导航后补一次聚焦；ack 路径此前已聚焦 */
+    }, 350);
+    return true;
+  }
+
+  /* 跨浏览上下文组交接核心（P0-C，2026-08-09；P2 抽公共核供浏览器/桌面壳两形态）：
+     命名查找只在同组内成立——书签/手输网址开出的工作台在别的组，named open 找不到
+     它；桌面壳（Electron）则根本没有命名寻址语义。BroadcastChannel 同源同
+     profile/partition 全组可达，正好补这两个洞：
+     · ws-ping 探活，250ms 内有工作台主控应答 → open-conv 交给那边站内打开，
+       派发 aitr:ws-handoff（入口页自行 toast「请切过去」——浏览器安全模型不允许
+       本页替用户聚焦别组标签页，明说比再开一个窗口诚实），再执行 cbs.hit 收尾；
+     · 无应答（没有工作台 / 旧版页面无监听）→ 执行 cbs.miss（调用方自定兜底：
+       浏览器=导航预开的空白命名窗；壳内=window.open 弹壳窗，均为原有语义零回归）。
+     返回 true=已接手异步收尾；false=BC 不可用/非会话深链，调用方走默认路径。 */
+  function _bcHandoff(url, cbs){
+    cbs = cbs || {};
+    var ch = null;
+    try { ch = new BroadcastChannel('aitr_ws_bridge::' + location.host); } catch(_) { return false; }
+    var p = _deepLinkParts(url);
+    /* allowPlain（P1-③）：无深链参数也允许纯探活判重（「返回工作台」/普通入口）——
+       pong 即别处有活跃坐席，无需送 open-conv（对方本来就开着工作台） */
+    if (!p && !cbs.allowPlain) { try { ch.close(); } catch(_) {} return false; }
+    var token = 'bc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var done = false;
+    ch.onmessage = function(ev){
+      var d = ev && ev.data;
+      if (done || !d || d.aitr !== 'ws-pong' || d.token !== token) return;
+      done = true;
+      if (p) { try { ch.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}); } catch(_) {} }
+      try { ch.close(); } catch(_) {}
+      try { if (cbs.hit) cbs.hit(); } catch(_) {}
+      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p ? p.cid : '', url: url}})); } catch(_) {}
+    };
+    try { ch.postMessage({aitr: 'ws-ping', token: token}); }
+    catch(_) { try { ch.close(); } catch(_) {} return false; }
+    setTimeout(function(){
+      if (done) return;
+      done = true;
+      try { ch.close(); } catch(_) {}
+      try { if (cbs.miss) cbs.miss(); } catch(_) {}
+    }, (cbs.waitMs > 0 ? cbs.waitMs : 250));   /* waitMs：耐心探活第二轮放宽窗口 */
+    return true;
+  }
+
+  /* 浏览器形态包装：刚开出的空白命名窗（本组无工作台）→ 先耐心探别组，
+     活坐席/冻结在场都关掉空白窗交接（toast 走中央监听），确无坐席才把空白窗
+     导航成唯一工作台。普通 /workspace 入口与深链同判重。 */
+  function _tryBcHandoff(w, url){
+    return _probeSeat(url, function(verdict){
+      _bcn('wsentry_' + verdict);
+      if (verdict === 'none') {
+        try { w.location.replace(url); } catch(_) { try { w.location.href = url; } catch(_) {} }
+        try { w.focus(); } catch(_) {}
+        return;
+      }
+      try { w.close(); } catch(_) {}
+      if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true, url: url});
+    });
+  }
+
+  /* 程序化入口：url 须为站内绝对路径。返回 true=已复用/聚焦成功；false=请调用方走默认路径。 */
+  window.__openUniqueUrl = function(url, kind){
+    try {
+      url = String(url || '');
+      if (!url || url.charAt(0) !== '/') return false;
+      if (APP_WIN) {
+        /* PWA 应用窗内：workspace/admin 主入口原地导航（返回 true=已接手，阻断
+           调用方的 _blank 默认路径）；wsub 子页返回 false 走默认新开。 */
+        var s = _slotFor(url, kind);
+        if (s === 'wsub') return false;
+        var here = _pathOf(location.pathname);
+        var deep0 = url.indexOf('?') >= 0 || url.indexOf('#') >= 0;
+        if (here === _pathOf(url) && !deep0) return true;   /* 已在目标页，无事可做 */
+        /* 已在坐席页收到会话深链 → 先试站内交接（免整页刷新，_tryHandoff 未 ack
+           时自带 350ms 后原地导航兜底） */
+        if (s === 'workspace' && here === '/workspace' && deep0 && _tryHandoff(window, url)) return true;
+        location.href = url;
+        return true;
+      }
+      var slot = _slotFor(url, kind);
+      var w = null;
+      try { w = window.open('', _name(slot)); } catch(_) { w = null; }
+      if (!w || w === window) return false;   /* 弹窗被拦 / 自引用（壳内点自己）→ 默认路径 */
+      var cur = null;                          /* null＝跨源读不到（该标签页被导航去了外站） */
+      try {
+        cur = String(w.location.pathname || '');
+        if (w.location.href === 'about:blank') cur = '';   /* 刚由本调用创建的空白命名窗 */
+      } catch(_) { cur = null; }
+      var deep = url.indexOf('?') >= 0 || url.indexOf('#') >= 0;
+      if (cur === '') {
+        /* 新开的空白窗＝本组内没有该命名窗口。坐席工作台（深链与普通入口都算）
+           先试跨组交接（别组可能已开着工作台），250ms 无应答才把空白窗导航成新工作台 */
+        if (slot === 'workspace' && _tryBcHandoff(w, url)) return true;
+        /* replace 导航，避免 about:blank 留在该标签页的历史里 */
+        try { w.location.replace(url); } catch(_) { w.location.href = url; }
+      } else if (cur === null) {
+        w.location.href = url;                 /* 外站游子：领回来 */
+      } else if (deep) {
+        /* 深链必须生效（?conv= 等）：收件箱在位的会话深链先试站内交接（免刷新），
+           其余深链/交接不可用 → 整页导航 */
+        if (!(slot === 'workspace' && _pathOf(cur) === '/workspace' && _tryHandoff(w, url))) {
+          w.location.href = url;
+        }
+      } else if (slot === 'admin') {
+        /* 已在后台壳任意页 → 只聚焦：后台多为列表/编辑页，硬拉去 "/" 会丢编辑现场 */
+        if (cur.indexOf('/workspace') === 0) w.location.href = url;   /* 名下窗口已不在后台壳 → 领回 */
+      } else {
+        /* 已在目标页 → 只聚焦不重载（坐席专窗的聊天现场尤其贵）；不同页 → 导航过去 */
+        if (_pathOf(cur) !== _pathOf(url)) w.location.href = url;
+      }
+      try { w.focus(); } catch(_) {}
+      return true;
+    } catch(_) { return false; }
+  };
+
+  /* 声明式入口：<a href="..." data-winname="workspace|admin"
+                    onclick="return __openUnique(event,this)">。
+     返回 false=已处理（阻止默认导航）；true=交回默认行为（修饰键/降级）。 */
+  window.__openUnique = function(ev, el){
+    try {
+      if (ev && (ev.defaultPrevented || (ev.button != null && ev.button !== 0)
+                 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)) return true;
+      var url = (el && el.getAttribute) ? (el.getAttribute('href') || '') : '';
+      var kind = (el && el.getAttribute) ? (el.getAttribute('data-winname') || 'workspace') : 'workspace';
+      if (window.__openUniqueUrl(url, kind)) return false;
+    } catch(_) {}
+    return true;
+  };
+})();
+</script>
+{#- 页内输入弹层 window.uiPrompt（#173，2026-09-05）：Electron 渲染进程不支持原生 prompt，
+    全站统一走 /copilot/ui-prompt.js（与 shared/copilot/app.html 同一份，双树镜像）。
+    放在本 partial＝base.html 与 workspace_base.html 两壳一次接入。 -#}
+<script src="/copilot/ui-prompt.js?v=20260911a"></script>

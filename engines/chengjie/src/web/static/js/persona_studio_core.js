@@ -128,7 +128,9 @@ async function _playVoicePreview(pid, btn) {
       body: JSON.stringify({text: text, persona_id: pid}),
     });
     const d = await r.json().catch(function(){ return {}; });
-    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+    // L-2 #205：后端按失败分类给了人话（message：引擎离线 / 无同类预置声）就优先显示，
+    // 而不是裸错误码；引擎离线时这里只提示、不播任何替代声音。
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
     if (_vpBtn !== btn) return;   // 期间用户点了别的卡片
     btn.classList.remove('loading'); btn.classList.add('playing'); btn.textContent = '■';
     _vpAudio = new Audio(d.url || d.audio_url);
@@ -145,16 +147,60 @@ async function _playVoicePreview(pid, btn) {
 // _activeTag、_sfFilter、_healthTierFilter、_customOrder、_selectedProfiles、_bulkMode、
 // _platBindMap、_filteredProfiles、_SRC、_hl、_fmt、_faceRefs、各 DnD/菜单/提示回调。
 // 顶层 let/const 跨 <script> 词法共享;本文件在内联脚本之后、DOMContentLoaded 之前加载。
+// #192：90 个标签占满三四行 → 默认只显高频 TAG_CLOUD_TOP 个（当前选中的即使在长尾也显），
+// 其余收进「更多 N 个标签 ▾」，点开/收起只切 _tagCloudExpanded 重绘。标签值经属性转义进
+// data-tag，点击从 dataset 取——旧写法把标签拼进 onclick 单引号串，含引号/尖括号的标签会炸。
+var TAG_CLOUD_TOP = 12;
+var _tagCloudExpanded = false;
+function _tagText(t) {
+  return String(t == null ? '' : t);
+}
+function _coerceProfileTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  var out = [], seen = {};
+  tags.forEach(function(t) {
+    var s = _tagText(t).trim();
+    if (!s) return;
+    var k = s.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(s);
+  });
+  return out;
+}
+function _tcAttr(s) {
+  s = String(s == null ? '' : s);
+  return (typeof _escAttr === 'function') ? _escAttr(s)
+    : s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 function renderTagCloud(profiles) {
   const cloud = document.getElementById('tag-cloud');
   if (!cloud) return;
   const tmap = {};
-  profiles.forEach(function(p) { (p.tags || []).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
-  cloud.innerHTML = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1]; }).map(function(e) {
+  profiles.forEach(function(p) { _coerceProfileTags(p.tags).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
+  const all = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1] || String(a[0]).localeCompare(String(b[0])); });
+  let show = all;
+  const hidden = Math.max(0, all.length - TAG_CLOUD_TOP);
+  if (!_tagCloudExpanded && hidden > 0) {
+    show = all.slice(0, TAG_CLOUD_TOP);
+    if (_activeTag && !show.some(function(e){ return e[0] === _activeTag; }) && tmap[_activeTag]) {
+      show = show.concat([[_activeTag, tmap[_activeTag]]]);
+    }
+  }
+  let html = show.map(function(e) {
     var t = e[0], c = e[1];
-    var tSafe = t.replace(/'/g, "\\'");
-    return '<span class="tc-chip' + (_activeTag === t ? ' active' : '') + '" data-tag="' + t + '" onclick="_clickTagText(\'' + tSafe + '\')">' + t + ' <span style="opacity:.65">' + c + '</span></span>';
+    return '<span class="tc-chip' + (_activeTag === t ? ' active' : '') + '" data-tag="' + _tcAttr(t) + '" onclick="_clickTagText(this.dataset.tag)">' + _tcAttr(t) + ' <span style="opacity:.65">' + c + '</span></span>';
   }).join('');
+  if (hidden > 0) {
+    const lbl = _tagCloudExpanded ? window.T('psn_tags_less')
+      : window.Tf('psn_tags_more', {n: String(hidden)});
+    html += '<span class="tc-chip tc-more" onclick="_toggleTagCloud()">' + _tcAttr(lbl) + (_tagCloudExpanded ? ' ▴' : ' ▾') + '</span>';
+  }
+  cloud.innerHTML = html;
+}
+function _toggleTagCloud() {
+  _tagCloudExpanded = !_tagCloudExpanded;
+  renderTagCloud(_allProfiles || []);
 }
 
 function _clickTagText(tag) {
@@ -186,10 +232,24 @@ function renderProfileList(profiles) {
     var initial = _profileInitial(p.name);
     var srcInfo = _SRC[p.source] || ['src-config', p.source || '?', ''];
     var srcBadge = '<span class="src-badge ' + srcInfo[0] + '" title="' + (srcInfo[2] || '').replace(/"/g, '&quot;') + '">' + srcInfo[1] + '</span>';
-    // 服务状态胶囊：绑定数>0 = 服务中，否则灰色未启用（不再计入完善度）
-    var livePill = p.binding_count > 0
-      ? '<span class="live-pill on">● ' + window.T('psn_serving') + ' ' + p.binding_count + '</span>'
-      : '<span class="live-pill off" title="' + window.T('psn_not_live_t') + '">○ ' + window.T('psn_not_live') + '</span>';
+    // 服务状态胶囊（L-2 #204，QRHNGM）：与后端 collect_binding_usage 四源同口径——
+    // 「● 服务中 a 个账号 · c 个会话」；账号与会话皆 0 才灰，文案「未绑定」（不是「未启用」，
+    // 人设本身没有开关，只有绑没绑）。旧 summary（无 binding_accounts）回落 binding_count。
+    var _bAcc = Number(p.binding_accounts), _bChat = Number(p.binding_chats);
+    var _hasSplit = !isNaN(_bAcc) && !isNaN(_bChat) && (p.binding_accounts !== undefined);
+    var _bTotal = _hasSplit ? (_bAcc + _bChat) : (Number(p.binding_count) || 0);
+    var livePill;
+    if (_bTotal > 0) {
+      var _servingTxt = _hasSplit
+        ? window.Tf('psn_serving_split', {a: String(_bAcc), c: String(_bChat)})
+        : (window.T('psn_serving') + ' ' + _bTotal);
+      var _servingTip = _hasSplit
+        ? window.Tf('psn_serving_split_t', {a: String(_bAcc), c: String(_bChat)}) + (p.binding_default ? ' · ' + window.T('psn_serving_default_t') : '')
+        : '';
+      livePill = '<span class="live-pill on" title="' + _servingTip.replace(/"/g, '&quot;') + '">● ' + _servingTxt + '</span>';
+    } else {
+      livePill = '<span class="live-pill off" title="' + window.T('psn_not_bound_t') + '">○ ' + window.T('psn_not_bound') + '</span>';
+    }
     // P2：近7日活跃火苗(usage_7d 来自后端 summary,无数据不显示)
     var usagePill = (p.usage_7d || 0) > 0
       ? '<span class="usage-pill" title="' + window.T('psn_usage_pill_t') + '">🔥 ' + (p.usage_7d > 999 ? '999+' : p.usage_7d) + '</span>'
@@ -210,7 +270,7 @@ function renderProfileList(profiles) {
       : '';
     var tagHtml = '';
     if (_q && p.tags && p.tags.length) {
-      var matchedTags = p.tags.filter(function(t){ return t.toLowerCase().includes(_q); });
+      var matchedTags = _coerceProfileTags(p.tags).filter(function(t){ return t.toLowerCase().includes(_q); });
       if (matchedTags.length) {
         tagHtml = matchedTags.map(function(t){ return '<span class="tag" style="font-size:.61rem">' + _hl(t, _q) + '</span>'; }).join('');
       }
@@ -252,6 +312,8 @@ function renderProfileList(profiles) {
       + '<button onclick="event.stopPropagation();editProfile(\'' + pidSafe + '\')">' + window.T('psn_js_355') + '</button>'
       + '<button class="btn-copy" onclick="event.stopPropagation();_copyProfileId(\'' + pidSafe + '\')" title="' + window.T('psn_js_356') + '">ID</button>'
       + '<button class="btn-clone" onclick="event.stopPropagation();_cloneProfile(\'' + pidSafe + '\')" title="' + window.T('psn_js_357') + '">' + window.T('psn_js_358') + '</button>'
+      // L-2 #202：导出单个人设（JSON 备份文件，可在别的机器「从备份恢复」）
+      + '<button class="btn-export" onclick="event.stopPropagation();pbExportOne(\'' + pidSafe + '\')" title="' + window.T('psn_export_one_t') + '">' + window.T('psn_export_one') + '</button>'
       + promoteBtn + '</div>'
       + '<div class="pcard-top">'
       + '<div class="pcard-av-wrap"><div class="pcard-av" style="background:' + color + '">' + avInner + '</div>' + ring + '</div>'
@@ -288,10 +350,12 @@ function _applyFilter() {
       return (p.name || '').toLowerCase().includes(q) ||
              (p.role || '').toLowerCase().includes(q) ||
              (p.id || '').toLowerCase().includes(q) ||
-             (p.tags || []).some(function(t){ return t.toLowerCase().includes(q); });
+             _coerceProfileTags(p.tags).some(function(t){ return t.toLowerCase().includes(q); });
     });
   }
-  if (_activeTag) filtered = filtered.filter(function(p){ return (p.tags || []).includes(_activeTag); });
+  if (_activeTag) filtered = filtered.filter(function(p){
+    return _coerceProfileTags(p.tags).indexOf(_activeTag) >= 0;
+  });
   if (_healthTierFilter !== null) {
     var _tBounds = [[0,49],[50,74],[75,89],[90,100]][_healthTierFilter];
     filtered = filtered.filter(function(p){ var s=_profileCompleteness(p); return s>=_tBounds[0]&&s<=_tBounds[1]; });
@@ -359,7 +423,9 @@ function _renderDashboard(d) {
   const bf = d.bindings || {};
   document.getElementById('hs-profiles').textContent  = pf.count != null ? pf.count : '—';
   document.getElementById('hs-bindings').textContent  = bf.count != null ? bf.count : (Object.keys(bf).length || '—');
-  document.getElementById('hs-unsynced').textContent  = pf.unsynced != null ? pf.unsynced : '—';
+  // L-2 #202：「未同步草稿」（personas.yaml 研发迁移残留）用户版不渲染该格 → 判空
+  var _hsUnsynced = document.getElementById('hs-unsynced');
+  if (_hsUnsynced) _hsUnsynced.textContent = pf.unsynced != null ? pf.unsynced : '—';
 
   let platCount = 0;
   if (d.tg_accounts && d.tg_accounts.length)   platCount++;
@@ -395,7 +461,7 @@ function _renderDashboard(d) {
   const utextEl  = document.getElementById('unsync-text');
   const u = pf.unsynced || 0;
   const lastSync = d.last_sync_at ? window.wsFmtDateTime(d.last_sync_at) : window.T('psn_js_009');
-  if (u > 0 && unsyncEl && __USER_ROLE === 'master') {
+  if (u > 0 && unsyncEl && __USER_ROLE === 'master' && window.__PSN_DEV_FACE !== false) {
     unsyncEl.classList.add('show');
     if (utextEl) utextEl.textContent = u + window.T('psn_js_010') + lastSync + '）';
   } else if (unsyncEl) { unsyncEl.classList.remove('show'); }
@@ -460,7 +526,7 @@ function _renderDashboard(d) {
       var initials = (a.label || a.account_id || '?').slice(0,2).toUpperCase();
       var curPid = (a.persona_ids && a.persona_ids[0]) || '';
       var assignBtn = platform
-        ? '<button class="btn btn-sm" style="font-size:.67rem;padding:.15rem .42rem' + (!hasP ? ';background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#3b82f6' : '') + '" onclick="openPersonaPicker(\'' + platform + '\',\'' + String(a.account_id).replace(/'/g,"\\'") + '\',\'' + String(curPid).replace(/'/g,"\\'") + '\')">' + (hasP ? window.T('psn_js_013') : window.T('psn_js_014')) + '</button>'
+        ? '<button class="btn btn-sm" style="font-size:.67rem;padding:.15rem .42rem' + (!hasP ? ';background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);border-color:color-mix(in srgb, var(--p,#1e8cf2) 30%, transparent);color:var(--p,#1e8cf2)' : '') + '" onclick="openPersonaPicker(\'' + platform + '\',\'' + String(a.account_id).replace(/'/g,"\\'") + '\',\'' + String(curPid).replace(/'/g,"\\'") + '\')">' + (hasP ? window.T('psn_js_013') : window.T('psn_js_014')) + '</button>'
         : '';
       var statusClass = a.status === 'active' ? 'online' : (a.status === 'error' ? 'error' : 'offline');
       h += '<div class="acc-card' + (!hasP ? ' no-pf' : '') + '">';

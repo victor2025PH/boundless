@@ -94,10 +94,33 @@ import "../platform/brand/brand.css";
 2. **同步 `brand.css`**：按命名规则补/改 `--bl-*` 变量（spacing 小数点写作 `-`，如 `0.5` → `--bl-space-0-5`；涉及明暗差异的，同时更新 `[data-theme="dark"]` 块）。
 3. **检查 `tailwind-preset.cjs`**：它 require tokens.json 自动派生，通常不用动；只有新增**顶层分组**（比如加了 `opacity` 阶）才需要在 preset 里补一行映射。
 4. **自检**：`node -e "console.log(require('./tailwind-preset.cjs').theme.extend)"` 能打印且无报错；抽查新值在 CSS 与 preset 中一致。
-5. 三端各自升级引用即可，**禁止**在产品仓里复制数值或另开小灶色板；发现硬编码品牌色应回收进本目录。
+5. **分发到消费方**：`python brand-assets/sync_brand_targets.py`（chengjie 坐席/桌面系资产 + brand.css 拷贝）；
+   **vendored 副本**（独立 git 仓构建期无法跨仓引用，整文件同步进各自仓，如
+   `tgkz2026/src/styles/brand-tokens.css`）需手动用母版覆盖，然后跑
+   `python brand-assets/check_vendored_brand.py` 防腐检查（副本键值≡母版、
+   允许子集、禁止借 `--bl-` 命名空间私造键；漂移 exit 1）。新引擎 vendoring
+   时把路径登记进该脚本的 `VENDORED` 清单。
+6. 三端各自升级引用即可，**禁止**在产品仓里复制数值或另开小灶色板；发现硬编码品牌色应回收进本目录。
 
 ## 5. 红线
 
 - 本目录内**只放静态令牌**（JSON/CSS/preset/文档），不放运行时逻辑，不 import 任何产品/引擎代码。
 - **不得**创建 `__init__.py`：顶层 `platform/` 与 Python 标准库 `platform` 同名，加包标记会遮蔽标准库，导致大量第三方库崩溃。
 - 数值冲突时以 `tokens.json` 为准；`brand.css` / `tailwind-preset.cjs` 与其不一致视为 bug。
+
+## 6. 消费方与防回退门禁（2026-07-30 全面盘点，改令牌前先读这张表）
+
+| 消费面 | 接入机制 | 同步方式 | 防回退门禁 |
+|---|---|---|---|
+| 官网 `website/` | `vendor/brand/tailwind-preset.cjs`（vendored） | `npm run sync:brand`（prebuild 自带过期检测） | `scripts/sync-brand.mjs --check` 红灯拦 build |
+| ChatX 坐席/管理/认证（`engines/chengjie`） | 7 根壳 `<link>` `static/brand/brand.css` + `th-brand-bridge.css` 后置覆盖 + `--bl-font-sans` 字体单一源 | `brand-assets/sync_brand_targets.py` 拷贝 | `tests/test_brand_token_bridge.py`（挂载/顺序/字体）、`test_legacy_blue_ratchet.py`（裸旧蓝清零+台账）、`test_copilot_theme_tokens.py`（副驾 accent 接 --bl-growth） |
+| ChatX 桌面壳（Electron） | `renderer/brand/`（copy-shared 预启同步）；字体走**相对路径** `fonts/...`（file:// 下绝对路径 404） | `desktop/copy-shared.js`（prestart/predist） | 同上 brand bridge 门禁含桌面 link 顺序断言 |
+| AvatarHub（`engines/avatarhub`） | 自有 `--bd-*` 命名空间，强调色**数值回填**（`--bd-acc`=brand-blue `#1e6bf0`、`--bd-acc2`=violet `#7a3bf5`；政策依据其《官网对齐方案》§5） | `tools/backfill_brand_accent.py`（幂等；改令牌后重跑） | `tools/_tokens_lint.py`（tokens↔CSS↔Qt launcher 三侧一致，进 run_all_tests） |
+| 智控 MatrixX（`tgkz2026/`，独立 git 仓） | vendored `src/styles/brand-tokens.css`（--bl-* 子集） | 手动用母版 brand.css 覆盖 | `brand-assets/check_vendored_brand.py`（键值≡母版/允许子集/禁私造键） |
+| huoke 后台（`engines/huoke`） | 自有 `--accent` 令牌（dark `#1e8cf2`/light `#0d76d9` = growth 500/600 阶） | 改 `src/host/static/css/dashboard.css` 定义点 | `tests/test_brand_accent.py`（定义点钉死） |
+
+**改主色的完整作业**：改 `tokens.json` → 同步 `brand.css`（§4）→ `sync_brand_targets.py` + `npm run sync:brand` + 覆盖 tgkz vendored → 回填 avatarhub（`backfill_brand_accent.py` 的映射表更新目标值后重跑）+ huoke 定义点 → 各仓跑上表门禁。
+
+**判定沉淀**（哪些蓝不许动，详见 `engines/chengjie/tests/test_legacy_blue_ratchet.py` 头注）：
+蓝色作为**多色家族的一臂**（状态/阶段/等级/类型/平台/图表/插画调色板）保留字面量——
+一臂跟品牌变量、其余臂字面量会破坏体系；蓝色**独立**作强调/active/hover/tint 才走品牌令牌。

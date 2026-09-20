@@ -34,6 +34,8 @@
       "js": [
         "vendor/profiles.js",
         "vendor/media-format.js",
+        "vendor/translate-scheduler.js",
+        "vendor/bubble-model.js",
         "vendor/core.js",
         "content/bridge.js"
       ],

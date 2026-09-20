@@ -1,0 +1,1977 @@
+# ============================================================================
+# 双侧本地节日日历（消费方：src/companion/locale_holidays.py）
+# ============================================================================
+#
+# 【这是规则库，不是日期表】
+# 绝不逐年手写公历日期。逐年表意味着每年年底必须有人记得来续，而人一定会忘——表一过期
+# 系统不会报错，只会**静默地不再有任何节日**，或更糟：拿去年的日子发今年的祝福。所以每
+# 条节日写的是「怎么算出它」的规则，一次写清、此后永久自动正确。
+#
+# 【规则类型（rule.type）】
+#   fixed         公历固定月日。            {type: fixed, month: 4, day: 13}
+#   lunar         农历月日 → 公历（lunar_python 动态算）。 {type: lunar, month: 1, day: 1}
+#                 day 为负＝该农历月倒数第 N 天，-1 即除夕（腊月末日可能廿九也可能三十）。
+#   nth_weekday   某月第 N 个星期几。weekday 用 Python date.weekday() 口径（0=周一，
+#                 3=周四，6=周日）；nth 为负＝倒数第 N 个（-1=最后一个）。
+#                 {type: nth_weekday, month: 11, weekday: 3, nth: 4}   # 美国感恩节
+#   easter_offset 复活节 ± N 天（算法内置，零依赖）。
+#                 {type: easter_offset, offset: -2}                    # Good Friday
+#                 calendar: julian → 东正教（儒略历）复活节，与西方复活节常差 1-5 周。
+#   table         逐年查表（见下方「为什么还需要查表」）。
+#   jieqi         二十四节气（清明/冬至/春分/秋分…），天文事件、公历日逐年 ±1 天漂。
+#                 {type: jieqi, name: 冬至}
+#
+# 所有类型都支持 days（可选，默认 1）＝从基准日起的连续天数：宋干节 3 天、俄罗斯新年假
+# 5 天、光明节 8 天、谢肉节一周。
+#
+# 【为什么还需要 table（逐年查表）】
+# 伊斯兰历依赖新月观测、希伯来历需要另一套完整历法实现，用现有依赖都算不准/算不了，
+# 而引新依赖不在预算内。这类节日只能查表，且表**只到 2033 年**。
+#   ⚠ 到了表尽头，该节日就**自动消失，而不是外推猜日子**。
+#   「今天没节日」是无害降级；「把开斋节发错三天」是文化事故。宁可静默失效。
+#   ⚠ 伊斯兰系日期为**近似观测日，各国宣布日可能 ±1 天**（沙特/印尼/土耳其常不同日）。
+#     仅用于聊天氛围与共情，**绝不可用于任何承诺、排期、履约或对客告知**。
+#   ○ 希伯来历是**算术历**（无需观测），表中日期为精确推算值，仅因规则引擎里没有希伯来
+#     历实现才落成表。若将来加 hebrew 规则类型，这些表可整体删除。
+#
+# 【greet 字段的运营含义】
+# 不是日历事实，而是「能不能给一个陌生/半熟用户主动送这条祝福」：
+#   true  = 有普遍的私人互祝习俗（春节/圣诞/开斋节/母亲节/情人节/感恩节…）。
+#   false = 政治性（国庆/独立日/革命纪念/主权日）、哀悼性（阵亡将士/国难日/扫墓节）、
+#           军事纪念、纯行政假（银行假日/节礼日/补假）。这些只作**事实注入**，不群发祝福。
+# 判不准一律保守设 false。「该祝贺却没祝贺」是遗憾，「在人家的国难日说节日快乐」是事故。
+# 本表把**所有**国庆/独立日/主权日统一设 false（含美国 7/4、加拿大国庆）——口径一致比
+# 逐国拍脑袋更可维护；某国确认可祝贺再单独放开。
+#
+# 【scope】public=法定假 | religious=宗教节 | cultural=民俗/商业节。
+# 同一天撞多个节日时按 public → religious → cultural 排序（法定假最可能真被过到）。
+#
+# 【策展原则】每国 8-12 条，宁精不滥：新年 + 国庆 + 最重要的传统节日 + 与「陪聊问候」
+# 真正相关的情感型节日（情人节/母亲节/父亲节/中秋/儿童节）。刻意留白的见文末「已知缺口」。
+# ============================================================================
+
+version: 1
+
+# ── 共享规则（YAML 锚点：同一份日期表被多国引用，改一处即全体生效，避免抄多份腐烂） ──
+# 用 `rule: *anchor` 直接引用，或 `rule: {<<: *anchor, days: 3}` 覆盖连续天数。
+_shared_rules:
+
+  # 斋月首日（1 Ramadan）。表历推算 + 1447AH=2026-02-18 观测锚点校准。
+  ramadan_start: &ramadan_start
+    type: table
+    dates:
+      2026: "02-18"
+      2027: "02-08"
+      2028: "01-28"
+      2029: "01-16"
+      2030: ["01-06", "12-26"]   # 伊斯兰年比公历短 ~11 天，同一公历年可撞两次
+      2031: "12-15"
+      2032: "12-04"
+      2033: "11-23"
+
+  # 开斋节（1 Shawwal / Eid al-Fitr / Idul Fitri / Hari Raya Puasa）
+  eid_al_fitr: &eid_al_fitr
+    type: table
+    dates:
+      2026: "03-20"
+      2027: "03-10"
+      2028: "02-27"
+      2029: "02-15"
+      2030: "02-05"
+      2031: "01-25"
+      2032: "01-14"
+      2033: ["01-03", "12-23"]
+
+  # 宰牲节（10 Dhu al-Hijja / Eid al-Adha / Hari Raya Haji / Kurban Bayramı）
+  eid_al_adha: &eid_al_adha
+    type: table
+    dates:
+      2026: "05-27"
+      2027: "05-17"
+      2028: "05-05"
+      2029: "04-24"
+      2030: "04-14"
+      2031: "04-03"
+      2032: "03-22"
+      2033: "03-12"
+
+  # ── 希伯来历（算术历，下列为精确推算值） ──
+  purim: &heb_purim
+    type: table
+    dates:
+      2026: "03-03"
+      2027: "03-23"
+      2028: "03-12"
+      2029: "03-01"
+      2030: "03-19"
+      2031: "03-09"
+      2032: "02-26"
+      2033: "03-15"
+
+  pesach: &heb_pesach
+    type: table
+    dates:
+      2026: "04-02"
+      2027: "04-22"
+      2028: "04-11"
+      2029: "03-31"
+      2030: "04-18"
+      2031: "04-08"
+      2032: "03-27"
+      2033: "04-14"
+
+  shavuot: &heb_shavuot
+    type: table
+    dates:
+      2026: "05-22"
+      2027: "06-11"
+      2028: "05-31"
+      2029: "05-20"
+      2030: "06-07"
+      2031: "05-28"
+      2032: "05-16"
+      2033: "06-03"
+
+  rosh_hashanah: &heb_rosh_hashanah
+    type: table
+    dates:
+      2026: "09-12"
+      2027: "10-02"
+      2028: "09-21"
+      2029: "09-10"
+      2030: "09-28"
+      2031: "09-18"
+      2032: "09-06"
+      2033: "09-24"
+
+  yom_kippur: &heb_yom_kippur
+    type: table
+    dates:
+      2026: "09-21"
+      2027: "10-11"
+      2028: "09-30"
+      2029: "09-19"
+      2030: "10-07"
+      2031: "09-27"
+      2032: "09-15"
+      2033: "10-03"
+
+  sukkot: &heb_sukkot
+    type: table
+    dates:
+      2026: "09-26"
+      2027: "10-16"
+      2028: "10-05"
+      2029: "09-24"
+      2030: "10-12"
+      2031: "10-02"
+      2032: "09-20"
+      2033: "10-08"
+
+  hanukkah: &heb_hanukkah
+    type: table
+    dates:
+      2026: "12-05"
+      2027: "12-25"
+      2028: "12-13"
+      2029: "12-02"
+      2030: "12-21"
+      2031: "12-10"
+      2032: "11-28"
+      2033: "12-17"
+
+
+# ── 语种 → 默认国家 ────────────────────────────────────────────────────────────
+# en/es/pt/fr **刻意留空**：跨洲通用语（英语可能是美/英/加/澳/菲/印，西语可能是西班牙
+# 或整个拉美），猜错的代价（给美国人发西班牙国庆祝福）远大于猜对的收益。留空则退回通用
+# 路径。调用方若能给出显式区域子标签（en-US / zh-HK / pt-BR），消费方会优先采用——那是
+# 数据而不是猜测。
+lang_defaults:
+  zh: CN
+  ja: JP
+  ko: KR
+  th: TH
+  vi: VN
+  id: ID
+  ms: MY
+  tl: PH
+  fil: PH
+  km: KH
+  hi: IN
+  ar: AE
+  tr: TR
+  ru: RU
+  he: IL
+  de: DE
+  it: IT
+  en: ""     # 跨洲通用语，不猜
+  es: ""     # 跨洲通用语，不猜
+  pt: ""     # 跨洲通用语，不猜
+  fr: ""     # 跨洲通用语，不猜
+
+
+countries:
+
+  # ── 泰国 ──────────────────────────────────────────────────────────────────
+  TH:
+    - key: th_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: th_songkran
+      name_zh: 宋干节（泼水节）
+      name_en: Songkran
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 4, day: 13, days: 3}
+    - key: th_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: th_coronation_day
+      name_zh: 国王加冕纪念日
+      name_en: Coronation Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 4}
+    - key: th_king_birthday
+      name_zh: 国王诞辰日
+      name_en: King's Birthday
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 7, day: 28}
+    - key: th_mothers_day
+      name_zh: 泰国母亲节（诗丽吉太后诞辰）
+      name_en: Thai Mother's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 8, day: 12}
+    - key: th_king_bhumibol_memorial
+      name_zh: 普密蓬国王逝世纪念日
+      name_en: King Bhumibol Memorial Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 10, day: 13}
+    - key: th_chulalongkorn_day
+      name_zh: 五世王纪念日
+      name_en: Chulalongkorn Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 23}
+    - key: th_fathers_day
+      name_zh: 泰国父亲节（普密蓬国王诞辰）
+      name_en: Thai Father's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 5}
+    - key: th_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 越南 ──────────────────────────────────────────────────────────────────
+  # Tết 与中国春节同为农历正月初一，用同一规则、不同 key 与名称（文化归属不同，
+  # 问候文案与习俗完全不同，绝不能共用一条）。
+  VN:
+    - key: vn_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: vn_tet_eve
+      name_zh: 越南除夕（Tất niên）
+      name_en: Tết Eve
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 12, day: -1}   # 腊月末日：廿九或三十，逐年不定
+    - key: vn_tet
+      name_zh: 越南春节（Tết Nguyên Đán）
+      name_en: Tết (Vietnamese Lunar New Year)
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 3}
+    - key: vn_hung_kings
+      name_zh: 雄王节
+      name_en: Hùng Kings' Festival
+      scope: public
+      greet: false      # 国族纪念性
+      rule: {type: lunar, month: 3, day: 10}
+    - key: vn_reunification_day
+      name_zh: 南方解放日
+      name_en: Reunification Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 4, day: 30}
+    - key: vn_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: vn_vu_lan
+      name_zh: 盂兰盆节（Vu Lan，孝亲节）
+      name_en: Vu Lan (Parents' Day)
+      scope: religious
+      greet: true
+      rule: {type: lunar, month: 7, day: 15}
+    - key: vn_national_day
+      name_zh: 越南国庆日
+      name_en: Vietnam National Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 9, day: 2}
+    - key: vn_mid_autumn
+      name_zh: 中秋节（Tết Trung Thu）
+      name_en: Mid-Autumn Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: vn_womens_day
+      name_zh: 越南妇女节
+      name_en: Vietnamese Women's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 10, day: 20}
+
+  # ── 菲律宾 ────────────────────────────────────────────────────────────────
+  PH:
+    - key: ph_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: ph_chinese_new_year
+      name_zh: 农历新年
+      name_en: Chinese New Year
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 1, day: 1}
+    - key: ph_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false      # 肃穆日，不道贺
+      rule: {type: easter_offset, offset: -2}
+    - key: ph_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: ph_day_of_valor
+      name_zh: 英勇日
+      name_en: Araw ng Kagitingan
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 4, day: 9}
+    - key: ph_labour_day
+      name_zh: 劳动节
+      name_en: Labor Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: ph_independence_day
+      name_zh: 菲律宾独立日
+      name_en: Independence Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 6, day: 12}
+    - key: ph_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: ph_fathers_day
+      name_zh: 父亲节
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 6, weekday: 6, nth: 3}
+    - key: ph_undas
+      name_zh: 诸圣节（Undas，扫墓节）
+      name_en: All Saints' Day (Undas)
+      scope: public
+      greet: false      # 追思扫墓
+      rule: {type: fixed, month: 11, day: 1}
+    - key: ph_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: ph_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 印尼 ──────────────────────────────────────────────────────────────────
+  ID:
+    - key: id_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: id_chinese_new_year
+      name_zh: 农历新年（Tahun Baru Imlek）
+      name_en: Chinese New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1}
+    - key: id_ramadan_start
+      name_zh: 斋月开始
+      name_en: Start of Ramadan
+      scope: religious
+      greet: true
+      rule: *ramadan_start
+    - key: id_eid_al_fitr
+      name_zh: 开斋节（Idul Fitri / Lebaran）
+      name_en: Eid al-Fitr
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_fitr, days: 2}
+    - key: id_eid_al_adha
+      name_zh: 宰牲节（Idul Adha）
+      name_en: Eid al-Adha
+      scope: public
+      greet: true
+      rule: *eid_al_adha
+    - key: id_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: id_independence_day
+      name_zh: 印尼独立日
+      name_en: Indonesian Independence Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 8, day: 17}
+    - key: id_mothers_day
+      name_zh: 印尼母亲节（Hari Ibu）
+      name_en: Indonesian Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 22}
+    - key: id_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: id_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 马来西亚 ──────────────────────────────────────────────────────────────
+  MY:
+    - key: my_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: my_chinese_new_year
+      name_zh: 农历新年
+      name_en: Chinese New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 2}
+    - key: my_eid_al_fitr
+      name_zh: 开斋节（Hari Raya Aidilfitri）
+      name_en: Hari Raya Aidilfitri
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_fitr, days: 2}
+    - key: my_eid_al_adha
+      name_zh: 哈芝节（Hari Raya Haji）
+      name_en: Hari Raya Haji
+      scope: public
+      greet: true
+      rule: *eid_al_adha
+    - key: my_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: my_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: my_mid_autumn
+      name_zh: 中秋节
+      name_en: Mid-Autumn Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: my_national_day
+      name_zh: 马来西亚国庆日（Hari Merdeka）
+      name_en: Hari Merdeka (National Day)
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 8, day: 31}
+    - key: my_malaysia_day
+      name_zh: 马来西亚日
+      name_en: Malaysia Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 9, day: 16}
+    - key: my_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: my_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 新加坡 ────────────────────────────────────────────────────────────────
+  SG:
+    - key: sg_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: sg_chinese_new_year
+      name_zh: 农历新年
+      name_en: Chinese New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 2}
+    - key: sg_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: sg_eid_al_fitr
+      name_zh: 开斋节（Hari Raya Puasa）
+      name_en: Hari Raya Puasa
+      scope: public
+      greet: true
+      rule: *eid_al_fitr
+    - key: sg_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: sg_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: sg_eid_al_adha
+      name_zh: 哈芝节（Hari Raya Haji）
+      name_en: Hari Raya Haji
+      scope: public
+      greet: true
+      rule: *eid_al_adha
+    - key: sg_national_day
+      name_zh: 新加坡国庆日
+      name_en: Singapore National Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 8, day: 9}
+    - key: sg_mid_autumn
+      name_zh: 中秋节
+      name_en: Mid-Autumn Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: sg_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: sg_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 柬埔寨 ────────────────────────────────────────────────────────────────
+  KH:
+    - key: kh_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: kh_victory_over_genocide
+      name_zh: 战胜种族灭绝日
+      name_en: Victory over Genocide Day
+      scope: public
+      greet: false      # 哀悼/政治
+      rule: {type: fixed, month: 1, day: 7}
+    - key: kh_womens_day
+      name_zh: 国际妇女节
+      name_en: International Women's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 3, day: 8}
+    - key: kh_khmer_new_year
+      name_zh: 柬埔寨新年（Choul Chnam Thmey）
+      name_en: Khmer New Year
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 4, day: 14, days: 3}
+    - key: kh_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: kh_king_birthday
+      name_zh: 国王诞辰日
+      name_en: King's Birthday
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 14}
+    - key: kh_constitution_day
+      name_zh: 宪法日
+      name_en: Constitution Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 9, day: 24}
+    - key: kh_independence_day
+      name_zh: 柬埔寨独立日
+      name_en: Independence Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 11, day: 9}
+    - key: kh_peace_day
+      name_zh: 和平日
+      name_en: Peace Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 12, day: 29}
+
+  # ── 日本 ──────────────────────────────────────────────────────────────────
+  # 春分の日/秋分の日由天文春分/秋分决定（逐年 ±1 天），故走 jieqi 规则而非固定日。
+  JP:
+    - key: jp_new_year
+      name_zh: 正月（新年）
+      name_en: Japanese New Year
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1, days: 3}
+    - key: jp_coming_of_age
+      name_zh: 成人节
+      name_en: Coming of Age Day
+      scope: public
+      greet: true
+      rule: {type: nth_weekday, month: 1, weekday: 0, nth: 2}
+    - key: jp_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: jp_hinamatsuri
+      name_zh: 女儿节（雛祭り）
+      name_en: Hinamatsuri (Doll Festival)
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 3, day: 3}
+    - key: jp_vernal_equinox
+      name_zh: 春分日
+      name_en: Vernal Equinox Day
+      scope: public
+      greet: true
+      rule: {type: jieqi, name: 春分}
+    - key: jp_showa_day
+      name_zh: 昭和日
+      name_en: Shōwa Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 4, day: 29}
+    - key: jp_childrens_day
+      name_zh: 儿童节（こどもの日）
+      name_en: Children's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 5, day: 5}
+    - key: jp_tanabata
+      name_zh: 七夕（公历）
+      name_en: Tanabata (Star Festival)
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 7, day: 7}
+    - key: jp_obon
+      name_zh: 盂兰盆（お盆）
+      name_en: Obon
+      scope: cultural
+      greet: false      # 祭祖返乡，不道贺
+      rule: {type: fixed, month: 8, day: 13, days: 3}
+    - key: jp_autumnal_equinox
+      name_zh: 秋分日
+      name_en: Autumnal Equinox Day
+      scope: public
+      greet: true
+      rule: {type: jieqi, name: 秋分}
+    - key: jp_christmas_eve
+      name_zh: 平安夜
+      name_en: Christmas Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 24}
+    - key: jp_new_year_eve
+      name_zh: 除夕（大晦日）
+      name_en: Ōmisoka (New Year's Eve)
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 韩国 ──────────────────────────────────────────────────────────────────
+  # 韩国传统节日用中国传来的同一套农历，故 lunar 规则直接适用。
+  KR:
+    - key: kr_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: kr_seollal
+      name_zh: 春节（설날 Seollal）
+      name_en: Seollal (Korean New Year)
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1}
+    - key: kr_independence_movement_day
+      name_zh: 三一独立运动纪念日
+      name_en: Independence Movement Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 3, day: 1}
+    - key: kr_buddha_birthday
+      name_zh: 佛诞日
+      name_en: Buddha's Birthday
+      scope: religious
+      greet: true
+      rule: {type: lunar, month: 4, day: 8}
+    - key: kr_childrens_day
+      name_zh: 儿童节
+      name_en: Children's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 5, day: 5}
+    - key: kr_parents_day
+      name_zh: 父母节（어버이날）
+      name_en: Parents' Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 5, day: 8}
+    - key: kr_memorial_day
+      name_zh: 显忠日
+      name_en: Memorial Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 6, day: 6}
+    - key: kr_liberation_day
+      name_zh: 光复节
+      name_en: Liberation Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 8, day: 15}
+    - key: kr_chuseok
+      name_zh: 中秋（추석 Chuseok）
+      name_en: Chuseok
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: kr_hangul_day
+      name_zh: 韩文日
+      name_en: Hangul Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 9}
+    - key: kr_pepero_day
+      name_zh: 巧克力棒节（빼빼로데이）
+      name_en: Pepero Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 11, day: 11}
+    - key: kr_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 中国大陆 ──────────────────────────────────────────────────────────────
+  # 清明/冬至跟节气走（公历日逐年 ±1 天漂），写死日期会年年错一次。
+  CN:
+    - key: cn_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: cn_chuxi
+      name_zh: 除夕
+      name_en: Chinese New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 12, day: -1}
+    - key: cn_spring_festival
+      name_zh: 春节
+      name_en: Chinese New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 3}
+    - key: cn_lantern_festival
+      name_zh: 元宵节
+      name_en: Lantern Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 1, day: 15}
+    - key: cn_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: cn_qingming
+      name_zh: 清明节
+      name_en: Qingming Festival
+      scope: public
+      greet: false      # 扫墓追思
+      rule: {type: jieqi, name: 清明}
+    - key: cn_duanwu
+      name_zh: 端午节
+      name_en: Dragon Boat Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 5, day: 5}
+    - key: cn_qixi
+      name_zh: 七夕节
+      name_en: Qixi (Chinese Valentine's Day)
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 7, day: 7}
+    - key: cn_mid_autumn
+      name_zh: 中秋节
+      name_en: Mid-Autumn Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: cn_double_ninth
+      name_zh: 重阳节
+      name_en: Double Ninth Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 9, day: 9}
+    - key: cn_national_day
+      name_zh: 国庆节
+      name_en: China National Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 1}
+    - key: cn_dongzhi
+      name_zh: 冬至
+      name_en: Winter Solstice
+      scope: cultural
+      greet: true
+      rule: {type: jieqi, name: 冬至}
+
+  # ── 台湾 ──────────────────────────────────────────────────────────────────
+  TW:
+    - key: tw_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: tw_chuxi
+      name_zh: 除夕
+      name_en: Lunar New Year's Eve
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 12, day: -1}
+    - key: tw_spring_festival
+      name_zh: 春节
+      name_en: Lunar New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 3}
+    - key: tw_lantern_festival
+      name_zh: 元宵节
+      name_en: Lantern Festival
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 1, day: 15}
+    - key: tw_peace_memorial_day
+      name_zh: 和平纪念日
+      name_en: Peace Memorial Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 2, day: 28}
+    - key: tw_childrens_day
+      name_zh: 儿童节
+      name_en: Children's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 4, day: 4}
+    - key: tw_qingming
+      name_zh: 清明节
+      name_en: Qingming Festival
+      scope: public
+      greet: false
+      rule: {type: jieqi, name: 清明}
+    - key: tw_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: tw_duanwu
+      name_zh: 端午节
+      name_en: Dragon Boat Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 5, day: 5}
+    - key: tw_mid_autumn
+      name_zh: 中秋节
+      name_en: Mid-Autumn Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: tw_double_tenth
+      name_zh: 双十节
+      name_en: Double Tenth Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 10}
+    - key: tw_christmas_eve
+      name_zh: 平安夜
+      name_en: Christmas Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 24}
+
+  # ── 香港 ──────────────────────────────────────────────────────────────────
+  HK:
+    - key: hk_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: hk_lunar_new_year_eve
+      name_zh: 年三十（除夕）
+      name_en: Lunar New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: lunar, month: 12, day: -1}
+    - key: hk_lunar_new_year
+      name_zh: 农历新年
+      name_en: Lunar New Year
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 1, day: 1, days: 3}
+    - key: hk_qingming
+      name_zh: 清明节
+      name_en: Ching Ming Festival
+      scope: public
+      greet: false
+      rule: {type: jieqi, name: 清明}
+    - key: hk_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: hk_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: hk_buddha_birthday
+      name_zh: 佛诞
+      name_en: Buddha's Birthday
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 4, day: 8}
+    - key: hk_duanwu
+      name_zh: 端午节
+      name_en: Tuen Ng (Dragon Boat) Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 5, day: 5}
+    - key: hk_establishment_day
+      name_zh: 香港特别行政区成立纪念日
+      name_en: HKSAR Establishment Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 7, day: 1}
+    - key: hk_mid_autumn
+      name_zh: 中秋节
+      name_en: Mid-Autumn Festival
+      scope: public
+      greet: true
+      rule: {type: lunar, month: 8, day: 15}
+    - key: hk_dongzhi
+      name_zh: 冬至
+      name_en: Winter Solstice
+      scope: cultural
+      greet: true
+      rule: {type: jieqi, name: 冬至}
+    - key: hk_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25, days: 2}
+
+  # ── 印度 ──────────────────────────────────────────────────────────────────
+  # ⚠ 已知缺口：排灯节（Diwali）/ 洒红节（Holi）等印度教节日走印度阴阳历，既算不了
+  # 也不在可信查表范围内（各邦历法口径不一），**刻意不收**——宁可缺，不可发错日子。
+  IN:
+    - key: in_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: in_republic_day
+      name_zh: 印度共和日
+      name_en: Republic Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 1, day: 26}
+    - key: in_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: in_eid_al_fitr
+      name_zh: 开斋节
+      name_en: Eid al-Fitr
+      scope: religious
+      greet: true
+      rule: *eid_al_fitr
+    - key: in_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: in_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: in_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: in_eid_al_adha
+      name_zh: 宰牲节（Bakrid）
+      name_en: Eid al-Adha (Bakrid)
+      scope: religious
+      greet: true
+      rule: *eid_al_adha
+    - key: in_independence_day
+      name_zh: 印度独立日
+      name_en: Indian Independence Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 8, day: 15}
+    - key: in_gandhi_jayanti
+      name_zh: 甘地诞辰纪念日
+      name_en: Gandhi Jayanti
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 2}
+    - key: in_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 阿联酋 ────────────────────────────────────────────────────────────────
+  AE:
+    - key: ae_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: ae_arab_mothers_day
+      name_zh: 阿拉伯母亲节
+      name_en: Arab Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 3, day: 21}
+    - key: ae_ramadan_start
+      name_zh: 斋月开始
+      name_en: Start of Ramadan
+      scope: religious
+      greet: true
+      rule: *ramadan_start
+    - key: ae_eid_al_fitr
+      name_zh: 开斋节
+      name_en: Eid al-Fitr
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_fitr, days: 3}
+    - key: ae_eid_al_adha
+      name_zh: 宰牲节
+      name_en: Eid al-Adha
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_adha, days: 3}
+    - key: ae_commemoration_day
+      name_zh: 烈士纪念日
+      name_en: Commemoration Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 12, day: 1}
+    - key: ae_national_day
+      name_zh: 阿联酋国庆日
+      name_en: UAE National Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 12, day: 2, days: 2}
+    - key: ae_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 土耳其 ────────────────────────────────────────────────────────────────
+  TR:
+    - key: tr_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: tr_ramadan_start
+      name_zh: 斋月开始
+      name_en: Start of Ramadan
+      scope: religious
+      greet: true
+      rule: *ramadan_start
+    - key: tr_eid_al_fitr
+      name_zh: 开斋节（Ramazan Bayramı）
+      name_en: Ramazan Bayramı (Eid al-Fitr)
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_fitr, days: 3}
+    - key: tr_childrens_day
+      name_zh: 儿童节（4月23日）
+      name_en: National Sovereignty and Children's Day
+      scope: public
+      greet: true      # 名义上主权日，实际全国以儿童节形式庆祝
+      rule: {type: fixed, month: 4, day: 23}
+    - key: tr_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: tr_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: tr_eid_al_adha
+      name_zh: 宰牲节（Kurban Bayramı）
+      name_en: Kurban Bayramı (Eid al-Adha)
+      scope: public
+      greet: true
+      rule: {<<: *eid_al_adha, days: 4}
+    - key: tr_victory_day
+      name_zh: 胜利日
+      name_en: Victory Day
+      scope: public
+      greet: false      # 军事纪念
+      rule: {type: fixed, month: 8, day: 30}
+    - key: tr_republic_day
+      name_zh: 土耳其共和国日
+      name_en: Republic Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 29}
+    - key: tr_ataturk_memorial
+      name_zh: 阿塔图尔克逝世纪念日
+      name_en: Atatürk Memorial Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 11, day: 10}
+
+  # ── 俄罗斯 ────────────────────────────────────────────────────────────────
+  # 东正教复活节走儒略历（calendar: julian），与西方复活节常差 1-5 周：
+  # 2026 西方 04-05、东正教 04-12。拿西历日子发东正教问候是错的。
+  RU:
+    - key: ru_new_year
+      name_zh: 新年（俄罗斯最大的节日）
+      name_en: New Year
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1, days: 5}
+    - key: ru_orthodox_christmas
+      name_zh: 东正教圣诞节
+      name_en: Orthodox Christmas
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 7}
+    - key: ru_defender_of_fatherland
+      name_zh: 祖国保卫者日
+      name_en: Defender of the Fatherland Day
+      scope: public
+      greet: false      # 军事纪念
+      rule: {type: fixed, month: 2, day: 23}
+    - key: ru_womens_day
+      name_zh: 国际妇女节（3月8日）
+      name_en: International Women's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 3, day: 8}
+    - key: ru_maslenitsa
+      name_zh: 谢肉节（Масленица）
+      name_en: Maslenitsa
+      scope: cultural
+      greet: true
+      rule: {type: easter_offset, calendar: julian, offset: -55, days: 7}
+    - key: ru_orthodox_easter
+      name_zh: 东正教复活节（Пасха）
+      name_en: Orthodox Easter (Pascha)
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, calendar: julian, offset: 0}
+    - key: ru_spring_labour_day
+      name_zh: 春天与劳动节
+      name_en: Spring and Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: ru_victory_day
+      name_zh: 胜利日
+      name_en: Victory Day
+      scope: public
+      greet: false      # 军事纪念/哀悼
+      rule: {type: fixed, month: 5, day: 9}
+    - key: ru_russia_day
+      name_zh: 俄罗斯日
+      name_en: Russia Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 6, day: 12}
+    - key: ru_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 美国 ──────────────────────────────────────────────────────────────────
+  US:
+    - key: us_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: us_mlk_day
+      name_zh: 马丁·路德·金纪念日
+      name_en: Martin Luther King Jr. Day
+      scope: public
+      greet: false
+      rule: {type: nth_weekday, month: 1, weekday: 0, nth: 3}
+    - key: us_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: us_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: us_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: us_memorial_day
+      name_zh: 阵亡将士纪念日
+      name_en: Memorial Day
+      scope: public
+      greet: false      # 哀悼日；5 月最后一个周一（nth 负数＝倒数）
+      rule: {type: nth_weekday, month: 5, weekday: 0, nth: -1}
+    - key: us_fathers_day
+      name_zh: 父亲节
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 6, weekday: 6, nth: 3}
+    - key: us_independence_day
+      name_zh: 美国独立日
+      name_en: Independence Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 7, day: 4}
+    - key: us_halloween
+      name_zh: 万圣夜
+      name_en: Halloween
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 10, day: 31}
+    - key: us_thanksgiving
+      name_zh: 感恩节
+      name_en: Thanksgiving
+      scope: public
+      greet: true
+      rule: {type: nth_weekday, month: 11, weekday: 3, nth: 4}
+    - key: us_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: us_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 加拿大 ────────────────────────────────────────────────────────────────
+  # ⚠ 已知缺口：维多利亚日＝「5 月 25 日之前的最后一个周一」，不是「5 月最后一个周一」
+  # （2026 年两者相差一周），nth_weekday 表达不了，刻意不收。
+  CA:
+    - key: ca_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: ca_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: ca_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: ca_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: ca_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: ca_fathers_day
+      name_zh: 父亲节
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 6, weekday: 6, nth: 3}
+    - key: ca_canada_day
+      name_zh: 加拿大国庆日
+      name_en: Canada Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 7, day: 1}
+    - key: ca_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: nth_weekday, month: 9, weekday: 0, nth: 1}
+    - key: ca_thanksgiving
+      name_zh: 加拿大感恩节
+      name_en: Canadian Thanksgiving
+      scope: public
+      greet: true
+      rule: {type: nth_weekday, month: 10, weekday: 0, nth: 2}
+    - key: ca_halloween
+      name_zh: 万圣夜
+      name_en: Halloween
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 10, day: 31}
+    - key: ca_remembrance_day
+      name_zh: 国殇纪念日
+      name_en: Remembrance Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 11, day: 11}
+    - key: ca_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 英国 ──────────────────────────────────────────────────────────────────
+  # 英国母亲节＝Mothering Sunday＝四旬期第四个主日＝复活节前 21 天（不是 5 月第二个周日，
+  # 这是给英国用户发问候最容易发错的一天）。
+  GB:
+    - key: gb_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: gb_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: gb_mothering_sunday
+      name_zh: 母亲节（Mothering Sunday）
+      name_en: Mothering Sunday
+      scope: cultural
+      greet: true
+      rule: {type: easter_offset, offset: -21}
+    - key: gb_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: gb_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: gb_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: gb_early_may_bank_holiday
+      name_zh: 五月初银行假日
+      name_en: Early May Bank Holiday
+      scope: public
+      greet: false      # 纯行政假
+      rule: {type: nth_weekday, month: 5, weekday: 0, nth: 1}
+    - key: gb_spring_bank_holiday
+      name_zh: 春季银行假日
+      name_en: Spring Bank Holiday
+      scope: public
+      greet: false
+      rule: {type: nth_weekday, month: 5, weekday: 0, nth: -1}
+    - key: gb_fathers_day
+      name_zh: 父亲节
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 6, weekday: 6, nth: 3}
+    - key: gb_summer_bank_holiday
+      name_zh: 夏季银行假日
+      name_en: Summer Bank Holiday
+      scope: public
+      greet: false
+      rule: {type: nth_weekday, month: 8, weekday: 0, nth: -1}
+    - key: gb_halloween
+      name_zh: 万圣夜
+      name_en: Halloween
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 10, day: 31}
+    - key: gb_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 法国 ──────────────────────────────────────────────────────────────────
+  FR:
+    - key: fr_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: fr_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: fr_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: fr_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: fr_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: fr_ve_day
+      name_zh: 二战欧战胜利日
+      name_en: Victory in Europe Day
+      scope: public
+      greet: false      # 军事纪念
+      rule: {type: fixed, month: 5, day: 8}
+    - key: fr_ascension
+      name_zh: 耶稣升天节
+      name_en: Ascension Day
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: 39}
+    - key: fr_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      # 法国母亲节＝5 月最后一个周日；极少数年份若与圣灵降临节同日则顺延到 6 月第一个
+      # 周日（本规则不表达该罕见例外，届时会早一周——已知偏差，非静默错误）。
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: -1}
+    - key: fr_bastille_day
+      name_zh: 法国国庆日（巴士底日）
+      name_en: Bastille Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 7, day: 14}
+    - key: fr_all_saints
+      name_zh: 诸圣节
+      name_en: All Saints' Day
+      scope: public
+      greet: false      # 追思扫墓
+      rule: {type: fixed, month: 11, day: 1}
+    - key: fr_armistice_day
+      name_zh: 一战停战纪念日
+      name_en: Armistice Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 11, day: 11}
+    - key: fr_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 德国 ──────────────────────────────────────────────────────────────────
+  DE:
+    - key: de_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: de_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: de_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: de_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: de_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: de_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: de_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: de_ascension
+      name_zh: 耶稣升天节
+      name_en: Ascension Day
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: 39}
+    - key: de_whit_monday
+      name_zh: 圣灵降临节星期一
+      name_en: Whit Monday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: 50}
+    - key: de_unity_day
+      name_zh: 德国统一日
+      name_en: German Unity Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 10, day: 3}
+    - key: de_st_nicholas
+      name_zh: 圣尼古拉斯日
+      name_en: St. Nicholas Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 6}
+    - key: de_christmas_eve
+      name_zh: 平安夜（德国过节主日）
+      name_en: Christmas Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 24}
+
+  # ── 意大利 ────────────────────────────────────────────────────────────────
+  IT:
+    - key: it_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: it_epiphany
+      name_zh: 主显节（Befana）
+      name_en: Epiphany
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 6}
+    - key: it_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: it_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: it_easter_monday
+      name_zh: 复活节星期一（Pasquetta）
+      name_en: Easter Monday (Pasquetta)
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: it_liberation_day
+      name_zh: 意大利解放日
+      name_en: Liberation Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 4, day: 25}
+    - key: it_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 5, day: 1}
+    - key: it_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: it_republic_day
+      name_zh: 意大利共和日
+      name_en: Republic Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 6, day: 2}
+    - key: it_ferragosto
+      name_zh: 八月节（Ferragosto，圣母升天）
+      name_en: Ferragosto (Assumption)
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 8, day: 15}
+    - key: it_all_saints
+      name_zh: 诸圣节
+      name_en: All Saints' Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 11, day: 1}
+    - key: it_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 澳大利亚 ──────────────────────────────────────────────────────────────
+  # 澳大利亚国庆日在原住民社群有争议（"Invasion Day"），greet 明确 false。
+  AU:
+    - key: au_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: au_australia_day
+      name_zh: 澳大利亚国庆日
+      name_en: Australia Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 1, day: 26}
+    - key: au_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: au_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: au_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: au_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: au_anzac_day
+      name_zh: 澳新军团日
+      name_en: Anzac Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 4, day: 25}
+    - key: au_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: au_fathers_day
+      name_zh: 父亲节（9月第一个周日）
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 9, weekday: 6, nth: 1}
+    - key: au_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+    - key: au_boxing_day
+      name_zh: 节礼日
+      name_en: Boxing Day
+      scope: public
+      greet: false      # 纯行政/购物假
+      rule: {type: fixed, month: 12, day: 26}
+    - key: au_new_year_eve
+      name_zh: 跨年夜
+      name_en: New Year's Eve
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 12, day: 31}
+
+  # ── 新西兰 ────────────────────────────────────────────────────────────────
+  # ⚠ 已知缺口：Matariki（毛利新年）由天文观测 + 政府逐年公告确定，无规则可写，刻意不收。
+  NZ:
+    - key: nz_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: nz_day_after_new_year
+      name_zh: 元旦次日
+      name_en: Day after New Year's Day
+      scope: public
+      greet: false      # 纯行政假
+      rule: {type: fixed, month: 1, day: 2}
+    - key: nz_waitangi_day
+      name_zh: 怀唐伊日
+      name_en: Waitangi Day
+      scope: public
+      greet: false
+      rule: {type: fixed, month: 2, day: 6}
+    - key: nz_valentine
+      name_zh: 情人节
+      name_en: Valentine's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 2, day: 14}
+    - key: nz_good_friday
+      name_zh: 耶稣受难日
+      name_en: Good Friday
+      scope: public
+      greet: false
+      rule: {type: easter_offset, offset: -2}
+    - key: nz_easter
+      name_zh: 复活节
+      name_en: Easter Sunday
+      scope: religious
+      greet: true
+      rule: {type: easter_offset, offset: 0}
+    - key: nz_easter_monday
+      name_zh: 复活节星期一
+      name_en: Easter Monday
+      scope: public
+      greet: true
+      rule: {type: easter_offset, offset: 1}
+    - key: nz_anzac_day
+      name_zh: 澳新军团日
+      name_en: Anzac Day
+      scope: public
+      greet: false      # 哀悼日
+      rule: {type: fixed, month: 4, day: 25}
+    - key: nz_mothers_day
+      name_zh: 母亲节
+      name_en: Mother's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 5, weekday: 6, nth: 2}
+    - key: nz_fathers_day
+      name_zh: 父亲节（9月第一个周日）
+      name_en: Father's Day
+      scope: cultural
+      greet: true
+      rule: {type: nth_weekday, month: 9, weekday: 6, nth: 1}
+    - key: nz_labour_day
+      name_zh: 劳动节
+      name_en: Labour Day
+      scope: public
+      greet: false
+      rule: {type: nth_weekday, month: 10, weekday: 0, nth: 4}
+    - key: nz_christmas
+      name_zh: 圣诞节
+      name_en: Christmas Day
+      scope: public
+      greet: true
+      rule: {type: fixed, month: 12, day: 25}
+
+  # ── 以色列 ────────────────────────────────────────────────────────────────
+  # 全部走 table：希伯来历是算术历（下列日期为精确推算值），但规则引擎里没有希伯来历
+  # 实现，故落成表。⚠ 犹太节日**从前一日日落开始**，这里记的是主日（公历白天那天）。
+  # ⚠ 已知缺口：以色列独立日（Yom Ha'atzmaut）含「避开安息日」的逐年顺延规则，不收。
+  IL:
+    - key: il_new_year
+      name_zh: 元旦
+      name_en: New Year's Day
+      scope: cultural
+      greet: true
+      rule: {type: fixed, month: 1, day: 1}
+    - key: il_purim
+      name_zh: 普林节
+      name_en: Purim
+      scope: religious
+      greet: true
+      rule: *heb_purim
+    - key: il_pesach
+      name_zh: 逾越节
+      name_en: Passover (Pesach)
+      scope: public
+      greet: true
+      rule: {<<: *heb_pesach, days: 7}
+    - key: il_shavuot
+      name_zh: 五旬节
+      name_en: Shavuot
+      scope: public
+      greet: true
+      rule: *heb_shavuot
+    - key: il_rosh_hashanah
+      name_zh: 犹太新年
+      name_en: Rosh Hashanah
+      scope: public
+      greet: true
+      rule: {<<: *heb_rosh_hashanah, days: 2}
+    - key: il_yom_kippur
+      name_zh: 赎罪日
+      name_en: Yom Kippur
+      scope: public
+      greet: false      # 斋戒忏悔日，不道贺
+      rule: *heb_yom_kippur
+    - key: il_sukkot
+      name_zh: 住棚节
+      name_en: Sukkot
+      scope: public
+      greet: true
+      rule: {<<: *heb_sukkot, days: 7}
+    - key: il_hanukkah
+      name_zh: 光明节
+      name_en: Hanukkah
+      scope: religious
+      greet: true
+      rule: {<<: *heb_hanukkah, days: 8}
+
+
+# ============================================================================
+# 已知缺口（刻意留白，宁缺勿错——补进来前必须先有可靠算法或权威表源）
+# ----------------------------------------------------------------------------
+# - 印度教节日（Diwali / Holi）：印度阴阳历，各邦口径不一，无可信规则。
+# - 泰/柬/缅佛历节日（Loy Krathong / Pchum Ben / Visak Bochea）：泰历≠中国农历，
+#   用 lunar 规则会系统性错日子。
+# - 巴厘岛 Nyepi（萨卡新年）、马来/新加坡 Deepavali：同上。
+# - 加拿大维多利亚日、以色列独立日、新西兰 Matariki：规则含 nth_weekday 表达不了的
+#   条件（"某日之前的最后一个周一" / 避安息日顺延 / 政府逐年公告）。
+# - 复活节相关：本表只覆盖西方（格里高利）与东正教（儒略）两支。
+# ============================================================================

@@ -24,6 +24,17 @@ def _reset_provider():
     reset_persona_media_store()
 
 
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸（capabilities.photos）默认关；本文件全部场景
+    假定「人设已开相册/发图」，统一打开（关态由 tests/test_photo_capability.py
+    的 B 线行为用例覆盖）。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+
+
 def _cfg(**selfie):
     return {"companion": {"selfie": selfie}}
 
@@ -87,7 +98,9 @@ async def test_stage_album_selfie(tmp_path, monkeypatch):
         "enabled": True, "backend": "album", "album_dir": str(album)})
     out = await ia.stage_image_file(
         cfg, "telegram", "acct1", "", {"kind": "selfie"})
-    assert out == ("/tmp/out.png", "/static/out.png", "selfie")
+    local, url, kind, info = out
+    assert (local, url, kind) == ("/tmp/out.png", "/static/out.png", "selfie")
+    assert info.get("provider") == "album" and not info.get("fallback_from")
     assert saved["data"] == b"\x89PNGdummy"
     assert saved["platform"] == "telegram" and saved["account"] == "acct1"
 
@@ -180,7 +193,9 @@ async def test_stage_object_text2img_and_llm_refine(tmp_path, monkeypatch):
     out = await ia.stage_image_file(
         cfg, "telegram", "acct1", "",
         {"kind": "object", "prompt": "a bowl of noodles"}, llm_refine=refine)
-    assert out == ("/l", "/u", "object")
+    local, url, kind, info = out
+    assert (local, url, kind) == ("/l", "/u", "object")
+    assert info.get("provider") == "openai" and not info.get("fallback_from")
     # 用了精炼后的 prompt（去引号），物体图不带人设基础图
     assert captured["prompt"] == "a gourmet bowl of ramen, steam"
     assert not captured.get("base_image")
@@ -223,7 +238,9 @@ async def test_run_registry_keyword_hit_sends_and_records():
         _cfg(enabled=True), "telegram", "acct1", "chatA", "lin",
         "给我跳舞看看", [], send_fn=send_fn, ai_text="好呀")
     assert ok is True
-    assert sent[0]["path"] == "/disk/dance.jpg" and sent[0]["type"] == "photo"
+    # 工单 #143：相册条目存的是 "photo"，发送层必须归一成 "image"——
+    # 裸传 "photo" 会让 WA 边车按 document 发出（对方看到点不开的「文档」）。
+    assert sent[0]["path"] == "/disk/dance.jpg" and sent[0]["type"] == "image"
     assert sent[0]["cap"] == "看我跳~"  # 用条目 caption
     assert st.get(row["id"])["hits"] == 1  # 命中计数 +1
 
@@ -345,6 +362,7 @@ async def test_run_selfie_album_growth_and_llm_caption(tmp_path, monkeypatch):
         "src.integrations.protocol_bridge.save_outbound_media", fake_save)
     cfg = _cfg(enabled=True, appearance="a young woman",
                register_generated_max=3,
+               consistency={"enabled": False},  # 关重发冷却：本测试专测轮换语义
                provider={"enabled": True, "backend": "openai", "api_key": "x",
                          "album_dir": str(album)})
     prov = cs.get_selfie_provider(cfg["companion"]["selfie"]["provider"])

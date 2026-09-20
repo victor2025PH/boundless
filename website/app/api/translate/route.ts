@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { deepseekEnabled } from "@/lib/deepseek";
 import { dailyGuard } from "@/lib/chat-log";
 import { canProceed, recordSuccess, recordFailure } from "@/lib/circuit-breaker";
@@ -7,7 +8,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ENDPOINT = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/chat/completions";
-const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+// deepseek-flash（V4.1-Flash）= 2026-09-10 起官方唯一对话模型；deepseek-chat 已退役。
+const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-flash";
+// 混合推理默认开思考且与正文共享 max_tokens → 严格 JSON 输出场景必须关（同 lib/deepseek.ts）。
+const THINKING_OFF: Record<string, unknown> = /api\.deepseek\.com/i.test(ENDPOINT)
+  ? { thinking: { type: "disabled" } }
+  : {};
 
 // 通译 LingoX demo 的目标语言（展示「一句进、多语出」的实时翻译能力）。
 const TARGETS = [
@@ -35,10 +41,7 @@ function limited(ip: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "anon";
+  const ip = clientIp(req);
   if (limited(ip)) {
     return NextResponse.json({ ok: false, error: "rate_limited" }, { status: 429 });
   }
@@ -84,6 +87,7 @@ export async function POST(req: NextRequest) {
         temperature: 0.3,
         max_tokens: 900,
         stream: false,
+        ...THINKING_OFF,
       }),
       signal: ac.signal,
     });

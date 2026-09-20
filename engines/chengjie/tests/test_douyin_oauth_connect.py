@@ -1,0 +1,272 @@
+# -*- coding: utf-8 -*-
+"""抖音企业号接入面板（实施96 P1-1 收尾，2026-09-08）：state 防篡改 / 授权 URL / code 换令牌落注册表 /
+教程页表单保存凭证（overlay）/ 授权跳转 / 公开回调 → 账号登记 → 页面列出令牌状态。"""
+from __future__ import annotations
+
+import time
+from typing import Any, Dict, List, Tuple
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+
+from src.integrations import douyin_official as dy
+
+KEY, SECRET = "awtestkey", "s3cr3t"
+
+
+class FakeTransport:
+    def __init__(self, grant: Dict[str, Any] | None = None):
+        self.calls: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.grant = grant if grant is not None else {
+            "access_token": "act.1", "expires_in": 1296000, "refresh_token": "rft.1", "refresh_expires_in": 2592000,
+            "open_id": "open-abc", "scope": dy.OAUTH_SCOPES, "error_code": 0, "description": ""}
+
+    async def __call__(self, method, url, **kw):
+        self.calls.append((method, url, kw))
+        return 200, {"data": self.grant, "message": "success"}
+
+
+class FakeRegistry:
+    def __init__(self):
+        self.rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def get(self, platform, account_id):
+        return self.rows.get((platform, account_id))
+
+    def list(self, platform=None, **_):
+        return [r for (p, _a), r in self.rows.items() if platform is None or p == platform]
+
+    def upsert(self, platform, account_id, *, meta=None, merge_meta=False, **kw):
+        row = self.rows.setdefault((platform, account_id), {"platform": platform, "account_id": account_id, "meta": {}})
+        for k, v in kw.items():
+            if v is not None:
+                row[k] = v
+        if meta is not None:
+            if merge_meta:
+                row["meta"].update(meta)
+            else:
+                row["meta"] = dict(meta)
+        return row
+
+
+def test_oauth_state_roundtrip_and_tamper():
+    now = 1_800_000_000.0
+    st = dy.oauth_state(SECRET, now)
+    assert dy.verify_oauth_state(SECRET, st, now + 5)
+    assert not dy.verify_oauth_state(SECRET, st, now + dy.OAUTH_STATE_TTL_SEC + 1)   # 过期
+    assert not dy.verify_oauth_state(SECRET, st, now - 5)                             # 未来时间戳
+    assert not dy.verify_oauth_state("other", st, now + 5)                            # 换密钥
+    ts, mac = st.split(".")
+    assert not dy.verify_oauth_state(SECRET, f"{int(ts) + 1}.{mac}", now + 5)        # 改时间戳
+    assert not dy.verify_oauth_state(SECRET, "garbage", now) and not dy.verify_oauth_state("", st, now)
+
+
+def test_authorize_url_shape():
+    u = dy.authorize_url(KEY, "https://x.example.com/webhook/douyin/oauth/callback", "1.abc")
+    p = urlparse(u)
+    assert f"{p.scheme}://{p.netloc}{p.path}" == dy.AUTHORIZE_URL
+    q = parse_qs(p.query)
+    assert q["client_key"] == [KEY] and q["response_type"] == ["code"] and q["state"] == ["1.abc"]
+    assert q["redirect_uri"] == ["https://x.example.com/webhook/douyin/oauth/callback"]
+    assert set(q["scope"][0].split(",")) == {"im.direct_message", "im.message_card", "tool.image.upload"}
+
+
+async def test_complete_oauth_registers_account_and_keeps_persona():
+    tr = FakeTransport()
+    reg = FakeRegistry()
+    reg.upsert("douyin", "open-abc", label="我的抖音号", meta={"persona_id": "p-1"})
+    now = 1_800_000_000.0
+    res = await dy.complete_oauth("code-1", config={"douyin": {"client_key": KEY, "client_secret": SECRET}},
+                                  registry=reg, api=dy.DouyinApi(transport=tr), now=now)
+    assert res["ok"] and res["open_id"] == "open-abc"
+    method, url, kw = tr.calls[0]
+    assert (method, url) == ("POST", dy.ACCESS_TOKEN_URL)
+    assert kw["form"] == {"client_key": KEY, "client_secret": SECRET, "code": "code-1", "grant_type": "authorization_code"}
+    row = reg.get("douyin", "open-abc")
+    assert row["mode"] == "official" and row["status"] == "active" and row["label"] == "我的抖音号"
+    m = row["meta"]
+    assert m["persona_id"] == "p-1" and m["access_token"] == "act.1" and m["refresh_token"] == "rft.1"
+    assert m["access_expires_at"] == now + 1296000 and m["refresh_expires_at"] == now + 2592000
+    assert m["renew_count"] == 0 and m["client_key"] == KEY
+    assert dy.token_state(m, now) == "ok"
+    # worker 能直接吃这份 meta
+    w = dy.DouyinOfficialWorker({"account_id": "open-abc", "meta": m}, {"douyin": {"client_key": KEY}},
+                                api=dy.DouyinApi(transport=tr), state=dy.DouyinStateStore(":memory:"), now=lambda: now)
+    assert w.token_state == "ok"
+
+
+async def test_complete_oauth_failures():
+    reg = FakeRegistry()
+    assert (await dy.complete_oauth("c", config={}, registry=reg))["error"] == "missing_credentials"
+    bad = FakeTransport(grant={"error_code": 10008, "description": "invalid code"})
+    res = await dy.complete_oauth("c", config={"douyin": {"client_key": KEY, "client_secret": SECRET}},
+                                  registry=reg, api=dy.DouyinApi(transport=bad))
+    assert res == {"ok": False, "error": "exchange_failed", "error_code": 10008, "description": "invalid code"}
+    assert reg.rows == {}
+
+
+@pytest.fixture()
+def _fake_registry(monkeypatch):
+    reg = FakeRegistry()
+    import src.integrations.account_registry as ar
+    monkeypatch.setattr(ar, "get_account_registry", lambda: reg)
+    yield reg
+    # 保存凭证时的热挂载会注册 (douyin, official) / (tiktok, official) 工厂——用完清掉
+    from src.integrations import account_orchestrator as ao
+    ao._WORKER_FACTORIES.pop("douyin:official", None)
+    ao._WORKER_FACTORIES.pop("tiktok:official", None)
+
+
+def test_panel_flow_end_to_end(auth_client, app, _fake_registry, monkeypatch):
+    cm = app.state.config_manager
+    ref = {"Referer": "http://testserver/workspace/onboarding/douyin"}
+    # 未配置：面板可见、授权按钮禁用、回调地址按 Host 生成
+    r = auth_client.get("/workspace/onboarding/douyin")
+    assert r.status_code == 200
+    assert 'action="/workspace/onboarding/douyin/credentials"' in r.text
+    assert "http://testserver/webhook/douyin/oauth/callback" in r.text
+    assert 'id="obg-authorize"' in r.text and "obg-btn pri dis" in r.text
+    # 未配置就点授权 → 回教程页带 error
+    r = auth_client.get("/workspace/onboarding/douyin/authorize", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?error=missing_credentials")
+    # 缺 secret 拒绝；保存成功 → overlay + 内存
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": KEY}, headers=ref,
+                         follow_redirects=False)
+    assert r.status_code == 303 and "missing_secret" in r.headers["location"]
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": KEY, "client_secret": SECRET},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?saved=1"), r.headers
+    assert cm.config["douyin"]["client_key"] == KEY and cm.config["douyin"]["client_secret"] == SECRET
+    assert cm.config["douyin"]["enabled"] is True
+    # 密钥留空 = 保留
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": "aw-new", "client_secret": ""},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and cm.config["douyin"]["client_secret"] == SECRET and cm.config["douyin"]["client_key"] == "aw-new"
+    r = auth_client.get("/workspace/onboarding/douyin?saved=1")
+    assert "已即时装载" in r.text and 'value="aw-new"' in r.text and SECRET not in r.text   # 密钥不回显
+    # 热挂载：保存凭证后 webhook 路由已挂、worker 工厂已注册，自检不再要求重启
+    from src.integrations import account_orchestrator as ao
+    assert ao.get_worker_factory("douyin", "official") is not None
+    st = auth_client.get("/api/onboarding/douyin/status").json()
+    assert st["checks"]["webhook_mounted"] is True and st["checks"]["restart_required"] is False
+    assert st["hint"] == "authorize" and st["light"] == "blue"
+    assert "obg-btn pri dis" not in r.text                                                     # 授权按钮启用
+    # 授权跳转：302 去抖音，redirect_uri 指回本机回调，state 可验
+    r = auth_client.get("/workspace/onboarding/douyin/authorize", follow_redirects=False)
+    assert r.status_code == 302
+    q = parse_qs(urlparse(r.headers["location"]).query)
+    assert r.headers["location"].startswith(dy.AUTHORIZE_URL) and q["client_key"] == ["aw-new"]
+    assert q["redirect_uri"] == ["http://testserver/webhook/douyin/oauth/callback"]
+    state = q["state"][0]
+    assert dy.verify_oauth_state(SECRET, state)
+    # 回调：坏 state / 用户拒绝 / 成功登记
+    r = auth_client.get("/webhook/douyin/oauth/callback?code=c&state=1.bad", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?error=bad_state")
+    r = auth_client.get(f"/webhook/douyin/oauth/callback?error=access_denied&state={state}", follow_redirects=False)
+    assert "error=denied:access_denied" in r.headers["location"]
+    tr = FakeTransport()
+    monkeypatch.setattr(dy, "DouyinApi", lambda *a, **k: _ApiWith(tr))
+    r = auth_client.get(f"/webhook/douyin/oauth/callback?code=code-9&state={state}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?connected=open-abc"), r.headers
+    assert tr.calls[0][2]["form"]["code"] == "code-9" and tr.calls[0][2]["form"]["client_key"] == "aw-new"
+    row = _fake_registry.get("douyin", "open-abc")
+    assert row and row["mode"] == "official" and row["meta"]["access_token"] == "act.1"
+    # 页面列出已授权账号与令牌状态
+    r = auth_client.get("/workspace/onboarding/douyin?connected=open-abc")
+    assert "open-abc" in r.text and "令牌正常" in r.text and "授权成功" in r.text
+    # 未登录不能进面板 / 授权，但公开回调路径可达（抖音回跳无会话）
+    from starlette.testclient import TestClient
+    with TestClient(app) as anon:
+        assert anon.get("/workspace/onboarding/douyin/authorize", follow_redirects=False).status_code in (302, 303, 401, 403)
+        r = anon.get("/webhook/douyin/oauth/callback?code=c&state=1.bad", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].endswith("?error=bad_state")
+
+
+class _ApiWith(dy.DouyinApi):
+    def __init__(self, tr):
+        super().__init__(transport=tr)
+
+
+def test_reauth_days_left_and_seven_day_warning(monkeypatch):
+    now = 1_800_000_000.0
+    d = 86400.0
+    # 能自动续期（refresh 存活、未续满）→ 无倒计时
+    assert dy.reauth_days_left({"refresh_token": "r", "refresh_expires_at": now + 20 * d, "renew_count": 2}, now) is None
+    # 已续满 5 次 → 终点＝refresh 到期日
+    assert dy.reauth_days_left({"refresh_token": "r", "refresh_expires_at": now + 6 * d + 100, "renew_count": 5}, now) == 6
+    # 无 refresh → 终点＝access 到期日
+    assert dy.reauth_days_left({"access_token": "a", "access_expires_at": now + 3 * d}, now) == 3
+    assert dy.reauth_days_left({}, now) is None
+
+    records = []
+
+    class _H:
+        def record(self, platform, account_id, status, *, detail="", login_id=""):
+            records.append((platform, account_id, status, detail))
+            return {}
+
+    import src.integrations.platform_session_health as psh
+    monkeypatch.setattr(psh, "get_platform_session_health", lambda: _H())
+    meta = {"access_token": "a", "access_expires_at": now + 10 * d, "refresh_token": "r",
+            "refresh_expires_at": now + 6 * d, "renew_count": 5}
+    clock = {"t": now}
+    w = dy.DouyinOfficialWorker({"account_id": "open-1", "meta": meta}, {"douyin": {"client_key": KEY}},
+                                api=dy.DouyinApi(transport=FakeTransport()), state=dy.DouyinStateStore(":memory:"),
+                                now=lambda: clock["t"])
+    assert w.token_state == "ok"
+    w._report_session_health()
+    w._report_session_health()   # 同态不重复上报
+    assert len(records) == 1 and records[0][2] == "authorized" and "6 天后到期" in records[0][3]
+    clock["t"] = now + 1 * d     # 倒计时变化 → 再报一次（detail 更新）
+    w._report_session_health()
+    assert len(records) == 2 and "5 天后到期" in records[1][3]
+    # 到期后 → expired
+    clock["t"] = now + 11 * d
+    w.token_state = dy.token_state(meta, clock["t"])
+    assert w.token_state == "needs_reauth"
+    w._report_session_health()
+    assert records[-1][2] == "expired"
+
+
+def test_tiktok_panel_registers_account_with_region(auth_client, app, _fake_registry):
+    cm = app.state.config_manager
+    ref = {"Referer": "http://testserver/workspace/onboarding/tiktok"}
+    r = auth_client.get("/workspace/onboarding/tiktok")
+    assert r.status_code == 200 and 'action="/workspace/onboarding/tiktok/account"' in r.text
+    assert "http://testserver/webhook/tiktok" in r.text
+    # 缺注册地 → 拒
+    r = auth_client.post("/workspace/onboarding/tiktok/account", data={"business_id": "biz-1", "access_token": "t"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?error=missing_region")
+    # 德国：登记成功但私信不可用 → 标红 + 替代
+    r = auth_client.post("/workspace/onboarding/tiktok/account",
+                         data={"business_id": "biz-de", "access_token": "tok-de", "region": "de"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?connected=biz-de&region=DE")
+    row = _fake_registry.get("tiktok", "biz-de")
+    assert row["mode"] == "official" and row["meta"] == {"region": "DE", "access_token": "tok-de"}
+    # 新加坡 + 应用凭证一起存：overlay 写入并开 enabled
+    r = auth_client.post("/workspace/onboarding/tiktok/account",
+                         data={"business_id": "biz-sg", "access_token": "tok-sg", "region": "SG",
+                               "app_id": "app-1", "secret": "sec-1"}, headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and "connected=biz-sg" in r.headers["location"]
+    assert cm.config["tiktok"] == {"app_id": "app-1", "secret": "sec-1", "enabled": True}
+    r = auth_client.get("/workspace/onboarding/tiktok?connected=biz-sg&region=SG")
+    html = r.text
+    assert "TikTok 账号已登记" in html and "biz-sg" in html and "biz-de" in html
+    assert "私信 API 可用" in html and "私信 API 不可用" in html and "替代：Messaging Ads" in html
+    assert 'value="app-1"' in html and "sec-1" not in html   # secret 不回显
+    # 令牌留空 = 保留已有；重复登记只改 region
+    r = auth_client.post("/workspace/onboarding/tiktok/account", data={"business_id": "biz-sg", "region": "MY"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303
+    assert _fake_registry.get("tiktok", "biz-sg")["meta"] == {"region": "MY", "access_token": "tok-sg"}
+
+
+def test_panel_shows_reauth_countdown(auth_client, _fake_registry):
+    now = time.time()
+    _fake_registry.upsert("douyin", "open-soon", mode="official", label="快到期的号", meta={
+        "access_token": "a", "access_expires_at": now + 10 * 86400, "refresh_token": "r",
+        "refresh_expires_at": now + 4 * 86400 + 100, "renew_count": 5})
+    r = auth_client.get("/workspace/onboarding/douyin")
+    assert r.status_code == 200 and "open-soon" in r.text and "4 天后需重新授权" in r.text

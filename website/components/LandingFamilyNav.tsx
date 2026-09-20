@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { useLang } from "./LanguageContext";
-import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey } from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER, type ProductKey } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_IMG, PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR, publicProductsInCategory } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { localePath } from "@/lib/site";
 import { track } from "@/lib/track";
 import type { LandingKey } from "@/lib/landingContent";
@@ -18,8 +18,12 @@ export type LandingNavFocus = LandingKey | "growth";
 const LANDING_PRODUCT: Record<LandingNavFocus, ProductKey[]> = {
   voice: ["voicex"],
   face: ["facex", "livex"],
-  interpreting: ["lingox", "voxx"],
+  // 通译并入智聊后 /interpreting 仅通传一轨（聊天翻译指路卡跳智聊落地页）
+  interpreting: ["voxx"],
   growth: ["reachx", "chatx"],
+  // fatex 在 PUBLIC_LIST_HIDDEN 内：/fate 页正常渲染家族导航，但幻缘 chip 本身
+  // 不出现在互链条（含本页）——刻意保持「不进销售陈列位」现状，本页无高亮属预期。
+  fate: ["fatex"],
 };
 
 function useProductHref(lang: "zh" | "en") {
@@ -46,7 +50,8 @@ function FamilyChips({
       {CATEGORY_ORDER.map((cat) => {
         const ui = CATEGORY_UI[cat];
         const cc = CATEGORIES[cat];
-        const items = productsInCategory(cat);
+        // 家族互链只列公开陈列线（gated 的 facex、matrixx 与未上线的 fatex 已过滤）
+        const items = publicProductsInCategory(cat);
         const catActive = items.some((k) => activeKeys.has(k));
         return (
           <div key={cat} className="flex flex-wrap items-center gap-1 pr-3">
@@ -75,14 +80,7 @@ function FamilyChips({
                   }`}
                   aria-current={on ? "page" : undefined}
                 >
-                  <Image
-                    src={PRODUCT_IMG[key]}
-                    alt=""
-                    width={16}
-                    height={16}
-                    className="h-4 w-4 object-contain"
-                    draggable={false}
-                  />
+                  <ProductIcon product={key} size={16} alt="" className="h-4 w-4 object-contain" />
                   {lang === "zh" ? p.zh : p.en}
                 </Link>
               );
@@ -141,7 +139,7 @@ export default function LandingFamilyNav({ product }: { product: LandingNavFocus
           <div className="absolute inset-x-0 bottom-0 max-h-[75vh] overflow-y-auto rounded-t-3xl border border-white/10 bg-ink-900 p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm font-semibold text-white">
-                {lang === "zh" ? "三系七产品" : "Three families · seven lines"}
+                {lang === "zh" ? "三系产品线" : "Three product families"}
               </p>
               <button
                 type="button"

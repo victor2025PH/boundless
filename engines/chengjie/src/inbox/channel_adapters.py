@@ -14,7 +14,7 @@ Telegram 四套不同的 source API（``list_chats`` / ``list_pending`` / ``list
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from src.inbox.normalizer import conv_id, name_is_real, normalize_chat, store_row_to_chat
 
@@ -22,12 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelSendError(Exception):
-    """渠道发送失败（携带 HTTP 语义状态码，由路由层映射成 HTTPException）。"""
+    """渠道发送失败（携带 HTTP 语义状态码，由路由层映射成 HTTPException）。
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    实施86 域B-1：可选携带边车结构化败因——``reason_code``（send_backoff/
+    account_blocked/e2ee_pin_pending…）供路由出人话与失败留痕，
+    ``retry_after_ms``（限频退避/冻结的确定性恢复时刻）供上游改期。
+    两参缺省零值，既有 raise 点零改动。
+    """
+
+    def __init__(self, status_code: int, detail: str, *,
+                 reason_code: str = "", retry_after_ms: int = 0) -> None:
         super().__init__(detail)
         self.status_code = int(status_code)
         self.detail = str(detail)
+        self.reason_code = str(reason_code or "")
+        self.retry_after_ms = int(retry_after_ms or 0)
 
 
 @runtime_checkable
@@ -143,7 +152,11 @@ async def _send_via_rpa_queue(
             raise ChannelSendError(400, str(ex))
         except Exception as ex:
             raise ChannelSendError(502, f"{platform} 入队发送失败: {ex}")
-        res = {"delivered": True, "queued": True, "item_id": int(item_id)}
+        # M-2 A1（#232）：入队 ≠ 送达。此前恒 delivered=True 让路由/前端把「排进 RPA
+        # 队列」当成平台回执打 ✓。改为 delivered=None（未知，等 RPA runner 真发）+
+        # queued=True：下游「显式 False 才算失败」的判定不受影响，前端按 queued 显
+        # 「已排队发送」而非 ✓。
+        res = {"delivered": None, "queued": True, "item_id": int(item_id)}
         _writeback_outbound(platform, account_id, chat_key, text, res)
         return res
     sender = getattr(target, "send_to_chat", None)
@@ -393,15 +406,40 @@ class MessengerInboxAdapter:
     async def _send_web(self, cfg: Dict[str, Any], account_id: str,
                         chat_key: str, text: str) -> Dict[str, Any]:
         from src.integrations.messenger_web_login import _post_json, service_base_url
+        from src.inbox.send_context import is_manual_send
         base = service_base_url(cfg)
+        # M-2 C（#233）：人工发送带 manual=true → 边车 send_backoff 窗内放行一次探测
+        _payload: Dict[str, Any] = {"jid": chat_key, "text": text}
+        if is_manual_send():
+            _payload["manual"] = True
         try:
             res = await _post_json(
                 f"{base}/accounts/{account_id}/send",
-                {"jid": chat_key, "text": text},
+                _payload,
             )
         except ChannelSendError:
             raise
         except Exception as ex:
+            # 边车有响应体（HTTP 5xx）≠ 服务不可达：透传真实败因（reason_code：
+            # render_timeout/needs_accept/e2ee_pin_prompt…），坐席 toast 直接可读
+            # ——2026-08-15 173 事故里这行只显示裸 500，误导排查方向。
+            # 实施86 域B-1：reason_code/retry_after_ms 随异常结构化携带，
+            # 路由据此出人话分类 + 失败留痕（#21/#23/#49）。
+            from src.integrations.messenger_web_login import http_error_fields
+            if getattr(ex, "response", None) is not None:
+                _f = http_error_fields(ex)
+                _detail = str(_f["detail"])
+                # B63-②：会话性败因（PIN/接受浮层/登出）→ 点亮账号级健康面，
+                # 不再让每条消息各自静默 500（skuio 实录 7/7）。
+                try:
+                    from src.integrations.platform_session_health import (
+                        note_send_auth_failure)
+                    note_send_auth_failure("messenger", account_id, _detail)
+                except Exception:
+                    logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
+                raise ChannelSendError(
+                    502, _detail, reason_code=str(_f["reason_code"]),
+                    retry_after_ms=int(_f["retry_after_ms"]))
             raise ChannelSendError(503, f"Messenger 网页服务不可达: {ex}")
         # 未送达判定收严：ok/delivered/sent 任一显式 False 都算失败（防「composer 未清空」
         # 的静默丢消息被当成功；Node 现也会对该情形回 HTTP 502，双保险）。
@@ -410,8 +448,19 @@ class MessengerInboxAdapter:
             or res.get("delivered") is False
             or res.get("sent") is False
         ):
+            _err_txt = str(res.get("error") or "Messenger 网页发送失败（未确认送达）")
+            try:
+                from src.integrations.platform_session_health import (
+                    note_send_auth_failure)
+                note_send_auth_failure(
+                    "messenger", account_id,
+                    f"{_err_txt} {res.get('reason_code') or ''}")
+            except Exception:
+                logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
             raise ChannelSendError(
-                502, str(res.get("error") or "Messenger 网页发送失败（未确认送达）"))
+                502, _err_txt,
+                reason_code=str(res.get("reason_code") or ""),
+                retry_after_ms=int(res.get("retry_after_ms") or 0))
         return {
             "delivered": True,
             "message_id": str((res or {}).get("message_id") or ""),
@@ -496,10 +545,15 @@ class TelegramInboxAdapter:
         return out
 
     def status(self, request: Any) -> Dict[str, Dict[str, Any]]:
+        # 无 A 线 client（telegram 未配置/未初始化）时**不再上报幽灵 default 行**：
+        # 该行不在账号注册表里，删除/登出接口对它都是空操作，在连接中心表现为
+        # 「永远断线且删不掉的主账号」。未接入平台由抽屉的「尚未接入」空态承担展示。
         tg = getattr(request.app.state, "telegram_client", None)
+        if tg is None:
+            return {}
         return {"telegram": {
             "platform": "telegram", "account_id": "default", "label": "Telegram",
-            "running": bool(getattr(tg, "running", False)) if tg else False,
+            "running": bool(getattr(tg, "running", False)),
         }}
 
     async def send(self, request: Any, account_id: str, chat_key: str, text: str
@@ -530,18 +584,29 @@ class WebInboxAdapter:
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
             return []
+        cfg0 = self._web_cfg(request)
+        # impl85 阶段4：客户形态默认隐藏「在线顾问」入口（#30/#42/#45 拍板），
+        # web_chat.show_in_workspace 显式覆写；服务器/运维形态不受影响。
+        try:
+            from src.integrations.web_chat.service import web_entry_visible
+            if not web_entry_visible(cfg0):
+                return []
+        except Exception:
+            logger.debug("[web-adapter] 入口可见性判定失败（按可见）", exc_info=True)
         out: List[Dict[str, Any]] = []
         try:
             rows = store.list_conversations(limit=limit, platform="web") or []
         except Exception:
             logger.debug("WebInboxAdapter list_conversations 失败", exc_info=True)
             return []
+        cfg = cfg0
         for r in rows:
             cid = str(r.get("conversation_id") or "")
             mode = "auto_ai"
             mcount = 0
             try:
-                mode = store.get_automation_mode(cid)
+                from src.inbox.automation_mode import resolve_automation_mode
+                mode = resolve_automation_mode(store, cid, cfg)
                 mcount = store.count_messages(cid)
             except Exception:
                 pass
@@ -554,9 +619,18 @@ class WebInboxAdapter:
         return cfg if isinstance(cfg, dict) else {}
 
     def status(self, request: Any) -> Dict[str, Dict[str, Any]]:
-        web = (self._web_cfg(request).get("web_chat") or {})
+        cfg = self._web_cfg(request)
+        web = (cfg.get("web_chat") or {})
         if not web.get("enabled"):
             return {}
+        # impl85 阶段4：入口隐藏时「账号与平台管理」的在线顾问卡一并不出
+        # （客户报障点名的就是这张卡：「只有刷新和改名功能，无任何实际用途」）。
+        try:
+            from src.integrations.web_chat.service import web_entry_visible
+            if not web_entry_visible(cfg):
+                return {}
+        except Exception:
+            logger.debug("[web-adapter] 入口可见性判定失败（按可见）", exc_info=True)
         aid = str(web.get("account_id") or "web")
         return {f"web_{aid}": {
             "platform": "web", "account_id": aid,
@@ -598,12 +672,16 @@ class WebInboxAdapter:
                 logger.debug("[web_chat] funnel(agent out) 失败", exc_info=True)
         if store is not None:
             try:
-                store.set_automation_mode(cid, "manual")  # 人工接管后停 AI
+                # 人工接管后停 AI（source=takeover，供横幅/自动接回识别）
+                from src.inbox.takeover_rearm import record_agent_takeover
+                record_agent_takeover(store, cid)
             except Exception:
                 logger.debug("[web_chat] set manual 失败", exc_info=True)
         try:
             from src.integrations.shared.event_bus import get_event_bus
-            get_event_bus().publish("inbox_message", {
+            # P2-2：出站走独立事件类型（inbox_message 会被前端当新入站给非选中会话
+            # unread+1；outbound_message = 刷新预览/线程但不加未读）。
+            get_event_bus().publish("outbound_message", {
                 "conversation_id": cid, "platform": "web", "account_id": wc.account_id,
                 "chat_key": visitor_id, "preview": text[:80],
                 "direction": "out", "ts": _time.time(),
@@ -628,13 +706,17 @@ class ProtocolInboxAdapter:
     def _protocol_ids(self) -> "tuple[Dict[str, set], Dict[str, set]]":
         """返回 (active, removed) 两组 ``{platform: {account_id}}``。
 
-        active：mode∈(protocol,desktop) 且 status≠removed —— 参与发送/收信展示。
+        active：mode∈(protocol,desktop) 且 status 不在 removed/offline —— 参与收信展示。
         removed：mode∈(protocol,desktop) 且 status==removed —— 仅只读历史展示
         （账号已移除但 store 里的历史会话仍在，供查看；不参与发送）。
+        offline（已登出）两组都不进——聊天页不展示，历史留库，同号重登后回 active。
         """
         try:
             from src.integrations.account_registry import get_account_registry
-            rows = get_account_registry().list() or []
+            # ⚠ 必须 include_removed=True：list() 默认在 SQL 层排除 removed 行，
+            # 旧代码再按 status=='removed' 分桶 → removed 桶恒空，「已移除只读历史」
+            # 在实时聚合路径从未生效（2026-07-31 修，门禁 test_account_status_marks）。
+            rows = get_account_registry().list(include_removed=True) or []
         except Exception:
             return {}, {}
         active: Dict[str, set] = {}
@@ -643,7 +725,10 @@ class ProtocolInboxAdapter:
             # protocol=真 worker push 落库；desktop=桌面壳同步桥落库（均按 store 读出）
             if a.get("mode") not in ("protocol", "desktop"):
                 continue
-            bucket = removed if a.get("status") == "removed" else active
+            st = str(a.get("status") or "")
+            if st == "offline":
+                continue
+            bucket = removed if st == "removed" else active
             bucket.setdefault(str(a.get("platform") or ""), set()).add(
                 str(a.get("account_id") or ""))
         return active, removed
@@ -673,6 +758,13 @@ class ProtocolInboxAdapter:
         plats = set(active) | (set(readonly_ids) if show_removed else set())
         if not plats:
             return []
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            cfg_root = (getattr(cm, "config", None) or {}) if cm is not None else {}
+            if not isinstance(cfg_root, dict):
+                cfg_root = {}
+        except Exception:
+            cfg_root = {}
         out: List[Dict[str, Any]] = []
         for plat in plats:
             active_ids = active.get(plat, set())
@@ -695,7 +787,8 @@ class ProtocolInboxAdapter:
                 mcount = 0
                 cid = str(r.get("conversation_id") or "")
                 try:
-                    mode = store.get_automation_mode(cid)
+                    from src.inbox.automation_mode import resolve_automation_mode
+                    mode = resolve_automation_mode(store, cid, cfg_root)
                     mcount = store.count_messages(cid)
                 except Exception:
                     pass
@@ -727,6 +820,49 @@ def default_inbox_adapters() -> List[ChannelAdapter]:
     ]
 
 
+_GROUP_CHAT_TYPES = frozenset({
+    "group", "supergroup", "gigagroup", "megagroup", "channel",
+})
+_last_group_count: Optional[int] = None
+
+
+def count_group_chats(chats: List[Dict[str, Any]]) -> int:
+    """会话列表里群/频道条数（#32③ 观测用；不改过滤语义）。"""
+    n = 0
+    for c in chats or []:
+        if not isinstance(c, dict):
+            continue
+        ct = str(c.get("chat_type") or "").strip().lower()
+        if ct in _GROUP_CHAT_TYPES:
+            n += 1
+            continue
+        if c.get("is_group") is True:
+            n += 1
+    return n
+
+
+def reset_group_count_watch() -> None:
+    """测试用：清进程内上次群数量。"""
+    global _last_group_count
+    _last_group_count = None
+
+
+def note_group_list_count(
+    chats: List[Dict[str, Any]],
+) -> Tuple[Optional[int], int]:
+    """群数量相对上次采集变化时打 INFO，方便下次复现定层。不抛。"""
+    global _last_group_count
+    now = count_group_chats(chats)
+    prev = _last_group_count
+    if prev is not None and prev != now:
+        logger.info(
+            "[inbox-list] group count changed %s -> %s total=%s",
+            prev, now, len(chats or []),
+        )
+    _last_group_count = now
+    return prev, now
+
+
 def collect_chats_via_adapters(
     request: Any, limit: int, adapters: List[ChannelAdapter],
 ) -> List[Dict[str, Any]]:
@@ -738,6 +874,10 @@ def collect_chats_via_adapters(
         except Exception:
             logger.debug("适配器 %s 收集失败",
                          getattr(adapter, "platform", "?"), exc_info=True)
+    try:
+        note_group_list_count(out)
+    except Exception:
+        logger.debug("群数量观测失败", exc_info=True)
     return out
 
 
@@ -760,6 +900,7 @@ def status_via_adapters(
 async def send_via_adapters(
     request: Any, platform: str, account_id: str, chat_key: str, text: str,
     adapters: List[ChannelAdapter], *, reply_to: Any = None, mentions: Any = None,
+    origin: str = "auto",
 ) -> Dict[str, Any]:
     """按 platform 路由到对应适配器投递；未知平台抛 ChannelSendError(400)。
 
@@ -768,8 +909,50 @@ async def send_via_adapters(
 
     P4-5B：``reply_to``={id,from_me,participant,text} 携带原生引用回复上下文，仅经编排器
     worker 的协议发送路径生效（WhatsApp）；RPA/官方 API 适配器不支持则忽略（向后兼容）。
+
+    ``origin``（P1 2026-08-12 人工预留额度）：``manual``=人工路径（收件箱发送路由/
+    人工通过投递链显式传入）走完整日额度；缺省 ``auto``=自动链在
+    ``cap - reserve_for_manual`` 让路。仅经编排器路径生效；RPA 回落适配器不受
+    该额度闸约束（enforcement 面不在本函数扩大）。
     """
     platform = str(platform or "").lower()
+    _origin = str(origin or "auto")
+    # M-2 C（#233）：人工路径在本 await 链内打「manual」标——边车载荷组装处据此带
+    # manual=true，send_backoff 窗内放行一次探测性发送（手动独立于自动退避锁、优先）。
+    from src.inbox.send_context import manual_send_scope
+    with manual_send_scope(_origin == "manual"):
+        return await _send_via_adapters_inner(
+            request, platform, account_id, chat_key, text, adapters,
+            reply_to=reply_to, mentions=mentions, origin=_origin)
+
+
+async def _send_via_adapters_inner(
+    request: Any, platform: str, account_id: str, chat_key: str, text: str,
+    adapters: List[ChannelAdapter], *, reply_to: Any = None, mentions: Any = None,
+    origin: str = "auto",
+) -> Dict[str, Any]:
+    _origin = str(origin or "auto")
+    # M-2 A2（#232，UE7VM3 ③）：通道未连接（边车没有该账号会话 / 已登出 / worker
+    # 放弃重连）→ **自动与手动同一闸**拒发，503 + reason_code=channel_disconnected，
+    # 前端据此出「该账号 Messenger 会话未建立，请重新登录」+ 重登出路。此前编排器
+    # worker 处于 error 时 owns()=False → 直接回落下面的适配器直打边车 → 每条 500
+    # 静默（15:44 七连发的入口正是这里）。reconnecting / unknown 不拦（fail-open）。
+    try:
+        from src.integrations.platform_session_health import channel_send_block_reason
+        _blk = channel_send_block_reason(platform, account_id)
+        if _blk.get("reason"):
+            logger.warning(
+                "[send] 通道未连接拒发 %s:%s origin=%s state=%s reason=%s detail=%s",
+                platform, account_id, _origin, _blk.get("state"),
+                _blk.get("reason"), str(_blk.get("detail") or "")[:80])
+            raise ChannelSendError(
+                503, f"channel_disconnected: {platform}:{account_id} "
+                     f"{_blk.get('reason')} ({_blk.get('detail') or ''})",
+                reason_code=str(_blk.get("reason")))
+    except ChannelSendError:
+        raise
+    except Exception:
+        logger.debug("[send] 通道连接判定异常（放行）", exc_info=True)
     try:
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
@@ -779,11 +962,17 @@ async def send_via_adapters(
                 try:
                     return await orch.send(
                         platform, account_id, chat_key, text,
-                        reply_to=reply_to, mentions=mentions)
+                        reply_to=reply_to, mentions=mentions, origin=_origin)
                 except TypeError:
-                    # 旧签名（无 mentions kwarg）→ 回落，保持向后兼容
-                    return await orch.send(
-                        platform, account_id, chat_key, text, reply_to=reply_to)
+                    # 旧签名（无 origin/mentions kwarg，测试假编排器常见）→ 逐级回落
+                    try:
+                        return await orch.send(
+                            platform, account_id, chat_key, text,
+                            reply_to=reply_to, mentions=mentions)
+                    except TypeError:
+                        return await orch.send(
+                            platform, account_id, chat_key, text,
+                            reply_to=reply_to)
             except ChannelSendError:
                 raise
             except Exception as ex:  # noqa: BLE001
@@ -798,7 +987,44 @@ async def send_via_adapters(
             # 让「编排器漏接」在看板可见（回落率高=该查 worker ownership），而非崩了才知道。
             _record_send_route(platform, "adapter")
             return await adapter.send(request, account_id, chat_key, text)
+    # 实施97 线 B：无 worker、无适配器的 ``mode=desktop`` 账号（个人微信 PC 副驾等由外部驱动进程
+    # 收发的桥接账号）→ 以 kind=manual 落受控出站队列，由驱动认领、守卫发送、回执。
+    # enqueue() 内建 Kill-Switch/发送闸门；桥未开或账号非 desktop → 维持旧 400。
+    _queued = _enqueue_desktop_bridge(request, platform, account_id, chat_key, text)
+    if _queued is not None:
+        _record_send_route(platform, "desktop_bridge")
+        return _queued
     raise ChannelSendError(400, f"不支持的平台: {platform}")
+
+
+def _enqueue_desktop_bridge(request: Any, platform: str, account_id: str, chat_key: str,
+                            text: str) -> Optional[Dict[str, Any]]:
+    """desktop 桥接账号的人工发送 → 受控出站队列（kind=manual）。不适用返回 None；绝不抛。"""
+    try:
+        cm = getattr(request.app.state, "config_manager", None)
+        cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
+        bridge = ((((cfg.get("inbox") or {}).get("l2_autosend") or {}).get("desktop_bridge")) or {})
+        if not bridge.get("enabled"):
+            return None
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get(platform, account_id) or {}
+        if str(row.get("mode") or "") != "desktop":
+            return None
+        from src.inbox.desktop_outbound import get_desktop_outbound_queue
+        from src.inbox.normalizer import conv_id
+        res = get_desktop_outbound_queue().enqueue(
+            platform, account_id, chat_key, text, kind="manual",
+            conversation_id=conv_id(platform, account_id, chat_key), config=cfg)
+        if not res.get("enqueued"):
+            raise ChannelSendError(409, f"desktop bridge blocked: {res.get('blocked') or 'enqueue_failed'}",
+                                   reason_code=str(res.get("blocked") or "enqueue_failed"))
+        return {"delivered": True, "queued": True, "queue_id": res.get("id"),
+                "message_id": f"dq-{res.get('id')}"}
+    except ChannelSendError:
+        raise
+    except Exception:
+        logger.debug("[send] desktop bridge 回落异常（按不适用处理）", exc_info=True)
+        return None
 
 
 def _record_send_route(platform: str, route: str) -> None:

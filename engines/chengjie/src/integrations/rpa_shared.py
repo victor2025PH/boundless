@@ -471,14 +471,20 @@ def diff_intent_tags(content: str) -> Dict[str, Any]:
 
 
 def list_intent_tags_backups() -> List[Dict[str, Any]]:
-    """P17-D: 列出可恢复的备份（按 mtime 倒序）。"""
+    """P17-D: 列出可恢复的备份（按 mtime 倒序）。
+
+    次序键带**文件名兜底**：Windows 写时间粒度 ~16ms，两次相邻备份（如「保存」紧接
+    「恢复」）常拿到完全相同的 st_mtime，纯 mtime 排序在并列上退化成 iterdir 顺序 →
+    「最新一份」随机翻转。备份名 ``.bakYYYYMMDD_HHMMSS_mmm[_N]`` 定宽零填充且由
+    ``_rotate_backups`` 保证同名不复用，字典序即时间序，正好当确定性 tie-break。
+    """
     p = _intent_tags_yaml_path()
     if not p.parent.exists():
         return []
     out: List[Dict[str, Any]] = []
     for f in sorted(
         [b for b in p.parent.iterdir() if b.name.startswith(p.name + ".bak")],
-        key=lambda x: x.stat().st_mtime, reverse=True,
+        key=lambda x: (x.stat().st_mtime, x.name), reverse=True,
     )[:_INTENT_TAGS_BACKUP_KEEP * 2]:  # 最多扫描 keep*2 份
         try:
             stat = f.stat()

@@ -104,9 +104,9 @@ export default function PurgeQueuePage({
       Icon: AlertTriangle,
       tone: stats.pendingOver72h ? "text-rose-400" : stats.pendingOver24h ? "text-amber-400" : "text-slate-600",
       cls: stats.pendingOver72h
-        ? "border-rose-500/50 bg-gradient-to-br from-rose-500/10 to-slate-900/60"
+        ? "border-rose-500/50 bg-gradient-to-br from-rose-500/10 to-ink-900/60"
         : stats.pendingOver24h
-          ? "border-amber-500/50 bg-gradient-to-br from-amber-500/10 to-slate-900/60"
+          ? "border-amber-500/50 bg-gradient-to-br from-amber-500/10 to-ink-900/60"
           : "",
     },
     {
@@ -172,14 +172,14 @@ export default function PurgeQueuePage({
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-500">
+              <tr className="border-b border-ink-700 text-[11px] uppercase tracking-wider text-slate-500">
                 <th className="py-2 font-medium">目标引擎</th>
                 <th className="py-2 text-right font-medium">待回执</th>
                 <th className="py-2 text-right font-medium">已回执</th>
                 <th className="py-2 pl-6 font-medium">最早滞留</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/70">
+            <tbody className="divide-y divide-ink-700/70">
               {stats.byTarget.map((t) => {
                 const h = hoursBetween(t.oldest_pending_at, now);
                 return (
@@ -266,7 +266,7 @@ export default function PurgeQueuePage({
         <Card className="p-0">
           <DataTable head={["指令", "人设", "目标引擎", "待删槽位", "下发", "回执", "回执详情"]}>
             {rows.map((r) => (
-              <tr key={r.purge_id} className="hover:bg-slate-800/40">
+              <tr key={r.purge_id} className="hover:bg-ink-700/40">
                 <Td className="font-mono text-xs text-slate-500">#{r.purge_id}</Td>
                 <Td>
                   <div className="flex items-center gap-2">

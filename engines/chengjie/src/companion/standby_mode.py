@@ -8,11 +8,13 @@
 
   - ``off``       关闭：AI 不自动出草稿、也不自动发（坐席全手动）。
   - ``suggest``   仅建议：AI 自动出草稿供坐席审，**绝不自动发**（worker 开、deliver 关）。
-  - ``watching``  值守中：AI 自动回复（worker+deliver 开）+ **自动开出站安全闸 send-gate**
+  - ``watching``  值守中：AI 自动回复（worker+deliver 开）+ **默认自动开出站安全闸 send-gate**
                   （安全护栏，开着只会拦风险发送、绝无害 → 一键即得「受保护的自动回复」）；
                   真发仍受**会话档=全自动**护栏（沿用 ``capability_toggle.check_toggle`` 权威
                   判定，此处不放松）。send-gate 是 safeguard，``_order`` 保证它在 deliver **之前**
                   开——闸先立起来，再武装真发。
+                  **例外**：overlay 里若**显式**写了 ``companion_send_gate.enabled: false``
+                  （运营主动关掉），值守/全自动**不得**把闸再打开——缺键的新装机仍走默认开闸。
 
 设计边界（刻意收窄，别把「值守」做成大杂烩）
 ==========================================
@@ -68,15 +70,64 @@ def is_standby_mode(name: str) -> bool:
     return name in _STANDBY_STATES
 
 
-def build_standby_plan(mode: str) -> Optional[List[Dict[str, Any]]]:
+def send_gate_operator_off(overlay: Optional[Dict[str, Any]]) -> bool:
+    """True 仅当 overlay **显式**写了 ``companion_send_gate.enabled: false``。
+
+    缺 overlay / 缺键 / ``true`` → False（值守仍会开闸）。**禁止**读合并后的
+    config：代码缺省也是 false，读合并值会让每台新装机都被误判成「运营关闸」。
+    """
+    if not isinstance(overlay, dict):
+        return False
+    gate = overlay.get("companion_send_gate")
+    if not isinstance(gate, dict) or "enabled" not in gate:
+        return False
+    return gate.get("enabled") is False
+
+
+def send_gate_target_cap(overlay: Optional[Dict[str, Any]] = None) -> int:
+    """值守若会开闸，将生效的目标日发上限（条/号/天）。
+
+    overlay 显式 ``target_cap`` 优先；否则用设置页 FIELDS 缺省（当前 15）。
+    不读合并 config 的 enabled 缺省——那会把「没配过闸」和「运营关闸」搅在一起。
+    """
+    from src.inbox.reply_pacing_settings import FIELDS
+    default = int(FIELDS["companion_send_gate.target_cap"]["default"])
+    if not isinstance(overlay, dict):
+        return default
+    gate = overlay.get("companion_send_gate")
+    if not isinstance(gate, dict) or "target_cap" not in gate:
+        return default
+    try:
+        n = int(gate["target_cap"])
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
+def watching_send_gate_fields(overlay: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """GET/POST ``watching`` 段附加字段（前端确认文案 / 收件箱勿再催开闸）。"""
+    return {
+        "send_gate_operator_off": send_gate_operator_off(overlay),
+        "send_gate_target_cap": send_gate_target_cap(overlay),
+    }
+
+
+def build_standby_plan(
+    mode: str, overlay: Optional[Dict[str, Any]] = None,
+) -> Optional[List[Dict[str, Any]]]:
     """姿态名 → 有序意图列表（只含该档声明的键）；未知姿态返回 None。
 
     复用 presets 的 ``_intentions_for``（含 dry_run 字段归零）+ ``_order``（关先于开、
     critical 主开关压最后），确保与预设/回滚走完全一致的执行序与护栏。
+
+    ``overlay`` 仅 watching 消费：运营显式关闸时从计划里拿掉 send-gate 意图。
+    ``overlay=None``（测试 / 旧调用）保持「值守开闸」原语义。
     """
     spec = _STANDBY_STATES.get(mode)
     if spec is None:
         return None
+    if mode == "watching" and send_gate_operator_off(overlay):
+        spec = {k: v for k, v in spec.items() if k != "companion_send_gate"}
     plan: List[Dict[str, Any]] = []
     for key, state in spec.items():   # 只写该档声明的键；未列键不动
         cap = CAP_BY_KEY.get(key)
@@ -84,6 +135,96 @@ def build_standby_plan(mode: str) -> Optional[List[Dict[str, Any]]]:
             continue
         plan.extend(_intentions_for(cap, state))
     return _order(plan)
+
+
+# ── P1 2026-08-22「一键全自动」捆绑语义 ─────────────────────────────────────
+# 三档从「只管 worker/deliver 两开关」升级为**一次写全**：默认档位（新会话怎么
+# 落档）与两开关同一动作同一语义——修 impl49 B37/B41 实录「三处入口各管一段、
+# 用户开了全自动还是不回」。extras 走 preset extras 同一直写通道（白名单声明，
+# 非用户输入）；bootstrap 只在全自动档显式置 true（review/manual 档沿
+# automation_mode 的既有缺省语义，不额外写键）。
+_STANDBY_EXTRAS: Dict[str, List[Dict[str, Any]]] = {
+    "watching": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "auto_ai"},
+        {"path": "inbox.auto_draft.bootstrap_automation_mode", "value": True},
+    ],
+    "suggest": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "review"},
+    ],
+    "off": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "manual"},
+    ],
+}
+
+# 每档的存量会话对齐目标（None=该档不做批量对齐）。只对**系统写的**档位行
+# （source ∈ _ALIGN_SOURCES）生效——坐席显式设置（human）、接管（takeover*）、
+# 守卫降档（guard:*/sweep*）、搁置静音（snooze*）全部保留，绝不覆盖人的决定。
+_STANDBY_ALIGN_TARGET: Dict[str, Optional[str]] = {
+    "watching": "auto_ai",
+    "suggest": "review",
+    # off 不批量改行：worker/deliver 双关已保证零自动出站，留档位现场
+    # 便于将来一键恢复（manual 全量覆写是不可逆的信息销毁）。
+    "off": None,
+}
+
+_ALIGN_SOURCES = frozenset({"bootstrap", "standby"})
+
+
+def standby_extras(mode: str) -> List[Dict[str, Any]]:
+    """该档要直写的注册表外 config 路径（白名单声明；未知档返回空）。"""
+    return [dict(e) for e in _STANDBY_EXTRAS.get(mode, [])]
+
+
+def standby_align_target(mode: str) -> Optional[str]:
+    """该档的存量会话对齐目标档位（None=不对齐）。"""
+    return _STANDBY_ALIGN_TARGET.get(mode)
+
+
+def align_existing_conversations(store: Any, target_mode: str) -> int:
+    """把**系统落档**（bootstrap/standby 来源）的存量会话对齐到 ``target_mode``。
+
+    为什么需要：bootstrap 会把「首条入站时刻的全局档位」固化成显式行——用户在
+    「拟稿人审」用了一周再切「全自动」，老客户全被一周前的 review 行钉住，
+    体验就是「开了全自动，老客户还是不自动回」（B37 同族的第二坑）。对齐范围
+    刻意收窄到系统写的行：人（human/takeover/guard/snooze…）写的行原样保留。
+
+    升 ``auto_ai`` 时**群会话一律跳过**——群的全自动只能来自坐席经 confirm_group
+    闸的显式确认（与 ``maybe_bootstrap_automation_mode`` 同一铁律）。
+    逐行走 ``set_automation_mode``（时间线审计照记）；任何单行异常跳过不中断。
+    返回实际改动行数。
+    """
+    if store is None or target_mode not in ("auto_ai", "review", "manual"):
+        return 0
+    try:
+        rows = store.list_automation_mode_rows()
+    except AttributeError:
+        return 0    # 旧 store 无该读口：优雅退化为「只影响新会话」
+    except Exception:
+        return 0
+    changed = 0
+    for r in rows or []:
+        try:
+            cid = str(r.get("conversation_id") or "")
+            cur = str(r.get("automation_mode") or "")
+            src = str(r.get("source") or "")
+            if not cid or cur == target_mode or src not in _ALIGN_SOURCES:
+                continue
+            if target_mode == "auto_ai":
+                # 双判据：会话行（chat_type 元数据）+ 无行时的 id 启发式兜底
+                # （telegram 负 peer 段=群/频道——is_group_conversation 同款
+                # 判据直接喂 conversation_id，防「行还没建」窗口漏判）。
+                from src.inbox.automation_mode import conversation_is_group
+                from src.inbox.ingest import is_group_conversation
+                if (conversation_is_group(store, cid)
+                        or is_group_conversation({
+                            "conversation_id": cid,
+                            "platform": cid.split(":", 1)[0]})):
+                    continue
+            store.set_automation_mode(cid, target_mode, source="standby")
+            changed += 1
+        except Exception:
+            continue
+    return changed
 
 
 def infer_standby_mode(config: Any) -> str:
@@ -110,8 +251,37 @@ def standby_options() -> List[Dict[str, str]]:
     return [{"mode": m, "label": STANDBY_LABELS[m]} for m in STANDBY_MODES]
 
 
+def split_state(
+    config: Any, auto_ai_rows: Optional[int] = None,
+) -> Dict[str, Any]:
+    """「拆开控制」读侧快照（#12 2026-08-30）：三档预设把「新会话默认档」与
+    「真发总闸」捆绑翻转（钧 0830 01:57 实锤：切人审后发连 deliver 一起关，
+    既有全自动会话的 B 线全灭零提示）——本函数供设置页把两个概念**分开**读，
+    配套 POST ``{"set": {...}}`` 分开写。
+
+    ``auto_ai_rows``＝显式全自动会话行数（调用方从 delivery_calibration 取），
+    应用「关真发」前的影响面披露就靠它；None＝调用方拿不到，键缺席。
+    """
+    from src.inbox.automation_mode import global_automation_mode_from_config
+
+    worker_cap = CAP_BY_KEY.get("l2_autosend_worker")
+    deliver_cap = CAP_BY_KEY.get("l2_autosend_deliver")
+    worker = bool(_dig(config, worker_cap.flag_path, False)) if worker_cap else False
+    deliver = bool(_dig(config, deliver_cap.flag_path, False)) if deliver_cap else False
+    out: Dict[str, Any] = {
+        "default_mode": global_automation_mode_from_config(config),
+        "worker": worker,
+        "deliver": deliver,
+    }
+    if auto_ai_rows is not None:
+        out["auto_ai_rows"] = int(auto_ai_rows)
+    return out
+
+
 __all__ = [
     "STANDBY_MODES", "STANDBY_LABELS", "STANDBY_KEYS",
     "is_standby_mode", "build_standby_plan", "infer_standby_mode",
-    "standby_options",
+    "standby_options", "standby_extras", "standby_align_target",
+    "align_existing_conversations", "split_state",
+    "send_gate_operator_off", "send_gate_target_cap", "watching_send_gate_fields",
 ]

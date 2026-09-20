@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import Depends, HTTPException, Request
 
@@ -34,6 +35,41 @@ def _deny_viewer_write(request: Request) -> None:
     """
     if _session_agent(request).get("role", "") == "viewer":
         raise HTTPException(403, tr(request, "err.perm.viewer_readonly"))
+
+
+def _session_identities(request: Request) -> set:
+    """会话身份候选集（user_id / user_name / username / display_name 全并入）。
+
+    历史包袱：注解作者走 ``user_name||username``、presence/@ 建议走
+    ``user_id||username`` 两套口径并存（unified_inbox_auth 两个取身份函数）。
+    定向通知过滤按「任一命中」判，避免口径分叉漏发；空 session 返回空集。
+    """
+    sess = {}
+    try:
+        if "session" in request.scope:
+            sess = dict(request.session)
+    except Exception:
+        sess = {}
+    return {
+        str(v).strip()
+        for v in (
+            sess.get("user_id"), sess.get("user_name"),
+            sess.get("username"), sess.get("display_name"),
+        )
+        if v is not None and str(v).strip()
+    }
+
+
+def _mention_targets_me(evt: dict, identities: set) -> bool:
+    """conv_note 通知是否 @ 到当前坐席（mentions 任一命中身份候选集）。"""
+    if not identities:
+        return False
+    data = evt.get("data") or {}
+    mentions = data.get("mentions") or evt.get("mentions") or []
+    try:
+        return any(str(m).strip() in identities for m in mentions)
+    except Exception:
+        return False
 
 
 def register_batch_notif_routes(app, *, api_auth) -> None:
@@ -60,7 +96,11 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         updated = 0
         for cid in cids[:200]:  # 单次上限 200 条
             try:
-                ok = store.set_conv_archived(cid, archived)
+                ok = store.set_conv_archived(
+                    cid, archived,
+                    source="api:batch_archive",
+                    actor=str(request.session.get("username") or ""),
+                )
                 if ok:
                     updated += 1
             except Exception:
@@ -85,6 +125,13 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         mode = str(body.get("mode", "add")).lower()
         if mode not in ("set", "add", "remove"):
             mode = "add"
+        if mode in ("set", "add"):
+            # Q-4（#267）：读侧计算的「作息外」标签不许写库
+            try:
+                from src.inbox.work_hours_gate import strip_off_hours_hold_tags
+                tags = strip_off_hours_hold_tags(tags)
+            except Exception:
+                pass
         if not cids:
             return {"ok": False, "error": tr(request, "err.ws.field_required", field="conversation_ids")}
         store = _inbox_store(request)
@@ -190,6 +237,24 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         # 通知队列挂在 app.state.notif_queue（由 SSE 推送时顺带写入）
         queue: list = getattr(request.app.state, "notif_queue", [])
         limit = max(1, min(200, int(limit or 50)))
+        # P0-协作闭环：@提及是定向通知——队列全员共享，读取侧按人过滤，
+        # conv_note 只回「@ 了当前坐席」的条目（别人的提及不进我的铃铛历史）。
+        me = _session_identities(request)
+        queue = [
+            n for n in queue
+            if (n or {}).get("type") != "conv_note" or _mention_targets_me(n, me)
+        ]
+        # impl85 阶段5（工单#30）：客户聊天消息默认不进通知中心——写入侧已按
+        # 配置拦，这里读取侧再滤一遍（覆盖开关切换前的存量条目 + 旧进程残留），
+        # 并把生效值回传给前端（live SSE 写铃铛与服务端同口径，单一开关两面生效）。
+        from src.web.routes.unified_inbox_realtime_routes import (
+            customer_msgs_in_center,
+        )
+        _cm = getattr(request.app.state, "config_manager", None)
+        _cust_ok = customer_msgs_in_center(
+            (getattr(_cm, "config", None) or {}) if _cm else None)
+        if not _cust_ok:
+            queue = [n for n in queue if (n or {}).get("type") != "inbox_message"]
         # P8：随历史一并回传该坐席「已读水位线」，前端据此跨设备恢复已读状态
         read_at = 0
         try:
@@ -199,7 +264,48 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
                 read_at = int(store.get_agent_prefs(agent["agent_id"]).get("notif_read_at") or 0)
         except Exception:
             logger.debug("读取 notif_read_at 失败（已忽略）", exc_info=True)
-        return {"ok": True, "notifications": queue[-limit:], "read_at": read_at}
+        return {"ok": True, "notifications": queue[-limit:], "read_at": read_at,
+                "customer_messages": _cust_ok}
+
+    @app.post("/api/workspace/notifications/sys-status")
+    async def api_workspace_notifications_sys_status(
+        request: Request, _=Depends(api_auth),
+    ):
+        """实施75 batch4：系统状态事件留痕（sys_status）。
+
+        右下通知总线（notify-bus）把维护预热/AI 降级/通道离线等系统事件写进本
+        进程级通知队列 —— 页面刷新 / SSE 断线重连经 GET /api/workspace/notifications
+        自然回放，消息中心不再「刷新即忘」。按 ``data.id`` 合并（同一状态只保留
+        最新一条，一天 N 次维护不堆 N 行），与前端 ``_COALESCE_TYPES`` 同语义；
+        队列上限沿用 SSE 写入方的 200。旧前端不发本请求＝零行为变化。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        sid = str((body or {}).get("id") or "").strip()[:64]
+        text = str((body or {}).get("text") or "").strip()[:300]
+        if not sid or not text:
+            return {"ok": False, "error": tr(request, "err.ws.field_required", field="id / text")}
+        nq: list = getattr(request.app.state, "notif_queue", None)
+        if nq is None:
+            nq = []
+            request.app.state.notif_queue = nq
+        nq[:] = [
+            n for n in nq
+            if not (
+                (n or {}).get("type") == "sys_status"
+                and str(((n or {}).get("data") or {}).get("id") or "") == sid
+            )
+        ]
+        nq.append({
+            "type": "sys_status",
+            "data": {"id": sid, "text": text},
+            "_notif_ts": int(time.time() * 1000),
+        })
+        if len(nq) > 200:
+            del nq[:-200]
+        return {"ok": True}
 
     @app.post("/api/workspace/notifications/read")
     async def api_workspace_notifications_read(request: Request, _=Depends(api_auth)):

@@ -3,7 +3,7 @@
 API 端点（register_drafts_routes — main.py 调用）：
   GET  /api/drafts                          ?status=pending&platform=&limit=50
   GET  /api/drafts/stats                    — 按平台×状态计数
-  GET  /api/drafts/risk-summary             — 待处理草稿按 autopilot_level 分布（B2）
+  GET  /api/drafts/risk-summary             — 待处理草稿按 autopilot_level 分布 + actionable / stale_count（B2 / Q-31 D）
   GET  /api/drafts/audit                    — 草稿处置审计日志（B2；主管专属）
   GET  /api/drafts/autosend-status          — AutosendWorker 运行指标（Phase A）
   GET  /api/drafts/{draft_id}               — 单条草稿
@@ -25,12 +25,33 @@ import logging
 import time
 
 from fastapi import Depends, HTTPException, Request
+from src.utils.agent_char_usage import record_request_chars
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+
+def _perm_ok(request: Request, perm: str) -> bool:
+    """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
+
+    懒 import：``resolve_user_perm`` 由并行批次在 web_user_store 落地，模块未就绪
+    （ImportError）/ user_store 未暴露 / 未登录（token 链）/ 任何异常 → **一律放行**
+    （fail-open；本文件多线共用，本批只接 /translate 一处，勿扩散）。
+    """
+    try:
+        from src.utils.web_user_store import resolve_user_perm
+        us = getattr(request.app.state, "user_store", None)
+        sess = request.session
+        uname = str(sess.get("username") or "")
+        role = str(sess.get("role") or "")
+        if us is None or not uname:
+            return True
+        return resolve_user_perm(us, uname, role, perm)
+    except Exception:
+        return True
+
 # 主管角色集（与 unified_inbox_routes 保持一致）
-_SUPERVISOR_ROLES = {"master", "admin"}
+_SUPERVISOR_ROLES = {"master", "admin", "supervisor"}
 
 # J2：意图 → 模板场景映射（与 template_seeds.py 的 scene 枚举对应）
 _INTENT_TO_SCENE: dict = {
@@ -96,11 +117,78 @@ def register_drafts_routes(app, *, api_auth):
         status: str = "pending",
         platform: str = "",
         limit: int = 50,
+        conversation_id: str = "",
         _=Depends(api_auth),
     ):
         svc = _get_draft_service(request)
         limit = max(1, min(200, int(limit or 50)))
-        drafts = svc.list_drafts(status=status or "", platform=platform or "", limit=limit)
+        # B86：conversation_id＝会话级精确过滤（体检计数与面板列表同源；旧服务
+        # 无该形参时回落全量口径——宁可多显示不静默空屏）
+        try:
+            drafts = svc.list_drafts(
+                status=status or "", platform=platform or "", limit=limit,
+                conversation_id=str(conversation_id or ""))
+        except TypeError:
+            drafts = svc.list_drafts(
+                status=status or "", platform=platform or "", limit=limit)
+        # 「点通过会不会被拦」的**预判**（与护栏同一入口 approve_block_reason，
+        # 否则徽标与实际行为不一致＝比没徽标更糟）。让坐席在点之前就看见「这稿太老 /
+        # 已经回过」，而不是撞 409 才知道。判定内部按稿龄短路，只有可能被拦的才查会话。
+        if hasattr(svc, "approve_block_reason"):
+            for d in drafts:
+                try:
+                    d["approve_blocked"] = svc.approve_block_reason(d)
+                except Exception:
+                    d["approve_blocked"] = ""
+        # M-2 E（#235）：L1「为什么要人确认」原因码——进程注册表优先（autodraft 拟稿时登记），
+        # 重启后回落草稿审计行 action=l1_reason（record_draft_audit）。非 L1 不查。
+        try:
+            from src.inbox.l1_reason import peek as _l1_peek
+            _store = getattr(svc, "_store", None)
+            for d in drafts:
+                if str(d.get("autopilot_level") or "") != "L1":
+                    continue
+                _did = str(d.get("draft_id") or "")
+                _r = _l1_peek(_did) or _l1_peek(str(d.get("conversation_id") or ""))
+                if not _r and _store is not None and hasattr(_store, "list_draft_audit"):
+                    try:
+                        for _a in (_store.list_draft_audit(draft_id=_did, limit=10) or []):
+                            if str(_a.get("action") or "") == "l1_reason" and _a.get("reason"):
+                                _r = str(_a.get("reason"))
+                                break
+                    except Exception:
+                        _r = ""
+                d["l1_reason"] = _r
+        except Exception:
+            logger.debug("[drafts] L1 原因富集失败（忽略）", exc_info=True)
+        # Q-21 B（#302 / Y82GWM）：稿头「对方语言未知 · 按人设语言（English）回」——起草链登记的
+        # 会话语言计划（outbound_translate.build_conv_lang_plan，进程注册表 → KV conv_lang_plan:<cid>）。
+        try:
+            from src.inbox.outbound_translate import peek_conv_lang_plan
+            _lp_store = getattr(svc, "_store", None)
+            for d in drafts:
+                _lp = peek_conv_lang_plan(str(d.get("conversation_id") or ""), store=_lp_store)
+                if _lp:
+                    d["lang_plan"] = _lp
+        except Exception:
+            logger.debug("[drafts] lang-plan 富集失败（忽略）", exc_info=True)
+        # R87 P1-3（X9B22T 15:30 preview='[PHOTO selfie cozy bedroom…'）：草稿正文里的 [PHOTO …] 发图指令
+        # 是给投递链的协议标记，坐席预览不该看原码——另给 draft_text_display（剥净）+ photo_directive
+        # （kind / scene），draft_text 原样保留（编辑 / 通过仍送原文，投递链照常解析执行）。
+        try:
+            from src.ai.photo_directive import extract_photo_directive as _epd
+            for d in drafts:
+                _raw = str(d.get("draft_text") or d.get("text") or "")
+                if "[PHOTO" not in _raw and "[photo" not in _raw:
+                    continue
+                _clean, _pd = _epd(_raw)
+                if _pd:
+                    d["photo_directive"] = {"kind": str(_pd.get("kind") or ""),
+                                            "scene": str(_pd.get("scene") or "")[:120]}
+                if _clean != _raw:
+                    d["draft_text_display"] = _clean
+        except Exception:
+            logger.debug("[drafts] photo_directive 富集失败（忽略）", exc_info=True)
         return {"ok": True, "count": len(drafts), "drafts": drafts}
 
     @app.get("/api/drafts/stats")
@@ -112,7 +200,7 @@ def register_drafts_routes(app, *, api_auth):
     async def api_drafts_risk_summary(
         request: Request, sla_hours: int = 4, _=Depends(api_auth),
     ):
-        """L0–L4 分布统计（供仪表盘风险看板轮询）。含 sla_overdue 字段（D1）。"""
+        """L0–L4 分布统计（供仪表盘风险看板轮询）。含 sla_overdue（D1）与 actionable / stale_count（Q-31 D）。"""
         svc = _get_draft_service(request)
         summary = svc.risk_summary()
         # D1：追加 SLA 过期数量（主管可见；非主管返回 -1 表示无权限）
@@ -135,10 +223,36 @@ def register_drafts_routes(app, *, api_auth):
         """AutosendWorker 运行时指标（主管专属）。"""
         if not _is_supervisor(request):
             raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        # 人工通过→真投递 接线状态：零流量也能看出链路是否断（配置漂移/注入被吞/
+        # 重构漏接线）。刻意在 worker=None 分支也给——那正是最可能断的形态
+        # （l2_autosend.enabled=false ⇒ worker 不创建 ⇒ 坐席点通过只标记不发）。
+        _hd_wired = None
+        _stale_h = None
+        try:
+            _dsvc = getattr(request.app.state, "draft_service", None)
+            if _dsvc is not None:
+                _hd_wired = bool(getattr(_dsvc, "inbox_deliver_wired", False))
+                # 陈旧护栏阈值（小时，0=关）。不暴露的话这道护栏对运维完全不可见——
+                # 「它在不在、几小时」只能翻代码，而它直接决定坐席能不能发老稿子。
+                _stale_h = float(getattr(_dsvc, "_stale_approve_hours", 0) or 0)
+        except Exception:
+            _hd_wired = None
         worker = getattr(request.app.state, "autosend_worker", None)
+        # 语音出站 24h 台账（跨重启）：B 线卡复用，不依赖 AvatarHub 开关。
+        _voice_outage = {}
+        try:
+            from src.ai.voice_outage import get_voice_outage
+            _voice_outage = get_voice_outage().outage_snapshot()
+        except Exception:
+            _voice_outage = {}
         if worker is None:
-            return {"ok": True, "worker": None, "note": tr(request, "err.draft.autosend_worker_off")}
+            return {"ok": True, "worker": None,
+                    "human_deliver_wired": _hd_wired,
+                    "stale_approve_hours": _stale_h,
+                    "voice_outage": _voice_outage,
+                    "note": tr(request, "err.draft.autosend_worker_off")}
         snap = worker.status_snapshot()
+        snap["voice_outage"] = _voice_outage
         try:
             from src.inbox.voice_autosend import metrics_snapshot as _vms
             snap["voice"] = _vms()  # 全自动语音：sent/fallback/last_reason/last_duration_ms
@@ -173,6 +287,11 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            from src.inbox.reply_split import bubbles_metrics_snapshot as _bms
+            snap["bubbles"] = _bms()  # P1.5 文本分条：sends_by_source/parts_sent/partial
+        except Exception:
+            pass
+        try:
             from src.ai.face_swap import metrics_snapshot as _fss
             snap["face_swap"] = _fss()  # 换脸：swapped/passthrough/failed/last_reason
         except Exception:
@@ -183,8 +302,43 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            # 语言硬闸（P1-198）：held（冲突拦下）/ rescued（gate-only 救回）/
+            # no_target_sent（CJK 盲发）。enabled 随配置回显——闸门在不在岗
+            # 零流量也能看出来。
+            from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+            from src.inbox.outbound_translate import parse_outbound_lang_gate_cfg
+            _lg = get_outbound_lang_stats().dump()
+            _cm = getattr(request.app.state, "config_manager", None)
+            _lg["enabled"] = bool(parse_outbound_lang_gate_cfg(
+                getattr(_cm, "config", None) or {}).get("enabled"))
+            snap["lang_gate"] = _lg
+        except Exception:
+            pass
+        try:
+            from src.inbox.effective_mood import mood_steering_snapshot as _mss
+            # P1-198 续：人工情绪标注转向——marks（按标签计打点）/ consumed
+            # （draft_directive/goal_hold/proactive_gate/voice 各链真用上的次数）。
+            # 「标了却恒 0 消费」＝接线断了，零流量即可判。
+            snap["mood_steering"] = _mss()
+        except Exception:
+            pass
+        try:
             from src.companion.proactive_stats import metrics_snapshot as _ps
             snap["proactive_topic"] = _ps()
+        except Exception:
+            pass
+        try:
+            # #37 自动链引用回复（I-4 D2）：decided/quoted/skipped{single_inbound,
+            # low_relevance,…}/applied/fallback_plain + 配置回显（enabled/地板）——
+            # 「开了却 decided 恒 0」＝接线断；「low_relevance 占比高」＝地板该调。
+            from src.inbox import reply_quote_policy as _rqp
+            _qr = _rqp.stats_snapshot()
+            _cm_q = getattr(request.app.state, "config_manager", None)
+            _qcfg = _rqp.parse_quote_cfg(getattr(_cm_q, "config", None) or {})
+            _qr["enabled"] = bool(_qcfg.get("enabled"))
+            _qr["min_unanswered"] = int(_qcfg.get("min_unanswered") or 0)
+            _qr["min_relevance"] = float(_qcfg.get("min_relevance") or 0)
+            snap["quote_reply"] = _qr
         except Exception:
             pass
         try:
@@ -207,12 +361,60 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            # P2：分条 A/B——全自动文本投递（bubbles vs single）3 天窗回复率对比。
+            # 观察性对比（非随机分组，受消息长短/类型混杂影响），趋势参考用。
+            _ibx_b = getattr(request.app.state, "inbox_store", None)
+            if _ibx_b is not None and hasattr(_ibx_b, "outreach_response_stats"):
+                _bab = {}
+                for _kind in ("bubbles", "single", "holdout"):
+                    _r = _ibx_b.outreach_response_stats(
+                        f"autosend_text:{_kind}", response_window_days=3.0)
+                    if int(_r.get("sent") or 0) > 0:
+                        _bab[_kind] = {
+                            "sent": int(_r.get("sent") or 0),
+                            "responded": int(_r.get("responded") or 0),
+                            "response_rate": _r.get("response_rate"),
+                        }
+                if _bab:
+                    snap["bubbles_ab"] = _bab
+        except Exception:
+            pass
+        try:
             # 统一草稿引擎规则栈生效观测（记忆/情感/陪伴/慢思考/守卫/重试命中）
             from src.monitoring.metrics_store import get_metrics_store
             snap["draft_pipeline"] = get_metrics_store().get_inbox_draft_metrics()
         except Exception:
             pass
-        return {"ok": True, "worker": snap}
+        try:
+            # 工作时间班表（P0-ws，2026-08-04）：配置总闸 + 全局默认班表此刻
+            # 在班态 + 各账号覆写的在班态（含下一次边界）——零流量也能判
+            # 「为什么这个号现在不自动回」。worker 侧计数（skipped_off_hours/
+            # catchup）已在 status_snapshot 本体。
+            from src.inbox.work_hours_gate import (
+                schedule_state as _ws_state,
+                work_schedule_cfg as _ws_cfg_fn,
+            )
+            _cm_ws = getattr(request.app.state, "config_manager", None)
+            _ws = _ws_cfg_fn(getattr(_cm_ws, "config", None) or {})
+            if _ws.get("enabled"):
+                _ws_out: dict = {
+                    "enabled": True,
+                    "default": _ws_state(_ws, "", "default"),
+                    "accounts": {},
+                }
+                _accts = _ws.get("accounts")
+                if isinstance(_accts, dict):
+                    for _k in list(_accts)[:32]:
+                        _plat, _, _aid = str(_k).partition(":")
+                        _ws_out["accounts"][str(_k)] = _ws_state(
+                            _ws, _plat, _aid or "default")
+                snap["work_schedule"] = _ws_out
+            else:
+                snap["work_schedule"] = {"enabled": False}
+        except Exception:
+            pass
+        return {"ok": True, "worker": snap, "human_deliver_wired": _hd_wired,
+                "stale_approve_hours": _stale_h}
 
     @app.get("/api/drafts/pipeline-metrics")
     async def api_drafts_pipeline_metrics(
@@ -426,6 +628,9 @@ def register_drafts_routes(app, *, api_auth):
         降级时返回原文（带 fallback 标记）。
         返回：{ok, translated, source_lang, target_lang, fallback, draft_id}
         """
+        # 能力权限（2026-08-16）：草稿翻译=坐席主动消费翻译能力，同受 ai.translate 闸
+        if not _perm_ok(request, "ai.translate"):
+            raise HTTPException(403, tr(request, "err.perm.capability_denied"))
         svc = _get_draft_service(request)
         draft = svc.get_draft(draft_id)
         if draft is None:
@@ -460,6 +665,10 @@ def register_drafts_routes(app, *, api_auth):
             )
             translated = str(result.translated_text if hasattr(result, "translated_text")
                              else result.get("translated_text", draft_text))
+            # 坐席字符计量归因（2026-08-16）：真翻译成功才记（源文本=草稿正文，
+            # 与 /translate 的 len(text) 同口径）；无 ok 属性的旧结果形状按成功记。
+            if getattr(result, "ok", True):
+                record_request_chars(request, "translation", len(draft_text))
             return {
                 "ok": True,
                 "draft_id": draft_id,
@@ -482,13 +691,14 @@ def register_drafts_routes(app, *, api_auth):
 
     @app.post("/api/drafts/bulk-resolve")
     async def api_drafts_bulk_resolve(request: Request, _=Depends(api_auth)):
-        """H2：批量处置草稿（主管专属）。
+        """H2：批量处置草稿。
 
-        Body: {action: "approve"|"reject", draft_ids: [...], by?}
+        Body: {action: "approve"|"reject", draft_ids: [...], by?, reason?}
+        ``reason=bulk_stale``（Q-31 D）：只拒绝 ``approve_block_reason==age`` 的 pending，
+        任意已登录坐席可点（超龄稿本就不能原样发）；未给 draft_ids 时服务端自选。
+        其它批量动作仍主管专属。
         返回：{ok, total, succeeded, failed, errors: [...]}
         """
-        if not _is_supervisor(request):
-            raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
         svc = _get_draft_service(request)
         body = {}
         try:
@@ -498,17 +708,45 @@ def register_drafts_routes(app, *, api_auth):
         action = str(body.get("action") or "").strip().lower()
         if action not in {"approve", "reject"}:
             raise HTTPException(400, tr(request, "err.draft.bad_action"))
+        reason = str(body.get("reason") or "").strip()
         draft_ids = list(body.get("draft_ids") or [])
-        if not draft_ids:
-            return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "errors": []}
+        if reason == "bulk_stale":
+            if action != "reject":
+                raise HTTPException(400, tr(request, "err.draft.bad_action"))
+            pending = svc.list_drafts(status="pending", limit=500)
+            stale_ids = [
+                str(d.get("draft_id") or "")
+                for d in pending
+                if d.get("draft_id")
+                and hasattr(svc, "approve_block_reason")
+                and (svc.approve_block_reason(d) or "") == "age"
+            ]
+            if draft_ids:
+                want = {str(x) for x in draft_ids}
+                draft_ids = [i for i in stale_ids if i in want]
+            else:
+                draft_ids = stale_ids
+            cap = 200
+        else:
+            if not _is_supervisor(request):
+                raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+            if not draft_ids:
+                return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "errors": []}
+            cap = 50
         by = str(body.get("by") or _session_agent_id(request))
         agent_id = _session_agent_id(request)
         succeeded, failed, errors = 0, 0, []
-        for did in draft_ids[:50]:  # 单次最多 50 条
+        for did in draft_ids[:cap]:
             try:
-                result = svc.resolve_with_audit(
-                    str(did), action, by=by or agent_id or "bulk"
-                )
+                _kw = {"by": by or agent_id or "bulk"}
+                if reason:
+                    _kw["reason"] = reason
+                try:
+                    result = svc.resolve_with_audit(str(did), action, **_kw)
+                except TypeError:
+                    result = svc.resolve_with_audit(
+                        str(did), action, by=by or agent_id or "bulk"
+                    )
                 if result.get("ok"):
                     succeeded += 1
                 else:
@@ -659,6 +897,122 @@ def register_drafts_routes(app, *, api_auth):
             raise HTTPException(404, tr(request, "err.draft.not_found"))
         return {"ok": True, "draft": draft}
 
+    @app.post("/api/drafts/{draft_id}/regenerate")
+    async def api_drafts_regenerate(request: Request, draft_id: str,
+                                    _=Depends(api_auth)):
+        """陈旧稿一键重生成（P1 2026-08-09，stale 护栏 409 的出路闭环）。
+
+        stale_approve_hours 护栏把老稿拦下后，坐席此前只有「编辑改写」或
+        「去输入框重新生成再手发」两条手工路。本端点＝按**当前**会话上下文
+        重走人设产线（``generate_persona_reply``，与全自动草稿/composer AI
+        同一条产线）→ 生成成功后**原子作废**旧稿（竞态窗内被同事处置 →
+        409 already_resolved，不铸新稿）→ 铸新 pending 稿。
+
+        安全语义：新稿 autopilot 按 review 口径定级（只产 L1/L3/L4）——
+        重生成是人工审阅流，**绝不**产 L2 落进自动投递批次。
+        """
+        svc = _get_draft_service(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            store = getattr(svc, "_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        old = store.get_draft(draft_id)
+        if old is None:
+            raise HTTPException(404, tr(request, "err.draft.not_found"))
+        if str(old.get("status") or "") not in ("pending", "enriching"):
+            raise HTTPException(409, tr(request, "err.draft.already_resolved"))
+        cid = str(old.get("conversation_id") or "")
+        platform = str(old.get("platform") or "")
+        chat_key = str(old.get("chat_key") or "")
+        account_id = str(old.get("account_id") or "default")
+
+        # 按**当前**会话上下文生成（老稿之所以老，就是因为情境已经变了）
+        from src.inbox.persona_reply import generate_persona_reply, normalize_history
+        rows = []
+        try:
+            if cid and hasattr(store, "list_recent_messages"):
+                from src.ai.context_depth import history_fetch_limit as _hfl
+                rows = store.list_recent_messages(cid, limit=_hfl(None, 30)) or []
+        except Exception:
+            rows = []
+        msgs = []
+        for r in rows:
+            try:
+                _txt = str((r.get("text") or r.get("original_text") or "")).strip()
+                if _txt:
+                    msgs.append({"direction": str(r.get("direction") or "in"),
+                                 "text": _txt})
+            except Exception:
+                continue
+        history, last_inbound = normalize_history(msgs)
+        if not last_inbound:
+            last_inbound = str(old.get("peer_text") or "")
+        if not last_inbound:
+            raise HTTPException(400, tr(request, "err.ws.no_conversation_context"))
+        # P3：最近一条入站的平台 message_id → 案例 mid 锚点（rows 已升序）
+        _inbound_mid = ""
+        try:
+            for r in reversed(rows or []):
+                if str(r.get("direction") or "") != "in":
+                    continue
+                mid = str(r.get("message_id") or "").strip()
+                if mid and mid not in ("0",):
+                    _inbound_mid = mid
+                    break
+        except Exception:
+            _inbound_mid = ""
+        out = await generate_persona_reply(
+            app=request.app, platform=platform, chat_key=chat_key,
+            last_inbound=last_inbound, history=history,
+            conversation_id=cid, account_id=account_id,
+            inbound_msg_id=_inbound_mid)
+        reply = str((out or {}).get("reply") or "").strip()
+        if not (out or {}).get("ok") or not reply:
+            raise HTTPException(502, tr(request, "err.draft.regen_failed"))
+
+        by = _session_agent_id(request) or "regen"
+        # 生成成功才作废旧稿；原子闸门（仅 pending/enriching 可转）防竞态双活
+        cancelled = store.update_draft_status(
+            draft_id, status="cancelled", decided_by=f"regen:{by}")
+        if not cancelled:
+            raise HTTPException(409, tr(request, "err.draft.already_resolved"))
+
+        import uuid as _uuid
+        from src.ai.chat_assistant_service import quick_analyze
+        from src.inbox.drafts import _max_risk, keyword_risk_level, risk_to_autopilot
+        analysis = quick_analyze(reply)
+        risk_level = _max_risk(
+            analysis.get("risk_level", "low"), keyword_risk_level(reply))
+        autopilot = risk_to_autopilot(risk_level, "review")
+        new_id = store.upsert_draft({
+            "source_kind": "inbox",
+            "source_id": "regen_" + _uuid.uuid4().hex,
+            "conversation_id": cid,
+            "platform": platform,
+            "account_id": account_id,
+            "chat_key": chat_key,
+            "chat_name": str(old.get("chat_name") or ""),
+            "peer_text": last_inbound,
+            "draft_text": reply,
+            "draft_lang": str(out.get("reply_lang") or ""),
+            "risk_level": risk_level,
+            "risk_reasons": analysis.get("risk_reasons") or [],
+            "autopilot_level": autopilot,
+            "status": "pending",
+            "trace_id": f"regen:{draft_id}",
+        })
+        try:
+            store.record_draft_audit(
+                new_id, autopilot_level=autopilot, action="regenerate_draft",
+                agent_id=by, reason=f"from={draft_id}",
+                risk_level=risk_level, conversation_id=cid)
+        except Exception:
+            pass
+        return {"ok": True, "draft_id": new_id, "cancelled": draft_id,
+                "risk_level": risk_level, "autopilot_level": autopilot,
+                "draft_text": reply}
+
     @app.post("/api/drafts/{draft_id}/resolve")
     async def api_drafts_resolve(request: Request, draft_id: str, _=Depends(api_auth)):
         """带 L4 拦截 + 敏感词强制升级 + 审计的统一处置（B2）。
@@ -674,6 +1028,20 @@ def register_drafts_routes(app, *, api_auth):
         result = svc.resolve_with_audit(draft_id, action, text=text, by=by)
         if not result.get("ok"):
             code = int(result.get("code") or 400)
+            # 两种 409 语义不同，别混成一句话（都回 409 但坐席该做的事完全不同）：
+            # too_stale＝这稿太老，原样发会穿帮 → 重新生成或改写后发；
+            # already_resolved＝刚被其他窗口/同事处置 → 刷新即可（多开防重，非故障）。
+            if result.get("too_stale"):
+                # 两种陈旧成因也分开说：已回过（会重复/自相矛盾）vs 单纯过期（脱节）
+                _key = ("err.draft.stale_replied"
+                        if result.get("stale_reason") == "replied"
+                        else "err.draft.too_stale")
+                raise HTTPException(409, tr(
+                    request, _key,
+                    age=int(result.get("age_hours") or 0),
+                    limit=int(result.get("max_age_hours") or 0)))
+            if code == 409 or result.get("already_resolved"):
+                raise HTTPException(409, tr(request, "err.draft.already_resolved"))
             raise HTTPException(code, result.get("error") or "处置失败")
         return result
 
@@ -716,8 +1084,10 @@ def register_drafts_routes(app, *, api_auth):
         for d in drafts:
             if d.get("autopilot_level") != "L2":
                 continue
+            # deliver=True：人工触发的批量 autosend 也要真投递（AutosendWorker 只投递
+            # 自己 resolve 的批次；此前该路由只标记 approved，客户实际收不到）。
             result = svc.resolve_with_audit(
-                d["draft_id"], "autosend", by=by,
+                d["draft_id"], "autosend", by=by, deliver=True,
             )
             if result.get("ok"):
                 sent += 1
@@ -790,7 +1160,16 @@ def register_metrics_route(app, *, api_auth):
         format: str = "json",
         _=Depends(api_auth),
     ):
-        if not _is_supervisor(request):
+        fmt = (format or "json").strip().lower()
+        # Phase9: Prometheus scrape uses static Bearer auth_token (no browser session).
+        # api_auth already validated the token; allow text export for machine scrapers
+        # without opening JSON metrics to non-supervisor humans.
+        auth_h = request.headers.get("Authorization", "") or ""
+        bearer_ok = auth_h.startswith("Bearer ") and len(auth_h) > 8
+        if fmt == "prometheus":
+            if not (_is_supervisor(request) or bearer_ok):
+                raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        elif not _is_supervisor(request):
             raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
 
         # ── 聚合各子系统指标 ──────────────────────────────────────
@@ -850,6 +1229,51 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             metrics["scheduled_reporter"] = {"running": False}
 
+        # P3 账号真相观测（2026-08-17）：账号名录规模趋势——已退出/已移除/仅历史号
+        # 异常增长（频繁掉配对、误删）在这里先看见，而不是等坐席报「对不上号」。
+        # directory_only=会话库有、注册表没有的号（含 config 来源活跃号的恒定底数，
+        # 看趋势不看绝对值）。失败静默：观测键绝不拖垮 metrics 主体。
+        try:
+            from src.integrations.account_registry import get_account_registry
+            _inb = getattr(request.app.state, "inbox_store", None)
+            _reg_rows = get_account_registry().list(include_removed=True) or []
+            _by_st: dict = {}
+            _reg_keys = set()
+            for _r in _reg_rows:
+                _st = str(_r.get("status") or "unknown")
+                _by_st[_st] = _by_st.get(_st, 0) + 1
+                _reg_keys.add((str(_r.get("platform") or ""),
+                               str(_r.get("account_id") or "")))
+            _directory = (_inb.account_directory()
+                          if _inb is not None
+                          and hasattr(_inb, "account_directory") else {})
+            from src.web.routes.unified_inbox_aggregate import directory_ghost_keys
+            _ghosts = directory_ghost_keys(_directory, _reg_keys)
+            _desktop = sum(
+                1 for _r in _reg_rows
+                if str(_r.get("mode") or "") == "desktop"
+                and str(_r.get("status") or "") != "removed")
+            metrics["accounts_truth"] = {
+                "registry_total": len(_reg_rows),
+                "registry_by_status": _by_st,
+                "directory_total": len(_directory),
+                # directory_only 保留旧键（趋势不断档）；history_only 剔除 web 工作台
+                # 后才是真幽灵——与 accounts_summary 的 history_only 同口径。
+                "directory_only": len(_ghosts),
+                "history_only": len(_ghosts),
+                "desktop": _desktop,
+            }
+        except Exception:
+            pass
+
+        # P1-9 账号健康（2026-08-29）：冻结/掉线/近7天风控一份快照——
+        # ops「🛡️ 账号健康」卡数据源；全部 peek 既有单例，逐段软失败
+        try:
+            from src.ops.account_health import collect_account_health
+            metrics["account_health"] = collect_account_health()
+        except Exception:
+            pass
+
         # InboxStore 草稿统计
         try:
             inbox = getattr(request.app.state, "inbox_store", None)
@@ -892,6 +1316,139 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.outbound_translation_stats import get_outbound_translation_stats
             metrics["outbound_translation"] = get_outbound_translation_stats().dump()
+        except Exception:
+            pass
+
+        # P0 多开治理：发送幂等去重（双窗口/双击重复提交拦截量；entries=当前占位窗口）
+        try:
+            from src.inbox.send_dedup import get_send_dedup
+            metrics["send_dedup"] = get_send_dedup().snapshot()
+        except Exception:
+            pass
+
+        # 所听即所发（P1 2026-08-05）：语音试听产物复用——hits/attempts/hit_rate +
+        # miss 原因分布（expired 多→放宽 TTL；text_mismatch 多→改稿没重生成）
+        try:
+            from src.integrations.shared.tts_preview import reuse_stats_snapshot
+            metrics["voice_preview_reuse"] = reuse_stats_snapshot()
+        except Exception:
+            pass
+
+        # 未读可信化 v2（2026-08-23）：工作台已读→平台回执的推送/节流/成败计数
+        # （pushed/push_ok/push_fail/skipped_*）。进程口径重启清零；开关关＝全 0。
+        # 「回执链活着吗」从翻日志变成读数（push_fail 持续涨=worker mark_read 断）。
+        try:
+            from src.inbox.read_sync import stats_snapshot as _read_sync_stats
+            metrics["read_sync"] = _read_sync_stats()
+        except Exception:
+            pass
+
+        # spoken_style 真人感文本层灰度（2026-08-11，AvatarHub 交付包桥接）：
+        # l1_inject/l2_inject=注入量、l2_skip_lang=zh_only 外语拦截量（应随外语消息同步涨）、
+        # l3_changed=出口清洁真剥了东西、l4_*=改写尝试/生效/直通（直通率>30% 该反馈 AvatarHub 线）。
+        # 进程内累计（重启清零）；桥接未启用/包缺席时全 0，照常暴露便于区分「没开」和「没流量」。
+        try:
+            from src.ai.spoken_style_bridge import stats as _spoken_style_stats
+            metrics["spoken_style"] = _spoken_style_stats()
+        except Exception:
+            pass
+        # #40 地区语气档（I-4 D1）：resolve_* 各解析来源计数（人设显式/粤语 dialect/
+        # 居住地/会话「发→」/全局默认）+ observed（非 CN 档出站被观测条数）+
+        # banned_hit（命中大陆口语禁用词）+ script_hit（繁體档漏简体字）。
+        # 命中率 = hit/observed；高了再决定要不要 L4 带负样本重写（现只观测不改文本）。
+        try:
+            from src.ai.persona_region import stats as _persona_region_stats
+            metrics["persona_region"] = _persona_region_stats()
+        except Exception:
+            pass
+
+        # 风险放行影子台账（#160 I-1，2026-09-04 老板拍板 v2：扣稿全放行、触发只写台账）：
+        # total/today/by_reason/by_level/by_stage/top_hits + stop_contact/self_harm 单列。
+        # 进程口径重启清零；持久口径是 logs/autosend_shadow/*.jsonl（CLI
+        # tools/autosend_shadow_report.py）。恒暴露（total=0 时 ops 卡整卡隐藏）。
+        try:
+            from src.inbox.autosend_shadow_log import stats_snapshot as _ashadow_stats
+            metrics["autosend_shadow"] = _ashadow_stats()
+        except Exception:
+            pass
+
+        # 「AI 指纹」四格（P-1 D #259 #254）：近 24h 破折号率 / 客服腔命中率 / 引用无锚点 /
+        # 承诺无动作（+ 发送门兜底命中）。进程事件环 + logs/ai_fingerprint/*.jsonl 回填，
+        # 重启不清零。恒暴露（无样本时卡片按 na 隐藏）。
+        try:
+            from src.inbox.ai_fingerprint_stats import snapshot as _aifp_snapshot
+            metrics["ai_fingerprint"] = _aifp_snapshot(hours=24)
+        except Exception:
+            pass
+
+        # 出站文本形态守卫（实施74 B118/B121/B104）：monologue=括号独白拦截、
+        # lang_mix_hard/soft=语种混杂剥除/观测、unfounded_recall=无出处引用剥句。
+        # 进程口径重启清零；恒暴露（全 0=没流量或没命中，与「没接」可区分）。
+        try:
+            from src.ai.outbound_text_guard import guard_stats as _otg_stats
+            metrics["outbound_text_guard"] = _otg_stats()
+        except Exception:
+            pass
+
+        # 出站收口点守卫（实施91 #97/#105/#106）：呼格纠正（互换/近形/人设名）、
+        # 铆定语言冲突（检出/翻译/HOLD/放行）、语音合成前收口两计数。skuio 复测
+        # 验收期值守直接读这里判「守卫在不在动手」。进程口径重启清零；恒暴露。
+        try:
+            from src.ai.sendpoint_guard import sendpoint_guard_stats
+            metrics["sendpoint_guard"] = sendpoint_guard_stats()
+        except Exception:
+            pass
+
+        # 图片翻译链路观测（P1-OBS 2026-08-19）：识别/贴回量、OCR 后端分布
+        # （ppocr 微服务灰度决策读数）、块级覆盖率、目标语分布。进程口径重启清零；
+        # 零流量 active=false（ops 卡整卡隐藏）。
+        try:
+            from src.ai.image_xlate_stats import get_image_xlate_stats
+            metrics["image_xlate"] = get_image_xlate_stats().dump()
+        except Exception:
+            pass
+
+        # UI 语言来源分布（系统语言自动跟随 2026-08-27）：negotiated 占比 = 自动
+        # 跟随的真实使用量；negotiated_by_lang = 语种校对优先级的真实数据源。
+        try:
+            from src.web.ui_lang_stats import get_ui_lang_stats
+            metrics["ui_lang"] = get_ui_lang_stats().dump()
+        except Exception:
+            pass
+
+        # Token 计费账本（2026-08-19 Token 定价改版观测三件套）：钱包余额/累计消耗/
+        # 按动作分布 + P5b 投递影子计数（出稿↔投递校准）+ P4 公平使用水表 + P6 enforce
+        # 态。enabled=False 时全零形状照常暴露（区分「没开」和「没流量」）。
+        try:
+            from src.licensing.token_ledger import metrics_snapshot as _tok_metrics
+            metrics["token_ledger"] = _tok_metrics()
+        except Exception:
+            pass
+
+        # 发送护栏拦截（P2 2026-08-13）：真实发送尝试被 Kill-Switch/金丝雀/授权/
+        # 反封号闸门拦下的进程口径计数（预判/横幅轮询 notify=False 不计——读路径
+        # 不污染）；键带 |manual/|auto 后缀（额度族）供「谁在被拦」分道观测。
+        try:
+            from src.integrations.shared.send_guard import block_stats_snapshot
+            metrics["send_gate_blocks"] = block_stats_snapshot()
+        except Exception:
+            pass
+
+        # 跨平台档案（origin_profile P2 2026-08-18）：provider 消费/渲染命中（进程口径，
+        # blocks=AI 真吃到背景的次数）+ 合并联动记忆合流量 + 档案/导入台账总量
+        # （contacts.db 持久口径，重启不清零）。contacts 未启用 → 只出进程计数。
+        try:
+            from src.contacts.origin_context import origin_stats_snapshot
+            _osnap: Dict[str, Any] = dict(origin_stats_snapshot())
+            _contacts_sub = getattr(request.app.state, "contacts", None)
+            _cstore = getattr(_contacts_sub, "store", None) if _contacts_sub else None
+            if _cstore is not None and hasattr(_cstore, "origin_profile_totals"):
+                _osnap["totals"] = _cstore.origin_profile_totals()
+            _ocfg_snap = (getattr(_contacts_sub, "config_snapshot", None) or {}) \
+                if _contacts_sub else {}
+            _osnap["enabled"] = bool(
+                ((_ocfg_snap.get("origin_profile") or {}).get("enabled", False)))
+            metrics["origin_profile"] = _osnap
         except Exception:
             pass
 
@@ -941,6 +1498,16 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # LINE 媒体收发：出站默认关，放量与否看这里的读数（尤其 orphan_recalled=
+        # 「先发占位、传字节失败后撤回」的次数，它是那条两步链在真实网络下的稳定度）。
+        # JSON 侧**不按 active 过滤**：零流量时的 active:false 本身就是「接线在、只是没
+        # 用上」的确认；Prometheus 侧才过滤，免得没有 LINE 号的部署长期挂一串零序列。
+        try:
+            from src.integrations.line_media_stats import get_line_media_stats
+            metrics["line_media"] = get_line_media_stats().dump()
+        except Exception:
+            pass
+
         # B 线 autosend 媒体出站：语音 provider/截断 + 发图失败原因分布
         try:
             from src.inbox.voice_autosend import metrics_snapshot as _vms
@@ -957,6 +1524,150 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.companion.bazi_stats import get_bazi_stats
             metrics["bazi"] = get_bazi_stats().dump()
+        except Exception:
+            pass
+
+        # 唱歌能力观测（实施58 P1）：requests/sent/no_stock/capped 计数 +
+        # 按模板分布（进程口径；备货盘点走 avatar-status singing 段）
+        try:
+            from src.companion.song_stock import metrics_snapshot as _song_ms
+            metrics["singing"] = _song_ms()
+        except Exception:
+            pass
+
+        # 报障群 AI 值守观测（bug_intake）：分类计数 + 今日工单 + 开放工单分布
+        try:
+            from src.ops.bug_intake import dump_stats as _bi_dump
+            metrics["bug_intake"] = _bi_dump()
+        except Exception:
+            pass
+
+        # 真实世界接轨观测（P0 人设时钟 / P1 天气 / P2 用户侧时钟 + 双侧节日）。
+        # 三者都是「静默降级」型能力：推不出时区、天气拉不到、节日缺库，链路照常跑但
+        # 价值悄悄归零——不在看板上给出读数就等于没上线。
+        try:
+            _rw: Dict[str, Any] = {}
+            try:
+                from src.companion.weather_state import dump_stats as _wx_dump
+                _rw["weather"] = _wx_dump()
+            except Exception:
+                _rw["weather"] = {}
+            try:
+                from src.companion.user_clock import dump_stats as _uc_dump
+                _rw["clock_core"] = _uc_dump()
+            except Exception:
+                _rw["clock_core"] = {}
+            try:
+                from src.companion.user_clock_resolver import (
+                    distribution as _uc_dist, dump_stats as _ucr_dump,
+                )
+                _rw["clock"] = _ucr_dump()
+                _rw["sources"] = _uc_dist()
+            except Exception:
+                _rw["clock"], _rw["sources"] = {}, {}
+            try:
+                from src.companion.locale_holidays import (
+                    load_calendar as _hol_cal, lunar_available as _lunar_ok,
+                )
+                _cal = _hol_cal() or {}
+                _ctys = _cal.get("countries") or {}
+                _rw["holidays"] = {
+                    "countries": len(_ctys),
+                    "entries": sum(
+                        len(v or []) for v in _ctys.values()
+                        if isinstance(v, (list, tuple))),
+                    "lunar_ok": bool(_lunar_ok()),
+                }
+            except Exception:
+                _rw["holidays"] = {}
+            # active：任一子系统真的动过（全零 → ops 卡整卡隐藏，不占版面）
+            _rw["active"] = bool(
+                sum(int(v or 0) for v in (_rw.get("weather") or {}).values())
+                or sum(int(v or 0) for v in (_rw.get("clock") or {}).values())
+                or sum(int(v or 0) for v in (_rw.get("clock_core") or {}).values())
+            )
+            metrics["real_world"] = _rw
+        except Exception:
+            pass
+
+        # 中央凭据池观测：池分配 vs 回落自带的比例（pool_share）+ 生效会员档 + 回落原因。
+        # 中央池的失败是静默降级，没有这组数就看不出「池到底有没有在生效」。
+        try:
+            from src.integrations.credpool_stats import get_credpool_stats
+            _cp = get_credpool_stats().dump()
+            # 风控隔离三盾覆盖率（按**在册账号**算，不是按登录事件比率——
+            # 运营要回答的是「我的号里有几个真被隔离了」）。即使本进程还没发生过
+            # 分配（active=false），只要有协议号就该看得见覆盖率。
+            try:
+                from src.integrations.isolation_shields import collect_shields
+                _cp["shields"] = collect_shields()
+            except Exception:
+                pass
+            # 池服务自身的健康只有外部看门狗知道（health 200 但 allocate 已死的
+            # 「半死」形态本项目吃过 2h20m 的亏）。路径由配置给出，客户桌面不配
+            # 这个键 → 这一段自然不存在。
+            try:
+                _wcm = getattr(request.app.state, "config_manager", None)
+                _wcfg = (_wcm.config if _wcm is not None else {}) or {}
+                _wpath = ((((_wcfg.get("platform_login") or {}).get("telegram") or {})
+                           .get("credpool") or {}).get("watchdog_state_path") or "")
+                if _wpath:
+                    from src.integrations.credpool_stats import watchdog_state
+                    _wd = watchdog_state(str(_wpath))
+                    if _wd:
+                        _cp["watchdog"] = _wd
+            except Exception:
+                pass
+            if _cp.get("active") or (_cp.get("shields", {}).get("total") or 0) > 0:
+                metrics["credpool"] = _cp
+        except Exception:
+            pass
+
+        # 营销目标观测：建目标→每日拍（含 hold 分桶）→注入生成链→主动桥真发→终态
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            metrics["goals"] = get_goal_stats().dump()
+        except Exception:
+            pass
+
+        # 跨平台身份影子扫描（P3.2）：读周期扫描落的 state 文件快照（绝不在请求里
+        # 现场扫库）；未启用 → {"enabled": false}，ops 卡据此整卡隐藏。
+        try:
+            _iscm = getattr(request.app.state, "config_manager", None)
+            if _iscm is not None:
+                from pathlib import Path as _ISPath
+                from src.utils.identity_shadow_periodic import (
+                    metrics_snapshot as _ism,
+                )
+                metrics["identity_shadow"] = _ism(
+                    getattr(_iscm, "config", None) or {},
+                    _ISPath(str(getattr(_iscm, "config_path", "")
+                                or "config/config.yaml")).parent)
+        except Exception:
+            pass
+
+        # 四域真活探针（2026-08-27）：读 watchdog 每轮落的 state 文件快照，**绝不在
+        # 请求里现场探针**（那会把一次看板刷新变成四发真推理）。此前探针结果只进日志
+        # 和主机弹窗，src/web 里一处引用都没有——「探针没在跑」完全不可观测，
+        # stale_sec 正是为区分「四域都绿」与「探针停摆」。未跑过 → {"present": false}。
+        try:
+            _tpcm = getattr(request.app.state, "config_manager", None)
+            if _tpcm is not None:
+                from pathlib import Path as _TPPath
+                from src.ops.true_probe import metrics_snapshot as _tpm
+                metrics["true_probe"] = _tpm(
+                    _TPPath(str(getattr(_tpcm, "config_path", "")
+                                or "config/config.yaml")).parent)
+        except Exception:
+            pass
+
+        # 记忆去重观测（P5）：灰区对（差一点就并的近义对）累计——「要不要上
+        # LLM 仲裁合并」的两周观察读数；store 未接（如纯 web 部署）→ 键缺省。
+        try:
+            _edsm = getattr(request.app.state, "skill_manager", None)
+            _edst = getattr(_edsm, "_episodic_store", None)
+            if _edst is not None and hasattr(_edst, "dedup_stats_snapshot"):
+                metrics["episodic_dedup"] = _edst.dedup_stats_snapshot()
         except Exception:
             pass
 
@@ -1023,6 +1734,100 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站拦截统一计数（P5：业务频控/安全刹车/额度 三层 × 原因 + unlimited_mode 放行数）
+        try:
+            from src.ops.outbound_policy import blocked_snapshot as _ob_snapshot
+            metrics["outbound_blocked"] = _ob_snapshot()
+        except Exception:
+            pass
+
+        # 坐席手动出图漏斗（尝试/成功/失败码分布/时延/相册秒发占比，2026-08-22 P1）
+        try:
+            from src.web.image_gen_stats import get_image_gen_stats
+            metrics["image_gen"] = get_image_gen_stats().dump()
+        except Exception:
+            pass
+
+        # 无兜底纪律拦截计数（语音/翻译/识图/转写/聊天失败未发出）
+        try:
+            from src.ops.delivery_block import snapshot as _deliv_snap
+            metrics["delivery_block"] = _deliv_snap()
+        except Exception:
+            pass
+
+        # 出站语言硬闸（P1-198）：held/rescued/no_target_sent + 最近事件
+        try:
+            from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+            metrics["outbound_lang_gate"] = get_outbound_lang_stats().dump()
+        except Exception:
+            pass
+
+        # 对方机器人守卫（P0 2026-08-03 SpamBot 空转实锤）：检出/拦截/降档/预算命中
+        try:
+            from src.inbox.peer_bot_guard import stats_snapshot as _pbg_snapshot
+            metrics["peer_bot_guard"] = _pbg_snapshot()
+        except Exception:
+            pass
+
+        # CSRF 写请求拒绝观测（中间件 403 计数；kind=cookie_no_header 即「宿主缺
+        # fetch 补丁/客户端未带凭证」签名——2026-07-31 人设切换事故的形态）
+        try:
+            from src.web.csrf_stats import get_csrf_reject_stats
+            metrics["csrf_rejects"] = get_csrf_reject_stats().dump()
+        except Exception:
+            pass
+
+        # 出站媒体归档发布（A 线 publish_outbound_media 成败；失败＝该条媒体在坐席台
+        # 静默退化成纯文本占位——「自己发的语音看不到」的根因计数，2026-08-02）
+        try:
+            from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+            metrics["outbound_mirror"] = get_outbound_mirror_stats().dump()
+        except Exception:
+            pass
+
+        # 功能锁触达（E6：档位闸门 API 403 / 页面 302 按族计数——「哪个锁被撞
+        # 得最多」＝下一个该降档/该重点卖的功能的定价信号）
+        try:
+            from src.web.feature_lock_stats import get_feature_lock_stats
+            metrics["feature_lock"] = get_feature_lock_stats().dump()
+        except Exception:
+            pass
+
+        # 人设文档导入/考题观测（解析→抽取→传记入库→一致性考题 漏斗计数与均值）
+        try:
+            from src.utils.persona_import_stats import get_persona_import_stats
+            metrics["persona_import"] = get_persona_import_stats().dump()
+        except Exception:
+            pass
+
+        # 前端 UI 交互埋点（空态引导按钮点击率/群区模式切换等；观测「引导有效性」）
+        try:
+            from src.web.ui_event_stats import get_ui_event_stats
+            metrics["ui_events"] = get_ui_event_stats().dump()
+        except Exception:
+            pass
+
+        # 目录同步（好友名单→通讯录）观测（分账号轮数/条数/失败段/上次同步时间）
+        try:
+            from src.integrations.directory_sync_stats import get_directory_sync_stats
+            metrics["directory_sync"] = get_directory_sync_stats().dump()
+        except Exception:
+            pass
+
+        # 出站语音语言路由观测（哪些语种在被路由/拒发；拒发涨=该语种缺音色映射）
+        try:
+            from src.ai.lang_route_stats import get_lang_route_stats
+            metrics["lang_voice_route"] = get_lang_route_stats().dump()
+        except Exception:
+            pass
+
+        # 双实例重启冷却（机器级 JSON；连环重启是坐席「加载超时」主因）
+        try:
+            from src.utils.instance_restart_status import collect_restart_status
+            metrics["instance_restart"] = collect_restart_status()
+        except Exception:
+            pass
+
         # 会话 peer 身份「惰性解析/自愈补名」观测（数字号 healed 了多少 / 缓存命中 / 取不到）
         try:
             from src.web.peer_identity_stats import get_peer_identity_stats
@@ -1041,8 +1846,109 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.companion.persona_media_store import get_persona_media_store
             _pms = get_persona_media_store()
+            # 实施90：挑图拦截计数（进程口径）随相册指标一并出（有流量才带键）
+            try:
+                from src.companion.album_gate_stats import snapshot as _ags_snap
+                _gates = _ags_snap()
+            except Exception:
+                _gates = None
             if _pms is not None:
                 metrics["persona_media"] = _pms.analytics()
+                if _gates and _gates.get("active"):
+                    metrics["persona_media"]["gates"] = _gates
+                try:
+                    from src.companion.album_semantic_recall import (
+                        snapshot as _asr_snap,
+                    )
+                    _shadow = _asr_snap()
+                    if _shadow.get("active"):
+                        metrics["persona_media"]["semantic_shadow"] = _shadow
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 表情包（贴纸）观测（2026-08-17）：发送/收藏进程口径 + sent_as 分桶
+        # （image 占比高＝目标平台原生能力缺口：WA 边车未升级 / LINE 自建包为主）。
+        # 备货水位走 store counts（持久口径）；零流量时 sends=0，ops 卡自行隐藏。
+        try:
+            from src.inbox.sticker_stats import get_sticker_stats
+            _stk = get_sticker_stats().dump()
+            from src.inbox.sticker_store import get_sticker_store
+            _sst = get_sticker_store()
+            if _sst is not None:
+                _stk.update(_sst.counts())
+            metrics["stickers"] = _stk
+        except Exception:
+            pass
+
+        # Telegram 群成员提取观测（成员/群/任务；active=false 时 ops 卡整卡隐藏）
+        try:
+            from src.companion.group_members_store import get_group_members_store
+            _gms = get_group_members_store()
+            if _gms is not None:
+                metrics["group_members"] = _gms.stats()
+        except Exception:
+            pass
+
+        # 回复时延 SLO（P1-8 2026-08-09）：首答 p50/p95 + 零回复率，inbox 持久库
+        # 口径（重启不清零），进程级 300s TTL 缓存防 ops 轮询逐次全扫消息表。
+        try:
+            _rl_store = getattr(request.app.state, "inbox_store", None)
+            if _rl_store is not None:
+                from src.ops.reply_latency import reply_latency_snapshot
+                _rl = reply_latency_snapshot(_rl_store)
+                if _rl:
+                    metrics["reply_latency"] = _rl
+        except Exception:
+            pass
+
+        # 入口可用性 SLO（P1-7 2026-08-12 可靠性复盘）：服务端＝边缘看门狗 7 天
+        # tick 可用率+断连段；坐席端＝conn_* 断连回执（P0-2 恢复时刻补发）。两视角
+        # 差值=客户端侧损耗。300s TTL 纯读软失败，看门狗日志缺失时 server 为空骨架。
+        try:
+            from src.ops.entrance_slo import entrance_slo_snapshot
+            _slo = entrance_slo_snapshot()
+            if _slo:
+                metrics["entrance_slo"] = _slo
+        except Exception:
+            pass
+
+        # 案例中心观测（2026-08-03：自启动立案/结案/升级/告警计数 + 平均结案时长；
+        # 当前未结案的 live 口径在 /api/cases/active，两者互补）
+        try:
+            from src.utils.case_stats import get_case_stats
+            metrics["cases"] = get_case_stats().dump()
+            try:
+                from src.utils.case_trend_store import get_case_trend_store
+                _cts = get_case_trend_store()
+                if _cts is not None:
+                    metrics["cases"]["trend"] = _cts.recent(14)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # 发图能力关闭时的出站消毒观测（P1，2026-07-31）：strip_rate 高=
+        # 提示层约束不够、靠守卫兜底；运营据此决定要不要加人设级禁令措辞。
+        try:
+            from src.companion.photo_capability import dump_sanitize_stats
+            metrics["photo_capability"] = dump_sanitize_stats()
+        except Exception:
+            pass
+
+        # 会话级人设覆写观测（出站解析 tier 分布 / 覆写命中 / legacy 被压制 / 治理动作）
+        try:
+            from src.ai.persona_override_stats import get_persona_override_stats
+            metrics["persona_override"] = get_persona_override_stats().dump()
+            # 活水位：现在还剩多少条 legacy 债（清零后回升=有路径在重新制造）。
+            # 嵌套 try：水位失败不连累计数器段。
+            try:
+                from src.web.routes.persona_routes import legacy_debt_snapshot
+                metrics["persona_override"]["legacy_debt"] = (
+                    legacy_debt_snapshot(request.app))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1052,6 +1958,28 @@ def register_metrics_route(app, *, api_auth):
                 get_platform_session_health,
             )
             metrics["platform_sessions"] = get_platform_session_health().dump()
+        except Exception:
+            pass
+
+        # Messenger 双道就绪度（P2 2026-08-13）：注册表×sidecar×配置闸门的
+        # 「人工收发 / 全自动」第一阻塞原因判定——与 tools/diagnose_messenger.py
+        # 共用 evaluate_messenger_readiness 同一纯函数（60s TTL 共享探针，
+        # watchdog 的 not_restored 对账同源）。
+        try:
+            from src.integrations.messenger_readiness_collect import (
+                collect_messenger_readiness,
+            )
+            _mr_cm = getattr(request.app.state, "config_manager", None)
+            metrics["messenger_readiness"] = collect_messenger_readiness(
+                getattr(_mr_cm, "config", None) or {})
+        except Exception:
+            pass
+
+        # 扫码登录漏斗（started→qr_shown→pin_issued→authorized ↘ failed[reason]）：
+        # rows[].stalled=True（发起≥3 次零授权）即某平台某登录方式事实不可用——LINE 事故形态
+        try:
+            from src.integrations.login_funnel_stats import get_login_funnel_stats
+            metrics["login_funnel"] = get_login_funnel_stats().dump()
         except Exception:
             pass
 
@@ -1065,6 +1993,16 @@ def register_metrics_route(app, *, api_auth):
                 metrics["platform_sessions"]["tg_cooldown"] = _cd
             elif _cd:
                 metrics["platform_sessions"] = {"tg_cooldown": _cd}
+        except Exception:
+            pass
+
+        # 账号官方资料修改推送观测（accounts.profile_push 漏斗：attempts/success/
+        # partial/failed/cooldown_blocked/offline_blocked/persona_fill + by_platform）
+        try:
+            from src.integrations.account_profile_push import (
+                get_profile_push_stats,
+            )
+            metrics["profile_push"] = get_profile_push_stats()
         except Exception:
             pass
 
@@ -1092,6 +2030,23 @@ def register_metrics_route(app, *, api_auth):
             _gauge("ws_autosend_circuit_open",
                    1 if metrics["autosend"].get("circuit_open") else 0,
                    "AutosendWorker circuit breaker open")
+            # P0/P2 多开治理：人工通过投递 + 竞态拦截 + 发送幂等去重
+            _gauge("ws_autosend_human_delivered_total",
+                   metrics["autosend"].get("total_human_delivered", 0),
+                   "Human-approved inbox drafts delivered via worker send chain")
+            _gauge("ws_autosend_human_deliver_errors_total",
+                   metrics["autosend"].get("total_human_deliver_errors", 0),
+                   "Human-approved inbox draft delivery failures")
+            _gauge("ws_autosend_raced_skips_total",
+                   metrics["autosend"].get("total_skipped_raced", 0),
+                   "Draft resolves skipped because another window/agent won the race")
+            _sd = metrics.get("send_dedup") or {}
+            _gauge("ws_send_dedup_duplicates_total",
+                   _sd.get("total_duplicates", 0),
+                   "Duplicate manual sends blocked by client_msg_id dedup")
+            _gauge("ws_send_dedup_reserved_total",
+                   _sd.get("total_reserved", 0),
+                   "Manual sends carrying a client_msg_id (dedup-protected)")
 
             _gauge("ws_sla_watcher_running",
                    1 if metrics["sla_watcher"].get("running") else 0,
@@ -1183,6 +2138,45 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 语音出站断档台账（三链滚动窗成败；attempts>0 且 ok=0 ＝断档告警面）
+            try:
+                from src.ai.voice_outage import get_voice_outage
+                if get_voice_outage().outage_snapshot().get("attempts_24h"):
+                    buf.write(get_voice_outage().dump_prom())
+            except Exception:
+                pass
+
+            # LINE 媒体收发（入站下载/出站两步链；仅有流量时输出，同 credpool 口径）
+            try:
+                from src.integrations.line_media_stats import get_line_media_stats
+                if get_line_media_stats().dump().get("active"):
+                    buf.write(get_line_media_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 出站媒体归档发布（A 线镜像可回放的前提；失败=静默退化文本占位）
+            try:
+                from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+                if get_outbound_mirror_stats().dump().get("total"):
+                    buf.write(get_outbound_mirror_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 中央凭据池（分配来源/生效档位/回落原因/池承载比例）
+            try:
+                from src.integrations.credpool_stats import get_credpool_stats
+                if get_credpool_stats().dump().get("active"):
+                    buf.write(get_credpool_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 功能锁触达（档位闸门拦截按族计数；零流量时只出 total=0 行，极轻）
+            try:
+                from src.web.feature_lock_stats import get_feature_lock_stats
+                buf.write(get_feature_lock_stats().dump_prom())
+            except Exception:
+                pass
+
             # 命理技能（话题/采集/灵签/详批/K线 漏斗计数）
             try:
                 from src.companion.bazi_stats import get_bazi_stats
@@ -1190,10 +2184,113 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 唱歌能力（requests/sent/no_stock/capped + 按模板分布）
+            try:
+                from src.companion.song_stock import get_song_stats
+                buf.write(get_song_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 营销目标（建目标/每日拍/注入/主动桥/终态 漏斗计数）
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                buf.write(get_goal_stats().dump_prom())
+            except Exception:
+                pass
+
             # 前端「哑按钮」运行时错误（by page / by fn / by type）
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 坐席手动出图（尝试/成功/失败码/时延/相册秒发）
+            try:
+                from src.web.image_gen_stats import get_image_gen_stats
+                buf.write(get_image_gen_stats().dump_prom())
+            except Exception:
+                pass
+
+            # Token 计费账本（钱包余额/消耗分布/影子计数/公平使用；未启用=零输出）
+            try:
+                from src.licensing.token_ledger import dump_prom as _tok_dump_prom
+                buf.write(_tok_dump_prom())
+            except Exception:
+                pass
+
+            # 出站拦截统一计数（outbound_blocked_total{layer,reason} + unlimited_mode 开关/放行数）
+            try:
+                from src.ops.outbound_policy import dump_prom as _ob_dump_prom
+                buf.write(_ob_dump_prom())
+            except Exception:
+                pass
+
+            # 出站语言硬闸（P1-198：held/rescued/no_target_sent 分桶）
+            try:
+                from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+                buf.write(get_outbound_lang_stats().dump_prom())
+            except Exception:
+                pass
+
+            # CSRF 写请求拒绝（total / by kind / by path，中间件静默 403 可观测化）
+            try:
+                from src.web.csrf_stats import get_csrf_reject_stats
+                buf.write(get_csrf_reject_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 人设文档导入/考题（漏斗事件计数 + 抽取耗时/完整度/考题分均值）
+            try:
+                from src.utils.persona_import_stats import get_persona_import_stats
+                buf.write(get_persona_import_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 会话级人设覆写（tier 分布 / legacy 被压制 / 治理动作）
+            try:
+                from src.ai.persona_override_stats import get_persona_override_stats
+                buf.write(get_persona_override_stats().dump_prom())
+                try:
+                    from src.web.routes.persona_routes import legacy_debt_snapshot
+                    _debt = legacy_debt_snapshot(request.app)
+                    buf.write(
+                        "# HELP persona_override_legacy_debt Remaining legacy "
+                        "peer-global bindings (excl. RPA-managed)\n"
+                        "# TYPE persona_override_legacy_debt gauge\n"
+                        f"persona_override_legacy_debt {_debt}\n"
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # 前端 UI 交互埋点（by action / by page；空态引导点击率等）
+            try:
+                from src.web.ui_event_stats import get_ui_event_stats
+                buf.write(get_ui_event_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 目录同步（分账号 runs/failures + 最近一轮条数 + 上次同步时间戳）：
+            # last_ts 陈旧 = 该号名单同步事实上死了，此前只有日志能看出来
+            try:
+                from src.integrations.directory_sync_stats import get_directory_sync_stats
+                buf.write(get_directory_sync_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 出站语音语言路由（routed by lang / 拒发守卫 / 克隆兜底对齐）
+            try:
+                from src.ai.lang_route_stats import get_lang_route_stats
+                buf.write(get_lang_route_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 双实例重启冷却（连环重启 / 坐席加载超时根因可告警）
+            try:
+                from src.utils.instance_restart_status import dump_prom as _inst_restart_prom
+                buf.write(_inst_restart_prom())
             except Exception:
                 pass
 
@@ -1233,6 +2330,15 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 扫码登录漏斗（started→qr_shown→pin_issued→authorized ↘ failed[reason]）：
+            # 读出端此前漏接线（埋点在累积却对外不可见），2026-07-25 功能测试补齐——
+            # 「pin_issued 有量 / authorized 近零」即 LINE 事故形态，Prometheus 侧现可抓取告警
+            try:
+                from src.integrations.login_funnel_stats import get_login_funnel_stats
+                buf.write(get_login_funnel_stats().dump_prom())
+            except Exception:
+                pass
+
             # B 线 autosend 语音/发图（sent/fallback + provider/截断/失败原因）
             av = metrics.get("autosend_voice") or {}
             if av:
@@ -1263,6 +2369,85 @@ def register_metrics_route(app, *, api_auth):
                        "Persona album media items by type", labels='type="photo"')
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
+                # 实施90：挑图门禁拦截（进程口径；零流量不出行）
+                _g = pm.get("gates") or {}
+                if _g:
+                    _gauge("ws_persona_media_gate_picks_total",
+                           _g.get("picks", 0),
+                           "Album pick attempts that returned a media")
+                    _gauge("ws_persona_media_gate_refused_total",
+                           _g.get("refused", 0),
+                           "Album pick attempts refused by gates")
+                    for _reason, _n in (_g.get("refused_by") or {}).items():
+                        if _n:
+                            _gauge("ws_persona_media_gate_refused_by",
+                                   _n, labels=f'reason="{_reason}"')
+
+            # 贴纸：发送/收藏（进程口径）+ 备货水位（包/张，持久口径）
+            stk = metrics.get("stickers") or {}
+            if stk:
+                _gauge("ws_sticker_sends_total", stk.get("sends", 0),
+                       "Sticker sends (process counter)")
+                _gauge("ws_sticker_collects_total", stk.get("collects", 0),
+                       "Inbound stickers collected into packs")
+                _gauge("ws_sticker_packs", stk.get("packs", 0),
+                       "Sticker packs enabled")
+                _gauge("ws_sticker_items", stk.get("stickers", 0),
+                       "Stickers enabled (all packs)")
+
+            # 群成员提取库水位（成员/群/运行中任务）
+            gm = metrics.get("group_members") or {}
+            if gm:
+                _gauge("ws_group_members_total", gm.get("members_total", 0),
+                       "Telegram group members extracted (total)")
+                _gauge("ws_group_members_groups", gm.get("groups", 0),
+                       "Distinct groups with extracted members")
+                _gauge("ws_group_members_jobs_running", gm.get("jobs_running", 0),
+                       "Group member extraction jobs running")
+
+            # 回复时延 SLO（24h 窗：p50/p95/零回复——市场可承诺数字的机器可读面）
+            rl = (metrics.get("reply_latency") or {}).get("d1") or {}
+            if rl.get("episodes"):
+                _gauge("ws_reply_latency_p50_seconds", rl.get("p50_s", 0),
+                       "First-reply latency p50 over last 24h (seconds)")
+                _gauge("ws_reply_latency_p95_seconds", rl.get("p95_s", 0),
+                       "First-reply latency p95 over last 24h (seconds)")
+                _gauge("ws_reply_unanswered_24h", rl.get("unanswered", 0),
+                       "Inbound bursts unanswered past grace over last 24h")
+
+            # 发送护栏拦截（P2 2026-08-13；零拦截不出行，与 cases 同口径）
+            _sgb = metrics.get("send_gate_blocks") or {}
+            if _sgb.get("total"):
+                _gauge("ws_send_gate_blocked_total", _sgb.get("total", 0),
+                       "Send attempts blocked by the send guard (process lifetime)")
+
+            # 案例中心（立案/结案/升级/告警；来源分布走 dump_prom 的 label 行）
+            cs = metrics.get("cases") or {}
+            if cs and (cs.get("opened") or cs.get("closed")):
+                _gauge("ws_cases_opened_total", cs.get("opened", 0),
+                       "Cases opened since boot")
+                _gauge("ws_cases_closed_total", cs.get("closed", 0),
+                       "Cases closed since boot")
+                _gauge("ws_cases_upgraded_total", cs.get("upgraded", 0),
+                       "Case severity upgrades since boot")
+                _gauge("ws_cases_alerts_total", cs.get("alerts_emitted", 0),
+                       "Case alerts emitted since boot")
+                for _src, _n in sorted((cs.get("opened_by_source") or {}).items()):
+                    _safe = "".join(
+                        ch if (ch.isalnum() or ch == "_") else "_" for ch in str(_src))
+                    _gauge("ws_cases_opened_by_source", _n,
+                           "Cases opened by source", labels=f'source="{_safe}"')
+
+            # 账号官方资料修改推送（accounts.profile_push 漏斗）
+            ppst = metrics.get("profile_push") or {}
+            if ppst:
+                _gauge("profile_push_attempts_total", ppst.get("attempts", 0),
+                       "Account profile push attempts (process lifetime)")
+                _gauge("profile_push_success_total", ppst.get("success", 0),
+                       "Account profile pushes with at least one field applied")
+                _gauge("profile_push_cooldown_blocked_total",
+                       ppst.get("cooldown_blocked", 0),
+                       "Account profile pushes blocked by the per-account cooldown")
 
             return PlainTextResponse(buf.getvalue(), media_type="text/plain; version=0.0.4")
 
@@ -1270,12 +2455,18 @@ def register_metrics_route(app, *, api_auth):
 
 
 def register_telemetry_route(app, *, api_auth):
-    """前端「哑按钮」运行时错误上报（任意登录用户可写，不限主管）。
+    """前端遥测上报（任意登录用户可写，不限主管）。
 
-    POST /api/telemetry/frontend-error  body: {page, fn, type}
+    POST /api/telemetry/frontend-error  body: {page, fn, type[, endpoint]}
     dead-click 守卫（unified_inbox + _rpa_shared_scripts）捕获 ReferenceError 后 beacon 到此，
     经 FrontendErrorStats 累计，读出走 /api/workspace/metrics.frontend_errors（主管专属）。
-    只收计数用的三个消毒字段，绝不落原文/堆栈；任何异常都吞掉返回 ok，绝不影响前端。
+    ``endpoint``（可选）＝apiFetch 网络层失败附带的请求 path（消毒：丢查询串、
+    数字段掩码 <n>）——修「哪个接口在坏」无从归因的观测盲区（2026-07-29）。
+    只收计数用的消毒字段，绝不落原文/堆栈；任何异常都吞掉返回 ok，绝不影响前端。
+
+    POST /api/telemetry/ui-event  body: {page, action}
+    UI 交互埋点（空态引导按钮点击/群区显示模式切换等），经 UiEventStats 累计，
+    读出走 /api/workspace/metrics.ui_events。同款契约：只收两个消毒字段，吞异常恒返 ok。
     """
     from fastapi import Depends
 
@@ -1292,10 +2483,70 @@ def register_telemetry_route(app, *, api_auth):
                     page=str(body.get("page") or ""),
                     fn=str(body.get("fn") or ""),
                     etype=str(body.get("type") or ""),
+                    endpoint=str(body.get("endpoint") or ""),
                 )
             except Exception:
                 pass
+            try:
+                # P9：按日落库（进程计数重启即清零，本机重启频繁——趋势只能靠 DB 口径；
+                # 未开 ops.frontend_error_trend → record 恒 no-op 零 IO）
+                from src.web.frontend_error_trend import record_frontend_error_trend
+                record_frontend_error_trend(str(body.get("type") or ""))
+            except Exception:
+                pass
         return {"ok": True}
+
+    @app.post("/api/telemetry/ui-event")
+    async def api_ui_event_beacon(request: Request, _=Depends(api_auth)):
+        """前端 UI 交互埋点 beacon（空态引导点击率/群区模式切换等「引导有效性」观测）。
+
+        与 frontend-error 同款契约：body 解析失败按 {}、只取 page+action 两个字段
+        （消毒在 UiEventStats 内做）、任何异常都吞掉返回 ok，绝不影响前端。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            try:
+                from src.web.ui_event_stats import get_ui_event_stats
+                get_ui_event_stats().record(
+                    page=str(body.get("page") or ""),
+                    action=str(body.get("action") or ""),
+                )
+            except Exception:
+                pass
+            try:
+                # 按日落库（进程计数重启即清零，2026-08-01 施工日实测一天 4 次重启把
+                # AI 回复漏斗首批数据清洗掉；未开 ops.ui_event_trend → record 恒 no-op）
+                from src.web.ui_event_trend import record_ui_event_trend
+                record_ui_event_trend(str(body.get("action") or ""))
+            except Exception:
+                pass
+        return {"ok": True}
+
+    @app.get("/api/workspace/entrances")
+    async def api_workspace_entrances(request: Request, _=Depends(api_auth)):
+        """入口清单（P1-5 2026-08-12 可靠性复盘）：断连横幅「切换备用入口」的数据源。
+
+        读 ``web_admin.entrance_alternates``（overlay 配置的绝对 base URL 列表，如
+        LAN 直连地址 + 公网域名）。前端页面加载时取一次并落 localStorage——断连
+        期间本接口本就不可达，缓存才是断连时刻的真数据源。未配置返回空表＝
+        横幅不出切换链接（租户实例零污染：他们的 overlay 没有这个键）。
+        只回显 http(s) 绝对地址，防配置手误把奇怪字符串塞进 <a href>。
+        """
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            raw_cfg = (getattr(cm, "config", None) or {}) if cm else {}
+            alts = (raw_cfg.get("web_admin") or {}).get("entrance_alternates") or []
+            out = []
+            for u in alts:
+                s = str(u or "").strip().rstrip("/")
+                if s.startswith(("http://", "https://")) and len(s) < 200:
+                    out.append(s)
+            return {"entrances": out[:4]}
+        except Exception:
+            return {"entrances": []}
 
 
 def register_glossary_route(app, *, api_auth):

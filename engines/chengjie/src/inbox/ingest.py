@@ -76,6 +76,16 @@ def _msg_from_obj(
     # 因为两路径同文本同 ts）。LINE 不取裸 id（房间 id），见 normalizer 白名单。
     src = m.get("source") if isinstance(m.get("source"), dict) else {}
     pid = extract_platform_msg_id(src, platform)
+    # 顶层显式 id（thread-history / 拉更早 常把 synth msg_id 放顶层，不包进 source）
+    if not pid:
+        for _k in ("msg_id", "platform_msg_id", "message_id"):
+            _v = m.get(_k)
+            if _v is None:
+                continue
+            _s = str(_v).strip()
+            if _s:
+                pid = _s
+                break
     # P61：携带媒体字段（message_obj 已从 source 抽取；无则回落直接读 source）
     media_type = str(m.get("media_type") or "")
     media_ref = str(m.get("media_ref") or "")
@@ -111,17 +121,30 @@ def _msg_from_obj(
         # P4-11E 群发言人（source.sender_id/sender_name，缺则空）
         sender_id=str(src.get("sender_id") or ""),
         sender_name=str(src.get("sender_name") or ""),
+        # 实施72 P2：合成时间戳标记透传（回填/拉更早路径置 1；实时路径缺省 0）
+        approx_ts=int(m.get("approx_ts") or 0),
+        # 接力记忆四期：出站发送方（编排器镜像 source.sent_by=ai/agent；入站/未知为空）
+        sent_by=str(src.get("sent_by") or m.get("sent_by") or "")[:16],
     )
 
 
 def _conv_from_chat(chat: Dict[str, Any]) -> InboxConversation:
+    # 「客户语言」列只接受**入站**证据：normalize_chat 把 chat["language"] 取自末条
+    # 消息且不分方向，出站镜像（AI 译文/外语人设文案）会把**我们自己说的语言**写进
+    # 客户语言列——2026-08-15 messenger 实锤：中文客户的会话被自己的英文回复镜像
+    # 反复钉成 en，出站翻译于是永远瞄准英文，形成自锁。方向为 out 时降级 unknown，
+    # store.upsert_conversation 的 CASE 护栏（unknown 不覆盖）会保住已存的真值。
+    lang = str(chat.get("language") or "unknown")
+    _lm = chat.get("last_message")
+    if isinstance(_lm, dict) and str(_lm.get("direction") or "in") == "out":
+        lang = "unknown"
     return InboxConversation(
         conversation_id=str(chat.get("conversation_id") or ""),
         platform=str(chat.get("platform") or ""),
         account_id=str(chat.get("account_id") or "default"),
         chat_key=str(chat.get("chat_key") or ""),
         display_name=str(chat.get("name") or ""),
-        language=str(chat.get("language") or "unknown"),
+        language=lang,
         last_text=str(chat.get("last_msg") or ""),
         last_ts=float(chat.get("last_ts") or 0),
         unread=int(chat.get("unread") or 0),
@@ -155,6 +178,28 @@ def _apply_contact_id(store, conv: InboxConversation) -> str:
     if cid:
         conv.contact_id = cid
     return cid
+
+
+def _quiet_inbound(conv: InboxConversation, lm: Dict[str, Any]) -> bool:
+    """这条入站是否「落库即止」：回填标记（source.backfill）或自聊会话。纯判定，绝不抛。"""
+    try:
+        from .normalizer import is_backfill_source, is_self_chat
+        src = lm.get("source") if isinstance(lm.get("source"), dict) else {}
+        if is_backfill_source(src):
+            return True
+        return is_self_chat(conv.platform, conv.account_id, conv.chat_key, src)
+    except Exception:
+        return False
+
+
+def _skip_autodraft(lm: Dict[str, Any]) -> bool:
+    """可见入站但不触发 new_inbound 回调（起草 / 关怀 / 学习）。Bad MAC 占位走这里。"""
+    try:
+        from .normalizer import is_decrypt_fail_source
+        src = lm.get("source") if isinstance(lm.get("source"), dict) else {}
+        return is_decrypt_fail_source(src)
+    except Exception:
+        return False
 
 
 def _publish_inbox_message(conv: InboxConversation) -> None:
@@ -207,6 +252,12 @@ def ingest_collected_chats(
             msgs.append(_msg_from_obj(conv.conversation_id, lm, platform=conv.platform))
         n = store.ingest_batch(conv, msgs)
         inserted += n
+        # P-2 A / F（#259 #252，2026-09-08）：回填历史（登录 / 重连 / 拉历史同步回来的）与
+        # 自聊会话（peer == 自己）**已落库**，到此为止——不清 snooze、不发 SSE、不进任何
+        # 入站回调（起草 / 关怀 / 目标 / 问候 / 影子扫描）、不更新意图情绪、不做记忆抽取。
+        # H3BAJD：登录 3 秒后对 6 个老会话批量 auto_generate_draft，根因就是这条 continue 缺席。
+        if n > 0 and isinstance(lm, dict) and _quiet_inbound(conv, lm):
+            continue
         if n > 0 and isinstance(lm, dict) \
                 and str(lm.get("direction") or "in") == "in":
             # P0-companion：客户再次来消息 → 立即取消搁置，让会话重回「待接管」队列。
@@ -217,6 +268,8 @@ def ingest_collected_chats(
                 logger.debug("clear_snooze 失败（已忽略）", exc_info=True)
             if publish_events:
                 _publish_inbox_message(conv)
+            if _skip_autodraft(lm):
+                continue
             # E2：通知已注册的入站新消息回调（auto-draft 生成等），best-effort
             msg_text = str(lm.get("text") or "").strip()
             if not msg_text:
@@ -232,6 +285,9 @@ def ingest_collected_chats(
                     "chat_key": conv.chat_key,
                     "display_name": conv.display_name,
                     "chat_type": conv.chat_type or "private",
+                    # Q-23 #303：发送方 id（群里区分同事 / 客户；私聊缺省=对端）→ GuardContext.sender_kind
+                    "sender_id": str(lm.get("sender_id")
+                                     or (lm.get("source") or {}).get("sender_id") or ""),
                 }
                 for _cb in getattr(store, "_new_inbound_cbs", []):
                     try:

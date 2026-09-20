@@ -1,4 +1,7 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18）：本页由管理员菜单「ROI 看板」进入，挂工作台左侧
+    导航（_ws_sidebar.html，菜单单源 nav_schema.py）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ (i18n or {}).get('wr_s001', "经营 ROI 看板") }}{% endblock %}
 {% block head %}
 <style>
@@ -37,6 +40,8 @@
 </style>
 {% endblock %}
 {% block content %}
+{% set cluster_id = "boards" %}{% set cluster_here = "/workspace/roi" %}
+{% include "_cluster_tabs.html" %}
 <div class="roi-wrap">
   <a class="roi-back" href="/workspace/dash">← {{ (i18n or {}).get('wr_s002', "返回今日概览") }}</a>
   <div class="roi-head">
@@ -109,7 +114,7 @@ function renderSpark(trend){
 }
 
 function loadRoi(){
-  fetch('/api/workspace/roi?days='+ROI_DAYS).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/roi?days='+ROI_DAYS).then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     var a=d.automation||{}, b=d.business||{}, h=d.config_health||{}, cmp=a.compare||{}, rel=d.relationship||{};
     // KPI 卡

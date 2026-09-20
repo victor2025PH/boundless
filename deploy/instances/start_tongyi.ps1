@@ -12,14 +12,16 @@
 param(
     # 自定义数据根（缺省 = 同目录 tongyi\data）。仓库外部署 / 本机试点用，
     # 初始化步骤同 README §3.1，只是把 $data 换成该目录。
-    [string]$DataDir = ''
+    [string]$DataDir = '',
+    # restart_instance.ps1 透传；通译恒为 tongyi（接受参数以免 -InstanceId 报错）
+    [string]$InstanceId = 'tongyi'
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
 # ── 实例常量（挪数据根/换端口只改这里，并同步 stack.json 条目与实例 overlay）──
-$InstanceId   = 'tongyi'
+if (-not $InstanceId) { $InstanceId = 'tongyi' }
 $InstanceName = '通译 LingoX'
 $Port         = 18899                                   # = 实例 config.local.yaml 的 web_admin.port
 $RepoRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -56,7 +58,18 @@ if (-not (Test-Path (Join-Path $DataRoot 'domains'))) {
 }
 
 # ── 幂等/端口防呆：已在跑则退出 0；被别人占则报错（绝不 Stop-Process）────
-$own = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+# P0-1 配套豁免（2026-08-12，与 start_zhiliao 同款）：netsh portproxy 的 LAN 直连
+# 转发监听（svchost 持有、转发目标 127.0.0.1）不算占用，与实例共存。
+$portproxyListens = @()
+try {
+    foreach ($ln in @(netsh interface portproxy show v4tov4 2>$null)) {
+        if ("$ln" -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$' -and $Matches[3] -eq '127.0.0.1') {
+            $portproxyListens += ("{0}:{1}" -f $Matches[1], [int]$Matches[2])
+        }
+    }
+} catch {}
+$own = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+         Where-Object { $portproxyListens -notcontains ("{0}:{1}" -f $_.LocalAddress, [int]$_.LocalPort) })
 if ($own.Count) {
     $pids = @($own | Select-Object -ExpandProperty OwningProcess -Unique)
     $isOurs = $false
@@ -96,6 +109,7 @@ $lic    = Join-Path $DataRoot 'config\license.key'
 
 $chain = @(
     "set `"AITR_DATA_DIR=$DataRoot`"",
+    "set `"AITR_INSTANCE_ID=$InstanceId`"",
     "set `"EVENT_SPOOL_DIR=$spool`"",
     "set `"CHENGJIE_PRODUCT_ID=$InstanceId`"",
     "set `"CHENGJIE_LEDGER_OUTBOX=$ledger`"",
@@ -138,6 +152,20 @@ $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 if ($r.ReturnValue -ne 0) { Fail "进程创建失败 ReturnValue=$($r.ReturnValue)" }
 
 Start-Sleep -Seconds 4
+# 生产实例 CPU 保护（2026-07-23）：本机兼任开发/测试/坐席工作站（pytest -n auto、agent
+# 会话、浏览器常把 8 核打满），Normal 优先级下坐席 API 在尖峰期被挤到秒级 →「聊天记录
+# 加载失败/切换超时」。把引擎 python（cmd 壳的子进程）提到 AboveNormal；壳一并提，
+# 覆盖 python 尚未拉起时的继承路径。失败静默（优先级只是保护，不是启动前置条件）。
+try {
+    $shell = Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue
+    if ($shell) { $shell.PriorityClass = 'AboveNormal' }
+    foreach ($cp in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($r.ProcessId)" -ErrorAction SilentlyContinue)) {
+        if ($cp.Name -eq 'python.exe') {
+            (Get-Process -Id $cp.ProcessId -ErrorAction Stop).PriorityClass = 'AboveNormal'
+            Write-Host "[start-$InstanceId] 引擎进程优先级 → AboveNormal（坐席 API 抗本机负载挤压）"
+        }
+    }
+} catch {}
 $listening = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0
 if ($listening) {
     Write-Host "[start-$InstanceId] done — 端口 $Port 已在听  日志=$out" -ForegroundColor Green

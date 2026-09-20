@@ -9,6 +9,7 @@ import datetime as dt
 import pytest
 
 from src.ai.companion_selfie import (
+    NIGHT_NEUTRAL_SCENE,
     ensure_time_of_day,
     pick_scene_hint,
     scene_conflicts_with_hour,
@@ -30,6 +31,14 @@ def _at(hour: int) -> dt.datetime:
     ("cozy dorm room, warm lamp light", 3, False),   # 中性光线词不剔
     ("convenience store, evening shift", 20, False), # 20 点属夜段，evening 不剔
     ("", 3, False),
+    # ── 深夜白天场所（2026-08-22「凌晨 3:31 在二手书店」实录修复）──────────
+    ("secondhand bookstore aisle, browsing paperbacks", 3, True),   # 事故原场景
+    ("university library window seat on a rainy day", 23, True),    # 图书馆 23 点
+    ("matcha dessert cafe, soft window light", 2, True),            # 甜品咖啡深夜
+    ("small gym, post-workout mirror selfie", 3, True),             # 健身房凌晨
+    ("secondhand bookstore aisle, browsing paperbacks", 15, False), # 白天书店 ✓
+    ("night street food market with warm lantern lights", 23, False),  # 夜市带 night 放行
+    ("high-rise lounge with city lights at night", 23, False),      # 夜景酒廊放行
 ])
 def test_scene_conflicts_with_hour(scene, hour, conflict):
     assert scene_conflicts_with_hour(scene, hour) is conflict
@@ -57,10 +66,42 @@ def test_pick_scene_daytime_pool_unfiltered_keeps_rotation():
     assert sc in _POOL  # 白天全池可用（无夜景词）
 
 
-def test_pick_scene_all_conflicting_falls_back_to_full_pool():
+def test_pick_scene_night_all_conflicting_falls_back_to_neutral():
+    """深夜全池冲突 → 中性居家场景（2026-08-22 修：回退原池＝把刚剔掉的
+    白天场所又请回来，正是「凌晨在二手书店」的再入口）。"""
     p = {"selfie_scenes": ["sunny day park, noon", "morning light kitchen"]}
     sc = pick_scene_hint(p, now=_at(2), salt=0)
-    assert sc  # 全池冲突 → 回退原池，仍给场景（不空转）
+    assert sc == NIGHT_NEUTRAL_SCENE
+    # 全场所池同理（无时间词但深夜常识违背）
+    p2 = {"selfie_scenes": [
+        "secondhand bookstore aisle, browsing paperbacks",
+        "university library window seat",
+    ]}
+    for salt in range(6):
+        assert pick_scene_hint(p2, now=_at(3), salt=salt) == NIGHT_NEUTRAL_SCENE
+
+
+def test_pick_scene_day_all_conflicting_keeps_full_pool_fallback():
+    # 白天段全池冲突仍回退原池（旧语义不动——白天没有「常识安全」的通用回退）
+    p = {"selfie_scenes": ["city night lights bokeh", "midnight rooftop, night"]}
+    sc = pick_scene_hint(p, now=_at(10), salt=0)
+    assert sc in p["selfie_scenes"]
+
+
+def test_pick_scene_taipei_pool_never_daytime_venue_at_night():
+    """事故人设全池（节选）：深夜任意 salt 都不许出书店/图书馆/咖啡店。"""
+    p = {"selfie_scenes": [
+        "university campus walkway, afternoon light",
+        "cozy dorm room desk with study notes, warm lamp light",
+        "matcha dessert cafe, soft window light",
+        "secondhand bookstore aisle, browsing paperbacks",
+        "university library window seat on a rainy day",
+        "night street food market with warm lantern lights",
+    ]}
+    for salt in range(10):
+        sc = pick_scene_hint(p, now=_at(3), salt=salt)
+        for bad in ("bookstore", "library", "cafe", "campus", "afternoon"):
+            assert bad not in sc, (salt, sc)
 
 
 def test_pick_scene_deterministic_same_bucket():

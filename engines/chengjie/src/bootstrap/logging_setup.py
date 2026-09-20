@@ -20,6 +20,13 @@ def setup_logging(assistant, log_config: dict) -> None:
         level = getattr(logging, log_level.upper(), logging.INFO)
         assistant.logger.setLevel(level)
 
+        # 第三方噪声折叠过滤器（pyrogram 掉线刷屏等；只折叠配置前缀，src.* 不受影响）
+        try:
+            from src.utils.log_throttle import build_throttle_filter
+            throttle_filter = build_throttle_filter(log_config)
+        except Exception:
+            throttle_filter = None
+
         # 重新配置日志记录器
         assistant.logger.handlers.clear()
 
@@ -35,15 +42,21 @@ def setup_logging(assistant, log_config: dict) -> None:
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             console_handler.setFormatter(console_formatter)
+            if throttle_filter is not None:
+                console_handler.addFilter(throttle_filter)
             assistant.logger.addHandler(console_handler)
 
-        # 文件处理器（RotatingFileHandler 自动轮转）
+        # 文件处理器（轮转容忍句柄占用，2026-08-27 06:11 宕机事故沉淀：
+        # 外部 tail 工具占住 app.log → rename 永败 → 每条日志向 stderr 倒堆栈
+        # → 45min 1.5GB 拖死实例。Resilient 版 rename 失败降级 copytruncate、
+        # 再失败进 60s 冷却，风暴在结构上不可能；正常路径行为与原生逐字节一致）
         if log_file:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            from logging.handlers import RotatingFileHandler
+            from logging.handlers import RotatingFileHandler  # isinstance 去重仍用基类
+            from src.utils.resilient_logging import ResilientRotatingFileHandler
             max_bytes = int(log_config.get("max_size_mb", 10)) * 1024 * 1024
             backup_count = int(log_config.get("backup_count", 5))
-            file_handler = RotatingFileHandler(
+            file_handler = ResilientRotatingFileHandler(
                 log_file, maxBytes=max_bytes, backupCount=backup_count,
                 encoding='utf-8',
             )
@@ -53,6 +66,8 @@ def setup_logging(assistant, log_config: dict) -> None:
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             file_handler.setFormatter(file_formatter)
+            if throttle_filter is not None:
+                file_handler.addFilter(throttle_filter)
             assistant.logger.addHandler(file_handler)
             # 防止 ai_chat_assistant 消息被 root handler 再写一次（duplicate）
             assistant.logger.propagate = False
@@ -87,3 +102,15 @@ def setup_logging(assistant, log_config: dict) -> None:
                 pass
 
         assistant.logger.info(f"日志已重新配置: level={log_level}, file={log_file}")
+    # ★★★ 无论有没有 logging 配置段，src.* 都必须能出声（2026-08-04 198 教训）：
+    # 桌面版 logging.file 常为空 → 上面的 file 补丁不生效，src.*（编排器/扫码
+    # 登录/会话健康）在 backend.log 全体隐身——事故复盘五个进程会话零编排器
+    # 日志。把主 logger 现有 handler（console±file）整体镜像给 "src"（幂等，
+    # 身份+同文件双重去重，绝不重复行）。
+    try:
+        from src.utils.log_setup import mirror_handlers_to_src
+        _lvl = getattr(logging, str(
+            (log_config or {}).get("level", "INFO")).upper(), logging.INFO)
+        mirror_handlers_to_src(assistant.logger, level=_lvl)
+    except Exception:
+        pass

@@ -59,10 +59,20 @@ def test_lang_names_cover_sea_languages():
         assert LANG_NAMES.get(code) == name
 
 
+class _AIThai(_AI):
+    """th 目标专用假引擎：P0-198 语言完整性护栏（_output_lang_sane）要求泰语目标
+    译文含泰文脚本——父类恒返回中文会被判 target_lang_mismatch（既有失配，
+    2026-08-29 修）。"""
+
+    async def chat(self, prompt, overrides=None):
+        self.calls += 1
+        return "สวัสดีครับ"
+
+
 @pytest.mark.asyncio
 async def test_translate_thai_target_marks_cached_on_repeat(tmp_path):
     """P55 工作台双向翻译依赖 cached 标记复用记忆，避免重复调用 AI。"""
-    ai = _AI()
+    ai = _AIThai()
     store = TranslationMemoryStore(tmp_path / "tm.db")
     svc = TranslationService(ai_client=ai, memory_store=store)
     r1 = await svc.translate("hello", target_lang="th")

@@ -152,6 +152,9 @@ def make_record(payload: "dict | None", token: "str | None", *, origin: str,
     revoked = (bool(ov.get("revoked")) or str(ov.get("status", "")) == "revoked"
                or bool(payload.get("revoked"))
                or str(payload.get("status", "")) == "revoked")
+    # 绑机：试用授权（build_trial_payload）与 license_tool --machine 写 payload.machine
+    # （``*`` = 站点授权不限机器，原样保留）；无该字段 = 不绑机 → null
+    machine = str(ov.get("machine_fingerprint") or payload.get("machine") or "").strip()
     return {
         "source_system": SOURCE_SYSTEM,
         "source_key": key,
@@ -166,7 +169,7 @@ def make_record(payload: "dict | None", token: "str | None", *, origin: str,
                           or payload.get("customer_name") or None),
         "customer_contact": (ov.get("customer_contact")
                              or payload.get("customer_contact") or None),
-        "machine_fingerprint": None,          # chengjie 不绑机
+        "machine_fingerprint": machine or None,
         "issued_at": to_iso(payload.get("iat")),
         "expires_at": to_iso(payload.get("exp")),
         "status": decide_status(payload, revoked=revoked),

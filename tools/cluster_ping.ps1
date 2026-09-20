@@ -26,7 +26,8 @@ $urls = @(
   @{ n = 'Faceswap 幻颜节点'; u = 'http://192.168.0.104:8000/health' },
   @{ n = 'STT 通传节点'; u = 'http://192.168.0.140:7854/health' },
   @{ n = 'EmotionTTS 通译'; u = 'http://192.168.0.117:7852/health' },
-  @{ n = 'Qwen3TTS 通译'; u = 'http://192.168.0.117:7858/health' }
+  @{ n = 'Qwen3TTS 通译'; u = 'http://192.168.0.117:7858/health' },
+  @{ n = 'GLM-Voice 幻影'; u = 'http://192.168.0.173:8888/' }
 )
 $svcOk = 0; $svcFail = 0
 foreach ($x in $urls) {

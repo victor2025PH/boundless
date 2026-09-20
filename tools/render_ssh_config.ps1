@@ -38,6 +38,11 @@ foreach ($m in $Machines.machines) {
 }
 
 # VPS
+# ⚠ 不要在任何 Host 块里写 `StdinNull yes`（2026-09-11 实锤后撤回）：Windows 自带 ssh.exe
+# 9.5p1 的一次性命令挂死 bug（Win32-OpenSSH #1334）要靠 **每个调用点显式 `ssh -n`** 修，
+# 不能按主机兜底——scp/sftp 是拉起 ssh 子进程、经它的 stdin/stdout 跑协议流，主机级
+# StdinNull 会把子进程 stdin 接到 /dev/null，scp 立刻 `Connection closed`（本机 04:2x 实测），
+# duty_watch_loop 下载诊断包 / tenant_ops _vps_push / chatx_gate 全部会断。
 [void]$sb.AppendLine('Host vps-bd2026 bd2026')
 [void]$sb.AppendLine('    HostName 165.154.233.121')
 [void]$sb.AppendLine('    User ubuntu')

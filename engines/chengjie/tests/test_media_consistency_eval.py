@@ -79,6 +79,38 @@ def test_past_reference_not_claim():
         "上次刚拍的那张你还留着吗", photo_sent=False)["ok"]
 
 
+# ── #171：英文过去时假声明（2026-09-05 WhatsApp Mizuki→John 实录必红）──────────
+@pytest.mark.parametrize("text", [
+    "Oh, sorry — I just sent it, you should have it now.",       # 实录①
+    "Hmm, that's weird — let me try sending it again for you.",  # 实录②
+    "I already sent you the photo, check again",
+    "did you get the photo?",
+    "我刚发给你了呀，你收到了吗",
+    "我再发一次哈",
+])
+def test_sent_claim_without_photo_caught(text):
+    v = check_media_consistency(text, photo_sent=False)
+    assert not v["ok"] and "claim_without_photo" in v["violations"], text
+    # 同一句真附了图 → 真话
+    assert check_media_consistency(text, photo_sent=True)["ok"], text
+
+
+@pytest.mark.parametrize("text", [
+    "I didn't send anything yet, hold on",   # 诚实否认
+    "I sent it yesterday, remember?",        # 远过去
+    "我没发呀，等我一下",
+])
+def test_sent_claim_denial_and_past_not_flagged(text):
+    assert check_media_consistency(text, photo_sent=False)["ok"], text
+
+
+def test_sent_claim_tamper_selfproof():
+    bad = [{"id": "tamper_sc",
+            "text": "Oh, sorry — I just sent it, you should have it now.",
+            "photo_sent": False, "expect_ok": True}]
+    assert evaluate_media_consistency(bad)["passed"] is False
+
+
 # ── 金标语料 + 探测器自证 ────────────────────────────────────────────────────
 def test_golden_corpus_all_pass():
     report = evaluate_media_consistency()
@@ -102,3 +134,77 @@ def test_detector_symmetric_tampering():
              "expect_ok": False}]
     report = evaluate_media_consistency(good)
     assert report["passed"] is False
+
+
+# ── 实施90：季节/地点 ×「此刻实拍」口径 ─────────────────────────────────────
+def test_season_mismatch_fresh_claim_only():
+    # 盛夏把雪景说成刚拍 → 违规
+    v = check_media_consistency(
+        "刚拍的，外面雪好大～", photo_sent=True,
+        media_season="winter", now_season="summer")
+    assert not v["ok"] and "season_mismatch" in v["violations"]
+    # 旧照口径（去年冬天去玩拍的）→ 合法（真人也发旅行旧照）
+    v2 = check_media_consistency(
+        "去年冬天去玩拍的，给你看雪～", photo_sent=True,
+        media_season="winter", now_season="summer")
+    assert v2["ok"]
+    # 没有「刚拍」口径（只是发图闲聊）→ 不判
+    v3 = check_media_consistency(
+        "看看这张～", photo_sent=True,
+        media_season="winter", now_season="summer")
+    assert v3["ok"]
+    # 过渡季（秋 vs 冬）刻意不判
+    v4 = check_media_consistency(
+        "刚拍的落叶～", photo_sent=True,
+        media_season="autumn", now_season="winter")
+    assert v4["ok"]
+    # 同季实拍=真话
+    v5 = check_media_consistency(
+        "刚拍的，今天太阳好舒服", photo_sent=True,
+        media_season="summer", now_season="summer")
+    assert v5["ok"]
+    # 无标注不判（保守）
+    v6 = check_media_consistency(
+        "刚拍的～", photo_sent=True, media_season="", now_season="summer")
+    assert v6["ok"]
+
+
+def test_place_mismatch_fresh_claim_only():
+    # 人在温哥华把东京照说成现拍 → 违规（中英两式）
+    v = check_media_consistency(
+        "刚拍的哦，这边夜景超美", photo_sent=True,
+        media_place="JP", home_place="CA")
+    assert not v["ok"] and "place_mismatch" in v["violations"]
+    v2 = check_media_consistency(
+        "Just snapped this outside!", photo_sent=True,
+        media_place="TH", home_place="CA")
+    assert not v2["ok"] and "place_mismatch" in v2["violations"]
+    # 诚实旅行旧照 → 合法
+    v3 = check_media_consistency(
+        "之前去日本玩拍的，超好看", photo_sent=True,
+        media_place="JP", home_place="CA")
+    assert v3["ok"]
+    # 同国 → 合法；无标注 → 不判
+    assert check_media_consistency(
+        "刚拍的～", photo_sent=True, media_place="CA", home_place="CA")["ok"]
+    assert check_media_consistency(
+        "刚拍的～", photo_sent=True, media_place="", home_place="CA")["ok"]
+    # 无图不参与本轨（claim_without_photo 另有其判）
+    v4 = check_media_consistency(
+        "上次拍的那张", photo_sent=False, media_place="JP", home_place="CA")
+    assert v4["ok"]
+
+
+def test_new_goldens_present_and_detector_selfproof():
+    report = evaluate_media_consistency()
+    assert report["passed"] is True
+    ids = {r["id"] for r in report["results"]}
+    for need in ("season1", "season2", "place1", "place2",
+                 "ok_season_old", "ok_place_honest",
+                 "sent_claim1", "sent_claim2", "ok_sent_claim_backed"):
+        assert need in ids, need
+    # 篡改新轨金标（把季节错配标成没问题）必 FAIL
+    bad = [{"id": "tamper3", "text": "刚拍的，外面雪好大～", "photo_sent": True,
+            "media_season": "winter", "now_season": "summer",
+            "expect_ok": True}]
+    assert evaluate_media_consistency(bad)["passed"] is False

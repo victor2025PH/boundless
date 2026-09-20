@@ -68,6 +68,11 @@ class PacingConfig:
         rp_lo, rp_hi = _pair("read_pause_ms", 800, 2000)
         pc_lo, pc_hi = _pair("per_char_ms", 40, 80)
         im_lo, im_hi = _pair("inter_msg_ms", 700, 1800)
+        # split_mode 为准；缺失时回落 legacy 键 split_strategy
+        # （旧版 WhatsApp 渠道页保存的是 split_strategy，兼容线上已持久化的旧配置）
+        split_raw = c.get("split_mode")
+        if split_raw in (None, ""):
+            split_raw = c.get("split_strategy")
         return cls(
             enabled=bool(c.get("enabled", True)),
             read_pause_ms_lo=rp_lo,
@@ -75,7 +80,7 @@ class PacingConfig:
             per_char_ms_lo=pc_lo,
             per_char_ms_hi=pc_hi,
             slow_type=bool(c.get("slow_type", False)),
-            split_mode=str(c.get("split_mode", "sentence") or "sentence").lower(),
+            split_mode=str(split_raw or "sentence").lower(),
             split_max_chars=max(20, int(c.get("split_max_chars", 80) or 80)),
             split_max_parts=max(1, int(c.get("split_max_parts", 3) or 3)),
             inter_msg_ms_lo=im_lo,
@@ -146,19 +151,66 @@ def _split_by_length(text: str, max_parts: int, max_chars: int) -> List[str]:
     return pieces
 
 
+def _collapse_if_multiline(text: str) -> str:
+    """整段单条出口的多行折叠（2026-08-09）。
+
+    bubbles 开启时拟稿合同是「每行一句」；RPA 链不拆条（pacing 关/none 模式/
+    只出一条）时把多行原样发出＝一条消息带结构化换行——正是 2026-08-08 客户
+    实锤质疑「why always 2 parts」的 AI 感形态。折叠成自然单段（与协议直发链
+    /桌面桥同款收口）。``collapse_paragraphs`` 不可用时原样返回，绝不阻断发送。
+    """
+    t = (text or "").strip()
+    if "\n" not in t:
+        return t
+    try:
+        from src.inbox.reply_split import collapse_paragraphs
+        return collapse_paragraphs(t) or t
+    except Exception:
+        return t
+
+
 def split_message(text: str, cfg: PacingConfig) -> List[str]:
-    """按配置把整段回复切成多条；总是至少返回一条。"""
+    """按配置把整段回复切成多条；总是至少返回一条。
+
+    2026-08-09 收编：sentence 模式委托 ``reply_split.split_reply_parts``
+    （orchestrator 三链同一把刀）——句界打包 + CJK 加权长度 + URL/长单号
+    原子保护，替代旧 ``_split_by_sentence`` 的「超长句按 max_chars 拦腰硬切」
+    （英文句被切成半句的实锤根因）。legacy 实现保留作 import 异常兜底；
+    length 模式（运营显式选按长度）行为不变。
+    """
     text = (text or "").strip()
     if not text:
         return []
     if not cfg.enabled or cfg.split_mode == "none" or cfg.split_max_parts <= 1:
-        return [text]
+        return [_collapse_if_multiline(text)]
     if cfg.split_mode == "length":
         parts = _split_by_length(text, cfg.split_max_parts, cfg.split_max_chars)
-    else:  # sentence
+        return parts if parts else [text]
+    # sentence（默认）。RPA 链有自己的 pacing 配置面（运营在此显式选了「按句」），
+    # 故显式走 reply_split 的算法切句档——inbox.reply_style.bubbles 的
+    # explicit_newline_only 出厂收紧（#210 / D-L3）只管编排器三链，不改本链语义。
+    try:
+        from src.inbox.reply_split import split_reply_parts
+        parts = split_reply_parts(
+            text,
+            max_parts=cfg.split_max_parts,
+            max_chars=cfg.split_max_chars,
+            min_tail_chars=4,
+            min_total_chars=0,
+            explicit_newline_only=False,
+        )
+    except Exception:
+        logger.debug("[human_pacing] reply_split 委托失败，回落 legacy 切分",
+                     exc_info=True)
         parts = _split_by_sentence(text, cfg.split_max_parts, cfg.split_max_chars)
-    # 兜底：若未切出任何段，退化为整段
-    return parts if parts else [text]
+    if not parts:
+        return [text]
+    if len(parts) == 1:
+        return [_collapse_if_multiline(parts[0])]
+    # 条内折叠：拟稿合同最多 5 行而 RPA max_parts 默认 3——超出的行被
+    # reply_split 并入末条且以 \n 连接，注入设备后又是「一条消息带换行」。
+    # 每个分条＝一条独立消息，条内不允许残留换行。
+    return [p if "\n" not in p else _collapse_if_multiline(p) for p in parts]
 
 
 def typing_duration_sec(text: str, cfg: PacingConfig) -> float:

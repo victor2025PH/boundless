@@ -18,6 +18,7 @@ import pytest
 from tests import _inline_handler_scan as scan
 
 _TPL_DIR = Path(__file__).resolve().parents[1] / "src" / "web" / "templates"
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "web" / "static"
 _ALL = sorted(_TPL_DIR.rglob("*.html"))
 _AMBIENT = scan.ambient_globals(_TPL_DIR)
 
@@ -32,12 +33,14 @@ def _scan_targets():
 
 
 def test_layer1_all_templates_inline_handlers_defined():
-    """层①：全模板——内联 handler 引用的函数都能找到定义。"""
+    """层①：全模板——内联 handler 引用的函数都能找到定义（含模板经
+    <script src="/static/…"> 引用的外迁 JS 里的定义，P2-3 起按模板逐一解析）。"""
     failures = {}
     for f in _scan_targets():
         html = f.read_text(encoding="utf-8")
         known = (scan.defined(html) | scan.BUILTINS | scan.SHARED_GLOBALS
-                 | scan.HELPERS | _AMBIENT)
+                 | scan.HELPERS | _AMBIENT
+                 | scan.local_static_globals(html, _STATIC_DIR))
         missing = sorted(scan.referenced(html) - known - _PENDING_ORPHANS.get(f.name, set()))
         if missing:
             failures[f.name] = missing
@@ -48,11 +51,13 @@ def test_layer1_all_templates_inline_handlers_defined():
 
 
 def test_layer2_all_templates_inline_handlers_reachable():
-    """层②：全模板——内联 handler 引用的函数都**全局作用域可达**（window 暴露 或 顶层全局）。"""
+    """层②：全模板——内联 handler 引用的函数都**全局作用域可达**（window 暴露 或 顶层全局，
+    或来自模板引用的本地静态 JS 的全局——外部 script 以全局作用域执行，同语义）。"""
     failures = {}
     for f in _scan_targets():
         html = f.read_text(encoding="utf-8")
-        unreachable = sorted(set(scan.unreachable_inline_handlers(html, extra_allow=_AMBIENT))
+        allow = _AMBIENT | scan.local_static_globals(html, _STATIC_DIR)
+        unreachable = sorted(set(scan.unreachable_inline_handlers(html, extra_allow=allow))
                              - _PENDING_ORPHANS.get(f.name, set()))
         if unreachable:
             failures[f.name] = unreachable
@@ -71,7 +76,8 @@ def test_pending_orphans_are_still_broken():
         if not f.exists():
             continue
         html = f.read_text(encoding="utf-8")
-        still_unreachable = set(scan.unreachable_inline_handlers(html, extra_allow=_AMBIENT))
+        still_unreachable = set(scan.unreachable_inline_handlers(
+            html, extra_allow=_AMBIENT | scan.local_static_globals(html, _STATIC_DIR)))
         fixed = sorted(orphans - still_unreachable)
         if fixed:
             stale[name] = fixed
@@ -87,6 +93,28 @@ def test_deadclick_guard_present_in_shared_scripts():
     assert "is not defined" in shared
     assert "rpa.toast" in shared
     assert "addEventListener('error'" in shared
+
+
+def test_local_static_globals_self_check(tmp_path):
+    """自测：外迁 JS 的全局解析——顶层 function / window 暴露可达，IIFE 局部名不可达；
+    带 ?v= 缓存戳的 src 正确剥参；外链 CDN 不解析。防该能力悄悄失效后外迁模板变假绿。"""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "mod.js").write_text(
+        "function topFn(){}\n"
+        "(function(){ function iifeLocal(){} window.exposedFn = function(){}; })();\n",
+        encoding="utf-8")
+    html = (
+        '<script src="/static/sub/mod.js?v=20260802a"></script>'
+        '<script src="https://cdn.example.com/x.js"></script>'
+        '<span onclick="topFn()"></span>'
+    )
+    g = scan.local_static_globals(html, tmp_path)
+    assert {"topFn", "exposedFn"} <= g
+    assert "iifeLocal" not in g
+    # 端到端：内联 handler 引用外迁全局 → 经 extra_allow 判定可达
+    assert scan.unreachable_inline_handlers(html, extra_allow=g) == []
+    # 缺了外迁解析就必须红（防有人把 allow 接线删掉后门禁假绿）
+    assert "topFn" in scan.unreachable_inline_handlers(html)
 
 
 def test_scanner_self_check():

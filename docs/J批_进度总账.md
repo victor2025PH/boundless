@@ -1,0 +1,112 @@
+# J 批进度总账（跨对话 / 跨账号交接的唯一入口）
+
+> 任何新对话、新账号、崩掉后重开，**第一件事就是读这里**。不依赖聊天记录。
+> **谁改这里：** 每条指令的执行方在**收工时（或额度将尽时）**更新自己那一行，**只改自己那一行**。
+> 建立于 2026-09-05 03:2x（值守线）。背景对账 `docs/报障对账_钧_花无缺_20260905.md`；公共底座 `docs/修复指令_J批_并行_2026-09-05.md`。
+
+## 一句话现状
+
+1.0.73 已装两位内测机。09-04 夜批共 17 个不同问题，已按一单一事立成 #164–#181；skuio 机远程包 88MP86 + 13 份 Cursor 报告在手，钧机远程包等他下次开机自动上传。本批五条指令全部可独立开工。
+
+**06:38 值守复核（第一波三条）：J-1 / J-2 / J-3 代码侧完成——三份落点表里全部 commit 在 HEAD，21 个关键落点 rg 全命中，三条声明的测试集在当前树合跑 569 passed / 0 failed。** 未完成的只剩「装载」与「真机」：所有 `.py` 改动**尚未装进 zhiliao**（末次重启 09-04 19:38，下一窗 12:30），#177「我有个女儿」/ #166 goal-inject 可见性 / #172 E2EE 视频等真机验收都要等装载 + 1.0.74 装机。J-2 另有追加对话 **D1b** 仍在改（`goals/**`、`cp-goal.js`、`unified_inbox.html` 的 `?v=` 行——与 J-4 共用文件，J-4 改 `unified_inbox.html` 前先 `agent_probe.ps1` 看它是否 ACTIVE）。06:5x 追加 J-6…J-9（见下）。
+
+## 进度表
+
+| 指令 | 主题 | 工单 | 预算 | 状态 | 已完成 | 剩余 | 落点表 | 已花 |
+|---|---|---|---|---|---|---|---|---|
+| **J-1** | AI 出站内容正确性 + 记忆一致性 | #171 #175 #176 #177 | $190 | 已完成（代码侧） | A `7a3fc6c9` / B `9d6426f3` / C `24229010` / D `5d46c4ee`（模块+prompt 消费；send 路由一行接线已由 J-3 落地 `dc923110`） | 交 J-2：SOP 步 prompt 人设口吻钉子；~~交 J-3 接线~~ 已完成；值守：skuio 机跑 `xlate_memory_purge --apply`、mutual_chat 阈值复核 | `发版对账_v1.0.74_J1.md` | ~$120 |
+| **J-2** | 目标 / 工作链 / 自动化档位：UI 承诺 vs 引擎实际 | #166 #168 #167 | $190 | 已完成 | A1 `d0aa6560` / A2 `e4a62ee5` / B `983e05ba` / C `45261c78`；D1b 未拍板（只翻 sprint.enabled 不够真出手） | 交 J-4：cp-goal `?v=`、链卡三态、批量挂链 tooltip | `发版对账_v1.0.74_J2.md` | |
+| **J-3** | LINE 媒体链 | #169 #172 #180（+#177 接线 / #181 观测） | $190 | 已完成（代码侧，未重启） | A #172 `c9d19638`（Letter Sealing 媒体 em* 路径+解密；404≠过期 7 天；回填排程）/ B #180 `28ce86ba`（501 三分因+文案+receiver 退避）/ C #169 `e3573a66`+`65e122a2`（上限单源 line 100/tg 200/wa 64；OBS 上传+编排器超时按体积；真机 30/60/100MB 全送达）/ #177 J-1 交办接线 `dc923110` / D #181 只读观测已记 | 交 J-4：fetch-media 重试路由改传真消息（`发版对账_v1.0.74_J3.md`「交 J-4」）+ 媒体按钮灰 tooltip 消费 `send-caps.caps_reason`；交 J-6：skuio 风暴＝单个 403 forbidden 账号被 `close-policy.js` 无限重连（10h 38 轮），钧机＝`ENOTFOUND web.whatsapp.com` DNS；值守：下个重启窗装载 `.py`；后续评估 LINE 入站缺省 20MB→32~40MB（服务端转码件 100MB→27.5MB 会被拒下） | `发版对账_v1.0.74_J3.md` | ~$150 |
+| **J-2 追加 D1b** | 自动推进真开（冲刺脱离 care 灰度门 / 三平台白名单 / 自然档每日拍 / 运行时闸单源 + preflight / 停摆看门狗） | #166 | （随 J-2） | **已完成（K-1 收尾 `124dd921`，09-05 20:1x；决策 K-D7）** | P0-1..3 `d34666f3` / P0-4 `abe96ba3`（含 cp-goal `?v=20260905a` + ui-build，**替 J-4 做掉了 J-2 交办的 bump**）/ P0-5 `981790e3` / **P0-6 + 收尾 `124dd921`**（新 `liveness.py` `goal_sprint_drill.py` `test_goal_liveness.py` + `sprint_ticker` `goal_routes` `health_watchdog` `webhook_notifier` `cp-goal.js`×2 `i18n goals.py` `config.example` 的 D1b hunk + cp-goal `?v=20260905d` 双树 + ui-build 20260905-2003；`test_goal_*` 962 passed）；`service.py` 的 `catalog_persona_id` hunk 实为 I-5 E3，已由 K-1 A2 `71355568` 提交 | `.py` 等 K-5 ①段重启装载；`config.example.yaml` 剩余 `outbound.unlimited_mode` hunk 是孤儿线（K-D1），不属 D1b | `发版对账_v1.0.74_J2.md`（D1b 收尾一行见文末）；`发版对账_v1.0.74_K1.md` §2 | |
+| **J-4** | 工作台 UI 小件 | #170 #173 #174 #178 #179 #164 nag（+ J-3 交办 fetch-media 路由 / 媒体按钮 tooltip、J-2 交办链卡三态 / 批量挂链 tooltip、#188） | $150 | **已完成**（七件 + 交办四项 + #188 全 commit；模板/CSS/组件已热更生效，三处 `.py` 待 12:30 装载） | A `09bd0294` / B `3c101f0e`+`7b56f894` / C `345241a6` / D `17230974` / E `ed1b746e` / F `38bfda40` / G `9f045de9` / J-2 链卡 `3c1213e6` / J-3 tooltip `c9759aea` / J-3 fetch-media `500d9b4d` / #188 `3fee4790`；cp-goal `?v=` 由 D1b `abe96ba3` 已 bump、G 再 bump `20260905c` | **#170 无后端项**（归档视图 mark-read 无早退、`store._unarchive_on_inbound` 已存在——88MP86 的 7 条 64h 被埋＝人工归档后无入站，非缺陷）；值守：① 12:30 装载 `persona_routes.py`（#179）/ `admin.py`+`goal_routes.py`（G）/ `unified_inbox_account_routes.py`（fetch-media）；② **催 I-2 线提交** `unified_inbox.html`/`unified-inbox.css`/`inbox_workspace.py` 里 09-04 #156/#159/#155 未 commit hunk（1.0.73 已发 #159 与 J-4 A 场景 13 都依赖）；③ ops 卡「已发假声明」行（J-1 A 提到）未做；J-7 可接管 `personas.html` / `persona_routes.py` | `发版对账_v1.0.74_J4.md`；骨架 `发版对账_v1.0.74.md` 已建 | ~$110 |
+| **J-5** | 登记链与值守工具 | 限频/分类/backfill/verify + #138 #140 #142（+#165 收集窗） | $120 | 已完成（代码侧，未重启；台账已改） | A `da1bbb86`（backfill 共享 seen 集 + observe mid 去重）/ B `7be18026`（verify 只认 #N / reply_to）/ C `9ec70d37`（限频不管登记）/ D `1287f489`（分类器补句 + 已知报障人图+字立单 + smalltalk 落事件）/ E-1 `6ed68d53`（`duty_ledger_fix` 已 `--apply`：#138/#140/#142 verified→fixed，notify_ts 保留，`ledger_fix` #750-752）/ E-2 `e4cf6896`（回复支持号消息续单）/ F `5f4f68f1`（AGENTS v1.3）；三测试文件 130 passed；61 单 fixed 未回访只记数不发 | 交值守：① `trigger.py` L299 / `skill_manager` L977 / `telegram_client._fetch` 透传 `account_id/sender_name/msg_id/reply_to_msg_id/last_name`（他线文件，落点表「交值守」①）；② AGENTS_JUN/SKUIO v1.3 重发两机并明说覆盖；③ 12:30 窗装载 | `发版对账_v1.0.74_J5.md` | ~$100 |
+| **J-6** | WhatsApp 边车稳定性（Node） | #181 + 403 无限重连 + ENOTFOUND + Bad MAC | $150 | 已完成（代码侧，未重启边车/实例） | A 403 终态 `aefd9a94`（连续 2 轮 403 停自动重连 + `/reconnect` 30min 解锁冷却 + `postStatus("forbidden")` + ops 卡 ⛔/解锁重连）/ B `4e9b2c2b`（close `reason_class` dns/net/server/forbidden/… ——ENOTFOUND 从 408 里分出来；`/health.reason_10m` 滚动窗；DNS 短退避 3s×10 不烧预算；`pairing_ms`+`hint_code=dns_retry`；Python `[rc:]` 解析聚合/Prom/ops KPI）/ C `ed20b1a0`（**新** `bad-mac-heal.js`：同对端连续 3 次 Bad MAC → `deleteSession` 让 libsignal 重建，30min 不重删，绝不全量 resync；`/health.bad_mac` + `[bm:]` 快照到 Python + ops KPI）；Node 63/63、Python 指定集 493 passed | 交 J-4：B-2 坐席可见 DNS 提示（后端 `hint_code` 已就绪，`whatsapp_baileys_login.py` 透传 + `unified_inbox.html` 文案两行，见落点表）；值守：① 重启窗装载 `platform_session_health.py` + 重启 117 边车；② `test_alert_delivery_e2e` 红 `phantom_unread_alert` 属他线 `health_watchdog.py` 未提交；③ #181 三项真机待核（钧机包 00:20–00:25 段 / 装机后 `pairing_ms` / skuio 24h `forbidden`） | `发版对账_v1.0.74_J6.md` | ~$95 |
+| **J-7** | 人设工作室体验与报错 | #189 #190 #191 #192 #193 #186（+#178/#179 若 J-4 未做） | $150 | 未开工（**J-4 已于 08:4x 释放 personas.html / persona_routes.py**，#178/#179 已由 J-4 做掉，可整批开工） | | | `发版对账_v1.0.74_J7.md` | |
+| **J-8** | 陪伴安全 + 关怀语义 | #185（P1）#182 | $190 | **进行中**（A 完成，B 开工） | A #185 `256e3380`（三档空态 + 一键开启 overlay 保注释 + cloud_light/desktop.internal 出厂开 + R8 桥 `wellbeing_escalation_bridge.py` 徽标/置顶/案例 + 页名「客户安全预警」人话化 + viewer 不可见；三件 crisis 评测全绿，skill_manager 零改动） | B #182；值守：下个重启窗装载 `.py`（桥 / enable 路由 / 角色门）；88MP86 回访口径见落点表 | `发版对账_v1.0.74_J8.md` | ~$70 |
+| **J-9** | 知识库隔离 + 检索自检 | #184（+#187 误读关单的「用户 KB 是否为空」读数） | $150 | **已完成**（代码侧，未重启；模板/i18n 已热更） | A `0d8d667e`（`kb_entries.source` user/import/system/vendor + 一次性回填 template_key→system / 厂商类目→vendor + `search()` 两段过滤硬排除 vendor 不占 top_k、桌面默认排除 / `AITR_KB_EXCLUDE_VENDOR` 覆写 + `health()` + `purge_by_source()` fail-closed + 零反馈 `satisfaction_rate=None` + 首装 3 条停用格式示例）/ B `0732f230`（`/api/kb/entries?source=` + `POST /api/kb/entries/purge-source` + `GET /api/kb/health` + sandbox `include_vendor`；KB 页来源筛选/厂商徽标/提示条一键清空/「暂无反馈」；zh_hant 再生；路由基线 +2）/ C `3ba163ae`（首装不再拷 `knowledge_base.db`：config_manager 种子清单 / stage_internal_assets / after-pack **FORBIDDEN** / smoke 断言无 vendor）/ D `92c14e2d`（厂商产品说明迁 `howto_pack` 3 条，价格不写）/ E `d74f6c89`（ops「📚 知识库接通性」卡 + 独立 pack `kb_health_ops.py` + `/knowledge?source=vendor` 深链 + ui-build `20260905-1445`）；`skill_manager.py` **零改动**只读核对（L2098 `search()` 不传 include_vendor ⇒ 走桌面默认排除；命中记账复用 L2359 `log_query`）；`test_kb_source_isolation` 26 例 + `test_ops_overview` 101 passed；模板/i18n 门禁 339 passed | 值守：① 22:30 窗装载 `kb_store/kb_routes/kb_importer/kb_starter/config_manager/howto_pack`，装后 `GET /api/kb/health` 应 `entries_vendor≈110, vendor_excluded=false`（zhiliao 服务器部署不排除是预期，**别在 zhiliao 点一键清空**）；② skuio/钧装 1.0.74 后看 ops 📚 卡「用户条目」——预期 0 + 黄字「用户知识库为空」＝对「KB 零贡献」的正面回答（不是检索坏，是没自己的知识）；③ `hits=-` 是风控字段的解释已写进卡底注 + howto `kb-vendor-preset` | `发版对账_v1.0.74_J9.md` | ~$85 |
+| **J-10** | AI 记忆机制一期（A 组：跨语言接地 / 例外队列 + 自动转正 / 召回记账 / 自身经历入口）+ 「AI 记忆」页重构（B 组）+ 二期 6 件 + 三期 3 件 | #183 #177 #182 | $190 | **已完成**（代码侧，未重启；模板/i18n 已热更；二期 6 件 + 三期 3 件也已 commit） | 三期 `33a0571a`（承诺块接线，`memory.promises.inject` 出厂关）/ `2266105b`（「AI 答应过还没做」跨客户汇总 + alert-status 告警 + 健康卡第 6 格 + `context_store.iter_rows_with_key`）/ `7e099619`（高影响六类命名 + `memory.review.high_impact_no_queue` 开关，默认不变）；三期回归 906 passed（唯一红例是 J-4 未提交的 chips 半成品）/ 二期 `2a439252`（待确认口径统一 + 抽检准确率只数已判过的）/ `e6b38c6b`（LLM 数值置信 → low_confidence）/ `5bb58c8a`（人设承诺账本 `_promise_log` + mark-done 路由 + 抽屉状态）/ `b93d8185`（每客户导出 JSON/CSV）/ `0588c357`（run_eval 合入接地评测 + 跨语言集 + 趋势行）/ `1e8a8010`（nav 帮助人话化）；二期回归 774 passed / B `de1a9cd9`（健康卡五格 KPI + 例外队列面板按原因给「为什么要我看」+ 类型化动作 + 人话化全套 + 向量列删 + 运维件收「维护」折叠区 + 「不再使用」软删默认 + 色点 + 隐私行；模板/i18n/记忆回归 445 passed）/ A1 `d03f32e4`（+`c61c9131` EOL）跨语言接地：`extract_memory_facts` 每条事实附客户原话逐字引文 → `memory_grounding.ground_fact_with_evidence` 引文级判据（同语种仍叠旧词汇判据、应答词不算引文、名字/数字必须在原话——不弱于 Phase8 旧护栏）+ 丢弃按原因落 `episodic_grounding_drops` 进 `admin_summary` + 引文存 `source_quote`；评测 15 样本 25 候选 keep 14/14 drop 11/11，`--memory-extract` 前后同 1.0/0 / A2 `d9677847`（透传体补在 `1c7e5a73`）例外队列 + 自动转正（D8）：`review_reason` 五类 / `impact` / `status=ignored` 软删 / `conflict_group` 并列不覆盖 / `consolidate` 7 天+被召回≥1 第二路径 / `review-queue`·`ignore`·`restore`·`resolve-conflict` 四路由 / A3 `1c7e5a73` 召回记账：`episodic_recall_log` + `recall_count` + `GET /api/episodic-memory/used`（交 J-4 契约在落点表）+ 抽屉「最近被用」/ A4 `72e0df5a` 「人设说过 / 承诺过」抽屉分区 + `self-log` 两路由；A 组新测试 30 例 + B 组 2 例；最终 §7 集 320 passed；`--memory-extract` 前后同 1.0/0；`skill_manager.py` 共 7 hunk 全在记忆抽取/注入/admin 透传 | 值守：① 下个重启窗装载 `.py`（`ai_client` / `memory_grounding` / `episodic_memory_store` / `memory_review` / `memory_self_log` / `skill_manager` / `episodic_identity_routes` / `human_outbound_memory` / `memory_extract_eval`）；② 装 1.0.74 后跑 88MP86 同口径（落点表「值守读数口径」五条）；③ `python scripts/i18n_hant.py generate` 再生繁体；④ `config.example.yaml` 文档键 `memory.consolidation.auto_promote.{days,min_recalls}` / `memory.review.low_confidence_threshold` 等 D1b 收工后补；⑤ 二期/三期新增或改动的 `.py`（`memory_promises.py` + `run_eval.py` + `help_terms.py` + `context_store.py` + `health_routes.py`）随同装载；⑥ 周批可加 `run_eval --memory-extract --extract-llm --out-jsonl logs/eval/memory_extract_trend.jsonl`；交 J-4：草稿旁记忆 chips（契约在落点表「交 J-4」）+ 「来源原话 → 定位到那条消息」；**注意**：15:57 有另一会话直接改写了 `memory_grounding.py`（未登意向板），本线采纳其实现并接线；二期清单在落点表 | `发版对账_v1.0.74_J10.md` | ~$160 |
+
+状态取值：`未开工` / `进行中` / `已完成` / `部分完成(等下一账号)` / `阻塞(原因)`
+
+## 指令文件
+
+| 指令 | 文件 |
+|---|---|
+| J-1 | `docs/指令_J-1_出站内容与记忆_2026-09-05.md` |
+| J-2 | `docs/指令_J-2_目标与工作链引擎_2026-09-05.md` |
+| J-3 | `docs/指令_J-3_LINE媒体链_2026-09-05.md` |
+| J-4 | `docs/指令_J-4_工作台UI小件_2026-09-05.md` |
+| J-5 | `docs/指令_J-5_登记链与值守_2026-09-05.md` |
+| J-6 | `docs/指令_J-6_WhatsApp边车稳定性_2026-09-05.md` |
+| J-7 | `docs/指令_J-7_人设工作室体验_2026-09-05.md` |
+| J-8 | `docs/指令_J-8_陪伴安全与关怀语义_2026-09-05.md` |
+| J-9 | `docs/指令_J-9_知识库隔离与检索_2026-09-05.md` |
+| J-10 | `docs/指令_J-10_AI记忆页与记忆机制一期_2026-09-05.md`（§1 含三视角问题清单） |
+| 公共底座 / 归属矩阵 / 老板决策 | `docs/修复指令_J批_并行_2026-09-05.md` |
+
+## 投放顺序与依赖
+
+```
+J-1 ─ J-2 ─ J-3 ─ J-4 ─ J-5   全部独立，可同时开（J-1/J-2/J-3 已完成代码侧）
+J-6（Node 边车）─ J-8（wellbeing/care）─ J-9（KB）  三条互不重叠（J-6 / J-9 已完成代码侧）
+J-7（人设工作室）：J-4 已做完 #178 `ed1b746e` / #179 `17230974` 并释放 personas.html / persona_routes.py，可整批开工
+D1b（J-2 追加）仍在改 goals/** + cp-goal.js + unified_inbox.html 的 ?v= 行 → J-4 改 unified_inbox.html 前先看意向板
+J-8 加 wellbeing 两键的 cloud_light.yaml / config.desktop.internal.yaml：D1b 在同文件 goals 段有未提交 hunk → 用 tools/stage_hunks.py 只提交自己的
+```
+
+## 老板决策记录
+
+| 日期 | 决策 | 影响 |
+|---|---|---|
+| 2026-09-05 | 见公共底座 D1–D6（sprint 出厂开 / 电话点击揭示 / 桌面包隐藏告警 nag / 限频不管登记 / verify 认 #N / 三单改回 fixed）——**默认按底座表执行，老板划掉的除外** | J-2 / J-4 / J-5 |
+| 2026-09-05 15:05 | **D7 拍板：开**——`companion.wellbeing.crisis_audit` / `crisis_escalation` 桌面包出厂默认开，审计页按角色门控，升级同时亮工作台徽标 | J-8 A 直接施工 |
+
+## 03:3x–05:4x 新增（skuio 又传 16 份 Cursor 报告，已立单 #182–#193；06:5x 已分派）
+
+| 单 | 级 | 主题 | 归属 |
+|---|---|---|---|
+| #182 | P2 | 主动关怀「补一条关怀」意图反转 | **J-8** |
+| #183 | P2 | 记忆「待确认」积压非闸门 + 抽取漏检（产品提案）| **J-10**（老板 15:1x 采纳方向 D8；值守核出真因之一＝跨语言接地 bug，见 J-10 §1 开发视角第 2 条） |
+| #184 | P2 | 知识库首装预置 110 条厂商产品；`source=vendor` 隔离 + 检索自检 | **J-9** |
+| #185 | **P1 安全** | 危机审计页空态混淆——值守已核：**识别与红线在 skuio 机是开的**（`wellbeing.enabled` 出厂 true），关着的是 R9 审计与 R8 升级 | **J-8**（决策 D7） |
+| #186 | P2 | 用户管理页 8 条僵尸会话 + 术语 | **J-7** |
+| ~~#187~~ | — | ~~拟稿 KB hits 恒空~~ → **误读关单**：`hits=` 是风控命中词字段；「用户 KB 是否为空」并入 #184 | J-9 |
+| #188 | P2 | 钧：手动发送气泡短暂双显，手机端一条 | **J-4** |
+| #189 | P2 | 人设编辑器·备货 tab：台词库/说话指纹是研发缓存却当用户功能，就绪度卡 75% | **J-7** |
+| #190 | P2 | 人设编辑器·相册 tab：试触发在底部、325 套表单、触发词全空、两套保存 | **J-7** |
+| #191 | P2 | 人设编辑器·预览 tab 历史质检点击 → 「页面脚本出错」 | **J-7**（先做） |
+| #192 | P2 | 人设工作室页头：控件截断 / 重复新建按钮 / 90 个标签 | **J-7** |
+| #193 | P2 | 人设工作室弹「页面未能打开 /admin/voice-eval」 | **J-7**（先做） |
+
+## 值守收尾清单（不开对话，值守自己做）
+
+- [x] **装载 zhiliao**（K-5 ①段，09-05 20:50:56 `restart_preflight` GO → `restart_instance`）：J-1…J-10 + D1b + K-1…K-4 全部 `.py` 一次装载（`680ddf81..b513ded9` 81 条）；`[goal-inject]` 行等有目标会话来入站（22:3x 前无入站，K-5 ⑤ 5b 继续盯）；#177 真机块等 1.0.74 装机。
+- [x] **J-9 六个 `.py` 同车装载**：`GET /api/kb/health` 200 → `entries_total=105, entries_vendor=77（zhiliao 实值，非 110）, entries_user=4, vendor_excluded=false`；未点一键清空；skuio/钧 ops 📚 卡读数等装机（K-5 ⑤ 5b）。
+- [ ] skuio 机 1.0.74 装完跑 `python tools/xlate_memory_purge.py --db %APPDATA%\telegram-ai-desktop\data\config\translation_memory.db --apply`（J-1 C 交办；不跑也会在命中时自愈）——K-5 ③ 步 8。
+- [x] LINE 入站缺省 20MB → **32MB**：K-3 D `88c442f9`，已随 ①段装载。
+- [x] `config.example.yaml` 两处文档键：K-3 E `ee7f8dda`（+ K-1 C `phantom_unread_remind` 键 `28089c22`）。
+- [ ] `mutual_chat` 判据（88MP86 把 John / BABY BEAR 判成「双向高频疑 AI 对聊」）阈值复核（J-1 顺手项）。
+- [ ] 钧机远程包到手 → 补 #180（00:48 LINE worker 状态）/ #181（00:20–00:25 wa-sidecar）证据回读；#164 回访文案（1.0.74 装完）。
+- [ ] skuio 两张截图（#171 John 原话 / #166 目标详情）03:36 已第二次提醒；仍不到则 J-1 A 的 EN 词表按常见形态收口，#166 键核对靠 A1 的 INFO 日志（装载后自证），不再追问。
+
+## 等待项（不阻塞开工，到了由值守回读）
+
+| 等 | 内容 | 到手后谁用 |
+|---|---|---|
+| ~~钧~~ | ✅ 03:12 老板代转答复：那张图**对方收到了**、手机端**一条** → #164 无第二因（只改提示，J-4 C）；双显立 #188 | 已回写台账 |
+| 钧 | v1.3.1 selfcheck 短码（Cursor 通道恢复） | 值守 |
+| 钧机 | 远程包 `dr-mtnarhxg-o8apf7`（DutyWatchTick 自动拉到 `tmp_diag/`） | J-3（00:48 LINE worker 状态）；#181 另开 J-6 |
+| skuio | John 要照片原话截图（#171）；BABY BEAR 目标详情截图（#166） | J-1 / J-2（**不要等**，两条指令的代码侧确定性缺陷先修） |
+
+## 换账号 / 额度用尽的通用流程
+
+**收工方：** ① 已完成的工作必须已 commit ② 写落点表（未完成项也留行）③ 更新本文件自己那一行 ④ 清意向板。
+**接手方：** 读本文件 → 读落点表 → `git log --oneline -15 -- engines/chengjie` 核 commit → 读指令文件从第一个未完成项继续。**以 commit 和落点表为准，总账是索引。**
+
+## 全批收口（五条都完成后，由值守做）
+
+1. 合并五份落点表进 `docs/发版对账_v1.0.74.md`（J-4 建骨架）
+2. 全量回归：`python -m pytest tests/ -n auto -q --timeout=90 --timeout-method=thread`
+3. `scripts\gate_sweep.ps1 -Full`
+4. 更新 `docs/值守症状族对账单.md`
+5. 才谈发版 1.0.74 → 两位内测机装完 → 按 #号逐单回访（含 I-6 那 61 单）

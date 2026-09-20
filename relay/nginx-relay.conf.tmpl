@@ -1,0 +1,33 @@
+# relay.bd2026.cc —— ChatX 官网中继（uvicorn 127.0.0.1:18790）。由 relay/deploy_relay.ps1 渲染并写到
+# /etc/nginx/sites-available/relay.bd2026.cc；证书 certbot webroot（与 prod-katie.conf 同法）。
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name __FQDN__;
+
+    ssl_certificate /etc/letsencrypt/live/__FQDN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__FQDN__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    access_log /var/log/nginx/relay.access.log;
+    error_log  /var/log/nginx/relay.error.log;
+
+    client_max_body_size 1m;
+    include snippets/scanner-deny.conf;
+
+    location / {
+        proxy_pass http://127.0.0.1:18790;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 设备 WebSocket 长连接
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_connect_timeout 10s;
+    }
+}

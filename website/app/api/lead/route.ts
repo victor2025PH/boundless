@@ -43,7 +43,7 @@ async function followUpCustomer(rec: LeadRecord) {
         reply_markup: {
           inline_keyboard: [
             [{ text: zh ? "🤖 AI 成交聊天" : "🤖 AI closing", web_app: { url: `${site}/#autochat` } }],
-            [{ text: zh ? "💰 套餐与价格" : "💰 Plans & pricing", web_app: { url: `${site}/#pricing` } }],
+            [{ text: zh ? "💰 套餐与价格" : "💰 Plans & pricing", web_app: { url: `${site}/order` } }],
           ],
         },
       }),

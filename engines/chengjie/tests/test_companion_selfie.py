@@ -58,9 +58,74 @@ def test_detect_positive_traditional(t):
 
 
 @pytest.mark.parametrize("t", [
+    # 量词插入（2026-07-22 TG：「给我个照片」不含连续「给我照片」）
+    "给我个照片",
+    "给我一张照片",
+    "发个照片呗",
+    # 粤语（2026-07-22 WA）
+    "哦我要你嘅相片啊，大佬，你个相啊。",
+    "我要你嘅相片",
+    "睇下你个相啦",
+    "俾张相我睇下",
+    # 闽南常见书面/ASR 落字
+    "甲我看你的相片",
+    "乎我看一下你的照片",
+    "欲看你的相",
+    # 日/韩/西/越
+    "写真送って",
+    "사진 보내줘",
+    "manda una foto por favor",
+    "gửi ảnh đi",
+])
+def test_detect_positive_dialect_and_measure(t):
+    assert detect_selfie_request(t) is True
+
+
+@pytest.mark.parametrize("t", [
+    # #171（2026-09-05 WhatsApp 英文客户实录）：这些最常见的英文索图形态此前
+    # 一个都不命中（EN 只靠子串表，_PHOTO_CORE 全是中文名词）→ 图链不启动，
+    # LLM 独自空转出「I just sent it」。
+    "send me a photo",
+    "send me a picture",
+    "can you send me a pic?",
+    "show me a picture",
+    "show me a pic of you",
+    "can I see you?",
+    "can i see a pic",
+    "could I see what you look like",
+    "got any pics?",
+    "do you have any photos",
+    "any selfies?",
+    "lemme see you",
+    "let me see your face",
+    "how do you look",
+    "what you look like?",
+])
+def test_detect_positive_en_common_forms(t):
+    assert detect_selfie_request(t) is True
+
+
+@pytest.mark.parametrize("t", [
+    "can I see you tonight?",           # 约见面，不是要图
+    "can i see you tomorrow",
+    "let me see you in person",
+    "send me a picture of your dog",    # 物体图（交上下文要图链）
+    "show me a pic of the food",
+    "I got photos from my trip",        # 客户自述自己的照片
+    "I'll send you a pic later",        # 客户要发给 AI，方向相反
+    "how was your day",
+])
+def test_detect_negative_en_common_forms(t):
+    assert detect_selfie_request(t) is False
+
+
+@pytest.mark.parametrize("t", [
     "你煮的肯定很好吃,可以拍個照片給我看一下嗎?",  # 要「你煮的」食物图 → 属上下文要图，非人设自拍
     "你做的蛋糕拍张照给我看看",
     "你买的裙子拍张照片",
+    "你煮嘅面影张相畀我睇",  # 粤语「你煮的」物体图
+    "互相啊今天怎么样",      # 裸「相啊」不得误伤
+    "睇下你今日点",          # 「睇下你」无照片名词 → 不命中
 ])
 def test_detect_object_photo_not_selfie(t):
     assert detect_selfie_request(t) is False

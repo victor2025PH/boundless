@@ -7,7 +7,8 @@
 - 熔断开路（含无 key 特征的网络黑洞）→ notify_cloud_outage，文案区分兜底就绪与否；
 - 告警标签可读（model @ host，而非裸 provider 名）；
 - HealthWatchdog：余额低水位 → notify_balance_low；余额接口 401 → notify_key_failure；
-  本地兜底长期顶班 → 升级提醒（首个周期只建基线、after_min 前不提醒、idle 重置）。
+  本地兜底长期顶班 → 升级提醒（首个周期只建基线、after_min 前不提醒、idle 重置；
+  ai.primary=local* 时不把本地主链出话当顶班）。
 
 不触网：主链客户端用假对象，探针/notify 全 monkeypatch。
 """
@@ -74,7 +75,10 @@ async def test_runtime_key_failure_alerts(monkeypatch):
     seen = _capture_notifications(monkeypatch)
     c = _client(Exception("Error code: 402 - Insufficient Balance"))
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
-    assert out  # canned 兜底仍出话
+    # 2026-08-15 罐头占位句移除（「可以不回复，不能乱回复」）+ 08-17 无兜底纪律：
+    # 全链失败＝不出话（None）——旧断言「canned 兜底仍出话」与现设计相反，
+    # 本测试的核心价值（key 失效告警必响、标签可读）在下方断言，保持不变。
+    assert out is None
     assert len(seen["keyfail"]) == 1
     label, detail = seen["keyfail"][0]
     assert label == "deepseek-chat @ api.deepseek.com"  # 可读标签而非 openai_compatible
@@ -308,6 +312,23 @@ def test_fallback_duty_disabled(monkeypatch):
     assert not called and wd._fb_duty_last_calls is None
 
 
+def test_fallback_duty_skips_when_local_is_primary(monkeypatch):
+    """ai.primary=local* 时本地就是主链，计数增量不得当「云端顶班」弹窗。"""
+    stats = {"local_fallback_calls": 0, "primary_mode": "local"}
+    wd = _watchdog({}, ai_stats=stats)
+    seen = []
+    monkeypatch.setattr(host_alert, "notify_host",
+                        lambda *a, **kw: seen.append(1) or True)
+    t0 = 40000.0
+    wd._check_local_fallback_duty(now=t0)
+    stats["local_fallback_calls"] = 80
+    wd._check_local_fallback_duty(now=t0 + 300)
+    wd._check_local_fallback_duty(now=t0 + 300 + 1900)
+    assert seen == []
+    assert wd.total_fallback_duty_reminders == 0
+    assert wd._fb_duty_since_ts == 0.0
+
+
 def test_fallback_duty_no_ai_client():
     wd = _watchdog({})  # state 无 ai_client
     wd._check_local_fallback_duty(now=1.0)  # 不抛即过
@@ -355,8 +376,13 @@ class TestDegradationSnapshot:
         return c
 
     def test_no_traffic_not_degraded(self):
+        # 2026-08-09 断言随 snapshot 增量更新：并行线给快照补了 primary 键
+        # （主链形态 cloud/local/local_only，坐席状态条区分「云主链」与「本地
+        # 主链」部署）。本测试守的不变量不变：无流量 ≠ 降级。
         snap = self._client().degradation_snapshot()
-        assert snap == {"degraded": False, "mode": "primary"}
+        assert snap["degraded"] is False
+        assert snap["mode"] == "primary"
+        assert snap.get("primary") in ("cloud", "local", "local_only")
 
     def test_primary_recent_not_degraded(self):
         c = self._client()

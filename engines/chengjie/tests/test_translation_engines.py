@@ -141,7 +141,7 @@ def test_ollama_mt_unavailable_without_config():
     assert OllamaMTEngine("", "").available is False
     assert OllamaMTEngine("http://h:11434", "").available is False
     assert OllamaMTEngine("", "m").available is False
-    # base_url+model 齐 → 可用（openai 库在本仓是硬依赖）
+    # base_url+model 齐 → 可用（httpx 在本仓是硬依赖，原生 /api/chat 传输层）
     assert OllamaMTEngine("http://h:11434", "hy-mt2").available is True
 
 
@@ -167,40 +167,36 @@ def test_ollama_mt_prompt_formats_follow_official_card():
 
 
 @pytest.mark.asyncio
-async def test_ollama_mt_translate_via_fake_client():
+async def test_ollama_mt_translate_via_fake_post():
+    """原生 /api/chat 契约（2026-08-09 弃 /v1 兼容层）：payload 必须带
+    stream=False（否则流式）+ 顶层 keep_alive（/v1 会忽略它=当年模型反复
+    冷加载的根因）+ options.num_predict；温度缺省不传（用模型内置采样）。"""
     e = OllamaMTEngine("http://h:11434", "hy-mt2")
+    seen = {}
 
-    class _Msg:
-        content = "Translation: hi there"
+    async def _post(url, payload):
+        seen["url"] = url
+        seen["payload"] = payload
+        return {"message": {"role": "assistant", "content": "Translation: hi there"}}
 
-    class _Choice:
-        message = _Msg()
-
-    class _Resp:
-        choices = [_Choice()]
-
-    class _Completions:
-        def __init__(self):
-            self.kwargs = None
-
-        async def create(self, **kw):
-            self.kwargs = kw
-            return _Resp()
-
-    class _Chat:
-        completions = _Completions()
-
-    class _Cli:
-        chat = _Chat()
-
-    e._clients["http://h:11434"] = _Cli()
+    e._post_chat = _post
     r = await e.translate("你好", source_lang="zh", target_lang="en")
     assert r.ok and r.engine == "ollama_mt"
     assert r.text == "hi there"  # _clean_translation 剥掉 "Translation:" 前缀
-    kw = _Cli.chat.completions.kwargs
-    assert kw["model"] == "hy-mt2"
-    assert kw["extra_body"] == {"keep_alive": "30m"}   # 默认防冷启动
-    assert "temperature" not in kw                     # 缺省不传 → 用模型内置采样
+    p = seen["payload"]
+    assert p["model"] == "hy-mt2"
+    assert p["stream"] is False
+    assert p["keep_alive"] == "30m"                    # 默认防冷启动（顶层字段）
+    assert p["options"]["num_predict"] == 1024
+    assert "temperature" not in p["options"]           # 缺省不传 → 用模型内置采样
+
+
+def test_ollama_mt_native_root_normalizes_v1_suffix():
+    # 配置误带 /v1 后缀也归一到根地址（原生 /api/chat 挂在根下）
+    assert OllamaMTEngine._native_root("http://h:11434") == "http://h:11434"
+    assert OllamaMTEngine._native_root("http://h:11434/") == "http://h:11434"
+    assert OllamaMTEngine._native_root("http://h:11434/v1") == "http://h:11434"
+    assert OllamaMTEngine._native_root("http://h:11434/v1/") == "http://h:11434"
 
 
 @pytest.mark.asyncio
@@ -214,63 +210,54 @@ async def test_ollama_mt_unsupported_target_yields_to_next_engine():
     assert res.ok and res.engine == "ai"
 
 
-def _fake_cli(reply: str = "ok", *, fail: bool = False):
-    """构造最小 AsyncOpenAI 假客户端；fail=True 时 create 抛连接异常。"""
-    class _Msg:
-        content = reply
+def _fake_post_router(e, mapping):
+    """给引擎装假 _post_chat：mapping = {url: 回复文本 | Exception}。
 
-    class _Choice:
-        message = _Msg()
+    返回 calls 计数 dict（按 url），供断言「谁被打了几次」。mapping 可在
+    测试中途改值（模拟端点恢复）。
+    """
+    calls: dict = {}
 
-    class _Resp:
-        choices = [_Choice()]
+    async def _post(url, payload):
+        calls[url] = calls.get(url, 0) + 1
+        v = mapping[url]
+        if isinstance(v, Exception):
+            raise v
+        return {"message": {"role": "assistant", "content": v}}
 
-    class _Completions:
-        def __init__(self):
-            self.calls = 0
-
-        async def create(self, **kw):
-            self.calls += 1
-            if fail:
-                raise ConnectionError("boom")
-            return _Resp()
-
-    class _Chat:
-        def __init__(self):
-            self.completions = _Completions()
-
-    class _Cli:
-        def __init__(self):
-            self.chat = _Chat()
-
-    return _Cli()
+    e._post_chat = _post
+    return calls
 
 
 @pytest.mark.asyncio
 async def test_ollama_mt_dual_endpoint_failover():
     # 176 挂 → 自动切 140；且 176 进冷却（下次排序降权到队尾）
     e = OllamaMTEngine(["http://a:11434", "http://b:11434"], "hy-mt2")
-    bad, good = _fake_cli(fail=True), _fake_cli("hello")
-    e._clients["http://a:11434"] = bad
-    e._clients["http://b:11434"] = good
+    calls = _fake_post_router(e, {
+        "http://a:11434": ConnectionError("boom"),
+        "http://b:11434": "hello",
+    })
     r = await e.translate("你好", source_lang="zh", target_lang="en")
     assert r.ok and r.text == "hello"
-    assert bad.chat.completions.calls == 1 and good.chat.completions.calls == 1
+    assert calls["http://a:11434"] == 1 and calls["http://b:11434"] == 1
     # 冷却生效：a 降权到队尾，后续调用直接走 b（a 不再被打）
     r2 = await e.translate("再见", source_lang="zh", target_lang="en")
-    assert r2.ok and bad.chat.completions.calls == 1
-    assert good.chat.completions.calls == 2
+    assert r2.ok and calls["http://a:11434"] == 1
+    assert calls["http://b:11434"] == 2
 
 
 @pytest.mark.asyncio
 async def test_ollama_mt_all_endpoints_down_returns_error():
     e = OllamaMTEngine(["http://a:11434", "http://b:11434"], "hy-mt2")
-    e._clients["http://a:11434"] = _fake_cli(fail=True)
-    e._clients["http://b:11434"] = _fake_cli(fail=True)
+    mapping = {
+        "http://a:11434": ConnectionError("boom"),
+        "http://b:11434": ConnectionError("boom"),
+    }
+    _fake_post_router(e, mapping)
     r = await e.translate("你好", source_lang="zh", target_lang="en")
     assert not r.ok and "ConnectionError" in r.error
     # 全端点冷却中仍保底可试（不剔除）：恢复后下一次调用即成功
-    e._clients["http://a:11434"] = _fake_cli("hi again")
+    mapping["http://a:11434"] = "hi again"
     r2 = await e.translate("你好", source_lang="zh", target_lang="en")
     assert r2.ok and r2.text == "hi again"
 
@@ -595,3 +582,102 @@ async def test_semantic_gate_disabled_keeps_old_behavior():
     router = EngineRouter([e1], min_confidence=0.5)
     r = await router.translate("你好", source_lang="zh", target_lang="en")
     assert r.ok and r.engine == "ollama_mt"
+
+
+# ── 中文变体（繁体/粤语）目标语（2026-08-29）──────────────────────────────────
+
+def test_variant_style_hint_zh_variants_only():
+    from src.ai.translation_engines import variant_style_hint
+    assert "繁體中文" in variant_style_hint("zh-tw")
+    assert "粵語口語" in variant_style_hint("YUE")   # 大小写不敏感
+    assert variant_style_hint("zh") == ""
+    assert variant_style_hint("en") == ""
+    assert variant_style_hint("") == ""
+
+
+def test_hymt_supports_zh_variants_with_chinese_prompt():
+    """zh-tw 进语种闸（HY-MT 官方模型卡本就含繁体）且走中文指令模板；yue 原有支持不回归。"""
+    eng = OllamaMTEngine(base_url="http://127.0.0.1:11434", model="m")
+    assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("yue") is True
+    p_tw = eng._build_prompt("你好", "zh", "zh-tw")
+    assert "翻译成繁体中文" in p_tw
+    p_yue = eng._build_prompt("你好", "zh", "yue")
+    assert "翻译成粤语" in p_yue
+
+
+def test_deepl_traditional_supported_cantonese_not():
+    eng = DeepLEngine("key")
+    assert eng.supports_target("zh-tw") is True   # → ZH-HANT
+    assert eng.supports_target("yue") is False    # DeepL 无粤语，路由让位下一引擎
+
+
+@pytest.mark.asyncio
+async def test_opencc_engine_converts_and_yields():
+    """OpenCC 简→繁：确定性转换（含台湾用词）；非中文源/非 zh-tw 目标让位下游。"""
+    pytest.importorskip("opencc")
+    from src.ai.translation_engines import OpenCCEngine
+
+    eng = OpenCCEngine()
+    assert eng.available is True
+    assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("zh") is False
+    assert eng.supports_target("yue") is False   # 粤语是语言变体不是字形转换
+
+    r = await eng.translate("软件视频信息", source_lang="zh", target_lang="zh-tw")
+    assert r.ok is True and r.engine == "opencc"
+    assert r.text == "軟體影片資訊"   # s2twp：字形 + 台湾用词双转换
+
+    # 明确非中文源 → 让位（字形转换救不了真翻译）
+    r2 = await eng.translate("hello", source_lang="en", target_lang="zh-tw")
+    assert r2.ok is False and r2.error.startswith("unsupported_source")
+    # 源未知/自动 → 放行（detect 对中文文本必产出 zh，护栏兜底）
+    r3 = await eng.translate("软件", source_lang="", target_lang="zh-tw")
+    assert r3.ok is True and r3.text == "軟體"
+
+
+def test_build_engines_recognizes_opencc():
+    engines = build_engines({"engines": {"order": ["opencc", "ai"]}}, ai_client=None)
+    assert [getattr(e, "name", "") for e in engines] == ["opencc", "ai"]
+
+
+@pytest.mark.asyncio
+async def test_router_opencc_first_llm_fallback_for_non_zh_source():
+    """per_lang_order 推荐姿势：zh-tw 先 opencc；英文源让位后由下游 LLM 承接。"""
+    pytest.importorskip("opencc")
+    from src.ai.translation_engines import OpenCCEngine
+
+    llm = _FixedEngine("ai", text="繁體譯文")
+    router = EngineRouter([OpenCCEngine(), llm])
+    r_zh = await router.translate("软件", source_lang="zh", target_lang="zh-tw")
+    assert r_zh.engine == "opencc" and r_zh.text == "軟體"
+    r_en = await router.translate("hello", source_lang="en", target_lang="zh-tw")
+    assert r_en.engine == "ai" and r_en.text == "繁體譯文"
+
+
+@pytest.mark.asyncio
+async def test_ai_engine_prompt_carries_variant_hint():
+    """LLM 线对 zh-tw/yue 必须带风格钉子（防简体字漏出/普通话书面语换皮）。"""
+    captured = {}
+
+    class _Cap:
+        async def chat(self, prompt, overrides=None):
+            captured["prompt"] = prompt
+            return "唔該晒你"
+
+    eng = AIEngine(_Cap())
+    r = await eng.translate("谢谢你", source_lang="zh", target_lang="yue")
+    assert r.ok is True
+    assert "Cantonese" in captured["prompt"]          # LANG_NAMES 显名
+    assert "粵語口語" in captured["prompt"]            # variant_style_hint 已注入
+
+    class _CapTw:
+        async def chat(self, prompt, overrides=None):
+            captured["prompt"] = prompt
+            return "謝謝你"
+
+    eng_tw = AIEngine(_CapTw())
+    r2 = await eng_tw.translate("谢谢你", source_lang="zh", target_lang="zh-tw")
+    assert r2.ok is True
+    assert "Traditional Chinese" in captured["prompt"]
+    assert "繁體中文" in captured["prompt"]

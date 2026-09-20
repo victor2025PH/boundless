@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>无界科技 BOUNDLESS · 品牌首屏（幻颜背景素材）</title>
+<style>
+  /* ========= 基础（与官网 tailwind 令牌同源）========= */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --ink-950: #05060f;
+    --cyan: #22d3ee;
+    --violet: #8b5cf6;
+    --pink: #ec4899;
+    /* 16:9 默认排版尺度（CSS 1920×1080，DPR2 输出 4K） */
+    --kicker-size: 17px;
+    --logo-size: 196px;
+    --halo-size: 300px;
+    --ring1: 340px;
+    --ring2: 440px;
+    --title-size: 100px;
+    --tagline-size: 27px;
+    --headline-size: 42px;
+    --sub-size: 20.5px;
+    --sub-max: 900px;
+    --gap-logo-title: 40px;
+  }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: var(--ink-950);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #fff;
+  }
+  /* 9:16 竖版尺度 */
+  body[data-aspect="9x16"] {
+    --kicker-size: 19px;
+    --logo-size: 250px;
+    --halo-size: 380px;
+    --ring1: 430px;
+    --ring2: 560px;
+    --title-size: 108px;
+    --title-en-size: 76px;
+    --tagline-size: 30px;
+    --headline-size: 40px;
+    --sub-size: 22px;
+    --sub-max: 820px;
+    --gap-logo-title: 52px;
+  }
+
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  /* ========= 深空星层（官网 star-layer 同款贴片）========= */
+  .star-layer { position: absolute; background-repeat: repeat; }
+  .star-1 {
+    inset: -260px;
+    background-image:
+      radial-gradient(1px 1px at 25px 35px, rgba(255,255,255,.5) 50%, transparent 100%),
+      radial-gradient(1px 1px at 110px 80px, rgba(255,255,255,.34) 50%, transparent 100%),
+      radial-gradient(1px 1px at 190px 45px, rgba(255,255,255,.44) 50%, transparent 100%),
+      radial-gradient(1px 1px at 60px 150px, rgba(255,255,255,.3) 50%, transparent 100%),
+      radial-gradient(1px 1px at 150px 200px, rgba(255,255,255,.46) 50%, transparent 100%),
+      radial-gradient(1px 1px at 230px 130px, rgba(255,255,255,.32) 50%, transparent 100%),
+      radial-gradient(1px 1px at 90px 240px, rgba(255,255,255,.4) 50%, transparent 100%),
+      radial-gradient(1px 1px at 210px 220px, rgba(255,255,255,.28) 50%, transparent 100%);
+    background-size: 260px 260px;
+  }
+  .star-2 {
+    inset: -340px;
+    background-image:
+      radial-gradient(1.5px 1.5px at 40px 60px, rgba(186,230,253,.85) 50%, transparent 100%),
+      radial-gradient(2px 2px at 170px 30px, rgba(255,255,255,.9) 50%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 280px 110px, rgba(196,181,253,.75) 50%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 100px 190px, rgba(255,255,255,.8) 50%, transparent 100%),
+      radial-gradient(2px 2px at 240px 260px, rgba(165,243,252,.8) 50%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 320px 200px, rgba(255,255,255,.65) 50%, transparent 100%);
+    background-size: 340px 340px;
+  }
+
+  /* ========= 极光光斑（官网 aurora-blob 同款；blur 滤镜预烘焙成径向渐变，
+     headless 无 GPU 时每帧软件光栅化 120px blur 是 15s/帧的元凶）========= */
+  .aurora-wrap { position: absolute; inset: 0; }
+  .blob { position: absolute; border-radius: 9999px; opacity: .38; }
+  .blob-1 { width: 900px; height: 900px; top: -340px; left: -300px;
+    background: radial-gradient(circle, rgba(139,92,246,.30), rgba(139,92,246,.10) 42%, transparent 72%); }
+  .blob-2 { width: 780px; height: 780px; top: 2%; right: -300px;
+    background: radial-gradient(circle, rgba(34,211,238,.25), rgba(34,211,238,.08) 42%, transparent 72%); }
+  .blob-3 { width: 720px; height: 720px; bottom: -270px; left: 22%;
+    background: radial-gradient(circle, rgba(236,72,153,.19), rgba(236,72,153,.06) 42%, transparent 72%); }
+  .blob-4 { width: 680px; height: 680px; top: 36%; right: 12%;
+    background: radial-gradient(circle, rgba(16,185,129,.15), rgba(16,185,129,.05) 42%, transparent 72%); }
+  /* 品牌区局部辉光：顶部青色 + 中央巨型紫晕（官网 BrandShowcase 同款） */
+  .glow-top { position: absolute; left: 50%; top: -6%; width: 720px; height: 720px;
+    transform: translateX(-50%); border-radius: 9999px;
+    background: radial-gradient(circle, rgba(34,211,238,.085), rgba(34,211,238,.03) 45%, transparent 72%); }
+  .glow-center { position: absolute; left: 50%; top: 50%; width: 1150px; height: 1150px;
+    transform: translate(-50%,-50%); border-radius: 9999px;
+    background: radial-gradient(circle, rgba(139,92,246,.055), rgba(139,92,246,.02) 48%, transparent 75%); }
+
+  /* ========= 粒子网络画布 ========= */
+  #net { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .7; }
+
+  /* ========= 透视网格地平线（官网 tech-grid 同款，收敛在底部）========= */
+  .grid-wrap { position: absolute; inset: 58% -20% -20% -20%; overflow: hidden;
+    transform: perspective(420px) rotateX(62deg); transform-origin: center top;
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.55), transparent 72%);
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,.55), transparent 72%); }
+  .grid-inner { position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,.12) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,.12) 1px, transparent 1px);
+    background-size: 56px 56px; }
+  .grid-scan { position: absolute; left: -5%; right: -5%; top: 0; height: 3px; opacity: 0;
+    background: linear-gradient(90deg, transparent, rgba(34,211,238,.75) 35%, rgba(139,92,246,.6) 65%, transparent);
+    box-shadow: 0 0 18px 2px rgba(34,211,238,.35); }
+
+  /* ========= 天幕斜向光带 / 流星 / 上升光尘（官网同款）========= */
+  .sweep { position: absolute; top: -30%; left: -60%; width: 55%; height: 160%; opacity: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(34,211,238,.05) 42%,
+      rgba(139,92,246,.08) 50%, rgba(34,211,238,.05) 58%, transparent 80%); }
+  .comet { position: absolute; width: 150px; height: 2px; border-radius: 9999px; opacity: 0;
+    background: linear-gradient(90deg, transparent, rgba(125,211,252,.05) 30%, rgba(125,211,252,.85) 82%, #fff);
+    filter: drop-shadow(0 0 6px rgba(125,211,252,.7)); }
+  .ember { position: absolute; bottom: -3vh; border-radius: 9999px; opacity: 0;
+    width: 3px; height: 3px; background: rgba(103,232,249,.75);
+    box-shadow: 0 0 6px 1px rgba(103,232,249,.4); }
+  .ember.v { background: rgba(196,181,253,.7); box-shadow: 0 0 6px 1px rgba(196,181,253,.38); }
+  .ember.p { background: rgba(244,114,182,.6); box-shadow: 0 0 6px 1px rgba(244,114,182,.32); }
+
+  /* ========= 中央内容 ========= */
+  .content { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; z-index: 5;
+    padding: 0 60px; }
+  .kicker { font-size: var(--kicker-size); letter-spacing: .34em; text-indent: .34em;
+    color: var(--cyan); text-transform: uppercase; font-weight: 500; }
+
+  .logo-stage { position: relative; margin-top: 34px; width: var(--ring2); height: calc(var(--logo-size) + 70px);
+    display: grid; place-items: center; }
+  .halo { position: absolute; width: calc(var(--halo-size) * 1.7); height: calc(var(--halo-size) * 1.7);
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(34,211,238,.155), rgba(34,211,238,.05) 45%, transparent 70%); }
+  .ring { position: absolute; border-radius: 9999px; }
+  .ring-1 { width: var(--ring1); height: var(--ring1); border: 1px solid rgba(255,255,255,.05); }
+  .ring-2 { width: var(--ring2); height: var(--ring2); border: 1px solid rgba(255,255,255,.04); }
+  .logo { position: relative; width: var(--logo-size); height: auto;
+    filter: drop-shadow(0 0 30px rgba(34,211,238,.35)); }
+
+  .title { margin-top: var(--gap-logo-title); font-size: var(--title-size); font-weight: 900;
+    letter-spacing: .01em; line-height: 1.08;
+    background-image: linear-gradient(110deg, #22d3ee, #8b5cf6, #ec4899, #22d3ee);
+    background-size: 200% auto; background-position: 33% 50%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-wrap: nowrap; white-space: nowrap; }
+  .title .en { letter-spacing: .12em; margin-left: .22em; }
+  body[data-aspect="9x16"] .title { white-space: normal; line-height: 1.12; }
+  body[data-aspect="9x16"] .title .cjk { display: block; letter-spacing: .06em; text-indent: .06em; }
+  body[data-aspect="9x16"] .title .en { display: block; margin-left: 0; margin-top: 10px;
+    font-size: var(--title-en-size); letter-spacing: .18em; text-indent: .18em; }
+
+  .tagline { margin-top: 22px; font-size: var(--tagline-size); color: #a7b0c8;
+    letter-spacing: .42em; text-indent: .42em; font-weight: 400; }
+
+  .headline { margin-top: 52px; font-size: var(--headline-size); font-weight: 800; color: #fff;
+    letter-spacing: .02em; }
+  .sub { margin-top: 20px; font-size: var(--sub-size); line-height: 1.85; color: #8e99b3;
+    max-width: var(--sub-max); }
+
+  .pill { margin-top: 46px; display: inline-flex; align-items: center; gap: 12px;
+    border: 1px solid rgba(34,211,238,.30); border-radius: 9999px; padding: 15px 30px;
+    background: linear-gradient(90deg, rgba(34,211,238,.10), rgba(139,92,246,.10));
+    box-shadow: 0 0 26px rgba(34,211,238,.10); }
+  .pill .inf { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 9999px;
+    background: rgba(34,211,238,.20); color: var(--cyan); font-size: 15px; }
+  .pill .zh { font-size: 19px; font-weight: 600; color: #fff; }
+  .pill .en { font-size: 12.5px; font-weight: 500; letter-spacing: .22em; color: rgba(34,211,238,.8);
+    text-transform: uppercase; }
+  .hint { margin-top: 18px; font-size: 14px; letter-spacing: .06em; color: #6b7590; }
+
+  body[data-aspect="9x16"] .pill { padding: 17px 34px; }
+  body[data-aspect="9x16"] .pill .zh { font-size: 21px; }
+  body[data-aspect="9x16"] .pill .en { font-size: 13.5px; }
+  body[data-aspect="9x16"] .hint { font-size: 16px; margin-top: 22px; }
+  body[data-aspect="9x16"] .sub { line-height: 1.95; }
+  body[data-aspect="9x16"] .headline { margin-top: 64px; }
+  body[data-aspect="9x16"] .content { padding: 0 90px; }
+
+  /* ========= 暗角 + 噪点（官网同款）========= */
+  .vignette { position: absolute; inset: 0; z-index: 8; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 34%, rgba(5,6,15,.76)); }
+  .noise { position: absolute; inset: 0; z-index: 9; opacity: .035; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+</style>
+</head>
+<body data-aspect="16x9">
+<div class="stage">
+  <div class="star-layer star-1" id="star1"></div>
+  <div class="star-layer star-2" id="star2"></div>
+
+  <div class="aurora-wrap" id="auroraWrap">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="glow-top"></div>
+    <div class="glow-center"></div>
+  </div>
+
+  <canvas id="net"></canvas>
+
+  <div class="grid-wrap"><div class="grid-inner" id="gridInner"><div class="grid-scan" id="gridScan"></div></div></div>
+
+  <div class="sweep" id="sweep"></div>
+  <span class="comet" id="comet1" style="top:14%; left:70%;"></span>
+  <span class="comet" id="comet2" style="top:32%; left:88%;"></span>
+  <span class="comet" id="comet3" style="top:7%; left:40%;"></span>
+  <div id="embers"></div>
+
+  <div class="content">
+    <div class="kicker">无界科技 · 品牌家族</div>
+    <div class="logo-stage" id="logoStage">
+      <div class="halo" id="halo"></div>
+      <div class="ring ring-1"></div>
+      <div class="ring ring-2"></div>
+      <img class="logo" id="logo" src="boundless-mark-512.png" alt="无界科技 BOUNDLESS">
+    </div>
+    <h1 class="title" id="title"><span class="cjk">无界科技</span><span class="en">BOUNDLESS</span></h1>
+    <div class="tagline">让沟通，无界</div>
+    <div class="headline">一个无界底座 · 九款产品 · 破八道边界</div>
+    <p class="sub">同一套私有化底座，打破触达、成交、规模、容貌、声音、身份、语言、缘运八道边界——九款产品按需单选，或组合成从获客到成交的完整闭环。</p>
+    <div class="pill">
+      <span class="inf">∞</span>
+      <span class="zh">无界底座</span>
+      <span class="en">BOUNDLESS ENGINE</span>
+    </div>
+    <div class="hint">9 款产品 · 三系一底座</div>
+  </div>
+
+  <div class="vignette"></div>
+  <div class="noise"></div>
+</div>
+
+<script>
+/* ============================================================
+ * 确定性动画驱动：window.__seek(t) 把整个画面推进到 t 秒。
+ * 主循环周期 T=12s，所有周期项均为 2π·k·t/T（k 为整数），
+ * 故 t=0 与 t=T 画面完全一致 → 逐帧导出即无缝循环视频。
+ * ============================================================ */
+const T = 12;
+const TAU = Math.PI * 2;
+const qs = new URLSearchParams(location.search);
+if (qs.get("aspect") === "9x16") document.body.dataset.aspect = "9x16";
+
+/* ---- 确定性伪随机（mulberry32）---- */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let z = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    z = (z + Math.imul(z ^ (z >>> 7), 61 | z)) ^ z;
+    return ((z ^ (z >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ---- 粒子网络（官网 ParticleField 同参：连线阈值/配色/尺寸）---- */
+const canvas = document.getElementById("net");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1, particles = [];
+
+function initNet() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const nine = document.body.dataset.aspect === "9x16";
+  const rand = mulberry32(nine ? 20260804 : 20260803);
+  const count = 132;
+  particles = Array.from({ length: count }, () => ({
+    x0: rand() * W,
+    y0: rand() * H,
+    ax: 16 + rand() * 38,
+    ay: 16 + rand() * 38,
+    kx: 1 + Math.floor(rand() * 2),
+    ky: 1 + Math.floor(rand() * 2),
+    px: rand() * TAU,
+    py: rand() * TAU,
+    tw: rand() * TAU,
+  }));
+}
+
+function drawNet(t) {
+  ctx.clearRect(0, 0, W, H);
+  const linkDist = 142;
+  const pos = particles.map(p => ({
+    x: p.x0 + p.ax * Math.sin(TAU * p.kx * t / T + p.px),
+    y: p.y0 + p.ay * Math.cos(TAU * p.ky * t / T + p.py),
+    a: 0.62 * (0.72 + 0.28 * Math.sin(TAU * 2 * t / T + p.tw)),
+  }));
+  for (let i = 0; i < pos.length; i++) {
+    for (let j = i + 1; j < pos.length; j++) {
+      const dx = pos[i].x - pos[j].x, dy = pos[i].y - pos[j].y;
+      const d = Math.hypot(dx, dy);
+      if (d < linkDist) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(120,160,255,${(0.20 * (1 - d / linkDist)).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.moveTo(pos[i].x, pos[i].y);
+        ctx.lineTo(pos[j].x, pos[j].y);
+        ctx.stroke();
+      }
+    }
+  }
+  for (const p of pos) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 1.4, 0, TAU);
+    ctx.fillStyle = `rgba(148,197,255,${p.a.toFixed(3)})`;
+    ctx.fill();
+  }
+}
+
+/* ---- 上升光尘：10 颗，进度=frac(t/T·n+φ) → 周期整除即无缝 ---- */
+const emberHost = document.getElementById("embers");
+const emberDefs = [
+  { left: 6,  n: 1, ph: 0.05, sway: 26,  cls: "" },
+  { left: 15, n: 1, ph: 0.45, sway: -20, cls: "v" },
+  { left: 26, n: 2, ph: 0.20, sway: 32,  cls: "" },
+  { left: 37, n: 1, ph: 0.72, sway: -28, cls: "p" },
+  { left: 47, n: 2, ph: 0.60, sway: 18,  cls: "" },
+  { left: 57, n: 1, ph: 0.30, sway: -34, cls: "v" },
+  { left: 68, n: 2, ph: 0.85, sway: 24,  cls: "" },
+  { left: 78, n: 1, ph: 0.15, sway: -18, cls: "p" },
+  { left: 88, n: 2, ph: 0.50, sway: 30,  cls: "" },
+  { left: 95, n: 1, ph: 0.90, sway: -26, cls: "v" },
+];
+const emberEls = emberDefs.map(d => {
+  const s = document.createElement("span");
+  s.className = "ember " + d.cls;
+  s.style.left = d.left + "%";
+  emberHost.appendChild(s);
+  return s;
+});
+function frac(x) { return x - Math.floor(x); }
+function emberSeek(t) {
+  const vh = H / 100;
+  emberDefs.forEach((d, i) => {
+    const p = frac(t / T * d.n + d.ph);
+    const y = -p * 105 * vh;
+    const x = d.sway * Math.sin(TAU * p);
+    let o = 0;
+    if (p < 0.08) o = p / 0.08 * 0.7;
+    else if (p < 0.55) o = 0.7 - (p - 0.08) / 0.47 * 0.15;
+    else if (p < 0.9) o = 0.55 - (p - 0.55) / 0.35 * 0.4;
+    else o = 0.15 - (p - 0.9) / 0.1 * 0.15;
+    emberEls[i].style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
+    emberEls[i].style.opacity = o.toFixed(3);
+  });
+}
+
+/* ---- 流星：每颗在主循环内一段窗口内飞过（still 时刻 t=3 全部隐身）---- */
+const cometDefs = [
+  { el: document.getElementById("comet1"), t0: 4.8,  dur: 1.25, ang: 152, dist: 0.72 },
+  { el: document.getElementById("comet2"), t0: 8.4,  dur: 1.35, ang: 161, dist: 0.58 },
+  { el: document.getElementById("comet3"), t0: 10.3, dur: 1.15, ang: 139, dist: 0.46 },
+];
+function cometSeek(t) {
+  for (const c of cometDefs) {
+    const p = (t - c.t0) / c.dur;
+    if (p < 0 || p > 1) { c.el.style.opacity = "0"; continue; }
+    const d = p * c.dist * W;
+    let o;
+    if (p < 0.08) o = p / 0.08 * 0.95;
+    else if (p < 0.75) o = 0.95 - (p - 0.08) / 0.67 * 0.25;
+    else o = 0.7 * (1 - (p - 0.75) / 0.25);
+    c.el.style.transform = `rotate(${c.ang}deg) translate3d(${d.toFixed(1)}px,0,0)`;
+    c.el.style.opacity = o.toFixed(3);
+  }
+}
+
+/* ---- 主 seek ---- */
+const star1 = document.getElementById("star1");
+const star2 = document.getElementById("star2");
+const auroraWrap = document.getElementById("auroraWrap");
+const blobs = auroraWrap.querySelectorAll(".blob");
+const gridInner = document.getElementById("gridInner");
+const gridScan = document.getElementById("gridScan");
+const sweep = document.getElementById("sweep");
+const logoStage = document.getElementById("logoStage");
+const halo = document.getElementById("halo");
+const title = document.getElementById("title");
+const isStill = qs.get("still") === "1";
+
+const blobMotion = [
+  { dx: 95,  dy: 70,  k: 1, ph: 0.0,  sk: 0.10, bp: 0.00 },
+  { dx: -85, dy: 95,  k: 1, ph: 0.28, sk: 0.09, bp: 0.30 },
+  { dx: 80,  dy: -75, k: 1, ph: 0.55, sk: 0.12, bp: 0.55 },
+  { dx: -70, dy: -85, k: 1, ph: 0.80, sk: 0.08, bp: 0.78 },
+];
+
+window.__seek = function (t) {
+  t = ((t % T) + T) % T;
+
+  /* 星层：轻微漂移 + 亮层闪烁 */
+  const s1 = Math.sin(TAU * t / T);
+  const c1 = Math.cos(TAU * t / T);
+  star1.style.transform = `translate3d(${(-14 * s1).toFixed(2)}px, ${(-10 * c1).toFixed(2)}px, 0)`;
+  star2.style.transform = `translate3d(${(20 * s1).toFixed(2)}px, ${(14 * c1).toFixed(2)}px, 0)`;
+  star2.style.opacity = (0.775 + 0.225 * Math.sin(TAU * 2 * t / T)).toFixed(3);
+
+  /* 极光：游走 + 呼吸 + 色相摆动 */
+  blobs.forEach((b, i) => {
+    const m = blobMotion[i];
+    const ph = TAU * (t / T * m.k + m.ph);
+    const x = m.dx * Math.sin(ph), y = m.dy * Math.cos(ph);
+    const sc = 1 + m.sk * Math.sin(ph);
+    b.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${sc.toFixed(3)})`;
+    b.style.opacity = (0.39 + 0.09 * Math.sin(TAU * (t / T + m.bp))).toFixed(3);
+  });
+  /* 色相摆动改为极光透明度错峰呼吸承担（全屏 hue-rotate 滤镜在软渲染下过重） */
+
+  /* 粒子网络 */
+  drawNet(t);
+
+  /* 网格：向观察者流动 + 扫描光带（每 6s 一次，2 次/循环） */
+  gridInner.style.backgroundPosition = `0 ${(frac(t / 6) * 56).toFixed(2)}px`;
+  const gp = frac(t / 6);
+  if (gp < 0.75) {
+    const q = gp / 0.75;
+    gridScan.style.transform = `translate3d(0, ${(q * H * 0.64).toFixed(1)}px, 0)`;
+    gridScan.style.opacity = (q < 0.06 ? q / 0.06 * 0.9 : 0.9 - q * 0.55).toFixed(3);
+  } else gridScan.style.opacity = "0";
+
+  /* 天幕光带：循环末段扫过一次 */
+  const sp = (t - 6.6) / 5.4;
+  if (sp > 0 && sp < 1) {
+    sweep.style.transform = `skewX(-14deg) translate3d(${(sp * 340).toFixed(1)}%, 0, 0)`;
+    sweep.style.opacity = (sp < 0.12 ? sp / 0.12 : sp > 0.8 ? (1 - sp) / 0.2 : 1) * 0.9;
+  } else sweep.style.opacity = "0";
+
+  /* 流星 + 光尘 */
+  cometSeek(t);
+  emberSeek(t);
+
+  /* logo 悬浮（6s 一摆，与官网 float 同频）+ 光晕呼吸 */
+  logoStage.style.transform = `translateY(${(-11 * Math.sin(TAU * t / 6)).toFixed(2)}px)`;
+  halo.style.opacity = (0.78 + 0.22 * Math.sin(TAU * t / 6 + 1.2)).toFixed(3);
+
+  /* 标题流光（6s 一循环，与官网 shimmer 同频；still 固定在最佳相位） */
+  if (!isStill) {
+    title.style.backgroundPosition = `${(frac(t / 6) * 200).toFixed(2)}% 50%`;
+  }
+};
+
+/* ---- 就绪信号：字体 + logo 解码完成 ---- */
+window.__ready = false;
+Promise.all([
+  document.fonts ? document.fonts.ready : Promise.resolve(),
+  document.getElementById("logo").decode ? document.getElementById("logo").decode().catch(() => {}) : Promise.resolve(),
+]).then(() => {
+  initNet();
+  window.__seek(3.0);
+  window.__ready = true;
+});
+
+/* ---- 手动预览：?live=1 时 rAF 播放 ---- */
+if (qs.get("live") === "1") {
+  const t0 = performance.now();
+  (function loop() {
+    if (window.__ready) window.__seek(((performance.now() - t0) / 1000) % T);
+    requestAnimationFrame(loop);
+  })();
+}
+window.addEventListener("resize", () => { initNet(); window.__seek(3.0); });
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "instagram-web-login-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Instagram 个人号网页托管登录 + 收发微服务（Playwright 加载 instagram.com；非官方通道，风险自负）",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install chromium",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "playwright": "^1.47.0"
+  }
+}

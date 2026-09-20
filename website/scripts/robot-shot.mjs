@@ -24,13 +24,13 @@ const clip = { x: 1440 - 420, y: 900 - 460, width: 420, height: 460 };
 
 await page.screenshot({ path: `${OUT}/1-idle.png`, clip });
 
-// 悬停触发挥手：抬臂完成但手指刚开始展开
+// 悬停触发挥手：抬臂完成但指荚刚开始展开
 const bot = page.locator(".ai-sprite-container [role='button']");
 await bot.hover();
 await page.waitForTimeout(450);
 await page.screenshot({ path: `${OUT}/2-wave-early.png`, clip });
 
-// 挥手中段：五指全开 + 腕部摆动
+// 挥手中段：三指荚扇形全开 + 腕部摆动
 await page.waitForTimeout(900);
 await page.screenshot({ path: `${OUT}/3-wave-mid.png`, clip });
 await page.waitForTimeout(500);

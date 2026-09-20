@@ -8,6 +8,7 @@
 // 收件人：getAdminChats()（env TELEGRAM_CHAT_ID ∪ admin_chats.json 绑定），与 health-watchdog 同源。
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminChats } from "@/lib/admin-store";
+import { card } from "@/lib/tg-card";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,7 +50,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "no_recipients", sent: 0 }, { status: 200 });
   }
 
-  const msg = source ? `[${source}] ${text}` : text;
+  const msg = card({
+    sev: "warn",
+    cat: "机器运维",
+    title: source ? `${source} 运维告警` : "机器运维告警",
+    body: text,
+    source: "五机(GPU/服务器) · 经官网中继",
+    rawTag: source || undefined,
+  });
   let sent = 0;
   for (const chat of chats) {
     try {

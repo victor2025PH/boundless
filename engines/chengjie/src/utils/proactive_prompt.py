@@ -5,16 +5,172 @@
 朋友发消息」。对晨/晚安这种**每天到点的日常问候**，这个「久别重逢」框定会把文案带偏
 （生成出「好久不见」式的生分感）。本模块按 ``plan.mode`` 给出贴合的框定：
 - ``ritual_morning`` / ``ritual_night`` → 「每天都会惦记 TA 的人，发一句平常的早/晚安」
-- 其余（follow_up / gentle_checkin / story_*）→ 「主动给许久未联系的朋友发消息」
+- 其余（follow_up / gentle_checkin / story_*）→ 按**真实沉默时长**分档框定
+  （P0 2026-07-29：此前一律「许久未联系」，沉默 4 小时也被框成久别重逢 →
+  LLM 稳定产出「好久没联系」开场；现在几小时/几天/几周/久别各说各话）。
 
 只拼 prompt、零 IO、不调 AI；真实文案由上层把本串喂给 ``ai_client.chat`` 产出。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import time
+import zlib
+from typing import Any, Dict, List, Optional
+
+from src.utils.proactive_topic import (
+    GAP_FEW_DAYS,
+    GAP_LONG,
+    GAP_SAME_DAY,
+    GAP_WEEK,
+    silence_gap_bucket,
+    silence_gap_phrase,
+)
 
 _RITUAL_SLOT_LABEL = {"ritual_morning": "早安", "ritual_night": "晚安"}
+
+# ── 晨/晚安当日切入角轮换（P1 2026-08-05）────────────────────────────────────
+# 实锤：ritual 框定「发一句平常的问候」→ LLM 稳定产出「早安，昨晚睡得还好吗」
+# 级别的安全壳（几天下来同一客户听出规律=机器人证据）。给每天配一个确定性切入角
+# （crc32(会话#日期)，与 checkin_angle/scene 轮换同哲学）：同会话同日恒定（15min
+# tick 重试不换角、缓存/预渲染友好），明天自动换；有悬空话头要接时不注入（接茬
+# 本身就是今天的切入角）。角度全部是「自己的状态/所见」而非问句壳——反编造约束
+# 仍然生效（角度是「说什么方向」，不是可断言的事实）。
+_RITUAL_MORNING_ANGLES = (
+    "从你自己刚醒来的状态说起（没睡醒/被闹钟叫醒/赖了会儿床）",
+    "从今天的天气或窗外的光线说起",
+    "从早餐或咖啡说起（你正要吃什么、想吃什么）",
+    "顺嘴提一句你今天的一个小安排",
+    "从你自己昨晚的睡眠或做的梦说起（说你自己的，别查户口）",
+    "关心TA今天的安排，用具体一点的问法（别问「最近怎么样」）",
+    "从你路上/楼下看到的一件小事说起",
+)
+_RITUAL_NIGHT_ANGLES = (
+    "从你刚做完的事说起（洗完澡/收拾完/刚躺下）",
+    "从你今天最累或最开心的一瞬间说起（你自己的）",
+    "从你明天的一个小期待说起",
+    "关心TA今天累不累，用具体一点的问法（别问「怎么样」）",
+    "从窗外的夜色或天气说起",
+)
+
+
+def _ritual_angle(mode: str, salt: str, now: Optional[float] = None) -> str:
+    """当日切入角（确定性轮换）。非 ritual mode / 空池 → ""。"""
+    pool = (_RITUAL_MORNING_ANGLES if mode == "ritual_morning"
+            else _RITUAL_NIGHT_ANGLES if mode == "ritual_night" else ())
+    if not pool:
+        return ""
+    day = time.strftime(
+        "%Y-%m-%d",
+        time.localtime(now if now is not None else time.time()))
+    return pool[zlib.crc32(f"{salt}#{day}".encode("utf-8")) % len(pool)]
+
+
+# ── 反「AI 问候腔」硬约束（实施84 P0-5c，2026-08-29 老板点名「问候要像真人，
+# 不要虚假的问候像AI一样」）──────────────────────────────────────────────────
+# LLM 中文问候的最大公约数是祝愿体/客服体/加油体（「新的一天元气满满」「记得吃
+# 早餐多喝水」「愿你有个好心情」）——真人给朋友发消息从不这么说话，几天下来
+# 客户一眼识破规律。恒定注入到所有主动 mode 的组稿出口（本模块是 ritual /
+# checkin / follow_up / milestone 全管线唯一框定层）；节日/生日用弱化版——
+# 「祝你生日快乐」是正当用法，只禁贺卡腔不禁祝福本身。
+_ANTI_BOT_NOTE = (
+    "（说人话，别带机器腔：禁用「新的一天」「元气满满」「记得吃早餐/多喝水/"
+    "照顾好自己/注意身体」「愿你…/祝你…」这类祝愿腔、客服腔和加油打气的空话；"
+    "波浪号至多一个，emoji 至多一个且别放句首；两句话别写成工整对仗。"
+    "就写你会顺手敲出来的话，随意一点、甚至没头没尾一点都行。）\n"
+)
+_ANTI_BOT_NOTE_MILESTONE = (
+    "（说人话，别带机器腔：祝福要具体、像你自己会说的话，禁用「愿你的每一天"
+    "都…」式贺卡腔和排比句；波浪号至多一个，emoji 至多一个。）\n"
+)
+
+
+def _brevity_day(salt: str, now: Optional[float] = None) -> bool:
+    """「超短消息日」确定性掷签（约 3 天 1 天；实施84 P0-5c）。
+
+    真人问候的长度本来就忽长忽短——有时就发「起了没」三个字；天天 30 字
+    满格排比反而是机器特征。同会话同日恒定（15min tick 重试不换档、与切入角
+    轮换同哲学），明日自动重掷。只作用于 ritual/gentle_checkin 且无悬空话头时
+    （接茬有社交义务在身，不配超短档）。
+    """
+    day = time.strftime(
+        "%Y-%m-%d",
+        time.localtime(now if now is not None else time.time()))
+    return zlib.crc32(f"brev#{salt}#{day}".encode("utf-8")) % 3 == 0
+
+
+def _silence_header(name: str, plan: Dict[str, Any]) -> str:
+    """沉默回访类开场的框定：按真实沉默时长说人话，短档明令禁「久别重逢」腔。"""
+    bucket = str(plan.get("gap_bucket") or "")
+    silent_hours = plan.get("silent_hours")
+    if not bucket:
+        # 未带档位的旧调用方 / ask_*、story_* 等 opener：有 silent_hours 就现算，
+        # 连时长都没有则保守按「几天没聊」框定（绝不默认久别重逢）。
+        bucket = (silence_gap_bucket(silent_hours)
+                  if silent_hours is not None else GAP_WEEK)
+    gap = (f"（你们上次聊天距现在{silence_gap_phrase(silent_hours)}）"
+           if silent_hours else "")
+    if bucket == GAP_SAME_DAY:
+        return (
+            f"你是「{name}」，今天才和TA聊过，这会儿又想到TA，主动再说句话{gap}。"
+            "这不是久别重逢——绝不要用「好久没联系/好久不见」这类措辞。"
+        )
+    if bucket == GAP_FEW_DAYS:
+        return (
+            f"你是「{name}」，想主动给一两天没聊的TA发条消息{gap}——只是日常惦记，"
+            "不是久别重逢，别用「好久没联系」这类措辞。"
+        )
+    if bucket == GAP_LONG:
+        return f"你是「{name}」，正在主动给一位许久未联系的朋友发消息{gap}。"
+    return (
+        f"你是「{name}」，想主动给几天没聊的TA发条消息{gap}——像朋友忽然想起TA，"
+        "不是久别重逢的生分口吻。"
+    )
+
+
+def build_persona_clock_note(
+    place_label: str,
+    local_now: Any = None,
+    offset_hours: float = 0.0,
+) -> str:
+    """人设当地钟批注（纯函数，实施53 P2-2，2026-08-22）。
+
+    主动 prompt 的日历块按**调度钟**（服务器/经显式信号核实的客户钟）框定
+    问候时点——那半边是对的（晨安要落在对方的早上）；但海外人设**自己的状态**
+    （刚起床/在干嘛/「今天」指哪天）此前没有任何框定，LLM 顺着日历块把人设也
+    放进对方的时段（温哥华人设在对方早上说「我刚起床」——她当地是傍晚，且
+    两地日期可能差一天）。本批注只管「自己的状态」半边，与日历块显式分工，
+    不引入第二个「现在几点」的仲裁混乱（B 线双时钟教训，实施53 RC1）。
+
+    |offset_hours| < 3 或缺 place/时刻 → 返回 ""（近时区两个钟几乎重合，
+    注入=纯噪音；这与 ``persona_location.time_gap_line`` 同阈值）。
+    """
+    import datetime as _dt
+
+    label = str(place_label or "").strip()
+    if not label or not isinstance(local_now, _dt.datetime):
+        return ""
+    try:
+        if abs(float(offset_hours or 0.0)) < 3.0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    try:
+        from src.companion.persona_location import daypart_label as _daypart
+        part = _daypart(local_now.hour, "zh")
+    except Exception:
+        part = ""
+    part_seg = f"（{part}）" if part else ""
+    wd = "周" + "一二三四五六日"[local_now.weekday()]
+    return (
+        f"（你的当地钟——重要：你人在{label}，你那边现在是"
+        f"{local_now.month}月{local_now.day}日 {wd} "
+        f"{local_now:%H:%M}{part_seg}。上一条日历说的是对方那边的时点，"
+        "问候时点跟它走；但**你自己的状态**——刚做完什么、正在做什么、"
+        "接下来的安排、以及你说的「今天/明天」——一律按你这边的当地时间，"
+        "自然处可带「我这边」（如「我这边快半夜了」）；"
+        "绝不要把自己的作息放进对方的时段。）\n"
+    )
 
 
 def build_proactive_prompt(
@@ -25,12 +181,20 @@ def build_proactive_prompt(
     few_shot_block: str = "",
     peer_language: str = "",
     scene_note: str = "",
+    persona_style: str = "",
+    persona_clock_note: str = "",
+    self_state_note: str = "",
+    avoid_texts: Optional[List[str]] = None,
+    pending_inbound: Optional[List[str]] = None,
+    pending_inbound_age: str = "",
+    now: Optional[float] = None,
 ) -> str:
     """组装主动外发文案生成 prompt（按 mode 自适应框定）。绝不抛。
 
     Args:
         ai_name: AI 人设名。
-        plan: 发送计划，至少含 ``directive``；可选 ``mode`` / ``context_facts``。
+        plan: 发送计划，至少含 ``directive``；可选 ``mode`` / ``context_facts`` /
+            ``gap_bucket`` / ``silent_hours``（沉默类开场按后两者框定真实时长）。
         recent_context: 最近聊天上下文（已截断），供参考口吻，可空。
         few_shot_block: 人工认可样本拼成的风格示范块（见 build_few_shot_block），可空。
         peer_language: 对端会话语言代码（如 ``en``/``ja``；inbox conversations.language）。
@@ -38,19 +202,47 @@ def build_proactive_prompt(
             客户发中文开场+中文语音，一眼机器人）。
         scene_note: 生活照场景（英文短语，Phase17 文案-场景对齐）。非空表示本条消息
             会附一张"你在该场景的自拍"——提示 LLM 自然带到正在做的事，图文一体。
+        persona_style: 人设说话风格一行（personality.style / style_hint），可空。
+            主动消息与被动回复应是同一个「人」——此前只带名字，七个人设写出同一句
+            「好久没联系啦」。
+        persona_clock_note: 人设当地钟批注（``build_persona_clock_note`` 产物，
+            实施53 P2-2）。跨时区人设（时差 ≥3h）时非空：日历块管「问候时点」
+            （对方的钟），本批注管「人设自身状态」（自己的钟），显式分工防
+            LLM 在两个都正确的时间框架间随机横跳；近时区/无居住地恒空=零变化。
+        avoid_texts: 「禁止相似」负样本——最近主动发过但没得到回应的开场原文。
+            LLM 必须换切入点/句式（P0 反复读：生产实锤同句式 x3/x2/x2 连发）。
+        pending_inbound: 悬空话头（P0 2026-08-05）——TA 最后发的、我们一直没回的
+            那几句原文（时间升序，见 trailing_unanswered_inbound）。非空时本条消息
+            **必须先接住这个话头**再带问候；晨安 ritual 的字数上限随之放宽（30→40）。
+            实锤：客户 22:27「以后给你介绍做你老公」无人接，07:10 收到一条通用晨安
+            ——上下文明明在 prompt 里，但「发一句平常的问候」框定压制了接茬动机。
+        pending_inbound_age: 悬空话头的相对时间标签（如「昨天」「9小时前」），可空。
     """
     name = str(ai_name or "她")
     plan = plan or {}
     mode = str(plan.get("mode") or "")
     directive = str(plan.get("directive") or "")
+    pend = [str(t).strip()[:60] for t in (pending_inbound or [])
+            if str(t).strip()][-2:]
 
     if mode.startswith("ritual_"):
         slot = _RITUAL_SLOT_LABEL.get(mode, "问候")
         header = (
             f"你是「{name}」，正在像一个每天都会惦记着TA的人那样，给TA发一句平常的"
             f"{slot}问候——不是久别重逢，就是日常里每天一句的牵挂。"
+            "语气像随手发的微信消息，可以带语气词，别写成工整的书面句，句尾别用句号。"
         )
-        length = "不超过30字"
+        # 有悬空话头要接时放宽到 40 字：既回应又问候，30 字挤不下会顾此失彼
+        length = "不超过40字" if pend else "不超过30字"
+        # 2026-08-18 双池统一：directive 层（build_ritual_opener 素材化）已带
+        # 「开场切入」时本层让行——两套切入角同时注入会互相打架（一句说聊早餐
+        # 一句说聊天气，LLM 无所适从或硬缝两个方向）。directive 层池更全
+        # （天气素材联动 + 轻话题顶替），它在场即以它为准。
+        if not pend and "开场切入" not in directive:
+            # 无话头可接才配当日切入角（接茬本身就是今天的切入角）
+            _angle = _ritual_angle(mode, str(plan.get("conversation_id") or ""))
+            if _angle:
+                header += f"今天的切入角：{_angle}——自然带一下就好，别刻意。"
     elif mode.startswith("milestone_"):
         # 纪念日/节日：具体场合由 directive 承载，这里只给「为特别的日子发问候」的框定，
         # 同样避开「久别重逢」误导（节点是惦记着重要日子，不是好久没联系）。
@@ -60,7 +252,7 @@ def build_proactive_prompt(
         )
         length = "不超过40字"
     else:
-        header = f"你是「{name}」，正在主动给一位许久未联系的朋友发消息。"
+        header = _silence_header(name, plan)
         length = "不超过40字"
 
     prompt = (
@@ -68,6 +260,88 @@ def build_proactive_prompt(
         f"要求：只输出要发出去的那一句话本身，口语化、温暖、自然，{length}，"
         f"不要解释、不要加引号、不要署名。\n"
     )
+    # 反 AI 问候腔（实施84 P0-5c，恒定注入；节日/生日弱化版——祝福本身正当）
+    prompt += (_ANTI_BOT_NOTE_MILESTONE if mode.startswith("milestone_")
+               else _ANTI_BOT_NOTE)
+    # 超短消息日（仅问候类 mode、无悬空话头）：形态日变是真人感的一半——
+    # 内容再好，天天等长等结构照样被听出规律。
+    if (mode.startswith("ritual_") or mode == "gentle_checkin") and not pend:
+        if _brevity_day(str(plan.get("conversation_id") or ""), now):
+            prompt += (
+                "（今天就发一条超短的：5～12个字，像顺手敲出来的一句，"
+                "上面的切入方向可用可不用，一个短句甚至一个词也行。）\n"
+            )
+    # 反编造共同回忆硬约束（P1 2026-08-03 神马搜索事故主防线）：可以聊此刻所见所感、
+    # 可以说"想到你了"，但**绝不能凭空断言你们一起经历过的具体往事**——只有确有记载
+    # 的事才能提。没有依据时不许写「你以前…/我们上次…/还记得我们…」这类断言（真人
+    # 一眼识破"我们根本没这回事"，当场穿帮）。措辞刻意自包含、不指代"背景块"（避开
+    # test_no_optional_blocks_when_absent 的裸词断言）。后置 detect_fabricated_memory 兜底。
+    prompt += (
+        "（重要：你可以分享此刻的所见所感、可以自然说想到了TA，但绝不能编造你们"
+        "共同经历过的具体往事。没有确凿依据时，不要写「你以前…」「我们上次…」"
+        "「还记得我们…」这类断言，宁可只聊当下。）\n"
+    )
+    # 真实日历接地（2026-08-18「迎新表演」事故防线之三，无条件注入）：LLM 不知道
+    # 今天几号——8 月中旬编出「今天在排迎新表演」这类反季活动，唯有把真实日期
+    # 写进 prompt 才能拦在生成前（素材层 filter_seasonal_beats + 出站层
+    # present_claim_season_conflict 是另外两道）。
+    # 2026-08-19 补钟点（「上午 10:12 晚安」事故）：只给日期不给小时，LLM 在
+    # 非仪式开场里可能自由发挥「晚安/早安」——小时取 plan.local_hour（排程修复
+    # 后＝服务器钟或经显式信号核实的用户钟），缺失回落服务器当前小时。
+    _lt = time.localtime(now if now is not None else time.time())
+    _ph = plan.get("local_hour")
+    _hour = _ph if isinstance(_ph, int) and 0 <= _ph <= 23 else _lt.tm_hour
+    prompt += (
+        f"（真实日历：今天是{_lt.tm_mon}月{_lt.tm_mday}日，对方那边现在约"
+        f"{_hour}点。你提到自己在做的事、节令活动必须符合这个日期与季节，"
+        "问候语要符合这个钟点（上午别说晚安）——拿不准的就不要提。）\n"
+    )
+    # 跨时区人设的「自身状态」框定（实施53 P2-2）：紧跟日历块，两个时间框架
+    # 相邻且显式分工（问候时点=对方的钟 / 自己的状态=自己的钟）。
+    _pcn = str(persona_clock_note or "").strip()
+    if _pcn:
+        prompt += _pcn + "\n"
+    # B52（实施64 P1-2，`_287`）：自己上一轮亲口说过的状态（要睡了/去健身…）
+    # 必须衔接——proactive 开场是最高发的「装没说过」翻车面（睡前说晚安、
+    # 早上开场却像无事发生）。块由 self_state.self_state_note 产出（TTL 窗内
+    # 才非空），此处有块即消费。
+    _ssn = str(self_state_note or "").strip()
+    if _ssn:
+        prompt += _ssn + "\n"
+    # 已读不回 → 无压力文体（P1 2026-08-18）：TA 看过消息但没回，这是软拒绝
+    # 信号——追问「怎么不回/在吗」是加压，真人朋友的做法是发一条不需要回答的
+    # 轻分享，把回不回的主动权还给对方。
+    if (str(plan.get("read_state") or "") == "read"
+            and int(plan.get("unanswered_streak") or 0) > 0):
+        prompt += (
+            "（TA 看到过你之前的消息但一直没回——这条只做无压力的轻分享：说说"
+            "你自己的近况或所见就好，句末不要问号，不要出现「在吗/忙吗/怎么"
+            "不回」这类催促、追问或求回复的话。）\n"
+        )
+
+    # 悬空话头接茬（P0 2026-08-05）：TA 最后说的话没人回过 → 本条必须先接住。
+    # 放在所有可选块最前——这是比问候本身更高优先级的社交义务（真人绝不会
+    # 对着没接的话装没看见，径直说「早安，昨晚睡得还好吗」）。
+    if pend:
+        age_seg = (f"TA {pending_inbound_age}说的" if pending_inbound_age
+                   else "TA 之前说的")
+        prompt += (
+            f"\n（❗最要紧：{age_seg}下面这几句话，你一直还没回——这条消息必须先"
+            "自然地接住这个话头（认真回应或顺着打趣都行，绝不能装没看见），"
+            "再顺势带出你本来想说的问候）：\n- " + "\n- ".join(pend) + "\n"
+        )
+
+    ps = str(persona_style or "").strip()
+    if ps:
+        prompt += f"（你的说话风格：{ps}——按这个风格说，但别提「风格」本身。）\n"
+
+    avoid = [str(t).strip() for t in (avoid_texts or []) if str(t).strip()][:4]
+    if avoid:
+        prompt += (
+            "\n（⚠ 你之前主动发过下面这些开场，TA 还没有回应。这次必须换一个"
+            "完全不同的切入点和句式——不要再用「问最近怎么样/还好吗」的问候壳子，"
+            "意思或句式与它们雷同的话都不要说）：\n- " + "\n- ".join(avoid) + "\n"
+        )
 
     sc = str(scene_note or "").strip()
     if sc:
@@ -78,7 +352,16 @@ def build_proactive_prompt(
         )
 
     lang = str(peer_language or "").strip().lower()
-    if lang and lang not in ("zh", "zh-cn", "zh-tw", "zh-hans", "zh-hant", "unknown"):
+    _ZH_FAMILY = ("zh", "zh-cn", "zh-tw", "zh-hans", "zh-hant")
+    if lang in _ZH_FAMILY:
+        # P1 语言锚补口（2026-08-03 实锤：会话 language=zh 的用户历史里混着
+        # 日语探针消息，晨安 ritual 生成时 LLM 跟着上下文写出「おはよう～」。
+        # 此前只对非中文加硬约束，zh 完全裸奔——中文会话同样要钉死）。
+        prompt += (
+            "（TA 平时用中文和你聊天——这句话必须用中文写，"
+            "即使下方聊天记录里出现日语/英语等别的语言，也不要跟着换语言。）\n"
+        )
+    elif lang and lang != "unknown":
         _names = {"en": "英语", "ja": "日语", "ko": "韩语", "th": "泰语",
                   "vi": "越南语", "id": "印尼语", "ms": "马来语", "es": "西班牙语",
                   "pt": "葡萄牙语", "fr": "法语", "de": "德语", "ru": "俄语",
@@ -86,7 +369,7 @@ def build_proactive_prompt(
         _label = _names.get(lang, lang)
         prompt += (
             f"（TA 平时用{_label}和你聊天——这句话必须用{_label}写，"
-            f"绝不要用中文。）\n"
+            f"绝不要用中文，也不要跟着聊天记录里的其他语言换语言。）\n"
         )
 
     facts = [
@@ -98,10 +381,12 @@ def build_proactive_prompt(
             "绝不要罗列、不要逐条追问）：\n- " + "\n- ".join(facts[:3]) + "\n"
         )
     if recent_context:
-        prompt += f"\n（可参考你们最近的聊天，但不要复读原话）：\n{recent_context}\n"
+        prompt += (
+            "\n（下面是你们最近的聊天记录，「你」开头的是你自己说过的话。"
+            f"参考语境和称呼习惯，但不要复读原话）：\n{recent_context}\n")
     if few_shot_block:
         prompt += few_shot_block
     return prompt
 
 
-__all__ = ["build_proactive_prompt"]
+__all__ = ["build_persona_clock_note", "build_proactive_prompt"]

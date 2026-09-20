@@ -9,6 +9,18 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger("ContextStore")
 
+
+def make_context_key(user_id: str, account_id: str = "") -> str:
+    """ContextStore 主键：多协议号同 peer 必须带 account_id，否则双号串话。
+
+    无 account_id / ``default`` → 保持旧裸 ``user_id``（单号/桌面路径零回归）。
+    """
+    uid = str(user_id or "").strip()
+    acct = str(account_id or "").strip()
+    if not acct or acct == "default":
+        return uid
+    return f"{acct}:{uid}"
+
 _PERSIST_KEYS = frozenset({
     "user_id", "last_message", "last_reply", "last_reply_time",
     "recent_replies",
@@ -19,6 +31,11 @@ _PERSIST_KEYS = frozenset({
     "_conversation_history", "_conversation_summary", "_user_profile",
     "_intent_chain", "_case_id",
     "companion_relationship",
+    # 会话语言契约（lang_policy）：用户明确请求的回复语言 + 请求时书写语言。
+    # 必须跨重启持久——「说了用日语」重启后失忆等于事故复发。
+    "user_lang_pref", "user_lang_pref_input",
+    # 会话当前语言（粘滞基准）：弱证据消息（ok/whatsapp/emoji)靠它保持语言稳定
+    "reply_lang",
 })
 
 _NON_PERSIST = frozenset({
@@ -34,6 +51,14 @@ _NON_PERSIST = frozenset({
     "funnel_stage",        # W3-3M: injected by runner, not persistent
     "_bond_level_block",   # Phase ②: per-request 关系成长厚度/里程碑感知块
     "_story_block",        # Phase ③: per-request 剧情场景导演指令（story_state 才持久）
+    "_voice_lang_suspect",  # lang_policy: per-request 可疑语音转写标记
+    "_voice_asr_suspect",   # asr_suspect: per-request 转写置信度可疑原因码（ASR P1）
+    "_bazi_block",         # companion.bazi: 每轮注入前 pop 重建，落盘只是死重
+    "_goal_block",         # companion.goals: 同上（目标态在 marketing_goals.db 才持久）
+    "_goal_cta",           # companion.goals: 链接纪律档位暂存，出站守卫读后即焚
+    "_camp_block",         # #147: 自家阵营在推活动块，每轮从 site_catalog 重建
+    "_known_profile_block",  # B50: 每轮从 episodic 重建（事实源在记忆库）
+    "_self_state_block",     # B52: 每轮按 _self_state_log(持久) + TTL 重建
 })
 
 
@@ -48,6 +73,10 @@ class ContextStore:
     CREATE INDEX IF NOT EXISTS idx_ctx_updated ON user_context(updated_at);
     """
 
+    # 案例兜底扫描的 TTL 缓存窗（秒）：徽章/待办条/案例页 30s 轮询/看门狗四方
+    # 都在调 iter_persisted_case_rows，裸 LIKE 全表扫不该按调用次数付费。
+    _CASE_SCAN_TTL_SEC = 20.0
+
     def __init__(self, db_path: Path, ttl_days: int = 30, max_memory: int = 500):
         self._db_path = db_path
         self._ttl = ttl_days * 86400
@@ -55,6 +84,8 @@ class ContextStore:
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._dirty: set = set()
         self._conn: Optional[sqlite3.Connection] = None
+        # (扫描时刻, rows[(uid, ctx)], 当时的 limit)；flush 到带案例的 ctx 时失效
+        self._case_scan_cache: Optional[tuple] = None
         self._init_db()
 
     def _init_db(self):
@@ -100,16 +131,38 @@ class ContextStore:
         self._evict_if_needed()
         return ctx
 
+    def peek(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """只读探视：已缓存 → 缓存对象；库里有 → 加载进缓存返回；都没有 → None。
+
+        与 ``get`` 的区别＝**不凭空建默认 ctx**。#146 对端删消息清理要对「已存在」
+        的上下文剔历史，用 get 会给每个被删消息的会话都造出一条空 ctx 并落盘。
+        """
+        uid = str(user_id or "")
+        if not uid:
+            return None
+        if uid in self._cache:
+            return self._cache[uid]
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM user_context WHERE user_id = ? LIMIT 1", (uid,)
+            ).fetchone()
+        except Exception:
+            return None
+        return self.get(uid) if row else None
+
     def mark_dirty(self, user_id: str):
         self._dirty.add(user_id)
 
     def flush(self, user_id: str = ""):
         targets = [user_id] if user_id else list(self._dirty)
         now = time.time()
+        case_touched = False
         for uid in targets:
             ctx = self._cache.get(uid)
             if not ctx:
                 continue
+            if ctx.get("_case_id"):
+                case_touched = True
             persist = {k: v for k, v in ctx.items()
                        if k in _PERSIST_KEYS or (k not in _NON_PERSIST and _is_serializable(v))}
             try:
@@ -121,6 +174,10 @@ class ContextStore:
             except Exception as e:
                 logger.debug("上下文持久化失败 %s: %s", uid, e)
             self._dirty.discard(uid)
+        if case_touched:
+            # 带案例的上下文刚落库 → 兜底扫描缓存失效（备注/结案/认领即时可见，
+            # 即便该 ctx 之后被逐出内存缓存也不受 TTL 窗拖累）
+            self._case_scan_cache = None
         try:
             self._conn.commit()
         except Exception:
@@ -140,6 +197,88 @@ class ContextStore:
         remove_count = len(self._cache) - self._max_memory // 2
         for uid, _ in sorted_users[:remove_count]:
             self._cache.pop(uid, None)
+
+    def iter_persisted_case_rows(self, exclude=(), limit: int = 300,
+                                 ttl: Optional[float] = None):
+        """列出 SQLite 里带 ``_case_id`` 的会话上下文 ``(uid, ctx)``。
+
+        /api/cases/active 的重启兜底：内存缓存重启即空，而案例要能被跟进到底。
+        LIKE 粗筛 + JSON 精筛；``exclude``（通常是缓存里已有的 uid）跳过；
+        **只读、不进缓存**——把整表拉进内存会挤掉活跃会话。
+
+        **TTL 缓存**（默认 20s，``ttl=0`` 强制重扫）：徽章、待办条、案例页 30s
+        轮询、看门狗四方共用本扫描，LIKE 全表扫不该按调用次数付费。正确性：
+        缓存后的写入经 flush 失效（见 flush）；仍在内存缓存的 ctx 由调用方
+        cache-first 合并覆盖（collect_case_rows 的 exclude），双保险。
+        返回行是缓存共享引用，**调用方只读勿改**。
+        """
+        if self._conn is None:
+            return []
+        now = time.time()
+        window = self._CASE_SCAN_TTL_SEC if ttl is None else max(0.0, float(ttl))
+        cached = self._case_scan_cache
+        if (cached is not None and (now - cached[0]) < window
+                and cached[2] >= int(limit)):
+            rows_all = cached[1]
+        else:
+            rows_all = []
+            try:
+                rows = self._conn.execute(
+                    "SELECT user_id, data FROM user_context WHERE data LIKE ? "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    ('%"_case_id"%', int(limit)),
+                ).fetchall()
+            except Exception:
+                return []
+            for uid, data in rows:
+                try:
+                    ctx = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(ctx, dict) and ctx.get("_case_id"):
+                    rows_all.append((uid, ctx))
+            self._case_scan_cache = (now, rows_all, int(limit))
+        ex = set(exclude or ())
+        return [(uid, ctx) for uid, ctx in rows_all if uid not in ex]
+
+    def iter_rows_with_key(self, json_key: str, limit: int = 300):
+        """列出含某个顶层键的会话上下文 ``(uid, ctx)``——内存缓存优先（未 flush 的最新态），
+        再补 SQLite 里的（LIKE 粗筛 + JSON 精筛，只读、不进缓存）。
+
+        J-10 三期给承诺账本跨客户汇总用（``_promise_log``）；与 :meth:`iter_persisted_case_rows`
+        同一哲学：把整表拉进内存会挤掉活跃会话，所以只按 LIKE 命中的行反序列化。
+        返回行是共享引用，**调用方只读勿改**。
+        """
+        key = str(json_key or "").strip()
+        if not key:
+            return []
+        out = []
+        seen = set()
+        for uid, ctx in list(self._cache.items()):
+            if isinstance(ctx, dict) and ctx.get(key):
+                out.append((uid, ctx))
+                seen.add(uid)
+        if self._conn is None:
+            return out
+        try:
+            rows = self._conn.execute(
+                "SELECT user_id, data FROM user_context WHERE data LIKE ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (f'%"{key}"%', max(1, int(limit))),
+            ).fetchall()
+        except Exception:
+            return out
+        for uid, data in rows:
+            if uid in seen:
+                continue
+            try:
+                ctx = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(ctx, dict) and ctx.get(key):
+                out.append((uid, ctx))
+                seen.add(uid)
+        return out
 
     def close(self):
         self.flush_all()

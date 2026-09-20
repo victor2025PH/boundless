@@ -1,0 +1,381 @@
+<script>
+/* ============================================================================
+   工作台公共基建（P0 页面优化，2026-07-23）——本分片被 workspace_base.html 头部
+   include，先于所有 body 脚本执行；全站工作台页面共享，无需各页重复实现。
+
+   1) window.apiFetch —— 统一请求层
+      背景：全站模板存在 100+ 个裸 fetch 调用点，无统一超时/重试/遥测。今晨实锤
+      事故：重启窗口的半开连接让 fetch 永不 settle → 悬死 promise 卡死轮询管线，
+      「重连中」横幅永久冻结。修复只点了 2 处轮询链；本层把「必然 settle」升级为
+      全站默认，并配 ratchet 门禁（tests/test_template_bare_fetch_ratchet.py）
+      禁止新增裸 fetch。
+      语义：与原生 fetch 完全同构（返回 Response、错误照抛），只额外提供——
+        - 默认 20s 硬超时（AbortController；opt.timeoutMs=0 关闭）；
+        - 调用方自带 init.signal 时不抢占其生命周期，超时改走 Promise.race
+          （请求继续、promise 必 settle，调用方自己的 abort 逻辑不受影响）；
+        - 仅网络层失败（TypeError/超时）可选重试 opt.retries（默认 0，HTTP 状态
+          码一律不重试——语义交还调用方）；
+        - 网络失败/超时时限流上报既有 /api/telemetry/frontend-error 遥测
+          （30s 节流，仅 {page, fn, type} 消毒字段，与哑按钮守卫同一后端计数）。
+
+   2) window.wsBanner —— 横幅仲裁器
+      背景：工作台同时存在多条状态横幅（AI 未配置 / AI 试用 / AI 降级 / 通道离线 /
+      重启冷却 + 收件箱连接条），此前各自 show/hide，可同时出现叠罗汉挤压工作区。
+      语义：register(id, prio, display) 登记；set(id, want) 声明「想显示」；
+      仲裁器保证**同一时刻最多渲染一条**（prio 最高者），其余保持 want 状态，
+      高优先级消失后自动回显。优先级约定：
+        conn-banner(100 页面连接) > ws-chandown(80 通道离线) >
+        ws-aidegrade(60 AI 降级) > ws-restartcool(40 重启冷却) >
+        ws-aiguide(20 配置引导) > ws-aitrial(18 托管试用)。
+   ============================================================================ */
+(function(){
+  'use strict';
+  /* ── 遥测限流：网络级失败才上报，30s 一条，绝不阻塞/抛错 ──
+     endpoint＝失败请求的 path（本地先剥查询串/hash，后端再消毒+数字掩码）：
+     没有它，「哪个接口在坏」完全无从归因（2026-07-29 事故：单会话 136 次
+     apiFetch 错误只知道页面不知道接口）。 */
+  var _lastBeacon = 0;
+  function _beacon(type, url){
+    try{
+      var now = Date.now();
+      if(now - _lastBeacon < 30000) return;
+      _lastBeacon = now;
+      if(!navigator.sendBeacon) return;
+      var ep = '';
+      try{ ep = String(url || '').split('?')[0].split('#')[0].slice(0, 200); }catch(_u){}
+      var body = JSON.stringify({page: location.pathname, fn: 'apiFetch',
+                                 type: String(type||'neterr'), endpoint: ep});
+      navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type:'application/json'}));
+    }catch(_e){}
+  }
+  function _sleep(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
+
+  /* ── 会话失效拦截（2026-08-08）──
+     背景：会话被服务端撤销（改密/角色调整/别处强制下线）后，已打开的页面只会
+     无限 401——仪表盘等无逐点 401 处理的页面看起来「全坏了」却零提示（实录：
+     老板对着 401 死循环的工作台判定「系统不能用」）。此处在 apiFetch choke point
+     统一兜底：同源 /api/ 请求 90s 窗口内 ≥2 次 401 → 顶部红条 + 「重新登录」
+     （带 next 回跳当前页）；任一成功响应即熄灭（重新登录回来自动恢复）。
+     刻意不自动跳转：收件箱可能有未发送的草稿输入，跳转=丢字。 */
+  var _sess401 = 0, _sess401First = 0;
+  function _sessionBanner(){
+    /* 实施75：优先走统一通知总线（右下置顶卡片 + 状态胶囊）；总线缺席（极早期
+       报错/独立片段）回落旧的顶部红条实现。 */
+    if(window.AITRNotify){
+      var _txt = window.T ? window.T('ws.session.expired_msg')
+        : 'Session expired; page data can no longer refresh.';
+      AITRNotify.ongoing.set('session', {text: _txt, tone: 'error'});
+      AITRNotify.notify({
+        severity: 'error', sticky: true, domKey: 'session', center: false,
+        text: _txt,
+        actions: [{label: (window.T ? window.T('ws.session.relogin_btn') : 'Sign in again'),
+          onClick: function(){
+            location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+          }}]
+      });
+      return;
+    }
+    var el = document.getElementById('ws-sessionexpired');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'ws-sessionexpired';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99990;display:none;' +
+        'align-items:center;justify-content:center;gap:12px;padding:9px 14px;' +
+        'background:#b3261e;color:#fff;font-size:13px;line-height:1.4;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,.25);';
+      var msg = document.createElement('span');
+      msg.textContent = window.T ? window.T('ws.session.expired_msg')
+        : 'Session expired; page data can no longer refresh.';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = window.T ? window.T('ws.session.relogin_btn') : 'Sign in again';
+      btn.style.cssText = 'flex:none;padding:4px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.7);' +
+        'background:rgba(255,255,255,.14);color:#fff;font-size:13px;cursor:pointer;font-weight:600;';
+      btn.addEventListener('click', function(){
+        location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+      });
+      el.appendChild(msg);
+      el.appendChild(btn);
+      (document.body || document.documentElement).appendChild(el);
+      window.wsBanner.register('ws-sessionexpired', 90, 'flex');
+    }
+    window.wsBanner.set('ws-sessionexpired', true);
+  }
+  /* ── 能力闸拒绝指路（P0-A3 2026-08-19）──
+     背景：能力未授予的 403（_deny_capability）此前只在各调用点当普通错误文案展示，
+     坐席撞闸=死胡同，也是最被浪费的「联系管理员开通/升级」时刻。后端将随下批在该
+     403 上带 X-Deny-Reason: capability 响应头（特性探测：旧后端无头=这里零行为变化）；
+     choke point 出一枚自动消失的底部提示统一指路，120s 节流防连点刷屏。 */
+  var _capLast = 0;
+  function _capToast(){
+    try{
+      var now = Date.now();
+      if(now - _capLast < 120000) return;
+      _capLast = now;
+      /* 实施75：走统一总线（右下）；缺席回落旧的底部中央提示 */
+      if(window.AITRNotify){
+        AITRNotify.notify({
+          severity: 'warn', center: false,
+          text: (window.T ? window.T('ws.cap.denied_msg')
+            : 'This capability is not enabled for your account; ask your admin to enable it.')
+        });
+        return;
+      }
+      var el = document.getElementById('ws-capdenied');
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'ws-capdenied';
+        el.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:99989;' +
+          'max-width:min(520px,calc(100vw - 32px));padding:10px 16px;border-radius:10px;' +
+          'background:rgba(15,23,42,.92);color:#fff;font-size:13px;line-height:1.5;' +
+          'box-shadow:0 8px 24px rgba(0,0,0,.35);display:none;';
+        (document.body || document.documentElement).appendChild(el);
+      }
+      el.textContent = window.T ? window.T('ws.cap.denied_msg')
+        : 'This capability is not enabled for your account; ask your admin to enable it.';
+      el.style.display = 'block';
+      setTimeout(function(){ try{ el.style.display = 'none'; }catch(_e){} }, 8000);
+    }catch(_e){}
+  }
+  function _noteAuth(res, url){
+    try{
+      if(!res || typeof res.status !== 'number') return;
+      var u = String(url || '');
+      if(u.indexOf('://') >= 0){
+        if(u.indexOf(location.origin + '/') !== 0) return;  /* 跨域请求不判 */
+        u = u.slice(location.origin.length);
+      }
+      if(u.indexOf('/api/') !== 0) return;
+      if(res.status === 403){
+        try{
+          if(res.headers && res.headers.get('X-Deny-Reason') === 'capability') _capToast();
+        }catch(_e){}
+      }
+      /* ── 额度拦截即时事件（quotawall v2，2026-08-21）──
+         后端在额度类 402/403 上带 X-AITR-Quota 机器头（license_chars / agent_chars，
+         与 X-Deny-Reason 同款特性探测）；这里只广播事件，弹不弹/怎么弹由
+         workspace_base 的 __wsQuotaWall 调度器统一治理（去抖/互斥/角色分流）。
+         旧后端 402 无头 → 本应用 402 只有授权字符池一种语义，按 license_chars 兜底；
+         无监听者（非工作台系页面）时事件自然空转，零行为。 */
+      if(res.status === 402 || res.status === 403){
+        var _qh = null;
+        try{ _qh = res.headers && res.headers.get('X-AITR-Quota'); }catch(_e){}
+        if(!_qh && res.status === 402) _qh = 'license_chars';
+        if(_qh){
+          try{
+            document.dispatchEvent(new CustomEvent('aitr:quota-blocked',
+              {detail:{source:String(_qh)}}));
+          }catch(_e){}
+        }
+      }
+      if(res.status === 401){
+        var now = Date.now();
+        if(!_sess401First || now - _sess401First > 90000){ _sess401First = now; _sess401 = 0; }
+        _sess401 += 1;
+        if(_sess401 >= 2) _sessionBanner();
+      }else if(res.ok){
+        _sess401 = 0; _sess401First = 0;
+        if(window.AITRNotify){
+          AITRNotify.ongoing.clear('session');
+          AITRNotify.dismiss('session');
+        }
+        if(document.getElementById('ws-sessionexpired')) window.wsBanner.set('ws-sessionexpired', false);
+      }
+    }catch(_e){}
+  }
+
+  function _oneAttempt(url, init, timeoutMs){
+    init = init || {};
+    // 无超时诉求（timeoutMs=0 显式关闭）或老浏览器缺 AbortController：原样透传
+    if(!timeoutMs || typeof AbortController === 'undefined') return fetch(url, init);
+    if(init.signal){
+      // 调用方自管 abort（如 loadThread 的切会话中断）：不抢 signal，
+      // 用 race 保证 promise 必 settle；底层请求交由调用方 controller 收尾。
+      var timer = null;
+      var timeoutP = new Promise(function(_res, rej){
+        timer = setTimeout(function(){
+          var err = new Error('apiFetch timeout after ' + timeoutMs + 'ms');
+          err.name = 'TimeoutError';
+          rej(err);
+        }, timeoutMs);
+      });
+      return Promise.race([fetch(url, init), timeoutP]).finally(function(){ clearTimeout(timer); });
+    }
+    var ctrl = new AbortController();
+    var to = setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, timeoutMs);
+    var merged = {};
+    for(var k in init){ if(Object.prototype.hasOwnProperty.call(init, k)) merged[k] = init[k]; }
+    merged.signal = ctrl.signal;
+    return fetch(url, merged).finally(function(){ clearTimeout(to); });
+  }
+
+  /**
+   * apiFetch(url[, init[, opt]]) → Promise<Response>
+   *   init: 标准 fetch init（method/headers/body/signal…），可省略。
+   *   opt : {timeoutMs:20000, retries:0, retryDelayMs:800}
+   * 错误语义与 fetch 一致：网络失败/超时 reject；HTTP 4xx/5xx 正常 resolve。
+   */
+  window.apiFetch = function(url, init, opt){
+    opt = opt || {};
+    var timeoutMs   = (opt.timeoutMs === undefined) ? 20000 : (opt.timeoutMs || 0);
+    var retries     = Math.max(0, opt.retries || 0);
+    var retryDelay  = Math.max(100, opt.retryDelayMs || 800);
+    var attempt = 0;
+    function run(){
+      return _oneAttempt(url, init, timeoutMs).then(function(res){
+        _noteAuth(res, url);
+        return res;
+      }).catch(function(err){
+        var isAbortByCaller = err && err.name === 'AbortError' && init && init.signal && init.signal.aborted;
+        if(!isAbortByCaller) _beacon(err && err.name === 'TimeoutError' ? 'timeout' : (err && err.name === 'AbortError' ? 'timeout' : 'neterr'), url);
+        if(isAbortByCaller || attempt >= retries) throw err;
+        attempt += 1;
+        return _sleep(retryDelay * attempt).then(run);
+      });
+    }
+    return run();
+  };
+
+  /* ── 横幅仲裁器 ── */
+  var _reg = {};
+  /* 状态中心 v2（2026-08-27）：＋N 角标从「悬停看名字」升级为「点开展开」。
+     展开态＝把所有 want=true 的横幅按各自 display 原地叠出——展示的是**真实
+     元素**（重登/登出/刷新等按钮原生可用），不做二手摘要面板；再点角标/点外部/
+     Esc/异常只剩一条 → 自动收回单槽仲裁。展开是用户显式动作，短暂「叠罗汉」
+     是他自己要看的清单，不违背单槽默认。 */
+  var _stackExpanded = false;
+  var _stackDismissWired = false;
+  function _applyBanners(){
+    var top = null, id;
+    for(id in _reg){
+      if(_reg[id].want && (top === null || _reg[id].prio > _reg[top].prio)) top = id;
+    }
+    var suppressed = [];
+    for(id in _reg){
+      if(id !== top && _reg[id].want) suppressed.push(id);
+    }
+    if(!suppressed.length) _stackExpanded = false;
+    for(id in _reg){
+      var el = document.getElementById(id);
+      if(!el) continue;
+      var show = _stackExpanded ? _reg[id].want : (id === top);
+      el.style.display = show ? (_reg[id].display || 'flex') : 'none';
+    }
+    _renderStackChip(top, suppressed);
+  }
+  function _wireStackDismiss(){
+    if(_stackDismissWired) return;
+    _stackDismissWired = true;
+    /* 捕获相位：点击落在任一可见横幅内（含角标自身）不收起——横幅上的按钮
+       要先能用；真正的「外点」才收。 */
+    document.addEventListener('click', function(e){
+      if(!_stackExpanded) return;
+      for(var id in _reg){
+        var el = document.getElementById(id);
+        if(el && el.style.display !== 'none' && el.contains(e.target)) return;
+      }
+      _stackExpanded = false;
+      _applyBanners();
+    }, true);
+    document.addEventListener('keydown', function(e){
+      if(_stackExpanded && e.key === 'Escape'){
+        _stackExpanded = false;
+        _applyBanners();
+      }
+    });
+  }
+
+  /* ── 折叠角标（P1-4）：被仲裁压掉的横幅不再"消失得无影无踪"——
+     在当前横幅右缘挂一枚「＋N」小角标，tooltip 列出被折叠的状态名，
+     当前横幅消失后它们本就会自动轮显（仲裁器语义），角标只是把这事"讲出来"。 ── */
+  var _BANNER_NAMES = {
+    'conn-banner':   function(){ return window.T ? window.T('ws.banner.name.conn')       : 'connection'; },
+    'ws-chandown':   function(){ return window.T ? window.T('ws.banner.name.chandown')   : 'channel'; },
+    'ws-aidegrade':  function(){ return window.T ? window.T('ws.banner.name.aidegrade')  : 'ai'; },
+    'ws-restartcool':function(){ return window.T ? window.T('ws.banner.name.restartcool'): 'maintenance'; },
+    'ws-expiry':     function(){ return window.T ? window.T('ws.banner.name.expiry')     : 'expiry'; },
+    'ws-delivblock': function(){ return window.T ? window.T('ws.banner.name.delivblock') : 'ai-unavailable'; },
+    'ws-aiguide':    function(){ return window.T ? window.T('ws.banner.name.aiguide')    : 'setup'; },
+    'ws-aitrial':    function(){ return window.T ? window.T('ws.banner.name.aitrial')    : 'trial'; }
+  };
+  function _renderStackChip(topId, suppressed){
+    var chip = document.getElementById('ws-banner-stack');
+    var host = topId ? document.getElementById(topId) : null;
+    if(!host || !suppressed.length){
+      if(chip) chip.style.display = 'none';
+      return;
+    }
+    if(!chip){
+      chip = document.createElement('span');
+      chip.id = 'ws-banner-stack';
+      chip.setAttribute('role', 'button');
+      chip.setAttribute('tabindex', '0');
+      chip.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);' +
+        'font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;cursor:pointer;' +
+        'background:rgba(0,0,0,.12);color:inherit;opacity:.85;white-space:nowrap;user-select:none;';
+      chip.addEventListener('click', function(){
+        _stackExpanded = !_stackExpanded;
+        if(_stackExpanded) _wireStackDismiss();
+        _applyBanners();
+      });
+      chip.addEventListener('keydown', function(e){
+        if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); chip.click(); }
+      });
+    }
+    if(chip.parentNode !== host) host.appendChild(chip);
+    try{
+      if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    }catch(_e){}
+    var names = [];
+    for(var i = 0; i < suppressed.length; i++){
+      var fn = _BANNER_NAMES[suppressed[i]];
+      names.push(fn ? fn() : suppressed[i]);
+    }
+    var n = suppressed.length;
+    if(_stackExpanded){
+      chip.textContent = '\uFF0D' + n;
+      chip.title = window.T ? window.T('ws.banner.collapse_t') : 'collapse';
+    }else{
+      chip.textContent = '\uFF0B' + n;
+      chip.title = (window.Tf
+        ? (window.Tf('ws.banner.more_title', {n: n, names: names.join(' / ')})
+           + ' ' + window.Tf('ws.banner.expand_t', {n: n + 1}))
+        : names.join(' / '));
+    }
+    chip.setAttribute('aria-label', chip.title);
+    chip.setAttribute('aria-expanded', _stackExpanded ? 'true' : 'false');
+    chip.style.display = 'inline-block';
+  }
+  window.wsBanner = {
+    register: function(id, prio, display){
+      if(!_reg[id]) _reg[id] = {prio: prio || 0, want: false, display: display || 'flex'};
+      else { _reg[id].prio = prio || _reg[id].prio; if(display) _reg[id].display = display; }
+    },
+    /** want=true 声明希望显示；仲裁后同刻只渲染最高优先级一条。 */
+    set: function(id, want, display){
+      if(!_reg[id]) _reg[id] = {prio: 0, want: false, display: display || 'flex'};
+      if(display) _reg[id].display = display;
+      _reg[id].want = !!want;
+      _applyBanners();
+    },
+    /** 当前实际显示中的横幅 id（无则 null），供文案联动判断。 */
+    shown: function(){
+      var top = null, id;
+      for(id in _reg){
+        if(_reg[id].want && (top === null || _reg[id].prio > _reg[top].prio)) top = id;
+      }
+      return top;
+    }
+  };
+  /* 预登记全站已知横幅（元素可能不在当前页，getElementById 为空时自动跳过） */
+  window.wsBanner.register('conn-banner',    100, 'block');
+  window.wsBanner.register('ws-chandown',     80, 'flex');
+  window.wsBanner.register('ws-aidegrade',    60, 'flex');
+  window.wsBanner.register('ws-delivblock',   70, 'flex');
+  window.wsBanner.register('ws-restartcool',  40, 'flex');
+  window.wsBanner.register('ws-expiry',       35, 'flex');
+  window.wsBanner.register('ws-uibuild',      30, 'flex');
+  window.wsBanner.register('ws-aiguide',      20, 'flex');
+  window.wsBanner.register('ws-aitrial',      18, 'flex');
+})();
+</script>

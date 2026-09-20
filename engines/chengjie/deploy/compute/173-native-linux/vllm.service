@@ -1,0 +1,22 @@
+# 参考副本——真实文件由 bootstrap_173.sh 按参数生成到 /etc/systemd/system/vllm.service
+# （改参数请改 bootstrap 的环境变量后重跑，别手改两处造成漂移）
+[Unit]
+Description=vLLM OpenAI server (qwen25-abl-awq)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=VLLM_NO_USAGE_STATS=1
+ExecStart=/opt/vllm/venv/bin/python -m vllm.entrypoints.openai.api_server \
+  --model /opt/models/qwen25-abl-awq \
+  --served-model-name qwen25-abl-awq \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.90
+Restart=always
+RestartSec=5
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

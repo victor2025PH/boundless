@@ -133,7 +133,8 @@ class _SM:
         self._send_ok = send_ok
         self.sent = []
 
-    def _episodic_storage_key(self, user_id_str, chat_id, platform=""):
+    def _episodic_storage_key(self, user_id_str, chat_id, platform="",
+                              account_id="", user_context=None):
         return f"u:{user_id_str}"
 
     async def _try_send_selfie_media(self, user_context, chat_id, image_path,

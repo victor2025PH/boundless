@@ -18,7 +18,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,8 @@ def service_base_url(config: Dict[str, Any]) -> str:
 
 
 def protocol_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    wa = pl.get("whatsapp", {}) or {}
-    return bool(wa.get("protocol_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch 注释）。
+    return resolve_login_switch(config, "platform_login.whatsapp.protocol_enabled")
 
 
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────
@@ -85,7 +84,9 @@ def make_provider(config: Dict[str, Any]):
             data = await _post_json(f"{base}/login/start", payload)
         except Exception as ex:  # noqa: BLE001
             logger.debug("[wa_baileys] start 调用失败", exc_info=True)
-            return {"instruction": f"无法连接 WhatsApp 协议服务（{ex}）。请确认 Baileys 微服务已启动。"}
+            # 同 messenger_web：不带 reason_code 上游无从判定失败，会话只能挂到 TTL 耗尽。
+            return {"instruction": f"无法连接 WhatsApp 协议服务（{ex}）。请确认 Baileys 微服务已启动。",
+                    "reason_code": "service_down"}
 
         login_id = str(data.get("login_id") or "")
         qr_image = str(data.get("qr_image") or "")
@@ -101,9 +102,18 @@ def make_provider(config: Dict[str, Any]):
             aid = str(res.get("account_id") or "")
             if st == "authorized" and aid:
                 try:
+                    # merge_meta：只登记 baileys_login_id，绝不整块覆盖 meta——
+                    # 2026-07-23 事故：重登录抹掉 persona_id 绑定 → 新好友回落
+                    # 默认人设 + 错语言音色（客户投诉"老是讲日语"）。
                     get_account_registry().upsert(
                         "whatsapp", aid, mode="protocol", status="online",
-                        meta={"baileys_login_id": login_id})
+                        meta={"baileys_login_id": login_id}, merge_meta=True)
+                    try:
+                        from src.ai.persona_voice import ensure_account_default_persona
+                        ensure_account_default_persona(
+                            get_account_registry(), "whatsapp", aid, config)
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] 注册表写入失败", exc_info=True)
                 # P4 身份化：Baileys 微服务若在 status 里回传 pushname/name → 富集自身昵称
@@ -117,9 +127,22 @@ def make_provider(config: Dict[str, Any]):
                         config=config)
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] self_profile 富集失败（忽略）", exc_info=True)
-            return {"status": st, "account_id": aid,
-                    "detail": str(res.get("detail") or ""),
-                    "qr_image": str(res.get("qr_image") or "")}
+            out: Dict[str, Any] = {
+                "status": st, "account_id": aid,
+                "detail": str(res.get("detail") or ""),
+                "qr_image": str(res.get("qr_image") or ""),
+                # #181（J-6 B-2）实时提示码：边车 scan-signal 判出配对期 DNS 连败
+                # （getaddrinfo ENOTFOUND 被 Baileys 包成 408）→ hint_code="dns_retry"，
+                # 非终态、可来回变，空值也照落（与 messenger/instagram 桥接同口径）。
+                "hint_code": str(res.get("hint_code") or ""),
+            }
+            try:
+                dns_fails = int(res.get("pairing_dns_fails") or 0)
+            except (TypeError, ValueError):
+                dns_fails = 0
+            if dns_fails > 0:
+                out["pairing_dns_fails"] = dns_fails
+            return out
 
         async def _cancel(session: Any) -> None:
             try:
@@ -131,6 +154,8 @@ def make_provider(config: Dict[str, Any]):
             "qr_image": qr_image,
             "qr_url": qr_url,
             "instruction": "用手机 WhatsApp：设置 → 已关联的设备 → 关联新设备，扫描二维码。",
+            # i18n 键随会话下发：英文坐席按键取本地化指引，raw instruction 仅兜底
+            "instruction_key": "inbox.connect.instr_wa_protocol",
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},

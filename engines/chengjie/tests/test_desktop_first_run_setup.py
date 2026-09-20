@@ -42,13 +42,26 @@ class TestDesktopMinSeed:
 
     def test_dangerous_subsystems_not_enabled(self):
         data = yaml.safe_load(MIN_SEED.read_text(encoding="utf-8"))
-        for key in ("line_rpa", "messenger_rpa", "whatsapp_rpa", "contacts",
-                    "platform_login", "monetization", "companion", "protocol"):
+        # platform_login 自 2026-07 起是**刻意**随包开启的（「下载即可用」，账号接入
+        # 是用户装完第一件事）；它「开关开了但交付物没进包」的风险由专门门禁
+        # test_desktop_seed_deliverable.py 钉住，故移出本清单。
+        # companion 保留：只防顶层 companion.enabled 之类的粗暴全开；其嵌套功能键
+        # （goals 基线该开 / selfie·proactive·bazi 等禁入）由
+        # test_desktop_seed_visibility.py 的 PRODUCT_BASELINE / MUST_STAY_OFF 管辖。
+        # contacts 自 2026-08-20 起**刻意**以「精简档」进基线（种子头部注释 + contacts 段：
+        # mode: lite 是硬闸，衰减/KPI/RPA hooks/Mobile Bridge 一律不启动），故移出清单，
+        # 改钉「开了就必须是 lite」（2026-09-11 收口：本清单自 07-15 起未随产品决策更新）。
+        for key in ("line_rpa", "messenger_rpa", "whatsapp_rpa",
+                    "monetization", "companion", "protocol"):
             sub = data.get(key)
             if sub is None:
                 continue  # 未列出 = 走代码默认（关）
             assert not (isinstance(sub, dict) and sub.get("enabled")), (
                 f"最小种子不得显式开启 {key}")
+        contacts = data.get("contacts")
+        if isinstance(contacts, dict) and contacts.get("enabled"):
+            assert str(contacts.get("mode") or "").lower() == "lite", (
+                "最小种子的 contacts 只允许精简档（mode: lite）")
 
     def test_required_sections_for_validation(self):
         data = yaml.safe_load(MIN_SEED.read_text(encoding="utf-8"))
@@ -280,10 +293,12 @@ def test_translation_service_rebind_ai_client():
 
 class TestFrontendWiring:
     def test_workspace_base_guide_bar(self):
+        # 实施75 batch2：引导横幅退役顶部，改右下卡片提示（去配置/先不管）
         src = (REPO / "src" / "web" / "templates" / "workspace_base.html").read_text(encoding="utf-8")
-        assert 'id="ws-aiguide"' in src
+        assert 'id="ws-aiguide"' not in src, "AI 配置引导横幅不得回归顶部（实施75）"
         assert "ai_key_missing" in src
-        assert "function _wsAiGuideDismiss()" in src  # 顶层声明 = window 可达
+        assert "dedupKey:'aiguide'" in src, "引导提示的每日一次去重键被删"
+        assert "ws_aiguide_dismissed" in src, "「先不管」永久免扰键被删"
         assert "/workspace/setup#ai" in src
 
     def test_page_ctx_exposes_ai_key_missing(self):

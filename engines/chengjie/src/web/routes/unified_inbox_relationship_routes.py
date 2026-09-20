@@ -41,6 +41,27 @@ def register_relationship_stage_routes(app, *, api_auth) -> None:
         result = _build_relationship_stage_payload(
             request, conversation_id, store, emit_pending_event=True,
         )
+        # P1-5（2026-08-12）：附带客户旅程（漏斗）——统一 App cp-rel-stage「旅程阶段」
+        # 子分区的数据源（网页原生右栏走会话列表行自带的 funnel_stage，这里补 conv 级
+        # 单点读）。刻意在 handler 层附加而非改 _build_relationship_stage_payload——
+        # 后者被 collab-context 等多处复用，改它=所有消费方连带变形。contacts 未启用/
+        # 无 journey → 不附字段（前端按缺省不渲染子分区）；任何异常静默，绝不伤关系
+        # 阶段主体响应。
+        try:
+            from src.web.routes.unified_inbox_helpers import FUNNEL_STAGE_LABELS
+            from src.web.routes.unified_inbox_services import _contacts_store
+            _ctx = result.get("context") or {}
+            _contact_id = str(_ctx.get("contact_id") or "")
+            _cs = _contacts_store(request) if _contact_id else None
+            _j = _cs.get_journey_by_contact(_contact_id) if _cs is not None else None
+            _fs = str(getattr(_j, "funnel_stage", "") or "") if _j is not None else ""
+            if _fs:
+                result["journey"] = {
+                    "funnel_stage": _fs,
+                    "funnel_stage_label": FUNNEL_STAGE_LABELS.get(_fs, _fs),
+                }
+        except Exception:
+            logger.debug("[rel-stage] journey 附加失败（忽略）", exc_info=True)
         return {"ok": True, "conversation_id": conversation_id, **result}
 
     @app.post("/api/workspace/conv/{conversation_id}/relationship-stage/confirm")

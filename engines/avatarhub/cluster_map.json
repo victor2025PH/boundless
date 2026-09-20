@@ -5,6 +5,10 @@
     "  2) tools/topology_lint.py — 与 env_config.bat 的 SVC_* 路由做一致性巡检，漂移即告警；",
     "     并校验 vram_budget：每机 Σ服务显存预算 ≤ 物理显存×threshold，超编即告警",
     "改机器/搬迁只改这一个文件；env_key 是该服务在 env_config.bat 里的路由变量名。",
+    "2026-08-14: emotion_tts 117→140（117 是开发机，腾干净；140 已有部署+EmotionTTS 自启任务，",
+    "  clone 实测 OK）。同日 Qwen3-TTS 从 117 退役（开机任务+夜间预渲染一并停），集群暂无替身。",
+    "  140 静态和 13.3G 超 12G——stt/nemo/emotion 懒加载峰值互斥（实测并存占用 4.2G），",
+    "  lint 超编告警属已知，若三者同时压满需再迁一项。",
     "字段: dir=项目目录  py=Python解释器  task=计划任务名  loadkey=/health 就绪正则(空=只看200)",
     "vram_budget: 数值为实测 GB（2026-07-05, logs/optimize_20260705）。上新/迁移服务先改这里，",
     "  lint 过了再动手——32B 翻译模型被挤出显存(31%落CPU、每句3.6s)就是没有这道闸的事故。"
@@ -23,11 +27,12 @@
     },
     "192.168.0.117": {
       "gpu": "RTX 3060", "vram_gb": 12.0,
-      "services": { "emotion_tts_cosyvoice3": 3.3, "qwen3_tts_0.6b_bf16": 3.2 }
+      "services": {}
     },
     "192.168.0.140": {
       "gpu": "RTX 4070", "vram_gb": 12.0,
-      "services": { "stt_whisper_turbo_nllb": 5.4, "nemo_stt_bf16": 4.3, "ollama_idle": 0.3 }
+      "services": { "stt_whisper_turbo_nllb": 5.4, "nemo_stt_bf16": 4.3, "ollama_idle": 0.3,
+                    "emotion_tts_cosyvoice3": 3.3 }
     },
     "192.168.0.198": {
       "gpu": "RTX 4070", "vram_gb": 12.0,
@@ -47,12 +52,7 @@
     "192.168.0.117": {
       "dir": "D:\\faceX\\mfys",
       "py": "D:\\faceX\\Miniconda3\\envs\\cosytts\\python.exe",
-      "svcs": [
-        { "server": "emotion_tts_server.py", "name": "emotion_tts", "addcors": true,
-          "task": "EmotionTTS_Boot", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "SVC_EMOTION_TTS" },
-        { "server": "qwen3_tts_server.py", "name": "qwen3_tts", "addcors": true,
-          "task": "Qwen3TTS_Boot", "port": 7858, "loadkey": "\"model_loaded\":\\s*true", "env_key": "SVC_QWEN3_TTS" }
-      ]
+      "svcs": []
     },
     "192.168.0.140": {
       "dir": "D:\\faceX\\mfys",
@@ -61,7 +61,9 @@
         { "server": "stt_server.py", "name": "stt", "addcors": true,
           "task": "STT_Boot", "port": 7854, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_STT" },
         { "server": "nemotron_stt_server.py", "name": "nemo_stt", "addcors": true,
-          "task": "NemoSTT_Boot", "port": 7857, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_NEMO_STT" }
+          "task": "NemoSTT_Boot", "port": 7857, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_NEMO_STT" },
+        { "server": "emotion_tts_server.py", "name": "emotion_tts", "addcors": true,
+          "task": "EmotionTTS", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "SVC_EMOTION_TTS" }
       ]
     }
   }

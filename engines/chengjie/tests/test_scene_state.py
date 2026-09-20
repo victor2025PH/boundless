@@ -43,6 +43,7 @@ class _SM:
     _record_media_sent = _SMcls._record_media_sent
     _last_sent_media_scene = _SMcls._last_sent_media_scene
     _inject_scene_state = _SMcls._inject_scene_state
+    _inject_time_grounding = _SMcls._inject_time_grounding
     _record_stage_turn = _SMcls._record_stage_turn
     _MEDIA_SENT_LOG_MAX = _SMcls._MEDIA_SENT_LOG_MAX
     _selfie_persona_for_prompt = _SMcls._selfie_persona_for_prompt
@@ -66,19 +67,34 @@ class _SM:
         self._context_store = _Store()
 
 
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸默认关；本文件场景假定「人设已开相册/发图」，
+    统一打开（关态由 tests/test_photo_capability.py 覆盖）。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
+
+
 # ── ① 场景单一事实源 ─────────────────────────────────────────────────────────
 
 def test_resolve_current_scene_uses_persona_pool_then_config():
+    # 钉白天时刻：本例测「池优先级」，与时段过滤无关——不钉的话深夜跑测试
+    # 会撞上 2026-08-22 的「深夜剔白天场所」新语义（library/office 被剔）。
+    import datetime
+    _noon = datetime.datetime(2026, 7, 14, 13, 0)
     persona = {"selfie_scenes": ["in the dorm", "at the library"]}
     scfg = {"scene_rotation": ["at the office"], "scene_hint": "fallback"}
-    out = cs.resolve_current_scene(persona, scfg)
+    out = cs.resolve_current_scene(persona, scfg, now=_noon)
     assert out in ("in the dorm", "at the library")
     # persona 无池 → config rotation
-    out2 = cs.resolve_current_scene({}, scfg)
+    out2 = cs.resolve_current_scene({}, scfg, now=_noon)
     assert out2 == "at the office"
     # 全无 → default scene_hint
-    assert cs.resolve_current_scene({}, {"scene_hint": "cozy room"}) == "cozy room"
-    assert cs.resolve_current_scene({}, {}) == ""
+    assert cs.resolve_current_scene(
+        {}, {"scene_hint": "cozy room"}, now=_noon) == "cozy room"
+    assert cs.resolve_current_scene({}, {}, now=_noon) == ""
 
 
 def test_resolve_current_scene_stable_within_time_bucket():
@@ -165,6 +181,36 @@ def test_inject_scene_state_gating_and_content():
     assert "_current_scene_note" not in ctx3
 
 
+def test_inject_scene_state_keeps_human_sent_media_and_video_wording():
+    """接力记忆四期：最近 3 条 + 更早 10 条内坐席替发的条目一起进块（封顶 6、时间序）；
+    有视频时标题跟上；坐席替发标注来源。"""
+    sm = _SM(selfie_cfg={"enabled": True, "scene_rotation": ["in a cozy cafe"]})
+    ctx = {"_media_sent_log": []}
+    log = ctx["_media_sent_log"]
+    log.append({"ts": 0.0, "note": "[图片] 太早的人工图", "author": "human"})          # 10 条外 → 掉
+    log.append({"ts": 1.0, "note": "[图片] 太早的人工图2", "author": "human"})         # 10 条外 → 掉
+    log.append({"ts": 2.0, "note": "[视频] 坐席发的视频", "author": "human", "desc": "海边跑步"})
+    for i in range(3, 8):
+        log.append({"ts": float(i), "note": f"[图片] AI 自拍{i}", "scene": "cafe"})
+    log.append({"ts": 8.0, "note": "[图片] 坐席发的图", "author": "human"})
+    for i in range(9, 12):
+        log.append({"ts": float(i), "note": f"[图片] AI 自拍{i}", "scene": "cafe"})   # 最近 3 条
+    assert len(log) == 12
+    sm._inject_scene_state(ctx)
+    note = ctx["_media_sent_note"]
+    assert "【你最近发过的照片/视频（事实）】" in note and "那个视频" in note
+    assert "坐席发的视频" in note and "海边跑步" in note and "坐席替你发的" in note
+    assert "坐席发的图" in note and "AI 自拍11" in note and "AI 自拍9" in note
+    assert "太早的人工图" not in note and "AI 自拍7" not in note
+    assert note.count("\n- ") == 5                                       # 2 人工 + 3 最近
+    assert note.index("坐席发的视频") < note.index("坐席发的图") < note.index("AI 自拍9")
+    # 无视频、无人工 → 老措辞、只最近 3 条
+    ctx2 = {"_media_sent_log": [{"ts": float(i), "note": f"[图片] p{i}", "scene": "cafe"} for i in range(5)]}
+    sm._inject_scene_state(ctx2)
+    n2 = ctx2["_media_sent_note"]
+    assert "【你最近发过的照片（事实）】" in n2 and "视频" not in n2 and n2.count("\n- ") == 3
+
+
 # ── ②b 显式场景进生图链（A 线 Stage A / B 线 plan+caption）──────────────────
 
 def test_plan_autosend_image_carries_requested_scene():
@@ -220,9 +266,11 @@ async def test_run_autosend_caption_gets_scene(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.integrations.protocol_bridge.save_outbound_media",
         lambda *a, **k: ("/tmp/out.png", "/static/out.png", "image"))
+    # 场景用「无时间词、无场所词」的中性短语：本例测「场景到达配文回调」，
+    # 用 cafe 会在深夜跑测试时被场所过滤剔掉（2026-08-22 语义），夹具时间依赖。
     cfg = {"companion": {"selfie": {
         "enabled": True,
-        "scene_rotation": ["in a cozy cafe"],
+        "scene_rotation": ["in a cozy reading nook"],
         "provider": {"enabled": True, "backend": "openai", "api_key": "x"}}}}
     prov = cs.get_selfie_provider(cfg["companion"]["selfie"]["provider"])
 
@@ -248,7 +296,7 @@ async def test_run_autosend_caption_gets_scene(tmp_path, monkeypatch):
         cfg, "telegram", "acct", "chat", "lin",
         "發個照片給我看看嘛", [], send_fn=_send_fn, llm_caption=_caption)
     assert ok is True
-    assert cap_seen.get("scene") == "in a cozy cafe"  # 场景到达配文回调
+    assert cap_seen.get("scene") == "in a cozy reading nook"  # 场景到达配文回调
     assert sent == ["配文来啦"]
     reset_persona_media_store()
     cs.reset_selfie_provider()
@@ -342,7 +390,8 @@ async def test_run_autosend_on_sent_and_requested_scene(tmp_path, monkeypatch):
         cfg, "telegram", "acct", "chatRS", "lin",
         "發個照片給我看看嘛", [], send_fn=_send_fn,
         requested_scene="at the beach, sea in the background",
-        on_sent=lambda note, scene: seen.update(note=note, scene=scene))
+        on_sent=lambda note, scene, series="": seen.update(
+            note=note, scene=scene, series=series))
     assert ok is True
     assert seen["note"].startswith("[图片]")
     assert "beach" in seen["scene"]  # requested_scene 覆盖了轮换场景
@@ -368,7 +417,8 @@ async def test_run_autosend_on_sent_registry_scene_empty(monkeypatch):
     ok = await ia.run_autosend_image(
         {"companion": {"selfie": {"enabled": True}}}, "telegram", "a", "cReg2",
         "lin", "给我跳舞", [], send_fn=_send_fn,
-        on_sent=lambda note, scene: seen.update(note=note, scene=scene))
+        on_sent=lambda note, scene, series="": seen.update(
+            note=note, scene=scene, series=series))
     assert ok is True
     assert seen["note"].startswith("[图片]") and seen["scene"] == ""
     reset_persona_media_store()
@@ -386,7 +436,7 @@ async def test_run_autosend_on_sent_exception_never_breaks_send(monkeypatch):
     async def _send_fn(mp, mu, mt, cap, inbox):
         return True
 
-    def _boom(note, scene):
+    def _boom(note, scene, series=""):
         raise RuntimeError("log fail")
 
     ok = await ia.run_autosend_image(
@@ -456,7 +506,8 @@ async def test_guard_keeps_promise_and_fulfills_async(monkeypatch):
         sm = _SM(selfie_cfg=_GEN_ON, guard_cfg={"async_fulfill": True})
         calls = {}
 
-        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp=""):
+        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp="",
+                                         *, scene_strict=True):
             calls["scene"] = scene
             ctx["_stage_media_note"] = "[图片] 兑现自拍"
             return True
@@ -481,14 +532,20 @@ async def test_guard_keeps_promise_and_fulfills_async(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_guard_fulfill_failure_sends_compensation(monkeypatch):
-    """任务失败 → 语言对齐台阶补偿文本经 _send_to_chat 发出（闭环诚实）。"""
+async def test_guard_fulfill_failure_stays_silent_no_fallback(monkeypatch):
+    """任务失败 → **静默**（无兜底纪律，2026-08-17 老板拍板）：不补台阶话术，
+    走 delivery_block 上报 + 坐席人工接管。
+
+    旧语义（发「手机抽风改天补」类补偿文本）已随无兜底纪律拆除——本测试
+    2026-08-18 对齐已提交行为（stale-red 清账）：断言零补偿文本发出。
+    """
     cs.reset_selfie_provider()
     try:
         sm = _SM(selfie_cfg=_GEN_ON, guard_cfg={"async_fulfill": True})
         sent_texts = []
 
-        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp=""):
+        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp="",
+                                         *, scene_strict=True):
             return False  # 生成/发送失败
 
         async def _capture_text(chat_id, text):
@@ -506,7 +563,7 @@ async def test_guard_fulfill_failure_sends_compensation(monkeypatch):
             await asyncio.sleep(0.01)
             if not sm._promise_fulfill_inflight:
                 break
-        assert sent_texts and ("改天" in sent_texts[0] or "make it up" in sent_texts[0])
+        assert sent_texts == []  # 静默：绝不向客户发出替代/圆场内容
     finally:
         cs.reset_selfie_provider()
 

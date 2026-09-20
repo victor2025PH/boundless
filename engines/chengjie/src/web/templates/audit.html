@@ -24,6 +24,9 @@
 .tl-diff.show{display:block}
 .tl-diff .rm{color:var(--red);background:var(--rs);padding:.05rem .25rem;border-radius:3px}
 .tl-diff .add{color:var(--green);background:var(--gs);padding:.05rem .25rem;border-radius:3px}
+/* kv 对象徽章可点（P4）：继承 badge 配色，仅加悬停暗示 */
+a.badge{text-decoration:none;cursor:pointer}
+a.badge:hover{filter:brightness(1.1);text-decoration:underline}
 .tl-expand{background:none;border:none;cursor:pointer;font-size:.75rem;color:var(--t3);padding:.2rem .5rem;border-radius:5px;transition:.15s;margin-top:.3rem;font-family:inherit}
 .tl-expand:hover{background:var(--bd);color:var(--t)}
 /* pagination */
@@ -36,10 +39,10 @@
 .hm-grid{display:inline-grid;grid-template-rows:repeat(7,12px);grid-auto-flow:column;gap:2px;min-width:max-content}
 .hm-cell{width:12px;height:12px;border-radius:2px;background:var(--bd);position:relative;cursor:default;transition:transform .1s}
 .hm-cell:hover{transform:scale(1.3);z-index:2}
-.hm-cell.l1{background:rgba(91,124,246,.25)}
-.hm-cell.l2{background:rgba(91,124,246,.45)}
-.hm-cell.l3{background:rgba(91,124,246,.7)}
-.hm-cell.l4{background:#5b7cf6}
+.hm-cell.l1{background:color-mix(in srgb, var(--p,#1e8cf2) 25%, transparent)}
+.hm-cell.l2{background:color-mix(in srgb, var(--p,#1e8cf2) 45%, transparent)}
+.hm-cell.l3{background:color-mix(in srgb, var(--p,#1e8cf2) 70%, transparent)}
+.hm-cell.l4{background:var(--p,#1e8cf2)}
 [data-theme="dark"] .hm-cell.l1{background:rgba(107,138,248,.3)}
 [data-theme="dark"] .hm-cell.l4{background:#6b8af8}
 .hm-month-labels{display:flex;gap:0;font-size:.66rem;color:var(--t3);margin-bottom:3px;margin-left:0;padding-left:0}
@@ -94,11 +97,20 @@
     {{ (i18n or {}).get('au_s011', "快捷筛选") }}
     <span style="font-size:.72rem;font-weight:400;color:var(--t3);margin-left:.3rem">{{ (i18n or {}).get('au_s012', "点击一次过滤；再点") }} [{{ (i18n or {}).get('inbox.dlm.clear', "清除") }}] {{ (i18n or {}).get('au_s013', "复位") }}</span>
   </h2>
-  <div style="display:flex;flex-wrap:wrap;gap:.4rem">
+  <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center">
     {% for a, label, kind in _presets %}
-    <a href="/audit?action={{ a }}"
+    <a href="/audit?action={{ a }}" data-ue="audit.filter_preset"
        class="btn btn-xs {% if filters and filters.action == a %}btn-p{% else %}btn-s{% endif %}"
        title="{{ (i18n or {}).get('em_s010', '筛选') }} action={{ a }}">{{ label }}</a>
+    {% endfor %}
+    {# 2026-08-18 芯片序＝FAMILY_ORDER 单源，禁止再手写一份 #}
+    <span style="width:1px;height:18px;background:var(--bd);margin:0 .2rem"></span>
+    {# family_order 由路由注入；缺省=旧 5 族——热更先于重启时新族芯片不出现，
+       避免点「贴纸」却打到旧进程空 patterns＝不过滤＝全库倾泻。 #}
+    {% for f in family_order|default(['danger', 'memory', 'kb', 'persona', 'rpa']) %}
+    <a href="/audit?family={{ f }}" data-ue="audit.filter_family"
+       class="btn btn-xs {% if filters and filters.family is defined and filters.family == f %}btn-p{% else %}btn-s{% endif %}"
+       title="{{ (i18n or {}).get('em_s010', '筛选') }} family={{ f }}">{{ (i18n or {}).get('au_fam_' ~ f, f) }}</a>
     {% endfor %}
   </div>
 </div>
@@ -116,23 +128,28 @@
         {% if filters.channel %}{% set _ = export_qs.append('channel=' ~ filters.channel) %}{% endif %}
         {% if filters.date_from %}{% set _ = export_qs.append('date_from=' ~ filters.date_from) %}{% endif %}
         {% if filters.date_to %}{% set _ = export_qs.append('date_to=' ~ filters.date_to) %}{% endif %}
+        {% if filters.family is defined and filters.family %}{% set _ = export_qs.append('family=' ~ filters.family) %}{% endif %}
       {% endif %}
       <a href="/audit/export{% if export_qs %}?{{ export_qs|join('&') }}{% endif %}"
-         class="btn btn-s btn-xs pro-only"
+         class="btn btn-s btn-xs pro-only" data-ue="audit.export"
          title="{% if export_qs %}{{ (i18n or {}).get('au_s015', '导出当前筛选结果为') }} CSV{% else %}{{ (i18n or {}).get('au_s016', '导出全部记录为') }} CSV{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         {% if export_qs %}{{ (i18n or {}).get('au_s017', "导出筛选结果") }}{% else %}{{ (i18n or {}).get('au_s018', "导出全部") }}{% endif %}
       </a>
     </div>
   </h2>
-  <form method="get" action="/audit">
+  <form method="get" action="/audit" id="audit-filter-form">
+    {% if filters and filters.family is defined and filters.family %}
+    <input type="hidden" name="family" value="{{ filters.family }}">
+    {% endif %}
     <div class="filter-row">
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('au_s019', "操作类型") }} <span class="tip" data-tip="intent" style="cursor:help;opacity:.5;font-size:.6rem;background:var(--bd2);width:13px;height:13px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center">?</span></label>
         <select name="action">
           <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
           {% for a in all_actions|default([]) %}
-          <option value="{{ a }}" {% if filters and filters.action == a %}selected{% endif %}>{{ a }}</option>
+          {# P0-198 问题9：枚举 → 人话标签（aud_act_* pack），未登记回落原值；title 恒带原值便于与导出 CSV 对账 #}
+          <option value="{{ a }}" title="{{ a }}" {% if filters and filters.action == a %}selected{% endif %}>{{ (i18n or {}).get('aud_act_' ~ a, a) }}</option>
           {% endfor %}
         </select>
       </div>
@@ -141,7 +158,8 @@
         <select name="operator">
           <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
           {% for op in all_operators|default([]) %}
-          <option value="{{ op }}" {% if filters and filters.operator == op %}selected{% endif %}>{{ op }}</option>
+          {# 显示坐席名（web_users.display_name），value 恒为账本 user_id 保对账 #}
+          <option value="{{ op }}" title="{{ op }}" {% if filters and filters.operator == op %}selected{% endif %}>{{ (operator_names or {}).get(op, op) }}</option>
           {% endfor %}
         </select>
       </div>
@@ -164,11 +182,11 @@
           {{ (i18n or {}).get('search', "搜索") }}
         </button>
       </div>
-      {% set has_filter = filters and (filters.action or filters.operator or filters.channel or filters.date_from or filters.date_to) %}
+      {% set has_filter = filters and (filters.action or filters.operator or filters.channel or filters.date_from or filters.date_to or (filters.family is defined and filters.family)) %}
       {% if has_filter %}
       <div class="f-grp" style="min-width:80px;flex:0">
         <label class="f-lbl">&nbsp;</label>
-        <a href="/audit" class="btn btn-s btn-sm" style="width:100%;justify-content:center">{{ (i18n or {}).get('inbox.dlm.clear', "清除") }}</a>
+        <a href="/audit" class="btn btn-s btn-sm" style="width:100%;justify-content:center" data-ue="audit.filter_clear">{{ (i18n or {}).get('inbox.dlm.clear', "清除") }}</a>
       </div>
       {% endif %}
     </div>
@@ -181,6 +199,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
     {{ (i18n or {}).get('au_s024', "操作时间轴") }}
     {% if total is defined %}<span style="font-weight:400;font-size:.8rem;color:var(--t3);margin-left:.3rem">{{ (i18n or {}).get('wa_js_019', "共") }} {{ total }} {{ (i18n or {}).get('dash.items', "条") }}</span>{% endif %}
+    {% if retention is defined and retention %}<span style="font-weight:400;font-size:.72rem;color:var(--t3);margin-left:auto" title="AuditStore.cleanup">{{ (i18n or {}).get('au_retention_note', "记录保留 {days} 天 · 上限 {rows} 条").replace('{days}', retention.days|string).replace('{rows}', retention.rows|string) }}</span>{% endif %}
   </h2>
   {% if records %}
   <div class="tl">
@@ -200,14 +219,21 @@
       </div>
       <div class="tl-body">
         <div class="tl-top">
-          <span class="tl-action">{{ act }}</span>
-          {% if r.target %}<span class="badge b-p">{{ r.target }}</span>{% endif %}
-          {% if r.user_id %}<span class="badge b-n">{{ r.user_id }}</span>{% endif %}
+          <span class="tl-action" title="{{ act }}">{{ (i18n or {}).get('aud_act_' ~ act, act) }}</span>
+          {% if r.target_tokens %}
+          {# kv 徽章可点＝按原始 key=value 串走 keyword 筛选（LIKE 四列，跨动作
+             聚出同对象全史）；增减量（packs+2）筛选无意义保持纯展示 #}
+          {% for tok in r.target_tokens %}{% if tok.value[:1] not in ('+', '-') %}<a class="badge b-p" data-ue="audit.tok_pivot" href="/audit?channel={{ (tok.key ~ '=' ~ tok.value)|urlencode }}" title="{{ (i18n or {}).get('em_s010', '筛选') }} {{ tok.key }}={{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</a>{% else %}<span class="badge b-p" title="{{ tok.key }}{{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</span>{% endif %}{% endfor %}
+          {% elif r.target %}<span class="badge b-p">{{ r.target }}</span>{% endif %}
+          {% if r.detail_tokens %}
+          {% for tok in r.detail_tokens %}{% if tok.value[:1] not in ('+', '-') %}<a class="badge b-n" data-ue="audit.tok_pivot" href="/audit?channel={{ (tok.key ~ '=' ~ tok.value)|urlencode }}" title="{{ (i18n or {}).get('em_s010', '筛选') }} {{ tok.key }}={{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</a>{% else %}<span class="badge b-n" title="{{ tok.key }}{{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</span>{% endif %}{% endfor %}
+          {% endif %}
+          {% if r.user_id %}<span class="badge b-n" title="{{ r.user_id }}">{{ (operator_names or {}).get(r.user_id, r.user_id) }}</span>{% endif %}
           <span class="tl-time">{{ r.ts }}</span>
         </div>
         {% if r.old_val or r.new_val or r.snapshot_id %}
         <div class="tl-meta">
-          {% if r.snapshot_id %}<span style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('au_s025', "快照") }}: {{ r.snapshot_id }}</span>{% endif %}
+          {% if r.snapshot_id %}<a href="/diff?a={{ r.snapshot_id|urlencode }}&amp;b=__current__" style="font-size:.72rem;color:var(--p);text-decoration:none" title="{{ (i18n or {}).get('aud_ui_rollback_tip', "该操作留有配置快照，点击对比当前配置并可回滚") }}">{{ (i18n or {}).get('au_s025', "快照") }}: {{ r.snapshot_id }} · {{ (i18n or {}).get('aud_ui_rollback', "可回滚") }}</a>{% endif %}
         </div>
         {% if r.old_val or r.new_val %}
         <button class="tl-expand" onclick="toggleDiff(this)">▶ {{ (i18n or {}).get('au_s026', "查看变更") }}</button>
@@ -248,11 +274,27 @@ function toggleDiff(btn) {
   btn.textContent = d.classList.contains('show') ? '▼ '+window.T('au_js001') : '▶ '+window.T('au_s026');
 }
 
+/* 筛选使用埋点（ops UI 交互卡可见；只送 page+action，无筛选原文） */
+(function(){
+  function bcn(action){
+    try{
+      var body=JSON.stringify({page:'/audit',action:String(action||'')});
+      if(navigator.sendBeacon) navigator.sendBeacon('/api/telemetry/ui-event',new Blob([body],{type:'application/json'}));
+    }catch(_){}
+  }
+  var form=document.getElementById('audit-filter-form');
+  if(form) form.addEventListener('submit',function(){ bcn('audit.filter_submit'); });
+  document.addEventListener('click',function(ev){
+    var el=ev.target && ev.target.closest ? ev.target.closest('[data-ue]') : null;
+    if(el) bcn(el.getAttribute('data-ue')||'');
+  },true);
+})();
+
 /* ── 活动热力图 ─────────────────────────────────────────── */
 (async function initHeatmap(){
   const DAYS = 84;
   try{
-    const r = await fetch('/api/audit/activity?days=' + DAYS);
+    const r = await apiFetch('/api/audit/activity?days=' + DAYS);
     if(!r.ok) return;
     const { days: dayMap, max } = await r.json();
 

@@ -120,6 +120,11 @@ async def start_assistant(assistant):
             )
             asyncio.create_task(assistant._periodic_self_heal(), name="kb_periodic_self_heal")
             asyncio.create_task(assistant._periodic_daily_learn(), name="daily_learner")
+            # ★ #88：dead-peer 存量标记核销（一次性启动迁移；flag 关=no-op）——
+            #   标记之后有成功出站的陈旧标（升级前累积）自动解除，黄条不再赖着。
+            from src.bootstrap.background_tasks import reconcile_dead_peer_marks
+            asyncio.create_task(
+                reconcile_dead_peer_marks(assistant), name="dead_peer_reconcile")
 
             # ★ W3-3G / W3-3K：启动 reunion 草稿成功率评估循环（DraftEvalScheduler）
             if assistant.contacts is not None and assistant.contacts.store is not None:
@@ -142,14 +147,50 @@ async def start_assistant(assistant):
             # ★ Phase O：主动关怀引擎（记忆驱动的约定/事件跟进）
             await assistant._maybe_start_proactive_care(assistant._web_app)
 
+            # ★ 智能养号执行引擎（常备接线 + 配置热闸；默认全关，go_live 仅金丝雀）
+            await assistant._maybe_start_nurture_engine(assistant._web_app)
+
             # ★ 多平台 deferred 队列（非 messenger 主动消息的发送闭环；默认关）
             await assistant._maybe_start_deferred_outbox()
+
+            # ★ 出站收口点铆定语言翻译器（#106 实施91）：orch.send / A 线发送口
+            #   的 sendpoint_lang_pin_fix 复用 deferred 同一翻译包装
+            #   （translate_outbound_text：B67 explicit 优先 + 已是客户语言即
+            #   跳过 + HOLD 无兜底纪律）。注册失败只损失兜底翻译（守卫本体
+            #   passthru 放行），绝不影响启动。
+            try:
+                from src.ai.sendpoint_guard import set_sendpoint_translator
+                set_sendpoint_translator(assistant._maybe_translate_outbound)
+                assistant.logger.info("✅ 出站收口点铆定翻译器已注册（#106）")
+            except Exception:
+                assistant.logger.debug("收口点铆定翻译器注册跳过", exc_info=True)
 
             # ★ 质量趋势持久化（周期落地 companion_quality_overview；默认关）
             await assistant._maybe_start_quality_trend()
 
             # ★ P4-B：TTS 成本按日落库（供 ops 看板画近 N 天花费曲线；默认关）
             assistant._maybe_init_tts_cost_log()
+
+            # ★ 2026-09-08 成本对账：每日 09:40 核对昨日 LLM 花费 vs 厂商账单真值，
+            #   不对账/尖峰/超预算/余额不足 → 分级推管理员；预算闸配置回调同批注入。
+            #   常开（ai.cost_guard.enabled=false 可关）；账本缺席则静默跳过。
+            try:
+                from src.ai.cost_ledger import get_cost_ledger
+                from src.ai.cost_recon import CostReconLoop, configure_cost_guard
+
+                configure_cost_guard(lambda: assistant.config.config or {})
+                _recon = CostReconLoop(
+                    lambda: assistant.config.config or {}, get_cost_ledger,
+                    logger_=assistant.logger)
+                await _recon.start()
+                assistant._cost_recon_loop = _recon
+                assistant.logger.info("✅ 成本日对账已常备（ai.cost_guard，默认 09:40 核对昨日）")
+            except Exception:
+                assistant.logger.debug("成本日对账启动跳过", exc_info=True)
+
+            # ★ 小智帮助语料首启自动播种（assistant.enabled 才动；幂等 upsert，
+            #   新装机首启即有语料——1.0.51 全功能开箱配套）
+            assistant._maybe_seed_assistant_help()
 
             # ★ S：翻译置信度低置信率/切换率按日落库（供看板画 7 天 sparkline；默认关）
             assistant._maybe_init_translation_trend_log()
@@ -158,11 +199,29 @@ async def start_assistant(assistant):
             assistant._maybe_init_send_route_trend_log()
             # ★ F1：会话身份健康（入站 raw% / 头像 empty%）按日落库（默认关）
             assistant._maybe_init_identity_trend_log()
+            # ★ P9：前端错误/意图落空按日落库（scoped_fail/dead_intent/conv_not_found；默认关）
+            assistant._maybe_init_frontend_error_trend_log()
+            # ★ 账号接入漏斗按日落库（成功率 / checkpoint 周趋势；默认关）
+            assistant._maybe_init_login_funnel_trend_log()
+            # ★ UI 事件按日落库（AI 回复漏斗 dpick.* 取消率/采纳率的耐久口径；默认关）
+            assistant._maybe_init_ui_event_trend_log()
+            # ★ 客户资产（好友/未开口/沉默）日快照落库（破冰/主动触达的趋势验收判据；默认关）
+            assistant._maybe_init_contacts_asset_trend_log()
+            # ★ P2（2026-07-31）：CSRF 准入/拒绝按日落库（同源回落收口决策的数据面；默认关）
+            assistant._maybe_init_csrf_trend_log()
             # ★ Phase22c：出站媒体承诺兑现率按日落库（供看板 sparkline + 阈值校准；默认关）
             assistant._maybe_init_media_promise_trend_log()
+            # ★ 注入抽取率按日落库（选择器失效遥测「归零判 → 比率阈值」的校准数据面；默认关）
+            assistant._maybe_init_inject_extract_trend_log()
 
             # ★ 每人设「相册/媒体」注册表（图/视频 + 触发词；始终开启，供相册后台/回复链读写）
             assistant._init_persona_media_store()
+
+            # ★ Telegram 群成员提取库（成员去重 + 提取任务/进度；始终建库，行为受 flag 门控）
+            assistant._init_group_members_store()
+
+            # ★ FateX（问衍）产品独立库：生辰画像结构化行（与主库物理分离，账号隔离）
+            assistant._init_fatex_store()
 
             # ★ Q 延伸：ingest 回写 contact_id（默认关）
             assistant._maybe_wire_ingest_contact_writeback()
@@ -285,6 +344,14 @@ async def stop_assistant(assistant):
                 assistant.logger.info("care_dispatcher 已停止")
             except Exception as ex:
                 assistant.logger.warning("care_dispatcher 停止异常: %s", ex)
+
+        # P2：care LLM 影子扫描优雅停止
+        if getattr(assistant, "_care_shadow_scanner", None) is not None:
+            try:
+                await assistant._care_shadow_scanner.stop()
+                assistant.logger.info("care_shadow_scanner 已停止")
+            except Exception as ex:
+                assistant.logger.warning("care_shadow_scanner 停止异常: %s", ex)
 
         # 多平台 deferred 队列优雅停止
         if assistant._deferred_outbox_dispatcher is not None:

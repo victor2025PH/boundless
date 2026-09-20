@@ -1,8 +1,9 @@
 """可信指标流水线（P0-5 D11）：把 run_eval 的硬门禁结果导出成营销站可引用的 JSON。
 
 逐项调用 ``python -m scripts.run_eval <flag> --json``，解析报告，产出
-``website/public/metrics/<key>.json`` + 汇总 ``index.json``。营销站由此引用
+``<monorepo>/website/public/metrics/<key>.json`` + 汇总 ``index.json``。营销站由此引用
 **真实评测数字**（营销可以强，数字必须真）。
+（2026-07-25：输出目标从 engines/chengjie/website（过期副本，已删除）改为 monorepo 根 website/。）
 
 设计要点：
 - 缺资源的评测（翻译引擎无 key / KB 未备货 / 无真实嵌入）**优雅跳过**记为 skipped，
@@ -14,7 +15,7 @@
 用法：
   python scripts/gen-trust-metrics.py                 # 全量（缺资源自动 skip）
   python scripts/gen-trust-metrics.py --only persona,crisis-overview
-  python scripts/gen-trust-metrics.py --out website/public/metrics --strict
+  python scripts/gen-trust-metrics.py --out ../../website/public/metrics --strict
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ EVALS: List[Dict[str, Any]] = [
      "label": {"zh": "记忆抽取质量（启发式）", "en": "Memory extraction quality"}},
     {"key": "voice-language", "args": ["--voice-language"],
      "label": {"zh": "语音合成语言一致性", "en": "Voice language consistency"}},
+    {"key": "media-consistency", "args": ["--media-consistency"],
+     "label": {"zh": "图文一致性（发图不否认/无图不谎称/场景不矛盾）",
+               "en": "Image-text consistency"}},
     {"key": "xlate-confidence", "args": ["--xlate-confidence"],
      "label": {"zh": "译文置信度 scorer", "en": "Translation confidence scorer"}},
     {"key": "intent", "args": [],
@@ -128,6 +132,11 @@ def _headline(key: str, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if key == "voice-language":
         return out("语音语种一致性", "Voice-language consistency",
                    _pct(s.get("accuracy")), s.get("total"))
+    if key == "media-consistency":
+        # 报告为顶层 {total, matched, passed}（无 summary 包裹）；对齐率 = matched/total
+        mt, tt = r.get("matched"), r.get("total")
+        val = _pct(mt / tt) if (isinstance(mt, int) and isinstance(tt, int) and tt) else None
+        return out("图文一致性对齐率（发图诚实红线）", "Image-text consistency", val, tt)
     if key == "xlate-confidence":
         return out("置信度判别准确率", "Confidence-scorer accuracy",
                    _pct(s.get("accuracy")), s.get("total"))
@@ -226,8 +235,8 @@ def run_one(spec: Dict[str, Any], *, timeout: float = 300.0) -> Dict[str, Any]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="可信指标流水线：run_eval → website/public/metrics/*.json")
-    ap.add_argument("--out", default="website/public/metrics",
-                    help="输出目录（默认 website/public/metrics）")
+    ap.add_argument("--out", default="../../website/public/metrics",
+                    help="输出目录（默认 monorepo 根 website/public/metrics；相对路径相对 engines/chengjie 解析）")
     ap.add_argument("--only", default="",
                     help="仅跑这些 key（逗号分隔，如 persona,crisis-overview）")
     ap.add_argument("--timeout", type=float, default=300.0, help="单项超时秒数")

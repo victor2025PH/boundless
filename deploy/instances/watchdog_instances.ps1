@@ -7,9 +7,10 @@
 # 不依赖任何人登录；cron_sentinel.ps1 顺带巡检本任务自身退出码（\Boundless\ 前缀全覆盖）。
 #
 # 每轮动作（探测复用 status_instances.ps1 -Json；数据根自动探测规则见该脚本头注）：
-#   DOWN（端口不在听）         → start_<实例>.ps1 -DataDir <根> 幂等拉起，等端口就绪；
-#   假活（在听但 HTTP 无响应）  → 连续 -HttpDeadRestartAfter 轮（缺省 3≈15 分钟）才 stop+start
-#                                强制重启，防「启动中/瞬时卡顿」误杀；计数落 flag 目录，恢复即清零；
+#   退役实例（.ops\retired\<id>.flag 存在，cutover_merge.ps1 写）→ 跳过不探不拉；
+#   DOWN（端口不在听）         → restart_instance.ps1 -FromWatchdog（含 /login 就绪 + 写冷却）；
+#   假活（unresponsive）       → status 分级：warming/login_ready 当存活不计 strike；
+#                                冷却窗内也不计（Phase4）；窗外连续 N 轮才 restart_instance；
 #   端口被非引擎进程占用       → 只告警绝不清杀（与 start/stop 同一防呆哲学：双实例误杀代价大）；
 #   domains 缺等配置性 DEGRADED → 只落日志（DailyVerify/人工处置；非存活问题，重启无益）。
 # 告警：VPS /api/ops/alert（Bearer=EVENT_INGEST_KEY），与 cron_sentinel 同款「失败边沿告警 +
@@ -37,6 +38,8 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
+. (Join-Path $PSScriptRoot '_restart_cooldown.ps1')
+
 $FlagDir = Join-Path $env:LOCALAPPDATA 'boundless-watchdog'
 New-Item -ItemType Directory -Force -Path $FlagDir | Out-Null
 $Log = Join-Path $FlagDir 'watchdog.log'
@@ -47,6 +50,18 @@ if (-not $base) { $base = [string]$env:PERSONA_SYNC_BASE }
 if (-not $base) { $base = 'https://bd2026.cc' }
 $key = $IngestKey
 if (-not $key) { $key = [string]$env:EVENT_INGEST_KEY }
+
+# Phase9: webhook/TG prefer ASCII note_en (encoding-proof); local Say may still use zh note.
+function Get-InstAlertNote($inst) {
+    if ($null -eq $inst) { return '' }
+    try {
+        if ($inst.PSObject.Properties.Name -contains 'note_en') {
+            $en = [string]$inst.note_en
+            if ($en) { return $en }
+        }
+    } catch {}
+    try { return [string]$inst.note } catch { return '' }
+}
 
 function Send-Alert([string]$text) {
     if (-not $key) { Say '无 EVENT_INGEST_KEY，跳过告警发送（仅落日志）'; return }
@@ -69,18 +84,36 @@ if ($PythonExe) {
     }
 }
 
-# ── 探测（复用 status_instances.ps1 -Json，数据根探测/判定单一源）────────
+# ── 探测（复用 status_instances.ps1；Phase7 读 UTF-8 快照文件，不经 Out-String）──
 $statusScript = Join-Path $PSScriptRoot 'status_instances.ps1'
 if (-not (Test-Path -LiteralPath $statusScript)) { Say "错误: 探测脚本缺失 $statusScript"; exit 2 }
-$statusArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $statusScript, '-Json')
+$opsDir = 'D:\chengjie-instances\.ops'
+if (-not (Test-Path -LiteralPath $opsDir)) { New-Item -ItemType Directory -Force -Path $opsDir | Out-Null }
+$snapPath = Join-Path $opsDir 'last_status.json'
+$statusArgs = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $statusScript,
+    '-Json', '-SnapshotPath', $snapPath
+)
 if ($ZhiliaoData) { $statusArgs += @('-ZhiliaoData', $ZhiliaoData) }
 if ($TongyiData)  { $statusArgs += @('-TongyiData',  $TongyiData) }
-$raw = (& powershell.exe @statusArgs 2>&1 | Out-String)
+# Run status (writes snapshot); ignore stdout encoding — file is SSOT
+$null = & powershell.exe @statusArgs 2>&1
 $st = $null
-try { $st = $raw | ConvertFrom-Json } catch {}
+if (Test-Path -LiteralPath $snapPath) {
+    try {
+        $st = Get-Content -LiteralPath $snapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Say ("警告: 读取快照失败: $($_.Exception.Message)")
+    }
+}
 if (-not $st -or -not $st.instances) {
-    Say ("错误: status_instances.ps1 -Json 输出不可解析: " + $raw.Substring(0, [Math]::Min(300, $raw.Length)))
-    exit 2
+    # Fallback: parse stdout (legacy) — may garble CJK notes but keeps heal working
+    $raw = (& powershell.exe @statusArgs 2>&1 | Out-String)
+    try { $st = $raw | ConvertFrom-Json } catch {}
+    if (-not $st -or -not $st.instances) {
+        Say ("错误: status_instances 快照/JSON 不可解析")
+        exit 2
+    }
 }
 
 function Wait-PortUp([int]$port, [int]$sec) {
@@ -92,6 +125,28 @@ function Wait-PortUp([int]$port, [int]$sec) {
     return $false
 }
 
+# Phase3: one heal path — restart_instance.ps1 (stop+start+/login ready+cooldown write).
+function Invoke-WatchdogRestart {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstanceId,
+        [string]$DataRoot = '',
+        [string]$Reason = 'watchdog'
+    )
+    $script = Join-Path $PSScriptRoot 'restart_instance.ps1'
+    # Do not name this $args — that shadows PowerShell's automatic $args.
+    $argList = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script,
+        '-Instance', $InstanceId,
+        '-FromWatchdog',
+        '-Reason', $Reason,
+        '-ReadyWaitSec', ([string]$StartWaitSec)
+    )
+    if ($DataRoot) { $argList += @('-DataDir', $DataRoot) }
+    & powershell.exe @argList 2>&1 | ForEach-Object { Say "  [restart] $_" }
+    $rc = [int]$LASTEXITCODE
+    return @{ ok = ($rc -eq 0); rc = $rc }
+}
+
 function Get-Strikes([string]$file) {
     if (Test-Path $file) { try { return [int](Get-Content $file -Raw).Trim() } catch { return 0 } }
     return 0
@@ -99,19 +154,43 @@ function Get-Strikes([string]$file) {
 
 $overall = 0
 foreach ($inst in $st.instances) {
+    # ── 退役实例跳过（融合切换 cutover_merge.ps1 写 .ops\retired\<id>.flag）────
+    # 通译并库进智聊后必须保持停机：拉活会造成同一批平台账号被两个实例双拉双发。
+    # 复活/回滚 = 删除 flag 文件（cutover_merge.ps1 -Rollback 会自动删）。
+    $retFlag = Join-Path $opsDir ("retired\{0}.flag" -f $inst.id)
+    if (Test-Path -LiteralPath $retFlag) {
+        Say "$($inst.id) 已退役（$retFlag），跳过探活/自愈"
+        Remove-Item (Join-Path $FlagDir "$($inst.id).down"), (Join-Path $FlagDir "$($inst.id).httpdead") -Force -ErrorAction SilentlyContinue
+        continue
+    }
     $downFlag   = Join-Path $FlagDir "$($inst.id).down"
     $strikeFile = Join-Path $FlagDir "$($inst.id).httpdead"
-    $alive = $inst.listening -and $inst.engine_owned -and ($inst.http -gt 0)
+    # Phase5: graded readiness from status_instances (ready|warming|unresponsive|…)
+    $phase = ''
+    if ($inst.PSObject.Properties.Name -contains 'http_phase') { $phase = [string]$inst.http_phase }
+    $loginReady = $false
+    if ($inst.PSObject.Properties.Name -contains 'login_ready') { $loginReady = [bool]$inst.login_ready }
+    # Treat warming + login_ready as alive: do not accumulate httpdead strikes / force-kill
+    $serving = ($inst.http -gt 0) -or $loginReady -or ($phase -eq 'warming') -or ($phase -eq 'ready')
+    $alive = $inst.listening -and $inst.engine_owned -and $serving
 
     if ($alive) {
         if (Test-Path $strikeFile) { Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue }
+        Remove-Item (Join-Path $FlagDir "$($inst.id).unresponsive.warn") -Force -ErrorAction SilentlyContinue
         if (Test-Path $downFlag) {
             Say "$($inst.id) 已恢复存活（端口 $($inst.port)），补发恢复通知并清 down-flag"
             Send-Alert "✅ $($inst.name) 已恢复存活（端口 $($inst.port)，$env:COMPUTERNAME）"
             Remove-Item $downFlag -Force -ErrorAction SilentlyContinue
         }
-        if ($inst.verdict -ne 'GO') { Say "$($inst.id) 存活但体检降级（非存活问题，不动手）: $($inst.note)" }
-        else { Say "$($inst.id) GO（端口 $($inst.port) HTTP $($inst.http)）" }
+        if ($phase -eq 'warming') {
+            $age = if ($inst.PSObject.Properties.Name -contains 'proc_age_sec') { $inst.proc_age_sec } else { '?' }
+            Say "$($inst.id) warming（age=${age}s，/login+health 未齐）— 预热豁免，不计入假活"
+        } elseif ($inst.verdict -ne 'GO') {
+            $nAlert = Get-InstAlertNote $inst
+            Say "$($inst.id) 存活但体检降级（非存活问题，不动手）: $nAlert"
+        } else {
+            Say "$($inst.id) GO（端口 $($inst.port) HTTP $($inst.http) login=$loginReady phase=$phase）"
+        }
         continue
     }
 
@@ -128,9 +207,27 @@ foreach ($inst in $st.instances) {
     }
 
     if ($inst.listening) {
+        # Phase4 warm-up exemption: during shared cooldown, HTTP can look "dead"
+        # while the process is still warming. Do NOT accumulate strikes — otherwise
+        # the moment cooldown ends, n already >= threshold and we immediately kill
+        # a healthy-but-slow boot (workbench load-timeout flap).
+        $cdWarm = Test-RestartCooldownActive -Instance $inst.id
+        if ($cdWarm.active) {
+            if (Test-Path $strikeFile) { Remove-Item $strikeFile -Force -ErrorAction SilentlyContinue }
+            Say "$($inst.id) 端口在听但 HTTP 未就绪，重启冷却中（剩约 $($cdWarm.left_min) 分钟 reason=$($cdWarm.record.reason)），本轮不计假活 strike（预热豁免）"
+            continue
+        }
         # 假活：端口在听但 HTTP 无响应——连续 N 轮才强制重启，防启动中误杀
         $n = (Get-Strikes $strikeFile) + 1
         Set-Content -Path $strikeFile -Value $n
+        # Phase6 early warning: at N-1 (default strike 2 of 3) alert once before force-kill
+        if ($HttpDeadRestartAfter -gt 1 -and $n -eq ($HttpDeadRestartAfter - 1)) {
+            $warnFlag = Join-Path $FlagDir "$($inst.id).unresponsive.warn"
+            if (-not (Test-Path $warnFlag)) {
+                Send-Alert "⏳ $($inst.name) unresponsive $n/$HttpDeadRestartAfter（phase=$phase，$env:COMPUTERNAME）— 下一轮将经 restart_instance 强杀，请人工先看 boot 日志"
+                New-Item -ItemType File -Force -Path $warnFlag | Out-Null
+            }
+        }
         if ($HttpDeadRestartAfter -le 0 -or $n -lt $HttpDeadRestartAfter) {
             Say "$($inst.id) 疑似假活（端口在听 HTTP 无响应），计数 $n/$HttpDeadRestartAfter，本轮先观察"
             continue
@@ -145,45 +242,61 @@ foreach ($inst in $st.instances) {
             }
             continue
         }
-        Say "$($inst.id) 假活满 $n 轮，强制重启（stop_instance + start_$($inst.id)）"
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'stop_instance.ps1') `
-            -Instance $inst.id 2>&1 | ForEach-Object { Say "  [stop] $_" }
-        if ($LASTEXITCODE -ne 0) {
+        # Phase3: single entry = restart_instance.ps1 (ready gate + cooldown write).
+        Say "$($inst.id) 假活满 $n 轮，经 restart_instance -FromWatchdog 重启"
+        $rr = Invoke-WatchdogRestart -InstanceId $inst.id -DataRoot ([string]$inst.data_root) -Reason 'watchdog_httpdead'
+        if ($rr.ok) {
+            Say "$($inst.id) 自愈成功（httpdead → restart_instance）"
+            Send-Alert "⚠️ $($inst.name) 假活，watchdog 已经 restart_instance 拉起（端口 $($inst.port)，$env:COMPUTERNAME）。请查 boot 日志"
+            Remove-Item $downFlag, $strikeFile -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $FlagDir "$($inst.id).unresponsive.warn") -Force -ErrorAction SilentlyContinue
+            $flap = Test-RestartFlap -Instance $inst.id
+            if ($flap.flapping) {
+                $rs = @($flap.reasons) -join ','
+                Send-Alert "🚨 $($inst.name) RESTART FLAP: $($flap.count)x in $($flap.window_min)m ($env:COMPUTERNAME; reasons=$rs). Stop further kills."
+            }
+        } else {
             $overall = 1
-            Say "$($inst.id) 强制重启失败于 stop（rc=$LASTEXITCODE），需人工"
+            Say "$($inst.id) restart_instance 失败 rc=$($rr.rc)，需人工"
             if (-not (Test-Path $downFlag)) {
-                Send-Alert "⛔ $($inst.name) 假活且 watchdog 停止失败（rc=$LASTEXITCODE，$env:COMPUTERNAME），需人工介入"
+                Send-Alert "⛔ $($inst.name) 假活且 restart_instance 失败（rc=$($rr.rc)，$env:COMPUTERNAME），需人工介入"
                 New-Item -ItemType File -Force -Path $downFlag | Out-Null
             }
-            continue
         }
-        # 停成功后走下面的统一拉起路径
+        continue
     }
 
-    # ── DOWN（或假活已停）：start_<实例>.ps1 幂等拉起 ──────────────────
+    # ── DOWN：同一入口拉起（含 /login 就绪，比只等端口更稳）──────────────
     if ($NoSelfHeal) {
         $overall = 1
-        Say "$($inst.id) DOWN（-NoSelfHeal 演练，不动手）: $($inst.note)"
+        $nAlert = Get-InstAlertNote $inst
+        Say "$($inst.id) DOWN（-NoSelfHeal 演练，不动手）: $nAlert"
         if (-not (Test-Path $downFlag)) {
-            Send-Alert "⛔ $($inst.name) DOWN（$($inst.note)，$env:COMPUTERNAME；watchdog 演练模式未动手）"
+            Send-Alert "DOWN $($inst.name) ($nAlert, $env:COMPUTERNAME; watchdog NoSelfHeal, no action)"
             New-Item -ItemType File -Force -Path $downFlag | Out-Null
         }
         continue
     }
-    $startScript = Join-Path $PSScriptRoot "start_$($inst.id).ps1"
-    Say "$($inst.id) 不在跑，拉起: start_$($inst.id).ps1 -DataDir $($inst.data_root)（数据根来源=$($inst.data_source)）"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript -DataDir $inst.data_root 2>&1 |
-        ForEach-Object { Say "  [start] $_" }
-    $rc = $LASTEXITCODE
-    if ($rc -eq 0 -and (Wait-PortUp $inst.port $StartWaitSec)) {
-        Say "$($inst.id) 自愈成功：端口 $($inst.port) 恢复监听"
-        Send-Alert "⚠️ $($inst.name) 曾宕机，watchdog 已自动拉起（端口 $($inst.port) 恢复监听，$env:COMPUTERNAME）。请留意宕机原因（boot 日志在 <数据根>\logs\）"
+    # 幽灵防护（2026-07-26）：restart_instance 正在窗口内（已停、未绑好端口）。
+    # 此时再拉起会在同一数据根起第二个引擎——端口绑定失败但 Telegram 客户端照跑，
+    # 与正主抢会话（2026-07-22 幽灵事故同型）。哨兵带 TTL，脚本崩溃残留会自动过期。
+    $inflight = Test-RestartInflight -Instance $inst.id
+    if ($inflight.active) {
+        Say "$($inst.id) DOWN 但 restart_inflight 哨兵在窗（age=$($inflight.age_sec)s reason=$($inflight.record.reason)），本轮不拉起（防双起幽灵），交回重启方等 /login 就绪"
+        continue
+    }
+    # DOWN 仍拉起，即使冷却中（进程已死；-FromWatchdog 含 -Force）
+    Say "$($inst.id) DOWN，经 restart_instance -FromWatchdog 拉起（数据根=$($inst.data_root) 来源=$($inst.data_source)）"
+    $rr = Invoke-WatchdogRestart -InstanceId $inst.id -DataRoot ([string]$inst.data_root) -Reason 'watchdog_start'
+    if ($rr.ok) {
+        Say "$($inst.id) 自愈成功（DOWN → restart_instance）"
+        Send-Alert "⚠️ $($inst.name) 曾宕机，watchdog 已经 restart_instance 拉起（端口 $($inst.port)，$env:COMPUTERNAME）。请留意宕机原因（boot 日志在 <数据根>\logs\）"
         Remove-Item $downFlag, $strikeFile -Force -ErrorAction SilentlyContinue
     } else {
         $overall = 1
-        Say "$($inst.id) 自愈失败（start rc=$rc，等待 ${StartWaitSec}s 端口未就绪），需人工"
+        Say "$($inst.id) 自愈失败（restart_instance rc=$($rr.rc)），需人工"
         if (-not (Test-Path $downFlag)) {
-            Send-Alert "⛔ $($inst.name) 宕机且 watchdog 自动拉起失败（start rc=$rc，$env:COMPUTERNAME），需人工介入"
+            Send-Alert "⛔ $($inst.name) 宕机且 restart_instance 失败（rc=$($rr.rc)，$env:COMPUTERNAME），需人工介入"
             New-Item -ItemType File -Force -Path $downFlag | Out-Null
         }
     }

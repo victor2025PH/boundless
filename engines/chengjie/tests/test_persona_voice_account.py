@@ -1,9 +1,14 @@
 """resolve_account_persona_id 单测（优化②：根治复数/单数命名不匹配 → 空 _real_pid）。
 
-覆盖优先级：registry meta.persona_id → meta.persona_ids[0] → config[platform].persona_ids[0]。
+覆盖优先级：registry meta.persona_id → meta.persona_ids[0]
+→ platform_login.default_persona_id → config[platform].persona_ids[0]。
 """
 
-from src.ai.persona_voice import resolve_account_persona_id
+from src.ai.persona_voice import (
+    default_account_persona_id,
+    ensure_account_default_persona,
+    resolve_account_persona_id,
+)
 
 
 class _FakeRegistry:
@@ -11,8 +16,19 @@ class _FakeRegistry:
 
     def __init__(self, row):
         self._row = row
+        self.upserts = []
 
     def get(self, platform, account_id):
+        return self._row
+
+    def upsert(self, platform, account_id, **kwargs):
+        self.upserts.append((platform, account_id, kwargs))
+        meta = dict((self._row or {}).get("meta") or {})
+        if kwargs.get("merge_meta") and isinstance(kwargs.get("meta"), dict):
+            meta.update(kwargs["meta"])
+        elif isinstance(kwargs.get("meta"), dict):
+            meta = dict(kwargs["meta"])
+        self._row = {"meta": meta}
         return self._row
 
 
@@ -74,3 +90,43 @@ def test_blank_values_skipped():
     cfg = {"telegram": {"persona_ids": ["lin_xiaoyu"]}}
     assert resolve_account_persona_id(
         cfg, "telegram", "acc", registry=reg) == "lin_xiaoyu"
+
+
+def test_platform_login_default_persona_id():
+    """跨平台运营默认优先于平台 persona_ids。"""
+    assert default_account_persona_id(
+        {"platform_login": {"default_persona_id": "lin_xiaoyu"},
+         "telegram": {"persona_ids": ["other"]}},
+        "telegram",
+    ) == "lin_xiaoyu"
+
+
+def test_new_account_waits_for_user_choice():
+    """#156（2026-09-03）：新账号**不自动绑定**人设——用户没选过身份之前，
+    AI 不该以任何身份说话（旧行为：上线即自动绑默认人设，客户收到的是一个
+    从没人挑过的人格，账号栏还显示得像是选过了）。"""
+    reg = _FakeRegistry({"meta": {}})
+    cfg = {"platform_login": {"default_persona_id": "lin_xiaoyu"}}
+    assert ensure_account_default_persona(
+        reg, "telegram", "6834964252", cfg) == ""
+    assert not reg.upserts
+    assert "persona_id" not in reg.get("telegram", "6834964252")["meta"]
+
+
+def test_auto_attach_opt_in_restores_legacy_write():
+    """批量铺号的部署仍可显式要旧便利：auto_attach_default_persona: true。"""
+    reg = _FakeRegistry({"meta": {}})
+    cfg = {"platform_login": {"default_persona_id": "lin_xiaoyu",
+                              "auto_attach_default_persona": True}}
+    pid = ensure_account_default_persona(reg, "telegram", "6834964252", cfg)
+    assert pid == "lin_xiaoyu"
+    assert reg.upserts
+    assert reg.get("telegram", "6834964252")["meta"]["persona_id"] == "lin_xiaoyu"
+
+
+def test_ensure_does_not_overwrite_existing():
+    reg = _FakeRegistry({"meta": {"persona_id": "chen_mo"}})
+    cfg = {"platform_login": {"default_persona_id": "lin_xiaoyu"}}
+    pid = ensure_account_default_persona(reg, "telegram", "8755679833", cfg)
+    assert pid == "chen_mo"
+    assert not reg.upserts

@@ -28,6 +28,17 @@ _IDIOM_EXCLUDE = re.compile(
     r"play\s*dead|dead\s*line|deadline|dying\s+to\s+(see|know|try|meet)"
 )
 
+# 英文「go on」的日常宾语/状语前瞻（B71 实施67 P2-k，`_335` 实锤：正常接送
+# 孩子的英文口语被立案紧急）：「can't go on **Monday**」「no reason to go on
+# **the highway**」是安排/路线语义，「go on = 继续活下去」的习语假设只在
+# 不带这类后续时成立。危机语义的高频后续（anymore / like this / living /
+# without you / 句末）刻意不排除。宁可漏报不误报（模块既有哲学）。
+_GO_ON_MUNDANE_TAIL = (
+    r"(?!\s+(?:the|a|an|to|with|at|in|on|this\s+(?:trip|one|tour|ride|bus|road)|"
+    r"that|my|our|your|his|her|their|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday|today|tomorrow|tonight)\b)"
+)
+
 # 自伤 / 轻生（severe）：明确表达不想活 / 结束生命 / 自伤方式。
 _SELF_HARM_PATTERNS = [
     re.compile(r"想?自杀|要自杀|去自杀"),
@@ -38,11 +49,15 @@ _SELF_HARM_PATTERNS = [
     re.compile(r"割腕|跳楼|跳河|上吊|服毒|自残|伤害自己"),
     re.compile(r"我?(好|只|真的?)?想死|想要去死|让我死"),
     re.compile(r"\bkill\s+myself|want\s+to\s+die|wanna\s+die|end\s+my\s+life|"
-               r"end\s+it\s+all|better\s+off\s+dead|no\s+reason\s+to\s+(live|go\s+on)|"
+               r"end\s+it\s+all|better\s+off\s+dead|"
+               r"no\s+reason\s+to\s+(live\b|go\s+on" + _GO_ON_MUNDANE_TAIL + r")|"
                r"suicid", re.I),
 ]
 
 # 深度绝望 / 无助（elevated）：未必有明确自伤意图，但情绪很危险，需格外温柔接住。
+# B71：``hopeless`` 收紧为情绪自述形态（feel hopeless / I'm hopeless 句末）——
+# 英式口语「traffic is hopeless」「I'm hopeless at cooking」是日常吐槽/自嘲，
+# 全词裸匹配的误报面正是 `_335` 这类家常英文；``can't go on`` 同加日常后续前瞻。
 _DESPAIR_PATTERNS = [
     re.compile(r"撑不下去|坚持不下去|快撑不住|熬不下去"),
     re.compile(r"(好|很|太|真的)?绝望|绝望(了|透了)"),
@@ -51,7 +66,11 @@ _DESPAIR_PATTERNS = [
                r"(没用|废物|多余|一无是处|累赘|负担|失败者)"),
     re.compile(r"看不到(希望|未来|出路)|没有(希望|未来|出路|意义)"),
     re.compile(r"(快|要)?崩溃了?|撑到极限|到极限了"),
-    re.compile(r"\b(hopeless|worthless|can'?t\s+go\s+on|no\s+one\s+cares)\b", re.I),
+    re.compile(r"\b(?:(?:feel(?:ing)?|felt)\s+(?:so\s+)?hopeless|"
+               r"i'?m\s+hopeless(?!\s+(?:at|with)\b)|"
+               r"worthless|"
+               r"can'?t\s+go\s+on" + _GO_ON_MUNDANE_TAIL + r"|"
+               r"no\s+one\s+cares)\b", re.I),
 ]
 
 

@@ -8,7 +8,9 @@
  */
 "use strict";
 
-const VERSION = "v3-2026-07-02";
+// 改 offline.html / 预缓存清单后必须递增 VERSION，否则老客户端继续吃 SHELL_CACHE 里的旧壳。
+// v5：offline 探针加 6s 超时中止（防火墙静默丢包会把无超时 fetch 挂起数分钟 → 页面钉死）。
+const VERSION = "v5-2026-07-31";
 const SHELL_CACHE = "ws-shell-" + VERSION;
 const ASSET_CACHE = "ws-assets-" + VERSION;
 const OFFLINE_URL = "/static/pwa/offline.html";
@@ -86,7 +88,9 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(ASSET_CACHE);
-        const cached = await cache.match(req);
+        // 跨 cache 查找：预缓存的壳资源落在 SHELL_CACHE，只查 ASSET_CACHE 会漏——
+        // 离线时 offline.html 的图标就是这么变成碎图的（precache 进 SHELL、读 ASSET）。
+        const cached = (await cache.match(req)) || (await caches.match(req));
         const network = fetch(req)
           .then((res) => {
             // 仅缓存完整的 200（排除 206/分块、opaque、错误）；put 失败(配额等)静默降级不阻断

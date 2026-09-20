@@ -9,6 +9,11 @@
 (function () {
   const profiles = globalThis.AInjectProfiles;
   const mediaFormat = globalThis.AInjectMediaFormat || null;
+  // 可选依赖（manifest 的 vendor 加载序里排在 core 之前）：显式传给 createInject 而不是让
+  // core 自己去摸 globalThis——接线显式才能被静态门禁验证「扩展真的接上了」,
+  // 隐式依赖漏了不会报错,只会静默退回旧行为（这正是本仓反复踩的静默缺陷）。
+  const translateScheduler = globalThis.ATranslateScheduler || null;
+  const bubbleModel = globalThis.ABubbleModel || null;
   const core = globalThis.AInjectCore;
   if (!profiles || !core || typeof core.createInject !== "function") {
     try { console.warn("[ai-inject] shared 模块缺失，注入未启动"); } catch (e) {}
@@ -68,5 +73,9 @@
     });
   } catch (e) { /* ignore */ }
 
-  core.createInject(host, { profiles, mediaFormat }).autostart();
+  // 扩展 host 只有单条 translate：调度器的批处理 transport 会自动回落成逐条并发,
+  // 缓存/去重/语言守卫/预算照样生效（此前扩展是每个气泡每次都译、零缓存）。
+  core.createInject(host, {
+    profiles, mediaFormat, translateScheduler, bubbleModel,
+  }).autostart();
 })();

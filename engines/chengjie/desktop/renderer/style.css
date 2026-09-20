@@ -1,39 +1,198 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #app { height: 100%; width: 100%; }
-body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; color: #e6edf3; }
+/* 品牌拉丁字（Montserrat，brand-fonts.css）+ 系统 CJK；主色一律走 --cp-accent*
+   （theme-dark 已接 --bl-growth），禁止再写死旧 Tailwind 蓝字面量。 */
+body {
+  font-family: var(--bl-font-sans, Montserrat, Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+  background: #17212b; color: #e6edf3;
+}
 
 #app { display: flex; height: 100vh; }
 
+/* ── 左侧竖栏标签条（2026-08-14 竖栏回归）───────────────────────────────────
+   38px 顶部横条 → 64px 左侧竖栏：栏顶壳级品牌头（#rail-brand）+「人工操作台」常驻
+   首标签 +「官方平台 · 人工」分组 + 账号标签。图标为主、短别名为辅、全名进 tooltip。
+   #rail id 与 .rail-item/.rail-dot 类名保持不变（renderer.js / boot-invariants 锚点）。
+   配色走 --cp-* token；栏底 #0b111a 比页内深一档以示壳层归属。
+   2026-08-14 P2：工作台激活且页内标签条（workspace_base cx-shell-strip）就绪时，
+   壳侧竖栏整条让位（rail-page-strip）——标签条视觉上移进页面头之下（老板要求
+   「状态栏在智聊坐席工作台状态栏下面」）；切到内嵌官方页标签时竖栏回归。 */
 #rail {
-  width: 76px; background: #0e1621; display: flex; flex-direction: column;
-  align-items: center; padding: 12px 0; gap: 8px; flex-shrink: 0;
+  grid-row: 2; grid-column: 1;
+  width: 64px; height: 100%; background: #0b111a;
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 8px 5px; gap: 4px;
+  overflow-y: auto; overflow-x: hidden;
+  border-right: 1px solid var(--cp-border, #22303e);
 }
-/* Option C：关闭内嵌官方网页时，桌面只剩统一收件箱（stage 由 flex:1 自动铺满），隐藏左侧账号栏。 */
+#rail::-webkit-scrollbar { width: 0; height: 0; }
+/* Option C：关闭内嵌官方网页时整条标签栏隐藏，桌面只剩统一收件箱（与网页版完全一致）。 */
 #app.no-embedded #rail { display: none; }
+/* 按需出现：内嵌模式开着但一个网页版标签都没开（只剩收件箱）→ 同样整条隐藏，
+   与网页版零差异；开出首个标签由 renderer.syncRailVisibility 摘掉本类。 */
+#app.rail-solo #rail { display: none; }
+/* 页内标签条接管（P2）：工作台标签激活 && 页面已渲染 cx-shell-strip（stripReady 握手）
+   → 壳竖栏隐藏，导航由页内标签条（工作台头部之下）承担；切到内嵌标签时本类被摘掉。 */
+#app.rail-page-strip #rail { display: none; }
+/* 栏顶品牌头：壳层自己的 LOGO 锁定区（满足「菜单在 LOGO 下方」） */
+#rail-brand {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 0 10px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--cp-border, #22303e);
+  flex-shrink: 0; user-select: none;
+}
+#rail-brand .rb-mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, #2b5278, #34c759);
+}
+#rail-brand > span:not(.rb-mark) { font-size: 10px; font-weight: 700; letter-spacing: .5px; color: #cdd9e5; }
 .rail-item {
-  width: 56px; height: 56px; border-radius: 14px; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; cursor: pointer; font-size: 11px;
-  color: #8a9bb0; background: transparent; gap: 2px; user-select: none;
+  position: relative; min-height: 52px; border-radius: 8px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; cursor: pointer; font-size: 10px;
+  padding: 8px 2px 7px; gap: 3px;
+  color: var(--cp-text-dim, #8a9bb0); background: transparent; user-select: none;
+  white-space: nowrap; flex-shrink: 0;
+  transition: background .15s ease, color .15s ease;
 }
-.rail-item:hover { background: #1c2733; }
-.rail-item.active { background: #2b5278; color: #fff; }
-.rail-item .ic { font-size: 20px; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+/* 标签名（icon 后第一个 span）：竖栏内短别名，超长省略（全名进 tooltip） */
+.rail-item .ic + span { max-width: 52px; overflow: hidden; text-overflow: ellipsis; }
+.rail-item:hover { background: var(--cp-surface-2, #1c2733); }
+.rail-item.active { background: var(--cp-accent, #2b5278); color: #fff; }
+/* 激活态左缘 2px 指示条：滚动中也能一眼锚定当前标签 */
+.rail-item.active::before {
+  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px;
+  border-radius: 2px; background: rgba(255, 255, 255, .85);
+}
+.rail-item .ic { font-size: 17px; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+/* chip / 健康点 / ✕ 收成一行（竖栏标签高度可控） */
+.rail-item .rail-meta { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; }
 .rail-item.disabled { opacity: .4; cursor: not-allowed; }
-/* 无网页版聊天的平台（Messenger/LINE）：dim 显示 + 「↪收件箱」标记，点了切到统一收件箱 */
+/* 无网页版聊天的平台（Messenger/LINE）：dim 显示 + 「↪工作台」标记，点了切到人工操作台 */
 .rail-item.via-inbox { opacity: .6; }
-.rail-item.via-inbox:hover { opacity: .9; background: #1c2733; }
-.rail-item .via-tag { font-size: 8px; color: #5a8bc0; line-height: 1; }
-/* 运行时新增账号(_auto)的「✕」移除角标：默认隐藏，hover rail 项才显现 */
-.rail-item { position: relative; }
-.rail-item .rm {
-  position: absolute; top: 2px; right: 4px; font-size: 10px; line-height: 1;
-  color: #8a9bb0; opacity: 0; transition: opacity .12s; padding: 2px;
+.rail-item.via-inbox:hover { opacity: .9; background: var(--cp-surface-2, #1c2733); }
+.rail-item .via-tag { font-size: 9px; color: #5a8bc0; line-height: 1.5; }
+/* 「人工」chip：琥珀 pill（与「AI+人工」品牌绿 chip 构成模式色彩纪律） */
+.rail-item .via-tag.assist {
+  padding: 0 5px; border-radius: 999px; font-weight: 600;
+  background: rgba(217, 119, 6, .18); color: #f0b429;
 }
-.rail-item:hover .rm { opacity: .8; }
+/* 「AI+人工」chip：收件箱标签的模式徽章（品牌绿） */
+.rail-item .rail-chip {
+  font-size: 9px; line-height: 1.5; padding: 0 5px; border-radius: 999px; font-weight: 600;
+  background: rgba(52, 199, 89, .18); color: #34c759;
+}
+.rail-item.active .rail-chip { background: rgba(255, 255, 255, .18); color: #fff; }
+/* 分组标题「官方平台 · 人工」：竖栏内小号灰字，允许折行 */
+.rail-group-label {
+  flex-shrink: 0; margin: 6px 1px 0; padding: 8px 2px 2px;
+  border-top: 1px solid var(--cp-border, #22303e);
+  font-size: 9px; line-height: 1.5; color: #6f8196; text-align: center;
+  white-space: normal; user-select: none;
+}
+
+/* Path2 官方网页「仅人工」诚实条（盖在 webview 顶部，与 inject-status 错开） */
+/* ── 壳级通知条（更新就绪/官方公告，P0 2026-08-14）───────────────────────────
+   in-flow（非 absolute）：出现时把 rail/webviews 自然下推，不遮挡任何交互；
+   tone 三态：update=绿（有动作可做）/ urgent=红（官方紧急公告）/ info=中性。 */
+#shell-notice {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  padding: 7px 14px; font-size: 12.5px; line-height: 1.45;
+  background: var(--cp-surface, #12181f);
+  border-bottom: 1px solid var(--cp-border, #22303e);
+  color: var(--cp-text, #e6edf3);
+}
+#shell-notice[hidden] { display: none !important; }
+#shell-notice.sn-update {
+  background: color-mix(in srgb, #34c759 14%, var(--cp-surface, #12181f));
+  border-bottom-color: color-mix(in srgb, #34c759 40%, transparent);
+}
+#shell-notice.sn-urgent {
+  background: color-mix(in srgb, #ff5a5a 16%, var(--cp-surface, #12181f));
+  border-bottom-color: color-mix(in srgb, #ff5a5a 45%, transparent);
+}
+#shell-notice .sn-badge { flex-shrink: 0; }
+#shell-notice .sn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shell-notice .sn-primary {
+  flex-shrink: 0; cursor: pointer; border: 0; border-radius: 6px;
+  padding: 4px 12px; font-size: 12px; font-weight: 600;
+  background: var(--cp-accent, #2b5278); color: #fff;
+}
+#shell-notice.sn-update .sn-primary { background: #2e9e4f; }
+#shell-notice .sn-primary:hover { filter: brightness(1.08); }
+#shell-notice .sn-primary:disabled { opacity: .6; cursor: default; }
+#shell-notice .sn-dismiss {
+  flex-shrink: 0; cursor: pointer; border: 0; background: transparent;
+  color: var(--cp-text-dim, #8a9bb0); font-size: 12px; padding: 3px 6px; border-radius: 4px;
+}
+#shell-notice .sn-dismiss:hover { background: var(--cp-surface-2, #1c2733); color: #fff; }
+
+#assist-only-banner {
+  position: absolute; left: 76px; right: 12px; top: 10px; z-index: 40;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  background: color-mix(in srgb, #d97706 18%, var(--cp-surface, #12181f));
+  border: 1px solid color-mix(in srgb, #d97706 45%, transparent);
+  color: #fbbf24; font-size: 12px; line-height: 1.45;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+}
+#assist-only-banner[hidden] { display: none !important; }
+#assist-only-banner .aob-text { flex: 1; min-width: 0; }
+#assist-only-banner .aob-cta {
+  flex-shrink: 0; cursor: pointer; border: 0; border-radius: 6px;
+  padding: 4px 10px; font-size: 12px; font-weight: 600;
+  background: var(--cp-accent, #2b5278); color: #fff;
+}
+#assist-only-banner .aob-cta:hover { filter: brightness(1.08); }
+/* #254 D-P2 局域网开放常驻小横幅：右上角小胶囊，不遮标签栏；lan_access=false 时不存在 */
+#lan-open-banner {
+  position: absolute; right: 12px; top: 10px; z-index: 41;
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: 999px;
+  background: color-mix(in srgb, #f59e0b 18%, var(--cp-surface, #12181f));
+  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+  color: #fbbf24; font-size: 12px; line-height: 1.3;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+}
+#lan-open-banner[hidden] { display: none !important; }
+#lan-open-banner .lob-addr { font-family: ui-monospace, Consolas, monospace; color: var(--cp-text, #e6edf3); }
+#lan-open-banner .lob-cta {
+  cursor: pointer; border: 0; border-radius: 999px;
+  padding: 3px 9px; font-size: 12px; font-weight: 600;
+  background: var(--cp-accent, #2b5278); color: #fff;
+}
+#lan-open-banner .lob-cta:hover { filter: brightness(1.08); }
+/* 收件箱激活时标签条可能隐藏；诚实条只在内嵌 Tab 出现，无需跟 rail-solo 联动 */
+/* 运行时新增账号(_auto)的「✕」移除钮：内联队尾，hover 标签才显现 */
+.rail-item .rm {
+  font-size: 11px; line-height: 1; color: inherit;
+  opacity: 0; transition: opacity .12s; padding: 2px; margin-left: 2px; border-radius: 4px;
+}
+.rail-item:hover .rm { opacity: .75; }
 .rail-item .rm:hover { color: #ff7a7a; opacity: 1; }
-/* 「➕新增」内嵌账号按钮 */
-.rail-item.rail-add { color: #6f8196; }
-.rail-item.rail-add:hover { background: #1c2733; color: #cdd9e5; }
+/* 账号健康三态点（原左上角角标 → 标签内联点）：on 绿=可用 / warn 黄=失配需校准 /
+   off 红=异常 / idle 灰=等待注入。内联后无需描边托底。 */
+.rail-item .rail-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #5a6b7a; flex-shrink: 0;
+}
+.rail-item .rail-dot.on { background: #34c759; }
+.rail-item .rail-dot.warn { background: #f0b429; }
+.rail-item .rail-dot.off { background: #ff5a5a; }
+.rail-item .rail-dot.idle { background: #5a6b7a; }
+/* 收件箱标签未读徽标：数据由 /workspace 页面经 inbox-preload.js 桥回推（页面聚合口径=单源）。
+   竖栏内改右上角悬浮（中性灰蓝；红色只留给「需人工」语义，由页内 rail 承担）。 */
+.rail-item .rail-badge {
+  position: absolute; top: 3px; right: 3px;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: #46586c; color: #fff; font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.rail-item .rail-badge[hidden] { display: none; }
+/* 「➕新增」内嵌账号按钮（队尾小钮）：竖栏内压扁一档 */
+.rail-item.rail-add { color: #6f8196; min-height: 36px; padding: 4px 2px; }
+.rail-item.rail-add:hover { background: var(--cp-surface-2, #1c2733); color: #cdd9e5; }
 /* 新增账号平台选择浮层（贴 ➕ 右侧弹出） */
 .rail-add-menu {
   position: fixed; z-index: 50; min-width: 150px; padding: 5px;
@@ -48,8 +207,18 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .rail-add-menu button:hover { background: #2b5278; color: #fff; }
 .rail-add-menu button .ic { font-size: 16px; display: inline-flex; align-items: center; line-height: 0; }
 
-#stage { flex: 1; position: relative; }
-#webviews { position: absolute; inset: 0; }
+/* stage = 两行两列网格：首行 shell-notice 横跨两列（出现时下推内容），
+   第二行左=竖栏 #rail、右=webview 区。#rail display:none 时左列 auto 归零，
+   webview 区自动占满（与旧「整条隐藏」语义一致）。#webviews 内的 webview/遮罩/
+   注入胶囊全部 absolute 锚定到 #webviews，不会顶进标签栏。 */
+#stage {
+  flex: 1; position: relative; min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
+}
+#shell-notice { grid-row: 1; grid-column: 1 / -1; }
+#webviews { grid-row: 2; grid-column: 2; position: relative; min-height: 0; min-width: 0; }
 #webviews webview { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
 #webviews webview.active { display: flex; }
 
@@ -76,7 +245,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 #inject-status.is-ok:hover { opacity: 1; }
 
 /* ── 统一收件箱连接遮罩（loading / error），盖在后台 webview 上 ──────────────
-   配色对齐后台 /workspace 浅色内容区（--bg-page #f3f4f6 / --accent #3b82f6），
+   配色对齐后台 /workspace 浅色内容区（--bg-page #f3f4f6 / --cp-accent 智连蓝），
    避免深色壳遮罩盖在浅色页上造成跳变。 */
 .inbox-overlay {
   position: absolute; inset: 0; z-index: 5; display: none;
@@ -90,26 +259,30 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .inbox-overlay.err .inbox-msg { color: #b91c1c; }
 .inbox-spinner {
   width: 30px; height: 30px; border-radius: 50%;
-  border: 3px solid #d1d5db; border-top-color: #3b82f6; animation: inbox-spin .8s linear infinite;
+  border: 3px solid #d1d5db; border-top-color: var(--cp-accent); animation: inbox-spin .8s linear infinite;
 }
 @keyframes inbox-spin { to { transform: rotate(360deg); } }
 .inbox-retry {
-  padding: 8px 18px; border: 0; border-radius: 8px; background: #3b82f6; color: #fff;
+  padding: 8px 18px; border: 0; border-radius: 8px; background: var(--cp-accent); color: #fff;
   font-size: 13px; cursor: pointer;
 }
-.inbox-retry:hover { background: #2563eb; }
+.inbox-retry:hover { background: var(--cp-accent-hover); }
 
-/* ── P2 业务右栏（浅色，与后台 /workspace 统一）──────────────────────
-   配色对齐后台：面板 #fff · 边框 #e5e7eb · 文字 #111827/#6b7280 · 主色 #3b82f6。 */
+/* ── P2 业务右栏（浅色基线 + 文末深色覆盖；主色走 --cp-accent）──────── */
 #copilot {
-  width: 320px; min-width: 280px; max-width: 480px; flex-shrink: 0; background: #ffffff; border-left: 1px solid #e5e7eb;
+  width: 320px; min-width: 280px; max-width: min(720px, 45vw); flex-shrink: 0; background: #ffffff; border-left: 1px solid #e5e7eb;
   display: flex; flex-direction: column; transition: width .15s ease; position: relative;
 }
+/* 拖拽中禁用宽度过渡：transition 与每帧写宽叠加=追 150ms 动画的橡皮筋卡顿（网页版同款豁免）。
+   max-width 同步升为 min(720px,45vw)——旧 480 与 sidebar-chrome _dynMax(720) 打架，
+   JS 应用 600px 时被 CSS 钳回 480，「拖了没反应」。 */
+#copilot:has(> .cp-sidebar-resize.dragging) { transition: none; }
 #copilot.collapsed { width: 36px; min-width: 36px; max-width: 36px; }
 .cp-sidebar-resize {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 3; touch-action: none;
+  /* 命中区 5→8px 与网页端同步（高频拖拽目标；视觉高亮仍只在 hover/拖拽渐显） */
+  position: absolute; left: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 3; touch-action: none;
 }
-.cp-sidebar-resize:hover, .cp-sidebar-resize.dragging { background: rgba(59, 130, 246, .28); }
+.cp-sidebar-resize:hover, .cp-sidebar-resize.dragging { background: var(--cp-accent-weak); }
 #copilot.collapsed .cp-sidebar-resize { display: none; }
 #copilot.collapsed .cp-body, #copilot.collapsed #cp-title { display: none; }
 /* 保留 cp-hidden 类供特殊场景手动折叠整栏；默认始终显示业务助手 */
@@ -125,10 +298,24 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 /* 灰度:统一 App iframe 模式——隐藏原生 tabs/body,撑满 iframe */
 #copilot.iframe-mode .cp-tabs,
 #copilot.iframe-mode .cp-body { display: none; }
-#cp-appframe-wrap { display: none; flex: 1; min-height: 0; flex-direction: column; }
+/* P0.2（2026-08-12）：统一 App 自带账号入口（tabs 行图标+掉线红点+覆盖层）后，
+   壳头部 👥 在 iframe 模式下＝同屏双入口 → 隐藏；原生回落模式仍显示（那里没有 App 入口）。
+   旧后端（无新 app.html）时账号入口＝旧版 App 底部账号卡，仍可达，不失能力。 */
+#copilot.iframe-mode #cp-accounts-toggle { display: none; }
+#cp-appframe-wrap { display: none; flex: 1; min-height: 0; flex-direction: column; position: relative; }
 #copilot.iframe-mode #cp-appframe-wrap { display: flex; }
 #copilot.iframe-mode.collapsed #cp-appframe-wrap { display: none; }
 #cp-appframe { flex: 1; width: 100%; border: 0; background: #f8fafc; }
+/* 后端冷启动占位（P1 2026-08-13）：iframe 在后端就绪前不导航（启动闸门），
+   这段窗口盖一层真实的启动叙事；就绪/cp-ready 即隐藏。壳为深色专属，直接用深色值。 */
+#cp-boot-overlay {
+  position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; text-align: center;
+  padding: 18px; background: #17212b;
+}
+#cp-boot-overlay[hidden] { display: none; }
+#cp-boot-overlay .cp-boot-title { font-size: 13px; font-weight: 600; color: #e6edf3; }
+#cp-boot-overlay .cp-boot-sub { font-size: 12px; color: #8a9bb0; line-height: 1.7; max-width: 250px; }
 .cp-tabs { display: flex; gap: 4px; padding: 8px 12px 0; flex-shrink: 0; background: #ffffff; border-bottom: 1px solid #e5e7eb; }
 .cp-tab {
   flex: 1; font: inherit; font-size: 12px; cursor: pointer; padding: 6px 0;
@@ -136,14 +323,24 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
 }
 .cp-tab:hover { color: #111827; }
-.cp-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; font-weight: 600; }
-.cp-tab-badge { font-size: 9px; font-weight: 700; padding: 0 5px; border-radius: 999px; background: #ef4444; color: #fff; line-height: 1.55; margin-left: 3px; vertical-align: middle; }
+.cp-tab.active { color: var(--cp-accent); border-bottom-color: var(--cp-accent); font-weight: 600; }
+/* 注意力圆点角标（文案挂 title）：文本徽章会撑爆 tab 压住相邻按钮，故只点不字 */
+.cp-tab-badge { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; font-size: 0; line-height: 0; padding: 0; margin-left: 4px; vertical-align: middle; overflow: hidden; }
 .cp-tab-badge:empty { display: none; }
 .cp-tab-badge.warn { background: #f59e0b; }
 .cp-tab-badge.accent { background: #6366f1; }
 #copilot.collapsed .cp-tabs { display: none; }
 .cp-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
 .cp-empty { color: #9ca3af; font-size: 12px; text-align: center; padding: 30px 8px; line-height: 1.6; }
+/* 副驾空状态「能力橱窗」：对标翻译型竞品，第一屏显性化我们独有的能力（左对齐，扁平，无装饰） */
+.cp-showcase { text-align: left; padding: 16px 14px 12px; }
+.cp-showcase .cp-sc-hd { font-size: 12px; font-weight: 600; color: #cdd9e5; margin-bottom: 12px; }
+.cp-showcase .cp-sc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cp-showcase .cp-sc-list li { display: flex; gap: 8px; align-items: flex-start; }
+.cp-showcase .cp-sc-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; background: #4c8dff; }
+.cp-showcase .cp-sc-list b { display: block; color: #cdd9e5; font-weight: 600; font-size: 12px; }
+.cp-showcase .cp-sc-list span { display: block; color: #8496a8; font-size: 11px; line-height: 1.45; }
+.cp-showcase .cp-sc-ft { margin-top: 14px; font-size: 11px; color: #6f8196; }
 .cp-sec { margin-bottom: 0; }
 .cp-voice-note { font-size: 11px; color: #9ca3af; margin: 6px 0 0; line-height: 1.4; }
 /* 内容盒（AI 分析结果 / 客户档案）：原 .cp-card 语义，改名 .cp-box，让出 .cp-card 给折叠外壳 */
@@ -153,7 +350,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 }
 .cp-box .tag {
   display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
-  background: #eff6ff; color: #2563eb; margin: 0 4px 4px 0;
+  background: var(--cp-accent-bg); color: var(--cp-accent-deep); margin: 0 4px 4px 0;
 }
 /* ===== 可折叠卡片（与网页 unified_inbox 同款：卡头图标+标题+状态 pill+chevron） ===== */
 .cp-card { border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; margin-bottom: 10px; overflow: hidden; }
@@ -167,9 +364,9 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center;
 }
 .cp-card-ic { display: inline-flex; align-items: center; vertical-align: middle; margin-right: 5px; color: #6b7280; opacity: .88; flex-shrink: 0; }
-.cp-card-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; color: #3b82f6; background: rgba(59,130,246,.12); border-radius: 999px; padding: 1px 8px; line-height: 1.6; }
+.cp-card-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--cp-accent); background: var(--cp-accent-weak); border-radius: 999px; padding: 1px 8px; line-height: 1.6; }
 .cp-card-pill:empty { display: none; }
-.cp-card-pill.pill-accent { color: #3b82f6; background: rgba(59,130,246,.12); }
+.cp-card-pill.pill-accent { color: var(--cp-accent); background: var(--cp-accent-weak); }
 .cp-card-pill.pill-ok { color: #16a34a; background: rgba(22,163,74,.14); }
 .cp-card-pill.pill-warn { color: #d97706; background: rgba(217,119,6,.16); }
 .cp-card-pill.pill-danger { color: #dc2626; background: rgba(220,38,38,.14); }
@@ -187,14 +384,14 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   flex: 0 0 auto; padding: 5px 8px; border: 1px solid #e5e7eb; border-radius: 6px;
   background: #fff; color: #6b7280; font-size: 13px; cursor: pointer; line-height: 1;
 }
-.cp-pin:hover { border-color: #3b82f6; color: #3b82f6; }
-.cp-pin.pinned { background: #eff6ff; color: #2563eb; border-color: #3b82f6; }
+.cp-pin:hover { border-color: var(--cp-accent); color: var(--cp-accent); }
+.cp-pin.pinned { background: var(--cp-accent-bg); color: var(--cp-accent-deep); border-color: var(--cp-accent); }
 .cp-persona-src { font-size: 11px; color: #9ca3af; margin: 0 0 8px 2px; }
 .cp-btn-primary {
-  width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #3b82f6; color: #fff;
+  width: 100%; padding: 8px; border: 0; border-radius: 8px; background: var(--cp-accent); color: #fff;
   font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s;
 }
-.cp-btn-primary:hover { background: #2563eb; }
+.cp-btn-primary:hover { background: var(--cp-accent-hover); }
 .cp-btn-primary:disabled { opacity: .6; cursor: default; }
 .cp-search { display: flex; gap: 6px; margin-bottom: 8px; }
 .cp-search input {
@@ -202,14 +399,14 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   background: #fff; color: #111827; font-size: 13px;
 }
 .cp-search button {
-  padding: 0 12px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer;
+  padding: 0 12px; border: 0; border-radius: 6px; background: var(--cp-accent); color: #fff; cursor: pointer;
 }
 .cp-list { display: flex; flex-direction: column; gap: 6px; }
 .cp-item {
   background: #f8fafc; border-radius: 8px; padding: 7px 9px; font-size: 12.5px; line-height: 1.45;
   color: #374151; cursor: pointer; border: 1px solid #e5e7eb;
 }
-.cp-item:hover { border-color: #3b82f6; background: #eff6ff; }
+.cp-item:hover { border-color: var(--cp-accent); background: var(--cp-accent-bg); }
 .cp-item .it-title { color: #111827; font-weight: 600; font-size: 12px; margin-bottom: 2px; }
 .cp-hint { color: #9ca3af; font-size: 11.5px; padding: 4px 2px; }
 
@@ -220,8 +417,8 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   line-height: 1.2; transition: background .12s ease, transform .06s ease; user-select: none;
 }
 .cp-act:active { transform: translateY(1px); }
-.cp-act.primary { background: #3b82f6; color: #fff; }
-.cp-act.primary:hover { background: #2563eb; }
+.cp-act.primary { background: var(--cp-accent); color: #fff; }
+.cp-act.primary:hover { background: var(--cp-accent-hover); }
 .cp-act.send { background: #16a34a; color: #fff; }
 .cp-act.send:hover { background: #15803d; }
 .cp-act.ghost { background: #fff; color: #6b7280; border: 1px solid #e5e7eb; }
@@ -239,7 +436,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   background: #fff; color: #111827; border: 1px solid #e5e7eb; border-radius: 6px;
   padding: 7px 9px; font-size: 13px; line-height: 1.5; font-family: inherit;
 }
-.cp-edit:focus { outline: none; border-color: #3b82f6; }
+.cp-edit:focus { outline: none; border-color: var(--cp-accent); }
 
 /* 账号管理:头部 👥 入口 + 覆盖面板 */
 #cp-accounts-toggle { cursor: pointer; opacity: .8; }
@@ -255,28 +452,15 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   box-shadow: -10px 10px 30px rgba(15, 23, 42, .2); z-index: 200;
 }
 
-/* 全自动托管开关条 */
-#cp-auto-bar {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-  padding: 6px 8px; border-radius: 7px; background: #f8fafc; border: 1px solid #e5e7eb;
-}
-#cp-auto-switch { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-#cp-auto-switch input[type="checkbox"] { width: 15px; height: 15px; accent-color: #16a34a; cursor: pointer; }
-.cp-auto-label { font-size: 13px; color: #111827; }
-.cp-auto-status { margin-left: auto; font-size: 11px; color: #6b7280; }
-.cp-auto-status.on { color: #16a34a; }
-.cp-auto-status.warn { color: #d97706; }
-.cp-auto-status.off { color: #9ca3af; }
-
 /* 草稿多语言块：每条一个块（单选「发这条」+ 可编辑文本框），只发选中那条 */
 .cp-lang-block { margin-top: 8px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; }
-.cp-lang-block.active { border-color: #3b82f6; background: #eff6ff; }
+.cp-lang-block.active { border-color: var(--cp-accent); background: var(--cp-accent-bg); }
 .cp-lang-head {
   display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
   font-size: 12px; color: #6b7280; cursor: pointer; user-select: none;
 }
-.cp-lang-head input[type="radio"] { accent-color: #3b82f6; cursor: pointer; }
-.cp-lang-block.active .cp-lang-name { color: #1d4ed8; }
+.cp-lang-head input[type="radio"] { accent-color: var(--cp-accent); cursor: pointer; }
+.cp-lang-block.active .cp-lang-name { color: var(--cp-accent-deep); }
 .cp-lang-name { flex: 1; min-width: 0; }
 
 /* 分析：摘要块 + 语义 chip */
@@ -318,14 +502,78 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .cp-edit { background: #222c3a; border-color: #2b3947; color: #e6edf3; }
 .cp-pin { background: #222c3a; border-color: #2b3947; color: #8a9bb0; }
 .cp-item { background: #222c3a; border-color: #2b3947; color: #cdd9e5; }
-.cp-item:hover { background: #1c2733; border-color: #3b82f6; }
+.cp-item:hover { background: #1c2733; border-color: var(--cp-accent); }
 .cp-item .it-title { color: #e6edf3; }
 .cp-act.ghost { background: #222c3a; border-color: #2b3947; color: #cdd9e5; }
 .cp-act.ghost:hover { color: #e6edf3; border-color: #5a8bc0; }
 .badge { background: #2b3947; color: #cdd9e5; }
 #cp-accounts-panel { background: #1a2330; border-color: #2b3947; }
-#cp-auto-bar { background: #222c3a; border-color: #2b3947; }
-.cp-auto-label { color: #e6edf3; }
 .cp-summary { color: #cdd9e5; }
-.cp-lang-block.active { background: rgba(59,130,246,.16); }
-.cp-pin.pinned { background: rgba(59,130,246,.18); color: #93c5fd; border-color: #3b82f6; }
+.cp-lang-block.active { background: var(--cp-accent-bg); }
+.cp-pin.pinned { background: var(--cp-accent-weak); color: var(--cp-accent-deep); border-color: var(--cp-accent); }
+
+/* ── 融合标题栏（titlebar merge P2 2026-08-22）───────────────────────────────
+   默认 display:none：mac / 旧配置（loadFile 不带 ?tb=1）连一像素都不占。
+   融合模式（body.cx-tb-on，renderer.initTitlebar 按 URL 参数点亮）：
+   · 32px 细条整条可拖（drag），交互件（⋯）单独 no-drag；
+   · 右 padding 146px = 原生窗控悬浮区 138px + 8px 呼吸，防内容钻到按钮下面；
+   · 暗档配色与工作台顶栏 ws-top 同一渐变（视觉上细条+页头融为一块品牌头）；
+   · 亮档（body.cx-tb-light，随页面主题经 cx-titlebar-theme 回推）对齐 ws-top 亮档。 */
+#cx-titlebar { display: none; }
+body.cx-tb-on #cx-titlebar {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  height: 32px; padding: 0 146px 0 10px;
+  background: linear-gradient(100deg, #131418 0%, #191b21 60%, #1c1f26 100%);
+  color: #cdd9e5; font-size: 11.5px; user-select: none;
+  -webkit-app-region: drag;
+}
+body.cx-tb-on #app { height: calc(100vh - 32px); }
+/* splash 让位：细条在开机动画期间也保持可见可拖（冷启动等待期窗口不至于钉死不能挪）。
+   选择器特异度 (1,1,1) > #bl-splash 的 inset:0，无需 !important。 */
+body.cx-tb-on #bl-splash { top: 32px; }
+/* 全屏收起（P2b）：原生窗控在全屏下自动消失，细条同步归零，正文吃满 100vh */
+body.cx-tb-on.cx-tb-fs #cx-titlebar { display: none; }
+body.cx-tb-on.cx-tb-fs #app { height: 100vh; }
+body.cx-tb-on.cx-tb-fs #bl-splash { top: 0; }
+#cx-titlebar .cxtb-mark {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, #2b5278, #34c759);
+}
+#cx-tb-title {
+  min-width: 0; max-width: 46vw; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-weight: 600; letter-spacing: .01em;
+}
+#cx-titlebar .cxtb-spacer { flex: 1; }
+#cx-tb-more {
+  -webkit-app-region: no-drag;
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font: inherit; font-size: 15px; line-height: 1; padding: 3px 9px; border-radius: 6px;
+}
+#cx-tb-more:hover { background: rgba(255, 255, 255, .12); }
+#cx-tb-menu {
+  position: fixed; top: 34px; right: 118px; z-index: 99990;
+  display: flex; flex-direction: column; gap: 2px; min-width: 168px; padding: 5px;
+  background: #1c2733; border: 1px solid #2b3947; border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  -webkit-app-region: no-drag;
+}
+#cx-tb-menu[hidden] { display: none !important; }
+#cx-tb-menu button {
+  display: block; width: 100%; text-align: left; font: inherit; font-size: 12.5px;
+  cursor: pointer; padding: 7px 10px; background: transparent; color: #cdd9e5;
+  border: 0; border-radius: 7px;
+}
+#cx-tb-menu button:hover { background: #2b5278; color: #fff; }
+/* 亮档：与 ws-top 亮档同源（白面 + 深 ink + 细分割线） */
+body.cx-tb-on.cx-tb-light #cx-titlebar {
+  background: #ffffff; color: #334155;
+  box-shadow: inset 0 -1px 0 #e5e6ea;
+}
+body.cx-tb-on.cx-tb-light #cx-tb-more:hover { background: rgba(15, 27, 45, .08); }
+body.cx-tb-on.cx-tb-light #cx-tb-menu {
+  background: #ffffff; border-color: #e5e7eb; box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
+}
+body.cx-tb-on.cx-tb-light #cx-tb-menu button { color: #374151; }
+body.cx-tb-on.cx-tb-light #cx-tb-menu button:hover { background: #f3f4f6; color: #111827; }

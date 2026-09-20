@@ -47,9 +47,13 @@ export default function AutoChatDemo() {
           </span>
           <span className="flex gap-1">
             {PLATFORMS.map((p) => (
+              // 实施78 X7（2026-08-28 实测）：原为 8px 白字压在品牌色上——四个品牌色亮度都高
+              // （LINE #06C755 白字对比度实测 2.26、Messenger #0084FF 3.66，均低于 WCAG AA 的 4.5），
+              // 白天模式下几乎看不清。改深色字：同样四个背景色下对比度升到 4.9~9.3 全部达标，
+              // 品牌色得以保留。字号一并 8→10px（8px 本就低于任何合理下限），徽标加宽以容下「LINE」。
               <span
                 key={p.label}
-                className="grid h-5 w-7 place-items-center rounded text-[8px] font-bold text-white"
+                className="grid h-5 w-8 place-items-center rounded text-[10px] font-bold text-ink-950"
                 style={{ background: p.color }}
               >
                 {p.label}

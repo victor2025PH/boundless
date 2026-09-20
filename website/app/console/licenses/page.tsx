@@ -1,33 +1,48 @@
-// /console/licenses：授权台账 —— source_system / 状态 / 到期窗口筛选 + 归属客户（viewer 隐藏）。
+// /console/licenses：授权台账 —— 产品许可证（订阅 / 试用 / 手工签发）。
+// Token 充值走订单台账（充值签的是额度凭证，不是本页这类许可证）。
 import Link from "next/link";
-import { listCustomers, listLicenses } from "@/lib/ledger";
+import { listLicenses } from "@/lib/ledger";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById } from "../data";
-import { AssignCustomerControl, type CustomerOption } from "../ui";
+import { AssignCustomerControl } from "../ui";
+import {
+  LEDGER_SOURCE_SYSTEMS,
+  LICENSE_STATUS_LABEL,
+  LICENSE_STATUS_ORDER,
+  SYSTEM_LABEL,
+  lbl,
+  seatsLabel,
+  toOptions,
+} from "../labels";
+import { productDisplay, tierLabel } from "../sku-names";
 import {
   Card,
-  Code,
   CustomerLink,
   DataTable,
   EmptyState,
   ExpiryCell,
   FilterSubmit,
+  FingerprintCell,
+  LicenseStatusBadge,
   PageHeader,
   Pager,
-  SystemBadge,
+  QuotaCell,
   Td,
   TestBadge,
   TestFilterToggle,
   filterInputCls,
-  fmtDateTime,
+  fmtRelative,
 } from "../parts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LIMIT = 50;
-const SYSTEMS = ["avatarhub", "chengjie"] as const;
+const STATUS_CHOICES = [
+  { value: "", label: "全部状态" },
+  ...toOptions(LICENSE_STATUS_LABEL, LICENSE_STATUS_ORDER),
+];
 const EXPIRING_CHOICES = [
   { value: "", label: "全部到期时间" },
   { value: "30", label: "30 天内到期" },
@@ -56,15 +71,9 @@ export default function LicensesPage({
     expiringInDays: Number.isFinite(expiringDays) ? expiringDays : undefined,
   };
   const { rows, total } = listLicenses({ ...baseFilter, limit: LIMIT, offset, includeTest: showTest });
-  // 当前筛选条件下的测试数据条数 = 含测试 total − 不含测试 total（limit:1 仅取计数）
   const testCount = showTest
     ? total - listLicenses({ ...baseFilter, limit: 1 }).total
     : listLicenses({ ...baseFilter, limit: 1, includeTest: true }).total - total;
-
-  const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
-    id: c.id,
-    label: `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`,
-  }));
 
   const nameById = new Map<string, string | null>();
   for (const l of rows) {
@@ -80,30 +89,26 @@ export default function LicensesPage({
     <div>
       <PageHeader
         title="授权台账"
-        desc={
-          <>
-            数据来自 <Code>tools/license_ledger</Code> 导出 →{" "}
-            <Code>scripts/ledger-import-licenses.mjs</Code> 导入（幂等，可重复执行）。到期不足 30 天的行会高亮，
-            是续费触达的第一队列。
-          </>
-        }
+        desc="产品许可证（试用 / 订阅 / 手工签发）。2026-08-21 起智聊只卖 Token 充值，充值记录在订单台账，不在本页。"
+        techNote="授权由各产品引擎每日同步进账本。到期不足 30 天会高亮。席位 0（成杰引擎）表示不限。额度列读签发时写入的 included_chars / included_tokens_monthly，台账暂无消耗水位。"
       />
 
       <form method="GET" className="mb-4 flex flex-wrap items-center gap-2">
         <select name="source_system" defaultValue={sourceSystem ?? ""} className={filterInputCls}>
-          <option value="">全部系统</option>
-          {SYSTEMS.map((s) => (
+          <option value="">全部引擎</option>
+          {LEDGER_SOURCE_SYSTEMS.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {lbl(SYSTEM_LABEL, s)}
             </option>
           ))}
         </select>
-        <input
-          name="status"
-          defaultValue={status ?? ""}
-          placeholder="状态（如 active / expired）"
-          className={`${filterInputCls} w-44`}
-        />
+        <select name="status" defaultValue={status ?? ""} className={filterInputCls}>
+          {STATUS_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
         <select name="expiring_days" defaultValue={expiringRaw ?? ""} className={filterInputCls}>
           {EXPIRING_CHOICES.map((c) => (
             <option key={c.value} value={c.value}>
@@ -114,7 +119,7 @@ export default function LicensesPage({
         {showTest && <input type="hidden" name="test" value="1" />}
         <FilterSubmit />
         {hasFilter && (
-          <Link href="/console/licenses" className="text-xs text-slate-500 hover:text-slate-300">
+          <Link href="/console/licenses" className="text-xs text-slate-400 hover:text-slate-200">
             清除
           </Link>
         )}
@@ -133,50 +138,74 @@ export default function LicensesPage({
           hints={
             hasFilter
               ? ["调整筛选条件试试。"]
-              : [
-                  <span key="export">
-                    先在产品侧用 <Code>tools/license_ledger</Code> 生成归一化导出 JSON；
-                  </span>,
-                  <span key="import">
-                    再运行 <Code>node scripts/ledger-import-licenses.mjs &lt;导出json&gt;</Code> 导入本账本。
-                  </span>,
-                ]
+              : ["授权由各产品引擎自动同步。尚无记录时请联系技术负责人确认履约端是否在岗。"]
           }
         />
       ) : (
         <Card className="p-0">
-          <DataTable head={["系统", "授权号", "产品 / 方案", "席位", "到期时间", "状态", "同步于", "关联客户"]}>
-            {rows.map((l) => (
-              <tr key={l.id} className="hover:bg-slate-800/40">
-                <Td>
-                  <SystemBadge system={l.source_system} />
-                </Td>
-                <Td>
-                  <span className="font-mono text-xs text-slate-200" title={l.id}>
-                    {l.source_key}
-                  </span>
-                  {l.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
-                </Td>
-                <Td className="text-xs text-slate-300">
-                  {[l.product_id, l.plan, l.edition].filter(Boolean).join(" / ") || "—"}
-                </Td>
-                <Td className="text-xs text-slate-400">{l.seats ?? "—"}</Td>
-                <Td className="text-xs">
-                  <ExpiryCell expiresAt={l.expires_at} />
-                </Td>
-                <Td className="text-xs text-slate-400">{l.status || "—"}</Td>
-                <Td className="text-xs text-slate-600">{fmtDateTime(l.synced_at)}</Td>
-                <Td>
-                  {l.customer_id ? (
-                    <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
-                  ) : canWrite ? (
-                    <AssignCustomerControl entity="license" entityKey={l.id} customers={customerOptions} />
-                  ) : (
-                    <span className="text-xs text-slate-600">未归属</span>
-                  )}
-                </Td>
-              </tr>
-            ))}
+          <DataTable
+            head={["产品", "关联客户", "授权号", "档位", "席位", "绑定设备", "额度", "到期", "状态", "最近同步"]}
+          >
+            {rows.map((l) => {
+              const product = productDisplay(
+                { product_id: l.product_id, sku_id: l.sku_id },
+                lbl(SYSTEM_LABEL, l.source_system)
+              );
+              const tier = tierLabel({ sku_id: l.sku_id, plan: l.plan, edition: l.edition });
+              const synced = fmtRelative(l.synced_at);
+              return (
+                <tr key={l.id}>
+                  <Td>
+                    <span title={product.title} className="text-xs text-slate-200">
+                      {product.text}
+                    </span>
+                    {l.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
+                  </Td>
+                  <Td>
+                    {l.customer_id ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
+                        {canWrite && <AssignCustomerControl entity="license" entityKey={l.id} assigned />}
+                      </span>
+                    ) : canWrite ? (
+                      <AssignCustomerControl entity="license" entityKey={l.id} />
+                    ) : (
+                      <span className="text-xs text-slate-400">未归属</span>
+                    )}
+                  </Td>
+                  <Td>
+                    <span className="font-mono text-xs text-slate-200" title={l.id}>
+                      {l.source_key}
+                    </span>
+                  </Td>
+                  <Td>
+                    <span title={tier.title} className="text-xs text-slate-300">
+                      {tier.text}
+                    </span>
+                  </Td>
+                  <Td className="text-xs tabular-nums text-slate-400">
+                    {seatsLabel(l.seats, l.source_system)}
+                  </Td>
+                  <Td>
+                    <FingerprintCell fingerprint={l.machine_fingerprint} />
+                  </Td>
+                  <Td>
+                    <QuotaCell raw={l.raw} />
+                  </Td>
+                  <Td className="text-xs">
+                    <ExpiryCell expiresAt={l.expires_at} />
+                  </Td>
+                  <Td>
+                    <LicenseStatusBadge status={l.status} />
+                  </Td>
+                  <Td>
+                    <span title={synced.title} className="text-xs text-slate-400">
+                      {synced.text}
+                    </span>
+                  </Td>
+                </tr>
+              );
+            })}
           </DataTable>
         </Card>
       )}

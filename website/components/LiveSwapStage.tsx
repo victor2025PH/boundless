@@ -122,7 +122,7 @@ export default function LiveSwapStage() {
           </span>
 
           {/* voice cloning indicator */}
-          <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 bg-black/50 px-2.5 py-1 text-[11px] font-medium text-neon-violet backdrop-blur">
+          <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 bg-black/50 px-2.5 py-1 text-[11px] font-medium text-violet-300 backdrop-blur">
             <Mic className="h-3 w-3" />
             {t.swap.voiceCloning}
             <span className="flex items-end gap-[2px]">

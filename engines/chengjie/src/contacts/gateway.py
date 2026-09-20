@@ -173,6 +173,26 @@ class ContactGateway:
         """
         self._intimacy_engine = engine
 
+    def set_post_merge_hook(self, fn: Optional[Any]) -> None:
+        """P3（2026-08-18 跨平台档案）：**自动**合并成功回调（token / 信号融合两路）。
+
+        bootstrap 注入「记忆合流执行器」——引流码客户自动并档后，AI 情景记忆
+        跟着合流（此前只有工作台人工合并路由接了 P2 桥，自动路径是缺口）。
+        签名 ``fn(contact_id=..., source="token"|"heuristic")``；回调自身
+        fail-soft，绝不影响合并结果。人工合并路由**不经此钩子**（路由层已
+        直连 P2 桥，双挂会重复执行——幂等但白烧）。
+        """
+        self._post_merge_hook = fn
+
+    def _fire_post_merge(self, contact_id: str, source: str) -> None:
+        fn = getattr(self, "_post_merge_hook", None)
+        if fn is None or not contact_id:
+            return
+        try:
+            fn(contact_id=contact_id, source=source)
+        except Exception:
+            logger.debug("post_merge_hook failed（不影响合并）", exc_info=True)
+
     # ── 高层便利查询（给 rpa_hooks / web 用，避免下钻 _store） ────
     def find_channel_identity(
         self, *, channel: str, account_id: str, external_id: str,
@@ -789,6 +809,7 @@ class ContactGateway:
                     for stg in (STAGE_LINE_ADDED, STAGE_LINE_ACCEPTED, STAGE_LINE_ENGAGED):
                         self._transit(new_journey.journey_id, stg,
                                       trace_id=trace_id, payload={"reason": "token_merged"})
+                self._fire_post_merge(new_contact_id, "token")
                 return MergeOutcome(
                     merged=True, via="token", confidence=0.95,
                     contact_id=new_contact_id,
@@ -820,6 +841,7 @@ class ContactGateway:
                 for stg in (STAGE_LINE_ADDED, STAGE_LINE_ACCEPTED, STAGE_LINE_ENGAGED):
                     self._transit(new_journey.journey_id, stg,
                                   trace_id=trace_id, payload={"reason": "signal_merged"})
+            self._fire_post_merge(new_contact_id, "heuristic")
             return MergeOutcome(
                 merged=True, via="heuristic", confidence=decision.confidence,
                 contact_id=new_contact_id,

@@ -86,6 +86,7 @@ def crisis_client(tmp_path):
     sm.crisis_mark_handled_for_admin.side_effect = lambda eid, **kw: store.mark_handled(
         eid, handled_by=kw.get("handled_by", ""), note=kw.get("note", "")
     )
+    sm._crisis_store = store   # #185：count_since 空态窗口口径
     tc.skill_manager = sm
     app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=tc)
     with TestClient(app, raise_server_exceptions=True) as client:
@@ -102,6 +103,133 @@ def crisis_client(tmp_path):
         )
         client.headers.update({"Authorization": "Bearer test-token-123"})
         yield client, store
+
+
+# ── #185 三档空态 + 一键开启（2026-09-05） ──────────────────────────────────
+
+def test_audit_page_state_pure():
+    from src.web.routes.crisis_audit_routes import audit_page_state, wellbeing_switches
+
+    assert audit_page_state(audit_on=False, count_in_window=0, total_count=0) == "audit_off"
+    # 留痕关了但库里还有历史 → 历史照常可见（has_events）；「现在没人在记」由页面红条
+    # 按 audit_on=false 单独亮，不靠空态档
+    assert audit_page_state(audit_on=False, count_in_window=0, total_count=9) == "has_events"
+    assert audit_page_state(audit_on=True, count_in_window=0, total_count=0) == "audit_on_empty"
+    # 表里有行就是 has_events（历史可见）；audit_on_empty 只属「留痕开着且全表为空」
+    assert audit_page_state(audit_on=True, count_in_window=0, total_count=3) == "has_events"
+    assert audit_page_state(audit_on=True, count_in_window=1, total_count=3) == "has_events"
+
+    off = wellbeing_switches({"companion": {"wellbeing": {}}})
+    assert off == {"wellbeing_enabled": True, "audit_on": False, "escalation_on": False}
+    on = wellbeing_switches({"companion": {"wellbeing": {
+        "crisis_audit": True, "crisis_escalation": True}}})
+    assert on["audit_on"] and on["escalation_on"]
+    # wellbeing 总闸关 → 留痕/升级视同关（页面亮红条，不装保护着）
+    dis = wellbeing_switches({"companion": {"wellbeing": {
+        "enabled": False, "crisis_audit": True, "crisis_escalation": True}}})
+    assert dis["wellbeing_enabled"] is False
+    assert dis["audit_on"] is False and dis["escalation_on"] is False
+    assert wellbeing_switches(None)["audit_on"] is False
+
+
+def test_list_reports_switches_when_flag_missing(crisis_client):
+    """默认配置没配 crisis_audit → audit_on=false（页面红条据此亮）；历史事件照常可见。"""
+    client, _ = crisis_client
+    d = client.get("/api/crisis-events").json()
+    assert d["audit_on"] is False and d["escalation_on"] is False
+    assert d["wellbeing_enabled"] is True
+    assert d["window_days"] >= 7
+    assert d["total"] == 2
+    assert d["state"] == "has_events"
+
+
+def test_list_reports_audit_off_when_flag_missing_and_empty(tmp_path):
+    """空库 + 留痕未开 → state=audit_off（页面绝不渲染「好消息」）。"""
+    from src.utils.crisis_event_store import CrisisEventStore
+
+    cm = _run_async(_load_cm(tmp_path))
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    store = CrisisEventStore(tmp_path / "crisis.db")
+    tc = MagicMock()
+    sm = MagicMock()
+    sm.crisis_list_for_admin.side_effect = lambda **kw: store.list_recent(limit=kw.get("limit", 50))
+    sm.crisis_count_for_admin.side_effect = lambda **kw: store.count(
+        only_unhandled=kw.get("only_unhandled", False))
+    sm._crisis_store = store
+    tc.skill_manager = sm
+    app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=tc)
+    with TestClient(app, raise_server_exceptions=True) as client:
+        client.headers.update({"Authorization": "Bearer test-token-123"})
+        d = client.get("/api/crisis-events").json()
+        assert d["state"] == "audit_off"
+        assert d["count"] == 0 and d["total"] == 0
+        # 开了留痕之后：空库 → audit_on_empty（这才是「好消息」档）
+        cm.set_overlay_flag("companion.wellbeing.crisis_audit", True)
+        d2 = client.get("/api/crisis-events").json()
+        assert d2["state"] == "audit_on_empty"
+        assert d2["audit_on"] is True
+
+
+def test_enable_writes_overlay_preserving_comments_and_flips_state(crisis_client, tmp_path):
+    client, _ = crisis_client
+    overlay = tmp_path / "config.local.yaml"
+    overlay.write_text(
+        "# 运维手写注释：这行不能被剃掉\n"
+        "companion:\n"
+        "  selfie:\n"
+        "    enabled: false   # 行尾注释也要活着\n",
+        encoding="utf-8",
+    )
+    r = client.post("/api/crisis-events/enable", json={})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] is True
+    assert d["applied"] == [
+        "companion.wellbeing.crisis_audit", "companion.wellbeing.crisis_escalation",
+    ]
+    assert d["audit_on"] is True and d["escalation_on"] is True
+    text = overlay.read_text(encoding="utf-8")
+    assert "运维手写注释" in text, "overlay 注释必须保留（ruamel round-trip）"
+    assert "行尾注释也要活着" in text
+    data = yaml.safe_load(text)
+    assert data["companion"]["wellbeing"]["crisis_audit"] is True
+    assert data["companion"]["wellbeing"]["crisis_escalation"] is True
+    assert data["companion"]["selfie"]["enabled"] is False, "旁边的键不得被改"
+    # 列表接口即时反映：留痕开了、窗口内有 2 条 → has_events
+    d2 = client.get("/api/crisis-events").json()
+    assert d2["state"] == "has_events"
+    assert d2["audit_on"] is True
+
+
+def test_enable_audit_only_when_escalation_false(crisis_client, tmp_path):
+    client, _ = crisis_client
+    r = client.post("/api/crisis-events/enable", json={"escalation": False})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["applied"] == ["companion.wellbeing.crisis_audit"]
+    assert d["audit_on"] is True and d["escalation_on"] is False
+    data = yaml.safe_load((tmp_path / "config.local.yaml").read_text(encoding="utf-8"))
+    assert "crisis_escalation" not in data["companion"]["wellbeing"]
+
+
+def test_enable_requires_write_permission(tmp_path):
+    cm = _run_async(_load_cm(tmp_path))
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=None)
+    with TestClient(app, raise_server_exceptions=True) as client:
+        r = client.post("/api/crisis-events/enable", json={},
+                        headers={"Authorization": "Bearer wrong"})
+        assert r.status_code in (401, 403)
+    assert not (tmp_path / "config.local.yaml").exists()
+
+
+def test_enable_audited(crisis_client, tmp_path):
+    client, _ = crisis_client
+    client.post("/api/crisis-events/enable", json={})
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    rows = audit.query(limit=20, action="crisis_audit_enable")
+    acts = [str(r.get("action") or "") for r in rows]
+    assert "crisis_audit_enable" in acts
 
 
 def test_list_crisis_events(crisis_client):

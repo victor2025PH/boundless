@@ -3,11 +3,22 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLang } from "@/components/LanguageContext";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
-import { PRODUCT_IMG, PRODUCT_GLOW } from "@/components/productMeta";
+import {
+  PRODUCT_IMG,
+  PRODUCT_IMG_WEBP,
+  PRODUCT_GLOW,
+  PRODUCT_OPTICAL_SCALE,
+} from "@/components/productMeta";
 import { track } from "@/lib/track";
-import { abVariant, abExpose } from "@/lib/ab";
+import { isColdExternalEntry } from "@/lib/overlay-policy";
+import { abExpose } from "@/lib/ab";
 
 /** 科幻开场页（进入 AI 世界）：全屏星际之门场景 + WebAudio 合成氛围音乐。
+ *  2026-07 起从「阻断式闸门」改造为「片头」：品牌感保留，但不再拦截转化——
+ *  - 移动端（pointer: coarse 或视口 <768px）完全不展示，等同已看过（写会话标记后收起）；
+ *  - 桌面端展示 ~2.6s（入场动画 ~1.25s 落定 + ~1.3s 品牌停留）后自动散场，
+ *    与点击按钮同一 dismiss 流程（reduced-motion 快速流程下缩短到 ~0.8s）；
+ *  - 遮罩任意点击可跳过（Enter/空格/Escape 原本就能进入）；?introhold=1 禁用自动散场（QA 专用）。
  *  - 每个会话只出现一次（sessionStorage），站内往返不重复打扰；
  *  - 音乐由 WebAudio 实时合成（无音频文件、无版权问题），首次手势后才出声（浏览器自动播放策略）；
  *  - 点击"进入"触发星流加速 + 光门冲越动画，随后音乐在正文里缓缓消散；
@@ -18,6 +29,29 @@ const SEEN_KEY = "bl-intro-seen";
 /* 同一 JS 运行时内（SPA 内部跳转回首页）直接跳过，避免一帧闪现；
  * 服务器端渲染时恒为 false，保证 SSR/hydration 一致。 */
 let dismissedInRuntime = false;
+
+/* 移动端判定（粗指针设备或窄视口）：开场片头只在桌面端展示。
+ * 只在浏览器侧调用（effect / inline script），SSR 阶段无 window 恒 false——
+ * 首帧闪现由遮罩内 inline script 以同一判定在 hydration 前兜住。 */
+const isMobileViewport = () =>
+  typeof window !== "undefined" &&
+  (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 768);
+
+/* QA 逃生舱：?introhold=1 禁用自动散场（Playwright 断言需要长时间观察遮罩，
+ * 见 scripts/qa-intro-motion.mjs / qa-intro-button.mjs 与 docs/qa-intro.md）。 */
+const introHoldActive = () => {
+  try {
+    return /[?&]introhold=1(?:&|$)/.test(window.location.search);
+  } catch {
+    return false;
+  }
+};
+
+/* 星门粒子等原生 DOM 直取图标处优先 .webp 变体（体积远小于 PNG）；变体可能尚未存在
+ * ——所有消费点都挂 onerror 一次性回退原 PNG（回退时清 onerror 防循环）。
+ * 取 productMeta 的成品映射而非在此拿 PNG 路径改后缀：URL 带 `?v=rev` 指纹后
+ * `/\.png$/` 锚不住结尾，正则会静默失效导致 webp 全线回落。 */
+const productImgSrc = (key: ProductKey) => PRODUCT_IMG_WEBP[key];
 
 const COPY = {
   zh: {
@@ -32,9 +66,12 @@ const COPY = {
   },
   en: {
     title: "BOUNDLESS",
-    sub: "无 界 科 技",
+    /* 实施78 P0-2：英文档原为中文页的镜像（sub「无 界 科 技」+ taglineSub「让沟通，无界」）。
+       中文页放拉丁转写是助记，反过来对不识汉字的访客只是噪音，且在我们主打「数据主权」时
+       多余地暗示产品来源。副标改拉丁字形，第二行留空（下方按真值渲染，不出空 span）。 */
+    sub: "A I   E N G I N E",
     tagline: "Communication, Boundless.",
-    taglineSub: "让沟通，无界",
+    taglineSub: "",
     enter: "ENTER THE AI WORLD",
     hint: "Sound on recommended · scroll or click",
     soundOff: "ENABLE SOUND",
@@ -49,12 +86,24 @@ const COPY = {
  * mp3 加载失败时回退到干净的合成和弦垫（无噪声层）。 */
 
 const THEME_URL = "/intro/theme.mp3";
+/* AAC 64kbps 变体（并行工作线产出，体积约为 mp3 的 1/3）：支持 mp4 音频的浏览器优先取它，
+ * 文件尚未产出（HTTP 非 ok）或网络错则回退 mp3。文件级回退，解码失败仍走既有合成和弦垫兜底。 */
+const THEME_M4A_URL = "/intro/theme-64.m4a";
 let themePromise: Promise<ArrayBuffer | null> | null = null;
+
+const fetchTrack = (url: string) => fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null));
 
 function preloadTheme() {
   if (!themePromise) {
-    themePromise = fetch(THEME_URL)
-      .then((r) => (r.ok ? r.arrayBuffer() : null))
+    // canPlayType 探测放在函数体内（本函数只在浏览器事件/effect 后调用），模块顶层不触碰 document
+    let m4aOk = false;
+    if (typeof document !== "undefined") {
+      try {
+        m4aOk = !!document.createElement("audio").canPlayType('audio/mp4; codecs="mp4a.40.2"');
+      } catch {}
+    }
+    themePromise = (m4aOk ? fetchTrack(THEME_M4A_URL).catch(() => null) : Promise.resolve<ArrayBuffer | null>(null))
+      .then((ab) => ab ?? fetchTrack(THEME_URL))
       .catch(() => null);
   }
   return themePromise;
@@ -484,15 +533,22 @@ function spawnGateParticle(
   el.style.setProperty("--tx", ux.toFixed(3));
   el.style.setProperty("--ty", uy.toFixed(3));
   const img = document.createElement("img");
-  img.src = PRODUCT_IMG[key];
+  img.onerror = () => {
+    img.onerror = null;
+    img.src = PRODUCT_IMG[key];
+  };
+  img.src = productImgSrc(key);
   img.alt = "";
   img.draggable = false;
   img.decoding = "async";
+  // 与 ProductIcon 同源光学补偿：星门粒子不经 React，需在 DOM 层自管缩放
+  const optical = PRODUCT_OPTICAL_SCALE[key] ?? 1;
   // C4 产品主色辉光：辉光/拖尾/涟漪同色，强化产品识别（近层追加紫晕纵深）
   const glow = PRODUCT_GLOW[key];
   img.style.filter =
     `drop-shadow(0 0 ${layer.glowPx}px rgba(${glow},${layer.glowA}))` +
     (layer.cls === "bl-gl-near" ? " drop-shadow(0 0 34px rgba(167,139,250,0.35))" : "");
+  if (optical !== 1) img.style.transform = `scale(${optical})`;
   el.appendChild(img);
   host.appendChild(el);
 
@@ -656,8 +712,6 @@ export default function IntroCover() {
   const [show, setShow] = useState<boolean>(() => !dismissedInRuntime);
   const [phase, setPhase] = useState<"idle" | "warp" | "leave">("idle");
   const [soundOn, setSoundOn] = useState(false);
-  // A/B intro_auto_enter B 桶：无操作 12s 自动进入；≤3s 时把剩余秒数显示在 hint 行
-  const [autoLeft, setAutoLeft] = useState<number | null>(null);
   // 进入按钮形状：产品裁定回退标准胶囊（波浪湍流轮廓反馈丑），不再做形状 A/B
   const [btnShape] = useState<"wave" | "pill">("pill");
   const btnShapeRef = useRef<"wave" | "pill">("pill");
@@ -669,6 +723,8 @@ export default function IntroCover() {
   const userMutedRef = useRef(false);
   const targetSpeedRef = useRef(0.0022);
   const timersRef = useRef<number[]>([]);
+  // 片头自动散场定时器：手动进入（点击/滚动/按键）时在 enter() 里清掉，防迟到的二次触发
+  const autoDismissTimerRef = useRef<number | null>(null);
   const reducedRef = useRef(false);
   const touchYRef = useRef<number | null>(null);
   const enterBtnRef = useRef<HTMLButtonElement>(null);
@@ -756,6 +812,11 @@ export default function IntroCover() {
     if (enteredRef.current) return;
     enteredRef.current = true;
     dismissedInRuntime = true;
+    // 手动进入抢在自动散场前：清掉倒计时定时器（enter 本身幂等，这里是双保险）
+    if (autoDismissTimerRef.current !== null) {
+      window.clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = null;
+    }
     // 进入方式 + 停留时长 + 是否开声 + 按钮形状桶，一个事件看全进入行为（后台免跨事件拼接）
     track("intro_enter", {
       method,
@@ -766,12 +827,20 @@ export default function IntroCover() {
     try {
       sessionStorage.setItem(SEEN_KEY, "1");
     } catch {}
-    // 尊重用户手动静音的选择；否则进场时音乐涌起 + 冲越声 + 光门撞击
+    // 尊重用户手动静音的选择；否则进场时音乐涌起 + 冲越声 + 光门撞击。
+    // 自动散场（method="auto"）可能全程没有用户手势：不冷启动音频（自动播放策略会拦截
+    // AudioContext 创建/resume 并在控制台报错），已被手势解锁的音频只做涌起/冲越衔接，
+    // 且跳过 impact 撞击音（它是「用户按下按钮」的触觉隐喻，无手势场景不该响）。
     if (!userMutedRef.current) {
-      startSound();
-      audioRef.current?.swell();
-      audioRef.current?.whoosh();
-      if (!reducedRef.current) audioRef.current?.impact();
+      if (method !== "auto") {
+        startSound();
+        audioRef.current?.swell();
+        audioRef.current?.whoosh();
+        if (!reducedRef.current) audioRef.current?.impact();
+      } else if (audioRef.current) {
+        audioRef.current.swell();
+        audioRef.current.whoosh();
+      }
     }
     const reduced = reducedRef.current;
     if (!reduced) targetSpeedRef.current = 0.075;
@@ -790,9 +859,32 @@ export default function IntroCover() {
     );
   }, [startSound]);
 
-  /* 会话内只出现一次 + 锁滚动 + 全局手势/键盘 */
+  /* 会话内只出现一次 + 移动端不展示 + 锁滚动 + 全局手势/键盘 */
   useEffect(() => {
     reducedRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    /* 移动端默认不展示片头（等同已看过）：SSR 阶段无 window、初始 show 恒为 true
+     * （沿用惰性初始 + effect 校正的既有模式，不引入水化不一致），这里把 React 状态
+     * 校正到位；hydration 前的首帧闪现由遮罩内 inline script 以同一判定提前隐藏。 */
+    if (isMobileViewport()) {
+      dismissedInRuntime = true;
+      try {
+        sessionStorage.setItem(SEEN_KEY, "1");
+      } catch {}
+      setShow(false);
+      return;
+    }
+    /* 实施78 P0-3：搜索 / AI 答案 / 广告 / 社媒点进来的冷流量直接跳过开场片。
+     * 那批人带着问题来、耐心最低，也恰恰是最贵的流量；品牌片留给直接访问与站内往返的访客。
+     * 与「会话内只出现一次」共用同一条退场路径（写 SEEN_KEY），避免二次导航又冒出来。 */
+    if (isColdExternalEntry()) {
+      dismissedInRuntime = true;
+      try {
+        sessionStorage.setItem(SEEN_KEY, "1");
+      } catch {}
+      setShow(false);
+      track("intro_skipped_cold_entry");
+      return;
+    }
     let seen = false;
     try {
       seen = !!sessionStorage.getItem(SEEN_KEY);
@@ -831,9 +923,10 @@ export default function IntroCover() {
   }, [enter, startSound]);
 
   /* 进入按钮：全员标准胶囊（Siri 流光/呼吸/光斑保留）。
-   * 波浪湍流形变已下线——产品反馈扭动轮廓不如旧胶囊；落盘写回 b 以免旧桶干扰读数。 */
+   * 波浪湍流形变已下线——产品反馈扭动轮廓不如旧胶囊；落盘写回 b 以免旧桶干扰读数。
+   * dismissedInRuntime 守卫：移动端/已看过的「短暂挂载即收起」流程里不产出曝光。 */
   useEffect(() => {
-    if (!show) return;
+    if (!show || dismissedInRuntime) return;
     try {
       localStorage.setItem("ab_intro_btn_shape", "b");
     } catch {
@@ -843,40 +936,32 @@ export default function IntroCover() {
     btnShapeRef.current = "pill";
   }, [show]);
 
-  /* A/B 实验 intro_auto_enter：B 桶在完全无操作 12s 后自动进入正文（最后 3s 在 hint 行倒计时，
-   * 任意操作立即取消且本次会话不再武装）；A 桶仅曝光作对照。要回答的问题：自动进入能否
-   * 挽回「看完动画就走神/流失」的会话，而不打扰主动探索的用户。 */
+  /* 片头自动散场：展示 ~2.6s（入场动画 ~1.25s 落定 + ~1.3s 品牌停留）后自动走与点击按钮
+   * 完全相同的退场流程（同一 enter()，保留退场动画与 sessionStorage 写入；音效差异在
+   * enter 的 auto 分支处理）。reduced-motion 本就是快速/静态流程，缩短到 ~0.8s。
+   * 用户在倒计时内点按钮 → enter() 清掉本定时器（幂等双保险）。?introhold=1 禁用（QA）。
+   * 注：本机制取代了旧 A/B 实验 intro_auto_enter（B 桶无操作 12s 自动进入）——
+   * 片头无条件自动散场后 12s 定时器永远不可能触发，保留只会产出稀释读数的假曝光，已下线。 */
   useEffect(() => {
-    if (!show) return;
-    const variant = abVariant("intro_auto_enter");
-    abExpose("intro_auto_enter", variant);
-    if (variant !== "b") return;
-    const deadline = performance.now() + 12_000;
-    const cancelEvents = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const;
-    const timer = window.setInterval(() => {
-      const left = deadline - performance.now();
-      if (left <= 0) {
-        window.clearInterval(timer);
-        if (!enteredRef.current) enter("auto");
-        return;
-      }
-      setAutoLeft(left <= 3200 ? Math.ceil(left / 1000) : null);
-    }, 250);
-    const cancel = () => {
-      window.clearInterval(timer);
-      setAutoLeft(null);
-      cancelEvents.forEach((ev) => document.removeEventListener(ev, cancel));
-    };
-    cancelEvents.forEach((ev) => document.addEventListener(ev, cancel, { passive: true }));
+    if (!show || dismissedInRuntime) return;
+    if (introHoldActive()) return;
+    const delay = reducedRef.current ? 800 : 2600;
+    autoDismissTimerRef.current = window.setTimeout(() => {
+      autoDismissTimerRef.current = null;
+      if (!enteredRef.current) enter("auto");
+    }, delay);
     return () => {
-      window.clearInterval(timer);
-      cancelEvents.forEach((ev) => document.removeEventListener(ev, cancel));
+      if (autoDismissTimerRef.current !== null) {
+        window.clearTimeout(autoDismissTimerRef.current);
+        autoDismissTimerRef.current = null;
+      }
     };
   }, [show, enter]);
 
-  /* 星流画布：从光门向外辐射的星际穿越粒子 */
+  /* 星流画布：从光门向外辐射的星际穿越粒子
+   *（dismissedInRuntime：移动端/已看过的短暂挂载不起 rAF 循环） */
   useEffect(() => {
-    if (!show) return;
+    if (!show || dismissedInRuntime) return;
     const canvas = canvasRef.current;
     const overlay = overlayRef.current;
     if (!canvas || !overlay) return;
@@ -967,9 +1052,10 @@ export default function IntroCover() {
   }, [show]);
 
   /* LOGO 粒子引擎初始化：会话随机上限（桌面 5~7、移动 4~5，恒 ≤8），洗牌轮转发牌；
-   *  同时预热 7 张图标（浏览器缓存 + 解码），出生瞬间不再有解码抖动。 */
+   *  同时预热 7 张图标（浏览器缓存 + 解码），出生瞬间不再有解码抖动。
+   *  dismissedInRuntime：移动端/已看过的短暂挂载不建引擎、不白耗 7 张图片流量。 */
   useEffect(() => {
-    if (!show || reducedRef.current) return;
+    if (!show || dismissedInRuntime || reducedRef.current) return;
     const mobile = window.matchMedia("(max-width: 767px)").matches;
     const nav = navigator as Navigator & { deviceMemory?: number };
     const lite = (nav.deviceMemory ?? 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
@@ -1003,7 +1089,11 @@ export default function IntroCover() {
     enterBtnRef.current?.setAttribute("data-lite", lite ? "1" : "0");
     PRODUCT_ORDER.forEach((k) => {
       const im = new Image();
-      im.src = PRODUCT_IMG[k];
+      im.onerror = () => {
+        im.onerror = null;
+        im.src = PRODUCT_IMG[k];
+      };
+      im.src = productImgSrc(k);
     });
     const host = gateHostRef.current;
     return () => {
@@ -1015,7 +1105,7 @@ export default function IntroCover() {
 
   /* prefers-reduced-motion：不跑引擎，静态散布 5 颗做装饰（左右交替、避开顶部锥区）。 */
   useEffect(() => {
-    if (!show || !reducedRef.current) return;
+    if (!show || dismissedInRuntime || !reducedRef.current) return;
     const host = gateHostRef.current;
     if (!host) return;
     const W = window.innerWidth;
@@ -1041,9 +1131,15 @@ export default function IntroCover() {
         el.style.opacity = "0.55";
         el.style.transform = `translate3d(${(ux * d).toFixed(0)}px, ${(uy * d).toFixed(0)}px, 0)`;
         const img = document.createElement("img");
-        img.src = PRODUCT_IMG[k];
+        img.onerror = () => {
+          img.onerror = null;
+          img.src = PRODUCT_IMG[k];
+        };
+        img.src = productImgSrc(k);
         img.alt = "";
         img.draggable = false;
+        const optical = PRODUCT_OPTICAL_SCALE[k] ?? 1;
+        if (optical !== 1) img.style.transform = `scale(${optical})`;
         el.appendChild(img);
         host.appendChild(el);
       });
@@ -1054,7 +1150,7 @@ export default function IntroCover() {
 
   /* 把产品 LOGO 喷涌原点对齐到「进入 AI 世界」按钮中心（星门口） */
   useEffect(() => {
-    if (!show) return;
+    if (!show || dismissedInRuntime) return;
     const measure = () => {
       const b = enterBtnRef.current?.getBoundingClientRect();
       const o = overlayRef.current?.getBoundingClientRect();
@@ -1092,7 +1188,11 @@ export default function IntroCover() {
     <div
       id="bl-intro"
       ref={overlayRef}
-      className={`bl-intro keep-dark${phase === "warp" || phase === "leave" ? " warping" : ""}${phase === "leave" ? " leaving" : ""}`}
+      /* 整层可点跳过：cursor-pointer（Tailwind，content 已扫 components/）+ role=button。
+       * 进入按钮的 click 会冒泡到这里再触发一次 enter——enter 以 enteredRef 幂等，第二次是空转；
+       * 声音开关自带 stopPropagation，点它不散场。 */
+      className={`bl-intro keep-dark cursor-pointer${phase === "warp" || phase === "leave" ? " warping" : ""}${phase === "leave" ? " leaving" : ""}`}
+      onClick={() => enter("click")}
       onWheel={(e) => {
         if (e.deltaY > 12) enter("scroll");
       }}
@@ -1102,14 +1202,16 @@ export default function IntroCover() {
       onTouchMove={(e) => {
         if (touchYRef.current !== null && touchYRef.current - e.touches[0].clientY > 26) enter("touch");
       }}
-      role="dialog"
-      aria-label={lang === "zh" ? "开场页" : "Intro"}
+      role="button"
+      aria-label={lang === "zh" ? "跳过开场，进入正文" : "Skip intro"}
     >
-      {/* 同会话重复访问：hydration 前直接隐藏，避免闪现 */}
+      {/* 同会话重复访问 / 移动端（粗指针或 <768px 视口）：hydration 前直接隐藏并放开滚动，
+          避免「先画出遮罩再消失」的首帧黑屏闪现；判定与 isMobileViewport() 保持同一口径 */}
       <script
         dangerouslySetInnerHTML={{
           __html:
-            "try{if(sessionStorage.getItem('" +
+            "try{var m=window.matchMedia('(pointer: coarse)').matches||window.innerWidth<768;" +
+            "if(m||sessionStorage.getItem('" +
             SEEN_KEY +
             "')){var e=document.getElementById('bl-intro');if(e)e.style.display='none';document.body.style.overflow=''}else{document.body.style.overflow='hidden'}}catch(e){}",
         }}
@@ -1153,22 +1255,33 @@ export default function IntroCover() {
       </button>
 
       <div className="bl-intro-content">
+        {/* 实施78 P0-2：`.zh-part` 只在 max-width:520px 被 CSS 藏起来，而开场页本就只在
+            桌面展示（移动端整层跳过）——等于英文桌面版一直挂着「· 无界引擎」。按语言渲染。 */}
         <div className="bl-stage bl-kicker">
           BOUNDLESS <span className="dot">·</span> AI ENGINE
-          <span className="zh-part">
-            {" "}
-            <span className="dot">·</span> 无界引擎
-          </span>
+          {lang === "zh" && (
+            <span className="zh-part">
+              {" "}
+              <span className="dot">·</span> 无界引擎
+            </span>
+          )}
         </div>
-        {/* 公司主标 + 无界科技 组成居中锁定图 */}
+        {/* 公司主标 + 无界科技 组成居中锁定图（picture：webp -79% 体积，旧浏览器原生回退 png） */}
         <div className="bl-stage bl-brandmark">
-          <img src="/brand/logos/boundless-mark-512.png" alt={BRAND.company.full} draggable={false} />
+          <picture>
+            <source srcSet="/brand/logos/boundless-mark-512.webp" type="image/webp" />
+            <img
+              src="/brand/logos/boundless-mark-512.png"
+              alt={lang === "zh" ? BRAND.company.full : BRAND.company.en}
+              draggable={false}
+            />
+          </picture>
         </div>
         <div className="bl-title-zh">{c.title}</div>
         <div className="bl-stage bl-title-en">{c.sub}</div>
         <div className="bl-stage bl-tagline">
           {c.tagline}
-          <span className="en">{c.taglineSub}</span>
+          {c.taglineSub && <span className="en">{c.taglineSub}</span>}
         </div>
         <div className="bl-stage bl-five">
           {lang === "zh" ? (
@@ -1223,13 +1336,7 @@ export default function IntroCover() {
               →
             </span>
           </button>
-          <div className="bl-enter-hint">
-            {autoLeft != null
-              ? lang === "zh"
-                ? `${autoLeft} 秒后自动进入 · 任意操作取消`
-                : `AUTO-ENTERING IN ${autoLeft}S · INTERACT TO CANCEL`
-              : c.hint}
-          </div>
+          <div className="bl-enter-hint">{c.hint}</div>
         </div>
       </div>
 

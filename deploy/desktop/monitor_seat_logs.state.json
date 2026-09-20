@@ -1,0 +1,14 @@
+{
+  "last_seen": {
+    "kouxing": "2026-09-01 01:48:54",
+    "lianbei": "2026-09-01 18:59:16",
+    "yunsheng": "2026-09-01 18:58:16",
+    "tingxie": "2026-08-23 05:50:18"
+  },
+  "alerted": {
+    "kouxing|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218523.8819888,
+    "lianbei|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218524.4215436,
+    "yunsheng|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218525.003915
+  },
+  "last_run": "2026-09-02 05:52:11"
+}

@@ -23,6 +23,8 @@
 ```
 brand-assets/
 ├─ build_brand_assets.py     一键重建脚本（python build_brand_assets.py）
+├─ build_installer_art.py    智聊 Windows 安装器位图（单独跑；产物进 07_installer/ 并镜像到
+│                            engines/chengjie/desktop/build/installer{Sidebar,Header}.bmp）
 ├─ sync_brand_targets.py     分发产物到消费方：两份 website + 坐席工作台 + 桌面端
 ├─ apply_telegram_branding.py  线上应用：频道/群头像+简介（幂等，--dry-run 预演）
 ├─ MANIFEST.md               全部 106 个产物的清单（自动生成）
@@ -41,8 +43,11 @@ brand-assets/
 ├─ 04_avatars/
 │   ├─ company/              品牌主头像(深/浅)、频道光环版、客服徽标版(中/英)
 │   └─ products/             7 产品 × (普通版 + 产品系光环版)，各 512 + 128 预览
-└─ 05_backgrounds/           TG贴文 / 竖屏故事 / 桌面(深浅) / X / FB / 公众号(深浅)
-                             / YouTube / 产品矩阵海报
+├─ 05_backgrounds/           TG贴文 / 竖屏故事 / 桌面(深浅) / X / FB / 公众号(深浅)
+│                            / YouTube / 产品矩阵海报
+└─ 07_installer/             智聊安装器侧栏 382x820 / 页眉 350x148（24 位 BMP，YaHei UI 9pt 下
+                             MUI 控件实测尺寸 x2）+ 同图「内测版」角标变体 + PNG 预览
+                             + 最近邻缩到 1x 的效果预览
 ```
 
 ## 账号怎么选头像（运营速查）

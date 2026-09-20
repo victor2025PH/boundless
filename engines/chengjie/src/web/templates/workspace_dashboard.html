@@ -1,4 +1,8 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18 老板点名）：概览与其他管理面板一样挂工作台左侧导航
+    （_ws_sidebar.html，菜单单源 nav_schema.py；坐席=简洁菜单、主管=完整分组，
+    组件自带角色过滤）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ i18n.get('dash.page_title', '工作台概览') }}{% endblock %}
 {% block head %}
 <style>
@@ -8,14 +12,24 @@
   .db-card{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;box-shadow:var(--tk-shadow);}
   /* KPI 数字：科技青→蓝渐变描字，明快有科技感 */
   .db-num{font-size:28px;font-weight:800;background:var(--tk-num-grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-brand);}
-  .db-num.warn{background:linear-gradient(135deg,#fdba74,#f97316);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-orange);}
-  .db-lbl{font-size:12px;color:var(--tk-text-muted);margin-top:4px;}
+  /* 警示数字改语义实色（P1 2026-08-18）：渐变描字在暗色下亮度不稳、低分屏/截图发虚——
+     语义状态必须稳定可读，品牌渐变只留给中性数字。 */
+  .db-num.warn{background:none;-webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:var(--tk-warn-ink);color:var(--tk-warn-ink);}
+  .db-lbl{font-size:12.5px;color:var(--tk-text-muted);margin-top:4px;}
   /* P5-6：进展中主数字后缀的狭义成交(won) 小数字——覆盖 .db-num 的渐变裁剪填充，避免透明不可见 */
   .db-won-sfx{font-size:13px;font-weight:700;background:none;-webkit-text-fill-color:var(--tk-text-muted);color:var(--tk-text-muted);opacity:.85;}
   /* 经营摘要条（executive strip）：大数字等宽数字位；critical 红字需覆盖 .db-num 的渐变裁剪填充 */
   #db-exec .db-num{font-variant-numeric:tabular-nums;}
-  #db-exec .db-num.crit{background:linear-gradient(135deg,#f87171,#dc2626);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-danger);}
-  .db-exec-sub{font-size:11px;color:var(--tk-text-muted);margin-top:3px;}
+  #db-exec .db-num.crit{background:none;-webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:var(--tk-danger-ink);color:var(--tk-danger-ink);}
+  .db-exec-sub{font-size:12px;color:var(--tk-text-muted);margin-top:3px;}
+  /* P1 分组降噪（2026-08-18）：KPI 三组标题 / 零值折叠行 / 合并卡可点副行 */
+  .db-grp-h{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--tk-text-muted);margin:4px 0 -4px;}
+  .db-grp-h::after{content:"";flex:1;height:1px;background:var(--tk-border);}
+  .db-fold{grid-column:1/-1;font-size:12.5px;color:var(--tk-text-muted);border:1px dashed var(--tk-border);border-radius:10px;padding:8px 12px;cursor:pointer;transition:background .12s;}
+  .db-fold:hover{background:var(--tk-surface-2);}
+  .db-fold-btn{color:var(--tk-brand);font-weight:600;margin-left:4px;}
+  .db-sub-act{font-size:11.5px;margin-top:4px;color:var(--tk-warn-ink);font-weight:600;cursor:pointer;}
+  .db-sub-act:hover{text-decoration:underline;}
   .db-sec{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:var(--tk-shadow);}
   .db-sec h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
   .db-wrap h2{color:var(--tk-text);}
@@ -59,7 +73,7 @@
       <option value="7" data-i18n="dash.range.7d">近 7 日</option>
       <option value="30" data-i18n="dash.range.30d">近 30 日</option>
     </select>
-    <a id="db-quick-approve" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid #16a34a;border-radius:6px;text-decoration:none;color:#15803d;background:#f0fdf4;" data-i18n-title="dash.quick_approve_t" title="一键发出所有待发的低风险 AI 回复"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.quick_approve">一键自动发送</span></a>
+    <a id="db-quick-approve" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid var(--th-bd-green6,#16a34a);border-radius:6px;text-decoration:none;color:var(--th-ink-green7,#15803d);background:#f0fdf4;" data-i18n-title="dash.quick_approve_t" title="一键发出所有待发的低风险 AI 回复"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.quick_approve">一键自动发送</span></a>
     <a id="db-export" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid var(--tk-border);border-radius:6px;text-decoration:none;color:var(--tk-text);background:var(--tk-surface);"><span data-ui-icon="download" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.export">导出 CSV</span></a>
   </div>
   </div>
@@ -286,6 +300,9 @@
   function _rowLbl(icon,key){ return '<span style="display:inline-flex;align-items:center;gap:5px;">'+(typeof uiIcon==='function'?uiIcon(icon,13):'')+T(key)+'</span>'; }
   function stageLabel(k){ return window.T('dash.stage.'+k, k); }
   function esc(s){return CRMW.esc(s);}
+  /* 内联 on*="fn(…)" 的字符串实参：JSON 字面量再做属性转义（裸 JSON.stringify 的双引号会把
+     双引号属性截断 → 点击即 SyntaxError，#191 同类）。 */
+  function jsArg(v){ return JSON.stringify(String(v==null?'':v)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
   function card(num,lbl,warn,scope){
     var attr = scope? ' class="db-card db-click" onclick="window.__dbDetail(\''+scope+'\')"' : ' class="db-card"';
     return '<div'+attr+'><div class="db-num'+(warn&&num?' warn':'')+'">'+num+'</div><div class="db-lbl">'+esc(lbl)+'</div></div>';
@@ -295,6 +312,101 @@
     var sfx=(typeof won==='number')?'<span class="db-won-sfx" title="'+esc(T('dash.card.won_sfx_t'))+'"> · '+esc(T('dash.card.won_sfx'))+' '+won+'</span>':'';
     return '<div class="db-card db-click" onclick="window.__dbGoDone()" title="'+esc(T('dash.card.done_t'))+'"><div class="db-num">'+num+sfx+'</div><div class="db-lbl">'+esc(T('dash.card.done'))+'</div></div>';
   }
+  // ── P1 概览降噪（2026-08-18）───────────────────────────────────────────
+  // 待回复/超时/严重三卡合一：同一批会话此前在三张卡重复同一个数字（实录满屏 90），
+  // 坐席不知道信哪张。主数字=待回复（点击开明细），副行=其中超时/严重（点击直达超时档）。
+  function _waitCard(sla){
+    var wait=sla.waiting||0, brk=sla.breaching||0, crit=sla.critical||0;
+    var sub='';
+    if(brk>0){
+      sub='<div class="db-sub-act" onclick="window.__dbWaitSub(event)">'
+        +esc(Tf('dash.wait.sub',{n:brk}))
+        +(crit>0?(' <span style="color:var(--tk-danger-ink);">'+esc(T('dash.card.critical'))+' '+crit+'</span>'):'')
+        +'</div>';
+    }
+    return '<div class="db-card db-click" onclick="window.__dbDetail(\'waiting\')">'
+      +'<div class="db-num'+(brk>0?' warn':'')+'">'+wait+'</div>'
+      +'<div class="db-lbl">'+esc(T('dash.card.waiting'))+'</div>'+sub+'</div>';
+  }
+  // KPI 卡定义（分组 + 零值判定）：act=永不折叠的行动卡；result/quality 里
+  // 值为 0/— 的卡默认折叠成一行（新账号「满屏 0」是第一印象杀手）。
+  function _zeroish(v){ return v===0||v==='0'||v==='—'; }
+  function _dbCardDefs(d){
+    var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
+    var defs=[];
+    function add(grp,label,html,zero){ defs.push({grp:grp,l:label,html:html,zero:!!zero}); }
+    add('act', T('dash.card.due_mine'), card(d.due_tasks_mine||0,T('dash.card.due_mine'),true), false);
+    add('act', T('dash.card.waiting'), _waitCard(sla), false);
+    if(IS_SUP) add('act', T('dash.card.due_all'), card(d.due_tasks||0,T('dash.card.due_all'),true), false);
+    if(IS_SUP){
+      var nc=t.new_contacts||0, ld=t.leads||0, ho=t.handoffs||0;
+      var dn=_doneCountFromStages(d.stage_counts);
+      var ws=(f.sessions!=null?f.sessions:(f.web_sessions||0));
+      add('result', T('dash.card.new_contacts'), card(nc,T('dash.card.new_contacts')), _zeroish(nc));
+      add('result', T('dash.card.leads'), card(ld,T('dash.card.leads')), _zeroish(ld));
+      add('result', T('dash.card.handoffs'), card(ho,T('dash.card.handoffs')), _zeroish(ho));
+      add('result', T('dash.card.done'), _doneCard(dn,_wonCountFromStages(d.stage_counts)), _zeroish(dn));
+      add('result', T('dash.card.web_sessions'), card(ws,T('dash.card.web_sessions')), _zeroish(ws));
+    }
+    var frtV=fr.today_responded?fmtDur(fr.today_avg_sec):'—';
+    add('quality', T('dash.card.frt_avg'), card(frtV,T('dash.card.frt_avg')), frtV==='—');
+    if(IS_SUP){
+      var att=fr.today_responded?(fr.today_attain_rate+'%'):'—';
+      add('quality', T('dash.card.attain_rate'), card(att,T('dash.card.attain_rate'),'','unresponded'), att==='—');
+      var rsv=rs.today_resolved||0;
+      add('quality', T('dash.card.resolved'), card(rsv,T('dash.card.resolved')), _zeroish(rsv));
+      var rav=rs.today_resolved?fmtDur(rs.today_avg_sec):'—';
+      add('quality', T('dash.card.resolve_avg'), card(rav,T('dash.card.resolve_avg')), rav==='—');
+    }
+    return defs;
+  }
+  var _dbUnfolded=false;
+  function renderTodayCards(d){
+    var el=document.getElementById('db-cards'); if(!el) return;
+    var defs=_dbCardDefs(d);
+    var groups=[['act',T('dash.grp.act')],['result',T('dash.grp.result')],['quality',T('dash.grp.quality')]];
+    var html='';
+    groups.forEach(function(g){
+      var items=defs.filter(function(x){return x.grp===g[0];});
+      if(!items.length) return;
+      var shown=items, folded=[];
+      if(g[0]!=='act' && !_dbUnfolded){
+        shown=items.filter(function(x){return !x.zero;});
+        folded=items.filter(function(x){return x.zero;});
+      }
+      html+='<div class="db-grp-h">'+esc(g[1])+'</div>';
+      html+=shown.map(function(x){return x.html;}).join('');
+      if(folded.length){
+        html+='<div class="db-fold" onclick="window.__dbToggleFold()" title="'+esc(T('dash.fold.show_t'))+'">'
+          +esc(Tf('dash.fold.line',{n:folded.length,names:folded.map(function(x){return x.l;}).join(' · ')}))
+          +'<span class="db-fold-btn">'+esc(T('dash.fold.show'))+' →</span></div>';
+      }
+    });
+    if(_dbUnfolded && defs.some(function(x){return x.zero&&x.grp!=='act';})){
+      html+='<div class="db-fold" onclick="window.__dbToggleFold()"><span class="db-fold-btn">'+esc(T('dash.fold.hide'))+'</span></div>';
+    }
+    el.innerHTML=html;
+  }
+  // P2 折叠行为裁决埋点（2026-08-18）：进 /api/telemetry/ui-event（{page,action} 契约，
+  // 读数 /api/admin/ui-event-trend?prefix=dbkpi_）。裁决问题=「坐席是否频繁展开零值组」
+  // ——频繁展开说明默认折叠折错了东西；wait_sub=合并卡副行的直达使用量（证合并没伤动线）。
+  function _dbBcn(a){
+    try{
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+        [JSON.stringify({page:'/workspace/dash', action:String(a)})],
+        {type:'application/json'}));
+    }catch(_){}
+  }
+  window.__dbToggleFold=function(){
+    _dbUnfolded=!_dbUnfolded;
+    _dbBcn(_dbUnfolded?'dbkpi_fold_show':'dbkpi_fold_hide');
+    if(_dashData) renderTodayCards(_dashData);
+  };
+  window.__dbWaitSub=function(ev){
+    try{ if(ev) ev.stopPropagation(); }catch(_){}
+    _dbBcn('dbkpi_wait_sub');
+    window.__dbDetail('breaching');
+  };
   var SCOPES=[['waiting',T('dash.scope.waiting')],['breaching',T('dash.scope.breaching')],['critical',T('dash.scope.critical')],['unresponded',T('dash.scope.unresponded')]];
   function scopeLabel(s){ for(var i=0;i<SCOPES.length;i++){ if(SCOPES[i][0]===s) return SCOPES[i][1]; } return s; }
   var _detailAgent=null;
@@ -310,7 +422,7 @@
     body.innerHTML='<span class="tk-load">'+T('dash.loading')+'</span>';
     var qs='/api/workspace/sla-detail?scope='+encodeURIComponent(scope);
     if(_detailAgent!==null) qs+='&agent='+encodeURIComponent(_detailAgent);
-    fetch(qs).then(function(r){return r.json();}).then(function(d){
+    apiFetch(qs).then(function(r){return r.json();}).then(function(d){
       var its=d.items||[];
       window.__slaItems=its;
       body.innerHTML= its.length? ('<div style="font-size:12px;color:var(--tk-text-muted);margin-bottom:6px;">'+Tf('dash.detail.hint',{n:d.count})+'</div>'+its.map(function(it,ix){
@@ -326,9 +438,9 @@
     if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     var it=(window.__slaItems||[])[ix]; if(!it) return;
     var btn=ev&&ev.target; if(btn){ btn.disabled=true; btn.textContent='…'; }
-    fetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
+    apiFetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:it.platform,chat_key:it.chat_key,conversation_id:it.conversation_id,
-        name:it.name,wait_sec:it.wait_sec})}).then(function(r){return r.json();}).then(function(d){
+        name:it.name,wait_sec:it.wait_sec})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ if(btn){ btn.textContent=T('dash.created_ok'); btn.style.color='var(--tk-ok-ink)'; } CRMW.toast(Tf('dash.task_ok',{name:esc(it.name)})); }
       else { if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(Tf('dash.task_fail',{err:((d&&d.error)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(T('dash.task_fail_generic'),'#dc2626'); });
@@ -340,7 +452,7 @@
     document.getElementById('db-modal-title').textContent=Tf('dash.agent_frt.title',{agent:(agent||'?'),days:curDays()});
     var body=document.getElementById('db-modal-body');
     body.innerHTML='<span class="tk-load">'+T('dash.loading')+'</span>';
-    fetch('/api/workspace/agent-frt-detail?days='+curDays()+'&agent='+encodeURIComponent(agent)).then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/agent-frt-detail?days='+curDays()+'&agent='+encodeURIComponent(agent)).then(function(r){return r.json();}).then(function(d){
       var its=d.items||[];
       body.innerHTML= its.length? ('<div style="font-size:12px;color:var(--tk-text-muted);margin-bottom:6px;">'+Tf('dash.agent_frt.hint',{n:d.count})+'</div>'+its.map(function(it){
         var col=it.attained?'var(--tk-ok-ink)':'var(--tk-danger-ink)';
@@ -350,13 +462,13 @@
       }).join('')) : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.agent_frt.empty')+'</span>';
     }).catch(function(){ body.innerHTML='<span class="tk-fail">'+T('dash.load_fail')+'</span>'; });
   }
-  function goConv(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } location.href='/workspace'; }
+  function goConv(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace'; }
   function closeDetail(){ document.getElementById('db-modal').style.display='none'; }
   function agentReport(ev, agent){ if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     window.location='/api/workspace/daily-report.csv?days='+curDays()+'&agent='+encodeURIComponent(agent||''); }
   var ESC_REASON={unclaimed:T('base.reason.unclaimed'),holder_offline:T('base.reason.holder_offline'),holder_quiet:T('base.reason.holder_quiet')};
   function loadEsc(){
-    fetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
       var its=(d&&d.items)||[]; window.__escItems=its;
       var _todayN=(d&&d.today_count)||0;
       var myId=(typeof MY_AGENT_ID!=='undefined')?MY_AGENT_ID:'';
@@ -381,10 +493,10 @@
     var newAgent=prompt(T('dash.esc.reassign_prompt'), it.assigned_to||'');
     if(!newAgent&&newAgent!==null) return;
     if(!newAgent) return;
-    fetch('/api/workspace/escalation/'+encodeURIComponent(escId)+'/assign',{
+    apiFetch('/api/workspace/escalation/'+encodeURIComponent(escId)+'/assign',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({agent_id:newAgent})
-    }).then(function(r){return r.json();}).then(function(d){
+    }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ CRMW.toast(Tf('dash.esc.reassigned_ok',{agent:esc(newAgent)})); loadEsc(); }
       else { CRMW.toast(Tf('dash.esc.reassign_fail',{detail:((d&&d.detail)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ CRMW.toast(T('dash.esc.reassign_fail_generic'),'#dc2626'); });
@@ -393,9 +505,9 @@
     if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     var it=(window.__escItems||[])[ix]; if(!it) return;
     var btn=ev&&ev.target; if(btn){ btn.disabled=true; btn.textContent='…'; }
-    fetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
+    apiFetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:it.platform,chat_key:it.chat_key,conversation_id:it.conversation_id,
-        name:it.name,wait_sec:it.wait_sec})}).then(function(r){return r.json();}).then(function(d){
+        name:it.name,wait_sec:it.wait_sec})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ if(btn){ btn.textContent=T('dash.created_ok'); btn.style.color='var(--tk-ok-ink)'; } CRMW.toast(Tf('dash.task_ok',{name:esc(it.name)})); }
       else { if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(Tf('dash.task_fail',{err:((d&&d.error)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(T('dash.task_fail_generic'),'#dc2626'); });
@@ -407,7 +519,7 @@
     if(!IS_SUP) return;
     var sec=document.getElementById('db-risk-sec');
     if(sec) sec.style.display='block';
-    fetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ document.getElementById('db-risk').innerHTML='<span class="tk-fail">'+T('dash.load_fail')+'</span>'; return; }
       var lvls=d.by_level||{};
       var total=d.total_pending||0;
@@ -419,7 +531,7 @@
         html+='<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid '+(isHigh&&n?'rgba(225,29,72,.4)':'var(--tk-border)')+';background:'+(isHigh&&n?'rgba(225,29,72,.08)':'var(--tk-surface-2)')+';">'
           +'<span style="font-size:18px;font-weight:700;color:'+LEVEL_COLORS[lv]+(';">'+n+'</span>')
           +'<span style="font-size:12px;color:var(--tk-text-muted);">'+LEVEL_LABELS[lv]+'</span>'
-          +(isHigh&&n?'<span style="font-size:10px;background:'+LEVEL_COLORS[lv]+';color:#fff;padding:1px 5px;border-radius:4px;margin-left:2px;">'+T('dash.risk.need_review')+'</span>':'')
+          +(isHigh&&n?'<span style="font-size:10px;background:'+LEVEL_COLORS[lv]+';color:var(--th-ink-inverse,#fff);padding:1px 5px;border-radius:4px;margin-left:2px;">'+T('dash.risk.need_review')+'</span>':'')
           +'</div>';
       });
       html+='</div>';
@@ -435,7 +547,7 @@
     var el=document.getElementById('db-metrics');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/metrics').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/metrics').then(function(r){return r.json();}).then(function(d){
       var as=d.autosend||{};
       var sw=d.sla_watcher||{};
       var wh=d.webhook||{};
@@ -446,7 +558,7 @@
       function _pill(v, ok, label){
         var color=ok?'var(--tk-ok-ink)':'var(--tk-danger-ink)';
         return '<span style="padding:2px 8px;border-radius:10px;background:'
-          +(ok?'#dcfce7':'#fee2e2')+';color:'+color+';font-size:11px;margin-right:4px;">'+label+': '+v+'</span>';
+          +(ok?'var(--th-bg-green100,#dcfce7)':'var(--th-bg-red1,#fee2e2)')+';color:'+color+';font-size:11px;margin-right:4px;">'+label+': '+v+'</span>';
       }
 
       var html='<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">'
@@ -482,7 +594,7 @@
   // ─── O1/O3 共用 SVG Sparkline ───────────────────────────────────────────
   function _sparkline(values, opts){
     opts = opts||{};
-    var w=opts.w||160, h=opts.h||36, color=opts.color||'#2563eb', fillColor=opts.fill||'';
+    var w=opts.w||160, h=opts.h||36, color=opts.color||'#0d76d9', fillColor=opts.fill||'';
     if(!values||!values.length) return '<span style="color:var(--tk-text-muted);font-size:11px;">'+T('dash.no_data')+'</span>';
     var min=Math.min.apply(null,values), max=Math.max.apply(null,values);
     var range=max-min||1;
@@ -515,7 +627,7 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var days=(document.getElementById('db-trend-days')||{}).value||'7';
-    fetch('/api/workspace/trend?days='+days)
+    apiFetch('/api/workspace/trend?days='+days)
       .then(function(r){ return r.json(); })
       .then(function(d){
         var csat=d.csat_trend||[];
@@ -555,7 +667,7 @@
     if(!sec) return;
     sec.style.display='';
     var days=(document.getElementById('db-myp-days')||{}).value||'7';
-    fetch('/api/workspace/my-perf?days='+days)
+    apiFetch('/api/workspace/my-perf?days='+days)
       .then(function(r){ return r.json(); })
       .then(function(d){
         if(!d.ok){ el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.no_data')+'</span>'; return; }
@@ -594,7 +706,7 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var period=(document.getElementById('db-lb-period')||{}).value||'weekly';
-    fetch('/api/workspace/leaderboard?period='+period)
+    apiFetch('/api/workspace/leaderboard?period='+period)
       .then(function(r){ return r.json(); })
       .then(function(d){
         var lb=(d&&d.leaderboard)||[];
@@ -637,7 +749,7 @@
     var el=document.getElementById('db-workload-body');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/workload')
+    apiFetch('/api/workspace/workload')
       .then(function(r){return r.json();})
       .then(function(d){
         if(!d.ok){if(el) el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; return;}
@@ -690,7 +802,7 @@
     var days=parseInt((document.getElementById('db-quality-days')||{}).value||'7');
 
     // Q2: 质量分分布
-    fetch('/api/workspace/quality-stats?days='+days)
+    apiFetch('/api/workspace/quality-stats?days='+days)
       .then(function(r){return r.json();})
       .then(function(d){
         if(!d.ok||!d.count){
@@ -720,7 +832,7 @@
       .catch(function(){ if(distEl) distEl.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; });
 
     // Q3: KB 命中率
-    fetch('/api/workspace/kb-stats?days='+days)
+    apiFetch('/api/workspace/kb-stats?days='+days)
       .then(function(r){return r.json();})
       .then(function(d){
         var entries=(d&&d.entries)||[];
@@ -755,7 +867,7 @@
         // 低命中率预警
         var low=(d.low_hit_entries||[]);
         if(low.length){
-          var lowHtml='<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--tk-text);">'
+          var lowHtml='<div style="background:var(--th-bg-amber10,rgba(245,158,11,.1));border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--tk-text);">'
             +'<strong style="color:var(--tk-warn-ink);">'+T('dash.q.low_hit_title')+'</strong><ul style="margin:4px 0 0;padding-left:14px;">';
           low.forEach(function(e){
             lowHtml+='<li>'+esc(e.entry_title||e.entry_id)+Tf('dash.q.low_hit_item',{rate:e.hit_rate,n:e.recommended})+'</li>';
@@ -775,7 +887,7 @@
     var el=document.getElementById('db-workspace-list');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/workspaces')
+    apiFetch('/api/workspace/workspaces')
       .then(function(r){ return r.json(); })
       .then(function(d){
         var list=d.workspaces||[];
@@ -796,7 +908,7 @@
           var st=ws.stats||{};
           var csat=st.avg_csat!=null?st.avg_csat.toFixed(1)+' '+uiIcon('star',12):'—';
           var isCur=ws.workspace_id===current;
-          html+='<tr style="border-bottom:1px solid var(--tk-border);'+(isCur?'background:rgba(59,130,246,.1);':'')+'">'
+          html+='<tr style="border-bottom:1px solid var(--tk-border);'+(isCur?'background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 10%, transparent);':'')+'">'
             +'<td style="padding:5px 6px;font-family:monospace;font-weight:'+(isCur?'700':'400')+';">'
             +esc(ws.workspace_id)+(isCur?' '+uiIcon('pin',12):'')+'</td>'
             +'<td style="padding:5px 6px;">'+esc(ws.display_name||'—')+'</td>'
@@ -815,11 +927,11 @@
     var wsName=(document.getElementById('ws-new-name')||{}).value||'';
     var res=document.getElementById('ws-create-result');
     if(!wsId.trim()){ if(res) res.innerHTML='<span style="color:var(--tk-danger-ink);">'+T('dash.ws.id_required')+'</span>'; return; }
-    fetch('/api/workspace/workspaces',{
+    apiFetch('/api/workspace/workspaces',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({workspace_id:wsId.trim(),display_name:wsName.trim()})
-    }).then(function(r){return r.json();}).then(function(d){
+    }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d.ok){
         if(res) res.innerHTML='<span style="color:var(--tk-ok-ink);">'+Tf('dash.ws.saved',{id:esc(d.workspace_id)})+'</span>';
         loadWorkspaces();
@@ -836,14 +948,14 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var period=(document.getElementById('db-report-period')||{}).value||'daily';
-    fetch('/api/workspace/report?period='+period+'&format=html')
+    apiFetch('/api/workspace/report?period='+period+'&format=html')
       .then(function(r){ return r.text(); })
       .then(function(html){
         el.innerHTML=html||'<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.no_data')+'</span>';
       })
       .catch(function(){ if(el) el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; });
     // 同步获取 json 数据供推送
-    fetch('/api/workspace/report?period='+period)
+    apiFetch('/api/workspace/report?period='+period)
       .then(function(r){ return r.json(); })
       .then(function(d){ _reportData=d; })
       .catch(function(){});
@@ -857,15 +969,15 @@
     var period=(document.getElementById('db-report-period')||{}).value||'daily';
     var _pl={'daily':T('dash.period.today'),'weekly':T('dash.period.week')}[period]||period;
     if(!confirm(Tf('dash.report.push_confirm',{period:_pl}))) return;
-    fetch('/api/workspace/report?period='+period+'&format=text')
+    apiFetch('/api/workspace/report?period='+period+'&format=text')
       .then(function(r){ return r.text(); })
       .then(function(text){
         // 通过 broadcast 接口发布一个 report 事件（如有配置，L2 Webhook 会接收）
-        return fetch('/api/workspace/broadcast',{
+        return apiFetch('/api/workspace/broadcast',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({type:'report',data:{period:period,text:text}})
-        });
+        }, {timeoutMs: 60000});
       })
       .then(function(r){ if(r.ok) alert(T('dash.report.push_ok')); else alert(T('dash.report.push_fail')); })
       .catch(function(e){ alert(Tf('dash.report.push_err',{err:e})); });
@@ -877,7 +989,7 @@
     var tsEl=document.getElementById('db-presence-ts');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
       var agents=(d&&d.agents)||[];
       if(tsEl) tsEl.textContent=window.wsFmtTime(null);
       if(!agents.length){
@@ -906,7 +1018,7 @@
   function loadOnboard(){
     var box=document.getElementById('db-onboard');
     if(!box) return;
-    fetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       if(d.light==='green'){ box.style.display='none'; return; }  // 已就绪不打扰
       var dismissed=false;
@@ -916,42 +1028,84 @@
       var pending=(d.checks||[]).filter(function(c){return c.status!=='ok';});
       var steps=pending.map(function(c){
         var color=c.status==='fail'?'var(--tk-danger)':'var(--tk-amber)';
-        var act=c.action_url?'<a href="'+c.action_url+'" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid var(--tk-brand);border-radius:7px;padding:5px 11px;background:rgba(59,130,246,.1);white-space:nowrap;">'+(c.action_label||T('dash.ob.go'))+' →</a>':'';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(245,158,11,.25);">'
+        var act=c.action_url?'<a href="'+c.action_url+'" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid var(--tk-brand);border-radius:7px;padding:5px 11px;background:var(--th-bg-blue10,rgba(59,130,246,.1));white-space:nowrap;">'+(c.action_label||T('dash.ob.go'))+' →</a>':'';
+        // data-ob-id：给交互引导（_guided_tour）一个稳定的高亮锚点（清单项 id 即锚）
+        return '<div data-ob-id="'+escHtml(c.id||'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));">'
           +'<span style="width:9px;height:9px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>'
           +'<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--tk-text);">'+escHtml(c.name)+'</div>'
-          +'<div style="font-size:11px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
+          +'<div style="font-size:12px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
       }).join('');
       var s=d.summary||{};
       var headline=d.light==='red'?T('dash.ob.headline_red'):T('dash.ob.headline_yellow');
       var dismissBtn=d.light==='yellow'
         ? '<span onclick="dismissOnboard()" style="cursor:pointer;font-size:12px;color:var(--tk-warn-ink);text-decoration:underline;">'+T('dash.ob.dismiss')+'</span>'
         : '';
-      box.innerHTML='<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:14px;padding:16px 18px;margin-bottom:14px;">'
+      box.innerHTML='<div style="background:var(--th-bg-amber10,rgba(245,158,11,.1));border:1px solid rgba(245,158,11,.35);border-radius:14px;padding:16px 18px;margin-bottom:14px;">'
         +'<div style="display:flex;align-items:center;gap:10px;">'
         +'<span style="color:var(--tk-brand);">'+uiIcon('rocket',20)+'</span>'
         +'<div><div style="font-size:15px;font-weight:700;color:var(--tk-text);">'+headline+'</div>'
         +'<div style="font-size:12px;color:var(--tk-warn-ink);">'+Tf('dash.ob.progress',{ok:(s.ok||0),total:(s.total||0)})+' · '
         +'<a href="/workspace/golive" style="color:var(--tk-brand);">'+T('dash.ob.full_check')+'</a></div></div>'
-        +'<span style="margin-left:auto;">'+dismissBtn+'</span></div>'
+        +'<span style="margin-left:auto;display:flex;align-items:center;gap:10px;">'
+        +'<button type="button" id="db-ob-tour" style="border:1px solid var(--tk-brand);background:var(--tk-brand);color:var(--th-ink-inverse,#fff);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;">▶ '+T('gtour_start')+'</button>'
+        +dismissBtn+'</span></div>'
         +steps+'</div>';
       box.style.display='block';
+      // 引导入口用 addEventListener 接线（不新增内联 on*，规避哑按钮门禁面）
+      var _tb=document.getElementById('db-ob-tour');
+      if(_tb) _tb.addEventListener('click',function(){ startOnboardTour(d); });
+      // 首登自动开讲一次（P1 收尾 2026-08-07）：托管新客户第一次进工作台不用自己
+      // 发现「开始引导」按钮。四重闸：①清单非绿（绿灯上面已 return，老实例零打扰）
+      // ②没点过「不再提示」 ③从未完成/跳过过引导（bl_tour_done，Esc/跳过/完成都落）
+      // ④本页仅一次（loadOnboard 重入不重启进行中的引导）。
+      if(!window.__obTourAutoFired && !dismissed && window.blTour && !window.blTour.seen()){
+        window.__obTourAutoFired=1;
+        setTimeout(function(){ startOnboardTour(d); },700);
+      }
     }).catch(function(){});
+  }
+
+  // 交互式新手引导：**步骤由实时清单动态生成**（而不是写死脚本）——
+  // 用户实际缺什么就引导什么，配好一项下次就自动少一步，永远不会和清单漂移。
+  function startOnboardTour(d){
+    if(!window.blTour||!d) return;
+    var pend=(d.checks||[]).filter(function(c){return c.status!=='ok';});
+    var list=[{
+      sel:'#db-onboard',
+      title:T('gtour_welcome_t'),
+      body:T('gtour_welcome_b'),
+      // 「哇时刻」前置：不接真实渠道也能先看 AI 说话；新标签打开，引导不丢
+      html:'<a class="blTour-cta" href="/personas" target="_blank" rel="noopener">'+T('gtour_try_btn')+'</a>'
+    }];
+    pend.forEach(function(c){
+      list.push({sel:'[data-ob-id="'+(c.id||'')+'"]',
+                 title:c.name||'', body:(c.detail||'')+' '+T('gtour_cfg_hint')});
+    });
+    if(!pend.length){
+      list.push({sel:'#db-onboard', title:T('gtour_none_t'), body:T('gtour_none_b')});
+    }
+    list.push({sel:'#db-onboard a[href="/workspace/golive"]',
+               title:T('gtour_final_t'), body:T('gtour_final_b')});
+    window.blTour.start(list);
   }
   function escHtml(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function dismissOnboard(){
     try{ localStorage.setItem('hl_onboard_dismiss','1'); }catch(e){}
     var box=document.getElementById('db-onboard'); if(box) box.style.display='none';
   }
+  /* innerHTML 拼的 onclick 走全局作用域；此前漏挂 window，一直靠 base.html 的同名
+     全局骗过静态扫描（运行时点「不再提示」实为 ReferenceError）——2026-08-31
+     新手引导退役删掉 base 同名函数后门禁现形，就地修复。 */
+  window.dismissOnboard=dismissOnboard;
 
   function loadHealth(){
     var el=document.getElementById('db-health');
     var tsEl=document.getElementById('db-health-ts');
     // 并发拉取两个端点，然后合并展示
     Promise.all([
-      fetch('/api/drafts/autosend-status').then(function(r){return r.json();}).catch(function(){return null;}),
-      fetch('/api/drafts/risk-summary').then(function(r){return r.json();}).catch(function(){return null;}),
-      fetch('/api/episodic-memory/key-health').then(function(r){return r.json();}).catch(function(){return null;})
+      apiFetch('/api/drafts/autosend-status').then(function(r){return r.json();}).catch(function(){return null;}),
+      apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).catch(function(){return null;}),
+      apiFetch('/api/episodic-memory/key-health').then(function(r){return r.json();}).catch(function(){return null;})
     ]).then(function(results){
       var ws=results[0], rs=results[1], kh=results[2];
       var now=window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -1160,31 +1314,36 @@
       else if(rk.light==='amber'||rk.light==='yellow'){ dotC='#f59e0b'; rkTxt=T('dash.exec.risk_warn'); rkCol='var(--tk-warn-ink)'; }
       else if(rk.light==='green'){ dotC='#22c55e'; rkTxt=T('dash.exec.risk_ok'); rkCol='var(--tk-ok-ink)'; }
     }
+    // 机群改资料热点副行（无热点不占位；有则提示去 RPA 概览看明细）
+    var churnSub=(rk.ok&&rk.churnHot>0)
+      ?('<div class="db-exec-sub" style="color:var(--tk-warn-ink);">'+esc(Tf('dash.exec.churn_hot',{n:rk.churnHot}))+'</div>')
+      :'';
     html+='<div class="db-card"><div style="font-size:18px;font-weight:800;display:flex;align-items:center;gap:8px;min-height:34px;">'
       +_dbDot(dotC)+'<span style="color:'+rkCol+';">'+esc(rkTxt)+'</span></div>'
-      +'<div class="db-lbl">'+esc(T('dash.exec.risk'))+'</div></div>';
+      +'<div class="db-lbl">'+esc(T('dash.exec.risk'))+'</div>'+churnSub+'</div>';
     grid.innerHTML=html;
     sec.style.display='';
   }
   function loadExec(){
     if(!IS_SUP||_execDenied) return;
-    fetch('/api/workspace/roi?days='+curDays()).then(function(r){
+    apiFetch('/api/workspace/roi?days='+curDays()).then(function(r){
       if(r.status===403){ _execDenied=true; renderExec(); return null; }
       return r.json();
     }).then(function(d){
       if(d&&d.ok){ _execRoi=d; renderExec(); }
     }).catch(function(){});
-    fetch('/api/monetize/kpi?days='+curDays())
+    apiFetch('/api/monetize/kpi?days='+curDays())
       .then(function(r){ return r.ok?r.json():null; })
       .then(function(d){ _execMon=d; renderExec(); })
       .catch(function(){ _execMon=null; });
     Promise.all([
-      fetch('/api/ops/kill-switch').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }),
-      fetch('/api/accounts/fleet-health').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; })
+      apiFetch('/api/ops/kill-switch').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }),
+      apiFetch('/api/accounts/fleet-health').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; })
     ]).then(function(res){
       var ks=res[0], fh=res[1];
       if(ks&&ks.ok&&fh&&fh.ok){
-        _execRisk={ok:true, frozen:!!(ks.frozen||(ks.count||0)>0), light:String((fh.fleet||{}).fleet_light||'')};
+        _execRisk={ok:true, frozen:!!(ks.frozen||(ks.count||0)>0), light:String((fh.fleet||{}).fleet_light||''),
+          churnHot:Array.isArray(fh.profile_churn_hot)?fh.profile_churn_hot.length:0};
       } else { _execRisk={ok:false}; }
       renderExec();
     });
@@ -1200,24 +1359,13 @@
   function fmtDur(sec){ return CRMW.fmtDur(sec); }
   function curDays(){ var s=document.getElementById('db-days'); return s?s.value:'7'; }
   function load(){
-    fetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
       var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
       _dashData=d; renderExec();  // 经营摘要卡3/4 复用本响应，不重复请求
-      // P1.2 核心卡精选：坐席只看「与我当下相关」4 张；经营/团队卡仅主管（IS_SUP）。
-      document.getElementById('db-cards').innerHTML=
-        card(d.due_tasks_mine||0,T('dash.card.due_mine'),true)
-        +card(sla.waiting||0,T('dash.card.waiting'),'',('waiting'))
-        +card(sla.breaching||0,T('dash.card.breaching')+((sla.critical||0)>0?(' · '+T('dash.card.critical')+sla.critical):''),true,'breaching')
-        +card(fr.today_responded?fmtDur(fr.today_avg_sec):'—',T('dash.card.frt_avg'))
-        +(IS_SUP?card(t.new_contacts||0,T('dash.card.new_contacts')):'')
-        +(IS_SUP?card(t.leads||0,T('dash.card.leads')):'')
-        +(IS_SUP?card(t.handoffs||0,T('dash.card.handoffs')):'')
-        +(IS_SUP?_doneCard(_doneCountFromStages(d.stage_counts), _wonCountFromStages(d.stage_counts)):'')
-        +(IS_SUP?card(d.due_tasks||0,T('dash.card.due_all'),true):'')
-        +(IS_SUP?card(fr.today_responded?(fr.today_attain_rate+'%'):'—',T('dash.card.attain_rate'),'','unresponded'):'')
-        +(IS_SUP?card(rs.today_resolved||0,T('dash.card.resolved')):'')
-        +(IS_SUP?card(rs.today_resolved?fmtDur(rs.today_avg_sec):'—',T('dash.card.resolve_avg')):'')
-        +(IS_SUP?card(f.sessions!=null?f.sessions:(f.web_sessions||0),T('dash.card.web_sessions')):'');
+      // P1.2 核心卡精选 → P1 分组降噪（2026-08-18）：三组「现在要处理/今天的成果/
+      // 响应质量」；待回复+超时+严重合并为单卡副行；零值/无数据卡默认折叠成一行
+      // （定义与折叠语义见 _dbCardDefs / renderTodayCards）。
+      renderTodayCards(d);
       var trend=d.trend||[];
       document.getElementById('db-trend').innerHTML= trend.length?
         ('<div style="display:flex;gap:14px;font-size:12px;color:var(--tk-text-muted);margin-bottom:4px;"><span><span style="color:var(--tk-brand);">●</span> '+T('dash.tg.new_contacts')+'</span><span><span style="color:var(--tk-emerald);">●</span> '+T('dash.tg.leads')+'</span><span><span style="color:var(--tk-amber);">●</span> '+T('dash.tg.handoffs')+'</span></div>'
@@ -1295,16 +1443,16 @@
       var afrt=d.agent_frt||[];
       document.getElementById('db-agent-frt').innerHTML= afrt.length? ('<div class="db-row" style="font-size:11px;color:var(--tk-text-muted);"><span>'+T('dash.col.agent')+'</span><span>'+T('dash.af.responded')+'</span><span>'+T('dash.af.avg_dur')+'</span><span>'+T('dash.af.attain')+'</span></div>'+afrt.map(function(a){
         var rc = a.attain_rate>=80?'var(--tk-ok-ink)':(a.attain_rate>=50?'var(--tk-warn-ink)':'var(--tk-danger-ink)');
-        return '<div class="db-row db-click" onclick="window.__dbAgentDetail('+JSON.stringify(a.agent_id||'')+')"><span>'+esc(a.agent_name||a.agent_id)+'</span>'
+        return '<div class="db-row db-click" onclick="window.__dbAgentDetail('+jsArg(a.agent_id||'')+')"><span>'+esc(a.agent_name||a.agent_id)+'</span>'
           +'<span>'+a.responded+'</span><span>'+fmtDur(a.avg_sec)+'</span>'
           +'<span style="color:'+rc+';font-weight:600;">'+a.attain_rate+'%</span>'
-          +(IS_SUP?('<a href="#" onclick="window.__dbAgentReport(event,'+JSON.stringify(a.agent_id||'')+')" title="'+T('dash.af.export_csv')+'" style="text-decoration:none;color:var(--tk-brand);">'+uiIcon('download',13)+'</a>'):'')+'</div>';
+          +(IS_SUP?('<a href="#" onclick="window.__dbAgentReport(event,'+jsArg(a.agent_id||'')+')" title="'+T('dash.af.export_csv')+'" style="text-decoration:none;color:var(--tk-brand);">'+uiIcon('download',13)+'</a>'):'')+'</div>';
       }).join('')) : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.af.empty')+'</span>';
       var sba=d.sla_by_agent||[];
       document.getElementById('db-sla-agents').innerHTML= sba.length? sba.map(function(a){
         var crit=a.critical||0, brk=a.breaching||0, wait=a.waiting||0;
         var tag = crit? ('<span style="color:var(--tk-danger-ink);font-weight:700;">'+Tf('dash.sa.critical',{n:crit})+'</span>') : (brk? ('<span style="color:var(--tk-warn-ink);font-weight:700;">'+Tf('dash.sa.breaching',{n:brk})+'</span>') : '');
-        return '<div class="db-row db-click" onclick="window.__dbDetail(\'waiting\','+JSON.stringify(a.agent_id||'')+')"><span>'+esc(a.agent_name||T('dash.sa.unclaimed'))+'</span>'
+        return '<div class="db-row db-click" onclick="window.__dbDetail(\'waiting\','+jsArg(a.agent_id||'')+')"><span>'+esc(a.agent_name||T('dash.sa.unclaimed'))+'</span>'
           +'<span style="color:var(--tk-text-muted);">'+Tf('dash.sa.waiting',{n:wait})+(brk?(' · '):'')+'</span>'
           +'<span>'+tag+'</span></div>';
       }).join('') : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.sa.empty')+'</span>';
@@ -1363,7 +1511,7 @@
     window.location='/api/workspace/daily-report.csv?days='+curDays(); }); }
   var _modal=document.getElementById('db-modal'); if(_modal){ _modal.addEventListener('click', function(e){ if(e.target===_modal) closeDetail(); }); }
   // 角色能力：主管才显示团队导出 / 升级历史 / 个人日报导出
-  fetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
+  apiFetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
     IS_SUP=!!(m&&m.is_supervisor);
   }).catch(function(){ IS_SUP=false; }).finally(function(){
     if(IS_SUP){
@@ -1385,7 +1533,8 @@
         qaBtn.onclick=function(e){
           e.preventDefault();
           if(!confirm(T('dash.qa.confirm'))) return;
-          fetch('/api/drafts/bulk-autosend',{method:'POST',headers:{'Content-Type':'application/json'}})
+          // 同步循环批发（≤200 张）可跑分钟级 → 10min 显式预算保证必然 settle
+          apiFetch('/api/drafts/bulk-autosend',{method:'POST',headers:{'Content-Type':'application/json'}},{timeoutMs:600000})
             .then(function(r){return r.json();}).then(function(d){
               alert(Tf('dash.qa.sent',{sent:d.sent})+(d.errors?Tf('dash.qa.errors',{n:d.errors}):''));
             }).catch(function(){ alert(T('dash.qa.fail')); });

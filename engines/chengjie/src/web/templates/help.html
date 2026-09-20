@@ -23,7 +23,7 @@
 .cmd-table tbody tr:hover td{background:var(--ps)}
 /* cmd code cell */
 .cmd-wrap{display:flex;align-items:center;gap:.4rem}
-.cmd-code{font-family:'Consolas','JetBrains Mono','Courier New',monospace;font-size:.82rem;color:var(--p);background:var(--ps);padding:.2rem .55rem;border-radius:5px;border:1px solid rgba(91,124,246,.15)}
+.cmd-code{font-family:'Consolas','JetBrains Mono','Courier New',monospace;font-size:.82rem;color:var(--p);background:var(--ps);padding:.2rem .55rem;border-radius:5px;border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent)}
 .copy-btn{background:none;border:none;cursor:pointer;color:var(--t3);padding:.2rem;border-radius:5px;transition:.15s;display:flex;align-items:center}
 .copy-btn:hover{background:var(--ps);color:var(--p)}
 .copy-btn svg{width:13px;height:13px}
@@ -34,7 +34,7 @@
 /* no result */
 #help-no-result{display:none;text-align:center;padding:2rem;color:var(--t3)}
 /* section icon colors */
-.sec-basic .acc-ico{color:#5b7cf6}
+.sec-basic .acc-ico{color:var(--p,#1e8cf2)}
 .sec-channel .acc-ico{color:#10b981}
 .sec-admin .acc-ico{color:#f59e0b}
 .sec-schedule .acc-ico{color:#8b5cf6}
@@ -43,17 +43,26 @@
 {% endblock %}
 {% block content %}
 {% set active="help" %}
+{# L-4 C（#198，D-L6）：用户版整页收起 → 「功能升级中」横幅；本页是 TG 时代斜杠命令表，
+   对收件箱 / RPA 用户没有意义。partner / internal 与开发者模式原页保留（下方章节标题已改
+   「机器人斜杠命令（旧）」并标注适用范围）。 #}
+{% include "_client_tier_upgrading.html" %}
+<div id="help-root" class="{% if ui_client_hide %}l4-locked{% endif %}">
 
 {% if ui_mode == 'simple' %}
-<div style="background:var(--ps);border:1px solid rgba(91,124,246,.2);border-radius:10px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.85rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:var(--ps);border:1px solid var(--th-bd-brand20,rgba(91,124,246,.2));border-radius:10px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.85rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.2rem">💡</span>
   <span>{{ (i18n or {}).get('hp_s003', "仅显示常用指令。") }}<a href="/set_ui_mode?mode=full" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('hp_s004', "切换完整模式") }}</a>{{ (i18n or {}).get('hp_s005', "查看全部指令。") }}</span>
 </div>
 {% endif %}
-<div style="background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(91,124,246,.1));border:1px solid rgba(91,124,246,.22);border-radius:12px;padding:.85rem 1.1rem;margin-bottom:1rem;font-size:.86rem;color:var(--t2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.65rem">
+{# L-4 C（#198）：培训演示入口只在 docs/training 文件在场时渲染（training_available 由 /help 路由
+   探测；缺席＝桌面包没带，按钮不出，不让用户点进 404）。 #}
+{% if training_available %}
+<div style="background:linear-gradient(135deg,var(--th-bg-grn10,rgba(16,185,129,.1)),var(--th-bg-brand10,rgba(91,124,246,.1)));border:1px solid var(--th-bd-brand22,rgba(91,124,246,.22));border-radius:12px;padding:.85rem 1.1rem;margin-bottom:1rem;font-size:.86rem;color:var(--t2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.65rem" id="help-training-entry">
   <span style="display:flex;align-items:center;gap:.5rem"><span style="font-size:1.25rem">📽</span><span><strong style="color:var(--t)">{{ (i18n or {}).get('hp_s006', "客服培训演示") }}</strong>{{ (i18n or {}).get('hp_s007', "（全屏幻灯片，含知识库与人工转接流程）") }}</span></span>
   <a href="/training" target="_blank" rel="noopener" class="btn btn-p btn-sm" style="text-decoration:none;white-space:nowrap">{{ (i18n or {}).get('hp_s008', "打开培训演示") }}</a>
 </div>
+{% endif %}
 <!-- search -->
 <div class="help-search fa">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -80,6 +89,10 @@
     <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
   </button>
   <div class="acc-body {% if loop.index == 1 %}open{% endif %}">
+    {% if sec.scope_key %}
+    {# L-4 C（#198）：适用范围一句话——这些斜杠命令只对 Telegram 主号 Bot 模式生效 #}
+    <p style="margin:0 0 .6rem;font-size:.78rem;color:var(--t3);line-height:1.55">{{ (i18n or {}).get(sec.scope_key, '') }}</p>
+    {% endif %}
     <table class="cmd-table">
       <thead><tr><th>{{ (i18n or {}).get('hp_s011', "指令") }}</th><th>{{ (i18n or {}).get('hp_s012', "说明") }}</th><th>{{ (i18n or {}).get('hp_s013', "示例") }}</th><th>{{ (i18n or {}).get('hp_s014', "权限") }}</th></tr></thead>
       <tbody>
@@ -108,6 +121,7 @@
   </div>
 </div>
 {% endfor %}
+</div>
 
 <script>
 function toggleAcc(btn) {

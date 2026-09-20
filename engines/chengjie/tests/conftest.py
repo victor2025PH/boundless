@@ -1,8 +1,11 @@
 """pytest 共享 fixtures — Web 管理面板集成测试"""
 
 import asyncio
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -24,11 +27,94 @@ os.environ.setdefault("HOST_ALERT_SILENT", "1")
 for _k in [k for k in os.environ if k.startswith("AITR_")]:
     os.environ.pop(_k, None)
 
+# 剥离之后**再指一个进程级临时数据根**（2026-07-29）：只剥不设会让所有按
+# ``AITR_DATA_DIR`` 定位数据的模块回落 ``Path.cwd()/config``＝**引擎根仓库目录**，
+# 于是测试真的写进仓库里那份生产配置。实测（用回归时间窗比对 config/ 文件 mtime）
+# 被写脏的有 persona_usage.db / vision_metrics.db / ops_events.db / autoreply_audit.db /
+# fatex.db / events/spool/*.jsonl —— 计数、审计台账、事件 spool 全被测试数据污染。
+# 指到 tmp 后，凡遵循该部署约定的模块（persona_usage / telemetry / desktop_selectors /
+# licensing.data_paths / instance_restart_status / config_manager 的无参定位）一次性全隔离。
+# 需要真值的用例（test_config_manager / test_licensing_data_paths / test_instance_restart_status）
+# 自行 monkeypatch.setenv，晚于本处生效、不受影响。
+_TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="aitr-test-dataroot-"))
+(_TEST_DATA_ROOT / "config").mkdir(parents=True, exist_ok=True)
+os.environ["AITR_DATA_DIR"] = str(_TEST_DATA_ROOT)
+# I-4 灰度账本（src/ops/region_quote_gray）默认相对 CWD 落 logs/i4_gray——pytest 的 CWD
+# 是引擎根，测试触发 decide/observe 会把账本写进仓库树；一并指到进程级 tmp。
+os.environ.setdefault("AITR_I4_GRAY_DIR", str(_TEST_DATA_ROOT / "logs" / "i4_gray"))
+atexit.register(lambda: shutil.rmtree(_TEST_DATA_ROOT, ignore_errors=True))
+
+# reunion 草稿 prompt 配置（``config/reunion_prompts.yaml``）＝真实生产配置，
+# 且 ``POST /api/reunion-prompts/set-default`` 会**写**它。它不走 AITR_DATA_DIR，
+# 但自带 ``REUNION_PROMPTS_PATH`` 覆盖钩子 → 指到 tmp，并把仓库真值**拷一份**过去，
+# 使读到的内容与生产一致（只有写落在 tmp）。
+_REPO_REUNION = Path(__file__).resolve().parent.parent / "config" / "reunion_prompts.yaml"
+_TEST_REUNION = _TEST_DATA_ROOT / "config" / "reunion_prompts.yaml"
+try:
+    if _REPO_REUNION.exists():
+        shutil.copy2(_REPO_REUNION, _TEST_REUNION)
+except Exception:
+    pass
+os.environ["REUNION_PROMPTS_PATH"] = str(_TEST_REUNION)
+
+# 意图字典（``config/intent_tags.yaml``）＝生产在用的跨平台意图词表，且后台有整套
+# 编辑栈会**写**它（``write_intent_tags_yaml`` + 时间戳备份轮转 + restore）。它不走
+# AITR_DATA_DIR，但自带 ``INTENT_TAGS_PATH`` 覆盖钩子 → 与 reunion 同款：指到 tmp 并把
+# 仓库真值拷一份过去（读到的内容与生产一致，只有写落 tmp）。
+# 现状（2026-07-29 探针实测）：既有 intent_tags 用例都自设该变量，唯一触及写端点的
+# ``test_admin_route_inventory`` 只静态列 URL 不真调 → 这颗地雷**当前不可达**。
+# 本兜底是防「以后谁加一个真打 /api/rpa/intent-tags/write 的路由测试」——那一刻
+# 生产词表就会被测试数据覆盖 + 备份轮转把真值挤走（global_rules 已实锤过同样剧本）。
+# 自设该变量的用例晚于本处生效，不受影响。
+_REPO_INTENT_TAGS = Path(__file__).resolve().parent.parent / "config" / "intent_tags.yaml"
+_TEST_INTENT_TAGS = _TEST_DATA_ROOT / "config" / "intent_tags.yaml"
+try:
+    if _REPO_INTENT_TAGS.exists():
+        shutil.copy2(_REPO_INTENT_TAGS, _TEST_INTENT_TAGS)
+except Exception:
+    pass
+os.environ["INTENT_TAGS_PATH"] = str(_TEST_INTENT_TAGS)
+
 from starlette.testclient import TestClient
 
-from src.utils.config_manager import ConfigManager
+from src.utils.config_manager import ConfigManager  # noqa: E402  (env 剥离必须先跑)
 from src.utils.audit_store import AuditStore
 from src.web.admin import create_app
+
+# 字符额度库全局隔离：`license_quota.db` 的默认路径由 __file__ 推出，落在
+# **仓库的 config/ 目录**。只要某个用例造出一份有效授权（试用链的用例就会），
+# record/topup 就会写进那个真库——2026-07-27 实测：一次 pytest 把 10 万字符加量
+# 写到了本机真 lic_id 上，之后本地激活的授权凭空多出 10 万额度。
+# 额度是要拿来对外收钱的数，绝不能被测试污染，故按用例隔离到 tmp。
+@pytest.fixture(autouse=True)
+def _reset_compute_lanes():
+    try:
+        from src.ai.compute_lanes import reset_lanes
+        reset_lanes()
+        yield
+        reset_lanes()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_license_quota_db(tmp_path_factory):
+    try:
+        from src.licensing.quota_store import (
+            configure_license_quota_store,
+            reset_license_quota_store,
+        )
+    except Exception:  # pragma: no cover - 模块缺失时无需隔离
+        yield
+        return
+    reset_license_quota_store()
+    d = tmp_path_factory.mktemp("licquota")
+    configure_license_quota_store(db_path=str(d / "license_quota.db"))
+    try:
+        yield
+    finally:
+        reset_license_quota_store()
+
 
 # ─────────────────────────────────────────────────────────
 # 配置目录 fixture
@@ -182,7 +268,14 @@ def _isolated_web_env(monkeypatch):
     **所有需登录的 HTML 渲染断言集体假失败**（曾误判为 40 个存量回归）。
     需要这些变量的用例（test_config_manager 等）自行 setenv，晚于本清理生效。
     """
-    for k in ("AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE"):
+    for k in (
+        "AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE",
+        "AITR_HOSTED_AI_KEY", "AITR_HOSTED_AI_BASE_URL", "AITR_HOSTED_AI_MODEL",
+        # 托管识图注入也走 env 回放（hosted_gateway.ensure_hosted_vision），同样
+        # 会被 ensure_* 写进本进程 → 不剥掉就会串进后续用例的 ConfigManager
+        "AITR_HOSTED_VISION_BASE_URL", "AITR_HOSTED_VISION_MODEL",
+        "AITR_HOSTED_VISION_AUTO",
+    ):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -203,6 +296,30 @@ def _isolated_account_registry(tmp_path):
         yield
     finally:
         ar._registry = old
+
+
+@pytest.fixture(autouse=True)
+def _isolated_account_channel_gate(tmp_path, monkeypatch):
+    """账号级通道门禁（M-2，``src/inbox/account_channel_gate``）按测试隔离。
+
+    门禁状态（登录冷静期 / 连续失败降级 / 退避水位）落 ``config_dir()/
+    account_channel_gate.json``——conftest 顶部把数据根指到**进程级** tmp，于是同一
+    次 pytest 里前面的用例让假账号 ``telegram:tg1`` 连败三次，后面的用例就会撞上
+    「已降级 → L2 扣住」（2026-09-06 实测 test_autosend_send_block 串味）。这里把落盘
+    路径改到每测试独立 tmp 并清进程内缓存；测试自行 setenv AITR_DATA_DIR 的仍按其设定。
+    """
+    try:
+        import src.inbox.account_channel_gate as gate
+    except Exception:
+        yield
+        return
+    p = tmp_path / "_test_account_channel_gate.json"
+    monkeypatch.setattr(gate, "_state_path", lambda: p)
+    gate._reset_for_tests()
+    try:
+        yield
+    finally:
+        gate._reset_for_tests()
 
 
 @pytest.fixture()
@@ -335,6 +452,21 @@ def _reset_process_singletons_now():
         _eb._bus = None
     except Exception:
         pass
+    try:
+        # 入站媒体识别计数（进程内累积，自检接口按「有尝试才带」判断是否输出段）
+        from src.inbox.media_enrich_stats import get_media_enrich_stats
+        get_media_enrich_stats().reset()
+    except Exception:
+        pass
+    try:
+        # ASR 转写缓存（2026-09-12 ASR P0）：键＝音频**内容** sha1——测试夹具普遍
+        # 写同一串假字节，不清则上一个用例的转写/负缓存会「命中」到下一个用例。
+        import sys as _sys
+        _vt = _sys.modules.get("src.voice_transcriber")
+        if _vt is not None and getattr(_vt, "_TRANSCRIPT_CACHE", None) is not None:
+            _vt._TRANSCRIPT_CACHE.reset()
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -349,6 +481,130 @@ def _reset_process_singletons():
     _reset_process_singletons_now()
     yield
     _reset_process_singletons_now()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_stores(tmp_path):
+    """把三个「审计/事件/指标」单例库重定向到 tmp（否则写进仓库 config/）。
+
+    这三个不走 ``AITR_DATA_DIR``，各自用相对 cwd 或 ``__file__`` 推导默认路径 →
+    pytest 的 cwd＝引擎根，于是测试数据直接进**生产台账**：
+      - ``config/autoreply_audit.db``  自动回复决策流（后台/桌面壳「实时流」面板读它）
+      - ``config/ops_events.db``       反封号运维事件（「这号这周被风控几次」的唯一史料）
+      - ``config/vision_metrics.db``   messenger VLM 调用指标
+
+    污染这些库不改变系统行为，但会**把假数据混进给人看的审计与健康史**——运维据此
+    判断「号是不是要炸」，掺了测试数据的台账比没有台账更糟。与
+    ``_isolated_account_registry`` 同款：重定向单例，用完还原。
+    """
+    import src.integrations.messenger_rpa.vision_metrics as vm
+    import src.integrations.protocol_autoreply_audit as ara
+    import src.ops.ops_events as oe
+
+    old_audit, old_ops = ara._audit, oe._store
+    old_vm_path, old_vm_init = vm._db_path, vm._initialized
+    ara._audit = ara.AutoReplyAudit(tmp_path / "_t_autoreply_audit.db")
+    oe._store = None                     # 下次 getter 用下面的默认路径重建
+    vm._db_path = tmp_path / "_t_vision_metrics.db"
+    vm._initialized = False
+    try:
+        # ops_events 的 getter 首次调用才定路径 → 预热到 tmp，防测试传默认值
+        try:
+            oe.get_ops_event_store(str(tmp_path / "_t_ops_events.db"))
+        except Exception:
+            pass
+        yield
+    finally:
+        ara._audit, oe._store = old_audit, old_ops
+        vm._db_path, vm._initialized = old_vm_path, old_vm_init
+
+
+@pytest.fixture(autouse=True)
+def _isolated_sticker_store(tmp_path):
+    """表情包存储隔离（2026-08-17，防以后）：sticker_store 的默认 DB 是 CWD 相对
+    ``config/sticker_packs.db``（pytest cwd＝引擎根 → 会写进仓库 config/），落盘根
+    默认在仓库 ``src/web/static/sticker_packs``。与 intent_tags 兜底同款哲学：
+    模块**已被导入**时重定向单例到 tmp/:memory:，用完还原——自设隔离的用例
+    （test_sticker_routes 自己 configure）晚于本处生效，不受影响。"""
+    import sys
+    mod = sys.modules.get("src.inbox.sticker_store")
+    if mod is not None:
+        mod.reset_sticker_store()
+        mod.configure_sticker_store(":memory:")
+        mod.configure_sticker_root(tmp_path / "_t_sticker_packs")
+    try:
+        yield
+    finally:
+        mod = sys.modules.get("src.inbox.sticker_store")
+        if mod is not None:
+            mod.reset_sticker_store()
+            mod.configure_sticker_root(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_global_rules(tmp_path):
+    """把 ``PersonaManager`` 的 global_rules 落盘路径重定向到每测试独立临时文件。
+
+    背景（2026-07-29 实锤事故）：``save_global_rules`` 的路径由
+    ``Path(__file__).resolve().parents[2] / "config" / "global_rules.yaml"`` 推导——
+    **完全无视 tmp_path**，直接写**仓库里那份生产在用的**文件（引擎按 mtime 热加载）。
+    一个路由级测试因此把生产的 13 条回复硬约束（含「不要自称AI」这类安全项）清成
+    ``[]``，并经备份轮转把测试数据推进 ``.bak.1`` 槽位（运维点「恢复槽位1」会二次
+    清空）。事后从 git HEAD 还原。
+
+    与 ``_isolated_account_registry`` 同族、同理由：产品代码里按 ``__file__`` 推导
+    config 路径的**写**操作都是同一颗地雷，而单靠「测试自己记得隔离」不可靠。
+
+    ⚠️ 曾试过「快照 config/ 目录、变了就点名」的通用探测器，在本机不可用：
+    ``-n auto`` 并行下 worker A 的快照窗口会把 worker B 的写入算到 A 头上，
+    且共享工作树上**其他 agent 线**正在编辑 config 文件、``*.db`` 被连接即改 mtime
+    → 实测 243 个假阳性。故回到「按写入口精确重定向」这条本仓已验证的路子。
+
+    2026-07-29 后续（P7-1 overlay 化）：产品侧写入已改落「可写数据区」
+    （``AITR_DATA_DIR/config``，本 conftest 顶部已把它指向进程级 tmp），所以本 fixture
+    已非唯一防线；但它把落点收到**每测试独立** tmp（而非全进程共享那个），
+    仍在防「用例之间经同一份 global_rules 串味」，且显式覆写同时钉住读与写落点。
+    """
+    from src.utils.persona_manager import PersonaManager
+
+    pm = PersonaManager.get_instance()
+    old_path = pm._global_rules_path        # noqa: SLF001 — 正是要拦的那个字段
+    old_cache = pm._global_rules
+    old_sig = pm._global_rules_sig
+    pm._global_rules_path = tmp_path / "global_rules.yaml"
+    pm._global_rules = None
+    pm._global_rules_sig = ("", 0.0, -1)
+    try:
+        yield
+    finally:
+        # 只在**单例还是我改过的那一个**时还原。若用例自己 reset() 了单例
+        # （``test_global_rules_overlay.py`` 那类专测自动解析链的测试就这么做），
+        # 此处绝不能再 get_instance() 把它复活、还盖上一个陈旧的 tmp 覆写——
+        # 那会让下一个依赖自动解析的用例读到上一个用例的 tmp 路径。
+        if PersonaManager._instance is pm:      # noqa: SLF001
+            pm._global_rules_path = old_path
+            pm._global_rules = old_cache
+            pm._global_rules_sig = old_sig
+
+
+@pytest.fixture(autouse=True)
+def _isolated_desc_inflight():
+    """清空图片识别去重锁（media_enrich._DESC_INFLIGHT，进程级模块状态）。
+
+    锁键=会话id|媒体引用，TTL 90s——不清则前一个用例占过的键会让后一个用例
+    被判「识别进行中」而进等待轮询（budget 默认 20s），测试变慢且行为串味。
+    与其他 autouse 隔离同理：模块级可变状态一律按测试清。"""
+    try:
+        from src.inbox import media_enrich as _me
+        _me._DESC_INFLIGHT.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from src.inbox import media_enrich as _me
+        _me._DESC_INFLIGHT.clear()
+    except Exception:
+        pass
 
 
 @pytest.fixture()

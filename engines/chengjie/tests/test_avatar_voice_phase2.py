@@ -417,6 +417,52 @@ def test_avatar_probe_target_decision():
     assert avatar_probe_target(
         {"avatar_voice": {"enabled": True, "base_url": "http://10.0.0.5:7852/"}}
     ) == "http://10.0.0.5:7852/health"
+    # base_urls（多端点）优先于单数 base_url——与 AvatarVoiceClient「主端点=首个」
+    # 同口径（2026-08-18 假告警实锤：只配 base_urls 时旧实现回落 127.0.0.1 探
+    # 已退役旧服务）
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True,
+                          "base_urls": ["http://192.168.0.140:7852/"]}}
+    ) == "http://192.168.0.140:7852/health"
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True,
+                          "base_urls": ["http://192.168.0.140:7852"],
+                          "base_url": "http://127.0.0.1:7852"}}
+    ) == "http://192.168.0.140:7852/health"
+    # 空/坏形列表回落单数键（含缺省）
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True, "base_urls": []}}
+    ) == "http://127.0.0.1:7852/health"
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True, "base_urls": ["", None]}}
+    ) == "http://127.0.0.1:7852/health"
+    # minicpm_clone 优先（2026-08-29 智聊 TTS 迁 104 专属 IndexTTS-2）：探针必须跟随
+    # **实际在用的那条链**，否则 avatar_voice 那台掉线会报成智聊语音故障（假告警），
+    # 而真正在用的节点挂了却没有灯——2026-08-18 假告警的同类错位，方向相反。
+    assert avatar_probe_target({
+        "avatar_voice": {"enabled": True,
+                         "base_urls": ["http://192.168.0.140:7852"]},
+        "minicpm_clone": {"enabled": True,
+                          "base_url": "http://192.168.0.104:7865"},
+    }) == "http://192.168.0.104:7865/health"
+    # minicpm_clone 未启用 / 缺 base_url → 回落 avatar_voice 链（旧行为不变）
+    assert avatar_probe_target({
+        "avatar_voice": {"enabled": True,
+                         "base_urls": ["http://192.168.0.140:7852"]},
+        "minicpm_clone": {"enabled": False,
+                          "base_url": "http://192.168.0.104:7865"},
+    }) == "http://192.168.0.140:7852/health"
+    assert avatar_probe_target({
+        "avatar_voice": {"enabled": True,
+                         "base_urls": ["http://192.168.0.140:7852"]},
+        "minicpm_clone": {"enabled": True, "base_url": "  "},
+    }) == "http://192.168.0.140:7852/health"
+    # avatar_voice 关但 minicpm_clone 开 → 仍要探（TTS 链只剩它）
+    assert avatar_probe_target({
+        "avatar_voice": {"enabled": False},
+        "minicpm_clone": {"enabled": True,
+                          "base_url": "http://192.168.0.104:7865/"},
+    }) == "http://192.168.0.104:7865/health"
 
 
 def test_build_health_avatar_component():

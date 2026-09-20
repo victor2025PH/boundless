@@ -36,6 +36,22 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 PRERENDER_DIRNAME = "prerendered"
+
+# ⚠️ 这是**唯一刻意保留的 CWD 相对路径**（其余静态资产路径必须绝对，见
+# tests/test_static_asset_paths.py）。两侧如何对上，以及为什么这样是安全的：
+#
+#   写入方＝CLI ``scripts/avatar_prerender``：**显式**按 ``resolve_data_roots()``
+#     逐根拼 ``<数据根>/assets/voices``（多实例各落各家），不吃 CWD。
+#   读取方＝引擎进程：用本默认值，按**进程 CWD** 解析；而双实例启动契约下
+#     引擎 CWD 就是实例数据根 → 恰好与写入方同址（实测 112 个 clip 全在数据根、
+#     引擎根 0 个）。
+#
+# 若哪天启动脚本改了 CWD（或 CLI 不再显式传 base_dir），两侧会错开——但失效是
+# **软的**：``find_prerendered`` 返 None → 回落现场合成（~7s vs ~200ms），不报错、
+# 不发错声。且该退化**已被既有观测覆盖**：``prerender_coverage`` 归零 +
+# ``prerender_miss`` 飙升会直接出现在 ops「🎙️ AvatarHub 语音」卡的备货缺口行。
+# 故此处刻意不改成绝对路径（重接管路要动整条在线语音链，风险大于收益）；
+# 真要改，请同时改 CLI 与本值并跑 tests/test_static_asset_paths.py。
 DEFAULT_BASE_DIR = "assets/voices"
 
 
@@ -317,6 +333,15 @@ _AUTO_STOCK_BLOCK = (
     "微信号", "支付宝", "QQ号", "手机号", "地址",
 )
 _AUTO_STOCK_BAD_MARKS = ("http", "www.", "@", "{", "}", "[", "]")
+# 仪式问候体裁刻意不自动入库（P1 2026-08-05）：daily_ritual 每天生成的晨/晚安
+# 若因高频缺口被固化成预渲染音频，同一客户每天听到**同一段波形**＝最硬的机器人
+# 证据（「拟人化 > 时延」方针下问候必须每天不重样；接茬改造后问候还要引用昨晚
+# 话头，更不可复用）。只拦**自动**路径——运营经一键入库/手编台词库的显式决策
+# 不受限（append_prerender_line 不查此表）。
+_AUTO_STOCK_RITUAL_MARKS = (
+    "早安", "晚安", "午安", "早上好", "晚上好", "睡得", "睡个好觉",
+    "好梦", "刚醒", "起床", "该睡了",
+)
 
 
 def qualify_auto_stock(
@@ -328,7 +353,8 @@ def qualify_auto_stock(
     - 长度 ≤ ``max_chars``：固定台词体裁；
     - 不含数字（日期/金额/号码类内容都不是固定台词，且可能带隐私痕迹）；
     - 不含 URL/@/占位符标记、不含敏感词（转账/验证码等——上游 persona_guard
-      本就不该产出，这里是最后一道皮带）。
+      本就不该产出，这里是最后一道皮带）；
+    - 不是仪式问候体裁（早安/晚安类——每天该不重样的话不能固化成同一段波形）。
     """
     t = normalize_prerender_text(text)
     if not t:
@@ -344,6 +370,8 @@ def qualify_auto_stock(
         return False, "bad_marks"
     if any(b in t for b in _AUTO_STOCK_BLOCK):
         return False, "blocked_word"
+    if any(g in t for g in _AUTO_STOCK_RITUAL_MARKS):
+        return False, "ritual_greeting"
     return True, ""
 
 

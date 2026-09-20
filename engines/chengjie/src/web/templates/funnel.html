@@ -2,6 +2,8 @@
 {% block title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
 {% block page_title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}{% endblock %}
 {% block content %}
+{% set cluster_id = "analysis" %}{% set cluster_here = "/funnel" %}
+{% include "_cluster_tabs.html" %}
 {# 跨平台客户旅程漏斗独立页:全量复用 RPA 共享漏斗组件,默认全渠道聚合,
    页内渠道筛选片(all/messenger/line/telegram/mobile)由组件自带。 #}
 {% include "_rpa_shared_styles.html" %}
@@ -18,6 +20,14 @@
     <span style="font-size:.82rem">{{ (i18n or {}).get('fn_kpi_subs','活跃订阅') }} <b id="fn-kpi-subs">—</b></span>
     <a href="/monetization" style="margin-left:auto;font-size:.76rem">{{ (i18n or {}).get('fn_kpi_more','查看变现营收 →') }}</a>
   </div>
+  {# 实施92c 客户旅程阶段条 — 旧后端/模块关(403/404)保持隐藏（特性探测） #}
+  <div id="fn-journey-strip" style="display:none;align-items:center;gap:1.1rem;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:.7rem 1.1rem;margin-bottom:.8rem;flex-wrap:wrap">
+    <span style="font-size:.78rem;font-weight:700;color:var(--t2)" title="{{ (i18n or {}).get('fn_journey_hint','按会话往来自动推导（成交引擎）；成交/复购由标记成交或变现入账进入') }}">{{ (i18n or {}).get('fn_journey_title','客户旅程阶段') }}</span>
+    <span id="fn-jn-cells" style="display:flex;gap:.9rem;flex-wrap:wrap;font-size:.82rem"></span>
+    <span style="margin-left:auto;font-size:.82rem">{{ (i18n or {}).get('fn_journey_deals_14d','近14日成交') }} <b id="fn-jn-deals">—</b></span>
+    <!-- 实施93c：CTA 追踪短链按目标拆分（发→点横比不同落地页；零铸链隐藏） -->
+    <span id="fn-jn-cta" style="display:none;flex-basis:100%;font-size:.78rem;color:var(--t2);margin-top:.15rem"></span>
+  </div>
   {% include "_rpa_shared_funnel.html" %}
 </div>
 <script>
@@ -27,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function(){
   }
 
   // 变现 KPI 条:403(viewer)/未启用/网络失败 一律保持隐藏
-  fetch('/api/monetize/kpi?days=30', {credentials:'same-origin'}).then(function(r){
+  apiFetch('/api/monetize/kpi?days=30', {credentials:'same-origin'}).then(function(r){
     if(!r.ok) return null;
     return r.json();
   }).then(function(d){
@@ -38,6 +48,78 @@ document.addEventListener('DOMContentLoaded', function(){
     document.getElementById('fn-kpi-tx').textContent = d.tx_count || 0;
     document.getElementById('fn-kpi-subs').textContent = d.active_subscriptions || 0;
     strip.style.display = 'flex';
+  }).catch(function(){});
+
+  // 实施92c 旅程阶段条：404(旧后端)/403(模块关)/零数据 保持隐藏
+  // 实施93：guide 风味（响应 flavor）时 quoting/deal/repeat 换引导语系文案
+  var _jnLabels = {
+    'new': {{ ((i18n or {}).get('wf_stage_new','新客'))|tojson }},
+    'contacted': {{ ((i18n or {}).get('wf_stage_contacted','建联'))|tojson }},
+    'nurturing': {{ ((i18n or {}).get('wf_stage_nurturing','培育'))|tojson }},
+    'quoting': {{ ((i18n or {}).get('wf_stage_quoting','报价'))|tojson }},
+    'deal': {{ ((i18n or {}).get('wf_stage_deal','成交'))|tojson }},
+    'repeat': {{ ((i18n or {}).get('wf_stage_repeat','复购'))|tojson }}
+  };
+  var _jnLabelsGuide = {
+    'quoting': {{ ((i18n or {}).get('wf_stage_quoting_g','已引导'))|tojson }},
+    'deal': {{ ((i18n or {}).get('wf_stage_deal_g','已转化'))|tojson }},
+    'repeat': {{ ((i18n or {}).get('wf_stage_repeat_g','再转化'))|tojson }}
+  };
+  var _jnDealsFmt = {{ ((i18n or {}).get('fn_journey_deals_fmt','{n} 单 · {amt}'))|tojson }};
+  apiFetch('/api/workspace/journey-funnel?days=14', {credentials:'same-origin'}).then(function(r){
+    if(!r.ok) return null;
+    return r.json();
+  }).then(function(d){
+    if(!d || !d.ok) return;
+    if(String(d.flavor||'sales')==='guide'){
+      Object.keys(_jnLabelsGuide).forEach(function(k){ _jnLabels[k]=_jnLabelsGuide[k]; });
+    }
+    var stages = d.stages || {};
+    var total = 0;
+    (d.order || []).forEach(function(s){ total += Number(stages[s]) || 0; });
+    var deals = d.deals || {};
+    if(!total && !Number(deals.n)) return;   // 零数据不装门面
+    var cells = document.getElementById('fn-jn-cells');
+    if(cells){
+      cells.textContent = '';
+      (d.order || []).forEach(function(s){
+        var n = Number(stages[s]) || 0;
+        var span = document.createElement('span');
+        span.textContent = (_jnLabels[s] || s) + ' ';
+        var b = document.createElement('b');
+        b.textContent = String(n);
+        if(s === 'deal' || s === 'repeat') b.style.color = 'var(--ok, #16a34a)';
+        span.appendChild(b);
+        if(!n) span.style.opacity = '.45';
+        cells.appendChild(span);
+      });
+    }
+    var db = document.getElementById('fn-jn-deals');
+    if(db) db.textContent = _jnDealsFmt
+      .replace('{n}', String(deals.n || 0))
+      .replace('{amt}', String(deals.amount || 0));
+    // 实施93c：按目标拆点击率（横比落地页；点击率低的目标该换素材/换去处）
+    var cta = d.cta || {};
+    var ctaRow = document.getElementById('fn-jn-cta');
+    if(ctaRow && Number(cta.links) > 0){
+      ctaRow.textContent = '';
+      var lb = document.createElement('b');
+      lb.textContent = {{ ((i18n or {}).get('fn_cta_title','🔗 追踪链接 发→点：'))|tojson }};
+      lb.style.marginRight = '.6rem';
+      ctaRow.appendChild(lb);
+      (cta.by_target || []).forEach(function(t){
+        var links = Number(t.links) || 0, clicked = Number(t.clicked) || 0;
+        var pct = links ? Math.round(clicked * 100 / links) : 0;
+        var sp = document.createElement('span');
+        sp.style.marginRight = '.9rem';
+        sp.textContent = (t.name || t.target_id || '?') + ' ' + clicked + '/' + links + '（' + pct + '%）';
+        if(links >= 3 && !clicked) sp.style.color = 'var(--warn, #b45309)';
+        ctaRow.appendChild(sp);
+      });
+      ctaRow.style.display = 'block';
+    }
+    var strip = document.getElementById('fn-journey-strip');
+    if(strip) strip.style.display = 'flex';
   }).catch(function(){});
 
   // 导出走服务端流式端点（P5）：拼装/转义/BOM 全在后端,前端只负责带参跳转

@@ -142,7 +142,7 @@ export const ENGINE: EngineDict = {
       },
       {
         icon: "languages",
-        line: { zh: "通译 LingoX", en: "LingoX" },
+        line: { zh: "通传 VoxX", en: "VoxX" },
         title: { zh: "克隆音同传 · 术语锁定", en: "Cloned-voice interpreting · term lock" },
         desc: {
           zh: "用你自己的克隆声做双向同传，术语表锁定专有名词（美团永远 Meituan），支持抢话打断，一键开通话套餐。",
@@ -152,7 +152,7 @@ export const ENGINE: EngineDict = {
       },
       {
         icon: "subtitles",
-        line: { zh: "通译 LingoX", en: "LingoX" },
+        line: { zh: "通传 VoxX", en: "VoxX" },
         title: { zh: "OBS 直播双语字幕", en: "OBS live bilingual subtitles" },
         desc: {
           zh: "OBS 浏览器源里拖一个链接，直播间即出实时双语字幕，散场一键导出 SRT——观众听不懂也跟得上。",

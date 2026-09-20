@@ -1,0 +1,1212 @@
+# ── ChatX 内测版 overlay 种子（v1.005，2026-08-23）────────────────────────────
+# 目标：安装包开箱 = 与 117 生产机（zhiliao 实例）同一形态——12 个人设、克隆语音、
+# 人设相册、主动触达、全自动回复（人审档）、本地 MT 翻译、LAN 视觉/嵌入/LLM 兜底全部点亮。
+#
+#   · v1.005（2026-08-23）：与 zhiliao overlay 重新净差分对齐（1.0.51「全功能开箱」，
+#     老板拍板：小智/相册/识图等功能不许再关）。本批补齐 8/04-8/23 新功能开关：
+#     **小智 AI 助手全家桶**（assistant：问答/报障/教学/「替我做」智能体/语音提问/
+#     报障截图 VLM 摘要；帮助语料首启自动播种见 assistant_routes）、唱歌能力
+#     （companion.singing 曲库+定制单）、今日话题源参数（daily_topics feeds/区域源/
+#     屏蔽词）、群成员提取（group_members）、节日问候（locale_holidays）、主动触达
+#     子能力（city_ask/milestone_ritual/photo/read_aware）、图文一致性升级
+#     （caption_guard/identity_check/手动出图配额）、贴纸面板（stickers）、工作流
+#     自动推进（workflows）、接管自动接回（takeover_rearm）、TG 历史全量同步/媒体
+#     拉取/出站媒体镜像、媒体翻译（图内改字/视频translate）、spoken_style 真人感
+#     文本层、表面融合（surface_fusion）、真探针自愈（true_probe）、token 记账
+#     （只记不拦）、右栏 App 模式默认开（同日老板拍板撤回：改默认原生右栏，见下方 copilot 段）、出站节奏与分条气泡参数对齐生产实测值。
+#     刻意不带：assistant.query.llm 直连（key=inherit 在客户机为空，走主链托管网关
+#     容灾即可）、order_hook/order_pull（官网密钥）、instagram/zalo 登录（边车不在
+#     桌面包 SPECS，开了=灰选项）、credpool（LAN 池+明文令牌）、ComfyUI 现场生图
+#     command_args（生产机专属）、RPA human_pacing（RPA 本体不随包）。
+#
+# ⚑ 内测口径（2026-08-01 拍板）：内测期**唯一打包形态就是本形态**——`npm run dist*`
+#   一律先 stage:internal（见 desktop/package.json predist* + after-pack.js 硬闸），
+#   不存在「标准包/内测包」两种产物。A/B/C 交付分级与 config.desktop.min.yaml
+#   语义保留（服务将来正式售卖），但内测期不投产标准形态。
+#
+# 用法：随内测包放进 resources/seed-data/config.local.internal.yaml；后端首启由
+# ConfigManager._ensure_seeded_extras 拷成 <数据区>/config/config.local.yaml
+# （已有 overlay 时只补缺失键——用户显式写过的值永远尊重；存量内测机升级后
+# 下次启动自动获得本文件新增的键）。
+#
+# 铁律：
+#   · 本文件是**公开分发物**：绝不写任何密钥/token/生产账号数据（AI Key 走官网托管
+#     网关 ensure_hosted_ai；Telegram api_id 走设备令牌粘定派发；均不落盘）。
+#   · v1.004（2026-08-04）：与 zhiliao overlay 重新净差分对齐（1.0.10 四机部署前）——
+#     补 8/2-8/3 新开关（分条回复参数/入站合并/出站防双发/peer_bot_guard/fresh_guard/
+#     语音分条/voice_iou/interject_absorb/tg_history_autosync/daily_topics/user_clock/
+#     care 影子档/趋势卡/reply_variety）；修 hub_fish 档名映射（旧英文档名在 hub 404
+#     =语音断档实锤）、ai.fallback 当时改 173 qwen14b（08-28 已再迁 173:8001 chatx 27B AWQ）、口语化改写 local_first（173/198 LAN 端点）；vision/嵌入/MT 端点序对齐生产
+#     140 首位；automation_mode 对齐生产机 auto_ai。
+#   · v1.003 起为**混合形态**（非局域网机器也可用算力）：视觉/克隆语音/语音识别三段带
+#     `_lan_seed: true` 标记——hosted_gateway 启动时探测 LAN 端点，可达＝直连（办公室
+#     低延迟），不可达＝自动切官网网关 bd2026.cc（经 117→VPS 反向隧道回同一批 GPU，
+#     设备令牌鉴权）。标记只授权注入器动「种子写的端点」，用户自配端点仍绝不覆盖。
+#     未走网关的能力出了 LAN 仍软降级（本地 MT→DeepSeek 翻译、嵌入→关键词召回、
+#     hub_fish→普通克隆链），聊天主链不受影响。
+#   · 与生产 zhiliao 合并视图（config.yaml ⊕ config.local.yaml）的差异只有四类
+#     （2026-08-01 用 config.yaml⊕overlay 三方净差分逐键核对过）：
+#     ①密钥/凭据/生产账号数据剔除——ai.api_key、telegram.api_id/api_hash、
+#       web_admin.auth_token/secret_key、credpool.*（LAN 中央池+共享令牌，公网不可达
+#       且明文令牌不可进公开分发物）、goals.order_hook.token / order_pull.admin_key、
+#       licensing.trial.fulfiller_watch.*（发货机运维，客户机无 admin key 可用）、
+#       group_show.linkage_overrides / companion_send_gate.exempt_peers /
+#       telegram.group_reply.allowlist_chat_ids（生产账号/群 id）；
+#     ②127.0.0.1:7852（本机 TTS）改写为 192.168.0.117:7852（LAN 可达）；
+#     ③本机进程内 ASR（sensevoice cuda）与 faster_whisper 本地回落改为
+#       176 GPU ASR + 140 AvatarHub 远程端点（冻结包无 torch，本地模型跑不动）；
+#     ④companion.selfie.provider.command_args（ComfyUI 现场生图）不随包——
+#       它要 python 解释器 + 仓库 tools/comfy_infer.py，冻结包两者皆无，
+#       相册档（backend=album）已全量可用，生成档属生产机专属能力。
+
+domain: conversion
+# 业务域单一真值（N-3 #241 / D-N1，2026-09-08）：内测机是陪伴运营机——Domain hook / KB 分类 /
+# 目标模板 / 摸底槽位 / 画像 schema / 话术种子全读它；缺省时按「桌面客户机」推导也是 companion，
+# 这里显式写死，升级机「只补缺失键」一样拿到。**不是** domain（域包名）——别改上面那行。
+business_domain: companion
+
+brand:
+  company_name: 无界科技
+  product_name: 智聊 ChatX
+  site_name: 无界科技 · 智聊
+  site_name_short: 智聊 ChatX
+  sidebar_name: 无界 · 智聊
+  login_subtitle: 管理控制台
+
+web_admin:
+  site_name: 无界科技 · 智聊
+
+inbox:
+  enabled: true
+  realtime_poll_sec: 3
+  # 多句分条回复——2026-09-06 老板决策 D-L3（#210，82BF95 实锤）：内测机同样**出厂关**、
+  # 逐句关、仅显式换行才拆。此前这里 enabled+per_sentence 双开正是 skuio 机 overlay 里
+  # 「谁打开的无记录」那组值的来源（内测种子播进 config.local.yaml）。运营要开就在
+  # 自动回复设置页开（开后也只按草稿显式换行拆、短回复永不拆）。节奏参数保留：
+  # 开闸即同档。
+  reply_style:
+    bubbles:
+      enabled: false
+      per_sentence: false
+      explicit_newline_only: true
+      max_parts: 5          # 逐句可能多于 3 句；封顶 5（余量并入末条）
+      max_chars: 60         # per_sentence 下不再用它回包，仅留作回落
+      # v1.005：条间节奏对齐生产实测值（4-11s 按字符长度伸缩，真人打字手速口径；
+      # 旧 0.8-2.5s 是机关枪节奏）。holdout 保持 0——A/B 保留组是生产实验档，
+      # 客户包不做实验。
+      gap_sec_lo: 4
+      gap_sec_hi: 11
+      per_char_sec: 0.13
+      latin_per_char_sec: 0.06
+      max_gap_sec: 20
+      total_budget_sec: 75
+      holdout_pct: 0.0      # 逐句是既定行为，不留 A/B 保留组（否则 10% 仍整段）
+  # Telegram 历史自动补缺口：停机/断线窗口的消息不再永久缺失
+  tg_history_autosync:
+    enabled: true
+  persona_conv_override:
+    enabled: true
+  auto_draft:
+    enabled: true
+    # v1.004 曾对齐生产机 auto_ai；1.0.76 D-M1（2026-09-06）改回 review：登录默认半自动只起草，
+    # 全自动按账号在收件箱账号菜单显式开启并确认；登录/重登后 10 分钟冷静期（login_gate）。
+    # 老会话已写的 auto_ai 不动。
+    automation_mode: review
+    # D-M1：首条入站不再自动持久化全局档（新会话跟随账号级决策，不钉死会话行）
+    bootstrap_automation_mode: false
+    skip_group_chats: true
+    # v1.005：群聊自动驾驶白名单平台（与生产一致；仅 telegram 群走群回逻辑）
+    group_autopilot_platforms:
+    - telegram
+    min_text_len: 0
+    # 入站爆发合并（防同义双发·治因）：几秒内连发多条合并成一次拟稿
+    inbound_merge:
+      enabled: true
+      window_sec: 8
+      max_wait_sec: 25
+      max_texts: 6
+  # 2026-08-23 老板拍板改回：默认原生右栏（App 面板缺「跨平台档案」卡，补齐前不默认开）
+  copilot:
+    app_default: false
+  # v1.005：桌面注入健康趋势落库（观测）
+  desktop_inject:
+    trend_log: true
+  # v1.005：贴纸面板（与生产一致）
+  stickers:
+    enabled: true
+  # v1.005：接管自动接回（坐席手动出站触发的 manual 静默 30min 后 AI 自动接回；
+  # 显式选的手动/风控降档不动——「全自动」承诺的闭环，防会话被无感钉死 manual）
+  takeover_rearm:
+    # D-M9（1.0.76）：手动是粘的——全局自动接回默认关；坐席切手动时可单独选「30 分钟后接回」（takeover_opt_from）
+    enabled: false
+    after_minutes: 30
+  # v1.005：工作流自动推进（目标自动挂载 + 每日/每 tick 预算）
+  workflows:
+    goal_auto_attach: true
+    auto_advance:
+      enabled: true
+      max_per_tick: 2
+      max_per_day: 15
+    auto_start:
+      max_per_day: 30
+  # 出站近重复守卫（防同义双发·治果）：投递前与最近出站核对，近重复静默跳过
+  outbound_dup_guard:
+    enabled: true
+    window_sec: 180
+    block_similar: true
+  # 对方机器人守卫：确定级降 manual、复读/秒回熔断降 review、单会话日预算
+  peer_bot_guard:
+    enabled: true
+    # 2026-08-17：全线统一 500（代码默认已同步 500）——40/200 在高强度试聊
+    # 与长陪聊场景反复触顶（2026-08-04 198 实锤 + 2026-08-17 老板实录 40/40），
+    # 真人客户永远打不满 500，预算回归「对面也是 LLM」的保险丝定位；触顶后
+    # 真人会话软停转人审拟稿（硬停=2×=1000），收件箱横幅/触顶弹窗可当日救济。
+    daily_reply_budget: 500
+  l2_autosend:
+    enabled: true
+    deliver: true
+    # 草稿过期守卫：拟稿后客户又说了新话 → 旧稿不投（计 skip 不计 error）
+    fresh_guard:
+      enabled: true
+    # v1.005：出站拟人节奏对齐生产实测值（10-54s 自适应 + 连发地板 + 抖动）
+    deliver_delay:
+      min_sec: 10
+      max_sec: 54
+      adaptive: true
+      base_sec: 18
+      per_char_sec: 0.1
+      latin_per_char_sec: 0.06
+      jitter: 0.3
+      min_gap_sec: 10
+      min_residual_sec: 2
+    # v1.005：多会话并行投递（不同会话不排一条队；同会话仍串行保顺序）
+    parallel_deliver:
+      enabled: true
+      max_concurrent: 2
+    # v1.005：与生产一致的显式声明（holding/已读回执/打字指示器均关）
+    holding:
+      enabled: false
+    mark_read_before_reply: false
+    typing_indicator: false
+    voice:
+      enabled: true
+      trigger: always
+      no_edge_fallback: true
+      max_chars: 110
+      # 分条语音：>40 字连发 2-3 条短语音；全部合成成功才逐条发，任一失败回落单条
+      split_send:
+        enabled: true
+        min_total_chars: 40
+        part_max_chars: 36
+        max_parts: 3
+  sla_watcher:
+    escalate_hours: 24
+  # 覆盖 config.desktop.min.yaml 的桌面默认关（P1-198）：内测口径=与生产机对齐，
+  # 生产机该入口是开的（代码默认 true、overlay 未动）。
+  next_actions:
+    follow_up_task: true
+
+# ── 小智 AI 助手全家桶（v1.005，2026-08-23 老板拍板「不能再关」）──────────────
+# 悬浮球（问答/报障/我的工单/教学模式/「替我做」智能体/语音提问）双壳常驻。
+# 帮助语料 assistant_help.db 由后端首启自动播种（src/assistant/seed_corpus 随包，
+# assistant_routes 注册时 enabled 即后台幂等 upsert——新装零人工、升级自动补新词条）。
+# 刻意不配 query.llm 直连（api_key: inherit 在客户机为空 → 白付一次失败往返）：
+# 问答走 skill_manager.ai_client 主链容灾（托管网关/自有 Key 都吃得住）。
+assistant:
+  enabled: true
+  name: 小智
+  agent:
+    enabled: true   # 「替我做」智能体：计划→确认卡→执行→撤销，动作层=既有白名单写口
+  voice:
+    enabled: true   # 面板🎤语音提问 → audio_pipeline（LAN 176 GPU ASR）；无麦克风环境按钮自动隐藏
+  vision:
+    enabled: true   # 报障截图 VLM 摘要（best-effort，VLM 掉线静默不影响落单）
+
+# v1.005：GPU 语音转写端点（小智语音提问 + 协议语音消息转写共用；LAN 176 whisper。
+# 出了内网软失败——转写不可用时小智语音按钮报错但问答/报障不受影响）
+audio_pipeline:
+  enabled: true
+  backend: openai
+  base_url: http://192.168.0.176:8765/v1
+  api_key: local
+  model: large-v3-turbo
+  language: auto
+
+voice_lang_route:
+  enabled: true
+  cantonese:
+    voice: zh-HK-HiuMaanNeural
+  follow_text:
+    enabled: true
+    reject_unmapped: true
+
+lang_prior:
+  enabled: true
+  phone_platforms:
+  - whatsapp
+
+# ── 克隆语音（IndexTTS-2 @104:7865）────────────────────────────────────────
+# 2026-08-29 域A修复：智聊 TTS 主力迁 104:7865 IndexTTS-2（同 /v1/tts/clone 契约，
+# 老板拍板专用节点），117:7852 CosyVoice 已退役（EmotionTTS_Boot Disabled）——
+# 旧种子 base_urls 指 [117:7852,140:7852] 两个死端点＝装机后克隆必回落通用音。
+# 2026-09-11：140:7852 也已停（08-29 Q7），种子不再列这条死备。
+# backend 仍用 avatar_clone（不学生产切 minicpm_clone）：hosted_gateway 混合注入
+# **只接管 avatar_voice.base_urls**，外网机器全靠它把官网网关排首位；minicpm_clone
+# 无网关注入路径，出了内网就是死配置。
+# _lan_seed: 授权 hosted_gateway 做混合注入——LAN 可达时网关殿后兜底，不可达时
+# 网关排首位（外网机器克隆语音经 bd2026.cc → 隧道 → 104:7865）。hub_fish 无健康预检，
+# 外网不可达时会被注入器就地禁用（回内网自动恢复）。
+# ⚠ 种子合并只补缺失键：存量装机的旧 base_urls 不会被本文件覆盖——它们靠
+# 网关中继修复（服务端已指向 104）恢复克隆，本段惠及新装/重置机器。
+avatar_voice:
+  enabled: true
+  _lan_seed: true
+  policy:
+    no_edge_fallback: true
+  synth_timeout_sec: 75
+  retries: 0
+  emotion_channel_threshold: 2
+  paralinguistic:
+    enabled: true
+    max_marks: 2
+  synth_verify:
+    enabled: true
+    cer_threshold: 0.3
+    max_retries: 1
+  colloquial:
+    enabled: true
+    mode: llm
+    rewrite_intensity: vivid
+    generated: true
+    disfluency: true
+    disfluency_every: 5
+    human_ticks: true
+    think_prob: 0.28
+    laugh_prob: 0.08
+    # ── 2026-08-28 中枢云端优先执行单 ②+⑤：摘 198 qwen3:8b、173:11434 → 173:8001 ──
+    # 旧＝「173 qwen14b 主 / 198 qwen3:8b 备」双 GPU 冗余。两条都撤：
+    #   · 198:11434 qwen3:8b 由中枢撤钉（198 改钉 qwen3-vl:8b 做视觉落点）→ 执行单 ②；
+    #   · 173:11434 不在中枢版图内（173 只保留 vLLM :8001）→ 执行单 ⑤ LAN 互备大扫除。
+    # 现在 LAN 只留一层 173:8001 chatx；它挂了仍有云端、最后规则档，能力不会消失。
+    # ⚠ 本文件是**安装包内置配置**：改动要等下一个 ChatX 包发版才到坐席机；
+    #   已装机器上的旧值由 hosted_gateway 混合形态兜住（LAN 不可达自动切网关）。
+    provider: local_first
+    temperature: 0.5
+    llm_endpoints:
+    - base_url: http://192.168.0.173:8001/v1
+      model: chatx
+      api_key: vllm
+      timeout_sec: 6.0
+    llm_timeout_sec: 12.0
+    min_chars: 12
+    lead_prob: 0.5
+    fillers: true
+    lexical: true
+    sentence_final: false
+  prosody:
+    enabled: true
+    flow_temperature: 1.08
+  # 2026-08-29 域A：104:7865 IndexTTS-2（健康形状 {status:"ok",model_loaded}，
+  # AvatarVoiceClient._probe 已双形状兼容）。140:7852 CosyVoice 08-29 已停，
+  # 不要再写进种子——会连 RST、看板假红。
+  base_urls:
+  - http://192.168.0.104:7865
+  voice_consistency: strict
+  hub_fish:
+    # 2026-08-29 与生产对齐关闭（老板拍板不用 176 角色库；智聊克隆统一走 104
+    # IndexTTS-2）。旧值 true 时 LAN 机器 allowlist 人设仍会打 176:9000。
+    enabled: false
+    base_url: http://192.168.0.176:9000
+    timeout_sec: 75.0
+    best_of: 2
+    # 分条单条 1 候选（整段仍 2）：分条×best_of 是 hub GPU 的主要放大器
+    best_of_parts: 1
+    # IndexTTS-2 情感/音色解耦（无 7852 的音色税）：0.35 放行日常闲聊情绪
+    emotion_threshold: 0.35
+    # v1.005：引擎归属钉死 index_tts（媒体产物验证纪律：hub 引擎解析是 prefer
+    # 语义，不钉会静默回落 fish 冒充克隆音色——2026-08-13「index 对照组」实锤）
+    tts_engine: index_tts
+    # v1.005：语音活人感分块节奏（呼吸/床音/思考词注入，与生产一致）
+    pacing:
+      enabled: true
+      bed: true
+      breath: true
+      inject_think: true
+      interactive: false
+      chunk_timeout_sec: 30.0
+      max_chunks: 8
+      min_chars: 24
+      tempo: 0.93
+      think_tempo: 0.9
+    # ⚠️ 档名必须是 hub 上真实存在的中文档：旧英文档名（chengjie_* 等）在 hub 404 →
+    # strict 拒发 → 全语音回落文字（2026-08-02 生产实锤），勿回退
+    persona_allowlist:
+    - lin_xiaoyu
+    - lin_jiaxin
+    - marcus_wei
+    - chen_mo
+    - mizuki
+    - su_wan
+    - chen_meiling
+    - haruko_traveler
+    - zhao_laoshi
+    - zhang_jingguang
+    profile_map:
+      lin_xiaoyu: 林小雨-智聊
+      lin_jiaxin: 林佳欣-智聊
+      mizuki: 美月-智聊
+      su_wan: 苏婉
+      chen_meiling: 陈美玲-智聊
+      haruko_traveler: 晴子-智聊
+      zhao_laoshi: 赵明德-智聊
+      zhang_jingguang: 张景光-智聊
+      marcus_wei: 魏卡斯-智聊
+      chen_mo: 陈默
+    response_format: ogg
+
+voice_clone_lan:
+  enabled: false
+
+# ── AI（Key 不随包：托管网关派发；这里只带行为参数 + LAN 嵌入/兜底）──────────
+ai:
+  # 反复读治理：出站口头禅账本，超限注入多样性硬约束
+  reply_variety:
+    enabled: true
+  # v1.005：真人感文本层 spoken_style L1-L3（人设口癖指纹+口语化指令+出口清洁；
+  # 纯 prompt 层零依赖，L4 rewrite 刻意不开——与语音链 voice_colloquial 二选一）
+  spoken_style:
+    enabled: true
+    level: 2
+    zh_only: true
+  ai_name: 顾嘉
+  system_prompt: "你是「顾嘉」（英文名 Gary），无界科技（BOUNDLESS）的资深方案顾问，8 年 AI 产品方案经验，\n既懂技术也懂生意。你正在在线聊天窗口接待访客。\n\
+    \n【公司与产品】无界科技主打七款 AI 产品（按商业主线）：\n· 通译 LingoX：多平台实时聊天翻译（文字+语音双向互译）\n· 通传 VoxX：会议/直播实时语音同传（克隆音同传+双语字幕）\n\
+    · 智拓 ReachX：真机多号自动获客（自动加友/打招呼/群提取）\n· 智聊 ChatX：聚合 AI 聊天客服，全程自动开发客户、推进成交\n· 幻声\
+    \ VoiceX：AI 声音克隆配音与语音合成\n· 幻颜 FaceX：图片/视频 AI 换脸\n· 幻影 LiveX：实时直播换脸换声分身\n一套私有化底座，产品可单选也可组合成获客到成交的完整闭环。\n\
+    \n【说话方式】\n- 专业、热情、简洁：每次回复 1-3 句说到点子上，先正面回答再延伸，绝不长篇大论。\n- 像真人顾问在打字：自然口语、少用感叹号堆砌、不用「亲」、不油腻、不客服腔。\n\
+    - 主动引导：搞清访客的行业、场景、痛点，把话题引向匹配的产品与下一步\n  （预约演示 / 领试用 / 留联系方式），一次只推进一小步，不硬塞。\n- 绝不过度承诺：不编造效果数据、不承诺做不到的事；拿不准的说「这个我和技术同事确认后给您准信」。\n\
+    - 渠道边界（被问「支持哪些平台/渠道」只按此清单答）：目前对接 Telegram、WhatsApp、LINE、Facebook Messenger、Instagram、Zalo、微信客服（企业微信官方通道，客户扫客服二维码即可咨询）和官网网页聊天；个人微信、QQ、淘宝、抖音、小红书等国内平台暂不支持——如实说明，可请客户留联系方式转产品团队评估，绝不为促成交谎称支持。\n\
+    - 客户用什么语言提问就用什么语言回答。\n\n【身份底线（必须遵守）】\n- 平时以顾问顾嘉的身份自然交流，不主动强调自己是 AI，也绝不谎称是人类。\n\
+    - 当客户直接问「你是不是机器人/AI/真人吗」这类问题时，诚实但弱化地回答，比如：\n  「我是无界的智能顾问，日常咨询我直接处理，复杂问题会请人工同事跟进」——绝不欺骗、绝不否认。\n"
+  max_tokens: 2048
+  timeout: 40
+  max_conversation_history: 8
+  # compact 只作用于**未绑定**（域/默认）会话省 token；用户显式绑定的人设
+  # （会话覆写/会话绑定/账号人设）自动升 full——档案字段全量进对话
+  # （实施67 B75「填了不算数」修复，勿改回旧语义）。
+  persona_block_detail: compact
+  num_ctx: 8192
+  # 端点序对齐生产机：140 首位（宕机端点排首位=每个冷却窗过期先吃一次连接超时的尾延迟税）
+  # 2026-08-28 执行单 ④：摘除 176:11434 备点（176 整卡腾出后无 bge-m3），LAN 单点 140。
+  # 外网机器上这个地址不可达 → hosted_gateway.ensure_hosted_embed 换成官网网关
+  # （0828 P0-1 补的 /api/ai/v1/embeddings 路由），故单点化不影响外网客户。
+  embedding_base_url: http://192.168.0.140:11434
+  embedding_base_urls:
+  - http://192.168.0.140:11434
+  embedding_model: bge-m3
+  fallback:
+    enabled: true
+    # 2026-08-28 执行单 ⑤：173:11434 qwen14b-fallback → 173:8001 chatx（vLLM 27B AWQ）。
+    # 173 在中枢版图里只保留 :8001；11434 探活零驻留＝每次兜底先吃 8GB 冷载的纸面兜底。
+    # 同时服务：① 主链断云时的回复兜底 ② colloquial local_first 的口语化改写。
+    # keep_alive/num_ctx/think 三个 Ollama 原生键已删（/v1 口忽略）。
+    base_url: http://192.168.0.173:8001/v1
+    model: chatx
+    api_key: vllm
+    timeout: 90
+    # v1.005：与生产一致——聊天主链不用本地小模型顶话（宁可如实失败不出「变笨」
+    # 的话；fallback 端点保留给口语化改写等改写型用途）
+    chat_fallback: false
+  reply_defaults:
+    length: detailed
+
+# v1.005：canned 兜底句显式清空（2026-08-16 老板裁定「宁可不发消息也不发垫场句」）
+reply:
+  ai_fallback_replies: []
+
+memory:
+  extract:
+    match_all: true
+  vector:
+    enabled: true
+    backfill_periodic:
+      enabled: true
+      interval_hours: 6
+      limit: 100
+  consolidation:
+    enabled: true
+    semantic_dedup: true
+
+skills:
+  enabled:
+  - greeting
+  - order_query
+  - price_check
+  - status_check
+  - channel_info
+  - complaint
+  - small_talk
+  - test
+  cooldown:
+    global: 0
+    per_user: 5
+    per_content: 120
+
+# ── Telegram 行为参数（凭据不随包：api_id/api_hash 走官网设备令牌派发）────────
+telegram:
+  login_method: qr
+  process_private: true
+  process_groups: true
+  process_channels: false
+  poll_fallback:
+    mirror_outgoing: true
+    # v1.005：出站媒体镜像（自己从手机端发的图/贴纸/语音也进工作台会话流）
+    mirror_outgoing_media:
+      enabled: true
+      max_mb: 5
+      kinds:
+      - image
+      - sticker
+      - voice
+  group_reply:
+    mode: mention_or_keyword
+    follow_window_minutes: 3
+  # reply_humanize.thinking_delay 刻意不配（2026-08-12）：未配值时 A 线思考延迟
+  # 自动跟随设置页「回复节奏」滑杆（humanize.resolve_following_delay_block 单一
+  # 判定），三条发送链一个滑杆管到底。此前种子钉死 2-9s → 坐席拖滑杆对 A 线
+  # 不生效（198 实录「改了没变化」根因）。要独立节奏请在设置页看链路自检说明，
+  # 或显式配 min_sec/max_sec（>0 即覆写）。门禁 test_reply_settings 钉住本约定。
+  voice_reply:
+    enabled: true
+    trigger: when_peer_voice
+    backend: avatar_clone
+    voice: zh-CN-XiaoxiaoNeural
+    voice_profile:
+      enabled: true
+      owner_consent: true
+      backend: avatar_clone
+      reference_audio_path: config/voice_refs/lin_xiaoyu.wav
+      emotion_default: neutral
+    emotion:
+      enabled: true
+      default: warm
+    split_send:
+      enabled: true
+    # 语音补欠账：诚实回落说了「回头补给你」→ 该会话下一回合语音链恢复时强制兑现
+    voice_iou:
+      enabled: true
+    text_first:
+      # 对方发语音在等语音条：40s 预算内不落文字占位
+      budget_sec: 40
+      # 2026-08-16 老板裁定：宁可不发消息也不发「嗯嗯我在，稍等哈～」类垫场句
+      # → 占位关闭（与代码默认一致，此处显式声明）；语音失败仍补发完整真回复
+      filler: false
+  reply_logic:
+    follow_up:
+      lookback_count: 10
+  # 插话吸收：连发短消息出队合并成一条输入；生成期间对方补话则放弃过期回复（仅私聊文本）
+  interject_absorb:
+    enabled: true
+    max_merge: 3
+    max_age_sec: 45
+    # v1.005：预生成静默窗参数（与生产实测值一致）
+    pregen_quiet_sec: 5
+    pregen_frag_quiet_sec: 9
+    pregen_max_wait_sec: 30
+  # v1.005：TG 历史全量同步（停机窗口消息不永久缺失；节流 1s/chat 防风控）
+  full_sync:
+    enabled: true
+    per_chat: 500
+    total_messages: 50000
+    pace_sec: 1.0
+    include_groups: false
+  # v1.005：入站媒体本体拉取（识图/语音转写的前提；50MB 上限）
+  media_fetch:
+    enabled: true
+    max_mb: 50
+
+protocol_autoreply:
+  enabled: true
+  rate:
+    hourly: 0
+    daily: 0
+    persist: true
+  breaker:
+    threshold: 5
+    cooldown_sec: 300
+  hours:
+    enabled: false
+    start: 08:00
+    end: 01:00
+    tz_offset: 8
+
+platform_login:
+  default_persona_id: lin_xiaoyu
+  # v1.005：Messenger 网页登录允许交互式补验（与生产一致）
+  messenger:
+    interactive_login: true
+  telegram:
+    backfill_dialogs: 0
+    companion_runtime: true
+    companion_media: true
+    # v1.005：登录时顺带记账联系人（跨平台档案的数据源之一）
+    contacts_recording: true
+    sync:
+      enabled: true
+      interval_seconds: 21600
+      max_contacts: 3000
+      max_dialogs: 200
+      seed_chats_max: 0
+    device_fingerprint:
+      enabled: true
+  line:
+    media:
+      outbound: true
+
+# ── 视觉（LAN 双活：176 5090 主 / 140 4070 备）──────────────────────────────
+# _lan_seed: LAN 不可达时由 hosted_gateway 接管指向官网网关（同一批 GPU），回内网还原直连
+vision:
+  enabled: true
+  _lan_seed: true
+  provider: openai_compatible
+  # 端点序对齐生产机：140 首位、176 备（2026-08-01 重排，176 修好后仍是备点）
+  base_url: http://192.168.0.140:11434/v1
+  model: qwen3-vl:8b-instruct
+  api_key: ollama
+  base_urls:
+  - http://192.168.0.140:11434/v1
+  - http://192.168.0.176:11434/v1
+  timeout: 150
+  # #333 R7775K：LAN 直连保留 150（140 冷载实测 130s）；被网关接管（外网坐席机）时按
+  # 端点分级——网关背后是热态 GPU，45s 足够，超了走降级话术而不是卡 2 分钟。
+  endpoint_timeouts:
+    bd2026.cc: 45
+  # #333（2026-09-17）识图 prompt v3：首行「类型=A|B|C」契约不变（前端徽标 / stats 认它），
+  # C 类改人物导向（主体 / 人物：人数·性别年龄·外貌·是否自拍 / 场景），钉「不猜姓名身份关系」。
+  # 与 src/companion/visual_identity.INBOUND_IMAGE_PROMPT 同文（门禁 test_visual_identity 钉同步）；
+  # 客户包（config.desktop.min）不配 prompt，走代码默认＝同一份。
+  prompt: >-
+    请先判断图片类型，再按对应规则输出，不要复述规则。输出的第一行固定为「类型=A」「类型=B」或「类型=C」（按你判断的类型），从第二行起输出内容。A类＝票据/订单/证件/表单/转账或支付凭证：把画面里的文字字段逐字抄录（尤其姓名/Name、日期、单号、金额、座位、电话等小字，不要总结省略；看不清的字段标注「不清晰」，不要猜），末尾用一句话说明单据类型（以画面文字为准，不要臆测交通工具或商家）。B类＝聊天记录截图：不要逐字抄录气泡，只概括「谁在和谁聊、主题是什么、最后一条说了什么」，最多逐字引用最关键的一两句（如金额、账号、时间承诺）。C类＝其他所有图片（人物/自拍/宠物/食物/房屋/车辆/风景/物品/界面等）：先写「主体：」后接一个词（自拍/单人/多人/宠物/食物/房屋/车辆/风景/物品/其他）。画面有人时写「人物：」——人数；每人的大致性别与年龄段；显著外貌特征（发色、发型、胡须、眼镜、明显服饰）；表情与姿态；是否对着镜头自拍。再写「场景：」——地点类型、主要物件与数量（按看到的写，不夸大）、光线或时段线索。不要猜测人物的姓名、身份或与聊天对象的关系，不要把画面里的地物当成对方的住处或所在地；画面上零散文字（键帽、包装印字、界面按钮、菜单项）不抄录，除非文字本身就是主体（横幅、告示牌）。回答用中文（抄录的字段保留原文语言），B/C 类总长不超过 160 字；不确定就写「不确定」，只写看到的。
+  max_tokens: 700
+  max_image_dim: 1536
+  # #333 视觉身份层（内测种子开；LAN 直连 176 边车。外网坐席机够不着 176 → 首发失败后
+  # 60s 冷却，零阻断；网关路由接通后改指 bd2026.cc）。键说明见 config.example.yaml。
+  face_identity:
+    enabled: true
+    base_url: http://192.168.0.176:8767
+    timeout_sec: 8
+  # v1.005：与生产一致——不走第三方云 VLM 兜底（LAN 双活 + 托管网关已覆盖）；
+  # 视频翻译抽帧参数
+  no_cloud_fallback: true
+  video_multi_image: true
+  video_frames_multi: 6
+  video_frame_dim: 640
+
+companion:
+  enabled: true
+  # ── 客户安全预警出厂开（老板决策 D7，2026-09-05，#185）──
+  # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；此前留痕(crisis_audit)与
+  # 人工升级(crisis_escalation)出厂关 → severe 命中不记录、不叫任何人（桌面包没配
+  # webhook，升级同时点亮工作台「需人工」徽标 + 置顶 + 落案例，不依赖外部通道）。
+  wellbeing:
+    crisis_audit: true
+    crisis_escalation: true
+    escalate_after: 1
+  # 今日话题包：RSS 抓当日新鲜事，冷场/被问起/主动开场时注入 1-3 条自然聊起
+  # v1.005：话题源参数对齐生产（公网 RSS 可直达；人设专属源随人设 lin_xiaoyu 走）
+  daily_topics:
+    enabled: true
+    proactive:
+      enabled: true
+      # 新闻升格为首选开场（实施55：news > life_share，生活素材聊过即退役）
+      upgrade_life_share: true
+    max_items: 16
+    cooldown_hours: 2
+    offer_percent: 35
+    feeds:
+    - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+    - https://feeds.bbci.co.uk/zhongwen/simp/rss.xml
+    - https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+    - https://news.google.com/rss/headlines/section/topic/SPORTS?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+    # 区域源：按客户地区取当地新闻当话题（人设键=该人设家乡源）
+    region_feeds:
+      lin_xiaoyu:
+      - https://news.google.com/rss/search?q=%E5%93%88%E5%B0%94%E6%BB%A8&hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      - https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      CA:
+      - https://news.google.com/rss?hl=zh-CN&gl=CA&ceid=CA:zh-Hans
+      - https://news.google.com/rss?hl=en-CA&gl=CA&ceid=CA:en
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      US:
+      - https://news.google.com/rss?hl=zh-CN&gl=US&ceid=US:zh-Hans
+      - https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      ES:
+      - https://news.google.com/rss?hl=es&gl=ES&ceid=ES:es
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      TH:
+      - https://news.google.com/rss?hl=th&gl=TH&ceid=TH:th
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      PH:
+      - https://news.google.com/rss?hl=en-PH&gl=PH&ceid=PH:en
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+      HK:
+      - https://news.google.com/rss?hl=zh-HK&gl=HK&ceid=HK:zh-Hant
+      - https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans
+    # 陪聊场景敏感话题屏蔽词（军政/财经/灾害类新闻不进话题池）
+    blocklist:
+    - 军事
+    - 美军
+    - 海军
+    - 空军
+    - 停战
+    - 战前
+    - 海峡
+    - 党籍
+    - 纪委
+    - 免职
+    - 辞去
+    - 落马
+    - 被查
+    - 汇率
+    - 美联储
+    - 央行
+    - 加息
+    - 降息
+    - 关税
+    - 国债
+    - 期货
+    - 午盘
+    - 收盘
+    - 涨停
+    - 跌停
+    - 灾害
+    - 崩塌
+    - 调查组
+    - 限制出境
+    - 科创板
+    - 停牌
+    - 复牌
+    - ETF
+    - IPO
+    - 上交所
+    - 深交所
+    - 新股
+    - 治党
+    - 党建
+    - 廉政
+    - 巡视
+    - 铸魂
+  # v1.005：节日问候（客户当地节日自动送祝福，纯软件零依赖）
+  locale_holidays:
+    enabled: true
+    greet_user_side: true
+  # v1.005：天气话题（主动开场可用当地天气当由头）
+  weather:
+    enabled: true
+  # v1.005：群成员提取（实施46 多平台化；获客工具，随生产同参数带风控预算）
+  group_members:
+    enabled: true
+    daily_cap_per_account: 200
+    scan_limit: 3000
+    group_daily_cap: 0
+    global_daily_cap: 0
+  # v1.005：唱歌能力（实施57/58：曲库翻唱+定制单；hub 出了内网自动回落如实拒绝，
+  # 曲库成品随包 assets/voices/*/songs）
+  singing:
+    enabled: true
+    allow_lang_fallback: true
+    custom:
+      enabled: true
+      review: true
+      daily_orders_cap: 10
+  relations_health:
+    health_board:
+      payer_sort_priority: true
+      inbox_sort_tiebreak: true
+  # 主动关怀（与生产机同为 dry_run 灰度档：只拟稿不真发，样本进审核队列）
+  proactive_care:
+    enabled: true
+    dry_run: true
+    interval_sec: 300
+    llm_extract:
+      # 2026-09-11 用量分析（B4）：影子扫描是纯实验流量（只写 jsonl 对照，不进产品），
+      # 此前随包全开＝每条入站多一次 LLM（198 实测 5.1k 字换 15 字），全队 token 的
+      # 16.9% 来自这类工具调用。实验样本留 117 生产实例一台采即可；客户/坐席包默认关。
+      shadow: false
+      daily_budget: 150
+      scan_gate: time_like
+  # 客户侧时钟（时空一致性：对方当地时间事实行 + 时差桥 + 出站星期守卫）
+  user_clock:
+    enabled: true
+    # v1.005：作息表注入（按对方时区推「TA 现在大概在干嘛」）
+    schedule: true
+  multiplatform_deferred:
+    enabled: true
+  proactive_topic:
+    enabled: true
+    dry_run: false
+    min_silent_hours: 24
+    cooldown_hours: 48
+    max_per_tick: 2
+    quiet_start_hour: 23
+    quiet_end_hour: 8
+    # B65 2026-08-24 老板拍板（对齐 min 种子 2026-08-09 的出厂选择）：新号 72h
+    # 「入站自动回复强制人审」不要——全自动即装即用，改为接入成功时的养号提示
+    # （收件箱接入弹窗 + messenger 登录窗横幅）。此前 internal 种子漏带本段 →
+    # 代码缺省 warmup_review=True，全功能包装完头 72h 反而不自动回（.198/.104
+    # 「以为功能坏了」实录）。主动外呼三闸（enabled/require_inbound/quota_gate）
+    # 保持代码默认开，防「登录第一个 tick 群发问候」事故不受影响。
+    cold_start:
+      warmup_review: false
+    adaptive_pacing:
+      enabled: true
+      min_silent_hours:
+        base: 24
+        at_intimacy_0: 48
+        at_intimacy_100: 12
+      cooldown_hours:
+        base: 48
+        at_intimacy_0: 96
+        at_intimacy_100: 24
+    no_reply_backoff:
+      enabled: true
+      multiplier: 3.0
+      max_backoff_hours: 720
+      stop_after: 0
+      stop_after_never_replied: 2
+    variety:
+      enabled: true
+      similarity_threshold: 0.6
+    optout:
+      enabled: true
+      mute_days: 30
+    response_pacing:
+      enabled: true
+      min_obs: 4
+      low_rate: 0.15
+      stretch: 1.5
+      high_rate: 0.6
+      relax: 0.85
+      auto_thresholds:
+        enabled: true
+        low_percentile: 25
+        high_percentile: 75
+        min_population: 12
+        min_separation: 0.15
+    media_feedback:
+      enabled: true
+      min_sent_per_arm: 8
+      lookback_days: 14
+      response_window_days: 3
+      max_boost: 1.5
+      max_cut: 0.5
+    mode_gate:
+      enabled: true
+      min_checkin_sent: 30
+      min_rich_sent: 15
+      max_skip: 0.5
+      lookback_days: 14
+      response_window_days: 3
+    voice:
+      enabled: true
+      probability: 0.5
+      foreign:
+        enabled: true
+        # 名单内外语主动开场走克隆链（同一把声念外语；en/ja/es 真机实证，
+        # ko 在 hub 稳定失败、th/vi/id/hi 引擎不支持 → 仍 edge）
+        clone_languages:
+        - en
+        - ja
+        - es
+        languages:
+        - en
+        - ja
+        - ko
+        - th
+        - vi
+        - id
+        - es
+        - hi
+    daily_ritual:
+      enabled: true
+      min_intimacy: 10
+      # v1.005：晨晚安 15% 概率换闲聊开场（防仪式感模板化）
+      smalltalk_probability: 0.15
+    # v1.005：主动触达子能力（与生产一致）——
+    # 城市询问（补客户画像）/里程碑仪式（认识 N 天）/主动配图/已读感知
+    city_ask:
+      enabled: true
+      min_intimacy: 40
+      cooldown_days: 45
+    milestone_ritual:
+      enabled: true
+      min_intimacy: 30
+    photo:
+      enabled: true
+      min_intimacy: 20
+      probability: 0.15
+      modes:
+      - gentle_checkin
+      - follow_up
+      - ritual_morning
+    read_aware:
+      enabled: true
+  deep_persona:
+    enabled: true
+    life_line: true
+    tastes: true
+    texture: true
+    relationship: true
+  goals:
+    enabled: true
+    # #166 老板决策 D1（2026-09-05）：冲刺推进器出厂开——限时目标（today/session）
+    # 选「自动推进」后按相位排主动拍，不再只等对方开口。安全闸沿用代码默认
+    # （silence_min/min_gap/危机/opt-out/auto_ai 会话/platforms 白名单）。存量内测机
+    # 升级后由 _merge_missing 补齐本键（用户显式写过的值不动）。⚠ 派发终点是
+    # proactive_care 派发器：上面 dry_run=true 时主动拍只拟稿不真发，卡片会如实标注。
+    sprint:
+      enabled: true
+    # v1.005：目标完成提醒（应用内 + 小智播报）与到期清扫（与生产一致）
+    notify:
+      enabled: true
+      push_agent: true
+    sweep:
+      enabled: true
+    profile_llm:
+      enabled: true
+      daily_budget: 100
+    # 与生产机对齐（2026-08-01）：su_wan 会话自动建目标。order_hook/order_pull
+    # 刻意不随包——两者都要官网侧密钥（token/admin_key），无密钥=空转刷错误日志。
+    auto_create:
+      enabled: true
+      max_per_day: 20
+      personas:
+      - su_wan
+    retention:
+      enabled: true
+      winback:
+        enabled: true
+        reconvert:
+          enabled: true
+  group_show:
+    live:
+      enabled: true
+      quiet_hours:
+      - 0
+      - 0
+  selfie:
+    enabled: true
+    min_bond_level: 0
+    free_daily: 5
+    daily_global_cap: 50
+    register_generated: true
+    default_album_key: lin_xiaoyu
+    provider:
+      enabled: true
+      backend: album
+      album_dir: config/persona_albums
+      album_fallback: true
+      default_album_key: lin_xiaoyu
+      # v1.005：右栏手动出图面板每日配额（与生产一致）
+      manual_ui:
+        daily_quota: 20
+    # v1.005：出站前 VLM 图文核对（配文声称画面里没有的东西 → 换诚实兜底配文；
+    # best-effort 绝不阻塞发图）+ 出图后验同脸检查（防「换脸换人」级穿帮）
+    caption_guard:
+      enabled: true
+      timeout_sec: 12
+    vision_gate:
+      identity_check: true
+    # 媒体拟人节奏（P3，2026-08-12）：相册图秒发（实录 0.8s）=机器指纹；
+    # 出站前补随机「挑图」等待 + A 线挂「正在发送照片」气泡。
+    media_pacing:
+      enabled: true
+      min_sec: 2.5
+      max_sec: 6.5
+      # v1.005：节奏覆盖的媒体类型（与生产一致）
+      kinds:
+      - selfie
+      - video
+      - photo
+
+# ── 语音识别（冻结包无本地模型：主走 176 GPU ASR，备走 140 AvatarHub Whisper）─
+# _lan_seed: LAN 不可达时主转写切官网网关 /audio/transcriptions（设备令牌），回内网还原
+voice_recognition:
+  enabled: true
+  _lan_seed: true
+  provider: openai_compatible
+  language: auto
+  base_url: http://192.168.0.176:8765/v1
+  api_key: local
+  model: large-v3-turbo
+  timeout: 20
+  max_retries: 0
+  fallback:
+  - provider: avatar_whisper
+    base_url: http://192.168.0.140:7854
+    timeout: 30
+  hotwords: 智聊ChatX、通译LingoX、通传VoxX、智拓ReachX、幻声VoiceX、幻颜FaceX、幻影LiveX、无界科技、WhatsApp、Telegram、拉黑、发语音、语音条、视频通话、红包、转账、加好友、朋友圈
+
+speech_emotion:
+  enabled: true
+  backend: funasr
+  device: cpu
+  min_confidence: 0.5
+  cb_cooldown_sec: 300
+  remote:
+    base_url: http://192.168.0.176:8765
+    timeout_sec: 10
+    cb_cooldown_sec: 120
+
+accounts:
+  self_profile:
+    enabled: true
+    avatar: true
+  profile_push:
+    enabled: true
+    cooldown_hours: 24
+    max_avatar_mb: 5
+    fresh_account_days: 7
+
+health_watchdog:
+  log_triage:
+    enabled: true
+    interval_min: 360
+    window_hours: 6
+  # v1.005：真探针自愈（周期真打关键链路，假活两振即重启自愈；纯本机）
+  true_probe:
+    enabled: true
+    interval_min: 10
+    fail_strikes: 2
+
+translation:
+  engines:
+    # ── 2026-08-28 中枢云端优先执行单 ①：翻译主路改云端 ────────────────────────
+    # 旧序 [ollama_mt, ai]＝LAN 优先（v1.005 为省 API 费定的），与老板 0828 拍板的
+    # 「所有能力优先走云端」相反，且对**装在客户机器上的包**是纯亏：LAN 地址不可达，
+    # 每条翻译先吃一次连接超时才落云端。改 [ai, ollama_mt] 后内网/外网都直走云端，
+    # LAN 只作云端不通时的兜底一层。
+    order:
+    - ai
+    - ollama_mt
+    timeout_sec: 8
+    ollama_mt:
+      # 执行单 ①：LAN MT 落点 176:11434 hy-mt2 → 173:8001 chatx（vLLM，OpenAI 兼容口）。
+      # 176 整卡腾出后无 hy-mt2；api:"openai" 让 OllamaMT 引擎改打 /v1/chat/completions，
+      # 沿用同一套 Hunyuan 翻译 prompt，零代码改动。keep_alive 是 Ollama 专有语义故删除。
+      base_url: http://192.168.0.173:8001/v1
+      base_urls:
+      - http://192.168.0.173:8001/v1
+      model: chatx
+      api: openai
+      api_key: vllm
+      timeout_sec: 25
+      # 2026-08-28 实测：chatx（Qwen3.6-27B-abl-AWQ）在 vLLM 上**默认开 thinking**
+      # → message.content=null、正文全在 reasoning，max_tokens 被思考吃光 ⇒ 引擎读
+      # content 恒空、兜底静默失效。关掉即恢复（同句 9 token / 1.1s）。
+      # 坐席机这一层尤其要带：它们本就只有「云端 → 这一层」两级。
+      payload_extra:
+        chat_template_kwargs:
+          enable_thinking: false
+
+workspace:
+  auto_translate_inbound:
+    enabled: true
+    # v1.005：入站自动翻译预算（与生产一致）
+    max_chars: 600
+    max_per_thread: 10
+
+# ── 网页聊天挂件（在线顾问，与生产机对齐 2026-08-01）────────────────────────
+web_chat:
+  enabled: true
+  title: 无界科技 · 在线顾问
+  greeting: 您好，我是无界科技的方案顾问顾嘉（Gary）。想了解哪款产品？聊聊您的场景，我帮您配个最合适的方案～
+  theme_color: '#0891b2'
+  default_mode: auto_ai
+
+licensing:
+  feature_gate:
+    enabled: true
+    plan_override: flagship
+  shop_url: https://bd2026.cc/order
+  # v1.005：token 用量记账（只记不拦，enforce 刻意 false——观测口径与生产一致）
+  token_ledger:
+    enabled: true
+    enforce: false
+  # 内测机不做字符计量：关闭本地体验档（出厂默认 10 万字符尝鲜 / 无时间窗）。
+  # configure_local_trial 尊重显式 enabled:false（不被桌面默认开启顶掉）；无签名授权时
+  # check_license_quota 走「included=0＝不限」分支，record_license_chars 直接零 IO，
+  # 「字符额度已用尽」host_alert 也随之不再触发。内测放开、正式包不带本段（各自 overlay）。
+  trial:
+    enabled: false
+
+fatex:
+  enabled: true
+  kline: true
+
+# v1.005：媒体翻译升级（实施48：图内改字翻译 + 视频翻译；走视觉/托管链，软失败）
+media:
+  image_patch_translate:
+    enabled: true
+  video_translate:
+    enabled: true
+
+# v1.005：表面融合（多平台同人会话聚合视图，与生产一致）
+surface_fusion:
+  enabled: true
+
+# v1.005：坐席用量记账（agent 字符口径，观测用）
+usage:
+  agent_chars:
+    enabled: true
+
+# v1.005：UI 收纳（与生产一致的导航去噪——这些入口生产机也是藏的，
+# 不是功能缺失：group_extract/group_show 走各自功能页，手动控制台/矩阵导航/
+# 团队协作属内部运维面）
+ui_visibility:
+  group_extract: false
+  group_show: false
+  manual_console: false
+  matrix_nav: false
+  team_collab: false
+
+ops:
+  # v1.005：自动化覆盖趋势（观测卡）
+  automation_coverage_trend:
+    enabled: true
+  cloud_credentials:
+    enabled: true
+    balance_warn_cny: 20
+  frontend_error_trend:
+    enabled: true
+  login_funnel_trend:
+    enabled: true
+  ui_event_trend:
+    enabled: true
+  contacts_asset_trend:
+    enabled: true
+  csrf_trend:
+    enabled: true
+  gpu_watermark:
+    enabled: true
+    hosts:
+    - {name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}
+    - {name: "140-4070", base_url: "http://192.168.0.140:11434", vram_gb: 12}
+    - {name: "173-5090", base_url: "http://192.168.0.173:11434", vram_gb: 32}
+    - {name: "198-4070", base_url: "http://192.168.0.198:11434", vram_gb: 12}
+  isolation_trend:
+    enabled: true
+  dead_peer_registry:
+    enabled: true
+    ttl_by_reason:
+      blocked: 604800
+      write_forbidden: 259200
+
+contacts:
+  enabled: true
+  # 内部/坐席包＝全量档：衰减 + KPI 告警 + intimacy 物化 + RPA hooks 全接。
+  # 客户包种子（config.desktop.min.yaml）是 lite；本行必须显式写 full——否则
+  # 存量内部安装升级时会被产品基线补齐补出 lite，把运营记账静默关掉。
+  mode: full
+  intimacy_refresh_interval_minutes: 360
+  identity_shadow:
+    enabled: true
+    scan_interval_hours: 6
+    max_rows: 2000
+  # v1.005：跨平台档案注入参数（与生产一致）
+  origin_profile:
+    enabled: true
+    max_chars: 500
+    merge_memory: true
+
+line_rpa:
+  media_enrich:
+    enabled: true
+
+personas:
+  doc_import:
+    enabled: true
+  bio_retrieval:
+    enabled: true
+    semantic: true
+    keyword_weight: 0.4
+    semantic_weight: 0.6
+    sem_floor: 0.55
+    sem_floor_kw0: 0.62
+    sem_min_chars: 40
+    chunk_mode: unit
+    unit_target_chars: 240
+    unit_min_chars: 120
+    unit_max_chars: 320
+    unit_overlap_chars: 40
+    top_k: 3
+    sentence_semantic: true
+    neighbor_expand: true
+    sem_veto: 0.45
+    doc_aliases: true
+  quiz:
+    enabled: true
+    llm_judge: true
+
+intent:
+  keywords:
+    greeting:
+    - 你好
+    - 您好
+    - hello
+    - hi
+    - 在吗
+    - 在？
+    - 有人吗
+    order_query:
+    - 订单
+    - 下单
+    - 查单
+    - 单号
+    - 订单号
+    - order
+    - 查询订单
+    price_check:
+    - 价格
+    - 价钱
+    - 多少钱
+    - 费率
+    - rate
+    - 价格表
+    - 报价
+    status_check:
+    - 状态
+    - 情况
+    - 怎么样了
+    - 进度
+    - status
+    - 怎么样
+    channel_info:
+    - 通道
+    - 渠道
+    - channel
+    - 有哪些通道
+    - 通道状态
+    complaint:
+    - 投诉
+    - 抱怨
+    - 问题
+    - 不爽
+    - 不满意
+    - complaint
+    - issue
+    small_talk:
+    - 天气
+    - 聊天
+    - 聊会
+    - 有空吗
+    - 无聊
+    - 干吗呢
+    test:
+    - 测试
+    - test
+    - 试验
+    - 试试
+    - camille

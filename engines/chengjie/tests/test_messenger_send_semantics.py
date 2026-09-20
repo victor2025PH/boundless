@@ -264,3 +264,98 @@ def test_adapter_manual_path_not_gated_by_session_health(monkeypatch):
     req = _req(config_manager=SimpleNamespace(config={}))
     res = asyncio.run(MessengerInboxAdapter().send(req, "100", "555", "hi"))
     assert res["delivered"] is True and "url" in sent
+
+
+# ── 4) 边车败因透传（2026-08-15 173 事故）：HTTP 5xx 响应体的 error/reason_code
+#      必须进投递失败文本——裸 httpx 文本只有状态码，真实败因（composer 渲染超时/
+#      需要接受/PIN 浮层）此前被 raise_for_status 丢弃，排查只能上机翻边车日志。──
+
+
+def _sidecar_http_error(body):
+    """伪 HTTPStatusError：契约只要求带 .response 且 .json() 可用（duck-typed）。"""
+    class _Resp:
+        def json(self):
+            if isinstance(body, Exception):
+                raise body
+            return body
+
+    ex = RuntimeError(
+        "Server error '500 Internal Server Error' for url 'http://svc/accounts/100/send'")
+    ex.response = _Resp()
+    return ex
+
+
+def test_http_error_detail_appends_sidecar_error_and_reason():
+    from src.integrations.messenger_web_login import http_error_detail
+
+    out = http_error_detail(_sidecar_http_error(
+        {"ok": False, "error": "composer not found (render_timeout)",
+         "reason_code": "render_timeout"}))
+    assert out.startswith("Server error '500")
+    assert "composer not found (render_timeout)" in out
+    # reason 已含于 error 文本 → 不重复追加 [render_timeout]
+    assert out.count("render_timeout") == 1
+
+
+def test_http_error_detail_reason_only_body():
+    from src.integrations.messenger_web_login import http_error_detail
+
+    out = http_error_detail(_sidecar_http_error({"reason_code": "needs_accept"}))
+    assert "[needs_accept]" in out
+
+
+def test_http_error_detail_degrades_to_plain_text():
+    from src.integrations.messenger_web_login import http_error_detail
+
+    # 无 response 属性（超时/连接错）→ 原样
+    plain = RuntimeError("timed out")
+    assert http_error_detail(plain) == "timed out"
+    # body 不是 dict → 原样
+    out = http_error_detail(_sidecar_http_error(["not", "a", "dict"]))
+    assert out.startswith("Server error '500") and "not" not in out.split("'500")[0]
+    # .json() 自身抛错 → 原样，绝不二次抛
+    out2 = http_error_detail(_sidecar_http_error(ValueError("bad json")))
+    assert out2.startswith("Server error '500")
+
+
+def test_worker_send_http_error_carries_sidecar_reason(monkeypatch):
+    """worker.send 的失败 error 文本必须带上边车 reason_code（进 autosend 投递失败日志）。"""
+    import src.integrations.messenger_web_login as mgw
+
+    async def _boom(url, payload, timeout=20.0):
+        raise _sidecar_http_error(
+            {"ok": False, "error": "composer not found (e2ee_pin_prompt)",
+             "reason_code": "e2ee_pin_prompt"})
+
+    monkeypatch.setattr(mgw, "_post_json", _boom)
+    res = asyncio.run(_worker().send("555", "hi"))
+    assert res["delivered"] is False
+    assert "e2ee_pin_prompt" in res["error"]
+    assert res["error"].startswith("messenger send failed: ")
+
+
+def test_adapter_send_web_http_error_carries_reason_as_502(monkeypatch):
+    """适配器路径（人工发送 UI 的 toast 来源）：边车 5xx 有响应体 → 502 + 真实败因；
+    真连接错（无 response）→ 维持 503 不可达语义。"""
+    mgw = _web_account(monkeypatch)
+    req = _req(config_manager=SimpleNamespace(config={}))
+
+    async def _boom(url, payload, timeout=20.0):
+        raise _sidecar_http_error(
+            {"ok": False, "error": "composer not found (render_timeout)",
+             "reason_code": "render_timeout"})
+
+    monkeypatch.setattr(mgw, "_post_json", _boom)
+    with pytest.raises(ChannelSendError) as ei:
+        asyncio.run(MessengerInboxAdapter().send(req, "100", "555", "hi"))
+    assert ei.value.status_code == 502
+    assert "render_timeout" in ei.value.detail
+
+    async def _conn_dead(url, payload, timeout=20.0):
+        raise RuntimeError("All connection attempts failed")
+
+    monkeypatch.setattr(mgw, "_post_json", _conn_dead)
+    with pytest.raises(ChannelSendError) as ei2:
+        asyncio.run(MessengerInboxAdapter().send(req, "100", "555", "hi"))
+    assert ei2.value.status_code == 503
+    assert "不可达" in ei2.value.detail

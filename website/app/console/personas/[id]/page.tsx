@@ -5,7 +5,6 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Flame } from "lucide-react";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
-import { listCustomers } from "@/lib/ledger";
 import {
   PERSONA_PRODUCT_IDS,
   PRODUCT_ENGINE_MAP,
@@ -23,12 +22,7 @@ import {
   SystemBadge,
   fmtDateTime,
 } from "../../parts";
-import {
-  AssignPersonaCustomerControl,
-  GrantToggle,
-  PersonaPurgeButton,
-  type PersonaCustomerOption,
-} from "../ui";
+import { AssignPersonaCustomerControl, GrantToggle, PersonaPurgeButton } from "../ui";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,11 +103,6 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
   const purgeTargets = computePurgeTargets(persona, grants);
   const grantedLabels = [...activeGrantIds].map((p) => PRODUCT_LABEL[p] ?? p);
 
-  const customerOptions: PersonaCustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
-    id: c.id,
-    label: `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`,
-  }));
-
   const slotFlags: Record<PersonaSlot, boolean> = {
     face: !!persona.slot_face,
     voice: !!persona.slot_voice,
@@ -149,7 +138,7 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
         {tags.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {tags.map((t) => (
-              <span key={t} className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300">
+              <span key={t} className="rounded-full bg-ink-700 px-2 py-0.5 text-[11px] text-slate-300">
                 #{t}
               </span>
             ))}
@@ -168,7 +157,7 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
                 <div className="mb-2 flex items-center gap-2">
                   <span
                     className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${
-                      on ? lit : "border-slate-800 bg-slate-900/60 text-slate-700"
+                      on ? lit : "border-ink-700 bg-ink-900/60 text-slate-700"
                     }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -204,17 +193,17 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <SectionTitle count={activeGrantIds.size}>授权矩阵</SectionTitle>
+          <SectionTitle count={activeGrantIds.size}>可用产品</SectionTitle>
           <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
             人设授权给哪些产品使用（授权只是使用许可的登记；资产分发仍走各引擎自己的通道）。
             {frozen && <b className="text-amber-300">当前状态下授权已冻结。</b>}
           </p>
-          <ul className="divide-y divide-slate-800/70">
+          <ul className="divide-y divide-ink-700/70">
             {PERSONA_PRODUCT_IDS.map((pid) => (
               <li key={pid} className="flex items-center justify-between gap-2 py-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-slate-200">{PRODUCT_LABEL[pid]}</span>
-                  <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+                  <span className="rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
                     {PRODUCT_ENGINE_MAP[pid]}
                   </span>
                 </div>
@@ -248,16 +237,16 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
               <p className="text-xs text-slate-500">尚未归属客户。</p>
             )}
             {customerNameHint && !customer && (
-              <p className="mt-2 rounded-lg bg-slate-800/60 p-2 text-[11px] text-slate-400">
+              <p className="mt-2 rounded-lg bg-ink-700/60 p-2 text-[11px] text-slate-400">
                 导入件带的归属线索：<b className="text-slate-300">{customerNameHint}</b>（仅供参考，未自动建档）
               </p>
             )}
             {canWrite ? (
               <div className="mt-3">
-                <AssignPersonaCustomerControl personaId={persona.id} customers={customerOptions} />
+                <AssignPersonaCustomerControl personaId={persona.id} />
               </div>
             ) : (
-              <p className="mt-3 text-[11px] text-slate-600">viewer 只读：归属操作需 admin 及以上角色。</p>
+              <p className="mt-3 text-[11px] text-slate-400">当前账号只读：归属需要运营或主账号。</p>
             )}
           </Card>
 
@@ -285,19 +274,19 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
               清除队列监控 →
             </Link>
           </p>
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <div className="overflow-x-auto rounded-xl border border-ink-700">
             <table className="w-full min-w-max text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-900/80 text-[11px] uppercase tracking-wider text-slate-500">
+                <tr className="border-b border-ink-700 bg-ink-900/80 text-[11px] uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2.5 font-medium">目标引擎</th>
                   <th className="px-3 py-2.5 font-medium">下发时间</th>
                   <th className="px-3 py-2.5 font-medium">回执状态</th>
                   <th className="px-3 py-2.5 font-medium">回执详情</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/70">
+              <tbody className="divide-y divide-ink-700/70">
                 {purges.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-800/40">
+                  <tr key={p.id} className="hover:bg-ink-700/40">
                     <td className="px-3 py-2.5">
                       <SystemBadge system={p.target_system} />
                     </td>

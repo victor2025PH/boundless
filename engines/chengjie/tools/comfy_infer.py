@@ -79,6 +79,154 @@ def is_schnell(ckpt: str) -> bool:
     return "schnell" in low or "turbo" in low
 
 
+# ── 多引擎（2026-08-21，工具箱「AI 生成图片」按局域网算力分配）────────────────
+# 默认 engine=flux＝现役 FLUX(fp8)+PuLID 锁脸链，**零行为变更**（autosend 自动链的
+# command_args 不带 --engine → 恒走 flux）。qwen_edit / z_image 是坐席手动出图的可选
+# 引擎，需 ComfyUI 侧先装对应模型（未装＝提交 400 → 调用方回落 flux/相册/文字）。
+#
+# GPU 分配（智聊模式实测：176=5090 现役 ComfyUI+FLUX 稳态仅剩 ~5.7G；173=5090 有更多
+# 名义余量但常驻 vLLM-27B+IndexTTS）：
+#   - 默认把 qwen_edit/z_image 也指向 **176:8188 现役 ComfyUI**（与 FLUX 模型热切换，
+#     同为出图用途不并存；本文件的 ensure_vram 会先卸同卡 Ollama 非 VLM 模型腾显存）。
+#     手动出图是低频动作，冷切换成本可接受。
+#   - 用量起来或切换抖动明显 → 把 --url 指向 173:8188 独立 ComfyUI（需在 173 泊车
+#     vLLM/IndexTTS 后装 Qwen 模型）。切换只改 config 的 command_args --url，无需改码。
+#
+# 节点图不可测风险的兜底：Qwen-Image-Edit-2511 的 ComfyUI 原生工作流节点名随版本演进，
+# 本文件内置的是「最佳努力」图；**推荐运维用 --workflow-template 指向自己 ComfyUI 里
+# 导出的 API 格式工作流 JSON**（占位符见 _apply_workflow_template），保证与在装版本逐字节
+# 对齐——那份是「一定跑得通」的真相，内置图只是便利默认。
+_QWEN_EDIT_UNET = os.environ.get("COMFY_QWEN_UNET", "qwen_image_edit_2511_fp8_e4m3fn.safetensors")
+_QWEN_EDIT_CLIP = os.environ.get("COMFY_QWEN_CLIP", "qwen_2.5_vl_7b_fp8_scaled.safetensors")
+_QWEN_EDIT_VAE = os.environ.get("COMFY_QWEN_VAE", "qwen_image_vae.safetensors")
+_ZIMAGE_UNET = os.environ.get("COMFY_ZIMAGE_UNET", "z_image_turbo_bf16.safetensors")
+_ZIMAGE_CLIP = os.environ.get("COMFY_ZIMAGE_CLIP", "qwen_2.5_vl_7b_fp8_scaled.safetensors")
+_ZIMAGE_VAE = os.environ.get("COMFY_ZIMAGE_VAE", "z_image_vae.safetensors")
+
+
+def _apply_workflow_template(raw: str, *, prompt: str, seed: int, width: int,
+                             height: int, steps: int, ref_image_name: str,
+                             out_prefix: str = "aitr_gen") -> dict:
+    """把运维导出的 ComfyUI API 格式工作流 JSON 里的占位符替换成本次参数。
+
+    支持占位符（字符串内子串替换，数字占位放在字符串里由 ComfyUI 自转型；模板作者
+    也可直接写数字并让本函数只替换文本占位）：
+        %PROMPT% %SEED% %WIDTH% %HEIGHT% %STEPS% %REF_IMAGE% %OUT_PREFIX%
+    这是「引擎无关」的稳妥路径：模板即运维在装 ComfyUI 里跑通过的真实工作流。
+    """
+    def _sub(s: str) -> str:
+        return (s.replace("%PROMPT%", prompt)
+                 .replace("%REF_IMAGE%", ref_image_name)
+                 .replace("%OUT_PREFIX%", out_prefix)
+                 .replace("%SEED%", str(seed))
+                 .replace("%WIDTH%", str(width))
+                 .replace("%HEIGHT%", str(height))
+                 .replace("%STEPS%", str(steps)))
+    wf = json.loads(_sub(raw))
+
+    def _walk(node):
+        if isinstance(node, dict):
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_walk(v) for v in node]
+        if isinstance(node, str):
+            return _sub(node)
+        return node
+    return _walk(wf)
+
+
+def build_qwen_edit_workflow(prompt: str, *, width: int, height: int, steps: int,
+                             seed: int, ref_image_name: str = "",
+                             unet: str = "", clip: str = "", vae: str = "") -> dict:
+    """Qwen-Image-Edit-2511 的 ComfyUI 原生工作流（最佳努力，可被 --workflow-template 覆写）。
+
+    人物一致性靠**参考图直出**（提示词只描述场景/衣着，长相取自参考图）——治现役
+    PuLID「头位表情千篇一律」。ref_image_name 空＝退化成纯文生图（Qwen-Image 基座）。
+    节点名以 2026 ComfyUI 原生 Qwen-Image-Edit 支持为准；不同版本可能命名有别，届时用
+    模板覆写。steps=0 → 20（非蒸馏基座）。
+    """
+    _unet = unet or _QWEN_EDIT_UNET
+    _clip = clip or _QWEN_EDIT_CLIP
+    _vae = vae or _QWEN_EDIT_VAE
+    _steps = steps if steps > 0 else 20
+    wf = {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": _unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": _clip, "type": "qwen_image"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": _vae}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": "", "clip": ["2", 0]}},
+        "8": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"images": ["8", 0], "filename_prefix": "aitr_gen"}},
+    }
+    if ref_image_name:
+        # 参考图编辑链：TextEncodeQwenImageEditPlus 吃 clip+vae+参考图+prompt，
+        # 同时产出正向 conditioning 与参考 latent（2511 支持多参考，这里单参考）。
+        wf["20"] = {"class_type": "LoadImage", "inputs": {"image": ref_image_name}}
+        wf["5"] = {"class_type": "TextEncodeQwenImageEditPlus",
+                   "inputs": {"prompt": prompt, "clip": ["2", 0], "vae": ["3", 0],
+                              "image1": ["20", 0]}}
+        wf["10"] = {"class_type": "EmptySD3LatentImage",
+                    "inputs": {"width": width, "height": height, "batch_size": 1}}
+        wf["6"] = {"class_type": "KSampler",
+                   "inputs": {"model": ["1", 0], "positive": ["5", 0],
+                              "negative": ["7", 0], "latent_image": ["10", 0],
+                              "seed": seed, "steps": _steps, "cfg": 2.5,
+                              "sampler_name": "euler", "scheduler": "simple",
+                              "denoise": 1.0}}
+    else:
+        wf["5"] = {"class_type": "CLIPTextEncode",
+                   "inputs": {"text": prompt, "clip": ["2", 0]}}
+        wf["10"] = {"class_type": "EmptySD3LatentImage",
+                    "inputs": {"width": width, "height": height, "batch_size": 1}}
+        wf["6"] = {"class_type": "KSampler",
+                   "inputs": {"model": ["1", 0], "positive": ["5", 0],
+                              "negative": ["7", 0], "latent_image": ["10", 0],
+                              "seed": seed, "steps": _steps, "cfg": 2.5,
+                              "sampler_name": "euler", "scheduler": "simple",
+                              "denoise": 1.0}}
+    return wf
+
+
+def build_zimage_workflow(prompt: str, *, width: int, height: int, steps: int,
+                          seed: int, unet: str = "", clip: str = "",
+                          vae: str = "") -> dict:
+    """Z-Image-Turbo（6B, Apache 2.0, 8 步蒸馏）的 ComfyUI 工作流（最佳努力）。
+
+    定位＝高频泛用图的速度档（拟真口碑最好）；不锁脸（纯文生图）。steps=0 → 8（蒸馏）。
+    """
+    _unet = unet or _ZIMAGE_UNET
+    _clip = clip or _ZIMAGE_CLIP
+    _vae = vae or _ZIMAGE_VAE
+    _steps = steps if steps > 0 else 8
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": _unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": _clip, "type": "qwen_image"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": _vae}},
+        "5": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": prompt, "clip": ["2", 0]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": "", "clip": ["2", 0]}},
+        "10": {"class_type": "EmptySD3LatentImage",
+               "inputs": {"width": width, "height": height, "batch_size": 1}},
+        "6": {"class_type": "KSampler",
+              "inputs": {"model": ["1", 0], "positive": ["5", 0],
+                         "negative": ["7", 0], "latent_image": ["10", 0],
+                         "seed": seed, "steps": _steps, "cfg": 1.0,
+                         "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "8": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"images": ["8", 0], "filename_prefix": "aitr_gen"}},
+    }
+
+
 def _log(m: str) -> None:
     print("[comfy_infer] " + m, file=sys.stderr, flush=True)
 
@@ -308,6 +456,29 @@ def _vram_free_gb() -> float:
         return -1.0
 
 
+def _comfy_reserved_gb() -> float:
+    """ComfyUI 自己在显存里占了多少(GB)——「大模型是否已常驻」的代理指标。
+
+    ``torch_vram_total`` = ComfyUI 进程 torch 侧 reserved。裸服务约 0.1G；
+    加载完 flux 全家桶后是十几 G。查不到返回 -1（未知）。
+    """
+    try:
+        with urllib.request.urlopen(COMFY_URL + "/system_stats", timeout=10) as r:
+            j = json.loads(r.read())
+        dev = (j.get("devices") or [{}])[0]
+        return float(dev.get("torch_vram_total", 0)) / (1024 ** 3)
+    except Exception:
+        return -1.0
+
+
+# 「模型已常驻」判据与活化显存下限（env 可调）。
+# 8G：裸服务 0.1G、加载完 flux 十几 G，8 落在两者之间且远离两端。
+WARM_RESERVED_GB = float(os.environ.get("COMFY_WARM_RESERVED_GB", "8") or 8)
+# 3G：1024x1024 flux 单张出图的活化显存约 2-4G（模型本身已在显存里，不再需要
+# min_free_gb 那么大的**加载**空间）。
+WARM_FREE_GB = float(os.environ.get("COMFY_WARM_FREE_GB", "3") or 3)
+
+
 def _free_comfy() -> None:
     """让 ComfyUI 卸载已加载模型 + 释放缓存显存（把地方让给换脸栈/给本次冷加载腾空间）。"""
     try:
@@ -383,10 +554,31 @@ def ensure_vram(min_free_gb: float, ollama_url: str = "") -> float:
     然后再查。
 
     返回最终 vram_free（GB）。调用方据此决定出图或回落。-1=查不到(放行)。
+
+    ⚠ **热加载优先**（2026-08-28 老板点名「要让模型一直热加载，不能等到用的时候
+    再加载」时定位到的自毁循环）：``min_free_gb`` 描述的是「把模型**装进**显存需要
+    多大空位」，模型**已经在**显存里时它就不适用了——而旧实现无条件先 ``/free``，
+    等于把马上要用的那份卸掉再从磁盘重载（实测冷加载 40-60s，热出图几秒）。同卡
+    Ollama 的翻译/嵌入模型会周期性把空闲显存压回闸门线以下，于是每次出图都重演
+    一遍：**热缓存的头号杀手是我们自己**。故先判常驻：已常驻且活化显存够 → 直接
+    放行，一个字节都不腾；活化不够也只卸**别人**（Ollama，秒级可重载），绝不卸自己。
     """
     free = _vram_free_gb()
     if free < 0:
         return free  # 查不到 → 不拦（交给出图本身，失败会回落）
+    if free < min_free_gb:
+        reserved = _comfy_reserved_gb()
+        if reserved >= WARM_RESERVED_GB:
+            if free >= WARM_FREE_GB:
+                _log("模型已驻留显存 %.1fG、空闲 %.1fG 够出图 → 跳过腾挪直接用(热)"
+                     % (reserved, free))
+                return max(free, min_free_gb)   # 闸门放行：无需再腾
+            _log("模型已驻留 %.1fG 但空闲仅 %.1fG，只卸 Ollama 腾活化空间(不卸自己)"
+                 % (reserved, free))
+            if ollama_url and _free_ollama(ollama_url):
+                free = _vram_free_gb()
+                _log("卸 Ollama 后 free=%.1fG" % free)
+            return max(free, min_free_gb) if free >= WARM_FREE_GB else free
     if free < min_free_gb:
         _log("显存不足 free=%.1fG < %.1fG，请求 ComfyUI 卸载腾显存…" % (free, min_free_gb))
         _free_comfy()
@@ -400,6 +592,34 @@ def ensure_vram(min_free_gb: float, ollama_url: str = "") -> float:
                 free = _vram_free_gb()
                 _log("卸 Ollama 后 free=%.1fG" % free)
     return free
+
+
+def classify_submit_rejection(body: str) -> str:
+    """把 ``/prompt`` 被拒（400 node_errors）归类：**模型文件缺失** vs 其它校验失败。
+
+    ComfyUI 校验器对「loader 的文件名不在服务端可选列表」输出
+    ``Value not in list: ckpt_name: 'xx' not in [...]``——2026-08-22 实锤事故形态是
+    ``not in []``（模型目录被整树清空，列表为空）。这类错误坐席自己救不了，
+    必须与「参数非法」区分开，前端才能给对的建议（联系运维 vs 换描述重试）。
+    """
+    low = str(body or "").lower()
+    if "not in list" in low or "not in []" in low or "value not in" in low:
+        return "model_missing"
+    return "submit_rejected"
+
+
+def classify_failure(exc: BaseException) -> str:
+    """终局异常 → 机器可读错误码（``ERR_CODE=`` 行的单一事实源）。"""
+    if isinstance(exc, TimeoutError):
+        return "gen_timeout"
+    msg = str(exc)
+    if isinstance(exc, RuntimeError) and "提交被拒" in msg:
+        return classify_submit_rejection(msg)
+    low = msg.lower()
+    if isinstance(exc, urllib.error.URLError) or "urlopen error" in low \
+            or "connection refused" in low or "10061" in low:
+        return "server_unreachable"
+    return "exec_error"
 
 
 def _post_prompt(workflow: dict, client_id: str) -> str:
@@ -459,6 +679,14 @@ def main() -> int:
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--url", default="", help="ComfyUI 基址；覆盖 COMFY_URL 环境变量（跨机调用用）")
+    ap.add_argument("--engine", default="flux", choices=["flux", "qwen_edit", "z_image"],
+                    help="出图引擎（默认 flux=现役 FLUX+PuLID，零行为变更）；"
+                         "qwen_edit=Qwen-Image-Edit-2511 参考图一致性；z_image=Z-Image-Turbo 速度档。"
+                         "非 flux 引擎需 ComfyUI 侧先装模型（未装=提交 400，调用方回落）")
+    ap.add_argument("--workflow-template", default="",
+                    help="ComfyUI API 格式工作流 JSON 路径（引擎无关的稳妥覆写）：占位符 "
+                         "%PROMPT%/%SEED%/%WIDTH%/%HEIGHT%/%STEPS%/%REF_IMAGE%/%OUT_PREFIX%。"
+                         "给了就用它、忽略内置引擎图——运维在装 ComfyUI 里导出的真实工作流最可靠")
     ap.add_argument("--width", type=int, default=1024)
     ap.add_argument("--height", type=int, default=1024)
     ap.add_argument("--steps", type=int, default=0,
@@ -505,9 +733,13 @@ def main() -> int:
         COMFY_URL = args.url.rstrip("/")
 
     # ① 本机互斥锁：同一时刻只放一个出图，防两个请求峰值叠加把 5090 撑爆。
+    # 失败路径统一补一行 ERR_CODE=<code>（stderr 末尾，机器可读）——调用方
+    # （SelfieProvider 摘录尾部 → image_gen 路由分类 → 前端人话+建议）据此
+    # 确定性归因，不再靠正则猜中文日志（2026-08-22 错误面收口）。
     lock = _acquire_lock(args.lock_wait)
     if lock is None:
         _log("获取出图锁超时，放弃(回落)")
+        _log("ERR_CODE=lock_busy")
         return 4
     try:
         # ② 显存闸门：不足先让 ComfyUI /free 腾；仍不足卸同卡 Ollama 兜底模型再腾；
@@ -518,6 +750,7 @@ def main() -> int:
         free = ensure_vram(args.min_free_gb, ollama_url=_ollama)
         if 0 <= free < args.min_free_gb:
             _log("显存仍不足 free=%.1fG < %.1fG，放弃出图(回落，不 OOM 换脸栈)" % (free, args.min_free_gb))
+            _log("ERR_CODE=vram_insufficient")
             return 3
 
         seed = args.seed if args.seed >= 0 else uuid.uuid4().int % (2**31)
@@ -525,26 +758,63 @@ def main() -> int:
         if args.face_ref:
             if not os.path.isfile(args.face_ref):
                 _log("基准脸不存在: %s" % args.face_ref)
+                _log("ERR_CODE=face_ref_missing")
                 return 2
             try:
                 face_ref_name = _upload_image(args.face_ref)
                 _log("face_ref 已上传: %s" % face_ref_name)
             except Exception as e:
                 _log("基准脸上传失败: %s" % e)
+                _log("ERR_CODE=face_ref_upload_failed")
                 return 2
-        # 模型路由（商用合规）：无脸图 → schnell(Apache 2.0)；锁脸 → dev(PuLID 训练基座)。
-        # 但按服务端实际可用列表收敛：期望模型没装则回落已装的（治「schnell 未装 → 400」）。
-        _want = args.ckpt if (face_ref_name or not args.ckpt_noface) else args.ckpt_noface
-        ckpt = resolve_ckpt(_want, fallback=args.ckpt)
-        steps = args.steps if args.steps > 0 else (4 if is_schnell(ckpt) else 20)
-        wf = build_workflow(args.prompt, width=args.width, height=args.height,
-                            steps=steps, guidance=args.guidance, seed=seed,
-                            ckpt=ckpt, face_ref_name=face_ref_name,
-                            face_weight=args.face_weight,
-                            pulid_start_at=args.pulid_start_at,
-                            pulid_end_at=args.pulid_end_at,
-                            lora_name=args.lora, lora_weight=args.lora_weight,
-                            lora_clip=args.lora_clip)
+        # ── 工作流构造：模板覆写 > 引擎分支 > 现役 FLUX（默认，零行为变更）──────────
+        _engine = str(getattr(args, "engine", "flux") or "flux").lower()
+        _tpl_path = str(getattr(args, "workflow_template", "") or "").strip()
+        if _tpl_path:
+            # 引擎无关的稳妥路径：运维在装 ComfyUI 导出的真实工作流（逐字节对齐）。
+            if not os.path.isfile(_tpl_path):
+                _log("工作流模板不存在: %s" % _tpl_path)
+                _log("ERR_CODE=template_error")
+                return 2
+            try:
+                with open(_tpl_path, "r", encoding="utf-8") as _tf:
+                    _raw = _tf.read()
+                _steps_tpl = args.steps if args.steps > 0 else 0
+                wf = _apply_workflow_template(
+                    _raw, prompt=args.prompt, seed=seed, width=args.width,
+                    height=args.height, steps=_steps_tpl, ref_image_name=face_ref_name)
+                _log("工作流走模板 %s engine=%s ref=%s"
+                     % (os.path.basename(_tpl_path), _engine, face_ref_name or "-"))
+            except Exception as e:
+                _log("模板解析失败: %s" % e)
+                _log("ERR_CODE=template_error")
+                return 2
+        elif _engine == "qwen_edit":
+            steps = args.steps
+            wf = build_qwen_edit_workflow(
+                args.prompt, width=args.width, height=args.height, steps=steps,
+                seed=seed, ref_image_name=face_ref_name)
+            _log("engine=qwen_edit ref=%s（参考图一致性；需 ComfyUI 装 Qwen-Image-Edit-2511）"
+                 % (face_ref_name or "-"))
+        elif _engine == "z_image":
+            steps = args.steps
+            wf = build_zimage_workflow(
+                args.prompt, width=args.width, height=args.height, steps=steps, seed=seed)
+            _log("engine=z_image（速度档；需 ComfyUI 装 Z-Image-Turbo）")
+        else:
+            # 现役 FLUX+PuLID（默认）。模型路由（商用合规）：无脸图 → schnell(Apache 2.0)；
+            # 锁脸 → dev(PuLID 训练基座)。按服务端可用列表收敛（治「schnell 未装 → 400」）。
+            _want = args.ckpt if (face_ref_name or not args.ckpt_noface) else args.ckpt_noface
+            ckpt = resolve_ckpt(_want, fallback=args.ckpt)
+            steps = args.steps if args.steps > 0 else (4 if is_schnell(ckpt) else 20)
+            wf = build_workflow(args.prompt, width=args.width, height=args.height,
+                                steps=steps, guidance=args.guidance, seed=seed,
+                                ckpt=ckpt, face_ref_name=face_ref_name,
+                                face_weight=args.face_weight,
+                                pulid_start_at=args.pulid_start_at,
+                                pulid_end_at=args.pulid_end_at,
+                                lora_name=args.lora, lora_weight=args.lora_weight,
+                                lora_clip=args.lora_clip)
         t0 = time.time()
         try:
             cid = uuid.uuid4().hex
@@ -555,15 +825,21 @@ def main() -> int:
                                                     args.pulid_end_at))
             _lora = (" lora=%s@%.2f" % (args.lora, args.lora_weight)
                      if args.lora else "")
-            _log("submitted prompt_id=%s seed=%d free=%.1fG face=%s ckpt=%s steps=%d%s%s"
-                 % (pid, seed, free, face_ref_name or "-", ckpt, steps, _pulid, _lora))
+            # ckpt/steps 只在 flux 分支定义；非 flux 引擎按引擎名记（模板/qwen/z_image）。
+            _ckpt_tag = locals().get("ckpt", _engine)
+            _steps_tag = locals().get("steps", args.steps)
+            _log("submitted prompt_id=%s seed=%d free=%.1fG face=%s engine=%s model=%s steps=%s%s%s"
+                 % (pid, seed, free, face_ref_name or "-", _engine, _ckpt_tag,
+                    _steps_tag, _pulid, _lora))
             entry = _wait_history(pid, args.timeout)
             if not _download_first_image(entry, args.out):
                 st = json.dumps(entry.get("status") or {}, ensure_ascii=False)
                 _log("无输出图 status=%s" % st[:2000])
+                _log("ERR_CODE=no_output")
                 return 3
         except Exception as e:
             _log("失败: %s" % e)
+            _log("ERR_CODE=%s" % classify_failure(e))
             return 2
         _log("OK %s (%.1fs)" % (args.out, time.time() - t0))
         if args.free_after:

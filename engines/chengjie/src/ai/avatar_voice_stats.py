@@ -30,6 +30,8 @@ class AvatarVoiceStats:
         "_stt_total", "_stt_ok", "_started_at", "_last_ts",
         "_synth_fail_streak", "_last_synth_ok_ts", "_last_synth_fail_ts",
         "_truncation_rejects",
+        "_engine_ok", "_engine_mismatch", "_engine_mismatch_last",
+        "_engine_mismatch_ts",
     )
 
     def __init__(self) -> None:
@@ -65,6 +67,12 @@ class AvatarVoiceStats:
         self._stt_ok = 0
         # 质量闸门拒发数（2026-07-15「乱码语音」防线：截断/坏音被拦下的次数）
         self._truncation_rejects = 0
+        # 引擎归属（2026-08-22「fish 冒充 IndexTTS-2」防线）：hub 回的音频采样率
+        # 指纹是否＝点名的引擎。mismatch >0 ＝ 正在被顶包（客户听到别人的声音）。
+        self._engine_ok = 0
+        self._engine_mismatch = 0
+        self._engine_mismatch_last = ""
+        self._engine_mismatch_ts = 0.0
         self._started_at = time.time()
         self._last_ts = 0.0
 
@@ -177,6 +185,29 @@ class AvatarVoiceStats:
             self._truncation_rejects += 1
             self._last_ts = time.time()
 
+    def record_engine_check(
+        self, verdict: str, detail: str = "", *, profile: str = "",
+    ) -> None:
+        """记一次引擎归属判定。``unknown``（判不了）刻意不计——只统计有判据的两态，
+        否则 ogg 路径的大量 unknown 会把 mismatch 占比稀释成看不见。
+
+        ``profile``＝受影响人设（合成前预检那条路知道是谁），进 last_mismatch 便于
+        「谁的客户听到了别人的声音」一眼可查。**必须收在签名里**：调用点全都裹在
+        ``except: pass`` 里，签名对不上＝TypeError 被吞＝计数器永远 0（2026-08-22
+        预检路径实锤——最该被看见的那一档反而完全不上报）。
+        """
+        v = str(verdict or "").strip().lower()
+        with self._lock:
+            if v == "ok":
+                self._engine_ok += 1
+            elif v == "mismatch":
+                self._engine_mismatch += 1
+                d = str(detail or "")[:120]
+                p = str(profile or "").strip()
+                self._engine_mismatch_last = f"{d}（{p}）" if p else d
+                self._engine_mismatch_ts = time.time()
+            self._last_ts = time.time()
+
     # ── STT ──────────────────────────────────────────────────────────────────
     def record_stt(self, *, ok: bool) -> None:
         with self._lock:
@@ -231,6 +262,12 @@ class AvatarVoiceStats:
                 "stt_total": int(self._stt_total),
                 "stt_ok": int(self._stt_ok),
                 "truncation_rejects": int(self._truncation_rejects),
+                "engine_check": {
+                    "ok": int(self._engine_ok),
+                    "mismatch": int(self._engine_mismatch),
+                    "last_mismatch": self._engine_mismatch_last,
+                    "last_mismatch_ts": float(self._engine_mismatch_ts),
+                },
             }
 
     def dump_prom(self) -> str:
@@ -249,6 +286,10 @@ class AvatarVoiceStats:
             "# TYPE avatar_voice_stt_total counter",
             "# HELP avatar_voice_truncation_rejects_total truncated/garbage audio blocked by quality gate",
             "# TYPE avatar_voice_truncation_rejects_total counter",
+            "# HELP avatar_voice_engine_ok_total synth verified as the pinned hub engine",
+            "# TYPE avatar_voice_engine_ok_total counter",
+            "# HELP avatar_voice_engine_mismatch_total hub served a DIFFERENT engine (voice identity swap)",
+            "# TYPE avatar_voice_engine_mismatch_total counter",
             "# HELP avatar_voice_by_channel_total successful synth by channel",
             "# TYPE avatar_voice_by_channel_total counter",
             "# HELP avatar_voice_colloquial_total synth with colloquial rewrite (liveliness, text layer)",
@@ -273,6 +314,9 @@ class AvatarVoiceStats:
             lines.append(f"avatar_voice_stt_total {self._stt_total}")
             lines.append(
                 f"avatar_voice_truncation_rejects_total {self._truncation_rejects}")
+            lines.append(f"avatar_voice_engine_ok_total {self._engine_ok}")
+            lines.append(
+                f"avatar_voice_engine_mismatch_total {self._engine_mismatch}")
             for ch, n in sorted(self._by_channel.items()):
                 lines.append(
                     f'avatar_voice_by_channel_total{{channel="{_esc(ch)}"}} {int(n)}')
@@ -304,6 +348,10 @@ class AvatarVoiceStats:
             self._stt_total = 0
             self._stt_ok = 0
             self._truncation_rejects = 0
+            self._engine_ok = 0
+            self._engine_mismatch = 0
+            self._engine_mismatch_last = ""
+            self._engine_mismatch_ts = 0.0
             self._last_ts = 0.0
 
 

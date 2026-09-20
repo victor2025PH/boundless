@@ -1,0 +1,6 @@
+# Download only from the official site
+Download only from https://bd2026.cc/download/chatx; the page lists each release's SHA-256.
+> Blue "Windows protected your PC" screen: click More info, then Run anyway (routine for new software, not a virus alert).
+
+# Your data and privacy
+Logins, chats, customer profiles, knowledge base and settings stay in your Windows profile (%APPDATA%); upgrades keep them and the uninstaller lets you keep or erase them. AI runs through the BOUNDLESS secure gateway - no API key to enter.

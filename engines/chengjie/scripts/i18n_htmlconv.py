@@ -13,7 +13,7 @@ Attribute values get the opposite fallback-quote of their enclosing quote (no cl
 Usage::
 
     from scripts import i18n_htmlconv as hc
-    hc.TPL = Path("src/web/templates/whatsapp_rpa.html")
+    hc.TPL = Path("src/web/templates/_channel_body_whatsapp.html")
     hc.KEY_PREFIX = "wa_s"
     hc.build_plan(3, 500)      # dry-run -> _html_plan.json / _html_new.json
     # ...review, author EN...
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from src.web.web_i18n import get_translations
 
-TPL = Path("src/web/templates/whatsapp_rpa.html")
+TPL = Path("src/web/templates/_channel_body_whatsapp.html")
 KEY_PREFIX = "wa_s"
 WORK = Path(".")
 

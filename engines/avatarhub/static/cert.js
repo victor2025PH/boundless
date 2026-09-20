@@ -44,7 +44,7 @@
     var fp=await fingerprint(base);
     var qrTarget=(base||location.origin)+'/verify';
     var qr=await loadImg(base+'/api/qr?data='+encodeURIComponent(qrTarget));
-    var acc=cssVar('--bd-acc','#4f7aff');
+    var acc=cssVar('--bd-acc','#1e6bf0');
     var COL={bg:'#0e1320', panel:'#161d2e', line:'#26304a', txt:'#e9edf7', mut:'#aab4cc', faint:'#6b7794',
              good:'#34d399', warn:'#fbbf24', none:'#6b7794'};
     var vcol = d.tone==='good'?COL.good : d.tone==='mid'?COL.warn : COL.none;

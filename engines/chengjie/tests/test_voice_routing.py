@@ -195,8 +195,9 @@ def test_stage_voice_file_routes_by_tier(tmp_path, monkeypatch):
         set_relationship_providers, reset_relationship_providers,
     )
 
+    _ptt = b"OggS" + b"\x00" * 60 + b"OpusHead" + b"\x00" * 32
     fd, audio = tempfile.mkstemp(suffix=".ogg")
-    os.write(fd, b"OGGfakebytes")
+    os.write(fd, _ptt)
     os.close(fd)
 
     captured = {}
@@ -206,9 +207,9 @@ def test_stage_voice_file_routes_by_tier(tmp_path, monkeypatch):
             captured["backend"] = cfg.get("backend")
 
         async def synthesize(self, text, timeout_sec=45.0, emotion=None,
-                             pre_colloquialized=False):
+                             pre_colloquialized=False, **_kw):
             with open(audio, "wb") as f:   # 每次重建（stage 读后会删）
-                f.write(b"OGGfakebytes")
+                f.write(_ptt)
 
             class _R:
                 ok = True
@@ -382,7 +383,7 @@ def test_sender_voice_reply_passes_chat_id_as_contact_key(monkeypatch, tmp_path)
             self.account_persona_ids = []
 
     s = _S()
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     monkeypatch.setattr(s, "_presend_pace", AsyncMock())
     monkeypatch.setattr(s, "_postsend_record_count", lambda: None)
     s._emit_inbox = lambda **kw: None

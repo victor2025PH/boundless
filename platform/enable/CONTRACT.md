@@ -113,3 +113,39 @@ platform 不 import 引擎代码，仅通过 HTTP 契约交互；能力实现与
    数字人视频只是其上可选叠加的一层。调用方若假设"调用 avatar_render 就一定拿到视频"
    会被这个静默退化坑到——本次在 `client.py`/`enable_schema.json` 里反复强调"必须看
    `lipsync_video_b64` 是否非空"，就是为了不让这个坑传染给下游承接方（chengjie）。
+
+## 7. 2026-07-20 第七阶段：真实起服务端做端到端烟测（不是只读代码/只用假 mock）
+
+此前 §5/§6 的核实方式是逐行读源码 + 用自建的假 mock 服务器验证鉴权头。本轮进一步确认
+`avatar_hub.py` 顶层 import **不含**任何 GPU/ML 重依赖（`torch`/`onnxruntime`/语音视觉
+模型库都在函数体内惰性 import，不拖启动），本机可以真的执行 `python avatar_hub.py` 把
+**真实服务端**跑起来（非 mock），据此做了一次真实调用：
+
+- 用备用端口（`AVATARHUB_PORT=19000`）真实启动 `avatar_hub.py`：`Application startup
+  complete`，内置示例角色"示例-晓晴"自动激活（`has_face=true`/`has_voice=true`）。
+- 用 `EnableClient`（`AVATARHUB_BASE_URL` 指向这个真实实例）真实调用：
+  - `.status()` → `{'available': True, 'tts_ready': True, 'profile_count': 6, ...}`——
+    真实成功，探针本身不依赖任何下游模型。
+  - `.avatar_render(text, profile_id='示例-晓晴', generate_lipsync=False)` → 请求被
+    真实路由接受、真实执行到"调用下游 TTS 微服务"这一步，因本机未部署 TTS 微服务
+    （端口 7851 等未监听）而在该步失败，服务端返回 `HTTPException 500`（文案
+    `"TTS 失败: All connection attempts failed"`），客户端按契约收敛为
+    `{'available': False, 'error': 'HTTP 500', 'detail': ...}`——**这正是 §4 表格
+    承诺的"不可用能力优雅退化"行为，用真实服务端代码路径验证到了，不是纯靠代码
+    审查推断**。
+  - `generate_lipsync=True`、不存在的 `profile_id`、`.tts_clone_speak()` 三种边界
+    情况：均在若干秒后收敛为 `{'available': False, 'error': 'timed out'}`（客户端
+    默认 8s 超时先于服务端到下游的重试逻辑触发）——同样是优雅收敛，不是异常穿透
+    或挂死；耗时特征提示"服务端对下游失败有重试"，供将来调超时参数时参考。
+  - 默认无 `license_enforce.flag` 时，`_license_gate_middleware` 未拦截——本机验证
+    环境下无需额外配置授权状态即可测到真实业务 handler。
+- 测试完毕已停止该临时实例；`git status` 确认未在 `engines/avatarhub/` 留下任何改动
+  或残留文件。
+
+**结论**：`avatar_render`/`tts_clone_speak`/`status` 三个契约方法对真实 avatarhub 代码
+的请求格式、路由、鉴权、失败收敛行为**全部验证通过**；唯一未覆盖的是"真的产出可听
+音频/可看视频"（需要真实部署下游 TTS/换脸微服务，属于运维资源问题，不是契约/接线
+问题）。这把 `avatar_render` 从"契约层面看起来应该没问题"升级为"用真实服务端代码
+实测过全部失败/成功分支"，但**不代表已有明确业务场景要接入它**——是否要真正把它
+接到某条产品热路径上，仍按 §4 "增强项而非必需项"的既定原则，等业务侧提出具体需求
+再做，不属于本轮主动新增范围。

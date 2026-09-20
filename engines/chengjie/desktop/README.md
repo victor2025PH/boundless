@@ -18,6 +18,13 @@
 
 ## 架构
 
+> **2026-08-11 双栏融合**：左侧竖排账号 rail 已改为 **stage 顶部标签条**（浏览器心智：
+> 收件箱=常驻首标签+未读徽标，内嵌官方网页=按需标签，健康点内联）。只剩收件箱一个标签时
+> 标签条整条自动隐藏（`rail-solo`），桌面与网页版零差异；「打开官方网页版」入口下沉到
+> 收件箱页**账号抽屉**的账号溢出菜单（经 `renderer/inbox-preload.js` 反向桥
+> `window.__chatxShell` 驱动壳；未读徽标与标签/注入健康状态经同一桥双向流动）。
+> 下文 ASCII 图中的「rail」概念不变，仅方位从左栏变为顶部标签条。
+
 ```
 rail 标签：
   [📥 统一收件箱]  ── webview ── 后台 /workspace（session cookie 鉴权，token 自动登录）
@@ -41,10 +48,14 @@ rail 标签：
 
 - **统一收件箱**：固定 id `__inbox__`，独立分区 `persist:backend-workspace`。落到 `/login`
   时在页面内 POST 凭据自动登录回跳——**凭据链**优先 `backend.token`，回退 `backend.user`/`backend.pass`
-  （token 为空/失效时自动接力，全部失败才露出登录页人工处理）。带 loading/error 遮罩；
+  （token 为空/失效时自动接力，全部失败才露出登录页人工处理）。两处例外（用户管理 P0，2026-09-11）：
+  ① 人在页面里点「退出登录」→ 服务端落 `/login?manual=1`，壳进入**手动登录态**不再自动重登
+  （密码错重渲染也不重登；进站成功 / 点重试 / 重开应用恢复）；② `backend.auto_login=false`
+  （坐席机开关）→ 凭据链整体停用、每次启动露出登录页让操作员用自己的子帐号登录，
+  `backend.token` 仍供 sidecar/API 使用。后台弹窗（`bindBackendPopupLogin`）同两条规则。带 loading/error 遮罩；
   **后端未起会自动重连**（主进程 `desktop:backend-health` 探活，可达即自动重载，先开桌面后开后端也能自愈）。
   开关：`config.json::unified_inbox.enabled`（默认 `true`，可改 `label`/`path`）；
-  `unified_inbox.lang`（如 `zh`/`en`，空=跟随后台）会以 `?lang=` 注入并贯穿登录回跳，**坐席界面语言对齐**。
+  `unified_inbox.lang`（`zh`/`zh_hant`/`en`/`vi`/`th`/`id`，与后端 `i18n_packs.UI_LANGS` 对齐，`zh-TW`/`zh-HK` 视作 `zh_hant`；**空=跟随系统**——`app.getLocale()` 按同一家族映射推断，2026-08-27 起真跟随，此前空值恒中文）会以 `?lang=` 注入并贯穿登录回跳，**坐席界面语言对齐**。扩展语下壳菜单/向导按表定底回落（vi/th/id→en，zh_hant→zh），Web 工作台按该语渲染。Web 端未登录/无偏好时按 `Accept-Language` 协商（显式选择与登录回填永远优先，推断不落 cookie）。
 - **内嵌官方网页多账号**：每个平台/账号一个 Electron `partition`（独立 cookie/storage），
   可在 `config.json` 的 `accounts[].proxy` 配独立代理（防关联）。除 `config.json` 静态配置外，
   rail 底部「➕新增」可**运行时新增**（免改配置免重启），账号持久化到 `localStorage`、重启自动重建。
@@ -68,8 +79,15 @@ rail 标签：
 ```bash
 cd desktop
 npm install
-npm start        # 或 npm run dev 打开 DevTools
+npm start        # 或 npm run dev（= electron . --dev --devtools，弹出 DevTools）
 ```
+
+> **DevTools 准入（2026-09-19）**：只有**显式 `--devtools`** 才会自动弹 DevTools，`--dev` 单独不再弹
+> （此前 `electron . --dev --inspect` 起的调试实例会把独立 DevTools 窗留在坐席眼前）。
+> **打包态（用户/坐席端）一律不可开**：主窗 / 后台弹窗 / 悬浮副驾 / 所有 webview 都下了
+> `webPreferences.devTools=false`，Chromium 层封死——菜单、快捷键、页内「版本号连点 12 次」
+> 解锁全部无效（壳经 `app-menu-spec.devtools_allowed=false` 通知页面不再接线解锁）。
+> 打包态排查主进程用 `--inspect`（Node inspector），渲染层看 `userData/logs/` 与「上传诊断」。
 
 ## 打包分发（双击安装 / 自动更新）
 
@@ -95,6 +113,7 @@ npm start        # 或 npm run dev 打开 DevTools
 1. 后端未起就启动桌面 → 收件箱显示「正在等待后台启动并自动重连…」；再起后端 → **自动连上**（无需点重试）。
 2. 收件箱首屏不出现 `/login` 闪屏，直接进 `/workspace`（token 自动登录生效）。
 3. 左侧 rail：Telegram/WhatsApp 为内嵌 Tab；若配了 Messenger/LINE 账号，显示「↪收件箱」dim 入口，点击切到收件箱（不开死页）。
+   （若 `embedded_official_pages` 开启且 Messenger 可内嵌：标签带 **人工** 副标 + 顶栏诚实条——本页只人工聊/翻译，全自动必须用统一收件箱 + messenger-web 服务器登录，与官方网页登录无关。）
 4. 切到 Telegram Tab 扫码登录 → 消息下出现「点击翻译」、右下角「🤖 智能回复」可用。
 5. Telegram Tab 选中一个会话 → 右栏头部 📥「在收件箱打开」→ 切到收件箱并定位到**同一会话**。
 6. rail 底部「➕新增」→ 选 Telegram/WhatsApp → 立刻出现新内嵌 Tab 并激活，可在其中扫码登录第二个号。

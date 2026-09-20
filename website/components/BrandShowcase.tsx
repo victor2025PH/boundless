@@ -5,6 +5,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "@/components/LanguageContext";
 import Reveal from "@/components/fx/Reveal";
+import ProductIcon from "@/components/ProductIcon";
 import { track } from "@/lib/track";
 import {
   BRAND,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
 import { localePath } from "@/lib/site";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE, PRODUCT_GLOW } from "@/components/productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_GLOW } from "@/components/productMeta";
 
 /** 品牌家族展示带：无界公司主标 + 三系七产品 LOGO 星阵。
  *  与下方 ProductMatrix（详细目录卡片）分工不同——这里是品牌形象「全家福」：
@@ -36,7 +37,9 @@ const COPY = {
   en: {
     kicker: "BOUNDLESS · Product Family",
     coreLabel: "BOUNDLESS Engine",
-    coreSub: "无 界 底 座",
+    // 实施78 P0-2：原为「无 界 底 座」——中文页把英文名当装饰副标是对的，英文页把中文
+    // 当装饰副标则是把「这是中国产品」写在首屏；改为英文语义副标（自有部署底座）。
+    coreSub: "SELF-HOSTED CORE",
     breakLabel: "Breaks",
     familyHint: `${PRODUCT_COUNT} products · three families, one core`,
   },
@@ -64,13 +67,12 @@ function ProductTile({
   const p = BRAND.products[keyName];
   const landing = PRODUCT_LANDING[keyName];
   const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[keyName];
-  const optical = PRODUCT_OPTICAL_SCALE[keyName] ?? 1;
 
   return (
     <a
       href={href}
       onClick={() => track("product_click", { key: keyName, where: "brand_showcase" })}
-      className="group flex w-[7.25rem] flex-col items-center text-center sm:w-32"
+      className="group flex w-24 flex-col items-center text-center sm:w-32"
     >
       <span className="relative grid h-24 w-24 place-items-center md:h-28 md:w-28">
         <span
@@ -82,32 +84,34 @@ function ProductTile({
         <span
           className={`relative inline-grid place-items-center${landed ? " bl-land" : ""}`}
           style={
-            {
-              ...(optical !== 1 ? { transform: `scale(${optical})` } : {}),
-              ...(landed
-                ? { "--land-delay": `${PRODUCT_ORDER.indexOf(keyName) * 95}ms`, "--land-glow": PRODUCT_GLOW[keyName] }
-                : {}),
-            } as CSSProperties
+            landed
+              ? ({
+                  "--land-delay": `${PRODUCT_ORDER.indexOf(keyName) * 95}ms`,
+                  "--land-glow": PRODUCT_GLOW[keyName],
+                } as CSSProperties)
+              : undefined
           }
         >
-          <Image
-            src={PRODUCT_IMG[keyName]}
-            alt={`${p.zh} ${p.en}`}
-            width={96}
-            height={96}
+          <ProductIcon
+            product={keyName}
+            size={80}
+            alt={lang === "zh" ? `${p.zh} ${p.en}` : p.en}
             className={`relative h-16 w-16 object-contain transition-transform duration-500 group-hover:scale-110 md:h-20 md:w-20 ${float ? "animate-float" : ""}`}
-            style={float ? { animationDelay: `${idx * 0.55}s` } : undefined}
-            draggable={false}
+            imgStyle={float ? { animationDelay: `${idx * 0.55}s` } : undefined}
           />
         </span>
       </span>
 
+      {/* 实施78 P0-2：中文页「智聊 / ChatX」双行助记；英文页产品名只出英文——
+          三系标题（上方）已按同一口径处理，产品卡此前漏了。 */}
       <span className="mt-4 block text-base font-bold text-white transition-colors group-hover:text-neon-cyan md:text-lg">
-        {p.zh}
+        {lang === "zh" ? p.zh : p.en}
       </span>
-      <span className="mt-0.5 block text-xs font-semibold uppercase tracking-wider text-neon-cyan/80">
-        {p.en}
-      </span>
+      {lang === "zh" && (
+        <span className={`mt-0.5 block text-xs font-semibold uppercase tracking-wider ${accent.enName}`}>
+          {p.en}
+        </span>
+      )}
       <span className="mt-1 block text-[11px] leading-snug text-slate-500">{p.scene[lang]}</span>
 
       <span
@@ -169,9 +173,18 @@ export default function BrandShowcase() {
             />
           </div>
 
+          {/* 实施78 P0-2（2026-08-28）：英文路由只出纯拉丁字形。此前无论语言都渲染
+              「无界科技BOUNDLESS」——国际访客首屏第一眼就是半个中文标题，既增加认知负担，
+              又在我们主打「数据主权」时把产品来源写在脸上，与卖点自相矛盾。中文页不变。 */}
           <h2 className="mt-7 text-4xl font-black tracking-tight text-white md:text-6xl">
-            {BRAND.company.zh}
-            <span className="text-gradient ml-3 tracking-[0.12em]">{BRAND.company.en}</span>
+            {lang === "zh" ? (
+              <>
+                {BRAND.company.zh}
+                <span className="text-gradient ml-3 tracking-[0.12em]">{BRAND.company.en}</span>
+              </>
+            ) : (
+              <span className="text-gradient tracking-[0.12em]">{BRAND.company.en}</span>
+            )}
           </h2>
           <p className="mt-3 text-sm tracking-[0.4em] text-slate-400 md:text-base">
             {lang === "zh" ? BRAND.company.tagline.zh : BRAND.company.tagline.en}
@@ -205,18 +218,20 @@ export default function BrandShowcase() {
               >
                 <Reveal delay={0.08 + catIdx * 0.06} className="w-full">
                   <div className="mb-5 flex flex-col items-center text-center">
+                    {/* P0-2：中文页「智连 GROWTH」双写有助记忆；英文页只留英文名——
+                        「GROWTH 智连」对不识汉字的访客是纯噪音，且破坏拉丁排版节奏。 */}
                     <span className={`text-xs font-semibold uppercase tracking-[0.28em] ${accent.label}`}>
                       {lang === "zh" ? cc.zh : cc.en}
-                      <span className="ml-2 font-medium text-slate-500">
-                        {lang === "zh" ? cc.en : cc.zh}
-                      </span>
+                      {lang === "zh" && <span className="ml-2 font-medium text-slate-500">{cc.en}</span>}
                     </span>
                     <span className="mt-1 text-[11px] text-slate-500">
                       {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-start justify-center gap-x-3 gap-y-8 sm:gap-x-5">
+                  {/* 移动端 3 tile 一行不换行的预算：360 视口 − px-5×2(40) − 列 px-2×2(16) = 304px
+                      = 3×w-24(96) + 2×gap-x-2(8)，恰好放满；tile 再宽或 gap 再大就会 2+1 断行漂移 */}
+                  <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-8 sm:gap-x-5">
                     {items.map((key) => (
                       <ProductTile
                         key={key}

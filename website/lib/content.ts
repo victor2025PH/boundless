@@ -1,9 +1,18 @@
+// 幻境 STUDIO 五档报价单一真相在 lib/avatarhub-pricing.ts::TIERS（2026-08-04 单源化）：
+// 本文件所有幻境档位行 / 起价数字一律派生，勿再手写（改价只改 TIERS 一处）。
+// 智聊 ChatX / 翻译 Token 分层单一真相在 lib/chatx-pricing.ts（2026-08-19 定价决议）：
+// 套餐卡（plans.items）与产品卡报价行（solutions.pricing）同样全部派生，零手写数字。
+import { studioTierRows, studioTier, tierPriceLabel, STUDIO_PAID_FROM } from "./avatarhub-pricing";
+import { chatxPlanCardItems, chatxPlanRows, translateRows, SIGNUP_BONUS_TOKENS } from "./chatx-pricing";
+
 export type Lang = "zh" | "en";
 
 export interface PricingRow {
   plan: string;
   price: string;
   detail: string;
+  /** 自助 SKU 的 /order 深链 plan 键（lib/order-lines.ts 的 tier key）；缺省 = 走客服。 */
+  order?: string;
 }
 
 export interface Solution {
@@ -16,13 +25,21 @@ export interface Solution {
   highlight?: boolean;
 }
 
+/** 首页套餐卡（2026-08-21 充值唯一化：形状与 chatx-pricing.PlanCardItem 同构——
+ *  price 是主数字文本、unit 是单位行；无月/年切换，充值档全部一次性）。 */
 export interface Plan {
   name: string;
-  priceMonthly: string;
-  priceYearly: string;
+  /** 主价格文本（"0" / "6" / "200" / "面议"） */
+  price: string;
+  /** 价格单位行（"USD · 一次性" / "永久免费" / "联系商务"…） */
+  unit: string;
   desc: string;
   features: string[];
   highlight?: boolean;
+  /** 自助下单深链键（/order?plan=<key>）；缺省 = CTA 回落客服。 */
+  plan?: string;
+  /** 直链覆写（免费开始 → 下载页）；优先于 plan 深链。 */
+  href?: string;
 }
 
 export interface Dict {
@@ -52,9 +69,15 @@ export interface Dict {
   };
   trust: {
     platformsLabel: string;
-    platforms: string[];
+    /** 第一层「已深度对接」：name=brandIcons 字形键；label=展示名覆写（缺省用 name）；note=能力一句话 */
+    platformsLive: { name: string; label?: string; note: string }[];
+    platformsComingLabel: string;
+    /** 第二层「陆续接入」：灰阶 + 角标，仅表达路线图（口径见 docs/claims.md 平台墙分层行） */
+    platformsComing: string[];
     statsTitle: string;
-    stats: { value: string; suffix: string; label: string }[];
+    statsSubtitle: string;
+    /** 前 4 项渲染为主数字大卡，其余为次级紧凑卡；sub=给非技术读者的一句人话 */
+    stats: { value: string; suffix: string; label: string; sub?: string }[];
     testimonialsTitle: string;
     testimonials: { quote: string; name: string; role: string }[];
     disclaimer: string;
@@ -62,12 +85,12 @@ export interface Dict {
   plans: {
     title: string;
     subtitle: string;
-    monthly: string;
-    yearly: string;
-    save: string;
+    /** 卡片区下方一句话计费提示（充值一次性 · 无月费） */
+    note: string;
     popular: string;
-    perMonth: string;
     cta: string;
+    /** 「查看完整价格与计算器」链接文案（→ /pricing） */
+    fullPricing: string;
     items: Plan[];
   };
   orderSteps: {
@@ -138,15 +161,10 @@ export interface Dict {
     subtitle: string;
   };
   solutions: Solution[];
+  /** 首页「私有定制」报价大表已于 2026-08-04 下线（Pricing.tsx 已删）；
+   *  仅剩 note 一个字段——Telegram 小程序 /app 价格页的挂牌说明还在消费。 */
   pricingSection: {
-    title: string;
-    subtitle: string;
-    unit: string;
     note: string;
-    planCol: string;
-    priceCol: string;
-    detailCol: string;
-    allLabel: string;
   };
   about: {
     title: string;
@@ -192,11 +210,6 @@ export interface Dict {
     theySee: string;
     faceVoice: string;
     voiceCloning: string;
-  };
-  personas: {
-    title: string;
-    subtitle: string;
-    items: { id: string; title: string; desc: string; cta: string; href: string }[];
   };
   showcaseSection: {
     title: string;
@@ -391,34 +404,46 @@ const zh: Dict = {
     cta: "立即咨询",
   },
   hero: {
-    badge: "无界科技 · AI 自动成交聊天 · 多语种拟人翻译 · 私有可控",
-    title: "对手还在手动加粉",
-    titleAccent: "你的 AI 已 24小时 替你成交",
-    titleLines: ["对手还在手动加粉", "你的 AI 已", "24小时 替你成交"],
-    rotating: ["AI 全自动接客成交", "多语种拟人翻译秒回", "1 个人干翻 10 人团队", "封号自动换号 0 停机", "实时换脸换声开播", "私有部署数据不出网"],
+    badge: "无界科技 · 跨境沟通 AI · 统一收件箱 · 私有部署",
+    title: "跟全球客户聊天",
+    titleAccent: "像跟老乡聊天一样自然",
+    titleLines: ["跟全球客户聊天", "像跟老乡聊天", "一样自然"],
+    rotating: ["30+ 语种拟人互译秒回", "AI 用你的人设 7×24 跟单", "多平台消息一个收件箱", "关键时刻一键人工接管", "私有部署 · 数据不出网"],
     subtitle:
-      "加人、翻译、跟单、催单——这些累死人还留不住客的活，全甩给 AI 7×24 去干：多号矩阵不知疲倦加粉引流，拟人翻译让对方看不出你是外国人，AI 主动逼单把钱谈进来，人工随时一键接管，还能直播 / 视频通话级实时换脸换声。同行 10 个人干的活，你 1 个人躺着收——私有部署、数据不出网、合规可溯源。",
-    trustline: "已服务出海团队 · 私有部署数据不出网 · 合规可溯源",
-    ctaPrimary: "免费咨询 · 拿成交方案",
+      "把 WhatsApp / Telegram / LINE / Messenger 全部接进一个收件箱：客户说什么语言都行，AI 实时拟人互译、按你的人设自动答疑、跟单、促成交，重要节点你随时一键接管。全程支持私有部署，数据不出你的服务器。",
+    trustline: "7×24 看门狗自愈生产运行 · 1100+ 自动化测试护航 · 数据不出网",
+    // hero_cta A/B 结案定稿（2026-08-07）：demo 钩子文案胜出（30 天 b 组 2 击 / a 组 0 击），
+    // 且与按钮落点 #autochat 演示区语义一致（旧文案承诺「咨询」落点却是演示，文不对题）。
+    ctaPrimary: "看 AI 当场成交演示",
     ctaSecondary: "查看套餐与价格",
     stats: [
-      { value: "24H", label: "AI 全天候接客不漏单" },
-      { value: "10×", label: "1 人顶 10 人团队" },
+      { value: "24H", label: "看门狗自愈全天候运行" },
       { value: "30+", label: "语种拟人互译" },
-      { value: "300+", label: "出海团队在用" },
+      { value: "5", label: "大平台统一接入" },
+      { value: "1100+", label: "自动化回归测试" },
     ],
   },
   solutionsSection: {
     title: "三大产品系 · 一个无界底座",
-    subtitle: "智连获客成交（智拓·智聊）、幻境数字分身（幻颜·幻声·幻影）、通达跨语沟通（通译·通传）——三系七产品共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
+    subtitle: "智连获客成交（智聊·智拓）、通达同声传译（通传）、幻境数字分身（幻声·幻影）——三大产品系共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
   },
   solutions: [
     {
+      id: "chatx",
+      tag: "智聊 ChatX",
+      title: "AI 成交聊天 · 统一收件箱",
+      desc: "多平台消息聚合进一个工作台：AI 按你的人设自动答疑、跟单、促成交，标准翻译永久免费，重要节点一键人工接管；AI 用量按 Token 透明计价，支持私有部署。",
+      features: ["多平台统一收件箱", "AI 人设自动跟单", "标准翻译永久免费", "一键人工接管"],
+      highlight: true,
+      // 2026-08-19 Token 分层：档位行由 chatx-pricing.ts 派生（免费/个人/按量/团队/旗舰）。
+      pricing: chatxPlanRows("zh"),
+    },
+    {
       id: "reach",
       tag: "智拓 ReachX",
-      title: "真机获客 · 智拓 ReachX",
-      desc: "真机多号自动加友、打招呼、群成员提取，7×24 全自动获客引流进私域；主控 + Worker 集群、防封风控、VPN 池，覆盖 Facebook / Messenger / TikTok / Instagram 等平台。",
-      features: ["真机多号并发加粉", "群成员批量提取", "自动打招呼引流", "防封风控 + VPN 池"],
+      title: "真机获客 · 智拓 ReachX（邀请制）",
+      desc: "真机集群获客方案：多号管理、群成员提取、打招呼引流。涉及平台合规边界，按团队场景评估后私有交付，不做公开自助开通。",
+      features: ["真机多号管理", "群成员批量提取", "私有化交付", "邀请制评估"],
       pricing: [
         { plan: "私有化部署", price: "按规模报价", detail: "真机获客集群，按设备数与规模定制交付" },
       ],
@@ -429,49 +454,28 @@ const zh: Dict = {
       title: "声音克隆 VoiceClone",
       desc: "几十秒样本零样本克隆任意音色，三引擎自动择优（Fish 实时 / Qwen3 首包 ≈97ms 十语种 / VoxCPM 48kHz 可商用），多语种 TTS + 实时变声 + 情感可调。",
       features: ["秒级零样本克隆", "三引擎自动择优", "10+ 语种合成", "实时变声 · 情感可调"],
-      pricing: [
-        { plan: "体验", price: "18 / 月", detail: "1 音色，1 万字符 TTS" },
-        { plan: "标准", price: "78 / 月", detail: "5 音色，10 万字符，多语种" },
-        { plan: "专业", price: "198 / 月", detail: "20 音色，50 万字符，变声 API" },
-        { plan: "按量加购", price: "10 / 万字符", detail: "实时变声 0.04 / 分钟" },
-      ],
+      // 2026-08-04：声音能力纳入幻境 STUDIO 五档会员（档位行由 TIERS 派生，改价改 avatarhub-pricing.ts）。
+      pricing: studioTierRows("zh"),
     },
     {
-      id: "faceswap",
-      tag: "幻颜 FaceX",
-      title: "AI 换脸 FaceSwap",
-      desc: "影视级图片 / 视频换脸：inswapper + GFPGAN / CodeFormer 精修 + 光流时序平滑，三路并发批量出片；开播前还能 AI 定妆换发型。实时换脸见上方旗舰服务。",
-      features: ["图片 / 视频换脸", "GFPGAN / CodeFormer 精修", "双人 face_map", "开播前 AI 定妆"],
-      pricing: [
-        { plan: "图片换脸", price: "1 / 张", detail: "包月 38 = 100 张" },
-        { plan: "视频换脸", price: "4 / 分钟", detail: "成片计费" },
-        { plan: "实时换脸部署", price: "980 起", detail: "远程部署调试，见旗舰" },
-        { plan: "数字人形象定制", price: "398 起", detail: "形象买断" },
-      ],
-    },
-    {
+      // 2026-08-04 通译并入智聊：本卡从独立产品「通译 LingoX」改为智聊的翻译专项套餐卡
+      //（id/SKU/深链不变，授权层 lingox-* 照旧履约；主推位 highlight 移交智聊主卡）。
       id: "translate",
-      tag: "通译 LingoX",
-      title: "跨境实时聊天翻译 SCRM",
-      desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。",
-      features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
-      highlight: true,
-      // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
-      pricing: [
-        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
-        { plan: "团队", price: "99 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
-        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
-      ],
+      tag: "智聊 ChatX · 翻译",
+      title: "跨境聊天翻译 · 标准翻译永久免费",
+      desc: "多平台文字 + 语音双向实时翻译——标准翻译所有档位免费含、不限字符（内置引擎，公平使用 200 万字符/日）；术语锁定、翻译记忆、DeepL 认证与图片/语音多模态属专业翻译，按 Token 透明计量。翻译能力内置在智聊 ChatX 客户端，下载即用。",
+      features: ["标准翻译免费 · 不限字符", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
+      // 2026-08-19 翻译免费化：报价行由 chatx-pricing.ts::translateRows 派生。
+      pricing: translateRows("zh"),
     },
     {
       id: "interpret",
       tag: "通传 VoxX",
       title: "克隆音实时同传 + 双语字幕",
-      desc: "用你自己的克隆声做双向语音同传，术语表锁定专有名词、支持抢话打断；OBS 拖一个链接直播间即出实时双语字幕，散场一键导 SRT。会议、直播、连麦全覆盖。",
+      desc: "用你自己的克隆声做双向语音同传，术语表锁定专有名词、支持抢话打断；OBS 拖一个链接直播间即出实时双语字幕，散场一键导 SRT。会议、直播、连麦全覆盖。目前以内测方式交付：预约演示，按场景配置。",
       features: ["克隆音双向同传", "术语锁定 · 抢话打断", "OBS 双语字幕", "一键通话套餐"],
-      // TODO 定价待老板拍板（split_you_price）
       pricing: [
-        { plan: "会议同传", price: "按需报价", detail: "按场次 / 时长计费" },
+        { plan: "内测预约", price: "按需报价", detail: "会议 / 直播场景评估后交付" },
         { plan: "私有化部署", price: "按需报价", detail: "买断 + 年度维护" },
       ],
     },
@@ -492,120 +496,101 @@ const zh: Dict = {
       id: "digital-human",
       tag: "幻影 LiveX",
       title: "高清活体数字人 / 虚拟主播",
-      desc: "克隆形象 + 克隆声 + 口型同步的活体分身，会眨眼、会摆头、有微表情——不是死图对口型。一路直推 WebRTC / OBS，5090 上 25fps 高清、亚秒级首帧。",
+      desc: "克隆形象 + 克隆声 + 口型同步的活体分身，会眨眼、会摆头、有微表情——不是死图对口型。一路直推 WebRTC / OBS，旗舰算力档 25fps 高清、亚秒级首帧（以部署环境为准）。",
       features: ["活体形象 + 克隆声", "口型同步 · 会眨眼摆头", "WebRTC / OBS 直推", "虚拟背景 · 口播成片"],
-      pricing: [
-        { plan: "订阅", price: "198 起 / 月", detail: "数字人口播套餐" },
-        { plan: "形象买断", price: "798", detail: "永久数字人形象" },
-      ],
+      // 2026-08-04：数字人能力纳入幻境 STUDIO 五档（档位行由 TIERS 派生）；旧「198 起 / 形象买断 798」下线防双报价。
+      pricing: studioTierRows("zh"),
     },
     {
       id: "video-dubbing",
       tag: "幻影 LiveX",
       title: "AI 视频翻译配音",
-      desc: "上传视频自动翻译、克隆原声配音、对口型，出海短视频刚需。",
+      desc: "上传视频自动翻译、克隆原声配音、对口型，出海短视频刚需。能力随幻境 STUDIO 会员开通；企业级批量矩阵请咨询旗舰版私有部署。",
       features: ["自动字幕翻译", "原声克隆配音", "口型对齐", "批量处理"],
       pricing: [
-        { plan: "视频翻译配音", price: "6 / 分钟", detail: "成片计费" },
-        { plan: "短视频矩阵", price: "398 / 月", detail: "30 条；100 条 998 / 月" },
+        { plan: "专业版起", price: tierPriceLabel(studioTier("pro"), "zh"), detail: "含直播换脸 · 同传 · 见幻境 STUDIO ", order: "pro" },
+        { plan: "旗舰版", price: tierPriceLabel(studioTier("flagship"), "zh"), detail: "私有部署 · 短视频矩阵定制", order: "flagship" },
       ],
     },
   ],
   pricingSection: {
-    title: "私有定制 · 一切皆可实现",
-    subtitle: "克隆声音、克隆人脸、实时视频通话与直播——只要你想要的功能，我们都能为你私有定制落地，适用于任何场景。",
-    unit: "单位：USD · 支持 USDT 等结算 · 可私有定制",
-    note: "下方为标准能力的挂牌建议价；超出清单的需求一律支持私有定制开发，按场景与规模报价。把你的想法告诉客服，我们把它变成现实。",
-    planCol: "套餐",
-    priceCol: "价格 (USD)",
-    detailCol: "说明",
-    allLabel: "全部",
+    note: `智聊 ChatX：免费开始（标准翻译不限量），按充值计费不订阅——50U 起充、1U = 1,500 Token、首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账；企业年框 / 私有化部署面议。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
   },
   trust: {
-    platformsLabel: "已覆盖全球主流平台",
-    platforms: ["Telegram", "WhatsApp", "LINE", "Messenger", "WeChat", "Instagram", "TikTok", "Facebook", "X", "Zalo", "Signal", "Viber", "KakaoTalk", "Discord"],
-    statsTitle: "用数据说话",
-    stats: [
-      { value: "2000", suffix: "万+", label: "累计处理消息" },
-      { value: "98", suffix: "%", label: "翻译准确满意度" },
-      { value: "300", suffix: "+", label: "服务出海团队" },
-      { value: "24", suffix: "/7", label: "全天候运行" },
+    platformsLabel: "深度对接的沟通平台",
+    platformsLive: [
+      { name: "Telegram", note: "协议级接入 · 消息 / 语音 / 媒体全能力" },
+      { name: "WhatsApp", note: "双向收发 · 语音 · 媒体" },
+      { name: "LINE", note: "双向收发 · 媒体 · 好友欢迎" },
+      { name: "Messenger", note: "网页 + 移动 App 双链路" },
+      { name: "Web", label: "网页客服", note: "官网 / 独立站即嵌即用" },
+      { name: "Facebook", note: "真机获客 · 好友 / 群触达" },
     ],
-    testimonialsTitle: "客户怎么说",
+    platformsComingLabel: "更多平台 · 陆续接入",
+    platformsComing: ["Instagram", "TikTok", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    statsTitle: "用工程事实说话",
+    statsSubtitle: "每个数字都有仓内实测记录与运行台账背书——可举证、可复现，拒绝形容词式吹牛。",
+    stats: [
+      { value: "1100", suffix: "+", label: "自动化回归测试（双引擎实测计数）", sub: "每一次改动都要先过这张回归网" },
+      { value: "50", suffix: "/50", label: "多语种回译评测全数通过（2026-08 周批）", sub: "回译 + 语义双轨，每周六自动重测" },
+      { value: "22", suffix: "/22", label: "断云演习本地模型全量接管", sub: "云端断链客户零感知，恢复自动闭合" },
+      { value: "24", suffix: "/7", label: "生产运行 · 看门狗 5 分钟自愈巡检", sub: "凌晨三点挂了也会自己爬起来" },
+      { value: "30", suffix: "+", label: "语种拟人互译（模型口径）", sub: "俚语与语气像本地人" },
+      { value: "5", suffix: "", label: "大平台接入 · 统一收件箱", sub: "全平台消息一个工作台接住" },
+      { value: "0.939", suffix: "", label: "回译语义均分（满分 1.0）", sub: "机器评审口径，周批持续追踪" },
+      { value: "20", suffix: "+", label: "专项质量评测门禁", sub: "危机安全 / 人设一致性 / 图文一致性…" },
+    ],
+    testimonialsTitle: "为什么可信",
     testimonials: [
       {
-        quote: "多号聚合 + 实时翻译直接把我们的跨境客服效率拉满，回复速度翻了一倍。",
-        name: "Leo",
-        role: "跨境电商 · 运营负责人",
+        quote: "智聊 7×24 生产运行：看门狗每 5 分钟巡检、异常自动拉起，重启带冷却闸门与维护预告，前台坐席无感。",
+        name: "生产部署",
+        role: "来源：deploy/instances 运行记录",
       },
       {
-        quote: "数字人口播视频批量产出，一个人顶一个小团队，内容矩阵铺得飞快。",
-        name: "Mia",
-        role: "MCN 工作室 · 主理人",
+        quote: "断云真流量演习：切断云端大模型后，22/22 条请求由本地模型接管出真话，客户端零感知，恢复后自动闭合。",
+        name: "容灾演习",
+        role: "来源：2026-07 断云演习记录",
       },
       {
-        quote: "私有化部署数据不出本地，合规上完全放心，模型还能按我们业务微调。",
-        name: "陈工",
-        role: "企业客户 · 技术负责人",
+        quote: "翻译走回译 + 语义双轨评测：宽语料 50/50 通过、语义均分 0.939；弱语对按周批数据自动切换更强引擎。",
+        name: "翻译评测",
+        role: "来源：translation_eval 周批（2026-08）",
       },
     ],
-    disclaimer: "以上数据为平台累计估算、客户评价为部分客户授权分享的示例展示，不代表对具体效果的承诺。",
+    disclaimer: "以上为内部工程实测与部署记录口径（2026-08），非对具体商业效果的承诺。",
   },
   plans: {
-    title: "AI 成交聊天 · 套餐",
-    subtitle: "聚合 + AI 拟人翻译 + AI 自动成交 + 人设语音，按账号规模选档，年付更划算。",
-    monthly: "月付",
-    yearly: "年付",
-    save: "省 15%",
+    title: "AI 成交聊天 · 按充值计费",
+    subtitle: `免费开始，充多少用多少，不订阅：标准翻译永久免费；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
+    note: "充值均为一次性、无月费；首笔充值按档加赠最高 +40%，实付 Token 12 个月有效（500U 及以上 24 个月）。",
     popular: "最受欢迎",
-    perMonth: "/ 月",
-    cta: "选择此套餐",
-    items: [
-      {
-        name: "入门",
-        priceMonthly: "58",
-        priceYearly: "50",
-        desc: "小团队 / 个人起步",
-        features: ["3 个聊天账号", "AI 拟人翻译", "1 个平台", "基础声音克隆体验"],
-      },
-      {
-        name: "团队",
-        priceMonthly: "198",
-        priceYearly: "168",
-        desc: "成长型团队首选",
-        features: ["10 个聊天账号", "全平台聚合", "AI 自动成交回复", "人设语音消息", "优先客服"],
-        highlight: true,
-      },
-      {
-        name: "旗舰",
-        priceMonthly: "598",
-        priceYearly: "508",
-        desc: "规模化 / 企业级",
-        features: ["50 个聊天账号", "AI 自动成交 + 人设语音", "人工接管 + 知识库", "数据看板", "可选私有化部署"],
-      },
-    ],
+    cta: "选择此档",
+    fullPricing: "看完整价格 · Token 费率 · 用量计算器 →",
+    // 2026-08-21 充值唯一化：五张卡（免费开始/新人 6U/200U/1000U/企业）由 chatx-pricing.ts 派生。
+    items: chatxPlanCardItems("zh"),
   },
   orderSteps: {
     title: "三步即可开通",
-    subtitle: "流程透明，确认即开通，开通即用。",
+    subtitle: "标准套餐全程自助：在线下单、付款到账、自动开通；定制方案随时找客服。",
     steps: [
-      { title: "选择服务", desc: "在业务与价格中挑选适合的套餐或组合。" },
-      { title: "Telegram 沟通确认", desc: "添加客服，确认需求、用量与最终报价。" },
-      { title: "确认付款开通", desc: "核对收款信息后付款，快速开通账号与权限。" },
+      { title: "选择套餐", desc: "在下单页选择套餐与周期；企业定制或拿不准的，加 Telegram 客服帮你选。" },
+      { title: "在线下单付款", desc: "支持 USDT / 银行卡；订单页实时显示到账进度，链接可收藏随时回查。" },
+      { title: "到账自动开通", desc: "付款确认后系统自动签发授权码 / 凭证，订单页直接复制，即刻激活使用。" },
     ],
   },
   faq: {
     title: "常见问题",
     subtitle: "还有疑问？直接联系 Telegram 客服。",
     items: [
-      { q: "支持哪些付款方式？", a: "下单前通过官方 Telegram 客服确认需求与报价；跨境客户支持 USDT 等结算，大额或企业合作可商定其它方式。" },
+      { q: "支持哪些付款方式？", a: "标准套餐可在官网下单页自助购买，支持 USDT（TRC20）等结算，到账后自动开通；大额或企业定制可通过官方 Telegram 客服商定其它方式。" },
       { q: "支持私有化部署吗？", a: "支持。聊天聚合与自主可控 AI 均可部署到你的服务器，数据本地化、无云端上报。" },
       { q: "你们的 AI 翻译和谷歌翻译有什么不同？", a: "我们用 AI 翻译 + 对话技术，输出地道口语、地方俚语与文化语气，对方看不出你是外国人；不同于市面软件直接套谷歌等 API 的生硬直译。" },
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
-      { q: "声音克隆 / 换脸需要什么素材？", a: "声音克隆仅需几十秒清晰人声样本；换脸需要清晰的人脸图片或视频。请确保你拥有相应授权。" },
+      { q: "声音克隆需要什么素材？", a: "仅需几十秒清晰人声样本即可零样本克隆；请确保你拥有该声音的授权。" },
       { q: "私有大模型和公有云 API 有什么区别？", a: "私有部署的大模型数据完全留在本地、不依赖公有云内容策略，可按你的业务自由微调知识库与输出风格，无云端上报，自主可控。" },
-      { q: "可以按量付费吗？", a: "可以。多数业务同时提供订阅与按量加购，用多少付多少，灵活组合。" },
-      { q: "如何防止收款诈骗？", a: "所有付款前请通过官方 Telegram 客服核对最新收款地址，切勿轻信第三方转发的地址。" },
+      { q: "可以按量付费吗？Token 是什么？", a: "可以，而且只有按量：不订阅、无月费。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；充值 50U 起、1U = 1,500 Token，首笔充值按档加赠最高 +40%，实付 12 个月有效（500U 及以上档 24 个月）。标准翻译不耗 Token、永久免费。" },
+      { q: "如何确认我在和官方沟通、收款地址无误？", a: "官网只在订单页实时展示收款地址；客服只使用官网页面上列出的官方 Telegram 账号。任何『主动私聊你的客服』或第三方转发的地址，请一律回到订单页核对后再操作。" },
     ],
   },
   realtime: {
@@ -633,23 +618,25 @@ const zh: Dict = {
       { tier: "专业 · 换脸+数字人", gpu: "RTX 4090 24G / 5080", use: "1080p 超清换脸 · 高清数字人 · 多场景并行" },
       { tier: "旗舰 · 全能工作站", gpu: "RTX 5090 32G（可双卡）", use: "25fps 高清活体数字人 + 克隆音 + 同传同驻 · 多路直播" },
     ],
-    plansTitle: "服务套餐与价格",
-    plansNote: "一次性部署费 · 全程 USDT 结算 · 含部署调试与技术支持",
+    plansTitle: "服务套餐与报价",
+    // 2026-08-04 定价改版：私有部署定制统一归幻境 STUDIO 旗舰版口径——不再挂一次性固定价，
+    // 全部咨询客服获取报价方案；自助购买走 /order 的幻境 STUDIO 会员套餐（免费换脸起步，39 USD/月起）。
+    plansNote: `私有部署定制 · 咨询客服获取报价方案；标准能力可在下单页自助购买幻境 STUDIO 会员（免费换脸起步，${STUDIO_PAID_FROM} USD/月起）`,
     availability: "本周可接 3 个部署排期 · 预约制（先约先得）",
     plans: [
       {
         name: "基础部署",
         tag: "单能力",
-        price: "980 USD 起",
-        unit: "一次性 · 含部署调试",
+        price: "咨询报价",
+        unit: "按需定制 · 含部署调试",
         specs: ["实时换脸 或 换声 任选其一", "远程部署 + 基础调试", "上手培训", "7 天技术支持"],
         cta: "Telegram 咨询",
       },
       {
         name: "创作者全能",
         tag: "推荐",
-        price: "5580 USD",
-        unit: "一次性 · 含部署调试",
+        price: "咨询报价",
+        unit: "按需定制 · 含部署调试",
         specs: ["实时换脸 + 换声 + 数字人", "多场景深度调试", "上手培训 + 文档", "30 天技术支持"],
         cta: "Telegram 咨询",
         highlight: true,
@@ -657,18 +644,17 @@ const zh: Dict = {
       {
         name: "全家桶",
         tag: "全能力",
-        // 2026-07-18 竞品×2 决议延伸：3980→7980，修复与 creator 5580 的倒挂
-        price: "7980 USD",
-        unit: "一次性 · 含部署调试",
+        price: "咨询报价",
+        unit: "按需定制 · 含部署调试",
         specs: ["换脸 + 换声 + 数字人", "自主可控私有大模型", "全场景定制调试", "30 天支持 + 1 月运维"],
         cta: "Telegram 咨询",
       },
     ],
     extrasTitle: "更多服务",
     extras: [
-      "场景深度定制开发 · 报价制 from 1600",
-      "上门 / 驻场部署 · from 3000 + 差旅",
-      "运维订阅 · 198 / 月 或 1998 / 年",
+      "场景深度定制开发 · 咨询报价",
+      "上门 / 驻场部署 · 咨询报价（含差旅）",
+      "运维托管 · 198 / 月 或 1998 / 年",
       "按次远程协助 · 160 / 小时",
     ],
     capacityNote: "硬件归你所有、数据私有不出网；我们提供从选型到部署、定制与运维的全流程技术服务，适用于任何场景。",
@@ -685,12 +671,7 @@ const zh: Dict = {
     uploadTarget: "目标图片",
     uploadTargetHint: "你的脸会被换到这张图里",
     pickTemplate: "选择一个模板",
-    templates: [
-      { id: "business", name: "职业商务", file: "/templates/tpl-business.png" },
-      { id: "hero", name: "超级英雄", file: "/templates/tpl-hero.png" },
-      { id: "astronaut", name: "宇航员", file: "/templates/tpl-astronaut.png" },
-      { id: "fashion", name: "时尚大片", file: "/templates/tpl-fashion.png" },
-    ],
+    templates: [],
     consent: "我确认对上传的照片拥有合法肖像授权，且不用于任何违法用途。",
     button: "开始换脸",
     processing: "AI 换脸中…通常需 30~60 秒，请稍候",
@@ -753,16 +734,6 @@ const zh: Dict = {
     theySee: "对方看到",
     faceVoice: "换脸 + 换声",
     voiceCloning: "声音克隆中",
-  },
-  personas: {
-    title: "你是谁？看这里",
-    subtitle: "不同场景的玩法不一样，先找到属于你的那一个。",
-    items: [
-      { id: "streamer", title: "主播 / 直播", desc: "直播、视频通话实时换脸换声，部署到你自己的设备，连麦即开播。", cta: "看实时换脸", href: "#realtime" },
-      { id: "ecom", title: "出海电商 / 客服", desc: "多平台多号聚合 + AI 拟人翻译 + AI 自动成交，转化客户不漏单。", cta: "看 AI 成交聊天", href: "#autochat" },
-      { id: "creator", title: "内容创作者 / MCN", desc: "数字人口播 + 声音克隆 + 视频翻译配音，批量起号。", cta: "看数字人", href: "#showcase" },
-      { id: "enterprise", title: "企业 / 开发者", desc: "大模型私有部署，数据不出本地，可微调可定制、自主可控。", cta: "看私有部署", href: "#showcase" },
-    ],
   },
   showcaseSection: {
     title: "看得见的能力",
@@ -894,8 +865,8 @@ const zh: Dict = {
         tagline: "你的设备，我们负责落地",
         you: "自购硬件 · 提供场地",
         we: "选型建议 + 部署 + 定制 + 培训 + 支持",
-        price: "一次性 980 USD 起",
-        priceNote: "含三档部署套餐 · 可加运维 198 / 月",
+        price: "咨询报价 · 按需定制",
+        priceNote: "方案一对一评估 · 可加运维 198 / 月",
         points: ["数据 100% 私有、不出网", "按你的场景深度定制", "交付文档 + 上手培训", "7~30 天技术支持"],
         cta: "Telegram 咨询",
       },
@@ -925,7 +896,7 @@ const zh: Dict = {
         cta: "Telegram 洽谈合作",
       },
     ],
-    serviceTiersLabel: "三档部署套餐（一次性）",
+    serviceTiersLabel: "三档部署套餐（咨询报价）",
     extrasLabel: "更多可选服务",
     invest: {
       roiTitle: "示例测算 · 标准档 50,000 USD（满载估算）",
@@ -963,13 +934,14 @@ const zh: Dict = {
     resultNetLabel: "净增收益 / 月",
     resultRoiLabel: "投入产出比",
     resultYearLabel: "年化净增（估）",
-    planLabel: "推荐套餐",
+    planLabel: "AI 用量成本",
     perMonth: "/ 月",
     assumptionsTitle: "测算假设（可与客服按你的实际调整）",
     assumptions: [
       "AI 自动成交可优化约 60% 重复性人力成本",
       "拟人翻译 + 7×24 不漏客，转化率平均相对提升约 35%",
       "按每月 30 天、你输入的客单价与转化率估算",
+      "AI 用量按公示费率折算：每条咨询约 8 条 AI 回复（10 Token/条），充值基准 1U = 1,500 Token",
     ],
     disclaimer: "以上为基于行业经验的估算模型，实际效果因行业、流量与运营而异，不构成任何收益承诺。",
     cta: "按我的数据要方案",
@@ -1005,7 +977,7 @@ const zh: Dict = {
     namePh: "怎么称呼你",
     contactPh: "Telegram / WhatsApp / 邮箱 / 微信",
     messagePh: "简单说说你的场景、平台或目标……",
-    interests: ["实时换脸换声", "AI 自动成交聊天", "私有部署", "整体托管（我们配硬件机房）", "投资合作分红", "其他"],
+    interests: ["AI 自动成交聊天", "聊天 / 同传翻译", "私有部署", "实时换脸换声（定制交付）", "整体托管（我们配硬件机房）", "投资合作分红", "其他"],
     submit: "提交，等客服联系我",
     submitting: "提交中…",
     successTitle: "已收到，马上联系你 ✅",
@@ -1051,34 +1023,45 @@ const en: Dict = {
     cta: "Get Started",
   },
   hero: {
-    badge: "BOUNDLESS · AI Auto-Closing Chat · human-like multi-language · private & controllable",
-    title: "Rivals still add leads by hand",
-    titleAccent: "Your AI already closes 24/7",
-    titleLines: ["Rivals still add leads by hand", "your AI already", "closes deals 24/7"],
-    rotating: ["AI closes deals 24/7", "Human-like translation, instant", "1 person beats a 10-person team", "Auto-swap accounts, 0 downtime", "Real-time face & voice swap", "Private deploy, off the net"],
+    badge: "BOUNDLESS · Cross-border chat AI · One inbox · Private deployment",
+    title: "Chat with customers worldwide",
+    titleAccent: "as naturally as with a neighbor",
+    titleLines: ["Chat with customers worldwide", "as naturally as", "with a neighbor"],
+    rotating: ["Human-like translation, 30+ languages", "AI follows up 24/7 in your persona", "Every platform, one inbox", "One-click human takeover", "Private deployment, data stays home"],
     subtitle:
-      "Adding leads, translating, following up, chasing orders — hand the grind to AI running 24/7: multi-account matrices add leads tirelessly, human-like translation hides your origin, AI actively pushes for the close, and humans take over anytime. Plus live-stream / video-call grade face & voice swap. One person does what a 10-person team does — privately deployed, off the net, verifiably compliant.",
-    trustline: "Trusted by cross-border teams · private, off the net · verifiably compliant",
-    ctaPrimary: "Free consult · get a closing plan",
+      "Bring WhatsApp / Telegram / LINE / Messenger into one inbox. Customers write in any language — AI translates like a native, answers and follows up in your persona, and you take over with one click when it matters. Deploy privately; data never leaves your servers.",
+    trustline: "24/7 self-healing production · 1100+ automated tests · Data stays on-prem",
+    // hero_cta A/B closed 2026-08-07: demo-hook copy won (see zh note above).
+    ctaPrimary: "Watch AI close a deal live",
     ctaSecondary: "View plans & pricing",
     stats: [
-      { value: "24H", label: "AI closes around the clock" },
-      { value: "10×", label: "1 person, 10-person output" },
-      { value: "30+", label: "Human-like languages" },
-      { value: "300+", label: "Cross-border teams onboard" },
+      { value: "24H", label: "Watchdog-healed, always on" },
+      { value: "30+", label: "Languages, human-like" },
+      { value: "5", label: "Platforms, one inbox" },
+      { value: "1100+", label: "Automated regression tests" },
     ],
   },
   solutionsSection: {
     title: "Three Families · Full Product Matrix",
-    subtitle: "Growth (ReachX lead-gen · ChatX closing), Studio (FaceX · VoiceX · LiveX digital twins), Lingo (LingoX chat translation · VoxX voice interpreting) — seven lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
+    subtitle: "Growth (ChatX closing · ReachX lead-gen), Lingo (VoxX voice interpreting), Studio (VoiceX voice · LiveX digital twins) — three product families on one BOUNDLESS core, privately deployed with data on-prem, used alone or composed on demand.",
   },
   solutions: [
     {
+      id: "chatx",
+      tag: "ChatX",
+      title: "AI Closing Chat · Unified Inbox",
+      desc: "Every platform's messages flow into one workspace: AI answers, follows up and closes in your persona, standard translation is free forever, and you take over with one click at key moments; AI usage meters at transparent token rates. Private deployment supported.",
+      features: ["Unified multi-platform inbox", "Persona-driven AI follow-up", "Standard translation free forever", "One-click human takeover"],
+      highlight: true,
+      // 2026-08-19 token plans: rows derived from chatx-pricing.ts (Free/Personal/Flex/Team/Flagship).
+      pricing: chatxPlanRows("en"),
+    },
+    {
       id: "reach",
       tag: "ReachX",
-      title: "Real-device Lead-gen · ReachX",
-      desc: "Multi-device auto add / greet / group-extract for 24/7 automated lead-gen into your funnel; coordinator + worker cluster, anti-ban risk control and a VPN pool across Facebook / Messenger / TikTok / Instagram and more.",
-      features: ["Multi-device parallel adds", "Bulk group-member extract", "Auto greet & funnel-in", "Anti-ban control + VPN pool"],
+      title: "Real-device Lead-gen · ReachX (Invite-only)",
+      desc: "A real-device cluster for lead generation: multi-account management, group-member extraction and greeting outreach. It sits close to platform-compliance boundaries, so it is delivered privately after a per-team review — no public self-serve activation.",
+      features: ["Real-device multi-account ops", "Bulk group-member extract", "Private delivery", "Invite-only review"],
       pricing: [
         { plan: "Private deployment", price: "Quote by scale", detail: "Real-device acquisition cluster, priced by device count & scale" },
       ],
@@ -1089,49 +1072,28 @@ const en: Dict = {
       title: "Voice Cloning",
       desc: "Zero-shot clone from seconds of audio, with three engines auto-picked (Fish real-time / Qwen3 ≈97ms first-packet, 10 languages / VoxCPM 48kHz commercial), multilingual TTS, real-time voice change and emotion control.",
       features: ["Zero-shot cloning", "Tri-engine auto-pick", "10+ languages", "Real-time VC · emotion"],
-      pricing: [
-        { plan: "Starter", price: "18 / mo", detail: "1 voice, 10K chars TTS" },
-        { plan: "Standard", price: "78 / mo", detail: "5 voices, 100K chars, multilingual" },
-        { plan: "Pro", price: "198 / mo", detail: "20 voices, 500K chars, voice API" },
-        { plan: "Add-on", price: "10 / 10K chars", detail: "Real-time 0.04 / min" },
-      ],
+      // 2026-08-04: voice capabilities fold into STUDIO five-tier membership (rows derived from TIERS).
+      pricing: studioTierRows("en"),
     },
     {
-      id: "faceswap",
-      tag: "FaceX",
-      title: "AI Face Swap",
-      desc: "Cinematic image / video swaps: inswapper + GFPGAN / CodeFormer refinement + optical-flow smoothing, batched 3-way; plus pre-broadcast AI hairstyle & makeup. Real-time swap is the flagship above.",
-      features: ["Image / video swap", "GFPGAN / CodeFormer refine", "Dual-person face_map", "Pre-broadcast makeup"],
-      pricing: [
-        { plan: "Image swap", price: "1 / image", detail: "Monthly 38 = 100 images" },
-        { plan: "Video swap", price: "4 / min", detail: "Per output minute" },
-        { plan: "Live swap deploy", price: "from 980", detail: "Remote deploy, see flagship" },
-        { plan: "Custom avatar", price: "from 398", detail: "One-time buyout" },
-      ],
-    },
-    {
+      // 2026-08-04: LingoX merged into ChatX — this card is now ChatX's translate-plan card
+      // (id / SKUs / deep links unchanged; lingox-* licensing keeps fulfilling as before).
       id: "translate",
-      tag: "LingoX",
-      title: "Cross-border Real-time Chat Translation SCRM",
-      desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE.",
-      features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
-      highlight: true,
-      // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
-      pricing: [
-        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory" },
-        { plan: "Team", price: "99 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
-        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
-      ],
+      tag: "ChatX · Translate",
+      title: "Cross-border Chat Translation · Standard Free Forever",
+      desc: "Two-way real-time text + voice translation across platforms — standard translation is free in every plan with unlimited characters (built-in engine, fair use 2M chars/day). Term-lock glossaries, translation memory, certified DeepL and image/voice multimodal are pro features metered in tokens. Ships inside the ChatX client; download and go.",
+      features: ["Standard translation free · unlimited", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
+      // 2026-08-19 free-translation repricing: rows derived from chatx-pricing.ts::translateRows.
+      pricing: translateRows("en"),
     },
     {
       id: "interpret",
       tag: "VoxX",
       title: "Cloned-voice Interpreting + Bilingual Subtitles",
-      desc: "Two-way voice interpreting in your own cloned voice, a glossary that locks proper nouns, barge-in interruption; drop one URL into OBS for live bilingual subtitles, export SRT afterwards. Meetings, streams and co-calls covered.",
+      desc: "Two-way voice interpreting in your own cloned voice, a glossary that locks proper nouns, barge-in interruption; drop one URL into OBS for live bilingual subtitles, export SRT afterwards. Meetings, streams and co-calls covered. Currently delivered as a private beta: book a demo and we configure it per scenario.",
       features: ["Cloned-voice interpreting", "Term lock · barge-in", "OBS bilingual subtitles", "One-tap call package"],
-      // TODO pricing pending owner decision (split_you_price)
       pricing: [
-        { plan: "Meeting interpret", price: "Quote", detail: "Per session / duration" },
+        { plan: "Beta booking", price: "Quote", detail: "Delivered after a meeting / live-stream scenario review" },
         { plan: "Self-hosted", price: "Quote", detail: "Buyout + annual support" },
       ],
     },
@@ -1152,120 +1114,101 @@ const en: Dict = {
       id: "digital-human",
       tag: "LiveX",
       title: "HD Living Digital Human / Virtual Streamer",
-      desc: "A living twin — cloned face + cloned voice + lip-sync that blinks, turns its head and emotes, not a still photo. Streamed straight to WebRTC / OBS at 25fps HD with a sub-second first frame on a 5090.",
+      desc: "A living twin — cloned face + cloned voice + lip-sync that blinks, turns its head and emotes, not a still photo. Streamed straight to WebRTC / OBS at 25fps HD with a sub-second first frame on flagship-tier hardware (subject to your deployment environment).",
       features: ["Living face + cloned voice", "Lip-sync · blinks & moves", "WebRTC / OBS stream", "Virtual bg · talking-heads"],
-      pricing: [
-        { plan: "Subscription", price: "from 198 / mo", detail: "Talking-head package" },
-        { plan: "Avatar buyout", price: "798", detail: "Permanent avatar" },
-      ],
+      // 2026-08-04: digital-human capabilities fold into STUDIO five-tier membership (rows derived from TIERS).
+      pricing: studioTierRows("en"),
     },
     {
       id: "video-dubbing",
       tag: "LiveX",
       title: "AI Video Translation & Dubbing",
-      desc: "Auto-translate videos, dub with cloned original voice, and align lip movements — built for global short video.",
+      desc: "Auto-translate videos, dub with cloned original voice, and align lip movements — built for global short video. Capabilities unlock with STUDIO membership; enterprise video-matrix is Flagship private deploy.",
       features: ["Auto subtitle translation", "Cloned voice dubbing", "Lip alignment", "Batch processing"],
       pricing: [
-        { plan: "Translate & dub", price: "6 / min", detail: "Per output minute" },
-        { plan: "Video matrix", price: "398 / mo", detail: "30 clips; 100 clips 998 / mo" },
+        { plan: "Pro+", price: tierPriceLabel(studioTier("pro"), "en"), detail: "Live swap · interpreting · see STUDIO", order: "pro" },
+        { plan: "Flagship", price: tierPriceLabel(studioTier("flagship"), "en"), detail: "Private deploy · short-video matrix", order: "flagship" },
       ],
     },
   ],
   pricingSection: {
-    title: "Private & Custom · Anything is possible",
-    subtitle: "Clone voices, clone faces, real-time video calls and live streams — whatever feature you imagine, we build it for you, privately, for any scenario.",
-    unit: "Unit: USD · USDT & more accepted · custom available",
-    note: "Below are suggested prices for standard capabilities; anything beyond the list is delivered as private custom development, quoted by scenario and scale. Tell us your idea — we make it real.",
-    planCol: "Plan",
-    priceCol: "Price (USD)",
-    detailCol: "Details",
-    allLabel: "All",
+    note: `ChatX: start free (unlimited standard translation), pay by top-up — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate; enterprise frames / private deployment by quote. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
   },
   trust: {
-    platformsLabel: "Global platforms covered",
-    platforms: ["Telegram", "WhatsApp", "LINE", "Messenger", "WeChat", "Instagram", "TikTok", "Facebook", "X", "Zalo", "Signal", "Viber", "KakaoTalk", "Discord"],
-    statsTitle: "Numbers that speak",
-    stats: [
-      { value: "20", suffix: "M+", label: "Messages processed" },
-      { value: "98", suffix: "%", label: "Translation satisfaction" },
-      { value: "300", suffix: "+", label: "Global teams served" },
-      { value: "24", suffix: "/7", label: "Always-on uptime" },
+    platformsLabel: "Deeply integrated platforms",
+    platformsLive: [
+      { name: "Telegram", note: "Protocol-level · text / voice / media" },
+      { name: "WhatsApp", note: "Two-way messaging · voice · media" },
+      { name: "LINE", note: "Two-way messaging · media · welcome flows" },
+      { name: "Messenger", note: "Web + mobile app, dual link" },
+      { name: "Web", label: "Web Chat", note: "Embed on any site in minutes" },
+      { name: "Facebook", note: "Real-device lead-gen · friends / groups" },
     ],
-    testimonialsTitle: "What clients say",
+    platformsComingLabel: "More platforms · coming",
+    platformsComing: ["Instagram", "TikTok", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    statsTitle: "Engineering facts, not adjectives",
+    statsSubtitle: "Every number is backed by in-repo measurements and production records — verifiable and reproducible.",
+    stats: [
+      { value: "1100", suffix: "+", label: "Automated regression tests (both engines, verified)", sub: "Every change passes this net first" },
+      { value: "50", suffix: "/50", label: "Back-translation eval, all passed (Aug 2026 weekly)", sub: "Dual-track: back-translation + semantics, re-run weekly" },
+      { value: "22", suffix: "/22", label: "Cloud-outage drill, local model took over", sub: "Customers noticed nothing; circuit self-closed" },
+      { value: "24", suffix: "/7", label: "In production · watchdog probes every 5 min", sub: "Crashes at 3am get back up on their own" },
+      { value: "30", suffix: "+", label: "Languages, human-like translation (model scope)", sub: "Slang and tone that read like a local" },
+      { value: "5", suffix: "", label: "Platforms into one inbox", sub: "Every channel lands in one workspace" },
+      { value: "0.939", suffix: "", label: "Mean semantic score (out of 1.0)", sub: "Machine-judged, tracked weekly" },
+      { value: "20", suffix: "+", label: "Dedicated quality-eval gates", sub: "Crisis safety / persona / media consistency…" },
+    ],
+    testimonialsTitle: "Why trust us",
     testimonials: [
       {
-        quote: "Multi-account inbox plus live translation maxed out our cross-border support — replies got twice as fast.",
-        name: "Leo",
-        role: "Cross-border e-commerce · Ops Lead",
+        quote: "ChatX runs in production 24/7: a watchdog probes every 5 minutes and pulls crashed instances back up, with restart cooldown gates and maintenance broadcasts — agents never notice.",
+        name: "Production ops",
+        role: "Source: deploy/instances records",
       },
       {
-        quote: "Batch digital-human videos let one person do the work of a whole team. Our content matrix scaled fast.",
-        name: "Mia",
-        role: "MCN Studio · Founder",
+        quote: "Live-traffic cloud-outage drill: with the cloud LLM cut off, 22/22 requests got real answers from the local model — customers noticed nothing, and the circuit closed itself on recovery.",
+        name: "Failover drill",
+        role: "Source: Jul 2026 outage drill records",
       },
       {
-        quote: "Private deployment keeps data local — fully compliant, and the model fine-tunes to our business.",
-        name: "Mr. Chen",
-        role: "Enterprise client · Tech Lead",
+        quote: "Translation ships behind dual-track back-translation + semantic evals: 50/50 passed on the wide corpus, 0.939 mean semantic score; weak language pairs switch to stronger engines on weekly batch data.",
+        name: "Translation evals",
+        role: "Source: translation_eval weekly batch (Aug 2026)",
       },
     ],
-    disclaimer: "Figures are cumulative platform estimates; testimonials are illustrative examples shared with client consent and are not a guarantee of specific results.",
+    disclaimer: "Figures above are internal engineering measurements and deployment records (Aug 2026), not a promise of specific business results.",
   },
   plans: {
-    title: "AI Auto-Closing Chat · Plans",
-    subtitle: "Aggregation + human-like AI translation + AI auto-closing + persona voice. Pick by account scale; save more annually.",
-    monthly: "Monthly",
-    yearly: "Yearly",
-    save: "Save 15%",
+    title: "AI Auto-Closing Chat · Pay by Top-up",
+    subtitle: `Start free and top up as you go — no subscription. Standard translation free forever; AI replies, pro translation and cloned voice meter at transparent token rates, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
+    note: "All top-ups are one-time with no monthly fee; the first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+).",
     popular: "Most popular",
-    perMonth: "/ mo",
-    cta: "Choose plan",
-    items: [
-      {
-        name: "Entry",
-        priceMonthly: "58",
-        priceYearly: "50",
-        desc: "Small teams / individuals",
-        features: ["3 chat accounts", "Human-like AI translation", "1 platform", "Basic voice cloning trial"],
-      },
-      {
-        name: "Team",
-        priceMonthly: "198",
-        priceYearly: "168",
-        desc: "Best for growing teams",
-        features: ["10 chat accounts", "All platforms unified", "AI auto-closing replies", "Persona voice messages", "Priority support"],
-        highlight: true,
-      },
-      {
-        name: "Flagship",
-        priceMonthly: "598",
-        priceYearly: "508",
-        desc: "Scale / enterprise",
-        features: ["50 chat accounts", "AI auto-closing + persona voice", "Human handoff + knowledge base", "Analytics dashboard", "Optional private deployment"],
-      },
-    ],
+    cta: "Choose this",
+    fullPricing: "Full pricing · token rates · calculator →",
+    // 2026-08-21 top-up-only: five cards (free start / 6U / 200U / 1000U / enterprise) derived from chatx-pricing.ts.
+    items: chatxPlanCardItems("en"),
   },
   orderSteps: {
     title: "Get started in 3 steps",
-    subtitle: "Transparent process, confirm and go live instantly.",
+    subtitle: "Standard plans are fully self-serve: order online, pay, and activation is automatic. Custom deals — just ping support.",
     steps: [
-      { title: "Pick a service", desc: "Choose the plan or combination that fits in solutions & pricing." },
-      { title: "Confirm on Telegram", desc: "Add support to confirm needs, usage and the final quote." },
-      { title: "Pay & go live", desc: "Verify payment details, pay, and get your account provisioned fast." },
+      { title: "Pick a plan", desc: "Choose your plan and billing period on the order page; for custom needs, Telegram support helps you decide." },
+      { title: "Order & pay online", desc: "USDT / bank card accepted; the order page tracks payment progress live — bookmark it to check anytime." },
+      { title: "Auto-activation", desc: "Once payment confirms, your license key / voucher is issued automatically — copy it right on the order page and activate." },
     ],
   },
   faq: {
     title: "FAQ",
     subtitle: "Still have questions? Reach our Telegram support directly.",
     items: [
-      { q: "What payment methods do you accept?", a: "Confirm your needs and quote with our official Telegram support before ordering; cross-border clients can settle in USDT and others, and large or enterprise deals can arrange alternative methods." },
+      { q: "What payment methods do you accept?", a: "Standard plans are self-serve on the order page — pay in USDT (TRC20) and more, with automatic activation once payment lands. Large or enterprise deals can arrange alternative methods via our official Telegram support." },
       { q: "Do you support private deployment?", a: "Yes. Chat aggregation and self-controlled AI can both deploy to your own servers — data stays local with no cloud reporting." },
       { q: "How is your AI translation different from Google Translate?", a: "We use AI translation + chat tech that outputs native slang, local idioms and cultural tone — they can't tell you're foreign — unlike tools that wire up Google-style APIs and read stiff and literal." },
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
-      { q: "What input do voice cloning / face swap need?", a: "Voice cloning needs a short clear voice sample; face swap needs clear face images or video. Ensure you hold the rights." },
+      { q: "What does voice cloning need from me?", a: "Just a few dozen seconds of clear voice audio for zero-shot cloning; make sure you hold the rights to that voice." },
       { q: "How is a private LLM different from a public cloud API?", a: "A privately deployed LLM keeps data fully local, free of public-cloud dependencies — fine-tune its knowledge base and output style to your business, with no cloud reporting and full self-control." },
-      { q: "Can I pay per usage?", a: "Yes. Most services offer both subscriptions and usage-based add-ons — pay for what you use, mix freely." },
-      { q: "How do I avoid payment scams?", a: "Always verify the latest receiving address via our official Telegram support before paying. Never trust addresses forwarded by third parties." },
+      { q: "Can I pay per usage? What are tokens?", a: "Yes — and usage is the only thing you pay for: no subscription, no monthly fee. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Top up from 50U at 1U = 1,500 tokens; your first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+). Standard translation costs no tokens — it's free forever." },
+      { q: "How do I know I'm talking to the official team and paying the right address?", a: "The payment address is shown live on the order page only, and our support uses only the official Telegram accounts listed on this site. If a \"support agent\" messages you first, or a third party forwards you an address, always go back to the order page and verify before acting." },
     ],
   },
   realtime: {
@@ -1293,23 +1236,25 @@ const en: Dict = {
       { tier: "Pro · swap+human", gpu: "RTX 4090 24G / 5080", use: "1080p ultra swap · HD digital human · parallel scenarios" },
       { tier: "Flagship · all-in-one", gpu: "RTX 5090 32G (dual-ready)", use: "25fps HD living human + cloned voice + interpreting · multi-stream" },
     ],
-    plansTitle: "Service packages & pricing",
-    plansNote: "One-time deployment fee · settled in USDT · incl. setup, tuning & support",
+    plansTitle: "Service packages & quotes",
+    // 2026-08-04 repricing: private deployment is quoted by sales (STUDIO Flagship stance) —
+    // no fixed one-time prices; self-serve buyers go to /order STUDIO plans (free face swap, paid from 39 USD/mo).
+    plansNote: `Private deployment is custom-quoted by sales; standard capability is self-serve via STUDIO plans (free face swap to start, from ${STUDIO_PAID_FROM} USD/mo)`,
     availability: "3 deployment slots open this week · by reservation",
     plans: [
       {
         name: "Basic deploy",
         tag: "Single",
-        price: "from 980 USD",
-        unit: "one-time · incl. setup",
+        price: "Contact for quote",
+        unit: "custom-scoped · incl. setup",
         specs: ["Face swap OR voice, your pick", "Remote deploy + basic tuning", "Hands-on training", "7-day support"],
         cta: "Ask on Telegram",
       },
       {
         name: "Creator all-in",
         tag: "Popular",
-        price: "5580 USD",
-        unit: "one-time · incl. setup",
+        price: "Contact for quote",
+        unit: "custom-scoped · incl. setup",
         specs: ["Face swap + voice + digital human", "Multi-scenario deep tuning", "Training + docs", "30-day support"],
         cta: "Ask on Telegram",
         highlight: true,
@@ -1317,18 +1262,17 @@ const en: Dict = {
       {
         name: "Everything",
         tag: "Full",
-        // 2026-07-18 竞品×2 决议延伸：3980→7980，修复与 creator 5580 的倒挂
-        price: "7980 USD",
-        unit: "one-time · incl. setup",
+        price: "Contact for quote",
+        unit: "custom-scoped · incl. setup",
         specs: ["Face + voice + digital human", "Self-controlled private LLM", "Full scenario tuning", "30-day support + 1mo ops"],
         cta: "Ask on Telegram",
       },
     ],
     extrasTitle: "More services",
     extras: [
-      "Custom development · quote from 1600",
-      "On-site deployment · from 3000 + travel",
-      "Maintenance subscription · 198/mo or 1998/yr",
+      "Custom development · quoted per scope",
+      "On-site deployment · quoted (incl. travel)",
+      "Managed maintenance · 198/mo or 1998/yr",
       "Per-session remote help · 160/hour",
     ],
     capacityNote: "You own the hardware and your data stays private, off the public net; we provide end-to-end service from selection to deployment, customization and ops — for any scenario.",
@@ -1345,12 +1289,7 @@ const en: Dict = {
     uploadTarget: "Target Image",
     uploadTargetHint: "Your face will be swapped into this image",
     pickTemplate: "Pick a template",
-    templates: [
-      { id: "business", name: "Business", file: "/templates/tpl-business.png" },
-      { id: "hero", name: "Superhero", file: "/templates/tpl-hero.png" },
-      { id: "astronaut", name: "Astronaut", file: "/templates/tpl-astronaut.png" },
-      { id: "fashion", name: "Fashion", file: "/templates/tpl-fashion.png" },
-    ],
+    templates: [],
     consent: "I confirm I have the legal rights to the uploaded photo and will not use it for any unlawful purpose.",
     button: "Swap Face",
     processing: "Swapping… usually 30–60s, please wait",
@@ -1413,16 +1352,6 @@ const en: Dict = {
     theySee: "They see",
     faceVoice: "Face + Voice",
     voiceCloning: "Cloning voice",
-  },
-  personas: {
-    title: "Who are you? Start here",
-    subtitle: "Every use case plays differently — find the one that fits you.",
-    items: [
-      { id: "streamer", title: "Streamer / Live", desc: "Real-time face & voice swap for live streams & video calls — deployed on your own device, go live in minutes.", cta: "See live swap", href: "#realtime" },
-      { id: "ecom", title: "Cross-border / Support", desc: "Multi-account inbox + human-like AI translation + AI auto-closing that converts customers.", cta: "See AI closing", href: "#autochat" },
-      { id: "creator", title: "Creator / MCN", desc: "Digital humans + voice cloning + video dubbing to scale content in batches.", cta: "See digital human", href: "#showcase" },
-      { id: "enterprise", title: "Enterprise / Dev", desc: "LLMs deployed privately — data stays local, fine-tunable, customizable and self-controlled.", cta: "See private deploy", href: "#showcase" },
-    ],
   },
   showcaseSection: {
     title: "Capabilities you can see",
@@ -1554,8 +1483,8 @@ const en: Dict = {
         tagline: "Your hardware, we make it work",
         you: "Buy hardware · provide space",
         we: "Spec advice + deploy + customize + train + support",
-        price: "one-time from 980 USD",
-        priceNote: "incl. 3 deploy tiers · ops add-on 198 / mo",
+        price: "Contact for quote",
+        priceNote: "scoped one-on-one · ops add-on 198 / mo",
         points: ["100% private, off the net", "Deeply tailored to your scenario", "Docs + hands-on training", "7–30 days tech support"],
         cta: "Ask on Telegram",
       },
@@ -1585,7 +1514,7 @@ const en: Dict = {
         cta: "Discuss on Telegram",
       },
     ],
-    serviceTiersLabel: "Three deploy packages (one-time)",
+    serviceTiersLabel: "Three deploy packages (quoted)",
     extrasLabel: "More optional services",
     invest: {
       roiTitle: "Example · standard 50,000 USD (full-load estimate)",
@@ -1623,13 +1552,14 @@ const en: Dict = {
     resultNetLabel: "Net gain / mo",
     resultRoiLabel: "Return on spend",
     resultYearLabel: "Annualized net (est.)",
-    planLabel: "Suggested plan",
+    planLabel: "AI usage cost",
     perMonth: "/ mo",
     assumptionsTitle: "Assumptions (tune with support to your reality)",
     assumptions: [
       "AI auto-closing optimizes ~60% of repetitive labor cost",
       "Human-like translation + 24/7 lifts conversion by ~35% relative",
       "Estimated over 30 days using your AOV and conversion",
+      "AI usage at published rates: ~8 AI replies per inquiry (10 tokens each), top-ups at 1U = 1,500 tokens",
     ],
     disclaimer: "An estimate model based on industry experience; actual results vary by industry, traffic and operations — not a guarantee of returns.",
     cta: "Get a plan with my numbers",
@@ -1665,7 +1595,7 @@ const en: Dict = {
     namePh: "What should we call you",
     contactPh: "Telegram / WhatsApp / email",
     messagePh: "Briefly describe your scenario, platform or goal…",
-    interests: ["Real-time face & voice swap", "AI auto-closing chat", "Private deployment", "Turnkey (we supply hardware & DC)", "Investment / revenue share", "Other"],
+    interests: ["AI auto-closing chat", "Chat / interpreting translation", "Private deployment", "Real-time face & voice swap (custom delivery)", "Turnkey (we supply hardware & DC)", "Investment / revenue share", "Other"],
     submit: "Submit — have support reach me",
     submitting: "Submitting…",
     successTitle: "Got it — reaching out shortly ✅",

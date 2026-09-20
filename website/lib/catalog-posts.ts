@@ -83,11 +83,15 @@ export function buildOverviewPost(lang: "zh" | "en" = "zh"): { caption: string; 
       ? `✨ <b>无界科技 BOUNDLESS · 一站式 AI 技术服务</b>\n\n` +
         `从容貌、声音到语言、对话与私有部署，同一套技术栈按需组合。\n\n` +
         `<b>📦 核心能力</b>\n${index}\n\n` +
+        `🎬 <b>三分钟品牌片</b>：没有摄影师、配音员和翻译——连主持人也是引擎做的\n` +
+        `${SITE_URL}/film\n\n` +
         `全程 USDT 结算 · 数据私有不出网 · 可私有定制\n\n` +
         `👇 点下方打开官网 / 小程序 / 联系客服`
       : `✨ <b>BOUNDLESS · One-stop AI technical services</b>\n\n` +
         `From face, voice to language, chat & private deployment — one stack, mix as you need.\n\n` +
         `<b>📦 Core capabilities</b>\n${index}\n\n` +
+        `🎬 <b>The 3-minute film</b>: no camera crew, no voice actor, no translator\n` +
+        `${SITE_URL}/en/film\n\n` +
         `USDT only · data stays private · fully customizable\n\n` +
         `👇 Open the site / Mini App / contact us below`;
   return {

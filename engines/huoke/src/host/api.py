@@ -230,6 +230,13 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         logger.debug("通知配置加载跳过: %s", e)
 
+    # TK-3：智聊回传轮询器（reply_engine=local 时线程只睡不动：零 HTTP、零任务）
+    try:
+        from src.app_automation.tiktok_chengjie_bridge import start_handback_poller
+        start_handback_poller()
+    except Exception as e:
+        logger.debug("[tiktok-chengjie] handback 轮询器未启动: %s", e)
+
     try:
         start_job_scheduler()
         from src.host.task_policy import policy_blocks_json_scheduled_jobs

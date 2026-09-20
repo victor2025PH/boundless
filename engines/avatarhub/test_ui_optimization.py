@@ -53,9 +53,9 @@ def run():
 
     # P1 后台接入
     check("P1 hub.blue 走 --hub-blue", "rgb(var(--hub-blue) / <alpha-value>)" in ui)
-    check("P1 默认品牌蓝三元组", "--hub-blue:79 122 255" in ui)
-    check("P1 JS 默认 brand 蓝", "brand:'79 122 255'" in ui)
-    check("P1 重置回退蓝", "setProperty('--hub-blue','79 122 255')" in ui)
+    check("P1 默认品牌蓝三元组", "--hub-blue:30 107 240" in ui)
+    check("P1 JS 默认 brand 蓝", "brand:'30 107 240'" in ui)
+    check("P1 重置回退蓝", "setProperty('--hub-blue','30 107 240')" in ui)
     check("P1 语义色对齐 brand", "green:'#34d399'" in ui and "red:'#f87171'" in ui)
     check("P1 可读性层 9px>=12", ".text-\\[9px\\]{font-size:12px" in ui)
     check("P1 无旧主色默认残留", "--hub-blue:88 166 255" not in ui)
@@ -75,9 +75,9 @@ def run():
     check("P3 用户告警 demo 过滤", "demoMode && (a.level==='warn'||a.level==='info')" in ui or "demoMode && (a.level==='warn'||a.level==='info')" in hub)
 
     # P4 客户端品牌统一
-    check("P4 phone accent 品牌蓝", "--acc-rgb: var(--bd-acc-rgb, 79 122 255)" in phone)
+    check("P4 phone accent 品牌蓝", "--acc-rgb: var(--bd-acc-rgb, 30 107 240)" in phone)
     check("P4 phone 无旧 accent", "--acc-rgb: 88 166 255" not in phone)
-    check("P4 converse 品牌蓝", "rgb(var(--bd-acc-rgb, 79 122 255))" in conv)
+    check("P4 converse 品牌蓝", "rgb(var(--bd-acc-rgb, 30 107 240))" in conv)
 
     # P5 后台侧边导航 + Tab 持久化
     check("P5 桌面侧边栏", "桌面左侧分组导航" in ui and "hidden lg:flex flex-col shrink-0" in ui)
@@ -133,13 +133,13 @@ def run():
     check("P9 减少动效偏好", "@media (prefers-reduced-motion: reduce)" in css)
 
     # P10 客户端跨设备白标联动（--bd-acc-rgb 中央三元组）
-    check("P10 中央三元组令牌", "--bd-acc-rgb:" in css and "79 122 255" in css)
+    check("P10 中央三元组令牌", "--bd-acc-rgb:" in css and "30 107 240" in css)
     check("P10 brand.js 同步三元组", "setProperty('--bd-acc-rgb'" in js)
     check("P10 brand.js 重置清三元组", "removeProperty('--bd-acc-rgb')" in js)
     check("P10 phone 跟随中央令牌", "--acc-rgb: var(--bd-acc-rgb" in phone)
     check("P10 phone 移除旧单键桥", "if(b) document.documentElement.style.setProperty('--acc-rgb', b)" not in phone)
     check("P10 converse 跟随中央令牌", "--accent:  rgb(var(--bd-acc-rgb" in conv)
-    check("P10 converse 无硬编码主色", "--accent:  #4f7aff;" not in conv)
+    check("P10 converse 无硬编码主色", "--accent:  #1e6bf0;" not in conv)
 
     # V2 全站深度美化（2026-07）：面板/表单/分段/开关组件 + 开播页双栏面板化 + 微字号源头清零
     check("V2 bd-panel 组件", ".bd-panel{" in css and ".bd-panel-head{" in css and ".bd-panel-sum{" in css)

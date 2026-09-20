@@ -1,0 +1,634 @@
+<!doctype html>
+<!--
+  Telegram 群成员提取 · 管理台（独立自包含页，不 extends base.html）。
+
+  刻意自包含：内联 zh/en i18n（无 window.T 依赖）、纯 fetch 驱动、只用 addEventListener
+  （无内联 on* handler）→ 重启前完全惰性、可被渲染冒烟测试验证、不牵动任何在跑页面。
+  由 group_members_routes.py 的 GET /tools/tg-members 直接返回本文件内容。
+  数据源：/api/accounts、/api/tg-members/{jobs,groups,members,members/export,quota}。
+  正式上线时的 nav 集成 / base.html 主题化 / 更细粒度 UX 属部署窗口内的真机打磨项。
+-->
+<html lang="{{ ui_locale|default('zh-CN') }}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TG 群成员提取</title>
+  <style>
+    :root { --bg:#f6f7f9; --card:#fff; --border:#e5e7eb; --text:#1f2937; --dim:#6b7280;
+            --accent:#1e8cf2; --ok:#0f9d75; --warn:#d97706; --danger:#dc2626; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0f141a; --card:#161c24; --border:#2a333d; --text:#e5e9ef; --dim:#93a1b0; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+           font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft Yahei",sans-serif; }
+    .wrap { max-width:1080px; margin:0 auto; padding:20px 16px 60px; }
+    h1 { font-size:20px; margin:0 0 4px; }
+    .sub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
+            padding:16px; margin-bottom:16px; }
+    .card h2 { font-size:15px; margin:0 0 12px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    label { color:var(--dim); font-size:12.5px; }
+    input, select { font:inherit; padding:6px 9px; border:1px solid var(--border);
+                    border-radius:8px; background:var(--card); color:var(--text); }
+    input[type=text], input[type=number] { min-width:200px; }
+    button { font:inherit; cursor:pointer; border:1px solid var(--border); background:var(--card);
+             color:var(--text); border-radius:8px; padding:6px 12px; }
+    button:hover { border-color:var(--accent); }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    button[disabled] { opacity:.5; cursor:not-allowed; }
+    .accts { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .accts label { display:inline-flex; align-items:center; gap:6px; padding:5px 10px;
+                   border:1px solid var(--border); border-radius:999px; color:var(--text); font-size:12.5px; }
+    .accts label.off { opacity:.45; }
+    .msg { font-size:12.5px; color:var(--dim); margin-top:6px; }
+    .banner { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-radius:10px;
+              padding:10px 12px; margin-bottom:16px; font-size:13px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); }
+    th { color:var(--dim); font-weight:600; font-size:12px; }
+    .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; }
+    .pill.run { background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 14%, transparent); color:var(--accent); }
+    .pill.done { background:rgba(15,157,117,.14); color:var(--ok); }
+    .pill.err { background:rgba(220,38,38,.14); color:var(--danger); }
+    .pill.adm { background:rgba(217,119,6,.14); color:var(--warn); }
+    .job { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+    .job .jhd { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+    .empty { color:var(--dim); padding:8px 2px; }
+    /* 账号卡片（头像+昵称+@+在线点，多选） */
+    .gm-acct-card { display:inline-flex; align-items:center; gap:8px; padding:5px 12px 5px 5px;
+                    border:1px solid var(--border); border-radius:999px; cursor:pointer;
+                    background:var(--card); user-select:none; }
+    .gm-acct-card.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    .gm-acct-card input { position:absolute; opacity:0; width:0; height:0; }
+    .gm-av { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none;
+             display:inline-flex; align-items:center; justify-content:center; color:#fff;
+             font-size:12px; font-weight:700; }
+    .gm-acct-meta { display:flex; flex-direction:column; line-height:1.2; }
+    .gm-acct-nm { font-size:12.5px; font-weight:600; color:var(--text); }
+    .gm-acct-un { font-size:11px; color:var(--dim); }
+    .gm-dot { width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none; }
+    /* 可聊度色块 */
+    .sc { display:inline-block; min-width:24px; text-align:center; padding:1px 7px;
+          border-radius:999px; font-size:11.5px; font-weight:700; }
+    .sc.hi { background:rgba(15,157,117,.16); color:var(--ok); }
+    .sc.mid { background:rgba(217,119,6,.16); color:var(--warn); }
+    .sc.lo { background:rgba(107,114,128,.16); color:var(--dim); }
+    .adv-toggle { font-size:11.5px; color:var(--accent); cursor:pointer; text-decoration:none; }
+    .gm-acct-q { font-size:10.5px; color:var(--dim); }
+    /* 任务进度条 */
+    .jbar { height:5px; background:var(--border); border-radius:999px; overflow:hidden; margin:8px 0 2px; }
+    .jbar > i { display:block; height:100%; width:0; background:var(--accent);
+                border-radius:999px; transition:width .4s ease; }
+    .job.jdone .jbar > i { background:var(--ok); }
+    .job.jerr  .jbar > i { background:var(--danger); }
+    /* 配额迷你条（选号卡片内） */
+    .qbar { display:inline-block; width:34px; height:4px; background:var(--border);
+            border-radius:999px; overflow:hidden; vertical-align:middle; margin-right:4px; }
+    .qbar > i { display:block; height:100%; background:var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 id="t-title"></h1>
+    <div class="sub" id="t-sub"></div>
+    <div class="banner" id="gm-disabled" hidden></div>
+
+    <section class="card">
+      <h2 id="t-extract"></h2>
+      <div class="msg" id="t-accts-l"></div>
+      <div class="accts" id="gm-accts"><span class="empty" id="gm-accts-empty"></span></div>
+      <div class="msg" id="gm-accts-total"></div>
+      <div class="row">
+        <label id="t-group-l" for="gm-group-sel"></label>
+        <select id="gm-group-sel"><option value=""></option></select>
+        <button type="button" id="gm-eg-refresh" title="刷新群列表">⟳</button>
+        <a href="#" id="gm-group-adv-toggle" class="adv-toggle"></a>
+      </div>
+      <div class="row" id="gm-group-adv" hidden>
+        <label id="t-group-manual-l" for="gm-group-manual"></label>
+        <input type="text" id="gm-group-manual" placeholder="-1001234567890 / @username" />
+      </div>
+      <div class="msg" id="gm-group-note"></div>
+      <div class="row">
+        <label id="t-filter-l" for="gm-filter"></label>
+        <select id="gm-filter">
+          <option value="spoke_no_admin"></option>
+          <option value="spoke"></option>
+          <option value="all"></option>
+        </select>
+        <label id="t-cap-l" for="gm-cap"></label>
+        <input type="number" id="gm-cap" value="200" min="1" max="100000" />
+      </div>
+      <button class="primary" id="gm-start"></button>
+      <div class="msg" id="gm-start-msg"></div>
+    </section>
+
+    <section class="card">
+      <h2 id="t-jobs"></h2>
+      <div id="gm-jobs"><div class="empty" id="gm-jobs-empty"></div></div>
+    </section>
+
+    <section class="card">
+      <h2 id="t-members"></h2>
+      <div class="row">
+        <label id="t-mgroup-l" for="gm-mgroup"></label>
+        <select id="gm-mgroup"></select>
+        <select id="gm-monly">
+          <option value="spoke_no_admin"></option>
+          <option value="spoke"></option>
+          <option value=""></option>
+          <option value="admins"></option>
+        </select>
+        <select id="gm-msort">
+          <option value="score"></option>
+          <option value="recent"></option>
+        </select>
+        <input type="text" id="gm-mq" />
+        <button id="gm-refresh"></button>
+        <button id="gm-export"></button>
+      </div>
+      <div class="msg" id="gm-mstats"></div>
+      <table>
+        <thead><tr>
+          <th id="th-user"></th><th id="th-name"></th><th id="th-score"></th>
+          <th id="th-spoke"></th><th id="th-admin"></th><th id="th-src"></th>
+        </tr></thead>
+        <tbody id="gm-mbody"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+    var EN = (document.documentElement.lang || "").toLowerCase().indexOf("en") === 0;
+    function t(zh, en) { return EN ? en : zh; }
+    function $(id) { return document.getElementById(id); }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function csrfToken() {
+      var m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : "";
+    }
+    async function api(url, opts) {
+      opts = opts || {};
+      var headers = Object.assign({ Accept: "application/json" }, opts.headers || {});
+      var method = (opts.method || "GET").toUpperCase();
+      if (method !== "GET" && method !== "HEAD") {
+        var tok = csrfToken();          // 同源 POST 中间件走 Origin 放行；带上 token 更稳
+        if (tok) headers["X-CSRF-Token"] = tok;
+      }
+      var res = await fetch(url, Object.assign(
+        { credentials: "same-origin" }, opts, { headers: headers }));
+      var data = {};
+      try { data = await res.json(); } catch (e) { data = {}; }
+      return { ok: res.ok, status: res.status, data: data };
+    }
+
+    var _jobPoll = null;
+    var _extractGroupsCache = {};   // account_id -> [{id,title,members}] | null（发起区群下拉缓存；null=拉过但失败）
+    var _egMembers = {};            // group_id -> members_count（并集口径，取最大）
+    var _egCoverage = {};           // group_id -> [account_ids]（所选号里谁在这个群）
+    var _acctName = {};             // account_id -> 展示名（self_name||label||id）
+    var _jobRate = {};              // job_id -> {pulled, ts}（相邻轮询算速率估 ETA）
+
+    function avatarColor(seed) {
+      var s = String(seed || ""), h = 0;
+      for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffff;
+      return "hsl(" + (h % 360) + ",42%,45%)";
+    }
+    function initial(name) {
+      var s = String(name || "").trim();
+      return s ? s.charAt(0).toUpperCase() : "#";
+    }
+    function scoreChip(s) {
+      if (s == null || s === "") return "";
+      var cls = s >= 80 ? "hi" : (s >= 60 ? "mid" : "lo");
+      return '<span class="sc ' + cls + '">' + s + "</span>";
+    }
+    function fmtDur(sec) {
+      sec = Math.max(0, Math.round(sec));
+      if (sec < 60) return sec + "s";
+      var m = Math.floor(sec / 60), s = sec % 60;
+      if (m < 60) return m + "m" + (s ? " " + s + "s" : "");
+      var h = Math.floor(m / 60); m = m % 60;
+      return h + "h" + (m ? " " + m + "m" : "");
+    }
+
+    function setText() {
+      $("t-title").textContent = t("Telegram 群成员提取", "Telegram group member extraction");
+      $("t-sub").textContent = t(
+        "多号进群 → 限速分批拉「发过言且非管理员」的成员入库 → 每天控量。只读提取；私聊触达是独立步骤。",
+        "Multi-account join -> rate-limited batched pull of active non-admins -> daily cap. Read-only extraction; outreach is separate.");
+      $("t-extract").textContent = t("① 发起提取", "① Start extraction");
+      $("t-accts-l").textContent = t("选择用哪些号拉（仅显示在线的 Telegram 号；多选=多号并行、各拉不同批次）",
+        "Pick accounts (online Telegram only; multi-select = parallel, disjoint batches)");
+      $("t-group-l").textContent = t("目标群（选号后自动列出）", "Target group (auto-listed after picking accounts)");
+      $("gm-eg-refresh").title = t("刷新群列表", "Refresh groups");
+      $("gm-group-adv-toggle").textContent = t("高级：手输群 id / @用户名", "Advanced: manual id / @username");
+      $("t-group-manual-l").textContent = t("手输群", "Manual group");
+      $("t-filter-l").textContent = t("过滤器", "Filter");
+      $("t-cap-l").textContent = t("每号每日上限", "Daily cap / account");
+      $("gm-start").textContent = t("🧲 发起提取", "🧲 Start");
+      $("t-jobs").textContent = t("② 提取任务", "② Extraction jobs");
+      $("gm-jobs-empty").textContent = t("暂无任务", "No jobs yet");
+      $("t-members").textContent = t("③ 成员库", "③ Member DB");
+      $("t-mgroup-l").textContent = t("群", "Group");
+      $("gm-refresh").textContent = t("刷新", "Refresh");
+      $("gm-export").textContent = t("导出 CSV", "Export CSV");
+      $("gm-mq").placeholder = t("搜名字/用户名", "search name/username");
+      $("th-user").textContent = "user_id";
+      $("th-name").textContent = t("名字", "Name");
+      $("th-score").textContent = t("可聊度", "Score");
+      $("th-spoke").textContent = t("发言", "Spoke");
+      $("th-admin").textContent = t("管理员", "Admin");
+      $("th-src").textContent = t("来源号", "By account");
+      var so = $("gm-msort").options;
+      so[0].textContent = t("可聊度优先", "Score first");
+      so[1].textContent = t("近发言优先", "Recent first");
+      var fo = $("gm-filter").options;
+      fo[0].textContent = t("发过言 · 非管理员（默认）", "Active · non-admin (default)");
+      fo[1].textContent = t("发过言", "Active (spoke)");
+      fo[2].textContent = t("全部成员", "All members");
+      var mo = $("gm-monly").options;
+      mo[0].textContent = t("发言非管理员", "Active non-admin");
+      mo[1].textContent = t("发过言", "Spoke");
+      mo[2].textContent = t("全部", "All");
+      mo[3].textContent = t("管理员", "Admins");
+    }
+
+    async function loadAccounts() {
+      var box = $("gm-accts");
+      var r = await api("/api/accounts");
+      var list = (r.data && r.data.accounts) || [];
+      var tg = list.filter(function (a) {
+        return a.platform === "telegram" && (a.status === "online" || a.running);
+      });
+      if (!tg.length) {
+        box.innerHTML = '<span class="empty">' +
+          t("没有在线的 Telegram 号", "No online Telegram accounts") + "</span>";
+        return;
+      }
+      _acctName = {};
+      box.innerHTML = tg.map(function (a) {
+        var id = esc(a.account_id);
+        var nm = a.self_name || a.label || a.account_id;
+        _acctName[a.account_id] = nm;
+        var un = a.self_username ? "@" + a.self_username : "";
+        var av = a.self_avatar
+          ? '<img class="gm-av" src="' + esc(a.self_avatar) + '" alt="" />'
+          : '<span class="gm-av" style="background:' + avatarColor(a.account_id) + '">' +
+            esc(initial(nm)) + "</span>";
+        return '<label class="gm-acct-card">' +
+          '<input type="checkbox" class="gm-acct" value="' + id + '" />' + av +
+          '<span class="gm-acct-meta"><span class="gm-acct-nm">' + esc(nm) + "</span>" +
+          (un ? '<span class="gm-acct-un">' + esc(un) + "</span>" : "") +
+          '<span class="gm-acct-q" data-q="' + id + '"></span></span>' +
+          '<span class="gm-dot" title="online"></span></label>';
+      }).join("");
+      Array.prototype.slice.call(box.querySelectorAll(".gm-acct")).forEach(function (c) {
+        c.addEventListener("change", function () {
+          var card = c.closest(".gm-acct-card");
+          if (card) card.classList.toggle("sel", c.checked);
+          onAccountsChanged();
+        });
+      });
+      loadAcctQuotas(tg);
+    }
+
+    // 每号今日配额余量（"今日 used/cap"）填进卡片 chip；满额标红。未开启/失败静默跳过。
+    async function loadAcctQuotas(list) {
+      var chips = {};
+      Array.prototype.slice.call(document.querySelectorAll(".gm-acct-q"))
+        .forEach(function (el) { chips[el.getAttribute("data-q")] = el; });
+      var sumUsed = 0, sumCap = 0, got = 0;
+      await Promise.all(list.map(function (a) {
+        return api("/api/tg-members/quota?account_id=" + encodeURIComponent(a.account_id))
+          .then(function (r) {
+            if (!r.ok) return;
+            var used = r.data.used_today || 0, cap = r.data.cap || 0;
+            sumUsed += used; sumCap += cap; got++;
+            var chip = chips[a.account_id];
+            if (!chip) return;
+            var pctq = cap > 0 ? Math.min(100, Math.round(used / cap * 100)) : 0;
+            var full = cap && used >= cap;
+            chip.innerHTML = '<span class="qbar"><i style="width:' + pctq + '%' +
+              (full ? ";background:var(--danger)" : "") + '"></i></span>' +
+              t("今日 ", "today ") + used + "/" + cap;
+            if (full) chip.style.color = "var(--danger)";
+          }).catch(function () {});
+      }));
+      var tot = $("gm-accts-total");
+      if (tot) {
+        if (got && sumCap > 0) {
+          var tp = Math.min(100, Math.round(sumUsed / sumCap * 100));
+          tot.textContent = t("全机群今日合计 ", "fleet today ") + sumUsed + "/" + sumCap + " (" + tp + "%)";
+        } else { tot.textContent = ""; }
+      }
+    }
+
+    function selectedAccounts() {
+      return Array.prototype.slice.call(document.querySelectorAll(".gm-acct:checked"))
+        .map(function (c) { return c.value; });
+    }
+
+    // 选号变化 → 并行列出「所有所选号」的群，合并成并集填进下拉；记录每群被哪些号覆盖。
+    async function onAccountsChanged() {
+      var accts = selectedAccounts();
+      var sel = $("gm-group-sel");
+      $("gm-group-note").textContent = "";
+      if (!accts.length) {
+        sel.innerHTML = '<option value="">' +
+          t("先选账号，自动列出其群", "pick account(s) to list groups") + "</option>";
+        return;
+      }
+      sel.innerHTML = '<option value="">' + t("加载群列表…", "loading groups…") + "</option>";
+      var need = accts.filter(function (a) { return _extractGroupsCache[a] === undefined; });
+      if (need.length) {
+        await Promise.all(need.map(function (a) {
+          return api("/api/tg-members/account-groups?account_id=" + encodeURIComponent(a))
+            .then(function (r) { _extractGroupsCache[a] = r.ok ? (r.data.groups || []) : null; })
+            .catch(function () { _extractGroupsCache[a] = null; });
+        }));
+      }
+      var union = {}, failed = [];
+      accts.forEach(function (a) {
+        var gs = _extractGroupsCache[a];
+        if (gs == null) { failed.push(a); return; }
+        gs.forEach(function (g) {
+          var u = union[g.id] || (union[g.id] = { title: g.title || g.id, members: 0, accts: [] });
+          if (g.title) u.title = g.title;
+          if (g.members && g.members > u.members) u.members = g.members;
+          u.accts.push(a);
+        });
+      });
+      var ids = Object.keys(union);
+      _egMembers = {}; _egCoverage = {};
+      if (!ids.length) {
+        sel.innerHTML = '<option value="">' + (failed.length
+          ? t("所选号都无法列群，用下方「手输」", "can't list groups; use manual below")
+          : t("所选号没有群", "no groups for selected accounts")) + "</option>";
+        return;
+      }
+      var total = accts.length;
+      ids.sort(function (a, b) {
+        var d = union[b].accts.length - union[a].accts.length;
+        return d !== 0 ? d : (union[b].members - union[a].members);
+      });
+      sel.innerHTML = '<option value="">' + t("选择群…", "select a group…") + "</option>" +
+        ids.map(function (gid) {
+          var u = union[gid];
+          _egMembers[gid] = u.members;
+          _egCoverage[gid] = u.accts.slice();
+          var cov = (u.accts.length < total)
+            ? " · " + t("覆盖 ", "cov ") + u.accts.length + "/" + total : "";
+          return '<option value="' + esc(gid) + '">' + esc(u.title) +
+            (u.members ? " (" + u.members + ")" : "") + cov + "</option>";
+        }).join("");
+      if (failed.length) {
+        $("gm-group-note").textContent = t("注：", "Note: ") + failed.length +
+          t(" 个号无法列群（离线？），未计入。", " account(s) couldn't list groups (offline?), excluded.");
+      }
+    }
+
+    function acctName(id) { return _acctName[id] || id; }
+
+    function _updateGroupNote() {
+      var gid = $("gm-group-sel").value;
+      if (!gid) { $("gm-group-note").textContent = ""; return; }
+      var n = _egMembers[gid], cov = _egCoverage[gid] || [];
+      var accts = selectedAccounts();
+      var inSet = {};
+      cov.forEach(function (a) { inSet[a] = 1; });
+      var notIn = accts.filter(function (a) { return !inSet[a]; });
+      var s = "";
+      if (n) s += t("该群约 ", "~") + n + t(" 人 · ", " members · ");
+      s += t("所选 ", "") + accts.length + t(" 号中 ", " picked, ") +
+        cov.length + t(" 个在此群", " in this group");
+      if (notIn.length) {
+        s += t("；不在的会空拉：", "; not in (pull nothing): ") + notIn.map(acctName).join("、");
+      }
+      $("gm-group-note").textContent = s;
+    }
+
+    async function startExtract() {
+      var accounts = selectedAccounts();
+      var manualEl = $("gm-group-manual");
+      var manual = (!$("gm-group-adv").hidden && manualEl) ? manualEl.value.trim() : "";
+      var group = manual || $("gm-group-sel").value;
+      var filter = $("gm-filter").value;
+      var cap = parseInt($("gm-cap").value, 10) || 200;
+      var msg = $("gm-start-msg");
+      if (!accounts.length || !group) {
+        msg.textContent = t("请先选号并选群（或用高级手输）", "Pick account(s) and a group (or manual id)");
+        return;
+      }
+      $("gm-start").disabled = true;
+      msg.textContent = t("发起中…", "Starting…");
+      var r = await api("/api/tg-members/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_ids: accounts, group: group, filter: filter,
+                               daily_cap_per_account: cap })
+      });
+      $("gm-start").disabled = false;
+      if (!r.ok) {
+        msg.textContent = t("失败：", "Failed: ") + esc((r.data && r.data.detail) || r.status);
+        return;
+      }
+      var skipped = (r.data.skipped || []);
+      msg.textContent = t("已发起 ", "Started ") + (r.data.jobs || []).length +
+        t(" 个任务（分片 ", " job(s) (shards ") + (r.data.shards || 1) + "）" +
+        (skipped.length ? t("；跳过离线号 ", "; skipped offline ") + skipped.join(",") : "");
+      loadJobs();
+    }
+
+    function jobStatusPill(st) {
+      var cls = st === "done" ? "done" : (st === "error" ? "err" : "run");
+      return '<span class="pill ' + cls + '">' + esc(st) + "</span>";
+    }
+
+    async function loadJobs() {
+      var box = $("gm-jobs");
+      var r = await api("/api/tg-members/jobs?limit=40");
+      var jobs = (r.data && r.data.jobs) || [];
+      if (!jobs.length) {
+        box.innerHTML = '<div class="empty">' + t("暂无任务", "No jobs yet") + "</div>";
+        return;
+      }
+      box.innerHTML = jobs.map(function (j) {
+        var acct = (j.account_ids || []).join(",");
+        var running = j.status === "running";
+        var cap = j.daily_cap_per_account || 0;
+        var pulled = j.pulled_total || 0;
+        var pct = cap > 0 ? Math.min(100, Math.round(pulled / cap * 100)) : 0;
+        var jcls = j.status === "done" ? " jdone" : (j.status === "error" ? " jerr" : "");
+        var bar = cap > 0 ? '<div class="jbar"><i style="width:' + pct + '%"></i></div>' : "";
+        // 客户端估算：相邻两次轮询的入库增量算速率 → 剩余配额 ÷ 速率 = ETA；停滞且有限速 → 等待提示
+        var etaTxt = "";
+        var prev = _jobRate[j.job_id], now = Date.now();
+        if (running) {
+          if (prev && pulled > prev.pulled && now > prev.ts) {
+            var rate = (pulled - prev.pulled) / ((now - prev.ts) / 1000);
+            if (rate > 0 && cap > pulled) etaTxt = " · " + t("约剩 ", "~") + fmtDur((cap - pulled) / rate);
+          } else if (prev && pulled === prev.pulled && j.floodwaits) {
+            etaTxt = ' · <span style="color:var(--warn)">' +
+              t("⏳ 限速等待中", "⏳ waiting (floodwait)") + "</span>";
+          }
+          _jobRate[j.job_id] = { pulled: pulled, ts: now };
+        } else { delete _jobRate[j.job_id]; }
+        return '<div class="job' + jcls + '"><div class="jhd">' +
+          "<div><b>" + esc(j.group_title || j.group_id) + "</b> · " + esc(acct) +
+          " · shard " + (j.shard_index + 1) + "/" + j.num_shards + "</div>" +
+          "<div>" + jobStatusPill(j.status) +
+          (running ? ' <button data-stop="' + esc(j.job_id) + '">' +
+            t("停止", "Stop") + "</button>" : "") +
+          (j.group_id ? ' <button data-view="' + esc(j.group_id) + '">' +
+            t("看成员", "Members") + "</button>" : "") + "</div></div>" + bar +
+          '<div class="msg">' + t("已入库 ", "pulled ") + pulled +
+          (cap > 0 ? "/" + cap + " (" + pct + "%)" : "") + etaTxt +
+          t(" · 去重 ", " · dedup ") + (j.dedup_skipped || 0) +
+          t(" · 剔管理员 ", " · admins ") + (j.admins_excluded || 0) +
+          (j.floodwaits ? t(" · 限速 ", " · floodwait ") + j.floodwaits : "") +
+          (j.last_error ? ' · <span style="color:var(--danger)">' + esc(j.last_error) + "</span>" : "") +
+          "</div></div>";
+      }).join("");
+      Array.prototype.slice.call(box.querySelectorAll("button[data-stop]")).forEach(function (b) {
+        b.addEventListener("click", function () { stopJob(b.getAttribute("data-stop")); });
+      });
+      Array.prototype.slice.call(box.querySelectorAll("button[data-view]")).forEach(function (b) {
+        b.addEventListener("click", function () { jumpToMembers(b.getAttribute("data-view")); });
+      });
+      if (jobs.some(function (j) { return j.status === "running"; })) {
+        if (!_jobPoll) _jobPoll = setInterval(loadJobs, 3000);
+      } else if (_jobPoll) { clearInterval(_jobPoll); _jobPoll = null; }
+    }
+
+    async function stopJob(jid) {
+      await api("/api/tg-members/jobs/" + encodeURIComponent(jid) + "/stop", { method: "POST" });
+      loadJobs();
+    }
+
+    async function loadGroups(preferGid) {
+      var sel = $("gm-mgroup");
+      var prev = preferGid || sel.value;   // 保留当前选中（轮询/直达刷新不打断查看）
+      var r = await api("/api/tg-members/groups");
+      var groups = (r.data && r.data.groups) || [];
+      sel.innerHTML = groups.map(function (g) {
+        return '<option value="' + esc(g.group_id) + '">' +
+          esc(g.group_title || g.group_id) + " (" + g.total +
+          (g.spoke ? " · " + g.spoke + t(" 可聊", " active") : "") + ")</option>";
+      }).join("");
+      if (prev) {
+        var has = Array.prototype.some.call(sel.options, function (o) { return o.value === prev; });
+        if (has) sel.value = prev;
+      }
+      if (sel.value) loadMembers();
+      else if (groups.length) { sel.selectedIndex = 0; loadMembers(); }
+    }
+
+    // 从任务卡「看成员」直达：确保群在下拉里（缺则刷新）→ 选中 → 加载 → 滚到成员区。
+    async function jumpToMembers(gid) {
+      if (!gid) return;
+      var sel = $("gm-mgroup");
+      var has = Array.prototype.some.call(sel.options, function (o) { return o.value === gid; });
+      if (!has) await loadGroups(gid);
+      sel.value = gid;
+      // 直达自带「最该聊的人」视角：只看发言非管理员 + 可聊度优先；清掉残留搜索词免藏结果
+      $("gm-monly").value = "spoke_no_admin";
+      $("gm-msort").value = "score";
+      $("gm-mq").value = "";
+      var d = await loadMembers();
+      // 兜底：该群有成员但「发言非管理员」为空（多为按「全部」提取的群）→ 自动切「全部」再看一次
+      if (d && !((d.items || []).length) && (d.total || 0) > 0) {
+        $("gm-monly").value = "";
+        await loadMembers();
+      }
+      var sec = $("t-members");
+      if (sec && sec.scrollIntoView) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    async function loadMembers() {
+      var gid = $("gm-mgroup").value;
+      var body = $("gm-mbody");
+      var stats = $("gm-mstats");
+      if (!gid) { body.innerHTML = ""; stats.textContent = ""; return; }
+      var only = $("gm-monly").value;
+      var q = $("gm-mq").value.trim();
+      var url = "/api/tg-members/members?group_id=" + encodeURIComponent(gid) +
+        "&only=" + encodeURIComponent(only) + "&q=" + encodeURIComponent(q) +
+        "&sort=" + encodeURIComponent($("gm-msort").value) + "&limit=500";
+      var r = await api(url);
+      var items = (r.data && r.data.items) || [];
+      stats.textContent = t("总 ", "total ") + (r.data.total || 0) +
+        t(" · 可聊 ", " · active ") + (r.data.spoke_no_admin || 0) +
+        t("（显示 ", " (showing ") + items.length + "）";
+      body.innerHTML = items.map(function (m) {
+        var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
+        return "<tr><td>" + esc(m.user_id) + "</td><td>" + esc(name) +
+          (m.username ? ' <span style="color:var(--dim)">@' + esc(m.username) + "</span>" : "") +
+          "</td><td>" + scoreChip(m.score) + "</td><td>" +
+          (m.spoke ? "✓" : "") + "</td><td>" +
+          (m.is_admin ? '<span class="pill adm">admin</span>' : "") + "</td><td>" +
+          esc(m.source_account_id) + "</td></tr>";
+      }).join("");
+      return r.data;
+    }
+
+    function doExport() {
+      var gid = $("gm-mgroup").value;
+      if (!gid) return;
+      window.open("/api/tg-members/members/export?group_id=" + encodeURIComponent(gid) +
+        "&only=" + encodeURIComponent($("gm-monly").value), "_blank");
+    }
+
+    async function init() {
+      setText();
+      // 探一下功能状态（quota 端点：403=未开启；其它非 200=后端未就绪/维护中）
+      var probe = await api("/api/tg-members/quota");
+      if (!probe.ok) {
+        var b = $("gm-disabled");
+        b.hidden = false;
+        if (probe.status === 403) {
+          b.textContent = t(
+            "群成员提取功能未开启：在 config.local.yaml 设 companion.group_members.enabled: true 后重启实例。",
+            "Feature disabled: set companion.group_members.enabled: true in config.local.yaml and restart.");
+        } else {
+          b.textContent = t(
+            "群成员提取正在就绪（后端需一次重启加载最新组件），请稍后再试。",
+            "Group member extraction is initializing (pending a service restart to load the latest build); please retry shortly.");
+        }
+      }
+      $("gm-start").addEventListener("click", startExtract);
+      $("gm-refresh").addEventListener("click", loadMembers);
+      $("gm-export").addEventListener("click", doExport);
+      $("gm-mgroup").addEventListener("change", loadMembers);
+      $("gm-monly").addEventListener("change", loadMembers);
+      $("gm-mq").addEventListener("keydown", function (e) { if (e.key === "Enter") loadMembers(); });
+      $("gm-msort").addEventListener("change", loadMembers);
+      $("gm-group-sel").addEventListener("change", _updateGroupNote);
+      $("gm-eg-refresh").addEventListener("click", function () {
+        selectedAccounts().forEach(function (a) { delete _extractGroupsCache[a]; });
+        onAccountsChanged();
+      });
+      $("gm-group-adv-toggle").addEventListener("click", function (e) {
+        e.preventDefault();
+        var adv = $("gm-group-adv");
+        adv.hidden = !adv.hidden;
+      });
+      loadAccounts();
+      loadJobs();
+      loadGroups();
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else { init(); }
+  })();
+  </script>
+</body>
+</html>

@@ -138,7 +138,8 @@ Source: "..\config.example.json"; DestDir: "{app}"; Flags: ignoreversion skipifs
 Source: "..\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion; Excludes: "_*.py"
 ; 面向用户的成品不带 README/交付清单等开发者文档（太专业，客户不需要）
 ; 前端页面
-Source: "..\static\*"; DestDir: "{app}\static"; Flags: ignoreversion recursesubdirs createallsubdirs
+; ui_src = 控制台拆分源目录（产物 ui.html 已随包），客户机不带源——与 build_packs.APP_TREE_EXCLUDES 同步
+Source: "..\static\*"; DestDir: "{app}\static"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "\ui_src\*"
 ; 启动角色包（占位形象+音色）：全新装机角色库为空时，Hub 首启一次性播种，让同传/换脸开箱即有可用角色。
 ; 占位素材（edge-tts 合成人声 + AI 生成虚拟脸），正式商用发布前用已授权素材替换同名文件即可。约 1MB。
 Source: "..\data\starter_profiles\*"; DestDir: "{app}\data\starter_profiles"; Flags: ignoreversion recursesubdirs createallsubdirs

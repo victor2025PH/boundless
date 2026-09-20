@@ -1,7 +1,7 @@
 """Messenger 网页模式（web mode）登录 provider（M5）。
 
 Messenger 没有像 WhatsApp Baileys 那样的干净协议库，但它**有官方网页版 messenger.com**。
-本模块是 Python 侧桥接：把统一收件箱「账号管理 → ＋ 扫码新增（网页）」的登录请求转发给
+本模块是 Python 侧桥接：把统一收件箱「账号管理 → ＋ 新增账号（网页托管）」的登录请求转发给
 一个独立运行的 **Playwright Node 微服务**（见 ``services/messenger-web/``），由它用隔离
 浏览器加载 messenger.com、完成官方登录、维护连接、DOM 收发，功能对齐官方网页版。
 
@@ -20,7 +20,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,23 @@ def service_base_url(config: Dict[str, Any]) -> str:
 
 
 def web_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    mg = pl.get("messenger", {}) or {}
-    return bool(mg.get("web_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch 注释）。
+    # 单一事实源——全部消费方（orchestrator / readiness / channel_adapters /
+    # protocol_diagnostics / account 路由）都经本函数，故升级安装的 Messenger 扫码
+    # 灰卡在此一处收口（104 事故的「另一半」：line/wa 已接、messenger 曾漏接）。
+    return resolve_login_switch(config, "platform_login.messenger.web_enabled")
+
+
+def interactive_login_enabled(config: Dict[str, Any]) -> bool:
+    """表单中继（Form-Relay）交互登录开关——把登录搬进程序内（headless 边车 + 应用侧
+    原生分步表单：账密 / 2FA 码 / E2EE PIN），不再弹独立浏览器窗口、也不靠只读截图。
+
+    默认**关**（含桌面壳）：headless + 由边车把值填进登录页，改变了 Facebook 的自动化
+    判定面，放量前需灰度验证账号不被风控。故刻意**不**进 `_DESKTOP_LOGIN_DEFAULT_ON`——
+    `resolve_login_switch` 在未显式配置时对该路径恒回 False，只有显式
+    `platform_login.messenger.interactive_login: true` 才开启。关闭时全链回落既有
+    headed 窗口 + 截图预览 + 运维指引，逐字节旧行为。"""
+    return resolve_login_switch(config, "platform_login.messenger.interactive_login")
 
 
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────
@@ -56,6 +70,104 @@ async def _get_json(url: str, timeout: float = 20.0) -> Dict[str, Any]:
         r = await client.get(url)
         r.raise_for_status()
         return r.json()
+
+
+# Q-24 B（#298）：边车 /send /send-media 失败七码契约（与 services/messenger-web/send_chain.js 同源）。
+SIDECAR_SEND_FAIL_CODES = (
+    "composer_detached", "thread_not_found", "e2ee_pin_pending", "call_overlay",
+    "send_backoff", "login_expired", "upload_failed",
+)
+_SIDECAR_CODE_SET = frozenset(SIDECAR_SEND_FAIL_CODES)
+
+
+def sidecar_fail_code(reason: str = "", detail: str = "") -> str:
+    """老边车 / 非结构化失败 → 七码归一（Python 侧镜像 send_chain.normalizeSendFailCode）。
+
+    认不出的一律 ``composer_detached``（DXAPAX 实锤：未归类 500 全是 detached 族）。
+    只做粗归类：细因由 reason/detail 原样带出，不丢证据。
+    """
+    r = str(reason or "").strip().lower()
+    m = str(detail or "")
+    if r in _SIDECAR_CODE_SET:
+        return r
+    import re as _re
+    if r in ("not_logged_in", "login_page", "logged_out", "expired", "needs_login") \
+            or _re.search(r"not_logged_in|not logged in|login required|re-login", m, _re.I):
+        return "login_expired"
+    if "pin" in r or _re.search(r"recovery pin|e2ee pin|\bPIN\b", m):
+        return "e2ee_pin_pending"
+    if r in ("send_backoff", "account_blocked", "temporarily_blocked", "blocked") \
+            or _re.search(r"backoff|temporarily blocked", m, _re.I):
+        return "send_backoff"
+    if "call" in r or "ongoing" in r or _re.search(r"Ongoing call|is calling you|Incoming (video )?call|正在通话|来电", m, _re.I):
+        return "call_overlay"
+    if _re.search(r"not attached|detached|stale|is not stable|Execution context was destroyed", m, _re.I):
+        return "composer_detached"
+    if _re.search(r"upload|attach|media|file_chooser|filechooser", r) \
+            or _re.search(r"file chooser|setInputFiles|upload|attach", m, _re.I):
+        return "upload_failed"
+    if r in ("page_not_rendered", "render_timeout", "thread_not_found", "nav_failed", "navigation") \
+            or _re.search(r"net::ERR|Navigation (failed|timeout)|page\.goto", m, _re.I):
+        return "thread_not_found"
+    return "composer_detached"
+
+
+def http_error_fields(ex: Exception) -> Dict[str, Any]:
+    """HTTP 状态异常 → 结构化败因 ``{detail, reason_code, retry_after_ms, status}``。
+
+    2026-08-15 173 实锤：/send 的 composer-not-found 500 在 Python 侧只留下
+    「Server error '500 Internal Server Error' for url …」——真实原因（渲染超时/
+    需要接受/PIN 浮层）在响应体里被 ``raise_for_status`` 丢弃，排查只能上机翻边车。
+
+    实施86 域B-1（#49）追加结构化：边车 /send 的 429（连败退避）/423（临时冻结）
+    带 ``retry_after_ms``＝确定性恢复时刻，此前同样死在异常字符串里——autosend
+    拿不到提示只能当场终局失败。duck-typed：任何带 ``.response`` 的异常都尝试
+    提取；任一步失败回落 ``{detail: str(ex), ...零值}``，绝不抛。
+    """
+    out: Dict[str, Any] = {"detail": str(ex), "reason_code": "",
+                           "retry_after_ms": 0, "status": 0,
+                           "code": "", "retries": 0, "sidecar_detail": ""}
+    resp = getattr(ex, "response", None)
+    if resp is None:
+        return out
+    try:
+        out["status"] = int(getattr(resp, "status_code", 0) or 0)
+    except Exception:
+        pass
+    try:
+        body = resp.json()
+    except Exception:
+        return out
+    if not isinstance(body, dict):
+        return out
+    detail = str(body.get("error") or "").strip()
+    reason = str(body.get("reason_code") or body.get("reason") or "").strip()
+    out["reason_code"] = reason
+    # Q-24 B（#298）：边车七码契约 ``code``（composer_detached|thread_not_found|e2ee_pin_pending|
+    # call_overlay|send_backoff|login_expired|upload_failed）+ ``retries``（同会话连败次数）+
+    # ``detail``（边车原始证据句）。老边车没有 code → 由 reason_code 归一（见 sidecar_fail_code）。
+    code = str(body.get("code") or "").strip().lower()
+    out["code"] = code if code in SIDECAR_SEND_FAIL_CODES else sidecar_fail_code(reason, detail)
+    try:
+        out["retries"] = max(0, int(body.get("retries") or 0))
+    except Exception:
+        pass
+    out["sidecar_detail"] = str(body.get("detail") or detail or "").strip()[:300]
+    try:
+        out["retry_after_ms"] = max(0, int(body.get("retry_after_ms") or 0))
+    except Exception:
+        pass
+    extra = detail
+    if reason and reason not in detail:
+        extra = f"{detail} [{reason}]" if detail else f"[{reason}]"
+    if extra:
+        out["detail"] = f"{str(ex)} — {extra}"
+    return out
+
+
+def http_error_detail(ex: Exception) -> str:
+    """（旧签名保留，全部消费口不变）``http_error_fields`` 的纯文本视图。"""
+    return str(http_error_fields(ex)["detail"])
 
 
 def _normalize_status(raw: str) -> str:
@@ -79,14 +191,22 @@ def make_provider(config: Dict[str, Any]):
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
                         ctx: Optional[Dict[str, Any]] = None):
         proxy = (ctx or {}).get("proxy") or {}
+        # 表单中继开关：开 → 告诉边车走无窗口交互模式（offscreen / new_headless），登录页
+        # 由应用侧原生表单驱动；关 → 不带该字段，边车维持既有 headed 弹窗行为（零回归）。
+        interactive = interactive_login_enabled(config)
         payload: Dict[str, Any] = {"account_id": account_id or ""}
+        if interactive:
+            payload["interactive"] = True
         if proxy.get("host"):
             payload["proxy_url"] = proxy.get("url") or ""
         try:
             data = await _post_json(f"{base}/login/start", payload)
         except Exception as ex:  # noqa: BLE001
             logger.debug("[messenger_web] start 调用失败", exc_info=True)
-            return {"instruction": f"无法连接 Messenger 网页服务（{ex}）。请确认 messenger-web 微服务已启动。"}
+            # 必须带 reason_code：只给 instruction 的话上游拿不到失败信号，会按「已开始登录」
+            # 挂起会话，坐席对着转圈干等到 TTL（180s）才等来一句超时——而真相是服务压根没起。
+            return {"instruction": f"无法连接 Messenger 网页服务（{ex}）。请确认 messenger-web 微服务已启动。",
+                    "reason_code": "service_down"}
 
         login_id = str(data.get("login_id") or "")
         qr_image = str(data.get("qr_image") or "")
@@ -101,9 +221,16 @@ def make_provider(config: Dict[str, Any]):
             aid = str(res.get("account_id") or "")
             if st == "authorized" and aid:
                 try:
+                    # merge_meta：防重登录整块覆盖 meta 抹掉 persona_id 等绑定
                     get_account_registry().upsert(
                         "messenger", aid, mode="web", status="online",
-                        meta={"messenger_login_id": login_id})
+                        meta={"messenger_login_id": login_id}, merge_meta=True)
+                    try:
+                        from src.ai.persona_voice import ensure_account_default_persona
+                        ensure_account_default_persona(
+                            get_account_registry(), "messenger", aid, config)
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception:  # noqa: BLE001
                     logger.debug("[messenger_web] 注册表写入失败", exc_info=True)
                 # self_profile 富集：微服务若回传昵称/头像 URL → 富集账号自身身份
@@ -118,6 +245,11 @@ def make_provider(config: Dict[str, Any]):
                     logger.debug("[messenger_web] self_profile 富集失败（忽略）", exc_info=True)
             return {"status": st, "account_id": aid,
                     "detail": str(res.get("detail") or ""),
+                    # 终态失败原因（路由只在非空时落会话，避免被后续空值抹掉）
+                    "reason_code": str(res.get("reason_code") or ""),
+                    # 实时提示码：微服务旁观登录页判出的「此刻在要什么」
+                    # （two_factor / checkpoint / password_error），非终态，可来回变。
+                    "hint_code": str(res.get("hint_code") or ""),
                     "qr_image": str(res.get("qr_image") or "")}
 
         async def _cancel(session: Any) -> None:
@@ -126,13 +258,81 @@ def make_provider(config: Dict[str, Any]):
             except Exception:  # noqa: BLE001
                 logger.debug("[messenger_web] cancel 调用失败", exc_info=True)
 
+        # 表单中继只读探针：把边车对登录页的分类（login_form/two_factor/e2ee_pin/checkpoint/…）
+        # 翻成「应用此刻该渲染哪一步原生表单」。纯读、失败软回落 wait（绝不阻断登录链）。
+        # 仅在 interactive_login 开启时随 provider 暴露（interactive 已在 _provider 顶部算出）；
+        # 关闭时为 None，路由回 not_supported，前端走既有 headed / 截图预览旧路径。
+
+        async def _relay_step(session: Any) -> Dict[str, Any]:
+            try:
+                res = await _get_json(f"{base}/login/{login_id}/relay-step")
+            except Exception as ex:  # noqa: BLE001
+                logger.debug("[messenger_web] relay-step 调用失败", exc_info=True)
+                return {"status": "pending", "step": "wait", "fields": [],
+                        "error": False, "escalate": False, "code": "",
+                        "qr_image": "", "detail": str(ex)}
+            return {
+                "status": str(res.get("status") or "pending"),
+                "booting": bool(res.get("booting")),
+                "step": str(res.get("step") or "wait"),
+                "fields": list(res.get("fields") or []),
+                "error": bool(res.get("error")),
+                "escalate": bool(res.get("escalate")),
+                "code": str(res.get("code") or ""),
+                "qr_image": str(res.get("qr_image") or ""),
+            }
+
+        async def _relay_submit(session: Any, step: str, values: Dict[str, Any]):
+            # 把应用侧原生表单字段值填回 headless 登录页（边车 fire-and-forget，结果由 poll
+            # / relay_step 观测）。失败一律结构化回落，绝不抛（不阻断登录链）。
+            try:
+                res = await _post_json(
+                    f"{base}/login/{login_id}/relay-submit",
+                    {"step": str(step or ""),
+                     "values": values if isinstance(values, dict) else {}})
+            except Exception as ex:  # noqa: BLE001
+                logger.debug("[messenger_web] relay-submit 调用失败", exc_info=True)
+                return {"ok": False, "reason_code": "service_down", "detail": str(ex)}
+            return {
+                "ok": bool(res.get("ok")),
+                "status": str(res.get("status") or ""),
+                "step": str(res.get("step") or ""),
+                "reason_code": str(res.get("reason_code") or ""),
+                "missing": list(res.get("missing") or []),
+                "submitted": bool(res.get("submitted")),
+                "accepted": bool(res.get("accepted")),
+                "detail": str(res.get("detail") or ""),
+            }
+
+        # 措辞注意：Facebook 网页端没有扫码登录，这里绝不能出现「扫码」字样——
+        # 方式选择卡明写「不使用二维码」，等待页再冒出「扫码均可」是自相矛盾（实录事故）。
+        # instruction_key 供前端取本地化文案（zh/en 同源），raw instruction 仅作后端兜底。
+        # B64 续（2026-08-23 117 实测）：interactive（表单中继）模式的浏览器窗口是
+        # **刻意离屏不可见**的，登录发生在应用弹窗内的原生表单——沿用 hosted 的
+        # 「服务器上已打开官方登录窗口，请在该机器上完成登录」文案会让用户满桌面找
+        # 一扇不存在的窗（实录：老板按文案等窗，判定「登录窗打不开」）。两种模式
+        # 必须各说各话。
+        if interactive:
+            _instr = ("已进入应用内登录：请直接在下方表单输入 Facebook 邮箱和密码"
+                      "（需要验证码时也在这里输入），不会弹出浏览器窗口，完成后自动确认。")
+            _instr_key = "inbox.connect.hint_inapp_login"
+        else:
+            _instr = ("服务器上已打开 Facebook 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
+                      "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。")
+            _instr_key = "inbox.connect.hint_server_login"
         return {
             "qr_image": qr_image,
-            "instruction": "在弹出的浏览器窗口内用官方方式登录 Messenger（扫码 / 账密 / 2FA 均可）。"
-                           "登录成功后本窗口会自动确认。",
+            "instruction": _instr,
+            "instruction_key": _instr_key,
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},
+            # 表单中继：开启交互登录时暴露 interactive 能力位 + 只读探针 + 写入端；关闭时
+            # interactive=False、relay_step/relay_submit=None（前端据此走既有 headed / 截图预览
+            # 路径，零行为变化）。
+            "interactive": interactive,
+            "relay_step": _relay_step if interactive else None,
+            "relay_submit": _relay_submit if interactive else None,
         }
 
     return _provider

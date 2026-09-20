@@ -227,8 +227,9 @@ class _FakeTTS:
 @pytest.mark.asyncio
 async def test_stage_voice_file_success(monkeypatch):
     # 造一个真实临时音频文件，假 TTS 返回它，转码原样返回，落盘 mock
+    _ptt = b"OggS" + b"\x00" * 60 + b"OpusHead" + b"\x00" * 32
     fd, audio = tempfile.mkstemp(suffix=".ogg")
-    os.write(fd, b"OGGfakebytes")
+    os.write(fd, _ptt)
     os.close(fd)
 
     monkeypatch.setattr(
@@ -256,7 +257,7 @@ async def test_stage_voice_file_success(monkeypatch):
     assert out[1] == "/static/protocol_media/x/out.ogg"
     assert isinstance(out[2], dict)
     assert captured["platform"] == "telegram"
-    assert captured["data"] == b"OGGfakebytes"
+    assert captured["data"] == _ptt
     # 合成临时文件已被清理
     assert not os.path.exists(audio)
 

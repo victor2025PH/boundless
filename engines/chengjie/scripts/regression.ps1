@@ -1,4 +1,4 @@
-# 回归运行器（防陈旧字节码幽灵 flaky）。
+﻿# 回归运行器（防陈旧字节码幽灵 flaky）。
 #
 # 背景：曾出现随机序下 test_*_event_alias 偶发失败——根因是上个会话遗留的旧
 # __pycache__/*.pyc（模块级常量与当前源码不一致）被加载。本脚本在跑测前清掉
@@ -25,10 +25,22 @@ try {
     }
     Get-ChildItem -Recurse -Directory -Filter "__pycache__" -Path src, tests `
         -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # 生产在线护栏（2026-07-23）：18799/18899 在听 = 本机正在服务坐席。全量 -n auto 在
+    # 8 核机开满 8 worker 与生产争核（实测 CPU 100%，坐席「聊天记录加载失败/切换超时」）。
+    # 生产在线时：本进程降 BelowNormal（pytest 子进程继承）+ 全量并行度封顶 4。
+    # 定向跑（透传参数）不动并行度，只降优先级。
+    $prodUp = @(Get-NetTCPConnection -LocalPort 18799, 18899 -State Listen `
+        -ErrorAction SilentlyContinue).Count -gt 0
+    if ($prodUp) {
+        try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
+        Write-Host "[regression] 生产实例在线（18799/18899）→ 本次回归 BelowNormal + 全量并行度封顶 4" `
+            -ForegroundColor Yellow
+    }
     if ($args.Count -gt 0) {
         python -m pytest @args -q --timeout=90 --timeout-method=thread
     } else {
-        python -m pytest tests/ -n auto -q --timeout=90 --timeout-method=thread
+        $nWorkers = if ($prodUp) { "4" } else { "auto" }
+        python -m pytest tests/ -n $nWorkers -q --timeout=90 --timeout-method=thread
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

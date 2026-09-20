@@ -30,6 +30,7 @@ import RichText from "./RichText";
 import { ENGINE } from "@/lib/engineContent";
 import { INSTALL_GUIDE, PRE_CHECK } from "@/lib/manualContent";
 import { RELEASE_NOTES, LATEST_VERSION, type ReleaseTag } from "@/lib/releaseNotes";
+import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 
@@ -68,7 +69,7 @@ const FALLBACK: Build[] = [
 /** 版本标签徽章的配色与双语文案 */
 const TAG_STYLE: Record<ReleaseTag, string> = {
   feature: "border-neon-cyan/40 bg-neon-cyan/10 text-neon-cyan",
-  improve: "border-neon-violet/40 bg-neon-violet/10 text-neon-violet",
+  improve: "border-neon-violet/40 bg-neon-violet/15 text-violet-300",
   fix: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
   security: "border-amber-400/40 bg-amber-400/10 text-amber-300",
 };
@@ -79,9 +80,16 @@ const TAG_LABEL: Record<ReleaseTag, { zh: string; en: string }> = {
   security: { zh: "安全", en: "Security" },
 };
 
-export default function DownloadSection() {
+/**
+ * 幻境 STUDIO 客户端下载页主体。
+ * embedded=true 时作为下载中心（DownloadHub 卡片矩阵）之下的区块渲染：
+ * hero 降级为 h2 区块标题（页面 h1 归 DownloadHub），顶距收紧，并带 #avatarhub 锚点。
+ * 安装包文件名仍为 AvatarHub-Setup-*.exe（真实发布物，勿只改文案不改发布脚本）。
+ */
+export default function DownloadSection({ embedded = false }: { embedded?: boolean }) {
   const { lang } = useLang();
   const zh = lang === "zh";
+  const Heading = embedded ? ("h2" as const) : ("h1" as const);
   const [builds, setBuilds] = useState<Build[]>(FALLBACK);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [showAllReleases, setShowAllReleases] = useState(false);
@@ -125,22 +133,30 @@ export default function DownloadSection() {
   ];
 
   return (
-    <section className="relative pb-24 pt-32">
+    <section className={`relative pb-24 ${embedded ? "pt-16" : "pt-32"}`}>
       <div className="pointer-events-none absolute left-1/3 top-24 h-80 w-80 rounded-full bg-neon-blue/15 blur-[130px]" />
 
-      <div className="relative mx-auto max-w-5xl px-5">
+      <div id={embedded ? "avatarhub" : undefined} className="relative mx-auto max-w-5xl scroll-mt-28 px-5">
         <Reveal eager className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
             <ShieldCheck className="h-3.5 w-3.5" />
             {zh ? "薄核心安装包 · 组件按需下载 · SHA-256 可校验" : "Thin-core installer · on-demand components · SHA-256 verifiable"}
           </span>
-          <h1 className="mt-4 text-3xl font-bold text-white md:text-5xl">
-            {zh ? "下载客户端" : "Download the Client"}
-          </h1>
+          <div className="mt-4 flex items-center justify-center gap-3">
+            {embedded && (
+              // eslint-disable-next-line @next/next/no-img-element -- 客户端级图标，静态 PNG
+              <img src="/brand/products/studio.png" alt="幻境 STUDIO " width={48} height={48} className="h-12 w-12 object-contain" draggable={false} />
+            )}
+            <Heading className={`font-bold text-white ${embedded ? "text-2xl md:text-4xl" : "text-3xl md:text-5xl"}`}>
+              {embedded
+                ? zh ? "幻境 STUDIO 实时数字人引擎" : "STUDIO Digital Human Engine"
+                : zh ? "下载客户端" : "Download the Client"}
+            </Heading>
+          </div>
           <p className="mx-auto mt-3 max-w-2xl text-slate-400">
             {zh
-              ? "AvatarHub 实时数字人引擎：声音克隆、实时换脸、数字人直播、克隆音同传，本地部署数据不出机房。"
-              : "AvatarHub real-time digital human engine: voice cloning, live face swap, digital-human streaming and interpreting — deployed locally, data stays on-prem."}
+              ? "幻境 STUDIO 实时数字人引擎：AI 作图、图片 / 视频换脸、直播实时换脸、变声器、克隆音同传，本地部署数据不出机房。免费版即可换脸（输出带水印）。"
+              : "STUDIO real-time digital human engine: AI image gen, photo/video face swap, live face swap, voice changer and cloned-voice interpreting — deployed locally, data stays on-prem. The Free plan does face swap (watermarked output)."}
           </p>
         </Reveal>
 
@@ -167,7 +183,8 @@ export default function DownloadSection() {
                   <div className="mt-5 flex-1">
                     {b.ready && b.url ? (
                       <a
-                        href={b.url}
+                        // /dl 分流：镜像健康走 R2 边缘（快 3–5 倍且不占主站带宽），否则自动回落本站
+                        href={b.filename ? dlHref(`releases/${b.filename}`) : b.url}
                         download
                         onClick={() => track("download_click", { os: b.os, ver: b.ver })}
                         className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
@@ -184,7 +201,7 @@ export default function DownloadSection() {
                         href={CONTACT_URL}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-block rounded-full border border-neon-violet/40 px-6 py-2.5 text-sm text-neon-violet transition hover:bg-neon-violet/10"
+                        className="inline-block rounded-full border border-neon-violet/40 px-6 py-2.5 text-sm text-violet-300 transition hover:bg-neon-violet/10"
                       >
                         {zh ? "上线后通知我" : "Notify me"}
                       </a>
@@ -288,7 +305,7 @@ export default function DownloadSection() {
               </div>
               <button
                 onClick={() => startInstallAssist("guide_header")}
-                className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 px-4 py-1.5 text-xs text-neon-violet transition hover:bg-neon-violet/10"
+                className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 px-4 py-1.5 text-xs text-violet-300 transition hover:bg-neon-violet/10"
               >
                 <Bot className="h-3.5 w-3.5" />
                 {zh ? "AI 协助安装" : "AI install assistant"}

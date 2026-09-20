@@ -10,9 +10,16 @@ import { resolveOrderSku } from "./offer-map";
 const DB = process.env.ORDERS_DB || path.join(DATA_DIR, "orders-db.json");
 const LOG = process.env.ORDERS_LOG || path.join(DATA_DIR, "orders.jsonl");
 
-/** pending 待付款 → paid 已到账 → activated 已开通；cancelled 取消。 */
-export type OrderStatus = "pending" | "paid" | "activated" | "cancelled";
-export const ORDER_STATUSES: OrderStatus[] = ["pending", "paid", "activated", "cancelled"];
+/** pending 待付款 → paid 已到账 → activated 已开通；cancelled 取消；
+ *  refunded 已退款（实施50 P2）——退款单在首充/新人/VIP/返利等一切资格判定里
+ *  视同不存在（判定只认 paid/activated）；已履约单标退款后，厂商机守护会点名
+ *  「凭证可能已兑换」转人工跟进（离线凭证架构无远程回收面）。 */
+export type OrderStatus = "pending" | "paid" | "activated" | "cancelled" | "refunded";
+export const ORDER_STATUSES: OrderStatus[] = ["pending", "paid", "activated", "cancelled", "refunded"];
+
+/** 交付形态：installed=装机授权码（默认）；hosted=托管实例开通（tenant_fulfill_watch）。 */
+export type OrderDelivery = "installed" | "hosted";
+export const ORDER_DELIVERIES: OrderDelivery[] = ["installed", "hosted"];
 
 export interface OrderEntry {
   id: string;
@@ -21,6 +28,11 @@ export interface OrderEntry {
   plan: string;
   edition: string;
   period: string;
+  /** 交付形态。缺省/历史单视同 installed；hosted 单不进装机 license 守护。 */
+  delivery?: OrderDelivery;
+  /** 坐席数（2026-08-19 Token 定价改版：团队版/工作台按坐席计价，amount=单价×seats）。
+   *  仅按坐席档写入；缺省/历史单=1 坐席语义。履约按此签发 seats 席位。 */
+  seats?: number;
   /** 全域 SKU 关联键，见 platform/licensing/sku_registry.json（下单时经 lib/offer-map.ts
    *  的 resolveOrderSku 推断填充；映射不到则不写，宁缺毋错）。 */
   sku_id?: string;
@@ -39,6 +51,13 @@ export interface OrderEntry {
   contact: string;
   fingerprint: string;
   lang: string;
+  /** 会话归因串（AI 坐席聊天里发出的下单链接带 ?ref=<platform:acct:chat>）：
+   *  记录这单是哪个 AI 会话促成的；chengjie 引擎按 ref 拉单自动结算营销目标。 */
+  ref?: string;
+  /** 渠道归因（实施50 P2 桌面海报漏斗）：下单页 URL 的 ?utm_source=（如 chatx_desktop
+   *  =桌面弹窗海报带来）。与 ref 同款「宁缺毋错」——空值不落字段；/console/funnel
+   *  按它把「桌面海报 → 下单」从全渠道订单里拆出来，闭合跨系统漏斗。 */
+  utm_source?: string;
   ip?: string;
   ua?: string;
   paid_at?: string;
@@ -111,12 +130,15 @@ export async function createOrder(
     const db = await readDb();
     // usdt：分配唯一小数尾数供链上自动核销；card：Stripe 按 session 对账，金额原样不加尾数。
     const method: "usdt" | "card" = input.method === "card" ? "card" : "usdt";
+    const delivery: OrderDelivery =
+      input.delivery === "hosted" ? "hosted" : "installed";
     const entry: OrderEntry = {
       ...input,
       id: newOrderId(),
       t: new Date().toISOString(),
       status: "pending",
       method,
+      delivery,
       pay_amount: method === "card" ? input.amount : allocPayAmount(db, input.amount),
       currency: method === "card" ? "USD" : "USDT",
     };
@@ -124,6 +146,10 @@ export async function createOrder(
     const sku = resolveOrderSku(input.plan, input.edition, input.period);
     if (sku.skuId) entry.sku_id = sku.skuId;
     if (sku.productId) entry.product_id = sku.productId;
+    if (!entry.ref) delete entry.ref; // 空归因串不落字段（绝大多数自然流量单）
+    if (!entry.utm_source) delete entry.utm_source; // 渠道归因同款：自然流量不落字段
+    // installed 是默认态：历史读库无字段视同 installed；新单也只在 hosted 时强制写出亦可，
+    // 这里显式落 installed，方便运营后台一眼区分两条履约链。
     db.orders[entry.id] = entry;
     await writeDb(db);
     await appendFile(LOG, JSON.stringify(entry) + "\n", "utf-8").catch(() => {});
@@ -216,7 +242,7 @@ export async function listOrders(status?: string): Promise<OrderEntry[]> {
   return status ? all.filter((o) => o.status === status) : all;
 }
 
-const PERIOD_SUB_DAYS: Record<string, number> = { monthly: 30, annual: 365 };
+const PERIOD_SUB_DAYS: Record<string, number> = { monthly: 30, quarterly: 90, annual: 365 };
 
 /** SLA/续费巡检（服务器 cron 每 10 分钟经 /api/admin/order-sla 调用；用官网自身原子存储，无多进程竞态）：
  *  ① 已到账超时未开通 → 疑似履约机离线，告警管理员（带一键开通）；
@@ -303,7 +329,8 @@ export async function notifyAdmins(text: string, inlineKeyboard?: unknown) {
   await Promise.allSettled(chats.map((c) => tgSend(c, text, inlineKeyboard)));
 }
 
-const zhPlan = (o: OrderEntry) => `${o.plan}${o.period === "annual" ? " · 年付" : o.period === "monthly" ? " · 月付" : ""}`;
+const zhPlan = (o: OrderEntry) =>
+  `${o.plan}${o.period === "annual" ? " · 年付" : o.period === "quarterly" ? " · 季付" : o.period === "monthly" ? " · 月付" : ""}`;
 
 /** 到账/开通/临期时自动私信已绑定的客户（notify_chat）。客户没绑定则静默跳过（仍可自助查询）。 */
 export async function notifyCustomerOfStatus(o: OrderEntry, kind: "paid" | "activated" | "expiring", daysLeft?: number) {
@@ -325,10 +352,14 @@ export async function notifyCustomerOfStatus(o: OrderEntry, kind: "paid" | "acti
       [[{ text: "📄 打开订单页", url: checkUrl }]]
     );
   } else if (kind === "expiring") {
+    // 续费链接透传原单 ref（会话归因串）：老客户点这里续的单继承归因 →
+    // 引擎 order_pull 才匹配得上留存目标（否则续了费目标仍按流失 expired，
+    // winback 反去骚扰刚付钱的客户）。无 ref 的自然流量单保持原样。
+    const refQ = o.ref ? `&ref=${encodeURIComponent(o.ref)}` : "";
     await tgSend(
       o.notify_chat,
       `⏰ <b>订阅即将到期</b>\n订单 <code>${o.id}</code>（${zhPlan(o)}）将在约 ${daysLeft ?? 3} 天后到期。点下方续费保持不中断。`,
-      [[{ text: "🔄 立即续费", url: `${site}/order?plan=${encodeURIComponent(o.plan)}&period=${o.period}` }]]
+      [[{ text: "🔄 立即续费", url: `${site}/order?plan=${encodeURIComponent(o.plan)}&period=${o.period}${refQ}` }]]
     );
   }
 }
@@ -346,9 +377,12 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
   const text =
     `🧾 新订单 ${o.id}\n` +
     `套餐：${o.plan} (${o.edition}) · ${o.period}\n` +
+    (o.seats && o.seats > 1 ? `坐席：${o.seats} 席（按坐席计价，应付=单价×席数）\n` : "") +
+    (o.delivery === "hosted" ? `交付：☁️ 云端托管（自动开通实例，勿手发授权码）\n` : "") +
     `应付：${o.pay_amount} USDT（挂牌 ${o.amount} + 识别尾数）\n` +
     `联系：${o.contact}\n` +
     (o.fingerprint ? `指纹：${o.fingerprint}\n` : "") +
+    (o.ref ? `🤖 AI 会话促成：${o.ref}\n` : "") +
     `状态：待付款`;
   const body = {
     text,
@@ -359,7 +393,10 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
               { text: "✅ 标记已到账", url: mark("paid") },
               { text: "🚀 标记已开通", url: mark("activated") },
             ],
-            [{ text: "❌ 取消订单", url: mark("cancelled") }],
+            [
+              { text: "❌ 取消订单", url: mark("cancelled") },
+              { text: "↩️ 标记已退款", url: mark("refunded") },
+            ],
           ],
         }
       : undefined,

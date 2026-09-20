@@ -25,7 +25,19 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_AVATAR_DIR = "src/web/static/persona_avatars"
+# 头像落盘目录必须是**绝对**路径，且等于 web 服务真正挂载的那个静态目录
+# （`admin.py`：`app.mount("/static", StaticFiles(Path(__file__).parent/"static"))`
+# ——即**代码根**的 src/web/static，与 CWD 无关）。
+#
+# ⚠️ 2026-07-29 实锤：原值是相对路径 "src/web/static/persona_avatars"，按**进程 CWD**
+# 解析。双实例迁移后进程 CWD 是实例数据根 → 头像被写进
+# `<数据根>/src/web/static/persona_avatars/`，那个目录 web 服务**从不挂载** →
+# 存进注册表的 `/static/persona_avatars/xxx.jpg` 永远 404（坐席看到裂图）。
+# 更糟的是有指纹去重（`avatar_needs_refresh`）：指纹不变就不再重下，**404 永久固化**。
+# 迁移前 CWD 恰好是代码根，所以旧账号的头像在对的位置——故障只在迁移后新登录的号上出现。
+# 解析方式与 `protocol_bridge._STATIC_MEDIA_SUBDIR` 同款（同仓既有先例）。
+_DEFAULT_AVATAR_DIR = str(
+    Path(__file__).resolve().parents[1] / "web" / "static" / "persona_avatars")
 _AVATAR_URL_PREFIX = "/static/persona_avatars"
 # 对外透出键（self_avatar_fid 是内部指纹，用于头像变更检测，不外泄）
 _SELF_KEYS = ("self_name", "self_username", "self_avatar")
@@ -226,6 +238,28 @@ async def enrich_from_user(
         return {}
 
 
+async def _download_avatar_url(
+    url: str, platform: str, account_id: str, avatar_dir: str
+) -> bool:
+    """best-effort 把远端头像**直链**下载到本地静态目录，成功 True。任何异常吞掉。
+
+    与 ``_download_avatar``（Telegram file_id 专用）互补：WhatsApp(pps)/Messenger(scontent)
+    的自身头像是带签名的临时 https URL，落本地后 UI 不再受签名过期影响。
+    """
+    try:
+        import httpx
+        Path(avatar_dir).mkdir(parents=True, exist_ok=True)
+        dest = Path(avatar_dir) / _safe_avatar_filename(platform, account_id)
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            dest.write_bytes(r.content)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.debug("[self_profile] 头像直链下载失败（忽略）", exc_info=True)
+        return False
+
+
 async def enrich_from_fields(
     platform: str,
     account_id: str,
@@ -234,11 +268,15 @@ async def enrich_from_fields(
     username: str = "",
     avatar_url: str = "",
     config: Optional[Dict[str, Any]] = None,
+    avatar_dir: str = _DEFAULT_AVATAR_DIR,
 ) -> Dict[str, str]:
     """通用富集入口（供 WhatsApp/LINE/Messenger 等已知自身昵称的适配器直接喂字段）。
 
     与 ``enrich_from_user`` 共用同一 read-merge-write + 计数管道。``avatar_url`` 为远端
-    头像直链（这些平台无需本地下载，直接存 URL）。flag 关/无有效字段 → 空 dict，绝不抛。
+    头像直链：``self_profile.avatar`` 子开关**开** → 下载落本地静态目录再存本地 URL
+    （远端多为带签名的临时 URL，过期即裂图；同 URL 幂等不重下，指纹复用 self_avatar_fid）；
+    **关** → 维持旧行为直接存远端 URL（轻量，接受过期风险）。
+    flag 关/无有效字段 → 空 dict，绝不抛。
     """
     if not self_profile_enabled(config):
         return {}
@@ -246,14 +284,30 @@ async def enrich_from_fields(
     try:
         profile = extract_self_profile(
             {"name": name, "username": username})
-        if avatar_url:
-            profile["self_avatar"] = str(avatar_url)
-        if not profile:
-            return {}
         from src.integrations.account_registry import get_account_registry
         reg = get_account_registry()
         existing_meta = (reg.get(platform, account_id) or {}).get("meta") or {}
-        return _write_profile(platform, account_id, profile, existing_meta)
+        extra: Dict[str, Any] = {}
+        url = str(avatar_url or "")
+        if url:
+            localized = False
+            if self_avatar_enabled(config) and url.startswith(("http://", "https://")):
+                if not avatar_needs_refresh(existing_meta, url):
+                    # 同一直链已本地化过 → 复用既有本地 URL，不重下
+                    profile["self_avatar"] = str(existing_meta["self_avatar"])
+                    extra["self_avatar_fid"] = url
+                    _bump("avatar_reused")
+                    localized = True
+                elif await _download_avatar_url(url, platform, account_id, avatar_dir):
+                    profile["self_avatar"] = build_avatar_url(platform, account_id, url)
+                    extra["self_avatar_fid"] = url
+                    _bump("avatar_downloaded")
+                    localized = True
+            if not localized:
+                profile["self_avatar"] = url   # 子开关关/下载失败 → 回落存远端直链
+        if not profile:
+            return {}
+        return _write_profile(platform, account_id, profile, existing_meta, extra)
     except Exception:  # noqa: BLE001
         _bump("errors")
         logger.debug("[self_profile] enrich_from_fields 失败（忽略）", exc_info=True)

@@ -21,10 +21,11 @@ def create_app(assistant_ref=None, auth_token: str = ""):
         raise ImportError("监控 API 需要安装: pip install fastapi uvicorn")
 
     app = FastAPI(title="Telegram MTProto AI 监控", version="1.0.0")
+    # S5：监控仅 GET 只读，不需带凭据；关闭 '*' + allow_credentials 危险组合。
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["GET"],
         allow_headers=["*"],
     )

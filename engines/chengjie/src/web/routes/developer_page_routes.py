@@ -4,6 +4,7 @@
   GET  /developer
   POST /developer/auth
   POST /developer/logout
+  GET  /model-keys   （登录即可，不走开发者密码闸）
 
 依赖：templates / require_auth / config_manager（经 AdminRouteContext）。
 """
@@ -28,6 +29,14 @@ def register_developer_page_routes(app, ctx) -> None:
         page_ctx: dict = {"dev_unlocked": dev_unlocked, "dev_error": ""}
         if dev_unlocked:
             cfg = config_manager.config or {}
+            wb = cfg.get("web_admin", {}) if isinstance(cfg.get("web_admin"), dict) else {}
+            # L-6 D：Session 密钥行显真实状态（桌面首启已自动生成 / 仍是默认值），
+            # 不再一律「留空保留原值」占位——值本身绝不进模板。
+            try:
+                from src.utils.config_manager import ConfigManager
+                secret_default = ConfigManager.web_secret_is_default(wb.get("secret_key"))
+            except Exception:
+                secret_default = True
             page_ctx.update({
                 "ai": cfg.get("ai", {}),
                 "voice_ai": (
@@ -35,7 +44,8 @@ def register_developer_page_routes(app, ctx) -> None:
                     if isinstance(cfg.get("messenger_rpa"), dict)
                     else {}
                 ),
-                "wb": cfg.get("web_admin", {}),
+                "wb": wb,
+                "wb_secret_state": "default" if secret_default else "set",
                 "tg": cfg.get("telegram", {}),
                 "notif": cfg.get("notifications", cfg.get("webhook", {})),
             })
@@ -54,8 +64,17 @@ def register_developer_page_routes(app, ctx) -> None:
             "dev_error": "密码错误，请重试",
         })
 
+    @app.get("/model-keys", response_class=HTMLResponse)
+    async def model_keys_page(request: Request):
+        """厂商模型档与密钥：登录即可，不走开发者密码闸。"""
+        _require_auth(request)
+        return templates.TemplateResponse(request, "model_keys.html", {})
+
     @app.post("/developer/logout")
     async def developer_logout(request: Request):
         _require_auth(request)
         request.session.pop("dev_unlocked", None)
+        # 开发者模式（L-4 A）随密码闸一起关：它只在 dev_unlocked 为真时生效，
+        # 这里顺手清掉，避免下次解锁时上一个人留下的视角直接回来。
+        request.session.pop("developer_mode", None)
         return RedirectResponse("/developer", status_code=303)

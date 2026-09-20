@@ -561,5 +561,6 @@ def unload_endpoint():
 
 
 if __name__ == "__main__":
-    print("[VideoTryOn] 启动于 :8006（模型懒加载，首单 ~45s 冷启动）")
-    uvicorn.run(app, host="0.0.0.0", port=8006, log_level="warning")
+    _port = int(os.environ.get("VIDEOTRYON_PORT") or app_config.port("videotryon") or 8006)
+    print(f"[VideoTryOn] 启动于 :{_port}（模型懒加载，首单 ~45s 冷启动）")
+    uvicorn.run(app, host="0.0.0.0", port=_port, log_level="warning")

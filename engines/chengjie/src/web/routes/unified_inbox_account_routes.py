@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
 import time
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -36,6 +38,172 @@ from src.web.routes.unified_inbox_auth import _session_agent
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+# 入站语音落库前转录的墙钟上限：协议边车（whatsapp-baileys / messenger-web）在等这个
+# HTTP 返回，超时会让它重投同一条消息。ASR 自己有超时，这层只兜「整条链卡死」。
+_INGEST_ASR_TIMEOUT_SEC = 25.0
+
+# 入站转录并发闸（2026-09-04 kouxing 事故）：边车冷启动会把积压语音**一次性**灌进来
+# （实录 11 秒内十几路），每路各占一条 Whisper HTTPS 连接，文件描述符越过 Windows
+# ``select()`` 的 512 上限后 uvicorn 事件循环整体抛 ValueError → 防幽灵 exit 78 →
+# 坐席静默掉线。闸门刻意开在 ``asyncio.wait_for`` **内侧**：排队时间算进同一个 25s
+# 墙钟预算内，超时仍按占位符落库（既有退化路径），绝不让排队把边车的 HTTP 拖到重投。
+_INGEST_ASR_MAX_CONCURRENCY_DEFAULT = 3
+_INGEST_ASR_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _ingest_asr_sem(cfg: Optional[Dict[str, Any]] = None) -> asyncio.Semaphore:
+    """进程级转录并发闸（首次调用时按配置定档，之后恒定）。"""
+    global _INGEST_ASR_SEM
+    if _INGEST_ASR_SEM is None:
+        n = _INGEST_ASR_MAX_CONCURRENCY_DEFAULT
+        try:
+            raw = ((cfg or {}).get("voice_recognition") or {}).get(
+                "ingest_concurrency")
+            if raw is not None:
+                n = max(1, min(8, int(raw)))
+        except Exception:
+            n = _INGEST_ASR_MAX_CONCURRENCY_DEFAULT
+        _INGEST_ASR_SEM = asyncio.Semaphore(n)
+        logger.info("[protocol] 入站语音转录并发闸 = %s", n)
+    return _INGEST_ASR_SEM
+
+
+async def _transcribe_ingest_guarded(vtr: Any, path: str, lang: str,
+                                     cfg: Optional[Dict[str, Any]] = None,
+                                     lang_hint: Optional[str] = None) -> Any:
+    """过并发闸再转录（调用方负责把本协程包进 wait_for 限总时长）。
+
+    ``lang_hint``（ASR P0）：会话语种先验，只用于「检出语种冲突且置信不足时按先验
+    重转一次」；转录器不认该参数（旧签名/替身）→ 退回两参调用。
+    """
+    async with _ingest_asr_sem(cfg):
+        if lang_hint:
+            try:
+                return await vtr.transcribe_voice_message(path, lang, lang_hint=lang_hint)
+            except TypeError:
+                pass
+        return await vtr.transcribe_voice_message(path, lang)
+
+# 各平台「边车 worker」的登录 mode——即会主动 POST /session-status 的那些服务所对应的
+# mode（messenger-web=web / whatsapp-baileys=protocol，与各自 login provider 落库口径一致）。
+# session-status 收到 authorized 兜底提升账号时据此钉正 mode：新建/修复的行必须落在
+# 有 worker 工厂的 mode 上（get_worker_factory(platform, mode)），否则账号 online 了却拉不起
+# worker。无映射的平台（不经边车 push）→ None，upsert 时不动既有 mode。
+_EDGE_WORKER_WEB_MODE: Dict[str, str] = {
+    "messenger": "web",
+    "whatsapp": "protocol",
+}
+
+# 告警渠道 = 整个实例的运营配置：配错/删渠道 → 全实例告警瞎，且渠道明细含明文群
+# webhook 地址（泄露即他人可往群里发东西）。故「读明细 + 写」收敛到运营角色。
+# 用**排除法**（拒 agent/viewer，放行 master/admin 与 Bearer 桌面壳＝装机主人、
+# session 无 role）而非严格白名单 `_require_supervisor`——后者会拦掉桌面壳纯 Bearer
+# 请求（session 无 role → 判非主管），而桌面壳正是客户主力界面，拦了就违背「每个
+# 安装的都能各绑各的」这一诉求。与生产验证过的 persona bind `_check_write_role`
+# 同哲学：绝不误伤「主人」，只拦明确的低权限坐席/观察员。alert-catalog（纯告警
+# 类型目录、无实例信息）不受此限，任意登录可读。门禁 test_alert_channel_authz。
+_ALERT_CFG_DENY_ROLES = {"agent", "viewer"}
+
+
+def _require_alert_channel_admin(request: Request) -> None:
+    try:
+        role = str(request.session.get("role", "") or "")
+    except Exception:
+        role = ""
+    if role in _ALERT_CFG_DENY_ROLES:
+        raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+
+
+# P1（2026-08-12）账号管理写口硬闸：启停/重启/登出/删除/改名/官方资料推送/批量对齐/
+# 自动回复开关与参数/全局设置/编排器同步＝运营动作——误触即「账号下线漏接客户 /
+# 官方身份被改写 / AI 开始代发」。与告警渠道同一排除法（拒 agent/viewer）：agent 本被
+# api_auth._agent_guard 前置全拦（纵深冗余），真正补的洞是 **viewer 能过 api_auth 直呼
+# 这些写口**。读口（清单/审计/体检/编排器状态/资料读取）不闸——viewer 保持可观察。
+# 前端侧配套：/api/accounts 的 viewer_can_manage 让 cp-accounts 提前收起管理按钮，
+# 本闸是它的服务端真边界。门禁 tests/test_account_manage_authz.py。
+_ACCOUNT_MANAGE_DENY_ROLES = _ALERT_CFG_DENY_ROLES
+
+
+def _require_account_manager(request: Request) -> None:
+    try:
+        role = str(request.session.get("role", "") or "")
+    except Exception:
+        role = ""
+    if role in _ACCOUNT_MANAGE_DENY_ROLES:
+        raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+
+
+def _record_profile_ops_event(
+    platform: str, account_id: str, *, kind: str, ok: bool,
+    fields: Any = None, persona_id: str = "", note: str = "", run_id: str = "",
+) -> None:
+    """把「官方资料推送/对齐」落一条 ops 事件（90 天可追溯），best-effort。
+
+    - ``kind``：``profile_push``（单号）/ ``profile_align``（批量对齐）；
+    - ``reason``：结果标签（``ok`` / ``failed``）；
+    - ``detail``：紧凑串 ``fields=name,avatar;persona=<id>;run=<id>;<note>``（不含昵称
+      原文/头像，仅字段名/人设 id/批次 id，避免把 PII 写进审计库）。``run_id`` 把同一次
+      批量对齐的多条 per-account 事件归组（前端可折叠成「这批 N 号一次对齐」）。
+    审计绝不阻断主流程：任何异常静默降级。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+        store = get_ops_event_store()
+        if store is None:
+            return
+        if isinstance(fields, (list, tuple, set)):
+            fstr = ",".join(sorted(str(f) for f in fields if f))
+        else:
+            fstr = str(fields or "")
+        parts = [f"fields={fstr}"] if fstr else []
+        if persona_id:
+            parts.append(f"persona={persona_id}")
+        if run_id:
+            parts.append(f"run={run_id}")
+        if note:
+            parts.append(str(note))
+        store.record(
+            kind, account_id=str(account_id or ""),
+            platform=str(platform or "").lower() or "telegram",
+            reason="ok" if ok else "failed",
+            detail=";".join(parts),
+        )
+    except Exception:
+        logger.debug("[profile_push] ops 事件审计失败（忽略）", exc_info=True)
+
+
+def _recent_profile_events(
+    platform: str, account_id: str, limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """取该号近期「资料推送/对齐」审计事件（跨运行，含批量），best-effort。
+
+    只回 ``profile_push`` / ``profile_align`` 两类，供详情页「变更历史」展开；
+    缺库或异常 → 空列表（详情页只是少一块，不报错）。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+        store = get_ops_event_store()
+        if store is None:
+            return []
+        rows = store.recent(account_id=str(account_id or ""),
+                             limit=max(1, int(limit)) * 3)
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            if str(r.get("kind") or "") not in ("profile_push", "profile_align"):
+                continue
+            out.append({
+                "ts": float(r.get("ts") or 0),
+                "kind": str(r.get("kind") or ""),
+                "ok": bool(r.get("reason") == "ok"),
+                "detail": str(r.get("detail") or ""),
+            })
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        return []
+
 
 _last_avatar_sweep_ts: float = 0.0
 _AVATAR_SWEEP_INTERVAL_S = 3600.0  # 孤儿头像清扫最短间隔（机会式，随 fleet-health 触发）
@@ -58,10 +226,654 @@ _TG_CLIENT_COOLDOWN_SEC = 60.0
 # ——把它降到 8s 缩小「首个牺牲者」的等待，同时仍远大于正常延迟（不误伤慢网）。
 _TG_FETCH_TIMEOUT_SEC = 8.0
 
+# WhatsApp/Messenger 头像上游（Node worker）的账号级熔断——与 _TG_CLIENT_BAD_UNTIL 同哲学。
+# 2026-08-05 实锤：WA socket 半死时 Baileys profilePictureUrl **无限挂起**（Node 层无超时），
+# Python 侧旧默认 20s 超时 → 浏览器里每个头像挂满 20s；列表几行 WA 会话就把同源 6 连接
+# 占死 → 整页请求（含 ?conv= 深链救援）饿死。修法：① 回源短超时 4s（正常 ~百 ms，只有
+# 挂死才吃到）；② 上游**超时**（≠业务快败——那说明服务活着）→ 开 60s 账号冷却窗，窗内
+# 同账号头像秒 404（前端回落首字母头像），只有首个请求付超时成本；成功回源即清除。
+# 刻意不写 per-peer .none 负缓存：挂死 ≠ 无头像，恢复后同一 peer 应立即可重试。
+_PROTO_AVATAR_BAD_UNTIL: Dict[str, float] = {}
+_PROTO_AVATAR_COOLDOWN_SEC = 60.0
+_PROTO_AVATAR_FETCH_TIMEOUT_SEC = 4.0
+
+
+def _proto_avatar_cooling(platform: str, account_id: str) -> bool:
+    """该账号的头像回源是否处于熔断冷却窗（过期自清）。"""
+    key = f"{platform}:{account_id}"
+    until = _PROTO_AVATAR_BAD_UNTIL.get(key)
+    if until is None:
+        return False
+    if time.monotonic() >= until:
+        _PROTO_AVATAR_BAD_UNTIL.pop(key, None)
+        return False
+    return True
+
+
+def _mark_proto_avatar_bad(platform: str, account_id: str) -> None:
+    _PROTO_AVATAR_BAD_UNTIL[f"{platform}:{account_id}"] = (
+        time.monotonic() + _PROTO_AVATAR_COOLDOWN_SEC)
+
+
+def _clear_proto_avatar_bad(platform: str, account_id: str) -> None:
+    _PROTO_AVATAR_BAD_UNTIL.pop(f"{platform}:{account_id}", None)
+
+
+def _norm_msg_text(t: Any) -> str:
+    """消息文本归一化（去重与校正索引共用的唯一口径）。"""
+    return " ".join(str(t or "").split()).lower()
+
+
+def approx_fix_index(
+    existing: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """建「合成时间行」的可校正索引（实施72 P5）：(按平台 msg_id, 按方向|文本)。
+
+    只登记 ``approx_ts=1``（时间是猜的）的行——历史重推带回真实 ts 时，去重本会把
+    那条整体丢弃、错时间永久留库；有了索引就能就地修对。
+    文本键指向多行 → **歧义**（同一句「好」出现两次，认不出真值该贴哪条）→ 从索引
+    剔除：宁可留着「≈」标，也不把真实时间贴到错的行上。msg_id 天然唯一不受此限。
+    """
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_txt: Dict[str, Dict[str, Any]] = {}
+    ambiguous: set = set()
+    for m in existing or []:
+        if not int(m.get("approx_ts") or 0):
+            continue
+        if not str(m.get("message_id") or "").strip():
+            continue
+        pmid = str(m.get("platform_msg_id") or "").strip()
+        if pmid:
+            by_id[pmid] = m
+        text = _norm_msg_text(m.get("text"))
+        if not text:
+            continue
+        key = f"{m.get('direction')}|{text}"
+        if key in by_txt:
+            ambiguous.add(key)
+        else:
+            by_txt[key] = m
+    for key in ambiguous:
+        by_txt.pop(key, None)
+    return by_id, by_txt
+
+
+def correct_approx_row(
+    store: Any,
+    row: Optional[Dict[str, Any]],
+    real_ts: float,
+) -> bool:
+    """把索引命中的合成时间行校正为真实时间（成功则同步内存快照）。
+
+    校正只许「猜的→真的」单向：store 侧 SQL 另有 ``approx_ts=1`` 闸，真实时间行
+    永不被改写（否则每次重推都是一次时间抖动＝不幂等）。同步 ``row`` 是因为调用方
+    随后要用 existing 快照算「库内最早时间」当合成锚点，读旧值会把残余合成行排到
+    真史之后。旧 store（方法未装载）静默跳过，绝不影响回填主链。
+    """
+    if not row or real_ts <= 0:
+        return False
+    try:
+        if not store.correct_approx_ts(str(row.get("message_id") or ""), real_ts):
+            return False
+    except AttributeError:
+        return False
+    except Exception:
+        logger.debug("[protocol] 补收时间校正失败", exc_info=True)
+        return False
+    row["ts"] = real_ts
+    row["approx_ts"] = 0
+    return True
+
 
 # resolve-peer 端点并发上限：占用的是 starlette 共享线程池（全站 sync 端点共用 ~40 线程），
 # 断网时每个 resolve 挂满 8s，无上限会把池吃空。超限直接快败（best-effort 补名，可重试）。
 _RESOLVE_PEER_SEM = threading.Semaphore(4)
+
+# 通讯录「立即同步」按钮的进程内限频：{platform:account_id: 上次触发的 monotonic}。
+# 目录同步是重 RPC（Telegram 要遍历 dialogs / WhatsApp 要 resyncAppState 全量回流），
+# 坐席狂点会把 Telegram RPC 打爆触发 FloodWait——那会**连累正常收发消息**几分钟到几小时，
+# 代价远大于「晚 10 分钟看到新好友」。故限死同号 10 分钟一次。
+# 只放进程内 dict：重启后重新计时的代价（最多多一次同步）远小于持久化的复杂度。
+_CONTACTS_REFRESH_COOLDOWN_SEC = 600.0
+_CONTACTS_REFRESH_LAST: Dict[str, float] = {}
+
+
+def _contacts_refresh_cooldown_left(platform: str, account_id: str) -> float:
+    """距下次允许「立即同步」还剩几秒；0 = 现在可以。"""
+    key = f"{platform}:{account_id}"
+    last = _CONTACTS_REFRESH_LAST.get(key)
+    if last is None:
+        return 0.0
+    left = _CONTACTS_REFRESH_COOLDOWN_SEC - (time.monotonic() - last)
+    if left <= 0:
+        _CONTACTS_REFRESH_LAST.pop(key, None)
+        return 0.0
+    return left
+
+
+def _contacts_refresh_mark(platform: str, account_id: str) -> None:
+    """记一次真实触发（仅在同步真的发出去之后调用，失败不该占用冷却窗）。"""
+    _CONTACTS_REFRESH_LAST[f"{platform}:{account_id}"] = time.monotonic()
+
+# Telegram 账号级聊天记录同步的进度状态：{account_id: {state, dialogs_done, dialogs_total,
+# messages, error, started_at, finished_at}}。同步协程跑在 pyrogram 自身 loop（独立线程），
+# web 线程轮询读——全程经 _TG_HIST_SYNC_LOCK 保护。
+_TG_HIST_SYNC: Dict[str, Dict[str, Any]] = {}
+_TG_HIST_SYNC_LOCK = threading.Lock()
+
+
+def tg_history_sync_snapshot(account_id: str) -> Dict[str, Any]:
+    """读取某账号历史同步进度快照（无记录 → state=idle）。"""
+    with _TG_HIST_SYNC_LOCK:
+        st = _TG_HIST_SYNC.get(str(account_id or ""))
+        return dict(st) if st else {"state": "idle"}
+
+
+def _tg_hist_update(account_id: str, **kw: Any) -> None:
+    with _TG_HIST_SYNC_LOCK:
+        _TG_HIST_SYNC.setdefault(str(account_id or ""), {}).update(kw)
+
+
+def _tg_hist_try_start(account_id: str) -> bool:
+    """原子地把该账号置为 running；已在跑返回 False（防重复并发同步）。"""
+    with _TG_HIST_SYNC_LOCK:
+        st = _TG_HIST_SYNC.setdefault(str(account_id or ""), {})
+        if st.get("state") == "running":
+            return False
+        st.update(state="running", dialogs_done=0, dialogs_total=0, messages=0,
+                  error="", error_kind="", started_at=time.time(),
+                  finished_at=0.0)
+        return True
+
+
+def _persist_tg_history_sync(
+    account_id: str, *, finished_at: float, dialogs: int = 0, messages: int = 0,
+) -> None:
+    """把本次成功同步的完成时间写入 registry.meta（跨进程重启仍可提示「上次同步」）。
+
+    read-merge-write：upsert(meta=) 是整块覆盖，必须先读再叠加，否则会抹掉
+    session_string / self_* 等既有字段。账号不在注册表（如 A 线 config 默认号）→ 静默跳过，
+    仅依赖进程内 ``_TG_HIST_SYNC`` 快照。
+    """
+    try:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+        row = reg.get("telegram", str(account_id or ""))
+        if row is None:
+            return
+        meta = dict(row.get("meta") or {})
+        meta["last_history_sync_ts"] = float(finished_at or 0)
+        meta["last_history_sync_dialogs"] = int(dialogs or 0)
+        meta["last_history_sync_messages"] = int(messages or 0)
+        reg.upsert("telegram", str(account_id or ""), meta=meta)
+    except Exception:
+        logger.debug("[protocol] 持久化 tg 历史同步时间失败", exc_info=True)
+
+
+def read_tg_history_sync_persisted(account_id: str) -> float:
+    """从 registry.meta 读持久化的上次历史同步完成时间（无 → 0）。"""
+    try:
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get("telegram", str(account_id or ""))
+        if not row:
+            return 0.0
+        return float((row.get("meta") or {}).get("last_history_sync_ts") or 0)
+    except Exception:
+        return 0.0
+
+
+def start_tg_history_sync(
+    app: Any, store: Any, account_id: str, *,
+    dialogs_limit: int = 100, per_chat: int = 100,
+) -> Dict[str, Any]:
+    """触发一次 Telegram 账号级历史同步（后台跑在该账号 pyrogram 自身 loop）。
+
+    手动路由与看门狗「自动补缺口」共用本入口：同一冷却检查、同一单飞闸
+    （``_tg_hist_try_start``）、同一进度登记表——不会出现自动/手动各跑一份。
+    返回触发结果（ok/reason/started/already_running + 进度快照）。
+    """
+    dialogs_limit = max(1, min(500, int(dialogs_limit or 100)))
+    per_chat = max(1, min(100, int(per_chat or 30)))
+    if _tg_client_cooling(account_id):
+        return {"ok": False, "reason": "client_cooling"}
+    # 全量深同步战役在跑 → 浅同步让路（同账号别叠两份 dialogs/history RPC；
+    # 反方向的互斥在 full-sync 路由里，两头都拦）。
+    try:
+        from src.integrations.tg_full_sync import full_sync_snapshot
+        if full_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_full_sync"}
+    except Exception:
+        pass
+    pyro = _get_tg_pyro_for_account(app, account_id)
+    loop = getattr(pyro, "loop", None)
+    if pyro is None or loop is None or not loop.is_running():
+        return {"ok": False, "reason": "client_unavailable"}
+    if not _tg_hist_try_start(account_id):
+        return {"ok": True, "already_running": True,
+                **tg_history_sync_snapshot(account_id)}
+    import asyncio
+    from src.inbox.ingest import ingest_thread
+    from src.integrations.protocol_bridge import (
+        sync_telegram_history, tg_error_kind,
+    )
+
+    def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
+        return ingest_thread(store, chat, msgs)
+
+    def _progress(done: int, total: int, messages: int) -> None:
+        _tg_hist_update(account_id, dialogs_done=done, dialogs_total=total,
+                        messages=messages)
+
+    async def _run() -> None:
+        try:
+            stats = await sync_telegram_history(
+                pyro, account_id, dialogs_limit=dialogs_limit,
+                per_chat=per_chat, ingest=_ingest, progress=_progress)
+            finished = time.time()
+            dialogs_n = int(stats.get("dialogs") or 0)
+            messages_n = int(stats.get("messages") or 0)
+            _tg_hist_update(
+                account_id, state="done", finished_at=finished,
+                dialogs_done=dialogs_n, messages=messages_n)
+            _persist_tg_history_sync(
+                account_id, finished_at=finished,
+                dialogs=dialogs_n, messages=messages_n)
+        except Exception as exc:
+            logger.debug("[protocol] telegram 历史同步失败", exc_info=True)
+            # error_kind=session_revoked → 前端提示「重新登录」而非笼统失败
+            _tg_hist_update(account_id, state="error",
+                            error=str(exc)[:200],
+                            error_kind=tg_error_kind(exc),
+                            finished_at=time.time())
+
+    asyncio.run_coroutine_threadsafe(_run(), loop)
+    return {"ok": True, "started": True, **tg_history_sync_snapshot(account_id)}
+
+
+def tg_autosync_pick(
+    rows: List[Dict[str, Any]], now: float, interval_hours: float,
+    max_pick: int = 1,
+) -> List[str]:
+    """纯函数：从账号行里挑「到期该自动同步」的 account_id（最久未同步优先）。
+
+    row 契约：``{"account_id": str, "last_sync_ts": float}``（后者=持久化戳与
+    进程内 finished_at 取大；0=从未同步——排最前，新接入账号第一轮就补齐）。
+    interval<=0 / max_pick<=0 → 空列表（等于关闭）。
+    """
+    try:
+        iv = float(interval_hours or 0)
+    except (TypeError, ValueError):
+        iv = 0.0
+    if iv <= 0 or int(max_pick or 0) <= 0:
+        return []
+    due: List[tuple] = []
+    for r in rows or []:
+        aid = str((r or {}).get("account_id") or "")
+        if not aid:
+            continue
+        try:
+            last = float((r or {}).get("last_sync_ts") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if (float(now) - last) >= iv * 3600.0:
+            due.append((last, aid))
+    due.sort(key=lambda t: t[0])
+    return [aid for _, aid in due[: int(max_pick)]]
+
+
+def maybe_autostart_tg_history_sync(app: Any, cfg: Dict[str, Any]) -> List[str]:
+    """看门狗钩子：给到期的 Telegram 账号自动触发历史同步（停机缺口自愈）。
+
+    实时镜像只覆盖服务在线时段——停机窗口丢的消息不会自己回来；本钩子按
+    ``inbox.tg_history_autosync`` 配置周期性补一轮云端同步（按消息 id 去重，
+    重复零成本）。判据 = registry.meta 持久戳与进程内 finished_at 取大。
+
+    **仅动「有自己专属 worker client」的在册账号**：``_get_tg_pyro_for_account``
+    的主 client 回落对自动化是串号风险（登出账号会拿主账号的 client 拉出主账号
+    的会话、按错误 account_id 落库）；手动同步由 UI 只对在线账号出按钮兜住，
+    自动路径必须在这里自己把关。返回本轮真正触发的 account_id 列表。
+    """
+    acfg = ((cfg.get("inbox") or {}).get("tg_history_autosync") or {}) \
+        if isinstance(cfg, dict) else {}
+    if not acfg.get("enabled", False):
+        return []
+    store = getattr(getattr(app, "state", None), "inbox_store", None)
+    if store is None:
+        return []
+    try:
+        from src.integrations.account_registry import get_account_registry
+        accounts = get_account_registry().list("telegram") or []
+    except Exception:
+        logger.debug("[protocol] autosync 读账号注册表失败", exc_info=True)
+        return []
+    orch = None
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+    except Exception:
+        orch = None
+    now = time.time()
+    rows: List[Dict[str, Any]] = []
+    for a in accounts:
+        aid = str((a or {}).get("account_id") or "")
+        if not aid:
+            continue
+        worker = orch.worker_for("telegram", aid) if orch is not None else None
+        if _extract_pyro(getattr(worker, "client", None)) is None:
+            continue   # 无专属 client → 不自动同步（防主 client 回落串号）
+        snap = tg_history_sync_snapshot(aid)
+        if snap.get("state") == "running":
+            continue
+        persisted = 0.0
+        try:
+            persisted = float(
+                ((a or {}).get("meta") or {}).get("last_history_sync_ts") or 0)
+        except (TypeError, ValueError):
+            persisted = 0.0
+        inproc = float(snap.get("finished_at") or 0)
+        rows.append({"account_id": aid,
+                     "last_sync_ts": max(persisted, inproc)})
+    try:
+        interval = float(acfg.get("interval_hours", 12) or 12)
+    except (TypeError, ValueError):
+        interval = 12.0
+    try:
+        max_pick = int(acfg.get("max_accounts_per_tick", 1) or 1)
+    except (TypeError, ValueError):
+        max_pick = 1
+    started: List[str] = []
+    for aid in tg_autosync_pick(rows, now, interval, max_pick):
+        res = start_tg_history_sync(
+            app, store, aid,
+            dialogs_limit=int(acfg.get("dialogs", 100) or 100),
+            per_chat=int(acfg.get("per_chat", 100) or 100))
+        if res.get("started"):
+            started.append(aid)
+            logger.info("[protocol] tg 历史自动同步已触发 acct=%s（缺口自愈）", aid)
+    return started
+
+
+# 单会话深度回填进度：{f"{account_id}:{chat_key}": {state, fetched, inserted,
+# exhausted, error, started_at, finished_at}}。写读经 _TG_DEEP_BF_LOCK；
+# 完成态条目超上限按最旧清（进程内观测表，防长期运行无界膨胀）。
+_TG_DEEP_BF: Dict[str, Dict[str, Any]] = {}
+_TG_DEEP_BF_LOCK = threading.Lock()
+_TG_DEEP_BF_MAX = 200
+
+
+def _deep_bf_key(account_id: str, chat_key: str) -> str:
+    return f"{account_id}:{chat_key}"
+
+
+def tg_deep_backfill_snapshot(account_id: str, chat_key: str) -> Dict[str, Any]:
+    """读取某会话深度回填进度快照（无记录 → state=idle）。"""
+    with _TG_DEEP_BF_LOCK:
+        st = _TG_DEEP_BF.get(_deep_bf_key(account_id, chat_key))
+        return dict(st) if st else {"state": "idle"}
+
+
+def _tg_deep_update(account_id: str, chat_key: str, **kw: Any) -> None:
+    with _TG_DEEP_BF_LOCK:
+        _TG_DEEP_BF.setdefault(
+            _deep_bf_key(account_id, chat_key), {}).update(kw)
+
+
+def _tg_deep_try_start(account_id: str, chat_key: str) -> bool:
+    """原子置 running；**该账号**已有深度回填在跑 → False（按账号串行——
+    两份并发 get_chat_history 会翻倍该账号的 RPC 压力，FloodWait 风险无谓放大）。
+    顺带按上限清最旧完成态条目。"""
+    key = _deep_bf_key(account_id, chat_key)
+    prefix = f"{account_id}:"
+    with _TG_DEEP_BF_LOCK:
+        for k, v in _TG_DEEP_BF.items():
+            if k.startswith(prefix) and v.get("state") == "running":
+                return False
+        if len(_TG_DEEP_BF) >= _TG_DEEP_BF_MAX:
+            done = sorted(
+                (k for k, v in _TG_DEEP_BF.items()
+                 if v.get("state") != "running"),
+                key=lambda k: float(_TG_DEEP_BF[k].get("finished_at") or 0))
+            for k in done[: max(1, len(_TG_DEEP_BF) - _TG_DEEP_BF_MAX + 1)]:
+                _TG_DEEP_BF.pop(k, None)
+        _TG_DEEP_BF[key] = {
+            "state": "running", "fetched": 0, "inserted": 0,
+            "exhausted": False, "error": "", "error_kind": "",
+            "started_at": time.time(), "finished_at": 0.0,
+        }
+        return True
+
+
+# ── B88：线程缺口探测（打开会话时 云端顶部 id vs 镜像最大 id）──────────────
+# 进程内观测表：{cid: {state, checked_at, top_id, mirror_max_id, gap, fetched,
+# inserted, capped, error, error_kind, finished_at}}。状态经 /thread 响应带给
+# 前端（补拉失败必须显式可见，禁止静默漏显——实施64:486 ③）。
+_TG_GAP_PROBE: Dict[str, Dict[str, Any]] = {}
+_TG_GAP_LOCK = threading.Lock()
+_TG_GAP_MAX = 300
+_TG_GAP_COOLDOWN_SEC = 120.0
+# C1-①（#123 族，2026-09-02）：序号洞探测参数——镜像最近 200 个 id 内找相邻差 >1
+# 的缺号，单轮最多定点核实 100 个 id（= 一次 messages.getMessages）；核实为空
+# （已删/服务消息）的 id 进 per-cid 缓存，后续探测不再重复烧 RPC。
+_TG_GAP_HOLE_WINDOW = 200
+_TG_GAP_HOLE_MAX = 100
+_TG_GAP_EMPTY_IDS: Dict[str, set] = {}
+_TG_GAP_EMPTY_IDS_MAX = 2000
+
+
+def tg_gap_probe_snapshot(cid: str) -> Dict[str, Any]:
+    """读某会话缺口探测快照（无记录 → state=idle）。"""
+    with _TG_GAP_LOCK:
+        st = _TG_GAP_PROBE.get(str(cid or ""))
+        return dict(st) if st else {"state": "idle"}
+
+
+def _tg_gap_update(cid: str, **kw: Any) -> None:
+    with _TG_GAP_LOCK:
+        _TG_GAP_PROBE.setdefault(str(cid or ""), {}).update(kw)
+
+
+def tg_seq_holes_applicable(chat_key: str) -> bool:
+    """序号连续性判洞是否适用于该会话：只有 supergroup/channel（``-100`` 前缀）
+    的消息 id 按会话单调连续；私聊/小群 id 是账号全局序，相邻差 >1 是常态。"""
+    return str(chat_key or "").strip().startswith("-100")
+
+
+def _tg_gap_remember_empty(cid: str, ids: Any) -> None:
+    """记住核实为空的洞 id（已删/服务消息），下次探测直接剔除。"""
+    ids = [int(i) for i in (ids or []) if int(i or 0) > 0]
+    if not ids:
+        return
+    with _TG_GAP_LOCK:
+        s = _TG_GAP_EMPTY_IDS.setdefault(str(cid or ""), set())
+        s.update(ids)
+        if len(s) > _TG_GAP_EMPTY_IDS_MAX:
+            # 只留最新的一段（老洞越久越不可能再被问到）
+            keep = sorted(s)[-_TG_GAP_EMPTY_IDS_MAX:]
+            s.clear()
+            s.update(keep)
+
+
+def tg_gap_candidate_holes(store: Any, cid: str, chat_key: str) -> List[int]:
+    """镜像序号洞候选（已剔除核实为空缓存）；不适用/异常 → 空列表。"""
+    if store is None or not tg_seq_holes_applicable(chat_key):
+        return []
+    try:
+        holes = list(store.numeric_platform_msg_id_holes(
+            cid, window=_TG_GAP_HOLE_WINDOW, max_holes=_TG_GAP_HOLE_MAX))
+    except Exception:
+        logger.debug("[gap-probe] 序号洞扫描失败 cid=%s", cid, exc_info=True)
+        return []
+    if not holes:
+        return []
+    with _TG_GAP_LOCK:
+        known_empty = set(_TG_GAP_EMPTY_IDS.get(str(cid or ""), ()))
+    return [h for h in holes if h not in known_empty]
+
+
+def _tg_gap_try_start(cid: str, now: float, *, force: bool = False) -> bool:
+    """原子置 running；冷却窗内/已在跑 → False。容量按最旧完成态清。
+
+    冷却按 ``checked_at`` 计（不是 finished_at）——/thread 是秒级轮询入口，
+    没有冷却就是每拍一次 RPC。``force``（手动重试按钮）只豁免冷却，不豁免
+    running 单飞。
+    """
+    cid = str(cid or "")
+    with _TG_GAP_LOCK:
+        st = _TG_GAP_PROBE.get(cid) or {}
+        if st.get("state") == "running":
+            return False
+        if not force and (now - float(st.get("checked_at") or 0)) < _TG_GAP_COOLDOWN_SEC:
+            return False
+        if len(_TG_GAP_PROBE) >= _TG_GAP_MAX and cid not in _TG_GAP_PROBE:
+            done = sorted(
+                (k for k, v in _TG_GAP_PROBE.items()
+                 if v.get("state") != "running"),
+                key=lambda k: float(_TG_GAP_PROBE[k].get("checked_at") or 0))
+            for k in done[: max(1, len(_TG_GAP_PROBE) - _TG_GAP_MAX + 1)]:
+                _TG_GAP_PROBE.pop(k, None)
+        _TG_GAP_PROBE[cid] = {
+            "state": "running", "checked_at": float(now),
+            "top_id": 0, "mirror_max_id": 0, "gap": False,
+            "top_gap": False, "hole_gap": False,
+            "fetched": 0, "inserted": 0, "capped": False,
+            "holes_probed": 0, "holes_filled": 0, "holes_empty": 0,
+            "error": "", "error_kind": "", "finished_at": 0.0,
+        }
+        return True
+
+
+def _gap_probe_pyro(app: Any, account_id: str) -> Any:
+    """B88 取数 client（严格版）：账号专属 worker client；主 client 仅限 default。
+
+    刻意**不**复用 ``_get_tg_pyro_for_account`` 的无条件主 client 回落——按别的
+    账号身份拉历史再按本账号 cid 落库＝串号污染镜像（autosync 同款纪律）。
+    """
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is not None:
+            wp = _extract_pyro(getattr(
+                orch.worker_for("telegram", account_id), "client", None))
+            if wp is not None:
+                return wp
+    except Exception:
+        logger.debug("[gap-probe] 取 worker client 失败 acct=%s",
+                     account_id, exc_info=True)
+    if str(account_id or "default") == "default":
+        return _extract_pyro(getattr(
+            getattr(app, "state", None), "telegram_client", None))
+    return None
+
+
+def maybe_probe_tg_thread_gap(
+    app: Any, store: Any, account_id: str, chat_key: str, *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """B88：打开会话时探测镜像缺口并自动补拉（best-effort，绝不阻塞 /thread）。
+
+    重启/停机窗口造成「线程视图冻在重启前最后一条」（QTSE67 实锤）：列表 ts 走
+    live dialogs 所以还在动、AI 照回，唯独镜像读取链缺了停机段。本钩子在读取
+    入口对比 dialog 顶部 id 与镜像最大 id，有缺口即在该账号 pyrogram loop 上
+    补拉缺口段（ingest 去重、不触发 SSE/auto-draft/自动回复）。
+
+    C1-①（#123 族，2026-09-02）：顶部比对之外，同轮把镜像里的**序号洞**（相邻
+    数字 id 差 >1 的缺号，仅 supergroup/channel）交云端按 id 定点核实——0902
+    21:1x 实锤：1084 漏收而 1085 已是 top，旧口径 gap=false 永远探不出中间的洞。
+    核实为空的 id（已删/服务消息）进程内缓存，不重复烧 RPC。
+
+    护栏：per-cid 120s 冷却（/thread 秒级轮询不放大 RPC）+ running 单飞 +
+    账号断网冷却让路 + 账号级同步/全量深同步在跑时让路 + 严格 client 路由
+    （不许主 client 顶别的账号）。返回触发结果（观测用）。
+    """
+    account_id = str(account_id or "default")
+    chat_key = str(chat_key or "")
+    cid = f"telegram:{account_id}:{chat_key}"
+    if store is None or not chat_key:
+        return {"ok": False, "reason": "unavailable"}
+    if _tg_client_cooling(account_id):
+        return {"ok": False, "reason": "client_cooling"}
+    try:
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_account_sync"}
+        from src.integrations.tg_full_sync import full_sync_snapshot
+        if full_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_full_sync"}
+    except Exception:
+        pass
+    now = time.time()
+    if not _tg_gap_try_start(cid, now, force=force):
+        return {"ok": True, "skipped": "cooldown_or_running"}
+    pyro = _gap_probe_pyro(app, account_id)
+    loop = getattr(pyro, "loop", None)
+    if pyro is None or loop is None or not loop.is_running():
+        # 客户端不可用＝这轮探不了；不算 error（离线是常态），保留 checked_at
+        # 吃冷却防每拍重试。
+        _tg_gap_update(cid, state="skipped", finished_at=time.time())
+        return {"ok": False, "reason": "client_unavailable"}
+    try:
+        mirror_max = int(store.max_numeric_platform_msg_id(cid) or 0)
+    except Exception:
+        mirror_max = 0
+    # C1-①：序号洞候选（镜像内相邻 id 差 >1 的缺号；supergroup/channel 才适用）
+    hole_ids = tg_gap_candidate_holes(store, cid, chat_key)
+    _tg_gap_update(cid, mirror_max_id=mirror_max, holes_probed=len(hole_ids))
+    import asyncio
+    from src.inbox.ingest import ingest_thread
+    from src.integrations.protocol_bridge import probe_fill_tg_gap, tg_error_kind
+
+    def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
+        return ingest_thread(store, chat, msgs)
+
+    async def _run() -> None:
+        try:
+            stats = await probe_fill_tg_gap(
+                pyro, account_id, chat_key,
+                mirror_max_id=mirror_max, cap=300, ingest=_ingest,
+                hole_ids=hole_ids)
+            _tg_gap_remember_empty(cid, stats.get("hole_empty_ids"))
+            _tg_gap_update(
+                cid, state="done", finished_at=time.time(),
+                top_id=int(stats.get("top_id") or 0),
+                gap=bool(stats.get("gap")),
+                top_gap=bool(stats.get("top_gap")),
+                hole_gap=bool(stats.get("hole_gap")),
+                fetched=int(stats.get("fetched") or 0),
+                inserted=int(stats.get("inserted") or 0),
+                capped=bool(stats.get("capped")),
+                holes_probed=int(stats.get("holes_probed") or 0),
+                holes_filled=int(stats.get("holes_filled") or 0),
+                holes_empty=int(stats.get("holes_empty") or 0))
+            if stats.get("top_gap"):
+                logger.info(
+                    "[gap-probe] 缺口补拉 cid=%s top=%s mirror=%s 拉=%s 入=%s%s",
+                    cid, stats.get("top_id"), mirror_max,
+                    stats.get("fetched"), stats.get("inserted"),
+                    "（触顶未接上）" if stats.get("capped") else "")
+            if stats.get("holes_probed"):
+                # 序号洞结果必须可见（#123 族：值守手动 gap-probe 只见 gap=false）
+                logger.log(
+                    logging.WARNING if stats.get("holes_filled") else logging.INFO,
+                    "[gap-probe] 序号洞核实 cid=%s 探=%s 补回=%s 空洞=%s ids=%s",
+                    cid, stats.get("holes_probed"), stats.get("holes_filled"),
+                    stats.get("holes_empty"),
+                    ",".join(str(h) for h in hole_ids[:20])
+                    + ("…" if len(hole_ids) > 20 else ""))
+            if stats.get("holes_filled"):
+                # 独立标签：值守阻塞哨兵（deploy/duty/group_sentinel.py）把
+                # 「gap-probe」整体列为噪声（0829 顶部补拉误报），而「洞里真有
+                # 漏收消息」是必须唤醒值守的真信号——换标签绕开噪声名单。
+                logger.warning(
+                    "[gap-hole-filled] 镜像序号洞补回 %s 条漏收消息 cid=%s（此前"
+                    "监听/轮询双双未收到；请核对是否有未应答提问）",
+                    stats.get("holes_filled"), cid)
+        except Exception as exc:
+            logger.debug("[gap-probe] 缺口补拉失败 cid=%s", cid, exc_info=True)
+            _tg_gap_update(cid, state="error", error=str(exc)[:200],
+                           error_kind=tg_error_kind(exc),
+                           finished_at=time.time())
+
+    asyncio.run_coroutine_threadsafe(_run(), loop)
+    return {"ok": True, "started": True}
 
 
 def _tg_client_cooling(account_id: str) -> bool:
@@ -82,6 +894,44 @@ def _mark_tg_client_bad(account_id: str) -> None:
 
 def _clear_tg_client_bad(account_id: str) -> None:
     _TG_CLIENT_BAD_UNTIL.pop(str(account_id or ""), None)
+
+
+# ── 媒体按需拉取（fetch-media）的进程内护栏 ──────────────────────────────
+# 单飞：同一 store 行同时只允许一次拉取（重复点击/双窗口直接拿 busy，不重复烧
+# 下载 RPC）；全局并发上限防「坐席对着长历史狂点」把账号推进 FloodWait。
+# 只在 web 事件循环内增删（协程间安全），无需线程锁。
+_MEDIA_FETCH_INFLIGHT: set = set()
+_MEDIA_FETCH_MAX_CONCURRENT = 3
+
+
+def _line_find_recent_message(client: Any, chat_key: str, pmid: str,
+                              limit: int = 100) -> Optional[Dict[str, Any]]:
+    """LINE fetch-media 重试：在 worker 最近消息里找 ``id == pmid`` 的**真消息**。
+
+    Letter Sealing 媒体的对象定位（SID/OID/chunks）只在真消息体里，用空壳
+    fake 调 ``download_line_media`` 永远拉不到（#172 / J-3 交办）。同步 API（走
+    线程池调用）；任何异常/形态不符一律返回 None 让调用方回落 fake——本函数
+    绝不能把一次「找真消息」的失败变成整条重试链的失败。
+    """
+    if not chat_key or not pmid:
+        return None
+    fn = getattr(client, "get_recent_messages", None)
+    if not callable(fn):
+        return None
+    try:
+        raw = fn(chat_key, int(limit))
+    except Exception:
+        logger.debug("[protocol] line fetch-media 取真消息失败", exc_info=True)
+        return None
+    rows: List[Dict[str, Any]] = []
+    if isinstance(raw, dict) and isinstance(raw.get("messages"), list):
+        rows = [m for m in raw["messages"] if isinstance(m, dict)]
+    elif isinstance(raw, list):
+        rows = [m for m in raw if isinstance(m, dict)]
+    for m in rows:
+        if str(m.get("id") or "").strip() == pmid:
+            return m
+    return None
 
 
 def tg_cooldown_snapshot() -> Dict[str, float]:
@@ -322,16 +1172,34 @@ def resolve_tg_peer_identity(store, client, account_id: str,
     return {"ok": True, **result}
 
 
+def _avatar_cache_component(raw: str, extra: str = "") -> str:
+    """磁盘缓存文件名分量：消毒 + 防碰撞。
+
+    旧实现只做「剔除非法字符」——消毒**有损**时两个不同 id 会折叠成同一文件名
+    （如 ``user.name``/``username`` 同账号互踩、非拉丁账号 id 全剔空后跨账号共享
+    同一张头像＝串号串脸）。现在：消毒无损（纯字母数字，账号另允 ``_-``）保持
+    原名（既有缓存文件零迁移）；有损则追加原始值 sha1 前 8 位，保证不同 id 必然
+    不同文件。空 id 同理落到纯哈希名，绝不产生共享的 ``_`` 前缀文件。
+    """
+    import hashlib
+    raw_s = str(raw)
+    safe = "".join(c for c in raw_s if c.isalnum() or c in extra)
+    if safe == raw_s and safe:
+        return safe
+    digest = hashlib.sha1(raw_s.encode("utf-8")).hexdigest()[:8]
+    return f"{safe}-{digest}" if safe else f"h{digest}"
+
+
 def _avatar_disk_paths(platform: str, account_id: str, chat_key: str):
     """会话头像的磁盘缓存路径（jpg / .none 负缓存标记 / 前端 302 目标 url_path）。
 
-    抽成模块级供 whatsapp/messenger 头像分支共用 + 单测（含路径穿越字符消毒——文件名只保
-    留字母数字，account 另允 ``_-``；Node 侧查询仍用**原始** chat_key，磁盘名仅作稳定缓存键）。
-    telegram 走 pyrogram 专路（``_telegram_peer_avatar``），不经此。
+    抽成模块级供 whatsapp/messenger 头像分支共用 + 单测（含路径穿越字符消毒——经
+    ``_avatar_cache_component`` 消毒+防碰撞；Node 侧查询仍用**原始** chat_key，磁盘名
+    仅作稳定缓存键）。telegram 走 pyrogram 专路（``_telegram_peer_avatar``），不经此。
     """
     from src.integrations.protocol_bridge import protocol_media_root
-    safe_acct = "".join(c for c in str(account_id) if c.isalnum() or c in "_-")
-    safe_key = "".join(c for c in str(chat_key) if c.isalnum())
+    safe_acct = _avatar_cache_component(account_id, extra="_-")
+    safe_key = _avatar_cache_component(chat_key)
     adir = protocol_media_root() / str(platform) / "avatars"
     adir.mkdir(parents=True, exist_ok=True)
     jpg = adir / f"{safe_acct}_{safe_key}.jpg"
@@ -340,8 +1208,47 @@ def _avatar_disk_paths(platform: str, account_id: str, chat_key: str):
     return jpg, none_marker, url_path
 
 
+def _avatar_src_fp(url: str) -> str:
+    """头像来源指纹＝直链**路径**部分的 sha1[:12]。
+
+    刻意剔掉 query——scontent 的 oh/oe token 每轮轮换，query 进指纹会让同一张图
+    每轮都被判「变了」；路径才是内容寻址的资产 id（对方换头像 → 路径变 → 指纹变，
+    这就是「头像更新了要能实时刷新」的判据）。空 url → 空串（无判据，走旧行为）。
+    """
+    import hashlib
+    path = str(url or "").split("?", 1)[0].strip()
+    if not path:
+        return ""
+    return hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
+
+
+def _avatar_src_sidecar(jpg):
+    """jpg 旁的 ``.src`` sidecar 路径（记录「这张缓存图当时从哪个直链路径下载」的指纹）。"""
+    return jpg.with_name(jpg.name + ".src")
+
+
+def _avatar_versioned_path(url_path: str, jpg) -> str:
+    """302 目标追加 ``?v=<sidecar 指纹>``——同一静态文件名，内容换代则 URL 换代。
+
+    浏览器与前端 blob 缓存都以最终 URL 为键：没有版本参数时，静态图路径永远不变，
+    对方换了头像也只会命中旧缓存（本次事故的前端半边）。sidecar 缺失（legacy 存量图）
+    回落 mtime，保证旧图也有稳定版本号。
+    """
+    ver = ""
+    try:
+        sc = _avatar_src_sidecar(jpg)
+        if sc.exists():
+            ver = sc.read_text(encoding="utf-8").strip()[:16]
+        if not ver and jpg.exists():
+            ver = str(int(jpg.stat().st_mtime))
+    except Exception:
+        ver = ""
+    return f"{url_path}?v={ver}" if ver else url_path
+
+
 async def _download_and_cache_avatar(url: str, jpg, none_marker, url_path: str,
-                                     *, neg_cache: bool = True, on_outcome=None):
+                                     *, neg_cache: bool = True, on_outcome=None,
+                                     src_fp: str = ""):
     """把 Node 返回的 https 直链头像下载落 /static → 302；空 url/下载失败 → 404。
 
     whatsapp（baileys profilePictureUrl）与 messenger（scontent 直链）两分支共用同一下载/缓存
@@ -353,6 +1260,9 @@ async def _download_and_cache_avatar(url: str, jpg, none_marker, url_path: str,
       下次列表重渲染即重试，轮询补齐后自然自愈。
     ``on_outcome``（可选回调）：命 ``empty``/``fetched``/``error`` 之一供观测（依赖注入而非直连
     观测单例，helper 保持纯粹可测；回调自身异常被吞，绝不影响主流程）。
+    ``src_fp``（可选，2026-08-16 头像实时刷新）：来源直链的路径指纹（``_avatar_src_fp``）。
+    非空时下载成功后写 ``.src`` sidecar（供路由比对「库里最新直链 vs 缓存图来源」判陈旧），
+    并把 302 目标追加 ``?v=<fp>``——内容变则最终 URL 变，浏览器/前端 blob 缓存自然失效。
     返回 ``RedirectResponse``（302→静态图）。
     """
     from fastapi.responses import RedirectResponse
@@ -367,6 +1277,9 @@ async def _download_and_cache_avatar(url: str, jpg, none_marker, url_path: str,
 
     if not url:
         _oc("empty")
+        # 陈旧穿透回源但上游瞬态无直链（messenger 轮询还没缓存到）→ 退回旧图而非 404
+        if jpg.exists():
+            return RedirectResponse(_avatar_versioned_path(url_path, jpg), status_code=302)
         if neg_cache:
             try:
                 none_marker.write_text("", encoding="utf-8")   # 无头像 → 负缓存(≤1 天)
@@ -379,6 +1292,11 @@ async def _download_and_cache_avatar(url: str, jpg, none_marker, url_path: str,
             r = await client.get(url)
             r.raise_for_status()
             jpg.write_bytes(r.content)
+        if src_fp:
+            try:
+                _avatar_src_sidecar(jpg).write_text(src_fp, encoding="utf-8")
+            except Exception:
+                pass
         if none_marker.exists():
             try:
                 os.remove(none_marker)
@@ -388,10 +1306,73 @@ async def _download_and_cache_avatar(url: str, jpg, none_marker, url_path: str,
         raise
     except Exception:
         _oc("error")
+        # 陈旧重取失败 → 退回已有旧图（旧头像好过裂图；下轮直链轮换后再重试）
+        if jpg.exists():
+            _oc("stale_served")
+            return RedirectResponse(_avatar_versioned_path(url_path, jpg), status_code=302)
         logger.debug("[protocol] 头像下载失败", exc_info=True)
         raise HTTPException(404, "no avatar")
     _oc("fetched")
-    return RedirectResponse(url_path, status_code=302)
+    return RedirectResponse(_avatar_versioned_path(url_path, jpg), status_code=302)
+
+
+# ── 头像后台再验证（2026-08-16 统一实时刷新，WA/TG 等拉取式平台） ──────────────
+# Messenger 有推送判据（目录同步持续更新 conversations.avatar_url → 指纹分歧即穿透），
+# 但 WhatsApp/Telegram 的库内没有持续更新的直链——7 天磁盘缓存一旦命中，对方换头像
+# 这边永远不知道。方案＝**先答后核**：缓存命中照常秒回 302（前端零等待），若缓存龄
+# 超过再验证 TTL 则后台回源比对来源指纹（WA=profilePictureUrl 路径 / TG=big_file_unique_id），
+# 变了才重下载 + 回写 conversations.avatar_fp（前端 ?v= 随之翻新 → <img> 缓存失效）。
+# 节流三层：TTL 窗（.reval marker mtime）+ 进程内 in-flight 去重 + 账号级熔断窗共用。
+_AVATAR_REVAL_TTL_SEC = 6 * 3600
+_AVATAR_REVAL_INFLIGHT: set = set()
+
+
+def _avatar_reval_marker(jpg):
+    """jpg 旁的 ``.reval`` 节流标记（mtime=上次后台再验证时刻，与结果无关）。"""
+    return jpg.with_name(jpg.name + ".reval")
+
+
+def _avatar_should_revalidate(jpg, marker, now: float,
+                              *, ttl_sec: float = _AVATAR_REVAL_TTL_SEC) -> bool:
+    """纯函数：磁盘缓存命中时，本次是否值得后台回源核对。
+
+    判据＝缓存图存在 且 图龄 ≥ TTL 且 上次核对（marker mtime）距今 ≥ TTL。
+    刚下载的新图（图龄 < TTL）天然不核——下载本身就是最新事实。任何 IO 异常
+    保守返 False（再验证是锦上添花，绝不给热路径添故障面）。
+    """
+    try:
+        if not jpg.exists():
+            return False
+        if (now - jpg.stat().st_mtime) < ttl_sec:
+            return False
+        if marker.exists() and (now - marker.stat().st_mtime) < ttl_sec:
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _touch_avatar_reval_marker(marker) -> None:
+    """刷新节流标记（spawn 前就刷——失败也占用本轮 TTL，防上游故障期反复回源）。"""
+    try:
+        marker.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _update_avatar_fp(app, platform: str, account_id: str, chat_key: str,
+                      fp: str) -> None:
+    """best-effort 回写 ``conversations.avatar_fp``（前端 ?v= 版本参数的数据源）。"""
+    if not fp:
+        return
+    try:
+        st = getattr(app.state, "inbox_store", None)
+        if st is None:
+            return
+        st.update_conversation_identity(
+            f"{platform}:{account_id}:{chat_key}", avatar_fp=str(fp))
+    except Exception:
+        logger.debug("[protocol] avatar_fp 回写失败", exc_info=True)
 
 
 def register_account_routes(app, *, api_auth, config_manager=None) -> None:
@@ -420,6 +1401,16 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             # 供官方 webhook 的 auto_ai 让位护栏只读查 automation_mode（System Z 去重）
             register_inbox_store_getter(
                 lambda: getattr(app.state, "inbox_store", None))
+            # #146：对端删消息 → 关联记忆清理。SkillManager 在 bootstrap 里 create_app
+            # 之后才挂上 app.state，故钩子内**每次调用时**惰性解析（与 store getter 同理）。
+            from src.integrations.protocol_bridge import register_deleted_memory_purger
+            from src.web.web_context import resolve_skill_manager
+
+            def _purge_deleted(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+                from src.inbox.peer_delete_purge import purge_for_deleted_rows
+                return purge_for_deleted_rows(resolve_skill_manager(None, app), rows)
+
+            register_deleted_memory_purger(_purge_deleted)
         except Exception:
             logger.debug("注册 protocol 收件箱 sink 失败", exc_info=True)
 
@@ -452,15 +1443,59 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         )
         _plat = str((body or {}).get("platform") or "")
         _acct = str((body or {}).get("account_id") or "")
-        _ck = str((body or {}).get("chat_key") or "")
+        # P3-198 身份归一：WA 设备后缀键（'num:0'）并入规范身份 'num'——否则同一
+        # 客户裂成两个会话（陈旧边车/回放消息仍可能携带后缀，服务端边界必须兜住）
+        from src.inbox.normalizer import normalize_chat_key
+        _ck = normalize_chat_key(_plat, str((body or {}).get("chat_key") or ""))
         if not _ck:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="chat_key"))
+        # 空 account_id 回填护栏（2026-07 事故）：Baileys Node 断线后离线队列回放存在
+        # accountId 竞态，push 可能带 account_id="" → 原样落库会裂出孤儿会话
+        # whatsapp::<peer>（与正常 whatsapp:<acct>:<peer> 同客户两条线程），且
+        # protocol_autoreply 因 payload 缺 account_id 直接放弃自动回复。
+        # 注册表在册 whatsapp 账号恰好 1 个 → 归属无歧义，直接回填；0 个或多个 →
+        # 无法判定归属，保持原行为照收（Node 推送无重试，拒收 4xx = 丢消息），只记
+        # error 供人工合并线程。仅对 whatsapp 做——其它平台 account_id 语义不同
+        # （telegram 有 default 账号语义），不扩大爆炸半径。
+        if _plat == "whatsapp" and not _acct:
+            _wa_rows: List[Dict[str, Any]] = []
+            try:
+                _wa_rows = get_account_registry().list(platform="whatsapp")
+            except Exception:
+                logger.debug("[protocol] ingest 回填读注册表失败", exc_info=True)
+            if len(_wa_rows) == 1:
+                _acct = str(_wa_rows[0].get("account_id") or "")
+                # 回填必须同步写回 body：后续若有代码直接 body.get("account_id")
+                # （而非局部 _acct），拿到的也是回填后的值——防「落库归对了、
+                # 自动回复链还是空」的半修状态。
+                body["account_id"] = _acct
+                logger.warning(
+                    "[protocol] whatsapp ingest 空 account_id 已按注册表唯一在册账号"
+                    "回填 account=%s chat_key=%s（Node 离线回放 accountId 竞态）",
+                    _acct, _ck)
+            else:
+                logger.error(
+                    "[protocol] whatsapp ingest 空 account_id 且在册账号数=%d，"
+                    "归属有歧义无法回填 → 照收进孤儿线程 chat_key=%s（需人工合并）",
+                    len(_wa_rows), _ck)
         # P0：跨平台入站身份归一（号码/线程 id 补名 + WhatsApp 号码补进资料面板 + 分类观测）。
         # 来显名是真名→用之；否则用已同步通讯录名补齐（好友名单同步后显示联系人名而非号码）；
         # 仍取不到→回落裸 chat_key。WhatsApp 私聊 chat_key 即 E.164 裸号 → 顺带补 phone。
-        _raw_name = str((body or {}).get("name") or "")
+        # 2026-08-14：来显名先过脏名黑名单（"Active now"/"消息请求" 等状态/导航文案
+        # 被 DOM 侧误当昵称）→ 归零后走下方通讯录补名，而不是带着脏名跳过补名。
+        from src.integrations.protocol_bridge import sanitize_peer_name
+        _raw_name0 = str((body or {}).get("name") or "")
+        _raw_name = sanitize_peer_name(_raw_name0)
+        if _raw_name0 and not _raw_name:
+            logger.info(
+                "[protocol] ingest 状态文案误当昵称已拦截 platform=%s chat_key=%s name=%r",
+                _plat, _ck, _raw_name0)
         direction = str((body or {}).get("direction") or "in")
         _chat_type = str((body or {}).get("chat_type") or "")
+        # P-2 A（#259）：边车打的回填标记（history_set / resync / upsert_append）——落库不触发
+        _backfill = bool((body or {}).get("backfill"))
+        _backfill_source = str((body or {}).get("backfill_source") or "")
+        _decrypt_fail = bool((body or {}).get("decrypt_fail")) or _backfill_source == "decrypt_fail"
         _contact_name = ""
         if not _raw_name or _raw_name == _ck:
             try:
@@ -472,7 +1507,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         _name = _ident["display_name"]
         _phone = _ident["phone"]
         # 观测：仅私聊 peer 身份分类（named/backfilled/raw），量化各平台「仍是裸 id」比例
-        if direction == "in" and _chat_type != "group":
+        from src.inbox.group_thread import is_one_to_one as _is_1to1
+        _one_to_one = _is_1to1(_chat_type)
+        if direction == "in" and _one_to_one:
             _record_ingest_identity(_plat, _ident["outcome"])
         _reply_to = (body or {}).get("reply_to")
         if not isinstance(_reply_to, dict):
@@ -502,17 +1539,113 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 from src.inbox.normalizer import conv_id as _mk_conv_id
                 _pre_cid = _mk_conv_id(_plat, _acct, _ck)
                 if store.get_automation_mode_if_set(_pre_cid) is None:
-                    store.set_automation_mode(
-                        _pre_cid, "manual" if _is_spam_request else "auto_ai")
+                    # #162（2026-09-04）：automation_mode_log 带 source，改档来源可审计
+                    _pre_mode = "manual" if _is_spam_request else "auto_ai"
+                    try:
+                        store.set_automation_mode(
+                            _pre_cid, _pre_mode, source="protocol_request_preset")
+                    except TypeError:
+                        store.set_automation_mode(_pre_cid, _pre_mode)
             except Exception:
                 logger.debug("[protocol] 陌生人请求预置档位失败", exc_info=True)
+        _text = str((body or {}).get("text") or "")
+        _mtype = str((body or {}).get("media_type") or "")
+        _mref = str((body or {}).get("media_ref") or "")
+        # 入站语音**落库前**转录（2026-08-23）：此前转录只活在拟稿的 enrich 里，
+        # 拟稿一被跳过（幂等/守卫/额度/关自动拟稿）转录就跟着不跑，消息行永久停在
+        # 「[语音]」；而占位符不携带消息身份，会让下一条语音被判成重复 → 会话彻底
+        # 哑掉（WA 实锤 08-22 03:47 与 08-23 05:29 两条全空、零回复）。
+        # 必须在 ingest_incoming **之前**：拟稿回调在它内部同步触发，晚一步草稿快照
+        # 就只能拿到占位符。转录到手 → 消息行、草稿快照、A 线自动回复一次性都拿到
+        # 真文本。任何失败保留占位符走原路径，绝不阻断落库。
+        if direction == "in" and _mref and _mtype.lower() in ("voice", "audio"):
+            try:
+                from src.inbox.media_enrich import (
+                    is_placeholder_only, lazy_voice_transcriber,
+                )
+                if is_placeholder_only(_text):
+                    from src.integrations.protocol_bridge import (
+                        static_media_ref_to_path,
+                    )
+                    _cm = getattr(request.app.state, "config_manager", None)
+                    _cfg0 = (getattr(_cm, "config", None) or {}) if _cm else {}
+                    _tc = getattr(request.app.state, "telegram_client", None)
+                    _vtr = getattr(_tc, "voice_transcriber", None) if _tc else None
+                    if _vtr is None:
+                        # 宿主启动后才热开 ASR → 懒建兜底（同 media_enrich 口径）
+                        _vtr = lazy_voice_transcriber(_cfg0)
+                    _vpath = static_media_ref_to_path(_mref)
+                    if _vpath and _vtr is not None:
+                        _vlang = str((_cfg0.get("voice_recognition") or {}).get(
+                            "language", "auto")) or "auto"
+                        # ASR P0：会话语种先验（显式「发→X」→ 历史文字多数语种），
+                        # 只做冲突复核不钉死 language；算不出 → None 保持 auto。
+                        _vhint = None
+                        try:
+                            from src.inbox.asr_lang_hint import conversation_asr_lang_hint
+                            from src.inbox.normalizer import conv_id as _mk_cid_v
+                            _vhint = conversation_asr_lang_hint(
+                                store, _mk_cid_v(_plat, _acct, _ck))
+                        except Exception:
+                            _vhint = None
+                        _vtxt = await asyncio.wait_for(
+                            _transcribe_ingest_guarded(
+                                _vtr, str(_vpath), _vlang, _cfg0, lang_hint=_vhint),
+                            timeout=_INGEST_ASR_TIMEOUT_SEC,
+                        )
+                        _vmeta = getattr(_vtr, "last_meta", None) or {}
+                        if _vtxt and str(_vtxt).strip():
+                            _text = str(_vtxt).strip()
+                            # ASR P1：按元数据判「可疑」并登记（skill_manager 起草时按会话 +
+                            # 本条文本核对 → prompt 走「可能听错 · 先确认」；autodraft 触发侧
+                            # 可选封顶 review）。不可疑则清旧登记。
+                            _asr_sus = ""
+                            try:
+                                from src.inbox.asr_suspect import note_from_meta as _asr_sus_note
+                                from src.inbox.normalizer import conv_id as _mk_cid_s
+                                _asr_sus = _asr_sus_note(
+                                    _mk_cid_s(_plat, _acct, _ck), _vmeta, _text, _cfg0)
+                            except Exception:
+                                _asr_sus = ""
+                            # ASR P2：逐条元数据落 KV（thread 响应 asr 字段 → 坐席台徽标/改正入口）
+                            try:
+                                from src.inbox.asr_meta import save as _asr_meta_save
+                                from src.inbox.normalizer import conv_id as _mk_cid_m
+                                _asr_meta_save(
+                                    store, _mk_cid_m(_plat, _acct, _ck),
+                                    str((body or {}).get("msg_id") or ""), _vmeta,
+                                    suspect=_asr_sus, machine_text=_text)
+                            except Exception:
+                                logger.debug("[protocol] asr 元数据落库失败（忽略）", exc_info=True)
+                            logger.info(
+                                "[protocol] 入站语音落库前转录 %s:%s:%s → %s "
+                                "(lang=%s p=%s logprob=%s cache=%s retry=%s hint=%s suspect=%s)",
+                                _plat, _acct, _ck, _text[:80],
+                                _vmeta.get("language", "?"),
+                                _vmeta.get("language_probability", "-"),
+                                _vmeta.get("avg_logprob", "-"),
+                                "hit" if _vmeta.get("cache_hit") else "-",
+                                "yes" if _vmeta.get("lang_retry") else "-",
+                                _vhint or "-", _asr_sus or "-")
+                        else:
+                            logger.info(
+                                "[protocol] 入站语音转录返空 %s:%s:%s err=%s cache=%s",
+                                _plat, _acct, _ck,
+                                str(getattr(_vtr, "last_error", "") or "-")[:120],
+                                "hit" if _vmeta.get("cache_hit") else "-")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[protocol] 入站语音转录超时 %ss，按占位符落库 %s:%s:%s",
+                    _INGEST_ASR_TIMEOUT_SEC, _plat, _acct, _ck)
+            except Exception:
+                logger.debug("[protocol] 入站语音落库前转录失败（忽略）", exc_info=True)
         cid = ingest_incoming(
             store,
             platform=_plat,
             account_id=_acct,
             chat_key=_ck,
             name=_name,
-            text=str((body or {}).get("text") or ""),
+            text=_text,
             ts=float((body or {}).get("ts") or 0),
             msg_id=str((body or {}).get("msg_id") or ""),
             direction=direction,
@@ -526,9 +1659,44 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             mentions=_mentions,
             sender_id=_sender_id,
             sender_name=_sender_name,
+            backfill=_backfill,
+            backfill_source=_backfill_source,
+            decrypt_fail=_decrypt_fail,
         )
-        # 群聊不进自动回复（自动回复面向 1:1）。spam 类陌生人请求只入收件箱、不自动回。
-        if direction == "in" and _chat_type != "group" and not _is_spam_request:
+        # Q-24 A/C（#298）：边车出站回抄的来源标记 ``origin``——
+        #   external    手机端 Messenger 发出的消息回抄（sender_id="external" 已随落库，
+        #               前端出「手机发出」角标）；**只落库不起草、不记坐席发送时刻**
+        #               （让位由 note_agent_send 只在工作台手发路由触发，此处天然不碰）；
+        #   retry_queue 边车待重试队列补发成功 → 把同文案 failed 留痕改标 resent。
+        _origin = str((body or {}).get("origin") or "")
+        if direction == "out" and cid and _origin == "retry_queue":
+            try:
+                _rs = store.mark_failed_outbound_resent_by_text(cid, _text)
+                logger.info("[protocol] messenger 排队补发成功 conv=%s resent_row=%s",
+                            cid, _rs or "-")
+            except Exception:
+                logger.debug("[protocol] retry_queue 留痕改标失败", exc_info=True)
+        elif direction == "out" and cid and _origin == "external":
+            logger.info("[protocol] messenger 手机端出站回抄 conv=%s len=%d（不起草/不让位）",
+                        cid, len(_text))
+        # 请求标记落库（2026-08-11 可视化）：is_request 落 conversations 列 → chats 透传
+        # → 前端徽章/引导条「回复即通过验证」。出站落库自动清（ingest_message），
+        # 显式接受/拒绝走 request-action 代理。best-effort 不阻断入站。
+        if direction == "in" and _is_request and cid:
+            try:
+                store.mark_conversation_request(cid, _req_cat)
+            except Exception:
+                logger.debug("[protocol] 陌生人请求标记失败", exc_info=True)
+        # 群/频道/多人房间不进自动回复（自动回复面向 1:1，判据走 group_thread 白名单——
+        # 旧口径 `!= "group"` 会把 channel / supergroup / LINE room 全放进来）。
+        # spam 类陌生人请求只入收件箱、不自动回。
+        # P-2 A / F：回填历史 / 自聊会话不进协议链直发（与 B 线拟稿同口径）。
+        if direction == "in" and _one_to_one and not _is_spam_request and not _backfill and not _decrypt_fail:
+            from src.inbox.normalizer import is_self_chat as _is_self_chat
+            if _is_self_chat(_plat, _acct, _ck):
+                logger.info("[inbound] self_chat=1 conv=%s:%s:%s skipped_autoreply=1",
+                            _plat, _acct, _ck)
+                return {"ok": bool(cid), "conversation_id": cid or ""}
             await maybe_auto_reply(make_message(
                 platform=_plat,
                 account_id=_acct,
@@ -537,6 +1705,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 text=str((body or {}).get("text") or ""),
                 ts=float((body or {}).get("ts") or 0),
                 msg_id=str((body or {}).get("msg_id") or ""),
+                # 携带媒体字段：直发线据此识别图片/语音/视频（补全 [图片]/[语音] 占位），
+                # 与全自动草稿链同口径。缺这两字段时纯媒体消息会被判 incomplete 早退。
+                media_type=str((body or {}).get("media_type") or ""),
+                media_ref=str((body or {}).get("media_ref") or ""),
             ))
         return {"ok": bool(cid), "conversation_id": cid or ""}
 
@@ -561,11 +1733,144 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         detail = str((body or {}).get("detail") or "")
         if not plat or not status:
             return {"ok": False, "reason": "missing_field"}
+        # Q-24 A（#298）：边车「发送卡住/已恢复/终局失败」是**发送态**不是登录态——
+        # 直接翻成通知中心铃铛并返回，不进 PlatformSessionHealth 状态机（会污染健康判定）。
+        try:
+            from src.inbox.sidecar_send_alert import (
+                is_send_stuck_status, push_send_stuck_bell)
+            if is_send_stuck_status(status):
+                item = push_send_stuck_bell(
+                    request.app, platform=plat, account_id=acct or login_id,
+                    status=status, detail=detail)
+                return {"ok": True, "kind": "send_stuck_bell", "pushed": item is not None}
+        except Exception:
+            logger.debug("[protocol] send_stuck 铃铛处理失败（忽略）", exc_info=True)
+            if str(status).startswith("send_"):
+                return {"ok": False, "kind": "send_stuck_bell", "pushed": False}
+        # P1 身份化：authorized 推送可携带自身昵称/头像（WA Baileys: pushname/avatar_url、
+        # messenger-web: 同名字段）→ 富集 registry meta.self_*。关键在覆盖「服务重启后
+        # Node restoreAll 自动重连」的存量账号——它们不经登录轮询，此前永远拿不到真实身份。
+        # Node 侧 postStatus 本就是 fire-and-forget（不 await 响应），此处 await 不拖慢对方；
+        # flag 关/字段缺失时 enrich 内部 no-op，best-effort 绝不抛。
+        if status == "authorized" and acct:
+            _sp_name = str((body or {}).get("pushname")
+                           or (body or {}).get("name") or "")
+            _sp_avatar = str((body or {}).get("avatar_url") or "")
+            if _sp_name or _sp_avatar:
+                try:
+                    from src.integrations.account_self_profile import (
+                        enrich_from_fields,
+                    )
+                    _cfg = (config_manager.config
+                            if config_manager is not None else {}) or {}
+                    await enrich_from_fields(
+                        plat, acct, name=_sp_name,
+                        avatar_url=_sp_avatar, config=_cfg)
+                except Exception:
+                    logger.debug("[protocol] session-status self_profile 富集失败（忽略）",
+                                 exc_info=True)
         from src.integrations.platform_session_health import (
             get_platform_session_health,
+            mark_superseded_accounts,
         )
         trans = get_platform_session_health().record(
             plat, acct or login_id, status, detail=detail, login_id=login_id)
+        # 身份接替（2026-08-27）：同一登录档案被新账号授权 → 旧账号健康记录已被
+        # record() 翻 logged_out，这里补注册表标记（worker:* → superseded:*）停催办。
+        if trans.get("superseded"):
+            mark_superseded_accounts(plat, trans["superseded"], acct or login_id)
+        # 登录身份决议（实施72 P1-1/P1-2）：authorized 即登记「登录位↔账号」映射
+        # （此前只有连接流轮询会写，relogin/回报路径全绕过 → 换人检测没原料），
+        # 并合并两路换人证据（注册表映射 + 上面 session_health 的 superseded 清单）
+        # → 检测到换人给新账号打 identity_pending 隔离标（不补人设/自动化封顶
+        # review/告警审计），人经 /api/admin/account-identity/confirm 显式转正。
+        if status == "authorized" and acct and login_id:
+            try:
+                from src.integrations.account_identity import (
+                    resolve_login_identity,
+                )
+                resolve_login_identity(
+                    plat, acct, login_id,
+                    extra_prev=list(trans.get("superseded") or []))
+            except Exception:
+                logger.debug("[protocol] 登录身份决议失败（忽略）", exc_info=True)
+        # B99（实施68 P1-9 残留 ⑤）：worker 检出平台「临时封锁」→ 账号级 ban_signal
+        # 暂停（kill_switch TTL 自动恢复，与 TG PeerFlood 同 pause 语义；messenger 面
+        # 此前未接）。临时封锁≠真封禁：绝不 auto_ban 永久冻结/标 meta.banned。
+        # 冻结原因经 kill_switch reason 进拦截横幅；ops_events 审计随 apply_action 落。
+        if status == "blocked" and acct:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                from src.ops.ban_signal import apply_action
+                from src.ops.kill_switch import get_kill_switch
+                apply_action(
+                    plat, acct,
+                    {"kind": "pause", "cooldown_sec": 7200.0,
+                     "reason": f"platform_blocked:{(detail or 'temporarily_blocked')[:60]}"},
+                    kill_switch=get_kill_switch(),
+                    registry=get_account_registry())
+                logger.warning(
+                    "[protocol] %s:%s 平台临时封锁 → 账号级暂停 2h（ban_signal）",
+                    plat, acct)
+            except Exception:
+                logger.debug("[protocol] blocked→ban_signal 处置失败（忽略）",
+                             exc_info=True)
+        # P1 被动退出闭环（2026-07-31）：运营点「登出」走 /logout 会写 registry
+        # status=offline；但「FB/平台侧把号踢下线」（cookie 失效/风控/手机端解绑）
+        # 只有这条 push——此前注册表停留在 online，而健康表是**进程内存态**，服务一
+        # 重启系统就对「号早退了」彻底失忆。把「需要人重新登录」的确定性转移落回
+        # 持久层：仅 online→offline（绝不动 removed/pending，防复活软删行/干扰登录
+        # 中态）；authorized 反向把 offline 恢复 online（重登成功自动归位）。
+        # ``failed``（崩溃循环放弃）刻意不落——那是可自愈故障，worker/看门狗另有
+        # 处置，标成「已退出」会误导运营去手动重登。best-effort 绝不影响 push 应答。
+        if acct:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                _reg = get_account_registry()
+                _row = _reg.get(plat, acct)
+                _rst = str((_row or {}).get("status") or "")
+                if (status in ("logged_out", "needs_login", "expired")
+                        and _rst == "online"):
+                    # 自灭标记（2026-08-16）：worker 上报的掉线（非运营操作）落
+                    # meta.offline_reason=worker:<status>——看门狗对 offline 账号
+                    # 的「死号持续提醒」只认该标记（运营主动登出走
+                    # _clear_session_creds 落 operator，不催）。没有它，自灭号在
+                    # 一次转移告警后永远静音（messenger 号 7/30 自灭 17 天无人知）。
+                    _reg.upsert(plat, acct, status="offline",
+                                meta={"offline_reason": f"worker:{status}"},
+                                merge_meta=True)
+                elif status == "authorized" and _rst != "removed":
+                    # Edge worker 确认账号已在线 → 权威兜底：把 pending / offline /
+                    # （self_profile 富集刚按默认值 device/pending 建的）新行统一提升为
+                    # online，并钉正 mode（messenger→web / whatsapp→protocol）。
+                    # 根因（2026-08）：慢登录（>HOSTED_TTL）时负责写 web/online 的登录
+                    # 轮询 _poll 已停，此前这里只认 offline→online，而 enrich_from_fields
+                    # 会先把行建成默认 device/pending → 账号永远卡「未接入」，且 device
+                    # mode 无 worker 工厂（get_worker_factory 返 None）导致即便手改 online
+                    # 也拉不起 worker。removed(软删) 不复活。
+                    # 归位顺带清 offline_reason 自灭标记——下一次掉线从头判定。
+                    _edge_mode = _EDGE_WORKER_WEB_MODE.get(plat)
+                    _meta_patch: Dict[str, Any] = {"offline_reason": ""}
+                    # 实施72 P2 重连积压盖章：offline→online 的恢复记录
+                    # {恢复时刻, 估算断线时长}（时长≈now-updated_at，行在离线期被
+                    # 其他 meta 写触碰会低估 → 只会少拦不会误拦，方向安全）。
+                    # 消费方＝effective_automation「reconnect_backlog」封顶层：
+                    # 长断线恢复后的短窗内 AI 只拟稿人审（积压消息的时间语境不可信，
+                    # 「大半夜回 9 天前的消息」类穿帮的总闸）。
+                    if _rst == "offline":
+                        try:
+                            import time as _time
+                            _now2 = _time.time()
+                            _meta_patch["last_recovered_at"] = _now2
+                            _meta_patch["last_downtime_sec"] = max(
+                                0.0, _now2 - float(_row.get("updated_at") or _now2))
+                        except Exception:
+                            pass
+                    _reg.upsert(plat, acct, status="online", mode=_edge_mode,
+                                meta=_meta_patch, merge_meta=True)
+            except Exception:
+                logger.debug("[protocol] session-status 注册表状态同步失败",
+                             exc_info=True)
         if trans.get("went_unhealthy") or trans.get("recovered"):
             try:
                 from src.integrations.shared.event_bus import get_event_bus
@@ -585,6 +1890,340 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "changed": bool(trans.get("changed")),
                 "went_unhealthy": bool(trans.get("went_unhealthy")),
                 "recovered": bool(trans.get("recovered"))}
+
+    @app.get("/api/admin/account-identity/pending")
+    async def api_account_identity_pending(request: Request):
+        """「身份待确认」账号清单（实施72 隔离态观测面）。
+
+        pending 账号＝登录位被检测到换人、尚未人工转正的账号：AI 只拟稿不自发、
+        不自动补挂人设。任意登录角色可读（observability）；写口见 confirm。
+
+        同时回**近期身份变更审计**（`ops_events` 的 `identity_change`，隔离/转正
+        各一条）：隔离态是瞬时状态，转正后 pending 会空——只看 pending 的看板会在
+        事后什么都看不到，运维无从判断「今天到底换过号没有」。台账缺库/无事件回空
+        列表（前端据此整卡隐藏），绝不因审计读取失败影响 pending 主体。
+        """
+        api_auth(request)
+        from src.integrations.account_identity import pending_accounts
+        out: Dict[str, Any] = {"ok": True, "pending": pending_accounts()}
+        recent: List[Dict[str, Any]] = []
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            st = get_ops_event_store()
+            if st is not None:
+                for r in (st.recent_kinds(["identity_change"], limit=20) or []):
+                    recent.append({
+                        "ts": float(r.get("ts") or 0),
+                        "platform": str(r.get("platform") or ""),
+                        "account_id": str(r.get("account_id") or ""),
+                        "reason": str(r.get("reason") or ""),
+                        "detail": str(r.get("detail") or "")[:200],
+                    })
+        except Exception:
+            logger.debug("[identity] 变更审计读取失败（忽略）", exc_info=True)
+        out["recent"] = recent
+        # 疑似自有号未登记（实施72 下一阶段 P1）：对端命中本机注册表 removed
+        # 归档账号（账密迁去别机的痕迹，Calixa 原型）却没登记 own_fleet.extra
+        # → 卡上提示行。只读提示不封顶（封顶会误伤「老板扮客户」常态流）。
+        try:
+            from src.integrations.account_identity import fleet_candidates
+            out["fleet_candidates"] = fleet_candidates(
+                (getattr(config_manager, "config", None) or {})
+                if config_manager else {},
+                inbox_store=getattr(request.app.state, "inbox_store", None))
+        except Exception:
+            logger.debug("[identity] 自有号候选检测失败（忽略）", exc_info=True)
+            out["fleet_candidates"] = []
+        return out
+
+    @app.post("/api/admin/account-identity/confirm")
+    async def api_account_identity_confirm(request: Request):
+        """身份转正（实施72）：人确认「这个新身份就是本机要运营的账号」。
+
+        body: ``{platform, account_id, persona_id?}``——``persona_id`` 非空＝显式
+        绑定该人设；空＝按域默认补挂（此刻是人的决定，自动补挂禁令不再适用）。
+        清 identity_pending 后自动化封顶层（compute_mode_caps ④）随缓存 TTL
+        （≤60s）解除。运营写口：拒 agent/viewer。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower().strip()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform/account_id"))
+        from src.integrations.account_identity import confirm_account_identity
+        try:
+            actor = str(request.session.get("user", "") or "")
+        except Exception:
+            actor = ""
+        cfg = (getattr(config_manager, "config", None) or {}) if config_manager else {}
+        res = confirm_account_identity(
+            plat, acct, persona_id=str((body or {}).get("persona_id") or ""),
+            config=cfg, actor=actor)
+        if not res.get("ok"):
+            raise HTTPException(404, tr(request, "err.ws.account_not_found"))
+        return {"ok": True, "persona_id": res.get("persona_id") or ""}
+
+    @app.post("/api/internal/protocol/inbox-health")
+    async def api_protocol_inbox_health(request: Request):
+        """内部桥（P0，2026-08-04 半死态解药）：外部 worker 周期 push「入站健康心跳」。
+
+        背景（Messenger 网页会话实测）：账号 status=authorized（登录探测绿：有输入框、有
+        会话列表）不代表能读到消息内容——cookie 快照恢复登录后 E2EE 设备密钥没恢复，消息区
+        永久卡 Loading，坐席看到侧栏未读却零入站，且轮询一路「健康」无任何告警（实测掉进这个
+        黑洞 4 天无人知）。本端点收 worker 的「侧栏未读数 + 进线程读取滚动窗成败」，落
+        ``PlatformSessionHealth.record_inbox_health``；「有未读却读取持续全失败」的确定性背离
+        由 ``HealthWatchdog._check_inbox_read_stall`` 升级式告警（本端点只记录不即时告警）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower()
+        acct = str((body or {}).get("account_id") or "")
+        if not plat or not acct:
+            return {"ok": False, "reason": "missing_field"}
+
+        def _int(v: Any) -> int:
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _flt(v: Any) -> float:
+            try:
+                return float(v or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _strict_int(v: Any) -> int:
+            """缺键/损坏值 → -1（=未上报），与「报了 0」严格区分。"""
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return -1
+
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            _ratio = (body or {}).get("e2ee_ratio")
+            res = get_platform_session_health().record_inbox_health(
+                plat, acct,
+                unread=_int((body or {}).get("unread")),
+                read_attempts=_int((body or {}).get("read_attempts")),
+                read_fails=_int((body or {}).get("read_fails")),
+                last_inbound_ts=_flt((body or {}).get("last_inbound_ts")),
+                detail=str((body or {}).get("detail") or ""),
+                # P1：E2EE 占位盲区信号（worker 未带 → -1 表示未知，不参与判定）
+                e2ee_ratio=(_flt(_ratio) if _ratio is not None else -1.0),
+                conv_count=_int((body or {}).get("conv_count")),
+                # P1 PIN 自愈观测（2026-08-14）：老 worker 不带这些键（或值损坏）
+                # → -1 表示未上报（健康行不写 pin_heal），绝不把「没报」记成
+                # 「0 次尝试」——看板会把老 worker 显成零尝试，比缺数据更糟。
+                pin_state=str((body or {}).get("pin_state") or ""),
+                pin_heal_attempts=_strict_int(
+                    (body or {}).get("pin_heal_attempts")),
+                pin_heal_ok=_int((body or {}).get("pin_heal_ok")),
+                pin_heal_fail=_int((body or {}).get("pin_heal_fail")),
+                # P1 2026-08-15：盲区修复观测（缺键 → -1/None=未上报，同 pin_heal 约定）
+                unread_forced_picked=_strict_int(
+                    (body or {}).get("unread_forced_picked")),
+                worker_code_stale=(
+                    None if (body or {}).get("worker_code_stale") is None
+                    else bool((body or {}).get("worker_code_stale"))),
+                worker_code_fp=str((body or {}).get("worker_code_fp") or ""),
+                requests_suspect_streak=_strict_int(
+                    (body or {}).get("requests_suspect_streak")),
+            )
+        except Exception:
+            logger.debug("[protocol] inbox-health 记录失败", exc_info=True)
+            return {"ok": False, "reason": "record_error"}
+        return {"ok": True, "stalled": bool(res.get("stalled"))}
+
+    @app.post("/api/internal/protocol/thread-history")
+    async def api_protocol_thread_history(request: Request):
+        """内部桥（P1，Messenger 对齐 Telegram「首连历史回填」）：worker 推某会话的
+        历史消息批（首次接入时 top-N 会话各回填末尾若干条，坐席接手即有上下文）。
+
+        两条硬护栏：
+        - **合并写入**（实施72 2026-08-27 改）：与库内既有消息按
+          ``platform_msg_id`` ∩ ``(方向, 归一化文本)`` 双层去重后只收新条目——
+          与「拉更早」``_messenger_pull_history`` 同一口径。旧闸「只对空会话
+          写入」在 P3 引入 synth msg_id 后已是过时保守，且被 2026-08-27 竞态
+          实锤打穿：实时链先入 1 条 → 4 秒后整批 14 条历史被 not_empty 拒收、
+          13 条永久丢失（新账号「登录了却没读到记录」的直接成因之一）。
+        - **历史语义 = ingest_thread**（与 Telegram 历史同步同一入口）：直写 store，
+          不触发 SSE / auto-draft / 自动回复、不改未读——历史绝不惊动 AI 与坐席。
+
+        消息 ts 缺失（DOM 解析不出绝对时间）时的合成锚点：空会话按数组序回推
+        （base - n + i 秒，base＝worker 采集时刻）；**非空会话**锚定在库内最早
+        消息之前（只保序——与拉更早同语义，绝不把旧史伪装成新消息）。带
+        ``msg_id`` 时写入 ``platform_msg_id``（表情/撤回挂点 + 跨次去重键）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower()
+        acct = str((body or {}).get("account_id") or "")
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not plat or not acct or not chat_key:
+            return {"ok": False, "reason": "missing_field"}
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        cid = f"{plat}:{acct}:{chat_key}"
+        # 删除墓碑（2026-08-16）：坐席删过的会话，历史回填不得复活——回填消息
+        # ts 按序回推必然早于删除时刻，属「被删历史」；真实新消息走实时 ingest
+        # 链自动解除墓碑，不经此口。
+        try:
+            if store.is_conversation_tombstoned(cid):
+                return {"ok": True, "inserted": 0, "reason": "tombstoned"}
+        except Exception:
+            logger.debug("[protocol] thread-history 墓碑判定失败（忽略）",
+                         exc_info=True)
+        try:
+            # 既有消息快照：空/非空决定合成 ts 锚点方向；非空时兼作去重基准。
+            # 用 list_recent_messages 而非 get_oldest_message——后者只认「带
+            # platform_msg_id」的消息，旧数据无 id 时会恒判「空」。
+            existing = store.list_recent_messages(cid, limit=500) or []
+        except Exception:
+            logger.debug("[protocol] thread-history 既有消息读取失败", exc_info=True)
+            return {"ok": False, "reason": "store_error"}
+        raw = (body or {}).get("messages") or []
+        if not isinstance(raw, list) or not raw:
+            return {"ok": True, "inserted": 0, "reason": "no_messages"}
+        raw = raw[:50]
+        try:
+            base = float((body or {}).get("ts") or 0) or time.time()
+        except (TypeError, ValueError):
+            base = time.time()
+        msgs = []
+        n_raw = len(raw)
+        for i, m in enumerate(raw):
+            if not isinstance(m, dict):
+                continue
+            text = str(m.get("text") or "")
+            media_ref = str(m.get("media_ref") or "")
+            media_type = str(m.get("media_type") or "")
+            if not text and not media_ref:
+                continue
+            if not text:
+                # ingest_thread 只收带 text 的消息——无正文媒体给占位文本
+                # （与 Telegram 历史回填 history_message_obj 同口径），media_ref 照带。
+                from src.integrations.protocol_bridge import media_placeholder
+                text = media_placeholder(media_type)
+            try:
+                ts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            pmid = str(m.get("msg_id") or m.get("message_id") or "").strip()
+            src = {"sender_name": str(m.get("sender") or "")}
+            if pmid:
+                src["msg_id"] = pmid
+                src["message_id"] = pmid
+            row = {
+                "text": text,
+                "direction": ("out" if str(m.get("direction") or "in") == "out"
+                              else "in"),
+                # 空会话：缺 ts 按数组序回推（base - n + i，旧语义原样保留）。
+                # 非空会话：先留 0，去重后统一锚到库内最早消息之前（见下）。
+                "ts": ts or ((base - n_raw + i) if not existing else 0.0),
+                # 实施72 P2 诚实标记：缺真实 ts 的行 ts 是合成值 → approx_ts=1
+                #（消费方：SLO 剔除 / 前端「约·补收」/ AI 新鲜度）；显式 ts 保 0。
+                "approx_ts": 0 if ts else 1,
+                "media_type": media_type,
+                "media_ref": media_ref,
+                "source": src,
+            }
+            if pmid:
+                row["msg_id"] = pmid
+            msgs.append(row)
+        if not msgs:
+            return {"ok": True, "inserted": 0, "reason": "no_messages"}
+        corrected = 0
+        if existing:
+            # ── 合并分支（实施72）：与拉更早同口径的双层去重 + 前置锚定 ──────
+            def _norm(t: Any) -> str:
+                return " ".join(str(t or "").split()).lower()
+
+            seen_txt = {f"{m.get('direction')}|{_norm(m.get('text'))}"
+                        for m in existing if _norm(m.get("text"))}
+            seen_ids = {str(m.get("platform_msg_id") or "").strip()
+                        for m in existing
+                        if str(m.get("platform_msg_id") or "").strip()}
+            # 实施72 P5 自愈校正索引（与「拉更早」路径共用同一 helper）
+            fix_by_id, fix_by_txt = approx_fix_index(existing)
+            fresh = []
+            for m in msgs:
+                pmid = str(m.get("msg_id") or "").strip()
+                key = f"{m.get('direction')}|{_norm(m.get('text'))}"
+                dup = bool(pmid and pmid in seen_ids) or key in seen_txt
+                if dup:
+                    # 重复行携带真实 ts → 把旧的合成时间修对，而不是整条丢弃
+                    try:
+                        _real = float(m.get("ts") or 0)
+                    except (TypeError, ValueError):
+                        _real = 0.0
+                    if correct_approx_row(
+                            store, fix_by_id.get(pmid) or fix_by_txt.get(key),
+                            _real):
+                        corrected += 1
+                    continue
+                seen_txt.add(key)
+                if pmid:
+                    seen_ids.add(pmid)
+                fresh.append(m)
+            if corrected:
+                logger.info(
+                    "[protocol] thread-history 补收时间校正 %d 条 cid=%s",
+                    corrected, cid)
+            if not fresh:
+                return {"ok": True, "inserted": 0, "reason": "all_duplicates",
+                        "corrected": corrected}
+            try:
+                earliest = min((float(m.get("ts") or 0) for m in existing
+                                if float(m.get("ts") or 0) > 0), default=0.0)
+            except (TypeError, ValueError):
+                earliest = 0.0
+            anchor = earliest or base
+            n_fresh = len(fresh)
+            for j, m in enumerate(fresh):
+                if not float(m.get("ts") or 0):
+                    m["ts"] = anchor - (n_fresh - j)
+            msgs = fresh
+        from src.inbox.ingest import ingest_thread
+        from src.integrations.protocol_bridge import sanitize_peer_name
+        chat = {
+            "conversation_id": cid, "platform": plat, "account_id": acct,
+            "chat_key": chat_key,
+            # 2026-08-14：历史回填的会话名同样过脏名黑名单（状态文案归零，
+            # 空名由 store CASE 护栏兜住不覆盖真名）
+            "name": sanitize_peer_name((body or {}).get("name") or ""),
+            "avatar_url": str((body or {}).get("avatar_url") or ""),
+            # 空会话：last_ts 用批内最新消息时间（store MAX 语义不会回拉）。
+            # 合并分支：拉的是旧史 → last_ts 传 0（绝不顶掉会话现有排序位），
+            # unread 保持现值。两分支 unread 都不制造「新消息」观感。
+            "last_ts": (0 if existing
+                        else max(float(m["ts"]) for m in msgs)),
+            "last_msg": ("" if existing else str(msgs[-1].get("text") or "")),
+            "unread": (int((store.get_conversation(cid) or {}).get("unread")
+                           or 0) if existing else 0),
+        }
+        try:
+            inserted = int(ingest_thread(store, chat, msgs) or 0)
+        except Exception:
+            logger.debug("[protocol] thread-history 落库失败", exc_info=True)
+            return {"ok": False, "reason": "ingest_error"}
+        return {"ok": True, "inserted": inserted, "corrected": corrected}
 
     @app.post("/api/internal/protocol/contacts")
     async def api_protocol_contacts(request: Request):
@@ -621,10 +2260,41 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         rows = (body or {}).get("chats") or []
+        _plat_chats = str((body or {}).get("platform") or "")
+        # 2026-08-14：目录占位名过脏名黑名单（"Active now" 等状态文案误当昵称）——
+        # 归零后 upsert_protocol_chats 自带「通讯录名 → 裸 chat_key」回落，且 store
+        # CASE 护栏保证空名/裸 key 不覆盖库里已有真名。全平台统一清洗（黑名单极窄，
+        # 真名零误伤；老版本 worker / 其他边车同样被兜住）。
+        if isinstance(rows, list):
+            from src.integrations.protocol_bridge import sanitize_peer_name
+            _dirty_names = 0
+            for _r in rows:
+                if isinstance(_r, dict) and _r.get("name"):
+                    _nm0 = str(_r.get("name") or "")
+                    if sanitize_peer_name(_nm0) != _nm0.strip():
+                        _r["name"] = ""
+                        _dirty_names += 1
+            if _dirty_names:
+                logger.info(
+                    "[protocol] chats 目录同步拦截状态文案脏名 %d 条 platform=%s",
+                    _dirty_names, _plat_chats)
+        # P3-198：会话列表占位同样过身份归一（jid 字段可能带设备后缀）；
+        # jid='0'＝WhatsApp 系统伪 jid（服务通知），不是客户 → 整行丢弃
+        # （陈旧边车防御——新边车已在源头过滤）
+        if _plat_chats.lower() == "whatsapp" and isinstance(rows, list):
+            from src.inbox.normalizer import normalize_chat_key
+            _clean_rows = []
+            for _r in rows:
+                if isinstance(_r, dict) and _r.get("jid"):
+                    _r["jid"] = normalize_chat_key("whatsapp", str(_r["jid"]))
+                    if _r["jid"] == "0" and not _r.get("is_group"):
+                        continue
+                _clean_rows.append(_r)
+            rows = _clean_rows
         n = 0
         try:
             n = store.upsert_protocol_chats(
-                str((body or {}).get("platform") or ""),
+                _plat_chats,
                 str((body or {}).get("account_id") or ""),
                 rows if isinstance(rows, list) else [],
             )
@@ -649,7 +2319,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         emoji = str((body or {}).get("emoji") or "")
         sender = str((body or {}).get("sender") or "me")
@@ -706,7 +2377,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         status = str((body or {}).get("status") or "")
         if not plat or not ck or not target_id or not status:
@@ -736,13 +2408,24 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         op = str((body or {}).get("op") or "").lower()
         if not plat or not ck or not target_id or op not in ("revoke", "edit"):
             return {"ok": False, "reason": "bad_request"}
         cid = f"{plat}:{acct}:{ck}"
         ok = False
+        # M-1 C #219：撤回前先取原文（方向 + 正文），标撤回后交记忆清理钩子——WhatsApp /
+        # Messenger 边车上报的撤回（含己方在手机端删自己的消息）此前只灰显气泡，AI 侧的
+        # A 线上下文 / 撤回账本零处置；与 Telegram 裸 id 路径（report_deleted_messages）同一钩子。
+        _rows_before = []
+        if op == "revoke" and hasattr(store, "select_live_by_platform_msg_ids"):
+            try:
+                _rows_before = list(store.select_live_by_platform_msg_ids(
+                    plat, acct, [target_id], chat_key=ck) or [])
+            except Exception:
+                _rows_before = []
         try:
             if op == "revoke":
                 ok = store.mark_message_revoked(cid, target_id)
@@ -751,6 +2434,19 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     cid, target_id, str((body or {}).get("text") or ""))
         except Exception:
             logger.debug("[protocol] 消息编辑/撤回落库失败", exc_info=True)
+        if ok and op == "revoke" and _rows_before:
+            try:
+                from src.integrations.protocol_bridge import get_deleted_memory_purger
+                _fn = get_deleted_memory_purger()
+                if _fn is not None:
+                    _purged = dict(_fn(_rows_before) or {})
+                    logger.info(
+                        "[protocol] 撤回同步 platform=%s conv=%s target=%s direction=%s "
+                        "记忆账本=%s 上下文剔除=%s", plat, cid, target_id,
+                        str(_rows_before[0].get("direction") or "?"),
+                        _purged.get("memory", 0), _purged.get("context", 0))
+            except Exception:
+                logger.debug("[protocol] 撤回关联记忆清理失败", exc_info=True)
         if ok:
             try:
                 from src.integrations.shared.event_bus import get_event_bus
@@ -777,7 +2473,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             body = {}
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         state = str((body or {}).get("state") or "").lower()
         if not plat or not ck or not state:
             return {"ok": False, "reason": "missing_field"}
@@ -831,17 +2528,76 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "service_error"}
         return {"ok": bool((res or {}).get("ok", False))}
 
+    @app.post("/api/platforms/messenger/{account_id}/request-action")
+    async def api_messenger_request_action(account_id: str, request: Request):
+        """Messenger 陌生人「消息请求」显式处置（接受/拒绝），代理 worker request-action。
+
+        body: {chat_key, action:"accept"|"decline", confirm?:bool}。
+        - accept：转正（非破坏；worker 复用生产验证过的点「接受」路径）。坐席直接回复
+          也会自动接受——本端点服务「先转正、稍后再聊」与不想回话的场景。
+        - decline：删除该请求（破坏性）。**须 confirm=true** 才真删；worker 侧另有双闸
+          （仅请求线程=页面有「接受」按钮才认 + 找不到删除按钮绝不瞎点）。
+        处置成功（接受 / 真删）即撤本地 is_request 标记（徽章/引导条消失）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        chat_key = str(body.get("chat_key") or "").strip()
+        action = str(body.get("action") or "").strip().lower()
+        confirm = body.get("confirm") is True
+        if not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="chat_key"))
+        if action not in ("accept", "decline"):
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="action(accept|decline)"))
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.messenger_web_login import (
+            _post_json, service_base_url,
+        )
+        try:
+            res = await _post_json(
+                f"{service_base_url(cfg)}/accounts/{account_id}/request-action",
+                {"jid": chat_key, "action": action, "confirm": confirm},
+                timeout=60.0)
+        except Exception as ex:  # worker 不可达 / 线程打不开等，如实回给坐席
+            raise HTTPException(502, tr(request, "err.rpa.op_failed",
+                                        op="request-action", err=str(ex)))
+        res = res if isinstance(res, dict) else {}
+        # 已处置（接受成功 / 真删成功）→ 撤本地标记，徽章与引导条随下一轮列表刷新消失
+        done = bool(res.get("ok")) and (action == "accept" or bool(res.get("deleted")))
+        if done:
+            try:
+                store = getattr(request.app.state, "inbox_store", None)
+                if store is not None:
+                    from src.inbox.normalizer import conv_id as _mk_conv_id
+                    store.clear_conversation_request(
+                        _mk_conv_id("messenger", account_id, chat_key))
+            except Exception:
+                logger.debug("[protocol] 请求标记清除失败", exc_info=True)
+        out: Dict[str, Any] = {"ok": bool(res.get("ok")), "action": action}
+        for k in ("was_request", "probe", "button_found", "deleted", "note", "error"):
+            if k in res:
+                out[k] = res[k]
+        return out
+
     @app.post("/api/platforms/{platform}/{account_id}/react")
     async def api_platform_react(platform: str, account_id: str, request: Request):
         """坐席给某条消息发表情回应（P4-5B，P4-3 接收侧的双向补全）。
 
         body: {chat_key, target_id, emoji, from_me?, participant?, chat_type?}
-        （emoji 空串=撤销）。发到 WhatsApp 后本地即以 sender='me' 落库，气泡即时显 chip。
-        仅 WhatsApp 协议号。best-effort。
+        （emoji 空串=撤销，仅 WhatsApp）。成功后本地以 sender='me' 落库，气泡即时显 chip。
+        平台面：WhatsApp（Baileys 原生 react API）+ Messenger（P3 双面板融合 2026-08-13，
+        sidecar DOM：hover 气泡 → 表情面板；无 wamid → 后端按 target_id 从库里查出目标
+        消息**文本**交 Node 锚定，前端零改动与 WA 同形；面板归一 😂→😆，Node 回执
+        emoji 为实际生效字符，按它落库）。best-effort。
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform != "whatsapp":
+        if platform not in ("whatsapp", "messenger"):
             return {"ok": False, "reason": "unsupported_platform"}
         try:
             body = await request.json()
@@ -852,83 +2608,170 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         if not chat_key or not target_id:
             return {"ok": False, "reason": "missing_field"}
         emoji = str((body or {}).get("emoji") or "")
-        is_group = str((body or {}).get("chat_type") or "").lower() == "group"
-        jid_suffix = "@g.us" if is_group else "@s.whatsapp.net"
         cfg = (config_manager.config if config_manager is not None else {}) or {}
-        from src.integrations.whatsapp_baileys_login import (
-            protocol_enabled as wa_enabled, service_base_url, _post_json,
-        )
-        if not wa_enabled(cfg):
-            return {"ok": False, "reason": "protocol_disabled"}
-        try:
-            res = await _post_json(
-                f"{service_base_url(cfg)}/accounts/{account_id}/react",
-                {"jid": f"{chat_key}{jid_suffix}", "target_id": target_id,
-                 "emoji": emoji, "from_me": bool((body or {}).get("from_me")),
-                 "participant": str((body or {}).get("participant") or "")})
-        except Exception:
-            logger.debug("[protocol] 发表情回应失败", exc_info=True)
-            return {"ok": False, "reason": "service_error"}
+        applied_emoji = emoji
+        if platform == "whatsapp":
+            is_group = str((body or {}).get("chat_type") or "").lower() == "group"
+            jid_suffix = "@g.us" if is_group else "@s.whatsapp.net"
+            from src.integrations.whatsapp_baileys_login import (
+                protocol_enabled as wa_enabled, service_base_url, _post_json,
+            )
+            if not wa_enabled(cfg):
+                return {"ok": False, "reason": "protocol_disabled"}
+            try:
+                res = await _post_json(
+                    f"{service_base_url(cfg)}/accounts/{account_id}/react",
+                    {"jid": f"{chat_key}{jid_suffix}", "target_id": target_id,
+                     "emoji": emoji, "from_me": bool((body or {}).get("from_me")),
+                     "participant": str((body or {}).get("participant") or "")})
+            except Exception:
+                logger.debug("[protocol] 发表情回应失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+        else:  # messenger
+            if not emoji:
+                # Messenger 撤销表情＝再点同款（DOM 语义），P3 刻意不做：诚实拒绝
+                return {"ok": False, "reason": "unreact_unsupported"}
+            from src.integrations.messenger_web_login import (
+                web_enabled as msgr_enabled,
+                service_base_url as msgr_base,
+                _post_json as msgr_post,
+            )
+            if not msgr_enabled(cfg):
+                return {"ok": False, "reason": "protocol_disabled"}
+            # Messenger 无 wamid：Node 只能按文本锚定气泡 → 从库里查目标消息文本
+            target_text = ""
+            _store_tx = getattr(request.app.state, "inbox_store", None)
+            if _store_tx is not None:
+                try:
+                    for _row in reversed(_store_tx.list_recent_messages(
+                            f"{platform}:{account_id}:{chat_key}", limit=80)):
+                        if str(_row.get("platform_msg_id") or "") == target_id:
+                            target_text = str(_row.get("text") or "")
+                            break
+                except Exception:
+                    target_text = ""
+            if not target_text.strip():
+                # 媒体消息/未落库消息无文本可锚定 → 如实拒绝（绝不盲挂最近一条）
+                return {"ok": False, "reason": "target_text_unavailable"}
+            try:
+                res = await msgr_post(
+                    f"{msgr_base(cfg)}/accounts/{account_id}/react",
+                    {"jid": chat_key, "target_id": target_id, "emoji": emoji,
+                     "target_text": target_text}, timeout=45.0)
+            except Exception:
+                logger.debug("[protocol] messenger 发表情回应失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+            applied_emoji = str((res or {}).get("emoji") or emoji)
         ok = bool((res or {}).get("ok", False))
         if ok:
             store = getattr(request.app.state, "inbox_store", None)
             if store is not None:
                 try:
                     store.set_reaction(
-                        f"{platform}:{account_id}:{chat_key}", target_id, "me", emoji)
+                        f"{platform}:{account_id}:{chat_key}", target_id, "me",
+                        applied_emoji)
                 except Exception:
                     logger.debug("[protocol] 本地表情回应落库失败", exc_info=True)
-        return {"ok": ok}
+        return {"ok": ok, "reason": str((res or {}).get("reason") or "")}
 
     @app.post("/api/platforms/{platform}/{account_id}/message-op")
     async def api_platform_message_op(platform: str, account_id: str, request: Request):
-        """坐席主动编辑/撤回自己发出的消息（P4-6B，P4-6A 接收侧的双向补全）。
+        """坐席主动编辑/撤回自己发出的消息（P4-6B → 2026-08-17 扩平台+批量）。
 
-        body: {chat_key, target_id, op, text?, chat_type?}（op∈revoke/edit，edit 需 text）。
-        发到 WhatsApp 成功后本地即改写线程 + 广播 SSE message_op（多坐席同步）。仅 WhatsApp。
+        body: {chat_key, target_id | target_ids[], op, text?, chat_type?}
+        - whatsapp: op∈revoke/edit（Baileys Node 服务，逐条）
+        - telegram / line: op=revoke（编排器 worker：pyrogram delete_messages
+          (revoke=True) / okline unsend_message）；edit 未接 → unsupported_op
+        - 其余平台: unsupported_platform
+        撤回**只允许自己发出的消息**（store 方向判定，服务端强制——前端置灰只是
+        体验，这里才是边界）；成功后本地标撤回 + SSE message_op + ops_events 留痕。
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform != "whatsapp":
+        if platform not in ("whatsapp", "telegram", "line"):
             return {"ok": False, "reason": "unsupported_platform"}
         try:
             body = await request.json()
         except Exception:
             body = {}
         chat_key = str((body or {}).get("chat_key") or "").strip()
-        target_id = str((body or {}).get("target_id") or "").strip()
         op = str((body or {}).get("op") or "").lower()
         text = str((body or {}).get("text") or "")
-        if not chat_key or not target_id or op not in ("revoke", "edit"):
+        raw_targets = (body or {}).get("target_ids")
+        if not isinstance(raw_targets, list):
+            raw_targets = [(body or {}).get("target_id")]
+        targets = [str(t or "").strip() for t in raw_targets if str(t or "").strip()]
+        targets = targets[:50]
+        if not chat_key or not targets or op not in ("revoke", "edit"):
             return {"ok": False, "reason": "bad_request"}
-        if op == "edit" and not text.strip():
-            return {"ok": False, "reason": "empty_text"}
-        is_group = str((body or {}).get("chat_type") or "").lower() == "group"
-        jid_suffix = "@g.us" if is_group else "@s.whatsapp.net"
+        if op == "edit":
+            if platform != "whatsapp":
+                return {"ok": False, "reason": "unsupported_op"}
+            if not text.strip():
+                return {"ok": False, "reason": "empty_text"}
         cfg = (config_manager.config if config_manager is not None else {}) or {}
-        from src.integrations.whatsapp_baileys_login import (
-            protocol_enabled as wa_enabled, service_base_url, _post_json,
-        )
-        if not wa_enabled(cfg):
-            return {"ok": False, "reason": "protocol_disabled"}
-        try:
-            res = await _post_json(
-                f"{service_base_url(cfg)}/accounts/{account_id}/message-op",
-                {"jid": f"{chat_key}{jid_suffix}", "target_id": target_id,
-                 "op": op, "text": text})
-        except Exception:
-            logger.debug("[protocol] 主动编辑/撤回失败", exc_info=True)
-            return {"ok": False, "reason": "service_error"}
-        ok = bool((res or {}).get("ok", False))
-        if ok:
-            cid = f"{platform}:{account_id}:{chat_key}"
-            store = getattr(request.app.state, "inbox_store", None)
+        cid = f"{platform}:{account_id}:{chat_key}"
+        store = getattr(request.app.state, "inbox_store", None)
+        # 撤回边界：只许撤自己发出的（direction=out）；方向未知（未落库/异常）
+        # 一律拒绝——宁可让坐席撤不了，也不误撤客户的消息。
+        skipped_not_own: list = []
+        if op == "revoke":
+            own: list = []
+            for t in targets:
+                d = ""
+                try:
+                    d = store.get_message_direction(cid, t) if store is not None else ""
+                except Exception:
+                    d = ""
+                (own if d == "out" else skipped_not_own).append(t)
+            targets = own
+            if not targets:
+                return {"ok": False, "reason": "not_own_message",
+                        "skipped": skipped_not_own}
+        ok = False
+        ok_targets: list = []
+        reason = ""
+        if platform == "whatsapp":
+            is_group = str((body or {}).get("chat_type") or "").lower() == "group"
+            jid_suffix = "@g.us" if is_group else "@s.whatsapp.net"
+            from src.integrations.whatsapp_baileys_login import (
+                protocol_enabled as wa_enabled, service_base_url, _post_json,
+            )
+            if not wa_enabled(cfg):
+                return {"ok": False, "reason": "protocol_disabled"}
+            for t in targets:
+                try:
+                    res = await _post_json(
+                        f"{service_base_url(cfg)}/accounts/{account_id}/message-op",
+                        {"jid": f"{chat_key}{jid_suffix}", "target_id": t,
+                         "op": op, "text": text})
+                except Exception:
+                    logger.debug("[protocol] 主动编辑/撤回失败", exc_info=True)
+                    reason = "service_error"
+                    continue
+                if bool((res or {}).get("ok", False)):
+                    ok_targets.append(t)
+                else:
+                    reason = str((res or {}).get("reason") or "service_error")
+            ok = bool(ok_targets) and len(ok_targets) == len(targets)
+        else:
+            # telegram / line：经编排器受管 worker（协议号/companion 统一运行时）。
+            # default 账号（A 线主客户端会话）不在编排器辖内 → no_worker 如实回传。
+            orch = get_orchestrator(cfg)
+            res = await orch.delete_messages(
+                platform, account_id, chat_key, targets, revoke=True)
+            ok = bool((res or {}).get("ok", False))
+            reason = str((res or {}).get("reason") or "")
+            if ok:
+                ok_targets = list(targets)
+        if ok_targets:
             if store is not None:
                 try:
-                    if op == "revoke":
-                        store.mark_message_revoked(cid, target_id)
-                    else:
-                        store.apply_message_edit(cid, target_id, text)
+                    for t in ok_targets:
+                        if op == "revoke":
+                            store.mark_message_revoked(cid, t)
+                        else:
+                            store.apply_message_edit(cid, t, text)
                 except Exception:
                     logger.debug("[protocol] 主动编辑/撤回本地落库失败", exc_info=True)
             try:
@@ -936,83 +2779,409 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 get_event_bus().publish("message_op", {
                     "conversation_id": cid, "platform": platform,
                     "account_id": account_id, "chat_key": chat_key,
-                    "op": op, "target_id": target_id,
+                    "op": op, "target_id": ok_targets[0],
+                    "target_ids": ok_targets,
                 })
             except Exception:
                 logger.debug("[protocol] message_op 事件发布失败", exc_info=True)
-        return {"ok": ok}
+        # 运维台账（90 天可追溯）：谁撤回了哪个会话几条 + **失败归因**。成功=reason
+        # 'ok'、失败/部分失败=reason 机器码——审计卡的撤回成功率/归因分布读这里
+        # （P2 2026-08-17：此前只记成功，失败率是观测盲区）。best-effort 绝不阻断。
+        if op == "revoke" and (targets or ok_targets):
+            try:
+                from src.ops.ops_events import get_ops_event_store
+                _oes = get_ops_event_store()
+                if _oes is not None:
+                    try:
+                        _actor = str(request.session.get("username", "") or "") or "api"
+                    except Exception:
+                        _actor = "api"
+                    _fail = max(0, len(targets) - len(ok_targets))
+                    _oes.record(
+                        platform=platform, account_id=account_id,
+                        kind="msg_revoke",
+                        reason="ok" if ok else (str(reason or "fail")[:64]),
+                        detail=f"cid={cid};by={_actor};n={len(ok_targets)};fail={_fail}")
+            except Exception:
+                logger.debug("[protocol] 撤回审计落账失败（忽略）", exc_info=True)
+        out: Dict[str, Any] = {"ok": bool(ok), "revoked": len(ok_targets)}
+        if reason:
+            out["reason"] = reason
+        if skipped_not_own:
+            out["skipped"] = skipped_not_own
+        return out
 
     @app.get("/api/platforms/{platform}/{account_id}/group-members")
     async def api_platform_group_members(platform: str, account_id: str, request: Request):
         """群成员名单（P4-11，供收件箱 @提及选人面板）。
 
-        query: chat_key=群号(digits)。仅 WhatsApp 协议号；成员名优先用已同步通讯录名，
-        否则回落号码。best-effort——取不到（未在线/非群/无权限）返回空 members。
+        query: chat_key=群号。WhatsApp 优先打直播 API；空/失败/其它平台一律
+        回落会话库入站发言人（``list_group_speakers``）。不再用
+        ``unsupported_platform`` 把选人面板打死——空名单前端自己藏面板。
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform != "whatsapp":
-            return {"ok": False, "reason": "unsupported_platform", "members": []}
         chat_key = str(request.query_params.get("chat_key") or "").strip()
         if not chat_key:
             return {"ok": False, "reason": "missing_chat_key", "members": []}
-        cfg = (config_manager.config if config_manager is not None else {}) or {}
-        from src.integrations.whatsapp_baileys_login import (
-            protocol_enabled as wa_enabled, service_base_url, _get_json,
-        )
-        if not wa_enabled(cfg):
-            return {"ok": False, "reason": "protocol_disabled", "members": []}
-        try:
-            res = await _get_json(
-                f"{service_base_url(cfg)}/accounts/{account_id}/group-members"
-                f"?jid={chat_key}")
-        except Exception:
-            logger.debug("[protocol] 取群成员失败", exc_info=True)
-            return {"ok": False, "reason": "service_error", "members": []}
-        raw = (res or {}).get("members") or []
         store = getattr(request.app.state, "inbox_store", None)
-        members: List[Dict[str, Any]] = []
-        for m in raw:
-            num = str((m or {}).get("number") or "").strip()
-            if not num:
-                continue
-            name = ""
-            if store is not None:
-                try:
-                    name = store.get_protocol_contact_name(platform, account_id, num)
-                except Exception:
-                    name = ""
-            members.append({"jid": str((m or {}).get("jid") or ""),
-                            "number": num, "name": name or num,
-                            "admin": str((m or {}).get("admin") or "")})
-        return {"ok": bool((res or {}).get("ok", False)),
-                "subject": str((res or {}).get("subject") or ""), "members": members}
+
+        def _store_members() -> List[Dict[str, Any]]:
+            if store is None:
+                return []
+            try:
+                from src.inbox.normalizer import conv_id
+                from src.inbox.group_thread import speakers_as_members
+                cid = conv_id(platform, str(account_id or ""), chat_key)
+                rows = store.list_group_speakers(cid) if hasattr(
+                    store, "list_group_speakers") else []
+                return speakers_as_members(rows)
+            except Exception:
+                logger.debug("[protocol] 发言人回落失败", exc_info=True)
+                return []
+
+        live: List[Dict[str, Any]] = []
+        subject = ""
+        live_ok = False
+        if platform == "whatsapp":
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+            try:
+                from src.integrations.whatsapp_baileys_login import (
+                    protocol_enabled as wa_enabled, service_base_url, _get_json,
+                )
+                if wa_enabled(cfg):
+                    res = await _get_json(
+                        f"{service_base_url(cfg)}/accounts/{account_id}/group-members"
+                        f"?jid={chat_key}")
+                    raw = (res or {}).get("members") or []
+                    for m in raw:
+                        num = str((m or {}).get("number") or "").strip()
+                        if not num:
+                            continue
+                        name = ""
+                        if store is not None:
+                            try:
+                                name = store.get_protocol_contact_name(
+                                    platform, account_id, num)
+                            except Exception:
+                                name = ""
+                        live.append({"jid": str((m or {}).get("jid") or ""),
+                                     "number": num, "name": name or num,
+                                     "admin": str((m or {}).get("admin") or "")})
+                    subject = str((res or {}).get("subject") or "")
+                    live_ok = bool((res or {}).get("ok", False)) and bool(live)
+            except Exception:
+                logger.debug("[protocol] 取群成员失败，回落发言人", exc_info=True)
+        members = live if live_ok else _store_members()
+        source = "live" if live_ok else "store"
+        return {"ok": True, "subject": subject, "members": members,
+                "source": source}
 
     @app.get("/api/platforms/{platform}/{account_id}/contacts")
     async def api_platform_contacts(platform: str, account_id: str, request: Request):
-        """好友名单：读取某协议账号已同步的通讯录（供前端「通讯录」视图）。"""
+        """好友名单：读取某协议账号已同步的通讯录（供前端「通讯录」视图）。
+
+        query:
+        - ``limit``：条数上限（store 侧封顶 5000）；
+        - ``enriched=1``：改走「联系人 + 会话状态」联表，每行补
+          ``has_conversation/last_ts/unread/never_spoke``，并额外返回 ``summary``
+          资产盘点段（未开口 / 沉默 / 已有会话）。**默认 0 = 旧形状逐字段不变**
+          （现有前端仍在消费旧形状，向后兼容是硬约束）；
+        - ``only``：仅 enriched 有效，``""``/``never_spoke``/``silent``/``chat_only``
+          档位筛选（``chat_only``＝有往来但没存进通讯录，仅并集口径下有内容）；
+        - ``q``：仅 enriched 有效，服务端按 名字/备注名/号码 模糊匹配（不传=全量，
+          旧「全量拉下来本地筛」的调用方零改动）；
+        - ``include_chats``：仅 enriched 有效，**默认开**。取数口径从「通讯录表」
+          升级为「人的并集」＝通讯录 ∪ 会话里的私聊 peer。为什么默认开：Telegram
+          的 ``get_contacts()`` 只含「我主动保存过的联系人」，线上实测三个生产 TG
+          账号同步全部成功而通讯录=0、同账号却有 62 条真实往来会话——默认关等于
+          「联系人」面板对 Telegram 恒空，坐席按名字找昨天聊过的客户永远找不到。
+          需要纯通讯录口径的消费方显式传 ``include_chats=0``。
+          已知的纯名单口径消费方：ops-overview「客户资产（目录同步）」卡
+          （``enriched=1&limit=1&include_chats=0``）——它问的是「已同步的**好友名单**
+          里有多少沉睡线索」，并集会把分母扩到全部往来的人（只有会话的人天然算
+          「开过口」）使「未开口占比」语义漂移，故显式关。改动该卡时勿丢这个参数。
+        """
         api_auth(request)
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        # 退出/已删账号（2026-08-16）：联系人面板与聊天页同口径隐藏。聊天页的
+        # 会话/线程/未读/chip 四路 2026-08-01 就按 offline 剔除了，本面是唯一
+        # 漏网（老板实测：离线号在联系人页签仍列 11 个会话 peer 当「好友」）。
+        # peek_account 只读现有单例绝不隐式建库；不在册账号（config/适配器来源，
+        # 如 telegram default）row=None 不拦——它们没有注册表退出语义。
+        # 数据仍留库，同号重登（registry→online）即自动回显。
+        try:
+            from src.integrations.account_registry import peek_account
+            _acct_row = peek_account(platform, account_id)
+        except Exception:
+            _acct_row = None
+        if _acct_row and str(_acct_row.get("status") or "") in ("offline", "removed"):
+            return {"ok": True, "platform": platform, "account_id": account_id,
+                    "count": 0, "contacts": [], "account_offline": True,
+                    "summary": {"total": 0, "never_spoke": 0, "silent_30d": 0,
+                                "with_conversation": 0, "in_book": 0,
+                                "chat_only": 0}}
         try:
             limit = int(request.query_params.get("limit") or 1000)
         except (TypeError, ValueError):
             limit = 1000
-        contacts = store.list_protocol_contacts(platform, account_id, limit=limit)
-        return {"ok": True, "platform": platform, "account_id": account_id,
-                "count": len(contacts), "contacts": contacts}
+        if str(request.query_params.get("enriched") or "") not in ("1", "true", "yes"):
+            contacts = store.list_protocol_contacts(platform, account_id, limit=limit)
+            return {"ok": True, "platform": platform, "account_id": account_id,
+                    "count": len(contacts), "contacts": contacts}
+        only = str(request.query_params.get("only") or "")
+        q = str(request.query_params.get("q") or "")
+        # 缺省=开（本轮要交付的用户价值）；显式传值时与 enriched 同一套真值口径
+        _inc_raw = request.query_params.get("include_chats")
+        include_chats = (True if _inc_raw is None or _inc_raw == ""
+                         else str(_inc_raw) in ("1", "true", "yes"))
+        contacts = store.list_protocol_contacts_enriched(
+            platform, account_id, limit=limit, only=only, query=q,
+            include_chats=include_chats)
+        summary = store.protocol_contacts_summary(
+            platform, account_id, query=q, include_chats=include_chats)
+        return {
+            "ok": True, "platform": platform, "account_id": account_id,
+            "count": len(contacts),
+            # 回显生效口径：前端据此如实标注「通讯录 / 通讯录+会话」，
+            # 避免用户把并集基数当成通讯录同步成果去判断同步有没有跑通
+            "include_chats": include_chats,
+            # 汇总跟随 q 但不跟随 only（档位是视图筛选，盘点数字要给全景基数）；
+            # silent_30d 的 30 天口径见 store.PROTOCOL_CONTACT_SILENT_DAYS
+            "summary": {
+                "total": summary["total"],
+                "never_spoke": summary["never_spoke"],
+                "silent_30d": summary["silent"],
+                "with_conversation": summary["with_conversation"],
+                "in_book": summary["in_book"],
+                "chat_only": summary["chat_only"],
+            },
+            "contacts": contacts,
+        }
 
-    @app.post("/api/platforms/{platform}/{account_id}/history")
-    async def api_platform_history(platform: str, account_id: str, request: Request):
-        """按需拉更早历史（P1）：以 store 里最旧的带 wamid 消息为锚点，请求 Baileys
-        向手机补拉更早消息。消息异步经 messaging-history.set 回流落库，前端稍后刷新即见。
+    @app.post("/api/platforms/{platform}/{account_id}/contacts/refresh")
+    async def api_platform_contacts_refresh(platform: str, account_id: str,
+                                            request: Request):
+        """手动触发该账号的「目录重新同步」（好友名单 + 会话占位）。
 
-        仅 WhatsApp 协议号可用（fetchMessageHistory 是 Baileys 能力）。best-effort。
+        供工作台通讯录面板的「立即同步」按钮用。异步触发、立即返回——目录同步走
+        平台 RPC 可能耗时数十秒，同步等待会把 web 请求挂死。
+
+        返回 ``{"ok": True, "started": True, ...}``，或 ``ok=False`` + ``reason``：
+        ``unsupported_platform`` / ``protocol_disabled`` / ``account_offline`` /
+        ``service_error`` / ``cooldown``（附 ``retry_after_sec``）。
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform != "whatsapp":
+        if platform not in ("telegram", "whatsapp"):
+            return {"ok": False, "reason": "unsupported_platform"}
+        left = _contacts_refresh_cooldown_left(platform, account_id)
+        if left > 0:
+            return {"ok": False, "reason": "cooldown",
+                    "retry_after_sec": int(left) + 1}
+        if platform == "telegram":
+            # 软依赖：目录同步模块由并行工作线交付，此刻可能还不存在。import 失败
+            # 只让本端点降级成 unsupported，绝不能在模块顶层 import 把整个 app 带崩。
+            try:
+                from src.integrations.telegram_directory_sync import (
+                    sync_directory_once,
+                )
+            except ImportError:
+                return {"ok": False, "reason": "unsupported_platform"}
+            pyro = _get_tg_pyro_for_account(request.app, account_id)
+            loop = getattr(pyro, "loop", None)
+            if pyro is None or loop is None or not loop.is_running():
+                return {"ok": False, "reason": "account_offline"}
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+
+            async def _run() -> None:
+                try:
+                    await sync_directory_once(pyro, account_id, cfg)
+                except Exception:
+                    logger.debug("[protocol] telegram 目录同步失败 acct=%s",
+                                 account_id, exc_info=True)
+
+            _contacts_refresh_mark(platform, account_id)
+            asyncio.run_coroutine_threadsafe(_run(), loop)
+            return {"ok": True, "started": True, "platform": platform,
+                    "account_id": account_id}
+        # WhatsApp：复用 Baileys 既有 /accounts/:id/resync（resyncAppState →
+        # contacts.upsert 回流 → 内部桥 /api/internal/protocol/contacts 落库）
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.whatsapp_baileys_login import (
+            protocol_enabled as wa_enabled, service_base_url, _post_json,
+        )
+        if not wa_enabled(cfg):
+            return {"ok": False, "reason": "protocol_disabled"}
+        try:
+            res = await _post_json(
+                f"{service_base_url(cfg)}/accounts/{account_id}/resync", {})
+        except Exception as exc:
+            # Node 对「账号未连接」回 404 —— 语义是号离线，不是服务坏了，区分开
+            status = getattr(getattr(exc, "response", None), "status_code", 0)
+            if status == 404:
+                return {"ok": False, "reason": "account_offline"}
+            logger.debug("[protocol] whatsapp 通讯录重同步触发失败", exc_info=True)
+            return {"ok": False, "reason": "service_error"}
+        if not bool((res or {}).get("ok", False)):
+            return {"ok": False, "reason": "service_error"}
+        _contacts_refresh_mark(platform, account_id)
+        return {"ok": True, "started": True, "platform": platform,
+                "account_id": account_id}
+
+    async def _messenger_pull_history(request: Request, store: Any, *,
+                                      cid: str, account_id: str,
+                                      chat_key: str, count: int):
+        """Messenger「拉更早」分支（P1 对齐 Telegram）：请求 messenger-web 打开线程
+        向上滚动加载，读取网页端本地能拿到的更早消息并落库。
+
+        去重分层（P3 优化：有 synth id 优先按 id，文本归一仍作无 id 回落）：
+        - **id 去重**＝库内 ``platform_msg_id`` ∩ 本批 ``msg_id``（同条跨拉不重复）；
+        - **文本去重**＝无 id 时仍按 (方向, 归一化文本)；真实重复短语可能折叠一条。
+        只收带文本消息（媒体无可靠指纹，刻意跳过）。
+        时间＝网页端拿不到可靠绝对时间，统一锚定在库内最早消息之前按序回推
+        （每条 -1s），只保序。网页端可加载深度有限（尤其 E2EE），到头如实 no_more。
+        """
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.messenger_web_login import (
+            _post_json, service_base_url, web_enabled,
+        )
+        if not web_enabled(cfg):
+            return {"ok": False, "reason": "protocol_disabled"}
+        base = service_base_url(cfg)
+        try:
+            data = await _post_json(
+                f"{base}/accounts/{account_id}/thread-history",
+                {"thread": chat_key, "count": count}, timeout=90.0)
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", 0)
+            if status == 404:
+                return {"ok": False, "reason": "account_offline"}
+            logger.debug("[protocol] messenger 历史拉取失败", exc_info=True)
+            return {"ok": False, "reason": "service_error"}
+        msgs_raw = (data or {}).get("messages") or []
+        if not isinstance(msgs_raw, list) or not msgs_raw:
+            return {"ok": False, "reason": "no_messages", "requested": count}
+
+        def _norm(t: Any) -> str:
+            return " ".join(str(t or "").split()).lower()
+
+        try:
+            existing = store.list_recent_messages(cid, limit=500) or []
+        except Exception:
+            existing = []
+        seen = {f"{m.get('direction')}|{_norm(m.get('text'))}"
+                for m in existing if _norm(m.get("text"))}
+        seen_ids = {str(m.get("platform_msg_id") or "").strip()
+                    for m in existing if str(m.get("platform_msg_id") or "").strip()}
+        try:
+            earliest = min((float(m.get("ts") or 0) for m in existing
+                            if float(m.get("ts") or 0) > 0), default=0.0)
+        except (TypeError, ValueError):
+            earliest = 0.0
+        base_ts = earliest or time.time()
+        # 实施72 P5：与回填路径共用的自愈校正索引。**拉更早比回填够得更深**——
+        # worker 回填只读线程末尾 ~20 条，早已滚出该窗口的合成时间行只有这条路能修。
+        fix_by_id, fix_by_txt = approx_fix_index(existing)
+        corrected = 0
+        fresh: List[Dict[str, Any]] = []
+        for m in msgs_raw[:200]:
+            if not isinstance(m, dict):
+                continue
+            text = str(m.get("text") or "")
+            direction = "out" if str(m.get("direction") or "in") == "out" else "in"
+            pmid = str(m.get("msg_id") or m.get("message_id") or "").strip()
+            key = f"{direction}|{_norm(text)}"
+            if (pmid and pmid in seen_ids) or (_norm(text) and key in seen):
+                try:
+                    _real = float(m.get("ts") or 0)
+                except (TypeError, ValueError):
+                    _real = 0.0
+                if correct_approx_row(
+                        store, fix_by_id.get(pmid) or fix_by_txt.get(key), _real):
+                    corrected += 1
+                continue
+            if not _norm(text):
+                continue
+            seen.add(key)
+            if pmid:
+                seen_ids.add(pmid)
+            src: Dict[str, Any] = {"sender_name": str(m.get("sender") or "")}
+            # 实施72 P4：worker 现在会随行下发 aria 解析出的真实 epoch（认不出=0）
+            try:
+                _real_ts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                _real_ts = 0.0
+            row: Dict[str, Any] = {
+                "text": text, "direction": direction, "source": src,
+                "ts": _real_ts,
+            }
+            if pmid:
+                src["msg_id"] = pmid
+                src["message_id"] = pmid
+                row["msg_id"] = pmid
+            fresh.append(row)
+        if corrected:
+            # 校正过就重算锚点：残余合成行要排在**校正后**的真实最早时间之前
+            try:
+                base_ts = min((float(m.get("ts") or 0) for m in existing
+                               if float(m.get("ts") or 0) > 0),
+                              default=0.0) or base_ts
+            except (TypeError, ValueError):
+                pass
+        if not fresh:
+            # 「一条没新增」但修对了时间也是有效结果（坐席点了「加载更早」不该看到纯失败）
+            return {"ok": bool(corrected), "reason": "no_more",
+                    "requested": count, "corrected": corrected}
+        n = len(fresh)
+        for i, m in enumerate(fresh):
+            if float(m.get("ts") or 0) > 0:
+                # 实施72 P4：真实时间直存（approx=0）——「拉更早」从「只保序」升级
+                # 为「能保真就保真」；worker 认不出的行仍走下方合成+打标。
+                m["approx_ts"] = 0
+                continue
+            m["ts"] = base_ts - (n - i)
+            # 实施72 P2：合成值锚定在库内最早消息之前（只保序），打 approx 标
+            m["approx_ts"] = 1
+        from src.inbox.ingest import ingest_thread
+        row = None
+        try:
+            row = store.get_conversation(cid)
+        except Exception:
+            row = None
+        chat = {
+            "conversation_id": cid, "platform": "messenger",
+            "account_id": account_id, "chat_key": chat_key,
+            "name": str((row or {}).get("display_name") or ""),
+            # 拉的是旧消息：last_ts 传 0（store MAX 语义不回拉）、未读保持现值
+            "last_ts": 0,
+            "unread": int((row or {}).get("unread") or 0),
+        }
+        try:
+            inserted = int(ingest_thread(store, chat, fresh) or 0)
+        except Exception:
+            logger.debug("[protocol] messenger 历史落库失败", exc_info=True)
+            return {"ok": False, "reason": "ingest_error"}
+        if corrected:
+            logger.info("[protocol] 拉更早补收时间校正 %d 条 cid=%s", corrected, cid)
+        return {"ok": True, "requested": count, "inserted": inserted,
+                "corrected": corrected}
+
+    @app.post("/api/platforms/{platform}/{account_id}/history")
+    async def api_platform_history(platform: str, account_id: str, request: Request):
+        """按需拉更早历史（P1）：以 store 里最旧的带平台消息 id 的消息为锚点向上补拉。
+
+        - WhatsApp 协议号：请求 Baileys fetchMessageHistory 向手机补拉，消息异步经
+          messaging-history.set 回流落库，前端稍后刷新即见；
+        - Telegram（协议号/主账号）：直接经 pyrogram get_chat_history 从云端拉取
+          （云历史与手机所见同源），同步落库并返回 inserted 条数。
+        best-effort。
+        """
+        api_auth(request)
+        platform = str(platform or "").lower()
+        if platform not in ("whatsapp", "telegram", "messenger"):
             return {"ok": False, "reason": "unsupported_platform"}
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
@@ -1029,16 +3198,85 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except (TypeError, ValueError):
             count = 50
         count = max(1, min(200, count))
+        cid = f"{platform}:{account_id}:{chat_key}"
+        if platform == "messenger":
+            return await _messenger_pull_history(
+                request, store, cid=cid, account_id=account_id,
+                chat_key=chat_key, count=count)
+        anchor = store.get_oldest_message(cid)
+        if platform == "telegram":
+            # 云端历史直拉：锚点有 MTProto 消息 id 则取更早（offset_id），否则从最新拉
+            import asyncio
+            from src.inbox.ingest import ingest_thread
+            from src.integrations.protocol_bridge import collect_tg_dialog_history
+            if _tg_client_cooling(account_id):
+                return {"ok": False, "reason": "client_cooling"}
+            pyro = _get_tg_pyro_for_account(request.app, account_id)
+            loop = getattr(pyro, "loop", None)
+            if pyro is None or loop is None or not loop.is_running():
+                return {"ok": False, "reason": "client_unavailable"}
+            # from_latest：从云端最新往回拉。默认锚点语义只取比库内最旧 id 更早的，
+            # 群消息实时入站又会被「未触发不处理」闸掉 → 刚进群的询价永远补不进工作台
+            # （2026-09-18 P6 社群舞台实锤）。坐席刷新 / 录屏 incoming 传 from_latest=true。
+            from_latest = bool((body or {}).get("from_latest"))
+            offset_id = 0
+            if anchor and not from_latest:
+                try:
+                    offset_id = int(str(anchor.get("platform_msg_id") or "0"))
+                except (TypeError, ValueError):
+                    offset_id = 0
+            fut = asyncio.run_coroutine_threadsafe(
+                collect_tg_dialog_history(
+                    pyro, account_id, chat_key, limit=count, offset_id=offset_id),
+                loop)
+            try:
+                res = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=30.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                _mark_tg_client_bad(account_id)
+                return {"ok": False, "reason": "timeout"}
+            except Exception:
+                logger.debug("[protocol] telegram 历史拉取失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+            if not res:
+                return {"ok": False, "reason": "no_messages", "requested": count}
+            chat, msgs = res
+            row = store.get_conversation(cid)
+            if row is not None:
+                # 已有会话：未读数保持现值（拉的是旧消息，不应清/改未读）
+                chat["unread"] = int(row.get("unread") or 0)
+            inserted = ingest_thread(store, chat, msgs)
+            return {"ok": True, "requested": count, "inserted": int(inserted)}
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.whatsapp_baileys_login import (
             protocol_enabled as wa_enabled, service_base_url, _post_json,
         )
         if not wa_enabled(cfg):
             return {"ok": False, "reason": "protocol_disabled"}
-        anchor = store.get_oldest_message(f"{platform}:{account_id}:{chat_key}")
         if not anchor or not str(anchor.get("platform_msg_id") or ""):
-            # 无锚点（会话为占位/无带 id 消息）→ 无法定位更早历史
-            return {"ok": False, "reason": "no_anchor"}
+            # 无锚点（占位会话：会话列表同步来的、store 里零消息）。此前直接返回
+            # no_anchor → 用户永远无法给空会话补拉历史。现在改为发「空 oldest_id」
+            # 请求：Node 侧用它缓存的「该会话最新消息 key」（lastMsgKeys）兜底当锚点，
+            # 等价于"从最新往前拉 count 条"。Node 明确回 no_cached_anchor（连缓存
+            # 也没有：Node 刚重启/从未见过该会话消息）才向前端返回 no_history_available。
+            payload = {
+                "jid": f"{chat_key}@s.whatsapp.net",
+                "count": count,
+                "oldest_id": "",  # 空 → Node 回落用缓存的 lastMsgKey
+                "oldest_ts": 0,
+                "from_me": False,
+            }
+            try:
+                res = await _post_json(
+                    f"{service_base_url(cfg)}/accounts/{account_id}/history", payload)
+            except Exception:
+                # best-effort：兜底路径任何异常都不上抛，前端得到明确的失败原因即可
+                logger.debug("[protocol] 占位会话兜底拉历史失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+            if bool((res or {}).get("ok", False)):
+                return {"ok": True, "requested": count}
+            if str((res or {}).get("error") or "") == "no_cached_anchor":
+                return {"ok": False, "reason": "no_history_available"}
+            return {"ok": False, "reason": "service_error"}
         payload = {
             "jid": f"{chat_key}@s.whatsapp.net",
             "count": count,
@@ -1053,6 +3291,519 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[protocol] fetchMessageHistory 触发失败", exc_info=True)
             return {"ok": False, "reason": "service_error"}
         return {"ok": bool((res or {}).get("ok", False)), "requested": count}
+
+    @app.post("/api/platforms/telegram/{account_id}/fetch-media")
+    async def api_telegram_fetch_media(account_id: str, request: Request):
+        """按需拉取单条消息的媒体本体并回填归档（P1，2026-08-04）。
+
+        面向三类「看得见形态、看不见内容」的行：历史同步落的结构化媒体行
+        （``media_type`` 有、``media_ref`` 空）、镜像/入站超限或下载失败的行、
+        存量「[图片]」纯文字占位行。坐席点「拉取原件」→ 本端点按行上的
+        ``platform_msg_id`` 经 pyrogram ``get_messages`` 取回消息 →
+        ``download_tg_media`` 归档进 /static → ``update_message_media`` 幂等回填
+        （只在 ref 为空时写，防与镜像/重复点击竞态）→ 前端原地重渲成真图。
+
+        护栏：配置闸 ``telegram.media_fetch``（默认关）+ 行级单飞 + 全局并发上限
+        （防狂点推 FloodWait）+ 账号断网冷却复用 ``_tg_client_cooling`` + 60s 硬超时。
+        Telegram 云端与手机同源，消息未被删就拉得回；已删如实返回 not_found。
+        成败计入 outbound_mirror_stats（kind=``fetch_*``，ops 归档卡可见）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        message_id = str((body or {}).get("message_id") or "").strip()
+        if not message_id:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="message_id"))
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        mf = (cfg.get("telegram") or {}).get("media_fetch")
+        if isinstance(mf, bool):
+            mf = {"enabled": mf}
+        if not isinstance(mf, dict) or not bool(mf.get("enabled", False)):
+            return {"ok": False, "reason": "disabled"}
+        try:
+            max_mb = float(mf.get("max_mb", 50))
+        except (TypeError, ValueError):
+            max_mb = 50.0
+        max_bytes = int(max(0.0, max_mb) * 1024 * 1024)
+
+        row = store.get_message(message_id)
+        if not row:
+            return {"ok": False, "reason": "message_not_found"}
+        if str(row.get("media_ref") or "").strip():
+            # 已有归档（并发拉取/镜像先到）：幂等直接返回现值，不重复下载
+            return {"ok": True, "already": True,
+                    "media_type": str(row.get("media_type") or ""),
+                    "media_ref": str(row.get("media_ref") or "")}
+        cid = str(row.get("conversation_id") or "")
+        conv = store.get_conversation(cid) or {}
+        if str(conv.get("platform") or "") != "telegram":
+            return {"ok": False, "reason": "unsupported_platform"}
+        if str(conv.get("account_id") or "") != str(account_id or ""):
+            return {"ok": False, "reason": "account_mismatch"}
+        chat_key = str(conv.get("chat_key") or "")
+        try:
+            pmid = int(str(row.get("platform_msg_id") or ""))
+        except (TypeError, ValueError):
+            # 旧行落库时没有平台消息 id（:h: 哈希兜底键）——云端无从定位
+            return {"ok": False, "reason": "no_platform_msg_id"}
+        if _tg_client_cooling(account_id):
+            return {"ok": False, "reason": "client_cooling"}
+        if message_id in _MEDIA_FETCH_INFLIGHT:
+            return {"ok": False, "reason": "busy"}
+        if len(_MEDIA_FETCH_INFLIGHT) >= _MEDIA_FETCH_MAX_CONCURRENT:
+            return {"ok": False, "reason": "busy"}
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        loop = getattr(pyro, "loop", None)
+        if pyro is None or loop is None or not loop.is_running():
+            return {"ok": False, "reason": "client_unavailable"}
+        peer: Any = chat_key
+        try:
+            peer = int(chat_key)
+        except (TypeError, ValueError):
+            peer = chat_key
+
+        async def _fetch_and_archive():
+            from src.integrations.protocol_bridge import (
+                download_tg_media, tg_media_meta,
+            )
+            msg = await pyro.get_messages(peer, pmid)
+            if msg is None or getattr(msg, "empty", False):
+                return "", "", "message_not_found"
+            if tg_media_meta(msg) is None:
+                return "", "", "no_media"
+            mt, mr = await download_tg_media(msg, account_id, max_bytes=max_bytes)
+            if mr:
+                return mt, mr, ""
+            return mt, "", ("oversize" if mt else "download_failed")
+
+        _MEDIA_FETCH_INFLIGHT.add(message_id)
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_fetch_and_archive(), loop)
+            try:
+                mt, mr, fail = await asyncio.wait_for(
+                    asyncio.wrap_future(fut), timeout=60.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                _mark_tg_client_bad(account_id)
+                return {"ok": False, "reason": "timeout"}
+            except Exception:
+                logger.debug("[protocol] telegram 媒体按需拉取失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+        finally:
+            _MEDIA_FETCH_INFLIGHT.discard(message_id)
+        try:
+            from src.integrations.outbound_mirror_stats import (
+                get_outbound_mirror_stats,
+            )
+            get_outbound_mirror_stats().record_publish(
+                "telegram", f"fetch_{mt or 'unknown'}", ok=bool(mr))
+        except Exception:
+            pass
+        if not mr:
+            return {"ok": False, "reason": fail or "download_failed"}
+        store.update_message_media(
+            cid, media_type=mt, media_ref=mr, message_id=message_id)
+        fresh = store.get_message(message_id) or {}
+        return {"ok": True,
+                "media_type": str(fresh.get("media_type") or mt),
+                "media_ref": str(fresh.get("media_ref") or mr)}
+
+    # 行上的 media_type → LINE contentType（回取用）。贴纸刻意不回取：贴纸图在
+    # 商店 CDN、按 contentMetadata.STKID 定位，而行里没存 STKID，无从定位。
+    _LINE_FETCH_CT = {
+        "voice": 3, "audio": 3, "image": 1, "photo": 1, "video": 2,
+        "document": 14, "file": 14,
+    }
+
+    @app.post("/api/platforms/line/{account_id}/fetch-media")
+    async def api_line_fetch_media(account_id: str, request: Request):
+        """LINE 版媒体按需拉取（#101 P1）：与 TG 端点同契约、同一个前端按钮。
+
+        入站下载瞬态失败/token 陈旧会把行落成「无音频存档」（``media_type`` 有、
+        ``media_ref`` 空），而 OBS 对象在 LINE 服务端仍在（真机取证：≥2 天后仍可
+        回取）——本端点按行上的 ``platform_msg_id`` 走**生产同一条**
+        ``download_line_media``（含 401 刷 token + 瞬态重试）重新归档回填。
+
+        闸门＝``platform_login.line.media.inbound``（与入站自动下载同一开关）：
+        OBS GET 是官方客户端打开会话本就会发的请求，无 TG 的 FloodWait 类风控
+        风险，刻意不另设 ``media_fetch`` 开关。单飞/并发上限与 TG 共用同一套
+        （``_MEDIA_FETCH_INFLIGHT``——全局媒体拉取预算本就该跨平台共享）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        message_id = str((body or {}).get("message_id") or "").strip()
+        if not message_id:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="message_id"))
+        from src.integrations.line_media import resolve_line_media_cfg
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        mcfg = resolve_line_media_cfg(cfg)
+        if not mcfg.get("inbound", True):
+            return {"ok": False, "reason": "disabled"}
+
+        row = store.get_message(message_id)
+        if not row:
+            return {"ok": False, "reason": "message_not_found"}
+        if str(row.get("media_ref") or "").strip():
+            # 已有归档（并发拉取/镜像先到）：幂等直接返回现值，不重复下载
+            return {"ok": True, "already": True,
+                    "media_type": str(row.get("media_type") or ""),
+                    "media_ref": str(row.get("media_ref") or "")}
+        cid = str(row.get("conversation_id") or "")
+        conv = store.get_conversation(cid) or {}
+        if str(conv.get("platform") or "") != "line":
+            return {"ok": False, "reason": "unsupported_platform"}
+        if str(conv.get("account_id") or "") != str(account_id or ""):
+            return {"ok": False, "reason": "account_mismatch"}
+        ct = _LINE_FETCH_CT.get(str(row.get("media_type") or "").strip().lower())
+        if ct is None:
+            # 行上没有可回取的媒体形态（纯文本占位/贴纸）——LINE 需要 contentType
+            # 才能推扩展名与识别大类，这与 TG「get_messages 自带媒体形态」不同。
+            return {"ok": False, "reason": "no_media"}
+        pmid = str(row.get("platform_msg_id") or "").strip()
+        if not pmid.isdigit():
+            # 旧行落库时没有平台消息 id（:h: 哈希兜底键）——OBS 无从定位
+            return {"ok": False, "reason": "no_platform_msg_id"}
+
+        from src.integrations.account_orchestrator import get_orchestrator
+        worker = get_orchestrator().worker_for("line", account_id)
+        client = getattr(worker, "client", None)
+        if client is None:
+            return {"ok": False, "reason": "client_unavailable"}
+        if message_id in _MEDIA_FETCH_INFLIGHT:
+            return {"ok": False, "reason": "busy"}
+        if len(_MEDIA_FETCH_INFLIGHT) >= _MEDIA_FETCH_MAX_CONCURRENT:
+            return {"ok": False, "reason": "busy"}
+
+        _MEDIA_FETCH_INFLIGHT.add(message_id)
+        dl_out: Dict[str, Any] = {}
+        try:
+            from src.integrations.line_media import download_line_media
+            # #172 / J-3 交办（2026-09-05）：Letter Sealing 媒体的对象定位要
+            # SID/OID/chunks（全在真消息的 contentMetadata / chunks 里），空壳
+            # fake 永远拉不到 → 先从 worker 端拿最近消息找同 id 的真行，找到就
+            # 原样传（含 createdTime 让龄判定有依据）；找不到才回落 fake，并把
+            # createdTime 设成行 ts*1000（否则 404 时 age=-1 无从区分过期/未到）。
+            real_msg = await asyncio.to_thread(
+                _line_find_recent_message, client,
+                str(conv.get("chat_key") or ""), pmid)
+            if real_msg is not None:
+                msg = dict(real_msg)
+                msg.setdefault("contentType", ct)
+                msg.setdefault("contentMetadata", {})
+            else:
+                msg = {"id": pmid, "contentType": ct, "contentMetadata": {}}
+                try:
+                    _ts = float(row.get("ts") or 0)
+                except (TypeError, ValueError):
+                    _ts = 0.0
+                if _ts > 0:
+                    msg["createdTime"] = str(int(_ts * 1000))
+            try:
+                # OBS GET 是同步 requests → 丢线程；不占 worker 的 _api_lock——
+                # 下载不取 reqSeq，与接收线程内的入站下载同一并发语义。
+                mt, mr = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        download_line_media, client, msg,
+                        str(account_id or ""), cfg=mcfg, out=dl_out),
+                    timeout=60.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                return {"ok": False, "reason": "timeout"}
+            except Exception:
+                logger.debug("[protocol] line 媒体按需拉取失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+        finally:
+            _MEDIA_FETCH_INFLIGHT.discard(message_id)
+        try:
+            from src.integrations.outbound_mirror_stats import (
+                get_outbound_mirror_stats,
+            )
+            get_outbound_mirror_stats().record_publish(
+                "line", f"fetch_{mt or 'unknown'}", ok=bool(mr))
+        except Exception:
+            pass
+        if not mr:
+            # miss 细因已由 download_line_media 记 WARNING + line_media_stats；
+            # 这里把 out.reason（not_found / expired / e2ee_no_key / too_large…）
+            # 透传给前端「拉取失败，点击重试」按钮做 tooltip（旧口径 download_failed
+            # 保留在 reason 字段作兜底，细因走 miss_reason，前端旧版不受影响）。
+            return {"ok": False, "reason": "download_failed",
+                    "miss_reason": str(dl_out.get("reason") or ""),
+                    "expired": bool(dl_out.get("expired")),
+                    "retryable": bool(dl_out.get("retryable")),
+                    "real_message": real_msg is not None}
+        store.update_message_media(
+            cid, media_type=mt, media_ref=mr, message_id=message_id)
+        # 转写/识别回填（#101 P2，best-effort）：救活的语音坐席要能读、AI 要能看——
+        # 只回填播放器等于修了一半。走平台无关的 enrich 链（ASR/VLM），30s 预算；
+        # update_message_text 自带「仅空/媒体占位才覆盖」守卫，绝不踩真实正文。
+        # 任何失败静默：媒体本体已回填成功，转写是锦上添花。
+        backfilled_text = ""
+        if mt in ("voice", "audio", "image", "video"):
+            try:
+                from src.inbox.media_enrich import enrich_inbound_media_text
+                _etext, _ = await asyncio.wait_for(
+                    enrich_inbound_media_text(
+                        media_type=mt, media_ref=mr, config=cfg),
+                    timeout=30.0)
+                _etext = str(_etext or "").strip()
+                # enrich 识别不出时回吐「[语音]」类占位——那不是转写，别写行
+                from src.integrations.protocol_bridge import media_placeholder
+                if _etext and _etext != media_placeholder(mt):
+                    if store.update_message_text(
+                            cid, text=_etext, message_id=message_id):
+                        backfilled_text = _etext
+            except Exception:
+                logger.debug("[protocol] line 拉取后转写回填失败（媒体已回填）",
+                             exc_info=True)
+        fresh = store.get_message(message_id) or {}
+        out = {"ok": True,
+               "media_type": str(fresh.get("media_type") or mt),
+               "media_ref": str(fresh.get("media_ref") or mr)}
+        if backfilled_text:
+            out["text"] = str(fresh.get("text") or backfilled_text)
+        return out
+
+    @app.get("/api/platforms/telegram/{account_id}/full-sync")
+    async def api_telegram_full_sync_status(account_id: str, request: Request):
+        """全量深同步进度快照（前端轮询）+ 断点账本摘要（已完成会话数）。"""
+        api_auth(request)
+        from src.integrations.tg_full_sync import (
+            default_state_path, full_sync_snapshot, load_state,
+        )
+        snap = full_sync_snapshot(account_id)
+        try:
+            done_total = len(
+                load_state(default_state_path(account_id)).get("chats") or {})
+        except Exception:
+            done_total = 0
+        return {"ok": True, "account_id": account_id,
+                "done_total": done_total, **snap}
+
+    @app.post("/api/platforms/telegram/{account_id}/full-sync")
+    async def api_telegram_full_sync(account_id: str, request: Request):
+        """一键全量深同步（P2，2026-08-05）：把该账号云端全部会话的深历史吸进工作台。
+
+        与账号级 sync-history（浅铺底：100 会话 × ≤100 条，一次性）不同，这是
+        **战役式**：分页枚举全部 dialogs → 热会话优先（私聊在前、最近活跃降序）→
+        逐会话 ``deep_backfill_tg_history``（每会话/每轮总量双预算，按云端 fetched
+        计）→ 每会话完成即落断点状态。预算耗尽 → ``budget_exhausted``，**再触发一次
+        接着跑**（已完成会话自动跳过）；``body {"restart": true}`` 清账本整役重来。
+        深历史媒体行只落 media_type 结构化形态（本体走 P1「拉取原件」按需回填），
+        磁盘/RPC 压力仅文本行。配置闸 ``telegram.full_sync``（默认关）；引擎与
+        断点语义见 src/integrations/tg_full_sync.py。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        restart = bool((body or {}).get("restart", False))
+        if _tg_client_cooling(account_id):
+            return {"ok": False, "reason": "client_cooling"}
+        # 与账号级浅同步互斥（同账号别叠两份 dialogs/history RPC）；
+        # 反方向的让路在 start_tg_history_sync 里，两头都拦。
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_account_sync"}
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.tg_full_sync import (
+            default_state_path, start_full_sync,
+        )
+        return start_full_sync(
+            pyro, store, account_id,
+            tg_cfg=(cfg.get("telegram") or {}),
+            state_path=default_state_path(account_id), restart=restart)
+
+    @app.get("/api/platforms/telegram/{account_id}/sync-history")
+    async def api_telegram_sync_history_status(account_id: str, request: Request):
+        """Telegram 账号级历史同步的进度快照（前端轮询）。"""
+        api_auth(request)
+        return {"ok": True, "account_id": account_id,
+                **tg_history_sync_snapshot(account_id)}
+
+    @app.post("/api/platforms/telegram/{account_id}/sync-history")
+    async def api_telegram_sync_history(account_id: str, request: Request):
+        """Telegram 账号级聊天记录同步（对齐手机）。
+
+        Telegram 云聊天历史存在其服务器上——用该账号 session 拉 get_dialogs +
+        get_chat_history 得到的就是手机上的同一份数据（端到端加密的密聊除外）。
+        本端点触发后台同步：遍历最近 ``dialogs`` 个云端会话、每会话拉近期
+        ``per_chat`` 条消息直写 store（不触发 SSE/auto-draft/自动回复；媒体不下载、
+        以占位文本入库）。同步跑在 pyrogram 自身 loop，本端点立即返回，进度经
+        GET 同路径轮询。同账号并发触发 → already_running。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            dialogs_limit = int((body or {}).get("dialogs") or 100)
+        except (TypeError, ValueError):
+            dialogs_limit = 100
+        try:
+            per_chat = int((body or {}).get("per_chat") or 30)
+        except (TypeError, ValueError):
+            per_chat = 30
+        # 触发核心与看门狗「自动补缺口」共用 start_tg_history_sync（同一冷却/单飞/进度表）
+        res = start_tg_history_sync(
+            request.app, store, account_id,
+            dialogs_limit=dialogs_limit, per_chat=per_chat)
+        # 快速失败补人话 detail（前端 _acctOpFail 优先显示 detail）——坐席实录：
+        # 裸 reason 只能渲染成笼统的「同步聊天记录失败」，看不出该做什么
+        if not res.get("ok"):
+            key = {
+                "client_cooling": "err.acct.tg_client_cooling",
+                "client_unavailable": "err.acct.tg_client_unavailable",
+                "busy_full_sync": "err.acct.tg_busy_full_sync",
+            }.get(str(res.get("reason") or ""))
+            if key:
+                res["detail"] = tr(request, key)
+        return res
+
+    @app.get("/api/platforms/telegram/{account_id}/deep-backfill")
+    async def api_telegram_deep_backfill_status(
+        account_id: str, request: Request, chat_key: str = "",
+    ):
+        """单会话深度回填进度快照（前端轮询）。"""
+        api_auth(request)
+        chat_key = str(chat_key or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        return {"ok": True, "account_id": account_id, "chat_key": chat_key,
+                **tg_deep_backfill_snapshot(account_id, chat_key)}
+
+    @app.post("/api/platforms/telegram/{account_id}/deep-backfill")
+    async def api_telegram_deep_backfill(account_id: str, request: Request):
+        """Telegram 单会话「深度回填」：从库里最旧锚点向云端连续拉到本轮上限/到头。
+
+        与 ``/history``（单次一页 ≤200 条，点一次补一段）互补：几千条的深历史
+        一键到底。后台跑在该账号 pyrogram 自身 loop，流式分批落库+进度轮询
+        （GET 同路径），不触发 SSE/auto-draft/自动回复；媒体不下载以占位文本
+        入库。同账号同时只跑一份（含与账号级 sync-history 互斥——同一账号别
+        叠两类批量拉取）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        try:
+            max_messages = int((body or {}).get("max_messages") or 2000)
+        except (TypeError, ValueError):
+            max_messages = 2000
+        max_messages = max(100, min(5000, max_messages))
+        if _tg_client_cooling(account_id):
+            return {"ok": False, "reason": "client_cooling"}
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "account_busy"}
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        loop = getattr(pyro, "loop", None)
+        if pyro is None or loop is None or not loop.is_running():
+            return {"ok": False, "reason": "client_unavailable"}
+        if not _tg_deep_try_start(account_id, chat_key):
+            return {"ok": False, "reason": "account_busy",
+                    **tg_deep_backfill_snapshot(account_id, chat_key)}
+        import asyncio
+        from src.inbox.ingest import ingest_thread
+        from src.integrations.protocol_bridge import (
+            deep_backfill_tg_history, tg_error_kind,
+        )
+
+        cid = f"telegram:{account_id}:{chat_key}"
+        anchor = store.get_oldest_message(cid)
+        # from_latest：从云端最新往回拉。默认锚点语义只取比库内最旧 id 更早的，
+        # 群消息实时入站又会被「未触发不处理」闸掉 → 刚进群的询价永远补不进工作台
+        # （2026-09-18 P6 社群舞台实锤）。坐席刷新 / 录屏 incoming 传 from_latest=true。
+        from_latest = bool((body or {}).get("from_latest"))
+        offset_id = 0
+        if anchor and not from_latest:
+            try:
+                offset_id = int(str(anchor.get("platform_msg_id") or "0"))
+            except (TypeError, ValueError):
+                offset_id = 0
+
+        def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
+            return ingest_thread(store, chat, msgs)
+
+        def _progress(fetched: int, inserted: int) -> None:
+            _tg_deep_update(account_id, chat_key,
+                            fetched=fetched, inserted=inserted)
+
+        async def _run() -> None:
+            try:
+                stats = await deep_backfill_tg_history(
+                    pyro, account_id, chat_key,
+                    max_messages=max_messages, offset_id=offset_id,
+                    ingest=_ingest, progress=_progress)
+                _tg_deep_update(
+                    account_id, chat_key, state="done",
+                    fetched=int(stats.get("fetched") or 0),
+                    inserted=int(stats.get("inserted") or 0),
+                    exhausted=bool(stats.get("exhausted")),
+                    finished_at=time.time())
+            except Exception as exc:
+                logger.debug("[protocol] telegram 深度回填失败", exc_info=True)
+                _tg_deep_update(account_id, chat_key, state="error",
+                                error=str(exc)[:200],
+                                error_kind=tg_error_kind(exc),
+                                finished_at=time.time())
+
+        asyncio.run_coroutine_threadsafe(_run(), loop)
+        return {"ok": True, "started": True, "offset_id": offset_id,
+                **tg_deep_backfill_snapshot(account_id, chat_key)}
+
+    @app.post("/api/platforms/telegram/{account_id}/gap-probe")
+    async def api_telegram_gap_probe(account_id: str, request: Request):
+        """B88：手动重试线程缺口补拉（豁免冷却；running 单飞仍生效）。
+
+        前端线程顶部「补拉失败」横幅的重试按钮打这里；成功与否经 /thread 的
+        ``gap_probe`` 字段回看。C1-①：响应 ``gap_probe`` 里新增
+        ``holes_probed/holes_filled/holes_empty/top_gap/hole_gap``——值守手动
+        探测时 ``holes_probed>0`` 即表示本轮在核实序号洞，结果异步落快照。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        res = maybe_probe_tg_thread_gap(
+            request.app, store, account_id, chat_key, force=True)
+        cid = f"telegram:{account_id}:{chat_key}"
+        return {**res, "cid": cid, **{"gap_probe": tg_gap_probe_snapshot(cid)}}
 
     @app.post("/api/platforms/{platform}/{account_id}/sync-groups")
     async def api_platform_sync_groups(platform: str, account_id: str, request: Request):
@@ -1080,6 +3831,99 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": bool((res or {}).get("ok", False)),
                 "groups": int((res or {}).get("groups") or 0)}
 
+    def _maybe_spawn_tg_avatar_reval(request: Request, account_id: str,
+                                     chat_key: str, jpg, now: float) -> None:
+        """TG 头像后台再验证（先答后核）：缓存命中后回源核对 unique_id 指纹。
+
+        节流/护栏：.reval marker TTL（6h）+ in-flight 去重 + 账号级断网冷却共用；
+        spawn 前就刷 marker——上游故障期失败也占用本轮 TTL，绝不放大回源频率。
+        指纹变代 → 重下载同名 jpg + 写 .src sidecar + 回写 conversations.avatar_fp
+        （前端列表下轮 ?v= 换代 → <img> 缓存失效 → 新头像可见）。全程 best-effort，
+        任何失败只记观测，绝不影响已返回的 302。
+        """
+        import asyncio
+        marker = _avatar_reval_marker(jpg)
+        if not _avatar_should_revalidate(jpg, marker, now):
+            return
+        if _tg_client_cooling(account_id):
+            return
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        loop = getattr(pyro, "loop", None)
+        if pyro is None or loop is None or not loop.is_running():
+            return
+        key = f"telegram:{account_id}:{chat_key}"
+        if key in _AVATAR_REVAL_INFLIGHT:
+            return
+        _AVATAR_REVAL_INFLIGHT.add(key)
+        _touch_avatar_reval_marker(marker)
+        try:
+            peer: Any = int(chat_key)
+        except (TypeError, ValueError):
+            peer = chat_key
+        dest = str(jpg.resolve())
+        app = request.app
+        cached_fp = ""
+        try:
+            _sc = _avatar_src_sidecar(jpg)
+            cached_fp = (_sc.read_text(encoding="utf-8").strip()
+                         if _sc.exists() else "")
+        except Exception:
+            cached_fp = ""
+
+        async def _probe():
+            # 跑在 pyrogram 自己的 loop（跨 loop 契约与 _dl 同款）
+            chat = await pyro.get_chat(peer)
+            photo = getattr(chat, "photo", None)
+            new_fp = ""
+            fid = None
+            if photo is not None:
+                fid = (getattr(photo, "big_file_id", None)
+                       or getattr(photo, "small_file_id", None))
+                uid = (getattr(photo, "big_file_unique_id", None)
+                       or getattr(photo, "small_file_unique_id", None))
+                if uid:
+                    new_fp = _avatar_src_fp(f"tg://{uid}")
+            if not new_fp or not fid:
+                return ("", "")
+            if cached_fp and cached_fp == new_fp:
+                return (new_fp, "unchanged")
+            saved = await pyro.download_media(fid, file_name=dest)
+            return (new_fp, str(saved or ""))
+
+        async def _run():
+            try:
+                fut = asyncio.run_coroutine_threadsafe(_probe(), loop)
+                new_fp, saved = await asyncio.wait_for(
+                    asyncio.wrap_future(fut), timeout=_TG_FETCH_TIMEOUT_SEC)
+                if not new_fp:
+                    # 对方现在无头像：保守不动旧图（7 天窗自然过期），只记观测
+                    _record_avatar("telegram", "reval_empty")
+                    return
+                if saved == "unchanged":
+                    # 未变：补写 DB 指纹（legacy 存量会话 bootstrap 出稳定版本键）
+                    _update_avatar_fp(app, "telegram", account_id, chat_key, new_fp)
+                    _record_avatar("telegram", "reval_unchanged")
+                    return
+                if not saved:
+                    _record_avatar("telegram", "reval_error")
+                    return
+                try:
+                    _avatar_src_sidecar(jpg).write_text(new_fp, encoding="utf-8")
+                except Exception:
+                    pass
+                _update_avatar_fp(app, "telegram", account_id, chat_key, new_fp)
+                _record_avatar("telegram", "reval_changed")
+            except Exception:
+                _record_avatar("telegram", "reval_error")
+                logger.debug("[protocol] tg 头像再验证失败", exc_info=True)
+            finally:
+                _AVATAR_REVAL_INFLIGHT.discard(key)
+
+        try:
+            asyncio.get_running_loop().create_task(_run())
+        except RuntimeError:
+            _AVATAR_REVAL_INFLIGHT.discard(key)
+
     async def _telegram_peer_avatar(request: Request, account_id: str,
                                     chat_key: str):
         """下载 Telegram 对方头像并缓存到 static（7 天缓存 + .none 负缓存 1 天）。
@@ -1102,7 +3946,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         now = time.time()
         if jpg.exists() and (now - jpg.stat().st_mtime) < 7 * 86400:
             _record_avatar("telegram", "cache_hit")
-            return RedirectResponse(url_path, status_code=302)
+            # 2026-08-16 头像实时刷新：秒回旧图后，若缓存龄超 TTL 则后台回源核对
+            # big_file_unique_id（对方换头像 → unique_id 变）——变了才重下载 + 回写
+            # avatar_fp，前端 ?v= 随之翻新。绝不阻塞本次响应。
+            _maybe_spawn_tg_avatar_reval(request, account_id, chat_key, jpg, now)
+            return RedirectResponse(
+                _avatar_versioned_path(url_path, jpg), status_code=302)
         if none_marker.exists() and (now - none_marker.stat().st_mtime) < 86400:
             _record_avatar("telegram", "neg_hit")
             raise HTTPException(404, "no avatar")
@@ -1121,6 +3970,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             peer = chat_key
         dest = str(jpg.resolve())
         ident_holder: Dict[str, Any] = {}   # _dl 顺带把 get_chat 的身份放这，供机会式补名
+        fp_holder: Dict[str, str] = {}      # _dl 顺带记来源指纹（big_file_unique_id）
 
         async def _dl() -> str:
             chat = await pyro.get_chat(peer)
@@ -1134,6 +3984,11 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             if photo is not None:
                 fid = (getattr(photo, "big_file_id", None)
                        or getattr(photo, "small_file_id", None))
+                uid = (getattr(photo, "big_file_unique_id", None)
+                       or getattr(photo, "small_file_unique_id", None))
+                if uid:
+                    # unique_id 跨会话稳定、换头像即变——正是「陈旧判据」要的指纹
+                    fp_holder["fp"] = _avatar_src_fp(f"tg://{uid}")
             if not fid:
                 return ""
             saved = await pyro.download_media(fid, file_name=dest)
@@ -1184,7 +4039,92 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             except Exception:
                 pass
         _record_avatar("telegram", "fetched")
-        return RedirectResponse(url_path, status_code=302)
+        # 落盘成功：写 .src sidecar（unique_id 指纹）+ 回写 conversations.avatar_fp
+        # ——前端列表下轮携带新 fp，?v= 换代，浏览器缓存自然失效。
+        new_fp = fp_holder.get("fp", "")
+        if new_fp:
+            try:
+                _avatar_src_sidecar(jpg).write_text(new_fp, encoding="utf-8")
+            except Exception:
+                pass
+            _update_avatar_fp(request.app, "telegram", account_id, chat_key, new_fp)
+        return RedirectResponse(
+            _avatar_versioned_path(url_path, jpg), status_code=302)
+
+    def _maybe_spawn_wa_avatar_reval(request: Request, account_id: str,
+                                     chat_key: str, jid_suffix: str, jpg,
+                                     none_marker, url_path: str,
+                                     now: float) -> None:
+        """WA 头像后台再验证（先答后核，与 TG 版同构）：核对 profilePictureUrl 路径指纹。
+
+        Baileys 的 profilePictureUrl 是限流真 API——节流三层（marker TTL 6h /
+        in-flight 去重 / 账号熔断窗）全部沿用；指纹未变零下载（只补写 DB 指纹）。
+        变代 → 复用 _download_and_cache_avatar 落盘（写 .src sidecar）+ 回写
+        conversations.avatar_fp。全程 best-effort，绝不影响已返回的 302。
+        """
+        import asyncio
+        marker = _avatar_reval_marker(jpg)
+        if not _avatar_should_revalidate(jpg, marker, now):
+            return
+        if _proto_avatar_cooling("whatsapp", account_id):
+            return
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.whatsapp_baileys_login import (
+            protocol_enabled as wa_enabled, service_base_url, _get_json,
+        )
+        if not wa_enabled(cfg):
+            return
+        key = f"whatsapp:{account_id}:{chat_key}"
+        if key in _AVATAR_REVAL_INFLIGHT:
+            return
+        _AVATAR_REVAL_INFLIGHT.add(key)
+        _touch_avatar_reval_marker(marker)
+        app_obj = request.app
+        cached_fp = ""
+        try:
+            _sc = _avatar_src_sidecar(jpg)
+            cached_fp = (_sc.read_text(encoding="utf-8").strip()
+                         if _sc.exists() else "")
+        except Exception:
+            cached_fp = ""
+
+        async def _run():
+            try:
+                res = await _get_json(
+                    f"{service_base_url(cfg)}/accounts/{account_id}/avatar"
+                    f"?jid={chat_key}{jid_suffix}",
+                    timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC)
+                remote_url = str((res or {}).get("url") or "").strip()
+                new_fp = _avatar_src_fp(remote_url)
+                if not remote_url or not new_fp:
+                    # 现在无头像/取不到：保守不动旧图，只记观测（与 TG 版同语义）
+                    _record_avatar("whatsapp", "reval_empty")
+                    return
+                if cached_fp and cached_fp == new_fp:
+                    _update_avatar_fp(app_obj, "whatsapp", account_id, chat_key,
+                                      new_fp)
+                    _record_avatar("whatsapp", "reval_unchanged")
+                    return
+                try:
+                    await _download_and_cache_avatar(
+                        remote_url, jpg, none_marker, url_path,
+                        neg_cache=False, src_fp=new_fp)
+                except HTTPException:
+                    _record_avatar("whatsapp", "reval_error")
+                    return
+                _update_avatar_fp(app_obj, "whatsapp", account_id, chat_key,
+                                  new_fp)
+                _record_avatar("whatsapp", "reval_changed")
+            except Exception:
+                _record_avatar("whatsapp", "reval_error")
+                logger.debug("[protocol] wa 头像再验证失败", exc_info=True)
+            finally:
+                _AVATAR_REVAL_INFLIGHT.discard(key)
+
+        try:
+            asyncio.get_running_loop().create_task(_run())
+        except RuntimeError:
+            _AVATAR_REVAL_INFLIGHT.discard(key)
 
     @app.get("/api/platforms/{platform}/{account_id}/avatar")
     async def api_platform_avatar(platform: str, account_id: str, request: Request):
@@ -1209,11 +4149,49 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(404, "no avatar")
         jpg, none_marker, url_path = _avatar_disk_paths(platform, account_id, chat_key)
         now = time.time()
+        # 2026-08-16 头像实时刷新：库里的直链由目录同步持续更新（对方换头像 → scontent
+        # 路径变）。缓存命中前先比对「缓存图来源指纹（.src sidecar） vs 库内最新直链指纹」，
+        # 分歧＝对方换过头像 → 穿透 7 天缓存回源重取。仅 messenger（WA 库内不存直链）。
+        db_fp = ""
+        if platform == "messenger":
+            try:
+                _st = getattr(request.app.state, "inbox_store", None)
+                _conv = (_st.get_conversation(f"{platform}:{account_id}:{chat_key}")
+                         if _st is not None else None)
+                db_fp = _avatar_src_fp(str((_conv or {}).get("avatar_url") or ""))
+            except Exception:
+                db_fp = ""
         if jpg.exists() and (now - jpg.stat().st_mtime) < 7 * 86400:
-            _record_avatar(platform, "cache_hit")      # 磁盘命中，未回源
-            return RedirectResponse(url_path, status_code=302)
+            cached_fp = ""
+            try:
+                _sc = _avatar_src_sidecar(jpg)
+                cached_fp = (_sc.read_text(encoding="utf-8").strip()
+                             if _sc.exists() else "")
+            except Exception:
+                cached_fp = ""
+            # 命中条件：库内无判据（非 messenger / 库里还没直链）或指纹一致。
+            # legacy 存量图（无 sidecar）在库里有直链时按陈旧处理——一次性回源补写
+            # sidecar 后即恢复稳定命中。
+            if not db_fp or (cached_fp and db_fp == cached_fp):
+                _record_avatar(platform, "cache_hit")      # 磁盘命中，未回源
+                if platform == "whatsapp":
+                    # WA 库内无推送判据 → 后台再验证补位（先答后核，6h 节流）
+                    _is_grp = (str(request.query_params.get("chat_type") or "")
+                               .lower() == "group")
+                    _maybe_spawn_wa_avatar_reval(
+                        request, account_id, chat_key,
+                        "@g.us" if _is_grp else "@s.whatsapp.net",
+                        jpg, none_marker, url_path, now)
+                return RedirectResponse(
+                    _avatar_versioned_path(url_path, jpg), status_code=302)
+            _record_avatar(platform, "stale_refresh")   # 换头像/补 sidecar → 回源
         if none_marker.exists() and (now - none_marker.stat().st_mtime) < 86400:
             _record_avatar(platform, "neg_hit")        # 负缓存命中（无头像，未回源）
+            raise HTTPException(404, "no avatar")
+        # 账号级熔断窗：上游刚被判定挂死（超时）→ 秒 404，不再逐个头像各吃一次超时
+        # （磁盘缓存命中不受影响——熔断只拦「回源」）。
+        if _proto_avatar_cooling(platform, account_id):
+            _record_avatar(platform, "cooldown")
             raise HTTPException(404, "no avatar")
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         if platform == "whatsapp":
@@ -1229,8 +4207,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             try:
                 res = await _get_json(
                     f"{service_base_url(cfg)}/accounts/{account_id}/avatar"
-                    f"?jid={chat_key}{jid_suffix}")
-            except Exception:
+                    f"?jid={chat_key}{jid_suffix}",
+                    timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC)
+            except Exception as e:
+                import httpx
+                if isinstance(e, httpx.TimeoutException):
+                    _mark_proto_avatar_bad(platform, account_id)   # 挂死特征 → 开账号熔断窗
                 _record_avatar(platform, "error")
                 logger.debug("[protocol] profilePictureUrl 取头像失败", exc_info=True)
                 raise HTTPException(404, "no avatar")
@@ -1244,18 +4226,31 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 raise HTTPException(404, "no avatar")
             try:
                 res = await msgr_get_json(
-                    f"{msgr_base(cfg)}/accounts/{account_id}/avatar?thread={chat_key}")
-            except Exception:
+                    f"{msgr_base(cfg)}/accounts/{account_id}/avatar?thread={chat_key}",
+                    timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC)
+            except Exception as e:
+                import httpx
+                if isinstance(e, httpx.TimeoutException):
+                    _mark_proto_avatar_bad(platform, account_id)   # 挂死特征 → 开账号熔断窗
                 _record_avatar(platform, "error")
                 logger.debug("[protocol] messenger 取头像失败", exc_info=True)
                 raise HTTPException(404, "no avatar")
+        _clear_proto_avatar_bad(platform, account_id)   # 上游活着 → 解除熔断（若有）
         remote_url = str((res or {}).get("url") or "").strip()
         # messenger 空 url 多为「轮询尚未缓存」瞬态 → 不写 1 天负缓存，靠重渲染自愈；
         # empty/fetched/error 结局经 on_outcome 回调落观测（DI，不把 helper 直连观测单例）
-        return await _download_and_cache_avatar(
+        resp = await _download_and_cache_avatar(
             remote_url, jpg, none_marker, url_path,
             neg_cache=(platform != "messenger"),
-            on_outcome=lambda oc: _record_avatar(platform, oc))
+            on_outcome=lambda oc: _record_avatar(platform, oc),
+            src_fp=_avatar_src_fp(remote_url))
+        # WA：首次/过期下载成功即回写 avatar_fp（前端 ?v= 的数据源）。messenger 刻意
+        # 不写——它的版本键走推送通道（目录同步的 avatar_url 路径哈希），双通道并存
+        # 会在推送已更新、懒加载未跟上时把 ?v= 钉在旧值。
+        if platform == "whatsapp" and remote_url:
+            _update_avatar_fp(request.app, platform, account_id, chat_key,
+                              _avatar_src_fp(remote_url))
+        return resp
 
     @app.get("/api/platforms/telegram/{account_id}/resolve-peer")
     async def api_telegram_resolve_peer(account_id: str, request: Request):
@@ -1337,6 +4332,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         fingerprint_id/sources``（sources 标出来源：registry/config/runtime）。
         """
         api_auth(request)
+        # fields=basic（2026-08-30）：轻量档，只回 registry+config 的账号基础态，跳过运行时
+        # 适配器/编排器/会话健康/配额聚合——供前端「先显示账号」首屏骨架用（个位数 ms，不受
+        # 任何 RPA 适配器响应性拖累）；完整态由随后的 loadChats/普通 /api/accounts 覆盖。
+        basic = str(request.query_params.get("fields", "")).lower() == "basic"
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         merged: Dict[tuple, Dict[str, Any]] = {}
 
@@ -1368,6 +4367,20 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     _sv = str(meta.get(_sk) or "").strip()
                     if _sv:
                         r[_sk] = _sv
+                # 账号卡徽标（轻量，直接来自 meta，不额外查询）：
+                # 绑定人设 + 近 7 天成功改资料次数（≥3 前端出黄色热点标）
+                _pid = str(meta.get("persona_id") or "").strip()
+                if _pid:
+                    r["persona_id"] = _pid
+                try:
+                    from src.integrations.account_profile_push import (
+                        profile_churn_count,
+                    )
+                    _churn = int(profile_churn_count(meta))
+                    if _churn > 0:
+                        r["profile_churn_7d"] = _churn
+                except Exception:
+                    pass
                 if "registry" not in r["sources"]:
                     r["sources"].append("registry")
         except Exception:
@@ -1382,6 +4395,24 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 r["label"] = label
             if "config" not in r["sources"]:
                 r["sources"].append("config")
+
+        # 轻量档早返回：running 由 registry status 廉价推得（online/running 即视为在线），
+        # 完整运行时态交给 loadChats/普通档补齐。跳过下方所有运行时/编排/健康/配额聚合。
+        if basic:
+            for a in merged.values():
+                a["running"] = str(a.get("status") or "").lower() in ("online", "running")
+            accounts = sorted(merged.values(),
+                              key=lambda x: (x["platform"], x["account_id"]))
+            mask_phone = bool(
+                ((cfg.get("accounts") or {}).get("self_profile") or {})
+                .get("mask_phone", True))
+            try:
+                _viewer_role = str(request.session.get("role", "") or "")
+            except Exception:
+                _viewer_role = ""
+            return {"ok": True, "accounts": accounts, "count": len(accounts),
+                    "mask_phone": mask_phone, "basic": True,
+                    "viewer_can_manage": _viewer_role not in _ALERT_CFG_DENY_ROLES}
 
         # 3) 运行时健康（适配器在线状态）
         try:
@@ -1421,6 +4452,29 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             logger.debug("[accounts] 编排器状态读取失败", exc_info=True)
 
+        # 3.6) 会话健康（外部 worker 上报的掉线时间戳）——让前端账号卡展示「掉线 X 分钟」+
+        #      平台对应的自助恢复 CTA，而不是只有一个笼统的「离线」。全程防御式，任一步失败不影响清单。
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            for hk, hv in (get_platform_session_health().unhealthy_sessions() or {}).items():
+                if not isinstance(hv, dict):
+                    continue
+                since = float(hv.get("unhealthy_since") or 0.0)
+                if not since:
+                    continue
+                # hk = "platform:account_id"；account_id 可能含冒号，按首个冒号切分
+                platform, _, account_id = str(hk or "").partition(":")
+                if not platform:
+                    continue
+                r = _ensure(platform, account_id or "default")
+                r["unhealthy_since"] = since
+                if hv.get("detail"):
+                    r["health_detail"] = str(hv.get("detail"))
+        except Exception:
+            logger.debug("[accounts] 会话健康读取失败", exc_info=True)
+
         # 4) 自动回复配额/熔断快照（Phase 5，仅协议号或已开自动回复的号）
         try:
             from src.integrations.protocol_autoreply_limits import (
@@ -1445,8 +4499,17 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         mask_phone = bool(
             ((cfg.get("accounts") or {}).get("self_profile") or {})
             .get("mask_phone", True))
+        # P0（2026-08-12）：viewer 管理权限下发——排除法与 _ALERT_CFG_DENY_ROLES 同哲学
+        # （只拦明确的低权限坐席/观察员；master/operator/桌面壳 Bearer（session 无 role）
+        # 一律可管）。前端 cp-accounts 据此隐藏 设置/告警渠道/添加账号/启停/自动开关；
+        # 老前端不认识该字段＝零影响，老后端缺字段＝前端 fail-open 照旧显示。
+        try:
+            _viewer_role = str(request.session.get("role", "") or "")
+        except Exception:
+            _viewer_role = ""
         return {"ok": True, "accounts": accounts, "count": len(accounts),
-                "mask_phone": mask_phone}
+                "mask_phone": mask_phone,
+                "viewer_can_manage": _viewer_role not in _ALERT_CFG_DENY_ROLES}
 
     @app.get("/api/accounts/orchestrator")
     async def api_orchestrator_status(request: Request):
@@ -1484,6 +4547,19 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             overview["self_profile"] = get_self_profile_stats()
         except Exception:
             logger.debug("[accounts] self_profile 计数读取失败", exc_info=True)
+        # 官方资料推送漏斗（与 ops 卡同源；零流量时 active=false）
+        try:
+            from src.integrations.account_profile_push import get_profile_push_stats
+            overview["profile_push"] = get_profile_push_stats()
+        except Exception:
+            logger.debug("[accounts] profile_push 计数读取失败", exc_info=True)
+        # P2 2026-08-13：发送护栏拦截计数（真实发送尝试被拦，进程口径重启清零；
+        # 键 platform:acct|reason[|origin]——机群卡「护栏拦截」KPI 消费）
+        try:
+            from src.integrations.shared.send_guard import block_stats_snapshot
+            overview["send_blocks"] = block_stats_snapshot()
+        except Exception:
+            logger.debug("[accounts] send_blocks 计数读取失败", exc_info=True)
         # P5：机会式孤儿头像清扫（开头像 + 节流），回收「注册表已无但文件还在」的残留
         global _last_avatar_sweep_ts
         try:
@@ -1540,6 +4616,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     @app.post("/api/accounts/orchestrator/sync")
     async def api_orchestrator_sync(request: Request):
         api_auth(request)
+        _require_account_manager(request)
         orch = _orch()
         await orch.sync()
         await orch.tick()
@@ -1548,6 +4625,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     @app.post("/api/accounts/{platform}/{account_id}/start")
     async def api_account_start(platform: str, account_id: str, request: Request):
         api_auth(request)
+        _require_account_manager(request)
         orch = _orch()
         acc = get_account_registry().get(platform, account_id) or {
             "platform": platform, "account_id": account_id}
@@ -1557,34 +4635,78 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     @app.post("/api/accounts/{platform}/{account_id}/stop")
     async def api_account_stop(platform: str, account_id: str, request: Request):
         api_auth(request)
+        _require_account_manager(request)
         await _orch().stop_account(_acct_key(platform, account_id))
         return {"ok": True}
 
     @app.post("/api/accounts/{platform}/{account_id}/restart")
     async def api_account_restart(platform: str, account_id: str, request: Request):
         api_auth(request)
+        _require_account_manager(request)
         ok = await _orch().restart_account(_acct_key(platform, account_id))
         return {"ok": ok}
 
     async def _remote_logout(platform: str, account_id: str,
                              cfg: Dict[str, Any]) -> None:
-        """Best-effort 通知平台侧解除设备关联（目前 WhatsApp Baileys 需要）。绝不抛。"""
-        if str(platform or "").lower() != "whatsapp":
-            return
+        """Best-effort 通知平台侧 Node 微服务真正登出（WhatsApp / Messenger）。绝不抛。
+
+        两家微服务端点同形（``POST /accounts/{id}/logout``），但后果不同：
+        - WhatsApp：解除设备关联，否则手机端仍留着一个「已登录的网页设备」。
+        - Messenger：关浏览器上下文 + 删持久化 profile。**漏掉这一步会无限弹窗**——
+          Node 把 context ``close`` 当崩溃自愈（3s 后回灌 ``<login_id>.cookies.json``
+          快照重登，且每次登录成功都清零退避计数 → 永远到不了放弃点），只有它自己的
+          cancel/logout 会打「主动关闭」免疫标记。于是坐席登出后那个 headed 窗口关一次
+          弹一次（2026-07-30 实测三分钟 6 轮），在网页里手动退出登录也会被快照回灌撤销。
+        """
+        plat = str(platform or "").lower()
         try:
-            from src.integrations.whatsapp_baileys_login import (
-                protocol_enabled as wa_enabled, service_base_url, _post_json,
-            )
-            if not wa_enabled(cfg):
+            if plat == "whatsapp":
+                from src.integrations.whatsapp_baileys_login import (
+                    protocol_enabled, service_base_url, _post_json,
+                )
+            elif plat == "messenger":
+                from src.integrations.messenger_web_login import (
+                    web_enabled as protocol_enabled, service_base_url, _post_json,
+                )
+            else:
+                return
+            if not protocol_enabled(cfg):
                 return
             await _post_json(
                 f"{service_base_url(cfg)}/accounts/{account_id}/logout", {})
         except Exception:
             logger.debug("[accounts] 远端登出失败（忽略）", exc_info=True)
 
+    def _sync_health_logged_out(platform: str, account_id: str,
+                                reason: str) -> None:
+        """运营登出/删除 → 同步内存健康表为 ``logged_out``（best-effort，绝不抛）。
+
+        背景（2026-08-27 Calixa 实锤）：健康表此前只有 worker push 能翻状态，而
+        worker 对「档案已不存在的号」永远不会再 push——运营做了正确操作（登出/
+        删除），顶栏「通道离线」红条却要挂到下一次进程重启。直接 ``record()``
+        不发 EventBus（运营明示动作无需告警回声）；``logged_out`` 仍在不健康
+        集合 → 发送前快速失败语义不变，仅横幅（刻意不显示 logged_out）与催办
+        （注册表 operator/removed 语义）立即熄灭。
+        """
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            get_platform_session_health().record(
+                platform, account_id, "logged_out", detail=reason)
+        except Exception:
+            logger.debug("[accounts] 健康表登出同步失败（忽略）", exc_info=True)
+
     def _clear_session_creds(platform: str, account_id: str,
                              *, status: str = "offline") -> None:
-        """清空注册表里可自动重连的会话凭据，使账号需重新扫码登录（保留记录）。"""
+        """清空注册表里可自动重连的会话凭据，使账号需重新扫码登录（保留记录）。
+
+        顺带落 ``offline_reason="operator"``（运营主动下线标记）：看门狗的
+        「死号持续提醒」只催 ``worker:*`` 自灭号，主动登出的号不催——催人修
+        自己刚下的号只会让人不再信告警。显式覆写还兼防时序竞态：Node 登出
+        push 若先一步到达会把该号标成 ``worker:logged_out``，这里最后落笔
+        改回 operator，两种到达顺序结果一致。
+        """
         reg = get_account_registry()
         row = reg.get(platform, account_id)
         if row is None:
@@ -1592,6 +4714,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         meta = dict(row.get("meta") or {})
         for k in ("session_string", "session_name"):
             meta.pop(k, None)
+        meta["offline_reason"] = "operator"
         reg.upsert(platform, account_id, meta=meta, status=status)
 
     @app.post("/api/accounts/{platform}/{account_id}/logout")
@@ -1599,22 +4722,55 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         """登出账号：停 worker + 通知平台解除关联 + 清空会话凭据。
 
         保留注册表记录（可重新扫码登录），仅使其下线并断开自动重连。
+        仅对注册表在册账号有意义；config/适配器来源的条目（如 A 线 telegram
+        default、web）没有可清的会话凭据 → 明确 404，而不是静默空操作。
         """
         api_auth(request)
+        _require_account_manager(request)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
+        if get_account_registry().get(platform, account_id) is None:
+            raise HTTPException(
+                404, tr(request, "err.ws.account_not_in_registry"))
         try:
             await _orch().stop_account(_acct_key(platform, account_id))
         except Exception:
             logger.debug("[accounts] logout 停止 worker 失败", exc_info=True)
         await _remote_logout(platform, account_id, cfg)
         _clear_session_creds(platform, account_id)
+        _sync_health_logged_out(platform, account_id, "operator logout")
+        # P0-1：登出=登录变更窗口开启——残留客户端随后抛的 auth 族错误（旧会话已
+        # 失效）降档为 pause+TTL，不判永久 ban（升级风暴同族误伤的显式登出面）。
+        try:
+            from src.ops.ban_signal import note_login_change
+            note_login_change(platform, account_id)
+        except Exception:
+            pass
         return {"ok": True, "platform": platform, "account_id": account_id}
 
     @app.post("/api/accounts/{platform}/{account_id}/remove")
     async def api_account_remove(platform: str, account_id: str, request: Request):
-        """删除账号：登出 + 从注册表移除（软删 status=removed，回收自身头像）。"""
+        """删除账号：登出 + 从注册表移除（软删 status=removed，回收自身头像）。
+
+        注册表里没有的账号（config/适配器来源，如 A 线 telegram default、web）
+        软删是空操作——旧版仍回 ok:true，前端刷新后账号原样回来，表现为
+        「点删除没反应」（2026-07-21 生产实测）→ 现在明确 404 告知不可删。
+
+        可选 body ``{"purge_data": true}``（2026-08-16）：随删除**连带清除**该账号
+        在本机的全部会话/消息/草稿等数据（store 级全表清除，不可恢复）。缺省
+        false＝旧行为（数据留库，removed 语义下聊天页已不展示）。清库刻意不落
+        墓碑：同号将来重新登录＝「下次登录再加载」，首连全量同步整体回灌。
+        """
         api_auth(request)
+        _require_account_manager(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        purge = bool((body or {}).get("purge_data"))
         cfg = (config_manager.config if config_manager is not None else {}) or {}
+        if get_account_registry().get(platform, account_id) is None:
+            raise HTTPException(
+                404, tr(request, "err.ws.account_not_in_registry"))
         try:
             await _orch().stop_account(_acct_key(platform, account_id))
         except Exception:
@@ -1624,7 +4780,262 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             get_account_registry().remove(platform, account_id)
         except Exception:
             logger.debug("[accounts] remove 注册表移除失败", exc_info=True)
-        return {"ok": True, "platform": platform, "account_id": account_id}
+        _sync_health_logged_out(platform, account_id, "operator remove")
+        # 账号终局 → 作废其全部待处理草稿（2026-08-27：Calixa 移除后一条 L1
+        # 待审稿挂了 10 天——账号没了草稿既发不出也无人清，白占积压看板）。
+        try:
+            _ibx = getattr(request.app.state, "inbox_store", None)
+            if _ibx is not None and hasattr(_ibx, "cancel_drafts_for_account"):
+                _n = _ibx.cancel_drafts_for_account(platform, account_id)
+                if _n:
+                    logger.info("[accounts] remove 连带作废待处理草稿 %d 条 "
+                                "%s:%s", _n, platform, account_id)
+        except Exception:
+            logger.debug("[accounts] remove 草稿作废失败（忽略）", exc_info=True)
+        purged: Dict[str, int] = {}
+        if purge:
+            store = getattr(request.app.state, "inbox_store", None)
+            if store is not None:
+                try:
+                    actor = ""
+                    try:
+                        actor = str(request.session.get("username", "") or "")
+                    except Exception:
+                        actor = ""
+                    purged = store.purge_account_conversations(
+                        platform, account_id, deleted_by=actor or "api")
+                except Exception:
+                    logger.error("[accounts] remove 清库失败 %s:%s",
+                                 platform, account_id, exc_info=True)
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "purged": purged, "purge_data": purge}
+
+    @app.post("/api/accounts/{platform}/{account_id}/restore")
+    async def api_account_restore(platform: str, account_id: str,
+                                  request: Request):
+        """恢复软删账号（P1 账号真相闭环，2026-08-17）：removed → offline（已退出可重登）。
+
+        背景：remove 是软删（注册表 status=removed，数据留库只读），但此前没有任何
+        恢复入口——误删只能改库。抽屉「历史 / 已退出账号」分区现在把 removed 号摆到
+        明面，配套这个恢复口：状态改回 offline 后账号回到「已退出」态，坐席点
+        「重新登录」走既有登录向导即可完全复活。
+
+        - 与 remove 同权限（``_require_account_manager``——能删才能恢复）；
+        - 仅 ``status=removed`` 的号可恢复：在册活跃号 409（语义上没什么可恢复），
+          注册表没有的号 404（config/适配器来源条目从没被软删过）；
+        - 只改状态不动凭据——凭据在 remove 时已清，恢复后必然要走重新登录。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        reg = get_account_registry()
+        row = reg.get(platform, account_id)
+        if row is None:
+            raise HTTPException(
+                404, tr(request, "err.ws.account_not_in_registry"))
+        if str(row.get("status") or "") != "removed":
+            raise HTTPException(
+                409, tr(request, "err.ws.account_not_removed"))
+        reg.set_status(platform, account_id, "offline")
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "status": "offline"}
+
+    def _purge_history_blocked(platform: str, account_id: str) -> bool:
+        """purge-history 资格判定单点（P1 抽取，2026-08-17）：True=不可删。
+
+        POST（真删）与 GET（预览 ``purgeable``）共用同一判定——两个消费面绝不
+        各算一套（预览说能删、真删却 409＝比没有预览更糟）。三条口径与 P0 一致：
+        内置合成号 / config 声明常驻号 / 注册表在册且状态不是 offline/removed。
+        """
+        from src.web.routes.unified_inbox_aggregate import is_synthetic_account
+        if is_synthetic_account(platform, account_id):
+            return True
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        try:
+            cfg_keys = {(str(p), str(a))
+                        for (p, a, _m, _l) in _collect_config_accounts(cfg)}
+        except Exception:
+            cfg_keys = set()
+        if (str(platform or "").lower(), str(account_id or "")) in cfg_keys:
+            return True
+        row = get_account_registry().get(platform, account_id)
+        return bool(row is not None and str(row.get("status") or "") not in (
+            "offline", "removed"))
+
+    @app.post("/api/accounts/{platform}/{account_id}/purge-history")
+    async def api_account_purge_history(platform: str, account_id: str,
+                                        request: Request):
+        """彻底删除历史账号（历史账号治理 P0，2026-08-17）：会话数据 + 注册表残行一并清。
+
+        目标＝账号面板「历史 / 已退出」分区的三类号：
+        - ``history_only``（只活在会话库、注册表没有）：/remove 对其 404，
+          此前会话数据没有任何删除出口——本路由就是为它开的；
+        - ``removed``（软删残影）：/remove?purge_data 清完数据后注册表行仍在，
+          历史区会留「已移除 · 0 会话」死行——本路由连行一起硬删（delete_row）；
+        - ``logged_out``（offline）：数据清 + 行删，一步到位。
+
+        安全边界（宁可拒绝不误删）：判定单点 ``_purge_history_blocked``——
+        与 remove 同权限（``_require_account_manager``）；活跃在册/config 常驻号/
+        内置合成号一律 409（它们不是「历史账号」，从这里删只会复活或误伤在线号）。
+        幂等：数据已空/注册表行已不存在按成功返回（重复点不报错）。
+        审计：ops_events 落 ``account_purge``（删除行数/是否删注册表行，不含内容）。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        if _purge_history_blocked(platform, account_id):
+            raise HTTPException(
+                409, tr(request, "err.ws.account_active_no_purge"))
+        reg = get_account_registry()
+        row = reg.get(platform, account_id)
+        # 防御性停 worker（offline/removed 本不该有 worker；best-effort 不阻断）
+        try:
+            await _orch().stop_account(_acct_key(platform, account_id))
+        except Exception:
+            logger.debug("[accounts] purge-history 停 worker 失败", exc_info=True)
+        purged: Dict[str, int] = {}
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is not None:
+            try:
+                actor = ""
+                try:
+                    actor = str(request.session.get("username", "") or "")
+                except Exception:
+                    actor = ""
+                purged = store.purge_account_conversations(
+                    platform, account_id, deleted_by=actor or "api") or {}
+            except Exception:
+                logger.error("[accounts] purge-history 清库失败 %s:%s",
+                             platform, account_id, exc_info=True)
+                raise HTTPException(
+                    500, tr(request, "err.ws.purge_failed"))
+        registry_deleted = False
+        if row is not None:
+            try:
+                registry_deleted = bool(reg.delete_row(platform, account_id))
+            except Exception:
+                logger.debug("[accounts] purge-history 注册表硬删失败",
+                             exc_info=True)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            evs = get_ops_event_store()
+            if evs is not None:
+                evs.record(
+                    "account_purge", account_id=str(account_id or ""),
+                    platform=str(platform or "").lower(), reason="ok",
+                    detail=(f"rows={int(sum(purged.values()))};"
+                            f"registry_deleted={int(registry_deleted)}"))
+        except Exception:
+            logger.debug("[accounts] purge-history 审计失败（忽略）",
+                         exc_info=True)
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "purged": purged, "purged_rows": int(sum(purged.values())),
+                "registry_deleted": registry_deleted}
+
+    @app.get("/api/accounts/{platform}/{account_id}/purge-history")
+    async def api_account_purge_history_preview(platform: str, account_id: str,
+                                                request: Request):
+        """删除前体量预估（历史账号治理 P1，2026-08-17）：GET 同路径零副作用。
+
+        「彻底删除」确认弹窗此前只能给会话数（accounts_summary 行携带），消息
+        体量看不见——删 3 个会话 30 条消息与 3 个会话 8000 条消息是两种决定。
+        返回 ``{conversations, messages, purgeable}``；``purgeable`` 与 POST 同一
+        判定单点（``_purge_history_blocked``），前端可在弹确认框**之前**就把
+        「不可删」诚实说清，省去两步确认后才撞 409。计数走会话子查询吃索引
+        （见 ``store.count_account_data``），孤儿消息不计入——展示口径，真实
+        删除行数以 POST 返回为准。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        counts = {"conversations": 0, "messages": 0}
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is not None:
+            try:
+                counts = store.count_account_data(platform, account_id) or counts
+            except Exception:
+                logger.debug("[accounts] purge-history 预估失败（忽略）",
+                             exc_info=True)
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "conversations": int(counts.get("conversations") or 0),
+                "messages": int(counts.get("messages") or 0),
+                "purgeable": not _purge_history_blocked(platform, account_id)}
+
+    @app.get("/api/accounts/{platform}/{account_id}/export-history")
+    async def api_account_export_history(platform: str, account_id: str,
+                                         request: Request):
+        """导出账号全部会话/消息为 JSONL（历史账号治理 P1，2026-08-17）。
+
+        「彻底删除」的资产保全配套——先备份再删，数据主权在本机。**任意账号
+        可导**（读操作零破坏、无复活风险，活跃号导出＝备份语义），权限与删除
+        同闸（``_require_account_manager``，agent/viewer 拒绝——导出是数据外携）。
+
+        流式 JSONL（``application/x-ndjson``）：首行 ``export_meta``（体量/时间），
+        随后每会话一行 ``conversation`` + 其消息逐行 ``message``（时间线升序；
+        含软删行——本地删除不改变导出口径的事实完整性）。字段白名单 schema=1，
+        新增内部列不会静默泄进导出文件。store 锁纪律见 ``iter_account_history``
+        （逐会话短持锁，绝不横跨下载周期）。审计：ops_events ``account_export``
+        （行数，不含内容），仅完整下载完成才落——中途断开不算一次导出。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.store_unavailable"))
+        import re as _re
+        from starlette.responses import StreamingResponse
+        plat = str(platform or "").lower()
+        acct = str(account_id or "")
+        safe = _re.sub(r"[^\w.-]", "_", f"{plat}_{acct}") or "account"
+        fname = f"chatx-history_{safe}_{time.strftime('%Y%m%d-%H%M')}.jsonl"
+        _CONV_FIELDS = ("conversation_id", "chat_key", "display_name",
+                        "username", "phone", "last_text", "last_ts",
+                        "unread", "archived", "automation_mode", "funnel_stage")
+        _MSG_FIELDS = ("message_id", "platform_msg_id", "direction", "text",
+                       "original_text", "translated_text", "source_lang",
+                       "target_lang", "media_type", "media_ref", "ts",
+                       "deleted_at")
+
+        def _gen():
+            n_conv = 0
+            n_msg = 0
+            try:
+                counts = store.count_account_data(plat, acct) or {}
+            except Exception:
+                counts = {}
+            meta = {"type": "export_meta", "app": "chatx", "schema": 1,
+                    "platform": plat, "account_id": acct,
+                    "exported_at": time.time(),
+                    "conversations": int(counts.get("conversations") or 0),
+                    "messages": int(counts.get("messages") or 0)}
+            yield json.dumps(meta, ensure_ascii=False) + "\n"
+            for conv, msgs in store.iter_account_history(plat, acct):
+                crow = {"type": "conversation"}
+                for k in _CONV_FIELDS:
+                    if k in conv:
+                        crow[k] = conv.get(k)
+                yield json.dumps(crow, ensure_ascii=False, default=str) + "\n"
+                n_conv += 1
+                for m in msgs:
+                    mrow = {"type": "message",
+                            "conversation_id": conv.get("conversation_id")}
+                    for k in _MSG_FIELDS:
+                        if k in m:
+                            mrow[k] = m.get(k)
+                    yield json.dumps(mrow, ensure_ascii=False, default=str) + "\n"
+                    n_msg += 1
+            # 完整走完才审计：中途断开的半个文件不算一次导出
+            try:
+                from src.ops.ops_events import get_ops_event_store
+                evs = get_ops_event_store()
+                if evs is not None:
+                    evs.record(
+                        "account_export", account_id=acct, platform=plat,
+                        reason="ok", detail=f"convs={n_conv};msgs={n_msg}")
+            except Exception:
+                logger.debug("[accounts] export-history 审计失败（忽略）",
+                             exc_info=True)
+
+        return StreamingResponse(_gen(), media_type="application/x-ndjson",
+                                 headers={"Content-Disposition":
+                                          f'attachment; filename="{fname}"'})
 
     @app.post("/api/accounts/{platform}/{account_id}/label")
     async def api_account_set_label(
@@ -1638,6 +5049,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         不会被编排器拉起 → 不会触发重复连接 / database lock）。
         """
         api_auth(request)
+        _require_account_manager(request)
         try:
             body = await request.json()
         except Exception:
@@ -1652,6 +5064,535 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "platform": platform,
                 "account_id": account_id, "label": label}
 
+    @app.get("/api/accounts/{platform}/{account_id}/profile")
+    async def api_account_profile_get(
+        platform: str, account_id: str, request: Request,
+    ):
+        """账号官方资料详情（accounts.profile_push 读口）：能力/自身资料/冷却/审计。
+
+        registry 无此账号也能返回（self 空、冷却不激活）——前端对 config 来源账号
+        （如 A 线 telegram default）也会点开详情。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.account_profile_push import (
+            capabilities, cooldown_remaining, fresh_account_days,
+            profile_churn_count, profile_push_enabled, push_cooldown_hours,
+            resolve_persona_fill,
+        )
+        from src.integrations.account_self_profile import (
+            read_self_profile_from_meta,
+        )
+        platform = str(platform or "").lower()
+        row = get_account_registry().get(platform, account_id) or {}
+        meta = row.get("meta") or {}
+        persona_id = str(meta.get("persona_id") or "")
+        if not persona_id:
+            pids = meta.get("persona_ids") or []
+            if isinstance(pids, (list, tuple)) and pids:
+                persona_id = str(pids[0] or "")
+        # 人设一键填充素材预览（use_persona）：绑定人设的名称/锁脸头像是否可用。
+        # best-effort——PersonaManager 异常/人设已删 → null，详情页其余信息照常。
+        persona = None
+        if persona_id:
+            try:
+                fill = resolve_persona_fill(persona_id, cfg)
+            except Exception:
+                fill = {}
+                logger.debug("[profile_push] persona 填充素材解析失败", exc_info=True)
+            if fill:
+                face_path = str(fill.get("face_ref_path") or "")
+                persona = {
+                    "id": str(fill.get("id") or persona_id),
+                    "name": str(fill.get("name") or ""),
+                    "face_ref": bool(face_path),
+                }
+                if face_path:
+                    try:
+                        mt = int(Path(face_path).stat().st_mtime)
+                    except Exception:
+                        mt = 0
+                    persona["face_ref_url"] = (
+                        f"/api/personas/{persona_id}/face-ref/image?v={mt}")
+        # 新号风控：账号接入天数（registry.created_at）→ 详情页保存前二次确认提示
+        try:
+            created_at = float(row.get("created_at") or 0)
+        except (TypeError, ValueError):
+            created_at = 0.0
+        account_age_days = (round((time.time() - created_at) / 86400.0, 1)
+                            if created_at > 0 else None)
+        fdays = fresh_account_days(cfg)
+        hours = push_cooldown_hours(cfg)
+        remain = cooldown_remaining(meta, time.time(), hours)
+        try:
+            last_push_ts = float(meta.get("profile_push_last_ts") or 0)
+        except (TypeError, ValueError):
+            last_push_ts = 0.0
+        # O-1 E（#255）：账号显示名 ≠ 人设名 → name_mismatch（详情页红条）；一致 / 判不出 None
+        _self = read_self_profile_from_meta(meta)
+        name_mismatch = None
+        try:
+            from src.utils.account_name_check import (
+                check_name_mismatch, log_mismatch_once)
+            name_mismatch = check_name_mismatch(
+                platform, account_id, _self.get("self_name"),
+                (persona or {}).get("name"), persona_id=persona_id)
+            if name_mismatch:
+                log_mismatch_once(name_mismatch)
+        except Exception:
+            name_mismatch = None
+        return {
+            "ok": True, "platform": platform, "account_id": account_id,
+            "enabled": profile_push_enabled(cfg),
+            "capabilities": capabilities(platform),
+            "self": _self,
+            "label": str(row.get("label") or ""),
+            "persona_id": persona_id,
+            "persona": persona,
+            "name_mismatch": name_mismatch,
+            "account_age_days": account_age_days,
+            "fresh": bool(account_age_days is not None
+                          and account_age_days < fdays),
+            "fresh_days": fdays,
+            "proxy": bool(row.get("proxy_id")),
+            "fingerprint": bool(row.get("fingerprint_id")),
+            "cooldown": {"active": remain > 0,
+                         "remaining_sec": int(max(0, remain)),
+                         "hours": hours},
+            "last_push_ts": last_push_ts,
+            "push_log": list(meta.get("profile_push_log") or [])[-5:],
+            # 近 7 天成功推送次数（详情页「改名频繁」提示；≥3 黄条）
+            "churn_7d": profile_churn_count(meta),
+            # 跨运行审计（ops_events，含批量对齐）——供「变更历史」展开；缺库=空
+            "profile_events": _recent_profile_events(platform, account_id),
+        }
+
+    @app.post("/api/accounts/{platform}/{account_id}/profile")
+    async def api_account_profile_push(
+        platform: str, account_id: str, request: Request,
+    ):
+        """把后台编辑的昵称/签名/头像推送到平台官方（accounts.profile_push 写口）。
+
+        body: ``{name?, status_text?, avatar_b64?, use_persona?}``（status_text 对
+        Telegram 语义为 bio）。``use_persona=true``＝「把账号对齐到绑定人设」：
+        name/头像缺省时取绑定人设的 profile 名 / 锁脸基准照（显式字段永远优先，
+        status_text 不受影响）。守卫顺序：flag → 平台能力 → 人设素材解析 →
+        至少一字段 → 长度校验（对人设名同样生效）→ 头像解码/加工 → 冷却 →
+        分平台执行（Telegram 协议直改 / WhatsApp 经 Baileys）→ meta 审计
+        （read-merge-write，保住 session_string 等敏感键）→ 回读刷新 self_*。
+        推送漏斗计数（attempts/cooldown_blocked/offline_blocked/failed/success/
+        partial/persona_fill）全程 best-effort，绝不影响主流程。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations import account_profile_push as profile_push
+
+        def _bump(key: str, plat: str = "") -> None:
+            try:
+                profile_push.bump_push_stat(key, plat or None)
+            except Exception:
+                logger.debug("[profile_push] 计数失败（忽略）", exc_info=True)
+
+        platform = str(platform or "").lower()
+        if not profile_push.profile_push_enabled(cfg):
+            raise HTTPException(403, tr(request, "err.acct.profile_disabled"))
+        caps = profile_push.capabilities(platform)
+        if caps.get("mode") == "manual":
+            raise HTTPException(
+                400, tr(request, "err.acct.profile_platform_manual"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        name = str((body or {}).get("name") or "").strip()
+        status_text = str((body or {}).get("status_text") or "").strip()
+        avatar_b64 = str((body or {}).get("avatar_b64") or "").strip()
+        use_persona = bool((body or {}).get("use_persona"))
+        reg = get_account_registry()
+        row = reg.get(platform, account_id)
+        # use_persona：把账号对齐到绑定人设——显式 body 字段优先，缺省才取人设素材
+        persona_used = {"name": False, "avatar": False}
+        persona_avatar_raw = None
+        if use_persona:
+            meta0 = dict((row or {}).get("meta") or {})
+            pid = str(meta0.get("persona_id") or "")
+            if not pid:
+                pids = meta0.get("persona_ids") or []
+                if isinstance(pids, (list, tuple)) and pids:
+                    pid = str(pids[0] or "")
+            try:
+                fill = profile_push.resolve_persona_fill(pid, cfg) if pid else {}
+            except Exception:
+                fill = {}
+                logger.debug("[profile_push] persona 填充素材解析失败", exc_info=True)
+            p_name = str((fill or {}).get("name") or "")
+            p_face = str((fill or {}).get("face_ref_path") or "")
+            if not (p_name or p_face):
+                raise HTTPException(
+                    400, tr(request, "err.acct.profile_no_persona"))
+            if not name and p_name:
+                name = p_name
+                persona_used["name"] = True
+            if not avatar_b64 and p_face:
+                try:
+                    persona_avatar_raw = Path(p_face).read_bytes()
+                except Exception:
+                    # 读不到按坏图走同一 400 报错键（与显式坏头像同语义）
+                    persona_avatar_raw = b""
+                    logger.debug("[profile_push] face_ref 读取失败", exc_info=True)
+                persona_used["avatar"] = True
+        if not (name or status_text or avatar_b64
+                or persona_avatar_raw is not None):
+            raise HTTPException(400, tr(request, "err.acct.profile_no_fields"))
+        bad = profile_push.validate_fields(platform, name, status_text)
+        if bad is not None:
+            raise HTTPException(400, tr(request, bad[0], **bad[1]))
+        mb = profile_push.max_avatar_mb(cfg)
+        mb_disp = int(mb) if mb == int(mb) else mb
+        avatar_bytes = None
+        if avatar_b64:
+            import base64
+            if avatar_b64.startswith("data:") and "," in avatar_b64:
+                avatar_b64 = avatar_b64.split(",", 1)[1]  # 容忍 dataURL 前缀
+            try:
+                raw = base64.b64decode(avatar_b64)
+            except Exception:
+                raise HTTPException(
+                    400, tr(request, "err.acct.profile_avatar_invalid"))
+            try:
+                avatar_bytes = profile_push.prepare_avatar(raw, mb)
+            except ValueError as ex:
+                key = str(ex.args[0] if ex.args
+                          else "err.acct.profile_avatar_invalid")
+                raise HTTPException(400, tr(request, key, mb=mb_disp))
+        elif persona_avatar_raw is not None:
+            try:
+                avatar_bytes = profile_push.prepare_avatar(persona_avatar_raw, mb)
+            except ValueError as ex:
+                key = str(ex.args[0] if ex.args
+                          else "err.acct.profile_avatar_invalid")
+                raise HTTPException(400, tr(request, key, mb=mb_disp))
+        meta = dict((row or {}).get("meta") or {})
+        hours = profile_push.push_cooldown_hours(cfg)
+        now = time.time()
+        _bump("attempts", platform)
+        remain = profile_push.cooldown_remaining(meta, now, hours)
+        if remain > 0:
+            _bump("cooldown_blocked")
+            raise HTTPException(429, tr(
+                request, "err.acct.profile_cooldown",
+                remain=profile_push.format_remaining(remain)))
+        requested = [f for f, v in (("name", name), ("status", status_text),
+                                    ("avatar", avatar_bytes)) if v]
+        tg_client = (_get_tg_pyro_for_account(request.app, account_id)
+                     if platform == "telegram" else None)
+        exe = await profile_push.execute_profile_push(
+            platform, account_id, name=name, status_text=status_text,
+            avatar_bytes=avatar_bytes, config=cfg, tg_client=tg_client)
+        if exe.get("offline"):
+            _bump("offline_blocked")
+            raise HTTPException(409, tr(request, "err.acct.profile_offline"))
+        applied = dict(exe.get("applied") or {})
+        errors_raw = dict(exe.get("errors") or {})
+        ok = bool(exe.get("ok"))
+        # 推送结果计数（success=至少一字段成功；partial 单独可见；全败=failed）
+        try:
+            profile_push.record_push_result(platform, ok, bool(errors_raw))
+            if ok and (persona_used["name"] or persona_used["avatar"]):
+                profile_push.bump_push_stat("persona_fill")
+        except Exception:
+            logger.debug("[profile_push] 结果计数失败（忽略）", exc_info=True)
+        # 成败都落 meta 审计（read-merge-write；registry 无此行时跳过，不建新行）
+        if row is not None:
+            try:
+                fresh = dict((reg.get(platform, account_id) or {})
+                             .get("meta") or {})
+                merged = profile_push.merge_push_meta(
+                    fresh, sorted(applied) if applied else requested, now, ok)
+                reg.upsert(platform, account_id, meta=merged)
+            except Exception:
+                logger.debug("[profile_push] meta 审计写入失败", exc_info=True)
+        # 审计事件（成败都记；单号推送人设 id 从本行 meta 取，best-effort）
+        _record_profile_ops_event(
+            platform, account_id, kind="profile_push", ok=ok,
+            fields=(sorted(applied) if applied else requested),
+            persona_id=str(meta.get("persona_id") or ""),
+            note=("persona_fill" if (persona_used["name"]
+                                     or persona_used["avatar"]) else ""))
+        if not ok:
+            raise HTTPException(
+                502, tr(request, "err.acct.profile_push_failed"))
+        await profile_push.refresh_self_after_push(
+            platform, account_id, config=cfg,
+            wa_res=exe.get("wa_res") or {},
+            tg_client=exe.get("tg_client"),
+            fallback_name=name)
+        from src.integrations.account_self_profile import (
+            read_self_profile_from_meta,
+        )
+        fresh_meta = (reg.get(platform, account_id) or {}).get("meta") or {}
+        errors_out = {f: tr(request, "err.acct.profile_push_failed")
+                      for f in errors_raw}
+        return {
+            "ok": True, "platform": platform, "account_id": account_id,
+            "applied": applied, "errors": errors_out,
+            "persona_used": persona_used,
+            "self": read_self_profile_from_meta(fresh_meta),
+            "cooldown": {"active": True,
+                         "remaining_sec": int(hours * 3600), "hours": hours},
+        }
+
+    @app.post("/api/accounts/persona-align")
+    async def api_accounts_persona_align(request: Request):
+        """把某个人设名下已绑定账号的官方昵称/头像批量对齐到人设（P3）。
+
+        body: ``{persona_id, dry_run?: bool, include?: ["plat:aid", ...]}``。
+        - dry_run=true（默认）→ 只预览：``would_push`` / ``skipped_*``，零副作用；
+        - dry_run=false → 串行真推（头像只 prepare 一次，账号间 sleep 1.5s），
+          单号失败不中止整批。新号默认 skip（批量风控面大于单号二次确认）。
+        - ``include``（仅真推生效）：账号白名单；未勾选的 would_push →
+          ``skipped_excluded``。缺省 = 推全部 would_push。
+        - ``fields``（仅真推生效）：字段白名单，``["name"]`` / ``["avatar"]`` /
+          两者。缺省 = 推全部可推字段。只推头像时忽略昵称对齐判断。
+        上限 ``ALIGN_MAX_ACCOUNTS``；响应 ``results[]`` + ``summary`` +
+        ``same_platform_risk``。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations import account_profile_push as profile_push
+        from src.integrations.account_self_profile import (
+            read_self_profile_from_meta,
+        )
+
+        if not profile_push.profile_push_enabled(cfg):
+            raise HTTPException(403, tr(request, "err.acct.profile_disabled"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        persona_id = str((body or {}).get("persona_id") or "").strip()
+        dry_run = bool((body or {}).get("dry_run", True))
+        include_set = (None if dry_run
+                       else profile_push.parse_align_include(
+                           (body or {}).get("include")))
+        fields_set = (None if dry_run
+                      else profile_push.parse_align_fields(
+                          (body or {}).get("fields")))
+        use_name = fields_set is None or "name" in fields_set
+        use_avatar = fields_set is None or "avatar" in fields_set
+        # 批次号：把本次真推产生的多条 per-account 审计事件归组（dry_run 不落审计→不需要）
+        run_id = "" if dry_run else __import__("uuid").uuid4().hex[:8]
+        if not persona_id:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="persona_id"))
+        try:
+            fill = profile_push.resolve_persona_fill(persona_id, cfg)
+        except Exception:
+            fill = {}
+            logger.debug("[profile_push] align persona 素材解析失败",
+                         exc_info=True)
+        p_name = str((fill or {}).get("name") or "")
+        p_face = str((fill or {}).get("face_ref_path") or "")
+        if not (p_name or p_face):
+            raise HTTPException(400, tr(request, "err.acct.profile_no_persona"))
+
+        reg = get_account_registry()
+        bound = profile_push.accounts_bound_to_persona(
+            reg.list(), persona_id)[:profile_push.ALIGN_MAX_ACCOUNTS]
+        hours = profile_push.push_cooldown_hours(cfg)
+        fdays = profile_push.fresh_account_days(cfg)
+        now = time.time()
+        mb = profile_push.max_avatar_mb(cfg)
+
+        # 头像只加工一次——批量 N 账号共享同一 JPEG（省 CPU + 保证字节一致）
+        avatar_bytes = None
+        if p_face:
+            try:
+                avatar_bytes = profile_push.prepare_avatar(
+                    Path(p_face).read_bytes(), mb)
+            except Exception:
+                logger.debug("[profile_push] align face_ref 加工失败",
+                             exc_info=True)
+                avatar_bytes = None
+                if not p_name:
+                    raise HTTPException(
+                        400, tr(request, "err.acct.profile_avatar_invalid"))
+
+        def _online(plat: str, aid: str) -> bool:
+            if plat == "telegram":
+                return _get_tg_pyro_for_account(request.app, aid) is not None
+            if plat == "whatsapp":
+                # 轻量：有编排器状态且 running；无状态时 dry-run 不拦（真推由 Node 判）
+                try:
+                    orch = getattr(request.app.state, "account_orchestrator", None)
+                    if orch is None:
+                        return True
+                    st = (getattr(orch, "status", None) or {})
+                    if callable(st):
+                        st = st() or {}
+                    row = None
+                    if isinstance(st, dict):
+                        row = (st.get(f"whatsapp:{aid}")
+                               or st.get(aid)
+                               or (st.get("accounts") or {}).get(aid))
+                    if isinstance(row, dict):
+                        return bool(row.get("running") or row.get("connected")
+                                    or row.get("ok"))
+                except Exception:
+                    pass
+                return True
+            return False
+
+        results: List[Dict[str, Any]] = []
+        for row in bound:
+            plat = str(row.get("platform") or "").lower()
+            aid = str(row.get("account_id") or "")
+            meta = dict(row.get("meta") or {})
+            try:
+                created_at = float(row.get("created_at") or 0)
+            except (TypeError, ValueError):
+                created_at = 0.0
+            self_info = read_self_profile_from_meta(meta)
+            self_name = str(self_info.get("self_name") or "")
+            base = {
+                "platform": plat, "account_id": aid,
+                "label": str(row.get("label") or ""),
+                "self_name": self_name,
+            }
+            # 字段级对齐：只推所选字段（dry_run 时 fields_set=None → 全量预览）
+            eff_name = p_name if use_name else ""
+            eff_avatar = avatar_bytes if use_avatar else None
+            pred = profile_push.predict_align_status(
+                plat, meta, now=now, cooldown_hours=hours,
+                fresh_days=fdays, created_at=created_at,
+                online=_online(plat, aid),
+                target_name=eff_name, has_avatar=bool(eff_avatar),
+                current_name=self_name)
+            # 运营在确认框取消勾选 → include 白名单；未列入的 would_push 记 excluded
+            if (not dry_run and pred == "would_push"
+                    and include_set is not None
+                    and (plat, aid) not in include_set):
+                results.append({**base, "status": "skipped_excluded"})
+                continue
+            # 选了字段却对本号无可推内容（如只推头像但无头像）→ 视作排除，不空打 API
+            if (not dry_run and pred == "would_push"
+                    and not eff_name and not eff_avatar):
+                results.append({**base, "status": "skipped_excluded"})
+                continue
+            if dry_run or pred != "would_push":
+                results.append({**base, "status": pred})
+                continue
+
+            # ── 真推一条（共用 execute_profile_push）──
+            name = eff_name
+            bad = profile_push.validate_fields(plat, name, "")
+            if bad is not None:
+                results.append({**base, "status": "failed",
+                                "reason": bad[0]})
+                continue
+            try:
+                profile_push.bump_push_stat("attempts", plat)
+            except Exception:
+                pass
+            tg_client = (_get_tg_pyro_for_account(request.app, aid)
+                         if plat == "telegram" else None)
+            exe = await profile_push.execute_profile_push(
+                plat, aid, name=name, avatar_bytes=eff_avatar,
+                config=cfg, tg_client=tg_client)
+            if exe.get("offline"):
+                try:
+                    profile_push.bump_push_stat("offline_blocked")
+                except Exception:
+                    pass
+                results.append({**base, "status": "skipped_offline"})
+                await asyncio.sleep(1.5)
+                continue
+            if exe.get("error_key") == "err.acct.profile_platform_manual":
+                results.append({**base, "status": "skipped_manual"})
+                continue
+            applied = dict(exe.get("applied") or {})
+            errors_raw = dict(exe.get("errors") or {})
+            ok = bool(exe.get("ok"))
+            try:
+                profile_push.record_push_result(
+                    plat, ok, bool(errors_raw) and ok)
+                if ok:
+                    profile_push.bump_push_stat("persona_fill")
+            except Exception:
+                pass
+            try:
+                fresh = dict((reg.get(plat, aid) or {}).get("meta") or {})
+                merged = profile_push.merge_push_meta(
+                    fresh, sorted(applied) if applied else
+                    [f for f, v in (("name", name), ("avatar", eff_avatar))
+                     if v],
+                    time.time(), ok)
+                reg.upsert(plat, aid, meta=merged)
+            except Exception:
+                logger.debug("[profile_push] align meta 审计失败", exc_info=True)
+            if ok:
+                await profile_push.refresh_self_after_push(
+                    plat, aid, config=cfg, wa_res=exe.get("wa_res") or {},
+                    tg_client=exe.get("tg_client"), fallback_name=name)
+            # 审计：每个真推账号记一条（可按号回溯「哪次批量把它对齐了」）
+            _record_profile_ops_event(
+                plat, aid, kind="profile_align", ok=ok,
+                fields=(sorted(applied) if applied
+                        else [f for f in ("name", "avatar")
+                              if (f == "name" and eff_name)
+                              or (f == "avatar" and eff_avatar)]),
+                persona_id=persona_id, note="align", run_id=run_id)
+            results.append({
+                **base,
+                "status": "pushed" if ok else "failed",
+                "applied": applied,
+            })
+            await asyncio.sleep(1.5)
+
+        if not dry_run:
+            try:
+                profile_push.bump_push_stat("align_runs")
+            except Exception:
+                pass
+        pushed = sum(1 for r in results if r.get("status") == "pushed")
+        failed = sum(1 for r in results if r.get("status") == "failed")
+        would = sum(1 for r in results if r.get("status") == "would_push")
+        skipped = len(results) - pushed - failed - would
+        risk = profile_push.same_platform_align_risk(results)
+        # 安全网：一次真推里同平台 ≥2 号被对齐到同一人设 → 关联封号风险，主动告警一次
+        # （run 级、按批次 key 去抖；前端已默认只勾 1/平台，触发＝运营主动覆盖了默认）
+        if not dry_run and risk:
+            try:
+                from src.utils.host_alert import notify_host
+                worst = max(risk, key=lambda x: int(x.get("count") or 0))
+                detail = "、".join(f"{x['platform']}×{x['count']}" for x in risk)
+                notify_host(
+                    "资料对齐同平台多号风险",
+                    (f"人设 {persona_id} 本次对齐：{detail}。"
+                     f"同平台多号同名/同头像易被关联风控，建议错峰分批。"),
+                    key=f"profile_align_burst:{persona_id}:{worst.get('platform')}",
+                    cooldown_sec=1800.0)
+            except Exception:
+                logger.debug("[profile_push] 同平台风险告警失败（忽略）",
+                             exc_info=True)
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "persona": {"id": persona_id, "name": p_name,
+                        "face_ref": bool(avatar_bytes or p_face)},
+            "results": results,
+            "same_platform_risk": risk,
+            "summary": {
+                "total": len(results),
+                "pushed": pushed if not dry_run else 0,
+                "would_push": would if dry_run else 0,
+                "failed": failed,
+                "skipped": skipped,
+            },
+        }
+
     @app.post("/api/accounts/{platform}/{account_id}/auto-reply")
     async def api_account_auto_reply(platform: str, account_id: str, request: Request):
         """切换某协议账号的 7×24 自动回复（账号闸门，写入 registry meta.auto_reply）。
@@ -1660,6 +5601,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         同时打开（双闸门）。body: {enabled: bool}
         """
         api_auth(request)
+        _require_account_manager(request)
         try:
             body = await request.json()
         except Exception:
@@ -1702,6 +5644,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         或 {reset: true} 清空该账号覆盖（回落全局）。
         """
         api_auth(request)
+        _require_account_manager(request)
         try:
             body = await request.json()
         except Exception:
@@ -1778,6 +5721,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     async def api_account_auto_reply_config_set(request: Request):
         """改自动回复全局设置（白名单校验落盘 + 热更新限流器，无需重启）。"""
         api_auth(request)
+        _require_account_manager(request)
         try:
             body = await request.json()
         except Exception:
@@ -1903,8 +5847,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.get("/api/accounts/auto-reply/webhooks")
     async def api_account_auto_reply_webhooks_get(request: Request):
-        """读有效告警渠道列表（脱敏 token/secret）。"""
+        """读有效告警渠道列表（脱敏 token/secret；含明文群地址 → 限运营角色）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.notify_webhooks_store import (
             effective_webhooks, mask,
@@ -1912,11 +5857,29 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         items = effective_webhooks(cfg)
         return {"ok": True, "webhooks": mask(items), "count": len(items)}
 
+    @app.get("/api/accounts/auto-reply/alert-catalog")
+    async def api_account_alert_catalog(request: Request):
+        """按受众分组的告警目录（2026-07-31 产品化：终端能大白话勾选、不再手打别名）。
+
+        返回 ``{business:[{alias,label_key}], technical:[...]}``——面板把业务告警默认
+        展开（大白话标签，终端运营看得懂能行动），技术告警折叠进「高级」（开发者/技术
+        支持向）。label_key 走 cp-i18n（前端 T() 取词）。绑定谁的渠道就发到谁那里
+        （per-instance，各配各的），故任意登录用户可读此目录。
+        """
+        api_auth(request)
+        try:
+            from src.inbox.webhook_notifier import alert_catalog
+            return {"ok": True, **alert_catalog()}
+        except Exception:
+            return {"ok": True, "business": [], "technical": []}
+
     @app.post("/api/accounts/auto-reply/webhooks")
     async def api_account_auto_reply_webhooks_set(request: Request):
         """整段保存告警渠道列表（白名单校验落盘 + 热更 WebhookNotifier，免重启）。
-        token/secret 留空 → 沿用同名旧值（前端展示是脱敏的，避免覆盖真实密钥）。"""
+        token/secret 留空 → 沿用同名旧值（前端展示是脱敏的，避免覆盖真实密钥）。
+        写＝运营配置，限运营角色（拒坐席/观察员，防误删主管配的渠道）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         try:
             body = await request.json()
         except Exception:
@@ -1924,17 +5887,13 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         incoming = body.get("webhooks") if isinstance(body, dict) else body
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.notify_webhooks_store import (
-            effective_webhooks, mask, sanitize_list, save_list,
+            effective_webhooks, mask, merge_preserve_secrets, sanitize_list,
+            save_list,
         )
-        # 按 name 保留旧密钥（前端回传脱敏值或空时不覆盖真实 token/secret）
+        # 按 name 保留旧密钥（前端回传脱敏值或空时不覆盖真实 token/secret）——
+        # 纯函数 merge_preserve_secrets 单一实现,门禁 test_webhook_channels 钉住。
         old_by_name = {w.get("name"): w for w in effective_webhooks(cfg)}
-        cleaned = sanitize_list(incoming)
-        for w in cleaned:
-            old = old_by_name.get(w.get("name")) or {}
-            for k in ("token", "secret"):
-                nv = str(w.get(k) or "")
-                if (not nv) or nv.endswith("***"):
-                    w[k] = str(old.get(k) or "")
+        cleaned = merge_preserve_secrets(sanitize_list(incoming), old_by_name)
         saved = save_list(cleaned)
         # 热更运行中的 notifier
         try:
@@ -1948,8 +5907,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     @app.post("/api/accounts/auto-reply/webhooks/test")
     async def api_account_auto_reply_webhooks_test(request: Request):
         """对单条渠道即时发一条测试告警（连通性检查）。
-        body: {index} 走有效列表第 index 条；或直接传 {webhook:{...}}。"""
+        body: {index} 走有效列表第 index 条；或直接传 {webhook:{...}}。
+        测试发送＝会真往渠道投递，限运营角色（防坐席乱发骚扰群）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         try:
             body = await request.json()
         except Exception:
@@ -1983,7 +5944,124 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             res = await notifier.send_test(wh)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        # B24（2026-08-21）报错人话化：把 send_test 带回的原始失败原因映射成
+        # 用户能行动的话术——「测试失败：HTTP 200」这类甩状态码违反人话铁律。
+        # 原始原因保留在日志（notifier 已 warning），响应只给人话+原因摘要。
+        if isinstance(res, dict) and not res.get("ok"):
+            raw = str(res.pop("error_raw", "") or "")
+            low = raw.lower()
+            if "chat not found" in low or "missing target" in low:
+                res["error"] = tr(request, "al.ct.err.chat_not_found")
+            elif ("unauthorized" in low or "missing url/token" in low
+                  or "http 401" in low):
+                res["error"] = tr(request, "al.ct.err.bad_token")
+            elif "blocked" in low or "kicked" in low:
+                res["error"] = tr(request, "al.ct.err.blocked")
+            elif ("timed out" in low or "timeout" in low
+                  or "getaddrinfo" in low or "connection" in low
+                  or "urlopen" in low):
+                res["error"] = tr(request, "al.ct.err.network")
+            else:
+                res["error"] = raw or tr(request, "al.ct.err.unknown")
         return res
+
+    @app.get("/api/admin/alert-link-status")
+    async def api_alert_link_status(request: Request):
+        """告警链路自检（只读聚合，零密钥字段）：文件真相 × 进程真相 × 分歧 × 诱饵。
+
+        「配了通道 ≠ 收得到」——真接通 = 关注别名逐个有启用通道订阅（audit.healthy）
+        且运行中的 notifier 装载的就是磁盘这份配置（指纹一致）。verdict 分档：
+        ``no_channel``（0 启用通道，今日生产现状）→ ``not_running``（notifier 存在但
+        事件循环没跑）→ ``divergent``（文件 vs 进程指纹不一致：手改文件未经面板 →
+        没热更）→ ``uncovered``（有通道但关注别名有洞）→ ``healthy``。
+        响应只含计数/别名/通道名/落点路径/指纹——无 token/url/target 明文，故仅
+        ``api_auth`` 不加运营角色闸（坐席能看懂「告警为什么静默」有助自查）；
+        改配置仍走受角色闸的面板路由。CLI 同源文件口径见 tools/alert_link_selfcheck.py，
+        本端点多出进程口径与分歧检测（CLI 在进程外看不到 notifier）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        # 聚合逻辑收敛在 collect_alert_link_status（健康灯 probe_alert_link 同源消费），
+        # 路由只做鉴权 + 透传——两个读数口永远一个口径。
+        from src.integrations.alert_link_status import collect_alert_link_status
+        return collect_alert_link_status(
+            cfg, getattr(app.state, "webhook_notifier", None))
+
+    @app.get("/api/admin/official-webhook-status")
+    async def api_official_webhook_status(request: Request):
+        """官方渠道 webhook 回调可达性（只读聚合，零密钥字段）。
+
+        「凭证配了、状态绿了、但客户消息永远进不来」——官方 API 渠道是被动 webhook
+        入站，回调打不进来时系统零报错。判词经 ``official_webhook_stats.classify``：
+        ``live``（事件到达过）/ ``handshake_only``（握手成功零事件：冷启动或订阅字段
+        没勾）/ ``auth_failing``（有请求到达但从未通过验证：凭证配错或扫描噪声）/
+        ``never_reached``（路由挂着、外面从没打进来：公网 URL/隧道/开发者后台没配）/
+        ``not_mounted``（启用但路由没挂：凭证缺 或 配完凭证等重启）/ ``disabled``。
+        挂载真相读 ``app.state``（各 webhook 注册时写入的路径），比纯配置推断多抓
+        「启动后才填凭证」这档。响应只含计数/时间年龄/路径——无 token 明文。
+        CLI 同源文件口径见 tools/official_webhook_selfcheck.py（进程外可用，
+        服务挂了/重启窗口内照样能诊断；judgment 共用 official_webhook_stats.classify）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.official_webhook_stats import collect_status
+        return collect_status(cfg, app_state=app.state)
+
+    @app.get("/api/admin/buried-conversations")
+    async def api_buried_conversations(request: Request):
+        """被埋会话体检（只读）：归档着、却有未读入站——客户在等而工作台看不见（P0-198）。
+
+        与 ``HealthWatchdog._check_buried_conversations`` / ``tools/audit_buried_
+        conversations.py`` 同一判据（``InboxStore.list_buried_archived`` 是唯一事实源），
+        三个读数口不会各说各话。告警是「会自己响」，这里是「随时能核对 + 点进去处置」。
+
+        **刻意不回 last_text**：定位「谁被埋了」只需要名字与未读数，内容一点进收件箱就有；
+        ops 总览页的可见面比收件箱宽，没必要在这里多摊一份客户原话。
+        ``supported=false`` = 该实例的 store 还没有这个能力（旧版本），前端据此整卡隐藏，
+        而不是显示一个恒为 0 的假绿灯。
+        """
+        api_auth(request)
+        store = getattr(app.state, "inbox_store", None)
+        if store is None or not hasattr(store, "list_buried_archived"):
+            return {"supported": False, "count": 0, "rows": []}
+        # #222 口径统一：与看门狗 / 工作台横幅同走 unread_aggregate.buried_conversations
+        # （私聊 + 有效未读 + 可见消息）；None 才回落 store 旧口径。
+        rows = None
+        try:
+            from src.inbox.unread_aggregate import buried_conversations
+            rows = buried_conversations(store, min_unread=1, limit=50)
+        except Exception:
+            rows = None
+        if rows is None:
+            try:
+                rows = store.list_buried_archived(min_unread=1, limit=50) or []
+            except Exception as exc:
+                return {"supported": True, "error": str(exc), "count": 0, "rows": []}
+        out = []
+        total_unread = 0
+        for r in rows:
+            try:
+                unread = int(r.get("unread") or 0)
+            except (TypeError, ValueError):
+                unread = 0
+            total_unread += unread
+            auto = float(r.get("auto_archived_at") or 0) > 0
+            out.append({
+                "conversation_id": r.get("conversation_id"),
+                "platform": r.get("platform"),
+                "display_name": r.get("display_name") or "",
+                "unread": unread,
+                "last_ts": r.get("last_ts") or 0,
+                "archived_at": r.get("archived_at") or 0,
+                "auto": auto,
+            })
+        return {
+            "supported": True,
+            "count": len(out),
+            "total_unread": total_unread,
+            "auto_archived": sum(1 for x in out if x["auto"]),
+            "rows": out,
+        }
 
     @app.get("/api/accounts/auto-reply/stream")
     async def api_account_auto_reply_stream(request: Request):
@@ -2029,6 +6107,17 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.on_event("startup")
     async def _orchestrator_autostart():
+        # P0+：健康表跨重启接续——注册表 offline 号种子化进内存健康表
+        # （幂等；即便编排器未启用也要做，坐席横幅/ops 卡靠它）。
+        try:
+            from src.integrations.platform_session_health import (
+                ensure_seeded_from_registry,
+            )
+            n = ensure_seeded_from_registry()
+            if n:
+                logger.info("平台会话健康表已自注册表种子化 %d 个已退出账号", n)
+        except Exception:
+            logger.debug("平台会话健康表种子化失败（已忽略）", exc_info=True)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         if not orchestrator_enabled(cfg):
             return

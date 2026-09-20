@@ -14,7 +14,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+import time
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 
@@ -23,6 +24,88 @@ from src.web.routes.unified_inbox_services import _inbox_store
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+# 主对话链模式（ai.primary）：与 AIClient._primary_mode 词表对齐。
+_AI_PRIMARY_MODES = frozenset({"cloud", "local", "local_only"})
+
+
+def _local_endpoint_ready(ai_cfg: Dict[str, Any]) -> bool:
+    """``ai.fallback`` 是否齐备到足以承担本地主链（enabled + base_url + model）。"""
+    fb = (ai_cfg or {}).get("fallback") or {}
+    if not isinstance(fb, dict) or not fb.get("enabled"):
+        return False
+    return bool(str(fb.get("base_url") or "").strip() and str(fb.get("model") or "").strip())
+
+
+def _ai_primary_snapshot(config_manager, ai_client=None) -> Dict[str, Any]:
+    """主对话模式快照（运营可见，零密钥）。
+
+    ``configured``＝overlay/主配置声明值；``effective``＝运行时 AIClient 实际值
+    （声明 local* 但端点缺 → 启动时退回 cloud，两者会分叉——看板必须显式对照）。
+    """
+    config = getattr(config_manager, "config", None) or {} if config_manager else {}
+    ai = config.get("ai") or {}
+    configured = str(ai.get("primary") or "cloud").strip().lower()
+    if configured not in _AI_PRIMARY_MODES:
+        configured = "cloud"
+    local_ready = _local_endpoint_ready(ai)
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else {}
+    effective = configured
+    if ai_client is not None:
+        effective = str(getattr(ai_client, "_primary_mode", None) or configured).strip().lower()
+        if effective not in _AI_PRIMARY_MODES:
+            effective = "cloud"
+    lock = ""
+    try:
+        from src.ai.ai_primary_audit import resolve_lock
+        lock = resolve_lock(ai)
+    except Exception:
+        lock = ""
+    return {
+        "configured": configured,
+        "effective": effective,
+        "local_ready": local_ready,
+        "local_model": str((fb or {}).get("model") or "").strip() or None,
+        "divergent": configured != effective,
+        # 老板锁（2026-08-22）：非空=档位锁死，越权切换被拒/被强制回锁值
+        "lock": lock,
+        "locked": bool(lock),
+    }
+
+
+def _request_actor(request: "Request") -> str:
+    """审计行的操作者标识（session 用户名/ID → Bearer 壳 → unknown；绝不抛）。"""
+    try:
+        u = request.session.get("username") or request.session.get("user_id")
+        if u:
+            return f"user:{u}"
+    except Exception:
+        pass
+    try:
+        if (request.headers.get("Authorization") or "").startswith("Bearer "):
+            return "bearer-token"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _request_ip(request: "Request") -> str:
+    try:
+        return str(request.client.host or "") if request.client else ""
+    except Exception:
+        return ""
+
+
+def _usage_tier_group(tier: str) -> str:
+    """llm_cost tier → 出话分布分组。
+
+    ``local_primary`` 必须独立成组——并进 ``primary`` 会让本地优先部署的看板
+    看起来「全是云主链」，隐私/算力归因双失真。
+    """
+    t = str(tier or "default")
+    if t in ("key_pool", "local_fallback", "local_primary"):
+        return t
+    return "primary"
 
 
 def _count_online_agents(request: Request) -> int:
@@ -50,6 +133,82 @@ def _kb_readiness_for(config_manager) -> dict:
         return {"available": False, "is_cold": True, "enabled_entries": 0}
 
 
+def _channel_health_snapshot() -> Dict[str, Any]:
+    """平台通道离线快照（坐席工作台「通道离线」警示横幅数据源，P0-2 延伸）。
+
+    读 ``platform_session_health.unhealthy_sessions()``（进程级内存登记表，零 IO），
+    把 ``platform:acct`` key 拆成结构化条目并按已离线时长降序（最久的排最前 =
+    横幅首条明细）。任何异常吞掉返回空快照——本函数挂在坐席状态条轮询接口上，
+    绝不能反过来把它拖垮（坐席端全靠该接口）。
+
+    ``logged_out``（运营主动登出 / 启动自注册表种子）**不进横幅**——那不是故障，
+    收件箱账号 chip 已有「已退出」语义；横幅只催 ``needs_login`` / ``expired`` /
+    ``failed`` 这类「该有人去修」的意外掉线。（``abandoned``＝放弃的登录尝试，
+    压根不在不健康集合里，天然不会到这。）
+
+    「期望在线」策略过滤（2026-08-27 状态中心 v2）：与看门狗催办**同一判据**
+    ``session_expected_online``——运营已登出（operator）/ 登录位已被接替
+    （superseded:*）/ 已删除 / 登录尝试幽灵（无注册表行的 msg_* 临时 id）一律
+    不亮。此前口径分裂：worker 重启用陈旧 cookie 重推一次 needs_login，就能把
+    处理完的号再点红（Calixa 僵尸的最后一条上游通路）。ops 卡走 ``dump()`` 原样
+    全量（管理员要看全部真相），本过滤只作用于坐席横幅。
+
+    每条目尽力富集 ``name``（注册表 meta.self_name / label）——红条只写
+    ``messenger:6158…`` 坐席不知道是谁掉线（2026-08-14 实录），有昵称才可操作。
+    另带 ``relogin_ts/relogin_by``（最近一次人工重登触发的痕迹）——多坐席值守
+    时「已有人在处理」全员可见，防同一个号被两个人各触发一遍。
+    """
+    try:
+        from src.integrations.platform_session_health import (
+            channel_alert_muted, ensure_seeded_from_registry,
+            get_platform_session_health, session_expected_online,
+        )
+        ensure_seeded_from_registry()
+        now = time.time()
+        items = []
+        reg = None
+        try:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+        except Exception:
+            reg = None
+        for key, sess in get_platform_session_health().unhealthy_sessions().items():
+            st = str(sess.get("status") or "")
+            if st == "logged_out":
+                continue
+            if not session_expected_online(key):
+                continue
+            # #196：坐席选了「不再提醒此账号」/「24 小时」→ 服务端静默（换机不丢），
+            # 快照直接不给前端；「标为已停用」走 expected_online=False 在上一行已剔。
+            if channel_alert_muted(key, now):
+                continue
+            platform, _, account_id = str(key).partition(":")
+            since = (float(sess.get("unhealthy_since") or 0.0)
+                     or float(sess.get("ts") or 0.0) or now)
+            name = ""
+            if reg is not None and account_id:
+                try:
+                    row = reg.get(platform, account_id) or {}
+                    meta = row.get("meta") or {}
+                    name = str(meta.get("self_name") or row.get("label") or "").strip()
+                except Exception:
+                    name = ""
+            items.append({
+                "platform": platform,
+                "account_id": account_id,
+                "name": name[:48],
+                "status": st,
+                "down_min": int(max(0.0, now - since) // 60),
+                "relogin_ts": float(sess.get("last_relogin_ts") or 0.0),
+                "relogin_by": str(sess.get("last_relogin_by") or "")[:24],
+            })
+        items.sort(key=lambda it: -it["down_min"])
+        return {"unhealthy": items, "count": len(items)}
+    except Exception:
+        logger.debug("平台通道健康快照失败（已忽略）", exc_info=True)
+        return {"unhealthy": [], "count": 0}
+
+
 def _session_present(request: Request) -> bool:
     """请求是否携带已登录 session（区别于桌面壳主进程的纯 Bearer 调用）。"""
     try:
@@ -66,6 +225,101 @@ def _require_supervisor_or_shell(request: Request) -> None:
     api_auth 已验 admin token = master 等价）放行。"""
     if _session_present(request):
         _require_supervisor(request)
+
+
+def _v1_base(base_url: Any) -> str:
+    """与 ``AIClient._build_route_clients`` 同口径补 ``/v1``（探活/拉清单必须打运行时真正会打的地址）。"""
+    b = str(base_url or "").strip().rstrip("/")
+    if b and "://" in b and not b.endswith("/v1"):
+        b = b + "/v1"
+    return b
+
+
+async def _probe_model_endpoint(base_url: str, model: str = "", api_key: str = "",
+                                timeout: float = 5.0) -> Dict[str, Any]:
+    """模型端点探活（async；与 composer「模型」面板共用 :func:`conv_route.probe_spec` 一套判定）。
+
+    返回 ``{online, status, latency_ms, error[, warn][, probe]}``：``online`` 只在端点真能用时
+    为真——401/403（密钥错）、404（模型不存在）、429（额度）一律 ``online=False`` 并带
+    ``error=http_<code>``；``warn=model_not_listed``＝在线但 /models 清单里没这个模型名。
+    2026-09-18 前此处是同步 urllib 且把 401 也画 🟢（阻塞事件循环 + 绿灯说谎）。绝不抛。
+    """
+    try:
+        from src.ai.conv_route import probe_spec
+        return await probe_spec(_v1_base(base_url), model, api_key, timeout=timeout)
+    except Exception as ex:
+        return {"online": False, "status": None, "latency_ms": 0,
+                "error": type(ex).__name__.lower()[:40]}
+
+
+async def _probe_models_concurrently(rows: List[Dict[str, Any]], *, timeout: float = 5.0,
+                                     limit: int = 5) -> Dict[str, Dict[str, Any]]:
+    """``[{name, base_url, model, api_key}]`` → ``{name: health}``，并发上限 ``limit``。"""
+    import asyncio
+    sem = asyncio.Semaphore(max(1, int(limit)))
+
+    async def _one(r: Dict[str, Any]) -> Dict[str, Any]:
+        async with sem:
+            return await _probe_model_endpoint(str(r.get("base_url") or ""),
+                                               str(r.get("model") or ""),
+                                               str(r.get("api_key") or ""), timeout=timeout)
+
+    results = await asyncio.gather(*(_one(r) for r in rows), return_exceptions=True)
+    out: Dict[str, Dict[str, Any]] = {}
+    for r, h in zip(rows, results):
+        out[str(r.get("name") or "")] = (h if isinstance(h, dict)
+                                          else {"online": False, "status": None, "latency_ms": 0,
+                                                "error": "probe_failed"})
+    return out
+
+
+# ai.models.<name> 里除 base_url/model/api_key 外，设置页可读可写的元数据（composer「模型」面板
+# 消费 label/max_ctx/cost_hint/supports_thinking；ai_client 消费 reasoning）。2026-09-18 前 POST
+# 整体替换 ai.models 时把这些全部抹掉——YAML 手配一次、页面保存一次就丢。
+_MODEL_EXTRA_KEYS = ("label", "max_ctx", "cost_hint", "supports_thinking", "reasoning")
+
+# 「用途分配」注册表：只列**代码里真有消费方**的任务名。
+#   assistant_planner ← assistant_action_routes（小智「替我做」规划）
+#   assistant_qa      ← assistant_routes（小智问答）
+#   memory_extract    ← ai_client 记忆抽取（不配＝有本地兜底就自动走 LAN）
+# 旧表的 computer_use / chat 全仓无 route= 消费方（chat 的会话级选择由 composer conv_route 承担）→ 下线；
+# YAML 里仍配着的自定义任务名由 GET 以 custom=True 原样带出，UI 不会静默丢掉。
+_MODEL_ROUTE_TASKS = (
+    ("assistant_planner", "dv_mr_task_planner", "dv_mr_task_planner_d"),
+    ("assistant_qa", "dv_mr_task_qa", "dv_mr_task_qa_d"),
+    ("memory_extract", "dv_mr_task_memory", "dv_mr_task_memory_d"),
+)
+
+
+def _mask_key(k: Any) -> str:
+    k = str(k or "")
+    return (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("…" if k.strip() else "")
+
+
+def _coerce_model_extras(item: Dict[str, Any], spec: Dict[str, Any]) -> Optional[str]:
+    """把 body 里显式带的元数据写进 spec（空值＝删该键）；返回错误码或 None。"""
+    for k in _MODEL_EXTRA_KEYS:
+        if k not in item:
+            continue
+        v = item.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            spec.pop(k, None)
+            continue
+        if k == "max_ctx":
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                return "max_ctx"
+            if n <= 0 or n > 50_000_000:
+                return "max_ctx"
+            spec[k] = n
+        elif k in ("supports_thinking", "reasoning"):
+            if isinstance(v, str):
+                v = v.strip().lower() in ("1", "true", "yes", "on")
+            spec[k] = bool(v)
+        else:
+            spec[k] = str(v).strip()[:40 if k == "label" else 24]
+    return None
 
 
 async def reload_ai_runtime(app, config_manager) -> bool:
@@ -98,20 +352,186 @@ async def reload_ai_runtime(app, config_manager) -> bool:
         return False
 
 
+def _provision_official_account(channel_id: str, config: Dict[str, Any]) -> str:
+    """纯官方 API 渠道（Instagram/Zalo）凭证就绪后，自动在账号注册表开通
+    ``mode=official`` 账号行（幂等 upsert）。
+
+    没有这一行：官方 worker 工厂注册了、webhook 也在收消息，但编排器的期望集
+    （``desired_accounts`` 只认注册表 ``status=online``）里没有它 → 出站 worker
+    永不拉起，坐席在收件箱看得见客户消息却发不出去，且没有任何一处会提示为什么。
+    account_id 必须与 webhook 入站镜像口径一致（见 Channel.official_account_id_key）。
+
+    返回开通的 account_id；非官方渠道 / 必填凭证未齐 / 失败一律返回 ""（best-effort，
+    绝不阻塞凭证保存本身）。
+    """
+    try:
+        from src.utils.channel_setup import _dig, _required_ready, get_channel
+        ch = get_channel(channel_id)
+        if ch is None or not ch.official_platform:
+            return ""
+        # 必填凭证未齐（如只填了一半）不开账号：开了也起不来，反而在账号栏挂个错误行
+        if not _required_ready(ch, {}, config):
+            return ""
+        account_id = ""
+        if ch.official_account_id_key:
+            account_id = str(_dig(config, ch.official_account_id_key) or "").strip()
+        account_id = account_id or "official"
+        from src.integrations.account_registry import get_account_registry
+        get_account_registry().upsert(
+            ch.official_platform, account_id, mode="official", status="online",
+            merge_meta=True)
+        return account_id
+    except Exception:
+        logger.debug("official 账号自动开通失败（已忽略；可手动重试保存）", exc_info=True)
+        return ""
+
+
+async def _maybe_probe_messenger_page(
+    channel_id: str, config_manager: Any,
+) -> Optional[Dict[str, Any]]:
+    """Messenger 官方渠道保存后的 Graph ``/me`` 探针（best-effort，2026-08-10）。
+
+    ① 验 token 真伪：抄错一个字符当场在保存响应里暴露（含 Graph 原始报错），
+       而不是等第一次真实出站失败才发现；
+    ② 成功顺带带回主页身份（page_id/name/picture）——config 缺 page_id 时自动
+       回填 overlay（用户不必去 Meta 后台抄 id），并让紧随其后的
+       ``_provision_official_account`` 开出的账号行 id 与 webhook 入站镜像口径
+       （``page_id or "official"``）天然一致，堵住「先存一半、后补 page_id →
+       新旧账号行分裂」的边界；
+    ③ 探针失败（网络/鉴权）只随响应报告，**绝不阻塞保存本身**——离线环境照样
+       能把凭证存进去。
+
+    返回探针结果 dict；非 messenger 渠道 / token 未填 / 探针异常返回 None
+    （响应里不出现 ``probe`` 字段＝前端不渲染，旧行为零变化）。
+    """
+    if str(channel_id or "").lower() != "messenger":
+        return None
+    try:
+        cfg = getattr(config_manager, "config", None) or {}
+        block = cfg.get("facebook_messenger") or {}
+        token = str(block.get("page_access_token") or "").strip()
+        if not token:
+            return None
+        from src.integrations.facebook_webhook import fb_probe_page
+        probe = await fb_probe_page(token, timeout_sec=6.0)
+        if (probe.get("ok") and probe.get("page_id")
+                and not str(block.get("page_id") or "").strip()):
+            try:
+                config_manager.save_channel_credentials(
+                    "messenger", {"page_id": str(probe["page_id"])})
+            except Exception:
+                logger.debug("page_id 自动回填失败（已忽略）", exc_info=True)
+        return probe
+    except Exception:
+        logger.debug("messenger 保存探针失败（已忽略）", exc_info=True)
+        return None
+
+
+async def _probe_public_media_url(url: str) -> Dict[str, Any]:
+    """公网媒体 URL 自检（best-effort）：本机向该地址发一次 GET，抓 DNS 拼错/隧道
+    掉线/TLS 坏/端口不通这几类最常见配置错误。
+
+    语义边界（如实告知，不装成完整验证）：本机可达 ≠ 平台可达（Meta/LINE 是从公网
+    访问），但本机不可达则平台几乎必不可达——结果只作提示，绝不拦截保存。
+    """
+    u = str(url or "").strip().rstrip("/")
+    if not u:
+        return {"state": "unset", "detail": ""}
+    if not u.lower().startswith("https://"):
+        # LINE 音频 originalContentUrl / Meta 附件拉取都强制 https，http 填了也白填
+        return {"state": "fail", "detail": "must_be_https"}
+    try:
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=4)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(u + "/login", allow_redirects=True) as resp:
+                return {"state": "ok" if resp.status < 500 else "fail",
+                        "detail": f"http_{resp.status}"}
+    except Exception as ex:  # noqa: BLE001
+        return {"state": "fail", "detail": type(ex).__name__}
+
+
+def _accounts_by_platform() -> dict:
+    """各平台「当前能收发消息」的账号数——向导徽标「已接 N 个账号」与头部
+    「能收发消息的渠道 X/7」的计数源。
+
+    向导「就绪」判定的第一手信号：扫码/协议登录进来的账号**不写任何渠道 yaml 键**，
+    只看配置就会把一台正在收发消息的机器报成「已就绪 0/4」（实机反馈）。
+
+    #126（2026-09-01 skuio）：多账号登录后徽标常年停在「已接 1 个账号」——与
+    #61/#78 同族的账号枚举病换了个消费面。真相单一源＝运行时账号注册表
+    ``platform_accounts``（``live_accounts_by_platform``，与人设「应用到」弹窗
+    #78 二轮同一张表）。此前本函数直接 ``list()`` 把 **offline（已登出）** 账号
+    一并计入，登出一个号计数不减＝违背「登录登出实时跟随」；现收敛到统一源，
+    offline/removed 一律不计——登出即时 -1，头部就绪口径连带跟随。
+    取数失败一律返回空 → 判定退回纯配置口径，绝不让向导因此报错。
+    """
+    from src.integrations.account_registry import live_accounts_by_platform
+    return live_accounts_by_platform()
+
+
+def _login_ready(config: dict) -> dict:
+    """各平台「扫码/协议登录这条路今天通不通」（复用登录弹窗那套诊断，单一事实源）。"""
+    try:
+        from src.integrations.platform_login import (
+            DEFAULT_PLATFORM_MODES, mode_available)
+        from src.integrations.platform_readiness import diagnose_platform
+        pl_cfg = (config or {}).get("platform_login") or {}
+        out: dict = {}
+        for platform, pdef in DEFAULT_PLATFORM_MODES.items():
+            modes = ((pl_cfg.get(platform) or {}).get("modes")) or pdef["modes"]
+            if not modes:
+                continue
+            rep = diagnose_platform(
+                platform, modes, config or {},
+                provider_registered_fn=mode_available)
+            out[platform] = bool(rep.get("ready"))
+        return out
+    except Exception:
+        logger.debug("平台登录就绪诊断失败（向导按可用呈现）", exc_info=True)
+        return {}
+
+
 def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
     """挂载渠道接入向导端点（/api/setup/channels[/{channel}]）。"""
 
     @app.get("/api/setup/channels")
-    async def api_setup_channels(request: Request):
-        """所有渠道的接入现状（启用/缺项/字段填写状态 + 总体完成度）。"""
+    async def api_setup_channels(request: Request, probe_media: int = 0):
+        """所有渠道的接入现状（两条接入路径各自状态 + 「能不能收发消息」完成度）。
+
+        ``probe_media=1``：顺带对 ``official_media.public_base_url`` 做一次可达性
+        自检（IG/LINE 官方通道发媒体的前置；默认不探，向导「检测」按钮触发）。
+        """
         api_auth(request)
         _require_supervisor(request)
         from src.utils.channel_setup import channel_status
         config = getattr(config_manager, "config", None) or {}
-        channels = channel_status(config)
+        channels = channel_status(
+            config,
+            accounts_by_platform=_accounts_by_platform(),
+            login_ready=_login_ready(config),
+        )
         ready = sum(1 for c in channels if c["ready"])
-        return {"ok": True, "channels": channels,
-                "ready_count": ready, "total": len(channels)}
+        out: Dict[str, Any] = {"ok": True, "channels": channels,
+                               "ready_count": ready, "total": len(channels)}
+        # official 媒体 URL 状态：只有在「需要它的渠道」（IG/LINE 官方）已配凭证
+        # 或 URL 已填时才有意义；前端两者皆空则不渲染该块。
+        try:
+            from src.integrations.official_api_worker import (
+                OFFICIAL_MEDIA_URL_PLATFORMS,
+            )
+            base = str((((config or {}).get("official_media") or {})
+                        .get("public_base_url")) or "").strip()
+            needed = [c["id"] for c in channels
+                      if c["id"] in OFFICIAL_MEDIA_URL_PLATFORMS
+                      and c.get("configured")]
+            media_block: Dict[str, Any] = {"url": base, "needed_by": needed}
+            if probe_media:
+                media_block["probe"] = await _probe_public_media_url(base)
+            out["official_media"] = media_block
+        except Exception:
+            logger.debug("official_media 状态汇总失败（已忽略）", exc_info=True)
+        return out
 
     @app.get("/api/setup/checklist")
     async def api_setup_checklist(request: Request):
@@ -152,9 +572,33 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         config = getattr(config_manager, "config", None) or {}
         return build_companion_preflight(config)
 
+    @app.get("/api/setup/deploy-profile")
+    async def api_setup_deploy_profile(request: Request):
+        """部署能力预设档就绪自检（WP-1，只读零网络）。
+
+        「当前档位 + 各能力 开/关/降级」一屏——首启向导与支持排障的单一读面。
+        全部来自合并后 config（含 overlay 与托管 env 注入），零密钥零探活；
+        state 语义见 ``deploy_profile.capability_snapshot``（on/off/degraded）。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        from src.utils.deploy_profile import (
+            active_profile, capability_snapshot, list_profiles)
+        config = getattr(config_manager, "config", None) or {} if config_manager else {}
+        return {
+            "ok": True,
+            "profile": active_profile(config) or None,
+            "available": list_profiles(),
+            "capabilities": capability_snapshot(config),
+        }
+
     @app.get("/api/setup/ai")
     async def api_setup_ai_status(request: Request):
-        """AI 大模型配置现状（key 打码回显；供首启向导/接入向导预填）。"""
+        """AI 大模型配置现状（key 打码回显；供首启向导/接入向导预填）。
+
+        另回 ``primary`` 段（``ai.primary`` 声明值 / 运行时生效值 / 本地端点就绪），
+        自托管「全本地」切换入口的读侧单一事实源。
+        """
         api_auth(request)
         _require_supervisor_or_shell(request)
         from src.utils.golive import _is_placeholder
@@ -163,6 +607,7 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         key = str(ai.get("api_key") or "")
         configured = not _is_placeholder(key)
         masked = (key[:4] + "…" + key[-4:]) if len(key) > 12 else ("…" if key.strip() else "")
+        ai_client = getattr(request.app.state, "ai_client", None)
         return {
             "ok": True,
             "configured": configured,
@@ -170,7 +615,121 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             "base_url": str(ai.get("base_url") or ""),
             "model": str(ai.get("model") or ""),
             "api_key_masked": masked,
+            "primary": _ai_primary_snapshot(config_manager, ai_client),
         }
+
+    @app.post("/api/setup/ai-primary")
+    async def api_setup_ai_primary_save(request: Request):
+        """切换主对话链模式（``ai.primary`` → overlay）并热重建 AI 运行时。
+
+        body: ``{primary: "cloud"|"local"|"local_only"}``
+
+        - ``local`` / ``local_only`` 前置：``ai.fallback`` 端点齐备，否则拒写
+          （避免「写了却启动退回 cloud」的静默分叉）；
+        - 写盘走 ``set_overlay_flag``（主 config 注释不动）；成功后
+          ``reload_ai_runtime`` 热生效，免重启。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        if config_manager is None:
+            return {"ok": False, "detail": tr(request, "err.svc.config_manager_not_ready")}
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        mode = str((body or {}).get("primary") or "").strip().lower()
+        if mode not in _AI_PRIMARY_MODES:
+            return {"ok": False, "detail": tr(request, "err.setup.ai_primary_invalid")}
+        ai_cfg = ((getattr(config_manager, "config", None) or {}).get("ai")) or {}
+        _pa_append = None
+        _lock = ""
+        try:
+            from src.ai.ai_primary_audit import append_event as _pa_append  # noqa: F811
+            from src.ai.ai_primary_audit import resolve_lock as _pa_lock
+            _lock = _pa_lock(ai_cfg)
+        except Exception:
+            _lock = ""
+        # 老板锁（2026-08-22）：与锁不符的切换一律拒绝 + 审计 + 告警。
+        # 解锁是显式人工动作（overlay 删改 ai.primary_lock），不给接口留后门。
+        if _lock and mode != _lock:
+            if _pa_append:
+                _pa_append(
+                    "switch_rejected", requested=mode, lock=_lock,
+                    actor=_request_actor(request), ip=_request_ip(request),
+                    via="endpoint")
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("ai_primary_guard_alert", {
+                    "kind": "lock_rejected",
+                    "requested": mode,
+                    "lock": _lock,
+                    "actor": _request_actor(request),
+                    "rate_key": "ai_primary_guard:lock",
+                })
+            except Exception:
+                pass
+            return {
+                "ok": False,
+                "locked": True,
+                "detail": tr(request, "err.setup.ai_primary_locked", mode=_lock),
+                "primary": _ai_primary_snapshot(
+                    config_manager, getattr(request.app.state, "ai_client", None)),
+            }
+        if mode != "cloud" and not _local_endpoint_ready(ai_cfg):
+            return {"ok": False, "detail": tr(request, "err.setup.ai_primary_need_local")}
+        _mode_before = str(ai_cfg.get("primary") or "cloud").strip().lower()
+        ok, msg = config_manager.set_overlay_flag("ai.primary", mode)
+        if not ok:
+            return {"ok": False, "detail": tr(
+                request, "err.setup.ai_primary_save_failed", reason=msg)}
+        ai_ready = await reload_ai_runtime(request.app, config_manager)
+        ai_client = getattr(request.app.state, "ai_client", None)
+        if _pa_append:
+            _pa_append(
+                "switch_saved", mode_from=_mode_before, mode_to=mode,
+                actor=_request_actor(request), ip=_request_ip(request),
+                via="endpoint", ai_ready=bool(ai_ready))
+        return {
+            "ok": True,
+            "detail": tr(request, "setup.ai_primary.saved"),
+            "ai_ready": bool(ai_ready),
+            "primary": _ai_primary_snapshot(config_manager, ai_client),
+        }
+
+    @app.get("/api/setup/ai-primary/summary")
+    async def api_setup_ai_primary_summary(request: Request):
+        """主链档位**单一口径**（2026-09-17 沉淀）：档位/锁/实际降级顺序/各档角色/主链一句话/
+        回落链一句话/云端计费厂商，零密钥。运维通报、官网算力推送器、告警文案全部消费这一份，
+        不再各自读 overlay 或账本——09-17 配置切 local 后五个出口仍说 cloud 叙事的根因就是
+        「没有共用真相」。形状见 ``src/ai/ai_primary_summary.build_summary``。"""
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        from src.ai.ai_primary_summary import build_summary
+        config = (getattr(config_manager, "config", None) or {}) if config_manager else {}
+        snap = _ai_primary_snapshot(config_manager, getattr(request.app.state, "ai_client", None))
+        out = build_summary(config, effective=snap.get("effective"), lock=snap.get("lock") or "")
+        out["local_ready"] = bool(snap.get("local_ready"))
+        return out
+
+    @app.get("/api/setup/ai-primary/audit")
+    async def api_setup_ai_primary_audit(request: Request):
+        """主链切换审计台账（最近 50 行）+ 当前锁态（supervisor/壳专属）。
+
+        2026-08-22 沉淀：此前切换不留痕，「谁把主链翻回 local_only」查无对证。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        rows: list = []
+        lock = ""
+        try:
+            from src.ai.ai_primary_audit import read_tail, resolve_lock
+            rows = read_tail(50)
+            ai_cfg = ((getattr(config_manager, "config", None) or {}).get("ai")) or {} \
+                if config_manager is not None else {}
+            lock = resolve_lock(ai_cfg)
+        except Exception:
+            rows = []
+        return {"ok": True, "lock": lock, "locked": bool(lock), "rows": rows}
 
     @app.post("/api/setup/ai-key")
     async def api_setup_ai_key_save(request: Request):
@@ -234,20 +793,36 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             out.setdefault("enabled", False)
             out.setdefault("balances", [])
             out.setdefault("pings", {})
-        # 出话分布（进程启动以来）：主链 vs 备用池 vs 本地兜底——「都是谁在出话、花了多少」
+        # 出话分布（进程启动以来）：云主链 / 备用池 / 本地主链 / 本地兜底。
+        # 每组带平均延迟（P3）——本地档「能用但慢」（.173 14B 全人设 prompt 实测 56s）
+        # 必须让运营在看板直接看到，分层换模型才有读数依据。
         try:
             from src.ai.llm_cost import get_llm_cost
             usage: Dict[str, Dict[str, float]] = {}
+            by_tier: Dict[str, Dict[str, float]] = {}
             for row in (get_llm_cost().dump().get("rows") or []):
-                tier = str(row.get("tier") or "default")
-                group = tier if tier in ("key_pool", "local_fallback") else "primary"
-                g = usage.setdefault(group, {"calls": 0, "tokens": 0, "cost_usd": 0.0})
+                raw_tier = str(row.get("tier") or "default")
+                group = _usage_tier_group(raw_tier)
+                g = usage.setdefault(group, {"calls": 0, "tokens": 0, "cost_usd": 0.0,
+                                             "latency_ms_sum": 0})
                 g["calls"] += int(row.get("calls") or 0)
                 g["tokens"] += int(row.get("prompt_tokens") or 0) + int(row.get("completion_tokens") or 0)
                 g["cost_usd"] += float(row.get("cost_usd") or 0.0)
+                g["latency_ms_sum"] += int(row.get("latency_ms_sum") or 0)
+                # 原始 tier 行透出（2026-08-13）：分组视图会把 tool/default 并进
+                # primary，读数排障（「vLLM 收到 N 次 vs 看板 M 次」）需要未分组真相。
+                b = by_tier.setdefault(raw_tier, {"calls": 0, "tokens": 0})
+                b["calls"] += int(row.get("calls") or 0)
+                b["tokens"] += int(row.get("prompt_tokens") or 0) + int(row.get("completion_tokens") or 0)
+            for g in usage.values():
+                g["latency_avg_ms"] = (
+                    int(g["latency_ms_sum"] / g["calls"]) if g["calls"] else 0)
+                g.pop("latency_ms_sum", None)
             out["usage"] = usage
+            out["usage_by_tier"] = by_tier
         except Exception:
             out["usage"] = {}
+            out["usage_by_tier"] = {}
         # 池配置（掩码）+ 运行态
         kp = ((config.get("ai") or {}).get("key_pool")) or {}
         keys_cfg = []
@@ -274,24 +849,230 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             out["pool"]["runtime"] = []
             out["pool"]["stats"] = {}
+        out["primary"] = _ai_primary_snapshot(config_manager, ai_client)
         return out
+
+    @app.get("/api/workspace/hosted-quota")
+    async def api_workspace_hosted_quota(request: Request):
+        """托管 AI 试用当日额度（绿条徽章数据源；任意登录用户，60s 进程缓存）。
+
+        非托管部署（自建 Key / 未接网关）→ ``{enabled: false}``，前端不渲染徽章。
+        探针软失败也不抛——徽章缺席即可，绝不给工作台添新报错面。
+        """
+        api_auth(request)
+        if config_manager is None:
+            return {"ok": True, "enabled": False}
+        import asyncio
+
+        try:
+            from src.ai.hosted_gateway import quota_probe
+            out = await asyncio.to_thread(quota_probe, config_manager)
+            return {"ok": True, **out}
+        except Exception:
+            return {"ok": True, "enabled": False}
+
+    @app.post("/api/workspace/channel-alert/mute")
+    async def api_workspace_channel_alert_mute(request: Request):
+        """#196 断线提醒按账号静默（服务端落注册表 meta，换机不丢）。
+
+        body ``{platform, account_id, hours}``：``hours`` 缺省/``null``/``"forever"``＝
+        不再提醒此账号；``<=0``＝取消静默；否则静默 N 小时。任意登录坐席可用——
+        这是提醒偏好不是账号状态；账号不在注册表（config/适配器来源）→ ``stored=false``
+        由前端回落本机 localStorage。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").strip().lower()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            return {"ok": False, "error": tr(request, "err.ws.field_required",
+                                              field="platform/account_id")}
+        raw_hours = (body or {}).get("hours", None)
+        hours: Optional[float]
+        if raw_hours is None or str(raw_hours).strip().lower() in ("", "forever", "never"):
+            hours = None
+        else:
+            try:
+                hours = float(raw_hours)
+            except (TypeError, ValueError):
+                hours = None
+        from src.integrations.platform_session_health import set_channel_alert_mute
+        until = set_channel_alert_mute(plat, acct, hours=hours)
+        return {"ok": True, "platform": plat, "account_id": acct,
+                "until": until, "stored": bool(until != 0.0 or (hours is not None and hours <= 0))}
+
+    @app.post("/api/workspace/channel-alert/disable")
+    async def api_workspace_channel_alert_disable(request: Request):
+        """#196「标为已停用」：账号进 offline + operator:disabled——看门狗跳过、横幅不亮、
+        账号栏灰显；凭据不清，重新登录一次即归位。主管权限（改的是账号状态）。
+        """
+        api_auth(request)
+        _require_supervisor(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").strip().lower()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            return {"ok": False, "error": tr(request, "err.ws.field_required",
+                                              field="platform/account_id")}
+        actor = ""
+        try:
+            actor = str(request.session.get("username") or "")
+        except Exception:
+            actor = ""
+        # 先停 worker（best-effort）：停用了还让编排器反复重连＝红噪音源头不断
+        try:
+            from src.integrations.account_orchestrator import (
+                account_key, get_orchestrator,
+            )
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+            await get_orchestrator(cfg).stop_account(account_key(plat, acct))
+        except Exception:
+            logger.debug("[channel-alert] 停用前停 worker 失败（忽略）", exc_info=True)
+        from src.integrations.platform_session_health import mark_account_disabled
+        ok = mark_account_disabled(plat, acct, actor=actor)
+        if not ok:
+            return {"ok": False, "error": tr(request, "err.ws.account_not_in_registry")}
+        return {"ok": True, "platform": plat, "account_id": acct, "status": "disabled"}
 
     @app.get("/api/workspace/ai-runtime-status")
     async def api_workspace_ai_runtime_status(request: Request):
-        """云端 AI 降级态（坐席工作台状态条轮询用，任意登录用户可读，纯内存零开销）。
+        """云端 AI 降级态 + 平台通道离线态（坐席工作台状态条轮询用，任意登录用户可读，
+        纯内存零开销）。
 
-        只报「降级/正常 + 谁在顶班」，不含密钥/端点/余额等敏感细节（那些在
-        supervisor 专属的 /api/setup/cloud-credentials）。
+        只报「降级/正常 + 谁在顶班」与「哪些通道离线多久」（结构化字段 + 英文枚举），
+        不含密钥/端点/余额等敏感细节（那些在 supervisor 专属的 /api/setup/cloud-credentials）。
+        ``channels`` 复用同一 60s 轮询驱动 #ws-chandown 横幅——WhatsApp 假死 2h 坐席
+        毫无感知的事故不再重演。
         """
         api_auth(request)
+        channels = _channel_health_snapshot()
+        try:
+            from src.ops.delivery_block import seat_banner as _deliv_banner
+            delivery_block = _deliv_banner()
+        except Exception:
+            delivery_block = {"active": False}
+        # Phase3: restart cooldown for THIS instance → workbench soft banner
+        # (same 60s poll as degrade/chandown; seat-safe, no filesystem paths).
+        try:
+            from src.utils.instance_restart_status import seat_restart_banner
+            restart_banner = seat_restart_banner()
+        except Exception:
+            restart_banner = {"cooldown_active": False, "instance_id": None}
+        # 托管到期提醒（P4，2026-08-08）：厂商巡检写进实例数据区的轻量 JSON →
+        # 同一 60s 轮询捎带（零新增轮询）；非托管部署无此文件 → None（前端不渲染）。
+        try:
+            from src.utils.tenant_notice import read_tenant_notice
+            tenant_notice = read_tenant_notice()
+        except Exception:
+            tenant_notice = None
+        # 官网连通性（实施86 域A-2②，#17/#51）：托管机各链（AI/克隆语音/报障）都
+        # 依赖官网，此前断链只会表现为一堆互不相干的静默回落。探针 120s 进程缓存 +
+        # 连续两振才报，同一 60s 轮询捎带；非托管态恒 None（前端隐藏）。
+        try:
+            # 本函数作用域没有 asyncio（上个函数的局部导入不可达）——漏导入会被
+            # 本 except 吞成 site_link 恒 None＝功能静默死（undefined-names 门禁抓的）
+            import asyncio
+
+            from src.utils.site_link_probe import site_link_snapshot
+            site_link = await asyncio.to_thread(site_link_snapshot, config_manager)
+        except Exception:
+            site_link = None
+        # P1 2026-08-23 急停可见化：全局急停摘要随同一 60s 轮询捎带（零新增轮询）。
+        # 顶栏冻结条据此渲染——收件箱横幅只覆盖「打开着的会话」，全局急停时坐席
+        # 不该等点进会话才发现。只读既有单例（status_snapshot fail-open），
+        # 无敏感字段（scope/来源/恢复时刻；reason 本就会显示给坐席横幅）。
+        kill_switch = {"active_scopes": 0, "global_active": False}
+        try:
+            from src.ops.kill_switch import (
+                GLOBAL_SCOPE,
+                freeze_source,
+                status_snapshot,
+            )
+            _ks_items = status_snapshot()
+            _ks_global = next(
+                (i for i in _ks_items if i.get("scope") == GLOBAL_SCOPE), None)
+            kill_switch = {
+                "active_scopes": len(_ks_items),
+                "global_active": bool(_ks_global),
+            }
+            if _ks_global:
+                _src, _cause = freeze_source(
+                    _ks_global.get("actor"), _ks_global.get("reason"))
+                kill_switch["source"] = _src
+                kill_switch["cause"] = _cause
+                kill_switch["expires_at"] = (
+                    float(_ks_global.get("expires_at") or 0) or None)
+        except Exception:
+            kill_switch = {"active_scopes": 0, "global_active": False}
         ai_client = getattr(request.app.state, "ai_client", None)
+        # 主对话模式（cloud/local/local_only）——坐席条只读 effective，不含密钥/端点。
+        primary_mode = "cloud"
+        try:
+            if ai_client is not None:
+                primary_mode = str(
+                    getattr(ai_client, "_primary_mode", None) or "cloud"
+                ).strip().lower()
+            if primary_mode not in _AI_PRIMARY_MODES:
+                primary_mode = "cloud"
+        except Exception:
+            primary_mode = "cloud"
         if ai_client is None or not hasattr(ai_client, "degradation_snapshot"):
-            return {"ok": True, "degraded": False, "mode": "primary"}
+            return {"ok": True, "degraded": False, "mode": "primary",
+                    "primary": primary_mode,
+                    "channels": channels, "instance_restart": restart_banner,
+                    "tenant_notice": tenant_notice,
+                    "delivery_block": delivery_block,
+                    "kill_switch": kill_switch, "site_link": site_link}
         try:
             snap = ai_client.degradation_snapshot()
         except Exception:
-            return {"ok": True, "degraded": False, "mode": "primary"}
-        return {"ok": True, **snap}
+            return {"ok": True, "degraded": False, "mode": "primary",
+                    "primary": primary_mode,
+                    "channels": channels, "instance_restart": restart_banner,
+                    "tenant_notice": tenant_notice,
+                    "delivery_block": delivery_block,
+                    "kill_switch": kill_switch, "site_link": site_link}
+        return {"ok": True, **snap, "primary": primary_mode,
+                "channels": channels, "instance_restart": restart_banner,
+                "tenant_notice": tenant_notice,
+                "delivery_block": delivery_block,
+                "kill_switch": kill_switch, "site_link": site_link}
+
+    # 「AI 本周替你完成 N 条回复」坐席可读摘要（2026-08-14）。/api/report/weekly 是
+    # 主管专属重报表，普通坐席 403 → 收件箱空态 ROI 行对最该被激励的人反而不显示。
+    # 本端点只出 drafts.sent 一个数字（无明细/无客户内容/无成本字段），与
+    # ai-runtime-status 同一坐席级鉴权；build_weekly_value 是 7 天窗持久库聚合 →
+    # 进程级 1h TTL 缓存 + to_thread（重算每小时最多一次，绝不随前端轮询放大）。
+    _weekly_brief_cache: Dict[str, Any] = {"ts": 0.0, "sent": None}
+
+    @app.get("/api/workspace/ai-weekly-brief")
+    async def api_workspace_ai_weekly_brief(request: Request):
+        api_auth(request)
+        import time as _t
+        now = _t.time()
+        if now - float(_weekly_brief_cache.get("ts") or 0) > 3600:
+            _weekly_brief_cache["ts"] = now   # 失败也进冷却：不对故障聚合连环重试
+            sent = None
+            try:
+                inbox = getattr(request.app.state, "inbox_store", None)
+                if inbox is not None:
+                    import asyncio as _aio
+                    from src.ops.value_report import build_weekly_value
+                    val = await _aio.to_thread(build_weekly_value, inbox)
+                    sent = int((((val or {}).get("this_week") or {})
+                                .get("drafts") or {}).get("sent") or 0)
+            except Exception:
+                sent = None
+            _weekly_brief_cache["sent"] = sent
+        sent = _weekly_brief_cache.get("sent")
+        return {"ok": True, "available": sent is not None,
+                "sent": int(sent or 0)}
 
     @app.post("/api/setup/key-pool")
     async def api_setup_key_pool_save(request: Request):
@@ -353,6 +1134,359 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "detail": tr(request, "setup.pool.saved"),
                 "count": len(cleaned), "ai_ready": bool(ai_ready)}
 
+    def _catalog_rows(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """``conv_route.model_catalog`` 按档名索引（厂商/数据去向/显示名与 composer 同源）；失败＝空。"""
+        try:
+            from src.ai.conv_route import model_catalog
+            return {str(r.get("name") or ""): r for r in model_catalog(config)}
+        except Exception:
+            logger.debug("model_catalog 不可用（忽略）", exc_info=True)
+            return {}
+
+    def _main_chain_row(config: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from src.ai.conv_route import main_chain_spec
+            row = main_chain_spec(config) or {}
+        except Exception:
+            row = {}
+        return {k: row.get(k) for k in ("label", "model", "host", "public_host", "vendor",
+                                        "private", "via", "max_ctx") if k in row}
+
+    def _unrestricted_profile(config: Dict[str, Any]) -> str:
+        try:
+            from src.ai.conv_route import profile_name
+            return str(profile_name(config) or "unrestricted")
+        except Exception:
+            return "unrestricted"
+
+    def _local_endpoint(ai_cfg: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """``ai.fallback`` 私网端点 → 预设「自有算力」的真值来源（模板里不再写死内网 IP）。"""
+        fb = ai_cfg.get("fallback") if isinstance(ai_cfg.get("fallback"), dict) else {}
+        base = str((fb or {}).get("base_url") or "").strip()
+        if not base or (fb or {}).get("enabled", True) is False:
+            return None
+        try:
+            from src.ai.vendor_params import is_private_endpoint
+            if not is_private_endpoint(base):
+                return None
+        except Exception:
+            return None
+        return {"base_url": base, "model": str((fb or {}).get("model") or "")}
+
+    def _model_rows(config: Dict[str, Any], ai_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """ai.models → 页面行（密钥打码；带 composer 同源的厂商/去向/显示名与可编辑元数据）。"""
+        cat = _catalog_rows(config)
+        unr = _unrestricted_profile(config)
+        out_models: List[Dict[str, Any]] = []
+        models_cfg = ai_cfg.get("models") or {}
+        if not isinstance(models_cfg, dict):
+            return out_models
+        for name, spec in models_cfg.items():
+            if not isinstance(spec, dict):
+                continue
+            n = str(name)
+            base = str(spec.get("base_url") or "")
+            crow = cat.get(n) or {}
+            if not crow:
+                # 目录不列的档（``_`` 内部档 / 非法名）也要有厂商与去向事实，页面才画得一致
+                try:
+                    from src.ai.conv_route import describe_endpoint
+                    crow = describe_endpoint(base, str(spec.get("model") or ""), str(spec.get("label") or ""))
+                except Exception:
+                    crow = {}
+            row: Dict[str, Any] = {
+                "name": n,
+                "base_url": base,
+                "model": str(spec.get("model") or ""),
+                "api_key_masked": _mask_key(spec.get("api_key")),
+                "has_key": bool(str(spec.get("api_key") or "").strip()),
+                # 可编辑元数据：只回**配置里真有的**值（缺省不回填，免得保存把默认值固化进 YAML）
+                "label": str(spec.get("label") or ""),
+                "max_ctx": spec.get("max_ctx") if isinstance(spec.get("max_ctx"), int) else None,
+                "cost_hint": str(spec.get("cost_hint") or ""),
+                "supports_thinking": bool(spec.get("supports_thinking", True)),
+                "reasoning": bool(spec.get("reasoning", False)),
+                # 展示态（与 composer「模型」面板同源）
+                "display_label": str(crow.get("label") or ""),
+                "vendor": str(crow.get("vendor") or ""),
+                "public_host": str(crow.get("public_host") or ""),
+                "private": bool(crow.get("private", False)),
+                "via": str(crow.get("via") or ""),
+                "max_ctx_default": crow.get("max_ctx"),
+                "internal": n.startswith("_"),
+                "opens_unrestricted": n == unr,
+            }
+            out_models.append(row)
+        return out_models
+
+    def _task_rows(request: Request, task_routes: Dict[str, str]) -> List[Dict[str, Any]]:
+        rows = [{"key": k, "label": tr(request, lk), "desc": tr(request, dk), "custom": False}
+                for k, lk, dk in _MODEL_ROUTE_TASKS]
+        known = {r["key"] for r in rows}
+        for t in task_routes:
+            if t not in known:
+                rows.append({"key": t, "label": t, "desc": tr(request, "dv_mr_task_custom_d"),
+                             "custom": True})
+        return rows
+
+    def _usage_snapshot(request: Request) -> Dict[str, Any]:
+        """进程内 by_model 计数 + 当前有多少会话点名了某档（失败则空；页面有数才画）。"""
+        try:
+            from src.ai import conv_route
+            snap = conv_route.stats_snapshot(_inbox_store(request))
+        except Exception:
+            return {"by_model": {}, "model_convs": {}, "unrestricted_convs": 0}
+        bm: Dict[str, Any] = {}
+        for k, v in (snap.get("by_model") or {}).items():
+            if not isinstance(v, dict):
+                continue
+            calls = int(v.get("calls") or 0)
+            if calls <= 0:
+                continue
+            bm[str(k)] = {"calls": calls, "ok": int(v.get("ok") or 0),
+                          "fail": int(v.get("fail") or 0)}
+        convs = {}
+        for k, n in (snap.get("model_convs") or {}).items():
+            try:
+                c = int(n or 0)
+            except (TypeError, ValueError):
+                c = 0
+            if c > 0:
+                convs[str(k)] = c
+        try:
+            unr = int(snap.get("unrestricted_convs") or 0)
+        except (TypeError, ValueError):
+            unr = 0
+        return {"by_model": bm, "model_convs": convs, "unrestricted_convs": max(0, unr)}
+
+    @app.get("/api/setup/model-routes")
+    async def api_setup_model_routes_get(request: Request, probe: int = 0):
+        """多模型路由总览（ai.models + ai.task_routes）：模型档（密钥打码 + composer 同源的
+        厂商/去向/显示名 + 可编辑元数据）+ 任务映射 + 用途注册表 + 主链事实 + 运行态（哪些档
+        已装载）。``probe=1`` 时并发探活各档（async，不阻塞事件循环）。密钥绝不回显全量。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        config = getattr(config_manager, "config", None) or {}
+        ai_cfg = config.get("ai") or {}
+        out_models = _model_rows(config, ai_cfg)
+        if probe and out_models:
+            models_cfg = ai_cfg.get("models") or {}
+            probe_rows = [{"name": r["name"], "base_url": r["base_url"], "model": r["model"],
+                           "api_key": str(((models_cfg.get(r["name"]) or {}).get("api_key"))
+                                          or ai_cfg.get("api_key") or "")}
+                          for r in out_models]
+            health = await _probe_models_concurrently(probe_rows)
+            for r in out_models:
+                r["health"] = health.get(r["name"]) or {"online": False, "error": "probe_failed"}
+        routes_cfg = ai_cfg.get("task_routes") or {}
+        task_routes = ({str(t): str(p) for t, p in routes_cfg.items()}
+                       if isinstance(routes_cfg, dict) else {})
+        loaded = []
+        try:
+            ai_client = getattr(request.app.state, "ai_client", None)
+            if ai_client is not None:
+                loaded = list(getattr(ai_client, "_route_clients", {}).keys())
+        except Exception:
+            loaded = []
+        return {
+            "ok": True,
+            "models": out_models,
+            "task_routes": task_routes,
+            "known_tasks": [k for k, _l, _d in _MODEL_ROUTE_TASKS],
+            "tasks": _task_rows(request, task_routes),
+            "main_chain": _main_chain_row(config),
+            "unrestricted_profile": _unrestricted_profile(config),
+            "local_endpoint": _local_endpoint(ai_cfg),
+            "loaded": loaded,
+            "usage": _usage_snapshot(request),
+        }
+
+    @app.post("/api/setup/model-routes/probe")
+    async def api_setup_model_routes_probe(request: Request):
+        """体检**页面当前列表**（含尚未保存的新档）：body ``{models:[{name, base_url, model, api_key?}]}``。
+
+        api_key 明文 → 直接用（新档）；掩码/空 → 同名已存档真值 → ``ai.api_key``（与 list-models
+        同规则）。并发探活，返回 ``{ok, health:{name: {online, status, latency_ms, error, warn}}}``；
+        不改配置、不回显密钥。2026-09-18 前「立即体检」是重载整页 → 把未保存的改动全吞掉。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        raw = (body or {}).get("models")
+        if not isinstance(raw, list):
+            return {"ok": False, "detail": tr(request, "err.setup.routes_models_required")}
+        cfg = getattr(config_manager, "config", None) or {}
+        ai_cfg = cfg.get("ai") or {}
+        stored = ai_cfg.get("models") if isinstance(ai_cfg.get("models"), dict) else {}
+        rows: List[Dict[str, Any]] = []
+        for item in raw[:21]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:40]
+            if not name:
+                # ``name: ""`` ＝ 主链行：端点/密钥由服务端自己填（客户端拿不到主链 base_url，
+                # 主链若是私网地址也不外露），与 composer 目录里 name="" 的语义一致
+                mb = str(ai_cfg.get("base_url") or "").strip()
+                if mb and not any(r["name"] == "" for r in rows):
+                    rows.append({"name": "", "base_url": mb, "model": str(ai_cfg.get("model") or ""),
+                                 "api_key": str(ai_cfg.get("api_key") or ""), "label": ""})
+                continue
+            key = str(item.get("api_key") or "").strip()
+            if not key or ("…" in key) or key.endswith("***"):
+                key = (str(((stored or {}).get(name) or {}).get("api_key") or "")
+                       or str(ai_cfg.get("api_key") or ""))
+            rows.append({"name": name, "base_url": str(item.get("base_url") or "").strip()[:300],
+                         "model": str(item.get("model") or "").strip()[:120], "api_key": key,
+                         "label": str(item.get("label") or "").strip()[:40]})
+        health = await _probe_models_concurrently(rows)
+        # 顺带把展示事实（厂商/数据去向/显示名）带回去：未保存的新档也能画得和保存后一样
+        try:
+            from src.ai.conv_route import describe_endpoint
+            for r in rows:
+                h = health.get(r["name"])
+                if isinstance(h, dict):
+                    h["facts"] = describe_endpoint(r["base_url"], r["model"], r.get("label") or "")
+        except Exception:
+            logger.debug("describe_endpoint 不可用（忽略）", exc_info=True)
+        return {"ok": True, "health": health, "n": len(health)}
+
+    @app.post("/api/setup/model-routes")
+    async def api_setup_model_routes_save(request: Request):
+        """保存多模型路由到 overlay（ai.models + ai.task_routes）并热重建 AI 运行时。
+
+        - body: ``{models: [{name, base_url, model, api_key?, label?, max_ctx?, cost_hint?,
+          supports_thinking?, reasoning?}], task_routes: {task: profile}}``；
+        - base_url/model 必填；掩码回传的 api_key 沿用同名旧真值；空 api_key 允许（本地端点
+          无鉴权，运行时自动填占位）；task_routes 指向不存在的档直接拒绝（防「路由到空气」）。
+        - 同名旧档的**其余键原样保留**（label/max_ctx/cost_hint/supports_thinking/reasoning 与任何
+          YAML 手配的未知键）；body 显式带出的元数据才覆盖（空值＝删）。2026-09-18 前整体替换＝抹掉。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        if config_manager is None:
+            return {"ok": False, "detail": tr(request, "err.svc.config_manager_not_ready")}
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        raw_models = (body or {}).get("models")
+        if not isinstance(raw_models, list):
+            return {"ok": False, "detail": tr(request, "err.setup.routes_models_required")}
+        if len(raw_models) > 20:
+            return {"ok": False, "detail": tr(request, "err.setup.routes_too_many", max=20)}
+        old_by_name: Dict[str, Dict[str, Any]] = {}
+        _m = (((getattr(config_manager, "config", None) or {}).get("ai") or {})
+              .get("models")) or {}
+        if isinstance(_m, dict):
+            for nm, sp in _m.items():
+                if isinstance(sp, dict):
+                    old_by_name[str(nm)] = dict(sp)
+        cleaned: Dict[str, Any] = {}
+        seen_names: set = set()
+        for i, item in enumerate(raw_models):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:40]
+            if not name:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_name_empty")}
+            if name in seen_names:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_dup_name", name=name)}
+            seen_names.add(name)
+            base = str(item.get("base_url") or "").strip()[:300]
+            if not base or "://" not in base:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_base_invalid", name=name)}
+            model = str(item.get("model") or "").strip()[:120]
+            if not model:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_model_empty", name=name)}
+            old = old_by_name.get(name) or {}
+            spec: Dict[str, Any] = {k: v for k, v in old.items() if k != "api_key"}
+            spec["base_url"] = base
+            spec["model"] = model
+            bad = _coerce_model_extras(item, spec)
+            if bad:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_bad_field", name=name, field=bad)}
+            key = str(item.get("api_key") or "").strip()
+            if ("…" in key) or key.endswith("***"):
+                key = str(old.get("api_key") or "")   # 掩码回传 → 沿用旧真值
+            if key:
+                spec["api_key"] = key[:512]
+            cleaned[name] = spec
+        raw_routes = (body or {}).get("task_routes") or {}
+        routes: Dict[str, str] = {}
+        if isinstance(raw_routes, dict):
+            for task, prof in raw_routes.items():
+                t = str(task).strip()[:40]
+                p = str(prof or "").strip()
+                if not t or not p:
+                    continue
+                if p not in cleaned:
+                    return {"ok": False,
+                            "detail": tr(request, "err.setup.routes_unknown_profile", task=t, name=p)}
+                routes[t] = p
+        ok = config_manager.save_overlay_patch(
+            {"ai": {"models": cleaned, "task_routes": routes}},
+            replace_paths=getattr(config_manager, "OVERLAY_REPLACE_PATHS",
+                                  ("ai.models", "ai.task_routes")))
+        if not ok:
+            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason="overlay")}
+        # save_overlay_patch 已按 replace 刷新内存；再赋一次防止旧桩/热重载竞态把删档合回来
+        ai_live = (getattr(config_manager, "config", None) or {}).setdefault("ai", {})
+        if isinstance(ai_live, dict):
+            ai_live["models"] = cleaned
+            ai_live["task_routes"] = routes
+        ai_ready = await reload_ai_runtime(request.app, config_manager)
+        return {"ok": True, "detail": tr(request, "setup.routes.saved"),
+                "models": len(cleaned), "routes": len(routes), "ai_ready": bool(ai_ready)}
+
+    @app.post("/api/setup/model-routes/list-models")
+    async def api_setup_model_routes_list_models(request: Request):
+        """拉某端点的模型清单（``GET {base}/v1/models``，OpenAI 兼容）——给开发者页「多模型路由」
+        的模型名输入框做候选，运营不必背 gpt-/gemini-/grok- 的现役 id（2026-09-12 厂商预设配套）。
+
+        body ``{base_url, api_key?, name?}``：api_key 为空或掩码 → 同名已存档的真值 → ``ai.api_key``。
+        只读、不耗 token；返回 ``{ok, ids:[...], n, status}``；密钥不回显。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        base = str((body or {}).get("base_url") or "").strip().rstrip("/")[:300]
+        if not base or "://" not in base:
+            return {"ok": False, "detail": tr(request, "err.setup.routes_base_invalid", name="-")}
+        base = _v1_base(base)
+        key = str((body or {}).get("api_key") or "").strip()
+        cfg = getattr(config_manager, "config", None) or {}
+        ai_cfg = cfg.get("ai") or {}
+        if not key or ("…" in key) or key.endswith("***"):
+            nm = str((body or {}).get("name") or "").strip()
+            stored = ((ai_cfg.get("models") or {}).get(nm) or {}) if nm else {}
+            key = str(stored.get("api_key") or "") or str(ai_cfg.get("api_key") or "")
+        ids: list = []
+        status = 0
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as cli:
+                resp = await cli.get(base + "/models",
+                                     headers={"Authorization": "Bearer " + (key or "probe")})
+            status = int(resp.status_code)
+            if status < 400:
+                data = resp.json()
+                rows = data.get("data") if isinstance(data, dict) else data
+                for it in (rows or [])[:500]:
+                    mid = it.get("id") if isinstance(it, dict) else it
+                    if mid:
+                        ids.append(str(mid))
+        except Exception as ex:
+            return {"ok": False, "detail": str(ex)[:120], "status": status}
+        ids = sorted(set(ids))[:200]
+        return {"ok": status < 400, "ids": ids, "n": len(ids), "status": status}
+
     @app.post("/api/setup/channels/{channel}")
     async def api_setup_channel_save(channel: str, request: Request):
         """保存某渠道凭证到 overlay 并即时生效；返回该渠道最新现状 + 自检问题。"""
@@ -381,6 +1515,28 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         ok, msg, issues = config_manager.save_channel_credentials(channel, values)
         if not ok:
             return {"ok": False, "detail": msg}
+        # Messenger 官方通道：保存后 Graph 探针（验 token 真伪 + 自动回填 page_id +
+        # 把主页名称/头像带回响应）。必须在 _provision_official_account **之前**——
+        # 回填的 page_id 决定账号行 id，与 webhook 入站镜像（page_id or "official"）
+        # 同口径。探针 6s 超时、绝不阻塞保存（离线也能存）。
+        page_probe = await _maybe_probe_messenger_page(
+            str(channel).lower(), config_manager)
+        # 纯官方 API 渠道（Instagram/Zalo）：凭证齐 → 自动开通注册表 official 账号行，
+        # 下面的编排器热拉起才有东西可认领（没有这行 = 收得到发不出，且无处报因）。
+        official_account = _provision_official_account(
+            str(channel).lower(), config_manager.config or {})
+        # 凭据齐全会顺带开 platform_login（channel_setup.enable_on_ready 桥接）。
+        # 编排器原本只在 app 启动时拉起——这里 best-effort 热拉起，免得「向导配完
+        # 还得重启一次，扫上的号才会上线」。ensure/start_loop 均幂等，已在跑零副作用。
+        try:
+            from src.integrations.account_orchestrator import (
+                ensure_builtin_workers, get_orchestrator, orchestrator_enabled)
+            cfg_now = config_manager.config or {}
+            if orchestrator_enabled(cfg_now):
+                ensure_builtin_workers(cfg_now)
+                await get_orchestrator(cfg_now).start_loop()
+        except Exception:
+            logger.debug("保存凭据后热拉起编排器失败（已忽略；重启后生效）", exc_info=True)
         from src.utils.channel_setup import channel_status
         status = next(
             (c for c in channel_status(config_manager.config or {})
@@ -393,4 +1549,11 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             if prefix in i.path or (status and any(
                 f["key"] in i.path for f in status.get("fields", [])))
         ]
-        return {"ok": True, "detail": msg, "channel": status, "issues": rel}
+        out = {"ok": True, "detail": msg, "channel": status, "issues": rel}
+        if official_account:
+            out["official_account"] = official_account
+        # 探针结论随保存响应直达前端（None＝非 messenger/无 token，不出字段）：
+        # ok 时前端可显示「已连接：<主页名>」确认时刻；失败带 Graph 原始报错就地纠错
+        if page_probe is not None:
+            out["probe"] = page_probe
+        return out

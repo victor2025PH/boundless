@@ -227,7 +227,8 @@ def seed_starter_pack(
     """把某域起步包播种进 KB。
 
     - ``dedup=True`` 时跳过标题已存在的条目（可重复点不会灌重复）；
-    - 每条标 ``source=\"starter:<domain>\"`` 便于日后识别/清理；
+    - 每条标 ``source="system"``（J-9 来源词表 user/import/system/vendor；起步包是
+      用户主动点选的行业预置，不是厂商自家产品话术，仍参与对客检索）；
     - reply_mode=ai_guided。
     返回 ``(added, skipped, added_titles)``。kb 不可用时抛 RuntimeError。
     """
@@ -250,6 +251,7 @@ def seed_starter_pack(
             "example_reply_zh": e.get("example_reply") or "",
             "reply_mode": "ai_guided",
             "enabled": 1,
+            "source": "system",
         }
         try:
             kb_store.add_entry(data)

@@ -1,0 +1,108 @@
+# ── 能力预设档：cloud_light（纯云起步档，WP-1 2026-08）─────────────────────────
+#
+# 目标机器：无局域网 GPU 拓扑的普通 Windows 机（陌生客户初装 / 独立演示 VM）。
+# 语义：把「零 GPU 部署该关掉的 LAN 依赖」显式钉进配置——example/种子的代码默认
+# 大多本就是关，但默认值会漂移、运营实验会留残值；本档把拓扑选择变成可检视的事实。
+#
+# 应用方式（不是运行时 merge 层，是首启一次性播种）：
+#   进程启动带 AITR_DEPLOY_PROFILE=cloud_light 且本次 config.yaml 为全新播种
+#   → ConfigManager._ensure_deploy_profile 把本文件深合并进 config.local.yaml
+#   overlay（ruamel 保注释写入），并以 deploy.profile 标记防重。
+#   升级安装 / 已有配置的机器**永不**被应用（用户已表达过的选择不被覆写）。
+#   手动应用：把本文件内容自行合并进实例 overlay 即可（纯 YAML，无代码路径）。
+#
+# 铁律（tests/test_deploy_profiles.py 门禁）：
+#   · 本目录任何预设文件不得出现内网 IP（192.168.* / 10.* / 172.16-31.*）；
+#   · feature_registry 里 reason=lan/infra 的 C 类键必须在本档显式为 false；
+#   · 本档合并进 example 基线后，LAN 探针决策函数必须全部静默（零常驻红灯）。
+
+deploy:
+  profile: cloud_light
+
+# ── 语音：静态保守关（零 LAN 依赖零常驻探针，五项门禁语义不变）；_hosted_auto=
+# 托管预授权（2026-08-19 报障群实测「客户部署与语音引擎零通路」后开通）——持设备
+# 令牌（cx.*）的部署由 hosted_gateway.ensure_hosted_voice 运行时**纯内存**自动开启
+# 并接官方语音网关（{site}/api/ai/hub → 集群 GPU），概不落盘。客户要彻底关闭
+# 托管语音：avatar_voice.hosted_opt_out: true。TTS 兜底后端仍为 edge_tts。──
+avatar_voice:
+  enabled: false
+  _hosted_auto: true
+realtime_voice:
+  enabled: false
+speech_emotion:
+  enabled: false
+# 语音接收转录：静态保守关（本地 ASR 依赖已被桌面包显式排除）；_hosted_auto=
+# 托管预授权（2026-08-20 内测群实测「对方语音消息无法识别」后开通，与 avatar_voice
+# 同构）——持设备令牌的部署由 hosted_gateway.ensure_hosted_asr 运行时纯内存开启并
+# 走官网网关转写。客户要彻底关闭：voice_recognition.hosted_opt_out: true。
+voice_recognition:
+  enabled: false
+  _hosted_auto: true
+telegram:
+  voice_reply:
+    backend: edge_tts
+
+# ── 视觉：静态保守关（零 LAN 端点零常驻探针）；_hosted_auto=托管预授权
+# （2026-08-22 外网机实测「发图即拦」后开通，与 avatar_voice 同构）——持设备
+# 令牌的部署由 hosted_gateway.ensure_hosted_vision 运行时纯内存开启并走官网
+# 识图网关（{site}/api/ai/v1 → 集群 GPU VLM）。客户要彻底关闭：
+# vision.hosted_opt_out: true。──
+vision:
+  enabled: false
+  _hosted_auto: true
+  base_urls: []
+
+# ── 嵌入：不配 → 记忆召回退关键词、语义去重退 hash（既有软降级，零阻断）──
+ai:
+  embedding_base_url: ""
+  embedding_base_urls: []
+  # 本地 LLM 容灾关：兜底端点是 LAN Ollama，客户机白付超时
+  fallback:
+    enabled: false
+
+# ── 翻译：云引擎序（AI 主链即翻译引擎；本地 MT 不配自动跳过）──
+translation:
+  engines:
+    order: ["ai"]
+    ollama_mt:
+      base_url: ""
+      base_urls: []
+
+# ── LAN 出图 / 相册链（ComfyUI 是 LAN 后端，相册备货属运营内容）──
+companion:
+  selfie:
+    enabled: false
+  # ── 客户安全预警出厂开（老板决策 D7，2026-09-05，#185）──
+  # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；此前留痕(crisis_audit)与
+  # 人工升级(crisis_escalation)出厂关 → severe 命中不记录、不叫任何人，页面却像正常空表。
+  # 隐私顾虑靠角色门（页面只给主管/合规看）+ 摘要 ≤120 字，而不是靠关掉。
+  wellbeing:
+    crisis_audit: true
+    crisis_escalation: true
+    escalate_after: 1
+  # ── 工作目标「冲刺推进器」出厂开（老板决策 D1，2026-09-05，#166）──
+  # 此前出厂 false：限时目标（pace=today/session）选了「自动推进」也只在对方开口时
+  # 带方向，卡片却写着「自动推进 · 进行中」——UI 兜售引擎不执行的事。开启后限时
+  # 目标按相位（开场/跟进/收口）排主动拍进 care 派发管线。**安全闸一律沿用 example
+  # 默认**：silence_min_sec / min_gap_sec / min_remaining_sec / 危机情绪 block /
+  # opt-out 静默 / 只对 autonomy=auto + auto_ai 会话 / platforms 白名单。
+  # ⚠ 派发终点是 care 派发器：companion.proactive_care.enabled=false 或 dry_run=true
+  # 时主动拍只拟稿不真发（引擎状态 /api/goals/engine-status 会如实报 blockers）。
+  goals:
+    sprint:
+      enabled: true
+
+# ── 运维探针：LAN/自有 Key 巡检类全关（探不到 = 看板恒 unknown / 告警噪声）──
+ops:
+  gpu_watermark:
+    enabled: false
+  cloud_credentials:
+    enabled: false
+
+# ── RPA（需安卓真机 / adb 基础设施，云起步档不带）──
+line_rpa:
+  enabled: false
+messenger_rpa:
+  enabled: false
+whatsapp_rpa:
+  enabled: false

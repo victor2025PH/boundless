@@ -5,10 +5,10 @@ import type { Dict, Solution } from "@/lib/content";
 import { CHANNEL_URL, GROUP_URL, CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
 import { BRAND, FAMILY_PITCH, PRODUCT_ORDER, productLineItems } from "@/lib/brand";
-import { PRODUCT_IMG } from "@/components/productMeta";
+import ProductIcon from "@/components/ProductIcon";
 import { PRODUCT_VIEW, type View } from "./routing";
 
-// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智拓/智聊/通译/通传。
+// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智聊/智拓/通传（通译已并入智聊）。
 // 各产品对应的 content.solutions SKU id 收口在 brand.ts::products[].skuIds，这里按 view 派生，
 // 不再散落硬编码 id 列表（改产品↔SKU 映射只动 brand.ts 一处）。
 const skuByView = (v: View): string[] =>
@@ -185,7 +185,7 @@ export function HomeView({ t, zh, onGo }: { t: Dict; zh: boolean; onGo: (v: View
             onClick={() => onGo(PRODUCT_VIEW[p.key])}
             className="rounded-2xl border border-slate-800 bg-slate-900/60 p-3 text-left active:scale-[0.98] transition"
           >
-            <img src={PRODUCT_IMG[p.key]} alt={p.name} width={36} height={36} className="h-9 w-9 object-contain" draggable={false} />
+            <ProductIcon product={p.key} size={36} alt={p.name} className="h-9 w-9 object-contain" />
             <div className="mt-1 text-sm font-bold text-white">{p.name}</div>
             <div className="mt-0.5 text-[11px] leading-snug text-slate-400">{p.desc}</div>
             <div className="mt-2 text-[11px] font-medium text-cyan-300">{zh ? "查看 →" : "Explore →"}</div>
@@ -267,7 +267,7 @@ export function SoulSyncView({ t, zh, onContact }: { t: Dict; zh: boolean; onCon
     <div>
       <SectionTitle
         icon="💬"
-        title={zh ? "智能沟通 · 智拓 / 智聊 / 通译 / 通传" : "Comms · ReachX / ChatX / LingoX / VoxX"}
+        title={zh ? "智能沟通 · 智聊 / 智拓 / 通传" : "Comms · ChatX / ReachX / VoxX"}
         sub={t.autochat.subtitle}
       />
       <ChatTheater t={t} />
@@ -301,8 +301,8 @@ export function SoulSyncView({ t, zh, onContact }: { t: Dict; zh: boolean; onCon
 
       <SectionTitle icon="🌐" title={zh ? "已聚合平台" : "Platforms unified"} />
       <div className="flex flex-wrap gap-1.5">
-        {t.trust.platforms.map((p) => (
-          <span key={p} className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300">{p}</span>
+        {t.trust.platformsLive.map((p) => (
+          <span key={p.name} className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300">{p.label ?? p.name}</span>
         ))}
       </div>
 
@@ -392,7 +392,7 @@ export function PricingView({
                 {p.name} {p.highlight && <span className="ml-1 rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] text-cyan-300">{t.plans.popular}</span>}
               </span>
               <span className="text-sm font-bold text-cyan-300">
-                {p.priceMonthly} <span className="text-[10px] font-normal text-slate-500">{t.plans.perMonth}</span>
+                {p.price} <span className="text-[10px] font-normal text-slate-500">{p.unit}</span>
               </span>
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500">{p.desc}</div>

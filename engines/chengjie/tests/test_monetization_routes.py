@@ -293,16 +293,42 @@ def test_entitlement_missing_contact():
 
 
 def test_webhook_applies_and_idempotent():
-    client, store = _client()
+    # S6：webhook 现在强制校验共享密钥；测试须配置 webhook_secret 并带 X-Monetize-Secret 头。
+    secret = "test-webhook-secret"
+    client, store = _client(mon_cfg={"enabled": True, "webhook_secret": secret})
+    headers = {"X-Monetize-Secret": secret}
     payload = {"contact_key": "c1", "kind": "subscribe", "item_id": "vip",
                "ref": "pay_42", "days": 30}
-    r1 = client.post("/api/monetize/webhook", json=payload)
+    r1 = client.post("/api/monetize/webhook", json=payload, headers=headers)
     assert r1.json()["applied"] is True
     # 重投同 ref → 幂等不再 applied
-    r2 = client.post("/api/monetize/webhook", json=payload)
+    r2 = client.post("/api/monetize/webhook", json=payload, headers=headers)
     assert r2.json()["applied"] is False
     assert store.get_entitlement("c1")["tier"] == "vip"
     assert store.count_tx() == 1
+
+
+def test_webhook_rejects_when_no_secret_configured():
+    """S6：未配置 webhook_secret → 直接拒绝（不再默认接受，防任意人伪造记账）。"""
+    client, store = _client(mon_cfg={"enabled": True})  # 无 webhook_secret
+    payload = {"contact_key": "c1", "kind": "subscribe", "item_id": "vip",
+               "ref": "pay_x", "days": 30}
+    r = client.post("/api/monetize/webhook", json=payload)
+    assert r.json()["ok"] is False
+    assert r.json()["reason"] == "webhook_secret_not_configured"
+    assert store.count_tx() == 0
+
+
+def test_webhook_rejects_wrong_secret():
+    """S6：配置了 secret 但请求头不匹配 → unauthorized。"""
+    client, store = _client(mon_cfg={"enabled": True, "webhook_secret": "right"})
+    payload = {"contact_key": "c1", "kind": "subscribe", "item_id": "vip",
+               "ref": "pay_y", "days": 30}
+    r = client.post("/api/monetize/webhook", json=payload,
+                    headers={"X-Monetize-Secret": "wrong"})
+    assert r.json()["ok"] is False
+    assert r.json()["reason"] == "unauthorized"
+    assert store.count_tx() == 0
 
 
 def test_feature_check_gate_off_allows():

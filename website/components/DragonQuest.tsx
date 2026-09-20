@@ -63,7 +63,7 @@ const T = {
     ceremonyTitle: "七星既聚 · 龙行无界",
     ceremonySub: "界龙衔珠而至，赐你一愿",
     wishTrial: "愿 · 体验",
-    wishTrialDesc: (left: number) => `通译/智聊/幻声等任选 1 款 · 30 天全功能（本月剩 ${left} 份）`,
+    wishTrialDesc: (left: number) => `智聊/幻声/通传等任选 1 款 · 30 天全功能（本月剩 ${left} 份）`,
     wishTrialFull: "本月名额已满，下月朔日再来",
     wishSkin: "愿 · 龙鳞",
     wishSkinDesc: "永久解锁「祥龙金鳞」形态，金瞳鹿角",
@@ -524,8 +524,9 @@ export default function DragonQuest() {
 
   if (!st) {
     if (!loadError) return null;
+    // z-[var(--z-easter)]：彩蛋层必须低于导航(--z-nav)——旧 z-[60] 曾盖在移动菜单上遮住「品牌」项
     return (
-      <div className="pointer-events-none fixed bottom-[172px] right-[106px] z-[60] md:bottom-[128px] md:right-[172px]">
+      <div className="pointer-events-none fixed bottom-[172px] right-[106px] z-[var(--z-easter)] md:bottom-[128px] md:right-[172px]">
         <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-300/30 bg-[#0a0b14]/92 px-3 py-1.5 text-[11px] text-amber-100/90 shadow-lg backdrop-blur">
           <span>{t.loadFail}</span>
           <button
@@ -955,7 +956,7 @@ export default function DragonQuest() {
       <AnimatePresence>
         {ghostOn && (
           <motion.div
-            className="pointer-events-none fixed bottom-[300px] right-[120px] z-[55] w-32 md:bottom-[320px] md:right-[190px] md:w-40"
+            className="pointer-events-none fixed bottom-[300px] right-[120px] z-[var(--z-easter)] w-32 md:bottom-[320px] md:right-[190px] md:w-40"
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}

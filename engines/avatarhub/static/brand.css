@@ -13,11 +13,11 @@
 
 :root{
   /* —— 品牌主色 —— */
-  --bd-acc:      #4f7aff;   /* 无界蓝（主） */
-  --bd-acc-rgb:  79 122 255; /* 主色三元组（R G B）；供 rgb(var(--bd-acc-rgb) / α) 自定义透明度用；brand.js 取色时同步，三端跨设备白标统一真相 */
-  --bd-acc2:     #a855f7;   /* 幻紫（辅） */
+  --bd-acc:      #1e6bf0;   /* 无界蓝（主） */
+  --bd-acc-rgb:  30 107 240; /* 主色三元组（R G B）；供 rgb(var(--bd-acc-rgb) / α) 自定义透明度用；brand.js 取色时同步，三端跨设备白标统一真相 */
+  --bd-acc2:     #7a3bf5;   /* 幻紫（辅） */
   --bd-grad:     linear-gradient(135deg, var(--bd-acc), var(--bd-acc2));
-  --bd-acc-weak: rgba(79,122,255,.16);
+  --bd-acc-weak: rgba(30,107,240,.16);
 
   /* —— 背景 / 表面 —— */
   --bd-bg:       #080b10;   /* 页面底色 */
@@ -25,8 +25,8 @@
   --bd-surface2: rgba(255,255,255,.06);
   --bd-border:   rgba(255,255,255,.12);
   --bd-border-strong: rgba(255,255,255,.16);
-  --bd-glow:     radial-gradient(120% 60% at 50% 0%, rgba(79,122,255,.18), transparent 55%),
-                 radial-gradient(120% 60% at 50% 100%, rgba(168,85,247,.14), transparent 50%);
+  --bd-glow:     radial-gradient(120% 60% at 50% 0%, rgba(30,107,240,.18), transparent 55%),
+                 radial-gradient(120% 60% at 50% 100%, rgba(122,59,245,.14), transparent 50%);
 
   /* —— 文字 —— */
   --bd-txt:      #e5e9f5;   /* 主文本 */
@@ -45,7 +45,7 @@
   --bd-r-sm:  12px;  --bd-r-md: 16px;  --bd-r-lg: 20px;  --bd-r-pill: 30px;
   --bd-shadow:    0 16px 48px rgba(0,0,0,.55);
   --bd-shadow-sm: 0 10px 28px rgba(0,0,0,.4);
-  --bd-cta-glow:  0 10px 32px rgba(79,122,255,.34);
+  --bd-cta-glow:  0 10px 32px rgba(30,107,240,.34);
 
   /* —— 字体 / 字阶 ——
      统一阶梯，最小 12px（label 下限）；旧的 --bd-fs-xs 因历史引用保留，但新代码请勿低于 --bd-fs-label。*/
@@ -157,8 +157,8 @@
 .bd-badge.ok{color:var(--bd-ok);background:var(--bd-ok-soft);border-color:rgba(52,211,153,.4)}
 .bd-badge.warn{color:var(--bd-warn);background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.4)}
 .bd-badge.muted{color:var(--bd-mut);background:var(--bd-surface)}
-.bd-badge.info{color:rgb(var(--bd-acc-rgb,79 122 255));background:rgb(var(--bd-acc-rgb,79 122 255)/.14);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.38)}
-.bd-badge.accent{color:#c4b5fd;background:rgba(168,85,247,.14);border-color:rgba(168,85,247,.38)}
+.bd-badge.info{color:rgb(var(--bd-acc-rgb,30 107 240));background:rgb(var(--bd-acc-rgb,30 107 240)/.14);border-color:rgb(var(--bd-acc-rgb,30 107 240)/.38)}
+.bd-badge.accent{color:#c4b5fd;background:rgba(122,59,245,.14);border-color:rgba(122,59,245,.38)}
 
 /* —— Pass E 实心状态 chip（角色卡过程态/就绪态）：高对比填充家族，与 bd-badge(软描边) 语义互补 ——
    solid=进行中/当前态要抢眼（亮底深字）；dim=常驻安静态（暗底亮字）。
@@ -167,7 +167,7 @@
    info 底色接 --hub-blue（后台品牌取色器实时联动，回退无界蓝），与 .bd-card-title 同法。*/
 .bd-chip{display:inline-block;font-size:var(--bd-fs-label);font-weight:600;
   padding:2px 8px;border-radius:var(--bd-r-pill)}
-.bd-chip.info{background:rgb(var(--hub-blue,var(--bd-acc-rgb,79 122 255)));color:#fff}
+.bd-chip.info{background:rgb(var(--hub-blue,var(--bd-acc-rgb,30 107 240)));color:#fff}
 .bd-chip.ok{background:var(--bd-ok);color:#04150c}
 .bd-chip.ok.dim{background:rgba(20,83,45,.5);color:#4ade80}
 .bd-chip.warn{background:#f59e0b;color:#160e02}
@@ -175,7 +175,7 @@
 .bd-chip.warn.dim{background:rgba(120,53,15,.55);color:#fcd34d}
 .bd-chip.err{background:rgba(220,38,38,.9);color:#fff}
 .bd-chip.muted{background:var(--bd-border,#262f42);color:var(--bd-mut)}
-.bd-chip.accent{background:rgba(168,85,247,.38);color:#e9d5ff}
+.bd-chip.accent{background:rgba(122,59,245,.38);color:#e9d5ff}
 /* P8 顶栏紧凑章：📹直播中/🎙变声中/⚠️高负载 等 px-1.5 场合 */
 .bd-chip.sm{font-size:11px;padding:1px 7px;font-weight:600;line-height:1.35}
 /* 字号叠加：.bd-chip 定义晚于字阶助手，同特异性会盖掉 13px 场合（英雄区/抽屉），双类提权 */
@@ -185,12 +185,12 @@
 
 /* 开播页 P1-6：状态条内标题色继承（减少内联 tone 三元） */
 .bd-strip.ok .strip-em{color:var(--bd-ok)}
-.bd-strip.info .strip-em{color:rgb(var(--bd-acc-rgb,79 122 255))}
+.bd-strip.info .strip-em{color:rgb(var(--bd-acc-rgb,30 107 240))}
 .bd-strip.warn .strip-em{color:var(--bd-warn)}
 .bd-strip.err .strip-em{color:var(--bd-danger)}
 
 .lat-spark{display:inline-block;vertical-align:middle;opacity:.85}
-.lat-spark path{fill:none;stroke:rgb(var(--bd-acc-rgb,79 122 255)/.75);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.lat-spark path{fill:none;stroke:rgb(var(--bd-acc-rgb,30 107 240)/.75);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 
 /* —— 按钮（统一基座，逐步替换散落工具类）——
    用法：class="bd-btn bd-btn-primary" / "bd-btn bd-btn-ghost" / "bd-btn bd-btn-danger" */
@@ -224,7 +224,7 @@
 /* —— 卡片标题（收敛 text-hub-blue font-bold text-sm）——
    刻意绑定 --hub-blue 以保留后台品牌取色器的实时联动与出厂重置行为；
    非后台页（无 --hub-blue）回退无界蓝。font-size 14px = 原 text-sm，像素级一致。*/
-.bd-card-title{color:rgb(var(--hub-blue, 79 122 255));font-weight:700;font-size:14px}
+.bd-card-title{color:rgb(var(--hub-blue, 30 107 240));font-weight:700;font-size:14px}
 
 /* —— 状态条带五态（S4 开播页视觉收敛 → v3.7 补中性档）——
    替代散落的 bg-*-900/xx + border-hub-*/xx 一次性组合：色相一处定义、语义对齐 --bd-ok/--bd-warn/--bd-danger，
@@ -233,7 +233,7 @@
    字号不烘进组件（text-[12px] 等工具类是大字模式的换算钩子，必须留在标记）；文字色烘进（定义性特征）。*/
 .bd-strip{border:1px solid var(--bd-border);border-radius:12px}
 .bd-strip.ok{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.40)}
-.bd-strip.info{background:rgb(var(--bd-acc-rgb,79 122 255) / .10);border-color:rgb(var(--bd-acc-rgb,79 122 255) / .40)}
+.bd-strip.info{background:rgb(var(--bd-acc-rgb,30 107 240) / .10);border-color:rgb(var(--bd-acc-rgb,30 107 240) / .40)}
 .bd-strip.warn{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.45)}
 .bd-strip.err{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.45)}
 .bd-strip.mute{background:var(--bd-bg,#080b10);color:var(--bd-mut,#8b96b0)}
@@ -253,8 +253,8 @@ html.bd-large-text main h2.text-sm{font-size:17px!important}
 }
 
 /* —— 主舞台卡强调（S4 卡片层级）：英雄卡带品牌描边 + 更深投影，视觉权重高于工具卡 —— */
-.bd-hero{border-color:rgb(var(--bd-acc-rgb,79 122 255) / .28)!important;
-  box-shadow:0 8px 28px -10px rgba(0,0,0,.55),0 0 0 1px rgb(var(--bd-acc-rgb,79 122 255) / .05)!important}
+.bd-hero{border-color:rgb(var(--bd-acc-rgb,30 107 240) / .28)!important;
+  box-shadow:0 8px 28px -10px rgba(0,0,0,.55),0 0 0 1px rgb(var(--bd-acc-rgb,30 107 240) / .05)!important}
 
 /* —— 成绩瓷砖（S5 场次成绩单）：停播即时结算的数值格 —— */
 .bd-stat{background:var(--bd-surface2);border:1px solid var(--bd-border);border-radius:10px;padding:8px 10px;text-align:center;min-width:0}
@@ -267,7 +267,7 @@ html.bd-large-text main h2.text-sm{font-size:17px!important}
 a:focus-visible,button:focus-visible,select:focus-visible,textarea:focus-visible,
 input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
 [role="tab"]:focus-visible,[tabindex]:focus-visible{
-  outline:2px solid var(--bd-acc, #4f7aff); outline-offset:2px}
+  outline:2px solid var(--bd-acc, #1e6bf0); outline-offset:2px}
 
 /* —— 可访问性 A11y：尊重系统"减少动态效果"偏好 —— */
 @media (prefers-reduced-motion: reduce){
@@ -290,7 +290,7 @@ input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
   box-shadow:0 1px 3px rgba(0,0,0,.28);overflow:hidden;
   transition:border-color var(--bd-dur-mid) var(--bd-ease),box-shadow var(--bd-dur-mid) var(--bd-ease)}
 .bd-panel::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;pointer-events:none;
-  background:linear-gradient(90deg,transparent,rgb(var(--bd-acc-rgb,79 122 255)/.35),rgba(168,85,247,.25),transparent)}
+  background:linear-gradient(90deg,transparent,rgb(var(--bd-acc-rgb,30 107 240)/.35),rgba(122,59,245,.25),transparent)}
 .bd-panel:hover{border-color:#33405c;box-shadow:0 4px 16px rgba(0,0,0,.35)}
 .bd-panel-head{display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;
   background:transparent;border:0;cursor:pointer;text-align:left;color:var(--bd-txt);font:inherit}
@@ -322,8 +322,8 @@ input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
   cursor:pointer;white-space:nowrap;
   transition:background var(--bd-dur-fast) var(--bd-ease),color var(--bd-dur-fast) var(--bd-ease)}
 .bd-seg>button:hover:not(:disabled){color:var(--bd-txt)}
-.bd-seg>button.on{background:rgb(var(--bd-acc-rgb,79 122 255)/.28);color:#fff;
-  box-shadow:inset 0 0 0 1px rgb(var(--bd-acc-rgb,79 122 255)/.45)}
+.bd-seg>button.on{background:rgb(var(--bd-acc-rgb,30 107 240)/.28);color:#fff;
+  box-shadow:inset 0 0 0 1px rgb(var(--bd-acc-rgb,30 107 240)/.45)}
 .bd-seg>button:disabled{opacity:.4;cursor:not-allowed}
 .bd-seg>button:active:not(:disabled){transform:none!important}
 
@@ -334,9 +334,9 @@ input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
   transition:background var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease)}
 .bd-switch i::after{content:"";position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;
   background:#94a0ba;transition:transform var(--bd-dur-fast) var(--bd-ease),background var(--bd-dur-fast) var(--bd-ease)}
-.bd-switch input:checked+i{background:rgb(var(--bd-acc-rgb,79 122 255)/.55);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.75)}
+.bd-switch input:checked+i{background:rgb(var(--bd-acc-rgb,30 107 240)/.55);border-color:rgb(var(--bd-acc-rgb,30 107 240)/.75)}
 .bd-switch input:checked+i::after{transform:translateX(14px);background:#fff}
-.bd-switch input:focus-visible+i{outline:2px solid var(--bd-acc,#4f7aff);outline-offset:2px}
+.bd-switch input:focus-visible+i{outline:2px solid var(--bd-acc,#1e6bf0);outline-offset:2px}
 
 /* —— 数值徽章：滑杆/分段控件的当前值回显（等宽数字，不跳动）—— */
 .bd-val{display:inline-block;font-size:12px;font-weight:700;color:var(--bd-txt);
@@ -366,23 +366,23 @@ input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
 .bd-act.off{opacity:.45;pointer-events:none}
 /* 重点动作：品牌渐变 + 辉光（每个子块最想让人点的那一枚） */
 .bd-act.primary{background:var(--bd-grad);color:#fff;font-weight:700;
-  box-shadow:0 3px 14px rgb(var(--bd-acc-rgb,79 122 255)/.32)}
+  box-shadow:0 3px 14px rgb(var(--bd-acc-rgb,30 107 240)/.32)}
 .bd-act.primary:hover:not(:disabled){filter:brightness(1.09);
-  box-shadow:0 5px 20px rgb(var(--bd-acc-rgb,79 122 255)/.48)}
+  box-shadow:0 5px 20px rgb(var(--bd-acc-rgb,30 107 240)/.48)}
 /* 次级确认：品牌蓝浅底描边 */
-.bd-act.soft{background:rgb(var(--bd-acc-rgb,79 122 255)/.13);
-  border-color:rgb(var(--bd-acc-rgb,79 122 255)/.5);color:rgb(var(--bd-acc-rgb,79 122 255))}
-.bd-act.soft:hover:not(:disabled){background:rgb(var(--bd-acc-rgb,79 122 255)/.25)}
+.bd-act.soft{background:rgb(var(--bd-acc-rgb,30 107 240)/.13);
+  border-color:rgb(var(--bd-acc-rgb,30 107 240)/.5);color:rgb(var(--bd-acc-rgb,30 107 240))}
+.bd-act.soft:hover:not(:disabled){background:rgb(var(--bd-acc-rgb,30 107 240)/.25)}
 /* 工具/中性 */
 .bd-act.ghost{border-color:#2e3950;color:var(--bd-mut);background:transparent}
-.bd-act.ghost:hover:not(:disabled){color:var(--bd-txt);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.5)}
+.bd-act.ghost:hover:not(:disabled){color:var(--bd-txt);border-color:rgb(var(--bd-acc-rgb,30 107 240)/.5)}
 /* 语义色变体：保留原有业务色相（实验=琥珀 / 妆容=粉 / 变声=紫 / 成功=绿 / 危险=红） */
 .bd-act.amber{background:rgba(245,158,11,.13);border-color:rgba(251,191,36,.5);color:#fcd34d}
 .bd-act.amber:hover:not(:disabled){background:rgba(245,158,11,.24)}
 .bd-act.pink{background:rgba(236,72,153,.13);border-color:rgba(244,114,182,.5);color:#f9a8d4}
 .bd-act.pink:hover:not(:disabled){background:rgba(236,72,153,.24)}
-.bd-act.purple{background:rgba(168,85,247,.15);border-color:rgba(192,132,252,.5);color:#d8b4fe}
-.bd-act.purple:hover:not(:disabled){background:rgba(168,85,247,.28)}
+.bd-act.purple{background:rgba(122,59,245,.15);border-color:rgba(192,132,252,.5);color:#d8b4fe}
+.bd-act.purple:hover:not(:disabled){background:rgba(122,59,245,.28)}
 .bd-act.green{background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.5);color:var(--bd-ok)}
 .bd-act.green:hover:not(:disabled){background:rgba(52,211,153,.24)}
 .bd-act.red{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.5);color:var(--bd-danger)}

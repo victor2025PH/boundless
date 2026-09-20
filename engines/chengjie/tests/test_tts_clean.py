@@ -1,5 +1,5 @@
 """TTS 合成前文本清洗门禁：剔 emoji + 换行折停顿（防克隆 TTS 念一半截断）。"""
-from src.ai.tts_pipeline import clean_text_for_tts
+from src.ai.tts_pipeline import clean_text_for_tts, polish_hub_speak_text
 
 
 def test_strips_emoji():
@@ -58,3 +58,30 @@ def test_empty_and_dirty_safe():
 def test_no_trailing_comma():
     out = clean_text_for_tts("你好呀\n")
     assert not out.endswith("，") and out.startswith("你好")
+
+
+def test_polish_hub_speak_strips_cosy_marks_and_softens_stops():
+    """hub/IndexTTS 不能吃 Cosy 副语言标记；句中句号改换气、句末句号去掉。"""
+    out = polish_hub_speak_text("[sigh]嗯……你说的这个我懂。其实吧，我觉得可以。[breath]")
+    assert "[sigh]" not in out and "[breath]" not in out
+    assert "懂……其实" in out or "懂……" in out
+    assert not out.endswith("。")
+    assert polish_hub_speak_text("") == ""
+
+
+def test_polish_hub_speak_breath_on_long_comma_chain():
+    """长句多逗号 → 首逗号改换气，逼 IndexTTS 喘一口气。"""
+    raw = "这个方案我建议你稳一点，别急着一次全投进去，先看看反馈"
+    out = polish_hub_speak_text(raw)
+    assert "……" in out
+    assert out.count("，") == raw.count("，") - 1
+
+
+def test_polish_hub_speak_strips_fake_hahaha_lead():
+    """句首哈哈哈/嘿嘿嘿极假 → 送 Hub 前剥掉。"""
+    out = polish_hub_speak_text("哈哈哈，今天真的太开心了！")
+    assert not out.startswith("哈")
+    assert "今天" in out
+    out2 = polish_hub_speak_text("嘿嘿嘿，你猜怎么着")
+    assert not out2.startswith("嘿")
+    assert "你猜" in out2

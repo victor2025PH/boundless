@@ -16,9 +16,9 @@
   /* 品牌点缀色 "R,G,B"（白标跟随 --acc-rgb；取不到回退无界蓝） */
   function accRgb() {
     try {
-      return (getComputedStyle(document.documentElement).getPropertyValue('--acc-rgb').trim() || '79 122 255')
+      return (getComputedStyle(document.documentElement).getPropertyValue('--acc-rgb').trim() || '30 107 240')
         .replace(/\s+/g, ',');
-    } catch (_) { return '79,122,255'; }
+    } catch (_) { return '30,107,240'; }
   }
 
   function roundRect(ctx, x, y, w, h, r) {

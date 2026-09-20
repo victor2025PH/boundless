@@ -110,6 +110,23 @@ def media_placeholder(media_type: str) -> str:
     return _MEDIA_PLACEHOLDER.get(str(media_type or "").strip().lower(), "[媒体]")
 
 
+def meta_attachment_url(attachments: Any) -> str:
+    """从 Meta 系（Messenger / Instagram）webhook attachments 抽 CDN URL。
+
+    形状：``[{type, payload:{url}}]``；取首条。缺字段 / 非列表 → 空串（占位仍落库，
+    识图预留字段可空）。Zalo 有独立抽取器，不走这里。
+    """
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    first = attachments[0] or {}
+    if not isinstance(first, dict):
+        return ""
+    payload = first.get("payload") or {}
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("url") or payload.get("thumbnail") or "").strip()
+
+
 def mirror_inbound_media(
     *, platform: str, account_id: str, chat_key: str, media_type: str,
     name: str = "", msg_id: str = "", media_ref: str = "",
@@ -143,5 +160,6 @@ async def mirror_official_outbound(
 
 __all__ = [
     "process_official_inbound", "mirror_official_outbound",
-    "mirror_inbound_media", "media_placeholder", "inbox_will_autosend",
+    "mirror_inbound_media", "media_placeholder", "meta_attachment_url",
+    "inbox_will_autosend",
 ]

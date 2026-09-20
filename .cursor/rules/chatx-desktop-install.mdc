@@ -1,0 +1,259 @@
+---
+description: 智聊(ChatX)桌面包的打包与坐席机安装/发版 SOP。凡是「打包智聊 / 安装智聊 / 发版 / 装到 173/198/104 / push_chatx / 重装 / 清空重装」这类任务，先按本规则执行；173 的安装崩溃按既定处置，不要重新排查。140 已改编记忆机、不是坐席。
+alwaysApply: false
+---
+
+# 智聊桌面包发版 SOP（2026-08-13 版，三机实测）
+
+## 频道发版文案纪律（2026-09-01 老板两条指令，v1.0.66 发版复盘）
+
+1. **不再附「自动更新提示」尾巴**：「已装 1.0.27 及以上版本会自动收到更新提示…
+   装好后关于页应显示 X」这段话**以后不发**（老板明令）。下载链接保留即可。
+2. **新功能必须讲用法，SOP/工作链类改动不许漏**：发版帖只列修复不讲新功能=白发。
+   每个对用户可见的新功能给「入口 + 一两步操作」；拿不准客户端形态是否开启的
+   （如成交引擎这类服务端开关）要如实写「未见入口=部署未开启」。
+3. **发版前跑一轮小智对话测试**：对每个要宣传的新功能问小智「XX 怎么用」，
+   小智答不上=帮助语料缺条目，先补 `src/web/help_terms.py` / `src/assistant/
+   howto_pack.py`（红线：只写已验证的真实行为）再发版——语料随包出货，
+   漏了这步=客户问小智全是「没有找到可靠依据」。本地 E2E 验法参照
+   实施93 发版夜的 tmp_impl93/xiaozhi_local_e2e.py 模式（真语料+真 LLM+真路由）。
+
+## 单一版本（D-Q11，2026-09-11 老板「不要内测版，只要一个版本」）
+
+## 发版通道（2026-09-18 老板）
+
+常规发版只做三件事：打 `dist:win:clean` → `website/scripts/publish_chatx.ps1` 上官网
+（public；内测渠道仍按上节做同字节桥）→ 频道发版帖（遵守上文文案纪律，不附自动更新尾巴）。
+
+**不要**再 `push_chatx` / 重装到局域网坐席 **173/`yunsheng`、198/`kouxing`、104/`lianbei`**
+（140/`tingxie` 已改编记忆机、不再是坐席，见下「机器映射」），除非用户**当次**明确说
+「装到这几台 / 173 / 198 …」。这些机器走客户端对 `latest.yml` 的自动更新。下面
+「安装到这几台机器」的第 5–7 步仅在点名坐席机时才跑。
+
+从 1.0.81 起 **R 批只出一个包 = clean 形态**（`npm run dist:win:clean` → `dist-clean\`），坐席机、内测机、
+公网用户装同一个 exe；`dist:win`（smart / internal，带「内测版」角标 + seed-data）**不再是发版产物**。
+- 一个 semver 只对应一个包：不许同号重切不同内容（1.0.80 两包同号 → 坐席机停在无 P0 修复的旧内容，
+  自动更新按 semver 判无更新，教训见 `docs/发版对账_v1.0.81_发版.md` §1）。
+- 内测渠道 `/downloads/internal/latest-internal.yml` 只做**同字节桥接**：把 clean 包的 exe + blockmap + `latest.yml`
+  复名 `latest-internal.yml` 放暂存目录 → `publish_chatx.ps1 -DistDir <暂存> -Channel internal`，让还在内测渠道的机器
+  自检到新版并装成 clean（装完 `app-update.yml` 指公共渠道）；fleet 与内测机全部显示 `clean/public` 后停更该渠道。
+- 坐席推包用 `-Setup <worktree>\dist-clean\ChatX-Setup-<ver>.exe`（push 默认取 `dist\` 最新，不指 -Setup 会推错目录）；
+  升级保数据，原 smart/internal 装机会变 clean/public。
+- 发版必须从 **release commit 的干净 worktree** 打包 + 在 worktree 上跑回归 / gate_sweep / import_sweep（主工作树被别线
+  未提交文件掩盖，R79 三处、R81 102 条红都是这样抓出来的）；回归红先串行复跑，再与上一版 release commit 对照，
+  只有「本版红 / 上版绿」才算本版引入。
+
+## 内测约定：「安装」＝先打包最新代码
+
+用户说「安装到这几台机器」＝**从当前工作树打全新安装包再装**，不是拿 `dist/` 里的旧包直接推。
+完整动作序列（每步都有实测背书，别跳步；**第 4 步按上节改打 clean 包**）：
+
+1. **探活+登记**：`engines\chengjie\scripts\agent_probe.ps1 -Intent "..."`；`services/messenger-web`、`shared/inject`、`desktop/` 有 ACTIVE（≤10min）先等静默——它们都会被打进包（extraResources）。
+2. **版本号**：`engines/chengjie/desktop/package.json` 的 `version`+`displayVersion` 一起递增（可能已被并行线 bump，确认即可，勿重复加）。
+3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红→**先试增量档** `npm run refresh:datas`（2026-08-18 起：变化全落在 templates/static/shared/domains/config 种子/**i18n 词条包**（`src/web/i18n_packs/*.py`，同日起 frozen 态文件优先 exec 属 datas；`__init__.py` 等 `_` 开头文件仍属代码）等 datas 资产时秒级刷绿；有编进 exe 的 `.py` 变更它会 exit 3 自拒）→ 仍红/被拒才 `npm run build:backend`（约 12 分钟）。增量档要求 stamp 带逐文件明细且根清单与当前代码一致（旧 stamp 会 exit 4，全量重打一次即自举；i18n 根并入后首次全量同理）。
+4. **打包**：`npm run dist:win`（predist 自带门禁+双冒烟；产物 `dist/ChatX-Setup-<ver>.exe` ~476MB，**必须落在 desktop\dist**——push 默认从那里取最新）。不确定改动范围时可用一键智能档 `npm run dist:win:smart`＝步骤 3+4 合一（先试增量刷新，被拒自动落全量再打包）。
+5. **逐台推**（默认升级保数据）：`powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh <别名> -Install -Relaunch -Smoke`
+   ——2026-08-17 起 `-Install -Relaunch` 自带坐席新鲜度终验（`verify_seat_backend_node.ps1`：
+   真坐席 run_sentinel `started_at` 晚于本次安装 + 18799 答 /login 200；失败 exit 10）。
+6. **终验**：`& deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei`——**以 fleet 台账的运行版本为准**（smoke 用的是一次性数据目录，只证明包能起，不证明坐席在跑新版；第 5 步的 seatverify 已把「坐席跑的是**本次**新后端」也证掉）。
+7. **收尾**：删各机 `C:\Users\Administrator\Downloads\chatx` 旧安装包只留当前版；`agent_probe.ps1 -Intent ... -Done`。
+
+## 干净包（对外发行，零数据种子；2026-08-19 起）
+
+- 「给用户的全新安装包 / 不带知识库人设库」＝ **clean 档**：
+  `cd engines/chengjie/desktop && npm run dist:win:clean`
+  （predist 自动：删 `build/seed-data` 内测残留 → 标准冒烟 `smoke_backend` + clean 零数据冒烟
+  `smoke_clean`（首启不得出现 KB/人设/相册/语音/内测 overlay 指纹）；after-pack 在
+  `CHATX_ALLOW_STANDARD=1` 下反向断言产物里**不得**有 `resources/seed-data`）。
+- 产物落 **`desktop\dist-clean\ChatX-Setup-<ver>.exe`**（与内测包分目录——push_chatx 默认取
+  `dist\` 最新包，不会误推 clean 包到坐席机）；包内 `resources/build-info.json` 带
+  `flavor: "clean"` 可远程核对形态。
+- clean 包首启形态：知识库/人设库/相册/克隆语音全空，config 播种自
+  `config.desktop.min.yaml`（首启向导 + 托管网关照常，出厂试用额度生效）；装到已有数据的
+  机器不会动存量数据（播种一律缺才补）。
+- 内测包流程不变（`dist:win` / `dist:win:smart` 仍走 stage:internal）；打完内测包
+  `build/seed-data` 会残留，下次打 clean 档由 `stage:clean` 自动清掉，别手工混用产物目录。
+
+## 热补丁（同版本内小修，不发整包；2026-08-27 起）
+
+改一行 JS 不该让坐席等一次 476MB 发版。热补丁在**同一 `baseAppVersion` 内**替换
+`resources\` 下的白名单文件，不过 NSIS、不碰用户数据。**新 semver 一律走上面的整包
+流程**——版本号变了 base 就对不上，客户端会自己拒绝。
+
+**载荷按区域 opt-in，这就是本通道的全部价值**（2026-08-27 实测）：
+
+| 区域 | 开关 | 体量 |
+|---|---|---|
+| `app.asar` + `build-info.json` + `shared\`(inject) + `app.asar.unpacked\` | 默认 | **~1.2MB / 8 文件**（壳/渲染/inject 修复都在这） |
+| `services\`（messenger-web / whatsapp-baileys） | `-IncludeServices` | 4700 文件 / 518MB 原始 → **~226MB zip** |
+| `backend\`（PyInstaller 产物） | `-IncludeBackend`（须先 `npm run build:backend`） | 大 |
+| `seed-data\` | `-IncludeSeed` | 中 |
+
+边车真改了就得带 `-IncludeServices`，但 226MB vs 整包 476MB 省得有限——**这种批次
+优先考虑正常发版**。make 每次会打印「哪些区进了、哪些没进」，**发之前读那一行**：
+换了 asar 而配套边车留在旧版＝版本错配运行时，比不打补丁更糟。
+
+1. **打补丁包**（117，不用 `build:backend`，不用改 `package.json` 版本号）：
+   `powershell -File deploy\desktop\make_chatx_hotpatch.ps1 -Fixes B117,B121 -Notes "贴纸不再当照片评论"`
+   ——内部走 `copy-shared` + `write-build-info` + `electron-builder --win dir`（只出
+   `dist\win-unpacked`，跳过 NSIS）；产物 `desktop\dist\hotpatch\ChatX-Hotpatch-<ver>-p<N>.zip`
+   + 同名 manifest + `hotpatch.json` 指针。补丁号 **p1 起自增**（同 base 续号，读指针）。
+   区域开关见上表。手上已有 `dist\win-unpacked` 时可
+   `-SkipDirBuild -FromUnpacked <路径>` 秒出包（改 `-OutDir` 可避免动默认指针）。
+2. **推坐席机**（SSH，默认 yunsheng/kouxing/lianbei）：
+   `powershell -File deploy\desktop\push_chatx_hotpatch.ps1 [-Targets yunsheng] [-Relaunch]`
+   ——scp zip+manifest+落地脚本 → `certutil` 远端核 sha256 → 远端跑 apply。
+3. **发给外部用户**（自助更新的那一半，缺这步只有坐席机拿到）：
+   `powershell -File website\scripts\publish_chatx_hotpatch.ps1 -Yes [-Announce]`
+   ——与 `publish_chatx.ps1` 同一原子序：**先传 zip、VPS 上验 sha256、最后才翻
+   `hotpatch.json` 指针**（指针绝不指向不存在的包）；顺带 R2 镜像 + 公网回验 + 旧包保留 5 份。
+   **不碰 `latest.yml` / `ChatX-Setup-*.exe`**，整包通道完全不受影响。
+4. **客户端行为**（壳内自助，`desktop/hotpatch-apply.js` 决策 + `hotpatch-stage.js` 落地）：
+   开机 90s 首查 + 每 4h + 唤醒补查（仅打包态 Windows）；**整包永远优先**（`latest.yml`
+   有更新 semver → `defer_full`，已暂存的补丁作废）；校验链＝manifest 自洽 → 整包 sha256
+   → 解包 → **逐文件 sha256**，全过才点亮**现有那个**「立即重启更新」横幅（刻意不新建
+   第二套横幅/IPC 桥）。点重启＝先等后端真死（B57），再交脱离进程的 helper 等本壳 PID
+   消失后换文件并拉起。任一步不过＝保持旧文件、横幅不出现，日志 `[hotpatch]`。
+   一键关停：`config.json` 的 `updates.hotpatch: false`（`updates.hotpatch_url` 可改源）。
+
+**引导期**：壳内自助拉取的代码本身在 `app.asar` 里，所以只有**含该能力的安装包**才会
+自己去拉热补丁。存量机（1.0.56 及更早）只能靠第 2 步 SSH 推，或等下一次整包发版；
+第 3 步的公网通道要等那次整包铺开才对外真正生效。
+
+改这套之前先读的硬不变量：
+
+- **落地脚本单一事实源**＝`deploy\desktop\apply_chatx_hotpatch_node.ps1`；壳内那份是
+  `copy-shared.js` 镜像进 `desktop\hotpatch\`（该目录已 gitignore）。**别 fork 第二份**
+  ——两份迟早漂移，漂移那天就是「装了一半的补丁」。
+- **base 不符即拒**（脚本 exit 3）、**补丁号只增不降**、旧文件进
+  `resources\.hotpatch-bak\p<N>`（永远留一次回滚）；用户数据全程不碰。
+- **manifest 规范化后条目数对不上＝整份拒绝**，不做「能套多少套多少」：asar 换了而
+  配套 inject/边车没换，是比不更新更坏的版本错配运行时。
+- 所有 `.ps1` **ASCII-only**（PS 5.1 按 GBK 解码脚本，中文注释＝语法错），壳生成的
+  wrapper 同理；等待参数叫 `$ShellPid` 不叫 `$Pid`（后者是自动变量，param 重名即语法错）。
+- 展示版本缀补丁号（`1.056+p3`），**遥测 `manifest_version` 保持纯 semver**、补丁号走
+  独立 `patch` 字段（老服务端直接丢弃）。
+- 门禁：`cd engines\chengjie\desktop && node test\hotpatch-apply.test.js`（75 断言，含
+  ASCII/顺序/白名单/接线契约），已挂进 `npm test` 链。
+
+## 机器映射（ssh config 由 deploy/machines.json 生成）
+
+坐席集合的单一源是 `deploy/machines.json` 里 `chatx_seat: true` 的机器（`monitor_seat_logs.py`
+也据此取名单与中文名）；改坐席编制先改台账。中文名用台账现名（2026-08-29 改编）。
+
+| 说法 | 别名（旧名仍可用） | 现名 | 系统 | 备注 |
+|---|---|---|---|---|
+| 173 | `yuyan` / `yunsheng` | 语言机 | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
+| 198 | `shijue` / `kouxing` | 视觉机 | Win10 | C 盘小；push <3GB 预检现自带**自动处方**（清旧包+陈旧 scoped_dir，见台账）；另有周清任务 `ChatXSeatTempClean`（SUN 06:40，脚本源 `deploy/desktop/seat_temp_clean.ps1`） |
+| 104 | `shengyin` / `lianbei` | 声音机 | Win10 | |
+
+**140（`jiyi` / `tingxie`，现名记忆机）已不是坐席**：2026-08-29 改编为算力节点（bge-m3 嵌入 :11434 +
+whisper STT :7854），智聊桌面版 2026-08-24 后未再运行、无自启，台账无 `chatx_seat`。不要往它推包，
+也不要把它加回坐席监控；若要重新启用为坐席，先在台账加 `chatx_seat: true`。
+
+## 三档安装语义（都从 117 一条命令发起）
+
+| 目的 | 命令追加参数 | 数据结果 |
+|---|---|---|
+| 日常升级 | `-Install -Relaunch -Smoke` | 全部数据保留 |
+| **清空重装但保登录** | `-FreshInstall -KeepAccounts -Relaunch -Smoke` | 聊天库/缓存/设置清空重播种；**登录态保留**（网页分区+协议会话+账号注册表+sidecar profile+overlay），经 `restore_chatx_accounts_node.ps1` 从 `_bak` 拷回；首启播种只补缺失不覆盖 |
+| 彻底出厂 | `-FreshInstall -Relaunch -Smoke` | 全部清空（账号也没），旧数据留 `%APPDATA%\<dir>_bak<stamp>` 恢复副本 |
+
+`_bak` 恢复副本只许人工删除（wipe 脚本会跳过 `*bak20*`）；节点确认健康后再清。
+
+## 用户侧卸载语义（desktop >= 1.0.45，`build/installer.nsh`）
+
+交互式卸载器新增「数据处置」页：**保留数据（默认）** / **彻底删除**（需勾选不可恢复确认，
+二次确认后删 `%APPDATA%\智聊` + `%APPDATA%\telegram-ai-desktop` + updater 缓存，先按路径
+收割后端/sidecar 进程再删，删后校验残留并如实弹报）。五条契约（C1-C5）钉在
+`desktop/test/uninstall-nsh-invariants.test.js`（挂 npm test + predist 三链）：
+
+| 通道 | 行为 |
+|---|---|
+| 升级链（新装老卸 `/S /KEEP_APP_DATA`） | **绝不删数据**（模板守卫 + nsh 内 `${isUpdated}` 双保险） |
+| `/S` 静默（`uninstall_chatx_node.ps1` 现行） | 只删程序，数据保留（语义不变） |
+| `/S --delete-app-data` | 静默全清（用户机应急通道；坐席机仍走 wipe/backup 脚本——_bak 感知更细） |
+| 交互式选「彻底删除」 | 全清 + 弹结果（成功/残留路径） |
+
+改 `installer.nsh` 前先读其头部 C1-C5 注释；「保留哪些数据」文案与
+`restore_chatx_accounts_node.ps1` keep-list 互为镜像（两边有交叉注释）。
+卸载器实弹测试**禁止用本机账号在 117 跑**（会真卸本机在用坐席端）。要实弹就走隔离测试用户：
+`build\smoke_uninstall.ps1 -Setup <包>` 跑静默通道矩阵（C1/C2/C3/C5），
+`build\smoke_installer_ui.ps1 -Setup <包>` 跑交互向导全程（装到完成页、卸载走「彻底删除」到完成页，
+每页出 PNG；免抢焦点，绝不启动 app）。两者都需要管理员，用 **Windows PowerShell 5.1** 跑；从 pwsh 7
+的终端里启动 powershell.exe 前要把 `PSModulePath` 清成 5.1 的两条路径，否则 5.1 会去加载 pwsh 7 的
+`Microsoft.PowerShell.Security` 模块直接失败（2026-09-05 实锤）。
+
+## 安装器界面/品牌层（desktop >= 1.0.74，2026-09-05）
+
+- 页序：安装 = 欢迎 → [检测到已有数据] → 安装前须知 → 目录（「安装」按钮）→ 进度 → 完成；
+  卸载 = 欢迎 → 保留/删除数据 → 进度 → 完成。「为哪位用户安装」页由 `customInstallMode`
+  强制按用户并跳过（仅旧的全机安装例外）。数据页刻意排在目录页**之前**：NSIS 只给紧邻
+  instfiles 的那一页标「安装」，别把它挪回 `customPageAfterChangeDir`（门禁会红）。
+- 品牌位图：`brand-assets/build_installer_art.py` 生成 `07_installer/*.bmp` 并镜像到
+  `desktop/build/installerSidebar.bmp` / `installerHeader.bmp`（24 位、MUI 标准尺寸 x2，
+  配 `ManifestDPIAware`）。改构图只改脚本重跑，不要手工 P 图。
+- 须知页：改 `desktop/build/installer-notice.zh_CN.txt` / `.en_US.txt`，然后
+  `node build/write-installer-notice.js` 重新生成 `license_zh_CN.rtf` / `license_en_US.rtf`
+  （产物入库；门禁按源文件 sha1 核对新鲜度，忘了重跑会红）。`build.nsis.license` 必须留空。
+- 颜色只许用 `installer.nsh` 顶部的 `CX_C_*` 令牌常量（HTML RRGGBB 顺序；旧的 `0x1F1FBF`
+  「红字」其实是深蓝）；中文界面字体由 `customHeader` 里 `SetFont /LANG=` 覆盖 NLF 的宋体。
+- 元数据：`package.json` 的 `description` / `author` / `build.copyright` 是安装包属性与
+  「应用和功能」发布者栏的来源，保持无界科技口径；**`appId` 绝不能动**（升级链身份）。
+- 形态角标：`write-build-info.js` 顺带写 `build/flavor.nsh`（gitignore），非 clean 形态的向导
+  用 `installerSidebar-internal.bmp` / `installerHeader-internal.bmp`（琥珀「内测版」胶囊）并在
+  品牌栏加「· 内测版」；文件缺失按内测处理（角标常亮）。所以**对外干净包必须走
+  `npm run dist:win:clean`**（predist 写入 clean），直接 `electron-builder` 出的包一律带角标。
+- 清数据结果不再弹窗：卸载/安装完成页的标题与正文是变量（`$cxUnFinMsg` / `$cxInsFinMsg`），
+  wipe 分支把「已全部清除」或「残留路径 + 下次登录自动清除」写进去；残留会触发 MUI 重启
+  变体页，默认选「稍后重启」。静默通道仍靠 DetailPrint + `%TEMP%\chatx_wipe.log`。
+- 以上全部钉在 `test/uninstall-nsh-invariants.test.js`；改完只想看界面不想跑 predist 门禁时，
+  `set CHATX_ALLOW_STANDARD=1&& npx electron-builder --win -c.directories.output=dist-uitest`
+  出一个临时包，走到目录页截图后取消即可（不点「安装」不落任何文件），完事删 `dist-uitest`。
+  要看英文界面再加 `-c.nsis.displayLanguageSelector=true`（多出语言选择框，选 English），
+  正式包不要带这个开关。向导语言跟随系统：`installerLanguages` 里 **en_US 排第一**是刻意的——
+  NSIS 匹配不到系统语言时用第一个语言，中文系统照样精确命中中文，海外非英语系统回落英文。英文文案比中文长 ~1.6 倍，门禁钉了 keep-detail ≤150 字符、欢迎页
+  bullet ≤54 字符（2026-09-05 英文实机截图曾溢出被截）。
+
+## 173 专属坑（每次都撞，按此处置）
+
+- `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发；**2026-08-17 实测 Win10/.198 也抖过一次、重试第 2 次即成——不是 Win11 专属，重试机制勿删**），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。
+- push 整体失败→**立刻原样重推**（历史最多两轮必成）。install 是先卸旧再装新，失败时机器处于**无安装状态**，绝不能放着收工。
+- 别 RDP 手点安装、别中途 kill、别删脚本重试逻辑。
+
+### 173 第三坑：静默安装器卡死在 CopyFiles（2026-09-17 发 1.0.87 实测）
+
+- **与 System.dll 0xC0000005 是两码事**：进程不崩、CPU≈0、`Responding=True`，`$PLUGINSDIR\7z-out` 已解完（~9118 文件 / 1.28GB），却永远不写入 `%LOCALAPPDATA%\Programs\telegram-ai-desktop`。NSIS `CopyFiles` = `SHFileOperation(FO_COPY)`；同树 `robocopy` 6 秒完成。bisect：`locales` 55 文件 OK，`resources\backend`（2958）/`resources\services`（6077）对 SHFileOperation 挂死。Defender RTP 开关不影响。
+- **已内建自愈（2026-09-17 当晚落 `install_chatx_node.ps1` 步骤 4）**：安装器不再 `-Wait` 死等，改 watchdog 轮询——7z-out 与 INSTDIR 字节、stub CPU 三者同时 **120s 不变** 且 7z-out 非空 ＝ CopyFiles 挂死 → `Complete-FromExtracted`：核 `build-info.json` version == 安装包版本、树体积 ≥ 压缩包（半棵树不装）、树 5s 内不再变 → 杀 stub → `robocopy /MIR` 进 INSTDIR（旧文件镜像掉）→ 核文件数/字节相等 → 写 HKCU `Uninstall\1c379198-…`（= uuid5(appId)，与安装器同键；不写悬空 UninstallString，落 `ChatXManualInstall` 标记）→ 桌面/开始菜单快捷方式 → 清本次 `ns*.tmp`。日志行 `installer exit=(bypassed: robocopy from extracted tree)` 与末尾 `install path: robocopy bypass` 即走了旁路。完全无解包 20 分钟 ＝ 杀掉当作一次崩溃重试。静态不变量：`tests/test_install_node_script_invariants.py`；行为用临时 harness 抽真函数体/真 for 循环对假 stub 验过（旁路三态 + 硬顶杀四轮）。
+- 人工处置（脚本旁路也失败时）：同上逻辑手做——确认 7z-out 对版 → 杀所有 `ChatX-Setup*` → `robocopy` → 注册表 → 快捷方式 → `relaunch_chatx_node.ps1` + `verify_seat_backend_node.ps1`。**不要**再叠第四次 SSH `/S`（只会再攒一份 ns*.tmp，~20GB）。
+- 控制台会话 `/IT` 计划任务在 Win11 26200.9168 上也可能 LastResult=0x1 不跑；此坑不能指望「静默 4 次失败后自动兜底」，靠的是上面的旁路。
+- 旁路装出的机器**没有 Uninstall 智聊.exe**：下次升级 `uninstallOldVersion` 找不到卸载器会跳过并直接覆盖（脚本步骤 3 也是 `uninstaller missing, skip`），若再挂死则再次旁路 `/MIR`——语义仍正确。
+
+### 173 第二坑：装后「smoke 过 → 几分钟内 DOWN」＝残留旧后端抢端口（2026-08-13 发 1.0.25 实测两轮复现；**2026-08-17 已根修**）
+
+- **与上面的 NSIS 崩溃是两码事**（安装本身 exit=0）。机制：安装周期没杀干净**上一版的后端 sidecar**（`run_sentinel.json` 的 `started_at` 早于本次安装、`beat_at` 仍在跳＝铁证）→ 新壳的后端绑 18799 失败即退 → 旧后端随后寿终 → fleet 报 `exe only (backend not serving)`（沙箱 smoke 用随机端口看不见这病）。
+- **根修已落**（2026-08-17 发 1.0.38 于 173 连装两轮实弹验证）：
+  ① `install_chatx_node.ps1` 步骤 2b「收割-验证-端口预检」：Stop-Process 后按路径+端口双面收割幸存者（`taskkill /T /F` 走不同权限路径），三轮后仍有残留/18799 仍被占 → **exit 5 拒装**（外来进程占端口只点名不杀）；
+  ② `push_chatx.ps1` 步骤 4.5 坐席新鲜度终验（新 exit 10）：拉起前取目标机时钟 → `verify_seat_backend_node.ps1` 轮询真坐席 `run_sentinel.json`，**started_at 必须晚于本次安装**（旧后端顶包=exit 1 立刻现形）+ 18799 真答 /login 200 才放行。
+- 旧的人工处置（杀壳→ChatXKick 计划任务拉起→fleet 复验）仍适用于**存量机器**上偶发的同型事故；新发版流程已不需要。
+- 2026-08-17 顺带实锤：**安装脚本内建的控制台会话兜底首次在真实发版中生效**（173 静默 4 连崩 → 兜底一次装成，两轮都是），此前它只被独立探针验证过。
+
+## 坐席显示标准（2026-08-17 .173「工具栏消失」事故沉淀）
+
+- **标准**：4K（3840x2160）面板一律 **200%**（逻辑 1920x1080）；1080p 面板 100%。逻辑高度 **≥800px** 是硬底线——低于它，收件箱 composer 工具栏（AI回复/语音/媒体/翻译）会被挤到折叠线以下，坐席看起来像「按钮全没了」，零代码故障。Windows 对 4K 的「推荐」是 300%（逻辑 1280x720）＝必踩，新机开机就要改。
+- **远程改缩放（免注销免 RDP）**：`deploy\desktop\set_seat_scale.ps1 -TargetSsh <node> -Scale 200 [-RestartApp|-StartApp]`——经控制台会话计划任务用 `DisplayConfigSetDeviceInfo` 现场生效（`SystemParametersInfo(SPI_SETLOGICALDPIOVERRIDE)` 在 Win11 26200 静默无效，别回去用）；`-RestartApp` 只重启壳 UI 保后端。截图留在坐席本机 `%USERPROFILE%\Downloads\chatx\seat_scale_after.png`（**不自动回传**，要看就 scp 拉回）；窗口是否真最大化用 `deploy\desktop\_winrect_probe_remote.ps1`（/IT 任务读 GetWindowRect+IsZoomed，全屏截图分不清「最大化」与「底部被裁」）。1.0.39 起壳自带 win-fit：逻辑桌面高 <820 自动最大化 + 写 `%APPDATA%\telegram-ai-desktop\display-metrics.json` 面包屑（缩放变化事件驱动自动刷新，fleet/push 探针优先读它）。
+- **观测三层**：① fleet 台账 `display` 列（逻辑 WxH@scale%；`*`=带活覆盖的推算值，无标=壳面包屑精确值；SMALL DESKTOP 点名）；② `push_chatx -Install` 步骤 4.6 装后自动查一次（warning-only 不拦发版）；③ 壳 >=1.0.39 落 `%APPDATA%\智聊\display-metrics.json` 面包屑（Chromium 实测真值，探针优先读、与当前 GPU 模式核对防陈旧）。
+- **诊断口径**：SSH 会话里所有会话级显示 API 都撒谎（WinForms 见幻影 1024x768；QueryDisplayConfig 0 路径）——远程判显示问题只信 CIM 物理分辨率 + 注册表 AppliedDPI/DpiValue 推算，或壳面包屑；要看真渲染用 `schtasks /IT` 进控制台会话截图。
+
+## 踩过的坑台账（改这套工具/流程前先读）
+
+- **fleet 参数**：`powershell -File xx.ps1 -Targets a,b,c` 绑成单字符串→全队显示 unreachable 假象；脚本已自拆逗号，但报「未安装/不可达」时先怀疑调用方式再怀疑机器。
+- **磁盘**：每次发版在暂存目录攒 476MB；198 曾剩 2.5GB 装不进。**真根因（2026-08-17 实锤）不是旧安装包**：
+  Chromium webview 的下载暂存尸体 `%TEMP%\scoped_dir*` 从不自清——198 实测 45 个共 ~69GB（删旧包只回 0.5GB，
+  清尸体 2.5→71GB）。现三层机制：① push <3GB 预检**先自动处方**（清「非本次版本」旧包 + >24h 陈旧 scoped_dir，
+  复查仍 <3GB 才 exit 8）；② fleet 台账带 `diskGB` 列（<10GB 标 LOW DISK）＝发版间隙的被动观测；③ 仅小盘机
+  198 注册周清任务 `ChatXSeatTempClean`（>7 天 scoped_dir + 旧包保最新，日志 `Downloads\chatx\seat_temp_clean.log`）。
+  173/104 盘大（400GB+）刻意不装任务——数据点名再扩。清理绝不碰 `*bak20*` 恢复副本与业务数据。
+- **本机(117)也装着智聊坐席端**：测试任何带「杀 telegram-ai-desktop 进程」步骤的节点脚本，必须用合成 `-AppDataRoot`（restore 脚本对非真实 APPDATA 自动不杀进程——2026-08-13 曾误杀 117 在用的智聊）。
+- **PS 引号**：远程命令用单引号外壳内嵌 `\"`；多行提交信息用 here-string 写临时文件 `git commit -F`（bash heredoc 在 PowerShell 必炸）。
+- **验证**：升级/重装后一律 fleet 台账终验运行版本，不要只看 smoke OK。

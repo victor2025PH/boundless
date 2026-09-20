@@ -5,7 +5,7 @@ import { useLang } from "./LanguageContext";
 import { track } from "@/lib/track";
 import { Lock, Unlock, Plus, Trash2 } from "lucide-react";
 
-/** 通译术语锁定小演示：展示「有术语表 vs 无术语表」的翻译差，不调 API，纯前端对照。 */
+/** 术语锁定小演示（智聊内置翻译能力）：展示「有术语表 vs 无术语表」的翻译差，不调 API，纯前端对照。 */
 const SEED = {
   zh: [
     { src: "BOUNDLESS Engine", locked: "BOUNDLESS Engine", unlocked: "无边界引擎" },
@@ -82,7 +82,7 @@ export default function GlossaryLockDemo() {
         </div>
         <span className="shrink-0 rounded-full border border-amber-400/25 bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
           <Lock className="mr-1 inline h-3 w-3" />
-          LingoX
+          ChatX
         </span>
       </div>
 

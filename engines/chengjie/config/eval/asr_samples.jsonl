@@ -1,0 +1,8 @@
+# ASR 评测金标清单（ASR P1，2026-09-12）。每行 JSON：{"audio", "ref", "lang", "tags", "note"}
+# audio 相对路径按本文件所在目录解析；音频不存在的行评测时跳过并计入 skipped。
+# 坐席改正台账（数据根 config/asr_corrections.jsonl）由 asr_eval 自动并入，不必抄进来。
+# 用法：python -m scripts.run_eval --asr [--json] [--dataset 另一份清单]
+# ⚠ ref 必须是人耳核对过的逐字稿；下面探针夹具的 ref 取自 assets/probe/asr_probe.txt（TTS 参考音
+#   sidecar），而 198 whisper-turbo 稳定转出「嗯嗯今天天氣不錯啊」——两者哪个对需要人耳裁决
+#   （tags 标 ref_unverified，核对后去掉标签或改 ref）。
+{"audio": "../../assets/probe/asr_probe.wav", "ref": "你好你好，今天天气不错", "lang": "zh", "tags": ["probe", "ref_unverified"], "note": "true_probe asr 域夹具；whisper-turbo 实测转出「嗯嗯今天天氣不錯啊」"}

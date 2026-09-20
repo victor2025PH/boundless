@@ -1,0 +1,198 @@
+# -*- coding: utf-8 -*-
+"""账号资产中心词条（账号资产保全 P1，2026-08-19）。
+
+覆盖 workspace_assets.html 全部 UI（总览 KPI / 账号资产卡 / 可加回句柄堆叠条 /
+快照·导出台账）+ nav 入口。按词条单源规则进 pack（勿往 web_i18n.py 单体加键）；
+键前缀 ``ac_``，新建前已确认全库唯一。ZH/EN 键一一对应，由
+``test_i18n_packs_bilingual_and_no_collision`` 门禁钉住。
+"""
+
+ZH = {
+    # ── 入口 / 页头 ──
+    "ac_nav": "账号资产中心",
+    "ac_title": "账号资产中心",
+    "ac_sub": "每个账号沉淀了多少会话、消息、联系人一目了然；账号被封时数据仍在这里，可随时导出、迁移。",
+    "ac_refresh": "刷新",
+    "ac_loading": "正在盘点资产…",
+    "ac_load_fail": "加载失败，请稍后重试",
+    # ── 总览 KPI ──
+    "ac_kpi_accounts": "账号",
+    "ac_kpi_banned": "封禁",
+    "ac_kpi_convs": "会话",
+    "ac_kpi_msgs": "消息",
+    "ac_kpi_contacts": "联系人（各账号累计）",
+    "ac_kpi_media": "媒体文件",
+    "ac_backup_last": "最近备份",
+    "ac_backup_none": "暂无备份记录",
+    # ── 账号卡：状态徽章 ──
+    "ac_st_banned": "已封禁",
+    "ac_st_online": "在线",
+    "ac_st_offline": "离线",
+    "ac_st_pending": "待接入",
+    "ac_st_removed": "已移除",
+    "ac_st_history": "仅历史",
+    # ── 账号卡：数字与元信息 ──
+    "ac_n_convs": "会话",
+    "ac_n_msgs": "消息",
+    "ac_n_contacts": "联系人",
+    "ac_last_active": "最近活跃",
+    "ac_media_files": "媒体",
+    # ── 可加回句柄 ──
+    "ac_reach_title": "可加回句柄覆盖",
+    "ac_reach_hint": "按会话档案身份列（用户名/手机号）统计的私聊客户覆盖——迁移建联清单的口径",
+    "ac_lg_both": "双句柄",
+    "ac_lg_user": "仅用户名",
+    "ac_lg_phone": "仅手机号",
+    "ac_lg_none": "无句柄",
+    # ── CTA ──
+    "ac_cta_export": "导出记录",
+    "ac_cta_migrate": "导出迁移包",
+    "ac_migrate_pending": "迁移包导出待上线（可先导出记录）",
+    "ac_exporting": "导出中…",
+    "ac_export_ok": "导出完成",
+    "ac_export_fail": "导出失败",
+    # ── 台账 ──
+    "ac_ledger_title": "快照 / 导出台账",
+    "ac_ledger_empty": "暂无导出、快照记录（导出记录或触发封号自动快照后此处留痕）",
+    "ac_col_time": "时间",
+    "ac_col_acct": "平台 / 账号",
+    "ac_col_kind": "类型",
+    "ac_col_result": "结果",
+    "ac_col_detail": "明细",
+    "ac_k_export": "历史导出",
+    "ac_k_purge": "历史清除",
+    "ac_k_migration": "迁移包导出",
+    "ac_k_snapshot": "自动快照",
+    # ── 账号身份可读化（P0，2026-08-28）──
+    # 长字串是平台自己的账号标识（LINE 的 44 字 MID / Messenger 的 FB 数字 id），
+    # 不是乱码；卡片主标题走「别名 > 平台昵称 > @用户名 > 脱敏 id」四级回落。
+    "ac_id_copy": "复制完整 ID",
+    "ac_id_copied": "已复制账号 ID",
+    "ac_id_copy_fail": "复制失败，请手动选中",
+    "ac_name_it": "起个名字",
+    "ac_name_it_t": "这个账号还没有别名，显示的是平台自己的账号标识",
+    "ac_rename_prompt": "给这个账号起个便于识别的名字（留空＝清除别名）",
+    "ac_rename_ok": "已更新名字",
+    "ac_rename_fail": "改名失败",
+    # ── 卡片动作 ──
+    "ac_more": "更多操作",
+    "ac_cta_rename": "重命名",
+    "ac_cta_restore": "恢复账号",
+    "ac_restore_confirm": "把「{name}」恢复为「已退出」状态？恢复后可重新登录。",
+    "ac_restore_ok": "已恢复，可重新登录",
+    "ac_restore_fail": "恢复失败",
+    "ac_cta_purge": "彻底删除",
+    "ac_cta_purge_t": "删除该账号在本机的全部会话与消息（不可恢复）",
+    "ac_purge_confirm1": "彻底删除「{name}」？将清除 {c} 个会话、{m} 条消息，且无法恢复。",
+    "ac_purge_confirm1_unknown": "彻底删除「{name}」？将清除该账号在本机的全部会话与消息，且无法恢复。",
+    "ac_purge_confirm2": "最后确认：数据删除后找不回来。建议先点「导出记录」或「导出迁移包」留一份备份。",
+    "ac_purge_go": "确认删除",
+    "ac_purge_ok": "已删除 {n} 行数据",
+    "ac_purge_fail": "删除失败",
+    "ac_purge_blocked": "该账号仍在线或在册，不能从这里删除；请先在收件箱把它登出",
+    "ac_purge_unready": "该功能需要服务端更新后可用",
+    "ac_no_perm": "权限不足（需要主管及以上）",
+    "ac_cancel": "取消",
+    "ac_busy": "处理中…",
+    # ── 口径诚实化（0% 不加解释会被读成「客户全丢了」）──
+    "ac_reach_nohandle": "该平台的会话不提供用户名/手机号，0% 是口径必然而非资产丢失；迁移需靠跨渠道锚点或人工确认",
+    "ac_reach_derived": "其中 {n} 人的号码由会话标识推出（该平台用号码寻址，可直接加回）",
+    "ac_note_media": "每账号「媒体」= 带附件的消息数；总览的媒体文件数 = 磁盘实际文件数，两者口径不同",
+    "ac_note_contacts": "各账号相加，同一个人在多个账号上会重复计数",
+    # ── 空态 ──
+    "ac_cards_empty": "暂无账号资产——接入渠道并开始收发消息后，这里会按账号呈现全部沉淀。",
+}
+
+EN = {
+    # ── nav / header ──
+    "ac_nav": "Account Assets",
+    "ac_title": "Account Asset Center",
+    "ac_sub": "See what each account has accumulated — chats, messages, contacts. If an account gets banned, the data stays here and can be exported or migrated at any time.",
+    "ac_refresh": "Refresh",
+    "ac_loading": "Taking inventory…",
+    "ac_load_fail": "Failed to load, please retry later",
+    # ── overview KPIs ──
+    "ac_kpi_accounts": "Accounts",
+    "ac_kpi_banned": "banned",
+    "ac_kpi_convs": "Conversations",
+    "ac_kpi_msgs": "Messages",
+    "ac_kpi_contacts": "Contacts (sum per account)",
+    "ac_kpi_media": "Media files",
+    "ac_backup_last": "Last backup",
+    "ac_backup_none": "No backups yet",
+    # ── status badges ──
+    "ac_st_banned": "Banned",
+    "ac_st_online": "Online",
+    "ac_st_offline": "Offline",
+    "ac_st_pending": "Pending",
+    "ac_st_removed": "Removed",
+    "ac_st_history": "History only",
+    # ── card numbers / meta ──
+    "ac_n_convs": "Chats",
+    "ac_n_msgs": "Messages",
+    "ac_n_contacts": "Contacts",
+    "ac_last_active": "Last active",
+    "ac_media_files": "Media",
+    # ── reachability ──
+    "ac_reach_title": "Re-addable handle coverage",
+    "ac_reach_hint": "Private-chat customers with username/phone on file (conversation identity columns) — the migration outreach list",
+    "ac_lg_both": "Both",
+    "ac_lg_user": "Username only",
+    "ac_lg_phone": "Phone only",
+    "ac_lg_none": "No handle",
+    # ── CTAs ──
+    "ac_cta_export": "Export history",
+    "ac_cta_migrate": "Export migration kit",
+    "ac_migrate_pending": "Migration export not deployed yet (history export works now)",
+    "ac_exporting": "Exporting…",
+    "ac_export_ok": "Export done",
+    "ac_export_fail": "Export failed",
+    # ── ledger ──
+    "ac_ledger_title": "Snapshot / export ledger",
+    "ac_ledger_empty": "No exports or snapshots yet — history exports and auto snapshots on ban will show up here.",
+    "ac_col_time": "Time",
+    "ac_col_acct": "Platform / account",
+    "ac_col_kind": "Type",
+    "ac_col_result": "Result",
+    "ac_col_detail": "Detail",
+    "ac_k_export": "History export",
+    "ac_k_purge": "History purge",
+    "ac_k_migration": "Migration export",
+    "ac_k_snapshot": "Auto snapshot",
+    # ── account identity readability (P0, 2026-08-28) ──
+    "ac_id_copy": "Copy full ID",
+    "ac_id_copied": "Account ID copied",
+    "ac_id_copy_fail": "Copy failed — please select it manually",
+    "ac_name_it": "Name it",
+    "ac_name_it_t": "This account has no alias yet, so the platform's own identifier is shown",
+    "ac_rename_prompt": "Give this account a recognisable name (empty = clear the alias)",
+    "ac_rename_ok": "Name updated",
+    "ac_rename_fail": "Rename failed",
+    # ── card actions ──
+    "ac_more": "More actions",
+    "ac_cta_rename": "Rename",
+    "ac_cta_restore": "Restore account",
+    "ac_restore_confirm": "Restore \"{name}\" to the \"signed out\" state? You can log in again afterwards.",
+    "ac_restore_ok": "Restored — you can log in again",
+    "ac_restore_fail": "Restore failed",
+    "ac_cta_purge": "Delete permanently",
+    "ac_cta_purge_t": "Delete every conversation and message this account holds locally (cannot be undone)",
+    "ac_purge_confirm1": "Permanently delete \"{name}\"? This removes {c} conversations and {m} messages, and cannot be undone.",
+    "ac_purge_confirm1_unknown": "Permanently delete \"{name}\"? This removes every conversation and message this account holds locally, and cannot be undone.",
+    "ac_purge_confirm2": "Final confirmation: deleted data cannot be recovered. Consider exporting the history or a migration kit first.",
+    "ac_purge_go": "Confirm deletion",
+    "ac_purge_ok": "Deleted {n} rows",
+    "ac_purge_fail": "Deletion failed",
+    "ac_purge_blocked": "This account is still online or registered and cannot be deleted here — sign it out from the inbox first",
+    "ac_purge_unready": "This needs a server update before it works",
+    "ac_no_perm": "Insufficient permissions (supervisor or above required)",
+    "ac_cancel": "Cancel",
+    "ac_busy": "Working…",
+    # ── honest calibers (an unexplained 0% reads as \"all customers lost\") ──
+    "ac_reach_nohandle": "This platform's conversations carry no username or phone, so 0% is a measurement limit rather than lost assets; migration needs a cross-channel anchor or manual confirmation",
+    "ac_reach_derived": "{n} of these numbers were derived from the conversation identifier (this platform addresses users by number, so they can be re-added directly)",
+    "ac_note_media": "Per-account \"Media\" counts messages with attachments; the overview counts actual files on disk — different calibers",
+    "ac_note_contacts": "Summed per account; the same person on several accounts is counted more than once",
+    # ── empty states ──
+    "ac_cards_empty": "No account assets yet — connect a channel and start messaging; everything accumulates here per account.",
+}

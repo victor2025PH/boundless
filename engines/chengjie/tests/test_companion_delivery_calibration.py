@@ -44,11 +44,24 @@ def test_verdict_inactive_with_autoai_ready():
 # ── verdict: misconfigured（deliver 开但发不出）──────────────────────────────
 
 def test_verdict_misconfigured_deliver_on_no_autoai():
-    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": True}}}
+    # 全局默认档非全自动（review）时才成立「无 auto_ai=发不出」（2026-08-22 起）
+    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": True},
+                     "auto_draft": {"automation_mode": "review"}}}
     rep = delivery_calibration(cfg, {"c1": "review"})
     assert rep["verdict"] == "misconfigured"
     assert rep["will_send_now"] is False
     assert any("无 auto_ai 会话" in w for w in rep["warnings"])
+
+
+def test_verdict_effective_global_auto_ai_zero_convs():
+    """B37 修复读侧：全局默认档=auto_ai（缺省）→ 零显式会话也算 effective
+    （新会话首条入站 bootstrap 即全自动，真发人群随入站诞生）。"""
+    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": True}}}
+    rep = delivery_calibration(cfg, {})
+    assert rep["verdict"] == "effective"
+    assert rep["will_send_now"] is True
+    assert rep["global_auto_ai"] is True
+    assert not any("无 auto_ai 会话" in w for w in rep["warnings"])
 
 
 def test_verdict_misconfigured_worker_off():

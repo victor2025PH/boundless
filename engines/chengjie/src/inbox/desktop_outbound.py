@@ -35,6 +35,14 @@ _DEFAULT_DB = os.path.join("config", "desktop_outbound.db")
 
 # claimed 但迟迟未 ack（桌面壳崩溃/页面被关）→ 超过此秒数自动回收为 pending 可重取
 _RECLAIM_AFTER_SEC = 180.0
+# 认领次数上限：超过即判 failed（进人审队列），不再无限回收重取。
+#
+# 「不 ack ⇒ 回收重取」本身是好设计（桌面壳崩溃/注入还没装载都能自愈），但它**必须有底**：
+# 客户端 2026-08-10 起改为「拿不到注入送达证据就不 ack」，若某账号的注入永久失效
+# （平台改版把选择器全打飞、或那个平台压根没有选择器档案），同一条命令会每 180s 被
+# 认领一次、attempts 无上限地涨，而运营在队列里只看到「一直 claimed」永远等不到定论。
+# 给个上限后，最坏 6 次(~18min) 就落成 failed + reason，出现在人审队列里可被看见/重试。
+_MAX_ATTEMPTS = 6
 # 已终态（sent/failed）保留天数，enqueue 时顺手清理，防表无限增长
 _RETENTION_SEC = 7 * 86400.0
 # 人审纠正样本（AI 失误数据资产）保留更久——供 prompt/KB 离线调优，但仍设上限防无限增长
@@ -123,7 +131,13 @@ class DesktopOutboundQueue:
                     attempts INTEGER DEFAULT 0,
                     created_at REAL,
                     claimed_at REAL,
-                    acked_at REAL
+                    acked_at REAL,
+                    media_url TEXT DEFAULT '',
+                    media_ref TEXT DEFAULT '',
+                    duration_ms INTEGER DEFAULT 0,
+                    inbox_text TEXT DEFAULT '',
+                    sender_name TEXT DEFAULT '',
+                    reply_group TEXT DEFAULT ''
                 )
                 """
             )
@@ -158,6 +172,20 @@ class DesktopOutboundQueue:
                         + _col + " TEXT DEFAULT ''")
                 except Exception:
                     pass  # 已存在 → 忽略
+            # 媒体命令（2026-09-19 微信 PC 语音）：``kind='voice'`` 时 ``text`` 是念稿（转写/预览），
+            # 音频在 ``media_url``（后端 /static URL，驱动按 token 拉取）/ ``media_ref``（同机本地路径）。
+            # ``duration_ms`` 由 staging 探测（微信 60s 硬顶在入队前按真实时长判，不按字数）；
+            # ``inbox_text``/``sender_name`` 是 ack 成功后镜像进收件箱出站行用的（谁的音色念了什么）。
+            # ``reply_group``（P2 分条节奏）：同一稿子拆出的多条命令共享一个组号；驱动据此把条间间隔从
+            # min_gap（20s）换成几秒的「连发」节奏。空＝独立命令。
+            for _col, _decl in (("media_url", "TEXT DEFAULT ''"), ("media_ref", "TEXT DEFAULT ''"),
+                                ("duration_ms", "INTEGER DEFAULT 0"), ("inbox_text", "TEXT DEFAULT ''"),
+                                ("sender_name", "TEXT DEFAULT ''"), ("reply_group", "TEXT DEFAULT ''")):
+                try:
+                    self._conn.execute(
+                        "ALTER TABLE desktop_outbound ADD COLUMN " + _col + " " + _decl)
+                except Exception:
+                    pass
 
     # ── 写入：受控入队 ────────────────────────────────────────────────
     def enqueue(
@@ -175,12 +203,21 @@ class DesktopOutboundQueue:
         guard: Optional[GuardFn] = None,
         hold: bool = False,
         now: Optional[float] = None,
+        media_url: str = "",
+        media_ref: str = "",
+        duration_ms: int = 0,
+        inbox_text: str = "",
+        sender_name: str = "",
+        reply_group: str = "",
     ) -> Dict[str, Any]:
         """受控入队：先过闸门，通过才落库。
 
         ``hold=False``（默认）→ 落 ``pending``（可被 pull 自动发）；
         ``hold=True``（人审模式 review_mode）→ 落 ``held``（pull 不认领，等运营「放行」才转 pending）。
         **闸门恒在入队前执行**（即便 hold）——held 命令也是已过 Kill-Switch/反封号的，放行=发送已审命令。
+
+        ``kind="voice"``：``text`` 为念稿（人审看的转写），必须带 ``media_url`` 或 ``media_ref``
+        （否则 ``blocked="voice_missing_media"``）；``duration_ms`` 是 staging 探到的真实时长。
 
         返回 ``{"enqueued": True, "id": <int>, "status": "pending"|"held"}``，或被拦截时
         ``{"enqueued": False, "blocked": "kill_switch:.../send_gate:..."}``。
@@ -190,10 +227,19 @@ class DesktopOutboundQueue:
         a = str(account_id or "")
         ck = str(chat_key or "")
         body = str(text or "").strip()
+        k = str(kind or "text").strip().lower() or "text"
+        murl = str(media_url or "").strip()
+        mref = str(media_ref or "").strip()
         if not p or not a or not ck:
             return {"enqueued": False, "blocked": "missing_key"}
         if not body:
             return {"enqueued": False, "blocked": "empty_text"}
+        if k == "voice" and not (murl or mref):
+            return {"enqueued": False, "blocked": "voice_missing_media"}
+        try:
+            dur = max(0, int(duration_ms or 0))
+        except (TypeError, ValueError):
+            dur = 0
         # ★ 受控不变式：入队前必过闸门（Kill-Switch 恒查 + 反封号闸门按开关）
         g = guard or _default_guard
         try:
@@ -211,10 +257,12 @@ class DesktopOutboundQueue:
             cur = self._conn.execute(
                 "INSERT INTO desktop_outbound "
                 "(platform, account_id, chat_key, conversation_id, text, kind, "
-                " draft_id, status, attempts, created_at) "
-                "VALUES (?,?,?,?,?,?,?, ?, 0, ?)",
-                (p, a, ck, str(conversation_id or ""), body, str(kind or "text"),
-                 str(draft_id or ""), status, ts),
+                " draft_id, status, attempts, created_at, "
+                " media_url, media_ref, duration_ms, inbox_text, sender_name, reply_group) "
+                "VALUES (?,?,?,?,?,?,?, ?, 0, ?, ?,?,?,?,?,?)",
+                (p, a, ck, str(conversation_id or ""), body, k,
+                 str(draft_id or ""), status, ts,
+                 murl, mref, dur, str(inbox_text or ""), str(sender_name or ""), str(reply_group or "")),
             )
             rid = int(cur.lastrowid or 0)
         return {"enqueued": True, "id": rid, "status": status}
@@ -235,7 +283,9 @@ class DesktopOutboundQueue:
         会话、不会按 chat_key 导航；客户端按「当前打开会话」拉取，其余命令留队列等会话打开，
         既不丢、也**绝不发错聊天**（防封号/防串话的关键安全闸）。
 
-        认领前先回收**超时未 ack** 的 claimed（桌面壳崩溃/页面关闭），避免命令卡死。
+        认领前先回收**超时未 ack** 的 claimed（桌面壳崩溃/页面关闭），避免命令卡死；
+        并把认领次数已达 ``_MAX_ATTEMPTS`` 的判成 failed（见该常量注释：给「不 ack 即重取」
+        兜个底，否则注入永久失效时同一条命令会无限重取且永远等不到定论）。
         """
         p = str(platform or "").lower()
         a = str(account_id or "")
@@ -249,6 +299,12 @@ class DesktopOutboundQueue:
                 "WHERE platform=? AND account_id=? AND status='claimed' "
                 "AND claimed_at IS NOT NULL AND (? - claimed_at) > ?",
                 (p, a, ts, _RECLAIM_AFTER_SEC),
+            )
+            # 重取已到顶的 → 判死，进人审（放在回收之后：刚回收的这轮也一并结算）
+            self._conn.execute(
+                "UPDATE desktop_outbound SET status='failed', reason=?, acked_at=? "
+                "WHERE platform=? AND account_id=? AND status='pending' AND attempts>=?",
+                ("max_attempts", ts, p, a, _MAX_ATTEMPTS),
             )
             sql = ("SELECT * FROM desktop_outbound "
                    "WHERE platform=? AND account_id=? AND status='pending'")
@@ -569,7 +625,15 @@ class DesktopOutboundQueue:
     # ── 内部 ─────────────────────────────────────────────────────────
     @staticmethod
     def _row_to_item(r: sqlite3.Row) -> Dict[str, Any]:
-        return {
+        keys = set(r.keys())
+
+        def _col(name: str, default: Any = "") -> Any:
+            if name not in keys:
+                return default
+            v = r[name]
+            return default if v is None else v
+
+        item = {
             "id": int(r["id"]),
             "platform": r["platform"],
             "account_id": r["account_id"],
@@ -581,7 +645,17 @@ class DesktopOutboundQueue:
             "status": r["status"],
             "attempts": int(r["attempts"] or 0),
             "created_at": r["created_at"],
+            "media_url": str(_col("media_url")),
+            "media_ref": str(_col("media_ref")),
+            "inbox_text": str(_col("inbox_text")),
+            "sender_name": str(_col("sender_name")),
+            "reply_group": str(_col("reply_group")),
         }
+        try:
+            item["duration_ms"] = int(_col("duration_ms", 0) or 0)
+        except (TypeError, ValueError):
+            item["duration_ms"] = 0
+        return item
 
     def _prune(self, now: float) -> None:
         """清理超龄终态记录（best-effort，调用方已持/未持锁均安全：内部自锁）。"""

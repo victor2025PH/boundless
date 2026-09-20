@@ -17,6 +17,14 @@ from src.inbox.drafts import DraftService
 from src.inbox.store import InboxStore
 
 
+@pytest.fixture(autouse=True)
+def _legacy_enforce_policy(monkeypatch):
+    """#160 v2（2026-09-04）起默认 ``policy_mode=shadow``（风险不降档、全放行、只写台账）。
+    本文件「生成正文二次风控只升不降 → L4」钉的是旧语义＝``enforce`` 档骨架，显式切
+    enforce 跑，兼作反向验证。shadow 行为见 ``tests/test_drafts_risk_policy.py``。"""
+    monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
+
+
 @pytest.fixture
 def store(tmp_path):
     s = InboxStore(tmp_path / "enrich.db")
@@ -201,3 +209,41 @@ def test_release_enriching_also_clears_stale_final_text(store):
     svc.auto_generate_draft(_conv(), "在忙吗？", automation_mode="auto_ai", enrich=True)
     assert svc.release_enriching_draft(did) is True
     assert store.get_draft(did)["final_text"] == ""
+
+
+# ── draft_ready 事件（2026-09-19：停泊稿翻 pending 那一刻工作台要能刷草稿条）──────
+
+def _events_of(kind: str):
+    from src.integrations.shared.event_bus import get_event_bus
+    return [e for e in get_event_bus().recent_events(50) if e.get("type") == kind]
+
+
+def test_enrich_draft_publishes_draft_ready(store):
+    """draft_created 发布时稿还是 enriching（前端拉 status=pending 为空）；enrich 收尾落成
+    pending 必须再发 draft_ready，否则开着会话的坐席永远等不到草稿条。"""
+    svc = _svc(store)
+    before = len(_events_of("draft_ready"))
+    did = svc.auto_generate_draft(_conv(), "两个多少钱？", automation_mode="review", enrich=True)
+    assert len(_events_of("draft_ready")) == before          # 停泊时不发
+    assert svc.enrich_draft(did, reply_text="两个 168，今天下单明天发。", reply_lang="zh",
+                            automation_mode="review") is True
+    evs = _events_of("draft_ready")
+    assert len(evs) == before + 1
+    d = evs[-1]["data"]
+    assert d["draft_id"] == did
+    assert d["conversation_id"] == "tg:default:u1" and d["platform"] == "telegram" and d["chat_key"] == "u1"
+    assert d["autopilot_level"] == "L1"
+    # 不复用 draft_created（webhook 按它推 L2/L3 提醒，复用会推两次）：本条稿只有 1 条 draft_created
+    assert len([e for e in _events_of("draft_created") if e["data"].get("draft_id") == did]) == 1
+
+
+def test_release_enriching_publishes_draft_ready_and_no_op_when_not_enriching(store):
+    svc = _svc(store)
+    did = svc.auto_generate_draft(_conv(), "在吗？", automation_mode="auto_ai", enrich=True)
+    before = len(_events_of("draft_ready"))
+    assert svc.release_enriching_draft(did) is True
+    assert len(_events_of("draft_ready")) == before + 1
+    # 已 pending 的稿再 enrich / release 都是 no-op，不重复发事件
+    assert svc.enrich_draft(did, reply_text="晚了") is False
+    assert svc.release_enriching_draft(did) is False
+    assert len(_events_of("draft_ready")) == before + 1

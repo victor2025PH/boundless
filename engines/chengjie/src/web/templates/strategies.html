@@ -41,13 +41,29 @@
 .map-item{background:var(--input);border-radius:8px;padding:.6rem .8rem;display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 .map-intent{font-weight:600;font-size:.85rem}
 .map-item select{padding:.3rem .5rem;font-size:.8rem;border:1.5px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);font-weight:500;cursor:pointer}
+/* 2026-08-20 实施49 P1-6：整张映射卡收进「高级」折叠（默认收起；主体页面
+   留给策略卡本身）。展开态由浏览器记不住是刻意的——这是配一次就不动的项。 */
+.map-adv-sum{display:flex;align-items:center;gap:.5rem;cursor:pointer;user-select:none;list-style:none;flex-wrap:wrap}
+.map-adv-sum::-webkit-details-marker{display:none}
+.map-adv-sum::after{content:'▾';margin-left:auto;color:var(--t3);font-size:.9rem;transition:transform .18s}
+#map-adv[open] .map-adv-sum::after{transform:rotate(180deg)}
+.map-adv-chip{font-size:.66rem;font-weight:700;padding:.12rem .42rem;border-radius:5px;background:var(--bd2);color:var(--t3);letter-spacing:.02em}
+.map-adv-title{font-weight:700;font-size:.95rem}
+.map-adv-hint{font-size:.76rem;color:var(--t3);font-weight:400}
+.map-adv-note{font-size:.72rem;color:var(--t3);font-weight:400}
+#map-adv[open] .map-adv-sum{margin-bottom:.4rem;padding-bottom:.5rem;border-bottom:1px solid var(--bd)}
 </style>
 {% endblock %}
 {% block content %}
 {% set active="strategies" %}
+{# L-4 D（#212，D-L2）：本页是大模型调参面板（Temperature / Max Tokens / 上下文轮数 / 意图→策略
+   映射），1.0.74 只折叠了参数仍对用户版直出。用户版整页收起 + 「功能升级中」横幅；partner /
+   internal 与开发者模式原面板不变。「稳重/均衡/活泼 × 简短/适中/详细」预设档待老板拍板后再做。 #}
+{% include "_client_tier_upgrading.html" %}
+<div id="st-root" class="{% if ui_client_hide %}l4-locked{% endif %}">
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(245,158,11,.06));border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-amber06,rgba(245,158,11,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🔍</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('st_s004', "只读概览") }}</strong>
@@ -62,7 +78,7 @@
 <div style="margin-bottom:1rem;padding:.65rem 1rem;background:linear-gradient(135deg,rgba(34,197,94,.06),rgba(59,130,246,.08));border:1px solid rgba(34,197,94,.25);border-radius:10px;font-size:.82rem;display:flex;align-items:flex-start;gap:.65rem;line-height:1.6">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🌐</span>
   <div>
-    <strong style="color:#15803d;font-size:.84rem">{{ (i18n or {}).get('st_s006', "作用域：所有平台") }}</strong><br>
+    <strong style="color:var(--th-ink-green7,#15803d);font-size:.84rem">{{ (i18n or {}).get('st_s006', "作用域：所有平台") }}</strong><br>
     {{ (i18n or {}).get('st_s007', "策略参数（Temperature / Max Tokens / 上下文轮数）对") }} <strong>Telegram, Messenger, LINE, WhatsApp</strong> {{ (i18n or {}).get('st_s008', "四端共同生效。") }}
     <span style="color:var(--t3)">{{ (i18n or {}).get('st_s009', "意图路由中部分客服意图仅在 Telegram 触发，已在下方标注。") }}</span>
   </div>
@@ -176,7 +192,7 @@
 </div>
 
 <!-- Strategy History Modal -->
-<div id="sh-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9200;align-items:flex-start;justify-content:center;padding:4vh 0;overflow-y:auto;backdrop-filter:blur(4px)"
+<div id="sh-overlay" style="display:none;position:fixed;inset:0;background:var(--th-bg-scrim50,rgba(0,0,0,.5));z-index:9200;align-items:flex-start;justify-content:center;padding:4vh 0;overflow-y:auto;backdrop-filter:blur(4px)"
      onclick="if(event.target===this)closeStrategyHistory()">
   <div style="background:var(--card);border:1px solid var(--bd);border-radius:16px;box-shadow:var(--s2);width:min(540px,94vw);margin:auto;animation:fadeUp .2s ease">
     <div style="padding:1rem 1.3rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:.7rem">
@@ -193,16 +209,18 @@
   </div>
 </div>
 
-<div class="map-card card fa pro-only">
-  <h2>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
-    {{ (i18n or {}).get('inbox.ai.intent', "意图") }} → {{ (i18n or {}).get('st_s031', "策略映射") }}
-    <span style="margin-left:auto;font-size:.78rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('st_s032', "修改后即时生效") }}</span>
-  </h2>
+<details class="map-card card fa pro-only" id="map-adv">
+  <summary class="map-adv-sum">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+    <span class="map-adv-chip">{{ (i18n or {}).get('st_s037', "高级") }}</span>
+    <span class="map-adv-title">{{ (i18n or {}).get('inbox.ai.intent', "意图") }} → {{ (i18n or {}).get('st_s031', "策略映射") }}</span>
+    <span class="map-adv-hint">{{ (i18n or {}).get('st_s038', "把每个意图路由到哪套策略；不确定就别动，默认值适用于绝大多数场景") }}</span>
+    <span class="map-adv-note">{{ (i18n or {}).get('st_s032', "修改后即时生效") }}</span>
+  </summary>
 
   <!-- 跨平台常用意图 -->
   <div style="margin-top:.6rem;margin-bottom:.3rem;font-size:.76rem;font-weight:600;color:var(--t2);display:flex;align-items:center;gap:.4rem">
-    <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e"></span>
+    <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--th-bg-green5,#22c55e)"></span>
     {{ (i18n or {}).get('st_s033', "跨平台活跃意图") }}
     <span style="font-weight:400;color:var(--t3)">— {{ (i18n or {}).get('st_s034', "四端均可触发") }}</span>
   </div>
@@ -233,7 +251,7 @@
       {% for intent, mapped_sid in intent_map.items() %}
       {% if intent not in cross_platform_intents %}
       <div class="map-item" style="opacity:.7">
-        <span class="map-intent" title="{{ intent }}" style="display:flex;align-items:center;gap:.3rem">{{ (intent_display_names or {}).get(intent, intent) }} <span style="font-size:.6rem;padding:.08rem .3rem;border-radius:4px;background:rgba(59,130,246,.1);color:#3b82f6;font-weight:500">TG</span></span>
+        <span class="map-intent" title="{{ intent }}" style="display:flex;align-items:center;gap:.3rem">{{ (intent_display_names or {}).get(intent, intent) }} <span style="font-size:.6rem;padding:.08rem .3rem;border-radius:4px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue5,#1d4ed8);font-weight:500">TG</span></span>
         <select onchange="updateMapping('{{ intent }}', this.value)" data-intent="{{ intent }}">
           {% for sid, s in strategies.items() %}
           <option value="{{ sid }}" {% if sid == mapped_sid %}selected{% endif %}>{{ s.name or sid }}</option>
@@ -244,6 +262,7 @@
       {% endfor %}
     </div>
   </details>
+</details>
 </div>
 
 <script>
@@ -262,21 +281,21 @@ function saveStrategy(sid){
   const tog=card.querySelector('.tog input[type=checkbox]');
   if(tog)data.enabled=tog.checked;
 
-  fetch('/api/strategies/'+sid,{
+  apiFetch('/api/strategies/'+sid,{
     method:'PUT',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify(data)
-  }).then(r=>r.json()).then(d=>{
+  }, {timeoutMs: 60000}).then(r=>r.json()).then(d=>{
     if(d.ok){showToast(window.T('wa_js_053')+' '+sid,'ok');card.classList.remove('dirty')}
     else showToast(window.T('ov_js_save_fail')+': '+(d.detail||''),'err');
   }).catch(()=>showToast(window.T('ov_js_req_fail'),'err'));
 }
 function updateMapping(intent,sid){
-  fetch('/api/strategies/mapping',{
+  apiFetch('/api/strategies/mapping',{
     method:'PUT',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({intent:intent,strategy_id:sid})
-  }).then(r=>r.json()).then(d=>{
+  }, {timeoutMs: 60000}).then(r=>r.json()).then(d=>{
     if(d.ok)showToast(intent+' → '+sid,'ok');
     else showToast(window.T('inbox.toast.update_fail'),'err');
   }).catch(()=>showToast(window.T('ov_js_req_fail'),'err'));
@@ -288,7 +307,7 @@ async function openStrategyHistory(sid){
   document.getElementById('sh-overlay').style.display='flex';
   document.getElementById('sh-body').innerHTML='<div style="text-align:center;padding:2rem;color:var(--t3)">'+window.T('dash.loading')+'</div>';
   try{
-    const r=await fetch('/api/strategy-history/'+sid);
+    const r=await apiFetch('/api/strategy-history/'+sid);
     const d=await r.json();
     const history=d.history||[];
     if(!history.length){
@@ -351,11 +370,11 @@ function stBatch(enabled){
     window.Tf('st_batch_confirm', {n: ids.length, label}),
     async()=>{
       try{
-        const r=await fetch('/api/batch-strategies',{
+        const r=await apiFetch('/api/batch-strategies',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({ids,enabled})
-        });
+        }, {timeoutMs: 60000});
         const d=await r.json();
         if(r.ok&&d.ok){
           showToast(window.Tf('st_batch_done', {label, n: d.updated.length}),'ok');

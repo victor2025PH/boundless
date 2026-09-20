@@ -309,3 +309,159 @@ async def test_loop_ritual_takes_priority_over_silence(tmp_path):
     res = await loop.run_once()
     assert res["sent"] == 1
     assert sent == [("c1", "ritual_morning")]  # 仪式优先，不重复打扰
+
+
+# ── 仪式未回退避（2026-08-18）─────────────────────────────────────────────────
+# 语义：连续 ≥3 个仪式日零回复 → 阶梯降频（隔天→每4天→每周）+ 降频期每天至多
+# 一档；对方任何入站即恢复每日节奏。streak 从既有冷却表 + 快照 last_in_ts 推导，
+# 零新增持久化。
+
+from src.utils.daily_ritual import (  # noqa: E402
+    DEFAULT_BACKOFF_TIERS,
+    parse_ritual_backoff_cfg,
+    ritual_backoff_allows,
+    ritual_backoff_stride,
+    ritual_reply_streak_days,
+)
+
+_BK = {"enabled": True, "tiers": DEFAULT_BACKOFF_TIERS}
+
+
+def _sent_past_days(cid, n_days, now, *, slot=MORNING):
+    """构造冷却表：cid 在 now 往前 1..n_days 天各发过一档仪式。"""
+    out = {}
+    for d in range(1, int(n_days) + 1):
+        ts = now - d * 86400.0
+        out[f"{cid}:{_daykey(ts)}:{slot}"] = ts
+    return out
+
+
+def _cid_with_gate(day_key, stride, want, prefix="cw"):
+    """找一个当日掷签结果确定为 want 的会话 id（确定性，绝不 flaky）。"""
+    for i in range(200):
+        cid = f"{prefix}{i}"
+        if ritual_backoff_allows(cid, day_key, stride) is bool(want):
+            return cid
+    raise AssertionError("50/50 掷签 200 连败不可能：实现坏了")
+
+
+def test_parse_backoff_cfg_defaults_enabled():
+    cfg = parse_ritual_backoff_cfg({})
+    assert cfg["enabled"] is True
+    assert cfg["tiers"] == DEFAULT_BACKOFF_TIERS
+    off = parse_ritual_backoff_cfg({"no_reply_backoff": {"enabled": False}})
+    assert off["enabled"] is False
+
+
+def test_parse_backoff_cfg_custom_tiers_filters_invalid():
+    cfg = parse_ritual_backoff_cfg({"no_reply_backoff": {
+        "tiers": [[5, 3], ["x"], [2, 1], [10, 5]]}})
+    # stride 必须 >1、天数 >0；按天数降序
+    assert cfg["tiers"] == ((10, 5), (5, 3))
+    # 全非法 → 回默认阶梯
+    bad = parse_ritual_backoff_cfg({"no_reply_backoff": {"tiers": [[0, 0]]}})
+    assert bad["tiers"] == DEFAULT_BACKOFF_TIERS
+
+
+def test_streak_counts_distinct_days_after_last_inbound():
+    now = _at(7)
+    entries = [(now - 86400.0, "20260618"), (now - 86400.0 + 60, "20260618"),
+               (now - 2 * 86400.0, "20260617")]
+    # 早晚双发同一天只算一天
+    assert ritual_reply_streak_days(entries, 0.0) == 2
+    # 对方在两天前之后回过话 → 只有更晚那天计入
+    assert ritual_reply_streak_days(entries, now - 1.5 * 86400.0) == 1
+    # 回话晚于全部发送 → 0
+    assert ritual_reply_streak_days(entries, now) == 0
+    assert ritual_reply_streak_days([], 0.0) == 0
+
+
+def test_stride_ladder():
+    for d, want in ((0, 1), (2, 1), (3, 2), (6, 2), (7, 4), (13, 4),
+                    (14, 7), (100, 7)):
+        assert ritual_backoff_stride(d) == want, d
+
+
+def test_backoff_allows_deterministic_and_spreads():
+    dk = "20260618"
+    a = ritual_backoff_allows("c1", dk, 2)
+    assert a == ritual_backoff_allows("c1", dk, 2)  # 同输入恒同结果
+    assert ritual_backoff_allows("c1", dk, 1) is True  # 未降频恒放行
+    assert ritual_backoff_allows("c1", "garbage", 7) is True  # 坏日期按放行
+    # stride=7：任意连续 7 天里恰好一天放行
+    import datetime as _d
+    base = _d.date(2026, 6, 10)
+    allowed = [
+        ritual_backoff_allows("c9", (base + _d.timedelta(days=i)).strftime("%Y%m%d"), 7)
+        for i in range(7)
+    ]
+    assert sum(allowed) == 1
+
+
+def test_plan_backoff_below_threshold_daily_unchanged():
+    now = _at(7)
+    conv = _conv("cb1", now=now)
+    conv["last_in_ts"] = 0.0
+    sent = _sent_past_days("cb1", 2, now)  # 才 2 天，未达 3 天档
+    plans = plan_daily_rituals(
+        [conv], ritual_sent=sent, opener_fn=_opener, now=now, backoff_cfg=_BK)
+    assert [p["conversation_id"] for p in plans] == ["cb1"]
+    assert plans[0]["reply_streak_days"] == 2
+
+
+def test_plan_backoff_stride_gates_by_day():
+    now = _at(7)
+    dk = _daykey(now)
+    cid_no = _cid_with_gate(dk, 2, False)
+    cid_yes = _cid_with_gate(dk, 2, True)
+    for cid, want in ((cid_no, 0), (cid_yes, 1)):
+        conv = _conv(cid, now=now)
+        conv["last_in_ts"] = 0.0
+        sent = _sent_past_days(cid, 3, now)  # streak=3 → 隔天档
+        plans = plan_daily_rituals(
+            [conv], ritual_sent=sent, opener_fn=_opener, now=now,
+            backoff_cfg=_BK)
+        assert len(plans) == want, (cid, want)
+
+
+def test_plan_backoff_one_slot_per_day():
+    now = _at(21)  # 晚安档目标小时=窗口起点 21（无活跃样本时）
+    dk = _daykey(now)
+    cid = _cid_with_gate(dk, 2, True)  # 今天轮到（不被掷签挡）
+    conv = _conv(cid, now=now)
+    conv["last_in_ts"] = 0.0
+    sent = _sent_past_days(cid, 3, now)
+    sent[f"{cid}:{dk}:{MORNING}"] = now - 12 * _H  # 今晨已发过
+    plans = plan_daily_rituals(
+        [conv], ritual_sent=sent, opener_fn=_opener, now=now, backoff_cfg=_BK)
+    assert plans == []  # 降频期不再早晚双发
+    # 退避关（None）＝旧行为：晨档已发不挡晚档
+    plans_off = plan_daily_rituals(
+        [conv], ritual_sent=sent, opener_fn=_opener, now=now, backoff_cfg=None)
+    assert [p["conversation_id"] for p in plans_off] == [cid]
+
+
+def test_plan_backoff_inbound_resets_to_daily():
+    now = _at(7)
+    dk = _daykey(now)
+    cid = _cid_with_gate(dk, 2, False)  # 掷签今天本不轮到
+    conv = _conv(cid, now=now)
+    conv["last_in_ts"] = now - 1800.0  # 但对方半小时前刚回过话 → streak=0
+    conv["last_ts"] = now - 4 * _H  # 且已过 quiet gap
+    sent = _sent_past_days(cid, 5, now)
+    plans = plan_daily_rituals(
+        [conv], ritual_sent=sent, opener_fn=_opener, now=now, backoff_cfg=_BK)
+    assert [p["conversation_id"] for p in plans] == [cid]
+    assert plans[0]["reply_streak_days"] == 0
+
+
+def test_plan_backoff_none_is_old_behavior():
+    now = _at(7)
+    dk = _daykey(now)
+    cid = _cid_with_gate(dk, 7, False)  # 重退避档也不轮到的日子
+    conv = _conv(cid, now=now)
+    conv["last_in_ts"] = 0.0
+    sent = _sent_past_days(cid, 20, now)  # 20 天零回复
+    plans = plan_daily_rituals(
+        [conv], ritual_sent=sent, opener_fn=_opener, now=now, backoff_cfg=None)
+    assert [p["conversation_id"] for p in plans] == [cid]  # 不退避＝照发

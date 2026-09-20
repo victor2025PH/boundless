@@ -9,7 +9,6 @@ import {
   DemonHorns,
   DigitalEye,
   EveArm,
-  EveHand,
   LoongAntlers,
   NeuralNeck,
   NewsHologram,
@@ -17,7 +16,6 @@ import {
   SWAY_MODES,
   armSwayVariants,
   buildBodyVariants,
-  handWrapperVariants,
   leftArmVariants,
   rightArmVariants,
   type BotMode,
@@ -42,10 +40,11 @@ type EveBotProps = {
   lowFx?: boolean;
   /** 皮肤：normal | demon（隐藏彩蛋，纯外观） */
   skin?: Skin;
+  /** 保留兼容：连击蓄力外观由皮肤/表情承担 */
+  charge?: number;
 };
 
-/** 机器人本体：头 / 颈 / 蛋形身体 / 双臂（左臂带五指手掌）/ 推进器光焰 / 悬浮光池。
- *  已导出：/robot-stage 素材舞台页复用同一实现，保证站内外 IP 形象一致。 */
+/** 机器人本体：头 / 颈 / 蛋形身体 / 花瓣双臂 / 推进器光焰 / 悬浮光池。 */
 export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal" }) => {
   const theme = SKIN[skin];
   const isDemon = skin === "demon";
@@ -77,8 +76,9 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
     if (isHovered) return setEyeExpression("happy");
     if (mode === "falling") return setEyeExpression("scared");
     if (mode === "flying") return setEyeExpression("focused");
-    if (mode === "idle_scan") return setEyeExpression("scanning");
-    if (mode === "idle_wave" || mode === "idle_dance") return setEyeExpression("happy");
+    if (mode === "idle_scan" || mode === "idle_tilt" || mode === "idle_alert") return setEyeExpression("scanning");
+    if (mode === "idle_wave" || mode === "idle_dance" || mode === "idle_stretch" || mode === "idle_nod" || mode === "idle_invite" || mode === "idle_clap") return setEyeExpression("happy");
+    if (mode === "idle_shy") return setEyeExpression("wink");
     if (mode === "idle_news") return setEyeExpression("focused");
     let alive = true;
     const blinkLoop = () => {
@@ -151,11 +151,31 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           <div className="relative z-20 w-[4rem] h-[5.5rem] mt-[-10px]">
             <div className="w-full h-full relative overflow-hidden" style={{ background: theme.body, borderRadius: "30% 30% 50% 50% / 20% 20% 80% 80%", boxShadow: theme.bodyShadow }}>
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[90%] h-5 to-transparent rounded-b-full opacity-40 blur-[1px]" style={{ backgroundImage: `linear-gradient(to bottom, ${isDemon ? "#7f1d2e" : isLoong ? "#f5c542" : "#a5f3fc"}, transparent)` }} />
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 w-8 h-8 flex items-center justify-center opacity-100">
-                <div className="w-2 h-2 rounded-full animate-pulse transition-colors duration-1000" style={{ backgroundColor: eyeColor, boxShadow: `0 0 10px ${eyeColor}` }} />
-                <div className="absolute w-full h-[1px] bg-black/5 top-1/2 -translate-y-1/2" />
-                <div className="absolute h-full w-[1px] bg-black/5 left-1/2 -translate-x-1/2" />
-              </div>
+              {/* 心脏位（方案 C）：小号 ∞ mark，弱而慢的青绿呼吸光 */}
+              <motion.div
+                className="absolute"
+                style={{ left: "70%", top: "34%", marginLeft: -8, marginTop: -6 }}
+                animate={reduced || lowFx ? { opacity: 0.78 } : { opacity: [0.62, 0.88, 0.62] }}
+                transition={reduced || lowFx ? undefined : { repeat: Infinity, duration: 3.6, ease: "easeInOut" }}
+              >
+                <div
+                  aria-hidden
+                  style={{
+                    width: 16,
+                    height: 12,
+                    backgroundColor: "#22d3ee",
+                    WebkitMaskImage: "url(/brand/logos/boundless-mark-256.png)",
+                    maskImage: "url(/brand/logos/boundless-mark-256.png)",
+                    WebkitMaskSize: "contain",
+                    maskSize: "contain",
+                    WebkitMaskRepeat: "no-repeat",
+                    maskRepeat: "no-repeat",
+                    WebkitMaskPosition: "center",
+                    maskPosition: "center",
+                    filter: "drop-shadow(0 0 2.5px #22d3ee99)",
+                  }}
+                />
+              </motion.div>
             </div>
           </div>
           {/* 左臂（屏幕左侧 = 机器人右手）：朝页面内容方向挥手，不会被视口右缘裁切 */}
@@ -167,15 +187,6 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="left" stops={theme.armStops} />
-              <motion.div
-                className="eve-hand absolute"
-                style={{ left: 4, top: 40, transformOrigin: "12px 22px" }}
-                variants={handWrapperVariants(reduced)}
-                initial="hidden"
-                animate={waving ? "shown" : "hidden"}
-              >
-                <EveHand skin={skin} />
-              </motion.div>
             </motion.div>
           </motion.div>
           {/* 右臂：挥手时仅轻微外张配重 */}

@@ -24,6 +24,7 @@ REST 端点：
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -103,9 +104,15 @@ def register_whatsapp_rpa_routes(
 
     # ── Web 页面 ─────────────────────────────────────────────────────────
 
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_whatsapp.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/whatsapp-rpa", response_class=HTMLResponse)
-    async def whatsapp_rpa_page(request: Request, _=Depends(page_auth)):
-        return templates.TemplateResponse(request, "whatsapp_rpa.html", {})
+    async def whatsapp_rpa_page(request: Request):
+        from fastapi.responses import RedirectResponse
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/whatsapp" + (f"?{q}" if q else ""), status_code=302
+        )
 
     # ── 状态 ─────────────────────────────────────────────────────────────
 
@@ -627,10 +634,21 @@ def register_whatsapp_rpa_routes(
                 wa[k] = v
         cfg["whatsapp_rpa"] = wa
         config_manager.config = cfg
+        # 最小 patch＝本次 body 命中白名单、真正落进配置的键（dict 值为浅合并
+        # 后的最终值）；优先经 save_overlay_patch 落 config.local.yaml overlay
+        # （保住主 config.yaml 注释/结构）。兜底：方法缺失（简化 fake）或返回
+        # 非 bool（MagicMock 桩）→ 回落整文件 save()。
+        patch = {"whatsapp_rpa": {k: wa[k] for k in body.keys()}}
         try:
-            config_manager.save()
+            _sop = getattr(config_manager, "save_overlay_patch", None)
+            ok = _sop(patch) if callable(_sop) else None
+            if not isinstance(ok, bool):
+                ok = config_manager.save()
         except Exception as e:
             raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        if ok is False:
+            raise HTTPException(500, tr(
+                request, "err.set.save_config_failed", err="overlay write failed"))
 
         svc = _get_service(request)
         if svc:

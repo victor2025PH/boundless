@@ -412,6 +412,13 @@ _SEED_EXTRACT_SAMPLES: List["ExtractSample"] = [
     ExtractSample("我是来问个问题的", forbid=["来问个问题"], note="误抽守护-我是来"),
     ExtractSample("叫我别走啊", forbid=["别走"], note="误抽守护-叫我别"),
     ExtractSample("我是觉得这样不太好", forbid=["觉得"], note="误抽守护-我是觉得"),
+    # 持久性守护（2026-07-26 生产实锤）：同一用户三轮聊到下雨 → LLM 每轮各存一条
+    # 「那里正在下大雨/用户那边下雨了/用户这里下大雨」近义事实（余弦 0.74-0.92，
+    # 部分低于去重阈值永不合并）。转瞬状态（此刻天气/正在做的动作）不该进长期记忆。
+    ExtractSample("我这边正在下大雨，好烦啊", forbid=["下雨", "下大雨"],
+                  note="持久性守护-此刻天气"),
+    ExtractSample("我刚到家，正准备吃饭", forbid=["到家", "吃饭"],
+                  note="持久性守护-正在动作"),
 ]
 
 

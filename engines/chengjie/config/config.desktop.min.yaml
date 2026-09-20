@@ -6,28 +6,70 @@
 #   · 不带任何占位假值（api_id / api_key 等一律留空）——留空字段由「桌面首启向导」写
 #     overlay（config.local.yaml）补齐，本文件播种后即不再被程序改写（注释永续）。
 #   · 只保留「装好→填 AI Key→翻译生效」必需的最小集；未列出的键一律走代码默认，
-#     所有危险/RPA/协议子系统开关（line_rpa / messenger_rpa / whatsapp_rpa / contacts /
-#     platform_login / monetization / realtime_voice …）保持代码默认 = 关。
+#     危险/RPA 子系统开关（line_rpa / messenger_rpa / whatsapp_rpa /
+#     monetization / realtime_voice …）保持代码默认 = 关。
+#     （contacts 自 2026-08-20 起以「精简档」进基线，见下方 contacts 段。）
+#   · 例外是 platform_login（见文件末尾）：账号接入是**用户装完第一件要做的事**，
+#     开关留在代码默认就等于「接入弹窗里每条路都灰着」，故随包显式配好。
 #   · web_admin 的 host/port/auth_token 会被桌面壳 launcher 注入的 AITR_WEB_HOST /
 #     AITR_WEB_PORT / AITR_WEB_TOKEN 环境变量覆盖（serve↔talk 强一致）；此处的静态默认
 #     与桌面壳 config.json 缺省（127.0.0.1:18799 / admin）对齐，无 env 时也能直连。
 
+# 业务域（N-3 #241 / 老板决策 D-N1，2026-09-08）——这台机器做什么生意的**单一真值**：
+#   companion = 陪伴运营（桌面客户包出厂值）；sales = 业务 / 销售（zhiliao 生产那类售卖机器人）。
+# Domain hook / KB 分类 / 目标模板库 / 客户摸底槽位 / 客户画像 schema / 系统话术种子全部读它：
+#   陪伴域不注册 ConversionDomainHook、不下发「转化成交」模板、摸底标签是陪伴集（称呼 / 坐标 /
+#   职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产）、KB 不预置 GXP 支付话术。
+# 缺省时按部署形态推导（桌面客户机 → companion）并写进 overlay；要改在后台「工作目标」设置里改。
+# 注意：这**不是** domain（域包名）——陪伴 system prompt / 人设仍在 conversion 域包里，别改 domain。
+business_domain: companion
+
 # Telegram 协议号（桌面模式默认不用；留空 = 跳过协议客户端初始化，收件箱/翻译不受影响）
+#
+# ⚠ 本段是本文件里**唯一**的 telegram 键（2026-08-28 合并）：原先文件末尾另有一个
+# `telegram:` 只写 poll_fallback，YAML 里后者整段覆盖前者 —— 实测解析结果是
+# `{'poll_fallback': {...}}`，下面这三个凭据字段**根本不存在**。当前不产生行为差异
+# （缺键与空串对 `cfg.get("api_id")` 同样是假值，都走「跳过」分支），但这是个陷阱：
+# 谁以后在这里填了真 api_id，会被静默忽略而毫无提示，而本文件是随桌面包发给客户的
+# 模板。再加 telegram 配置请往本段里加，别另起一个同名键。
 telegram:
   api_id: ""
   api_hash: ""
   phone_number: ""
-  session_name: "desktop"
+  # TG 出站镜像（2026-08-20 内测反馈进基线，原在文件末尾独立 telegram 段）：用户从
+  # 手机/其他端主动发起的私聊必须出现在工作台会话列表（默认关时纯出站会话永不落库
+  # ＝「主动发消息左侧没窗口」）。文本占位随既有轮询零额外下载；direction=out 永不
+  # 触发自动回复；媒体本体归档（mirror_outgoing_media）保持默认关（有下载 RPC 风控面）。
+  poll_fallback:
+    mirror_outgoing: true
+  # ⚠ session_name 刻意保持注释：它在重复键时代**一直是被丢弃的**，代码走
+  # `telegram_cfg.get("session_name") or "camille_bot"`，所以现网桌面端实际用的
+  # 是 camille_bot.session。合并重复键时若顺手把它启用，已部署的机器会去找一个
+  # 不存在的 desktop.session —— 对用户就是「莫名其妙掉线要重新登录」。
+  # 要改会话名是一次独立的迁移（需同时改名现有 session 文件），不能搭在清理里。
+  # session_name: "desktop"
 
-# AI 大模型（桌面首启向导收集 api_key 后写 overlay，本文件保持留空）
+# AI 大模型（桌面托管版默认走官网网关，用户无需填 Key）
+# 启动时 ensure_hosted_ai → POST bd2026.cc/api/ai/device-token → 设备令牌写入内存；
+# 真云 Key 只在官网 DEEPSEEK_API_KEY。运维也可直注 AITR_HOSTED_AI_*（永不入库）。
+# 用户保存自有 Key 后永远优先自有。licensing.hosted_ai.enabled: false 可关网关。
 ai:
   provider: "openai_compatible"     # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: ""                       # ← 首启向导写 config.local.yaml overlay，勿手改本文件
   base_url: "https://api.deepseek.com"
-  model: "deepseek-chat"
+  model: "deepseek-flash"           # DeepSeek V4.1-Flash（2026-09-10 起官方唯一对话模型；deepseek-chat / deepseek-v4-flash 已退役，装载时自动归一）
   temperature: 0.7
   max_tokens: 1024
-  timeout: 30
+  timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
+  prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
+  # ChatX 27B：与办公室同一产品。干净包零 RFC1918；打官网 /api/ai/v1 model=chatx。
+  # 聊天主链不拿它顶话（chat_fallback: false）；目录 / 无限制档走这条。
+  fallback:
+    enabled: true
+    base_url: https://bd2026.cc/api/ai/v1
+    model: chatx
+    timeout: 90
+    chat_fallback: false
 
 # 技能集（回复产线用；与 example 同款默认，不含 test 技能）
 skills:
@@ -57,3 +99,338 @@ translation:
 inbox:
   enabled: true
   read_from_store: true
+  # 全自动开箱（2026-08-22 拍板，全自动一键化 P2）：新装出厂即「🚀 全自动」——
+  # worker + deliver + 默认档位 auto_ai 三件套齐开（B37 实录：两位内测用户 100%
+  # 卡死在「装好后还要自己找到第二道开关」；skuio 产品口径「点开全自动就该同时
+  # 开真发」已被采纳为验收标准）。安全带全程在岗：出站安全闸（下方
+  # companion_send_gate）、回复额度守卫、每日字符额度、kill-switch。
+  # 用户随时可在「自动回复设置 → AI 接管」一键退到拟稿人审/关闭。
+  # 存量安装升级**不受本段影响**（种子只影响新装；存量走工作台一次性提示条自选）。
+  # 回复节奏拟人默认（2026-08-07：修「装完即秒回」出货缺陷）：
+  # 自动回复读的 deliver_delay 就是本块，缺省则 0 秒秒回（客户与平台风控当场识破
+  # 机器人）。这里给一个保守的拟人区间，让「下载即用」的默认体验就是像真人。
+  # 设置页「回复节奏」滑杆改写的也是这个键（三条发送链单一节奏源），用户随时可覆盖。
+  auto_draft:
+    # D-M1（1.0.76）：登录默认半自动——全局 review 只起草，全自动按账号在账号菜单显式开启并确认；
+    # 登录/重登后 10 分钟冷静期只起草（login_gate 缺省开）。老会话已写的 auto_ai 不动。
+    automation_mode: review
+    bootstrap_automation_mode: false
+    # 识别失败降级诚实自动回（实施56 P1，2026-08-22 拍板「不要再有小问题掐断
+    # 全自动」）：图片/语音没识别出来时不扣留回复，AI 自然承认没看清并温和追问
+    # （绝不装懂）。服务器实例代码默认关（维持 08-17 无兜底纪律），客户包默认开。
+    media_degrade_reply: true
+    # 入站爆发合并（A 类基线，2026-09-08 D-O4 #252 #254）：客户几秒内连发多条 → 等一个
+    # 8–15s 随机静默窗合并成一句、只拟一次稿只回一次（不是每条各回一条机关枪）。
+    # 窗口上限 window_max_sec 代码缺省 15；语音条窗 15s；硬上限 25s / 6 条照旧。
+    inbound_merge:
+      enabled: true
+  # 出站近重复守卫（A 类基线，2026-08-22 随全自动开箱）：投递前与最近出站比对，
+  # 同义双发静默跳过——B41「同稿双投」防线里唯一跨重启的一层（DB 消息镜像口径）。
+  outbound_dup_guard:
+    enabled: true
+  # Q-31 D：出厂 48h 作废未发 L1 稿（只动 pending，不改发送）。
+  sla_watcher:
+    auto_expire_hours: 48
+    auto_expire_levels: [L1]
+  # 账号作息班表——2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：**出厂关**。
+  # 1.0.78 曾 enabled:true + 「timezone 空＝本机钟」：桌面机在上海、客户在纽约，客户的下午
+  # ＝我们的凌晨 → 自动回被整段静默扣留。班表会改变发送时间（基线红线②）、时区不得默认本机
+  # （红线③），只能由用户在「自动回复设置 → 工作时间」显式开启并**选时区**（缺时区不能保存）。
+  # default.start/end 只是开启时的建议班次（页面预填），不是基线值。
+  work_schedule:
+    enabled: false
+    default:
+      start: "08:20"
+      end: "01:00"
+  l2_autosend:
+    enabled: true
+    deliver: true
+    # 新入站过期守卫（A 类基线，2026-08-22）：拟稿/拟人延迟窗内客户又说话 →
+    # 旧稿作废等新稿覆盖两问（防「答非所问 + 背靠背两连发」）。
+    fresh_guard:
+      enabled: true
+    deliver_delay:
+      # 「拟人程度」出厂档（A 类基线，2026-09-08 D-O4 #252 #254，FW78ZP「起草→发出恒
+      # 12–13s」）：natural = 读 3–6s + 每 10 词 +1s、想 3–8s、打字 35–45 词/分（中文
+      # 60–90 字/分）±30%、发出前 1s 停「正在输入」——回复快慢随字数变、无两条到秒相同。
+      # profile 在场时下面的 min/max/adaptive 只作 custom 回落值；设置页「拟人程度」可改。
+      profile: natural
+      min_sec: 8
+      max_sec: 20
+      adaptive: true
+      # P1 连发/秒回两道地板（2026-08-12，修 198 实录「第 1 条有思考、第 2/3 条
+      # 秒回」）：adaptive 会把「生成/排队耗时」从目标延迟里抵扣——单条语义正确，
+      # 但连发场景抵扣归零后就是背靠背机关枪。min_gap_sec=同会话两条出站最小间隔
+      # （±15% 抖动）；min_residual_sec=抵扣后至少保留的残余延迟（打字气泡有露出
+      # 窗口）。代码默认 0=关（老部署行为不变），种子显式开=「下载即用像真人」。
+      min_gap_sec: 8
+      min_residual_sec: 2
+  # 多句分条回复总闸——2026-09-06 老板决策 D-L3（#210）：**出厂关**。2026-07-31 升 A
+  # 类时的前提「真发仍逐条由坐席 opt-in」在 8 月三条自动链接线后已不成立：固定的
+  # 拆条节奏被付费客户的客户当场识破 AI（82BF95「huge difference between your typing
+  # here on TG and WhatsApp」）。已降 B 类：默认关，客户可在自动回复设置页自助开——
+  # 开后也只按草稿显式换行拆、短回复永不拆（reply_split 1.0.75 口径）。
+  reply_style:
+    bubbles:
+      enabled: false
+      explicit_newline_only: true
+  # 接管自动接回（2026-08-09 .198/.104 事故沉淀）：坐席手动发一条消息会触发
+  # 「接管即静音」（会话切 manual 停 AI，防人机抢话）——此前**没有任何恢复机制**，
+  # 实测会话被钉死 manual 27 小时，坐席全程不知道是自己关掉了 AI。本段=桌面版
+  # 「全自动」交付承诺的闭环：坐席静默 after_minutes 后 AI 自动接回（恢复到接管前
+  # 档位；每次人工出站都重置计时）。**只碰坐席出站触发的 manual**——下拉框显式
+  # 选的手动、风控守卫降的档一律不动。代码默认关（新子系统约定），种子显式开。
+  takeover_rearm:
+    # D-M9（1.0.76）：手动是粘的——全局自动接回默认关；坐席切手动时可单独选「30 分钟后接回」（takeover_opt_from）
+    enabled: false
+    after_minutes: 30
+
+# 出站安全闸（随全自动开箱一并武装，2026-08-22）：频率/健康闸门，只拦风险发送、
+# 对正常回复零感知——真发默认开的部署绝不裸奔（capability 看板同款「先立闸再
+# 武装真发」顺序，这里是种子态的等价物）。
+# ⚠ 参数必须带客户档（2026-08-22 深评补丁）：库默认 warmup 2→15/14 天是**养号
+# 农场语义**（新注册小号防封爬坡）；客户接入的是自己的成熟账号，套农场默认＝
+# 「开箱第一天只自动回 2 条就哑」（B37 同型工单制造机，signals 缺 age_days 时
+# 按 0 天算恰好命中最低档）。客户档=宽额度快爬坡；真正的反轰炸主力是
+# peer_bot_guard（每会话每日 500 轮）与 flood/错误风控信号（红灯照拦不受此参数
+# 影响）。养号/内部部署刻意不受本段影响（各自 overlay 自带参数）。
+# 2026-09-09 老板决策 D-Q2（#267 CSTCJT）：**出厂关**。1.0.78 各号折算 114–129 条且人工也拦
+# （「自动 ok / 人工 ok」两列）。额度是会减少发送的开关（基线红线②）：默认关、用户在
+# 「自动回复设置 → 单账号日发额度」自助开；开启后只拦 origin=auto，人工发送永不受限；
+# 300/100/3 是「推荐」参数（新号 3 天从 100 爬到 300），不是安装包默认。
+companion_send_gate:
+  enabled: false
+  target_cap: 300
+  warmup_start_cap: 100
+  warmup_ramp_days: 3
+
+# ── 产品基线功能（A 类：零外部依赖，装完即应可见）────────────────────────────
+# 背景（2026-07-31）：演示机上的功能靠 config.local.yaml overlay 打开，而 overlay
+# 刻意不随包 → 安装包里这些功能「代码全在、开关全关」；又因「关闭 = API 403 =
+# 前端整卡隐藏」且首启向导/能力面板都没有开启入口，客户会认定功能不存在。
+# 判据＝纯软件（本地 DB + 随包 AI 链即可跑）、无 LAN/GPU 依赖、无封号/合规风险；
+# 满足判据的才允许进本段。LAN 依赖/风险功能（avatar_voice / selfie / proactive /
+# RPA / monetization …）禁入种子——「开关开了但依赖没随包」比隐藏更糟（同
+# platform_login 一节的教训）。两侧不变量由 tests/test_desktop_seed_visibility.py
+# 双向钉住：基线键必须开、C 类键必须保持关/缺失。
+# 托管语音预授权标记（2026-08-19 报障群实测「客户与语音引擎零通路」后进基线）：
+# 仅是标记非开关——enabled 保持代码默认关（C 类语义不变，零 LAN 探针零常驻噪音）；
+# 持设备令牌（cx.*）的部署由 hosted_gateway 运行时**纯内存**自动接入官方语音网关
+# （{site}/api/ai/hub → 集群 GPU）。用户退出：avatar_voice.hosted_opt_out: true。
+avatar_voice:
+  _hosted_auto: true
+
+# 托管语音识别（转写）预授权标记（2026-08-20 内测群实测「对方语音消息无法识别」
+# 后进基线，与 avatar_voice._hosted_auto 同构）：本地 ASR 依赖被打包排除，持设备
+# 令牌的部署由 hosted_gateway.ensure_hosted_asr 运行时纯内存接入官网网关转写。
+# 用户退出：voice_recognition.hosted_opt_out: true。
+voice_recognition:
+  _hosted_auto: true
+
+    # 托管识图预授权标记（2026-08-22 外网机实测「发图即拦」后进基线，与
+    # avatar_voice._hosted_auto 同构）：客户档不配 LAN VLM，持设备令牌的部署由
+    # hosted_gateway.ensure_hosted_vision 运行时纯内存接入官网识图网关。
+    # 用户退出：vision.hosted_opt_out: true。
+    # 视觉身份（#333）：干净包不写 face_identity.enabled。ensure_hosted_vision 置
+    # _hosted_vision 后 face_cfg 自动走官网 /api/ai/v1/face/embed。退出：
+    # vision.face_identity.hosted_opt_out: true（或 enabled: false）。
+vision:
+  _hosted_auto: true
+  # #333 R7775K（2026-09-17）：网关识图单端点无备胎，代码默认 timeout=120 → 端点卡死时
+  # 拟稿整整等 2 分钟（Enrique 01:26 实录 elapsed=123s）再降级。托管网关背后 qwen3-vl:8b
+  # 热态 2~8s、忙时 20s 上下，45s 已覆盖 P99；超了直接走降级话术（认收·等下再看）。
+  timeout: 45
+
+# 跨平台联系人「精简档」（2026-08-20 内测反馈进基线）：右栏「跨平台档案」卡此前
+# 对客户报一句裸错误码（功能整条链随包、只是总开关默认关）。本段只交付纯软件那半：
+# 本地 contacts.db（落用户数据区）+ 跨平台档案读写 + _origin_block 注入 AI。
+# mode: lite 是硬闸——衰减/KPI 周期任务、RPA 逐条记账 hooks、Mobile Bridge 每 15s
+# 打本机 18080（手机自动化 rig，客户机上不存在）一律不启动。运营/内测坐席要全量
+# 档位在 config.desktop.internal.yaml 显式写 mode: full（内部包种子覆盖本值）。
+contacts:
+  enabled: true
+  mode: lite
+  origin_profile:
+    enabled: true
+
+companion:
+  # 工作目标（坐席右栏卡 + prompt 注入 + /api/goals*）：目标库落用户数据区
+  # （<config 目录>/marketing_goals.db），规划走随包 AI 链，无任何本机集群依赖。
+  goals:
+    enabled: true
+    # 完成提醒扫描（2026-08-20 内测反馈进基线）：纯软件（EventBus 应用内提醒，
+    # 零 LAN/外部通道依赖）。此前缺省关且无 UI 开关，右栏卡对用户显示「未开启」
+    # 却无处可开——种子哲学反例，出厂即开。
+    notify:
+      enabled: true
+    # 冲刺推进器出厂开（老板决策 D1 #166，2026-09-05；D-L1 2026-09-06 进基础配置）：
+    # 限时目标选「自动推进」后按相位排主动拍。此前只写在 cloud_light（仅全新安装）
+    # 与内测种子（仅 smart 包）——走 clean 包升级的机器两条路都不经过，卡片写着
+    # 「自动推进」引擎却没开。现为 feature_registry A 类：新装随本种子、存量升级由
+    # _ensure_baseline 补齐；安全闸全部沿用代码默认（silence_min/min_gap/危机/
+    # opt-out/平台白名单/仅 auto_ai 会话）。
+    sprint:
+      enabled: true
+    # 摸底目标 LLM 摘录补槽（Q-5 代 Q-4 2026-09-09，#267）：正则轨盲区由主链 LLM 摘录客户
+    # 自由表达填画像槽。clean 包此前缺键 → goal engine-status 恒 profile_llm_off、兴趣槽只能
+    # 人工补录。纯软件、只多学不多发（不是发送行为开关）。feature_registry A 类同值。
+    profile_llm:
+      enabled: true
+  # 客户安全预警出厂开（老板决策 D7 #185，2026-09-05；D-L1 2026-09-06 进基础配置）：
+  # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；留痕（crisis_audit）与
+  # 人工升级（crisis_escalation）此前出厂关 → severe 命中不记录、不叫任何人，页面
+  # 却像正常空表。桌面包升级不依赖 webhook：点亮工作台「需人工」徽标 + 置顶 + 落案例。
+  # 隐私靠角色门（页面只给主管/合规看）+ 摘要 ≤120 字，而不是靠关掉。同为 A 类基线。
+  wellbeing:
+    crisis_audit: true
+    crisis_escalation: true
+  # 深度人设分层注入（2026-07-31 拍板升 A）：纯 prompt 层增强，各层软降级。
+  deep_persona:
+    enabled: true
+  # 冷启动隔离（2026-08-04 智拓机 .198 事故根因闸）：桌面用户拿任意历史身份的号登录，
+  # 目录同步把手机历史会话灌进来后每条都「沉默数月」→ 若主动触达开着，登录第一个 tick
+  # 就会群发问候给同行/bot/群（当场被识破 + 向风控表演自动化 + 烧光额度）。种子显式带上
+  # 安全 floor：账号接入不足预热窗 / 仅有导入历史的会话，一律不主动冷开场。只压主动外呼，
+  # 用户手动发送不受影响。（代码默认亦为开，此处显式化交付承诺。）
+  proactive_topic:
+    cold_start:
+      enabled: true
+      warmup_hours: 72
+      require_inbound_since_connect: true
+      quota_gate: true
+      # 入站侧封顶（2026-08-09 出厂改为 false）：true 时预热窗内**入站自动回复**也被降级
+      # 为 review（AI 拟稿、人审后发）。它与上面三条不同——那三条只压「系统主动去骚扰
+      # 谁」，这条压的是「有人真的来消息时能不能自动回」，即用户买的核心功能。实测
+      # .198/.104 现场：装完开全自动 → 72h 内一条都不自动回、稿子堆在待审队列，用户
+      # 以为功能坏了（且看板不显眼、无 UI 入口可关）。故出厂关闭，把「新号头几天要不
+      # 要人审」交给运营显式选择。防封号的主力仍在：主动外呼三条闸不受影响。
+      # 要恢复保护：改回 true（判据取账号注册表 created_at，判不出则不封顶）。
+      warmup_review: false
+
+# ── 情景记忆抽取白名单（老板决策 D-O5，2026-09-08 O-2 A，WYNN22 #201）─────────────
+# 第三次「出厂默认没进基线」。抽取闸 should_extract_intent 按 memory.extract.intents
+# 白名单放行、**空即不抽**（Phase D 为存量零回归刻意如此）。此前这把钥匙只在两处：
+#   · 服务器 config/config.yaml（四值）——不随包；
+#   · 内测种子 config.desktop.internal.yaml（match_all: true）——只进 smart 包。
+# 本文件此前**没有任何 memory 块** → clean 包每台全新安装从首日起 intents=[]：skuio 机
+# 1.0.76 重装后 8 小时 30 次 `[episodic] schedule run` 全部 skip、6 客户零抽取零 promoted，
+# 而启动日志仍写「情景记忆已启用」。现为 feature_registry A 类：新装随本种子；存量升级
+# （skuio 两台、钧一台）由 _ensure_baseline 在**合并视图缺键**时补进 overlay；用户显式写
+# `intents: []` ＝自己关掉，一个字不动（启动日志会 WARNING「抽取白名单为空」）。
+# 值与服务器同（不选 match_all：greeting / stop_contact 噪音 + token 成本）。列表顺序须与
+# feature_registry baseline 一致——种子门禁 test_desktop_seed_visibility 按声明值逐字核。
+memory:
+  extract:
+    enabled: true
+    use_llm: true
+    intents: [direct_chat, small_talk, greeting, complaint]
+
+# ── 账号接入（「下载即可用」的关键开关）──────────────────────────────────────
+# 为什么必须在种子里显式打开：代码默认全关，而桌面用户装完不会去改 YAML —— 于是
+# 「接入 Telegram / WhatsApp / LINE / Messenger」弹窗里每一种方式都灰着显示「未启用」，
+# 只剩一个要求用户自备安卓手机的「真机 / 模拟器」。开关随包配好，能力才算真交付。
+#
+# 判据＝**只开这个安装包真带得动的方式**，并把带不动的从 modes 清单里摘掉：
+# 一个点了没反应的灰选项比没有这个选项更糟（用户会一直以为是自己没配对）。
+#   开：whatsapp.protocol —— baileys 边车随包 + 桌面壳自动拉起（sidecar-launcher.js），
+#       装完即可扫码，**不需要**用户另装 Node，也不需要运维
+#   开：messenger.web —— messenger-web 边车随包（含兜底 Chromium），桌面壳自动拉起；
+#       它不是扫码，而是在本机隔离浏览器里人工完成一次 Facebook 账密/2FA 登录
+#   开：telegram.protocol —— pyrogram 已随包；api_id/api_hash 由官网按设备令牌粘定
+#       派发（用户无需申请，详见下方 telegram 段的注释），未派发到则回落自助填一次
+#   摘：telegram.web / whatsapp.web —— 本系统未实现（见 platform_readiness._IMPLEMENTED_MODES）
+#   摘：line.protocol —— 需 okline（逆向库、违反 LINE ToS 且有封号风险，产品决策为不随包）
+# 「开关开了但交付物没进包」这种静默空转由两道门禁钉住（源码侧 + 产物侧）：
+#   tests/test_desktop_seed_deliverable.py（改本段必看：新方式进 modes 要同时补判据）
+#   desktop/build/after-pack.js（装包打完核对 resources/ 真有边车，缺件即打包失败）
+platform_login:
+  enabled: true
+  # 登录后把账号托管为常驻在线。关着的话扫码能成、但重启就得重扫（诊断会出
+  # orchestrator_off「不会常驻在线」警告），对桌面用户等于功能只交付了一半。
+  orchestrator_enabled: true
+  telegram:
+    protocol_enabled: true
+    # 手机号+验证码：扫码失败/无法自扫时的备选（list_modes 运行时挂到末位，不抢推荐）。
+    # 不进 modes 清单——注入式呈现（同 Zalo web_enabled），避免改默认表牵动官方漏斗门禁。
+    phone_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # ── 用户为什么不用自己申请 api_id ──────────────────────────────────────
+    # 走的是**官网设备令牌**那条链，不是下面这个 LAN 池，且它已经全线接好、无需配置：
+    #   启动时 main.py → hosted_gateway.ensure_hosted_telegram()
+    #   → POST {site}/api/pool/telegram-cred（Bearer 设备令牌，与 AI 网关同一枚）
+    #   → 服务端按机器指纹**粘定**派发一组 api_id/api_hash（同机恒定，与 pyrogram
+    #     session 绑 api_id 的不变量一致）→ 注入内存 telegram.*（不落盘、不回显）
+    # 桌面态自动生效（AITR_DESKTOP_MODE=1 → hosted_gateway._wants_hosted 默认真）；
+    # 用户自填的凭据永远优先，绝不覆盖。
+    # ⚠️ 唯一的运维前提（代码侧无法自造）：VPS 上要给官网配 `POOL_TG_CREDS`
+    # （或 POOL_TG_CREDS_FILE）——即几组真实的 api_id/api_hash。没配＝服务端回
+    # 503 pool_disabled，客户端**静默**回落自助流程（诊断报 creds_missing，弹窗直接
+    # 给「填 API ID / Hash 保存即启用」表单，见 unified_inbox.html::_canOneClickEnable），
+    # 不报错也不阻断——但那就不是「下载即可用」了。
+    #
+    # 下面这个 credpool 是**另一套**：集团 LAN 内网的中央池（智控 :8000），鉴权用一个
+    # 共享的 X-Service-Token。桌面版刻意**不用**它，两个原因：① 内网地址公网够不着；
+    # ② 安装包公开可下载，明文令牌写进来等于把池子交给任何人刷。
+    # 还有一个更隐蔽的坑：**开着它而没有令牌时诊断会判 protocol「可用」**
+    # （credpool_enabled 为真就不再报缺凭据），用户点下去要到分配阶段才失败——
+    # 比灰着更糟。所以这里必须保持 false。
+    credpool:
+      enabled: false
+      base_url: ""
+      service_token: ""
+  whatsapp:
+    protocol_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # 桌面壳把边车起在这个端口（须与 desktop/sidecar-launcher.js 的 SIDECAR_PORT 一致）
+    baileys_url: http://127.0.0.1:8790
+  line:
+    protocol_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # LINE 协议扫码（okline 逆向库）随包分发。okline 靠持久 Node 桥跑 LTSM WASM 算 X-Hmac：
+    # 客户**无需装 Node** —— PATH 上没有真 node 时自动回落随包 Electron（壳注入
+    # AITR_ELECTRON_NODE，见 desktop/backend-launcher.js + line_protocol_login.
+    # resolve_node_runtime）。非桌面部署且缺 node 时接入弹窗如实报「缺组件 Node.js 18+」。
+    # 可用 node_path 显式指定 node 绝对路径（优先级最高）。
+    # ⚠️ 违反 LINE ToS、有封号风险；务必一号一指纹一代理 + 养号。
+  messenger:
+    web_enabled: true
+    modes: ["web", "device"]
+    default: "web"
+    # 桌面壳把边车起在这个端口（须与 sidecar-launcher.js 的 SPECS.messenger.port 一致）
+    web_url: http://127.0.0.1:8791
+    # ⚠️ 刻意**不**配 MSG_BROWSER_CHANNEL：服务默认优先系统真 Chrome，没装才回落随包
+    # Chromium。别为了「反正随包了」把它钉成捆绑版——捆绑版 UA 与自身 Sec-CH-UA 自相
+    # 矛盾（品牌报 Chromium、内核版本落后），是 Facebook 最容易抓的自动化信号，正是
+    # 「账密验证码都对却被弹回登录页、cookie 只剩 datr」的成因（见 services/
+    # messenger-web/server.js 的 BROWSER_CHANNEL 注释）。随包 Chromium 的定位是**兜底**：
+    # 让没装 Chrome 的机器也能用，装了 Chrome 的机器仍走成功率更高的那条路。
+
+# ── 小智 AI 助手（2026-08-23 老板拍板进产品基线：任何形态的包都不许再关）────────
+# 悬浮球双壳常驻：产品问答（独立帮助语料库首启自动播种，检索零命中=诚实说不知道，
+# 绝不让 LLM 裸编）+ 一键报障（截图+环境自采，写本地工单生命周期）+ 我的工单进度
+# + 教学模式（点哪学哪）+「替我做」智能体（映射既有白名单写口，确认卡+可撤销）。
+# 零 LAN 硬依赖：问答 LLM 走主链（托管网关/自有 Key 均可），报障/工单全本地。
+# 与 feature_registry A 类基线互为镜像（tests/test_desktop_seed_visibility 钉住）。
+# voice（语音提问）刻意不开：转写依赖 audio_pipeline GPU 端点，clean 档不带——
+# 开了=面板出一个必然报错的麦克风按钮（内测包种子各自显式开）。
+assistant:
+  enabled: true
+  agent:
+    enabled: true
+  vision:
+    enabled: true   # 报障截图 VLM 摘要：best-effort（托管识图网关可达即工作，掉线静默）
+
+# 首启体验档：桌面装完直接能用（10 万字符尝鲜、无时间窗、用完即止），不要求注册；
+# 注册后经官网领满 100 万（无期限，规格在 chatx_fulfillment.TRIAL_SPEC）。
+# 只在没有授权文件时生效；有正式授权即整段失效（见 config.example.yaml 的详细说明）。
+# enforce=true（2026-08-11 起）：「注册领 100 万」链路已上线，用尽即拦、拦了有出路
+# （注册 / 联系客服 / 邀请好友 / 购买）；不拦的话尝鲜额度形同虚设。
+licensing:
+  trial:
+    enabled: true
+    enforce: true
+    chars: 100000
+    window_hours: 0          # 0 = 无时间窗，用完即止

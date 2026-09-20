@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 # 熟络阶段（脾气/不完美/内部梗等"有棱角"行为的闸门，与 persona_manager 同口径）。
 _INTIMATE_STAGES = ("intimate", "steady")
@@ -42,7 +42,9 @@ def _as_list(v: Any) -> List[str]:
 # ── L1 · 人设自传生活线 ──────────────────────────────────────────────────────
 
 def pick_life_beat(
-    persona: Dict[str, Any], now: datetime, *, seed_salt: str = "", stride_days: int = 3
+    persona: Dict[str, Any], now: datetime, *, seed_salt: str = "",
+    stride_days: int = 3,
+    skip_fn: Optional[Callable[[str], bool]] = None,
 ) -> Optional[str]:
     """确定性挑选"人设最近的生活片段"（一条向前走、前后一致的生活线）。
 
@@ -50,6 +52,11 @@ def pick_life_beat(
     选取：以 ``stride_days`` 天为一个「生活阶段」窗（默认 3 天），窗内**稳定不变**（避免
     "昨天说考完试今天又在备考"的自相矛盾），跨窗按 **人设偏移 + 阶段序号**推进轮转。
     无 life_arc → None（不注入，行为不变）。
+
+    ``skip_fn``（实施55「聊过即退役」）：会话级已用素材排除——命中的 beat
+    不进池（该会话不再聊它），全池被排空 → None（生活线让位给新闻等实时
+    素材）。缺省 None＝旧行为逐位不变。排除发生在轮换取模**之前**：池随
+    会话使用逐渐收窄，同日仍确定性稳定。
     """
     if not isinstance(persona, dict):
         return None
@@ -63,6 +70,21 @@ def pick_life_beat(
             pass
     else:
         beats = _as_list(arc)
+    if not beats:
+        return None
+    # 季节接地（2026-08-18「迎新表演」事故）：带明确节令词且今天出窗的节拍
+    # **今天不进池**（8 月不说迎新排练，9 月到窗自动恢复；无需删运营素材）。
+    # 全池被滤空＝今天没有可说的生活节拍，如实返回 None；过滤异常回原池。
+    try:
+        from src.companion.seasonal_guard import filter_seasonal_beats
+        beats = filter_seasonal_beats(beats, now)
+    except Exception:
+        pass
+    if skip_fn is not None:
+        try:
+            beats = [b for b in beats if not skip_fn(b)]
+        except Exception:
+            pass
     if not beats:
         return None
     stride = max(1, int(stride_days or 1))
@@ -89,6 +111,9 @@ def format_life_context(beat: Optional[str], *, theme: str = "") -> str:
     return (
         head + "——这是你真实在过的日子，可在合适时自然带出或在被问近况时提起；"
         "**前后保持一致**，不要编造与你人设背景冲突的事，也别硬塞进每句话。"
+        # R87 #321：同一片段在窗内会连续几天注入；对话历史里若已经讲过，就不是「今天」的新鲜事
+        "若对话记录里你已经跟对方讲过这件事，就不要再当「今天」的新鲜事重讲一遍——"
+        "要么不提，要么用「前两天」「那天」接着往下说（后续、感受、对方的反应）。"
     )
 
 
@@ -271,7 +296,22 @@ _STOP = frozenset([
     "什么", "怎么", "这个", "那个", "我们", "你们", "然后", "就是", "还有", "但是",
     "可以", "不是", "这样", "知道", "觉得", "真的", "一个", "有点", "哈哈", "嗯嗯",
     "the", "and", "you", "that", "this", "for", "are", "was", "with", "have",
+    # 2026-09-18：请求/媒体/寒暄/质疑 AI 的高频词不是「梗」——实录 inside_jokes 里
+    # 躺着「给我/照片/语音」（客户在索要图和语音）与「你是ai」，被当默契注入 prompt。
+    "给我", "照片", "语音", "视频", "图片", "自拍", "发个", "发张", "发给", "在吗", "你好",
+    "早安", "晚安", "谢谢", "不要", "没有", "可不", "能不", "为什么", "怎么样", "多少",
+    "机器人", "骗子", "真人", "现在", "今天", "明天", "昨天", "时候", "东西", "感觉",
+    "喜欢", "想你", "宝贝", "亲爱", "老公", "老婆",
+    "photo", "picture", "voice", "video", "send", "please", "hello", "thanks", "bot",
+    "robot", "real", "human", "want", "give", "your", "just", "like", "what", "when",
 ])
+# 短语级黑名单：命中即整段不算梗（索要媒体 / 质疑 AI / 泛寒暄）
+_JOKE_BLOCK_RE = re.compile(
+    r"(给我|发(个|张|一张|一段)|照片|语音|视频|图片|自拍|看看你|你是(不是)?(ai|机器人|真人|人)|"
+    r"机器人|骗子|在吗|在不在|早安|晚安|你好|谢谢|多少钱|"
+    r"photo|pic|selfie|voice|video|send\s+me|are\s+you\s+(a\s+)?(bot|robot|real|ai|human)|hello|thanks)",
+    re.IGNORECASE,
+)
 
 
 def detect_recurring_phrases(
@@ -286,6 +326,10 @@ def detect_recurring_phrases(
 
     纯启发式：中文取 2..max_len 字滑窗、英文取单词，统计跨消息出现次数（同一条只计一次），
     过滤停用词与纯标点，返回出现≥min_count 的 top_k。空/异常 → []。
+
+    质量闸（2026-09-18）：索要媒体 / 质疑 AI / 寒暄类短语整段不算梗（:data:`_JOKE_BLOCK_RE`）
+    ——实录 inside_jokes 里躺着「给我/照片/语音/你是ai」。其余口径不变（2 字词 ≥min_count 即算，
+    漂移守卫 / 画像巩固都依赖这一契约）。
     """
     if not messages:
         return []
@@ -298,7 +342,7 @@ def detect_recurring_phrases(
         # 英文/数字 token
         for tok in re.findall(r"[A-Za-z][A-Za-z0-9']{2,}", s):
             k = tok.lower()
-            if k in _STOP or len(k) < 3:
+            if k in _STOP or len(k) < 3 or _JOKE_BLOCK_RE.search(k):
                 continue
             seen_in_msg.add(k)
         # 中文滑窗
@@ -308,11 +352,12 @@ def detect_recurring_phrases(
             for L in range(min_len, min(max_len, n) + 1):
                 for i in range(0, n - L + 1):
                     frag = run[i : i + L]
-                    if frag in _STOP:
+                    if frag in _STOP or _JOKE_BLOCK_RE.search(frag):
                         continue
                     seen_in_msg.add(frag)
         for k in seen_in_msg:
             counts[k] = counts.get(k, 0) + 1
+
     # 取高频；对中文优先较长的片段（更像"梗"而非碎词），做一次包含去冗
     cand = sorted(
         (k for k, c in counts.items() if c >= min_count),
@@ -328,8 +373,21 @@ def detect_recurring_phrases(
     return picked
 
 
+def clean_inside_jokes(jokes: Sequence[str]) -> List[str]:
+    """读侧过滤：库里并集累积的历史垃圾（「给我/照片/你是ai」）不再进 prompt。纯函数。"""
+    out: List[str] = []
+    for j in _as_list(jokes):
+        s = str(j or "").strip()
+        if not s or s in _STOP or _JOKE_BLOCK_RE.search(s):
+            continue
+        if len(s) <= 1:
+            continue
+        out.append(s)
+    return out
+
+
 def format_inside_jokes(jokes: Sequence[str]) -> str:
-    js = _as_list(jokes)
+    js = clean_inside_jokes(jokes)
     if not js:
         return ""
     return (
@@ -411,6 +469,8 @@ def life_share_allowed(
       - 近 7 天分享次数 < max_per_week；
       - 距上次分享 ≥ min_gap_hours。
     两者皆满足才允许。空历史 → 允许。纯函数。
+    「0=不限」（2026-09-04）：``max_per_week<=0`` 不限周频；``min_gap_hours<=0``
+    不限间隔（旧实现 ``len >= 0`` 恒真＝配 0 反而全拦）。
     """
     try:
         now_ts = now.timestamp()
@@ -419,13 +479,23 @@ def life_share_allowed(
     ts = [float(t) for t in (recent_shares or []) if isinstance(t, (int, float))]
     if not ts:
         return True
-    week_ago = now_ts - 7 * 86400
-    recent_week = [t for t in ts if t >= week_ago]
-    if len(recent_week) >= int(max_per_week):
-        return False
-    last = max(ts)
-    if (now_ts - last) < float(min_gap_hours) * 3600:
-        return False
+    try:
+        _mpw = int(max_per_week)
+    except (TypeError, ValueError):
+        _mpw = 0
+    if _mpw > 0:
+        week_ago = now_ts - 7 * 86400
+        recent_week = [t for t in ts if t >= week_ago]
+        if len(recent_week) >= _mpw:
+            return False
+    try:
+        _gap = float(min_gap_hours)
+    except (TypeError, ValueError):
+        _gap = 0.0
+    if _gap > 0:
+        last = max(ts)
+        if (now_ts - last) < _gap * 3600:
+            return False
     return True
 
 
@@ -630,19 +700,35 @@ def build_deep_persona_block(
     cfg = cfg or {}
     if not cfg.get("enabled", False):
         return ""
+    try:
+        from src.ai.usage_economy import skip_deep_persona
+        if skip_deep_persona():
+            return ""
+    except Exception:
+        pass
     persona = persona or {}
-    deep_ctx = deep_ctx or {}
+    # isinstance 而非 or：空 dict 是 falsy，`or {}` 会换新对象——调用方要靠
+    # 传入的 deep_ctx 读回 _life_beat_chosen（实施55），引用必须保住。
+    deep_ctx = deep_ctx if isinstance(deep_ctx, dict) else {}
     blocks: List[str] = []
 
-    # L1 生活线（persona.life_arc 静态派生，无需 store）
+    # L1 生活线（persona.life_arc 静态派生，无需 store）。
+    # 实施55：deep_ctx.beat_skip_fn＝会话级已用素材排除（聊过即退役）；
+    # 选中的 beat 回写 deep_ctx["_life_beat_chosen"] 供调用方栈进 user_context
+    # ——出站回复真提及它时在 _update_after_reply 记账退役。
     if _flag(cfg, "life_line"):
-        beat = pick_life_beat(persona, now)
+        beat = pick_life_beat(
+            persona, now, skip_fn=deep_ctx.get("beat_skip_fn"))
         lc = format_life_context(beat, theme=life_theme(persona))
         if lc:
             blocks.append(lc)
+            deep_ctx["_life_beat_chosen"] = str(beat or "")
 
-    # L3 口味/立场（persona.tastes 静态）
-    if _flag(cfg, "tastes"):
+    # L3 口味/立场（persona.tastes 静态）。
+    # B6（2026-09-11）：PersonaManager.format_persona_block 已从同一 tastes 字段写
+    # 【你的好恶与观点】，这里再写【你的稳定口味与立场】= 每轮重复 200–400 字。
+    # 默认去重；``tastes_repeat: true`` 才双写（门禁用 / 回滚）。
+    if _flag(cfg, "tastes") and bool(cfg.get("tastes_repeat")):
         tb = format_tastes(persona)
         if tb:
             blocks.append(tb)
@@ -707,15 +793,18 @@ def build_deep_persona_block(
 
 def build_life_beat_opener(
     persona: Dict[str, Any], now: datetime, *, gate: str = "",
+    skip_fn: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Any]:
     """把人设"最近的生活片段"做成一条**主动分享**开场（像真人主动说近况）。
 
     gate=="block"（近期危机）→ {}；其余允许（温和分享，soft 也可）。无 life_arc → {}。
     返回 opener dict：``{mode:"life_share", fact, directive}``，与 build_proactive_opener 同形。
+    ``skip_fn``（实施55）＝会话级已用素材排除：该会话聊过的 beat 不再作
+    开场素材，全用完 → {}（升级链自然落到新闻/天气/问候）。
     """
     if str(gate or "").strip().lower() == "block":
         return {}
-    beat = pick_life_beat(persona, now)
+    beat = pick_life_beat(persona, now, skip_fn=skip_fn)
     if not beat:
         return {}
     return {
@@ -928,7 +1017,7 @@ def run_deep_persona_consolidation(
 __all__ = [
     "pick_life_beat", "format_life_context", "life_theme",
     "build_relationship_profile", "format_relationship_profile", "build_callback_opener",
-    "format_tastes", "detect_recurring_phrases", "format_inside_jokes",
+    "format_tastes", "detect_recurring_phrases", "format_inside_jokes", "clean_inside_jokes",
     "rank_by_affect", "to_experiential_recall",
     "temporal_anchor", "maybe_imperfection_hint",
     "build_deep_persona_block",

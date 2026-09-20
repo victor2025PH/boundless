@@ -20,6 +20,12 @@ __pycache__/
 # ---- node / next ----
 node_modules/
 .next/
+# 隔离验证/历史构建目录（.next-verify* / .next-old / .next-hand-redesign）与截图缓存
+.next-*/
+website/.hand-shots/
+website/.icon-shots/
+# 临时验收脚本（deploy.ps1 的 tar 亦排除 scripts/_*）
+website/scripts/_*
 build/
 dist/
 
@@ -61,6 +67,17 @@ _pending_models/
 !website/public/**/*.mp3
 !website/public/**/*.mp4
 
+# 真活探针的 ASR 夹具同属「被代码引用、缺了就静默降级」那一类（2026-08-27）：
+# 上面的 *.wav 把它整个挡在版本控制外 → 干净 clone / 别的机器上
+# build_probe_specs 的 ASR_FIXTURE.is_file() 为假，四域探针**静默变三域**且零信号。
+# 与上面官网资产同理放行；136KB，只此一个文件。
+!engines/chengjie/assets/probe/*.wav
+
+# #121 三进宫「疑似无声」误报的金标夹具（2026-09-02）：真实 IndexTTS-2 克隆产物
+# （22.05k/16bit/C2PA 尾块，与 KKXSTU 包里被误判的 tts-*.wav 同引擎同容器），
+# tests/test_preview_speech_verdict.py 用它钉「有声样本绝不判无声」。134KB，gold_ 前缀限定。
+!engines/chengjie/tests/fixtures/gold_*.wav
+
 # keep empty structure
 !**/.gitkeep
 
@@ -83,3 +100,32 @@ website/public/brand/campaign/teaser-war-latest.png
 engines/chengjie/website/
 # Playwright browser profile cache (runtime artifact, not source)
 engines/avatarhub/demo_record/.pwprofile/
+
+# ---- runtime / cross-machine handoff (2026-07-25) ----
+deploy/instances/.ops/
+handoff/
+tmp_voice_ab/
+# local-only archives (e.g. chengjie/website dup-only files rescued before deletion)
+_archive/
+# nested repo (TG ZhiKongWang, independent repo - do not absorb)
+tgkz2026/
+
+# ---- release hygiene (2026-07-29) ----
+# 运行时注册表 DB（root config/ 与 platform/credpool/config/ 各一份；同名 .py 源码不受影响）
+account_registry.db
+xyc2026/trustcheck.db
+.pytest_cache/
+# agent 临时验收/探针产物（根目录 scratch 约定 _tmp_* 前缀）与登录二维码截图
+_tmp_*
+tmp_tg_qr.png
+# scratch 一律不入库（2026-08-27 大收口前补全）：上面三条 tmp 规则是零散加的，
+# 漏掉了 tmp_198_logs/ 这类事故排查目录——里面是 579KB 后端日志、一次性探针脚本
+# （q.py/q2.py…），以及 msg_secrets.json（Messenger e2ee_pin，**真凭据**）。
+# 差点随一次性大收口进版本库；tmp_ 前缀本就是本仓的 scratch 约定，这里补成通配。
+tmp_*
+# QA 截图缓存（与 .hand-shots / .icon-shots 同族；qa-wizard-shots.mjs 脚本本身仍入库）
+website/.wizard-shots/
+website/.wizard-shots-en/
+# 发布物只活在下载服务器（deploy.ps1 [3.5/4] 差量上传通道），不入库
+website/public/downloads/
+website/public/releases/

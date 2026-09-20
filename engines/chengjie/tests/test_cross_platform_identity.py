@@ -2,7 +2,10 @@
 import tempfile
 from pathlib import Path
 import pytest
-from src.utils.cross_platform_identity import CrossPlatformIdentity
+from src.utils.cross_platform_identity import (
+    CrossPlatformIdentity,
+    link_and_merge_memory,
+)
 
 
 @pytest.fixture
@@ -80,3 +83,70 @@ class TestListAndGetByCanonical:
         platforms = [p[0] for p in pairs]
         assert "telegram" in platforms
         assert "line_rpa" in platforms
+
+
+class _RecStore:
+    """记录 merge_key 调用的最小情景记忆库替身。"""
+
+    def __init__(self, rows_per_merge: int = 3):
+        self.calls = []
+        self._rows = rows_per_merge
+
+    def merge_key(self, old_key, new_key):
+        self.calls.append((old_key, new_key))
+        return self._rows
+
+
+class TestLinkAndMergeMemory:
+    """P10：手动 link（AI Studio 路径）与影子确认同口径的记忆合流 + 簇传递。"""
+
+    def test_basic_merge_moves_b_history(self, cpi):
+        store = _RecStore()
+        out = link_and_merge_memory(
+            cpi, store, "telegram", "111", "whatsapp", "639")
+        assert out["canonical_id"] == "telegram:111"
+        assert store.calls == [("whatsapp:639", "telegram:111")]
+        assert out["memory_rows_merged"] == 3
+        assert out["merged_from"] == ["whatsapp:639"]
+        assert cpi.resolve("whatsapp", "639") == "telegram:111"
+
+    def test_no_store_still_links(self, cpi):
+        out = link_and_merge_memory(
+            cpi, None, "telegram", "111", "whatsapp", "639")
+        assert out["canonical_id"] == "telegram:111"
+        assert out["memory_rows_merged"] == 0
+        assert cpi.resolve("whatsapp", "639") == "telegram:111"
+
+    def test_already_same_canonical_is_noop_merge(self, cpi):
+        cpi.link("telegram", "111", "whatsapp", "639")
+        store = _RecStore()
+        out = link_and_merge_memory(
+            cpi, store, "telegram", "111", "whatsapp", "639")
+        assert out["canonical_id"] == "telegram:111"
+        assert store.calls == []            # pre_b == canon → 零合并
+        assert out["cluster_relinked"] == []
+
+    def test_cluster_members_follow(self, cpi):
+        # 既有簇：line L1 ← whatsapp 639（共享 whatsapp:639）
+        cpi.link("whatsapp", "639", "line", "L1")
+        store = _RecStore()
+        out = link_and_merge_memory(
+            cpi, store, "telegram", "111", "whatsapp", "639")
+        canon = out["canonical_id"]
+        assert canon == "telegram:111"
+        # 簇友 line 一并改挂（传递性）；旧簇史合流一次
+        assert cpi.resolve("line", "L1") == canon
+        assert {(r["platform"], r["uid"]) for r in out["cluster_relinked"]} \
+            == {("line", "L1")}
+        assert store.calls == [("whatsapp:639", canon)]
+
+    def test_merge_failure_never_blocks_link(self, cpi):
+        class _Boom:
+            def merge_key(self, *_a):
+                raise RuntimeError("locked")
+
+        out = link_and_merge_memory(
+            cpi, _Boom(), "telegram", "111", "whatsapp", "639")
+        assert out["canonical_id"] == "telegram:111"
+        assert out["memory_rows_merged"] == 0
+        assert cpi.resolve("whatsapp", "639") == "telegram:111"

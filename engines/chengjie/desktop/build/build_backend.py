@@ -18,10 +18,13 @@ electron-builder 的 extraResources 会把 backend-dist/ → 安装包内 resour
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import time
 from pathlib import Path
 
 # Windows 默认 GBK 控制台无法编码 ✓/✗/⚠ 等状态符 → 打包成功后最后一行 print 会抛
@@ -39,19 +42,349 @@ OUT = HERE / "backend-dist"                      # 产出目录（electron-build
 NAME = "backend"
 
 # 后端运行需要的数据（模板/静态/示例配置）。格式：(源, 包内目标相对路径)
+# 注意：src/web/static 不直接入包——见 _stage_static()（剔除运行时落地的真实媒体后再打）。
 DATAS = [
     (REPO / "src" / "web" / "templates", "src/web/templates"),
-    (REPO / "src" / "web" / "static", "src/web/static"),
+    # 两端共享的 copilot 组件库。admin.py 用 Path(__file__).parents[2]/"shared"/"copilot"
+    # 定位并挂到 /copilot——冻结后即 <_MEIPASS>/shared/copilot。漏打 → 目录不存在 →
+    # mount 被 if 跳过 → /copilot/* 全 404：桌面右栏业务助手 iframe 显示 {"detail":"Not Found"}，
+    # 网页工作台侧栏的 cp-* 组件与 tokens.css 一并失效（0.2.0/0.2.1 安装版实测中招）。
+    (REPO / "shared" / "copilot", "shared/copilot"),
+    # AI 助手悬浮球组件（2026-08-21）。admin.py 同款 parents[2]/"shared"/"assistant"
+    # 定位挂 /assistant-shared——漏打则打包态开 assistant.enabled 时 bootstrap 探针
+    # 通过但组件脚本 404＝死球（与上面 copilot 0.2.0 中招机制完全相同）。
+    (REPO / "shared" / "assistant", "shared/assistant"),
     # P0-1 A1：桌面随包种子 = 最小配置（无 YOUR_* 占位）。AITR_DESKTOP_MODE 下
     # ConfigManager._ensure_seeded 优先播种它 → 首启只差一个 AI Key（向导写 overlay）。
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
     (REPO / "config" / "config.desktop.min.yaml", "config"),
     (REPO / "config" / "config.example.yaml", "config"),
+    # P-4 #254（MTRCH2③，2026-09-08）：转人工话术 / 合规检查两份 yaml 此前**没进包**，
+    # clean 装每次启动 WARNING「HandoffRenderer init skipped: scripts file not found」
+    # 「HandoffComplianceChecker init skipped」——转人工整条链在客户机上哑。
+    # contacts/bootstrap 先找用户数据区 config/，缺则回落这里的 <_internal>/config/。
+    # ⚠ 只许纯 YAML 话术 / 规则进这一段；fatex.db / *.key / credpool 库 / 真实 config.yaml
+    # 一律不得出现（package-layout.test.js「必须不在」清单钉住）。
+    (REPO / "config" / "handoff_scripts.yaml", "config"),
+    (REPO / "config" / "handoff_compliance.yaml", "config"),
+    # Q-4 #267 F（2026-09-10）：「这版改变了什么」默认值变更清单（纯 JSON 数据；每版发版线维护）。
+    # src/utils/release_defaults.py 用 parents[2]/config 定位＝冻结后 <_internal>/config/。
+    (REPO / "config" / "release_defaults_changed.json", "config"),
+    # WP-1：部署能力预设档（cloud_light 等；纯 YAML，门禁保证零内网 IP）。
+    # launcher 注入 AITR_DEPLOY_PROFILE 后，首启由 ConfigManager 播种进 overlay。
+    (REPO / "config" / "profiles", "config/profiles"),
+    # M-5 D（#225，2026-09-06）：真探针夹具（asr_probe.wav 16k 单声道 + 逐字稿 sidecar，
+    # ~133KB）。true_probe 用 parents[2]/assets/probe 定位＝冻结后 <_MEIPASS>/assets/probe；
+    # 此前漏打 → 客户机每 10 分钟 WARNING「asr/ser 域缺夹具，该域不参与探针」，转录
+    # 健康从未被真探（5NXHUW 实录）。
+    (REPO / "assets" / "probe", "assets/probe"),
 ]
+
+# 集团底座 platform/ 下被引擎**按文件路径**加载的瘦模块。它们在引擎目录之外，
+# PyInstaller 的静态分析看不见（没有 import 语句可追），必须显式登记：
+#   · credpool  —— 中央凭据池瘦客户端；漏打 → 中央池静默失效，用户被逼回
+#     my.telegram.org 自己申请 api_id（0.2.1 安装版实测漏打）。
+#   · licensing —— 机器指纹（授权绑机 + 首启体验档归属）；漏打 → 绑机校验放行、
+#     体验档退化为无机器归属，一样是静默降级。
+# 冻结后落在 sys._MEIPASS/platform/<name>/，与各 bridge 的查找顺序一一对应。
+#
+# ⚠️ 不能整目录直打（2026-08-09 实锤）：这两个目录里除 .py 外还常年躺着**运行时/机密
+# 数据**——credpool/config/account_registry.db（真实 Telegram 账号 + credpool_cred）、
+# credpool/config/registry.key（Fernet 密钥，registry_crypto 用它加解密 meta.session_string
+# 等）、credpool/data/tgmatrix.db。整目录 --add-data 会把它们卷进**公网安装包**＝真实账号
+# ＋解密钥同包交付。而消费方（credpool_bridge / license_client）运行时**只按文件路径加载
+# .py**，这些数据文件从不被读。故与 src/web/static 的 RUNTIME_STATIC_EXCLUDES 同哲学：
+# 暂存清洗（剔除 config/data/__pycache__ 与 .db/.key 等机密后缀）后再打，见 _stage_platform_pkg。
+_PLATFORM_ROOT = REPO.parent.parent / "platform"
+PLATFORM_PKGS = ("credpool", "licensing")
+
+# static/ 下的运行时落地目录：protocol_media＝客户聊天媒体（语音/照片/视频），
+# persona_avatars＝运行时同步的账号/人设头像。均为 gitignore 的生产数据，随包分发
+# ＝把真实客户隐私打进公网安装包（0.1.0 曾中招），必须剔除；两目录代码均按需重建。
+RUNTIME_STATIC_EXCLUDES = {"protocol_media", "persona_avatars"}
+STATIC_SRC = REPO / "src" / "web" / "static"
+STATIC_STAGED = HERE / "static-staged"
+
+# i18n 词条包（P1 增量化，2026-08-18）：packs 是纯数据 dict（有门禁保证零运行时
+# import），frozen 态由 i18n_packs/__init__ 改为「磁盘文件优先 exec」——把源文件
+# 一并 --add-data 进 <_MEIPASS>/src/web/i18n_packs/，词条改动即可走 refresh:datas
+# 秒级增量（并让 web_i18n 的 pack mtime 热重载在安装版复活）。PYZ 内编译副本仍在
+# （collect-submodules src），作 exec 失败回落。暂存清洗：剔 __pycache__/*.pyc +
+# 逐文件语法自检（全量构建 PYZ 编译天然会拦语法错，数据路径必须补齐同强度门）。
+I18N_PACKS_SRC = REPO / "src" / "web" / "i18n_packs"
+I18N_PACKS_STAGED = HERE / "i18n-packs-staged"
+
+# 领域包（只读代码资产：系统提示词/术语/KB 种子/看板挂件/域内模板）。
+# 消费方经 domain_loader.resolve_domains_dir 定位：冻结态回落到 <_MEIPASS>/domains。
+# 漏打 → 安装版日志出 "Domain 'xxx' has no manifest.yaml"，领域提示词与挂件静默丢失
+# （0.2.1 实测），AI 回复质量无声降级且没有任何报错。
+DOMAINS_SRC = REPO / "domains"
+DOMAINS_STAGED = HERE / "domains-staged"
+
+# 集团底座瘦模块（credpool/licensing）暂存目录与「机密数据」剔除规则（见上方 _PLATFORM_ROOT
+# 注释的事故背景）。EXCLUDE_DIRS 整块剔（credpool 的运行时数据只在 config/ data/ 里，licensing
+# 当前无运行时数据目录，剔了也不误伤代码/schema）；SECRET_SUFFIXES 逐文件剔（防将来任意子目录
+# 里躺库/密钥/证书被顺带打进公网包）。
+PLATFORM_STAGED = HERE / "platform-staged"
+PLATFORM_EXCLUDE_DIRS = {"config", "data", "__pycache__"}
+PLATFORM_SECRET_SUFFIXES = {".db", ".db-wal", ".db-shm", ".key", ".pem",
+                            ".sqlite", ".sqlite3", ".pyc", ".pyo"}
+
+# 需要「暂存清洗后再打」的目录的包内目标（打包完整性门禁读这个常量，防两边口径漂移）
+STAGED_DESTS = ("src/web/static", "domains",
+                "platform/credpool", "platform/licensing",
+                "src/web/i18n_packs")
+
+# --ref 快照构建的落地目录（P0 2026-08-29，1.0.59「半途快照误发」事故后补）
+SNAPSHOT_DIR = HERE / "src-snapshot"
+SNAPSHOT_STAMP = "SNAPSHOT_REF.txt"
+
+
+# ── --ref 快照构建（防共享树半途脏文件搭车进发布包）─────────────────────────
+#
+# 背景：本树常年有 100+ 脏文件、多条并行线各自半途——默认模式直接读活树打包，
+# 发布时刻恰逢别人保存到一半＝把半成品发给全部客户（2026-08-29 v1.0.59 实锤，
+# 当天被迫重发 1.0.60）。--ref 模式把「发布内容」钉在一个 git 提交点：
+#   git archive <ref> 导出干净快照 → 用**快照里的** build_backend.py 在快照根上
+#   构建（老 ref 也自洽）→ 产出搬回本目录 backend-dist/ + 落 SNAPSHOT_REF.txt。
+# 默认（不带 --ref）行为逐字节不变——采纳与否是发布线的 SOP 决策。
+
+def _run_git(git_args: list, cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *git_args], cwd=str(cwd),
+                          capture_output=True)
+
+
+def export_ref_snapshot(
+    ref: str,
+    *,
+    engine_root: Path = REPO,
+    snapshot_dir: Path = SNAPSHOT_DIR,
+) -> tuple:
+    """把 ``<ref>`` 的引擎子树 + platform 瘦模块导出成干净快照。
+
+    返回 ``(快照引擎根, 短sha, notes)``；notes 里带「platform 包走了活树回落」
+    这类必须让发布者看见的降级说明。失败抛 RuntimeError（快照构建宁断不糊）。
+    """
+    notes: list = []
+    top = _run_git(["rev-parse", "--show-toplevel"], engine_root)
+    if top.returncode != 0:
+        raise RuntimeError(f"不在 git 仓库内，--ref 不可用: {engine_root}")
+    toplevel = Path(top.stdout.decode("utf-8", "replace").strip())
+    sha_p = _run_git(["rev-parse", "--short", f"{ref}^{{commit}}"], toplevel)
+    if sha_p.returncode != 0:
+        raise RuntimeError(
+            f"git ref 无法解析: {ref}: "
+            f"{sha_p.stderr.decode('utf-8', 'replace').strip()}")
+    sha = sha_p.stdout.decode("utf-8", "replace").strip()
+
+    shutil.rmtree(snapshot_dir, ignore_errors=True)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    def _archive_into(pathspec: str) -> bool:
+        args = ["archive", "--format=tar", sha]
+        if pathspec:
+            args += ["--", pathspec]
+        proc = _run_git(args, toplevel)
+        if proc.returncode != 0:
+            return False
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tf:
+            try:
+                tf.extractall(snapshot_dir, filter="data")
+            except TypeError:            # Python <3.12 无 filter 形参
+                tf.extractall(snapshot_dir)
+        return True
+
+    try:
+        rel_engine = engine_root.resolve().relative_to(toplevel.resolve())
+    except ValueError:
+        rel_engine = Path(".")
+    rel_posix = rel_engine.as_posix()
+    if not _archive_into("" if rel_posix == "." else rel_posix):
+        raise RuntimeError(f"git archive 引擎子树失败（ref={ref}）")
+    snap_engine = (snapshot_dir / rel_engine).resolve() \
+        if rel_posix != "." else snapshot_dir.resolve()
+    if not (snap_engine / "main.py").is_file():
+        raise RuntimeError(f"快照缺 main.py（引擎子树没导出全）: {snap_engine}")
+
+    # platform 瘦模块：优先取 ref 内容；未入库（独立仓/未跟踪）→ 活树拷贝回落
+    # （构建期 _stage_platform_pkg 照常剔机密，风险=platform 半途编辑搭车，如实播报）
+    snap_platform = snap_engine.parent.parent / "platform"
+    if snapshot_dir.resolve() not in snap_platform.resolve().parents:
+        # 引擎就在仓根（CI 单仓布局）：parent.parent 会逃出快照目录——绝不
+        # 往快照外写文件；该布局本就没有集团 platform 目录可打。
+        notes.append("引擎位于仓根布局，platform 瘦模块不适用（跳过）")
+        return snap_engine, sha, notes
+    for pkg in PLATFORM_PKGS:
+        live = _PLATFORM_ROOT / pkg
+        expect = snap_platform / pkg
+        if expect.is_dir():
+            continue                     # archive 已按仓库相对路径落对位置
+        try:
+            rel_pkg = live.resolve().relative_to(toplevel.resolve()).as_posix()
+        except ValueError:
+            rel_pkg = ""
+        if rel_pkg and _archive_into(rel_pkg) and expect.is_dir():
+            continue
+        if live.is_dir():
+            shutil.copytree(
+                live, expect,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            notes.append(
+                f"platform/{pkg} 不在 ref 内 → 活树回落拷贝（半途编辑可能搭车，"
+                "机密仍由打包暂存清洗剔除）")
+        else:
+            notes.append(f"platform/{pkg} 源缺失 → 包内将没有该模块（静默降级面）")
+    return snap_engine, sha, notes
+
+
+def _build_from_ref(args) -> int:
+    """--ref 主流程：导出快照 → 子进程跑快照里的本脚本 → 产出搬回 + 落 ref 戳。"""
+    try:
+        snap_engine, sha, notes = export_ref_snapshot(args.ref)
+    except RuntimeError as e:
+        print(f"✗ 快照导出失败: {e}", file=sys.stderr)
+        return 2
+    for n in notes:
+        print(f"⚠ {n}")
+    script = snap_engine / "desktop" / "build" / "build_backend.py"
+    if not script.is_file():
+        print(f"✗ 该 ref 尚无打包脚本（太老）: {script}", file=sys.stderr)
+        return 2
+    if args.export_only:
+        n_files = sum(1 for p in snap_engine.rglob("*") if p.is_file())
+        print(f"✓ 快照已导出（仅导出模式）：{snap_engine}  ref={args.ref}"
+              f" sha={sha} files={n_files}")
+        return 0
+    sub = [sys.executable, str(script)]
+    if args.clean:
+        sub.append("--clean")
+    if args.onefile:
+        sub.append("--onefile")
+    if args.keep_heavy:
+        sub.append("--keep-heavy")
+    print(f"→ 快照构建（ref={args.ref} sha={sha}）:\n  " + " ".join(sub))
+    proc = subprocess.run(sub, cwd=str(snap_engine))
+    if proc.returncode != 0:
+        print("✗ 快照构建失败（活树 backend-dist 未被触碰）", file=sys.stderr)
+        return proc.returncode
+    snap_out = snap_engine / "desktop" / "build" / "backend-dist"
+    if not snap_out.is_dir():
+        print(f"✗ 快照构建无产出目录: {snap_out}", file=sys.stderr)
+        return 1
+    shutil.rmtree(OUT, ignore_errors=True)
+    shutil.move(str(snap_out), str(OUT))
+    (OUT / SNAPSHOT_STAMP).write_text(
+        f"ref={args.ref}\nsha={sha}\nbuilt_at={time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        + "".join(f"note={n}\n" for n in notes),
+        encoding="utf-8")
+    print(f"✓ 快照构建完成：{OUT}（ref={args.ref} sha={sha}，{SNAPSHOT_STAMP} 已落）")
+    return 0
+
+
+def _stage_static() -> Path:
+    """把 src/web/static 复制到构建暂存目录，顶层剔除运行时媒体目录后供 --add-data 使用。"""
+    shutil.rmtree(STATIC_STAGED, ignore_errors=True)
+
+    def _ignore(dirpath: str, names: list[str]):
+        if Path(dirpath).resolve() == STATIC_SRC.resolve():
+            return set(names) & RUNTIME_STATIC_EXCLUDES
+        return set()
+
+    shutil.copytree(STATIC_SRC, STATIC_STAGED, ignore=_ignore)
+    leaked = [n for n in RUNTIME_STATIC_EXCLUDES if (STATIC_STAGED / n).exists()]
+    if leaked:
+        raise RuntimeError(f"static 暂存仍含运行时目录（打包中止防隐私泄漏）: {leaked}")
+    return STATIC_STAGED
+
+
+def _stage_i18n_packs() -> Path:
+    """i18n packs 暂存：剔 __pycache__/*.pyc + 逐文件语法自检后供 --add-data。
+
+    frozen 态这些 .py 以数据文件被 exec（文件优先加载），不经 PYZ 编译——语法坏文件
+    若混进包，安装版收集时只能靠回落救；在构建/刷新期就地 compile 拦下才是同强度门。
+    """
+    shutil.rmtree(I18N_PACKS_STAGED, ignore_errors=True)
+    shutil.copytree(I18N_PACKS_SRC, I18N_PACKS_STAGED,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for p in sorted(I18N_PACKS_STAGED.glob("*.py")):
+        try:
+            compile(p.read_text(encoding="utf-8-sig"), str(p), "exec")
+        except SyntaxError as e:
+            raise RuntimeError(
+                f"i18n pack 语法错误（打包/刷新中止，防坏词表进包）: {p.name}: {e}") from e
+    return I18N_PACKS_STAGED
+
+
+def _stage_domains() -> Path:
+    """domains/ 暂存：剔除 __pycache__（构建机路径与 magic 号无谓入包）。"""
+    shutil.rmtree(DOMAINS_STAGED, ignore_errors=True)
+    shutil.copytree(DOMAINS_SRC, DOMAINS_STAGED,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return DOMAINS_STAGED
+
+
+def _stage_platform_pkg(pkg: str):
+    """把 platform/<pkg> 复制到暂存目录，剔除运行时/机密数据后供 --add-data。
+
+    落地前**断言零 .db/.key/.pem 幸存**——防「同目录恰好躺着账号库/解密钥」被打进公网
+    安装包（2026-08-09 credpool 实锤：account_registry.db + registry.key + tgmatrix.db）。
+    宁可打不出（RuntimeError 中止）也不泄账号。源不存在 → None（打包侧跳过，与旧 is_dir 判一致）。
+    """
+    src = _PLATFORM_ROOT / pkg
+    if not src.is_dir():
+        return None
+    dest = PLATFORM_STAGED / pkg
+    shutil.rmtree(dest, ignore_errors=True)
+
+    def _ignore(dirpath: str, names: list[str]) -> set[str]:
+        drop: set[str] = set()
+        for n in names:
+            full = Path(dirpath) / n
+            if full.is_dir():
+                if n in PLATFORM_EXCLUDE_DIRS:
+                    drop.add(n)
+            elif full.suffix.lower() in PLATFORM_SECRET_SUFFIXES:
+                drop.add(n)
+        return drop
+
+    shutil.copytree(src, dest, ignore=_ignore)
+    _hard = {".db", ".db-wal", ".db-shm", ".key", ".pem", ".sqlite", ".sqlite3"}
+    leaked = [str(p.relative_to(dest)) for p in dest.rglob("*")
+              if p.is_file() and p.suffix.lower() in _hard]
+    if leaked:
+        raise RuntimeError(
+            f"platform/{pkg} 暂存仍含机密数据（打包中止防账号/密钥泄漏）: {leaked}")
+    return dest
+
+
+def _staged_datas() -> list:
+    out = [(_stage_static(), "src/web/static")]
+    if I18N_PACKS_SRC.is_dir():
+        out.append((_stage_i18n_packs(), "src/web/i18n_packs"))
+    if DOMAINS_SRC.is_dir():
+        out.append((_stage_domains(), "domains"))
+    # 集团底座瘦模块：清洗后再打（绝不整目录直打，见 _PLATFORM_ROOT 注释）
+    for _pkg in PLATFORM_PKGS:
+        staged = _stage_platform_pkg(_pkg)
+        if staged is not None:
+            out.append((staged, f"platform/{_pkg}"))
+    return out
 
 # 动态 import 的包，PyInstaller 静态分析抓不全 → 显式 collect。
 COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
-COLLECT_ALL = ["uvicorn"]  # uvicorn 的 lifespan/loops/protocols 子模块按字符串加载
+# uvicorn 的 lifespan/loops/protocols 子模块按字符串加载；
+# okline（LINE 协议登录）除子模块外还须连 ltsm/*.wasm + *.js（Node 桥资产）一并收进包，
+# 否则冻结后 hmac_signer 找不到 ltsm_bridge.js → LINE 扫码在安装版恒失败（--collect-all
+# 会把 collect_data_files 抓到的非 .py 数据一起打进 <_MEIPASS>/okline/ltsm/）。
+# opencc（opencc-python-reimplemented）：词典/配置是包内 dictionary/*.txt +
+# config/*.json 数据文件，静态分析只带 .py → 冻结后 OpenCC("t2s") 找不到词典即抛，
+# 软依赖处静默降级成恒等 → 桌面端繁简归一（synth_verify CER / 克隆发音输入 t2s /
+# zh-tw 出向翻译 OpenCCEngine）在坐席机上全部失效（2026-09-12 GWJ2RZ 钧机
+# 整晚克隆被繁体转写误判「念错」）。--collect-all 连数据一并收进包。
+# uiautomation（个人微信 PC 副驾读屏，2026-09-19 1.0.90 进包）：包内 bin/UIAutomationClient_VC140_*.dll
+# 是数据文件，静态分析只带 .py → 冻结后 ctypes 找不到 DLL 即 import 失败 → driver_ready.ok=False →
+# 引导页退回「手动命令行」（而那条命令又要求装 Python）——外部用户点「启动副驾」是坏的。
+COLLECT_ALL = ["uvicorn", "okline", "opencc", "uiautomation"]
 
 # 重量级可选软依赖：默认排除以控包体（缺失时后端对应能力软降级）。
 #
@@ -61,10 +394,13 @@ COLLECT_ALL = ["uvicorn"]  # uvicorn 的 lifespan/loops/protocols 子模块按�
 # import**），其余（ctranslate2/av/transformers/scipy/sklearn/onnxruntime/numba/llvmlite/
 # pyarrow/pandas/playwright…）都是这两个「根」的传递依赖——排除它们不碰后端启动链，
 # 缺失时对应可选功能在惰性 import 处软降级（已有 try/except）。
-# 保留：numpy（众多库基础依赖）/ jieba（中文分词，KB 可能用）/ PIL（收件箱图片）。
+# 保留：numpy（众多库基础依赖）/ jieba（中文分词，KB 可能用）/ PIL（收件箱图片）/
+# sounddevice + soundfile（2026-09-19 起是个人微信 PC 副驾「发语音」的音频通路：播/录 VB-CABLE、
+# 解码合成音；两者带的 portaudio / libsndfile DLL 合计 <3MB，hooks-contrib 自带 hook 会收进包；
+# 排掉它们副驾就永远 voice_ready=False 只发文字，坐席机上没人能补装）。
 EXCLUDES = [
     # 本地 ASR / 音频声学（桌面走云或 LAN GPU faster-whisper 服务，不做本地转写/分析）
-    "whisper", "faster_whisper", "ctranslate2", "av", "librosa", "soundfile",
+    "whisper", "faster_whisper", "ctranslate2", "av", "librosa",
     "torch", "torchaudio",
     # 本地向量嵌入 / ML / 评测（桌面 embedding 走云 API；eval/训练不随桌面分发）
     "sentence_transformers", "transformers", "tokenizers", "onnxruntime",
@@ -85,7 +421,18 @@ def main() -> int:
     ap.add_argument("--clean", action="store_true", help="打包前清空产出与缓存")
     ap.add_argument("--onefile", action="store_true", help="单文件模式（更慢、首启解压；默认 onedir 更稳）")
     ap.add_argument("--keep-heavy", action="store_true", help="不排除 whisper/torch 等重依赖")
+    ap.add_argument("--ref", default="", metavar="GIT_REF",
+                    help="从 git 提交点快照构建（防共享树半途脏文件搭车进发布包；"
+                         "产出仍落 backend-dist/ 并带 SNAPSHOT_REF.txt）")
+    ap.add_argument("--export-only", action="store_true",
+                    help="配合 --ref：只导出快照不构建（核对发布内容用）")
     args = ap.parse_args()
+
+    if args.export_only and not args.ref:
+        print("✗ --export-only 只与 --ref 搭配使用", file=sys.stderr)
+        return 2
+    if args.ref:
+        return _build_from_ref(args)
 
     try:
         import PyInstaller  # noqa: F401
@@ -94,10 +441,14 @@ def main() -> int:
         return 2
 
     if args.clean:
-        for d in (OUT, HERE / "build", HERE / "__pycache__"):
+        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED,
+                  DOMAINS_STAGED, PLATFORM_STAGED, I18N_PACKS_STAGED,
+                  SNAPSHOT_DIR):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
+
+    datas = _staged_datas() + DATAS
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -117,7 +468,7 @@ def main() -> int:
     if not args.keep_heavy:
         for mod in EXCLUDES:
             cmd += ["--exclude-module", mod]
-    for src, dst in DATAS:
+    for src, dst in datas:
         if Path(src).exists():
             cmd += ["--add-data", f"{src}{_sep()}{dst}"]
         else:
@@ -147,9 +498,28 @@ def main() -> int:
         shutil.rmtree(inner, ignore_errors=True)
 
     final = OUT / exe
-    print(f"✓ 完成：{final}" if final.exists() else f"⚠ 产出未在预期路径：{OUT}（请检查 PyInstaller 输出）")
+    if not final.exists():
+        print(f"⚠ 产出未在预期路径：{OUT}（请检查 PyInstaller 输出）", file=sys.stderr)
+        return 1
+
+    # 源码指纹戳：predist 用它拦「改了 src 却直接 dist」的陈旧 sidecar
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        from backend_source_fingerprint import compute_fingerprint, write_stamp
+        # detail=True：stamp 带逐文件明细，refresh_backend_datas.py 据此做文件级 diff
+        # （纯数据资产变更走秒级增量刷新而非整跑 PyInstaller）
+        fp = compute_fingerprint(REPO, datas=list(DATAS), detail=True)
+        stamp = write_stamp(OUT, fp)
+        print(f"✓ 源码指纹已写入 {stamp.name} ({fp['aggregate'][:16]}… files={fp['file_count']})")
+    except Exception as e:
+        print(f"✗ 写入源码指纹失败（拒绝产出无戳 backend-dist）: {e}", file=sys.stderr)
+        return 1
+
+    print(f"✓ 完成：{final}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

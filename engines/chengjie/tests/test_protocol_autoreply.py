@@ -30,8 +30,10 @@ def _row(auto_reply=True, persona_id="zjg"):
 @pytest.fixture(autouse=True)
 def _clear_state():
     pa._last_reply.clear()
+    pa._last_sent.clear()
     yield
     pa._last_reply.clear()
+    pa._last_sent.clear()
 
 
 def _make_send(sink):
@@ -93,7 +95,10 @@ async def test_both_gates_on_sends_and_passes_persona():
 
 
 @pytest.mark.asyncio
-async def test_high_risk_reply_not_sent():
+async def test_high_risk_reply_not_sent(monkeypatch):
+    """enforce 档（旧行为）：AI 稿命中高风险 → 转人工不自动发。#160 v2 起默认 shadow
+    放行（见下面两条），这里显式切 enforce 兼作「旧规则仍在」反向验证。"""
+    monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
     sent = []
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
@@ -103,6 +108,96 @@ async def test_high_risk_reply_not_sent():
     )
     assert res["skipped"] == "high_risk"
     assert sent == []
+
+
+@pytest.fixture
+def _shadow_ledger(tmp_path, monkeypatch):
+    from src.inbox import autosend_shadow_log as sl
+    d = tmp_path / "shadow"
+    monkeypatch.setenv(sl.ENV_DIR, str(d))
+    monkeypatch.delenv("AITR_AUTOSEND_POLICY_MODE", raising=False)
+    sl.get_stats().reset()
+    sl._reset_pending_for_tests()
+    return d
+
+
+def _ledger_rows(d):
+    import json
+    out = []
+    if d.exists():
+        for p in sorted(d.glob("shadow_*.jsonl")):
+            out += [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return out
+
+
+@pytest.mark.asyncio
+async def test_high_risk_reply_held_for_review_in_shadow_with_ledger(_shadow_ledger):
+    """D-O1 豁免②（O-1 A，2026-09-08）：shadow 下 AI 稿高风险**不再直发**，转人工（high_risk）；
+    台账仍一行 hold(stage=protocol) + 一行 outcome(cancelled:risk_high_review)；不登记 reconcile
+    待终局（本链无草稿行）。09-04 全放行只剩 medium（见下一条）。"""
+    from src.inbox import autosend_shadow_log as sl
+    sent = []
+    res = await pa.run_autoreply(
+        _payload("我要退款"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("好的，请提供付款账号我帮你退款"), send=_make_send(sent),
+        risk_fn=lambda t: "high",
+    )
+    assert res["skipped"] == "high_risk" and res["risk"] == "high" and res.get("sent") is not True
+    assert pa.needs_handoff(res) is True
+    assert sent == []
+    rows = _ledger_rows(_shadow_ledger)
+    holds = [r for r in rows if r.get("kind") == "hold"]
+    outs = [r for r in rows if r.get("kind") == "outcome"]
+    assert len(holds) == 1 and len(outs) == 1
+    h, o = holds[0], outs[0]
+    assert h["stage"] == "protocol" and h["would_hold_level"] == "L4" and h["hold_reason"] == "reply_risk"
+    assert h["platform"] == "telegram" and h["account_id"] == "tg1" and h["conv_key"] == "123"
+    assert h["draft_id"].startswith("proto:telegram:tg1:123:")
+    assert h["reply_risk"] == "high" and h["peer_risk"] == "low"
+    assert any("付款" in x or "退款" in x for x in h["risk_hits"]), h["risk_hits"]
+    assert h["text_fp"] and h["peer_text_fp"] and h["lang"] == "zh"
+    assert o["draft_id"] == h["draft_id"] and o["outcome"] == "cancelled"
+    assert o["reason"] == "risk_high_review"
+    assert sl.pending_count() == 0                      # 不进 reconcile 队列
+    snap = sl.stats_snapshot()
+    assert snap["total"] == 1 and snap["by_stage"] == {"protocol": 1} and snap["outcomes"] == {"cancelled": 1}
+    # 不记原文
+    raw = "".join(p.read_text(encoding="utf-8") for p in _shadow_ledger.glob("*.jsonl"))
+    assert "好的，请提供付款账号我帮你退款" not in raw
+
+
+@pytest.mark.asyncio
+async def test_high_risk_never_reaches_send(_shadow_ledger):
+    """D-O1 ②：高风险稿在到 send 之前就被扣下——send 即使会炸也不会被调用。"""
+    calls = []
+
+    async def _send_fail(**kw):
+        calls.append(kw)
+        raise RuntimeError("send_gate_blocked:kill_switch")
+    res = await pa.run_autoreply(
+        _payload("退款"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("请给我银行卡号"), send=_send_fail,
+        risk_fn=lambda t: "high",
+    )
+    assert res["skipped"] == "high_risk" and calls == []
+    outs = [r for r in _ledger_rows(_shadow_ledger) if r.get("kind") == "outcome"]
+    assert len(outs) == 1 and outs[0]["outcome"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_medium_risk_never_touches_ledger(_shadow_ledger):
+    """本链旧规则只对 high 动手，medium 一直放行 → 台账不记（口径与旧行为逐字一致）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("有优惠哦"), send=_make_send(sent),
+        risk_fn=lambda t: "medium",
+    )
+    assert res["sent"] is True and res["shadow_released"] is False
+    assert _ledger_rows(_shadow_ledger) == []
 
 
 @pytest.mark.asyncio
@@ -123,6 +218,28 @@ async def test_duplicate_inbound_skipped():
     assert first["sent"] is True
     assert second["skipped"] == "duplicate"
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_inbound_expires_allows_repeat():
+    """同文超过 AUTO_DEDUP_SEC 后应再回（客户催「你在干嘛」不得永久静默）。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    first = await pa.run_autoreply(
+        _payload("你在干嘛"), registry=reg, cfg=cfg,
+        generate=_make_gen("在忙呀"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=1000.0,
+    )
+    later = await pa.run_autoreply(
+        _payload("你在干嘛"), registry=reg, cfg=cfg,
+        generate=_make_gen("还在呢"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        now=1000.0 + pa.AUTO_DEDUP_SEC + 1.0,
+    )
+    assert first["sent"] is True
+    assert later.get("sent") is True
+    assert len(sent) == 2
 
 
 @pytest.mark.asyncio
@@ -160,7 +277,50 @@ async def test_outbound_payload_ignored():
 
 @pytest.mark.asyncio
 async def test_inbox_autopilot_conv_skips_direct_send():
-    """会话 automation_mode=auto_ai（收件箱全自动）→ protocol_autoreply 早退，不直发。"""
+    """会话 auto_ai 且收件箱真发已开 → protocol 早退，交给 autosend。"""
+    sent = []
+    gen_called = []
+
+    async def _gen(**kw):
+        gen_called.append(kw)
+        return "不该生成"
+
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={
+            "protocol_autoreply": {"enabled": True},
+            "inbox": {"l2_autosend": {"deliver": True}},
+        },
+        generate=_gen, send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        inbox_mode_fn=lambda p, a, c: "auto_ai",
+    )
+    assert res["skipped"] == "inbox_autopilot"
+    assert sent == []
+    assert gen_called == []  # 早退在生成之前，连 token 都不烧
+
+
+@pytest.mark.asyncio
+async def test_inbox_autopilot_keeps_protocol_when_deliver_off():
+    """auto_ai 但 l2 deliver 未开 → 不得让位吞消息，继续协议直发。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _payload("你还在吗"), registry=_FakeRegistry(_row()),
+        cfg={
+            "protocol_autoreply": {"enabled": True},
+            "inbox": {"l2_autosend": {"deliver": False}},
+        },
+        generate=_make_gen("在呢~"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        inbox_mode_fn=lambda p, a, c: "auto_ai",
+    )
+    assert res.get("sent") is True
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_review_conv_stands_down():
+    """「AI草稿我审」须停 protocol 直发（与 A 线 / UI 同口径），改由 System Z 拟稿人审。"""
     sent = []
     gen_called = []
 
@@ -173,26 +333,33 @@ async def test_inbox_autopilot_conv_skips_direct_send():
         cfg={"protocol_autoreply": {"enabled": True}},
         generate=_gen, send=_make_send(sent),
         risk_fn=lambda t: "low",
-        inbox_mode_fn=lambda p, a, c: "auto_ai",
+        inbox_mode_fn=lambda p, a, c: "review",
     )
-    assert res["skipped"] == "inbox_autopilot"
+    assert res["skipped"] == "inbox_human_gate"
     assert sent == []
-    assert gen_called == []  # 早退在生成之前，连 token 都不烧
+    assert gen_called == []
 
 
 @pytest.mark.asyncio
-async def test_non_auto_ai_conv_still_direct_sends():
-    """会话非 auto_ai（如 review/manual）→ 直发链路照常工作（账号级闸门开时）。"""
+async def test_manual_conv_stands_down():
+    """Sprint1 接管即静音：会话为 manual（坐席已接管）→ protocol 直发让位，不生成不发。"""
     sent = []
+    gen_called = []
+
+    async def _gen(**kw):
+        gen_called.append(kw)
+        return "不该生成"
+
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
         cfg={"protocol_autoreply": {"enabled": True}},
-        generate=_make_gen("亲，在的~"), send=_make_send(sent),
+        generate=_gen, send=_make_send(sent),
         risk_fn=lambda t: "low",
-        inbox_mode_fn=lambda p, a, c: "review",
+        inbox_mode_fn=lambda p, a, c: "manual",
     )
-    assert res["sent"] is True
-    assert len(sent) == 1
+    assert res["skipped"] == "inbox_manual"
+    assert sent == []
+    assert gen_called == []  # 让位在生成之前，不烧 token
 
 
 @pytest.mark.asyncio
@@ -212,3 +379,126 @@ async def test_inbox_mode_fn_exception_does_not_block():
     )
     assert res["sent"] is True
     assert len(sent) == 1
+
+
+# ── 2026-07 媒体消息补坑：纯图片/语音/视频（无 caption）也应回复 ──────────────
+
+def _media_payload(*, text="", media_type="image", media_ref="/static/protocol_media/whatsapp/a.jpg"):
+    return {
+        "platform": "whatsapp", "account_id": "wa1", "chat_key": "8613800000000",
+        "text": text, "direction": "in",
+        "media_type": media_type, "media_ref": media_ref,
+    }
+
+
+@pytest.mark.asyncio
+async def test_media_only_inbound_generates_and_passes_media():
+    """纯图片消息（text 空、有 media_ref）不再被判 incomplete，且 media 字段透传到生成。"""
+    sent = []
+    cap = {}
+    res = await pa.run_autoreply(
+        _media_payload(text=""), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("这张图好看！", cap), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+    # media 字段透传到 generate（供 _generate 做识别补全）
+    assert cap.get("media_type") == "image"
+    assert cap.get("media_ref") == "/static/protocol_media/whatsapp/a.jpg"
+
+
+@pytest.mark.asyncio
+async def test_placeholder_text_media_still_generates():
+    """文本是裸占位 [图片] 且有 media_ref → 照常进入生成（识别补全在 _generate 内）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _media_payload(text="[图片]"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("收到你的图啦~"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_distinct_media_not_deduped():
+    """两张不同的图（media_ref 不同、text 都空）不应被判 duplicate。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    first = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=3000.0,
+    )
+    second = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/b.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图2"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=3100.0,  # 超冷却窗
+    )
+    assert first["sent"] is True
+    assert second["sent"] is True
+    assert len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_media_deduped():
+    """同一张图连发（media_ref 相同、text 空）→ 第二次判 duplicate。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=4000.0,
+    )
+    res = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=4001.0,
+    )
+    assert res["skipped"] == "duplicate"
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_text_no_media_still_incomplete():
+    """既无文本也无媒体 → 仍判 incomplete（不生成不发）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _media_payload(text="", media_type="", media_ref=""),
+        registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("x"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["skipped"] == "incomplete"
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_multiline_reply_collapsed_before_send():
+    """单段落收口（2026-08-09）：本链不分条，多行拟稿合同的产物必须折叠成单段。
+
+    bubbles 开启时 ai_client 不再折叠（合同=「每行一句」交投递层拆条），而本链
+    整条直发——不折叠就会发出「一条消息带结构化换行」（2026-08-08 客户实锤的
+    AI 感形态）。折叠语义与 collapse_paragraphs 一致：CJK 裸边界补「，」。
+    """
+    sent = []
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("今天好累\n想你了"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+    assert "\n" not in sent[0]["text"]
+    assert sent[0]["text"] == "今天好累，想你了"

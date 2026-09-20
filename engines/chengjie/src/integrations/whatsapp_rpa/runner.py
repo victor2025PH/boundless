@@ -446,6 +446,35 @@ class WhatsAppRpaRunner:
             line_pkg=self._wa_pkg,
         )
 
+    def _note_risk_screen(self, chat_xml: Optional[bytes]) -> None:
+        """P6：发送失败时从屏幕文字识别平台风控（验证墙/限制/封号）→ 24h 滚动计数。
+
+        verify/limit → risk_events flood 家族（喂 account_health 降 cap）；ban → 告警
+        不计数（终态）。复用手上 chat_xml（无则即时 dump 一次，发送失败低频可接受）。
+        全 best-effort，绝不抛。
+        """
+        try:
+            raw = chat_xml
+            if not raw:
+                raw, _ = self._dump_ui_xml()
+            if not raw:
+                return
+            xml_text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            from src.ops.rpa_risk_screen import note_risk_screen
+            _alert = None
+            if self._state_store is not None:
+                def _alert(_kind, _ctx, _msg):
+                    self._state_store.insert_alert(
+                        kind="account_risk", severity="warn",
+                        message=f"{_msg} account={self._account_id}",
+                        dedup_window_sec=600.0)
+            kind = note_risk_screen("whatsapp", self._account_id, xml_text, alert=_alert)
+            if kind and kind != "none":
+                logger.warning("[wa_rpa] 屏幕风控识别 kind=%s account=%s",
+                               kind, self._account_id)
+        except Exception:
+            logger.debug("[wa_rpa] _note_risk_screen 跳过", exc_info=True)
+
     def _dump_ui_xml(self) -> Tuple[Optional[bytes], str]:
         serial = self._serial
         if not serial:
@@ -956,11 +985,45 @@ class WhatsAppRpaRunner:
 
     # ── 语音识别（Voice Input / ASR） ─────────────────────────────────────
 
+    # Whisper（faster-whisper / OpenAI ASR）支持的 ISO-639-1 语言先验白名单
+    _ASR_HINT_LANGS = frozenset({
+        "zh", "en", "ja", "ko", "ar", "ru", "th", "vi", "de", "fr",
+        "es", "pt", "tr", "id", "hi", "it", "nl", "pl", "ms", "tl",
+    })
+
+    def _asr_language_hint(self, chat_key: str) -> Optional[str]:
+        """会话稳定语言 → Whisper language 先验（治方言/口音语音被误判成外语）。
+
+        Whisper 对短促/带口音/方言音频在 99 语开放空间里自由猜语种，是「粤语被
+        转写成越南语」这类事故的源头。会话已有稳定语言（运营锁 > 用户明确偏好 >
+        稳定检测缓存）时作为先验传入，把候选空间钉住；无稳定语言（首次接触）时
+        返回 None 保持自动检测。可经 voice_input.asr_lang_hint=false 一键关闭。
+        """
+        try:
+            voice_cfg = self._cfg_get("voice_input") or {}
+            if isinstance(voice_cfg, dict) and not voice_cfg.get("asr_lang_hint", True):
+                return None
+            if not (chat_key and self._state_store):
+                return None
+            st = self._state_store.get_chat_state(chat_key) or {}
+            from src.ai.lang_policy import normalize_lang_code
+            raw = (
+                str(st.get("forced_lang") or "").strip()
+                or str(st.get("user_lang_pref") or "").strip()
+                or str(st.get("detected_lang") or "").strip()
+            )
+            lang = normalize_lang_code(raw)
+            return lang if lang in self._ASR_HINT_LANGS else None
+        except Exception:
+            logger.debug("[wa_rpa] asr_language_hint 计算失败", exc_info=True)
+            return None
+
     async def _try_transcribe_voice(
         self,
         chat_xml: bytes,
         screen_width: int,
         result: Dict[str, Any],
+        chat_key: str = "",
     ) -> Optional[str]:
         """检测聊天界面中的语音消息并转写为文字。
 
@@ -1040,11 +1103,55 @@ class WhatsAppRpaRunner:
             self._voice_metrics["stt_attempts"] += 1
             if len(_pulled_files) > 1:
                 self._voice_metrics["stt_batch_multi"] += 1
+            # 会话语言先验：钉住 Whisper 语种候选，防方言/口音被猜成其他国家语言
+            _lang_hint = self._asr_language_hint(chat_key)
+            if _lang_hint:
+                result["voice_lang_hint"] = _lang_hint
+            # 业务语言白名单 + 语种置信度门槛（voice_input 配置，均可关）：
+            #   asr_lang_whitelist: ["zh","en","ja"] —— 检出白名单外语种视为可疑
+            #   asr_min_lang_prob: 0.6 —— whisper language_probability 低于此视为可疑
+            # 可疑 → 用「白名单首位 or 默认回复语言」强制指定语种重转一次；
+            # 重转仍可疑只标记 voice_lang_lowconf（下游语言决策隔离），文本保留。
+            _vcfg = voice_cfg if isinstance(voice_cfg, dict) else {}
+            _wl = [str(x).strip().lower() for x in (_vcfg.get("asr_lang_whitelist") or []) if str(x).strip()]
+            _min_prob = float(_vcfg.get("asr_min_lang_prob", 0.6) or 0)
+
+            def _asr_suspicious(_tr) -> bool:
+                if _lang_hint:
+                    return False  # 已带先验，语种由我们钉住
+                _l = str(getattr(_tr, "language", "") or "").strip().lower()
+                if _wl and _l and _l not in _wl:
+                    return True
+                _p = _tr.extra.get("language_probability") if hasattr(_tr, "extra") else None
+                if isinstance(_p, (int, float)) and _min_prob > 0 and float(_p) < _min_prob:
+                    return True
+                return False
+
+            _retry_hint = (_wl[0] if _wl else "") or str(
+                self._cfg_get("default_reply_lang", "") or ""
+            ).strip().lower() or None
             transcripts: list = []
             total_asr_ms = 0
             _any_fallback = False
             for vf in _pulled_files:
-                tr = await ap.transcribe_file(vf.local_path)
+                tr = await ap.transcribe_file(vf.local_path, language_hint=_lang_hint)
+                if tr.ok and _asr_suspicious(tr) and _retry_hint:
+                    logger.info(
+                        "[wa_rpa] ASR 语种可疑(lang=%s prob=%s) → 按 %s 重转: %s",
+                        tr.language, tr.extra.get("language_probability"),
+                        _retry_hint, vf.filename,
+                    )
+                    result["voice_lang_retry"] = True
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("voice_lang_retry")
+                    except Exception:
+                        pass
+                    tr2 = await ap.transcribe_file(vf.local_path, language_hint=_retry_hint)
+                    if tr2.ok and tr2.text.strip():
+                        tr = tr2
+                    else:
+                        result["voice_lang_lowconf"] = True  # 重转失败，原文标记低置信
                 if tr.ok and tr.text.strip():
                     transcripts.append(tr.text.strip())
                     total_asr_ms += tr.latency_ms
@@ -1234,6 +1341,7 @@ class WhatsAppRpaRunner:
 
         if png_bytes:
             self._media_metrics["vision_attempts"] += 1
+            _crop_sink: Dict[str, Any] = {}
             desc, tag = await describe_wa_media(
                 png_bytes, media_msg.bounds, kind,
                 vision_cfg=vision_cfg,
@@ -1242,8 +1350,22 @@ class WhatsAppRpaRunner:
                 padding=padding,
                 max_image_dim=max_dim,
                 timeout_sec=timeout,
+                crop_sink=_crop_sink,
             )
             result["media_vision_backend"] = tag
+            # #333 P3-2（2026-09-18）：气泡裁图落盘 → ctx 有 _media_ref。RPA 线没有原图文件，
+            # 此前视觉身份层（face_identity）在本渠道拿不到文件、整体盲区（首验 no_path 计数
+            # 就是给这里的）。只对图片类落；贴纸/GIF/视频截帧无人脸语义，不落。任何失败忽略。
+            if kind in ("image", "photo") and _crop_sink.get("crop_bytes"):
+                try:
+                    import secrets as _secrets
+                    from src.integrations.protocol_bridge import media_paths
+                    _dest, _url = media_paths(
+                        "whatsapp", f"warpa_{int(time.time() * 1000)}_{_secrets.token_hex(3)}", ".jpg")
+                    _dest.write_bytes(_crop_sink["crop_bytes"])
+                    result["media_ref"] = _url
+                except Exception:
+                    logger.debug("[wa_rpa] 气泡裁图落盘失败（身份层本轮无图）", exc_info=True)
             if desc:
                 self._media_metrics["vision_ok"] += 1
                 result["media_desc"] = desc
@@ -1316,6 +1438,17 @@ class WhatsAppRpaRunner:
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "..."
             result["tts_truncated"] = True
+        # 语音断档台账（2026-08-22）：本链此前**完全没接** voice_outage——当晚 hub
+        # 质量轨引擎被同卡显存挤到每发必超时、WhatsApp 全程发不出语音，而台账仍显示
+        # 24h 全绿（它只收 aline/autosend/manual 三条），看门狗与 ops 卡因此一声不响，
+        # 故障靠人耳发现。记账口径＝**这一轮语音的终局**：auto_voice 模式看「发没发
+        # 出去」，其余模式（approval_only）没有发送步骤 → 合成成功即终局。
+        _vo_final = "auto_voice" if mode == "auto_voice" else "synth"
+
+        def _vo(ok: bool, reason: str = "") -> None:
+            from src.ai.voice_outage import note_voice_attempt
+            note_voice_attempt(ok, "wa_rpa", reason)
+
         try:
             self._voice_metrics["tts_attempts"] += 1
             from src.ai.tts_pipeline import get_tts_pipeline
@@ -1330,6 +1463,7 @@ class WhatsAppRpaRunner:
                 result["tts_duration_sec"] = round(rv.duration_sec, 2)
                 if rv.duration_sec > 0 and (rv.duration_sec > hard_max or rv.duration_sec < min_sec):
                     result["tts_error"] = f"duration_guard:{rv.duration_sec:.1f}s"
+                    _vo(False, f"duration_guard:{rv.duration_sec:.1f}s")
                     try:
                         import os as _os
                         if rv.audio_path and _os.path.isfile(rv.audio_path):
@@ -1342,13 +1476,17 @@ class WhatsAppRpaRunner:
                 result["tts_format"] = rv.format
                 self._voice_metrics["tts_ok"] += 1
                 logger.warning("[wa_rpa] TTS ok: %s dur=%.1fs %dms", rv.provider, rv.duration_sec, rv.latency_ms)
+                if _vo_final == "synth":
+                    _vo(True)
                 if mode == "auto_voice":
                     await self._maybe_send_tts_audio(rv.audio_path, cfg, result)
                     if result.get("tts_send_ok"):
                         self._voice_metrics["tts_sent"] += 1
+                        _vo(True)
                     else:
                         self._voice_metrics["tts_send_fail"] += 1
                         _err = str(result.get("tts_send_error") or "")
+                        _vo(False, f"send:{_err or 'unknown'}")
                         # 错误分类：share UI 未出现→轻量恢复；发送按钮未找到→全量回退
                         if _err.startswith("share_skip_"):
                             logger.warning("[wa_rpa] TTS send skipped: %s (no recovery needed)", _err)
@@ -1363,8 +1501,10 @@ class WhatsAppRpaRunner:
             else:
                 self._voice_metrics["tts_fail"] += 1
                 result["tts_error"] = rv.error
-        except Exception:
+                _vo(False, str(rv.error or "synth_failed"))
+        except Exception as ex:
             self._voice_metrics["tts_fail"] += 1
+            _vo(False, f"exception:{type(ex).__name__}")
             logger.debug("[wa_rpa] TTS 异常", exc_info=True)
 
     async def _maybe_send_tts_audio(
@@ -1462,7 +1602,16 @@ class WhatsAppRpaRunner:
                 )
                 break
             if pacing.enabled and idx < len(parts) - 1:
-                await asyncio.sleep(jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi))
+                # 条间隔采样进 bubble_gap 观测（与 orchestrator 三链同口径）
+                _gap = jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi)
+                try:
+                    from src.integrations.humanize_metrics import (
+                        record_bubble_gap as _rbg_rpa,
+                    )
+                    _rbg_rpa("rpa", "whatsapp", _gap)
+                except Exception:
+                    pass
+                await asyncio.sleep(_gap)
 
         out: Dict[str, Any] = {"ok": overall_ok, "parts": results, "parts_count": len(parts)}
         if not overall_ok and results:
@@ -2797,7 +2946,9 @@ class WhatsAppRpaRunner:
             _m = _re_pos.search(r'bottom_y=(\d+)', reason2 or '')
             _text_bottom_y = int(_m.group(1)) if _m else 0
             if not peer_text or _last_voice.bottom_y >= _text_bottom_y:
-                _voice_text = await self._try_transcribe_voice(chat_xml, sw, result)
+                _voice_text = await self._try_transcribe_voice(
+                    chat_xml, sw, result, chat_key=chat_key,
+                )
                 if _voice_text:
                     peer_text = _voice_text
                     _voice_transcribed = True
@@ -2859,32 +3010,96 @@ class WhatsAppRpaRunner:
             return self._finish(result, t0)
 
         # 10) AI 生成回复
-        # 10-a) 检测用户消息语言 → 动态设置 reply_lang + 语言指令
-        from src.integrations.whatsapp_rpa.lang_detect import detect_tts_lang, tts_lang_to_human
+        # 10-a) 会话级语言决策（lang_policy 单一事实源）——替换旧「逐条检测 + <8 字符
+        # 复用缓存」逻辑。治两类线上事故：① 中文会话发一个「whatsapp」（恰 8 字符，
+        # 旧护栏漏过）被判英语并写缓存粘住后续轮次；② 用户明确说「用日语聊」被无视。
+        # 优先级：运营 forced_lang > 用户明确请求（持久 user_lang_pref）> 强证据
+        # 立即跟随 > 弱证据粘住缓存语言。缓存 detected_lang 只写「稳定」结果。
+        from src.ai.lang_policy import (
+            classify_evidence as _lang_classify,
+            normalize_lang_code as _lang_norm,
+            resolve_conversation_language as _lang_resolve,
+        )
+        from src.integrations.whatsapp_rpa.lang_detect import tts_lang_to_human
         _vo_cfg = self._cfg_get("voice_output") or {}
-        _lang_default = str(_vo_cfg.get("voice_profile", {}).get("language") or "zh-cn")
-        _peer_tts_lang: Optional[str] = None
-        # P4-A: 运营手动锁定优先级最高，跳过一切自动检测
-        _forced_lang = str(state.get("forced_lang") or "").strip()
-        if _forced_lang:
-            _peer_tts_lang = _forced_lang
-        elif _vo_cfg.get("auto_language", True):
-            _peer_stripped = peer_text.strip()
-            _cached_lang = str(state.get("detected_lang") or "").strip()
-            # 短消息（打招呼/yes/ok）易误判 → 复用上轮检测结果
-            if len(_peer_stripped) < 8 and _cached_lang:
-                _peer_tts_lang = _cached_lang
-            else:
-                _peer_tts_lang = detect_tts_lang(_peer_stripped, fallback=_lang_default)
-                # 写入对话级缓存（只在 state_store 可用时）
-                if _peer_tts_lang and _peer_tts_lang != _cached_lang and self._state_store:
-                    try:
-                        self._state_store.upsert_chat_state(
-                            chat_key, detected_lang=_peer_tts_lang
-                        )
-                    except Exception:
-                        pass
-        lang = _peer_tts_lang or str(self._cfg_get("default_reply_lang", "zh"))
+        _peer_stripped = peer_text.strip()
+        _cached_lang = str(state.get("detected_lang") or "").strip()
+        _forced_lang = str(state.get("forced_lang") or "").strip()  # P4-A 运营锁
+        _state_pref = str(state.get("user_lang_pref") or "").strip()
+        _state_pref_input = str(state.get("user_lang_pref_input") or "").strip()
+        # 可疑语音转写隔离：ASR 声明的语种与会话稳定语言冲突时，转写文本
+        # 大概率是 Whisper 语种误判产物（方言/口音音频被转成流利的外语句子，
+        # 文本层会当强证据）——本轮不允许它参与语言决策，粘住会话语言。
+        _voice_suspect = False
+        if _voice_transcribed:
+            _asr_lang = _lang_norm(str(result.get("voice_lang") or ""))
+            _stable_lang = _lang_norm(_forced_lang or _state_pref or _cached_lang)
+            if _asr_lang and _stable_lang and _asr_lang != _stable_lang:
+                _voice_suspect = True
+                result["voice_lang_suspect"] = True
+                logger.info(
+                    "[wa_rpa] 可疑语音转写: asr=%s ≠ 会话稳定=%s，语言决策忽略本条 chat=%s",
+                    _asr_lang, _stable_lang, chat_key,
+                )
+            elif result.get("voice_lang_lowconf"):
+                # ASR 自检低置信（无稳定语言可对照时也要谨慎）→ 同样隔离
+                _voice_suspect = True
+                result["voice_lang_suspect"] = True
+        if _voice_suspect:
+            try:
+                from src.monitoring.metrics_store import get_metrics_store
+                get_metrics_store().record_lang_event("voice_suspect")
+            except Exception:
+                pass
+        _lang_decision = _lang_resolve(
+            "" if _voice_suspect else _peer_stripped,
+            None,  # RPA 无结构化历史，粘滞语义由 detected_lang 缓存承担
+            prev_lang=_cached_lang,
+            lang_pref=_state_pref,
+            lang_pref_input=_state_pref_input,
+            operator_lock=_forced_lang,
+            default=str(self._cfg_get("default_reply_lang", "zh") or "zh"),
+        )
+        lang = _lang_decision.lang
+        if self._state_store:
+            try:
+                if _lang_decision.request:
+                    # 明确语言请求 → 持久到会话状态（跨消息、跨重启生效）
+                    self._state_store.upsert_chat_state(
+                        chat_key,
+                        user_lang_pref=_lang_decision.request,
+                        user_lang_pref_input=(_lang_classify(_peer_stripped)[0] or ""),
+                        detected_lang=lang,
+                    )
+                    logger.info(
+                        "[wa_rpa] 语言请求命中: %r → %s (persisted) chat=%s",
+                        _peer_stripped[:40], _lang_decision.request, chat_key,
+                    )
+                elif _lang_decision.source == "stable_switch":
+                    # 稳定漂移 → 释放旧偏好并更新缓存
+                    self._state_store.upsert_chat_state(
+                        chat_key, user_lang_pref="", user_lang_pref_input="",
+                        detected_lang=lang,
+                    )
+                elif _lang_decision.stable and lang != _cached_lang:
+                    # 只有稳定证据才允许改写会话语言缓存——单条误判不再污染
+                    self._state_store.upsert_chat_state(chat_key, detected_lang=lang)
+            except Exception:
+                logger.debug("[wa_rpa] 语言状态写入失败", exc_info=True)
+        # CRM 联动（高价值信号：主动提语言要求的客户在认真对话）。
+        # 注：explicit_request/stable_switch 埋点由 skill_manager 3b 统一记录
+        # （WA 不锁 reply_lang，同一事件会在 3b 复核命中），此处只做 CRM 写回。
+        if _lang_decision.request or _lang_decision.source == "stable_switch":
+            if self._contact_hooks is not None:
+                try:
+                    self._contact_hooks.on_language_preference(
+                        channel="whatsapp",
+                        account_id=self._account_id,
+                        external_id=row.name or chat_key,
+                        lang=_lang_decision.request or "",
+                    )
+                except Exception:
+                    logger.debug("[wa_rpa] on_language_preference 跳过", exc_info=True)
         req_id = f"warpa-{uuid.uuid4().hex[:12]}"
         _style_hint = str(self._cfg_get("reply_style_hint") or "").strip()
         if not _style_hint:
@@ -2901,11 +3116,22 @@ class WhatsAppRpaRunner:
             "_current_user_message_for_lang": peer_text.strip(),
             "account_persona_id": self._account_persona_id(),
         }
-        # 语言指令：明确告知 AI 用对方语言回复（LLM 通常已隐式多语言，此处显式强化）
-        if _peer_tts_lang:
-            ctx["_reply_in_language"] = tts_lang_to_human(_peer_tts_lang)
-            logger.debug("[wa_rpa] 检测到用户语言=%s (%s) chat=%s",
-                         _peer_tts_lang, tts_lang_to_human(_peer_tts_lang), chat_key)
+        # 会话语言偏好透传：SkillManager 3b 用同一 lang_policy 复核，携带 state_store
+        # 的持久偏好保证两级决策同源（ContextStore 被 TTL 清理后也能从这里回灌）。
+        # stable_switch（漂移释放）时不透传——旧偏好刚被清除，不能回灌。
+        _eff_pref = _lang_decision.request or (
+            "" if _lang_decision.source == "stable_switch" else _state_pref
+        )
+        if _eff_pref:
+            ctx["user_lang_pref"] = _eff_pref
+            ctx["user_lang_pref_input"] = (
+                (_lang_classify(_peer_stripped)[0] or "")
+                if _lang_decision.request else _state_pref_input
+            )
+        logger.debug(
+            "[wa_rpa] 语言决策=%s (source=%s, %s) chat=%s",
+            lang, _lang_decision.source, tts_lang_to_human(lang), chat_key,
+        )
         # 注入上次回复 → 激活 SkillManager 的角度轮换/反重复系统
         _last_reply = (state.get("last_reply") or "").strip()
         if _last_reply:
@@ -2923,6 +3149,9 @@ class WhatsAppRpaRunner:
         if _voice_transcribed:
             ctx["_peer_message_is_voice"] = True
             ctx["_voice_duration"] = result.get("voice_duration", "")
+        # 可疑转写 → 澄清话术：像真人一样「听不清就确认」，而不是自信地答错。
+        # ★ 恒写键（True/False 显式覆盖）：user_context 持久化会残留旧 True。
+        ctx["_voice_lang_suspect"] = bool(_voice_suspect)
 
         # 媒体消息标记：让 AI 知道对方发的是图片/视频/贴纸等，自然回应
         if _media_described:
@@ -2930,6 +3159,9 @@ class WhatsAppRpaRunner:
             ctx["_media_kind"] = result.get("media_kind", "")
             ctx["_media_desc"] = result.get("media_desc", "")
             ctx["_media_vision_backend"] = result.get("media_vision_backend", "")
+            # #333 P3-2：气泡裁图的 /static/protocol_media URL → skill_manager 身份层可解析到文件
+            if result.get("media_ref"):
+                ctx["_media_ref"] = str(result.get("media_ref") or "")
 
         # W4-Runner：ContactHooks inbound 入库 + portrait block 注入
         _journey_ctx = None
@@ -3118,6 +3350,7 @@ class WhatsAppRpaRunner:
 
         # 11.5) TTS 语音回复准备（在文本发送之前）
         # 从 reply_text 二次检测语言（比 peer_text 更稳定，LLM 已规范输出）
+        from src.integrations.whatsapp_rpa.lang_detect import detect_tts_lang
         _tts_lang: Optional[str] = None
         if (self._cfg_get("voice_output") or {}).get("auto_language", True):
             _tts_lang = detect_tts_lang(
@@ -3272,6 +3505,9 @@ class WhatsAppRpaRunner:
                     message=f"发送失败: chat={chat_key} err={result['error'][:80]}",
                     dedup_window_sec=120.0,
                 )
+            # P6：设备 RPA 屏幕级风控识别 → 24h 滚动风控计数（喂 account_health）。
+            # 复用本轮 chat_xml（发送时已 dump），零额外 IO；全 best-effort 不影响主链。
+            self._note_risk_screen(chat_xml)
 
         # 抓包补漏：发完后检测 AI 处理期间到达的新消息（最多 N 轮）
         # 背景：bot 打开聊天 → AI 思考 15-25s → 用户发新消息 → WhatsApp 自动已读
@@ -3291,7 +3527,9 @@ class WhatsAppRpaRunner:
                 # catchup: 语音 fallback（用户在 AI 思考期间发了语音）
                 if not _cu_text:
                     _cu_result: Dict[str, Any] = {}
-                    _cu_text = await self._try_transcribe_voice(_cu_xml, sw, _cu_result)
+                    _cu_text = await self._try_transcribe_voice(
+                        _cu_xml, sw, _cu_result, chat_key=chat_key,
+                    )
                     if _cu_text:
                         logger.info("[wa_rpa] catchup voice round=%d text=%r", _cu_round, _cu_text[:40])
                 if not _cu_text:

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -22,6 +23,28 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
+
+
+def _dict_diff(before, after):
+    """after 相对 before 的最小嵌套 patch（只表达新增/变更）。
+
+    本文件各保存 handler 只 set 不 delete——快照 diff 出的补丁可证明恰含本次
+    真实改动，不用逐行镜像赋值；需要删除语义的端点（意图关键词整表替换）
+    自行走 ``replace_paths``。"""
+    out = {}
+    for k, v in (after or {}).items():
+        b = (before or {}).get(k, _MISSING)
+        if isinstance(v, dict) and (b is _MISSING or isinstance(b, dict)):
+            # 新增/既有 dict 一律递归；空产物不进补丁（handler 的 ensure-init
+            # 空字典不算改动）
+            sub = _dict_diff({} if b is _MISSING else b, v)
+            if sub:
+                out[k] = sub
+        elif b is _MISSING or b != v:
+            out[k] = v
+    return out
+
 
 def register_settings_routes(app, ctx):
     from src.web.admin import templates, invalidate_schedule_status_cache
@@ -32,6 +55,24 @@ def register_settings_routes(app, ctx):
     _api_auth = ctx.api_auth
     _api_write = ctx.api_write
     _require_role = ctx.require_role
+
+    def _persist_patch(request, patch, *, replace_paths=()):
+        """最小 patch 落 config.local.yaml overlay（保住主 config.yaml 注释/结构，
+        与渠道路由 _save_cfg 同口径）。兜底：方法缺失（简化 fake）/旧签名不认
+        replace_paths（TypeError）/返回非 bool（MagicMock 桩）→ 整文件 save()。"""
+        saver = getattr(config_manager, "save_overlay_patch", None)
+        ok = None
+        if callable(saver):
+            try:
+                ok = (saver(patch, replace_paths=replace_paths)
+                      if replace_paths else saver(patch))
+            except TypeError:
+                ok = saver(patch)
+        if not isinstance(ok, bool):
+            ok = config_manager.save()
+        if ok is False:
+            raise HTTPException(
+                500, tr(request, "err.set.save_config_failed", err="persist"))
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
@@ -58,12 +99,26 @@ def register_settings_routes(app, ctx):
             he_agent_teams_json = json.dumps(he.get("agent_teams", []), ensure_ascii=False, indent=2)
         except Exception:
             he_agent_teams_json = "[]"
+        # P-4 A（#254 / D-P2）：后端当前真实监听地址——设置页「允许局域网设备连接」
+        # 开关的写侧在桌面壳 config.json（backend.lan_access），读侧要能对照
+        # 「开关已开但后端还没重启」这种半生效态，所以把本进程 bind host 一并给模板。
+        lan_bind_host = str(wb.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+        lan_bind_port = str(wb.get("port") or "18799")
+        # P-4 B（#254 / D-P6）：「兜底策略」卡按业务域给说明（陪伴：默认零直发兜底）
+        try:
+            from src.utils.kb_store import system_seed_plan
+            fb_business_domain = system_seed_plan(config_manager)["business_domain"]
+        except Exception:
+            fb_business_domain = "sales"
         return templates.TemplateResponse(request, "settings.html", {
             "ai": ai, "wb": wb, "tg": tg, "notif": notif, "he": he,
             "he_agents_json": he_agents_json,
             "he_work_hours_json": he_work_hours_json,
             "he_work_exceptions_json": he_work_exceptions_json,
             "he_agent_teams_json": he_agent_teams_json,
+            "lan_bind_host": lan_bind_host,
+            "lan_bind_port": lan_bind_port,
+            "fb_business_domain": fb_business_domain,
         })
 
     @app.post("/api/settings/save")
@@ -83,6 +138,10 @@ def register_settings_routes(app, ctx):
             cfg = {}
             config_manager.config = cfg
         updated = []
+        # 快照真实写入的子树（voice_ai 实际落在 messenger_rpa.voice_output）——
+        # 保存时 diff 出最小 patch 走 overlay，不再整文件 dump。
+        _patch_root = "messenger_rpa" if section == "voice_ai" else section
+        _before = copy.deepcopy(cfg.get(_patch_root) or {})
         if section == "voice_ai":
             mr = cfg.get("messenger_rpa")
             if not isinstance(mr, dict):
@@ -154,7 +213,8 @@ def register_settings_routes(app, ctx):
                 "--voice-profile", profile_path,
                 "--language-type", "Japanese",
             ]
-            config_manager.save()
+            _persist_patch(request, {
+                _patch_root: _dict_diff(_before, cfg.get(_patch_root) or {})})
             try:
                 from src.ai.tts_pipeline import reset_tts_pipeline
                 reset_tts_pipeline()
@@ -252,10 +312,8 @@ def register_settings_routes(app, ctx):
             cfg[section]["forward_to_group"] = ftg
             updated.append("forward_to_group")
 
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        _persist_patch(request, {
+            _patch_root: _dict_diff(_before, cfg.get(_patch_root) or {})})
 
         actor = request.session.get("username", "web_admin")
         if audit_store:
@@ -322,6 +380,10 @@ def register_settings_routes(app, ctx):
         if cfg is None:
             cfg = {}
             config_manager.config = cfg
+        # 快照两棵真实写入的子树（telegram.reply_logic/group_reply + trigger.enabled），
+        # 保存时 diff 最小 patch 走 overlay；trigger_rules.yaml 是独立文件不在此列。
+        _tg_before = copy.deepcopy(cfg.get("telegram") or {})
+        _trig_before = copy.deepcopy(cfg.get("trigger") or {})
         if "telegram" not in cfg:
             cfg["telegram"] = {}
         tg = cfg["telegram"]
@@ -418,10 +480,14 @@ def register_settings_routes(app, ctx):
                 except Exception:
                     pass
 
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        _patch = {}
+        _tg_diff = _dict_diff(_tg_before, cfg.get("telegram") or {})
+        if _tg_diff:
+            _patch["telegram"] = _tg_diff
+        _trig_diff = _dict_diff(_trig_before, cfg.get("trigger") or {})
+        if _trig_diff:
+            _patch["trigger"] = _trig_diff
+        _persist_patch(request, _patch)
 
         actor = request.session.get("username", "web_admin")
         if audit_store:
@@ -433,30 +499,44 @@ def register_settings_routes(app, ctx):
     async def api_get_intent_keywords(request: Request):
         """获取所有意图关键词配置"""
         _api_auth(request)
+        from src.utils.persona_manager import profile_rev
         cfg = config_manager.config or {}
         intent_cfg = cfg.get("intent", {})
+        _kw = intent_cfg.get("keywords", {})
         return {
-            "keywords": intent_cfg.get("keywords", {}),
+            "keywords": _kw,
             "patterns": intent_cfg.get("patterns", {}),
+            # rev＝乐观锁指纹（多开治理）：本表是**整字典替换**语义，两窗口先后保存
+            # 会让后者整体抹掉前者新增/删除的意图 → 编辑器带 expected_rev 回传
+            "rev": profile_rev(_kw),
         }
 
     @app.put("/api/settings/intent-keywords")
     async def api_update_intent_keywords(request: Request):
         """更新意图关键词配置 + 热更新 SkillManager"""
         _api_auth(request)
+        from src.utils.persona_manager import profile_rev
         body = await request.json()
         new_kw = body.get("keywords")
         if not isinstance(new_kw, dict):
             raise HTTPException(400, tr(request, "err.set.keywords_format"))
 
+        # 乐观锁：带 expected_rev 且当前指纹已变 → 409 拒写（他人在你编辑期间改过
+        # 意图表）。不带 expected_rev＝旧契约零破坏；前端 409 后确认可免键覆盖。
+        expected_rev = str(body.get("expected_rev") or "")
+        if expected_rev:
+            _cur = ((config_manager.config or {}).get("intent") or {}).get("keywords", {})
+            if profile_rev(_cur) != expected_rev:
+                raise HTTPException(409, tr(request, "err.persona.stale_rev"))
+
         cfg = config_manager.config
         if "intent" not in cfg:
             cfg["intent"] = {}
         cfg["intent"]["keywords"] = new_kw
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_failed", err=e))
+        # 关键词表是「整字典替换」语义（删掉的意图必须真被删掉）——深合并会让
+        # 陈旧意图赖在 overlay/内存里，故走 replace_paths 整树替换。
+        _persist_patch(request, {"intent": {"keywords": new_kw}},
+                       replace_paths=("intent.keywords",))
 
         # 热更新 SkillManager
         if telegram_client:
@@ -467,7 +547,9 @@ def register_settings_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "update_intent_keywords", "",
                             "", f"intents={list(new_kw.keys())}")
-        return {"ok": True, "intents": list(new_kw.keys())}
+        # 回传落库后的新指纹，编辑器就地更新基线（免一次重取）
+        return {"ok": True, "intents": list(new_kw.keys()),
+                "rev": profile_rev(new_kw)}
 
     @app.post("/api/settings/test-intent")
     async def api_test_intent(request: Request):

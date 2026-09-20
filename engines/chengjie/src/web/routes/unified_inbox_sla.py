@@ -68,10 +68,16 @@ def _agent_sla_cfg(request: Request) -> Dict[str, Any]:
 
 
 def _sla_alert_snapshot(request: Request) -> Dict[str, Any]:
-    """当前 SLA 快照：等待/警告/严重计数 + 严重超时会话清单（告警徽标/SSE 用）。
+    """当前 SLA 快照：等待/警告/严重计数 + 待处理会话清单（告警徽标/SSE 用）。
 
     阈值按当前坐席个性化覆盖；静音或免打扰时段则 items 置空 + quiet=true，
     使徽标与 SSE toast 在该坐席侧静默（计数仍照常返回供仪表盘参考）。
+
+    #144（2026-09-02，skuio 截图 1019/1020）口径对齐：此前 ``items`` 只装 ≥crit 的
+    会话，而徽标数字在无严重项时取 ``breaching``（≥warn）——两会话等了 40 分钟
+    时徽标亮「待处理 2」、点开面板却「暂无需要处理的会话」。现 items 同时装
+    warn 档与 crit 档、每条带 ``level``（``crit``/``warn``），**徽标数字＝面板条数**
+    ＝``breaching``；``critical`` 仍单独给出（红/黄底色 + 面板「严重超时」段）。
     """
     inbox = _inbox_store(request)
     if inbox is None:
@@ -86,7 +92,7 @@ def _sla_alert_snapshot(request: Request) -> Dict[str, Any]:
     archived = _archived_set(inbox, list(cmap))
     snoozed = _snoozed_set(inbox, list(cmap))
     now = time.time()
-    waiting = breaching = 0
+    waiting = breaching = critical = 0
     items: List[Dict[str, Any]] = []
     for cid, info in dirs.items():
         if info.get("direction") != "in":
@@ -99,21 +105,27 @@ def _sla_alert_snapshot(request: Request) -> Dict[str, Any]:
             continue  # 群组/频道不计入 SLA 告警，改走「群组动态」
         waiting += 1
         wait = now - (info.get("ts") or now)
-        if wait >= sla["warn"]:
-            breaching += 1
+        if wait < sla["warn"]:
+            continue
+        breaching += 1
+        level = "warn"
         if wait >= sla["crit"]:
-            c = cmap.get(cid) or {}
-            items.append({
-                "conversation_id": cid,
-                "platform": str(c.get("platform") or ""),
-                "account_id": str(c.get("account_id") or "default"),
-                "chat_key": str(c.get("chat_key") or ""),
-                "name": str(c.get("display_name") or c.get("chat_key") or cid),
-                "wait_sec": int(wait),
-            })
-    items.sort(key=lambda x: -x["wait_sec"])
+            critical += 1
+            level = "crit"
+        c = cmap.get(cid) or {}
+        items.append({
+            "conversation_id": cid,
+            "platform": str(c.get("platform") or ""),
+            "account_id": str(c.get("account_id") or "default"),
+            "chat_key": str(c.get("chat_key") or ""),
+            "name": str(c.get("display_name") or c.get("chat_key") or cid),
+            "wait_sec": int(wait),
+            "level": level,
+        })
+    # 严重在前、同级按等待时长降序——面板两段 / 徽标 tooltip 前 8 条同一顺序
+    items.sort(key=lambda x: (0 if x["level"] == "crit" else 1, -x["wait_sec"]))
     return {"ok": True, "waiting": waiting, "breaching": breaching,
-            "critical": len(items), "items": [] if quiet else items[:50],
+            "critical": critical, "items": [] if quiet else items[:50],
             "quiet": quiet, "warn_sec": sla["warn"], "crit_sec": sla["crit"]}
 
 
@@ -296,8 +308,16 @@ def _escalation_snapshot(request: Request) -> Dict[str, Any]:
         today_count = inbox.count_escalations_since(midnight)
     except Exception:
         logger.debug("escalation today_count 失败（已忽略）", exc_info=True)
+    # 永久搁置存量：这些会话被刻意移出一切告警口径（客户回复才回来），升级快照
+    # 作为团队安全网顺带点名存量，防止「永久搁置」沦为无人知晓的沉默坟场。
+    snoozed_forever = 0
+    try:
+        snoozed_forever = int(inbox.snooze_counts().get("permanent") or 0)
+    except Exception:
+        logger.debug("escalation snoozed_forever 读取失败（已忽略）", exc_info=True)
     return {"ok": True, "count": len(items), "items": items[:50],
-            "today_count": today_count, "crit_sec": sla["crit"]}
+            "today_count": today_count, "crit_sec": sla["crit"],
+            "snoozed_forever": snoozed_forever}
 
 
 def _sla_detail(

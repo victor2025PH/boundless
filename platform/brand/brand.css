@@ -78,6 +78,19 @@
   --bl-lingo-800: #9e4f00;
   --bl-lingo-900: #804000;
 
+  /* ---------------- 皇冠资产强调色（集团控制台 /console 专属；数值同 warning，语义独立） ---------------- */
+  --bl-crown: #f59e0b;
+  --bl-crown-50: #fffbeb;
+  --bl-crown-100: #fef3c7;
+  --bl-crown-200: #fde68a;
+  --bl-crown-300: #fcd34d;
+  --bl-crown-400: #fbbf24;
+  --bl-crown-500: #f59e0b;
+  --bl-crown-600: #d97706;
+  --bl-crown-700: #b45309;
+  --bl-crown-800: #92400e;
+  --bl-crown-900: #78350f;
+
   /* ---------------- 语义色 ---------------- */
   --bl-success-50: #f0fdf4;
   --bl-success-100: #dcfce7;

@@ -122,13 +122,14 @@ class _SM:
         self._cpi = None
         self._user_ctx = {}
 
-    def _episodic_storage_key(self, user_id_str, chat_id, platform=""):
+    def _episodic_storage_key(self, user_id_str, chat_id, platform="",
+                              account_id="", user_context=None):
         return f"u:{user_id_str}"
 
     async def _episodic_patch_embedding(self, rid, fact):
         return None
 
-    def _get_user_context(self, user_id):
+    def _get_user_context(self, user_id, account_id=""):
         return self._user_ctx
 
     def _get_persona_name_for_context(self, user_context):

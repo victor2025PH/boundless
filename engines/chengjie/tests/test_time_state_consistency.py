@@ -243,8 +243,10 @@ async def test_autosend_gate_disabled_keeps_old_behavior(monkeypatch, tmp_path):
     import src.ai.persona_voice as pv
     import src.inbox.voice_autosend as va
 
-    fake_audio = tmp_path / "short2.wav"
-    fake_audio.write_bytes(b"RIFFxxxx")
+    # 质量闸关：截断不拦；仍须过 PTT 魔数（假 WAV 不再按 voice 放行）
+    _ptt = b"OggS" + b"\x00" * 60 + b"OpusHead" + b"\x00" * 32
+    fake_audio = tmp_path / "short2.ogg"
+    fake_audio.write_bytes(_ptt)
     _ShortCloneTTS.audio = fake_audio
 
     monkeypatch.setattr(
@@ -255,7 +257,6 @@ async def test_autosend_gate_disabled_keeps_old_behavior(monkeypatch, tmp_path):
         va, "resolve_voice_autosend_cfg",
         lambda c: {"quality_gate": {"enabled": False}})
     monkeypatch.setattr("src.ai.tts_pipeline.TTSPipeline", _ShortCloneTTS)
-    # OGG 转码直接回传原路径（不真跑 ffmpeg）
     monkeypatch.setattr(
         "src.client.voice_sender.convert_to_ogg_opus",
         lambda p, delete_src=True: p)
@@ -263,7 +264,7 @@ async def test_autosend_gate_disabled_keeps_old_behavior(monkeypatch, tmp_path):
     path, meta = await va._synth_ogg(
         {}, "lin_xiaoyu", "不过你要是请我吃好的我还能再吃一顿哦",
         out_dir=str(tmp_path))
-    assert path is not None                 # 闸门关 → 旧行为照发
+    assert path is not None                 # 截断闸关 + PTT 合规 → 照发
     assert not meta.get("truncation_rejected")
 
 

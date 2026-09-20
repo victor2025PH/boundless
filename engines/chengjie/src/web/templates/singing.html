@@ -1,0 +1,807 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('sg_title', "歌房") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('sg_title', "歌房") }}{% endblock %}
+{% block head %}
+<style>
+/* P3-2 重排（实施58 §10.3）：运营动线=先处理事(点唱台)→看货(矩阵)→管配置。
+   颜色纪律：容器走 --card/--bd канон token（偿还 reskin 线点名的 --card-bg 孤儿），
+   状态色沿用页面既有 ok/warn 字面档（与全站 chip 家族同容忍级）。 */
+.sg-wrap{display:flex;flex-direction:column;gap:1rem;max-width:1100px;padding-bottom:70px}
+.sg-card{background:var(--card,rgba(255,255,255,.03));border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:14px;padding:1rem 1.15rem}
+.sg-card h3{margin:0 0 .2rem;font-size:1rem;display:flex;align-items:center;gap:.45rem}
+.sg-sub{font-size:.78rem;color:var(--t2,#8a93a6);margin:.15rem 0 .7rem;line-height:1.5}
+.sg-hero{display:flex;flex-wrap:wrap;align-items:center;gap:.8rem}
+.sg-hero-main{display:flex;align-items:center;gap:.7rem;flex:1;min-width:240px}
+.sg-hero-title{font-size:1.05rem;font-weight:700}
+.sg-pill{display:inline-flex;align-items:center;gap:.3rem;padding:.22rem .65rem;border-radius:999px;font-size:.74rem;border:1px solid var(--bd,rgba(255,255,255,.14))}
+.sg-pill b{font-size:.86rem}
+.sg-pill.ok{color:#4ade80;border-color:rgba(74,222,128,.35)}
+.sg-pill.warn{color:#fbbf24;border-color:rgba(251,191,36,.4)}
+.sg-pill.dim{color:var(--t2,#8a93a6)}
+.sg-switch{position:relative;width:46px;height:24px;flex:none}
+.sg-switch input{opacity:0;width:100%;height:100%;position:absolute;margin:0;cursor:pointer;z-index:2}
+.sg-switch i{position:absolute;inset:0;border-radius:999px;background:var(--bd,rgba(255,255,255,.16));transition:.2s}
+.sg-switch i::after{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+.sg-switch input:checked + i{background:color-mix(in srgb, var(--tk-brand,#6ea8fe) 75%, transparent)}
+.sg-switch input:checked + i::after{left:25px}
+.sg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.7rem}
+.sg-field{display:flex;flex-direction:column;gap:.25rem;padding:.6rem .7rem;border:1px solid var(--bd,rgba(255,255,255,.07));border-radius:10px}
+.sg-field label{font-size:.82rem;font-weight:600}
+.sg-hint{font-size:.72rem;color:var(--t2,#8a93a6);line-height:1.45}
+.sg-field input[type=number]{width:90px;padding:.25rem .4rem;border-radius:8px;border:1px solid var(--bd,rgba(255,255,255,.15));background:transparent;color:inherit}
+.sg-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.sg-table th,.sg-table td{padding:.45rem .55rem;border-bottom:1px solid var(--bd,rgba(255,255,255,.06));text-align:left;vertical-align:middle}
+.sg-table th{font-size:.72rem;color:var(--t2,#8a93a6);font-weight:600}
+.sg-chip{display:inline-block;padding:.08rem .5rem;border-radius:999px;font-size:.7rem;border:1px solid var(--bd,rgba(255,255,255,.15))}
+.sg-chip.ok{color:#4ade80;border-color:rgba(74,222,128,.4)}
+.sg-chip.warn{color:#fbbf24;border-color:rgba(251,191,36,.4)}
+.sg-chip.bad{color:#f87171;border-color:rgba(248,113,113,.4)}
+.sg-chip.dim{color:var(--t2,#8a93a6)}
+.sg-play{cursor:pointer;border:1px solid var(--bd,rgba(255,255,255,.2));background:transparent;color:inherit;border-radius:8px;padding:.18rem .6rem;font-size:.78rem}
+.sg-play.playing{color:#4ade80;border-color:rgba(74,222,128,.5)}
+.sg-btn{cursor:pointer;border:1px solid var(--bd,rgba(255,255,255,.2));background:transparent;color:inherit;border-radius:9px;padding:.3rem .8rem;font-size:.8rem}
+.sg-btn.primary{background:color-mix(in srgb, var(--tk-brand,#6ea8fe) 22%, transparent);border-color:color-mix(in srgb, var(--tk-brand,#6ea8fe) 55%, transparent)}
+.sg-btn.danger{color:#f87171;border-color:rgba(248,113,113,.4)}
+.sg-btn:disabled{opacity:.5;cursor:default}
+.sg-stats{display:flex;gap:.6rem;flex-wrap:wrap}
+.sg-stat{padding:.5rem .8rem;border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:10px;min-width:104px}
+.sg-stat b{display:block;font-size:1.15rem}
+.sg-stat span{font-size:.72rem;color:var(--t2,#8a93a6)}
+.sg-code{display:block;background:rgba(0,0,0,.25);border-radius:8px;padding:.5rem .7rem;font-size:.75rem;overflow-x:auto;margin:.3rem 0}
+.sg-lyrics{white-space:pre-line;font-size:.78rem;line-height:1.7;color:var(--t2,#aab3c5)}
+.sg-toast{position:fixed;right:18px;bottom:84px;background:#1f2937;color:#fff;padding:.55rem .9rem;border-radius:10px;font-size:.82rem;opacity:0;transition:opacity .25s;pointer-events:none;z-index:60}
+.sg-toast.show{opacity:.96}
+/* 点唱台卡片流 */
+.sg-orders{display:flex;flex-direction:column;gap:.7rem}
+.sg-ordcard{border:1px solid var(--bd,rgba(255,255,255,.09));border-radius:12px;padding:.75rem .9rem;display:flex;gap:.9rem;flex-wrap:wrap}
+.sg-ordcard.review{border-color:rgba(251,191,36,.45)}
+.sg-ordmain{flex:1;min-width:230px;display:flex;flex-direction:column;gap:.35rem}
+.sg-ordwho{display:flex;align-items:center;gap:.5rem;font-weight:600}
+.sg-ava{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;background:color-mix(in srgb, var(--tk-brand,#6ea8fe) 28%, transparent);color:var(--tk-brand,#9ec1ff)}
+.sg-quote{font-size:.76rem;color:var(--t2,#8a93a6);border-left:2px solid var(--bd,rgba(255,255,255,.16));padding-left:.55rem}
+.sg-ordside{display:flex;flex-direction:column;gap:.45rem;align-items:flex-end;justify-content:center;min-width:170px}
+.sg-ordacts{display:flex;gap:.45rem;flex-wrap:wrap}
+.sg-qa{display:flex;gap:.35rem;flex-wrap:wrap}
+/* 备货矩阵 */
+.sg-mx-persona{display:flex;align-items:center;gap:.5rem}
+.sg-vtag{font-size:.7rem;color:var(--t2,#9aa3b5)}
+.sg-vm{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-left:.3rem;vertical-align:middle}
+.sg-vm.ok{background:#4ade80}.sg-vm.warn{background:#fbbf24}.sg-vm.bad{background:#f87171}.sg-vm.na{background:var(--bd,rgba(255,255,255,.2))}
+/* 声库卡片 */
+.sg-voices{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.7rem}
+.sg-vcard{border:1px solid var(--bd,rgba(255,255,255,.09));border-radius:12px;padding:.7rem .85rem;display:flex;flex-direction:column;gap:.4rem}
+/* 底部迷你播放器 */
+.sg-player{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;z-index:55;display:none;align-items:center;gap:.6rem;background:#111827f0;border:1px solid var(--bd,rgba(255,255,255,.14));border-radius:12px;padding:.45rem .8rem;min-width:280px;max-width:92vw}
+.sg-player.show{display:flex}
+.sg-player .name{font-size:.76rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sg-bar{flex:1;height:4px;border-radius:4px;background:var(--bd,rgba(255,255,255,.15));min-width:90px;position:relative;overflow:hidden}
+.sg-bar i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--tk-brand,#6ea8fe)}
+@media (max-width:560px){.sg-grid{grid-template-columns:1fr}.sg-ordside{align-items:stretch;min-width:0;width:100%}}
+</style>
+{% endblock %}
+{% block content %}
+{# L-4 G（#199，D-L6）：用户版直达 URL → 顶部「功能升级中」横幅 + 原操作面整体收起（l4-locked）；
+   partner / internal 与开发者模式原页不变。侧栏入口已由 nav_schema.CLIENT_HIDDEN_ITEM_IDS 剔除。 #}
+{% include "_client_tier_upgrading.html" %}
+<div class="sg-wrap{% if ui_client_hide %} l4-locked{% endif %}" id="sg-root">
+
+  <div class="sg-card">
+    <div class="sg-hero">
+      <div class="sg-hero-main">
+        <span class="sg-hero-title">🎤 {{ (i18n or {}).get('sg_hero_title', "人设唱歌") }}</span>
+        <label class="sg-switch" title="{{ (i18n or {}).get('sg_enabled', '唱歌能力') }}">
+          <input type="checkbox" id="sg-cfg-enabled" onchange="sgSaveToggle('enabled', this)"><i></i>
+        </label>
+      </div>
+      <div id="sg-health" class="sg-stats" style="gap:.4rem"></div>
+    </div>
+    <div class="sg-hint" style="margin-top:.45rem">{{ (i18n or {}).get('sg_enabled_hint', "开＝客户点名要听时用人设唱歌嗓清唱一段；关＝回落正常文字聊天") }}</div>
+    <!-- L-4 G（#199）：资产不齐（曲库 0 / 声库 0）时能力位不可开启并写明原因；已开着则红字警示 -->
+    <div class="sg-hint" id="sg-assets-warn" style="display:none;margin-top:.4rem;color:var(--amber,#b45309);font-weight:600"></div>
+    <details style="margin-top:.6rem">
+      <summary class="sg-hint" style="cursor:pointer">⚙️ {{ (i18n or {}).get('sg_switch_title', "护栏参数") }}</summary>
+      <div class="sg-grid" id="sg-switches" style="margin-top:.6rem">
+        <div class="sg-field">
+          <label for="sg-cfg-daily_cap">{{ (i18n or {}).get('sg_daily_cap', "每会话日上限") }}</label>
+          <input type="number" min="0" max="10" step="1" id="sg-cfg-daily_cap" onchange="sgSaveNum('daily_cap', this)">
+          <div class="sg-hint">{{ (i18n or {}).get('sg_daily_cap_hint', "同一客户一天最多听到几段（0=当天不唱）") }}</div>
+        </div>
+        <div class="sg-field">
+          <label for="sg-cfg-cooldown_hours">{{ (i18n or {}).get('sg_cooldown', "冷却（小时）") }}</label>
+          <input type="number" min="0" max="48" step="0.5" id="sg-cfg-cooldown_hours" onchange="sgSaveNum('cooldown_hours', this)">
+          <div class="sg-hint">{{ (i18n or {}).get('sg_cooldown_hint', "同一客户两段之间至少隔多久") }}</div>
+        </div>
+        <div class="sg-field">
+          <label for="sg-cfg-repeat_window_days">{{ (i18n or {}).get('sg_repeat_window', "避重窗（天）") }}</label>
+          <input type="number" min="0" max="30" step="1" id="sg-cfg-repeat_window_days" onchange="sgSaveNum('repeat_window_days', this)">
+          <div class="sg-hint">{{ (i18n or {}).get('sg_repeat_window_hint', "窗口内不给同一客户唱重复曲目") }}</div>
+        </div>
+        <div class="sg-field">
+          <label><input type="checkbox" id="sg-cfg-allow_lang_fallback" onchange="sgSaveToggle('allow_lang_fallback', this)"> {{ (i18n or {}).get('sg_lang_fallback', "语言不匹配也唱") }}</label>
+          <div class="sg-hint">{{ (i18n or {}).get('sg_lang_fallback_hint', "关（推荐）＝英文客户不硬塞中文歌") }}</div>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="sg-card">
+    <h3>🎧 {{ (i18n or {}).get('sg_ord_title', "点唱台（专属歌订单）") }} <span class="sg-chip warn" id="sg-ord-badge" style="display:none"></span></h3>
+    <p class="sg-sub">{{ (i18n or {}).get('sg_ord_sub', "客户求「写一首关于我们的歌」→ 自动建单 → 后台制作 → 这里试听把关：放行即发给客户，打回则不发") }}</p>
+    <div class="sg-stats" id="sg-ord-counts"></div>
+    <div class="sg-orders" id="sg-orders" style="margin-top:.7rem"></div>
+    <div class="sg-hint" id="sg-ord-empty" style="display:none;margin-top:.4rem"></div>
+  </div>
+
+  <div class="sg-card">
+    <h3>📀 {{ (i18n or {}).get('sg_stock_title', "备货矩阵") }}</h3>
+    <p class="sg-sub">{{ (i18n or {}).get('sg_stock_sub2', "每个人设当前会唱什么。▶ 试听的就是客户会收到的音频；小圆点＝和这个人设说话声的贴合度（绿≥70% / 黄≥50% / 红<50%）") }}</p>
+    <div style="overflow-x:auto"><table class="sg-table" id="sg-matrix"></table></div>
+  </div>
+
+  <div class="sg-card">
+    <h3>🎼 {{ (i18n or {}).get('sg_tpl_title', "曲库") }}</h3>
+    <p class="sg-sub">{{ (i18n or {}).get('sg_tpl_sub2', "启用的曲目才会被选唱；「补货」＝把该曲排进今晚的自动制作队列") }}</p>
+    <div style="overflow-x:auto"><table class="sg-table" id="sg-templates"></table></div>
+  </div>
+
+  <div class="sg-card">
+    <h3>🎙️ {{ (i18n or {}).get('sg_voice_title', "声库") }}</h3>
+    <p class="sg-sub">{{ (i18n or {}).get('sg_voice_sub2', "每把唱歌嗓＝一条老板人耳认可的标准录音；新歌一律从它复刻音色") }}</p>
+    <div class="sg-voices" id="sg-voices"></div>
+  </div>
+
+  <div class="sg-card">
+    <h3>🏭 {{ (i18n or {}).get('sg_supply_title', "供给状态") }}</h3>
+    <p class="sg-sub" id="sg-supply-note">{{ (i18n or {}).get('sg_supply_note', "夜间自动补货已开启（每天 05:10）：补缺货、消化专属歌订单；下面是最近的产出记录") }}</p>
+    <div class="sg-stats" id="sg-supply-chips"></div>
+    <div style="overflow-x:auto;margin-top:.5rem"><table class="sg-table" id="sg-supply-recent"></table></div>
+    <details style="margin-top:.6rem">
+      <summary class="sg-hint" style="cursor:pointer">🔧 {{ (i18n or {}).get('sg_howto_title', "工程师详情（命令行）") }}</summary>
+      <div class="sg-hint" style="margin-top:.4rem">{{ (i18n or {}).get('sg_howto_1', "新歌：把曲目加进 manifest.json（歌词自创或公版），然后跑：") }}</div>
+      <code class="sg-code">python -m scripts.song_factory --template &lt;song_id&gt; --voice all --enable-template</code>
+      <div class="sg-hint">{{ (i18n or {}).get('sg_howto_worker', "专属歌订单手动消化：") }}</div>
+      <code class="sg-code">python -m scripts.song_custom_worker --max-orders 5</code>
+      <div class="sg-hint">{{ (i18n or {}).get('sg_howto_2', "换嗓：替换声库锚定音后重跑工厂（指纹变化自动全量重渲）") }}</div>
+      <div class="sg-hint" style="margin-top:.3rem">⚠ {{ (i18n or {}).get('sg_howto_3', "供给红线：只做原创与公有领域，绝不点名翻唱") }}</div>
+    </details>
+  </div>
+
+  <audio id="sg-audio" preload="none" style="display:none"></audio>
+  <div class="sg-player" id="sg-player">
+    <button class="sg-play" id="sg-player-btn" type="button">⏸</button>
+    <span class="name" id="sg-player-name"></span>
+    <div class="sg-bar"><i id="sg-player-bar"></i></div>
+  </div>
+  <div class="sg-toast" id="sg-toast"></div>
+</div>
+
+<script>
+(function(){
+  var SG = {{ {
+    'loading': (i18n or {}).get('sg_loading', '加载中…'),
+    'load_fail': (i18n or {}).get('sg_load_fail', '读取失败，稍后重试'),
+    'saved': (i18n or {}).get('sg_saved', '已保存'),
+    'save_fail': (i18n or {}).get('sg_save_fail', '保存失败'),
+    'confirm_off': (i18n or {}).get('sg_confirm_off', '确认关闭唱歌能力？'),
+    'col_persona': (i18n or {}).get('sg_col_persona', '人设'),
+    'col_voice': (i18n or {}).get('sg_col_voice', '唱歌嗓'),
+    'no_stock': (i18n or {}).get('sg_no_stock', '—'),
+    'listen': (i18n or {}).get('sg_listen', '试听'),
+    'col_song': (i18n or {}).get('sg_tpl_col_song', '曲目'),
+    'col_source': (i18n or {}).get('sg_tpl_col_source', '供给'),
+    'col_lyrics': (i18n or {}).get('sg_tpl_col_lyrics', '歌词'),
+    'col_stocked': (i18n or {}).get('sg_tpl_col_stocked', '备货'),
+    'col_enabled': (i18n or {}).get('sg_tpl_col_enabled', '启用'),
+    'src_origin': (i18n or {}).get('sg_src_origin', '原创'),
+    'src_pd': (i18n or {}).get('sg_src_pd', '公版'),
+    'tpl_toggle_fail': (i18n or {}).get('sg_tpl_toggle_fail', '曲目开关失败'),
+    'voice_anchor': (i18n or {}).get('sg_voice_anchor', '标准录音'),
+    'voice_personas': (i18n or {}).get('sg_voice_personas', '覆盖人设'),
+    'voice_none': (i18n or {}).get('sg_voice_none', '（未分配人设——备用嗓）'),
+    'stat_requests': (i18n or {}).get('sg_stat_requests', '点名请求'),
+    'stat_sent': (i18n or {}).get('sg_stat_sent', '已唱出'),
+    'stat_no_stock': (i18n or {}).get('sg_stat_no_stock', '无货回落'),
+    'stat_capped': (i18n or {}).get('sg_stat_capped', '被频控拦'),
+    'ord_review': (i18n or {}).get('sg_ord_review', '待审'),
+    'ord_pending': (i18n or {}).get('sg_ord_pending', '排队'),
+    'ord_rendering': (i18n or {}).get('sg_ord_rendering', '制作中'),
+    'ord_delivered': (i18n or {}).get('sg_ord_delivered', '已送达'),
+    'ord_failed': (i18n or {}).get('sg_ord_failed', '失败'),
+    'ord_rejected': (i18n or {}).get('sg_ord_rejected', '已打回'),
+    'ord_approve': (i18n or {}).get('sg_ord_approve', '✓ 放行发送'),
+    'ord_reject': (i18n or {}).get('sg_ord_reject', '✕ 打回'),
+    'ord_retry': (i18n or {}).get('sg_ord_retry', '🔁 重新制作'),
+    'ord_delete': (i18n or {}).get('sg_ord_delete', '🗑 清除'),
+    'ord_approve_confirm': (i18n or {}).get('sg_ord_approve_confirm', '确认把这首歌发给客户？'),
+    'ord_reject_reason': (i18n or {}).get('sg_ord_reject_reason', '打回原因（可空）：'),
+    'ord_delete_confirm': (i18n or {}).get('sg_ord_delete_confirm', '确认清除这张订单？'),
+    'ord_sent_ok': (i18n or {}).get('sg_ord_sent_ok', '已发送给客户'),
+    'ord_act_fail': (i18n or {}).get('sg_ord_act_fail', '操作失败'),
+    'ord_empty': (i18n or {}).get('sg_ord_empty', '暂无订单——客户在聊天里说「给我写首歌」就会出现在这里'),
+    'vm_label': (i18n or {}).get('sg_vm_label', '音色贴合度'),
+    'vm_na': (i18n or {}).get('sg_vm_na', '待测'),
+    'dur_label': (i18n or {}).get('sg_dur_label', '时长'),
+    'health_cap': (i18n or {}).get('sg_health_cap', '能力'),
+    'health_on': (i18n or {}).get('sg_health_on', '开'),
+    'health_off': (i18n or {}).get('sg_health_off', '关'),
+    'health_songs': (i18n or {}).get('sg_health_songs', '曲目'),
+    'health_personas': (i18n or {}).get('sg_health_personas', '人设'),
+    'health_review': (i18n or {}).get('sg_health_review', '待审单'),
+    'vm_upgrading': (i18n or {}).get('sg_vm_upgrading', '⚠ 音色升级中：唱歌嗓与说话嗓的贴合度正在专项修复（RVC 主修线）'),
+    'supply_btn': (i18n or {}).get('sg_supply_btn', '🌙 排队补货'),
+    'supply_queued': (i18n or {}).get('sg_supply_queued', '已排队，今晚 05:10 自动制作'),
+    'supply_pending': (i18n or {}).get('sg_supply_pending', '在队申请'),
+    'supply_recent_t': (i18n or {}).get('sg_supply_recent_t', '时间'),
+    'supply_recent_what': (i18n or {}).get('sg_supply_recent_what', '曲目 × 嗓'),
+    'supply_recent_result': (i18n or {}).get('sg_supply_recent_result', '结果'),
+    'supply_ok': (i18n or {}).get('sg_supply_ok', '成功'),
+    'supply_fail': (i18n or {}).get('sg_supply_fail', '没过质检'),
+    'supply_empty': (i18n or {}).get('sg_supply_empty', '还没有产出记录'),
+    'assets_missing': (i18n or {}).get('sg_assets_missing', '曲库 {t} 首 · 声库 {v} 个 · 备货 {s} 段：资产不齐，唱歌能力不可开启（开着会让客户求歌建单进失败）；如需开通请联系客服。'),
+    'assets_on_missing': (i18n or {}).get('sg_assets_on_missing', '⚠ 唱歌能力已开启但资产不齐（曲库 {t} 首 · 声库 {v} 个 · 备货 {s} 段）：客户求歌会建单进失败。建议先关闭，或联系客服补齐资产。'),
+  }|tojson }};
+  var OV = null;
+  var busy = false;
+  // L-4 G（D-L6）：用户版整页收起时不发任何 API（横幅已说明原因）
+  var LOCKED = !!(document.getElementById('sg-root') && document.getElementById('sg-root').classList.contains('l4-locked'));
+  // feat 探测（reply-settings 守卫卡同款语义）：P3-1 新端点（retry/delete/
+  // supply）可能晚于本模板热更装载——旧后端时隐藏对应按钮，绝不摆死按钮。
+  var FEAT = {orders_v2: false};
+
+  function toast(msg){
+    var t = document.getElementById('sg-toast');
+    if(!t) return;
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 2000);
+  }
+
+  function el(tag, cls, text){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+
+  /* ── 迷你播放器（全页同刻只播一条 + 进度） ── */
+  var curBtn = null;
+  function sgPlay(btn, url, name){
+    var a = document.getElementById('sg-audio');
+    var p = document.getElementById('sg-player');
+    if(curBtn) curBtn.classList.remove('playing');
+    if(a.dataset.cur === url && !a.paused){
+      a.pause(); a.dataset.cur=''; p.classList.remove('show'); curBtn=null; return;
+    }
+    a.src = url; a.dataset.cur = url;
+    curBtn = btn; btn.classList.add('playing');
+    document.getElementById('sg-player-name').textContent = name || '';
+    p.classList.add('show');
+    a.play().catch(function(){ btn.classList.remove('playing'); p.classList.remove('show'); });
+  }
+  window.sgPlay = sgPlay;
+  (function(){
+    var a = document.getElementById('sg-audio');
+    var bar = document.getElementById('sg-player-bar');
+    var pbtn = document.getElementById('sg-player-btn');
+    a.addEventListener('timeupdate', function(){
+      if(a.duration) bar.style.width = (a.currentTime / a.duration * 100) + '%';
+    });
+    a.addEventListener('ended', function(){
+      if(curBtn) curBtn.classList.remove('playing');
+      document.getElementById('sg-player').classList.remove('show');
+      curBtn = null;
+    });
+    pbtn.addEventListener('click', function(){
+      if(a.paused){ a.play(); pbtn.textContent='⏸'; }
+      else { a.pause(); pbtn.textContent='▶'; }
+    });
+  })();
+
+  function playBtn(url, name){
+    var b = el('button', 'sg-play', '▶ ' + SG.listen);
+    b.type = 'button';
+    b.addEventListener('click', function(){ sgPlay(b, url, name); });
+    return b;
+  }
+
+  function vmDot(vm){
+    var cls = 'na', tip = SG.vm_label + ': ' + SG.vm_na;
+    if(vm !== undefined && vm !== null){
+      cls = vm >= 0.7 ? 'ok' : (vm >= 0.5 ? 'warn' : 'bad');
+      tip = SG.vm_label + ' ' + Math.round(vm * 100) + '%';
+    }
+    var d = el('span', 'sg-vm ' + cls);
+    d.title = tip;
+    return d;
+  }
+
+  function avatar(name){
+    var a = el('span', 'sg-ava', (name || '?').charAt(0));
+    return a;
+  }
+
+  /* ── hero 健康灯 ── */
+  function renderHealth(counts){
+    var box = document.getElementById('sg-health');
+    box.innerHTML = '';
+    if(!OV) return;
+    var enabled = !!(OV.config && OV.config.enabled);
+    var pOn = el('span', 'sg-pill ' + (enabled ? 'ok' : 'dim'));
+    pOn.append(SG.health_cap + ' ');
+    pOn.appendChild(el('b', '', enabled ? SG.health_on : SG.health_off));
+    box.appendChild(pOn);
+    var nT = (OV.templates || []).filter(function(t){ return t.enabled; }).length;
+    var pT = el('span', 'sg-pill dim');
+    pT.append(SG.health_songs + ' ');
+    pT.appendChild(el('b', '', nT));
+    box.appendChild(pT);
+    var pP = el('span', 'sg-pill dim');
+    pP.append(SG.health_personas + ' ');
+    pP.appendChild(el('b', '', Object.keys(OV.matrix || {}).length));
+    box.appendChild(pP);
+    var rv = (counts && counts.review) || 0;
+    var pR = el('span', 'sg-pill ' + (rv ? 'warn' : 'dim'));
+    pR.append(SG.health_review + ' ');
+    pR.appendChild(el('b', '', rv));
+    box.appendChild(pR);
+    // 音色升级中徽章：任何在货唱段贴合度 <0.7 即亮（把已知问题显式化）
+    var low = false, seen = false;
+    Object.keys(OV.matrix || {}).forEach(function(pid){
+      Object.keys(OV.matrix[pid] || {}).forEach(function(tid){
+        var vm = OV.matrix[pid][tid].voice_match;
+        if(vm !== undefined && vm !== null){ seen = true; if(vm < 0.7) low = true; }
+      });
+    });
+    if(!seen || low){
+      box.appendChild(el('span', 'sg-pill warn', SG.vm_upgrading));
+    }
+  }
+
+  /* L-4 G（#199）：资产不齐 → 能力位不可开启并写明原因；已开着 → 红字警示可关不可再开 */
+  function renderAssetsGuard(cfg){
+    var warn = document.getElementById('sg-assets-warn');
+    var en = document.getElementById('sg-cfg-enabled');
+    var a = (OV && OV.assets) || null;
+    if(!warn || !en || !a){ if(warn) warn.style.display = 'none'; return; }
+    var fill = function(s){ return String(s).replace('{t}', a.songs_enabled || 0).replace('{v}', a.voices_ok || 0).replace('{s}', a.stock_files || 0); };
+    if(a.ready){ warn.style.display = 'none'; en.disabled = false; return; }
+    warn.style.display = '';
+    if(cfg && cfg.enabled){ warn.textContent = fill(SG.assets_on_missing); en.disabled = false; }
+    else { warn.textContent = fill(SG.assets_missing); en.disabled = true; }
+  }
+
+  function renderConfig(cfg){
+    var en = document.getElementById('sg-cfg-enabled');
+    if(en) en.checked = !!cfg.enabled;
+    renderAssetsGuard(cfg);
+    ['daily_cap','cooldown_hours','repeat_window_days'].forEach(function(k){
+      var i = document.getElementById('sg-cfg-'+k);
+      if(i && cfg[k] !== undefined && cfg[k] !== null) i.value = cfg[k];
+    });
+    var lf = document.getElementById('sg-cfg-allow_lang_fallback');
+    if(lf) lf.checked = !!cfg.allow_lang_fallback;
+  }
+
+  function voiceOf(pid){
+    if(!OV) return null;
+    for(var i=0;i<OV.voices.length;i++){
+      if((OV.voices[i].personas||[]).indexOf(pid) >= 0) return OV.voices[i];
+    }
+    return null;
+  }
+
+  function renderMatrix(){
+    var t = document.getElementById('sg-matrix');
+    t.innerHTML = '';
+    var head = el('tr');
+    head.appendChild(el('th', '', SG.col_persona));
+    head.appendChild(el('th', '', SG.col_voice));
+    OV.templates.forEach(function(tp){
+      head.appendChild(el('th', '', tp.title + (tp.enabled ? '' : ' ⏸')));
+    });
+    t.appendChild(head);
+    Object.keys(OV.matrix).forEach(function(pid){
+      var tr = el('tr');
+      var name = (OV.persona_names && OV.persona_names[pid]) || pid;
+      var tdp = el('td');
+      var wrap = el('span', 'sg-mx-persona');
+      wrap.appendChild(avatar(name));
+      wrap.appendChild(el('span', '', name));
+      tdp.appendChild(wrap);
+      tr.appendChild(tdp);
+      var v = voiceOf(pid);
+      tr.appendChild(el('td', 'sg-vtag', v ? v.label : ''));
+      OV.templates.forEach(function(tp){
+        var td = el('td');
+        var cell = OV.matrix[pid][tp.id];
+        if(cell){
+          td.appendChild(playBtn('/api/singing/audio/' + encodeURIComponent(pid) + '/' + encodeURIComponent(tp.id), name + ' · ' + tp.title));
+          td.appendChild(vmDot(cell.voice_match));
+          if(cell.dur) td.appendChild(el('span', 'sg-hint', ' ' + cell.dur + 's'));
+        } else {
+          td.appendChild(el('span', 'sg-chip dim', SG.no_stock));
+        }
+        tr.appendChild(td);
+      });
+      t.appendChild(tr);
+    });
+  }
+
+  function stockedCount(tid){
+    var n = 0;
+    Object.keys(OV.matrix).forEach(function(pid){ if(OV.matrix[pid][tid]) n++; });
+    return n;
+  }
+
+  function renderTemplates(){
+    var t = document.getElementById('sg-templates');
+    t.innerHTML = '';
+    var head = el('tr');
+    [SG.col_song, SG.col_source, SG.col_lyrics, SG.col_stocked, SG.col_enabled, ''].forEach(function(h){
+      head.appendChild(el('th', '', h));
+    });
+    t.appendChild(head);
+    OV.templates.forEach(function(tp){
+      var tr = el('tr');
+      var tdt = el('td');
+      tdt.appendChild(el('div', '', tp.title));
+      tdt.appendChild(el('div', 'sg-hint', tp.id));
+      tr.appendChild(tdt);
+      tr.appendChild(el('td', '', tp.source === 'pd' ? SG.src_pd : SG.src_origin));
+      var lyr = el('td');
+      lyr.appendChild(el('div', 'sg-lyrics', tp.lyrics || ''));
+      tr.appendChild(lyr);
+      tr.appendChild(el('td', '', stockedCount(tp.id) + '/' + Object.keys(OV.matrix).length));
+      var tde = el('td');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!tp.enabled;
+      cb.addEventListener('change', function(){ sgTplToggle(tp.id, cb); });
+      tde.appendChild(cb);
+      tr.appendChild(tde);
+      var tda = el('td');
+      if(FEAT.orders_v2){
+        var sb = el('button', 'sg-btn', SG.supply_btn);
+        sb.type = 'button';
+        sb.addEventListener('click', function(){ sgSupplyReq(tp.id, sb); });
+        tda.appendChild(sb);
+      }
+      tr.appendChild(tda);
+      t.appendChild(tr);
+    });
+  }
+
+  function renderVoices(){
+    var box = document.getElementById('sg-voices');
+    box.innerHTML = '';
+    OV.voices.forEach(function(v){
+      var c = el('div', 'sg-vcard');
+      var head = el('div', 'sg-ordwho');
+      head.appendChild(el('b', '', v.label));
+      c.appendChild(head);
+      var row = el('div');
+      if(v.anchor_ok){ row.appendChild(playBtn('/api/singing/anchor/' + encodeURIComponent(v.key), v.label + ' · ' + SG.voice_anchor)); }
+      else { row.appendChild(el('span', 'sg-chip bad', '✗ ' + SG.voice_anchor)); }
+      c.appendChild(row);
+      var tp = el('div');
+      if((v.personas||[]).length){
+        v.personas.forEach(function(pid){
+          var chip = el('span', 'sg-chip dim', (OV.persona_names && OV.persona_names[pid]) || pid);
+          chip.style.margin = '0 .3rem .3rem 0';
+          tp.appendChild(chip);
+        });
+      } else {
+        tp.appendChild(el('span', 'sg-hint', SG.voice_none));
+      }
+      c.appendChild(tp);
+      box.appendChild(c);
+    });
+  }
+
+  function renderStatsChips(stats){
+    // 运行读数并进供给状态卡 chips（读数为进程口径）
+    var box = document.getElementById('sg-supply-chips');
+    box.innerHTML = '';
+    var s = (stats && stats.stats && stats.stats.counters) || (stats && stats.stats) || {};
+    [['stat_requests', s.requests], ['stat_sent', s.sent],
+     ['stat_no_stock', s.no_stock], ['stat_capped', s.capped]].forEach(function(p){
+      var d = el('div', 'sg-stat');
+      d.appendChild(el('b', '', (p[1] === undefined || p[1] === null) ? '0' : p[1]));
+      d.appendChild(el('span', '', SG[p[0]]));
+      box.appendChild(d);
+    });
+  }
+
+  /* ── 点唱台 ── */
+  function ordStatusChip(st){
+    var map = {review:['warn', SG.ord_review], pending:['dim', SG.ord_pending],
+               rendering:['dim', SG.ord_rendering],
+               delivered:['ok', SG.ord_delivered],
+               failed:['bad', SG.ord_failed],
+               rejected:['dim', SG.ord_rejected]};
+    var m = map[st] || ['dim', st];
+    return el('span', 'sg-chip ' + m[0], m[1]);
+  }
+
+  function sgOrdersLoad(){
+    fetch('/api/singing/orders?limit=30', {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!d || !d.ok) throw new Error('bad');
+        renderOrderCounts(d.counts || {});
+        renderOrders(d.orders || []);
+        renderHealth(d.counts || {});
+      })
+      .catch(function(){ renderHealth({}); });
+  }
+  window.sgOrdersLoad = sgOrdersLoad;
+
+  function renderOrderCounts(counts){
+    var box = document.getElementById('sg-ord-counts');
+    if(!box) return;
+    box.innerHTML = '';
+    [['review','ord_review'], ['pending','ord_pending'],
+     ['rendering','ord_rendering'], ['delivered','ord_delivered'],
+     ['failed','ord_failed']].forEach(function(p){
+      var d = el('div', 'sg-stat');
+      d.appendChild(el('b', '', counts[p[0]] || 0));
+      d.appendChild(el('span', '', SG[p[1]]));
+      box.appendChild(d);
+    });
+    var badge = document.getElementById('sg-ord-badge');
+    if(badge){
+      var rv = counts.review || 0;
+      badge.style.display = rv ? '' : 'none';
+      badge.textContent = SG.ord_review + ' ' + rv;
+    }
+  }
+
+  function renderOrders(rows){
+    var box = document.getElementById('sg-orders');
+    var hint = document.getElementById('sg-ord-empty');
+    if(!box) return;
+    box.innerHTML = '';
+    if(!rows.length){
+      if(hint){ hint.style.display = ''; hint.textContent = SG.ord_empty; }
+      return;
+    }
+    if(hint) hint.style.display = 'none';
+    rows.forEach(function(o){
+      var card = el('div', 'sg-ordcard' + (o.status === 'review' ? ' review' : ''));
+      var main = el('div', 'sg-ordmain');
+      var who = el('div', 'sg-ordwho');
+      var pname = (OV && OV.persona_names && OV.persona_names[o.persona_id]) || o.persona_id || '';
+      who.appendChild(avatar(o.peer_name || o.chat_key));
+      who.appendChild(el('span', '', o.peer_name || o.chat_key || ('#' + o.id)));
+      who.appendChild(el('span', 'sg-vtag', '· ' + pname));
+      who.appendChild(ordStatusChip(o.status));
+      who.appendChild(el('span', 'sg-hint', '#' + o.id));
+      main.appendChild(who);
+      if(o.request_text) main.appendChild(el('div', 'sg-quote', '「' + o.request_text + '」'));
+      if(o.lyrics) main.appendChild(el('div', 'sg-lyrics', o.lyrics));
+      if(o.fail_human) main.appendChild(el('div', 'sg-chip bad', o.fail_human));
+      box.appendChild(card);
+      var side = el('div', 'sg-ordside');
+      var qa = el('div', 'sg-qa');
+      if(o.take && (o.take.dur || o.take.voice_match !== undefined)){
+        if(o.take.voice_match !== undefined && o.take.voice_match !== null){
+          var vmv = Math.round(o.take.voice_match * 100);
+          qa.appendChild(el('span', 'sg-chip ' + (o.take.voice_match >= 0.7 ? 'ok' : (o.take.voice_match >= 0.5 ? 'warn' : 'bad')), SG.vm_label + ' ' + vmv + '%'));
+        }
+        if(o.take.dur) qa.appendChild(el('span', 'sg-chip dim', SG.dur_label + ' ' + o.take.dur + 's'));
+      }
+      side.appendChild(qa);
+      if(o.has_audio){
+        side.appendChild(playBtn('/api/singing/orders/' + o.id + '/audio', '#' + o.id + ' ' + (o.peer_name || '')));
+      }
+      var acts = el('div', 'sg-ordacts');
+      if(o.status === 'review'){
+        var ap = el('button', 'sg-btn primary', SG.ord_approve);
+        ap.type = 'button';
+        ap.addEventListener('click', function(){ sgOrdApprove(o.id, ap); });
+        acts.appendChild(ap);
+        var rj = el('button', 'sg-btn', SG.ord_reject);
+        rj.type = 'button';
+        rj.addEventListener('click', function(){ sgOrdReject(o.id, rj); });
+        acts.appendChild(rj);
+      }
+      if(FEAT.orders_v2 && o.status === 'failed'){
+        var rt = el('button', 'sg-btn', SG.ord_retry);
+        rt.type = 'button';
+        rt.addEventListener('click', function(){ sgOrdRetry(o.id, rt); });
+        acts.appendChild(rt);
+      }
+      if(FEAT.orders_v2 && (o.status === 'failed' || o.status === 'rejected' || o.status === 'delivered')){
+        var dl = el('button', 'sg-btn danger', SG.ord_delete);
+        dl.type = 'button';
+        dl.addEventListener('click', function(){ sgOrdDelete(o.id, dl); });
+        acts.appendChild(dl);
+      }
+      side.appendChild(acts);
+      card.appendChild(main);
+      card.appendChild(side);
+    });
+  }
+
+  /* ── 供给状态 ── */
+  function sgSupplyLoad(){
+    fetch('/api/singing/supply-status', {credentials:'same-origin'})
+      .then(function(r){ if(!r.ok) throw new Error('http'+r.status); return r.json(); })
+      .then(function(d){
+        if(!d || !d.ok) throw new Error('bad');
+        if(!FEAT.orders_v2){
+          FEAT.orders_v2 = true;
+          sgOrdersLoad();
+          if(OV) renderTemplates();
+        }
+        var t = document.getElementById('sg-supply-recent');
+        t.innerHTML = '';
+        var head = el('tr');
+        [SG.supply_recent_t, SG.supply_recent_what, SG.supply_recent_result].forEach(function(h){
+          head.appendChild(el('th', '', h));
+        });
+        t.appendChild(head);
+        var rows = (d.factory_recent || []).slice().reverse();
+        if(!rows.length){
+          var tr0 = el('tr');
+          var td0 = el('td', 'sg-hint', SG.supply_empty);
+          td0.colSpan = 3;
+          tr0.appendChild(td0);
+          t.appendChild(tr0);
+        }
+        rows.forEach(function(r){
+          var tr = el('tr');
+          tr.appendChild(el('td', 'sg-hint', (r.ts || '').slice(5, 16)));
+          tr.appendChild(el('td', '', (r.template || '') + ' × ' + (r.voice || '')));
+          var td = el('td');
+          td.appendChild(el('span', 'sg-chip ' + (r.ok ? 'ok' : 'bad'),
+                            r.ok ? SG.supply_ok : SG.supply_fail));
+          tr.appendChild(td);
+          t.appendChild(tr);
+        });
+        var pend = d.pending_requests || [];
+        if(pend.length){
+          var note = document.getElementById('sg-supply-note');
+          note.textContent = note.textContent.split('｜')[0] + '｜' + SG.supply_pending + ': ' +
+            pend.map(function(p){ return p.template_id; }).join(', ');
+        }
+      })
+      .catch(function(){ /* 旧后端无此端点：静默（feat 探测语义） */ });
+  }
+  window.sgSupplyLoad = sgSupplyLoad;
+
+  function sgLoad(){
+    if(LOCKED) return;
+    fetch('/api/singing/overview', {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!d || !d.ok) throw new Error('bad');
+        OV = d;
+        renderConfig(d.config);
+        renderStatsChips(d.stats);
+        renderMatrix();
+        renderTemplates();
+        renderVoices();
+        sgOrdersLoad();
+        sgSupplyLoad();
+      })
+      .catch(function(){ toast(SG.load_fail); });
+  }
+  window.sgLoad = sgLoad;
+
+  function post(url, body){
+    return fetch(url, {method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+      .then(function(r){ return r.json().then(function(j){ return {ok: r.ok, j: j}; }); });
+  }
+
+  function sgSaveToggle(key, cb){
+    if(busy) return;
+    if(key === 'enabled' && !cb.checked && !confirm(SG.confirm_off)){
+      cb.checked = true; return;
+    }
+    busy = true;
+    post('/api/singing/config', {key: key, value: !!cb.checked})
+      .then(function(r){
+        /* 409 资产不齐（L-4 G）：后端 detail 已是人话，原样转告 */
+        toast(r.ok ? SG.saved : ((r.j && r.j.detail) || SG.save_fail));
+        if(!r.ok) cb.checked = !cb.checked;
+        else { if(OV && OV.config) OV.config[key] = !!cb.checked; renderAssetsGuard(OV && OV.config); sgOrdersLoad(); }
+      })
+      .catch(function(){ toast(SG.save_fail); cb.checked = !cb.checked; })
+      .finally(function(){ busy = false; });
+  }
+  window.sgSaveToggle = sgSaveToggle;
+
+  function sgSaveNum(key, inp){
+    if(busy) return;
+    busy = true;
+    post('/api/singing/config', {key: key, value: parseFloat(inp.value)})
+      .then(function(r){ toast(r.ok ? SG.saved : SG.save_fail); })
+      .catch(function(){ toast(SG.save_fail); })
+      .finally(function(){ busy = false; });
+  }
+  window.sgSaveNum = sgSaveNum;
+
+  function sgTplToggle(tid, cb){
+    post('/api/singing/template-enable', {id: tid, enabled: !!cb.checked})
+      .then(function(r){
+        if(!r.ok){ toast(SG.tpl_toggle_fail); cb.checked = !cb.checked; }
+        else { toast(SG.saved); }
+      })
+      .catch(function(){ toast(SG.tpl_toggle_fail); cb.checked = !cb.checked; });
+  }
+  window.sgTplToggle = sgTplToggle;
+
+  function sgSupplyReq(tid, btn){
+    btn.disabled = true;
+    post('/api/singing/supply-request', {template_id: tid})
+      .then(function(r){
+        toast(r.ok ? SG.supply_queued : ((r.j && r.j.detail) || SG.ord_act_fail));
+        sgSupplyLoad();
+      })
+      .catch(function(){ toast(SG.ord_act_fail); })
+      .finally(function(){ btn.disabled = false; });
+  }
+  window.sgSupplyReq = sgSupplyReq;
+
+  function sgOrdApprove(oid, btn){
+    if(busy) return;
+    if(!confirm(SG.ord_approve_confirm)) return;
+    busy = true; btn.disabled = true;
+    post('/api/singing/orders/' + oid + '/approve', {})
+      .then(function(r){
+        toast(r.ok ? SG.ord_sent_ok : ((r.j && r.j.detail) || SG.ord_act_fail));
+        sgOrdersLoad();
+      })
+      .catch(function(){ toast(SG.ord_act_fail); })
+      .finally(function(){ busy = false; btn.disabled = false; });
+  }
+  window.sgOrdApprove = sgOrdApprove;
+
+  function sgOrdReject(oid, btn){
+    if(busy) return;
+    var reason = prompt(SG.ord_reject_reason, '');
+    if(reason === null) return;
+    busy = true; btn.disabled = true;
+    post('/api/singing/orders/' + oid + '/reject', {reason: reason || ''})
+      .then(function(r){
+        toast(r.ok ? SG.saved : ((r.j && r.j.detail) || SG.ord_act_fail));
+        sgOrdersLoad();
+      })
+      .catch(function(){ toast(SG.ord_act_fail); })
+      .finally(function(){ busy = false; btn.disabled = false; });
+  }
+  window.sgOrdReject = sgOrdReject;
+
+  function sgOrdRetry(oid, btn){
+    if(busy) return;
+    busy = true; btn.disabled = true;
+    post('/api/singing/orders/' + oid + '/retry', {})
+      .then(function(r){
+        toast(r.ok ? SG.saved : ((r.j && r.j.detail) || SG.ord_act_fail));
+        sgOrdersLoad();
+      })
+      .catch(function(){ toast(SG.ord_act_fail); })
+      .finally(function(){ busy = false; btn.disabled = false; });
+  }
+  window.sgOrdRetry = sgOrdRetry;
+
+  function sgOrdDelete(oid, btn){
+    if(busy) return;
+    if(!confirm(SG.ord_delete_confirm)) return;
+    busy = true; btn.disabled = true;
+    post('/api/singing/orders/' + oid + '/delete', {})
+      .then(function(r){
+        toast(r.ok ? SG.saved : ((r.j && r.j.detail) || SG.ord_act_fail));
+        sgOrdersLoad();
+      })
+      .catch(function(){ toast(SG.ord_act_fail); })
+      .finally(function(){ busy = false; btn.disabled = false; });
+  }
+  window.sgOrdDelete = sgOrdDelete;
+
+  document.addEventListener('DOMContentLoaded', sgLoad);
+})();
+</script>
+{% endblock %}

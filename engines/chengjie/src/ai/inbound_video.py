@@ -42,13 +42,30 @@ def compose_video_inbound_text(*, caption: str = "", video_desc: str = "") -> st
     - 带 caption：caption 保留在前，视频块换行追加（Phase5 caption 视频也抽帧）
     """
     cap = str(caption or "").strip()
-    desc = str(video_desc or "").strip()
+    desc = _single_line(video_desc)
     if desc:
         block = f"[视频内容] {desc}"
         return f"{cap}\n{block}" if cap else block
     if cap:
         return cap
     return "[视频]"
+
+
+def _single_line(desc: Any) -> str:
+    """描述压单行（#143 C-补，与 media_enrich.flatten_desc_line 同口径）。
+
+    VLM 画面描述 / ASR 转写都可能带换行；``[视频内容]`` 块只有首行带标记，续行会
+    逃过语言证据剥离把外语会话带偏成中文。导入失败退回「换行→；」的同语义实现。
+    """
+    t = str(desc or "").strip()
+    if "\n" not in t and "\r" not in t:
+        return t
+    try:
+        from src.inbox.media_enrich import flatten_desc_line
+        return flatten_desc_line(t)
+    except Exception:
+        return "；".join(p.strip() for p in t.replace("\r", "\n").split("\n")
+                        if p.strip())
 
 
 def vision_usable(vision_config: Optional[Dict[str, Any]]) -> bool:
@@ -62,6 +79,25 @@ def vision_usable(vision_config: Optional[Dict[str, Any]]) -> bool:
     return bool(vcfg.get("api_key"))
 
 
+# ── C2 跨链路理解缓存（2026-07-22）────────────────────────────────────────
+# 背景：同一条入站视频会被**直发线**（protocol_autoreply→media_enrich）和
+# **全自动草稿链**（autodraft_helpers）各理解一遍——真机实测同文件 5 秒内两次
+# 完整「抽帧+VLM+音轨 ASR」（两次 VLM 输出还不一致）。按「路径+mtime+size」
+# 记忆成品描述，第二链路直接复用；短 TTL 防陈旧。进程内 dict + 锁，绝不落盘。
+_UNDERSTAND_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+_UNDERSTAND_CACHE_LOCK = asyncio.Lock()
+_UNDERSTAND_CACHE_TTL = 600.0   # 10 分钟：覆盖双链路窗口，也容错人工重放
+_UNDERSTAND_CACHE_MAX = 64
+
+
+def _understand_cache_key(video_path: str) -> str:
+    try:
+        st = Path(video_path).stat()
+        return f"{video_path}|{int(st.st_mtime)}|{st.st_size}"
+    except OSError:
+        return ""
+
+
 async def understand_video_file(
     video_path: str,
     *,
@@ -70,10 +106,26 @@ async def understand_video_file(
     speech_emotion_config: Optional[Dict[str, Any]] = None,
     voice_recognition_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """理解本地视频文件 → 「画面：… 语音：…」综合描述；都空返回 None。"""
+    """理解本地视频文件 → 「画面：… 语音：…」综合描述；都空返回 None。
+
+    同一文件（路径+mtime+size）10 分钟内重复调用直接回缓存成品——
+    直发线与全自动草稿链各理解一遍的双倍 GPU 消耗由此消除。
+    """
     from src.ai.inbound_video_stats import get_inbound_video_stats
 
     stats = get_inbound_video_stats()
+    _ck = _understand_cache_key(video_path)
+    if _ck:
+        async with _UNDERSTAND_CACHE_LOCK:
+            hit = _UNDERSTAND_CACHE.get(_ck)
+            if hit is not None and (asyncio.get_event_loop().time() - hit[0]
+                                    ) < _UNDERSTAND_CACHE_TTL:
+                logger.info("[inbound_video] 命中理解缓存（跨链路复用）")
+                # 只记 outcome 不记 attempt：attempts/success_rate 语义保持
+                # "真实理解尝试"，缓存命中作为独立观测项。
+                stats.record_outcome("cache_hit")
+                return hit[1]
+
     stats.record_attempt()
     if not vision_usable(vision_config) and not voice_transcriber:
         stats.record_outcome("no_backend")
@@ -92,15 +144,26 @@ async def understand_video_file(
 
     parts: List[str] = []
     if visual_desc:
-        parts.append(f"画面：{visual_desc}")
+        parts.append(f"画面：{_single_line(visual_desc)}")
     if audio_text:
         emo = f"（说话语气：{audio_emotion}）" if audio_emotion else ""
-        parts.append(f"语音：{audio_text}{emo}")
+        parts.append(f"语音：{_single_line(audio_text)}{emo}")
+    result: Optional[str]
     if not parts:
         stats.record_outcome("empty")
-        return None
-    stats.record_outcome("ok")
-    return " ".join(parts)[:2400]
+        result = None
+    else:
+        stats.record_outcome("ok")
+        result = " ".join(parts)[:2400]
+
+    # 空结果不缓存：可能是后端瞬时不可用，下一链路应有机会重试
+    if _ck and result is not None:
+        async with _UNDERSTAND_CACHE_LOCK:
+            if len(_UNDERSTAND_CACHE) >= _UNDERSTAND_CACHE_MAX:
+                _oldest = min(_UNDERSTAND_CACHE.items(), key=lambda kv: kv[1][0])[0]
+                _UNDERSTAND_CACHE.pop(_oldest, None)
+            _UNDERSTAND_CACHE[_ck] = (asyncio.get_event_loop().time(), result)
+    return result
 
 
 async def enrich_tg_video_payload(
@@ -172,6 +235,20 @@ async def _video_visual_desc(
         frames = int(vision_config.get("video_frames", 4) or 4)
     except Exception:
         frames = 4
+    # 多图直喂（2026-08-15，vision.video_multi_image 默认关）：帧列表逐张独立分辨率
+    # 进 VLM（qwen*-vl 原生多图），比宫格把 N 帧挤进一张图精细；帧数走独立旋钮
+    # video_frames_multi（默认 4）——多图 token 预算必须收在 Ollama /v1 默认
+    # n_ctx=4096 内（4×640≈3k tokens），盲目跟随 video_frames 提帧会 400 超窗。
+    # 任何失败静默回落下方宫格路径——多图是增强不是替代。
+    if vision_config.get("video_multi_image"):
+        try:
+            frames_multi = int(vision_config.get("video_frames_multi", 4) or 4)
+        except Exception:
+            frames_multi = 4
+        desc = await _video_visual_desc_multi(
+            video_path, loop, vision_config, frames=frames_multi)
+        if desc:
+            return desc
     montage_path = str(Path(video_path).with_suffix(".montage.jpg"))
     try:
         res = await loop.run_in_executor(
@@ -206,6 +283,57 @@ async def _video_visual_desc(
             Path(montage_path).unlink(missing_ok=True)
         except Exception:
             pass
+
+
+async def _video_visual_desc_multi(
+    video_path: str, loop, vision_config: Dict[str, Any], *, frames: int,
+) -> Optional[str]:
+    """多图直喂路径：抽帧列表 → VisionClient.describe_images（仅 OpenAI 兼容端）。
+
+    返回 None＝调用方回落宫格；本函数自身软失败，绝不抛。帧临时目录自清理。
+    """
+    try:
+        from src.utils.video_frames import extract_frames_list
+        from src.vision_client import VisionClient as _VC
+    except Exception:
+        return None
+    import shutil
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="vmulti_")
+    try:
+        res = await loop.run_in_executor(
+            None,
+            lambda: extract_frames_list(video_path, tmpdir, frames=frames),
+        )
+        if not res:
+            return None
+        paths, _dur = res
+        if len(paths) < 2:
+            return None
+        v_prompt = (
+            vision_config.get("video_prompt_multi")
+            or (f"以下 {len(paths)} 张图片是同一段视频按时间先后顺序均匀抽取的帧"
+                "（第一张最早、最后一张最晚）。请综合各帧，用中文简要描述这段视频的"
+                "主要内容、画面里的人/物/场景、正在发生的事及其变化；"
+                "若有文字/商品/价格也一并读出。不要逐帧罗列，直接给整体概述。")
+        )
+        cli = _VC(dict(vision_config))
+        if not cli.initialize():
+            return None
+        text = await cli.describe_images(paths, prompt=v_prompt)
+        if text and text.strip():
+            logger.info(
+                "[inbound_video] 画面解析成功(多图直喂) frames=%s len=%s",
+                len(paths), len(text),
+            )
+            return text.strip()[:1600]
+        logger.info("[inbound_video] 多图直喂空答/失败，回落宫格路径")
+        return None
+    except Exception:
+        logger.warning("[inbound_video] 多图直喂异常，回落宫格路径", exc_info=True)
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 async def _video_audio_understand(

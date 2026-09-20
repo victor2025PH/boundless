@@ -242,6 +242,58 @@ async def test_worker_send_returns_real_msg_id(monkeypatch):
     assert res2 == {"delivered": True, "message_id": ""}
 
 
+async def test_invite_to_group_maps_platform_errors_to_actionable_kinds():
+    """排班补位：拉群回执按平台语义归类——privacy/admin_required/already 各有
+    明确下一步，绝不把失败静默装成功（P3-5「人工拉群无回执」的修复面）。"""
+    from src.integrations.telegram_companion_worker import TelegramCompanionWorker
+
+    class _Inner:
+        def __init__(self, exc=None):
+            self.exc = exc
+            self.calls = []
+
+        async def add_chat_members(self, chat, user):
+            self.calls.append((chat, user))
+            if self.exc is not None:
+                raise self.exc
+
+    class _Cli:
+        def __init__(self, exc=None):
+            self.client = _Inner(exc)
+
+    w = TelegramCompanionWorker({"account_id": "kt", "meta": {}}, {})
+
+    w.client = _Cli()
+    ok = await w.invite_to_group("-1003142518418", "@whigger96")
+    assert ok == {"ok": True, "kind": "invited", "error": ""}
+    assert w.client.client.calls == [(-1003142518418, "whigger96")]  # int 群 + 去@
+
+    class UserAlreadyParticipant(Exception):
+        pass
+
+    w.client = _Cli(UserAlreadyParticipant("already in"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is True and r["kind"] == "already"   # 幂等成功
+
+    class UserPrivacyRestricted(Exception):
+        pass
+
+    w.client = _Cli(UserPrivacyRestricted("privacy"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "privacy"
+
+    class ChatAdminRequired(Exception):
+        pass
+
+    w.client = _Cli(ChatAdminRequired("no right"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "admin_required"
+
+    w.client = None
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "offline"
+
+
 # ── A 线 initialize/start 改造 ───────────────────────────────────────────────
 
 async def test_initialize_session_string_skips_phone(monkeypatch):
@@ -415,3 +467,36 @@ def test_emit_inbox_swallows_errors(monkeypatch):
     obj._mirror_inbox = True
     # 镜像失败绝不冒泡（不影响主消息流）
     obj._emit_inbox(chat_id=1, text="x", direction="in")
+
+
+def test_emit_inbox_group_sender_in_source(monkeypatch):
+    """群消息镜像带发言人结构化字段（P4-11E 对齐）：sender_id/sender_name 经
+    source 透传 → ingest 落 messages.sender_id/sender_name。灰度实测镜像行
+    sender_id 恒空 → 群观测无法按发言者聚合（2026-07-25），此测钉死修复。"""
+    import src.integrations.protocol_bridge as pb
+    calls = []
+    monkeypatch.setattr(pb, "emit_incoming", lambda m: calls.append(m))
+    obj = _bare_tc()
+    obj.account_id = "u1"
+    obj._mirror_inbox = True
+    obj._emit_inbox(chat_id=-1003431196068, text="群里发言", direction="in",
+                    name="小明", sender_id="6834964252", sender_name="小明")
+    assert len(calls) == 1
+    src = calls[0].get("source")
+    assert isinstance(src, dict)
+    assert src["sender_id"] == "6834964252"
+    assert src["sender_name"] == "小明"
+
+
+def test_emit_inbox_private_has_no_sender_source(monkeypatch):
+    """私聊镜像不带 sender 字段（normalizer 语义「缺省空=非群」），source 保持
+    None——防私聊气泡误显发言人条。"""
+    import src.integrations.protocol_bridge as pb
+    calls = []
+    monkeypatch.setattr(pb, "emit_incoming", lambda m: calls.append(m))
+    obj = _bare_tc()
+    obj.account_id = "u1"
+    obj._mirror_inbox = True
+    obj._emit_inbox(chat_id=12345, text="在吗", direction="in", name="甜心")
+    assert len(calls) == 1
+    assert calls[0].get("source") is None

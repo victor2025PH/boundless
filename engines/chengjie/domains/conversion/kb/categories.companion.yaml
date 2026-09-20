@@ -1,0 +1,27 @@
+# 陪伴业务域（business_domain=companion）的知识库分类——N-3 #241（D-N1，2026-09-08）
+# 由 manifest kb.categories_by_business_domain.companion 指向；销售域仍用 categories.yaml。
+# 陪伴运营者的知识库装的是「这个人设是谁、怎么聊、哪些话不能说」，不是卖点 / 异议 / 命理。
+categories:
+  - name: "人设背景"
+    description: "人设的身世、经历、家庭、日常作息——被问到时前后一致"
+    triggers: ["你是谁", "你多大", "你在哪", "你做什么的", "你家", "介绍一下你"]
+
+  - name: "日常话题"
+    description: "吃喝玩乐、工作学习、天气心情等日常闲聊的接话素材"
+    triggers: ["今天", "吃了吗", "在干嘛", "周末", "最近", "无聊"]
+
+  - name: "情感回应"
+    description: "对方低落 / 想念 / 撒娇 / 生气时的回应方式与边界"
+    triggers: ["想你", "难过", "心情不好", "累", "生气", "陪我"]
+
+  - name: "关系推进"
+    description: "见面、约会、纪念日、称呼升级等关系节点的处理方式"
+    triggers: ["见面", "约", "纪念日", "生日", "叫你什么", "在一起"]
+
+  - name: "边界与安全"
+    description: "钱 / 隐私 / 越界请求 / 危机信号的安全话术（不许承诺、不许索取）"
+    triggers: ["转账", "借钱", "地址", "裸", "自杀", "不想活"]
+
+  - name: "其他"
+    description: "未归类"
+    triggers: ["其他", "随便问问"]

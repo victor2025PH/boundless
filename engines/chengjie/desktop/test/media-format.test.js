@@ -35,9 +35,10 @@ ok("语音 ok", f.ok && f.original === "how are you" && f.translated === "你好
 f = formatMediaResult("image", { ok: false, reason: "vision_disabled", message: "图像识别未启用" });
 ok("失败带 message", f.ok === false && f.note === "图像识别未启用");
 
-// ── 失败：无 message 时 reason → 中文 ──────────────────────────────────
+// ── 失败：无 message 时 reason → 中文（B27：人话化，禁配置键） ─────────
 f = formatMediaResult("voice", { ok: false, reason: "asr_disabled" });
-ok("reason 映射中文", f.ok === false && f.note.indexOf("语音转写未启用") >= 0);
+ok("reason 映射中文", f.ok === false && f.note.indexOf("语音转写服务未接入") >= 0);
+ok("兜底文案无配置键", f.note.indexOf("config.") < 0);
 
 // ── 失败：未知 reason 回退原值 ─────────────────────────────────────────
 f = formatMediaResult("image", { ok: false, reason: "weird" });

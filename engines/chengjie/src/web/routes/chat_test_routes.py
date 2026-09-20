@@ -161,6 +161,7 @@ def register_chat_test_routes(app, ctx) -> None:
         # 只设 mock_ctx["account_persona_id"]，由 ai_client._build_system_instruction
         # 内部经 PersonaManager 解析并拼「后台人设定位」块（与 skill_manager autodraft 路径同款）
         persona_used = None
+        persona = None
         if persona_id:
             from src.utils.persona_manager import PersonaManager
             pm = PersonaManager.get_instance()
@@ -209,6 +210,76 @@ def register_chat_test_routes(app, ctx) -> None:
             )
         except Exception as _e:
             _step("ai_error", str(_e))
+
+        # 3.5 发图能力同轨消毒（2026-07-31，试聊与生产同一防线）：
+        # ① [PHOTO] 协议标记绝不能漏给人看（试聊此前直出原始 LLM 文本，是
+        #    生产链路之外唯一的裸奔出口）；
+        # ② 发图能力关闭（默认：人设 capabilities.photos 关）时，剥
+        #    「翻相册/找找图/这张是…」承诺与断言——与 A/B 线 promise guard
+        #    同库同词表，试聊所见即生产所得（此前试聊无任何守卫，人设连环
+        #    空头支票的实录截图正是从这里来的）。
+        _photo_cap = False
+        _photo_preview = None  # P1：能力开时把 [PHOTO] 转成试聊占位（不烧 GPU）
+        if ai_reply:
+            try:
+                from src.companion.photo_capability import (
+                    photos_effective,
+                    sanitize_no_photo_reply,
+                )
+                _cfg_all = getattr(_config_manager, "config", None) or {}
+                _photo_cap = photos_effective(
+                    _cfg_all, persona if persona_used else None)
+                _raw_reply = ai_reply
+                if _photo_cap:
+                    # 能力开：解析指令供前端占位气泡 → 再剥标记（试聊无执行层，
+                    # 标记直显=穿帮；占位让运营看见「生产会在这里真发一张」）。
+                    from src.ai.photo_directive import (
+                        extract_photo_directive,
+                        parse_photo_directive,
+                    )
+                    _dir = parse_photo_directive(ai_reply)
+                    if _dir:
+                        _photo_preview = {
+                            "kind": _dir.get("kind") or "selfie",
+                            "scene": (_dir.get("scene") or "")[:120],
+                        }
+                    ai_reply, _ = extract_photo_directive(ai_reply)
+                else:
+                    # 能力关：媒体语境（本条在要图 / 上一轮 AI 在承诺或 offer）
+                    # 下连「已发」断言一起剥，与 A 线 _apply_media_promise_guard
+                    # 的 media_context 粘性同口径。
+                    _mctx = False
+                    try:
+                        from src.ai.outbound_promise_guard import (
+                            detect_media_offer,
+                            detect_media_promise,
+                            wants_media,
+                        )
+                        _prev_ai = ""
+                        for _h in reversed(sess["_history"]):
+                            if _h.get("role") == "assistant":
+                                _prev_ai = str(_h.get("content") or "")
+                                break
+                        _mctx = bool(
+                            wants_media(message)
+                            or detect_media_promise(_prev_ai)
+                            or detect_media_offer(_prev_ai))
+                    except Exception:
+                        _mctx = False
+                    ai_reply = sanitize_no_photo_reply(
+                        ai_reply, media_context=_mctx, source="chat_test")
+                if ai_reply != _raw_reply or _photo_preview:
+                    _step("media_guard", {
+                        "photo_capability": _photo_cap,
+                        "raw": _raw_reply[:300],
+                        "action": ("photo_preview" if _photo_preview
+                                   else ("photo_directive_stripped" if _photo_cap
+                                         else "no_photo_promise_stripped")),
+                        "photo_preview": _photo_preview,
+                    })
+            except Exception as _e:
+                _step("media_guard_error", str(_e))
+
         _step("ai_reply", {
             "reply": (ai_reply or "")[:500],
             "length": len(ai_reply or ""),
@@ -269,4 +340,10 @@ def register_chat_test_routes(app, ctx) -> None:
             resp["sop_check"] = sop_check
         if persona_used:
             resp["persona_used"] = persona_used
+            # 相册/发图能力状态（2026-07-31）：前端试聊抽屉头显示「相册：开/关」
+            # chip——开关状态在试聊现场可视化，运营不用翻配置。
+            resp["photo_capability"] = bool(_photo_cap)
+        if _photo_preview:
+            # P1：能力开时试聊占位（{kind, scene}）；前端渲成「此处将真实发出」卡
+            resp["photo_preview"] = _photo_preview
         return resp

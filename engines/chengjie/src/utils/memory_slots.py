@@ -19,6 +19,23 @@ from typing import Optional, Tuple
 SLOT_NAME = "name"
 SLOT_RESIDENCE = "residence"
 SLOT_RELATIONSHIP = "relationship"
+SLOT_AGE = "age"
+
+# 年龄（B50 2026-08-23）：单值身份槽——同槽不同值＝冲突按新近择一（用户过
+# 生日年龄+1 是常态）。只认规范事实（memory_heuristic「用户年龄：38岁」）与
+# 第一人称现在时自报；追忆句（岁的时候/那年）刻意排除。
+# 第三人称形（#96 实施91，0831 原图 867 实锤）：LLM 抽取的条目是「用户今年
+# 22岁/用户21岁」第三人称句式——旧表只认第一人称/规范模板，三条年龄条目
+# 并存打架而矛盾消解全程看不见它们。
+_AGE_PATTERNS = [
+    re.compile(r"用户年龄\s*[：:]\s*(?P<v>\d{1,2})\s*岁"),
+    re.compile(r"我(?:今年|现在|都)?\s*(?P<v>\d{1,2})\s*岁(?!的时候|那年|之前|以前)"),
+    re.compile(r"(?:用户|客户|对方)(?:今年|现在|大概|都|约)?\s*(?P<v>\d{1,2})\s*岁"
+               r"(?!的时候|那年|之前|以前)"),
+    re.compile(r"我今年\s*(?P<v>\d{1,2})(?!\d)"
+               r"(?!\s*(?:年|月|号|日|点|块|元|斤|万|亿|个|天|小时|分|秒|[kKwW]))"),
+    re.compile(r"(?i)\bI(?:'m|\s+am)\s+(?P<v>\d{1,2})(?:\s+years?\s+old)?\b"),
+]
 
 # 关系状态：关键词 → 规范值（单值：当前只可能处于其一）
 _REL_MAP = [
@@ -30,9 +47,17 @@ _REL_MAP = [
 ]
 
 # 称呼/名字（含 heuristic 模板与自由表达）
+# 第三人称/存量句式（#96 实施91）：新规范「客户自称X」（batchB 抽取 prompt
+# 钉的写法，可不带冒号）与存量双解句式「用户称呼自己为X」（1.0.63 前旧抽取
+# 的病句形——归槽后同名槽矛盾消解/最新优先才罩得住它们）。值首字符禁数字
+# （防「自称22岁」被归 name 槽）。
 _NAME_PATTERNS = [
     re.compile(r"称呼\s*TA\s*[：:]\s*(?P<v>[^\s，。！？、\n]{1,16})"),
     re.compile(r"用户自称\s*[：:]\s*(?P<v>[^\s，。！？、\n]{1,20})"),
+    re.compile(r"(?:用户|客户|对方)自称\s*[：:]?\s*[\"“『「]?"
+               r"(?P<v>(?!\d)[^\s，。！？、\n\"”』」]{1,20})"),
+    re.compile(r"(?:用户|客户)称呼自己为\s*[\"“『「]?"
+               r"(?P<v>(?!\d)[^\s，。！？、\n\"”』」]{1,20})"),
     re.compile(r"(?:以后)?叫我\s*(?P<v>[^\s，。！？、\n]{1,16})"),
     re.compile(r"(?i)be\s+called\s*[:：]?\s*(?P<v>[A-Za-z][A-Za-z '.-]{0,24})"),
     re.compile(r"(?i)name\s*\(EN\)\s*[:：]\s*(?P<v>[A-Za-z][A-Za-z '.-]{0,24})"),
@@ -82,6 +107,16 @@ def extract_slot(text: str) -> Optional[Tuple[str, str, int]]:
             if val:
                 return (SLOT_NAME, val, 0)
 
+    for pat in _AGE_PATTERNS:
+        m = pat.search(t)
+        if m:
+            try:
+                age = int(m.group("v"))
+            except (TypeError, ValueError):
+                continue
+            if 10 <= age <= 99:
+                return (SLOT_AGE, str(age), 0)
+
     for pat in _REL_MAP:
         if pat[0].search(t):
             return (SLOT_RELATIONSHIP, pat[1], 0)
@@ -124,4 +159,5 @@ __all__ = [
     "SLOT_NAME",
     "SLOT_RESIDENCE",
     "SLOT_RELATIONSHIP",
+    "SLOT_AGE",
 ]

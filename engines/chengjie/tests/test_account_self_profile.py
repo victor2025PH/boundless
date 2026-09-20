@@ -312,6 +312,89 @@ async def test_enrich_from_fields_idempotent_skip(monkeypatch):
     assert reg.upserts == []   # 无变化 → 零写入
 
 
+# ── P0 头像本地化：avatar 子开关开 → 远端直链下载落盘存本地 URL ────────────────
+
+async def test_enrich_from_fields_localizes_avatar_when_flag_on(monkeypatch, tmp_path):
+    sp.reset_self_profile_stats()
+    reg = _FakeRegistry()
+    monkeypatch.setattr("src.integrations.account_registry.get_account_registry",
+                        lambda *a, **k: reg)
+    downloads = []
+
+    async def _fake_dl(url, platform, account_id, avatar_dir):
+        downloads.append(url)
+        return True
+
+    monkeypatch.setattr(sp, "_download_avatar_url", _fake_dl)
+    cfg = {"accounts": {"self_profile": {"enabled": True, "avatar": True}}}
+    got = await sp.enrich_from_fields(
+        "whatsapp", "wa1", name="小雨",
+        avatar_url="https://pps.whatsapp.net/p.jpg?sig=abc",
+        config=cfg, avatar_dir=str(tmp_path))
+    assert downloads == ["https://pps.whatsapp.net/p.jpg?sig=abc"]
+    # 存的是本地静态 URL（带缓存击穿键），不再是会过期的远端签名直链
+    assert got["self_avatar"].startswith(
+        "/static/persona_avatars/self_whatsapp_wa1.jpg?v=")
+    _, _, written = reg.upserts[0]
+    assert written["self_avatar_fid"] == "https://pps.whatsapp.net/p.jpg?sig=abc"
+    assert sp.get_self_profile_stats()["avatar_downloaded"] == 1
+
+
+async def test_enrich_from_fields_avatar_reuse_same_url(monkeypatch, tmp_path):
+    sp.reset_self_profile_stats()
+    url = "https://pps.whatsapp.net/p.jpg?sig=abc"
+    existing = {"self_name": "小雨",
+                "self_avatar": "/static/persona_avatars/self_whatsapp_wa1.jpg?v=x",
+                "self_avatar_fid": url}
+    reg = _FakeRegistry(existing_meta=existing)
+    monkeypatch.setattr("src.integrations.account_registry.get_account_registry",
+                        lambda *a, **k: reg)
+
+    async def _boom_dl(*a, **k):  # pragma: no cover
+        raise AssertionError("同一直链不应重下")
+
+    monkeypatch.setattr(sp, "_download_avatar_url", _boom_dl)
+    cfg = {"accounts": {"self_profile": {"enabled": True, "avatar": True}}}
+    got = await sp.enrich_from_fields(
+        "whatsapp", "wa1", name="小雨", avatar_url=url,
+        config=cfg, avatar_dir=str(tmp_path))
+    assert got["self_avatar"] == existing["self_avatar"]   # 复用本地 URL
+    assert reg.upserts == []                               # 内容未变 → 零写入
+    st = sp.get_self_profile_stats()
+    assert st["avatar_reused"] == 1 and st["skipped"] == 1
+
+
+async def test_enrich_from_fields_download_fail_falls_back_remote(monkeypatch, tmp_path):
+    reg = _FakeRegistry()
+    monkeypatch.setattr("src.integrations.account_registry.get_account_registry",
+                        lambda *a, **k: reg)
+
+    async def _fail_dl(*a, **k):
+        return False
+
+    monkeypatch.setattr(sp, "_download_avatar_url", _fail_dl)
+    cfg = {"accounts": {"self_profile": {"enabled": True, "avatar": True}}}
+    got = await sp.enrich_from_fields(
+        "whatsapp", "wa1", name="小雨", avatar_url="https://x/p.jpg",
+        config=cfg, avatar_dir=str(tmp_path))
+    assert got["self_avatar"] == "https://x/p.jpg"   # 下载失败回落远端直链，至少可显
+
+
+async def test_enrich_from_fields_avatar_flag_off_keeps_remote(monkeypatch):
+    reg = _FakeRegistry()
+    monkeypatch.setattr("src.integrations.account_registry.get_account_registry",
+                        lambda *a, **k: reg)
+
+    async def _boom_dl(*a, **k):  # pragma: no cover
+        raise AssertionError("avatar 子开关关不应下载")
+
+    monkeypatch.setattr(sp, "_download_avatar_url", _boom_dl)
+    cfg = {"accounts": {"self_profile": {"enabled": True}}}   # avatar 缺省=关
+    got = await sp.enrich_from_fields(
+        "whatsapp", "wa1", name="小雨", avatar_url="https://x/p.jpg", config=cfg)
+    assert got["self_avatar"] == "https://x/p.jpg"   # 旧行为：直接存远端 URL
+
+
 # ── P4: cleanup_avatar（账号移除回收） ────────────────────────────────────────
 
 def test_cleanup_avatar_deletes_file(tmp_path):

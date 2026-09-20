@@ -6,6 +6,8 @@
   <div>
     <h1 class="page-title">{{ (i18n or {}).get('lr_s002', "智能学习") }}</h1>
     <p class="page-desc">{{ (i18n or {}).get('lr_s003', "自动收集未命中问题") }} → AI {{ (i18n or {}).get('lr_s004', "生成知识草稿") }} → {{ (i18n or {}).get('lr_s005', "人工审核入库") }}</p>
+    <!-- 页面定位互跳（融合 P1）：一句话讲清与案例跟进的分工，治「两个队列分不清」 -->
+    <p class="page-desc" style="margin-top:.15rem;font-size:.76rem;color:var(--t3)">{{ (i18n or {}).get('lr2_pos_body', "本页教 AI 下次答得更好（审核通过的知识影响未来所有会话）；需要人现在接手的风险会话在") }} <a href="/cases" style="color:var(--p);font-weight:600;text-decoration:none">{{ (i18n or {}).get('lr2_pos_link', "案例跟进") }} →</a></p>
   </div>
   <div style="display:flex;gap:.5rem">
     <button class="btn btn-outline" onclick="loadDrafts()" data-help="btn_refresh">
@@ -19,8 +21,11 @@
   </div>
 </div>
 
+<!-- 运行状态条：上次学习结果 + 素材漏斗 + AI/服务健康（后端未升级时自动隐藏细节） -->
+<div id="learner-statusbar" style="display:none;margin-bottom:.8rem;padding:.55rem .9rem;border:1px solid var(--bd);border-radius:8px;background:var(--card);font-size:.8rem;color:var(--t2);line-height:1.7"></div>
+
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(139,92,246,.06),rgba(91,124,246,.06));border:1px solid rgba(139,92,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-vio06,rgba(139,92,246,.06)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-vio15,rgba(139,92,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🧠</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title', "操作说明") }}</strong>
@@ -58,6 +63,15 @@
   </div>
 </div>
 
+<!-- 手动喂料：把没答好的问题直接入队学习 -->
+<div class="card mb-4 pro-only" style="padding:.6rem .9rem;display:flex;gap:.5rem;align-items:center">
+  <span style="font-size:1rem;flex-shrink:0">📥</span>
+  <input id="feed-query" maxlength="200" placeholder="{{ (i18n or {}).get('lr2_feed_ph', "把客户问过而 AI 没答好的问题贴进来，直接生成学习草稿") }}"
+         style="flex:1;font-size:.82rem;padding:.4rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t)"
+         onkeydown="if(event.key==='Enter')feedQuery()">
+  <button class="btn btn-sm btn-primary" id="btn-feed" onclick="feedQuery()">{{ (i18n or {}).get('lr2_feed_btn', "入队学习") }}</button>
+</div>
+
 <!-- Filter Tabs -->
 <div class="card mb-4">
   <div style="display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;border-bottom:1px solid var(--bd)">
@@ -72,18 +86,20 @@
       <option value="time">{{ (i18n or {}).get('lr_s013', "排序") }}: {{ (i18n or {}).get('lr_s017', "最新时间") }}</option>
     </select>
     <div style="flex:1"></div>
-    <button class="btn btn-sm btn-green" onclick="approveAll()" id="btn-approve-all" style="display:none">
-      {{ (i18n or {}).get('lr_s018', "全部通过") }}
+    <!-- L-4 F（#201）：「全部通过」→「通过已选（N）」——只通过勾选的、每批 ≤20、二次确认弹层列明将入库条目 -->
+    <button class="btn btn-sm btn-green" onclick="approveSelected()" id="btn-approve-all" style="display:none" title="{{ (i18n or {}).get('lr4_select_hint', "勾选要通过的条目，再点「通过已选」") }}">
+      <span id="btn-approve-all-label">{{ (i18n or {}).get('lr4_approve_selected', "通过已选（{n}）")|replace('{n}', '0') }}</span>
     </button>
   </div>
 
   <!-- A2: Batch action bar -->
-  <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:rgba(91,124,246,.06);border-bottom:1px solid rgba(91,124,246,.18);font-size:.82rem;align-items:center;gap:.6rem">
+  <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:var(--th-bg-brand06,rgba(91,124,246,.06));border-bottom:1px solid var(--th-bd-brand18,rgba(91,124,246,.18));font-size:.82rem;align-items:center;gap:.6rem">
     <input type="checkbox" id="batch-all" onchange="toggleAllChecks(this.checked)" style="margin-right:.3rem">
     <span id="batch-count">0</span> {{ (i18n or {}).get('lr_s019', "条已选") }}
-    <button class="btn btn-sm btn-green" onclick="batchAction('approve')" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
+    <button class="btn btn-sm btn-green" onclick="approveSelected()" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
     <button class="btn btn-sm btn-red" onclick="batchAction('reject')">✖ {{ (i18n or {}).get('draft.bulk.reject', "批量拒绝") }}</button>
     <button class="btn btn-sm" onclick="clearBatch()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+    <span style="color:var(--t3);font-size:.74rem;margin-left:auto">{{ (i18n or {}).get('lr4_limit_hint', "一次最多通过 {n} 条")|replace('{n}', '20') }}</span>
   </div>
   <div id="drafts-container" style="min-height:200px">
     <div style="padding:3rem;text-align:center;color:var(--t3)">{{ (i18n or {}).get('msg_js_1047', "加载中") }}...</div>
@@ -91,7 +107,7 @@
 </div>
 
 <!-- Edit Modal -->
-<div id="edit-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)">
+<div id="edit-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim50,rgba(0,0,0,.5));backdrop-filter:blur(4px)">
   <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(600px,90vw);max-height:80vh;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--s2);padding:1.5rem">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
       <h3 style="margin:0;font-size:1.1rem">{{ (i18n or {}).get('lr_s021', "编辑草稿") }}</h3>
@@ -125,7 +141,39 @@
   </div>
 </div>
 
+<!-- L-4 F（#201）：通过已选的二次确认弹层——列出将入库的条目，私事条目单独标明去处 -->
+<div id="approve-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim50,rgba(0,0,0,.5));backdrop-filter:blur(4px)">
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--s2);padding:1.25rem 1.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
+      <h3 style="margin:0;font-size:1.05rem" id="approve-modal-title">{{ (i18n or {}).get('lr4_confirm_title', "确认将以下 {n} 条入库？")|replace('{n}', '0') }}</h3>
+      <button onclick="closeApproveModal()" style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--t3)">&times;</button>
+    </div>
+    <p style="font-size:.78rem;color:var(--t2);margin:0 0 .6rem;line-height:1.55">{{ (i18n or {}).get('lr4_confirm_note', "入库后会影响所有会话的 AI 回答；标「客户私事」的条目不进共享知识库，只写入该客户的 AI 记忆。") }}</p>
+    <div id="approve-modal-list" style="flex:1;overflow-y:auto;border:1px solid var(--bd);border-radius:var(--r-sm);font-size:.8rem"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.8rem;align-items:center">
+      <span id="approve-modal-hint" style="font-size:.74rem;color:var(--t3);margin-right:auto"></span>
+      <button class="btn btn-outline" onclick="closeApproveModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button class="btn btn-primary" id="approve-modal-ok" onclick="confirmApproveSelected()">{{ (i18n or {}).get('lr4_confirm_ok', "确认通过") }}</button>
+    </div>
+  </div>
+</div>
+
 <style>
+/* L-4 F（#201）：译文行 / 私事徽章 / 「相似度未计算」 */
+.draft-zh{font-size:.8rem;color:var(--t2);margin:.1rem 0 .25rem;padding-left:.2rem}
+.draft-zh b{color:var(--t3);font-weight:600;margin-right:.3rem}
+/* M-5 E（#220）：译文行「原语：日语」标注 + 未译态（失败不留空） */
+.draft-zh .zh-src{font-style:normal;color:var(--t3);margin-left:.45rem;font-size:.74rem}
+.draft-zh .zh-untranslated{color:var(--th-ink-red6,#b91c1c)}
+.draft-zh .zh-retry{margin-left:.35rem;padding:0 .45rem;font-size:.72rem;line-height:1.4}
+.draft-zh.zh-failed{border-left:2px solid var(--th-ink-red6,#b91c1c);padding-left:.4rem}
+.priv-badge{display:inline-flex;align-items:center;gap:.2rem;font-size:.68rem;padding:.12rem .45rem;border-radius:4px;font-weight:700;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed);flex-shrink:0;cursor:help}
+.dup-badge.dup-uncomputed{background:var(--input);color:var(--t3)}
+.mem-badge{display:inline-flex;align-items:center;font-size:.72rem;padding:.2rem .5rem;border-radius:4px;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed)}
+.apm-row{display:flex;gap:.5rem;align-items:flex-start;padding:.45rem .7rem;border-bottom:1px solid var(--bd)}
+.apm-row:last-child{border-bottom:none}
+.apm-row .apm-q{flex:1;min-width:0}
+.apm-row .apm-t{color:var(--t3);font-size:.74rem;margin-top:.1rem}
 .row{display:flex;gap:.75rem;flex-wrap:wrap}
 .col-4{flex:1;min-width:120px}
 .draft-card{padding:1rem;border-bottom:1px solid var(--bd);transition:background .15s}
@@ -136,6 +184,7 @@
 .source-miss{background:var(--rs);color:var(--red)}
 .source-negative_feedback{background:var(--as);color:var(--amber)}
 .source-weak_hit{background:var(--prs);color:var(--purple)}
+.source-manual{background:var(--ps);color:var(--p)}
 .draft-query{font-weight:600;font-size:.92rem;flex:1}
 .draft-count{font-size:.75rem;color:var(--t3)}
 .draft-body{margin:.4rem 0;font-size:.85rem;color:var(--t2)}
@@ -144,6 +193,7 @@
 .btn-sm{font-size:.78rem;padding:.3rem .65rem;border-radius:6px;border:1px solid var(--bd);background:var(--card);color:var(--t);cursor:pointer;transition:.15s;font-weight:500}
 .btn-sm:hover{border-color:var(--p);color:var(--p)}
 .btn-sm.active{background:var(--p);color:#fff;border-color:var(--p)}
+a.btn-sm{text-decoration:none;display:inline-block}
 .btn-green{background:var(--green)!important;color:#fff!important;border-color:var(--green)!important}
 .btn-green:hover{opacity:.85}
 .btn-red{background:none;color:var(--red);border-color:var(--red)}
@@ -172,22 +222,116 @@
 .dup-warn .dup-score{font-size:.72rem;color:var(--t3);margin-left:.3rem}
 .dup-recheck{background:none;border:1px solid var(--bd);border-radius:4px;font-size:.7rem;padding:.15rem .4rem;cursor:pointer;color:var(--t3);margin-left:auto}
 .dup-recheck:hover{border-color:var(--p);color:var(--p)}
+/* 融合 P2：草稿溯源徽章（来源案例/会话） */
+.src-ref{display:inline-flex;align-items:center;font-size:.68rem;padding:.1rem .4rem;border-radius:4px;background:var(--ps);color:var(--p);text-decoration:none;flex-shrink:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+a.src-ref:hover{text-decoration:underline}
 </style>
 
 <script>
 let currentFilter='pending';
+window.__learnerStats=null;
+
+function _setStatVals(v){
+  ['stat-pending','stat-approved','stat-rejected','stat-dup'].forEach(id=>{
+    var el=document.getElementById(id);if(el)el.textContent=v;
+  });
+}
+
+function _renderStatusbar(d){
+  // 三态：服务异常（红） / AI 降级（琥珀） / 正常（上次运行摘要）。
+  // 旧后端（无 available/last_run 字段）→ 只在 error 时显示，避免猜。
+  const bar=document.getElementById('learner-statusbar');
+  if(!bar)return;
+  let html='';
+  if(!d||(d.error&&d.available!==true)){
+    html='<span style="color:var(--red);font-weight:600">⚠ '+window.T('lr2_svc_err')+'</span>'
+      +(d&&d.error?' <span style="color:var(--t3)">('+esc(String(d.error))+')</span>':'');
+    bar.innerHTML=html;bar.style.display='';return;
+  }
+  if(d.ai_ready===false){
+    html+='<div style="color:var(--amber);font-weight:600">⚠ '+window.T('lr2_ai_off')+'</div>';
+  }
+  const lr=d.last_run;
+  if(lr&&lr.ts){
+    const src=lr.source==='manual'?window.T('lr2_status_manual'):window.T('lr2_status_scheduled');
+    html+='<div><b>'+window.T('lr2_status_last')+'</b> '+esc(lr.ts).replace('T',' ')+' ('+src+') · '
+      +window.Tf('lr2_status_result',{c:lr.collected||0,g:lr.generated||0,s:lr.saved||0})
+      +(typeof d.miss_rows==='number'?' · '+window.Tf('lr2_status_misspool',{n:d.miss_rows}):'')
+      +'</div>';
+    const f=lr.funnel;
+    if(f&&typeof f.miss_total==='number'){
+      html+='<div style="color:var(--t3);font-size:.76rem">'
+        +window.Tf('lr2_funnel_detail',{q:f.miss_qualified||0,t:f.min_miss_count||2,b:f.miss_below_threshold||0,nq:f.miss_not_question||0,p:f.miss_placeholder||0,d:f.already_drafted||0})
+        +'</div>';
+    }
+  }else if(d.available===true){
+    html+='<div style="color:var(--t3)">'+window.T('lr2_status_never')+'</div>';
+  }
+  /* 融合 P2 效果回访行：入库条目近 7 天真实命中（kb_query_log 只读对账）。
+     旧后端无 effect_7d 字段 → 整行不出，零猜测。 */
+  const eff=d.effect_7d;
+  if(eff&&Number(eff.approved_n||0)>0){
+    let effHtml='<b>📈</b> '+window.Tf('lr2_effect_line',{n:eff.approved_n,h:eff.total_hits||0});
+    const tops=(eff.entries||[]).filter(function(x){return Number(x.hits||0)>0;}).slice(0,3);
+    if(tops.length){
+      effHtml+=' · '+tops.map(function(x){return '「'+esc(String(x.title||''))+'」×'+x.hits;}).join(' / ');
+    }
+    html+='<div style="color:var(--t2)">'+effHtml+'</div>';
+  }
+  /* 融合 P3 零命中淘汰建议：入库 ≥3 天、检索日志全窗零命中 → 点名（链到知识库
+     条目自行改词/停用——本页只出建议不做第二个 KB 写入口）。日志不可查时后端
+     返回空数组，本段自然不出。 */
+  const zh=(eff&&eff.zero_hit)||[];
+  if(zh.length){
+    let zHtml='<b>🧹</b> '+window.Tf('lr2_effect_zero',{n:zh.length})+' · '
+      +zh.slice(0,3).map(function(x){
+        return '<a href="/knowledge#entry-'+encodeURIComponent(String(x.entry_id||''))+'" target="_blank" style="color:var(--amber)">「'+esc(String(x.title||''))+'」</a>';
+      }).join(' / ');
+    html+='<div style="color:var(--t3)">'+zHtml+'</div>';
+  }
+  if(html){bar.innerHTML=html;bar.style.display='';}
+  else{bar.style.display='none';}
+}
+
+/* 融合 P2 溯源徽章：source_ref='case:案号' 链到案例页 / 'conv:会话id' 链到工作台，
+   其他原样文本。运行时由 renderDrafts 模板串调用（非内联 handler，无需挂 window）。 */
+function _srcRefHtml(ref){
+  ref=String(ref||'');
+  if(!ref)return '';
+  const label=window.T('lr2_src_ref');
+  if(ref.indexOf('case:')===0){
+    return '<a class="src-ref" href="/cases" title="'+label+'">🔗 '+esc(ref.slice(5))+'</a>';
+  }
+  if(ref.indexOf('conv:')===0){
+    return '<a class="src-ref" href="/workspace?conv='+encodeURIComponent(ref.slice(5))+'" target="_blank" title="'+label+'">🔗 '+esc(ref.slice(5))+'</a>';
+  }
+  return '<span class="src-ref" title="'+label+'">'+esc(ref)+'</span>';
+}
 
 async function loadStats(){
   try{
-    const r=await fetch('/api/learner/stats');
+    /* ?effect=1（融合 P2）：只有本页要效果回访段；徽标/待办条走轻量 stats */
+    const r=await apiFetch('/api/learner/stats?effect=1');
     const d=await r.json();
+    window.__learnerStats=d;
+    if(d&&d.error&&d.available!==true){
+      _setStatVals('—');
+      _renderStatusbar(d);
+      return;
+    }
     document.getElementById('stat-pending').textContent=d.pending||0;
     document.getElementById('stat-approved').textContent=d.approved||0;
     document.getElementById('stat-rejected').textContent=d.rejected||0;
     var dupEl=document.getElementById('stat-dup');
     if(dupEl)dupEl.textContent=d.dup_flagged||0;
+    if(typeof d.approve_limit==='number'&&d.approve_limit>0)window.__learnerApproveLimit=d.approve_limit;
     document.getElementById('btn-approve-all').style.display=(d.pending>0&&currentFilter==='pending')?'':'none';
-  }catch(e){}
+    _syncApproveSelectedBtn();
+    _renderStatusbar(d);
+  }catch(e){
+    _setStatVals('—');
+    _renderStatusbar(null);
+  }
 }
 
 let currentSort='priority';
@@ -197,7 +341,7 @@ async function loadDrafts(){
   const c=document.getElementById('drafts-container');
   c.innerHTML='<div style="padding:2rem;text-align:center;color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
   try{
-    const r=await fetch('/api/learner/drafts?status='+currentFilter+'&sort='+currentSort);
+    const r=await apiFetch('/api/learner/drafts?status='+currentFilter+'&sort='+currentSort);
     const d=await r.json();
     renderDrafts(d.drafts||[]);
   }catch(e){
@@ -213,29 +357,48 @@ function renderDrafts(drafts){
     var _sm=document.documentElement.getAttribute('data-ui-mode')==='simple';
     const msgs={pending:_sm?window.T('lr_js002'):window.T('lr_js003')+'「'+window.T('lr_js004')+window.T('lr_js005'),
                 approved:window.T('lr_js006'),rejected:window.T('lr_js007'),all:window.T('draft.empty.none')};
-    c.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg><p>'+(msgs[currentFilter]||msgs.all)+'</p></div>';
+    // 待审空态自解释：有上次运行数据时给出漏斗摘要，区分「素材不足」vs「都审完了」
+    var extra='';
+    var st=window.__learnerStats;
+    if(currentFilter==='pending'&&st&&st.last_run&&st.last_run.funnel){
+      var f=st.last_run.funnel;
+      extra='<p style="font-size:.78rem;color:var(--t3);margin-top:.4rem">'
+        +window.Tf('lr2_funnel_detail',{q:f.miss_qualified||0,t:f.min_miss_count||2,b:f.miss_below_threshold||0,nq:f.miss_not_question||0,p:f.miss_placeholder||0,d:f.already_drafted||0})
+        +'</p>';
+    }
+    c.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg><p>'+(msgs[currentFilter]||msgs.all)+'</p>'+extra+'</div>';
     return;
   }
-  const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009')};
+  const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009'),manual:window.T('lr2_src_manual')};
   let html='';
+  window.__learnerDrafts={};
   drafts.forEach(d=>{
+    window.__learnerDrafts[d.id]=d;
     const src=srcLabels[d.source]||d.source;
     const triggers=(d.triggers||'').split(',').filter(Boolean).map(t=>'<span>'+t.trim()+'</span>').join('');
     const conf=d.confidence||0;
     const confCls=conf>=75?'conf-high':conf>=40?'conf-mid':'conf-low';
     const confLabel=conf>=75?'✔️':conf>=40?'⚠️':'❓';
     const showCheck=d.status==='pending';
+    /* L-4 F（#201）：查重标以 dup_entry_id 为准；BM25 文本命中 dup_score=0 → 「相似度未计算」，不再显 99% */
+    const hasDup=!!(d.dup_entry_id)||d.dup_score>0;
+    const dupPct=d.dup_score>0?(Math.round(d.dup_score*100)+'%'):window.T('lr4_dup_uncomputed');
+    const dupMethod=d.dup_method==='bm25'?window.T('lr4_dup_bm25'):(d.dup_method||'auto');
+    const isMem=String(d.entry_id||'').indexOf('mem:')===0;
     html+=`<div class="draft-card" data-id="${d.id}">
       <div class="draft-header">
         ${showCheck?'<input type="checkbox" class="draft-check" value="'+d.id+'" onchange="updateBatch()">':''}
         <span class="draft-source source-${d.source}">${src}</span>
         <span class="draft-query">${esc(d.query)}</span>
         <span class="draft-count">${d.hit_count}${window.T('kb_js_174')}</span>
+        ${d.source_ref?_srcRefHtml(d.source_ref):''}
+        ${_privBadge(d)}
         <span class="conf-badge ${confCls}" title="AI${window.T('lr_s015')}">${confLabel} ${conf}</span>
-        ${d.dup_score>0?'<span class="dup-badge" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+Math.round(d.dup_score*100)+'%</span>':''}
+        ${hasDup?'<span class="dup-badge'+(d.dup_score>0?'':' dup-uncomputed')+'" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+esc(dupPct)+'</span>':''}
         ${d.status!=='pending'?'<span class="status-badge status-'+d.status+'">'+(d.status==='approved'?window.T('msg_js_1928'):window.T('draft.tab.rejected'))+'</span>':''}
       </div>
-      ${d.dup_score>0?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+Math.round(d.dup_score*100)+'% · '+(d.dup_method||'auto')+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
+      <div class="draft-zh" data-zh-for="${d.id}"${d.query_zh?'':' style="display:none"'}><b>${window.T('lr4_zh_label')}</b><span>${esc(d.query_zh||'')}</span><em class="zh-src" data-zh-src-for="${d.id}"></em></div>
+      ${hasDup?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+esc(dupPct)+' · '+esc(dupMethod)+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
       <div class="draft-title"><b>${esc(d.title)}</b> · ${esc(d.category)}</div>
       <div class="draft-triggers">${triggers}</div>
       ${d.example_reply?'<div class="draft-reply">'+esc(d.example_reply)+'</div>':''}
@@ -246,13 +409,102 @@ function renderDrafts(drafts){
           <button class="btn-sm btn-red" onclick="rejectDraft('${d.id}')">${window.T('rpa_js_act_reject')}</button>
           <button class="btn-sm" onclick="editDraft('${d.id}')">${window.T('edit')}</button>
         `:''}
+        ${(d.status==='approved'&&d.entry_id&&!isMem)?'<a class="btn-sm" href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener">📖 '+window.T('lr2_view_entry')+'</a>':''}
+        ${(d.status==='approved'&&isMem)?'<span class="mem-badge">🧠 '+window.T('lr4_mem_written')+'</span>':''}
       </div>
     </div>`;
   });
   c.innerHTML=html;
+  _syncApproveSelectedBtn();
+  _fillTranslations(drafts);
 }
 
+/* L-4 F（#201）：私事徽章（含人名/金额/地点/约定等 → 通过后写该客户记忆，不进共享 KB） */
+function _privBadge(d){
+  const kinds=String(d.private_kinds||'').split(',').filter(Boolean);
+  if(!kinds.length)return '';
+  const names=kinds.map(function(k){return window.T('lr4_private_kind_'+k);}).join(' / ');
+  return '<span class="priv-badge" title="'+window.T('lr4_private_tip')+'">🔒 '+window.T('lr4_private_badge')+' · '+esc(names)+'</span>';
+}
+
+/* L-4 F（#201）：外语原文补中文译文——复用入站翻译缓存，缺则后端按需翻一次并写回草稿行。
+   M-5 E（#220）：① 要不要请求译文**按文字系统**判——此前「含任何汉字就当中文」把
+   「そっか、向こうはもう物語の世界に戻るのね」（假名+汉字）整条跳过；现在只有
+   「纯汉字 + 标点数字」才不请求，其余交后端 detect_language 定夺（后端 zh/identity 会回 skipped）；
+   ② 译文行带「原语：日语」（后端真实检测结果，不再靠猜）；③ 失败不留空：标「未译 · 翻译失败」+ 重试。 */
+function _needsTranslation(d){
+  if(d.query_zh)return false;
+  const q=String(d.query||'').trim();
+  if(!q)return false;
+  if(/[\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u0590-\u05FF\u0370-\u03FF\u1780-\u17FF]/.test(q))return true;   // 假名/谚文/泰文/西里尔/阿拉伯/天城/希伯来/希腊/高棉：不是中文
+  if(/^[\u4e00-\u9fff\s\d\p{P}\p{S}]*$/u.test(q))return false;   // 纯汉字 + 标点数字 → 中文，不请求
+  return /[A-Za-z\u00C0-\u024F\u1EA0-\u1EF9]/.test(q);           // 拉丁（含越南声调）
+}
+function _fillTranslations(drafts,onlyIds){
+  const need=(drafts||[]).filter(function(d){
+    if(onlyIds&&onlyIds.indexOf(d.id)<0)return false;
+    return onlyIds?true:_needsTranslation(d);
+  }).map(function(d){return d.id;});
+  if(!need.length)return;
+  apiFetch('/api/learner/drafts/translate',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids:need.slice(0,50)})
+  },{timeoutMs:60000}).then(function(r){return r.json();}).then(function(d){
+    const tr=(d&&d.translations)||{};
+    const labels=(d&&d.src_lang_labels)||{};
+    const failed=(d&&d.failed)||{};
+    Object.keys(tr).forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span)span.textContent=tr[id];
+      row.classList.remove('zh-failed');
+      const src=row.querySelector('[data-zh-src-for]');
+      if(src)src.textContent=labels[id]?window.Tf('lr5_src_lang',{lang:labels[id]}):'';
+      row.style.display='';
+      if(window.__learnerDrafts&&window.__learnerDrafts[id])window.__learnerDrafts[id].query_zh=tr[id];
+    });
+    Object.keys(failed).forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span){
+        span.innerHTML='<span class="zh-untranslated" title="'+esc(String(failed[id]||''))+'">'+esc(window.T('lr5_untranslated'))+'</span> '
+          +'<button type="button" class="btn-sm zh-retry" onclick="retryTranslate(\''+esc(id)+'\',this)">'+esc(window.T('lr5_retry'))+'</button>';
+      }
+      const src=row.querySelector('[data-zh-src-for]');
+      if(src)src.textContent=labels[id]?window.Tf('lr5_src_lang',{lang:labels[id]}):'';
+      row.classList.add('zh-failed');
+      row.style.display='';
+    });
+  }).catch(function(){
+    /* 请求整体失败（网络/超时）：把本批全标「未译 · 重试」，绝不留空 */
+    need.forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span)span.innerHTML='<span class="zh-untranslated">'+esc(window.T('lr5_untranslated'))+'</span> '
+        +'<button type="button" class="btn-sm zh-retry" onclick="retryTranslate(\''+esc(id)+'\',this)">'+esc(window.T('lr5_retry'))+'</button>';
+      row.classList.add('zh-failed');
+      row.style.display='';
+    });
+  });
+}
+function retryTranslate(id,btn){
+  if(btn){btn.disabled=true;btn.textContent=window.T('lr5_retrying');}
+  const d=(window.__learnerDrafts&&window.__learnerDrafts[id])||{id:id};
+  _fillTranslations([d],[id]);
+}
+window.retryTranslate=retryTranslate;
+
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+/* 学习闭环补链（实施49 P0-4）：approve 时后端把正式条目 id 回写进草稿行，
+   这里按知识库页既有的锚点约定（效果回访/查重链同款）拼跳转地址。 */
+function _kbEntryHref(entryId){
+  return '/knowledge#entry-'+encodeURIComponent(String(entryId||''));
+}
+window._kbEntryHref=_kbEntryHref;
 
 function filterDrafts(status,btn){
   currentFilter=status;
@@ -265,8 +517,13 @@ async function runLearning(){
   const btn=document.getElementById('btn-run');
   btn.disabled=true;btn.textContent=window.T('lr_js012')+'...';
   try{
-    const r=await fetch('/api/learner/run',{method:'POST'});
-    const d=await r.json();
+    const r=await apiFetch('/api/learner/run',{method:'POST'}, {timeoutMs: 120000});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      // 503 带明确原因（AI 不可用/KB 不可用），如实转告而不是「undefined」
+      if(typeof showToast==='function')showToast((d&&d.detail)||window.T('lr2_run_fail_detail'),'error');
+      return;
+    }
     if(typeof showToast==='function')showToast(window.Tf('lr_learn_done', {c: d.collected, g: d.generated, s: d.saved}),'success');
     loadDrafts();
   }catch(e){
@@ -276,10 +533,44 @@ async function runLearning(){
   }
 }
 
+async function feedQuery(){
+  const inp=document.getElementById('feed-query');
+  const btn=document.getElementById('btn-feed');
+  const q=(inp&&inp.value||'').trim();
+  if(!q)return;
+  if(btn)btn.disabled=true;
+  try{
+    const r=await apiFetch('/api/learner/feed',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query:q})
+    }, {timeoutMs: 60000});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(typeof showToast==='function')showToast((d&&d.detail)||window.T('lr2_feed_fail'),'error');
+      return;
+    }
+    if(d.reason==='duplicate'){
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_dup'),'warning');
+    }else if(d.generated>0){
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_ok_gen'),'success');
+      if(inp)inp.value='';
+      loadDrafts();
+    }else{
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_ok_queued'),'info');
+      if(inp)inp.value='';
+      loadStats();
+    }
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('lr2_feed_fail')+': '+e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+
 async function recheckDup(id,btn){
   if(btn){btn.disabled=true;btn.textContent=window.T('tg_s121')+'...'}
   try{
-    const r=await fetch('/api/learner/drafts/'+id+'/recheck-dup',{method:'POST'});
+    const r=await apiFetch('/api/learner/drafts/'+id+'/recheck-dup',{method:'POST'}, {timeoutMs: 60000});
     const d=await r.json();
     if(d.dup){
       if(typeof showToast==='function')showToast(window.T('lr_js014')+': '+d.dup.entry_title+' ('+Math.round(d.dup.score*100)+'%)','warning');
@@ -296,32 +587,110 @@ async function approveDraft(id){
   var msg=hasDup?'⚠ '+window.T('lr_js016'):window.T('lr_js017');
   if(!confirm(msg))return;
   try{
-    await fetch('/api/learner/drafts/'+id+'/approve',{method:'POST'});
-    if(typeof showToast==='function')showToast(window.T('lr_js018'),'success');
+    const r=await apiFetch('/api/learner/drafts/'+id+'/approve',{method:'POST'}, {timeoutMs: 60000});
+    /* apiFetch 对 4xx/5xx 是正常 resolve（语义同 fetch）——不判 ok 会把失败也报成
+       「已通过入库」，坐席以为学会了、知识库里其实什么都没有。 */
+    const d=await r.json().catch(function(){return {}});
+    if(!r.ok||d.ok===false)throw new Error(d.detail||('HTTP '+r.status));
+    if(typeof showToast==='function'){
+      var t=window.T('lr_js018');
+      /* 学习闭环补链（实施49 P0-4）：入库后直接给出正式条目的去处，
+         「审完不知道去哪看」是内测里最常见的断链。 */
+      if(d.target==='memory')t=window.T('lr4_approved_mem');
+      else if(d.entry_id)t+=' · <a href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+window.T('lr2_view_entry')+'</a>';
+      showToast(t,'success',d.entry_id?8000:3500);
+    }
     loadDrafts();
-  }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error')}
+  }catch(e){if(typeof showToast==='function')showToast((e&&e.message&&!/^HTTP /.test(e.message))?e.message:window.T('ov_js_op_fail'),'error')}
 }
 
 async function rejectDraft(id){
   try{
-    await fetch('/api/learner/drafts/'+id+'/reject',{method:'POST'});
+    await apiFetch('/api/learner/drafts/'+id+'/reject',{method:'POST'}, {timeoutMs: 60000});
     if(typeof showToast==='function')showToast(window.T('draft.tab.rejected'),'info');
     loadDrafts();
   }catch(e){}
 }
 
-async function approveAll(){
-  if(!confirm(window.T('lr_js019')))return;
+/* ── L-4 F（#201）：「通过已选（N）」+ 二次确认弹层 ──────────────────────
+   旧「全部通过」一键把 166 条无确认灌进共享 KB 是 P1 事故；现在：只通过勾选的、
+   每批 ≤ approve_limit（后端 20）、弹层逐条列出将入库内容（私事条目标明去客户记忆），
+   确认后才带 confirm=1 调 approve-all。 */
+window.__learnerApproveLimit=20;
+function _syncApproveSelectedBtn(){
+  const btn=document.getElementById('btn-approve-all');
+  const lbl=document.getElementById('btn-approve-all-label');
+  if(!btn||!lbl)return;
+  const n=getSelectedIds().length;
+  lbl.textContent=window.Tf('lr4_approve_selected',{n:n});
+  btn.disabled=n===0;
+  btn.style.opacity=n===0?'.55':'';
+}
+function approveSelected(){
+  const ids=getSelectedIds();
+  if(!ids.length){
+    if(typeof showToast==='function')showToast(window.T('lr4_select_hint'),'info');
+    return;
+  }
+  const limit=window.__learnerApproveLimit||20;
+  const use=ids.slice(0,limit);
+  const list=document.getElementById('approve-modal-list');
+  const rows=use.map(function(id){
+    const d=(window.__learnerDrafts||{})[id]||{};
+    const kinds=String(d.private_kinds||'').split(',').filter(Boolean);
+    const dest=kinds.length?'<span class="priv-badge">🔒 '+window.T('lr4_private_badge')+' → '+window.T('lr4_dest_memory')+'</span>':'<span class="status-badge status-approved">→ '+window.T('lr4_dest_kb')+'</span>';
+    return '<div class="apm-row"><div class="apm-q"><div><b>'+esc(d.title||'')+'</b> · '+esc(d.query||id)+'</div>'
+      +(d.query_zh?'<div class="apm-t">'+esc(d.query_zh)+'</div>':'')
+      +(d.example_reply?'<div class="apm-t">↳ '+esc(String(d.example_reply).slice(0,120))+'</div>':'')
+      +'</div>'+dest+'</div>';
+  }).join('');
+  list.innerHTML=rows;
+  document.getElementById('approve-modal-title').textContent=window.Tf('lr4_confirm_title',{n:use.length});
+  const hint=document.getElementById('approve-modal-hint');
+  hint.textContent=ids.length>limit?window.Tf('lr4_limit_over',{n:limit,x:ids.length-limit}):'';
+  const modal=document.getElementById('approve-modal');
+  modal.dataset.ids=JSON.stringify(use);
+  modal.style.display='block';
+}
+function closeApproveModal(){
+  const modal=document.getElementById('approve-modal');
+  if(modal){modal.style.display='none';modal.dataset.ids='';}
+}
+async function confirmApproveSelected(){
+  const modal=document.getElementById('approve-modal');
+  let ids=[];
+  try{ids=JSON.parse(modal.dataset.ids||'[]');}catch(e){ids=[];}
+  if(!ids.length){closeApproveModal();return;}
+  const ok=document.getElementById('approve-modal-ok');
+  if(ok)ok.disabled=true;
   try{
-    const r=await fetch('/api/learner/drafts/approve-all',{method:'POST'});
-    const d=await r.json();
-    if(typeof showToast==='function')showToast(window.Tf('lr_batch_approved', {n: d.approved}),'success');
+    const r=await apiFetch('/api/learner/drafts/approve-all',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids:ids,confirm:1})
+    }, {timeoutMs: 120000});
+    const d=await r.json().catch(function(){return {}});
+    if(!r.ok||d.ok===false){
+      if(typeof showToast==='function')showToast(d.detail||window.T('ov_js_op_fail'),'error');
+      return;
+    }
+    if(typeof showToast==='function'){
+      let msg=window.Tf('lr_batch_approved',{n:d.approved||0});
+      const fr=d.failed_reasons||{};
+      const nf=Object.keys(fr).length;
+      if(nf)msg+=' · '+window.Tf('lr4_failed_private',{n:nf});
+      showToast(msg,nf?'warning':'success',nf?8000:3500);
+    }
+    closeApproveModal();
     loadDrafts();
-  }catch(e){}
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error');
+  }finally{
+    if(ok)ok.disabled=false;
+  }
 }
 
 function editDraft(id){
-  fetch('/api/learner/drafts/'+id).then(r=>r.json()).then(d=>{
+  apiFetch('/api/learner/drafts/'+id).then(r=>r.json()).then(d=>{
     document.getElementById('edit-id').value=d.id;
     document.getElementById('edit-query').textContent=d.query;
     document.getElementById('edit-category').value=d.category||'';
@@ -343,7 +712,7 @@ async function saveDraft(){
     example_reply:document.getElementById('edit-reply').value,
   };
   try{
-    await fetch('/api/learner/drafts/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    await apiFetch('/api/learner/drafts/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     if(typeof showToast==='function')showToast(window.T('wa_js_053'),'success');
     closeModal();
     loadDrafts();
@@ -359,6 +728,7 @@ function updateBatch(){
   const bar=document.getElementById('batch-bar');
   bar.style.display=ids.length?'flex':'none';
   document.getElementById('batch-count').textContent=ids.length;
+  _syncApproveSelectedBtn();
 }
 function toggleAllChecks(on){
   document.querySelectorAll('.draft-check').forEach(cb=>{cb.checked=on});
@@ -370,17 +740,19 @@ function clearBatch(){
   if(bar)bar.style.display='none';
   const ba=document.getElementById('batch-all');
   if(ba)ba.checked=false;
+  _syncApproveSelectedBtn();
 }
 async function batchAction(action){
   const ids=getSelectedIds();
   if(!ids.length)return;
+  if(action==='approve'){approveSelected();return;}  /* 通过一律走确认弹层（L-4 F） */
   const label=action==='approve'?window.T('lr_s008'):window.T('rpa_js_act_reject');
   if(!confirm(window.Tf('lr_confirm_batch', {n: ids.length, label: label})))return;
   try{
-    const r=await fetch('/api/learner/drafts/batch-action',{
+    const r=await apiFetch('/api/learner/drafts/batch-action',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ids,action})
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(typeof showToast==='function')showToast(window.Tf('lr_batch_result', {label: label, a: d.approved||0, r: d.rejected||0}),'success');
     loadDrafts();

@@ -6,6 +6,10 @@ import { useLang } from "./LanguageContext";
 import { getLocal, setLocal } from "@/lib/safe-storage";
 
 const KEY = "yt-cookie-consent";
+/** StickyCTA 等底部浮动元素据此判断「横幅是否还占着底部」（键名保持历史值不动老用户状态） */
+export const COOKIE_CONSENT_KEY = KEY;
+/** 用户做出选择时广播，底部让位的元素监听后恢复显示 */
+export const COOKIE_DECIDED_EVENT = "bl:cookie-decided";
 
 export default function CookieConsent() {
   const { lang } = useLang();
@@ -23,6 +27,9 @@ export default function CookieConsent() {
   function decide(value: "accept" | "reject") {
     setLocal(KEY, value);
     setShow(false);
+    try {
+      window.dispatchEvent(new CustomEvent(COOKIE_DECIDED_EVENT, { detail: value }));
+    } catch {}
   }
 
   if (!show) return null;
@@ -32,7 +39,7 @@ export default function CookieConsent() {
       role="dialog"
       aria-live="polite"
       aria-label={zh ? "Cookie 同意" : "Cookie consent"}
-      className="fixed inset-x-3 bottom-3 z-[60] mx-auto max-w-2xl rounded-2xl border border-white/10 bg-ink-900/90 p-4 shadow-2xl backdrop-blur-md sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2"
+      className="fixed inset-x-3 bottom-3 z-[var(--z-cookie)] mx-auto max-w-2xl rounded-2xl border border-white/10 bg-ink-900/90 p-4 shadow-2xl backdrop-blur-md sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-xs leading-relaxed text-slate-300">

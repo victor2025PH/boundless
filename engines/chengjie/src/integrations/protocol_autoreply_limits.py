@@ -25,6 +25,23 @@ logger = logging.getLogger(__name__)
 _HOUR = 3600.0
 _DAY = 86400.0
 
+
+def _note_block(layer: str, reason: str) -> None:
+    """拦截统一计数（outbound_policy P5）。软依赖，绝不抛。"""
+    try:
+        from src.ops.outbound_policy import record_block
+        record_block(layer, reason)
+    except Exception:
+        pass
+
+
+def _note_bypass(reason: str) -> None:
+    try:
+        from src.ops.outbound_policy import record_unlimited_bypass
+        record_unlimited_bypass(reason)
+    except Exception:
+        pass
+
 _SEND_DDL = """
 CREATE TABLE IF NOT EXISTS account_sends (
     account_key TEXT NOT NULL,
@@ -77,6 +94,24 @@ class SendCountStore:
                 (str(account_key), float(since_ts)),
             ).fetchone()
         return int((row[0] if row else 0) or 0)
+
+    def nth_oldest_since(
+        self, account_key: str, since_ts: float, n: int,
+    ) -> Optional[float]:
+        """窗口内第 ``n`` 老（1-indexed）的发送时间戳；不足 ``n`` 条 → None。
+
+        供「日额度何时释放空位」预估（滚动 24h 窗：第 k 老的记录过期时刻 =
+        其 ts + 24h）。只读，不影响计数路径。
+        """
+        if n < 1:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT ts FROM account_sends WHERE account_key=? AND ts>=? "
+                "ORDER BY ts ASC LIMIT 1 OFFSET ?",
+                (str(account_key), float(since_ts), int(n) - 1),
+            ).fetchone()
+        return float(row[0]) if row else None
 
     def _prune_locked(self, before_ts: float) -> None:
         try:
@@ -153,14 +188,31 @@ class AutoReplyLimiter:
         now = now if now is not None else time.time()
         h_limit = self.hourly if hourly is None else int(hourly or 0)
         d_limit = self.daily if daily is None else int(daily or 0)
+        # outbound.unlimited_mode：时/日额度属业务频控 → 归 0（=不限）；
+        # 断路器（基础设施连败）是安全刹车，任何模式都拦。
+        unlimited = False
+        try:
+            from src.ops.outbound_policy import is_unlimited
+            unlimited = bool(is_unlimited())
+        except Exception:
+            unlimited = False
         with self._lock:
             ou = self._open_until.get(account_key, 0.0)
             if ou and now < ou:
+                _note_block("safety", "protocol_circuit_open")
                 return False, "circuit_open"
+            if unlimited:
+                if h_limit or d_limit:
+                    hour, day = self._counts(account_key, now)
+                    if (h_limit and hour >= h_limit) or (d_limit and day >= d_limit):
+                        _note_bypass("protocol_quota")
+                return True, "ok"
             hour, day = self._counts(account_key, now)
             if h_limit and hour >= h_limit:
+                _note_block("business", "protocol_quota_hour")
                 return False, "quota_hour"
             if d_limit and day >= d_limit:
+                _note_block("business", "protocol_quota_day")
                 return False, "quota_day"
             return True, "ok"
 
@@ -192,6 +244,41 @@ class AutoReplyLimiter:
                 self._fails[account_key] = 0
                 return True
             return False
+
+    def quota_frees_at(
+        self, account_key: str, cap: int, now: Optional[float] = None,
+    ) -> Optional[float]:
+        """日额度（滚动 24h 窗）预计**首个空位**的释放时刻。
+
+        ``day_used >= cap`` 时：窗口内第 ``day_used - cap + 1`` 老的发送记录
+        过期（ts + 24h）即腾出一个名额。未超限 / cap<=0 / 无数据 → None。
+        与 ``_counts`` 同数据源（store 优先、内存 deque 兜底），保证「预计
+        释放时刻」与「拦不拦」用的是同一份计数。
+        """
+        now = now if now is not None else time.time()
+        cap = int(cap or 0)
+        if cap <= 0:
+            return None
+        with self._lock:
+            _hour, day = self._counts(account_key, now)
+            k = day - cap + 1
+            if k <= 0:
+                return None
+            ts: Optional[float] = None
+            if self._store is not None:
+                try:
+                    ts = self._store.nth_oldest_since(account_key, now - _DAY, k)
+                except Exception:
+                    logger.debug("[limiter] nth_oldest_since 失败，降级内存",
+                                 exc_info=True)
+                    ts = None
+            if ts is None:
+                dq = self._sends.get(account_key)
+                if dq:
+                    self._prune(dq, now)
+                    if len(dq) >= k:
+                        ts = dq[k - 1]   # deque 按 append 时序天然升序
+            return (float(ts) + _DAY) if ts is not None else None
 
     def snapshot(
         self, account_key: str, now: Optional[float] = None,
@@ -247,6 +334,22 @@ def get_autoreply_limiter(cfg: Optional[Dict[str, Any]] = None) -> AutoReplyLimi
                     breaker_cooldown=brk.get("cooldown_sec", 300),
                     store=store,
                 )
+    elif cfg:
+        # C1（2026-07-22 配置单例审计）：与 get_orchestrator 同款缺陷——单例在
+        # 启动时捕获阈值，热重载改 rate.hourly/daily 后不生效。调用方每次都带
+        # "当前"配置，这里跟着刷新数值阈值（store/断路器状态保持，不重建）。
+        try:
+            pa = (cfg or {}).get("protocol_autoreply") or {}
+            rate = pa.get("rate") or {}
+            brk = pa.get("breaker") or {}
+            _limiter.configure(
+                hourly=rate.get("hourly"),
+                daily=rate.get("daily"),
+                breaker_threshold=brk.get("threshold"),
+                breaker_cooldown=brk.get("cooldown_sec"),
+            )
+        except Exception:
+            logger.debug("[limiter] 热刷新阈值失败（保留旧值）", exc_info=True)
     return _limiter
 
 

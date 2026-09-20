@@ -9,7 +9,17 @@ const path = require("path");
 
 const SRC = path.resolve(__dirname, "..", "shared", "inject");
 const DST = path.join(__dirname, "vendor");
-const FILES = ["profiles.js", "media-format.js", "core.js"];
+// 清单必须与 manifest.json 的 content_scripts 加载清单一致（门禁
+// desktop/test/extension-vendor-sync.test.js 双向钉住：拷了不加载=死文件,加载了不拷=装不上）。
+// translate-scheduler / bubble-model 是 core 的可选依赖：扩展侧没有 require,靠各模块
+// 自注册到 globalThis 被 core 认到,故只要进包就自动生效,bridge.js 零改动。
+const FILES = [
+  "profiles.js",
+  "media-format.js",
+  "translate-scheduler.js",
+  "bubble-model.js",
+  "core.js",
+];
 
 try {
   if (!fs.existsSync(SRC)) {

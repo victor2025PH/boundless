@@ -210,6 +210,11 @@ _MODE_HINTS = {
         "太频繁/被反感：上调 name_ask.cooldown_days 或 min_intimacy，只对够熟的人问",
         "不自然：放在 gentle_checkin（最没话说时）顺势问，别硬塞进有记忆钩子的回访",
     ],
+    "ask_city": [
+        "问得像查户口：只问城市、不要详细地址，先问候再随口关心作息",
+        "问到国内用户：核对 city_ask_eligible（应只放行外语/行为钟偏国内≥3h）",
+        "太频繁/被反感：上调 city_ask.cooldown_days 或 min_intimacy",
+    ],
     "story_invite": [
         "邀约太硬/像广告：收紧 directive，先共情再顺势提议，别一上来报剧情名",
         "续作召回核对前传共同经历是否被自然提起（satisfied_prerequisite/ending_memory）",

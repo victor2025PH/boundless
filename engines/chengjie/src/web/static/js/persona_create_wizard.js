@@ -216,15 +216,15 @@
       '@media (max-width:560px){.psw-grid{grid-template-columns:1fr}}' +
       '.psw-card{border:1px solid var(--bd);border-radius:11px;padding:.7rem .75rem;cursor:pointer;' +
         'background:var(--card,var(--bg2,transparent));transition:border-color .15s,box-shadow .15s,transform .12s}' +
-      '.psw-card:hover{border-color:var(--accent,#5b7cf6);box-shadow:0 4px 14px rgba(91,124,246,.15);transform:translateY(-1px)}' +
+      '.psw-card:hover{border-color:var(--accent,#5b7cf6);box-shadow:0 4px 14px color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);transform:translateY(-1px)}' +
       '.psw-card:focus{outline:2px solid var(--accent,#5b7cf6);outline-offset:1px}' +
       '.psw-card-top{display:flex;align-items:center;gap:.45rem;margin-bottom:.25rem}' +
       '.psw-emoji{font-size:1.25rem;line-height:1}' +
       '.psw-card-name{font-size:.86rem;font-weight:700;color:var(--t1)}' +
       '.psw-card-desc{font-size:.7rem;color:var(--t2);line-height:1.45;min-height:2em}' +
       '.psw-traits{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.45rem}' +
-      '.psw-trait{font-size:.6rem;padding:.08rem .38rem;border-radius:999px;background:rgba(91,124,246,.1);' +
-        'color:var(--accent,#5b7cf6);border:1px solid rgba(91,124,246,.25);line-height:1.5}' +
+      '.psw-trait{font-size:.6rem;padding:.08rem .38rem;border-radius:999px;background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);' +
+        'color:var(--accent,#5b7cf6);border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 25%, transparent);line-height:1.5}' +
       '.psw-card-blank{border-style:dashed;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}' +
       '.psw-blank-plus{font-size:1.3rem;color:var(--t3);margin-bottom:.2rem;line-height:1}' +
       '.psw-badge{display:flex;align-items:center;gap:.5rem;padding:.5rem .65rem;border:1px solid var(--bd);' +
@@ -505,10 +505,21 @@
       if (d && d.ok) {
         _submitting = false;
         _close();
-        _notify(_fmt(_t('psn_wiz_created', '已创建「{name}」，接下来补上头像和声音吧'), { name: name }), 'ok');
         if (window.loadProfileList) window.loadProfileList();
         if (window.refreshStatus) window.refreshStatus();
-        if (window.editProfile) window.editProfile(pid);
+        // 服务端已创建成功；打开编辑器是第二步，失败不该被说成「创建失败」，也不该和
+        // 「已创建」同时弹两条互相矛盾的 toast（2026-09-15 `_psnArRender` 实录）。
+        // editProfile 成功返 true、装载中途失败返 false（旧版本无返回值 → undefined 按成功）。
+        var opened = true;
+        if (window.editProfile) {
+          try { opened = (await window.editProfile(pid)) !== false; } catch (e3) { opened = false; }
+        }
+        if (opened) {
+          _notify(_fmt(_t('psn_wiz_created', '已创建「{name}」，接下来补上头像和声音吧'), { name: name }), 'ok');
+        } else {
+          _notify(_fmt(_t('psn_wiz_created_editor_failed',
+            '「{name}」已创建成功，但编辑器没能打开——刷新页面后在列表里点开它即可'), { name: name }), 'info');
+        }
       } else {
         var detail = (d && (d.detail || d.error)) || ('HTTP ' + r.status);
         _notify(_t('psn_js_064', '保存失败: ') + detail, 'err');

@@ -149,8 +149,20 @@ class _FakeSender:
     def _postsend_record_count(self):
         self.recorded += 1
 
-    def _postsend_mirror_and_record(self, chat_id, text):
+    def _mirror_out_row(self, chat_id, text, **kw):
+        # 2026-08-02 起分条路径逐条镜像走此口（不再合并一行 _postsend_mirror_and_record）
         self.mirrored.append(text)
+
+    def _record_contact_out(self, chat_id, preview):
+        pass
+
+    def _publish_media_ref(self, path):
+        return ("", "")   # 本文件只测质量闸门，不关心归档
+
+    # contacts 预览构造借真实实现（_record_contact_out 前会调它）
+    _voice_mirror_preview = staticmethod(
+        __import__("src.client.sender", fromlist=["TelegramSenderMixin"])
+        .TelegramSenderMixin._voice_mirror_preview)
 
     def _reply_to_message_id_for_send(self, msg):
         return 42

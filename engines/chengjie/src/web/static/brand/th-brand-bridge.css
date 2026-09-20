@@ -1,0 +1,50 @@
+/* 无界科技 Boundless — theme-tokens 的「品牌色」令牌重映射桥（chengjie 专属）
+ * ============================================================
+ * 【为什么需要单独这一层，而不是直接改源头】
+ * static/theme-tokens.css 由 tools/inline_color_codemod.py --emit-css 生成，
+ * 其设计不变量是「亮色值恒 = 迁移前的字面量本身」（保证把硬编码收口成令牌时
+ * 亮色渲染字节级零变化），并由 tests/test_template_inline_color_ratchet.py
+ * 校验「模板里的 fallback ≡ :root 亮值」。因此**不能**为了换品牌色去手改那个
+ * 文件、也不该改生成器色表 —— 两者都会破坏它的不变量并把门禁弄红。
+ *
+ * 但 --th-*-brand* 这一族是从 base.html 的旧主色 #5b7cf6（偏紫蓝）收口来的；
+ * 主色现已统一到品牌智连蓝（--bl-growth #1e8cf2），这一族的值就落后了，于是
+ * 出现「文字 var(--p) 是智连蓝、底色 var(--th-bg-brand08) 仍偏紫」的同组件割裂。
+ *
+ * 【做法】在 theme-tokens.css **之后**引入本文件做后置覆盖：一处改动即让全部
+ * --th-*-brand* 引用点（约 17 处 / 13 个模板）同时品牌化，且
+ *   · 不动机器生成文件      · 不动生成器色表      · 不触发 ratchet 门禁
+ * （门禁校验的对象是 theme-tokens.css 与模板 fallback，二者均未被修改）。
+ *
+ * ⚠️ 加载顺序是生效前提：本文件的 <link> 必须排在 theme-tokens.css 之后。
+ * ⚠️ 覆盖范围刻意收窄为「亮色全部 + 暗色的遗漏项」：暗色的 --th-*-brand* 在
+ * theme-tokens.css 里已是 #58a6ff 系 rgb(88,166,255)，与品牌暗档 #54a7f5
+ * rgb(84,167,245) 几乎同值、差异不可见，故不覆盖以减少改动面。
+ */
+
+:root{
+  /* 纯色走 var() 直接引品牌令牌，未来改 tokens.json 自动跟随 */
+  --th-bg-brand:var(--bl-growth,#1e8cf2);
+  /* alpha 档改 color-mix 引令牌（2026-08-23 白标压测批）：旧写法是写死的
+     rgba(30,140,242,.xx)——「带 alpha 无法引用 hex 令牌」是 color-mix 普及前的
+     约束，本仓 workspace_base 等处早已大量使用 color-mix；写死值=换肤时这 10 档
+     底色/描边仍是旧品牌蓝（verify_brand_reskin 压测的第一批实锤泄漏）。
+     现全部跟随 --bl-growth，改 tokens.json 即全站换肤。 */
+  --th-bg-brand06:color-mix(in srgb, var(--bl-growth,#1e8cf2) 6%, transparent);
+  --th-bg-brand08:color-mix(in srgb, var(--bl-growth,#1e8cf2) 8%, transparent);
+  --th-bg-brand10:color-mix(in srgb, var(--bl-growth,#1e8cf2) 10%, transparent);
+  --th-bg-brand15:color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent);
+  --th-bg-brand18:color-mix(in srgb, var(--bl-growth,#1e8cf2) 18%, transparent);
+  --th-bg-brand22:color-mix(in srgb, var(--bl-growth,#1e8cf2) 22%, transparent);
+  --th-bd-brand15:color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent);
+  --th-bd-brand18:color-mix(in srgb, var(--bl-growth,#1e8cf2) 18%, transparent);
+  --th-bd-brand20:color-mix(in srgb, var(--bl-growth,#1e8cf2) 20%, transparent);
+  --th-bd-brand22:color-mix(in srgb, var(--bl-growth,#1e8cf2) 22%, transparent);
+}
+
+/* 暗色：theme-tokens.css 的暗色块**漏了**纯色 --th-bg-brand（因此暗色下它仍取
+   亮色块的 #5b7cf6 旧紫蓝，且不透明、肉眼可见），此处补品牌暗档；
+   其余 brand* 暗值按上文说明保持不动。 */
+[data-theme="dark"],[data-cp-theme="dark"]{
+  --th-bg-brand:var(--bl-growth-400,#54a7f5);
+}

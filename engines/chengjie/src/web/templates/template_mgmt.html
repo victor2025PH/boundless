@@ -7,7 +7,7 @@
 .tm-title{font-size:20px;font-weight:700;color:#1e293b;}
 .tm-filters{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;}
 .tm-filter{padding:4px 12px;border-radius:8px;font-size:12px;cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#475569;transition:all .15s;}
-.tm-filter.active{background:#3b82f6;color:#fff;border-color:#3b82f6;}
+.tm-filter.active{background:var(--p,#1e8cf2);color:#fff;border-color:var(--p,#1e8cf2);}
 .tm-search{flex:1;min-width:200px;padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;}
 .tm-table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}
 .tm-table th{background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;padding:10px 12px;text-align:left;border-bottom:1px solid #e2e8f0;}
@@ -21,7 +21,7 @@
 .tm-badge.other{background:#f1f5f9;color:#475569;}
 .tm-badge.scene{background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;}
 .tm-btn{padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:none;font-weight:600;}
-.tm-btn-edit{background:#eff6ff;color:#1d4ed8;}
+.tm-btn-edit{background:var(--bl-growth-50,#eef6fe);color:var(--bl-growth-700,#0b64b7);}
 .tm-btn-del{background:#fef2f2;color:#dc2626;}
 .tm-content-cell{max-width:280px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .tm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center;}
@@ -39,7 +39,7 @@
 <div class="tm-wrap">
   <div class="tm-header">
     <div class="tm-title">📚 {{ (i18n or {}).get('base.nav.templates_t', "回复模板库") }}</div>
-    <button class="tm-btn" style="background:#3b82f6;color:#fff;padding:7px 16px;font-size:13px;" onclick="openModal()">+ {{ (i18n or {}).get('tm_s002', "新建模板") }}</button>
+    <button class="tm-btn" style="background:var(--th-bg-blue5,#3b82f6);color:var(--th-ink-inverse,#fff);padding:7px 16px;font-size:13px;" onclick="openModal()">+ {{ (i18n or {}).get('tm_s002', "新建模板") }}</button>
   </div>
   <div class="tm-filters">
     <input class="tm-search" id="tm-search" placeholder="{{ (i18n or {}).get('tm_s003', '搜索模板标题或内容…') }}" oninput="debounceLoad()">
@@ -104,8 +104,8 @@
       </div>
     </div>
     <div class="tm-dialog-btns">
-      <button class="tm-btn" style="background:#f1f5f9;color:#475569;" onclick="closeModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-      <button class="tm-btn" style="background:#3b82f6;color:#fff;padding:6px 18px;" onclick="saveModal()">{{ (i18n or {}).get('save', "保存") }}</button>
+      <button class="tm-btn" style="background:var(--th-bg-slate1,#f1f5f9);color:var(--th-ink-slate6,#475569);" onclick="closeModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button class="tm-btn" style="background:var(--th-bg-blue5,#3b82f6);color:var(--th-ink-inverse,#fff);padding:6px 18px;" onclick="saveModal()">{{ (i18n or {}).get('save', "保存") }}</button>
     </div>
   </div>
 </div>
@@ -119,7 +119,7 @@ function load(){
   if(_lang) url+='&language='+encodeURIComponent(_lang);
   if(_scene) url+='&scene='+encodeURIComponent(_scene);
   if(search) url+='&search='+encodeURIComponent(search);
-  fetch(url).then(function(r){return r.json();}).then(function(d){
+  apiFetch(url).then(function(r){return r.json();}).then(function(d){
     _tmplates=d.templates||[];
     var stat=document.getElementById('tm-stat');
     if(stat) stat.textContent=window.T('wa_js_019')+' '+_tmplates.length+' '+window.T('tm_js001');
@@ -138,7 +138,7 @@ function load(){
         +'<td>'+langBadge+'</td>'
         +'<td>'+sceneBadge+'</td>'
         +'<td class="tm-content-cell" title="'+esc(t.content)+'">'+esc(t.content)+'</td>'
-        +'<td style="text-align:center;color:#94a3b8;">'+esc(t.used_count||0)+'</td>'
+        +'<td style="text-align:center;color:var(--th-ink-slate4,#5b6b85);">'+esc(t.used_count||0)+'</td>'
         +'<td><button class="tm-btn tm-btn-edit" onclick="editTpl(\''+esc(t.id)+'\')">'+window.T('edit')+'</button> '
         +'<button class="tm-btn tm-btn-del" onclick="delTpl(\''+esc(t.id)+'\',\''+esc(t.title)+'\')">'+window.T('delete')+'</button></td>'
         +'</tr>';
@@ -198,7 +198,7 @@ function saveModal(){
   var url,method;
   if(tid){ url='/api/reply-templates/'+encodeURIComponent(tid); method='PUT'; }
   else { url='/api/reply-templates'; method='POST'; body.created_by='admin'; }
-  fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  apiFetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ closeModal(); load(); }
       else { alert((d&&d.detail)||window.T('ov_js_save_fail')); }
@@ -206,7 +206,7 @@ function saveModal(){
 }
 function delTpl(tid, title){
   if(!confirm(window.T('tm_js004')+' "'+title+'"? '+window.T('tm_js005'))) return;
-  fetch('/api/reply-templates/'+encodeURIComponent(tid),{method:'DELETE'})
+  apiFetch('/api/reply-templates/'+encodeURIComponent(tid),{method:'DELETE'}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ load(); }
       else { alert((d&&d.detail)||window.T('tm_js006')); }

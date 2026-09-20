@@ -1,0 +1,32 @@
+# 跨机算力联络纪律（2026-08-15 起，vLLM 双开互踩事故沉淀）
+
+## 背景
+
+173 的两个 vLLM（:8001 `vllm`/chatx＝智聊主链、:8010 `vllm-coder`/coder＝编程模式）
+曾因本线 `systemctl enable` + `VLLM_Keepalive` 计划任务与中枢(176)的集群模式轮换
+互踩：code 模式下 :8001 被 keepalive 复活 → 32G 卡双开拉满 → coder 掉到 ~1.5 tok/s。
+集群模式 SSOT＝176 的 boundless-hud modes.json，**173 的 unit 启停权归中枢模式执行器**。
+
+## 铁律
+
+1. **动 173（及任何非本机）的模型/服务/unit/计划任务前，先写联络单**：
+   `D:\chengjie-instances\.ops\ASK_from_shengbei_YYYYMMDD.md` 知会中枢，等回执或
+   明确窗口再动手。紧急止血例外＝先动手、1 小时内补单。中枢来单在同目录
+   `ASK_from_zhongshu_*.md`，答复写 `reply_to_zhongshu_*.md`（对方轮询该路径）。
+2. **顺序契约（智聊主链 × :8001 联动）**：`ai.primary=local_only` 语义＝本地挂了
+   也绝不回落云端、直接 canned 占位——所以「:8001 不可用的任何时段，智聊必须处于
+   cloud 档」。停 :8001 前先
+   `POST 117:18799/api/setup/ai-primary {"primary":"cloud"}`（Bearer＝zhiliao overlay
+   `web_admin.auth_token`，热生效免重启）；:8001 起来并 `deploy\compute\verify_vllm.ps1`
+   通过后才切回 `{"primary":"local_only"}`。顺序反了＝主营业务变复读机。
+3. **智聊在保依赖不止 173:8001**（中枢腾挪显存时同级看待，完整清单见
+   `reply_to_zhongshu_20260814.md` 问题 6）：140:7852 CosyVoice（克隆语音唯一点，
+   **所有模式不可泊**）、140/176:11434（bge-m3 嵌入 + hy-mt2 MT + qwen3-vl 视觉）、
+   176:9000 hub index_tts（智聊模式勿泊；code 模式泊＝降级可接受）。
+   「智聊 TTS 走 117 本地」的说法已过时（2026-08-14 本机 TTS 退役）。
+4. **`VLLM_Keepalive`（173 计划任务）移交中**：处置以 `reply_to_zhongshu_20260814.md`
+   的回执结论为准；未收到中枢回执前本线不得单方启停它或两个 vLLM unit。它的三件事
+   （钉 WSL VM 会话防空闲回收 / portproxy 随 WSL IP 自刷 / 健康自检+恢复暖机）
+   必须有归属——WSL VM 被回收时 systemd 会对 unit 发正常 stop，:8010 同样中招。
+5. 173 部署契约 SSOT＝`engines/chengjie/deploy/compute/README.md`（8001/chatx、
+   16384 上下文下限、util 0.90、无审查 32B 是选型硬条件），改动先改 README。

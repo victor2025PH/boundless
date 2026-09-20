@@ -1,0 +1,22 @@
+{
+  "name": "qq-personal-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "智聊自研 QQ 个人号协议边车 — 注入本机 QQ 客户端驱动其内核收发（签名由 QQ 自身完成，不连外部签名服务、不需 token），对上暴露 Milky HTTP/WS。扫码即用。",
+  "type": "module",
+  "main": "server.js",
+  "license": "GPL-2.0",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "qrcode": "^1.5.3",
+    "ws": "^8.18.0"
+  }
+}

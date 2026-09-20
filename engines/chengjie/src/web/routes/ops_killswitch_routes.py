@@ -11,7 +11,54 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger(__name__)
+
+
+def scope_parts(scope: str) -> tuple:
+    """作用域 → (platform, account_id) 审计归属（纯函数）。
+
+    ``account:<p>:<id>`` 归到具体号（号健康史可见「这号被谁冻过几次」）；
+    ``platform:<p>`` 归平台；``global`` 归 ``global`` 伪平台（不污染
+    telegram 缺省桶）。
+    """
+    s = str(scope or "")
+    if s.startswith("account:"):
+        rest = s[len("account:"):]
+        parts = rest.split(":", 1)
+        if len(parts) == 2 and parts[0]:
+            return parts[0], parts[1]
+    if s.startswith("platform:"):
+        return s[len("platform:"):], ""
+    return "global", ""
+
+
+def _audit_killswitch(kind: str, scope: str, *, actor: str = "",
+                      reason: str = "", detail: str = "") -> None:
+    """置位/解除落 ops_events 审计（P1 2026-08-23）。
+
+    此前 kill_switch 表只存当前态、clear 即删行——「谁在何时冻过/解过」查
+    无对证。best-effort：审计失败绝不阻断急停操作本身。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+        store = get_ops_event_store()
+        if store is None:
+            return
+        p, aid = scope_parts(scope)
+        extra = f"scope={scope}"
+        if actor:
+            extra += f" actor={actor}"
+        if detail:
+            extra += f" {detail}"
+        store.record(kind, platform=p, account_id=aid,
+                     reason=str(reason or ""), detail=extra)
+    except Exception:
+        logger.debug("[kill-switch] ops_events 审计写入失败（忽略）",
+                     exc_info=True)
 
 
 def register_ops_killswitch_routes(app, ctx) -> None:
@@ -67,6 +114,9 @@ def register_ops_killswitch_routes(app, ctx) -> None:
             rec = _ks().set(scope, reason=reason, actor=_actor(request), ttl_sec=ttl_sec)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        _audit_killswitch("kill_switch_set", rec["scope"],
+                          actor=str(rec.get("actor") or ""), reason=reason,
+                          detail=f"ttl_sec={ttl_sec:g}")
         return {"ok": True, "set": rec}
 
     @app.delete("/api/ops/kill-switch")
@@ -79,7 +129,12 @@ def register_ops_killswitch_routes(app, ctx) -> None:
             body = {}
         scope = str((body or {}).get("scope") or "global").strip()
         try:
-            existed = _ks().clear(scope)
+            from src.ops.kill_switch import normalize_scope
+            scope_norm = normalize_scope(scope)
+            existed = _ks().clear(scope_norm)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        return {"ok": True, "scope": scope, "was_active": existed}
+        _audit_killswitch("kill_switch_clear", scope_norm,
+                          actor=_actor(request),
+                          detail=f"was_active={existed}")
+        return {"ok": True, "scope": scope_norm, "was_active": existed}

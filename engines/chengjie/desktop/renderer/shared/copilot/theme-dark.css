@@ -1,18 +1,57 @@
 /* 暗色语义色(程序端)。宿主在 <html data-cp-theme="dark">。
-   自定义属性穿透 Shadow DOM,组件内 var(--cp-*) 自动随之。 */
+   自定义属性穿透 Shadow DOM,组件内 var(--cp-*) 自动随之。
+   强调色接无界智连蓝阶（暗底取亮档，语义是「同等强调度」而非「同色值」）。 */
 :root[data-cp-theme="dark"],
 .cp-theme-dark {
+  /* UA 原生件（滚动条/表单件）跟随深色；iframe(app.html) 是独立文档，不继承宿主的
+     color-scheme —— 缺这行就是「暗面板上一根 Windows 白滚动条」的直接土壤（2026-08-17 实锤）。 */
+  color-scheme: dark;
+  /* 统一细滚动条 thumb 色（cp-panel-base 注入 scrollbar-color 消费；track 恒透明） */
+  --cp-sb-thumb: rgba(148, 163, 184, .38);
   --cp-bg: #141519;
   --cp-surface: #1d1e24;
   --cp-surface-2: #26272e;
   --cp-border: #30313a;
   --cp-text: #ececf0;
-  --cp-text-dim: #a0a3ab;
-  --cp-text-tiny: #85888f;
-  --cp-accent: #60a5fa;
-  --cp-accent-weak: rgba(96, 165, 250, .16);
+  /* 2026-08-28 暗色提亮：右栏副驾从来没进过 2026-08-16 那次全站提亮（对比度门禁
+     当时只覆盖 base.html + theme-tokens.css），于是比它所在的工作台外壳整整暗
+     一到两档——实测 dim 6.6:1 / tiny 4.7:1，tiny 贴 --cp-surface-2 只有 4.2:1
+     （已低于 WCAG AA 4.5），而这些 token 承载的正是提示/额度/说明这类必须扫一眼
+     确认的信息。现与 base.html --t2/--t3 暗值、workspace --tk-text-muted 同档；
+     门禁 tests/test_theme_contrast_gate.py 已扩到 --cp-*，回退会被点名。 */
+  --cp-text-dim: #b4b8c0;
+  --cp-text-tiny: #9aa0aa;
+  --cp-accent: var(--bl-growth-400, #54a7f5);
+  --cp-accent-hover: var(--bl-growth-300, #8bc4f8);
+  --cp-accent-weak: rgba(84, 167, 245, .16);
+  /* accent-deep 暗色下须取亮档（深色文字贴深底不可读） */
+  --cp-accent-deep: var(--bl-growth-300, #8bc4f8);
+  --cp-accent-bg: rgba(84, 167, 245, .14);
+  /* accent-border=info 级提示描边（cp-voice 语种改道说明等「说明非警告」条） */
+  --cp-accent-border: rgba(84, 167, 245, .38);
+  --cp-bg-soft: #26272e;
   --cp-ok: #38d39f;
   --cp-warn: #f5b945;
   --cp-danger: #f06a6a;
+  /* violet 暗色取亮档（深紫贴深底不可读） */
+  --cp-violet: #a78bfa;
+  /* goal-* 场景类别色：暗色一律取亮档（语义=同等强调度而非同色值） */
+  --cp-goal-conv: #fbbf24;
+  --cp-goal-rel: #fb7185;
+  --cp-goal-eng: #38bdf8;
+  --cp-goal-disc: #2dd4bf;
+  /* sprint 暗色取亮档琥珀（贴深底可读；与 --cp-warn 同系） */
+  --cp-goal-sprint: #fbbf24;
+  /* gold 暗色取亮档（金带/chips 贴深底可读） */
+  --cp-gold: #eab308;
   --cp-track: #26272e;
+  /* 语义状态 底/描边/文字：暗色取半透明 tint（贴深底不发白块），
+     文字取亮档（语义=同等强调度而非同色值，与 --cp-ok/--cp-warn 同哲学） */
+  --cp-ok-bg: rgba(56, 211, 159, .14);
+  --cp-ok-border: rgba(56, 211, 159, .38);
+  --cp-warn-bg: rgba(245, 185, 69, .12);
+  --cp-warn-border: rgba(245, 185, 69, .38);
+  --cp-warn-ink: #f5b945;
+  /* danger-bg 暗色取半透明 tint（与 ok-bg/warn-bg 同哲学，贴深底不发白块） */
+  --cp-danger-bg: rgba(240, 106, 106, .14);
 }

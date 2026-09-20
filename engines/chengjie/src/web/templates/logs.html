@@ -11,7 +11,7 @@
 .level-filters{display:flex;gap:.4rem;flex-wrap:wrap}
 .lf-btn{display:inline-flex;align-items:center;gap:.3rem;padding:.3rem .7rem;border-radius:7px;font-size:.76rem;font-weight:700;cursor:pointer;border:1.5px solid var(--bd);background:var(--input);color:var(--t3);font-family:inherit;transition:.15s;user-select:none}
 .lf-btn.on-DEBUG{border-color:rgba(107,114,128,.4);background:rgba(107,114,128,.1);color:var(--t2)}
-.lf-btn.on-INFO{border-color:rgba(91,124,246,.4);background:var(--ps);color:var(--p)}
+.lf-btn.on-INFO{border-color:color-mix(in srgb, var(--p,#1e8cf2) 40%, transparent);background:var(--ps);color:var(--p)}
 .lf-btn.on-WARNING{border-color:rgba(245,158,11,.4);background:var(--as);color:var(--amber)}
 .lf-btn.on-ERROR{border-color:rgba(239,68,68,.4);background:var(--rs);color:var(--red)}
 .lf-btn.on-CRITICAL{border-color:rgba(139,92,246,.4);background:var(--prs);color:var(--purple)}
@@ -53,7 +53,7 @@
 {% set active="logs" %}
 
 {% if ui_mode == 'simple' %}
-<div style="background:linear-gradient(135deg,rgba(245,158,11,.08),rgba(91,124,246,.06));border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:linear-gradient(135deg,var(--th-bg-amber08,rgba(245,158,11,.08)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-amber20,rgba(245,158,11,.2));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0">📋</span>
   <div><strong style="color:var(--t)">{{ (i18n or {}).get('logs_adv_title','高级功能') }}</strong> — {{ (i18n or {}).get('logs_adv_desc','实时日志供技术排查使用。') }} <a href="/cases" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('logs_back_cases','返回案例') }}</a></div>
 </div>

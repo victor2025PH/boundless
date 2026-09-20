@@ -1,0 +1,17 @@
+v1.0.64 (Sprint Goals release)
+
+1. Sprint goals, now for real ("results within 3 hours" finally means it)
+- Sprint engine: timed goals (close-today / this-session) no longer wait for the customer to speak — when they go quiet, the AI reaches out on schedule across opening / follow-up / closing beats
+- Push-force escalation: near the deadline the AI switches to closing language (state the price, give a clear next step, mention time is short); new goals can pick "All-out" force — no backoff, no halt, direct from beat one, +2 beat cap
+- "Push now" button: nudge the AI to advance one beat on the spot (double-clicks never double-send)
+- Transparent scheduling: live countdown plus a "beats pushed · next proactive beat at HH:MM" status line — you always know what the AI will do next
+- Auto-settle on contact info: when the customer shares WeChat / phone / email, the goal is marked won automatically (optional); expired goals with a detected signal offer one-click "record win" instead of counting as failures
+- Sprint queue-jump: with a long-term goal active, pause it in one click, run the sprint, and the long-term goal resumes automatically afterwards
+- Safety boundaries unchanged: emotional-crisis windows, explicit "stop messaging me", and human-review conversations are never touched proactively
+
+2. Observability
+- Instant alert when a sprint goal misses (no more waiting for the daily digest), flagged when a completion signal had been detected
+- Goal reports now split done-rate and time-to-done by pace (natural / today / session)
+
+3. Misc
+- Also carries today's stability fix batches (see channel history)

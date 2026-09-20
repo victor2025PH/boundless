@@ -14,12 +14,63 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
+
+# 「账号隔离健康」60s 进程内 TTL 缓存（episodic GROUP BY 属全表扫描，
+# 看板 60s 轮询别每次直打；force=1 绕过）。
+_ISOLATION_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_ISOLATION_TTL_SEC = 60.0
+
+# gpu_watermark「开了但没配 hosts」只记一条 WARNING（看板每 60s 轮询，不能刷屏）
+_GW_MISCONFIG_WARNED = False
+
+
+def _snap_contacts_assets(app, store, *, accounts=None, cap: int = 12,
+                          now_hint: Optional[float] = None) -> int:
+    """把各账号「好友名单盘点」快照进 trend store（懒快照写侧，返回落账账号数）。
+
+    口径与 ops「客户资产」卡完全同源：不筛平台（LINE/Messenger 没有名单，
+    ``include_chats=False`` 下 total=0 被自然过滤）、账号数封顶、total<=0 不落
+    （没同步过名单的账号记 0 会把聚合线拉出假凹坑）。
+
+    ``accounts``：测试注入口；None = 读 account_registry。``now_hint``：测试时钟。
+    """
+    inbox = getattr(app.state, "inbox_store", None)
+    if inbox is None or store is None:
+        return 0
+    if accounts is None:
+        try:
+            from src.integrations.account_registry import get_account_registry
+            accounts = get_account_registry().list()
+        except Exception:
+            logger.debug("[ca_trend] 读账号注册表失败（已忽略）", exc_info=True)
+            return 0
+    n = 0
+    for r in accounts or []:
+        try:
+            plat = str((r or {}).get("platform") or "").lower()
+            acct = str((r or {}).get("account_id") or "")
+            if not plat or not acct:
+                continue
+            s = inbox.protocol_contacts_summary(plat, acct, include_chats=False)
+            total = int((s or {}).get("total") or 0)
+            if total <= 0:
+                continue
+            store.snap(plat, acct, total=total,
+                       never_spoke=int(s.get("never_spoke") or 0),
+                       silent=int(s.get("silent") or 0), now=now_hint)
+            n += 1
+            if n >= max(1, int(cap)):
+                break
+        except Exception:
+            logger.debug("[ca_trend] 账号快照失败（已忽略）", exc_info=True)
+            continue
+    return n
 
 
 def _reliability_payload(request: Request, hours: int):
@@ -76,6 +127,8 @@ def register_ops_overview_routes(app, ctx) -> None:
     templates = ctx.templates
     config_manager = ctx.config_manager
     audit_store = ctx.audit_store
+    # 部分轻量测试 Ctx 未带 telegram_client（send-route-trend 等只测别的端点）→ getattr 防摔
+    telegram_client = getattr(ctx, "telegram_client", None)
 
     @app.get("/api/admin/ops-overview")
     async def api_ops_overview(request: Request, days: int = 7, month: str = "", hours: int = 24):
@@ -361,6 +414,148 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("translation-confidence-trend 读取失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "days": []}
 
+    @app.get("/api/admin/frontend-error-trend")
+    async def api_frontend_error_trend(request: Request, days: int = 7):
+        """P9：近 N 天前端错误/意图落空按日聚合（供看板画 sparkline）。
+
+        未开启趋势落库（ops.frontend_error_trend.enabled=false）→ 返回 enabled:false
+        + 空序列，前端据此隐藏曲线、仅显示进程内瞬时快照。
+        """
+        api_auth(request)
+        try:
+            from src.web.frontend_error_trend import get_frontend_error_trend_store
+            store = get_frontend_error_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = int(days or 7)
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("fe_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True, "days": store.daily(days=span)}
+        except Exception:
+            logger.debug("frontend-error-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
+    @app.get("/api/admin/login-funnel-trend")
+    async def api_login_funnel_trend(request: Request, days: int = 7):
+        """近 N 天账号接入漏斗按日聚合（供看板画成功率 / 失败原因 sparkline）。
+
+        未开启（ops.login_funnel_trend.enabled=false）→ enabled:false + 空序列。
+        进程内 login_funnel_stats 重启即清零；本端点是跨重启耐久口径。
+        """
+        api_auth(request)
+        try:
+            from src.integrations.login_funnel_trend import get_login_funnel_trend_store
+            store = get_login_funnel_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = int(days or 7)
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("login_funnel_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True, "days": store.daily(days=span)}
+        except Exception:
+            logger.debug("login-funnel-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
+    @app.get("/api/admin/ui-event-trend")
+    async def api_ui_event_trend(request: Request, days: int = 14, prefix: str = ""):
+        """近 N 天 UI 事件按日聚合（``?prefix=dpick.`` 取 AI 回复漏斗命名空间）。
+
+        进程内 ui_events 计数重启即清零（2026-08-01 施工日一天 4 次重启把漏斗首批
+        数据清洗掉）——本端点读的是 beacon 旁路的按日落库口径，重启无损。
+        未开启（ops.ui_event_trend.enabled=false）→ enabled:false + 空序列。
+        """
+        api_auth(request)
+        try:
+            from src.web.ui_event_trend import get_ui_event_trend_store
+            store = get_ui_event_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = int(days or 14)
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("uiev_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True,
+                    "days": store.daily(days=span, prefix=str(prefix or ""))}
+        except Exception:
+            logger.debug("ui-event-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
+    @app.get("/api/admin/contacts-asset-trend")
+    async def api_contacts_asset_trend(request: Request, days: int = 14):
+        """客户资产（好友/未开口/沉默）近 N 天日快照序列 + 读时懒快照。
+
+        写侧刻意「读时快照」（当天一次）：打开 ops 看板本身就是每日节奏，无需
+        看门狗/计划任务；口径与「客户资产」卡同源＝纯名单 ``include_chats=False``
+        （并集会把分母扩到全部往来的人，「未开口占比」语义漂移）。
+        未开启（ops.contacts_asset_trend.enabled=false）→ enabled:false + 空序列；
+        进程启动后才在 overlay 开的开关走热启用兜底（免吃一次重启窗口）。
+        """
+        api_auth(request)
+        try:
+            from src.web.contacts_asset_trend import (
+                configure_contacts_asset_trend, get_contacts_asset_trend_store,
+            )
+            store = get_contacts_asset_trend_store()
+            if store is None:
+                # 热启用兜底：bootstrap init 跑在开关之前 → 按当前配置补装配
+                cm = getattr(request.app.state, "config_manager", None)
+                _cat = (((cm.config if cm is not None else {}) or {})
+                        .get("ops") or {}).get("contacts_asset_trend") or {}
+                if not _cat.get("enabled", False):
+                    return {"ok": True, "enabled": False, "days": []}
+                from pathlib import Path as _P
+                store = configure_contacts_asset_trend(
+                    enabled=True,
+                    db_path=_P(cm.config_path).parent / "contacts_asset_trend.db",
+                    retention_days=float(_cat.get("retention_days", 180)),
+                )
+                if store is None:
+                    return {"ok": True, "enabled": False, "days": []}
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("ca_trend prune 失败（已忽略）", exc_info=True)
+            try:
+                if not store.has_day():
+                    _snap_contacts_assets(request.app, store)
+            except Exception:
+                logger.debug("ca_trend 懒快照失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True,
+                    "days": store.series(days=int(days or 14))}
+        except Exception:
+            logger.debug("contacts-asset-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
+    @app.get("/api/admin/csrf-trend")
+    async def api_csrf_trend(request: Request, days: int = 14):
+        """P2：近 N 天 CSRF 准入/拒绝按日聚合（收口决策数据面）。
+
+        读法：``admit:origin`` / ``admit:referer`` 持续归零 N 天＝没有合法流量还
+        依赖同源回落 → 可以安全地把回落降级为纯观测；``reject:*`` 出现即异常
+        （某前端宿主写通道断裂 / 跨站探测）。未开启落库（ops.csrf_trend.enabled
+        =false）→ enabled:false + 空序列。
+        """
+        api_auth(request)
+        try:
+            from src.web.csrf_trend import get_csrf_trend_store
+            store = get_csrf_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = max(1, min(int(days or 14), 90))
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("csrf_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True, "days": store.daily(days=span)}
+        except Exception:
+            logger.debug("csrf-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
     @app.get("/api/admin/identity-health-trend")
     async def api_identity_health_trend(request: Request, days: int = 7):
         """F1：近 N 天会话身份健康（入站 raw% / 头像 empty%·hit%）按日聚合（供看板 sparkline）。
@@ -436,11 +631,32 @@ def register_ops_overview_routes(app, ctx) -> None:
 
         「140 兼任嵌入+视觉备点，被同时压上会挤爆」的提前预警。未启用
         （ops.gpu_watermark.enabled=false）→ enabled:false，前端隐藏卡。
+
+        ``misconfigured:true``＝**开关开了但没配 hosts**（2026-07-29 实测：overlay
+        只有 enabled:true、hosts 缺失 → 卡片静默隐藏数周，运营与文档都以为已生效）。
+        这种「开了却无效」必须与「没开」区分开，否则永远查不出来；前端行为保持不变
+        （仍隐藏卡），但 API 带 detail、且进程内首次命中记一条 WARNING 留痕。
         """
         api_auth(request)
         try:
-            from src.utils.gpu_watermark import probe_hosts
+            from src.utils.gpu_watermark import config_state, probe_hosts
             cfg = getattr(config_manager, "config", None) or {}
+            _state = config_state(cfg)
+            if _state == "misconfigured":
+                global _GW_MISCONFIG_WARNED
+                if not _GW_MISCONFIG_WARNED:
+                    _GW_MISCONFIG_WARNED = True
+                    logger.warning(
+                        "[gpu_watermark] ops.gpu_watermark.enabled=true 但未配置有效 "
+                        "hosts（需含 base_url 形如 http://ip:11434）→ 看板卡片不会显示。"
+                        "补 hosts 后即生效（config 热更新，无需重启）。")
+                return {
+                    "ok": True, "enabled": False, "misconfigured": True, "hosts": [],
+                    "detail": ("ops.gpu_watermark.enabled=true 但未配置有效 hosts"
+                               "（需含 base_url）"),
+                }
+            if _state == "off":
+                return {"ok": True, "enabled": False, "hosts": []}
             data = await probe_hosts(cfg, force=bool(force))
             if data is None:
                 return {"ok": True, "enabled": False, "hosts": []}
@@ -448,6 +664,192 @@ def register_ops_overview_routes(app, ctx) -> None:
         except Exception:
             logger.debug("gpu-watermark 探测失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "hosts": []}
+
+    @app.get("/api/admin/automation-coverage")
+    async def api_automation_coverage(request: Request):
+        """自动化覆盖率（P1 2026-08-09，.198/.104 事故第三批）。
+
+        「多少会话真在全自动跑、没跑的被什么压住（封顶/接管/显式档位）、
+        待审稿龄分布」一次读全——此前这个老板级问题只能逐会话点开拼答案。
+        口径与护栏同源（compute_mode_caps / takeover source / 全局默认回落），
+        纯读 fail-open；无持久层/零会话 → ``applicable:false`` 前端整卡隐藏
+        （gpu-watermark 同约定）。
+        """
+        api_auth(request)
+        from src.inbox.automation_coverage import collect_automation_coverage
+        store = getattr(request.app.state, "inbox_store", None)
+        cfg = getattr(config_manager, "config", None) or {}
+        cfg = cfg if isinstance(cfg, dict) else {}
+        if store is None:
+            return {"ok": True, "applicable": False}
+        data = collect_automation_coverage(store, cfg)
+        data["applicable"] = bool(
+            (data.get("totals") or {}).get("conversations"))
+        # 趋势段（P2）：ops.automation_coverage_trend 开启才有（watchdog 每小时
+        # 落当日快照）；关闭/无历史 → 键缺席，前端不画趋势线。
+        try:
+            from src.inbox.automation_coverage_trend import (
+                get_coverage_trend_store,
+                trend_cfg,
+            )
+            if trend_cfg(cfg)["enabled"]:
+                try:
+                    days = int(request.query_params.get("days") or 14)
+                except (TypeError, ValueError):
+                    days = 14
+                data["trend"] = get_coverage_trend_store().recent(days=days)
+        except Exception:
+            logger.debug("[coverage] 趋势段读取失败（忽略）", exc_info=True)
+        return data
+
+    @app.get("/api/admin/acquisition-health")
+    async def api_acquisition_health(request: Request):
+        """个人号获客健康（P8）：所有 ``personal_rpa`` 账号的 account_health 聚合。
+
+        收口 P0（发送异常风控计数）/ P6（WA/LINE 屏幕风控）/ P7（leadbus 线索归属
+        设备账号）——把「哪个获客号在被风控、该不该停」从扣分逻辑内部变成看板读数。
+        零 ``personal_rpa`` 账号 → ``applicable:false``，前端隐藏卡（同 gpu-watermark
+        约定）。纯读（注册表 list + 24h 计数），软失败不抛。
+        """
+        api_auth(request)
+        _empty = {"ok": True, "applicable": False, "total": 0, "light": "none",
+                  "counts": {"green": 0, "amber": 0, "red": 0}, "accounts": []}
+        try:
+            from src.integrations.account_registry import get_account_registry
+            from src.ops.acquisition_health import collect_acquisition_health
+            return {"ok": True, **collect_acquisition_health(get_account_registry())}
+        except Exception:
+            logger.debug("acquisition-health 聚合失败（已忽略）", exc_info=True)
+            return _empty
+
+    @app.get("/api/admin/duel-bench")
+    async def api_duel_bench(request: Request, days: int = 14):
+        """AI 对练台状态：夜跑最新摘要 + LAST_RUN + 产品/裁判两条趋势线。
+
+        纯读盘（``logs/duel/*`` + ``logs/eval/duel_semantic_trend.jsonl``），
+        缺文件 → ``active:false``，前端可整卡隐藏。不依赖实例重启。
+        """
+        api_auth(request)
+        try:
+            from src.utils.duel_bench_status import build_status
+            # 夜跑脚本把产物写在引擎代码根 logs/duel（与本模块 DEFAULT_ROOT 同树），
+            # 不要用实例 data 根的 config_path 推——那会指到 chengjie-instances。
+            return build_status(None, days=int(days or 14))
+        except Exception:
+            logger.debug("duel-bench 状态读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "active": False, "latest": None,
+                    "last_run": None, "over_budget": False,
+                    "nightly": {"rows": [], "direction": "unknown", "points": 0},
+                    "semantic": {"rows": [], "points": 0, "last_passed": None}}
+
+    @app.get("/api/admin/diagnostic-bundle")
+    async def api_diagnostic_bundle(request: Request, probe: int = 0):
+        """P2-198 一键诊断包：版本 + 打码配置 + 日志尾部打成 zip 下载。
+
+        客户报障从「截图猜」变成「传包定位」（198 排障时桌面版日志几乎为零、
+        只能远程拉库反推的教训产品化）。密钥值全部打码（api_key/token/secret 族），
+        绝不带 *.db（体积 + 客户消息原文）。``?probe=1`` 只回 {ok}——settings 页
+        据此判断后端是否支持（旧后端 404 → 整卡隐藏，模板热更新自洽）。
+        """
+        api_auth(request)
+        if probe:
+            return {"ok": True}
+        import asyncio as _aio
+
+        from fastapi.responses import Response as _Resp
+
+        from src.utils.diag_upload import app_identity, resolve_diag_dirs
+        from src.utils.diagnostic_bundle import build_diagnostic_bundle
+        cfg_dir, logs_dir = resolve_diag_dirs(config_manager)
+        meta: Dict[str, Any] = {}
+        app_meta, _ver = app_identity()
+        if app_meta:
+            meta["app"] = app_meta
+        meta["config_dir"] = str(cfg_dir or "")
+        meta["logs_dir"] = str(logs_dir or "")
+        blob = await _aio.to_thread(
+            build_diagnostic_bundle,
+            config_dir=cfg_dir, logs_dir=logs_dir, meta=meta)
+        fname = time.strftime("chatx-diag-%Y%m%d-%H%M%S.zip")
+        return _Resp(
+            content=blob, media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+    @app.post("/api/admin/diagnostic-upload")
+    async def api_diagnostic_upload(request: Request, probe: int = 0):
+        """P1-⑦ 一键诊断直传：本机打包 → 服务端转投官网 → 回 6 位短码。
+
+        「下载 zip → 找客服 → 发文件」三步高摩擦变一步：用户点一下，把短码念给
+        客服即可（官网收包自动推送到客服 TG，见 website /api/diag-upload）。
+        走后端 server-to-server 转投而非浏览器直传——工作台是 127.0.0.1 源，
+        直 POST 官网必撞 CORS 预检。``?probe=1`` 探活（旧后端 404 → 按钮隐藏）。
+        """
+        api_auth(request)
+        if probe:
+            return {"ok": True}
+        # 实现共用 src.utils.diag_upload（坐席入口 /api/support/diag-upload 同源）。
+        from src.utils.diag_upload import build_and_upload, error_detail_for
+        out = await build_and_upload(config_manager)
+        if out.get("ok"):
+            resp = {"ok": True, "code": str(out.get("code") or "")}
+            if out.get("mini"):
+                resp["mini"] = True   # 降级 mini 包送达（additive，旧前端零感知）
+            return resp
+        err = str(out.get("error") or "upload_failed")
+        return {"ok": False, "detail": error_detail_for(request, err)}
+
+    @app.get("/api/admin/media-consistency")
+    async def api_media_consistency(request: Request, force: int = 0):
+        """图文一致性观测（P1）：投诉分类计数 + 点名场景供需缺口报告。
+
+        需求侧＝``image_autosend`` 进程级计数（重启清零）；供给侧＝注册相册(DB)
+        + 文件系统相册按场景类清点（300s TTL，``?force=1`` 强制重扫）。
+        selfie 未启用且零数据 → active:false，前端隐藏卡。
+        """
+        api_auth(request)
+        try:
+            from src.companion.media_gap import (
+                collect_scene_supply, scene_gap_report)
+            from src.inbox.image_autosend import metrics_snapshot as _ims
+            snap = _ims()
+            cfg = getattr(config_manager, "config", None) or {}
+            scfg = ((cfg.get("companion") or {}).get("selfie") or {}) \
+                if isinstance(cfg, dict) else {}
+            supply = collect_scene_supply(scfg, force=bool(force))
+            gap = scene_gap_report(
+                supply, snap.get("scene_demand"), snap.get("scene_unmet"))
+            complaints = {
+                "total": int(snap.get("complaints", 0) or 0),
+                "by_kind": dict(snap.get("complaints_by_kind") or {}),
+                "by_persona": dict(snap.get("complaints_by_persona") or {}),
+            }
+            # P2 自动补货计划状态（默认关=全零；开了才有读数）。
+            restock = {"enabled": False, "pending": 0, "done": 0}
+            try:
+                from src.companion.media_restock import (load_plan,
+                                                         pending_items,
+                                                         resolve_restock_cfg)
+                rc = resolve_restock_cfg(scfg)
+                restock["enabled"] = bool(rc["enabled"])
+                plan = load_plan(rc["plan_path"])
+                items = plan.get("items") or []
+                restock["pending"] = len(pending_items(plan))
+                restock["done"] = sum(
+                    1 for it in items
+                    if isinstance(it, dict) and str(it.get("status")) == "done")
+            except Exception:
+                pass
+            active = bool(
+                gap.get("active") or complaints["total"]
+                or snap.get("scene_demand") or snap.get("scene_unmet")
+                or restock["pending"])
+            return {"ok": True, "active": active,
+                    "complaints": complaints, "gap": gap, "restock": restock}
+        except Exception:
+            logger.debug("media-consistency 汇总失败（已忽略）", exc_info=True)
+            return {"ok": True, "active": False,
+                    "complaints": {"total": 0, "by_kind": {}, "by_persona": {}},
+                    "gap": {"rows": [], "supply_totals": {}, "active": False}}
 
     @app.get("/api/admin/realtime-voice-trend")
     async def api_realtime_voice_trend(request: Request, days: int = 7):
@@ -725,6 +1127,184 @@ def register_ops_overview_routes(app, ctx) -> None:
                 logger.debug("realtime_voice_alert_thresholds 审计写入失败（已忽略）", exc_info=True)
         return {"ok": True, "applied": applied, "enabled": enabled}
 
+    @app.get("/api/admin/instance-restart-status")
+    async def api_instance_restart_status(request: Request):
+        """双实例重启冷却快照（restart_instance + watchdog 共用机器级 JSON）。
+
+        坐席「加载超时」根因多为连环重启；本端点让 ops 一眼看到谁刚重启、冷却还剩多久。
+        只读文件系统，缺文件 = 无记录（不报错）。
+        """
+        api_auth(request)
+        from src.utils.instance_restart_status import collect_restart_status
+        return collect_restart_status()
+
+    @app.get("/api/admin/tenant-overview")
+    async def api_tenant_overview(request: Request, force: int = 0):
+        """托管租户全景：实例状态 / 持单台账 / 三守护心跳（ops「☁️ 托管租户」卡）。
+
+        收集器纯函数在 src/ops/tenant_overview.py（30s TTL 缓存，force=1 绕过）；
+        全路软失败，`active=false`（零租户零持单）时前端整卡隐藏。
+        """
+        api_auth(request)
+        from src.ops.tenant_overview import collect_tenant_overview_cached
+        try:
+            return {"ok": True, **collect_tenant_overview_cached(force=bool(force))}
+        except Exception as e:  # noqa: BLE001 - 观测面绝不 5xx
+            logger.debug("tenant-overview 采集失败（已忽略）", exc_info=True)
+            return {"ok": False, "error": str(e)[:200]}
+
+    @app.get("/api/admin/isolation-health")
+    async def api_isolation_health(request: Request, force: int = 0):
+        """多协议号「账号隔离健康」快照：记忆键分桶形态 + 在线号人设绑定 + FateX 独立库。
+
+        隔离改造（context/记忆/人设按 account 分桶，FateX 数据独立建库）完成后的常驻
+        观测——legacy/bare 存量键回升或新上号漏绑人设，在看板即可见。三路数据源全部
+        软失败（拿不到按空算，绝不 5xx）；60s 进程内 TTL 缓存，``force=1`` 绕过。
+        """
+        api_auth(request)
+        now = time.time()
+        if (not force and _ISOLATION_CACHE["data"] is not None
+                and now - float(_ISOLATION_CACHE["ts"]) < _ISOLATION_TTL_SEC):
+            return _ISOLATION_CACHE["data"]
+        from src.utils.isolation_health import build_isolation_health
+
+        key_stats: list = []
+        try:
+            from src.web.web_context import resolve_skill_manager
+            sm = resolve_skill_manager(telegram_client, app)
+            store = getattr(sm, "_episodic_store", None) if sm else None
+            if store is not None and hasattr(store, "list_key_stats"):
+                key_stats = store.list_key_stats()
+        except Exception:
+            logger.debug("isolation-health：episodic 键统计读取失败（已忽略）", exc_info=True)
+        accounts: list = []
+        try:
+            from src.integrations.account_registry import get_account_registry
+            accounts = get_account_registry().list()
+        except Exception:
+            logger.debug("isolation-health：账号注册表读取失败（已忽略）", exc_info=True)
+        fatex_stats: dict = {}
+        try:
+            from src.fatex.store import get_fatex_store
+            fx = get_fatex_store()
+            fatex_stats = fx.stats() if fx is not None else {}
+        except Exception:
+            logger.debug("isolation-health：FateX 库统计读取失败（已忽略）", exc_info=True)
+        data = {"ok": True, **build_isolation_health(key_stats, accounts, fatex_stats)}
+        # 趋势落库（ops.isolation_trend.enabled，默认关）：开着才 upsert 当日水位并附
+        # trend/regression 两键；关 = 响应不带这两键。全程 best-effort，绝不影响 200。
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+            trend_cfg = ((cfg.get("ops") or {}).get("isolation_trend") or {})
+            if isinstance(trend_cfg, dict) and trend_cfg.get("enabled", False):
+                from src.utils.isolation_trend_store import (
+                    configure_isolation_trend_store,
+                    get_isolation_trend_store,
+                )
+                tstore = get_isolation_trend_store()
+                if tstore is None:
+                    # 懒配置：库随实例 config 目录走（与 fatex.db 同目录模式）。
+                    cfg_path = getattr(config_manager, "config_path", None)
+                    if cfg_path:
+                        from pathlib import Path
+                        tstore = configure_isolation_trend_store(
+                            Path(cfg_path).parent / "isolation_trend.db")
+                if tstore is not None:
+                    tstore.upsert_today(data)
+                    data["trend"] = tstore.recent(7)
+                    regression = tstore.regression_signal()
+                    data["regression"] = regression
+                    if regression.get("regressed"):
+                        logger.warning(
+                            "isolation-health：隔离指标回升 %s",
+                            regression.get("detail", ""))
+        except Exception:
+            logger.debug("isolation-health：趋势落库失败（已忽略）", exc_info=True)
+        _ISOLATION_CACHE["ts"] = now
+        _ISOLATION_CACHE["data"] = data
+        return data
+
+    @app.get("/api/admin/profile-audit")
+    async def api_profile_audit(request: Request, days: int = 7, limit: int = 40):
+        """官方资料「推送/对齐」审计流：近 N 天按天聚合 + 最近明细 + 批次归组。
+
+        读 ``ops_events``（profile_push / profile_align 两类）。缺库/无事件 →
+        ``enabled:false``（前端隐藏卡）。纯读，不写任何存储。
+        """
+        api_auth(request)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            store = get_ops_event_store()
+            if store is None:
+                return {"ok": True, "enabled": False}
+            span = max(1, int(days or 7))
+            lim = max(1, min(int(limit or 40), 200))
+            kinds = ["profile_push", "profile_align"]
+            daily = store.daily_kinds(kinds, days=span)
+            rows = store.recent_kinds(kinds, limit=lim)
+
+            def _parse_detail(s: str) -> dict:
+                out = {"persona": "", "run": "", "fields": "", "note": ""}
+                for seg in str(s or "").split(";"):
+                    seg = seg.strip()
+                    if seg.startswith("fields="):
+                        out["fields"] = seg[7:]
+                    elif seg.startswith("persona="):
+                        out["persona"] = seg[8:]
+                    elif seg.startswith("run="):
+                        out["run"] = seg[4:]
+                    elif seg:
+                        out["note"] = seg
+                return out
+
+            recent = []
+            runs: dict = {}
+            since = time.time() - span * 86400
+            aligns = singles = ok_n = failed_n = 0
+            accts: set = set()
+            for r in rows:
+                det = _parse_detail(r.get("detail") or "")
+                ok = bool(r.get("reason") == "ok")
+                kind = str(r.get("kind") or "")
+                plat = str(r.get("platform") or "")
+                aid = str(r.get("account_id") or "")
+                ts = float(r.get("ts") or 0)
+                recent.append({
+                    "ts": ts, "kind": kind, "ok": ok,
+                    "platform": plat, "account_id": aid,
+                    "persona": det["persona"], "run": det["run"],
+                    "fields": det["fields"],
+                })
+                if ts >= since:
+                    accts.add(f"{plat}:{aid}")
+                    if kind == "profile_align":
+                        aligns += 1
+                    else:
+                        singles += 1
+                    ok_n += 1 if ok else 0
+                    failed_n += 0 if ok else 1
+                run = det["run"]
+                if run:
+                    g = runs.setdefault(run, {
+                        "run": run, "ts": ts, "persona": det["persona"],
+                        "count": 0, "ok": 0, "failed": 0, "platforms": {}})
+                    g["count"] += 1
+                    g["ok"] += 1 if ok else 0
+                    g["failed"] += 0 if ok else 1
+                    g["ts"] = max(g["ts"], ts)
+                    g["platforms"][plat] = int(g["platforms"].get(plat, 0)) + 1
+            runs_list = sorted(runs.values(), key=lambda x: x["ts"], reverse=True)
+            return {
+                "ok": True, "enabled": True, "days": span,
+                "totals": {"aligns": aligns, "singles": singles,
+                           "ok": ok_n, "failed": failed_n,
+                           "accounts": len(accts)},
+                "daily": daily, "recent": recent, "runs": runs_list[:20],
+            }
+        except Exception:
+            logger.debug("profile-audit 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False}
+
     @app.post("/api/admin/platform-sessions/relogin")
     async def api_platform_session_relogin(request: Request,
                                            _=Depends(api_write("manage_ops"))):
@@ -751,9 +1331,108 @@ def register_ops_overview_routes(app, ctx) -> None:
         if not ident:
             raise HTTPException(400, tr(request, "err.ws.field_required",
                                         field="login_id/account_id"))
+        if platform not in ("messenger", "whatsapp"):
+            raise HTTPException(400, tr(request, "err.psess.relogin_unsupported",
+                                        platform=platform))
+        from src.integrations.messenger_web_login import (
+            _post_json,
+            http_error_detail,
+            service_base_url,
+        )
+        config = getattr(config_manager, "config", None) or {}
+        try:
+            if platform == "whatsapp":
+                # P1（2026-08-14）：WA 走 baileys 的凭据级 reconnect（编排器自愈
+                # 同一端点，契约 404/already/reconnecting）——WA 登录是扫码制，
+                # 没有 messenger 那种 headed 交互窗；凭据真死时 reconnect 链会把
+                # needs_login 推回健康表，运营再走登录页扫码。按钮语义＝
+                # 「先试自动拉活」，多数掉线（网络抖动/进程重启）到此为止。
+                from src.integrations.whatsapp_baileys_login import (
+                    service_base_url as wa_base_url,
+                )
+                res = await _post_json(
+                    f"{wa_base_url(config)}/accounts/{ident}/reconnect", {},
+                    timeout=30.0)
+            else:
+                res = await _post_json(
+                    f"{service_base_url(config)}/accounts/{ident}/relogin", {},
+                    timeout=60.0)
+        except Exception as ex:
+            # 失败分诊（2026-08-27，修「裸 httpx 英文原文糊脸」）：三种失败对
+            # 运营是三种完全不同的处置，绝不再共用一句话——
+            #   · worker 回 404 ＝ 本机已无该账号的登录档案（在别的电脑登录了/
+            #     档案被别的账号复用/已被清理）：重试无意义，出路是账号管理
+            #     重新接入或登出停提醒 → 语义化 404，前端据此给专属 CTA；
+            #   · 连不上 worker（无 response）＝ 登录服务没起 → 502 指路管理员；
+            #   · worker 回其他 HTTP 错 → 502 附 http_error_detail（含边车真实
+            #     败因 reason_code），原文进日志便于排障。
+            _resp_code = getattr(getattr(ex, "response", None),
+                                 "status_code", None)
+            logger.warning("[psess] relogin 转发失败 platform=%s ident=%s: %s",
+                           platform, ident, http_error_detail(ex))
+            if _resp_code == 404:
+                raise HTTPException(404, tr(
+                    request, "err.psess.relogin_no_profile"))
+            if _resp_code is None:
+                raise HTTPException(502, tr(
+                    request, "err.psess.relogin_worker_down"))
+            raise HTTPException(502, tr(request, "err.rpa.op_failed",
+                                        op="relogin",
+                                        err=http_error_detail(ex)))
+        actor = "api"
+        try:
+            actor = request.session.get("username", "api")
+        except Exception:
+            pass  # 无 SessionMiddleware（内部调用）→ 记 api
+        if audit_store is not None:
+            try:
+                audit_store.log(actor, "platform_session_relogin", "ops", ident,
+                                f"platform={platform}")
+            except Exception:
+                logger.debug("platform_session_relogin 审计写入失败（已忽略）",
+                             exc_info=True)
+        # P4 漏斗中段：人工重登计数 + 操作者痕迹（状态中心 v2：横幅快照带
+        # relogin_ts/by → 多坐席可见「已有人触发过」，防同号被各触发一遍）
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            acct = str(body.get("account_id") or ident)
+            get_platform_session_health().record_relogin(platform, acct,
+                                                         by=actor)
+        except Exception:
+            logger.debug("platform_session_relogin 漏斗计数失败（已忽略）",
+                         exc_info=True)
+        res = res or {}
+        # WA reconnect 契约无 status 字段，从 already/reconnecting 布尔位推导
+        status = str(res.get("status") or "")
+        if not status:
+            status = ("already" if res.get("already")
+                      else "reconnecting" if res.get("reconnecting") else "pending")
+        return {"ok": True, "login_id": str(res.get("login_id") or ident),
+                "status": status}
+
+    async def _e2ee_pin_impl(request: Request, body: dict):
+        """e2ee-pin 托管的共享实现（admin 端点与坐席端点同一条逻辑，绝不各写一套）。"""
+        from fastapi import HTTPException
+        from src.web.web_i18n import tr
+        platform = str(body.get("platform") or "").strip().lower()
+        ident = (str(body.get("login_id") or "").strip()
+                 or str(body.get("account_id") or "").strip())
+        pin = str(body.get("pin") or "").strip()
+        if not platform:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform"))
+        if not ident:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="login_id/account_id"))
         if platform != "messenger":
             raise HTTPException(400, tr(request, "err.psess.relogin_unsupported",
                                         platform=platform))
+        # PIN 格式在 worker 侧 normalizePin 权威校验；这里只挡明显非数字，早退省一次往返。
+        digits = "".join(ch for ch in pin if ch.isdigit())
+        if pin and (len(digits) < 4 or len(digits) > 12 or digits != pin):
+            raise HTTPException(400, tr(request, "err.psess.pin_invalid"))
         from src.integrations.messenger_web_login import (
             _post_json,
             service_base_url,
@@ -761,25 +1440,84 @@ def register_ops_overview_routes(app, ctx) -> None:
         config = getattr(config_manager, "config", None) or {}
         try:
             res = await _post_json(
-                f"{service_base_url(config)}/accounts/{ident}/relogin", {},
-                timeout=60.0)
-        except Exception as ex:  # worker 不可达/profile 不存在等，如实回给运营
+                f"{service_base_url(config)}/accounts/{ident}/e2ee-pin",
+                {"pin": pin}, timeout=30.0)
+        except Exception as ex:
             raise HTTPException(502, tr(request, "err.rpa.op_failed",
-                                        op="relogin", err=str(ex)))
+                                        op="e2ee-pin", err=str(ex)))
+        verified = None
+        prompt_seen = False
+        if pin and bool(body.get("verify")):
+            try:
+                vres = await _post_json(
+                    f"{service_base_url(config)}/accounts/{ident}/e2ee-pin/verify",
+                    {}, timeout=45.0)
+                if isinstance(vres, dict):
+                    verified = vres.get("verified")
+                    prompt_seen = bool(vres.get("prompt"))
+            except Exception:
+                # 实测环节挂了不推翻「托管已落盘」——verified=null 如实交前端。
+                logger.debug("e2ee-pin verify 转发失败（已忽略）", exc_info=True)
         if audit_store is not None:
             try:
                 actor = "api"
                 try:
                     actor = request.session.get("username", "api")
                 except Exception:
-                    pass  # 无 SessionMiddleware（内部调用）→ 记 api
-                audit_store.log(actor, "platform_session_relogin", "ops", ident,
-                                f"platform={platform}")
+                    pass
+                # 只记「设置/清除」动作，绝不记 PIN 值
+                audit_store.log(actor, "platform_session_e2ee_pin", "ops", ident,
+                                f"platform={platform};set={bool(pin)}")
             except Exception:
-                logger.debug("platform_session_relogin 审计写入失败（已忽略）",
+                logger.debug("platform_session_e2ee_pin 审计写入失败（已忽略）",
                              exc_info=True)
         return {"ok": True, "login_id": str((res or {}).get("login_id") or ident),
-                "status": str((res or {}).get("status") or "pending")}
+                "pin_set": bool((res or {}).get("pin_set")),
+                "verified": verified, "prompt": prompt_seen}
+
+    @app.post("/api/admin/platform-sessions/e2ee-pin")
+    async def api_platform_session_e2ee_pin(request: Request,
+                                            _=Depends(api_write("manage_ops"))):
+        """P3 入站半死自愈：给某 Messenger 账号托管 E2EE 恢复 PIN（管理面）。
+
+        转发给 worker（``/accounts/:id/e2ee-pin``），worker 落 sessions 机密 sidecar
+        （不入库、不出网明文）。托管后，进程重启/崩溃自愈撞到「恢复加密聊天」PIN 浮层
+        会自动输入 → 「登录态在、消息读不到」的半死态从「等人重登」变成无人值守自愈。
+        ``pin=""`` 清除托管。当前仅 messenger 网页模式。
+
+        ``verify: true``（2026-08-14 必答弹窗配套）：设置成功后顺路打 worker 的
+        ``/accounts/:id/e2ee-pin/verify``——页面此刻挂着 PIN 浮层就当场实测输入，
+        响应多带 ``verified``（true=实测通过 / false=实测被拒=PIN 错 / null=当下
+        无浮层无法实测，已武装待自愈）与 ``prompt``。verify 环节 best-effort：
+        它挂了不连累「托管已落盘」这个既成事实（verified=null 如实回）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        return await _e2ee_pin_impl(request, body if isinstance(body, dict) else {})
+
+    @app.post("/api/unified-inbox/messenger/e2ee-pin")
+    async def api_inbox_messenger_e2ee_pin(request: Request):
+        """坐席可达的 E2EE PIN 托管入口（2026-08-14 必答弹窗事故配套）。
+
+        知道恢复 PIN 的人是坐席本人，但坐席角色被 ``_agent_api_allowed`` 钉在
+        ``/api/unified-inbox*`` 四族——admin 端点对最需要它的人恒 403，弹窗形同虚设。
+        此别名走 ``api_auth``（任意登录用户），与 admin 端点共享同一实现，差异仅：
+        **只许设置不许清除**（``pin=""`` 解除自愈武装属运维决策，仍走 manage_ops）。
+        提供错 PIN 无危害（页面实测被拒即回 verified=false，不落任何持久损伤）。
+        """
+        from fastapi import HTTPException
+        from src.web.web_i18n import tr
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        if not str(body.get("pin") or "").strip():
+            raise HTTPException(403, tr(request, "err.psess.pin_clear_admin_only"))
+        return await _e2ee_pin_impl(request, body)
 
     @app.get("/admin/ops", response_class=HTMLResponse)
     async def ops_overview_page(request: Request, _=Depends(page_auth)):

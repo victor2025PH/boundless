@@ -1,6 +1,11 @@
 "use client";
 
-import { AnimatePresence, motion, type MotionValue, type Variants } from "framer-motion";
+import {
+  AnimatePresence,
+  motion,
+  type MotionValue,
+  type Variants,
+} from "framer-motion";
 import { Activity } from "lucide-react";
 
 /**
@@ -8,7 +13,29 @@ import { Activity } from "lucide-react";
  * 从 AISprite 拆出，供 forms/* 独立形态文件复用，避免循环依赖。
  */
 
-export type BotMode = "flying" | "falling" | "idle_base" | "idle_wave" | "idle_dance" | "idle_scan" | "idle_news" | "idle_spin";
+export type BotMode =
+  | "flying"
+  | "falling"
+  | "idle_base"
+  | "idle_wave"
+  | "idle_dance"
+  | "idle_scan"
+  | "idle_news"
+  | "idle_spin"
+  /** 点头致意：短促上下点两下 */
+  | "idle_nod"
+  /** 伸懒腰：双臂外展、身体微升 */
+  | "idle_stretch"
+  /** 好奇歪头：向内容侧倾一下再回正 */
+  | "idle_tilt"
+  /** 邀约：左臂朝内容区轻指一下 */
+  | "idle_invite"
+  /** 警觉欢迎：微抬头扫一眼（回首页 / 回标签） */
+  | "idle_alert"
+  /** 轻鼓：双臂在胸前合一下（案例区低概率） */
+  | "idle_clap"
+  /** 害羞收臂：连点彩蛋蓄力时微缩提示 */
+  | "idle_shy";
 
 export type EyeExpr = "normal" | "happy" | "blink" | "focused" | "scanning" | "scared" | "wink";
 
@@ -99,6 +126,49 @@ export const buildBodyVariants = (reduced: boolean): Variants => ({
   idle_wave: { y: -4, rotate: -3 },
   idle_dance: { y: [0, -15, 0], rotate: [-3, 3, -3], transition: { y: { repeat: Infinity, duration: 0.4, ease: "easeOut" }, rotate: { repeat: Infinity, duration: 0.8, ease: "linear" } } },
   idle_news: { y: 0, rotate: 0 },
+  idle_spin: { y: -4, rotate: 0 },
+  /* 点头：两次短促下沉，读作“嗯嗯” */
+  idle_nod: {
+    y: [-4, 2, -4, 2, -4],
+    rotate: 0,
+    transition: { duration: 1.35, ease: "easeInOut", times: [0, 0.22, 0.45, 0.68, 1] },
+  },
+  /* 伸懒腰：微升停顿再落回 */
+  idle_stretch: {
+    y: [-4, -14, -14, -4],
+    rotate: 0,
+    transition: { duration: 2.2, ease: "easeInOut", times: [0, 0.25, 0.7, 1] },
+  },
+  /* 好奇：向页面内容侧（左）歪头再回正 */
+  idle_tilt: {
+    y: -5,
+    rotate: [0, -14, -14, 0],
+    transition: { duration: 2.0, ease: "easeInOut", times: [0, 0.28, 0.72, 1] },
+  },
+  /* 邀约：身体略倾内容侧，配合左臂指意 */
+  idle_invite: {
+    y: -6,
+    rotate: [0, -8, -8, 0],
+    transition: { duration: 2.1, ease: "easeInOut", times: [0, 0.25, 0.7, 1] },
+  },
+  /* 欢迎回：微抬头停顿再回正 */
+  idle_alert: {
+    y: [-4, -10, -10, -4],
+    rotate: [0, 4, 4, 0],
+    transition: { duration: 1.9, ease: "easeInOut", times: [0, 0.28, 0.68, 1] },
+  },
+  /* 轻鼓：两次小弹，读作“啪啪”肯定 */
+  idle_clap: {
+    y: [-4, -9, -4, -9, -4],
+    rotate: 0,
+    transition: { duration: 1.55, ease: "easeInOut", times: [0, 0.22, 0.45, 0.68, 1] },
+  },
+  /* 害羞：微缩下沉再回，配合收臂 */
+  idle_shy: {
+    y: [-4, 2, 2, -4],
+    rotate: [0, 3, 3, 0],
+    transition: { duration: 1.6, ease: "easeInOut", times: [0, 0.3, 0.7, 1] },
+  },
   flying: { rotate: 0, y: -20 },
   falling: { rotate: -15, y: 30 },
 });
@@ -133,7 +203,7 @@ export const NeuralNeck = ({ color }: { color: string }) => (
 );
 
 
-/** 花瓣形手臂。渐变 id 按侧+皮肤唯一，避免重复 SVG id；皮肤切换时换渐变色 */
+/** 花瓣形手臂（原造型）：柔和肩线收成尖端，无手指。渐变 id 按侧+皮肤唯一。 */
 export const EveArm = ({ side, stops = ["#ffffff", "#eef2ff", "#dbeafe"], edge = "white" }: { side: "left" | "right"; stops?: [string, string, string]; edge?: string }) => {
   const gid = `eve-arm-grad-${side}-${stops[0].replace("#", "")}`;
   return (
@@ -152,150 +222,7 @@ export const EveArm = ({ side, stops = ["#ffffff", "#eef2ff", "#dbeafe"], edge =
   );
 };
 
-/**
- * 五指布局：每根手指由 3 节指骨组成（近节/中节/远节），远节在恶魔态收成尖爪。
- * x=指根在掌缘的横向位置；splay=张开角；len=长度系数；w=粗细系数。
- */
-const HAND_FINGERS = [
-  { x: 4.5, splay: -34, len: 0.8, w: 0.9 }, // 小指
-  { x: 8.6, splay: -15, len: 0.95, w: 1 },
-  { x: 12, splay: 1, len: 1.06, w: 1.05 }, // 中指最长
-  { x: 15.5, splay: 17, len: 0.93, w: 1 },
-  { x: 18.7, splay: 41, len: 0.68, w: 1.2 }, // 拇指：短、粗、外展
-] as const;
-
-/** 单根手指的展开动画：随 custom 索引错峰弹出（挥手时从掌心逐根舒展） */
-const fingerVariants: Variants = {
-  hidden: { scaleY: 0.1, opacity: 0 },
-  shown: (i: number) => ({
-    scaleY: 1,
-    opacity: 1,
-    transition: { delay: 0.2 + i * 0.055, type: "spring", stiffness: 420, damping: 20 },
-  }),
-};
-
-/** 掌心出现动画 */
-const palmVariants: Variants = {
-  hidden: { scale: 0.35, opacity: 0 },
-  shown: { scale: 1, opacity: 1, transition: { delay: 0.08, type: "spring", stiffness: 320, damping: 20 } },
-};
-
-/** 单节指骨（圆角胶囊）。用底部内阴影表现“关节褶皱”而非整圈描边，让三节读起来是连着的手指；demon 远节收成尖爪 */
-const Phalanx = ({ bottom, w, h, seg, claw, clawColor, crease }: { bottom: number; w: number; h: number; seg: string; claw?: boolean; clawColor?: string; crease: string }) => (
-  <div
-    className="absolute left-1/2"
-    style={{
-      bottom,
-      width: w,
-      height: h,
-      marginLeft: -w / 2,
-      background: seg,
-      borderRadius: claw ? "50% 50% 42% 42%" : `${w / 2}px ${w / 2}px ${w / 2.6}px ${w / 2.6}px`,
-      clipPath: claw ? "polygon(50% 0%, 100% 58%, 80% 100%, 20% 100%, 0% 58%)" : undefined,
-      boxShadow: `inset 0 -1.5px 1.5px ${crease}, inset 0 1px 1px rgba(255,255,255,0.12)`,
-    }}
-  >
-    {claw && clawColor && (
-      <span className="absolute left-1/2 top-[-1.5px] h-2 w-2 -translate-x-1/2 rounded-full" style={{ background: clawColor, boxShadow: `0 0 5px ${clawColor}` }} />
-    )}
-  </div>
-);
-
-/** 一根三节指骨手指：近节→中节→远节(爪)，指骨间轻微重叠+关节褶皱，读起来是“三个模块”的一根手指 */
-const HandFinger = ({ i, spec, tone }: { i: number; spec: (typeof HAND_FINGERS)[number]; tone: HandTone }) => {
-  const L = spec.len;
-  const W = spec.w;
-  const proxH = 9 * L;
-  const midH = 7 * L;
-  const distH = 6 * L;
-  const overlap = 1.4; // 指骨轻微交叠，关节相连不散
-  return (
-    <motion.div
-      custom={i}
-      variants={fingerVariants}
-      className="absolute"
-      style={{ left: spec.x, bottom: 11, width: 0, height: proxH + midH + distH - overlap * 2, transformOrigin: "50% 100%", rotate: spec.splay }}
-    >
-      <Phalanx bottom={0} w={6 * W} h={proxH} seg={tone.seg} crease={tone.crease} />
-      <Phalanx bottom={proxH - overlap} w={5.2 * W} h={midH} seg={tone.seg} crease={tone.crease} />
-      <Phalanx bottom={proxH + midH - overlap * 2} w={4.4 * W} h={distH} seg={tone.segTip} crease={tone.crease} claw={tone.claw} clawColor={tone.clawGlow} />
-    </motion.div>
-  );
-};
-
-type HandTone = { seg: string; segTip: string; crease: string; palm: string; claw: boolean; clawGlow?: string };
-
-const HAND_TONE: Record<Skin, HandTone> = {
-  normal: {
-    seg: "linear-gradient(to top, #cfe6fb, #ffffff)",
-    segTip: "linear-gradient(to top, #d8eefe, #ffffff)",
-    crease: "rgba(80,110,150,0.28)",
-    palm: "radial-gradient(circle at 38% 30%, #ffffff 0%, #e0f2fe 60%, #cffafe 100%)",
-    claw: false,
-  },
-  demon: {
-    seg: "linear-gradient(to top, #23131c, #55303f)",
-    segTip: "linear-gradient(to top, #180c12, #40202e)",
-    crease: "rgba(0,0,0,0.5)",
-    palm: "radial-gradient(circle at 38% 30%, #4a2836 0%, #2a1620 62%, #180c12 100%)",
-    claw: true,
-    clawGlow: "#f43f5e",
-  },
-  loong: {
-    seg: "linear-gradient(to top, #f0d190, #fff8e4)",
-    segTip: "linear-gradient(to top, #e8bc62, #f7dfa0)",
-    crease: "rgba(170,120,30,0.3)",
-    palm: "radial-gradient(circle at 38% 30%, #fffbef 0%, #ffedbc 60%, #f0d190 100%)",
-    claw: true,
-    clawGlow: "#f5c542",
-  },
-};
-
-/** 三节指骨关节手/爪（挥手时出现在左臂末端），配色随皮肤 */
-export const EveHand = ({ skin = "normal" }: { skin?: Skin }) => {
-  const tone = HAND_TONE[skin];
-  return (
-    <div className="relative h-[34px] w-6 drop-shadow-sm">
-      {HAND_FINGERS.map((spec, i) => (
-        <HandFinger key={i} i={i} spec={spec} tone={tone} />
-      ))}
-      <motion.div
-        variants={palmVariants}
-        className="absolute bottom-0 h-[14px] w-[17px]"
-        style={{
-          left: 3.5,
-          borderRadius: "46% 46% 48% 48%",
-          background: tone.palm,
-          boxShadow: `inset -1px -1.5px 3px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.1), 0 0 0 0.5px ${tone.crease}`,
-        }}
-      />
-    </div>
-  );
-};
-
-/**
- * 腕部动画：招手时手掌以腕关节为轴左右摆动（±20° 左右），
- * 大臂只负责一次性抬起，双关节运动比原先整臂 -140° 甩动自然得多。
- * 手掌基础角 -76° 抵消大臂 +76° 抬起，保证五指全球朝上。
- */
-export const handWrapperVariants = (reduced: boolean): Variants => ({
-  hidden: { opacity: 0, scale: 0.3, rotate: -76, transition: { duration: 0.22 } },
-  shown: {
-    opacity: 1,
-    scale: 1,
-    rotate: reduced ? -76 : [-76, -56, -90, -58, -86, -68, -76],
-    transition: {
-      opacity: { duration: 0.15 },
-      scale: { type: "spring", stiffness: 300, damping: 18 },
-      rotate: reduced
-        ? { duration: 0.3 }
-        : { delay: 0.5, duration: 1.6, repeat: Infinity, repeatDelay: 0.35, ease: "easeInOut" },
-    },
-  },
-});
-
-
-/** 数码眼：横纹发光屏，支持多种表情形变。tilt=内低外高的“怒”倾角（恶魔皮肤用）、screen=屏底色 */
+/** 数码眼：原横纹椭圆屏造型；只抬高亮度与外溢光。tilt=恶魔倾角、screen=屏底色 */
 export const DigitalEye = ({ expression, color, tilt = 0, screen = "#001020" }: { expression: EyeExpr; color: string; tilt?: number; screen?: string }) => {
   const variants: Record<string, { scaleY: number; scaleX: number; borderRadius: string; height: string }> = {
     normal: { scaleY: 1, scaleX: 1, borderRadius: "50%", height: "16px" },
@@ -309,18 +236,18 @@ export const DigitalEye = ({ expression, color, tilt = 0, screen = "#001020" }: 
   return (
     <motion.div
       className="relative w-6 overflow-hidden transition-colors duration-1000"
-      style={{ backgroundColor: screen, boxShadow: `0 0 5px ${color}80`, border: `1px solid ${color}40`, rotate: tilt }}
+      style={{ backgroundColor: screen, boxShadow: `0 0 8px ${color}aa, 0 0 14px ${color}55`, border: `1px solid ${color}66`, rotate: tilt }}
       animate={variants[expression === "wink" ? "blink" : expression]}
       transition={{ type: "spring", stiffness: 300, damping: 20 }}
     >
       <motion.div className="absolute inset-0 bg-black" initial={{ opacity: 0 }} animate={{ opacity: expression === "happy" ? 1 : 0 }} style={{ clipPath: "polygon(0% 50%, 100% 50%, 100% 100%, 0% 100%)" }} />
       {expression === "scanning" && <motion.div className="absolute inset-0 bg-white/50 h-[2px]" animate={{ top: ["0%", "100%", "0%"] }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} />}
-      <div className="absolute inset-0 flex flex-col justify-center gap-[1px] opacity-90">
+      <div className="absolute inset-0 flex flex-col justify-center gap-[1px] opacity-95">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="w-full h-[2px] transition-colors duration-1000" style={{ backgroundColor: color, boxShadow: `0 0 2px ${color}`, opacity: 1 - Math.abs(2 - i) * 0.25 }} />
+          <div key={i} className="w-full h-[2px] transition-colors duration-1000" style={{ backgroundColor: color, boxShadow: `0 0 3px ${color}`, opacity: 1 - Math.abs(2 - i) * 0.18 }} />
         ))}
       </div>
-      <div className="absolute inset-0 blur-sm transition-colors duration-1000" style={{ backgroundColor: `${color}40` }} />
+      <div className="absolute inset-0 blur-sm transition-colors duration-1000" style={{ backgroundColor: `${color}55` }} />
     </motion.div>
   );
 };
@@ -343,7 +270,8 @@ export const SKIN: Record<Skin, {
   armStops: [string, string, string];
 }> = {
   normal: {
-    eyeColors: ["#22d3ee", "#8b5cf6", "#06b6d4", "#a855f7", "#38bdf8"],
+    /* ∞ 七色加亮版：造型不变，只让屏幕更亮 */
+    eyeColors: ["#22e8ff", "#4d8fff", "#a55cff", "#ef4dff", "#ff7ab8", "#ff9630", "#ffc028"],
     eyeScreen: "#001020",
     eyeTilt: 0,
     body: "radial-gradient(circle at 30% 50%, #ffffff 0%, #ecfeff 50%, #cffafe 100%)",
@@ -429,15 +357,34 @@ export const DemonFangs = () => (
 
 /**
  * 左臂姿态表（角度符号：正 = 顺时针 = 左臂向外张开）。
- * 挥手仅抬到 +76°（指尖约在胸口高度），满足“招手时手臂也要低”。
+ * 挥手仅抬到 +76°（臂尖约在胸口高度），满足“招手时手臂也要低”。
  */
 export const leftArmVariants: Variants = {
   idle_base: { x: 0, y: 0, rotate: 7 },
-  idle_scan: { x: 0, y: 0, rotate: 7 },
+  /* 扫描：小抬臂 38° */
+  idle_scan: { x: -1, y: -1, rotate: 38, transition: { type: "spring", stiffness: 160, damping: 16 } },
   idle_wave: { x: -2, y: -2, rotate: 76, transition: { type: "spring", stiffness: 170, damping: 15 } },
   idle_dance: { x: -7, y: -4, rotate: [6, 44, 6], transition: { rotate: { repeat: Infinity, duration: 0.4 } } },
-  idle_news: { x: -1, y: 0, rotate: 12 },
+  /* 播报：高抬臂 104°，引导视线到头顶全息面板 */
+  idle_news: { x: -2, y: -2, rotate: 104, transition: { type: "spring", stiffness: 150, damping: 16 } },
   idle_spin: { x: 0, y: 0, rotate: 7 },
+  idle_nod: { x: 0, y: 1, rotate: 12, transition: { type: "spring", stiffness: 200, damping: 18 } },
+  /* 伸懒腰：左臂大幅外展 */
+  idle_stretch: { x: -6, y: -6, rotate: 118, transition: { type: "spring", stiffness: 140, damping: 14 } },
+  idle_tilt: { x: -1, y: 0, rotate: 18, transition: { type: "spring", stiffness: 160, damping: 16 } },
+  /* 邀约：左臂外展指内容（屏幕左侧 = 页面主体） */
+  idle_invite: { x: -4, y: -3, rotate: 92, transition: { type: "spring", stiffness: 150, damping: 15 } },
+  /* 警觉：双臂微张、左臂略抬 */
+  idle_alert: { x: -2, y: -2, rotate: 48, transition: { type: "spring", stiffness: 170, damping: 16 } },
+  /* 轻鼓：左臂向胸口合拢 */
+  idle_clap: {
+    x: 4,
+    y: 2,
+    rotate: [38, 52, 38, 52, 28],
+    transition: { duration: 1.55, ease: "easeInOut", times: [0, 0.22, 0.45, 0.68, 1] },
+  },
+  /* 害羞：左臂贴身收 */
+  idle_shy: { x: 2, y: 4, rotate: 22, transition: { type: "spring", stiffness: 180, damping: 18 } },
   flying: { x: -3, y: 6, rotate: 42 },
   falling: { x: -12, y: -13, rotate: 124 },
 };
@@ -450,12 +397,26 @@ export const rightArmVariants: Variants = {
   idle_dance: { x: 7, y: -4, rotate: [-6, -44, -6], transition: { rotate: { repeat: Infinity, duration: 0.4, delay: 0.2 } } },
   idle_news: { x: 1, y: 0, rotate: -12 },
   idle_spin: { x: 0, y: 0, rotate: -7 },
+  idle_nod: { x: 0, y: 1, rotate: -12, transition: { type: "spring", stiffness: 200, damping: 18 } },
+  /* 伸懒腰：右臂对称外展 */
+  idle_stretch: { x: 6, y: -6, rotate: -118, transition: { type: "spring", stiffness: 140, damping: 14 } },
+  idle_tilt: { x: 2, y: 0, rotate: -22, transition: { type: "spring", stiffness: 160, damping: 16 } },
+  idle_invite: { x: 2, y: 0, rotate: -16, transition: { type: "spring", stiffness: 150, damping: 15 } },
+  idle_alert: { x: 2, y: -1, rotate: -28, transition: { type: "spring", stiffness: 170, damping: 16 } },
+  /* 轻鼓：右臂对称合拢 */
+  idle_clap: {
+    x: -4,
+    y: 2,
+    rotate: [-38, -52, -38, -52, -28],
+    transition: { duration: 1.55, ease: "easeInOut", times: [0, 0.22, 0.45, 0.68, 1] },
+  },
+  idle_shy: { x: -2, y: 4, rotate: -22, transition: { type: "spring", stiffness: 180, damping: 18 } },
   flying: { x: 3, y: 6, rotate: -42 },
   falling: { x: 12, y: -13, rotate: -124 },
 };
 
 /** 呼吸微摆生效的姿态：待机类动作时手臂随身体轻晃 ±1.6°，静态也是“活”的 */
-export const SWAY_MODES = new Set<BotMode>(["idle_base", "idle_scan", "idle_news", "idle_spin"]);
+export const SWAY_MODES = new Set<BotMode>(["idle_base", "idle_scan", "idle_news", "idle_spin", "idle_tilt"]);
 
 /** 手臂呼吸微摆（嵌套节点实现，避免与姿态弹簧在同一元素上打架） */
 export const armSwayVariants = (side: "left" | "right"): Variants => ({

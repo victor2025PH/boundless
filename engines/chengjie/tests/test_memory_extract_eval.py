@@ -18,6 +18,7 @@ import pytest
 
 from src.eval.dataset import ExtractSample, load_extract_samples
 from src.eval.memory_extract_eval import (
+    XLANG_EXTRACT_SAMPLES_PATH,
     build_llm_extract_fn,
     evaluate_fact_extraction,
     format_extract_report,
@@ -92,6 +93,41 @@ def test_report_format_smoke():
     assert "记忆抽取质量报告" in out
 
 
+def test_cli_memory_extract_reports_grounding_and_trend(tmp_path):
+    """J-10 二期：run_eval --memory-extract 一并出接地护栏报告 + --out-jsonl 趋势行。"""
+    import json
+    import subprocess
+    import sys
+
+    trend = tmp_path / "trend.jsonl"
+    r = subprocess.run(
+        [sys.executable, "-m", "scripts.run_eval", "--memory-extract", "--json",
+         "--out-jsonl", str(trend)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+    )
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    body = r.stdout[r.stdout.index("{"):r.stdout.rindex("}") + 1]
+    out = json.loads(body)
+    assert out["passed_all"] is True and out["extractor"] == "heuristic"
+    assert out["grounding"]["passed"] is True
+    assert out["grounding"]["summary"]["leaked"] == 0 and out["grounding"]["summary"]["lost"] == 0
+    assert out["grounding"]["results"] == []          # 只列非 ok 的
+    line = json.loads(trend.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert line["kind"] == "memory_extract" and line["passed"] is True
+    assert line["grounding"]["kept_ok"] == line["grounding"]["expect_keep"]
+
+
+def test_xlang_sample_set_loads_and_is_llm_only():
+    """跨语言增补集：可加载、含 Phase8 forbid；不喂启发式门禁（启发式不认英文事实）。"""
+    samples = load_extract_samples(XLANG_EXTRACT_SAMPLES_PATH)
+    assert len(samples) >= 6
+    assert any("女儿" in s.expect for s in samples)
+    assert any("大阪" in s.forbid for s in samples)
+    # 启发式对这组 forbid 必须零误抽（它不会把 AI 提议抽成事实）
+    rep = evaluate_fact_extraction(heuristic_extract_fn, samples, recall_target=0.0)
+    assert rep["summary"]["false_positives"] == 0
+
+
 # ── 启发式抽取常驻门禁（离线，从 YAML 样本）──────────────────────
 
 def test_heuristic_extraction_gate():
@@ -115,7 +151,9 @@ def test_llm_extraction_gate():
     target = _env_float("AITR_EXTRACT_RECALL_TARGET", 0.8)
     # LLM 召回口径放宽：LLM 抽取是概括/推断，表述与 expect 子串未必字面一致，
     # 只守"不崩 + 误抽不超阈"，召回目标可经 env 下调。
+    # J-10 A1：加跨语言/混语增补集（英文客户事实 + Phase8 事故语料 forbid）。
     samples = load_extract_samples("config/eval/memory_extract_samples.yaml")
+    samples += load_extract_samples(XLANG_EXTRACT_SAMPLES_PATH)
     rep = evaluate_fact_extraction(
         extract_fn, samples,
         recall_target=_env_float("AITR_EXTRACT_LLM_RECALL_TARGET", 0.5),

@@ -13,7 +13,11 @@ import os
 
 import pytest
 
-from src.eval.embedding_providers import build_embed_fn, describe_availability
+from src.eval.embedding_providers import (
+    _load_config_if_none,
+    build_embed_fn,
+    describe_availability,
+)
 
 _ST_INSTALLED = importlib.util.find_spec("sentence_transformers") is not None
 _CLEAR_ENV = (
@@ -44,6 +48,43 @@ def test_openai_compat_requires_base_and_model(monkeypatch):
     # 只给 base 不给 model → 不构造（避免向只支持 chat 的端点误请求 embeddings）
     monkeypatch.setenv("AITR_EMBED_BASE_URL", "http://127.0.0.1:11434")
     assert build_embed_fn(config={"ai": {}}) is None
+
+
+def _write_cfg(tmp_path, main: str, overlay: str | None = None):
+    d = tmp_path / "config"
+    d.mkdir()
+    (d / "config.yaml").write_text(main, encoding="utf-8")
+    if overlay is not None:
+        (d / "config.local.yaml").write_text(overlay, encoding="utf-8")
+
+
+def test_config_loader_merges_local_overlay(tmp_path, monkeypatch):
+    """标准部署里主配置的端点是空串占位、真值只在 overlay——漏合并会让
+    build_embed_fn 静默返回 None，依赖它的语义检索无声退化成纯关键词。"""
+    _write_cfg(
+        tmp_path,
+        'ai:\n  embedding_base_url: ""\n  embedding_model: ""\n  api_key: "sk-main"\n',
+        'ai:\n  embedding_base_url: "http://10.0.0.9:11434"\n  embedding_model: "bge-m3"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    ai = _load_config_if_none(None)["ai"]
+    assert ai["embedding_base_url"] == "http://10.0.0.9:11434"
+    assert ai["embedding_model"] == "bge-m3"
+    assert ai["api_key"] == "sk-main"  # overlay 未覆盖的键保留
+
+
+def test_config_loader_without_overlay_is_unchanged(tmp_path, monkeypatch):
+    _write_cfg(tmp_path, 'ai:\n  embedding_base_url: "http://127.0.0.1:11434"\n')
+    monkeypatch.chdir(tmp_path)
+    assert _load_config_if_none(None)["ai"]["embedding_base_url"] == "http://127.0.0.1:11434"
+
+
+def test_explicit_config_skips_file_read(tmp_path, monkeypatch):
+    _write_cfg(tmp_path, 'ai:\n  embedding_base_url: "http://from-file:1"\n',
+               'ai:\n  embedding_base_url: "http://from-overlay:1"\n')
+    monkeypatch.chdir(tmp_path)
+    given = {"ai": {"embedding_base_url": "http://caller:1"}}
+    assert _load_config_if_none(given) is given
 
 
 def test_describe_availability_smoke(monkeypatch):

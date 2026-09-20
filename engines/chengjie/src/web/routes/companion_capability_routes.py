@@ -30,6 +30,82 @@ _RUNTIME_STATE_ATTRS = {
 }
 
 
+def _overlay_dict(cm) -> dict:
+    """读实例 overlay 原文（config.local.yaml），不是合并后的 config。
+
+    值守「运营关闸」判定必须看 overlay 是否**显式**写了
+    ``companion_send_gate.enabled: false``——合并 config 的代码缺省也是 false，
+    读合并值会把新装机误判成运营关闸。文件缺失 / 解析失败 → {}（=未显式关）。
+    """
+    try:
+        raw = getattr(cm, "config_path", "") or ""
+        if not raw:
+            return {}
+        ov = Path(raw).parent / "config.local.yaml"
+        if not ov.is_file():
+            return {}
+        import yaml
+        with open(ov, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.debug("读 overlay 失败（值守 send-gate 决策回落为默认开闸）",
+                     exc_info=True)
+        return {}
+
+
+async def _provision_media_backends(cm, flags) -> dict:
+    """开启类预设的**供给**步骤：托管版把识图指向官网网关（幂等）。
+
+    2026-07-31 修「按钮只对开关负责、不对结果负责」：此前本接口只写 ``vision.enabled``，
+    而托管版的识图后端是启动时的一次性内存注入——令牌后到、或写 overlay 触发的热重载，
+    都会让它缺席。于是用户点完「一键开齐入站识别」拿到的是一盏「开了但后端未就绪」的
+    黄灯加一句「联系客服」。现在开启前先补供给，让按钮对**能不能用**负责。
+
+    非托管态 / 用户自配后端 → ``ensure_hosted_vision`` 内部自行早返（单一事实源在
+    hosted_gateway，此处不复制判断）。绝不抛：供给失败仍照常写开关（保留「先开开关
+    后补后端」的既有语义），只把结果如实回给前端。走线程池——领令牌可能真发 HTTP。
+    """
+    out: dict = {}
+    if not (flags or {}).get("vision.enabled"):
+        return out
+    import asyncio
+
+    try:
+        from src.ai.hosted_gateway import (
+            ensure_hosted_ai, ensure_hosted_vision, vision_provision_reason)
+
+        def _run() -> bool:
+            ensure_hosted_ai(cm)  # 识图与聊天共用设备令牌：没令牌先补令牌
+            return bool(ensure_hosted_vision(cm))
+
+        out["vision"] = await asyncio.to_thread(_run)
+        out["vision_reason"] = vision_provision_reason(getattr(cm, "config", None))
+    except Exception:
+        logger.debug("托管识图供给失败（忽略，仍写开关）", exc_info=True)
+        out["vision"] = False
+    return out
+
+
+def _actor_from(request, body) -> str:
+    """开关操作者身份：body 显式 > session 坐席名 > 'web-admin'。
+
+    #142 件二：翻动留痕要回答「谁关的」——此前全部回落 'web-admin'（设置页
+    不传 actor），审计等于没记人。session 无身份（纯 token 部署）仍回落旧值。
+    """
+    explicit = str((body or {}).get("actor") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from src.web.routes.unified_inbox_auth import _session_agent
+        name = str(_session_agent(request).get("display_name") or "").strip()
+        if name and name != "agent":
+            return name
+    except Exception:
+        logger.debug("session 坐席身份解析失败（回落 web-admin）", exc_info=True)
+    return "web-admin"
+
+
 def _audit_path(cm):
     base = getattr(cm, "config_path", None)
     return (Path(base).parent / "companion_capability_audit.jsonl") if base else None
@@ -52,6 +128,20 @@ def _audit_toggle(cm, *, actor, key, field, value, path, reason="") -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         logger.debug("写陪伴能力开关审计失败（忽略）", exc_info=True)
+    # #142 翻动留痕：真发总闸（enabled/deliver）另落结构化状态文件——jsonl 是全量
+    # 流水，横幅/设置页要的是「最近一次谁关的」这个 O(1) 读；写入点收在这里＝
+    # 预设/值守三档/拆开控制/回滚/横幅一键恢复全部入口天然覆盖（都经本审计）。
+    try:
+        from src.inbox.autosend_gate_state import (
+            GATE_PATHS, config_dir_from_manager, record_gate_flip,
+        )
+        if path in GATE_PATHS:
+            d = config_dir_from_manager(cm)
+            if d is not None:
+                record_gate_flip(d, path=path, value=bool(value),
+                                 actor=actor, source=(reason or key))
+    except Exception:
+        logger.debug("真发总闸翻动留痕失败（忽略）", exc_info=True)
 
 
 def _read_audit(path, limit) -> list:
@@ -135,11 +225,59 @@ def _apply_extra_flags(cm, flags, *, actor, reason) -> dict:
     return {"extras_applied": applied, "extras_failed": failed}
 
 
+def _attach_gate_meta(split, cm, config):
+    """给 split（拆开控制读侧）附总闸留痕：最近一次 deliver 翻动 + 暂停元信息。
+
+    #142 件二读侧：设置页要能看到「最近一次谁关的」。键缺席＝无留痕/旧后端，
+    前端不渲染（feature 探测，零回归）。best-effort，绝不抛。
+    """
+    if not isinstance(split, dict):
+        return split
+    try:
+        from src.inbox.autosend_gate_state import (
+            config_dir_from_manager, gate_flip_snapshot, pause_meta,
+        )
+        d = config_dir_from_manager(cm)
+        if d is None:
+            return split
+        snap = gate_flip_snapshot(d, limit=5)
+        flip = (snap.get("paths") or {}).get("inbox.l2_autosend.deliver")
+        if not flip:
+            # deliver 无留痕时回落最近一条总闸翻动（enabled 也算总闸的一半）
+            hist = snap.get("history") or []
+            flip = hist[0] if hist else None
+        if flip:
+            split["deliver_flip"] = flip
+        pm = pause_meta(config, d)
+        if pm:
+            split["pause"] = pm
+    except Exception:
+        logger.debug("附总闸留痕失败（忽略）", exc_info=True)
+    return split
+
+
 def _collect_status(state, config):
     from src.companion.capability_status import collect_capability_status
     runtime = {dep: (getattr(state, attr, None) is not None)
                for dep, attr in _RUNTIME_STATE_ATTRS.items()}
     return collect_capability_status(config, runtime=runtime)
+
+
+def _try_rewire(state) -> dict:
+    """开关写完 overlay 后 best-effort 热接线 autosend（P1 2026-08-22）。
+
+    闭包由 bootstrap 注册（``make_autosend_rewire``）；旧进程/测试 app 无此键
+    → 如实回 ``{"rewired": False, "reason": "not_wired"}``（重启后仍会生效，
+    与旧行为一致——feature 探测，绝不抛）。
+    """
+    fn = getattr(state, "autosend_rewire", None)
+    if not callable(fn):
+        return {"rewired": False, "reason": "not_wired"}
+    try:
+        return dict(fn() or {})
+    except Exception:
+        logger.debug("autosend 热接线调用失败（忽略）", exc_info=True)
+        return {"rewired": False, "reason": "error"}
 
 
 def _auto_ai_count(state):
@@ -367,7 +505,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         key = str(body.get("key") or "").strip()
         field = str(body.get("field") or "enabled").strip()
         value = bool(body.get("value"))
-        actor = (str(body.get("actor") or "").strip() or "web-admin")
+        actor = _actor_from(request, body)
         if not key:
             return {"ok": False, "message": "缺少 key"}
 
@@ -405,7 +543,110 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "value": value, "capability": capability, "summary": summary}
         if chk.get("warn"):
             resp["warn"] = chk.get("reason")
+        # autosend 双开关（worker/deliver）即时生效：热接线运行中的 worker
+        if key in ("l2_autosend_worker", "l2_autosend_deliver"):
+            resp["rewire"] = _try_rewire(state)
         return resp
+
+    @app.get("/api/companion/media-capabilities")
+    async def api_media_capabilities(request: Request, _=Depends(api_auth)):
+        """入站多媒体能力（识图/识别语音/识别视频/自动发自拍）就绪自检：每项开没开 + 后端配没配。
+
+        只读。回 ``{capabilities:[{key,label,enabled,backend_ready,stage,hint}], summary}``。
+        stage=off（未开）/ needs_backend（开了但没配后端）/ active（开了且后端就绪）。
+        """
+        from src.companion.media_capability import collect_media_status
+
+        state = request.app.state
+        cm = getattr(state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if not isinstance(config, dict):
+            return {"ok": False, "available": False,
+                    "message": "config 未就绪", "capabilities": []}
+        try:
+            data = collect_media_status(config)
+        except Exception:
+            logger.warning("media capability status 计算失败", exc_info=True)
+            return {"ok": False, "available": True, "capabilities": [],
+                    "message": "聚合计算失败"}
+        return {"ok": True, "available": True, **data}
+
+    @app.post("/api/companion/media-capabilities/preset")
+    async def api_media_capabilities_preset(request: Request, _=Depends(api_auth)):
+        """一键预设多媒体能力（只翻 vision/voice_recognition/selfie 开关，写 overlay + 审计）。
+
+        body: {name: understand_all|understand_and_selfie|media_off, actor?}。
+        开启类预设会附带 ``warnings``（若将开启的能力后端未就绪，如实提示但仍写开关——
+        运营可先开开关再补后端，与其它 overlay 开关同语义）。
+        """
+        from src.companion.media_capability import (
+            MEDIA_PRESETS, build_media_preset, collect_media_status,
+            preset_backend_warnings,
+        )
+
+        state = request.app.state
+        cm = getattr(state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if cm is None or not isinstance(config, dict) or not hasattr(cm, "set_overlay_flag"):
+            return {"ok": False, "available": False, "message": "config 未就绪"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        name = str(body.get("name") or "").strip()
+        actor = _actor_from(request, body)
+        spec = build_media_preset(name)
+        if spec is None:
+            return {"ok": False, "message": f"未知媒体预设: {name}",
+                    "presets": {k: v["label"] for k, v in MEDIA_PRESETS.items()}}
+
+        # 供给先于开关：warnings 必须在供给之后算，否则报的是「修好之前」的旧账
+        provisioned = await _provision_media_backends(cm, spec.get("flags") or {})
+        warnings = preset_backend_warnings(name, config)
+        applied, failed = [], []
+        for path, value in (spec.get("flags") or {}).items():
+            ok, msg = cm.set_overlay_flag(path, bool(value))
+            if ok:
+                _audit_toggle(cm, actor=actor, key=path, field="enabled",
+                              value=bool(value), path=path, reason=f"media_preset:{name}")
+                applied.append({"path": path, "value": bool(value)})
+            else:
+                failed.append({"path": path, "value": bool(value), "reason": msg})
+        status = None
+        try:
+            status = collect_media_status(config)
+        except Exception:
+            logger.debug("回算媒体能力状态失败", exc_info=True)
+        return {"ok": True, "preset": name, "label": spec["label"],
+                "applied": applied, "failed": failed, "warnings": warnings,
+                "provisioned": provisioned, "status": status}
+
+    @app.post("/api/companion/media-capabilities/provision")
+    async def api_media_capabilities_provision(request: Request, _=Depends(api_auth)):
+        """「重试接入」：重跑一次托管识图供给，回结构化原因码 + 最新自检状态。
+
+        存在理由＝把托管态那句死路文案（「如未生效请联系客服开启」）换成用户点得动的
+        动作：绝大多数「后端未就绪」只是供给没发生（令牌后到 / 热重载抹掉），重跑即好，
+        根本不该开工单。真需要人工介入时也给出确定性原因码（``no_token`` 等），
+        客服不必从零猜。
+        """
+        from src.ai.hosted_gateway import vision_provision_reason
+        from src.companion.media_capability import collect_media_status
+
+        cm = getattr(request.app.state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if cm is None or not isinstance(config, dict):
+            return {"ok": False, "available": False, "message": "config 未就绪"}
+        provisioned = await _provision_media_backends(cm, {"vision.enabled": True})
+        reason = vision_provision_reason(config)
+        status = None
+        try:
+            status = collect_media_status(config)
+        except Exception:
+            logger.debug("回算媒体能力状态失败", exc_info=True)
+        return {"ok": True, "provisioned": provisioned, "reason": reason,
+                "status": status}
 
     @app.get("/api/companion/capabilities/toggle-audit")
     async def api_companion_toggle_audit(
@@ -419,6 +660,26 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         return {"ok": True, "available": True,
                 "count": len(entries), "entries": entries}
 
+    @app.get("/api/companion/capabilities/preset-preview")
+    async def api_companion_capability_preset_preview(
+        request: Request, name: str = "", _=Depends(api_auth),
+    ):
+        """只读预览一键预设将写入的意图（含运营关闸时是否跳过 send-gate）。
+
+        与 POST ``/preset`` 共用 ``preview_preset``；本端点零 overlay 写入、
+        零快照、零 rewire。``name`` 未知 → ``error=unknown_preset``。
+        """
+        from src.companion.capability_presets import PRESETS, preview_preset
+
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None:
+            return {"ok": False, "available": False, "error": "config_not_ready"}
+        preview = preview_preset(str(name or "").strip(), overlay=_overlay_dict(cm))
+        if preview is None:
+            return {"ok": False, "error": "unknown_preset",
+                    "presets": {k: v["label"] for k, v in PRESETS.items()}}
+        return {"ok": True, "available": True, **preview}
+
     @app.post("/api/companion/capabilities/preset")
     async def api_companion_capability_preset(request: Request, _=Depends(api_auth)):
         """一键预设档：按风险阶梯整档切换（每条仍逐项过护栏）；切换前自动存快照供回滚。
@@ -426,7 +687,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         body: {name: safe_default|dry_run_trial|full_auto, actor?}。
         """
         from src.companion.capability_presets import (
-            PRESETS, build_preset_plan, capture_extra_flags, capture_snapshot,
+            PRESETS, preview_preset, capture_extra_flags, capture_snapshot,
             preset_extras,
         )
         from src.companion.capability_status import collect_capability_status
@@ -442,11 +703,13 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             body = {}
         body = body if isinstance(body, dict) else {}
         name = str(body.get("name") or "").strip()
-        actor = (str(body.get("actor") or "").strip() or "web-admin")
-        plan = build_preset_plan(name)
-        if plan is None:
+        actor = _actor_from(request, body)
+        overlay = _overlay_dict(cm)
+        preview = preview_preset(name, overlay=overlay)
+        if preview is None:
             return {"ok": False, "message": f"未知预设: {name}",
                     "presets": {k: v["label"] for k, v in PRESETS.items()}}
+        plan = preview["plan"]
 
         modes = None
         store = getattr(state, "inbox_store", None)
@@ -473,6 +736,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             result.update(_apply_extra_flags(
                 cm, {e["path"]: e["value"] for e in extras},
                 actor=actor, reason=f"preset:{name}"))
+        result["rewire"] = _try_rewire(state)
         summary = None
         try:
             runtime = {dep: (getattr(state, attr, None) is not None)
@@ -480,6 +744,8 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             summary = collect_capability_status(config, runtime=runtime).get("summary")
         except Exception:
             logger.debug("回算概要失败", exc_info=True)
+        if preview.get("send_gate_skipped"):
+            result["send_gate_skipped"] = preview["send_gate_skipped"]
         return {"ok": True, "preset": name, "label": PRESETS[name]["label"],
                 "summary": summary, **result}
 
@@ -498,7 +764,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             body = await request.json()
         except Exception:
             body = {}
-        actor = (str((body or {}).get("actor") or "").strip() or "web-admin")
+        actor = _actor_from(request, body)
 
         sp = _snapshot_path(cm)
         if sp is None or not sp.exists():
@@ -524,6 +790,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         if isinstance(extra_flags, dict) and extra_flags:
             result.update(_apply_extra_flags(cm, extra_flags,
                                              actor=actor, reason="rollback"))
+        result["rewire"] = _try_rewire(state)
         summary = None
         try:
             runtime = {dep: (getattr(state, attr, None) is not None)
@@ -543,7 +810,10 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         双重 opt-in 护栏拦下（如无 auto_ai 会话），以及是否裸奔（send-gate 未开）。
         """
         from src.companion.delivery_calibration import delivery_calibration
-        from src.companion.standby_mode import infer_standby_mode, standby_options
+        from src.companion.standby_mode import (
+            infer_standby_mode, split_state, standby_options,
+            watching_send_gate_fields,
+        )
         from src.companion.capability_toggle import check_toggle
 
         state = request.app.state
@@ -566,13 +836,24 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             "ok": True, "available": True,
             "mode": infer_standby_mode(config),
             "options": standby_options(),
+            # #12 拆开控制读侧（2026-08-30）：新会话默认档 / worker / 真发总闸 /
+            # 显式全自动行数（关真发前的影响面披露）。旧前端不识此键零影响；
+            # 新前端据此渲染「拆开控制」面板（键缺席=旧后端 → 面板隐藏）。
+            # #142：附总闸留痕（deliver_flip=最近一次谁翻的 / pause=暂停元信息）。
+            "split": _attach_gate_meta(split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"]),
+                cm, config),
             "watching": {
                 "allowed": bool(chk.get("allowed")),
                 "warn": bool(chk.get("warn")),
                 "reason": chk.get("reason") or "",
                 "auto_ai": cal["automation_modes"]["auto_ai"],
+                # 全局默认档=auto_ai（新会话 bootstrap 即全自动）——前端据此
+                # 不再对「显式 auto_ai=0」误报「不会对任何人真发」（B37 读侧）
+                "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
+                **watching_send_gate_fields(_overlay_dict(cm)),
             },
         }
 
@@ -580,12 +861,21 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
     async def api_companion_standby_set(request: Request, _=Depends(api_auth)):
         """切换 AI 值守姿态（主管专属）。逐条过同一套护栏 + 写 overlay + 存快照供回滚。
 
-        body: {mode: off|suggest|watching, actor?}。切「值守中」若无 auto_ai 会话/worker 未开，
-        由 ``check_toggle`` 如实拦下 deliver 项（worker 仍会开），并在 blocked 里给出原因。
+        body: {mode: off|suggest|watching, actor?}。
+
+        P1 2026-08-22 捆绑语义（「一键全自动」单写入口）：三档不再只管
+        worker/deliver 两开关——**默认档位 extras 先落**（watching→auto_ai+
+        bootstrap / suggest→review / off→manual，护栏因此看到「全局已全自动」，
+        新装机零会话也不再死锁）→ 能力计划照旧逐条过护栏 → **存量系统落档
+        会话批量对齐**（只动 bootstrap/standby 来源的行，人的显式设置绝不覆盖）
+        → **热接线**运行中的 worker（真发当场生效，不再等重启）。
         """
         from src.web.routes.unified_inbox_auth import _require_supervisor
         from src.companion.standby_mode import (
-            build_standby_plan, infer_standby_mode, is_standby_mode, STANDBY_LABELS,
+            align_existing_conversations, build_standby_plan,
+            infer_standby_mode, is_standby_mode, send_gate_operator_off,
+            split_state, standby_align_target, standby_extras,
+            watching_send_gate_fields, STANDBY_LABELS,
         )
         from src.companion.capability_presets import capture_extra_flags, capture_snapshot
         from src.companion.delivery_calibration import delivery_calibration
@@ -604,8 +894,55 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             body = {}
         body = body if isinstance(body, dict) else {}
         mode = str(body.get("mode") or "").strip()
-        actor = (str(body.get("actor") or "").strip() or "web-admin")
-        plan = build_standby_plan(mode)
+        actor = _actor_from(request, body)
+        overlay = _overlay_dict(cm)
+
+        # ── #12 拆开控制写侧（2026-08-30）：body {"set": {...}} 单键直写，与三档
+        #    预设互斥（带 set 即不走捆绑路径）。「新会话默认档」只写
+        #    inbox.auto_draft.automation_mode（不动真发/worker/存量会话）；「真发
+        #    总闸」只走 l2_autosend_deliver 能力意图（check_toggle 护栏 + 审计 +
+        #    热接线照旧）——修「切个默认档连真发一起翻、既有全自动 B 线全灭
+        #    零提示」（钧 0830 01:57 审计行实锤）。
+        setter = body.get("set") if isinstance(body.get("set"), dict) else None
+        if setter:
+            modes = None
+            store = getattr(state, "inbox_store", None)
+            if store is not None:
+                try:
+                    modes = store.all_automation_modes()
+                except Exception:
+                    logger.debug("all_automation_modes 失败", exc_info=True)
+            out: dict = {"ok": True, "split_applied": {}}
+            if "default_mode" in setter:
+                dm = str(setter.get("default_mode") or "").strip().lower()
+                from src.inbox.store import AUTOMATION_MODES as _AM
+                if dm not in _AM:
+                    return {"ok": False, "message": f"未知默认档: {dm}"}
+                out.update(_apply_extra_flags(
+                    cm, {"inbox.auto_draft.automation_mode": dm},
+                    actor=actor, reason="standby-split:default_mode"))
+                out["split_applied"]["default_mode"] = dm
+            if "deliver" in setter:
+                want = bool(setter.get("deliver"))
+                from src.companion.capability_presets import (
+                    CAP_BY_KEY, _intentions_for, _order,
+                )
+                cap = CAP_BY_KEY.get("l2_autosend_deliver")
+                mini_plan = (_order(_intentions_for(
+                    cap, "on" if want else "off")) if cap is not None else [])
+                out.update(_apply_plan(cm, config, modes, mini_plan,
+                                       actor=actor,
+                                       reason="standby-split:deliver"))
+                out["split_applied"]["deliver"] = want
+                out["rewire"] = _try_rewire(state)
+            cal = delivery_calibration(config, modes)
+            out["mode"] = infer_standby_mode(config)
+            out["split"] = _attach_gate_meta(split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"]),
+                cm, config)
+            return out
+
+        plan = build_standby_plan(mode, overlay=overlay)
         if plan is None or not is_standby_mode(mode):
             return {"ok": False, "message": f"未知值守档: {mode}",
                     "options": [{"mode": m, "label": lbl}
@@ -631,20 +968,110 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("存快照失败（忽略）", exc_info=True)
 
-        result = _apply_plan(cm, config, modes, plan,
-                             actor=actor, reason=f"standby:{mode}")
+        result: dict = {}
+        # ① 默认档位 extras **先于**能力计划——deliver 的护栏读全局档位，
+        #    先写档位才轮到「全局已全自动」的免死锁语义（B37 修复的写侧）。
+        extras = standby_extras(mode)
+        if extras:
+            result.update(_apply_extra_flags(
+                cm, {e["path"]: e["value"] for e in extras},
+                actor=actor, reason=f"standby:{mode}"))
+        # ② 能力计划逐条过护栏（send-gate 先立 → worker → deliver 压最后）
+        result.update(_apply_plan(cm, config, modes, plan,
+                                  actor=actor, reason=f"standby:{mode}"))
+        # ③ 存量系统落档会话批量对齐（走线程池：可能逐行写几百条）
+        aligned = 0
+        target = standby_align_target(mode)
+        if target and store is not None:
+            try:
+                import asyncio as _aio
+                aligned = await _aio.to_thread(
+                    align_existing_conversations, store, target)
+            except Exception:
+                logger.debug("存量会话对齐失败（忽略）", exc_info=True)
+        result["aligned_conversations"] = aligned
+        # ④ 热接线运行中的 worker（真发当场生效；旧进程无闭包=如实回报）
+        result["rewire"] = _try_rewire(state)
         cal = delivery_calibration(config, modes)
         chk = check_toggle(config, modes, "l2_autosend_deliver", "enabled", True)
-        return {
+        out = {
             "ok": True, "requested": mode, "mode": infer_standby_mode(config),
             "label": STANDBY_LABELS.get(mode, mode),
+            "split": _attach_gate_meta(split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"]),
+                cm, config),
             "watching": {
                 "allowed": bool(chk.get("allowed")), "warn": bool(chk.get("warn")),
                 "reason": chk.get("reason") or "",
                 "auto_ai": cal["automation_modes"]["auto_ai"],
+                "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
+                **watching_send_gate_fields(overlay),
             },
+            **result,
+        }
+        if mode == "watching" and send_gate_operator_off(overlay):
+            out["send_gate_skipped"] = "operator_off"
+        return out
+
+    @app.post("/api/companion/deliver-gate/resume")
+    async def api_companion_deliver_gate_resume(request: Request, _=Depends(api_auth)):
+        """#142 一键恢复真发：从会话/全局横幅直达「把总闸打开」（主管专属）。
+
+        与拆开控制「真发总闸=开」同一条能力意图链（check_toggle 护栏 + 审计 +
+        留痕 + 热接线全部照旧）——差异只有两点：① worker 若也关着（enabled=false
+        部署被顺手关过）一并打开，横幅承诺的是「恢复后即真发」，只开 deliver
+        不开 worker 是半截恢复；② source 记 ``inbox_banner:resume``，留痕可查
+        「谁从横幅点的恢复」。
+        """
+        from src.web.routes.unified_inbox_auth import _require_supervisor
+        from src.companion.capability_presets import (
+            CAP_BY_KEY, _intentions_for, _order,
+        )
+        from src.companion.standby_mode import split_state
+
+        _require_supervisor(request)
+        state = request.app.state
+        cm = getattr(state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if cm is None or not isinstance(config, dict) or not hasattr(cm, "set_overlay_flag"):
+            return {"ok": False, "available": False, "message": "config 未就绪"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        actor = _actor_from(request, body)
+
+        modes = None
+        store = getattr(state, "inbox_store", None)
+        if store is not None:
+            try:
+                modes = store.all_automation_modes()
+            except Exception:
+                logger.debug("all_automation_modes 失败", exc_info=True)
+
+        l2 = ((config.get("inbox") or {}).get("l2_autosend") or {})
+        plan: list = []
+        for cap_key, flag_on in (("l2_autosend_worker", bool(l2.get("enabled"))),
+                                 ("l2_autosend_deliver", bool(l2.get("deliver")))):
+            if flag_on:
+                continue  # 本就开着的不动（幂等：重复点恢复零副作用）
+            cap = CAP_BY_KEY.get(cap_key)
+            if cap is not None:
+                plan.extend(_intentions_for(cap, "on"))
+        if not plan:
+            return {"ok": True, "already_on": True,
+                    "split": _attach_gate_meta(split_state(config), cm, config)}
+        result = _apply_plan(cm, config, modes, _order(plan),
+                             actor=actor, reason="inbox_banner:resume")
+        result["rewire"] = _try_rewire(state)
+        blocked = result.get("blocked") or []
+        return {
+            "ok": not blocked,
+            "message": (blocked[0].get("reason") if blocked else ""),
+            "split": _attach_gate_meta(split_state(config), cm, config),
             **result,
         }
 

@@ -16,6 +16,15 @@ from urllib.parse import unquote, urlparse
 
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _AUDIO_EXT = {".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm", ".amr", ".aac", ".mp4"}
+# P2（2026-08-18）视频翻译。刻意不把 .mp4/.webm 挪进来：扩展名推断层它们历史上归
+# voice（语音备忘常用容器），挪动会改变存量消息的归类；真视频消息平台侧都带显式
+# media_type=video，走下面的显式分支，不吃扩展名歧义。
+_VIDEO_EXT = {".mov", ".mkv", ".avi", ".m4v", ".mpg", ".mpeg", ".3gp", ".ts", ".flv", ".wmv"}
+# P0-D（2026-08-19）会话内文档一键译：只认 document_file_translate 真支持的格式
+# （txt/csv 等留给「文档翻译」面板粘贴路径）。刻意按**扩展名**归类而不看
+# media_type=document——TG 把「以文件形式发送的图片/音频」也标 document，那些应
+# 继续按扩展名归 image/voice 走 OCR/ASR（本函数的既有落序恰好保证这一点）。
+_DOC_EXT = {".pdf", ".docx", ".xlsx", ".pptx", ".srt", ".vtt"}
 
 
 def _is_remote(ref: str) -> bool:
@@ -69,7 +78,7 @@ def resolve_media_path(
 
 
 def media_kind(message: Dict[str, Any]) -> str:
-    """归一媒体大类：image | voice | other | ''（按 media_type 或 ref 扩展名推断）。"""
+    """归一媒体大类：image | voice | video | document | other | ''（按 media_type 或 ref 扩展名推断）。"""
     if not isinstance(message, dict):
         return ""
     mt = str(message.get("media_type") or "").strip().lower()
@@ -77,12 +86,18 @@ def media_kind(message: Dict[str, Any]) -> str:
         return "image"
     if mt in ("voice", "audio"):
         return "voice"
+    if mt in ("video", "video_note"):
+        return "video"
     ref = str(message.get("media_ref") or "").strip().lower()
     ext = os.path.splitext(urlparse(ref).path or ref)[1]
     if ext in _IMAGE_EXT:
         return "image"
     if ext in _AUDIO_EXT:
         return "voice"
+    if ext in _VIDEO_EXT:
+        return "video"
+    if ext in _DOC_EXT:
+        return "document"
     return "other" if (mt or ref) else ""
 
 
@@ -99,7 +114,7 @@ def resolve_for_translate(
     if not ref:
         return None, "", "no_ref"
     kind = media_kind(message)
-    if kind not in ("image", "voice"):
+    if kind not in ("image", "voice", "video", "document"):
         return None, kind, "unsupported_kind"
     if _is_remote(ref):
         return None, kind, "remote_unsupported"

@@ -14,32 +14,71 @@
   const Base = root.CopilotShared && root.CopilotShared.CpPanelBase;
   if (!Base) { console.error("cp-draft: CpPanelBase 未加载"); return; }
 
-  // 语种与后台翻译栏保持同一套（顺序/数量一致）；标签经 i18n 词典按 UI 语言显示
-  const LANGS = [
+  /* Q-21 A（#290，2026-09-12）：回复语言下拉只读语言目录单点 GET /api/lang-catalog
+     （src/i18n/lang_catalog：34 码含粤语 yue / 繁体 zh-tw，显示名按 UI 语言，能力位 draft）。
+     下面这份 10 语短表**只是端点不可达时的兜底**——三单复验「下拉没有粤语」的根因就是
+     四处各写一份短表。条目形状 [code, i18nKey, name]：name 有值（来自目录）优先，否则走 t(key)。
+     首项 "" = 跟随人设/账户（cp.lang.follow）恒在。 */
+  const LANGS_FALLBACK = [
     ["", "cp.lang.follow"], ["zh", "cp.lang.zh"], ["en", "cp.lang.en"], ["th", "cp.lang.th"],
     ["vi", "cp.lang.vi"], ["id", "cp.lang.id"], ["ja", "cp.lang.ja"],
     ["ko", "cp.lang.ko"], ["ru", "cp.lang.ru"], ["es", "cp.lang.es"], ["pt", "cp.lang.pt"],
   ];
-  const TIER = { chat_binding: "cp.draft.tier_chat_binding", account_profile: "cp.draft.tier_account_profile", domain: "cp.draft.tier_domain", default: "cp.draft.tier_default" };
+  let LANGS = LANGS_FALLBACK.slice();
+  let _catalogLoaded = "";   // 已加载的 ui_lang（切 UI 语言重新拉一次）
+  let _catalogPromise = null;
+  async function _loadLangCatalog(client, uiLang) {
+    if (_catalogLoaded === uiLang) return LANGS;
+    if (_catalogPromise) return _catalogPromise;
+    _catalogPromise = (async () => {
+      try {
+        let d = null;
+        if (client && typeof client.langCatalog === "function") d = await client.langCatalog({ ui_lang: uiLang });
+        if (!(d && d.ok && Array.isArray(d.langs) && d.langs.length)) {
+          const r = await fetch("/api/lang-catalog?ui_lang=" + encodeURIComponent(uiLang || ""), { credentials: "same-origin" });
+          d = r.ok ? await r.json() : null;
+        }
+        if (d && d.ok && Array.isArray(d.langs) && d.langs.length) {
+          const rows = d.langs.filter((l) => l && l.code && !(l.caps && l.caps.draft === false))
+            .map((l) => [String(l.code), "", String(l.name || l.code) + ((l.endonym && l.endonym !== l.name) ? " · " + l.endonym : "")]);
+          LANGS = [["", "cp.lang.follow"]].concat(rows);
+          _catalogLoaded = uiLang;
+        }
+      } catch (_e) { /* 兜底短表 */ }
+      _catalogPromise = null;
+      return LANGS;
+    })();
+    return _catalogPromise;
+  }
+  const TIER = { conv_override: "cp.draft.tier_conv_override", chat_binding: "cp.draft.tier_chat_binding", account_profile: "cp.draft.tier_account_profile", domain: "cp.draft.tier_domain", default: "cp.draft.tier_default" };
 
   class CpDraft extends Base {
     constructor() {
       super();
       this._genToken = 0;
       this._pickSeq = 0;
+      /* P1-198：生成模式——reply=承接客户最后一条(旧行为)；opener=主动开启新话题
+         （无入站消息也可生成，走 /api/desktop/smart-reply {mode:"opener"} 开场产线） */
+      this._mode = "reply";
+      /* P22：坐席显式指令（目标今日拍 / 画像缺口追问）。进 smart-reply.instruction，
+         不写 composer——防误发意图原文。{text, label?, pushLevel?, goalId?} */
+      this._directive = null;
       this.shadowRoot.addEventListener("change", (e) => {
         const s = e.target.closest('select[data-role="lang"]');
         if (s) { this._saveLang(s.value); this.emit("cp-lang-changed", { lang: s.value }); }
         const c = e.target.closest('select[data-role="contrast"]');
         if (c) this._saveContrast(c.value);
         const p = e.target.closest('select[data-role="persona"]');
-        if (p) this._updatePinState();
+        if (p) { this._pinState = null; this._updatePinState(); }
       });
     }
     emptyText() { return this.t("cp.draft.empty"); }
     styles() {
       return `
       .ctl { display:flex; flex-direction:column; gap:var(--cp-gap-sm,6px); align-items:stretch; }
+      .mrow { display:flex; gap:4px; }
+      button.mode { flex:1; padding:4px 6px; font-size:var(--cp-fs-tiny,11px); opacity:.78; }
+      button.mode.on { background:var(--cp-accent,#4f46e5); color:#fff; border-color:transparent; opacity:1; font-weight:600; }
       select { font:inherit; font-size:var(--cp-fs-sm,12px); padding:5px 8px; width:100%;
                border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px);
                background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); }
@@ -54,6 +93,13 @@
       .bdg { font-size:var(--cp-fs-tiny,11px); padding:1px 7px; border-radius:99px;
              background:var(--cp-accent-weak,rgba(79,70,229,.1)); color:var(--cp-accent,#4f46e5); }
       .bdg.intent { background:var(--cp-surface,#eef2ff); color:var(--cp-text-dim,#64748b); }
+      .bdg.kb { background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); border:1px solid var(--cp-border,#e2e8f0); cursor:help; }
+      .bdg.goal { cursor:help; }
+      .bdg.goal.on { background:rgba(15,157,117,.14); color:var(--cp-ok,#0f9d75); }
+      .bdg.goal.off { background:rgba(217,119,6,.14); color:var(--cp-warn,#92400e); }
+      /* observe 档＝刻意配置（只跟踪不注入），中性灰——琥珀会被读成「有问题」
+         （P2 2026-08-13，坐席实录「观察档 未注入」被当故障上报的纠偏） */
+      .bdg.goal.observe { background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); border:1px solid var(--cp-border,#e2e8f0); }
       .reply { font-size:var(--cp-fs,13px); color:var(--cp-text,#1e293b); line-height:1.5; white-space:pre-wrap; }
       .tr { margin-top:5px; padding-top:5px; border-top:1px dashed var(--cp-border,#e2e8f0);
             font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#475569); white-space:pre-wrap; }
@@ -73,6 +119,17 @@
       button.pin { flex:0 0 auto; padding:5px 8px; }
       button.pin.on { background:var(--cp-accent,#4f46e5); color:#fff; border-color:transparent; }
       .psrc { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); margin:-2px 0 6px; }
+      .dirchip { display:flex; align-items:flex-start; gap:6px; margin:0 0 6px;
+                 padding:6px 8px; border-radius:var(--cp-radius-sm,6px);
+                 background:rgba(79,70,229,.08); border:1px solid rgba(79,70,229,.22);
+                 font-size:var(--cp-fs-tiny,11px); color:var(--cp-accent,#4f46e5); line-height:1.4; }
+      .dirchip .dirbody { flex:1; min-width:0; }
+      .dirchip .dirlab { font-weight:600; margin-right:4px; }
+      .dirchip .dirtxt { color:var(--cp-text,#1e293b); display:block; margin-top:2px;
+                         white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                         max-width:100%; }
+      .dirchip button.dirx { flex:0 0 auto; padding:0 6px; font-size:14px; line-height:1.2;
+                             background:transparent; border:0; color:var(--cp-text-dim,#64748b); cursor:pointer; }
       .lblock { border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px); padding:6px 8px; margin-top:6px; }
       .lblock.active { border-color:var(--cp-accent,#4f46e5); box-shadow:0 0 0 1px var(--cp-accent,#4f46e5) inset; }
       .lblock .lhead { display:flex; align-items:center; gap:6px; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-bottom:4px; }
@@ -88,9 +145,14 @@
         return;
       }
       this._draft = null;
+      // 切会话清指令，避免上一条会话的今日拍串到下一条
+      this._directive = null;
       const lang = this._loadLang();
-      const opts = LANGS.map(([v, k]) =>
-        `<option value="${v}"${v === lang ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
+      // Q-21 A：先拿目录（缓存命中零等待；首拉失败保留兜底短表）
+      try { await _loadLangCatalog(this._client, String((root.CopilotShared && root.CopilotShared.lang) || "")); } catch (_e) {}
+      const _lbl = (e) => (e[2] ? e[2] : this.t(e[1]));
+      const opts = LANGS.map((e) =>
+        `<option value="${e[0]}"${e[0] === lang ? " selected" : ""}>${this.esc(_lbl(e))}</option>`).join("");
       const wantPersona = this.hasAttribute("persona");
       const wantContrast = this.hasAttribute("contrast");
       let personaRow = "";
@@ -98,23 +160,30 @@
         personaRow =
           `<div class="prow"><label>${this.esc(this.t("cp.draft.persona_label"))}</label>` +
           `<select data-role="persona"><option value="">${this.esc(this.t("cp.draft.persona_default"))}</option></select>` +
-          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">📌</button></div>` +
+          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">${this.ic("pin", 12)}</button></div>` +
           `<div class="psrc" data-role="psrc"></div>`;
       }
       let contrastRow = "";
       if (wantContrast) {
         const cl = this._loadContrast();
         const copts = LANGS.filter(([v]) => v !== "")
-          .map(([v, k]) => `<option value="${v}"${v === cl ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
+          .map((e) => `<option value="${e[0]}"${e[0] === cl ? " selected" : ""}>${this.esc(_lbl(e))}</option>`).join("");
         contrastRow = `<select data-role="contrast"><option value="">${this.esc(this.t("cp.draft.no_contrast"))}</option>${copts}</select>`;
       }
+      const modeRow =
+        `<div class="mrow">` +
+        `<button class="mode${this._mode !== "opener" ? " on" : ""}" data-act="mode-reply">${this.esc(this.t("cp.draft.mode_reply"))}</button>` +
+        `<button class="mode${this._mode === "opener" ? " on" : ""}" data-act="mode-opener" title="${this.esc(this.t("cp.draft.mode_opener_t"))}">${this.esc(this.t("cp.draft.mode_opener"))}</button>` +
+        `</div>`;
       this._render(
         personaRow +
-        `<div class="ctl"><select data-role="lang">${opts}</select>` +
+        `<div data-role="dirhost"></div>` +
+        `<div class="ctl">` + modeRow + `<select data-role="lang">${opts}</select>` +
         contrastRow +
         `<button class="gen" data-act="gen">${this.esc(this.t("cp.draft.gen_btn"))}</button></div>` +
         `<div class="slot"></div>`
       );
+      this._paintDirective();
       if (wantPersona) this._loadPersonas();
       // P4-C：无会话级记忆时，回落服务端「默认回复语言」（账号>平台>全局）。不写本地（仅默认，非用户选择）。
       if (!lang) this._applyServerReplyDefault(this._ctx && this._ctx.conversationId);
@@ -140,11 +209,12 @@
     _contrastKey() { return "cp_contrastlang:" + (this._ctx && this._ctx.conversationId || ""); }
     _loadContrast() { try { return localStorage.getItem(this._contrastKey()) || ""; } catch (e) { return ""; } }
     _saveContrast(v) { try { if (v) localStorage.setItem(this._contrastKey(), v); else localStorage.removeItem(this._contrastKey()); } catch (e) {} }
-    _langLabel(code) { const f = LANGS.find(([v]) => v === code); return f ? this.t(f[1]) : code; }
+    _langLabel(code) { const f = LANGS.find(([v]) => v === code); return f ? (f[2] || this.t(f[1])) : code; }
 
     async _loadPersonas() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
       if (!sel || !this._client) return;
+      this._pinState = null;
       let summary = [];
       this._profiles = {};
       try {
@@ -158,6 +228,18 @@
         const ck = (this._ctx && this._ctx.chatKey) || "";
         const bd = (b && b.bindings && ck) ? b.bindings[ck] : null;
         bound = bd ? (bd.id || "") : "";
+      } catch (e) {}
+      /* 会话覆写层优先回显（cp-persona 同源 effective API）：之前只读 legacy 绑定，
+         会话覆写钉过的人设换回会话后下拉框显示成「默认」，坐席误以为掉绑再钉一次。 */
+      try {
+        const cid = String((this._ctx && this._ctx.conversationId) || "");
+        if (cid.split(":").length >= 3 && typeof this._client.personaEffective === "function") {
+          const eff = await this._client.personaEffective({ conversationId: cid });
+          if (eff && eff.ok && eff.conv && eff.conv.id) {
+            bound = eff.conv.id;
+            this._pinState = { scope: "conversation", suppressed: false };
+          }
+        }
       } catch (e) {}
       let h = `<option value="">${this.esc(this.t("cp.draft.persona_default"))}</option>`;
       summary.forEach((p) => {
@@ -174,32 +256,73 @@
       const pin = this.shadowRoot.querySelector("button.pin");
       const src = this.shadowRoot.querySelector('[data-role="psrc"]');
       if (pin && sel) pin.classList.toggle("on", !!sel.value);
-      if (src && sel) src.textContent = sel.value ? this.t("cp.draft.pinned") : this.t("cp.draft.unpinned");
+      if (!src || !sel) return;
+      if (!sel.value) { src.textContent = this.t("cp.draft.unpinned"); return; }
+      const st = this._pinState || {};
+      if (st.suppressed) src.textContent = this.t("cp.draft.pin_suppressed");
+      else if (st.scope === "conversation") src.textContent = this.t("cp.draft.pinned_conv");
+      else src.textContent = this.t("cp.draft.pinned");
     }
 
     async _pinPersona() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
       const pid = sel ? sel.value : "";
-      const chatKey = (this._ctx && this._ctx.chatKey) || "";
-      if (!chatKey || !this._client) return;
-      let ok = false;
-      try {
-        if (pid) {
-          const persona = (this._profiles || {})[pid];
-          if (!persona) return;
-          const r = await this._client.bindPersona({ chatKey, persona });
-          ok = !!(r && r.ok);
-        } else {
-          const r = await this._client.unbindPersona({ chatKey });
-          ok = !!(r && r.ok);
-        }
-      } catch (e) { ok = false; }
+      const ctx = this._ctx || {};
+      const chatKey = ctx.chatKey || "";
+      const cid = String(ctx.conversationId || "");
+      if (!this._client) return;
+      const persona = pid ? (this._profiles || {})[pid] : null;
+      if (pid && !persona) return;
+      /* 会话覆写优先（出站链 resolve_effective_persona 的最高层，压得住账号默认人设）；
+         开关关（服务端 400）/ 壳未暴露 IPC → 回落 legacy 旧语义。legacy 绑定在
+         「账号配了默认人设」的部署里必被压制（conv_override > account_profile > legacy），
+         正是「钉了林若曦、出站还是林小雨」的根因——所以能走覆写就绝不写 legacy。 */
+      const canConv = cid.split(":").length >= 3 &&
+        typeof this._client.bindConvPersona === "function";
+      if (!canConv && !chatKey) return;
+      let ok = false, scope = "";
+      if (canConv) {
+        try {
+          const r = pid
+            ? await this._client.bindConvPersona({ conversationId: cid, profileId: pid })
+            : await this._client.unbindConvPersona({ conversationId: cid });
+          if (r && r.ok) { ok = true; scope = "conversation"; }
+        } catch (e) { /* 覆写不可用 → 下面回落 legacy */ }
+      }
+      if (!ok && chatKey) {
+        try {
+          const r = pid
+            ? await this._client.bindPersona({ chatKey, persona })
+            : await this._client.unbindPersona({ chatKey });
+          if (r && r.ok) { ok = true; scope = "legacy"; }
+        } catch (e) { ok = false; }
+      }
+      /* legacy 档钉完读一次生效真相：被更高层压制就如实警示，别再宣称「全端生效」 */
+      let suppressed = false;
+      if (ok && scope === "legacy" && pid && cid.split(":").length >= 3 &&
+          typeof this._client.personaEffective === "function") {
+        try {
+          const eff = await this._client.personaEffective({ conversationId: cid });
+          const effId = eff && eff.ok && eff.effective && eff.effective.id;
+          suppressed = !!(effId && effId !== pid);
+        } catch (e) {}
+      }
+      this._pinState = ok ? { scope, suppressed } : null;
       this._updatePinState();
-      this.emit("cp-persona-pinned", { personaId: pid, chatKey, ok });
+      this.emit("cp-persona-pinned", {
+        personaId: pid,
+        personaName: persona ? (persona.name || pid) : "",
+        chatKey, conversationId: cid, scope, suppressed, ok,
+      });
     }
 
     onAction(act, el) {
       if (act === "gen") { this._generate(); return; }
+      if (act === "dir-clear") { this.clearDirective(); return; }
+      if (act === "mode-reply" || act === "mode-opener") {
+        this._setMode(act === "mode-opener" ? "opener" : "reply");
+        return;
+      }
       if (act === "pin") { this._pinPersona(); return; }
       if (act === "fill-pick") {
         const t = this._pickedText();
@@ -337,15 +460,31 @@
         .map((m) => ({ direction: m.direction, text: m.text }))
         .filter((m) => m.text);
       if (token !== this._genToken) return;
-      if (!messages.length) {
+      const opener = this._mode === "opener";
+      // P1-198：开新话题模式不依赖入站消息（没人说话也能主动开场）；续聊模式保持旧检查
+      if (!messages.length && !opener) {
         if (slot) slot.innerHTML = `<div class="err">${this.esc(this.t("cp.draft.no_context"))}</div>`;
         return;
       }
 
       const personaSel = this.shadowRoot.querySelector('select[data-role="persona"]');
       const personaId = personaSel ? personaSel.value : "";
-      const payload = { messages, platform, chat_key: chatKey, target_lang: lang };
+      // conversation_id 必带：服务端由它反解 account → 会话覆写/账号人设才解析得准
+      // （只给 platform+chat_key 时多账号下会落到 config 默认人设 → 口径与出站链分裂）。
+      const payload = { messages, platform, chat_key: chatKey, target_lang: lang, conversation_id: cid };
+      if (opener) payload.mode = "opener";
+      // P2-198 直出模式：带上坐席 UI 语言——正文按客户语言直出时，服务端附一份
+      // 该语言的对照译文（gloss，只读），中文坐席不必再切「中文」生成 + 发送再翻。
+      payload.gloss_lang = (root.CopilotShared && root.CopilotShared.lang) || "zh";
       if (personaId) payload.persona_id = personaId;
+      // P22：坐席指令进 prompt【坐席指令】——绝不写进 messages / composer
+      const dirText = this._directive && String(this._directive.text || "").trim();
+      if (dirText) {
+        payload.instruction = dirText.slice(0, 400);
+        // P23：目标/来源随行（服务端落 drive_draft 耐久事件 + 抽检样本归属）
+        if (this._directive.goalId) payload.goal_id = this._directive.goalId;
+        if (this._directive.source) payload.instruction_source = this._directive.source;
+      }
       let r;
       try {
         r = await this._client.smartReply(payload);
@@ -363,6 +502,101 @@
       this._paintDraft(r);
     }
 
+    /* P22：宿主（目标卡「采纳并拟稿」）注入坐席指令。
+       opts: {text, summary?, label?, pushLevel?, goalId?, source?, autoGen?}
+       text=送进 smart-reply.instruction 的完整指令；summary=chip 短展示（默认取首行）。
+       autoGen 默认 true。
+       P28：opener 产线已吃 instruction + 注入目标（P25），**不再**强制切回 reply——
+       否则「开新话题」态点采纳会丢掉 opener 语义（坐席实录：目标设了开场仍跑题）。 */
+    setDirective(opts) {
+      const o = opts || {};
+      const text = String(o.text || o.intent || "").trim().slice(0, 400);
+      if (!text) return;
+      const summary = String(o.summary || o.intent || "").trim()
+        || text.split(/\n/)[0].slice(0, 80);
+      this._directive = {
+        text,
+        summary,
+        label: String(o.label || "").trim(),
+        pushLevel: String(o.pushLevel || "").trim(),
+        goalId: String(o.goalId || "").trim(),
+        source: String(o.source || "").trim(),
+      };
+      this._paintDirective();
+      if (o.autoGen !== false) this._generate();
+    }
+    clearDirective() {
+      this._directive = null;
+      this._paintDirective();
+    }
+    _paintDirective() {
+      const host = this.shadowRoot && this.shadowRoot.querySelector('[data-role="dirhost"]');
+      if (!host) return;
+      const d = this._directive;
+      if (!d || !d.text) { host.innerHTML = ""; return; }
+      const lab = d.label || this.t("cp.draft.directive_label");
+      const tipParts = [this.t("cp.draft.directive_tip")];
+      if (d.pushLevel === "none") tipParts.push(this.t("cp.draft.directive_companion_tip"));
+      if (d.text) tipParts.push(d.text);
+      const tip = tipParts.filter(Boolean).join("\n");
+      const shown = d.summary || d.text.split(/\n/)[0];
+      host.innerHTML =
+        `<div class="dirchip" title="${this.esc(tip)}">` +
+        `<div class="dirbody"><span class="dirlab">${this.esc(lab)}</span>` +
+        (d.pushLevel === "none"
+          ? `<span class="dirlab" style="font-weight:400;opacity:.85">${this.esc(this.t("cp.draft.directive_companion_tip"))}</span>`
+          : "") +
+        `<span class="dirtxt">${this.esc(shown)}</span></div>` +
+        `<button type="button" class="dirx" data-act="dir-clear" aria-label="${this.esc(this.t("cp.draft.directive_clear"))}">\u00d7</button></div>`;
+    }
+
+    /* 宿主联动（cp-persona-changed 后调用）：人设换绑使已展示的草稿口吻过期 ——
+       仅当面板里已有草稿时才重生成（闲置面板不烧 LLM；下次手动生成天然用新人设）。 */
+    regenerate() {
+      if (this._draft) this._generate();
+    }
+
+    /* P1-198：切换生成模式（只改按钮态，不清已生成草稿、不烧 LLM）。 */
+    _setMode(m) {
+      this._mode = m === "opener" ? "opener" : "reply";
+      this.shadowRoot.querySelectorAll("button.mode").forEach((b) => {
+        const isOpener = b.getAttribute("data-act") === "mode-opener";
+        b.classList.toggle("on", isOpener === (this._mode === "opener"));
+      });
+    }
+
+    /* P28：goal_applied 徽章——「设了目标为什么没切入」从黑箱变可读。
+       成功=绿；有 goal_id / 驱动指令却跳过=琥珀（带 reason）；无目标静默不刷。 */
+    _goalBadgeHtml(r) {
+      const ga = r && r.goal_applied;
+      if (!ga || typeof ga !== "object") return "";
+      const esc = (s) => this.esc(s);
+      if (ga.injected) {
+        const pl = String(ga.push_level || "").trim();
+        const tip = [ga.title, ga.intent, ga.profile_gap].filter(Boolean).join("\n");
+        return `<span class="bdg goal on" title="${esc(tip)}">${this.ic("target", 11)} ${esc(this.t("cp.draft.goal_on"))}` +
+          (pl ? ` · ${esc(pl)}` : "") + `</span>`;
+      }
+      const reason = String(ga.reason || "").trim();
+      if (!reason || reason === "no_goal" || reason === "unknown") return "";
+      if (!ga.goal_id && !(this._directive && this._directive.goalId)) return "";
+      const key = "cp.draft.goal_" + reason;
+      let lab = this.t(key);
+      if (!lab || lab === key || String(lab).indexOf("cp.draft.") === 0) {
+        lab = this.t("cp.draft.goal_skipped");
+      }
+      /* observe 档＝刻意配置（只跟踪不注入）：中性徽章 + 人话 tooltip 讲清
+         「为什么没注入 + 想注入去哪改」——琥珀+黑话曾被坐席当故障上报
+         （2026-08-12 实录「观察档 未注入」工单）。其余跳过原因维持警示色。 */
+      if (reason === "observe") {
+        const otip = [ga.title, this.t("cp.draft.goal_observe_t")]
+          .filter(Boolean).join("\n");
+        return `<span class="bdg goal observe" title="${esc(otip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;
+      }
+      const tip = [ga.title, reason, ga.hold_reason].filter(Boolean).join(" · ");
+      return `<span class="bdg goal off" title="${esc(tip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;
+    }
+
     _paintDraft(r) {
       const esc = (s) => this.esc(s);
       const slot = this._slot();
@@ -370,8 +604,16 @@
       const tierKey = TIER[r.persona_tier];
       const tierLbl = tierKey ? this.t(tierKey) : (r.persona_tier || "");
       const badges =
-        (r.persona ? `<span class="bdg">🎭 ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
-        (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "");
+        (r.persona ? `<span class="bdg">${this.ic("mask", 11)} ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
+        (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "") +
+        this._goalBadgeHtml(r);
+      // P2 证据链：草稿引用的 KB 条目（display-only chips，悬停看片段——引用注入不再黑盒）
+      const kbRefs = Array.isArray(r.kb_refs) ? r.kb_refs.slice(0, 3) : [];
+      const kbChips = kbRefs.length
+        ? `<div class="badges">` + kbRefs.map((k) =>
+            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">${this.ic("book", 11)} ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
+          ).join("") + `</div>`
+        : "";
       // —— 对比语言路径(桌面：reply/contrast 双块可编辑 + send-pick) ——
       const wantContrast = this.hasAttribute("contrast");
       const contrastSel = this.shadowRoot.querySelector('select[data-role="contrast"]');
@@ -379,18 +621,24 @@
       const replyLang = this._draftLang || "zh";
       // 指定回复语言时后端已用该语言生成(translated≈reply)，取可读文本
       const replyText = (this._reqLang && r.translated) ? r.translated : r.reply;
+      // P2-198 对照译文（只读）：正文按客户语言直出时给坐席看的母语对照。
+      // 刻意**没有**「填入」按钮——把对照填进输入框发出去=把中文发给外语客户
+      // （正是 P0 修掉的泄漏路径），对照只服务于「读得懂」。
+      const gloss = r.gloss
+        ? `<div class="tr gloss"><div class="tl">${esc(this.t("cp.draft.gloss"))}</div>${esc(r.gloss)}</div>` : "";
       if (wantContrast && contrastLang && contrastLang !== replyLang) {
         this._pickSeq += 1;
         const nm = "cppick" + this._pickSeq;
         slot.innerHTML =
           `<div class="draft">` +
-          (badges ? `<div class="badges">${badges}</div>` : "") +
+          (badges ? `<div class="badges">${badges}</div>` : "") + kbChips +
           `<div class="lblock active" data-block="reply">` +
             `<div class="lhead"><input type="radio" name="${nm}" data-pick="reply" checked><span>${esc(this._langLabel(replyLang))}</span></div>` +
             `<textarea data-role="reply-ta" rows="4">${esc(replyText)}</textarea></div>` +
           `<div class="lblock" data-block="contrast">` +
             `<div class="lhead"><input type="radio" name="${nm}" data-pick="contrast"><span>${esc(this._langLabel(contrastLang))}</span></div>` +
             `<textarea data-role="contrast-ta" rows="4">${esc(this.t("cp.draft.translating"))}</textarea></div>` +
+          gloss +
           `<div class="acts">` +
             `<button class="primary" data-act="fill-pick">${esc(this.t("cp.draft.fill"))}</button>` +
             `<button class="send" data-act="send-pick">${esc(this.t("cp.draft.fill_send"))}</button>` +
@@ -407,13 +655,13 @@
       const sendWhich = r.translated ? "translated" : "reply";
       slot.innerHTML =
         `<div class="draft">` +
-        (badges ? `<div class="badges">${badges}</div>` : "") +
+        (badges ? `<div class="badges">${badges}</div>` : "") + kbChips +
         `<div class="reply">${esc(r.reply)}</div>` +
         `<div class="acts">` +
         `<button class="primary" data-act="fill" data-which="reply">${esc(this.t("cp.draft.fill"))}</button>` +
         `<button class="send" data-act="send" data-which="${sendWhich}">${esc(this.t("cp.draft.fill_send"))}</button>` +
         `</div>` +
-        translated +
+        translated + gloss +
         `<div class="guardbox"></div>` +
         `</div>`;
       this._preflightGuardForPill(r);

@@ -2,9 +2,10 @@
 # 网站开场页动效 CI 质量门禁（Intro QA）
 #
 # 用途：对首页全屏开场页（components/IntroCover.tsx）的两套动效做量化验收，
-# 作为合入门禁——任一判定 FAIL 即 step 非零退出、workflow 标红：
+# 外加试用领取闭环的 API 端到端验收——任一判定 FAIL 即 step 非零退出、workflow 标红：
 #   - LOGO 粒子动效：scripts/qa-intro-motion.mjs（10 项判定）
 #   - Siri 流光按钮：scripts/qa-intro-button.mjs（6 项检查）
+#   - 试用领取闭环：scripts/qa-trial-flow.mjs（26 项，含去重/幂等/鉴权/防枚举）
 #
 # 说明：QA 脚本对无 GPU 的 headless Runner 已做解析式判定兼容——速度/时长
 # 判定基于引擎上报的闭式运动学参数（v0/ve/planMs）计算，帧率无关；
@@ -58,6 +59,12 @@ jobs:
         run: npm run build
 
       - name: 后台启动服务（端口 3470）
+        # 试用闭环验收要写台账并调后台口：数据目录指到临时区（不落 runner home），
+        # 两把 key 用固定测试值（本 job 是隔离容器，不涉及任何真实凭据）。
+        env:
+          LEADS_DIR: /tmp/qa-trial-data
+          ADMIN_KEY: ci-admin-key
+          CONSOLE_KEY: ci-console-key
         run: npx next start -p 3470 &
 
       - name: 等待端口就绪
@@ -77,6 +84,22 @@ jobs:
 
       - name: 开场页动效验收
         run: npm run qa:intro
+
+      # 试用领取闭环（P2）：claim 去重 → 绑定码 → 厂商机回填 → 客户端取回 → 客服核销。
+      # 全链 26 项判定；任一失败即门禁红。用随机机器指纹，不依赖也不污染真实台账。
+      - name: 试用领取闭环验收
+        env:
+          ADMIN_KEY: ci-admin-key
+          CONSOLE_KEY: ci-console-key
+        # 直呼脚本而不走 npm run：package.json 的 scripts 段是多条工作流共同编辑的
+        # 热点文件，绕开它可以让本门禁的改动自洽（少一处跨文件耦合）。
+        run: node scripts/qa-trial-flow.mjs --url http://localhost:3470
+
+      # 滥用面：IP/指纹双轴限流的实际拦截点、XFF 伪造能否绕过、指纹幂等、蜜罐。
+      # XFF 那条是回归钉——限流键一旦回到「取 XFF 第一段」，客户端就能自称任意 IP，
+      # 登录爆破与领取刷量的 IP 轴一起失效。
+      - name: 试用领取滥用面压测
+        run: node scripts/qa-trial-abuse.mjs --url http://localhost:3470
 
       - name: 失败时上传诊断截图
         if: failure()

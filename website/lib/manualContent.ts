@@ -1,5 +1,6 @@
 /**
- * AvatarHub 产品手册与安装教程内容（单一数据源）。
+ * 幻境 STUDIO 产品手册与安装教程内容（单一数据源）。
+ * 注意：安装包文件名 AvatarHub-Setup-x.x.x.exe 是真实发布物名称，改名需随发布脚本一起改，勿只改文案。
  *
  * - INSTALL_GUIDE：详细安装步骤 + 常见安装问题，下载页教程版块与手册页共用。
  * - MANUAL_SECTIONS：在线手册（/manual）完整章节，支持浏览器打印导出 PDF。
@@ -51,7 +52,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   {
     term: { zh: "首启向导", en: "first-run wizard" },
     def: {
-      zh: "第一次打开 AvatarHub 时的引导流程：自动检测硬件、推荐功能档位、下载所需组件，全程无需命令行。",
+      zh: "第一次打开幻境 STUDIO 时的引导流程：自动检测硬件、推荐功能档位、下载所需组件，全程无需命令行。",
       en: "The guided flow on first launch: detects your hardware, recommends a capability tier and downloads the required components — no command line involved.",
     },
   },
@@ -172,8 +173,8 @@ export const INSTALL_GUIDE: { steps: InstallStep[]; faqs: InstallFaq[] } = {
       title: { zh: "运行安装程序", en: "Run the installer" },
       time: { zh: "约 1 分钟", en: "~1 min" },
       detail: {
-        zh: "双击安装包，一路点 **下一步** 即可。**按用户安装、免管理员权限**，可自选安装目录。安装完成后，桌面与开始菜单会出现 **AvatarHub** 图标。",
-        en: "Double-click the installer and follow the wizard. It installs **per-user with no admin rights** and lets you choose the folder. An **AvatarHub** icon appears on the desktop and Start menu when done.",
+        zh: "双击安装包，一路点 **下一步** 即可。**按用户安装、免管理员权限**，可自选安装目录。安装完成后，桌面与开始菜单会出现 **幻境 STUDIO ** 图标。",
+        en: "Double-click the installer and follow the wizard. It installs **per-user with no admin rights** and lets you choose the folder. A **STUDIO** icon appears on the desktop and Start menu when done.",
       },
       warn: {
         zh: "最常见卡点：[[SmartScreen]] 提示「已保护你的电脑」——这是 Windows 对新发布程序的例行提醒，不是病毒报警。点 **更多信息 → 仍要运行** 即可；不放心可先核对 [[SHA-256]] 再放行。",
@@ -184,8 +185,8 @@ export const INSTALL_GUIDE: { steps: InstallStep[]; faqs: InstallFaq[] } = {
       title: { zh: "首次启动 · 硬件检测", en: "First launch · hardware detection" },
       time: { zh: "约 2 分钟", en: "~2 min" },
       detail: {
-        zh: "双击打开 AvatarHub，[[首启向导]]会自动检测你的显卡，并推荐适合的功能[[档位]]（入门 / 标准 / 旗舰），**不用敲一行命令**。",
-        en: "Open AvatarHub. The [[first-run wizard]] detects your GPU and recommends a [[capability tier]] (Lite / Standard / Flagship) — **zero command line**.",
+        zh: "双击打开幻境 STUDIO ，[[首启向导]]会自动检测你的显卡，并推荐适合的功能[[档位]]（入门 / 标准 / 旗舰），**不用敲一行命令**。",
+        en: "Open STUDIO. The [[first-run wizard]] detects your GPU and recommends a [[capability tier]] (Lite / Standard / Flagship) — **zero command line**.",
       },
       sub: {
         zh: [
@@ -208,16 +209,16 @@ export const INSTALL_GUIDE: { steps: InstallStep[]; faqs: InstallFaq[] } = {
         en: "Confirm the tier and the wizard downloads the required AI components and models — every file [[SHA-256]] verified, all downloads [[resumable download]]. Expect **10–60 GB** depending on tier; keep **80 GB free on an SSD**. Feel free to explore the UI meanwhile.",
       },
       warn: {
-        zh: "下载慢或中断了？直接关掉重开 AvatarHub 即可——[[断点续传]]会从断点继续，**已完成的部分不会重下**。弱网建议换更稳的网络再继续。",
-        en: "Slow or interrupted? Just reopen AvatarHub — [[resumable download]] continues from the breakpoint and **finished parts are never re-downloaded**. On weak networks, switch to a steadier connection.",
+        zh: "下载慢或中断了？直接关掉重开幻境 STUDIO 即可——[[断点续传]]会从断点继续，**已完成的部分不会重下**。弱网建议换更稳的网络再继续。",
+        en: "Slow or interrupted? Just reopen STUDIO — [[resumable download]] continues from the breakpoint and **finished parts are never re-downloaded**. On weak networks, switch to a steadier connection.",
       },
     },
     {
-      title: { zh: "激活或开始试用", en: "Activate or start the trial" },
+      title: { zh: "激活或免费使用", en: "Activate or use the Free plan" },
       time: { zh: "约 1 分钟", en: "~1 min" },
       detail: {
-        zh: "在 **设置 → 授权** 输入订单号即可[[在线激活]]（自动取回已签授权）；没有订单也可以直接开始 **14 天免费试用**，无需登记任何信息。",
-        en: "Go to **Settings → License**, enter your order number for [[online activation]] (the signed license is fetched automatically) — or just start the **14-day free trial**, no sign-up required.",
+        zh: "在 **设置 → 授权** 输入订单号即可[[在线激活]]（自动取回已签授权）；没有订单也可以直接用 **免费版**——换脸免费用（输出带合规水印），无需登记任何信息。",
+        en: "Go to **Settings → License**, enter your order number for [[online activation]] (the signed license is fetched automatically) — or just use the **Free plan**: face swap at no cost (watermarked output), no sign-up required.",
       },
     },
     {
@@ -240,8 +241,8 @@ export const INSTALL_GUIDE: { steps: InstallStep[]; faqs: InstallFaq[] } = {
     {
       q: { zh: "组件下载很慢或中断了怎么办？", en: "Component download is slow or got interrupted?" },
       a: {
-        zh: "下载支持[[断点续传]]：重新打开 AvatarHub 会自动从断点继续，**不会重下已完成的部分**。弱网环境建议换到更稳的网络后继续。",
-        en: "Downloads are [[resumable download]]: reopen AvatarHub and it continues from where it stopped — **finished parts are never re-downloaded**. On a weak network, switch to a steadier connection and resume.",
+        zh: "下载支持[[断点续传]]：重新打开幻境 STUDIO 会自动从断点继续，**不会重下已完成的部分**。弱网环境建议换到更稳的网络后继续。",
+        en: "Downloads are [[resumable download]]: reopen STUDIO and it continues from where it stopped — **finished parts are never re-downloaded**. On a weak network, switch to a steadier connection and resume.",
       },
     },
     {
@@ -319,7 +320,7 @@ const MANUAL_ZH: ManualSectionData[] = [
     blocks: [
       {
         type: "p",
-        text: "AvatarHub 是本地部署的实时数字人引擎：声音克隆、实时换脸、数字人直播、克隆音同传四大能力装在你自己的电脑或服务器上，数据不出机房。核心链路：说话 → 语音识别 → 大模型 → 克隆音合成 → 实时口型 / 换脸 → 直播推流或视频通话。",
+        text: "幻境 STUDIO 是本地部署的实时数字人引擎：声音克隆、实时换脸、数字人直播、克隆音同传四大能力装在你自己的电脑或服务器上，数据不出机房。核心链路：说话 → 语音识别 → 大模型 → 克隆音合成 → 实时口型 / 换脸 → 直播推流或视频通话。",
       },
       {
         type: "bullets",
@@ -374,12 +375,13 @@ const MANUAL_ZH: ManualSectionData[] = [
   },
   {
     id: "activation",
-    title: "激活与试用",
+    title: "激活与免费版",
     blocks: [
       {
         type: "bullets",
         items: [
-          "14 天免费试用：安装后无需任何操作即可开始试用全部已下载功能。",
+          "免费版：安装后无需任何操作即可免费使用换脸（输出带合规水印）。",
+          "付费解锁：入门版起去水印并解锁 AI 作图 / 视频换脸，标准版加直播换脸与变声器，专业版加直播同声传译。",
           "在线激活：购买后在「设置 → 授权」输入订单号，自动取回已签授权，立即生效。",
           "授权与硬件绑定：更换整机请提前联系客服迁移授权。",
         ],
@@ -497,7 +499,7 @@ const MANUAL_EN: ManualSectionData[] = [
     blocks: [
       {
         type: "p",
-        text: "AvatarHub is a locally deployed real-time digital human engine: voice cloning, live face swap, digital-human streaming and cloned-voice interpreting run on your own PC or server — data never leaves your premises. Core pipeline: speech → STT → LLM → cloned-voice TTS → real-time lip sync / face swap → live stream or video call.",
+        text: "STUDIO is a locally deployed real-time digital human engine: voice cloning, live face swap, digital-human streaming and cloned-voice interpreting run on your own PC or server — data never leaves your premises. Core pipeline: speech → STT → LLM → cloned-voice TTS → real-time lip sync / face swap → live stream or video call.",
       },
       {
         type: "bullets",
@@ -552,12 +554,13 @@ const MANUAL_EN: ManualSectionData[] = [
   },
   {
     id: "activation",
-    title: "Activation & trial",
+    title: "Activation & Free plan",
     blocks: [
       {
         type: "bullets",
         items: [
-          "14-day free trial: starts automatically after install — no steps needed.",
+          "Free plan: face swap works right after install at no cost — output carries a compliance watermark.",
+          "Paid tiers: Starter removes the watermark and unlocks AI image gen / video face swap; Standard adds live face swap and the voice changer; Pro adds live interpreting.",
           "Online activation: after purchase, enter your order number in Settings → License; the signed license is fetched and applied instantly.",
           "Licenses are hardware-bound: contact support before moving to a new machine.",
         ],

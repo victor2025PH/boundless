@@ -51,15 +51,22 @@ export function dispatchDragonCollect() {
  * 判断「已充分曝光」自行收场，星珠气泡则排队等回归。
  */
 
-export type AttentionId = "pearl-offer" | "chat-teaser";
+export type AttentionId = "pearl-offer" | "chat-teaser" | "sprite-greet";
 
 const ATTN_HOLD_MS: Record<AttentionId, number> = {
   /* 星珠 15s 无人理会即可让位（收下后组件自会 release） */
   "pearl-offer": 15000,
-  /* 招呼 22s 完整阅读窗口 */
+  /* 右下角闲聊播报 22s 完整阅读窗口 */
   "chat-teaser": 22000,
+  /* 精灵贴身短句：与挥手/邀约动作同步，短持有 */
+  "sprite-greet": 3800,
 };
-const ATTN_PRIO: Record<AttentionId, number> = { "pearl-offer": 2, "chat-teaser": 1 };
+const ATTN_PRIO: Record<AttentionId, number> = {
+  "pearl-offer": 2,
+  "chat-teaser": 1,
+  /* 低于二者：绝不抢星珠/闲聊位；动作气泡宁可不出，也不排队迟到 */
+  "sprite-greet": 0,
+};
 
 type AttnState = {
   current: AttentionId | null;
@@ -109,6 +116,18 @@ export function attnRequest(id: AttentionId) {
   } else {
     attnNotify();
   }
+}
+
+/**
+ * 瞬时气泡专用：台上空闲才占号，永不入队。
+ * 动作（挥手）已在播时，排队迟到的气泡会「话不对景」——软失败比迟到好。
+ */
+export function attnTryRequest(id: AttentionId): boolean {
+  if (attn.current === id) return true;
+  if (attn.current) return false;
+  attn.queue = attn.queue.filter((x) => x !== id);
+  attnGrant(id);
+  return true;
 }
 
 export function attnRelease(id: AttentionId) {

@@ -34,22 +34,46 @@ def _html_lang(html: str) -> str:
     return m.group(1) if m else ""
 
 
+def _delivered_i18n_js(html: str) -> str:
+    """返回该页**实际生效**的词典 JS 源文本。
+
+    ``_i18n_bootstrap.html`` 有两档投递（2026-08-07 P2 传输减重起）：内联整包，或外链
+    ``/i18n/ws-i18n.js?lang=..&v=<指纹>``。本门禁要断言的是「这一页会用上的字典是哪种语言」，
+    所以外链档**复用路由自己的** ``_build_full_bundle``（同一函数同一字典），而不是在测试里
+    另算一套——否则门禁会与线上投递物漂移，绿了也不说明什么。
+    """
+    m = re.search(r'<script src="/i18n/ws-i18n\.js\?lang=([A-Za-z-]+)&v=', html)
+    if not m:
+        return html  # 内联档（旧进程 / 直渲模板）
+    from src.web.routes.i18n_bundle_routes import _build_full_bundle
+
+    body, _fp = _build_full_bundle(m.group(1).lower())
+    return body.decode("utf-8")
+
+
 def _ws_i18n(html: str) -> dict:
-    """从 ``window.WS_I18N = {...};`` 注入处精确抠出整包译表（raw_decode 忽略尾随 ``;``）。"""
-    marker = "window.WS_I18N = "
-    i = html.find(marker)
-    assert i != -1, "WS_I18N 注入缺失"
-    obj, _ = json.JSONDecoder().raw_decode(html[i + len(marker):])
+    """抠出整包译表（raw_decode 忽略尾随 ``;``）。
+
+    ⚠ 必须匹配「``=`` 后紧跟 ``{``」：partial 里还有一行兜底赋值
+    ``window.WS_I18N = window.WS_I18N || {};``（外链包未达时 T() 回落键名用），
+    早期实现按 ``"window.WS_I18N = "`` 首次出现取值，在外链档会抠到那行兜底上。
+    """
+    js = _delivered_i18n_js(html)
+    m = re.search(r"window\.WS_I18N\s*=\s*(?=\{)", js)
+    assert m, "WS_I18N 注入缺失"
+    obj, _ = json.JSONDecoder().raw_decode(js[m.end():])
     return obj
 
 
 def _ws_locale(html: str) -> str:
-    m = re.search(r'window\.WS_LOCALE\s*=\s*"([^"]+)"', html)
+    js = _delivered_i18n_js(html)
+    # 内联档为 `window.WS_LOCALE = window.WS_LOCALE || "zh-CN";`，外链包为 `window.WS_LOCALE="zh-CN";`
+    m = re.search(r'window\.WS_LOCALE\s*=\s*(?:window\.WS_LOCALE\s*\|\|\s*)?"([^"]+)"', js)
     assert m, "WS_LOCALE 注入缺失"
     return m.group(1)
 
 
-@pytest.mark.parametrize("lang,lang_attr,date_locale", [("zh", "zh-CN", "zh-CN"), ("en", "en", "en-US")])
+@pytest.mark.parametrize("lang,lang_attr,date_locale", [("zh", "zh-CN", "zh-CN"), ("en", "en-US", "en-US")])
 def test_workspace_pages_localized_title_lang_and_dict(auth_client, lang, lang_attr, date_locale):
     from src.web.web_i18n import get_translations
 
@@ -93,7 +117,8 @@ def test_lang_switch_changes_same_page(auth_client):
     zr = auth_client.get("/workspace?lang=zh").text
     er = auth_client.get("/workspace?lang=en").text
     assert _title(zr) != _title(er)
-    assert _html_lang(zr) == "zh-CN" and _html_lang(er) == "en"
+    # BCP-47：zh→zh-CN、en→en-US（单一事实源 i18n_packs.UI_LOCALES；扩展语同理）
+    assert _html_lang(zr) == "zh-CN" and _html_lang(er) == "en-US"
     assert _ws_i18n(zr)["inbox.page_title"] == "聊天工作台"
     assert _ws_i18n(er)["inbox.page_title"] == "Chat Workspace"
     assert _ws_locale(zr) == "zh-CN" and _ws_locale(er) == "en-US"
@@ -125,7 +150,11 @@ _JINJA_OPS_PAGES = ["ops/merge_reviews.html", "ops/contacts.html", "ops/mobile_h
 def test_sealed_templates_no_hardcoded_zh_cn_date_locale():
     """③-Q/③-S2 防回潮：所有外壳页 + 外壳本体 + 共享脚本的 JS 不得硬编码 ``'zh-CN'`` 作 toLocale* locale。
 
-    允许：``<html lang>`` / ``WS_LOCALE`` 服务端注入（含 ui_lang）/ ``wsDateLocale`` 回落常量。
+    允许：``<html lang>`` / ``WS_LOCALE`` 服务端注入（``ui_lang`` 条件式，或收口后的
+    ``ui_locale``——BCP-47 单一事实源 ``i18n_packs.UI_LOCALES``，zh→zh-CN / en→en-US /
+    vi→vi-VN…，正是为了消灭各页写死 zh-CN|en-US 二元、扩展语拿错 locale）/
+    ``wsDateLocale`` 回落常量。此处 ``default('zh-CN')`` 是**回落底**不是硬编码：
+    真值由服务端按 ui_lang 注入，模板只在拿不到时兜一个合法值。
     standalone ops 页（不继承外壳、无 wsFmt*）不在本门禁，见 ``DEFERRED_STANDALONE_DATE_PAGES``。
     """
     from scripts.i18n_scan import _TPL_DIR
@@ -135,9 +164,9 @@ def test_sealed_templates_no_hardcoded_zh_cn_date_locale():
         for i, line in enumerate((_TPL_DIR / name).read_text(encoding="utf-8").splitlines(), 1):
             if "'zh-CN'" not in line and '"zh-CN"' not in line:
                 continue
-            if "<html" in line and "ui_lang" in line:
+            if "<html" in line and ("ui_lang" in line or "ui_locale" in line):
                 continue
-            if "WS_LOCALE" in line and "ui_lang" in line:
+            if "WS_LOCALE" in line and ("ui_lang" in line or "ui_locale" in line):
                 continue
             if "wsDateLocale" in line:
                 continue
@@ -149,7 +178,8 @@ def test_jinja_ops_pages_use_shared_bootstrap():
     """③-S9k：ops 运营家族三页升级为 Jinja + 共享 bootstrap 后，日期/文案单一真源防回潮——
     ① 必须 {% include _i18n_bootstrap.html %}（拿 window.T/Tf + wsFmt*）；
     ② 不得再引退役的 /static/ops_locale.js；
-    ③ <html lang> 必须条件化（含 ui_lang），不得硬编码 zh-CN；
+    ③ <html lang> 必须由服务端按 UI 语言驱动（``ui_lang`` 条件式，或收口后的
+       ``ui_locale``＝BCP-47 单一事实源），不得写死；
     ④ 不得内联 new Date().toLocale* / 在 toLocale 上硬编码 zh-CN（应走 wsFmt*）。
     """
     from scripts.i18n_scan import _TPL_DIR
@@ -162,8 +192,10 @@ def test_jinja_ops_pages_use_shared_bootstrap():
         if "ops_locale.js" in text:
             offenders.append(f"{name}: 仍引用退役的 /static/ops_locale.js")
         for i, line in enumerate(text.splitlines(), 1):
-            if "<html" in line and "lang=" in line and "ui_lang" not in line:
-                offenders.append(f"{name}:{i}: <html lang> 未条件化（缺 ui_lang）")
+            if ("<html" in line and "lang=" in line
+                    and "ui_lang" not in line and "ui_locale" not in line):
+                offenders.append(
+                    f"{name}:{i}: <html lang> 未由服务端语言驱动（缺 ui_lang/ui_locale）")
             if "toLocale" in line and ("'zh-CN'" in line or '"zh-CN"' in line):
                 offenders.append(f"{name}:{i}: toLocale 硬编码 zh-CN")
         if re.search(r"new Date\([^\n]*?\)\.toLocale", text):
@@ -232,14 +264,16 @@ def test_i18n_bootstrap_partial_localizes_by_lang():
         out = templates.env.get_template("_i18n_bootstrap.html").render(
             i18n=get_translations(lang), ui_lang=lang,
         )
-        assert f'window.WS_LOCALE = "{locale}"' in out, (lang, "WS_LOCALE")
-        assert f'window.WS_LANG = "{lang}"' in out, (lang, "WS_LANG")
+        # 断言「值随语言」而非某个字面写法：partial 现为 `X = X || "值"` 幂等赋值
+        # （外链词典包先落地时不覆盖它已设的值），写死字面量会把这类无害改写误判成回归。
+        assert _ws_locale(out) == locale, (lang, "WS_LOCALE", out[:400])
+        assert re.search(rf'window\.WS_LANG\s*=\s*(?:window\.WS_LANG\s*\|\|\s*)?"{lang}"', out), (lang, "WS_LANG")
         for fn in ("window.wsFmtDate", "window.wsFmtTime", "window.wsFmtDateTime",
                    "window.wsDateLocale", "window.T ", "window.Tf ", "window.wsApplyI18n"):
             assert fn in out, (lang, fn)
 
 
-@pytest.mark.parametrize("lang,lang_attr,date_locale", [("zh", "zh-CN", "zh-CN"), ("en", "en", "en-US")])
+@pytest.mark.parametrize("lang,lang_attr,date_locale", [("zh", "zh-CN", "zh-CN"), ("en", "en-US", "en-US")])
 def test_admin_shell_localized_lang_and_locale(auth_client, lang, lang_attr, date_locale):
     """管理后台页（``/help`` → base.html）端到端：``<html lang>`` + WS_LOCALE + wsFmt* 助手随
     ``?lang=`` 正确注入（地基真的接到了真路由 / 真中间件上）。
@@ -267,12 +301,35 @@ _LEGACY_DATE_MARKERS = (
 
 
 # ── ③-S3：base.html 共享侧栏导航「中英双语」服务端渲染（原硬编码 span 收口为 key 后真切换）──
-# 选三个仅出现在导航、且简洁/完整模式都在的标签做断言（避开 ai_studio/whatsapp 等仅完整模式项）。
+# 靶点＝仅出现在导航、且**简洁模式确实会渲染**的标签（全角色默认档位是简洁模式，见 web_user_store）。
+# ⚠ 靶点必须同时登记在 _CHROME_NAV_TARGET_IDS 并由下方 self-check 钉住「仍在简洁清单里」：
+#   早期这里写死了「AI 记忆」，而 episodic 后来被移出简洁清单（SIMPLE_MORE 有 ≤6 尺寸棘轮），
+#   于是门禁对着一个根本不渲染的标签报「缺导航标签」——真因是靶点过期，不是 i18n 坏了。
+_CHROME_NAV_TARGET_IDS = ("care", "learner", "crisis_audit")
 _CHROME_NAV_BILINGUAL = [
     ("主动关怀", "Proactive Care"),
-    ("AI 记忆", "AI Memory"),
-    ("危机审计", "Crisis Audit"),
+    ("学习队列", "Learning Queue"),
+    # 2026-09-05 #185：页名人话化「危机审计」→「客户安全预警」（老板决策 D7）
+    ("客户安全预警", "Customer Safety Alerts"),
 ]
+
+
+def test_chrome_nav_bilingual_targets_still_in_simple_nav():
+    """靶点自检：三个靶点仍在简洁清单内，且中英标签与 i18n 现值一致。
+
+    清单/文案任一处调整时在**这里**点名（附下一步），而不是让上面那条门禁抛出
+    看起来像 i18n 回归的「缺导航标签」。"""
+    from src.web.nav_schema import SIMPLE_CORE, SIMPLE_MORE
+    from src.web.web_i18n import get_translations
+
+    simple = set(SIMPLE_CORE) | set(SIMPLE_MORE)
+    zh, en = get_translations("zh"), get_translations("en")
+    for item_id, (zh_label, en_label) in zip(_CHROME_NAV_TARGET_IDS, _CHROME_NAV_BILINGUAL):
+        assert item_id in simple, (
+            f"导航靶点 {item_id!r} 已不在简洁清单（SIMPLE_CORE/SIMPLE_MORE）——"
+            "请把 _CHROME_NAV_TARGET_IDS/_CHROME_NAV_BILINGUAL 换成清单内的项，别删门禁")
+        assert zh.get(item_id) == zh_label, (item_id, "zh 文案已变", zh.get(item_id))
+        assert en.get(item_id) == en_label, (item_id, "en 文案已变", en.get(item_id))
 
 
 @pytest.mark.parametrize("lang", ["zh", "en"])
@@ -285,6 +342,9 @@ def test_admin_chrome_nav_localized(auth_client, lang):
 
     html = auth_client.get(f"/cases?lang={lang}").text
     html = _re.sub(r"<script[\s\S]*?</script>", "", html, flags=_re.I)
+    # HTML 注释同 <script>：不是可见文案。模板里的中文施工注释（如「待跟/SLA/危机/学习队列」）
+    # 会让「en 不得残留中文」这条断言对着注释误报，而注释对用户根本不存在。
+    html = _re.sub(r"<!--[\s\S]*?-->", "", html)
     for zh_label, en_label in _CHROME_NAV_BILINGUAL:
         if lang == "zh":
             assert zh_label in html, f"zh 缺导航标签 {zh_label!r}"
@@ -312,7 +372,7 @@ def test_admin_command_palette_localized(auth_client, lang):
             assert en_label not in html, f"zh 面板残留英文 {en_label!r}（i18n 未生效）"
 
 
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 @pytest.mark.parametrize("path", _SWEPT_ADMIN_PAGES)
 def test_swept_admin_pages_localized_dates(auth_client, path, lang, lang_attr):
     """③-S2：已扫日期的后台页运行期渲染——200 + wsFmt* 助手到位 + 无 legacy 日期写法 + lang 随语言。
@@ -337,7 +397,7 @@ def test_swept_admin_pages_localized_dates(auth_client, path, lang, lang_attr):
 # 真中间件后，注入客户端的 ``window.WS_I18N``（window.T/Tf 的数据源）确为该语言整包，且既含静态层
 # (msg_s*) 又含 JS 层 (msg_js_*) 代表键——坐实「服务端注译表 → 客户端 T() 取该语言」整链路通，
 # 防 JS 层键漏进客户端时 window.T 回退键名（界面显示 'msg_js_123'）。
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_messenger_rpa_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -368,7 +428,7 @@ def test_messenger_rpa_en_js_keys_are_english(auth_client):
 # ── whatsapp_rpa：同 messenger 口径的「真 app 客户端译表随语言、含静态/JS/Tf 三层键」冒烟 ──
 # 静态层 wa_s*（Jinja get）、JS 层 wa_js*（window.T）、Tf 短语 wa_js_p*（window.Tf 占位符插值）
 # 三层代表键都该经真路由 + inject_i18n 注入客户端整包 window.WS_I18N，且随语言取对应译文。
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_whatsapp_rpa_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -397,7 +457,7 @@ def test_whatsapp_rpa_en_js_keys_are_english(auth_client):
 # ── line_rpa：同口径「真 app 客户端译表随语言、含静态/JS/Tf 三层键」冒烟 ──
 # 静态层 ln_s*（Jinja get）、JS 层 ln_js*（window.T）、Tf 短语 ln_js_p*（window.Tf 占位符插值）
 # 三层代表键都该经真路由 /line-rpa + inject_i18n 注入客户端整包 window.WS_I18N，随语言取对应译文。
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_line_rpa_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -424,7 +484,7 @@ def test_line_rpa_en_js_keys_are_english(auth_client):
 
 
 # ── telegram：原生 mtproto 运营台，同口径三层键（静态 tg_s* / JS tg_js* / Tf tg_js_p*）冒烟 ──
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_telegram_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -453,7 +513,7 @@ def test_telegram_en_js_keys_are_english(auth_client):
 # ── dashboard：落地首屏（route "/"），同口径三层键（静态 db_s* / JS db_js* / Tf db_js_p*）冒烟 ──
 # 注：``/`` 在 simple 模式会 303→/cases 丢掉 ?lang=（见 resolve_ui_mode 默认 simple），
 # 故显式带 ``ui_mode=full`` cookie 让根路由真渲染 dashboard.html。
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_dashboard_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -480,7 +540,7 @@ def test_dashboard_en_js_keys_are_english(auth_client):
 
 
 # ── settings：系统设置（route "/settings"，直渲无模式跳转），同口径三层键（set_s* / set_js* / set_js_p*）──
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_settings_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -507,7 +567,7 @@ def test_settings_en_js_keys_are_english(auth_client):
 
 
 # ── knowledge：知识库管理（route "/knowledge"，直渲），同口径三层键（kb_s* / kb_js* / kb_js_p*）──
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_knowledge_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 
@@ -538,7 +598,7 @@ def test_knowledge_en_js_keys_are_english(auth_client):
 # 直出当前语言、无「先中文后 JS 换字」闪烁、免 JS 亦可读；JS 层照旧 window.T/Tf（ap_js*/ap_js_p*）。
 # 故除「客户端整包 WS_I18N 随语言」外，额外坐实「静态英文文案已被服务端直接渲进 HTML」（其余工作台
 # 页此处仍是中文、靠 data-i18n 加载时换）——这是本页机制的关键差异点。
-@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("lang,lang_attr", [("zh", "zh-CN"), ("en", "en-US")])
 def test_agent_perf_localized_dict_injected(auth_client, lang, lang_attr):
     from src.web.web_i18n import get_translations
 

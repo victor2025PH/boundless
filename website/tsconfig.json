@@ -33,7 +33,16 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next-verify/types/**/*.ts"
+    ".next-verify/types/**/*.ts",
+    ".next-tripod/types/**/*.ts",
+    ".next-verify2/types/**/*.ts",
+    ".next-new/types/**/*.ts",
+    ".next-dev-iter/types/**/*.ts",
+    ".next-hand-redesign/types/**/*.ts",
+    ".next-verify3/types/**/*.ts",
+    ".next-geo-check/types/**/*.ts",
+    ".next-p0-verify/types/**/*.ts",
+    ".next-dlcheck/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

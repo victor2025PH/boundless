@@ -18,6 +18,11 @@
 故**无需改 CompanionProactiveLoop**：上层把本计划并进 ritual 计划即可。
 
 设计与 ``plan_daily_rituals`` 同范式：纯函数、零 IO、注入式 opener/时钟、默认关。
+
+**用户时钟 / 地区节日（注入式，默认关）**：不传 ``user_clock_provider`` 与
+``locale_holiday_provider`` 时全按服务器本地钟 + 配置日历判定（＝逐位等价旧行为）；
+传了则每会话各按对方的钟算「到没到问候整点」「今天是几月几号」，节日改问「**该会话所在
+地区**今天过什么节」——泰国用户过宋干节而不是元旦，且对方的 12-25 不是服务器的 12-25。
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from src.companion.user_clock import schedule_clock, user_day_key, user_month_day
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +78,96 @@ def due_anniversary(
     return d if d in ms else None
 
 
-def holiday_for_date(
-    now: float, calendar: Any = None,
+def _holiday_from_calendar(
+    month_day: str, calendar: Any = None,
 ) -> Optional[Tuple[str, str]]:
-    """今天 (月-日) 是否命中节日日历；命中返回 ("MM-DD", 名称)，否则 None。"""
+    """给定 ``"MM-DD"`` 查配置节日日历；命中返回 (月-日, 名称)，否则 None。
+
+    ``holiday_for_date`` 的「日期已算好」版本——用户时钟下的今天不等于服务器的今天，
+    但查表口径必须与旧路径完全一致，故两条路共用本函数（单一事实源）。
+    """
     cal = calendar if isinstance(calendar, dict) else DEFAULT_HOLIDAYS
-    key = time.strftime("%m-%d", time.localtime(now))
+    key = str(month_day or "")
     name = cal.get(key)
     if name:
         return key, str(name)
     return None
+
+
+def holiday_for_date(
+    now: float, calendar: Any = None,
+) -> Optional[Tuple[str, str]]:
+    """今天 (月-日) 是否命中节日日历；命中返回 ("MM-DD", 名称)，否则 None。"""
+    return _holiday_from_calendar(
+        time.strftime("%m-%d", time.localtime(now)), calendar)
+
+
+def _birthday_on_date(
+    birthday: Any, *, year: int, month: int, day: int,
+) -> bool:
+    """给定「今天」的 (年,月,日) 判定是否该庆生。
+
+    与 ``src.utils.birthday.is_birthday_today`` 同语义（含 2/29 生日在平年顺延到 2/28），
+    只是把「今天」从 ``time.localtime(now)``（服务器钟）换成调用方给的日期——这样同一份
+    判定既能用服务器钟也能用用户钟，而无需改动 birthday 模块的既有签名。
+    """
+    if not isinstance(birthday, (tuple, list)) or len(birthday) < 2:
+        return False
+    try:
+        bmo, bda = int(birthday[0]), int(birthday[1])
+    except (TypeError, ValueError):
+        return False
+    if not (1 <= bmo <= 12 and 1 <= bda <= 31):
+        return False
+    if (int(month), int(day)) == (bmo, bda):
+        return True
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    if bmo == 2 and bda == 29 and not leap:
+        return (int(month), int(day)) == (2, 28)
+    return False
+
+
+def _resolve_user_clock(
+    provider: Optional[Callable[[str], Optional[Any]]], cid: str,
+) -> Optional[Any]:
+    """注入式取该会话的用户时钟；无 provider / 解析失败 → None（＝服务器钟旧行为）。"""
+    if provider is None:
+        return None
+    try:
+        return provider(cid)
+    except Exception:
+        logger.debug("[milestone] user_clock_provider 失败 cid=%s", cid, exc_info=True)
+        return None
+
+
+def _resolve_locale_holiday(
+    provider: Optional[Callable[[str], Optional[Tuple[str, str]]]], cid: str,
+) -> Optional[Tuple[str, str]]:
+    """注入式取该会话所在地区今天适合问候的节日 ``(key, 名称)``；无/异常 → None。
+
+    返回 None 表示「该地区今天没有可问候的节日」→ 调用方回落配置日历（绝不因地区
+    引擎缺数据就丢掉原有的公历节日能力）。
+    """
+    if provider is None:
+        return None
+    try:
+        got = provider(cid)
+    except Exception:
+        logger.debug("[milestone] locale_holiday_provider 失败 cid=%s",
+                     cid, exc_info=True)
+        return None
+    # 必须是 (key, 名称) 二元组：字符串同样可索引（``"x"[0]`` 不报错），宽松取值会把
+    # 一个坏返回值变成 key="x" 的假节日 + 一条永久占位的冷却键，故按类型硬校验。
+    if not isinstance(got, (tuple, list)) or len(got) < 2:
+        return None
+    try:
+        key = str(got[0] or "").strip()
+        name = str(got[1] or "").strip()
+        return (key, name) if key and name else None
+    except Exception:
+        logger.debug("[milestone] locale_holiday_provider 返回值非法 cid=%s",
+                     cid, exc_info=True)
+        return None
 
 
 def _detect_event(
@@ -91,11 +178,21 @@ def _detect_event(
     holiday: Optional[Tuple[str, str]],
     year: int,
     birthday: Optional[Tuple[int, int]] = None,
+    today_md: Optional[Tuple[int, int]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """该会话今天应触发的事件（优先级：生日 > 纪念日 > 节日）；无 → None。"""
+    """该会话今天应触发的事件（优先级：生日 > 纪念日 > 节日）；无 → None。
+
+    ``today_md``＝用户钟下今天的 (月, 日)；给了就按它判生日（配合 ``year`` 做闰日顺延），
+    没给仍走 ``is_birthday_today``（服务器钟）＝旧行为。
+    """
     if birthday is not None:
-        from src.utils.birthday import is_birthday_today
-        if is_birthday_today(birthday, now):
+        if today_md is not None:
+            hit = _birthday_on_date(
+                birthday, year=year, month=today_md[0], day=today_md[1])
+        else:
+            from src.utils.birthday import is_birthday_today
+            hit = is_birthday_today(birthday, now)
+        if hit:
             return {
                 "type": "birthday", "mode": MODE_BIRTHDAY,
                 "tag": str(year), "days": 0, "label": "生日",
@@ -128,6 +225,9 @@ def plan_milestone_rituals(
     holiday_calendar: Any = None,
     has_pending_care: Optional[Callable[[str], bool]] = None,
     birthday_provider: Optional[Callable[[str], Optional[Tuple[int, int]]]] = None,
+    user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
+    locale_holiday_provider: Optional[
+        Callable[[str], Optional[Tuple[str, str]]]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本 tick 该给谁发纪念日/节日问候（确定性纯函数）。非问候时点 → 空。
 
@@ -140,17 +240,31 @@ def plan_milestone_rituals(
         greet_hour: 节点问候只在这个整点触发一次（默认 10 点；与晨/晚安窗口错开，避免扎堆）。
         min_intimacy: 低于此亲密度不发（不对刚认识的人庆"认识 100 天"）。
         max_per_tick: 单 tick 上限（按亲密度降序截断）。
+        user_clock_provider: 可选 ``(cid) -> UserClock|None``。给了则 ``greet_hour``
+            整点判定、节日日期、生日日期全按该会话的用户钟算（替代「服务器不到整点就整
+            tick 空」的全局早退）。解析排在 intimacy 等便宜过滤之后；异常按无时钟处理。
+        locale_holiday_provider: 可选 ``(cid) -> (key, 名称)|None``——「该会话所在地区、
+            今天、适合问候的节日」。命中则**优先于**配置日历（返回 None 才回落配置
+            日历）；``ritual_key`` 用节日 key 而非 MM-DD，因为同一天不同地区可能是不同
+            节日（同一张冷却表里两地节日不会互相顶掉）。
+            纪念日的 ``days_known`` 与时区无关（纯时长差），故不随用户钟改动。
 
     Returns:
-        计划列表（同 plan_daily_rituals 形状 + ``slot/ritual_key/event_type/event_label``）。
+        计划列表（同 plan_daily_rituals 形状 + ``slot/ritual_key/event_type/event_label``
+        + 观测字段 ``clock_source/clock_offset/local_hour``）。
         ``slot`` 借用为事件类型，便于上层统一按 ritual_key 记冷却。
     """
     now = now if now is not None else time.time()
     lt = time.localtime(now)
-    if lt.tm_hour != int(greet_hour):
-        return []  # 非节点问候整点
+    # 任一 provider 给了 → 逐会话判定（各地的整点/节日各自成立）；都没给 → 逐位旧行为。
+    per_conv = (user_clock_provider is not None
+                or locale_holiday_provider is not None)
     year = lt.tm_year
-    holiday = holiday_for_date(now, holiday_calendar)
+    holiday: Optional[Tuple[str, str]] = None
+    if not per_conv:
+        if lt.tm_hour != int(greet_hour):
+            return []  # 非节点问候整点
+        holiday = holiday_for_date(now, holiday_calendar)
 
     plans: List[Dict[str, Any]] = []
     for c in conversations or []:
@@ -165,6 +279,37 @@ def plan_milestone_rituals(
             intimacy = 0.0
         if intimacy < float(min_intimacy):
             continue
+        # 用户时钟接管（解析故意排在亲密度过滤之后：被筛掉的会话不付 IO 代价）
+        clock: Optional[Any] = None
+        hour = lt.tm_hour
+        today_md: Optional[Tuple[int, int]] = None
+        if per_conv:
+            clock = _resolve_user_clock(user_clock_provider, cid)
+            hour, _day_key, _offset = schedule_clock(clock, now)
+            if hour != int(greet_hour):
+                continue  # 对方那边还没到（或已过）节点问候整点
+            # 节日/生日/年份按**用户钟下的今天**算——但与 schedule_clock 同一
+            # 信任纪律（2026-08-19 事故同根收口）：只有 replace（显式信号）才
+            # 换日期基准；narrow 裸行为推断错一个时区就把生日/节日提前或推后
+            # 一天，宁按服务器日历。
+            _date_clock = clock if str(
+                getattr(clock, "trust", "") or "") == "replace" else None
+            ukey = user_day_key(_date_clock, now)
+            month_day = user_month_day(_date_clock, now)
+            try:
+                year = int(ukey[:4])
+            except (TypeError, ValueError):
+                year = lt.tm_year
+            if _date_clock is not None:
+                # 无（可信）时钟时刻意不走新路径：仍调 is_birthday_today（服务器钟）＝旧行为
+                try:
+                    today_md = (int(month_day[:2]), int(month_day[3:5]))
+                except (TypeError, ValueError):
+                    today_md = None
+            # 地区节日优先；该地区今天无可问候节日 → 回落配置日历（同一份查表口径）
+            holiday = _resolve_locale_holiday(locale_holiday_provider, cid)
+            if holiday is None:
+                holiday = _holiday_from_calendar(month_day, holiday_calendar)
         # 生日取数（IO，注入式）：仅对通过亲密度门槛的候选查一次，控成本（同 active_hours 范式）。
         bday = None
         if birthday_provider is not None:
@@ -174,7 +319,7 @@ def plan_milestone_rituals(
                 bday = None
         event = _detect_event(
             c, now, anniversary_milestones=anniversary_milestones,
-            holiday=holiday, year=year, birthday=bday)
+            holiday=holiday, year=year, birthday=bday, today_md=today_md)
         if event is None:
             continue
         ritual_key = f"{cid}:ms:{event['type']}:{event['tag']}"
@@ -225,6 +370,10 @@ def plan_milestone_rituals(
             "event_type": event["type"],
             "event_label": event["label"],
             "intimacy": round(intimacy, 1),
+            # 观测/排障：按谁的钟判的整点/日期（server=服务器钟）、时钟偏移、本地小时
+            "clock_source": str(getattr(clock, "source", "") or "server"),
+            "clock_offset": round(float(getattr(clock, "offset_hours", 0.0) or 0.0), 1),
+            "local_hour": hour,
         })
 
     plans.sort(key=lambda p: p["intimacy"], reverse=True)

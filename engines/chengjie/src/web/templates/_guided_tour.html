@@ -1,0 +1,134 @@
+{# ── 新手交互引导（P1，2026-08-07）───────────────────────────────────────────
+   聚光灯 coach-mark：高亮**真实元素** + 气泡说明「这一步做什么、下一步点哪」。
+   自研轻组件（不引外链库，与本仓自托管字体/零外链风格一致）。
+
+   ⚠ 复用载入层的「绝不卡住用户」范式（本仓 2026-08-07 教训）：
+     ① 遮罩层 pointer-events:none —— **任何时候都不拦截点击**，高亮的按钮本人可直接点；
+     ② 目标元素找不到 → 自动跳过该步（不是卡住），连续找不到就整体退出；
+     ③ Esc / 跳过 / 完成 三个出口，退出即落 localStorage 不再自动纠缠。
+
+   调用：window.blTour.start([{sel,title,body,html?}, ...])
+   入口：workspace_dashboard 的首登引导卡（**只在清单非绿时出现** → 配置完整的
+   生产实例根本看不到这个入口，对老坐席零打扰）。 #}
+<div id="blTourHole" aria-hidden="true"></div>
+<div id="blTourTip" role="dialog" aria-live="polite">
+  <div class="blTour-t" id="blTourT"></div>
+  <div class="blTour-b" id="blTourB"></div>
+  <div class="blTour-x" id="blTourX"></div>
+  <div class="blTour-foot">
+    <span class="blTour-n" id="blTourN"></span>
+    <button type="button" class="blTour-skip" id="blTourSkip"></button>
+    <button type="button" class="blTour-prev" id="blTourPrev"></button>
+    <button type="button" class="blTour-next" id="blTourNext"></button>
+  </div>
+</div>
+<style>
+#blTourHole{position:fixed;z-index:99990;border-radius:12px;pointer-events:none;display:none;
+  box-shadow:0 0 0 9999px rgba(9,14,28,.55);transition:all .22s cubic-bezier(.4,0,.2,1)}
+#blTourTip{position:fixed;z-index:99991;display:none;max-width:340px;width:min(340px,calc(100vw - 28px));
+  background:var(--tk-surface,#fff);color:var(--tk-text,#111827);border:1px solid var(--tk-border,rgba(0,0,0,.1));
+  border-radius:14px;padding:15px 16px 12px;box-shadow:0 18px 48px rgba(0,0,0,.28);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+#blTourTip .blTour-t{font-size:14px;font-weight:700;margin-bottom:6px}
+#blTourTip .blTour-b{font-size:12.5px;line-height:1.65;color:var(--tk-text-muted,#5b6b85)}
+#blTourTip .blTour-x{margin-top:9px}
+#blTourTip .blTour-foot{display:flex;align-items:center;gap:8px;margin-top:13px}
+#blTourTip .blTour-n{font-size:11px;color:var(--tk-text-muted,#8091ad);margin-right:auto}
+#blTourTip button{border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;padding:6px 13px;
+  font-family:inherit;border:1px solid var(--tk-border,rgba(0,0,0,.14));background:transparent;
+  color:var(--tk-text-muted,#5b6b85)}
+#blTourTip button.blTour-next{background:var(--tk-brand,#2563eb);border-color:transparent;color:#fff}
+#blTourTip button:hover{filter:brightness(1.06)}
+#blTourTip .blTour-cta{display:inline-block;margin-top:2px;padding:7px 13px;border-radius:9px;
+  background:var(--tk-brand,#2563eb);color:#fff;font-size:12px;font-weight:600;text-decoration:none}
+{# ⚠ CSS 花括号后紧贴井号选择器（左花括号+井号连写）会被 Jinja 当注释开始符
+   （TemplateSyntaxError 全站 500，2026-08-07 实锤），花括号后必须留空格 #}
+@media (prefers-reduced-motion:reduce){ #blTourHole{transition:none} }
+</style>
+<script>
+(function(){
+  var hole=document.getElementById('blTourHole'), tip=document.getElementById('blTourTip');
+  if(!hole||!tip) return;
+  var elT=document.getElementById('blTourT'), elB=document.getElementById('blTourB'),
+      elX=document.getElementById('blTourX'), elN=document.getElementById('blTourN'),
+      bSkip=document.getElementById('blTourSkip'), bPrev=document.getElementById('blTourPrev'),
+      bNext=document.getElementById('blTourNext');
+  var L={
+    next:{{ (i18n or {}).get('gtour_next','下一步')|tojson }},
+    prev:{{ (i18n or {}).get('gtour_prev','上一步')|tojson }},
+    skip:{{ (i18n or {}).get('gtour_skip','跳过引导')|tojson }},
+    done:{{ (i18n or {}).get('gtour_done','完成')|tojson }}
+  };
+  bSkip.textContent=L.skip; bPrev.textContent=L.prev;
+  var steps=[], idx=0, on=false;
+
+  function place(el){
+    var pad=6, r=el.getBoundingClientRect();
+    hole.style.display='block';
+    hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
+    hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
+    tip.style.display='block';
+    var tw=tip.offsetWidth||320, th=tip.offsetHeight||150;
+    var top=r.bottom+12, left=r.left;
+    if(top+th>window.innerHeight-10) top=Math.max(10,r.top-th-12);
+    if(left+tw>window.innerWidth-10) left=Math.max(10,window.innerWidth-tw-10);
+    tip.style.top=top+'px'; tip.style.left=Math.max(10,left)+'px';
+  }
+  function findEl(sel){
+    if(!sel) return null;
+    try{ return document.querySelector(sel); }catch(e){ return null; }
+  }
+  function render(){
+    if(!on) return;
+    if(idx<0) idx=0;
+    if(idx>=steps.length){ finish(true); return; }
+    var s=steps[idx], el=s.sel?findEl(s.sel):null;
+    // 防卡死②：目标不在（页面结构变了/该项已完成）→ 自动跳过，不是卡住
+    if(s.sel && !el){
+      var dir=(idx>=(render._last||0))?1:-1; render._last=idx; idx+=dir;
+      if(idx<0||idx>=steps.length){ finish(true); return; }
+      return render();
+    }
+    render._last=idx;
+    elT.textContent=s.title||''; elB.textContent=s.body||'';
+    elX.innerHTML=s.html||'';
+    elN.textContent=(idx+1)+' / '+steps.length;
+    bPrev.style.display=idx>0?'':'none';
+    bNext.textContent=(idx===steps.length-1)?L.done:L.next;
+    if(el){
+      try{ el.scrollIntoView({block:'center',behavior:'smooth'}); }catch(e){ }
+      setTimeout(function(){ if(on) place(el); },260);
+      place(el);
+    }else{
+      hole.style.display='none';
+      tip.style.display='block';
+      tip.style.top=Math.max(16,(window.innerHeight-(tip.offsetHeight||180))/2)+'px';
+      tip.style.left=Math.max(10,(window.innerWidth-(tip.offsetWidth||320))/2)+'px';
+    }
+  }
+  function finish(mark){
+    on=false; hole.style.display='none'; tip.style.display='none';
+    if(mark){ try{ localStorage.setItem('bl_tour_done','1'); }catch(e){} }
+    window.removeEventListener('resize',onMove);
+    window.removeEventListener('scroll',onMove,true);
+  }
+  function onMove(){ if(!on) return; var s=steps[idx]; var el=s&&s.sel?findEl(s.sel):null; if(el) place(el); }
+
+  bNext.addEventListener('click',function(){ idx++; render(); });
+  bPrev.addEventListener('click',function(){ idx--; render(); });
+  bSkip.addEventListener('click',function(){ finish(true); });
+  document.addEventListener('keydown',function(e){ if(on&&e.key==='Escape') finish(true); });
+
+  window.blTour={
+    start:function(list){
+      if(!list||!list.length) return;
+      steps=list; idx=0; on=true; render._last=0;
+      window.addEventListener('resize',onMove);
+      window.addEventListener('scroll',onMove,true);
+      render();
+    },
+    stop:function(){ finish(false); },
+    seen:function(){ try{ return localStorage.getItem('bl_tour_done')==='1'; }catch(e){ return false; } }
+  };
+})();
+</script>

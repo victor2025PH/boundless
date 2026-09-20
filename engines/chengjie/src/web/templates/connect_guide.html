@@ -1,0 +1,755 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('cg.title_' ~ guide_platform, '接入引导') }}{% endblock %}
+{% block head %}
+<style>
+  /* 实施97 · 多步引导型接入页：左步骤轨 + 右内容区 + 底部动作条。全部走 --tk-* 令牌；
+     企微侧步骤（授权/凭证）用企微蓝 --cg-wecom，客户侧（二维码）与个人微信用微信绿 --cg-wx。 */
+  .cg-wrap{--cg-wecom:#1b6df5;--cg-wx:#07c160;--cg-badge-gray:#4b5563;--cg-on-badge:#fff;height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;}
+  .cg-shell{max-width:960px;margin:0 auto;}
+  .cg-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;}
+  .cg-head .cg-ico{flex:none;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 13%,transparent);}
+  .cg-head h1{font-size:18px;font-weight:800;color:var(--tk-text);margin:0 0 3px;letter-spacing:.2px;}
+  .cg-head .cg-sub{font-size:12.5px;color:var(--tk-text-muted);line-height:1.5;}
+  .cg-head .cg-meta{margin-top:6px;display:flex;gap:10px;font-size:11.5px;color:var(--tk-text-muted);flex-wrap:wrap;}
+  .cg-back{font-size:12px;color:var(--tk-text-muted);text-decoration:none;display:inline-block;margin-bottom:10px;}
+  .cg-back:hover{color:var(--tk-brand);}
+  .cg-body{display:grid;grid-template-columns:210px 1fr;gap:14px;align-items:start;}
+  .cg-rail{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:var(--tk-radius-lg,14px);padding:10px 8px;box-shadow:var(--tk-shadow);position:sticky;top:0;}
+  .cg-rail button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;background:transparent;padding:9px 8px;border-radius:10px;cursor:pointer;color:var(--tk-text-muted);font-size:12.5px;}
+  .cg-rail button:hover{background:var(--tk-surface-2);}
+  .cg-rail button.on{background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 10%,transparent);color:var(--tk-text);font-weight:700;}
+  .cg-rail .n{flex:none;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--tk-border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--tk-text-muted);background:var(--tk-surface);}
+  .cg-rail button.on .n{border-color:var(--cg-accent,var(--tk-brand));color:var(--cg-accent,var(--tk-brand));}
+  .cg-rail button.done .n{background:var(--tk-ok-ink,#15803d);border-color:var(--tk-ok-ink,#15803d);color:#fff;}
+  .cg-rail .lbl{flex:1;min-width:0;line-height:1.3;}
+  .cg-rail .lbl small{display:block;font-size:10.5px;color:var(--tk-text-muted);font-weight:400;margin-top:1px;}
+  .cg-panel{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:var(--tk-radius-lg,14px);box-shadow:var(--tk-shadow);overflow:hidden;min-height:420px;display:flex;flex-direction:column;}
+  .cg-panel-hd{padding:14px 18px 10px;border-bottom:1px solid var(--tk-border);display:flex;align-items:center;gap:10px;}
+  .cg-panel-hd .k{font-size:11px;color:var(--tk-text-muted);letter-spacing:.3px;}
+  .cg-panel-hd h2{font-size:15px;font-weight:800;margin:0;color:var(--tk-text);}
+  .cg-panel-bd{padding:16px 18px;flex:1;font-size:13px;color:var(--tk-text);line-height:1.6;}
+  .cg-panel-ft{padding:12px 18px;border-top:1px solid var(--tk-border);display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--tk-surface-2);}
+  .cg-btn{border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text);border-radius:10px;padding:0 14px;height:36px;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .cg-btn:hover{background:var(--tk-surface-2);}
+  .cg-btn.primary{background:var(--cg-accent,var(--tk-brand));border-color:var(--cg-accent,var(--tk-brand));color:#fff;}
+  .cg-btn.primary:hover{filter:brightness(1.06);}
+  .cg-btn.ghost{background:transparent;}
+  .cg-btn:disabled{opacity:.5;cursor:not-allowed;}
+  .cg-btn.sm{height:30px;padding:0 10px;font-size:12px;border-radius:8px;}
+  .cg-lead{margin:0 0 12px;color:var(--tk-text);}
+  .cg-list{margin:0 0 12px;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .cg-list li{display:flex;gap:10px;align-items:flex-start;}
+  .cg-list .dot{flex:none;width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 12%,transparent);color:var(--cg-accent,var(--tk-brand));font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px;}
+  .cg-card{border:1px solid var(--tk-border);border-radius:12px;padding:12px 14px;background:var(--tk-surface-2);margin:10px 0;}
+  .cg-card.accent{border-color:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 40%,transparent);background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 7%,transparent);}
+  .cg-card.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10);}
+  .cg-card.ok{border-color:color-mix(in srgb,var(--tk-ok-ink,#15803d) 40%,transparent);background:color-mix(in srgb,var(--tk-ok-ink,#15803d) 8%,transparent);}
+  .cg-kv{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .cg-kv code{font-size:15px;font-weight:700;letter-spacing:.5px;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:8px;padding:4px 10px;}
+  .cg-field{margin:10px 0;}
+  .cg-field label{display:block;font-size:12.5px;font-weight:700;margin-bottom:4px;}
+  .cg-field label .req{color:var(--tk-danger,#e11d48);margin-left:2px;}
+  .cg-field input,.cg-field textarea,.cg-field select{width:100%;box-sizing:border-box;height:38px;border:1px solid var(--tk-border);border-radius:9px;padding:0 10px;font-size:13px;background:var(--tk-surface);color:var(--tk-text);}
+  .cg-field textarea{height:76px;padding:8px 10px;resize:vertical;}
+  .cg-field .hint{font-size:11px;color:var(--tk-text-muted);margin-top:4px;}
+  .cg-field .bad{font-size:11px;color:var(--tk-danger-ink,#b91c1c);margin-top:4px;}
+  .cg-checks{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-direction:column;gap:8px;}
+  .cg-checks li{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:1px solid var(--tk-border);background:var(--tk-surface);}
+  .cg-checks li .st{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;background:#9ca3af;}
+  .cg-checks li.ok .st{background:var(--tk-ok-ink,#15803d);} .cg-checks li.bad .st{background:var(--tk-danger,#e11d48);}
+  .cg-checks li .t{flex:1;min-width:0;} .cg-checks li .t small{display:block;color:var(--tk-text-muted);font-size:11.5px;margin-top:2px;line-height:1.5;}
+  .cg-acct{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin:10px 0;}
+  .cg-acct label{border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:center;cursor:pointer;background:var(--tk-surface);}
+  .cg-acct label.sel{border-color:var(--cg-accent,var(--tk-brand));background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 8%,transparent);}
+  .cg-acct label.dis{opacity:.55;cursor:not-allowed;}
+  .cg-acct .av{flex:none;width:36px;height:36px;border-radius:10px;background:var(--tk-surface-2);object-fit:cover;}
+  .cg-acct .nm{font-weight:700;font-size:13px;line-height:1.3;} .cg-acct .id{font-size:10.5px;color:var(--tk-text-muted);word-break:break-all;}
+  .cg-pill{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:999px;margin-top:3px;}
+  .cg-pill.on{background:color-mix(in srgb,var(--tk-ok-ink,#15803d) 14%,transparent);color:var(--tk-ok-ink,#15803d);}
+  .cg-pill.warn{background:rgba(245,158,11,.16);color:var(--tk-warn-ink,#b45309);}
+  .cg-pill.muted{background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .cg-tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0;}
+  .cg-tiers label{border:1px solid var(--tk-border);border-radius:12px;padding:12px;cursor:pointer;background:var(--tk-surface);position:relative;}
+  .cg-tiers label.sel{border-color:var(--cg-accent,var(--tk-brand));box-shadow:0 0 0 2px color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 25%,transparent);}
+  .cg-tiers .tn{font-weight:800;font-size:13px;} .cg-tiers .td{font-size:11.5px;color:var(--tk-text-muted);margin-top:4px;line-height:1.45;}
+  .cg-tiers .rec{position:absolute;top:-8px;right:10px;font-size:10px;font-weight:800;background:var(--cg-accent,var(--tk-brand));color:#fff;border-radius:999px;padding:1px 7px;}
+  .cg-qr{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;}
+  .cg-qr .box{width:220px;height:220px;border-radius:12px;border:1px solid var(--tk-border);background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .cg-qr .box img{width:100%;height:100%;object-fit:contain;}
+  .cg-recent{border:1px dashed var(--tk-border);border-radius:12px;padding:10px 12px;min-height:56px;font-size:12.5px;color:var(--tk-text-muted);}
+  .cg-recent .msg{color:var(--tk-text);} .cg-recent .who{font-size:11px;font-weight:700;margin-right:6px;color:var(--cg-accent,var(--tk-brand));}
+  /* 测试消息三态：等待（脉冲点 + 上一条灰显）/ 收到了（实线绿卡）/ 未在线（纯提示） */
+  .cg-recent.waiting{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+  .cg-recent .pulse{width:8px;height:8px;border-radius:50%;background:var(--cg-accent,var(--tk-brand));animation:cgPulse 1.4s ease-in-out infinite;flex:none;}
+  .cg-recent .prev{flex-basis:100%;opacity:.7;}
+  .cg-recent.got{border:1px solid rgba(22,163,74,.45);background:rgba(22,163,74,.07);color:var(--tk-text);}
+  .cg-recent.got .got-h{display:flex;align-items:center;gap:6px;font-weight:800;color:#16a34a;margin-bottom:6px;}
+  .cg-recent.got .got-f{margin-top:8px;font-size:11.5px;color:var(--tk-text-muted);} .cg-recent.got .got-f a{color:var(--cg-accent,var(--tk-brand));font-weight:700;}
+  @keyframes cgPulse{0%,100%{opacity:.35;transform:scale(.85);}50%{opacity:1;transform:scale(1);}}
+  .cg-rules{margin:14px 0 0;padding:0;list-style:none;font-size:12px;color:var(--tk-text-muted);display:flex;flex-direction:column;gap:5px;}
+  .cg-rules li::before{content:'•';margin-right:6px;color:var(--cg-accent,var(--tk-brand));}
+  /* 命令块：overflow-wrap:anywhere 只在必要处折行，不再把路径/参数劈成单字符（P0 劈词修复） */
+  .cg-cmd{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:9px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;line-height:1.55;color:var(--tk-text);user-select:all;}
+  table.cg-faq{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+  table.cg-faq th,table.cg-faq td{border-bottom:1px solid var(--tk-border);padding:7px 8px;text-align:left;vertical-align:top;line-height:1.5;}
+  table.cg-faq th{color:var(--tk-text-muted);font-weight:700;font-size:11px;}
+  .cg-status{font-size:12px;color:var(--tk-text-muted);}
+  .cg-status.ok{color:var(--tk-ok-ink,#15803d);font-weight:700;} .cg-status.bad{color:var(--tk-danger-ink,#b91c1c);font-weight:700;}
+  /* ── 个人微信 · 一键启停（2026-09-19 P1/P2）── */
+  .cg-trusts{display:inline-flex;gap:6px;flex-wrap:wrap;}
+  .cg-trust{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;color:var(--tk-text-muted);border:1px solid var(--tk-border);border-radius:999px;padding:1px 8px;background:var(--tk-surface);}
+  .cg-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 4px;}
+  .cg-btn .ui-ic{margin-left:-2px;}
+  .cg-sec{margin-top:18px;}
+  .cg-sec-h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--tk-text);margin-bottom:6px;}
+  /* 状态机卡：左侧一枚状态点（在线呼吸），标题一句人话 + 一行解释 + 动作按钮；颜色只用 ok/warn/bad/busy 四态 */
+  .cg-live{--lv:#9ca3af;display:flex;gap:14px;align-items:flex-start;border:1px solid var(--tk-border);border-left:4px solid var(--lv);border-radius:12px;padding:14px 16px;background:var(--tk-surface-2);margin:8px 0 12px;transition:border-color .25s,background .25s;}
+  .cg-live .dot{flex:none;width:12px;height:12px;border-radius:50%;background:var(--lv);margin-top:5px;box-shadow:0 0 0 4px color-mix(in srgb,var(--lv) 18%,transparent);}
+  .cg-live .body{flex:1;min-width:0;}
+  .cg-live .ttl{font-size:14px;font-weight:800;color:var(--tk-text);line-height:1.35;}
+  .cg-live .dsc{font-size:12.5px;color:var(--tk-text-muted);margin-top:3px;line-height:1.5;}
+  .cg-live .meta{font-size:11px;color:var(--tk-text-muted);margin-top:4px;font-family:ui-monospace,Consolas,monospace;}
+  .cg-live .dsc:empty,.cg-live .meta:empty{display:none;}
+  .cg-live .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .cg-live.ok{--lv:var(--cg-wx);border-color:color-mix(in srgb,var(--cg-wx) 45%,transparent);background:color-mix(in srgb,var(--cg-wx) 7%,transparent);}
+  .cg-live.ok .dot{animation:cg-breathe 2.2s ease-in-out infinite;}
+  .cg-live.warn{--lv:#f59e0b;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.09);}
+  .cg-live.bad{--lv:var(--tk-danger,#e11d48);border-color:color-mix(in srgb,var(--tk-danger,#e11d48) 45%,transparent);background:color-mix(in srgb,var(--tk-danger,#e11d48) 6%,transparent);}
+  .cg-live.busy{--lv:var(--cg-accent,var(--tk-brand));} .cg-live.busy .dot{animation:cg-spin-fade 1s linear infinite;}
+  .cg-live.manual{--lv:var(--tk-text-muted);border-style:dashed;}
+  @keyframes cg-breathe{0%,100%{box-shadow:0 0 0 4px color-mix(in srgb,var(--lv) 18%,transparent);}50%{box-shadow:0 0 0 8px color-mix(in srgb,var(--lv) 6%,transparent);}}
+  @keyframes cg-spin-fade{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .cg-log{margin:10px 0 0;padding:8px 10px;max-height:160px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.5;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--tk-text-muted);}
+  /* 自启开关：iOS 式滑块 + 一句解释，比「复制注册计划任务命令」少三步 */
+  .cg-toggle{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--tk-border);border-radius:12px;padding:12px 14px;background:var(--tk-surface);cursor:pointer;margin:0 0 6px;}
+  .cg-toggle input{position:absolute;opacity:0;width:0;height:0;}
+  .cg-toggle .sw{flex:none;width:38px;height:22px;border-radius:999px;background:var(--tk-border);position:relative;transition:background .2s;margin-top:2px;}
+  .cg-toggle .sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .2s;}
+  .cg-toggle input:checked+.sw{background:var(--cg-wx);} .cg-toggle input:checked+.sw::after{left:19px;}
+  .cg-toggle input:focus-visible+.sw{outline:2px solid var(--tk-brand);outline-offset:2px;}
+  .cg-toggle .txt{flex:1;min-width:0;font-size:13px;line-height:1.4;} .cg-toggle .txt small{display:block;font-size:11.5px;color:var(--tk-text-muted);margin-top:2px;}
+  /* 折叠区（FAQ / 高级命令）：默认收起，summary 一行带图标 */
+  .cg-adv{border:1px solid var(--tk-border);border-radius:12px;background:var(--tk-surface);margin:10px 0;}
+  .cg-adv summary{list-style:none;cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:var(--tk-text);display:flex;align-items:center;gap:6px;}
+  .cg-adv summary::-webkit-details-marker{display:none;}
+  .cg-adv summary::after{content:'';margin-left:auto;width:7px;height:7px;border-right:1.5px solid var(--tk-text-muted);border-bottom:1.5px solid var(--tk-text-muted);transform:rotate(-45deg);transition:transform .15s;}
+  .cg-adv[open] summary::after{transform:rotate(45deg);}
+  .cg-adv>*:not(summary){padding:0 14px 12px;}
+  .cg-adv .cg-list{margin-bottom:0;}
+  @media (max-width:720px){
+    .cg-body{grid-template-columns:1fr;}
+    .cg-rail{position:static;display:flex;overflow-x:auto;gap:4px;padding:8px;}
+    .cg-rail button{width:auto;flex:none;} .cg-rail .lbl small{display:none;}
+    .cg-tiers{grid-template-columns:1fr;}
+    .cg-trusts{display:none;}
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="cg-wrap" id="cg-wrap" data-plat="{{ guide_platform }}" data-supervisor="{{ '1' if is_supervisor else '0' }}"
+     data-faq='{{ (guide_faq or []) | tojson }}' data-rules='{{ (guide_rules or []) | tojson }}'>
+  <div class="cg-shell">
+    <a class="cg-back" href="/workspace?drawer=1" data-i18n="cg.back">← 返回工作台</a>
+    <div class="cg-head">
+      <div class="cg-ico" id="cg-ico"></div>
+      <div style="flex:1;min-width:0;">
+        <h1 id="cg-title"></h1>
+        <div class="cg-sub" id="cg-sub"></div>
+        <div class="cg-meta"><span id="cg-eta"></span><a id="cg-tutorial" href="#" target="_blank" rel="noopener" style="color:var(--tk-brand);text-decoration:none;"></a></div>
+      </div>
+    </div>
+    <div class="cg-body">
+      <nav class="cg-rail" id="cg-rail" aria-label="steps"></nav>
+      <section class="cg-panel">
+        <div class="cg-panel-hd"><span class="k" id="cg-step-k"></span><h2 id="cg-step-h"></h2></div>
+        <div class="cg-panel-bd" id="cg-panel"></div>
+        <div class="cg-panel-ft">
+          <button class="cg-btn ghost" id="cg-prev" type="button"></button>
+          <span class="cg-status" id="cg-foot-status"></span>
+          <button class="cg-btn primary" id="cg-next" type="button"></button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  'use strict';
+  var T=window.T, Tf=window.Tf;
+  var root=document.getElementById('cg-wrap');
+  var PLAT=root.getAttribute('data-plat')||'wechat_kf';
+  var IS_SUP=root.getAttribute('data-supervisor')==='1';
+  var FAQ=[], RULES=[];
+  try{ FAQ=JSON.parse(root.getAttribute('data-faq')||'[]'); }catch(_){ FAQ=[]; }
+  try{ RULES=JSON.parse(root.getAttribute('data-rules')||'[]'); }catch(_){ RULES=[]; }
+  var isKF=PLAT==='wechat_kf';
+  var accent=isKF?'var(--cg-wecom)':'var(--cg-wx)';
+  root.style.setProperty('--cg-accent',accent);
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function el(id){ return document.getElementById(id); }
+  function setStatus(txt,cls){ var s=el('cg-foot-status'); s.textContent=txt||''; s.className='cg-status'+(cls?' '+cls:''); }
+  async function api(path,opts){
+    var r=await window.apiFetch(path,opts||{},{timeoutMs:30000});
+    var d=null; try{ d=await r.json(); }catch(_){ d={}; }
+    if(!r.ok){ var why=(d&&(d.detail||d.error))||('HTTP '+r.status); throw new Error(typeof why==='string'?why:JSON.stringify(why)); }
+    return d;
+  }
+  async function copyText(t,btn){
+    try{ await navigator.clipboard.writeText(t); if(btn){ var o=btn.textContent; btn.textContent=T('cg.copied'); setTimeout(function(){ btn.textContent=o; },1400);} }
+    catch(_){ setStatus(T('cg.copy_failed'),'bad'); }
+  }
+  function inviteCard(){
+    var link=location.origin+location.pathname;
+    return '<div class="cg-card warn"><b>'+esc(T('cg.invite_title'))+'</b><div style="margin:6px 0 8px;font-size:12.5px;">'+esc(T('cg.invite_body'))+'</div>'
+      +'<div class="cg-kv"><code style="font-size:12px;font-weight:500;">'+esc(link)+'</code><button class="cg-btn sm" type="button" data-copy="'+esc(link)+'">'+esc(T('cg.copy_link'))+'</button></div></div>';
+  }
+
+  // ── 步骤定义 ──
+  var STEPS = isKF ? [
+    {key:'kf1', title:T('cg.kf.s1'), eta:5, render:renderKf1},
+    {key:'kf2', title:T('cg.kf.s2'), eta:2, render:renderKf2, sup:true},
+    {key:'kf3', title:T('cg.kf.s3'), eta:1, render:renderKf3, sup:true},
+    {key:'kf4', title:T('cg.kf.s4'), eta:1, render:renderKf4, sup:true},
+    {key:'kf5', title:T('cg.kf.s5'), eta:1, render:renderKf5}
+  ] : [
+    // 个人微信三步（2026-09-19）：① 连接电脑微信 ② 设置副驾 ③ 启动并验证——一键启停由后端托管，不再复制命令
+    {key:'pc1', title:T('cg.pc.s1'), eta:1, render:renderPc1},
+    {key:'pc2', title:T('cg.pc.s2'), eta:1, render:renderPc2, sup:true},
+    {key:'pc3', title:T('cg.pc.s3'), eta:1, render:renderPc3}
+  ];
+  var cur=0, done={}, doneSub={}, timers=[];
+  var state={ egress:'', checks:null, accounts:[], selected:{}, bound:[], kfid:'', kfname:'', personas:[], qr:null, env:null, policy:null,
+              live:null, autoAdvanced:false, manual:null, logOpen:false };
+  // 漏斗埋点（cgpc_*）：走既有 /api/telemetry/ui-event 通道，读数 /api/admin/ui-event-trend?prefix=cgpc_
+  function track(a){ try{ navigator.sendBeacon('/api/telemetry/ui-event',new Blob([JSON.stringify({page:location.pathname,action:'cg'+(isKF?'kf':'pc')+'_'+String(a)})],{type:'application/json'})); }catch(_){} }
+
+  function head(){
+    el('cg-title').textContent=T(isKF?'cg.title_wechat_kf':'cg.title_wechat_pc');
+    el('cg-sub').textContent=T(isKF?'cg.sub_wechat_kf':'cg.sub_wechat_pc');
+    var total=STEPS.reduce(function(a,s){ return a+(s.eta||1); },0);
+    el('cg-eta').textContent=Tf('cg.eta',{n:total});
+    var tu=el('cg-tutorial'); tu.textContent=T('cg.tutorial'); tu.href='/help/onboarding/'+PLAT;
+    if(!isKF){
+      // 信任 chip：三句话打消「要不要交微信密码 / 会不会被封」的顾虑（营销 + 用户视角）
+      var chips=['cg.trust_a','cg.trust_b','cg.trust_c'].map(function(k){ return '<span class="cg-trust">'+(window.uiIcon?uiIcon('shield',11):'')+esc(T(k))+'</span>'; }).join('');
+      var meta=el('cg-eta').parentNode; var wrap=document.createElement('span'); wrap.className='cg-trusts'; wrap.innerHTML=chips; meta.appendChild(wrap);
+    }
+    try{
+      var svg=window.platformIconSVG?window.platformIconSVG('wechat',{size:28}):'';
+      // 与抽屉同一枚角标（企 / PC）：管理者一眼分清「企业官方客服号」与「我自己的个人号」
+      var badge=isKF?T('inbox.plat.badge_wechat_kf'):T('inbox.plat.badge_wechat');
+      el('cg-ico').innerHTML='<span style="position:relative;display:inline-flex;width:28px;height:28px;">'+svg
+        +'<span style="position:absolute;right:-5px;bottom:-5px;min-width:13px;height:13px;padding:0 3px;border-radius:5px;background:'+(isKF?'var(--cg-wecom)':'var(--cg-badge-gray)')+';color:var(--cg-on-badge);font-size:9px;line-height:13px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--tk-surface,#fff);">'+esc(badge)+'</span></span>';
+    }catch(_){}
+  }
+  // 步骤轨副行：完成态显示证据（微信版本 / 档位 / 在线），当前步显示「进行中」，其余显示预计时长
+  function railSub(s,i){
+    if(done[s.key]) return doneSub[s.key]||T('cg.done_badge');
+    if(i===cur) return T('cg.in_progress');
+    return Tf('cg.eta',{n:s.eta||1});
+  }
+  function rail(){
+    var h='';
+    STEPS.forEach(function(s,i){
+      h+='<button type="button" data-i="'+i+'" class="'+(i===cur?'on':'')+(done[s.key]?' done':'')+'"><span class="n">'+(done[s.key]?'✓':(i+1))+'</span><span class="lbl">'+esc(s.title)+'<small>'+esc(railSub(s,i))+'</small></span></button>';
+    });
+    el('cg-rail').innerHTML=h;
+    foot();
+  }
+  // 底部动作条：只有本步真的完成了「下一步」才是实心主按钮（不再靠点击伪造完成态）
+  function foot(){
+    var last=cur===STEPS.length-1, nb=el('cg-next');
+    nb.textContent=last?T('cg.finish'):T('cg.next');
+    nb.className='cg-btn'+((done[STEPS[cur].key]||isKF)?' primary':'');
+  }
+  function markDone(key,sub){ var changed=!done[key]||(sub&&doneSub[key]!==sub); done[key]=true; if(sub) doneSub[key]=sub; if(changed) rail(); }
+  function markUndone(key){ if(done[key]){ delete done[key]; delete doneSub[key]; rail(); } }
+  function clearTimers(){ timers.forEach(clearInterval); timers=[]; }
+  function every(fn,ms){ fn(); timers.push(setInterval(fn,ms)); }
+  function show(i){
+    clearTimers();
+    cur=Math.max(0,Math.min(STEPS.length-1,i));
+    var s=STEPS[cur];
+    el('cg-step-k').textContent=Tf('cg.step_of',{i:cur+1,n:STEPS.length});
+    el('cg-step-h').textContent=s.title;
+    el('cg-prev').textContent=T('cg.prev'); el('cg-prev').disabled=cur===0;
+    setStatus('');
+    var p=el('cg-panel');
+    var fail=function(e){ p.innerHTML='<div class="cg-card warn">'+esc(Tf('cg.error_generic',{why:String(e&&e.message||e)}))+'</div>'; };
+    if(s.sup && !IS_SUP){ p.innerHTML=inviteCard()+'<div class="cg-status">'+esc(T('cg.waiting_admin'))+'</div>'; }
+    else { p.innerHTML='<div class="cg-status">'+esc(T('cg.loading'))+'</div>'; try{ Promise.resolve(s.render(p)).catch(fail); }catch(e){ fail(e); } }
+    rail();
+    track('step_'+(cur+1));
+    try{ history.replaceState(null,'',location.pathname+'#s'+(cur+1)); }catch(_){}
+  }
+  el('cg-prev').onclick=function(){ show(cur-1); };
+  el('cg-next').onclick=function(){
+    if(cur===STEPS.length-1){ track(done[STEPS[cur].key]?'finish_ok':'finish_early'); location.href='/workspace?drawer=1'; return; }
+    // 企微五步里 ①/⑤ 没有可验证的完成信号，沿用「点下一步即视为看过」；个人微信三步全部有真实证据，不伪造
+    if(isKF) done[STEPS[cur].key]=true;
+    show(cur+1);
+  };
+  el('cg-rail').addEventListener('click',function(e){ var b=e.target.closest('button[data-i]'); if(b) show(parseInt(b.getAttribute('data-i'),10)); });
+  document.addEventListener('click',function(e){ var b=e.target.closest('[data-copy]'); if(b){ copyText(b.getAttribute('data-copy'),b); } });
+
+  // ══════════ 企微 ══════════
+  function egressBlock(){
+    return '<div class="cg-card accent"><div style="font-size:11.5px;color:var(--tk-text-muted);margin-bottom:6px;">'+esc(T('cg.kf.egress_label'))+'</div>'
+      +'<div class="cg-kv"><code id="cg-egress">'+esc(state.egress||T('cg.kf.egress_detecting'))+'</code><button class="cg-btn sm" type="button" id="cg-copy-ip" '+(state.egress?'':'disabled')+'>'+esc(T('cg.kf.copy_ip'))+'</button></div>'
+      +'<div class="hint" style="font-size:11px;color:var(--tk-text-muted);margin-top:6px;">'+esc(T('cg.kf.egress_hint'))+'</div></div>';
+  }
+  async function loadEgress(){
+    if(!IS_SUP) return;
+    try{ var d=await api('/api/setup/wechat_kf/egress-ip'); state.egress=d.ok?d.ip:''; }catch(_){ state.egress=''; }
+    var c=el('cg-egress'); if(c){ c.textContent=state.egress||T('cg.kf.egress_fail'); var b=el('cg-copy-ip'); if(b){ b.disabled=!state.egress; b.onclick=function(){ copyText(state.egress,b); }; } }
+  }
+  // 公网前缀（配置的可信域名 / 官网中继设备前缀 / 当前来源）：回调地址、登录回跳都从这里派生
+  state.publicBase=''; state.relay=null;
+  async function loadPublicBase(){
+    try{ var d=await api('/api/auth/wecom/status'); state.publicBase=String(d.public_base||''); state.relay=d.relay||null; state.redirectSource=d.redirect_source||''; }catch(_){}
+    return state.publicBase;
+  }
+  function callbackUrlBlock(){
+    var base=state.publicBase||location.origin;
+    var relayNote='';
+    if(state.relay&&state.relay.enabled){
+      relayNote=' <span class="cg-pill '+(state.relay.connected?'on':'warn')+'">'+esc(T(state.relay.connected?'cg.kf.relay_on':'cg.kf.relay_off'))+'</span>';
+    } else if(state.redirectSource==='request'){
+      relayNote=' <span class="cg-pill warn">'+esc(T('cg.kf.public_missing'))+'</span>';
+    }
+    return '<div class="cg-card"><div style="font-size:11.5px;color:var(--tk-text-muted);margin-bottom:4px;">'+esc(T('cg.kf.cb_url'))+relayNote+'</div>'
+      +'<div class="cg-kv"><code style="font-size:12px;font-weight:600;">'+esc(base+'/wechat/kf/callback')+'</code><button class="cg-btn sm" type="button" data-copy="'+esc(base+'/wechat/kf/callback')+'">'+esc(T('cg.copy_link'))+'</button></div></div>';
+  }
+  async function renderKf1(p){
+    await loadPublicBase();
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.kf.s1_lead'))+'</p><ul class="cg-list">'
+      +['cg.kf.s1_a','cg.kf.s1_b','cg.kf.s1_c','cg.kf.s1_d'].map(function(k,i){ return '<li><span class="dot">'+(i+1)+'</span><span>'+esc(T(k))+'</span></li>'; }).join('')
+      +'</ul>'+(IS_SUP?egressBlock():'')+callbackUrlBlock()
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><a class="cg-btn" href="https://work.weixin.qq.com/wework_admin/frame#apps" target="_blank" rel="noopener">'+esc(T('cg.kf.open_console'))+'</a>'
+      +'<a class="cg-btn" href="https://work.weixin.qq.com/wework_admin/frame#/kf" target="_blank" rel="noopener">'+esc(T('cg.kf.open_kf_console'))+'</a></div>'
+      +'<ul class="cg-rules">'+RULES.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ul>';
+    loadEgress();
+  }
+  function checkLabel(id){ return T(id==='credentials'?'cg.kf.chk_credentials':id==='kf_permission'?'cg.kf.chk_kf_permission':'cg.kf.chk_manageable_accounts'); }
+  function renderChecks(res){
+    if(!res||!res.checks) return '';
+    var h='<ul class="cg-checks">';
+    res.checks.forEach(function(c){
+      h+='<li class="'+(c.ok?'ok':'bad')+'"><span class="st">'+(c.ok?'✓':'!')+'</span><span class="t">'+esc(checkLabel(c.id))+(c.ok&&c.count?esc(Tf('cg.kf.chk_count',{n:c.count})):'')
+        +(c.ok?'':'<small>'+esc(c.problem||'')+(c.fix?' · '+esc(Tf('cg.kf.chk_fix',{fix:c.fix})):'')+(c.errcode?' (errcode '+esc(c.errcode)+')':'')+'</small>')+'</span></li>';
+    });
+    h+='</ul>';
+    if(res.ok) h+='<div class="cg-card ok" style="margin-top:10px;">'+esc(T('cg.kf.all_green'))+'</div>';
+    return h;
+  }
+  async function renderKf2(p){
+    if(!state.publicBase) await loadPublicBase();
+    p.innerHTML='<div class="cg-field"><label>'+esc(T('cg.kf.corpid'))+'<span class="req">*</span></label><input id="cg-corpid" autocomplete="off" placeholder="wwxxxxxxxxxxxxxxxx"><div class="hint">'+esc(T('cg.kf.corpid_hint'))+'</div><div class="bad" id="cg-corpid-bad" style="display:none;">'+esc(T('cg.kf.corpid_bad'))+'</div></div>'
+      +'<div class="cg-field"><label>'+esc(T('cg.kf.secret'))+'<span class="req">*</span></label><input id="cg-secret" type="password" autocomplete="new-password"><div class="hint">'+esc(T('cg.kf.secret_hint'))+'</div></div>'
+      +'<details style="margin:8px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--tk-text-muted);">'+esc(T('cg.kf.advanced'))+'</summary>'
+      +'<div class="cg-field"><label>'+esc(T('cg.kf.cb_token'))+'</label><input id="cg-cb-token" autocomplete="off"></div>'
+      +'<div class="cg-field"><label>'+esc(T('cg.kf.cb_aes'))+'</label><input id="cg-cb-aes" autocomplete="off"></div>'
+      +'<div class="hint" style="font-size:11px;color:var(--tk-text-muted);">'+esc(T('cg.kf.cb_url'))+' <code>'+esc((state.publicBase||location.origin)+'/wechat/kf/callback')+'</code></div></details>'
+      +'<div style="display:flex;gap:8px;align-items:center;margin-top:10px;"><button class="cg-btn primary" type="button" id="cg-test">'+esc(T('cg.kf.test_btn'))+'</button><span class="cg-status" id="cg-test-st"></span></div>'
+      +'<div id="cg-checks">'+renderChecks(state.checks)+'</div>';
+    el('cg-corpid').addEventListener('input',function(){ var v=this.value.trim(); el('cg-corpid-bad').style.display=(v&&!/^ww[a-z0-9]{6,}$/i.test(v))?'':'none'; });
+    el('cg-test').onclick=async function(){
+      var corpid=el('cg-corpid').value.trim(), secret=el('cg-secret').value.trim();
+      var values={}; if(corpid) values['wechat_kf.corpid']=corpid; if(secret) values['wechat_kf.secret']=secret;
+      var tk=el('cg-cb-token').value.trim(), aes=el('cg-cb-aes').value.trim();
+      if(tk) values['wechat_kf.callback.token']=tk; if(aes) values['wechat_kf.callback.encoding_aes_key']=aes;
+      this.disabled=true; el('cg-test-st').textContent=T('cg.kf.testing'); el('cg-test-st').className='cg-status';
+      try{
+        if(Object.keys(values).length){ await api('/api/setup/channels/wechat_kf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})}); }
+        var res=await api('/api/setup/wechat_kf/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corpid:corpid,secret:secret})});
+        state.checks=res; state.accounts=res.accounts||[]; if(res.egress_ip) state.egress=res.egress_ip;
+        el('cg-checks').innerHTML=renderChecks(res);
+        el('cg-test-st').textContent=res.ok?T('cg.kf.saved'):''; el('cg-test-st').className='cg-status'+(res.ok?' ok':'');
+        if(res.ok){ done.kf2=true; rail(); }
+      }catch(e){ el('cg-test-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-test-st').className='cg-status bad'; }
+      finally{ this.disabled=false; }
+    };
+  }
+  function acctCard(a){
+    var can=a.manage_privilege!==false;
+    var sel=!!state.selected[a.open_kfid];
+    return '<label class="'+(sel?'sel':'')+(can?'':' dis')+'" data-kfid="'+esc(a.open_kfid)+'">'
+      +(a.avatar?'<img class="av" src="'+esc(a.avatar)+'" alt="">':'<span class="av"></span>')
+      +'<span style="flex:1;min-width:0;"><div class="nm">'+esc(a.name)+'</div><div class="id">'+esc(a.open_kfid)+'</div>'
+      +(a.bound?'<span class="cg-pill on">'+esc(T('cg.kf.acct_bound'))+'</span>':(can?'<span class="cg-pill muted">'+esc(T('cg.kf.acct_manage'))+'</span>':'<span class="cg-pill warn">'+esc(T('cg.kf.acct_nomanage'))+'</span>'))
+      +'</span><input type="checkbox" '+(sel?'checked':'')+(can?'':' disabled')+' style="width:16px;height:16px;"></label>';
+  }
+  async function loadAccounts(){
+    try{ var d=await api('/api/setup/wechat_kf/accounts'); state.accounts=d.accounts||[]; state.acctErr=d.ok?'':(d.problem||''); }
+    catch(e){ state.accounts=[]; state.acctErr=String(e&&e.message||e); }
+    paintAccounts();
+  }
+  function paintAccounts(){
+    var box=el('cg-accts'); if(!box) return;
+    var n=Object.keys(state.selected).filter(function(k){ return state.selected[k]; }).length;
+    if(!state.accounts.length){ box.innerHTML='<div class="cg-card warn">'+esc(state.acctErr||T('cg.kf.acct_empty'))+'</div>'; }
+    else box.innerHTML='<div class="cg-acct">'+state.accounts.map(acctCard).join('')+'</div>';
+    var b=el('cg-bind'); if(b){ b.textContent=Tf('cg.kf.bind_btn',{n:n}); b.disabled=!n; }
+  }
+  function renderKf3(p){
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.kf.acct_lead'))+'</p><div id="cg-accts"><div class="cg-status">'+esc(T('cg.loading'))+'</div></div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;"><button class="cg-btn sm ghost" type="button" id="cg-refresh">'+esc(T('cg.kf.refresh'))+'</button>'
+      +'<input id="cg-new-name" placeholder="'+esc(T('cg.kf.new_acct_name'))+'" maxlength="16" style="height:30px;border:1px solid var(--tk-border);border-radius:8px;padding:0 8px;font-size:12px;">'
+      +'<button class="cg-btn sm" type="button" id="cg-create">'+esc(T('cg.kf.new_acct'))+'</button></div>'
+      +'<div style="display:flex;gap:10px;align-items:center;margin-top:14px;"><button class="cg-btn primary" type="button" id="cg-bind" disabled>'+esc(Tf('cg.kf.bind_btn',{n:0}))+'</button><span class="cg-status" id="cg-bind-st"></span></div>';
+    el('cg-accts').addEventListener('click',function(e){ var lab=e.target.closest('label[data-kfid]'); if(!lab||lab.classList.contains('dis')) return; var k=lab.getAttribute('data-kfid'); if(e.target.tagName!=='INPUT') e.preventDefault(); state.selected[k]=!state.selected[k]; paintAccounts(); });
+    el('cg-refresh').onclick=loadAccounts;
+    el('cg-create').onclick=async function(){
+      var nm=el('cg-new-name').value.trim(); if(!nm) return;
+      this.disabled=true; this.textContent=T('cg.kf.creating');
+      try{ var d=await api('/api/setup/wechat_kf/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm})});
+        if(d.ok){ state.selected[d.open_kfid]=true; el('cg-new-name').value=''; await loadAccounts(); } else { setStatus((d.problem||'')+(d.fix?' · '+d.fix:''),'bad'); }
+      }catch(e){ setStatus(Tf('cg.error_generic',{why:String(e&&e.message||e)}),'bad'); }
+      finally{ this.disabled=false; this.textContent=T('cg.kf.new_acct'); }
+    };
+    el('cg-bind').onclick=async function(){
+      var picked=state.accounts.filter(function(a){ return state.selected[a.open_kfid]; }).map(function(a){ return {open_kfid:a.open_kfid,name:a.name}; });
+      if(!picked.length) return;
+      this.disabled=true; el('cg-bind-st').textContent=T('cg.kf.binding');
+      try{ var d=await api('/api/setup/wechat_kf/bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:picked})});
+        state.bound=picked; state.kfid=picked[0].open_kfid; state.kfname=picked[0].name;
+        el('cg-bind-st').textContent=Tf('cg.kf.bound_ok',{n:(d.accounts||[]).length}); el('cg-bind-st').className='cg-status ok';
+        done.kf3=true; rail(); await loadAccounts();
+      }catch(e){ el('cg-bind-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-bind-st').className='cg-status bad'; }
+      finally{ this.disabled=false; }
+    };
+    loadAccounts();
+  }
+  function tierCard(v,name,desc,rec){
+    return '<label class="'+(state.tier===v?'sel':'')+'" data-tier="'+v+'">'+(rec?'<span class="rec">'+esc(T('cg.kf.recommended'))+'</span>':'')+'<div class="tn">'+esc(name)+'</div><div class="td">'+esc(desc)+'</div></label>';
+  }
+  async function ensureBoundTarget(){
+    if(state.kfid) return true;
+    var bound=state.accounts.filter(function(a){ return a.bound; });
+    if(!bound.length){ try{ await loadAccountsSilent(); bound=state.accounts.filter(function(a){ return a.bound; }); }catch(_){} }
+    if(bound.length){ state.kfid=bound[0].open_kfid; state.kfname=bound[0].name; return true; }
+    return false;
+  }
+  async function loadAccountsSilent(){ var d=await api('/api/setup/wechat_kf/accounts'); state.accounts=d.accounts||[]; }
+  async function renderKf4(p){
+    if(!(await ensureBoundTarget())){ p.innerHTML='<div class="cg-card warn">'+esc(T('cg.kf.acct_empty'))+'</div>'; return; }
+    state.tier=state.tier||'review';
+    var personas=[]; try{ var d=await api('/api/personas/list'); personas=d.profiles||[]; }catch(_){}
+    p.innerHTML='<p class="cg-lead">'+esc(Tf('cg.kf.s4_lead',{name:state.kfname||state.kfid}))+'</p>'
+      +'<div class="cg-tiers" id="cg-tiers">'+tierCard('manual',T('cg.kf.tier_manual'),T('cg.kf.tier_manual_d'))+tierCard('review',T('cg.kf.tier_review'),T('cg.kf.tier_review_d'),true)+tierCard('auto_ai',T('cg.kf.tier_auto'),T('cg.kf.tier_auto_d'))+'</div>'
+      +'<div class="cg-field"><label>'+esc(T('cg.kf.persona'))+'</label><select id="cg-persona"><option value="">'+esc(T('cg.kf.persona_default'))+'</option>'+personas.map(function(x){ return '<option value="'+esc(x.id)+'">'+esc(x.name||x.id)+'</option>'; }).join('')+'</select></div>'
+      +'<div class="cg-field"><label>'+esc(T('cg.kf.welcome'))+'</label><textarea id="cg-welcome" placeholder="'+esc(T('cg.kf.welcome_ph'))+'"></textarea></div>'
+      +'<div class="cg-card" style="font-size:12px;color:var(--tk-text-muted);">'+esc(T('cg.kf.compliance'))+'</div>'
+      +'<div style="display:flex;gap:10px;align-items:center;"><button class="cg-btn primary" type="button" id="cg-save-rec">'+esc(T('cg.kf.save_reception'))+'</button><span class="cg-status" id="cg-rec-st"></span></div>';
+    el('cg-tiers').addEventListener('click',function(e){ var l=e.target.closest('label[data-tier]'); if(!l) return; state.tier=l.getAttribute('data-tier'); Array.prototype.forEach.call(el('cg-tiers').children,function(c){ c.classList.toggle('sel',c.getAttribute('data-tier')===state.tier); }); });
+    el('cg-save-rec').onclick=async function(){
+      this.disabled=true; el('cg-rec-st').textContent=T('cg.kf.saving'); el('cg-rec-st').className='cg-status';
+      try{ await api('/api/setup/wechat_kf/reception',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({open_kfid:state.kfid,tier:state.tier,persona_id:el('cg-persona').value,welcome_text:el('cg-welcome').value})});
+        el('cg-rec-st').textContent=T('cg.kf.saved'); el('cg-rec-st').className='cg-status ok'; done.kf4=true; rail();
+      }catch(e){ el('cg-rec-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-rec-st').className='cg-status bad'; }
+      finally{ this.disabled=false; }
+    };
+  }
+  function recentBlock(items,noneKey){
+    if(!items||!items.length) return '<div class="cg-recent">'+esc(T(noneKey))+'</div>';
+    return '<div class="cg-recent">'+items.map(function(c){ var who=(c.last_direction==='out')?T('cg.kf.recent_out'):T('cg.kf.recent_in'); return '<div><span class="who">'+esc(c.name||who)+'</span><span class="msg">'+esc(c.last_msg||'')+'</span></div>'; }).join('')+'</div>';
+  }
+  async function pollRecent(plat,acct,boxId,noneKey){
+    try{ var q='/api/unified-inbox/chats?limit=3&platform='+encodeURIComponent(plat)+(acct?'&account_id='+encodeURIComponent(acct):'');
+      var d=await api(q); var chats=(d.chats||[]).filter(function(c){ return c.platform===plat; }); var b=el(boxId); if(b) b.innerHTML=recentBlock(chats,noneKey);
+    }catch(_){}
+  }
+  /* PC 第 ③ 步「发一条测试消息」有明确完成态：以进入本步时最新一条 last_ts 为基线，之后凡有更新的对方
+     消息进来 → 「收到了 ✓」绿卡 + 漏斗 test_msg_received（一次）；之前只能看着一条旧消息猜是否算数。 */
+  async function pollRecentPc(){
+    var b=el('cg-recent'); if(!b) return;
+    var online=state.live&&(state.live.state==='online');
+    try{
+      var d=await api('/api/unified-inbox/chats?limit=3&platform=wechat');
+      var chats=(d.chats||[]).filter(function(c){ return c.platform==='wechat'; });
+      var newest=0; chats.forEach(function(c){ newest=Math.max(newest,Number(c.last_ts)||0); });
+      if(state.recentBaseline===undefined) state.recentBaseline=newest;
+      if(!state.testReceived){
+        var fresh=chats.filter(function(c){ return (Number(c.last_ts)||0)>state.recentBaseline&&c.last_direction!=='out'; })
+          .sort(function(x,y){ return (Number(y.last_ts)||0)-(Number(x.last_ts)||0); })[0];
+        if(fresh){ state.testReceived={name:fresh.name||T('cg.kf.recent_in'),msg:fresh.last_msg||''}; track('test_msg_received'); if(state.live) paintLive(state.live); }
+      }
+      var html;
+      if(state.testReceived){
+        html='<div class="cg-recent got"><div class="got-h">'+ic('check')+esc(T('cg.pc.test_got'))+'</div><div><span class="who">'+esc(state.testReceived.name)+'</span><span class="msg">'+esc(state.testReceived.msg)+'</span></div>'
+          +'<div class="got-f">'+esc(T('cg.pc.test_got_d'))+' <a href="/workspace">'+esc(T('cg.pc.test_go_ws'))+'</a></div></div>';
+      } else if(!online){
+        html='<div class="cg-recent">'+esc(T('cg.pc.test_wait_online'))+'</div>';
+      } else {
+        var last=chats[0];
+        html='<div class="cg-recent waiting"><span class="pulse"></span>'+esc(T('cg.pc.test_waiting'))
+          +(last?'<div class="prev"><span class="who">'+esc(last.name||'')+'</span><span class="msg">'+esc(last.last_msg||'')+'</span></div>':'')+'</div>';
+      }
+      if(b.dataset.html!==html){ b.dataset.html=html; b.innerHTML=html; }
+    }catch(_){}
+  }
+  async function renderKf5(p){
+    if(!(await ensureBoundTarget())){ p.innerHTML='<div class="cg-card warn">'+esc(T('cg.kf.acct_empty'))+'</div>'; return; }
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.kf.s5_lead'))+'</p><div class="cg-qr"><div class="box" id="cg-qr-box"><span class="cg-status">'+esc(T('cg.kf.qr_gen'))+'</span></div>'
+      +'<div style="flex:1;min-width:220px;"><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><a class="cg-btn sm" id="cg-qr-dl" download="wechat-kf-qr.png" style="display:none;">'+esc(T('cg.kf.qr_download'))+'</a><button class="cg-btn sm" type="button" id="cg-qr-copy" style="display:none;">'+esc(T('cg.kf.qr_copy'))+'</button></div>'
+      +'<div style="font-size:11.5px;color:var(--tk-text-muted);margin-bottom:6px;">'+esc(T('cg.kf.recent_title'))+'</div><div id="cg-recent"></div></div></div>'
+      +'<div style="font-size:11.5px;color:var(--tk-text-muted);margin-top:14px;font-weight:700;">'+esc(T('cg.kf.rules_title'))+'</div><ul class="cg-rules">'+RULES.map(function(r){ return '<li>'+esc(r)+'</li>'; }).join('')+'</ul>';
+    if(IS_SUP){
+      try{ var d=await api('/api/setup/wechat_kf/contact-way',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({open_kfid:state.kfid})});
+        if(d.ok&&d.qr_image){ el('cg-qr-box').innerHTML='<img src="'+d.qr_image+'" alt="QR">'; var dl=el('cg-qr-dl'); dl.href=d.qr_image; dl.style.display=''; var cp=el('cg-qr-copy'); cp.style.display=''; cp.onclick=function(){ copyText(d.url,cp); }; }
+        else el('cg-qr-box').innerHTML='<span class="cg-status bad">'+esc(Tf('cg.kf.qr_fail',{why:(d.problem||d.fix||'')}))+'</span>';
+      }catch(e){ el('cg-qr-box').innerHTML='<span class="cg-status bad">'+esc(Tf('cg.kf.qr_fail',{why:String(e&&e.message||e)}))+'</span>'; }
+    } else { el('cg-qr-box').innerHTML='<span class="cg-status">'+esc(T('cg.supervisor_only'))+'</span>'; }
+    every(function(){ pollRecent('wechat_kf',state.kfid,'cg-recent','cg.kf.recent_none'); },5000);
+  }
+
+  // ══════════ 个人微信（三步：连接微信 → 设置副驾 → 启动并验证；2026-09-19 一键启停） ══════════
+  function tierName(t){ return T(t==='semi'?'cg.pc.tier_semi':t==='auto_reply'?'cg.pc.tier_auto':'cg.pc.tier_copilot'); }
+  function post(path,body){ return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); }
+  function ic(n,s){ return window.uiIcon?uiIcon(n,s||13):''; }
+  function envRows(env){
+    var rows=[];
+    if(!env.os_windows){ rows.push(['bad',T('cg.pc.env_not_windows')]); return rows; }
+    if(env.running) rows.push(['ok',T('cg.pc.env_running')]);
+    else rows.push(env.installed?['warn',T('cg.pc.env_installed')]:['bad',T('cg.pc.env_not_installed')]);
+    if(env.running){
+      if(env.version) rows.push([env.version_ok?'ok':'bad',Tf('cg.pc.env_version',{v:env.version})+(env.version_ok?'':' · '+T('cg.pc.env_version_bad'))]);
+      else rows.push(['warn',T('cg.pc.env_version_unknown')]);
+      if(env.main_window) rows.push(['ok',T('cg.pc.env_main')]);
+      else if(env.login_window) rows.push(['warn',T('cg.pc.env_login')]);
+      else rows.push(['warn',T('cg.pc.env_hidden')]);
+    }
+    if(env.can_manage===false) rows.push(['bad',T('cg.pc.env_no_driver')]);
+    var vr=voiceRow(env); if(vr) rows.push(vr);
+    return rows;
+  }
+  // 语音回复是可选能力：任何一项不满足都只是 warn（副驾照常发文字），不影响第 ① 步完成态。
+  // 判序 = 驱动 voice_ready 的判序：版本门 → 音频库 → 声卡在不在 → 两端采样率。
+  function voiceState(env){
+    var v=env&&env.voice; if(!v||!env.running||!v.os_windows) return '';
+    if(!v.voice_version_ok) return 'version';
+    if(!v.audio_libs) return 'libs';
+    var c=v.cable||{};
+    if(!c.present) return 'cable';
+    if(!c.rates_match) return 'rates';
+    return 'ready';
+  }
+  function voiceRow(env){
+    var s=voiceState(env); if(!s) return null;
+    var v=env.voice, c=v.cable||{};
+    switch(s){
+      case 'version': return ['warn',Tf('cg.pc.voice_version_low',{v:v.min_version||'4.1.9'})];
+      case 'libs': return ['warn',T('cg.pc.voice_no_libs')];
+      case 'cable': return ['warn',T('cg.pc.voice_no_cable')];
+      case 'rates': return ['warn',Tf('cg.pc.voice_rates',{a:c.render_sr||'?',b:c.capture_sr||'?'})];
+      default: return ['ok',Tf('cg.pc.voice_ready',{rate:c.render_sr||''})];
+    }
+  }
+  function checksHtml(rows){
+    return '<ul class="cg-checks">'+rows.map(function(r){ return '<li class="'+(r[0]==='ok'?'ok':r[0]==='bad'?'bad':'')+'"><span class="st">'+(r[0]==='ok'?'✓':'!')+'</span><span class="t">'+esc(r[1])+'</span></li>'; }).join('')+'</ul>';
+  }
+  function wxReady(env){ return !!(env&&env.running&&env.version_ok&&env.main_window); }
+  var _envSig='';
+  function paintEnv(env){
+    var box=el('cg-env'); if(!box) return;
+    // 5 秒一轮询：状态没变就不重建 DOM（重建会打断用户正要点的按钮 / 丢焦点）
+    var vs=voiceState(env);
+    var sig=[env.os_windows,env.running,env.installed,env.main_window,env.login_window,env.version,env.version_ok,env.can_manage,vs].join('|');
+    if(sig!==_envSig||!box.firstElementChild||box.firstElementChild.className!=='cg-checks'){
+    _envSig=sig;
+    box.innerHTML=checksHtml(envRows(env))+(vs?'<div class="hint" style="font-size:11.5px;color:var(--tk-text-muted);margin-top:4px;">'+esc(T('cg.pc.voice_where'))+'</div>':'');
+    // 动作区随状态变：没装 → 下载；装了没开 → 打开；登录窗开着 → 置前 + 扫码提示；托盘 → 还原
+    var act=el('cg-env-act'); if(act){
+      var h='';
+      if(env.os_windows){
+        if(!env.running){ h+=env.installed&&IS_SUP?'<button class="cg-btn primary" type="button" id="cg-open-wx">'+ic('plug')+esc(T('cg.pc.open_wechat'))+'</button>':'<a class="cg-btn primary" href="https://pc.weixin.qq.com/" target="_blank" rel="noopener">'+esc(T('cg.pc.download'))+'</a>'; }
+        else if(!env.main_window&&IS_SUP){ h+='<button class="cg-btn primary" type="button" id="cg-open-wx">'+ic('arrow-up-right')+esc(T('cg.pc.focus_wechat'))+'</button>'; }
+      }
+      // 语音通路动作：没声卡 → 下载；采样率不齐 → 一键对齐（需管理员）；就绪 → 回环自测（不碰微信）
+      if(vs==='cable') h+='<a class="cg-btn" href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">'+ic('download')+esc(T('cg.pc.voice_download'))+'</a>';
+      else if(vs==='rates'&&IS_SUP) h+='<button class="cg-btn" type="button" id="cg-voice-align">'+ic('wrench')+esc(T('cg.pc.voice_align'))+'</button>';
+      else if(vs==='ready'&&IS_SUP) h+='<button class="cg-btn" type="button" id="cg-voice-test">'+ic('mic')+esc(T('cg.pc.voice_selftest'))+'</button>';
+      h+='<button class="cg-btn ghost" type="button" id="cg-recheck">'+ic('refresh')+esc(T('cg.pc.recheck'))+'</button>';
+      act.innerHTML=h;
+      var ow=el('cg-open-wx'); if(ow) ow.onclick=async function(){ ow.disabled=true; ow.textContent=T('cg.pc.opening_wechat'); track('open_wechat'); try{ await post('/api/setup/wechat_pc/launch-wechat'); }catch(e){ setStatus(Tf('cg.error_generic',{why:String(e&&e.message||e)}),'bad'); } setTimeout(function(){ _envSig=''; loadEnv(); },1500); };
+      el('cg-recheck').onclick=function(){ _envSig=''; loadEnv(); };
+      var va=el('cg-voice-align'); if(va) va.onclick=async function(){ va.disabled=true; track('voice_align');
+        try{ var d=await post('/api/setup/wechat_pc/voice/align'); setStatus(d.ok?T('cg.pc.voice_align_ok'):Tf('cg.pc.voice_align_fail',{why:d.error||''}),d.ok?'ok':'bad'); track(d.ok?'voice_align_ok':'voice_align_fail'); }
+        catch(e){ setStatus(Tf('cg.pc.voice_align_fail',{why:String(e&&e.message||e)}),'bad'); }
+        _envSig=''; loadEnv(); };
+      var vt=el('cg-voice-test'); if(vt) vt.onclick=async function(){ vt.disabled=true; vt.textContent=T('cg.pc.voice_testing'); track('voice_selftest');
+        try{ var d=await post('/api/setup/wechat_pc/voice/selftest'); var st=d.selftest||{};
+          if(d.ok) setStatus(Tf('cg.pc.voice_selftest_ok',{f:Math.round(st.dominant_hz||st.expected_hz||1000)}),'ok'); else setStatus(Tf('cg.pc.voice_selftest_fail',{why:st.error||(st.ok===false?(st.dominant_hz||0)+' Hz / rms '+(st.rms||0):'')||d.error||''}),'bad');
+          track(d.ok?'voice_selftest_ok':'voice_selftest_fail'); }
+        catch(e){ setStatus(Tf('cg.pc.voice_selftest_fail',{why:String(e&&e.message||e)}),'bad'); }
+        _envSig=''; loadEnv(); };
+    }
+    var hint=el('cg-scan-hint'); if(hint) hint.style.display=(env.running&&env.login_window)?'':'none';
+    }
+    if(wxReady(env)){
+      markDone('pc1',Tf('cg.rail.done_env',{v:env.version||''}));
+      // 首次检测到登录且用户还停在第 ① 步 → 提示后自动进下一步（不抢用户正在看的其它步）
+      if(cur===0&&!state.autoAdvanced){ state.autoAdvanced=true; setStatus(T('cg.pc.login_detected'),'ok'); track('login_detected'); setTimeout(function(){ if(cur===0) show(1); },1600); }
+    } else markUndone('pc1');
+  }
+  async function loadEnv(){ try{ var d=await api('/api/setup/wechat_pc/env'); state.env=d; paintEnv(d); }catch(e){ var b=el('cg-env'); if(b) b.innerHTML='<div class="cg-card warn">'+esc(Tf('cg.error_generic',{why:String(e&&e.message||e)}))+'</div>'; } }
+  function renderPc1(p){
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.pc.s1_lead'))+'</p><div id="cg-env"><div class="cg-status">'+esc(T('cg.loading'))+'</div></div>'
+      +'<div class="cg-card accent" id="cg-scan-hint" style="display:none;font-size:12.5px;">'+ic('phone')+' '+esc(T('cg.pc.scan_hint'))+'</div>'
+      +'<div class="cg-actions" id="cg-env-act"></div>'
+      +'<details class="cg-adv"><summary>'+ic('shield')+esc(T('cg.pc.privacy_title'))+'</summary><ul class="cg-list">'+['cg.pc.s2_a','cg.pc.s2_b','cg.pc.s2_c'].map(function(k,i){ return '<li><span class="dot">'+(i+1)+'</span><span>'+esc(T(k))+'</span></li>'; }).join('')+'</ul></details>';
+    every(loadEnv,5000);
+  }
+  function pcTierCard(v,name,desc,rec){ return '<label class="'+(state.tier===v?'sel':'')+'" data-tier="'+v+'"><div class="tn">'+esc(name)+(rec?' <span class="cg-pill on">'+esc(T('cg.kf.recommended'))+'</span>':'')+'</div><div class="td">'+esc(desc)+'</div></label>'; }
+  async function loadPolicy(){ try{ state.policy=await api('/api/setup/wechat_pc/policy'); }catch(_){ state.policy=state.policy||{tier:'copilot',work_hours:[8,23],risk_ack:false,autostart:false}; } return state.policy; }
+  function policySub(pol){ return Tf('cg.rail.done_tier',{tier:tierName(pol.tier),a:pol.work_hours[0],b:pol.work_hours[1]}); }
+  // 左栏「真完成态」：直接落到第 ③ 步（刷新 / 深链）也要把 ①② 补齐，而不是只在各自面板里标
+  function syncRailFromState(){
+    var env=state.env, pol=state.policy;
+    if(env){ if(wxReady(env)) markDone('pc1',Tf('cg.rail.done_env',{v:env.version||''})); else markUndone('pc1'); }
+    if(pol){ if(pol.saved_at>0) markDone('pc2',policySub(pol)); else markUndone('pc2'); }
+  }
+  async function renderPc2(p){
+    await loadPolicy();
+    syncRailFromState();
+    state.tier=state.policy.tier||'copilot';
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.pc.s2_lead'))+'</p><div class="cg-tiers" id="cg-tiers">'+pcTierCard('copilot',T('cg.pc.tier_copilot'),T('cg.pc.tier_copilot_d'),true)+pcTierCard('semi',T('cg.pc.tier_semi'),T('cg.pc.tier_semi_d'))+pcTierCard('auto_reply',T('cg.pc.tier_auto'),T('cg.pc.tier_auto_d'))+'</div>'
+      +'<div class="cg-field"><label>'+esc(T('cg.pc.work_hours'))+'</label><div style="display:flex;gap:8px;align-items:center;"><input id="cg-wh-a" type="number" min="0" max="23" value="'+esc(state.policy.work_hours[0])+'" style="width:80px;"> — <input id="cg-wh-b" type="number" min="1" max="24" value="'+esc(state.policy.work_hours[1])+'" style="width:80px;"></div><div class="hint">'+esc(T('cg.pc.work_hours_hint'))+'</div></div>'
+      +'<div class="cg-card warn" id="cg-risk" style="'+(state.tier==='auto_reply'?'':'display:none;')+'"><b>'+esc(T('cg.pc.risk_title'))+'</b><ul class="cg-list" style="margin-top:8px;">'+['cg.pc.risk_a','cg.pc.risk_b','cg.pc.risk_c','cg.pc.risk_d'].map(function(k,i){ return '<li><span class="dot">'+(i+1)+'</span><span>'+esc(T(k))+'</span></li>'; }).join('')+'</ul>'
+      +'<label style="display:flex;gap:8px;align-items:center;font-weight:700;font-size:12.5px;"><input type="checkbox" id="cg-risk-ck" '+(state.policy.risk_ack?'checked':'')+' style="width:16px;height:16px;">'+esc(T('cg.pc.risk_check'))+'</label></div>'
+      +'<div class="cg-actions"><button class="cg-btn primary" type="button" id="cg-save-tier">'+esc(T('cg.pc.save_tier'))+'</button><span class="cg-status" id="cg-tier-st">'+esc(Tf('cg.pc.tier_current',{tier:tierName(state.tier)}))+'</span></div>';
+    el('cg-tiers').addEventListener('click',function(e){ var l=e.target.closest('label[data-tier]'); if(!l) return; state.tier=l.getAttribute('data-tier'); Array.prototype.forEach.call(el('cg-tiers').children,function(c){ c.classList.toggle('sel',c.getAttribute('data-tier')===state.tier); }); el('cg-risk').style.display=state.tier==='auto_reply'?'':'none'; });
+    el('cg-save-tier').onclick=async function(){
+      var ack=el('cg-risk-ck').checked;
+      if(state.tier==='auto_reply'&&!ack&&!state.policy.risk_ack){ el('cg-tier-st').textContent=T('cg.pc.risk_required'); el('cg-tier-st').className='cg-status bad'; return; }
+      this.disabled=true;
+      try{ var d=await post('/api/setup/wechat_pc/policy',{tier:state.tier,work_hours:[parseInt(el('cg-wh-a').value,10),parseInt(el('cg-wh-b').value,10)],risk_ack:ack});
+        state.policy=d; el('cg-tier-st').textContent=T('cg.pc.tier_saved'); el('cg-tier-st').className='cg-status ok'; markDone('pc2',policySub(d)); track('tier_'+d.tier);
+      }catch(e){ el('cg-tier-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-tier-st').className='cg-status bad'; }
+      finally{ this.disabled=false; }
+    };
+  }
+  // ── 第 ③ 步：状态机卡（idle / starting / online / blind / offline / error / manual）──
+  function fmtUp(sec){ sec=Math.max(0,sec|0); if(sec<60) return sec+'s'; if(sec<3600) return Math.floor(sec/60)+'m'; return Math.floor(sec/3600)+'h'+Math.floor((sec%3600)/60)+'m'; }
+  // 心跳 voice_ready：true/false 来自驱动实测（版本门 ∧ 声卡 ∧ 「发语音」锚点）；老驱动不报 → 不显示
+  // voice_mic_busy（P2）：坐席正在开会/通话——能力在、此刻不排语音；voice_today/voice_daily_cap：今日语音配额用量
+  function voiceChip(hb){
+    if(!hb) return '';
+    if(hb.voice_ready===true){
+      var s=hb.stats||{}, out=' · ';
+      if(hb.voice_mic_busy) out+=Tf('cg.pc.live_voice_busy',{p:hb.voice_mic_busy_by||'?'});
+      else out+=T('cg.pc.live_voice_ok');
+      if(typeof s.voice_daily_cap==='number'&&s.voice_daily_cap>0) out+=' · '+Tf('cg.pc.live_voice_quota',{n:s.voice_today|0,cap:s.voice_daily_cap});
+      return out;
+    }
+    if(hb.voice_ready===false) return ' · '+T('cg.pc.live_voice_off');
+    return '';
+  }
+  function liveView(st,env){
+    var pol=state.policy||{work_hours:[8,23]}, hb=st.heartbeat||{};
+    var manual=env&&env.can_manage===false;
+    if(manual&&!(hb.alive)) return {cls:'manual',title:T('cg.pc.live_manual'),desc:T('cg.pc.live_manual_d'),acts:[]};
+    switch(st.state){
+      case 'online': return {cls:'ok',title:Tf('cg.pc.live_online',{tier:tierName(st.tier||hb.tier||'copilot')}),desc:Tf('cg.pc.live_online_d',{s:hb.age_sec||0,a:pol.work_hours[0],b:pol.work_hours[1]})+(st.attached?' · '+T('cg.pc.live_attached'):'')+voiceChip(hb),acts:st.attached?[]:['restart','stop']};
+      case 'blind': return {cls:'warn',title:T('cg.pc.live_blind'),desc:T('cg.pc.live_blind_d'),acts:['focus'].concat(st.attached?[]:['stop'])};
+      case 'starting': return {cls:'busy',title:T('cg.pc.live_starting'),desc:T('cg.pc.live_starting_d'),acts:['stop']};
+      case 'error': return {cls:'bad',title:T('cg.pc.live_error'),desc:(st.reason==='no_heartbeat'?T('cg.pc.live_error_nohb'):Tf('cg.pc.live_error_exit',{code:String(st.reason||'').replace('exit_',''),n:st.backoff_sec||0})),acts:['retry','log']};
+      case 'offline': return {cls:'',title:T('cg.pc.live_offline'),desc:(hb.age_sec?Tf('cg.pc.live_offline_d',{m:Math.max(1,Math.round(hb.age_sec/60))}):''),acts:['start','log']};
+      default:
+        if(wxReady(env)) return {cls:'',title:T('cg.pc.live_idle'),desc:T('cg.pc.live_idle_d'),acts:['start']};
+        // 微信在跑但主窗不可见（收进托盘）：就地给「还原窗口」，不把用户赶回第 ① 步
+        if(env&&env.running&&env.version_ok&&!env.main_window&&!env.login_window) return {cls:'warn',title:T('cg.pc.live_idle'),desc:T('cg.pc.live_idle_tray'),acts:['focus']};
+        return {cls:'',title:T('cg.pc.live_idle'),desc:T('cg.pc.live_idle_nowx'),acts:['back1']};
+    }
+  }
+  function actBtn(a,st){
+    var m={start:['primary','zap','cg.pc.btn_start'],retry:['primary','refresh','cg.pc.btn_retry'],restart:['','refresh','cg.pc.btn_restart'],stop:['ghost','pause','cg.pc.btn_stop'],
+           focus:['primary','arrow-up-right','cg.pc.focus_wechat'],log:['ghost','scroll','cg.pc.btn_log'],back1:['','reply','cg.pc.s1']}[a];
+    if(!m) return '';
+    // 退避倒计时也是每拍变的文本：按钮本身不重建，只改 <span> 文字（见 paintLive 末尾）
+    if(a==='retry'&&st.backoff_sec>0) return '<button class="cg-btn" type="button" disabled>'+ic(m[1])+'<span id="cg-retry-in"></span></button>';
+    return '<button class="cg-btn '+m[0]+'" type="button" data-act="'+a+'">'+ic(m[1])+esc(T(m[2]))+'</button>';
+  }
+  function paintLive(st){
+    var box=el('cg-live'); if(!box) return;
+    state.live=st;
+    var v=liveView(st,state.env);
+    // pid/已运行 每拍都变：放独立元素只改文本，卡片主体（含按钮）只在状态/文案变化时重建，
+    // 否则每 3 秒 innerHTML 一次会把用户正要点的按钮换掉、日志区滚动归零
+    var metaTxt=st.managed&&st.pid?Tf('cg.pc.meta_pid',{pid:st.pid,t:fmtUp(st.uptime_sec)}):'';
+    var acts=IS_SUP?v.acts.map(function(a){ return actBtn(a,st); }).join(''):'';
+    var agent=(!IS_SUP&&st.state!=='online'&&st.state!=='blind')?'<div class="meta">'+esc(T('cg.pc.agent_wait'))+'</div>':'';
+    var log=(state.logOpen||st.state==='error')&&st.log_tail?'<pre class="cg-log">'+esc((st.log_tail||[]).join('\n')||T('cg.pc.log_empty'))+'</pre>':'';
+    box.className='cg-live '+v.cls;
+    var html='<div class="dot"></div><div class="body"><div class="ttl" id="cg-live-ttl"></div><div class="dsc" id="cg-live-dsc"></div><div class="meta" id="cg-live-meta"></div>'+agent+(acts?'<div class="acts">'+acts+'</div>':'')+log+'</div>';
+    if(box.dataset.html!==html){ box.dataset.html=html; box.innerHTML=html; }
+    el('cg-live-ttl').textContent=v.title; el('cg-live-dsc').textContent=v.desc;
+    var mt=el('cg-live-meta'); if(mt){ mt.textContent=metaTxt; mt.style.display=metaTxt?'':'none'; }
+    var ri=el('cg-retry-in'); if(ri) ri.textContent=Tf('cg.pc.btn_retry_in',{n:st.backoff_sec||0});
+    if(st.state==='online'||st.state==='blind') markDone('pc3',T(state.testReceived?'cg.rail.done_live_msg':'cg.rail.done_live')); else markUndone('pc3');
+    // 漏斗关键转化：本次会话首次看到在线（不管是点按钮、自启还是别处拉起的）
+    if(st.state==='online'&&!state.trackedOnline){ state.trackedOnline=true; track(st.attached?'online_attached':'online'); }
+    var m=el('cg-manual'); if(m){ var showManual=(state.env&&state.env.can_manage===false); if(showManual&&!m.open&&!m.dataset.touched){ m.open=true; loadManual(); } }
+  }
+  async function pollLive(){
+    try{ if(!state.env) { try{ state.env=await api('/api/setup/wechat_pc/env'); }catch(_){ } }
+      var st=await api('/api/setup/wechat_pc/copilot/status'); paintLive(st);
+      // 在线 → 顺手刷新最近一条
+      if(st.state==='online') pollRecentPc();
+    }catch(e){ var b=el('cg-live'); if(b){ b.className='cg-live bad'; b.innerHTML='<div class="dot"></div><div class="body"><div class="ttl">'+esc(Tf('cg.error_generic',{why:String(e&&e.message||e)}))+'</div></div>'; } }
+  }
+  var _envTick=0;
+  async function pollLiveAndEnv(){ if((_envTick++%3)===0){ try{ state.env=await api('/api/setup/wechat_pc/env'); syncRailFromState(); }catch(_){ } } await pollLive(); }
+  async function doAct(a,btn){
+    var box=el('cg-live');
+    if(a==='back1'){ show(0); return; }
+    if(a==='log'){ state.logOpen=!state.logOpen; if(state.live) paintLive(state.live); return; }
+    if(a==='focus'){ track('focus_wechat'); try{ await post('/api/setup/wechat_pc/launch-wechat'); }catch(e){ setStatus(Tf('cg.error_generic',{why:String(e&&e.message||e)}),'bad'); } setTimeout(pollLive,1200); return; }
+    var path={start:'start',retry:'restart',restart:'restart',stop:'stop'}[a]; if(!path) return;
+    if(btn){ btn.disabled=true; if(a!=='stop') btn.textContent=T('cg.pc.btn_starting'); }
+    if(box&&a!=='stop'){ box.className='cg-live busy'; }
+    track(a);
+    try{ var st=await post('/api/setup/wechat_pc/copilot/'+path); paintLive(st); track(a+'_ok'); }
+    catch(e){ var why=String(e&&e.message||e); var msg=why.indexOf('driver_not_ready')>=0?T('cg.pc.err_driver'):why.indexOf('admin_token_missing')>=0?T('cg.pc.err_token'):Tf('cg.pc.err_start',{why:why});
+      setStatus(msg,'bad'); track(a+'_fail'); pollLive(); }
+  }
+  async function loadManual(){
+    var m=el('cg-manual-body'); if(!m) return;
+    m.innerHTML='<div class="cg-status">'+esc(T('cg.loading'))+'</div>';
+    try{
+      if(IS_SUP){ try{ await post('/api/setup/wechat_pc/prepare'); }catch(_){} }
+      var d=await api('/api/setup/wechat_pc/start-command'); state.manual=d;
+      m.innerHTML='<p class="cg-lead" style="margin-top:6px;">'+esc(T('cg.pc.adv_lead'))+'</p>'
+        +'<div class="cg-cmd">'+esc(d.command)+'</div><div class="cg-actions"><button class="cg-btn sm" type="button" data-copy="'+esc(d.command)+'">'+esc(T('cg.pc.copy_cmd'))+'</button></div>'
+        +'<p class="cg-lead">'+esc(T('cg.pc.adv_autostart_lead'))+'</p><div class="cg-cmd">'+esc(d.autostart_command)+'</div><div class="cg-actions"><button class="cg-btn sm" type="button" data-copy="'+esc(d.autostart_command)+'">'+esc(T('cg.pc.copy_autostart'))+'</button></div>'
+        +'<div class="hint" style="font-size:11.5px;color:var(--tk-text-muted);">'+esc(T(d.prepared?'cg.pc.adv_token_note':'cg.pc.token_missing'))+'</div>';
+    }catch(e){ m.innerHTML='<div class="cg-card warn">'+esc(Tf('cg.pc.adv_load_fail',{why:String(e&&e.message||e)}))+' <button class="cg-btn sm" type="button" id="cg-manual-retry">'+esc(T('cg.pc.adv_retry'))+'</button></div>'; var r=el('cg-manual-retry'); if(r) r.onclick=loadManual; }
+  }
+  async function renderPc3(p){
+    await loadPolicy();
+    syncRailFromState();
+    var auto=!!(state.policy&&state.policy.autostart);
+    p.innerHTML='<p class="cg-lead">'+esc(T('cg.pc.s3_lead'))+'</p>'
+      +'<div class="cg-live" id="cg-live" role="status" aria-live="polite"><div class="dot"></div><div class="body"><div class="ttl">'+esc(T('cg.loading'))+'</div></div></div>'
+      +(IS_SUP?'<label class="cg-toggle"><input type="checkbox" id="cg-auto" '+(auto?'checked':'')+'><span class="sw"></span><span class="txt"><b>'+esc(T('cg.pc.autostart'))+'</b><small>'+esc(T('cg.pc.autostart_d'))+'</small></span><span class="cg-status" id="cg-auto-st"></span></label>':'')
+      +'<div class="cg-sec"><div class="cg-sec-h">'+ic('chat')+esc(T('cg.pc.test_title'))+'</div><p class="cg-lead">'+esc(T('cg.pc.test_lead'))+'</p><div id="cg-recent"></div></div>'
+      +'<details class="cg-adv"><summary>'+ic('help')+esc(T('cg.pc.faq_title'))+'</summary><table class="cg-faq"><thead><tr><th>'+esc(T('cg.pc.faq_symptom'))+'</th><th>'+esc(T('cg.pc.faq_cause'))+'</th><th>'+esc(T('cg.pc.faq_fix'))+'</th></tr></thead><tbody>'
+      +FAQ.map(function(f){ return '<tr><td>'+esc(f.code)+'</td><td>'+esc(f.meaning)+'</td><td>'+esc(f.fix)+'</td></tr>'; }).join('')+'</tbody></table></details>'
+      +'<details class="cg-adv" id="cg-manual"><summary>'+ic('wrench')+esc(T('cg.pc.adv_title'))+'</summary><div id="cg-manual-body"></div></details>';
+    el('cg-live').addEventListener('click',function(e){ var b=e.target.closest('button[data-act]'); if(b) doAct(b.getAttribute('data-act'),b); });
+    var man=el('cg-manual'); man.addEventListener('toggle',function(){ man.dataset.touched='1'; if(man.open&&!state.manual) loadManual(); });
+    var ck=el('cg-auto'); if(ck) ck.onchange=async function(){
+      var on=ck.checked; ck.disabled=true; el('cg-auto-st').textContent=T('cg.kf.saving'); el('cg-auto-st').className='cg-status';
+      try{ var d=await post('/api/setup/wechat_pc/autostart',{enabled:on}); state.policy.autostart=d.autostart; el('cg-auto-st').textContent=T(d.autostart?'cg.pc.autostart_on':'cg.pc.autostart_off'); el('cg-auto-st').className='cg-status ok'; track(on?'autostart_on':'autostart_off'); }
+      catch(e){ ck.checked=!on; el('cg-auto-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-auto-st').className='cg-status bad'; }
+      finally{ ck.disabled=false; }
+    };
+    every(pollLiveAndEnv,3000);
+    every(pollRecentPc,6000);
+  }
+
+  head();
+  var m=(location.hash||'').match(/^#s(\d+)$/); show(m?parseInt(m[1],10)-1:0);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,1026 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('mb_title', '会员中心') }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('mb_title', '会员中心') }}{% endblock %}
+
+{% block content %}
+{#- 服务端渲染为主 + 三段客户端 JS（同步授权 / 邀请卡 / 客服绑定码 / 注册领取）。
+    i18n 键在 i18n_packs/membership.py，数据装配在 routes/membership_routes.py::
+    build_membership_snapshot（口径=feature_gate 单源）。
+    2026-08-11 免费额度升级改版：额度英雄区（环形进度+剩余大字）→ 获取更多三卡
+    （邀请 / 客服 / 购买）→ 注册领取 → 激活/兑换 → 托管 AI 独立水表 → 趋势 → 矩阵。
+    新 JS 全部对「后端还没装载新路由」降级（404/异常 → 整卡隐藏），模板热更新
+    先于实例重启上线也不会出现死按钮。 -#}
+<style>.mb-cur-col{background:color-mix(in srgb, var(--blue,#3b82f6) 6%, transparent)}
+.mb-from-hint{margin:0 0 .7rem;padding:.55rem .8rem;border-radius:8px;font-size:.85rem;
+  background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent);color:var(--blue,#3b82f6);
+  display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.mb-from-hint>span{flex:1 1 auto;min-width:200px}
+.mb-from-cta{flex:0 0 auto;padding:.3rem .8rem;border-radius:6px;font-size:.8rem;white-space:nowrap;
+  background:var(--blue,#3b82f6);color:#fff;text-decoration:none}
+.mb-from-cta:hover{opacity:.88}
+.mb-row-hi td{background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent)}
+.mb-row-hi td:first-child{font-weight:600}
+#mb-activate:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}
+#mb-claim:target,#mb-invite:target,#mb-cs:target,#mb-hero:target,#mb-more:target,#mb-trend:target,#mb-matrix:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}
+/* 锚点导航（P0 引导 2026-08-21）：10 张卡的长页需要一行「去哪找什么」。
+   字号守 .75rem 下限（admin-theme 可读性纪律）。 */
+.mb2-nav{display:flex;gap:.45rem;flex-wrap:wrap;margin:0 0 1rem}
+.mb2-nav a{font-size:.75rem;padding:.24rem .68rem;border-radius:999px;border:1px solid var(--bd,#e5e7eb);
+  color:var(--t2);text-decoration:none;white-space:nowrap;transition:.15s}
+.mb2-nav a:hover{color:var(--blue,#3b82f6);border-color:var(--blue,#3b82f6)}
+.mb-hero{display:flex;gap:1.4rem;align-items:center;padding:1.1rem 1.3rem;flex-wrap:wrap}
+.mb-hero-num{font-size:2rem;font-weight:800;line-height:1.15;letter-spacing:.3px}
+.mb-chip{display:inline-block;padding:.14rem .55rem;border-radius:999px;font-size:.68rem;
+  background:color-mix(in srgb, var(--blue,#3b82f6) 12%, transparent);color:var(--blue,#3b82f6)}
+.mb-more{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.8rem}
+.mb-more-card{border:1px solid var(--bd,#e5e7eb);border-radius:10px;padding:.85rem .95rem;
+  display:flex;flex-direction:column;gap:.45rem;min-height:150px}
+.mb-more-card h4{margin:0;font-size:.92rem}
+.mb-more-card .d{font-size:.76rem;color:var(--t2);line-height:1.55;flex:0 0 auto}
+.mb-code{font-family:monospace;font-weight:700;font-size:1.05rem;letter-spacing:1.5px;
+  padding:.3rem .6rem;border-radius:8px;background:var(--bg2,#f1f5f9);display:inline-block}
+.mb-inline-msg{font-size:.76rem}</style>
+{% set gate = mb.gate or {} %}
+{% set lic = mb.license or {} %}
+{% set plan = gate.plan or 'community' %}
+{% set state = lic.state or 'unlicensed' %}
+{% set q = mb.quota or {} %}
+{% set inc = q.included_chars or 0 %}
+{% set used = q.used_chars or 0 %}
+{% set remv = q.remaining_chars if q.remaining_chars is not none else (inc - used if inc - used > 0 else 0) %}
+{% set is_trial_src = q.source == 'local_trial' %}
+{#- 注册领取卡：无签名授权且非厂商自营 override 才有意义（zhiliao 自营实例不渲染） -#}
+{% set can_claim = user_role == 'master' and (not lic.licensed) and gate.plan_source != 'override' %}
+{% set lvl = 'out' if q.exceeded else ('low' if (inc > 0 and remv <= inc * 0.2) else 'ok') %}
+{% set lvl_color = 'var(--red,#ef4444)' if lvl == 'out' else ('var(--amber,#d97706)' if lvl == 'low' else 'var(--green,#16a34a)') %}
+
+<div style="max-width:980px">
+  <p style="color:var(--t2);margin:.2rem 0 .7rem">{{ (i18n or {}).get('mb_subtitle', '当前授权档位、功能矩阵与用量一览') }}</p>
+
+  {#- 尝鲜（未注册）接回横幅（P0 引导 2026-08-21）：首启向导里跳过领取的人，
+      在这里被接回领取流程；额度数字用本机真值（licensing.trial 可配，勿写死）。 -#}
+  {% if is_trial_src and can_claim %}
+  <div class="mb-from-hint" id="mb2-trial-banner">
+    <span>🎁 {{ ((i18n or {}).get('mb2_trial_banner', '当前是尝鲜额度（{n} 字符 · 未注册）。留个联系方式即可免费领 100 万字符——无期限、绑定本机。')).format(n='{:,}'.format(inc)) }}</span>
+    <a class="mb-from-cta" href="#mb-claim">{{ (i18n or {}).get('mb2_trial_banner_cta', '立即领取 ↓') }}</a>
+  </div>
+  {% endif %}
+
+  {#- 锚点导航（P0 引导）：长页寻路；条件项跟随对应卡片的渲染条件，不出死锚。 -#}
+  <nav class="mb2-nav">
+    <a href="#mb-hero">{{ (i18n or {}).get('mb2_nav_quota', '额度总览') }}</a>
+    <a href="#mb-more">{{ (i18n or {}).get('mb_more_title', '获取更多字符') }}</a>
+    {% if can_claim %}<a href="#mb-claim">{{ (i18n or {}).get('mb_claim_title', '注册领取免费额度') }}</a>{% endif %}
+    {% if user_role == 'master' %}<a href="#mb-activate">{{ (i18n or {}).get('mb_activate_title', '激活授权') }}</a>{% endif %}
+    {% if mb.quota.history %}<a href="#mb-trend">{{ (i18n or {}).get('mb_trend_title', '用量趋势') }}</a>{% endif %}
+    <a href="#mb-matrix">{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</a>
+  </nav>
+
+  {% if not gate.enabled %}
+  <div class="card" style="border-left:3px solid var(--amber);margin-bottom:1rem">
+    <div style="padding:.7rem 1rem;color:var(--t2)">{{ (i18n or {}).get('mb_gate_off', '档位功能闸门当前未启用：所有功能全量放行。') }}</div>
+  </div>
+  {% endif %}
+
+  {#- ═══ 额度英雄区：环形进度 + 剩余大字（这页存在的第一理由是回答「我还剩多少」） ═══ -#}
+  <div class="card" id="mb-hero" style="margin-bottom:1.2rem{% if lvl == 'out' %};border-left:3px solid var(--red,#ef4444){% elif lvl == 'low' %};border-left:3px solid var(--amber,#d97706){% endif %}">
+    <div class="mb-hero">
+      <div style="flex:0 0 auto;position:relative;width:128px;height:128px">
+        <svg width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="quota">
+          <circle cx="64" cy="64" r="54" fill="none" stroke="var(--bg2,#f1f5f9)" stroke-width="11"/>
+          {% if inc > 0 %}
+          {% set frac = (remv / inc) %}
+          {% set frac = 0.0 if frac < 0 else (1.0 if frac > 1 else frac) %}
+          <circle cx="64" cy="64" r="54" fill="none" stroke="{{ lvl_color }}" stroke-width="11"
+                  stroke-linecap="round" stroke-dasharray="{{ '%.1f' % (339.292 * frac) }} 339.292"
+                  transform="rotate(-90 64 64)"/>
+          {% else %}
+          <circle cx="64" cy="64" r="54" fill="none" stroke="var(--green,#16a34a)" stroke-width="11"
+                  stroke-linecap="round" stroke-dasharray="339.292 339.292" transform="rotate(-90 64 64)" opacity=".55"/>
+          {% endif %}
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column">
+          {% if inc > 0 %}
+          <span style="font-size:.95rem;font-weight:800;color:{{ lvl_color }}">{{ '%.0f' % (100 * (0.0 if inc == 0 else (0.0 if remv < 0 else (1.0 if remv > inc else remv / inc))) ) }}%</span>
+          <span style="font-size:.6rem;color:var(--t2)">{{ (i18n or {}).get('mb_hero_remaining', '剩余可用') }}</span>
+          {% else %}
+          <span style="font-size:1.3rem;font-weight:800;color:var(--green,#16a34a)">∞</span>
+          {% endif %}
+        </div>
+      </div>
+      <div style="flex:1;min-width:230px">
+        <div style="margin-bottom:.35rem">
+          <span class="mb-chip">
+            {% if is_trial_src %}{{ (i18n or {}).get('mb_src_taste', '尝鲜额度 · 未注册') }}
+            {% elif lic.trial %}{{ (i18n or {}).get('mb_src_free', '免费额度 · 已注册绑定本机') }}
+            {% elif lic.licensed %}{{ (i18n or {}).get('mb_src_paid', '订阅额度') }}
+            {% else %}{{ (i18n or {}).get('mb_quota', '字符额度') }}{% endif %}
+          </span>
+        </div>
+        {% if inc > 0 %}
+        <div class="mb-hero-num" style="color:{{ lvl_color }}">{{ '{:,}'.format(remv) }}</div>
+        <div style="font-size:.78rem;color:var(--t2);margin-top:.15rem">
+          {{ ((i18n or {}).get('mb_hero_used', '已用 {n}')).format(n='{:,}'.format(used)) }}
+          · {{ ((i18n or {}).get('mb_hero_included', '总额度 {n}')).format(n='{:,}'.format(inc)) }}
+          {% if q.topup_chars %}
+          <span style="color:var(--green)">· {{ ((i18n or {}).get('mb_hero_topup', '含加量 +{n}')).format(n='{:,}'.format(q.topup_chars)) }}</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="mb-hero-num">{{ (i18n or {}).get('mb_hero_unlimited', '不限量') }}</div>
+        <div style="font-size:.78rem;color:var(--t2);margin-top:.15rem">{{ (i18n or {}).get('mb_hero_unlimited_note', '当前授权不限字符量') }}</div>
+        {% endif %}
+        <div style="font-size:.8rem;font-weight:600;color:{{ lvl_color }};margin-top:.45rem">
+          {% if lvl == 'out' %}{{ (i18n or {}).get('mb_hero_state_out', '额度已用尽') }}
+          {% elif lvl == 'low' %}{{ (i18n or {}).get('mb_hero_state_low', '额度即将用尽') }}
+          {% elif inc > 0 %}{{ (i18n or {}).get('mb_hero_state_ok', '额度充足') }}{% endif %}
+          {#- P-4 #254（MTRCH2④）：hours_left 三态——有数 / None 且窗口 0（不限时）/ None 且窗口 >0（未开始计时）。
+              此前 None 分支整行不渲染，日志侧则打成「0.0 小时窗口（剩 None 小时）」。 -#}
+          {% if is_trial_src and not q.exceeded %}
+            {% if q.trial_hours_left is not none %}
+          <span style="font-weight:400;color:var(--t2)">· {{ ((i18n or {}).get('mb_trial_line', '首启体验档 · 还剩 {h} 小时')).format(h=q.trial_hours_left) }}</span>
+            {% elif not q.trial_window_hours %}
+          <span style="font-weight:400;color:var(--t2)">· {{ (i18n or {}).get('mb_trial_line_unlimited', '首启体验档 · 不限时') }}</span>
+            {% else %}
+          <span style="font-weight:400;color:var(--t2)">· {{ (i18n or {}).get('mb_trial_line_not_started', '首启体验档 · 未开始计时') }}</span>
+            {% endif %}
+          {% endif %}
+          {#- low/out 前置引导（P1-L 缩水版）：三出路卡就在下方，给一步直达锚点即可，
+              不在英雄区复制按钮组（重复建设）。 -#}
+          {% if lvl in ('low', 'out') %}
+          <a href="#mb-more" style="font-weight:600;font-size:.76rem;margin-left:.35rem;color:var(--blue,#3b82f6);text-decoration:none">{{ (i18n or {}).get('mb2_more_jump', '获取更多 ↓') }}</a>
+          {% endif %}
+        </div>
+        {% if lvl == 'out' %}
+        <div style="font-size:.76rem;color:var(--t2);margin-top:.3rem">{{ (i18n or {}).get('mb_hero_out_hint', '翻译与 AI 拟稿已暂停——邀请好友、联系客服或购买即可继续。') }}</div>
+        {% endif %}
+        {% if user_role == 'master' %}
+        <div style="margin-top:.55rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+          <button id="mb-sync-btn" class="btn btn-sm" type="button">{{ (i18n or {}).get('mb_sync_btn', '同步授权') }}</button>
+          <span id="mb-sync-msg" class="mb-inline-msg" style="display:none"></span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {#- 概要三卡：档位 / 状态 / 席位（字符额度已升级为上方英雄区） -#}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem;margin-bottom:1.2rem">
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_cur_plan', '当前档位') }}</div>
+      <div style="font-size:1.3rem;font-weight:800">{{ (i18n or {}).get('mb_plan_' ~ plan, plan) }}</div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {% if gate.plan_source == 'override' %}{{ (i18n or {}).get('mb_plan_src_override', '厂商自营（override）') }}
+        {% elif gate.plan_source == 'license' %}{{ (i18n or {}).get('mb_plan_src_license', '授权文件') }}
+        {% else %}{{ (i18n or {}).get('mb_plan_src_community', '未激活授权') }}{% endif %}
+      </div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_state', '授权状态') }}</div>
+      <div style="font-size:1.05rem;font-weight:700">{{ (i18n or {}).get('mb_state_' ~ state, state) }}</div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {% if lic.days_left is not none and lic.days_left >= 0 %}
+          {{ ((i18n or {}).get('mb_days_left', '剩余 {n} 天')).format(n=lic.days_left) }}
+        {% elif lic.licensed %}
+          {{ (i18n or {}).get('mb_perpetual', '永久有效') }}
+        {% else %}—{% endif %}
+      </div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {{ (i18n or {}).get('mb_channels', '允许渠道') }}:
+        {% if lic.channels %}{{ lic.channels|join(' · ') }}{% else %}{{ (i18n or {}).get('mb_channels_all', '全渠道') }}{% endif %}
+      </div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_seats', '坐席席位') }}</div>
+      <div style="font-size:1.05rem;font-weight:700">
+        {% set su = mb.seats.used if mb.seats.used is not none else '—' %}
+        {% if mb.seats.limit > 0 %}
+          {{ ((i18n or {}).get('mb_seats_val', '已建 {used} / 上限 {limit}')).format(used=su, limit=mb.seats.limit) }}
+        {% else %}
+          {{ ((i18n or {}).get('mb_seats_unlimited', '已建 {used} / 不限')).format(used=su) }}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {#- ═══ 获取更多字符：邀请（免费）/ 客服（真人）/ 购买（即时）三条出路并排 ═══ -#}
+  <div class="card" id="mb-more" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_more_title', '获取更多字符') }}</h3></div>
+    <div style="padding:.9rem 1rem">
+      <div class="mb-more">
+        {#- 邀请/客服两卡挂在官网 trial 台账上：厂商自营 override 实例没有 claim，
+            渲染出来只会是死按钮 → 服务端直接不出。 -#}
+        {% if user_role == 'master' and gate.plan_source != 'override' %}
+        <div class="mb-more-card" id="mb-invite">
+          <h4>🎁 {{ (i18n or {}).get('mb_more_invite_t', '邀请好友') }}</h4>
+          <div class="d">{{ (i18n or {}).get('mb_more_invite_d', '好友注册时填你的邀请码，双方各得一笔字符奖励——完全免费。') }}</div>
+          <div id="mb-invite-body" style="display:flex;flex-direction:column;gap:.45rem">
+            <span class="mb-inline-msg" style="color:var(--t2)">{{ (i18n or {}).get('mb_invite_loading', '加载中…') }}</span>
+          </div>
+        </div>
+        <div class="mb-more-card" id="mb-cs">
+          <h4>💬 {{ (i18n or {}).get('mb_more_cs_t', '联系客服申请') }}</h4>
+          <div class="d">{{ (i18n or {}).get('mb_more_cs_d', '把绑定码发给客服并说明你的用量需求，核销后额度自动到账——不用回来操作。') }}</div>
+          <div id="mb-cs-body" style="display:flex;flex-direction:column;gap:.45rem">
+            <div><button id="mb-cs-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_cs_get_btn', '获取绑定码') }}</button></div>
+            <span id="mb-cs-msg" class="mb-inline-msg" style="display:none"></span>
+          </div>
+        </div>
+        {% endif %}
+        <div class="mb-more-card" id="mb-buy">
+          <h4>🚀 {{ (i18n or {}).get('mb_more_buy_t', '购买 / 升级') }}</h4>
+          <div class="d">{{ (i18n or {}).get('mb_more_buy_d', '订阅套餐解锁更多坐席、全渠道与 AI 自动成交；也可单买字符包。') }}</div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:auto">
+            {% if mb.shop.url %}
+            <a href="{{ mb.shop.url }}" target="_blank" rel="noopener" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_buy_cta', '购买 / 续费') }}</a>
+            {% endif %}
+            {% if user_role == 'master' %}
+            <a href="#mb-activate" class="btn btn-sm">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {#- ═══ 注册领取免费额度（未持签名授权 + 非厂商自营实例才渲染） ═══ -#}
+  {% if can_claim %}
+  <div class="card" id="mb-claim" style="margin-bottom:1.2rem;border-left:3px solid var(--blue,#3b82f6)">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_claim_title', '注册领取免费额度') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('mb_claim_desc', '留一个联系方式（Telegram 用户名或手机号），免费领取 100 万字符——无期限、绑定本机。用完可邀请好友、联系客服申请或购买。') }}</div>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <input id="mb-claim-contact" type="text" autocomplete="off" spellcheck="false"
+               placeholder="{{ (i18n or {}).get('mb_claim_ph', '@你的Telegram用户名 或 手机号') }}"
+               style="flex:2;min-width:220px;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-size:.82rem">
+        <input id="mb-claim-invite" type="text" autocomplete="off" spellcheck="false"
+               placeholder="{{ (i18n or {}).get('mb_claim_invite_ph', '邀请码（选填，好友给你的 ZL-XXXXXX）') }}"
+               style="flex:1;min-width:180px;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-size:.82rem">
+        <button id="mb-claim-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_claim_btn', '免费领取') }}</button>
+      </div>
+      <div id="mb-claim-msg" class="mb-inline-msg" style="margin-top:.55rem;display:none"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  {#- 升级引导（保留：锁定功能计数 + 购买 CTA） -#}
+  {% if gate.enabled %}
+  <div class="card" style="margin-bottom:1.2rem;border-left:3px solid {{ 'var(--green)' if not gate.locked else 'var(--blue,#3b82f6)' }}">
+    <div style="padding:.8rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-weight:700;margin-bottom:.2rem">{{ (i18n or {}).get('mb_upgrade_title', '升级套餐') }}</div>
+        <div style="font-size:.82rem;color:var(--t2)">
+          {% if gate.locked %}
+            {{ ((i18n or {}).get('mb_upgrade_desc', '有 {n} 项功能未包含在当前档位。联系您的服务商升级套餐，或在下方「激活授权」粘贴新的授权密钥。')).format(n=gate.locked|length) }}
+          {% else %}
+            {{ (i18n or {}).get('mb_upgrade_all_clear', '当前档位已解锁全部功能。') }}
+          {% endif %}
+        </div>
+      </div>
+      {% if mb.shop.url %}
+      <a href="{{ mb.shop.url }}" target="_blank" rel="noopener" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_buy_cta', '购买 / 续费') }}</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {#- 激活授权（P0-IA）：粘贴 key → /api/admin/license/activate（验签通过才写
+      config/license.key 并热 reload）。本页=授权唯一主场（看/买/激活/兑换）。 -#}
+  {% if user_role == 'master' %}
+  <div class="card" id="mb-activate" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_activate_title', '激活授权') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('mb_activate_desc', '粘贴厂商签发的授权码（license key），激活成功立即生效；无效或过期的授权码不会写入。') }}</div>
+      <textarea id="mb-activate-input" rows="3" autocomplete="off" spellcheck="false"
+                placeholder="{{ (i18n or {}).get('mb_activate_ph', 'eyJzdWIi…（粘贴授权码）') }}"
+                style="width:100%;box-sizing:border-box;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-family:monospace;font-size:.78rem;resize:vertical"></textarea>
+      <div style="display:flex;align-items:center;gap:.6rem;margin-top:.55rem;flex-wrap:wrap">
+        <button id="mb-activate-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_activate_btn', '激活') }}</button>
+        <span id="mb-activate-msg" style="font-size:.8rem;display:none"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var btn = document.getElementById('mb-activate-btn');
+    var inp = document.getElementById('mb-activate-input');
+    var msg = document.getElementById('mb-activate-msg');
+    if (!btn || !inp || !msg) return;
+    /* 经锚点进入（「去激活授权」CTA / 系统设置指路 /membership#mb-activate）
+       → 自动聚焦输入框，落地即可粘贴 */
+    if (location.hash === '#mb-activate') { setTimeout(function(){ inp.focus(); }, 150); }
+    var T_EMPTY = {{ (i18n or {}).get('mb_activate_empty', '请先粘贴授权码')|tojson }};
+    var T_OK = {{ (i18n or {}).get('mb_activate_ok', '激活成功，正在刷新…')|tojson }};
+    var T_FAIL = {{ (i18n or {}).get('mb_activate_fail', '激活失败：')|tojson }};
+    function show(text, ok){
+      msg.style.display = 'inline';
+      msg.style.color = ok ? 'var(--green)' : 'var(--red,#ef4444)';
+      msg.textContent = text;
+    }
+    btn.addEventListener('click', function(){
+      var v = (inp.value || '').trim();
+      if (!v) { show(T_EMPTY, false); inp.focus(); return; }
+      btn.disabled = true;
+      window.apiFetch('/api/admin/license/activate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: v})
+      }, {timeoutMs: 30000}).then(function(r){
+        return r.json().then(function(d){ return {ok: r.ok, d: d}; });
+      }).then(function(x){
+        if (x.ok && x.d && x.d.ok) {
+          show(T_OK, true);
+          setTimeout(function(){ location.reload(); }, 1400);
+        } else {
+          show(T_FAIL + ((x.d && (x.d.detail || x.d.error)) || 'error'), false);
+          btn.disabled = false;
+        }
+      }).catch(function(){
+        show(T_FAIL + 'network error', false);
+        btn.disabled = false;
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+
+  {#- 兑换加量包（P4c；2026-08-19 起同一兑换框吃两种凭证：字符包 + Token 包）。
+      条件补 tokens.enabled：新 SKU（字符不限=免费翻译）用户也要有兑换入口，
+      否则 Token 包凭证无处粘贴。 -#}
+  {% if user_role == 'master' and (mb.quota.included_chars or (mb.tokens or {}).get('enabled')) %}
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_redeem_title', '兑换加量包') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('mb_redeem_desc', '购买字符加量包后会收到一段凭证，粘贴到下方即可入账（同一凭证只能兑换一次）。') }}</div>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <input id="mb-voucher-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="{{ (i18n or {}).get('mb_redeem_ph', '粘贴加量凭证…') }}"
+               style="flex:1;min-width:260px;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-family:monospace;font-size:.78rem">
+        <button id="mb-voucher-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_redeem_btn', '兑换') }}</button>
+      </div>
+      <div id="mb-voucher-msg" style="font-size:.8rem;margin-top:.5rem;display:none"></div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var btn = document.getElementById('mb-voucher-btn');
+    var inp = document.getElementById('mb-voucher-input');
+    var msg = document.getElementById('mb-voucher-msg');
+    if (!btn || !inp || !msg) return;
+    btn.addEventListener('click', function(){
+      var v = (inp.value || '').trim();
+      if (!v) { inp.focus(); return; }
+      btn.disabled = true;
+      window.apiFetch('/api/admin/license/topup-voucher', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({voucher: v})
+      }, {timeoutMs: 15000}).then(function(r){ return r.json(); }).then(function(res){
+        msg.style.display = 'block';
+        if (res && res.ok) {
+          msg.style.color = 'var(--green)';
+          // Token 包凭证回 tokens 字段、字符包回 chars——按载荷选文案（双载荷优先报 Token）
+          msg.textContent = (res.tokens
+            ? (window.T ? window.T('mb_redeem_ok_tokens') : 'OK').replace('{n}', (res.tokens || 0).toLocaleString())
+            : (window.T ? window.T('mb_redeem_ok') : 'OK').replace('{n}', (res.chars || 0).toLocaleString()));
+          setTimeout(function(){ location.reload(); }, 1400);
+        } else {
+          msg.style.color = 'var(--red,#ef4444)';
+          msg.textContent = (res && res.detail) || (res && res.error) || 'error';
+          btn.disabled = false;
+        }
+      }).catch(function(){
+        msg.style.display = 'block';
+        msg.style.color = 'var(--red,#ef4444)';
+        msg.textContent = 'network error';
+        btn.disabled = false;
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+
+  {#- Token 钱包（2026-08-19 Token 定价改版 P2b）：licensing.token_ledger.enabled
+      开启才出卡（服务端 feat-detect，中间态自洽）。余额/月含量/消耗构成/入账批次/
+      公示计价表全部服务端渲染零 JS；与字符额度、托管通道是三套独立水表。 -#}
+  {% set tk = mb.tokens or {} %}
+  {% if tk.get('enabled') %}
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>🪙 {{ (i18n or {}).get('mb_tok_title', 'Token 钱包') }}</h3></div>
+    <div style="padding:.9rem 1.1rem">
+      <div style="display:flex;flex-wrap:wrap;gap:1.6rem;align-items:flex-end">
+        <div>
+          <div style="font-size:.72rem;color:var(--t2)">{{ (i18n or {}).get('mb_tok_balance', '当前余额') }}</div>
+          <div style="font-size:1.9rem;font-weight:700;line-height:1.15">{{ '{:,}'.format(tk.get('balance', 0)) }}
+            <span style="font-size:.78rem;font-weight:400;color:var(--t2)">{{ (i18n or {}).get('mb_tok_unit', 'Token') }}</span></div>
+        </div>
+        <div style="font-size:.76rem;color:var(--t2);display:flex;gap:1.2rem;flex-wrap:wrap">
+          <span>{{ (i18n or {}).get('mb_tok_today', '今日消耗') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('today', 0)) }}</b></span>
+          <span>{{ (i18n or {}).get('mb_tok_total', '累计消耗') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('total_spend', 0)) }}</b></span>
+          {% if tk.get('expired_lost', 0) > 0 %}
+          <span>{{ (i18n or {}).get('mb_tok_expired', '过期作废') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('expired_lost', 0)) }}</b></span>
+          {% endif %}
+        </div>
+      </div>
+      <div style="font-size:.76rem;color:var(--t2);margin-top:.5rem">
+        {% if tk.get('monthly', 0) > 0 %}{{ ((i18n or {}).get('mb_tok_monthly', '订阅每月含 {n} Token（自动入账 · 当月有效不结转）')).replace('{n}', '{:,}'.format(tk.get('monthly', 0))) }}
+        {% else %}{{ (i18n or {}).get('mb_tok_monthly_none', '无订阅月含量（按量 / Token 包模式）') }}{% endif %}
+      </div>
+
+      {% if tk.get('by_action') %}
+      <div style="margin-top:.8rem">
+        <div style="font-size:.74rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_tok_by_action', '消耗构成（累计）') }}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem">
+          {% for act, n in tk.get('by_action', {}).items() %}
+          <span style="font-size:.74rem;border:1px solid var(--bd);border-radius:999px;padding:.18rem .6rem;color:var(--t1)">
+            {{ (i18n or {}).get('mb_tok_act_' ~ act, act) }} · {{ '{:,}'.format(n) }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk.get('grants') %}
+      <div style="margin-top:.8rem">
+        <div style="font-size:.74rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_tok_grants', '最近入账批次') }}</div>
+        <table style="width:100%;font-size:.76rem;border-collapse:collapse">
+          {% for g in tk.get('grants', []) %}
+          <tr style="border-top:1px solid var(--bd)">
+            <td style="padding:.28rem 0;color:var(--t1)">{{ (i18n or {}).get('mb_tok_kind_' ~ g.kind, g.kind) }}</td>
+            <td style="padding:.28rem 0;text-align:right;font-weight:600">+{{ '{:,}'.format(g.tokens) }}</td>
+            <td style="padding:.28rem 0 .28rem 1rem;color:var(--t2)">
+              {% if g.expires_day %}{{ ((i18n or {}).get('mb_tok_expires', '有效期至 {d}')).replace('{d}', g.expires_day) }}
+              {% else %}{{ (i18n or {}).get('mb_tok_never', '永不过期') }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
+      <details style="margin-top:.8rem">
+        <summary style="font-size:.74rem;color:var(--t2);cursor:pointer">{{ (i18n or {}).get('mb_tok_rates_title', '计价表（公示口径）') }}</summary>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem">
+          {% for r in tk.get('rates', []) %}
+          <span style="font-size:.72rem;border:1px solid var(--bd);border-radius:6px;padding:.2rem .5rem;color:var(--t2)">
+            {{ (i18n or {}).get('mb_tok_act_' ~ r.key, r.key) }}：
+            {%- if r.tokens == 0 %} {{ (i18n or {}).get('mb_tok_free', '免费') }}
+            {%- else %} {{ r.tokens }} / {% if r.unit_size > 1 %}{{ '{:,}'.format(r.unit_size) }} {% endif %}{{ (i18n or {}).get('mb_tok_u_' ~ r.unit, r.unit) }}{% endif %}</span>
+          {% endfor %}
+        </div>
+      </details>
+      {% set fu = tk.get('fair_use') or {} %}
+      {% if fu.get('today', 0) > 0 %}
+      <div style="font-size:.74rem;color:var(--t2);margin-top:.6rem">
+        {{ ((i18n or {}).get('mb_tok_fair_use', '免费标准翻译今日 {n} / {limit} 字符（公平使用，超出仅提醒不拦截）'))
+           .replace('{n}', '{:,}'.format(fu.get('today', 0))).replace('{limit}', '{:,}'.format(fu.get('limit', 0))) }}
+        {% if fu.get('exceeded') %}<b style="color:var(--amber,#d97706)">⚠</b>{% endif %}
+      </div>
+      {% endif %}
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.6rem">💡 {{ (i18n or {}).get('mb_tok_degrade_note', '余额用尽不会断线：AI 回复自动切换免费本地模型、专业翻译降级标准翻译（免费不限量），补充 Token 包立即恢复。') }}
+        {%- if mb.tokens.get('enforce') %}
+        <span style="display:inline-block;margin-left:.35rem;padding:.05rem .45rem;border-radius:99px;background:var(--ok-bg,#dcfce7);color:var(--ok,#15803d);font-weight:600">{{ (i18n or {}).get('mb_tok_enforce_on', '降级保护已启用') }}</span>
+        {%- else %}
+        <span style="display:inline-block;margin-left:.35rem;padding:.05rem .45rem;border-radius:99px;background:var(--chip-bg,#f1f5f9);color:var(--t2)">{{ (i18n or {}).get('mb_tok_enforce_off', '当前仅观测记账（不扣减服务）') }}</span>
+        {%- endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {#- 托管 AI 试用通道（云端网关按日计量）：与授权字符额度是**两套水表**，
+      独立成卡 + 一句话说明，别再塞进字符卡里让两个数字互相污染。 -#}
+  <div class="card" id="mb-hosted-quota" style="display:none;margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_hosted_title', 'AI 试用通道（云端）') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="mb-hosted-line" style="font-weight:600;font-size:.9rem"></span>
+        <span style="flex:0 0 120px;height:7px;border-radius:999px;background:var(--bg2,#f1f5f9);overflow:hidden;display:inline-block">
+          <i id="mb-hosted-bar" style="display:block;height:100%;width:0%;background:var(--green,#16a34a);border-radius:999px;transition:width .4s ease"></i>
+        </span>
+      </div>
+      <div id="mb-hosted-note" style="display:none;color:var(--red);font-size:.76rem;margin-top:.3rem"></div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.45rem">{{ (i18n or {}).get('mb_hosted_card_note', '云端 AI 通道按天计量、每日自动恢复——与上面的字符额度是两套独立额度。') }}</div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var LINE={{ (i18n or {}).get('mb_hosted_line', '今日已用 {used} / {budget} 字符')|tojson }};
+    var EXH={{ (i18n or {}).get('mb_hosted_exhausted', '今日已用完，明天自动恢复')|tojson }};
+    var BUSY={{ (i18n or {}).get('mb_hosted_busy', '通道繁忙，稍后自动恢复')|tojson }};
+    window.apiFetch('/api/workspace/hosted-quota', {credentials:'same-origin'},
+                    {timeoutMs: 15000})
+      .then(function(r){return r.json();})
+      .then(function(q){
+        if(!q || q.enabled===false || q.error || !q.budget) return;
+        var box=document.getElementById('mb-hosted-quota');
+        var line=document.getElementById('mb-hosted-line');
+        var bar=document.getElementById('mb-hosted-bar');
+        var note=document.getElementById('mb-hosted-note');
+        if(!box) return;
+        box.style.display='block';
+        if(line) line.textContent=LINE.replace('{used}', (q.used||0).toLocaleString()).replace('{budget}', (q.budget||0).toLocaleString());
+        var pct=q.budget>0?Math.max(0,Math.min(100,Math.round((q.used||0)*100/q.budget))):0;
+        if(bar){ bar.style.width=pct+'%'; if(pct>=100) bar.style.background='var(--red,#dc2626)'; }
+        if(note && (q.exhausted||q.busy)){ note.textContent=q.busy?BUSY:EXH; note.style.display='block'; }
+      }).catch(function(){});
+  })();
+  </script>
+
+  {#- 用量趋势（P5）：按月字符用量柱状图，服务端渲染零 JS；无记录/不限量自动隐藏。 -#}
+  {% if mb.quota.history %}
+  <div class="card" id="mb-trend" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_trend_title', '用量趋势') }}</h3></div>
+    <div style="padding:.9rem 1.1rem 1rem">
+      {% set mx = mb.quota.history | map(attribute='chars') | max %}
+      {% set mx = mx if mx and mx > 0 else 1 %}
+      <div id="mb-trend-bars" style="display:flex;align-items:flex-end;gap:14px;min-height:110px">
+        {% for it in mb.quota.history %}
+        <div style="flex:1;max-width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end"
+             title="{{ it.month }} · {{ '{:,}'.format(it.chars) }}">
+          <div style="font-size:.66rem;color:var(--t2)">
+            {%- if it.chars >= 10000 -%}{{ '%.0f' % (it.chars / 1000) }}k
+            {%- elif it.chars >= 1000 -%}{{ '%.1f' % (it.chars / 1000) }}k
+            {%- else -%}{{ it.chars }}{%- endif -%}
+          </div>
+          <div style="width:100%;border-radius:4px 4px 0 0;background:var(--blue,#3b82f6);opacity:{{ '.95' if loop.last else '.5' }};height:{{ (it.chars * 72 / mx) | round(1) }}px;min-height:2px"></div>
+          <div style="font-size:.68rem;color:var(--t2)">{{ it.month[5:] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      <div style="font-size:.7rem;color:var(--t2);margin-top:.55rem">{{ (i18n or {}).get('mb_trend_note', '按月统计（UTC）；含翻译与语音合成两类字符消耗。') }}</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {#- 功能矩阵 -#}
+  <div class="card" id="mb-matrix">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>
+    {#- E4/E5 来源引导：锁定页/锁标 302 带 ?from=<族> → 一句人话 + 行高亮 + 购买 CTA -#}
+    {% if from_hint %}<div class="mb-from-hint"><span>💡 {{ from_hint }}</span>
+      {%- if from_cta_url %}<a class="mb-from-cta" href="{{ from_cta_url }}" target="_blank" rel="noopener">{{ (i18n or {}).get('mb_from_cta', '查看升级方案 →') }}</a>{% endif -%}
+    </div>{% endif %}
+    <div style="overflow-x:auto">
+      <table class="tbl" style="width:100%;min-width:560px">
+        <thead>
+          <tr>
+            <th style="text-align:left">{{ (i18n or {}).get('mb_matrix_feature', '功能') }}</th>
+            {% for p in mb.matrix.plans %}
+            <th style="text-align:center{% if p == plan %};color:var(--blue,#3b82f6){% endif %}">
+              {{ (i18n or {}).get('mb_plan_' ~ p, p) }}{% if p == plan %}{{ (i18n or {}).get('mb_matrix_cur', '（当前）') }}{% endif %}
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in mb.matrix.rows %}
+          {#- 来源行高亮优先于锁定压暗（用户就是冲这行来的，别让它半透明） -#}
+          <tr{% if from_feature == row.name %} class="mb-row-hi"{% elif gate.enabled and not row.allowed %} style="opacity:.55"{% endif %}>
+            <td>
+              {{ (i18n or {}).get('mb_feat_' ~ row.name, row.name) }}
+              {% if gate.enabled and not row.allowed %}
+              <span style="font-size:.68rem;color:var(--amber);margin-left:.35rem">🔒 {{ (i18n or {}).get('mb_locked_row', '未包含') }}</span>
+              {% endif %}
+            </td>
+            {% for cell in row.cells %}
+            <td style="text-align:center"{% if mb.matrix.plans[loop.index0] == plan %} class="mb-cur-col"{% endif %}>
+              {% if cell %}<span style="color:var(--green)">✓</span>{% else %}<span style="color:var(--t3,#666)">—</span>{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# WP-4 合规能力一句话（销售/采购尽调常问；文档与官网模板页为引用件） #}
+  <p style="margin:.9rem 0 0;font-size:.72rem;color:var(--t3,var(--t2))">
+    {{ (i18n or {}).get('mb_compliance_note', '合规能力：AI 披露 / 诚实身份 / 危机干预与转介计数已内建，开关默认关、由运营方按属地开启。详见《智聊合规能力说明》与官网') }}
+    {% if mb.compliance and mb.compliance.protocol_url %}
+    <a href="{{ mb.compliance.protocol_url }}" target="_blank" rel="noopener">{{ (i18n or {}).get('mb_compliance_link', '危机干预协议模板页') }}</a>
+    {% endif %}
+  </p>
+</div>
+
+{% if user_role == 'master' %}
+<script>
+(function(){
+  /* ── 同步授权（自动 + 手动）：打一发 GET /api/admin/license/trial-claim ──
+     存量升级重签（免费档 25k/7天 → 100 万/无期限）与邀请奖励凭证都经这条链落地。
+     applied_license / extra_credited_chars 是「这次真的落了东西」的信号（与
+     summarize 的 activated 历史位不同——用那个会无限刷新循环）。
+     后端还没装载新逻辑（旧进程）→ 响应里没这些字段 → 永远只显示「已是最新」。 */
+  var btn = document.getElementById('mb-sync-btn');
+  var msg = document.getElementById('mb-sync-msg');
+  var T_CHK = {{ (i18n or {}).get('mb_sync_checking', '正在核对…')|tojson }};
+  var T_OKV = {{ (i18n or {}).get('mb_sync_latest', '已是最新')|tojson }};
+  var T_APPLIED = {{ (i18n or {}).get('mb_sync_applied', '授权已更新，正在刷新…')|tojson }};
+  var T_CREDITED = {{ (i18n or {}).get('mb_extra_credited', '+{n} 字符已到账')|tojson }};
+  var busy = false;
+  function show(text, tone){
+    if (!msg) return;
+    msg.style.display = 'inline';
+    msg.style.color = tone === 'ok' ? 'var(--green)' : (tone === 'err' ? 'var(--red,#ef4444)' : 'var(--t2)');
+    msg.textContent = text;
+  }
+  function sync(manual){
+    if (busy) return;
+    busy = true;
+    if (manual) show(T_CHK, '');
+    window.apiFetch('/api/admin/license/trial-claim', {}, {timeoutMs: 20000})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        busy = false;
+        d = d || {};
+        var credited = Number(d.extra_credited_chars || 0);
+        if (d.applied_license || credited > 0) {
+          var t = d.applied_license ? T_APPLIED : T_CREDITED.replace('{n}', credited.toLocaleString());
+          show(t, 'ok');
+          setTimeout(function(){ location.reload(); }, 1400);
+          return;
+        }
+        if (manual) show(T_OKV, '');
+      })
+      .catch(function(){ busy = false; if (manual) show(T_OKV, ''); });
+  }
+  if (btn) btn.addEventListener('click', function(){ sync(true); });
+  sync(false);   /* 进页自动核对一次：升级重签/邀请奖励不用等用户想起来点按钮 */
+})();
+</script>
+<script>
+(function(){
+  /* ── 邀请好友卡：数据源 = GET /api/admin/license/referral（官网 invite-info 代理）。
+     旧后端（路由未装载）/网络失败 → 整卡隐藏；未领取免费额度 → 指路注册领取卡。 */
+  var card = document.getElementById('mb-invite');
+  var body = document.getElementById('mb-invite-body');
+  if (!card || !body) return;
+  var CAN_CLAIM = {{ 'true' if can_claim else 'false' }};
+  var T_COPY = {{ (i18n or {}).get('mb_invite_copy', '复制')|tojson }};
+  var T_COPIED = {{ (i18n or {}).get('mb_invite_copied', '已复制')|tojson }};
+  var T_CODE = {{ (i18n or {}).get('mb_invite_code_label', '我的邀请码')|tojson }};
+  var T_LINK = {{ (i18n or {}).get('mb_invite_share_label', '分享链接')|tojson }};
+  var T_STATS = {{ (i18n or {}).get('mb_invite_stats', '已邀 {n} 人 · 奖励已入账 {chars} 字符')|tojson }};
+  var T_FLAGGED = {{ (i18n or {}).get('mb_invite_flagged', '{n} 条邀请在人工核对中')|tojson }};
+  var T_RULE = {{ (i18n or {}).get('mb_invite_rule', '好友注册各得 {b} 字符；好友真实用满 {q} 字符后你再得 {r} 字符（上限 {cap} 人）。')|tojson }};
+  var T_NEED = {{ (i18n or {}).get('mb_invite_need_claim', '先在下方「注册领取免费额度」，就会生成你的专属邀请码。')|tojson }};
+  /* 里程碑 / 首充返利 / 分享海报（实施50 P1；旧后端无新字段时相关块自动不渲染） */
+  var T_MILE_T = {{ (i18n or {}).get('mb_invite_milestones_t', '里程碑加码')|tojson }};
+  var T_MILE_ROW = {{ (i18n or {}).get('mb_invite_milestone_row', '邀满 {at} 人 → 额外 +{chars} 字符')|tojson }};
+  var T_MILE_DONE = {{ (i18n or {}).get('mb_invite_milestone_done', '已入账')|tojson }};
+  var T_MILE_NEXT = {{ (i18n or {}).get('mb_invite_next_milestone', '再邀 {n} 人达标，解锁下一档加码')|tojson }};
+  var T_BONUS_EARNED = {{ (i18n or {}).get('mb_invite_bonus_earned', '里程碑 / 返利已入账 {chars} 字符')|tojson }};
+  var T_REBATE_RULE = {{ (i18n or {}).get('mb_invite_rebate_rule', '好友首笔充值，你再得其金额 10% 的等值字符（7 天观察期后自动到账，单笔封顶 100U 等值）。')|tojson }};
+  var T_POSTER_BTN = {{ (i18n or {}).get('mb_invite_poster_btn', '🖼️ 生成分享海报')|tojson }};
+  var T_POSTER_SAVED = {{ (i18n or {}).get('mb_invite_poster_saved', '海报已下载，发给好友吧')|tojson }};
+  var T_POSTER_FAIL = {{ (i18n or {}).get('mb_invite_poster_fail', '生成失败，直接复制邀请码也一样用')|tojson }};
+  var T_P_HEADLINE = {{ (i18n or {}).get('mb_poster_headline', '送你 {b} 字符免费 AI 额度')|tojson }};
+  var T_P_STEPS = {{ (i18n or {}).get('mb_poster_steps', '① 下载智聊 ChatX　② 首启向导填入邀请码　③ 双方奖励自动到账')|tojson }};
+  var T_P_NOTE = {{ (i18n or {}).get('mb_poster_note', '注册再送 10,000 体验 Token · 标准翻译永久免费')|tojson }};
+  function esc(s){
+    return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  var _shareBeaconed = false;
+  function beaconShare(){
+    /* 邀请漏斗头一段（invite_share）：每次会话只记一次，纯旁路绝不阻断复制 */
+    if (_shareBeaconed) return;
+    _shareBeaconed = true;
+    try {
+      window.apiFetch('/api/admin/license/trial-funnel', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({event: 'invite_share'})}, {timeoutMs: 8000})
+        .catch(function(){});
+    } catch (e) {}
+  }
+  function wireCopy(btnId, text){
+    var b = document.getElementById(btnId);
+    if (!b) return;
+    b.addEventListener('click', function(){
+      beaconShare();
+      try {
+        navigator.clipboard.writeText(text);
+        b.textContent = T_COPIED;
+        setTimeout(function(){ b.textContent = T_COPY; }, 1600);
+      } catch (e) { /* 剪贴板不可用：内容就在屏幕上 */ }
+    });
+  }
+  window.apiFetch('/api/admin/license/referral', {}, {timeoutMs: 15000})
+    .then(function(r){
+      if (!r.ok && r.status !== 200) { throw new Error('http ' + r.status); }
+      return r.json();
+    })
+    .then(function(d){
+      d = d || {};
+      if (!d.ok) {
+        if (String(d.error || '') === 'not_claimed' && CAN_CLAIM) {
+          body.innerHTML = '<span class="mb-inline-msg" style="color:var(--t2)">' + esc(T_NEED)
+            + ' <a href="#mb-claim" style="color:var(--blue,#3b82f6)">↓</a></span>';
+        } else {
+          card.style.display = 'none';
+        }
+        return;
+      }
+      var st = d.stats || {};
+      var earned = Number(st.chars_earned || 0);
+      var bonusEarned = Number(st.bonus_chars_earned || 0);
+      /* 里程碑阶梯（新后端才有 st.milestones；旧后端整块不渲染，绝不显示半截功能） */
+      var mileHtml = '';
+      if (Array.isArray(st.milestones) && st.milestones.length) {
+        var rows = '';
+        for (var i = 0; i < st.milestones.length; i++) {
+          var m = st.milestones[i] || {};
+          rows += '<div style="display:flex;justify-content:space-between;gap:.5rem;font-size:.72rem;'
+            + 'color:' + (m.rewarded ? 'var(--green,#059669)' : 'var(--t2)') + '">'
+            + '<span>' + esc(T_MILE_ROW.replace('{at}', String(m.at || 0))
+                                       .replace('{chars}', Number(m.chars || 0).toLocaleString())) + '</span>'
+            + (m.rewarded ? '<span>✓ ' + esc(T_MILE_DONE) + '</span>' : '')
+            + '</div>';
+        }
+        mileHtml = '<div style="border:1px solid var(--line,rgba(0,0,0,.08));border-radius:.5rem;padding:.5rem .6rem">'
+          + '<div style="font-size:.68rem;color:var(--t2);margin-bottom:.25rem">🏆 ' + esc(T_MILE_T) + '</div>'
+          + rows
+          + (st.next_milestone_need != null
+            ? '<div style="font-size:.68rem;color:var(--blue,#3b82f6);margin-top:.25rem">'
+              + esc(T_MILE_NEXT.replace('{n}', String(st.next_milestone_need))) + '</div>'
+            : '')
+          + '</div>'
+          + '<div class="mb-inline-msg" style="color:var(--t2)">' + esc(T_REBATE_RULE) + '</div>'
+          + (bonusEarned > 0
+            ? '<div class="mb-inline-msg" style="color:var(--green,#059669);font-weight:600">'
+              + esc(T_BONUS_EARNED.replace('{chars}', bonusEarned.toLocaleString())) + '</div>'
+            : '');
+      }
+      var html = ''
+        + '<div><div style="font-size:.68rem;color:var(--t2);margin-bottom:.15rem">' + esc(T_CODE) + '</div>'
+        + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+        + '<span class="mb-code">' + esc(d.code || '') + '</span>'
+        + '<button id="mb-inv-copy-code" class="btn btn-sm" type="button">' + esc(T_COPY) + '</button>'
+        + '<button id="mb-inv-poster" class="btn btn-sm" type="button">' + esc(T_POSTER_BTN) + '</button>'
+        + '</div></div>'
+        + '<div><div style="font-size:.68rem;color:var(--t2);margin-bottom:.15rem">' + esc(T_LINK) + '</div>'
+        + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+        + '<span style="font-size:.72rem;word-break:break-all;color:var(--t2)">' + esc(d.share_url || '') + '</span>'
+        + '<button id="mb-inv-copy-link" class="btn btn-sm" type="button">' + esc(T_COPY) + '</button>'
+        + '</div></div>'
+        + '<div class="mb-inline-msg" style="color:var(--t1);font-weight:600">'
+        + esc(T_STATS.replace('{n}', String(st.registered || 0)).replace('{chars}', earned.toLocaleString()))
+        + '</div>'
+        + ((st.flagged || 0) > 0
+          ? '<div class="mb-inline-msg" style="color:var(--amber,#d97706)">'
+            + esc(T_FLAGGED.replace('{n}', String(st.flagged))) + '</div>'
+          : '')
+        + '<div class="mb-inline-msg" style="color:var(--t2)">'
+        + esc(T_RULE.replace('{b}', Number(d.invitee_bonus || 0).toLocaleString())
+                    .replace('{q}', Number(d.qualify_chars || 0).toLocaleString())
+                    .replace('{r}', Number(d.inviter_bonus || 0).toLocaleString())
+                    .replace('{cap}', String(st.cap_total || '')))
+        + '</div>'
+        + mileHtml;
+      body.innerHTML = html;
+      wireCopy('mb-inv-copy-code', String(d.code || ''));
+      wireCopy('mb-inv-copy-link', String(d.share_url || ''));
+      wirePoster(d);
+    })
+    .catch(function(){ card.style.display = 'none'; });
+
+  /* ── 分享海报生成器（canvas → PNG 下载；纯前端零依赖，失败绝不阻断卡片其余功能）──
+     刻意不放二维码：邀请机制的核心是「首启向导填码」，大号邀请码 + 链接文字
+     即完整信息；二维码需要引码库，收益不抵引入面（P2 视传播数据再议）。 */
+  function rr(g, x, y, w, h, r){
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+  function wirePoster(d){
+    var btn = document.getElementById('mb-inv-poster');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      beaconShare();
+      try {
+        var c = document.createElement('canvas');
+        c.width = 1080; c.height = 1350;
+        var g = c.getContext('2d');
+        var grad = g.createLinearGradient(0, 0, 1080, 1350);
+        grad.addColorStop(0, '#241a33');
+        grad.addColorStop(0.55, '#141122');
+        grad.addColorStop(1, '#12233a');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 1080, 1350);
+        /* 顶部品牌 */
+        g.fillStyle = '#fcd34d';
+        g.font = '600 44px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.textAlign = 'center';
+        g.fillText('智聊 ChatX', 540, 130);
+        g.fillStyle = 'rgba(230,237,243,.55)';
+        g.font = '30px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText('AI ' + String.fromCharCode(0x00B7) + ' 多平台客服成交系统', 540, 185);
+        /* 主标（送字符） */
+        g.fillStyle = '#ffffff';
+        g.font = '700 64px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText(T_P_HEADLINE.replace('{b}', Number(d.invitee_bonus || 0).toLocaleString()), 540, 330);
+        g.font = '34px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillStyle = 'rgba(230,237,243,.75)';
+        g.fillText(T_P_NOTE, 540, 400);
+        /* 邀请码框 */
+        g.strokeStyle = 'rgba(252,211,77,.65)';
+        g.lineWidth = 4;
+        rr(g, 190, 500, 700, 190, 26);
+        g.stroke();
+        g.fillStyle = 'rgba(252,211,77,.08)';
+        rr(g, 190, 500, 700, 190, 26);
+        g.fill();
+        g.fillStyle = 'rgba(230,237,243,.6)';
+        g.font = '30px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText(T_CODE, 540, 555);
+        g.fillStyle = '#fcd34d';
+        g.font = '700 96px Consolas,Menlo,monospace';
+        g.fillText(String(d.code || ''), 540, 660);
+        /* 步骤 */
+        g.fillStyle = 'rgba(230,237,243,.85)';
+        g.font = '32px "PingFang SC","Microsoft YaHei",sans-serif';
+        var steps = String(T_P_STEPS).split(/\u3000|  /).filter(function(s){ return s.trim(); });
+        for (var i = 0; i < steps.length && i < 4; i++) {
+          g.fillText(steps[i].trim(), 540, 820 + i * 70);
+        }
+        /* 链接 + 底部 */
+        g.fillStyle = '#7dd3fc';
+        g.font = '600 40px Consolas,Menlo,monospace';
+        g.fillText(String(d.share_url || '').replace(/^https?:\/\//, ''), 540, 1140);
+        g.fillStyle = 'rgba(230,237,243,.4)';
+        g.font = '28px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText('bd2026.cc', 540, 1270);
+        c.toBlob(function(blob){
+          if (!blob) { btn.textContent = T_POSTER_FAIL; return; }
+          var a = document.createElement('a');
+          var url = URL.createObjectURL(blob);
+          a.href = url;
+          a.download = 'chatx-invite-' + String(d.code || '').replace(/[^A-Z0-9-]/gi, '') + '.png';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+          btn.textContent = T_POSTER_SAVED;
+          setTimeout(function(){ btn.textContent = T_POSTER_BTN; }, 2600);
+        }, 'image/png');
+      } catch (e) {
+        btn.textContent = T_POSTER_FAIL;
+        setTimeout(function(){ btn.textContent = T_POSTER_BTN; }, 2600);
+      }
+    });
+  }
+})();
+</script>
+<script>
+(function(){
+  /* ── 联系客服卡：取绑定码 + TG/WA 深链（复用首启向导同一条 bind_code 链）。 */
+  var btn = document.getElementById('mb-cs-btn');
+  var body = document.getElementById('mb-cs-body');
+  var msg = document.getElementById('mb-cs-msg');
+  if (!btn || !body || !msg) return;
+  var T_FAIL = {{ (i18n or {}).get('mb_cs_fail', '取码失败，稍后再试')|tojson }};
+  var T_TG = {{ (i18n or {}).get('mb_cs_open_tg', '打开 Telegram 发给客服')|tojson }};
+  var T_WA = {{ (i18n or {}).get('mb_cs_open_wa', '用 WhatsApp 发给客服')|tojson }};
+  var T_COPY = {{ (i18n or {}).get('mb_invite_copy', '复制')|tojson }};
+  var T_COPIED = {{ (i18n or {}).get('mb_invite_copied', '已复制')|tojson }};
+  var T_REDEEMED = {{ (i18n or {}).get('mb_cs_redeemed', '已核销，额度将自动到账')|tojson }};
+  var T_NEED = {{ (i18n or {}).get('mb_invite_need_claim', '先在下方「注册领取免费额度」，就会生成你的专属邀请码。')|tojson }};
+  var CAN_CLAIM = {{ 'true' if can_claim else 'false' }};
+  function esc(s){
+    return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  btn.addEventListener('click', function(){
+    btn.disabled = true;
+    msg.style.display = 'none';
+    window.apiFetch('/api/admin/license/trial-bind-code', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: '{}'}, {timeoutMs: 15000})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        d = d || {};
+        if (!d.ok || !d.bind_code) {
+          msg.style.display = 'inline';
+          msg.style.color = String(d.error || '') === 'not_claimed' && CAN_CLAIM
+            ? 'var(--t2)' : 'var(--amber,#d97706)';
+          msg.textContent = String(d.error || '') === 'not_claimed' && CAN_CLAIM ? T_NEED : T_FAIL;
+          btn.disabled = false;
+          return;
+        }
+        var html = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+          + '<span class="mb-code">' + esc(d.bind_code) + '</span>'
+          + '<button id="mb-cs-copy" class="btn btn-sm" type="button">' + esc(T_COPY) + '</button></div>';
+        if (d.redeemed) {
+          html += '<span class="mb-inline-msg" style="color:var(--green)">' + esc(T_REDEEMED) + '</span>';
+        }
+        var links = '';
+        if (d.telegram_url) {
+          links += '<a class="btn btn-p btn-sm" target="_blank" rel="noopener" href="'
+            + esc(d.telegram_url) + '">' + esc(T_TG) + '</a>';
+        }
+        if (d.whatsapp_url) {
+          links += '<a class="btn btn-sm" target="_blank" rel="noopener" href="'
+            + esc(d.whatsapp_url) + '">' + esc(T_WA) + '</a>';
+        }
+        if (links) html += '<div style="display:flex;gap:.5rem;flex-wrap:wrap">' + links + '</div>';
+        body.innerHTML = html;
+        var cp = document.getElementById('mb-cs-copy');
+        if (cp) cp.addEventListener('click', function(){
+          try {
+            navigator.clipboard.writeText(String(d.bind_code));
+            cp.textContent = T_COPIED;
+            setTimeout(function(){ cp.textContent = T_COPY; }, 1600);
+          } catch (e) {}
+        });
+      })
+      .catch(function(){
+        msg.style.display = 'inline';
+        msg.style.color = 'var(--amber,#d97706)';
+        msg.textContent = T_FAIL;
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
+{% endif %}
+{% if can_claim %}
+<script>
+(function(){
+  /* ── 注册领取免费额度（会员页版）：与首启向导同一条 claim → poll 链。
+     领取失败绝不拦人——本页所有其它功能照常可用。 */
+  var btn = document.getElementById('mb-claim-btn');
+  var contact = document.getElementById('mb-claim-contact');
+  var invite = document.getElementById('mb-claim-invite');
+  var msg = document.getElementById('mb-claim-msg');
+  if (!btn || !contact || !msg) return;
+  var T_NEED = {{ (i18n or {}).get('mb_claim_need_contact', '填一下联系方式，客服才能找到你')|tojson }};
+  var T_SENDING = {{ (i18n or {}).get('mb_claim_sending', '正在提交…')|tojson }};
+  var T_WAITING = {{ (i18n or {}).get('mb_claim_waiting', '已提交，正在签发…（通常 1 分钟内自动生效，可先去干活）')|tojson }};
+  var T_OK = {{ (i18n or {}).get('mb_claim_ok', '已激活，正在刷新…')|tojson }};
+  var T_EXH = {{ (i18n or {}).get('mb_claim_exhausted', '这台机器已领取过免费额度')|tojson }};
+  var T_FAIL = {{ (i18n or {}).get('mb_claim_fail', '领取失败：')|tojson }};
+  function show(text, tone){
+    msg.style.display = 'block';
+    msg.style.color = tone === 'ok' ? 'var(--green)'
+      : (tone === 'warn' ? 'var(--amber,#d97706)'
+        : (tone === 'err' ? 'var(--red,#ef4444)' : 'var(--t2)'));
+    msg.textContent = text;
+  }
+  function done(d){
+    if (d && (d.activated || d.applied_license)) { show(T_OK, 'ok'); setTimeout(function(){ location.reload(); }, 1400); return true; }
+    if (d && (d.trial_exhausted || d.exhausted || d.activate_error === 'expired')) { show(T_EXH, 'warn'); return true; }
+    return false;
+  }
+  function poll(attempt){
+    if (attempt >= 6) { show(T_WAITING, ''); btn.disabled = false; return; }
+    setTimeout(function(){
+      window.apiFetch('/api/admin/license/trial-claim', {}, {timeoutMs: 20000})
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (!done(d)) poll(attempt + 1); })
+        .catch(function(){ poll(attempt + 1); });
+    }, 5000);
+  }
+  btn.addEventListener('click', function(){
+    var c = (contact.value || '').trim();
+    if (!c || c.replace(/^[@+]+/, '').replace(/[\s\-()]/g, '').length < 3) {
+      show(T_NEED, 'err'); contact.focus(); return;
+    }
+    btn.disabled = true;
+    show(T_SENDING, '');
+    window.apiFetch('/api/admin/license/trial-claim', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({contact: c, invite_code: (invite && invite.value || '').trim()})
+    }, {timeoutMs: 25000}).then(function(r){ return r.json(); }).then(function(d){
+      if (done(d)) return;
+      if (d && d.ok) { show(T_WAITING, ''); poll(0); return; }
+      show(T_FAIL + ((d && d.error) || 'error'), 'err');
+      btn.disabled = false;
+    }).catch(function(){
+      show(T_FAIL + 'network', 'err');
+      btn.disabled = false;
+    });
+  });
+
+  /* ── 尝鲜接回横幅归因（P2 埋点 claim_banner）：点 CTA 记一次（会话级一次），
+     并顺手把焦点送进联系方式输入框——锚点跳转省下用户再点一次的动作。
+     事件走官方漏斗白名单（trial_claim_client.FUNNEL_EVENTS），旧后端拒收=静默丢，
+     绝不影响锚点跳转本身。 */
+  var bannerCta = document.querySelector('#mb2-trial-banner .mb-from-cta');
+  var _bannerBeaconed = false;
+  if (bannerCta) bannerCta.addEventListener('click', function(){
+    setTimeout(function(){ try { contact.focus(); } catch (e) {} }, 150);
+    if (_bannerBeaconed) return;
+    _bannerBeaconed = true;
+    try {
+      window.apiFetch('/api/admin/license/trial-funnel', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({event: 'claim_banner'})}, {timeoutMs: 8000})
+        .catch(function(){});
+    } catch (e) {}
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -71,6 +71,30 @@ def test_singleton_stable():
     assert get_voice_synth_stats() is get_voice_synth_stats()
 
 
+# ── P0/P1 观测扩展（2026-08-31）：语种闸拦截 + 语种→引擎改派 ─────────────────
+def test_record_blocked_and_routed_counts():
+    s = VoiceSynthLangStats()
+    s.record_blocked("ja")
+    s.record_blocked("JA-jp")     # 前缀归一
+    s.record_blocked("th")
+    s.record_lang_routed("ja", "fish_speech")
+    d = s.dump()
+    assert d["lang_blocked"] == 3
+    assert d["blocked_by_lang"] == {"ja": 2, "th": 1}
+    assert d["lang_routed"] == 1
+    assert d["routed_by_pair"] == {"ja:fish_speech": 1}
+    prom = s.dump_prom()
+    assert 'voice_synth_lang_blocked_total{lang="ja"} 2' in prom
+    assert 'voice_synth_lang_routed_total{pair="ja:fish_speech"} 1' in prom
+    s.record_blocked("")          # 脏输入不计不抛
+    s.record_lang_routed("", "")
+    assert s.dump()["lang_blocked"] == 3
+    s.reset()
+    d2 = s.dump()
+    assert d2["lang_blocked"] == 0 and d2["blocked_by_lang"] == {}
+    assert d2["lang_routed"] == 0 and d2["routed_by_pair"] == {}
+
+
 # ── synthesize_clone 端到端真实打点 ───────────────────────────────
 class _FakeResp:
     def __init__(self, body: bytes) -> None:

@@ -25,14 +25,18 @@ from src.ai.avatar_voice import (
     build_clone_payload,
     build_instruct_payload,
     build_stt_payload,
+    build_tts_only_payload,
     find_reference_text,
+    hub_fish_synthesize,
     load_reference_b64,
     normalize_avatar_emotion,
     parse_audio_response,
     parse_batch_response,
     parse_stt_response,
+    parse_tts_only_response,
     read_service_token,
     reset_caches,
+    sniff_audio_format,
 )
 
 
@@ -51,6 +55,28 @@ def _wav_bytes(ms: int = 200, rate: int = 24000) -> bytes:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(b"\x00\x00" * int(rate * ms / 1000))
+    return buf.getvalue()
+
+
+def _wav_tone_bytes(ms: int = 200, rate: int = 24000) -> bytes:
+    """生成一段**有能量**的 WAV（440Hz 正弦）。
+
+    hub 产物夹具必须用它：B61 哑音兜底（tts_pipeline `detect_silent_audio`）会把
+    全零 WAV 判成哑音重试→判失败——用静音夹具装 hub 输出＝测试自己撞闸。
+    """
+    import math
+
+    buf = io.BytesIO()
+    n = int(rate * ms / 1000)
+    frames = bytearray()
+    for i in range(n):
+        v = int(12000 * math.sin(2 * math.pi * 440 * i / rate))
+        frames += int(v).to_bytes(2, "little", signed=True)
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
     return buf.getvalue()
 
 
@@ -209,6 +235,52 @@ def test_read_service_token_runtime_and_cache(tmp_path):
     assert read_service_token("") == ""
 
 
+# ── #161：令牌三级解析 + 缺失只告警一次（钧机 22:54 STT 二级回落静默失败）──
+def test_resolve_service_token_prefers_config_then_gateway(tmp_path, monkeypatch):
+    from src.ai.avatar_voice import resolve_service_token
+
+    f = tmp_path / "svc.txt"
+    f.write_text("from-file\n", encoding="utf-8")
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.device-token")
+    # 配置读得到 → 配置优先（LAN 算力机既有行为逐字不变）
+    assert resolve_service_token(str(f)) == "from-file"
+    # 客户机形态：未配置 token_file，但网关注了设备令牌 → 用它（此前 STT 腿
+    # 拿不到它，二级回落必然缺令牌失败）
+    assert resolve_service_token("") == "cx.device-token"
+    # 显式配了却读不到 ≠ 悄悄换一台机器的令牌：如实空（配置错误不许被掩盖）
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    assert resolve_service_token(str(tmp_path / "nope.txt")) == ""
+    # 非 cx.* 的环境值不当服务令牌用（那是别的体系的 key）
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "sk-not-a-device-token")
+    assert resolve_service_token(str(tmp_path / "nope.txt")) == ""
+
+
+def test_warn_token_missing_only_once_per_scope(caplog):
+    import logging as _logging
+
+    from src.ai import avatar_voice as _av
+
+    _av._TOKEN_WARNED.discard("STT-unit")
+    with caplog.at_level(_logging.DEBUG, logger="src.ai.avatar_voice"):
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+    warns = [r for r in caplog.records if r.levelno == _logging.WARNING]
+    assert len(warns) == 1, [r.getMessage() for r in warns]
+    # 首告警必须给出下一步动作，且绝不打印令牌本身
+    assert "token_file" in warns[0].getMessage()
+    _av._TOKEN_WARNED.discard("STT-unit")
+
+
+def test_stt_token_file_no_longer_defaults_to_dev_path():
+    """客户机上开发机路径恒不存在，却让令牌解析看起来「配过了」（#161 根因）。"""
+    from src.ai.avatar_voice import AvatarVoiceClient
+
+    assert AvatarVoiceClient({}).stt_token_file == ""
+    assert AvatarVoiceClient(
+        {"stt": {"token_file": "X:/t.txt"}}).stt_token_file == "X:/t.txt"
+
+
 def test_load_reference_b64_cache_invalidates_on_change(tmp_path):
     f = tmp_path / "ref.wav"
     f.write_bytes(b"AAA")
@@ -294,6 +366,101 @@ def test_post_with_retry_gives_up_after_retries():
     assert mock_post.call_count == 2  # 1 原始 + 1 重试，不无限重试
 
 
+def _http_error(code: int, body: bytes):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("http://x/v1/tts/clone", code, "Bad Gateway", {}, io.BytesIO(body))
+
+
+def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
+    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功；emotion 档保留。"""
+    from src.ai.avatar_voice import is_emo_text_infer_error
+    c = _client(retries=0)
+    seen: list = []
+    wav = _wav_bytes()
+    bad = b'{"detail":"IndexTTS2 infer failed: ValueError: QwenEmotion returned a non-numeric emotion score \'\xe8\x87\xaa\xe7\x84\xb6\'. Please retry the request."}'
+
+    def fake_post(url, payload, *, timeout, headers=None):
+        body = json.loads(payload)
+        seen.append(body)
+        if body.get("emo_text"):
+            raise _http_error(502, bad)
+        return json.dumps({"audio_base64": base64.b64encode(wav).decode()}).encode()
+
+    with patch.object(AvatarVoiceClient, "_post", side_effect=fake_post):
+        out = c.tts("你好呀", reference_audio_b64="QQ==", emotion="happy", emo_text="轻松愉快地说", emo_alpha=0.6)
+    assert out == wav and len(seen) == 2
+    assert seen[0].get("emo_text") == "轻松愉快地说" and seen[0].get("use_emo_text") is True
+    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "happy"
+    # 指纹判定：只认 5xx + QwenEmotion/emotion score/Please retry；4xx / 别的 5xx 不算
+    assert is_emo_text_infer_error(_http_error(502, bad))
+    assert not is_emo_text_infer_error(_http_error(400, bad))
+    assert not is_emo_text_infer_error(_http_error(500, b'{"detail":"CUDA out of memory"}'))
+    assert not is_emo_text_infer_error(OSError("dead"))
+
+
+def test_tts_emo_text_unrelated_5xx_is_not_retried():
+    """没带 emo_text 或 5xx 不是引导层的锅 → 照旧抛出（不吞引擎离线）。"""
+    c = _client(retries=0)
+    import urllib.error
+    with patch.object(AvatarVoiceClient, "_post", side_effect=lambda *a, **k: (_ for _ in ()).throw(
+            _http_error(500, b'{"detail":"CUDA out of memory"}'))) as mock_post:
+        with pytest.raises(urllib.error.HTTPError):
+            c.tts("你好", reference_audio_b64="QQ==", emo_text="开心")
+    assert mock_post.call_count == 1
+
+
+# ── B1+ 忙碌感知多端点路由（2026-07-21 三端点扩容）─────────────────────────
+def _fake_audio_post(seen):
+    wav = _wav_bytes()
+
+    def fake_post(url, payload, *, timeout, headers=None):
+        seen.append(url)
+        return json.dumps(
+            {"audio_base64": base64.b64encode(wav).decode()}).encode()
+
+    return fake_post
+
+
+def test_post_any_priority_order_when_all_free():
+    """全部端点空闲 → 仍按配置优先级走主端点（主力机优先不变）。"""
+    c = _client(retries=0, base_urls=[
+        "http://10.9.0.1:7852", "http://10.9.0.2:7852"])
+    seen: list = []
+    with patch.object(AvatarVoiceClient, "_health_ok_base", return_value=True), \
+            patch.object(AvatarVoiceClient, "_post",
+                         side_effect=_fake_audio_post(seen)):
+        c.tts("hi", reference_audio_b64="QQ==")
+    assert seen and seen[0].startswith("http://10.9.0.1")
+
+
+def test_post_any_busy_aware_routes_to_free_endpoint():
+    """主端点 GPU 锁被占 → 请求派给空闲备用端点（并行合成而非排队）。"""
+    from src.ai.avatar_voice import _gpu_lock_for
+    c = _client(retries=0, base_urls=[
+        "http://10.9.1.1:7852", "http://10.9.1.2:7852"])
+    seen: list = []
+    lock_main = _gpu_lock_for("http://10.9.1.1:7852")
+    done = {"ok": False}
+
+    def _run():
+        c.tts("hi", reference_audio_b64="QQ==")
+        done["ok"] = True
+
+    with patch.object(AvatarVoiceClient, "_health_ok_base", return_value=True), \
+            patch.object(AvatarVoiceClient, "_post",
+                         side_effect=_fake_audio_post(seen)):
+        lock_main.acquire()  # 模拟主端点正在合成中
+        try:
+            t = threading.Thread(target=_run)
+            t.start()
+            t.join(timeout=5)
+        finally:
+            lock_main.release()
+    assert done["ok"], "主端点忙时请求不应排队等待（应切空闲端点）"
+    assert seen and seen[0].startswith("http://10.9.1.2")
+
+
 def test_tts_long_text_chunked_and_merged():
     """长文本按句切块逐块合成，产物为合法 WAV 且时长≈各块之和。"""
     c = _client(chunk_max_chars=20, chunk_gap_ms=0)
@@ -362,7 +529,8 @@ def test_health_parsers():
 
         mock_open.return_value = _R()
         d = c.health()
-    assert d == {"reachable": True, "models_loaded": True}
+    # shape=引擎形状（#58 2026-08-30）：7852 家族键 → cosyvoice（副语言标记可送）
+    assert d == {"reachable": True, "models_loaded": True, "shape": "cosyvoice"}
 
 
 def test_qwen_health_parser():
@@ -380,7 +548,64 @@ def test_qwen_health_parser():
 
         mock_open.return_value = _R()
         d = c.qwen_health()
-    assert d == {"reachable": True, "models_loaded": True}
+    # qwen(7858) 响应键与 7865 同族 → shape 带出 indextts2；qwen 路径不消费该键
+    assert d == {"reachable": True, "models_loaded": True, "shape": "indextts2"}
+
+
+def _mock_health_resp(payload: dict):
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    return _R()
+
+
+def test_health_accepts_indextts2_shape():
+    """克隆端点健康预检必须认 IndexTTS-2(7865) 的 {status:"ok",model_loaded} 形状。
+
+    2026-08-29 智聊克隆主力迁 104:7865 后 base_urls 可直指 7865——旧实现只认
+    {ok,models_loaded}，对 7865 永远判不就绪 → 端点活着也全量回落 edge。
+    """
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "engine": "index_tts2", "model_loaded": True})
+        d = c.health()
+    # shape=indextts2（#58）：该形状端点不得收副语言标记（marks_safe 据此判 False）
+    assert d == {"reachable": True, "models_loaded": True, "shape": "indextts2"}
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "engine": "index_tts2", "model_loaded": True})
+        assert c.health_ok(use_cache=False) is True
+
+
+def test_health_indextts2_not_loaded_or_error():
+    """7865 形状的负例：model_loaded=false / status!=ok 都不得判就绪。"""
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "model_loaded": False})
+        assert c.health()["models_loaded"] is False
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "loading", "model_loaded": True})
+        assert c.health()["models_loaded"] is False
+
+
+def test_health_mfys_shape_still_authoritative():
+    """带 ok 键的响应仍按主形状判——ok:false 不得被 alt 键对救活。"""
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"ok": False, "models_loaded": True, "status": "ok",
+             "model_loaded": True})
+        assert c.health()["models_loaded"] is False
 
 
 def test_health_unreachable():
@@ -526,6 +751,346 @@ async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
     assert rv.provider == "edge_tts"
 
 
+# ── 幻声 hub Fish-Speech 高保真（Phase B, /api/tts_only）────────────────────────
+def test_build_tts_only_payload_omits_neutral_and_short():
+    """neutral 情绪不下发（走保真默认）；best_of<=1 不下发；language 空不下发。"""
+    body = json.loads(build_tts_only_payload("lin_jiaxin", "你好"))
+    assert body == {"profile": "lin_jiaxin", "text": "你好"}
+    body2 = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", language="zh", emotion="neutral", best_of=1))
+    assert body2 == {"profile": "lin_jiaxin", "text": "你好", "language": "zh"}
+
+
+def test_build_tts_only_payload_includes_emotion_and_bestof():
+    body = json.loads(build_tts_only_payload(
+        "zhao_laoshi", "晚上好", language="zh", emotion="warm", best_of=3))
+    assert body["emotion"] == "warm"
+    assert body["best_of"] == 3
+
+
+def test_build_tts_only_payload_format_two_states():
+    """audio_format 空/wav 不下发 format 键（旧行为）；ogg 才下发。"""
+    body = json.loads(build_tts_only_payload("lin_jiaxin", "你好"))
+    assert "format" not in body
+    body_wav = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", audio_format="wav"))
+    assert "format" not in body_wav
+    body_ogg = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", audio_format="ogg"))
+    assert body_ogg["format"] == "ogg"
+
+
+def test_sniff_audio_format_magic():
+    assert sniff_audio_format(b"OggS" + b"\x00" * 32) == "ogg"
+    assert sniff_audio_format(_wav_bytes(50)) == "wav"          # RIFF
+    assert sniff_audio_format(b"\x01\x02\x03\x04") == "wav"     # 未知 → default
+    assert sniff_audio_format(b"\x01\x02", default="ogg") == "ogg"
+    assert sniff_audio_format(b"") == "wav"
+
+
+def test_parse_tts_only_response_ok_and_failures():
+    wav = _wav_bytes(200)
+    good = json.dumps(
+        {"ok": True, "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(good) == (wav, "wav")
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(json.dumps({"ok": False, "detail": "x"}).encode())
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(json.dumps({"ok": True}).encode())  # 无音频
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(b"")
+
+
+def test_parse_tts_only_response_format_field_and_magic():
+    """格式判定：字段与魔数不符以魔数为准；缺字段默认 wav；OggS → ogg。"""
+    wav = _wav_bytes(100)
+    ogg = b"OggS" + b"\x00" * 64
+    # ① 字段说 ogg 但魔数是 RIFF（hub ffmpeg 异常回退 wav 场景）→ 判 wav
+    body = json.dumps({"ok": True, "format": "ogg",
+                       "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(body) == (wav, "wav")
+    # ② 缺 format 字段 → 判 wav
+    body = json.dumps({"ok": True,
+                       "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(body) == (wav, "wav")
+    # ③ OggS 魔数（字段一致）→ 判 ogg
+    body = json.dumps({"ok": True, "format": "ogg",
+                       "audio_base64": base64.b64encode(ogg).decode()}).encode()
+    assert parse_tts_only_response(body) == (ogg, "ogg")
+    # ④ 字段说 wav 但魔数是 OggS → 魔数为准判 ogg
+    body = json.dumps({"ok": True, "format": "wav",
+                       "audio_base64": base64.b64encode(ogg).decode()}).encode()
+    assert parse_tts_only_response(body) == (ogg, "ogg")
+
+
+def test_hub_fish_synthesize_posts_and_decodes():
+    wav = _wav_bytes(250)
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["body"] = json.loads(req.data.decode())
+
+        class _R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"ok": True,
+                     "audio_base64": base64.b64encode(wav).decode()}).encode()
+
+        return _R()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = hub_fish_synthesize(
+            "http://192.168.0.176:9000", "lin_jiaxin", "你好呀", language="zh")
+    assert out == (wav, "wav")
+    assert seen["url"] == "http://192.168.0.176:9000/api/tts_only"
+    assert seen["body"]["profile"] == "lin_jiaxin"
+    assert "format" not in seen["body"]  # 缺省不下发（Hub 缺省回 wav=旧行为）
+
+
+def test_hub_fish_synthesize_requests_ogg_and_detects_format():
+    """audio_format=ogg 透传进请求体；返回格式按响应字节魔数判定。"""
+    ogg = b"OggS" + b"\x00" * 64
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["body"] = json.loads(req.data.decode())
+
+        class _R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"ok": True, "format": "ogg",
+                     "audio_base64": base64.b64encode(ogg).decode()}).encode()
+
+        return _R()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = hub_fish_synthesize(
+            "http://192.168.0.176:9000", "lin_jiaxin", "你好呀",
+            audio_format="ogg")
+    assert seen["body"]["format"] == "ogg"
+    assert out == (ogg, "ogg")
+
+
+def _pipeline_cfg_hub(tmp_path, ref: Path, *, hub_enabled=True,
+                      allowlist=None, response_format=None) -> dict:
+    cfg = _pipeline_cfg(tmp_path, ref)
+    cfg["persona_id"] = "lin_jiaxin"
+    hf = {"enabled": hub_enabled,
+          "base_url": "http://192.168.0.176:9000",
+          "timeout_sec": 5.0, "best_of": 1}
+    if allowlist is not None:
+        hf["persona_allowlist"] = allowlist
+    if response_format is not None:
+        hf["response_format"] = response_format
+    cfg["avatar_voice"]["hub_fish"] = hf
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_hit_takes_priority(tmp_path):
+    """hub_fish 开 + 命中 → provider=hub_fish（最高保真优先于本地 CosyVoice3）。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    wav = _wav_tone_bytes(600)
+
+    def fake_hub(base_url, profile, text, **kw):
+        assert profile == "lin_jiaxin"
+        return wav, "wav"
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize("你好呀，今天怎么样")
+    assert rv.ok
+    assert rv.provider == "hub_fish"
+    assert rv.format == "wav"
+    assert rv.audio_path.endswith(".wav")
+    assert rv.extra.get("hub_fish_profile") == "lin_jiaxin"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_ogg_direct_out(tmp_path):
+    """response_format=ogg → 请求透传 + 按实际 ogg 落 .ogg 后缀 + ffprobe 测时长。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, response_format="ogg")
+    ogg = b"OggS" + b"\x00" * 128
+    seen = {}
+
+    def fake_hub(base_url, profile, text, **kw):
+        seen["audio_format"] = kw.get("audio_format")
+        return ogg, "ogg"
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch("src.client.voice_sender.probe_audio_duration_ms",
+               return_value=1234):
+        rv = await tts.synthesize("你好呀，直出测试")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert seen["audio_format"] == "ogg"
+    assert rv.format == "ogg"
+    assert rv.audio_path.endswith(".ogg")
+    assert Path(rv.audio_path).read_bytes() == ogg
+    assert rv.duration_sec == pytest.approx(1.234)
+    assert rv.duration_source == "ffprobe"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_ogg_config_but_hub_falls_back_wav(tmp_path):
+    """配置要 ogg 但 hub 回退 wav（ffmpeg 异常）→ 按实际格式落 .wav，绝不装 ogg。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, response_format="ogg")
+    wav = _wav_tone_bytes(400)
+
+    def fake_hub(base_url, profile, text, **kw):
+        assert kw.get("audio_format") == "ogg"
+        return wav, "wav"   # hub 侧回退：字节实为 RIFF
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize("你好呀，回退测试")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert rv.format == "wav"
+    assert rv.audio_path.endswith(".wav")
+
+
+def test_pipeline_hub_fish_cache_key_includes_response_format(tmp_path):
+    """缓存键并入 response_format：翻 ogg 开关自动失效旧 wav 缓存。"""
+    from src.ai.tts_pipeline import TTSPipeline
+    from src.ai.voice_emotion import NEUTRAL
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    p1 = TTSPipeline(_pipeline_cfg_hub(tmp_path, ref))                          # 缺省=wav
+    p2 = TTSPipeline(_pipeline_cfg_hub(tmp_path, ref, response_format="ogg"))
+    k1 = p1._cache_key("你好", "v", "avatar_clone", NEUTRAL, hour=12)
+    k2 = p2._cache_key("你好", "v", "avatar_clone", NEUTRAL, hour=12)
+    assert k1 != k2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_failure_falls_through_to_local(tmp_path):
+    """hub_fish 失败 → 贯穿回落本机 CosyVoice3(7852)，provider=avatar_clone。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    local_wav = _wav_bytes(400)
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize",
+               side_effect=OSError("hub down")), \
+         patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，回落测试")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_not_in_allowlist_uses_local(tmp_path):
+    """人设不在 allowlist → 不走 hub，直接本地 CosyVoice3。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, allowlist=["zhao_laoshi"])
+    local_wav = _wav_bytes(400)
+    called = {"hub": False}
+
+    def fake_hub(*a, **k):
+        called["hub"] = True
+        return _wav_bytes(100), "wav"
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，名单外")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
+    assert called["hub"] is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_disabled_uses_local(tmp_path):
+    """hub_fish 关（默认）→ 行为不变，走本地 CosyVoice3。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, hub_enabled=False)
+    local_wav = _wav_bytes(400)
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，关闭测试")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_gets_colloquial_spoken_text(tmp_path):
+    """hub 命中前必须先口语化——送稿≠书面原文（读稿音根因回归网）。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    cfg["avatar_voice"]["colloquial"] = {
+        "enabled": True, "mode": "rule", "fillers": True, "lexical": True,
+        "min_chars": 8, "lead_prob": 1.0,
+    }
+    seen = {"text": ""}
+
+    def fake_hub(base_url, profile, text, **kw):
+        seen["text"] = text
+        return _wav_tone_bytes(500), "wav"
+
+    async def fake_llm(*a, **k):
+        return "说真的，这件事你不用急，慢慢来就好"
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    # 强制走 LLM 口语档返回固定口语稿，验证 hub 收到的是口语版而非原文
+    cfg["avatar_voice"]["colloquial"]["mode"] = "llm"
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch("src.ai.voice_colloquial_llm.llm_colloquialize", side_effect=fake_llm):
+        rv = await tts.synthesize(
+            "因此您无需着急，可以慢慢处理这件事。", emotion="warm")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert seen["text"]
+    assert "因此您无需着急" not in seen["text"]
+    assert "说真的" in seen["text"] or "慢慢" in seen["text"]
+    assert rv.extra.get("colloquial") or rv.extra.get("colloquial_llm")
+    assert "[sigh]" not in seen["text"]
+
+
 # ── AvatarWhisperTranscriber ─────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_avatar_whisper_transcriber_ok(tmp_path):
@@ -617,3 +1182,21 @@ def test_warmup_personas_collects_refs_and_registers(tmp_path):
         n = warmup_personas(cfg)
     assert n == 1
     assert reg.call_count == 1
+
+
+# ── 跨机 TTS 鉴权头（2026-08-02：修 140/173 节点 401，多端点回落从未生效）────────
+def test_svc_headers_loopback_none_lan_token(tmp_path):
+    from src.ai.avatar_voice import AvatarVoiceClient
+    tok = tmp_path / "svc_token.txt"
+    tok.write_text("tok-abc\n", encoding="utf-8")
+    c = AvatarVoiceClient({"stt": {"token_file": str(tok)}})
+    assert c._svc_headers("http://127.0.0.1:7852") is None
+    assert c._svc_headers("http://localhost:7852") is None
+    assert c._svc_headers("http://192.168.0.140:7852") == {"X-AH-Svc": "tok-abc"}
+    assert c._svc_headers("http://192.168.0.173:7852") == {"X-AH-Svc": "tok-abc"}
+
+
+def test_svc_headers_missing_token_stays_old_behavior(tmp_path):
+    from src.ai.avatar_voice import AvatarVoiceClient
+    c = AvatarVoiceClient({"stt": {"token_file": str(tmp_path / "nope.txt")}})
+    assert c._svc_headers("http://192.168.0.140:7852") is None

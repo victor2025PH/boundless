@@ -3,7 +3,7 @@
 faster-whisper `large-v3-turbo`(CUDA float16) 的 OpenAI 兼容转录端点(替代本机 CPU whisper 作为主 ASR)
 + emotion2vec_plus_large(CUDA) 的语音情绪端点(替代 117 CPU plus_base 作为主 SER)。
 
-- 端点:`http://192.168.0.176:8765/v1/audio/transcriptions`(契约=OpenAI `audio.transcriptions`,`response_format` 支持 `json`/`text`);`POST /v1/audio/emotion`(multipart file → 原始 `{labels,scores,model,latency_ms}`,标签→系统语义的映射**只在客户端** `src/ai/speech_emotion.py` 单一出口);健康检查 `GET /health`(含 `ser_model`)。
+- 端点:`http://192.168.0.176:8765/v1/audio/transcriptions`(契约=OpenAI `audio.transcriptions`,`response_format` 支持 `json`/`text`/`verbose_json`——后者回 `{text,language,duration,segments:[{start,end,text}]}` 供 SRT 字幕消费方,P3 2026-08-18 部署,默认 `json` 响应零变化);`POST /v1/audio/emotion`(multipart file → 原始 `{labels,scores,model,latency_ms}`,标签→系统语义的映射**只在客户端** `src/ai/speech_emotion.py` 单一出口);健康检查 `GET /health`(含 `ser_model`)。
 - 消费方:`config/config.local.yaml::voice_recognition`(provider `openai_compatible` 主 + `faster_whisper` CPU 备,经 `FallbackTranscriber` 级联)与 `speech_emotion.remote`(远程优先,失败 120s 冷却回落本地 funasr CPU),两条链都绝不阻塞理解链。
 - 实测:ASR 热延迟 ~0.3-0.4s;SER 热延迟 ~44ms 往返(server 15ms)。
 - **启动预热(2026-07-11)**:`AITR_WARMUP`(默认 1)在服务启动时后台预载 ASR+SER 两模型,
@@ -33,6 +33,32 @@ ONSTART 任务只保开机,白天崩了没人管会静默降级 CPU 兜底,看�
 **模型获取(176 网络教训)**:176 上 modelscope 直连实测 179kB/s(1.95GB 要 3h)、hf-mirror 直接连接失败
 → **不要依赖 176 的 hub 下载**。在 117 用 `huggingface_hub.snapshot_download`(直连可用,~11MB/s)下到
 `D:\tmp\emotion2vec_plus_large`(已留存),`scp -r` 过去(LAN ~2.5min),`AITR_SER_MODEL` 指本地目录。
+
+## 2026-08-29 起服务在 198（`asr198`），2026-09-12 ASR P0 解码纪律
+
+- 服务本体已迁 `192.168.0.198:8765`（计划任务 `AITR_ASR_198`；176 的 `AITR_ASR_176` 已 Disabled）。
+  部署：`scp scripts\asr176\asr_server.py asr198:C:/aitr_asr/asr_server.py` →
+  `ssh asr198 powershell -NoProfile -ExecutionPolicy Bypass -File C:\aitr_asr\restart_asr_198.ps1`
+  （本目录 `restart_asr_198.ps1` 即该脚本）→ `/health` 出 `asr_loaded=true`（~15s）。
+- **72h 自杀（2026-09-18）**：`schtasks /Create` 默认 `ExecutionTimeLimit=PT72H`。
+  `AITR_ASR_198` 于 09-15 19:36 启动，09-18 19:37 被关控制台，日志末行
+  `forrtl: error (200): program aborting due to window-CLOSE event`，之后 8765 无监听、
+  看门狗任务也没装到 198。处置：`fix_asr_198_task.ps1` 把时限改成 `PT0S` 再重启；
+  `register_watchdog.ps1` 挂 `AITR_ASR_WATCHDOG`（`watchdog_asr.ps1` 优先打 198 任务）。
+  `deploy_asr.ps1` 建任务后必须写 `ExecutionTimeLimit=PT0S`，否则三天后再死一次。
+- `asr_server.py` 09-12 变更：`condition_on_previous_text=False`；whisper 自带三阈值显式钉住；
+  接 OpenAI 标准 `prompt` 字段作 initial_prompt；`verbose_json` 多回
+  `language_probability / avg_logprob / no_speech_prob / compression_ratio / vad / rescue`
+  （默认 `json` 仍只回 `{text}`）；**短片段二次解码**：<2s 且 VAD 判无人声 → 关 VAD 再解一次，
+  只在 `avg_logprob ≥ -0.6 且 language_probability ≥ 0.7 且 compression_ratio ≤ 2.0` 时采信。
+- **同机同模型 A/B 结论（勿再踩）**：VAD 放宽（threshold 0.35 / min_speech 100）与钉
+  `min_speech_duration_ms=250`（旧版库默认，1.2.1 是 0）都让探针夹具从稳定正确变成乱码/错句；
+  任何形式的热词 prompt 在边缘音频上乱码、干净音频只多标点 → 客户端默认不送热词。
+  VAD 参数只传旧服务传过的 `min_silence_duration_ms=300`，其余交库默认。
+
+- **换模型先有尺子**（ASR P1/P2）：`python -m scripts.run_eval --asr [--asr-base-url 候选端点]` 用生产同款
+  转写链算 CER；金标用 `python tools/asr_gold_curate.py export/import/status` 从归档语音 + 坐席改正积攒
+  （≥5 条核对过才裁决）。Qwen3-ASR A/B 步骤见 `docs/指令_ASR_P2_工作台接线契约与QwenASR_AB_runbook_2026-09-12.md`。
 
 ## 常用命令(从 117,ssh 别名 gpu176)
 

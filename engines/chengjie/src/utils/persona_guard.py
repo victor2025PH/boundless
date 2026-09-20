@@ -16,7 +16,14 @@ LLM 不总是遵守 prompt 里"禁止使用 X"的指令；一旦回复漏出客�
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+import unicodedata
+from typing import Any, Dict, List, Optional, Tuple
+
+# #145③：整段都是他人设产品名、剥空时的中性兜底——绝不回退原文（回退＝串味出站）。
+_FOREIGN_PRODUCT_FALLBACK_ZH = "那个我没怎么接触过，咱们聊点别的吧"
+_FOREIGN_PRODUCT_FALLBACK_EN = (
+    "That's not really my area — let's talk about something else."
+)
 
 # 自曝 AI 身份的模式（仅 deny_ai 人设启用）。保守匹配："我是…AI" 命中，
 # 但 "我不是 AI" 不命中（否定句不算露馅）。
@@ -29,12 +36,504 @@ _AI_SELF_ID_PATTERNS = [
     re.compile(r"\blanguage model\b", re.I),
 ]
 
+# ── 能力自曝（2026-09-11 客户机 DC8F 实录「我只能发文字」）────────────────────
+# 与「自称 AI」同族、同开关（deny_ai 人设）：不说自己是 AI，却把**通道能力**当
+# 自身属性说出口——「我只能发文字/只能打字」「I can only send text」「text-only」
+# ——对客户等于「你是个程序」。词形保守：必须是第一人称 + 「只能」+ 文字/打字；
+# 「这边不方便开视频，先这样聊嘛」（人设块要求的正确婉拒）不含「只能…文字」不命中。
+_CAPABILITY_LEAK_PATTERNS = [
+    re.compile(r"(我|我这边|我这|这边|我目前|目前)\s*(现在|暂时|只|就)?\s*只能\s*"
+               r"(发|打|用|发送|回|以)?\s*(文字|文本|字|纯文字|文字消息|文字聊|打字)"),
+    re.compile(r"(我|我这边|这边)\s*(没法|无法|不能|没办法)\s*(发|传|发送)\s*"
+               r"(语音|照片|图片|图|视频)[^。！？!?\n]{0,6}(只能|就)\s*(发|打|用)?\s*(文字|字|打字)"),
+    re.compile(r"\bi(?:'m| am)?\s+(?:can|could)?\s*only\s+(?:able\s+to\s+)?"
+               r"(?:send|type|use|do|write|reply\s+(?:with|in|via))\s+"
+               r"(?:you\s+)?(?:plain\s+)?text(?:\s+messages?)?\b", re.I),
+    re.compile(r"\bi\s+can\s+only\s+communicate\s+(?:via|through|by|in|with)\s+text\b", re.I),
+    re.compile(r"\b(?:i(?:'m| am)\s+)?text[- ]only\b", re.I),
+    re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+have\s+(?:the\s+)?(?:ability|capability|"
+               r"function|feature)\s+to\s+(?:send|share)\s+(?:photos?|pictures?|images?|"
+               r"voice|audio|videos?)\b", re.I),
+    # Q-20 D（#178 VDUJX6 / PQE9ZF 实录）：客户问「这是你吗」→ AI「我没这个功能 / 不支持发图 /
+    # I can't send photos」。「功能 / 支持 / 不能发照片」全是把自己当程序说——同族同开关。
+    re.compile(r"(我|我这边|我这|这边|我目前|目前|系统|系統)?\s*(没有|没|沒有|沒|无|無|不支持|不支援)\s*"
+               r"(这个|這個|这种|這種|这样的|這樣的|发图|發圖|发照片|發照片|发送图片|發送圖片|"
+               r"发送照片|發送照片|发图片|發圖片|传图|傳圖|发视频|發視頻|发语音|發語音)?\s*"
+               r"(功能|的功能|功能哦|功能呢|功能啦|功能的)"),
+    # 「不支持发图」不带主语也命中（指令黑名单原词）；「只能发文字」同理（DC8F 那条要第一人称，
+    # 这里补动宾齐全的裸句形——「只能发文字」四字连用没有真人语境）
+    re.compile(r"(我|我这边|我这|这边|目前|系统|系統)?\s*(不支持|不支援|支持不了|支援不了)\s*"
+               r"(发|發|传|傳|发送|發送)?\s*(图|圖|图片|圖片|照片|相片|视频|視頻|语音|語音)"),
+    # 第二人称（「你只能发文字吗？」是在问客户）与问句不命中
+    re.compile(r"(?<![你您])只能\s*(发|發|传|傳)\s*(文字|文本|字)(?![^。！？!?\n]{0,3}[吗嗎么麼？?])"),
+    # 「我现在/暂时不能发照片，在开会」是临时不便（真人也会说）——时间词打断即不命中
+    re.compile(r"(我|我这边|我这|这边)\s*(不能|没法|沒法|无法|無法|没办法|沒辦法|发不了|發不了|发不出|發不出)\s*"
+               r"(发|發|传|傳|发送|發送|给你发|給你發|给你|給你)?\s*(照片|图片|圖片|图|圖|相片|自拍)"
+               r"(?![^。！？!?\n]{0,8}(?:现在|這會|这会|此刻|手头|手頭|这边不方便|這邊不方便|等会|等會|待会|待會|晚点|晚點|一会|一會))"),
+    re.compile(r"\bi\s+(?:can'?t|cannot|can\s+not|am\s+(?:not\s+able|unable)|(?:'m|am)\s+not\s+able)\s+"
+               r"(?:to\s+)?(?:send|share|upload|attach)\s+(?:you\s+)?(?:any\s+)?(?:photos?|pictures?|pics?|images?|"
+               r"selfies?|videos?|voice\s+(?:notes?|messages?)|audio)\b"
+               r"(?![^.!?\n]{0,12}(?:right\s+now|at\s+the\s+moment|now|today|tonight|later|atm)\b)", re.I),
+    re.compile(r"\b(?:there(?:'s| is)\s+)?no\s+such\s+(?:feature|function|option)\b", re.I),
+    re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+have\s+(?:that|this|such\s+a|the)\s+(?:feature|function|option|capability)\b", re.I),
+]
+
+
+def matches_capability_leak(text: str) -> List[str]:
+    """文本中「能力自曝」命中片段（deny_ai 人设启用）；纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _CAPABILITY_LEAK_PATTERNS:
+            m = pat.search(s)
+            if m:
+                out.append(m.group(0))
+    except Exception:
+        return []
+    return out
+
+
+# 感知语境豁免（2026-07-20 阿龙实测误报）：「我怕你觉得我是AI客服机器人」是
+# 「怕被当成机器人」的拟人打趣（强化真人感），不是身份自曝——与既有「否定句不算
+# 露馅」同一类。命中片段若紧跟在感知动词后（觉得/以为/当成…，允许 ≤4 个非标点
+# 字符间隔，如「觉得其实我是AI」）→ 不算违规。刻意不收「说」（"老实说我是AI"
+# 是真自曝），宁可漏豁免不可漏拦截。
+_PERCEPTION_PREFIX_RE = re.compile(
+    r"(觉得|以为|当成|当作|误会|怀疑)[^。！？!?\n]{0,4}$"
+)
+
+# ── 他人串扰自曝红线（#91-B，0830 钧实锤）────────────────────────────────────
+# 事故原话：AI 被戳穿记忆幻觉后回「我记岔了，可能把别人的事记到你头上了」——
+# 向客户自曝「我同时聊着很多人」，陪伴人设当场崩塌。此类话术与「自称 AI」同级
+# （身份红线，无条件检，不依赖人设 forbidden_phrases 配置）；honest_identity
+# 合规模式下随身份家族一并豁免（诚实档的 AI 说自己服务多人不算穿帮）。
+# 保守词形：必须同时含「别人/其他人」指涉 + 「记错归因/搞混」语义——单纯认错
+# （「我记岔了」）不命中，那是正常人也会说的话。
+_MULTI_PEER_LEAK_PATTERNS = [
+    # 把别人的事记到你头上 / 把人家的话安到你身上（事故原形）
+    re.compile(r"把(别人|其他人|人家|别的[\u4e00-\u9fff]{1,3})的"
+               r"[^。！？!?\n]{0,6}(记|安|算|套|挂)到你(头|身)上"),
+    # 语序变体：别人的事…记到你头上
+    re.compile(r"(别人|其他人|人家)[^。！？!?\n]{0,10}记到你(头|身)上"),
+    # 把你和别人搞混/记混/弄混/认错/记串
+    re.compile(r"把你(和|跟|与)(别人|其他人|别的人|人家)"
+               r"[^。！？!?\n]{0,6}(搞混|记混|弄混|搞错|认错|记串)"),
+    # 跟别人聊的（内容）记混/串了
+    re.compile(r"(跟|和|与)(别人|其他人)(聊|说)的"
+               r"[^。！？!?\n]{0,8}(记混|搞混|记串|串了|弄混)"),
+    # 聊的人（太）多 + 记混/记不清/串（自曝多会话存在的根形态）
+    re.compile(r"(聊|加|认识|联系)的人(太|真|好)?多"
+               r"[^。！？!?\n]{0,10}(记混|搞混|记不清|记岔|记串|串了|弄混)"),
+    re.compile(r"\b(?:mixed|mix(?:ing)?|got)\s+you\s+up\s+with\s+"
+               r"(?:someone|somebody|another|other)", re.I),
+    re.compile(r"\bconfus(?:ed|ing)\s+you\s+with\s+"
+               r"(?:someone|somebody|another|other)", re.I),
+    re.compile(r"\b(?:talk|chat)(?:t?ing)?\s+(?:to|with)\s+(?:so\s+)?many\s+"
+               r"(?:people|others)\b[^,.!?\n]{0,30}\b(?:mix|confus)", re.I),
+]
+
+
+# ── 客服/销售框架腔（#175，2026-09-05 skuio 实录）────────────────────────────────
+# 事故原话（WhatsApp Mizuki→John 01:06）：「My assistant will reach out with the
+# account details and a quick setup guide—should take you about ten minutes.」
+# 客户回「I'd rather speak to you directly about anything. I don't like these parties.」
+# ——陪聊人设以第一人称朋友身份聊天，一开口却是「我的助理/我们团队会联系你、开户
+# 资料、引导页」这套**公司客服/销售的组织框架**，对客户等于「原来你背后是个团队」，
+# 沉浸感当场崩塌。88MP86 全窗口零 workflow/goal-inject 行 → 是 LLM 拿账号 SOP
+# （「积极推进产品」）自由发挥出的企业话术，不是链话术步指令带进来的。
+# 与 ``speaking.forbidden_phrases``（人设配置里的中文客服腔）同处理：句级剥离。
+# 词形保守：只收「第三方将代我行动」「组织身份自称」「开户/引导页/入职」这类
+# 组织框架硬词；「my friend will call you」（朋友≠组织）不收——误伤面测试钉住。
+_SERVICE_FRAME_PATTERNS = [
+    # 第三方代办：my assistant/team/colleague will … ；I'll have someone …
+    re.compile(
+        r"\bmy\s+(?:assistant|team|colleagues?|manager|staff|secretary|agent|"
+        r"people|associates?|advisor|adviser)\s+(?:will|would|can|is\s+going\s+to|"
+        r"are\s+going\s+to|'ll|’ll)\b", re.I),
+    re.compile(
+        r"\b(?:our|the)\s+(?:team|staff|support(?:\s+team)?|customer\s+(?:service|"
+        r"success|care)|agents?|advisors?|specialists?|colleagues?|managers?|"
+        r"onboarding\s+team|sales\s+team|account\s+team)\s+"
+        r"(?:will|would|can|is\s+going\s+to|are\s+going\s+to|'ll|’ll)\s+"
+        r"(?:reach\s+out|contact|get\s+(?:back\s+)?(?:in\s+touch|to\s+you)|"
+        r"follow\s+up|call|assist|help|guide|walk\s+you|send|take\s+(?:it\s+)?"
+        r"from\s+there|handle|process|set\s+(?:you|it)\s+up)\b", re.I),
+    re.compile(
+        r"\bi(?:'|’)?ll\s+have\s+(?:someone|somebody|one\s+of\s+(?:our|my)|"
+        r"my\s+(?:assistant|team|colleagues?|people|manager)|our\s+"
+        r"(?:team|staff|specialists?|advisors?))\b", re.I),
+    re.compile(r"\bon\s+behalf\s+of\s+(?:our|the)\s+(?:team|company|firm|"
+               r"platform|organi[sz]ation)\b", re.I),
+    # 组织身份自称 / 专属经理
+    re.compile(
+        r"\byour\s+(?:dedicated\s+|personal\s+|assigned\s+)?(?:account\s+manager|"
+        r"relationship\s+manager|account\s+executive|onboarding\s+specialist|"
+        r"customer\s+success\s+manager|client\s+manager|support\s+agent)\b", re.I),
+    re.compile(r"\bas\s+your\s+(?:dedicated\s+|personal\s+)?(?:assistant|"
+               r"advisor|adviser|agent|account\s+manager|consultant|"
+               r"representative)\b", re.I),
+    # 开户/引导页/入职流程硬词
+    re.compile(r"\baccount\s+details\b", re.I),
+    re.compile(r"\b(?:quick\s+)?set-?up\s+guide\b", re.I),
+    re.compile(r"\bonboarding\b", re.I),
+    re.compile(r"\b(?:registration|sign-?up|account)\s+(?:link|form|page|"
+               r"portal|process)\b", re.I),
+    # 经典客服腔（「有什么可以帮您」的英文对应；限带 today/assist 的定式）
+    re.compile(r"\bhow\s+(?:can|may)\s+i\s+(?:help|assist)\s+you\s+today\b", re.I),
+    re.compile(r"\bhow\s+may\s+i\s+assist\s+you\b", re.I),
+    re.compile(r"\b(?:is\s+there\s+)?anything\s+else\s+i\s+can\s+(?:help|assist)\s+"
+               r"you\s+with\b", re.I),
+    re.compile(r"\bthank\s+you\s+for\s+(?:reaching\s+out|contacting\s+us|"
+               r"your\s+patience|choosing\s+us)\b", re.I),
+    re.compile(r"\bwe\s+(?:apologi[sz]e\s+for\s+(?:the|any)\s+inconvenience|"
+               r"appreciate\s+your\s+(?:business|patience|understanding))\b", re.I),
+    # zh 同框架（同一 SOP 在中文会话里的落地形态）；「会/稍后/尽快」类副词
+    # 允许 1-3 个任意顺序（「稍后会加你」「会尽快联系您」）
+    re.compile(r"(?:我的|我)\s*(?:助理|助手|同事|团队|團隊|经理|經理|秘书|秘書)\s*"
+               r"(?:(?:会|會|稍后|稍後|马上|馬上|一会儿?|一會兒?|尽快|盡快|随后|隨後|很快|"
+               r"待会儿?|待會兒?|等下|回头|回頭)\s*){1,3}(?:再)?\s*"
+               r"(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|找|加|打给|打給|给|給|发|發)"),
+    re.compile(r"(?:我们|我們|咱们|咱們)\s*(?:的)?\s*(?:团队|團隊|客服|同事|专员|專員|"
+               r"顾问|顧問|工作人员|工作人員|运营|運營|技术|技術)\s*"
+               r"(?:(?:会|會|稍后|稍後|马上|馬上|一会儿?|一會兒?|尽快|盡快|随后|隨後|很快|"
+               r"待会儿?|待會兒?|等下)\s*){1,3}(?:再)?\s*"
+               r"(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|协助|協助|为您|為您|处理|處理|安排)"),
+    re.compile(r"(?:我|我会|我會)\s*(?:让|讓|安排)\s*(?:人|同事|专人|專人|助理|团队|團隊)"
+               r"\s*(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|加)\s*(?:你|您)"),
+    re.compile(r"(?:专属|專屬|您的|你的)\s*(?:客户经理|客戶經理|账户经理|賬戶經理|"
+               r"理财经理|理財經理|顾问|顧問|客服)"),
+    re.compile(r"开户(?:资料|資料|流程|链接|鏈接|指引|指南)|開戶(?:資料|流程|鏈接|指引|指南)"),
+    re.compile(r"(?:设置|設置|操作|新手|入门|入門)\s*(?:指南|指引|教程|手册|手冊)|引导页|引導頁"),
+    re.compile(r"很高兴为您服务|很高興為您服務|请问有什么可以帮|請問有什麼可以幫|"
+               r"有什么可以帮您|有什麼可以幫您|感谢您的咨询|感謝您的諮詢|"
+               r"给您带来的不便|給您帶來的不便"),
+]
+
+
+def matches_service_frame(text: str) -> List[str]:
+    """文本中「客服/销售组织框架腔」命中片段（#175）；空 = 合规。"""
+    s = str(text or "")
+    if not s:
+        return []
+    out: List[str] = []
+    for pat in _SERVICE_FRAME_PATTERNS:
+        m = pat.search(s)
+        if m:
+            out.append(m.group(0))
+    return out
+
+
+# ── 客服腔句级家族（O-1 C · #253 · D-O3，2026-09-08 Q9H2HM / XAM4KV）──────────────
+# 事故原话：「I hear you, and I'll stop here… Take care.」「Absolutely, I'm looking forward
+# to it. Have a great morning over there!」「我的助理会联系您」——不是组织框架硬词（#175
+# 已收），是**客服/助理的礼貌腔**：同理确认句、告别祝福句、「随时告诉我」条件句、您称。
+# 陪伴人设（第一人称朋友）一开口是这套，客户当场识破（Sinue：obviously handled by an AI
+# assistant）。词形保守：只收定式短语；「take care of yourself when sick」这类实义用法靠
+# 上下文排除（see _SERVICE_TONE_EXEMPT）。**只对 business_domain=companion 启用**（销售域
+# 的「如有需要 / 您」是对的）——由调用方判域。
+_SERVICE_TONE_PATTERNS_EN = [
+    re.compile(r"\bi\s+hear\s+you\b", re.I),
+    re.compile(r"\bi\s+(?:completely|totally|fully|really|do)?\s*understand\s+(?:how\s+you\s+feel|"
+               r"where\s+you(?:'re|\s+are)\s+coming\s+from|your\s+(?:frustration|concern|point)"
+               r"|that\s+this|if\s+you)\b", re.I),
+    re.compile(r"\bi\s+(?:completely|totally|fully)\s+understand\b", re.I),
+    re.compile(r"\btake\s+care(?:\s+of\s+yourself)?\s*(?:[!.。]|$)", re.I),
+    re.compile(r"\bi(?:'|’)?ll\s+be\s+(?:around|right\s+here|here\s+(?:if|when|whenever))\b", re.I),
+    re.compile(r"\bi(?:'|’)?m\s+(?:always\s+)?here\s+(?:if|when|whenever|for\s+you)\b", re.I),
+    re.compile(r"\bfeel\s+free\s+to\b", re.I),
+    re.compile(r"\blet\s+me\s+know\s+if\b", re.I),
+    re.compile(r"\bdon(?:'|’)?t\s+hesitate\s+to\b", re.I),
+    re.compile(r"\brest\s+assured\b", re.I),
+    re.compile(r"\bi\s+(?:really\s+)?appreciate\s+you(?:r)?\s+(?:sharing|telling|opening|trust|"
+               r"honesty|patience|understanding)\b", re.I),
+    re.compile(r"\bthank(?:s|\s+you)\s+for\s+(?:sharing|opening\s+up|telling\s+me|your\s+"
+               r"(?:message|time|honesty|patience|understanding|kind\s+words)|letting\s+me\s+know)\b", re.I),
+    re.compile(r"\bthank\s+you\s+for\s+reaching\s+out\b", re.I),
+    re.compile(r"\b(?:have|hope\s+you\s+have)\s+a\s+(?:great|wonderful|lovely|nice|good|fantastic|"
+               r"blessed|beautiful|restful|productive)\s+(?:day|morning|evening|night|weekend|"
+               r"week|rest\s+of\s+your\s+day)(?:\s+over\s+there)?\b", re.I),
+    re.compile(r"\bwishing\s+you\s+(?:a|all|the|nothing\s+but|good)\b", re.I),
+    re.compile(r"\bplease\s+know\s+that\b", re.I),
+    re.compile(r"\byour\s+feelings\s+are\s+valid\b", re.I),
+    re.compile(r"\bit(?:'|’)?s\s+(?:completely\s+)?understandable\s+(?:that|to)\b", re.I),
+    re.compile(r"\bthat\s+(?:must|sounds)\s+(?:be\s+)?(?:really\s+|so\s+|incredibly\s+)?"
+               r"(?:hard|difficult|tough|frustrating|overwhelming|exhausting)\b", re.I),
+    re.compile(r"\bi(?:'|’)?m\s+(?:so\s+)?(?:sorry|glad)\s+to\s+hear\s+that\b", re.I),
+    re.compile(r"\babsolutely[,!]\s+i(?:'|’)?m\s+looking\s+forward\s+to\s+it\b", re.I),
+    re.compile(r"\bis\s+there\s+anything\s+(?:else\s+)?(?:i\s+can\s+do|you\s+need)\b", re.I),
+    re.compile(r"\bhow\s+can\s+i\s+(?:help|support)\s+you\b", re.I),
+    re.compile(r"\bmy\s+assistant\b", re.I),
+    re.compile(r"\bour\s+team\b", re.I),
+    re.compile(r"\bat\s+your\s+(?:convenience|service)\b", re.I),
+    re.compile(r"\bi\s+(?:hope|trust)\s+this\s+(?:helps|finds\s+you\s+well)\b", re.I),
+]
+_SERVICE_TONE_PATTERNS_ZH = [
+    re.compile(r"如有需要|如您需要|若有需要|如果您需要|如果您有任何|若您有任何|如果有任何(?:问题|需要|疑问)"),
+    re.compile(r"很高兴为您|很高兴能为您|很荣幸为您|为您服务|为您解答|为您提供"),
+    re.compile(r"感谢您的(?:分享|信任|理解|耐心|支持|反馈|消息|来信|咨询)|谢谢您的(?:分享|信任|理解|耐心|支持)"),
+    re.compile(r"我(?:非常|完全|很|能|十分)?理解您的(?:感受|心情|处境|担忧|顾虑)"),
+    re.compile(r"请随时(?:告诉我|联系我|联系|找我|沟通)|随时告诉我|随时联系我|欢迎随时"),
+    re.compile(r"祝您(?:生活愉快|一切顺利|工作顺利|身体健康|好运|愉快|有美好的一天|度过)|祝你有(?:个|一个)(?:美好|愉快)的"),
+    re.compile(r"我的助理|我们(?:的)?团队|我们会尽快|我们将"),
+    re.compile(r"有什么可以帮|需要什么帮助|还有什么可以帮|有什么需要"),
+    re.compile(r"请您(?:放心|谅解|理解|知悉|留意|注意)|请放心|敬请"),
+    re.compile(r"给您带来的不便|造成的不便|深表歉意|非常抱歉给您"),
+    re.compile(r"保重(?:身体)?[。！!]?\s*$"),
+    re.compile(r"我(?:一直|随时|都)在(?:这里|这儿)[，,]?(?:如果|若|需要|随时)"),
+    # 独立收尾句「我一直在这里。」「我随时都在。」——客服式陪伴承诺
+    re.compile(r"^\s*我(?:会)?(?:一直|随时|都|永远)(?:都)?在(?:这里|这儿|的)?(?:陪(?:着)?你)?[。！!～~]*\s*$"),
+    re.compile(r"(?:^|[。！？!?\n]\s*)您好[，,!！。]"),
+]
+# 实义用法豁免：「take care of the kids」「照顾好自己」不是客服告别
+_SERVICE_TONE_EXEMPT = [
+    re.compile(r"\btake\s+care\s+of\s+(?!yourself\b)\w+", re.I),
+    re.compile(r"\btake\s+care\s+of\s+yourself\s+(?:when|while|after|during|if)\b", re.I),
+]
+# 「致谢-确认-告别」三段式：三类句子同时在场（各一句）＝客服收尾模板
+_TONE_THANKS_RE = re.compile(
+    r"^\s*(?:thank(?:s|\s+you)\b|i\s+(?:really\s+)?appreciate\b|感谢|谢谢|多谢)", re.I)
+_TONE_CONFIRM_RE = re.compile(
+    r"^\s*(?:i\s+(?:completely\s+|totally\s+)?(?:understand|hear\s+you|get\s+it|see)\b|"
+    r"(?:got\s+it|noted|understood|absolutely|of\s+course|certainly)\b|"
+    r"(?:我)?(?:明白|理解|了解|知道)了?|好的|没问题|当然)", re.I)
+_TONE_FAREWELL_RE = re.compile(
+    r"(?:\btake\s+care\b|\bhave\s+a\s+(?:great|wonderful|lovely|nice|good)\b|\bwishing\s+you\b|"
+    r"\bgood\s*bye\b|\ball\s+the\s+best\b|\bbest\s+wishes\b|祝您|祝你|保重|再见|再會|拜拜)", re.I)
+# 条件句收尾：末句以「如果你需要 / 有需要的话 / 随时 / If you ever need / Should you / Whenever you're ready」起
+_TONE_CONDITIONAL_CLOSE_RE = re.compile(
+    r"^\s*(?:if\s+(?:you\s+)?(?:ever\s+)?(?:need|want|feel|have|change\s+your\s+mind|decide|"
+    r"you(?:'d|\s+would)\s+like)\b|should\s+you\b|whenever\s+you(?:'re|\s+are)?\s+ready\b|"
+    r"anytime\s+you\b|just\s+(?:say|let\s+me\s+know|reach\s+out)\b|"
+    r"(?:如果|若|要是)(?:你|您)?(?:有|需要|想|愿意|改变)|有需要(?:的话)?|需要的话|随时|"
+    r"什么时候(?:想|需要))", re.I)
+_FORMAL_YOU_RE = re.compile(r"您")
+
+
+def companion_tone_guard_active(config: Any = None) -> bool:
+    """客服腔守卫是否该开＝这台机器是陪伴运营（``business_domain=companion``）。
+
+    进程级 active（DomainLoader 装配时登记）优先，其次给定配置 / 运行时配置推导；销售域
+    （「如有需要 / 您」是对的）恒 False。异常 → False（宁漏不误伤）。
+    """
+    try:
+        from src.utils.business_domain import active_business_domain
+        cfg = config
+        if cfg is None:
+            try:
+                from src.compliance.runtime import runtime_config
+                cfg = runtime_config() or None
+            except Exception:
+                cfg = None
+        return active_business_domain(cfg) == "companion"
+    except Exception:
+        return False
+
+
+def matches_service_tone(text: str) -> List[str]:
+    """文本中「客服 / 助理礼貌腔」命中片段（O-1 C）；空 = 合规。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _SERVICE_TONE_PATTERNS_EN + _SERVICE_TONE_PATTERNS_ZH:
+            m = pat.search(s)
+            if not m:
+                continue
+            frag = m.group(0)
+            if any(ex.search(s[max(0, m.start() - 2): m.end() + 24]) for ex in _SERVICE_TONE_EXEMPT):
+                continue
+            out.append(frag.strip())
+    except Exception:
+        return []
+    return out
+
+
+def _tone_sentences(text: str) -> List[str]:
+    parts = _split_sentences_sn(text)
+    return [p for p in parts if p and p.strip()]
+
+
+def detect_three_part_close(text: str) -> bool:
+    """「致谢 - 确认 - 告别」三段式：≥3 句且三类各至少一句（顺序不限）。"""
+    try:
+        sents = _tone_sentences(str(text or ""))
+        if len(sents) < 3:
+            return False
+        has_t = any(_TONE_THANKS_RE.search(s) for s in sents)
+        has_c = any(_TONE_CONFIRM_RE.search(s) for s in sents)
+        has_f = any(_TONE_FAREWELL_RE.search(s) for s in sents)
+        return bool(has_t and has_c and has_f)
+    except Exception:
+        return False
+
+
+def detect_conditional_close(text: str) -> bool:
+    """末句是条件句收尾（「如果你需要…随时找我」/ If you ever need…）。"""
+    try:
+        sents = _tone_sentences(str(text or ""))
+        if len(sents) < 2:
+            return False
+        return bool(_TONE_CONDITIONAL_CLOSE_RE.search(sents[-1]))
+    except Exception:
+        return False
+
+
+def service_tone_report(text: str) -> Dict[str, Any]:
+    """客服腔体检：``{"hits", "three_part", "conditional_close", "formal_you", "any"}``。"""
+    s = str(text or "")
+    hits = matches_service_tone(s)
+    three = detect_three_part_close(s)
+    cond = detect_conditional_close(s)
+    formal = len(_FORMAL_YOU_RE.findall(s)) if _CJK_RE.search(s) else 0
+    return {"hits": hits, "three_part": three, "conditional_close": cond,
+            "formal_you": formal, "any": bool(hits or three or cond or formal)}
+
+
+def rewrite_service_tone(text: str, *, formal_you: bool = True,
+                         record_stats: bool = True) -> Tuple[str, Dict[str, Any]]:
+    """按人设口吻**确定性**改写一次：剥掉客服腔句、剥条件句收尾、三段式只留中间承接句、
+    您 → 你。返回 ``(文本, report)``，``report["action"] ∈ {"clean", "rewrite", "review"}``——
+    ``review``＝整段都是客服腔、剥完为空 → 原文返回，调用方降级人工审核。绝不抛、绝不返回空。
+
+    ``record_stats``（P-1 D）：计入质检页「客服腔命中率」（``ai_fingerprint_stats``）；发送门
+    兜底那次复检传 False，避免同一稿记两遍。
+    """
+    src = str(text or "")
+    out_text, rep = _rewrite_service_tone_impl(src, formal_you=formal_you)
+    if record_stats and src.strip():
+        try:
+            from src.inbox.ai_fingerprint_stats import record_service_tone
+            record_service_tone(str(rep.get("action") or "clean"))
+        except Exception:
+            pass
+    return out_text, rep
+
+
+def _rewrite_service_tone_impl(src: str, *, formal_you: bool) -> Tuple[str, Dict[str, Any]]:
+    rep = service_tone_report(src)
+    rep["action"] = "clean"
+    if not src.strip() or not rep["any"]:
+        return src, rep
+    try:
+        sents = _tone_sentences(src)
+        if not sents:
+            return src, rep
+        kept: List[str] = []
+        for s in sents:
+            if matches_service_tone(s):
+                continue
+            # 三段式：致谢 / 确认 / 告别三类句子整套剥掉（模板句一句都不是人话）
+            if rep["three_part"] and (_TONE_THANKS_RE.search(s) or _TONE_FAREWELL_RE.search(s)
+                                      or _TONE_CONFIRM_RE.search(s)):
+                continue
+            kept.append(s)
+        if rep["conditional_close"] and kept and _TONE_CONDITIONAL_CLOSE_RE.search(kept[-1]):
+            kept.pop()
+        out = "".join(kept).strip()
+        if formal_you and out and _CJK_RE.search(out):
+            out = out.replace("您好", "你好").replace("您", "你")
+        # 剥完残留的孤立连接词 / 开头逗号（整词匹配：别把 Sounds 的 So 吃掉）
+        out = re.sub(r"^(?:and|but|so|anyway|also)\b\s*[,，]?\s*|^[,，、]\s*", "", out,
+                     flags=re.I).strip()
+        if not out or not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", out):
+            rep["action"] = "review"
+            return src, rep
+        rep["action"] = "rewrite" if out != src.strip() else "clean"
+        return out, rep
+    except Exception:
+        rep["action"] = "clean"
+        return src, rep
+
+
+def matches_multi_peer_leak(text: str) -> List[str]:
+    """文本中「他人串扰自曝」命中片段（#91-B 红线，无条件检）。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _MULTI_PEER_LEAK_PATTERNS:
+            m = pat.search(s)
+            if m:
+                out.append(m.group(0))
+    except Exception:
+        return []
+    return out
+
+# ── 已撤销旧设定的「认领」检测（2026-08-04 P2 期，出站兜底）────────────────────
+# prompt 钉子（boundaries.retired_facts）偶尔还是会被历史窗口压过——AI 又说出
+# 「我家猫今天很乖」。本检测**刻意只抓第一人称认领**：
+#   命中 = 第一人称归属/偏好标记 + ≤8 个非标点字符间隔 + 锚词；
+#   豁免 = 窗口内含否定（「我没有养猫」是钉子要求的正确澄清，绝不能剥）。
+# 「你家的猫真可爱」（聊客户的猫）没有第一人称标记 → 不命中——撤销语义本就允许
+# 正常参与话题，只禁认领。宁可漏拦（钉子已是主防线）不可误伤正常社交。
+_RETIRED_FP_MARKER = r"(我们家|我家|我的|我养|我新养|我喜欢|我超喜欢|我最爱|我爱|\bmy\b|\bour\b)"
+_RETIRED_NEG_RE = re.compile(r"(没有|没在|没养|从没|从来没|不再|不养|哪有|不是|别提)")
+
+
+def _retired_claim_re(term: str) -> "re.Pattern":
+    return re.compile(
+        _RETIRED_FP_MARKER + r"[^。！？!?\n]{0,8}" + re.escape(term), re.I)
+
+
+def _matches_retired_claims(text: str, terms: List[str]) -> List[str]:
+    out: List[str] = []
+    s = str(text or "")
+    for term in terms or []:
+        t = str(term).strip()
+        if not t:
+            continue
+        for m in _retired_claim_re(t).finditer(s):
+            window = s[max(0, m.start() - 6):m.end()]
+            if _RETIRED_NEG_RE.search(window):
+                continue          # 否定澄清是钉子要求的正确行为
+            out.append(m.group(0))
+            break                 # 每词至多记一个片段（与既有模式一致）
+    return out
+
 # 按中英文句末标点切句（保留标点，便于无缝重组剩余句子）
-_SENTENCE_SPLIT_RE = re.compile(r"[^。！？!?\n]*[。！？!?\n]|[^。！？!?\n]+")
+# 英文句点后跟空白/行尾也算句界（#175 2026-09-05：实录是英文多句消息，此前
+# 「Missed you! My assistant will … minutes. Anyway, how was your run?」整段到「?」
+# 才算一句 → 剥框架句连带吞掉「how was your run」；小数「3.5」/域名无空白不切）。
+_SENTENCE_SPLIT_RE = re.compile(
+    r"[^。！？!?\n]*?(?:[。！？!?\n]|\.(?=\s|$))|[^。！？!?\n]+")
+
+# 无句末标点的中文口语流用空格当子句边界（拟人人设常用风格：「行 那再给你发一条
+# 你听听」）。子句 = 非空白串 + 其尾随空白（保留空白，剔除违规子句后无缝重组）。
+_WS_CLAUSE_RE = re.compile(r"\S+\s*")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 
 
-def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
-    """从人设 dict 抽取守卫所需的禁用项。"""
+def collect_forbidden(
+    persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """从人设 dict 抽取守卫所需的禁用项。
+
+    ``service_frame``（#175，2026-09-05）＝是否启用「客服/销售组织框架腔」家族
+    （``_SERVICE_FRAME_PATTERNS``：my assistant will / our team will reach out /
+    account details / setup guide / onboarding / your account manager…）。
+    None＝按人设推：声明了 ``identity.deny_ai`` 或 ``identity.claim_human``
+    （要被当真人的陪聊人设）即开；调用方可按域显式给 True/False（陪聊域
+    conversion 一律开——账号人设未必配 deny_ai 但产品语义就是「真人朋友」）。
+    **不随 honest_identity 豁免**：那是身份坦白合规，客服腔照剥（与配置禁语同）。
+
+    ``retired_terms``（2026-08-04）＝撤销旧设定的锚词（仅结构化条目提供，
+    legacy 纯文案条目无锚词=不参与守卫）；异常一律空列表，绝不拖垮守卫。
+
+    ``honest_identity``（WP-4 合规模式，2026-08-17）＝``compliance.disclosure.
+    honest_identity`` 开时由调用方传 True：(a) ``deny_ai`` 按 False 处理——
+    「自曝 AI 身份」不再算违规（客户直问「你是 AI 吗」的如实回答不得被剥）；
+    (b) ``forbidden_phrases`` 里**身份类**条目（「作为AI」「我是语言模型」这类
+    会剥掉诚实承认的短语）一并豁免——判类复用 ``_AI_SELF_ID_PATTERNS`` 单一
+    口径，防第二套正则漂移；非身份类禁语（客服腔等）照常生效。默认 False =
+    行为与旧版逐字节一致。
+    """
     speaking = (persona or {}).get("speaking") or {}
     identity = (persona or {}).get("identity") or {}
     phrases = [
@@ -42,7 +541,78 @@ def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
         for p in (speaking.get("forbidden_phrases") or [])
         if str(p).strip()
     ]
-    return {"phrases": phrases, "deny_ai": bool(identity.get("deny_ai"))}
+    if honest_identity:
+        phrases = [p for p in phrases if not _matches_ai_self_id(p)]
+    try:
+        from src.utils.persona_retired import retired_guard_terms
+        retired = retired_guard_terms(persona)
+    except Exception:
+        retired = []
+    deny_ai = bool(identity.get("deny_ai")) and not honest_identity
+    if service_frame is None:
+        service_frame = bool(identity.get("deny_ai")) or bool(
+            identity.get("claim_human"))
+    # #91-B：他人串扰自曝红线——身份家族，无条件开（不依赖人设配置）；
+    # honest_identity 合规模式随家族豁免。
+    return {"phrases": phrases, "deny_ai": deny_ai,
+            "retired_terms": retired,
+            "peer_leak": not honest_identity,
+            "service_frame": bool(service_frame),
+            "foreign_products": _foreign_products_for(persona, foreign_products)}
+
+
+def _foreign_products_for(
+    persona: Dict[str, Any],
+    foreign_products: Optional[List[str]],
+) -> List[str]:
+    """他人设产品名命中面。显式传入（含空表）优先；否则按人设 id 从目录加载。
+
+    无 id / 加载失败 / 目录全是共享货 → []，行为与旧版一致。
+    """
+    if foreign_products is not None:
+        out: List[str] = []
+        seen = set()
+        for x in foreign_products:
+            s = str(x or "").strip()
+            if len(s) < 2:
+                continue
+            k = s.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(s)
+        return out
+    pid = ""
+    if isinstance(persona, dict):
+        pid = str(persona.get("id") or persona.get("persona_id") or "").strip()
+    if not pid:
+        return []
+    try:
+        from src.companion.goals import site_catalog as sc
+        cat = sc.load_catalog(sc.catalog_path({}))
+        return list(sc.foreign_product_names(cat, pid) or [])
+    except Exception:
+        return []
+
+
+def _foreign_product_fallback(text: str) -> str:
+    if _CJK_RE.search(text or ""):
+        return _FOREIGN_PRODUCT_FALLBACK_ZH
+    return _FOREIGN_PRODUCT_FALLBACK_EN
+
+
+# #175：整段客服框架腔剥空时的中性兜底——第一人称、朋友口吻、不引入任何第三方。
+_SERVICE_FRAME_FALLBACK_ZH = "这事就咱俩聊，不用经过别人～你想先了解哪块，我直接跟你说"
+_SERVICE_FRAME_FALLBACK_EN = (
+    "Let's keep this between us — no middlemen. "
+    "Tell me what you want to know and I'll walk you through it myself."
+)
+
+
+def _service_frame_fallback(text: str) -> str:
+    if _CJK_RE.search(text or ""):
+        return _SERVICE_FRAME_FALLBACK_ZH
+    return _SERVICE_FRAME_FALLBACK_EN
 
 
 def _norm(s: str) -> str:
@@ -62,61 +632,913 @@ def _matches_phrase(haystack_norm: str, phrases: List[str]) -> List[str]:
 def _matches_ai_self_id(text: str) -> List[str]:
     out: List[str] = []
     for pat in _AI_SELF_ID_PATTERNS:
-        m = pat.search(text)
-        if m:
+        for m in pat.finditer(text):
+            # 感知语境豁免：「(你)觉得/以为/当成…我是AI」不是自曝（见常量注释）
+            if _PERCEPTION_PREFIX_RE.search(text[:m.start()]):
+                continue
             out.append(m.group(0))
+            break  # 每个模式至多记一个片段（与旧行为一致）
     return out
 
 
-def find_violations(text: str, persona: Dict[str, Any]) -> List[str]:
+def matches_ai_self_identity(text: str) -> List[str]:
+    """公共入口：文本中「自曝 AI 身份」的命中片段（含否定句/感知语境豁免）。
+
+    供 quality_tracker 等监控组件复用同一判定口径，避免两套正则漂移
+    （此前 quality_tracker 自带简版正则，把「怕你觉得我是AI机器人」误报成 identity_leak）。
+    """
+    return _matches_ai_self_id(str(text or ""))
+
+
+def find_violations(
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
+) -> List[str]:
     """返回 ``text`` 中命中的违规片段清单（空 = 合规）。"""
     if not text:
         return []
-    fb = collect_forbidden(persona)
+    fb = collect_forbidden(
+        persona, honest_identity=honest_identity,
+        foreign_products=foreign_products, service_frame=service_frame)
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
+        hits.extend(matches_capability_leak(text))
+    if fb.get("retired_terms"):
+        hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
+    if fb.get("peer_leak"):
+        hits.extend(matches_multi_peer_leak(text))
+    if fb.get("service_frame"):
+        hits.extend(matches_service_frame(text))
+    if fb.get("foreign_products"):
+        hits.extend(_matches_phrase(_norm(text), fb["foreign_products"]))
     return hits
 
 
 def _split_sentences(text: str) -> List[str]:
-    return [m.group(0) for m in _SENTENCE_SPLIT_RE.finditer(text) if m.group(0)]
+    parts = [m.group(0) for m in _SENTENCE_SPLIT_RE.finditer(text) if m.group(0)]
+    # 整段无句末标点的中文口语流（空格代逗号句号的人设风格）→ 按空格切子句。
+    # 否则整段=一个"句子"：一处违规 → 全删 → 触发「删光回退原文」= 守卫形同虚设
+    # （2026-07-20 阿龙实测：日志喊「已剥离」实际原样发出的根因）。
+    if (len(parts) <= 1 and text and not _SENT_PUNCT_RE.search(text)
+            and _CJK_RE.search(text) and re.search(r"\s", text.strip())):
+        return [m.group(0) for m in _WS_CLAUSE_RE.finditer(text)]
+    return parts
 
 
 def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
     if _matches_phrase(_norm(sentence), fb["phrases"]):
         return True
-    if fb["deny_ai"] and _matches_ai_self_id(sentence):
+    if fb["deny_ai"] and (_matches_ai_self_id(sentence)
+                          or matches_capability_leak(sentence)):
+        return True
+    if fb.get("retired_terms") and _matches_retired_claims(
+            sentence, fb["retired_terms"]):
+        return True
+    if fb.get("peer_leak") and matches_multi_peer_leak(sentence):
+        return True
+    if fb.get("service_frame") and matches_service_frame(sentence):
+        return True
+    if fb.get("foreign_products") and _matches_phrase(
+            _norm(sentence), fb["foreign_products"]):
         return True
     return False
 
 
-def sanitize(text: str, persona: Dict[str, Any]) -> Tuple[str, List[str]]:
+def sanitize(
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
+) -> Tuple[str, List[str]]:
     """剥离违规句，返回 ``(清洁文本, 命中清单)``。
 
     - 无禁用项或无命中 → 原样返回（命中清单为空）。
     - 有命中 → 删掉含违规片段的整句，保留其余；
     - 若删光（整段都违规）→ 先尝试 inline 抹掉禁用短语；仍空则回退原文（绝不返回空）。
+    - ``honest_identity=True``（WP-4 合规模式）→ 身份类检测整体豁免，其余照常
+      （语义见 :func:`collect_forbidden`）。
+    - ``service_frame``（#175）→ 客服/销售组织框架腔家族开关（None=按人设推）。
     """
     if not text:
         return text, []
-    fb = collect_forbidden(persona)
-    if not fb["phrases"] and not fb["deny_ai"]:
+    fb = collect_forbidden(
+        persona, honest_identity=honest_identity,
+        foreign_products=foreign_products, service_frame=service_frame)
+    if (not fb["phrases"] and not fb["deny_ai"]
+            and not fb.get("retired_terms") and not fb.get("peer_leak")
+            and not fb.get("service_frame")
+            and not fb.get("foreign_products")):
         return text, []
-    violations = find_violations(text, persona)
+    violations = find_violations(
+        text, persona, honest_identity=honest_identity,
+        foreign_products=foreign_products, service_frame=service_frame)
     if not violations:
         return text, []
     kept = [s for s in _split_sentences(text) if not _sentence_violates(s, fb)]
     cleaned = "".join(kept).strip()
     if not cleaned:
+        # #175：整段都是客服/销售组织框架（实录整条就是「My assistant will reach
+        # out with the account details and a quick setup guide…」）→ 中性兜底，
+        # 绝不回退原文（回退＝框架腔原样出站），也不做 inline 抹词（抹掉
+        # 「my assistant will」「account details」剩下的是残句）。
+        if fb.get("service_frame") and matches_service_frame(text):
+            return _service_frame_fallback(text), violations
         cleaned = text
-        for p in fb["phrases"]:
+        for p in list(fb["phrases"]) + list(fb.get("foreign_products") or []):
             if p:
                 cleaned = re.sub(re.escape(p), "", cleaned, flags=re.I)
         cleaned = cleaned.strip()
+        # 子句级降级（2026-08-04 真机实测缺口）：单句回复（只有逗号）里
+        # 「刚下课～我家猫特别黏人，你吃了吗？」——句级剥离把整段删光 →
+        # 回退原文＝认领句原样出站。逗号级再切一刀只丢违规子句，其余保留。
+        if cleaned == text.strip() or not cleaned:
+            base = cleaned or text
+            clauses = [m.group(0) for m in
+                       re.finditer(r"[^，,;；]+[，,;；]?", base)]
+            kept2 = [c for c in clauses if not _sentence_violates(c, fb)]
+            c2 = "".join(kept2).strip("，,;； ")
+            if c2 and c2 != base.strip():
+                cleaned = c2
         if not cleaned:
+            # #145③：他人设产品名剥空不得回退原文（回退＝串味出站）。
+            if fb.get("foreign_products") and _matches_phrase(
+                    _norm(text), fb["foreign_products"]):
+                return _foreign_product_fallback(text), violations
             return text, violations
+    if (fb.get("foreign_products")
+            and _matches_phrase(_norm(text), fb["foreign_products"])
+            and not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", cleaned or "")):
+        return _foreign_product_fallback(text), violations
     return cleaned, violations
 
 
-__all__ = ["collect_forbidden", "find_violations", "sanitize"]
+# ── 错误自称名守卫（2026-08-08「David Lin」事故）────────────────────────────────
+# 实录：客户（显示名 David）质疑「Look like ai」，AI 回「I'm just David Lin, a real
+# guy…」——把**对方的名字**和自己的姓氏缝成新身份自称，3 分钟后被问「Who are you?」
+# 又改口真名 Lin Xiaoyu，当场穿帮。prompt 侧「自称规则·强制」在场仍失守 ⇒ 需要出站
+# 硬护栏。判罚分级（宁可漏拦不误拦，与本模块其余检测同哲学）：
+#   hard（剥除）＝ ① 自称名含**对方名字** token（借名缝合，任何脚本）；
+#                 ② CJK 强模式（我叫/我的名字是/叫我）报出非白名单 CJK 名；
+#                 ③ 拉丁 ≥2 词全名且白名单已含拉丁变体（names.* 西名或拼音罗马化
+#                    在册）仍不匹配——白名单不完备时绝不启用此档。
+#   soft（只记日志）＝ 其余非白名单自称（如单词英文名/绰号玩笑），先观测后收紧。
+# 白名单 = persona.name + names.*（full_western/english/german/french/nickname）
+#          + 调用方补充（spoken_name/ai_name 覆写）+ CJK 条目的拼音变体
+#          （pypinyin 软依赖，缺库自动少一层，判罚档 ③ 随之自动收窄）。
+# 引导词大小写不敏感（(?i: ) 作用域旗标），但**名字捕获组保持大小写敏感**——
+# 「首字母大写」正是英文里区分 "I'm fine" 与 "I'm David" 的关键信号。
+_SELF_NAME_EN_RE = re.compile(
+    r"\b(?i:i\s*['’]?\s*m|i\s+am|my\s+name(?:['’]s|\s+is)|call\s+me)\s+"
+    r"(?:(?i:just|actually|really|still|now|officially)\s+)*"
+    r"([A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,2})"
+)
+_SELF_NAME_CJK_STRONG_RE = re.compile(
+    r"(?<![不没别可])(?:我叫|我的名字[是叫]|叫我)\s*([\u4e00-\u9fff][\u4e00-\u9fff·]{0,5})"
+)
+_SELF_NAME_CJK_WEAK_RE = re.compile(
+    r"(?<![不没别])(?:我是|我就是)\s*([\u4e00-\u9fff][\u4e00-\u9fff·]{1,5})"
+)
+# 英文感知/转述前缀（"you think I'm David" 不是自称）；CJK 侧复用 _PERCEPTION_PREFIX_RE
+_EN_PERCEPTION_PREFIX_RE = re.compile(
+    r"(?:think|thought|assumed?|guess(?:ed)?|wish|pretend(?:ed)?)\s*$", re.I)
+# 英文名 token 停用词：命中任一 token ＝ 不是名字（"I'm Just Kidding" / "I'm So Sorry"）
+_EN_NAME_STOPWORDS = frozenset({
+    "just", "kidding", "sorry", "fine", "good", "okay", "ok", "sure",
+    "serious", "done", "back", "here", "home", "not", "so", "really",
+    "busy", "tired", "late", "happy", "sad", "glad", "ready", "right",
+    "wrong", "sick", "free", "online", "offline", "alright", "great",
+})
+_CJK_TRAIL_PARTICLES = "吧哦呀啦哈嘛呢哟喔噢咯呗啊呐嘞哩喽欸诶嗯～~！!。，,"
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _pinyin_variants(name: str) -> List[str]:
+    """CJK 名 → 拼音罗马化变体（全名连写 / 名不带姓）。pypinyin 缺失返回空。"""
+    s = str(name or "").strip()
+    if not s or not _CJK_RE.search(s):
+        return []
+    try:
+        from pypinyin import lazy_pinyin
+        syls = [str(x).strip().lower() for x in lazy_pinyin(s) if str(x).strip()]
+    except Exception:
+        return []
+    if not syls:
+        return []
+    out = {"".join(syls)}
+    if len(syls) >= 2:
+        out.add("".join(syls[1:]))          # 名（去姓）：xiaoyu
+    return [v for v in out if len(v) >= 2]
+
+
+def build_self_name_allowlist(
+    persona: Dict[str, Any], extra_names: List[str] | None = None
+) -> List[str]:
+    """收集「本人设可以用来自称」的全部名字（含 names.* 西名与拼音变体）。绝不抛。"""
+    out: List[str] = []
+    try:
+        p = persona or {}
+        cands: List[str] = [str(p.get("name") or "")]
+        names = p.get("names") or {}
+        if isinstance(names, dict):
+            for k in ("full_western", "english", "german", "french", "nickname"):
+                cands.append(str(names.get(k) or ""))
+        for x in (extra_names or []):
+            cands.append(str(x or ""))
+        seen = set()
+        for c in cands:
+            c = c.strip()
+            if not c:
+                continue
+            variants = [c] + _pinyin_variants(c)
+            # CJK 姓名补「去姓的名」（林小语 → 小语；复姓 4 字 → 再补后 2 字）：
+            # 「叫我小语」是最常见的合法自称形态，白名单没有它=strong 档必误伤。
+            if _CJK_RE.search(c) and len(c) >= 3:
+                variants.append(c[1:])
+                if len(c) >= 4:
+                    variants.append(c[2:])
+            for v in variants:
+                nv = _norm(v)
+                if len(nv) >= 2 and nv not in seen:
+                    seen.add(nv)
+                    out.append(v)
+    except Exception:
+        pass
+    return out
+
+
+def _reserved_norm(s: str) -> str:
+    """Q-38：reserved 比对用归一（NFKC + casefold + 去空白）。与出站 _norm 分开，不改守卫。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(s or ""))).casefold()
+
+
+def reserved_self_names(persona: Any, *, peer_calls_you: str = "") -> set:
+    """人设自称 ∪ 会话 ``peer_calls_you`` → 归一后的 reserved 集。缺人设 = 空集不误伤。
+
+    Q-38（#272 HPS7C3 / E2GXEP）：客户画像 ``name`` 槽禁止写入我方人设名 / 对方对我的叫法。
+    只收集，**不改**出站自称 / 呼格守卫。"""
+    out: set = set()
+    try:
+        extra: List[str] = []
+        py = str(peer_calls_you or "").strip()
+        if py:
+            extra.append(py)
+        p = persona if isinstance(persona, dict) else {}
+        for v in build_self_name_allowlist(p, extra_names=extra or None):
+            nv = _reserved_norm(v)
+            if nv:
+                out.add(nv)
+        if py:
+            nv = _reserved_norm(py)
+            if nv:
+                out.add(nv)
+    except Exception:
+        return set()
+    return out
+
+
+def _peer_norm_tokens(peer_names: List[str] | None) -> Tuple[List[str], List[str]]:
+    """对方名 → (拉丁 token 集, CJK 归一串集)。@username / first+last 都拆词。"""
+    latin: List[str] = []
+    cjk: List[str] = []
+    for p in (peer_names or []):
+        s = str(p or "").strip().lstrip("@")
+        if not s:
+            continue
+        for t in _LATIN_TOKEN_RE.findall(s):
+            tl = t.lower()
+            if tl not in _EN_NAME_STOPWORDS and tl not in latin:
+                latin.append(tl)
+        cs = "".join(ch for ch in s if _CJK_RE.match(ch))
+        if len(cs) >= 2 and cs not in cjk:
+            cjk.append(cs)
+    return latin, cjk
+
+
+def _expand_allowed_norms(allowed_names: List[str] | None) -> List[str]:
+    """归一化白名单 + CJK 姓名自动补「去姓的名」变体（检测器内置，
+    调用方传裸名单也不丢保护：「叫我小语」对白名单只有「林小语」的部署零误伤）。"""
+    out: List[str] = []
+    seen = set()
+    for a in (allowed_names or []):
+        s = str(a or "").strip()
+        if not s:
+            continue
+        cands = [s]
+        if _CJK_RE.search(s) and len(s) >= 3:
+            cands.append(s[1:])
+            if len(s) >= 4:
+                cands.append(s[2:])
+        for c in cands:
+            n = _norm(c)
+            if len(n) >= 2 and n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
+def _claim_allowed(claim_norm: str, allowed_norms: List[str]) -> bool:
+    if not claim_norm or len(claim_norm) < 2:
+        return True          # 太短不判（保守放行）
+    for a in allowed_norms:
+        if len(a) >= 2 and (claim_norm == a or claim_norm in a or a in claim_norm):
+            return True
+    return False
+
+
+def _iter_self_name_claims(text: str):
+    """产出 (claim_text, is_strong, is_latin)。已剔除否定/感知/所有格/停用词形态。"""
+    s = str(text or "")
+    if not s:
+        return
+    for m in _SELF_NAME_EN_RE.finditer(s):
+        prefix = s[:m.start()]
+        if _EN_PERCEPTION_PREFIX_RE.search(prefix[-24:]):
+            continue
+        raw = m.group(1).strip()
+        toks = [t for t in re.split(r"\s+", raw) if t]
+        # 所有格截断（"David's friend" 不是自称）：遇 's 丢弃该词及其后
+        kept: List[str] = []
+        for t in toks:
+            if re.search(r"['’]s$", t):
+                break
+            kept.append(t)
+        if not kept:
+            continue
+        if any(t.lower() in _EN_NAME_STOPWORDS for t in kept):
+            continue
+        yield " ".join(kept), True, True
+    for pat, strong in ((_SELF_NAME_CJK_STRONG_RE, True),
+                        (_SELF_NAME_CJK_WEAK_RE, False)):
+        for m in pat.finditer(s):
+            if _PERCEPTION_PREFIX_RE.search(s[:m.start()]):
+                continue
+            raw = m.group(1).strip().rstrip(_CJK_TRAIL_PARTICLES)
+            if "的" in raw:      # 「我是大卫的朋友」＝关系描述不是自称
+                continue
+            if len(raw) < 2:
+                continue
+            yield raw, strong, False
+
+
+def find_wrong_self_name(
+    text: str,
+    allowed_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[List[str], List[str]]:
+    """返回 ``(hard_hits, soft_suspicions)``——错误自称名的分级命中。
+
+    hard = 高置信必错（借对方名 / CJK 强模式报非白名单名 / 拉丁全名且白名单
+    已含拉丁变体仍不匹配）→ 调用方应剥除；soft = 非白名单但置信不足 → 只观测。
+    纯函数，绝不抛。
+    """
+    hard: List[str] = []
+    soft: List[str] = []
+    try:
+        allowed_norms = _expand_allowed_norms(allowed_names)
+        peer_latin, peer_cjk = _peer_norm_tokens(peer_names)
+        allow_has_latin = any(re.search(r"[a-z]", a) for a in allowed_norms)
+        for claim, strong, is_latin in _iter_self_name_claims(text):
+            cn = _norm(claim)
+            if _claim_allowed(cn, allowed_norms):
+                continue
+            borrowed = False
+            if is_latin:
+                ctoks = {t.lower() for t in re.split(r"\s+", claim) if t}
+                borrowed = bool(ctoks & set(peer_latin))
+            else:
+                borrowed = any(pc in cn or cn in pc for pc in peer_cjk)
+            if borrowed:
+                hard.append(claim)
+            elif strong and not is_latin and allowed_norms:
+                hard.append(claim)          # 我叫〈非白名单 CJK 名〉
+            elif (is_latin and len(claim.split()) >= 2
+                    and allowed_norms and allow_has_latin):
+                hard.append(claim)          # 拉丁全名 + 白名单有拉丁变体仍不匹配
+            else:
+                soft.append(claim)
+    except Exception:
+        return [], []
+    return hard, soft
+
+
+# 英文感知句界（仅自称名守卫用）：既有 _split_sentences 不认 ASCII 句点——
+# 英文回复 "…sweet. What makes…?" 会整段并成一句，一处违规连带剥掉好句。
+# 此处补「.!? 后跟空白」为句界（防 3.5 / example.com / U.S. 中间误切），
+# 刻意不动 _split_sentences 本体（既有 sanitize 行为/测试保持原样）。
+_SN_SENT_BOUNDARY_RE = re.compile(r"(?:(?<=[。！？!?\n])|(?<=[.!?])(?=\s))")
+
+
+def _split_sentences_sn(text: str) -> List[str]:
+    s = str(text or "")
+    if not s:
+        return []
+    cuts = sorted({m.start() for m in _SN_SENT_BOUNDARY_RE.finditer(s)
+                   if 0 < m.start() < len(s)})
+    frags: List[str] = []
+    prev = 0
+    for i in cuts:
+        frags.append(s[prev:i])
+        prev = i
+    frags.append(s[prev:])
+    return [f for f in frags if f]
+
+
+def _hit_is_borrowed(claim: str, peer_names: List[str] | None) -> bool:
+    """hard 命中是否属「借对方名」档（与 find_wrong_self_name 内部同判据）。
+
+    borrowed＝身份级穿帮（拿客户的名字自称），残剥也比发出去强；
+    非 borrowed 的 hard（白名单外自称）实证主因是**白名单不完备**（自建人设
+    名没进白名单，B74 `_352`），残剥反而必穿帮。
+    """
+    try:
+        cn = _norm(str(claim or ""))
+        if not cn:
+            return False
+        peer_latin, peer_cjk = _peer_norm_tokens(peer_names)
+        if re.search(r"[a-z]", cn):
+            ctoks = {t.lower() for t in re.split(r"\s+", str(claim)) if t}
+            return bool(ctoks & set(peer_latin))
+        return any(pc in cn or cn in pc for pc in peer_cjk)
+    except Exception:
+        return False
+
+
+def sanitize_self_name(
+    text: str,
+    allowed_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[str, List[str], List[str]]:
+    """剥离 hard 级错误自称句，返回 ``(清洁文本, hard 命中, soft 观测)``。
+
+    与 :func:`sanitize` 同一套「按句剥离 → 剥光则 inline 抹名 → 绝不返回空」策略。
+
+    B74 修正（实施67，`_352` 实录「叫我。朋友都这么喊我。」）：hard 自称名必然
+    处于自介引导语境（我叫/叫我/call me…——检测正则本身就锚定这些引导词），
+    inline 抹名会把自介句剁成「叫我。」残句＝100% 穿帮，比误放行更糟。故 inline
+    抹名兜底**只对 borrowed（借对方名）档执行**（David Lin 事故金标不回退——
+    借名缝合发出去是身份级事故，残句是两害相权）；非 borrowed 的 hard 剥光时
+    保留原文（宁可漏拦不误伤，白名单不完备时这正是人设真名在自报家门）。
+    """
+    t = str(text or "")
+    if not t:
+        return t, [], []
+    hard, soft = find_wrong_self_name(t, allowed_names, peer_names)
+    if not hard:
+        return t, hard, soft
+    kept = [
+        s for s in _split_sentences_sn(t)
+        if not find_wrong_self_name(s, allowed_names, peer_names)[0]
+    ]
+    cleaned = "".join(kept).strip()
+    if not cleaned:
+        borrowed = [h for h in hard if _hit_is_borrowed(h, peer_names)]
+        if not borrowed:
+            return t, hard, soft          # 非借名 → 残剥必穿帮，保留原文
+        cleaned = t
+        for h in borrowed:
+            cleaned = re.sub(re.escape(h), "", cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+        if not cleaned or _norm(cleaned) == _norm(t):
+            return t, hard, soft          # 无法安全剥离 → 保留原文（调用方记日志）
+    return cleaned, hard, soft
+
+
+# ── 称呼混淆守卫（B42 2026-08-22）：用**自己的**人设名呼叫对方 ────────────────
+#
+# 实录（1.0.46 _236）：对客户 Nicks 说 "you're not that old, Steven"——Steven 是
+# AI 自己的人设名。上面的 find_wrong_self_name 守的是反方向（拿别人的名字自称）；
+# 这里守正方向：把自己的名字砸在客户头上（呼格）。
+#
+# 只抓高置信**呼格形态**（句首「Name, …」/ 句尾「…, Name」），并且：
+#   - 对方已知名字含该名 → 全跳（客户真叫这个名，禁了就误伤）；
+#   - 名字前是自我介绍语境（我是/我叫/叫我/I'm/call me/this is…）→ 不算呼格；
+#   - 对方名字**未知**（peer_names 空）→ **照判**（#96 0830 Steven 实锤改判：
+#     B 线草稿链没有 peer 名管道、A 线也有拿不到显示名的时刻，旧「不判」语义
+#     让最需要守卫的路径恰好裸奔。prompt 侧铁律本就是「不知道对方叫什么就
+#     不用名字」——守卫按同一契约执行；「对方恰好与人设同名且档案不知情」的
+#     极端同名场景，token 级剥离的代价只是少喊一声名字，远轻于把自己人设名
+#     砸在客户头上的身份穿帮）。
+# 剥离粒度＝**名字 token 本身**而非整句——"you're not that old, Steven" 去掉
+# 呼格名后句子本体仍是有效回复；整句剥反而把内容杀掉。
+
+_VOC_SELF_INTRO_TAIL_RE = re.compile(
+    r"(?:我(?:就)?[是叫]|叫我|人家(?:是|叫)|这(?:里|边)是|我系|"
+    r"i\s*(?:'?a?m)|it\s*'?s|this\s+is|call\s+me|name\s*(?:'?s|is)|named|-|—)"
+    r"\s*[,，]?\s*$",   # 「name is, Steven」怪写法的逗号也算自介语境
+    re.IGNORECASE)
+
+
+def _voc_patterns(name: str) -> List[re.Pattern]:
+    n = re.escape(str(name or "").strip())
+    if not n:
+        return []
+    return [
+        # 句尾呼格：…, Name / …，Name（后只许终止标点/空白）
+        re.compile(r"[,，]\s*(" + n + r")\s*(?=[.!?。！？~～…\s]*$)", re.IGNORECASE),
+        # 句首呼格：Name, … / Name，…
+        re.compile(r"^\s*(" + n + r")\s*[,，]", re.IGNORECASE),
+    ]
+
+
+def find_vocative_self_name(
+    text: str,
+    self_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> List[str]:
+    """返回被用来**称呼对方**的自己人设名命中列表（高置信呼格形态）。纯函数绝不抛。
+
+    ``peer_names`` 空＝对方名未知 → **照判**（#96：B 线无 peer 名管道曾致该路
+    裸奔；prompt 契约本就是「不知道对方叫什么就不用名字」）；非空且含该名 →
+    客户真叫这个名，跳过不判。
+    """
+    hits: List[str] = []
+    try:
+        t = str(text or "")
+        peers = [str(p or "").strip() for p in (peer_names or []) if str(p or "").strip()]
+        if not t.strip():
+            return []
+        peer_norm = _norm(" ".join(peers)) if peers else ""
+        for name in (self_names or []):
+            nm = str(name or "").strip()
+            if len(nm) < 2:
+                continue
+            if peer_norm and _norm(nm) and _norm(nm) in peer_norm:
+                continue       # 客户名里含此名 → 称呼合法
+            for sent in _split_sentences_sn(t):
+                for pat in _voc_patterns(nm):
+                    m = pat.search(sent)
+                    if not m:
+                        continue
+                    # 自我介绍语境（"…, I'm Steven" 的逗号形不落此形态，但
+                    # "my name is, Steven" 类怪写法防一手）
+                    if _VOC_SELF_INTRO_TAIL_RE.search(sent[:m.start(1)]):
+                        continue
+                    hits.append(nm)
+                    break
+                if nm in hits:
+                    break
+    except Exception:
+        return []
+    return hits
+
+
+def strip_vocative_self_name(
+    text: str,
+    self_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[str, List[str]]:
+    """剥离呼格位置的自己人设名（只抹名字 token，句子本体保留）。
+
+    返回 ``(清洁文本, 命中列表)``；无命中原样返回。剥后为空回原文（绝不返回空）。
+    """
+    t = str(text or "")
+    hits = find_vocative_self_name(t, self_names, peer_names)
+    if not hits:
+        return t, []
+    out_sents: List[str] = []
+    for sent in _split_sentences_sn(t):
+        s = sent
+        for nm in hits:
+            for pat in _voc_patterns(nm):
+                m = pat.search(s)
+                if m and not _VOC_SELF_INTRO_TAIL_RE.search(s[:m.start(1)]):
+                    # 连同引导逗号一起抹（句首形态抹尾随逗号）
+                    s = (s[:m.start()] + s[m.end():]) if m.start() > 0 or s[:m.start()].strip() \
+                        else s[m.end():]
+        out_sents.append(s)
+    cleaned = "".join(out_sents)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    if not cleaned:
+        return t, hits
+    return cleaned, hits
+
+
+# ── #24 称呼互换守卫（0830 babe/baba 实锤）────────────────────────────────────
+#
+# 档案明写「你叫对方 babe / 对方叫你 baba」，AI 仍被客户满屏「baba」带跑、把
+# 对方叫成 baba（「good morning baba」形）。prompt 硬钉子是第一道（persona_manager
+# ``_build_address_pin``），这里是出站兜底：呼格位置的 peer_calls_you → call_peer。
+#
+# 只动**呼格形态**（三种）：带逗号呼格（复用 _voc_patterns）、问候语+称呼收尾
+# （good morning baba / 晚安 baba——事故原形没有逗号）、句首独立称呼起头
+# （baba 你睡了吗）。元语句（叫我/叫你/call me…讨论称呼本身）整句跳过——
+# 「你叫我 baba 的时候好可爱」是合法引用，换词反而穿帮；所有格「我是你的 baba」
+# （AI 自指）不属呼格，天然不动。
+
+_ADDR_META_RE = re.compile(
+    r"叫我|喊我|叫你|喊你|你叫|别叫|不要叫|call(?:s|ing|ed)?\s+(?:me|you)|"
+    r"don'?t call", re.IGNORECASE)
+
+_GREET_WORDS = (
+    r"good\s+(?:morning|night|evening|afternoon)|morning|night|"
+    r"hi|hey|hello|miss\s+you|love\s+you|"
+    r"早安|早呀|早|晚安|嗨|想你了|爱你")
+
+
+def _addr_voc_patterns(name: str) -> List[re.Pattern]:
+    n = re.escape(str(name or "").strip())
+    if not n:
+        return []
+    return [
+        # 逗号呼格（与 _voc_patterns 同形）：…, Y 结尾 / Y, … 开头
+        re.compile(r"[,，]\s*(" + n + r")\s*(?=[.!?。！？~～…\s]*$)",
+                   re.IGNORECASE),
+        re.compile(r"^\s*(" + n + r")\s*[,，]", re.IGNORECASE),
+        # 问候语 + 称呼收尾（事故原形，无逗号）：good morning Y / 晚安 Y
+        re.compile(r"(?:" + _GREET_WORDS + r")\s*[,，]?\s+(" + n + r")\b"
+                   r"(?=[.!?。！？~～…\s]*$)", re.IGNORECASE),
+        # 问候语 + 称呼 + 逗号续句（#105 金标扩形，真实问候高频形态：
+        # Good morning Y, did you sleep well? / Miss you Y, come back soon）
+        re.compile(r"(?:" + _GREET_WORDS + r")\s*[,，]?\s+(" + n + r")\s*[,，]",
+                   re.IGNORECASE),
+        # 双逗号夹呼格（…, Y, …）——Y 是档案配置的称呼词，误伤面可忽略
+        re.compile(r"[,，]\s*(" + n + r")\s*[,，]", re.IGNORECASE),
+        # 句首独立称呼起头：Y 你睡了吗 / Y what are you doing
+        re.compile(r"^\s*(" + n + r")(?=\s+\S|[，,]\s*\S)", re.IGNORECASE),
+    ]
+
+
+def swap_vocative_peer_call(
+    text: str, call_peer: str, peer_calls_you: str,
+) -> Tuple[str, List[str]]:
+    """呼格位置的「对方叫你的称呼」→「你叫对方的称呼」（#24 出站兜底）。
+
+    返回 ``(纠正后文本, 命中列表)``；任一字段为空/两者相同/无命中原样返回。
+    纯函数绝不抛；只替换称呼 token，句子本体不动。
+    """
+    t = str(text or "")
+    cp = str(call_peer or "").strip()
+    py = str(peer_calls_you or "").strip()
+    if not t.strip() or not cp or not py or _norm(cp) == _norm(py):
+        return t, []
+    hits: List[str] = []
+    out_sents: List[str] = []
+    try:
+        pats = _addr_voc_patterns(py)
+        for sent in _split_sentences_sn(t):
+            s = sent
+            if _ADDR_META_RE.search(s):
+                out_sents.append(s)     # 讨论称呼本身的句子整句放行
+                continue
+            for pat in pats:
+                m = pat.search(s)
+                if not m:
+                    continue
+                if _VOC_SELF_INTRO_TAIL_RE.search(s[:m.start(1)]):
+                    continue            # 自介语境不是呼格
+                hits.append(m.group(1))
+                s = s[:m.start(1)] + cp + s[m.end(1):]
+            out_sents.append(s)
+    except Exception:
+        return t, []
+    if not hits:
+        return t, []
+    cleaned = "".join(out_sents)
+    return (cleaned if cleaned.strip() else t), hits
+
+
+# ── O-1 E（#255 8FJDUK ①，2026-09-08）：>72h 沉寂后的首回**不编造迟回理由** ─────────
+# 事故：客户 7 天后收到「Sorry, I've been buried in work」——AI 不知道这 7 天发生了什么，
+# 任何「忙 / 病 / 手机坏 / 出差」都是编的，被戳穿即露馅。与 C 段底稿「不编造日常与
+# 迟回理由」同向：命中即剥掉那句；剥完为空 → 换一句如实的「刚看到」。
+# 「刚看到 / just saw this / didn't see this」是**事实陈述**不是理由，放行。
+# 只对沉寂 ≥ LATE_REPLY_SILENCE_HOURS 的首回启用（调用方判沉寂），日常对话里的「今天好忙」不动。
+LATE_REPLY_SILENCE_HOURS = 72.0
+_LATE_EXCUSE_EN = re.compile(
+    r"\b(?:"
+    r"(?:(?:i(?:'ve| have| was|'m| am| got|'d)?\s+(?:been\s+)?|(?<!you\s)(?<!you've\s)(?<!u\s)(?<!he\s)(?<!she\s)(?<!they\s)been\s+)"
+    r"(?:so\s+|really\s+|super\s+|crazy\s+|totally\s+|completely\s+)?"
+    r"(?:busy|swamped|slammed|buried(?:\s+in\s+work)?|snowed\s+under|tied\s+up|caught\s+up(?:\s+with\s+\w+)?|"
+    r"out\s+of\s+town|travell?ing|on\s+a\s+trip|sick|ill|unwell|under\s+the\s+weather|"
+    r"dealing\s+with\s+(?:some\s+)?(?:stuff|things|family\s+stuff|a\s+lot)|"
+    r"off\s+the\s+grid|offline|away))|"
+    r"(?:my\s+phone\s+(?:died|broke|was\s+(?:broken|dead|off|stolen|lost)|got\s+(?:broken|stolen|lost)))|"
+    r"(?:lost\s+my\s+phone)|(?:had\s+no\s+(?:signal|service|internet|wifi|reception))|"
+    r"(?:work\s+(?:has\s+been|was|is)\s+(?:crazy|insane|hectic|nuts|a\s+lot))|"
+    r"(?:things\s+(?:have\s+been|were|got)\s+(?:crazy|hectic|busy|a\s+lot))|"
+    r"(?:(?:crazy|hectic|busy|rough|long)\s+(?:few\s+)?(?:days|week|weeks|month))|"
+    r"(?:(?:i\s+)?(?:totally\s+|completely\s+)?forgot\s+to\s+(?:reply|text|write|message|get\s+back))|"
+    r"(?:(?:time|life)\s+(?:got|has\s+been)\s+(?:away\s+from\s+me|crazy|hectic))"
+    r")",
+    re.I,
+)
+_LATE_EXCUSE_ZH = re.compile(
+    r"(?:"
+    r"(?:这几天|这段时间|这周|这几周|最近|前几天|前段时间|这一阵|这阵子)?"
+    r"(?:忙死了|忙疯了|忙翻了|忙到飞起|忙得(?:要死|不行|团团转|脚不沾地|没时间|没空)|太忙了|特别忙|超忙|好忙|一直在忙|忙着\S{1,6}|"
+    r"手机(?:坏了|丢了|摔了|没电|被偷|进水|坏掉|出问题)|换手机|没(?:信号|网|网络|流量)|"
+    r"出差(?:了|去了)?|在外地|回老家|旅行|出去玩|"
+    r"生病了|病了|感冒了|发烧了|住院了|身体不(?:舒服|好)|"
+    r"加班|赶项目|赶工|开会开到|"
+    r"家里(?:有事|出了点事|出事)|出了点(?:事|状况|问题)|一堆事|好多事|一言难尽|"
+    r"忘了回|忘记回|没看到消息|消息被淹|把消息刷掉)"
+    r")",
+)
+_LATE_HONEST_RE = re.compile(
+    r"(刚看到|刚刚看到|才看到|现在才看到|刚看见|刚翻到|just\s+(?:saw|seeing|noticed|caught)\s+this|"
+    r"didn'?t\s+see\s+(?:this|your\s+message|it)|only\s+(?:just\s+)?(?:saw|seeing)\s+this|"
+    r"missed\s+(?:this|your\s+message)|sorry\s+for\s+the\s+(?:late|slow)\s+reply)",
+    re.I,
+)
+_LATE_HONEST_LINE = {
+    "zh": "刚看到。", "en": "Just saw this.", "ja": "今見た。", "th": "เพิ่งเห็นเลย",
+    "es": "Acabo de verlo.", "pt": "Acabei de ver.", "fr": "Je viens de voir ça.",
+    "de": "Hab's gerade erst gesehen.", "ko": "지금 봤어.",
+}
+
+
+def detect_late_reply_excuses(text: str) -> List[str]:
+    """文本里「编造的迟回理由」命中片段（忙 / 病 / 手机坏 / 出差 / 忘了…）。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for m in _LATE_EXCUSE_EN.finditer(s):
+            out.append(m.group(0))
+        for m in _LATE_EXCUSE_ZH.finditer(s):
+            out.append(m.group(0))
+    except Exception:
+        return []
+    return out
+
+
+def strip_late_reply_excuses(text: str, lang: str = "") -> Tuple[str, Dict[str, Any]]:
+    """剥掉含编造迟回理由的**句子**；剥完为空 → 换一句如实「刚看到」。返回 ``(文本, report)``，
+    ``report["action"] ∈ {"clean", "strip", "replace"}``、``hits`` 命中片段。
+    「刚看到 / just saw this」是事实陈述，含它的句子**保留**（去掉理由后仍是句子）。绝不抛、绝不返回空。
+    """
+    src = str(text or "")
+    rep: Dict[str, Any] = {"hits": [], "action": "clean"}
+    if not src.strip():
+        return src, rep
+    try:
+        hits = detect_late_reply_excuses(src)
+        if not hits:
+            return src, rep
+        rep["hits"] = hits[:6]
+        sents = _tone_sentences(src)
+        kept: List[str] = []
+        for s in sents:
+            if detect_late_reply_excuses(s):
+                # 句内同时有「刚看到」这类事实陈述 → 只留事实那半句
+                if _LATE_HONEST_RE.search(s):
+                    parts = re.split(r"(?<=[,，;；])\s*|\s+(?:but|and|so|because|cause|coz|cuz)\s+|(?:，|,)\s*(?:但是|不过|因为|所以)", s, flags=re.I)
+                    honest = [p for p in parts if p and _LATE_HONEST_RE.search(p) and not detect_late_reply_excuses(p)]
+                    if honest:
+                        kept.append(honest[0].strip().rstrip(",，;；") + ("。" if _CJK_RE.search(s) else "."))
+                continue
+            kept.append(s)
+        out = "".join(kept).strip()
+        out = re.sub(r"^(?:and|but|so|anyway|also)\b\s*[,，]?\s*|^[,，、]\s*", "", out, flags=re.I).strip()
+        if not out or not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", out):
+            lg = str(lang or "").lower()[:2]
+            if not lg:
+                lg = "zh" if _CJK_RE.search(src) else "en"
+            out = _LATE_HONEST_LINE.get(lg) or _LATE_HONEST_LINE["en"]
+            rep["action"] = "replace"
+            return out, rep
+        rep["action"] = "strip"
+        return out, rep
+    except Exception:
+        rep["action"] = "clean"
+        return src, rep
+
+
+# ── Q-20 C（#178 Q9GDEH/2PKKM6 · 2026-09-11）：否认客户侧名字 ────────────────────
+# 实录 15:56 AI 出站「It's Mizuki, not Alicia」→ 客户「Mizuki who are u? I know only
+# Alicia」。联系人级 peer_calls_you（对方一直叫我的名字）是**客户那里的事实**，出站
+# 里任何「我不是 Alicia / 不是 Alicia / 我是 Mizuki 不是 Alicia / 不认识 Alicia」都是
+# 当场穿帮。以 peer_calls_you 实值构造句形（不认泛化的「not」），命中即整句剥除；
+# 剥空 → 换一句认领「It's me, Alicia」。纯函数绝不抛；名字为空 / 与人设名一致不判。
+
+_NAME_DENIAL_FALLBACK = {
+    "zh": "是我呀，{x}～", "en": "It's me, {x} 😊", "ja": "私だよ、{x}。",
+}
+
+
+def _name_denial_patterns(client_name: str, self_names: Optional[List[str]] = None) -> List[re.Pattern]:
+    x = re.escape(str(client_name or "").strip())
+    if not x:
+        return []
+    latin = bool(re.fullmatch(r"[A-Za-z][A-Za-z .'\-]*", str(client_name).strip()))
+    xb = (r"\b" + x + r"\b(?!'s\b)") if latin else x   # 「not Alicia's style」所有格不算否认
+    ys = [re.escape(str(s or "").strip()) for s in (self_names or []) if str(s or "").strip()]
+    y_alt = "(?:" + "|".join(ys) + ")" if ys else None
+    pats = [
+        # EN：not X / I'm not X / I am not X / it's Y, not X / my name is Y not X
+        re.compile(r"\b(?:i(?:'m| am)|it(?:'s| is)|this is|that(?:'s| is)|my name(?:'s| is))?"
+                   r"\s*,?\s*(?:not|isn'?t|is not|ain'?t)\s+" + xb, re.I),
+        re.compile(r"\bnot\s+" + xb, re.I),
+        re.compile(r"\b(?:don'?t|do not|dont)\s+know\s+(?:any|an?y?one\s+(?:called|named)|who)\s+" + xb, re.I),
+        re.compile(r"\bwho(?:'s| is)\s+" + xb + r"\s*\?", re.I),
+        re.compile(r"\b(?:i(?:'m| am)|call me)\s+(?!" + xb + r")[A-Za-z][\w'\-]*\s*,?\s*(?:not|never)\s+" + xb, re.I),
+        # ZH：不是 X / 我不是 X / 我是 Y 不是 X / 我不叫 X / 不认识 X / 没有 X 这个人 / X 是谁
+        re.compile(r"(?:我|这里|这边)?\s*(?:才)?\s*不是\s*" + x),
+        re.compile(r"我\s*(?:不叫|不是叫|没叫)\s*" + x),
+        re.compile(r"(?:我)?\s*(?:不认识|不認識|没听说过|沒聽說過|没有认识|不知道)\s*(?:什么|甚麼|谁是|誰是)?\s*" + x),
+        re.compile(r"(?:没有|沒有)\s*" + x + r"\s*(?:这个人|這個人|这人|這人)"),
+        re.compile(x + r"\s*(?:是谁|是誰|是哪位|是哪个|是哪個)"),
+        re.compile(r"(?:叫错|叫錯|认错|認錯|搞错|搞錯)\s*(?:了|人了)?[^。！？!?\n]{0,6}" + x),
+        # JA：X じゃない / X ではありません / X って誰
+        re.compile(x + r"\s*(?:じゃ|では|ちゃう)\s*(?:ない|ありません|ないよ|ないです)"),
+        re.compile(x + r"\s*(?:って|とは)\s*(?:誰|だれ|どなた)"),
+    ]
+    if y_alt:
+        pats.append(re.compile(r"我\s*(?:是|叫)\s*" + y_alt + r"\s*[,，、]?\s*(?:不是|不叫)\s*" + x))
+        pats.append(re.compile(r"\b(?:i(?:'m| am)|it(?:'s| is)|my name(?:'s| is))\s+" + y_alt
+                               + r"\s*,?\s*(?:not|and not|never)\s+" + xb, re.I))
+    return pats
+
+
+def _name_denial_exempt(sentence: str, client_name: str) -> bool:
+    """元语句放行：「you can call me X」「叫我 X 就好」——那是在**接受**这个名字。"""
+    s = str(sentence or "")
+    x = re.escape(str(client_name or "").strip())
+    if not x:
+        return True
+    if re.search(r"\b(?:call|calling)\s+me\s+" + x, s, re.I) and not re.search(
+            r"\b(?:don'?t|do not|stop|never)\s+call(?:ing)?\s+me\s+" + x, s, re.I):
+        return True
+    if re.search(r"(?:叫我|喊我)\s*" + x, s) and not re.search(r"(?:别|不要|不用|别再|不許|不许)\s*(?:叫我|喊我)\s*" + x, s):
+        return True
+    return False
+
+
+def find_name_denial(text: str, client_name: str, self_names: Optional[List[str]] = None) -> List[str]:
+    """出站文本里「否认客户侧名字」命中片段（Q-20 C）。``client_name`` 空 / 与
+    ``self_names`` 任一一致（Mizu↔Mizuki）→ []（不是两个名字就没有「否认」可言）。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        x = str(client_name or "").strip()
+        if not s.strip() or not x:
+            return []
+        try:
+            from src.utils.account_name_check import names_consistent
+            for y in (self_names or []):
+                if str(y or "").strip() and names_consistent(x, y):
+                    return []
+        except Exception:
+            pass
+        for sent in _split_sentences_sn(s):
+            if _name_denial_exempt(sent, x):
+                continue
+            for pat in _name_denial_patterns(x, self_names):
+                m = pat.search(sent)
+                if m:
+                    out.append(m.group(0).strip())
+                    break
+    except Exception:
+        return []
+    return out
+
+
+def strip_name_denial(
+    text: str, client_name: str, self_names: Optional[List[str]] = None, *, lang: str = "",
+) -> Tuple[str, Dict[str, Any]]:
+    """剥掉含「否认客户侧名字」的**句子**；剥空 → 换一句认领「It's me, X」。返回 ``(文本, report)``，
+    ``report["action"] ∈ {"clean", "strip", "replace"}``、``hits`` 命中片段、``name``。绝不抛、绝不返回空。"""
+    src = str(text or "")
+    x = str(client_name or "").strip()
+    rep: Dict[str, Any] = {"hits": [], "action": "clean", "name": x}
+    if not src.strip() or not x:
+        return src, rep
+    try:
+        hits = find_name_denial(src, x, self_names)
+        if not hits:
+            return src, rep
+        rep["hits"] = hits[:6]
+        kept: List[str] = []
+        for sent in _split_sentences_sn(src):
+            if find_name_denial(sent, x, self_names):
+                continue
+            kept.append(sent)
+        out = "".join(kept).strip()
+        out = re.sub(r"^(?:and|but|so|anyway|also|well)\b\s*[,，]?\s*|^[,，、]\s*", "", out, flags=re.I).strip()
+        if not out or not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", out):
+            lg = str(lang or "").lower()[:2]
+            if not lg:
+                lg = "ja" if re.search(r"[\u3040-\u30ff]", src) else ("zh" if _CJK_RE.search(src) else "en")
+            out = (_NAME_DENIAL_FALLBACK.get(lg) or _NAME_DENIAL_FALLBACK["en"]).format(x=x)
+            rep["action"] = "replace"
+            return out, rep
+        rep["action"] = "strip"
+        return out, rep
+    except Exception:
+        rep["action"] = "clean"
+        return src, rep
+
+
+__all__ = [
+    "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
+    "matches_multi_peer_leak",
+    "LATE_REPLY_SILENCE_HOURS", "detect_late_reply_excuses", "strip_late_reply_excuses",
+    "matches_service_frame",
+    "build_self_name_allowlist", "reserved_self_names",
+    "find_wrong_self_name", "sanitize_self_name",
+    "find_vocative_self_name", "strip_vocative_self_name",
+    "swap_vocative_peer_call",
+    "find_name_denial", "strip_name_denial",
+]

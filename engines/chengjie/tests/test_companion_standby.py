@@ -102,14 +102,85 @@ def test_options_ordered_low_to_high():
     assert all(o["label"] for o in opts)
 
 
+# ── #12 拆开控制读侧（2026-08-30）：默认档与真发总闸分开读 ────────────────────
+
+def test_split_state_reads_both_axes_independently():
+    from src.companion.standby_mode import split_state
+
+    cfg = _cfg(True, False)
+    cfg.setdefault("inbox", {})["auto_draft"] = {"automation_mode": "review"}
+    sp = split_state(cfg, auto_ai_rows=7)
+    assert sp == {"default_mode": "review", "worker": True,
+                  "deliver": False, "auto_ai_rows": 7}
+    # 默认档缺省=auto_ai（automation_mode 全局缺省语义），行数不传则键缺席
+    sp2 = split_state(_cfg(True, True))
+    assert sp2["default_mode"] == "auto_ai"
+    assert sp2["worker"] is True and sp2["deliver"] is True
+    assert "auto_ai_rows" not in sp2
+
+
 # ── 与护栏组合契约：值守中真发仍受双 opt-in 约束（护栏不被姿态绕过）─────────────
 
 def test_watching_deliver_blocked_without_auto_ai():
-    """请求值守中时，若无 auto_ai 会话 → check_toggle 拦下 deliver（worker 仍可开）。"""
+    """全局默认档非全自动且无 auto_ai 会话 → check_toggle 仍拦 deliver。
+
+    2026-08-22 起需显式钉 automation_mode=review 才触发旧判据——值守「watching」
+    捆绑写入会先把全局档落 auto_ai（standby_extras），届时本闸自然放行；
+    这里守的是「档位没跟上时护栏不放水」的兜底语义。"""
     cfg = _cfg(True, False)          # worker 已开（值守计划会先开 worker）
+    cfg.setdefault("inbox", {})["auto_draft"] = {"automation_mode": "review"}
     chk = check_toggle(cfg, {}, "l2_autosend_deliver", "enabled", True)
     assert chk["allowed"] is False
     assert "auto_ai" in chk["reason"] or "全自动" in chk["reason"]
+
+
+def test_watching_bundle_semantics():
+    """P1 捆绑语义（2026-08-22）：三档 extras/对齐目标的契约钉。"""
+    from src.companion.standby_mode import standby_align_target, standby_extras
+
+    w = {e["path"]: e["value"] for e in standby_extras("watching")}
+    assert w["inbox.auto_draft.automation_mode"] == "auto_ai"
+    assert w["inbox.auto_draft.bootstrap_automation_mode"] is True
+    s = {e["path"]: e["value"] for e in standby_extras("suggest")}
+    assert s["inbox.auto_draft.automation_mode"] == "review"
+    o = {e["path"]: e["value"] for e in standby_extras("off")}
+    assert o["inbox.auto_draft.automation_mode"] == "manual"
+    assert standby_extras("nope") == []
+    assert standby_align_target("watching") == "auto_ai"
+    assert standby_align_target("suggest") == "review"
+    assert standby_align_target("off") is None   # off 刻意不批量覆写档位现场
+
+
+def test_align_existing_conversations_scoped_to_system_sources(tmp_path):
+    """存量对齐只动 bootstrap/standby 来源的行；人的显式设置/接管/守卫降档
+    绝不覆盖；升 auto_ai 时群会话跳过（confirm_group 铁律）。"""
+    from src.inbox.store import InboxStore
+    from src.companion.standby_mode import align_existing_conversations
+
+    store = InboxStore(tmp_path / "align.db")
+    store.set_automation_mode("telegram:a:p1", "review", source="bootstrap")
+    store.set_automation_mode("telegram:a:p2", "review", source="human")
+    store.set_automation_mode("telegram:a:p3", "manual", source="takeover")
+    store.set_automation_mode("telegram:a:p4", "review", source="standby")
+    # 群会话（telegram 负 id）+ bootstrap 来源：升 auto_ai 必须跳过
+    store.set_automation_mode("telegram:a:-100888", "review", source="bootstrap")
+    n = align_existing_conversations(store, "auto_ai")
+    assert n == 2
+    assert store.get_automation_mode_if_set("telegram:a:p1") == "auto_ai"
+    assert store.get_automation_mode_if_set("telegram:a:p2") == "review"    # human 保留
+    assert store.get_automation_mode_if_set("telegram:a:p3") == "manual"    # takeover 保留
+    assert store.get_automation_mode_if_set("telegram:a:p4") == "auto_ai"
+    assert store.get_automation_mode_if_set("telegram:a:-100888") == "review"  # 群跳过
+    # 降 review 无群限制：两条 auto_ai（现 source=standby）回 review
+    n2 = align_existing_conversations(store, "review")
+    assert n2 == 2
+    assert store.get_automation_mode_if_set("telegram:a:p1") == "review"
+    # 无该读口的旧 store → 0（优雅退化）
+    class _Old:
+        pass
+    assert align_existing_conversations(_Old(), "auto_ai") == 0
+    assert align_existing_conversations(None, "auto_ai") == 0
+    assert align_existing_conversations(store, "bogus") == 0
 
 
 def test_watching_deliver_allowed_with_auto_ai_and_gate():
@@ -128,3 +199,78 @@ def test_watching_deliver_warns_without_send_gate():
     chk = check_toggle(cfg, modes, "l2_autosend_deliver", "enabled", True)
     assert chk["allowed"] is True
     assert chk.get("warn") is True
+
+
+# ── P0 2026-08-29：overlay 显式关闸时值守不得重开 ──────────────────────────
+
+def test_send_gate_operator_off_only_explicit_false():
+    from src.companion.standby_mode import send_gate_operator_off
+    assert send_gate_operator_off(None) is False
+    assert send_gate_operator_off({}) is False
+    assert send_gate_operator_off({"companion_send_gate": {}}) is False
+    assert send_gate_operator_off({"companion_send_gate": {"enabled": True}}) is False
+    assert send_gate_operator_off({"companion_send_gate": {"target_cap": 15}}) is False
+    assert send_gate_operator_off({"companion_send_gate": {"enabled": False}}) is True
+    # 字符串 / 0 不算「显式 false」——YAML 布尔才是运营关闸契约
+    assert send_gate_operator_off({"companion_send_gate": {"enabled": 0}}) is False
+    assert send_gate_operator_off({"companion_send_gate": {"enabled": "false"}}) is False
+
+
+def test_watching_skips_send_gate_when_overlay_explicitly_off():
+    ov = {"companion_send_gate": {"enabled": False}}
+    keys = {it["key"] for it in build_standby_plan("watching", overlay=ov)}
+    assert "companion_send_gate" not in keys
+    m = {(it["key"], it["field"]): it["value"]
+         for it in build_standby_plan("watching", overlay=ov)}
+    assert m[("l2_autosend_worker", "enabled")] is True
+    assert m[("l2_autosend_deliver", "enabled")] is True
+
+
+def test_watching_still_opens_gate_when_overlay_missing_or_true():
+    for ov in (None, {}, {"companion_send_gate": {"enabled": True}}):
+        m = {(it["key"], it["field"]): it["value"]
+             for it in build_standby_plan("watching", overlay=ov)}
+        assert m[("companion_send_gate", "enabled")] is True
+
+
+def test_watching_send_gate_fields_and_target_cap():
+    from src.companion.standby_mode import (
+        send_gate_target_cap, watching_send_gate_fields,
+    )
+    from src.inbox.reply_pacing_settings import FIELDS
+    factory = int(FIELDS["companion_send_gate.target_cap"]["default"])
+    assert send_gate_target_cap(None) == factory
+    assert send_gate_target_cap({}) == factory
+    assert send_gate_target_cap({"companion_send_gate": {"target_cap": 300}}) == 300
+    f = watching_send_gate_fields({"companion_send_gate": {"enabled": False, "target_cap": 80}})
+    assert f["send_gate_operator_off"] is True
+    assert f["send_gate_target_cap"] == 80
+    f2 = watching_send_gate_fields({})
+    assert f2["send_gate_operator_off"] is False
+    assert f2["send_gate_target_cap"] == factory
+
+
+def test_watching_operator_off_does_not_mutate_spec():
+    """跳过开闸不得改写模块级 _STANDBY_STATES——下一次无 overlay 调用仍须开闸。"""
+    ov = {"companion_send_gate": {"enabled": False}}
+    build_standby_plan("watching", overlay=ov)
+    m = _plan_map("watching")
+    assert m[("companion_send_gate", "enabled")] is True
+
+
+def test_overlay_dict_reads_explicit_false(tmp_path):
+    from src.web.routes.companion_capability_routes import _overlay_dict
+
+    class _CM:
+        config_path = str(tmp_path / "config.yaml")
+
+    assert _overlay_dict(_CM()) == {}
+    (tmp_path / "config.local.yaml").write_text(
+        "companion_send_gate:\n  enabled: false\n  target_cap: 80\n",
+        encoding="utf-8")
+    ov = _overlay_dict(_CM())
+    assert ov["companion_send_gate"]["enabled"] is False
+    assert ov["companion_send_gate"]["target_cap"] == 80
+    # 合并 config 缺省 false 不算——只读 overlay 文件
+    (tmp_path / "config.local.yaml").write_text("inbox:\n  foo: 1\n", encoding="utf-8")
+    assert "companion_send_gate" not in _overlay_dict(_CM())

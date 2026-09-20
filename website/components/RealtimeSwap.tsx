@@ -29,7 +29,7 @@ export default function RealtimeSwap() {
               02 · Flagship
               <span className="h-px w-8 bg-neon-cyan/30" />
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 bg-neon-violet/10 px-3 py-1 text-xs font-medium text-neon-violet">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 bg-neon-violet/10 px-3 py-1 text-xs font-medium text-violet-300">
               <Sparkles className="h-3.5 w-3.5" />
               {rt.badge}
             </span>

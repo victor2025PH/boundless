@@ -1,13 +1,18 @@
 <!doctype html>
-<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
+<html lang="{{ ui_locale|default('zh-CN') }}"><head><meta charset="utf-8">
 <title>Contacts · Ops</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_boot_error_guard.html" %}
+{% include "_api_fetch.html" %}
+<link rel="stylesheet" href="/static/brand/brand.css">
+<link rel="stylesheet" href="/static/brand/brand-fonts.css">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260818a">
 <style>
-body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1100px;margin:20px auto;padding:0 20px;background:#fafafa;color:#222}
+body{font-family:var(--bl-font-sans,-apple-system,'Segoe UI',sans-serif);max-width:1100px;margin:20px auto;padding:0 20px;background:#fafafa;color:#222}
 h1{font-size:20px;margin-bottom:4px}
 .stats{display:flex;gap:12px;margin:10px 0 20px;flex-wrap:wrap}
 .pill{padding:6px 12px;background:#fff;border:1px solid #ddd;border-radius:6px;font-size:13px}
-.pill strong{color:#2563eb}
+.pill strong{color:var(--bl-growth-600,#0d76d9)}
 table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}
 th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eee}
 th{background:#f3f4f6;font-weight:600;color:#444}
@@ -22,7 +27,7 @@ tr:hover{background:#f9fafb}
 .s-BONDED,.s-CONVERTED{background:#fce7f3;color:#9f1239}
 .s-LOST_HANDOFF,.s-LOST_LINE_SILENT{background:#fee2e2;color:#991b1b}
 .empty{padding:40px;text-align:center;color:#888}
-a{color:#2563eb;text-decoration:none}
+a{color:var(--bl-growth-600,#0d76d9);text-decoration:none}
 a:hover{text-decoration:underline}
 .nav{margin-bottom:20px}
 .nav a{margin-right:14px;font-size:13px}
@@ -55,14 +60,35 @@ a:hover{text-decoration:underline}
 .tl-payload{font-size:11px;color:#555;margin-top:3px;background:#f8fafc;border-radius:4px;padding:5px 8px;word-break:break-all}
 .tl-snip{font-style:italic;color:#374151;margin-top:2px;font-size:11px}
 .tl-empty{color:#9ca3af;font-size:13px;text-align:center;margin-top:30px}
-tr.clickable:hover td{background:#eff6ff;cursor:pointer}
+tr.clickable:hover td{background:var(--bl-growth-50,#eef6fe);cursor:pointer}
 /* ── 搜索框 ── */
 .search-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center}
 .search-bar input{flex:1;padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none}
-.search-bar input:focus{border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+.search-bar input:focus{border-color:var(--bl-growth-600,#0d76d9);box-shadow:0 0 0 2px color-mix(in srgb, var(--bl-growth-600,#0d76d9) 12%, transparent)}
 .search-hint{font-size:12px;color:#94a3b8}
 .result-badge{display:inline-block;padding:2px 8px;background:#e0f2fe;color:#0369a1;border-radius:4px;font-size:12px;font-weight:600;margin-left:8px}
-.nav a.active{font-weight:700;color:#1e3a8a;border-bottom:2px solid #2563eb;padding-bottom:2px}
+.nav a.active{font-weight:700;color:#1e3a8a;border-bottom:2px solid var(--bl-growth-600,#0d76d9);padding-bottom:2px}
+/* ── 跨平台身份映射面板（自 /ai-studio 迁入） ── */
+.idp{margin-top:22px;background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px}
+.idp summary{cursor:pointer;font-weight:600;font-size:14px}
+.idp .idp-sub{font-size:11px;font-weight:400;color:#888}
+.idp-desc{font-size:12px;color:#555;margin:12px 0 8px}
+.idp-form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;font-size:13px;margin-bottom:14px}
+.idp-col{display:flex;flex-direction:column;gap:2px}
+.idp-lbl{font-size:11px;color:#888;font-weight:600}
+.idp-form select,.idp-form input{padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:13px}
+.idp-arrow{color:#888;padding-bottom:6px}
+.idp-btn-p{padding:6px 14px;border:1px solid var(--bl-growth-600,#0d76d9);background:var(--bl-growth-600,#0d76d9);color:#fff;border-radius:5px;cursor:pointer;font-size:13px}
+.idp-btn{padding:6px 12px;border:1px solid #ccc;background:#fff;border-radius:5px;cursor:pointer;font-size:13px}
+.idp-msg{font-size:12px;color:#555}
+.idp-muted{color:#888;font-size:13px}
+.idp-plat{display:inline-block;padding:2px 6px;border-radius:4px;background:#f3f4f6;font-size:12px;font-weight:600}
+.idp-mono{font-family:monospace;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.idp-canon{font-family:monospace;font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.idp-unlink{padding:2px 8px;border:1px solid #ccc;background:#fff;border-radius:4px;cursor:pointer;font-size:11px}
+.idp-alone{color:#aaa;font-size:11px}
+.idp-grp{border-bottom:2px solid #e5e7eb}
+.idp-err{color:#dc2626}
 </style></head>
 <body>
 {% include "ops/_ops_nav.html" %}
@@ -92,6 +118,44 @@ tr.clickable:hover td{background:#eff6ff;cursor:pointer}
   <tr><th>ID</th><th>{{ (i18n or {}).get('dash.ws.col_name', '名称') }}</th><th>{{ (i18n or {}).get('ops.ct.col_lang', '语言') }}</th><th>{{ (i18n or {}).get('ops.ct.col_stage', '阶段') }}</th><th>Intimacy</th><th>{{ (i18n or {}).get('ops.ct.col_last', '最后活跃') }}</th></tr>
 </thead><tbody></tbody></table>
 <div id="empty" class="empty" style="display:none">{{ (i18n or {}).get('ops.ct.empty', '暂无联系人') }}</div>
+
+<!-- 跨平台身份映射（自 /ai-studio 迁入 2026-08-01）：手动 link/unlink 两个平台账号共享同一记忆。
+     数据源 user_identity_map（episodic_identity_routes，与 contacts 开关无关）。懒加载：展开才拉。 -->
+<details id="identity-panel" class="idp" ontoggle="if(this.open)idLoad()">
+  <summary>🔗 {{ (i18n or {}).get('as_s067', '身份映射表') }} <span class="idp-sub">(user_identity_map)</span></summary>
+  <div>
+    <div class="idp-desc">{{ (i18n or {}).get('as_s065', '手动连接两个平台账号分享同一记忆') }}</div>
+    <div class="idp-form">
+      <div class="idp-col">
+        <label class="idp-lbl">{{ (i18n or {}).get('inbox.info.platform', '平台') }} A</label>
+        <select id="id-pa">
+          <option value="telegram">Telegram</option><option value="messenger">Messenger</option>
+          <option value="whatsapp">WhatsApp</option><option value="line">LINE</option>
+        </select>
+      </div>
+      <div class="idp-col">
+        <label class="idp-lbl">UID A</label>
+        <input id="id-ua" type="text" placeholder="e.g. 123456" style="width:140px">
+      </div>
+      <span class="idp-arrow">→</span>
+      <div class="idp-col">
+        <label class="idp-lbl">{{ (i18n or {}).get('inbox.info.platform', '平台') }} B</label>
+        <select id="id-pb">
+          <option value="telegram">Telegram</option><option value="messenger">Messenger</option>
+          <option value="whatsapp">WhatsApp</option><option value="line">LINE</option>
+        </select>
+      </div>
+      <div class="idp-col">
+        <label class="idp-lbl">UID B</label>
+        <input id="id-ub" type="text" placeholder="e.g. Uabc123..." style="width:160px">
+      </div>
+      <button class="idp-btn-p" onclick="idLink()">✨ {{ (i18n or {}).get('as_s066', '连接') }}</button>
+      <button class="idp-btn" onclick="idLoad()">&#8635; {{ (i18n or {}).get('dash.refresh', '刷新') }}</button>
+      <span id="id-link-msg" class="idp-msg"></span>
+    </div>
+    <div id="id-list" class="idp-muted">{{ (i18n or {}).get('dash.loading', '加载中…') }}</div>
+  </div>
+</details>
 <script>
 function escapeHtml(s){return (s+'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -172,7 +236,7 @@ function doSearch(q){
 
 async function renderContacts(q){
   const qs = q ? `&q=${encodeURIComponent(q)}` : '';
-  const list = await fetch(`/api/contacts?limit=100&expand=journey${qs}`).then(r=>r.json());
+  const list = await apiFetch(`/api/contacts?limit=100&expand=journey${qs}`).then(r=>r.json());
   const badge = document.getElementById('result-badge');
   const hint = document.getElementById('search-hint');
   if(q){
@@ -212,7 +276,7 @@ async function load(){
   const initQ = new URLSearchParams(location.search).get('q')||'';
   if(initQ){ document.getElementById('search-input').value = initQ; _currentQ = initQ; }
   const [stats] = await Promise.all([
-    fetch('/api/funnel/stats').then(r=>r.json()),
+    apiFetch('/api/funnel/stats').then(r=>r.json()),
   ]);
   const s=document.getElementById('stats');
   s.innerHTML = `<div class="pill">${window.T('ops.ct.total')} <strong>${stats.total_contacts}</strong></div>`
@@ -282,17 +346,17 @@ async function openDrawer(contactId, name){
   document.getElementById('drawer-overlay').style.display='block';
   document.getElementById('drawer').classList.add('open');
   try{
-    const d = await fetch(`/api/contacts/${contactId}/timeline?limit=80`).then(r=>r.json());
+    const d = await apiFetch(`/api/contacts/${contactId}/timeline?limit=80`).then(r=>r.json());
     const events = d.events||[];
     if(!events.length){
       document.getElementById('drawer-body').innerHTML='<p class="tl-empty">'+window.T('ops.ct.no_events')+'</p>';
       return;
     }
     document.getElementById('drawer-body').innerHTML =
-      `<p style="font-size:11px;color:#9ca3af;margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
+      `<p style="font-size:11px;color:var(--th-ink-gray4,#5b6b85);margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
       + events.map(renderEvent).join('');
   }catch(e){
-    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:#dc2626">${window.T('dash.load_fail')}: ${e}</p>`;
+    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:var(--th-ink-red6,#b91c1c)">${window.T('dash.load_fail')}: ${e}</p>`;
   }
 }
 
@@ -301,5 +365,67 @@ function closeDrawer(){
   document.getElementById('drawer-overlay').style.display='none';
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+
+/* ── 跨平台身份映射（自 /ai-studio 迁入 2026-08-01）── */
+// 写侧一律 inbox 平台名（与记忆键 canonical 同口径）；`_rpa` 键仅为存量行显示兼容。
+function _platLabel(p){
+  return ({telegram:'Telegram',messenger:'Messenger',whatsapp:'WhatsApp',line:'LINE',web:'Web',
+           messenger_rpa:'Messenger',whatsapp_rpa:'WhatsApp',line_rpa:'LINE'})[p]||p;
+}
+async function idLoad(){
+  const el=document.getElementById('id-list');
+  if(!el)return;
+  el.innerHTML='<span class="idp-muted">'+window.T('dash.loading')+'</span>';
+  try{
+    const r=await apiFetch('/api/identity?limit=300');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(!d.items||!d.items.length){el.innerHTML='<span class="idp-muted">'+window.T('as_js022')+'</span>';return;}
+    const groups={};
+    for(const row of d.items){(groups[row.canonical_id]=groups[row.canonical_id]||[]).push(row);}
+    const rows=Object.entries(groups).map(([canon,members])=>{
+      const isLinked=members.length>1;
+      return members.map(m=>`<tr>
+        <td><span class="idp-plat">${escapeHtml(_platLabel(m.platform))}</span></td>
+        <td class="idp-mono">${escapeHtml(m.platform_uid)}</td>
+        <td class="idp-canon">${escapeHtml(m.canonical_id)}</td>
+        <td>${isLinked?`<button class="idp-unlink" onclick="idUnlink('${escapeHtml(m.platform)}','${escapeHtml(m.platform_uid)}')">✂ ${window.T('msg_js_2047')}</button>`:'<span class="idp-alone">'+window.T('as_js023')+'</span>'}</td>
+      </tr>`).join('');
+    }).map(g=>`<tbody class="idp-grp">${g}</tbody>`).join('');
+    el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr><th>${window.T('inbox.info.platform')}</th><th>Platform UID</th><th>Canonical ID</th><th>${window.T('ov_js_th_action')}</th></tr></thead>${rows}
+    </table></div>`;
+  }catch(e){el.innerHTML='<span class="idp-err">'+window.T('dash.load_fail')+': '+escapeHtml(e.message)+'</span>';}
+}
+async function idLink(){
+  const pa=document.getElementById('id-pa')?.value;
+  const ua=document.getElementById('id-ua')?.value?.trim();
+  const pb=document.getElementById('id-pb')?.value;
+  const ub=document.getElementById('id-ub')?.value?.trim();
+  const msg=document.getElementById('id-link-msg');
+  if(!ua||!ub){if(msg)msg.textContent=window.T('as_js024')+' UID';return;}
+  if(msg)msg.textContent=window.T('ov_js_processing');
+  try{
+    const r=await apiFetch('/api/identity/link',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform_a:pa,uid_a:ua,platform_b:pb,uid_b:ub})
+    },{timeoutMs:60000});
+    const d=await r.json();
+    if(msg)msg.textContent=r.ok?window.Tf('as_linked_ok',{c:d.canonical_id}):('✗ '+(d.detail||''));
+    if(r.ok){document.getElementById('id-ua').value='';document.getElementById('id-ub').value='';idLoad();}
+  }catch(e){if(msg)msg.textContent=window.T('ln_js_036')+': '+e.message;}
+}
+async function idUnlink(platform,uid){
+  if(!confirm(window.Tf('as_confirm_unlink',{p:_platLabel(platform),uid:uid})))return;
+  try{
+    const r=await apiFetch('/api/identity/unlink',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform,uid})
+    },{timeoutMs:60000});
+    const d=await r.json();
+    if(!r.ok)alert(window.T('rpa_js_st_failed')+': '+(d.detail||''));
+    idLoad();
+  }catch(e){alert(window.T('ln_js_036')+': '+e.message);}
+}
 </script>
 </body></html>

@@ -38,25 +38,20 @@ except Exception:
 DEFAULT_PROBE = "你好呀，今天过得怎么样？我一直在想你呢。"
 WARN_THRESHOLD = 0.70
 CRIT_THRESHOLD = 0.60
-OUT_JSONL = _ROOT / "logs" / "voice_similarity.jsonl"
+# 产物路径按「运行根契约」逐根解析（<数据根>/logs/voice_similarity.jsonl），
+# 见 scripts/_data_root.py——app 的 avatar-status 卡按实例 CWD 相对路径读同一文件。
 
 
-def _load_config() -> dict:
-    import yaml
-    data = yaml.safe_load(
-        (_ROOT / "config" / "config.yaml").read_text(encoding="utf-8")) or {}
-    local = _ROOT / "config" / "config.local.yaml"
-    if local.is_file():
-        overlay = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
+def _load_config(root: Path = None) -> dict:
+    """合并配置（运行根契约）。缺省根＝首个活跃实例数据根（无实例→引擎根）。
 
-        def merge(d: dict, s: dict) -> None:
-            for k, v in s.items():
-                if isinstance(v, dict) and isinstance(d.get(k), dict):
-                    merge(d[k], v)
-                else:
-                    d[k] = v
-        merge(data, overlay)
-    return data
+    保留此包装以兼容外部消费者（blind_ab_samples / trim_reference_audio /
+    reference_audio_audit）——它们与本探针一样操作**活体人设**，跟随契约
+    默认读实例根才是正确语义（引擎根自 2026-07 迁移后已无人设）。
+    """
+    from scripts._data_root import load_merged_config, resolve_data_roots
+
+    return load_merged_config(root or resolve_data_roots()[0])
 
 
 def classify_score(score: float, *, warn: float = WARN_THRESHOLD,
@@ -125,7 +120,7 @@ def load_history_rows(path: Path, *, max_rows: int = 400) -> list:
         return []
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="音色相似度周期抽检")
     ap.add_argument("--persona", default="", help="只测指定人设（默认全部）")
     ap.add_argument("--probe-text", default=DEFAULT_PROBE)
@@ -133,7 +128,10 @@ def main() -> int:
     ap.add_argument("--crit", type=float, default=CRIT_THRESHOLD)
     ap.add_argument("--prosody-ab", choices=["on", "off"], default="on",
                     help="Phase C A/B：每音色额外合成一次固定噪声版对照自然度差")
-    args = ap.parse_args()
+    ap.add_argument("--data-root", default="",
+                    help="实例数据根（产物落 <根>/logs/voice_similarity.jsonl；"
+                         "缺省按运行根契约解析，可多实例）")
+    args = ap.parse_args(argv)
 
     if not _MFYS.is_dir():
         print("[!] AvatarHub 目录不存在（非 TTS 节点机），跳过")
@@ -150,6 +148,7 @@ def main() -> int:
     except Exception as ex:
         print(f"[-] prosody_scorer 不可用（{ex}），仅测声纹")
 
+    from scripts._data_root import resolve_data_roots
     from scripts.avatar_prerender import _collect_avatar_personas
     from src.ai.avatar_voice import (
         AvatarVoiceClient,
@@ -157,33 +156,12 @@ def main() -> int:
         load_reference_b64,
     )
 
-    cfg = _load_config()
-    client = AvatarVoiceClient.from_config(cfg)
-    if not client.enabled:
-        print("[!] avatar_voice 未启用，跳过")
-        return 0
-    if not client.ensure_ready(wait_sec=180.0):
-        print("[!] 7852 未就绪，跳过")
-        return 0
+    roots = resolve_data_roots(args.data_root)
+    print(f"[*] 数据根 ×{len(roots)}: " + " | ".join(str(r) for r in roots))
 
-    targets = _collect_avatar_personas(cfg)
-    if args.persona:
-        targets = [(p, r) for p, r in targets if p == args.persona]
-    if not targets:
-        print("[!] 无目标人设")
-        return 0
-
-    OUT_JSONL.parent.mkdir(parents=True, exist_ok=True)
-    # 自然度告警下限：历史数据自动校准（不足 NAT_MIN_SAMPLES 样本=0.0 不告警）
-    nat_floor = calibrate_naturalness_floor(load_history_rows(OUT_JSONL))
-    if nat_floor > 0:
-        print(f"[*] 自然度告警下限（历史 p10-{NAT_FLOOR_MARGIN}）: {nat_floor}")
-    else:
-        print(f"[*] 自然度刻度校准中（历史样本 <{NAT_MIN_SAMPLES}），只收集不告警")
     worst = "ok"
     order = {"ok": 0, "warn": 1, "critical": 2}
-    seen_refs: dict = {}
-    flow_temp = float(getattr(client, "flow_temperature", 0) or 0)
+    seen_refs: dict = {}   # 跨根共享：同参考音+同探针句只合成一次
 
     def _nat_of(synth_b64: str, ref_b64: str):
         if naturalness_fn is None:
@@ -196,21 +174,68 @@ def main() -> int:
             pass
         return None
 
-    def _append_row(pid: str, *, score, label, nat, prosody: str) -> None:
-        row = {
-            "ts": time.time(),
-            "date": time.strftime("%Y-%m-%d"),
-            "persona": pid,
-            "score": score,
-            "label": label,
-            "naturalness": nat,
-            "probe": args.probe_text[:40],
-            "prosody": prosody,
-            "flow_temp": flow_temp if prosody == "on" else 0,
-        }
-        with OUT_JSONL.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    ready_checked = False
+    for root in roots:
+        cfg = _load_config(root)
+        client = AvatarVoiceClient.from_config(cfg)
+        if not client.enabled:
+            print(f"[!] [{root}] avatar_voice 未启用，跳过")
+            continue
+        if not ready_checked:
+            if not client.ensure_ready(wait_sec=180.0):
+                print("[!] 7852 未就绪，跳过")
+                return 0
+            ready_checked = True
 
+        targets = _collect_avatar_personas(cfg, root=root)
+        if args.persona:
+            targets = [(p, r) for p, r in targets if p == args.persona]
+        if not targets:
+            print(f"[!] [{root}] 无目标人设")
+            continue
+
+        out_jsonl = Path(root) / "logs" / "voice_similarity.jsonl"
+        out_jsonl.parent.mkdir(parents=True, exist_ok=True)
+        # 自然度告警下限：历史数据自动校准（不足 NAT_MIN_SAMPLES 样本=0.0 不告警）
+        nat_floor = calibrate_naturalness_floor(load_history_rows(out_jsonl))
+        if nat_floor > 0:
+            print(f"[*] 自然度告警下限（历史 p10-{NAT_FLOOR_MARGIN}）: {nat_floor}")
+        else:
+            print(f"[*] 自然度刻度校准中（历史样本 <{NAT_MIN_SAMPLES}），只收集不告警")
+        flow_temp = float(getattr(client, "flow_temperature", 0) or 0)
+
+        def _append_row(pid: str, *, score, label, nat, prosody: str) -> None:
+            row = {
+                "ts": time.time(),
+                "date": time.strftime("%Y-%m-%d"),
+                "persona": pid,
+                "score": score,
+                "label": label,
+                "naturalness": nat,
+                "probe": args.probe_text[:40],
+                "prosody": prosody,
+                "flow_temp": flow_temp if prosody == "on" else 0,
+            }
+            with out_jsonl.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        worst = _probe_targets(
+            targets, client=client, args=args, seen_refs=seen_refs,
+            score_similarity=score_similarity, _nat_of=_nat_of,
+            _append_row=_append_row, nat_floor=nat_floor,
+            load_reference_b64=load_reference_b64,
+            find_reference_text=find_reference_text,
+            worst=worst, order=order)
+
+    print(f"[*] 抽检完成，最差={worst}（正常带 0.78~0.86；<{args.warn} 警戒，"
+          f"<{args.crit} 灾难级=音色资产大概率坏了）")
+    return 1 if worst == "critical" else 0
+
+
+def _probe_targets(targets, *, client, args, seen_refs, score_similarity,
+                   _nat_of, _append_row, nat_floor, load_reference_b64,
+                   find_reference_text, worst, order):
+    """单根目标集抽检（从 main 拆出以支持多根循环；行为与旧实现逐行等价）。"""
     for pid, ref_path in targets:
         try:
             # 同参考音只合成一次（多人设共用音色时省 GPU）
@@ -266,10 +291,7 @@ def main() -> int:
         except Exception as ex:
             print(f"  ✗ {pid}: FAILED {ex}")
             worst = "critical"
-
-    print(f"[*] 抽检完成，最差={worst}（正常带 0.78~0.86；<{args.warn} 警戒，"
-          f"<{args.crit} 灾难级=音色资产大概率坏了）")
-    return 1 if worst == "critical" else 0
+    return worst
 
 
 if __name__ == "__main__":

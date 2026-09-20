@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<!--
+  桌面壳「网页多开 + 双语 + 副驾」六批改动的一站式验收参照页（2026-08-10）。
+  合并原三个分批前后对照夹具（bubble/rail/showcase）为单一「当前状态全景」，全部由**真** pure
+  函数 + 真 style.css 驱动（bubble-model / webmulti / inject-status / copilot-capabilities），
+  改了模块这页立刻跟着变——单一事实源，零漂移。
+
+  === 两层验收清单（壳构建后照单执行）===
+  A. 机械层（已由 desktop `npm test` 在 predist/predist:win 构建前置闸门自动跑，无需人工）：
+     P0 scan-perf.test（去抖/自体过滤/取文缓存/脏标记/废旧轮询）、bubble-model.test（去外挂框/
+     译文单显/FAB 去 emoji）、renderer-boot-invariants（账号栏三态接线）、copilot-capabilities.test
+     （能力橱窗内容+接线）。构建时任一红→安装包拒绝出生。本页＝这些不变量的**可视**对照。
+  B. 人眼层（需真壳 + 真账号，本机/CI 之外，无法自动化）：
+     P0  载入速度：开一条 500+ 条历史的真会话，对比官方裸客户端——应「秒开」不再卡顿；
+         看 DevTools Performance 有无长任务风暴（改前是每条消息插入触发一次全量重扫）。
+     P1  真官方 DOM 上双语气泡观感：译文是否读作「气泡自带第二行」（无蓝框）；出站彩色气泡上
+         译文是否随气泡文字色（浅色可读，非白底块）；官方暗色开关下无白底块。
+     P1.5 入站气泡原文只出现一次（官方原生那次），注入框只有译文。
+     FAB 智能回复钮是安静 chip（无 🤖）；连点在生成期间不重复触发（看后端 smart-reply 调用数）。
+     P2  账号栏每个号左上角健康点随注入状态实时变色（切一个失配的号看是否转黄/红）。
+     P3  没开会话时右栏副驾显示能力橱窗（这一屏是给客户看的第一印象）。
+     遥测 选择器失效遥测未回归：GET /api/desktop/inject-health/alerts 的 selector_diagnosis 与
+         extract-trend（enabled:true）在真会话下有正常数据流，无因 scan 循环改动而中断。
+-->
+<html data-cp-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>桌面壳六批改动 · 验收参照（当前状态全景）</title>
+<link rel="stylesheet" href="/desktop/renderer/style.css" />
+<style>
+  body{margin:0;background:#0b1219;color:#cdd9e5;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  .page{padding:24px;display:flex;flex-direction:column;gap:26px;max-width:1160px}
+  h1{font-size:16px;margin:0;color:#e8eaed}
+  h2{font-size:13px;margin:0 0 10px;color:#8aa}
+  .sub{font-size:12px;color:#6f8196;margin:2px 0 0}
+  .cols{display:flex;gap:24px;flex-wrap:wrap}
+  .stream{padding:12px;border-radius:10px;min-width:320px}
+  .light-stream{background:#e4e9ef}
+  .dark-stream{background:#0e1621}
+  .bub{max-width:80%;margin:7px 0;padding:7px 11px;border-radius:12px;font-size:14px;line-height:1.4}
+  .in{background:#fff;color:#111}
+  .out{margin-left:auto;background:#3390ec;color:#fff}
+  .dark-stream .in{background:#182533;color:#e8eaed}
+  .dark-stream .out{background:#2b5278;color:#fff}
+  .railwrap{background:#0e1621;padding:10px 8px;border-radius:14px;display:inline-flex;flex-direction:column;gap:8px}
+  .rail-item .ic{font-size:16px;font-weight:600}
+  .panel{width:300px;background:#141b22;border:1px solid #223;border-radius:10px;overflow:hidden}
+  .panel .cp-head{height:38px;display:flex;align-items:center;padding:0 12px;color:#cdd9e5;font-size:13px;border-bottom:1px solid #223}
+  #fabrow .demo-fab{position:relative;right:auto;bottom:auto;margin:0 12px 0 0}
+  #fabrow{display:flex;align-items:center;gap:8px;padding:12px;background:#0e1621;border-radius:10px}
+  #fabrow.light{background:#e4e9ef}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>桌面壳 · 网页多开 + 双语 + 副驾 · 验收参照（当前状态，全部由真模块渲染）</h1>
+
+  <section>
+    <h2>P1 / P1.5 · 双语气泡（原生第二行，译文单显）</h2>
+    <div class="cols">
+      <div><div class="sub">浅色</div><div class="stream light-stream" id="stream-light"></div></div>
+      <div><div class="sub">深色（含彩色出站气泡）</div><div class="stream dark-stream" id="stream-dark"></div></div>
+      <div><div class="sub">媒体翻译状态（OCR/转写：加载/失败/完成，与文本同套盒子）</div><div class="stream light-stream" id="stream-media"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>FAB · 智能回复浮钮（安静 ghost chip，无 emoji，SVG spark）</h2>
+    <div id="fabrow" class="light"><span class="sub" style="margin-right:8px">浅色</span></div>
+    <div style="height:8px"></div>
+    <div id="fabrow2"><span class="sub" style="margin-right:8px">深色</span></div>
+  </section>
+
+  <section>
+    <h2>P2 · 账号栏健康三态（真 deriveInjectState → railBadge）</h2>
+    <div class="railwrap" id="rail"></div>
+  </section>
+
+  <section>
+    <h2>P3 · 副驾能力橱窗（空状态第一印象，显性化竞品没有的能力）</h2>
+    <div class="panel"><div class="cp-head">业务助手</div>
+      <div class="cp-body"><div class="cp-empty" id="cp-empty"></div></div></div>
+  </section>
+</div>
+
+<script src="/desktop/renderer/shell-i18n.js"></script>
+<script src="/desktop/renderer/inject-status.js"></script>
+<script src="/desktop/renderer/webmulti.js"></script>
+<script src="/desktop/renderer/shared/copilot/cp-capabilities.js"></script>
+<!-- bubble-model 住在 shared/inject（真壳经 webview preload 加载,非 renderer）；此处按真实位置引用 -->
+<script src="/shared/inject/bubble-model.js"></script>
+<script>
+const M = globalThis.ABubbleModel;
+document.head.appendChild(Object.assign(document.createElement("style"), { textContent: M.bubbleStyleCss() }));
+
+// ── P1/P1.5 双语气泡 ──
+function renderBox(model){
+  const box = document.createElement("div"); box.className = "aitr-box " + model.cls;
+  model.lines.forEach(function(ln){
+    const el = document.createElement("span");
+    el.className = "aitr-line " + (ln.role === "orig" ? "aitr-orig" : "aitr-trans");
+    el.textContent = ln.text; box.appendChild(el);
+  });
+  if(model.badge){ const b=document.createElement("span"); b.className="aitr-badge"; b.textContent=model.badge; box.appendChild(b); }
+  return box;
+}
+function bub(stream, dir, orig, model, withBtn){
+  const d = document.createElement("div"); d.className = "bub " + dir;
+  d.appendChild(document.createTextNode(orig));
+  if(model.show) d.appendChild(renderBox(model));
+  if(withBtn){ const b=document.createElement("span"); b.className="aitr-btn"; b.textContent="点击翻译"; d.appendChild(b); }
+  stream.appendChild(d);
+}
+function fillStream(s){
+  bub(s,"in","Hey, is the product still in stock?", M.bubbleRenderModel({state:"done",direction:"in",origText:"Hey, is the product still in stock?",translated:"嗨，这个产品还有货吗？"}));
+  bub(s,"out","有的，现在下单今天发。", M.bubbleRenderModel({state:"done",direction:"out",origText:"有的，现在下单今天发。",translated:"Yes, order now and it ships today."}));
+  bub(s,"in","そちらの価格を教えてください", M.bubbleRenderModel({state:"stale",direction:"in",origText:"そちらの価格を教えてください",translated:"请告诉我你们的价格"}));
+  bub(s,"in","OK 👍", M.bubbleRenderModel({state:"same",direction:"in",origText:"OK 👍"}));
+  bub(s,"in","??? garbled", M.bubbleRenderModel({state:"error",direction:"in",origText:"???"}), true);
+}
+fillStream(document.getElementById("stream-light"));
+fillStream(document.getElementById("stream-dark"));
+
+// 媒体翻译状态（复刻 renderMediaBox：复用 aitr-loading/error/done 同一套盒子样式）
+function mediaBox(state, o){
+  o = o || {}; const box = document.createElement("div"); box.className = "aitr-box aitr-" + state;
+  ["original","translated"].forEach(function(k, i){
+    if(o[k]){ const e=document.createElement("span"); e.className="aitr-line "+(i?"aitr-trans":"aitr-orig"); e.textContent=o[k]; box.appendChild(e); }
+  });
+  if(o.badge){ const e=document.createElement("span"); e.className="aitr-badge"; e.textContent=o.badge; box.appendChild(e); }
+  return box;
+}
+function mediaBub(stream, state, o, btnText){
+  const d=document.createElement("div"); d.className="bub in";
+  d.appendChild(document.createTextNode("[图片]"));
+  d.appendChild(mediaBox(state, o));
+  const b=document.createElement("span"); b.className="aitr-btn"; b.textContent=btnText; d.appendChild(b);
+  stream.appendChild(d);
+}
+const sm=document.getElementById("stream-media");
+mediaBub(sm, "loading", {badge:"识别中…"}, "识别中…");
+mediaBub(sm, "error", {badge:"翻译失败"}, "重试");
+mediaBub(sm, "done", {original:"[图片原文] Special offer today", translated:"今日特惠"}, "重新识别");
+
+// ── FAB ghost chip（复刻 renderer 结构：SVG spark + 文字，无 emoji）──
+function sparkSvg(){
+  const NS="http://www.w3.org/2000/svg"; const s=document.createElementNS(NS,"svg");
+  s.setAttribute("class","aitr-fab-ic"); s.setAttribute("viewBox","0 0 24 24");
+  s.setAttribute("width","13"); s.setAttribute("height","13"); s.setAttribute("fill","currentColor");
+  const p=document.createElementNS(NS,"path"); p.setAttribute("d","M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8L12 2z");
+  s.appendChild(p); return s;
+}
+function makeFab(host, dark){
+  const fab=document.createElement("div"); fab.id="aitr-smart-demo-"+(dark?"d":"l"); fab.className="demo-fab";
+  fab.appendChild(sparkSvg());
+  const tx=document.createElement("span"); tx.className="aitr-fab-tx"; tx.textContent="智能回复"; fab.appendChild(tx);
+  host.appendChild(fab);
+}
+document.head.appendChild(Object.assign(document.createElement("style"),{textContent:
+  ".demo-fab{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:16px;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.14)}"
+  +"#fabrow .demo-fab{color:#1c7ed6;background:rgba(255,255,255,.92);border:1px solid rgba(28,126,214,.35)}"
+  +"#fabrow2 .demo-fab{color:#6cb6ff;background:rgba(32,38,46,.94);border:1px solid rgba(108,182,255,.42)}"}));
+makeFab(document.getElementById("fabrow"), false);
+makeFab(document.getElementById("fabrow2"), true);
+
+// ── P2 账号栏三态（真 deriveInjectState → railBadge）──
+const rail=document.getElementById("rail");
+[
+  {label:"Telegram",ic:"T",payload:{supported:true,composer:true,bubbles:8,chatOpen:true}},
+  {label:"WhatsApp",ic:"W",payload:{supported:true,composer:true,bubbles:4,chatOpen:true,extract:{decorated:0,unresolved:4}}},
+  {label:"Instagram",ic:"I",payload:{supported:false}},
+  {label:"Messenger",ic:"M",payload:{supported:true,composer:false,bubbles:0,chatOpen:false}},
+  {label:"X",ic:"X",payload:null},
+].forEach(function(s,i){
+  const item=document.createElement("div"); item.className="rail-item"+(i===0?" active":"");
+  // 两个纯函数只出 code/key，文案由 shell-i18n 取（与 renderer.js 同一条链）
+  const st=deriveInjectState(s.payload);
+  const badge=railBadge({level:st.cls,textKey:"inject."+st.code});
+  const tip=(window.SH?SH(badge.textKey):badge.textKey)||"";
+  item.innerHTML='<span class="ic">'+s.ic+'</span><span>'+s.label+'</span>'
+    +'<span class="rail-dot '+badge.dot+'" title="'+tip+'"></span>';
+  rail.appendChild(item);
+});
+
+// ── P3 能力橱窗（真 capabilityShowcase）──
+(function(){
+  const el=document.getElementById("cp-empty"); const items=capabilityShowcase(); const head=showcaseHeadline();
+  const esc=(s)=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const rows=items.map((it)=>'<li><span class="cp-sc-dot"></span><div><b>'+esc(it.title)+'</b><span>'+esc(it.desc)+'</span></div></li>').join("");
+  el.innerHTML='<div class="cp-showcase"><div class="cp-sc-hd">'+esc(head)+'</div><ul class="cp-sc-list">'+rows+'</ul><div class="cp-sc-ft">打开一个会话即可开始</div></div>';
+})();
+</script>
+</body>
+</html>

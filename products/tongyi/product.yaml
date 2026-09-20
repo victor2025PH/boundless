@@ -1,13 +1,23 @@
 # products/tongyi/product.yaml — 通译 LingoX 产品清单（productization manifest · 范式模板）
 # 说明：products/<拼音> 是「产品化薄封装」——不放引擎实现，只放 SKU/裁剪overlay/落地页映射/交付定义，
 #       复用 engines/ 的共享实现。其它 6 个产品照本模板填。
+#
+# ── 2026-08-19 定价决议（翻译免费化重定位，老板拍板）────────────────────────
+# 标准翻译（内置引擎 hy-mt2 本地/自有 GPU 池）**永久免费、不限字符**（公平使用
+# 200 万字符/日/授权）——翻译从「卖字符」转为获客钩子；付费点转移到：
+#   ① 专业翻译按 Token（AI 引擎+术语锁定/翻译记忆 10 Token/千字符；DeepL 认证 40/千字符）
+#   ② 翻译工作台订阅（多坐席收件箱/客户 journey/漏斗）$29/坐席/月
+#   ③ AI 成交能力走智聊 ChatX 档位（同一客户端）
+# Token 与 ChatX 同一钱包（token-pack-* 见 products/zhiliao）。
+# 旧 lingox-charpack/team/pro 停售：存量订阅服务到期；charpack 未用完字符按
+# 1.5M 字符 = 60,000 Token 等值换发（客户受益，作为升级公告执行）。
 id: tongyi
 brand_key: lingox                 # 对应 website/lib/brand.ts 的 ProductKey
 name:   { zh: 通译, en: LingoX }
 category: lingo                   # 三系：通达 Lingo
 tagline:
-  zh: 跨境实时聊天翻译 SCRM（多平台文字+语音双向 · 术语锁定 · 客户资产沉淀）
-  en: Cross-border real-time chat translation SCRM
+  zh: 跨境实时聊天翻译 SCRM（标准翻译永久免费 · 术语锁定 · 客户资产沉淀）
+  en: Cross-border chat translation SCRM — standard translation free forever
 
 engine: chengjie                                              # 承载引擎 engines/chengjie
 engine_overlay: engines/chengjie/config/lingox.overlay.example.yaml  # 裁剪为「纯翻译工作台」(已入库)
@@ -23,25 +33,38 @@ website:
   landing: /interpreting           # productMeta.PRODUCT_LANDING.lingox
   matrix_family: lingo
 
-# 定价已拍板（2026-07-18 定价决议：按竞品 NexScrm ×2 + 品牌尾数惯例；website/lib/pricing.ts + content.ts 已同步）
+# 定价（2026-08-19 决议：翻译免费化；展示层单一真相 website/lib/chatx-pricing.ts）
 skus:
+  - id: lingox-free
+    name: { zh: 免费版, en: Free }
+    unit: month
+    price: "0"                     # 标准翻译免费不限量（公平使用 200 万字符/日/授权）
+    includes: [多平台双向标准翻译不限量, 1 坐席, 术语表基础版]
+  - id: lingox-workbench
+    name: { zh: 翻译工作台·每坐席, en: Workbench per seat }
+    unit: month
+    price: "29"                    # USD/坐席/月（纯翻译团队；AI 成交能力走 ChatX 档位）
+    includes: [多坐席统一收件箱, 客户 journey, 漏斗计数, 术语锁定+翻译记忆]
+  # 专业翻译不设订阅 SKU：按 Token 计量（AI 引擎 10/千字符 · DeepL 认证 40/千字符），
+  # 钱包与 Token 包见 products/zhiliao（token-pack-*），跨产品同一余额。
+  # ── 停售台账（2026-08-19 起不再对外挂牌；保留供历史订单/授权反查，勿删）──
   - id: lingox-charpack
-    name: { zh: 字符包, en: Char pack }
+    name: { zh: 字符包（停售）, en: Char pack (legacy) }
     unit: one-time
-    price: "59"                    # USD / 150万字符（NexScrm Character Pack $30/1.5M ×2=60 → 尾数 9 惯例 59）
-    includes: [多平台双向翻译, 术语库]
+    price: "59"                    # 停售 2026-08-19；未用完字符按 1.5M=60,000 Token 换发
+    includes: [停售·存量按 60,000 Token 等值换发]
   - id: lingox-team
-    name: { zh: 团队, en: Team }
+    name: { zh: 团队（停售）, en: Team (legacy) }
     unit: month
-    price: "99"                    # USD/月（NexScrm Standard $48/mo ×2=96 → 99）
-    includes: [多坐席, 客户 journey, 漏斗看板]
+    price: "99"                    # 停售 2026-08-19；存量服务到期，续费引导 workbench/ChatX 团队版
+    includes: [停售·存量服务到期]
   - id: lingox-pro
-    name: { zh: 专业, en: Pro }
+    name: { zh: 专业（停售）, en: Pro (legacy) }
     unit: month
-    price: "198"                   # USD/月（NexScrm Pro $90/mo ×2=180 → 尾数 8 惯例 198）
-    includes: [不限字符, 多模态翻译, 置信度/引擎健康]
+    price: "198"                   # 停售 2026-08-19；「不限字符」由免费版标准翻译承接
+    includes: [停售·存量服务到期]
 
 delivery:
   pack: 轻量交付包 = chengjie 翻译子集 + lingox.overlay + 首跑向导（setup_wizard）
-  metering: platform/licensing        # 计量=字符数；门控=SKU 功能位（翻译/坐席开，RPA/换脸关）
+  metering: platform/licensing        # 计量=Token（专业翻译）；标准翻译 0 Token；门控=SKU 功能位（翻译/坐席开，RPA/换脸关）
   compliance_out: platform/compliance # 如产出媒体则走 C2PA/水印

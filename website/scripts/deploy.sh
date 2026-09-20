@@ -17,6 +17,18 @@ flock -xn 9 || { echo "[deploy ERROR] another deploy holds /tmp/yuntech-deploy.l
 APP_DIR="${APP_DIR:-/home/ubuntu/yuntech}"
 PM2_NAME="${PM2_NAME:-yuntech}"
 PORT="${PORT:-3000}"
+
+# 绑定地址由 package.json 的 `start: next start -H 127.0.0.1` 决定，本脚本只**校验结果**。
+# 背景：`next start` 默认绑 0.0.0.0，应用端口因此对公网直接开放（2026-07-28 实测外部
+# 直连 http://<vps>:3000/api/health 返回 200，且 ufw inactive）。那条路径绕过 nginx：
+#   ① X-Forwarded-For 完全由客户端写 → 按 IP 的限流（后台/客服台登录爆破、领取刷量）全失效；
+#   ② 没有 TLS；③ 反代层的一切策略（跳转、体积限制）统统绕过。
+# nginx 的 proxy_pass 指向 127.0.0.1:3000，故绑回环对反代零影响。
+#
+# 为什么校验而不是在这里设环境变量：**试过，不管用**——`next start`（14.x）只认 `-H`
+# 参数，不读 HOSTNAME（env 确实进了进程，监听仍是 *:3000）。所以断言结果比指望机制可靠：
+# 机制换了、package.json 被改回去、有人手工重建 pm2 应用，这里都能立刻喊出来。
+BIND_EXPECT="${BIND_EXPECT:-127.0.0.1}"
 TARBALL="${1:-/home/ubuntu/website-deploy.tar.gz}"
 
 PARENT="$(dirname "$APP_DIR")"
@@ -32,7 +44,12 @@ fail() { echo "[deploy ERROR] $*" >&2; }
 [ -d "$APP_DIR" ] || { fail "app dir not found: $APP_DIR"; exit 1; }
 
 log "1/7 backup current -> $(basename "$BAK")"
-tar -czf "$BAK" -C "$APP_DIR" --exclude=node_modules --exclude=.next .
+# 排除 public/downloads·public/releases：与下面 rsync 的排除口径一致。发布物是几百 MB 的
+# 安装包，不属应用代码；把它们打进每份备份会让 tar 从 ~300MB 涨到 1.5GB+，累计十几份直接
+# 撑爆磁盘（2026-07-31 实测 backups 占 ~8GB、根分区 87%）。回滚 extract 不删现存文件，故
+# 安装包目录在回滚时原样保留、无需备份内也存一份。
+tar -czf "$BAK" -C "$APP_DIR" --exclude=node_modules --exclude=.next \
+    --exclude=public/downloads --exclude=public/releases .
 
 # 备份轮转（替代「仅留最近 5 份」）：
 #   · 始终保留最新 KEEP_BACKUP_RECENT 份（默认 5）——与旧策略同日回滚深度对齐，覆盖当日连打；
@@ -111,7 +128,7 @@ rollback() {
   # 备份 tar 不含 node_modules；若本次部署改过依赖（package/lock）再回滚，旧代码必须配旧 lock
   # 对应的依赖树，否则 build 会因依赖错配失败。LIBC=glibc 已在主流程全局 export，对 rollback 同样生效。
   npm ci --no-audit --no-fund >/dev/null 2>&1 || true
-  ( cd "$APP_DIR" && npm run build >/dev/null 2>&1 && pm2 restart "$PM2_NAME" --update-env >/dev/null 2>&1 ) \
+  ( cd "$APP_DIR" && npm run build >/dev/null 2>&1 && (pm2 reload "$PM2_NAME" --update-env >/dev/null 2>&1 || pm2 restart "$PM2_NAME" --update-env >/dev/null 2>&1) ) \
     || fail "rollback rebuild/restart had issues — inspect manually"
   fail "rollback attempted; site restored to pre-deploy state"
   exit 1
@@ -121,12 +138,87 @@ log "2/7 extract stage"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 tar -xzf "$TARBALL" -C "$STAGE"
 
+# 2026-08-20 部署防呆（fail-closed）：
+#   8/19 加的 commit_ts 检查被绕过三次洞：① 每次部署都用客户端上传的 deploy.sh 覆盖服务器脚本，
+#   旧树带着无防呆的旧脚本上来；② 缺 .deploy-meta.json 只 WARN 不拦；③ rsync --delete 把线上
+#   基准 meta 删掉，之后防呆永久空转。
+# 现规则（FORCE_OLDER=1 才放行，真回滚请用备份 tar）：
+#   · 包内必须有 .deploy-epoch，且 ≥ MIN_EPOCH（旧树没有这个文件 → 直接拒绝）
+#   · 不得低于线上已部署的 epoch
+#   · 包内必须有 .deploy-meta.json；commit_ts 不得比线上更旧
+# 本脚本针定在 /home/ubuntu/deploy.sh（chattr +i），客户端不再覆盖它。
+MIN_EPOCH=20260819
+read_epoch() {
+  local f="$1" e=0
+  if [ -f "$f" ]; then
+    e="$(tr -cd '0-9' < "$f" | head -c 16)"
+  fi
+  echo "${e:-0}"
+}
+log "2.5/7 staleness guard (.deploy-epoch + .deploy-meta.json, fail-closed)"
+NEW_EPOCH="$(read_epoch "$STAGE/.deploy-epoch")"
+CUR_EPOCH="$(read_epoch "$APP_DIR/.deploy-epoch")"
+if [ "${FORCE_OLDER:-0}" != "1" ]; then
+  if [ "$NEW_EPOCH" -lt "$MIN_EPOCH" ]; then
+    fail "incoming .deploy-epoch missing or below floor $MIN_EPOCH (got $NEW_EPOCH) — stale website tree, refused"
+    fail "  deploy only from the canonical repo (D:\\boundless\\website). Old worktree copies cannot overwrite production."
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  if [ "$CUR_EPOCH" -gt 0 ] && [ "$NEW_EPOCH" -lt "$CUR_EPOCH" ]; then
+    fail "incoming epoch $NEW_EPOCH is older than deployed $CUR_EPOCH — refused"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  NEW_META="$STAGE/.deploy-meta.json"
+  CUR_META="$APP_DIR/.deploy-meta.json"
+  if [ ! -f "$NEW_META" ]; then
+    fail "incoming package has no .deploy-meta.json — refused (old deploy.ps1 / hand-rolled tar)"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  NEW_TS=$(python3 -c "import json;print(int(json.load(open('$NEW_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  CUR_TS=0
+  [ -f "$CUR_META" ] && CUR_TS=$(python3 -c "import json;print(int(json.load(open('$CUR_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  if [ "$NEW_TS" -le 0 ]; then
+    fail "incoming .deploy-meta.json has no commit_ts — refused"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  if [ "$CUR_TS" -gt 0 ] && [ "$NEW_TS" -lt "$CUR_TS" ]; then
+    fail "incoming commit ($(date -u -d @"$NEW_TS" +%F\ %T 2>/dev/null || echo "$NEW_TS")) is OLDER than deployed ($(date -u -d @"$CUR_TS" +%F\ %T 2>/dev/null || echo "$CUR_TS"))"
+    fail "  your website tree is stale — run: git pull  (or FORCE_OLDER=1 to override)"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  log "guard OK: epoch $NEW_EPOCH (live $CUR_EPOCH) commit_ts=$NEW_TS live=$CUR_TS ($(python3 -c "import json;m=json.load(open('$NEW_META'));print(str(m.get('commit') or '')[:8], m.get('host') or '?')" 2>/dev/null || echo '?'))"
+else
+  log "WARN FORCE_OLDER=1 — staleness guard bypassed"
+fi
+
 log "3/7 sync into place (keep .env.local/node_modules/.next, prune stale)"
+# 发布物目录（安装包等大文件）常驻服务器、不随源码 tarball 走：本地 deploy.ps1 打包时排除、
+# 部署后单独差量上传。这里 exclude + --delete 语义 = 不覆盖也不删除；缺此保护时，
+# 任何一次「不含安装包的部署」都会把线上下载文件整目录删掉（2026-07-25 实际发生两次）。
 rsync -a --delete \
   --exclude=node_modules --exclude=.next --exclude=.env.local --exclude='*.log' \
+  --exclude=public/downloads --exclude=public/releases \
   "$STAGE"/ "$APP_DIR"/
+mkdir -p "$APP_DIR/public/downloads" "$APP_DIR/public/releases"
 
 cd "$APP_DIR"
+
+# 品牌 preset 门禁：官网已 vendored 到 vendor/brand，服务器没有 monorepo 的 platform/。
+# 缺文件时 next build 会在解析 tailwind.config 时炸掉；这里在 npm ci 之前 fail-fast，
+# 避免白跑几分钟安装再回滚。本地发包前请跑 npm run sync:brand（release/deploy 脚本已强制）。
+log "3.5/7 assert vendored brand"
+if [ ! -f "$APP_DIR/vendor/brand/tailwind-preset.cjs" ] || [ ! -f "$APP_DIR/vendor/brand/tokens.json" ]; then
+  fail "vendor/brand/{tailwind-preset.cjs,tokens.json} missing in deploy package"
+  fail "  fix: on monorepo machine run (cd website && npm run sync:brand) then re-pack"
+  rollback
+fi
+log "vendor/brand OK"
+
 log "4/7 npm ci"
 # LIBC=glibc：本机 prebuild-install 探测不到 libc（日志见 libc= 空），会放弃预编译二进制
 # 转而源码编译 better-sqlite3，在 1C 小鸡上必失败；显式声明后直接下载官方 glibc 预编译包。
@@ -134,8 +226,11 @@ export LIBC=glibc
 npm ci --no-audit --no-fund || rollback
 log "5/7 next build"
 npm run build || rollback
-log "6/7 pm2 restart ($PM2_NAME)"
-pm2 restart "$PM2_NAME" --update-env || rollback
+# Q-14 #262（2026-09-09）：滚动 reload 代替 restart。cluster 模式（ecosystem.config.js）下
+# pm2 reload = 先起新 worker、就绪后再停旧 → 部署期 /api/ai/hub/health 零 5xx（09-08 19h
+# R78 部署窗 restart 让 nginx 记了 7 次 5xx）。旧 fork 进程上 reload 退化为重启，语义不坏。
+log "6/7 pm2 reload ($PM2_NAME, rolling)"
+pm2 reload "$PM2_NAME" --update-env || pm2 restart "$PM2_NAME" --update-env || rollback
 pm2 save >/dev/null 2>&1 || true
 
 log "7/7 health check (:$PORT)"
@@ -146,11 +241,48 @@ else
   rollback
 fi
 
+# 绑定面校验：应用端口必须只在回环上监听。非致命（站点照常工作）故不回滚，但要喊出来
+# ——它决定了「按 IP 的限流是否有意义」，静默失效过一次就够了。
+BIND_ADDRS=$(ss -tlnH "sport = :$PORT" 2>/dev/null | awk '{print $4}' | sed 's/:[0-9]*$//' | sort -u | tr '\n' ' ')
+case "$BIND_ADDRS" in
+  *"$BIND_EXPECT"*)
+    if echo "$BIND_ADDRS" | grep -qE '(\*|0\.0\.0\.0|\[::\])'; then
+      log "WARN bind: :$PORT 仍在非回环地址监听 ($BIND_ADDRS) —— 应用端口对公网直接开放，"
+      log "WARN bind: 反代会被绕过、按 IP 的限流失效。检查 package.json 的 start 是否为 'next start -H $BIND_EXPECT'"
+    else
+      log "bind OK ($BIND_ADDRS)"
+    fi
+    ;;
+  "")
+    log "WARN bind: 读不到 :$PORT 的监听地址（ss 不可用？），跳过校验" ;;
+  *)
+    log "WARN bind: :$PORT 监听在 $BIND_ADDRS，期望 $BIND_EXPECT —— 见上一条说明" ;;
+esac
+
 # SEO: 部署成功后把可收录 URL 推给 IndexNow（Bing/Naver/Yandex 等）。失败不影响部署。
 SETUP_KEY=$(grep -E '^TELEGRAM_SETUP_KEY=' "$APP_DIR/.env.local" 2>/dev/null | sed -E 's/^[^=]+=//; s/^"//; s/"$//' | tr -d '\r')
 if [ -n "$SETUP_KEY" ]; then
   IN_RES=$(curl -s -m 20 -X POST -H "x-setup-key: $SETUP_KEY" "http://127.0.0.1:$PORT/api/admin/indexnow" || echo '{"ok":false,"error":"curl_failed"}')
   log "indexnow ping: $IN_RES"
+fi
+
+# 成功后用本次包内的 scripts/deploy.sh 更新针定脚本。本机 chattr +i 需要 sudo；
+# 解不了锁就跳过自更新（站点已在上面起来，绝不能在这里把整次部署判失败）。
+PINNED="$PARENT/deploy.sh"
+PACKED_SH="$APP_DIR/scripts/deploy.sh"
+if [ -f "$PACKED_SH" ]; then
+  if sudo -n chattr -i "$PINNED" 2>/dev/null || chattr -i "$PINNED" 2>/dev/null; then
+    sed 's/\r$//' "$PACKED_SH" > "$PINNED.tmp"
+    chmod +x "$PINNED.tmp"
+    mv "$PINNED.tmp" "$PINNED"
+    if sudo -n chattr +i "$PINNED" 2>/dev/null || chattr +i "$PINNED" 2>/dev/null; then
+      log "pinned deploy.sh updated + immutable"
+    else
+      log "WARN pinned deploy.sh updated but could not re-lock"
+    fi
+  else
+    log "WARN pinned deploy.sh immutable and unlock failed — skip self-update (site already live)"
+  fi
 fi
 
 rm -rf "$STAGE" "$TARBALL"

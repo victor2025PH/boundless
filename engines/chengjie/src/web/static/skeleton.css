@@ -1,0 +1,46 @@
+/* ── 骨架屏原语 · 管理台壳实现（2026-08-22 P4）─────────────────────────────
+   类名 API 与工作台壳完全一致（.tk-skel / -kpi / -row / -chart，度量同规格）——
+   工作台侧的定义内置在 workspace_base.html（用 --tk-text-muted color-mix），那边是
+   工作台单源；本文件是 base.html（管理后台壳）侧的同 API 实现（该壳无 --tk-* token，
+   用中性 slate 半透明，亮暗通吃）。样板与禁则见 /developer「样式指南」卡 ④。
+   ⚠ 只允许 base.html <link> 本文件；workspace_base 已内置同名类，重复引入=双定义。
+   发布纪律：改本文件 bump base.html 的 ?v= + ui-build.txt 双戳。 */
+.tk-skel{
+  position:relative; overflow:hidden; border-radius:6px;
+  background:rgba(148,163,184,.14);
+}
+.tk-skel::after{
+  content:''; position:absolute; inset:0; transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(148,163,184,.22),transparent);
+  animation:tk-skel-sweep 1.3s ease-in-out infinite;
+}
+@keyframes tk-skel-sweep{ to{ transform:translateX(100%); } }
+.tk-skel-kpi{ width:56px; height:22px; }
+.tk-skel-row{ width:100%; height:14px; margin:6px 0; }
+.tk-skel-chart{ width:100%; height:60px; border-radius:10px; }
+
+/* ── ops 总览 KPI 网格自动骨架（零接线）───────────────────────────────
+   卡片 KPI 容器是 <div class="grid" id="...Kpis">，loader 填充前为 :empty——此时
+   自动出两块 shimmer 占位；任何 loader 一填充 :empty 即失效、骨架自动消失。
+   刻意零 JS/零 HTML 改动：75 张卡不必逐个接线，新卡天然获益。
+   已知边界：若某 grid 加载后合法「可见且空」，shimmer 会常驻——那本身就是
+   「可见但空」类缺陷（waste 扫描门禁语义），修那张卡而不是关本规则。 */
+.ops-wrap .grid:empty{
+  min-height:64px;
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px;
+}
+.ops-wrap .grid:empty::before,
+.ops-wrap .grid:empty::after{
+  content:""; display:block; height:56px; border-radius:10px;
+  background:linear-gradient(100deg,rgba(148,163,184,.14) 30%,rgba(148,163,184,.26) 45%,rgba(148,163,184,.14) 60%);
+  background-size:220% 100%;
+  animation:tk-skel-bg 1.3s ease-in-out infinite;
+}
+@keyframes tk-skel-bg{ from{background-position:120% 0} to{background-position:-120% 0} }
+
+/* 无障碍：偏好减少动效时静止（保留占位色块，不闪） */
+@media (prefers-reduced-motion: reduce){
+  .tk-skel::after,
+  .ops-wrap .grid:empty::before,
+  .ops-wrap .grid:empty::after{ animation:none; }
+}

@@ -41,14 +41,29 @@ logger = logging.getLogger(__name__)
 
 # SSE replay / live 订阅事件类型（与 monolith 原集合一致）
 _SSE_EVENT_TYPES = frozenset({
-    "inbox_message", "agent_presence",
+    "inbox_message",
+    # P2-2：出站镜像事件（autosend/主动触达/坐席手发经编排器回写收件箱时发布）——
+    # 前端据此「刷新线程/列表预览但不加未读」，选中会话轮询得以 10s→30s。
+    "outbound_message",
+    # 2026-07-31 计划维护预告：restart_instance.ps1 停机前经内部路由广播，前端把
+    # 接下来的连接失败渲染成蓝色「维护窗口」而非红色「连接中断」（横幅根因治理）。
+    "maintenance_notice",
+    "agent_presence",
     "conversation_claim", "conversation_assigned", "follow_up",
     "draft_created",
+    # 2026-09-19：停泊稿（enriching）人设正文落成 pending 的那一刻——draft_created 发布时
+    # 状态还是 enriching，前端拉 status=pending 为空把草稿条收起，之后再无事件；
+    # 开着该会话的坐席要切走再切回才看到稿。前端按 draft_created 同路径刷新草稿条。
+    "draft_ready",
     "draft_sla_breach",
     "draft_reassigned",
     "typing",
     "peer_typing",
     "message_op",
+    # 2026-08-17 官方级消息管理：置顶/会话删除/消息软删（含恢复与清空）的多窗口同步
+    "conversation_pinned",
+    "conversation_deleted",
+    "messages_deleted",
     "anomaly_alert",
     "sla_alert",
     "conv_note",
@@ -67,12 +82,33 @@ _SSE_EVENT_TYPES = frozenset({
     "health_alert",
     "billing_alert",
     "ops_report",
+    # P0 2026-08-09：营销目标达成（goals.notify 扫描器发布）——工作台 toast + 铃铛
+    "goal_completed_alert",
+    # M-7 C 2026-09-07（#236）：目标到期/失守当刻的结算摘要（goals.notify.settle_and_notify
+    # 发布，每目标一次、不经 3 条/24h 日报聚合）——此前只有 webhook 的 goal_miss_alert，
+    # 工作台永远看不到「你的目标到期了、X 拍 / Y 完成、没出手是因为…」
+    "goal_settled_alert",
+    # P3 2026-08-17：peer_bot_guard 判定告警（服务端每会话每日至多一次）。
+    # 前端只消费 reason=daily_budget → 触顶中央弹窗（workspace_base __wsBudgetPop），
+    # 修「预算熔断发生时坐席不开着那个会话就零感知」的盲区；其余 reason 前端暂忽略。
+    "bot_peer_alert",
+    # 实施93c：客户首点 CTA 追踪短链（cta_links.handle_click 发布）——最热跟进
+    # 信号进工作台 toast + 铃铛；服务端只在首点发布，天然稀疏。
+    "cta_clicked",
 })
 
 # 写入 app.state.notif_queue 的重要事件类型
 _NOTIF_EVENT_TYPES = frozenset({
     "inbox_message", "draft_sla_breach", "draft_reassigned",
     "conversation_assigned",
+    # P3.1 2026-08-17：预算触顶进铃铛历史（离线/跨班次坐席补看弹窗错过的触顶）。
+    # 内容级准入在 _notif_content_ok——bot_peer_alert 只收 reason=daily_budget
+    # （Tier0/复读/秒回判定已有收件箱 🤖 徽章 + webhook，进铃铛=噪音）。
+    "bot_peer_alert",
+    # P0-协作闭环（2026-08-01）：@提及注解进通知历史——此前被 @ 的坐席只有
+    # 「正开着同一会话」才收到 toast，跨班次/离线的提及等于丢失。读取侧按
+    # 会话坐席过滤（batch_notif_routes），非被 @ 者的铃铛历史不出现别人的提及。
+    "conv_note",
     "anomaly_alert", "sla_alert", "escalation", "queue_alert",
     "stage_advance", "stage_advance_pending", "stage_downgrade",
     "stage_reunion", "stage_sync", "workflow_step",
@@ -82,16 +118,258 @@ _NOTIF_EVENT_TYPES = frozenset({
     "billing_alert",
     "orchestrator_worker_alert",
     "ops_report",
+    "goal_completed_alert",
+    "goal_settled_alert",
+    "cta_clicked",
 })
 
 # 复发型告警：按「类型+会话」在 notif_queue 内合并，仅保留最新一条（避免历史堆叠）
 _COALESCE_NOTIF_TYPES = frozenset({
     "escalation", "sla_alert", "draft_sla_breach", "queue_alert", "anomaly_alert",
+    # 预算触顶按会话合并：SSE 每个新连接会把 recent_events 重放一遍经过
+    # _maybe_push_notif（本队列无 conv_note 式幂等），coalesce 保最新一条
+    # 即天然去重；跨日再触顶也只留最新（昨天的触顶已无行动价值）。
+    "bot_peer_alert",
+    # 93c：同会话重复铸链再点（新 token 首点）只留最新一条——跟进动作是同一个
+    "cta_clicked",
+    # 工单#142（2026-09-02 钧机实锤）：编排器 worker 反复报警曾在通知中心连排
+    # 5 条同义告警。按「类型+账号集合」合并（键见 _notif_coalesce_key），保最新
+    # 一条并累计 _notif_count，渲染端显示「×N」读出规模。
+    "orchestrator_worker_alert",
 })
+
+# ① 通知中心 i18n 准入表（工单#142，2026-09-02）：进 notif_queue 的每个事件类型
+# 都必须有「人话标题 + 一句话说明」词条（值：(标题key, 说明key)；渲染端
+# workspace_base._TYPE_META 同键消费）。缺映射的类型**不进**用户可见通知——
+# 裸英文事件名曾在通知中心连排刷屏（orchestrator_worker_alert×5、
+# stage_advance_pending×2，与 #117 裸键直显同族）。新增事件类型必须同步补齐：
+# 本表 + i18n 词条（zh+en）+ 前端 _TYPE_META，门禁
+# tests/test_notif_center_i18n_gate.py 三处联检，缺一即红。
+_NOTIF_TYPE_I18N: Dict[str, tuple] = {
+    "inbox_message": ("base.notif.type_inbox_message", "base.notif.msg_sub"),
+    "draft_sla_breach": ("base.notif.type_draft_sla_breach", "base.notif.draft_sla_sub"),
+    "draft_reassigned": ("base.notif.type_draft_reassigned", "base.notif.reassigned_sub"),
+    "conversation_assigned": ("base.notif.type_conversation_assigned", "base.notif.assigned_sub"),
+    "bot_peer_alert": ("base.notif.type_budget_hit", "base.notif.budget_sub_soft"),
+    "conv_note": ("base.notif.type_conv_note", "base.notif.mention_sub"),
+    "anomaly_alert": ("base.notif.type_anomaly_alert", "base.notif.anomaly_sub"),
+    "sla_alert": ("base.notif.type_sla_alert", "base.notif.sla_sub"),
+    "escalation": ("base.notif.type_escalation", "base.notif.esc_sub"),
+    "queue_alert": ("base.notif.type_queue_alert", "base.notif.queue_alert_sub"),
+    "stage_advance": ("base.notif.type_stage_advance", "base.sse.stage_advance"),
+    "stage_advance_pending": ("base.notif.type_stage_advance_pending", "base.sse.stage_pending"),
+    "stage_downgrade": ("base.notif.type_stage_downgrade", "base.sse.stage_downgrade"),
+    "stage_reunion": ("base.notif.type_stage_reunion", "base.sse.stage_reunion"),
+    "stage_sync": ("base.notif.type_stage_sync", "base.notif.stage_sync_sub"),
+    "workflow_step": ("base.notif.type_workflow_step", "base.sse.wf_step"),
+    "workflow_execution_completed": ("base.notif.type_wf_done", "base.notif.wf_done_sub"),
+    "workflow_execution_failed": ("base.notif.type_wf_failed", "base.sse.wf_failed"),
+    "workflow_execution_cancelled": ("base.notif.type_wf_cancelled", "base.notif.wf_cancelled_sub"),
+    "health_alert": ("base.notif.type_health_alert", "base.notif.health_sub"),
+    "billing_alert": ("base.notif.type_billing_alert", "base.notif.billing_sub"),
+    "orchestrator_worker_alert": ("base.notif.type_orch_worker", "base.notif.orch_worker_sub"),
+    "ops_report": ("base.notif.type_ops_report", "base.notif.ops_report_sub"),
+    "goal_completed_alert": ("base.notif.type_goal_done", "base.notif.goal_done_sub"),
+    "goal_settled_alert": ("base.notif.type_goal_settled", "base.notif.goal_settled_sub"),
+    "cta_clicked": ("base.notif.type_cta_click", "base.notif.cta_sub"),
+}
+
+# 缺映射类型的 ops 落账去抖（进程级一次；SSE 重放会反复经过同一事件）
+_UNMAPPED_NOTIF_LOGGED: set = set()
+
+
+def _notif_type_registered(etype: Any) -> bool:
+    """i18n 准入闸（纯判定 + 首见落账）：缺人话映射的事件类型不进用户可见通知。
+
+    首见时 logger.warning + ops_events 落账（kind=notif_type_unmapped），值守在
+    运营总览的事件审计流里能看见「有新事件类型裸奔被拦」，补词条后放行。
+    """
+    if etype in _NOTIF_TYPE_I18N:
+        return True
+    key = str(etype)
+    if key not in _UNMAPPED_NOTIF_LOGGED:
+        _UNMAPPED_NOTIF_LOGGED.add(key)
+        logger.warning(
+            "[notif] 事件类型 %s 缺 i18n 人话映射，已拦截不进通知中心——请补 "
+            "_NOTIF_TYPE_I18N + i18n 词条 + workspace_base._TYPE_META（门禁 "
+            "test_notif_center_i18n_gate 会红）", key)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            store = get_ops_event_store()
+            if store is not None:
+                # detail 走 ASCII 键值串（ops 审计惯例；亦不入路由响应中文棘轮账本）
+                store.record("notif_type_unmapped", reason=key,
+                             detail=f"etype={key};blocked=no_i18n_mapping")
+        except Exception:
+            logger.debug("notif_type_unmapped ops 落账失败（已忽略）", exc_info=True)
+    return False
+
+
+def _notif_coalesce_key(evt: dict) -> str:
+    """复发型告警的合并键（类型内）。
+
+    - ``orchestrator_worker_alert``：按**账号集合**合并（problems[].id =
+      ``platform:account_id``，排序拼接）；恢复事件（problems 空）自成一键——
+      同一批账号的反复告警只留最新一条，不再连排刷屏（工单#142）。
+    - 其余沿用「会话/草稿/id」旧口径。
+    """
+    d = (evt or {}).get("data") or {}
+    if evt.get("type") == "orchestrator_worker_alert":
+        ids = sorted(str(p.get("id") or "?") for p in (d.get("problems") or []))
+        return "|".join(ids) if ids else "recovered"
+    return str(d.get("conversation_id") or d.get("draft_id") or d.get("id") or "")
+
+
+def _queue_notif(nq: list, evt: dict) -> None:
+    """把已过准入的事件写入通知队列（合并/幂等的单一口径，纯函数可门禁）。
+
+    复发型告警按 :func:`_notif_coalesce_key` 合并：仅保留最新一条，并累计
+    ``_notif_count``（渲染端显示「×N」）。SSE 重连会把 recent_events 重放一遍
+    ——EventBus 历史存的是**同一 dict 对象**，故用 ``data is data`` 判重放：
+    重放不加计数、沿用旧时戳（不把已读顶回未读）。
+    """
+    etype = evt.get("type")
+    if etype in _COALESCE_NOTIF_TYPES:
+        key = _notif_coalesce_key(evt)
+        if key:
+            count, keep_ts = 1, None
+            kept = []
+            for n in nq:
+                if n.get("type") == etype and _notif_coalesce_key(n) == key:
+                    if n.get("data") is evt.get("data"):
+                        count = int(n.get("_notif_count") or 1)
+                        keep_ts = n.get("_notif_ts")
+                    else:
+                        count = int(n.get("_notif_count") or 1) + 1
+                else:
+                    kept.append(n)
+            nq[:] = kept
+            entry = {**evt, "_notif_ts": keep_ts or int(time.time() * 1000)}
+            if count > 1:
+                entry["_notif_count"] = count
+            nq.append(entry)
+            if len(nq) > 200:
+                del nq[:-200]
+            return
+    elif etype == "conv_note":
+        # 注解按 note_id 幂等：SSE 重连会重放 recent_events 并再次经过本函数，
+        # 同一条注解若刷新 _notif_ts 会把已读的提及顶回未读——首写胜出，重放丢弃。
+        nid = str((evt.get("data") or {}).get("note_id")
+                  or evt.get("note_id") or "")
+        if nid and any(
+            n.get("type") == "conv_note"
+            and str((n.get("data") or {}).get("note_id")
+                    or n.get("note_id") or "") == nid
+            for n in nq
+        ):
+            return
+    nq.append({**evt, "_notif_ts": int(time.time() * 1000)})
+    if len(nq) > 200:
+        del nq[:-200]
+
+
+def customer_msgs_in_center(config: dict | None) -> bool:
+    """客户聊天消息要不要进通知中心/铃铛历史（impl85 阶段5，工单#30 钧拍板）。
+
+    「铃铛的消息中心，不用显示客户聊天记录，只需要系统的消息或需要人工处理的
+    消息」——客户消息默认**不进**（内容留在通知中心也有隐私问题；会话列表未读
+    才是它的家）。``workspace.notify_center.customer_messages: true`` 重新打开
+    （值守承诺的「想盯消息的人可以自己打开」）。系统/运维/需人工类事件不受影响。
+    """
+    try:
+        ws = (config or {}).get("workspace") or {}
+        nc = ws.get("notify_center") if isinstance(ws, dict) else None
+        if isinstance(nc, dict) and "customer_messages" in nc:
+            return bool(nc.get("customer_messages"))
+    except Exception:
+        logger.debug("[notif] notify_center 配置解析失败（按默认不进）", exc_info=True)
+    return False
+
+
+def _notif_content_ok(evt: dict, config: dict | None = None) -> bool:
+    """铃铛队列的内容级准入（类型白名单之上的第二道闸，纯函数可门禁）。
+
+    bot_peer_alert 是混合语义事件（Tier0/复读/秒回/预算共用一个类型）——
+    只有 ``reason=daily_budget``（预算触顶）值得进坐席铃铛历史：它有明确
+    的当场行动（今日继续/改人审跟进），其余判定属身份标注，收件箱徽章与
+    webhook 已覆盖。
+    impl85 阶段5：``inbox_message``（客户聊天消息）按 ``customer_msgs_in_center``
+    准入（默认不进——见该函数 docstring）。其他类型一律放行（维持旧行为）。
+    """
+    etype = (evt or {}).get("type")
+    if etype == "inbox_message":
+        return customer_msgs_in_center(config)
+    if etype != "bot_peer_alert":
+        return True
+    data = evt.get("data") or {}
+    return str(data.get("reason") or "") == "daily_budget"
+
+
+def _edge_pick(items: list, seen: set) -> list:
+    """SLA/升级边沿判定的单一口径：返回本轮「新转入」的 items，并原地维护 seen 集
+    （补新边沿 + 剔除已恢复者——恢复后再次越线可再报）。
+
+    存在的理由（2026-08-05 实锤）：连接首轮 seen 为空 → 旧逻辑把**全部在途项**当
+    新边沿逐条发帧（生产积压 ~45 条 SLA + ~45 条升级），前端每帧又各触发一次快照
+    刷新 → 冷启动瞬间 ~90 个并发 GET 把浏览器同源 6 连接吃满，页面上其余请求
+    （含 ?conv= 深链救援）整段饿死。连接期这些帧本就零信息量——工作台开页时
+    已拉过快照接口、收帧后也只是再拉一次快照。故首轮 emit=False 静默 prime
+    （升级审计副作用照跑），只有连接存续期间的**真边沿**才发帧。"""
+    fresh = [it for it in items if it["conversation_id"] not in seen]
+    seen.update(it["conversation_id"] for it in fresh)
+    seen.intersection_update({it["conversation_id"] for it in items})
+    return fresh
+
+
+def _is_loopback_client(request: Any) -> bool:
+    """maintenance-notice 的本机直通判定。
+
+    重启编排脚本没有 session/Bearer，且「宣告本进程即将停机」天然只该来自
+    同一台机器 —— loopback 即放行；其余来源回退 ``api_auth``。
+    """
+    try:
+        host = request.client.host if request.client else ""
+    except Exception:
+        host = ""
+    return host in ("127.0.0.1", "::1", "localhost")
 
 
 def register_realtime_routes(app, *, api_auth) -> None:
     """挂载 SSE 实时推送 + typing 协同端点。"""
+
+    @app.post("/api/internal/ops/maintenance-notice")
+    async def api_maintenance_notice(request: Request):
+        """内部桥（2026-07-31「连接中断」横幅根因治理）：停机前宣告计划维护窗口。
+
+        ``restart_instance.ps1`` 在 stop 之前 POST（body ``{window_sec, reason}``）：
+        登记 ``maintenance_notice`` 进程内状态（→ ``seat_restart_banner.quiet_poll``
+        折叠，见 instance_restart_status）并经 EventBus → SSE 即时广播 —— 已打开的
+        工作台把接下来的连接失败渲染为蓝色「服务维护窗口」而非红色「连接中断」，
+        轮询/SSE 重连借 ``__wsRestartCool.quiet`` 的既有消费口自动降速。
+        鉴权：loopback 直通（脚本无 session；同机才可宣告本进程维护），
+        非本机回退 ``api_auth``（Bearer/主管 session，供将来 UI 触发）。
+        """
+        if not _is_loopback_client(request):
+            api_auth(request)
+        from src.utils.maintenance_notice import set_notice
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        snap = set_notice(
+            (body or {}).get("window_sec"),
+            reason=str((body or {}).get("reason") or ""),
+        )
+        try:
+            get_event_bus().publish("maintenance_notice", {
+                "left_sec": snap["left_sec"],
+                "until_ts": snap["until_ts"],
+                "reason": snap["reason"],
+            })
+        except Exception:
+            logger.debug("maintenance_notice 事件发布失败（已忽略）", exc_info=True)
+        return {"ok": True, "maintenance": snap}
 
     @app.get("/api/workspace/stream")
     async def api_workspace_stream(request: Request):
@@ -104,22 +382,26 @@ def register_realtime_routes(app, *, api_auth) -> None:
 
         _sla_seen: set = set()
 
-        def _sla_pushes():
-            """边沿触发：返回本轮"新转入严重超时"的会话 SSE 帧（去重 + 恢复后可再报）。"""
+        def _sla_pushes(emit: bool = True):
+            """边沿触发：返回本轮"新转入严重超时"的会话 SSE 帧（去重 + 恢复后可再报）。
+
+            emit=False（连接首轮）：只 prime seen 集不发帧——在途存量对新连接零信息量，
+            逐条重放曾把浏览器连接池打满（见 _edge_pick docstring）。"""
             frames: List[str] = []
             try:
                 snap = _sla_alert_snapshot(request)
-                items = snap.get("items", [])
-                cur = {it["conversation_id"] for it in items}
-                for it in items:
-                    cid = it["conversation_id"]
-                    if cid not in _sla_seen:
-                        _sla_seen.add(cid)
+                # #144：快照 items 现含 warn 档（徽标/面板口径）；SSE toast 语义仍是
+                # 「新转入**严重**超时」——只对 crit 档边沿触发，提醒线不弹 toast。
+                crit_items = [
+                    it for it in (snap.get("items") or [])
+                    if str(it.get("level") or "crit") == "crit"]
+                fresh = _edge_pick(crit_items, _sla_seen)
+                if emit:
+                    for it in fresh:
                         frames.append(
                             "data: " + _json.dumps(
                                 {"type": "sla_alert", "data": it},
                                 ensure_ascii=False) + "\n\n")
-                _sla_seen.intersection_update(cur)
             except Exception:
                 logger.debug("SLA SSE 推送计算失败（已忽略）", exc_info=True)
             return frames
@@ -153,19 +435,17 @@ def register_realtime_routes(app, *, api_auth) -> None:
                 logger.debug("auto-assign supervisor 失败（已忽略）", exc_info=True)
                 return ""
 
-        def _esc_pushes():
-            """边沿触发：新升级 → 审计落库 + 自动指派主管 + 推定向 SSE 帧。"""
+        def _esc_pushes(emit: bool = True):
+            """边沿触发：新升级 → 审计落库 + 自动指派主管 + 推定向 SSE 帧。
+
+            emit=False（连接首轮）：审计/指派副作用**照跑**（服务重启窗口越线的升级
+            仍要有人记账），但不发帧——存量重放曾把浏览器连接池打满（见 _edge_pick）。"""
             frames: List[str] = []
             try:
                 snap = _escalation_snapshot(request)
-                items = snap.get("items", [])
-                cur = {it["conversation_id"] for it in items}
                 inbox = _inbox_store(request)
-                for it in items:
+                for it in _edge_pick(snap.get("items", []), _esc_seen):
                     cid = it["conversation_id"]
-                    if cid in _esc_seen:
-                        continue
-                    _esc_seen.add(cid)
                     assigned_to = ""
                     if inbox is not None:
                         try:
@@ -203,13 +483,13 @@ def register_realtime_routes(app, *, api_auth) -> None:
                                     pass
                         except Exception:
                             logger.debug("升级审计落库失败（已忽略）", exc_info=True)
-                    payload = dict(it)
-                    payload["assigned_to"] = assigned_to
-                    frames.append(
-                        "data: " + _json.dumps(
-                            {"type": "escalation", "data": payload},
-                            ensure_ascii=False) + "\n\n")
-                _esc_seen.intersection_update(cur)
+                    if emit:
+                        payload = dict(it)
+                        payload["assigned_to"] = assigned_to
+                        frames.append(
+                            "data: " + _json.dumps(
+                                {"type": "escalation", "data": payload},
+                                ensure_ascii=False) + "\n\n")
             except Exception:
                 logger.debug("升级 SSE 推送计算失败（已忽略）", exc_info=True)
             return frames
@@ -217,33 +497,25 @@ def register_realtime_routes(app, *, api_auth) -> None:
         def _maybe_push_notif(evt: dict):
             """将重要事件写入 app.state.notif_queue（P24 通知中心）。
 
-            复发型告警（升级/会话SLA/草稿SLA/队列/异常）按「类型+会话」合并：
-            写入前先剔除队列中同 key 的旧条，仅保留最新一条 —— 从源头避免历史里
-            同一会话堆几十条同义告警（前端亦有合并，这里是 defense-in-depth）。
+            三道闸依次过：类型白名单（_NOTIF_EVENT_TYPES，语义不动）→ i18n 人话
+            准入（_notif_type_registered，缺映射拦截+落账，工单#142）→ 内容级准入
+            （_notif_content_ok）。合并/幂等统一走 _queue_notif（复发型告警按
+            _notif_coalesce_key 只留最新一条并累计 ×N；前端亦有合并，defense-in-depth）。
             """
             etype = evt.get("type")
             if etype not in _NOTIF_EVENT_TYPES:
+                return
+            if not _notif_type_registered(etype):
+                return
+            _cm = getattr(request.app.state, "config_manager", None)
+            if not _notif_content_ok(
+                    evt, (getattr(_cm, "config", None) or {}) if _cm else None):
                 return
             nq: list = getattr(request.app.state, "notif_queue", None)
             if nq is None:
                 nq = []
                 request.app.state.notif_queue = nq
-            if etype in _COALESCE_NOTIF_TYPES:
-                d = evt.get("data") or {}
-                key = str(d.get("conversation_id") or d.get("draft_id") or d.get("id") or "")
-                if key:
-                    nq[:] = [
-                        n for n in nq
-                        if not (
-                            n.get("type") == etype
-                            and str((n.get("data") or {}).get("conversation_id")
-                                    or (n.get("data") or {}).get("draft_id")
-                                    or (n.get("data") or {}).get("id") or "") == key
-                        )
-                    ]
-            nq.append({**evt, "_notif_ts": int(time.time() * 1000)})
-            if len(nq) > 200:
-                del nq[:-200]
+            _queue_notif(nq, evt)
 
         async def _gen():
             try:
@@ -251,10 +523,10 @@ def register_realtime_routes(app, *, api_auth) -> None:
                     if evt.get("type") in _SSE_EVENT_TYPES:
                         yield f"data: {_json.dumps(evt, ensure_ascii=False)}\n\n"
                         _maybe_push_notif(evt)
-                for fr in _sla_pushes():
-                    yield fr
-                for fr in _esc_pushes():
-                    yield fr
+                # 连接首轮：静默 prime（升级审计副作用照跑）——在途存量对新连接零信息量，
+                # 逐条重放曾触发前端刷新风暴打满浏览器连接池（见 _edge_pick docstring）。
+                _sla_pushes(emit=False)
+                _esc_pushes(emit=False)
                 while True:
                     try:
                         evt = await asyncio.wait_for(queue.get(), timeout=30.0)

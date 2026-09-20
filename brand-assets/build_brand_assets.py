@@ -12,6 +12,10 @@
 
 重跑：  python build_brand_assets.py
 依赖：  Pillow >= 10, numpy；fonts/ 下 NotoSansCJKsc(Black/Bold/Medium) + Montserrat 可变字体
+
+注：幻境 STUDIO（原 AvatarHub 客户端）的客户端级图标不在本管线九产品之列，
+由 build_studio_icon.py 单独生成（复用本文件的抠白/方形化函数）；全量重跑后
+若需刷新 STUDIO 图标，另跑 `python build_studio_icon.py`。
 """
 
 import os
@@ -19,6 +23,9 @@ import sys
 import math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fill_hollow_icons import refine_master  # noqa: E402  (母版构图加工，见 build_masters)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "00_master", "src")
@@ -60,7 +67,7 @@ TAGLINE_EN = "Communication, Boundless."
 COMPANY_ZH = "无界科技"
 COMPANY_EN = "BOUNDLESS"
 
-# 三系 × 七产品（与 ai-p0-integration/website/lib/brand.ts 对齐）
+# 三系 × 八产品（与 ai-p0-integration/website/lib/brand.ts 对齐）
 CATEGORIES = {
     "growth": {"zh": "智连", "en": "Growth", "tag": "社交增长 · 从触达到成交", "accent": C("1E8CF2"),
                "ring": [C("0070F0"), C("00C2FF"), C("0070F0")]},
@@ -77,6 +84,8 @@ PRODUCTS = {  # 顺序即展示顺序
     "livex": {"zh": "幻影", "en": "LiveX", "cat": "studio", "desc": "直播实时换脸换声"},
     "lingox": {"zh": "通译", "en": "LingoX", "cat": "lingo", "desc": "多平台实时聊天互译"},
     "voxx": {"zh": "通传", "en": "VoxX", "cat": "lingo", "desc": "会议直播同声传译"},
+    "matrixx": {"zh": "智控", "en": "MatrixX", "cat": "growth", "desc": "Telegram 矩阵化运营，AI 团队协作不失控"},
+    "fatex": {"zh": "幻缘", "en": "FateX", "cat": "studio", "desc": "AI 命理陪伴：八字运势与人生 K 线"},
 }
 
 MANIFEST = []  # (relpath, "WxH", 用途)
@@ -120,14 +129,37 @@ def fit(img, w, h=None):
     s = min(w / img.width, h / img.height)
     return img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))), Image.LANCZOS)
 
-def boxed_square(img, size, pad_ratio=0.08):
+def boxed_square(img, size, pad_ratio=0.08, optical_scale=1.0):
     """等比放入正方形透明画布（统一光学边距）。官网 / 头像 / 导航共用此规格，
-    避免「裁切非方图 → object-contain 下宽扁图标视觉偏小」。"""
+    避免「裁切非方图 → object-contain 下宽扁图标视觉偏小」。
+
+    optical_scale：按 alpha 加权等效直径做光学归一（实心方块阵感观大 → <1；
+    稀疏麦克风感观小 → >1）。系数单一真相：platform/brand/optical-scale.json。
+    系数须在 (0.7, 1.3]——过大易裁切、过小留白失控。"""
     cv = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     box = int(size * (1 - 2 * pad_ratio))
+    if optical_scale and abs(optical_scale - 1.0) > 1e-3:
+        optical_scale = max(0.7, min(1.3, float(optical_scale)))
+        box = max(1, int(round(box * optical_scale)))
     m = fit(img, box, box)
     cv.paste(m, ((size - m.width) // 2, (size - m.height) // 2), m)
     return cv
+
+
+def load_optical_scales():
+    """读 platform/brand/optical-scale.json；缺失时回退空表（等同 pad-only）。"""
+    import json
+    path = os.path.normpath(os.path.join(ROOT, "..", "platform", "brand", "optical-scale.json"))
+    if not os.path.isfile(path):
+        print("[warn] optical-scale.json 缺失，产品图标不做光学补偿: " + path)
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    scales = data.get("scales") or {}
+    return {k: float(v) for k, v in scales.items()}
+
+
+PRODUCT_OPTICAL_SCALE = load_optical_scales()
 
 def scale_alpha(img, k):
     img = img.copy()
@@ -253,6 +285,11 @@ def build_masters():
     for name, fn in jobs.items():
         keyed = key_out_white(os.path.join(SRC, fn))
         keyed = autocrop(keyed, 0.02)
+        # 构图加工（空心补玻璃底 / 收外侧装饰条）必须嵌在这里：本函数每次都从 src
+        # 重新抠白覆盖 keyed，加工若只是「手工改一次 keyed」会被静默冲掉。
+        refined = refine_master(name, keyed)
+        if refined is not keyed:
+            keyed = autocrop(refined, 0.0)
         MASTERS[name] = keyed
         save_png(keyed, os.path.join(KEYED, name + "-keyed.png"), "透明底母版（抠白，防高光穿孔）")
 
@@ -282,11 +319,15 @@ def build_logos():
 def build_product_icons():
     for k in PRODUCTS:
         icon = MASTERS[k]
+        optical = PRODUCT_OPTICAL_SCALE.get(k, 1.0)
         for s in [512, 256, 128]:
             save_png(
-                boxed_square(icon, s, 0.08),
+                boxed_square(icon, s, 0.08, optical_scale=optical),
                 os.path.join(DIR_PICONS, k, "%s-%d.png" % (k, s)),
-                "%s %s 图标 透明底正方形 %dpx（pad 8%%）" % (PRODUCTS[k]["zh"], PRODUCTS[k]["en"], s),
+                "%s %s 图标 透明底正方形 %dpx（pad 8%%%s）" % (
+                    PRODUCTS[k]["zh"], PRODUCTS[k]["en"], s,
+                    "" if abs(optical - 1.0) < 1e-3 else (", optical×%.2f" % optical),
+                ),
             )
 
 # ---------------------------------------------------------------- 03 组合标
@@ -624,7 +665,7 @@ def build_matrix_poster():
     cv.alpha_composite(row, (margin, 66))
     tr = tagline_row(30, dark=True)
     cv.alpha_composite(tr, (w - margin - tr.width, 66 + row.height // 2 - tr.height // 2))
-    sub = render_text("三大产品系 · 七款产品 · 打破每一种「界」", font_noto(40, "bold"), (255, 255, 255, 225), tracking=4)
+    sub = render_text("三大产品系 · 八款产品 · 打破每一种「界」", font_noto(40, "bold"), (255, 255, 255, 225), tracking=4)
     cv.paste(sub, (margin, 66 + row.height + 34), sub)
     # 三列卡片（画在独立 overlay 上再 alpha_composite——ImageDraw 直接带 alpha
     # 画到画布会“替换”像素而非叠加，导致卡片区域透明、白字不可见）
@@ -666,11 +707,11 @@ def build_matrix_poster():
             cv.paste(ds, (x + 30 + 110, py + 14 + nm_zh.height), ds)
             py += 128
         x += card_w + gap
-    ft = render_text("无界底座 BOUNDLESS Engine — 一套底座，托起三系七款产品",
+    ft = render_text("无界底座 BOUNDLESS Engine — 一套底座，托起三系八款产品",
                      font_noto(30, "medium"), (255, 255, 255, 140), tracking=2)
     paste_cx(cv, ft, w / 2, h - 68)
     save_png(cv, os.path.join(DIR_BG, "matrix-poster-1920x1080.png"),
-             "产品矩阵总览海报（母品牌 + 三系七产品，一图讲清）")
+             "产品矩阵总览海报（母品牌 + 三系八产品，一图讲清）")
 
 # ---------------------------------------------------------------- MANIFEST
 

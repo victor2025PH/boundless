@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 _DAY = 86400.0
 _RETAIN_DAYS = 90  # 审计保留 90 天（够看季度健康史；表恒小）
 
+#: **数据主权类**事件：客户资产被谁在什么时候导出/清除/迁移的凭证。
+#: 与运维健康史（暂停/风控/熔断——看季度趋势 90 天足够）不是一个用途：
+#: 资产中心「快照 / 导出台账」是「资产保全」这个承诺的**唯一证据面**，
+#: 90 天后自动消失等于「三个月前那批客户数据是谁带走的」永久查不到。
+#: 单独给更长保留期而不是整表放宽——运维事件是高频的（限速触顶/风控每天都写），
+#: 整表放宽会让表无界增长；这几类是低频人工动作，两年也只有几百行。
+_CUSTODY_KINDS = (
+    "account_export",
+    "account_purge",
+    "account_export_migration",
+    "account_snapshot",
+    "asset_snapshot",
+)
+_CUSTODY_RETAIN_DAYS = 730  # 两年（够覆盖一个完整的合规追溯周期）
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS ops_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +113,75 @@ class OpsEventStore:
             row = self._conn.execute(q, args).fetchone()
         return int((row[0] if row else 0) or 0)
 
+    def recent_kinds(self, kinds: List[str], *, limit: int = 50) -> List[Dict[str, Any]]:
+        """跨账号取指定 kind 集合的近期事件（资料审计流：不按号，按全局时间线）。"""
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return []
+        ph = ",".join("?" * len(ks))
+        q = ("SELECT ts, platform, account_id, kind, reason, detail "
+             f"FROM ops_events WHERE kind IN ({ph}) ORDER BY id DESC LIMIT ?")
+        with self._lock:
+            rows = self._conn.execute(q, [*ks, int(limit)]).fetchall()
+        return [dict(r) for r in rows]
+
+    def daily_kinds(self, kinds: List[str], *, days: int = 7) -> List[Dict[str, Any]]:
+        """指定 kind 集合近 N 天按天聚合 {date, total, ok, failed}（本地日历日）。
+
+        用 sqlite ``date(ts,'unixepoch','localtime')`` 分组；``reason='ok'`` 计成功。
+        返回按日期升序，只含有事件的天（前端补零/画柱）。
+        """
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return []
+        ph = ",".join("?" * len(ks))
+        since = time.time() - float(days) * _DAY
+        q = (
+            "SELECT date(ts,'unixepoch','localtime') AS d, "
+            "COUNT(*) AS total, "
+            "SUM(CASE WHEN reason='ok' THEN 1 ELSE 0 END) AS ok "
+            f"FROM ops_events WHERE ts>=? AND kind IN ({ph}) "
+            "GROUP BY d ORDER BY d ASC"
+        )
+        with self._lock:
+            rows = self._conn.execute(q, [since, *ks]).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            total = int(r["total"] or 0)
+            ok = int(r["ok"] or 0)
+            out.append({"date": str(r["d"]), "total": total,
+                        "ok": ok, "failed": max(0, total - ok)})
+        return out
+
+    def reason_summary(self, kinds: List[str], *, days: int = 7) -> Dict[str, Dict[str, Any]]:
+        """近 N 天指定 kind 集合的 ``{kind: {total, ok, by_reason}}``。
+
+        消息管理审计卡口径（2026-08-17 P2）：``reason='ok'`` 计成功，其余 reason
+        逐值分桶——撤回失败归因分布（no_worker/service_error/超时限被平台拒…）
+        直接可读，是「要不要加 N 分钟内可撤前端预判」的判据数据。
+        """
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return {}
+        ph = ",".join("?" * len(ks))
+        since = time.time() - float(days) * _DAY
+        q = (f"SELECT kind, reason, COUNT(*) AS n FROM ops_events"
+             f" WHERE ts>=? AND kind IN ({ph}) GROUP BY kind, reason")
+        with self._lock:
+            rows = self._conn.execute(q, [since, *ks]).fetchall()
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            kind = str(r["kind"])
+            n = int(r["n"] or 0)
+            reason = str(r["reason"] or "") or "unknown"
+            ent = out.setdefault(kind, {"total": 0, "ok": 0, "by_reason": {}})
+            ent["total"] += n
+            if reason == "ok":
+                ent["ok"] += n
+            else:
+                ent["by_reason"][reason] = int(ent["by_reason"].get(reason, 0)) + n
+        return out
+
     def summary(self, *, account_id: str = "", days: int = 7) -> Dict[str, Any]:
         """近 N 天各类事件计数（「号健康史」概览：paused/banned/… 各几次）。"""
         since = time.time() - float(days) * _DAY
@@ -114,8 +198,23 @@ class OpsEventStore:
                 "total": sum(by_kind.values()), "by_kind": by_kind}
 
     def _prune_locked(self, before_ts: float) -> None:
+        """清理陈旧行。``before_ts`` 是**普通运维事件**的截止线。
+
+        数据主权类事件（``_CUSTODY_KINDS``）走各自更长的保留期——它们是资产被
+        导出/清除的凭证，与「这号这周被风控几次」的健康史不是一个用途。两条
+        DELETE 而不是一条带 CASE：kind 列有索引，分开写两边都吃
+        ``idx_ops_events_kind_ts``，且语义一眼可读。
+        """
         try:
-            self._conn.execute("DELETE FROM ops_events WHERE ts<?", (float(before_ts),))
+            ph = ",".join("?" * len(_CUSTODY_KINDS))
+            self._conn.execute(
+                f"DELETE FROM ops_events WHERE ts<? AND kind NOT IN ({ph})",
+                (float(before_ts), *_CUSTODY_KINDS))
+            # 凭证类的截止线由自己的保留期算，**不跟随入参**：调用方传的是普通
+            # 事件的窗口，若拿它去删凭证就等于这条豁免根本没生效。
+            self._conn.execute(
+                f"DELETE FROM ops_events WHERE ts<? AND kind IN ({ph})",
+                (time.time() - _CUSTODY_RETAIN_DAYS * _DAY, *_CUSTODY_KINDS))
             self._conn.commit()
         except Exception:
             logger.debug("[ops_events] prune 失败（忽略）", exc_info=True)
@@ -139,6 +238,15 @@ def get_ops_event_store(db_path: str = "config/ops_events.db") -> Optional[OpsEv
     return _store
 
 
+def peek_ops_event_store() -> Optional[OpsEventStore]:
+    """只探测既有单例，绝不新建（与 peek_goal_store 同纪律，2026-08-23）。
+
+    周报等聚合读方用它：``get_ops_event_store`` 的缺省路径是 CWD 相对——从
+    引擎根跑的 CLI 会在仓库里凭空建一个空库并把「零事件」误报成事实。
+    """
+    return _store
+
+
 def reset_ops_event_store() -> None:
     """测试辅助：清空单例。"""
     global _store
@@ -146,4 +254,5 @@ def reset_ops_event_store() -> None:
         _store = None
 
 
-__all__ = ["OpsEventStore", "get_ops_event_store", "reset_ops_event_store"]
+__all__ = ["OpsEventStore", "get_ops_event_store", "peek_ops_event_store",
+           "reset_ops_event_store"]

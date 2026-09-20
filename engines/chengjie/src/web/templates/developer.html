@@ -2,6 +2,7 @@
 {% block title %}{{ (i18n or {}).get('dv_s001', "开发者工具") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
 {% block page_title %}{{ (i18n or {}).get('dv_s001', "开发者工具") }}{% endblock %}
 {% block head %}
+<script>if(location.hash==='#dvmr') location.replace('/model-keys');</script>
 <style>
 .dev-login{max-width:400px;margin:4rem auto;text-align:center}
 .dev-login h2{font-size:1.4rem;font-weight:700;margin-bottom:.5rem}
@@ -51,7 +52,7 @@
 .dev-warn-banner strong{color:var(--t)}
 .dev-logout-btn{background:none;border:1px solid var(--bd);color:var(--t3);cursor:pointer;font-size:.75rem;padding:.3rem .7rem;border-radius:6px;margin-left:auto;flex-shrink:0}
 .dev-logout-btn:hover{background:var(--input);color:var(--t)}
-.ai-status-card{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;padding:.75rem;border:1px solid var(--bd);border-radius:10px;background:rgba(91,124,246,.06);margin-bottom:.9rem}
+.ai-status-card{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;padding:.75rem;border:1px solid var(--bd);border-radius:10px;background:color-mix(in srgb, var(--p,#1e8cf2) 6%, transparent);margin-bottom:.9rem}
 .ai-status-item{min-width:0}
 .ai-status-lbl{font-size:.68rem;color:var(--t3);margin-bottom:.18rem}
 .ai-status-val{font-size:.82rem;color:var(--t);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -99,7 +100,7 @@
   <!-- ══ AI 接口配置 ═════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd open" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#5b7cf6,#8b5cf6)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-brand,#5b7cf6),var(--th-bg-violet5,#8b5cf6))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
       </div>
       <div>
@@ -209,6 +210,33 @@
 
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
 
+      <!-- 🏠 主对话模型位置（ai.primary）：自托管隐私档；写 overlay + 热重建，免重启。 -->
+      <div class="f-row" id="dv-ai-primary-card">
+        <div class="f-lbl">🏠 {{ (i18n or {}).get('dv_ai_p_title', "主对话模型位置") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_ai_p_sub', "决定聊天内容走云端还是本机 GPU。local_only＝严格隐私。") }}</div>
+        <div id="dv-ai-primary-status" style="margin:.4rem 0;font-size:.8rem;color:var(--t2)"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0">
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="cloud">
+            {{ (i18n or {}).get('dv_ai_p_mode_cloud', "云端优先（默认）") }}
+          </label>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="local">
+            {{ (i18n or {}).get('dv_ai_p_mode_local', "本地优先（挂了可回落云）") }}
+          </label>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="local_only">
+            {{ (i18n or {}).get('dv_ai_p_mode_local_only', "仅本地（绝不上传）") }}
+          </label>
+        </div>
+        <div class="save-bar">
+          <span class="save-result" id="dv-ai-primary-res"></span>
+          <button class="btn btn-p btn-sm" type="button" onclick="dvAiPrimarySave()">{{ (i18n or {}).get('dv_ai_p_btn_save', "切换并生效") }}</button>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
       <!-- ☁️ 云端凭证 / 备用 Key 池（P-KeyPool 2026-07-12）：主 Key 挂了自动切备用；
            此卡=余额/探活体检 + 备用 Key 编辑（保存即热生效，无需重启）。 -->
       <div class="f-row">
@@ -232,6 +260,89 @@
           <button class="btn btn-s btn-sm" onclick="dvccProbe()">{{ (i18n or {}).get('dv_cc_btn_probe', "立即体检") }}</button>
           <button class="btn btn-p btn-sm" onclick="dvccSave()">{{ (i18n or {}).get('dv_cc_btn_save', "保存并生效") }}</button>
         </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
+      <!-- 多模型路由已迁到 /model-keys（登录即可，无需开发者密码）。#dvmr 锚保留给旧书签。 -->
+      <div class="f-row" id="dvmr">
+        <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_mr_title', "多模型路由（按任务挑模型）") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_mr_moved', "多模型路由已移到侧栏「模型与密钥」，登录即可进入，无需开发者密码。") }}</div>
+        <div class="save-bar">
+          <a class="btn btn-p btn-sm" href="/model-keys">{{ (i18n or {}).get('dv_mr_moved_btn', "前往模型与密钥") }}</a>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
+      <!-- 👁️ 内部功能显隐（ui_visibility，2026-08-14）：内部/运维界面默认对
+           坐席隐藏，此处按键开启（即点即存，写 overlay 热生效）。单源判定
+           src/web/ui_visibility.py；桌面壳经 GET /api/desktop/ui-flags 消费。 -->
+      <div class="f-row">
+        <div class="f-lbl">👁️ {{ (i18n or {}).get('dv_uiv_title', "内部功能显隐") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_uiv_sub', "以下内部/运维界面默认对坐席隐藏，按需开启（写 config.local.yaml 热生效免重启；隐藏只藏入口与渲染，URL/API 不封）。") }}</div>
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin:.5rem 0">
+          {% set _uiv = ui_vis or {} %}
+          {# 只渲染运行中进程认识的键（`_k in _uiv`）：模板热更新先于重启上线，
+             新键的开关行提前渲染会「点了报 404 未知键」——按键在场再显示。 #}
+          {% for _k in ['manual_console', 'group_extract', 'matrix_nav', 'group_show', 'team_collab', 'ai_settings', 'cockpit'] if _k in _uiv %}
+          <label style="display:flex;align-items:flex-start;gap:.55rem;cursor:pointer">
+            <input type="checkbox" id="dvuiv-{{ _k }}" style="margin-top:.2rem"
+                   {% if _uiv.get(_k) %}checked{% endif %}
+                   onchange="dvUivToggle('{{ _k }}', this)">
+            <span>
+              <b style="font-size:.85rem">{{ (i18n or {}).get('dv_uiv_k_' + _k, _k) }}</b>
+              <span class="ai-pill" id="dvuiv-pill-{{ _k }}" style="margin-left:.4rem">{{ (i18n or {}).get('dv_uiv_on' if _uiv.get(_k) else 'dv_uiv_off', '') }}</span>
+              <br><span style="font-size:.75rem;color:var(--t2)">{{ (i18n or {}).get('dv_uiv_k_' + _k + '_d', '') }}</span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_uiv_note_desktop', "「人工操作台」桌面壳形态需重启壳应用后完全生效；网页侧刷新即生效。") }}</div>
+        <div class="save-bar"><span class="save-result" id="dvuiv-res"></span></div>
+      </div>
+
+      <!-- 🧪 开发者模式（L-4 A 2026-09-06，D-L2）：client 形态（客户桌面包）把研发面 /
+           代理商面从侧栏与页内藏掉；内部人在客户机排障时在这里临时打开——只写 session，
+           退出登录 / 锁回开发者工具即自动关，不落配置文件。判定单源 ui_visibility.py。 -->
+      <div class="f-row" id="dv-devmode-row">
+        <div class="f-lbl">🧪 {{ (i18n or {}).get('dv_devmode_title', "开发者模式（客户机看研发面）") }}</div>
+        <div class="f-hint">
+          {% set _fl = ui_flavor or 'internal' %}
+          {{ (i18n or {}).get('dv_devmode_flavor', "当前形态") }}：<b>{% if _fl == 'client' %}{{ (i18n or {}).get('dv_devmode_flavor_client', "用户版（client）") }}{% elif _fl == 'partner' %}{{ (i18n or {}).get('dv_devmode_flavor_partner', "代理商版（partner）") }}{% else %}{{ (i18n or {}).get('dv_devmode_flavor_internal', "研发版（internal）") }}{% endif %}</b>。
+          {{ (i18n or {}).get('dv_devmode_sub', "用户版（client）会隐藏研发页（帮助 / 回复策略 / 歌房 / 声音评测 / 实时日志 / 开发者工具 / 报障工单）和代理商面（白标 / 演示数据 / 授权）。打开后这些项带「研发 / 代理商」角标回到侧栏与页面；只对当前登录会话生效，退出登录自动关闭。") }}
+        </div>
+        <label style="display:flex;align-items:flex-start;gap:.55rem;cursor:pointer;margin:.5rem 0">
+          <input type="checkbox" id="dv-devmode-cb" style="margin-top:.2rem"
+                 {% if ui_developer_mode %}checked{% endif %}
+                 {% if (ui_flavor or 'internal') != 'client' %}disabled{% endif %}
+                 onchange="dvDevModeToggle(this)">
+          <span>
+            <b style="font-size:.85rem">{{ (i18n or {}).get('dv_devmode_cb', "在本机显示被用户版隐藏的项") }}</b>
+            <span class="ai-pill" id="dv-devmode-pill" style="margin-left:.4rem">{{ (i18n or {}).get('dv_uiv_on' if ui_developer_mode else 'dv_uiv_off', '') }}</span>
+            {% if (ui_flavor or 'internal') != 'client' %}
+            <br><span style="font-size:.75rem;color:var(--t2)">{{ (i18n or {}).get('dv_devmode_na', "当前不是用户版形态，所有项本就可见，无需开启。") }}</span>
+            {% endif %}
+          </span>
+        </label>
+        <div class="save-bar"><span class="save-result" id="dv-devmode-res"></span></div>
+      </div>
+
+      <!-- 🧭 业务域（N-3 #241 / D-N1，2026-09-08）：这台机器做什么生意的单一真值。
+           陪伴 = 不注册 ConversionDomainHook / 不下发「转化成交」模板 / 摸底槽位与画像走陪伴集
+           / KB 不预置支付话术；销售 = 旧行为。值经 GET /api/developer/business-domain 拉取
+           （不依赖模板上下文——模板热更新先于重启，端点缺席时整块提示「重启后可用」）。 -->
+      <div class="f-row" id="dv-bd-row">
+        <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_bd_title', "业务域（这台机器做什么生意）") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_bd_sub', "陪伴：工作目标不出现「转化成交」类目，客户摸底 / 画像用陪伴标签集（称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产），知识库不预置支付话术。销售：保留商机标签（痛点 / 平台 / 团队 / 预算 / 决策 / 上线）与成交字段。改动写 config.local.yaml；模板 / 标签 / 画像即时生效，Domain hook 与知识库分类重启后跟随。") }}</div>
+        <div style="display:flex;align-items:center;gap:.6rem;margin:.5rem 0;flex-wrap:wrap">
+          <select id="dv-bd-sel" style="min-width:12rem" disabled onchange="dvBdChange(this)">
+            <option value="">{{ (i18n or {}).get('dv_bd_loading', "读取中…") }}</option>
+          </select>
+          <span class="ai-pill" id="dv-bd-pill"></span>
+          <span style="font-size:.75rem;color:var(--t2)" id="dv-bd-src"></span>
+        </div>
+        <div class="save-bar"><span class="save-result" id="dv-bd-res"></span></div>
       </div>
 
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
@@ -302,7 +413,7 @@
   <!-- ══ 意图路由管理 ══════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet6,#7c3aed))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
       </div>
       <div>
@@ -331,7 +442,7 @@
   <!-- ══ Web 管理安全 ════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
       </div>
       <div>
@@ -361,7 +472,7 @@
         <label class="f-lbl">Session {{ (i18n or {}).get('dv_s057', "密钥（Secret Key）") }}<span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span></label>
         <div class="masked-row">
           <input class="f-inp" type="password" id="wb-secret_key"
-            placeholder="{{ (i18n or {}).get('dv_s056', '留空保留原值') }}">
+            placeholder="{% if wb_secret_state == 'set' %}{{ (i18n or {}).get('dv_secret_set', '已自动生成，留空保留') }}{% else %}{{ (i18n or {}).get('dv_secret_default', '仍是出厂默认值（桌面版首启会自动生成）') }}{% endif %}">
           <button type="button" class="show-btn" onclick="toggleMask('wb-secret_key',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
         </div>
         <div class="f-hint">{{ (i18n or {}).get('dv_s058', "用于加密 Cookie，修改会导致所有会话失效（需重新登录）") }}</div>
@@ -376,7 +487,7 @@
   <!-- ══ 通知 Webhook ═════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber6,#d97706))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
       </div>
       <div>
@@ -422,7 +533,7 @@
   <!-- ══ Bot 行为配置 ══════════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-cyan5,#06b6d4),var(--th-bg-cyan6,#0891b2))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       </div>
       <div>
@@ -479,7 +590,116 @@
     </div>
   </div>
 
-  <!-- ══ 回复逻辑管理 ══════════════════════════════════════════ -->
+  <!-- ══ 样式指南（活体，2026-08-22 P4）═══════════════════════════
+     Phase0-3 立的界面规矩的单一陈列处：徽标三级制/行动药丸/chip/骨架配方/空态三件套
+     + token 映射 + 发布纪律。全部静态样例零 JS；样例用本壳（base.html）令牌，
+     工作台侧对应类名在注释里点名。规则的机器执行面在各门禁（哑按钮/跨作用域/
+     编码完整性/密度 ratchet/主题对比度），这里是给人看的样板间。 -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#ec4899)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><circle cx="11" cy="11" r="2"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">🎨 {{ (i18n or {}).get('dv_sg_title', "样式指南（活体）") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_sg_sub', "徽标 · 药丸 · chip · 骨架屏 · 空态——新界面照抄这里的样板与禁则") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-styleguide">
+      <style>
+        /* 样式指南局部样例（.dv-sg 作用域；只服务本段展示，别的页面禁引用样例类） */
+        .dv-sg{display:flex;flex-direction:column;gap:1rem;font-size:.85rem}
+        .dv-sg h4{margin:.2rem 0 .4rem;font-size:.92rem}
+        .dv-sg .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+        .dv-sg .note{color:var(--t3);font-size:.76rem;line-height:1.7}
+        .dv-sg code{background:var(--input);border:1px solid var(--bd);border-radius:5px;padding:.05rem .35rem;font-size:.74rem}
+        .dv-sg .sg-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:15px;padding:0 4px;border-radius:999px;font-size:10px;font-weight:700;background:#64748b;color:#fff}
+        .dv-sg .sg-badge.attn{background:var(--red)}
+        .dv-sg .sg-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#94a3b8}
+        .dv-sg .sg-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid}
+        .dv-sg .sg-pill.sev{background:rgba(225,29,72,.09);color:var(--red);border-color:rgba(225,29,72,.36)}
+        .dv-sg .sg-pill.rev{background:rgba(245,158,11,.12);color:var(--amber);border-color:rgba(245,158,11,.45)}
+        .dv-sg .sg-pill.task{background:rgba(8,145,178,.08);color:#0891b2;border-color:rgba(6,182,212,.35)}
+        .dv-sg .sg-chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:12px;border:1px solid var(--bd);background:var(--input);color:var(--t2)}
+        .dv-sg .sg-chip.active{border-color:var(--p);color:var(--p);background:color-mix(in srgb,var(--p) 10%,transparent)}
+        .dv-sg .sg-skel{position:relative;overflow:hidden;background:color-mix(in srgb,var(--t3) 16%,transparent);border-radius:6px}
+        .dv-sg .sg-skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--t3) 13%,transparent),transparent);animation:dvSgSweep 1.4s infinite}
+        @keyframes dvSgSweep{to{transform:translateX(100%)}}
+        @media (prefers-reduced-motion: reduce){.dv-sg .sg-skel::after{animation:none}}
+        .dv-sg .sg-empty{border:1px dashed var(--bd);border-radius:12px;padding:1.1rem;text-align:center;max-width:380px}
+        .dv-sg table{border-collapse:collapse;font-size:.76rem}
+        .dv-sg td,.dv-sg th{border:1px solid var(--bd);padding:.3rem .55rem;text-align:left}
+      </style>
+      <div class="dv-sg">
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h1', "① 徽标三级制（2026-08-22 真相化）") }}</h4>
+          <div class="row">
+            <span>{{ (i18n or {}).get('dv_sg_b1a', "需人工：") }}<span class="sg-badge attn">2</span></span>
+            <span>{{ (i18n or {}).get('dv_sg_b1b', "仅未读：") }}<span class="sg-dot"></span></span>
+            <span>{{ (i18n or {}).get('dv_sg_b1c', "无事：") }}<code>{{ (i18n or {}).get('dv_sg_b1d', "不渲染") }}</code></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n1', "红=需人工，数字必须是可行动数；纯未读降为中性小点。实现参照：") }}
+            <code>unified_inbox.html::_navBadgeHtml / _acUnreadBadge</code></div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h2', "② 行动药丸（顶栏紧急度单轴）") }}</h4>
+          <div class="row">
+            <span class="sg-pill sev">{{ (i18n or {}).get('dv_sg_p_sev', "急需处理") }} <b>94</b></span>
+            <span class="sg-pill rev">{{ (i18n or {}).get('dv_sg_p_rev', "发前确认") }} <b>11</b></span>
+            <span class="sg-pill task">{{ (i18n or {}).get('dv_sg_p_task', "待跟进") }} <b>3</b></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n2', "数字=可行动数；点击直达处理面；零数据整颗隐藏。") }}
+            <code>_setPill</code> · <code>window._ui</code></div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h3', "③ Chip（筛选/分类）") }}</h4>
+          <div class="row"><span class="sg-chip active">{{ (i18n or {}).get('dv_sg_c1', "待处理 2") }}</span><span class="sg-chip">{{ (i18n or {}).get('dv_sg_c2', "已结案 0") }}</span><span class="sg-chip">{{ (i18n or {}).get('dv_sg_c3', "全部") }}</span></div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n3', "六家族共用一份度量——别造第七套尺寸。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h4', "④ 骨架屏三配方") }}</h4>
+          <div class="row">
+            <span>{{ (i18n or {}).get('dv_sg_k1', "KPI：") }}<span class="sg-skel" style="display:inline-block;width:56px;height:22px"></span></span>
+            <span style="flex:1;min-width:180px">{{ (i18n or {}).get('dv_sg_k2', "列表行：") }}<span class="sg-skel" style="display:block;height:14px;margin:4px 0"></span><span class="sg-skel" style="display:block;height:14px;width:72%"></span></span>
+            <span style="flex:1;min-width:160px">{{ (i18n or {}).get('dv_sg_k3', "图表：") }}<span class="sg-skel" style="display:block;height:60px;border-radius:10px"></span></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n4', "工作台侧现成类 .tk-skel 家族；管理台侧拷贝本段配方。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h5', "⑤ 空态三件套（图标 + 一句话 + 主 CTA）") }}</h4>
+          <div class="sg-empty">
+            <div style="font-size:1.8rem">📚</div>
+            <div style="margin:.35rem 0 .6rem;color:var(--t2)">{{ (i18n or {}).get('dv_sg_e1', "还没有知识条目——添加后 AI 回答会引用这里的内容") }}</div>
+            <button class="btn btn-p" type="button" style="pointer-events:none">{{ (i18n or {}).get('dv_sg_e2', "＋ 新建条目") }}</button>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n5', "一句话说清「为什么空+下一步」；CTA 直达动作。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h6', "⑥ Token 映射与禁则") }}</h4>
+          <table>
+            <tr><th>{{ (i18n or {}).get('dv_sg_t0', "语义") }}</th><th>{{ (i18n or {}).get('dv_sg_t1', "工作台壳（--tk-*）") }}</th><th>{{ (i18n or {}).get('dv_sg_t2', "管理台壳（base）") }}</th><th>{{ (i18n or {}).get('dv_sg_t3', "内联迁移层") }}</th></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r1', "正文/次要文字") }}</td><td>--tk-text / --tk-text-muted</td><td>--t / --t2 / --t3</td><td>--th-ink-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r2', "面/边/输入面") }}</td><td>--tk-surface / --tk-border</td><td>--card / --bd / --input</td><td>--th-bg-* / --th-bd-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r3', "语义色（文字）") }}</td><td>--tk-*-ink</td><td>--red / --amber / --green</td><td>--th-ink-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r4', "品牌强调") }}</td><td>--tk-brand</td><td>--p</td><td>--th-bg-brand</td></tr>
+          </table>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n6', "禁则：JS 禁裸 hex；文字禁 opacity 调灰；暗色走令牌自适配；SVG 主题色走 style 变量。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h7', "⑦ 发布纪律清单（每批前端落地必做）") }}</h4>
+          <div class="note">
+            1. {{ (i18n or {}).get('dv_sg_n7a', "双戳：bump ui-build + CSS ?v=；") }}<br>
+            2. {{ (i18n or {}).get('dv_sg_n7b', "gate_sweep 收口；") }}<br>
+            3. {{ (i18n or {}).get('dv_sg_n7c', "共享组件改动跑 sync_copilot_mirror.py；") }}<br>
+            4. {{ (i18n or {}).get('dv_sg_n7d', "文件拷贝一律二进制语义。") }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<!-- ══ 回复逻辑管理 ══════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,#ec4899,#db2777)">
@@ -647,11 +867,11 @@ async function saveSection(section){
   resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
   try{
     const fields = _getFields(prefix);
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section, fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return null; }
     resEl.textContent = window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';
@@ -668,23 +888,23 @@ async function switchAiPreset(kind){
   const presets = {
     local: {
       mode: 'local',
-      /* 176(5090) 与 ai.fallback 兜底同栈同模型（旧值 192.168.0.184 是网段迁移前的死主机）；
-         timeout 120 覆盖冷载 ~30-60s，热答秒级 */
-      base_url: 'http://192.168.0.176:11434/v1',
-      model: 'qwen3:30b-a3b-instruct-2507-q4_K_M',
-      embedding_model: '',
-      temperature: '0.8',
+      /* 2026-08-16 校正：本地主链统一指 173 常驻 chatx（Qwen3.6-27B-abl-awq，vLLM 7x24
+         常暖、热答 ~2s）——旧值 176:11434 qwen3:30b(17G) 违反集群显存纪律（176 兼任
+         MT/嵌入/视觉），且与 ai.primary/ai.fallback 的本地链（同为 173 chatx）分叉。 */
+      base_url: 'http://192.168.0.173:8001/v1',
+      model: 'chatx',
+      temperature: '0.7',
       max_tokens: '2048',
-      timeout: '120',
+      timeout: '60',
     },
     deepseek: {
       mode: 'deepseek',
       base_url: 'https://api.deepseek.com/v1',
-      model: 'deepseek-chat',
-      embedding_model: '',
+      /* deepseek-chat 是旧别名（服务端现路由到 v4-flash）；写现役模型名防别名哪天下线 */
+      model: 'deepseek-v4-flash',
       temperature: '0.7',
       max_tokens: '2048',
-      timeout: '60',
+      timeout: '40',
     },
   };
   const p = presets[kind];
@@ -692,7 +912,8 @@ async function switchAiPreset(kind){
   document.getElementById('ai-mode').value = p.mode;
   document.getElementById('ai-base_url').value = p.base_url;
   document.getElementById('ai-model').value = p.model;
-  document.getElementById('ai-embedding_model').value = p.embedding_model;
+  /* 刻意不碰 ai-embedding_model：预设曾把它填空再整段保存 → 服务端空值保护白名单
+     不含该键，bge-m3 被清空=记忆向量/语义闸门静默失效。嵌入配置与主链模式正交。 */
   document.getElementById('ai-temperature').value = p.temperature;
   document.getElementById('ai-max_tokens').value = p.max_tokens;
   document.getElementById('ai-timeout').value = p.timeout;
@@ -724,11 +945,11 @@ async function saveVoiceAi(){
     owner_consent: document.getElementById('vai-owner_consent').checked,
   };
   try{
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section:'voice_ai', fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     document.getElementById('vai-dashscope_api_key').value = '';
@@ -745,7 +966,7 @@ async function testApiConn(opts){
   resEl.textContent = window.T('dv_js006'); resEl.className='save-result';
   refreshAiStatus(window.T('dv_js006'));
   try{
-    const r = await fetch('/api/setup/test-ai',{
+    const r = await apiFetch('/api/setup/test-ai',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -753,7 +974,7 @@ async function testApiConn(opts){
         base_url: document.getElementById('ai-base_url').value.trim(),
         model:    document.getElementById('ai-model').value.trim(),
       }),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     resEl.textContent = (d.ok?'✓ ':'✗ ') + d.msg;
     resEl.className = 'save-result '+(d.ok?'ok':'err');
@@ -767,6 +988,55 @@ async function testApiConn(opts){
 }
 
 // ── ☁️ 云端凭证体检 / 备用 Key 池（P-KeyPool 2026-07-12）──────────
+// 🏠 主对话模式（ai.primary）：读 GET /api/setup/ai 或 cloud-credentials.primary；
+// 写 POST /api/setup/ai-primary → overlay + reload_ai_runtime。
+function _dvAiPrimaryPaint(p){
+  p = p || {};
+  const st = document.getElementById('dv-ai-primary-status');
+  const eff = p.effective || p.configured || 'cloud';
+  document.querySelectorAll('input[name="dv-ai-primary"]').forEach(el=>{
+    el.checked = (el.value === (p.configured || eff));
+  });
+  if(!st) return;
+  const bits = [];
+  bits.push('<b>' + _dvccEsc(eff) + '</b>');
+  if(p.local_model) bits.push(window.T('dv_ai_p_local_model') + ' ' + _dvccEsc(p.local_model));
+  if(!p.local_ready) bits.push('<span style="color:var(--th-ink-red6,#b91c1c)">' + window.T('dv_ai_p_not_ready') + '</span>');
+  if(p.divergent) bits.push('<span style="color:var(--th-ink-amber7,#b45309)">'
+    + window.Tf('dv_ai_p_divergent', {configured: p.configured || '?', effective: eff}) + '</span>');
+  st.innerHTML = bits.join(' · ');
+}
+
+async function dvAiPrimaryLoad(){
+  try{
+    const r = await apiFetch('/api/setup/ai', {credentials:'same-origin'});
+    const d = await r.json();
+    if(d && d.ok && d.primary) _dvAiPrimaryPaint(d.primary);
+  }catch(e){ /* 卡片缺席即可 */ }
+}
+
+async function dvAiPrimarySave(){
+  const res = document.getElementById('dv-ai-primary-res');
+  const picked = document.querySelector('input[name="dv-ai-primary"]:checked');
+  if(!picked){ if(res){ res.textContent = window.T('dv_ai_p_need_pick'); res.className = 'save-result err'; } return; }
+  if(res){ res.textContent = window.T('dv_ai_p_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/setup/ai-primary', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({primary: picked.value}),
+    }, {timeoutMs: 60000});
+    const d = await r.json();
+    if(!d.ok){ if(res){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; } return; }
+    if(res){
+      res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
+      res.className = 'save-result ok';
+    }
+    if(d.primary) _dvAiPrimaryPaint(d.primary);
+  }catch(e){
+    if(res){ res.textContent = '✗ ' + (e.message || window.T('inbox.voice.unknown_err')); res.className = 'save-result err'; }
+  }
+}
+
 // 主 Key 失效自动切备用（ai.key_pool）；此卡读 /api/setup/cloud-credentials 出
 // 余额/探活/顶班现状，编辑走 POST /api/setup/key-pool（掩码回传保真密钥，热生效）。
 let _dvccKeys = [];
@@ -789,7 +1059,7 @@ function _dvccRender(rt, pings){
     const r = rt[k.name] || {};
     const p = pings[k.name];
     const chips = [];
-    if(r.cooling) chips.push('<span class="ai-pill" style="color:#dc2626">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
+    if(r.cooling) chips.push('<span class="ai-pill" style="color:var(--th-ink-red6,#b91c1c)">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
     if(p) chips.push('<span class="ai-pill">' + window.T('dv_cc_js_ping') + ' ' + (p.ok ? '🟢' : '🔴') + '</span>');
     return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
       + '<b style="min-width:90px">' + _dvccEsc(k.name) + '</b>'
@@ -804,7 +1074,7 @@ async function dvccLoad(probe){
   const st = document.getElementById('dvcc-status');
   if(!st) return;
   try{
-    const r = await fetch('/api/setup/cloud-credentials' + (probe ? '?probe=1' : ''), {credentials:'same-origin'});
+    const r = await apiFetch('/api/setup/cloud-credentials' + (probe ? '?probe=1' : ''), {credentials:'same-origin'});
     const d = await r.json();
     if(!d.ok) throw new Error('bad response');
     const parts = [];
@@ -813,27 +1083,32 @@ async function dvccLoad(probe){
       const icon = b.status === 'low' ? '🔴' : (b.status === 'auth_failed' ? '⛔' : (b.status === 'ok' ? '🟢' : '⚪'));
       const bad = (b.status === 'low' || b.status === 'auth_failed');
       parts.push('<span style="margin-right:.9rem">' + icon + ' ' + _dvccEsc(b.provider) + ' '
-        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? '#dc2626' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
+        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? 'var(--th-ink-red6,#b91c1c)' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
     });
     const stats = (d.pool && d.pool.stats) || {};
     if(stats.calls){
       parts.push('<span>🛟 ' + window.Tf('dv_cc_js_takeover', {n: stats.ok || 0})
         + (stats.last_key ? (' · ' + _dvccEsc(stats.last_key)) : '') + '</span>');
     }
-    // 出话分布（进程启动以来）：主链 / 备用池 / 本地兜底 各出了多少话、花了多少钱
+    // 出话分布：云主链 / 备用池 / 本地主链 / 本地兜底（local_primary 独立，防隐私档归因失真）
     const u = d.usage || {};
-    if(u.primary || u.key_pool || u.local_fallback){
+    if(u.primary || u.key_pool || u.local_fallback || u.local_primary){
       const seg = [];
       [['primary', 'dv_cc_js_u_primary'], ['key_pool', 'dv_cc_js_u_pool'],
+       ['local_primary', 'dv_ai_p_js_u_local_primary'],
        ['local_fallback', 'dv_cc_js_u_local']].forEach(pair=>{
         const g = u[pair[0]];
         if(g && g.calls){
+          const lat = Number(g.latency_avg_ms) || 0;
           seg.push(window.T(pair[1]) + ' ' + g.calls
-            + (g.cost_usd ? ('($' + Number(g.cost_usd).toFixed(3) + ')') : ''));
+            + (g.cost_usd ? ('($' + Number(g.cost_usd).toFixed(3) + ')') : '')
+            + (lat > 0 ? (' ' + (lat / 1000).toFixed(1) + 's') : ''));
         }
       });
       if(seg.length) parts.push('<span style="margin-left:.9rem">📊 ' + window.T('dv_cc_js_usage') + ' ' + seg.join(' · ') + '</span>');
     }
+    // 同步主对话模式卡（cloud-credentials 已带回 primary 快照，免二次请求）
+    if(d.primary) _dvAiPrimaryPaint(d.primary);
     st.innerHTML = parts.join('') || window.T('dv_cc_js_no_balance');
     _dvccKeys = ((d.pool && d.pool.keys) || []).map(k=>({
       name: k.name, api_key: k.api_key_masked || '',
@@ -869,10 +1144,10 @@ async function dvccSave(){
   const res = document.getElementById('dvcc-save-res');
   res.textContent = window.T('ov_js_saving'); res.className = 'save-result';
   try{
-    const r = await fetch('/api/setup/key-pool', {
+    const r = await apiFetch('/api/setup/key-pool', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({keys: _dvccKeys}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!d.ok){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; return; }
     res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
@@ -890,6 +1165,119 @@ async function dvccProbe(){
   res.textContent = '';
 }
 
+// ── 内部功能显隐（ui_visibility）：即点即存，失败回滚勾选态 ──
+async function dvUivToggle(key, el){
+  const res = document.getElementById('dvuiv-res');
+  const want = !!el.checked;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/ui-visibility', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: key, visible: want}),
+    }, {timeoutMs: 30000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      el.checked = !want;
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      return;
+    }
+    const pill = document.getElementById('dvuiv-pill-' + key);
+    if(pill) pill.textContent = window.T(want ? 'dv_uiv_on' : 'dv_uiv_off');
+    if(res){ res.textContent = window.T('dv_uiv_js_saved'); res.className = 'save-result ok'; setTimeout(()=>{ res.textContent = ''; }, 4000); }
+  }catch(e){
+    el.checked = !want;
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
+}
+
+// ── 开发者模式（L-4 A）：只写 session；成功后整页刷新让侧栏立刻按新视角重渲染 ──
+async function dvDevModeToggle(el){
+  const res = document.getElementById('dv-devmode-res');
+  const want = !!el.checked;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/developer-mode', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({on: want}),
+    }, {timeoutMs: 15000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      el.checked = !want;
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      return;
+    }
+    const pill = document.getElementById('dv-devmode-pill');
+    if(pill) pill.textContent = window.T(d.developer_mode ? 'dv_uiv_on' : 'dv_uiv_off');
+    if(res){ res.textContent = window.T('dv_uiv_js_saved'); res.className = 'save-result ok'; }
+    setTimeout(function(){ location.reload(); }, 400);
+  }catch(e){
+    el.checked = !want;
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
+}
+
+// ── 业务域（N-3 #241）：端点自取当前值；缺端点（旧进程）→ 整块提示重启后可用 ──
+function dvBdRender(d){
+  const sel = document.getElementById('dv-bd-sel');
+  const pill = document.getElementById('dv-bd-pill');
+  const src = document.getElementById('dv-bd-src');
+  if(!sel) return;
+  const lang = (document.documentElement.getAttribute('lang') || 'zh').toLowerCase();
+  const opts = Array.isArray(d.options) ? d.options : [];
+  sel.innerHTML = opts.map(function(o){
+    const lab = lang.indexOf('en') === 0 ? (o.label_en || o.id) : (o.label_zh || o.id);
+    return '<option value="' + o.id + '"' + (o.id === d.business_domain ? ' selected' : '') + '>' + lab + '</option>';
+  }).join('');
+  sel.disabled = false;
+  if(pill) pill.textContent = d.business_domain || '';
+  if(src) src.textContent = d.explicit ? window.T('dv_bd_src_explicit') : window.T('dv_bd_src_inferred');
+}
+async function dvBdLoad(){
+  const sel = document.getElementById('dv-bd-sel');
+  if(!sel) return;
+  try{
+    const r = await apiFetch('/api/developer/business-domain', {}, {timeoutMs: 15000});
+    if(r.status === 404){ sel.innerHTML = '<option value="">' + window.T('dv_bd_restart_needed') + '</option>'; return; }
+    const d = await r.json();
+    if(!r.ok || !d.ok){ sel.innerHTML = '<option value="">' + window.T('dv_uiv_js_fail') + '</option>'; return; }
+    dvBdRender(d);
+  }catch(e){
+    sel.innerHTML = '<option value="">' + window.T('dv_uiv_js_fail') + '</option>';
+  }
+}
+async function dvBdChange(el){
+  const res = document.getElementById('dv-bd-res');
+  const want = el.value;
+  if(!want) return;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/business-domain', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({business_domain: want}),
+    }, {timeoutMs: 15000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      await dvBdLoad();
+      return;
+    }
+    dvBdRender(d);
+    if(res){ res.textContent = window.T('dv_bd_saved_restart'); res.className = 'save-result ok'; }
+  }catch(e){
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
+}
+document.addEventListener('DOMContentLoaded', function(){ try{ dvBdLoad(); }catch(_e){} });
+
 (function(){
   const box = document.getElementById('dvcc-pool-list');
   if(box){
@@ -902,13 +1290,14 @@ async function dvccProbe(){
     });
   }
   dvccLoad(false);
+  dvAiPrimaryLoad();
 })();
 
 async function testWebhook(){
   const resEl = document.getElementById('save-res-notif');
   resEl.textContent = window.T('rpa_js_st_sending'); resEl.className='save-result';
   try{
-    const r = await fetch('/api/settings/test-webhook');
+    const r = await apiFetch('/api/settings/test-webhook');
     const d = await r.json();
     resEl.textContent = (d.ok?'✓ '+window.T('dv_js012'):'✗ '+window.T('dv_js013')+(d.error||d.status));
     resEl.className = 'save-result '+(d.ok?'ok':'err');
@@ -924,12 +1313,14 @@ const _intentLabels = {
   enhanced_quota_config:window.T('dv_js017'), quota_config:window.T('dv_js018'),
 };
 
+var _intentKwRev='';   // 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 async function loadIntentKeywords(){
   const el=document.getElementById('intent-kw-editor');
   try{
-    const r=await fetch('/api/settings/intent-keywords');
+    const r=await apiFetch('/api/settings/intent-keywords');
     const d=await r.json();
     _intentKeywords=d.keywords||{};
+    _intentKwRev=d.rev||'';   // 老后端无 rev → 空=不启用校验（零破坏）
     renderIntentEditor();
   }catch(e){
     el.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';
@@ -967,15 +1358,29 @@ async function saveIntentKeywords(){
     const lines=area.value.split('\n').map(l=>l.trim()).filter(l=>l);
     updated[intent]=lines;
   });
-  try{
-    const r=await fetch('/api/settings/intent-keywords',{
+  // 乐观锁：本表是整字典替换，两窗口先后保存会整体抹掉对方新增/删除的意图 →
+  // 带加载时指纹；撞 409 时表单原样保留，显式确认后免键重发（与人设编辑器同款）。
+  const _put=function(withRev){
+    const body={keywords:updated};
+    if(withRev && _intentKwRev) body.expected_rev=_intentKwRev;
+    return apiFetch('/api/settings/intent-keywords',{
       method:'PUT',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({keywords:updated}),
-    });
+      body:JSON.stringify(body),
+    }, {timeoutMs: 60000});
+  };
+  try{
+    let r=await _put(true);
+    if(r.status===409){
+      if(!confirm(window.T('psn.save.stale_confirm'))){
+        resEl.textContent=''; resEl.className='save-result'; return;
+      }
+      r=await _put(false);
+    }
     const d=await r.json();
     if(d.ok){
       _intentKeywords=updated;
+      _intentKwRev=d.rev||'';
       resEl.textContent='✓ '+window.T('dv_js020'); resEl.className='save-result ok';
     }else{
       resEl.textContent=window.T('ov_js_save_fail'); resEl.className='save-result err';
@@ -991,11 +1396,11 @@ async function testIntent(){
   if(!text){ resEl.textContent=window.T('dv_js021'); return; }
   resEl.textContent=window.T('dv_js006');
   try{
-    const r=await fetch('/api/settings/test-intent',{
+    const r=await apiFetch('/api/settings/test-intent',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text}),
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     const label=_intentLabels[d.intent]||d.intent;
     resEl.innerHTML=`${window.T('dv_js025')}: <b style="color:var(--p)">${label}</b> (<code>${d.intent}</code>) — ${window.T('dv_js026')}: ${d.matched_by}`;
@@ -1013,7 +1418,7 @@ refreshAiStatus();
 /* ── Reply Logic ─────────────────────────────────── */
 async function loadReplyLogic(){
   try{
-    const r = await fetch('/api/reply-logic');
+    const r = await apiFetch('/api/reply-logic');
     const d = await r.json();
     document.getElementById('rl-trigger_enabled').checked = !!d.trigger_enabled;
     document.getElementById('rl-group_reply_mode').value = d.group_reply_mode || 'mention_or_keyword';
@@ -1047,11 +1452,11 @@ async function saveReplyLogic(){
       l2_reply_threshold: parseFloat(document.getElementById('rl-l2_reply_threshold').value) || 0.75,
       l3_cooldown_seconds: parseInt(document.getElementById('rl-l3_cooldown_seconds').value) || 90,
     };
-    const r = await fetch('/api/reply-logic',{
+    const r = await apiFetch('/api/reply-logic',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent=window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     resEl.textContent=window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';

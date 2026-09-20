@@ -51,6 +51,10 @@ $plat = (git ls-files platform | Where-Object { $_ -notmatch 'README|gitkeep|MIG
 if ($plat -gt 0) { Line 'OK' ("platform has $plat impl files") } else { Line 'WARN' 'platform still contract-only (compliance extraction staged for env machine)' }
 
 # G2 products 清单门禁：每个产品必须有 product.yaml，含 brand_key/engine/compliance，且 engine 目录存在
+# （或 engine 显式登记在 $externalEngines——实现物理上不在本仓 engines/ 下的对接型产品，
+#  如智控 zhikong 对接的 tgkz2026 独立仓库，见其 product.yaml 头部注释 +
+#  platform/licensing/LICENSE_CONTRACT.md，"engine 不可解析成本仓路径"是设计使然不是缺陷）。
+$externalEngines = @('tgkz2026')
 $prodDirs = Get-ChildItem (Join-Path $root 'products') -Directory -EA SilentlyContinue
 $bad = @()
 foreach ($d in $prodDirs) {
@@ -59,7 +63,7 @@ foreach ($d in $prodDirs) {
   $engOk = $true
   if (Test-Path $y) {
     $eng = (Select-String -LiteralPath $y -Pattern '^engine:\s*(\S+)').Matches[0].Groups[1].Value
-    if ($eng) { $engOk = Test-Path (Join-Path $root ('engines/' + $eng)) }
+    if ($eng -and ($externalEngines -notcontains $eng)) { $engOk = Test-Path (Join-Path $root ('engines/' + $eng)) }
   }
   if (-not ($okKeys -and $engOk)) { $bad += $d.Name }
 }
@@ -82,8 +86,9 @@ else {
   $copyHits | Select-Object -First 8 | ForEach-Object { Write-Output ('      ' + $_) }
 }
 
-# I 产品图标完整性：7 张必须存在且为正方形（防再混入非方/缺 voxx）
-$iconKeys = @('reachx','chatx','facex','voicex','livex','lingox','voxx')
+# I 产品图标完整性：九张必须存在且为正方形（防再混入非方/缺款）。
+# 名单漏一款就等于该款完全不设防——fatex 曾漏登记，靠 I2 的 "9/8" 计数才暴露。
+$iconKeys = @('reachx','chatx','facex','voicex','livex','lingox','voxx','matrixx','fatex')
 $iconBad = @()
 Add-Type -AssemblyName System.Drawing -EA SilentlyContinue
 foreach ($k in $iconKeys) {
@@ -95,11 +100,133 @@ foreach ($k in $iconKeys) {
     $img.Dispose()
   } catch { $iconBad += "$k unreadable" }
 }
-if ($iconBad.Count -eq 0) { Line 'OK' 'product icons: 7 square PNGs present' }
+if ($iconBad.Count -eq 0) { Line 'OK' ('product icons: ' + $iconKeys.Count + ' square PNGs present') }
 else { Line 'FAIL' ('product icons bad: ' + ($iconBad -join '; ')) }
 
+# I2 icon visual-size regression gate (lesson from the 2026-07-22 redraw: stale optical
+# scales caused ~18% visual-size drift and the "exists + square" check above cannot see it).
+# Measures per-icon alpha-equivalent diameter eq = 2*sqrt(sum(alpha/255)/PI) on the baked
+# PNGs and compares against expected_eq published by the auto-calibration script into
+# platform/brand/optical-scale.json. capped icons are exempt from the median self-check
+# (canvas-crop guard keeps them off-baseline by design) but must still match their own
+# expected value. Perf: LockBits + Marshal.Copy bulk byte[] read; GetPixel loops are
+# unusably slow in PowerShell and must not be used here.
+#
+# NOTE (calibrator v3, 2026-07-25): normalization target is now the mixed metric
+# visual = eq^(1-w) * bboxGeo^w, so ink (eq) is deliberately NOT uniform across icons
+# (~20% spread by design). The self-consistency check below must therefore read
+# expected_visual, not expected_eq -- asserting eq uniformity would fail on a healthy
+# calibration. The per-artifact check (b) still uses eq: it is a function of both the
+# master and the final k, so any drift in either still trips it.
+function Get-AlphaEqDiam([string]$pngPath) {
+  $bmp = New-Object System.Drawing.Bitmap($pngPath)
+  if ($null -eq $bmp) { throw ('cannot load bitmap: ' + $pngPath) }
+  try {
+    $w = $bmp.Width; $h = $bmp.Height
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+    $bd = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+      $stride = [Math]::Abs($bd.Stride)
+      $bytes = New-Object byte[] ($stride * $h)
+      [System.Runtime.InteropServices.Marshal]::Copy($bd.Scan0, $bytes, 0, $bytes.Length)
+    } finally { $bmp.UnlockBits($bd) }
+    $sum = [double]0
+    for ($y = 0; $y -lt $h; $y++) {
+      $rowOff = $y * $stride
+      $rowEnd = $rowOff + ($w * 4)
+      for ($i = $rowOff + 3; $i -lt $rowEnd; $i += 4) { $sum += $bytes[$i] }
+    }
+    return 2.0 * [Math]::Sqrt(($sum / 255.0) / [Math]::PI)
+  } finally { $bmp.Dispose() }
+}
+$optPath = Join-Path $root 'platform/brand/optical-scale.json'
+if (-not (Test-Path $optPath)) {
+  Line 'WARN' 'platform/brand/optical-scale.json missing (icon optical-size gate skipped)'
+} else {
+  $optCfg = $null
+  try { $optCfg = Get-Content -LiteralPath $optPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $optCfg = $null }
+  if ($null -eq $optCfg) {
+    Line 'FAIL' 'optical-scale.json unreadable or invalid JSON (icon optical-size gate cannot run)'
+  } else {
+    if ($optCfg.applyInUi -eq $true) {
+      Line 'WARN' 'optical-scale.json applyInUi=true (temporary CSS compensation active; icons not baked)'
+    }
+    $expProp = $optCfg.PSObject.Properties['expected_eq']
+    if ($null -eq $expProp -or $null -eq $expProp.Value) {
+      Line 'WARN' 'optical-scale.json has no expected_eq (icons not auto-calibrated yet)'
+    } else {
+      $expectedEq = $expProp.Value
+      $cappedKeys = @()
+      $capProp = $optCfg.PSObject.Properties['capped']
+      if ($capProp -and $capProp.Value) { $cappedKeys = @($capProp.Value) }
+      # (a) calibration self-consistency: non-capped icons must sit within 5% of the median
+      #     of the *normalized* metric, otherwise the calibration output itself is broken.
+      #     Prefer expected_visual (v3 mixed metric); fall back to expected_eq for old JSON.
+      $selfMetric = 'expected_visual'
+      $selfSrc = $null
+      $visProp = $optCfg.PSObject.Properties['expected_visual']
+      if ($visProp -and $visProp.Value) { $selfSrc = $visProp.Value }
+      else { $selfSrc = $expectedEq; $selfMetric = 'expected_eq (legacy JSON: no expected_visual)' }
+      $nonCapped = @()
+      foreach ($p in $selfSrc.PSObject.Properties) {
+        $pv = 0.0
+        try { $pv = [double]$p.Value } catch { $pv = 0.0 }
+        if (($cappedKeys -notcontains $p.Name) -and ($pv -gt 0)) { $nonCapped += ,@($p.Name, $pv) }
+      }
+      $selfBad = @()
+      if ($nonCapped.Count -gt 0) {
+        $vals = @($nonCapped | ForEach-Object { $_[1] } | Sort-Object)
+        $n = $vals.Count
+        if ($n % 2 -eq 1) { $median = [double]$vals[[int](($n - 1) / 2)] }
+        else { $median = ([double]$vals[[int]($n / 2) - 1] + [double]$vals[[int]($n / 2)]) / 2.0 }
+        if ($median -gt 0) {
+          foreach ($pair in $nonCapped) {
+            $devPct = [Math]::Abs(($pair[1] - $median) / $median) * 100.0
+            if ($devPct -gt 5.0) {
+              $selfBad += "$($pair[0]) expected=$([Math]::Round($pair[1], 1)) median=$([Math]::Round($median, 1)) dev=$([Math]::Round($devPct, 1))%"
+            }
+          }
+        }
+      }
+      if ($selfBad.Count -gt 0) {
+        Line 'FAIL' ('optical-scale ' + $selfMetric + ' self-inconsistent (non-capped icon vs median >5%, calibration output suspect): ' + $selfBad.Count)
+        $selfBad | ForEach-Object { Write-Output ('      ' + $_) }
+      }
+      # (b) baked artifact vs expectation: measured eq of each PNG must match expected_eq within 2.5%.
+      $expKeys = @($expectedEq.PSObject.Properties | ForEach-Object { $_.Name })
+      $uncovered = @($iconKeys | Where-Object { $expKeys -notcontains $_ })
+      if ($uncovered.Count -gt 0) {
+        Line 'WARN' ('expected_eq does not cover: ' + ($uncovered -join ',') + ' (these icons skipped by optical gate)')
+      }
+      $eqBad = @(); $eqChecked = 0
+      foreach ($p in $expectedEq.PSObject.Properties) {
+        $k = $p.Name
+        $expVal = 0.0
+        try { $expVal = [double]$p.Value } catch { $expVal = 0.0 }
+        $fp = Join-Path $root ("website/public/brand/products/$k.png")
+        if (-not (Test-Path $fp)) { continue }   # missing file already FAILed by the presence check above
+        if ($expVal -le 0) { $eqBad += ($k + ' expected_eq not a positive number'); continue }
+        try {
+          $meas = Get-AlphaEqDiam ((Resolve-Path -LiteralPath $fp).ProviderPath)
+          $eqChecked++
+          $devPct = [Math]::Abs(($meas - $expVal) / $expVal) * 100.0
+          if ($devPct -gt 2.5) {
+            $eqBad += "$k measured=$([Math]::Round($meas, 1)) expected=$([Math]::Round($expVal, 1)) dev=$([Math]::Round($devPct, 1))%"
+          }
+        } catch { $eqBad += ($k + ' eq measurement failed') }
+      }
+      if ($eqBad.Count -gt 0) {
+        Line 'FAIL' ('product icon visual-size regression (measured vs expected_eq >2.5%): ' + $eqBad.Count + ' icon(s)')
+        $eqBad | ForEach-Object { Write-Output ('      ' + $_) }
+      } elseif ($selfBad.Count -eq 0) {
+        Line 'OK' ('product icons optical size: ' + $eqChecked + '/' + $iconKeys.Count + ' match expected_eq (tol 2.5%); ' + $selfMetric + ' self-consistent')
+      }
+    }
+  }
+}
+
 # J 产品落地页路由存在性（PRODUCT_LANDING 路径对应 app 路由，缺页则导航 404）
-$landingRoutes = @('voice','face','interpreting','growth','brand')
+$landingRoutes = @('voice','face','interpreting','growth','brand','matrix')
 $missLand = @()
 foreach ($r in $landingRoutes) {
   $zh = Join-Path $root ("website/app/$r/page.tsx")
@@ -107,7 +234,7 @@ foreach ($r in $landingRoutes) {
   if (-not (Test-Path $zh)) { $missLand += "/$r" }
   if (-not (Test-Path $en)) { $missLand += "/en/$r" }
 }
-if ($missLand.Count -eq 0) { Line 'OK' 'product landing routes present (zh+en): voice/face/interpreting/growth/brand' }
+if ($missLand.Count -eq 0) { Line 'OK' 'product landing routes present (zh+en): voice/face/interpreting/growth/brand/matrix' }
 else { Line 'FAIL' ('missing landing routes: ' + ($missLand -join ', ')) }
 
 # K brand-assets sync 目标：boundless/website 必须在 sync_brand_targets.py 的 SITES 里

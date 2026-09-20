@@ -7,6 +7,7 @@ slice 40 起文本+媒体翻译合并为 ``unified_inbox_translate_routes``（30
 
 from __future__ import annotations
 
+from src.web.routes.asr_correction_routes import register_asr_correction_routes
 from src.web.routes.unified_inbox_account_routes import register_account_routes
 from src.web.routes.unified_inbox_analyze_routes import register_analyze_routes
 from src.web.routes.unified_inbox_aux_read_routes import register_aux_read_routes
@@ -21,6 +22,7 @@ from src.web.routes.unified_inbox_dashboard_routes import register_workspace_das
 from src.web.routes.unified_inbox_desktop_routes import register_desktop_routes
 from src.web.routes.unified_inbox_intel_profile_routes import register_intel_profile_routes
 from src.web.routes.unified_inbox_login_routes import register_platform_login_routes
+from src.web.routes.unified_inbox_msgops_routes import register_msgops_routes
 from src.web.routes.unified_inbox_proxy_routes import register_proxy_fingerprint_routes
 from src.web.routes.unified_inbox_qa_churn_routes import register_qa_churn_routes
 from src.web.routes.unified_inbox_quality_routes import register_quality_routes
@@ -35,7 +37,9 @@ from src.web.routes.unified_inbox_setup_routes import register_setup_routes
 from src.web.routes.unified_inbox_usage_routes import register_usage_routes
 from src.web.routes.unified_inbox_stored_read_routes import register_stored_read_routes
 from src.web.routes.unified_inbox_template_routes import register_template_routes
+from src.web.routes.unified_inbox_tg_join_routes import register_tg_join_routes
 from src.web.routes.unified_inbox_translate_routes import register_translate_routes
+from src.web.routes.unified_inbox_vision_routes import register_vision_routes
 from src.web.routes.unified_inbox_workflow_routes import register_workflow_routes
 from src.web.routes.unified_inbox_workspace_contacts_routes import (
     register_workspace_contacts_routes,
@@ -72,12 +76,16 @@ def register_unified_inbox_routes(
     # ── 2. 实时 + 主读路径（slice 36 / 37b）──────────────────────────────
     register_realtime_routes(app, api_auth=api_auth)
     register_read_routes(app, api_auth=api_auth, config_manager=config_manager)
+    # 官方级消息管理（2026-08-17）：置顶 / 清空 / 消息软删+恢复 / 能力探测
+    register_msgops_routes(app, api_auth=api_auth, config_manager=config_manager)
 
     # ── 3. 账号 / 代理 / 登录（slice 8–10）──────────────────────────────
     register_platform_login_routes(app, api_auth=api_auth, config_manager=config_manager)
     register_setup_routes(app, api_auth=api_auth, config_manager=config_manager)
     register_proxy_fingerprint_routes(app, api_auth=api_auth)
     register_account_routes(app, api_auth=api_auth, config_manager=config_manager)
+    # 语音转写改正 + 改正台账（ASR P2，2026-09-12）：坐席改正 → 台账/正文/元数据/缓存四处同步
+    register_asr_correction_routes(app, api_auth=api_auth, config_manager=config_manager)
 
     # ── 4. 坐席工作台（slice 11–16）────────────────────────────────────
     register_workspace_presence_routes(
@@ -97,6 +105,8 @@ def register_unified_inbox_routes(
     # ── 5. 辅助读 + 翻译 + 桌面 + 转化 + 分析（slice 37a / 40 / 33 / 32–34）──
     register_aux_read_routes(app, api_auth=api_auth, config_manager=config_manager)
     register_translate_routes(app, api_auth=api_auth)
+    # 图片问答（P2 2026-08-19：「问这张图」，与翻译集群共享媒体反查/围栏/能力闸）
+    register_vision_routes(app, api_auth=api_auth)
     register_desktop_routes(app, api_auth=api_auth)
     register_conversion_outreach_routes(app, api_auth=api_auth)
     register_analyze_routes(app, api_auth=api_auth)
@@ -104,6 +114,7 @@ def register_unified_inbox_routes(
     # ── 6. 写路径 + store 读（slice 29–30）──────────────────────────────
     register_stored_read_routes(app, api_auth=api_auth)
     register_send_routes(app, api_auth=api_auth, page_auth=page_auth)
+    register_tg_join_routes(app, page_auth=page_auth)
 
     # ── 7. 协作 / 智能 / 运营（slice 18–28 / 23–27 / 21–22）────────────
     register_intel_profile_routes(app, api_auth=api_auth)

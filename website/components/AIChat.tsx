@@ -18,7 +18,7 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const INTENT = /价格|多少钱|报价|购买|下单|怎么收费|套餐|合作|定制|price|cost|buy|order|quote|pricing|plan|deploy/i;
 
-/** 外部唤起在线顾问（顾嘉）聊天窗的自定义事件名（detail.scenario 可指定进入场景，如 "install"） */
+/** 外部唤起在线顾问（小界）聊天窗的自定义事件名（detail.scenario 可指定进入场景，如 "install"） */
 export const OPEN_CHAT_EVENT = "boundless:open-ai-chat";
 
 /**
@@ -32,11 +32,11 @@ export function openAiChat(scenario?: "install") {
 
 const COPY = {
   zh: {
-    title: "无界 · 在线顾问 顾嘉",
+    title: "无界 · 在线顾问 小界",
     sub: "资深方案顾问 · 通常秒回",
-    greet: "您好，我是无界科技的方案顾问顾嘉（Gary）。想了解哪款产品？聊聊您的场景，我帮您配个最合适的方案～\n（支持任意语言：用您客户的母语问我试试 🌍）",
+    greet: "您好，我是无界科技的方案顾问小界（Jie）。想了解哪款产品？聊聊您的场景，我帮您配个最合适的方案～\n（支持任意语言：用您客户的母语问我试试 🌍）",
     placeholder: "任意语言输入你的问题…",
-    suggestions: ["AI 自动成交怎么收费？", "实时换脸支持视频通话吗？", "¿Cuánto cuesta el chat con IA?"],
+    suggestions: ["AI 自动成交怎么收费？", "翻译支持哪些平台和语言？", "¿Cuánto cuesta el chat con IA?"],
     leave: "留个联系方式，让客服联系我",
     disclaimer: "回复仅供参考，最终方案与报价以人工确认为准。",
     error: "网络繁忙，请稍后重试或点下方留资。",
@@ -44,19 +44,19 @@ const COPY = {
     contactPh: "Telegram / WhatsApp / 邮箱",
     leadSubmit: "提交",
     leadOk: "已收到，马上联系你 ✅",
-    teaser: "在找出海获客方案？我是顾问顾嘉，问我 AI 自动成交怎么帮你多赚 👋",
+    teaser: "在找出海获客方案？我是顾问小界，问我 AI 自动成交怎么帮你多赚 👋",
     human: "转人工客服",
-    replyIn: "顾嘉将用此语言实时回复",
+    replyIn: "小界将用此语言实时回复",
     installGreet:
-      "已进入安装协助模式 🛠 我是顾嘉，一步步带你完成 AvatarHub 的下载与安装：从下载安装包、首次启动向导、组件下载，到激活试用。\n遇到报错把提示原文发给我就行；也可以先点下面的常见问题。",
+      "已进入安装协助模式 🛠 我是小界，一步步带你完成幻境 STUDIO 的下载与安装：从下载安装包、首次启动向导、组件下载，到激活使用。\n遇到报错把提示原文发给我就行；也可以先点下面的常见问题。",
     installSuggestions: ["完整的安装步骤是什么？", "SmartScreen 拦截了安装包怎么办？", "我的显卡能跑哪些功能？", "组件下载中断了怎么办？"],
   },
   en: {
-    title: "BOUNDLESS · Gary, Consultant",
+    title: "BOUNDLESS · Jie, Consultant",
     sub: "Senior solutions consultant · replies fast",
-    greet: "Hi, I'm Gary, solutions consultant at BOUNDLESS. Which product are you looking at? Tell me your scenario and I'll match you with the right plan.\n(Any language works — try your customer's native tongue 🌍)",
+    greet: "Hi, I'm Jie, solutions consultant at BOUNDLESS. Which product are you looking at? Tell me your scenario and I'll match you with the right plan.\n(Any language works — try your customer's native tongue 🌍)",
     placeholder: "Type in any language…",
-    suggestions: ["How is AI closing priced?", "Does live swap work on video calls?", "¿Cuánto cuesta el chat con IA?"],
+    suggestions: ["How is AI closing priced?", "Which platforms and languages does translation cover?", "¿Cuánto cuesta el chat con IA?"],
     leave: "Leave my contact for support",
     disclaimer: "Replies are for reference; final plans and quotes confirmed by our team.",
     error: "Busy now, please retry later or leave your contact below.",
@@ -64,19 +64,19 @@ const COPY = {
     contactPh: "Telegram / WhatsApp / email",
     leadSubmit: "Submit",
     leadOk: "Got it — reaching out shortly ✅",
-    teaser: "Scaling cross-border sales? I'm Gary — ask how AI auto-closing earns you more 👋",
+    teaser: "Scaling cross-border sales? I'm Jie — ask how AI auto-closing earns you more 👋",
     human: "Talk to a human",
-    replyIn: "Gary replies live in this language",
+    replyIn: "Jie replies live in this language",
     installGreet:
-      "Install-assist mode 🛠 Gary here — I'll walk you through downloading and installing AvatarHub: the installer, the first-run wizard, component downloads and activation.\nHit an error? Paste the exact message here — or start with a common question below.",
+      "Install-assist mode 🛠 Jie here — I'll walk you through downloading and installing STUDIO: the installer, the first-run wizard, component downloads and activation.\nHit an error? Paste the exact message here — or start with a common question below.",
     installSuggestions: ["What are the full install steps?", "SmartScreen blocked the installer — what now?", "What can my GPU run?", "Component download got interrupted?"],
   },
   // 小语种落地页（/ko /ja）专用界面文案；AI 回复语言由后端「语言镜像」指令保证。
   ko: {
-    title: "BOUNDLESS · 상담 컨설턴트 Gary",
+    title: "BOUNDLESS · 상담 컨설턴트 Jie",
     sub: "수석 솔루션 컨설턴트 · 빠른 답변",
     greet:
-      "안녕하세요, BOUNDLESS의 솔루션 컨설턴트 Gary입니다. 어떤 제품이 궁금하신가요? 사용 시나리오를 알려주시면 가장 적합한 플랜을 제안해 드리겠습니다.\n(어떤 언어로도 OK — 한국어로 편하게 질문하세요 🌍)",
+      "안녕하세요, BOUNDLESS의 솔루션 컨설턴트 Jie입니다. 어떤 제품이 궁금하신가요? 사용 시나리오를 알려주시면 가장 적합한 플랜을 제안해 드리겠습니다.\n(어떤 언어로도 OK — 한국어로 편하게 질문하세요 🌍)",
     placeholder: "질문을 입력하세요…",
     suggestions: ["음성 클로닝은 한국어를 지원하나요?", "AI 자동 성사 요금은 어떻게 되나요?", "온프레미스 도입은 어떻게 진행되나요?"],
     leave: "연락처 남기고 상담 요청",
@@ -86,18 +86,18 @@ const COPY = {
     contactPh: "Telegram / WhatsApp / 이메일",
     leadSubmit: "보내기",
     leadOk: "접수되었습니다. 곧 연락드리겠습니다 ✅",
-    teaser: "음성 클로닝이 궁금하세요? 컨설턴트 Gary입니다. 요금과 도입 방법을 물어보세요 👋",
+    teaser: "음성 클로닝이 궁금하세요? 컨설턴트 Jie입니다. 요금과 도입 방법을 물어보세요 👋",
     human: "상담원 연결",
-    replyIn: "Gary가 이 언어로 실시간 답변합니다",
+    replyIn: "Jie가 이 언어로 실시간 답변합니다",
     installGreet:
-      "설치 지원 모드입니다 🛠 Gary입니다. AvatarHub 다운로드와 설치를 단계별로 도와드립니다. 오류 메시지를 그대로 붙여넣어 주세요.",
+      "설치 지원 모드입니다 🛠 Jie입니다. 幻境 STUDIO 다운로드와 설치를 단계별로 도와드립니다. 오류 메시지를 그대로 붙여넣어 주세요.",
     installSuggestions: ["전체 설치 단계는?", "SmartScreen이 설치를 차단했어요", "제 GPU로 어떤 기능을 쓸 수 있나요?"],
   },
   ja: {
-    title: "BOUNDLESS · コンサルタント Gary",
+    title: "BOUNDLESS · コンサルタント Jie",
     sub: "シニアソリューションコンサルタント · 即レス",
     greet:
-      "こんにちは、BOUNDLESSのソリューションコンサルタントのGaryです。どの製品にご興味がありますか？ご利用シーンをお聞かせいただければ、最適なプランをご提案します。\n（どの言語でもOK——日本語でお気軽にどうぞ 🌍）",
+      "こんにちは、BOUNDLESSのソリューションコンサルタントのJieです。どの製品にご興味がありますか？ご利用シーンをお聞かせいただければ、最適なプランをご提案します。\n（どの言語でもOK——日本語でお気軽にどうぞ 🌍）",
     placeholder: "ご質問を入力してください…",
     suggestions: ["音声クローンは日本語に対応していますか？", "AI自動成約の料金は？", "オンプレミス導入の流れは？"],
     leave: "連絡先を残して相談する",
@@ -107,11 +107,11 @@ const COPY = {
     contactPh: "Telegram / WhatsApp / メール",
     leadSubmit: "送信",
     leadOk: "承りました。まもなくご連絡します ✅",
-    teaser: "音声クローンにご興味は？コンサルタントのGaryです。料金や導入方法をお尋ねください 👋",
+    teaser: "音声クローンにご興味は？コンサルタントのJieです。料金や導入方法をお尋ねください 👋",
     human: "担当者に相談",
-    replyIn: "Garyがこの言語でリアルタイム回答",
+    replyIn: "Jieがこの言語でリアルタイム回答",
     installGreet:
-      "インストール支援モードです 🛠 Garyです。AvatarHubのダウンロードからインストールまでステップごとにご案内します。エラーはそのまま貼り付けてください。",
+      "インストール支援モードです 🛠 Jieです。幻境 STUDIO のダウンロードからインストールまでステップごとにご案内します。エラーはそのまま貼り付けてください。",
     installSuggestions: ["インストール手順の全体は？", "SmartScreenにブロックされました", "私のGPUで使える機能は？"],
   },
 };
@@ -379,7 +379,7 @@ export default function AIChat() {
               </span>
               <span className="text-xs leading-relaxed text-slate-200">
                 {pearl?.todayCollected
-                  ? lang === "zh" ? "星珠已收 ✦ 顺便聊聊出海获客？我是顾问顾嘉 👋" : "Pearl collected ✦ Now, need help with global lead-gen? I'm Gary 👋"
+                  ? lang === "zh" ? "星珠已收 ✦ 顺便聊聊出海获客？我是顾问小界 👋" : "Pearl collected ✦ Now, need help with global lead-gen? I'm Jie 👋"
                   : c.teaser}
               </span>
             </button>

@@ -1,0 +1,786 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('goal_rpt_title', "目标达成报表") }}{% endblock %}
+{% block head %}
+<style>
+  /* 2026-08-18 暗色适配整页 pass：全部颜色走 workspace --tk-* 令牌（暗档自适配，
+     不写 [data-cp-theme] 成对覆盖）；语义徽章按 admin-theme 约定＝半透底 + *-ink
+     文字（旧浅色实心底在暗档发白块）。刻意保持常量的：批量浮条/遮罩（两主题恒
+     深）、阴影（主题无关）、趋势赢单金 #ca8a04 与热力 rgba 渐变（图表系列色）。 */
+  .gr-wrap{height:100%;overflow-y:auto;background:var(--tk-bg,#f7f8fa);padding:18px;}
+  .gr-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;}
+  .gr-sub{font-size:12px;color:var(--tk-text-muted,#94a3b8);margin-bottom:14px;}
+  .gr-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
+  .gr-filters select,.gr-filters input{padding:5px 10px;border:1px solid var(--tk-border,#d1d5db);border-radius:6px;font-size:13px;background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);}
+  .gr-summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:18px;}
+  .gr-kpi{background:var(--tk-surface,#fff);border:1px solid var(--tk-border,#e5e7eb);border-radius:12px;padding:14px 16px;text-align:center;}
+  .gr-kpi .val{font-size:26px;font-weight:700;color:var(--tk-text,#1e3a5f);}
+  .gr-kpi .lbl{font-size:11px;color:var(--tk-text-muted,#94a3b8);margin-top:2px;}
+  .gr-card{background:var(--tk-surface,#fff);border:1px solid var(--tk-border,#e5e7eb);border-radius:12px;overflow:hidden;margin-bottom:18px;}
+  .gr-card h3{margin:0;padding:12px 14px 10px;font-size:14px;color:var(--tk-text,#374151);}
+  .gr-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .gr-table th{background:var(--tk-surface-2,#f1f5f9);padding:9px 12px;text-align:left;font-weight:600;color:var(--tk-text,#374151);border-bottom:2px solid var(--tk-border,#e5e7eb);white-space:nowrap;}
+  .gr-table td{padding:8px 12px;border-bottom:1px solid var(--tk-border,#f3f4f6);color:var(--tk-text,#374151);vertical-align:middle;}
+  .gr-table tr:hover td{background:var(--tk-surface-2,#f8fafc);}
+  .gr-table tr:last-child td{border-bottom:0;}
+  .gr-bar-wrap{width:90px;background:var(--tk-surface-2,#f1f5f9);border-radius:4px;height:8px;display:inline-block;vertical-align:middle;margin-right:6px;}
+  .gr-bar{height:8px;border-radius:4px;background:var(--bl-growth-600,#0d76d9);}
+  .gr-badge{display:inline-block;padding:2px 8px;border-radius:9px;font-size:11px;font-weight:600;white-space:nowrap;}
+  .st-done{background:color-mix(in srgb,var(--tk-emerald,#10b981) 14%,transparent);color:var(--tk-ok-ink,#065f46);}
+  .st-active{background:color-mix(in srgb,var(--tk-brand,#2563eb) 12%,transparent);color:var(--tk-brand,#1e40af);}
+  .st-failed{background:color-mix(in srgb,var(--tk-danger,#ef4444) 13%,transparent);color:var(--tk-danger-ink,#991b1b);}
+  .st-expired{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 16%,transparent);color:var(--tk-amber-ink,#9a3412);}
+  .st-cancelled{background:var(--tk-surface-2,#f1f5f9);color:var(--tk-text-muted,#64748b);}
+  .fu-yes{background:color-mix(in srgb,var(--tk-emerald,#10b981) 14%,transparent);color:var(--tk-ok-ink,#065f46);}
+  .fu-no{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 16%,transparent);color:var(--tk-amber-ink,#92400e);}
+  .gr-hot{color:var(--tk-danger-ink,#dc2626);font-weight:700;font-size:11px;margin-left:4px;}
+  .gr-act{display:inline-block;padding:3px 9px;border:1px solid var(--tk-border,#d1d5db);border-radius:6px;font-size:12px;cursor:pointer;background:var(--tk-surface,#fff);color:var(--tk-text,#374151);margin-right:4px;white-space:nowrap;}
+  .gr-act:hover{border-color:var(--tk-brand,#2563eb);color:var(--tk-brand,#1d4ed8);}
+  .gr-act[disabled]{opacity:.45;cursor:not-allowed;}
+  .gr-empty{text-align:center;padding:32px;color:var(--tk-text-muted,#94a3b8);font-size:14px;}
+  .gr-pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:10px 14px;font-size:12px;color:var(--tk-text-muted,#6b7280);}
+  .gr-name{font-weight:600;color:var(--tk-text,#1f2937);}
+  .gr-dim{font-size:11px;color:var(--tk-text-muted,#94a3b8);}
+  /* N-3 #241（VAQGZY ④）：陪伴业务域没有「赢单金额」口径——金额 KPI / 列 / 后缀整体收起 */
+  body.gr-companion .gr-amount{display:none;}
+  /* 发消息弹层（遮罩恒深属刻意常量；面材/文字随主题） */
+  .gr-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:1200;}
+  .gr-modal{background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,#e5e7eb);border-radius:14px;width:min(480px,92vw);padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25);}
+  .gr-modal h4{margin:0 0 10px;font-size:15px;color:var(--tk-text,#111827);}
+  .gr-modal textarea{width:100%;box-sizing:border-box;min-height:96px;border:1px solid var(--tk-border,#d1d5db);border-radius:8px;padding:9px;font-size:13px;resize:vertical;background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);}
+  .gr-chip{display:inline-block;padding:3px 10px;border:1px solid color-mix(in srgb,var(--tk-brand,#2563eb) 35%,transparent);background:color-mix(in srgb,var(--tk-brand,#2563eb) 10%,transparent);color:var(--tk-brand,#1d4ed8);border-radius:999px;font-size:12px;cursor:pointer;margin:0 6px 8px 0;}
+  .gr-modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+  .gr-btn{padding:6px 16px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--tk-border,#d1d5db);background:var(--tk-surface,#fff);color:var(--tk-text,#374151);}
+  .gr-btn-primary{background:var(--tk-brand,#2563eb);border-color:var(--tk-brand,#2563eb);color:#fff;}
+  .gr-btn[disabled]{opacity:.5;cursor:not-allowed;}
+  /* P1：勾选与批量触达（浮条两主题恒深＝刻意常量，文字用常量浅灰不用翻转 ink） */
+  .gr-table input[type=checkbox]{cursor:pointer;}
+  .gr-batchbar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;background:#111827;color:#fff;border-radius:999px;padding:9px 18px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.35);z-index:1100;font-size:13px;}
+  .gr-batchbar button{border:0;border-radius:999px;padding:5px 14px;font-size:12px;cursor:pointer;}
+  .gr-bb-send{background:#2563eb;color:#fff;} .gr-bb-clear{background:#374151;color:#e5e7eb;}
+  .gr-ob-box{background:var(--tk-surface-2,#f8fafc);border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;padding:9px;font-size:12px;color:var(--tk-text-muted,#475569);margin-top:8px;display:none;}
+  .gr-ob-box b{color:var(--tk-text,#111827);}
+  @media (max-width:760px){ .gr-table th:nth-child(n+7),.gr-table td:nth-child(n+7){display:none;} }
+</style>
+{% endblock %}
+{% block content %}
+<div class="gr-wrap">
+  <div class="gr-header">
+    <h2 style="margin:0;font-size:18px;">🎯 {{ (i18n or {}).get('goal_rpt_title', "目标达成报表") }}</h2>
+    <span id="gr-update" style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);"></span>
+  </div>
+  <div class="gr-sub">{{ (i18n or {}).get('goal_rpt_sub', "按账号 × 客户查看工作目标完成情况；完成的客户趁热跟进") }}</div>
+
+  <div class="gr-filters">
+    <select id="f-days" onchange="grLoad()">
+      <option value="7">{{ (i18n or {}).get('analytics_period_7d', "近 7 天") }}</option>
+      <option value="30" selected>{{ (i18n or {}).get('analytics_period_30d', "近 30 天") }}</option>
+      <option value="90">{{ (i18n or {}).get('goal_rpt_d90', "近 90 天") }}</option>
+    </select>
+    <select id="f-status" onchange="grPage=1;grLoadContacts()">
+      <option value="done" selected>{{ (i18n or {}).get('goal_rpt_st_done', "已完成") }}</option>
+      <option value="active">{{ (i18n or {}).get('goal_rpt_st_active', "进行中") }}</option>
+      <option value="failed">{{ (i18n or {}).get('goal_rpt_st_failed', "失败") }}</option>
+      <option value="expired">{{ (i18n or {}).get('goal_rpt_st_expired', "已到期") }}</option>
+      <option value="cancelled">{{ (i18n or {}).get('goal_rpt_st_cancelled', "已取消") }}</option>
+      <option value="ended">{{ (i18n or {}).get('goal_rpt_st_ended', "全部终态") }}</option>
+      <option value="all">{{ (i18n or {}).get('goal_rpt_st_all', "全部") }}</option>
+    </select>
+    <select id="f-template" onchange="grPage=1;grLoadContacts()">
+      <option value="">{{ (i18n or {}).get('goal_rpt_f_tpl_all', "全部类型") }}</option>
+    </select>
+    <input id="f-account" placeholder="{{ (i18n or {}).get('goal_rpt_f_account', '账号（可选）') }}" style="width:150px;" oninput="grDebounce()">
+    <button class="gr-act" onclick="grLoad()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+  </div>
+
+  <div id="gr-disabled" class="gr-card" style="display:none;"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_disabled', "工作目标功能未启用（companion.goals.enabled）") }}</div></div>
+  <!-- Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0 → 告警行（记忆页 #cs-stall 同口径） -->
+  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);"></div>
+
+  <div id="gr-body">
+    <!-- KPI -->
+    <div class="gr-summary">
+      <div class="gr-kpi"><div class="val" id="kpi-done">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_done', "已完成") }}</div></div>
+      <div class="gr-kpi"><div class="val" id="kpi-rate">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_done_rate', "完成率") }}</div></div>
+      <div class="gr-kpi gr-amount"><div class="val" id="kpi-amount">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_won_amount', "赢单金额") }}</div></div>
+      <div class="gr-kpi"><div class="val" id="kpi-active">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_active', "进行中") }}</div></div>
+      <div class="gr-kpi"><div class="val" id="kpi-miss">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_miss', "未达成") }}</div></div>
+      <div class="gr-kpi"><div class="val" id="kpi-days">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_avg_days', "平均达成天数") }}</div></div>
+    </div>
+
+    <!-- 账号视角 -->
+    <div class="gr-card">
+      <h3>📱 {{ (i18n or {}).get('goal_rpt_acct_title', "账号视角") }}</h3>
+      <div style="overflow-x:auto;">
+      <table class="gr-table"><thead><tr>
+        <th>{{ (i18n or {}).get('goal_rpt_th_account', "账号") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_active', "进行中") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_done', "完成") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_miss', "未达成") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_rate', "完成率") }}</th>
+        <th class="gr-won-lbl" data-companion="{{ (i18n or {}).get('goal_rpt_th_won_companion', "达成") }}">{{ (i18n or {}).get('goal_rpt_th_won', "赢单") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_avgd', "平均天数") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_top', "主力类型") }}</th>
+        <th></th>
+      </tr></thead><tbody id="gr-acct-rows">
+        <tr><td colspan="9"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_loading', "加载中…") }}</div></td></tr>
+      </tbody></table>
+      </div>
+    </div>
+
+    <!-- 客户明细 -->
+    <div class="gr-card" id="gr-contacts-card">
+      <h3 style="display:flex;justify-content:space-between;align-items:center;">
+        <span>👥 {{ (i18n or {}).get('goal_rpt_ct_title', "客户明细") }}</span>
+        <button class="gr-act" onclick="grExportCsv()">⬇️ {{ (i18n or {}).get('goal_rpt_csv', "导出 CSV") }}</button>
+      </h3>
+      <div style="overflow-x:auto;">
+      <table class="gr-table"><thead><tr>
+        <th style="width:26px;"><input type="checkbox" id="gr-sel-all" onclick="grToggleAll(this.checked)"></th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_contact', "客户") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_account', "账号") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_goal', "目标") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_status', "状态") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_when', "完成时间") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_kind', "完成方式") }}</th>
+        <th class="gr-amount">{{ (i18n or {}).get('goal_rpt_th_amount', "金额") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_days', "用时") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_fu', "跟进") }}</th>
+        <th>{{ (i18n or {}).get('goal_rpt_th_actions', "操作") }}</th>
+      </tr></thead><tbody id="gr-ct-rows">
+        <tr><td colspan="11"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_loading', "加载中…") }}</div></td></tr>
+      </tbody></table>
+      </div>
+      <div class="gr-pager">
+        <span id="gr-pageinfo"></span>
+        <button class="gr-act" id="gr-prev" onclick="grPrev()">{{ (i18n or {}).get('goal_rpt_prev', "上一页") }}</button>
+        <button class="gr-act" id="gr-next" onclick="grNext()">{{ (i18n or {}).get('goal_rpt_next', "下一页") }}</button>
+      </div>
+    </div>
+
+    <!-- P2：趋势 + 热力（零数据自动隐藏） -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;">
+      <div class="gr-card" id="gr-trend-card" style="display:none;">
+        <h3 id="gr-trend-title">📈 {{ (i18n or {}).get('goal_rpt_trend_title', "完成趋势（近 {n} 天）").replace('{n}','—') }}</h3>
+        <div id="gr-trend" style="padding:4px 14px 14px;"></div>
+      </div>
+      <div class="gr-card" id="gr-heat-card" style="display:none;">
+        <h3>🗺️ {{ (i18n or {}).get('goal_rpt_heat_title', "账号 × 目标类型（窗口内完成数）") }}</h3>
+        <div id="gr-heat" style="padding:4px 14px 14px;overflow-x:auto;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 发消息弹层 -->
+<div class="gr-modal-bg" id="gr-modal-bg" onclick="if(event.target===this)grCloseModal()">
+  <div class="gr-modal">
+    <h4>💬 {{ (i18n or {}).get('goal_rpt_send_title', "给客户发消息") }}</h4>
+    <div style="font-size:12px;color:var(--th-ink-gray5,#6b7280);margin-bottom:8px;">{{ (i18n or {}).get('goal_rpt_send_to', "发给") }}：<span id="gr-send-to" class="gr-name"></span></div>
+    <div>
+      <span class="gr-chip" onclick="grFillTpl('thanks')">{{ (i18n or {}).get('goal_rpt_tpl_thanks', "感谢成交") }}</span>
+      <span class="gr-chip" onclick="grFillTpl('care')">{{ (i18n or {}).get('goal_rpt_tpl_care', "完成关怀") }}</span>
+    </div>
+    <textarea id="gr-send-text" placeholder="{{ (i18n or {}).get('goal_rpt_send_ph', '输入要发送的内容…（发送时按会话语言自动翻译）') }}"></textarea>
+    <div class="gr-modal-foot">
+      <button class="gr-btn" onclick="grCloseModal()">{{ (i18n or {}).get('goal_rpt_send_cancel', "取消") }}</button>
+      <button class="gr-btn gr-btn-primary" id="gr-send-btn" onclick="grSend()">{{ (i18n or {}).get('goal_rpt_send_btn', "发送") }}</button>
+    </div>
+  </div>
+</div>
+
+<!-- P1：批量选择浮条 -->
+<div class="gr-batchbar" id="gr-batchbar">
+  <span id="gr-bb-count"></span>
+  <button class="gr-bb-send" onclick="grOpenOutreach()">{{ (i18n or {}).get('goal_rpt_batch_send', "📣 批量触达") }}</button>
+  <button class="gr-bb-clear" onclick="grClearSel()">{{ (i18n or {}).get('goal_rpt_batch_clear', "清空选择") }}</button>
+</div>
+
+<!-- P1：批量触达弹层（预检 → 确认发送 两段式） -->
+<div class="gr-modal-bg" id="gr-ob-bg" onclick="if(event.target===this)grCloseOutreach()">
+  <div class="gr-modal">
+    <h4>📣 {{ (i18n or {}).get('goal_rpt_ob_title', "批量触达（完成客户跟进）") }}</h4>
+    <div style="font-size:12px;color:var(--tk-text-muted,#6b7280);margin-bottom:6px;" id="gr-ob-count"></div>
+    <div>
+      <span class="gr-chip" onclick="grObFillTpl('thanks')">{{ (i18n or {}).get('goal_rpt_tpl_thanks', "感谢成交") }}</span>
+      <span class="gr-chip" onclick="grObFillTpl('care')">{{ (i18n or {}).get('goal_rpt_tpl_care', "完成关怀") }}</span>
+    </div>
+    <textarea id="gr-ob-text" placeholder="{{ (i18n or {}).get('goal_rpt_ob_tpl_ph', '输入模板文案…支持变量 {name}＝客户昵称') }}"></textarea>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tk-text-muted,#475569);margin-top:6px;cursor:pointer;">
+      <input type="checkbox" id="gr-ob-translate" checked>
+      {{ (i18n or {}).get('goal_rpt_ob_translate', "按每位客户的会话语言自动翻译后发送") }}
+    </label>
+    <div class="gr-ob-box" id="gr-ob-preview"></div>
+    <div class="gr-modal-foot">
+      <button class="gr-btn" onclick="grCloseOutreach()">{{ (i18n or {}).get('goal_rpt_send_cancel', "取消") }}</button>
+      <button class="gr-btn" id="gr-ob-preview-btn" onclick="grObPreview()">{{ (i18n or {}).get('goal_rpt_ob_preview', "预检名单") }}</button>
+      <button class="gr-btn gr-btn-primary" id="gr-ob-exec-btn" onclick="grObExecute()" disabled>{{ (i18n or {}).get('goal_rpt_send_btn', "发送") }}</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var GR_I18N = {
+  fu_yes: {{ ((i18n or {}).get('goal_rpt_fu_yes', "已跟进"))|tojson }},
+  fu_no: {{ ((i18n or {}).get('goal_rpt_fu_no', "待跟进"))|tojson }},
+  kind_order: {{ ((i18n or {}).get('goal_rpt_kind_order', "订单回流"))|tojson }},
+  kind_manual: {{ ((i18n or {}).get('goal_rpt_kind_manual', "人工成交"))|tojson }},
+  kind_manual_sales: {{ ((i18n or {}).get('goal_rpt_kind_manual', "人工成交"))|tojson }},
+  kind_manual_companion: {{ ((i18n or {}).get('goal_rpt_kind_manual_companion', "人工标记达成"))|tojson }},
+  kind_auto: {{ ((i18n or {}).get('goal_rpt_kind_auto', "自动结算"))|tojson }},
+  st_done: {{ ((i18n or {}).get('goal_rpt_st_done', "已完成"))|tojson }},
+  st_active: {{ ((i18n or {}).get('goal_rpt_st_active', "进行中"))|tojson }},
+  st_failed: {{ ((i18n or {}).get('goal_rpt_st_failed', "失败"))|tojson }},
+  st_expired: {{ ((i18n or {}).get('goal_rpt_st_expired', "已到期"))|tojson }},
+  st_cancelled: {{ ((i18n or {}).get('goal_rpt_st_cancelled', "已取消"))|tojson }},
+  empty: {{ ((i18n or {}).get('goal_rpt_empty', "该窗口内没有记录"))|tojson }},
+  load_fail: {{ ((i18n or {}).get('goal_rpt_load_fail', "加载失败"))|tojson }},
+  extract_stall: {{ ((i18n or {}).get('goal_rpt_extract_stall', "抽取可能未生效：连续 {n} 轮记忆 0 条、画像 0 项——检查「AI 抽取」开关与模型是否可用"))|tojson }},
+  send_ok: {{ ((i18n or {}).get('goal_rpt_send_ok', "已发送"))|tojson }},
+  send_fail: {{ ((i18n or {}).get('goal_rpt_send_fail', "发送失败"))|tojson }},
+  view_contacts: {{ ((i18n or {}).get('goal_rpt_view_contacts', "看客户"))|tojson }},
+  act_msg: {{ ((i18n or {}).get('goal_rpt_act_msg', "发消息"))|tojson }},
+  act_open: {{ ((i18n or {}).get('goal_rpt_act_open', "看会话"))|tojson }},
+  pageinfo: {{ ((i18n or {}).get('goal_rpt_pageinfo', "第 {p} 页 · 共 {n} 条"))|tojson }},
+  days_n: {{ ((i18n or {}).get('goal_rpt_days_n', "{n} 天"))|tojson }},
+  tpl_thanks: {{ ((i18n or {}).get('goal_rpt_tpl_thanks_text', "谢谢你的信任呀，有任何问题随时找我，我一直都在～"))|tojson }},
+  tpl_care: {{ ((i18n or {}).get('goal_rpt_tpl_care_text', "这几天用下来感觉怎么样？有什么不清楚的尽管问我～"))|tojson }},
+  miss_offered: {{ ((i18n or {}).get('goal_rpt_miss_offered', "已开价未成交"))|tojson }},
+  miss_offered_t: {{ ((i18n or {}).get('goal_rpt_miss_offered_t', "开价拍真的发出过——官网成交在站外，先人工复核有没有漏标成交"))|tojson }},
+  miss_engaged: {{ ((i18n or {}).get('goal_rpt_miss_engaged', "有来有回"))|tojson }},
+  miss_engaged_t: {{ ((i18n or {}).get('goal_rpt_miss_engaged_t', "窗口内客户回过话但没走到开价——看推进节奏与种草话术"))|tojson }},
+  miss_silent: {{ ((i18n or {}).get('goal_rpt_miss_silent', "没聊起来"))|tojson }},
+  miss_silent_t: {{ ((i18n or {}).get('goal_rpt_miss_silent_t', "窗口内客户几乎没回话——复盘开场话术与名单质量"))|tojson }},
+  batch_bar: {{ ((i18n or {}).get('goal_rpt_batch_bar', "已选 {n} 人"))|tojson }},
+  ob_eligible: {{ ((i18n or {}).get('goal_rpt_ob_eligible', "可发送 {n} 人"))|tojson }},
+  ob_skipped: {{ ((i18n or {}).get('goal_rpt_ob_skipped', "跳过 {n} 人"))|tojson }},
+  ob_skip_cooldown: {{ ((i18n or {}).get('goal_rpt_ob_skip_cooldown', "触达冷却中"))|tojson }},
+  ob_skip_cap: {{ ((i18n or {}).get('goal_rpt_ob_skip_cap', "账号今日配额已满"))|tojson }},
+  ob_langmix: {{ ((i18n or {}).get('goal_rpt_ob_langmix', "语言分布：{mix}"))|tojson }},
+  ob_execute: {{ ((i18n or {}).get('goal_rpt_ob_execute', "确认发送 {n} 人"))|tojson }},
+  ob_sending: {{ ((i18n or {}).get('goal_rpt_ob_sending', "发送中…"))|tojson }},
+  ob_done: {{ ((i18n or {}).get('goal_rpt_ob_done', "已发送 {sent} 人（失败 {failed}）"))|tojson }},
+  ob_disabled: {{ ((i18n or {}).get('goal_rpt_ob_disabled', "批量触达未启用（config.outreach.enabled）——预检名单仍可用"))|tojson }},
+  ob_empty_tpl: {{ ((i18n or {}).get('goal_rpt_ob_empty_tpl', "先写模板文案再预检"))|tojson }},
+  act_chain: {{ ((i18n or {}).get('goal_rpt_act_chain', "启动后续链"))|tojson }},
+  chain_started: {{ ((i18n or {}).get('goal_rpt_chain_started', "已启动后续链"))|tojson }},
+  chain_fail: {{ ((i18n or {}).get('goal_rpt_chain_fail', "启动失败"))|tojson }},
+  trend_title: {{ ((i18n or {}).get('goal_rpt_trend_title', "完成趋势（近 {n} 天）"))|tojson }},
+  trend_done: {{ ((i18n or {}).get('goal_rpt_trend_done', "完成"))|tojson }},
+  trend_won: {{ ((i18n or {}).get('goal_rpt_trend_won', "赢单"))|tojson }}
+};
+var grPage = 1, grTotal = 0, grPageSize = 25, grSendRow = null, grDebT = null;
+var grSel = {};          // goal_id -> {conversation_id, name}（跨页保持）
+var grChains = null;     // 工作链清单（null=不可用/未启用 → 隐藏链按钮）
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function grDebounce(){ clearTimeout(grDebT); grDebT = setTimeout(function(){ grPage=1; grLoad(); }, 400); }
+function grFmtTs(ts){
+  if(!ts) return '—';
+  var diff = Date.now()/1000 - ts;
+  if(diff < 3600) return Math.max(1,Math.round(diff/60)) + ' min';
+  if(diff < 86400) return Math.round(diff/3600) + ' h';
+  return window.wsFmtDate(ts, {month:'numeric', day:'numeric'});
+}
+function grStatusBadge(st){
+  var lbl = GR_I18N['st_'+st] || st;
+  return '<span class="gr-badge st-'+esc(st)+'">'+esc(lbl)+'</span>';
+}
+function grKindTxt(k){ return k==='order'?GR_I18N.kind_order : k==='manual'?GR_I18N.kind_manual : k==='auto'?GR_I18N.kind_auto : '—'; }
+
+async function grLoad(){
+  var days = document.getElementById('f-days').value;
+  try{
+    var r = await fetch('/api/goals/report/accounts?days='+days);
+    if(r.status===403){ document.getElementById('gr-disabled').style.display='block'; document.getElementById('gr-body').style.display='none'; return; }
+    document.getElementById('gr-disabled').style.display='none';
+    document.getElementById('gr-body').style.display='block';
+    var d = await r.json();
+    var t = d.totals||{};
+    // N-3 #241：陪伴域收起金额口径（KPI / 列 / 后缀），「赢单」列头改「达成」，完成方式改「人工标记」
+    var companion = String(d.business_domain||'') === 'companion';
+    document.body.classList.toggle('gr-companion', companion);
+    GR_I18N.kind_manual = companion ? GR_I18N.kind_manual_companion : GR_I18N.kind_manual_sales;
+    document.querySelectorAll('.gr-won-lbl').forEach(function(el){
+      if(!el.getAttribute('data-sales')) el.setAttribute('data-sales', el.textContent);
+      el.textContent = companion ? (el.getAttribute('data-companion')||el.textContent) : el.getAttribute('data-sales');
+    });
+    document.getElementById('kpi-done').textContent = t.done!=null?t.done:'—';
+    document.getElementById('kpi-rate').textContent = (t.done_rate!=null&&(t.done+t.failed+t.expired)>0)?Math.round(t.done_rate*100)+'%':'—';
+    document.getElementById('kpi-amount').textContent = t.won_amount?('$'+t.won_amount):(t.won?t.won:'—');
+    document.getElementById('kpi-active').textContent = t.active!=null?t.active:'—';
+    document.getElementById('kpi-miss').textContent = ((t.failed||0)+(t.expired||0))||'—';
+    document.getElementById('kpi-days').textContent = t.avg_days_to_done!=null?t.avg_days_to_done:'—';
+    grRenderAccounts(d.accounts||[]);
+    grRenderTrend(d.trend||[]);
+    grRenderHeat(d.heat||{});
+    /* Q-5 D（#263）：连续 N 轮抽取 0/0 → 顶部告警行；后端缺键 / 未停滞 = 隐藏 */
+    var esEl = document.getElementById('gr-extract-stall');
+    if (esEl) {
+      var es = d.extract_stall;
+      if (es && es.stalled) {
+        esEl.textContent = String(GR_I18N.extract_stall||'').replace('{n}', String(es.zero_streak||es.threshold||50));
+        esEl.style.display = 'block';
+      } else { esEl.style.display = 'none'; }
+    }
+    document.getElementById('gr-update').textContent = window.wsFmtTime(Date.now());
+  }catch(e){
+    document.getElementById('gr-acct-rows').innerHTML = '<tr><td colspan="9"><div class="gr-empty">'+esc(GR_I18N.load_fail)+'</div></td></tr>';
+  }
+  grLoadContacts();
+}
+
+function grRenderAccounts(rows){
+  var tb = document.getElementById('gr-acct-rows');
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="9"><div class="gr-empty">'+esc(GR_I18N.empty)+'</div></td></tr>'; return; }
+  tb.innerHTML = rows.map(function(a){
+    var miss = (a.failed||0)+(a.expired||0);
+    var rate = Math.round((a.done_rate||0)*100);
+    var organic = (a.done||0)+miss;
+    return '<tr>'
+      +'<td><span class="gr-name">'+esc(a.platform)+':'+esc(a.account_id)+'</span></td>'
+      +'<td>'+(a.active||0)+'</td>'
+      +'<td><b>'+(a.done||0)+'</b></td>'
+      +'<td>'+(miss||0)+'</td>'
+      +'<td>'+(organic? ('<span class="gr-bar-wrap"><span class="gr-bar" style="width:'+rate+'%"></span></span>'+rate+'%') : '—')+'</td>'
+      +'<td>'+(a.won||0)+(a.won_amount?(' <span class="gr-dim gr-amount">($'+a.won_amount+')</span>'):'')+'</td>'
+      +'<td>'+(a.avg_days_to_done!=null?a.avg_days_to_done:'—')+'</td>'
+      +'<td class="gr-dim">'+esc(a.top_template||'—')+'</td>'
+      +'<td><button class="gr-act" onclick="grFilterAccount(\''+esc(a.account_id)+'\')">'+esc(GR_I18N.view_contacts)+'</button></td>'
+      +'</tr>';
+  }).join('');
+}
+
+function grFilterAccount(aid){
+  document.getElementById('f-account').value = aid;
+  grPage = 1;
+  grLoadContacts();
+  document.getElementById('gr-contacts-card').scrollIntoView({behavior:'smooth'});
+}
+
+async function grLoadContacts(){
+  var days = document.getElementById('f-days').value;
+  var st = document.getElementById('f-status').value;
+  var tpl = document.getElementById('f-template').value;
+  var acct = document.getElementById('f-account').value.trim();
+  var q = '/api/goals/report/contacts?days='+days+'&status='+encodeURIComponent(st)
+    +'&page='+grPage+'&page_size='+grPageSize
+    +(tpl?('&template='+encodeURIComponent(tpl)):'')
+    +(acct?('&account_id='+encodeURIComponent(acct)):'');
+  var tb = document.getElementById('gr-ct-rows');
+  try{
+    var r = await fetch(q);
+    if(r.status===403) return;
+    var d = await r.json();
+    grTotal = d.total||0;
+    var rows = d.rows||[];
+    if(!rows.length){ tb.innerHTML = '<tr><td colspan="11"><div class="gr-empty">'+esc(GR_I18N.empty)+'</div></td></tr>'; }
+    else tb.innerHTML = rows.map(grRenderContactRow).join('');
+    document.getElementById('gr-pageinfo').textContent =
+      GR_I18N.pageinfo.replace('{p}', grPage).replace('{n}', grTotal);
+    document.getElementById('gr-prev').disabled = grPage<=1;
+    document.getElementById('gr-next').disabled = grPage*grPageSize>=grTotal;
+    var selAll = document.getElementById('gr-sel-all');
+    if(selAll) selAll.checked = rows.length>0 && rows.every(function(g){ return grSel[g.goal_id]; });
+  }catch(e){
+    tb.innerHTML = '<tr><td colspan="11"><div class="gr-empty">'+esc(GR_I18N.load_fail)+'</div></td></tr>';
+  }
+}
+
+function grRenderContactRow(g){
+  var who = g.contact_name || g.chat_key || '?';
+  var hot = (g.status==='done' && g.done_at && (Date.now()/1000-g.done_at)<172800) ? '<span class="gr-hot">🔥</span>' : '';
+  var fu = '';
+  if(g.status==='done'){
+    if(g.followed_up===true) fu = '<span class="gr-badge fu-yes">'+esc(GR_I18N.fu_yes)+'</span>';
+    else if(g.followed_up===false) fu = '<span class="gr-badge fu-no">'+esc(GR_I18N.fu_no)+'</span>';
+    else fu = '—';
+  } else if(g.miss_kind){
+    // P5 失守三分法：已开价未成交（琥珀=最该复核）/ 有来有回（蓝灰）/ 没聊起来（灰）
+    var mk = g.miss_kind;
+    var mkCls = mk==='offered' ? 'fu-no' : 'st-cancelled';
+    var mkLbl = mk==='offered' ? GR_I18N.miss_offered : (mk==='engaged' ? GR_I18N.miss_engaged : GR_I18N.miss_silent);
+    var mkTip = mk==='offered' ? GR_I18N.miss_offered_t : (mk==='engaged' ? GR_I18N.miss_engaged_t : GR_I18N.miss_silent_t);
+    fu = '<span class="gr-badge '+mkCls+'" title="'+esc(mkTip)+'">'+esc(mkLbl)+'</span>';
+  } else fu = '—';
+  var payload = esc(JSON.stringify({goal_id:g.goal_id, platform:g.platform, account_id:g.account_id, chat_key:g.chat_key, conversation_id:g.conversation_id, name:who}));
+  var chainBtn = '';
+  if(g.status==='done' && g.rec_chain && grChains){
+    var chainPayload = esc(JSON.stringify({conversation_id:g.conversation_id, chain_id:g.rec_chain, goal_id:g.goal_id}));
+    chainBtn = '<button class="gr-act" data-gr-chain="'+chainPayload+'">🔁 '+esc(GR_I18N.act_chain)+'</button>';
+  }
+  return '<tr>'
+    +'<td><input type="checkbox" data-gr-sel="'+esc(g.goal_id)+'" data-gr-sel-payload="'+payload+'"'+(grSel[g.goal_id]?' checked':'')+'></td>'
+    +'<td><span class="gr-name">'+esc(who)+'</span>'+hot+'<div class="gr-dim">'+esc(g.platform)+':'+esc(g.chat_key)+'</div></td>'
+    +'<td class="gr-dim">'+esc(g.account_id)+'</td>'
+    +'<td>'+esc(g.title||g.template_name||g.template)+'<div class="gr-dim">'+esc(g.template_name||'')+'</div></td>'
+    +'<td>'+grStatusBadge(g.status)+'</td>'
+    +'<td>'+(g.status==='done'?grFmtTs(g.done_at):(g.status==='active'?'—':grFmtTs(g.done_at)))+'</td>'
+    +'<td class="gr-dim">'+esc(g.status==='done'?grKindTxt(g.result_kind):'—')+'</td>'
+    +'<td class="gr-amount">'+(g.amount!=null?('$'+g.amount):'—')+'</td>'
+    +'<td>'+(g.days_to_done!=null?esc(GR_I18N.days_n.replace('{n}',g.days_to_done)):'—')+'</td>'
+    +'<td>'+fu+'</td>'
+    +'<td>'
+      +'<button class="gr-act" data-gr-send="'+payload+'">💬 '+esc(GR_I18N.act_msg)+'</button>'
+      +'<button class="gr-act" data-gr-open="'+esc(g.conversation_id)+'">📂 '+esc(GR_I18N.act_open)+'</button>'
+      +chainBtn
+    +'</td>'
+    +'</tr>';
+}
+
+// 行操作走事件委托（动态行不挂内联全局函数——防连字符/引号转义脆弱模式）
+document.getElementById('gr-ct-rows').addEventListener('click', function(ev){
+  var cb = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-gr-sel') : null;
+  if(cb){
+    if(ev.target.checked){
+      try{ grSel[cb] = JSON.parse(ev.target.getAttribute('data-gr-sel-payload')); }catch(_){}
+    } else delete grSel[cb];
+    grSyncBatchBar();
+    return;
+  }
+  var btn = ev.target.closest ? ev.target.closest('button') : null;
+  if(!btn) return;
+  var send = btn.getAttribute('data-gr-send');
+  if(send){ try{ grOpenModal(JSON.parse(send)); }catch(_){} return; }
+  var chain = btn.getAttribute('data-gr-chain');
+  if(chain){ try{ grStartChain(JSON.parse(chain), btn); }catch(_){} return; }
+  var conv = btn.getAttribute('data-gr-open');
+  if(conv){
+    try{ sessionStorage.setItem('ws_focus_conv', conv); }catch(_){}
+    location.href = '/workspace';
+  }
+});
+
+// ── P1：勾选/批量条 ─────────────────────────────────────────
+function grSyncBatchBar(){
+  var n = Object.keys(grSel).length;
+  var bar = document.getElementById('gr-batchbar');
+  bar.style.display = n ? 'flex' : 'none';
+  document.getElementById('gr-bb-count').textContent = GR_I18N.batch_bar.replace('{n}', n);
+}
+function grToggleAll(checked){
+  document.querySelectorAll('#gr-ct-rows input[data-gr-sel]').forEach(function(cb){
+    cb.checked = checked;
+    var gid = cb.getAttribute('data-gr-sel');
+    if(checked){ try{ grSel[gid] = JSON.parse(cb.getAttribute('data-gr-sel-payload')); }catch(_){} }
+    else delete grSel[gid];
+  });
+  grSyncBatchBar();
+}
+function grClearSel(){
+  grSel = {};
+  document.querySelectorAll('#gr-ct-rows input[data-gr-sel]').forEach(function(cb){ cb.checked=false; });
+  var selAll = document.getElementById('gr-sel-all'); if(selAll) selAll.checked=false;
+  grSyncBatchBar();
+}
+
+// ── P1：一键启动后续链（链缺席时先导入种子链，幂等） ────────────
+async function grLoadChains(){
+  try{
+    var r = await fetch('/api/workspace/workflow-chains');
+    if(!r.ok){ grChains = null; return; }
+    var d = await r.json();
+    grChains = {};
+    (d.chains||[]).forEach(function(c){ grChains[c.chain_id] = true; });
+  }catch(_){ grChains = null; }
+}
+async function grStartChain(p, btn){
+  if(btn) btn.disabled = true;
+  try{
+    if(grChains && !grChains[p.chain_id]){
+      try{
+        await fetch('/api/workspace/workflow-chains/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        await grLoadChains();
+      }catch(_){}
+    }
+    var r = await fetch('/api/workspace/conv/'+encodeURIComponent(p.conversation_id)+'/start-chain', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({chain_id: p.chain_id, goal_id: p.goal_id})
+    });
+    var d = await r.json();
+    if(d && d.ok){
+      if(window.CRMW && CRMW.toast) CRMW.toast(GR_I18N.chain_started, '#0f766e', 'zap');
+    } else {
+      if(btn) btn.disabled = false;
+      var msg = (d && d.error) ? d.error : GR_I18N.chain_fail;
+      if(window.CRMW && CRMW.toast) CRMW.toast(msg, '#b45309', 'alert');
+    }
+  }catch(e){
+    if(btn) btn.disabled = false;
+    if(window.CRMW && CRMW.toast) CRMW.toast(GR_I18N.chain_fail, '#ef4444', 'x');
+  }
+}
+
+// ── P1：批量触达（预检 → 确认发送 两段式；复用 outreach 资格管线） ──
+var grObPlan = null;
+function grOpenOutreach(){
+  if(!Object.keys(grSel).length) return;
+  grObPlan = null;
+  document.getElementById('gr-ob-count').textContent = GR_I18N.batch_bar.replace('{n}', Object.keys(grSel).length);
+  document.getElementById('gr-ob-preview').style.display = 'none';
+  document.getElementById('gr-ob-exec-btn').disabled = true;
+  document.getElementById('gr-ob-bg').style.display = 'flex';
+}
+function grCloseOutreach(){ document.getElementById('gr-ob-bg').style.display='none'; }
+function grObFillTpl(kind){
+  document.getElementById('gr-ob-text').value = kind==='thanks' ? GR_I18N.tpl_thanks : GR_I18N.tpl_care;
+}
+function grObIds(){
+  return Object.keys(grSel).map(function(gid){ return grSel[gid].conversation_id; }).filter(Boolean);
+}
+async function grObPreview(){
+  var text = document.getElementById('gr-ob-text').value.trim();
+  var box = document.getElementById('gr-ob-preview');
+  if(!text){ box.style.display='block'; box.textContent = GR_I18N.ob_empty_tpl; return; }
+  try{
+    var r = await fetch('/api/unified-inbox/outreach/preview', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({conversation_ids: grObIds()})
+    });
+    var d = await r.json();
+    grObPlan = d;
+    var skipReasons = {};
+    (d.skipped||[]).forEach(function(s){ skipReasons[s.reason] = (skipReasons[s.reason]||0)+1; });
+    var skipTxt = Object.keys(skipReasons).map(function(k){
+      var lbl = k==='cooldown'?GR_I18N.ob_skip_cooldown : k==='account_cap'?GR_I18N.ob_skip_cap : k;
+      return lbl+'×'+skipReasons[k];
+    }).join('、');
+    var langMix = {};
+    (d.eligible||[]).forEach(function(t){ var l=t.language||'?'; langMix[l]=(langMix[l]||0)+1; });
+    var mixTxt = Object.keys(langMix).map(function(k){ return k+'×'+langMix[k]; }).join('、') || '—';
+    box.style.display = 'block';
+    box.innerHTML = '<b>'+esc(GR_I18N.ob_eligible.replace('{n}', d.eligible_count||0))+'</b>'
+      +((d.skipped_count)?('　'+esc(GR_I18N.ob_skipped.replace('{n}', d.skipped_count))+(skipTxt?('：'+esc(skipTxt)):'')):'')
+      +'<br>'+esc(GR_I18N.ob_langmix.replace('{mix}', mixTxt));
+    var execBtn = document.getElementById('gr-ob-exec-btn');
+    execBtn.disabled = !(d.eligible_count>0);
+    execBtn.textContent = GR_I18N.ob_execute.replace('{n}', d.eligible_count||0);
+  }catch(e){
+    box.style.display='block'; box.textContent = GR_I18N.load_fail;
+  }
+}
+async function grObExecute(){
+  var text = document.getElementById('gr-ob-text').value.trim();
+  if(!text || !grObPlan) return;
+  var btn = document.getElementById('gr-ob-exec-btn');
+  btn.disabled = true; btn.textContent = GR_I18N.ob_sending;
+  try{
+    var r = await fetch('/api/unified-inbox/outreach/execute', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        filters: {conversation_ids: grObIds()},
+        template: text, confirm: true,
+        translate: document.getElementById('gr-ob-translate').checked,
+        batch_id: 'goalrpt-'+Date.now()
+      })
+    });
+    var d = await r.json();
+    if(d && d.reason==='outreach_disabled'){
+      var box = document.getElementById('gr-ob-preview');
+      box.style.display='block'; box.textContent = GR_I18N.ob_disabled;
+      btn.textContent = GR_I18N.ob_execute.replace('{n}', (grObPlan&&grObPlan.eligible_count)||0);
+      return;
+    }
+    var msg = GR_I18N.ob_done.replace('{sent}', (d&&d.sent)!=null?d.sent:'?').replace('{failed}', (d&&d.failed)!=null?d.failed:'0');
+    if(window.CRMW && CRMW.toast) CRMW.toast(msg, (d&&d.sent)?'#0f766e':'#b45309', 'send');
+    grCloseOutreach(); grClearSel(); grLoadContacts();
+  }catch(e){
+    if(window.CRMW && CRMW.toast) CRMW.toast(GR_I18N.send_fail, '#ef4444', 'x');
+    btn.disabled = false;
+    btn.textContent = GR_I18N.ob_execute.replace('{n}', (grObPlan&&grObPlan.eligible_count)||0);
+  }
+}
+
+// ── P2：趋势 sparkline + 账号×类型热力（沿用本仓轻量 SVG/CSS 惯例，零图表库） ──
+function grSpark(series, opts){
+  // series: [{label, values[], color}]；等宽折线，hover 出 <title>
+  var w = opts.w||560, h = opts.h||90, pad = 6;
+  var n = Math.max.apply(null, series.map(function(s){ return s.values.length; }));
+  if(n < 2) return '';
+  var maxV = Math.max(1, Math.max.apply(null, series.map(function(s){ return Math.max.apply(null, s.values); })));
+  var sx = (w - pad*2) / (n - 1), sy = (h - pad*2) / maxV;
+  var polys = series.map(function(s){
+    var pts = s.values.map(function(v,i){
+      return (pad + i*sx).toFixed(1)+','+(h - pad - v*sy).toFixed(1);
+    }).join(' ');
+    return '<polyline points="'+pts+'" fill="none" stroke="'+s.color+'" stroke-width="2" stroke-linejoin="round"><title>'+esc(s.label)+'</title></polyline>';
+  }).join('');
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px;display:block;">'+polys+'</svg>';
+}
+function grRenderTrend(trend){
+  var card = document.getElementById('gr-trend-card');
+  var total = trend.reduce(function(a,r){ return a + (r.done||0); }, 0);
+  if(!trend.length || !total){ card.style.display='none'; return; }
+  card.style.display='block';
+  document.getElementById('gr-trend-title').textContent =
+    '📈 ' + GR_I18N.trend_title.replace('{n}', trend.length);
+  var svg = grSpark([
+    {label: GR_I18N.trend_done, values: trend.map(function(r){ return r.done||0; }), color: 'var(--bl-growth-600,#0d76d9)'},
+    {label: GR_I18N.trend_won,  values: trend.map(function(r){ return r.won||0; }), color: '#ca8a04'}
+  ], {h:90});
+  var days = trend.map(function(r){ return r.day; });
+  var lbl = '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tk-text-muted,#94a3b8);margin-top:2px;">'
+    +'<span>'+esc(days[0])+'</span><span>'+esc(days[Math.floor(days.length/2)])+'</span><span>'+esc(days[days.length-1])+'</span></div>';
+  var legend = '<div style="font-size:11px;color:var(--tk-text-muted,#6b7280);margin-bottom:4px;">'
+    +'<span style="color:var(--bl-growth-600,#0d76d9);">●</span> '+esc(GR_I18N.trend_done)
+    +'　<span style="color:#ca8a04;">●</span> '+esc(GR_I18N.trend_won)+'</div>';
+  document.getElementById('gr-trend').innerHTML = legend + svg + lbl;
+}
+function grRenderHeat(heat){
+  var card = document.getElementById('gr-heat-card');
+  var accts = (heat&&heat.accounts)||[], tmpls = (heat&&heat.templates)||[], cells = (heat&&heat.cells)||{};
+  if(!accts.length || !tmpls.length){ card.style.display='none'; return; }
+  card.style.display='block';
+  var maxV = 1;
+  accts.forEach(function(a){ tmpls.forEach(function(t){ maxV = Math.max(maxV, (cells[a]||{})[t.id]||0); }); });
+  var html = '<table class="gr-table" style="font-size:12px;"><thead><tr><th></th>'
+    + tmpls.map(function(t){ return '<th style="white-space:normal;min-width:64px;">'+esc(t.name)+'</th>'; }).join('')
+    + '</tr></thead><tbody>';
+  accts.forEach(function(a){
+    html += '<tr><td class="gr-dim" style="white-space:nowrap;">'+esc(a)+'</td>';
+    tmpls.forEach(function(t){
+      var v = (cells[a]||{})[t.id]||0;
+      var alpha = v ? (0.15 + 0.6*(v/maxV)) : 0;
+      html += '<td style="text-align:center;'+(v?('background:rgba(13,118,217,'+alpha.toFixed(2)+');'
+        +(alpha>0.45?'color:#fff;':'')):'')+'">'+(v||'')+'</td>';
+    });
+    html += '</tr>';
+  });
+  document.getElementById('gr-heat').innerHTML = html + '</tbody></table>';
+}
+
+// ── P2：URL 预置筛选（失守日报深链 ?status=ended&days=3 直达那批客户） ──
+function grApplyUrlPresets(){
+  try{
+    var q = new URLSearchParams(location.search);
+    var map = {days:'f-days', status:'f-status', template:'f-template', account_id:'f-account'};
+    Object.keys(map).forEach(function(k){
+      var v = q.get(k);
+      if(!v) return;
+      var el = document.getElementById(map[k]);
+      if(!el) return;
+      if(el.tagName==='SELECT'){
+        var has = Array.prototype.some.call(el.options, function(o){ return o.value===v; });
+        if(has) el.value = v;
+      } else el.value = v;
+    });
+  }catch(_){}
+}
+
+// ── P1：导出 CSV（当前筛选，最多 500 行；客户端拼装零新端点） ────────
+async function grExportCsv(){
+  var days = document.getElementById('f-days').value;
+  var st = document.getElementById('f-status').value;
+  var tpl = document.getElementById('f-template').value;
+  var acct = document.getElementById('f-account').value.trim();
+  var all = [];
+  for(var p=1; p<=10; p++){
+    var q = '/api/goals/report/contacts?days='+days+'&status='+encodeURIComponent(st)
+      +'&page='+p+'&page_size=50'
+      +(tpl?('&template='+encodeURIComponent(tpl)):'')
+      +(acct?('&account_id='+encodeURIComponent(acct)):'');
+    try{
+      var r = await fetch(q);
+      if(!r.ok) break;
+      var d = await r.json();
+      all = all.concat(d.rows||[]);
+      if(all.length >= (d.total||0) || !(d.rows||[]).length) break;
+    }catch(_){ break; }
+  }
+  var head = ['contact','platform','account_id','chat_key','goal','template','status','done_at','result_kind','amount','days_to_done','followed_up'];
+  var lines = [head.join(',')];
+  all.forEach(function(g){
+    var cells = [g.contact_name||g.chat_key, g.platform, g.account_id, g.chat_key,
+      g.title||'', g.template_name||g.template, g.status,
+      g.done_at?new Date(g.done_at*1000).toISOString():'',
+      g.result_kind||'', g.amount!=null?g.amount:'', g.days_to_done!=null?g.days_to_done:'',
+      g.followed_up===true?'yes':(g.followed_up===false?'no':'')];
+    lines.push(cells.map(function(c){
+      c = String(c==null?'':c);
+      return (c.indexOf(',')>=0||c.indexOf('"')>=0||c.indexOf('\n')>=0) ? '"'+c.replace(/"/g,'""')+'"' : c;
+    }).join(','));
+  });
+  var blob = new Blob(['\ufeff'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'goal-report-'+days+'d-'+(st||'all')+'.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+}
+
+function grOpenModal(row){
+  grSendRow = row;
+  document.getElementById('gr-send-to').textContent = row.name + '（' + row.platform + ':' + row.account_id + '）';
+  document.getElementById('gr-send-text').value = '';
+  document.getElementById('gr-modal-bg').style.display = 'flex';
+  document.getElementById('gr-send-text').focus();
+}
+function grCloseModal(){ document.getElementById('gr-modal-bg').style.display='none'; grSendRow=null; }
+function grFillTpl(kind){
+  document.getElementById('gr-send-text').value = kind==='thanks' ? GR_I18N.tpl_thanks : GR_I18N.tpl_care;
+}
+async function grSend(){
+  if(!grSendRow) return;
+  var text = document.getElementById('gr-send-text').value.trim();
+  if(!text) return;
+  var btn = document.getElementById('gr-send-btn');
+  btn.disabled = true;
+  try{
+    var r = await fetch('/api/unified-inbox/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        platform: grSendRow.platform, account_id: grSendRow.account_id,
+        chat_key: grSendRow.chat_key, text: text,
+        target_lang: 'auto',
+        client_msg_id: 'goalrpt-'+grSendRow.goal_id+'-'+Date.now()
+      })
+    });
+    if(r.ok){
+      grCloseModal();
+      if(window.CRMW && CRMW.toast) CRMW.toast(GR_I18N.send_ok, '#0f766e', 'check');
+      grLoadContacts();   // followed_up 由消息事实推导，刷新即变「已跟进」
+    } else {
+      var msg = GR_I18N.send_fail;
+      try{ var jd = await r.json(); if(jd && jd.detail) msg += ': '+jd.detail; }catch(_){}
+      if(window.CRMW && CRMW.toast) CRMW.toast(msg, '#ef4444', 'x');
+    }
+  }catch(e){
+    if(window.CRMW && CRMW.toast) CRMW.toast(GR_I18N.send_fail, '#ef4444', 'x');
+  }finally{ btn.disabled = false; }
+}
+function grPrev(){ if(grPage>1){ grPage--; grLoadContacts(); } }
+function grNext(){ if(grPage*grPageSize<grTotal){ grPage++; grLoadContacts(); } }
+
+async function grLoadTemplates(){
+  try{
+    var r = await fetch('/api/goals/templates');
+    if(!r.ok) return;
+    var d = await r.json();
+    var sel = document.getElementById('f-template');
+    var en = (document.documentElement.lang||'').toLowerCase().indexOf('en')===0;
+    (d.templates||[]).forEach(function(t){
+      var o = document.createElement('option');
+      o.value = t.id; o.textContent = (en ? (t.name_en||t.name_zh) : (t.name_zh||t.name_en)) || t.id;
+      sel.appendChild(o);
+    });
+    // URL 预置的 template 参数要等选项灌入后才生效（异步竞态）
+    try{
+      var tv = new URLSearchParams(location.search).get('template');
+      if(tv && Array.prototype.some.call(sel.options, function(o){ return o.value===tv; })){
+        sel.value = tv; grPage = 1; grLoadContacts();
+      }
+    }catch(_){}
+  }catch(_){}
+}
+window.grLoad = grLoad; window.grLoadContacts = grLoadContacts;
+window.grPrev = grPrev; window.grNext = grNext;
+window.grFilterAccount = grFilterAccount; window.grOpenModal = grOpenModal;
+window.grCloseModal = grCloseModal; window.grFillTpl = grFillTpl;
+window.grSend = grSend; window.grDebounce = grDebounce;
+window.grToggleAll = grToggleAll; window.grClearSel = grClearSel;
+window.grOpenOutreach = grOpenOutreach; window.grCloseOutreach = grCloseOutreach;
+window.grObFillTpl = grObFillTpl; window.grObPreview = grObPreview;
+window.grObExecute = grObExecute; window.grExportCsv = grExportCsv;
+grApplyUrlPresets();
+grLoadTemplates();
+grLoadChains().then(grLoad);
+</script>
+{% endblock %}

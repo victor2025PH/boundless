@@ -148,6 +148,53 @@ def test_copy_voice_profile_source_without_voice_noop():
     assert "voice_profile" not in out
 
 
+def test_copy_voice_profile_clone_source_is_normalized_to_valid_clone():
+    """2026-09-19 陈美玲→Claire：存量克隆档带残留预置声名、无显式 voice_mode，
+    原样复制 → 目标下一次保存被 #205 校验以 clone_with_preset_voice 拒绝。
+    复用收口：显式 clone、清预置声名、其余键照带，且复制件本身过保存校验。"""
+    from src.ai.voice_tristate import split_problems, validate_voice_profile
+
+    src = {"voice_profile": {
+        "enabled": True, "owner_consent": True, "backend": "avatar_clone",
+        "instruct_style": "温柔", "reference_audio_path": "config/voice_refs/chen_meiling.wav",
+        "voice": "zh-CN-XiaoxiaoNeural", "format": "mp3", "emotion": "serious",
+    }}
+    dst = {"name": "Claire", "voice_profile": {
+        "voice_mode": "preset", "backend": "edge_tts", "voice": "en-US-AvaMultilingualNeural"}}
+    vp = copy_voice_profile(src, dst)["voice_profile"]
+    assert vp["voice_mode"] == "clone"
+    assert vp["backend"] == "avatar_clone"
+    assert vp["voice"] == ""
+    assert vp["reference_audio_path"] == "config/voice_refs/chen_meiling.wav"
+    assert vp["owner_consent"] is True and vp["instruct_style"] == "温柔"
+    errs, _ = split_problems(validate_voice_profile(vp, check_files=False))
+    assert errs == []
+    # 入参不动
+    assert src["voice_profile"]["voice"] == "zh-CN-XiaoxiaoNeural"
+    assert "voice_mode" not in src["voice_profile"]
+
+
+def test_copy_voice_profile_clone_backend_resolved_from_enroll_source():
+    """backend 被打空但登记来源在场（#149 形态）→ 复制件按来源补回后端。"""
+    src = {"voice_profile": {"enabled": True, "source": "avatar_zeroshot",
+                             "speaker_id": "spk_abc", "voice": "alloy"}}
+    vp = copy_voice_profile(src, {"name": "B"})["voice_profile"]
+    assert vp["voice_mode"] == "clone"
+    assert vp["backend"] == "avatar_clone"
+    assert vp["voice"] == ""
+
+
+def test_copy_voice_profile_preset_source_gets_explicit_mode():
+    vp = copy_voice_profile(
+        {"voice_profile": {"backend": "edge_tts", "voice": "ja-JP-NanamiNeural"}},
+        {"name": "B"})["voice_profile"]
+    assert vp["voice_mode"] == "preset"
+    assert vp["voice"] == "ja-JP-NanamiNeural"
+    # 显式三态原样保留
+    vp2 = copy_voice_profile({"voice_profile": {"voice_mode": "off"}}, {})["voice_profile"]
+    assert vp2 == {"voice_mode": "off"}
+
+
 # ── 生命周期端点契约 ─────────────────────────────────────────────────────────
 def test_unbind_missing_persona_404(auth_client):
     r = auth_client.delete("/api/voice/profiles/__no_such_persona__", follow_redirects=False)

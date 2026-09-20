@@ -28,6 +28,8 @@ from .models import (
     ChannelIdentity,
     HandoffToken,
     Journey,
+    STAGE_ENGAGED,
+    STAGE_HANDOFF_SENT,
     STAGE_INITIAL,
     VALID_CHANNELS,
 )
@@ -212,6 +214,48 @@ CREATE TABLE IF NOT EXISTS tag_library (
     sort_order  INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL DEFAULT 0
 );
+
+-- 2026-08-18 跨平台档案（origin profile）：客户级来源叙事 + AI 可见背景。
+-- 「他从哪个平台来 / 在那边叫什么 / 聊过哪些话题域」——供 _origin_block 注入 AI prompt。
+-- 具体记忆事实**不落这里**（走 episodic_memory 的 canonical 键）；本表只存叙事层。
+CREATE TABLE IF NOT EXISTS contact_profiles (
+    contact_id       TEXT PRIMARY KEY,
+    origin_channel   TEXT NOT NULL DEFAULT '',   -- 来源平台（可为系统外：wechat/other）
+    origin_label     TEXT NOT NULL DEFAULT '',   -- 来源备注（如「广告线索」「微信-老号」）
+    known_since      TEXT NOT NULL DEFAULT '',   -- 认识时长档（recent/months/halfyear/years 或自由文本）
+    preferred_name   TEXT NOT NULL DEFAULT '',   -- 客户偏好称呼
+    prior_names_json TEXT NOT NULL DEFAULT '',   -- {平台: 原平台昵称}
+    topics_json      TEXT NOT NULL DEFAULT '',   -- ["聊过的话题域", ...]
+    background_note  TEXT NOT NULL DEFAULT '',   -- 自由背景叙述（AI 可见）
+    ai_visible       INTEGER NOT NULL DEFAULT 1, -- 0=整份档案不注入 AI
+    created_at       INTEGER NOT NULL DEFAULT 0,
+    updated_at       INTEGER NOT NULL DEFAULT 0,
+    updated_by       TEXT NOT NULL DEFAULT ''
+);
+
+-- 2026-08-18 P1 聊天记录导入批次台账：可撤销的单位。fact_hashes_json 记录写进
+-- episodic 的事实指纹（memory_key + content_hash），整批撤销按指纹精确删除——
+-- episodic 零 schema 改动。原文件解析后即弃，只留 sha256 防重复导入。
+CREATE TABLE IF NOT EXISTS contact_memory_imports (
+    batch_id         TEXT PRIMARY KEY,
+    contact_id       TEXT NOT NULL,
+    source_channel   TEXT NOT NULL DEFAULT '',   -- 来源平台标签（wechat/whatsapp/...）
+    source_label     TEXT NOT NULL DEFAULT '',   -- 自由备注（「微信-老号」）
+    file_name        TEXT NOT NULL DEFAULT '',
+    file_sha256      TEXT NOT NULL DEFAULT '',
+    msg_count        INTEGER NOT NULL DEFAULT 0,
+    date_from        TEXT NOT NULL DEFAULT '',   -- 记录时间范围（YYYY-MM-DD）
+    date_to          TEXT NOT NULL DEFAULT '',
+    summary_json     TEXT NOT NULL DEFAULT '',   -- {topics, note}
+    memory_key       TEXT NOT NULL DEFAULT '',   -- 写入时的 canonical 键（撤销按它删）
+    fact_hashes_json TEXT NOT NULL DEFAULT '',   -- [content_hash, ...]
+    facts_written    INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL DEFAULT 'confirmed',  -- confirmed / revoked
+    created_by       TEXT NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL DEFAULT 0,
+    revoked_at       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cmi_contact ON contact_memory_imports(contact_id, created_at DESC);
 """
 
 
@@ -375,6 +419,229 @@ class ContactStore:
                 (cid,),
             ).fetchall()
         return {str(r["attr_key"]): str(r["attr_value"]) for r in rows}
+
+    # ── 跨平台档案（origin profile，2026-08-18）───────────────────
+    def get_contact_profile(self, contact_id: str) -> Optional[Dict[str, Any]]:
+        """取客户级跨平台档案；无档案 → None。JSON 字段已解析为 dict/list。"""
+        cid = str(contact_id or "").strip()
+        if not cid:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM contact_profiles WHERE contact_id=?", (cid,)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for key, default in (("prior_names_json", {}), ("topics_json", [])):
+            raw = str(d.get(key) or "").strip()
+            parsed: Any = default
+            if raw:
+                try:
+                    val = json.loads(raw)
+                    parsed = val if isinstance(val, type(default)) else default
+                except Exception:
+                    parsed = default
+            d[key.replace("_json", "")] = parsed
+            d.pop(key, None)
+        d["ai_visible"] = bool(d.get("ai_visible", 1))
+        return d
+
+    def upsert_contact_profile(
+        self,
+        contact_id: str,
+        *,
+        origin_channel: Optional[str] = None,
+        origin_label: Optional[str] = None,
+        known_since: Optional[str] = None,
+        preferred_name: Optional[str] = None,
+        prior_names: Optional[Dict[str, str]] = None,
+        topics: Optional[List[str]] = None,
+        background_note: Optional[str] = None,
+        ai_visible: Optional[bool] = None,
+        updated_by: str = "",
+    ) -> bool:
+        """写客户级档案（部分更新语义：None=保留旧值；首写自动建行）。"""
+        cid = str(contact_id or "").strip()
+        if not cid:
+            return False
+        now = self._now()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT contact_id FROM contact_profiles WHERE contact_id=?", (cid,)
+            ).fetchone()
+            if not row:
+                self._conn.execute(
+                    "INSERT INTO contact_profiles (contact_id, created_at, updated_at)"
+                    " VALUES (?, ?, ?)",
+                    (cid, now, now),
+                )
+            updates: List[str] = ["updated_at=?"]
+            params: List[Any] = [now]
+            for col, val in (
+                ("origin_channel", origin_channel),
+                ("origin_label", origin_label),
+                ("known_since", known_since),
+                ("preferred_name", preferred_name),
+                ("background_note", background_note),
+            ):
+                if val is not None:
+                    updates.append(f"{col}=?")
+                    params.append(str(val).strip())
+            if prior_names is not None:
+                updates.append("prior_names_json=?")
+                params.append(json.dumps(
+                    {str(k): str(v) for k, v in prior_names.items() if str(v).strip()},
+                    ensure_ascii=False))
+            if topics is not None:
+                updates.append("topics_json=?")
+                params.append(json.dumps(
+                    [str(t).strip() for t in topics if str(t).strip()][:12],
+                    ensure_ascii=False))
+            if ai_visible is not None:
+                updates.append("ai_visible=?")
+                params.append(1 if ai_visible else 0)
+            if updated_by:
+                updates.append("updated_by=?")
+                params.append(str(updated_by)[:64])
+            params.append(cid)
+            self._conn.execute(
+                f"UPDATE contact_profiles SET {', '.join(updates)} WHERE contact_id=?",
+                params,
+            )
+            self._conn.commit()
+        return True
+
+    # ── 聊天记录导入批次台账（P1，2026-08-18）──────────────────────
+    def insert_memory_import(
+        self,
+        *,
+        contact_id: str,
+        source_channel: str = "",
+        source_label: str = "",
+        file_name: str = "",
+        file_sha256: str = "",
+        msg_count: int = 0,
+        date_from: str = "",
+        date_to: str = "",
+        summary: Optional[Dict[str, Any]] = None,
+        memory_key: str = "",
+        fact_hashes: Optional[List[str]] = None,
+        facts_written: int = 0,
+        created_by: str = "",
+    ) -> str:
+        """登记一个已确认写入的导入批次；返回 batch_id。"""
+        bid = new_id()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO contact_memory_imports (batch_id, contact_id,"
+                " source_channel, source_label, file_name, file_sha256,"
+                " msg_count, date_from, date_to, summary_json, memory_key,"
+                " fact_hashes_json, facts_written, status, created_by, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)",
+                (
+                    bid, str(contact_id), str(source_channel or "")[:24],
+                    str(source_label or "")[:80], str(file_name or "")[:120],
+                    str(file_sha256 or "")[:64], int(msg_count or 0),
+                    str(date_from or "")[:10], str(date_to or "")[:10],
+                    json.dumps(summary or {}, ensure_ascii=False),
+                    str(memory_key or "")[:200],
+                    json.dumps(list(fact_hashes or []), ensure_ascii=False),
+                    int(facts_written or 0), str(created_by or "")[:64],
+                    self._now(),
+                ),
+            )
+            self._conn.commit()
+        return bid
+
+    def _row_to_memory_import(self, row: Any) -> Dict[str, Any]:
+        d = dict(row)
+        for key, default in (("summary_json", {}), ("fact_hashes_json", [])):
+            raw = str(d.get(key) or "").strip()
+            parsed: Any = default
+            if raw:
+                try:
+                    val = json.loads(raw)
+                    parsed = val if isinstance(val, type(default)) else default
+                except Exception:
+                    parsed = default
+            d[key.replace("_json", "")] = parsed
+            d.pop(key, None)
+        return d
+
+    def list_memory_imports(
+        self, contact_id: str, *, status: str = "", limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        cid = str(contact_id or "").strip()
+        if not cid:
+            return []
+        sql = ("SELECT * FROM contact_memory_imports WHERE contact_id=?")
+        params: List[Any] = [cid]
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 20), 100)))
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_memory_import(r) for r in rows]
+
+    def get_memory_import(self, batch_id: str) -> Optional[Dict[str, Any]]:
+        bid = str(batch_id or "").strip()
+        if not bid:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM contact_memory_imports WHERE batch_id=?", (bid,)
+            ).fetchone()
+        return self._row_to_memory_import(row) if row else None
+
+    def find_confirmed_import_by_sha(
+        self, contact_id: str, file_sha256: str,
+    ) -> Optional[Dict[str, Any]]:
+        """重复导入守卫：同客户同文件指纹的已确认批次。"""
+        cid = str(contact_id or "").strip()
+        sha = str(file_sha256 or "").strip()
+        if not cid or not sha:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM contact_memory_imports WHERE contact_id=? AND"
+                " file_sha256=? AND status='confirmed' LIMIT 1",
+                (cid, sha),
+            ).fetchone()
+        return self._row_to_memory_import(row) if row else None
+
+    def mark_memory_import_revoked(self, batch_id: str) -> bool:
+        bid = str(batch_id or "").strip()
+        if not bid:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE contact_memory_imports SET status='revoked', revoked_at=?"
+                " WHERE batch_id=? AND status='confirmed'",
+                (self._now(), bid),
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def origin_profile_totals(self) -> Dict[str, int]:
+        """跨平台档案观测总量（持久口径，ops 卡用）：档案数 / 导入批次 / 事实。"""
+        with self._lock:
+            profiles = self._conn.execute(
+                "SELECT COUNT(*) FROM contact_profiles").fetchone()[0]
+            row = self._conn.execute(
+                "SELECT"
+                " SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END),"
+                " SUM(CASE WHEN status='revoked' THEN 1 ELSE 0 END),"
+                " SUM(CASE WHEN status='confirmed' THEN facts_written ELSE 0 END)"
+                " FROM contact_memory_imports").fetchone()
+        return {
+            "profiles": int(profiles or 0),
+            "imports_confirmed": int(row[0] or 0),
+            "imports_revoked": int(row[1] or 0),
+            "facts_written": int(row[2] or 0),
+        }
 
     def find_contacts_by_attribute(
         self, key: str, value: str, *, exclude_contact_id: str = "",
@@ -735,6 +1002,103 @@ class ContactStore:
                 (str(event_type), int(since_ts)),
             ).fetchall()
         return {str(r["d"]): int(r["n"]) for r in rows}
+
+    # ── C1-2 试用/Demo：漏斗示例数据（线索/转化） ──────────────────────
+    #
+    # 让老板看板的「线索 / 转化数 / 转化率 / 解决时长」在演示时有数字——
+    # 口径与 _daily_report_rows 完全同源（leads=lead_captured、
+    # conversions=handoff_sent、解决时长=journey 内首条 msg_in → handoff_sent）。
+    # 隔离与 InboxStore.purge_demo 同约定：demo: 前缀命名空间，一键整体清空；
+    # 真实 contact_id 由 new_id() 生成（uuid 形），永不与前缀撞。
+
+    def seed_demo_funnel(self, *, days: int = 14,
+                         prefix: str = "demo:") -> Dict[str, int]:
+        """铺演示漏斗：8 联系人 + journey + 线索/转化事件（幂等，先清后铺）。
+
+        事件时间刻意压在最近一周内（老板卡默认 7 天窗），联系人建档时间
+        铺满整个 days 窗（新客趋势线有形状）。
+        """
+        self.purge_demo_funnel(prefix=prefix)
+        now = int(time.time())
+        span = max(1, int(days or 14))
+        profiles = [  # (名字, 语言, 建档几天前)
+            ("Alice Wang", "zh", min(13, span - 1)),
+            ("John Carter", "en", min(11, span - 1)),
+            ("佐藤花子", "ja", min(9, span - 1)),
+            ("陈伟", "zh", min(7, span - 1)),
+            ("Maria Silva", "pt", 5),
+            ("访客 8821", "zh", 4),
+            ("Emma Miller", "en", 2),
+            ("박지훈", "ko", 1),
+        ]
+        lead_days = [6, 5, 4, 3, 2]        # 前 5 人留资（近一周内）
+        conv_days = [4, 2, 1]              # 其中 3 人转化（handoff_sent）
+        n_lead = n_conv = 0
+        with self._lock:
+            for i, (name, lang, age_d) in enumerate(profiles):
+                cid = f"{prefix}fc{i}"
+                jid = f"{prefix}fj{i}"
+                created = now - age_d * 86400
+                stage = STAGE_INITIAL
+                if i < len(lead_days):
+                    stage = STAGE_ENGAGED
+                if i < len(conv_days):
+                    stage = STAGE_HANDOFF_SENT
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO contacts (contact_id, primary_name, "
+                    "language_hint, timezone_hint, country_hint, created_at, "
+                    "last_active_at, notes) VALUES (?, ?, ?, '', '', ?, ?, 'demo')",
+                    (cid, name, lang, created, created + 3600))
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO journeys (journey_id, contact_id, "
+                    "persona_id, funnel_stage, created_at, updated_at) "
+                    "VALUES (?, ?, '', ?, ?, ?)",
+                    (jid, cid, stage, created, created + 3600))
+                self._insert_event_nolock(
+                    journey_id=jid, event_type="contact_created",
+                    payload={}, trace_id="", ts=created)
+                if i < len(lead_days):
+                    lead_ts = now - lead_days[i] * 86400
+                    self._insert_event_nolock(
+                        journey_id=jid, event_type="msg_in",
+                        payload={}, trace_id="", ts=lead_ts - 1800)
+                    self._insert_event_nolock(
+                        journey_id=jid, event_type="lead_captured",
+                        payload={}, trace_id="", ts=lead_ts)
+                    n_lead += 1
+                if i < len(conv_days):
+                    conv_ts = now - conv_days[i] * 86400 + 9000
+                    self._insert_event_nolock(
+                        journey_id=jid, event_type="handoff_sent",
+                        payload={}, trace_id="", ts=conv_ts)
+                    n_conv += 1
+            self._conn.commit()
+        return {"contacts": len(profiles), "leads": n_lead, "conversions": n_conv}
+
+    def purge_demo_funnel(self, prefix: str = "demo:") -> Dict[str, int]:
+        """按命名空间清空演示漏斗数据（绝不碰真实 contact/journey）。"""
+        like = f"{prefix}%"
+        with self._lock:
+            ev = self._conn.execute(
+                "DELETE FROM journey_events WHERE journey_id LIKE ?", (like,)).rowcount
+            jn = self._conn.execute(
+                "DELETE FROM journeys WHERE journey_id LIKE ?", (like,)).rowcount
+            ct = self._conn.execute(
+                "DELETE FROM contacts WHERE contact_id LIKE ?", (like,)).rowcount
+            self._conn.commit()
+        return {"contacts": int(ct), "journeys": int(jn), "events": int(ev)}
+
+    def count_demo_funnel(self, prefix: str = "demo:") -> Dict[str, int]:
+        """演示漏斗数据现状（settings 状态行 / demo_status 消费）。"""
+        like = f"{prefix}%"
+        with self._lock:
+            ct = self._conn.execute(
+                "SELECT COUNT(*) FROM contacts WHERE contact_id LIKE ?",
+                (like,)).fetchone()[0]
+            ev = self._conn.execute(
+                "SELECT COUNT(*) FROM journey_events WHERE journey_id LIKE ?",
+                (like,)).fetchone()[0]
+        return {"contacts": int(ct), "funnel_events": int(ev)}
 
     def agent_task_load(self) -> List[Dict[str, Any]]:
         """每个坐席未完成任务数（仪表盘坐席负载）。"""

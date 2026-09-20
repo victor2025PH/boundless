@@ -9,7 +9,7 @@ Reusable across workspace templates. Set the target template before use, then:
 Usage::
 
     from scripts import i18n_mh
-    i18n_mh.TPL = "src/web/templates/whatsapp_rpa.html"
+    i18n_mh.TPL = "src/web/templates/_channel_body_whatsapp.html"
     i18n_mh.insert_keys({"wa_s001": "中文"}, {"wa_s001": "English"})
     i18n_mh.apply_edits([(120, 'old', 'new')])
     i18n_mh.report(node=True)

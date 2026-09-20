@@ -5,7 +5,9 @@ base.html 的 tooltip 引擎经 `const TERM_DICT={{ help_terms|tojson }};` 消�
 admin.py `_enrich_context` 注入模板上下文。词条结构:
     key → {zh, en, desc, desc_en, usage?, usage_en?}
 zh/en=标题,desc*=功能描述,usage*=典型操作路径(可选)。
-导航项的 key(nav_*)由 src/web/nav_schema.py 的 item.help 关联。
+导航项的 key(nav_* 等)由 src/web/nav_schema.py 的 item.help 关联。
+tooltip 引擎 matchTerm 是「整元素文本 trim/小写后与 key / zh / en 精确相等」才挂——
+不做子串匹配,所以同一功能的多种屏幕说法(如工作目标 / 工作计划)须各占一条词条。
 "bot_admin" 品牌词条此处存默认品牌名;线上 zh/en 随 site_name 动态,
 由 base.html 注入 TERM_DICT 后覆写(与原内联 Jinja 表达式行为一致)。
 """
@@ -19,6 +21,79 @@ HELP_TERMS: dict = {
         "desc_en": "System overview page showing bot status, channel health, recent activity and other key metrics",
         "usage": "打开即可查看全局状态，点击各卡片的快捷链接可跳转到对应功能模块",
         "usage_en": "Open it to see global status; click a card's quick link to jump to the matching module"
+    },
+    "nav_ops_overview": {
+        "zh": "运营总览",
+        "en": "Ops Overview",
+        "desc": "老板单页：业务 ROI、计费用量、运行时健康、运维可靠性与运维事件的聚合看板，全部运维卡片（语音/翻译/命理/主动触达等）都在这里",
+        "desc_en": "The single-page boss view: business ROI, billing, runtime health, ops reliability and incidents, plus every ops card (voice, translation, bazi, proactive outreach, ...)",
+        "usage": "日常巡检从这里开始；仪表盘上的可靠性摘要与工程 chip 也都深链到本页",
+        "usage_en": "Start daily checks here; the dashboard's reliability summary and engineering chips deep-link into this page"
+    },
+    # ── 仪表盘区块（2026-08 改版：待办条 / 统计卡 / 折叠区） ───
+    "dash_todo": {
+        "zh": "待办",
+        "en": "To-dos",
+        "desc": "需要人处理的事项汇总：待审回复草稿、学习队列、未处理危机事件、进行中案例。数据与侧栏徽标同源",
+        "desc_en": "Everything waiting on a human: reply drafts, learning queue, unhandled crisis events and open cases. Same source as the sidebar badges",
+        "usage": "点击任一徽标直达对应处理页；全部清零时显示「暂无待办」",
+        "usage_en": "Click any pill to jump to its handling page; shows \"All clear\" when empty"
+    },
+    "dash_health": {
+        "zh": "系统运行状态",
+        "en": "Runtime health",
+        "desc": "运行时红绿灯：数据库、AI 大模型、授权、消息渠道、后台 Worker、草稿队列等组件的存活/积压/熔断状况",
+        "desc_en": "Runtime traffic light: liveness, backlog and circuit state of DB, AI model, license, channels, workers and draft queues",
+        "usage": "任一组件 chip 都可点击，直达该问题的处理页；异常组件的原因直接显示在行内",
+        "usage_en": "Every component chip is clickable and jumps to where you fix it; failing chips show their reason inline"
+    },
+    "dash_reliability": {
+        "zh": "运维可靠性",
+        "en": "Ops reliability",
+        "desc": "近 24 小时出站处置量、拦截率、升级率与各 Worker 错误率的汇总评分，用于判断自动化链路是否健康",
+        "desc_en": "24h dispositions, block/reject rates and per-worker error rates rolled into one score for judging automation health",
+        "usage": "摘要行足够判断好坏；点开看各 Worker 明细，完整运维卡片在「运营总览」页",
+        "usage_en": "The summary row tells you good/bad at a glance; expand for per-worker detail, full cards live in Ops Overview"
+    },
+    "dash_eng": {
+        "zh": "工程明细",
+        "en": "Engineering detail",
+        "desc": "Bot 实时性能（响应耗时/并发/队列/熔断）与触发器决策日志，供排障和调参使用，默认折叠",
+        "desc_en": "Bot performance (latency, concurrency, queues, circuit breaker) and trigger decision log for debugging and tuning; collapsed by default",
+        "usage": "展开后才开始加载与高频刷新；日常运营无需展开",
+        "usage_en": "Loads and polls only when expanded; day-to-day operators can leave it closed"
+    },
+    "dash_msgs": {
+        "zh": "消息 收/发",
+        "en": "Messages in/out",
+        "desc": "自本次启动以来收到与回复的消息总量及回复率（⏱ 为统计窗口时长），点击进入运营分析看完整趋势",
+        "desc_en": "Messages received/replied since this process started, with reply rate (⏱ shows the window); click through to Analytics for full trends",
+        "usage": "点击卡片跳转「运营分析」页查看按日趋势与分渠道数据",
+        "usage_en": "Click the card to open Analytics for daily trends and per-channel breakdowns"
+    },
+    "dash_diag": {
+        "zh": "系统诊断",
+        "en": "Diagnostics",
+        "desc": "汇总运行时健康组件的正常/注意/异常计数；点击运行一次全面体检（配置、连通性、策略完整性）",
+        "desc_en": "Rolls up ok/warn/fail counts from runtime health; click to run a full check across config, connectivity and strategies",
+        "usage": "点击卡片弹出诊断面板，逐项列出问题与修复入口",
+        "usage_en": "Click to open the diagnostic modal listing each issue with a fix link"
+    },
+    "dash_proactive": {
+        "zh": "主动触达（14天）",
+        "en": "Proactive outreach (14d)",
+        "desc": "近 14 天主动打招呼/回访的发送总量与回复率（按开场 mode 聚合，与运营总览主动触达卡同口径）",
+        "desc_en": "Proactive greeting/check-in sends and reply rate over the last 14 days (aggregated by opener mode, same source as the Ops Overview card)",
+        "usage": "点击卡片进入运营总览查看 mode 级回复率、退避与媒体形态明细",
+        "usage_en": "Click through to Ops Overview for per-mode reply rates, backoff and media-form detail"
+    },
+    "dash_proactive": {
+        "zh": "主动触达",
+        "en": "Proactive outreach",
+        "desc": "近 14 天主动开场（问候/生活分享/记忆追问等）的发送量与回复率——判断「主动找客户聊」有没有换来回应的核心读数",
+        "desc_en": "Sends and reply rate of proactive openers (check-ins, life shares, memory follow-ups) over the last 14 days — the key read on whether outreach earns replies",
+        "usage": "点击卡片进入运营总览，看分 mode 回复率、未回退避与媒体形态反哺明细",
+        "usage_en": "Click through to Ops Overview for per-mode reply rates, no-reply backoff and media feedback detail"
     },
     "nav_templates": {
         "zh": "话术模板（已迁移）",
@@ -63,10 +138,10 @@ HELP_TERMS: dict = {
     "nav_users": {
         "zh": "用户管理",
         "en": "User Management",
-        "desc": "添加/管理后台管理员账户，设置角色权限（主帐号/管理员/观察员）",
-        "desc_en": "Add and manage admin accounts and assign role permissions (Master / Admin / Viewer)",
-        "usage": "点击「创建子帐号」→ 填写信息 → 分配角色。可随时禁用/删除账户",
-        "usage_en": "Click \"Create sub-account\" → fill in details → assign a role. Accounts can be disabled/deleted anytime"
+        "desc": "添加/管理智聊操作员账号（主帐号/管理员/主管/坐席/观察员），重置密码、额度与权限，查看已登录的设备",
+        "desc_en": "Add and manage ChatX operator accounts (Master / Admin / Supervisor / Agent / Viewer), reset passwords, quotas and permissions, and see signed-in devices",
+        "usage": "点「＋ 添加子帐号」→ 填信息 → 分配角色 → 复制弹出的登录信息给对方。帐号卡上可改角色、重置密码；「⋯」菜单里有额度/权限/通知/禁用/删除",
+        "usage_en": "Click \"Add sub-account\" → fill in details → assign a role → copy the sign-in info card to the person. On each card change the role or reset the password; the ⋯ menu holds quota / permissions / notifications / disable / delete"
     },
     "nav_settings": {
         "zh": "系统设置",
@@ -119,10 +194,10 @@ HELP_TERMS: dict = {
     "nav_cases": {
         "zh": "案例跟进",
         "en": "Case Follow-ups",
-        "desc": "追踪用户意图链产生的案例（如咨询→投诉→退款），监控满意度，支持添加备注和结案",
-        "desc_en": "Track cases formed by user intent chains (e.g. inquiry → complaint → refund), monitor satisfaction, add notes and close cases",
-        "usage": "查看活跃 Case 列表 → 关注高风险标记 → 添加备注或结案",
-        "usage_en": "Review the active case list → watch high-risk flags → add notes or close the case"
+        "desc": "AI 自动识别需要人工跟进的会话并立案：客户要求人工、怀疑机器人、质疑照片造假、危机信号、投诉升级等；支持跳转会话、备注、结案",
+        "desc_en": "AI opens cases for conversations that need a human: requests for a real agent, bot suspicion, photo-fake doubts, crisis signals, complaint escalation; jump to the conversation, add notes, close cases",
+        "usage": "按严重度处理案例 → 点「打开会话」直达工作台 → 处理完结案销账",
+        "usage_en": "Work cases by severity → click Open conversation to jump to the workspace → close the case when resolved"
     },
     "nav_escalation": {
         "zh": "人工转接",
@@ -151,10 +226,10 @@ HELP_TERMS: dict = {
     "nav_unified_inbox": {
         "zh": "坐席工作台",
         "en": "Agent Workspace",
-        "desc": "多平台统一收件箱：坐席在此接待所有渠道的客户对话，支持人工/AI 协作回复（新窗口打开）",
-        "desc_en": "Unified multi-platform inbox where agents handle customer chats from every channel, with human/AI co-reply (opens in a new window)",
-        "usage": "点击在新窗口打开 → 扫码接入账号 → 认领会话开始接待",
-        "usage_en": "Click to open in a new window → link accounts via QR → claim a conversation to start"
+        "desc": "多平台统一收件箱：坐席在此接待所有渠道的客户对话，支持人工/AI 协作回复（独立窗口打开；已开着的工作台会被复用聚焦，不会重复新开）",
+        "desc_en": "Unified multi-platform inbox where agents handle customer chats from every channel, with human/AI co-reply (opens in its own window; an already-open workspace is reused and focused instead of duplicated)",
+        "usage": "点击在独立窗口打开（已打开则切过去）→ 扫码接入账号 → 认领会话开始接待",
+        "usage_en": "Click to open in its own window (or switch to the one already open) → link accounts via QR → claim a conversation to start"
     },
     "nav_learner": {
         "zh": "学习队列",
@@ -172,49 +247,41 @@ HELP_TERMS: dict = {
         "usage": "创建/编辑人设 → 设为默认或绑定到指定会话 → 配置全局规则",
         "usage_en": "Create/edit a persona → set as default or bind to sessions → configure global rules"
     },
-    "nav_ai_studio": {
-        "zh": "AI 工作室",
-        "en": "AI Studio",
-        "desc": "AI 能力聚合入口：人设指挥、情景记忆、学习审核、关系与身份绑定一站式管理",
-        "desc_en": "Aggregated AI hub: persona command, episodic memory, learning review, relations and identity binding in one place",
-        "usage": "从各功能卡片进入对应模块，或用顶部标签页切换",
-        "usage_en": "Enter each module from its card, or switch with the top tabs"
-    },
     "nav_rpa_overview": {
-        "zh": "渠道总览",
-        "en": "Channel Overview",
-        "desc": "Telegram / LINE / Messenger / WhatsApp 四大渠道的运行状态、待审、告警与漏斗聚合看板",
-        "desc_en": "Aggregate board for Telegram / LINE / Messenger / WhatsApp: runtime status, pending reviews, alerts and funnels",
+        "zh": "矩阵总览",
+        "en": "Matrix Overview",
+        "desc": "真机矩阵的聚合看板：Telegram / LINE / Messenger / WhatsApp 全渠道运行状态、账号健康、待审、告警与漏斗",
+        "desc_en": "Aggregate board of the device matrix: runtime status, account health, pending reviews, alerts and funnels across Telegram / LINE / Messenger / WhatsApp",
         "usage": "先看告警和待审数 → 点击渠道卡片跳到对应渠道页处理",
         "usage_en": "Check alerts and pending counts first → click a channel card to jump to that channel's page"
     },
     "nav_telegram": {
-        "zh": "Telegram 自动化",
-        "en": "Telegram Automation",
+        "zh": "Telegram（真机矩阵）",
+        "en": "Telegram (Device Matrix)",
         "desc": "配置 Telegram 主号的 AI 自动回复：接收范围、回复逻辑、屏蔽名单、语音与运营漏斗。坐席扫码登录的账号请在坐席工作台管理，不在此页",
         "desc_en": "Configure the Telegram main account's AI auto-reply: scope, reply logic, block list, voice and funnel. QR-linked agent accounts are managed in the Agent Workspace, not here",
         "usage": "选择消息处理范围 → 调整回复逻辑 → 保存后对主号自动回复生效",
         "usage_en": "Choose the message scope → tune reply logic → save to apply to the main account's auto-replies"
     },
     "nav_line_rpa": {
-        "zh": "LINE 自动化",
-        "en": "LINE Automation",
+        "zh": "LINE（真机矩阵）",
+        "en": "LINE (Device Matrix)",
         "desc": "LINE 真机自动化运营台：设备监控、聊天设置、运维工具与运营漏斗",
         "desc_en": "LINE device-automation console: device monitoring, chat settings, ops tools and funnel",
         "usage": "监控页看设备状态 → 设置页调聊天行为 → 运维页处理异常",
         "usage_en": "Watch device status on Monitor → tune chat behavior in Settings → handle issues in Ops"
     },
     "nav_messenger_rpa": {
-        "zh": "Messenger 自动化",
-        "en": "Messenger Automation",
+        "zh": "Messenger（真机矩阵）",
+        "en": "Messenger (Device Matrix)",
         "desc": "Messenger 网页自动化运营台：客户线索、人设策略、账号设备、审批质检与数据中心",
         "desc_en": "Messenger web-automation console: leads, persona strategy, accounts & devices, review QA and data center",
         "usage": "总览看运行态 → 客户线索跟进 → 审批质检处理待审消息",
         "usage_en": "Check the overview → follow up leads → clear pending items in Review QA"
     },
     "nav_whatsapp_rpa": {
-        "zh": "WhatsApp 自动化",
-        "en": "WhatsApp Automation",
+        "zh": "WhatsApp（真机矩阵）",
+        "en": "WhatsApp (Device Matrix)",
         "desc": "WhatsApp 协议自动化：对话管理、待审队列、模板分析、配置与运维",
         "desc_en": "WhatsApp protocol automation: conversations, review queue, template analytics, config and ops",
         "usage": "对话页看会话 → 待审页处理草稿 → 模板分析优化话术",
@@ -223,18 +290,34 @@ HELP_TERMS: dict = {
     "nav_episodic": {
         "zh": "AI 记忆",
         "en": "AI Memory",
-        "desc": "查看与校正 AI 对每个用户的情景记忆，保证长期对话不「失忆」、不记错",
-        "desc_en": "Inspect and correct the AI's episodic memory about each user, so long-running chats stay consistent",
-        "usage": "搜索用户 → 查看记忆条目 → 修正错误记忆或删除过期信息",
-        "usage_en": "Search a user → review memory entries → fix wrong memories or delete stale ones"
+        "desc": "AI 记得你每一位客户：聊天里客户说过的事会自动记下、下次回复时用上；这里看它记了什么、对不对，只有少数「需要你看一眼」的例外要你处理",
+        "desc_en": "The AI remembers every customer: things they say in chat are stored automatically and used in later replies. Check what it remembers and whether it's right; only a few exceptions need a look",
+        "usage": "看「今日需处理」→ 打开一位客户看记忆时间线 → 确认属实 / 编辑 / 不再使用",
+        "usage_en": "Check \"to handle today\" → open a customer's memory timeline → confirm / edit / stop using"
     },
     "nav_crisis_audit": {
-        "zh": "危机审计",
-        "en": "Crisis Audit",
-        "desc": "危机安全链事件留痕：高危消息的识别、处理过程与复盘记录",
-        "desc_en": "Audit trail of the crisis-safety chain: how high-risk messages were detected, handled and reviewed",
-        "usage": "关注未处理事件 → 查看上下文 → 标记处理结果",
-        "usage_en": "Watch unhandled events → inspect context → mark the outcome"
+        "zh": "客户安全预警",
+        "en": "Customer Safety Alerts",
+        "desc": "AI 在客户消息里识别到自伤、绝望等危机信号时的记录：谁、什么时候、AI 怎么兜底、有没有叫人",
+        "desc_en": "Records of moments when the AI detected self-harm or despair signals in a customer's messages: who, when, how the AI applied its safety net, and whether a human was called",
+        "usage": "先确认留痕已开启 → 关注未处理事件 → 查看上下文 → 标记处理结果",
+        "usage_en": "Make sure logging is on → watch unhandled events → inspect context → mark the outcome"
+    },
+    "nav_voice_eval": {
+        "zh": "声音评测",
+        "en": "Voice Eval",
+        "desc": "试听每个人设的克隆声（直念/拟人化/慢速多版本对比），打分并决定保留、修正或替换",
+        "desc_en": "Audition each persona's cloned voice (verbatim / humanized / slow variants), rate and decide keep, fix or replace",
+        "usage": "逐人设试听 → 打星+判定 → 需替换的在候选区选新音色",
+        "usage_en": "Audition per persona → star + verdict → pick a replacement candidate where needed"
+    },
+    "nav_singing": {
+        "zh": "歌房",
+        "en": "Song Studio",
+        "desc": "人设清唱能力管理：开关与频控护栏、每人设备货试听、曲库启停与声库锚定音",
+        "desc_en": "Manage persona singing: switches and rate guardrails, per-persona stock audition, songbook toggles and voice anchors",
+        "usage": "开总闸 → 备货矩阵逐条试听 → 曲库启停曲目（补货走 song_factory 命令行）",
+        "usage_en": "Enable the master switch → audition the stock matrix → toggle songs (restock via the song_factory CLI)"
     },
     "nav_care": {
         "zh": "主动关怀",
@@ -267,6 +350,59 @@ HELP_TERMS: dict = {
         "desc_en": "Cross-platform customer-journey funnel: stage counts, conversion rates and funnel alerts, filterable by channel",
         "usage": "看整体漏斗 → 用渠道筛选片定位掉量渠道 → 处理漏斗告警",
         "usage_en": "Review the overall funnel → use channel chips to find the leaking channel → handle funnel alerts"
+    },
+    # ── 工作目标（= 工作计划；「营销目标」是 1.0.77 前管理端 / 配置里的旧叫法）───
+    # 三个同义词各占一条:tooltip 引擎 matchTerm 是「整元素文本精确相等」,
+    # 一条词条只能认领一种屏幕说法,所以同义词只能靠多开 key 覆盖。
+    # N-3 #241（2026-09-08）：界面 / 路由 / 日志统一「工作目标」；「营销目标」词条保留只为
+    # 让搜旧词的人找到卡（词条本身说明它是旧名）。
+    "work_goal": {
+        "zh": "工作目标",
+        "en": "Work Goal",
+        "desc": "为一段客户关系设定的推进目标：选模板（关系推进/沉默唤回/客户摸底/自定义…；销售域另有付费解锁/会员订阅/获客转化）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。转化类与自定义可选「今天收口 / 这轮聊完」限时节奏。也叫「工作计划」；1.0.77 之前管理端与配置里曾叫「营销目标」——三个说法是同一个东西，现在界面统一叫「工作目标」（配置键仍是 companion.goals）。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
+        "desc_en": "A progress goal set for one customer relationship: pick a template (relationship / reactivation / profile discovery / custom…; sales deployments also get paid unlock / subscription / acquire-and-convert) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Conversion and custom templates can pick a same-day or this-chat sprint cadence. Also called the \"work plan\"; before 1.0.77 the admin side and config called it \"marketing goal\" — all three are the same thing, and the UI now says \"work goal\" everywhere (the config key is still companion.goals). Requires companion.goals.enabled; the whole card is hidden while it is off",
+        "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
+    },
+    "work_plan": {
+        "zh": "工作计划",
+        "en": "Work Plan",
+        "desc": "「工作目标」的口语叫法，指的是同一张卡：给这段关系定推进目标与期限，AI 按里程碑分天推进并每天出「今日拍」。1.0.77 之前管理端与配置里同一子系统叫「营销目标」，现已统一为「工作目标」",
+        "desc_en": "The colloquial name for the \"work goal\" — the very same card: set a progress goal and deadline for this relationship, and the AI advances it along milestones with a daily beat. Before 1.0.77 the admin side and config called the same subsystem the \"marketing goal\"; it is now \"work goal\" everywhere",
+        "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
+    },
+    "marketing_goal": {
+        "zh": "营销目标",
+        "en": "Marketing Goal",
+        "desc": "「工作目标」的旧叫法（1.0.77 之前管理端与配置里这么叫；配置键 companion.goals 不变）。现在界面里统一叫「工作目标」：运营总览的「工作目标」卡是只读读数（进行中/今日拍/让路/注入/终态），坐席端那张可操作的卡也叫「工作目标」，运营口语里叫「工作计划」",
+        "desc_en": "The former name of the \"work goal\" (what the admin side and config called it before 1.0.77; the config key companion.goals is unchanged). The UI now says \"work goal\" everywhere: the Ops Overview \"work goals\" card is read-only telemetry (active / beats / holds / injections / outcomes), and the card agents operate is also the \"work goal\", spoken of as the \"work plan\"",
+        "usage": "只读读数看运营总览的「工作目标」卡；要建目标/改目标去坐席工作台 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "For read-only numbers see the \"work goals\" card on Ops Overview; to create or change a goal use Agent Workspace → right rail \"Customer\" → the \"Work Goal\" card"
+    },
+    "goal_beat_today": {
+        "zh": "今日拍",
+        "en": "Today's Beat",
+        "desc": "目标在「今天」的一次推进安排＝今日意图 + 推进力度（陪伴日：只字不提推进 / 顺势：自然带到 / 可直说：可以直接说）。坐席可采纳或驳回：驳回后今天只陪伴、不带目标内容，且会回流规划器降档——驳回 1 次把「可直说」压到「顺势」，连续 2 次整天退回纯陪伴。对方情绪低落或连发未回时系统自己让路，当天不出拍",
+        "desc_en": "One day's push arrangement for a goal: today's intent plus a push level (companion day = never mention the goal / gentle = weave it in naturally / direct OK = say it outright). Agents can adopt or reject it: after a reject the day stays companion-only with no goal content, and the verdict flows back to the planner as a step-down — one reject caps \"direct OK\" down to \"gentle\", two in a row drop the whole day to companion-only. When the contact is feeling low or hasn't replied to several sends, the system yields on its own and plans no beat",
+        "usage": "「工作目标」卡的今日意图行 → 👍 采纳 / 👎 驳回；运营总览「工作目标」卡看今日拍与让路的总数",
+        "usage_en": "On the \"Work Goal\" card, use 👍 adopt / 👎 reject on the today-intent row; the Ops Overview \"work goals\" card shows total beats and holds"
+    },
+    "goal_autonomy": {
+        "zh": "自治档",
+        "en": "Autonomy",
+        "desc": "建目标时选的 AI 介入程度，三档：只观察＝只跟踪进度，不影响 AI 回复；顺势建议＝在 AI 回复里注入顺势引导，不硬推（默认档）；自动推进＝允许 AI 按日程主动推进目标。任何档位都受情绪让路与沉默熔断护栏约束",
+        "desc_en": "How far the AI may go, chosen when creating a goal. Three levels: Observe only = track progress, AI replies unaffected; Suggest = inject gentle nudges into AI replies, never pushy (the default); Auto advance = let the AI proactively advance the goal on schedule. Every level is still bound by the emotion-yield and silence-cutoff guardrails",
+        "usage": "「工作目标」卡 →「设定目标」→ 表单里的「自治档」；建好后可暂停/恢复目标",
+        "usage_en": "\"Work Goal\" card → \"Set a goal\" → the \"Autonomy\" field in the form; an existing goal can be paused/resumed"
+    },
+    "goal_milestone": {
+        "zh": "里程碑",
+        "en": "Milestone",
+        "desc": "目标推进弧线切成的几段（多数模板 4 段，如破冰回暖→价值铺垫→顺势开价→跟进收口；获客转化模板 5 段），卡上的分段条显示当前走到哪一段。每段自带默认推进力度，越靠后越可以直说；模板只声明弧线与今日意图，具体话术由回复生成层现场生成",
+        "desc_en": "The segments a goal's arc is cut into (4 in most templates, e.g. reconnect → seed value → soft offer → follow up; the acquire-and-convert template has 5). The segmented bar on the card shows which segment you are in. Each segment carries a default push level, growing more direct toward the end; templates declare only the arc and the daily intent — the actual wording is generated live by the reply layer",
+        "usage": "「工作目标」卡标题下的分段条：绿=已过，高亮=当前段，灰=待推进",
+        "usage_en": "The segmented bar under the \"Work Goal\" card title: green = passed, highlighted = current, grey = pending"
     },
     # ── 通用术语 ───
     "buy_rate": {
@@ -322,6 +458,38 @@ HELP_TERMS: dict = {
         "desc_en": "Number of past dialogue rounds fed to the AI. More rounds = richer context but slower and pricier",
         "usage": "通常 3-5 轮即可。复杂业务场景可增至 8-10 轮",
         "usage_en": "3-5 rounds is usually enough; raise to 8-10 for complex scenarios"
+    },
+    "context_depth": {
+        "zh": "上下文与记忆深度",
+        "en": "Context & memory depth",
+        "desc": "云端主链四档：标准约 12k / 深度 32k / 最大 128k / 超大约 900k。本机「无限制」会话在工作台按窗口重画，满窗约 24k，发送时超窗会压住。越深越记得住，也越贵。改完即生效，不用重启。",
+        "desc_en": "Four cloud tiers: Standard ~12k / Deep 32k / Max 128k / Ultra ~900k. Unrestricted local chats are redrawn to this machine's window (~24k today) and clamped on send. Deeper remembers more and costs more. Takes effect immediately, no restart.",
+        "usage": "自动回复设置 →「上下文与记忆深度」下拉选档 → 保存。日常用标准或深度；超大档很贵。本机无限制请在会话「模型 ▾」里选满窗。",
+        "usage_en": "Reply settings → Context & memory depth → pick a tier → save. Use Standard or Deep day-to-day; Ultra is expensive. For local unrestricted, pick fill-window in the composer Model menu.",
+    },
+    "usage_mode": {
+        "zh": "用量模式",
+        "en": "Usage mode",
+        "desc": "和「深度」是两套旋钮：深度决定记得多少，用量模式是省钱压帽。完整＝按上面的深度档；经济＝只留最近 4 条、压缩人设、少做记忆抽取。钱包用尽时即使选「完整」也会自动进经济档（本地模型顶班 + 短上下文），避免断线。改完即生效。",
+        "desc_en": "Separate from depth: depth is how much to remember; usage mode is a spend cap. Full follows the depth tier; Economy keeps the last 4 messages, a compact persona and fewer memory extracts. When the token wallet is empty, Full still drops into Economy (local model + short context) so chat does not go dark. Takes effect immediately.",
+        "usage": "自动回复设置 →「用量模式」选完整或经济 → 保存。要省量选经济；要按深度档完整记忆选完整。",
+        "usage_en": "Reply settings → Usage mode → Full or Economy → save. Pick Economy to spend less; pick Full to use the depth tier as-is."
+    },
+    "risk_grading": {
+        "zh": "风控分级",
+        "en": "Risk grading",
+        "desc": "客户消息按三级处理：高（自伤 / 未成年 / 威胁 / 要钱要凭据 / 诈骗 / 支付关键词）→ 稿子转人审 + 会话标「需人工」并保持；中（成人内容、要联系方式 / 照片 / 见面 / 礼物、停联）→ 只打「风险 · 中」标签，按人设政策委婉延后或软回应，不进需人工；低（隐私词、照片 / 钱 / 电话的叙述性提及）→ 只记日志。「承诺」类只评我们自己要发出的话，客户叙述不再误判。人工发送或点「我知道了」摘标后，同类别 30 分钟内不重复打标、不重弹横幅。",
+        "desc_en": "Customer messages are handled in three tiers. High (self-harm / minor / threat / asking for money or credentials / scam / payment keywords) → draft goes to human review and the thread is tagged Needs human and held. Medium (adult content, asking for contact / photos / meetup / gifts, stop-contact) → only a Risk · medium tag; the persona policy softly defers or soft-replies, no Needs human. Low (privacy words, narrative mentions of photos / money / phone) → log only. Commitment checks now apply only to our own outbound text, so customer narration is no longer misjudged. After a human send or Got it clears the tag, the same category is not re-tagged and no banner reappears for 30 minutes.",
+        "usage": "自动回复设置 →「🧯 风控分级」卡查看全部类别 / 词表 / 级别 / 动作；选人设后可把「索要照片 / 视频」等类别改高 / 中 / 低 → 保存。会话头的「风险保持 · 类别」胶囊与横幅会写明命中类别与命中词。",
+        "usage_en": "Reply settings → Risk grading card lists every category / word list / tier / action; pick a persona to move categories such as asking for photos between high / medium / low → save. The thread header chip Risk hold · category and the banner state the matched category and words."
+    },
+    "send_lang_per_conv": {
+        "zh": "发送语言（本会话）",
+        "en": "Send language (this thread)",
+        "desc": "翻译工具条的「我的消息→ 某语言」只对当前会话生效，不再跨会话继承：在 A 会话切「发→日」，切到 B 会话时 B 仍是自己的设置；没设过就显示「自动 · 跟对方：English」，AI 自动回复跟对方语言，手发原样。「对方消息→」（收→）仍是全局默认。手发时若目标语言和客户语言不一致，会先弹「将译成 X 发给 Y 客户，确定发送？」，确认前不发。",
+        "desc_en": "The translation toolbar's My messages → language applies to the current thread only and no longer carries over: set Send → Japanese in thread A and thread B keeps its own setting; unset shows Auto · follow peer: English, AI replies follow the customer's language and manual sends go as typed. Incoming (Receive →) stays a global default. If a manual send's target language differs from the customer's language, a confirmation Translate into X for a Y-speaking customer, send? appears first; nothing is sent until confirmed.",
+        "usage": "聊天工作台 → 翻译工具条 →「我的消息→」选语言（旁边标「本会话」）。切会话前看一眼工具条即可；弹确认时按取消可改回。",
+        "usage_en": "Workspace → translation toolbar → My messages → pick a language (marked This thread). Glance at the toolbar before switching threads; press Cancel on the confirmation to change it."
     },
     "split_send": {
         "zh": "分条发送",
@@ -909,6 +1077,22 @@ HELP_TERMS: dict = {
         "desc": "通道成功率不稳定，可能影响交易。AI 会提醒用户注意风险",
         "desc_en": "The channel's success rate is unstable and may affect transactions. The AI will warn users of the risk"
     },
+    "zalo_7d_window": {
+        "zh": "7 天互动窗",
+        "en": "7-day messaging window",
+        "desc": "Zalo OA 客服消息政策：用户最后一次互动后 7 天内可主动给 TA 发消息，超过窗口需等对方再次发起会话。不是本系统限制，是平台规则",
+        "desc_en": "Zalo OA customer-service policy: you may message a user within 7 days of their last interaction; after that you must wait for them to message first. A platform rule, not a limit of this system",
+        "usage": "接入 Zalo 官方渠道后留意回复时效；窗口内尽快回复可避免会话失联",
+        "usage_en": "After connecting the Zalo official channel, reply within the window to avoid losing the conversation"
+    },
+    "qqbot_passive_window": {
+        "zh": "QQ 机器人被动回复窗口",
+        "en": "QQ Bot passive reply window",
+        "desc": "QQ 开放平台机器人政策：单聊每条来话 60 分钟内最多回 4 条、群 @ 消息 5 分钟内最多 5 条；用户不再说话就不能再发（主动消息 2025-04 起已收敛）。群里默认只收 @机器人 的消息。不是本系统限制，是平台规则",
+        "desc_en": "QQ Open Platform bot policy: at most 4 replies within 60 minutes per inbound private message and 5 within 5 minutes per group @-message; once the user stops talking you cannot send (proactive messages retired in 2025-04). Groups only deliver @-mentions by default. A platform rule, not a limit of this system",
+        "usage": "QQ 机器人渠道下把要说的话合成一条发；主动关怀 / 沉默回访在该渠道不会真发（窗口外会被本地拦下并标 window_expired）",
+        "usage_en": "On the QQ Bot channel, say it in one message; proactive care / re-engagement will not go out there (blocked locally as window_expired outside the window)"
+    },
     # ── 用户角色 ───
     "role_master": {
         "zh": "主帐号",
@@ -953,6 +1137,516 @@ HELP_TERMS: dict = {
         "en": "Case",
         "desc": "由系统自动识别的用户对话升级事件，需要运营关注和跟进",
         "desc_en": "A user-conversation escalation event auto-detected by the system, needing ops attention and follow-up"
+    },
+    # ── 群脉导播台（group_show）：只经 data-help 显式挂载，不劫持通用词的全局精确匹配 ──
+    "gs_softad": {
+        "zh": "软广强度",
+        "en": "Soft-ad level",
+        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。剧本里前低后高再回落最像真人；* 表示这一拍单独调过、覆盖了剧本默认值",
+        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. Low-then-high-then-ease reads most human; * means this beat overrides the playbook default"
+    },
+    "gs_pace": {
+        "zh": "语速档",
+        "en": "Pace",
+        "desc": "这一拍的发言节奏：chatty=你一言我一语抢着说，normal=常规群聊，slow=有人在思考或刚看到。节奏本身也会出卖机器人，故按拍设定",
+        "desc_en": "This beat's rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. Rhythm itself can betray a bot, so it's set per beat"
+    },
+    "gs_beatcount": {
+        "zh": "拍数",
+        "en": "Beats",
+        "desc": "这出戏由几拍组成。每一拍是一句节拍（谁说、什么意图），台词不写死、由人设 AI 现场生成",
+        "desc_en": "How many beats the show has. Each beat is one step (who speaks, what intent); lines aren't fixed - the persona AI generates them live"
+    },
+    "gs_prodline": {
+        "zh": "产品线",
+        "en": "Product line",
+        "desc": "这出戏软推的产品系：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏其实就是选产品",
+        "desc_en": "Which product family the show seeds: growth (acquisition), studio (content companion), lingo (translation). Picking a show is picking a product"
+    },
+    "gs_naturalness": {
+        "zh": "自然度",
+        "en": "Naturalness",
+        "desc": "这场戏像不像真人：绿=像真人，黄=各说各话，红=模板复读一眼假。看三个指标——熵（用词多样度）、间隔 CV（节奏像真人还是定时器）、均衡度（是不是一个号包场）",
+        "desc_en": "How human the show looks: green = human, amber = talking past each other, red = robotic. Three metrics: entropy (word variety), interval CV (human rhythm vs timer), balance (does one account hog the floor)"
+    },
+    "gs_linkage": {
+        "zh": "关联风险体检",
+        "en": "Linkage risk check",
+        "desc": "同一个群里同时能上几个号，取决于独立网络出口数——不是在线号数。同一出口下多个号一唱一和，是关联封号最典型的姿势。这里说的是你手上真号真发时的上限",
+        "desc_en": "How many accounts can be in one group at once depends on independent network exits, not how many are online. Several accounts behind one exit is the classic linked-ban pattern. This is the ceiling for your real accounts"
+    },
+    "gs_attendance": {
+        "zh": "出席矩阵",
+        "en": "Attendance matrix",
+        "desc": "管「谁进了哪些群」。同一批号同时混在同一批群里，是多号多群下最容易被抓的特征。给出每个群该派哪几个号，把任意两号的共同出席压到真人区间。加群一旦发生就冻结，退群更可疑",
+        "desc_en": "Governs who is in which groups. The same accounts sharing the same groups is the top giveaway. It tells you which accounts to put in each group, keeping any pair's shared attendance human-like. Once joined it's frozen; leaving looks even more suspicious"
+    },
+    "gs_exposure": {
+        "zh": "演出矩阵",
+        "en": "Performance matrix",
+        "desc": "管「谁开过口」。成员面加完就冻结了，这是之后唯一还能动的暴露面，而且平台是靠消息实时统计的。最强杠杆：每场少让一个号开口，能安全覆盖的群数是二次增长",
+        "desc_en": "Governs who has spoken. Membership freezes once joined; this is the only exposure surface you can still adjust, and platforms count messages in real time. Biggest lever: one fewer speaker per show grows safe group coverage quadratically"
+    },
+    "gs_schedule": {
+        "zh": "开演排期",
+        "en": "Show schedule",
+        "desc": "静态特征洗干净后，节奏是最后一条出卖人的轴：一批群挤在同一小时、精确每 30 分钟一场、每天同一时刻。这张管开演时间，和管加群时间的出席矩阵相互独立",
+        "desc_en": "After static traits are cleaned, rhythm is the last axis that betrays: groups bunched in one hour, exactly every 30 min, the same time daily. This governs show times, independent of the attendance matrix that governs join times"
+    },
+    "gs_outcome": {
+        "zh": "演出效果",
+        "en": "Show outcomes",
+        "desc": "唯一回答「值不值得继续投」的读数：真发场次在归因窗口内的群内反响（多少人接话）与私聊转化（群里发过言的人之后首次私聊我们）。排练不计——它一条消息都没发过",
+        "desc_en": "The only reading that answers \"is this worth continuing\": in-group response (how many people replied) and DM conversions (people who spoke in the group and then DM'd us for the first time) within the attribution window. Rehearsals never count - they send nothing",
+        "usage": "真发之后隔一个窗口回来看；转化数是下限，潜水观众无法归因",
+        "usage_en": "Check back one window after going live; conversions are a floor - lurkers cannot be attributed"
+    },
+    "gs_livecheck": {
+        "zh": "开演前体检",
+        "en": "Pre-live check",
+        "desc": "真发前最后一道体检，只体检不发一条消息。看选角/闸门预检是否通过、双锁是否武装、是否处于禁演时段。真发需另开配置锁 + 代码锁两把锁",
+        "desc_en": "The final check before going live - it checks only, sends nothing. Shows whether casting/gate preflight passes, whether the double lock is armed, and quiet-hours status. Going live needs both the config lock and the code lock"
+    },
+    "rps_peer_budget": {
+        "zh": "单会话额度",
+        "en": "Per-conversation budget",
+        "desc": "每个会话每天最多自动回复几轮。对面也是机器人时，没有这道保险丝会空转烧额度（曾实录 80 秒 78 轮）。0＝不限额。坐席手动发送不受限，次日自动恢复。",
+        "desc_en": "Caps auto-reply rounds per conversation per day. Without this fuse, bot-vs-bot loops burn budget (a real incident: 78 rounds in 80 seconds). 0 = unlimited. Manual agent sends are never limited; the cap resets next day."
+    },
+    "rps_account_send_gate": {
+        "zh": "单账号日发额度",
+        "en": "Per-account daily send cap",
+        "desc": "整个账号每天最多发多少条（含新号爬坡）。单号发太多会触发平台风控。与「单会话额度」正交：那道管对轰，这道管整号总量。运营在 overlay 里显式关掉后，一键全自动也不会重开。",
+        "desc_en": "How many messages one account may send per day (new accounts ramp up). Too many on one account trips platform rate flags. Orthogonal to the per-conversation budget: that stops bot loops; this caps the whole account. If operators explicitly turn it off in the overlay, switching to full auto will not reopen it."
+    },
+    # ── v1.0.66 新功能词条（2026-09-01，实施93）：小智对话测试实锤这批功能
+    #    零语料只能拒答——补齐后 seed_corpus 自动进帮助库。只写已验证行为。 ───
+    "workflow_sop": {
+        "zh": "工作链",
+        "en": "Workflow SOP",
+        "desc": "预设的多步跟进剧本（破冰/报价跟单/复购唤醒等），按天数间隔逐步推进；执行档分「拟稿人审」与「自动发送」，链推进期间 AI 普通回复自动让路",
+        "desc_en": "Preset multi-step follow-up scripts (icebreak, quote follow-up, win-back) advanced on day intervals; runs in draft-review or auto-send mode, and normal AI replies yield while a chain is running",
+        "usage": "坐席工作台右栏「工作链」组件给当前会话挂链/换链/停链；收件箱筛选面板可按筛选结果批量挂链；建链与预设包在「工作链」页（/workflows）",
+        "usage_en": "Attach/switch/stop chains from the Workflows panel in the workspace right rail; bulk-attach from the inbox filter panel; create chains and seed preset packs on /workflows"
+    },
+    "deal_engine": {
+        "zh": "成交引擎",
+        "en": "Deal engine",
+        "desc": "按会话内容识别客户旅程阶段（破冰→试探→报价→成交），给出下一步最优动作与建议跟进链，并在工作链页出成交看板；属服务端开关",
+        "desc_en": "Classifies each conversation's journey stage (icebreak, probing, quoting, closing), suggests the next best action and chain, and adds a deal dashboard to the Workflows page; enabled server-side",
+        "usage": "开启后建议自动出现在工作台右栏；「工作链」页看不到成交引擎卡＝当前部署未开启，请管理员启用",
+        "usage_en": "Once enabled, suggestions appear in the right rail automatically; no deal-engine card on /workflows means this deployment has it off - ask an admin"
+    },
+    "voice_clone_bind": {
+        "zh": "克隆音色并绑定人设",
+        "en": "Clone voice & bind persona",
+        "desc": "从客户语音消息一键克隆音色并绑到人设，之后该人设的语音回复即用克隆声；登记需勾选授权确认，完成页可直接试听/撤销",
+        "desc_en": "Clone a voice from a customer's voice message and bind it to a persona; later voice replies use the clone. Registration requires a consent tick; the success screen offers audition and undo",
+        "usage": "消息流语音行「⋮」→「克隆音色并绑定人设」；弹层只 ×/完成/Esc 可关，点外部不会误关（试听生成中安全）",
+        "usage_en": "Voice row \"...\" menu → Clone voice & bind persona; the dialog closes only via X / Done / Esc - clicking outside never dismisses it mid-audition"
+    },
+    "ai_image_gen": {
+        "zh": "AI 生成图片",
+        "en": "AI image generation",
+        "desc": "工具箱卡片：按人设/模式（自拍/物件）/场景现场生成图片，预览后发送到会话或存入相册；相册有匹配存货时先出缩略图零等待直发",
+        "desc_en": "Toolbox card: generate images by persona, mode (selfie/object) and scene, preview, then send to the conversation or save to the album; matching album stock shows thumbnails for zero-wait sending",
+        "usage": "「功能未启用」＝该部署没接出图算力（外网部署属正常）；引擎「未部署」置灰；「服务器不可达」黄条预警；失败出人话错误卡可复制诊断",
+        "usage_en": "\"Not enabled\" means no image backend in this deployment (normal off-LAN); undeployed engines are greyed; \"server unreachable\" shows an amber banner; failures show an error card with diagnostic copy"
+    },
+    "media_ai_desc": {
+        "zh": "AI 识图",
+        "en": "AI vision summary",
+        "desc": "客户发来的图片/视频自动识别成摘要，显示在媒体卡下方的折叠行（超长折 3 行）；是坐席内部参考，绝不以消息气泡出现、也不会发给客户",
+        "desc_en": "Customer images and videos are auto-summarised in a folded row under the media card (long text folds to three lines); internal reference for agents - never rendered as a chat bubble, never sent to the customer",
+        "usage": "点「展开全文」看完整识别；对图片点「问这张图」可就画面追问",
+        "usage_en": "Click expand for the full text; use \"Ask about this image\" to probe the picture"
+    },
+    "face_identity": {
+        "zh": "图中是谁",
+        "en": "Who is in the photo",
+        "desc": "客户发来带人脸的照片时，系统会比对人设相册、客户本人和已确认的关系人，给拟稿一句内部说明（这是 TA 本人 / 不要猜是谁、可以问）。坐席不用开开关：外网走官网网关，内网可直连边车。推断只作参考，客户亲口说「是我 / 这是我妹妹」才记成事实。关：config 里 vision.face_identity.enabled: false。",
+        "desc_en": "When a customer sends a photo with a face, the AI compares persona album, confirmed self, and known relations, then adds one internal note for drafting (this is them / don't guess, ask). No toggle for operators: hosted installs use the site gateway; LAN can talk to the sidecar. Inferences stay observations until they say that's me / this is my sister. Off: vision.face_identity.enabled: false.",
+        "usage": "不用设置。对方发自拍或合影后看拟稿是否认人；对方说「是我」后下次同脸会按本人处理。问小智「图中是谁怎么用」。",
+        "usage_en": "No setting. After a selfie or group photo, check whether the draft recognizes the person; after they say that's me, the same face is treated as self next time."
+    },
+    "voice_fallback_note": {
+        "zh": "标准音色回落",
+        "en": "Standard-voice fallback",
+        "desc": "生成/发送语音未用克隆声时，语音面板会说明原因（该语言暂不支持克隆声/额度用尽/克隆通道暂不可用）并给出路，如一键关翻译重新生成",
+        "desc_en": "When a voice is synthesized without the cloned timbre, the voice panel explains why (language unsupported by the clone, quota exhausted, clone channel down) and offers a way out, e.g. one-tap regenerate without translation",
+        "usage": "看到黄条按提示操作；「标准音色」徽标＝本条不是人设克隆声",
+        "usage_en": "Follow the amber note's suggestion; a \"standard voice\" badge means this clip is not the persona's cloned voice"
+    },
+    "birthday_capture": {
+        "zh": "生日自动记忆",
+        "en": "Birthday auto-capture",
+        "desc": "客户明说生日会自动写入 AI 记忆——包括「今天是我的生日」这类没有具体日期的说法（按当天记）；AI 自己的反问不会被误记",
+        "desc_en": "When a customer states their birthday it is captured into AI memory - including date-less phrasings like \"today is my birthday\" (recorded as today); the AI's own questions are never miscaptured",
+        "usage": "「AI 记忆」页搜索该客户可查看/修正生日条目",
+        "usage_en": "Search the customer on the AI Memory page to view or correct the birthday entry"
+    },
+    "acct_unread_badge": {
+        "zh": "账号未读数字",
+        "en": "Account unread badge",
+        "desc": "账号栏上的未读数字可以点开：弹出的就是徽标同一口径的那几条会话，点一行直达该会话；也可一键把这一号全部标已读",
+        "desc_en": "The unread number on an account chip is clickable: the popover lists the same conversations the badge counts; click a row to open it, or mark the whole account read",
+        "usage": "点账号头像旁的未读数字 → 在浮层里点会话打开，或点「全部标已读」",
+        "usage_en": "Click the unread number beside an account → open a conversation from the popover, or tap Mark all read"
+    },
+    "acct_no_persona_dot": {
+        "zh": "未绑人设黄点",
+        "en": "Unbound-persona yellow dot",
+        "desc": "账号栏黄色小点表示该号还没绑人设，回复会走默认配置；点黄点会打开账号抽屉并进入该号详情，可当场绑定",
+        "desc_en": "A yellow dot on an account means no persona is bound and replies fall back to defaults; click it to open the account drawer on that account and bind a persona",
+        "usage": "点账号旁的黄点 → 在账号详情里选人设并保存",
+        "usage_en": "Click the yellow dot → pick a persona in the account detail panel and save"
+    },
+    "conv_address_names": {
+        "zh": "双向称呼",
+        "en": "Address names",
+        "desc": "每个会话可单独设定「我怎么叫对方 / 对方怎么叫我」；空着则沿用人设默认称呼，填空串等于明确不用爱称",
+        "desc_en": "Each conversation can set how you address the peer and how they address you; blank inherits the persona defaults, an explicit empty string clears a nickname",
+        "usage": "打开会话 → 右栏「客户关系」身份区两个输入框，改完失焦即保存",
+        "usage_en": "Open a conversation → Customer tab identity fields; changes save on blur"
+    },
+    "autosend_shadow": {
+        "zh": "全自动放行",
+        "en": "Full-auto release",
+        "desc": "全自动就是全自动：自动回复不再因「高风险」扣稿转人工，触发只后台记台账；坐席自己点发送也不会被二次拦住",
+        "desc_en": "Full-auto stays full-auto: drafts are not held for high risk; triggers are ledger-only, and agent-typed send is not blocked",
+        "usage": "保持会话为全自动即可；风险记录只在运营总览/影子台账，坐席侧零拦截",
+        "usage_en": "Leave the conversation on full-auto; risk hits land in the ops ledger only"
+    },
+    "agent_yield": {
+        "zh": "AI 让位",
+        "en": "AI yield",
+        "desc": "全自动会话里坐席手发或打字后 60 秒内，AI 稿留队等待而不是取消：会话头蓝色胶囊「AI 让位中 · 坐席 60s 内发过 · N s 后接回」倒数，到 0 自动发出，客户消息不丢；坐席再手发就再让位一次。让位期间坐席真发了一句，等待中的那稿才取消（客户那句已由人接）。1.0.81 及之前这 60 秒内的客户消息被直接取消不回。",
+        "desc_en": "In a full-auto thread, for 60 seconds after the agent sends or types, the AI draft waits in queue instead of being cancelled: the header chip AI yielding · agent sent within 60s · resumes in Ns counts down and the draft auto-sends at zero, so no customer message is dropped; sending manually again yields again. Only if the agent actually sends during the window is the waiting draft cancelled (a human answered). Up to 1.0.81 those messages were cancelled with no reply.",
+        "usage": "点会话头的让位胶囊，或顶栏重选「全自动」→ AI 立即接回、待发稿放行；体检面板让位期间有「立即让 AI 接回」按钮。",
+        "usage_en": "Click the yield chip in the thread header, or re-pick Full auto in the header → the AI resumes and the queued draft is released; the diagnosis panel offers Let AI resume now while yielding."
+    },
+    "abort_ledger": {
+        "zh": "今日拦截",
+        "en": "Blocked today",
+        "desc": "自动回复设置里「🚧 今日拦截 · AI 为什么没回」卡：最近 24 小时自动回复被拦下的次数按原因码计——成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息——并列最近 5 条（会话 · 时间 · 原因 · 命中词 + 阶段）。台账从本次启动起记、滚动 200 条、不回填；让位两项只是延后，窗过自动发。",
+        "desc_en": "The Blocked today · why the AI didn't reply card in Reply settings: auto-replies held back in the last 24h counted by reason code — adult content / risk hold / needs human / agent just sent (yield) / agent typing (yield) / mode switched / off-hours schedule — plus the last 5 rows (thread · time · reason · matched words + stage). The ledger starts at this launch, keeps 200 rows rolling and does not backfill; the two yield reasons only defer and auto-send after the window.",
+        "usage": "自动回复设置 → 滚到「风控分级」卡下方 → 看「24h 共 N 次」与各原因计数 → 最近 5 条里找会话名，点进会话核命中词。",
+        "usage_en": "Reply settings → scroll below the Risk grading card → read the 24h total and per-reason counts → find the thread in the last 5 rows and open it to check the matched words."
+    },
+    "adult_cum_disambig": {
+        "zh": "成人词消歧",
+        "en": "Adult word disambiguation",
+        "desc": "成人内容判定不再被孤立歧义词掐停：印式英语「message cum reply」（cum = and）、「summa cum laude」不判成人；cock / pussy / anal / nude 等歧义词在没有第二个露骨信号、没有施压词时只记提及或调侃，不打「需人工」、不进成人让位。「make me cum」「cumshot」「nudes」「blow job」等强词仍照旧判露骨。",
+        "desc_en": "Adult grading is no longer tripped by an isolated ambiguous word: Indian English message cum reply (cum = and) and summa cum laude are not adult; cock / pussy / anal / nude with no second explicit signal and no pressure words are logged as mention or flirt only, with no Needs human tag and no adult hold. Strong terms such as make me cum, cumshot, nudes or blow job are still explicit.",
+        "usage": "不用设置。若全自动会话仍被误判成人内容，把原句连同「今日拦截」卡里的命中词发到报障群。",
+        "usage_en": "No setting needed. If a full-auto thread is still misjudged as adult content, send the original sentence and the matched words from the Blocked today card to the support group."
+    },
+    "profile_anchored": {
+        "zh": "画像只写可锚定事实",
+        "en": "Anchored profile facts",
+        "desc": "客户画像的 AI 推断只写能在客户原话里逐字找到的事实：年龄只收 16–99 数字或年龄段（30s / 三十多 / 90后）；职业 / 坐标 / 居住地只收 24 字以内短语、整句不写；候选必须带客户原句且能在最近 30 条入站里查到；我方回复、译文、关怀稿不进抽取；值语种与客户主语种不符的丢弃。坐席确认或手录的值一字不动。目标面板进度 N/10 只数已确认的槽，AI 推断另显「待确认 M」；年龄输入只收数字或年龄段；过长值按 24 字省略、悬停看全文。",
+        "desc_en": "Profile AI inference writes only facts found verbatim in the customer's own messages: age accepts a number 16–99 or an age band; occupation / location / residence must be a phrase of 24 characters or fewer, never a sentence; a candidate needs the customer's quote, verifiable in the last 30 inbound messages; our replies, translations and care drafts never feed extraction; a value in a different language from the customer's main one is dropped. Confirmed or hand-typed values are never touched. The goal panel's N/10 counts only confirmed slots and shows AI-inferred ones as N unconfirmed; the age field accepts a number or band only; long values are clipped to 24 characters with the full text on hover.",
+        "usage": "目标面板 → 画像卡：AI 推断的槽点 ✓ 确认 / ✕ 拒绝；进度只随确认走。旧版留下的乱值直接拒绝，或让值守按会话跑清洗脚本。",
+        "usage_en": "Goal panel → profile card: ✓ confirm or ✕ reject AI-inferred slots; progress follows confirmations only. Reject leftover bad values from older versions, or have ops run the purge script per thread."
+    },
+    "ui_lang_switch": {
+        "zh": "界面语言切换",
+        "en": "Interface language",
+        "desc": "界面语言在顶栏地球按钮或用户菜单「语言」里选：简体中文 / 繁體中文 / English / Tiếng Việt / ไทย / Bahasa Indonesia，另有「跟随系统语言」。选完整页刷新一次即按所选显示，桌面版的文件 / 编辑 / 视图 / 窗口 / 帮助菜单同步跟随，登录页与初始化页用同一个菜单。越南语 / 泰语 / 印尼语仍在补词，未翻译的部分显示英文，菜单里标 β 并写明覆盖范围。菜单顶部若提示「当前语言由链接参数指定」，选一项即可覆盖。",
+        "desc_en": "Pick the interface language from the globe button in the top bar or the user menu → Language: Simplified Chinese / Traditional Chinese / English / Vietnamese / Thai / Indonesian, plus Follow system language. The page reloads once and shows your choice; the desktop app's File / Edit / View / Window / Help menus follow, and the login and setup pages use the same menu. Vietnamese / Thai / Indonesian are still being filled in: untranslated parts show in English, marked β with a coverage note. If the menu says the current language is set by a URL parameter, choosing any item overrides it.",
+        "usage": "顶栏地球按钮（或右上用户菜单 → 语言）→ 点目标语言 → 页面刷新后生效。想跟随系统语言就选第一项「跟随系统语言」。",
+        "usage_en": "Top bar globe button (or user menu → Language) → pick a language → it applies after the page reloads. Choose Follow system language to track your OS / browser language."
+    },
+    "group_never_auto": {
+        "zh": "群聊永不自动回",
+        "en": "Groups never auto-reply",
+        "desc": "群聊、频道、报障群、人审 / 手动档、同事账号，AI 都不会自动发（含成人软回应）。软回应只在「全自动 + 私聊客户」才会经同一道出站闸发出，失败就不发，不会用固定套话顶替。",
+        "desc_en": "Groups, channels, the support group, review / manual mode and colleague accounts never get an automatic send — including adult soft replies. Soft replies only go out in a full-auto private customer thread through the same outbound gate; if generation fails, nothing is sent and no canned line is used.",
+        "usage": "不用设置。群会话顶栏保持「人审」即可；要 AI 自己回客户，只把那个私聊会话顶栏切成「全自动」。",
+        "usage_en": "No setting needed. Leave group threads on Review; to let the AI reply to a customer, switch only that private thread's header to Full auto."
+    },
+    "risk_hard_stop": {
+        "zh": "风控五类硬拦",
+        "en": "Five hard risk stops",
+        "desc": "只有五类会把全自动掐停转人工：未成年、自伤、人身威胁、明确要钱 / 要验证码凭据、确认诈骗。其余（含成人露骨无施压、孤立「cum」印式英语）不停全自动。硬拦持有 2 小时；点「需人工」摘标、或顶栏切回「全自动」，旧持有立刻释放，下一条按全自动走。",
+        "desc_en": "Only five kinds pause full-auto for a human: minors, self-harm, a personal threat, an explicit ask for money / OTP credentials, and confirmed scam. Everything else (including explicit adult without pressure, and Indian-English cum) keeps full-auto running. A hard hold lasts 2 hours; clearing the Needs human tag or switching the header back to Full auto releases it at once, and the next message follows full-auto.",
+        "usage": "被拦时会话头状态带会写「AI 不发 · 需人工」并给出命中类别；看完点「我知道了」摘标，或顶栏重选「全自动」。今日拦截卡在 自动回复设置。",
+        "usage_en": "When blocked, the header status band says AI will not send · needs human and names the category; click Got it to clear the tag, or re-pick Full auto in the header. The Blocked today card is in Reply settings."
+    },
+    "messenger_send_visible": {
+        "zh": "Messenger 发送失败可见",
+        "en": "Messenger send failures are visible",
+        "desc": "Messenger 网页代发失败会在工作台写明原因（composer 断开 / 找不到会话 / PIN 待确认 / 来电遮挡 / 退避中 / 登录过期 / 上传失败），并自动按原文重试；连败后出铃铛。需要在手机确认 PIN 时会话头出黄条；手机发出的消息带回抄并打「手机发出」角标，不触发 AI 让位。",
+        "desc_en": "A failed Messenger web send shows a concrete reason in the workspace (composer detached / thread not found / PIN pending / call overlay / backoff / login expired / upload failed) and retries the same text automatically; a bell appears after consecutive failures. A yellow header bar flags a phone PIN; messages you send on the phone are copied back with a Sent from phone badge and do not trigger AI yield.",
+        "usage": "失败红字旁点「重试」会按同一句再发。看到 PIN 黄条：打开手机 Messenger 确认，或点「托管 PIN」。手机已发出的那句不用在工作台再发一遍。",
+        "usage_en": "Click Retry next to the red reason to resend the same text. On a PIN yellow bar, confirm in Messenger on the phone or tap Hosted PIN. Do not resend a line already sent from the phone."
+    },
+    "fact_gate_confirm": {
+        "zh": "画像确认必有反应",
+        "en": "Profile confirm always reacts",
+        "desc": "画像 / 记忆 / 目标回填只写能在客户原话里逐字核到的事实；AI 自己问出来的答案（例如客户回 couple months）不会写成职业。无值的「已提及」只显示「AI 有线索，待补值」，确认钮禁用；有值点 ✓ 必发确认请求，成功行内打勾，失败出红字，不会点了没反应。",
+        "desc_en": "Profile / memory / goal backfill writes only facts verifiable verbatim in the customer's own words; an answer the AI elicited (e.g. couple months) is never written as a job. A mention with no value shows AI has a clue, value pending and disables Confirm; with a value, ✓ always sends the confirm request, ticks the row on success and shows red text on failure — the button never silently no-ops.",
+        "usage": "目标面板 → 画像卡：有值的槽点 ✓ 确认 / ✕ 拒绝；确认后应立刻看到 ✓ 或红字。无值线索用 ✎ 手补再确认。",
+        "usage_en": "Goal panel → profile card: ✓ confirm or ✕ reject a slot that has a value; you should see a tick or red text at once. For a valueless clue, type a value with ✎ then confirm."
+    },
+    "recent_image_claim": {
+        "zh": "刚发的图必认领",
+        "en": "Claim a photo just sent",
+        "desc": "客户叫你的名字时，用「对方怎么叫我」里的名字，绝不纠正成人设名。客户问「是你吗 / is that you」且本会话 30 分钟内刚发过图（含你手发的），AI 认领那张、不说没发过、不发第二张。空的「我怎么叫对方」不再套用人设爱称，改用对方显示名或不称呼。",
+        "desc_en": "When the customer calls you by name, that name is what they entered in What they call me — the AI never corrects it to the persona name. If they ask is that you and a photo was sent in this thread within 30 minutes (including one you sent by hand), the AI claims that photo, never says it was not sent, and does not send a second one. A blank What I call them no longer inherits the persona pet name; it uses their display name or no address.",
+        "usage": "打开会话 → 右栏客户关系：填「对方怎么叫我」「我怎么叫对方」。刚发过自拍后对方追问「是你吗」，看 AI 是否认领、有没有再发一张。",
+        "usage_en": "Open the thread → Customer tab: fill in What they call me and What I call them. After you send a selfie, if they ask is that you, check that the AI claims it and does not send another."
+    },
+    "lang_plan_yue": {
+        "zh": "发送语言按会话（含粤语）",
+        "en": "Send language per thread (incl. Cantonese)",
+        "desc": "「发→」语言只跟本会话，不再写进全局默认。语言目录 34 种含粤语 / 繁中。对方语言未知时按人设语言回，会话头标注「对方语言未知 · 按人设语言（X）回」，不会静默当成没选人设。",
+        "desc_en": "The Send → language is per thread and is no longer written to the global default. The language catalog has 34 codes including Cantonese and Traditional Chinese. If the peer's language is unknown the AI replies in the persona language and the header notes Peer language unknown · replying in persona language (X) — it is not treated as a missing persona.",
+        "usage": "会话工具条「发→」选本会话语言（粤语在目录里）。换一个会话再看，应仍是那个会话自己的选择。语言未知时看会话头那句标注。",
+        "usage_en": "On the thread toolbar, Send → picks the language for this thread only (Cantonese is in the list). Switch threads: each keeps its own choice. When language is unknown, read the header note."
+    },
+    "clone_no_silent_fallback": {
+        "zh": "克隆声不静默换系统音",
+        "en": "Clone voice never silently falls back",
+        "desc": "克隆声不支持的语种（如日语 × 只登记了中英的音色）不再偷偷换成微软系统音发出；自动链改发文字。工作台红条可「改发文字」，或点「用系统音发」并二次确认。语音语种必须与文本一致，否则跳过语音。人设语音卡列出支持语种；登记成功后结果面板可停留（试听 / 语种 / 体检），不会一闪而过。",
+        "desc_en": "If the clone voice does not support the language (e.g. Japanese × a voice enrolled for zh/en only), it no longer silently sends a Microsoft system voice; the auto chain sends text instead. The workspace red bar offers Send as text, or Use system voice with a second confirm. Voice language must match the text or the voice is skipped. The persona voice card lists supported languages; after enrollment a result panel stays open (preview / langs / health) instead of a toast that vanishes.",
+        "usage": "人设 → 语音卡看「克隆声支持语种」。给不支持的语种发语音：应出红条而不是发出别人的声音。登记音色后看结果面板，点 × 才关。",
+        "usage_en": "Persona → Voice tab: read Clone voice supports. Sending voice in an unsupported language should show the red bar, not someone else's voice. After enrollment, the result panel stays until you click ×."
+    },
+    "conv_state_band": {
+        "zh": "会话头「AI 会不会回」",
+        "en": "Header: will the AI reply",
+        "desc": "每个会话头第一条是一条状态带：AI 会不会回、为什么、下一步点什么（摘标 / 立即接回 / 重试起草 / 确认 PIN）。全自动无拦截时写「AI 会自动回」；被拦、让位、作息外、语言未知、边车 PIN、起草失败都用同一条带子说清楚，不再靠好几枚互不相关的胶囊。",
+        "desc_en": "The first line of every thread header is one status band: whether the AI will reply, why, and what to tap next (clear tag / resume now / retry draft / confirm PIN). Full-auto with no hold says AI will reply automatically; a hold, yield, off-hours, unknown language, sidecar PIN or draft failure all use that same band instead of several unrelated chips.",
+        "usage": "打开任意会话看头部第一条色带。被拦时点带子上的动作（「我知道了」或「立即接回」）；想知道今天拦了多少，到 自动回复设置 → 今日拦截。",
+        "usage_en": "Open any thread and read the first coloured band. When held, tap the action on the band (Got it or Resume now). For today's totals, Reply settings → Blocked today."
+    },
+    "peer_local_time": {
+        "zh": "客户当地时间",
+        "en": "Customer local time",
+        "desc": "画像里已确认城市（且能唯一对应一个时区）后，AI 按客户当地钟，不再问「现在几点 / 白天还是晚上」。客户自己说「我这边四点了」会记 12 小时。主动触达也读这只钟：客户当地深夜、或人设当地 23–8 且对方半小时没说话，不主动发。认不出的同名城 / 多时区国名不会瞎猜。",
+        "desc_en": "After a city is confirmed on the profile (and maps to exactly one timezone), the AI uses the customer's local clock and does not ask what time it is or whether it is day or night. If they say it is 4 here, that is kept for 12 hours. Proactive outreach uses the same clock: no outreach in the customer's late night, or in the persona's 23:00–08:00 quiet hours when they have been silent for 30 minutes. Ambiguous cities and multi-timezone country names are not guessed.",
+        "usage": "打开会话 → 右栏画像 → 确认城市或居住地。之后看 AI 还问不问几点；深夜也不该再主动发「现在凌晨三点」。",
+        "usage_en": "Open the thread → profile in the right pane → confirm city or residence. The AI should stop asking the time, and should not proactively text in the customer's late night."
+    },
+    "handoff_memory": {
+        "zh": "人工发的图进记忆",
+        "en": "Hand-sent media enters memory",
+        "desc": "你在工作台手发的图 / 语音 / 视频会标「人工」并写入本会话的 AI 记忆。切回全自动后，AI 能认刚发过的媒体，不会装没看见或再发一张。入站图说明只记观察、不夸大张数。",
+        "desc_en": "Photos, voice and video you send by hand in the workspace are marked Sent by you and written into this thread's AI memory. After you switch back to Full auto, the AI can claim media just sent — it does not pretend it never saw them or send another. Inbound photo captions are stored as observations and are not inflated.",
+        "usage": "工作台手发一张图 → 气泡带「人工」角标 → 顶栏切回「全自动」。下一句应能认这张图。",
+        "usage_en": "Send a photo by hand → the bubble shows a Sent by you badge → switch the header back to Full auto. The next reply should acknowledge that photo."
+    },
+    "seat_single": {
+        "zh": "单人端不认领",
+        "en": "Single-seat: no claim UI",
+        "desc": "只有一台坐席在用时，点开会话不再出现「处理中 · 释放认领」，全自动也不会因为误判多坐席而卡住。近 30 分钟真有两名坐席同时在线，或到 自动回复设置 打开「多坐席协作」，认领 / 处理中 / 「我的」才会出现。",
+        "desc_en": "With one seat in use, opening a thread no longer shows In progress · release claim, and full-auto is not blocked by a false multi-seat lock. Claim / In progress / Mine appear only when two seats have been online in the last 30 minutes, or when Multi-seat collaboration is switched on in Reply settings.",
+        "usage": "单人使用不用设置。点开会话看头部：不应再有「释放认领」。团队要认领：自动回复设置 → 多坐席协作 → 打开 → 保存，收件箱大约 1 分钟后刷新。",
+        "usage_en": "No setting needed for a single seat. Open a thread: there should be no Release claim. For a team, Reply settings → Multi-seat collaboration → on → save; the inbox refreshes within about a minute."
+    },
+    "yield_no_dup": {
+        "zh": "切档同句只发一次",
+        "en": "Mode switch sends a line once",
+        "desc": "坐席正在打字或刚发过时 AI 会让位；你再把档位切回全自动，同一句只发出一次，不会瞬间双发。切到全自动也会作废本会话里还没点的陈旧「发前确认」稿。会话头状态带会写清「首回故意慢一点」等真原因。",
+        "desc_en": "The AI yields while you type or just after you send. Switching back to Full auto sends that deferred line once — never twice in the same instant. Switching to Full auto also cancels stale pending approval drafts in that thread. The header status band names the real reason, such as a deliberate slow first reply.",
+        "usage": "会话头从人审 / 让位切回「全自动」，看对方是否只收到一句。顶栏「发前确认」数字应随陈旧稿作废下降。",
+        "usage_en": "Switch the header from Review / yield back to Full auto and check the customer gets only one copy. The Pending approval count in the top bar should drop when stale drafts are cancelled."
+    },
+    "panel_sys_tags": {
+        "zh": "系统标签折叠",
+        "en": "System tags folded",
+        "desc": "收件箱筛选里，休眠 / 风控 / 停联等系统标签收进「系统标签 ▸ N」（单人端默认收起，多坐席默认展开）。点筹码后面的 × 或按 Esc 只清筛选，不删标签。对方再发来一条真消息时，休眠「已忽略」会自动摘掉。",
+        "desc_en": "In the inbox filter, dormant / risk / stop-contact system tags sit under System tags ▸ N (collapsed on a single seat, open when multi-seat). The × on a chip or Esc clears the filter only — it does not delete tags. A real inbound message automatically clears dormant: ignored.",
+        "usage": "收件箱左侧筛选 → 「系统标签 ▸ N」展开或收起。筛完点筹码上的 ×，或按 Esc，列表应恢复、标签还在。",
+        "usage_en": "Inbox left filter → expand or collapse System tags ▸ N. After filtering, tap × on the chip or press Esc: the list clears the filter and the tags remain."
+    },
+    "l4_actionable": {
+        "zh": "发前确认只计新稿",
+        "en": "Pending approval counts actionable drafts",
+        "desc": "顶栏「发前确认」药丸只数现在还能点通过的稿（过期、已作废、不可行动的不算）。出厂超过 48 小时的稿视为超龄；审批台可「清空超龄稿」。",
+        "desc_en": "The Pending approval pill in the top bar counts only drafts you can still approve. Expired, cancelled or non-actionable drafts are excluded. Drafts older than 48 hours (factory default) are stale; the approval desk can Clear stale drafts.",
+        "usage": "看顶栏药丸数字，点进去应都能处理。要清旧稿：打开审批台 → 「清空超龄稿」。",
+        "usage_en": "The top-bar number should match drafts you can still act on. To drop old ones: open the approval desk → Clear stale drafts."
+    },
+    "album_upload_visible": {
+        "zh": "相册上传失败可见",
+        "en": "Album upload failures are visible",
+        "desc": "人设相册批量上传会逐张回报成功 / 已存在 / 失败；失败可展开原因（格式不支持、超大小等）并只重试失败项。会话头若提示「相册没有匹配 · AI 已改口 · 去补标签」，点进去给人设图补标签即可。",
+        "desc_en": "Persona album batch upload reports each file as ok / already there / failed. Failures expand with a reason (unsupported type, over size, …) and Retry sends only the failed files. If the header says the album had no match and the AI rephrased, open the album and add tags.",
+        "usage": "人设 → 相册 → 选多张上传 → 看结果条。有失败就展开明细，点重试。会话头出现「去相册补标签」则点过去补。",
+        "usage_en": "Persona → Album → upload several files → read the result bar. Expand failures and tap Retry. If the header offers Add album tags, follow that link."
+    },
+    "offer_media": {
+        "zh": "客户要发自己的图",
+        "en": "Customer offers their own photo",
+        "desc": "客户说「我发张图给你 / I'll send you a pic」是对方要发，不是向你索图；全自动不再按「要你的照片」拒绝。你自己提议发图、对方答应，仍走原来的发图桥。入站图说明只记观察，回复里不把一张说成好几张。",
+        "desc_en": "I'll send you a pic means they will send, not that they want your photo; full-auto no longer refuses that as a media request. If you offered a photo and they accepted, the existing send-photo bridge still runs. Inbound captions are observations only — replies do not inflate one photo into several.",
+        "usage": "不用设置。客户说要发自己的图时，看 AI 是不是在等图而不是回「不能发 / 没有照片」。",
+        "usage_en": "No setting needed. When they offer to send their own photo, the AI should wait for it — not reply that it cannot send or has no photos."
+    },
+    "own_name_gate": {
+        "zh": "画像不写人设名",
+        "en": "Profile never stores the persona name",
+        "desc": "客户打招呼喊人设名（Hi Mizuki）不会把这个名字写成「客户叫什么」。画像 name 只收人自己的名字；人设自称和「对方怎么叫我」都进黑名单。摸底进度卡上的确认 / 拒绝钮不再被裁掉，随时能点。",
+        "desc_en": "If the customer greets you with the persona name (Hi Mizuki), that name is not written as their name. The profile name slot only accepts their own name; persona self-names and What they call me are reserved. Confirm / reject on the discovery progress card are no longer clipped and stay tappable.",
+        "usage": "目标面板 → 画像卡：客户只喊了人设名时，name 槽不应出现待确认。有值的槽点 ✓ / ✕，钮应完整可见。",
+        "usage_en": "Goal panel → profile card: if they only used the persona name, the name slot should not show a pending value. Confirm / reject on a valued slot should be fully visible."
+    },
+    "composer_model_mode": {
+        "zh": "会话模型与模式",
+        "en": "Per-thread model and mode",
+        "desc": "输入框上方两个等宽按钮。「模型」选谁来答：云厂商＝标准模式（规则全开）；ChatX聊天模型＝无限制（规则让路）。「模式」可再调上下文深度、力度、思考，或从无限制改回标准。密钥在侧栏「模型与密钥」，登录即可改。",
+        "desc_en": "Above the composer are two equal buttons. Model picks who answers: a cloud vendor = Standard (all rules on); ChatX chat model = Unrestricted (rules step aside). Mode still adjusts context depth, effort and thinking, or switches Unrestricted back to Standard. Keys live under Models & keys in the sidebar — sign in to edit.",
+        "usage": "打开会话 → 输入框上方点「模型」选 ChatX聊天模型或云厂商；点「模式」调上下文深度。保存后应有提示。",
+        "usage_en": "Open a thread → above the composer, Model picks ChatX chat model or a cloud vendor; Mode adjusts context depth. A toast confirms the save."
+    },
+    "image_send_gate": {
+        "zh": "跟图与要图意图闸",
+        "en": "Photo follow and ask-intent gate",
+        "desc": "客户发来一张图（系统识图描述里有「自拍」）不会自动再回一张；只有对方话里真的要图、或你已承诺发图时才出相册。同会话跟着发图有冷却和每日上限；配文太像上一张会自动换一句或空着。",
+        "desc_en": "An inbound photo whose system caption says selfie does not trigger another send. The album only fires when they ask for a photo in their own words, or you already promised one. Follow-up sends in the same thread have a cooldown and daily cap; near-duplicate captions are swapped or cleared.",
+        "usage": "不用设置。客户只发图不说话时，AI 应只回文字；对方说「再来一张 / May I see a pic」才出图。",
+        "usage_en": "No setting needed. If they only send a photo with no ask, the AI should reply in text; May I see a pic / send another still pulls from the album."
+    },
+    "xlate_hold_retry": {
+        "zh": "翻译失败可重试",
+        "en": "Retry after translate hold",
+        "desc": "出站自动翻译若引擎空串或超时，会先同引擎再试、换引擎、必要时按目标语重起草；仍失败则本条不发原文，会话头出现「翻译引擎没回话 · 重试翻译」。点「重试翻译」再走翻译链补投。",
+        "desc_en": "If outbound auto-translate returns empty or times out, the app retries the same engine, then another, then may redraft in the target language. Still failing holds the line (never sends Chinese as-is). The header shows Translate engine silent · Retry translate.",
+        "usage": "会话头状态带出现「重试翻译」→ 点一下。成功会补发出站译文；失败仍 HOLD，不发中文原文。",
+        "usage_en": "When the header status band offers Retry translate, tap it. Success delivers the translated line; failure stays on hold and never sends the Chinese original."
+    },
+    "list_sys_chips": {
+        "zh": "全部账号列表顶系统筹码",
+        "en": "All-accounts strip system chips",
+        "desc": "「全部账号」视图列表顶那排标签：单人端默认不显示休眠 / 风控 / 停联等系统筹码；多坐席或筛选里打开「系统标签」才出，文案是人话（长期未回 / 需留意 / 别再联系）。点筹码筛选，点 × 只清筛选。",
+        "desc_en": "On the All accounts list strip, single-seat mode hides dormant / risk / stop-contact system chips by default. Multi-seat or opening System tags in the filter shows plain labels (long silent / needs attention / do not contact). Tap a chip to filter; × clears the filter only.",
+        "usage": "打开全部账号 → 看列表顶。单人端不应出现 dormant:ignored 原码；要筛系统标签：左侧筛选展开「系统标签」。",
+        "usage_en": "Open All accounts → check the top strip. Single-seat should not show raw dormant:ignored. To filter system tags, expand System tags in the left filter."
+    },
+    "album_big_upload": {
+        "zh": "相册大图与 HEIC",
+        "en": "Large album upload and HEIC",
+        "desc": "人设相册可传更大静图（约 25MB）和视频（约 100MB / 5 分钟）；上传有逐文件进度。iPhone HEIC 会尽量转成 JPEG 入库；解不开时提示在手机相册导出为 JPEG。删单张或「删除所选」只摘卡片，不整页跳回顶；点缩略图在页内灯箱看大图。",
+        "desc_en": "Persona albums accept larger stills (~25MB) and videos (~100MB / 5 min) with per-file progress. iPhone HEIC is converted to JPEG when possible; otherwise export JPEG from the phone album. Delete one or Delete selected removes cards without jumping to the top; thumbnails open an in-page lightbox.",
+        "usage": "人设 → 相册 → 选大图或 HEIC 上传，看结果条进度。点缩略图开灯箱；勾选多张 → 「删除所选」。",
+        "usage_en": "Persona → Album → upload a large still or HEIC and watch the result bar. Tap a thumbnail for the lightbox; select several → Delete selected."
+    },
+    "chat_large_media": {
+        "zh": "聊天大图与大视频",
+        "en": "Large chat photos and videos",
+        "desc": "会话里发图 / 视频按各平台上限（如 LINE 视频约 100MB、Telegram 约 200MB；Messenger 仍约 25MB）。超限会提示还差多少；静图过大可点「压后发送」（默认仍发原图）。上传超时随体积加长。",
+        "desc_en": "In-thread photo/video sends follow each platform cap (e.g. LINE video ~100MB, Telegram ~200MB; Messenger stays ~25MB). Over-limit toasts show how much over; large stills can Compress then send (default remains original). Upload timeout scales with size.",
+        "usage": "打开会话 → 附件选大视频或大图。超限看提示；需要缩小静图时点「压后发送」再发。",
+        "usage_en": "Open a thread → attach a large video or photo. Read the over-limit toast; for a still, tap Compress then send if you need a smaller file."
+    },
+    # ── 1.0.87（R87：无限制离线回退 / 配文语言 / 生成图归属 / 拦截人话 / 语音语种旁注）───
+    "route_offline_fallback": {
+        "zh": "ChatX聊天模型离线自动回标准档",
+        "en": "ChatX chat model offline falls back to standard",
+        "desc": "会话选了「无限制」（ChatX聊天模型）而端点连不上时，不再静默不回：这一轮按标准档（规则全开、走主链）代答，会话头出黄条「ChatX聊天模型离线 · 已按标准档回复」+「切回标准」；模式菜单里离线项淡显带原因。端点恢复出话即自动回到无限制。",
+        "desc_en": "If a chat is on Unrestricted (ChatX chat model) and the endpoint is unreachable, the AI no longer goes silent: it answers on the standard profile (all rules on, main chain), the header shows ChatX chat model offline · answered on standard + Switch back to standard, and the offline option is dimmed in the mode menu. It returns to Unrestricted once the endpoint responds again.",
+        "usage": "会话头黄条 → 点「切回标准」永久切回；不点则端点恢复后自动回无限制。全自动不回时先看 AI 体检里的「ChatX聊天模型离线」。",
+        "usage_en": "Header band → tap Switch back to standard to make it permanent; otherwise it resumes Unrestricted when the endpoint is back. If auto-reply is silent, check ChatX chat model offline in AI diagnosis first."
+    },
+    "caption_lang_pin": {
+        "zh": "配图文案跟会话语言",
+        "en": "Photo captions follow the chat language",
+        "desc": "发图配文按会话铆定语（工具条「发→X」）出：日语 / 泰语等非中英会话不再冒出中文固定配文；配文池没有该语种时宁可只发图不配字。B 线 LLM 配文同样先读铆定语。",
+        "desc_en": "Photo captions follow the chat's pinned language (toolbar Send→X): Japanese / Thai and other non-zh/en chats no longer get canned Chinese captions; if no caption exists in that language the photo goes without text. LLM captions on the autosend line read the pin first.",
+        "usage": "不用设置。客户问「你是中国人吗」这类穿帮不该再出现；要改语种在工具条「发→X」铆定。",
+        "usage_en": "No setting needed. Are you Chinese? style slips should stop; pin the language via Send→X on the toolbar."
+    },
+    "album_ai_gen_gate": {
+        "zh": "AI 生成图归属与开关",
+        "en": "AI-generated photos: label and switch",
+        "desc": "相册无匹配时是否允许 AI 生成一张脸：有真人相册的人设默认关（无匹配 → 诚实文字），没有相册的人设默认开。生成入册的图在相册页带「AI 生成」角标，可按「只看 AI 生成」筛选清理。",
+        "desc_en": "Whether the AI may generate a face when the album has no match: off by default for personas with a real album (no match → honest text), on for personas without one. Generated photos carry an AI generated badge in the album and can be filtered for cleanup.",
+        "usage": "人设 → 相册 → 顶部「允许 AI 生成」开关；筛选选「AI 生成」看有哪些是生成的。",
+        "usage_en": "Persona → Album → Allow AI generation toggle at the top; filter by AI generated to see which ones were generated."
+    },
+    "abort_reason_human": {
+        "zh": "今日拦截原因人话",
+        "en": "Plain-language block reasons",
+        "desc": "节奏页「最近 24 小时」拦截行不再直出 dup_guard_blocked 这类原码：原因写成人话（近重复拦截），附「与哪条相近 · 相似度 · 已自动改写几次」和「去会话处理」。近重复第一次换说法仍雷同会先换角度再改写一次，第二次才转人工。",
+        "desc_en": "The Last 24 hours block rows on the pacing page no longer show raw codes like dup_guard_blocked: reasons read as plain text (near-duplicate guard) with which message it matched, similarity, how many rewrites, and Go to chat. A near-duplicate gets a second, angle-changing rewrite before handing off.",
+        "usage": "自动回复设置 → 节奏 → 最近 24 小时 → 点「去会话处理」。AI 体检面板「为什么没回」也列同一份拦截时间线。",
+        "usage_en": "Reply settings → Pacing → Last 24 hours → Go to chat. The AI diagnosis panel lists the same block timeline under Why no reply."
+    },
+    "voice_clone_lang_note": {
+        "zh": "克隆声不支持该语种提示",
+        "en": "Clone voice unsupported language note",
+        "desc": "克隆声念不了会话语种（如日语）时按设计改发文字，不是语音链路坏了：会话头一行「本会话语音不可用（克隆声不支持 ja）」，同一会话不再每条告警，也不再被算进「语音出站断档」。",
+        "desc_en": "When the clone voice cannot speak the chat language (e.g. Japanese), replies go as text by design — not a voice outage: the header shows Voice off for this chat (clone does not support ja), the same chat is not warned per message and it no longer counts toward voice outage alerts.",
+        "usage": "看到该行不用处理；要让这个会话出语音需换支持该语种的克隆声或改人设语言。",
+        "usage_en": "No action needed; to get voice in that chat, switch to a clone voice that supports the language or change the persona language."
+    },
+    # ── 1.0.89（群进工作台 / 间隔记忆 / 西语标点 / 媒体账本）───
+    "group_inbox_mirror": {
+        "zh": "群消息进工作台",
+        "en": "Group messages in the inbox",
+        "desc": "Telegram 群即使没触发自动回复，也会镜像进统一收件箱，会话名用群名而不是发言人。不在灰度白名单的群不进工作台也不回复。",
+        "desc_en": "Telegram group messages are mirrored into the unified inbox even when auto-reply does not fire. The thread keeps the group title, not the speaker name. Groups outside the allowlist stay out of the inbox and are not answered.",
+        "usage": "打开工作台 → 群组动态。要处理某个群：把该群 chat_id 加进 telegram.group_reply.allowlist_chat_ids。问小智「群消息怎么进工作台」。",
+        "usage_en": "Open the workspace → Group activity. To handle a group, add its chat_id to telegram.group_reply.allowlist_chat_ids."
+    },
+    "time_gap_memory": {
+        "zh": "隔很久再聊的时间记忆",
+        "en": "Time-gap memory",
+        "desc": "对方隔几天再来时，拟稿按真实间隔说话（好久没聊了），不会把几天说成几十天。对方提过的事（吃撑、涮肉）会按关键词和近义再提起。",
+        "desc_en": "When someone returns after days, drafts use the real gap (long time no chat) instead of inflating days into weeks. Things they mentioned (a huge meal, hotpot) can be brought back by keywords and near-synonyms.",
+        "usage": "不用设置。隔几天的会话看拟稿是否提间隔、是否接得上上次的事。问小智「隔很久再聊会乱记时间吗」。",
+        "usage_en": "No setting. After a multi-day gap, check whether the draft mentions the pause and picks up the last topic."
+    },
+    "spanish_punct_lang": {
+        "zh": "西语标点不再误判成英文",
+        "en": "Spanish punctuation is not misread as English",
+        "desc": "带 ¿ / ¡ 的短西语句会判成西班牙语。以前没关键词时会被当成英文，会话「发→西语」再把已经是西语的草稿译成英文发给客户。",
+        "desc_en": "Short Spanish lines with ¿ / ¡ are detected as Spanish. Without keywords they used to be tagged English, then Send→Spanish re-translated an already-Spanish draft into English.",
+        "usage": "不用设置。西语客户来一句带问号的短句时，看发出去的仍是西语。问小智「西语为什么回成英文」。",
+        "usage_en": "No setting. On a short Spanish question, the outbound line should stay Spanish."
+    },
+    "media_ledger": {
+        "zh": "已发图片账本",
+        "en": "Sent-photo ledger",
+        "desc": "拟稿认工作台里已经发出去的图，不会一边说「等我再发一张」一边其实刚发过。对方发来的图也会记一笔，回「收到照片」而不是装作没看见。",
+        "desc_en": "Drafts see photos already sent from the workspace, so they do not promise another picture right after one went out. Inbound photos are noted too, so the reply can acknowledge the picture instead of ignoring it.",
+        "usage": "不用设置。刚手发或自动发过图后，看下一条拟稿还说不说「等我发一张」。问小智「刚发过图为什么还说要发」。",
+        "usage_en": "No setting. After a photo just went out, the next draft should not say wait I will send one."
+    },
+    # ── 1.0.90（电脑微信副驾进包 / 发语音 / 接管迟到闸 / 成人不设限）───
+    "wechat_pc_copilot": {
+        "zh": "个人微信 · PC 副驾",
+        "en": "Personal WeChat · PC copilot",
+        "desc": "读取本机已登录的电脑微信窗口，把私聊同步进工作台。半自动只发你批准的稿；全自动需在引导页勾风险知情同意后可代发。不是微信官方接口，不保存微信密码。",
+        "desc_en": "Reads the signed-in WeChat for Windows window and mirrors chats into the workspace. Semi-auto sends only approved drafts; full-auto can send after a risk acknowledgement. Not an official WeChat API; the password is never stored.",
+        "usage": "工作台 → 账号管理 → 个人微信 · PC 副驾 → 查看接入流程。三步：检测微信并扫码 → 选档位并保存 → 点「启动副驾」。问小智「个人微信怎么用」。",
+        "usage_en": "Workspace → Accounts → Personal WeChat · PC copilot → guide. Three steps: detect and scan → pick a tier → Start copilot."
+    },
+    "wechat_pc_voice": {
+        "zh": "微信副驾发语音",
+        "en": "WeChat copilot voice replies",
+        "desc": "全自动档可用人设克隆声发微信语音：电脑微信 4.1.9+、免费 VB-CABLE、两端采样率一致。单条约 55 秒，超长分条；麦被占用或通路未就绪改发文字。对方发来的语音听不到（只有「语音N秒」占位），人设请对方打字。",
+        "desc_en": "On full-auto the copilot can send clone-voice clips: WeChat 4.1.9+, free VB-CABLE, matching sample rates. Clips ~55 s, longer ones split; mic busy or path not ready falls back to text. Inbound voice cannot be heard (duration placeholder only); the persona asks them to type.",
+        "usage": "引导第 ① 步看「语音回复」一行（下载 VB-CABLE / 对齐采样率 / 自测）。第 ② 步选全自动。人设绑克隆音色。问小智「微信怎么发语音」。",
+        "usage_en": "Step 1 of the guide: Voice replies line (download VB-CABLE / align sample rate / self-test). Step 2: full-auto. Bind a clone voice on the persona."
+    },
+    "takeover_late_gate": {
+        "zh": "接管迟到闸",
+        "en": "Takeover late gate",
+        "desc": "点接管或把会话切到人工后，还在拟人等待里的那一稿会弃发，避免「按钮已变人工、消息仍自动出去」。已经出现在对方聊天里的那条收不回来。",
+        "desc_en": "After Take over or switching the thread to Manual, a draft still waiting in the humanize delay is dropped so a send cannot land after the button already shows Manual. A line already delivered cannot be recalled.",
+        "usage": "会话头切「人工」或点接管。若仍发出去，把会话和时间发到报障群。问小智「点了接管为什么还在自动发」。",
+        "usage_en": "Switch the thread header to Manual or click Take over. If a send still goes out, report the thread and time."
+    },
+    "adult_policy_open": {
+        "zh": "人设成人政策 · 不设限",
+        "en": "Persona adult policy · Unrestricted",
+        "desc": "开黄腔、露骨按人设口吻接住，不软回应、不因成人内容转人工。本机配置 adult_grader.default_policy=open 时，「跟随域默认」也按不设限。对方自称或明显未成年仍强制转人工。",
+        "desc_en": "Flirty or explicit lines stay in character; no soft-reply and no hand-off for adult content. If the machine sets adult_grader.default_policy=open, Follow domain default uses Unrestricted too. Self-identified or obvious minors still hand off.",
+        "usage": "人设工坊 → 打开人设 → 边界 / 成人政策 →「不设限」。未见该档=当前部署未开启。问小智「不设限怎么用」。",
+        "usage_en": "Persona studio → open a persona → Boundaries / adult policy → Unrestricted. Missing option means this deployment does not enable that tier."
     }
 }
 

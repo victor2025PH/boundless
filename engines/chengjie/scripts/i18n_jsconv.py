@@ -15,7 +15,7 @@ Reuses existing keys by exact zh match (any namespace); mints ``<KEY_PREFIX>NNN`
 Usage::
 
     from scripts import i18n_jsconv as jc
-    jc.TPL = Path("src/web/templates/whatsapp_rpa.html")
+    jc.TPL = Path("src/web/templates/_channel_body_whatsapp.html")
     jc.KEY_PREFIX = "wa_js_"          # minted-key namespace for this page
     jc.build_plan(1448, 1799)         # dry-run -> writes _js_plan/_js_new/_js_phrases.json
     # ...review JSON, author EN dict for the new keys...
@@ -30,7 +30,7 @@ from pathlib import Path
 
 from src.web.web_i18n import get_translations
 
-TPL = Path("src/web/templates/messenger_rpa.html")
+TPL = Path("src/web/templates/_channel_body_messenger.html")
 KEY_PREFIX = "msg_js_"
 WORK = Path(".")  # dir holding transient _js_plan.json / _js_new.json / _js_phrases.json
 

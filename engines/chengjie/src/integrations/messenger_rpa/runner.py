@@ -7558,6 +7558,15 @@ class MessengerRpaRunner:
                 block_duration_sec=block_hours * 3600,
                 require_consecutive=require,
             )
+            # 反封号反馈闭环（P0）：页面风控态 → 统一 24h 风控计数 → account_health
+            # 扣分 → companion_send_gate 自动降 recommended_cap。与协议线 FloodWait
+            # 走同一口径（risk_events），让机群健康分「看得见」RPA 号的风控压力。
+            # best-effort：记账失败绝不影响既有 pause/告警主流程。
+            try:
+                from src.ops.risk_events import KIND_FLOOD, record_risk_event
+                record_risk_event("messenger", self._account_id, KIND_FLOOD)
+            except Exception:
+                pass
             result["risk"] = {
                 "hit": True,
                 "severity": risk.severity,
@@ -7917,14 +7926,16 @@ class MessengerRpaRunner:
         chat_key: str,
         profile: Dict[str, Any],
     ) -> str:
-        """Resolve output language with current text first, then profile/history.
+        """Resolve output language（lang_policy 会话契约版）。
+
+        Messenger 是唯一 `reply_lang_locked=True` 的产线——本方法的结果就是最终
+        回复语言（skill_manager 3b 不再复核），因此策略必须在这里完整落地：
+          全局 force > per-chat forced_lang > 人设 profile.language >
+          用户明确请求（持久 user_lang_pref）> 强证据立即跟随 >
+          弱证据/中性词粘住上一轮 > default_reply_lang。
 
         Non-text media often arrives as Chinese local labels ("[图片]"), so for
         those messages we prefer explicit profile language or prior chat language.
-
-        Config keys:
-          force_reply_lang   e.g. "ja" — hard override, ignores all detection.
-          default_reply_lang e.g. "ja" — fallback when detection yields nothing.
         """
         # Global hard override: force_reply_lang skips all detection.
         _force_global = str(self._cfg.get("force_reply_lang") or "").strip().lower()
@@ -7932,8 +7943,9 @@ class MessengerRpaRunner:
             return _force_global
 
         # P5-A: Per-chat operator lock (higher priority than profile, lower than global)
+        _cs: Dict[str, Any] = {}
         try:
-            _cs = self._state.get_chat_state(chat_key)
+            _cs = self._state.get_chat_state(chat_key) or {}
             _per_chat_lock = str(_cs.get("forced_lang") or "").strip().lower()
             if _per_chat_lock and _per_chat_lock not in ("auto", "detect"):
                 return _per_chat_lock
@@ -7945,10 +7957,11 @@ class MessengerRpaRunner:
             return forced
 
         cfg_default = str(self._cfg.get("default_reply_lang", "zh") or "zh").lower()
-        ai_for_lang = getattr(self._sm, "ai_client", None)
-        votes: Dict[str, int] = {}
+        prev = self._previous_reply_lang(chat_key)
+
+        # 清洗输入：连发合并取各行（供窗口回落），单条取 raw
+        lines: List[str] = []
         if peer_msg.kind == "text":
-            lines: List[str] = []
             if "[对方连发]" in text_for_ai:
                 for line in text_for_ai.splitlines():
                     clean = self._strip_lang_detection_markup(line)
@@ -7958,15 +7971,74 @@ class MessengerRpaRunner:
                 clean = self._strip_lang_detection_markup(peer_msg.raw or text_for_ai)
                 if clean:
                     lines.append(clean)
-            for line in lines:
-                lang = _detect_peer_lang(line, ai_client=ai_for_lang)
-                if lang not in ("unknown", ""):
-                    votes[lang] = votes.get(lang, 0) + 1
+        _cur_text = lines[-1] if lines else ""
+        _pseudo_hist = [{"role": "user", "content": ln} for ln in lines[:-1]]
+
+        try:
+            from src.ai.lang_policy import (
+                classify_evidence as _lang_classify,
+                resolve_conversation_language as _lang_resolve,
+            )
+            _decision = _lang_resolve(
+                _cur_text,
+                _pseudo_hist or None,
+                prev_lang=prev,
+                lang_pref=str(_cs.get("user_lang_pref") or ""),
+                lang_pref_input=str(_cs.get("user_lang_pref_input") or ""),
+                default=cfg_default,
+            )
+            if _decision.request:
+                try:
+                    self._state.set_user_lang_pref(
+                        chat_key, _decision.request,
+                        (_lang_classify(_cur_text)[0] or ""),
+                    )
+                    logger.info(
+                        "[messenger_rpa] 语言请求命中: %r → %s (persisted) chat=%s",
+                        _cur_text[:40], _decision.request, chat_key,
+                    )
+                except Exception:
+                    logger.debug("[messenger_rpa] 语言偏好写入失败", exc_info=True)
+            elif _decision.source == "stable_switch":
+                try:
+                    self._state.set_user_lang_pref(chat_key, None, None)
+                except Exception:
+                    pass
+            # 观测埋点（Messenger 锁定 reply_lang，skill_manager 3b 不复核 → 这里记）
+            if _decision.request or _decision.source == "stable_switch":
+                try:
+                    from src.monitoring.metrics_store import get_metrics_store
+                    get_metrics_store().record_lang_event(
+                        "explicit_request" if _decision.request else "stable_switch"
+                    )
+                except Exception:
+                    pass
+                if self._contact_hooks is not None:
+                    try:
+                        self._contact_hooks.on_language_preference(
+                            channel="messenger",
+                            account_id=str(getattr(self, "_account_id", "") or "default"),
+                            external_id=chat_key,
+                            lang=_decision.request or "",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "[messenger_rpa] on_language_preference 跳过", exc_info=True,
+                        )
+            return _decision.lang
+        except Exception:
+            logger.debug("[messenger_rpa] lang_policy 决策失败，回落旧链", exc_info=True)
+
+        # 兜底（策略异常）：沿用旧的逐行投票链
+        ai_for_lang = getattr(self._sm, "ai_client", None)
+        votes: Dict[str, int] = {}
+        for line in lines:
+            lang = _detect_peer_lang(line, ai_client=ai_for_lang)
+            if lang not in ("unknown", ""):
+                votes[lang] = votes.get(lang, 0) + 1
         if votes:
             non_en = {k: v for k, v in votes.items() if k != "en"}
             return max(non_en or votes, key=(non_en or votes).get)
-
-        prev = self._previous_reply_lang(chat_key)
         if prev:
             return prev
         return cfg_default
@@ -8456,6 +8528,16 @@ class MessengerRpaRunner:
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "..."
             result["tts_truncated"] = True
+        # 语音断档台账（2026-08-22）：与 WhatsApp 同批接线——两条 RPA 语音链此前都不进
+        # voice_outage，导致「hub 引擎被显存挤到每发必超时」那晚台账仍是 24h 全绿，
+        # 看门狗/ops 卡/Prometheus 集体沉默。终局口径：真发档（auto_voice 且 reply_mode
+        # =auto）看发送成败，其余档（approval_only=只产 artifact 待人审）合成成功即终局。
+        _vo_send_final = (mode == "auto_voice" and self._reply_mode == "auto")
+
+        def _vo(ok: bool, reason: str = "") -> None:
+            from src.ai.voice_outage import note_voice_attempt
+            note_voice_attempt(ok, "mr_rpa", reason)
+
         try:
             from src.ai.tts_pipeline import get_tts_pipeline
 
@@ -8498,6 +8580,7 @@ class MessengerRpaRunner:
                     result.setdefault("hints", []).append(
                         f"tts_duration_guard_blocked:{rv.duration_sec:.1f}s"
                     )
+                    _vo(False, f"duration_guard:{rv.duration_sec:.1f}s")
                     # 删掉坏的 artifact，避免误投
                     try:
                         import os as _os
@@ -8510,8 +8593,14 @@ class MessengerRpaRunner:
                 result["tts_voice"] = rv.voice
                 result["tts_format"] = rv.format
                 result.setdefault("hints", []).append("tts_ready_for_review")
+                if not _vo_send_final:
+                    _vo(True)
                 if mode == "auto_voice" and self._reply_mode == "auto":
                     await self._maybe_send_tts_audio(rv.audio_path, cfg, result)
+                    if result.get("tts_send_ok"):
+                        _vo(True)
+                    else:
+                        _vo(False, f"send:{str(result.get('tts_send_error') or 'unknown')}")
                     # ★ 若 share-sheet 发送失败，需按 BACK 回到 Messenger 聊天页
                     # 否则后续 text send 会在 "Send to" 页面操作，导致循环
                     # 但如果是预检就中止的（share_skip_），share 根本没打开，不需要 BACK
@@ -8538,8 +8627,10 @@ class MessengerRpaRunner:
             else:
                 result["tts_error"] = rv.error
                 result.setdefault("hints", []).append("tts_failed_text_fallback")
-        except Exception:
+                _vo(False, str(rv.error or "synth_failed"))
+        except Exception as ex:
             result.setdefault("hints", []).append("tts_exception_text_fallback")
+            _vo(False, f"exception:{type(ex).__name__}")
             logger.debug("[messenger_rpa] TTS generation failed", exc_info=True)
 
     async def _maybe_send_tts_audio(
@@ -8724,18 +8815,37 @@ class MessengerRpaRunner:
             )
             # text 渲染缓冲——给 messenger 1.5s 把刚发的文字渲染出来再切 share
             await asyncio.sleep(1.5)
-            rv = await asyncio.to_thread(
-                sender.send_audio_file,  # 通用：mime 由扩展名决定
-                sticker_path,
-                recipient_name=chat_name,
-                auto_find_send_button=bool(cfg.get("auto_find_share_send_button", True)),
-                auto_search_recipient=bool(cfg.get("auto_search_share_recipient", True)),
-                audit_dir=str(
-                    cfg.get("send_audit_dir")
-                    or self._cfg.get("debug_screenshot_dir")
-                    or "tmp_messenger_rpa"
-                ),
-            )
+            # 反封号·去重微扰（默认关，opt-in）：同一张 sticker 发多号 → 文件哈希相同是垃圾信号。
+            # RPA 走 adb push 本地文件，是绕过编排器 send_media 的直发缝——这里发前产「视觉无差、
+            # 字节唯一」临时副本 push、发完删；canonical sticker 资产不动。软失败回落原图。
+            _send_sticker = sticker_path
+            _dedup_temp = False
+            try:
+                from src.integrations.shared.media_dedup import perturb_for_send
+                _root_cfg = self._cm.config if hasattr(self._cm, "config") else {}
+                _send_sticker, _dedup_temp = perturb_for_send(
+                    sticker_path, "sticker", _root_cfg)
+            except Exception:
+                _send_sticker, _dedup_temp = sticker_path, False
+            try:
+                rv = await asyncio.to_thread(
+                    sender.send_audio_file,  # 通用：mime 由扩展名决定
+                    _send_sticker,
+                    recipient_name=chat_name,
+                    auto_find_send_button=bool(cfg.get("auto_find_share_send_button", True)),
+                    auto_search_recipient=bool(cfg.get("auto_search_share_recipient", True)),
+                    audit_dir=str(
+                        cfg.get("send_audit_dir")
+                        or self._cfg.get("debug_screenshot_dir")
+                        or "tmp_messenger_rpa"
+                    ),
+                )
+            finally:
+                try:
+                    from src.integrations.shared.media_dedup import cleanup_temp
+                    cleanup_temp(_send_sticker, _dedup_temp)
+                except Exception:
+                    pass
             result["sticker_send_ok"] = rv.ok
             result["sticker_send_extra"] = rv.extra
             if rv.ok:
@@ -11160,6 +11270,16 @@ class MessengerRpaRunner:
         if not reply_text:
             result["error"] = "empty_reply_text"
             return False
+        # 多行折叠（2026-08-09）：本路径整段注入+单次点发送、不具备分条能力；
+        # bubbles 开启时拟稿合同是「每行一句」，多行原样注入＝一条消息带结构化
+        # 换行（2026-08-08 客户实锤的 AI 感形态）→ 折叠成自然单段（与协议直发
+        # 链/桌面桥/human_pacing 单条出口同款收口；折叠不可用原样发，绝不阻断）。
+        if "\n" in reply_text:
+            try:
+                from src.inbox.reply_split import collapse_paragraphs as _clp_mr
+                reply_text = (_clp_mr(reply_text) or reply_text)[:1500]
+            except Exception:
+                pass
 
         text_x, text_y = cc.INPUT_TEXT_FIELD.at(*wh)
         if use_adb_keyboard:

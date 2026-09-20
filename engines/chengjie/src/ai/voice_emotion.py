@@ -23,9 +23,13 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 # 受支持的情绪词表（保持精简——只收各引擎都能稳定表达的）。
 # 每个情绪带一组「画像」：自然语言语气词、ElevenLabs 标签、edge rate/pitch 偏移。
+# angry（2026-08-22 实施54）：temper 回怼功能的配套档——骂回去的文本被人设
+# 默认基调渲染成 happy（开心语调骂人=穿帮）；仅由骂战态覆写链产生
+# （persona_voice.resolve_emotion_for_send），derive_emotion 的常规判定链
+# 刻意不产出它（AI 不会因为「聊到生气话题」就对客户发火）。
 EMOTIONS = (
     "neutral", "warm", "happy", "excited", "playful",
-    "empathetic", "apologetic", "calm", "sad", "serious",
+    "empathetic", "apologetic", "calm", "sad", "serious", "angry",
 )
 
 # 情绪 → 各引擎画像。rate/pitch 为 edge_tts 的相对偏移（百分比/Hz 风格字符串生成用）。
@@ -40,6 +44,7 @@ _EMOTION_PROFILE: Dict[str, Dict[str, Any]] = {
     "calm":       {"tone": "平静、沉稳、舒缓",            "el_tag": "calmly",      "rate": -6,  "pitch": -1},
     "sad":        {"tone": "低落、轻声、略带叹息",        "el_tag": "sadly",       "rate": -10, "pitch": -4},
     "serious":    {"tone": "认真、郑重、清晰",            "el_tag": "seriously",   "rate": -2,  "pitch": -1},
+    "angry":      {"tone": "不耐烦、带火气、语气冲",      "el_tag": "angry",       "rate": 6,   "pitch": 2},
 }
 
 
@@ -93,14 +98,57 @@ _INTENT_EMOTION = {
     "farewell": "warm", "告别": "warm", "再见": "warm",
 }
 
+# 线索词表中英并重（2026-09-20）。此前英文侧只有 sorry/apolog、haha 族、thank、字面
+# "!!" 四处，于是**整条英文人设永远撞不到线索**，五级瀑布一路滑到 default——实测
+# "Oh my god, I'm so happy right now!" 与 "I am still here." 派生出完全相同的
+# warm/0.6，老板一耳朵听出「太AI化」：每句话都是同一个语气。
+#
+# 收词标准：只收**说话人自述情绪**的强口语搭配，不收话题词。"happy" 单字不收——
+# "happy to help" 是客套不是开心；"are you happy with it" 问的是对方。宁可漏，
+# 不可错：判错情绪比没情绪更出戏。
 _TEXT_CUES = (
-    # (子串元组, 情绪)；命中即取，顺序=优先级
-    (("对不起", "不好意思", "抱歉", "sorry", "apolog"), "apologetic"),
-    (("哈哈", "嘻嘻", "lol", "😄", "😂", "🤣", "笑死"), "playful"),
-    (("谢谢", "感谢", "thank", "❤", "🥰", "么么"), "warm"),
-    (("太好了", "棒", "恭喜", "🎉", "！！", "!!"), "excited"),
-    (("难过", "伤心", "唉", "😢", "😭", "可惜"), "sad"),
+    # (子串元组, 情绪)；命中即取，顺序=优先级——具体在前，宽泛在后
+    (("对不起", "不好意思", "抱歉", "sorry", "apolog", "my bad",
+      "my fault", "i feel terrible"), "apologetic"),
+    (("哈哈", "嘻嘻", "haha", "hehe", "lol", "lmao", "😄", "😂", "🤣", "笑死",
+      "just kidding", "kidding", "you wish", "very funny", "😜", "😏"), "playful"),
+    (("难过", "伤心", "唉", "😢", "😭", "可惜",
+      "i'm sad", "im sad", "so sad", "heartbroken", "miss you so much",
+      "bummed", "gutted", "feel awful"), "sad"),
+    (("太好了", "棒", "恭喜", "🎉", "！！", "!!",
+      "oh my god", "omg", "can't wait", "cant wait", "so excited",
+      "i'm thrilled", "im thrilled", "congrats", "congratulations",
+      "finally!", "no way!", "🤩", "🥳"), "excited"),
+    (("开心", "高兴", "😊", "😁",
+      "so happy", "i'm happy", "im happy", "made my day", "love it",
+      "so glad", "i'm glad", "im glad", "turned out great"), "happy"),
+    (("谢谢", "感谢", "thank", "❤", "🥰", "么么",
+      "appreciate it", "you're the best", "youre the best", "means a lot",
+      "take care", "get some rest"), "warm"),
+    (("生气", "烦死", "别烦我", "无语",
+      "seriously?", "are you kidding me", "the nerve", "a lot of nerve",
+      "don't talk to me", "dont talk to me", "fed up", "had enough",
+      "😠", "😡"), "angry"),
+    (("累了", "好累", "撑不住",
+      "i'm exhausted", "im exhausted", "so tired", "worn out",
+      "long day", "my eyes hurt", "drained"), "calm"),
 )
+
+
+def text_cue_emotion(text: Optional[str]) -> Optional[str]:
+    """文本线索命中的情绪；没命中 → None（纯函数）。
+
+    单独暴露是为了让调用方能问「这句话的情绪是**读出来的**，还是兜底基线」——
+    LLM 兜底层只在没读出来时才值得花一次模型调用（见 voice_emotion_llm）。
+    """
+    t = str(text or "")
+    if not t:
+        return None
+    tl = t.lower()
+    for cues, val in _TEXT_CUES:
+        if any(c in t or c in tl for c in cues):
+            return val
+    return None
 
 
 def derive_emotion(
@@ -155,13 +203,8 @@ def derive_emotion(
                 break
 
     # 3) 文本线索
-    if emo is None and text:
-        t = str(text)
-        tl = t.lower()
-        for cues, val in _TEXT_CUES:
-            if any(c in t or c in tl for c in cues):
-                emo = val
-                break
+    if emo is None:
+        emo = text_cue_emotion(text)
 
     # 4) 关系阶段微调（亲密阶段更暖更俏皮）
     rs = str(rel_stage or "").strip().lower()
@@ -220,7 +263,10 @@ def persona_default_emotion(persona: Optional[Dict[str, Any]]) -> Optional[str]:
     blob = " ".join(parts).lower()
     if not blob:
         return None
-    if any(k in blob for k in ("活泼", "俏皮", "调皮", "爱笑", "热情", "外放", "playful")):
+    if any(k in blob for k in (
+        "活泼", "俏皮", "调皮", "爱笑", "热情", "外放",
+        "playful", "tease", "flirt", "coquettish", "spoiled",
+    )):
         return "playful"
     if any(k in blob for k in ("开心", "快乐", "乐观", "阳光", "happy")):
         return "happy"
@@ -389,8 +435,10 @@ def elevenlabs_voice_settings(
 
 # 情绪 → CosyVoice3(AvatarHub 7852) emotion 标签。服务端词表：
 # neutral/happy/sad/angry/fearful/surprised/disgusted/gentle/excited/calm/serious。
-# 系统词表中的「暖/共情类」统一映射 gentle；angry/fearful 等负面标签**刻意不映射**
-# ——AI 角色对用户发火/恐惧不是本产品语气。
+# 系统词表中的「暖/共情类」统一映射 gentle；fearful/disgusted 等标签**刻意不映射**
+# ——AI 角色对用户恐惧/厌恶不是本产品语气。angry 自 2026-08-22（实施54）起
+# 映射：temper 回怼功能已让人设「敢骂回去」，语音层再钉死正向语气就是自相
+# 矛盾（happy 语调骂人=穿帮）；angry 仅由骂战态覆写链产出，常规判定链不产。
 _COSYVOICE_EMOTION: Dict[str, str] = {
     "neutral":    "neutral",
     "warm":       "gentle",
@@ -402,6 +450,7 @@ _COSYVOICE_EMOTION: Dict[str, str] = {
     "calm":       "calm",
     "sad":        "sad",
     "serious":    "serious",
+    "angry":      "angry",
 }
 
 # 强情绪阈值：intensity ≥ 此值才切 7852 的 instruct2 情感路径。
@@ -448,6 +497,7 @@ _EMOTION_SPEED: Dict[str, float] = {
     "happy":      1.04,
     "playful":    1.05,
     "excited":    1.08,
+    "angry":      1.05,   # 吵架语速快而急（与 playful 同级，靠 tone 分火气）
 }
 
 
@@ -573,19 +623,33 @@ def _paraling_res() -> tuple:
     if _SIGH_LEAD_RE is None:
         import re
         # 长叹词在前（正则交替按序匹配）：防「呜呜」被单字「呜」截断成「呜[sigh]呜」
-        _SIGH_LEAD_RE = re.compile(r"^(哎呀|呜呜|唉|哎|呜|嗯|哦|唔)")
+        # 英文：mm / ahh / aww / oh 是 Claire 这类美式陪伴的气口/撒娇起势。
+        _SIGH_LEAD_RE = re.compile(
+            r"^(哎呀|呜呜|唉|哎|呜|嗯|哦|唔|"
+            r"(?i:mm+|ahh+|aww+|ooh+|oh+))")
         _LAUGH_CUE_RE = re.compile(
-            r"(哈哈+|嘻嘻+|嘿嘿+|噗+|太逗|笑死|好好笑|太好笑|绝了|太搞笑|好搞笑)")
+            r"(哈哈+|嘻嘻+|嘿嘿+|噗+|太逗|笑死|好好笑|太好笑|绝了|太搞笑|好搞笑|"
+            r"(?i:haha+|hehe+|heh+|lol+|lmao)|"
+            r"(?i:\*+\s*(?:laughs|laugh|giggles|giggle|chuckles)\s*\*+))")
         _BREATH_SPLIT_RE = re.compile(r"[，,]")
         # 哭声拟声词（≥2 连字 + 可选停顿符）：TTS 念不稳（真机 STT 把「呜呜」
         # 听成「喂鱼」），且文字拟声本就是副语言——换成真叹气声更拟人。
-        _CRY_LEAD_RE = re.compile(r"^(呜{2,}|嘤{2,}|哇{2,})[，,、\s]*")
+        _CRY_LEAD_RE = re.compile(
+            r"^(呜{2,}|嘤{2,}|哇{2,}|(?i:\*+\s*(?:sighs|sobs)\s*\*+))[，,、\s]*")
     return _SIGH_LEAD_RE, _LAUGH_CUE_RE, _BREATH_SPLIT_RE, _CRY_LEAD_RE
 
 
 # <strong> 重点词强调（③）：程度副词/强调词——真人说「真的超好吃」会重读「超」。
 # 仅 excited/serious（表达欲/严肃强调场景）注入，每句 ≤1 个，占 marks 额度。
 _STRONG_CUE_RE = None
+
+
+def _looks_english(text: str) -> bool:
+    """粗判拉丁文为主（Claire 等英文人设）。纯函数、无 IO。"""
+    t = str(text or "")
+    letters = sum(1 for ch in t if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
+    cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff")
+    return letters >= 8 and letters > cjk * 2
 
 
 def _strong_re():
@@ -698,6 +762,54 @@ def inject_paralinguistic(
                    + out[m.end():])
             marks += 1
 
+    # 6) 英文陪伴：playful/happy 长句在逗号后补一口气（撒娇/喘息）。中文 playful
+    # 不加这档——中文气口已由配方 3/4 覆盖，避免给「哈哈」短句多一层味精。
+    if (not breath_done and marks < max_marks and emo in ("playful", "happy")
+            and _looks_english(out) and len(out) >= 18 and _hit(27, 0.45)):
+        commas = [m.end() for m in breath_re.finditer(out)]
+        if commas:
+            pos = commas[(seed >> 21) % len(commas)]
+            out = out[:pos] + "[breath]" + out[pos:]
+            marks += 1
+
+    return out
+
+
+# 副语言标记**全家族**（方括号族 + <strong> 强调对）——单一事实源（#58 2026-08-30）。
+# 只有 CosyVoice3(7852) 的 tokenizer 消费这些标记；IndexTTS-2 / MiniCPM / fish
+# （/v1/tts/clone 契约家族）一律当正文按英文念出：104 idx_serve.log 实锤 8 发
+# 合成文本字面含 [breath]（全在逗号后句中位=本模块第 3/4 步注入位），用户听到
+# 固定英文音「PLAS」。凡送往非 CosyVoice 上游的文本，合成前必须过一道剥除。
+_PARA_MARK_FAMILY_RE = None
+
+
+def _para_mark_family_re():
+    """惰性编译（与本模块其余正则同纪律：模块导入零开销）。"""
+    global _PARA_MARK_FAMILY_RE
+    if _PARA_MARK_FAMILY_RE is None:
+        import re
+        _PARA_MARK_FAMILY_RE = re.compile(
+            r"\[(?:sigh|breath|laughter|laughs|laugh|strong)\]|</?strong>",
+            re.IGNORECASE)
+    return _PARA_MARK_FAMILY_RE
+
+
+def strip_paralinguistic_marks(text: str) -> str:
+    """剥副语言标记全家族——送往**非 CosyVoice** 克隆上游前的消费侧守卫。
+
+    ``[sigh]/[breath]/[laughter]/[strong]`` 与 ``<strong>…</strong>`` 只在
+    CosyVoice3 被 tokenizer 层消费（绝不读出）；IndexTTS-2/MiniCPM/fish 会按
+    英文朗读（#58「PLAS」事故）。``<strong>`` 只剥标签、保留被强调的词本体。
+    纯函数、幂等；无标记时原文原样返回（零分配路径）。
+    """
+    t = str(text or "")
+    if not t or ("[" not in t and "<" not in t):
+        return t
+    out = _para_mark_family_re().sub("", t)
+    if out != t:
+        import re
+        # 标记两侧原有空格时剥除会留双空格；只折叠空格不动其他空白
+        out = re.sub(r" {2,}", " ", out)
     return out
 
 
@@ -760,6 +872,9 @@ _INSTRUCT_STYLES: Dict[str, str] = {
     "沉稳": "沉稳可靠",
     "清冷": "清冷淡然",
     "阳光": "阳光爽朗",
+    "coquettish": "soft spoiled teasing",
+    "breathy": "breathy intimate",
+    "california": "warm California",
 }
 
 
@@ -806,6 +921,141 @@ def to_cosyvoice_instruct(
     return instr + pace_part
 
 
+# IndexTTS-2 / 2.5 的 emo_text 通道（2026-08 起局域网 104:7865 主路）。
+# CosyVoice 的 [laughter]/[breath] 在 IndexTTS tokenizer 里当英文念出「PLAS」——
+# 现网 7852 已停，笑声/喘息/撒娇必须走独立情感描述，而不是方括号标记。
+# 官方：use_emo_text + emo_text + emo_alpha≈0.55–0.65（再高音色开始漂）。
+_INDEXTTS_EMO_TEXT: Dict[str, Dict[str, tuple]] = {
+    "en": {
+        "warm": (
+            "warm, close, a small smile in the voice",
+            "soft and easy, like talking to someone you like",
+        ),
+        "happy": (
+            "happy, light laugh sitting under the words",
+            "bright, almost giggling, still natural",
+        ),
+        "excited": (
+            "excited, breath a little quicker, almost laughing",
+            "lit up, voice lifting, a tiny giggle",
+        ),
+        "playful": (
+            "playful, teasing, a soft giggle, a little spoiled",
+            "coquettish, breathy, flirty laugh between the words",
+            "teasing California girl, soft laugh, not cartoonish",
+        ),
+        "empathetic": (
+            "soft, gentle, a quiet breath before the words",
+            "tender, close to the mic, a small sigh",
+        ),
+        "apologetic": (
+            "sincere, quieter, a little breathy",
+            "soft apology, no performance",
+        ),
+        "calm": (
+            "calm, unhurried, a little breathy",
+            "low and easy, late-night voice",
+        ),
+        "sad": (
+            "sad, a small sigh, voice quieter",
+            "hurt but held in, a breath before speaking",
+        ),
+        "serious": (
+            "serious, clear, no giggle",
+            "steady and direct",
+        ),
+        "angry": (
+            "impatient, sharper, still her voice",
+            "short and heated",
+        ),
+    },
+    "zh": {
+        "warm": ("温暖亲切、带着浅浅笑意", "温柔贴心、像跟熟人说话"),
+        "happy": ("开心轻快、藏不住笑意", "愉快、声音里带笑"),
+        "excited": ("兴奋雀跃、几乎要笑出声", "特别激动、语调上扬"),
+        "playful": ("俏皮撒娇、带一声轻笑", "调皮黏人、逗对方开心"),
+        "empathetic": ("轻声安抚、先换一口气", "温柔共情、贴得很近"),
+        "apologetic": ("诚恳愧疚、声音放轻", "小心翼翼、带着歉意"),
+        "calm": ("平静舒缓、略带气声", "从容、慢慢说"),
+        "sad": ("低落、轻轻叹气", "难过失落、声音收着"),
+        "serious": ("认真郑重、不笑", "一字一句清晰"),
+        "angry": ("不耐烦、语气冲", "带火、但还是本人"),
+    },
+}
+
+_INDEXTTS_STYLE_EN: Dict[str, str] = {
+    "撒娇": "spoiled, soft whine, teasing",
+    "俏皮": "playful tease",
+    "温柔": "soft and close",
+    "御姐": "lazy, low, a little smug",
+    "沉稳": "steady, grounded",
+    "清冷": "cool and spare",
+    "阳光": "bright and easy",
+    "coquettish": "spoiled, breathy, teasing laugh",
+    "breathy": "breathy, intimate, close to the mic",
+    "california": "warm Southern California, unhurried",
+}
+
+
+def to_indextts_emo_text(
+    spec: EmotionSpec, *, language: str = "zh", style: str = "",
+    seed_text: str = "",
+) -> str:
+    """EmotionSpec → IndexTTS-2.5 ``emo_text``（情感描述，**不会被读出**）。
+
+    英文人设用英语描述（笑声/气声/撒娇）；中文沿用既有语气内核。neutral → ""。
+    纯函数、确定性（crc32(seed_text) 选变体）。
+    """
+    if spec is None or spec.is_neutral():
+        return ""
+    lang = str(language or "zh").strip().lower()
+    bank_key = "en" if lang.startswith("en") else "zh"
+    variants = (_INDEXTTS_EMO_TEXT.get(bank_key) or {}).get(spec.emotion)
+    if not variants:
+        return ""
+    import zlib
+    idx = zlib.crc32(str(seed_text or "").encode("utf-8")) % len(variants)
+    core = variants[idx]
+    style_key = str(style or "").strip()
+    extra = ""
+    if bank_key == "en":
+        extra = _INDEXTTS_STYLE_EN.get(style_key, "")
+        if not extra and style_key in _INDEXTTS_EMO_TEXT["en"]:
+            extra = ""
+    else:
+        extra = _INSTRUCT_STYLES.get(style_key, "")
+        if extra and any(extra[i:i + 2] in core for i in range(max(0, len(extra) - 1))):
+            extra = ""
+    if extra and extra.lower() not in core.lower():
+        core = f"{extra}, {core}" if bank_key == "en" else f"{extra}，{core}"
+    if spec.intensity >= 0.75:
+        core = (
+            f"{core}, more feeling, a real laugh if it fits"
+            if bank_key == "en" else f"{core}，情绪更饱满")
+    elif spec.intensity <= 0.4:
+        core = (
+            f"{core}, keep it small"
+            if bank_key == "en" else f"{core}，情绪收着一点")
+    if spec.pace == "slow":
+        core = f"{core}, slower" if bank_key == "en" else f"{core}，语速放慢"
+    elif spec.pace == "fast":
+        core = f"{core}, a little faster" if bank_key == "en" else f"{core}，语速稍快"
+    return core
+
+
+def indextts_emo_alpha(spec: EmotionSpec, *, default: float = 0.58) -> float:
+    """IndexTTS emo_alpha：日常 0.55 左右，强情绪不超过 0.72（再高音色漂）。"""
+    if spec is None or spec.is_neutral():
+        return 0.0
+    try:
+        inten = float(spec.intensity)
+    except (TypeError, ValueError):
+        inten = 0.6
+    base = float(default or 0.58)
+    alpha = base + (inten - 0.6) * 0.25
+    return round(max(0.35, min(0.72, alpha)), 2)
+
+
 def edge_prosody(spec: EmotionSpec) -> Dict[str, str]:
     """edge_tts 的 rate/pitch 字符串（按 intensity 缩放）。
 
@@ -833,6 +1083,7 @@ __all__ = [
     "to_elevenlabs_text", "elevenlabs_voice_settings",
     "fish_marker", "to_fish_text",
     "to_cosyvoice_emotion", "cosyvoice_speed", "to_cosyvoice_instruct",
-    "inject_paralinguistic",
+    "to_indextts_emo_text", "indextts_emo_alpha",
+    "inject_paralinguistic", "strip_paralinguistic_marks",
     "edge_prosody",
 ]

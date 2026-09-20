@@ -23,7 +23,7 @@ _PACING_LOCK = threading.Lock()
 _PACING: Dict[str, Dict[str, float]] = {}
 _PACING_FIELDS = (
     "count", "adaptive_count", "sum_delay", "sum_target", "sum_elapsed",
-    "max_delay", "last_delay",
+    "max_delay", "last_delay", "floored_count",
 )
 
 
@@ -67,6 +67,10 @@ def record_pacing(path: str, result: Any) -> None:
             row["count"] += 1
             if is_adaptive:
                 row["adaptive_count"] += 1
+            # P1（2026-08-12）：残余/连发地板兜住的次数——「秒回修复是否真在
+            # 生效」的直接读数（floored_count 恒 0 + 配置>0 ＝地板没被踩到/没接上）。
+            if bool(getattr(result, "floored", False)):
+                row["floored_count"] += 1
             row["sum_delay"] += delay
             row["sum_target"] += target
             row["sum_elapsed"] += elapsed
@@ -74,6 +78,31 @@ def record_pacing(path: str, result: Any) -> None:
             row["last_delay"] = round(delay, 2)
     except Exception:
         pass
+
+
+def record_bubble_gap(source: str, platform: str, gap_sec: float) -> None:
+    """记一次分条**条间**延迟采样（路径 ``bubble_gap/{source}/{platform}``）。
+
+    与 ``record_pacing`` 共用 ``_PACING`` 存储和 ``pacing_snapshot`` 出口——设置页
+    「实测节奏」与 autosend-status 的消费链零改动即可见。「第一句慢、后面机关枪」
+    这类条间节奏问题此前不可观测（只有首条延迟有采样），修好了也无从证明；
+    本入口补上分布数据（count/avg/max）。字段语义：delay=target=本次条间隔，
+    elapsed 恒 0（条间没有「已耗时」概念）。坏输入静默丢弃，绝不影响发送。
+    """
+    try:
+        g = max(0.0, float(gap_sec))
+    except (TypeError, ValueError):
+        return
+    src = (str(source or "other").strip() or "other").lower()
+    plat = (str(platform or "-").strip() or "-").lower()
+    p = f"bubble_gap/{src}/{plat}"
+    with _PACING_LOCK:
+        row = _PACING.setdefault(p, {k: 0.0 for k in _PACING_FIELDS})
+        row["count"] += 1
+        row["sum_delay"] += g
+        row["sum_target"] += g
+        row["max_delay"] = max(row["max_delay"], g)
+        row["last_delay"] = round(g, 2)
 
 
 def pacing_snapshot() -> Dict[str, Dict[str, float]]:
@@ -101,5 +130,5 @@ def reset() -> None:
 
 __all__ = [
     "record_read", "record_typing", "snapshot",
-    "record_pacing", "pacing_snapshot", "reset",
+    "record_pacing", "record_bubble_gap", "pacing_snapshot", "reset",
 ]

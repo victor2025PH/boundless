@@ -55,6 +55,12 @@ class MetricsStore:
         self._outbound_self_ref_fixes: int = 0
         self._outbound_repeats: int = 0
         self._lang_mismatch_count: int = 0
+        # 会话语言契约事件（lang_policy）：explicit_request / stable_switch /
+        # guard_corrected / voice_suspect / voice_lang_retry / llm_request_fallback…
+        self._lang_events: Dict[str, int] = {}
+        # 语言契约事件时间序列：(ts, name) 最近 2000 条 → 支持任意窗口聚合
+        # （与 _messenger_rpa_metrics_recent 同口径；快照暴露 lang_events_1h）
+        self._lang_events_recent: deque = deque(maxlen=2000)
         # 情景记忆 / 慢思考（可选观测）
         self._slow_think_count: int = 0
         self._episodic_inject_count: int = 0
@@ -64,6 +70,8 @@ class MetricsStore:
         self._startup_advisory_total: int = 0
         self._startup_advisory_warnings: int = 0
         self._startup_advisory_audit_logged: Optional[int] = None
+        # Phase 11：启动分阶段计时快照（initialize() 末尾写入；供状态/ops 归因冷启动）
+        self._boot_timing: Optional[Dict[str, Any]] = None
         # LINE RPA（ADB 个人号）轮次统计
         self._line_rpa_runs: int = 0
         self._line_rpa_ok: int = 0
@@ -228,6 +236,29 @@ class MetricsStore:
     def record_reply_length(self, length: int):
         self._reply_lengths.append(length)
 
+    def reply_length_snapshot(self) -> dict:
+        """近 200 条回复的长度分布（「自动回复设置」页内容卡实测回读用）。
+
+        桶边界对齐长度三档的粗粒度语义：≤60 字≈简短带、61-160≈适中带、
+        >160≈详细带（字符数含标点；只是参照带不是硬阈值）。空样本 → n=0。
+        """
+        lens = sorted(self._reply_lengths)
+        n = len(lens)
+        if not n:
+            return {"n": 0, "avg": 0, "p50": 0, "p90": 0,
+                    "buckets": {"short": 0, "mid": 0, "long": 0}}
+        return {
+            "n": n,
+            "avg": round(sum(lens) / n),
+            "p50": lens[n // 2],
+            "p90": lens[min(n - 1, int(n * 0.9))],
+            "buckets": {
+                "short": sum(1 for x in lens if x <= 60),
+                "mid": sum(1 for x in lens if 60 < x <= 160),
+                "long": sum(1 for x in lens if x > 160),
+            },
+        }
+
     def record_ai_success(self):
         self._ai_last_success_at = time.time()
         self._ai_consecutive_errors = 0
@@ -239,6 +270,41 @@ class MetricsStore:
     def record_lang_mismatch(self):
         with self._lock:
             self._lang_mismatch_count += 1
+
+    def record_lang_event(self, name: str, count: int = 1) -> None:
+        """会话语言契约事件计数（lang_policy 观测）。
+
+        约定事件名：explicit_request（明确语言请求命中）/ stable_switch（偏好漂移
+        释放）/ guard_corrected（守卫翻译纠正成功）/ voice_suspect（可疑语音转写
+        隔离）/ voice_lang_retry（ASR 低置信/白名单外重转）/ llm_request_fallback
+        （间接表达 LLM 短判兜底命中）。守卫触发数沿用 lang_mismatch_count。
+        质量口径：guard 触发率持续走高 = 上游决策在错，应报警而非依赖翻译兜底。
+
+        累计计数 + 时间序列两路同时写入（与 record_messenger_rpa_metric 同口径），
+        供快照 lang_events_1h 做近 1 小时窗口聚合。
+        """
+        if not name:
+            return
+        c = int(max(0, count))
+        if c <= 0:
+            return
+        now = time.time()
+        with self._lock:
+            self._lang_events[name] = self._lang_events.get(name, 0) + c
+            for _ in range(c):
+                self._lang_events_recent.append((now, name))
+
+    def get_lang_events(self, window_sec: Optional[float] = None) -> Dict[str, int]:
+        """语言契约事件快照：``window_sec=None`` 返回累计；指定时返回最近 N 秒窗口聚合。"""
+        with self._lock:
+            if not window_sec or window_sec <= 0:
+                return dict(self._lang_events)
+            cutoff = time.time() - float(window_sec)
+            agg: Dict[str, int] = defaultdict(int)
+            for ts, name in self._lang_events_recent:
+                if ts >= cutoff:
+                    agg[name] += 1
+            return dict(agg)
 
     def record_slow_think(self):
         with self._lock:
@@ -380,13 +446,36 @@ class MetricsStore:
             # 后者是「空草稿率」（生成失败信号）。漏列会让下游读到 None 误判为 0。
             for _k in ("memory_hit", "emotional_active", "companion_active",
                        "slow_think", "retry_applied", "persona_guard_intercept",
-                       "crisis_override", "fast_path", "empty"):
+                       "crisis_override", "fast_path", "empty",
+                       # 2026-09-18 观测先行：记忆/时间/媒体事实三类注入的触发率
+                       "time_hint_active", "memory_probe_hint", "media_ledger_hint"):
                 rates[_k] = round(int(out_total.get(_k, 0)) / gen, 4)
+        # 派生读数（2026-09-18）：
+        #   memory_probe_no_evidence_ratio —— 客户考记忆时「聊天记录里查不到」的占比。高＝检索层
+        #     不够（该上语义索引 / 放宽 scan_limit）或客户在编造往事（该走 false_premise），
+        #     两者处置完全不同，所以必须单独可见；
+        #   time_hint_gap —— 断层分桶（time_hint_gap:<桶> 计数汇成一张小表），回答「客户一般隔多久回来」。
+        derived: Dict[str, Any] = {}
+        _probe = int(out_total.get("memory_probe_hint", 0))
+        if _probe > 0:
+            derived["memory_probe_no_evidence_ratio"] = round(
+                int(out_total.get("memory_probe_no_evidence", 0)) / _probe, 4)
+            derived["memory_probe_semantic_assist_ratio"] = round(
+                int(out_total.get("memory_probe_semantic_assist", 0)) / _probe, 4)
+        _gap_tab = {k.split(":", 1)[1]: v for k, v in out_total.items()
+                    if k.startswith("time_hint_gap:")}
+        if _gap_tab:
+            derived["time_hint_gap"] = _gap_tab
+        _kind_tab = {k.split(":", 1)[1]: v for k, v in out_total.items()
+                     if k.startswith("memory_probe:")}
+        if _kind_tab:
+            derived["memory_probe_kinds"] = _kind_tab
         return {
             "total": out_total,
             "window": dict(window),
             "window_sec": int(window_sec or 3600.0),
             "rates_vs_generated": rates,
+            "derived": derived,
             "latency": latency,
         }
 
@@ -400,6 +489,16 @@ class MetricsStore:
         """Web 启用且 AuditStore 写入 warning 条数之后调用；n 为写入审计的条数。"""
         with self._lock:
             self._startup_advisory_audit_logged = max(0, int(n))
+
+    def set_boot_timing(self, summary: Optional[Dict[str, Any]]) -> None:
+        """Phase 11：initialize() 末尾写入启动分阶段计时摘要（BootTimer.summary()）。"""
+        with self._lock:
+            self._boot_timing = dict(summary) if isinstance(summary, dict) else None
+
+    def get_boot_timing(self) -> Optional[Dict[str, Any]]:
+        """读最近一次启动分阶段计时摘要（无则 None）。"""
+        with self._lock:
+            return dict(self._boot_timing) if self._boot_timing else None
 
     def record_companion_safe_skip(self, reason: str = "") -> None:
         """陪护模式 safe_skip 计数（pre_send_gate / credit_low / ascii_guard / 其他）。"""
@@ -793,6 +892,14 @@ class MetricsStore:
             ar_rw_ad = self._ar_rewrite_adopted
             ec_hit = self._embed_cache_hit
             ec_miss = self._embed_cache_miss
+            le_recent = list(self._lang_events_recent)
+        # 近 1 小时语言契约事件窗口聚合（与 lang_events 累计并列暴露）
+        _le_cutoff = time.time() - 3600
+        lang_events_1h: Dict[str, int] = defaultdict(int)
+        for _ts, _name in le_recent:
+            if _ts >= _le_cutoff:
+                lang_events_1h[_name] += 1
+        lang_events_1h = dict(lang_events_1h)
         lr_ms = list(self._line_rpa_total_ms)
         lr_avg = round(sum(lr_ms) / len(lr_ms), 2) if lr_ms else 0.0
         times = list(self._response_times)
@@ -826,6 +933,13 @@ class MetricsStore:
                 "truncated_count": truncated,
                 "truncated_rate_pct": round(truncated / replied * 100, 1),
                 "lang_mismatch_count": self._lang_mismatch_count,
+                # 语言错配率/千条回复（市场侧 KPI）：守卫触发数 ÷ 回复数 × 1000
+                "lang_mismatch_per_1k": round(
+                    self._lang_mismatch_count / replied * 1000, 2
+                ),
+                "lang_events": dict(self._lang_events),
+                # 近 1 小时各语言契约事件计数（时间序列窗口聚合）
+                "lang_events_1h": lang_events_1h,
             },
             # 主对话 LLM 容灾：本地兜底模型出话情况（云主模型不可达/熔断时）
             "local_llm_fallback": {

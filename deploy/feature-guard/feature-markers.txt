@@ -1,0 +1,13 @@
+# 官网跨环境「load-bearing 功能」清单（feature-guard.sh 消费）。
+# 格式：<相对 app 根路径>|<必须存在的字面子串，留空=只查文件存在>|<人读标签>
+# 增删功能时同步维护本表；子串要选**该功能独有、改名会一起变**的稳定 token。
+#
+# ── 托管 SaaS 批次（托管交付 / 按实例计量 / 下单入口）──
+lib/order-store.ts|OrderDelivery|托管交付类型(order-store)
+app/api/order/route.ts|data?.delivery|下单托管入口(order-route)
+lib/ai-gateway.ts|quotaSubject|按实例AI计量(ai-gateway)
+components/OrderPanel.tsx|order_delivery|下单页托管切换(OrderPanel)
+# ── 品牌片批次（sibling 线，2026-08-07 上线）──
+lib/film.ts|BRAND_FILM|品牌片数据(film)
+components/FilmPlayer.tsx||品牌片播放器(文件存在)
+app/api/health/route.ts|trial_upgrade|授权能力caps(health)

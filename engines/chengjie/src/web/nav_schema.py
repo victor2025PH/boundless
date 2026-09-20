@@ -7,8 +7,13 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 结构:
 - NAV_ICONS: 图标名 → 内联 SVG(品牌图标仅用于渠道组,其余为线性图标)
 - NAV_ITEMS: 菜单项定义(label_key 指向 web_i18n,label_zh 为兜底文案)
-- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/渠道/AI/洞察/合规/系统/支持)
-- SIMPLE_CORE / SIMPLE_MORE: 简洁模式主区与折叠区(引用 item id)
+- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/真机矩阵/AI/洞察/用量计费/合规/
+  系统/支持;每组 note_key/note_zh=一句话定位,渲染为分组标题悬浮提示)
+- SIMPLE_CORE / SIMPLE_MORE: 简洁模式主区与折叠区(引用 item id;定位=值班/看店
+  日常,运维/分析/矩阵类只在完整模式)
+- MATRIX_ITEM_IDS → nav_matrix_items: 真机矩阵五页(总览+四渠道)。简洁模式侧栏
+  不渲染它们;深链进矩阵页时两套侧栏(base.html/_ws_sidebar.html)按当前路径
+  上下文渲染本组,保住组内互切与高亮
 - "__domain_pages__" 哨兵: 模板在该位置内联渲染域动态页(domain_web_pages)
 
 约定:
@@ -17,7 +22,16 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 - dot      = 渠道在线状态点的 data-chan 值(base.html JS 轮询填充)
 - help     = base.html TERM_DICT 的悬浮词条 key
 - master_only(item/group)= 仅 master 角色渲染
-- cmd_keys = 命令面板搜索别名(含旧菜单名,保证改名后老用户仍搜得到)
+- feature  = 授权档位功能名(licensing/feature_gate.py 注册表;gate 默认关 = 全量渲染
+             零变化;P3 起锁定项渲染为「锁标 + 跳会员中心」升级引导(locked=True 注解,
+             base.html nav_item 宏消费);命令面板仍直接隐藏锁定项(跳转列表无升级语义)
+- tier     = 开发者模式注解(get_nav_context 输出侧,非声明侧):client 形态开了开发者
+             模式后,本应被藏的项带 tier="internal"/"partner" 回归,侧栏渲染
+             「研发 / 代理商」角标(base.html / _ws_sidebar.html 消费)
+- cmd_keys = 命令面板搜索别名(含旧菜单名/同义词,保证改名或术语分裂后老用户仍搜得到)
+- simple   = 命令面板「简洁模式」可见性覆写(默认按是否在 SIMPLE_CORE/SIMPLE_MORE 推导;
+             CMD_EXTRA_ITEMS 的项不在简洁清单里 → 不显式声明 simple=True 就只在完整
+             模式的面板里出现,而全角色默认档位是简洁模式,见 web_user_store)
 """
 
 _STROKE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">%s</svg>'
@@ -59,91 +73,213 @@ NAV_ICONS = {
     "wallet": _STROKE % '<rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>',
     "truck": _STROKE % '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
     "info": _STROKE % '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    # 2026-08-18 P0：完整模式侧栏可见项图标去重（含矩阵/变现打开后仍不撞）
+    "trending-down": _STROKE % '<polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/>',
+    "trending-up": _STROKE % '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+    "gauge": _STROKE % '<path d="M12 21a9 9 0 110-18 9 9 0 010 18z"/><path d="M12 12l4-4"/>',
+    "award": _STROKE % '<circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/>',
+    "palette": _STROKE % '<path d="M12 2a10 10 0 00-1 19.95c.6 0 .8-.8.4-1.2a3.5 3.5 0 014.9-4.95c.4.35 1.2.2 1.2-.45A10 10 0 0012 2z"/><circle cx="7.5" cy="10" r="1.1" fill="currentColor"/><circle cx="10.5" cy="7" r="1.1" fill="currentColor"/><circle cx="14.5" cy="7.5" r="1.1" fill="currentColor"/><circle cx="16.5" cy="11" r="1.1" fill="currentColor"/>',
+    "clipboard": _STROKE % '<path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    "list": _STROKE % '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    "sparkles": _STROKE % '<path d="M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/>',
+    "film": _STROKE % '<rect x="2" y="2" width="20" height="20" rx="2.5"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/>',
+    # 2026-08-20：voice_eval 项引用 mic 却没登记 SVG（图标门禁红），侧栏渲染空白格子
+    "mic": _STROKE % '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>',
+    "key": _STROKE % '<circle cx="7.5" cy="15.5" r="3.5"/><path d="M10.2 13.2L21 3"/><path d="M16 3h5v5"/>',
+    # 2026-08-28 实施81：报障工单处置台（bug_tickets）专属图标（可见项图标去重门禁）
+    "bug": _STROKE % '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M8 9H4M8 13H4M8 17H5M16 9h4M16 13h4M16 17h3M9 6a3 3 0 016 0"/>',
 }
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
 NAV_ITEMS = {
+    # winname：入口走 _win_unique.html 的窗口唯一性 helper——点击复用/聚焦既有
+    # 工作台窗口而非每次 _blank 新开（窗口堆积的头号入口）；target 保留作降级兜底。
     "workspace": dict(key="", path="/workspace", icon="inbox", target="_blank",
+                      winname="workspace",
                       external=True, label_key="workspace_inbox", label_zh="坐席工作台",
                       help="nav_unified_inbox",
                       cmd_keys="unified inbox 统一 收件箱 消息 聊天 多平台 坐席 工作台 workspace"),
     "cases": dict(key="cases", path="/cases", icon="file-text", badge="badge-cases",
                   label_key="cases", label_zh="案例跟进", help="nav_cases",
                   cmd_keys="cases 案例 待处理 待处理案例 跟进 case"),
-    "care": dict(key="care", path="/care-schedule", icon="heart",
+    "care": dict(feature="care", key="care", path="/care-schedule", icon="heart",
                  label_key="care", label_zh="主动关怀", help="nav_care",
                  cmd_keys="care 关怀 主动 问候"),
-    "relations_health": dict(key="relations_health", path="/relations-health", icon="pulse",
+    "relations_health": dict(feature="care", key="relations_health", path="/relations-health", icon="trending-down",
                              label_key="relations_health", label_zh="流失预警",
                              help="nav_relations_health",
                              cmd_keys="churn 流失 预警 关系 健康 relations"),
-    "rpa_overview": dict(key="rpa_overview", path="/rpa-overview", icon="radar",
-                         badge="badge-rpa-ov", label_key="rpa_overview", label_zh="渠道总览",
+    # ── 真机矩阵（2026-08-03 更名迁移）：总览 + 四渠道从简洁模式撤出，只在完整
+    #    模式「真机矩阵」组渲染（运维驾驶舱定位，普通用户日常不碰）。cmd_keys 保留
+    #    旧名（渠道总览/XX 渠道/渠道中心），老用户 Ctrl+K 搜旧名仍命中；五项显式
+    #    simple=True＝侧栏藏、命令面板仍可搜（藏而不废，URL/书签也不封）。简洁模式
+    #    深链进矩阵页时，两套侧栏按当前路径上下文渲染本组（消费 nav_matrix_items）。
+    "rpa_overview": dict(feature="rpa", key="rpa_overview", path="/rpa-overview",
+                         icon="radar", simple=True,
+                         badge="badge-rpa-ov", label_key="rpa_overview", label_zh="矩阵总览",
                          help="nav_rpa_overview",
-                         cmd_keys="rpa overview 总览 跨平台 渠道 渠道总览 RPA跨平台总览 telegram line messenger whatsapp"),
-    "telegram": dict(key="telegram", path="/telegram", icon="telegram", dot="telegram",
-                     label_key="telegram_settings", label_zh="Telegram 自动化",
+                         cmd_keys="rpa overview 总览 跨平台 渠道 渠道总览 真机矩阵 矩阵 "
+                                  "matrix RPA跨平台总览 telegram line messenger whatsapp"),
+    # 渠道中心融合：四渠道设置页迁入工作台壳（/workspace/channels/*），
+    # 旧路径仍 302 兜底；侧栏/命令面板直指新址。
+    # Telegram 刻意不挂 feature="rpa"：主号走 MTProto 协议（基础产品面），API 前缀
+    # 表也不含 telegram；挂档会把核心渠道锁进 flagship（门禁钉在
+    # test_page_feature_mapping_pure：/workspace/channels/telegram 不守卫）。
+    "telegram": dict(key="telegram", path="/workspace/channels/telegram",
+                     icon="telegram", dot="telegram", simple=True,
+                     label_key="telegram_settings", label_zh="Telegram",
                      help="nav_telegram",
-                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置"),
-    "line_rpa": dict(key="line_rpa", path="/line-rpa", icon="line", dot="line",
-                     label_key="line_rpa", label_zh="LINE 自动化", help="nav_line_rpa",
-                     cmd_keys="line rpa 自动化 自动聊天 真机"),
-    "messenger_rpa": dict(key="messenger_rpa", path="/messenger-rpa", icon="messenger",
+                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置 渠道中心 "
+                              "真机矩阵 matrix"),
+    "line_rpa": dict(feature="rpa", key="line_rpa", path="/workspace/channels/line", icon="line",
+                     dot="line", simple=True,
+                     label_key="line_rpa", label_zh="LINE", help="nav_line_rpa",
+                     cmd_keys="line rpa 自动化 自动聊天 真机 渠道中心 真机矩阵 matrix"),
+    "messenger_rpa": dict(feature="rpa", key="messenger_rpa", path="/workspace/channels/messenger",
+                          icon="messenger", simple=True,
                           dot="messenger", label_key="messenger_rpa",
-                          label_zh="Messenger 自动化", help="nav_messenger_rpa",
-                          cmd_keys="messenger facebook fb rpa 自动化 线索"),
-    "whatsapp_rpa": dict(key="whatsapp_rpa", path="/whatsapp-rpa", icon="whatsapp",
+                          label_zh="Messenger", help="nav_messenger_rpa",
+                          cmd_keys="messenger facebook fb rpa 自动化 线索 渠道中心 "
+                                   "真机矩阵 matrix"),
+    "whatsapp_rpa": dict(feature="rpa", key="whatsapp_rpa", path="/workspace/channels/whatsapp",
+                         icon="whatsapp", simple=True,
                          dot="whatsapp", label_key="whatsapp_rpa",
-                         label_zh="WhatsApp 自动化", help="nav_whatsapp_rpa",
-                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板"),
-    "ai_studio": dict(key="ai_studio", path="/ai-studio", icon="plus-circle",
-                      featured=True, strong=True, label_key="ai_studio",
-                      label_zh="AI 工作室", help="nav_ai_studio",
-                      cmd_keys="ai studio 工作室 中枢 hub"),
-    "personas": dict(key="personas", path="/personas", icon="persona",
+                         label_zh="WhatsApp", help="nav_whatsapp_rpa",
+                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心 "
+                                  "真机矩阵 matrix"),
+    # 群脉 CrowdX 导播台：多号群戏剧本库 + 离线排练（dry-run，不发真消息）
+    "group_show": dict(key="group_show", path="/group-show", icon="film",
+                       label_key="gs_nav", label_zh="群脉导播台",
+                       cmd_keys="group show crowdx 群脉 导播 导播台 群戏 剧本 排练 炒群"),
+    # ai_studio 已解散（2026-08-01）：5 个 tab 中 3 个是兄弟页面套壳，独有能力
+    # 已迁回权威页（Prompt A/B→策略效果、合并批量/扫描→ops/merge-reviews、
+    # 身份映射→ops/contacts、关系分析三卡→运营分析、聚合统计→数据概览）。
+    # /ai-studio 路由 301 → /personas 兜底旧书签。
+    "personas": dict(feature="personas", key="personas", path="/personas", icon="persona",
                      label_key="personas", label_zh="人设工作室", help="nav_personas",
                      cmd_keys="personas persona 人设 角色 工作室"),
-    "knowledge": dict(key="knowledge", path="/knowledge", icon="book",
+    "knowledge": dict(feature="kb", key="knowledge", path="/knowledge", icon="book",
                       label_key="knowledge", label_zh="知识库", help="nav_knowledge",
                       cmd_keys="knowledge 知识库 话术"),
-    "learner": dict(key="learner", path="/learner", icon="book-open", badge="badge-learner",
+    "learner": dict(feature="kb", key="learner", path="/learner", icon="book-open", badge="badge-learner",
                     label_key="learner", label_zh="学习队列", help="nav_learner",
                     cmd_keys="learner 学习 审核 AI 学习审核 学习队列 队列"),
     "episodic": dict(key="episodic", path="/episodic-memory", icon="brain",
                      label_key="episodic", label_zh="AI 记忆", help="nav_episodic",
                      cmd_keys="episodic memory 记忆 情景 情景记忆"),
-    "strategies": dict(key="strategies", path="/strategies", icon="sliders",
+    # 2026-08-19：人设声音评测台（tmp_voice_eval 转正）
+    "voice_eval": dict(key="voice_eval", path="/admin/voice-eval", icon="mic",
+                       label_key="voice_eval", label_zh="声音评测",
+                       help="nav_voice_eval",
+                       cmd_keys="voice eval 声音 评测 试听 音色 克隆 语音评测"),
+    # 2026-08-23：歌房（实施58——人设清唱能力管理：开关/备货/曲库/声库）
+    "singing": dict(key="singing", path="/singing", icon="sparkles",
+                    label_key="sg_title", label_zh="歌房",
+                    help="nav_singing",
+                    cmd_keys="singing song 歌房 唱歌 清唱 曲库 声库 唱首歌"),
+    "strategies": dict(feature="ai_autosend", key="strategies", path="/strategies", icon="sliders",
                        label_key="strategies", label_zh="回复策略", help="nav_strategies",
                        cmd_keys="strategies 策略 配置 策略配置 回复策略 参数"),
-    "strategy_analytics": dict(key="strategy-analytics", path="/strategy-analytics",
+    # 自动回复设置：全自动档位/回复速度/拟人细节的集中入口（2026-08-02 P0）
+    "reply_settings": dict(feature="ai_autosend", key="reply_settings", path="/reply-settings",
+                           icon="clock",
+                           label_key="rps_nav", label_zh="自动回复设置",
+                           cmd_keys="reply settings 自动回复 回复速度 档位 延迟 打字 "
+                                    "拟人 全自动 速度 autosend delay pacing mode "
+                                    "长度 风格 内容 语气 emoji 句数 length style tone"),
+    "model_keys": dict(key="model_keys", path="/model-keys", icon="key",
+                       label_key="nav_model_keys", label_zh="模型与密钥",
+                       cmd_keys="model keys 模型 密钥 API key openai gemini grok deepseek "
+                                "chatgpt 多模型路由 dvmr 厂商 端点 管理模型 密钥管理"),
+    "strategy_analytics": dict(feature="ai_autosend", key="strategy-analytics", path="/strategy-analytics",
                                icon="target", label_key="strategy_analytics",
                                label_zh="策略效果", help="nav_strategy_analytics",
                                cmd_keys="strategy analytics 策略 效果"),
     "dash": dict(key="dash", path="/", icon="grid", label_key="dashboard",
-                 label_zh="数据概览", help="nav_dashboard",
-                 cmd_keys="dashboard home 首页 概览 仪表盘"),
-    "analytics": dict(key="analytics", path="/analytics", icon="bar-chart",
+                 label_zh="今日概览", help="nav_dashboard",
+                 cmd_keys="dashboard home 首页 概览 仪表盘 数据概览 今日概览 today"),
+    # 运营总览（/admin/ops）2026-08-02 补入侧栏：此前只有简洁模式仪表盘的快捷
+    # 入口卡能到——信息密度最高的 ops 卡片页没有常驻导航，是历代内容被迫堆进
+    # 仪表盘的根因之一。
+    "ops": dict(key="ops", path="/admin/ops", icon="pulse",
+                label_key="db2_nav_ops", label_zh="运营总览",
+                help="nav_ops_overview",
+                cmd_keys="ops overview 运营 总览 运营总览 运维 事件 roi 计费 "
+                         "可靠性 老板 boss"),
+    "analytics": dict(feature="analytics", key="analytics", path="/analytics", icon="bar-chart",
                       label_key="analytics", label_zh="运营分析", help="nav_analytics",
                       cmd_keys="analytics 运营 分析 数据"),
-    "funnel": dict(key="funnel", path="/funnel", icon="funnel",
+    "funnel": dict(feature="analytics", key="funnel", path="/funnel", icon="funnel",
                    label_key="rpa_fn_title", label_zh="运营漏斗", help="nav_funnel",
                    cmd_keys="funnel 漏斗 转化 运营漏斗 conversion journey"),
-    "monetization": dict(key="monetization", path="/monetization", icon="dollar",
-                         label_key="monetization", label_zh="变现营收",
+    "monetization": dict(feature="monetization", key="monetization", path="/monetization", icon="dollar",
+                         label_key="monetization", label_zh="客户营收",
                          help="nav_monetization",
-                         cmd_keys="monetization revenue 变现 营收 订阅"),
+                         cmd_keys="monetization revenue 变现 营收 订阅 客户营收 变现营收 customer"),
     "crisis_audit": dict(key="crisis_audit", path="/crisis-audit", icon="alert-triangle",
-                         badge="badge-crisis", label_key="crisis_audit", label_zh="危机审计",
-                         help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险"),
-    "audit": dict(key="audit", path="/audit", icon="clock", label_key="audit",
+                         badge="badge-crisis", label_key="crisis_audit", label_zh="客户安全预警",
+                         help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险 安全 预警"),
+    "audit": dict(key="audit", path="/audit", icon="clipboard", label_key="audit",
                   label_zh="操作记录", help="nav_audit", cmd_keys="audit 审计 记录 操作"),
+    # 账号资产中心（账号资产保全 P1，2026-08-19）：封号场景「资产可见→可导出→可迁移」
+    # 的产品面，归安全合规组（「出了事怎么查/怎么带走」语义）。/workspace/* 子页与
+    # 主管看板同例不开新窗（2026-08-16 老板点名，见 ws_boards 注释）。
+    "asset_center": dict(key="asset_center", path="/workspace/assets", icon="package",
+                         label_key="ac_nav", label_zh="账号资产中心",
+                         cmd_keys="assets asset 资产 资产中心 账号资产 保全 备份 迁移 "
+                                  "导出 联系人迁移 封号 被封 vault migration export"),
+    # 报障工单处置台（实施81 P0-2）：报障群值守的工单闭环面——列表/详情/截图/
+    # 状态流转/一键回访/群内回复。master_only：值守与老板用，坐席不进。
+    "bug_tickets": dict(key="bug_tickets", path="/admin/bug-tickets", icon="bug",
+                        master_only=True, label_key="bug_tickets",
+                        label_zh="报障工单",
+                        cmd_keys="bug tickets 报障 工单 值守 处置 报障群 反馈 "
+                                 "修复 回访 bugintake"),
     "users": dict(key="users", path="/users", icon="users", label_key="users",
                   label_zh="用户管理", help="nav_users", cmd_keys="users 用户"),
     "settings": dict(key="settings", path="/settings", icon="gear",
                      label_key="system_settings", label_zh="系统设置", help="nav_settings",
                      cmd_keys="settings 系统 设置 品牌 授权 system"),
-    "diff": dict(key="diff", path="/diff", icon="git", label_key="diff", label_zh="版本对比",
-                 help="nav_diff", cmd_keys="diff 对比 版本"),
+    # 融合实例 P3：会员中心（档位/用量/功能矩阵/到期；nav 锁标与顶栏徽章的落点）
+    "membership": dict(key="membership", path="/membership", icon="wallet",
+                       master_only=True, label_key="mb_nav", label_zh="会员中心",
+                       cmd_keys="membership plan 会员 档位 套餐 授权 升级 license"),
+    # ── 用量与计费组（2026-08-16 管理面改造）：用量看板从命令面板孤儿升格为
+    #    「用量与额度」正式入口——「用了多少/还剩多少」此前实际存在但不可发现，
+    #    是本次改造要修的第一主诉。页面在工作台壳（/workspace/usage），主管闸
+    #    在页面路由自身；当前窗口打开（见下方主管看板注释，同一决策）。
+    "usage_center": dict(key="", path="/workspace/usage", icon="gauge",
+                         label_key="nav_usage_center", label_zh="用量与额度",
+                         cmd_keys="用量 额度 计量 消耗 余额 字符 对账 账单 usage quota "
+                                  "chars balance metering billing 用量看板 用量与额度"),
+    # ── 主管四看板（2026-08-16 收编）：原 CMD_EXTRA_ITEMS 孤儿页（2026-08-14
+    #    顶栏「更多」删除后仅命令面板可达）→ 数据洞察组正式入口。路由自带主管闸
+    #    （非主管 302 回工作台）；不标 simple＝完整模式（配置/运维视角）才渲染。
+    #    四看板与用量页刻意无 target/winname（2026-08-16 老板点名：桌面壳里
+    #    _blank 会弹独立壳窗＝「弹出面板」，且 /workspace/* 子页不在壳内
+    #    __openUniqueUrl 的复用范围、每点必新弹——改与其他洞察面板一致在当前
+    #    窗口打开。坐席工作台 workspace 条目不在此列：坐席窗独立+BC 探活去重
+    #    是多窗治理主线的刻意设计，勿顺手「统一」掉）。
+    # ── 主管看板页群（2026-08-18 P1）：四看板侧栏收成一个入口 ws_boards，
+    #    页内 _cluster_tabs.html Tab 互切（成员表=PAGE_CLUSTERS.boards）。四页
+    #    本体不动：URL / 路由 / 主管闸 / 独立 PV 归因全保留；单页搜索入口降到
+    #    CMD_EXTRA（Ctrl+K 搜「绩效」仍直达绩效页，不必先进队列再点 Tab）。
+    "ws_boards": dict(key="", path="/workspace/queue", icon="list",
+                      label_key="nav_ws_boards", label_zh="主管看板",
+                      cmd_keys="主管看板 看板 主管 boards 队列 绩效 质量 "
+                               "queue perf quality roi 运营队列"),
+    "ws_queue": dict(key="", path="/workspace/queue", icon="list",
+                     label_key="nav_ws_queue", label_zh="运营队列看板",
+                     cmd_keys="队列 运营队列 实时队列 排队 queue backlog"),
+    "ws_perf": dict(key="", path="/workspace/agent-perf", icon="award",
+                    label_key="nav_ws_perf", label_zh="坐席绩效看板",
+                    cmd_keys="绩效 坐席绩效 考核 perf performance agent"),
+    "ws_aiq": dict(key="", path="/workspace/ai-quality", icon="sparkles",
+                   label_key="nav_ws_aiq", label_zh="AI 质量看板",
+                   cmd_keys="AI质量 质量 回复质量 quality aiq ai-quality"),
+    "ws_roi": dict(key="", path="/workspace/roi", icon="trending-up",
+                   label_key="nav_ws_roi", label_zh="ROI 看板",
+                   cmd_keys="ROI 经营 投产比 营收 roi revenue"),
     "logs": dict(key="logs", path="/logs", icon="terminal", label_key="logs",
                  label_zh="实时日志", help="nav_logs", cmd_keys="logs 日志 终端"),
     "developer": dict(key="developer", path="/developer", icon="code", label_key="developer",
@@ -155,6 +291,15 @@ NAV_ITEMS = {
     "escalation": dict(key="settings", path="/settings#escalation", icon="phone",
                        master_only=True, label_key="escalation", label_zh="人工转接",
                        help="nav_escalation", cmd_keys="escalation 人工 转接 客服 handoff"),
+    # 个人设置(2026-08-04):坐席级外观个性化(主题/壁纸/夜间/字号/圆角/动画)。
+    # 全角色可用;设置经 /api/workspace/prefs.appearance 漫游(本机缓存+服务端),
+    # 收件箱左栏「主题配色」按钮弹出的快捷面板与本页共用同一渲染器(appearance.js)。
+    "personal_settings": dict(key="personal_settings", path="/personal-settings",
+                              icon="palette",
+                              label_key="nav_personal_settings", label_zh="个人设置",
+                              cmd_keys="personal settings 个人 设置 个人设置 外观 主题 "
+                                       "壁纸 夜间 暗色 字号 圆角 动画 表情 appearance "
+                                       "theme wallpaper night dark emoji"),
 }
 
 # 仅命令面板可达(无侧栏入口)的页面
@@ -162,37 +307,155 @@ CMD_EXTRA_ITEMS = {
     "templates": dict(key="tpl", path="/templates", icon="file-text",
                       label_key="templates", label_zh="话术模板",
                       cmd_keys="templates 模板 话术"),
+    # 版本对比（2026-08-18 降出侧栏，随上游 /templates 同例）：快照只在网页后台
+    # 保存话术模板/回复策略等旧配置流时自动生成，不用那些编辑流的部署里此页
+    # 常年「暂无快照」＝侧栏常驻空页。降级只动入口：审计页/仪表盘「可回滚」
+    # 深链（/diff?a=…&b=__current__）、/api/rollback 与快捷键 v 全部保留。
+    "diff": dict(key="diff", path="/diff", icon="git", label_key="diff",
+                 label_zh="版本对比", help="nav_diff",
+                 cmd_keys="diff 对比 版本 快照 回滚 rollback snapshot"),
     "import": dict(key="import", path="/import", icon="package",
                    label_key="import_page", label_zh="导入配置", cmd_keys="import 导入"),
+    # 坐席「工作目标」深链(/workspace?card=goal → 自动切「客户&关系」tab + 展开目标卡)。
+    # 只进命令面板不进侧栏:侧栏已有 workspace 行,同一目的页不重复占位。
+    # 术语三分裂(坐席端=工作目标 / 配置与 ops=营销目标 / 运营口语=工作计划)全塞 cmd_keys
+    # ——面板按 name+keys 子串搜,搜任一说法都命中这一个入口。
+    # simple=True 必须显式声明:全角色默认简洁模式,否则坐席根本搜不到(本项要解的正是「找不到」)。
+    "work_goal": dict(key="", path="/workspace?card=goal", icon="target",
+                      simple=True, label_key="nav_work_goal",
+                      label_zh="工作目标（工作计划）", help="work_goal",
+                      cmd_keys="工作目标 工作计划 营销目标 目标 计划 推进 里程碑 今日拍 "
+                               "goal goals plan milestone agenda"),
+    # 策略效果（2026-08-18 P0 降出侧栏，随 /diff 同例）：生产 1115 事件 100%
+    # 单策略、A/B 从未配置，页是空壳对照。只动入口：URL / API / Ctrl+K 保留；
+    # G+S 改去 /strategies（回复策略）。tracker.record 与策略配置页不废。
+    "strategy_analytics": dict(NAV_ITEMS["strategy_analytics"]),
+    # 运营漏斗（2026-08-18 P1）：与运营分析同属「看转化」，侧栏只留 analytics
+    # 一个入口，两页经 PAGE_CLUSTERS.analysis 的页内 Tab 互切；本条保 Ctrl+K
+    # 直达与 URL 存活。feature 标注跟原条目（锁定时面板隐藏，与页面闸一致）。
+    "funnel": dict(NAV_ITEMS["funnel"]),
+    # 主管四看板单页入口（2026-08-18 P1，随 ws_boards 页群收编）：侧栏一个
+    # 「主管看板」，单页仍可被 Ctrl+K 按名直达（升格→页群是入口形态变化，
+    # 不是 2026-08-14「孤儿化」的回退——页面有常驻侧栏入口 + 页内 Tab）。
+    "ws_queue": dict(NAV_ITEMS["ws_queue"]),
+    "ws_perf": dict(NAV_ITEMS["ws_perf"]),
+    "ws_aiq": dict(NAV_ITEMS["ws_aiq"]),
+    "ws_roi": dict(NAV_ITEMS["ws_roi"]),
+    # ── 工作台主管看板五页：2026-08-14 曾因顶栏「更多」删除收进命令面板当孤儿；
+    #    2026-08-16 管理面改造升格正式侧栏入口；2026-08-18 P1 收成 ws_boards
+    #    页群入口 + 页内 Tab（用量看板不动，仍在「用量与计费」组）。
+    # ── 代理商面深链（2026-09-06 L-4 A，PARTNER_ONLY_ITEM_IDS）：系统设置页三张
+    #    商业卡的 Ctrl+K 直达（settings.html hash 深链自动展开定位）。key 与系统设置
+    #    同为 settings（与 escalation 同例），显隐只能按 path 剔。
+    "settings_brand": dict(key="settings", path="/settings#brand", icon="palette",
+                           label_key="nav_settings_brand", label_zh="品牌 / 白标",
+                           cmd_keys="brand 品牌 白标 logo 主题色 署名 oem whitelabel"),
+    "settings_license": dict(key="settings", path="/settings#license", icon="award",
+                             label_key="nav_settings_license", label_zh="授权 / 激活",
+                             cmd_keys="license 授权 激活 到期 旗舰 社区 activation"),
+    "settings_demo": dict(key="settings", path="/settings#demo", icon="film",
+                          label_key="nav_settings_demo", label_zh="试用 / 演示数据",
+                          cmd_keys="demo 演示 示例 试用 铺数据 演示数据 seed"),
 }
 
 DOMAIN_SENTINEL = "__domain_pages__"
 
 # ── 完整模式分组 ─────────────────────────────────────────────────────────────
+# 2026-08-16 管理面改造：7 组 → 8 组，每组带一句话定位（note_key/note_zh →
+# base.html 分组标题 title 悬浮），防止分类语义再度漂移。要点：
+# - 「看数」只住数据洞察（主管四看板收编；策略效果 2026-08-18 降出侧栏进
+#   CMD_EXTRA，与 /diff 同例——空壳对照页不占常驻位）；
+# - 新组「用量与计费」＝资源与钱（用量与额度 + 会员中心），与「客户营收」
+#   （客户付给你的钱，留数据洞察；侧栏显隐跟 monetization.enabled，档位锁
+#   定时保留锁标升级面）刻意分开；
+# - 系统管理仍 master_only；用户管理页自身权限已放宽 admin（页面路由另判）。
 NAV_GROUPS_FULL = [
+    # 域动态页哨兵在「工作台」组尾：支付域渠道/汇率等属日常业务面；且哨兵不能
+    # 单独成组——无域包的部署会渲染出空分组标题。
     dict(label_key="section_workbench", label_zh="工作台",
-         items=["workspace", "cases", "care", "relations_health"]),
-    dict(label_key="section_channels", label_zh="渠道自动化",
+         note_key="section_note_workbench", note_zh="今天要处理的事",
+         items=["workspace", "cases", "care", "relations_health", DOMAIN_SENTINEL]),
+    # 真机矩阵（原「渠道自动化」，2026-08-03 更名）：矩阵总览 + 四渠道 + 群脉导播
+    # ——群脉指挥的就是同一批矩阵账号，归组随矩阵。
+    dict(label_key="section_channels", label_zh="真机矩阵",
+         note_key="section_note_channels", note_zh="渠道与设备运维",
          items=["rpa_overview", "telegram", "line_rpa", "messenger_rpa",
-                "whatsapp_rpa", DOMAIN_SENTINEL]),
+                "whatsapp_rpa", "group_show"]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
-         items=["ai_studio", "personas", "knowledge", "learner", "episodic",
-                "strategies", "strategy_analytics"]),
+         note_key="section_note_ai_kb", note_zh="教 AI 怎么说话",
+         items=["personas", "voice_eval", "singing", "reply_settings", "model_keys",
+                "strategies", "knowledge", "learner", "episodic"]),
     dict(label_key="section_insights", label_zh="数据洞察",
-         items=["dash", "analytics", "funnel", "monetization"]),
+         note_key="section_note_insights", note_zh="只看数，不改配置",
+         items=["dash", "ops", "analytics", "monetization", "ws_boards"]),
+    dict(label_key="section_usage_billing", label_zh="用量与计费",
+         note_key="section_note_usage_billing", note_zh="资源花到哪、还剩多少",
+         items=["usage_center", "membership"]),
     dict(label_key="section_compliance", label_zh="安全合规",
-         items=["crisis_audit", "audit"]),
+         note_key="section_note_compliance", note_zh="出了事怎么查",
+         items=["crisis_audit", "audit", "asset_center", "bug_tickets"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
-         items=["users", "settings", "diff", "logs", "developer"]),
-    dict(label_key="section_support", label_zh="支持", items=["help"]),
+         note_key="section_note_system", note_zh="配置这套系统",
+         items=["users", "settings", "logs", "developer"]),
+    dict(label_key="section_support", label_zh="支持",
+         note_key="section_note_support", note_zh="帮助与个性化",
+         items=["personal_settings", "help"]),
 ]
 
 # ── 简洁模式 ────────────────────────────────────────────────────────────────
+# 定位（2026-08-03 精简）：简洁模式＝值班/看店视角（坐席+店主每天要碰的），
+# 完整模式＝配置/运维/增长视角。真机矩阵五项、人设工作室与分析/审计/记账类页
+# 只在完整模式渲染；URL 不封（书签/深链仍可达），命令面板按 simple 标注兜底可搜。
+# 客户安全预警（原危机审计）刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
 SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
-               "learner", "personas", "rpa_overview", "telegram", "line_rpa",
-               "messenger_rpa", "whatsapp_rpa", "escalation"]
-SIMPLE_MORE = ["dash", "analytics", "audit", "episodic", "crisis_audit",
-               "relations_health", "monetization", "help"]
+               "reply_settings", "model_keys", "escalation"]
+# usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」
+# 必须在简洁模式可达；折叠区尺寸棘轮 ≤6，本项恰好用满——再加需先精简。
+SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",
+               "personal_settings", "help"]
+
+# 真机矩阵成员（简洁模式上下文导航用：深链进矩阵页时侧栏就地渲染本组，保住
+# 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
+MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
+                   "whatsapp_rpa")
+
+# 客户形态（ui_visibility.flavor=client / 桌面包）不渲染的导航项：纯运维/开发面，
+# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封（/developer 本就
+# 有密码闸）——内部人员在客户机上直接敲地址仍可进。
+# 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
+# bug_tickets（实施81）＝我方报障群值守的处置台，客户部署没有报障群值守语义。
+# 2026-09-06 L-4 A（D-L2 / D-L6，#197 #198 #212 #199 #211）扩容：
+# - help        帮助中心＝TG 时代斜杠命令表 + 培训演示 404（docs/training 未随包）；
+# - strategies  回复策略＝大模型调参面板直出（Temperature / Max Tokens / 意图映射）；
+# - singing     歌房：曲库 0 / 声库 0 的空壳，客户求歌会建单进失败；
+# - voice_eval  声音评测：只有消费端没有生产端。
+# 「学习队列 learner」刻意不在此列（D-L5 先止血不隐藏，入口本就在简洁模式「更多」）。
+# 三层形态里 partner（代理商版）与 internal 都看得见这些项——本表只对 client 生效。
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets",
+                          "help", "strategies", "singing", "voice_eval")
+
+# 代理商版才显（D-L7）：白标 / 演示数据 / 授权激活是代理商 / OEM 的商业面，终端
+# 用户看到「可改产品名去厂商署名」＝白送，「一键铺假会话」在全自动账号下会真发。
+# 三项是 settings.html 三张卡的命令面板深链（卡片本体由模板按 ui_client_hide 同口径
+# 藏）。client 形态剔除；partner / internal 保留；开发者模式一开随 CLIENT_HIDDEN 回归。
+PARTNER_ONLY_ITEM_IDS = ("settings_brand", "settings_license", "settings_demo")
+
+# 开发者模式下被藏项回归时打的 tier 注解（base.html / _ws_sidebar.html 渲染角标）：
+# 内部研发面 → "internal"（角标「研发」）；代理商面 → "partner"（角标「代理商」）。
+NAV_TIER_INTERNAL = "internal"
+NAV_TIER_PARTNER = "partner"
+
+# ── 页群（2026-08-18 P1）：侧栏一个入口 + 页内 Tab 互切 ─────────────────────
+# 「合并看板/漏斗」刻意不做模板级合并：各页 JS 与数据装载互不相干，真合页＝
+# 高风险重写且 PV 归因坍缩成一个数。页群方案＝成员页顶部渲染
+# _cluster_tabs.html（消费本表经 nav_clusters），URL / 路由 / 权限闸 / 独立
+# PV 全保留，侧栏行数 5+2 → 1+1。成员只改这里，模板零改动跟随；
+# 模板侧以 `{% set cluster_id/cluster_here %}` 自报身份（渲染类测试无 request
+# 也能跑，partial 对缺 nav_clusters 的上下文静默不渲染）。
+PAGE_CLUSTERS = {
+    "boards": ("ws_queue", "ws_perf", "ws_aiq", "ws_roi"),
+    "analysis": ("analytics", "funnel"),
+}
 
 
 def _resolve(ids):
@@ -200,7 +463,11 @@ def _resolve(ids):
 
 
 def _cmd_items():
-    """命令面板页面项:完整模式顺序 + 简洁专属项 + 面板专属页。"""
+    """命令面板页面项:完整模式顺序 + 简洁专属项 + 面板专属页。
+
+    simple 默认按简洁清单推导,项内显式声明 simple 则以其为准(面板专属页无侧栏行,
+    只能这样进简洁模式的面板)。
+    """
     simple_ids = set(SIMPLE_CORE) | set(SIMPLE_MORE)
     seen, out = set(), []
 
@@ -209,7 +476,7 @@ def _cmd_items():
             return
         seen.add(item_id)
         d = dict(item)
-        d["simple"] = item_id in simple_ids
+        d["simple"] = bool(item.get("simple", item_id in simple_ids))
         out.append(d)
 
     for grp in NAV_GROUPS_FULL:
@@ -229,10 +496,208 @@ _NAV_CONTEXT = dict(
     nav_groups=[dict(g, items=_resolve(g["items"])) for g in NAV_GROUPS_FULL],
     nav_simple_core=_resolve(SIMPLE_CORE),
     nav_simple_more=_resolve(SIMPLE_MORE),
+    nav_matrix_items=_resolve(list(MATRIX_ITEM_IDS)),
     nav_cmd_items=_cmd_items(),
+    # 页群 Tab（_cluster_tabs.html 消费）；锁定/显隐过滤刻意不套——成员页自带
+    # 权限闸（主管 302）或 feature 页面守卫，Tab 只是同权页面间的互切。
+    nav_clusters={cid: _resolve(list(ids))
+                  for cid, ids in PAGE_CLUSTERS.items()},
 )
 
 
-def get_nav_context() -> dict:
-    """供 admin.py _enrich_context 与渲染类测试注入模板上下文(静态数据,进程内单例)。"""
-    return _NAV_CONTEXT
+def _drop_locked(items, locked):
+    """过滤掉 feature 被锁定的菜单项(命令面板用;哨兵与无标签项原样保留)。"""
+    return [
+        it for it in items
+        if it == DOMAIN_SENTINEL
+        or not (isinstance(it, dict) and it.get("feature") in locked)
+    ]
+
+
+def _mark_locked(items, locked):
+    """给 feature 被锁定的菜单项打 locked=True 注解(拷贝,绝不改单例)。
+
+    P3 语义：侧栏锁定项不消失,渲染为「锁标 + 跳 /membership 升级引导」
+    (base.html nav_item 宏消费 locked 字段)——市场面保留可见的升级面,
+    也避免「点进被锁页面 → API 全 403」的死路体验。
+    """
+    out = []
+    for it in items:
+        if isinstance(it, dict) and it.get("feature") in locked:
+            out.append(dict(it, locked=True))
+        else:
+            out.append(it)
+    return out
+
+
+# ── E3：页面路径 → 授权功能族（中间件页面守卫用） ─────────────────────────────
+# 与 nav 可见性同一事实源（NAV_ITEMS 的 feature 标注）：锁定项侧栏渲染锁标跳
+# /membership，直连 URL 也一致 302 过去——nav 藏了但 URL 仍能打开半残页（API 全
+# 403）的缝隙从此闭合，且两个面永不漂移（新页面挂进 NAV_ITEMS 带 feature 即自动
+# 双面生效）。表按前缀长度降序（最长优先），匹配按整段边界（/knowledge 匹配
+# /knowledge 与 /knowledge/*，不误伤 /knowledgebase）。
+_PAGE_FEATURE_PREFIXES = tuple(sorted(
+    ((str(it["path"]), str(it["feature"]))
+     for it in NAV_ITEMS.values()
+     if isinstance(it, dict) and it.get("feature") and it.get("path")),
+    key=lambda pf: -len(pf[0]),
+))
+
+
+def feature_for_page_path(path: str):
+    """页面路径 → 所属授权功能族；无归属 → None（不守卫）。纯函数零 IO。"""
+    p = str(path or "")
+    for prefix, feat in _PAGE_FEATURE_PREFIXES:
+        if p == prefix or p.startswith(prefix + "/"):
+            return feat
+    return None
+
+
+def _monetization_product_on(config) -> bool:
+    """变现产品开关：只有 yaml ``monetization.enabled`` 为真才算开。
+
+    缺段/缺键/非 dict = 关。不另造 ui_visibility 键——开变现即回侧栏。
+    """
+    try:
+        mo = (config or {}).get("monetization")
+        return bool(isinstance(mo, dict) and mo.get("enabled"))
+    except Exception:
+        return False
+
+
+def _partner_paths():
+    return {CMD_EXTRA_ITEMS[i]["path"] for i in PARTNER_ONLY_ITEM_IDS}
+
+
+def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) -> dict:
+    """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
+
+    - matrix_nav 关 → 剔真机矩阵五项（侧栏完整模式组 / 简洁上下文导航
+      nav_matrix_items / 命令面板）；
+    - group_show 关 → 剔群脉导播台（同面；2026-08-16 前它在 matrix_nav 关时
+      留守组内，「真机矩阵」组标题因此一直显示）。
+    - ai_settings 关 → 剔简洁模式「人工转接」项（深链 /settings#escalation，
+      该卡片本身也被藏 → 入口留着＝点进去空页）。
+    - monetization.enabled 关 → 剔「客户营收」（空页不占侧栏）。例外：该项
+      已被 feature_gate 打 ``locked=True`` 时留下——锁标升级面是档位契约，
+      不能被产品开关顺手藏掉。
+    - **形态＝client** → 剔 ``CLIENT_HIDDEN_ITEM_IDS``（运维/研发面）与
+      ``PARTNER_ONLY_ITEM_IDS``（代理商面；2026-08-20 实施49 P1-6 起步，
+      2026-09-06 L-4 A 扩容 + 加代理商层）。形态是维度而非布尔键：内部服务器
+      部署必须原样保留，所以判定走 ``resolve_ui_flavor`` 而不是再造默认 False
+      的键（那会让 117 双实例也跟着丢入口）。「运营总览」刻意**不**在此列——
+      老板要的经营读数就在那页，藏了等于砍功能。
+    - **开发者模式**（``developer_mode=True``，session 级，见 ui_visibility）→
+      client 形态下上两表**不剔**，改为打 ``tier`` 注解（"internal" / "partner"），
+      侧栏渲染「研发 / 代理商」角标——内部人在客户机排障能看见全貌，又一眼分得
+      清哪些是客户看不到的。partner / internal 形态本就全显，注解不打。
+    两键全关 → 组内无真实项，整组消失（防空标题）。URL 刻意不封（藏而不废，
+    与 simple=True 深链哲学一致）；判定异常回落「隐藏」——内部功能读不到
+    配置时藏起来比露出来安全。
+
+    ⚠ 剔除按 **key 或 path** 两个维度：escalation / 三条代理商深链与「系统设置」
+    共用 ``key="settings"``（它们就是那页的深链），只能靠 path 区分，按 key 剔会把
+    完整模式的系统设置项一起干掉。
+    """
+    flags = {}
+    client_flavor = False
+    try:
+        from src.web.ui_visibility import is_client_flavor, resolve_ui_visibility
+        flags = resolve_ui_visibility(config)
+        client_flavor = is_client_flavor(config)
+    except Exception:
+        flags = {}
+    hidden_ids = set()
+    hidden_paths = set()
+    tier_ids: dict = {}
+    tier_paths: dict = {}
+    if client_flavor:
+        if developer_mode:
+            tier_ids = {i: NAV_TIER_INTERNAL for i in CLIENT_HIDDEN_ITEM_IDS}
+            tier_paths = {p: NAV_TIER_PARTNER for p in _partner_paths()}
+        else:
+            hidden_ids |= set(CLIENT_HIDDEN_ITEM_IDS)
+            hidden_paths |= _partner_paths()
+    if not flags.get("matrix_nav", False):
+        hidden_ids |= set(MATRIX_ITEM_IDS)
+    if not flags.get("group_show", False):
+        hidden_ids.add("group_show")
+    if not flags.get("ai_settings", False):
+        hidden_paths.add(NAV_ITEMS["escalation"]["path"])
+    if not _monetization_product_on(config):
+        hidden_paths.add(NAV_ITEMS["monetization"]["path"])
+    if not (hidden_ids or hidden_paths or tier_ids or tier_paths):
+        return ctx
+
+    _mo_path = NAV_ITEMS["monetization"]["path"]
+
+    def _hidden(it):
+        # 档位锁住的客户营收 = 升级面，产品开关关着也要留在侧栏。
+        if it.get("path") == _mo_path and it.get("locked"):
+            return False
+        return (it.get("key") in hidden_ids) or (it.get("path") in hidden_paths)
+
+    def _tier(it):
+        return tier_paths.get(it.get("path")) or tier_ids.get(it.get("key"))
+
+    def _drop_hidden(items):
+        out = []
+        for it in items:
+            if it == DOMAIN_SENTINEL or not isinstance(it, dict):
+                out.append(it)
+                continue
+            if _hidden(it):
+                continue
+            t = _tier(it)
+            out.append(dict(it, tier=t) if t else it)
+        return out
+
+    groups = []
+    for g in ctx["nav_groups"]:
+        kept = _drop_hidden(g["items"])
+        if any(i for i in kept if i != DOMAIN_SENTINEL):
+            groups.append(dict(g, items=kept))
+    return dict(
+        ctx,
+        nav_groups=groups,
+        nav_simple_core=_drop_hidden(ctx["nav_simple_core"]),
+        nav_simple_more=_drop_hidden(ctx["nav_simple_more"]),
+        nav_matrix_items=([] if set(MATRIX_ITEM_IDS) & hidden_ids
+                          else ctx["nav_matrix_items"]),
+        nav_cmd_items=_drop_hidden(ctx["nav_cmd_items"]),
+    )
+
+
+def get_nav_context(config: dict = None, developer_mode: bool = False) -> dict:
+    """供 admin.py _enrich_context 与渲染类测试注入模板上下文。
+
+    不传 config → 返回静态全量(进程内单例,零变化——渲染类测试/无配置场景
+    保持全量可见)；传 config → 依次套两层过滤：
+    ① feature_gate 锁定项(侧栏 locked 注解/命令面板隐藏，gate 关或异常回落全量)；
+    ② ui_visibility.matrix_nav / group_show / ai_settings(缺省隐藏真机矩阵五项、
+      群脉导播台与简洁模式「人工转接」项，开发者页按键开启后回归) +
+      monetization.enabled（缺省隐藏客户营收；档位锁定项保留锁标升级面）+
+      部署形态（client＝桌面包剔 CLIENT_HIDDEN / PARTNER_ONLY 两表；
+      ``developer_mode=True`` 时两表不剔改打 tier 注解，见 _apply_ui_visibility）。
+    视图每次重建(列表极小,开销可忽略)。
+    """
+    if config is None:
+        return _NAV_CONTEXT
+    ctx = _NAV_CONTEXT
+    try:
+        from src.licensing.feature_gate import gate_enabled, locked_features
+        locked = set(locked_features(config)) if gate_enabled(config) else set()
+    except Exception:
+        locked = set()
+    if locked:
+        groups = [dict(g, items=_mark_locked(g["items"], locked))
+                  for g in ctx["nav_groups"]]
+        ctx = dict(
+            ctx,
+            nav_groups=groups,
+            nav_simple_core=_mark_locked(ctx["nav_simple_core"], locked),
+            nav_simple_more=_mark_locked(ctx["nav_simple_more"], locked),
+            nav_matrix_items=_mark_locked(ctx["nav_matrix_items"], locked),
+            nav_cmd_items=_drop_locked(ctx["nav_cmd_items"], locked),
+        )
+    return _apply_ui_visibility(ctx, config, developer_mode=bool(developer_mode))

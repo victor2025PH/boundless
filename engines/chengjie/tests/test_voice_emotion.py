@@ -63,6 +63,25 @@ def test_derive_emotion_text_cues():
     assert derive_emotion(text="太好了恭喜你！！").emotion == "excited"
 
 
+def test_english_replies_get_emotion_instead_of_flat_default():
+    """英文人设此前恒落 default——每句同一个语气，听上去就是机器念稿。"""
+    assert derive_emotion(text="Oh my god, I'm so happy right now!").emotion != "warm"
+    assert derive_emotion(text="I can't wait to show you").emotion == "excited"
+    assert derive_emotion(text="It turned out great, love it").emotion == "happy"
+    assert derive_emotion(text="You have a lot of nerve").emotion == "angry"
+    assert derive_emotion(text="Honestly, my bad on that one").emotion == "apologetic"
+    assert derive_emotion(text="It's been such a long day, I'm exhausted"
+                          ).emotion == "calm"
+    # 无线索的平句仍走 default：这层只补「有情绪时认得出」，不制造情绪
+    assert derive_emotion(text="I am still here.").emotion == "warm"
+
+
+def test_topic_words_do_not_fake_emotion():
+    """客套/问句里的情绪词不算说话人自己的情绪——判错比没有更出戏。"""
+    assert derive_emotion(text="Happy to help with that").emotion == "warm"
+    assert derive_emotion(text="Are you happy with the fabric?").emotion == "warm"
+
+
 def test_derive_emotion_relationship_stage_and_default():
     assert derive_emotion(rel_stage="intimate").emotion == "playful"
     assert derive_emotion(rel_stage="stranger").emotion == "warm"

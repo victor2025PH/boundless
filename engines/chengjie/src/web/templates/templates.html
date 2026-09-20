@@ -20,12 +20,13 @@
 .tg-preview{background:var(--input);border-radius:12px;padding:1rem;margin-bottom:1rem}
 .tg-preview-lbl{font-size:.75rem;font-weight:600;color:var(--t3);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.04em}
 .tg-bubble-wrap{display:flex;justify-content:flex-end}
-.tg-bubble{background:linear-gradient(135deg,#5b7cf6,#8b5cf6);color:#fff;padding:.7rem .9rem;border-radius:14px 14px 2px 14px;max-width:85%;font-size:.875rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 12px rgba(91,124,246,.3);position:relative}
+.tg-bubble{background:linear-gradient(135deg,var(--p,#1e8cf2),#8b5cf6);color:#fff;padding:.7rem .9rem;border-radius:14px 14px 2px 14px;max-width:85%;font-size:.875rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 12px color-mix(in srgb, var(--p,#1e8cf2) 30%, transparent);position:relative}
 .tg-time{text-align:right;font-size:.68rem;opacity:.7;margin-top:.3rem}
 /* var badges */
 .var-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}
 .var-pill{background:var(--prs);color:var(--purple);padding:.15rem .5rem;border-radius:5px;font-size:.74rem;font-weight:600;font-family:'Consolas',monospace;cursor:pointer;transition:.15s}
-.var-pill:hover{background:var(--purple);color:#fff}
+/* 软底+深字：实底紫+白字在暗色（紫提亮为 300 档后）会跌破 AA，软底公式两主题都达标 */
+.var-pill:hover{background:var(--prs);color:var(--purple)}
 /* char count */
 .char-count{font-size:.75rem;color:var(--t3);text-align:right;margin-top:.25rem}
 /* type column */
@@ -45,7 +46,7 @@
 {% set active="tpl" %}
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(245,158,11,.06));border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-amber06,rgba(245,158,11,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">📝</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('tp_s003', "只读模式") }}</strong>
@@ -220,6 +221,28 @@
         {{ (i18n or {}).get('tp_s021', "提示：列表类型每行写一条；字典类型格式为") }} <code>{{ (i18n or {}).get('tp_s022', "键名") }}: {{ (i18n or {}).get('em_s017', "内容") }}</code>，{{ (i18n or {}).get('tp_s023', "每行写一条") }}
       </div>
     </form>
+    <!-- 多语言变体·起草工作台（V2 2026-08-18）：机器起草 → 人工确认，对齐 KB 翻译审核心智。
+         数据=templates_i18n.yaml 旁挂档（坐席面板/自动推荐按会话语言取，落盘即热生效）。 -->
+    <div class="f-grp" id="i18n-sec" style="display:none;border-top:1px solid var(--bd);padding-top:.8rem">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+        <label class="f-lbl" style="margin:0">🌐 {{ (i18n or {}).get('tp_i18n_title', "多语言变体") }}</label>
+        <select id="i18n-lang-sel" style="font-size:.8rem;padding:.3rem .5rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t)">
+          <option value="en">EN · {{ (i18n or {}).get('tp_i18n_lang_en', "英语") }}</option>
+          <option value="ja">JA · {{ (i18n or {}).get('tp_i18n_lang_ja', "日语") }}</option>
+          <option value="th">TH · {{ (i18n or {}).get('tp_i18n_lang_th', "泰语") }}</option>
+          <option value="vi">VI · {{ (i18n or {}).get('tp_i18n_lang_vi', "越南语") }}</option>
+          <option value="id">ID · {{ (i18n or {}).get('tp_i18n_lang_id', "印尼语") }}</option>
+          <option value="ko">KO · {{ (i18n or {}).get('tp_i18n_lang_ko', "韩语") }}</option>
+          <option value="ru">RU · {{ (i18n or {}).get('tp_i18n_lang_ru', "俄语") }}</option>
+          <option value="es">ES · {{ (i18n or {}).get('tp_i18n_lang_es', "西班牙语") }}</option>
+          <option value="pt">PT · {{ (i18n or {}).get('tp_i18n_lang_pt', "葡萄牙语") }}</option>
+        </select>
+        <button type="button" class="btn btn-s btn-sm" id="i18n-draft-btn" onclick="i18nDraft()">✨ {{ (i18n or {}).get('tp_i18n_draft', "机器起草") }}</button>
+      </div>
+      <div style="font-size:.77rem;color:var(--t3);margin-bottom:.45rem">{{ (i18n or {}).get('tp_i18n_hint', "头部话术的人工定稿；没配变体的语言，发送时走机器翻译兜底") }}</div>
+      <div id="i18n-body"></div>
+      <div id="i18n-msg" style="font-size:.78rem;margin-top:.35rem;min-height:1em"></div>
+    </div>
   </div>
   <div class="panel-foot">
     <button type="button" class="btn btn-p" id="save-btn" onclick="saveTemplate()">
@@ -260,10 +283,131 @@ function openEdit(key) {
   const ta = document.getElementById('edit-ta');
   ta.value = txt;
   onTaChange(ta);
+  i18nKey = key;   // V2：变体区随抽屉切键
+  renderI18n();
   panel.classList.add('open');
   document.getElementById('panel-backdrop').classList.add('open');
   setTimeout(() => ta.focus(), 350);
 }
+
+/* ===== 多语言变体·起草工作台（V2）=====
+   数据流：GET /api/templates-i18n 一次拉全 → 按键渲染；draft/save/confirm/delete
+   四端点返回该 键×语言 的最新条目列表，就地回写 i18nData 重渲。
+   base.html 全局 fetch 补丁自动带 X-CSRF-Token，这里用裸 fetch 即可。 */
+let i18nData = {};
+let i18nKey = '';
+function _i18nEsc(s){
+  return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function _i18nEligible(key){
+  if(!key || key==='test' || key.indexOf('gxp_')===0) return false;
+  const v = tplData[key];
+  return typeof v==='string' || Array.isArray(v);
+}
+function _i18nMsg(text, ok){
+  const el=document.getElementById('i18n-msg');
+  if(!el) return;
+  el.textContent=text||'';
+  // --d 是手滑（全站无此 token，红色一直靠回落值撑着）→ 用本壳的 --red
+  el.style.color=ok?'var(--ok,#047857)':'var(--red,#b91c1c)';
+  if(text) setTimeout(()=>{ if(el.textContent===text) el.textContent=''; }, 4000);
+}
+function _i18nErrText(code){
+  const known={has_vars:1,translate_failed:1,duplicate:1,no_source:1,system_key:1,not_found:1};
+  return window.T(known[code]?('tp_i18n_err_'+code):'tp_i18n_err_generic');
+}
+async function loadI18nAll(){
+  try{
+    const r=await fetch('/api/templates-i18n');
+    const d=await r.json();
+    if(d && d.ok){ i18nData=d.variants||{}; renderI18n(); }
+  }catch(_){}
+}
+function renderI18n(){
+  const sec=document.getElementById('i18n-sec');
+  if(!sec) return;
+  if(!_i18nEligible(i18nKey)){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  const body=document.getElementById('i18n-body');
+  const langs=i18nData[i18nKey]||{};
+  const codes=Object.keys(langs).sort();
+  if(!codes.length){
+    body.innerHTML='<div style="font-size:.78rem;color:var(--t3);padding:.4rem 0">'+_i18nEsc(window.T('tp_i18n_empty'))+'</div>';
+    return;
+  }
+  body.innerHTML=codes.map(lc=>{
+    let nm=window.T('tp_i18n_lang_'+lc);
+    if(nm==='tp_i18n_lang_'+lc) nm='';
+    const rows=(langs[lc]||[]).map((e,i)=>{
+      const st=e.approved
+        ? '<span style="color:var(--ok,#16a34a)">✓ '+_i18nEsc(window.T('tp_i18n_approved'))+'</span>'
+        : '<span style="color:var(--warn,#d97706)">◌ '+_i18nEsc(window.T('tp_i18n_pending'))+'</span>';
+      const confirmBtn=e.approved?'' :
+        '<button type="button" class="btn btn-s btn-sm" onclick="i18nConfirm(\''+lc+'\','+i+')">'+_i18nEsc(window.T('tp_i18n_confirm'))+'</button>';
+      return '<div style="margin:.3rem 0 .55rem">'
+        + '<textarea id="i18n-ta-'+lc+'-'+i+'" rows="2" style="width:100%;box-sizing:border-box;font-size:.82rem;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);resize:vertical">'+_i18nEsc(e.text)+'</textarea>'
+        + '<div style="display:flex;gap:.4rem;align-items:center;font-size:.75rem;margin-top:.25rem">'+st
+        + confirmBtn
+        + '<button type="button" class="btn btn-s btn-sm" onclick="i18nSaveRow(\''+lc+'\','+i+')">'+_i18nEsc(window.T('tp_i18n_save'))+'</button>'
+        + '<button type="button" class="btn btn-d btn-sm" onclick="i18nDeleteRow(\''+lc+'\','+i+')">'+_i18nEsc(window.T('tp_i18n_delete'))+'</button>'
+        + '</div></div>';
+    }).join('');
+    return '<div style="margin-bottom:.4rem"><div style="font-size:.78rem;font-weight:700;color:var(--t2)">'
+      + lc.toUpperCase()+(nm?' · '+_i18nEsc(nm):'')+'</div>'+rows+'</div>';
+  }).join('');
+}
+function _i18nApply(d){
+  if(!d || d.ok!==true){ _i18nMsg(_i18nErrText(d && d.error), false); return false; }
+  if(!i18nData[d.key]) i18nData[d.key]={};
+  if(d.entries && d.entries.length) i18nData[d.key][d.lang]=d.entries;
+  else { delete i18nData[d.key][d.lang]; if(!Object.keys(i18nData[d.key]).length) delete i18nData[d.key]; }
+  renderI18n();
+  return true;
+}
+async function i18nDraft(){
+  const lang=document.getElementById('i18n-lang-sel').value;
+  const btn=document.getElementById('i18n-draft-btn');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/templates-i18n/draft',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:i18nKey,lang:lang})});
+    const d=await r.json();
+    if(_i18nApply(d)) _i18nMsg(window.T('tp_i18n_drafted'), true);
+  }catch(_){ _i18nMsg(_i18nErrText(''), false); }
+  finally{ btn.disabled=false; }
+}
+async function i18nSaveRow(lc,i){
+  const ta=document.getElementById('i18n-ta-'+lc+'-'+i);
+  if(!ta) return;
+  try{
+    const r=await fetch('/api/templates-i18n/save',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:i18nKey,lang:lc,index:i,text:ta.value,approved:true})});
+    const d=await r.json();
+    if(_i18nApply(d)) _i18nMsg(window.T('tp_i18n_saved'), true);
+  }catch(_){ _i18nMsg(_i18nErrText(''), false); }
+}
+async function i18nConfirm(lc,i){
+  try{
+    const r=await fetch('/api/templates-i18n/confirm',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:i18nKey,lang:lc,index:i})});
+    const d=await r.json();
+    if(_i18nApply(d)) _i18nMsg(window.T('tp_i18n_saved'), true);
+  }catch(_){ _i18nMsg(_i18nErrText(''), false); }
+}
+async function i18nDeleteRow(lc,i){
+  if(!confirm(window.T('tp_i18n_del_confirm'))) return;
+  try{
+    const r=await fetch('/api/templates-i18n/delete',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:i18nKey,lang:lc,index:i})});
+    const d=await r.json();
+    if(_i18nApply(d)) _i18nMsg(window.T('tp_i18n_saved'), true);
+  }catch(_){ _i18nMsg(_i18nErrText(''), false); }
+}
+loadI18nAll();
 
 function closeEdit() {
   document.getElementById('tpl-panel').classList.remove('open');
@@ -301,7 +445,7 @@ async function _doSaveTemplate(fd){
   var btn=document.getElementById('save-btn');
   btnLoading(btn,true);
   try{
-    var r=await fetch('/templates/update',{method:'POST',body:fd,headers:{'Accept':'application/json'}});
+    var r=await apiFetch('/templates/update',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){
       showToast(d.msg||window.T('wa_js_053'),'ok');
@@ -363,11 +507,11 @@ function tplBatchDelete(){
     `${window.T('tp_js006')} <strong>${keys.length}</strong> ${window.T('tp_js007')}`,
     async ()=>{
       try{
-        const r=await fetch('/api/batch-templates',{
+        const r=await apiFetch('/api/batch-templates',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({keys,action:'delete'})
-        });
+        }, {timeoutMs: 60000});
         const d=await r.json();
         if(r.ok&&d.ok){
           showToast(window.Tf('tp_deleted_n', {n: d.removed.length}),'ok');

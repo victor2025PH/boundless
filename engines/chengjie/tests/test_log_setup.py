@@ -85,3 +85,50 @@ def test_third_party_not_affected(tmp_path):
     finally:
         root.setLevel(old_level)
         _cleanup([h])
+
+
+# ── mirror_handlers_to_src（P1-198，2026-08-05：桌面无 file 时 console 也镜像） ──
+
+def test_mirror_console_handler_reaches_src(tmp_path):
+    """桌面形态（主 logger 只有 console/stream handler）：src.* 必须能出声。
+
+    198 取证实锤：五个进程会话 backend.log 里编排器零日志，法证只能拉库反推。
+    """
+    from src.utils.log_setup import mirror_handlers_to_src
+    import io
+    buf = io.StringIO()
+    h = logging.StreamHandler(buf)
+    h.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+    main_logger = logging.getLogger("ai_chat_assistant_mirror_test")
+    main_logger.handlers.clear()
+    main_logger.addHandler(h)
+    try:
+        mirror_handlers_to_src(main_logger, level=logging.INFO)
+        logging.getLogger("src.integrations.account_orchestrator").info(
+            "编排器出声 probe")
+        h.flush()
+        assert "编排器出声 probe" in buf.getvalue()
+    finally:
+        _cleanup([h])
+        main_logger.handlers.clear()
+
+
+def test_mirror_idempotent_and_dedups_with_file_attach(tmp_path):
+    """镜像与 attach_src_file_handler 混用：同一 handler 对象绝不重复挂。"""
+    from src.utils.log_setup import mirror_handlers_to_src
+    f, h = _mk_handler(tmp_path)
+    main_logger = logging.getLogger("ai_chat_assistant_mirror_test2")
+    main_logger.handlers.clear()
+    main_logger.addHandler(h)
+    try:
+        attach_src_file_handler(h, level=logging.INFO)   # 生产先走 file 补丁
+        mirror_handlers_to_src(main_logger, level=logging.INFO)   # 再整体镜像
+        mirror_handlers_to_src(main_logger, level=logging.INFO)   # 幂等重入
+        src = logging.getLogger("src")
+        assert src.handlers.count(h) == 1
+        logging.getLogger("src.foo2").info("双通道去重 probe")
+        h.flush()
+        assert f.read_text(encoding="utf-8").count("双通道去重 probe") == 1
+    finally:
+        _cleanup([h])
+        main_logger.handlers.clear()

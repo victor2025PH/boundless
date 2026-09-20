@@ -8,14 +8,16 @@ import { TIERS } from "@/lib/avatarhub-pricing";
 export const metadata: Metadata = {
   title: "购买与下单 · 无界科技 BOUNDLESS",
   description:
-    "AvatarHub 会员套餐与授权购买：声音克隆、实时换脸、数字人直播、克隆音同传。引擎跑在你自己的设备上，用量不限、不按字符或时长计费；设备自备、协助部署。月付 / 年付（送 2 个月 + 首年 8 折），全程 USDT 结算。",
+    "自助购买：幻境 STUDIO 会员（免费换脸起步，本机算力用量不限）；智聊 ChatX 按充值计费不订阅（免费开始 · 充值 50U 起 · 首充最高 +40% · 新人 6U 大礼包，标准翻译永久免费），Token 跨智聊/通译通用。USDT / 银行卡结算，到账自动开通。",
   alternates: {
     canonical: "/order",
     languages: { "zh-CN": "/order", en: "/en/order", "x-default": "/order" },
   },
   openGraph: {
     title: "购买与下单 · 无界科技 BOUNDLESS",
-    description: "会员套餐 39–699 USD/月，本机算力用量不限，年付送 2 个月 + 首年 8 折。支持 USDT 结算，数据不出机房。",
+    // 与主 description 同一叙事顺序（充值唯一化后主推=智聊充值；此前这里还是纯 STUDIO 旧文案）
+    description:
+      "告别订阅：智聊 ChatX 充多少用多少——1U = 1,500 Token，首充最高 +40%，新人 6U 大礼包 18,000 Token，标准翻译永久免费。幻境 STUDIO 免费换脸起步、本机算力用量不限。USDT / 银行卡结算，到账自动开通。",
     url: `${SITE_URL}/order`,
   },
 };
@@ -23,8 +25,8 @@ export const metadata: Metadata = {
 const offersLd = {
   "@context": "https://schema.org",
   "@type": "Product",
-  name: "AvatarHub — BOUNDLESS 实时数字人引擎",
-  description: "声音克隆、实时换脸、数字人直播、克隆音同传的本地部署引擎，会员订阅制。",
+  name: "幻境 STUDIO — BOUNDLESS 实时数字人引擎",
+  description: "AI 作图、图片 / 视频换脸、直播实时换脸、变声器与克隆音同传的本地部署引擎，会员订阅制。",
   brand: { "@type": "Organization", name: "无界科技 BOUNDLESS" },
   offers: TIERS.filter((t) => t.monthly > 0).map((t) => ({
     "@type": "Offer",

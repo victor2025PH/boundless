@@ -19,6 +19,17 @@
   });
   const MODE_KEY = { protocol: "cp.acct.mode.protocol", web: "cp.acct.mode.web", device: "cp.acct.mode.device", desktop: "cp.acct.mode.desktop" };
   const STATUS_KEY = { online: "cp.acct.status.online", offline: "cp.acct.status.offline", pending: "cp.acct.status.pending", unknown: "cp.acct.status.unknown" };
+  // 后端 reason_code → 本地化文案。未知 code 回落通用失败文案，不显示裸 code。
+  const REASON_KEYS = {
+    qr_expired: "cp.acct.qr_expired",
+    pin_timeout: "cp.acct.fail.pin_timeout",
+    rate_limited: "cp.acct.fail.rate_limited",
+    network: "cp.acct.fail.network",
+    okline_missing: "cp.acct.fail.unavailable",
+    client_init: "cp.acct.fail.unavailable",
+    cancelled: "cp.acct.fail.cancelled",
+    login_failed: "cp.acct.login_fail",
+  };
   function T(key, vars) {
     const f = root.CopilotShared && root.CopilotShared.t;
     return f ? f(key, vars) : key;
@@ -54,9 +65,11 @@
     .row .sub { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
     .badge { font-size:var(--cp-fs-tiny,11px); padding:1px 7px; border-radius:10px;
              background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-dim,#64748b); }
-    .badge.on { background:rgba(47,158,110,.18); color:#2f9e6e; }
-    .badge.off { background:rgba(120,130,150,.18); color:#8a9bb0; }
-    .badge.pending { background:rgba(255,176,32,.2); color:#c98a14; }
+    /* P2：状态语义色收口 --cp-* token（在线=ok 绿 / 掉线=中性灰 / 登录中=warn 琥珀），
+       日夜主题自适配；头像渐变池是 categorical 色池刻意保留（legacy-blue 棘轮已登记） */
+    .badge.on { background:color-mix(in srgb,var(--cp-ok,#2f9e6e) 18%,transparent); color:var(--cp-ok,#2f9e6e); }
+    .badge.off { background:color-mix(in srgb,var(--cp-text-tiny,#8a9bb0) 18%,transparent); color:var(--cp-text-tiny,#8a9bb0); }
+    .badge.pending { background:color-mix(in srgb,var(--cp-warn,#c98a14) 20%,transparent); color:var(--cp-warn,#c98a14); }
     .add { margin-top:10px; border-top:1px dashed var(--cp-border,#e2e8f0); padding-top:10px; }
     .add .field { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
     .add label { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); flex:0 0 56px; }
@@ -67,8 +80,14 @@
     .qr img { width:180px; height:180px; background:#fff; border-radius:8px; padding:6px; }
     .qr .inst { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-top:6px; white-space:pre-wrap; }
     .qr .st { font-size:var(--cp-fs-sm,12px); margin-top:6px; }
-    .qr .st.ok { color:#2f9e6e; }
+    .qr .st.ok { color:var(--cp-ok,#2f9e6e); }
     .qr .st.fail { color:var(--cp-danger,#dc2626); }
+    .qr .pin { margin-top:10px; }
+    .qr .pin-label { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
+    .qr .pin-code { display:flex; gap:6px; justify-content:center; margin-top:6px; }
+    .qr .pin-d { min-width:26px; padding:6px 0; border:1px solid var(--cp-border,#e2e8f0);
+                 border-radius:6px; font:600 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+                 color:var(--cp-text,#0f172a); background:var(--cp-bg-soft,#f8fafc); }
     .audit { margin-top:10px; border-top:1px dashed var(--cp-border,#e2e8f0); padding-top:10px; }
     .audit .sum { display:flex; align-items:center; gap:8px; font-size:var(--cp-fs-tiny,11px);
             color:var(--cp-text-dim,#64748b); margin-bottom:6px; }
@@ -80,9 +99,9 @@
     .audit .it .tx { font-size:var(--cp-fs-sm,12px); margin-top:2px; white-space:pre-wrap; word-break:break-word; }
     .rb { font-size:var(--cp-fs-tiny,11px); padding:1px 6px; border-radius:8px;
             background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-dim,#64748b); }
-    .rb.sent { background:rgba(47,158,110,.18); color:#2f9e6e; }
+    .rb.sent { background:color-mix(in srgb,var(--cp-ok,#2f9e6e) 18%,transparent); color:var(--cp-ok,#2f9e6e); }
     .rb.handoff { background:rgba(220,38,38,.16); color:var(--cp-danger,#dc2626); }
-    .live { font-size:var(--cp-fs-tiny,11px); color:#2f9e6e; margin-left:auto; }`;
+    .live { font-size:var(--cp-fs-tiny,11px); color:var(--cp-ok,#2f9e6e); margin-left:auto; }`;
 
   class CpAccounts extends HTMLElement {
     constructor() {
@@ -122,6 +141,10 @@
       const accs = (d && d.accounts) || [];
       // P5：脱敏开关随 /api/accounts 下发（缺省 true，与 web 端口径一致）
       this._maskPhone = !(d && d.mask_phone === false);
+      // P0（2026-08-12）：管理权限随 /api/accounts 下发（服务端排除法拒 agent/viewer，
+      // 与告警渠道 _ALERT_CFG_DENY_ROLES 同哲学）。fail-open：老后端缺字段＝可管理（旧行为），
+      // 只有显式 false 才收起管理按钮——坐席看得到账号状态，动不了启停/配置。
+      this._canManage = !(d && d.viewer_can_manage === false);
       this._render(accs);
     }
 
@@ -129,14 +152,19 @@
       this._accounts = accs || [];
       const rows = accs.map((a) => this._rowHtml(a)).join("") ||
         `<div class="empty">${this._esc(T("cp.acct.empty"))}</div>`;
+      // hide-title：宿主已有自己的卡头/标题（如 app.html 账号管理层头）时消掉组件内重复标题行
+      const ttl = this.hasAttribute("hide-title") ? "" : `<span class="t">${this._esc(T("cp.acct.title"))}</span>`;
+      // 管理面（设置/告警渠道/添加账号）只给有管理权限的角色；体检/日志/刷新是只读诊断，全员可见
+      const mng = this._canManage !== false;
       this._wrap().innerHTML =
-        `<div class="head"><span class="t">${this._esc(T("cp.acct.title"))}</span>` +
+        `<div class="head">${ttl}` +
         `<button data-act="health">${this._esc(T("cp.acct.health"))}</button>` +
-        `<button data-act="settings">${this._esc(T("cp.acct.settings"))}</button>` +
-        `<button data-act="webhooks">${this._esc(T("cp.acct.webhooks"))}</button>` +
+        (mng ? `<button data-act="settings">${this._esc(T("cp.acct.settings"))}</button>` : "") +
+        (mng ? `<button data-act="webhooks">${this._esc(T("cp.acct.webhooks"))}</button>` : "") +
         `<button data-act="audit">${this._esc(T("cp.acct.audit_btn"))}</button>` +
         `<button data-act="refresh">${this._esc(T("cp.common.refresh"))}</button>` +
-        `<button class="primary" data-act="add">${this._esc(T("cp.acct.add"))}</button></div>` +
+        (mng ? `<button class="primary" data-act="add">${this._esc(T("cp.acct.add"))}</button>` : "") +
+        `</div>` +
         `<div class="list">${rows}</div>` +
         `<div class="form"></div>`;
     }
@@ -189,10 +217,11 @@
       const stCls = st === "online" ? "on" : (st === "pending" ? "pending" : "off");
       const stTxt = STATUS_KEY[st] ? T(STATUS_KEY[st]) : st;
       const mode = MODE_KEY[a.mode] ? T(MODE_KEY[a.mode]) : (a.mode || "");
-      // 仅 protocol 号可由编排器启停 + 切 7×24 自动回复（web/device 由各自宿主或手机负责）
+      // 仅 protocol 号可由编排器启停 + 切 7×24 自动回复（web/device 由各自宿主或手机负责）；
+      // 启停/自动开关属管理动作，低权限角色（agent/viewer）只读不给按钮
       const p = this._esc(a.platform);
       const id = this._esc(a.account_id);
-      const ctrl = a.mode === "protocol"
+      const ctrl = (a.mode === "protocol" && this._canManage !== false)
         ? `<button data-act="toggle-auto" class="${a.auto_reply ? "primary" : ""}" data-p="${p}" data-a="${id}" data-v="${a.auto_reply ? "1" : "0"}">${this._esc(a.auto_reply ? T("cp.acct.auto_on") : T("cp.acct.auto_off"))}</button>` +
           `<button data-act="adv" data-p="${p}" data-a="${id}">${this._esc(T("cp.acct.adv"))}</button>` +
           `<button data-act="start" data-p="${p}" data-a="${id}">${this._esc(T("cp.acct.start"))}</button>` +
@@ -214,12 +243,21 @@
     }
 
     _onAction(act, el) {
+      // P0（2026-08-12）危险操作两步确认：停止（账号下线漏接客户）与「开」自动回复
+      // （AI 开始自动发消息）必须再点一次才生效——按钮原地变确认态 4s，超时自动还原。
+      // 「关」自动回复/启动是安全方向，不拦。误触即事故 → 误触可反悔。
+      if ((act === "stop" || (act === "toggle-auto" && el.getAttribute("data-v") !== "1")) &&
+          el.getAttribute("data-armed") !== "1") {
+        this._armConfirm(el, act);
+        return;
+      }
       if (act === "refresh") return this.reload();
       if (act === "audit") return this._renderAudit();
       if (act === "health") return this._renderHealth();
       if (act === "webhooks") return this._renderWebhooks();
       if (act === "settings") return this._renderSettings();
       if (act === "wh-add") return this._whAddRow();
+      if (act === "wh-goal-preset") return this._whGoalPreset(el);
       if (act === "wh-del") return this._whDelRow(el);
       if (act === "wh-test") return this._whTest(el);
       if (act === "wh-save") return this._whSave(el);
@@ -238,6 +276,21 @@
     _findAccount(platform, account_id) {
       return (this._accounts || []).find(
         (a) => a.platform === platform && a.account_id === account_id) || null;
+    }
+
+    _armConfirm(el, act) {
+      el.setAttribute("data-armed", "1");
+      el.dataset.origText = el.textContent;
+      el.dataset.origCls = el.className;
+      el.textContent = T(act === "stop" ? "cp.acct.confirm_stop" : "cp.acct.confirm_auto_on");
+      el.classList.add("danger");
+      setTimeout(() => {
+        // 4s 内没点第二次 → 还原（列表若已 reload 重渲，旧节点脱离文档，自然作废）
+        if (!el.isConnected || el.getAttribute("data-armed") !== "1") return;
+        el.removeAttribute("data-armed");
+        el.textContent = el.dataset.origText || "";
+        el.className = el.dataset.origCls || "";
+      }, 4000);
     }
 
     _renderOverride(el) {
@@ -301,7 +354,7 @@
         const d = await this._client.setAccountOverride({ platform, account_id, override });
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.saved_refresh") : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
         setTimeout(() => this.reload(), 700);
       } catch (e) {
@@ -495,14 +548,36 @@
       if (!form || !this._client || !this._client.autoReplyWebhooks) return;
       form.innerHTML = `<div class="add"><div class="sub">${this._esc(T("cp.acct.wh_loading"))}</div></div>`;
       let list = [];
+      let denied = "";
       try {
         const d = await this._client.autoReplyWebhooks();
-        list = (d && d.webhooks) || [];
+        if (d && d.webhooks) list = d.webhooks;
+        // 非主管（坐席/观察员）读渠道明细被后端拒 → 只回 {detail} 无 webhooks 字段。
+        // 优雅降级：显示「仅主管可配置」而非空白/报错（后端 detail 已 i18n，优先用它）。
+        else if (d && (d.detail || d.error)) denied = String(d.detail || d.error);
       } catch (e) { /* 空列表 */ }
+      if (denied) {
+        form.innerHTML = `<div class="add"><div class="sub">` +
+          `${this._esc(denied || T("cp.acct.wh_no_perm"))}</div></div>`;
+        return;
+      }
+      // 大白话告警目录（分组复选框的数据源）：拿到则订阅项渲染成分组勾选，
+      // 拿不到（旧后端/旧壳）→ this._alertCat 保持 null → _whEventsHtml 回落文本框。
+      this._alertCat = null;
+      if (this._client.alertCatalog) {
+        try {
+          const c = await this._client.alertCatalog();
+          if (c && (c.business || c.technical)) {
+            this._alertCat = { business: c.business || [], technical: c.technical || [] };
+          }
+        } catch (e) { /* 回落文本框 */ }
+      }
       const rows = list.map((w, i) => this._whRowHtml(w, i)).join("");
       form.innerHTML =
         `<div class="add">` +
         `<div class="sub">${this._esc(T("cp.acct.wh_desc"))}</div>` +
+        this._whChannelGuide() +
+        this._whGoalPresetHtml() +
         `<div class="wh-list">${rows || `<div class="empty">${this._esc(T("cp.acct.wh_empty"))}</div>`}</div>` +
         `<div class="field" style="justify-content:space-between;gap:8px">` +
         `<button data-act="wh-add">${this._esc(T("cp.acct.wh_add"))}</button>` +
@@ -517,18 +592,108 @@
       const e = (s) => this._esc(s == null ? "" : s);
       const fmt = w.format || "telegram";
       const fopt = (v, label) => `<option value="${v}"${fmt === v ? " selected" : ""}>${label}</option>`;
-      const evs = (w.events || ["autoreply_alert"]).join(",");
       const tokenPh = w.token_set ? T("cp.acct.token_set") : T("cp.acct.token_ph");
       return `<div class="wh-it" data-i="${i}" style="border:1px solid var(--cp-border,#eef2f7);border-radius:8px;padding:6px;margin-bottom:6px">` +
         `<div class="field"><input class="w-name" placeholder="${e(T("cp.acct.wh_name_ph"))}" value="${e(w.name)}" style="max-width:120px"/>` +
-        `<select class="w-fmt">${fopt("telegram", "Telegram")}${fopt("whatsapp", "WhatsApp")}${fopt("messenger", "Messenger")}${fopt("json", T("cp.acct.wh_json"))}</select>` +
+        `<select class="w-fmt">${fopt("telegram", "Telegram")}${fopt("whatsapp", "WhatsApp")}${fopt("messenger", "Messenger")}${fopt("feishu", T("cp.acct.wh_fmt_feishu"))}${fopt("wecom", T("cp.acct.wh_fmt_wecom"))}${fopt("dingtalk", T("cp.acct.wh_fmt_dingtalk"))}${fopt("json", T("cp.acct.wh_json"))}</select>` +
         `<label style="flex:0"><input type="checkbox" class="w-en" ${w.enabled === false ? "" : "checked"}/>${e(T("cp.common.enable"))}</label>` +
         `<span style="flex:1"></span><button data-act="wh-test">${e(T("cp.common.test"))}</button><button data-act="wh-del">${e(T("cp.common.delete"))}</button></div>` +
         `<div class="field"><input class="w-token" placeholder="${e(tokenPh)}" value="" style="flex:1"/></div>` +
         `<div class="field"><input class="w-target" placeholder="${e(T("cp.acct.wh_target_ph"))}" value="${e(w.target)}" style="flex:1"/></div>` +
         `<div class="field"><input class="w-url" placeholder="${e(T("cp.acct.wh_url_ph"))}" value="${e(w.url)}" style="flex:1"/></div>` +
-        `<div class="field"><input class="w-events" placeholder="${e(T("cp.acct.wh_events_ph"))}" value="${e(evs)}" style="flex:1"/></div>` +
+        this._whEventsHtml(w) +
         `</div>`;
+    }
+
+    /* 订阅哪些告警（2026-07-31 分层）：拿到大白话目录 → 分组复选框（业务默认展开、
+       技术折叠进「高级」）；拿不到（旧后端/旧壳未暴露 alertCatalog）→ 回落原「手打
+       逗号别名」文本框，保证新旧环境都自洽、不半残。 */
+    _whEventsHtml(w) {
+      const e = (s) => this._esc(s == null ? "" : s);
+      if (!this._alertCat) {
+        const evs = (w.events || ["autoreply_alert"]).join(",");
+        return `<div class="field"><input class="w-events" placeholder="${e(T("cp.acct.wh_events_ph"))}" value="${e(evs)}" style="flex:1"/></div>`;
+      }
+      const sel = {};
+      (w.events || []).forEach((a) => { sel[a] = true; });
+      const cb = (it) =>
+        `<label class="w-ev" style="display:inline-flex;align-items:center;gap:3px;margin:2px 10px 2px 0;font-size:11px;cursor:pointer">` +
+        `<input type="checkbox" class="w-ev-cb" value="${e(it.alias)}"${sel[it.alias] ? " checked" : ""}/>` +
+        `${e(T(it.label_key))}</label>`;
+      const biz = (this._alertCat.business || []).map(cb).join("");
+      const tech = (this._alertCat.technical || []).map(cb).join("");
+      return `<div class="w-evs" style="margin-top:4px">` +
+        `<div class="sub" style="margin:2px 0">${e(T("cp.acct.wh_events_title"))}</div>` +
+        `<div class="wh-grp-biz" style="margin-bottom:2px">${biz}</div>` +
+        `<details class="wh-grp-tech-wrap"><summary style="cursor:pointer;font-size:11px;color:var(--cp-text-dim,#64748b)">${e(T("cp.acct.wh_grp_tech"))}</summary>` +
+        `<div class="sub" style="font-size:10px;margin:2px 0">${e(T("cp.acct.wh_grp_tech_hint"))}</div>` +
+        `<div class="wh-grp-tech">${tech}</div></details>` +
+        `</div>`;
+    }
+
+    /* 各渠道怎么填的速查（折叠；飞书/企微/钉钉最省事——只贴 Webhook URL）。 */
+    _whChannelGuide() {
+      const e = (s) => this._esc(s == null ? "" : s);
+      return `<details class="wh-guide" style="margin:2px 0 8px">` +
+        `<summary style="cursor:pointer;font-size:11px;color:var(--cp-accent,#4f46e5)">${e(T("cp.acct.wh_guide_title"))}</summary>` +
+        `<div style="padding:4px 0 0;font-size:11px;line-height:1.7;color:var(--cp-text-dim,#64748b)">` +
+        `• ${e(T("cp.acct.wh_ch_feishu"))}<br>` +
+        `• ${e(T("cp.acct.wh_ch_wecom"))}<br>` +
+        `• ${e(T("cp.acct.wh_ch_dingtalk"))}<br>` +
+        `• ${e(T("cp.acct.wh_ch_telegram"))}<br>` +
+        `• ${e(T("cp.acct.wh_ch_whatsapp"))}` +
+        `</div></details>`;
+    }
+
+    /* 「目标达成推送」一键预置（2026-08-18）：选平台加一行、预勾
+       goal_complete+goal_miss——「成交时推送老板/同事的 IM」从翻别名文档
+       变成三步（加行→填凭证→测试保存）。复用整套既有行编辑/测试/保存机制，
+       不造第二套渠道表单。 */
+    _whGoalPresetHtml() {
+      const e = (s) => this._esc(s == null ? "" : s);
+      const btn = (fmt, label) =>
+        `<button data-act="wh-goal-preset" data-fmt="${fmt}">${e(label)}</button>`;
+      return `<div class="wh-goal" style="border:1px dashed var(--cp-border,#e2e8f0);border-radius:8px;padding:6px 8px;margin:0 0 8px">` +
+        `<div style="font-size:11.5px;font-weight:700">${e(T("cp.acct.wh_goal_title"))}</div>` +
+        `<div class="sub" style="margin:2px 0 4px">${e(T("cp.acct.wh_goal_desc"))}</div>` +
+        `<div class="field" style="flex-wrap:wrap;gap:4px">` +
+        btn("telegram", "Telegram") +
+        btn("whatsapp", "WhatsApp") +
+        btn("feishu", T("cp.acct.wh_fmt_feishu")) +
+        btn("wecom", T("cp.acct.wh_fmt_wecom")) +
+        btn("dingtalk", T("cp.acct.wh_fmt_dingtalk")) +
+        `</div></div>`;
+    }
+
+    _whGoalPreset(el) {
+      const fmt = (el && el.getAttribute("data-fmt")) || "telegram";
+      const list = this.shadowRoot.querySelector(".wh-list");
+      if (!list) return;
+      const empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      // 唯一名 goal-push-<fmt>（重名追加 -2/-3……绝不覆盖已有渠道行）
+      const used = new Set(Array.from(list.querySelectorAll(".w-name"))
+        .map((n) => String(n.value || "").trim()));
+      let name = `goal-push-${fmt}`;
+      for (let k = 2; used.has(name); k++) name = `goal-push-${fmt}-${k}`;
+      const i = list.querySelectorAll(".wh-it").length;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = this._whRowHtml(
+        { name, format: fmt, enabled: true,
+          events: ["goal_complete", "goal_miss"] }, i);
+      const row = tmp.firstChild;
+      list.appendChild(row);
+      try { row.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e2) { /* soft */ }
+      // 聚焦该渠道第一个要填的凭证位（TG/Messenger=Token；其余=URL）
+      const inp = row.querySelector(
+        (fmt === "telegram" || fmt === "messenger") ? ".w-token" : ".w-url");
+      if (inp) { try { inp.focus(); } catch (e2) { /* soft */ } }
+      const msg = this.shadowRoot.querySelector(".wh-msg");
+      if (msg) {
+        msg.textContent = T("cp.acct.wh_goal_added", { name }) +
+          (fmt === "whatsapp" ? " " + T("cp.acct.wh_goal_wa_hint") : "");
+        msg.style.color = "";
+      }
     }
 
     _whAddRow() {
@@ -553,7 +718,11 @@
       if (!list) return [];
       return Array.from(list.querySelectorAll(".wh-it")).map((it) => {
         const g = (s) => { const n = it.querySelector(s); return n ? n.value.trim() : ""; };
-        const events = g(".w-events").split(",").map((x) => x.trim()).filter(Boolean);
+        // 分组复选框（新）优先；无则回落逗号文本框（旧后端/旧壳）
+        const cbs = it.querySelectorAll(".w-ev-cb");
+        const events = cbs.length
+          ? Array.from(cbs).filter((c) => c.checked).map((c) => c.value)
+          : g(".w-events").split(",").map((x) => x.trim()).filter(Boolean);
         return {
           name: g(".w-name") || "webhook",
           format: it.querySelector(".w-fmt").value,
@@ -573,7 +742,7 @@
         const d = await this._client.setAutoReplyWebhooks(this._whCollect());
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.wh_saved", { count: d.count }) : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.common.save_fail"); msg.style.color = "var(--cp-danger,#dc2626)"; }
@@ -600,7 +769,7 @@
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.wh_test_ok")
             : T("cp.acct.wh_test_fail", { err: (d && d.error) || T("cp.acct.wh_unreachable") });
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.acct.wh_test_fail_simple"); msg.style.color = "var(--cp-danger,#dc2626)"; }
@@ -661,7 +830,7 @@
         const d = await this._client.setAutoReplyConfig(patch);
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.saved") : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.common.save_fail"); msg.style.color = "var(--cp-danger,#dc2626)"; }
@@ -746,26 +915,52 @@
           d = await this._client.loginStatus(this._login);
         } catch (e) { return; }
         const st = (d && d.status) || "";
-        // provider 可能在轮询里刷新 QR（如 protocol 令牌轮换）
-        if ((d && d.qr_image) || (d && d.qr_url)) {
+        // provider 可能在轮询里刷新 QR（如 protocol 令牌轮换）。但 PIN 阶段 provider 仍会
+        // 回带 qr_image，重绘会把刚显示的验证码冲掉——那正是用户此刻要照着输的东西。
+        if (((d && d.qr_image) || (d && d.qr_url)) && st !== "pin_needed") {
           const stEl = qr.querySelector(".st");
           if (stEl && st !== "authorized") this._paintQr(qr, d);
         }
         const stEl = qr.querySelector(".st");
         if (st === "authorized") {
-          this._stopPoll();
+          this._stopPoll({ authorized: true });
           if (stEl) { stEl.textContent = T("cp.acct.login_ok"); stEl.className = "st ok"; }
           setTimeout(() => this.reload(), 1000);
+        } else if (st === "pin_needed") {
+          // 不停轮询：PIN 要用户在手机上输完，后端才会走到 authorized
+          this._paintPin(qr, (d && d.pin) || "");
+          if (stEl) { stEl.textContent = T("cp.acct.pin_waiting"); stEl.className = "st"; }
         } else if (st === "failed" || st === "expired") {
           this._stopPoll();
-          if (stEl) { stEl.textContent = st === "expired" ? T("cp.acct.qr_expired") : T("cp.acct.login_fail"); stEl.className = "st fail"; }
+          const reason = (d && d.reason_code) || "";
+          const key = REASON_KEYS[reason] || (st === "expired" ? "cp.acct.qr_expired" : "cp.acct.login_fail");
+          if (stEl) { stEl.textContent = T(key); stEl.className = "st fail"; }
         }
       }, 2500);
     }
 
-    _stopPoll() {
+    /** PIN 区幂等重绘：同一串码重复回来不重建 DOM（否则每 2.5s 闪一次）。 */
+    _paintPin(qr, pin) {
+      const code = String(pin || "");
+      if (!code) return;
+      let box = qr.querySelector(".pin");
+      if (box && box.dataset.pin === code) return;
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "pin";
+        const st = qr.querySelector(".st");
+        if (st) qr.insertBefore(box, st); else qr.appendChild(box);
+      }
+      box.dataset.pin = code;
+      const digits = code.split("").map((c) => `<span class="pin-d">${this._esc(c)}</span>`).join("");
+      box.innerHTML = `<div class="pin-label">${this._esc(T("cp.acct.pin_label"))}</div>`
+        + `<div class="pin-code" aria-live="polite">${digits}</div>`;
+    }
+
+    _stopPoll(opts) {
       if (this._poll) { clearInterval(this._poll); this._poll = null; }
-      if (this._login && this._client) {
+      // 已授权的会话绝不 cancel：客户端已交给后台 worker 收发，取消等于把刚上线的号踢下线
+      if (this._login && this._client && !(opts && opts.authorized)) {
         try { this._client.cancelLogin(this._login); } catch (e) { /* ignore */ }
       }
       this._login = null;

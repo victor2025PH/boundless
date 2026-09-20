@@ -1,0 +1,55 @@
+{
+  "version": 2,
+  "_readme": [
+    "官方表情包清单：POST /api/stickers/seed-official 读取本文件幂等导入。",
+    "两类条目：",
+    "  line_sticker_range / line_stickers = LINE 官方商店贴纸（纯 ID 映射，",
+    "    面板预览走 LINE CDN 静帧，仅 LINE 会话可原生发送——三个包是 LINE",
+    "    Messaging API 公开的默认免费贴纸包，个人号 okline send_sticker 可发）。",
+    "  files = 相对本目录的本地图片（png/jpg/webp/gif），经规范化管线转",
+    "    512px webp 入库，四平台可发。条目两种写法：纯路径字符串，或",
+    "    {\"file\", \"emoji\", \"keywords\"} 字典（带检索标签——面板搜索按",
+    "    emoji_tag/keywords 过滤，纯路径导入的贴纸搜不到，建议都用字典）。",
+    "starter/ 由 scripts/gen_starter_stickers.py 程序化生成（确定性可重跑，",
+    "  文件名/emoji/keywords 三元组以脚本内 STICKERS 表为单一事实源，门禁",
+    "  tests/test_starter_sticker_assets.py 钉住两边一致）；品牌正式素材",
+    "  做好后放进 brand/ 并登记在此，播种管线零改动。"
+  ],
+  "packs": [
+    {
+      "id": "starter-faces",
+      "title": "小圆脸",
+      "sort": 5,
+      "files": [
+        {"file": "starter/smile.webp", "emoji": "😊", "keywords": ["微笑", "开心", "smile", "happy"]},
+        {"file": "starter/laugh.webp", "emoji": "😄", "keywords": ["大笑", "哈哈", "laugh", "haha"]},
+        {"file": "starter/love.webp", "emoji": "😍", "keywords": ["爱心眼", "喜欢", "love", "adore"]},
+        {"file": "starter/wow.webp", "emoji": "😮", "keywords": ["惊讶", "哇", "wow", "surprised"]},
+        {"file": "starter/cry.webp", "emoji": "😢", "keywords": ["哭", "难过", "cry", "sad"]},
+        {"file": "starter/sleep.webp", "emoji": "😴", "keywords": ["晚安", "睡觉", "sleep", "goodnight"]},
+        {"file": "starter/think.webp", "emoji": "🤔", "keywords": ["思考", "想想", "think", "hmm"]},
+        {"file": "starter/angry.webp", "emoji": "😠", "keywords": ["生气", "哼", "angry", "mad"]},
+        {"file": "starter/heart.webp", "emoji": "❤️", "keywords": ["爱心", "比心", "heart", "love"]},
+        {"file": "starter/ok.webp", "emoji": "✅", "keywords": ["好的", "收到", "ok", "done"]}
+      ]
+    },
+    {
+      "id": "line-brown-cony-sally",
+      "title": "Brown & Cony & Sally",
+      "sort": 10,
+      "line_sticker_range": {"package_id": "11537", "from": 52002734, "to": 52002773}
+    },
+    {
+      "id": "line-choco-friends",
+      "title": "CHOCO & Friends",
+      "sort": 20,
+      "line_sticker_range": {"package_id": "11538", "from": 51626494, "to": 51626533}
+    },
+    {
+      "id": "line-universtar-bt21",
+      "title": "UNIVERSTAR BT21",
+      "sort": 30,
+      "line_sticker_range": {"package_id": "11539", "from": 52114110, "to": 52114149}
+    }
+  ]
+}

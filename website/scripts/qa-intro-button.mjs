@@ -24,6 +24,12 @@
  *   先启动站点服务（npm run dev 或 npm run build && npm run start），
  *   确保 --url 指向的地址可访问。
  *
+ * 与生产行为的关系（2026-07 片头改造）：
+ *   开场遮罩默认 ~2.6s 自动散场——本脚本的 hover/press 检查链耗时超过它，会在断言中途
+ *   被自动散场打断，故对被测 URL 自动追加 ?introhold=1（组件内置 QA 逃生舱，仅禁用
+ *   自动散场）。遮罩整层现在任意点击即跳过：按钮 click 冒泡到整层只会空转一次幂等的
+ *   enter()，press-charging / click-warping 的既有断言不受影响。
+ *
  * 用法：
  *   node scripts/qa-intro-button.mjs
  *   node scripts/qa-intro-button.mjs --url http://localhost:3470/
@@ -49,6 +55,8 @@ function getArg(name, fallback) {
 }
 
 const url = getArg('url', 'http://localhost:3470/');
+// 片头默认 ~2.6s 自动散场：断言链需要遮罩常驻 → 自动追加 ?introhold=1（仅禁用自动散场）
+const qaUrl = url.includes('introhold=') ? url : url + (url.includes('?') ? '&' : '?') + 'introhold=1';
 
 // Next dev 已知水合警告，不计入控制台错误
 const IGNORED_CONSOLE_PATTERNS = ['Extra attributes from the server'];
@@ -77,21 +85,16 @@ try {
     if (!ignored(text)) consoleErrors.push(`pageerror: ${text}`);
   });
 
-  // 钉死实验桶保证确定性：auto_enter=a 防自动进入抢时序；btn_shape=b 与现行胶囊定稿一致
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem('ab_intro_auto_enter', 'a');
-      localStorage.setItem('ab_intro_btn_shape', 'b');
-    } catch {}
-  });
+  // 旧 A/B 桶钉死（ab_intro_auto_enter / ab_intro_btn_shape）已随实验下线移除：
+  // 12s 自动进入实验被片头无条件自动散场取代，时序确定性现由 URL 上的 ?introhold=1 保证。
 
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto(qaUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   const btn = page.locator('.bl-enter-btn');
   try {
     await btn.waitFor({ state: 'visible', timeout: 20000 });
   } catch {
-    console.error(`[qa] .bl-enter-btn 未在 20s 内可见（url: ${url}），请确认服务已启动且开场页正常渲染。`);
+    console.error(`[qa] .bl-enter-btn 未在 20s 内可见（url: ${qaUrl}），请确认服务已启动且开场页正常渲染。`);
     await browser.close();
     process.exit(2);
   }
@@ -243,12 +246,12 @@ try {
 
   // ---------- 汇总输出 ----------
   const pass = checks.every((c) => c.pass);
-  console.log(JSON.stringify({ url, checks, pass }, null, 2));
+  console.log(JSON.stringify({ url: qaUrl, checks, pass }, null, 2));
   await browser.close();
   process.exit(pass ? 0 : 1);
 } catch (err) {
   console.error('[qa] 脚本执行异常（请确认本地服务已启动）:', err?.message ?? err);
-  if (checks.length) console.log(JSON.stringify({ url, checks, pass: false }, null, 2));
+  if (checks.length) console.log(JSON.stringify({ url: qaUrl, checks, pass: false }, null, 2));
   await browser.close().catch(() => {});
   process.exit(1);
 }

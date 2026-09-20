@@ -1,0 +1,20 @@
+[Unit]
+Description=ChatX relay (relay.bd2026.cc) - public HTTPS callbacks to NAT-ed ChatX instances
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/relay
+EnvironmentFile=-/home/ubuntu/relay/relay.env
+Environment=RELAY_STATE=/home/ubuntu/relay/state/devices.json
+Environment=RELAY_VERIFY_DIR=/home/ubuntu/relay/verify
+ExecStart=/home/ubuntu/relay/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18790 --proxy-headers --forwarded-allow-ips 127.0.0.1 --log-level warning
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -34,17 +34,31 @@ except Exception:
     pass
 
 
-def _load_config() -> dict:
+async def _load_config() -> dict:
+    """按**应用同一口径**装载配置（主 config.yaml + config.local.yaml overlay）。
+
+    旧实现只 safe_load 主文件，完全无视 overlay —— 而所有运营开关（各平台
+    protocol_enabled / web_enabled / orchestrator_enabled…）恰恰都写在 overlay 里。
+    结果是自检报告与线上实况系统性不符：本机 overlay 明明开着
+    ``whatsapp.protocol_enabled: true``，doctor 却一直报「未启用」。
+    一个会说谎的诊断比没有诊断更糟——它把人引向错误的修复方向。
+    """
     cfg_path = ROOT / "config" / "config.yaml"
     if not cfg_path.exists():
         return {}
     try:
-        import yaml
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        from src.utils.config_manager import ConfigManager
+        cm = ConfigManager(str(cfg_path))
+        await cm.load()          # 主文件 + overlay 深合并 + AITR_* env 覆盖
+        return cm.config or {}
     except Exception as ex:  # noqa: BLE001
-        print(f"[warn] 读取 {cfg_path} 失败: {ex}")
-        return {}
+        print(f"[warn] 读取配置失败（回落只读主文件）: {ex}")
+        try:
+            import yaml
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except Exception:
+            return {}
 
 
 async def _smoke_ingest(server_url: str, token: str) -> bool:
@@ -90,7 +104,7 @@ async def main() -> int:
 
     from src.integrations.protocol_diagnostics import format_report, readiness
 
-    config = _load_config()
+    config = await _load_config()
     report = await readiness(config)
 
     if args.json:

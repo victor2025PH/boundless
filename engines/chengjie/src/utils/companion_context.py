@@ -34,6 +34,7 @@ _REL_PROVIDERS: Dict[str, Optional[_RelLookup]] = {
     "record": None,
     "story": None,
     "entitlement": None,
+    "origin": None,
 }
 
 
@@ -44,6 +45,7 @@ def set_relationship_providers(
     message_recorder: Optional[_RelLookup] = None,
     story_recorder: Optional[_RelLookup] = None,
     entitlement_resolver: Optional[_RelLookup] = None,
+    origin_block_lookup: Optional[_RelLookup] = None,
 ) -> None:
     """注册关系事实源查询器/记录器（幂等；仅覆盖显式传入的项）。
 
@@ -59,6 +61,9 @@ def set_relationship_providers(
       据真实拥有判准入。**仅在 monetization store 就绪时注册**；未注册 → ``resolve_entitlement``
       返回 None → 行为等同旧版（付费场景对所有人锁，零回归）。约定：``contact_key`` ==
       ``process_message`` 的 ``user_id``（端用户身份），支付流水须按同一 key 写权益。
+    - ``origin_block_lookup``：``(channel/account_id/external_id) -> str``——跨平台档案
+      叙事块（``contacts.origin_context.make_origin_provider`` 产物；contacts 就绪时注册，
+      开关热闸在 provider 内部）。未注册 → ``resolve_origin_block`` 返回 None → 零行为变化。
     """
     if intimacy_lookup is not None:
         _REL_PROVIDERS["intimacy"] = intimacy_lookup
@@ -70,6 +75,8 @@ def set_relationship_providers(
         _REL_PROVIDERS["story"] = story_recorder
     if entitlement_resolver is not None:
         _REL_PROVIDERS["entitlement"] = entitlement_resolver
+    if origin_block_lookup is not None:
+        _REL_PROVIDERS["origin"] = origin_block_lookup
 
 
 def reset_relationship_providers() -> None:
@@ -79,6 +86,7 @@ def reset_relationship_providers() -> None:
     _REL_PROVIDERS["record"] = None
     _REL_PROVIDERS["story"] = None
     _REL_PROVIDERS["entitlement"] = None
+    _REL_PROVIDERS["origin"] = None
 
 
 def record_relationship_message(
@@ -175,6 +183,29 @@ def resolve_funnel_stage(
             external_id=str(chat_key),
         )
         s = str(st).strip() if st is not None else ""
+        return s or None
+    except Exception:
+        return None
+
+
+def resolve_origin_block(
+    account_id: Any, chat_key: Any, *, channel: str = "telegram"
+) -> Optional[str]:
+    """查当前会话的跨平台档案叙事块（渲染好的 ``_origin_block`` 文本）。
+
+    未注册 provider（contacts 关 / origin_profile 关）/ 空 key / 异常 / 无可说内容
+    → None（调用方不注入，行为同旧版、零回归）。
+    """
+    fn = _REL_PROVIDERS.get("origin")
+    if fn is None or chat_key in (None, ""):
+        return None
+    try:
+        block = fn(
+            channel=channel,
+            account_id=str(account_id or "default"),
+            external_id=str(chat_key),
+        )
+        s = str(block).strip() if block else ""
         return s or None
     except Exception:
         return None
@@ -290,4 +321,5 @@ __all__ = [
     "resolve_intimacy_score",
     "resolve_funnel_stage",
     "resolve_entitlement",
+    "resolve_origin_block",
 ]

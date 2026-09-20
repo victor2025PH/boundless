@@ -500,6 +500,10 @@ APP_EXTRA_FILES = ("config.example.json", "_warmup_face.jpg", "assets/app.ico")
 APP_TREES = ("static", "requirements",
              "data/starter_profiles")     # 启动角色包(占位形象+音色)：全新装机首启播种
 # 递归整树；tools 单独(仅 *.py 且剔 _*)
+# [P6-C·2026-07-16] 树内排除（前缀匹配，与 AvatarHub.iss [Files] static 行的 Excludes 同步改）：
+# static/ui_src = 控制台拆分后的**源目录**（壳+12 页签片段），产物 ui.html 已在包内；
+# 客户机没有 _build_ui.py（tools _* 被排除），带上源只会诱导"手改源以为会生效"的误会。
+APP_TREE_EXCLUDES = ("static/ui_src",)
 
 
 def _match_any(name: str, pats) -> bool:
@@ -520,7 +524,10 @@ def iter_app_files() -> list[tuple[str, Path]]:
         if root.is_dir():
             for f in sorted(root.rglob("*")):
                 if f.is_file() and not f.is_symlink():
-                    members.append((str(f.relative_to(HERE)).replace("\\", "/"), f))
+                    arc = str(f.relative_to(HERE)).replace("\\", "/")
+                    if any(arc == ex or arc.startswith(ex + "/") for ex in APP_TREE_EXCLUDES):
+                        continue
+                    members.append((arc, f))
     tools = HERE / "tools"
     if tools.is_dir():
         for f in sorted(tools.glob("*.py")):

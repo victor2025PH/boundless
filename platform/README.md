@@ -36,10 +36,27 @@
 
 `platform/licensing/` 原有 SKU 注册表读取器（`sku_registry.py/.json`）；融合期新增 `license_client.py` + `LICENSE_CONTRACT.md` + `license_schema.json`：按 avatarhub 模式，**卡密/收款实现留在智控王 `license_server.py`（aiohttp 独立服务），platform 只放契约 + stdlib 瘦客户端**消费其 HTTP 面（validate/activate/heartbeat/quota/usage/products/payment/order）。`LicenseClient` 可降级（`LICENSE_SERVER_URL` 不可达返回 `{"available":False}`），并与 `sku_registry` 按 `sku_id` 对齐。**迁移前必须先修复的服务端高危问题**见 `LICENSE_CONTRACT.md`：orders/coupons 表 schema 漂移、双 JWT/双余额/双优惠券、默认明文密钥。
 
+### 1e. credpool 中央凭据池：Telegram api_id/api_hash 托管分配（集团统一注册与补给）
+
+新用户在 `my.telegram.org` 申请 api_id/api_hash 是接入转化率的最大黑洞——官方规则**一个手机号只能注册一组**，申请页无提示 `ERROR`/VPN/广告拦截/IP 与号码归属国不一致/24h 风控/429 限流，国内尤其易全程失败；且用户看到 "API ID / API Hash" 会直接判定"这是给程序员的"。故新增第七条契约，把凭据变成**集团统一注册、统一补给**的后台资源，终端用户全程无需接触。
+
+| 子目录 | 契约（做什么） | 关键接口 | 提供方 | 消费方 | 状态 |
+|---|---|---|---|---|---|
+| `credpool/` | **中央凭据池**：按账号分配/释放托管 Telegram 凭据，回报健康分喂池的自动切换 | `allocate(phone)` · `release()` · `report()` · `account()` · `available()` | 智控 `tgkz2026/backend` 主后台 `:8000` 的 `api-pool`（**已接线**，`admin/api_pool.py` 早有成熟实现） | chengjie（智聊/通译，**已接线**，默认关 `platform_login.telegram.credpool.enabled`）/ 智控自身 | **契约+client+服务端鉴权+引擎接线✓** |
+
+三个与既有契约不同、需要知道的点：
+
+- **鉴权是新增的第三种**：原 `api-pool` 只认人类管理员 JWT。给产品发管理员 JWT 权限过大且无法按产品吊销，故智控侧新增**产品服务作用域 token**（`admin/service_token.py`，请求头 `X-Service-Token`，作用域 `credpool:*`，落库只存 sha256，明文仅签发时返回一次，可独立吊销）。管理员路径**行为零变化**，是纯增量分支。
+- **粘定键（sticky key）是硬约束**：pyrogram 的 session 与登录时所用的 api_id 绑定，换凭据会把会话跑坏。故每个账号首次扫码生成 `credpool_key` 写进账号注册表 meta，之后 runner 每次拉起用同一 key 取回**同一组**凭据——本地**不存 api_hash 明文**，凭据权威始终在中央池。
+- **容量安全默认 `max_accounts = 5`**：Telegram 未公布单 api_id 的账号上限，官方硬规则只有"一号一组""公开 api_id 触发 `API_ID_PUBLISHED_FLOOD`""非官方客户端登录进入观察"三条。故按**压低爆炸半径**取保守值，并**禁止用公共 api_id（如 Telegram Desktop 的 2040）兜底**。补给闭环＝`forecast` 容量预测 + `alerts` 告警 + **每日 Telegram 日报**（`admin/pool_daily_report.py`，复用既有 `AlertService` 的 Telegram 渠道，与其它日报同一个账号，零新增配置，按产品分帐）。
+
+**隔离＝专业版权益（三隔离已齐）**：档位由**服务端**查 `licenses` 表判定（`admin/member_tier.py`），产品只送 `license_key` + `machine_id`、自报档位一律忽略；卡密**首次使用即绑机**，换机降回 `free`，且**不送 `machine_id` 一律按 `free`**（否则"不送"就成了绕过绑机的后门）。付费档拿到的是三件套：① `min_member_level` 受限的**专属凭据**；② 智控代理池按同一粘定键下发的**独立出口 IP**（代理池为空则不给，回落自身配置不阻塞登录；运营显式指定的代理永远优先）；③ chengjie 侧 `device_fingerprint.py` 派生的**自洽且恒定的设备指纹**（指纹本体落账号 meta，机型表将来刷新不会改掉存量账号身份）。生效情况经 `credpool_stats.py` → `/api/workspace/metrics.credpool` + Prometheus + ops「🔑 中央凭据池」卡观测：`pool_share` 回答"池有没有在生效"，`proxy_share` 回答"隔离是不是只做了一半"。
+
 ### 1d. 链条总闸自测（两个互补脚本）
 
-- `platform/chain_selftest.py`（纯 stdlib）自动发现 `platform/*/` 下所有瘦客户端，在**清空全部总线环境变量**的单机模式下逐个跑降级自测，断言"全部优雅降级、无一抛异常、exit 0"——证明"断总线各自独立运行"。当前 6 条契约（compliance/leadbus/enable/replybus/licensing/observability）全绿。新契约落地后自动纳入，无需改本文件。
+- `platform/chain_selftest.py`（纯 stdlib）自动发现 `platform/*/` 下所有瘦客户端，在**清空全部总线环境变量**的单机模式下逐个跑降级自测，断言"全部优雅降级、无一抛异常、exit 0"——证明"断总线各自独立运行"。当前 7 条契约（compliance/leadbus/enable/replybus/licensing/observability/credpool）全绿。新契约落地后自动纳入，无需改本文件。
 - `platform/chain_live_smoke.py`（2026-07-19 新增）反过来证明"**接上总线，客户端与 chengjie 真实路由字节级兼容**"：起一个只挂 `leadbus_routes.py`/`enable_routes.py`/`replybus_routes.py` 三条新路由的裸 FastAPI 服务（同 chengjie 自己 `tests/test_*_routes.py` 的隔离范式，不碰 Telegram/GPU/生产库），用真实瘦客户端对它发起真实 HTTP 请求。两个脚本互补：一个证明"没有总线也能活"，一个证明"有总线时真的能通"。
+- `platform/credpool/credpool_live_smoke.py`（2026-07-27 新增）是 credpool 契约的同款"真实接线"演练，但更进一步：它跑的是**智控真 aiohttp + 真 admin 处理器 + 真落库**（临时数据目录 + 随机端口 + **起服前自证隔离**），覆盖鉴权拒绝/会员定档/卡密绑机/换机降级/独立出口/粘定复用/成败回报/释放/结构化错误/产品归属/真数据日报。**首次运行即揪出 5 个既有缺陷**（跨库定档、30 秒自锁、`sqlite3.Row.get` 三处、未定义的 `ErrorCode.OPERATION_FAILED` 被 48 处引用），全部已修——这就是"替身测试全绿也不等于链路能通"的实证。
 
 ---
 

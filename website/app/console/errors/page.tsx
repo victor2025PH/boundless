@@ -1,0 +1,164 @@
+// /console/errors：客户端错误回传看板（公网测试者的远程可观测）。
+// 数据源 = DATA_DIR/client-logs.jsonl（桌面 beacon 回传，见 lib/telemetry_beacon.py）。
+// 只读聚合：版本分布 / 错误 Top / 崩溃 / 最近事件。默认近 24h，?h=6 可调窗口。
+import { AlertTriangle, Bug, MonitorSmartphone, Skull } from "lucide-react";
+import { hasConsoleSession } from "@/lib/console-auth";
+import { summarizeClientLogs } from "@/lib/client-logs";
+import { LOG_LEVEL_LABEL, lbl } from "../labels";
+import { Card, DataTable, EmptyState, PageHeader, SectionTitle, Td, fmtDateTime } from "../parts";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function Stat({ label, value, tone }: { label: string; value: number | string; tone?: "amber" | "red" }) {
+  const c = tone === "red" ? "text-rose-400" : tone === "amber" ? "text-amber-300" : "text-white";
+  return (
+    <div className="rounded-xl border border-ink-700 bg-ink-900/40 px-4 py-3">
+      <div className={`text-xl font-bold ${c}`}>{value}</div>
+      <div className="mt-0.5 text-[11px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+export default async function ErrorsPage({ searchParams }: { searchParams: { h?: string } }) {
+  if (!hasConsoleSession()) return null;
+  const h = Math.min(168, Math.max(1, Number(searchParams.h) || 24));
+  const s = await summarizeClientLogs(h);
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="客户端错误"
+        desc={
+          <>
+            <Bug className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
+            公网/内网测试者的桌面端 <span className="font-medium text-amber-300/90">错误摘要 + 崩溃</span>
+            自动回传归集（消毒后：无聊天内容、无密钥）。近 {h} 小时；
+            <a className="ml-1 text-amber-300 hover:underline" href="?h=6">6h</a> ·
+            <a className="ml-1 text-amber-300 hover:underline" href="?h=24">24h</a> ·
+            <a className="ml-1 text-amber-300 hover:underline" href="?h=72">72h</a>
+          </>
+        }
+      />
+
+      {!s.present || s.total_events === 0 ? (
+        <EmptyState
+          title="窗口内还没有回传"
+          hints={[
+            <>桌面端装好并联网后，错误日志与崩溃会自动回传到这里。</>,
+            <>没有回传通常是好事（没人报错）；也可能是还没人在该窗口内启动。</>,
+          ]}
+        />
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="事件总数" value={s.total_events} />
+            <Stat label="涉及机器数" value={s.machines} />
+            <Stat label="错误类型" value={s.top_errors.length} tone={s.top_errors.length ? "amber" : undefined} />
+            <Stat label="崩溃/异常退出" value={s.crashes.length} tone={s.crashes.length ? "red" : undefined} />
+          </div>
+
+          <Card>
+            <SectionTitle count={s.by_version.length}>
+              <MonitorSmartphone className="mr-1 inline h-4 w-4 align-text-bottom" />版本分布
+            </SectionTitle>
+            <DataTable head={["版本", "机器数", "事件数"]}>
+              {s.by_version.map((v) => (
+                <tr key={v.ver} className="hover:bg-ink-700/40">
+                  <Td><span className="font-mono text-xs">{v.ver || "?"}</span></Td>
+                  <Td>{v.machines}</Td>
+                  <Td>{v.events}</Td>
+                </tr>
+              ))}
+            </DataTable>
+          </Card>
+
+          {s.crashes.length > 0 && (
+            <Card className="border-rose-500/30">
+              <SectionTitle count={s.crashes.length}>
+                <Skull className="mr-1 inline h-4 w-4 align-text-bottom text-rose-400" />崩溃 / 异常退出（哨兵）
+              </SectionTitle>
+              <DataTable head={["时间", "机器", "版本", "详情"]}>
+                {s.crashes.map((c, i) => (
+                  <tr key={i} className="hover:bg-ink-700/40">
+                    <Td className="whitespace-nowrap text-xs text-slate-400">{fmtDateTime(c.t)}</Td>
+                    <Td><span className="font-mono text-[11px]">{c.fp || "?"}</span></Td>
+                    <Td><span className="font-mono text-[11px]">{c.ver}</span></Td>
+                    <Td><span className="text-xs text-slate-300">{c.msg}</span></Td>
+                  </tr>
+                ))}
+              </DataTable>
+            </Card>
+          )}
+
+          <Card>
+            <SectionTitle count={s.top_errors.length}>
+              <AlertTriangle className="mr-1 inline h-4 w-4 align-text-bottom text-amber-400" />错误 Top（合并计数）
+            </SectionTitle>
+            {s.top_errors.length === 0 ? (
+              <p className="px-1 py-3 text-xs text-slate-400">窗口内只有启动心跳，无错误或警告。</p>
+            ) : (
+              <DataTable head={["次数", "机器", "来源", "消息", "最近"]}>
+                {s.top_errors.map((e, i) => (
+                  <tr key={i} className="hover:bg-ink-700/40">
+                    <Td><span className="font-semibold text-amber-300">{e.count}</span></Td>
+                    <Td>{e.machines}</Td>
+                    <Td><span className="font-mono text-[11px] text-slate-400">{e.logger}</span></Td>
+                    <Td><span className="text-xs text-slate-300">{e.msg}</span></Td>
+                    <Td className="whitespace-nowrap text-[11px] text-slate-500">{fmtDateTime(e.last)}</Td>
+                  </tr>
+                ))}
+              </DataTable>
+            )}
+          </Card>
+
+          {/* 逐条明细：Top 是合并计数，排障时要看「同一台机器先后报了什么」的时序——
+              这份 lib 一直在算（summarize.recent），此前页面没消费。滤掉 beacon 心跳只留有信息量的行。 */}
+          <Card>
+            <SectionTitle count={recentMeaningful(s.recent).length}>最近回传明细（心跳已滤）</SectionTitle>
+            {recentMeaningful(s.recent).length === 0 ? (
+              <p className="px-1 py-3 text-xs text-slate-500">窗口内除启动心跳外没有其他回传。</p>
+            ) : (
+              <DataTable head={["时间", "级别", "机器", "版本", "来源", "消息"]}>
+                {recentMeaningful(s.recent).map((r, i) => (
+                  <tr key={i} className="hover:bg-ink-700/40">
+                    <Td className="whitespace-nowrap text-xs text-slate-500">{fmtDateTime(r.t)}</Td>
+                    <Td>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          r.logger === "exit_sentinel"
+                            ? "bg-rose-500/15 text-rose-300"
+                            : r.level.toUpperCase() === "ERROR" || r.level.toUpperCase() === "CRITICAL"
+                              ? "bg-rose-500/15 text-rose-300"
+                              : r.level.toUpperCase() === "WARNING"
+                                ? "bg-amber-500/15 text-amber-300"
+                                : "bg-ink-700 text-slate-400"
+                        }`}
+                      >
+                        {r.logger === "exit_sentinel" ? "崩溃哨兵" : lbl(LOG_LEVEL_LABEL, r.level || null)}
+                      </span>
+                    </Td>
+                    <Td><span className="font-mono text-[11px]">{r.fp || "?"}</span></Td>
+                    <Td><span className="font-mono text-[11px]">{r.ver || "?"}</span></Td>
+                    <Td><span className="font-mono text-[11px] text-slate-400">{r.logger}</span></Td>
+                    <Td>
+                      <span className="text-xs text-slate-300">
+                        {r.msg}
+                        {r.n > 1 && <span className="ml-1 text-[10px] text-slate-500">×{r.n}</span>}
+                      </span>
+                    </Td>
+                  </tr>
+                ))}
+              </DataTable>
+            )}
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 明细行过滤：beacon 启动心跳无排障信息量，滤掉；其余（ERROR/WARNING/崩溃哨兵/INFO 摘要）保留。 */
+function recentMeaningful(rows: Awaited<ReturnType<typeof summarizeClientLogs>>["recent"]) {
+  return rows.filter((r) => r.logger !== "beacon").slice(0, 25);
+}

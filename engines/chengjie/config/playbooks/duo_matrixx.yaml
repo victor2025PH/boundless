@@ -1,0 +1,79 @@
+# 双号对话 · 智控 MatrixX —— P3-5 两角最小单元
+#
+# 为什么要有一本「恰好两个角色」的剧本
+# ------------------------------------
+# 四角剧本（growth_matrixx）要四个独立出口的号；两个号硬上会 understaffed 拒演，
+# 降级顶替＝自问自答。两个号的正确形态是 advocate × skeptic 对打：有质疑有化解，
+# 比 solo 独白可信，又不虚构第三个人。
+#
+# 结构沿用范式（见 growth_matrixx 头注）：
+#   1) intent 写意图不写台词；
+#   2) soft 前低后高再回落；
+#   3) skeptic 的质疑要真的扎人，被化解后也不许秒变吹捧。
+#
+# 弧线 8 拍：吐槽痛点 → 附和踩坑 → 问怎么解 → 种草浮出 → 质疑封号 → 化解不打包票
+#           → 保留态度 → 自然散场。收尾留在 skeptic 侧的「半信半疑」上——
+#           被说服到九成的怀疑者，比满口称赞的托可信得多。
+id: duo_matrixx
+name: 双号对话 · 智控 MatrixX
+system: growth
+products:
+  - matrixx
+soft_ad_level: 4
+
+roles:
+  - slot: advocate
+    desc: 真在用的人。分享体感而非参数，不背话术，不发链接，不打包票。
+  - slot: skeptic
+    desc: 泼冷水的人。质疑要具体到能扎人（封号、挂机、价格），被化解后保留态度。
+
+beats:
+  - id: b1_pain
+    role: skeptic
+    intent: 吐槽手上账号越来越多，来回切换很容易把消息发错人。用自己刚踩坑的口吻抱怨，绝对不要提任何工具或产品。
+    soft: 0
+    pace: chatty
+
+  - id: b2_echo
+    role: advocate
+    intent: 附和这个痛点，补一个自己以前踩过的具体小事故。只共情不给方案，不要提任何工具。
+    soft: 0
+    pace: chatty
+
+  - id: b3_ask_how
+    role: skeptic
+    intent: 问对方现在是怎么管这么多号的，是不是也只能硬切。语气是随口好奇。
+    soft: 0
+    pace: normal
+
+  - id: b4_reveal
+    role: advocate
+    intent: 顺着说自己现在把所有号的消息收在一个后台里看，不用来回切。像随口分享，不要介绍功能清单，不要念宣传语。
+    product: matrixx
+    soft: 3
+    pace: normal
+
+  - id: b5_doubt
+    role: skeptic
+    intent: 质疑这类工具的风险——会不会被判定成机器人挂机导致封号。语气是真的担心，不是抬杠。
+    soft: 0
+    pace: chatty
+
+  - id: b6_resolve
+    role: advocate
+    intent: 化解这个担心——说明它不是群发机器人，消息还是一条条正常发，只是聚在一个地方看和回。承认风险取决于怎么用，不要打包票。
+    product: matrixx
+    soft: 4
+    pace: slow
+
+  - id: b7_reserve
+    role: skeptic
+    intent: 承认听起来有点意思，但保留态度，说还是得自己看过才知道。不要转变成吹捧。
+    soft: 1
+    pace: normal
+
+  - id: b8_close
+    role: advocate
+    intent: 自然收住，不再推产品，把话题让回群里（比如问问群里其他人平时怎么管）。不要发链接，不要留联系方式。
+    soft: 1
+    pace: slow

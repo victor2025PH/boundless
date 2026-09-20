@@ -82,6 +82,58 @@ def test_detect_promise_question_sentence_skipped_but_statement_caught():
     assert pg.detect_media_promise(txt) == "image"
 
 
+# ── A2 视频通话承诺（2026-07-22，真机实录：AI 声称"视频都开到㗎"）──────────────
+@pytest.mark.parametrize("text", [
+    # 真机事故原文（粤语）
+    "哈哈，有得啊，我微信视频号同 WhatsApp 视频都开到㗎～",
+    "可以视频啊，你打过来嘛",
+    "我们开个视频聊吧",
+    "跟你视频也没问题呀",
+    "同你視頻傾下啦",
+    "we can do a video call anytime",
+    "let's video chat!",
+    "I'll video call you tonight",
+])
+def test_detect_videocall_promise_positive(text):
+    assert pg.detect_media_promise(text) == "video_call"
+
+
+@pytest.mark.parametrize("text", [
+    # 否认/婉拒：正是我们想要的行为，绝不能剥
+    "这边不方便开视频啦，先文字聊嘛",
+    "我不能视频哦，你别闹",
+    "视频就算了吧，打字挺好的",
+    # 远期/条件
+    "改天有机会我们再视频～",
+    "下次见面前先视频认识下吧",
+    # 疑问 offer
+    "要不要视频呀？",
+    "想视频吗？",
+    # 谈论视频内容（媒体视频，不是通话）
+    "你发的视频我看了，好好笑",
+    "我在拍视频素材呢",
+    "这个视频拍得真好看",
+])
+def test_detect_videocall_promise_negative(text):
+    assert pg.detect_media_promise(text) != "video_call"
+
+
+def test_videocall_rewrite_instruction_and_deflection():
+    ins = pg.build_promise_rewrite_instruction("可以视频啊，你打过来", pg.KIND_VIDEOCALL)
+    assert "视频通话" in ins and "婉拒" in ins
+    d = pg.deflection_line("可以视频啊", pg.KIND_VIDEOCALL)
+    assert d and "视频" in d
+    d_en = pg.deflection_line("sure let's video call", pg.KIND_VIDEOCALL)
+    assert d_en and "video" in d_en.lower()
+
+
+def test_videocall_strip_sentence_level():
+    txt = "今天好累呀。可以视频啊，你打过来嘛！你吃饭了没？"
+    out = pg.strip_media_promises(txt)
+    assert "视频" not in out
+    assert "今天好累" in out and "吃饭" in out
+
+
 # ── Phase18 多语种承诺检测（宁漏勿误：只收宣告形）──────────────────────────────
 @pytest.mark.parametrize("text", [
     "写真を送るね！",          # ja 宣告
@@ -210,14 +262,29 @@ def _mk_ai(cfg):
     return c
 
 
-def test_context_prompt_media_hint_and_capability_boundary():
+def test_context_prompt_media_hint_and_capability_boundary(monkeypatch):
+    """2026-07-31 语义升级：发图协议注入要求「全局 selfie 开 **且** 当前人设
+    capabilities.photos 开（默认关）」；能力关不再是「什么都不注入」而是注入
+    「无发图能力」硬约束（photo_capability SSOT，修倒挂——发不了图的形态恰恰
+    最需要「别承诺发图」）。"""
+    import src.companion.photo_capability as pc
+
     base_ctx = {"last_message": "在吗"}
-    # ① 上游 hint 注入 → 进 prompt（发图协同块）
+
+    def _persona_on():
+        monkeypatch.setattr(pc, "resolve_prompt_persona",
+                            lambda _ctx: {"capabilities": {"photos": True}})
+
+    def _persona_off():
+        monkeypatch.setattr(pc, "resolve_prompt_persona", lambda _ctx: None)
+
+    # ① 上游 hint 注入 → 进 prompt（发图协同块），与人设开关无关
+    _persona_on()
     p = _mk_ai({"companion": {"selfie": {"enabled": True}}})._build_context_prompt(
         dict(base_ctx, _media_coherence_hint="对方在要照片，本轮发不出，别承诺。"))
     assert "发图协同" in p and "别承诺" in p
-    # ② conversion 域 + selfie 开：默认 hybrid 模式 → LLM 主动决策协议块
-    #   （photo_directive 决策权上移）；intent.mode=keyword 回退 → 旧被动声明。
+    # ② conversion 域 + selfie 开 + 人设开：默认 hybrid → LLM 主动决策协议块；
+    #   intent.mode=keyword 回退 → 旧被动声明。
     p2 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True}}})._build_context_prompt(dict(base_ctx))
     assert "发照片能力" in p2 and "[PHOTO" in p2
@@ -226,17 +293,31 @@ def test_context_prompt_media_hint_and_capability_boundary():
                    "intent": {"mode": "keyword"}}}})._build_context_prompt(
         dict(base_ctx))
     assert "媒体能力边界" in p2k
-    # ③ selfie 关 → 无声明/无协议（没有发图能力时这段是噪声）
+    # ②x 全局开但**人设关（默认）**：不注协议，注「无发图能力」硬约束
+    _persona_off()
+    p2x = _mk_ai({"domain": "conversion", "companion": {
+        "selfie": {"enabled": True}}})._build_context_prompt(dict(base_ctx))
+    assert "[PHOTO" not in p2x and "发照片能力" not in p2x
+    assert "发图能力·硬边界" in p2x
+    # ③ selfie 全局关 → 同样注入硬约束（旧行为=什么都不注入，正是倒挂缺陷）
     p3 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": False}}})._build_context_prompt(dict(base_ctx))
-    assert "媒体能力边界" not in p3 and "发照片能力" not in p3
-    # ④ capability_hint 配置可关
+    assert "发图能力·硬边界" in p3 and "发照片能力" not in p3
+    # ④ capability_hint 配置可整体关（协议与硬约束都不注入）
+    _persona_on()
     p4 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True},
         "media_promise_guard": {"capability_hint": False}}})._build_context_prompt(
         dict(base_ctx))
     assert "媒体能力边界" not in p4 and "发照片能力" not in p4
+    _persona_off()
+    p4x = _mk_ai({"domain": "conversion", "companion": {
+        "selfie": {"enabled": False},
+        "media_promise_guard": {"capability_hint": False}}})._build_context_prompt(
+        dict(base_ctx))
+    assert "发图能力·硬边界" not in p4x
     # ⑤ 有具体 hint 时不叠加常驻声明（hint 更具体，避免指令冗余）
+    _persona_on()
     p5 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True}}})._build_context_prompt(
         dict(base_ctx, _media_coherence_hint="X提示X"))
@@ -258,3 +339,139 @@ def test_context_prompt_scene_state_and_media_log_blocks():
     p2 = _mk_ai({"domain": "support", "companion": {
         "selfie": {"enabled": True}}})._build_context_prompt(dict(ctx))
     assert "你此刻的状态" not in p2
+
+
+# ── #171 已发假声明（sent-claim，2026-09-05 WhatsApp Mizuki→John 实录）────────
+# 实录：AI「Oh, sorry — I just sent it, you should have it now.」→ 客户「I never
+# got it」→ AI「Hmm, that's weird — let me try sending it again for you.」全程零
+# send_media。detect_media_claim 的 media_context 门没开、promise 词表要 photo 名词
+# → 两道既有防线都沉默。本组不吃语境，真伪交近窗媒体账本判。
+@pytest.mark.parametrize("text", [
+    "Oh, sorry — I just sent it, you should have it now.",          # 实录①
+    "Hmm, that's weird — let me try sending it again for you.",     # 实录②
+    "I already sent you the photo, check again",
+    "Already sent it babe, you should have it by now",
+    "did you get the photo?",
+    "did you get it yet?",
+    "it should be in your chat now",
+    "I'll resend it",
+    "sending it over now~",
+    "我刚发给你了呀",
+    "已经发过去了，你收到了吗",
+    "我再发一次哈",
+    "给你发过去了呀",
+    "照片发你了哦",
+    # #332（2026-09-17 Cameron 00:56/00:59 实录）：占位残留 + 照片配文体，零 send_media
+    "[我方发出的图片] [图片] Just took this one, lazy night in 😉",
+    "[Image sent by me] [Image] There's my face, now you owe me something about your day 😜",
+    "Just took this one, lazy night in 😉",
+    "There's my face, now you owe me something about your day 😜",
+    "Found this old one of me, thought you'd like it",
+    "here's me after the gym lol",
+    "that's me in the pic, don't laugh",
+    "刚拍的，给你看～",
+    "这张就是我啦",
+])
+def test_detect_sent_claim_positive(text):
+    assert pg.detect_sent_claim(text) == "image"
+
+
+@pytest.mark.parametrize("text", [
+    "I just sent you a voice note, did you hear it?",
+    "语音发你了，听听看",
+])
+def test_detect_sent_claim_voice(text):
+    assert pg.detect_sent_claim(text) == "voice"
+
+
+@pytest.mark.parametrize("text", [
+    # 否定：诚实表达
+    "I didn't send anything yet",
+    "我没发呀",
+    # 方向相反：问/让对方发、别人发的
+    "did you send it?",
+    "你发了吗？",
+    "can you resend it? it didn't load",
+    "you just sent it to the wrong person haha",
+    # 第三方去向
+    "I sent it to my mom lol",
+    # 非媒体宾语（那类谎不归发图链，拉进来会误发自拍）
+    "I just sent you the address",
+    "I just sent you a message",
+    "我刚给你发了红包",
+    "我把地址发给你了",
+    # 远过去（近窗账本判不了）
+    "I sent it yesterday, remember?",
+    # 「再发」≠「再发展/再发挥」
+    "再发展下去我可要生气了",
+    "我们再发挥一下想象力",
+    # 普通闲聊 / 将发承诺（属 detect_media_promise，不重叠计）
+    "今天好累呀，你吃饭了没",
+    "哈哈你太逗了",
+    "how was your day? I missed you",
+    "I'll send you a photo in a sec",
+    # #332 配文体方向相反：评论**对方**发来的图，不是自称附图
+    "you just took this one? looks great",
+    "love that you snapped this at sunset",
+    "that's you in the pic? cute",
+    "这是你刚拍的吗，好看",
+    "你刚拍的？背景好美",
+    # 「took」不带指示词 / 泛指
+    "I took a nap after lunch",
+    "it took forever to get home",
+])
+def test_detect_sent_claim_negative(text):
+    assert pg.detect_sent_claim(text) == ""
+
+
+def test_strip_sent_claims_sentence_level():
+    # 英文句点切句（#171 同批：此前整段英文算一句，剥离＝整条清空）
+    out = pg.strip_sent_claims(
+        "Oh, sorry — I just sent it, you should have it now. Anyway, how was your day?")
+    assert "sent it" not in out and "should have it" not in out
+    assert "how was your day" in out
+    # 整条都是假声明 → 剥空（由调用方兜底）
+    assert pg.strip_sent_claims(
+        "Hmm, that's weird — let me try sending it again for you.") == ""
+    # zh：只剥假声明句，正常句保留
+    out2 = pg.strip_sent_claims("哈哈你太逗了。我刚发给你了呀。多聊聊嘛")
+    assert "刚发给你" not in out2 and "太逗了" in out2 and "多聊聊" in out2
+    # 无假声明原样返回
+    t = "今天好累呀，你吃饭了没"
+    assert pg.strip_sent_claims(t) == t
+
+
+def test_sent_claim_deflection_is_honest_and_does_not_reloop():
+    # 客户刚说「没收到」，兜底不能再卖关子（旧 deflection 是「先卖个关子」）
+    en = pg.deflection_line("I just sent it", "image", sent_claim=True)
+    zh = pg.deflection_line("我刚发给你了", "image", sent_claim=True)
+    assert "didn't" in en and "later" in en and "curious" not in en
+    assert "没发出去" in zh and "关子" not in zh
+    # 兜底文案自身不得被任一检测器再次判成承诺/假声明（否则二次校验回环）
+    for kind in ("image", "voice"):
+        for lang in ("zh", "en", "ja", "ko"):
+            line = pg._SENT_CLAIM_DEFLECTIONS[kind][lang]
+            assert pg.detect_sent_claim(line) == "", (kind, lang)
+            assert pg.detect_media_promise(line) == "", (kind, lang)
+    # 非 sent_claim 调用维持旧行为
+    assert pg.deflection_line("I just sent it", "image") == pg._DEFLECTIONS["image"]["en"]
+
+
+def test_sent_claim_rewrite_instruction_honest_wording():
+    ins = pg.build_promise_rewrite_instruction(
+        "I just sent it, you should have it now", "image", sent_claim=True)
+    assert "传不出去" in ins and "稍后再补" in ins and "I just sent it" in ins
+    assert "岔开话题" not in ins   # 假声明不走「卖关子」口径
+    # 旧路径不受影响
+    old = pg.build_promise_rewrite_instruction("等我拍一张给你", "image")
+    assert "岔开话题" in old
+
+
+def test_sentence_split_latin_period_and_decimals():
+    # 英文句点后跟空白/行尾才切；小数与域名不切（承诺剥离依赖此粒度）
+    assert pg._sentences("I'll send you a photo in a sec. How are you") == [
+        "I'll send you a photo in a sec", " How are you"]
+    assert pg._sentences("It's 3.5 km away. see you at a.com") == [
+        "It's 3.5 km away", " see you at a.com"]
+    out = pg.strip_media_promises("I'll send you a photo in a sec. How are you")
+    assert "photo" not in out and "How are you" in out

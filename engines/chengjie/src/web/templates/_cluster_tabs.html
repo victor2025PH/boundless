@@ -1,0 +1,32 @@
+{#- 页群 Tab 条（2026-08-18 P1）：同权页面群的页内互切，成员表单源
+    nav_schema.PAGE_CLUSTERS（经 nav_clusters 注入）。用法（成员页 content 顶部）：
+      {% set cluster_id = "boards" %}{% set cluster_here = "/workspace/queue" %}
+      {% include "_cluster_tabs.html" %}
+    约定：
+    - cluster_here 由页面自报（成员页 key 多为空串，且渲染类测试无 request，
+      不能靠 active/URL 推断）；
+    - nav_clusters 缺席（i18n 覆盖率类最小上下文渲染 / nav_schema 未随重启装载
+      的热更窗口）→ 整块静默不渲染，页面自洽；
+    - 纯链接零 JS 零 id：每个 Tab 是真页面跳转，PV 归因按页独立（这正是不做
+      JS 假 Tab 的原因之一）。样式只用 currentColor/半透明灰，双壳（base /
+      workspace_base）双主题通用，不引入第三套 token。 -#}
+{% set _cl_items = (nav_clusters or {}).get(cluster_id | default(''), []) %}
+{% if _cl_items and _cl_items | length > 1 %}
+<style>
+.pgclu{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:0 0 .85rem}
+.pgclu-tab{display:inline-block;padding:.3rem .8rem;border-radius:999px;font-size:.8rem;
+  line-height:1.25;text-decoration:none;color:inherit;opacity:.72;
+  border:1px solid rgba(127,127,127,.32)}
+.pgclu-tab:hover{opacity:1;text-decoration:none}
+.pgclu-tab.on{opacity:1;font-weight:600;border-color:currentColor}
+</style>
+<nav class="pgclu" aria-label="{{ (i18n or {}).get('nav_cluster_aria', '相关页面') }}">
+  {%- for it in _cl_items %}
+  <a class="pgclu-tab{% if it.path == cluster_here | default('') %} on{% endif %}"
+     href="{{ it.path }}"
+     {%- if it.path == cluster_here | default('') %} aria-current="page"{% endif %}>
+    {{- (i18n or {}).get(it.label_key, it.label_zh) -}}
+  </a>
+  {%- endfor %}
+</nav>
+{% endif %}

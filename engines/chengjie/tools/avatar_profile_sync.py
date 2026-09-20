@@ -140,6 +140,10 @@ def main() -> int:
     ap.add_argument("--personas", default="", help="逗号分隔；空=全部有 face_ref 的")
     ap.add_argument("--album-root", default="assets/persona_media")
     ap.add_argument("--smoke", default="", help="同步后对该人设试出一段口播视频")
+    # 音色一致性（2026-07-27）：原先硬编 fish_speech（2026-07-14 止血措施），而幻影
+    # 对话走 moss_ttsd → 同人设两种音色。此处可显式对齐，无需改代码。
+    ap.add_argument("--tts-engine", default="fish_speech",
+                    help="hub 侧合成引擎（与幻影对话对齐用 moss_ttsd）")
     args = ap.parse_args()
 
     profiles = (yaml.safe_load(
@@ -156,7 +160,8 @@ def main() -> int:
             failed += 1
             continue
         try:
-            if not sync_one(args.base, pid, p, album_root):
+            if not sync_one(args.base, pid, p, album_root,
+                            tts_engine=args.tts_engine):
                 failed += 1
         except Exception as e:  # noqa: BLE001
             _log(f"!! {pid} 同步异常：{type(e).__name__} {e}")

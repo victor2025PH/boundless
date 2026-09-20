@@ -188,8 +188,74 @@ def test_ensure_vram_escalates_to_ollama(monkeypatch):
 def test_ensure_vram_no_ollama_when_comfy_enough(monkeypatch):
     free_seq = iter([10.0, 16.0])                   # ComfyUI 自卸就够 → 不碰 Ollama
     monkeypatch.setattr(ci, "_vram_free_gb", lambda: next(free_seq))
+    monkeypatch.setattr(ci, "_comfy_reserved_gb", lambda: 0.1)   # 未常驻=旧路径
     monkeypatch.setattr(ci, "_free_comfy", lambda: None)
     def boom(url):
         raise AssertionError("够了不该卸 Ollama")
     monkeypatch.setattr(ci, "_free_ollama", boom)
     assert ci.ensure_vram(14.0, ollama_url="http://x:11434") == 16.0
+
+
+# ── 热加载优先（2026-08-28）：模型已在显存里时，min_free_gb 那道「装得下吗」的
+#    闸门不适用；旧实现无条件 /free 会把马上要用的那份卸掉再从头搬一遍。
+def test_ensure_vram_keeps_resident_model(monkeypatch):
+    """已常驻 + 活化显存够 → 一个字节都不腾，直接放行。"""
+    monkeypatch.setattr(ci, "_vram_free_gb", lambda: 5.0)     # < min 14
+    monkeypatch.setattr(ci, "_comfy_reserved_gb", lambda: 16.0)   # 模型在显存里
+    def boom_comfy():
+        raise AssertionError("模型已常驻，绝不能 /free 自毁热缓存")
+    def boom_ollama(url):
+        raise AssertionError("活化显存够，不该动 Ollama")
+    monkeypatch.setattr(ci, "_free_comfy", boom_comfy)
+    monkeypatch.setattr(ci, "_free_ollama", boom_ollama)
+    assert ci.ensure_vram(14.0, ollama_url="http://x:11434") >= 14.0  # 闸门放行
+
+
+def test_ensure_vram_resident_but_tight_evicts_only_ollama(monkeypatch):
+    """已常驻但活化空间不足 → 只卸别人（Ollama 秒级可重载），绝不卸自己。"""
+    free_seq = iter([1.0, 6.0])       # 初查 / 卸 Ollama 后
+    monkeypatch.setattr(ci, "_vram_free_gb", lambda: next(free_seq))
+    monkeypatch.setattr(ci, "_comfy_reserved_gb", lambda: 16.0)
+    def boom_comfy():
+        raise AssertionError("绝不卸自己")
+    monkeypatch.setattr(ci, "_free_comfy", boom_comfy)
+    called = {}
+    monkeypatch.setattr(ci, "_free_ollama",
+                        lambda url: called.setdefault("url", url) or 1)
+    assert ci.ensure_vram(14.0, ollama_url="http://x:11434") >= 14.0
+    assert called["url"] == "http://x:11434"
+
+
+def test_ensure_vram_cold_path_unchanged(monkeypatch):
+    """未常驻（reserved 极小）→ 完全走旧路径（/free 自己再卸 Ollama）。"""
+    free_seq = iter([10.0, 11.0, 20.0])
+    monkeypatch.setattr(ci, "_vram_free_gb", lambda: next(free_seq))
+    monkeypatch.setattr(ci, "_comfy_reserved_gb", lambda: 0.1)
+    seen = []
+    monkeypatch.setattr(ci, "_free_comfy", lambda: seen.append("comfy"))
+    monkeypatch.setattr(ci, "_free_ollama", lambda url: seen.append("ollama") or 1)
+    assert ci.ensure_vram(14.0, ollama_url="http://x:11434") == 20.0
+    # 旧路径原样：自卸 → 卸 Ollama → 再让 ComfyUI 整理一次碎片
+    assert seen == ["comfy", "ollama", "comfy"]
+
+
+def test_ensure_vram_enough_free_short_circuits(monkeypatch):
+    """空闲本来就够 → 连常驻探针都不查（热路零多余往返）。"""
+    monkeypatch.setattr(ci, "_vram_free_gb", lambda: 25.0)
+    def boom():
+        raise AssertionError("空闲够时不该再探常驻")
+    monkeypatch.setattr(ci, "_comfy_reserved_gb", boom)
+    assert ci.ensure_vram(14.0, ollama_url="http://x:11434") == 25.0
+
+
+# ── 保温器：判「保得住吗」的纯函数（--lowvram 下保温物理无效，别白烧 GPU）
+def test_warmup_detects_flags_that_forbid_residency():
+    import importlib
+    cw = importlib.import_module("comfy_warmup")
+    argv = ["main.py", "--listen", "0.0.0.0", "--port", "8188", "--lowvram"]
+    assert cw.blocking_flags(argv) == ["--lowvram"]
+    assert cw.blocking_flags(["main.py", "--novram", "--cache-none"]) == [
+        "--novram", "--cache-none"]
+    # 正常启动（可常驻）→ 空清单，保温才有意义
+    assert cw.blocking_flags(["main.py", "--listen", "0.0.0.0"]) == []
+    assert cw.blocking_flags([]) == []

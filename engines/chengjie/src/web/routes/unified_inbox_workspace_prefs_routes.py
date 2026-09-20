@@ -12,6 +12,8 @@ prefs.languages 写链路仍走 inbox.set_agent_languages（坐席语言栈，�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -30,9 +32,90 @@ from src.web.routes.unified_inbox_sla import (
     _sla_cfg,
     _sla_detail,
 )
+from src.web.appearance_prefs import (
+    APPEARANCE_MAX_BYTES,
+    dumps_appearance,
+    loads_appearance,
+    sanitize_appearance,
+    sanitize_dock_order,
+)
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+# ── 坐席「个人常用语」（P1 2026-08-18，cp-kb 面板「我的常用语」层）──────────
+# 存储＝app_settings KV `inbox.quick_replies.{agent_id}`（JSON 列表），与
+# agent-lang 同一先例；这是个人层的**唯一写入口**。团队话术编辑走 admin 的
+# PUT /api/templates/{key}（快照/审计/热失效齐备），绝不在这里造第二条团队写路径。
+# 上限/长度/去重全在服务端守（面板是薄壳）；id=文本 sha1 前 8 位（文本去重后天然唯一）。
+_QUICK_REPLIES_KEY = "inbox.quick_replies"
+QUICK_REPLIES_MAX_ITEMS = 20
+QUICK_REPLY_MAX_CHARS = 500
+
+
+def _qr_id(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+
+
+def parse_quick_replies(raw: Any) -> List[Dict[str, str]]:
+    """KV JSON → 规范列表（坏数据整体回空、超限截断、按文本去重，绝不半解析）。"""
+    try:
+        data = json.loads(raw or "[]")
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        text = str(it.get("text") or "").strip()
+        if not text or len(text) > QUICK_REPLY_MAX_CHARS or text in seen:
+            continue
+        seen.add(text)
+        out.append({"id": _qr_id(text), "text": text})
+        if len(out) >= QUICK_REPLIES_MAX_ITEMS:
+            break
+    return out
+
+
+def mutate_quick_replies(
+    items: List[Dict[str, str]], action: str, *, text: str = "", item_id: str = "",
+) -> tuple:
+    """个人常用语状态机（纯函数）：add/update/delete → (新列表, error_code)。
+
+    error_code=""=成功；错误码走机器码（frontend 按 cp.kb.err_* 词条本地化，
+    与 agent-lang 的 error 口径同风格）。新增排最前（刚存的马上要用）。
+    """
+    text = str(text or "").strip()
+    items = list(items)
+    if action == "add":
+        if not text:
+            return items, "empty_text"
+        if len(text) > QUICK_REPLY_MAX_CHARS:
+            return items, "too_long"
+        if any(it["text"] == text for it in items):
+            return items, "duplicate"
+        if len(items) >= QUICK_REPLIES_MAX_ITEMS:
+            return items, "full"
+        return [{"id": _qr_id(text), "text": text}] + items, ""
+    if action in ("update", "delete"):
+        idx = next((i for i, it in enumerate(items) if it.get("id") == item_id), -1)
+        if idx < 0:
+            return items, "not_found"
+        if action == "delete":
+            return items[:idx] + items[idx + 1:], ""
+        if not text:
+            return items, "empty_text"
+        if len(text) > QUICK_REPLY_MAX_CHARS:
+            return items, "too_long"
+        if any(it["text"] == text for i, it in enumerate(items) if i != idx):
+            return items, "duplicate"
+        items[idx] = {"id": _qr_id(text), "text": text}
+        return items, ""
+    return items, "bad_action"
 
 
 def register_workspace_prefs_routes(app, *, api_auth) -> None:
@@ -49,6 +132,9 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
                  if inbox is not None else
                  {"warn_sec": 0, "crit_sec": 0, "muted": 0,
                   "dnd_start": -1, "dnd_end": -1})
+        prefs = dict(prefs)
+        # 外观个性化：落库为 JSON 文本，API 口径统一回解析后的 dict（空/坏数据回 {}）。
+        prefs["appearance"] = loads_appearance(prefs.get("appearance"))
         return {"ok": True, "prefs": prefs,
                 "global_warn_sec": glob["warn"], "global_crit_sec": glob["crit"],
                 "effective": _agent_sla_cfg(request)}
@@ -76,14 +162,21 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
             return v if v == -1 else max(0, min(1439, v))
 
         agent = _session_agent(request)
-        prefs = inbox.set_agent_prefs(
-            agent["agent_id"],
-            warn_sec=max(0, _int("warn_sec")),
-            crit_sec=max(0, _int("crit_sec")),
-            muted=1 if body.get("muted") else 0,
-            dnd_start=_clamp_min(_int("dnd_start", -1)),
-            dnd_end=_clamp_min(_int("dnd_end", -1)),
-        )
+        # 局部更新语义（2026-08-04）：外观面板等调用方只带自己的键。告警偏好仅在
+        # 显式携带任一告警键时才整条覆盖——否则「只存外观」的 POST 会把 warn/crit/
+        # 免打扰静默清零（与下方 languages 的按键触发同一模式）。
+        _alert_keys = ("warn_sec", "crit_sec", "muted", "dnd_start", "dnd_end")
+        if any(k in body for k in _alert_keys):
+            prefs = inbox.set_agent_prefs(
+                agent["agent_id"],
+                warn_sec=max(0, _int("warn_sec")),
+                crit_sec=max(0, _int("crit_sec")),
+                muted=1 if body.get("muted") else 0,
+                dnd_start=_clamp_min(_int("dnd_start", -1)),
+                dnd_end=_clamp_min(_int("dnd_end", -1)),
+            )
+        else:
+            prefs = inbox.get_agent_prefs(agent["agent_id"])
         # P3：坐席技能语言声明（供 auto_assign match_language；只在 body 显式带 languages 时更新）。
         if "languages" in body:
             from src.ai.translation_service import normalize_lang
@@ -95,6 +188,34 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
                 if code and code not in norm:
                     norm.append(code)
             prefs = inbox.set_agent_languages(agent["agent_id"], ",".join(norm))
+        # 外观个性化：白名单净化通过才整 JSON 覆盖；非法载荷 400，绝不半净化落库。
+        if "appearance" in body:
+            ap = sanitize_appearance(body.get("appearance"))
+            if ap is None:
+                raise HTTPException(400, tr(request, "err.ws.appearance_invalid"))
+            # Dock P3 carry-over：appearance.js 的整状态推送不带 dock_order（它不管排序），
+            # 直接覆盖会把账号坞自定义排序抹掉——本次写入若缺该子键，从库里已存值搬运保全。
+            if "dock_order" not in ap:
+                cur = loads_appearance(prefs.get("appearance"))
+                if isinstance(cur.get("dock_order"), dict):
+                    ap["dock_order"] = cur["dock_order"]
+            prefs = inbox.set_agent_appearance(
+                agent["agent_id"], dumps_appearance(ap))
+        # Dock P3：账号坞自定义排序独立写键（body 顶层 dock_order）。语义＝只改 appearance
+        # JSON 里的 dock_order 子键，其余外观键原样保留（与 appearance 整写互为镜像的合并向）。
+        # 空 plats 合法（显式清空，跨设备传播「恢复默认」）；非法载荷 400。
+        if "dock_order" in body:
+            dk = sanitize_dock_order(body.get("dock_order"))
+            if dk is None:
+                raise HTTPException(400, tr(request, "err.ws.dock_order_invalid"))
+            cur = loads_appearance(prefs.get("appearance"))
+            cur["dock_order"] = dk
+            blob = dumps_appearance(cur)
+            if len(blob.encode("utf-8")) > APPEARANCE_MAX_BYTES:
+                raise HTTPException(400, tr(request, "err.ws.dock_order_invalid"))
+            prefs = inbox.set_agent_appearance(agent["agent_id"], blob)
+        prefs = dict(prefs)
+        prefs["appearance"] = loads_appearance(prefs.get("appearance"))
         return {"ok": True, "prefs": prefs}
 
     @app.get("/api/workspace/sla-detail")
@@ -169,3 +290,33 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
             out["contact_id"] = contact_id
             out["due_at"] = due_at
         return out
+
+    @app.post("/api/unified-inbox/quick-replies")
+    async def api_unified_inbox_quick_replies(request: Request):
+        """坐席个人常用语增删改。body: ``{action: add|update|delete, text?, id?}``。
+
+        身份取会话 session（无 SessionMiddleware 部署回落共享 "agent"，与
+        agent-lang 同语义）；列表随每次变更整体回传，面板据此就地重渲。
+        读路径无独立端点——个人常用语随 GET /api/unified-inbox/templates 一并
+        下发（source="mine"），面板一次取全。
+        """
+        api_auth(request)
+        inbox = _inbox_store(request)
+        if inbox is None or not hasattr(inbox, "get_app_setting"):
+            return {"ok": False, "error": "inbox_unavailable"}
+        body = await request.json()
+        action = str(body.get("action") or "").strip()
+        agent = str(_session_agent(request).get("agent_id") or "agent")
+        key = f"{_QUICK_REPLIES_KEY}.{agent}"
+        items = parse_quick_replies(inbox.get_app_setting(key))
+        items, err = mutate_quick_replies(
+            items, action,
+            text=str(body.get("text") or ""),
+            item_id=str(body.get("id") or ""))
+        if err:
+            return {"ok": False, "error": err, "items": items,
+                    "max_items": QUICK_REPLIES_MAX_ITEMS}
+        ok = inbox.set_app_setting(
+            key, json.dumps(items, ensure_ascii=False), updated_by=agent)
+        return {"ok": bool(ok), "items": items,
+                "max_items": QUICK_REPLIES_MAX_ITEMS}

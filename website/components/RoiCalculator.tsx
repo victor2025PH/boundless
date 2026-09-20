@@ -7,10 +7,13 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
+import { rechargeOnlyMonthlyCost, tokenRate } from "@/lib/chatx-pricing";
 
 const LABOR_OPT = 0.6;
 const CONV_UPLIFT = 0.35;
 const DAYS = 30;
+// 每条新咨询日均消耗的 AI 回复条数（答疑 + 跟进；与 content.ts roi.assumptions 同口径）
+const AI_REPLIES_PER_LEAD = 8;
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.max(0, Math.round(n)));
@@ -70,9 +73,10 @@ export default function RoiCalculator() {
   const [conv, setConv] = useState(8);
 
   const calc = useMemo(() => {
-    const planIdx = agents >= 9 || leads >= 150 ? 2 : 1;
-    const plan = t.plans.items[planIdx];
-    const planCost = Number(plan.priceMonthly) || 0;
+    // 2026-08-21 充值唯一化：工具成本不再按订阅档，按「充值基准价 × 估算 Token 用量」
+    // 真实核算（与 /pricing 计算器同一张费率表）——每条咨询日均 ~8 条 AI 回复。
+    const tokens = Math.round(leads * DAYS * AI_REPLIES_PER_LEAD * tokenRate("ai_reply").tokens);
+    const planCost = rechargeOnlyMonthlyCost(tokens);
 
     const laborSave = agents * salary * LABOR_OPT;
     const newConv = Math.min(conv * (1 + CONV_UPLIFT), 95);
@@ -85,8 +89,8 @@ export default function RoiCalculator() {
     const outBar = 100;
     const inBar = gain > 0 ? Math.max(4, (planCost / gain) * 100) : 4;
 
-    return { plan, planCost, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
-  }, [agents, salary, leads, aov, conv, t.plans.items]);
+    return { tokens, planCost, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
+  }, [agents, salary, leads, aov, conv]);
 
   return (
     <section className="relative py-8">
@@ -191,7 +195,7 @@ export default function RoiCalculator() {
                   {r.planLabel}
                 </span>
                 <span className="text-sm font-semibold text-white">
-                  {calc.plan.name} · {calc.plan.priceMonthly} USD{r.perMonth}
+                  ≈ {fmt(calc.tokens)} Token · {fmt(calc.planCost)} USD{r.perMonth}
                 </span>
               </div>
 

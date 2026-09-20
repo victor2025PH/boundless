@@ -1,159 +1,617 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
-import { BadgeCheck, Check, Clapperboard, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
+import {
+  BadgeCheck,
+  Building2,
+  Check,
+  ChevronDown,
+  Coins,
+  Copy,
+  KeyRound,
+  Languages,
+  ServerCog,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  Wallet,
+  X,
+} from "lucide-react";
 import { useLang } from "./LanguageContext";
 import OrderStatusLookup from "./OrderStatusLookup";
+import Burst from "./fx/Burst";
+import MatrixRain from "./fx/MatrixRain";
 import Reveal from "./fx/Reveal";
+import HeroStatCards from "./HeroStatCards";
+import RotatingPerk from "./RotatingPerk";
+import { parseRegTs, readStoredRegTs } from "./NewbieCountdown";
+import RechargeOrderZone, { StickyOrderBar, type CreditView } from "./RechargeOrderZone";
 import { track } from "@/lib/track";
+import { BRAND_FILM } from "@/lib/film";
 import { BOT_HANDLE, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import {
   ACCESSORIES,
-  FIRST_YEAR_PROMO,
+  CAPABILITY_TIERS,
   HARDWARE,
-  LICENSES,
   REMOTE_INSTALL,
   SHOWCASE_VIDEOS,
   TIERS,
   USDT_ADDR,
+  studioTier,
   tierPrice,
+  tierPriceLabel,
+  tierShortName,
   type Period,
-  type Tier,
 } from "@/lib/avatarhub-pricing";
+import {
+  CHATX_FREE_HINT,
+  FAMILIES,
+  familyDefaultTier,
+  familyOfPlan,
+  familyTiers,
+  rechargeCreditOf,
+  resolvePlanAlias,
+  type FamilyMeta,
+  type LineTier,
+  type OrderFamily,
+} from "@/lib/order-lines";
+import { ACTIVATION_MINUTES, ORDER_HERO } from "@/lib/order-hero";
+import { ENTERPRISE_TRACKS } from "@/lib/chatx-pricing";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
-export default function OrderPanel() {
-  const { lang } = useLang();
-  const zh = lang === "zh";
-  const [period, setPeriod] = useState<Period>("monthly");
-  const [selected, setSelected] = useState("pro");
-  const [checkout, setCheckout] = useState(false);
-  const [prefillFp, setPrefillFp] = useState("");
+/** 家族通用价格：一次性商品（充值档）不随周期变价；其余走 tierPrice（年付 ×10）；
+ *  按坐席档（工作台）= 单价 × 坐席数。 */
+function linePrice(t: LineTier, period: Period, seats = 1): number {
+  const unit = t.oneTime ? t.monthly : tierPrice(t, period);
+  return t.perSeat ? unit * seats : unit;
+}
 
-  const tier = useMemo(() => TIERS.find((t) => t.key === selected) ?? TIERS[3], [selected]);
+/** 坐席数夹取（档位切换/深链共用）。 */
+function clampSeats(t: LineTier, n: number): number {
+  if (!t.perSeat) return 1;
+  return Math.min(t.perSeat.max, Math.max(t.perSeat.min, Math.round(n) || t.perSeat.min));
+}
 
-  // 深链预填：/order?plan=pro&period=annual&fp=<指纹>（客户端内"购买"按钮可带参跳转，绑机零输入）
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
-    const plan = q.get("plan");
-    if (plan && TIERS.some((t) => t.key === plan)) setSelected(plan);
-    if (q.get("period") === "annual") setPeriod("annual");
-    const fp = q.get("fp");
-    if (fp) setPrefillFp(fp.slice(0, 128));
-  }, []);
+/** 产品线 Tab 图标（lucide，避免引入 brand ProductIcon 的资源依赖）。 */
+const FAMILY_ICON: Record<OrderFamily, typeof Sparkles> = {
+  avatarhub: Sparkles,
+  tokens: Coins,
+  lingox: Languages,
+};
 
+/* parseRegTs / 倒计时组件在 components/NewbieCountdown.tsx（/pricing 海报共用单源）。 */
+
+/** 首屏主张区（kicker / 脉冲徽章 / 两行大标题 / 轮换卖点 / 一句话副标题 + 规则折叠）。
+ *  外层以 key={family} 重挂：切产品线时 CSS 入场重播、规则折叠态自动复位。 */
+function OrderHeroCopy({
+  family,
+  familyMeta,
+  zh,
+}: {
+  family: OrderFamily;
+  familyMeta: FamilyMeta;
+  zh: boolean;
+}) {
+  const copy = ORDER_HERO[family];
+  const [rulesOpen, setRulesOpen] = useState(false);
   return (
-    <section className="relative pb-24 pt-32">
-      <div className="pointer-events-none absolute left-1/4 top-24 h-80 w-80 rounded-full bg-neon-violet/15 blur-[130px]" />
-      <div className="pointer-events-none absolute right-1/4 top-96 h-72 w-72 rounded-full bg-neon-cyan/10 blur-[120px]" />
+    <>
+      {/* kicker：保住「购买与下单」的页面语义（SEO 词在 metadata/title 同在） */}
+      <div className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-500">
+        {zh ? "购买与下单" : "Plans & Ordering"}
+      </div>
 
-      <div className="relative mx-auto max-w-7xl px-5">
-        {/* ── 标题 ── */}
-        <Reveal eager className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
-            <Sparkles className="h-3.5 w-3.5" />
-            {zh ? "全程 USDT 结算 · 本地部署数据不出机房" : "Settled in USDT · local deployment, data stays on-prem"}
+      <div className="mt-4 flex justify-center">
+        <span className="inline-flex items-center gap-2 rounded-full border border-neon-cyan/25 bg-neon-cyan/[0.06] px-4 py-1.5 text-xs text-slate-200 shadow-[0_0_20px_rgba(34,211,238,0.15)]">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
           </span>
-          <h1 className="mt-4 text-3xl font-bold text-white md:text-5xl">
-            {zh ? "购买与下单" : "Plans & Ordering"}
-          </h1>
-          <p className="mx-auto mt-3 max-w-2xl text-slate-400">
-            {zh
-              ? "引擎跑在你自己的设备上——我们不卖算力，所以不按字符、张数、时长计费，用量不限。设备自备（下方有配置与配件清单），我们协助部署；到账后按机器指纹签发授权，客户端一键激活。"
-              : "The engine runs on your own hardware — we don't sell compute, so there's no per-character or per-minute metering. Bring your device (specs below), we help you deploy; licenses are issued against your machine fingerprint after payment."}
+          {zh ? copy.badge.zh : copy.badge.en}
+        </span>
+      </div>
+
+      {/* 两行大标题：宣言（实色）→ 解法（渐变，text-gradient 自带日间覆盖表） */}
+      <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-black leading-[1.15] tracking-tight text-white md:text-6xl">
+        <span className="block">{zh ? copy.titleTop.zh : copy.titleTop.en}</span>
+        <span className="text-gradient block">{zh ? copy.titleAccent.zh : copy.titleAccent.en}</span>
+      </h1>
+
+      <RotatingPerk items={copy.rotating} zh={zh} />
+
+      <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
+        {zh ? familyMeta.blurb.zh : familyMeta.blurb.en}
+        {family === "avatarhub" && (
+          <>
             {" "}
             <a href={zh ? "/download" : "/en/download"} className="text-neon-cyan hover:underline">
               {zh ? "前往下载客户端 →" : "Download the client →"}
             </a>
-          </p>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setRulesOpen((v) => {
+              if (!v) track("order_rules_expand", { family });
+              return !v;
+            });
+          }}
+          aria-expanded={rulesOpen}
+          className="ml-2 inline-flex items-center gap-0.5 align-baseline text-xs text-neon-cyan transition hover:underline"
+        >
+          {zh ? "详细规则" : "Full terms"}
+          <ChevronDown className={`h-3 w-3 transition-transform ${rulesOpen ? "rotate-180" : ""}`} />
+        </button>
+      </p>
+      {rulesOpen && (
+        <div className="mx-auto mt-3 max-w-2xl rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-xs leading-relaxed text-slate-500">
+          {zh ? familyMeta.rules.zh : familyMeta.rules.en}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* RotatingPerk 已抽到 components/RotatingPerk.tsx（/pricing 首屏复用同款）。 */
+
+export default function OrderPanel() {
+  const { lang } = useLang();
+  const zh = lang === "zh";
+  // 2026-08-21 充值唯一化后主推产品线 = 智聊充值：无深链直进 /order 默认落 tokens
+  //（此前默认 avatarhub，想买智聊的人落地先看到 STUDIO 会员卡）；带 ?plan= 深链照旧
+  // 在 useLayoutEffect 里切到所属产品线，STUDIO 买家全部来自带参产品页，零损伤。
+  const [family, setFamily] = useState<OrderFamily>("tokens");
+  const [period, setPeriod] = useState<Period>("monthly");
+  const [selected, setSelected] = useState(() => familyDefaultTier("tokens", TIERS));
+  // 首充 / 复充视角（tokens 家族）：卡片主数字、结算明细、吸底条随视角换口径——
+  // 复充老客看首充大数是预期错位，诚实的数字比大的数字更能让老客掏钱。
+  const [creditView, setCreditView] = useState<CreditView>("first");
+  // 新人 6U 真倒计时锚（ms）：深链 ?reg_ts=<注册时间> 带入（桌面端海报 CTA 追加，
+  // 跨仓待办），localStorage 兜底同会话续存。0 = 无锚 → 金卡不出任何倒计时（匿名
+  // 访客不做假倒计时，实施 50 决策不变）。倒计时纯展示；资格终审在履约端 72h 窗，
+  // 篡改参数只会看到错的钟，下单仍被 newbie-gate 拦并给人话文案。
+  const [regTs, setRegTs] = useState(0);
+  // 坐席数（仅 perSeat 档生效；档位切换按各档下限重置，深链 ?seats= 预填）
+  const [seats, setSeats] = useState(2);
+  const [checkout, setCheckout] = useState(false);
+  const [prefillFp, setPrefillFp] = useState("");
+  // 会话归因串（AI 坐席聊天里发的下单链接带 ?ref=<会话id>）：静默随单提交，
+  // 供 chengjie 引擎按 ref 自动结算营销目标；对用户不可见不可编辑。
+  const [prefillRef, setPrefillRef] = useState("");
+  // 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：随单提交进订单台账，
+  // /console/funnel 据此拆「桌面海报带来的下单」；与 ref 同款静默、7 天续存。
+  const [prefillUtm, setPrefillUtm] = useState("");
+  // 深链预填完成前不写回 URL，避免首帧用默认 pro 盖掉 ?plan=autochat-entry。
+  const urlReady = useRef(false);
+
+  const tiers = useMemo(() => familyTiers(family, TIERS), [family]);
+  const tier = useMemo<LineTier>(
+    () => tiers.find((t) => t.key === selected) ?? tiers[0],
+    [tiers, selected],
+  );
+  const familyMeta = FAMILIES.find((f) => f.key === family) ?? FAMILIES[0];
+  // 充值档到账明细（结算条 / 确认弹窗共用；非充值档为 null 整段隐藏）
+  const selectedCredit = useMemo(
+    () => (family === "tokens" ? rechargeCreditOf(selected) : null),
+    [family, selected],
+  );
+
+  // 深链预填：/order?plan=<档位|offer id>&period=quarterly|annual&fp=<指纹>——plan 跨三条产品线检索，
+  // 命中即自动切到所属产品线（产品页「购买」按钮带参直达，见 config.example.yaml shop_url 注）。
+  // useLayoutEffect（非 useEffect）：家族切换必须发生在 framer-motion 注册视口观察器之前，
+  // 否则挂载后立刻换掉子树会让全页 whileInView 观察失效 → 面板整段卡在 opacity:0（实测）。
+  useLayoutEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    // 停售档深链平移（LEGACY_PLAN_MAP）：老链接落到承接档，绝不落空
+    const plan = resolvePlanAlias(q.get("plan") || "");
+    const fam = plan ? familyOfPlan(plan, TIERS) : undefined;
+    if (plan && fam) {
+      setFamily(fam);
+      setSelected(plan);
+      const tiersOfFam = familyTiers(fam, TIERS);
+      const t = tiersOfFam.find((x) => x.key === plan);
+      if (t?.perSeat) setSeats(clampSeats(t, Number(q.get("seats")) || t.perSeat.min));
+    }
+    const p = q.get("period");
+    if (p === "annual" || p === "quarterly") setPeriod(p);
+    const fp = q.get("fp");
+    if (fp) setPrefillFp(fp.slice(0, 128));
+    // 新人 6U 真倒计时锚：?reg_ts= 优先，localStorage（bl-reg-ts）兜底续存——
+    // 从桌面海报点进来后刷新 / 二次访问 / 逛去 /pricing 倒计时都不丢。
+    const rt = parseRegTs(q.get("reg_ts"));
+    if (rt) {
+      setRegTs(rt);
+      try {
+        localStorage.setItem("bl-reg-ts", String(rt));
+      } catch {}
+    } else {
+      const saved = readStoredRegTs();
+      if (saved) setRegTs(saved);
+    }
+    const ref = q.get("ref");
+    if (ref) setPrefillRef(ref.slice(0, 160));
+    else {
+      // 跨页归因兜底：AI 链接可能先落首页（试算器锚点），root layout 已把
+      // ?ref 暂存 localStorage（bl-ref）——7 天内进下单页仍能归因到会话。
+      try {
+        const v = localStorage.getItem("bl-ref") || "";
+        const ts = Number(localStorage.getItem("bl-ref-ts") || 0);
+        if (v && ts && Date.now() - ts < 7 * 86400e3) setPrefillRef(v.slice(0, 160));
+      } catch {}
+    }
+    // 渠道归因（桌面海报深链 ?utm_source=chatx_desktop）：直落即记 + 7 天续存——
+    // 用户「点海报进来 → 先逛 /pricing → 回来下单」仍能归因到桌面海报。
+    const utm = (q.get("utm_source") || "").slice(0, 40);
+    if (utm) {
+      setPrefillUtm(utm);
+      try {
+        localStorage.setItem("bl-utm", utm);
+        localStorage.setItem("bl-utm-ts", String(Date.now()));
+      } catch {}
+    } else {
+      try {
+        const v = localStorage.getItem("bl-utm") || "";
+        const ts = Number(localStorage.getItem("bl-utm-ts") || 0);
+        if (v && ts && Date.now() - ts < 7 * 86400e3) setPrefillUtm(v.slice(0, 40));
+      } catch {}
+    }
+    urlReady.current = true;
+  }, []);
+
+  // 档位切换 → 坐席数按新档下限/上限夹取（非按坐席档归 1）
+  useEffect(() => {
+    setSeats((s) => clampSeats(tier, s));
+  }, [tier]);
+
+  // 选档/周期/交付 → URL 同步（replaceState，可分享/刷新不丢；保留 fp/check 等其它参数）。
+  useEffect(() => {
+    if (!urlReady.current || typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    u.searchParams.set("plan", selected);
+    if (period !== "monthly" && !tier.oneTime) u.searchParams.set("period", period);
+    else u.searchParams.delete("period");
+    // 2026-08-21 云端托管随订阅停售下线：老 URL 里的 delivery 参数一律清掉
+    u.searchParams.delete("delivery");
+    if (tier.perSeat) u.searchParams.set("seats", String(seats));
+    else u.searchParams.delete("seats");
+    const next = u.pathname + u.search + u.hash;
+    if (next !== window.location.pathname + window.location.search + window.location.hash) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [selected, period, tier.oneTime, tier.perSeat, family, seats]);
+
+  return (
+    <section className="order-hero relative pb-24 pt-28">
+      {/* ── Hero 背景层（视觉语言对齐首页首屏：数字雨 + 极光 + 网格 + 扫描线）——
+            紧凑版：只铺首屏高度且底部渐隐，绝不压住下方卡片区；数字雨低密度、
+            仅 md+ 且暗色模式渲染（拖尾是深色填充，日间由 .order-rain 覆写隐藏）。 ── */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[620px] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]"
+      >
+        <MatrixRain className="order-rain absolute inset-0 hidden h-full w-full opacity-[0.11] md:block [mask-image:radial-gradient(ellipse_72%_68%_at_50%_26%,#000_8%,transparent_74%)]" />
+        <div className="hero-aurora absolute left-1/2 top-[-12%] h-[52vmax] w-[52vmax] -translate-x-1/2 rounded-full opacity-45" />
+        <div className="order-grid absolute inset-0" />
+        <div className="hero-scan absolute inset-x-0 top-0 h-36 opacity-25" />
+      </div>
+      <div className="pointer-events-none absolute left-1/4 top-24 h-80 w-80 rounded-full bg-neon-violet/15 blur-[130px]" />
+      <div className="pointer-events-none absolute right-1/4 top-96 h-72 w-72 rounded-full bg-neon-cyan/10 blur-[120px]" />
+
+      <div className="relative mx-auto max-w-7xl px-5">
+        {/* ── 首屏主张区：kicker + 动态徽章 + 两行大标题 + 轮换卖点 + 一句话副标题。
+              整组随产品线切换（key 重挂 → .order-swap CSS 入场，reduced-motion 关）。 ── */}
+        <Reveal eager className="text-center">
+          <div key={family} className="order-swap">
+            <OrderHeroCopy family={family} familyMeta={familyMeta} zh={zh} />
+          </div>
         </Reveal>
 
-        {/* ── 月付 / 年付 ── */}
-        <Reveal className="mt-10 flex flex-col items-center gap-3">
-          <div className="glass inline-flex rounded-full border border-white/10 p-1">
-            {(["monthly", "annual"] as Period[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => {
-                  setPeriod(p);
-                  track("order_period", { period: p });
+        {/* ── 产品线切换（幻境 STUDIO / 智聊 / 通译）——eager：首屏关键交互不依赖滚动显现 ── */}
+        <Reveal eager delay={0.06} className="mt-7 flex justify-center">
+          <div className="glass inline-flex max-w-full flex-wrap justify-center rounded-full border border-white/10 p-1">
+            {FAMILIES.map((f) => {
+              const Icon = FAMILY_ICON[f.key];
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => {
+                    setFamily(f.key);
+                    setSelected(familyDefaultTier(f.key, TIERS));
+                    track("order_family", { family: f.key });
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm transition md:px-5 ${
+                    family === f.key
+                      ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {zh ? f.tab.zh : f.tab.en}
+                </button>
+              );
+            })}
+          </div>
+        </Reveal>
+
+        {/* ── 关键数字数据卡（首页 Hero stats 同款 CountUp）：随产品线换数据组；
+              「到账 X 分钟」卡由 /api/order/stats 近 60 天实测 p50 替换，见 HeroStatCards ── */}
+        <Reveal eager delay={0.12}>
+          <div key={family} className="order-swap mt-7">
+            <HeroStatCards stats={ORDER_HERO[family].stats} zh={zh} />
+          </div>
+        </Reveal>
+
+        {/* ── 翻译免费化公告（2026-08-19 定价改版；通译 tab 专属） ── */}
+        {family === "lingox" && (
+          <Reveal eager className="mx-auto mt-6 max-w-3xl">
+            <div className="glass rounded-2xl border border-emerald-400/30 bg-emerald-400/[0.06] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
+              <span className="mr-1.5">🎉</span>
+              {zh ? (
+                <>
+                  <b className="text-emerald-300">标准翻译已永久免费、不限字符</b>
+                  ——下载智聊 ChatX 即用，无需购买。原「字符包 / 团队 / 专业」套餐停售：存量订阅服务到期，
+                  字符包未用完的字符按 <b className="text-emerald-300">150 万字符 = 60,000 Token</b> 免费换发（只多不少）。
+                  专业翻译（术语锁定 / DeepL 认证 / 多模态）按 Token 计量，见「Token 包」。{" "}
+                  <a href="/download/chatx" className="text-neon-cyan hover:underline">
+                    下载智聊 ChatX →
+                  </a>
+                </>
+              ) : (
+                <>
+                  <b className="text-emerald-300">Standard translation is now free forever with unlimited characters</b>
+                  {" "}— just download ChatX. Legacy char packs & plans are discontinued: active subscriptions run to term, and
+                  unused char-pack balances convert to <b className="text-emerald-300">60,000 tokens per 1.5M chars</b> (always in your favor).
+                  Pro translation (term-lock / certified DeepL / multimodal) meters in tokens — see Token packs.{" "}
+                  <a href="/en/download/chatx" className="text-neon-cyan hover:underline">
+                    Download ChatX →
+                  </a>
+                </>
+              )}
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 免费开始指引（充值 tab 专属）：免费档不出购买卡，下载即用 ── */}
+        {family === "tokens" && (
+          <Reveal eager className="mx-auto mt-6 max-w-3xl">
+            <div className="glass rounded-2xl border border-neon-cyan/25 bg-neon-cyan/[0.05] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
+              <span className="mr-1.5">🆓</span>
+              {zh ? CHATX_FREE_HINT.zh : CHATX_FREE_HINT.en}{" "}
+              <a href={zh ? "/download/chatx" : "/en/download/chatx"} className="text-neon-cyan hover:underline">
+                {zh ? "免费下载 →" : "Download free →"}
+              </a>
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 月付 / 季付 / 年付（充值家族隐藏——一次性商品上的周期切换只会制造困惑，
+              由 RechargeOrderZone 顶部的「一次性 · 不订阅 · 永不自动扣费」徽章行替位） ── */}
+        {family !== "tokens" && (
+          <Reveal eager className="mt-6 flex flex-col items-center gap-3">
+            <div className="glass inline-flex rounded-full border border-white/10 p-1">
+              {(["monthly", "quarterly", "annual"] as Period[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => {
+                    setPeriod(p);
+                    track("order_period", { period: p });
+                  }}
+                  className={`rounded-full px-5 py-2 text-sm transition ${
+                    period === p
+                      ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {p === "monthly"
+                    ? zh ? "月付" : "Monthly"
+                    : p === "quarterly"
+                      ? zh ? "季付" : "Quarterly"
+                      : family === "avatarhub"
+                        ? zh ? "年付" : "Annual"
+                        : zh ? "年付 · 送 2 个月" : "Annual · 2 months free"}
+                </button>
+              ))}
+            </div>
+            {tier.oneTime && (
+              <p className="text-xs text-slate-500">
+                {zh
+                  ? "充值为一次性加购（实付 12 个月有效，500U 及以上档 24 个月），价格不受月/季/年付切换影响"
+                  : "Top-ups are one-time (paid tokens valid 12 months, 24 for 500U+) — the period toggle does not change the price"}
+              </p>
+            )}
+          </Reveal>
+        )}
+
+        {/* ── 套餐卡片（充值家族走专属渲染区：6U 置顶金卡 + 加赠阶梯 + 充值卡网格） ── */}
+        {family === "tokens" ? (
+          <RechargeOrderZone
+            zh={zh}
+            selected={selected}
+            view={creditView}
+            regTs={regTs}
+            onViewChange={(v) => {
+              setCreditView(v);
+              track("order_credit_view", { view: v });
+            }}
+            onSelect={(k) => {
+              setSelected(k);
+              track("order_tier", { tier: k });
+            }}
+          />
+        ) : (
+          <div
+            className={`mt-10 grid gap-5 sm:grid-cols-2 ${
+              tiers.length >= 5 ? "xl:grid-cols-5" : "mx-auto max-w-4xl lg:grid-cols-3"
+            }`}
+          >
+            {tiers.map((t, i) => (
+              <TierCard
+                key={t.key}
+                tier={t}
+                zh={zh}
+                period={period}
+                selected={selected === t.key}
+                delay={i * 0.05}
+                onSelect={() => {
+                  setSelected(t.key);
+                  track("order_tier", { tier: t.key });
                 }}
-                className={`rounded-full px-5 py-2 text-sm transition ${
-                  period === p
-                    ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
-                    : "text-slate-300 hover:text-white"
-                }`}
-              >
-                {p === "monthly" ? (zh ? "月付" : "Monthly") : zh ? `年付 · 送 2 个月` : "Annual · 2 months free"}
-              </button>
+              />
             ))}
           </div>
-          <AnimatePresence>
-            {period === "annual" && (
-              <motion.span
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="rounded-full border border-neon-pink/30 bg-neon-pink/10 px-3 py-1 text-xs text-neon-pink"
-              >
-                {zh ? "🎁 限时首年 8 折 · 送 2 个月" : "🎁 First year 20% off · 2 months free"}
-              </motion.span>
-            )}
-          </AnimatePresence>
-        </Reveal>
-
-        {/* ── 套餐卡片 ── */}
-        <div className="mt-10 grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
-          {TIERS.map((t, i) => (
-            <TierCard
-              key={t.key}
-              tier={t}
-              zh={zh}
-              period={period}
-              selected={selected === t.key}
-              delay={i * 0.05}
-              onSelect={() => {
-                setSelected(t.key);
-                track("order_tier", { tier: t.key });
-              }}
-            />
-          ))}
-        </div>
+        )}
 
         {/* ── 结算条 ── */}
-        <Reveal className="mt-8">
+        <Reveal eager className="mt-8">
           <div className="glass flex flex-wrap items-center gap-x-8 gap-y-3 rounded-2xl border border-white/10 px-6 py-4">
             <div>
               <div className="text-xs text-slate-500">{zh ? "已选套餐" : "Selected plan"}</div>
               <div className="font-semibold text-white">{zh ? tier.name.zh : tier.name.en}</div>
             </div>
+            {tier.perSeat && (
+              <div>
+                <div className="text-xs text-slate-500">
+                  {zh ? `坐席数（最少 ${tier.perSeat.min} 席）` : `Seats (min ${tier.perSeat.min})`}
+                </div>
+                <div className="mt-0.5 inline-flex items-center gap-2">
+                  <button
+                    onClick={() => setSeats((s) => clampSeats(tier, s - 1))}
+                    disabled={seats <= tier.perSeat.min}
+                    aria-label={zh ? "减少坐席" : "Fewer seats"}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/15 text-slate-300 transition hover:border-neon-cyan/50 hover:text-white disabled:opacity-30"
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[3.5rem] text-center font-semibold tabular-nums text-white">
+                    {seats} {zh ? "席" : seats > 1 ? "seats" : "seat"}
+                  </span>
+                  <button
+                    onClick={() => setSeats((s) => clampSeats(tier, s + 1))}
+                    disabled={seats >= tier.perSeat.max}
+                    aria-label={zh ? "增加坐席" : "More seats"}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/15 text-slate-300 transition hover:border-neon-cyan/50 hover:text-white disabled:opacity-30"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )}
             <div>
               <div className="text-xs text-slate-500">{zh ? "应付金额" : "Total"}</div>
               <div className="font-semibold text-neon-cyan">
-                {tier.monthly === 0
+                {tier.custom
                   ? zh
-                    ? "免费 · 14 天"
-                    : "Free · 14 days"
-                  : `${fmt(tierPrice(tier, period))} USD / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
+                    ? "定制报价 · 按需方案"
+                    : "Custom quote"
+                  : tier.monthly === 0
+                    ? zh
+                      ? "免费"
+                      : "Free"
+                    : tier.oneTime
+                      ? `${fmt(tier.monthly)} USD${zh ? " · 一次性" : " · one-time"}`
+                      : `${fmt(linePrice(tier, period, seats))} USD / ${
+                          period === "monthly" ? (zh ? "月" : "mo") : period === "quarterly" ? (zh ? "季" : "qtr") : zh ? "年" : "yr"
+                        }`}
               </div>
+              {tier.perSeat && (
+                <div className="text-[11px] text-slate-500">
+                  {zh
+                    ? `${fmt(tierPrice(tier, period))} × ${seats} 席`
+                    : `${fmt(tierPrice(tier, period))} × ${seats} seats`}
+                </div>
+              )}
+              {/* 「所付即所得」：付款前把到账 Token / 有效期 / 等值 AI 回复摆在眼前 */}
+              {selectedCredit && (
+                <div className="text-[11px] tabular-nums text-slate-500">
+                  {zh
+                    ? `到账 ${fmt(creditView === "repeat" ? selectedCredit.repeat : selectedCredit.first)} Token · ${selectedCredit.months} 个月有效 · ≈ ${fmt(
+                        creditView === "repeat" ? selectedCredit.repliesRepeat : selectedCredit.repliesFirst,
+                      )} 条 AI 回复`
+                    : `${fmt(creditView === "repeat" ? selectedCredit.repeat : selectedCredit.first)} tokens credited · valid ${selectedCredit.months} mo · ≈ ${fmt(
+                        creditView === "repeat" ? selectedCredit.repliesRepeat : selectedCredit.repliesFirst,
+                      )} AI replies`}
+                </div>
+              )}
             </div>
-            <button
-              onClick={() => {
-                setCheckout(true);
-                track("order_open_checkout", { tier: tier.key, period });
-              }}
-              className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
-            >
-              {zh ? "立即下单 · USDT 结算" : "Order now · pay in USDT"}
-            </button>
+            {tier.custom ? (
+              <a
+                href={CONTACT_URL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => track("order_contact_sales", { tier: tier.key })}
+                className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+              >
+                {zh ? "咨询客服 · 获取报价方案" : "Contact sales for a quote"}
+              </a>
+            ) : (
+              <button
+                onClick={() => {
+                  setCheckout(true);
+                  track("order_open_checkout", { tier: tier.key, period });
+                }}
+                className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+              >
+                {zh ? "立即下单 · USDT 结算" : "Order now · pay in USDT"}
+              </button>
+            )}
           </div>
+        </Reveal>
+
+        {/* ── 以下大区块（演示 / 硬件 / 配件 / 代部署 / 信任卡）均为
+              幻境 STUDIO 本机算力产品专属；ChatX / LingoX 的能力详情走各自产品页 ── */}
+        {family === "avatarhub" && (
+          <>
+        {/* ── 品牌片薄横幅：付款犹豫时的信任压缩包，不挤价格表（点击去 /film） ── */}
+        <Reveal className="mt-14">
+          <Link
+            href={zh ? "/film" : "/en/film"}
+            className="glass group flex items-center gap-4 rounded-2xl border border-emerald-300/25 p-3 pr-5 transition hover:border-emerald-300/50"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zh ? BRAND_FILM.poster.zh : BRAND_FILM.poster.en}
+              alt=""
+              className="h-20 w-36 shrink-0 rounded-xl object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-white">
+                {zh ? "3 分钟品牌片：六个功能真机实测" : "The 3-minute film: six features, real engine output"}
+              </div>
+              <p className="mt-1 truncate text-xs text-slate-400">
+                {zh
+                  ? "没有摄影师、配音员和翻译——连主持人也是引擎做的"
+                  : "No camera crew, no voice actor, no translator — even the host is engine-made"}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-neon-blue px-4 py-2 text-xs font-semibold text-white transition group-hover:brightness-110">
+              ▶ {zh ? BRAND_FILM.durationLabel.zh : BRAND_FILM.durationLabel.en}
+            </span>
+          </Link>
         </Reveal>
 
         {/* ── 效果演示（真实引擎输出优先；未就绪的显示制作中占位） ── */}
         <ShowcaseGrid zh={zh} />
+
+        {/* ── 能力 → 档位对照：拿着产品名（幻影/幻声/通传…）来找价的人在这里对上号
+              （2026-08-07 实录工单「看不到幻影的价格」；数据源 CAPABILITY_TIERS 与
+              TIERS.feats 同步维护，档位名/价格全派生零手写） ── */}
+        <PricingTable
+          title={zh ? "我要的功能在哪个档？" : "Which tier has what I need?"}
+          subtitle={zh ? "按产品线找价格：能力包含在会员档位里，不单独计价" : "Find pricing by product line — capabilities ship inside membership tiers"}
+          head={zh ? ["我想要的能力", "产品线", "所在档位", "挂牌价 (USD)"] : ["Capability", "Product line", "Tier", "List price (USD)"]}
+          rows={CAPABILITY_TIERS.map((c) => {
+            const t = studioTier(c.tierKey);
+            const tierLabel = `${tierShortName(t, zh ? "zh" : "en")}${zh ? "起" : "+"}`;
+            const price = tierPriceLabel(t, zh ? "zh" : "en") + (c.note ? `（${zh ? c.note.zh : c.note.en}）` : "");
+            return [zh ? c.need.zh : c.need.en, zh ? c.product.zh : c.product.en, tierLabel, price];
+          })}
+          highlightCol={3}
+        />
 
         {/* ── 部署版本 × 最低配置（设备自备，我们协助部署） ── */}
         <PricingTable
@@ -173,20 +631,31 @@ export default function OrderPanel() {
           highlightCol={2}
         />
 
-        {/* ── 私有授权 ── */}
-        <PricingTable
-          title={zh ? "本地私有部署授权" : "Private deployment licenses"}
-          subtitle={zh ? "一次性 / 年费 · USD" : "One-off / yearly · USD"}
-          head={zh ? ["方案", "授权档", "年费", "买断", "说明"] : ["Plan", "Edition", "Yearly", "Buyout", "Details"]}
-          rows={LICENSES.map((l) => [
-            zh ? l.name.zh : l.name.en,
-            l.edition,
-            zh ? l.yearly.zh : l.yearly.en,
-            zh ? l.buyout.zh : l.buyout.en,
-            zh ? l.desc.zh : l.desc.en,
-          ])}
-          highlightCol={2}
-        />
+        {/* ── 私有化部署 / 企业定制：统一走旗舰版咨询客服，不再挂固定价目表 ── */}
+        <Reveal className="mt-14">
+          <div className="glass flex flex-wrap items-center gap-4 rounded-2xl border border-neon-violet/25 px-6 py-5">
+            <KeyRound className="h-8 w-8 shrink-0 text-neon-violet" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-white">
+                {zh ? "私有化部署 · 企业定制（旗舰版）" : "Private deployment · enterprise customization (Flagship)"}
+              </div>
+              <p className="mt-1 text-sm text-slate-400">
+                {zh
+                  ? "私有部署、定制开发与所有专业私域服务按需组合，方案与报价一对一评估——请咨询客服获取报价方案。"
+                  : "Private deployment, custom development and full pro private-domain services, scoped case by case — contact sales for a tailored quote."}
+              </p>
+            </div>
+            <a
+              href={CONTACT_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => track("cta_click", { where: "order_flagship_quote" })}
+              className="rounded-full border border-neon-violet/40 px-5 py-2 text-sm text-violet-300 transition hover:bg-neon-violet/10"
+            >
+              {zh ? "咨询客服获取报价" : "Contact sales"}
+            </a>
+          </div>
+        </Reveal>
 
         {/* ── 远程代部署 ── */}
         <Reveal className="mt-10">
@@ -211,64 +680,105 @@ export default function OrderPanel() {
           </div>
         </Reveal>
 
-        {/* ── 信任区块：先试后买 / 密码学授权 / 到账自动核销 / 数据不出机房 ── */}
-        <Reveal className="mt-12">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {(
-              [
-                {
-                  icon: Timer,
-                  title: zh ? "先试后买" : "Try before you buy",
-                  desc: zh
-                    ? "14 天免费试用不收一分钱，效果满意再付费；下载即用，无需信用卡。"
-                    : "14-day free trial, no card required. Pay only when you're satisfied.",
-                },
-                {
-                  icon: KeyRound,
-                  title: zh ? "密码学授权" : "Cryptographic licensing",
-                  desc: zh
-                    ? "Ed25519 签名 + 机器指纹绑定，兑换码在线激活即刻生效，不怕丢单。"
-                    : "Ed25519-signed licenses bound to your machine; redeem codes activate instantly.",
-                },
-                {
-                  icon: Wallet,
-                  title: zh ? "到账自动核销" : "Auto payment matching",
-                  desc: zh
-                    ? "每单唯一识别尾数，链上到账自动对单开通；进度随时自助可查。"
-                    : "Unique cent suffix per order — on-chain payments match automatically, status self-serve.",
-                },
-                {
-                  icon: BadgeCheck,
-                  title: zh ? "数据不出机房" : "Data stays on-prem",
-                  desc: zh
-                    ? "全部推理在你本机/内网运行，素材与产出不上传；产出带 C2PA 凭证可验真。"
-                    : "All inference runs on your hardware; nothing uploads. Outputs carry C2PA credentials.",
-                },
-              ] as const
-            ).map((c) => (
-              <div key={c.title} className="glass rounded-2xl border border-white/10 p-5">
-                <c.icon className="h-6 w-6 text-neon-cyan" />
-                <div className="mt-3 text-sm font-semibold text-white">{c.title}</div>
-                <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{c.desc}</p>
-              </div>
-            ))}
-          </div>
-        </Reveal>
+          </>
+        )}
+
+        {/* ── 企业锚点（充值 tab 专属）：预算最大的两类客户不走自助结算，
+              年框协议 / 私有化部署直达商务——此前只在 /pricing 有卡，结算页是盲区 ── */}
+        {family === "tokens" && (
+          <Reveal className="mt-14">
+            <div className="mb-4 flex items-baseline gap-3">
+              <h2 className="text-xl font-bold text-white md:text-2xl">
+                {zh ? "预算超过 10000U？" : "Beyond 10000U?"}
+              </h2>
+              <span className="text-xs text-slate-500">
+                {zh ? "年框协议价 / 私有化部署 · 一对一评估报价" : "Annual frames / private deployment · quoted case by case"}
+              </span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {ENTERPRISE_TRACKS.map((t) => {
+                const Icon = t.key === "private-deploy" ? ServerCog : Building2;
+                return (
+                  <div key={t.key} className="glass flex flex-col rounded-2xl border border-neon-violet/25 p-6">
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-7 w-7 shrink-0 text-neon-violet" />
+                      <div>
+                        <div className="font-semibold text-white">{zh ? t.name.zh : t.name.en}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">{zh ? t.tagline.zh : t.tagline.en}</div>
+                      </div>
+                    </div>
+                    <ul className="mt-4 flex-1 space-y-2">
+                      {(zh ? t.points.zh : t.points.en).map((p) => (
+                        <li key={p} className="flex items-start gap-2 text-sm text-slate-300">
+                          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-violet" />
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                    <a
+                      href={CONTACT_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => track("order_contact_sales", { tier: t.key })}
+                      className="mt-5 rounded-full border border-neon-violet/40 py-2 text-center text-sm text-violet-300 transition hover:bg-neon-violet/10"
+                    >
+                      {zh ? "联系商务 · 获取方案" : "Contact sales"}
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 信任区块：内容随产品线切换（此前被锁在 STUDIO 块里，
+              现金流主力的充值 tab 反而没有信任区） ── */}
+        {family !== "lingox" && <TrustGrid family={family} zh={zh} />}
 
         {/* ── 订单进度自助查询 ── */}
         <OrderStatusLookup />
 
         <p className="mx-auto mt-10 max-w-3xl text-center text-xs leading-relaxed text-slate-500">
-          {zh
-            ? "会员等级对应引擎授权档（trial / standard / pro / enterprise），到账后由激活服务器按机器指纹签发 Ed25519 签名授权。产出默认带 C2PA 内容凭证 + 不可见水印可验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址。"
-            : "Plan tiers map to engine license editions (trial / standard / pro / enterprise). Licenses are Ed25519-signed against your machine fingerprint after payment. Outputs carry C2PA credentials + invisible watermark; cloning requires the subject's consent. Always verify the payment address with support before sending."}
+          {family === "avatarhub"
+            ? zh
+              ? "会员等级对应引擎授权档（trial / standard / pro / enterprise），到账后由激活服务器按机器指纹签发 Ed25519 签名授权。产出默认带 C2PA 内容凭证 + 不可见水印可验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址。"
+              : "Plan tiers map to engine license editions (trial / standard / pro / enterprise). Licenses are Ed25519-signed against your machine fingerprint after payment. Outputs carry C2PA credentials + invisible watermark; cloning requires the subject's consent. Always verify the payment address with support before sending."
+            : zh
+              ? "到账后自动签发 Ed25519 签名授权码并按联系方式送达，在后台「会员中心」粘贴即激活；Token 包凭证同样在会员中心兑换（绑定下单联系方式，防串号）。下单前请向客服核对最新收款地址。"
+              : "After payment an Ed25519-signed license code is issued automatically and delivered to your contact — paste it in the admin Membership Center to activate. Token-pack vouchers redeem the same way (bound to your order contact). Always verify the payment address with support before sending."}
         </p>
       </div>
+
+      {/* ── 吸底结算条（充值家族专属）：已选档+到账数常驻视口，CTA 不再依赖回滚页面；
+            挂载期打 html[data-order-bar]，全局移动粘性条自动让位 ── */}
+      {family === "tokens" && (
+        <StickyOrderBar
+          zh={zh}
+          selected={selected}
+          view={creditView}
+          hidden={checkout}
+          onOrder={() => {
+            setCheckout(true);
+            track("order_sticky_cta", { tier: selected });
+          }}
+        />
+      )}
 
       {/* ── 结算弹窗 ── */}
       <AnimatePresence>
         {checkout && (
-          <CheckoutModal zh={zh} tier={tier} period={period} initialFp={prefillFp} onClose={() => setCheckout(false)} />
+          <CheckoutModal
+            zh={zh}
+            tier={tier}
+            period={period}
+            family={family}
+            seats={tier.perSeat ? seats : 1}
+            creditView={creditView}
+            initialFp={prefillFp}
+            attributionRef={prefillRef}
+            attributionUtm={prefillUtm}
+            onClose={() => setCheckout(false)}
+          />
         )}
       </AnimatePresence>
     </section>
@@ -283,17 +793,32 @@ function TierCard({
   delay,
   onSelect,
 }: {
-  tier: Tier;
+  tier: LineTier;
   zh: boolean;
   period: Period;
   selected: boolean;
   delay: number;
   onSelect: () => void;
 }) {
-  const price = tierPrice(t, period);
-  const unit = period === "monthly" ? (zh ? "USD / 月" : "USD / mo") : zh ? "USD / 年" : "USD / yr";
+  const price = linePrice(t, period);
+  const seatSuffix = t.perSeat ? (zh ? " / 坐席" : " / seat") : "";
+  const unit = t.oneTime
+    ? zh
+      ? "USD · 一次性"
+      : "USD one-time"
+    : (period === "monthly"
+        ? zh
+          ? "USD / 月"
+          : "USD / mo"
+        : period === "quarterly"
+          ? zh
+            ? "USD / 季"
+            : "USD / qtr"
+          : zh
+            ? "USD / 年"
+            : "USD / yr") + seatSuffix;
   return (
-    <Reveal delay={delay} className="h-full">
+    <Reveal eager delay={delay} className="h-full">
       <button
         onClick={onSelect}
         className={`relative flex h-full w-full flex-col rounded-2xl border p-5 text-left transition ${
@@ -312,10 +837,15 @@ function TierCard({
           {zh ? t.audience.zh : t.audience.en} · {t.edition}
         </div>
         <div className="mt-4">
-          {t.monthly === 0 ? (
+          {t.custom ? (
+            <>
+              <span className="text-3xl font-bold text-white">{zh ? "定制报价" : "Custom"}</span>
+              <span className="ml-1.5 text-xs text-slate-500">{zh ? "咨询客服" : "contact sales"}</span>
+            </>
+          ) : t.monthly === 0 ? (
             <>
               <span className="text-3xl font-bold text-white">{zh ? "免费" : "Free"}</span>
-              <span className="ml-1.5 text-xs text-slate-500">{zh ? "14 天" : "14 days"}</span>
+              <span className="ml-1.5 text-xs text-slate-500">{zh ? "带水印" : "watermarked"}</span>
             </>
           ) : (
             <>
@@ -324,12 +854,6 @@ function TierCard({
             </>
           )}
         </div>
-        {period === "annual" && t.monthly > 0 && (
-          <div className="mt-1 text-xs text-neon-pink">
-            {zh ? "首年 8 折 ≈ " : "1st year ≈ "}
-            {fmt(Math.round(price * FIRST_YEAR_PROMO))} USD
-          </div>
-        )}
         <ul className="mt-4 flex-1 space-y-2">
           {(zh ? t.feats.zh : t.feats.en).map((f) => (
             <li key={f} className="flex items-start gap-2 text-sm text-slate-300">
@@ -352,8 +876,10 @@ function TierCard({
   );
 }
 
-/** 效果演示网格：ready 的视频直接内嵌播放（优先真实引擎输出），未就绪的显示「制作中」占位。 */
+/** 效果演示网格：只渲染 ready=true 的条目（ready=false = 下架，整卡不出现，也不出「制作中」占位）。 */
 function ShowcaseGrid({ zh }: { zh: boolean }) {
+  const live = SHOWCASE_VIDEOS.filter((v) => v.ready);
+  if (live.length === 0) return null;
   return (
     <Reveal className="mt-14">
       <div className="mb-4 flex items-baseline gap-3">
@@ -363,56 +889,46 @@ function ShowcaseGrid({ zh }: { zh: boolean }) {
         </span>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {SHOWCASE_VIDEOS.map((v) => {
+        {live.map((v) => {
           const src = !zh && v.srcEn ? v.srcEn : v.src;
           const poster = !zh && v.posterEn ? v.posterEn : v.poster;
           return (
             <div key={v.key} className="glass overflow-hidden rounded-2xl border border-white/10">
-              {v.ready ? (
-                <div className="relative">
-                  <video
-                    controls
-                    preload="none"
-                    poster={poster}
-                    src={src}
-                    className="aspect-video w-full bg-ink-950 object-cover"
-                    onPlay={(e) => {
-                      // 每会话每条只记一次"开播"(暂停续播不重复计数),带语言维度
-                      const el = e.currentTarget;
-                      if (el.dataset.played) return;
-                      el.dataset.played = "1";
-                      track("showcase_play", { key: v.key, lang: zh ? "zh" : "en" });
-                    }}
-                    onTimeUpdate={(e) => {
-                      // 25/50/75 进度里程碑:与 ended 一起可算每条片的观看深度漏斗
-                      const el = e.currentTarget;
-                      if (!el.duration) return;
-                      const q = Math.floor((el.currentTime / el.duration) * 4);
-                      const prev = Number(el.dataset.q || 0);
-                      if (q > prev && q < 4) {
-                        el.dataset.q = String(q);
-                        track("showcase_progress", { key: v.key, pct: q * 25, lang: zh ? "zh" : "en" });
-                      }
-                    }}
-                    onEnded={() => track("showcase_done", { key: v.key, lang: zh ? "zh" : "en" })}
-                  />
-                  <span
-                    className={`pointer-events-none absolute left-3 top-3 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-                      v.real ? "bg-emerald-400/90 text-ink-950" : "bg-neon-violet/90 text-white"
-                    }`}
-                  >
-                    {v.real ? (zh ? "✓ 真实引擎输出" : "✓ Real engine output") : zh ? "概念演示" : "Concept demo"}
-                  </span>
-                </div>
-              ) : (
-                <div className="relative grid aspect-video w-full place-items-center bg-gradient-to-br from-ink-900 via-ink-950 to-ink-900">
-                  <div className="flex flex-col items-center gap-2 text-slate-600">
-                    <Clapperboard className="h-8 w-8" />
-                    <span className="text-xs">{zh ? "演示视频制作中" : "Demo video coming soon"}</span>
-                  </div>
-                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(34,211,238,0.08),transparent_60%)]" />
-                </div>
-              )}
+              <div className="relative">
+                <video
+                  controls
+                  preload="none"
+                  poster={poster}
+                  src={src}
+                  className="aspect-video w-full bg-ink-950 object-cover"
+                  onPlay={(e) => {
+                    // 每会话每条只记一次"开播"(暂停续播不重复计数),带语言维度
+                    const el = e.currentTarget;
+                    if (el.dataset.played) return;
+                    el.dataset.played = "1";
+                    track("showcase_play", { key: v.key, lang: zh ? "zh" : "en" });
+                  }}
+                  onTimeUpdate={(e) => {
+                    // 25/50/75 进度里程碑:与 ended 一起可算每条片的观看深度漏斗
+                    const el = e.currentTarget;
+                    if (!el.duration) return;
+                    const q = Math.floor((el.currentTime / el.duration) * 4);
+                    const prev = Number(el.dataset.q || 0);
+                    if (q > prev && q < 4) {
+                      el.dataset.q = String(q);
+                      track("showcase_progress", { key: v.key, pct: q * 25, lang: zh ? "zh" : "en" });
+                    }
+                  }}
+                  onEnded={() => track("showcase_done", { key: v.key, lang: zh ? "zh" : "en" })}
+                />
+                <span
+                  className={`pointer-events-none absolute left-3 top-3 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                    v.real ? "bg-emerald-400/90 text-ink-950" : "bg-neon-violet/90 text-white"
+                  }`}
+                >
+                  {v.real ? (zh ? "✓ 真实引擎输出" : "✓ Real engine output") : zh ? "概念演示" : "Concept demo"}
+                </span>
+              </div>
               <div className="p-4">
                 <div className="text-sm font-semibold text-white">{zh ? v.title.zh : v.title.en}</div>
                 <p className="mt-1 text-xs leading-relaxed text-slate-400">{zh ? v.desc.zh : v.desc.en}</p>
@@ -481,6 +997,85 @@ function PricingTable({
   );
 }
 
+/** 信任四卡：内容随产品线（tokens = 充值链路信任点；avatarhub = 本机算力信任点）。 */
+function TrustGrid({ family, zh }: { family: OrderFamily; zh: boolean }) {
+  const cards =
+    family === "tokens"
+      ? ([
+          {
+            icon: Wallet,
+            title: zh ? "到账自动核销" : "Auto payment matching",
+            desc: zh
+              ? `每单唯一识别尾数，链上到账自动对单开通，全程 ≈${ACTIVATION_MINUTES} 分钟；银行卡走 Stripe 安全支付。`
+              : `Unique cent suffix per order — payments match automatically, activation in ~${ACTIVATION_MINUTES} minutes. Cards go through Stripe.`,
+          },
+          {
+            icon: BadgeCheck,
+            title: zh ? "单号自助查询" : "Self-serve tracking",
+            desc: zh
+              ? "订单进度本页随时可查；绑定 Telegram 后到账、开通、临期自动私信提醒。"
+              : "Track any order right on this page; bind Telegram once for payment, activation and renewal alerts.",
+          },
+          {
+            icon: ShieldCheck,
+            title: zh ? "用尽永不断线" : "Never offline",
+            desc: zh
+              ? "Token 用尽自动降级到免费引擎，翻译与会话不中断——补充后即刻恢复满血。"
+              : "When tokens run out, ChatX gracefully falls back to free engines — nothing stops. Top up to restore full power.",
+          },
+          {
+            icon: Coins,
+            title: zh ? "一个钱包通用" : "One shared wallet",
+            desc: zh
+              ? "Token 跨智聊 / 通译同一钱包；会员中心粘贴凭证即到账，绑定下单联系方式防串号。"
+              : "Tokens are shared across ChatX & LingoX. Redeem vouchers in the membership center, bound to your order contact.",
+          },
+        ] as const)
+      : ([
+          {
+            icon: Timer,
+            title: zh ? "先试后买" : "Try before you buy",
+            desc: zh
+              ? "免费版换脸直接用（输出带水印），效果满意再升级付费档；下载即用，无需信用卡。"
+              : "The Free plan does face swap out of the box (watermarked). Upgrade only when you're satisfied — no card required.",
+          },
+          {
+            icon: KeyRound,
+            title: zh ? "密码学授权" : "Cryptographic licensing",
+            desc: zh
+              ? "Ed25519 签名 + 机器指纹绑定，兑换码在线激活即刻生效，不怕丢单。"
+              : "Ed25519-signed licenses bound to your machine; redeem codes activate instantly.",
+          },
+          {
+            icon: Wallet,
+            title: zh ? "到账自动核销" : "Auto payment matching",
+            desc: zh
+              ? "每单唯一识别尾数，链上到账自动对单开通；进度随时自助可查。"
+              : "Unique cent suffix per order — on-chain payments match automatically, status self-serve.",
+          },
+          {
+            icon: BadgeCheck,
+            title: zh ? "数据不出机房" : "Data stays on-prem",
+            desc: zh
+              ? "全部推理在你本机/内网运行，素材与产出不上传；产出带 C2PA 凭证可验真。"
+              : "All inference runs on your hardware; nothing uploads. Outputs carry C2PA credentials.",
+          },
+        ] as const);
+  return (
+    <Reveal className="mt-12">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((c) => (
+          <div key={c.title} className="glass rounded-2xl border border-white/10 p-5">
+            <c.icon className="h-6 w-6 text-neon-cyan" />
+            <div className="mt-3 text-sm font-semibold text-white">{c.title}</div>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{c.desc}</p>
+          </div>
+        ))}
+      </div>
+    </Reveal>
+  );
+}
+
 /** /api/payment/methods 的浏览器可见子集（见 lib/payment-settings.ts getPublicPaymentSettings）。 */
 interface PayMethodsInfo {
   usdt?: { enabled?: boolean; address?: string };
@@ -492,18 +1087,35 @@ function CheckoutModal({
   zh,
   tier,
   period,
+  family,
+  seats = 1,
+  creditView = "first",
   initialFp,
+  attributionRef = "",
+  attributionUtm = "",
   onClose,
 }: {
   zh: boolean;
-  tier: Tier;
+  tier: LineTier;
   period: Period;
+  family: OrderFamily;
+  /** 坐席数（仅 perSeat 档 >1；应付 = 单价 × seats）。 */
+  seats?: number;
+  /** 首充 / 复充视角（充值档到账数按此口径展示）。 */
+  creditView?: CreditView;
   initialFp: string;
+  /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
+  attributionRef?: string;
+  /** 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：与 ref 同款静默随单提交——
+   *  捕获/续存在 OrderPanel（bl-utm 7 天），此处只负责把值送进 POST /api/order。 */
+  attributionUtm?: string;
   onClose: () => void;
 }) {
   const [contact, setContact] = useState("");
   const [fp, setFp] = useState(initialFp);
   const [state, setState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  // 服务端拒单代码（如新人包资格不符）：有值时错误框给具体原因而不是笼统「提交失败」
+  const [errCode, setErrCode] = useState("");
   const [orderId, setOrderId] = useState("");
   const [payAmount, setPayAmount] = useState(0);
   const [copied, setCopied] = useState<"" | "addr" | "amount" | "id">("");
@@ -511,7 +1123,9 @@ function CheckoutModal({
   const [pay, setPay] = useState<PayMethodsInfo | null>(null);
   const [method, setMethod] = useState<"usdt" | "card">("usdt");
   const [cardNotice, setCardNotice] = useState(false);
-  const price = tierPrice(tier, period);
+  const price = linePrice(tier, period, seats);
+  // 充值档到账明细（非充值档为 null → 到账/有效期两行整体隐藏）
+  const credit = family === "tokens" ? rechargeCreditOf(tier.key) : null;
   // 卡通道可用 = 后台启用 + 服务器已配 Stripe Secret；免费档（price=0）无可扣金额，不给卡入口。
   const cardAvailable = !!pay?.card?.enabled && pay?.cardSecretConfigured !== false && price > 0;
   const usdtAvailable = !pay || pay.usdt?.enabled !== false;
@@ -563,9 +1177,11 @@ function CheckoutModal({
 
   const submit = async () => {
     if (!contact.trim()) {
+      setErrCode("");
       setState("err");
       return;
     }
+    setErrCode("");
     setState("busy");
     try {
       const r = await fetch("/api/order", {
@@ -574,12 +1190,21 @@ function CheckoutModal({
         body: JSON.stringify({
           plan: tier.key,
           edition: tier.edition,
-          period,
+          // 一次性商品（charpack）不随周期——履约走 topup 凭证通道不读 period，
+          // 送 "onetime" 让台账/TG 通知语义诚实。
+          period: tier.oneTime ? "onetime" : period,
           amount: price,
           contact: contact.trim(),
           fingerprint: fp.trim(),
           lang: zh ? "zh" : "en",
           method,
+          // 坐席数：仅按坐席档携带（履约按席数签发；amount 已是 单价×seats）
+          ...(tier.perSeat ? { seats } : {}),
+          // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
+          ...(attributionRef ? { ref: attributionRef } : {}),
+          // 渠道归因（?utm_source=chatx_desktop 等）：有值才带——此前只捕获未随单提交，
+          // 「桌面海报 → 下单」在台账里断链（/console/funnel 拆不出桌面来源）
+          ...(attributionUtm ? { utm_source: attributionUtm } : {}),
         }),
       });
       const j = await r.json();
@@ -596,6 +1221,7 @@ function CheckoutModal({
         }
         setState("ok");
       } else {
+        setErrCode(String(j?.error || ""));
         setState("err");
       }
     } catch {
@@ -653,22 +1279,69 @@ function CheckoutModal({
 
         <div className="mt-4 space-y-1 text-sm">
           <Row k={zh ? "套餐" : "Plan"} v={`${zh ? tier.name.zh : tier.name.en} (${tier.edition})`} />
+          {tier.perSeat && (
+            <Row
+              k={zh ? "坐席数" : "Seats"}
+              v={zh ? `${seats} 席 × ${fmt(tierPrice(tier, period))} USD` : `${seats} × ${fmt(tierPrice(tier, period))} USD`}
+            />
+          )}
           <Row
             k={zh ? "计费周期" : "Billing"}
             v={
               tier.monthly === 0
                 ? zh
-                  ? "免费试用 14 天"
-                  : "14-day free trial"
-                : period === "monthly"
+                  ? "免费版（输出带水印）"
+                  : "Free plan (watermarked output)"
+                : tier.oneTime
                   ? zh
-                    ? "按月订阅"
-                    : "Monthly"
-                  : zh
-                    ? `按年订阅（送 2 个月）`
-                    : "Annual (2 months free)"
+                    ? "一次性加购（不续费）"
+                    : "One-time purchase"
+                  : period === "monthly"
+                    ? zh
+                      ? "按月订阅"
+                      : "Monthly"
+                    : period === "quarterly"
+                      ? zh
+                        ? "按季订阅"
+                        : "Quarterly"
+                      : zh
+                        ? "按年订阅"
+                        : "Annual"
             }
           />
+          {/* 充值档「所付即所得」：付款确认时刻必须看得到到账数与有效期 */}
+          {credit && (
+            <>
+              <Row
+                k={zh ? "到账 Token" : "Tokens credited"}
+                v={
+                  credit.newbie
+                    ? zh
+                      ? `${fmt(credit.first)}（2 倍率到账）`
+                      : `${fmt(credit.first)} (double rate)`
+                    : creditView === "repeat"
+                      ? zh
+                        ? `${fmt(credit.repeat)}（复充口径 · VIP 累充另加）`
+                        : `${fmt(credit.repeat)} (repeat · VIP loyalty extra)`
+                      : zh
+                        ? `${fmt(credit.first)}${credit.bonusPct ? `（含首充 +${credit.bonusPct}%）` : ""}`
+                        : `${fmt(credit.first)}${credit.bonusPct ? ` (incl. first +${credit.bonusPct}%)` : ""}`
+                }
+              />
+              <Row
+                k={zh ? "Token 有效期" : "Token validity"}
+                v={
+                  credit.newbie
+                    ? zh
+                      ? `${credit.months} 个月`
+                      : `${credit.months} months`
+                    : zh
+                      ? `实付 ${credit.months} 个月 · 赠送 6 个月先扣`
+                      : `paid ${credit.months} mo · bonus 6 mo, spends first`
+                }
+              />
+            </>
+          )}
           <Row
             k={zh ? "应付金额" : "Total"}
             v={tier.monthly === 0 ? `0 ${amountUnit}` : `${fmt(price)} ${amountUnit}`}
@@ -717,15 +1390,29 @@ function CheckoutModal({
           placeholder={zh ? "@yourname 或 you@email.com" : "@yourname or you@email.com"}
           className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
         />
-        <label className="mt-3 block text-xs text-slate-400">
-          {zh ? "机器指纹（选填，绑机签发授权用）" : "Machine fingerprint (optional)"}
-        </label>
-        <input
-          value={fp}
-          onChange={(e) => setFp(e.target.value)}
-          placeholder={zh ? "客户端「设置 → 授权」中复制，或留空" : "Copy from client Settings → License, or leave empty"}
-          className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
-        />
+        {family === "avatarhub" ? (
+          <>
+            <label className="mt-3 block text-xs text-slate-400">
+              {zh ? "机器指纹（选填，绑机签发授权用）" : "Machine fingerprint (optional)"}
+            </label>
+            <input
+              value={fp}
+              onChange={(e) => setFp(e.target.value)}
+              placeholder={zh ? "客户端「设置 → 授权」中复制，或留空" : "Copy from client Settings → License, or leave empty"}
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
+            />
+          </>
+        ) : (
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            {tier.oneTime
+              ? zh
+                ? "充值凭证绑定此联系方式；老客户请与历史订单联系方式一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
+                : "The top-up voucher is bound to this contact — returning customers should use the same Telegram / email as before (formatting may differ)."
+              : zh
+                ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
+                : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
+          </p>
+        )}
 
         {method === "usdt" ? (
           <>
@@ -763,7 +1450,9 @@ function CheckoutModal({
         )}
 
         {state === "ok" && (
-          <div className="mt-4 rounded-xl border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-3 text-sm text-slate-200">
+          <div className="relative mt-4 rounded-xl border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-3 text-sm text-slate-200">
+            {/* 成交时刻彩纸（一次性，1.4s 自卸载；reduced-motion 由样式隐藏） */}
+            <Burst count={22} />
             <div>
               ✅ {zh ? "订单已创建" : "Order created"}
               {orderId && (
@@ -821,7 +1510,15 @@ function CheckoutModal({
         )}
         {state === "err" && (
           <div className="mt-4 rounded-xl border border-neon-pink/30 bg-neon-pink/10 px-4 py-3 text-sm text-slate-200">
-            {zh ? (
+            {errCode === "newbie_already_claimed" ? (
+              zh
+                ? <>这个账号已经领过新人 6U 大礼包（每账号仅一次）。日常充值 50U 起、首笔还有加赠——切到充值档即可。</>
+                : <>This account has already claimed the newcomer 6U pack (once per account). Regular top-ups start at 50U with a first-top-up bonus — just pick a tier.</>
+            ) : errCode === "newbie_window_passed" ? (
+              zh
+                ? <>新人 6U 大礼包仅限注册后 72 小时内购买，你的注册时间已超窗。别急——首笔正常充值仍有 +5%~+40% 加赠。</>
+                : <>The newcomer 6U pack is only available within 72h of signup, and that window has passed. Your first regular top-up still earns +5%–40%.</>
+            ) : zh ? (
               <>{contact.trim() ? "提交失败，请稍后重试，或" : "请填写联系方式，或"}直接联系 <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram 客服</a> 下单。</>
             ) : (
               <>{contact.trim() ? "Submission failed — retry or" : "Contact is required, or"} order via <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram support</a>.</>

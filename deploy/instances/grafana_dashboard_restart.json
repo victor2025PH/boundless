@@ -1,0 +1,153 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Chengjie dual-instance restart",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Cooldown active (any)",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "max(chengjie_instance_restart_cooldown_active_any)", "legendFormat": "cool"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "IDLE", "color": "green"}}},
+            {"type": "value", "options": {"1": {"text": "COOLING", "color": "orange"}}}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 1}
+          ]}
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1}
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "FLAP (any)",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "max(chengjie_instance_restart_flapping_any)", "legendFormat": "flap"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "OK", "color": "green"}}},
+            {"type": "value", "options": {"1": {"text": "FLAP", "color": "red"}}}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "red", "value": 1}
+          ]}
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1}
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "HTTP phase (zhiliao)",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "max(chengjie_instance_http_phase{instance=\"zhiliao\"})", "legendFormat": "phase"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "ready", "color": "green"},
+              "1": {"text": "warming", "color": "yellow"},
+              "2": {"text": "unresponsive", "color": "red"},
+              "3": {"text": "other", "color": "purple"}
+            }}
+          ]
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1}
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "HTTP phase (tongyi)",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "max(chengjie_instance_http_phase{instance=\"tongyi\"})", "legendFormat": "phase"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "ready", "color": "green"},
+              "1": {"text": "warming", "color": "yellow"},
+              "2": {"text": "unresponsive", "color": "red"},
+              "3": {"text": "other", "color": "purple"}
+            }}
+          ]
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1}
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "Cooldown left (seconds)",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "chengjie_instance_restart_cooldown_left_seconds", "legendFormat": "{{instance}}"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5}
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Seconds since last restart",
+      "datasource": {"type": "prometheus", "uid": "$DS_PROMETHEUS"},
+      "targets": [
+        {"expr": "chengjie_instance_restart_age_seconds", "legendFormat": "{{instance}}"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["chengjie", "restart", "dual-instance"],
+  "templating": {
+    "list": [
+      {
+        "current": {"text": "default", "value": "default"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Chengjie Dual-Instance Restart",
+  "uid": "chengjie-dual-instance-restart",
+  "version": 1,
+  "weekStart": ""
+}

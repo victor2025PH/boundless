@@ -1,0 +1,25 @@
+v1.0.63 (Aug 30 noon-batch fixes)
+
+AI reply quality
+- Mixed-language outbound (e.g. "I'm 我") fixed for good: outbound language-consistency check intercepts and rewrites before sending (all three translation exits guarded)
+- Stage-direction leaks eradicated: (tone shifts to playful), (smiles), Chinese aside brackets and the whole family are now hard-banned at generation and stripped at the outbound gate
+- Replies no longer drift to Chinese after the customer sends a photo: vision captions are never mistaken for the customer's language
+
+Persona profile is now authoritative
+- Two-way address fields: new "You call them / They call you" fields in Persona Studio, injected as hard constraints that override AI-inferred memories; an outbound guard auto-corrects swapped pet names
+- Location follows the profile: no more claiming to be in Manila when the profile says Bohol; trips mentioned in chat become a temporary state (narrated during, auto-expiring after); no more asserting rain/snow without real weather data
+- Promise integrity: promises the AI actually made are never denied, and ones it never made are never claimed
+
+Memory management upgrade
+- Every memory now carries provenance (hover to see the original message it was extracted from)
+- New Edit action: fix a wrong memory and keep it (saving counts as human verification)
+- AI-inferred entries are de-prioritized at generation time; the profile wins on conflict
+
+Album & delivery truth
+- Album uploads moved to the data directory: updates no longer wipe albums (existing files migrate automatically); uploads are content-validated so corrupted files are rejected on the spot; the misleading "album is empty" error is fixed
+- Manual sends no longer report false failures: on timeout the client reconciles with the server before concluding (slow rate-limited confirmations of 30-65s are recognized as sent)
+- "Unreachable customer" mis-flags fixed: flags carry evidence, expire after 7 days, and clear instantly on any successful delivery; a visible banner explains when auto-reply is paused
+
+Other
+- Diagnostic bundles now include the desktop shell's renderer log
+- The voice-transcription relay was hot-fixed server-side the same day (no client action needed)

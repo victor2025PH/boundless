@@ -65,3 +65,43 @@
 - {text: "متى سيصل طلبي؟ لقد طلبته قبل أسبوع تقريبًا", target_lang: zh, source_lang: ar, note: 进站-物流查询}
 - {text: "Bonjour, la robe est trop petite, je voudrais l'échanger contre une taille M", target_lang: zh, source_lang: fr, note: 进站-换货}
 - {text: "क्या आप बता सकते हैं कि मेरा ऑर्डर कब आएगा?", target_lang: zh, source_lang: hi, note: 进站-物流查询}
+
+# ── 中文变体（2026-08-30 随 zh-tw/yue 目标语上线补基线；港台市场出向场景）──
+# 读法提示：zh→yue 字符轨天然偏低（粤文用字差异大），以语义轨（bge-m3）为主判；
+# zh→zh-tw 关注词汇本地化（软件→軟體/视频→影片），回译后简繁归一由字符轨自然容忍。
+- {text: "我们的软件支持视频通话和语音消息，你可以先免费试用一周", target_lang: zh-tw, source_lang: zh, note: 出向-产品介绍-考词汇本地化}
+- {text: "订单信息我已经发到你邮箱了，记得查收一下", target_lang: zh-tw, source_lang: zh, note: 出向-电商-订单通知}
+- {text: "周末有优惠活动，买一送一，记得提前预约哦", target_lang: zh-tw, source_lang: zh, note: 出向-营销-活动通知}
+- {text: "你今晚有没有空？想请你吃个饭聊聊天", target_lang: yue, source_lang: zh, note: 出向-陪伴-邀约-考粤文口语}
+- {text: "这个东西现在缺货，下周才到，你要不要等等？", target_lang: yue, source_lang: zh, note: 出向-电商-缺货沟通}
+- {text: "谢谢你一直支持我们，有问题随时找我", target_lang: yue, source_lang: zh, note: 出向-客服-致谢}
+
+# ── HY-MT 模型卡补齐（2026-08-30：此前宽集未覆盖的 14 码；各 2 条陪伴+电商）──
+- {text: "今天降温了，记得多穿一件外套", target_lang: pl, note: 陪伴-叮嘱}
+- {text: "退款会在三到五个工作日内原路返回", target_lang: pl, note: 电商-退款}
+- {text: "周末打算去哪里玩？带我一起呗", target_lang: cs, note: 陪伴-邀约}
+- {text: "下单后可以修改收货地址吗？", target_lang: cs, note: 电商-售后}
+- {text: "你最近睡得好吗？别熬夜太晚", target_lang: nl, note: 陪伴-关怀}
+- {text: "运费需要多少？满多少可以包邮？", target_lang: nl, note: 电商-物流}
+- {text: "别太累着自己，记得按时吃饭哦", target_lang: km, note: 陪伴-关怀}
+- {text: "你的包裹已经发出，预计三天内送达", target_lang: km, note: 电商-物流}
+- {text: "今天工作辛苦了，早点休息哦", target_lang: my, note: 陪伴-关怀}
+- {text: "如果商品有质量问题，我们可以免费换货", target_lang: my, note: 电商-售后}
+- {text: "想到马上要见到你，我就特别开心", target_lang: fa, note: 陪伴-期待}
+- {text: "这款有红色和蓝色两种颜色可以选", target_lang: fa, note: 电商-商品}
+- {text: "别担心，一切都会好起来的", target_lang: he, note: 陪伴-安慰}
+- {text: "发票可以开公司抬头吗？", target_lang: he, note: 电商-发票}
+- {text: "很高兴认识你，希望我们能常常聊天", target_lang: bn, note: 陪伴-破冰}
+- {text: "该商品全球包邮，支持多种货币结算", target_lang: bn, note: 电商-物流}
+- {text: "累了就休息一下，我一直都在", target_lang: ta, note: 陪伴-安慰}
+- {text: "库存不多了，喜欢的话要尽快下单哦", target_lang: ta, note: 电商-促单}
+- {text: "吃过晚饭了吗？今天想吃点什么？", target_lang: te, note: 陪伴-日常}
+- {text: "尺码偏大还是偏小？我该选哪个码？", target_lang: te, note: 电商-尺码}
+- {text: "上次你说的那个面试，后来顺利吗？", target_lang: mr, note: 回访-具体事}
+- {text: "付款成功后大约多久能收到确认邮件？", target_lang: mr, note: 电商-支付}
+- {text: "我们周末一起看场电影吧，你想看哪部？", target_lang: gu, note: 陪伴-邀约}
+- {text: "这个产品支持七天无理由退货吗？", target_lang: gu, note: 电商-售后}
+- {text: "谢谢你一直陪着我，真的很开心", target_lang: ur, note: 陪伴-感谢}
+- {text: "支持哪些支付方式？可以货到付款吗？", target_lang: ur, note: 电商-支付}
+- {text: "你今天过得怎么样？我有点想你了", target_lang: uk, note: 陪伴-想念}
+- {text: "请问我的订单什么时候发货？", target_lang: uk, note: 电商-物流}

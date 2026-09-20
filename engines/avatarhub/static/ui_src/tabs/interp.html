@@ -1,0 +1,27 @@
+<div x-show="tab==='interp'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <!-- [去重·2026-07-16] 卡头收敛为单行：品牌/开始入口/观测让位给 iframe 内同传面板（宿主只管：
+         是什么、活没活、怎么单开、OBS 字幕）。原双 CTA(直播同传/通话同传)的编排能力移入面板
+         「开始 ▾」菜单(通话向导已在,直播同传新增)；原「直播观测」条与面板底部观测重复,整块退役。 -->
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <h2 class="bd-card-title whitespace-nowrap"
+          data-tip="通译 LingoX · 实时同传|我说中文→对方听我的克隆外语,共用当前角色音色|直播出镜:先「📡 开播」出画面,再在下方「开始 ▾」选直播同传;纯通话:下方「开始 ▾ → 通话向导」">🌐 通译 LingoX · 实时同传</h2>
+      <div class="flex items-center gap-x-3 gap-y-1.5 flex-wrap">
+        <span x-show="interpUp===true" class="text-xs text-green-400 whitespace-nowrap" data-tip="同传服务在线|翻译引擎(端口 7900)已就绪|">● 服务在线</span>
+        <span x-show="interpUp===false" class="text-xs text-red-400 whitespace-nowrap" data-tip="同传服务未启动|翻译引擎(端口 7900)没有运行|用启动器拉起服务后再开同传">● 未启动(端口 7900)</span>
+        <a :href="interpUrl" target="_blank" class="text-xs text-hub-blue hover:underline whitespace-nowrap" data-tip="新窗口打开|把下方同传页面单独开一个浏览器窗口|想全屏看字幕或多屏摆放时">↗ 新窗口打开</a>
+        <button type="button" @click="navigator.clipboard.writeText(interpOverlayUrl(0)); showToast('OBS 字幕 URL 已复制','info')"
+                class="text-xs text-hub-muted hover:text-hub-blue whitespace-nowrap" data-tip="字幕挂件|复制 OBS Browser Source 地址(透明底实时双语字幕)|直播画面想叠字幕时,粘贴到 OBS 浏览器源">字幕挂件</button>
+      </div>
+    </div>
+    <template x-if="interpUp===false">
+      <div class="text-xs bd-strip mute p-3 mb-3">
+        同传服务未运行。请在启动器点 <b class="text-hub-blue">「直播同传」</b> 或 <b class="text-hub-blue">「打开同传」</b>，
+        或运行 <code class="text-hub-blue">python live_interpreter.py</code>(facefusion 环境),稍候自动连接。
+        也可 <button @click="goFix('interpreter')" class="text-hub-blue underline hover:text-hub-text">去体检页一键启动</button>
+      </div>
+    </template>
+    <iframe x-show="interpUp!==false" :key="interpFrameKey" :src="visitedTabs.includes('interp') ? interpUrl : ''"
+            class="w-full h-[82vh] border-0 rounded-lg" title="通译 LingoX 实时同传" loading="lazy"></iframe>
+  </div>
+</div>

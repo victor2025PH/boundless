@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BOUNDLESS LIVE WALLPAPER</title>
+<!--
+  无界集群·星门实况动态壁纸（Lively Wallpaper 本地 HTML 型）
+  特效引擎逐参数移植自官网首屏 website/components/IntroCover.tsx：
+    - 星流透视 canvas（idle speed 0.0022，白/青/紫三色流光）
+    - 星门产品 LOGO 粒子（三层景深 / 128° 扇区、顶部 ±52° 豁免 / 左右严格交替 /
+      闭式运动学 d(t)=v0·t+a·t²/2 / 尺寸 ∝ p^1.7 / 拖尾 ∝ 速度 / 出生涟漪）
+  数据链：本机哨兵(sentinel.ps1 v6)每分钟写同目录 data.js（自身状态 + hub /api/history 集群实况），
+  页面每 30s 换发 <script> 重载——file:// 下 fetch 会被 CORS 拦，script 标签不受限。
+  哨兵故障态(netdown/gpufault/ipdrift/hubdown/svcdown)直接在页内弹告警横幅，
+  解决「Lively 遮住哨兵告警壁纸」的 8/7 试点遗留缺口。
+  性能纪律：30fps 上限 / DPR≤1.25 / 粒子≤6（lite 4）/ document.hidden 即停。
+-->
+<style>
+  :root { --accent: #F0A010; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden; background: #05060f;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    cursor: default; user-select: none;
+  }
+  /* 宇宙底图 + 缓慢漂移（同官网 bl-bg-drift） */
+  .bg {
+    position: absolute; inset: -4%;
+    background: url("assets/cosmos.jpg") center 62% / cover no-repeat;
+    animation: bgdrift 36s ease-in-out 0s infinite alternate;
+    will-change: transform;
+  }
+  @keyframes bgdrift {
+    from { transform: scale(1.02) translateY(0); }
+    to   { transform: scale(1.08) translateY(-1.2%); }
+  }
+  canvas#stars { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+  /* 暗角压光（同官网 bl-intro-tint） */
+  .tint {
+    position: absolute; inset: 0; z-index: 2;
+    background:
+      radial-gradient(ellipse 62% 52% at 50% 46%, rgba(5,6,15,.52), transparent 72%),
+      radial-gradient(ellipse 90% 60% at 50% 62%, transparent 30%, rgba(5,6,15,.55) 100%),
+      linear-gradient(to bottom, rgba(5,6,15,.55), transparent 32%, transparent 70%, rgba(5,6,15,.7));
+  }
+  .gate-logos { position: absolute; left: 50%; top: 72%; width: 0; height: 0; z-index: 3; pointer-events: none; }
+  .gate-logo { position: absolute; left: 0; top: 0; opacity: 0; will-change: transform, opacity; }
+  .gate-logo img { width: 100%; height: 100%; object-fit: contain; }
+
+  /* ===== 中央机器身份 ===== */
+  .content {
+    position: absolute; inset: 0; z-index: 4; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding-bottom: 6vh;
+  }
+  .kicker {
+    font-size: 13px; letter-spacing: .42em; color: rgba(165,243,252,.72);
+    margin-bottom: 28px; text-indent: .42em;
+  }
+  .brandmark img {
+    height: clamp(72px, 9vh, 112px);
+    filter: drop-shadow(0 0 18px rgba(34,211,238,.5));
+    animation: markglow 6s ease-in-out infinite;
+  }
+  @keyframes markglow {
+    0%, 100% { filter: drop-shadow(0 0 16px rgba(34,211,238,.45)); }
+    50%      { filter: drop-shadow(0 0 34px rgba(34,211,238,.8)); }
+  }
+  .m-name {
+    margin-top: 20px;
+    font-size: clamp(88px, 10vw, 164px); font-weight: 800; line-height: 1.12;
+    color: #fff; letter-spacing: .14em; text-indent: .14em;
+    text-shadow: 0 0 26px rgba(103,232,249,.42), 0 0 70px rgba(103,232,249,.22), 0 2px 18px rgba(5,6,15,.85);
+  }
+  .m-sub {
+    margin-top: 18px; font-family: Consolas, monospace;
+    font-size: clamp(14px, 1.1vw, 19px); letter-spacing: .14em; color: rgba(226,232,240,.78);
+  }
+  .m-role {
+    margin-top: 10px; font-size: clamp(12px, .9vw, 15px);
+    letter-spacing: .1em; color: rgba(148,197,255,.75);
+  }
+  .m-role b { color: var(--accent); font-weight: 600; }
+
+  /* ===== 集群实况面板（右上） ===== */
+  .panel {
+    position: absolute; top: 28px; right: 28px; z-index: 6; width: 348px;
+    padding: 13px 16px 10px;
+    background: rgba(8,11,26,.6);
+    border: 1px solid rgba(148,163,184,.16); border-radius: 14px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.35);
+    font-size: 13px; color: #dbe6f5;
+  }
+  .p-head {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 12px; letter-spacing: .22em; color: rgba(165,243,252,.85);
+    margin-bottom: 6px;
+  }
+  .p-live {
+    font-size: 10px; letter-spacing: .1em; color: #34d399;
+    border: 1px solid rgba(52,211,153,.4); padding: 0 5px; border-radius: 6px;
+    animation: liveblink 2.4s ease-in-out infinite;
+  }
+  @keyframes liveblink { 50% { opacity: .45; } }
+  #pAge { margin-left: auto; font-size: 11px; letter-spacing: 0; color: rgba(148,163,184,.7); }
+  #pAge.stale { color: #f59e0b; }
+  .prow {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 5px 0 4px; border-top: 1px solid rgba(148,163,184,.09);
+  }
+  .prow .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.ok   { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,.8); }
+  .dot.warn { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,.85); }
+  .dot.na   { background: #475569; }
+  .pname { width: 56px; color: rgba(230,240,255,.92); }
+  .prow.self .pname { font-weight: 700; }
+  .pval { margin-left: auto; font-family: Consolas, monospace; font-size: 11.5px; color: rgba(203,213,225,.85); }
+  .vbar {
+    position: relative; width: 100%; height: 5px; margin: 1px 0 2px;
+    background: rgba(148,163,184,.14); border-radius: 4px; overflow: hidden;
+  }
+  .vbar i {
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px;
+    background: linear-gradient(90deg, #22d3ee, #a78bfa);
+  }
+  .pwait { padding: 10px 0 6px; color: rgba(148,163,184,.65); font-size: 12px; }
+
+  /* ===== 哨兵告警横幅（顶部居中，state != normal 时出现） ===== */
+  .alert {
+    position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
+    z-index: 8; max-width: 72vw;
+    padding: 10px 24px; border-radius: 12px;
+    font-size: 16px; font-weight: 700; letter-spacing: .06em; color: #fff;
+    box-shadow: 0 6px 30px rgba(0,0,0,.5);
+    animation: alertpulse 2.2s ease-in-out infinite;
+  }
+  @keyframes alertpulse { 50% { box-shadow: 0 6px 44px rgba(255,80,40,.45); } }
+
+  /* ===== 时钟（右下） ===== */
+  .foot {
+    position: absolute; right: 30px; bottom: 24px; z-index: 6; text-align: right;
+    font-family: Consolas, monospace; color: rgba(203,213,225,.55);
+  }
+  #fClock { font-size: 36px; letter-spacing: .08em; color: rgba(226,232,240,.82); }
+  #fDate { font-size: 13px; margin-left: 12px; }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<canvas id="stars"></canvas>
+<div class="tint"></div>
+<div id="gate" class="gate-logos"></div>
+
+<div class="content">
+  <div class="kicker">BOUNDLESS &middot; AI ENGINE &middot; 无界引擎</div>
+  <div class="brandmark">
+    <picture>
+      <source srcset="assets/mark.webp" type="image/webp">
+      <img src="assets/mark.png" alt="" draggable="false">
+    </picture>
+  </div>
+  <div class="m-name" id="mName">主机</div>
+  <div class="m-sub" id="mSub"></div>
+  <div class="m-role" id="mRole"></div>
+</div>
+
+<div class="panel">
+  <div class="p-head">集群实况 <span class="p-live">LIVE</span><span id="pAge"></span></div>
+  <div id="pRows"><div class="pwait">等待哨兵数据…</div></div>
+</div>
+
+<div class="alert" id="alert" hidden></div>
+<div class="foot"><span id="fClock"></span><span id="fDate"></span></div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  "use strict";
+  var CFG = window.HUD_CFG || {
+    id: "shengbei", zh: "主机", alias: "ZHUJI", ip: "192.168.0.117",
+    gpu: "RTX 3060 12G", accent: "#F0A010", role: "", role_detail: "", lite: false,
+    machines: []
+  };
+  var LITE = !!CFG.lite;
+  document.documentElement.style.setProperty("--accent", CFG.accent || "#F0A010");
+  document.getElementById("mName").textContent = CFG.zh || CFG.id;
+  document.getElementById("mSub").textContent =
+    (CFG.alias || "") + " · " + (CFG.ip || "") + " · " + (CFG.gpu || "");
+  var roleEl = document.getElementById("mRole");
+  roleEl.innerHTML = "";
+  var rb = document.createElement("b");
+  rb.textContent = CFG.role || "";
+  roleEl.appendChild(rb);
+  if (CFG.role_detail) roleEl.appendChild(document.createTextNode("　" + CFG.role_detail));
+
+  /* ===== 产品图标元数据（与官网 productMeta.ts 同值） ===== */
+  var PRODUCT_ORDER = ["chatx", "reachx", "matrixx", "voxx", "voicex", "facex", "livex", "fatex"];
+  var GLOW = {
+    reachx: "251,146,60", chatx: "217,70,239", facex: "96,165,250", voicex: "167,139,250",
+    livex: "232,121,249", voxx: "249,115,22", matrixx: "242,67,214", fatex: "206,86,203"
+  };
+  var LAYERS = [
+    { cls: "far",  sizeMul: 0.62, vMul: 0.82, alpha: 0.55, trailA: 0.14, glowPx: 6,  glowA: 0.35, weight: 0.3 },
+    { cls: "mid",  sizeMul: 1,    vMul: 1,    alpha: 0.85, trailA: 0.22, glowPx: 12, glowA: 0.55, weight: 0.45 },
+    { cls: "near", sizeMul: 1.35, vMul: 1.22, alpha: 1,    trailA: 0.3,  glowPx: 16, glowA: 0.7,  weight: 0.25 }
+  ];
+
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+  /* 128° 扇区（右 -38°→90°、左 90°→218°），正上方 ±52° 锥区豁免（保标题区干净） */
+  function pickAngle(side) {
+    var half = (52 * Math.PI) / 180;
+    var span = Math.PI - half;
+    return side === 1 ? -Math.PI / 2 + half + Math.random() * span : Math.PI / 2 + Math.random() * span;
+  }
+  function pickLayer() {
+    var r = Math.random(), acc = 0;
+    for (var i = 0; i < LAYERS.length; i++) { acc += LAYERS[i].weight; if (r < acc) return LAYERS[i]; }
+    return LAYERS[1];
+  }
+
+  /* ===== 画布与星流 ===== */
+  var canvas = document.getElementById("stars");
+  var ctx = canvas.getContext("2d");
+  var DPR = Math.min(window.devicePixelRatio || 1, 1.25);
+  var W = 0, H = 0, CX = 0, CY = 0, gateY = 0;
+  var stars = [];
+  var STAR_SPEED = 0.0022;
+
+  function spawnStar(anywhere) {
+    return { x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: anywhere ? 0.12 + Math.random() * 0.88 : 1, hue: Math.random() };
+  }
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    CX = W * 0.5; CY = H * 0.55; gateY = H * 0.72;
+    var count = Math.min(300, Math.round((W * H) / 6500));
+    if (LITE) count = Math.round(count * 0.6);
+    if (stars.length > count) stars.length = count;
+    while (stars.length < count) stars.push(spawnStar(true));
+  }
+  function tickStars() {
+    var scale = Math.min(W, H) * 0.9;
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var pz = s.z;
+      s.z -= STAR_SPEED * (0.4 + s.z);
+      if (s.z <= 0.03) { stars[i] = spawnStar(false); continue; }
+      var px = CX + (s.x / s.z) * scale;
+      var py = CY + (s.y / s.z) * scale;
+      if (px < -60 || px > W + 60 || py < -60 || py > H + 60) { stars[i] = spawnStar(false); continue; }
+      var qx = CX + (s.x / pz) * scale;
+      var qy = CY + (s.y / pz) * scale;
+      var depth = 1 - s.z;
+      var alpha = Math.max(0, Math.min(1, depth * 1.1)) * 0.85;
+      var color = s.hue < 0.55 ? "240,253,255" : s.hue < 0.8 ? "103,232,249" : "196,181,253";
+      ctx.strokeStyle = "rgba(" + color + "," + alpha.toFixed(3) + ")";
+      ctx.lineWidth = Math.max(0.5, depth * 2.1);
+      ctx.beginPath(); ctx.moveTo(qx, qy); ctx.lineTo(px, py); ctx.stroke();
+    }
+  }
+
+  /* ===== 星门粒子引擎（闭式运动学，逐参数同官网） ===== */
+  var host = document.getElementById("gate");
+  var eng = {
+    live: [], queue: shuffle(PRODUCT_ORDER.slice()),
+    side: Math.random() < 0.5 ? 1 : -1,
+    nextAt: (performance.now ? performance.now() : Date.now()) + 600,
+    cap: LITE ? 4 : 6, ripples: []
+  };
+
+  function iconEl(key, baseSz, layer) {
+    var el = document.createElement("span");
+    el.className = "gate-logo";
+    el.style.width = baseSz.toFixed(0) + "px";
+    el.style.height = baseSz.toFixed(0) + "px";
+    el.style.marginLeft = (-baseSz / 2).toFixed(0) + "px";
+    el.style.marginTop = (-baseSz / 2).toFixed(0) + "px";
+    el.style.opacity = "0";
+    var img = document.createElement("img");
+    img.onerror = function () { img.onerror = null; img.src = "assets/products/" + key + ".png"; };
+    img.src = "assets/products/" + key + ".webp";
+    img.alt = ""; img.draggable = false; img.decoding = "async";
+    var glow = GLOW[key];
+    img.style.filter =
+      "drop-shadow(0 0 " + layer.glowPx + "px rgba(" + glow + "," + layer.glowA + "))" +
+      (layer.cls === "near" ? " drop-shadow(0 0 34px rgba(167,139,250,0.35))" : "");
+    el.appendChild(img);
+    return el;
+  }
+
+  function spawnParticle(now) {
+    var key = null;
+    for (var i = 0; i < eng.queue.length; i++) {
+      var k = eng.queue[i], busy = false;
+      for (var j = 0; j < eng.live.length; j++) if (eng.live[j].key === k) { busy = true; break; }
+      if (!busy) { key = k; break; }
+    }
+    if (!key) return null;
+    eng.queue.splice(eng.queue.indexOf(key), 1);
+    eng.queue.push(key);
+    eng.side = eng.side === 1 ? -1 : 1;
+    var side = eng.side;
+    var layer = pickLayer();
+    var ang = pickAngle(side);
+    var ux = Math.cos(ang), uy = Math.sin(ang);
+    var baseSz = (26 + Math.random() * 40) * layer.sizeMul;
+    var sStart = 0.5, sEnd = 1.9 + Math.random() * 0.5;
+    var margin = (baseSz * sEnd) / 2 + 12;
+    var hD = Math.abs(ux) > 1e-3 ? (W * 0.5) / Math.abs(ux) : Infinity;
+    var vD = Math.abs(uy) > 1e-3 ? (uy < 0 ? gateY : H - gateY) / Math.abs(uy) : Infinity;
+    var dEdge = Math.min(hD, vD);
+    var dExit = dEdge + margin / Math.max(0.2, Math.max(Math.abs(ux), Math.abs(uy)));
+    var v0 = (240 + Math.random() * 60) * layer.vMul;
+    var ve = Math.max((980 + Math.random() * 350) * layer.vMul, (2 * dExit) / 1.5 - v0);
+    var acc = (ve * ve - v0 * v0) / (2 * dExit);
+    var el = iconEl(key, baseSz, layer);
+    host.appendChild(el);
+    return {
+      key: key, el: el, born: now, ux: ux, uy: uy, layer: layer, baseSz: baseSz,
+      v0: v0, acc: acc, dExit: dExit, sStart: sStart, sEnd: sEnd,
+      alpha: layer.alpha, trailA: layer.trailA, color: GLOW[key], blurDone: false, trail: []
+    };
+  }
+
+  function tickGate(now) {
+    if (now >= eng.nextAt && eng.live.length < eng.cap) {
+      var p0 = spawnParticle(now);
+      if (p0) {
+        eng.live.push(p0);
+        if (!LITE) {
+          eng.ripples.push({ x: CX, y: gateY, t0: now, dur: 260, r0: 6, r1: 22 + p0.baseSz * 0.35, color: p0.color });
+        }
+      }
+      eng.nextAt = now + (150 + Math.random() * 260) * (LITE ? 1.25 : 1);
+    }
+    for (var ri = eng.ripples.length - 1; ri >= 0; ri--) {
+      var rp = eng.ripples[ri];
+      var rpr = (now - rp.t0) / rp.dur;
+      if (rpr >= 1) { eng.ripples.splice(ri, 1); continue; }
+      var ease = 1 - (1 - rpr) * (1 - rpr);
+      ctx.strokeStyle = "rgba(" + rp.color + "," + (0.4 * (1 - rpr)).toFixed(3) + ")";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r0 + (rp.r1 - rp.r0) * ease, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    for (var i = eng.live.length - 1; i >= 0; i--) {
+      var p = eng.live[i];
+      var t = (now - p.born) / 1000;
+      var d = p.v0 * t + 0.5 * p.acc * t * t;
+      if (d >= p.dExit) {
+        p.el.parentNode && p.el.parentNode.removeChild(p.el);
+        eng.live.splice(i, 1);
+        continue;
+      }
+      var prog = d / p.dExit;
+      var s = p.sStart + (p.sEnd - p.sStart) * Math.pow(prog, 1.7);
+      var px = p.ux * d, py = p.uy * d;
+      p.el.style.transform = "translate3d(" + px.toFixed(1) + "px," + py.toFixed(1) + "px,0) scale(" + s.toFixed(3) + ")";
+      var fadeIn = Math.min(1, (now - p.born) / 180);
+      p.el.style.opacity = (p.alpha * fadeIn).toFixed(3);
+      if (!LITE) {
+        if (fadeIn < 1) p.el.style.filter = "blur(" + (4 * (1 - fadeIn)).toFixed(1) + "px)";
+        else if (!p.blurDone) { p.el.style.filter = ""; p.blurDone = true; }
+      }
+      if (!LITE) {
+        var gx = CX + px, gy = gateY + py;
+        p.trail.push({ x: gx, y: gy });
+        if (p.trail.length > 5) p.trail.shift();
+        for (var tj = 1; tj < p.trail.length; tj++) {
+          var aSeg = p.trailA * (tj / p.trail.length) * fadeIn;
+          ctx.strokeStyle = "rgba(" + p.color + "," + aSeg.toFixed(3) + ")";
+          ctx.lineWidth = Math.max(1, (s * p.baseSz) / 30);
+          ctx.beginPath();
+          ctx.moveTo(p.trail[tj - 1].x, p.trail[tj - 1].y);
+          ctx.lineTo(p.trail[tj].x, p.trail[tj].y);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  /* ===== 主循环（30fps 上限；隐藏即停，Lively 全屏应用时也会暂停 WebView） ===== */
+  var raf = 0, lastFrame = 0;
+  function loop(t) {
+    raf = requestAnimationFrame(loop);
+    if (t - lastFrame < 33) return;
+    lastFrame = t;
+    ctx.clearRect(0, 0, W, H);
+    tickStars();
+    tickGate(performance.now());
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { cancelAnimationFrame(raf); raf = 0; }
+    else if (!raf) { lastFrame = 0; raf = requestAnimationFrame(loop); }
+  });
+  window.addEventListener("resize", resize);
+
+  /* 预热图标（同官网：出生瞬间无解码抖动） */
+  PRODUCT_ORDER.forEach(function (k) {
+    var im = new Image();
+    im.onerror = function () { im.onerror = null; im.src = "assets/products/" + k + ".png"; };
+    im.src = "assets/products/" + k + ".webp";
+  });
+
+  /* ===== data.js 轮换重载（哨兵每分钟写；script 标签不受 file:// CORS 限制） ===== */
+  var STATE_TXT = {
+    netdown:  ["网络中断", "网关无响应"],
+    gpufault: ["GPU 故障", "nvidia-smi 无响应"],
+    ipdrift:  ["IP 漂移", "实际 IP 与名册不符"],
+    hubdown:  ["中枢失联", "感知机 :9000 不可达"],
+    svcdown:  ["本机服务掉线", ""]
+  };
+  var STATE_BG = {
+    netdown: "rgba(220,38,38,.92)", gpufault: "rgba(153,27,27,.94)",
+    ipdrift: "rgba(147,51,234,.92)", hubdown: "rgba(217,119,6,.92)", svcdown: "rgba(234,88,12,.92)"
+  };
+
+  function esc(str) {
+    return String(str).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function applyData() {
+    var d = window.HUD_DATA || null;
+    var last = (d && d.hist && d.hist.length) ? d.hist[d.hist.length - 1] : null;
+    var ageEl = document.getElementById("pAge");
+    var rows = document.getElementById("pRows");
+
+    var wrote = (d && d.self && d.self.wrote_epoch) ? d.self.wrote_epoch * 1000 : 0;
+    if (wrote) {
+      var ageSec = Math.max(0, Math.round((Date.now() - wrote) / 1000));
+      var stale = ageSec > 300;
+      ageEl.textContent = stale ? "数据过期 " + Math.round(ageSec / 60) + "m" :
+        (ageSec < 90 ? ageSec + "s 前" : Math.round(ageSec / 60) + "m 前");
+      ageEl.className = stale ? "stale" : "";
+    } else {
+      ageEl.textContent = ""; ageEl.className = "";
+    }
+
+    if (!last || !last.m || !CFG.machines.length) {
+      rows.innerHTML = '<div class="pwait">等待哨兵数据…</div>';
+    } else {
+      var html = "";
+      for (var i = 0; i < CFG.machines.length; i++) {
+        var mc = CFG.machines[i];
+        var r = last.m[mc.id] || null;
+        var vu = r ? r.vu : -1, vt = r ? r.vt : -1, u = r ? r.u : -1;
+        var l = (r && typeof r.l === "number") ? r.l : null;
+        var st = r ? r.s : null;
+        if (mc.id === CFG.id && d.self) {
+          if (d.self.vram_total_mb > 0) { vu = d.self.vram_used_mb; vt = d.self.vram_total_mb; }
+          if (d.self.gpu_util >= 0) { u = d.self.gpu_util; }
+        }
+        var cls = st === "o" ? "ok" : (st ? "warn" : "na");
+        var parts = [];
+        if (l !== null && l >= 0) parts.push("负载 " + (+l).toFixed(1));
+        if (u !== null && u >= 0) parts.push(u + "%");
+        if (vt > 0 && vu >= 0) parts.push((vu / 1024).toFixed(1) + "/" + (vt / 1024).toFixed(1) + "G");
+        var bar = "";
+        if (vt > 0 && vu >= 0) {
+          var pct = Math.max(0, Math.min(100, Math.round((vu / vt) * 100)));
+          bar = '<div class="vbar"><i style="width:' + pct + '%"></i></div>';
+        }
+        var selfCls = mc.id === CFG.id ? " self" : "";
+        var nameStyle = mc.id === CFG.id ? ' style="color:' + esc(CFG.accent || "#fff") + '"' : "";
+        html += '<div class="prow' + selfCls + '"><span class="dot ' + cls + '"></span>' +
+          '<span class="pname"' + nameStyle + ">" + esc(mc.zh || mc.id) + "</span>" +
+          '<span class="pval">' + (parts.length ? esc(parts.join(" · ")) : "—") + "</span>" + bar + "</div>";
+      }
+      rows.innerHTML = html;
+    }
+
+    var al = document.getElementById("alert");
+    var stt = (d && d.self) ? d.self.state : null;
+    if (stt && stt !== "normal" && STATE_TXT[stt]) {
+      var tt = STATE_TXT[stt];
+      var detail = tt[1];
+      if (stt === "svcdown") {
+        var dp = (d.self.dead_ports || []).join(", ");
+        detail = "端口 " + dp + " 未监听";
+      }
+      al.textContent = "⚠ " + tt[0] + " · " + detail + (d.self.since ? " · 自 " + d.self.since : "");
+      al.style.background = STATE_BG[stt];
+      al.hidden = false;
+    } else {
+      al.hidden = true;
+    }
+  }
+
+  function reloadData() {
+    var old = document.getElementById("datajs");
+    if (old) old.parentNode.removeChild(old);
+    var s = document.createElement("script");
+    s.id = "datajs";
+    s.src = "data.js?t=" + Date.now();
+    s.onload = applyData;
+    s.onerror = applyData;
+    document.body.appendChild(s);
+  }
+  setInterval(reloadData, 30000);
+
+  /* ===== 时钟 ===== */
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  var WEEK = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  function tickClock() {
+    var n = new Date();
+    document.getElementById("fClock").textContent = pad(n.getHours()) + ":" + pad(n.getMinutes());
+    document.getElementById("fDate").textContent = (n.getMonth() + 1) + "月" + n.getDate() + "日 " + WEEK[n.getDay()];
+  }
+  setInterval(tickClock, 15000);
+
+  /* ===== 启动 ===== */
+  resize();
+  tickClock();
+  reloadData();
+  raf = requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

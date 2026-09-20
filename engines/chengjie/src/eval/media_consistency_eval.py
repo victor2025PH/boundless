@@ -51,18 +51,67 @@ _CLAIM_WITHOUT_PHOTO = [re.compile(p, re.IGNORECASE) for p in (
     r"[刚剛]\s*拍\s*(?:的|好)[^\n，,]{0,4}[，,]?\s*(?:发|發|给|給)\s*你",
     r"(?:发|發)\s*(?:给|給)?\s*你\s*(?:啦|了)\s*[～~!！。]?\s*$",
     r"看\s*(?:一)?\s*下\s*(?:我[刚剛]拍)",
+    # 实施69（2026-08-24 夜市摊实录）：完成态口语「这不就来了嘛」、
+    # 「真发过去了」与**传输借口式已发断言**（「信号不好照片没传出去/卡在
+    # 半道」——尾部必须是"没传出/卡住"类断言，「信号不好发不了」是诚实否认
+    # 不命中）；粤语完成态（啱啱拍嘅）来自同期另一客户实录。
+    r"这不\s*就?\s*(?:来|來)\s*(?:了|啦|嘛)",
+    r"(?:真|真的|已经|已經)\s*(?:发|發|传|傳)\s*(?:过去|過去|出去|给你|給你)\s*(?:了|啦)",
+    r"(?:信号|信號|讯号|訊號|网络|網絡)[^\n，,]{0,6}(?:不好|不太行|不行|太差|差)"
+    r"[^\n]{0,10}(?:没传出|沒傳出|没发出|沒發出|卡在|卡住)",
+    r"(?:照片|图|圖)\s*卡\s*(?:在|住)",
+    r"(?:啱啱|头先|頭先)\s*(?:影|拍)\s*(?:嘅|咗)",
+    r"拍\s*好\s*(?:啦|了|咯)(?![吗嗎没沒])",
     r"\bhere(?:'|’)?s\s+(?:a|an|my|the|one)?\s*(?:photo|pic(?:ture)?|selfie)",
     r"\bjust\s+(?:took|sent)\s+(?:this|it|one|a\s+(?:photo|pic|selfie))",
     r"\b(?:photo|pic|selfie)\s+(?:is\s+)?(?:sent|on\s+(?:the|its)\s+way)",
+    # #171（2026-09-05 WhatsApp Mizuki→John 实录）：英文**过去时假声明**——
+    # 「I just sent it, you should have it now」「let me try sending it again」
+    # ——旧表只认 just sent / here's a pic 宣告形，「you should have it」「send it
+    # again」（补发承诺预设「发过」）全漏。与生产 detect_sent_claim 同族但独立
+    # 维护（评测器不 import 生产词表）。否定（didn't send）在 check 里统一排除。
+    r"\bi(?:'ve|’ve|\s+have)?\s+(?:just\s+|already\s+)?sent\s+(?:you\s+)?"
+    r"(?:it|that|one|(?:the|a|an|my|another)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    r"\b(?:already|just)\s+sent\s+(?:it|that|one|(?:the|a|my)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    r"\b(?:you|u)\s+should\s+(?:have|see)\s+(?:it|them|the\s+(?:photos?|pics?|pictures?)|my\s+(?:photos?|pics?))\b",
+    r"\b(?:re-?send(?:ing)?|send(?:ing)?)\s+(?:it|them|that|the\s+(?:photos?|pics?|pictures?))\s+(?:again|one\s+more\s+time|once\s+more)\b",
+    r"\b(?:let\s+me|i(?:'ll|’ll|\s+will))\s+(?:try\s+(?:and\s+|to\s+)?)?re-?send\b",
+    r"\bdid\s+(?:you|u)\s+(?:get|receive)\s+(?:(?:it|them)\s+yet|(?:the|my)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    # zh 同形态：刚发给你了 / 已经发过去了 / 我再发一次 / 你收到了吗
+    r"(?:已经|已經|刚刚|剛剛|刚才|剛才|刚|剛)\s*(?:就)?\s*(?:给|給)?\s*你?\s*(?:发|發|传|傳)\s*(?:给|給)?\s*(?:你|过去|過去|出去)\s*(?:了|啦)?",
+    r"(?:再|重新|重)\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|给你|給你|过去|過去)",
+    r"(?:照片|图|圖|自拍)[^\n，,]{0,6}(?:收到|收得到)\s*(?:了)?\s*(?:吗|嗎|没|沒)",
 )]
+
+# 否定排除（「I didn't send anything」「我没发」是诚实否认，不是已发断言）
+_DENIAL_RE = re.compile(
+    r"\b(?:didn(?:'|’)?t|did\s+not|never|haven(?:'|’)?t|couldn(?:'|’)?t|can(?:'|’)?t|forgot\s+to)\s+"
+    r"(?:\w+\s+)?(?:send|sent)\b|没\s*(?:有)?\s*(?:发|發|传|傳)|沒\s*(?:有)?\s*(?:发|發|传|傳)|还没\s*(?:发|發)",
+    re.IGNORECASE)
 
 # 过去指涉排除（谈论以前发过的照片 ≠ 断言本条附了图）
 _PAST_REF_RE = re.compile(
-    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b")
+    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b|\byesterday\b"
+    r"|\blast\s+(?:week|night)\b"
+    r"|去年|(?:今年)?[春夏秋冬]天(?:去|在)|旅行时|旅行時|去玩(?:的时候|的時候)?")
 
-# 强断言"我在 X"（配文声称身处某场景类；与照片实际场景类冲突才违规）
+# 「此刻实拍」口径（实施90 季节/地点错配的触发条件）：只有把照片说成**现在拍的**
+# 才参与季节/地点错配判定——发异季/异国旧照配「上次去玩拍的」是真人行为，
+# 不许误伤；窄口径宣告形（刚拍/现在拍/just took），愿望/提问不命中。
+_FRESH_NOW_RE = re.compile(
+    r"[刚剛][刚剛]?\s*(?:拍|照|出炉|出爐)|现在\s*(?:拍|照)|現在\s*(?:拍|照)|"
+    r"这会儿\s*拍|這會兒\s*拍|今天\s*[刚剛]\s*拍|"
+    r"\bjust\s+(?:took|snapped|shot)\b|\btaking\s+(?:it\s+)?right\s+now\b",
+    re.IGNORECASE)
+
+# 对立季（唯一硬冲突对；春/秋过渡季歧义大刻意不判——与生产门同哲学但独立实现，
+# 评测器不 import 生产词表，防「词表改坏评测跟着瞎」）
+_OPPOSITE_SEASONS = frozenset({"summer", "winter"})
+
+# 强断言"我在 X"（配文声称身处某场景类；与照片实际场景类冲突才违规）。
+# 实施69：补东北口语「搁」（「我搁这儿呢」）——实录事故人设的自称句式。
 _SELF_LOCATION_RE = re.compile(
-    r"(?:我|人家)\s*(?:现在|現在|正)?\s*在\s*([^\s，。！？,!?~～]{1,8})"
+    r"(?:我|人家)\s*(?:现在|現在|正)?\s*(?:在|搁|擱)\s*([^\s，。！？,!?~～]{1,8})"
 )
 
 # 场景类词表（zh 断言词 → 类 key；en 场景短语关键词 → 类 key）。
@@ -87,8 +136,12 @@ _SCENE_CLASSES: Dict[str, Dict[str, Sequence[str]]] = {
                 "en": ("bedroom",)},
     "library": {"zh": ("图书馆", "圖書館", "书店", "書店"),
                 "en": ("library", "bookstore")},
-    "street":  {"zh": ("街上", "街头", "街頭"),
-                "en": ("city street", "street style")},
+    # 实施69：夜市/烤串并入 street（实录人设=烧烤店老板娘，其自称场景词
+    # 此前表盲；独立维护，刻意不与生产词表同源）。
+    "street":  {"zh": ("街上", "街头", "街頭", "夜市", "烤串", "大排档",
+                       "大排檔", "烧烤摊", "燒烤攤"),
+                "en": ("city street", "street style", "night market",
+                       "food stall")},
 }
 
 # home 域内互容（"在家" vs bedroom/couch 不算冲突——卧室也是家）
@@ -126,12 +179,24 @@ def check_media_consistency(
     photo_sent: bool,
     scene: str = "",
     hour: Optional[int] = None,
+    media_season: str = "",
+    now_season: str = "",
+    media_place: str = "",
+    home_place: str = "",
 ) -> Dict[str, Any]:
     """单样本图文一致性判定（纯函数）。返回 ``{"ok": bool, "violations": [...]}``。
 
     ``text``＝随图配文或无图时的出站文本；``photo_sent``＝该消息是否真附了照片；
     ``scene``＝照片实际生成场景（英文短语，可空=相册现成图）；``hour``＝发送时刻
     （0-23，可空=跳过时间冲突检查）。
+
+    实施90 新增两轨（都缺省为空=不判，向后兼容）：
+    - ``media_season``/``now_season``：照片季节标注 vs 发送时人设当地季节——
+      **对立季**且配文按「此刻实拍」口径（``season_mismatch``）＝冬天把盛夏
+      海滩照说成刚拍；旧照口径（上次/去年夏天）合法放行。
+    - ``media_place``/``home_place``：照片拍摄国 vs 人设所在国——异国照片配
+      「刚拍」口径（``place_mismatch``）＝人在温哥华把东京街景说成现拍；
+      「之前去日本玩拍的」合法放行。
     """
     violations: List[str] = []
     t = str(text or "")
@@ -140,7 +205,8 @@ def check_media_consistency(
             if rx.search(t):
                 violations.append("deny_with_photo")
                 break
-    elif not _PAST_REF_RE.search(t):  # 谈论以前的照片 ≠ 断言本条附图
+    elif not _PAST_REF_RE.search(t) and not _DENIAL_RE.search(t):
+        # 谈论以前的照片 / 诚实否认「没发」≠ 断言本条附图
         for rx in _CLAIM_WITHOUT_PHOTO:
             if rx.search(t):
                 violations.append("claim_without_photo")
@@ -159,6 +225,17 @@ def check_media_consistency(
                 violations.append("time_mismatch")
         except Exception:
             pass
+    # 实施90：季节/地点 ×「此刻实拍」口径（旧照口径放行——真人也发旅行旧照，
+    # 穿帮点只在把它说成现在拍的）
+    if photo_sent and _FRESH_NOW_RE.search(t) and not _PAST_REF_RE.search(t):
+        ms = str(media_season or "").strip().lower()
+        ns = str(now_season or "").strip().lower()
+        if ms and ns and {ms, ns} == _OPPOSITE_SEASONS:
+            violations.append("season_mismatch")
+        mp = str(media_place or "").strip().upper()
+        hp = str(home_place or "").strip().upper()
+        if mp and hp and mp != hp:
+            violations.append("place_mismatch")
     return {"ok": not violations, "violations": violations}
 
 
@@ -178,7 +255,66 @@ _GOLDEN_SAMPLES: List[Dict[str, Any]] = [
      "scene": "at the beach, sea in the background", "expect_ok": False},
     {"id": "time1", "text": "刚拍的～", "photo_sent": True,
      "scene": "campus walkway, afternoon light", "hour": 3, "expect_ok": False},
+    # —— 实施69 扩容（2026-08-24 夜市摊实录 + 同期粤语实录）——
+    {"id": "claim3", "text": "哎妈呀，急啥，这不就来了嘛。", "photo_sent": False,
+     "scene": "", "expect_ok": False},                        # 完成态口语谎
+    {"id": "claim4",
+     "text": "哎妈呀，真发过去了，可能夜市这边信号不太行，照片卡在半道儿了。",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 传输借口式已发断言
+    {"id": "claim5", "text": "黄昏海边嗰张，啱啱拍嘅，你睇清楚係咪真嘅",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 粤语完成态
+    {"id": "scene2", "text": "我在夜市摊这儿呢，刚收完摊。", "photo_sent": True,
+     "scene": "at home on the couch, cozy and relaxed",
+     "expect_ok": False},                                     # 自称夜市×居家图
+    # —— 实施90 扩容：季节/地点 ×「此刻实拍」口径 ——
+    {"id": "season1", "text": "刚拍的，外面雪好大～", "photo_sent": True,
+     "scene": "", "media_season": "winter", "now_season": "summer",
+     "expect_ok": False},                                     # 盛夏把雪景说成刚拍
+    {"id": "season2", "text": "just took this at the beach, so hot today!",
+     "photo_sent": True, "scene": "", "media_season": "summer",
+     "now_season": "winter", "expect_ok": False},             # 寒冬把海滩照说成刚拍
+    {"id": "place1", "text": "刚拍的哦，这边夜景超美", "photo_sent": True,
+     "scene": "", "media_place": "JP", "home_place": "CA",
+     "expect_ok": False},                                     # 人在温哥华，东京照说成现拍
+    {"id": "place2", "text": "Just snapped this outside!", "photo_sent": True,
+     "scene": "", "media_place": "TH", "home_place": "CA",
+     "expect_ok": False},
+    # —— #171（2026-09-05 WhatsApp Mizuki→John 实录）：英文过去时假声明 ——
+    {"id": "sent_claim1",
+     "text": "Oh, sorry — I just sent it, you should have it now.",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 实录原句①
+    {"id": "sent_claim2",
+     "text": "Hmm, that's weird — let me try sending it again for you.",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 实录原句②（补发预设已发）
+    {"id": "sent_claim3", "text": "我刚发给你了呀，你收到了吗", "photo_sent": False,
+     "scene": "", "expect_ok": False},                        # zh 同形态
     # —— 合法反例（不许误伤）——
+    {"id": "ok_sent_claim_backed",
+     "text": "Oh, sorry — I just sent it, you should have it now.",
+     "photo_sent": True, "scene": "", "expect_ok": True},     # 真附图=真话
+    {"id": "ok_sent_denial", "text": "I didn't send anything yet, hold on",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 诚实否认
+    {"id": "ok_sent_old", "text": "I sent it yesterday, remember?",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 远过去不由本轨判
+    {"id": "ok_season_old", "text": "去年冬天去玩拍的，给你看雪～", "photo_sent": True,
+     "scene": "", "media_season": "winter", "now_season": "summer",
+     "expect_ok": True},                                      # 旧照口径=真人行为
+    {"id": "ok_season_same", "text": "刚拍的，今天太阳好舒服", "photo_sent": True,
+     "scene": "", "media_season": "summer", "now_season": "summer",
+     "expect_ok": True},                                      # 同季实拍=真话
+    {"id": "ok_season_shoulder", "text": "刚拍的落叶～", "photo_sent": True,
+     "scene": "", "media_season": "autumn", "now_season": "winter",
+     "expect_ok": True},                                      # 过渡季刻意不判
+    {"id": "ok_place_honest", "text": "之前去日本玩拍的，超好看", "photo_sent": True,
+     "scene": "", "media_place": "JP", "home_place": "CA",
+     "expect_ok": True},                                      # 诚实旅行旧照
+    {"id": "ok_place_no_meta", "text": "刚拍的～", "photo_sent": True,
+     "scene": "", "media_place": "", "home_place": "CA",
+     "expect_ok": True},                                      # 无标注不判（保守）
+    {"id": "ok_claim_backed", "text": "这不就来了嘛，你看看～", "photo_sent": True,
+     "scene": "", "expect_ok": True},                         # 真附图=真话
+    {"id": "ok_honest_signal", "text": "这边信号不太好，这会儿发不了照片呢",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 诚实否认≠传输借口
     {"id": "ok1", "text": "这是刚拍的，给你看～喜欢吗？", "photo_sent": True,
      "scene": "in a cozy cafe", "expect_ok": True},           # 附图说刚拍=真话
     {"id": "ok2", "text": "嘿嘿，先卖个关子～多陪我聊聊嘛", "photo_sent": False,
@@ -212,6 +348,10 @@ def evaluate_media_consistency(
             photo_sent=bool(s.get("photo_sent")),
             scene=str(s.get("scene") or ""),
             hour=s.get("hour"),
+            media_season=str(s.get("media_season") or ""),
+            now_season=str(s.get("now_season") or ""),
+            media_place=str(s.get("media_place") or ""),
+            home_place=str(s.get("home_place") or ""),
         )
         expected = bool(s.get("expect_ok", True))
         hit = (verdict["ok"] == expected)

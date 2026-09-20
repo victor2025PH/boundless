@@ -66,8 +66,22 @@ def test_lang_fallback_and_unknown_key():
     assert selfie_stage_text("nonexistent_key", "zh") == ""
 
 
+def test_caption_rotates_and_mostly_avoids_just_taken_claim():
+    """2026-07-22 复盘：配文键升级为变体池——连发必换措辞；且 album 后端发旧照，
+    池里至多一条声称「刚拍」的弱时间声明（防"刚拍的怎么衣服都变了"被抓包）。"""
+    a = selfie_stage_text("caption", "zh")
+    b = selfie_stage_text("caption", "zh")
+    assert a and b and a != b
+    zh_pool = _STAGE_TEXTS["caption"]["zh"]
+    assert isinstance(zh_pool, (list, tuple)) and len(zh_pool) >= 3
+    assert sum(1 for t in zh_pool if "刚拍" in t) <= 1
+    # 英文池同语义
+    en_pool = _STAGE_TEXTS["caption"]["en"]
+    assert isinstance(en_pool, (list, tuple)) and len(en_pool) >= 3
+    assert sum(1 for t in en_pool if "just took" in t.lower()) <= 1
+
+
 def test_single_string_keys_unchanged_shape():
-    """非变体键（caption/too_soon 等）仍是稳定单句（配置覆盖逻辑依赖此语义）。"""
-    assert selfie_stage_text("caption", "zh") == selfie_stage_text("caption", "zh")
+    """真正的单句键（too_soon/promise_fail 等低频键）仍稳定存在。"""
     assert selfie_stage_text("too_soon", "zh")
     assert selfie_stage_text("promise_fail", "en")

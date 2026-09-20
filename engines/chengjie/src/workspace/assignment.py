@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+from src.workspace.presence_policy import accepts_new_assignments
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,15 +135,18 @@ class AssignmentService:
     # ── 内部 ──────────────────────────────────────────────────
 
     def eligible_agents(self, presence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """从 presence 列表筛出可被派单的坐席。"""
+        """从 presence 列表筛出可被派单的坐席（状态语义单源 presence_policy）。
+
+        2026-08-19 起改为消费 ``accepts_new_assignments``：行为与旧内联判断等价
+        （online_only=True 仅在线；False 时忙碌也可、离开永不），唯一收紧是
+        空/非法 status 一律按离开处理（旧代码在 online_only=False 时会放行空状态）。
+        """
+        allow_busy = not self.cfg["online_only"]
         out: List[Dict[str, Any]] = []
         for p in presence or []:
             if not p or not p.get("agent_id"):
                 continue
-            st = str(p.get("status") or "").lower()
-            if st == "offline":
-                continue
-            if self.cfg["online_only"] and st != "online":
+            if not accepts_new_assignments(p.get("status"), allow_busy=allow_busy):
                 continue
             out.append(p)
         return out

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="theme-color" content="#080b10"/>
 <title>BOUNDLESS 看板 · 无界科技</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
 <link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png"/>
@@ -18,9 +19,9 @@
   :root{
     --bg:#0b0f1a; --card:#141a24; --bord:#262f42;
     --txt:var(--bd-txt,#e6edf7); --mut:var(--bd-mut,#8b96b0);
-    --acc-rgb:var(--bd-acc-rgb,79 122 255); --acc:rgb(var(--acc-rgb));
+    --acc-rgb:var(--bd-acc-rgb,30 107 240); --acc:rgb(var(--acc-rgb));
     --ok:var(--bd-ok,#34d399); --warn:var(--bd-warn,#fbbf24); --bad:var(--bd-danger,#f87171);
-    --purple:#a855f7;
+    --purple:#7a3bf5;
   }
   *{ box-sizing:border-box; }
   html{ scroll-behavior:smooth; }
@@ -29,7 +30,7 @@
         font-size:13px; line-height:1.5;
         background:
           radial-gradient(120% 50% at 100% 0%, rgb(var(--acc-rgb)/.07), transparent 55%),
-          radial-gradient(120% 50% at 0% 100%, rgba(168,85,247,.05), transparent 50%),
+          radial-gradient(120% 50% at 0% 100%, rgba(122,59,245,.05), transparent 50%),
           var(--bg); }
   main{ padding:14px 18px 40px; max-width:1560px; margin:0 auto; }
   section{ scroll-margin-top:62px; }
@@ -985,7 +986,7 @@ function shareFunnel(o, title){
   stages.forEach((s,i)=>{
     const pct=Math.round(s[1]/base*100);
     const conv=i>0&&stages[i-1][1]?` · ${Math.round(s[1]/stages[i-1][1]*100)}%`:'';
-    h+=drawBar(s[0],s[1],pct,conv,'linear-gradient(90deg,#3b82f6,#a855f7)');
+    h+=drawBar(s[0],s[1],pct,conv,'linear-gradient(90deg,#3b82f6,#7a3bf5)');
   });
   const gp=o.gallery_play||0;
   if(gp){
@@ -1102,7 +1103,7 @@ function renderShareTrend(d){
   const t=d.trend, hasScan=t.some(x=>x.scan);
   const max=Math.max(1,...t.map(x=>Math.max(x.open,x.land,x.cta,hasScan?(x.scan||0):0)));
   if(!t.some(x=>x.open||x.land||x.cta)){ box.innerHTML=''; return; }
-  const series=[['open','#3b82f6','打开'],['land','#a855f7','落地'],['cta','#34d399','拉新'],
+  const series=[['open','#3b82f6','打开'],['land','#7a3bf5','落地'],['cta','#34d399','拉新'],
                 ...(hasScan?[['scan','#f59e0b','扫码']]:[])];
   const isWk=d.granularity==='week';
   const step=Math.ceil(t.length/8);

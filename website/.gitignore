@@ -8,6 +8,9 @@ next-env.d.ts
 .DS_Store
 /.robot-shots
 /.deploy-stage
+# 客户端安装包发布产物（部署经 scripts/deploy.ps1 差量 SCP 上传，不进 git）
+/public/downloads
 /scripts/_ios_wave
 /scripts/_wave_*.png
 /scripts/_shot_*.mjs
+.deploy-meta.json

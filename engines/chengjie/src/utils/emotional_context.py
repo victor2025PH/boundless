@@ -42,6 +42,15 @@ _EMOTION_LEXICON: Dict[str, Tuple[str, float]] = {
     "无语": ("frustrated", 0.7), "服了": ("frustrated", 0.7),
     "坑": ("angry", 0.6), "骗": ("angry", 0.7), "垃圾": ("angry", 0.8),
     "什么鬼": ("frustrated", 0.6), "搞什么": ("frustrated", 0.7),
+    # 辱骂/敌意（2026-08-22 实施54）：骂词此前不在词典 → 指向性辱骂被判
+    # neutral，「来呀……你个傻逼玩意儿」甚至被「呀」带成 playful 0.97，与
+    # temper 回怼指令在同一 prompt 里打架。只收高置信、无歧义子串的骂词
+    # （「滚」单字会命中 摇滚/滚动、「操你」会命中 做早操你去吗，刻意不收），
+    # 宁少勿滥；否定前瞻（「别去死磕」的「别」）照常生效。
+    "傻逼": ("angry", 0.9), "操你妈": ("angry", 0.9), "草泥马": ("angry", 0.9),
+    "去死": ("angry", 0.9), "白痴": ("angry", 0.85), "蠢货": ("angry", 0.85),
+    "混蛋": ("angry", 0.85), "王八蛋": ("angry", 0.85), "滚蛋": ("angry", 0.85),
+    "神经病": ("angry", 0.8), "fuck you": ("angry", 0.9),
     # 焦虑/担心
     "担心": ("anxious", 0.6), "焦虑": ("anxious", 0.7), "紧张": ("anxious", 0.6),
     "怕": ("anxious", 0.5), "害怕": ("anxious", 0.7), "不安": ("anxious", 0.6),
@@ -205,7 +214,17 @@ def analyze_emotion(text: str) -> Dict[str, Any]:
 # 2. 时间感知 — 距上次对话时间差 → 自然语调
 # ────────────────────────────────────────────────────────────────────────
 
-def classify_time_gap(last_message_ts: Optional[float]) -> Dict[str, Any]:
+def _fuzzy_days(gap_sec: float) -> str:
+    """≥14 天用真人口径（「一个多月」），否则整数天——与 inbox.time_context.describe_age 同源。"""
+    try:
+        from src.inbox.time_context import describe_age
+        return describe_age(gap_sec)
+    except Exception:
+        return f"{int(gap_sec / 86400)} 天"
+
+
+def classify_time_gap(last_message_ts: Optional[float], *,
+                      gap_sec: Optional[float] = None) -> Dict[str, Any]:
     """
     返回:
     {
@@ -214,7 +233,18 @@ def classify_time_gap(last_message_ts: Optional[float]) -> Dict[str, Any]:
         "gap_hint": "距上次聊天约1小时前",
         "opening_guidance": "...",   # 给 AI 的开场指导
     }
+
+    ``gap_sec`` 显式给了（B 线从 inbox 时间线推出的 ``_turn_gap_sec``）则优先于
+    ``last_message_ts``——后者是持久 user_context 里只有 A 线才写的键，草稿链读到的
+    恒是陈旧值（2026-09-18 实锤：真实间隔 5.4 天，提示写成 57 天，LLM 原样念出）。
     """
+    if gap_sec is not None:
+        try:
+            _g = float(gap_sec)
+            if _g >= 0:
+                last_message_ts = time.time() - _g
+        except (TypeError, ValueError):
+            pass
     if not last_message_ts:
         return {
             "gap_seconds": None,
@@ -274,16 +304,20 @@ def classify_time_gap(last_message_ts: Optional[float]) -> Dict[str, Any]:
             ),
         }
     else:
-        days = int(gap / 86400)
+        span = _fuzzy_days(gap)
+        fuzzy_rule = (
+            "提到间隔只说大概（「好久没聊」「一个多月了吧」），**不要报精确天数**——真人不会数着日子说话。"
+            if gap >= 14 * 86400 else ""
+        )
         return {
             "gap_seconds": gap,
             "gap_label": "long_time",
-            "gap_hint": f"上次聊天约 {days} 天前",
+            "gap_hint": f"上次聊天约 {span}前",
             "opening_guidance": (
-                f"已经 {days} 天没联系了。像老朋友很久没聊突然发消息，"
+                f"已经 {span}没联系了。像老朋友很久没聊突然发消息，"
                 "可以说「好久没聊了，突然想问你xxx」。"
                 "如果记忆中有对方之前提过的事，一定要关心一下进展，"
-                "这会让对方觉得你是真的记得TA。"
+                "这会让对方觉得你是真的记得TA。" + fuzzy_rule
             ),
         }
 
@@ -623,8 +657,19 @@ def build_emotional_context_block(
             logger.debug("wellbeing_guard inject skipped", exc_info=True)
 
     # ── 2. 时间感知 ──
+    # 单一时钟：A 线每轮写 _turn_gap_sec（＝now-last_message_time，同值）；B 线由
+    # generate_inbox_draft 从 inbox 时间线推出并覆盖写。有它就不读陈旧的 last_message_time。
     last_ts = user_context.get("last_message_time") or user_context.get("last_reply_time")
-    time_info = classify_time_gap(last_ts)
+    # 0 = A 线「没有上一轮」哨兵值（首聊），不算已知间隔 → 不覆盖。
+    _gap_override = None
+    try:
+        if user_context.get("_turn_gap_sec") is not None:
+            _gap_override = float(user_context.get("_turn_gap_sec"))
+            if _gap_override <= 0:
+                _gap_override = None
+    except (TypeError, ValueError):
+        _gap_override = None
+    time_info = classify_time_gap(last_ts, gap_sec=_gap_override)
     if time_info["opening_guidance"]:
         parts.append(f"【时间感知】{time_info['gap_hint']}\n{time_info['opening_guidance']}")
 

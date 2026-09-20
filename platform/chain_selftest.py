@@ -33,6 +33,7 @@ _KNOWN = [
     ("replybus 决策回执", "replybus/client.py", ["--selftest"]),
     ("licensing 授权收款", "licensing/license_client.py", ["--selftest"]),
     ("observability 事件发射", "observability/emitter.py", ["--selftest"]),
+    ("credpool 中央凭据池", "credpool/credpool_client.py", ["--selftest"]),
 ]
 
 

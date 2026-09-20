@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS license_char_usage (
     chars     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (lic_id, day, category)
 );
+CREATE TABLE IF NOT EXISTS license_char_topup (
+    ref        TEXT PRIMARY KEY,
+    lic_id     TEXT NOT NULL,
+    chars      INTEGER NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -140,6 +147,144 @@ class LicenseQuotaStore:
             return None
         return max(0, inc - self.used_chars(lic_id))
 
+    def usage_history(self, lic_id: str, months: int = 6) -> list:
+        """按月聚合用量（近 N 个自然月，UTC 口径随 ``_day_str``）。
+
+        返回 ``[{month: 'YYYY-MM', chars: int}, ...]`` **旧 → 新**（渲染顺序）；
+        只含有记录的月份（会员页据此隐藏空趋势，不补零月）。读失败返回空表。
+        """
+        n = max(1, int(months or 6))
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT substr(day, 1, 7) AS ym, SUM(chars) AS s "
+                    "FROM license_char_usage WHERE lic_id = ? "
+                    "GROUP BY ym ORDER BY ym DESC LIMIT ?",
+                    (str(lic_id or "default"), n),
+                ).fetchall()
+            return [
+                {"month": str(r["ym"]), "chars": int(r["s"] or 0)}
+                for r in reversed(rows)
+            ]
+        except Exception:
+            logger.debug("[license_quota] usage_history 读取失败（空表）", exc_info=True)
+            return []
+
+    def daily_totals(self, lic_id: str, days: int = 7) -> list:
+        """最近 N 天逐日消耗（旧→新，缺日补零）。「预计耗尽」外推的数据源。
+
+        与用量页客户端版算式同口径（remaining ÷ 日均）；quotawall v2 起算式
+        上移服务端（quota_state.forecast_exhaustion），顶栏 tooltip / 预警条 /
+        会员页共用同一个数字。读失败返回空表（外推层按「无法预测」处理）。
+        """
+        import time as _t
+
+        n = max(1, min(int(days or 7), 90))
+        base = _t.time()
+        day_keys = [_day_str(base - i * 86400) for i in range(n - 1, -1, -1)]
+        got: Dict[str, int] = {}
+        try:
+            with self._lock:
+                for r in self._conn.execute(
+                    "SELECT day, SUM(chars) AS s FROM license_char_usage "
+                    "WHERE lic_id = ? AND day >= ? GROUP BY day",
+                    (str(lic_id or "default"), day_keys[0]),
+                ).fetchall():
+                    got[str(r["day"])] = int(r["s"] or 0)
+        except Exception:
+            logger.debug("[license_quota] daily_totals 读取失败（空表）", exc_info=True)
+            return []
+        return [got.get(k, 0) for k in day_keys]
+
+    # ── 字符加量包（charpack，融合实例 P4b）────────────────────────────────
+    #
+    # lingox-charpack 等「买字符包」订单的入账通道：license payload 的
+    # included_chars 是签发时固定值，加量不重签授权，落本表按 lic_id 累加，
+    # check_license_quota 把 topup 并进 included 口径。ref=订单号，主键幂等
+    # ——同一订单重复入账天然拒绝（对齐 fulfillment 的幂等 ref 语义）。
+
+    def add_topup(
+        self, lic_id: str, chars: int, ref: str, note: str = "",
+    ) -> bool:
+        """入账一笔加量包。ref 已存在/参数非法 → False（幂等，绝不抛）。"""
+        n = int(chars or 0)
+        r = str(ref or "").strip()
+        if n <= 0 or not r:
+            return False
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO license_char_topup "
+                    "(ref, lic_id, chars, note, created_at) VALUES (?,?,?,?,?)",
+                    (r, str(lic_id or "default"), n, str(note or ""),
+                     time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())),
+                )
+                self._conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False  # 同 ref 已入账（幂等拒绝）
+        except Exception:
+            logger.debug("[license_quota] add_topup 失败（已忽略）", exc_info=True)
+            return False
+
+    def topup_chars(self, lic_id: str) -> int:
+        """该授权全部加量包字符合计。读失败按 0（不误加额度）。"""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(chars), 0) AS s FROM license_char_topup "
+                    "WHERE lic_id = ?",
+                    (str(lic_id or "default"),),
+                ).fetchone()
+            return int(row["s"] or 0)
+        except Exception:
+            logger.debug("[license_quota] topup_chars 读取失败（按 0）", exc_info=True)
+            return 0
+
+    def list_topups(self, lic_id: str, limit: int = 20) -> list:
+        """最近入账记录（会员页展示用）。读失败返回空表。"""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT ref, chars, note, created_at FROM license_char_topup "
+                    "WHERE lic_id = ? ORDER BY created_at DESC, ref DESC LIMIT ?",
+                    (str(lic_id or "default"), int(limit)),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def topup_daily_counts(self, lic_id: str, days: int = 14) -> list:
+        """最近 N 天逐日入账聚合（旧→新，缺日补零；``{day,n,chars}``）。
+
+        额度墙漏斗卡「服务端到账真值」口径（quotawall v2 P2.5）：``qw_credited``
+        埋点只统计「坐席开着页面等到 watch 侦测命中」的场景，页面关早了就漏计；
+        本表每行都是一笔真实到账（凭证兑换/手工直充/自动履约共用 add_topup），
+        按日聚合即对账真值。created_at 为 UTC ``YYYY-MM-DD HH:MM:SS`` 文本 →
+        与日键前缀字典序可比。读失败返回空表。
+        """
+        import time as _t
+
+        n_days = max(1, min(int(days or 14), 90))
+        base = _t.time()
+        day_keys = [_day_str(base - i * 86400) for i in range(n_days - 1, -1, -1)]
+        got: Dict[str, Dict[str, int]] = {}
+        try:
+            with self._lock:
+                for r in self._conn.execute(
+                    "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n, "
+                    "COALESCE(SUM(chars), 0) AS s FROM license_char_topup "
+                    "WHERE lic_id = ? AND created_at >= ? GROUP BY d",
+                    (str(lic_id or "default"), day_keys[0]),
+                ).fetchall():
+                    got[str(r["d"])] = {"n": int(r["n"] or 0),
+                                        "chars": int(r["s"] or 0)}
+        except Exception:
+            logger.debug("[license_quota] topup_daily_counts 读取失败（空表）",
+                         exc_info=True)
+            return []
+        return [{"day": k, **got.get(k, {"n": 0, "chars": 0})} for k in day_keys]
+
 
 # ── 模块级单例 + 惰性建库（治理随授权走）────────────────────────────────────
 _STORE: Optional[LicenseQuotaStore] = None
@@ -150,8 +295,10 @@ _WARNED_LIC_IDS: set = set()
 
 
 def _default_db_path() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(here, "config", "license_quota.db")
+    """用量库位置：跟随可写数据区。落在安装目录的话每次升级用量归零＝白送额度。"""
+    from src.licensing.data_paths import data_file
+
+    return data_file("license_quota.db")
 
 
 def configure_license_quota_store(
@@ -200,21 +347,40 @@ def _current_status():
     return get_license_manager().status()
 
 
+def _local_trial() -> Any:
+    """首启体验档（未启用 → None）。它是**无授权时**的额度来源。"""
+    try:
+        from src.licensing.local_trial import get_local_trial
+        return get_local_trial()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def record_license_chars(
     category: str, chars: int, *, lic_status: Any = None,
 ) -> None:
     """成功交付后记账（翻译/TTS 热路旁路调用一行）。
 
-    无额度授权（unlicensed / included_chars<=0）→ 立即返回零 IO。绝不抛。
+    无额度授权时改记到**首启体验档**的 lic_id（若已启用）；两者都没有 → 零 IO。绝不抛。
     """
     try:
         n = int(chars or 0)
         if n <= 0:
             return
         st = lic_status if lic_status is not None else _current_status()
-        if not getattr(st, "licensed", False):
-            return
-        if int(getattr(st, "included_chars", 0) or 0) <= 0:
+        licensed = bool(getattr(st, "licensed", False))
+        base = int(getattr(st, "included_chars", 0) or 0)
+        if not licensed or base <= 0:
+            # 无授权（或不限量授权）→ 体验档记账。不限量授权本就无需计量，故只在
+            # 真的没有授权时才落体验档，避免给付费不限量客户凭空造出一条用量。
+            lt = None if licensed else _local_trial()
+            if lt is None:
+                return
+            store = _ensure_store()
+            if store is None:
+                return
+            lt.touch()          # 顺手推进单调水位（防时钟回拨）
+            store.record(lt.lic_id(), category, n)
             return
         store = _ensure_store()
         if store is None:
@@ -222,6 +388,56 @@ def record_license_chars(
         store.record(str(getattr(st, "lic_id", "") or "default"), category, n)
     except Exception:
         logger.debug("[license_quota] record_license_chars 失败（已忽略）", exc_info=True)
+
+
+def _merge_local_trial_quota(out: Dict[str, Any]) -> None:
+    """把首启体验档的额度并进 check 结果（就地改 out）。
+
+    只在「完全没有授权」时被调用。语义与正式授权一致（used/included/remaining/
+    exceeded/allowed），额外给 ``source="local_trial"`` 与剩余时长，供会员页/首启
+    向导显示「体验档还剩 X 小时 / Y 字符」。
+
+    ``enforce`` 走独立开关 ``licensing.trial.enforce``（默认关）——不共用
+    ``licensing.enforce``：那个开关是给**正式客户过期只读**用的，把体验档
+    绑在它上面会让「开了 enforce 的存量客户」顺带把新装用户也锁死。
+    """
+    try:
+        from src.licensing.local_trial import local_trial_enforced
+        lt = _local_trial()
+        if lt is None:
+            return
+        store = _ensure_store()
+        used = store.used_chars(lt.lic_id()) if store is not None else 0
+        snap = lt.snapshot(used_chars=used)
+        if not snap.get("started"):
+            return                       # 还没开始计时（首启向导尚未落锚点）
+        enforce = local_trial_enforced()
+        out["source"] = "local_trial"
+        out["lic_id"] = snap["lic_id"]
+        out["included"] = out["included_base"] = int(snap["included"])
+        out["used"] = int(snap["used"])
+        out["remaining"] = max(0, int(snap["included"]) - int(snap["used"]))
+        out["enforce"] = enforce
+        out["trial_hours_left"] = snap.get("hours_left")
+        # P-4 #254（MTRCH2④）：hours_left=None 有两种含义——窗口 0（不限时）或窗口 >0 但
+        # 未开始计时；会员页要分开说，所以把窗口小时数一并给出。
+        out["trial_window_hours"] = snap.get("window_hours")
+        out["trial_expired"] = bool(snap.get("expired"))
+        out["trial_closed"] = bool(snap.get("closed"))
+        # 过期与用尽都算"没额度了"——两者都该走同一条软/硬拦截口径。
+        out["exceeded"] = bool(snap.get("exhausted") or snap.get("expired")
+                               or snap.get("closed"))
+        if out["exceeded"] and enforce:
+            out["allowed"] = False
+        elif out["exceeded"] and snap["lic_id"] not in _WARNED_LIC_IDS:
+            _WARNED_LIC_IDS.add(snap["lic_id"])
+            logger.warning(
+                "[license_quota] 体验档已结束（used=%s/%s expired=%s）；"
+                "licensing.trial.enforce 未开启，仅提醒不阻断",
+                snap["used"], snap["included"], snap.get("expired"),
+            )
+    except Exception:
+        logger.debug("[license_quota] 体验档额度合并失败（放行）", exc_info=True)
 
 
 def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
@@ -235,19 +451,31 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
     """
     out: Dict[str, Any] = {
         "allowed": True, "exceeded": False, "enforce": False,
-        "used": 0, "included": 0, "remaining": None, "lic_id": "",
+        "used": 0, "included": 0, "included_base": 0, "topup_chars": 0,
+        "remaining": None, "lic_id": "",
     }
     try:
         st = lic_status if lic_status is not None else _current_status()
-        included = int(getattr(st, "included_chars", 0) or 0)
+        base = int(getattr(st, "included_chars", 0) or 0)
         out["enforce"] = bool(getattr(st, "enforce", False))
-        out["included"] = included
+        out["included"] = out["included_base"] = base
         out["lic_id"] = str(getattr(st, "lic_id", "") or "default")
-        if not getattr(st, "licensed", False) or included <= 0:
+        if not getattr(st, "licensed", False) or base <= 0:
+            # base<=0 = 不限量授权：加量包对其无意义，included 恒 0（不限）。
+            # 但「完全没有授权」时还有一条额度来源：首启体验档。
+            if not getattr(st, "licensed", False):
+                _merge_local_trial_quota(out)
             return out
         store = _ensure_store()
         if store is None:
             return out
+        # charpack 加量包并进额度口径：included = 签发额度 + 累计加量。
+        # 下游所有消费方（gate.quota_exceeded / license_routes / 会员页）
+        # 读同一 included 字段 → 加量即时全局生效，零改动。
+        topup = store.topup_chars(out["lic_id"])
+        included = base + topup
+        out["topup_chars"] = topup
+        out["included"] = included
         used = store.used_chars(out["lic_id"])
         out["used"] = used
         out["remaining"] = max(0, included - used)
@@ -276,11 +504,97 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
     return out
 
 
+def current_daily_totals(days: int = 7, *, lic_id: str = "") -> list:
+    """当前生效水表（正式授权或体验档）最近 N 天逐日消耗（旧→新，缺日补零）。
+
+    ``lic_id`` 给则直查（quota_state 已从 check 结果拿到，免二次解析）；缺省
+    自解析一次（含体验档合并语义，与 check_license_quota 同源）。无水表/
+    不限量/任何异常 → []（外推层据此显示「无法预测」而不是编数字）。
+    """
+    try:
+        lid = str(lic_id or "")
+        if not lid:
+            q = check_license_quota()
+            if int(q.get("included") or 0) <= 0:
+                return []
+            lid = str(q.get("lic_id") or "")
+        if not lid:
+            return []
+        store = _ensure_store()
+        if store is None:
+            return []
+        return store.daily_totals(lid, days)
+    except Exception:
+        logger.debug("[license_quota] current_daily_totals 失败（空表）", exc_info=True)
+        return []
+
+
+def current_topup_daily(days: int = 14, *, lic_id: str = "") -> list:
+    """当前生效水表最近 N 天逐日入账（服务端到账真值；quotawall v2 P2.5）。
+
+    lic_id 解析与 ``current_daily_totals`` 同源（缺省自解析，含体验档合并语义）；
+    刻意**不**按 included>0 闸——不限量授权也可能收到加量入账，如实回列。
+    无授权/任何异常 → []（漏斗卡对账行缺席，不编数字）。
+    """
+    try:
+        lid = str(lic_id or "")
+        if not lid:
+            q = check_license_quota()
+            lid = str(q.get("lic_id") or "")
+        if not lid:
+            return []
+        store = _ensure_store()
+        if store is None:
+            return []
+        return store.topup_daily_counts(lid, days)
+    except Exception:
+        logger.debug("[license_quota] current_topup_daily 失败（空表）", exc_info=True)
+        return []
+
+
+def add_license_topup(
+    chars: int, ref: str, note: str = "", *, lic_status: Any = None,
+) -> Dict[str, Any]:
+    """给当前授权入账一笔字符加量包（charpack 履约通道，P4b）。
+
+    返回 {ok, error?, lic_id, topup_chars, included}：
+    - 未激活授权 → error=not_licensed（加量包挂在授权上，无授权无处入账）；
+    - 授权本身不限量（included_chars<=0）→ error=unlimited（充值无意义，拒绝
+      防止误操作烧订单号）；
+    - ref 已入账 → error=duplicate_ref（幂等：同一订单绝不重复加量）；
+    - 建库失败 → error=store_unavailable。
+    自身绝不抛；成功后 check_license_quota 立即反映新额度。
+    """
+    try:
+        st = lic_status if lic_status is not None else _current_status()
+        if not getattr(st, "licensed", False):
+            return {"ok": False, "error": "not_licensed"}
+        base = int(getattr(st, "included_chars", 0) or 0)
+        if base <= 0:
+            return {"ok": False, "error": "unlimited"}
+        lic_id = str(getattr(st, "lic_id", "") or "default")
+        store = _ensure_store()
+        if store is None:
+            return {"ok": False, "error": "store_unavailable"}
+        if not store.add_topup(lic_id, chars, ref, note):
+            return {"ok": False, "error": "duplicate_ref", "lic_id": lic_id,
+                    "topup_chars": store.topup_chars(lic_id)}
+        topup = store.topup_chars(lic_id)
+        return {"ok": True, "lic_id": lic_id, "topup_chars": topup,
+                "included": base + topup}
+    except Exception:
+        logger.debug("[license_quota] add_license_topup 失败", exc_info=True)
+        return {"ok": False, "error": "internal"}
+
+
 __all__ = [
     "QUOTA_EXCEEDED_ERROR",
     "LicenseQuotaStore",
+    "add_license_topup",
     "check_license_quota",
     "configure_license_quota_store",
+    "current_daily_totals",
+    "current_topup_daily",
     "get_license_quota_store",
     "record_license_chars",
     "reset_license_quota_store",

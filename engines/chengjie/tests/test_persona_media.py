@@ -178,3 +178,53 @@ def test_pick_media_via_store():
     assert got and got["persona_id"] == "lin"
     assert pm.pick_media(s, "lin", "无关", generic_ok=False) is None
     assert pm.pick_media(None, "lin", "跳舞") is None
+
+
+# ── 意图门：邀约/拒收不触发关键词池（2026-08-12「出来喝咖啡→发咖啡照」实录）──
+def test_is_invite_or_decline():
+    for t in ("出来喝咖啡吗", "一起去吃饭吧", "要不要出来玩", "约你看电影",
+              "咱们去逛街", "let's grab coffee", "wanna go out?",
+              "别再发图了", "不要发照片", "stop sending pics"):
+        assert pm.is_invite_or_decline(t), t
+    for t in ("给我看看你喝咖啡的照片", "你在喝咖啡吗", "跳舞给我看",
+              "要不要看我的新照片",           # 「要不要看」是 offer 不是邀约
+              "今天好累", "", None):
+        assert not pm.is_invite_or_decline(t), t
+
+
+def test_invite_blocks_keyword_pool():
+    rows = [{"id": "cafe1", "media_type": "photo", "enabled": True, "weight": 1,
+             "min_bond_level": 0, "triggers": ["咖啡"], "url": "/c1"}]
+    # 事故金标：邀约句含触发词 → 不发（关键词池被意图门清空、generic 也不放）
+    assert pm.select_media(rows, "出来喝咖啡吗", generic_ok=False) is None
+    ex = pm.explain_match(rows, "出来喝咖啡吗", generic_ok=False)
+    assert ex["pool"] == "none"
+    # 正常要图句照常命中
+    got = pm.select_media(rows, "给我看你喝咖啡的样子", rng=random.Random(1))
+    assert got and got["id"] == "cafe1"
+
+
+def test_decline_blocks_keyword_pool():
+    rows = [{"id": "p1", "media_type": "photo", "enabled": True, "weight": 1,
+             "min_bond_level": 0, "triggers": ["照片"], "url": "/p1"}]
+    assert pm.select_media(rows, "别再发照片了", generic_ok=False) is None
+
+
+# ── 配文时刻词守卫（2026-08-12 凌晨 3 点发「下午的阳光」实录）────────────────
+def test_caption_tod_conflict():
+    # 白天词 × 深夜时刻 → 冲突
+    assert pm.caption_tod_conflict("下午的阳光真好", 3) is True
+    assert pm.caption_tod_conflict("早上的咖啡", 23) is True
+    assert pm.caption_tod_conflict("sunny afternoon vibes", 2) is True
+    # 夜词 × 白天时刻 → 冲突
+    assert pm.caption_tod_conflict("深夜的城市", 10) is True
+    assert pm.caption_tod_conflict("good night~", 14) is True
+    # 匹配时段 → 不冲突
+    assert pm.caption_tod_conflict("下午的阳光真好", 15) is False
+    assert pm.caption_tod_conflict("深夜失眠中", 1) is False
+    # 无时刻词 / 傍晚两可段 / 非法输入 → 一律放行（宁漏勿错）
+    assert pm.caption_tod_conflict("今天心情不错", 3) is False
+    assert pm.caption_tod_conflict("下午的阳光", 19) is False   # 17-22 两可
+    assert pm.caption_tod_conflict("", 3) is False
+    assert pm.caption_tod_conflict(None, None) is False
+    assert pm.caption_tod_conflict("阳光", "bad-hour") is False

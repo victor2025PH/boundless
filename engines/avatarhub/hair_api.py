@@ -612,7 +612,8 @@ loadStyles();
     return HTMLResponse(content=html)
 
 if __name__ == "__main__":
+    _port = int(os.environ.get("HAIR_PORT") or app_config.port("hair") or 8001)
     print("=" * 50)
-    print(" Hair Transfer API  http://0.0.0.0:8001")
+    print(f" Hair Transfer API  http://0.0.0.0:{_port}")
     print("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=_port, log_level="warning")

@@ -1,0 +1,43 @@
+# products/zhikong/product.yaml — 智控王 TG Matrix
+#
+# 🔧 2026-07-20 第八阶段新增：与本目录其它产品的关键差异——本产品实现**不在**
+# `engines/` 目录下，而是独立仓库（内部项目名/数据库均叫 "TG-Matrix"/"tgmatrix.db"，
+# 故取 brand_key=matrixx）。boundless 侧只通过 platform 的 HTTP 契约 + stdlib 瘦客户端
+# 对接，不 import、不搬迁任何实现代码——与 avatarhub/chengjie 模式一致。
+# 🔧 2026-07-27 修正：原注释写「实现在 D:\aixyc2026\tgkz2026（仓库外）」已过期——
+# 该路径不存在；真实代码就在本仓 `tgkz2026/`（独立 git 仓，remote victor2025PH/tgkz2026）。
+# 对接契约现有两条：`platform/licensing` → `license_server.py`（卡密/会员/收款，:8080）；
+# `platform/credpool` → 主后台 `:8000` 的 api-pool（Telegram 凭据托管池，见 CREDPOOL_CONTRACT.md）。
+id: zhikong
+brand_key: matrixx
+name:   { zh: 智控, en: MatrixX }
+category: growth
+tagline:
+  zh: Telegram 群控获客 + AI 自动回复 + 会员订阅制，六级会员从入门到企业定制
+  en: Telegram group automation + AI auto-reply + tiered membership subscriptions
+
+engine: tgkz2026                  # 外部仓库，非 engines/ 目录内；见上方注释
+engine_services: [license_server.py]   # 卡密/收款/配额服务（aiohttp，默认 :8080）
+
+compliance:
+  visibility: gated                # MTProto 群控自动化，与 zhituo(智拓) 同类风险，暂按保守分类；如需调整请业务侧确认
+  risk: high
+  guard: Telegram User API 自动化存在账号风控/合规边界，参考 zhituo 准入区处理方式
+
+website:
+  landing: "/matrix"               # boundless 官网独立落地页（原「暂无」，见 app/matrix + app/en/matrix）
+  anchor: null
+  matrix_family: growth
+
+# 账号制会员套餐（platform/licensing 门控 + 计量）；六级会员（bronze 免费试用未列入付费 SKU）
+# 完整时长矩阵（周/月/季/年/终身）见智控王自身 `/api/products`；本清单只收录月费代表档位，
+# 对客报价以本文件（sku_registry）为发现/目录口径，完整计费矩阵仍以智控王 /api/products 为履约口径
+# （与 LICENSE_CONTRACT.md §5 既定原则一致，避免"两份权威价目表"）。
+skus:
+  - { id: matrixx-silver,  name: { zh: 白银精英, en: Silver },  unit: month, price: "4.99", currency: USD, note: 5个TG账号/100条日消息/50次AI回复 }
+  - { id: matrixx-gold,    name: { zh: 黄金大师, en: Gold },    unit: month, price: "19.9", currency: USD, note: 15个TG账号/300次AI调用/智能模式+数据洞察，性价比主力档 }
+  - { id: matrixx-diamond, name: { zh: 钻石王牌, en: Diamond }, unit: month, price: "59.9", currency: USD, note: 50个TG账号/AI调用无限/策略自动化+高级分析 }
+
+delivery:
+  gate: platform/licensing         # 卡密验证/JWT/配额门控（见 LICENSE_CONTRACT.md）
+  compliance_out: platform/compliance

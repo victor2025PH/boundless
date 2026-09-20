@@ -12,23 +12,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from src.ai.lang_voice_route import EDGE_VOICE_BY_LANG as _SHARED_EDGE_VOICES
+
 logger = logging.getLogger(__name__)
 
-# BCP47 前缀 → edge 默认神经声（可配置覆写）
+# BCP47 前缀 → edge 默认神经声：单一事实源在 lang_voice_route.EDGE_VOICE_BY_LANG
+# （follow_text 出站路由与主动外语开场共用一张表；此处剔除 zh——本模块语义是
+# 「非中文会话才用 edge 外语声」，zh 由克隆链负责）。
 _DEFAULT_EDGE_VOICE: Dict[str, str] = {
-    "en": "en-US-JennyNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "ko": "ko-KR-SunHiNeural",
-    "th": "th-TH-PremwadeeNeural",
-    "vi": "vi-VN-HoaiMyNeural",
-    "id": "id-ID-GadisNeural",
-    "es": "es-ES-ElviraNeural",
-    "fr": "fr-FR-DeniseNeural",
-    "de": "de-DE-KatjaNeural",
-    "pt": "pt-BR-FranciscaNeural",
-    "hi": "hi-IN-SwaraNeural",
-    "tl": "fil-PH-BlessicaNeural",
-    "fil": "fil-PH-BlessicaNeural",
+    k: v for k, v in _SHARED_EDGE_VOICES.items() if k != "zh"
 }
 
 _ZH_PREFIXES = frozenset(
@@ -74,6 +66,58 @@ def foreign_voice_allowed(
         allowed = {str(x).strip().lower().split("-")[0] for x in allow if str(x).strip()}
         return prefix in allowed
     return prefix in _DEFAULT_EDGE_VOICE
+
+
+def clone_capable_languages(foreign_cfg: Dict[str, Any]) -> frozenset:
+    """``foreign.clone_languages`` 名单（BCP47 前缀化）。
+
+    P2（2026-08-02 一人一声后续）：hub Fish 克隆链已实证可念部分外语（en/ja/es
+    真机试听通过；ko 在 hub 上稳定失败 hub_voice_source_unavailable，th/vi/id/hi
+    引擎不支持）。名单内语种的主动开场改走与中文同一条克隆链——同一把声念外语，
+    比 edge 通用声更像「本人」。**基线默认空＝旧行为全走 edge**（新行为 opt-in），
+    生产经 overlay 开：companion.proactive_topic.voice.foreign.clone_languages。
+    """
+    langs = (foreign_cfg or {}).get("clone_languages")
+    if isinstance(langs, str):
+        langs = [langs]
+    if not isinstance(langs, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        str(x).strip().lower().split("-")[0]
+        for x in langs if x and str(x).strip())
+
+
+def use_clone_for_language(
+    foreign_cfg: Dict[str, Any],
+    peer_language: str,
+    capable_langs: Any = None,
+) -> bool:
+    """该外语是否改走克隆链（同一把声念外语）。中文恒 False（本就走克隆链）。
+
+    ``capable_langs``（P0 2026-08-31「日文怪声」收口）：克隆主路**实际**可念
+    语种（``lang_voice_route.clone_voice_langs`` 的 SSOT 输出）。非空时，
+    ``clone_languages`` 白名单语种还须在能力表内才走克隆——白名单是「运营想用
+    克隆」的意愿（2026-08-02 hub fish 时代实证 en/ja/es），引擎切换后能力萎缩
+    （index_tts 仅中英）意愿名单不会自动跟上；按实况收窄后，名单内但念不了的
+    语种回到 edge 多语声（Phase15 行为），保住语音触达而不是「克隆试败 → 纯
+    文本」。None/空元组=能力未知，维持纯名单语义（宁可漏收窄不误伤）。
+    """
+    if is_chinese_peer_language(peer_language):
+        return False
+    prefix = peer_lang_prefix(peer_language)
+    if prefix not in clone_capable_languages(foreign_cfg):
+        return False
+    if capable_langs:
+        try:
+            capable = {
+                str(x or "").strip().lower().split("-")[0]
+                for x in capable_langs if str(x or "").strip()
+            }
+        except TypeError:
+            return True
+        if capable and prefix not in capable:
+            return False
+    return True
 
 
 def pick_edge_voice(foreign_cfg: Dict[str, Any], peer_language: str) -> str:
@@ -154,4 +198,6 @@ __all__ = [
     "foreign_voice_allowed",
     "stage_foreign_voice_file",
     "resolve_foreign_voice_cfg",
+    "clone_capable_languages",
+    "use_clone_for_language",
 ]

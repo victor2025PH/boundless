@@ -34,8 +34,25 @@ def register_monitoring_routes(app, ctx):
         import asyncio as _aio
 
         def _gather():
-            bot_online = False
-            if telegram_client:
+            # 渠道就绪聚合（与 collect_health/channel_status 同口径）。
+            # 旧口径只看 config 静态主协议号 telegram_client.running——扫码登录/
+            # 编排器拉起的账号不经过该引用，协议号未配置时恒 False（仪表盘
+            # 「Bot 离线」假信号的根因，2026-08-02 修正）。bot_online 保留为
+            # 向后兼容别名（=任一渠道就绪）。
+            ch_ready = ch_configured = ch_total = 0
+            try:
+                from src.utils.channel_setup import channel_status
+                _cfg_all = config_manager.config if (
+                    config_manager and config_manager.config) else {}
+                _chs = channel_status(_cfg_all)
+                ch_total = len(_chs)
+                ch_ready = sum(1 for c in _chs if c.get("ready"))
+                ch_configured = sum(1 for c in _chs if c.get("configured"))
+            except Exception:
+                pass
+            bot_online = ch_ready > 0
+            if not bot_online and telegram_client is not None:
+                # 兜底：老部署仍在用 config 静态主协议号时沿用旧判定
                 bot_online = bool(getattr(telegram_client, "running", False))
 
             last_activity = None
@@ -71,12 +88,29 @@ def register_monitoring_routes(app, ctx):
                 ai_cfg = config_manager.config.get("ai", {}) if config_manager.config else {}
             except Exception:
                 pass
-            embedding_ok = bool(ai_cfg.get("api_key", ""))
+            # 旧口径误用聊天模型 api_key 当「向量化已开启」信号；改看嵌入端点配置
+            # （KB 向量检索走 ai.embedding_base_url(s)，与聊天 key 无关）。
+            embedding_ok = bool(
+                ai_cfg.get("embedding_base_urls") or ai_cfg.get("embedding_base_url")
+            )
 
-            uptime_s = int(time.time() - boot_ts) if boot_ts else 0
+            # 进程运行时长：metrics_store 为权威（旧口径 boot_ts 挂在 config 静态
+            # telegram 客户端上，协议号未配置时恒 0——「运行 0s」假数据根因）。
+            uptime_s = 0
+            try:
+                from src.monitoring.metrics_store import get_metrics_store
+                uptime_s = int(get_metrics_store().uptime_seconds())
+            except Exception:
+                uptime_s = 0
+            if uptime_s <= 0 and boot_ts:
+                uptime_s = int(time.time() - boot_ts)
 
             return {
                 "bot_online":    bot_online,
+                # 键名刻意用 msg_channels（消息渠道）：与支付域的 channels/
+                # channels_count 词汇隔离（见 test_domain_web_isolation）
+                "msg_channels":  {"ready": ch_ready, "configured": ch_configured,
+                                  "total": ch_total},
                 "last_activity": last_activity,
                 "memory_mb":     mem_mb,
                 "uptime_s":      uptime_s,
@@ -85,6 +119,100 @@ def register_monitoring_routes(app, ctx):
                 "admin_users":   user_store.user_count(),
                 "embedding_ok":  embedding_ok,
             }
+
+        return await _aio.to_thread(_gather)
+
+    @app.get("/api/todo-summary")
+    async def api_todo_summary(request: Request):
+        """仪表盘待办条聚合（只出计数不出内容，2026-08-02）。
+
+        动机：待办条 v1 每 60s 打 4 个列表接口（学习队列还整表下发）；本端点把
+        「需要人处理」的 5 个计数聚成一次往返，并补上 SLA 越线数。各段与权威
+        接口同源同口径：
+          drafts_pending   = DraftService.stats().total_pending（/api/drafts/stats）
+          learner_pending  = DailyLearner pending 行数（/api/learner/drafts）
+          crisis_unhandled = SkillManager.crisis_count_for_admin（/api/crisis-events）
+          cases_open       = context_store 有 _case_id 且未结案（/api/cases/active）
+          sla_overdue      = SLAWatcher.status_snapshot().breaching_now
+        任一子系统不可用记 null（前端隐藏对应徽标），绝不 500。
+        """
+        _api_auth(request)
+
+        import asyncio as _aio
+
+        def _gather():
+            out = {
+                "ok": True,
+                "drafts_pending": None, "learner_pending": None,
+                "crisis_unhandled": None, "cases_open": None,
+                "sla_overdue": None, "sla_max_wait_min": None,
+            }
+            state = getattr(app, "state", None)
+
+            # ① 待审回复草稿
+            try:
+                svc = getattr(state, "draft_service", None)
+                if svc is not None and hasattr(svc, "stats"):
+                    out["drafts_pending"] = int(
+                        (svc.stats() or {}).get("total_pending") or 0)
+            except Exception:
+                pass
+
+            # ② 学习队列（与 /api/learner/drafts 同一惰性构造：审核链纯 DB，
+            #    AI 缺席不阻塞；已构造实例直接复用，绝不重复建）
+            try:
+                learner = getattr(state, "_daily_learner", None)
+                if learner is None and _kb_store is not None:
+                    from src.utils.daily_learner import DailyLearner, resolve_learner_ai
+                    _ai = resolve_learner_ai(app, telegram_client)
+                    learner = DailyLearner(
+                        _kb_store, _ai,
+                        db_path=Path(config_manager.config_path).parent
+                        / "knowledge_base.db")
+                    state._daily_learner = learner
+                if learner is not None:
+                    # stats() 是全表 COUNT——旧口径 len(list_drafts()) 受默认
+                    # limit=50 封顶，积压超 50 时待办条/徽标失真（2026-08-16 修）
+                    out["learner_pending"] = int(
+                        (learner.stats() or {}).get("pending") or 0)
+            except Exception:
+                pass
+
+            # ③④ 危机 / 案例（共用 skill_manager 解析，各自独立软失败）
+            sm = None
+            try:
+                from src.web.web_context import resolve_skill_manager
+                sm = resolve_skill_manager(telegram_client, app)
+            except Exception:
+                sm = None
+            if sm is not None:
+                try:
+                    if hasattr(sm, "crisis_count_for_admin"):
+                        out["crisis_unhandled"] = int(
+                            sm.crisis_count_for_admin(only_unhandled=True) or 0)
+                except Exception:
+                    pass
+                try:
+                    ctx_store = getattr(sm, "_context_store", None)
+                    if ctx_store is not None and hasattr(ctx_store, "_cache"):
+                        # 与 /api/cases/active 同源口径（含 SQLite 兜底与淡出窗），
+                        # 否则重启后待办条与案例页各说各话。
+                        from src.utils.case_center import count_open_cases
+                        out["cases_open"] = count_open_cases(ctx_store)
+                except Exception:
+                    pass
+
+            # ⑤ SLA 越线（SLAWatcher 快照；未挂载 → null）
+            try:
+                sw = getattr(state, "sla_watcher", None)
+                if sw is not None and hasattr(sw, "status_snapshot"):
+                    snap = sw.status_snapshot() or {}
+                    if snap.get("breaching_now") is not None:
+                        out["sla_overdue"] = int(snap.get("breaching_now") or 0)
+                        out["sla_max_wait_min"] = int(snap.get("max_wait_min") or 0)
+            except Exception:
+                pass
+            return out
 
         return await _aio.to_thread(_gather)
 

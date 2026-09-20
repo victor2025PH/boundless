@@ -33,6 +33,7 @@ class _SM:
     _get_selfie_cap = _SMcls._get_selfie_cap
     _selfie_upsell_text = _SMcls._selfie_upsell_text
     _try_send_selfie_media = _SMcls._try_send_selfie_media
+    _media_presend_pacing = _SMcls._media_presend_pacing
     _selfie_persona_for_prompt = _SMcls._selfie_persona_for_prompt
     _selfie_album_key = _SMcls._selfie_album_key
     _get_persona_name_for_context = _SMcls._get_persona_name_for_context
@@ -58,6 +59,17 @@ class _SM:
 
 _ON = {"enabled": True, "free_daily": 1, "min_bond_level": 2,
        "provider": {"enabled": False}}
+
+
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸（capabilities.photos）默认关；本文件全部场景
+    假定「人设已开相册/发图」，统一在此打开。关态行为（默认关/一张不发）
+    由 tests/test_photo_capability.py 专门覆盖。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
 
 
 @pytest.fixture()
@@ -224,6 +236,99 @@ async def test_try_send_selfie_media_no_image_returns_false():
     assert ok is False
 
 
+# ── P3 媒体拟人节奏（media_pacing，2026-08-12）────────────────────────────
+# 实录：客户「出来喝咖啡」→ 0.8s 相册图落地（媒体短路在文本 humanize 之前裸发）。
+# 契约：默认关（零休眠，行为不变）；开启后随机等待落在 [min,max]、分段 ≤4s、
+# 等待期挂「正在发送照片」action；action 抛错退化纯等待不阻塞发图。
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_off_by_default_no_sleep():
+    sm = _SM(selfie_cfg=_ON)   # 未配 media_pacing → 默认关
+    slept = []
+
+    async def _fs(d):
+        slept.append(d)
+
+    await sm._media_presend_pacing({}, 1, _sleep=_fs)
+    assert slept == []
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_enabled_sleeps_in_range_with_action():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = {"enabled": True, "min_sec": 5, "max_sec": 9}
+    sm = _SM(selfie_cfg=cfg)
+    slept, actions = [], []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    async def _act(chat_id):
+        actions.append(chat_id)
+
+    await sm._media_presend_pacing({"_send_media_action": _act}, 7, _sleep=_fs)
+    total = sum(slept)
+    assert 5.0 <= total <= 9.0
+    assert all(s <= 4.0 for s in slept)     # 分段 ≤4s（气泡 ~5s 过期要续挂）
+    assert len(actions) == len(slept)       # 每段等待前都挂了一次 action
+    assert actions[0] == 7
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_bool_true_uses_defaults():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = True
+    sm = _SM(selfie_cfg=cfg)
+    slept = []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    await sm._media_presend_pacing({}, 1, _sleep=_fs)
+    assert 2.5 <= sum(slept) <= 6.5
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_action_failure_degrades_to_silent_wait():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = {"enabled": True, "min_sec": 6, "max_sec": 6}
+    sm = _SM(selfie_cfg=cfg)
+    slept, boom = [], []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    async def _bad(chat_id):
+        boom.append(1)
+        raise RuntimeError("action down")
+
+    await sm._media_presend_pacing({"_send_media_action": _bad}, 1, _sleep=_fs)
+    assert abs(sum(slept) - 6.0) < 0.01     # 等待照常走完
+    assert boom == [1]                       # 抛错一次后不再重试
+
+
+@pytest.mark.asyncio
+async def test_try_send_selfie_media_runs_pacing_before_send():
+    """汇口契约：`_try_send_selfie_media` 发送前必过 `_media_presend_pacing`
+    （7 个媒体调用点都从这里受益；挪走调用点先红）。"""
+    sm = _SM(selfie_cfg=_ON)
+    order = []
+
+    async def _pacing(user_context, chat_id, **kw):
+        order.append("pacing")
+
+    async def _fake_send(chat_id, path, caption):
+        order.append("send")
+        return True
+
+    sm._media_presend_pacing = _pacing
+    ok = await sm._try_send_selfie_media(
+        {"_send_photo_to_chat": _fake_send}, 1, "/tmp/x.png", "hi")
+    assert ok is True
+    assert order == ["pacing", "send"]
+
+
 @pytest.mark.asyncio
 async def test_try_send_selfie_media_callback_failure_soft_false():
     sm = _SM(selfie_cfg=_ON)
@@ -302,7 +407,7 @@ def _photo_sender(cli, *, min_interval=0, last_send=0.0):
 @pytest.mark.asyncio
 async def test_send_photo_blocked_by_presend_guard(monkeypatch):
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: True)  # 冻结/被闸门拦
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: True)  # 冻结/被闸门拦
     assert await s.send_photo(7, "/p.png", "c") is False
     assert s.client.calls == []  # 护栏拦下，照片未真发（不绕过风控）
 
@@ -316,7 +421,7 @@ async def test_send_photo_paces_against_shared_wallclock(monkeypatch):
 
     monkeypatch.setattr("src.client.sender.asyncio.sleep", _fake_sleep)
     s = _photo_sender(_PhotoCli(), min_interval=5, last_send=time.time())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     ok = await s.send_photo(7, "/p.png", "c")
     assert ok is True
     assert slept.get("sec") is not None and slept["sec"] > 0  # 距上次<5s→补足节流
@@ -333,7 +438,7 @@ async def test_send_photo_no_pace_when_interval_zero(monkeypatch):
 
     monkeypatch.setattr("src.client.sender.asyncio.sleep", _fake_sleep)
     s = _photo_sender(_PhotoCli(), min_interval=0, last_send=time.time())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_photo(7, "/p.png", "c") is True
     assert "sec" not in slept  # min_interval=0 → 不节流（行为不变）
 
@@ -353,16 +458,18 @@ async def test_send_photo_mirrors_and_records(monkeypatch):
     monkeypatch.setattr(cc, "record_relationship_message", _rec)
 
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     s._emit_inbox = lambda **kw: emitted.update(kw)
 
     assert await s.send_photo(7, "/p.png", "看我新裙子") is True
-    # 坐席台镜像：带 [图片] 前缀 + 配文，方向 out；msg_id 供回显去重（mock 客户端无 id→空串）
+    # 坐席台镜像（2026-08-02 起媒体行正文=干净配文，[图片] 语义由 media_type 承载，
+    # 与 B 线 caption 同口径）；msg_id 供回显去重（mock 客户端无 id→空串）
     assert emitted["chat_id"] == 7
-    assert emitted["text"] == "[图片] 看我新裙子"
+    assert emitted["text"] == "看我新裙子"
+    assert emitted["media_type"] == "image"
     assert emitted["direction"] == "out"
     assert emitted.get("msg_id") == ""
-    # contacts 记账：外发互动计入 IntimacyEngine（mutuality）
+    # contacts 记账：外发互动计入 IntimacyEngine（mutuality）；纯文本时间线保留标记表意
     assert recorded["dir"] == "out" and recorded["prev"] == "[图片] 看我新裙子"
     assert recorded["chat"] == 7 and recorded["acc"] == "a"
 
@@ -373,10 +480,11 @@ async def test_send_photo_empty_caption_preview(monkeypatch):
     import src.utils.companion_context as cc
     monkeypatch.setattr(cc, "record_relationship_message", lambda *a, **k: None)
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     s._emit_inbox = lambda **kw: emitted.update(kw)
     assert await s.send_photo(7, "/p.png", "") is True
-    assert emitted["text"] == "[图片]"  # 无配文 → 仅标记
+    # 无配文 → 正文空、media_type=image（前端按 🖼️ 占位/真图渲染，不再显示裸标记）
+    assert emitted["text"] == "" and emitted["media_type"] == "image"
 
 
 @pytest.mark.asyncio
@@ -386,7 +494,7 @@ async def test_postsend_mirror_record_no_emit_attr_still_records(monkeypatch):
     monkeypatch.setattr(cc, "record_relationship_message",
                         lambda *a, **k: recorded.update({"hit": True}))
     s = _photo_sender(_PhotoCli())  # 无 _emit_inbox 属性
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_photo(7, "/p.png", "hi") is True  # 镜像缺省→优雅跳过、不抛
     assert recorded.get("hit") is True  # contacts 记账照常
 
@@ -473,7 +581,9 @@ async def test_global_cap_ignored_when_provider_disabled():
 async def test_allow_direct_send_returns_empty_when_photo_sent(monkeypatch):
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
-    prov = cs.get_selfie_provider({"enabled": True, "backend": "disabled"})
+    # 预建 cfg 必须与 _ON["provider"] 指纹一致：get_selfie_provider 现按配置
+    # 指纹重建单例（热重载语义），不一致会在 handle 内重建、monkeypatch 丢失。
+    prov = cs.get_selfie_provider(dict(_ON["provider"]))
 
     async def _fake_gen(prompt, **kw):
         return cs.SelfieResult(ok=True, image_path="/tmp/fake.png", provider="x")
@@ -712,7 +822,8 @@ async def test_selfie_sent_records_media_note_for_history(monkeypatch):
     经 _record_stage_turn 进 last_reply → 下一轮 LLM 知道自己刚发过图。"""
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
-    prov = cs.get_selfie_provider({"enabled": True, "backend": "disabled"})
+    # 同上：预建 cfg 与 _ON["provider"] 指纹一致，防 handle 内重建丢 monkeypatch
+    prov = cs.get_selfie_provider(dict(_ON["provider"]))
 
     async def _gen(p, **k):
         return cs.SelfieResult(ok=True, image_path="/tmp/ok.png", provider="x")

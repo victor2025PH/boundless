@@ -11,9 +11,36 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from src.ai.translation_service import detect_language
+
+#: 极短拉丁客套词（小写）：语言证据不足，不参与会话语言投票
+_TRIVIAL_LATIN = frozenset({
+    "ok", "okay", "k", "kk", "okk", "yes", "no", "y", "n", "ty", "thx",
+    "thanks", "thank you", "hi", "hello", "hey", "ha", "haha", "hahaha",
+    "lol", "good", "nice", "cool", "done", "wow", "oh", "hmm", "em", "en",
+})
+
+
+def detect_inbound_language(raw: str) -> str:
+    """入站语言检测（带「证据不足不投票」护栏，2026-08-20 实锤）。
+
+    事故：用户在中文群回两个字母「OK」→ detect 判 en → conversations upsert 的
+    「非 unknown 即覆写」把会话语言翻成 en → ①坐席发中文被出站语言守卫 409 拦
+    （「会话语言是 en」）②出站自动翻译开始把中文反向译英发给中文客户。
+    护栏：**纯 ASCII 且（字母数 <4 或命中常见客套词）→ 返回 unknown**（upsert
+    对 unknown 不覆写＝沿用会话既有语言）。真英文会话不受影响——任何一条正常
+    长度的英文消息都会正确投票。
+    """
+    t = str(raw or "").strip()
+    if t and all(ord(c) < 128 for c in t):
+        low = t.lower().rstrip(".!?~ ")
+        letters = sum(1 for c in low if c.isalpha())
+        if low in _TRIVIAL_LATIN or letters < 4:
+            return "unknown"
+    return detect_language(t)
 
 # 统一收件箱草稿/审批的 4 档自动化模式（与 unified_inbox 前端一致）
 SEND_MODES = ["manual", "review", "multi_choice", "auto_ai"]
@@ -24,12 +51,101 @@ PLATFORM_DISPLAY = {
     "whatsapp": "WhatsApp",
     "messenger": "Messenger",
     "telegram": "Telegram",
+    # 微信客服（企业微信官方通道，实施97）：不加则 platform.title() 渲成「Wechat_Kf」；
+    # 与其它条目一样用语言中立的英文品牌名（工作台 PN 表同名，UI 语种切换不混语）
+    "wechat_kf": "WeChat Service",
 }
 
 
 def conv_id(platform: str, account_id: str, chat_key: str) -> str:
     """会话唯一 id：platform:account_id:chat_key。"""
     return f"{platform}:{account_id}:{chat_key}"
+
+
+# P3-198：WhatsApp 设备后缀键（'639531765880:0'，Baileys 设备寻址/历史同步产物）。
+# 同一客户的规范身份=冒号前的号码；不归一会裂成两个会话（线程分叉），且旧版边车
+# toJid 曾把后缀并进号码 → 消息发到不存在的号码（2026-07-31 实锤）。
+_WA_DEVICE_KEY_RE = re.compile(r"^(\d+):\d+$")
+
+
+def normalize_chat_key(platform: str, chat_key: str) -> str:
+    """平台级 chat_key 归一（内桥 ingest 边界统一调用）。
+
+    当前只有 WhatsApp 有设备后缀语义；其它平台原样返回——LINE 官方键
+    （``line:group:<id>``）等含冒号形态不匹配 ``^\\d+:\\d+$``，天然不受影响。
+    纯函数、绝不抛。
+    """
+    key = str(chat_key or "")
+    if str(platform or "").lower() == "whatsapp":
+        m = _WA_DEVICE_KEY_RE.match(key.strip())
+        if m:
+            return m.group(1)
+    return key
+
+
+# ── P-2 A / F（#259 #252，2026-09-08）：回填标记 + 自聊会话 ─────────────────────────
+# 两个「不是新入站」的判据收口在 normalizer（落库路径唯一读它的地方是 ingest_collected_chats）：
+#   · backfill：边车 / 桥打在 source 上的 ``backfill=1``（含 backfill_source: history_set |
+#     resync | upsert_append | tg_dialogs）——登录 / 重连 / 拉历史同步回来的消息。**落库**（历史要
+#     看得见）但不发「新入站」事件（起草 / 关怀 / 目标 / 问候 / 引用 / 学习抽取 / 未读角标）。
+#   · self_chat：peer == 自己（WhatsApp「Message yourself」jid==me；Telegram Saved Messages
+#     peer id == 自己的 user id）——手机备忘录，不是客户，排除全部自动化、不计未读、列表显示
+#     「我自己 · 备忘」。判据只用 id（chat_key == account_id），零 schema。
+BACKFILL_KEY = "backfill"
+BACKFILL_SOURCE_KEY = "backfill_source"
+SELF_CHAT_KEY = "self_chat"
+DECRYPT_FAIL_KEY = "decrypt_fail"
+
+
+def is_backfill_source(source: Any) -> bool:
+    """source dict 是否带回填标记（``backfill`` 真值）。纯函数，绝不抛。"""
+    if not isinstance(source, dict):
+        return False
+    v = source.get(BACKFILL_KEY)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes")
+    return bool(v)
+
+
+def backfill_source_of(source: Any) -> str:
+    """回填来源标签（history_set / resync / upsert_append / tg_dialogs / ""）。"""
+    if not isinstance(source, dict):
+        return ""
+    return str(source.get(BACKFILL_SOURCE_KEY) or "").strip()[:32]
+
+
+def is_decrypt_fail_source(source: Any) -> bool:
+    """Bad MAC 占位入站：落库、计未读、发 SSE，但不起草（#279 可见但不起草）。"""
+    if not isinstance(source, dict):
+        return False
+    v = source.get(DECRYPT_FAIL_KEY)
+    if isinstance(v, str):
+        if v.strip().lower() in ("1", "true", "yes"):
+            return True
+    elif v:
+        return True
+    return backfill_source_of(source) == "decrypt_fail"
+
+
+def is_self_chat(platform: str, account_id: str, chat_key: str,
+                 source: Any = None) -> bool:
+    """会话对端是否就是账号自己（自聊 / 备忘）。
+
+    WhatsApp：私聊 chat_key 是裸 E.164，「Message yourself」的 jid==me → chat_key==account_id。
+    Telegram：Saved Messages 的 peer id == 自己的 user id → 同样 chat_key==account_id。
+    其它平台无自聊语义，只认 source 显式 ``self_chat`` 标（边车 / 桥知道 me 时可直接打）。
+    account_id 为空 / default 时判不出 → False（default 账号没有「自己」的身份可比）。
+    """
+    if isinstance(source, dict) and source.get(SELF_CHAT_KEY):
+        return True
+    plat = str(platform or "").strip().lower()
+    acct = str(account_id or "").strip()
+    key = normalize_chat_key(plat, str(chat_key or "")).strip()
+    if not acct or acct == "default" or not key:
+        return False
+    if plat in ("whatsapp", "telegram"):
+        return key == acct
+    return False
 
 
 def name_is_real(name: Any, chat_key: Any) -> bool:
@@ -51,7 +167,10 @@ def name_is_real(name: Any, chat_key: Any) -> bool:
 # 会话类型归一（私聊 / 群组 / 频道）。用于「群组不进升级告警、改走群组动态」分流。
 # 群/超级群/广播群统一归为 ``group``；频道单列 ``channel``；其余（含未知）回落 ``private``，
 # 因为告警侧对未知保守按私聊处理（宁可多提醒一个私聊，不可漏一个真客户）。
-_GROUP_SOURCE_TYPES = {"group", "supergroup", "gigagroup", "megagroup", "room"}
+_GROUP_SOURCE_TYPES = {
+    "group", "supergroup", "gigagroup", "megagroup", "room",
+    "group_thread", "community",
+}
 _PRIVATE_SOURCE_TYPES = {"private", "user", "bot", "dm", "direct"}
 
 
@@ -86,6 +205,27 @@ def infer_chat_type(
         return "group"
     if pt == "channel":
         return "channel"
+    tt = str(src.get("thread_type") or src.get("threadType") or "").strip().lower()
+    if tt in _GROUP_SOURCE_TYPES:
+        return "group"
+    if tt == "channel":
+        return "channel"
+    if "is_group_thread" in src:
+        try:
+            if bool(src.get("is_group_thread")):
+                return "group"
+        except Exception:  # noqa: BLE001
+            pass
+    for _k in ("participants_count", "participant_count", "participantCount"):
+        if _k not in src:
+            continue
+        try:
+            n = int(src.get(_k) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n >= 3:
+            return "group"
+        break
     plat = str(platform or "").lower()
     ck = str(chat_key or "").strip()
     if plat == "telegram":
@@ -97,6 +237,11 @@ def infer_chat_type(
         low = ck.lower()
         if ":group:" in low or ":room:" in low or low.startswith(("line:group:", "line:room:")):
             return "group"
+    if plat in ("qqbot", "qq"):
+        # QQ 两平台的 chat_key 自描述：``qqbot:group:<group_openid>`` / ``qqbot:c2c:<openid>``；
+        # ``qq:group:<群号>`` / ``qq:friend:<QQ号>`` / ``qq:temp:<QQ号>``（临时会话按私聊）。
+        if ":group:" in ck.lower():
+            return "group"
     return "private"
 
 
@@ -107,7 +252,8 @@ def infer_chat_type(
 _PLATFORM_MSG_ID_FIELDS = {
     "telegram":  ("id", "message_id"),         # MTProto message.id
     "whatsapp":  ("wamid", "message_id", "msg_id"),
-    "messenger": ("mid", "message_id"),
+    # msg_id = messenger-web synthMsgId（DOM 无 mid/wamid 时的确定性指纹）
+    "messenger": ("mid", "message_id", "msg_id"),
     "line":      ("message_id", "server_id"),  # 不取裸 id（房间 id）
     "web":       ("message_id", "id"),
 }
@@ -195,7 +341,7 @@ def message_obj(
     纯加法字段——文本消息显示与既有行为完全不变。
     """
     raw = str(text or "")
-    lang = detect_language(raw)
+    lang = detect_inbound_language(raw)
     if not media_type and not media_ref:
         media_type, media_ref = extract_media(source)
     return {
@@ -244,7 +390,16 @@ def normalize_chat(
     ``username`` / ``phone`` / ``avatar_url``：peer 真实身份画像（缺省空，可从
     ``source`` 兜底）；落库后列表/头部/客户信息面板统一读出，替代「一排数字 id」。
     """
-    msg = message_obj(text=last_msg, ts=last_ts, direction="in", source=source)
+    # 顶层 message_id 与 source 双写：protocol_bridge 常把 msg_id 放进 source；
+    # 显式提到顶层后，ingest._msg_from_obj 任一抽取路径都能命中（防 source 被剥）。
+    _src = source if isinstance(source, dict) else {}
+    _pmid = extract_platform_msg_id(_src, platform) or str(
+        _src.get("message_id") or _src.get("msg_id") or ""
+    ).strip()
+    msg = message_obj(
+        text=last_msg, ts=last_ts, direction="in",
+        message_id=_pmid, source=source,
+    )
     ctype = (str(chat_type).strip().lower()
              or infer_chat_type(platform, chat_key, source))
     src = source if isinstance(source, dict) else {}
@@ -278,6 +433,28 @@ def normalize_chat(
     }
 
 
+def _effective_unread_from_row(row: Dict[str, Any]) -> int:
+    """P0：由会话行派生「有效未读」——已读水位覆盖最后一条**入站**则 0。
+
+    v2（2026-08-23）：闸门 ts 优先 ``last_in_ts``（最后一条入站；0=无入站回流的
+    占位/存量行 → 回落 ``last_ts`` 保旧行为）——自己的出站不再复活未读徽标。
+    纯逻辑（不依赖 store 实例，避免 normalizer→store 循环依赖）；与
+    ``InboxStore.effective_unread`` / ``sum_effective_unread_by_account`` 的
+    SQL CASE 三处同口径，改任何一处必须同改其余两处。
+    """
+    try:
+        raw = int(row.get("unread") or 0)
+        if raw <= 0:
+            return 0
+        last_ts = float(row.get("last_ts") or 0)
+        last_in = float(row.get("last_in_ts") or 0)
+        last_read = float(row.get("last_read_ts") or 0)
+    except (TypeError, ValueError):
+        return int(row.get("unread") or 0)
+    gate_ts = last_in if last_in > 0 else last_ts
+    return raw if gate_ts > last_read else 0
+
+
 def store_row_to_chat(
     row: Dict[str, Any],
     *,
@@ -286,6 +463,7 @@ def store_row_to_chat(
     account_label: Optional[str] = None,
     read_only: bool = False,
     account_status: str = "",
+    can_send: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """把 InboxStore.list_conversations 的一行映射回 unified_inbox 的 chat dict 形状。
 
@@ -317,6 +495,7 @@ def store_row_to_chat(
     )
     language = (last_msg_obj["language"] if last_msg_obj
                else str(row.get("language") or "unknown"))
+    _self_chat = is_self_chat(platform, account_id, chat_key)
     return {
         "platform": platform,
         "platform_name": PLATFORM_DISPLAY.get(platform, platform.title() or platform),
@@ -329,20 +508,41 @@ def store_row_to_chat(
         "username": str(row.get("username") or ""),
         "phone": str(row.get("phone") or ""),
         "avatar_url": str(row.get("avatar_url") or ""),
+        # 头像内容指纹（2026-08-16）：前端 _peerAvatarPlan 据此拼 ?v= 穿透 <img> 缓存；
+        # 空=平台无指纹通道（走 avatar_url 路径哈希/无版本，旧行为）。
+        "avatar_fp": str(row.get("avatar_fp") or ""),
         "first_seen": row.get("first_seen") or 0,
         "chat_type": str(row.get("chat_type") or "")
         or infer_chat_type(platform, chat_key),
         "last_msg": last_text,
         "last_ts": row.get("last_ts") or 0,
-        "unread": int(row.get("unread") or 0),
+        # P0 未读可信化：``unread`` 对外恒为「有效未读」——已读水位（last_read_ts）覆盖到
+        # 末条则 0，否则用同步来的 unread。这样协议号每轮 upsert_protocol_chats 覆盖的
+        # 手机端未读数不会把坐席已读态冲回（打开即已读、永不回弹）。
+        # ``synced_unread`` 保留平台/手机端原始未读，供前端出「灰色·手机端未读」徽标区分。
+        "unread": 0 if _self_chat else _effective_unread_from_row(row),
+        "synced_unread": 0 if _self_chat else int(row.get("unread") or 0),
+        # 占位会话：有同步未读但本地零条消息（协议号只同步了会话列表、消息本体没回流）。
+        # 前端据此出专属空态（「历史尚未回流」+ 拉取按钮），而非通用「暂无消息」。
+        "is_placeholder": bool(int(row.get("unread") or 0) > 0
+                               and int(message_count or 0) == 0),
         # P4-11B 群「@我」未读旗标（store-backed 读路径透出；前端据此出 @ 徽标/置顶/提醒）
         "mentioned": bool(row.get("mentioned_unread") or 0),
+        # Messenger 陌生人「消息请求」（待验证新客户）：前端徽章 + 引导「回复即通过验证」。
+        # 出站落库自动清（ingest_message），显式接受/拒绝走 request-action 代理。
+        "is_request": bool(row.get("is_request") or 0),
+        "request_category": str(row.get("request_category") or ""),
+        # P-2 F（#252 A7PB2F / H3BAJD）：自聊会话（peer == 自己）——前端显示「我自己 · 备忘」、
+        # 折叠到底部、不计未读；自动化排除在 ingest 侧（同一 is_self_chat 判据）。
+        "self_chat": _self_chat,
         "language": language,
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],
         "message_count": int(message_count or 0),
-        # read_only：账号已从注册表移除（如 status=removed），仅可查看历史、不可发送。
-        "can_send": not read_only,
+        # read_only：账号已从注册表移除（status=removed），仅可查看历史（前端归「已移除」tab）。
+        # can_send 可被显式覆写（account_status=offline 的「已登出」账号：不隐藏、只禁发）；
+        # 缺省沿用旧语义 = not read_only。
+        "can_send": (not read_only) if can_send is None else bool(can_send),
         "read_only": bool(read_only),
         "account_status": str(account_status or ""),
         "send_modes": list(SEND_MODES),
@@ -400,6 +600,13 @@ def store_message_to_obj(row: Dict[str, Any]) -> Dict[str, Any]:
         # P4-6A 编辑/撤回：撤回=气泡置灰「已撤回」；编辑=标「已编辑」
         "revoked": bool(row.get("revoked") or 0),
         "edited": bool(row.get("edited") or 0),
+        # 实施72 P2：合成时间戳标记（断线补收/历史回填的 ts=入库回推，只保序）——
+        # 前端据此渲染「≈」标注，绝不把补收时间当真实收发时刻展示。
+        "approx_ts": int(row.get("approx_ts") or 0),
+        # 实施72 P3：投递失败原因码（status=failed 留痕行专属）——气泡自解释
+        "fail_reason": str(row.get("fail_reason") or ""),
+        # 接力记忆三期：出站发送方（'agent'=坐席工作台手动发；''=AI/自动链/手机端/老行）
+        "sent_by": str(row.get("sent_by") or ""),
         "source": {},
         "from_store": True,
     }
@@ -471,3 +678,20 @@ def candidate_messages_from_source(source: Dict[str, Any]) -> List[Dict[str, Any
                     ))
             return [m for m in out if m.get("text")]
     return []
+
+
+# ── 实施96 P0（2026-09-08）：注册表兜底 ─────────────────────────────────────────────
+# 上面两张手写表只覆盖历史平台；未手写的平台（抖音 / TikTok / QQ …）此前回落 `title()`
+# （"Qqbot"、"Douyin" 这种半对不对的名字）与「无可信 msg_id 字段」。这里用平台注册表
+# （src/integrations/platform_registry.py，单一事实源）补齐**缺席项**——`setdefault` 只添不改，
+# 手写条目原样保留；散表收口完成后可把手写条目删掉，行为不变。与前端 platColor/platName 回落
+# /static/platform_registry.json 同源。
+try:
+    from src.integrations import platform_registry as _preg
+    for _spec in _preg.all_platforms():
+        PLATFORM_DISPLAY.setdefault(_spec.id, _spec.name)
+        if _spec.msg_id_fields:
+            _PLATFORM_MSG_ID_FIELDS.setdefault(_spec.id, tuple(_spec.msg_id_fields))
+    del _spec
+except Exception:  # 注册表不可用时保持旧行为（回落 title()）
+    pass

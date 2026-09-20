@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,17 @@ def _asr_cfg(config_manager: Any) -> Dict[str, Any]:
     return dict(cfg.get("voice_recognition") or {})
 
 
-def _save_cfg(config_manager: Any, request) -> None:
-    ok = config_manager.save()
+def _save_cfg(config_manager: Any, request, patch: Dict[str, Any]) -> None:
+    """把本次真正改动（最小 patch，嵌套 dict）持久化。
+
+    优先走 config_manager.save_overlay_patch——运行时写配置一律落
+    config.local.yaml overlay（保住主 config.yaml 注释/结构，值不固化进主文件）。
+    兜底：方法缺失（简化 fake）或返回非 bool（MagicMock 桩）→ 回落整文件 save()。
+    """
+    saver = getattr(config_manager, "save_overlay_patch", None)
+    ok = saver(patch) if callable(saver) else None
+    if not isinstance(ok, bool):
+        ok = config_manager.save()
     if ok is False:
         raise HTTPException(500, tr(request, "err.tg.save_config_failed"))
 
@@ -336,6 +345,15 @@ def _redact_secrets(obj: Any, _keys=("api_key", "password", "secret", "token")) 
     return obj
 
 
+def derive_account_status(running: bool, has_identity: bool) -> str:
+    """Three-state account status: connected / connecting / offline."""
+    if running and has_identity:
+        return "connected"
+    if running:
+        return "connecting"
+    return "offline"
+
+
 def register_telegram_routes(
     app,
     *,
@@ -348,11 +366,13 @@ def register_telegram_routes(
 ) -> None:
 
     # ── 页面 ─────────────────────────────────────────────────
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_telegram.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/telegram", response_class=HTMLResponse)
     async def telegram_page(request: Request):
-        page_auth(request)
-        return templates.TemplateResponse(
-            request, "telegram.html", {"active": "telegram"},
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/telegram" + (f"?{q}" if q else ""), status_code=302
         )
 
     # ── 读取全量设置 ─────────────────────────────────────────
@@ -385,9 +405,12 @@ def register_telegram_routes(
             "send_text_summary", "out_dir", "voice",
         }
         updated = []
+        # 与内存写入并行攒最小 patch（只含本次命中白名单的键，掩码跳过的键不进）
+        vr_patch: Dict[str, Any] = {}
         for k, v in body.items():
             if k in top_allowed:
                 vr[k] = v
+                vr_patch[k] = v
                 updated.append(k)
 
         # voice_profile — includes the critical reference_audio_path
@@ -399,24 +422,34 @@ def register_telegram_routes(
                 "reference_audio_path", "voice_profile_path",
                 "speaker_id", "command_timeout_sec",
             }
+            vp_patch: Dict[str, Any] = {}
             for k, v in vp_body.items():
                 if k in vp_allowed:
                     vp[k] = v
+                    vp_patch[k] = v
                     updated.append(f"voice_profile.{k}")
+            if vp_patch:
+                vr_patch["voice_profile"] = vp_patch
 
         # openai_tts sub-fields
         oai_body = body.get("openai_tts")
         if isinstance(oai_body, dict):
             oai = vr.setdefault("openai_tts", {})
+            oai_patch: Dict[str, Any] = {}
             for k, v in oai_body.items():
                 if k in {"model", "voice"}:
                     oai[k] = v
+                    oai_patch[k] = v
                     updated.append(f"openai_tts.{k}")
                 elif k == "api_key" and str(v).strip() not in ("", "***"):
                     oai[k] = v
+                    oai_patch[k] = v
                     updated.append("openai_tts.api_key")
+            if oai_patch:
+                vr_patch["openai_tts"] = oai_patch
 
-        _save_cfg(config_manager, request)
+        _save_cfg(config_manager, request,
+                  {"telegram": {"voice_reply": vr_patch}} if vr_patch else {})
         _save_snapshot(config_manager, label="voice_reply")
         logger.info("[telegram_routes] voice_reply saved: %s", updated)
         return {"ok": True, "updated": updated}
@@ -430,36 +463,52 @@ def register_telegram_routes(
 
         top_allowed = {"enabled", "provider", "language", "timeout", "max_file_size"}
         updated = []
+        asr_patch: Dict[str, Any] = {}
         for k, v in body.items():
             if k in top_allowed:
                 asr[k] = v
+                asr_patch[k] = v
                 updated.append(k)
 
         if isinstance(body.get("openai"), dict):
             oai = asr.setdefault("openai", {})
+            oai_patch: Dict[str, Any] = {}
             for k, v in body["openai"].items():
                 if k in {"model", "base_url"}:
                     oai[k] = v
+                    oai_patch[k] = v
                     updated.append(f"openai.{k}")
                 elif k == "api_key" and str(v).strip() not in ("", "***"):
                     oai[k] = v
+                    oai_patch[k] = v
                     updated.append("openai.api_key")
+            if oai_patch:
+                asr_patch["openai"] = oai_patch
 
         if isinstance(body.get("whisper"), dict):
             wh = asr.setdefault("whisper", {})
+            wh_patch: Dict[str, Any] = {}
             for k, v in body["whisper"].items():
                 if k in {"model_size", "device", "compute_type"}:
                     wh[k] = v
+                    wh_patch[k] = v
                     updated.append(f"whisper.{k}")
+            if wh_patch:
+                asr_patch["whisper"] = wh_patch
 
         if isinstance(body.get("faster_whisper"), dict):
             fw = asr.setdefault("faster_whisper", {})
+            fw_patch: Dict[str, Any] = {}
             for k, v in body["faster_whisper"].items():
                 if k in {"model_size", "device", "compute_type"}:
                     fw[k] = v
+                    fw_patch[k] = v
                     updated.append(f"faster_whisper.{k}")
+            if fw_patch:
+                asr_patch["faster_whisper"] = fw_patch
 
-        _save_cfg(config_manager, request)
+        _save_cfg(config_manager, request,
+                  {"voice_recognition": asr_patch} if asr_patch else {})
         _save_snapshot(config_manager, label="voice_asr")
         logger.info("[telegram_routes] voice_asr saved: %s", updated)
         return {"ok": True, "updated": updated}
@@ -477,19 +526,26 @@ def register_telegram_routes(
             "reply_to_user_message", "ignore_edited",
         }
         updated = []
+        tg_patch: Dict[str, Any] = {}
         for k, v in body.items():
             if k in top_allowed:
                 tg[k] = v
+                tg_patch[k] = v
                 updated.append(k)
 
         if isinstance(body.get("reply_logic"), dict):
             rl = tg.setdefault("reply_logic", {})
+            rl_patch: Dict[str, Any] = {}
             for k, v in body["reply_logic"].items():
                 if k in rl_allowed:
                     rl[k] = v
+                    rl_patch[k] = v
                     updated.append(f"reply_logic.{k}")
+            if rl_patch:
+                tg_patch["reply_logic"] = rl_patch
 
-        _save_cfg(config_manager, request)
+        _save_cfg(config_manager, request,
+                  {"telegram": tg_patch} if tg_patch else {})
         _save_snapshot(config_manager, label="reply_logic")
 
         # 热更新运行时 TelegramClient
@@ -540,10 +596,29 @@ def register_telegram_routes(
             except Exception:
                 pass
 
+        has_identity = bool(info["username"] or info["display_name"])
+        info["status"] = derive_account_status(info["online"], has_identity)
+        info["stats_source"] = "log_scan_today"
+
         # Today's stats from log
         try:
             import asyncio as _aio
             info["stats"] = await _aio.to_thread(_today_stats_from_log)
+        except Exception:
+            pass
+
+        # 结构化当日计数优先（src/client/daily_stats.py，镜像 gate_stats 模式）：
+        # 可用则覆盖三个消息/语音键；gate_cooldown/gate_streak 维持现状口径。
+        # 模块缺失/返回 None → 保留上面的日志尾扫 + stats_source=log_scan_today。
+        try:
+            import asyncio as _aio
+            from src.client.daily_stats import today_counts as _daily_counts
+            dc = await _aio.to_thread(_daily_counts)
+            if dc is not None:
+                # replies（AI 已发）仅结构化口径有——日志尾扫数不出，缺席时前端如实显 —
+                for k in ("messages", "voice_in", "tts_sent", "replies"):
+                    info["stats"][k] = int(dc.get(k, 0) or 0)
+                info["stats_source"] = "structured"
         except Exception:
             pass
 
@@ -764,6 +839,7 @@ def register_telegram_routes(
         _save_snapshot(config_manager, label="pre_restore")
         root = getattr(config_manager, "config", None) or {}
         root["telegram"] = restored_tg
-        _save_cfg(config_manager, request)
+        # 恢复语义本来就是整段覆盖 → 允许整段 telegram pin 进 overlay
+        _save_cfg(config_manager, request, {"telegram": restored_tg})
         logger.info("[telegram_routes] config restored from snapshot: %s", filename)
         return {"ok": True, "restored": filename}

@@ -261,6 +261,11 @@ def chat_ping_targets(config: Dict[str, Any]) -> list:
             continue
         seen.add((base, key))
         model = str(item.get("model") or ai.get("model") or "").strip()
+        try:
+            from src.ai.vendor_params import normalize_model
+            model, _ = normalize_model(base, model)   # 与 AIClient 池条目同款退役名归一
+        except Exception:
+            pass
         name = str(item.get("name") or f"key{i + 1}").strip()
         out.append({"name": name, "base_url": base, "api_key": key, "model": model})
     return out
@@ -275,11 +280,19 @@ def probe_chat_key(base_url: str, api_key: str, model: str,
     """
     result: Dict[str, Any] = {"ok": False, "reachable": False, "http_status": 0}
     url = base_url.rstrip("/") + "/chat/completions"
-    payload = json.dumps({
+    body_obj: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1,
-    }).encode("utf-8")
+    }
+    # 与真出话同参（关思维链）：混合推理档不关思考时 1 token 全进 reasoning，
+    # 探活「200 但 content 空」会把坏参数当好钥匙。
+    try:
+        from src.ai.vendor_params import thinking_off_extra_body
+        body_obj.update(thinking_off_extra_body(base_url, model))
+    except Exception:
+        pass
+    payload = json.dumps(body_obj).encode("utf-8")
     t0 = time.time()
     try:
         req = urllib.request.Request(url, data=payload, method="POST", headers={
@@ -287,9 +300,16 @@ def probe_chat_key(base_url: str, api_key: str, model: str,
             "Content-Type": "application/json",
         })
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            resp.read()
+            body = resp.read()
             result.update({"ok": True, "reachable": True,
                            "http_status": int(resp.status or 200)})
+        try:
+            from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+            record_usage_from_response(
+                json.loads(body.decode("utf-8", "replace")), model=model,
+                purpose="probe", tier="probe", provider=provider_from_base_url(base_url))
+        except Exception:
+            pass
     except urllib.error.HTTPError as e:
         result.update({"reachable": True, "http_status": int(e.code or 0),
                        "error": f"HTTP {e.code}"})

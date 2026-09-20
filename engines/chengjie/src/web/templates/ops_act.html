@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="{{ ui_locale|default('zh-CN') }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>{{ (i18n or {}).get('oa.title', 'Alert action') }}</title>
+<style>
+  /* 运维群降噪 P1.3：告警卡「处置」链接落点。手机第一屏，独立于工作台壳（无 session 也能用），
+     与 ops_glance.html 同一套系统字体与颜色，不引任何工作台脚本。 */
+  html,body{margin:0;background:#f5f6f8;color:#1f2937;font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:560px;margin:0 auto;padding:18px 14px 40px}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{font-size:12px;color:#6b7280;margin:0 0 14px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:12px}
+  dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0;font-size:13.5px}
+  dt{color:#6b7280}
+  dd{margin:0;word-break:break-word}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-weight:600;font-size:12.5px}
+  .pill.open{background:#fef3c7;color:#92400e}
+  .pill.quiet{background:#dcfce7;color:#166534}
+  .pill.clear{background:#e5e7eb;color:#374151}
+  form{margin:0 0 8px}
+  .btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;cursor:pointer;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;padding:12px;border-radius:10px;font-size:15px}
+  .btn.soft{background:#eef2ff;color:#3730a3}
+  .btn.ghost{background:#fff;color:#374151;border:1px solid #d1d5db}
+  .hint{font-size:12px;color:#6b7280;text-align:center;margin:-2px 0 10px}
+  .ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46;font-size:14.5px;font-weight:600}
+  .warn{background:#fff7ed;border-color:#fed7aa;color:#9a3412;font-size:14px}
+  code{font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{{ (i18n or {}).get('oa.title', 'Alert action') }}</h1>
+  <p class="sub">{{ (i18n or {}).get('oa.subtitle', '') }}</p>
+
+  {% if state != 'ok' %}
+    <div class="card warn">{{ (i18n or {}).get('oa.' ~ state, state) }}</div>
+    <a class="btn" href="{{ login_url }}">{{ (i18n or {}).get('oa.go_login', 'Go to login') }}</a>
+  {% else %}
+    {% if result %}
+      <div class="card ok">
+        {% if result == 'acked' %}{{ (i18n or {}).get('oa.done_acked', 'Acknowledged') }}
+        {% elif result == 'muted' %}{{ ((i18n or {}).get('oa.done_muted', 'Muted until {until}')).replace('{until}', muted_until) }}
+        {% else %}{{ (i18n or {}).get('oa.done_unmuted', 'Unmuted') }}{% endif %}
+        {% if who %}<div style="font-size:12px;font-weight:400;margin-top:4px">{{ (i18n or {}).get('oa.by', 'By') }}: {{ who }}</div>{% endif %}
+      </div>
+    {% endif %}
+    <div class="card">
+      <dl>
+        <dt>{{ (i18n or {}).get('oa.item', 'Reminder') }}</dt>
+        <dd>{% if label_key %}<b>{{ (i18n or {}).get(label_key, key) }}</b><br>{% endif %}{{ summary or '' }}{% if not summary %}<code>{{ key }}</code>{% endif %}</dd>
+        <dt>{{ (i18n or {}).get('oa.status', 'Status') }}</dt>
+        <dd>
+          {% if not alerted %}<span class="pill clear">{{ (i18n or {}).get('oa.state_clear', 'Not alerting') }}</span>
+          {% elif muted %}<span class="pill quiet">{{ ((i18n or {}).get('oa.state_muted', 'Muted until {until}')).replace('{until}', muted_until) }}</span>
+          {% elif acked %}<span class="pill quiet">{{ (i18n or {}).get('oa.state_acked', 'Acknowledged') }}</span>
+          {% else %}<span class="pill open">{{ (i18n or {}).get('oa.state_open', 'Still reminding') }}</span>{% endif %}
+          {% if by %}<span style="font-size:12px;color:#6b7280"> · {{ by }}</span>{% endif %}
+        </dd>
+        {% if hours_txt %}<dt>{{ (i18n or {}).get('oa.since', 'Open for') }}</dt><dd>{{ hours_txt }}</dd>{% endif %}
+      </dl>
+    </div>
+
+    {% if not result %}
+    <form method="post" action="/ops/act">
+      <input type="hidden" name="k" value="{{ key }}"><input type="hidden" name="at" value="{{ action_token }}"><input type="hidden" name="action" value="ack">
+      <button class="btn" type="submit">{{ (i18n or {}).get('oa.ack', 'Handled') }}</button>
+    </form>
+    <p class="hint">{{ (i18n or {}).get('oa.ack_hint', '') }}</p>
+    {% for h in mute_choices %}
+    <form method="post" action="/ops/act">
+      <input type="hidden" name="k" value="{{ key }}"><input type="hidden" name="at" value="{{ action_token }}"><input type="hidden" name="action" value="mute"><input type="hidden" name="hours" value="{{ h }}">
+      <button class="btn soft" type="submit">{{ (i18n or {}).get('oa.mute_' ~ h, 'Mute ' ~ h ~ 'h') }}</button>
+    </form>
+    {% endfor %}
+    {% if muted or acked %}
+    <form method="post" action="/ops/act">
+      <input type="hidden" name="k" value="{{ key }}"><input type="hidden" name="at" value="{{ action_token }}"><input type="hidden" name="action" value="unmute">
+      <button class="btn ghost" type="submit">{{ (i18n or {}).get('oa.unmute', 'Unmute') }}</button>
+    </form>
+    {% endif %}
+    {% endif %}
+    <a class="btn ghost" href="/admin/ops">{{ (i18n or {}).get('oa.back', 'Ops overview') }}</a>
+  {% endif %}
+</div>
+</body>
+</html>

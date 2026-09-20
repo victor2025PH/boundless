@@ -220,6 +220,9 @@ def start_service(svc: dict) -> bool:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["COQUI_TOS_AGREED"] = "1"
+    # 端口覆盖层(两套安装并存)：把生效端口注入子进程认的 <SVC>_PORT env(零配置时恒空,零回归)
+    for _k, _v in app_config.port_env_extra(name).items():
+        env.setdefault(_k, _v)
 
     try:
         f_log = open(log_file, "a", encoding="utf-8")

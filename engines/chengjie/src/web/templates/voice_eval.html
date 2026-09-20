@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('veval_title', "人设声音评测") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('veval_title', "人设声音评测") }}{% endblock %}
+{% block head %}
+<style>
+/* 声音评测台：卡片/chip 全走 base 令牌，暗色自适配 */
+.vev-sub{color:var(--t3);font-size:.8rem;margin:-.2rem 0 .8rem}
+.vev-bar{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-bottom:.8rem}
+.vev-sum{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.8rem;color:var(--t2)}
+.vev-sum b{color:var(--t)}
+.vev-blind{margin-left:auto;display:inline-flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--t2);cursor:pointer;user-select:none}
+.vev-prog{height:5px;background:var(--input);border-radius:3px;overflow:hidden;margin:.2rem 0 1rem}
+.vev-prog i{display:block;height:100%;width:0;background:var(--p,#1e8cf2);transition:width .3s}
+.vev-card{border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.9rem 1rem;margin-bottom:.9rem}
+.vev-card.rated{border-color:color-mix(in srgb,var(--green,#34d399) 45%,var(--bd))}
+.vev-hd{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap}
+.vev-name{font-weight:700;font-size:1rem;color:var(--t)}
+.vev-brief{color:var(--t3);font-size:.75rem}
+.vev-chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:.45rem 0 .2rem}
+.vev-chip{font-size:.7rem;padding:.1rem .55rem;border-radius:99px;background:var(--input);color:var(--t3);border:1px solid var(--bd)}
+.vev-chip.hi{color:var(--green)}.vev-chip.warn{color:var(--amber)}
+.vev-expect{font-size:.78rem;color:var(--t3);margin:.3rem 0 .1rem}
+.vev-expect b{color:var(--t2)}
+.vev-aulab{margin-top:.55rem;font-size:.75rem;font-weight:600;color:var(--pd,var(--p))}
+.vev-aulab .tag{font-weight:400;color:var(--t3);border:1px solid var(--bd);border-radius:99px;padding:0 .45rem;margin-left:.4rem;font-size:.66rem}
+.vev-card audio{width:100%;height:36px;margin:.2rem 0}
+.vev-card details{margin:.3rem 0 .4rem}
+.vev-card summary{cursor:pointer;color:var(--t3);font-size:.75rem}
+.vev-ttext{white-space:pre-wrap;font-size:.8rem;color:var(--t2);background:var(--input);border-radius:8px;padding:.55rem .7rem;margin-top:.35rem}
+.vev-rate{display:flex;gap:.9rem;align-items:center;flex-wrap:wrap;border-top:1px dashed var(--bd);margin-top:.55rem;padding-top:.6rem}
+.vev-stars{display:flex;gap:2px;font-size:1.5rem;line-height:1;cursor:pointer;user-select:none}
+.vev-stars span{color:var(--bd);padding:0 2px}
+.vev-stars span.on{color:var(--amber,#f5b83d)}
+.vev-verdict{display:flex;gap:.4rem;flex-wrap:wrap}
+.vev-vbtn{border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.8rem;padding:.3rem .8rem;border-radius:99px;cursor:pointer}
+.vev-vbtn.keep.on{background:var(--green);border-color:var(--green);color:#06281a;font-weight:700}
+.vev-vbtn.fix.on{background:var(--amber);border-color:var(--amber);color:#2d2005;font-weight:700}
+.vev-vbtn.replace.on{background:var(--red,#f87171);border-color:var(--red,#f87171);color:#330a0a;font-weight:700}
+.vev-noterow{display:flex;gap:.5rem;margin-top:.55rem}
+.vev-noterow textarea{flex:1;background:var(--input);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:.45rem .6rem;font:.8rem/1.5 inherit;resize:vertical;min-height:34px}
+.vev-saved{font-size:.7rem;color:var(--t3);min-width:80px;text-align:right;align-self:center}
+.vev-saved.ok{color:var(--green)}
+.vev-err{color:var(--red,#f87171);font-size:.78rem;margin-top:.3rem}
+.vev-cand{border-top:1px dashed var(--bd);padding:.55rem 0 .3rem}
+.vev-cand .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.vev-cand .nm{font-weight:700;color:var(--t);min-width:64px}
+.vev-pick{border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.75rem;padding:.25rem .7rem;border-radius:99px;cursor:pointer;white-space:nowrap}
+.vev-pick.on{background:var(--green);border-color:var(--green);color:#06281a;font-weight:700}
+.vev-blindon .vev-name,.vev-blindon .vev-brief,.vev-blindon .vev-expect{filter:blur(6px)}
+</style>
+{% endblock %}
+{% block content %}
+{# L-4 G（#211，D-L6）：用户版直达 URL → 「功能升级中」横幅 + 评测操作面收起（只有消费端没有生产端，
+   不补生产入口）；partner / internal 与开发者模式原页不变。 #}
+{% include "_client_tier_upgrading.html" %}
+<div id="vev-root" class="{% if ui_client_hide %}l4-locked{% endif %}">
+<div class="vev-sub">{{ (i18n or {}).get('veval_sub', '生产同款克隆链出样 · 评分即时保存 · 盲听可隐藏人设信息防先入为主') }}</div>
+<div class="vev-bar">
+  <div class="vev-sum" id="vev-sum"></div>
+  <label class="vev-blind"><input type="checkbox" id="vev-blind"> {{ (i18n or {}).get('veval_blind', '盲听模式') }}</label>
+</div>
+<div class="vev-prog"><i id="vev-pbar"></i></div>
+<div id="vev-list">{{ (i18n or {}).get('veval_loading', '加载中…') }}</div>
+<div id="vev-cands"></div>
+</div>
+<script>
+(function(){
+  var API = '/api/admin/voice-eval';
+  var root = document.getElementById('vev-root');
+  if(root && root.classList.contains('l4-locked')) return;  /* L-4 G：用户版收起，不拉评测数据 */
+  var I = {
+    emotion: {{ ((i18n or {}).get('veval_emotion', '情绪'))|tojson }},
+    scoreChip: {{ ((i18n or {}).get('veval_score_chip', '声纹相似度'))|tojson }},
+    flagged: {{ ((i18n or {}).get('veval_flagged', '机筛低于地板'))|tojson }},
+    expect: {{ ((i18n or {}).get('veval_expect', '期望声线'))|tojson }},
+    texts: {{ ((i18n or {}).get('veval_texts', '朗读文本'))|tojson }},
+    va: {{ ((i18n or {}).get('veval_va', 'A · 直念版'))|tojson }},
+    vaTag: {{ ((i18n or {}).get('veval_va_tag', '无拟人层'))|tojson }},
+    vb: {{ ((i18n or {}).get('veval_vb', 'B · 拟人化版'))|tojson }},
+    vbTag: {{ ((i18n or {}).get('veval_vb_tag', '口语化改写 + 停顿气口'))|tojson }},
+    vc: {{ ((i18n or {}).get('veval_vc', 'C · 慢速拟人'))|tojson }},
+    vcTag: {{ ((i18n or {}).get('veval_vc_tag', '分句真停顿 + 分段情绪 + 底噪/真呼吸'))|tojson }},
+    vd: {{ ((i18n or {}).get('veval_vd', 'D · MOSS 引擎版'))|tojson }},
+    vdTag: {{ ((i18n or {}).get('veval_vd_tag', '对话感引擎对比'))|tojson }},
+    vn: {{ ((i18n or {}).get('veval_vn', '对照 · 不带情绪标签'))|tojson }},
+    vnTag: {{ ((i18n or {}).get('veval_vn_tag', '查情绪参考音是否错源'))|tojson }},
+    keep: {{ ((i18n or {}).get('veval_keep', '✅ 合适'))|tojson }},
+    fix: {{ ((i18n or {}).get('veval_fix', '🔧 需修正'))|tojson }},
+    replace: {{ ((i18n or {}).get('veval_replace', '❌ 需替换'))|tojson }},
+    notePh: {{ ((i18n or {}).get('veval_note_ph', '备注：哪里不对'))|tojson }},
+    saving: {{ ((i18n or {}).get('veval_saving', '保存中…'))|tojson }},
+    saved: {{ ((i18n or {}).get('veval_saved', '已保存'))|tojson }},
+    saveFail: {{ ((i18n or {}).get('veval_save_fail', '保存失败，重试一下'))|tojson }},
+    cands: {{ ((i18n or {}).get('veval_cands', '替换候选'))|tojson }},
+    candsSub: {{ ((i18n or {}).get('veval_cands_sub', '同文本同引擎直念，纯比音色'))|tojson }},
+    pick: {{ ((i18n or {}).get('veval_pick', '用这个'))|tojson }},
+    picked: {{ ((i18n or {}).get('veval_picked', '✓ 已选它替换'))|tojson }},
+    pickNone: {{ ((i18n or {}).get('veval_pick_none', '都不合适就在备注里写要求'))|tojson }},
+    pickedLine: {{ ((i18n or {}).get('veval_picked_line', '已选择'))|tojson }},
+    sumRated: {{ ((i18n or {}).get('veval_sum_rated', '已评'))|tojson }},
+    sumKeep: {{ ((i18n or {}).get('veval_sum_keep', '合适'))|tojson }},
+    sumFix: {{ ((i18n or {}).get('veval_sum_fix', '修正'))|tojson }},
+    sumReplace: {{ ((i18n or {}).get('veval_sum_replace', '替换'))|tojson }},
+    empty: {{ ((i18n or {}).get('veval_empty', '还没有样音批次'))|tojson }},
+    genFail: {{ ((i18n or {}).get('veval_gen_fail', '生成失败'))|tojson }}
+  };
+  var STATE = null;
+  var debounces = {};
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+  function auBlock(label, tag, file){
+    if(!file) return '';
+    return '<div class="vev-aulab">'+esc(label)+(tag?'<span class="tag">'+esc(tag)+'</span>':'')+'</div>'
+      +'<audio controls preload="metadata" src="'+API+'/audio/'+encodeURIComponent(file)+'"></audio>';
+  }
+
+  function card(it, r){
+    var el = document.createElement('div');
+    el.className = 'vev-card'; el.id = 'vev-c-' + it.id;
+    var sc = it.clone_score;
+    var v = it.vivid||{}, sl = it.slow||{}, ms = it.moss||{}, nd = it.neutral_diag||{};
+    el.innerHTML =
+      '<div class="vev-hd"><span class="vev-name">'+esc(it.name)+'</span>'
+      +'<span class="vev-brief">'+esc(it.brief)+'</span></div>'
+      +'<div class="vev-chips"><span class="vev-chip">'+I.emotion+' '+esc(it.emotion)+'</span>'
+      +(sc!=null?'<span class="vev-chip '+(sc>=0.8?'hi':'warn')+'">'+I.scoreChip+' '+sc+'</span>':'')
+      +(it.flagged?'<span class="vev-chip warn">'+I.flagged+'</span>':'')+'</div>'
+      +'<div class="vev-expect"><b>'+I.expect+'：</b>'+esc(it.expect)+'</div>'
+      +auBlock(I.va, I.vaTag, it.file)
+      +auBlock(I.vb, I.vbTag, v.file)+(v.error?'<div class="vev-err">'+I.genFail+'：'+esc(v.error)+'</div>':'')
+      +auBlock(I.vc, I.vcTag, sl.file)+(sl.error?'<div class="vev-err">'+I.genFail+'：'+esc(sl.error)+'</div>':'')
+      +auBlock(I.vd, I.vdTag, ms.file)
+      +auBlock(I.vn, I.vnTag, nd.file)
+      +'<details><summary>'+I.texts+'</summary><div class="vev-ttext">A：'+esc(it.text)
+      +(v.spoken_text?'\n\nB：'+esc(v.spoken_text):'')
+      +(sl.spoken_text?'\n\nC：'+esc(sl.spoken_text):'')+'</div></details>'
+      +'<div class="vev-rate"><div class="vev-stars">'
+      +[1,2,3,4,5].map(function(n){return '<span data-n="'+n+'">★</span>';}).join('')
+      +'</div><div class="vev-verdict">'
+      +'<button type="button" class="vev-vbtn keep" data-v="keep">'+I.keep+'</button>'
+      +'<button type="button" class="vev-vbtn fix" data-v="fix">'+I.fix+'</button>'
+      +'<button type="button" class="vev-vbtn replace" data-v="replace">'+I.replace+'</button>'
+      +'</div></div>'
+      +'<div class="vev-noterow"><textarea placeholder="'+esc(I.notePh)+'">'+esc(r.note||'')+'</textarea>'
+      +'<div class="vev-saved" id="vev-s-'+esc(it.id)+'"></div></div>';
+    var stars = el.querySelector('.vev-stars');
+    stars.addEventListener('click', function(e){
+      var n = +(e.target.getAttribute('data-n')||0); if(!n) return;
+      paintStars(stars, n); save(it.id, {score:n});
+    });
+    if(r.score) paintStars(stars, r.score);
+    el.querySelectorAll('.vev-vbtn').forEach(function(b){
+      b.addEventListener('click', function(){
+        el.querySelectorAll('.vev-vbtn').forEach(function(x){x.classList.remove('on');});
+        b.classList.add('on'); save(it.id, {verdict:b.getAttribute('data-v')});
+      });
+    });
+    if(r.verdict){var vb = el.querySelector('.vev-vbtn.'+r.verdict); if(vb) vb.classList.add('on');}
+    el.querySelector('textarea').addEventListener('input', function(e){
+      clearTimeout(debounces[it.id]);
+      debounces[it.id] = setTimeout(function(){save(it.id, {note:e.target.value});}, 600);
+    });
+    if(r.score||r.verdict) el.classList.add('rated');
+    return el;
+  }
+
+  function renderCands(cands, items){
+    var zone = document.getElementById('vev-cands'); zone.innerHTML='';
+    Object.keys(cands||{}).forEach(function(target){
+      var it = items[target]||{name:target};
+      var rid = 'replace_pick:'+target;
+      var picked = (STATE.ratings[rid]||{}).note||'';
+      var box = document.createElement('div'); box.className='vev-card';
+      box.innerHTML = '<div class="vev-hd"><span class="vev-name">🔁 '+I.cands+' · '+esc(it.name)
+        +'</span><span class="vev-brief">'+I.candsSub+'</span></div>';
+      (cands[target]||[]).forEach(function(c){
+        var row = document.createElement('div'); row.className='vev-cand';
+        if(c.error){
+          row.innerHTML = '<div class="row"><span class="nm">'+esc(c.profile)+'</span>'
+            +'<span class="vev-err">'+I.genFail+'：'+esc(c.error)+'</span></div>';
+        } else {
+          row.innerHTML = '<div class="row"><span class="nm">'+esc(c.profile)+'</span>'
+            +'<span class="vev-chip '+((c.clone_score==null||c.clone_score>=0.8)?'hi':'warn')+'">'
+            +I.scoreChip+' '+(c.clone_score==null?'?':c.clone_score)+' · '+(c.dur||'?')+'s</span>'
+            +'<button type="button" class="vev-pick'+(picked===c.profile?' on':'')+'" data-t="'+esc(target)
+            +'" data-p="'+esc(c.profile)+'">'+(picked===c.profile?I.picked:I.pick)+'</button></div>'
+            +'<audio controls preload="metadata" src="'+API+'/audio/'+encodeURIComponent(c.file)+'"></audio>';
+        }
+        box.appendChild(row);
+      });
+      var hint = document.createElement('div'); hint.className='vev-brief';
+      hint.style.marginTop='.4rem';
+      hint.textContent = picked ? (I.pickedLine+'：'+picked) : ('（'+I.pickNone+'）');
+      box.appendChild(hint);
+      zone.appendChild(box);
+    });
+    zone.querySelectorAll('.vev-pick').forEach(function(b){
+      b.addEventListener('click', function(){
+        var t = b.getAttribute('data-t'), p = b.getAttribute('data-p');
+        save('replace_pick:'+t, {note:p, verdict:'pick'}).then(function(){
+          STATE.ratings['replace_pick:'+t] = {note:p, verdict:'pick'};
+          renderCands((STATE.manifest||{}).candidates||{}, (STATE.manifest||{}).items||{});
+          soloPlay();
+        });
+      });
+    });
+  }
+
+  function paintStars(box, n){
+    box.querySelectorAll('span').forEach(function(s){
+      s.classList.toggle('on', +s.getAttribute('data-n') <= n);
+    });
+  }
+
+  function save(id, patch){
+    var s = document.getElementById('vev-s-'+id);
+    if(s){s.textContent = I.saving; s.classList.remove('ok');}
+    var body = {id:id}; Object.keys(patch).forEach(function(k){body[k]=patch[k];});
+    return fetch(API+'/rate', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){
+        if(!j.ok) throw new Error(j.error||'fail');
+        STATE.ratings[id] = Object.assign(STATE.ratings[id]||{}, patch);
+        if(s){s.textContent = '✓ '+I.saved+' '+String(j.row.ts||'').slice(11,16); s.classList.add('ok');}
+        var c = document.getElementById('vev-c-'+id);
+        if(c){var rr = STATE.ratings[id]; if(rr.score||rr.verdict) c.classList.add('rated');}
+        syncSummary();
+      }).catch(function(){ if(s) s.textContent = I.saveFail; });
+  }
+
+  function syncSummary(){
+    var items = (STATE.manifest||{}).items||{};
+    var ids = Object.keys(items);
+    var done=0, k=0, f=0, rp=0;
+    ids.forEach(function(id){
+      var r = STATE.ratings[id]||{};
+      if(r.score||r.verdict) done++;
+      if(r.verdict==='keep') k++;
+      if(r.verdict==='fix') f++;
+      if(r.verdict==='replace') rp++;
+    });
+    document.getElementById('vev-pbar').style.width = ids.length ? (done/ids.length*100)+'%' : '0';
+    document.getElementById('vev-sum').innerHTML =
+      I.sumRated+' <b>'+done+'/'+ids.length+'</b> · '+I.sumKeep+' <b>'+k+'</b> · '
+      +I.sumFix+' <b>'+f+'</b> · '+I.sumReplace+' <b>'+rp+'</b>';
+  }
+
+  function soloPlay(){
+    document.querySelectorAll('audio').forEach(function(au){
+      au.onplay = function(){
+        document.querySelectorAll('audio').forEach(function(a){ if(a!==au) a.pause(); });
+      };
+    });
+  }
+
+  fetch(API+'/state').then(function(r){return r.json();}).then(function(st){
+    STATE = st;
+    var items = (st.manifest||{}).items||{};
+    var list = document.getElementById('vev-list'); list.innerHTML='';
+    var ids = Object.keys(items);
+    if(!ids.length){ list.textContent = I.empty; return; }
+    ids.forEach(function(id){ list.appendChild(card(items[id], st.ratings[id]||{})); });
+    renderCands((st.manifest||{}).candidates||{}, items);
+    syncSummary(); soloPlay();
+  });
+
+  document.getElementById('vev-blind').addEventListener('change', function(e){
+    document.body.classList.toggle('vev-blindon', !!e.target.checked);
+  });
+})();
+</script>
+{% endblock %}

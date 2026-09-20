@@ -1,0 +1,144 @@
+name: chengjie-tests
+
+# 从 engines/chengjie/.github/workflows/tests.yml 上移到仓库根（2026-08-27 P0）。
+#
+# 为什么必须上移：GitHub Actions **只加载仓库根 `.github/workflows/`**。本仓远端是
+# boundless 单仓，于是嵌套在 engines/*/.github/ 下的工作流从来没有被触发过——22,421 条
+# 回归测试事实上不是合并门禁，只是「本地才跑」的资产。同目录的 trust-metrics.yml
+# 自己的注释里就写明了这一点，问题被发现过但只落成了注释。
+#
+# 同批修掉两处按旧规模写死的参数（实跑 `--collect-only` 为 22,421 条，而下方原注释写 6,500）：
+#   · timeout-minutes 15 → 30：按 6.5k→4min 的历史比例外推 22.4k 约 14 分钟，15 分钟只剩
+#     1 分钟余量，会变成「偶尔莫名超时」的噪声源，而噪声源最终都会被忽略；
+#   · run 步骤补 --timeout=90（依赖 requirements-ci.txt 新增的 pytest-timeout）：与本地
+#     scripts/regression.ps1 对齐，让挂起的 worker 被点名而不是烧满 job。
+
+on:
+  push:
+    branches: [main, 'feat-*', 'sprint*/**']
+    paths:
+      - 'engines/chengjie/**'
+      - '.github/workflows/chengjie-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'engines/chengjie/**'
+      - '.github/workflows/chengjie-tests.yml'
+
+# 同一分支新推送时取消进行中的旧跑，省 runner、加快反馈。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: engines/chengjie
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # 两版本互不熔断：一个挂也要看另一个结果，便于定位是否版本特异问题。
+      fail-fast: false
+      matrix:
+        # 3.12 = CI 主支持档；3.13 = 开发机实跑档（防本地能跑/CI 挂的漂移）。
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: engines/chengjie/requirements-ci.txt
+
+      - name: Install CI deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Validate dependency graph (pip check)
+        # 校验已装依赖之间版本兼容、无缺失子依赖（与 --collect-only 互补）。
+        run: pip check
+
+      - name: Collect tests (fast fail on import errors)
+        # pytest.ini 当前 0 ignore（全量纳入）；本步只做 collect，import 期错误会快速失败。
+        # 本机实跑：22,421 条 / 23 秒。
+        run: python -m pytest tests/ --collect-only -q
+
+      - name: Run regression (parallel, file-level isolation)
+        run: python -m pytest tests/ -n auto -q --tb=line --timeout=90 --timeout-method=thread
+
+  lint:
+    # 与 regression 并行的快速门禁：跑 .pre-commit-config.yaml 中「只检查、不改写」的
+    # 钩子，拦住坏 YAML / 残留合并标记 / 误留 pdb/breakpoint 进 main。
+    # 刻意不跑 trailing-whitespace / end-of-file-fixer（会改写文件，且存量违规多，
+    # 应作为独立清理 PR，不在门禁里）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install pre-commit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit
+
+      # 缓存钩子环境（按 config 哈希）：config 变（如 autoupdate 升 rev）才重装。
+      - name: Cache pre-commit hook envs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('engines/chengjie/.pre-commit-config.yaml') }}
+
+      - name: Run check-only hooks (yaml / merge-conflict / debug-statements)
+        run: |
+          pre-commit run check-yaml --all-files
+          pre-commit run check-merge-conflict --all-files
+          pre-commit run debug-statements --all-files
+
+  secrets:
+    # gitleaks 一直配在 .pre-commit-config.yaml 里，但从没进过 CI —— 这正是
+    # engines/huoke/config/vpn_config.json 的明文 VLESS 凭据能在库里躺约 4 个月的机制原因
+    # （2026-08-27 P0 已移出索引，凭据轮换另行处置）。
+    #
+    # ⚠ 刻意**不**复用那个 pre-commit 钩子：其入口是 `gitleaks protect --staged`
+    # （pass_filenames:false），只扫暂存区差异——CI 里暂存区为空，于是恒绿。本地实测
+    # 已证实：把一对真密钥写进文件后 `pre-commit run gitleaks --all-files` 依然 Passed。
+    # 直接调 `gitleaks dir` 才真扫内容（同样本实测 exit=1）。既有误报登记在仓库根
+    # .gitleaksignore，逐条附判据。
+    #
+    # 独立成 job 且**不带 paths 过滤**：密钥可能出现在任何目录，被 chengjie 的路径
+    # 过滤挡住就失去意义。
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gitleaks
+        # 版本与 .pre-commit-config.yaml 的 rev 对齐（v8.21.2），避免本地/CI 规则集漂移。
+        run: |
+          set -euo pipefail
+          VER=8.21.2
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan working tree for secrets
+        # checkout 出来的就是被跟踪文件集合，正是「有没有密钥入库」要问的范围。
+        # `--verbose` 不能省：2026-08-28 首跑报 "leaks found: 30" 就没了下文，
+        # 日志里只有一个计数，谁都没法据此定位——红得不可诊断等于没红。
+        run: gitleaks dir . --no-banner --redact --verbose --exit-code 1

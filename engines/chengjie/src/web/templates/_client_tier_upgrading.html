@@ -1,0 +1,21 @@
+{#- 用户版「功能升级中」空态横幅（L-4 G / C / D，D-L6，2026-09-06）。
+    用法：在页面 content 块顶部 {% include "_client_tier_upgrading.html" %}，并给原操作面
+    的容器加 class="{% if ui_client_hide %}l4-locked{% endif %}"（include 有独立作用域，
+    变量不能从这里传出去，所以各页直接读 ui_client_hide）。
+    ui_client_hide＝client 形态且未开开发者模式（admin.py _enrich_context）；缺席（旧后端 /
+    渲染类测试）按不藏。隐藏 ≠ 删路由：URL / API 照旧可达，内部人在客户机开开发者模式即恢复原页。 -#}
+{%- if ui_client_hide %}
+<style>
+.l4-upgrading{display:flex;gap:.7rem;align-items:flex-start;padding:.9rem 1.1rem;margin:0 0 1rem;border:1px solid var(--th-bd-amber3,rgba(245,158,11,.35));border-radius:12px;background:var(--th-bg-amber06,rgba(245,158,11,.08));color:var(--t2);font-size:.86rem;line-height:1.6}
+.l4-upgrading b{color:var(--t);font-size:.95rem;display:block;margin-bottom:.15rem}
+.l4-upgrading .l4-ico{font-size:1.3rem;line-height:1.2;flex-shrink:0}
+.l4-locked{display:none!important}
+</style>
+<div class="l4-upgrading" role="status" data-l4-upgrading="1">
+  <span class="l4-ico">🚧</span>
+  <div>
+    <b>{{ (i18n or {}).get('l4_upgrading_title', "功能升级中") }}</b>
+    <div>{{ (i18n or {}).get('l4_upgrading_body', "此功能正在升级，暂不对用户版开放；如需开通请联系客服。") }}</div>
+  </div>
+</div>
+{%- endif %}

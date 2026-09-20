@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 from src.eval.dataset import (
     load_faq_samples, load_intent_samples, load_translation_samples,
@@ -93,15 +94,19 @@ def _try_build_llm_generate_fn():
         return None
     try:
         import asyncio
-        import yaml
         from src.ai.ai_client import AIClient
+        # 2026-07-29：改走数据根契约 + overlay 合并（eval_config）。此前是
+        # `open("config/config.yaml")` 且**不合并 overlay**——双实例迁移后这条链
+        # 读到的是引擎根旧副本里的**另一把旧 key**（实例 base 是 YOUR_API_KEY
+        # 占位、真 key 只在实例 overlay）。后果：EVAL_LLM=1 的真 LLM 评测轨
+        # （--bazi-reading 等）在评另一个账号，或旧 key 已废→建不出 client→静默跳过。
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
 
-        with open("config/config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+        cfg = load_runtime_config(None)
 
         class _Cfg:
             config = cfg
-            config_path = "config/config.yaml"
+            config_path = str(Path(runtime_config_source()) / "config" / "config.yaml")
 
             def get_ai_config(self):
                 return cfg.get("ai", {})
@@ -124,6 +129,54 @@ def _try_build_llm_generate_fn():
         return _gen
     except Exception as ex:
         logger.warning("LLM generate_fn 构造失败，跳过 LLM 对比: %s", ex)
+        return None
+
+
+def _try_build_llm_history_generate_fn():
+    """带历史的 generate_fn（格式诱导轨用）：``fn(user_message, history, system_hint) -> str``。
+
+    与 ``_try_build_llm_generate_fn`` 同一把 client / 同一 EVAL_LLM 闸；history 走
+    ``conversation_history``，system_hint 走 ``_topic_switch_hint``（与生产 persona_reply
+    的 extra_hint 消费口同一通道）。不满足条件返回 None。
+    """
+    if os.environ.get("EVAL_LLM") != "1":
+        return None
+    try:
+        import asyncio
+        from src.ai.ai_client import AIClient
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
+
+        cfg = load_runtime_config(None)
+
+        class _Cfg:
+            config = cfg
+            config_path = str(Path(runtime_config_source()) / "config" / "config.yaml")
+
+            def get_ai_config(self):
+                return cfg.get("ai", {})
+
+        client = AIClient(_Cfg())
+
+        def _gen(user_message: str, history, system_hint: str) -> str:
+            async def _run():
+                if hasattr(client, "initialize"):
+                    try:
+                        await client.initialize()
+                    except Exception:
+                        pass
+                ctx = {"reply_lang": "zh", "request_id": "eval-label-leak",
+                       "_conversation_history": list(history or [])}
+                if system_hint:
+                    ctx["_topic_switch_hint"] = system_hint
+                return await client.generate_reply(
+                    user_message, ctx, conversation_history=list(history or []),
+                    _skip_quality_check=True,
+                ) or ""
+            return asyncio.run(_run())
+
+        return _gen
+    except Exception as ex:
+        logger.warning("LLM history generate_fn 构造失败，跳过格式诱导轨: %s", ex)
         return None
 
 
@@ -174,6 +227,8 @@ def main(argv=None) -> int:
                     help="抽取召回率 PASS 阈值(--memory-extract)")
     ap.add_argument("--extract-max-fp", type=int, default=0,
                     help="允许的最大误抽数(--memory-extract)")
+    ap.add_argument("--assistant-qa", action="store_true",
+                    help="小智产品问答检索评测（BM25 命中率，确定性无需 LLM）")
     ap.add_argument("--persona", action="store_true",
                     help="人设一致性评测（persona_guard 违规召回 + 误伤）")
     ap.add_argument("--emotion", action="store_true",
@@ -198,13 +253,165 @@ def main(argv=None) -> int:
                     help="危机安全总览（L/O 主动抑制 + J 响应闭环 + Q 资源保障 串联回归）")
     ap.add_argument("--voice-language", action="store_true",
                     help="语音合成语言一致性评测（合成语言随文本语种，防中文声纹念英文）")
+    ap.add_argument("--asr", action="store_true",
+                    help="ASR 转写字错率评测（config/eval/asr_samples.jsonl + 坐席改正台账 → 生产同款"
+                         "转写链 → CER 按语种/时长桶；样本 <5 不裁决；--asr-base-url 可评另一端点）")
+    ap.add_argument("--asr-threshold", type=float, default=0.10, help="ASR 平均 CER PASS 阈值（默认 0.10）")
+    ap.add_argument("--asr-min-samples", type=int, default=5, help="ASR 裁决所需最少样本数（默认 5）")
+    ap.add_argument("--asr-base-url", default="",
+                    help="ASR A/B：改评这个 OpenAI 兼容端点（如候选 Qwen3-ASR 服务），不动生产配置")
+    ap.add_argument("--asr-model", default="", help="与 --asr-base-url 搭配的 model 名（服务端多半忽略）")
     ap.add_argument("--bazi", action="store_true",
                     help="命盘质量评测（四柱金标+十神交叉验证+强弱不变量+K线健全性；缺 lunar_python 跳过）")
     ap.add_argument("--bazi-reading", action="store_true",
                     help="LLM 命理解读质量（干支反幻觉+接地度+宿命断言红线；需 EVAL_LLM=1）")
     ap.add_argument("--media-consistency", action="store_true",
                     help="图文一致性评测（附图否认/无图称已发/场景强断言冲突/时间冲突；纯函数常驻）")
+    ap.add_argument("--offer-guard", action="store_true",
+                    help="出站优惠守卫评测（编折扣/券码/赠送/客户数必剥 + 婉拒/授权事实零误伤；纯函数常驻）")
+    ap.add_argument("--outbound-claims", action="store_true",
+                    help="出站事实声明校验（报价/试用时长对不对得上目录 + gated 线泄漏"
+                         "/回复语种漂移/内部指令泄漏；纯函数常驻）")
+    ap.add_argument("--duel-semantic", action="store_true",
+                    help="对练语义层评测（sycophancy/编身世/不合时宜推销三轴；"
+                         "金标形状常驻，实跑需 EVAL_LLM=1）")
+    ap.add_argument("--lang-mix", action="store_true",
+                    help="出站混语收口评测（#97 实施91：发送收口点+出稿口双层，"
+                         "「I'm 我」家族金标；纯函数常驻）")
+    ap.add_argument("--sendpoint-guard", action="store_true",
+                    help="出站收口点守卫评测（#105 呼格 baba→babe/#96 人设名呼格"
+                         "/#106 铆定语言冲突；纯函数常驻）")
+    ap.add_argument("--recall-claim", action="store_true",
+                    help="回忆断言接地锁评测（#91-A OMEN 案金标：现编必拦+"
+                         "合法回忆零误伤；纯函数常驻）")
+    ap.add_argument("--shared-past", action="store_true",
+                    help="共同经历叙事锁评测（#110 海鲜店四连金标：初识期禁+"
+                         "深阶段接地；纯函数常驻）")
+    ap.add_argument("--label-leak", action="store_true",
+                    help="系统标签泄漏评测（2026-09-12「[我方语音消息]」：出稿口金标+"
+                         "normalize_history 契约常驻；EVAL_LLM=1 加跑格式诱导轨）")
+    ap.add_argument("--label-leak-rounds", type=int, default=4,
+                    help="格式诱导轨每口径生成次数（默认 4）")
     args = ap.parse_args(argv)
+
+    if args.label_leak:
+        from src.eval.label_leak_eval import (
+            evaluate_label_leak, format_label_leak_report,
+        )
+        gen = _try_build_llm_history_generate_fn()
+        report = evaluate_label_leak(gen, rounds=max(1, int(args.label_leak_rounds)))
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_label_leak_report(report))
+            if gen is None:
+                print("[note] 格式诱导轨需 EVAL_LLM=1 且配好 ai；当前只跑了确定性轨。")
+        return 0 if report["passed"] else 1
+
+    if args.lang_mix:
+        from src.eval.lang_mix_eval import (
+            evaluate_lang_mix, format_lang_mix_report,
+        )
+        report = evaluate_lang_mix()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_lang_mix_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.sendpoint_guard:
+        from src.eval.sendpoint_guard_eval import (
+            evaluate_sendpoint_guard, format_sendpoint_guard_report,
+        )
+        report = evaluate_sendpoint_guard()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_sendpoint_guard_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.recall_claim:
+        from src.eval.recall_claim_eval import evaluate_recall_claim_guard
+        report = evaluate_recall_claim_guard()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
+
+    if args.shared_past:
+        from src.eval.recall_claim_eval import evaluate_shared_past_guard
+        report = evaluate_shared_past_guard()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
+
+    if args.duel_semantic:
+        # 注意：此处若不用别名，局部 import 会把模块级 `format_report`（意图评测
+        # 报告器）遮蔽成 main() 函数级局部名 → 裸跑意图评测在 585 行抛
+        # UnboundLocalError（2026-07-29 实测事故，勿回退）。
+        from src.eval.duel_semantic_eval import (
+            append_trend, check_corpus, load_samples, run_llm,
+        )
+        from src.eval.duel_semantic_eval import format_report as format_duel_report
+        samples = load_samples()
+        report = check_corpus(samples)
+        _mode = "corpus"
+        if report.get("passed") and os.environ.get("EVAL_LLM") == "1":
+            # 实跑轨：复用对练裁判的评审链（配置从实例 config 读，不在 eval 里硬编）
+            import sys as _sys
+            from pathlib import Path as _Path
+            _root = str(_Path(__file__).resolve().parents[1])
+            if _root not in _sys.path:
+                _sys.path.insert(0, _root)
+            from scripts.duel_judge import (
+                _load_ai_cfg, _load_persona, load_fact_sheet, semantic_review,
+            )
+            cfg_dir = os.environ.get(
+                "AITR_EVAL_CONFIG_DIR",
+                r"D:\chengjie-instances\zhiliao\data\config")
+            ai_cfg = _load_ai_cfg(cfg_dir)
+            if not ai_cfg.get("api_key"):
+                print("[warn] 读不到云端 key，实跑轨跳过（仅金标形状校验）")
+            else:
+                persona = _load_persona(cfg_dir, "su_wan")
+                facts = load_fact_sheet("su_wan")
+
+                def _review(rows):
+                    return semantic_review(
+                        rows, [int(r.get("turn") or 0) for r in rows],
+                        ai_cfg=ai_cfg, persona=persona, facts=facts)
+
+                report = run_llm(_review, samples)
+                _mode = "llm"
+        if args.out_jsonl and report.get("available"):
+            append_trend(report, args.out_jsonl, mode=_mode)
+            print(f"[trend] 已追加 → {args.out_jsonl}")
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_duel_report(report))
+        if not report.get("available"):
+            return 0          # 缺金标优雅跳过（与其他 eval 同约定）
+        return 0 if report["passed"] else 1
+
+    if args.outbound_claims:
+        from src.eval.outbound_claim_eval import (
+            evaluate_outbound_claims, format_outbound_claim_report,
+        )
+        report = evaluate_outbound_claims()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_outbound_claim_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.offer_guard:
+        from src.eval.offer_guard_eval import (
+            evaluate_offer_guard, format_offer_guard_report,
+        )
+        report = evaluate_offer_guard()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_offer_guard_report(report))
+        return 0 if report["passed"] else 1
 
     if args.media_consistency:
         from src.eval.media_consistency_eval import (
@@ -256,6 +463,42 @@ def main(argv=None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             print(format_voice_language_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.asr:
+        from src.eval.asr_eval import (
+            DEFAULT_MANIFEST, build_transcribe_fn_from_config, evaluate_asr,
+            format_asr_report, load_asr_samples,
+        )
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
+        from src.inbox.asr_corrections import corrections_path
+        cfg = load_runtime_config(None)
+        corr = corrections_path(config_dir=str(Path(runtime_config_source()) / "config"))
+        loaded = load_asr_samples(args.dataset or DEFAULT_MANIFEST,
+                                  corrections_path=str(corr) if corr else None)
+        if args.asr_base_url:
+            vr = dict((cfg.get("voice_recognition") or {}))
+            vr.update({"enabled": True, "provider": "openai_compatible",
+                       "base_url": args.asr_base_url, "api_key": vr.get("api_key") or "local",
+                       "model": args.asr_model or vr.get("model") or "whisper-1",
+                       "fallback": []})
+            cfg = {**cfg, "voice_recognition": vr}
+            label = f"A/B {args.asr_base_url}"
+        else:
+            label = str(((cfg.get("voice_recognition") or {}).get("base_url")) or "production")
+        fn = build_transcribe_fn_from_config(cfg)
+        if fn is None:
+            print("ASR 评测：voice_recognition 未启用或转写链构建失败——SKIP")
+            return 0
+        report = evaluate_asr(loaded["samples"], fn, threshold=args.asr_threshold,
+                              min_samples=args.asr_min_samples, label=label)
+        if args.json:
+            report["skipped"] = loaded["skipped"]
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_asr_report(report, loaded["skipped"]))
+        if report.get("passed") is None:
+            return 0          # 无样本 / 样本不足：轨在场不裁决
         return 0 if report["passed"] else 1
 
     if args.crisis_overview:
@@ -319,6 +562,26 @@ def main(argv=None) -> int:
             print(format_confidence_report(report))
         return 0 if report["passed"] else 1
 
+    if args.assistant_qa:
+        # 语料从代码构建（随包发货的那份），不读线上库——见模块 docstring
+        from src.eval.assistant_qa_eval import (
+            evaluate_assistant_qa,
+            format_report as format_asb_report,
+            targets as asb_targets,
+        )
+
+        res = evaluate_assistant_qa()
+        t = asb_targets()
+        passed = (res["topk_rate"] >= t["topk"] and res["top1_rate"] >= t["top1"])
+        if args.json:
+            print(json.dumps({**res, "targets": t, "passed": passed},
+                             ensure_ascii=False, indent=2))
+        else:
+            print(format_asb_report(res))
+            print(f"  判定：{'PASS' if passed else 'FAIL'}"
+                  f"（下限 top{res['top_k']}≥{t['topk']:.0%} / top1≥{t['top1']:.0%}）")
+        return 0 if passed else 1
+
     if args.persona:
         samples = load_persona_samples(args.dataset or "config/eval/persona_samples.yaml")
         report = evaluate_persona_consistency(samples)
@@ -349,22 +612,73 @@ def main(argv=None) -> int:
     if args.memory_extract:
         samples = load_extract_samples(
             args.dataset or "config/eval/memory_extract_samples.yaml")
+        extractor_label = "heuristic"
         if args.extract_llm:
             extract_fn = build_llm_extract_fn()
             if extract_fn is None:
                 print("[note] LLM 抽取评测需 ai_client.extract_memory_bullets（配好 ai + key）。"
                       "当前不可用，跳过。")
                 return 0
+            extractor_label = "llm"
+            # J-10 二期：LLM 抽取器加跨语言/混语增补集（英文客户事实 + Phase8 forbid）；
+            # 启发式只认中文自称正则，不吃这组 expect，故只在 LLM 轨合入。
+            if not args.dataset:
+                try:
+                    from src.eval.memory_extract_eval import XLANG_EXTRACT_SAMPLES_PATH
+                    if os.path.exists(XLANG_EXTRACT_SAMPLES_PATH):
+                        samples = list(samples) + load_extract_samples(XLANG_EXTRACT_SAMPLES_PATH)
+                except Exception as ex:  # noqa: BLE001
+                    print(f"[warn] 跨语言增补集加载失败，只跑主集: {ex}")
         else:
             extract_fn = heuristic_extract_fn
         report = evaluate_fact_extraction(
             extract_fn, samples,
             recall_target=args.extract_recall, max_false_positive=args.extract_max_fp)
+        # J-10 二期：抽取器之后那道接地护栏（引文级 / 跨语言）一并出报告——纯函数常驻，
+        # 漏网（该丢没丢）一条即 FAIL；样本缺失则跳过不影响抽取报告。
+        grounding = None
+        try:
+            from src.eval.memory_extract_eval import (
+                evaluate_evidence_grounding, format_grounding_report,
+            )
+            grounding = evaluate_evidence_grounding()
+        except FileNotFoundError:
+            grounding = None
+        except Exception as ex:  # noqa: BLE001
+            print(f"[warn] 接地护栏评测跳过: {ex}")
+            grounding = None
+        passed = bool(report["passed"]) and (grounding is None or bool(grounding["passed"]))
+        if args.out_jsonl:
+            try:
+                import datetime as _dt
+                line = {
+                    "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                    "kind": "memory_extract", "extractor": extractor_label,
+                    "dataset": args.dataset or "config/eval/memory_extract_samples.yaml",
+                    **report["summary"],
+                    "grounding": (grounding["summary"] if grounding else None),
+                    "passed": passed,
+                }
+                os.makedirs(os.path.dirname(args.out_jsonl) or ".", exist_ok=True)
+                with open(args.out_jsonl, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(line, ensure_ascii=False) + "\n")
+                print(f"[trend] 已追加 → {args.out_jsonl}")
+            except Exception as ex:  # noqa: BLE001 - 趋势落盘失败不影响评测退出码
+                print(f"[warn] 趋势 JSONL 写入失败: {ex}")
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2))
+            out = dict(report)
+            out["extractor"] = extractor_label
+            if grounding is not None:
+                out["grounding"] = {"summary": grounding["summary"], "passed": grounding["passed"],
+                                    "results": [r for r in grounding["results"] if r["verdict"] != "ok"]}
+            out["passed_all"] = passed
+            print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
+            print(f"[extractor] {extractor_label}  样本: {len(samples)}")
             print(format_extract_report(report))
-        return 0 if report["passed"] else 1
+            if grounding is not None:
+                print(format_grounding_report(grounding))
+        return 0 if passed else 1
 
     if args.semantic_dedup:
         print(f"[info] {describe_availability()}")

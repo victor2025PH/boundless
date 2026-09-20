@@ -25,6 +25,7 @@ grace_days      到期后宽限天数（默认 7）
 lic_id          授权编号（便于吊销登记）
 included_chars  含翻译/TTS 字符额度（0/省略 = 不限；P0-4 试用计量用）
 trial           是否试用授权（bool，仅标记/展示用）
+machine         绑定的机器指纹（省略/空 = 不绑机；``*`` = 站点授权不限机器）
 ==============  ====================================================
 """
 
@@ -145,6 +146,9 @@ class LicenseStatus:
     # P0-4 免费试用（字符额度）：翻译/TTS 合计含量（0 = 不限）+ 试用标记
     included_chars: int = 0
     trial: bool = False
+    # 2026-08-19 Token 定价改版：订阅每月含 Token（0 = 无月度含量；团队版 payload
+    # 已按坐席数放大）。运行时由 token_ledger.ensure_monthly_tokens 按自然月幂等入账。
+    included_tokens_monthly: int = 0
 
     @property
     def licensed(self) -> bool:
@@ -195,6 +199,7 @@ class LicenseStatus:
             "channels": list(self.channels),
             "features": dict(self.features),
             "included_chars": self.included_chars,
+            "included_tokens_monthly": self.included_tokens_monthly,
             "trial": self.trial,
             "enforce": self.enforce,
             "read_only": self.read_only,
@@ -234,6 +239,11 @@ class LicenseManager:
     def license_path(self) -> Optional[str]:
         """授权文件路径（C4 粘贴激活写入目标；可能为 None＝纯内联/env 模式）。"""
         return self._path
+
+    @property
+    def public_key_hex(self) -> str:
+        """当前生效的厂商公钥（topup 凭证等同源签名物验签复用同一把钥匙）。"""
+        return self._public_key_hex
 
     def preview_token(self, token: str) -> LicenseStatus:
         """校验一段授权码并返回其状态快照——**不写盘、不动单例缓存**。
@@ -320,6 +330,33 @@ class LicenseManager:
                 messages=[f"授权无效：{e}"],
             )
 
+        # 同一把厂商钥匙也签「字符加量凭证」（typ=topup，见 topup_voucher.py）——
+        # 验签会过，但它不是授权码。误贴当授权激活会得到一个"永久 basic 幽灵授权"
+        # （payload 缺 plan/exp 全走默认值），必须在这里挡下并指路。
+        if str(payload.get("typ") or "") == "topup":
+            return LicenseStatus(
+                state="invalid",
+                messages=["这是字符加量凭证（非授权码）：请到 会员中心 → 兑换加量包 使用"],
+            )
+
+        # 绑机校验（可选字段，存量授权无 machine → 逐字节按旧行为放行）。
+        # 试用授权靠它防「一份 7 天试用发给一群人」：服务端按机器码去重签发，
+        # 客户端只需确认"这张是发给本机的"。
+        #
+        # 判定不出来（platform/licensing/machine_id.py 缺失、注册表读不到）→ **放行**。
+        # 反过来做会把正当付费用户锁在门外，而绑机本身只是防滥用、不是防破解——
+        # 指纹取自本机可读信息，客户端侧一定可伪造，真正的闸门在签发侧台账。
+        bound = str(payload.get("machine") or "").strip()
+        if bound:
+            from src.licensing.machine_bridge import machine_matches
+            verdict = machine_matches(bound)
+            if verdict is False:
+                return LicenseStatus(
+                    state="invalid",
+                    messages=["此授权绑定到另一台机器，无法在本机使用；"
+                              "如需换机请联系客服解绑"],
+                )
+
         exp = int(payload.get("exp") or 0)
         grace_days = int(payload.get("grace_days", DEFAULT_GRACE_DAYS))
         now = int(self._now())
@@ -334,6 +371,8 @@ class LicenseManager:
             channels=list(payload.get("channels") or []),
             features=dict(payload.get("features") or {}),
             included_chars=max(0, int(payload.get("included_chars") or 0)),
+            included_tokens_monthly=max(
+                0, int(payload.get("included_tokens_monthly") or 0)),
             trial=bool(payload.get("trial", False)),
         )
         if not exp or now <= exp:
@@ -372,8 +411,11 @@ _SINGLETON_LOCK = threading.Lock()
 
 
 def _default_license_path() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(here, "config", "license.key")
+    """授权文件位置：跟随可写数据区（见 data_paths 顶部说明——打包后 __file__ 指向
+    安装目录，升级即被替换/可能只读，激活会失效）。"""
+    from src.licensing.data_paths import data_file
+
+    return data_file("license.key")
 
 
 def get_license_manager(

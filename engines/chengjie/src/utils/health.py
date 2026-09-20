@@ -44,6 +44,8 @@ def build_health(
     pending_threshold: int = 200,
     audio_service: Optional[Dict[str, Any]] = None,
     avatar_voice: Optional[Dict[str, Any]] = None,
+    sla_backlog: Optional[Dict[str, Any]] = None,
+    alert_link: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """聚合运行时健康（纯函数）。返回 {ok, light, components, summary, ts}。"""
     comps: List[Dict[str, Any]] = []
@@ -151,6 +153,67 @@ def build_health(
         else:
             comps.append(_comp("queue", "草稿队列", "ok",
                                f"待处理 {pending_drafts} 条"))
+
+    # 6.5) 草稿 SLA 严重超时——与 6) 的「数量」维度互补的「等待时长」维度。
+    # 动机（2026-07-29 实测）：一条 L3 草稿无人认领躺了 6.7 天，队列总数远低于阈值
+    # 故 6) 全绿，而 K2 自动再分配只处理「已认领+坐席断线」的、永远跳过无主草稿
+    # → 没有任何一盏灯会亮。把 SLAWatcher 的越线快照接进健康灯后，此类积压经
+    # health_watchdog 既有的 health_alert 告警链**主动外发**（复用已接通的通道，
+    # 而不是指望运营去订阅新事件别名）。None = watcher 未挂载（不出该组件）。
+    if sla_backlog is not None:
+        _unclaimed = int(sla_backlog.get("unclaimed_escalating") or 0)
+        _esc = int(sla_backlog.get("escalating_now") or 0)
+        _maxw = int(sla_backlog.get("max_wait_min") or 0)
+        _wait_txt = f"最长等待 {_maxw / 60:.0f}h" if _maxw >= 60 else f"最长等待 {_maxw}min"
+        if _unclaimed > 0:
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "warn",
+                f"{_unclaimed} 条严重超时且**无人认领**（{_wait_txt}）——"
+                "自动再分配不覆盖无主草稿，需人工认领处置"))
+        elif _esc > 0:
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "warn",
+                f"{_esc} 条严重超时（已认领，{_wait_txt}）"))
+        else:
+            _br = int(sla_backlog.get("breaching_now") or 0)
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "ok",
+                f"无严重超时（越线 {_br} 条，{_wait_txt}）" if _br
+                else "无越线草稿"))
+
+    # 6.6) 告警外发链路——软性：断链时系统照跑，但所有 EventBus 告警（SLA 越线/
+    # 草稿积压/host_alert…）只进日志与工作台铃铛＝「报进虚空」（L3 草稿烂 167h 的
+    # 根因），绝不 fail 只亮黄灯。None = 检查被显式关闭（ops.alert_link_health:
+    # false，刻意不配外发通道的部署）。注意无循环告警问题：warn 默认不经
+    # health_alert 外发（alert_on_warn=False），只上看板 + 落 incidents 台账。
+    if alert_link is not None:
+        _v = str(alert_link.get("verdict") or "")
+        _cov = f"{int(alert_link.get('covered') or 0)}/{int(alert_link.get('focus') or 0)}"
+        if _v == "healthy":
+            _errs = int(alert_link.get("total_errors") or 0)
+            comps.append(_comp(
+                "alert_link", "告警外发链路", "ok",
+                f"{int(alert_link.get('channels_enabled') or 0)} 个启用通道，"
+                f"关注别名覆盖 {_cov}"
+                + (f"（累计投递失败 {_errs}，详见 ops 卡）" if _errs else "")))
+        elif _v == "no_channel":
+            comps.append(_comp(
+                "alert_link", "告警外发链路", "warn",
+                "0 个启用通道——SLA/积压/主机告警只进日志与铃铛（报进虚空）；"
+                "到「告警渠道」面板填 token 接通"))
+        elif _v == "not_running":
+            comps.append(_comp(
+                "alert_link", "告警外发链路", "warn",
+                "通知器未在消费事件（配置在、投递链没跑）"))
+        elif _v == "divergent":
+            comps.append(_comp(
+                "alert_link", "告警外发链路", "warn",
+                "磁盘配置与运行进程装载的不是同一份（手改文件需经面板保存或重启）"))
+        else:  # uncovered（及未知档保守归此）
+            comps.append(_comp(
+                "alert_link", "告警外发链路", "warn",
+                f"{int(alert_link.get('uncovered') or 0)} 个关注别名无人订阅"
+                f"（覆盖 {_cov}）——那些告警仍然外发不出去"))
 
     fails = sum(1 for c in comps if c["status"] == "fail")
     warns = sum(1 for c in comps if c["status"] == "warn")

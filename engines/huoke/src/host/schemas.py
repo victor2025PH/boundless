@@ -33,6 +33,7 @@ class TaskType(str, Enum):
     TIKTOK_CHAT = "tiktok_chat"
     TIKTOK_SEND_DM = "tiktok_send_dm"
     TIKTOK_CHECK_INBOX = "tiktok_check_inbox"
+    TIKTOK_CHENGJIE_HANDBACK = "tiktok_chengjie_handback"  # TK-3 智聊回传认领（reply_engine=chengjie）
     TIKTOK_FOLLOW_UP = "tiktok_follow_up"
     TIKTOK_AUTO = "tiktok_auto"
     TIKTOK_STATUS = "tiktok_status"

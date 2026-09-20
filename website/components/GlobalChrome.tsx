@@ -16,6 +16,7 @@ import AIChat from "./AIChat";
 import MiniAppBridge from "./MiniAppBridge";
 import Analytics from "./Analytics";
 import CookieConsent from "./CookieConsent";
+import NewbieFloatingPoster from "./NewbieFloatingPoster";
 
 export default function GlobalChrome() {
   const pathname = usePathname();
@@ -38,6 +39,7 @@ export default function GlobalChrome() {
       <AIChat />
       <MiniAppBridge />
       <CookieConsent />
+      <NewbieFloatingPoster />
       <Analytics />
     </>
   );

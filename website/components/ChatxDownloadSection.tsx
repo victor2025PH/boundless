@@ -1,0 +1,463 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ClipboardCheck,
+  Clock,
+  Download,
+  HardDrive,
+  HelpCircle,
+  History,
+  KeyRound,
+  MessageCircle,
+  Monitor,
+  PlayCircle,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
+import { CHATX_TUTORIALS, CHATX_TUTORIALS_PATH, CHATX_TUTORIAL_COUNT, CHATX_TUTORIAL_TOTAL_SEC, fmtDuration } from "@/lib/chatx-tutorials";
+import { useLang } from "./LanguageContext";
+import Reveal from "./fx/Reveal";
+import RichText from "./RichText";
+import ProductIcon from "./ProductIcon";
+import ProductScreenshots from "./ProductScreenshots";
+import { CHATX } from "@/lib/chatxContent";
+import { dlHref } from "@/lib/mirror";
+import { track } from "@/lib/track";
+import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
+import type { BrandLang } from "@/lib/brand";
+
+/** /downloads/manifest.json 的运行时形态（打包脚本生成；构建时兜底见 chatxContent） */
+interface ChatxManifest {
+  version?: string;
+  filename?: string;
+  size_mb?: string;
+  sha256?: string;
+  signed?: boolean;
+}
+
+/**
+ * 智聊 ChatX 专属下载页主体（与幻境 STUDIO / 智控的下载组件隔离，零回归风险——
+ * 三个客户端上手卡点不同，内容单源各自维护，骨架风格保持一致）。
+ * lang 由路由显式传入（/download/chatx = zh，/en/download/chatx = en）。
+ */
+export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLang }) {
+  const ctx = useLang();
+  const lang: BrandLang = forced ?? ctx.lang;
+  const zh = lang === "zh";
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [mf, setMf] = useState<ChatxManifest | null>(null);
+
+  const d = CHATX.download;
+  // 运行时清单优先（发布脚本随安装包一起更新），构建时常量兜底。
+  const version = mf?.version || d.version;
+  const filename = mf?.filename || d.filename;
+  const sizeLabel = mf?.size_mb ? `${mf.size_mb} MB` : d.size[lang];
+  const sha256 = mf?.sha256 || d.sha256;
+  // /dl 分流：476MB 大包镜像健康走 R2 边缘，否则自动回落本站 /downloads/
+  const url = dlHref(`downloads/${filename}`);
+
+  useEffect(() => {
+    fetch(d.manifestUrl)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j?.version) setMf(j as ChatxManifest);
+      })
+      .catch(() => {});
+  }, [d.manifestUrl]);
+
+  const installVideo = CHATX_TUTORIALS.find((e) => e.ep === 0);
+  const tutorialsHref = zh ? CHATX_TUTORIALS_PATH : `/en${CHATX_TUTORIALS_PATH}`;
+  const quickNav = [
+    {
+      icon: HardDrive,
+      title: zh ? "分步安装教程" : "Step-by-step install",
+      desc: zh ? "五步从下载到开始接待" : "Five steps from download to first chat",
+      href: "#install-guide",
+      external: false,
+    },
+    {
+      // 2026-09-17：视频教程合集（装完不会用是下载后最大流失点）
+      icon: PlayCircle,
+      title: zh ? "视频教程" : "Video tutorials",
+      desc: zh
+        ? `${CHATX_TUTORIAL_COUNT} 集约 ${Math.round(CHATX_TUTORIAL_TOTAL_SEC / 60)} 分钟学会`
+        : `${CHATX_TUTORIAL_COUNT} episodes · ~${Math.round(CHATX_TUTORIAL_TOTAL_SEC / 60)} min`,
+      href: tutorialsHref,
+      external: false,
+    },
+    {
+      icon: HelpCircle,
+      title: zh ? "常见问题" : "Install FAQ",
+      desc: zh ? "SmartScreen / 更新 / 数据安全" : "SmartScreen / updates / data safety",
+      href: "#faq",
+      external: false,
+    },
+    {
+      icon: History,
+      title: zh ? "版本更新记录" : "Release notes",
+      desc: zh ? `最新 v${version} 更新了什么` : `What's new in v${version}`,
+      href: zh ? "/download/chatx/releases" : "/en/download/chatx/releases",
+      external: false,
+    },
+    {
+      icon: MessageCircle,
+      title: zh ? "联系客服" : "Contact support",
+      desc: zh ? `Telegram ${TELEGRAM_DISPLAY} · 秒回` : `Telegram ${TELEGRAM_DISPLAY}`,
+      href: CONTACT_URL,
+      external: true,
+    },
+  ];
+
+  return (
+    <section className="relative pb-24 pt-32">
+      <div className="pointer-events-none absolute left-1/3 top-24 h-80 w-80 rounded-full bg-neon-cyan/15 blur-[130px]" />
+
+      <div className="relative mx-auto max-w-5xl px-5">
+        {/* 头部 */}
+        <Reveal eager className="text-center">
+          <span className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-1 text-xs text-neon-cyan">
+            <span className="inline-flex items-center gap-1.5 font-medium">
+              <KeyRound className="h-3.5 w-3.5" />
+              {zh ? "无需 API Key，装完即用" : "No API key — works out of the box"}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {zh
+                ? "数据本地保存 · 免显卡 · 自动更新 · SHA-256 可校验"
+                : "Local-first data · no GPU · auto-update · SHA-256 verifiable"}
+            </span>
+          </span>
+          <div className="mt-5 flex items-center justify-center gap-3">
+            <ProductIcon product="chatx" size={48} alt="智聊 ChatX" className="h-12 w-12 object-contain" />
+            <h1 className="text-3xl font-bold text-white md:text-5xl">
+              {zh ? "下载智聊 ChatX 客户端" : "Download the ChatX Client"}
+            </h1>
+          </div>
+          <p className="mx-auto mt-3 max-w-2xl text-slate-400">
+            {zh
+              ? "聚合 AI 聊天工作台：全渠道统一收件箱、AI 自动拟稿 / 自动回复、实时互译、语音消息与客户画像，一个桌面客户端全部就位。"
+              : "The omni-channel AI chat workspace: unified inbox, AI drafting / auto-reply, live translation, voice messages and customer profiles — all in one desktop client."}
+          </p>
+          {/* 通译并入说明：找「通译客户端」的用户在这里得到确定答案 */}
+          <p className="mx-auto mt-4 max-w-2xl rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-xs leading-relaxed text-slate-300">
+            {zh ? (
+              <>
+                📌 <b className="text-amber-300">通译 LingoX 已与智聊合并为同一个程序</b>
+                ：本客户端内置通译全部翻译能力，无需单独下载「通译客户端」；通译套餐授权在本程序「会员中心」粘贴激活即可，原有授权继续有效。
+              </>
+            ) : (
+              <>
+                📌 <b className="text-amber-300">LingoX is merged into ChatX — one single program</b>
+                : this client ships with every LingoX translation capability, so there is no separate LingoX download. LingoX licenses activate in this app&apos;s membership center; existing licenses remain valid.
+              </>
+            )}
+          </p>
+        </Reveal>
+
+        {/* 下载卡片：Windows 主力 + macOS 规划中 */}
+        <div className="mt-12 grid gap-6 md:grid-cols-2">
+          <Reveal>
+            <div className="glass flex h-full flex-col rounded-2xl border border-white/10 p-6">
+              <div className="flex items-center gap-3">
+                <Monitor className="h-8 w-8 text-neon-cyan" />
+                <div>
+                  <div className="font-semibold text-white">{d.os[lang]}</div>
+                  <div className="text-xs text-slate-500">
+                    {zh ? "版本" : "Version"} v{version} · {sizeLabel}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5 flex-1">
+                <a
+                  href={url}
+                  download
+                  onClick={() => track("chatx_download_click", { os: "windows", ver: version })}
+                  className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+                >
+                  <Download className="h-4 w-4" />
+                  {zh ? "下载" : "Download"} {filename}
+                </a>
+              </div>
+              <div className="mt-4 break-all rounded-lg bg-ink-950/60 px-3 py-2 font-mono text-[11px] text-slate-600">
+                SHA-256: {sha256 || (zh ? "发布时公布" : "published at release")}
+              </div>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.08}>
+            <div className="glass flex h-full flex-col rounded-2xl border border-white/10 p-6">
+              <div className="flex items-center gap-3">
+                <Monitor className="h-8 w-8 text-slate-500" />
+                <div>
+                  <div className="font-semibold text-white">macOS</div>
+                  <div className="text-xs text-slate-500">{zh ? "规划中" : "Planned"}</div>
+                </div>
+              </div>
+              <div className="mt-5 flex-1">
+                <a
+                  href={CONTACT_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block rounded-full border border-neon-cyan/40 px-6 py-2.5 text-sm text-neon-cyan transition hover:bg-neon-cyan/10"
+                >
+                  {zh ? "上线后通知我" : "Notify me"}
+                </a>
+              </div>
+              <p className="mt-4 text-xs leading-relaxed text-slate-500">{d.macNote[lang]}</p>
+            </div>
+          </Reveal>
+        </div>
+
+        {/* 快速入口 */}
+        <Reveal className="mt-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            {quickNav.map((q) => {
+              const inner = (
+                <>
+                  <q.icon className="mt-0.5 h-5 w-5 shrink-0 text-neon-cyan" />
+                  <div>
+                    <div className="text-sm font-medium text-white">{q.title}</div>
+                    <div className="mt-0.5 text-xs text-slate-500">{q.desc}</div>
+                  </div>
+                </>
+              );
+              return q.external ? (
+                <a
+                  key={q.title}
+                  href={q.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="glass card-hover flex items-start gap-3 rounded-2xl border border-white/10 p-4"
+                >
+                  {inner}
+                </a>
+              ) : (
+                <a
+                  key={q.title}
+                  href={q.href}
+                  className="glass card-hover flex items-start gap-3 rounded-2xl border border-white/10 p-4"
+                >
+                  {inner}
+                </a>
+              );
+            })}
+          </div>
+        </Reveal>
+
+        {/* 真实界面截图（实施78 P0-5/P0-6）：放在下载按钮之后、教程之前——
+            「让我下 442MB 未签名 exe，却不给我看软件长什么样」是最先要答的疑问 */}
+        <ProductScreenshots lang={lang} />
+
+        {/* 装前自查 + 分步安装教程 */}
+        <Reveal className="mt-12">
+          <div id="install-guide" className="glass scroll-mt-28 rounded-2xl border border-white/10 p-6 md:p-8">
+            <div className="flex items-center gap-2 text-lg font-semibold text-white">
+              <HardDrive className="h-5 w-5 text-neon-cyan" />
+              {zh ? "分步安装教程 · 从下载到开始接待" : "Install guide · from download to first chat"}
+            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              {zh
+                ? "全程约 10–15 分钟，零命令行。装完即是完整工作台，数据全部保存在本机。"
+                : "About 10–15 minutes, zero command line. You get the full workspace; all data stays on your machine."}
+            </p>
+
+            {/* 2026-09-17：安装集视频（lib/chatx-tutorials.ts 单一真相）嵌在文字步骤之上；
+                不自动播、preload=none，只在用户点播时才拉流。全部 12 集去合集页。 */}
+            {installVideo && (
+              <div className="mt-5 grid gap-4 lg:grid-cols-[3fr,2fr]">
+                <div className="overflow-hidden rounded-xl border border-neon-cyan/25 bg-ink-950 shadow-[0_0_40px_rgba(34,211,238,0.08)]">
+                  <video
+                    className="aspect-video w-full"
+                    src={installVideo.src}
+                    poster={installVideo.poster}
+                    controls
+                    playsInline
+                    preload="none"
+                    aria-label={installVideo.title[lang]}
+                    onPlay={(e) => {
+                      const el = e.currentTarget;
+                      if (el.dataset.played) return;
+                      el.dataset.played = "1";
+                      track("tutorial_play", { ep: installVideo.id, lang, where: "download_page" });
+                    }}
+                  />
+                </div>
+                <div className="flex flex-col justify-center">
+                  <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-neon-cyan">
+                    <PlayCircle className="h-3.5 w-3.5" />
+                    {zh ? "视频版 · 安装集" : "Video · install episode"}
+                  </p>
+                  <div className="mt-1.5 text-base font-semibold text-white">
+                    {installVideo.title[lang]}
+                    <span className="ml-2 text-xs font-normal text-slate-500">{fmtDuration(installVideo.durationSec)}</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{installVideo.desc[lang]}</p>
+                  <a
+                    href={tutorialsHref}
+                    onClick={() => track("tutorial_entry_click", { where: "download_install_guide" })}
+                    className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-neon-cyan/40 px-4 py-1.5 text-xs text-neon-cyan transition hover:bg-neon-cyan/10"
+                  >
+                    {zh
+                      ? `装好之后怎么用？看全部 ${CHATX_TUTORIAL_COUNT} 集 →`
+                      : `Installed — now what? All ${CHATX_TUTORIAL_COUNT} episodes →`}
+                  </a>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 rounded-xl border border-white/10 bg-ink-950/40 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-white">
+                <ClipboardCheck className="h-4 w-4 text-emerald-400" />
+                {zh ? "装前 30 秒自查" : "30-second pre-check"}
+              </div>
+              <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                {CHATX.preCheck.map((c, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
+                    <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/80" />
+                    {c[lang]}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <ol className="mt-6 space-y-6">
+              {CHATX.install.steps.map((s, i) => (
+                <li key={i} className="flex items-start gap-4">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet text-xs font-bold text-ink-950">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="font-medium text-white">{s.title[lang]}</span>
+                      {"time" in s && s.time && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-slate-500">
+                          <Clock className="h-3 w-3" />
+                          {s.time[lang]}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed text-slate-400">
+                      <RichText text={s.detail[lang]} />
+                    </p>
+                    {"warn" in s && s.warn && (
+                      <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-slate-300">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        <span>
+                          <RichText text={s.warn[lang]} />
+                        </span>
+                      </div>
+                    )}
+                    {"blocker" in s && s.blocker && (
+                      <div className="mt-2 flex items-start gap-2 rounded-lg border border-rose-400/30 bg-rose-400/[0.07] px-3 py-2.5 text-xs leading-relaxed text-slate-300">
+                        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+                        <span>
+                          <RichText text={s.blocker[lang]} />
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </Reveal>
+
+        {/* 常见问题 */}
+        <Reveal className="mt-6">
+          <div id="faq" className="glass scroll-mt-28 rounded-2xl border border-white/10 p-6 md:p-8">
+            <div className="flex items-center gap-2 text-lg font-semibold text-white">
+              <HelpCircle className="h-5 w-5 text-neon-cyan" />
+              {zh ? "常见问题" : "FAQ"}
+            </div>
+            <div className="mt-5 space-y-3">
+              {CHATX.install.faqs.map((f, i) => {
+                const isOpen = openFaq === i;
+                return (
+                  <div key={i} className="overflow-hidden rounded-xl border border-white/10 bg-ink-900/60">
+                    <button
+                      onClick={() => {
+                        setOpenFaq(isOpen ? null : i);
+                        if (!isOpen) track("chatx_faq_open", { q: f.q.zh });
+                      }}
+                      aria-expanded={isOpen}
+                      className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left"
+                    >
+                      <span className="text-sm font-medium text-white">{f.q[lang]}</span>
+                      <ChevronDown
+                        aria-hidden
+                        className={`h-4 w-4 shrink-0 text-neon-cyan transition-transform ${isOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {isOpen && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.25, ease: "easeInOut" }}
+                        >
+                          <p className="px-4 pb-4 text-sm leading-relaxed text-slate-400">
+                            <RichText text={f.a[lang]} />
+                          </p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Reveal>
+
+        {/* 底部联系条 */}
+        <Reveal className="mt-6">
+          <div className="glass flex flex-col items-start gap-4 rounded-2xl border border-neon-violet/25 bg-neon-violet/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <MessageCircle className="mt-0.5 h-5 w-5 shrink-0 text-neon-violet" />
+              <div>
+                <div className="text-sm font-medium text-white">
+                  {zh ? "安装遇到问题，或想要团队方案？" : "Install trouble, or need a team plan?"}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {zh
+                    ? "把报错截图发给客服，安装 / 接入 / 授权问题秒回。"
+                    : "Send a screenshot to support — install, onboarding and licensing answered fast."}
+                </p>
+                {/* 邮箱兜底（实施78 U5）：此前整页唯一联系方式是 Telegram，而从 AI/搜索
+                    进来的国际访客常常不用 Telegram，也不会为问一个问题装一个 App。
+                    判空渲染——lib/site.CONTACT_EMAIL 为空时这行不出现，绝不显示会退信的地址。 */}
+                {CONTACT_EMAIL && (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    {zh ? "不用 Telegram？发邮件也行：" : "Not on Telegram? Email us: "}
+                    <a
+                      href={CONTACT_EMAIL_URL}
+                      onClick={() => track("cta_click", { where: "chatx_download_email" })}
+                      className="text-neon-cyan underline decoration-dotted underline-offset-2 transition hover:text-white"
+                    >
+                      {CONTACT_EMAIL}
+                    </a>
+                  </p>
+                )}
+              </div>
+            </div>
+            <a
+              href={CONTACT_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => track("cta_click", { where: "chatx_download_footer" })}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-5 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+            >
+              <MessageCircle className="h-4 w-4" />
+              {zh ? `联系 ${TELEGRAM_DISPLAY}` : `Contact ${TELEGRAM_DISPLAY}`}
+            </a>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}

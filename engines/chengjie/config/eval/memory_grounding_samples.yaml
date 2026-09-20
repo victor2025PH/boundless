@@ -1,0 +1,118 @@
+# 记忆接地护栏评测样本（J-10 A1，#183 跨语言接地 · 2026-09-05）
+# 评的是抽取器**之后**那道护栏 memory_grounding.ground_fact_with_evidence：
+# 给定用户原话 + 抽取器候选（fact 中文短句 + evidence 客户原话逐字引文），期望 keep / drop。
+#
+# 每条：
+#   text       ：用户消息（护栏核对引文的唯一依据）
+#   reply      ：助手回复（护栏不看；留作语境说明——Phase8 事故里假事实全来自这里）
+#   candidates ：[{fact, evidence, expect: keep|drop, reason?}]
+#                reason 是期望的丢弃原因（no_evidence / evidence_mismatch / fact_unanchored），
+#                只作观测核对，不影响 PASS/FAIL
+#   note       ：备注
+#
+# 口径：leaked（该丢没丢）= 假记忆入库 = 硬红线，一条不许；lost（该留没留）= 跨语言漏记。
+# 跑：tests/test_memory_grounding.py::test_grounding_eval_gate
+
+# —— 跨语言 keep（88MP86 实锤：英文客户的中文事实此前 100% 被旧词汇判据丢掉）——
+- text: "I have a daughter and she is my greatest treasure"
+  reply: "Aww, she must be so lucky to have you 🥹"
+  candidates:
+    - {fact: "客户有一个女儿", evidence: "I have a daughter", expect: keep}
+  note: "EN→ZH 基本用例（指令验收句）"
+
+- text: "I've only had three boyfriends in my whole life. And I was married once."
+  reply: "That's such a big thing to share with me..."
+  candidates:
+    - {fact: "客户一生只交过三个男朋友", evidence: "I've only had three boyfriends in my whole life", expect: keep}
+    - {fact: "客户结过一次婚", evidence: "I was married once", expect: keep}
+  note: "88MP86 BABY BEAR 实锤（原被丢：客户一生只交过三个女朋友…; 客户结过一次婚）"
+
+- text: "My parents are retired and I pay all their bills. I have 4 siblings and we all take care of them."
+  reply: "You carry so much for your family 💛"
+  candidates:
+    - {fact: "客户的父母已退休，由客户支付他们所有账单", evidence: "My parents are retired and I pay all their bills", expect: keep}
+    - {fact: "客户有4个兄弟姐妹，且都关心父母", evidence: "I have 4 siblings and we all take care of them", expect: keep}
+  note: "88MP86 20:43–20:46 两条被丢事实（含数字 4 的语言无关 token 核对）"
+
+- text: "I have a daughter and she’s my greatest treasure!!"
+  reply: "🥹"
+  candidates:
+    - {fact: "客户有一个女儿", evidence: "I have a daughter and she is my greatest treasure", expect: keep}
+  note: "引文被 LLM 微改（she’s→she is、丢掉标点）→ 子串失败但 token 重叠 ≥60% 仍留"
+
+- text: "我现在住在 Cebu，working as a nurse at a private hospital"
+  reply: "护士好辛苦呀，夜班多吗"
+  candidates:
+    - {fact: "客户住在宿务", evidence: "住在 Cebu", expect: keep}
+    - {fact: "客户是护士", evidence: "working as a nurse", expect: keep}
+  note: "中英混语：一条同语种（走旧词汇判据）+ 一条跨语种（只认引文）"
+
+- text: "ฉันมีลูกสาวหนึ่งคน น่ารักมาก"
+  reply: "น่ารักแน่ๆ 🥰"
+  candidates:
+    - {fact: "客户有一个女儿", evidence: "ฉันมีลูกสาว", expect: keep}
+  note: "泰文（不分词文字，bigram 路径）"
+
+- text: "私には娘がいます。もう高校生です。"
+  reply: "もう高校生！早いね"
+  candidates:
+    - {fact: "客户有一个女儿，已是高中生", evidence: "私には娘がいます", expect: keep}
+  note: "日文（含汉字但有假名 → 按日文处理，不套中文 bigram 判据）"
+
+- text: "Sige, I'm 25 na. Taga-Davao ako."
+  reply: "25 lang! Ang bata mo pa 😄"
+  candidates:
+    - {fact: "客户25岁", evidence: "I'm 25 na", expect: keep}
+    - {fact: "客户来自达沃", evidence: "Taga-Davao ako", expect: keep}
+  note: "菲律宾 Taglish（数字 25 语言无关 token 必须在原话里）"
+
+# —— Phase8 事故语料 drop（2026-07-13「精神错乱」：AI 臆测被抽成用户事实，一条不能过）——
+- text: "好呀好呀"
+  reply: "突然换日文了！那我也用日文回你～你说想去大阪玩，明天不用上班吧？"
+  candidates:
+    - {fact: "客户想去大阪玩", evidence: "想去大阪玩", expect: drop, reason: evidence_mismatch}
+    - {fact: "客户明天不用上班", evidence: "", expect: drop, reason: no_evidence}
+    - {fact: "客户想去大阪玩", evidence: "好呀好呀", expect: drop, reason: fact_unanchored}
+  note: "Phase8 真实事故：引文抄自助手 / 无引文 / 真引文洗白假事实 三种形态"
+
+- text: "你在干嘛呢 干嘛呢"
+  reply: "在想你呀～你这么晚还在线，明天休息吗？"
+  candidates:
+    - {fact: "客户深夜还在线，可能明天休息", evidence: "你这么晚还在线", expect: drop, reason: evidence_mismatch}
+  note: "Phase8 第三条污染记忆（引文取自助手回复）"
+
+# —— 跨语言 drop：外语客户也不能被「真引文洗白」——
+- text: "yes"
+  reply: "So you don't work tomorrow, right?"
+  candidates:
+    - {fact: "客户明天不用上班", evidence: "yes", expect: drop}
+  note: "EN 应答词不算引文（AI 提议 + 用户 yes ≠ 用户说过那件事）"
+
+- text: "ok sure haha"
+  reply: "You're from Japan, aren't you?"
+  candidates:
+    - {fact: "客户来自日本", evidence: "ok sure haha", expect: drop}
+    - {fact: "客户来自日本", evidence: "you're from Japan", expect: drop, reason: evidence_mismatch}
+  note: "填充词引文 / 引文抄自助手"
+
+- text: "I'm Bob, nice to meet you"
+  reply: "Nice to meet you too Bob!"
+  candidates:
+    - {fact: "客户自称Tom", evidence: "I'm Bob", expect: drop, reason: fact_unanchored}
+    - {fact: "客户自称Bob", evidence: "I'm Bob", expect: keep}
+  note: "事实里的名字（语言无关 token）必须真在原话里：Tom 丢、Bob 留"
+
+- text: "I'm 25"
+  reply: "So young! And you said you're from Osaka?"
+  candidates:
+    - {fact: "客户30岁", evidence: "I'm 25", expect: drop, reason: fact_unanchored}
+    - {fact: "客户来自大阪", evidence: "you're from Osaka", expect: drop, reason: evidence_mismatch}
+  note: "数字对不上 / 引文抄自助手"
+
+# —— 同语种旧判据回归（行为与 Phase8 以来一致）——
+- text: "我被咬了？"
+  reply: "被虫咬了吗？涂点风油精"
+  candidates:
+    - {fact: "客户被虫咬了", evidence: "我被咬了", expect: keep}
+    - {fact: "客户询问风油精的使用方法", evidence: "涂点风油精", expect: drop, reason: evidence_mismatch}
+  note: "旧 9 例同源语料：用户说的留、助手说的丢"

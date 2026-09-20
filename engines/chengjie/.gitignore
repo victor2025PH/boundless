@@ -177,6 +177,8 @@ config/.vendor_license_private.pem
 *.vendor_license_private.pem
 # P1 签发台账 outbox（签发即导出钩子落盘；含客户名等经营数据，切勿入库）
 config/ledger_outbox.jsonl
+# P5 履约守护 state（已开通订单 id 表，运行态非代码）
+config/fulfilled_chatx.json
 
 # SQLite 数据库（所有变体，含 WAL/SHM/备份）
 *.db
@@ -331,6 +333,9 @@ login_dump*.html
 # PyInstaller workpath `desktop/build/build/` 命中通用 `build/`，产出目录单列如下）
 !desktop/build/
 desktop/build/backend-dist/
+desktop/build/refresh_usage.jsonl
+# 内测包随包数据种子暂存（stage_internal_assets.py 产出：生产人设/语音/相册快照，~90MB）
+desktop/build/seed-data/
 config/notify_webhooks.json
 
 # ── 语音运行产物 / 参考素材（2026-07-12 补：防预渲染音频与名人声样本误入库）──
@@ -361,4 +366,19 @@ config/purged_trash/
 
 # 运行时事件 spool（telemetry 落盘，非版本资产）
 config/events/
+
+# P3.2 跨平台身份影子周期扫描 state（watchdog 每轮落盘的观测快照，机器本地）
+config/identity_shadow_state.json
+# 首启体验档锚点（每机独有的运行时状态：首次运行时间/机器短码/是否已关闭）
+config/local_trial.json
+# 中央凭据池的粘定机器 id（credpool_bridge 运行时写入，每机独有）
+config/.credpool_machine_id
+
+# 小智「电脑操控」runner 本地运行态（实施91）：token=密钥、kill=急停哨兵、
+# shots=截图落盘、审计——全是每机本地运行态，绝不入库。
+runner/.pc_runner_token
+runner/.pc_runner_kill
+runner/pc_runner_shots/
+runner/*.audit.jsonl
+tmp_pcvision/
 

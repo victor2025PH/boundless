@@ -395,6 +395,239 @@ async def test_sync_budget_defers_rest_to_background(tmp_path):
     store.close()
 
 
+def test_sync_per_msg_timeout_stays_within_budget():
+    """不变量：同步单条超时 <= 同步预算，且远小于 /thread 外层 6s 兜底。
+
+    预算只在「开始下一条之前」检查，所以单条超时比预算大多少，一条慢消息就能把
+    /thread 拖过预算多少。2026-08-28 事故：单条 5.0s vs 预算 2.5s → 云端引擎译一条
+    286 字消息要 8.5s，每次打开该会话稳定 5.1~5.7s（health_report 每日告警的根因）。
+    """
+    assert IT._SYNC_PER_MSG_TIMEOUT <= IT._SYNC_BUDGET_SEC
+    assert IT._SYNC_PER_MSG_TIMEOUT < 6.0          # /thread 外层 asyncio.wait_for
+    assert IT._BG_PER_MSG_TIMEOUT > IT._SYNC_PER_MSG_TIMEOUT   # 后台才是慢引擎的通道
+
+
+@pytest.mark.asyncio
+async def test_sync_timeout_is_retried_in_background(tmp_path, monkeypatch):
+    """同步超时的那条**必须**转后台，由 30s 通道译成落库。
+
+    事故回归（2026-08-28）：旧实现 ``deferred = candidates[i:]`` 从 break 位置切片，
+    恰好把刚超时的 candidates[0] 漏在外面 → 它永远只能在同步通道里重试、永远超时，
+    每 10 分钟（负缓存 TTL）复发一次，直到有更新的候选把它挤到后台才被译出。
+    """
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "line:default:u7"
+    _ingest_inbound(store, cid, "m1", "a very slow message")
+    req = _app_with_store(store)
+
+    monkeypatch.setattr(IT, "_SYNC_PER_MSG_TIMEOUT", 0.05)
+
+    class _SlowSvc:
+        """比同步预算慢、比后台预算快——正是生产里云端引擎对长文本的形态。"""
+
+        async def translate(self, text, **kw):
+            await asyncio.sleep(0.2)
+            return TranslationResult(text, "慢译文", "en", "zh", True, provider="ai")
+
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {"enabled": True}}})
+    msgs = [message_obj(text="a very slow message", direction="in",
+                        message_id=f"{cid}:m1", ts=100.0)]
+    _, stats = await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg, translation_svc=_SlowSvc(),
+    )
+    assert stats["sync_timeout"] == 1
+    assert stats["translated"] == 0
+    assert stats["deferred"] == 1              # 关键：没有被漏掉
+    assert stats["failed"] == 0                # 超时不是「引擎说不行」
+
+    for _ in range(300):                       # 等后台收尾
+        if cid not in IT._BG_CONVS:
+            break
+        await asyncio.sleep(0.01)
+    row = store.list_messages(cid)[0]
+    assert row["translated_text"] == "慢译文"   # 后台把它译成了
+    assert f"{cid}:m1" not in IT._FAILED_AT     # 成功后负缓存被清，不再拖下次打开
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_sync_timeout_not_counted_as_failed_in_daily_funnel(tmp_path, monkeypatch):
+    """同步超时不进按日漏斗 failed（已转后台，成败由后台落账）。
+
+    否则看板会把「后台其实译成了」的消息长期记成失败——2026-08-28 生产实录的
+    `失败 7` 全是这类，读数直接把人引向「引擎坏了」的错误结论。
+    """
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "line:default:u8"
+    _ingest_inbound(store, cid, "m1", "another slow one")
+    req = _app_with_store(store)
+    monkeypatch.setattr(IT, "_SYNC_PER_MSG_TIMEOUT", 0.05)
+
+    class _SlowSvc:
+        async def translate(self, text, **kw):
+            await asyncio.sleep(0.2)
+            return TranslationResult(text, "译文", "en", "zh", True, provider="ai")
+
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {"enabled": True}}})
+    msgs = [message_obj(text="another slow one", direction="in",
+                        message_id=f"{cid}:m1", ts=100.0)]
+    await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg, translation_svc=_SlowSvc())
+    for _ in range(300):
+        if cid not in IT._BG_CONVS:
+            break
+        await asyncio.sleep(0.01)
+    s = store.get_inbound_xlate_stats(0)
+    assert s["failed"] == 0
+    assert s["translated"] == 1                # 后台侧自己落的账
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_engine_failure_is_not_retried_in_background(tmp_path):
+    """引擎明确报错（非超时）不转后台——那是「引擎说不行」，立刻重试只是重试风暴。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "line:default:u9"
+    _ingest_inbound(store, cid, "m1", "hello there")
+    req = _app_with_store(store)
+
+    calls = {"n": 0}
+
+    class _FailSvc:
+        async def translate(self, text, **kw):
+            calls["n"] += 1
+            return TranslationResult(text, text, "en", "zh", False,
+                                     provider="none", error="provider_unavailable")
+
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {"enabled": True}}})
+    msgs = [message_obj(text="hello there", direction="in",
+                        message_id=f"{cid}:m1", ts=100.0)]
+    _, stats = await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg, translation_svc=_FailSvc())
+    assert stats["failed"] == 1 and stats["sync_timeout"] == 0
+    assert stats["deferred"] == 0
+    await asyncio.sleep(0.05)
+    assert calls["n"] == 1                     # 没有被后台再打一次
+    store.close()
+
+
+def _ingest_bot_conv(store, cid, text="[播报] 🔴 198 kouxing chengjie 1.049"):
+    """自建播报 bot 会话（生产实录形态：中文正文里混拉丁串 → 语种检测判成 en）。"""
+    from src.inbox.models import InboxConversation, InboxMessage
+    store.upsert_conversation(InboxConversation(
+        conversation_id=cid, platform="telegram", account_id="acct",
+        chat_key=cid.split(":")[-1], display_name="BOUNDLESS",
+        last_text=text, last_ts=100.0,
+    ))
+    store.set_peer_bot_verdict(cid, is_bot=1, evidence="tg_username_bot: @tgzkw_bot")
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, platform_msg_id="m1", direction="in",
+        text=text, original_text=text, source_lang="en", ts=100.0,
+    ))
+
+
+@pytest.mark.asyncio
+async def test_bot_peer_conversation_skips_translation(tmp_path):
+    """机器人会话不进翻译链：零引擎调用、零写库（本方系统文案，译了没有收益）。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:8506426282"
+    _ingest_bot_conv(store, cid)
+    req = _app_with_store(store)
+
+    calls = {"n": 0}
+
+    class _CountingSvc:
+        async def translate(self, text, **kw):
+            calls["n"] += 1
+            return TranslationResult(text, "译文", "en", "zh", True, provider="ai")
+
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {"enabled": True}}})
+    text = store.list_messages(cid)[0]["text"]
+    msgs = [message_obj(text=text, direction="in", message_id=f"{cid}:m1", ts=100.0)]
+    out, stats = await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg, translation_svc=_CountingSvc())
+    assert stats["bot_peer"] is True
+    assert calls["n"] == 0
+    assert stats["translated"] == 0 and stats["deferred"] == 0
+    assert store.list_messages(cid)[0]["translated_text"] == ""
+    # 内部标注不因提前返回而泄漏进响应
+    assert "_store_mid" not in out[0] and "_xlate_attempted" not in out[0]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_bot_peer_still_shows_existing_translations(tmp_path):
+    """跳过的是「产生新翻译」，不是「显示译文」——历史已译行仍经 overlay 正常展示。"""
+    from src.inbox.models import InboxConversation, InboxMessage
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:900"
+    store.upsert_conversation(InboxConversation(
+        conversation_id=cid, platform="telegram", account_id="acct", chat_key="900",
+        display_name="B", last_text="hello", last_ts=100.0,
+    ))
+    store.set_peer_bot_verdict(cid, is_bot=1, evidence="manual")
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, platform_msg_id="m1", direction="in",
+        text="hello", original_text="hello", translated_text="你好",
+        source_lang="en", target_lang="zh", ts=100.0,
+    ))
+    req = _app_with_store(store)
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {"enabled": True}}})
+    msgs = [message_obj(text="hello", direction="in", message_id=f"{cid}:m1", ts=100.0)]
+    out, stats = await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg,
+        translation_svc=TranslationService())
+    assert stats["bot_peer"] is True
+    assert stats["from_store"] == 1
+    assert out[0]["translated_text"] == "你好"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_bot_peer_skip_is_configurable(tmp_path):
+    """``skip_bot_peers: false`` → 恢复旧行为（真有客户拿 bot 号做业务时的逃生门）。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:901"
+    _ingest_bot_conv(store, cid, text="hello there")
+    req = _app_with_store(store)
+
+    class _OkSvc:
+        async def translate(self, text, **kw):
+            return TranslationResult(text, "你好", "en", "zh", True, provider="ai")
+
+    cfg = SimpleNamespace(config={"workspace": {"auto_translate_inbound": {
+        "enabled": True, "skip_bot_peers": False}}})
+    msgs = [message_obj(text="hello there", direction="in",
+                        message_id=f"{cid}:m1", ts=100.0)]
+    _, stats = await enrich_inbound_translations(
+        req, msgs, conversation_id=cid, config_manager=cfg, translation_svc=_OkSvc())
+    assert stats["bot_peer"] is False
+    assert stats["translated"] == 1
+    store.close()
+
+
+def test_bot_predicate_is_the_shared_one():
+    """bot 口径必须复用 peer_bot_guard 单一事实源（别在本模块长出第三种判定）。
+
+    尤其是运营覆写 ``peer_is_bot=-1``（「确认是真人」）必须继续被翻译。
+    """
+    class _Store:
+        def __init__(self, row):
+            self._row = row
+
+        def get_conversation(self, cid):
+            return self._row
+
+    assert IT._peer_is_bot(_Store({"peer_is_bot": 1}), "c") is True
+    assert IT._peer_is_bot(_Store({"peer_is_bot": -1, "platform": "telegram",
+                                   "username": "someone_bot"}), "c") is False
+    assert IT._peer_is_bot(_Store({"platform": "telegram",
+                                   "username": "tgzkw_bot"}), "c") is True
+    assert IT._peer_is_bot(_Store({"platform": "line", "username": "tgzkw_bot"}), "c") is False
+    assert IT._peer_is_bot(_Store(None), "c") is False
+    assert IT._peer_is_bot(None, "c") is False
+
+
 @pytest.mark.asyncio
 async def test_live_message_translation_persists_via_store_mid(tmp_path):
     """live 聚合消息（裸平台 message_id）：overlay 按 text+ts 命中 store 行携带真主键，

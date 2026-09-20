@@ -3,8 +3,10 @@
 from unittest.mock import MagicMock
 
 from src.inbox.automation_mode import (
+    allows_direct_autosend,
     bootstrap_enabled_from_config,
     global_automation_mode_from_config,
+    human_gate_skip_reason,
     maybe_bootstrap_automation_mode,
     resolve_automation_mode,
 )
@@ -33,7 +35,11 @@ def test_maybe_bootstrap_persists_auto_ai():
     mode = maybe_bootstrap_automation_mode(
         store, cid, _cfg(automation_mode="auto_ai"))
     assert mode == "auto_ai"
-    store.set_automation_mode.assert_called_once_with(cid, "auto_ai")
+    # 2026-08-09 断言随 source 打标落地更新：bootstrap 写入带来源标（可解释性
+    # 链路的一环——「谁把档位写成这样」）；旧 store 无该形参时模块内有
+    # TypeError 回落，MagicMock 不会触发回落故只会收到带 source 的一次调用。
+    store.set_automation_mode.assert_called_once_with(
+        cid, "auto_ai", source="bootstrap")
 
 
 def test_bootstrap_respects_explicit_mode():
@@ -65,3 +71,22 @@ def test_maybe_bootstrap_records_stats():
     snap = metrics_snapshot()
     assert snap["bootstrap_total"] >= 1
     assert snap["last"]["platform"] == "messenger"
+
+
+def test_allows_direct_autosend_only_auto_ai():
+    """坐席「手动/草稿我审」必须停 A 线直发与主动触达。"""
+    assert allows_direct_autosend("auto_ai") is True
+    assert allows_direct_autosend("AUTO_AI") is True
+    assert allows_direct_autosend("manual") is False
+    assert allows_direct_autosend("review") is False
+    assert allows_direct_autosend("multi_choice") is False
+    assert allows_direct_autosend("") is False
+    assert allows_direct_autosend(None) is False
+
+
+def test_human_gate_skip_reason():
+    assert human_gate_skip_reason("manual") == "inbox_manual"
+    assert human_gate_skip_reason("review") == "inbox_human_gate"
+    assert human_gate_skip_reason("multi_choice") == "inbox_human_gate"
+    assert human_gate_skip_reason("auto_ai") == ""
+    assert human_gate_skip_reason("") == ""

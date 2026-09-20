@@ -195,14 +195,44 @@ async def test_max_per_tick_limits():
     assert s.count(status="pending") == 3
 
 
-async def test_dry_run_no_send_but_marks_sent():
+async def test_dry_run_no_send_keeps_pending():
+    """实施84 P0-4：dry 拟稿**不消费待办**——行保持 pending（转真发后仍会发），
+    只落快照与 dry_sampled_at；重拟冷却窗内不再烧 LLM。"""
     s = _store_with()
     rec = []
-    d = CareDispatcher(store=s, ai_client=_AI(), send_callback=_sender(rec),
-                       context_provider=lambda ck: "ctx", dry_run=True)
+    ai = _AI()
+    # expire_grace_days 放宽到 3 天：本测试要验证 25h 后的重拟，别让 1 天
+    # 宽限先把行 expire 掉（那是另一条独立且正确的生命周期）
+    d = CareDispatcher(store=s, ai_client=ai, send_callback=_sender(rec),
+                       context_provider=lambda ck: "ctx", dry_run=True,
+                       expire_grace_days=3.0)
     n = await d.run_once(now=NOW)
     assert n == 1 and not rec  # 没真发
-    assert s.count(status="sent") == 1
+    assert s.count(status="sent") == 0
+    assert s.count(status="pending") == 1  # 待办还在
+    row = s.list_pending()[0]
+    assert float(row["dry_sampled_at"]) > 0
+    assert row["sent_text"]  # 快照已落
+    # 冷却窗内第二轮：不重拟（LLM 只被调过一次）
+    n2 = await d.run_once(now=NOW + 600)
+    assert n2 == 0 and len(ai.prompts) == 1
+    # 冷却窗过后（默认 24h）重拟一次（新鲜样本）
+    n3 = await d.run_once(now=NOW + 25 * 3600)
+    assert n3 == 1 and len(ai.prompts) == 2
+
+
+async def test_dry_sampled_item_still_sends_after_go_live():
+    """试运行期间「演习」过的约定，切真发后必须仍然发出（旧语义的核心缺陷）。"""
+    s = _store_with()
+    rec = []
+    d_dry = CareDispatcher(store=s, ai_client=_AI(), send_callback=_sender(rec),
+                           context_provider=lambda ck: "ctx", dry_run=True)
+    assert await d_dry.run_once(now=NOW) == 1 and not rec
+    d_live = CareDispatcher(store=s, ai_client=_AI(), send_callback=_sender(rec),
+                            context_provider=lambda ck: "ctx", dry_run=False)
+    assert await d_live.run_once(now=NOW + 60) == 1
+    assert len(rec) == 1
+    assert s.count(status="sent") == 1 and s.count(status="pending") == 0
 
 
 async def test_not_due_not_dispatched():
@@ -245,8 +275,9 @@ async def test_dislike_similarity_regenerates():
     s = _store_with()
     rec = []
     ai = _AISeq([bad, good])
+    # P-1 B：引用「你提过换工作」必须在会话要点里有锚点，否则被 claim_guard 改成中性句
     d = CareDispatcher(store=s, ai_client=ai, send_callback=_sender(rec),
-                       context_provider=lambda ck: "ctx", default_lang="zh")
+                       context_provider=lambda ck: "对方最近说想换工作", default_lang="zh")
     n = await d.run_once(now=NOW)
     assert n == 1 and len(rec) == 1
     assert rec[0]["reply"] == good  # 发的是重生成版
@@ -380,3 +411,34 @@ async def test_quiet_hours_defers_send_time():
     assert len(rec) == 1
     dd = datetime.fromtimestamp(rec[0]["defer_until"])
     assert dd.hour >= 8 and dd.day == 18  # 顺延到次日 08:00 之后
+
+
+# ── P2 2026-08-03：话术快照随行留档（长期审计口径，独立于 deferred 保留期）──
+async def test_dispatch_writes_sent_text_snapshot():
+    s = _store_with()
+    rec = []
+    d = CareDispatcher(store=s, ai_client=_AI("面试顺利吗？我一直记着这事呢"),
+                       send_callback=_sender(rec),
+                       context_provider=lambda ck: "上次聊到她准备面试")
+    assert await d.run_once(now=NOW) == 1
+    row = s.list_recent(status="sent")[0]
+    assert row["note"].startswith("deferred:")
+    assert row["sent_text"] == "面试顺利吗？我一直记着这事呢"
+
+
+async def test_dry_run_writes_sent_text_snapshot():
+    """dry 拟稿也落快照：metrics 侧样本进程内易失，本列才是持久口径。
+    实施84 P0-4：快照落在 pending 行（不再借 sent 行），负样本/审核队列照常可见。"""
+    s = _store_with()
+    # P-1 B：引用「你说的复查」要有锚点（会话要点提到复查），否则 claim_guard 改中性句
+    d = CareDispatcher(store=s, ai_client=_AI("记得你说的复查，还顺利吗？"),
+                       send_callback=_sender([]),
+                       context_provider=lambda ck: "下周要去医院复查", dry_run=True)
+    assert await d.run_once(now=NOW) == 1
+    row = s.list_pending()[0]
+    assert float(row["dry_sampled_at"]) > 0
+    assert row["sent_text"] == "记得你说的复查，还顺利吗？"
+    # 快照进防重负样本 + 持久待审队列（两代形态谓词）
+    assert "记得你说的复查，还顺利吗？" in s.recent_sent_texts("tg:u0")
+    drafts = s.list_unreviewed_drafts()
+    assert len(drafts) == 1 and int(drafts[0]["id"]) == int(row["id"])

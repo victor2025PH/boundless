@@ -3,9 +3,11 @@
 import asyncio
 import csv
 import hashlib
+import hmac
 import io
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -30,6 +32,13 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 # auto_reload 作为构造参数会 TypeError，改为构造后直接设到 Jinja2 Environment。
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 templates.env.auto_reload = True
+# 模板热更新的运行时兜底（2026-08-17 `){#` 事故第三层防线）：坏保存落盘时供应
+# 最后一版好模板 + CRITICAL 限流日志，替代整页 500；冷启动就坏仍照旧抛。
+# 详见 src/web/template_guard.py 的取舍说明；门禁 tests/test_template_guard.py。
+from src.web.body_replay import make_replay_receive  # noqa: E402
+from src.web.template_guard import install_template_guard  # noqa: E402
+
+install_template_guard(templates.env)
 
 # ── 模型显示名映射（UI 层展示，不影响实际 API 调用）─────────────
 _MODEL_DISPLAY_MAP: dict = {
@@ -52,6 +61,32 @@ templates.env.filters["display_model"] = _display_model
 # Default to generic name; overridden in create_app() when domain pack loads
 templates.env.globals["site_name"] = "无界科技 · 智聊"
 templates.env.globals["site_name_short"] = "无界科技"
+
+# ── static_v：mtime 自动版号静态 URL（消灭手动 ?v= 缓存戳）────────────────
+# 手动双戳（CSS ?v= + ui-build.txt）是「改了功能忘 bump → 坐席踩旧 JS」事故的
+# 根因（2026-07-29 账号 rail 事故）。本仓坐席端没有构建期（模板热更新直达生产），
+# 故版号取文件 mtime：保存即换号，下一次页面渲染自动带新 ?v=，无需人工记忆。
+# ⚠️ 两阶段落地：本全局随下次实例重启装载；模板在重启**之前**不得引用
+# static_v（未定义全局 → Jinja 渲染 500）。切换模板引用属重启后的后续批次。
+_STATIC_V_ROOT = Path(__file__).parent / "static"
+_static_v_cache: dict = {}
+
+
+def _static_v(rel_path: str) -> str:
+    """/static/<rel>?v=<mtime 十六进制>；文件缺失回落无版号（不阻断渲染）。"""
+    try:
+        mt = (_STATIC_V_ROOT / rel_path).stat().st_mtime
+    except OSError:
+        return f"/static/{rel_path}"
+    cached = _static_v_cache.get(rel_path)
+    if cached and cached[0] == mt:
+        return cached[1]
+    url = f"/static/{rel_path}?v={int(mt):x}"
+    _static_v_cache[rel_path] = (mt, url)
+    return url
+
+
+templates.env.globals["static_v"] = _static_v
 
 # ── /api/human-escalation/schedule-status 短时缓存（减轻 is_within + 粗估重复计算）──
 _SCHEDULE_STATUS_LOCK = threading.Lock()
@@ -96,6 +131,96 @@ def invalidate_schedule_status_cache() -> None:
         _SCHEDULE_STATUS_CACHE = None
 
 
+class RevalidateStaticFiles(StaticFiles):
+    """强制回源校验的静态服务（``Cache-Control: no-cache``）。
+
+    为什么需要（2026-07-31「切换失败」事故收尾）：``/copilot`` 的 iframe 入口
+    ``app.html`` 没有 ``?v=`` 缓存戳可用（iframe src 只带 ?theme=），而 Starlette
+    静态响应默认不带 Cache-Control → Chromium 启发式缓存可把旧 app.html 连同其
+    引用的旧组件 URL 一起复用数小时——坐席「刷新了还是旧的」。no-cache ≠ 不缓存：
+    浏览器仍缓存，只是每次使用前必须带 ETag 回源验证（未变=304，极廉价）。
+    200 与 304（NotModifiedResponse）两种返回都补头。
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+class CachedStaticFiles(StaticFiles):
+    """按 ``?v=`` 版本戳分级缓存的静态服务（2026-08-07 感知性能实测后加）。
+
+    背景：``/static`` 此前挂裸 StaticFiles，**不带任何 Cache-Control** → 浏览器每次
+    导航都要对每个资源回源校验。实测一次 ``/workspace`` 导航要拉 14 个资源、
+    占传输 20%（托管形态经反向 SSH 隧道，每次往返都很贵）。
+
+    分级依据＝本仓既有的「改前端就 bump ``?v=``」纪律（见 ui-build.txt 注释）：
+    - 带 ``v=`` 版本戳 → 内容一变 URL 就变，可安全 **immutable 长缓存**
+      （大头如 unified-inbox.css 236KB 正属此类，命中后重复导航零传输）；
+    - 无版本戳（图标/token 等小文件）→ 只给 **300s 短缓存**：既消掉一次会话内
+      的反复回源往返，又把「改了没生效」的窗口钉在 5 分钟内；
+    - ``ui-build.txt`` 例外 **no-cache**：它是「陈旧页提醒」的新鲜度信号源，
+      缓存它等于让坐席晚几分钟才收到「请刷新」，与它存在的目的相悖。
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        scope = kwargs.get("scope")
+        if scope is None and len(args) >= 3:
+            scope = args[2]
+        try:
+            qs = (scope or {}).get("query_string", b"").decode("latin-1")
+            path = (scope or {}).get("path", "") or ""
+        except Exception:  # noqa: BLE001 - 取不到就按最保守的短缓存
+            qs, path = "", ""
+        if path.endswith("ui-build.txt"):
+            resp.headers["Cache-Control"] = "no-cache"
+        elif qs.startswith("v=") or "&v=" in qs:
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
+
+
+class ProtocolMediaStatic(CachedStaticFiles):
+    """协议媒体专属静态服务：主根（实例数据根）优先，旧引擎树根兜底。
+
+    媒体根 2026-08-19 迁入实例数据根（``protocol_bridge.protocol_media_root``：
+    备份带得走、多实例不混居），但存量 ``media_ref`` 全是
+    ``/static/protocol_media/…`` URL——本类保住该命名空间：主根 miss 时回查旧根，
+    启动迁移（``migrate_legacy_protocol_media``）偶发搬不动的文件（被占用/权限）
+    仍可被服务，搬迁过程零 404 窗口。缓存语义继承 ``CachedStaticFiles``（?v= 分级）。
+    """
+
+    def __init__(self, *args, fallback_directory: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fallback = (
+            StaticFiles(directory=fallback_directory, check_dir=False)
+            if fallback_directory else None)
+
+    def lookup_path(self, path: str):
+        full, stat_result = super().lookup_path(path)
+        if stat_result is None and self._fallback is not None:
+            return self._fallback.lookup_path(path)
+        return full, stat_result
+
+
+def is_persona_album_upload_path(path: str) -> bool:
+    """相册 / 锁脸基准照 multipart 上传口（#316 / 09-13 钧 明日香语 25 张 Failed to fetch）。
+
+    路径是 ``/api/personas/{pid}/media`` 或 ``…/face-ref``，pid 不固定，不能写死 prefix。
+    只认恰好 5 段——``/media/test`` ``/media/retag`` 等 JSON 口仍吃 2MB 闸。
+    """
+    parts = str(path or "").split("/")
+    return (
+        len(parts) == 5
+        and parts[1] == "api"
+        and parts[2] == "personas"
+        and parts[4] in ("media", "face-ref")
+    )
+
+
 def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                telegram_client=None, event_tracker=None, log_buffer=None) -> FastAPI:
     # Load domain pack manifest for web integration（支付域在插件关闭时映射为 conversion）
@@ -105,9 +230,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     domain_web_pages: list = []
     domain_dashboard_widgets: list = []
     _domain_manifest: dict = {}
-    _project_root = Path(config_manager.config_path).parent.parent if hasattr(config_manager, "config_path") else Path(".")
+    # 域包目录经 resolve_domains_dir 统一定位：冻结态 config_path 在用户数据目录，
+    # 其 ../domains 是空的，必须回落到随包的 <_MEIPASS>/domains，否则安装版丢掉
+    # 领域看板挂件与域内模板（与 skill_manager 同一入口，避免两处口径分裂）。
+    from src.utils.domain_loader import resolve_domains_dir as _resolve_domains_dir
+    _domains_dir = _resolve_domains_dir(getattr(config_manager, "config_path", None), domain_name)
     try:
-        _mf = _project_root / "domains" / domain_name / "manifest.yaml"
+        _mf = _domains_dir / domain_name / "manifest.yaml"
         if _mf.exists():
             import yaml as _y
             with open(_mf, "r", encoding="utf-8") as _f:
@@ -120,8 +249,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         pass
     # Add domain template directory to Jinja2 search path
-    if _project_root:
-        _domain_tpl_dir = _project_root / "domains" / domain_name / "web" / "templates"
+    if _domains_dir:
+        _domain_tpl_dir = _domains_dir / domain_name / "web" / "templates"
         if _domain_tpl_dir.is_dir():
             from jinja2 import FileSystemLoader
             templates.env.loader = FileSystemLoader(
@@ -191,16 +320,142 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             pass
         return await call_next(request)
 
+    # ── C0-3b 档位功能闸门：按授权档位锁 API 族（feature_gate 关 = 全放行零变化）──
+    # 单点强制：前缀表见 src/licensing/feature_gate.py::API_FEATURE_PREFIXES；
+    # 先于路由/鉴权（未解锁 → 403 feature_locked；已解锁未登录 → 后续 401 照旧）。
+    @app.middleware("http")
+    async def _feature_gate_guard(request, call_next):
+        try:
+            from src.licensing.feature_gate import (
+                feature_enabled, feature_for_api_path, gate_enabled,
+            )
+
+            _cfg = getattr(config_manager, "config", None) or {}
+            if gate_enabled(_cfg):
+                _feat = feature_for_api_path(request.url.path)
+                if _feat and not feature_enabled(_feat, _cfg):
+                    from fastapi.responses import JSONResponse
+
+                    from src.web.web_i18n import tr as _tr
+
+                    try:  # E6 锁触达观测（定价信号），失败绝不影响拦截语义
+                        from src.web.feature_lock_stats import get_feature_lock_stats
+                        get_feature_lock_stats().record(_feat, "api")
+                    except Exception:
+                        pass
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "ok": False,
+                            "error": "feature_locked",
+                            "feature": _feat,
+                            "detail": _tr(request, "err.lic.feature_locked"),
+                        },
+                    )
+                # E3：页面族守卫——nav 对锁定功能渲染锁标跳 /membership，但直连
+                # URL（书签/分享链）仍能打开半残页（渲染成功、API 全 403）。此处
+                # 与 nav 同源判定（nav_schema.feature_for_page_path），锁定页面
+                # GET 一律 302 升级引导。仅 GET（页面导航语义）；/membership 自身
+                # 无 feature 标注，天然无环。
+                if request.method == "GET" and not request.url.path.startswith("/api/"):
+                    from src.web.nav_schema import feature_for_page_path
+
+                    _pfeat = feature_for_page_path(request.url.path)
+                    if _pfeat and not feature_enabled(_pfeat, _cfg):
+                        from fastapi.responses import RedirectResponse
+
+                        try:  # E6 锁触达观测
+                            from src.web.feature_lock_stats import (
+                                get_feature_lock_stats,
+                            )
+                            get_feature_lock_stats().record(_pfeat, "page")
+                        except Exception:
+                            pass
+                        # ?from=<族> → 会员页高亮对应矩阵行 + 来源引导语（E4）
+                        return RedirectResponse(
+                            "/membership?from=" + _pfeat, status_code=302)
+        except Exception:  # pragma: no cover - 守卫自身异常绝不阻断请求
+            pass
+        return await call_next(request)
+
     _static_dir = Path(__file__).parent / "static"
     if _static_dir.is_dir():
-        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+        # Windows 的 MIME 注册表常缺 .woff2（或被装成 text/plain），Starlette 静态
+        # 服务按 mimetypes 猜类型会把品牌字体标错——浏览器多半仍加载但控制台告警、
+        # 且严格代理/CDN 可能拒缓存。显式登记一次（幂等，进程级）。
+        import mimetypes as _mimetypes
+
+        _mimetypes.add_type("font/woff2", ".woff2")
+        _mimetypes.add_type("font/woff", ".woff")
+        # 协议媒体专属挂载（账号资产 P0，2026-08-19）：媒体根已迁实例数据根
+        # （protocol_bridge.protocol_media_root），对同一 URL 前缀**先**注册专属
+        # 挂载（Starlette 按注册序匹配）保住存量 /static/protocol_media/... 引用；
+        # 无数据根契约（根==旧根）时不挂＝旧单挂载行为。挂载失败回落旧行为，
+        # 绝不因媒体挂载挡整个后台。
+        try:
+            from src.integrations.protocol_bridge import (
+                legacy_protocol_media_root as _pm_legacy_fn,
+                protocol_media_root as _pm_root_fn,
+            )
+            _pm_root = _pm_root_fn()
+            _pm_legacy = _pm_legacy_fn()
+            if str(_pm_root) != str(_pm_legacy):
+                _pm_root.mkdir(parents=True, exist_ok=True)
+                app.mount(
+                    "/static/protocol_media",
+                    ProtocolMediaStatic(
+                        directory=str(_pm_root),
+                        fallback_directory=(
+                            str(_pm_legacy) if _pm_legacy.is_dir() else None)),
+                    name="protocol_media",
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("protocol_media 专属挂载失败（回落旧 /static 单挂载）",
+                           exc_info=True)
+        # 人设相册专属挂载（#67-① 0830）：相册落盘迁数据根（打包桌面态旧位置
+        # =安装目录，更新即清空），URL 形态 /static/persona_albums/... 不变——
+        # 数据根优先 + 旧树兜底，与 protocol_media 同款零 404 窗口。
+        # 无数据根契约（根==旧树，裸引擎/CI）不挂＝旧行为。
+        try:
+            from src.companion.media_paths import (
+                LEGACY_ALBUM_ROOT as _pa_legacy,
+                resolve_album_root as _pa_root_fn,
+            )
+            _pa_root = _pa_root_fn()
+            if str(_pa_root.resolve()) != str(_pa_legacy.resolve()):
+                _pa_root.mkdir(parents=True, exist_ok=True)
+                app.mount(
+                    "/static/persona_albums",
+                    ProtocolMediaStatic(
+                        directory=str(_pa_root),
+                        check_dir=False,
+                        fallback_directory=(
+                            str(_pa_legacy) if _pa_legacy.is_dir() else None)),
+                    name="persona_albums",
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("persona_albums 专属挂载失败（回落旧 /static 单挂载）",
+                           exc_info=True)
+        app.mount("/static", CachedStaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
+    # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版
     _shared_copilot_dir = Path(__file__).resolve().parents[2] / "shared" / "copilot"
     if _shared_copilot_dir.is_dir():
         app.mount(
             "/copilot",
-            StaticFiles(directory=str(_shared_copilot_dir)),
+            RevalidateStaticFiles(directory=str(_shared_copilot_dir)),
             name="copilot_shared",
+        )
+    # AI 助手悬浮球共享组件（2026-08-19；与 copilot 同模式：仓根单一事实源 +
+    # 桌面镜像，no-cache 逐次回源防旧版钉住）
+    _shared_assistant_dir = (
+        Path(__file__).resolve().parents[2] / "shared" / "assistant"
+    )
+    if _shared_assistant_dir.is_dir():
+        app.mount(
+            "/assistant-shared",
+            RevalidateStaticFiles(directory=str(_shared_assistant_dir)),
+            name="assistant_shared",
         )
 
     # ── PWA（Phase 1：把 /workspace 做成可安装的原生官网）──────────────
@@ -243,25 +498,107 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     web_cfg = config_manager.config.get("web_admin", {})
     secret = web_cfg.get("secret_key", "change-me-in-production")
     token = web_cfg.get("auth_token", "")
+    # worker 专用窄令牌（2026-08-28 P1-6 第一步）：四个 Node 侧车（WhatsApp/Messenger/
+    # Instagram/Zalo）此前持有的是 **admin auth_token**——匹配它就直通 _api_auth 的
+    # 全部路由，等于给协议进程发了管理员钥匙。它们真正需要的只有 /api/internal/*
+    # （11 个端点，实际打的是 protocol/ingest 与 session-status）。
+    # 本键留空＝行为与此前**逐字节相同**；配上才生效，故可先随任意重启装载，
+    # 待引擎确认接受双令牌后再切 Node 侧（顺序不可颠倒，见 worker_token 注释块）。
+    worker_token = str(web_cfg.get("worker_token", "") or "").strip()
+    if worker_token:
+        # 三道自检：与 admin 同值＝零隔离（还不如不配）；过短或占位符＝比不配更危险
+        # （一个可猜的字符串换来内部端点访问）。任一不过一律**降级为未配置**并告警，
+        # 绝不「带病放行」。
+        _wt_bad = ""
+        if hmac.compare_digest(worker_token, str(token or "")):
+            _wt_bad = "与 auth_token 同值（无隔离效果）"
+        elif len(worker_token) < 24:
+            _wt_bad = f"长度 {len(worker_token)} < 24（太短，可暴力猜）"
+        elif any(m in worker_token.upper() for m in ("CHANGE_ME", "YOUR_", "PLACEHOLDER", "EXAMPLE")):
+            _wt_bad = "疑似占位符未替换"
+        if _wt_bad:
+            logger.warning(
+                "[SECURITY] web_admin.worker_token %s —— 已按未配置处理；"
+                "侧车将继续使用 auth_token（管理员级），请换一个独立随机值。", _wt_bad)
+            worker_token = ""
+
+    # S2：默认 secret_key 是公开常量（签名 session 可被伪造）。此处仅告警不阻断
+    # （本地/测试仍可跑）；真正的「非本地暴露」防护做成 fail-safe，在 bootstrap 启动处
+    # 检测到「默认 secret + 绑定非本地地址」时降级绑回 127.0.0.1（见 bootstrap/web_app.py）。
+    if secret == "change-me-in-production":
+        logger.warning(
+            "[SECURITY] 正在使用默认 secret_key，仅适用于本地/测试；生产请在 "
+            "config.yaml::web_admin.secret_key 配置随机值，否则 session 可被伪造。"
+        )
 
     session_max_age = int(web_cfg.get("session_max_age", 7200))
-    app.add_middleware(SessionMiddleware, secret_key=secret, max_age=session_max_age)
+    # S4：session cookie 加 SameSite=Strict；经 TLS 反代时置 cookie_secure:true 开启 Secure。
+    _cookie_secure = bool(web_cfg.get("cookie_secure", False))
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=secret,
+        max_age=session_max_age,
+        same_site="strict",
+        https_only=_cookie_secure,
+    )
 
-    # ── CORS ──────────────────────────────────────────────────
-    cors_origins = web_cfg.get("cors_origins", ["*"])
+    # ── 响应压缩（2026-08-07 实测定位）：工作台页面 1~2MB 未压缩 HTML 经反向 SSH
+    # 隧道传输时严重拖慢（隧道有效吞吐 ~30-50KB/s，TCP-over-TCP 吞吐坍缩）——直连
+    # localhost 渲染仅 0.03s，走隧道却 20~45s。在**实例侧**先压缩是唯一能在进隧道前
+    # 减小字节的位置（nginx 在隧道下游，压不到隧道那一跳）。对 LAN 坐席顺带受益。
+    # 同日升级：GZipMiddleware → 自带 CompressionMiddleware（brotli 优先再省 ~15-20%，
+    # gzip 兜底语义不变；顺带修 SSE 不该被压缩缓冲的盲区）。minimum_size 跳过小响应。
+    from src.web.compression import CompressionMiddleware
+    app.add_middleware(CompressionMiddleware, minimum_size=1024)
+
+    # ── CORS（S5：默认同源；关闭 '*' + allow_credentials 的危险组合）────────
+    cors_origins = web_cfg.get("cors_origins", [])
     if isinstance(cors_origins, str):
         cors_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+    if cors_origins:
+        _allow_star = "*" in cors_origins
+        if _allow_star:
+            logger.warning(
+                "[SECURITY] web_admin.cors_origins 含 '*'，已禁用 allow_credentials 以避免危险组合；"
+                "如需带凭据跨域，请配置精确来源白名单。"
+            )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=(not _allow_star),
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+        )
 
     # ── CSRF 防护 ─────────────────────────────────────────────
     import secrets as _secrets
     _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+    # 豁免口清单（每条都要能回答「为什么 CSRF 威胁模型不适用」）：
+    # - /login /logout /setup：未认证引导入口，无 ambient 会话权限可被借用（S3）；
+    # - /api/goals/order-hook：外部服务器回流 webhook，路由自带共享 token 恒时比较（2026-07-27 实锤）；
+    # - /api/telemetry/*：navigator.sendBeacon 无法自定义头，端点只累计**消毒后的计数**
+    #   （page/fn/type 白名单化、distinct 封顶），无状态权限可借用；鉴权仍在路由层
+    #   ——不豁免则「Referer 被隐私设置剥掉」的环境里观测通道先于业务瞎掉（2026-07-31）。
+    _CSRF_EXEMPT_PATHS = {
+        "/login", "/logout", "/setup", "/api/goals/order-hook",
+        "/api/telemetry/frontend-error", "/api/telemetry/ui-event",
+    }
+
+    def _csrf_admit(request: Request, ticket: str) -> None:
+        """写请求放行留痕（P2 收口决策数据面）：
+        - ``request.state.csrf_ticket``＝单一事实源（/api/preflight/echo 回显「靠哪张证」）；
+        - 进程计数 csrf_stats.admitted_by（看「当下分布」）；
+        - origin/referer 放行另落日趋势（跨重启看「同源回落还有没有人在用」——
+          两周归零才能安全地把回落降级为纯观测）。全程 best-effort 零阻断。"""
+        try:
+            request.state.csrf_ticket = ticket
+            from src.web.csrf_stats import get_csrf_reject_stats
+            get_csrf_reject_stats().record_admit(ticket)
+            if ticket in ("origin", "referer"):
+                from src.web.csrf_trend import record_csrf_admit_trend
+                record_csrf_admit_trend(ticket)
+        except Exception:
+            pass
 
     @app.middleware("http")
     async def csrf_middleware(request: Request, call_next):
@@ -273,16 +610,25 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             return response
         auth_h = request.headers.get("Authorization", "")
         if auth_h.startswith("Bearer "):
+            _csrf_admit(request, "bearer")
             return await call_next(request)
         # 公网网页聊天 Widget：访客用 HMAC token 鉴权（非 session cookie），CSRF 不适用
         if request.url.path.startswith("/chat/"):
             return await call_next(request)
+        if request.url.path in _CSRF_EXEMPT_PATHS:
+            return await call_next(request)
         _line_exempt = getattr(request.app.state, "line_webhook_path", None)
         if _line_exempt and request.url.path == _line_exempt:
             return await call_next(request)
+        # 微信客服（企微）回调：企微服务器 POST 加密 XML，路由自带 msg_signature（SHA1 token）验签，不借用任何会话
+        # 权限——CSRF 威胁模型不适用（实施97；此前只被带 cookie 的测试客户端掩盖，经中继转来的真回调会被拦成 403）。
+        _wxkf_exempt = getattr(request.app.state, "wechat_kf_callback_path", None)
+        if _wxkf_exempt and request.url.path == _wxkf_exempt:
+            return await call_next(request)
         cookie_tok = request.cookies.get("csrf_token", "")
         header_tok = request.headers.get("X-CSRF-Token", "")
-        if cookie_tok and header_tok and cookie_tok == header_tok:
+        if cookie_tok and header_tok and hmac.compare_digest(cookie_tok, header_tok):
+            _csrf_admit(request, "csrf_pair")
             return await call_next(request)
         origin = request.headers.get("origin", "")
         referer = request.headers.get("referer", "")
@@ -290,15 +636,45 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if host:
             expected = {f"http://{host}", f"https://{host}"}
             if origin and origin in expected:
+                _csrf_admit(request, "origin")
                 return await call_next(request)
             if referer:
                 for exp in expected:
                     if referer.startswith(exp + "/") or referer == exp:
+                        _csrf_admit(request, "referer")
                         return await call_next(request)
-        ct = request.headers.get("content-type", "")
-        if "application/json" in ct:
-            return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
-        return await call_next(request)
+        # S3：CSRF token / 同源校验均失败 → 一律拒绝（含表单/multipart），
+        # 关闭原「非 JSON 写请求直接放行」的旁路（登录等引导入口已在上方豁免）。
+        # 2026-07-31 起拒绝**必留痕**：计数进 csrf_stats（metrics/Prometheus/ops 卡）+
+        # 节流 WARNING——「人设切换失败」事故里这里静默吞了两周的 403，谁也不知道。
+        # 响应带机器可读 code：前端据此分型提示/自愈重试（重放安全：拒绝发生在业务逻辑之前）。
+        _kind = "bare"
+        try:
+            from src.web.csrf_stats import get_csrf_reject_stats
+            _stats = get_csrf_reject_stats()
+            _kind = _stats.record(
+                path=request.url.path,
+                had_cookie=bool(cookie_tok), had_header=bool(header_tok),
+                origin=origin, referer=referer,
+            )
+            try:
+                from src.web.csrf_trend import record_csrf_reject_trend
+                record_csrf_reject_trend(_kind)
+            except Exception:
+                pass
+            _ip = request.client.host if request.client else "?"
+            if _stats.should_log(f"{_ip}|{request.url.path}"):
+                logger.warning(
+                    "[CSRF] 拒绝写请求 %s %s kind=%s ip=%s ua=%.40s",
+                    request.method, request.url.path, _kind, _ip,
+                    request.headers.get("user-agent", ""),
+                )
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "CSRF token missing or invalid", "code": "csrf"},
+        )
 
     # ── HTML 页面禁缓存（防止浏览器缓存旧版模板） ──────────────
     @app.middleware("http")
@@ -366,7 +742,31 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     if "/api/rpa/intent-tags" not in _BODY_LIMIT_OVERRIDES:
         _BODY_LIMIT_OVERRIDES["/api/rpa/intent-tags"] = int(
             web_cfg.get("max_body_bytes_intent_tags_write", 4 * 1024 * 1024))
-    _BODY_LIMIT_EXEMPT_PREFIXES: tuple = tuple(web_cfg.get("max_body_exempt_prefixes", []))
+    # P4（2026-08-18）媒体翻译上传口代码级缺省：这些端点收 base64 媒体（×1.33 膨胀），
+    # 2MB 全局默认把「音频 25MB/视频 50MB/文档 10MB/图 8MB」的路由级上限拦腰斩断
+    # （实测 1.85MB 参考音 b64=2.47MB 被 413）。上限=路由级源文件上限×1.37 取整，
+    # 端点内各自的解码上限仍是第二道闸；config body_limits 可按实例覆写。
+    for _mp, _mlim in (
+        ("/api/unified-inbox/translate-voice", 36 * 1024 * 1024),
+        ("/api/unified-inbox/translate-video", 72 * 1024 * 1024),
+        ("/api/unified-inbox/translate-document-file", 16 * 1024 * 1024),
+        ("/api/unified-inbox/translate-image", 12 * 1024 * 1024),
+    ):
+        _BODY_LIMIT_OVERRIDES.setdefault(_mp, _mlim)
+    # M-3 A（#227 #229 #231，2026-09-06）：收件箱媒体上传口**代码级豁免**本闸。
+    # 事故链：send-media 是 multipart 文件上传，却一直吃 2MB 全局默认——任何 >2MB 的
+    # 图/视频在路由跑起来之前就被这里 413 + Connection:close，浏览器还在推 body 时连接
+    # 被掐（本机复现 ConnectionAbortedError 10053 / 10054），XHR 只见 onerror、后端零
+    # `[send-media]` 记录 → 坐席看到「结果未知」。98MB 视频、5MB .MOV 三平台全灭都是它，
+    # 不是格式、不是网络。该路由自带按平台/按类别的流式体积闸（media_limits，413 带
+    # 实际大小与上限），比这里的一刀切更准，故豁免而非改上限。
+    _BODY_LIMIT_CODE_EXEMPT_PREFIXES: tuple = ("/api/unified-inbox/send-media",)
+    _BODY_LIMIT_EXEMPT_PREFIXES: tuple = (
+        tuple(web_cfg.get("max_body_exempt_prefixes", []))
+        + _BODY_LIMIT_CODE_EXEMPT_PREFIXES)
+    # #316 追加（09-13）：相册 POST /api/personas/{pid}/media 与 face-ref 同 M-3
+    # 形状——2.1–2.7MB PNG 被 2MB 闸 413+Connection:close，前端记 Failed to fetch，
+    # 路由级上限其实是图 10MB / 视频 50MB。pid 不固定，走 is_persona_album_upload_path。
     # P25-B / P26-D: 413 攻击信号防抖 — 用通用 AuditThrottle
     from src.utils.audit_throttle import AuditThrottle as _AuditThrottle
     _body_oversize_throttle = _AuditThrottle(window_sec=5.0, max_keys=4096)
@@ -405,7 +805,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if request.method in ("GET", "HEAD", "OPTIONS", "DELETE"):
             return await call_next(request)
         path = request.url.path
-        if any(path.startswith(p) for p in _BODY_LIMIT_EXEMPT_PREFIXES):
+        if (any(path.startswith(p) for p in _BODY_LIMIT_EXEMPT_PREFIXES)
+                or is_persona_album_upload_path(path)):
             return await call_next(request)
         limit = _BODY_LIMIT_OVERRIDES.get(path, _BODY_LIMIT_DEFAULT)
         # 1) Content-Length 预检（快速失败，不读 body）
@@ -437,28 +838,86 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             if not msg.get("more_body", False):
                 break
         # 3) 重放给下游
+        # 回落目标必须是**替换前**的 receive，故先捕获再替换。这一行有两次
+        # 事故史，机制与判据都写在 body_replay.py 的模块 docstring 里：
+        #   · 旧实现耗尽后返回伪造的 `{"type":"http.disconnect"}` —— 普通响应
+        #     无害，但 StreamingResponse 并发跑 listen_for_disconnect 来实现
+        #     「客户端一走就停止出话」，它把伪信号当真 → 掐掉正在出话的生成器
+        #     ⇒ 小智问答 100% 在 meta 之后 0.2s 断流、前端只剩「网络异常」；
+        #   · 改成 `await request._receive()` 同样错 —— 赋值已发生，那是自调用，
+        #     967 层后 RecursionError，症状与上一种一模一样。
+        # 做成工厂后 original_receive 由闭包捕获，自引用在结构上写不出来。
         full_body = b"".join(body_chunks)
-        replayed = {"done": False}
-
-        async def replay_receive():
-            if replayed["done"]:
-                return {"type": "http.disconnect"}
-            replayed["done"] = True
-            return {"type": "http.request", "body": full_body, "more_body": False}
-
-        request._receive = replay_receive
+        request._receive = make_replay_receive(request._receive, full_body)
         return await call_next(request)
+
+    # ── M-3 A（#227）Web 层访问日志：大请求 / 慢请求 / 被拒请求一行落痕 ────────
+    # 8YNDKE 实锤：98MB 上传期间「后端零记录」——被上面 body 闸掐掉的请求不进任何路由，
+    # 日志里就像没发生过。这里在闸**外侧**（后注册＝外层）记：路径 / 声明大小 / 耗时 /
+    # 状态码，只对「值得看」的请求出声（体 ≥1MB、耗时 ≥3s、或 413/415/499/5xx），
+    # 普通 GET 轮询零噪音。挂在 logger.info（生产默认级别）而非 debug。
+    _ACCESS_LOG_MIN_BYTES = 1024 * 1024
+    _ACCESS_LOG_SLOW_SEC = 3.0
+    _ACCESS_LOG_STATUSES = {413, 415, 499}
+
+    @app.middleware("http")
+    async def upload_access_log_middleware(request: Request, call_next):
+        _t0 = time.perf_counter()
+        try:
+            _cl = int(request.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            _cl = 0
+        status = 0
+        try:
+            response = await call_next(request)
+            status = int(getattr(response, "status_code", 0) or 0)
+            return response
+        except BaseException:
+            status = 500
+            raise
+        finally:
+            _dt = time.perf_counter() - _t0
+            if (_cl >= _ACCESS_LOG_MIN_BYTES or _dt >= _ACCESS_LOG_SLOW_SEC
+                    or status in _ACCESS_LOG_STATUSES or status >= 500):
+                try:
+                    logger.info(
+                        "[http] %s %s size=%.1fMB %.2fs %s ip=%s",
+                        request.method, request.url.path, _cl / (1024 * 1024), _dt,
+                        status or "-", request.client.host if request.client else "?")
+                except Exception:
+                    pass
 
     # RBAC user store
     from src.utils.web_user_store import (WebUserStore, ROLE_MASTER, ROLE_ADMIN,
                                            ROLE_VIEWER, ROLE_AGENT, ROLE_LABELS, PAGE_PERMISSIONS,
                                            UI_MODE_SIMPLE, UI_MODE_FULL, UI_MODE_LABELS,
-                                           SIMPLE_MODE_CORE_PAGES, SIMPLE_MODE_MORE_PAGES,
-                                           resolve_ui_mode, is_page_visible_in_simple)
+                                           resolve_ui_mode)
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
     if user_store.user_count() == 0:
-        user_store._ensure_master("admin", token or "admin123")
+        if token:
+            user_store._ensure_master("admin", token)
+        else:
+            # S2：不再使用可爆破的默认口令 admin123。随机生成一次性 master 口令，
+            # 落盘到数据根（仅本机可读）；运维首次登录后应立即改密（/api/change-password）。
+            _seed_pw = _secrets.token_urlsafe(12)
+            user_store._ensure_master("admin", _seed_pw)
+            try:
+                _seed_path = cfg_dir / "first_run_credential.txt"
+                _seed_path.write_text(
+                    "username: admin\npassword: " + _seed_pw + "\n"
+                    "# 首次登录后请立即修改密码，随后可删除本文件。\n",
+                    encoding="utf-8",
+                )
+                logger.warning(
+                    "[SECURITY] 首次启动已生成随机 master 口令，见 %s（登录后请立即改密）",
+                    _seed_path,
+                )
+            except Exception:
+                logger.warning(
+                    "[SECURITY] 首次启动已生成随机 master 口令（落盘失败）；"
+                    "如无法登录请用 scripts 重置口令。"
+                )
 
     # SSE 配置热更新推送（端点注册在 _api_auth 之后，见下方）
     import asyncio as _asyncio
@@ -477,13 +936,49 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     config_manager.on_reload(_apply_branding_globals)
 
     from src.web.web_i18n import get_translations
+    # UI 语言白名单/locale/系统语言协商——单一事实源（xlate P3 / 自动跟随 2026-08-27）
+    from src.web.i18n_packs import (
+        UI_LANGS, UI_LOCALES, UI_LANG_NATIVE, negotiate_ui_lang, primary_lang_tag,
+    )
+
+    from src.web.ui_lang_stats import get_ui_lang_stats
+    _ui_lang_stats = get_ui_lang_stats()
+    _UI_LANG_STATS_SKIP = ("/static", "/copilot", "/i18n", "/favicon")
 
     @app.middleware("http")
     async def inject_i18n(request: Request, call_next):
-        lang = request.query_params.get("lang") or request.cookies.get("ui_lang", "zh")
-        if lang not in ("zh", "en", "vi"):
-            lang = "zh"
+        # 语言链：?lang=（显式压制）→ ui_lang cookie（显式选择/登录回填）→
+        # Accept-Language 系统语言推断（跟随而非固化：不落 cookie，浏览器/系统
+        # 换语言界面即跟走；显式选过一次则 cookie 永远先手）→ zh。
+        # 逐级独立校验：脏 ?lang= 落到 cookie 而非直接跳推断（旧实现 or 串联会
+        # 让垃圾 query 吞掉合法 cookie）。
+        _q = request.query_params.get("lang")
+        _c = request.cookies.get("ui_lang")
+        if _q in UI_LANGS:
+            lang, _src = _q, "query"
+        elif _c in UI_LANGS:
+            lang, _src = _c, "cookie"
+        else:
+            _al = request.headers.get("accept-language", "")
+            _neg = negotiate_ui_lang(_al)
+            lang, _src = (_neg, "negotiated") if _neg else ("zh", "default")
+        try:
+            if not request.url.path.startswith(_UI_LANG_STATS_SKIP):
+                _ui_lang_stats.record(_src, lang)
+                # 「想要却没有」：推断落空但浏览器确实声明了语言 → 记需求分布
+                if _src == "default" and _al:
+                    _ui_lang_stats.record_unsupported(primary_lang_tag(_al))
+                # URL 钉住 ≠ 用户选择：本次切语言事故最直接的暴露信号
+                # （/set_lang?lang=X 自身天然 query≠旧 cookie，不算冲突）
+                if (_src == "query" and _c in UI_LANGS and _c != lang
+                        and request.url.path.rstrip("/") != "/set_lang"):
+                    _ui_lang_stats.record_conflict(lang, _c)
+        except Exception:
+            pass  # 观测绝不干扰请求
         request.state.ui_lang = lang
+        # 语言来源随上下文下发（2026-09-12）：语言菜单的 ✓/「跟随系统」状态据此画，
+        # 不再各自猜（此前 ✓ 看 query 派生的 WS_LANG、跟随态看 cookie 有无，可同真同假）。
+        request.state.ui_lang_src = _src
         request.state.i18n = get_translations(lang)
         # 配置热重载检查点：check_and_hot_reload 原本只挂在 Telegram 消息循环——
         # 没进站消息的静默期改 config/overlay 永不生效。此处补 web 侧触发；
@@ -502,6 +997,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     _PATH_TO_ACTIVE = {
         "/": "dash", "/templates": "tpl",
+        # ops_overview P1 挂壳（2026-08-03）：/admin/ops 继承 base.html 后侧栏需高亮
+        "/admin/ops": "ops",
+        # 报障工单处置页（实施81 P0-2）
+        "/admin/bug-tickets": "bug_tickets",
         "/strategies": "strategies", "/strategy-analytics": "strategy-analytics",
         "/audit": "audit", "/diff": "diff", "/logs": "logs",
         "/analytics": "analytics", "/help": "help", "/users": "users",
@@ -517,12 +1016,46 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/rpa-overview": "rpa_overview",
         "/funnel": "funnel",
         "/personas": "personas",
+        "/singing": "singing",
         "/ai-studio": "ai_studio",
+        "/membership": "membership",
+        "/reply-settings": "reply_settings",
+        "/model-keys": "model_keys",
+        "/personal-settings": "personal_settings",
+        # 账号资产中心（账号资产保全 P1，2026-08-19）
+        "/workspace/assets": "asset_center",
     }
     for _dp in domain_web_pages:
         _PATH_TO_ACTIVE[_dp["path"]] = _dp["key"]
 
     old_render = templates.TemplateResponse
+
+    # 坐席规模快照（实施49 P1-6/B13 · Q-30 A #309 #310 改判据）：60s TTL——第二个坐席登录
+    # 后最迟下一分钟刷新页面即出现「认领」。判据＝显式 ui_visibility.seat_mode（设置页
+    # 「多坐席协作」开关）→ agent_coordinator presence 近 30 分钟 ≥2 个不同坐席在线 → 否则
+    # single。**不再看用户表行数**（客户机 admin + 坐席两个账号一律被判 multi，B13 的单坐席
+    # 守卫全被绕过＝「点开即认领 · 处理中 · 释放认领」的根因）。
+    _seat_snap = {"ts": 0.0, "multi": False}
+
+    def _multi_seat_now() -> bool:
+        import time as _t
+        try:
+            from src.web.ui_visibility import SEAT_PRESENCE_WINDOW_SEC, is_multi_seat
+            if _t.time() - _seat_snap["ts"] > 60:
+                _presence = None
+                try:
+                    _store = getattr(app.state, "inbox_store", None)
+                    if _store is not None and hasattr(_store, "list_agent_presence"):
+                        _presence = _store.list_agent_presence(
+                            active_within_sec=SEAT_PRESENCE_WINDOW_SEC)
+                except Exception:
+                    _presence = None
+                _seat_snap["multi"] = is_multi_seat(
+                    getattr(config_manager, "config", None), None, _presence)
+                _seat_snap["ts"] = _t.time()
+            return bool(_seat_snap["multi"])
+        except Exception:
+            return False   # 取不到数据一律 single：显式开关（多坐席协作）一键可救，误判 multi 才是 #309
 
     def _enrich_context(request: Request, context: dict) -> dict:
         """向模板上下文注入 i18n / 用户身份 / active 导航 / ui_mode 等公共字段"""
@@ -533,6 +1066,26 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             ui_lang = getattr(request.state, "ui_lang", ui_lang)
         context.setdefault("i18n", i18n)
         context.setdefault("ui_lang", ui_lang)
+        # query / cookie / negotiated / default（语言菜单状态单源；老进程缺省空串 → 模板回落旧判定）
+        context.setdefault("ui_lang_src", getattr(getattr(request, "state", None), "ui_lang_src", "") or "")
+        # BCP-47 locale（<html lang>/日期本地化用；消费 UI_LOCALES 单一事实源，
+        # 此前 login.html 等页写死 zh-CN/en-US 二元——扩展语拿错 locale）
+        context.setdefault("ui_locale", UI_LOCALES.get(ui_lang, "zh-CN"))
+        # 当前语言母语自称（切换入口的「(中文)」尾注；base/login/setup 统一用它替代二元 EN/ZH）
+        context.setdefault("ui_lang_native", UI_LANG_NATIVE.get(ui_lang, ui_lang))
+        # 各语种词条覆盖率 {lang: 0..1}：语言菜单据此自动挂 β / 覆盖说明，不再手写
+        try:
+            from src.web.web_i18n import get_ui_lang_coverage
+            context.setdefault("ui_lang_coverage", get_ui_lang_coverage())
+        except Exception:
+            context.setdefault("ui_lang_coverage", {})
+        # 词典指纹 → _i18n_bootstrap.html 走外链词典包（/i18n/ws-i18n.js?v=fp，
+        # immutable 缓存；P2 传输减重）。异常时不注入 → 模板自动回落内联词典。
+        try:
+            from src.web.web_i18n import get_translations_fingerprint
+            context.setdefault("i18n_fp", get_translations_fingerprint(ui_lang))
+        except Exception:
+            pass
         session_role = ""
         try:
             session_role = request.session.get("role", "")
@@ -569,16 +1122,92 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         effective_mode = resolve_ui_mode(cookie_mode, session_role)
         context.setdefault("ui_mode", effective_mode)
         context.setdefault("ui_mode_labels", UI_MODE_LABELS)
-        context.setdefault("simple_core_pages", SIMPLE_MODE_CORE_PAGES)
-        context.setdefault("simple_more_pages", SIMPLE_MODE_MORE_PAGES)
         context.setdefault("domain_name", domain_name)
         context.setdefault("domain_web_pages", domain_web_pages)
         context.setdefault("domain_dashboard_widgets", domain_dashboard_widgets)
 
+        # ── 部署形态 + 开发者模式（L-4 A 2026-09-06，D-L2）────────────
+        # ui_flavor：client / partner / internal（ui_visibility.resolve_ui_flavor）；
+        # ui_developer_mode：session 级（/developer 密码闸内开关，退出即关）；
+        # ui_client_hide：client 形态且未开开发者模式＝「用户版隐藏」生效——模板藏
+        # 研发/代理商面（settings 三卡、help/strategies/singing/voice_eval 页内入口、
+        # L-2 人设页三处）都读这一个布尔，与下方导航剔除同口径。异常回落
+        # internal / False（fail-internal：不误藏内部机器的入口）。
+        _ui_flavor, _ui_dev_mode, _ui_client_hide = "internal", False, False
+        try:
+            from src.web.ui_visibility import (client_hide_active,
+                                               resolve_developer_mode,
+                                               resolve_ui_flavor)
+            _ui_cfg = getattr(config_manager, "config", None)
+            _ui_flavor = resolve_ui_flavor(_ui_cfg)
+            try:
+                _ui_dev_mode = resolve_developer_mode(request.session)
+            except Exception:
+                _ui_dev_mode = False
+            _ui_client_hide = client_hide_active(_ui_cfg, _ui_dev_mode)
+        except Exception:
+            pass
+        context.setdefault("ui_flavor", _ui_flavor)
+        context.setdefault("ui_developer_mode", _ui_dev_mode)
+        context.setdefault("ui_client_hide", _ui_client_hide)
+
         # ── 侧栏导航单源数据(nav_schema)──────────────────────
+        # 融合实例 P1/P3：传 config 让档位锁定项渲染锁标（gate 关 = 静态全量，零变化）
         from src.web.nav_schema import get_nav_context
-        for _k, _v in get_nav_context().items():
+        for _k, _v in get_nav_context(
+                getattr(config_manager, "config", None),
+                developer_mode=_ui_dev_mode).items():
             context.setdefault(_k, _v)
+
+        # ── 内部功能界面显隐(ui_visibility 单源，2026-08-14)────────
+        # 模板消费 ui_vis.{manual_console,group_extract,matrix_nav,group_show,
+        # team_collab,ai_settings}（缺省全 False=隐藏；开发者页 /developer 按键
+        # 开启走 overlay 热重载）。
+        try:
+            from src.web.ui_visibility import resolve_ui_visibility
+            context.setdefault("ui_vis", resolve_ui_visibility(
+                getattr(config_manager, "config", None)))
+        except Exception:
+            context.setdefault("ui_vis", {})
+        # 部署形态旗标（J-4 G 2026-09-05）：client 形态（桌面包 AITR_DESKTOP_MODE /
+        # app.desktop_mode / ui_visibility.flavor=client）→ 模板据此不渲染只有内部
+        # 运维能处置的 nag（首个消费方 _alertlink_connect.html 的「告警通道未接通」）。
+        # 判定单源 ui_visibility.is_client_flavor（与导航隐藏同口径）；异常回落
+        # False＝不隐藏，与 resolve_ui_flavor 的 fail-internal 方向一致。
+        try:
+            from src.web.ui_visibility import is_client_flavor
+            context.setdefault("ui_client_flavor", bool(is_client_flavor(
+                getattr(config_manager, "config", None))))
+        except Exception:
+            context.setdefault("ui_client_flavor", False)
+
+        # 坐席规模：单人部署藏「认领/释放」协作原语（B13）；藏而不废，API 不封。
+        context.setdefault("ws_multi_seat", _multi_seat_now())
+
+        # ── 档位徽章(P3)：仅 feature_gate 开启时出现在顶栏,默认部署零变化 ──
+        # L-4 B（#197 / D-L7）授权口径同源：徽标与系统设置「授权」卡、/api/admin/license
+        # 都读 gate_snapshot 的 plan + plan_source。plan_override（内测种子 flagship）
+        # 生效而无授权文件时，徽标不再裸显「旗舰版」，改 mb_plan_<plan>_override
+        # （「旗舰版（厂商自营）」）——两面从此说同一句话。
+        try:
+            from src.licensing.feature_gate import badge_label_key as _fg_lk
+            from src.licensing.feature_gate import gate_enabled as _fg_on
+            from src.licensing.feature_gate import gate_snapshot as _fg_snap
+            _fg_cfg = getattr(config_manager, "config", None)
+            if _fg_on(_fg_cfg):
+                _snap = _fg_snap(_fg_cfg)
+                _plan = str(_snap.get("plan") or "community")
+                _src = str(_snap.get("plan_source") or "community")
+                context.setdefault(
+                    "plan_badge",
+                    {"plan": _plan, "label_key": _fg_lk(_plan, _src), "source": _src})
+            else:
+                # 显式占位 None：templates 是模块级单例，多次 create_app 会层层
+                # 叠 i18n_render 包装（测试常态）——条件性缺席的键会被旧 app 闭包
+                # 的 setdefault 补上（陈旧档位徽章漏进本 app 渲染）。占位即封口。
+                context.setdefault("plan_badge", None)
+        except Exception:
+            pass
 
         # ── 悬浮提示词典单源数据(help_terms,原 base.html 内联 TERM_DICT)──
         from src.web.help_terms import get_help_terms
@@ -638,11 +1267,47 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             return None
 
     @app.get("/set_lang")
-    async def set_lang(request: Request, lang: str = "zh"):
-        resp = RedirectResponse(request.headers.get("referer", "/"), status_code=303)
-        resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
-        # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
-        if lang in ("zh", "en", "vi"):
+    async def set_lang(request: Request, lang: str = "zh", next: str = ""):
+        # 回跳地址剥掉 ?lang=（2026-09-12）：中间件 ?lang= > cookie，桌面壳首帧又把
+        # ?lang= 钉在 /workspace 上——原样回 Referer 等于让旧 query 再压一次刚写的
+        # cookie，「切了不生效」。剥掉后 cookie 生效，其余参数（theme/next…）保留。
+        # 页面可显式传 next=path?query#hash（wsToggleLang 传当前地址）保住 hash 路由位。
+        from src.web.login_redirect import set_lang_redirect_target
+        resp = RedirectResponse(
+            set_lang_redirect_target(request.headers.get("referer", ""), next or None),
+            status_code=303)
+        # 切换遥测：切到哪 + 5 分钟内切回（语种放弃信号）。会话键取用户名/会话 cookie 的短哈希，不存原值。
+        try:
+            if lang == "auto" or lang in UI_LANGS:
+                import hashlib
+                _sid_src = ""
+                try:
+                    _sid_src = request.session.get("username", "") or ""
+                except Exception:
+                    _sid_src = ""
+                _sid_src = _sid_src or request.cookies.get("session", "") or ""
+                _sid = hashlib.sha1(_sid_src.encode("utf-8", "ignore")).hexdigest()[:12] if _sid_src else ""
+                # 「切换前」语言只能信 cookie（本请求 ?lang= 就是目标语，state.ui_lang 已被它占）
+                _from = request.cookies.get("ui_lang", "") or "auto"
+                _ui_lang_stats.record_switch(_sid, _from, lang)
+        except Exception:
+            pass  # 观测绝不干扰切换
+        # auto = 回到「跟随系统」（2026-08-27）：删 cookie + 清落库偏好 →
+        # 中间件按 Accept-Language 推断，坐席换系统语言界面即跟走。
+        if lang == "auto":
+            resp.delete_cookie("ui_lang")
+            try:
+                _uname = request.session.get("username", "")
+                if _uname:
+                    user_store.set_lang(_uname, "")
+            except Exception:
+                pass
+            return resp
+        # 白名单内才写 cookie（此前无条件写——脏值 cookie 会让中间件误判
+        # 「有显式选择」的语义边界；现在脏值=纯 no-op 重定向）。
+        if lang in UI_LANGS:
+            resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
+            # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
             try:
                 _uname = request.session.get("username", "")
                 if _uname:
@@ -668,6 +1333,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             redirect_to = "/cases"
         resp = RedirectResponse(redirect_to, status_code=303)
         resp.set_cookie("ui_mode", mode, max_age=365 * 86400)
+        # 观察期读数（2026-08-03 简洁模式精简）：两周内 grep app.log 的 [ui-mode]
+        # 看「切完整模式找功能」的频次，评估精简/兜底是否到位；纯日志零新基建。
+        try:
+            logger.info("[ui-mode] switch -> %s (user=%s role=%s to=%s)",
+                        mode, request.session.get("username", "?"),
+                        request.session.get("role", "?"), redirect_to)
+        except Exception:
+            pass
         return resp
 
     def _check_session_valid(request: Request) -> bool:
@@ -686,22 +1359,33 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         return (path.startswith("/api/unified-inbox")
                 or path.startswith("/api/workspace")
                 or path.startswith("/api/drafts")
-                or path.startswith("/api/voice/tts-test"))
+                or path.startswith("/api/voice/tts-test")
+                # AI 助手悬浮球（2026-08-19）：坐席可问答/报障
+                or path.startswith("/api/assistant")
+                # 客服支持通道（2026-08-20 P1-9）：机器码自查 + 一键诊断直传。
+                # 报障的主力恰恰是坐席，而诊断直传原先只挂在 /api/admin/* 下
+                # → 坐席点了必 403。刻意另起 support 命名空间而非放开 admin 前缀。
+                or path.startswith("/api/support")
+                # 顺修存量缺陷：坐席前端错误 beacon 此前被 403 静默丢失
+                or path.startswith("/api/telemetry"))
 
     def _require_auth(request: Request):
         # 无用户且无 token → 引导至首次设置向导
         if user_store.user_count() == 0 and not token:
             raise HTTPException(status_code=303, headers={"Location": "/setup"})
+        from src.web.login_redirect import login_redirect_location
+        _login_loc = login_redirect_location(
+            request.url.path or "/", request.url.query or "")
         if request.session.get("user_id"):
             if not _check_session_valid(request):
                 request.session.clear()
-                raise HTTPException(status_code=303, headers={"Location": "/login"})
+                raise HTTPException(status_code=303, headers={"Location": _login_loc})
         elif token and request.session.get("auth") == token:
             if not _check_session_valid(request):
                 request.session.clear()
-                raise HTTPException(status_code=303, headers={"Location": "/login"})
+                raise HTTPException(status_code=303, headers={"Location": _login_loc})
         else:
-            raise HTTPException(status_code=303, headers={"Location": "/login"})
+            raise HTTPException(status_code=303, headers={"Location": _login_loc})
         # 已认证：agent 角色只能停留在工作台，其余页面一律跳回 /workspace
         if request.session.get("role", "") == ROLE_AGENT:
             path = request.url.path.rstrip("/") or "/"
@@ -719,13 +1403,35 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 raise HTTPException(status_code=401, detail="Session 已失效，请重新登录")
             _agent_guard()
             return
+        # S1：空 auth_token 不再 fail-open。仅「全新安装（尚无任何用户）+ 本机请求」
+        # 放行，供 /setup 向导创建首个 master；其余一律 401（消除 API 裸奔）。
         if not token:
-            return
+            _ch = request.client.host if request.client else ""
+            if user_store.user_count() == 0 and _ch in ("127.0.0.1", "::1", "localhost"):
+                return
+            raise HTTPException(status_code=401, detail="Unauthorized")
         auth_header = request.headers.get("Authorization", "")
-        if auth_header == f"Bearer {token}":
+        if hmac.compare_digest(auth_header, f"Bearer {token}"):
+            # 管理员令牌 = 本机桌面壳 / 运维脚本的主管身份。不写 session（无 cookie），
+            # 由 _is_supervisor 认 request.state.auth_via_admin_token，否则启停副驾等
+            # 主管端点会对 Bearer 一律 403（2026-09-19 托盘联调实锤）。
+            try:
+                request.state.auth_via_admin_token = True
+            except Exception:
+                pass
             return
+        # worker 窄令牌：只放行 /api/internal/*（协议侧车的全部所需），其余一律 403。
+        # 刻意用 403 而不是 401：令牌是真的、只是越权，说「没认证」会让排障的人去查
+        # 令牌对不对，而真正该看的是「这个端点不在 worker 的授权面里」。
+        # 未配置（worker_token 为空）时本分支永不进入 = 与改动前逐字节等价。
+        if worker_token and hmac.compare_digest(auth_header, f"Bearer {worker_token}"):
+            if request.url.path.startswith("/api/internal/"):
+                return
+            raise HTTPException(
+                status_code=403,
+                detail="worker 令牌仅授权 /api/internal/*，此端点需管理员令牌")
         sess = request.session.get("auth")
-        if sess == token:
+        if sess and hmac.compare_digest(str(sess), str(token)):
             if not _check_session_valid(request):
                 request.session.clear()
                 raise HTTPException(status_code=401, detail="Session 已失效，请重新登录")
@@ -747,6 +1453,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # 主管专属端点仍由各路由内部 _is_supervisor 守卫。
     app.state.api_auth = _api_auth
     app.state.require_role = _require_role
+    # P2（2026-08-16 管理面改造）：暴露用户存储——路由层能力守卫（按人权限覆写
+    # resolve_user_perm）与坐席额度闸（check_request_quota 查 monthly_char_quota）
+    # 都要按登录身份查 web_users 行；缺失时守卫一律 fail-open（宁可漏拦不误伤）。
+    app.state.user_store = user_store
 
     _PATH_TO_PAGE = {
         "/": "dash", "/templates": "tpl", "/templates/update": "tpl",
@@ -763,6 +1473,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/monetization": "monetization",
         "/line-rpa": "line_rpa",
         "/workspace": "workspace",
+        # 自动回复设置页与「回复策略」同受众（master/admin），共用权限键
+        "/reply-settings": "strategies",
     }
     for _dp in domain_web_pages:
         _PATH_TO_PAGE[_dp["path"]] = _dp["key"]
@@ -840,15 +1552,75 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             "auth_user 路由注册失败", exc_info=True
         )
 
+    # ── 企业微信成员扫码登录（实施97 P1：wecom_login.enabled 才会在登录页出现按钮；恒注册） ──
+    try:
+        from src.web.routes.wecom_login_routes import register_wecom_login_routes
+
+        register_wecom_login_routes(app, user_store=user_store, config_manager=config_manager,
+                                    templates=templates)
+    except Exception:
+        import logging as _log_ww
+
+        _log_ww.getLogger("admin").debug("企业微信登录路由注册跳过", exc_info=True)
+
     # ── C0-1 授权状态只读 API ──────────────────────────────
     try:
         from src.web.routes.license_routes import register_license_routes
 
-        register_license_routes(app, api_auth=_api_auth)
+        register_license_routes(app, api_auth=_api_auth,
+                                config_manager=config_manager)
     except Exception:
         import logging as _log_lic
 
         _log_lic.getLogger("admin").warning("license 路由注册失败", exc_info=True)
+
+    # ── 融合实例 P3：会员中心（档位/矩阵/用量/到期）─────────
+    try:
+        from src.web.routes.membership_routes import register_membership_routes
+
+        register_membership_routes(
+            app, templates=templates, page_auth=_page_auth,
+            api_auth=_api_auth, config_manager=config_manager,
+            user_store=user_store)
+    except Exception:
+        import logging as _log_mb
+
+        _log_mb.getLogger("admin").warning("membership 路由注册失败", exc_info=True)
+
+    # ── WP-2 首启向导 /welcome 与 WP-7 坐席新手任务已退役（2026-08-31 新手引导删除）：
+    #    路由不再注册（访问=404）；模块文件与状态文件的物理清理见二期批。──
+
+    # ── WP-4：合规只读导出（危机转介计数 + 开关回显；写入面在危机处置链打点）──
+    try:
+        from src.web.routes.compliance_routes import register_compliance_routes
+
+        register_compliance_routes(
+            app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cmp
+
+        _log_cmp.getLogger("admin").warning("compliance 路由注册失败", exc_info=True)
+    # 合规开关的进程级读取面（persona_manager prompt 组装等消费点惰性读；
+    # provider 指向实时合并配置=跟随 overlay 热重载；失败=开关恒关，零风险）
+    try:
+        from src.compliance.runtime import set_config_provider
+
+        set_config_provider(
+            lambda: getattr(config_manager, "config", None) or {})
+    except Exception:
+        pass
+    # 出站策略单一开关 outbound.unlimited_mode（2026-09-04）：与合规读取面同范式，
+    # skill 冷却 / S5 概率 / 主动触达叠加降频 / 各日配额消费点惰性读实时配置。
+    try:
+        from src.ops.outbound_policy import (
+            set_config_provider as _set_outbound_cfg_provider,
+        )
+
+        _set_outbound_cfg_provider(
+            lambda: getattr(config_manager, "config", None) or {})
+    except Exception:
+        pass
+
 
     # ── C1-1 白标品牌设置 API ──────────────────────────────
     try:
@@ -891,6 +1663,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_care.getLogger("admin").warning("care 路由注册失败", exc_info=True)
 
+    # ── Q-4 #267 F：升级首开「这版改变了什么」弹窗 API（/api/release-notice*）──
+    try:
+        from src.web.routes.release_notice_routes import register_release_notice_routes
+
+        register_release_notice_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_rn
+
+        _log_rn.getLogger("admin").warning("release-notice 路由注册失败", exc_info=True)
+
     # ── 多平台 deferred 队列·运营可观测 API（/api/deferred-outbox/status）──
     try:
         from src.web.routes.deferred_outbox_routes import (
@@ -902,6 +1684,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_dob
 
         _log_dob.getLogger("admin").warning("deferred-outbox 路由注册失败", exc_info=True)
+
+    # （外链 i18n 词典包 /i18n/ws-i18n.js 与静态壳切片 /api/i18n/bundle 同在
+    #   i18n_bundle_routes 模块，由下方既有的 register_i18n_bundle_routes 一次挂载。）
 
     # ── platform/leadbus 线索接收承接端 API（/api/leadbus/ingest、/status）──
     # 无界融合期新增（2026-07 S1）：上游获客(智控王/huoke)经 platform/leadbus 契约
@@ -971,7 +1756,20 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_ccap
 
-        _log_ccap.getLogger("admin").warning("companion capability 看板路由注册失败", exc_info=True)
+        _log_ccap.getLogger(__name__).warning(
+            "companion capability routes 注册失败", exc_info=True)
+
+    # ── 被骂回怼治理 API（/api/companion/temper/*）────────────────────
+    try:
+        from src.web.routes.temper_routes import register_temper_routes
+
+        register_temper_routes(
+            app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_temper
+
+        _log_temper.getLogger(__name__).warning(
+            "temper 治理路由注册失败", exc_info=True)
 
     # 系统状态/指标/reactivation dry-run/审计热力图 已抽到 routes/monitoring_routes.py（批 G2-①）
     # （register_monitoring_routes 在 _admin_ctx + kb_store 就绪后调用，见下方 learner 注册附近）
@@ -1028,9 +1826,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             rates_data = config_manager.get_exchange_rates_config() or {}
             channels = rates_data.get("channels", {})
 
+            # 多取一些原始行供展示层聚合（批量操作逐条记账 → 折叠成一行 ×N）
             recent_audit = []
             if audit_store:
-                recent_audit = audit_store.query(limit=10)
+                recent_audit = audit_store.query(limit=60)
 
             _has_ch_widget = any(w.get("key") == "channel_health" for w in domain_dashboard_widgets)
             health = []
@@ -1038,27 +1837,38 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 from src.utils.channel_health import compute_health_scores
                 health = compute_health_scores(channels, event_tracker)
 
-            recent_ops = []
-            for e in recent_audit:
-                recent_ops.append({
-                    "action": e.get("action", ""),
-                    "operator": e.get("user_id", ""),
-                    "channel": e.get("target", ""),
-                    "ts": e.get("ts", ""),
-                })
-            return tpl_data, channels, recent_ops, health
+            # 聚合 + 按日分段 + 今日摘要（纯函数，见 src/web/audit_display.py）
+            from src.web.audit_display import (
+                build_recent_groups, group_days, summarize_actions,
+            )
+            _today = time.strftime("%Y-%m-%d")
+            _yesterday = time.strftime(
+                "%Y-%m-%d", time.localtime(time.time() - 86400))
+            recent_op_days = group_days(
+                build_recent_groups(recent_audit, max_groups=8),
+                today=_today, yesterday=_yesterday)
+            audit_today = {"total": 0, "danger": 0}
+            if audit_store:
+                audit_today = summarize_actions(
+                    audit_store.actions_since(_today + " 00:00:00"))
+            return tpl_data, channels, recent_op_days, audit_today, health
 
-        tpl_data, channels, recent_ops, health = await _aio.to_thread(_build_dashboard_data)
+        (tpl_data, channels, recent_op_days, audit_today,
+         health) = await _aio.to_thread(_build_dashboard_data)
 
         uptime = int(time.time() - boot_ts) if boot_ts else 0
         hours, remainder = divmod(uptime, 3600)
         mins, secs = divmod(remainder, 60)
         uptime_str = f"{hours}h {mins}m {secs}s"
 
+        from src.web.audit_display import operator_display_names
+
         return templates.TemplateResponse(request, "dashboard.html", {
             "templates": tpl_data,
             "channels": channels,
-            "recent_ops": recent_ops,
+            "recent_op_days": recent_op_days,
+            "audit_today": audit_today,
+            "operator_names": operator_display_names(user_store),
             "uptime": uptime_str,
             "uptime_hours": hours,
             "template_count": len(tpl_data),
@@ -1086,7 +1896,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if ok:
             config_manager.invalidate_templates_cache()
             actor = request.session.get("username", "web_admin")
-            _auto_snapshot("templates", snap_content, actor)
+            snap_id = _auto_snapshot("templates", snap_content, actor) or ""
+            if audit_store:
+                audit_store.log(actor, "update_template", key, "",
+                                (value or "")[:100], snap_id)
             import asyncio as _asyncio
             try:
                 _asyncio.get_running_loop().create_task(_fire_webhook(
@@ -1117,6 +1930,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         merged.update(getattr(app.state, "intent_display_names_extra", {}))
         return merged
 
+    # ── 浏览器环境体检（P2：写通道/时钟/构建戳零副作用探针，golive 页消费）──
+    try:
+        from src.web.routes.preflight_routes import register_preflight_routes
+        register_preflight_routes(app, auth_dep=_api_auth)
+    except Exception:
+        import logging as _log_pf
+        _log_pf.getLogger("admin").warning("preflight 路由注册失败", exc_info=True)
+
     # ── Persona Studio (/personas) ───────────────────────────
     try:
         from src.web.routes.persona_routes import register_persona_routes
@@ -1127,6 +1948,35 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_pr
         _log_pr.getLogger("admin").debug("Persona API 路由注册跳过", exc_info=True)
 
+    # ── Persona doc import（「从文档创建人设」LLM 抽取）──────
+    try:
+        from src.web.routes.persona_import_routes import register_persona_import_routes
+        register_persona_import_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pi
+        _log_pi.getLogger("admin").debug("Persona 文档导入路由注册跳过", exc_info=True)
+
+    # ── Persona quiz（人设一致性考题：档案出题 → 真人设 prompt 实测 → 判分）──
+    try:
+        from src.web.routes.persona_quiz_routes import register_persona_quiz_routes
+        register_persona_quiz_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pq
+        _log_pq.getLogger("admin").debug("Persona 考题路由注册跳过", exc_info=True)
+
+    try:
+        from src.web.routes.persona_proposal_routes import register_persona_proposal_routes
+        register_persona_proposal_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pp
+        _log_pp.getLogger("admin").debug("Persona 补丁提案路由注册跳过", exc_info=True)
+
     try:
         from src.web.routes.persona_media_routes import register_persona_media_routes
         register_persona_media_routes(
@@ -1136,6 +1986,104 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_pm
         _log_pm.getLogger("admin").debug("Persona media 路由注册跳过", exc_info=True)
+
+    # ── #333 视觉记忆（客户图里是谁）：查看 / 确认 / 否认 / 退休 / 整会话删 ──
+    try:
+        from src.web.routes.visual_memory_routes import register_visual_memory_routes
+        register_visual_memory_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_vm
+        _log_vm.getLogger("admin").debug("视觉记忆路由注册跳过", exc_info=True)
+
+    # ── 表情包（贴纸）：包/条目管理 + 收藏入包 + 官方包播种 + 跨平台发送 ──
+    try:
+        from src.web.routes.sticker_routes import register_sticker_routes
+        register_sticker_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_stk
+        _log_stk.getLogger("admin").debug("表情包路由注册跳过", exc_info=True)
+
+    # ── Telegram 群成员提取（工具箱）：多号限速拉群成员入库 + 每日配额 ──
+    try:
+        from src.web.routes.group_members_routes import register_group_members_routes
+        register_group_members_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_gm
+        _log_gm.getLogger("admin").debug("Telegram 群成员提取路由注册跳过", exc_info=True)
+
+    # ── 工具箱「AI 生成图片」（cp-image）：坐席手动出图 → VLM 后验 → 发送/存册 ──
+    try:
+        from src.web.routes.image_gen_routes import register_image_gen_routes
+        register_image_gen_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_img
+        _log_img.getLogger("admin").debug("AI 生成图片路由注册跳过", exc_info=True)
+
+    # ── 工具箱「智能养号」（cp-nurture）：机群养护状态 + 用户自配养护方案 ──
+    try:
+        from src.web.routes.nurture_routes import register_nurture_routes
+        register_nurture_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_nur
+        _log_nur.getLogger("admin").debug("智能养号路由注册跳过", exc_info=True)
+
+    # ── 营销目标（marketing goals）：会话级工作目标 CRUD + settle-on-read 视图 ──
+    try:
+        from src.web.routes.goal_routes import register_goal_routes
+        register_goal_routes(app, auth_dep=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_goal
+        _log_goal.getLogger("admin").warning("营销目标路由注册失败", exc_info=True)
+
+    # ── 静态壳 i18n bundle（D1）：/copilot/app.html 等无 Jinja 宿主按前缀拉词典切片 ──
+    try:
+        from src.web.routes.i18n_bundle_routes import register_i18n_bundle_routes
+        register_i18n_bundle_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_i18nb
+        _log_i18nb.getLogger("admin").warning("i18n bundle 路由注册失败", exc_info=True)
+
+    # ── 功能总览（feature center）：交付注册表驱动的能力清单 + overlay 开关 ──
+    try:
+        from src.web.routes.feature_center_routes import register_feature_center_routes
+        register_feature_center_routes(
+            app, auth_dep=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_fc
+        _log_fc.getLogger("admin").warning("功能总览路由注册失败", exc_info=True)
+
+    # ── 内部功能界面显隐（2026-08-14）：桌面壳 ui-flags + 开发者页写开关 ──
+    try:
+        from src.web.routes.ui_visibility_routes import register_ui_visibility_routes
+        register_ui_visibility_routes(
+            app, auth_dep=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_uiv
+        _log_uiv.getLogger("admin").warning("ui_visibility 路由注册失败", exc_info=True)
+
+    # ── 人设声音评测台（2026-08-19 由 tmp_voice_eval 转正）：试听/评分/替换候选 ──
+    try:
+        from src.web.routes.voice_eval_routes import register_voice_eval_routes
+        register_voice_eval_routes(
+            app, page_auth=_page_auth, api_auth=_api_auth, templates=templates)
+    except Exception:
+        import logging as _log_vev
+        _log_vev.getLogger("admin").warning("voice_eval 路由注册失败", exc_info=True)
 
     @app.get("/personas", response_class=HTMLResponse)
     async def personas_page(request: Request, _=Depends(_page_auth)):
@@ -1162,6 +2110,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             "personas_cfg": personas_from_cfg,
             "tg_accounts": tg_accounts_stats,
         })
+
+    # ── 歌房（实施58 P1：人设清唱能力管理——开关/备货试听/曲库/声库）──
+    @app.get("/singing", response_class=HTMLResponse)
+    async def singing_page(request: Request, _=Depends(_page_auth)):
+        return templates.TemplateResponse(request, "singing.html", {})
 
     # ── AI 工作室 (/ai-studio) — 4-Tab 集中入口 ─────────────────────
     @app.get("/ai-studio", response_class=HTMLResponse)
@@ -1190,7 +2143,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         # 情景记忆
         try:
-            sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+            from src.web.web_context import resolve_skill_manager
+            sm = resolve_skill_manager(telegram_client, app)
             store = getattr(sm, "_episodic_store", None) if sm else None
             if store and store._conn:
                 row = store._conn.execute(
@@ -1205,15 +2159,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         except Exception:
             pass
 
-        # KB 草稿统计
+        # KB 草稿统计（AI 客户端走回落链且可缺席——统计是纯 DB 读）
         try:
-            from src.utils.daily_learner import DailyLearner as _DL
+            from src.utils.daily_learner import DailyLearner as _DL, resolve_learner_ai as _rla
             learner = getattr(app.state, "_daily_learner", None)
             if learner is None:
-                ai = getattr(telegram_client, "ai_client", None) if telegram_client else None
                 kb = getattr(app.state, "kb_store", None)
-                if ai and kb:
-                    learner = _DL(kb, ai, db_path=getattr(app.state, "kb_db_path", None) or kb._db_path)
+                if kb:
+                    ai = _rla(app, telegram_client)
+                    _kbp = (getattr(app.state, "kb_db_path", None)
+                            or getattr(kb, "_db_path", None) or getattr(kb, "db_path", None))
+                    learner = _DL(kb, ai, db_path=_kbp)
                     app.state._daily_learner = learner
             if learner:
                 out["drafts"] = learner.stats()
@@ -1360,12 +2316,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     def _get_strategy_tracker():
         # 修复潜伏 bug：strategy_routes 抽出时此闭包未在 admin.py 保留，
         # 导致 data-purge/session-stats/export-strategy/daily-report 调用时 NameError。
-        # 仅依赖 telegram_client，与 strategy_routes 内同名实现一致。
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "strategy_tracker", None)
-        return None
+        # 与 strategy_routes 内同名实现一致（主客户端 → app.state 双通路）。
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        return getattr(sm, "strategy_tracker", None) if sm else None
 
     @app.post("/api/data-purge")
     async def api_data_purge(request: Request, _=Depends(_api_write("import_export"))):
@@ -1413,10 +2367,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         ok, msg = config_manager.save_strategies(rs)
         if not ok:
             raise HTTPException(500, msg)
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm and hasattr(sm, "_refresh_strategies"):
-                sm._refresh_strategies()
+        from src.web.web_context import resolve_skill_manager
+        _sm_hot = resolve_skill_manager(telegram_client, app)
+        if _sm_hot and hasattr(_sm_hot, "_refresh_strategies"):
+            _sm_hot._refresh_strategies()
         if audit_store:
             audit_store.log(request.session.get("username", "web_admin"),
                             "apply_param_suggestion", f"{sid}.{param}",
@@ -1538,7 +2492,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         yaml.safe_load(content)
         prefix = snap_id.rsplit("_", 1)[0] if "_" in snap_id else ""
         target = None
-        if "templates" in prefix:
+        # 顺序敏感：templates_i18n 前缀含 "templates" 子串——本分支必须在前，
+        # 否则变体快照回滚会把多语言内容覆写进 templates.yaml（机器人话术池被毁）。
+        if "templates_i18n" in prefix:
+            target = cfg_dir / "templates_i18n.yaml"
+        elif "templates" in prefix:
             target = cfg_dir / "templates.yaml"
         elif "exchange_rates" in prefix:
             target = cfg_dir / "exchange_rates.yaml"
@@ -1670,6 +2628,26 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_ovw.getLogger("admin").warning("ops overview 路由注册失败", exc_info=True)
 
+    # 客服支持通道（P1-9）：机器码/版本自查 + 坐席可用的一键诊断直传
+    try:
+        from src.web.routes.support_routes import register_support_routes
+
+        register_support_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_sup
+
+        _log_sup.getLogger("admin").warning("support 路由注册失败", exc_info=True)
+
+    # 群脉 CrowdX 导播台：剧本库 / 逐拍详情 / 一键排练（dry-run）/ 历史场次
+    try:
+        from src.web.routes.group_show_routes import register_group_show_routes
+
+        register_group_show_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_gs
+
+        _log_gs.getLogger("admin").warning("group show 路由注册失败", exc_info=True)
+
     # ── 告警状态 API ───────────────────────────────────────────
     # ── Webhook 通知 ──────────────────────────────────────────
     # 配置存储路径：{config_dir}/webhook_settings.json
@@ -1788,6 +2766,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         data = config_manager.get_dynamic_templates_config() or {}
         if key not in data:
             raise HTTPException(404, f"Template '{key}' not found")
+        # 变更前快照（与表单路径 /templates/update 同口径，审计可深链 /diff）
+        snap_content = yaml.dump(data, allow_unicode=True, default_flow_style=False)
         if isinstance(value, list):
             data[key] = value
         else:
@@ -1796,9 +2776,140 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if not ok:
             raise HTTPException(500, msg)
         config_manager.invalidate_templates_cache()
+        actor = request.session.get("username", "api")
+        snap_id = _auto_snapshot("templates", snap_content, actor) or ""
         if audit_store:
-            audit_store.log("api", "update_template", key, "", str(value)[:100])
+            audit_store.log(actor, "update_template", key, "", str(value)[:100], snap_id)
         return {"ok": True, "key": key}
+
+    # ── 团队话术多语言变体·起草工作台（V2 2026-08-18）────────────────────────
+    # 写侧唯一入口＝src/web/templates_i18n_store.py（读侧在 unified_inbox_context，
+    # mtime 缓存 → 落盘即热生效，坐席面板/自动推荐零重启拿到新变体）。
+    # draft＝服务端直调生产翻译栈机器起草（含 {var} 占位符的源文本拒绝——机翻会
+    # 翻掉占位符名，破坏面板变量补全表单契约）；确认/改稿/删除对齐 KB
+    # kb_translations 的 auto_translated→人工确认 心智。权限与模板编辑同位。
+
+    def _ti_snapshot(actor: str) -> str:
+        from src.web import templates_i18n_store as _ti
+        return _auto_snapshot(
+            "templates_i18n",
+            _ti.dump_yaml(_ti.load_all(config_manager)), actor) or ""
+
+    @app.get("/api/templates-i18n")
+    async def api_get_templates_i18n(request: Request, _=Depends(_api_auth)):
+        from src.web import templates_i18n_store as _ti
+        return {"ok": True, "variants": _ti.load_all(config_manager),
+                "path": str(_ti.resolve_path(config_manager))}
+
+    @app.post("/api/templates-i18n/draft")
+    async def api_templates_i18n_draft(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        from src.web.routes.unified_inbox_context import _qtpl_is_system_key
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        data = config_manager.get_dynamic_templates_config() or {}
+        if key not in data:
+            raise HTTPException(404, f"Template '{key}' not found")
+        if _qtpl_is_system_key(key):
+            return {"ok": False, "error": "system_key"}
+        val = data.get(key)
+        if isinstance(val, str):
+            texts = [val]
+        elif isinstance(val, list):
+            texts = [x for x in val if isinstance(x, str)]
+        else:
+            return {"ok": False, "error": "system_key"}
+        src = next((s.strip() for s in texts if s and s.strip()), "")
+        if not src:
+            return {"ok": False, "error": "no_source"}
+        if _ti.has_placeholders(src):
+            return {"ok": False, "error": "has_vars"}
+        from src.web.routes.unified_inbox_services import _get_translation_service
+        svc = _get_translation_service(request)
+        result = await svc.translate(src, target_lang=lang, source_lang="zh")
+        translated = str(getattr(result, "translated_text", "") or "").strip()
+        if not getattr(result, "ok", False) or not translated:
+            return {"ok": False, "error": "translate_failed"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.draft_variant(config_manager, key, lang, translated)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_draft", f"{key}:{lang}", "",
+                            translated[:100], snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries,
+                "provider": str(getattr(result, "provider", "") or "")}
+
+    @app.post("/api/templates-i18n/save")
+    async def api_templates_i18n_save(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        text = str(body.get("text") or "")
+        index = body.get("index", None)
+        idx = int(index) if isinstance(index, (int, float)) else None
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.upsert_variant(
+            config_manager, key, lang, text,
+            approved=bool(body.get("approved", True)), index=idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_save", f"{key}:{lang}", "",
+                            text[:100], snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
+
+    @app.post("/api/templates-i18n/confirm")
+    async def api_templates_i18n_confirm(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        try:
+            idx = int(body.get("index"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "not_found"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.confirm_variant(config_manager, key, lang, idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_confirm", f"{key}:{lang}", "",
+                            str(idx), snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
+
+    @app.post("/api/templates-i18n/delete")
+    async def api_templates_i18n_delete(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        try:
+            idx = int(body.get("index"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "not_found"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.delete_variant(config_manager, key, lang, idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_delete", f"{key}:{lang}", "",
+                            str(idx), snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
 
     @app.post("/api/batch-strategies")
     async def api_batch_strategies(request: Request, _=Depends(_api_write("edit_strategy"))):
@@ -1825,9 +2936,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if not ok:
             raise HTTPException(500, msg)
         actor = request.session.get("username", "api")
-        _auto_snapshot("reply_strategies", snap_content, actor)
+        snap_id = _auto_snapshot("reply_strategies", snap_content, actor) or ""
         if audit_store:
-            audit_store.log(actor, "batch_strategy_enabled", ",".join(updated), "", str(enabled))
+            audit_store.log(actor, "batch_strategy_enabled", ",".join(updated), "",
+                            str(enabled), snap_id)
         return {"ok": True, "updated": updated, "not_found": not_found, "enabled": enabled}
 
     @app.post("/api/batch-templates")
@@ -1859,9 +2971,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             raise HTTPException(500, msg)
         config_manager.invalidate_templates_cache()
         actor = request.session.get("username", "api")
-        _auto_snapshot("templates", snap_content, actor)
+        snap_id = _auto_snapshot("templates", snap_content, actor) or ""
         if audit_store:
-            audit_store.log(actor, "batch_delete_templates", ",".join(removed), "", "")
+            audit_store.log(actor, "batch_delete_templates", ",".join(removed), "",
+                            "", snap_id)
         return {"ok": True, "removed": removed, "not_found": not_found}
 
     @app.get("/api/audit")
@@ -2007,6 +3120,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         cfg_dir = config_manager.config_path.parent
         content = await file.read()
         restored = []
+        import_snap_stems: list = []
         merge_stats = {}
         try:
             with zipfile.ZipFile(io.BytesIO(content), "r") as zf:
@@ -2028,12 +3142,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                         out_content = yaml.dump(merged, allow_unicode=True, default_flow_style=False)
                     else:
                         out_content = raw
-                    # 保存前快照
+                    # 保存前快照（多文件导入时只收集 stem；审计第六参仅在「单文件单快照」时写入，
+                    # 避免一条审计挂多个无法深链的 snap）
                     actor = request.session.get("username", "web_admin")
                     snap_content = target.read_text(encoding="utf-8") if target.exists() else ""
                     if snap_content:
                         prefix = name.replace(".yaml", "")
-                        _auto_snapshot(prefix, snap_content, actor)
+                        stem = _auto_snapshot(prefix, snap_content, actor)
+                        if stem:
+                            import_snap_stems.append(stem)
                     import shutil
                     if target.exists():
                         shutil.copy2(target, target.with_suffix(".yaml.pre_import"))
@@ -2050,7 +3167,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             config_manager.invalidate_exchange_rates_cache()
             actor = request.session.get("username", "web_admin")
             if audit_store:
-                audit_store.log(actor, f"import_config_{mode}", ", ".join(restored))
+                snap_id = (import_snap_stems[0]
+                           if len(restored) == 1 and len(import_snap_stems) == 1
+                           else "")
+                audit_store.log(actor, f"import_config_{mode}", ", ".join(restored),
+                                "", "", snap_id)
         if mode == "merge" and merge_stats:
             details = "; ".join(
                 f"{n}: +{v['added']} 新增 / ~{v['updated']} 更新"
@@ -2239,6 +3360,46 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_cases.getLogger("admin").warning("cases 路由注册失败", exc_info=True)
 
+    # 报障群工单管理（bug_intake，2026-08-18：报障群 AI 值守台账；
+    # 2026-08-28 实施81：+处置台页面（page_auth）与 bot 发送配置（config_manager））
+    try:
+        from src.web.routes.bug_intake_routes import register_bug_intake_routes
+
+        register_bug_intake_routes(
+            app, api_auth=_admin_ctx.api_auth,
+            page_auth=_admin_ctx.page_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_bi
+
+        _log_bi.getLogger("admin").warning("bug_intake 路由注册失败",
+                                           exc_info=True)
+
+    # 迁移包导出（账号资产保全，实施47 §5 工单 2）：联系人+会话+可加回句柄打成
+    # 一份离线 zip。资产中心页按路由路径探测本端点（features.export_migration），
+    # 装载后其「导出迁移包」CTA 自动点亮，无需前端改动。
+    try:
+        from src.web.routes.migration_export_routes import (
+            register_migration_export_routes,
+        )
+        register_migration_export_routes(app, api_auth=_admin_ctx.api_auth)
+    except Exception:
+        import logging as _log_mex
+        _log_mex.getLogger("admin").warning("migration_export 路由注册失败",
+                                            exc_info=True)
+
+    # 回连认领（账号资产保全 P1）：封号账号 → 新账号的老客户识别 + 记忆合流
+    try:
+        from src.web.routes.reconnect_claim_routes import (
+            register_reconnect_claim_routes,
+        )
+
+        register_reconnect_claim_routes(app, api_auth=_admin_ctx.api_auth)
+    except Exception:
+        import logging as _log_rcl
+
+        _log_rcl.getLogger("admin").warning("reconnect_claim 路由注册失败",
+                                            exc_info=True)
+
     # 运营 Copilot + 测试纠错 API（Phase E1 续拆 → copilot_routes）
     try:
         from src.web.routes.copilot_routes import register_copilot_routes
@@ -2248,6 +3409,43 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_cop
 
         _log_cop.getLogger("admin").warning("copilot 路由注册失败", exc_info=True)
+
+    # AI 助手悬浮球 /api/assistant/*（2026-08-19 P0；assistant.enabled 灰度）
+    try:
+        from src.web.routes.assistant_routes import register_assistant_routes
+
+        register_assistant_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asb
+
+        _log_asb.getLogger("admin").warning("assistant 路由注册失败",
+                                            exc_info=True)
+
+    # 小智动作注册表 /api/assistant/actions|act*（实施58 P1；同 assistant.enabled 灰度）
+    try:
+        from src.web.routes.assistant_action_routes import (
+            register_assistant_action_routes,
+        )
+
+        register_assistant_action_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asa
+
+        _log_asa.getLogger("admin").warning("assistant action 路由注册失败",
+                                            exc_info=True)
+
+    # 小智手机扫码操控 /api/assistant/pair* + GET /xz（实施58 P4；同灰度）
+    try:
+        from src.web.routes.assistant_pair_routes import (
+            register_assistant_pair_routes,
+        )
+
+        register_assistant_pair_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asp
+
+        _log_asp.getLogger("admin").warning("assistant pair 路由注册失败",
+                                            exc_info=True)
 
     # ---------- 知识库健康度 ----------
     # KB 健康统计/Miss日志/翻译审核/图片/种子/维护建议 已抽到 routes/kb_routes.py（批 5K）
@@ -2285,6 +3483,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                         f"📊 自动周报: 本周 {tw_total} 次查询, "
                         f"命中率 {tw_rate}%"
                     )
+                    # AI 价值总账行（2026-08-06）：与 /api/report/weekly 同源
+                    # （src/ops/value_report），推送不再只有一句 KB 命中率。
+                    try:
+                        from src.ops.value_report import build_weekly_value
+                        _inbox_st = getattr(app.state, "inbox_store", None)
+                        _val = build_weekly_value(_inbox_st) if _inbox_st is not None else {}
+                        for _vl in (_val or {}).get("text_lines", []):
+                            summary += "\n" + _vl
+                    except Exception:
+                        pass
                     await _fire_webhook("weekly_report", "system", "report", summary)
                     logger.info("F4 周报已推送: %s", summary)
                     await asyncio.sleep(72000)  # 推送后休眠 20h 避免重复
@@ -2303,11 +3511,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     async def api_users_at_risk(request: Request):
         """K3: 返回满意度 at_risk 的用户列表"""
         _api_auth(request)
-        ctx_store = None
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                ctx_store = getattr(sm, "_context_store", None)
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        ctx_store = getattr(sm, "_context_store", None) if sm else None
         if not ctx_store:
             return {"users": [], "count": 0}
         at_risk = []
@@ -2333,11 +3539,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     async def api_active_conversations(request: Request, minutes: int = 30):
         """返回最近 N 分钟内有活动的对话列表（含满意度、意图、at_risk 状态）"""
         _api_auth(request)
-        ctx_store = None
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                ctx_store = getattr(sm, "_context_store", None)
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        ctx_store = getattr(sm, "_context_store", None) if sm else None
         if not ctx_store:
             return {"conversations": [], "count": 0, "at_risk_count": 0}
 
@@ -2530,11 +3734,41 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         _require_role(request, "care")
         return templates.TemplateResponse(request, "care_schedule.html", {})
 
+    # ── 个人设置（2026-08-04）：坐席级外观个性化（主题/壁纸/夜间/字号/圆角/动画）──
+    # 全部登录角色可用（外观是个人偏好而非管理能力），刻意只挂 _page_auth 不加
+    # _require_role；数据经 /api/workspace/prefs 的 appearance 字段按坐席漫游。
+    @app.get("/personal-settings", response_class=HTMLResponse)
+    async def personal_settings_page(request: Request, _=Depends(_page_auth)):
+        return templates.TemplateResponse(request, "personal_settings.html", {})
+
     # ── Phase P4：关系健康 / 流失预警榜页面 ──
     @app.get("/relations-health", response_class=HTMLResponse)
     async def relations_health_page(request: Request, _=Depends(_page_auth)):
         _require_role(request, "care")
         return templates.TemplateResponse(request, "relations_health.html", {})
+
+    # ── RH-P1：流失预警页能力探测（必须**无条件**注册——它存在的意义就是在
+    # contacts 未启用时也能回答「全量榜为什么不可用、还能用什么」，前端据此
+    # 三态渲染，不再拿裸 404 猜原因）。纯函数核心见 src/web/relations_capability.py。
+    @app.get("/api/relations/capability")
+    async def api_relations_capability(request: Request, _=Depends(_api_auth)):
+        from src.web.relations_capability import build_capability, route_paths_of
+
+        contact_count = None
+        _contacts = getattr(request.app.state, "contacts", None)
+        _cstore = getattr(_contacts, "store", None) if _contacts else None
+        if _cstore is not None:
+            try:
+                contact_count = int(_cstore.count_contacts())
+            except Exception:
+                contact_count = None
+        return build_capability(
+            route_paths=route_paths_of(request.app),
+            config=getattr(config_manager, "config", None) or {},
+            has_inbox_store=getattr(
+                request.app.state, "inbox_store", None) is not None,
+            contact_count=contact_count,
+        )
 
     # ── Phase K2：C 端变现营收页面 ──
     @app.get("/monetization", response_class=HTMLResponse)
@@ -2650,6 +3884,73 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_zalo.getLogger("admin").debug("Zalo Webhook 注册跳过", exc_info=True)
 
+    # ── 微信客服（企业微信）回调（实施97 线 A；未配回调即纯轮询，不注册） ──
+    try:
+        from src.integrations.wechat_kf_webhook import (
+            register_wechat_kf_routes, register_wechat_kf_session_routes,
+        )
+
+        register_wechat_kf_routes(app, config_manager)
+        # 会话状态动作（转企微人工 / 结束会话 / 查状态）——坐席鉴权，恒注册（无 worker 时 409）
+        register_wechat_kf_session_routes(app, _api_auth)
+        # 五步接入向导后端（出站 IP / 凭证测试 / 客服账号 / 绑定 / 客户二维码 / AI 接待）——主管专属
+        from src.web.routes.wechat_kf_setup_routes import register_wechat_kf_setup_routes
+
+        register_wechat_kf_setup_routes(app, _api_auth)
+        # 个人微信 PC 副驾接入引导后端（环境检测 / 档位与风险确认）
+        from src.web.routes.wechat_pc_setup_routes import register_wechat_pc_setup_routes
+
+        register_wechat_pc_setup_routes(app, _api_auth)
+    except Exception:
+        import logging as _log_wxkf
+
+        _log_wxkf.getLogger("admin").debug("微信客服回调注册跳过", exc_info=True)
+
+    # ── QQ 机器人（QQ 开放平台官方 API）Webhook（2026-09-07 QQ 双轨·官方轨） ──
+    # WebSocket 网关由编排器里的 QQBotOfficialWorker 拉起；这里只挂 HTTPS 回调
+    # （op=13 验证 + 事件推送验签）并注入 SkillManager 取法供自答回落。
+    try:
+        from src.integrations.qq_official import register_qqbot_routes
+
+        register_qqbot_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_qqbot
+
+        _log_qqbot.getLogger("admin").debug("QQ 机器人 Webhook 注册跳过", exc_info=True)
+
+    # ── 抖音官方通道（小程序 IM）Webhook（实施96 P1-1 骨架；douyin.enabled 为真才挂） ──
+    # 验签 sha1(secret+body) + verify_webhook challenge 回显 + 幂等 + 进私 30 秒问候快路径；
+    # 入站按 make_message 形状 emit_incoming → 收件箱 / System Z / B 线全部复用，不在此自答。
+    try:
+        from src.integrations.douyin_official import register_douyin_routes
+
+        register_douyin_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_douyin
+
+        _log_douyin.getLogger("admin").debug("抖音 Webhook 注册跳过", exc_info=True)
+
+    # ── TikTok 官方通道（Business Messaging）Webhook（指令 TK-1 B 骨架；tiktok.enabled 为真才挂） ──
+    try:
+        from src.integrations.tiktok_official import register_tiktok_routes
+
+        register_tiktok_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_tiktok
+
+        _log_tiktok.getLogger("admin").debug("TikTok Webhook 注册跳过", exc_info=True)
+
+    # ── 渠道接入教程页 /help/onboarding/{slug}（抖音企业版申请 / TikTok / 付款方式；2026-09-08 拍板）──
+    # 与小智问答同一份数据（src/assistant/onboarding_guides.py）；session auth，按 ui_lang 中英。
+    try:
+        from src.web.routes.onboarding_guide_routes import register_onboarding_guide_routes
+
+        register_onboarding_guide_routes(app, page_auth=_page_auth, templates=templates)
+    except Exception:
+        import logging as _log_obg
+
+        _log_obg.getLogger("admin").debug("接入教程页注册跳过", exc_info=True)
+
     # ── LINE RPA（个人号自动聊天）Web 管理页 + REST ──
     try:
         from src.web.routes.line_rpa_routes import register_line_rpa_routes
@@ -2748,7 +4049,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         from src.web.routes.unified_inbox_routes import register_unified_inbox_routes
 
         def _unified_inbox_page_auth(request: Request):
-            # 坐席工作台：master/admin/agent 可进（agent 仅此处可达）
+            # 坐席工作台：master/admin/agent 可进（agent 仅此处可达）。
+            # P1 2026-08-09：接受 Bearer 主令牌（与 _api_auth 同口径、恒时
+            # 比较）——send/send-media/send-voice 是挂在页面鉴权下的 **JSON**
+            # 端点，此前脚本/集成用主令牌调用会被 303 到登录页 HTML（.198/.104
+            # 排障实测：为发一条验证消息只能模拟表单登录拿 session+CSRF）。
+            # 主令牌本就拥有 _api_auth 全接口最高权限，此处放行不扩大权限面。
+            if token:
+                _auth_header = request.headers.get("Authorization", "")
+                if hmac.compare_digest(_auth_header, f"Bearer {token}"):
+                    return
             _require_role(request, "workspace")
 
         register_unified_inbox_routes(
@@ -2830,9 +4140,131 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             templates=templates,
             config_manager=config_manager,
         )
+        # P0 2026-08-09：目标达成报表页（主管；数据走 /api/goals/report/*）
+        from src.web.routes.goal_routes import register_goal_report_page
+        register_goal_report_page(
+            app,
+            page_auth=_unified_inbox_page_auth,
+            templates=templates,
+            config_manager=config_manager,
+        )
     except Exception:
         import logging as _log_dr
         _log_dr.getLogger("admin").debug("草稿/绩效路由注册跳过", exc_info=True)
+
+    # ── WP-3：老板日报 /workspace/boss（任意登录角色；数据=value_report 日/周窗）──
+    # 独立注册块：不与上方草稿链装配连坐（store 缺席时端点自答 available:false）。
+    # 注意 _unified_inbox_page_auth 定义在上方局部作用域（~L3300），本块必须留在
+    # 它之后——挪去文件前部会 NameError 被 try 静默吞掉（2026-08-17 首版实错）。
+    try:
+        from src.web.routes.boss_routes import register_boss_routes
+
+        register_boss_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates, config_manager=config_manager)
+    except Exception:
+        import logging as _log_boss
+
+        _log_boss.getLogger("admin").warning("boss 路由注册失败", exc_info=True)
+
+    # ── AI 花费与对账（成本对账 P1/P2）：/workspace/cost + /api/cost/*（cost_routes.py）──
+    # 2026-09-10 重挂：09-09 07:31～17:13 四次启动日志均有「成本页已注册」，17:58 起消失
+    # ——注册调用在工作树覆盖中丢失且从未入库，老板日报脚本 /api/cost/summary 404 崩、
+    # 通报里的成本页链接是死链。独立 try 块（同 boss_routes 例），清单门禁见
+    # tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_10_COST`。
+    try:
+        from src.web.routes.cost_routes import register_cost_routes
+
+        register_cost_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cost
+
+        _log_cost.getLogger("admin").warning("成本页路由注册失败", exc_info=True)
+
+    # AI 提示词调试口（2026-09-11）：模型实际收到的 messages / usage / 缓存命中率 / 深度档。
+    # 基线登记：tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_11_AI_INSPECT`。
+    try:
+        from src.web.routes.ai_inspect_routes import register_ai_inspect_routes
+
+        register_ai_inspect_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_aii
+
+        _log_aii.getLogger("admin").warning("AI 提示词调试口注册失败", exc_info=True)
+
+    # 会话级模型路由（2026-09-12，composer「模型 ▾」/ 无限制档 173 直答）：
+    # conv-model-route 读写 + 端点探活 + 观测。SSOT src/ai/conv_route.py。
+    # 基线登记：tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_12_CONV_MODEL_ROUTE`。
+    try:
+        from src.web.routes.conv_model_route_routes import register_conv_model_route_routes
+
+        register_conv_model_route_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cmr
+
+        _log_cmr.getLogger("admin").warning("会话级模型路由注册失败", exc_info=True)
+
+    # ── 账号资产中心（账号资产保全 P1，2026-08-19）：/workspace/assets ──
+    # 独立注册块（同 boss_routes 例：不与草稿链装配连坐；须留在
+    # _unified_inbox_page_auth 定义之后，挪前会 NameError 被 try 静默吞掉）。
+    try:
+        from src.web.routes.asset_center_routes import (
+            register_asset_center_routes,
+        )
+
+        register_asset_center_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates)
+    except Exception:
+        import logging as _log_ac
+
+        _log_ac.getLogger("admin").warning("资产中心路由注册失败", exc_info=True)
+
+    # ── Q-14 #262（2026-09-09）：「AI 本轮未生成」灰标读 / 清端点（独立块，同上例）──
+    try:
+        from src.web.routes.ai_fail_routes import register_ai_fail_routes
+
+        register_ai_fail_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_aif
+
+        _log_aif.getLogger("admin").warning("ai_fail 路由注册失败", exc_info=True)
+
+    # ── Q-15 #271（2026-09-10）：成人内容「一键人设口吻软回应」取词 + grade 自检（adult_routes.py）──
+    try:
+        from src.web.routes.adult_routes import register_adult_routes
+
+        register_adult_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_adg
+
+        _log_adg.getLogger("admin").warning("adult 路由注册失败（Q-15）", exc_info=True)
+
+    # ── Q-14 #262 E（2026-09-10）：告警「一眼看」只读页 /ops/glance（十分钟一次性令牌，
+    # 令牌密钥 = web_admin.secret_key；默认占位符不铸令牌 → notifier 回落普通登录链接）──
+    try:
+        from src.utils import ops_glance_token as _ogt
+        from src.web.routes.ops_glance_routes import register_ops_glance_routes
+
+        _ogt.configure(secret)
+        register_ops_glance_routes(app, templates=templates)
+    except Exception:
+        import logging as _log_og
+
+        _log_og.getLogger("admin").warning("ops_glance 路由注册失败", exc_info=True)
+
+    # ── 运维群降噪 P1.3（2026-09-10）：告警卡「已处理 / 静音」动作页 /ops/act（同款令牌，
+    # 24h 链接 + 15min 动作表单两步确认；写巡检进程内的提醒账本）──
+    try:
+        from src.web.routes.ops_act_routes import register_ops_act_routes
+
+        register_ops_act_routes(app, templates=templates, page_auth=_unified_inbox_page_auth)
+    except Exception:
+        import logging as _log_oa
+
+        _log_oa.getLogger("admin").warning("ops_act 路由注册失败", exc_info=True)
 
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")
@@ -2859,9 +4291,38 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     # ── P37/P38: 工作流 + 路由规则管理页面 ───────────────────────────
 
+    @app.get("/workflows")
+    async def _ws_workflows_alias(request: Request):
+        """E1：短链别名。工作台组件（cp-chain-exec「管理工作链」）、ops 漏斗卡
+        与两批文档一直深链 ``/workflows``，而真实页面在 ``/workspace/workflows``
+        ——上线以来 404（种子选择器让人不用离开会话，没人点过才没暴露）。
+        别名一处修复全部历史链接；鉴权/锁定判定统一交给目标路由。"""
+        from fastapi.responses import RedirectResponse as _RR
+        return _RR("/workspace/workflows", status_code=302)
+
     @app.get("/workspace/workflows")
     async def _ws_workflows(request: Request):
         _unified_inbox_page_auth(request)
+        # E1 页面级锁定态（判定与 API 闸门同源，防「API 拦了页面没拦」）：
+        # license 锁 → 升级引导（nav-locked 同款去处）；运营关闭 → 404
+        # （模块不存在于此部署；API 侧对应 403，页面语义按「无此页」处理）。
+        try:
+            from src.web.routes.unified_inbox_workflow_routes import (
+                workflows_disabled_reason_cfg,
+            )
+            _wf_reason = workflows_disabled_reason_cfg(config_manager.config or {})
+        except Exception:
+            _wf_reason = ""
+        if _wf_reason == "license":
+            from fastapi.responses import RedirectResponse as _RR
+            try:  # E6 锁触达观测
+                from src.web.feature_lock_stats import get_feature_lock_stats
+                get_feature_lock_stats().record("workflows", "page")
+            except Exception:
+                pass
+            return _RR("/membership?from=workflows", status_code=302)
+        if _wf_reason == "config":
+            raise HTTPException(404)
         sess = request.session
         ctx = {
             "request": request,
@@ -2900,6 +4361,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_wc
         _log_wc.getLogger("admin").debug("网页聊天 Widget 路由注册跳过", exc_info=True)
+
+    # ── 歌房（唱歌能力管理）API ───────────────────────────────
+    try:
+        from src.web.routes.singing_routes import register_singing_routes
+
+        register_singing_routes(app, api_auth=_api_auth,
+                                config_manager=config_manager)
+    except Exception:
+        import logging as _log_sg
+        _log_sg.getLogger("admin").warning("singing 路由注册失败", exc_info=True)
+
+    # ── 专属歌订单（点唱台：列表/试听/人审放行=就地投递/打回）──
+    try:
+        from src.web.routes.song_order_routes import (
+            register_song_order_routes,
+        )
+
+        register_song_order_routes(app, api_auth=_api_auth,
+                                   config_manager=config_manager)
+    except Exception:
+        import logging as _log_so
+        _log_so.getLogger("admin").warning("song_order 路由注册失败",
+                                           exc_info=True)
 
     # ── Voice / TTS 统一试听 API ──────────────────────────────
     try:
@@ -2941,6 +4425,84 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_tgr
 
         _log_tgr.getLogger("admin").debug("Telegram 路由注册跳过", exc_info=True)
+
+    # ── 自动回复设置页（档位 / 回复速度 / 拟人链 / 语音，P0 2026-08-02）──
+    try:
+        from src.web.routes.reply_settings_routes import register_reply_settings_routes
+
+        def _reply_settings_page_auth(request: Request):
+            # 与「回复策略」同受众：master/admin（见 _PATH_TO_PAGE 权限键）
+            _require_role(request, "strategies")
+
+        register_reply_settings_routes(
+            app,
+            page_auth=_reply_settings_page_auth,
+            api_auth=_api_auth,
+            templates=templates,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_rps
+
+        _log_rps.getLogger("admin").debug("自动回复设置路由注册跳过", exc_info=True)
+
+    # ── 新账号「AI 接管方式」确认（全自动/拟稿人审/关闭，P0 2026-08-30）──
+    try:
+        from src.web.routes.account_mode_routes import register_account_mode_routes
+
+        register_account_mode_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_am
+
+        _log_am.getLogger("admin").debug("账号档位路由注册跳过", exc_info=True)
+
+    # ── 双面板融合 API（能力注册表 / 驾驶权互斥锁，P0 2026-08-13）──
+    try:
+        from src.web.routes.surface_fusion_routes import (
+            register_surface_fusion_routes,
+        )
+
+        register_surface_fusion_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_sf
+
+        _log_sf.getLogger("admin").debug("双面板融合路由注册跳过", exc_info=True)
+
+    # ── 会话级接管 API（一键接管/交还，驾驶舱 P0 2026-08-13）──
+    try:
+        from src.web.routes.takeover_routes import register_takeover_routes
+
+        register_takeover_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_tko
+
+        _log_tko.getLogger("admin").debug("会话接管路由注册跳过", exc_info=True)
+
+    # ── 驾驶舱 API（介入优先级队列聚合，cockpit P1 2026-08-13）──
+    try:
+        from src.web.routes.cockpit_routes import register_cockpit_routes
+
+        register_cockpit_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_ck
+
+        _log_ck.getLogger("admin").debug("驾驶舱路由注册跳过", exc_info=True)
 
     return app
 

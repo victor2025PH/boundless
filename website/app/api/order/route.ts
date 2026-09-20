@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { appendLead, upsertLead, type LeadRecord } from "@/lib/lead-store";
 import { createOrder, getOrder, notifyAdminsOfOrder } from "@/lib/order-store";
+import { newbieOrderGate } from "@/lib/newbie-gate";
+import { NEWBIE_PACK } from "@/lib/chatx-pricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,12 +19,14 @@ export async function GET(req: NextRequest) {
   }
   const o = await getOrder(id);
   if (!o) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-  return NextResponse.json({
+    return NextResponse.json({
     ok: true,
     id: o.id,
     status: o.status,
     plan: o.plan,
     period: o.period,
+    delivery: o.delivery || "installed",
+    seats: o.seats ?? null,
     pay_amount: o.pay_amount,
     t: o.t,
     paid_at: o.paid_at ?? null,
@@ -42,8 +46,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "contact_required" }, { status: 400 });
     }
 
+    // 新人 6U 包下单预检（实施50 P1）：明确不合格的单在收钱前就拦下并给出人话原因；
+    // 履约端另有同口径终审（本闸 fail-open，绝不因台账抖动挡住结账）。
+    if (clean(data?.plan, 40).toLowerCase() === NEWBIE_PACK.key) {
+      const verdict = await newbieOrderGate({
+        contact,
+        fingerprint: clean(data?.fingerprint, 128),
+      });
+      if (!verdict.ok) {
+        return NextResponse.json({ ok: false, error: verdict.error }, { status: 400 });
+      }
+    }
+
     // 支付方式白名单：usdt（默认）/ card；其余值一律按 usdt 处理。
     const method = clean(data?.method, 10) === "card" ? ("card" as const) : ("usdt" as const);
+    // 交付形态白名单：hosted=托管实例；其余/缺省=装机授权（防任意字符串污染履约分流）。
+    const delivery = clean(data?.delivery, 16) === "hosted" ? ("hosted" as const) : ("installed" as const);
+    // 坐席数（2026-08-19 按坐席档）：夹 [1,50]；缺省/非按坐席档不写（历史单=1 席语义）。
+    const seats = Math.min(50, Math.max(0, Math.round(Number(data?.seats) || 0)));
 
     const order = await createOrder({
       plan: clean(data?.plan, 40),
@@ -51,9 +71,15 @@ export async function POST(req: NextRequest) {
       period: clean(data?.period, 10),
       amount: Math.max(0, Number(data?.amount) || 0),
       method,
+      delivery,
+      ...(seats > 0 ? { seats } : {}),
       contact,
       fingerprint: clean(data?.fingerprint, 128),
       lang: clean(data?.lang, 8),
+      // 会话归因串（AI 坐席发的下单链接 ?ref=…）：空串不落库（order-store 清理）
+      ref: clean(data?.ref, 160),
+      // 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：同款空串不落库
+      utm_source: clean(data?.utm_source, 40),
       ip: clean(req.headers.get("x-forwarded-for")?.split(",")[0] || req.headers.get("x-real-ip"), 60),
       ua: clean(req.headers.get("user-agent"), 250),
     });
@@ -64,7 +90,7 @@ export async function POST(req: NextRequest) {
       name: "",
       contact,
       interest: `订单 ${order.plan}/${order.period}`,
-      message: `[${order.id}] ${order.plan} (${order.edition}) ${order.period} 应付 ${order.pay_amount} USDT${order.fingerprint ? ` 指纹:${order.fingerprint}` : ""}`,
+      message: `[${order.id}] ${order.plan} (${order.edition}) ${order.period}${order.seats && order.seats > 1 ? ` ${order.seats}席` : ""} 应付 ${order.pay_amount} USDT${order.fingerprint ? ` 指纹:${order.fingerprint}` : ""}`,
       lang: order.lang,
       source: "order",
       path: "/order",

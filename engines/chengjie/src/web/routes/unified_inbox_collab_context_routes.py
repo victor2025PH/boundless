@@ -1,16 +1,16 @@
-"""统一收件箱——客户 360°时间轴 / 多坐席协作剧本上下文路由域（巨石拆分 slice 25）。
+"""统一收件箱——客户 360°时间轴 / 多坐席协作上下文路由域（巨石拆分 slice 25）。
 
 把 ``register_unified_inbox_routes`` 巨型闭包中的客户级聚合视图子域整体外移为
 ``register_collab_context_routes(app, *, api_auth)``，由主 register 在**原位置**调用：
 
 - Phase 31 客户 360°时间轴：``contact/{id}/timeline``
-- Phase 45 多坐席协作剧本上下文：``contact/{id}/collab-context`` + ``conv/{id}/collab-context``
+- Phase 45 多坐席协作上下文：``contact/{id}/collab-context`` + ``conv/{id}/collab-context``
   （注：``conv`` 级 handler 在进程内复用 ``contact`` 级 handler，二者必须同模块共存）
 
-端点路径/方法/响应零变化（admin_route_inventory URL 契约守卫 + slice 25 端点契约断言）。
+端点路径/方法零变化（admin_route_inventory URL 契约守卫 + slice 25 端点契约断言）。
 
 依赖全部朝下：services.(_inbox_store/_contacts_store)、
-context.(_build_contact_relationship_payload/_build_relationship_stage_payload)；剧本引擎/
+context.(_build_contact_relationship_payload/_build_relationship_stage_payload)；
 关系阶段/积分打分器均为 handler 内局部 import。只收 api_auth 一个参数（零闭包私有依赖）。
 """
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_collab_context_routes(app, *, api_auth) -> None:
-    """挂载客户 360°时间轴 + 多坐席协作剧本上下文（客户级/会话级）端点。"""
+    """挂载客户 360°时间轴 + 多坐席协作上下文（客户级/会话级）端点。"""
 
     # ─── Phase 31: 客户 360° 时间轴 ────────────────────────────────────
 
@@ -49,32 +49,25 @@ def register_collab_context_routes(app, *, api_auth) -> None:
         events = store.get_contact_timeline(contact_id, limit=limit)
         return {"ok": True, "contact_id": contact_id, "events": events, "count": len(events)}
 
-    # ─── Phase 45: 多坐席协作剧本上下文 ─────────────────────────────────
+    # ─── Phase 45: 多坐席协作上下文 ─────────────────────────────────────
 
     @app.get("/api/workspace/contact/{contact_id}/collab-context")
     async def api_contact_collab_context(contact_id: str, request: Request):
-        """EE1：客户级协作上下文（统一阶段 + 积分 + 话题 + 活跃工作链）。"""
+        """EE1：客户级协作上下文（统一阶段 + 积分 + 活跃工作链）。"""
         api_auth(request)
         store = _inbox_store(request)
         cs = _contacts_store(request)
-        from src.inbox.conversation_script import ConversationScriptEngine
-        from src.inbox.relationship_stage import compute_relationship_stage
 
-        intimacy_score = None
         primary_name = ""
         if cs is not None:
             try:
                 contact = cs.get_contact(contact_id)
                 if contact:
                     primary_name = str(contact.primary_name or "")
-                journey = cs.get_journey_by_contact(contact_id)
-                if journey is not None:
-                    intimacy_score = float(journey.intimacy_score or 0)
             except Exception:
                 pass
 
-        # 聚合该客户所有会话消息数
-        message_count = 0
+        # 该客户名下会话（供活跃工作链 / 近期注解聚合）
         conv_ids: List[str] = []
         if store is not None:
             try:
@@ -83,12 +76,6 @@ def register_collab_context_routes(app, *, api_auth) -> None:
                     (contact_id,),
                 ).fetchall()
                 conv_ids = [r["conversation_id"] for r in rows]
-                if conv_ids:
-                    ph = ",".join("?" * len(conv_ids))
-                    message_count = store._conn.execute(
-                        f"SELECT COUNT(*) as c FROM messages WHERE conversation_id IN ({ph})",
-                        conv_ids,
-                    ).fetchone()["c"]
             except Exception:
                 pass
 
@@ -96,12 +83,6 @@ def register_collab_context_routes(app, *, api_auth) -> None:
         rel = {k: v for k, v in rel_payload.items() if k not in (
             "stage_conflict", "stage_conflict_detail", "contact_updated_by",
         )}
-        engine = ConversationScriptEngine()
-        topics = engine.suggest_topics(
-            rel.get("display_stage") or rel.get("confirmed_stage") or rel.get("stage") or "initial",
-            custom_topics=store.list_script_topics() if store else [],
-            limit=3,
-        ).get("topics", [])
 
         engagement_raw = store.get_contact_engagement(contact_id) if store else None
         engagement = None
@@ -133,7 +114,6 @@ def register_collab_context_routes(app, *, api_auth) -> None:
             "contact_stage_label": rel_payload.get("contact_stage_label"),
             "stage_conflict": rel_payload.get("stage_conflict", False),
             "stage_conflict_detail": rel_payload.get("stage_conflict_detail"),
-            "suggested_topics": topics,
             "engagement": engagement,
             "active_chains": active_chains[:10],
             "recent_notes": recent_notes,
@@ -142,7 +122,7 @@ def register_collab_context_routes(app, *, api_auth) -> None:
 
     @app.get("/api/workspace/conv/{conversation_id}/collab-context")
     async def api_conv_collab_context(conversation_id: str, request: Request):
-        """EE1：会话级协作条（含 @mention 时附带阶段+话题）。"""
+        """EE1：会话级协作条（含 @mention 时附带阶段）。"""
         api_auth(request)
         store = _inbox_store(request)
         rel = _build_relationship_stage_payload(request, conversation_id, store)
@@ -153,17 +133,9 @@ def register_collab_context_routes(app, *, api_auth) -> None:
             resp["conversation_id"] = conversation_id
             resp["relationship"] = {k: v for k, v in rel.items() if k != "context"}
             return resp
-        from src.inbox.conversation_script import ConversationScriptEngine
-        engine = ConversationScriptEngine()
-        topics = engine.suggest_topics(
-            rel.get("display_stage") or rel.get("stage") or "initial",
-            custom_topics=store.list_script_topics() if store else [],
-            limit=3,
-        ).get("topics", [])
         return {
             "ok": True,
             "conversation_id": conversation_id,
             "relationship": {k: v for k, v in rel.items() if k != "context"},
-            "suggested_topics": topics,
             "recent_notes": store.list_conv_notes(conversation_id, limit=5) if store else [],
         }

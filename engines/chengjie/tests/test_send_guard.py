@@ -242,7 +242,7 @@ def _text_sender(cli, *, min_interval=0, last_send=0.0):
 @pytest.mark.asyncio
 async def test_send_message_blocked_by_presend_guard(monkeypatch):
     s = _text_sender(_TextCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: True)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: True)
     assert await s.send_message(7, "hi") is False
     assert s.client.calls == []  # 冻结/被闸门拦 → 不真发（不绕过风控）
 
@@ -250,7 +250,7 @@ async def test_send_message_blocked_by_presend_guard(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_message_success_records_count(monkeypatch):
     s = _text_sender(_TextCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_message(7, "hi") is True
     assert s.client.calls == [(7, "hi")]
     assert s._last_send_wallclock > 0  # 记账刷新墙钟（喂下次节流 + 共用计数器）
@@ -265,7 +265,7 @@ async def test_send_message_paces_against_wallclock(monkeypatch):
 
     monkeypatch.setattr("src.client.sender.asyncio.sleep", _fake_sleep)
     s = _text_sender(_TextCli(), min_interval=5, last_send=time.time())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_message(7, "hi") is True
     assert slept.get("sec") is not None and slept["sec"] > 0
 
@@ -273,14 +273,14 @@ async def test_send_message_paces_against_wallclock(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_message_no_client_returns_false(monkeypatch):
     s = _text_sender(None)
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_message(7, "hi") is False
 
 
 @pytest.mark.asyncio
 async def test_send_message_failure_returns_false(monkeypatch):
     s = _text_sender(_TextCli(fail=True))
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_message(7, "hi") is False  # RPC 抛 → False、不冒泡
 
 
@@ -299,7 +299,7 @@ class _MsgTextCli:
 async def test_send_message_return_id_success(monkeypatch):
     """P4-4：send_message_return_id 成功 → (True, 真实 id 字符串)。"""
     s = _text_sender(_MsgTextCli(mid=7788))
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     ok, mid = await s.send_message_return_id(7, "hi")
     assert ok is True and mid == "7788"
 
@@ -309,7 +309,7 @@ async def test_send_message_return_id_blocked(monkeypatch):
     """被护栏拦 → (False, "")，且不真发。"""
     cli = _MsgTextCli()
     s = _text_sender(cli)
-    monkeypatch.setattr(s, "_presend_blocked", lambda: True)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: True)
     ok, mid = await s.send_message_return_id(7, "hi")
     assert ok is False and mid == ""
     assert cli.calls == []
@@ -319,6 +319,83 @@ async def test_send_message_return_id_blocked(monkeypatch):
 async def test_send_message_return_id_no_message_object(monkeypatch):
     """底层桩返回 None（无 Message）→ ok=True 但 id 空串，绝不抛。"""
     s = _text_sender(_TextCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     ok, mid = await s.send_message_return_id(7, "hi")
     assert ok is True and mid == ""
+
+
+# ── #77（0830 AW7MUV 实锤）：白名单豁免可观测 + 拦截日志带 peer ──────────────
+
+def test_send_blocked_exempt_peer_passes_and_counted_77(fresh_ks):
+    """白名单 peer：闸门不评估直接放行，且豁免命中进计数（正面证据）。"""
+    from src.integrations.shared import send_guard as sg
+
+    class _Reg:
+        def get(self, p, a):
+            return {"meta": {"banned": True}, "status": "removed"}
+
+    cfg = {"companion_send_gate": {"enabled": True,
+                                   "exempt_peers": ["6206360305"]}}
+    before = sg.block_stats_snapshot()["exempt_hits"]
+    blocked, reason = send_blocked(
+        "telegram", "1", config=cfg, registry=_Reg(),
+        chat_key="6206360305")
+    assert blocked is False and reason == ""
+    assert sg.block_stats_snapshot()["exempt_hits"] == before + 1
+    # 非白名单 peer 照常被拦（豁免只对那一位，不解锁整个账号）
+    blocked2, reason2 = send_blocked(
+        "telegram", "1", config=cfg, registry=_Reg(),
+        chat_key="7331000000")
+    assert blocked2 is True and reason2.startswith("send_gate:")
+
+
+def test_send_blocked_exempt_notify_false_not_counted_77(fresh_ks):
+    """预判/横幅读路径（notify=False）不进豁免计数——防轮询刷成噪音。"""
+    from src.integrations.shared import send_guard as sg
+    cfg = {"companion_send_gate": {"enabled": True,
+                                   "exempt_peers": ["123"]}}
+    before = sg.block_stats_snapshot()["exempt_hits"]
+    send_blocked("telegram", "1", config=cfg, chat_key="123", notify=False)
+    assert sg.block_stats_snapshot()["exempt_hits"] == before
+
+
+def test_intercept_logs_carry_peer_77():
+    """静态契约：三处拦截/豁免日志都必须带目标 peer（AW7MUV 定性不了的根因）。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    orch_src = (root / "src" / "integrations"
+                / "account_orchestrator.py").read_text(encoding="utf-8")
+    assert orch_src.count("→ peer=%s") >= 2      # send + send_media 两处
+    sender_src = (root / "src" / "client" / "sender.py").read_text(
+        encoding="utf-8")
+    assert "白名单豁免命中" in sender_src            # A 线豁免接入 + 留痕
+    assert "被反封号闸门拦截 → peer=" in sender_src
+    pa_src = (root / "src" / "integrations"
+              / "protocol_autoreply.py").read_text(encoding="utf-8")
+    assert "白名单豁免命中" in pa_src
+    assert "|peer={chat_key}" in pa_src
+
+
+@pytest.mark.asyncio
+async def test_presend_gate_exempt_peer_77(monkeypatch):
+    """A 线行为：白名单 peer 的发送不被 daily_cap 类闸门拦（此前 A 线没接豁免）。"""
+    cli = _TextCli()
+    s = _text_sender(cli)
+
+    class _GateCfg:
+        config = {"companion_send_gate": {"enabled": True,
+                                          "exempt_peers": ["777"]},
+                  "reply": {"split_send": {"min_interval_seconds": 0}}}
+
+        def get(self, k, d=None):
+            return self.config.get(k, d if d is not None else {})
+
+    s.config = _GateCfg()
+    # 让闸门评估必拦（banned 信号）——豁免命中时根本走不到评估
+    import src.skills.companion_send_gate as gate_mod
+    monkeypatch.setattr(
+        gate_mod, "evaluate",
+        lambda sig, cfg, **kw: {"allowed": False, "reason": "daily_cap",
+                                "light": "red", "score": 0})
+    assert s._presend_blocked(peer="777") is False      # 白名单放行
+    assert s._presend_blocked(peer="888") is True       # 其他客户照拦

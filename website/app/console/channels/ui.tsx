@@ -7,6 +7,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, X } from "lucide-react";
+import {
+  CHANNEL_INSTANCE_LABEL,
+  CHANNEL_INSTANCE_ORDER,
+  CHANNEL_PLATFORM_FORM_LABEL,
+  CHANNEL_PLATFORM_ORDER,
+  CHANNEL_STATUS_LABEL,
+  CHANNEL_STATUS_ORDER,
+  toOptions,
+} from "../labels";
 
 function emitToast(msg: string, ok = true) {
   if (typeof window !== "undefined") {
@@ -32,37 +41,17 @@ async function api<T = Record<string, unknown>>(url: string, init?: RequestInit 
 }
 
 const inputCls =
-  "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+  "w-full rounded-lg border border-slate-700 bg-ink-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-crown-500";
 const btnPrimary =
-  "rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50";
+  "rounded-lg bg-crown-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-crown-400 disabled:opacity-50";
 
 // 枚举选项（值与 lib/channels.ts 的 CHECK 约束一致）
-const PLATFORM_OPTIONS = [
-  { value: "telegram", label: "Telegram（MTProto 协议号）" },
-  { value: "whatsapp", label: "WhatsApp（baileys 侧车）" },
-  { value: "messenger", label: "Messenger（网页会话侧车）" },
-  { value: "line", label: "LINE（RPA 桌面登录）" },
-  { value: "web", label: "web 官网客服 widget" },
-  { value: "other", label: "其他平台" },
-] as const;
-
-const INSTANCE_OPTIONS = [
-  { value: "zhiliao", label: "zhiliao 智聊实例" },
-  { value: "tongyi", label: "tongyi 通译实例" },
-  { value: "avatarhub", label: "avatarhub 幻境系引擎" },
-  { value: "huoke", label: "huoke 获客引擎" },
-  { value: "website", label: "website 官网" },
-  { value: "none", label: "none 暂未挂载" },
-] as const;
+const PLATFORM_OPTIONS = toOptions(CHANNEL_PLATFORM_FORM_LABEL, CHANNEL_PLATFORM_ORDER);
+const INSTANCE_OPTIONS = toOptions(CHANNEL_INSTANCE_LABEL, CHANNEL_INSTANCE_ORDER);
 
 const PURPOSE_OPTIONS = ["总机接待", "交付服务", "测试", "投放专号", "其他"] as const;
 
-const STATUS_OPTIONS = [
-  { value: "active", label: "active 在用" },
-  { value: "pending", label: "pending 待启用" },
-  { value: "paused", label: "paused 已暂停" },
-  { value: "revoked", label: "revoked 已弃用" },
-] as const;
+const STATUS_OPTIONS = toOptions(CHANNEL_STATUS_LABEL, CHANNEL_STATUS_ORDER);
 
 interface ChannelFormValue {
   platform: string;
@@ -180,9 +169,9 @@ export function NewChannelAccountForm() {
     );
   }
   return (
-    <div className="w-full rounded-xl border border-amber-500/25 bg-slate-900/70 p-4 sm:max-w-md">
+    <div className="w-full rounded-xl border border-crown-500/25 bg-ink-900/70 p-4 sm:max-w-md">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-semibold text-amber-300">登记渠道账号</span>
+        <span className="text-sm font-semibold text-crown-300">登记渠道账号</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-4 w-4" />
         </button>
@@ -258,7 +247,7 @@ export function EditChannelAccountControl({ account }: { account: ChannelAccount
     return (
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-amber-500/60 hover:text-amber-300"
+        className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-crown-500/60 hover:text-crown-300"
       >
         <Pencil className="h-3 w-3" />
         编辑
@@ -266,9 +255,9 @@ export function EditChannelAccountControl({ account }: { account: ChannelAccount
     );
   }
   return (
-    <div className="w-80 rounded-xl border border-amber-500/25 bg-slate-900 p-3 text-left shadow-xl">
+    <div className="w-80 rounded-xl border border-crown-500/25 bg-ink-900 p-3 text-left shadow-xl">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-amber-300">编辑「{account.label}」</span>
+        <span className="text-xs font-semibold text-crown-300">编辑「{account.label}」</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-3.5 w-3.5" />
         </button>

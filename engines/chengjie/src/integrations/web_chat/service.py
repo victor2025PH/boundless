@@ -13,6 +13,29 @@ from src.inbox.models import InboxConversation, InboxMessage
 from src.inbox.normalizer import conv_id
 
 
+def web_entry_visible(config: Optional[Dict[str, Any]]) -> bool:
+    """web 渠道入口（「在线顾问」账号卡 + platform=web 会话）在工作台是否可见。
+
+    impl85 阶段4（工单 #30/#42/#45，钧拍板「做隐藏，我不要手工配置」）：桌面包种子
+    自带 ``web_chat.title=无界科技·在线顾问`` 的网页挂件入口，客户机上无实际用途却
+    常驻账号管理与会话列表。判定序：
+    - 显式 ``web_chat.show_in_workspace``（含 false）永远优先——运营可两个方向覆写；
+    - 未写时按 UI 形态：**客户形态（桌面壳）默认隐藏**，internal（服务器/运维工作台，
+      如生产实例的官网在线客服运营）默认可见——零手工配置即达客户诉求，且不动
+      厂商自己的运营面。
+    隐藏是**工作台可见性**语义：widget 公网路由/落库不受影响（web_chat.enabled 管那个）。
+    """
+    wc = (config or {}).get("web_chat") if isinstance(config, dict) else None
+    wc = wc if isinstance(wc, dict) else {}
+    if "show_in_workspace" in wc:
+        return bool(wc.get("show_in_workspace"))
+    try:
+        from src.web.ui_visibility import resolve_ui_flavor
+        return resolve_ui_flavor(config) != "client"
+    except Exception:
+        return True
+
+
 class WebChatService:
     def __init__(
         self,

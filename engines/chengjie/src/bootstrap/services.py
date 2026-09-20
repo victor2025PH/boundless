@@ -72,6 +72,9 @@ def setup_contacts_subsystem(assistant):
                         assistant.logger.info(
                             "Telegram A 线已接入关系事实源 "
                             "(只读 intimacy/funnel；contacts_recording 未开)")
+                elif assistant.contacts.is_lite:
+                    assistant.logger.info(
+                        "Telegram 关系事实源未接：contacts 精简档（mode=lite）")
                 else:
                     assistant.logger.info(
                         "Telegram 关系事实源已按配置禁用 "
@@ -122,6 +125,66 @@ def setup_contacts_subsystem(assistant):
                     assistant.logger.info(
                         "WhatsApp RPA ContactHooks 已按配置禁用 "
                         "(contacts.rpa_hooks.whatsapp=false)")
+            # 2026-08-18 跨平台档案（origin_profile）：注册 _origin_block provider。
+            # 无条件注册、开关（contacts.origin_profile.enabled，默认关）在 provider
+            # 内部按次实读 → overlay 热开/热关免重启；A/B 线经
+            # companion_context.resolve_origin_block 消费，未开=返空零行为变化。
+            try:
+                from src.contacts.origin_context import make_origin_provider
+                from src.utils.companion_context import (
+                    set_relationship_providers as _set_rel_providers,
+                )
+                _set_rel_providers(
+                    origin_block_lookup=make_origin_provider(
+                        assistant.contacts.store, assistant.config))
+                assistant.logger.info(
+                    "跨平台档案 origin provider 已注册（开关按次实读 "
+                    "contacts.origin_profile.enabled）")
+            except Exception:
+                assistant.logger.warning(
+                    "origin provider 注册失败", exc_info=True)
+            # P3（2026-08-18）：token/信号**自动**合并成功 → 记忆合流（人工合并
+            # 路由已在 P2 直连桥，这里补自动路径缺口）。执行器按次实读
+            # merge_memory 开关（热关即停）；全链 fail-soft 绝不影响合并本身。
+            try:
+                _origin_store = assistant.contacts.store
+
+                def _post_merge_memory(contact_id: str = "", source: str = "") -> None:
+                    try:
+                        _cfgd = (assistant.config.config
+                                 if hasattr(assistant.config, "config") else {})
+                        _op = ((_cfgd.get("contacts") or {})
+                               .get("origin_profile") or {})
+                        if not _op.get("merge_memory", False):
+                            return
+                        _sm = assistant.skill_manager
+                        if _sm is None:
+                            return
+                        from src.contacts.memory_merge_bridge import (
+                            merge_contact_memory,
+                        )
+                        out = merge_contact_memory(
+                            contacts_store=_origin_store,
+                            inbox_store=assistant.inbox_store,
+                            cpi=getattr(_sm, "_cpi", None),
+                            episodic_store=getattr(_sm, "_episodic_store", None),
+                            contact_id=contact_id,
+                        )
+                        if out.get("linked"):
+                            assistant.logger.info(
+                                "[origin] %s 自动合并联动记忆合流 contact=%s "
+                                "linked=%d rows=%d", source, contact_id,
+                                out.get("linked", 0), out.get("rows_merged", 0))
+                    except Exception:
+                        assistant.logger.debug(
+                            "post-merge 记忆合流失败（不影响合并）", exc_info=True)
+
+                assistant.contacts.gateway.set_post_merge_hook(_post_merge_memory)
+                assistant.logger.info(
+                    "跨平台档案 post-merge 记忆合流钩子已挂（token/heuristic 自动路径）")
+            except Exception:
+                assistant.logger.warning(
+                    "post-merge 记忆合流钩子挂载失败", exc_info=True)
     except Exception as ex:
         assistant.logger.warning("Contacts 子系统启动跳过: %s", ex)
 
@@ -186,10 +249,20 @@ def setup_device_management(assistant):
 def setup_rpa_services(assistant):
     """装配三个 RPA 服务(Stage3,从 initialize() 原样迁出):LINE / Facebook
     Messenger / WhatsApp,均支持单/多账号,try/except 兜底,失败不挡启动。"""
+    # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
+    # 档位不含 rpa → 三个 RPA runner 一律不构建（LINE/Messenger/WhatsApp 真机自动化属旗舰）。
+    try:
+        from src.licensing.feature_gate import feature_enabled as _feat_on
+        _rpa_allowed = _feat_on("rpa", assistant.config.config or {})
+    except Exception:
+        _rpa_allowed = True
+    if not _rpa_allowed:
+        assistant.logger.info("RPA 服务全部跳过：授权档位未含 rpa（feature gate）")
     # LINE RPA 服务（单账号 or 多账号）
     try:
         _line_rpa_cfg = assistant.config.get_line_rpa_config() or {}
-        if isinstance(_line_rpa_cfg, dict) and _line_rpa_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_line_rpa_cfg, dict) \
+                and _line_rpa_cfg.get("enabled"):
             from src.integrations.line_rpa.service import LineRpaService
             _line_accounts = _line_rpa_cfg.get("accounts") or []
             if _line_accounts:
@@ -222,7 +295,7 @@ def setup_rpa_services(assistant):
     # Facebook Messenger RPA 服务（可选；主进程托管循环）
     try:
         _msgr_cfg = assistant.config.get_messenger_rpa_config() or {}
-        if isinstance(_msgr_cfg, dict) and _msgr_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_msgr_cfg, dict) and _msgr_cfg.get("enabled"):
             from src.integrations.messenger_rpa.service import MessengerRpaService
             assistant.messenger_rpa_service = MessengerRpaService(
                 config_manager=assistant.config,
@@ -239,7 +312,7 @@ def setup_rpa_services(assistant):
     # WhatsApp RPA 服务（单账号 or 多账号）
     try:
         _wa_cfg = (assistant.config.config or {}).get("whatsapp_rpa") or {}
-        if isinstance(_wa_cfg, dict) and _wa_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_wa_cfg, dict) and _wa_cfg.get("enabled"):
             from src.integrations.whatsapp_rpa.service import WhatsAppRpaService
             _wa_accounts = _wa_cfg.get("accounts") or []
             if _wa_accounts:

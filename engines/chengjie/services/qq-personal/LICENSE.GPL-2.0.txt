@@ -1,0 +1,16 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 2, June 1991
+
+ Copyright (C) 1989, 1991 Free Software Foundation, Inc.,
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+（本文件为 GNU General Public License, version 2 全文占位。构建/发布时以
+ https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt 的完整正文替换本占位，
+ 随安装包 LICENSES/ 目录一并分发。）
+
+本边车（qq-personal-connector）的注入 / QQNT hook / Milky 适配核心移植并改造自
+GPL-2.0 开源项目 LLOneBot（https://github.com/LLOneBot/LLOneBot ，v4.9.4 直连注入形态），
+按 GPL-2.0 第 2 条以相同许可发布。修改说明与来源见同目录 NOTICE.md，
+源码获取见 SOURCE_OFFER.md。

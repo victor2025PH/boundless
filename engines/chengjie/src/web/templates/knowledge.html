@@ -12,33 +12,37 @@
 
 /* Tabs */
 .kb-tabs{display:flex;gap:.25rem;border-bottom:2px solid var(--bd);margin-bottom:1.25rem;overflow-x:auto}
-.kb-tab{padding:.55rem 1.1rem;font-size:.85rem;font-weight:500;color:var(--t3);border:none;background:none;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s}
-.kb-tab.active{color:var(--p);border-bottom-color:var(--p)}
-.kb-tab:hover:not(.active){color:var(--t2)}
+/* Tab 是导航件：非激活态用二级文字（--t3 是辅助信息档，导航用它=可发现性打折） */
+.kb-tab{padding:.55rem 1.1rem;font-size:.85rem;font-weight:500;color:var(--t2);border:none;background:none;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s}
+/* 激活字用 --pd：tabs 直接坐在页面底（比白卡深一档）上，600 档蓝实测 4.18 差线 */
+.kb-tab.active{color:var(--pd);border-bottom-color:var(--p)}
+.kb-tab:hover:not(.active){color:var(--t)}
 .kb-pane{display:none}.kb-pane.active{display:block}
 
 /* Toolbar */
 .kb-toolbar{display:flex;align-items:center;gap:.7rem;margin-bottom:1rem;flex-wrap:wrap}
 .kb-toolbar input,.kb-toolbar select{background:var(--input);border:1px solid var(--bd);border-radius:var(--r-sm);padding:.45rem .75rem;font-size:.84rem;color:var(--t)}
 .kb-toolbar input{min-width:220px}
-.tag-chip{display:inline-block;background:var(--ps);color:var(--p);border-radius:20px;padding:.18rem .6rem;font-size:.75rem;margin:.15rem}
-.quality-star{color:#f59e0b;cursor:pointer}
+/* 触发词 chip：亮色深字浅底公式（--pd=品牌700 于 12% 蓝晕上 5.2:1；--p 只有 4.0）*/
+.tag-chip{display:inline-block;background:var(--ps);color:var(--pd);border-radius:20px;padding:.18rem .6rem;font-size:.75rem;font-weight:500;margin:.15rem}
+.quality-star{color:var(--amber);cursor:pointer}
 
 /* Entry Grid */
 .entry-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
 .entry-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem;position:relative;transition:box-shadow .15s}
 .entry-card:hover{box-shadow:var(--s1)}
-.entry-card.disabled{opacity:.5}
+/* 停用态：半透明只是"淡"，配显式徽章（entryCard 渲染）才是"可读的状态" */
+.entry-card.disabled{opacity:.65}
 /* 翻译状态 */
 .trans-badge{display:inline-flex;align-items:center;gap:.25rem;background:var(--gs);color:var(--green);border-radius:20px;padding:.12rem .5rem;font-size:.7rem;font-weight:600}
 .trans-badge.partial{background:var(--as);color:var(--amber)}
 .trans-badge.none{background:var(--rs);color:var(--red)}
 .trans-pill{display:inline-block;width:24px;height:14px;border-radius:10px;font-size:.6rem;text-align:center;line-height:14px;font-weight:700}
 .trans-pill.ok{background:var(--green);color:#fff}
-.trans-pill.pending{background:var(--bd2);color:var(--t3)}
+.trans-pill.pending{background:var(--bd2);color:var(--t2)}
 .trans-pill.auto{background:var(--amber);color:#fff}
 /* AI 回复面板 */
-.ai-reply-panel{background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(139,92,246,.06));border:1px solid rgba(91,124,246,.2);border-radius:var(--r);padding:1rem;margin-top:1rem}
+.ai-reply-panel{background:linear-gradient(135deg,color-mix(in srgb, var(--p,#1e8cf2) 6%, transparent),rgba(139,92,246,.06));border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 20%, transparent);border-radius:var(--r);padding:1rem;margin-top:1rem}
 .ai-reply-panel h4{font-size:.82rem;font-weight:600;color:var(--p);margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem}
 .ai-reply-bubble{background:var(--card);border-radius:var(--r-sm);padding:.8rem 1rem;font-size:.87rem;line-height:1.6;white-space:pre-wrap;min-height:60px}
 .ai-thinking{display:flex;gap:.3rem;align-items:center;padding:.5rem 0;color:var(--t3);font-size:.82rem}
@@ -47,7 +51,7 @@
 .ai-thinking span:nth-child(3){animation-delay:.4s}
 @keyframes bounce{0%,80%,100%{transform:scale(.8);opacity:.5}40%{transform:scale(1.1);opacity:1}}
 .entry-head{display:flex;align-items:flex-end;gap:.5rem;margin-bottom:.5rem;padding-right:44px}
-.entry-cat-badge{display:inline-block;background:var(--ps);color:var(--p);border-radius:20px;padding:.2rem .65rem;font-size:.72rem;font-weight:600;margin:0;line-height:1}
+.entry-cat-badge{display:inline-block;background:var(--ps);color:var(--pd);border-radius:20px;padding:.2rem .65rem;font-size:.72rem;font-weight:600;margin:0;line-height:1}
 .entry-title{font-size:.95rem;font-weight:600;margin-bottom:.4rem;color:var(--t)}
 .entry-scenario{font-size:.8rem;color:var(--t2);margin-bottom:.5rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .entry-triggers{margin-bottom:.6rem}
@@ -60,6 +64,7 @@
 
 /* ── 批量选择 ── */
 .entry-card.sel{outline:2px solid var(--p);outline-offset:2px;background:var(--ps)}
+.entry-card.hl-flash{outline:2px solid var(--p);outline-offset:2px;box-shadow:0 0 0 6px var(--ps)}
 .entry-cb{position:static;width:16px;height:16px;cursor:pointer;accent-color:var(--p);z-index:2;margin:0;flex:0 0 auto;align-self:flex-end}
 /* 选中模式：整个 card 可点击切换 */
 .sel-mode .entry-card{cursor:pointer}
@@ -123,7 +128,7 @@
 .sandbox-result-panel h4{font-size:.85rem;font-weight:600;color:var(--t2);margin-bottom:.7rem}
 .kb-ctx-block{background:var(--input);border-radius:var(--r-sm);padding:.75rem;font-size:.81rem;color:var(--t);white-space:pre-wrap;font-family:inherit;max-height:320px;overflow-y:auto;line-height:1.6}
 .match-entry{border:1px solid var(--bd);border-radius:var(--r-sm);padding:.6rem .8rem;margin-bottom:.5rem;font-size:.82rem}
-.match-score{float:right;background:var(--ps);color:var(--p);border-radius:20px;padding:.1rem .45rem;font-size:.72rem}
+.match-score{float:right;background:var(--ps);color:var(--pd);border-radius:20px;padding:.1rem .45rem;font-size:.72rem}
 
 /* Feedback */
 .fb-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1rem;margin-bottom:.6rem}
@@ -138,7 +143,7 @@
 </style>
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(16,185,129,.06),rgba(91,124,246,.06));border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-grn06,rgba(16,185,129,.06)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-grn15,rgba(16,185,129,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">📚</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title', "操作说明") }}</strong>
@@ -158,7 +163,10 @@
     <div class="kb-stat"><strong id="s-entries">{{ stats.total_entries }}</strong> {{ (i18n or {}).get('db_js_075', "条知识") }}</div>
     <div class="kb-stat pro-only"><strong id="s-examples">{{ stats.examples }}</strong> {{ (i18n or {}).get('kb_s008', "对话示例") }}</div>
     <div class="kb-stat pro-only"><strong id="s-ec">{{ stats.error_codes }}</strong> {{ (i18n or {}).get('kb_s009', "错误码") }}</div>
-    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} <span style="color:var(--green)" id="s-sat">{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}</span></div>
+    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} <span style="color:var(--green)" id="s-sat">{% if stats.satisfaction_rate is none %}{{ (i18n or {}).get('kb2_sat_none', "暂无反馈") }}{% else %}{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}{% endif %}</span></div>
+    <!-- 健康分：原本藏在维护面板深处，提到页头常驻可见（点击直达诊断）。刻意不加
+         pro-only——简洁模式的运营正是最需要"知识库健不健康"信号的人群。 -->
+    <div class="kb-stat" id="kb-health-chip" style="display:none;cursor:pointer" onclick="openMaintPanel();runHealthCheck()" title="{{ (i18n or {}).get('kb2_health_tip', '知识库健康分（点击查看诊断建议与修复入口）') }}">🏥 <strong id="s-health">—</strong> <span id="s-health-grade" style="font-size:.72rem;color:var(--t3)"></span></div>
   </div>
 </div>
 
@@ -168,7 +176,7 @@
   <button class="kb-tab pro-only" data-tab="error-codes" onclick="switchTab('error-codes',this)" title="{{ (i18n or {}).get('kb_s011', '管理业务错误码及其标准回复话术') }}">⚠️ {{ (i18n or {}).get('kb_s012', "错误码字典") }}</button>
   <button class="kb-tab" data-tab="examples" onclick="switchTab('examples',this)" title="{{ (i18n or {}).get('kb_s013', '管理高质量的对话示例，AI 会参考这些示例回复') }}">💬 {{ (i18n or {}).get('kb_s008', "对话示例") }}</button>
   <button class="kb-tab" data-tab="sandbox" data-help="sandbox" onclick="switchTab('sandbox',this)">🧪 {{ (i18n or {}).get('kb_s014', "沙盒测试") }}</button>
-  <button class="kb-tab pro-only" data-tab="translations" onclick="switchTab('translations',this)" id="tab-trans" data-help="batch_translate">🌐 {{ (i18n or {}).get('kb_s015', "翻译审核") }} <span id="trans-badge" style="display:none;background:var(--red);color:#fff;border-radius:20px;padding:.05rem .4rem;font-size:.68rem;margin-left:.25rem">0</span></button>
+  <button class="kb-tab pro-only" data-tab="translations" onclick="switchTab('translations',this)" id="tab-trans" data-help="batch_translate">🌐 {{ (i18n or {}).get('kb_s015', "翻译审核") }} <span id="trans-badge" style="display:none;background:var(--red);color:var(--th-ink-inverse,#fff);border-radius:20px;padding:.05rem .4rem;font-size:.68rem;margin-left:.25rem">0</span></button>
   <button class="kb-tab pro-only" data-tab="feedback" data-help="kb_feedback" onclick="switchTab('feedback',this)">📊 {{ (i18n or {}).get('kb_s016', "效果反馈") }}</button>
 </div>
 
@@ -186,6 +194,17 @@
       <option value="">{{ (i18n or {}).get('kb_s018', "全部分类") }}</option>
       {% for cat in categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
     </select>
+    <!-- 来源筛选（J-9 #184）：把「厂商随包预置的自家产品说明」与用户自建条目分开看 -->
+    <select id="entry-source" onchange="loadEntries()" title="{{ (i18n or {}).get('kb2_src_tip', '按条目来源筛选') }}">
+      <option value="">{{ (i18n or {}).get('kb2_src_all', "全部来源") }}</option>
+      <option value="user">{{ (i18n or {}).get('kb2_src_user', "我建的") }}</option>
+      <option value="import">{{ (i18n or {}).get('kb2_src_import', "批量导入") }}</option>
+      {# P-4 #254（D-P6）：「系统话术」整类移出用户 KB 页 → 系统设置「兜底策略」（/settings#fallback）。
+         选项藏而不删：兜底策略页「在知识库里查看」与支付话术横幅仍经 kbShowSystem() 深链进来。 #}
+      <option value="system" hidden>{{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</option>
+      <option value="vendor">{{ (i18n or {}).get('kb2_src_vendor', "系统预置·厂商产品") }}</option>
+      <option value="learner">{{ (i18n or {}).get('kb2_src_learner', "学习队列学来的") }}</option>
+    </select>
     <select id="entry-sort" onchange="loadEntries()" class="pro-only">
       <option value="">{{ (i18n or {}).get('psn_sort_default', "默认排序") }}</option>
       <option value="use_desc">{{ (i18n or {}).get('kb_s019', "使用最多") }}</option>
@@ -195,7 +214,7 @@
     <label style="display:flex;align-items:center;gap:.35rem;font-size:.83rem" class="pro-only">
       <input type="checkbox" id="entry-enabled-only" onchange="loadEntries()"> {{ (i18n or {}).get('kb_s021', "仅启用") }}
     </label>
-    <button class="btn btn-p btn-sm" onclick="openEntryDrawer()">
+    <button class="btn btn-p btn-sm" data-anchor="kb-new-entry" onclick="openEntryDrawer()">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       {{ (i18n or {}).get('kb_s005', "新建条目") }}
     </button>
@@ -216,6 +235,10 @@
     <button class="btn btn-s btn-sm pro-only" onclick="openMaintPanel()" title="{{ (i18n or {}).get('kb_s028', '查重、备份、维护诊断') }}">
       ⚙️ {{ (i18n or {}).get('db_s012', "维护") }}
     </button>
+    {# Q-10 #254（22KVXF ⑤）：预置条目按来源 vendor / system / help 两步清——先列清单再删 #}
+    <button class="btn btn-s btn-sm" id="btn-purge-preset" onclick="openPresetPurgeModal()" title="{{ (i18n or {}).get('kb2_preset_btn_tip', '按来源列出厂商 / 系统 / 帮助语料残留的预置条目，看过清单再删；你自己建的条目永不在内') }}">
+      🧹 {{ (i18n or {}).get('kb2_preset_btn', "清除预置条目") }}
+    </button>
     <button class="btn btn-s btn-sm pro-only" onclick="exportCsv()" title="{{ (i18n or {}).get('kb_s029', '导出为 CSV，可用 Excel 打开编辑') }}">
       📊 CSV
     </button>
@@ -229,6 +252,31 @@
     <button class="btn btn-s btn-sm pro-only" onclick="exportMarkdown()" title="{{ (i18n or {}).get('kb_s033', '导出知识库为 Markdown 文档') }}">
       📄 Markdown
     </button>
+  </div>
+  <!-- 厂商预置条目提示（J-9 #184）：服务端首渲染按 stats.entries_vendor 决定是否可见，
+       之后由 refreshStats → _syncVendorNotice 维持；「稍后」只在本会话隐藏，升级后再提醒。 -->
+  <div id="kb-vendor-notice" role="status"
+       style="display:{{ 'flex' if (stats.entries_vendor or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
+    <span>📦 {{ (i18n or {}).get('kb2_vendor_lead', "检测到") }} <strong id="kb-vendor-n">{{ stats.entries_vendor or 0 }}</strong> {{ (i18n or {}).get('kb2_vendor_lead2', "条厂商随包预置的产品说明（不是你的知识）。") }}
+      <span id="kb-vendor-state" style="color:var(--t3)">{% if stats.vendor_excluded %}{{ (i18n or {}).get('kb2_vendor_excluded', "对客回复已排除它们。") }}{% else %}{{ (i18n or {}).get('kb2_vendor_not_excluded', "当前部署对客回复仍会用到它们。") }}{% endif %}</span>
+    </span>
+    <span style="display:flex;gap:.4rem;margin-left:auto">
+      <button class="btn btn-s btn-sm" onclick="kbShowVendor()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbPurgeVendor()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_vendor_purge', "一键清空") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbDismissVendorNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
+    </span>
+  </div>
+  <!-- 系统预置支付话术提示（N-3 #240 / D-N2）：1.0.76 之前每次启动无条件播进库的 GXP 支付
+       话术等（source=system，template_key ∈ PAYMENT_SEED_KEYS）。非支付部署用不上；
+       首渲染按 stats.entries_system_payment，之后 refreshStats → _syncSysPayNotice 维持。 -->
+  <div id="kb-syspay-notice" role="status"
+       style="display:{{ 'flex' if (stats.entries_system_payment or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
+    <span>🧾 {{ (i18n or {}).get('kb2_syspay_lead', "知识库里还有") }} <strong id="kb-syspay-n">{{ stats.entries_system_payment or 0 }}</strong> {{ (i18n or {}).get('kb2_syspay_lead2', "条系统预置的支付话术（GXP 查单 / 回调 / 汇率菜单等）——这是支付插件用的，陪伴 / 销售运营用不上，也不是你的知识。") }}</span>
+    <span style="display:flex;gap:.4rem;margin-left:auto">
+      <button class="btn btn-s btn-sm" onclick="kbShowSystem()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbPurgePaymentSeeds()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_syspay_purge', "一键清除") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbDismissSysPayNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
+    </span>
   </div>
   <div id="entry-grid" class="entry-grid">
     <div class="empty-state"><p>{{ (i18n or {}).get('dash.loading', "加载中…") }}</p></div>
@@ -279,6 +327,30 @@
   <div style="display:flex;gap:.5rem;justify-content:flex-end">
     <button class="btn btn-s" onclick="closeImportModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
     <button class="btn btn-p" onclick="doImport()">{{ (i18n or {}).get('psn_start_import', "开始导入") }}</button>
+  </div>
+</div>
+
+<!-- ══ 清除预置条目模态框（Q-10 #254 / 22KVXF ⑤）：dry-run 清单 → 勾选来源 → 确认删除 ═══ -->
+<div id="preset-overlay" onclick="closePresetPurgeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
+<div id="preset-modal" role="dialog" aria-labelledby="preset-title" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+    <strong id="preset-title">🧹 {{ (i18n or {}).get('kb2_preset_title', "清除预置条目") }}</strong>
+    <button class="btn btn-s" onclick="closePresetPurgeModal()" style="padding:.3rem .6rem">✕</button>
+  </div>
+  <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('kb2_preset_lead', "预置条目不是你的知识：厂商随包的产品说明、系统话术 / 示例、历史版本误播进来的帮助语料残留。先列清单，看过再删；「我建的」「批量导入」「学习队列学来的」永远不在清单里。") }}</div>
+  <div id="preset-sources" style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.83rem;margin-bottom:.6rem">
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="vendor" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_vendor', "系统预置·厂商产品") }}</label>
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="system" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</label>
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="help" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_help', "帮助语料残留") }}</label>
+  </div>
+  <div id="preset-help-line" style="font-size:.78rem;color:var(--t3);margin-bottom:.6rem"></div>
+  <div id="preset-summary" style="font-size:.82rem;margin-bottom:.5rem;min-height:1.2rem"></div>
+  <div id="preset-list" style="max-height:38vh;overflow:auto;border:1px solid var(--bd);border-radius:8px;font-size:.8rem"></div>
+  <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.9rem;align-items:center">
+    <span id="preset-status" style="font-size:.78rem;color:var(--t3);margin-right:auto"></span>
+    <button class="btn btn-s" onclick="closePresetPurgeModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+    <button class="btn btn-s" id="btn-preset-preview" onclick="presetPurgePreview()">{{ (i18n or {}).get('kb2_preset_preview', "刷新清单") }}</button>
+    <button class="btn btn-p" id="btn-preset-delete" onclick="presetPurgeConfirm()" disabled style="background:var(--red,#c0392b);border-color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_preset_delete', "确认删除") }}</button>
   </div>
 </div>
 
@@ -479,7 +551,7 @@
       <span id="btp-counts" style="font-size:.75rem;color:var(--t3)"></span>
     </div>
     <div style="background:var(--bd);border-radius:20px;height:8px;overflow:hidden">
-      <div id="btp-bar" style="height:100%;background:linear-gradient(90deg,var(--p),#8b5cf6);border-radius:20px;width:0;transition:width .3s"></div>
+      <div id="btp-bar" style="height:100%;background:linear-gradient(90deg,var(--p),var(--th-bg-violet5,#8b5cf6));border-radius:20px;width:0;transition:width .3s"></div>
     </div>
     <div id="btp-status" style="font-size:.72rem;color:var(--t3);margin-top:.35rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ (i18n or {}).get('inbox.xl.prog_preparing', "准备中…") }}</div>
   </div>
@@ -565,22 +637,29 @@
   <div class="kb-drawer-body">
     <input type="hidden" id="entry-id">
     <!-- AI 自动生成区 -->
-    <div id="ai-gen-bar" class="pro-only" style="background:linear-gradient(135deg,#ede9fe,#dbeafe);border:1px solid #c4b5fd;border-radius:9px;padding:.65rem .9rem;margin-bottom:.8rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
-      <span style="font-size:.78rem;font-weight:600;color:#6d28d9">✨ AI {{ (i18n or {}).get('kb_s095', "智能填写") }}</span>
+    <div id="ai-gen-bar" class="pro-only" style="background:linear-gradient(135deg,var(--th-bg-violet100,#ede9fe),var(--th-bg-blue100,#dbeafe));border:1px solid var(--th-bd-violet3,#c4b5fd);border-radius:9px;padding:.65rem .9rem;margin-bottom:.8rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+      <span style="font-size:.78rem;font-weight:600;color:var(--th-ink-violet7,#6d28d9)">✨ AI {{ (i18n or {}).get('kb_s095', "智能填写") }}</span>
       <input id="ai-gen-topic" type="text" placeholder="{{ (i18n or {}).get('kb_s096', '输入主题，如：账单异常处理') }}"
-        style="flex:1;min-width:120px;border:1.5px solid #c4b5fd;border-radius:7px;padding:.35rem .6rem;font-size:.82rem;background:#fff;outline:none"
+        style="flex:1;min-width:120px;border:1.5px solid var(--th-bd-violet3,#c4b5fd);border-radius:7px;padding:.35rem .6rem;font-size:.82rem;background:var(--th-bg-surface,#fff);outline:none"
         onkeydown="if(event.key==='Enter')aiGenerate()">
       <button class="btn btn-p btn-xs" onclick="aiGenerate()" id="ai-gen-btn"
-        style="background:linear-gradient(135deg,#7c3aed,#5b7cf6);white-space:nowrap">
+        style="background:linear-gradient(135deg,var(--th-bg-violet6,#7c3aed),var(--th-bg-brand,#5b7cf6));white-space:nowrap">
         {{ (i18n or {}).get('kb_s097', "生成内容") }}
       </button>
-      <span id="ai-gen-status" style="font-size:.72rem;color:#6d28d9"></span>
+      <span id="ai-gen-status" style="font-size:.72rem;color:var(--th-ink-violet7,#6d28d9)"></span>
+    </div>
+    <!-- P-4 #254（D-P6）：「新建条目」预填模板（按域：陪伴＝称呼偏好 / 忌聊话题 / 常聊话题；
+         销售＝原三例）。首装 KB 不再落示例行，格式示例改在这里点一下即填进表单——不落库、
+         没有「误启用客服域示例」的事故面。只在新建时显示。 -->
+    <div id="kb-tpl-bar" style="display:none;border:1px dashed var(--bd);border-radius:9px;padding:.55rem .8rem;margin-bottom:.8rem">
+      <div style="font-size:.76rem;color:var(--t2);margin-bottom:.4rem">{{ (i18n or {}).get('kb2_tpl_lead', "从模板开始：点一下预填，再改成你的真实内容") }}</div>
+      <div id="kb-tpl-chips" style="display:flex;gap:.4rem;flex-wrap:wrap"></div>
     </div>
     {% if domain_web_pages|selectattr('key','equalto','ch')|list %}
     <div class="ch-conflict-warn pro-only" id="ch-conflict-warn">
       <strong>⚠️ {{ (i18n or {}).get('kb_s098', "通道数据冲突提醒") }}</strong>
       <div>{{ (i18n or {}).get('kb_s099', "此条目涉及通道实时数据（成功率/费率/限额/状态等），这些数据由") }}
-        <a href="/channels" style="color:#b45309;font-weight:600">{{ (i18n or {}).get('kb_s100', "通道管理面板") }}</a> {{ (i18n or {}).get('kb_s101', "实时控制。") }}</div>
+        <a href="/channels" style="color:var(--th-ink-amber7,#b45309);font-weight:600">{{ (i18n or {}).get('kb_s100', "通道管理面板") }}</a> {{ (i18n or {}).get('kb_s101', "实时控制。") }}</div>
       <ul id="ch-conflict-details"></ul>
       <div style="font-size:.75rem;color:#a16207;margin-top:.3rem">
         KB {{ (i18n or {}).get('kb_s102', "中的通道数值") }}<strong>{{ (i18n or {}).get('kb_s103', "不会被机器人使用") }}</strong>。{{ (i18n or {}).get('kb_s104', "如需修改通道数据，请前往通道管理面板。") }}
@@ -671,6 +750,7 @@
     <button class="btn btn-s" onclick="showVersionHistory()" id="btn-ver-hist" style="display:none" title="{{ (i18n or {}).get('kb_s145', '查看此条目的编辑历史') }}">
       🕐 {{ (i18n or {}).get('kb_s146', "历史") }}
     </button>
+    <button class="btn btn-s" onclick="sandboxFromDrawer()" title="{{ (i18n or {}).get('kb2_sandbox_try_tip', '保存前先到沙盒用触发词试一次命中效果（不发消息）') }}">🧪 {{ (i18n or {}).get('kb2_sandbox_try', "沙盒试一句") }}</button>
     <button class="btn btn-p" onclick="saveEntry()">{{ (i18n or {}).get('save', "保存") }}</button>
   </div>
 </div>
@@ -685,7 +765,7 @@
 </div>
 
 <!-- ══ 版本 Diff 模态框 ══════════════════════════════════ -->
-<div id="diff-modal-overlay" onclick="closeDiffModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:700"></div>
+<div id="diff-modal-overlay" onclick="closeDiffModal()" style="display:none;position:fixed;inset:0;background:var(--th-bg-scrim45,rgba(0,0,0,.45));z-index:700"></div>
 <div id="diff-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(820px,96vw);max-height:85vh;overflow-y:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.22);z-index:701">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.2rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--card);z-index:1">
     <div>
@@ -822,7 +902,7 @@ function toast(msg, ok=true){
 async function api(method, url, body=null){
   const opts={method,headers:{'Content-Type':'application/json'}};
   if(body) opts.body=JSON.stringify(body);
-  const r=await fetch(url,opts);
+  const r=await apiFetch(url,opts);
   return r.ok ? r.json() : Promise.reject(await r.text());
 }
 
@@ -833,17 +913,44 @@ function debounceLoadEntries(){
 }
 
 /* ── 知识条目 ─────────────────────────────────────────── */
+/* 空态「清除筛选」落点（顶层声明=全局，供内联 onclick 调用） */
+function kbResetFilters(){
+  document.getElementById('entry-search').value='';
+  document.getElementById('entry-cat').value='';
+  document.getElementById('entry-enabled-only').checked=false;
+  const _src=document.getElementById('entry-source'); if(_src) _src.value='';
+  loadEntries();
+}
 async function loadEntries(){
   const search=(document.getElementById('entry-search').value||'').trim();
   const cat=document.getElementById('entry-cat').value;
   const enabled=document.getElementById('entry-enabled-only').checked;
   const sort=document.getElementById('entry-sort').value;
-  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort});
+  const srcEl=document.getElementById('entry-source');
+  const source=srcEl?srcEl.value:'';
+  /* P-4 #254（D-P6）：不筛来源时默认**排除** source=system——系统话术 / 示例整类归系统设置
+     「兜底策略」页管理，用户知识库页只看自己的知识；显式选 system（深链）才看它们。 */
+  const querySource = source || '-system';
+  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort,source:querySource});
   const {entries}=await api('GET','/api/kb/entries?'+params);
   const grid=document.getElementById('entry-grid');
   _allEntryIds = (entries||[]).map(e=>String(e.id));   // 更新全选池
   if(!entries.length){
-    grid.innerHTML='<div class="empty-state"><p>'+window.T('kb_js_001')+'"'+window.T('kb_s005')+'"'+window.T('add')+'</p></div>';
+    /* 空态分语义（2026-08-22 P5）：「筛选无结果」与「库真空」是两回事——
+       前者给一键清筛，后者给三件套（插画+一句人话+真 CTA：起步包向导/新建）。
+       旧实现一行灰字两头凑，违反 /developer 样式指南卡 ⑤。 */
+    if(search || cat || enabled || source){
+      grid.innerHTML='<div class="empty-state"><p>'+window.T('kb2_nomatch')+'</p>'
+        +'<button class="btn btn-s btn-sm" onclick="kbResetFilters()">'+window.T('kb2_clearfilter')+'</button></div>';
+    }else{
+      grid.innerHTML='<div class="empty-state">'
+        +'<div style="font-size:34px;line-height:1" aria-hidden="true">📚</div>'
+        +'<p style="margin:.6rem auto 1rem;max-width:420px">'+window.T('kb2_empty_lead')+'</p>'
+        +'<div style="display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap">'
+        +'<a class="btn btn-p btn-sm" href="/workspace/kb-start" style="text-decoration:none">🌱 '+window.T('kb2_empty_seed')+'</a>'
+        +'<button class="btn btn-s btn-sm" onclick="openEntryDrawer()">＋ '+window.T('kb_s005')+'</button>'
+        +'</div></div>';
+    }
     return;
   }
   grid.innerHTML=entries.map(e=>entryCard(e)).join('');
@@ -869,7 +976,11 @@ function transStatusBadge(trans){
 }
 
 function entryCard(e){
-  const triggers=(e.triggers||[]).slice(0,4).map(t=>`<span class="tag-chip">${t}</span>`).join('');
+  const trigList=e.triggers||[];
+  /* 只展示前 4 个触发词，其余原先被静默截断——运营不知道还有多少词在生效；
+     现在收成 "+N" chip，悬停可见剩余全量。 */
+  const triggers=trigList.slice(0,4).map(t=>`<span class="tag-chip">${esc(t)}</span>`).join('')
+    +(trigList.length>4?`<span class="tag-chip" title="${esc(trigList.slice(4).join(' / '))}">+${trigList.length-4}</span>`:'');
   const selClass=_selectedIds.has(String(e.id))?'sel':'';
   return `<div class="entry-card ${e.enabled?'':'disabled'} ${selClass}" id="ec-${e.id}"
     onclick="onCardClick(event,'${e.id}')">
@@ -880,9 +991,11 @@ function entryCard(e){
         ${_selectedIds.has(String(e.id))?'checked':''}
         onclick="event.stopPropagation();toggleSelectEntry('${e.id}')">
       <div class="entry-cat-badge">${e.category||window.T('kb_js_005')}</div>
+      ${e.enabled?'':'<span class="badge b-n" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb2_disabled')+'</span>'}
       ${e.reply_mode==='direct'?'<span class="badge b-g pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_006')+'</span>'
        :e.reply_mode==='ai_strict'?'<span class="badge b-u pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_007')+'</span>':''}
       ${e.template_key?`<span class="badge b-p pro-only" style="font-size:.65rem;margin-left:.3rem">${esc(e.template_key)}</span>`:''}
+      ${e.source==='vendor'?'<span class="badge b-n" style="font-size:.65rem;margin-left:.3rem" title="'+window.T('kb2_src_vendor_tip')+'">'+window.T('kb2_src_vendor_badge')+'</span>':''}
     </div>
     <div class="entry-title">${esc(e.title)}</div>
     <div class="entry-scenario">${esc(e.scenario||'')}</div>
@@ -902,6 +1015,36 @@ function entryCard(e){
       </div>
     </div>
   </div>`;
+}
+
+/* P-4 #254（D-P6）「新建条目」预填模板：GET /api/kb/new-entry-templates（按域），懒取一次；
+   点 chip → 填标题 / 分类 / 触发词 / 场景 / 步骤 / 原则 / 示例 / 禁忌，启用勾默认保留给用户决定。 */
+let _kbTplCache=null;
+function _kbTplFill(t){
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=(v==null?'':v); };
+  set('f-title',t.title); set('f-triggers',(t.triggers||[]).join(', ')); set('f-scenario',t.scenario);
+  set('f-steps',t.steps); set('f-principles',t.principles); set('f-example',t.example_reply_zh);
+  set('f-forbidden',t.forbidden); set('f-reply-mode',t.reply_mode||'ai_guided');
+  const cat=document.getElementById('f-category');
+  if(cat && t.category && [...cat.options].some(o=>o.value===t.category)) cat.value=t.category;
+  if(typeof _scheduleConflictCheck==='function') _scheduleConflictCheck();
+}
+async function _kbTplBarToggle(show){
+  const bar=document.getElementById('kb-tpl-bar'); const chips=document.getElementById('kb-tpl-chips');
+  if(!bar||!chips) return;
+  if(!show){ bar.style.display='none'; return; }
+  try{
+    if(!_kbTplCache){ const r=await api('GET','/api/kb/new-entry-templates'); _kbTplCache=(r&&r.templates)||[]; }
+  }catch(e){ _kbTplCache=[]; }
+  if(!_kbTplCache.length){ bar.style.display='none'; return; }
+  chips.innerHTML='';
+  _kbTplCache.forEach((t,i)=>{
+    const b=document.createElement('button'); b.type='button'; b.className='btn btn-s btn-xs';
+    b.textContent=t.title||('#'+(i+1)); b.title=t.scenario||'';
+    b.addEventListener('click',()=>_kbTplFill(t));
+    chips.appendChild(b);
+  });
+  bar.style.display='';
 }
 
 async function openEntryDrawer(id=null){
@@ -940,6 +1083,7 @@ async function openEntryDrawer(id=null){
     if(verBtn) verBtn.style.display='none';
     document.getElementById('img-section').style.display='none';
   }
+  _kbTplBarToggle(!id);
   document.getElementById('version-panel').style.display='none';
   var _chWarn=document.getElementById('ch-conflict-warn');if(_chWarn)_chWarn.classList.remove('show');
   document.getElementById('entry-overlay').classList.add('open');
@@ -973,10 +1117,10 @@ function _checkChannelConflict(){
     ).join('');
     const example = document.getElementById('f-example').value;
     if(/\d+[\.\d]*\s*%/.test(example)){
-      details.innerHTML += '<li style="color:#dc2626">'+window.T('kb_js_016')+'</li>';
+      details.innerHTML += '<li style="color:var(--th-ink-red6,#b91c1c)">'+window.T('kb_js_016')+'</li>';
     }
     if(document.getElementById('f-category').value === window.T('channels_status')){
-      details.innerHTML += '<li style="color:#dc2626">「'+window.T('kb_js_017')+window.T('kb_js_018')+'</li>';
+      details.innerHTML += '<li style="color:var(--th-ink-red6,#b91c1c)">「'+window.T('kb_js_017')+window.T('kb_js_018')+'</li>';
     }
     warn.classList.add('show');
   } else {
@@ -1039,7 +1183,7 @@ function _fieldDiff(oldVal, newVal){
   const n=String(newVal||'').trim();
   if(o===n) return `<span style="color:var(--t2)">${_escHtml(o)||'—'}</span>`;
   return `<span style="color:var(--danger,#dc3545);text-decoration:line-through;margin-right:.4rem">${_escHtml(o)||'—'}</span>`+
-         `<span style="color:#198754">${_escHtml(n)||'—'}</span>`;
+         `<span style="color:var(--th-ink-bsgreen,#198754)">${_escHtml(n)||'—'}</span>`;
 }
 
 async function previewVersion(vid){
@@ -1076,7 +1220,7 @@ async function previewVersion(vid){
   document.getElementById('diff-modal-content').innerHTML=`
     <div style="font-size:.75rem;color:var(--t3);margin-bottom:.6rem">
       ${window.T('kb_js_143')} = ${window.T('kb_js_144')} <span style="color:var(--danger,#dc3545);text-decoration:line-through">${window.T('kb_js_145')}</span> 
-      → <span style="color:#198754">${window.T('kb_js_146')}</span>
+      → <span style="color:var(--th-ink-bsgreen,#198754)">${window.T('kb_js_146')}</span>
     </div>
     <table style="width:100%;border-collapse:collapse"><tbody>${rows}</tbody></table>`;
   _pendingRestoreVid=vid;
@@ -1090,7 +1234,7 @@ async function restoreVersion(vid){
   if(r.ok){
     toast(window.T('kb_js_026'));
     const id=document.getElementById('entry-id').value;
-    openEntryEditor(id);  // 重新加载条目内容
+    openEntryDrawer(id);  // 重新加载条目内容（真名是 openEntryDrawer——旧名 openEntryEditor 从未存在，点恢复版本即 ReferenceError）
     showVersionHistory();
   } else {
     toast(window.T('wa_js_038'),'warn');
@@ -1484,7 +1628,7 @@ async function loadCategoryStats(){
     const cats=d.categories||[];
     if(!cats.length){ el.innerHTML='<span style="color:var(--t3)">'+window.T('rpa_js_no_data')+'</span>'; return; }
     const maxUse=cats.reduce((m,c)=>Math.max(m,c.total_use||0),1);
-    const palette=['#5b7cf6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316'];
+    const palette=['#1e8cf2','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316'];
     el.innerHTML=cats.map((c,i)=>{
       const pct=maxUse>0?Math.max(2,Math.round((c.total_use||0)/maxUse*100)):2;
       const color=palette[i%palette.length];
@@ -1546,13 +1690,171 @@ async function refreshStats(){
   document.getElementById('s-examples').textContent=s.examples;
   document.getElementById('s-ec').textContent=s.error_codes;
   document.getElementById('s-feedback').textContent=s.feedback;
-  document.getElementById('s-sat').textContent=s.satisfaction_rate+'%'+window.T('kb_s010');
+  /* 分母为 0 → 后端回 null，显示「暂无反馈」而不是假 0.0%（J-9） */
+  document.getElementById('s-sat').textContent=(s.satisfaction_rate==null)
+    ? window.T('kb2_sat_none') : (s.satisfaction_rate+'%'+window.T('kb_s010'));
+  _syncVendorNotice(s);
+  _syncSysPayNotice(s);
 }
+
+/* ── 厂商预置条目提示 / 一键清空（J-9 #184）──────────────────
+   内测包随 knowledge_base.db 带进来的厂商自家产品说明（source=vendor）。
+   对客检索在桌面模式已硬排除；这里让运营看得见、能一键清走。 */
+function _syncVendorNotice(s){
+  const box=document.getElementById('kb-vendor-notice');
+  if(!box) return;
+  const n=(s&&s.entries_vendor)||0;
+  const dismissed=sessionStorage.getItem('kb.vendorNotice.dismiss')==='1';
+  if(!n||dismissed){ box.style.display='none'; return; }
+  document.getElementById('kb-vendor-n').textContent=n;
+  const st=document.getElementById('kb-vendor-state');
+  if(st) st.textContent=s.vendor_excluded?window.T('kb2_vendor_excluded'):window.T('kb2_vendor_not_excluded');
+  box.style.display='flex';
+}
+function kbShowVendor(){
+  const sel=document.getElementById('entry-source'); if(sel){ sel.value='vendor'; }
+  loadEntries();
+  const grid=document.getElementById('entry-grid'); if(grid) grid.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function kbDismissVendorNotice(){
+  sessionStorage.setItem('kb.vendorNotice.dismiss','1');
+  const box=document.getElementById('kb-vendor-notice'); if(box) box.style.display='none';
+}
+async function kbPurgeVendor(){
+  /* Q-10 #254：厂商横幅的「一键清空」不再直删（purge-source 无 dry-run）——统一走
+     「清除预置条目」两步弹窗，预选 vendor 一档；旧口 /api/kb/entries/purge-source 保留给 API 调用方。 */
+  const s=await api('GET','/api/kb/stats');
+  const n=(s&&s.entries_vendor)||0;
+  if(!n){ toast(window.T('kb2_vendor_none')); return; }
+  openPresetPurgeModal(['vendor']);
+}
+window.kbShowVendor=kbShowVendor; window.kbDismissVendorNotice=kbDismissVendorNotice; window.kbPurgeVendor=kbPurgeVendor;
+
+/* ── 清除预置条目（Q-10 #254 / 22KVXF ⑤）────────────────────
+   两步走：POST /api/kb/entries/purge-preset 默认 dry_run 只列清单（含启用 / 命中次数）→
+   用户看过清单、勾好来源 → dry_run:false + ids（清单交集）才删。绝不在自检 / 加载时自动跑。 */
+let _presetItems=[];
+function _presetSources(){
+  return Array.from(document.querySelectorAll('#preset-sources input[type=checkbox]:checked')).map(x=>x.value);
+}
+function openPresetPurgeModal(only){
+  document.querySelectorAll('#preset-sources input[type=checkbox]').forEach(x=>{
+    x.checked = Array.isArray(only) ? only.indexOf(x.value)>=0 : true;
+  });
+  _presetItems=[];
+  document.getElementById('preset-list').innerHTML='';
+  document.getElementById('preset-summary').textContent='';
+  document.getElementById('preset-help-line').textContent='';
+  document.getElementById('preset-status').textContent='';
+  document.getElementById('btn-preset-delete').disabled=true;
+  document.getElementById('preset-modal').style.display='';
+  document.getElementById('preset-overlay').style.display='';
+  presetPurgePreview();
+}
+function closePresetPurgeModal(){
+  document.getElementById('preset-modal').style.display='none';
+  document.getElementById('preset-overlay').style.display='none';
+}
+const _PRESET_SRC_LABEL={vendor:'kb2_src_vendor',system:'kb2_src_system',help:'kb2_src_help'};
+async function presetPurgePreview(){
+  const srcs=_presetSources();
+  const list=document.getElementById('preset-list');
+  const sum=document.getElementById('preset-summary');
+  const del=document.getElementById('btn-preset-delete');
+  const st=document.getElementById('preset-status');
+  _presetItems=[]; del.disabled=true;
+  if(!srcs.length){ list.innerHTML=''; sum.textContent=window.T('kb2_preset_pick_source'); return; }
+  st.textContent=window.T('dash.loading');
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-preset',{dry_run:true,sources:srcs}); }
+  catch(err){ st.textContent=''; sum.textContent=String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail'); return; }
+  st.textContent='';
+  const items=(r&&r.items)||[];
+  _presetItems=items;
+  const hc=r&&r.help_corpus;
+  const hl=document.getElementById('preset-help-line');
+  if(hc&&typeof hc.count==='number'&&hc.count>=0){ hl.textContent=window.Tf('kb2_preset_help_line',{n:hc.count}); }
+  else hl.textContent='';
+  if(!items.length){
+    list.innerHTML=''; sum.textContent=window.T('kb2_preset_none'); return;
+  }
+  const bys=r.by_source||{};
+  const parts=Object.keys(bys).map(k=>window.T(_PRESET_SRC_LABEL[k]||k)+' '+bys[k]);
+  sum.textContent=window.Tf('kb2_preset_summary',{n:items.length})+(parts.length?'（'+parts.join(' · ')+'）':'');
+  list.innerHTML=items.map(it=>{
+    const flags=[];
+    if(it.enabled) flags.push(window.T('kb2_preset_flag_enabled'));
+    if(it.use_count>0) flags.push(window.Tf('kb2_preset_flag_used',{n:it.use_count}));
+    return '<div style="display:flex;gap:.6rem;align-items:baseline;padding:.35rem .6rem;border-bottom:1px solid var(--bd)">'
+      +'<span style="flex:0 0 auto;color:var(--t3);font-size:.72rem;min-width:5.5em">'+esc(window.T(_PRESET_SRC_LABEL[it.source]||it.source))+'</span>'
+      +'<span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.title)+'">'+esc(it.title||it.id)+'</span>'
+      +'<span style="flex:0 0 auto;color:var(--t3);font-size:.72rem">'+esc(it.category||'')+(flags.length?' · <b style="color:var(--amber,#d98c00)">'+esc(flags.join(' / '))+'</b>':'')+'</span>'
+      +'</div>';
+  }).join('');
+  del.disabled=false;
+  del.textContent=window.Tf('kb2_preset_delete_n',{n:items.length});
+}
+async function presetPurgeConfirm(){
+  const srcs=_presetSources();
+  const ids=_presetItems.map(x=>x.id).filter(Boolean);
+  if(!ids.length||!srcs.length) return;
+  if(!confirm(window.Tf('kb2_preset_confirm',{n:ids.length}))) return;
+  const st=document.getElementById('preset-status');
+  const del=document.getElementById('btn-preset-delete');
+  del.disabled=true; st.textContent=window.T('dash.loading');
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-preset',{dry_run:false,sources:srcs,ids}); }
+  catch(err){ st.textContent=''; del.disabled=false; toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
+  st.textContent='';
+  toast(window.Tf('kb2_preset_purged',{n:(r&&r.count)||0}));
+  closePresetPurgeModal();
+  const sel=document.getElementById('entry-source'); if(sel&&(sel.value==='vendor'||sel.value==='system')) sel.value='';
+  await loadEntries(); await refreshStats();
+}
+window.openPresetPurgeModal=openPresetPurgeModal; window.closePresetPurgeModal=closePresetPurgeModal;
+window.presetPurgePreview=presetPurgePreview; window.presetPurgeConfirm=presetPurgeConfirm;
+
+/* ── 系统预置支付话术提示 / 一键清除（N-3 #240 / D-N2）────────
+   source=system 且 template_key 属支付系列（GXP 等）。只清这一系列：用户改过的
+   通用兜底与【示例】不动；后端打标后下次启动不再灌回。 */
+function _syncSysPayNotice(s){
+  const box=document.getElementById('kb-syspay-notice');
+  if(!box) return;
+  const n=(s&&s.entries_system_payment)||0;
+  const dismissed=sessionStorage.getItem('kb.sysPayNotice.dismiss')==='1';
+  if(!n||dismissed){ box.style.display='none'; return; }
+  const el=document.getElementById('kb-syspay-n'); if(el) el.textContent=n;
+  box.style.display='flex';
+}
+function kbShowSystem(){
+  const sel=document.getElementById('entry-source'); if(sel){ sel.value='system'; }
+  loadEntries();
+  const grid=document.getElementById('entry-grid'); if(grid) grid.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function kbDismissSysPayNotice(){
+  sessionStorage.setItem('kb.sysPayNotice.dismiss','1');
+  const box=document.getElementById('kb-syspay-notice'); if(box) box.style.display='none';
+}
+async function kbPurgePaymentSeeds(){
+  const s=await api('GET','/api/kb/stats');
+  const n=(s&&s.entries_system_payment)||0;
+  if(!n){ toast(window.T('kb2_syspay_none')); return; }
+  if(!confirm(window.Tf('kb2_syspay_purge_confirm',{n}))) return;
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-payment-seeds',{}); }
+  catch(err){ toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
+  toast(window.Tf('kb2_syspay_purged',{n:(r&&r.count)||0}));
+  await loadEntries(); await refreshStats();
+}
+window.kbShowSystem=kbShowSystem; window.kbDismissSysPayNotice=kbDismissSysPayNotice; window.kbPurgePaymentSeeds=kbPurgePaymentSeeds;
 
 /* ── HTML 转义 ────────────────────────────────────────── */
 function esc(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+/* 内联 on*="fn(…)" 的字符串实参：JSON 字面量再做属性转义（裸 JSON.stringify 的双引号会把
+   双引号属性截断 → 点击即 SyntaxError，#191 同类）。 */
+function jsArg(v){ return JSON.stringify(String(v==null?'':v)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 
 /* ── 翻译审核 ─────────────────────────────────────────── */
 const _LANG_LABELS={en:'English',ur:'اردو',pt:'Português',ar:'عربي'};
@@ -1599,7 +1901,7 @@ function transCard(t){
       <div>
         <span class="entry-cat-badge">${esc(t.category||'')}</span>
         <strong style="font-size:.88rem;margin-left:.4rem">${esc(t.entry_title||'')}</strong>
-        <span style="margin-left:.5rem;background:#1b2038;color:#a5b4fc;border-radius:5px;padding:.1rem .45rem;font-size:.72rem">${_LANG_LABELS[lang]||lang}</span>
+        <span style="margin-left:.5rem;background:var(--th-bg-inkchip,#1b2038);color:var(--th-ink-indigo3,#a5b4fc);border-radius:5px;padding:.1rem .45rem;font-size:.72rem">${_LANG_LABELS[lang]||lang}</span>
         <span class="trans-badge partial" style="margin-left:.3rem;font-size:.7rem">🤖 ${window.T('kb_js_154')}</span>
       </div>
       <div style="display:flex;gap:.4rem">
@@ -1686,7 +1988,7 @@ async function loadAutoSuggestions(){
       return `
       <div style="border:1px solid var(--bd);border-left:3px solid ${pc};border-radius:var(--r-sm);padding:.5rem .7rem;margin-bottom:.5rem;background:var(--card)">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem">
-          <span style="background:${pc};color:#fff;border-radius:10px;padding:.1rem .4rem;font-size:.68rem">${pl}</span>
+          <span style="background:${pc};color:var(--th-ink-inverse,#fff);border-radius:10px;padding:.1rem .4rem;font-size:.68rem">${pl}</span>
           <span style="font-size:.72rem;color:var(--t3)">${sl} · ×${s.count}${window.T('kb_js_174')}</span>
           ${s.avg_score?`<span style="font-size:.7rem;color:var(--t3)">${window.T('kb_js_156')}:${s.avg_score}</span>`:''}
         </div>
@@ -1728,7 +2030,7 @@ async function acceptSuggestion(btn,s){
 /* ── 知识盲区（Miss Log） ───────────────────────────── */
 async function loadMissLog(){
   try{
-    const r=await fetch('/api/kb/health-stats');
+    const r=await apiFetch('/api/kb/health-stats');
     if(!r.ok)return;
     const d=await r.json();
     const miss=d.miss_queries||[];
@@ -1741,8 +2043,8 @@ async function loadMissLog(){
       <div style="display:flex;align-items:center;gap:.6rem;padding:.4rem .6rem;border:1px solid var(--bd);border-radius:var(--r-sm);margin-bottom:.4rem;background:var(--card)">
         <span style="flex:1;font-size:.83rem;color:var(--t2)">${esc(m.query)}</span>
         <span style="background:var(--rs);color:var(--red);border-radius:20px;padding:.1rem .5rem;font-size:.72rem;flex-shrink:0">×${m.cnt}${window.T('kb_js_174')}</span>
-        <button class="btn btn-p btn-xs" onclick="missToEntry(${JSON.stringify(m.query)},this)">→ ${window.T('kb_s087')}</button>
-        <button class="btn btn-s btn-xs" onclick="deleteMiss(${JSON.stringify(m.query)},this)">${window.T('base.drill.ignore')}</button>
+        <button class="btn btn-p btn-xs" onclick="missToEntry(${jsArg(m.query)},this)">→ ${window.T('kb_s087')}</button>
+        <button class="btn btn-s btn-xs" onclick="deleteMiss(${jsArg(m.query)},this)">${window.T('base.drill.ignore')}</button>
       </div>`).join('');
   }catch(e){}
 }
@@ -1772,7 +2074,7 @@ async function deleteMiss(query, btn){
 /* ── 使用率统计 + 过期条目 ───────────────────────────── */
 async function loadUsageRanking(){
   try{
-    const r=await fetch('/api/kb/usage-ranking?limit=10');
+    const r=await apiFetch('/api/kb/usage-ranking?limit=10');
     if(!r.ok)return;
     const d=await r.json();
     const ranking=d.ranking||[];
@@ -1803,7 +2105,7 @@ async function showStale(){
   const btn=document.getElementById('btn-stale');
   btn.disabled=true; btn.textContent=window.T('kb_js_092');
   try{
-    const r=await fetch('/api/kb/stale?days=7');
+    const r=await apiFetch('/api/kb/stale?days=7');
     const d=await r.json();
     const stale=d.stale||[];
     _staleIds=stale.map(s=>s.id);
@@ -1871,7 +2173,7 @@ async function exportKb(){
   const btn = document.querySelector('[onclick="exportKb()"]');
   if(btn){ btn.disabled=true; btn.textContent='⏳ '+window.T('kb_js_096'); }
   try{
-    const resp = await fetch('/api/kb/export?fmt=json');
+    const resp = await apiFetch('/api/kb/export?fmt=json');
     if(!resp.ok){ toast(window.T('psn_js_194'),'warn'); return; }
     const blob = await resp.blob();
     const cd = resp.headers.get('Content-Disposition')||'';
@@ -1932,7 +2234,7 @@ async function exportCsv(){
   const btn = document.querySelector('[onclick="exportCsv()"]');
   if(btn){ btn.disabled=true; btn.textContent='⏳'; }
   try{
-    const resp = await fetch('/api/kb/export-csv');
+    const resp = await apiFetch('/api/kb/export-csv');
     if(!resp.ok){ toast('CSV '+window.T('psn_js_194'),'warn'); return; }
     const blob = await resp.blob();
     const cd = resp.headers.get('Content-Disposition')||'';
@@ -2140,9 +2442,9 @@ async function loadVectorProgress(){
   const mode=cov.mode||'bm25-only';
   const modeEl=document.getElementById('vec-mode-badge');
   if(mode.includes('hybrid')){
-    modeEl.innerHTML='<span style="background:#d4edda;color:#155724;padding:.1rem .5rem;border-radius:99px;font-size:.73rem">✅ '+window.T('kb_js_111')+'（BM25 + '+window.T('db_js_082')+'</span>';
+    modeEl.innerHTML='<span style="background:var(--th-bg-bsok,#d4edda);color:var(--th-ink-bsok,#155724);padding:.1rem .5rem;border-radius:99px;font-size:.73rem">✅ '+window.T('kb_js_111')+'（BM25 + '+window.T('db_js_082')+'</span>';
   } else {
-    modeEl.innerHTML='<span style="background:#fff3cd;color:#856404;padding:.1rem .5rem;border-radius:99px;font-size:.73rem">⚠️ '+window.T('kb_js_112')+'</span>';
+    modeEl.innerHTML='<span style="background:var(--th-bg-bswarn,#fff3cd);color:var(--th-ink-bswarn,#856404);padding:.1rem .5rem;border-radius:99px;font-size:.73rem">⚠️ '+window.T('kb_js_112')+'</span>';
   }
   if(d.running){
     document.getElementById('vec-progress-msg').textContent=d.msg||window.T('kb_js_113');
@@ -2192,7 +2494,7 @@ async function findDuplicates(){
   el.innerHTML=d.pairs.map(p=>`
     <div style="padding:.4rem 0;border-bottom:1px solid var(--bd2)">
       <div style="display:flex;align-items:center;gap:.4rem">
-        <span style="background:var(--warn-bg,#fff3cd);color:#856404;padding:.1rem .4rem;border-radius:4px;font-size:.72rem">${Math.round(p.similarity*100)}% ${window.T('kb_js_169')}</span>
+        <span style="background:var(--warn-bg,#fff3cd);color:var(--th-ink-bswarn,#856404);padding:.1rem .4rem;border-radius:4px;font-size:.72rem">${Math.round(p.similarity*100)}% ${window.T('kb_js_169')}</span>
       </div>
       <div style="font-size:.8rem;margin-top:.2rem">
         <a href="#" onclick="editEntry('${p.id1}');closeMaintPanel();return false" style="color:var(--p)">${p.title1}</a>
@@ -2235,14 +2537,76 @@ async function restoreBackup(filename){
 /* ── 条目编辑快捷入口 ────────────────────────────────────── */
 function editEntry(id){
   switchTab('entries');
-  // 直接调用条目编辑 drawek
-  setTimeout(()=>openEntryEditor(id),300);
+  // 直接打开条目编辑抽屉（真名 openEntryDrawer；旧名 openEntryEditor 是 ReferenceError 死链）
+  setTimeout(()=>openEntryDrawer(id),300);
 }
 
+/* ── 页头健康分芯片（复用维护面板同一接口；取数失败静默隐藏不打扰） ── */
+async function loadHealthChip(){
+  try{
+    const d=await api('GET','/api/kb/maintenance-advice');
+    if(!d||typeof d.score==='undefined')return;
+    const sc=document.getElementById('s-health');
+    sc.textContent=d.score;
+    sc.style.color=d.score>=80?'var(--green)':(d.score>=60?'var(--amber)':'var(--red)');
+    document.getElementById('s-health-grade').textContent=d.grade||'';
+    document.getElementById('kb-health-chip').style.display='';
+  }catch(_){}
+}
+
+/* ── 编辑抽屉 → 沙盒直达：拿首个触发词（缺则标题）预填并跑一次只读检索
+   （runSandbox 是 KB 检索不烧 LLM；runSandboxAI 才是真 AI，不自动跑） ── */
+function sandboxFromDrawer(){
+  const trig=(document.getElementById('f-triggers').value||'').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+  const seed=trig[0]||document.getElementById('f-title').value.trim();
+  closeEntryDrawer();
+  switchTab('sandbox',document.querySelector('.kb-tab[data-tab="sandbox"]'));
+  const q=document.getElementById('sb-query');
+  if(seed&&!q.value.trim())q.value=seed;
+  q.focus();
+  if(q.value.trim())runSandbox();
+}
+
+/* ── 深链定位：/knowledge#entry-<id>（实施49 P0-4）────────────
+   学习队列「已通过」、查重提示、效果回访三处早就在发这个链接，而本页
+   从不消费 hash——点过去只是打开知识库首屏，人还得自己搜标题，这正是
+   内测反馈里「学完了不知道去哪看」的断链点。命中列表就滚动高亮；条目
+   被筛选/搜索挡在列表外时按 id 直接拉起编辑抽屉（openEntryDrawer 按 id
+   取数，不依赖当前列表），删掉的条目如实提示而不是静默什么都不发生。 */
+async function _focusHashEntry(){
+  const m=/^#(?:entry|ec)-(.+)$/.exec(location.hash||'');
+  if(!m) return;
+  const id=decodeURIComponent(m[1]);
+  const card=document.getElementById('ec-'+id);
+  if(card){
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+    card.classList.add('hl-flash');
+    setTimeout(()=>card.classList.remove('hl-flash'),2600);
+    return;
+  }
+  try{ await openEntryDrawer(id); }
+  catch(e){ if(typeof showToast==='function')showToast(window.T('kb2_entry_gone'),'warning'); }
+}
+window._focusHashEntry=_focusHashEntry;
+window.addEventListener('hashchange',_focusHashEntry);
+
 /* 初始加载 */
-loadEntries();
+// J-9 #184：ops 卡「/knowledge?source=vendor」深链 → 预置来源筛选（值不在下拉里则忽略）
+try{
+  const _qsSrc=new URLSearchParams(location.search).get('source')||'';
+  const _srcSel=document.getElementById('entry-source');
+  if(_qsSrc && _srcSel && Array.from(_srcSel.options).some(o=>o.value===_qsSrc)) _srcSel.value=_qsSrc;
+}catch(_e){}
+loadEntries().then(_focusHashEntry).then(()=>{
+  // P-4 #254：系统设置「兜底策略」→「在知识库里编辑」深链 /knowledge?source=system&edit=<id>
+  try{
+    const _qsEdit=new URLSearchParams(location.search).get('edit')||'';
+    if(_qsEdit) openEntryDrawer(_qsEdit);
+  }catch(_e){}
+}).catch(()=>{});
+loadHealthChip();
 // 静默加载待审核数量
-fetch('/api/kb/translations/pending?limit=100').then(r=>r.json()).then(d=>{
+apiFetch('/api/kb/translations/pending?limit=100').then(r=>r.json()).then(d=>{
   const total=(d.pending||[]).length;
   if(total>0){
     const badge=document.getElementById('trans-badge');
@@ -2251,7 +2615,7 @@ fetch('/api/kb/translations/pending?limit=100').then(r=>r.json()).then(d=>{
 }).catch(()=>{});
 
 // 启动时加载一次向量化覆盖率，若有向量化进行中则自动轮询
-fetch('/api/kb/embed-progress').then(r=>r.json()).then(d=>{
+apiFetch('/api/kb/embed-progress').then(r=>r.json()).then(d=>{
   if(d.running) _embedPollTimer=setInterval(loadVectorProgress,3000);
 }).catch(()=>{});
 
@@ -2418,7 +2782,7 @@ function renderImageList(images){
       <img src="${img.url}" style="width:100%;height:100%;object-fit:cover" loading="lazy">
       <button onclick="deleteImage('${img.id}')"
         style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;
-               background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;
+               background:var(--th-bg-scrim60,rgba(0,0,0,.6));color:var(--th-ink-inverse,#fff);border:none;cursor:pointer;
                font-size:10px;line-height:18px;text-align:center;padding:0">✕</button>
     </div>`).join('');
 }
@@ -2433,7 +2797,7 @@ async function uploadImage(input){
   fd.append('file',file);
   fd.append('caption','');
   try{
-    const r=await fetch(`/api/kb/entries/${entryId}/images`,{method:'POST',body:fd});
+    const r=await apiFetch(`/api/kb/entries/${entryId}/images`,{method:'POST',body:fd},{timeoutMs:120000});
     if(!r.ok){ const d=await r.json(); toast(window.T('tg_js_024')+(d.detail||window.T('inbox.voice.unknown_err')),'warn'); }
     else{ toast(window.T('kb_js_134')); loadEntryImages(entryId); }
   }catch(e){ toast(window.T('kb_js_135'),'warn'); }

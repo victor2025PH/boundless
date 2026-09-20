@@ -124,6 +124,15 @@ class RateLimiter:
     def allow(self, user_id: str = "", chat_id: int = 0) -> Tuple[bool, str]:
         if not self._enabled:
             return True, ""
+        # outbound.unlimited_mode（2026-09-04）：入站限速/自动封禁属业务频控
+        # （防刷成本），一键放行且不累计 ban hits；实时读 provider，绝不抛。
+        try:
+            from src.ops.outbound_policy import is_unlimited
+            if is_unlimited():
+                self._stats["passed"] += 1
+                return True, ""
+        except Exception:
+            pass
 
         if user_id and self.is_banned(user_id):
             return False, "banned"

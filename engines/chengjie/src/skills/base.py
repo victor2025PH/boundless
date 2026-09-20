@@ -7,7 +7,6 @@ import random
 from typing import Dict, Any, Optional
 
 from src.utils.logger import LoggerMixin
-from src.utils.domain_policy import effective_domain_name
 from src.ai.ai_client import AIClient
 
 
@@ -56,39 +55,21 @@ class Skill(LoggerMixin):
             return kb.get_direct_reply(template_key, **kwargs)
         return None
 
-    _FALLBACK_EN = {
-        "greeting": "Hi there! I'm Ling, how can I help you?",
-        "channel_info": "Let me check the channel status for you.",
-        "complaint": "I understand your concern. Let me look into this for you right away.",
-        "order_query": "Let me check your order status. Could you share the order number or payment screenshot?",
-        "small_talk": "Hi! I'm here to help with orders, channel status, and payment inquiries.",
-        "status_check": "Let me check the current status for you.",
-        "default": "Hi, how can I assist you?",
-    }
+    def _kb_fallback(self, intent: str, lang: str = "zh") -> Optional[str]:
+        """意图兜底话术：只认运营在 KB 里显式配置的模板（{intent}_fallback /
+        global_fallback），没配 → None＝本轮不回复。
 
-    def _kb_fallback(self, intent: str, lang: str = "zh") -> str:
+        2026-08-15 起硬编码罐头池全部移除（「在呀，你说～」/_FALLBACK_EN 英文池/
+        conversion 域寒暄池）——罐头兜底在 AI 全链失败时对任意消息答非所问
+        （「可以不回复，不能乱回复」）。非中文会话同理：KB 模板是中文写的，
+        发给外语客户＝语言错配，宁可沉默。
+        """
+        if lang and lang != "zh":
+            return None
         kb = self._get_kb_store()
         if kb:
-            reply = kb.get_fallback(intent)
-            if reply:
-                if lang and lang != "zh":
-                    return self._FALLBACK_EN.get(intent, self._FALLBACK_EN["default"])
-                return reply
-        if lang and lang != "zh":
-            return self._FALLBACK_EN.get(intent, self._FALLBACK_EN["default"])
-        try:
-            cfg = self.config.config if hasattr(self.config, "config") else {}
-            if isinstance(cfg, dict) and effective_domain_name(cfg) == "conversion":
-                return random.choice(
-                    [
-                        "嗯嗯我在～怎么啦？",
-                        "在呀，找我呢？",
-                        "在的，你说～",
-                    ]
-                )
-        except Exception:
-            pass
-        return "在呀，你说～"  # S3: 改为伴侣风格，去客服腔
+            return kb.get_fallback(intent)
+        return None
 
     def _get_template_reply(self, template_name: str, context: Optional[Dict[str, Any]] = None) -> Optional[str]:
         reply = self._kb_reply(template_name, **(context or {}))

@@ -8,10 +8,10 @@
 .brand-lockup__surface{font-weight:400;color:#aeb8d4}
 .brand-lockup__sep{font-weight:400;opacity:.85}
 .brand-mark{object-fit:contain;display:block;flex-shrink:0}
-.brand-mark-wrap{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;background:#05060f;border-radius:22%;padding:5px;box-shadow:0 4px 14px rgba(91,124,246,.25)}
+.brand-mark-wrap{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;background:#05060f;border-radius:22%;padding:5px;box-shadow:0 4px 14px color-mix(in srgb, var(--bl-growth,#1e8cf2) 25%, transparent)}
 .brand-mark-wrap--card{padding:6px;border-radius:13px;animation:brand-breathe 3s ease-in-out infinite}
-.brand-mark-wrap--sidebar{padding:4px;border-radius:10px;box-shadow:0 2px 10px rgba(91,124,246,.2)}
-@keyframes brand-breathe{0%,100%{box-shadow:0 4px 14px rgba(91,124,246,.25)}50%{box-shadow:0 6px 22px rgba(91,124,246,.45)}}
+.brand-mark-wrap--sidebar{padding:4px;border-radius:10px;box-shadow:0 2px 10px color-mix(in srgb, var(--bl-growth,#1e8cf2) 20%, transparent)}
+@keyframes brand-breathe{0%,100%{box-shadow:0 4px 14px color-mix(in srgb, var(--bl-growth,#1e8cf2) 25%, transparent)}50%{box-shadow:0 6px 22px color-mix(in srgb, var(--bl-growth,#1e8cf2) 45%, transparent)}}
 .brand-lockup--card{margin-bottom:1.8rem}
 .brand-lockup--card .brand-lockup__line--single{font-size:1.12rem}
 .brand-lockup--setup{margin-bottom:2rem}

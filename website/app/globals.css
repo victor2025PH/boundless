@@ -4,6 +4,57 @@
 
 :root {
   color-scheme: dark;
+
+  /* ===== z-index 令牌表（2026-08-07 浮动元素归位）=====
+   * 全站浮动元素统一从这里取值，禁止再散写魔法数——星珠徽章 z-60 曾盖在
+   * 移动菜单（header z-50）上遮住菜单项。分层语义：
+   *   easter(35)  彩蛋/吉祥物：永远低于一切功能层
+   *   sticky(40)  移动底部粘性条；backtop(41) 返回顶部
+   *   nav(50)     顶栏 header（含桌面下拉面板）
+   *   chat(55)    AI 客服气泡（AIChat 面板历史值 80，低于抽屉即可）
+   *   cookie(60)  Cookie 同意横幅（法务优先级高于常规浮层）
+   *   drawer(85)  移动全屏菜单抽屉：覆盖除弹窗外的一切
+   * （DragonQuest 奖励弹窗 z-300 / 龙珠 toast z-95 为瞬时顶层，刻意不入表。） */
+  --z-easter: 35;
+  --z-sticky: 40;
+  --z-backtop: 41;
+  --z-nav: 50;
+  --z-chat: 55;
+  --z-cookie: 60;
+  --z-drawer: 85;
+}
+
+/* ===== 移动全屏菜单抽屉（Navbar）===== */
+@keyframes nav-drawer-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nav-item-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.nav-drawer {
+  animation: nav-drawer-in 0.22s ease-out both;
+}
+.nav-drawer-item {
+  animation: nav-item-in 0.34s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer,
+  .nav-drawer-item {
+    animation: none;
+  }
+}
+/* 抽屉打开时底部浮动元素让位（抽屉本身 z-85 已覆盖，此处防未来 z 漂移） */
+html[data-nav-open] .sticky-cta,
+html[data-nav-open] .ai-teaser-bubble {
+  display: none;
+}
+
+/* 白天模式下粘性条次按钮：深字深边，白玻璃底上仍可读 */
+html[data-mode="day"] .sticky-cta-secondary {
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.28);
 }
 
 /* ===== 打印 / 导出 PDF（手册页「打印导出」按钮走浏览器打印对话框）=====
@@ -824,6 +875,120 @@ html.fx-warp .star-wrap {
   }
 }
 
+/* ============================================================
+   ===== 充值定价区特效（BonusLadder / 金色描边 / 吸底结算条）=====
+   消费方：/order 充值 Tab（RechargeOrderZone）与 /pricing 报价页。
+   ============================================================ */
+
+/* 金色描边光束变体（新人礼包 / 大额档语义色；与 .border-beam 同机制仅换色） */
+.border-beam-gold {
+  background: conic-gradient(
+    from var(--beam-angle, 0deg),
+    transparent 0%,
+    rgba(252, 211, 77, 0.9) 12%,
+    rgba(251, 146, 60, 0.85) 22%,
+    transparent 35%
+  );
+}
+html[data-mode="day"] .border-beam-gold {
+  background: conic-gradient(
+    from var(--beam-angle, 0deg),
+    transparent 0%,
+    rgba(180, 83, 9, 0.6) 12%,
+    rgba(194, 65, 12, 0.5) 22%,
+    transparent 35%
+  );
+}
+
+/* 阶梯选中节点：呼吸脉冲（扩散环 + 辉光交替） */
+.ladder-node-sel {
+  animation: ladder-pulse 2.4s ease-in-out infinite;
+}
+@keyframes ladder-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45), 0 0 18px rgba(34, 211, 238, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(34, 211, 238, 0), 0 0 30px rgba(139, 92, 246, 0.55);
+  }
+}
+html[data-mode="day"] .ladder-node-sel {
+  animation-name: ladder-pulse-day;
+}
+@keyframes ladder-pulse-day {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(8, 145, 178, 0.35), 0 0 14px rgba(8, 145, 178, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(8, 145, 178, 0), 0 0 22px rgba(124, 58, 237, 0.35);
+  }
+}
+
+/* 阶梯入场：一道光带从左到右点亮扫过（一次性） */
+.ladder-sweep {
+  position: absolute;
+  inset: -6px 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ladder-sweep::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  background: linear-gradient(100deg, transparent, rgba(103, 232, 249, 0.16) 50%, transparent);
+  transform: translateX(-140%) skewX(-14deg);
+  animation: ladder-sweep-move 1.1s ease-out 0.25s forwards;
+}
+html[data-mode="day"] .ladder-sweep::before {
+  background: linear-gradient(100deg, transparent, rgba(15, 23, 42, 0.1) 50%, transparent);
+}
+@keyframes ladder-sweep-move {
+  to {
+    transform: translateX(340%) skewX(-14deg);
+  }
+}
+
+/* keep-dark 深色广告牌（新人 6U 海报/横幅）里的琥珀文字：
+ * 日间覆盖表把 text-amber-300 压深成 #b45309，在深底上不可读——keep-dark 区还原亮金 */
+html[data-mode="day"] .keep-dark .text-amber-300 {
+  color: #fcd34d;
+}
+/* 竞品对照表本站行左侧发光竖条：日间换深青 */
+html[data-mode="day"] .border-l-neon-cyan\/70 {
+  border-left-color: rgba(8, 145, 178, 0.7);
+}
+
+/* 吸底结算条（/order 充值 Tab）：底部滑入；与全局移动粘性条(.sticky-cta)互斥
+ * ——挂载期在 <html> 打 data-order-bar，粘性条让位（同 data-nav-open 模式）。 */
+.order-bar {
+  transition: transform 0.3s ease;
+}
+html[data-order-bar] .sticky-cta {
+  display: none;
+}
+html[data-nav-open] .order-bar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ladder-node-sel {
+    animation: none !important;
+    box-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+  }
+  .ladder-sweep {
+    display: none;
+  }
+  .border-beam-gold {
+    animation: none !important;
+  }
+  .order-bar {
+    transition: none;
+  }
+}
+
 /* ===== HUD scanlines ===== */
 .hud-scanlines {
   background: repeating-linear-gradient(
@@ -1225,6 +1390,55 @@ html.fx-warp .star-wrap {
   .hero-aurora, .hero-scan, .hero-accent::after, .hero-flow, .hero-matrix, .hero-bolts .bolt, .hero-line { animation: none; }
   .hero-bolts { display: none; }
   .hero-line { opacity: 1; transform: none; }
+}
+
+/* ===== /order 首屏（order-hero）：首页首屏视觉语言的紧凑版 =====
+ * 背景层 = 极光（.hero-aurora 复用）+ 数据网格（.order-grid）+ 扫描线（.hero-scan 复用）
+ *        + 低密度数字雨（.order-rain，仅 md+ 且夜间——canvas 拖尾是深色填充，白底会糊）。
+ * 产品线切换时主张区 / 数据卡以 key 重挂，.order-swap 播一次入场（reduced-motion 关）。 */
+.order-grid {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 64% 60% at 50% 28%, #000 22%, transparent 74%);
+  mask-image: radial-gradient(ellipse 64% 60% at 50% 28%, #000 22%, transparent 74%);
+}
+@keyframes order-swap-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.order-swap {
+  animation: order-swap-in 0.28s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .order-swap { animation: none; }
+}
+
+/* ShineCard 合成层按需提升：只有真正会倾斜的设备（鼠标 + 未降级动画）才 will-change，
+ * 触屏 / reduced-motion 下不建层——低端机滚动白闪的治理点。 */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .shine-card { will-change: transform; }
+}
+
+/* ---- /order 首屏日间版（完整双色适配，不走 keep-dark 偷懒）----
+ * 数字雨整层隐藏（拖尾深色填充在白底上只会发灰）；极光收成晨雾；网格/扫描线换深青细线。 */
+html[data-mode="day"] .order-rain { display: none; }
+html[data-mode="day"] .order-hero .hero-aurora {
+  opacity: 0.4;
+  filter: blur(34px) saturate(0.78) brightness(1.12);
+}
+html[data-mode="day"] .order-hero .hero-scan {
+  background: linear-gradient(180deg, rgba(8, 145, 178, 0.13), transparent);
+}
+html[data-mode="day"] .order-grid {
+  background-image:
+    linear-gradient(rgba(14, 116, 144, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(14, 116, 144, 0.09) 1px, transparent 1px);
+}
+/* 轮换卖点渐变字：白底换深色三段渐变（顺带修首页 Hero 同类字在日间的可读性） */
+html[data-mode="day"] .hero-subrotate {
+  background-image: linear-gradient(90deg, #0e7490, #047857, #6d28d9);
 }
 
 /* ===== 产品 LOGO 星门喷涌（rAF 物理引擎驱动，见 IntroCover.tsx 的 tickGateEngine） =====
@@ -2178,6 +2392,7 @@ html[data-mode="day"] .form-beam label {
 
 /* ---- 状态色透明度变体(夜间高亮色带透明度,白底上直接用实色深一档) ---- */
 html[data-mode="day"] .text-amber-300\/80 { color: #b45309; }
+html[data-mode="day"] .text-violet-300\/90 { color: #6d28d9; }
 html[data-mode="day"] .text-emerald-300\/90 { color: #047857; }
 html[data-mode="day"] .text-emerald-400\/80 { color: #059669; }
 html[data-mode="day"] .text-red-400\/80 { color: #dc2626; }

@@ -53,7 +53,7 @@ function Row({
             ))}
           </ul>
           <a
-            href="#pricing"
+            href="/order"
             onClick={() => track("cta_click", { where: "showcase", which: trackId })}
             className="group mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-neon-cyan transition hover:text-white"
           >

@@ -129,13 +129,15 @@ def register_leadbus_routes(app, *, api_auth, config_manager=None) -> None:
         # 字段映射取舍（按任务要求逐条说明设计判断）：
         # - chat_key = external_id 原样（如 "tg:123"），不拆分平台前缀出来——保持简单，
         #   且与 client.py 的幂等/去重语义一致（同一 external_id 落同一条收件箱会话）。
-        # - account_id：ingest_incoming 要求账号维度落库，但 leadbus 信封没有账号概念
-        #   （获客侧常见多账号池轮转捕获，线索本身不归属某个具体账号）。用 source.product
-        #   （获客产品线，如 zhituo）顶替——近似「这条线索来自哪条产品线的获客账号池」，
-        #   比留空或瞎填更有业务意义，也让同一产品线的线索会话在收件箱里聚在一起。
+        # - account_id（P7）：信封可选带 ``source.account_id`` → 归属真实个人号设备账号
+        #   （huoke 等 RPA 侧纯增量），并幂等登记进注册表（personal_rpa mode，本机编排器
+        #   不接管）接上按 account_id 的健康/风控治理；不带 → 回落 ``source.product`` 顶替
+        #   （旧语义逐字节保留：同产品线线索仍聚在一起）。
         # - text：leadbus 语义是「捕获到一个潜在线索」，不是「收到一条聊天消息」——这里
         #   没有真实聊天正文可转发，故合成一句占位文案，只用于会话列表预览/首条消息展示，
         #   不代表任何用户真实发言；坐席据此一眼可辨认「这是待激活的线索」而非常规对话。
+        #   前缀常量与 auto_draft 闸门同源（leadbus_account.LEAD_CAPTURE_PREFIX）——
+        #   占位符不是客户发言，不该触发 AI 拟稿/自动发（2026-08-18 事故沉淀）。
         # - assign_hint/profile/campaign/lead_id：目前只原样透传进 ingest_incoming 的
         #   source 参数（供本次调用内部的 chat_type 推断等复用同一 source 字典），
         #   *不*会被持久化成可查询的独立列——InboxMessage/InboxConversation 当前的表结构
@@ -143,14 +145,28 @@ def register_leadbus_routes(app, *, api_auth, config_manager=None) -> None:
         #   开对应列。也就是说这里的“记录”仅止于“接收、不丢弃、原样带过这一次调用”，不是
         #   「以后可在收件箱数据库里查到这些字段」。若后续需要真正的可查询留痕/坐席分配，
         #   需要新开列或旁路存储，超出本次「只新增一个路由文件」的边界，留给后续任务。
-        text = f"[线索捕获] {handle or external_id}"
+        # P7：线索账号归属——带 source.account_id 则归真实设备账号并登记注册表，否则回落 product。
+        from src.integrations.leadbus_account import (
+            LEAD_CAPTURE_PREFIX, register_lead_account, resolve_lead_account,
+        )
+        text = f"{LEAD_CAPTURE_PREFIX} {handle or external_id}"
+        lead_account_id, _is_real_account = resolve_lead_account(source)
+        if _is_real_account:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                # label 不传 handle——handle 是线索对方昵称，非账号自身名；
+                # register_lead_account 用 account_id 兜底，运营后台可再命名。
+                register_lead_account(
+                    get_account_registry(), platform, lead_account_id)
+            except Exception:
+                logger.debug("[leadbus] 个人号账号登记跳过（不阻断线索落库）", exc_info=True)
 
         try:
             from src.integrations.protocol_bridge import ingest_incoming
             conversation_id = ingest_incoming(
                 store,
                 platform=platform,
-                account_id=product,
+                account_id=lead_account_id,
                 chat_key=external_id,
                 name=handle,
                 text=text,

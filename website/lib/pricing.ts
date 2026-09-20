@@ -6,6 +6,8 @@
 // formats of these same numbers — when a price changes, update it HERE and keep
 // the content.ts display strings in sync.
 
+import { LINGOX_WORKBENCH, chatxSchemaOffers } from "./chatx-pricing";
+
 export type PriceUnit = "one-time" | "month";
 
 export interface PriceOffer {
@@ -30,12 +32,12 @@ export interface PriceOffer {
 }
 
 /** Real-time face & voice swap — private deployment.
+ *  ⚠ 2026-08-04 定价改版：官网对外不再展示私有部署固定价（realtime 版块与 engage 卡
+ *  已改「咨询报价」，与幻境 STUDIO 旗舰版口径一致）；本数组保留仅供台账/offer-map 反查
+ *  历史订单的 skuId 映射，不再进任何页面展示或 JSON-LD。改回挂牌需产品决策。
  *  报价币种已统一 USD（USDT 仅保留为结算方式表述）。skuId 对齐说明：
- *  realtime-basic ↔ registry `facex-live-deploy`（同为"实时换脸部署 980 / one-time"，
- *  registry 计 "from 980" 起价，差异只记录不改价）；realtime-creator ↔ registry
- *  `livex-creator-deploy`（2026-07-18 定价决议新增，5580 USD：基准栈 Synthesia Studio
- *  Avatar $1000/年 + ElevenLabs Pro ≈$1188/年 + HeyGen LiveAvatar ≈$588/年 ≈ $2776/年
- *  ×2=5552 → 尾数 8 惯例 5580）。详见 platform/licensing/SKU_ALIGNMENT_REPORT.md。 */
+ *  realtime-basic ↔ registry `facex-live-deploy`；realtime-creator ↔ registry
+ *  `livex-creator-deploy`。详见 platform/licensing/SKU_ALIGNMENT_REPORT.md。 */
 export const realtimeOffers: PriceOffer[] = [
   {
     id: "realtime-basic",
@@ -61,11 +63,11 @@ export const realtimeOffers: PriceOffer[] = [
   },
 ];
 
-/** Voice cloning & TTS (幻声 VoiceX) — 会员月付三档，public 直售。
- *  2026-07-18 治理收尾（SKU_ALIGNMENT_REPORT.md §4.2 建议落地）：价格/币种/周期
- *  取自 registry（voicex-starter 18 / voicex-std 78 / voicex-pro 198，USD/month）。
- *  registry 的 voicex-usage（10 USD / per-10k-chars）不挂牌：per-usage 单位超出
- *  PriceUnit 类型，扩类型需单独评审。 */
+/** Voice cloning & TTS (幻声 VoiceX) — ⚠ 2026-08-04 定价改版后**仅供台账反查**：
+ *  声音能力已并入幻境 STUDIO 五档会员（lib/avatarhub-pricing.ts::TIERS 为展示/JSON-LD
+ *  单一真相），本数组的 18/78/198 旧价不再进任何页面或结构化数据，保留只为
+ *  findOfferBySkuId 反查历史订单的 skuId 映射。改回挂牌需产品决策。
+ *  （历史口径：2026-07-18 治理收尾，价格取自 registry voicex-*，USD/month。） */
 export const voiceOffers: PriceOffer[] = [
   {
     id: "voice-starter",
@@ -96,10 +98,10 @@ export const voiceOffers: PriceOffer[] = [
   },
 ];
 
-/** Digital human (幻影 LiveX) — mixed 线中可公开挂牌的两个 SKU。
- *  2026-07-18 治理收尾（§4.2 落地）：livex-avatar-buy 798 one-time、
- *  livex-dub-matrix 398/month，价格取自 registry。同产品的 livex-avatar-sub
- *  （"from 198" 起价，非定值）与 livex-dub-min（per-min 计量单位）不挂牌。 */
+/** Digital human (幻影 LiveX) — ⚠ 2026-08-04 定价改版后**仅供台账反查**：
+ *  数字人能力已并入幻境 STUDIO 五档会员（展示/JSON-LD 由 avatarhub-pricing.TIERS 派生），
+ *  798 买断 / 398 月付旧价不再进任何页面展示，保留只为台账/offer-map 反查历史订单。
+ *  （历史口径：2026-07-18 治理收尾，价格取自 registry livex-*。） */
 export const livexOffers: PriceOffer[] = [
   {
     id: "livex-avatar-buy",
@@ -121,77 +123,64 @@ export const livexOffers: PriceOffer[] = [
   },
 ];
 
-/** AI auto-closing chat system — subscription.
- *  skuId 对齐 registry 智聊 ChatX：价格数值/周期一致；2026-07-18 定价决议起报价币种
- *  统一 USD（与 product.yaml"单位 USD、结算支持 USDT"口径一致），币种差异已消除。
- *  2026-07-18 治理收尾：补挂 chatx-entry（入门 58/月，registry 确认），三档齐进 JSON-LD。 */
-export const autochatOffers: PriceOffer[] = [
+/** Token 充值档（一次性 · 跨 ChatX/LingoX 通用；2026-08-21 充值唯一化后 = ChatX
+ *  仅有的自助挂牌商品）——派生自 chatx-pricing.ts（导出名沿用 tokenPackOffers，
+ *  消费方零改动）。订阅三档（chatx-personal/pro/flagship）2026-08-21 停售 →
+ *  legacyAutochatOffers 台账反查，不再进任何页面/JSON-LD。 */
+export const tokenPackOffers: PriceOffer[] = chatxSchemaOffers()
+  .filter((o) => o.unit === "one-time")
+  .map((o) => ({
+    id: o.id,
+    skuId: o.skuId,
+    name: o.name,
+    price: o.price,
+    currency: "USD",
+    unit: "one-time",
+    description: o.description,
+  }));
+
+/** 通译 LingoX（2026-08-19 翻译免费化决议）：标准翻译永久免费不限量（不产生 offer，
+ *  公平使用 200 万字符/日/授权）；专业翻译按 Token 计量（10/千字符，DeepL 认证 40/千字符，
+ *  无订阅 SKU）；唯一订阅挂牌 = 翻译工作台（每坐席/月，纯翻译团队）。
+ *  旧 charpack(59)/team(99)/pro(198) 停售 → legacyTranslateOffers 台账反查；
+ *  charpack 未用完字符按 1.5M = 60,000 Token 等值换发。 */
+export const translateOffers: PriceOffer[] = [
   {
-    id: "autochat-entry",
-    skuId: "chatx-entry",
-    name: "Entry",
-    price: "58",
+    id: LINGOX_WORKBENCH.key,
+    skuId: LINGOX_WORKBENCH.skuId,
+    name: "Translation Workbench",
+    price: String(LINGOX_WORKBENCH.monthly),
     currency: "USD",
     unit: "month",
-    description: "Per month; 3 chat accounts, AI translation, 1 platform.",
-  },
-  {
-    id: "autochat-team",
-    skuId: "chatx-team",
-    name: "Team",
-    price: "198",
-    currency: "USD",
-    unit: "month",
-    description: "Per month; 10 chat accounts, all platforms, AI auto-closing replies.",
-  },
-  {
-    id: "autochat-flagship",
-    skuId: "chatx-flagship",
-    name: "Flagship",
-    price: "598",
-    currency: "USD",
-    unit: "month",
-    description: "Per month; 50 accounts, human handoff, dashboard, persona voice.",
+    description:
+      "Per month per seat; translation-only teams: multi-seat unified inbox, customer journey, funnel counter. Standard translation is free & unlimited in every plan.",
   },
 ];
 
-/** Real-time cross-border translation SCRM (通译 LingoX) — flagship, low-risk cash flow.
- *  USD, self-serve. Differentiator vs. plain translation add-ons: term-lock glossary,
- *  translation memory, and customer-asset SCRM (unified inbox + journey + funnel).
- *  skuId 对齐 registry 通译 LingoX：三档 id/币种/周期一一对应。2026-07-18 定价决议
- *  （竞品 NexScrm ×2 + 品牌尾数惯例）：charpack $30×2=60→59；team $48×2=96→99；
- *  pro $90×2=180→198。registry（products/tongyi/product.yaml）已同步实价，TBD 差异已消除。 */
-export const translateOffers: PriceOffer[] = [
-  {
-    id: "translate-charpack",
-    skuId: "lingox-charpack",
-    name: "Char pack",
-    price: "59",
-    currency: "USD",
-    unit: "one-time",
-    description:
-      "One-time; 1.5M translation chars, term-lock glossary + translation memory.",
-  },
-  {
-    id: "translate-team",
-    skuId: "lingox-team",
-    name: "Team",
-    price: "99",
-    currency: "USD",
-    unit: "month",
-    description:
-      "Per month; multi-seat unified inbox, customer journey, conversion funnel counter.",
-  },
-  {
-    id: "translate-pro",
-    skuId: "lingox-pro",
-    name: "Pro",
-    price: "198",
-    currency: "USD",
-    unit: "month",
-    description:
-      "Per month; unlimited chars, multimodal (image/voice) translate, confidence badge + engine health.",
-  },
+/** ⚠ 停售台账（勿删）：仅供 findOfferBySkuId 反查历史订单，不进任何页面/JSON-LD。
+ *  2026-08-21 充值唯一化：订阅三档（基础 39 / 专业 99 / 旗舰 598）整体停售，
+ *  存量按期履约到期转充值——三条 offer 从在售数组平移到此。 */
+export const legacyAutochatOffers: PriceOffer[] = [
+  { id: "autochat-personal", skuId: "chatx-personal", name: "Basic (legacy)", price: "39", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; superseded by token top-ups (recharge-*). Active terms run to expiry." },
+  { id: "autochat-pro", skuId: "chatx-pro", name: "Pro (legacy)", price: "99", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; superseded by token top-ups (recharge-*). Active terms run to expiry." },
+  { id: "autochat-flagship", skuId: "chatx-flagship", name: "Max (legacy)", price: "598", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; private-deployment story continues as chatx-private-deploy (lead-based)." },
+  { id: "autochat-entry", skuId: "chatx-entry", name: "Entry (legacy)", price: "58", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Basic (39/mo), itself discontinued 2026-08-21." },
+  { id: "autochat-team", skuId: "chatx-team", name: "Team (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Pro (99/mo), itself discontinued 2026-08-21." },
+  { id: "autochat-team-seat", skuId: "chatx-team-seat", name: "Team per seat (legacy)", price: "49", currency: "USD", unit: "month", description: "Discontinued 2026-08-20; superseded by ChatX Pro (99/mo), itself discontinued 2026-08-21." },
+];
+
+/** ⚠ 2026-08-20 停售的旧 Token 包台账（勿删）：仅供 findOfferBySkuId 反查历史订单。 */
+export const legacyTokenPackOffers: PriceOffer[] = [
+  { id: "token-pack-s", skuId: "token-pack-s", name: "Token pack S (legacy)", price: "9.9", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 50U top-up tier." },
+  { id: "token-pack-m", skuId: "token-pack-m", name: "Token pack M (legacy)", price: "49", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 50U top-up tier." },
+  { id: "token-pack-l", skuId: "token-pack-l", name: "Token pack L (legacy)", price: "199", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 200U top-up tier." },
+  { id: "token-pack-xl", skuId: "token-pack-xl", name: "Token pack XL (legacy)", price: "499", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 500U top-up tier." },
+];
+
+export const legacyTranslateOffers: PriceOffer[] = [
+  { id: "translate-charpack", skuId: "lingox-charpack", name: "Char pack (legacy)", price: "59", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-19; unused chars convert to 60,000 tokens." },
+  { id: "translate-team", skuId: "lingox-team", name: "Team (legacy)", price: "99", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by Workbench (29/seat/mo) + free standard translation." },
+  { id: "translate-pro", skuId: "lingox-pro", name: "Pro (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; unlimited chars superseded by free standard translation." },
 ];
 
 /** Map a PriceOffer to a schema.org Offer node. */
@@ -205,13 +194,17 @@ export function toSchemaOffer(o: PriceOffer) {
   };
 }
 
-// 全部对外挂牌的 offer 数组（新增数组时同步登记，findOfferBySkuId 才能反查到）。
+// 全部对外挂牌 + 停售台账 offer 数组（新增数组时同步登记，findOfferBySkuId 才能反查到；
+// legacy 数组排在最后——同 skuId 时挂牌价优先命中）。
 const ALL_OFFER_ARRAYS: readonly (readonly PriceOffer[])[] = [
   realtimeOffers,
   voiceOffers,
   livexOffers,
-  autochatOffers,
+  tokenPackOffers,
   translateOffers,
+  legacyAutochatOffers,
+  legacyTokenPackOffers,
+  legacyTranslateOffers,
 ];
 
 /** 按全域 SKU id（platform/licensing/sku_registry.json 的 sku_id）反查官网 offer。

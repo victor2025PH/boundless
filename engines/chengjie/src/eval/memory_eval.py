@@ -257,11 +257,10 @@ def build_real_embed_fn(config: Optional[Dict[str, Any]] = None) -> Optional[Emb
     try:
         import asyncio
 
-        cfg = config
-        if cfg is None:
-            import yaml
-            with open("config/config.yaml", "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
+        # 2026-07-29：按数据根契约解析（自动发现活跃实例），别用 CWD 相对读取——
+        # 从引擎根跑会读到迁移遗留旧副本，评的是没在跑的嵌入端点。见 eval_config。
+        from src.eval.eval_config import load_runtime_config
+        cfg = load_runtime_config(config)
         from src.ai.ai_client import AIClient
 
         class _Cfg:

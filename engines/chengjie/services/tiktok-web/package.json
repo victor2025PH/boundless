@@ -1,0 +1,21 @@
+{
+  "name": "tiktok-web-login-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TikTok 个人号网页托管登录 + 只读收件箱边车（Playwright 加载 tiktok.com；非官方通道；阶段 1 assistOnly 不代发；风险自负）",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install chromium",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "playwright": "^1.47.0"
+  }
+}

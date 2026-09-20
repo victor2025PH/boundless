@@ -54,15 +54,31 @@ def _probe_timeout():
         return connect
 
 
+def _deep_merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
+    """递归合并 over 到 base（就地）；与 ConfigManager._deep_merge 同语义（本地拷贝防耦合）。"""
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
 def _load_config_if_none(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if config is not None:
-        return config
-    try:
-        import yaml
-        with open("config/config.yaml", "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception:
-        return {}
+    """读主配置并合并 config.local.yaml overlay（运行态真实配置）。
+
+    不合并 overlay 会漏读端点：标准部署的 ``config.yaml`` 里 ``ai.embedding_base_url``
+    是空串占位，真值只写在 overlay。漏读 → build_embed_fn 返回 None → 依赖它的
+    人设长传记语义检索**静默退化成纯关键词**（实测命中率 93%→68%，且无任何报错）。
+    与 ``translation_eval._load_config`` 同语义。
+    """
+    # 2026-07-29：按数据根契约解析（自动发现活跃实例）。此前 CWD 相对读取会在
+    # 「从引擎根跑 run_eval」时读到迁移遗留旧副本——实测 embedding_base_url 都不同
+    # （140 vs 176），评的是没在跑的端点。详见 src/eval/eval_config.py。
+    from src.eval.eval_config import load_runtime_config
+    return load_runtime_config(config)
+
+
 
 
 def _from_openai_compatible(config: Optional[Dict[str, Any]]) -> Optional[EmbedFn]:

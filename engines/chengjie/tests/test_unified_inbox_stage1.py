@@ -203,9 +203,13 @@ def test_unified_inbox_profile_endpoint_returns_contact_shape():
     data = resp.json()
     profile = data["profile"]
     assert profile["display_name"] == "TG User"
-    assert profile["relationship"]["stage"] in {"初识", "升温", "稳定陪伴"}
+    # i18n P0 缺口回填（2026-08-20）：stage 走 inbox.rel.stage.* 词典（warming 从
+    # 旧「升温」对齐为系统统一叫法「试探/升温」）；载荷新增 stage_key 机器码
+    assert profile["relationship"]["stage"] in {"初识", "试探/升温", "稳定陪伴"}
+    assert profile["relationship"]["stage_key"] in {"initial", "warming", "steady"}
     assert profile["activity"]["message_count"] == 2
     assert "tags" in profile
+    assert len(profile.get("tags_keys") or []) == len(profile.get("tags") or [])
 
 
 def test_unified_inbox_automation_mode_roundtrip():
@@ -375,6 +379,113 @@ def test_send_skip_translate_sends_original():
     data = resp.json()
     assert data["sent_text"] == "hello"
     assert data["translation"] is None
+
+
+# ── P1.5 多句分条（inbox.reply_style.bubbles）：/send 手动路径 ──────────────
+
+
+def _bubbles_client(monkeypatch, sent_log, *, owns=True):
+    from types import SimpleNamespace
+    import src.web.routes.unified_inbox_send_routes as sr
+
+    async def _fake_send_via(request, platform, account_id, chat_key, text,
+                             adapters, *, reply_to=None, mentions=None,
+                             origin="manual"):
+        sent_log.append({"text": text, "reply_to": reply_to})
+        # message_id 逐条递增：#210 B 响应体 bubbles.message_ids 与镜像行同键
+        return {"delivered": True, "message_id": f"m{len(sent_log)}",
+                "conversation_id": f"{platform}:{account_id}:{chat_key}"}
+
+    monkeypatch.setattr(sr, "send_via_adapters", _fake_send_via)
+
+    class _Orch:
+        def owns(self, platform, account_id):
+            return owns
+
+    import src.integrations.account_orchestrator as _ao
+    monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+
+    c = _client()
+    c.app.state.config_manager = SimpleNamespace(config={
+        "inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "min_tail_chars": 0,
+            "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}})
+    return c
+
+
+def test_send_bubbles_splits_newlines_first_part_carries_reply_to(monkeypatch):
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "123",
+        "text": "第一句\n第二句\n第三句", "bubbles": 1,
+        "reply_to": {"id": "m1", "text": "hi"},
+    })
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] is True
+    # #210 B：响应体带每条的平台 message_id（== 工作台镜像行 platform_msg_id）
+    assert d["bubbles"] == {"parts_total": 3, "parts_sent": 3,
+                            "message_ids": ["m1", "m2", "m3"]}
+    assert [s["text"] for s in sent] == ["第一句", "第二句", "第三句"]
+    assert sent[0]["reply_to"] and sent[1]["reply_to"] is None \
+        and sent[2]["reply_to"] is None
+
+
+def test_send_bubbles_requires_client_opt_in(monkeypatch):
+    """无 bubbles 标志（旧前端/脚本调用方）→ 整段单发，严格向后兼容。"""
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "123",
+        "text": "第一句\n第二句"})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_bubbles_group_not_split(monkeypatch):
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "-100888",
+        "text": "第一句\n第二句", "bubbles": 1})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_bubbles_rpa_not_split(monkeypatch):
+    """orch_only：编排器不拥有（RPA runner 自有 human_pacing 分条）→ 整段。"""
+    sent = []
+    c = _bubbles_client(monkeypatch, sent, owns=False)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "line", "account_id": "line-a", "chat_key": "line-room",
+        "text": "第一句\n第二句", "bubbles": 1})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_caps_exposes_bubbles(monkeypatch):
+    from types import SimpleNamespace
+
+    class _Orch:
+        def owns_media(self, platform, account_id):
+            return True
+
+        def owns(self, platform, account_id):
+            return True
+
+    import src.integrations.account_orchestrator as _ao
+    monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+    c = _client()
+    c.app.state.config_manager = SimpleNamespace(config={
+        "inbox": {"reply_style": {"bubbles": {"enabled": True, "max_parts": 3}}}})
+    d = c.get(
+        "/api/unified-inbox/send-caps?platform=telegram&account_id=default").json()
+    assert d["bubbles"] is True and d["bubbles_max_parts"] == 3
 
 
 def test_send_target_auto_infers_conversation_language():
@@ -939,6 +1050,12 @@ def test_workspace_prefs_set_languages_persists_via_store_slice14():
     captured: Dict[str, Any] = {}
 
     class _Inbox:
+        def get_agent_prefs(self, agent_id):
+            # 2026-08-04 局部更新语义：body 不带告警键时路由改「读现值」而非整条覆盖
+            #（防外观 appearance 等单键 POST 把告警偏好清零）——桩同步补读口。
+            return {"agent_id": agent_id, "warn_sec": 0, "crit_sec": 0, "muted": 0,
+                    "dnd_start": -1, "dnd_end": -1, "languages": "", "appearance": ""}
+
         def set_agent_prefs(self, agent_id, **kw):
             return {"agent_id": agent_id, **kw}
 
@@ -1182,8 +1299,8 @@ def test_relationship_stage_routes_slice18_registers_contract():
 
 
 def test_copilot_routes_slice19_registers_contract():
-    """巨石拆分 slice 19：register_copilot_routes 子注册函数挂载剧本引擎/互动积分/AI 副驾
-    端点（Phase40/41/42），路径/方法与基线一致。"""
+    """巨石拆分 slice 19：register_copilot_routes 子注册函数挂载互动积分/AI 副驾
+    端点（Phase41/42），路径/方法与基线一致（Phase40 剧本话题已于 2026-08 下线）。"""
     from fastapi import FastAPI
     from src.web.routes.unified_inbox_copilot_routes import register_copilot_routes
     app = FastAPI()
@@ -1195,17 +1312,15 @@ def test_copilot_routes_slice19_registers_contract():
                 continue
             live.add((getattr(r, "path", ""), m))
     expected = {
-        ("/api/workspace/conv/{conversation_id}/script-suggestions", "GET"),
-        ("/api/workspace/script-topics", "GET"),
-        ("/api/workspace/script-topics", "POST"),
-        ("/api/workspace/script-topics/{topic_id}", "PUT"),
-        ("/api/workspace/script-topics/{topic_id}", "DELETE"),
         ("/api/workspace/contact/{contact_id}/engagement", "GET"),
         ("/api/workspace/contact/{contact_id}/engagement", "POST"),
         ("/api/workspace/conv/{conversation_id}/copilot-prefill", "GET"),
         ("/api/workspace/conv/{conversation_id}/reply-suggest", "POST"),
     }
     assert expected <= live, f"Copilot 副驾路由域端点缺失：{expected - live}"
+    # 下线的剧本话题端点不得复活（残留路由=幽灵管理面，前端已无任何调用方）
+    retired = {p for p, _ in live if "script-topics" in p or "script-suggestions" in p}
+    assert not retired, f"剧本话题端点已下线，不应再注册：{retired}"
 
 
 def test_workflow_routes_slice20_registers_contract():
@@ -1222,17 +1337,13 @@ def test_workflow_routes_slice20_registers_contract():
                 continue
             live.add((getattr(r, "path", ""), m))
     expected = {
-        ("/api/workspace/conv/{conversation_id}/next-actions", "GET"),
-        ("/api/workspace/conv/{conversation_id}/execute-action", "POST"),
-        ("/api/workspace/workflow-actions", "GET"),
-        ("/api/workspace/workflow-actions", "POST"),
-        ("/api/workspace/workflow-actions/{action_id}", "PUT"),
-        ("/api/workspace/workflow-actions/{action_id}", "DELETE"),
         ("/api/workspace/workflow-chains", "GET"),
         ("/api/workspace/workflow-chains", "POST"),
+        ("/api/workspace/workflow-chains/seed", "POST"),
         ("/api/workspace/workflow-chains/{chain_id}", "PUT"),
         ("/api/workspace/workflow-chains/{chain_id}", "DELETE"),
         ("/api/workspace/chain-executions", "GET"),
+        ("/api/workspace/chain-funnel", "GET"),
         ("/api/workspace/conv/{conversation_id}/chain-executions", "GET"),
         ("/api/workspace/chain-executions/{exec_id}/cancel", "POST"),
         ("/api/workspace/conv/{conversation_id}/start-chain", "POST"),
@@ -2359,6 +2470,44 @@ def test_unified_inbox_template_contains_drafts_panel():
     # 内嵌面板校验
     assert "loadDrafts" in html
     assert "draft-card-mini" in html or "draft-panel-items" in html
+
+
+def test_send_has_inflight_guard_and_idempotency_key():
+    """防双发（2026-07-29）：``sendMsg`` 必须带 in-flight 闸门 + 幂等键。
+
+    两条缺一不可、各防一半：
+      - **in-flight 闸门**防「用户连按两次」。发送按钮在请求期间会 disabled，但
+        **Enter 键路径直接调 sendMsg 绕过按钮**（实测缺口：连按两次 Enter 发出两条
+        一样的消息）。两次是独立提交、``client_msg_id`` 不同，服务端幂等键抓不住。
+      - **幂等键**防「同一请求被重放」（网络层重试等 → 同 id 命中 TTL 窗被拒）。
+    顺带钉住加锁/解锁的**顺序**：早退在前、置位与 btn.disabled 同处、收尾清零，
+    否则闸门会把发送按钮永久卡死（比双发更糟）。
+    """
+    path = (Path(__file__).resolve().parent.parent / "src" / "web"
+            / "templates" / "unified_inbox.html")
+    html = path.read_text(encoding="utf-8")
+
+    start = html.index("async function sendMsg(){")
+    end = html.index("async function resendFailed(", start)
+    body = html[start:end]
+
+    i_guard = body.index("if(_sendInFlight) return;")
+    i_set = body.index("_sendInFlight=true;")
+    i_clear = body.index("_sendInFlight=false;")
+    assert i_guard < i_set < i_clear, (
+        "顺序必须是「早退闸门 → 置位 → 收尾清零」，否则会把发送按钮卡死")
+    # 置位须与「提交点」那处 btn.disabled=true 紧邻（sendMsg 内另有一处 disabled 属
+    # 翻译预览分支，不能被当成提交点 → 断言**结构相邻**而非距离启发式）
+    import re as _re
+    assert _re.search(r"btn\.disabled=true;\s*\n\s*_sendInFlight=true;", body), (
+        "_sendInFlight=true 必须紧跟提交点的 btn.disabled=true，别落到预览分支")
+    # 收尾清零须在 try/catch **之后**（异常路径也要解锁）
+    assert i_clear > body.index("}catch(e){")
+    # 幂等键随请求体提交
+    assert "client_msg_id: _newClientMsgId()" in body
+
+    # 媒体路径有自己的同款闸门（_mediaSending），不靠 _sendInFlight
+    assert "if(_mediaSending) return;" in html
 
 
 def test_unified_inbox_template_contains_assign_suggestion():

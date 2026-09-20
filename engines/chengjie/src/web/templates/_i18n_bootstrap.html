@@ -1,13 +1,31 @@
+{# 词典载入分两档（P2 传输减重 2026-08-07）：
+   ① 上下文有 i18n_fp（新进程，_enrich_context 注入）→ 外链 /i18n/ws-i18n.js?v=<内容指纹>
+      + immutable 一年缓存——词典 560KB/页 从每次导航里消失，改词条=指纹变=新 URL 即时生效；
+   ② 无 i18n_fp（旧进程 / 测试直渲）→ 原样内联整包。
+   ⚠ 这个分支是 **restart 安全契约**：模板热更新先于进程重启上生产，旧进程没有
+   /i18n/ 路由也没有 i18n_fp，走 ② 行为与历史逐字节一致；勿删除内联分支。 #}
+{% if i18n_fp is defined and i18n_fp %}
+<script src="/i18n/ws-i18n.js?lang={{ ui_lang|default('zh') }}&v={{ i18n_fp }}"></script>
+{% endif %}
 <script>
 /* 工作台 / 管理后台「共享」i18n + 日期 locale 引导（P1 i18n step③-S：抽成单一真源 partial）。
    被 workspace_base.html 与 base.html 同时 include，杜绝两套外壳脚本漂移。
    注意：Jinja 会解析本文件里的 双花括号 / 花括号-百分号 定界符（即便在 JS 注释内），故此处不写这些定界符字面量。
    复用 admin.py inject_i18n 中间件注入的 i18n 整包 + ui_lang（语言源 = ui_lang cookie / set_lang / lang 查询参数）。
    提供：window.T / Tf（文案）、wsFmtDate/Time/DateTime + wsDateLocale（日期本地化）、wsApplyI18n（data-i18n 静态替换）。 */
+{% if not (i18n_fp is defined and i18n_fp) %}
 window.WS_I18N = {{ i18n|default({})|tojson }};
-window.WS_LANG = "{{ ui_lang|default('zh') }}";
-window.WS_LOCALE = "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else ('vi-VN' if (ui_lang|default('zh')) == 'vi' else 'en-US') }}";
-window.wsDateLocale = function(){ return window.WS_LOCALE || (window.WS_LANG==='en'?'en-US':(window.WS_LANG==='vi'?'vi-VN':'zh-CN')); };
+{% endif %}
+window.WS_I18N = window.WS_I18N || {};   /* 外链包意外未达时 T() 回落键名，不抛错 */
+window.WS_LANG = window.WS_LANG || "{{ ui_lang|default('zh') }}";
+/* 语言来源 query/cookie/negotiated/default（admin.inject_i18n 下发；老进程为空串 → 旧判定）。
+   语言菜单的 ✓ 与「跟随系统」状态只看它，不再各自猜。 */
+window.WS_LANG_SRC = window.WS_LANG_SRC || "{{ ui_lang_src|default('') }}";
+/* locale 映射表驱动（xlate P3）：加 UI 语言改下一行与 i18n_packs.UI_LOCALES 两处即可。
+   （用 JS 注释而非 Jinja 注释——本文件头部纪律：script 内不写 Jinja 定界符，
+   否则 test_template_inline_js_syntax 的掩码器不剥注释定界符会把它当坏 JS。） */
+window.WS_LOCALE = window.WS_LOCALE || "{{ {'zh':'zh-CN','en':'en-US','vi':'vi-VN','th':'th-TH','id':'id-ID','zh_hant':'zh-Hant'}.get(ui_lang|default('zh'), 'en-US') }}";
+window.wsDateLocale = function(){ if(window.WS_LOCALE) return window.WS_LOCALE; var m={zh:'zh-CN',en:'en-US',vi:'vi-VN',th:'th-TH',id:'id-ID',zh_hant:'zh-Hant'}; return m[window.WS_LANG]||'zh-CN'; };
 window.wsFmtDate = function(ts, opts){
   if(ts==null||ts==='') return '';
   var d=new Date(ts<1e12?ts*1000:ts);
@@ -26,7 +44,136 @@ window.T = function(k, fb){ var v = window.WS_I18N && window.WS_I18N[k]; return 
 /* Tf：带占位符插值的 T —— Tf(key,{tag}) 把译文里的 {tag} 全替为值。
    用 split/join 全局替换（免正则转义），各语言只存一句含 {x} 的完整文案，杜绝字符串拼接。 */
 window.Tf = function(k, vars){ var s = window.T(k); if(vars){ for(var p in vars){ if(Object.prototype.hasOwnProperty.call(vars,p)){ s = s.split('{'+p+'}').join(String(vars[p])); } } } return s; };
-window.wsToggleLang = function(){ var c=window.WS_LANG||'zh'; var n=(c==='zh')?'en':(c==='en')?'vi':'zh'; location.href='/set_lang?lang='+n; };
+/* 语言切换（xlate P3 升级 → 2026-09-12 重做）：就地六语选择器，所有调用点（顶栏 pill /
+   用户菜单 / 登录·初始化·后台各页）共用。语言名用其母语自称 + 英文副标（选择器惯例，
+   刻意不随 UI 语言翻译——CJK 自称用 unicode 转义写，守住共享 partial 零裸 CJK 门禁）。
+   β 与「部分页面仍是英文 · N%」不再手写：按服务端下发的 WS_LANG_COVERAGE（词条覆盖率）
+   自动挂，低于 WS_LANG_BETA_BELOW 即 β。异常一律回落旧式循环，绝不让切换入口失效。 */
+window.WS_LANG_COVERAGE = window.WS_LANG_COVERAGE || {{ ui_lang_coverage|default({})|tojson }};
+window.WS_LANG_BETA_BELOW = 0.9;
+window.WS_UI_LANGS = window.WS_UI_LANGS || [
+  ['zh','\u4e2d\u6587','Chinese (Simplified)'],
+  ['zh_hant','\u7e41\u9ad4\u4e2d\u6587','Chinese (Traditional)'],
+  ['en','English','English'],
+  ['vi','Ti\u1ebfng Vi\u1ec7t','Vietnamese','M\u1ed9t s\u1ed1 trang v\u1eabn hi\u1ec3n th\u1ecb ti\u1ebfng Anh'],
+  ['th','\u0e44\u0e17\u0e22','Thai','\u0e1a\u0e32\u0e07\u0e2b\u0e19\u0e49\u0e32\u0e22\u0e31\u0e07\u0e41\u0e2a\u0e14\u0e07\u0e40\u0e1b\u0e47\u0e19\u0e20\u0e32\u0e29\u0e32\u0e2d\u0e31\u0e07\u0e01\u0e24\u0e29'],
+  ['id','Bahasa Indonesia','Indonesian','Sebagian halaman masih dalam bahasa Inggris']
+];
+/* 当前语言母语自称（pill 尾注等处用） */
+window.wsLangNative = function(code){
+  var L=window.WS_UI_LANGS||[]; for(var i=0;i<L.length;i++){ if(L[i][0]===code) return L[i][1]; } return code||'';
+};
+/* 切换动作单入口：整页导航到 /set_lang（桌面壳靠这次导航同步壳配置+原生菜单，不能改成
+   fetch）；next=当前 path?query#hash（剥 lang），服务端回跳保住 hash 路由位；切换前记一笔
+   sessionStorage，新页面装载时弹一次「界面语言已切换」确认，用户不再靠猜。 */
+window.wsSwitchLang = function(code){
+  var nxt='';
+  try{
+    var u=new URL(location.href); u.searchParams.delete('lang');
+    nxt=u.pathname+u.search+u.hash;
+    if(nxt.indexOf('/set_lang')===0) nxt='';
+  }catch(_){ nxt=''; }
+  try{ sessionStorage.setItem('ws.lang.switched', code+'|'+(window.WS_LANG||'')); }catch(_){}
+  location.href='/set_lang?lang='+encodeURIComponent(code)+(nxt?'&next='+encodeURIComponent(nxt):'');
+};
+window.wsToggleLang = function(ev){
+  try{
+    var old=document.getElementById('ws-lang-menu');
+    if(old){ old.parentNode.removeChild(old); return; }
+    var cur=window.WS_LANG||'zh';
+    var cov=window.WS_LANG_COVERAGE||{};
+    var box=document.createElement('div'); box.id='ws-lang-menu'; box.setAttribute('role','menu');
+    box.style.cssText='position:fixed;z-index:10050;background:var(--tk-surface,#fff);color:var(--tk-text,#16223a);border:1px solid var(--tk-border,#d7dce3);border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,.2);padding:6px;min-width:228px;font-size:13px;line-height:1.35;';
+    /* 状态单源 = 服务端下发的语言来源（negotiated/default = 跟随态；query/cookie = 显式态）。
+       老进程不下发 → 回落「无 ui_lang cookie = 跟随态」旧判定。 */
+    var src = window.WS_LANG_SRC || '';
+    var isAuto = src ? (src==='negotiated' || src==='default') : (document.cookie.indexOf('ui_lang=') === -1);
+    if(src==='query'){
+      /* 当前语言被 URL 参数钉住（桌面壳首帧 / 分享链接）：说明一句，免得 ✓ 与刚才的选择
+         对不上时以为切换坏了；/set_lang 回跳会剥掉 lang 参数，选完即按所选显示。 */
+      var hint=document.createElement('div');
+      hint.textContent=(window.T ? window.T('base.lang.pinned_hint') : 'Language set by URL');
+      hint.style.cssText='font-size:11px;opacity:.7;padding:6px 12px 4px;white-space:normal;max-width:260px;';
+      box.appendChild(hint);
+    }
+    function row(code,label,sub,on,extraStyle){
+      var a=document.createElement('div'); a.setAttribute('role','menuitemradio'); a.setAttribute('aria-checked',on?'true':'false');
+      a.style.cssText='display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;'+(on?'background:rgba(125,125,125,.12);':'')+(extraStyle||'');
+      var mark=document.createElement('span'); mark.textContent=on?'\u2713':''; mark.style.cssText='width:14px;flex:0 0 14px;text-align:center;font-weight:700;opacity:.9;';
+      var body=document.createElement('div'); body.style.cssText='display:flex;flex-direction:column;min-width:0;';
+      var main=document.createElement('div'); main.textContent=label; main.style.cssText='white-space:nowrap;'+(on?'font-weight:700;':'');
+      body.appendChild(main);
+      if(sub){ var s=document.createElement('div'); s.textContent=sub; s.style.cssText='font-size:11px;opacity:.62;white-space:normal;max-width:240px;'; body.appendChild(s); }
+      a.appendChild(mark); a.appendChild(body);
+      a.onmouseenter=function(){ a.style.background='rgba(125,125,125,.18)'; };
+      a.onmouseleave=function(){ a.style.background=on?'rgba(125,125,125,.12)':''; };
+      a.onclick=function(){ window.wsSwitchLang(code); };
+      return a;
+    }
+    /* 「跟随系统」置顶：副标写出解析结果（「· 当前 中文」），auto 不再是黑盒 */
+    var autoSub=(window.T ? window.T('base.lang.follow_sys_t') : '');
+    if(isAuto){ autoSub=(window.T ? window.T('base.lang.follow_now',' ') : ' ').replace('{lang}', window.wsLangNative(cur)).trim(); }
+    box.appendChild(row('auto', (window.T ? window.T('base.lang.follow_sys') : 'Auto'), autoSub, isAuto,
+      'border-bottom:1px solid var(--tk-border,#d7dce3);border-radius:8px 8px 0 0;margin-bottom:4px;'));
+    var L=window.WS_UI_LANGS||[];
+    for(var i=0;i<L.length;i++){
+      var code=L[i][0], label=L[i][1], en=L[i][2]||'', note=L[i][3]||'';
+      var c=(typeof cov[code]==='number')?cov[code]:1;
+      var beta=c<window.WS_LANG_BETA_BELOW;
+      var sub=en;
+      if(beta){ label+=' (\u03b2)'; sub=(note?note+' \u00b7 ':'')+Math.round(c*100)+'%'; }
+      else if(en && en!==label){ sub=en; }
+      else { sub=''; }
+      box.appendChild(row(code,label,sub,(code===cur && !isAuto)));
+    }
+    document.body.appendChild(box);
+    var e=ev||window.event;
+    var anchor=e&&e.target&&e.target.closest?e.target.closest('a,button'):null;
+    var r=anchor?anchor.getBoundingClientRect():null;
+    var bw=box.offsetWidth||228, bh=box.offsetHeight||260;
+    var x=r?Math.min(Math.max(8,r.left), window.innerWidth-bw-8):(window.innerWidth-bw)/2;
+    var y=r?((r.bottom+bh+8<window.innerHeight)?(r.bottom+6):(r.top-bh-6)):(window.innerHeight/2-bh/2);
+    box.style.left=Math.round(x)+'px'; box.style.top=Math.round(Math.max(8,y))+'px';
+    setTimeout(function(){
+      document.addEventListener('click', function _c(evt){
+        if(!box.contains(evt.target)){
+          if(box.parentNode) box.parentNode.removeChild(box);
+          document.removeEventListener('click',_c,true);
+        }
+      }, true);
+      document.addEventListener('keydown', function _k(evt){
+        if(evt.key==='Escape'){ if(box.parentNode) box.parentNode.removeChild(box); document.removeEventListener('keydown',_k,true); }
+      }, true);
+    },0);
+  }catch(_){
+    var c0=window.WS_LANG||'zh'; var n=(c0==='zh')?'en':(c0==='en')?'vi':'zh';
+    location.href='/set_lang?lang='+n;
+  }
+};
+/* 切换后确认（自带最小 toast，不依赖各外壳各自的 toast 实现）：上一页记的目标语与本页
+   实际语一致 → 「界面语言已切换为 X」；不一致（被 URL 钉住等）→ 不弹，避免说谎。 */
+(function(){
+  var rec=''; try{ rec=sessionStorage.getItem('ws.lang.switched')||''; sessionStorage.removeItem('ws.lang.switched'); }catch(_){ return; }
+  if(!rec) return;
+  var want=rec.split('|')[0], now=window.WS_LANG||'';
+  if(want!=='auto' && want!==now) return;
+  function show(){
+    try{
+      var t=document.createElement('div');
+      var name=window.wsLangNative(now);
+      var msg=(want==='auto')
+        ? (window.T ? window.T('base.lang.follow_now',' ') : ' ').replace('{lang}',name)
+        : (window.T ? window.T('base.lang.switched_to',' ') : ' ').replace('{lang}',name);
+      if(!msg.trim()) return;
+      t.textContent=msg;
+      t.style.cssText='position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:10060;background:var(--tk-surface,#1f2937);color:var(--tk-text,#fff);border:1px solid var(--tk-border,rgba(255,255,255,.12));border-radius:10px;padding:9px 14px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transition:opacity .25s;';
+      document.body.appendChild(t);
+      requestAnimationFrame(function(){ t.style.opacity='1'; });
+      setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ if(t.parentNode) t.parentNode.removeChild(t); },300); },2600);
+    }catch(_){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', show); else show();
+})();
 (function(){
   function apply(root){
     root=root||document;
@@ -36,6 +183,9 @@ window.wsToggleLang = function(){ var c=window.WS_LANG||'zh'; var n=(c==='zh')?'
     for(var j=0;j<ps.length;j++){ var pe=ps[j],pk=pe.getAttribute('data-i18n-placeholder'); if(pk){ var pv=window.T(pk,null); if(pv!==null&&pv!==undefined) pe.setAttribute('placeholder',pv); } }
     var ts=root.querySelectorAll('[data-i18n-title]');
     for(var m=0;m<ts.length;m++){ var te=ts[m],tk=te.getAttribute('data-i18n-title'); if(tk){ var tv=window.T(tk,null); if(tv!==null&&tv!==undefined) te.setAttribute('title',tv); } }
+    // optgroup 等靠 label 属性显示文案的元素（2026-08-29，翻译弹层语言分组首用）
+    var ls=root.querySelectorAll('[data-i18n-label]');
+    for(var q=0;q<ls.length;q++){ var le=ls[q],lk=le.getAttribute('data-i18n-label'); if(lk){ var lv=window.T(lk,null); if(lv!==null&&lv!==undefined) le.setAttribute('label',lv); } }
   }
   window.wsApplyI18n=apply;
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ apply(); });

@@ -1,0 +1,2330 @@
+<!-- ══════════════════════════════════════════
+     Tab 2: 开播
+═══════════════════════════════════════════ -->
+<div x-show="tab==='stream'" class="fade space-y-3">
+
+  <!-- 开播页工具条：用户/专家双模（用户=极简关键操作；专家=全部参数与诊断）-->
+  <div class="bd-card px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+    <div class="flex items-center gap-2">
+      <span class="bd-card-title">📡 开播</span>
+      <span class="text-[13px] text-hub-muted" x-text="streamSimple?'用户模式 · 选角色 → 一键开播 → 看画面':'专家模式 · 参数 / 设备 / 诊断已全部展开'"></span>
+    </div>
+    <div class="bd-seg">
+      <button type="button" :class="streamSimple?'on':''" @click="setStreamMode(false)">👤 用户</button>
+      <button type="button" :class="!streamSimple?'on':''" @click="setStreamMode(true)">🛠️ 专家</button>
+    </div>
+    <button type="button" @click="toggleLargeText()" :class="largeText?'border-hub-blue text-hub-blue bg-hub-blue/10':'border-hub-border text-hub-muted hover:text-hub-text'"
+            class="text-[12px] px-2 py-1 rounded-full border shrink-0 transition-colors" title="字号整体 +2px">🔤 大字</button>
+    <span x-show="!streamSimple && autoHealServer" class="bd-badge ok shrink-0" title="无人值守：无脸换源/显存腾挪/设备缺席热切等由服务端自动执行">🛡 智能守护</span>
+  </div>
+
+  <!-- ════ 区一·英雄区：出镜角色 + 自适应主 CTA + 在播仪式感 ════ [S4] bd-hero=主舞台卡视觉权重高于工具卡 -->
+    <div class="bd-card bd-hero p-4 sm:p-5">
+      <!-- P1-C 整链路主裁决：一眼「链路是否健康」+ 一步直达修复（合并视频/音频/服务/显存，收口 P0 状态条 + P1-B 真信号）-->
+      <!-- [S1 信息收口] 相位=live 才出现（未开播的就绪判定统一收进下方「开播就绪度」，同屏不再两处说就绪）-->
+      <!-- [S4 视觉收敛] 状态条带统一走 brand.css .bd-strip 四态令牌（ok/info/warn/err），不再散落一次性色组合 -->
+      <div x-show="tab==='stream' && streamPhase()==='live'" class="mb-4 flex items-center gap-2.5 px-3.5 py-2.5 bd-strip text-[14px]"
+           :class="{'ok':linkVerdict().level==='ok', 'info':linkVerdict().level==='info',
+                    'warn':linkVerdict().level==='warn', 'err':linkVerdict().level==='error'}">
+        <span class="shrink-0 text-base" x-text="linkVerdict().icon"></span>
+        <div class="min-w-0 flex-1">
+          <div class="font-bold"
+               :class="{'text-hub-green':linkVerdict().level==='ok','text-hub-blue':linkVerdict().level==='info','text-hub-orange':linkVerdict().level==='warn','text-hub-red':linkVerdict().level==='error'}"
+               x-text="linkVerdict().title"></div>
+          <div class="text-[13px] text-hub-muted mt-0.5 leading-relaxed" x-text="linkVerdict().detail"></div>
+        </div>
+        <button x-show="linkVerdict().ctaKey" @click="verdictCta(linkVerdict().ctaKey)"
+                :disabled="(linkVerdict().ctaKey==='freeVram'&&freeVramBusy)||((linkVerdict().ctaKey==='phone'||linkVerdict().ctaKey==='restart')&&wireless.running)"
+                class="bd-act shrink-0"
+                :class="linkVerdict().level==='error'?'red':'green'"
+                x-text="linkVerdict().ctaLabel"></button>
+        <!-- P5 一键自检报告：始终可用，出问题时一键导出可复制诊断文本发给技术支持 -->
+        <button @click="openSelfCheck()" title="生成开播自检报告（预检 + 四路信号 + 服务/显存/设备/自愈 → 可复制发给技术支持）"
+                class="bd-act ghost shrink-0">📋 自检</button>
+      </div>
+
+      <!-- [P8 孤儿流→06t 收养兜底] 正常路径已是无闪断自动接管(见 chip)；此横幅只在接管未成
+           (PID 反查失败/HUB_ORPHAN_ADOPT=0)时出现——点一键开播强接管(杀旧重拉,≈3s 闪断)。 -->
+      <div x-show="tab==='stream' && !perf.streaming && orphanStream && heroTipVisible('orphan')" x-cloak x-transition.opacity.duration.250ms
+           class="mb-4 flex items-start gap-2.5 px-3.5 py-2.5 bd-strip warn text-[13px] text-hub-orange">
+        <span class="shrink-0 mt-0.5">🛰️</span>
+        <div class="flex-1 min-w-0 space-y-0.5">
+          <div class="font-bold">检测到画面进程在跑，但不受本面板管理</div>
+          <div class="text-hub-orange/80" x-text="((orphanStream&&orphanStream.hint)||'')+((orphanStream&&orphanStream.preset)?('（当前档位 '+orphanStream.preset+'）'):'')"></div>
+        </div>
+      </div>
+
+      <!-- [S6 新手引导] 首播三步条：只对「从没成功开过播」的人出现（localStorage hub_stream_guide_done）。
+           步骤随真实状态自动打勾——启用角色→选方式→开播；首播成功自动永久退场，✕ 手动关闭同效。
+           与 showTour/onboardShow 不重复：那两个只覆盖「角色库→对话」链路。 -->
+      <div x-show="tab==='stream' && guideVisible() && heroTipVisible('guide')" x-cloak x-transition.opacity.duration.200ms
+           class="mb-4 bd-strip info px-3.5 py-2.5">
+        <div class="flex items-center gap-2 text-[13px]">
+          <span class="font-bold text-hub-blue">👋 第一次开播？三步搞定</span>
+          <button @click="guideDismiss()" class="bd-tap ml-auto shrink-0 opacity-60 hover:opacity-100 px-1"
+                  title="不再显示（开播成功后也会自动消失）" aria-label="关闭新手引导">✕</button>
+        </div>
+        <div class="flex items-stretch gap-1.5 mt-2 flex-wrap">
+          <template x-for="(st,i) in guideSteps()" :key="st.n">
+            <button @click="guideAct(st)"
+                    class="flex-1 min-w-[9rem] text-left rounded-lg border px-2.5 py-1.5 transition"
+                    :class="st.done ? 'border-hub-green/40 bg-hub-green/10'
+                                    : (i===guideCurrentIdx() ? 'border-hub-blue bg-hub-blue/10 ring-1 ring-hub-blue/50'
+                                                             : 'border-hub-border bg-hub-bg/50 opacity-70')">
+              <div class="flex items-center gap-1.5 text-[13px] font-semibold"
+                   :class="st.done?'text-hub-green':(i===guideCurrentIdx()?'text-hub-blue':'text-hub-muted')">
+                <span x-text="st.done?'✓':(st.n+'.')"></span><span x-text="st.label"></span>
+              </div>
+              <div class="text-[12px] text-hub-muted mt-0.5 leading-snug" x-text="st.done?'已完成':st.hint"></div>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- [P1-3] 英雄区次级条带预算：>2 条时折叠为「还有 N 条」 -->
+      <button x-show="heroTipsOverflow()>0" @click="heroTipsOpen=!heroTipsOpen"
+              class="mb-4 w-full text-left bd-strip info px-3 py-2 text-[13px] text-hub-muted hover:text-hub-blue transition-colors">
+        <span x-text="heroTipsOpen ? '▾ 收起提示' : ('▸ 还有 '+heroTipsOverflow()+' 条提示')"></span>
+      </button>
+
+      <!-- [S5 场次成绩单] 停播即时结算升级：时长/峰值/稳定度/变声 四格 + 一句话评语 + 复制/再开一场。
+           数据仅前端累计(signalTick，稳定度=健康采样 ok 占比)，无后端依赖；与「场次复盘」(事件明细)互补不重复。
+           位置在就绪度之前：刚停播先看"这场怎么样"，再看"下一场是否就绪"（叙事顺序=时间顺序）。 -->
+      <div x-show="streamPhase()==='ended'" x-transition.opacity.duration.250ms x-cloak
+           class="mb-4 bd-strip info px-3.5 py-3 text-[14px]">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-base leading-none">🏁</span>
+          <span class="font-bold text-hub-text">本场直播成绩单</span>
+          <span class="text-[13px] text-hub-muted" x-show="recapRemark()" x-text="'· '+recapRemark()"></span>
+          <span class="ml-auto flex items-center gap-2 shrink-0">
+            <span class="text-[13px] px-2 py-0.5 rounded-full border border-hub-green/40 text-hub-green/90 bg-hub-green/10">🔒 本地运行</span>
+            <button @click="lastSession=null" aria-label="关闭本场成绩单" class="opacity-60 hover:opacity-100 px-1" title="关闭本场成绩单">✕</button>
+          </span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2.5">
+          <div class="bd-stat"><div class="v text-hub-text" x-text="lastSession?fmtDur(lastSession.durSec):''"></div><div class="k">直播时长</div></div>
+          <div class="bd-stat"><div class="v text-hub-text" x-text="(lastSession&&lastSession.peakFps>0)?(lastSession.peakFps+' fps'):'—'"></div><div class="k">峰值画质</div></div>
+          <div class="bd-stat" :title="lastSession&&lastSession.stabilityPct==null?'本场采样太少，不下结论':'直播期间画面健康(换脸生效中)的时间占比'">
+            <div class="v" :class="stabilityTone(lastSession?lastSession.stabilityPct:null)"
+                 x-text="(lastSession&&lastSession.stabilityPct!=null)?(lastSession.stabilityPct+'%'):'—'"></div>
+            <div class="k">画面稳定度</div>
+          </div>
+          <div class="bd-stat"><div class="v" :class="lastSession&&lastSession.usedRvc?'text-hub-purple':'text-hub-muted'"
+                                    x-text="lastSession&&lastSession.usedRvc?'🎙 已用':'未用'"></div><div class="k">变声</div></div>
+          <!-- [观察自动化] 第二行：后端场次质量报告(停播后 hub 自动聚合,约 10s 内到达)——真人实测要记的量化项全在这，无需人肉记数 -->
+          <template x-if="lastSession?.swap">
+            <div class="contents" style="display:contents">
+              <div class="bd-stat" title="脸区裁剪通道命中率：命中=按脸区小图换脸(省算力、脸更清晰)；未命中=回退全帧兜底">
+                <div class="v" :class="(lastSession.swap.crop&&lastSession.swap.crop.hit_pct!=null&&lastSession.swap.crop.hit_pct<80)?'text-hub-orange':'text-hub-text'"
+                     x-text="(lastSession.swap.crop&&lastSession.swap.crop.hit_pct!=null)?(lastSession.swap.crop.hit_pct+'%'):'—'"></div>
+                <div class="k">裁剪命中</div></div>
+              <div class="bd-stat" title="单帧换脸耗时中位数(含精修)，越低越流畅">
+                <div class="v text-hub-text" x-text="(lastSession.swap.latency_ms&&lastSession.swap.latency_ms.med!=null)?(lastSession.swap.latency_ms.med+'ms'):'—'"></div>
+                <div class="k">换脸时延</div></div>
+              <div class="bd-stat" :title="'为保流畅自动降档运行的时间占比(高=机器撑不住目标档)'+(Object.keys(lastSession.swap.degrade_reasons||{}).length?('。原因: '+Object.keys(lastSession.swap.degrade_reasons).join('、')):'')">
+                <div class="v" :class="(lastSession.swap.degraded_pct||0)>30?'text-hub-orange':'text-hub-text'"
+                     x-text="(lastSession.swap.degraded_pct||0)+'%'"></div>
+                <div class="k">自动降档</div></div>
+              <div class="bd-stat" title="本场主要使用的精修引擎(占比最高)">
+                <div class="v text-hub-text" x-text="swapRecapEnh()"></div>
+                <div class="k">精修引擎</div></div>
+            </div>
+          </template>
+        </div>
+        <!-- [观察自动化] 对比上场趋势行：两场都有报告才出现（绿=变好，橙=变差；裁剪↑好、时延/降档↓好） -->
+        <div x-show="lastSession?.swap && lastSession?.swapPrev"
+             class="text-[13px] text-hub-muted mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-0.5"
+             title="与上一场对比（上场→本场）：裁剪命中越高越好，时延/降档越低越好">
+          <span class="font-semibold">对比上场</span>
+          <span x-show="swapDeltaTxt('crop')">裁剪 <span :class="swapDeltaTone('crop')" x-text="swapDeltaTxt('crop')"></span></span>
+          <span x-show="swapDeltaTxt('lat')">时延 <span :class="swapDeltaTone('lat')" x-text="swapDeltaTxt('lat')"></span></span>
+          <span x-show="swapDeltaTxt('deg')">降档 <span :class="swapDeltaTone('deg')" x-text="swapDeltaTxt('deg')"></span></span>
+        </div>
+        <!-- [P8] 离席拆账行：有离席才出现——失败率剔除离席时段才是画质的真实体检 -->
+        <div x-show="(lastSession?.swap?.away_s||0)>0" x-cloak
+             class="text-[13px] text-hub-muted mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-0.5"
+             title="离席=画面里检测不到人脸的时段(观众看到自动模糊的稍等画面)。有效失败率已剔除离席时段，只算真在播时的换脸失败占比">
+          <span class="font-semibold">离席</span>
+          <span x-text="swapAwayTxt()"></span>
+          <span x-show="lastSession?.swap?.swap?.fail_pct_active!=null">有效失败率
+            <span :class="(lastSession?.swap?.swap?.fail_pct_active||0)>8?'text-hub-orange':'text-hub-green'"
+                  x-text="(lastSession?.swap?.swap?.fail_pct_active??'—')+'%'"></span>
+            <span class="opacity-60" x-text="'(含离席 '+(lastSession?.swap?.swap?.fail_pct??'—')+'%)'"></span>
+          </span>
+        </div>
+        <!-- P5-2 设备热切行：本场发生过拔插一键恢复才出现——次数+失败数+最近明细，复盘「中间哑了几秒」有据可查 -->
+        <div x-show="lastSession?.hotSwitch" x-cloak
+             class="text-[13px] text-hub-muted mb-2.5"
+             title="直播中设备拔插触发的一键热切记录（来自健康时间线账本），明细含从哪只切到哪只/耗时/来源">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span class="font-semibold">设备热切</span>
+            <span :class="(lastSession?.hotSwitch?.fail||0)>0?'text-hub-orange':'text-hub-green'"
+                  x-text="'🎚 '+(lastSession?.hotSwitch?.n||0)+' 次'+((lastSession?.hotSwitch?.fail||0)>0?('（失败 '+lastSession.hotSwitch.fail+'）'):'（全部成功）')"></span>
+          </div>
+          <template x-for="(it,i) in (lastSession?.hotSwitch?.items||[])" :key="'hsw'+i">
+            <div class="text-[12px] opacity-70 pl-1" x-text="it.t+' · '+it.label"></div>
+          </template>
+        </div>
+        <!-- [P7 五期] 主观速记：真人观察仅剩的两件主观项就地入账（点选即存·再点撤销），与量化同一本场次账本 -->
+        <div x-show="lastSession?.swap" x-cloak
+             class="text-[13px] text-hub-muted mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1"
+             title="仅剩的人工观察项：看完点一下即写入场次账本，复制成绩单一并带上">
+          <span class="font-semibold">主观速记</span>
+          <span class="flex items-center gap-1" title="裁剪框边缘在纯色背景/大幅转头时是否可见">贴缝
+            <template x-for="v in ['good','ok','bad']" :key="'hsm'+v">
+              <button @click="rateSwapRecap('seam',v)" x-text="humanLabel(v)"
+                      class="px-1.5 py-0.5 rounded border text-[12px] transition-colors"
+                      :class="(lastSession?.swap?.human?.seam===v)?'border-hub-blue text-hub-blue bg-hub-blue/10 font-semibold':'border-hub-border text-hub-muted hover:text-hub-text'"></button>
+            </template></span>
+          <span class="flex items-center gap-1" title="精修引擎观感：是否过度美颜化/身份漂移(口播近景重点看)">精修观感
+            <template x-for="v in ['good','ok','bad']" :key="'hen'+v">
+              <button @click="rateSwapRecap('enhance',v)" x-text="humanLabel(v)"
+                      class="px-1.5 py-0.5 rounded border text-[12px] transition-colors"
+                      :class="(lastSession?.swap?.human?.enhance===v)?'border-hub-blue text-hub-blue bg-hub-blue/10 font-semibold':'border-hub-border text-hub-muted hover:text-hub-text'"></button>
+            </template></span>
+          <input @change="noteSwapRecap($event)" :value="(lastSession?.swap?.human?.note)||''"
+                 placeholder="备注(可选·回车存)" maxlength="120"
+                 class="bg-transparent border border-hub-border rounded px-1.5 py-0.5 text-[12px] w-40 focus:border-hub-blue outline-none">
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="copyRecap()" aria-label="复制本场成绩单" title="复制成绩单文本，可粘贴到社群/群聊分享"
+                  class="text-[13px] px-2.5 py-1 rounded-full border border-hub-blue/40 text-hub-blue hover:bg-hub-blue/10 transition-colors">📋 复制成绩单</button>
+          <button @click="exportRecapCard()" :disabled="exportBusy || !lastSession" aria-label="导出成绩单分享图" title="生成品牌成绩单图片，可发朋友圈/社群"
+                  class="text-[13px] px-2.5 py-1 rounded-full border border-hub-purple/40 text-purple-300 hover:bg-purple-500/10 disabled:opacity-40 transition-colors">🖼 导出分享图</button>
+          <button x-show="webShareOk" @click="shareRecapCard()" :disabled="exportBusy || !lastSession" aria-label="分享成绩单" title="调起系统分享面板，直接发给微信/QQ/邮件"
+                  class="text-[13px] px-2.5 py-1 rounded-full border border-hub-purple/40 text-purple-300 hover:bg-purple-500/10 disabled:opacity-40 transition-colors">📤 分享</button>
+          <button @click="guardedStart()" :disabled="streaming || wireless.running" title="用同样的设置立即再开一场"
+                  class="text-[13px] px-2.5 py-1 rounded-full border border-hub-green/50 text-hub-green hover:bg-hub-green/10 disabled:opacity-40 transition-colors font-semibold">🔁 再开一场</button>
+        </div>
+      </div>
+
+      <!-- [S1 开播就绪度] 未开播的唯一就绪信息源：环形进度 + 一句话结论 + 可展开逐项修复。
+           合并旧四处重复（未播主裁决条 / 预检折叠卡 / 药丸行 / 显存卡未播态），数据仍取 preflight() 单一真相 -->
+      <!-- [S5] 启动中(starting)隐藏就绪度：木已成舟，此刻由下方里程碑面板唯一叙事 -->
+      <div x-show="tab==='stream' && !perf.streaming && !streaming" x-cloak class="mb-4 bd-strip overflow-hidden"
+           :class="readyLine().tone==='red'?'err':(readyLine().tone==='orange'?'warn':'ok')">
+        <div class="flex items-center gap-3 px-3.5 py-2.5">
+          <!-- 环形进度：oks/total -->
+          <div class="relative shrink-0 w-11 h-11"
+               :class="readyLine().tone==='red'?'text-hub-red':(readyLine().tone==='orange'?'text-hub-orange':'text-hub-green')">
+            <svg viewBox="0 0 36 36" class="w-11 h-11 -rotate-90">
+              <circle cx="18" cy="18" r="15.5" fill="none" stroke-width="3.5" class="stroke-hub-border/70"></circle>
+              <circle cx="18" cy="18" r="15.5" fill="none" stroke-width="3.5" stroke-linecap="round" stroke="currentColor"
+                      stroke-dasharray="97.4" :stroke-dashoffset="97.4*(1-preflight().oks/Math.max(1,preflight().total))"
+                      style="transition:stroke-dashoffset .45s ease"></circle>
+            </svg>
+            <span class="absolute inset-0 flex items-center justify-center text-[12px] font-bold tabular-nums"
+                  x-text="preflight().oks+'/'+preflight().total"></span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-[14px]"
+                 :class="readyLine().tone==='red'?'text-hub-red':(readyLine().tone==='orange'?'text-hub-orange':'text-hub-green')"
+                 x-text="'开播就绪度 · '+readyLine().text"></div>
+            <div class="text-[13px] text-hub-muted mt-0.5 truncate" x-text="readySub()"></div>
+          </div>
+          <!-- 修复全部（仅有可自动修复项时出现）+ 自检 + 展开 -->
+          <button x-show="fixableKeys().length" @click="fixAll()" :disabled="fixAllBusy"
+                  class="bd-act soft shrink-0"
+                  x-text="fixAllBusy?'⏳ 修复中…':'🛠 修复全部'"></button>
+          <button @click="openSelfCheck()" title="生成开播自检报告（预检 + 四路信号 + 服务/显存/设备/自愈 → 可复制发给技术支持）"
+                  class="bd-act ghost shrink-0">📋</button>
+          <button x-show="preflight().fails===0" @click="readyOpen=!readyOpen"
+                  class="shrink-0 px-2 py-1.5 rounded-lg text-[13px] text-hub-muted hover:text-hub-text transition-colors"
+                  x-text="readyOpen?'收起 ▲':'详情 ▼'"></button>
+        </div>
+        <!-- 逐项清单（fail 时强制展开）：动作词按钮 + 原地反馈 + 设备内联下拉（S3）-->
+        <div x-show="readyOpen || preflight().fails>0" x-transition.opacity.duration.200ms class="border-t border-hub-border/50">
+          <template x-for="it in preflight().items" :key="it.key">
+            <div class="px-3.5 py-2 text-[13px] border-t border-hub-border/30 first:border-t-0">
+              <div class="flex items-center gap-2.5">
+                <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                      :class="{'bg-hub-green':it.status==='ok','bg-hub-orange':it.status==='warn','bg-hub-red':it.status==='fail'}"></span>
+                <span class="shrink-0" x-text="it.icon"></span>
+                <span class="font-semibold text-hub-text shrink-0" x-text="it.label"></span>
+                <span class="text-hub-muted truncate" x-text="it.detail"></span>
+                <span class="ml-auto shrink-0 flex items-center gap-1.5">
+                  <!-- 动作词升级：说清点了会发生什么（S3）-->
+                  <button x-show="it.key==='profile' && it.status!=='ok'" @click="goTab('profiles')"
+                          class="bd-act sm red">🎭 去角色库启用</button>
+                  <button x-show="(it.key==='faceswap'||it.key==='engine') && it.status!=='ok'" @click="runHealAction('goSettings')"
+                          class="bd-act sm"
+                          :class="it.status==='fail'?'red':'amber'">🔧 去设置检查</button>
+                  <button x-show="['video','mic','cable'].includes(it.key) && it.status!=='ok'" @click="fixScan(it.key)"
+                          :disabled="fixState[it.key]&&fixState[it.key].busy"
+                          class="bd-act sm amber"
+                          x-text="(fixState[it.key]&&fixState[it.key].busy)?'⏳ 扫描中…':'⟳ 重新扫描'"></button>
+                  <!-- P2-2 试音黄灯：原地就能录 3 秒完成验证，结论立刻回填本行 -->
+                  <button x-show="it.key==='mictest' && it.status!=='ok'" @click="micTestRun()" :disabled="micTest.busy"
+                          title="录 3 秒当前选中的麦克风，确认收音正常（不拦开播，只是建议）"
+                          class="bd-act sm amber"
+                          x-text="micTest.busy?'⏳ 录音中…':(it.ctaLabel||'🎙 试音')"></button>
+                  <!-- P3-2 试听黄灯：直打直播声卡做回环验证（就算你监听走耳机，验的也是观众那一路） -->
+                  <button x-show="it.key==='outtest' && it.status!=='ok'" @click="outTestRun(_cableOutDev())" :disabled="outTest.busy"
+                          title="向直播声卡播 1 秒提示音并自动录回环：heard=收到 ⇒ 观众能听到这一路（不拦开播，只是建议）"
+                          class="bd-act sm amber"
+                          x-text="outTest.busy?'⏳ 播放中…':(it.ctaLabel||'🔊 试听')"></button>
+                  <!-- [S6 无设备路径] 没摄像头 → 一键改选数字人模式（AI 形象出画，本来就不需要摄像头），视频项立即转绿 -->
+                  <button x-show="it.key==='video' && it.status!=='ok' && broadcastMode!=='avatar_lipsync'"
+                          @click="setBroadcastMode('avatar_lipsync')"
+                          title="数字人由 AI 形象出画，不需要摄像头；切换后此项立即就绪"
+                          class="bd-act sm soft">🤖 改用数字人</button>
+                  <button x-show="it.key==='cable' && it.status!=='ok'" @click="cableWiz.show=true; cableWiz.note=''"
+                          class="bd-act sm soft">📥 安装向导</button>
+                  <button x-show="it.key==='vram' && it.status!=='ok' && canFreeVram()" @click="freeVram()" :disabled="freeVramBusy"
+                          class="bd-act sm amber"
+                          x-text="freeVramBusy?'⏳ 腾出中…':'🧹 一键腾显存'"></button>
+                </span>
+              </div>
+              <!-- 原地反馈：扫描/修复结论就地出现，8 秒后自动消隐（S3）-->
+              <div x-show="fixState[it.key] && fixState[it.key].note" class="mt-1 ml-6 text-[13px]"
+                   :class="(fixState[it.key]&&fixState[it.key].ok===false)?'text-hub-orange':((fixState[it.key]&&fixState[it.key].ok)?'text-hub-green':'text-hub-muted')"
+                   x-text="fixState[it.key]?fixState[it.key].note:''"></div>
+              <!-- 设备内联下拉：不跳区、原地换设备（S3）——与专家「设备」区共用同一数据模型。
+                   P3-3 修正：走 onPickAudioInput/Output（此前直写 rvc.*，绕过了危险项确认与偏好保存，
+                   在这里选的设备重启后会静默丢失）-->
+              <div x-show="it.key==='mic' && rvcInputDevices.length" class="mt-1.5 ml-6">
+                <select x-model="audioInput" @change="onPickAudioInput()" class="w-full text-[13px] py-1">
+                  <option value="">自动选择（推荐 DroidCam / 手机麦）</option>
+                  <template x-for="a in rvcInputDevices" :key="a"><option :value="a" x-text="a"></option></template>
+                </select>
+              </div>
+              <div x-show="it.key==='cable' && rvcOutputDevices.length" class="mt-1.5 ml-6">
+                <select x-model="audioOutput" @change="onPickAudioOutput()" class="w-full text-[13px] py-1">
+                  <option value="">自动选择（推荐 CABLE Input）</option>
+                  <template x-for="a in rvcOutputDevices" :key="a"><option :value="a" x-text="a"></option></template>
+                </select>
+              </div>
+              <div x-show="it.key==='video' && cameras.length && broadcastMode!=='avatar_lipsync'" class="mt-1.5 ml-6">
+                <select x-model.number="selectedCamera" @change="pickReadyCam()" class="w-full text-[13px] py-1">
+                  <option :value="-1">自动选择（优先手机摄像头）</option>
+                  <template x-for="c in cameras" :key="c.index"><option :value="c.index" x-text="c.label+' ('+c.resolution+')'"></option></template>
+                </select>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 在播横幅：开播成功后的"在播"确认（红点脉冲 + 角色 + 健康 + fps）；[S5] clone-pop=入播一次性弹出仪式感 -->
+      <div x-show="perf.streaming"
+           class="mb-4 flex items-center gap-2 px-3.5 py-2.5 bd-strip ok clone-pop text-[14px]">
+        <span class="w-2.5 h-2.5 rounded-full bg-hub-red animate-pulse shrink-0"></span>
+        <span class="font-bold text-hub-green">直播中</span>
+        <span class="text-hub-text" x-show="active" x-text="'· '+active"></span>
+        <span :class="streamHealth().text" x-text="'· '+streamHealth().label"></span>
+        <span x-show="perf.fps>0" class="text-hub-muted" x-text="'· '+perf.fps+' fps'"></span>
+        <!-- S8-2: 容灾副本接管条——在播横幅一眼可见（比角色条更醒目，回切自动消失） -->
+        <span x-show="dfmHot.cur && dfmHot.cur.failover && dfmHot.cur.failover.on_replica" x-cloak
+              class="px-2 py-0.5 rounded-md text-[13px] bg-orange-500/25 text-orange-200 border border-orange-500/50 animate-pulse"
+              title="换脸主引擎失联，本机容灾副本接管中（无锐化增强，画面略糊；已自动加锐化补偿，主引擎恢复后回切）">🛟 容灾降级中</span>
+        <!-- [P2 价值条] 在播时长：把"在播中"从"没报错"升级为"正在产出"（正向感）-->
+        <span x-show="streamDurStr()" class="text-hub-muted" x-text="'· ⏱ '+streamDurStr()"></span>
+        <!-- [P2 价值条] 右侧：变声中 + 本地运行徽标（隐私/合规卖点，始终成立，可直接给客户看）-->
+        <span class="ml-auto flex items-center gap-2 shrink-0">
+          <span x-show="rvcLive()" class="text-hub-purple text-[13px]">🎙 变声中</span>
+          <span class="text-[13px] px-2 py-0.5 rounded-full border border-hub-green/40 text-hub-green/90 bg-hub-green/10"
+                title="全程本地运行，画面与声音不经第三方服务器（隐私安全）">🔒 本地运行</span>
+        </span>
+      </div>
+
+      <!-- 开播健康·可执行失败卡：换脸服务离线 / 未检测到人脸 时给出"该怎么办"+按钮+原始画面，杜绝"在播却空画面还以为正常" -->
+      <!-- [降噪·WS1] && !healthCardRedundant()：主裁决已完整覆盖(lag/svc_down 同标题同动作)时不重复本卡；noface/stalled 保留(独有原始画面预览)。删除该条件即回退 -->
+      <div x-show="perf.streaming && streamHealth().hint && !healthCardRedundant()" x-transition.opacity.duration.250ms
+           class="mb-4 rounded-xl text-[14px] overflow-hidden"
+           :class="(streamHealth().state==='svc_down'||streamHealth().state==='stalled') ? 'bg-red-900/25 border border-hub-red/45 text-hub-red'
+                                                      : 'bg-orange-900/20 border border-hub-orange/45 text-hub-orange'">
+        <div class="flex items-start gap-2.5 px-3.5 py-2.5">
+          <span class="shrink-0 text-base" x-text="streamHealth().state==='svc_down'?'🛑':(streamHealth().state==='stalled'?'📵':(streamHealth().state==='noface'?'📸':'⚠️'))"></span>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold" x-text="streamHealth().label"></div>
+            <div class="text-[13px] opacity-90 mt-0.5 leading-relaxed" x-text="streamHealth().hint"></div>
+            <!-- 驻留升级：坏状态拖久了，提示更主动（无脸已自动展开原始画面） -->
+            <div x-show="streamHealth().state==='noface' && healthDwell>=8" class="text-[13px] font-semibold mt-1 opacity-95">
+              ⏱ 已持续 <span x-text="healthDwell"></span>s — 已自动展开下方原始画面；仍无脸请点〔换源重连〕，或确认手机端是否还在推流
+            </div>
+            <!-- 动作行：由自愈策略表 healPolicy 驱动（单源、去重）。按状态给"一步可执行" -->
+            <div class="flex items-center gap-2 mt-2 flex-wrap">
+              <template x-for="a in (healPolicy[streamHealth().state]||[])" :key="a.key">
+                <button @click="runHealAction(a.key)" :disabled="a.disableWhenBusy && streaming"
+                        class="text-[13px] px-2 py-0.5 rounded-md border border-white/25 hover:bg-white/10 disabled:opacity-40"
+                        x-text="healLabel(a)"></button>
+              </template>
+            </div>
+            <!-- 自愈执行轨迹：无人值守自动动作发生时可见（最近一条） -->
+            <div x-show="healLog.length" class="text-[13px] text-hub-muted/90 mt-1.5" x-text="'🔧 '+(healLog[0]?healLog[0].msg:'')"></div>
+          </div>
+        </div>
+        <!-- 内联原始画面(实况 mjpeg)：一眼看出"是不是没对着脸/对着天花板/画面冻住"。x-if 关闭即断流，不挂后台连接 -->
+        <template x-if="rawPeek && (streamHealth().state==='noface' || streamHealth().state==='stalled')">
+          <div class="px-3.5 pb-3">
+            <div class="relative rounded-lg overflow-hidden border border-white/20 bg-black/60 mx-auto" style="aspect-ratio:16/9; max-width:340px">
+              <img :src="'/realtime/raw.mjpeg?n='+streamNonce" alt="原始摄像头画面" class="w-full h-full object-contain">
+              <span class="absolute top-1.5 left-1.5 text-[12px] px-1.5 py-0.5 rounded bg-black/60 text-white/85">摄像头实拍 · 让脸出现在画面中即可换脸</span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 显存吃紧·一键腾显存：讲清因果(不是本次重启造成的·是常驻/未用引擎占着)+列出可腾引擎+一键释放。
+           去重：主裁决已把「腾显存」作为首要动作时不再重复本卡；主裁决被更重故障占用时本卡仍出(补充因果说明)
+           [S1] 加 perf.streaming：未开播的显存提示统一收进「开播就绪度」清单，本卡只服务直播中场景 -->
+      <div x-show="perf.streaming && vramTight && canFreeVram() && linkVerdict().ctaKey!=='freeVram'" x-cloak x-transition.opacity.duration.250ms
+           class="mb-4 flex items-start gap-2.5 px-3.5 py-2.5 bd-strip warn text-[13px] text-hub-orange">
+        <span class="shrink-0 mt-0.5">🧹</span>
+        <div class="flex-1 min-w-0 space-y-0.5">
+          <div>显存吃紧（<b x-text="Math.round(perf.gpu_mem_used/perf.gpu_mem_total*100)"></b>%）。这<b>不是本次重新开播造成的</b>——有
+            <b x-text="freeVramCandidates().length"></b> 个当前用不到的引擎还占着显存，可一键腾出，<b>不影响直播</b>。</div>
+          <div class="text-hub-orange/70 text-[13px] truncate"
+               x-text="'可腾出：'+freeVramCandidates().map(n=>svcName(n)).join('、')"></div>
+        </div>
+        <button @click="freeVram()" :disabled="freeVramBusy"
+                class="shrink-0 self-center px-2.5 py-1 rounded-md border border-hub-orange/50 hover:bg-hub-orange/10 disabled:opacity-40 font-semibold"
+                x-text="freeVramBusy?'腾显存中…':'一键腾显存'"></button>
+      </div>
+
+      <div class="flex items-start gap-4 flex-wrap">
+        <!-- 出镜角色头像/名（未开播）-->
+        <template x-if="activeProfileObj && !perf.streaming">
+          <div class="flex items-center gap-3 shrink-0">
+            <div class="w-14 h-14 rounded-full overflow-hidden bg-hub-border flex items-center justify-center ring-2 ring-hub-green/50">
+              <img x-show="activeProfileObj.thumbnail" :src="'data:image/jpeg;base64,'+activeProfileObj.thumbnail" class="w-full h-full object-cover">
+              <div x-show="!activeProfileObj.thumbnail" class="w-full h-full flex items-center justify-center text-white font-bold text-lg"
+                   :style="'background:'+avatarSeed(activeProfileObj.name).bg" x-text="avatarSeed(activeProfileObj.name).initial"></div>
+            </div>
+            <div class="min-w-0">
+              <div class="text-[13px] text-hub-muted">出镜角色</div>
+              <div class="bd-fs-h2 font-bold text-hub-text truncate" x-text="activeProfileObj.name"></div>
+            </div>
+          </div>
+        </template>
+        <!-- [S2 所见即所得] 直播中：头像位升级为观众视角小窗（~1.1s 快照心跳 streamClock，点击看大图）。
+             x-if 保证未开播/离开页签时零请求；快照走既有 /realtime/swapped.jpg，无新增后端 -->
+        <template x-if="activeProfileObj && perf.streaming">
+          <div class="shrink-0 w-44">
+            <button @click="openLivePreview()" title="观众看到的直播画面（点击看大图与换脸前后对比）"
+                    class="relative block w-full rounded-xl overflow-hidden border border-hub-red/50 bg-black/60 group" style="aspect-ratio:16/9">
+              <img :src="'/realtime/swapped.jpg?t='+streamClock" alt="直播画面缩略图" class="w-full h-full object-contain"
+                   @error="$el.style.opacity=0.15" @load="$el.style.opacity=1">
+              <span class="absolute top-1 left-1 flex items-center gap-1 text-[12px] px-1.5 py-0.5 rounded bg-black/70 text-white">
+                <span class="w-1.5 h-1.5 rounded-full bg-hub-red animate-pulse"></span>观众视角
+              </span>
+              <span class="absolute bottom-1 right-1 text-[12px] px-1.5 py-0.5 rounded bg-black/60 text-white/85 opacity-0 group-hover:opacity-100 transition">⤢ 看大图</span>
+            </button>
+            <div class="mt-1.5 flex items-center gap-1.5 min-w-0">
+              <div class="w-5 h-5 rounded-full overflow-hidden bg-hub-border shrink-0 flex items-center justify-center">
+                <img x-show="activeProfileObj.thumbnail" :src="'data:image/jpeg;base64,'+activeProfileObj.thumbnail" class="w-full h-full object-cover">
+                <div x-show="!activeProfileObj.thumbnail" class="w-full h-full flex items-center justify-center text-white font-bold text-[12px]"
+                     :style="'background:'+avatarSeed(activeProfileObj.name).bg" x-text="avatarSeed(activeProfileObj.name).initial"></div>
+              </div>
+              <span class="text-[13px] font-semibold text-hub-text truncate" x-text="activeProfileObj.name"></span>
+              <span class="text-[12px] text-hub-red shrink-0">· 出镜中</span>
+            </div>
+          </div>
+        </template>
+        <template x-if="!activeProfileObj">
+          <div class="flex items-center gap-3 shrink-0">
+            <div class="w-14 h-14 rounded-full bg-hub-border/60 flex items-center justify-center text-2xl shrink-0">🎭</div>
+            <div>
+              <div class="text-[14px] font-bold text-hub-text">还没有出镜角色</div>
+              <button @click="goTab('profiles')" class="mt-1 text-[13px] text-hub-blue hover:underline">去「角色库」启用一个 →</button>
+            </div>
+          </div>
+        </template>
+
+        <!-- 右侧：链路 + 就绪体检 + 主CTA + 画质 + 步骤 -->
+        <div class="flex-1 min-w-[260px] space-y-3">
+          <!-- 实时连接状态条·真信号：直播中显示「真的在出画/出声」(活帧·健康·电平)，未开播显示就绪预览 -->
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+            <!-- 视频：真实活帧+健康态(出画/卡顿/没脸/启动中/引擎离线)，sub 内联可见 -->
+            <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border bg-hub-bg/60"
+                  :class="{'border-hub-green/40':videoLive().dot==='green','border-hub-blue/40':videoLive().dot==='blue','border-hub-orange/50':videoLive().dot==='red','border-hub-border':videoLive().dot==='gray'}"
+                  :title="'视频 · '+videoLive().label+'（'+videoLive().sub+'）'">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                    :class="{'bg-hub-green':videoLive().dot==='green','bg-hub-blue':videoLive().dot==='blue','bg-hub-orange':videoLive().dot==='red','bg-hub-muted':videoLive().dot==='gray'}"></span>
+              <span class="text-hub-muted">📹</span><span class="font-semibold text-hub-text" x-text="videoLive().label"></span>
+              <span class="text-hub-muted/70" x-text="videoLive().sub"></span>
+            </span>
+            <span class="text-hub-muted/40">→ 换脸 → OBS</span>
+            <!-- 音频：设备判定(可靠)为主 + 迷你监听电平条(有声正向确认、静音不误报)。绿=最近有声 -->
+            <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border bg-hub-bg/60"
+                  :class="audioLive().talking?'border-hub-green/40':(audioLive().dot==='gray'?'border-hub-border':'border-hub-blue/40')"
+                  :title="'音频输入 · '+audioLive().label+'（'+audioLive().sub+'）'+(audioLive().monActive?(audioLive().cableOk?' · 直播电平 ':' · 监听电平 ')+audioLive().monLevel+'%':'')">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                    :class="audioLive().talking?'bg-hub-green':(audioLive().dot==='gray'?'bg-hub-muted':'bg-hub-blue')"></span>
+              <span class="text-hub-muted">🎙️</span><span class="font-semibold text-hub-text" x-text="audioLive().label"></span>
+              <span class="text-hub-muted/70" x-show="audioLive().talking">有声</span>
+              <!-- 迷你电平条：有 CABLE 探针→直播真声电平(最可信)，否则→PC 监听输出电平。静音不误报 -->
+              <span x-show="audioLive().monLevel>=0" class="w-8 h-1.5 rounded-full bg-hub-border/50 overflow-hidden shrink-0"
+                    :title="audioLive().cableOk?'直播馈线电平（OBS 实际读到的虚拟声卡 / CABLE 输出，直播真声）':'PC 监听输出电平（经手机监听中继测得，非麦克风输入电平）'">
+                <span class="block h-full rounded-full transition-all duration-150"
+                      :class="audioLive().talking?'bg-hub-green':'bg-hub-blue/60'"
+                      :style="'width:'+Math.max(4,audioLive().monLevel)+'%'"></span>
+              </span>
+            </span>
+            <span class="text-hub-muted/40">→ 变声 → 虚拟声卡</span>
+          </div>
+
+          <!-- [S1 去重] 旧「预检药丸行」已删：与就绪度清单同源同屏重复，信息统一收进上方「开播就绪度」组件 -->
+
+          <!-- 开播方式二选一：真人换脸 / 数字人。两条链路 OBS 已拆分，切换即互斥，杜绝争抢黑屏/停更 -->
+          <div x-show="!perf.streaming && !streaming" class="space-y-2">
+            <div class="text-[13px] text-hub-muted flex items-center gap-1"><span>🎬 选择开播方式</span>
+              <span class="text-hub-muted/50">（两条链路已拆分，各走独立虚拟摄像头，不再互相抢画面）</span></div>
+            <div class="grid grid-cols-2 gap-2">
+              <button @click="setBroadcastMode('real_faceswap')"
+                      class="text-left rounded-xl border p-3 transition"
+                      :class="broadcastMode==='real_faceswap' ? 'border-hub-blue bg-hub-blue/10 ring-1 ring-hub-blue' : 'border-hub-border bg-hub-bg hover:border-hub-blue/50'">
+                <div class="text-[14px] font-bold text-hub-text">🧑 真人出镜 · 实时换脸</div>
+                <div class="text-[13px] text-hub-muted mt-0.5 leading-snug">用你的真实摄像头，实时换成角色脸。更自然、零合成延迟、隐私出镜。</div>
+                <div class="text-[12px] mt-1" :class="broadcastMode==='real_faceswap'?'text-hub-blue':'text-hub-muted/50'"
+                     x-text="broadcastMode==='real_faceswap'?'● 已选 · 输出到 OBS 虚拟摄像头':'点此选择'"></div>
+              </button>
+              <button @click="setBroadcastMode('avatar_lipsync')"
+                      class="text-left rounded-xl border p-3 transition"
+                      :class="broadcastMode==='avatar_lipsync' ? 'border-hub-blue bg-hub-blue/10 ring-1 ring-hub-blue' : 'border-hub-border bg-hub-bg hover:border-hub-blue/50'">
+                <div class="text-[14px] font-bold text-hub-text">🤖 AI 数字人 · 无人直播</div>
+                <div class="text-[13px] text-hub-muted mt-0.5 leading-snug">不用出镜，AI 形象 + 克隆声自动播。适合 24h 挂机、口播带货。</div>
+                <div class="text-[12px] mt-1" :class="broadcastMode==='avatar_lipsync'?'text-hub-blue':'text-hub-muted/50'"
+                     x-text="broadcastMode==='avatar_lipsync'?'● 已选 · 数字人独占 OBS':'点此选择'"></div>
+              </button>
+            </div>
+            <!-- 双路同开（进阶）：仅在检测到 Unity Capture 时可用 -->
+            <label x-show="dualAvailable && broadcastMode==='real_faceswap'" class="flex items-start gap-2 text-[13px] text-hub-muted cursor-pointer">
+              <input type="checkbox" x-model="broadcastDual" class="accent-hub-blue mt-0.5">
+              <span>👥 <b class="text-hub-text">双路同开</b>：真人换脸→OBS，数字人→Unity Capture（两个独立虚拟摄像头，可同时用）</span>
+            </label>
+            <!-- [S1 去重] 旧「先选一种开播方式」橙条已删：与按钮下方的禁用原因行(startDisabledReason)重复 -->
+          </div>
+
+          <!-- 自适应主 CTA：未开播=一键开播(手机在线则用手机)；进行中=启动中；已开播=重新开播 + 停止 -->
+          <div class="flex gap-2">
+            <button @click="guardedStart()" :disabled="streaming || (!perf.streaming && (!streamReady() || wireless.running))"
+                    :title="!streamReady()&&!perf.streaming?'请先在「角色库」启用一个出镜角色':(wireless.running?'「手机无线开播」准备中…':(perf.streaming?(dangerArm==='restart'?'再点一次确认重启画面':'已在直播中，点此用当前设置重启画面'):'立即用当前/自动画面开播'))"
+                    class="flex-1 bg-gradient-to-r from-green-600 to-emerald-500 hover:from-green-500 hover:to-emerald-400
+                           disabled:from-gray-700 disabled:to-gray-700 disabled:cursor-not-allowed
+                           text-white font-bold py-3.5 rounded-xl text-[15px] tracking-wide shadow-lg shadow-green-900/30
+                           hover:shadow-green-900/50 transition"
+                    :class="[dangerArm==='restart'?'ring-2 ring-hub-orange/70':'',
+                             (!streaming && !perf.streaming && streamReady() && !wireless.running)?'bd-glow-pulse':'']">
+              <span x-show="streaming" class="pulse">⏳ 启动中…</span>
+              <span x-show="!streaming && perf.streaming && dangerArm!=='restart'">🔄 重新开播</span>
+              <span x-show="!streaming && perf.streaming && dangerArm==='restart'" class="text-hub-orange">⚠️ 再点一次确认重启</span>
+              <span x-show="!streaming && !perf.streaming" x-text="startCtaLabel()"></span>
+            </button>
+            <button @click="clickStop()" x-show="perf.streaming || streaming"
+                    :title="dangerArm==='stop'?'再点一次确认停播':'停止开播'"
+                    class="px-4 py-3.5 rounded-xl font-bold text-sm border transition flex items-center gap-1"
+                    :class="dangerArm==='stop'?'border-hub-red bg-hub-red/30 text-white ring-2 ring-hub-red/60':'border-hub-red/50 text-hub-red bg-hub-red/10 hover:bg-hub-red hover:text-white'">
+              <span x-text="dangerArm==='stop'?'⚠️':''"></span><span x-text="dangerArm==='stop'?'确认停播':'⏹'"></span><span class="hidden sm:inline" x-text="dangerArm==='stop'?'':'停止'"></span>
+            </button>
+          </div>
+          <!-- S4: 换脸角色预热条（真人换脸模式 + 引擎可达且有 DFM 库时显示）——开播时也会自动预热，此按钮供提前手点 -->
+          <div x-show="broadcastMode==='real_faceswap' && dfmHot.cur && dfmHot.cur.engine_up && (dfmHot.cur.dfm_library||0)>0" x-cloak
+               class="flex items-center gap-2 text-[13px] px-3 py-2 rounded-lg bg-hub-card/60 border border-hub-border/40">
+            <span>🎭</span>
+            <span class="text-hub-muted">当前换脸：</span>
+            <span class="font-semibold" x-text="dfmHot.cur ? (dfmHot.cur.active_cn || (dfmHot.cur.is_dfm ? dfmHot.cur.active : '通用换脸（跟随角色源脸）')) : '—'"></span>
+            <!-- S6/S8-2: 容灾接管徽标——主引擎失联、副本顶着时亮出；画质降级明示（无 GFPGAN 锐化） -->
+            <span x-show="dfmHot.cur && dfmHot.cur.failover && dfmHot.cur.failover.on_replica" x-cloak
+                  class="px-1.5 py-0.5 rounded text-[12px] bg-orange-500/20 text-orange-300 border border-orange-500/40 animate-pulse"
+                  title="生产换脸引擎失联，画面由本机容灾副本接管（锐化增强暂不可用，略糊但可播）；主引擎恢复后自动回切">🛟 副本接管·画质降级</span>
+            <button @click="prewarmHot()" :disabled="dfmHot.busy"
+                    class="ml-auto px-2.5 py-1 rounded-md border border-hub-blue/50 text-hub-blue hover:bg-hub-blue hover:text-white transition text-[12px] disabled:opacity-50"
+                    title="把活动角色+最常用角色的整脸模型提前加载进直播机显存——场内切角色零冻结（开播时也会自动预热）">
+              <span x-text="dfmHot.busy?'预热中…':'🔥 预热本场角色'"></span>
+            </button>
+          </div>
+          <div x-show="dfmHot.msg" x-cloak class="text-[12px] text-hub-muted px-1" x-text="dfmHot.msg"></div>
+          <!-- [S5 启动仪式] starting 相位：里程碑 + 耗时 + 扫描进度（前端演绎启动流程，不谎报完成；真实逐步结果返回后见「开播步骤」）-->
+          <div x-show="streamPhase()==='starting'" x-cloak class="bd-strip info px-3.5 py-2.5 space-y-2">
+            <div class="flex items-center gap-2 text-[13px]">
+              <span class="pulse">🚀</span>
+              <span class="font-bold text-hub-blue" x-text="(startingRestart?'正在重启直播画面':'正在开播')+'…'"></span>
+              <span class="text-hub-muted tabular-nums" x-text="startingElapsed()+'s'"></span>
+              <span class="ml-auto text-[12px] text-hub-muted/70">通常 5~15 秒 · 完成后自动出画</span>
+            </div>
+            <div class="bd-progress indeterminate"><i></i></div>
+            <div class="flex items-center gap-1 flex-wrap text-[13px]">
+              <template x-for="(m,mi) in startMilestones()" :key="m">
+                <span class="flex items-center gap-1">
+                  <span :class="mi===startingStageIdx()?'text-hub-blue font-semibold':(mi<startingStageIdx()?'text-hub-muted/60':'text-hub-muted/35')"
+                        x-text="(mi===startingStageIdx()?'⏳ ':'')+m"></span>
+                  <span x-show="mi<startMilestones().length-1" class="text-hub-muted/30">→</span>
+                </span>
+              </template>
+            </div>
+          </div>
+
+          <!-- [S2 原因外显] 按钮为什么点不了/点了会怎样——一行说清，不再藏在悬浮 title；无阻碍时回落为默认引导 -->
+          <div x-show="!perf.streaming && !streaming && startDisabledReason()" class="text-[13px] bd-strip px-3 py-1.5 flex items-center gap-2"
+               :class="startDisabledReason() && startDisabledReason().tone==='red' ? 'err text-hub-red'
+                      : (startDisabledReason() && startDisabledReason().tone==='blue' ? 'info text-hub-blue' : 'warn text-hub-orange')">
+            <span class="shrink-0" x-text="startDisabledReason()?startDisabledReason().icon:''"></span>
+            <span class="flex-1 min-w-0" x-text="startDisabledReason()?startDisabledReason().text:''"></span>
+            <button x-show="startDisabledReason() && startDisabledReason().cta" @click="reasonCta(startDisabledReason().key)"
+                    class="shrink-0 underline font-semibold hover:opacity-80" x-text="startDisabledReason()?startDisabledReason().cta:''"></button>
+          </div>
+          <div class="text-[13px] text-hub-muted/80" x-show="!perf.streaming && !streaming && !startDisabledReason()">
+            立即开播：用<b class="text-hub-text">当前/自动</b>画面（手机摄像头在线时自动选用）。还没连手机？用下方
+            <b class="text-hub-blue">📱 手机无线开播</b> 向导。
+          </div>
+          <div class="text-[13px] text-hub-green/90" x-show="perf.streaming && !streaming">
+            ✅ 已在直播中。改了画质/设备想生效，点「🔄 重新开播」；结束直播点「⏹ 停止」。
+          </div>
+
+          <!-- 降级显形：本次没用上手机(回退本机/兜底)→ 明确告知 + 一步切手机，不再"静默回退" -->
+          <div x-show="showVideoFallbackNotice && heroTipVisible('fallback')" x-cloak x-transition.opacity.duration.250ms
+               class="text-[13px] bd-strip px-3 py-2"
+               :class="lastVideo.degraded?'err text-hub-red':'warn text-hub-orange'">
+            <div class="flex items-start gap-2">
+              <span class="shrink-0 mt-0.5" x-text="lastVideo.degraded?'⚠️':'📱'"></span>
+              <div class="flex-1 min-w-0">
+                <div>本次用的是「<b x-text="lastVideo.label"></b>」，<b>没用上手机摄像头</b><span x-show="lastVideo.degraded">，画面可能是空的</span>。</div>
+                <div class="text-hub-muted/80 text-[13px] mt-0.5">想用手机出镜：手机连同一 WiFi → 扫码打开手机端点「🚀 一键准备」，再点「改用手机开播」（会自动等手机就绪）。</div>
+                <div class="flex flex-wrap gap-2 mt-1.5">
+                  <button @click="wirelessStart()" :disabled="wireless.running"
+                          class="px-2.5 py-1 rounded-md border border-hub-green/50 text-hub-green hover:bg-hub-green/10 disabled:opacity-40 font-semibold"
+                          x-text="wireless.running?'手机准备中…':'📱 改用手机开播'"></button>
+                  <button @click="phoneGuideOpen=true; loadPhoneRelayStatus()"
+                          class="px-2.5 py-1 rounded-md border border-hub-blue/50 text-hub-blue hover:bg-hub-blue/10">🔎 展开手机向导</button>
+                  <button @click="videoNoticeDismissed=true"
+                          class="px-2.5 py-1 rounded-md border border-hub-border text-hub-muted hover:bg-hub-border/30">就用本机，知道了</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- [S1 去重] 旧「请先启用出镜角色」橙条已删：禁用原因行(startDisabledReason)已覆盖同一信息与跳转 -->
+
+          <!-- [S7 手机出镜提位] 按连接进度给不同强度的入口（手机出镜只属于真人换脸链路，数字人模式一律不出现）：
+               ① 已选真人换脸 + 终端已在线只差摄像头（用户已扫码，就差一步）→ 行动条：一键无线开播 / 展开向导
+               ② 其余未推流场景（没连手机 / 还没选方式）→ 静默文字链接，只导航不代做决定
+               ③ 摄像头已推流 → 不再加提示（CTA 文案「用手机摄像头开播」+ 视频胶囊绿点已表达，避免三处重复） -->
+          <div x-show="streamReady() && !phoneRelayCam.live && phoneRelay.ok && broadcastMode==='real_faceswap' && streamPhase()!=='starting' && heroTipVisible('phone')" x-cloak
+               class="bd-strip info px-3 py-2 text-[13px] flex items-center gap-2 flex-wrap">
+            <span class="shrink-0">📱</span>
+            <span class="flex-1 min-w-[12rem]"><b class="text-hub-text">手机终端已在线</b>，只差摄像头——点这里自动等手机就绪并开播</span>
+            <button @click="phoneGuideOpen=true; wirelessStart()" :disabled="wireless.running || streaming"
+                    class="shrink-0 bd-act sm green"
+                    x-text="wireless.running?'⏳ 手机准备中…':'🚀 一键无线开播'"></button>
+            <button @click="phoneGuideOpen=true" class="shrink-0 bd-act sm ghost">展开向导</button>
+          </div>
+          <button x-show="streamReady() && !phoneRelayCam.live && broadcastMode!=='avatar_lipsync' && !(phoneRelay.ok && broadcastMode==='real_faceswap')"
+                  @click="phoneGuideOpen=true"
+                  class="text-[13px] text-hub-blue hover:underline text-left">📱 想用手机出镜？展开下方「手机无线开播」向导 ↓</button>
+
+          <!-- [S2 选中态] 画质预设：当前生效的预设高亮 ✓（presetActive 由实际参数反推，手调参数后自动显示「自定义」）
+               [P0 预设合一] 每档同时驱动画布层+引擎层(处理宽/精修)；在播点击=引擎档即时热切 -->
+          <div class="flex items-center gap-1.5 flex-wrap text-[13px]">
+            <span class="text-hub-muted">画质预设</span>
+            <template x-for="pk in (streamSimple?['low','balanced','quality']:['low','balanced','quality','ultra','vocal','style'])" :key="pk">
+              <button @click="applyPreset(pk)" :title="presetLocked(pk) ? presetLockTip(pk) : _presetDefs[pk].hint"
+                      class="px-2.5 py-1 rounded-full border transition-colors"
+                      :class="presetLocked(pk) ? 'bg-hub-bg border-hub-border text-hub-muted opacity-60'
+                              : (presetActive()===pk ? 'bg-hub-blue/15 border-hub-blue text-hub-blue font-semibold' : 'bg-hub-bg border-hub-border hover:border-hub-blue')"
+                      x-text="(presetLocked(pk)?'🔒 ':'')+(presetActive()===pk?'✓ ':'')+_presetDefs[pk].label"></button>
+            </template>
+            <span x-show="!presetActive()" class="px-2 py-1 rounded-full border border-hub-purple/40 text-hub-purple/90 bg-hub-purple/10"
+                  title="当前参数与任何预设都不同（手动调过效果参数）">自定义参数</span>
+            <!-- [P0 生效档状态条] 绿=生效档与目标一致；琥珀=自适应已降档保流畅(悬停看原因,回落自动升回) -->
+            <template x-if="tierChip()">
+              <span :class="tierChip().degraded ? 'bd-badge warn' : 'bd-badge ok'"
+                    :title="tierChip().degraded ? ('自动降档保流畅：'+tierChip().reason+'（负载回落后自动升回）') : '引擎生效档与目标一致'"
+                    x-text="tierChip().text"></span>
+            </template>
+            <!-- [P8 锁主脸] 多脸在镜才出现：绿=已锁定最大脸(海报/路人不误换) 橙=全换模式(时延约翻倍) 蓝=双人档(锁主脸让位,按槽全换) -->
+            <template x-if="facesChip()">
+              <span class="cursor-help"
+                    :class="facesChip().dual ? 'bd-badge info' : (facesChip().on ? 'bd-badge ok' : 'bd-badge warn')"
+                    :title="facesChip().tip" x-text="facesChip().txt"></span>
+            </template>
+            <!-- [06t 孤儿流收养] hub 重启后自动认领了在跑的画面进程(零闪断)：如实展示,监控/停播都已恢复 -->
+            <template x-if="orphanAdopted && perf.streaming">
+              <span class="bd-badge info cursor-help"
+                    :title="'面板重启时画面进程仍在跑，已按 PID '+orphanAdopted.pid+' 无闪断接管：监控、成绩单、停播按钮全部恢复，画面没有中断过。'"
+                    x-text="'🛰️ 已接管在跑画面'"></span>
+            </template>
+          </div>
+          <div x-show="tierChip() && tierChip().degraded && heroTipVisible('tier')" x-transition.opacity class="text-[13px] text-hub-orange"
+               x-text="'⚡ '+(tierChip()?tierChip().reason:'')+' — 负载回落后自动升回目标档'"></div>
+
+          <!-- 开播步骤结果 + 失败修复指引 -->
+          <!-- [P2 极简] 用户模式：默认折叠为一行摘要（失败步骤始终展开、可操作）；专家模式或点开=全量。删除 streamSimple 分支即回退 -->
+          <div x-show="streamSteps.length" class="space-y-1">
+            <button x-show="streamSimple" @click="streamStepsOpen=!streamStepsOpen" :aria-expanded="streamStepsOpen"
+                    class="w-full flex items-center gap-2 text-xs px-2 py-1 rounded-lg border border-hub-border/60 hover:border-hub-blue/40 text-left transition-colors">
+              <span x-text="streamSteps.filter(s=>!s.ok).length ? '⚠️' : '✅'"></span>
+              <span class="font-semibold" :class="streamSteps.filter(s=>!s.ok).length ? 'text-hub-orange' : 'text-hub-green'"
+                    x-text="streamSteps.filter(s=>!s.ok).length ? (streamSteps.filter(s=>!s.ok).length+' 步需要处理') : ('开播步骤就绪 · '+streamSteps.length+' 步全部通过')"></span>
+              <span class="ml-auto text-hub-muted" x-text="streamStepsOpen?'收起 ▲':'查看步骤 ▾'"></span>
+            </button>
+            <template x-for="s in streamSteps" :key="s.step">
+              <!-- 用户模式收起时只留失败步骤(!s.ok)；专家模式或展开=全部 -->
+              <div class="text-xs" x-show="!streamSimple || streamStepsOpen || !s.ok">
+                <div class="flex items-start gap-1.5">
+                  <span :class="s.ok?'text-hub-green':'text-hub-red'" x-text="s.ok?'✅':'❌'"></span>
+                  <span x-text="stepLabels[s.step]||s.step"></span>
+                  <!-- [降噪·WS3] 用户模式显示人话(humanizeStepDetail)，原始技术串保留在 title 悬浮与专家模式
+                       P2-4: 后端带 detail_raw(原始设备名)时优先做悬浮原文，正文直接用后端人话明细 -->
+                  <span class="text-hub-muted flex-1" :title="s.detail_raw||(typeof s.detail==='string'?s.detail:'')"
+                        x-text="streamSimple ? humanizeStepDetail(s.detail) : (typeof s.detail==='string'?s.detail:'')"></span>
+                </div>
+                <div x-show="!s.ok && streamStepHint(s.step, s.detail)"
+                     class="ml-5 mt-0.5 bd-strip warn text-hub-orange px-2 py-1">
+                  💡 <span x-text="streamStepHint(s.step, s.detail)"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ 区二·手机无线开播向导（折叠）：扫码 → 一键准备(含HTTPS证书提示) → 自动开播 ════ -->
+    <div class="bd-card p-4">
+      <button @click="phoneGuideOpen=!phoneGuideOpen" class="w-full flex items-center gap-2.5 text-left">
+        <span class="bd-card-title">📱 手机无线开播</span>
+        <span :class="phoneRelay.ok?'bd-badge ok':'bd-badge warn'"
+              x-text="phoneRelay.ok?'手机终端在线':'手机终端离线'"></span>
+        <span x-show="phoneRelayCam.live" class="text-[13px] text-hub-green">· 摄像头已推流</span>
+        <span class="ml-auto text-hub-muted text-xs" x-text="phoneGuideOpen?'收起 ▲':'展开 ▼'"></span>
+      </button>
+
+      <div x-show="phoneGuideOpen" x-transition.opacity>
+        <div class="flex items-center justify-between gap-2 mt-1 mb-3">
+          <div class="text-[13px] text-hub-muted">用一台手机当无线摄像头 + 麦克风：扫码 → 点「一键准备」→ 自动开播。</div>
+          <button @click="loadPhoneRelayStatus(); loadPhoneRelayCam()" class="bd-act sm ghost shrink-0">⟳ 刷新状态</button>
+        </div>
+
+        <!-- 终端/监听/手机麦/摄像头 状态点 -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mb-3">
+          <div class="rounded-lg border px-2 py-1.5" :class="phoneRelay.ok?'border-hub-green/40 bg-hub-green/10':'border-hub-red/40 bg-hub-red/10'">
+            <div class="text-[12px] text-hub-muted">终端</div>
+            <div class="text-xs font-semibold" :class="phoneRelay.ok?'text-hub-green':'text-hub-red'" x-text="phoneRelay.ok?'在线':'离线'"></div>
+          </div>
+          <div class="rounded-lg border px-2 py-1.5" :class="phoneRelay.audio&&phoneRelay.audio.ok?'border-hub-green/40 bg-hub-green/10':'border-hub-orange/40 bg-orange-900/10'">
+            <div class="text-[12px] text-hub-muted">监听</div>
+            <div class="text-xs font-semibold" :class="phoneRelay.audio&&phoneRelay.audio.ok?'text-hub-green':'text-hub-orange'" x-text="phoneRelay.audio&&phoneRelay.audio.ok?'在线':'待配置'"></div>
+          </div>
+          <div class="rounded-lg border px-2 py-1.5" :class="(phoneRelay.mic&&(phoneRelay.mic.ok||phoneRelay.mic.taps>0))?'border-hub-green/40 bg-hub-green/10':'border-hub-orange/40 bg-orange-900/10'">
+            <div class="text-[12px] text-hub-muted">手机麦</div>
+            <div class="text-xs font-semibold" :class="(phoneRelay.mic&&(phoneRelay.mic.ok||phoneRelay.mic.taps>0))?'text-hub-green':'text-hub-orange'" x-text="phoneRelay.mic?(phoneRelay.mic.ok?'已注入':(phoneRelay.mic.taps>0?'直连':'待机')):'待机'"></div>
+          </div>
+          <div class="rounded-lg border px-2 py-1.5" :class="phoneRelay.cam&&phoneRelay.cam.ok?'border-hub-green/40 bg-hub-green/10':'border-hub-orange/40 bg-orange-900/10'">
+            <div class="text-[12px] text-hub-muted">摄像头</div>
+            <div class="text-xs font-semibold" :class="phoneRelay.cam&&phoneRelay.cam.ok?'text-hub-green':'text-hub-orange'" x-text="phoneRelay.cam&&phoneRelay.cam.ok?((phoneRelay.cam.w||'?')+'×'+(phoneRelay.cam.h||'?')):'待推流'"></div>
+          </div>
+        </div>
+
+        <div class="grid sm:grid-cols-[auto_1fr] gap-4 items-start">
+          <!-- 步骤①：扫码（内嵌二维码，指向 HTTPS 终端 7879）-->
+          <div class="flex flex-col items-center gap-1.5">
+            <div class="bg-white rounded-lg p-2 w-[148px] h-[148px] flex items-center justify-center">
+              <img :src="phoneRelayQrSrc" alt="手机端二维码" class="w-full h-full object-contain" @error="$el.style.opacity=0.2">
+            </div>
+            <div class="text-[12px] text-hub-muted">① 手机扫码打开手机端（做同传 / 出镜就扫这个）</div>
+            <button @click="openPhoneRelay('https')" class="text-[13px] text-hub-blue hover:underline">或在手机浏览器打开链接</button>
+          </div>
+          <!-- 步骤②③ 指引 + 一键无线开播 -->
+          <div class="space-y-2 text-[13px] text-hub-muted leading-relaxed">
+            <div><b class="text-hub-text">② 手机上点【🚀 一键准备】</b>，自动开启监听 + 摄像头（弹窗点「允许」麦克风/摄像头）。</div>
+            <div class="text-[13px] bd-strip warn text-hub-orange px-2.5 py-1.5 leading-relaxed">
+              ⚠️ 手机首次打开若提示「连接不是私密 / 证书无效」——本机自签证书，<b>安全</b>：
+              安卓 Chrome 点 <b>高级 → 继续前往</b>；iPhone Safari 点 <b>显示详情 → 访问此网站</b>；
+              微信里点右上 <b>··· → 在浏览器打开</b>（微信不给摄像头/麦克风）。
+              <a href="/help?doc=interp" target="_blank" class="text-hub-blue underline">看图文全流程 ↗</a>
+            </div>
+            <div><b class="text-hub-text">③ 点下面「一键无线开播」</b>，等手机就绪后自动用手机摄像头开播。</div>
+            <div class="flex flex-wrap items-center gap-2 pt-1">
+              <button @click="wirelessStart()" :disabled="wireless.running || streaming"
+                      class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-green-600 to-emerald-500 hover:from-green-500 hover:to-emerald-400
+                             text-white font-bold text-sm shadow-lg shadow-green-900/30
+                             disabled:from-gray-700 disabled:to-gray-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+                      :class="(wireless.running || streaming)?'':'bd-glow-pulse'"
+                      :title="active?'等手机端就绪后用手机摄像头自动开播':'请先选择出镜角色'">
+                <span x-text="wireless.running?'⏳ 准备中…':'📱 一键无线开播'"></span>
+              </button>
+              <button x-show="wireless.running" @click="wirelessCancel()" class="bd-act red">取消</button>
+              <button @click="openInterpreter()" class="bd-act ghost">🌐 实时同传</button>
+            </div>
+            <!-- 进度：就绪清单 + 当前指引 -->
+            <div x-show="wireless.phase" x-transition.opacity.duration.150ms class="rounded-lg border border-hub-border bg-hub-bg/60 px-2.5 py-2">
+              <div class="flex flex-wrap items-center gap-1.5 mb-1">
+                <span class="text-[12px] px-1.5 py-0.5 rounded-full border" :class="wireless.checklist.term?'border-hub-green/40 text-hub-green':'border-hub-border text-hub-muted'" x-text="(wireless.checklist.term?'✓':'•')+' 终端'"></span>
+                <span class="text-[12px] px-1.5 py-0.5 rounded-full border" :class="wireless.checklist.audio?'border-hub-green/40 text-hub-green':'border-hub-border text-hub-muted'" x-text="(wireless.checklist.audio?'✓':'•')+' 监听'"></span>
+                <span class="text-[12px] px-1.5 py-0.5 rounded-full border" :class="wireless.checklist.cam?'border-hub-green/40 text-hub-green':'border-hub-border text-hub-muted'" x-text="(wireless.checklist.cam?'✓':'•')+' 摄像头'"></span>
+              </div>
+              <div class="text-[13px]" :class="wireless.phase==='done'?'text-hub-green':(wireless.phase==='error'||wireless.phase==='timeout'||wireless.phase==='need_profile'?'text-hub-orange':'text-hub-muted')" x-text="wireless.msg"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  <!-- ════ v2 主工作区：专家+宽屏(xl) 双栏网格（左 7 列=实时画面粘性跟随；右 5 列=设置面板手风琴），
+        用户模式或窄屏=单列 flex（display:none 的列不产生多余 gap；DOM 顺序与旧版一致，窄屏体验不变）════ -->
+  <div class="flex flex-col gap-3 min-w-0" :class="streamSimple?'':'xl:grid xl:grid-cols-12 xl:items-start'">
+
+    <!-- ── 右列·上半：效果调节 + 视觉效果（专家）── -->
+    <div x-show="!streamSimple" class="order-2 xl:order-none xl:col-start-8 xl:col-span-5 xl:row-start-1 flex flex-col gap-3 min-w-0">
+
+    <!-- 效果调节（专家手调；快捷预设在上方英雄区）——v2 面板化：折叠头常显当前档位摘要；枚举项=分段控件一次直选 -->
+    <section class="bd-panel">
+      <button type="button" class="bd-panel-head" @click="togglePanel('fx')" :aria-expanded="panelOpen.fx?'true':'false'">
+        <h2 class="bd-card-title">🎛️ 效果调节</h2>
+        <span class="bd-panel-sum" x-text="fxSummary()"></span>
+        <span class="bd-panel-chev">▾</span>
+      </button>
+      <div x-show="panelOpen.fx" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+
+      <div class="space-y-2">
+        <div class="text-[13px] text-hub-muted font-semibold">视频</div>
+        <div class="bd-form">
+          <div class="bd-field">
+            <label>画面比例 <span class="bd-val" x-text="{portrait916:'竖屏9:16',portrait34:'竖屏3:4',landscape169:'横屏16:9',landscape169hd:'横屏1080P',square11:'方形1:1'}[outputAspect]||'横屏(默认)'"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="outputAspect==='portrait916'?'on':''" @click="setAspect('portrait916')" title="手机全屏 720×1280，视频通话/Telegram 竖屏">竖屏</button>
+              <button type="button" :class="outputAspect==='landscape169'?'on':''" @click="setAspect('landscape169')" title="横屏 1280×720">横屏</button>
+              <button type="button" :class="outputAspect==='square11'?'on':''" @click="setAspect('square11')" title="方形 720×720">方形</button>
+            </div>
+          </div>
+          <div class="bd-hint">手机视频通话选「竖屏」→ 自动 720×1280 全屏比例，开播/自愈都不再翻回横屏。</div>
+          <!-- 切换比例后一次性引导：新分辨率需在对端 App 重选摄像头才吃(Telegram/微信 会缓存旧分辨率) -->
+          <div x-show="aspectReselectTip" x-transition
+               class="mt-2 flex items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-200">
+            <span>📱</span>
+            <div class="flex-1">已切到「<b x-text="aspectReselectTip"></b>」。若对方看到的画面还是旧比例：请在 <b>Telegram</b> 里点一次「Stop Video → Start Video」(或重新选择 OBS Virtual Camera) 刷新分辨率。</div>
+            <button type="button" class="shrink-0 text-amber-300 hover:text-white" @click="aspectReselectTip=''" title="知道了">✕</button>
+          </div>
+          <div class="bd-field">
+            <label>分辨率 <span x-show="![720,1080].includes(videoHeight)" class="bd-val" x-text="videoWidth+'×'+videoHeight"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="videoWidth===1280&&videoHeight===720?'on':''" @click="videoWidth=1280;videoHeight=720;outputAspect='landscape169';setAspect('landscape169')">720p</button>
+              <button type="button" :class="videoWidth===1920&&videoHeight===1080?'on':''" @click="videoWidth=1920;videoHeight=1080;outputAspect='landscape169hd';setAspect('landscape169hd')">1080p</button>
+            </div>
+          </div>
+          <div class="bd-field">
+            <label>摄像头 FPS <span x-show="![15,20,30].includes(videoFps)" class="bd-val" x-text="videoFps"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="videoFps===15?'on':''" @click="videoFps=15">15</button>
+              <button type="button" :class="videoFps===20?'on':''" @click="videoFps=20">20</button>
+              <button type="button" :class="videoFps===30?'on':''" @click="videoFps=30">30</button>
+            </div>
+          </div>
+          <div class="bd-field">
+            <label>换脸 FPS <span x-show="![6,8,10].includes(swapFps)" class="bd-val" x-text="swapFps"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="swapFps===6?'on':''" @click="swapFps=6">6</button>
+              <button type="button" :class="swapFps===8?'on':''" @click="swapFps=8">8</button>
+              <button type="button" :class="swapFps===10?'on':''" @click="swapFps=10">10</button>
+            </div>
+          </div>
+          <div class="bd-field">
+            <label>MJPEG FPS <span x-show="![10,12,15].includes(mjpegFps)" class="bd-val" x-text="mjpegFps"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="mjpegFps===10?'on':''" @click="mjpegFps=10">10</button>
+              <button type="button" :class="mjpegFps===12?'on':''" @click="mjpegFps=12">12</button>
+              <button type="button" :class="mjpegFps===15?'on':''" @click="mjpegFps=15">15</button>
+            </div>
+          </div>
+          <div class="bd-field">
+            <label title="预览/手机端输出的JPEG质量；送检压缩已解耦、按引擎档自动走，不受此项影响">输出画质(JPEG) <span x-show="![75,85,92].includes(jpegQuality)" class="bd-val" x-text="jpegQuality"></span></label>
+            <div class="bd-seg">
+              <button type="button" :class="jpegQuality===75?'on':''" @click="jpegQuality=75;liveParamsPush()">低 75</button>
+              <button type="button" :class="jpegQuality===85?'on':''" @click="jpegQuality=85;liveParamsPush()">中 85</button>
+              <button type="button" :class="jpegQuality===92?'on':''" @click="jpegQuality=92;liveParamsPush()">高 92</button>
+            </div>
+          </div>
+          <div class="bd-field">
+            <label>换脸平滑 (s)</label>
+            <input type="number" min="0" max="1" step="0.05" x-model.number="crossfade" @change="liveParamsPush()" class="w-ctl-sm">
+          </div>
+        </div>
+        <div class="bd-hint">提示：1080p/高质量可能提高延迟，卡顿时降低分辨率或FPS。</div>
+      </div>
+
+      <div class="pt-3 border-t border-hub-border/50 space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="text-[13px] text-hub-muted font-semibold">换脸</span>
+          <!-- P9 参数热更：在播时这些参数拖动即生效，不再「下次开播生效」 -->
+          <span class="text-[13px] px-1.5 py-0.5 rounded-full border"
+                :class="perf.streaming?'border-hub-green/40 text-hub-green bg-hub-green/10':'border-hub-blue/40 text-hub-blue bg-hub-blue/10'"
+                x-text="perf.streaming?'高级 · 在播即调即生效':'高级 · 开播时生效'"></span>
+        </div>
+        <div class="bd-form">
+          <div class="bd-field">
+            <label>融合强度 (blend) <span class="bd-val" x-text="faceBlend"></span></label>
+            <input type="range" min="0.5" max="1" step="0.05" x-model.number="faceBlend" @change="liveParamsPush()" class="w-full">
+            <div class="bd-hint">1=完全替换，越低越保留原脸轮廓</div>
+          </div>
+          <div class="bd-field">
+            <label>检测阈值 <span class="bd-val" x-text="faceThreshold"></span></label>
+            <input type="range" min="0" max="0.9" step="0.05" x-model.number="faceThreshold" @change="liveParamsPush()" class="w-full">
+            <div class="bd-hint">0=自动，调高可滤掉背景路人脸</div>
+          </div>
+          <div class="bd-field">
+            <label>稳定平滑 <span class="bd-val" x-text="faceSmooth"></span></label>
+            <input type="range" min="0" max="0.9" step="0.05" x-model.number="faceSmooth" @change="liveParamsPush()" class="w-full">
+            <div class="bd-hint">0=关(最清晰)，越大越稳但可能轻微拖影</div>
+          </div>
+          <div class="bd-field">
+            <label title="推荐「跟随画质档」：高清脸/美颜档自动开精修，省电/自然档自动关；强制指定会压过按档策略">脸部精修（增强）</label>
+            <select x-model="faceEnhance" @change="liveParamsPush()" class="w-full">
+              <option value="">跟随画质档（推荐）</option>
+              <option value="none">强制关（最快）</option>
+              <option value="gpen" :disabled="!enhanceCap('gpen')"
+                      x-text="'GPEN 直播精修'+(enhanceCap('gpen')?'（清晰≈GFPGAN·快约20倍，直播推荐）':'（引擎未部署）')"></option>
+              <option value="gfpgan" :disabled="!enhanceCap('gfpgan')"
+                      x-text="'GFPGAN 标准精修'+(enhanceCap('gfpgan')?'（更清晰，略慢）':'（引擎未部署）')"></option>
+              <option value="codeformer" :disabled="!enhanceCap('codeformer')"
+                      x-text="'CodeFormer 极致精修'+(enhanceCap('codeformer')?'（画质最好·帧率较低，适合口播/慢节奏）':'（引擎未部署）')"></option>
+            </select>
+            <div x-show="faceEnhance==='codeformer'" class="bd-hint text-hub-orange/90">
+              ⓘ CodeFormer 单路约 350ms；增强池×3 并发约 5fps。口播请用「口播极致」预设(换脸5fps+交叉淡化)；追求丝滑用 GFPGAN。
+            </div>
+          </div>
+        </div>
+        <div class="bd-hint opacity-80" x-text="perf.streaming?'在播中：拖动/选择后约 0.5 秒生效（分辨率与帧率除外，那两项需重新开播）。':'未开播：这些参数将随下次「一键开播」应用；开播后也可随时热调。'"></div>
+      </div>
+
+      <div class="bd-act-row text-xs pt-3 border-t border-hub-border/50">
+        <button @click="saveEffectConfig()" class="bd-act primary" title="保存到本机+服务端(data/effect_cfg.json)：手机遥控/换电脑同步生效">💾 保存效果配置</button>
+        <button @click="resetEffectConfig()" class="bd-act ghost">恢复默认</button>
+        <!-- P9 一键画质标定：停播时可跑，实测本机四档时延 → 自适应降/升档阈值，下次开播自动生效 -->
+        <button x-show="!perf.streaming" @click="calibRun()" :disabled="calib.busy"
+                title="对四个画质档打生产同形请求实测时延分布(约1-2分钟)，自动得出本机专属的自适应降档/回升阈值；结果持久化，之后每次开播自动采用"
+                class="bd-act purple"
+                x-text="calib.busy?('⏳ 标定中 '+(calib.phase||'')+'…'):'🎯 一键画质标定（约1-2分钟）'"></button>
+        <span x-show="!perf.streaming && !calib.busy && calibSavedLine()" class="bd-hint" x-text="calibSavedLine()"></span>
+        <!-- P10 标定周期化：从未标定/超14天 → 琥珀提示（不拦任何操作） -->
+        <span x-show="!perf.streaming && !calib.busy && calibStaleLine()" class="bd-hint" style="color:var(--bd-warn,#f59e0b)" x-text="calibStaleLine()"></span>
+      </div>
+      <div x-show="calib.msg" x-transition.opacity class="text-[13px] px-2.5 py-1.5 flex items-start gap-1.5"
+           :class="calib.level==='good'?'bd-strip ok text-hub-green':'bd-strip warn text-hub-orange'">
+        <span class="shrink-0" x-text="calib.level==='good'?'✅':'💡'"></span>
+        <span class="min-w-0 flex-1" x-text="calib.msg"></span>
+        <button @click="calib.msg=''" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+      </div>
+      </div>
+    </section>
+
+    <!-- ═ Phase 12 C：视觉效果（虚拟背景 / 双人换脸 / 发型定妆）——v2 独立面板 ═ -->
+    <section class="bd-panel">
+      <button type="button" class="bd-panel-head" @click="togglePanel('visual')" :aria-expanded="panelOpen.visual?'true':'false'">
+        <h2 class="bd-card-title">🎨 视觉效果</h2>
+        <span class="text-[13px] px-1.5 py-0.5 rounded-full border border-purple-400/40 text-purple-300 bg-purple-500/10 shrink-0">背景 · 双人 · 定妆</span>
+        <span class="bd-panel-sum" x-text="visualSummary()"></span>
+        <span class="bd-panel-chev">▾</span>
+      </button>
+      <div x-show="panelOpen.visual" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+
+        <!-- C-1 虚拟背景：开播中热切，立即生效 -->
+        <div class="space-y-2 text-xs">
+          <div class="bd-sub-title" title="换脸之后·推流之前抠像替换背景；开播中即时生效">🖼️ 虚拟背景
+            <span class="bd-hint">开播中热切 · 立即生效</span></div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>背景模式</label>
+              <select x-model="bgCfg.mode" class="w-full">
+                <option value="none">关（原背景）</option>
+                <option value="blur">背景虚化</option>
+                <option value="image">图片背景</option>
+                <option value="green">绿幕（OBS 色键）</option>
+              </select>
+            </div>
+            <div class="bd-field" x-show="bgCfg.mode==='image'">
+              <label>背景素材（图片 / GIF / 视频自动循环）</label>
+              <div class="flex gap-1.5">
+                <select x-model="bgCfg.image" class="flex-1 min-w-0">
+                  <option value="">— 选择素材 —</option>
+                  <template x-for="im in bgImageOptions()" :key="im">
+                    <option :value="im" x-text="(bgIsVideo(im)?'▶ ':'')+im"></option>
+                  </template>
+                </select>
+                <label class="bd-act ghost cursor-pointer shrink-0"
+                       :class="bgUpBusy?'off':''" title="上传图片（jpg/png/webp ≤15MB）或动图视频（gif/mp4/webm/mov ≤200MB，建议 1080p 内）">
+                  <span x-text="bgUpBusy?'上传中…':'⬆ 上传'"></span>
+                  <input type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm,.mov,.avi,.m4v" class="hidden" @change="uploadBgImage($event,'bg')">
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <button @click="applyBg()" :disabled="bgBusy" class="bd-act primary"
+                    x-text="bgBusy?'应用中…':'✨ 应用背景'"></button>
+            <span x-show="bgCfg.up && bgCfg.enabled" class="text-[12px] text-green-400"
+                  x-text="'● '+(bgCfg.mode)+' · '+(bgCfg.ms||0)+'ms/帧'"></span>
+            <span x-show="bgCfg.up===false" class="text-[12px] text-hub-muted">开播后可用</span>
+            <!-- 显存门禁(2026-07-10)：显卡近满时不上 RVM(防原生崩溃断播)，CPU 抠像顶替并在此明示 -->
+            <span x-show="bgCfg.up && bgCfg.enabled && bgCfg.rvm && bgCfg.rvm.hold" x-cloak
+                  class="text-[12px] text-hub-orange" :title="bgCfg.rvm && bgCfg.rvm.hold"
+                  x-text="'ⓘ '+((bgCfg.rvm&&bgCfg.rvm.hold)||'')"></span>
+          </div>
+        </div>
+
+        <!-- 06v 离席画面：主播离席>10s 观众看什么（持久保存，开播自动生效；在播改动即时热切） -->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5">
+          <div class="bd-sub-title" title="离席(无脸)超10秒观众看到的画面：模糊最后一帧 / 品牌图 / 关(冻结帧)。保存后开播自动生效，在播改动即时切换">🚪 离席画面
+            <span class="bd-hint">离席超 10 秒观众看什么</span></div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>离席样式</label>
+              <select x-model="awayCfg.style" @change="applyAway()" class="w-full">
+                <option value="blur">模糊 + 角标（默认）</option>
+                <option value="image">品牌图</option>
+                <option value="off">关（冻结帧）</option>
+              </select>
+            </div>
+            <div class="bd-field">
+              <label title="叠在离席画面底部的文字；清空=不出角标">角标文案</label>
+              <input type="text" x-model="awayCfg.text" @change="applyAway()" maxlength="40"
+                     placeholder="留空 = 不显示文字" class="w-full">
+            </div>
+            <div class="bd-field" x-show="awayCfg.style==='image'">
+              <label>品牌图（bg_images 目录，仅静图）</label>
+              <div class="flex gap-1.5">
+                <select x-model="awayCfg.image" @change="applyAway()" class="flex-1 min-w-0">
+                  <option value="">— 选择图片 —</option>
+                  <template x-for="im in bgImageOptions('img')" :key="'aw-'+im">
+                    <option :value="im" x-text="im"></option>
+                  </template>
+                </select>
+                <label class="bd-act ghost cursor-pointer shrink-0"
+                       :class="bgUpBusy?'off':''" title="从本机上传图片（jpg/png/webp，≤15MB）">
+                  <span x-text="bgUpBusy?'上传中…':'⬆ 上传'"></span>
+                  <input type="file" accept=".jpg,.jpeg,.png,.webp" class="hidden" @change="uploadBgImage($event,'away')">
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <button @click="saveAway()" :disabled="awayBusy" class="bd-act primary"
+                    x-text="awayBusy?'保存中…':'💾 保存离席画面'"></button>
+            <span x-show="perf.streaming" class="text-[12px] text-green-400">在播·改动即时生效</span>
+          </div>
+        </div>
+
+        <!-- C-1b 录播增强：MatAnyone 2 影视级离线抠像（上传录播→选背景→后台跑→取件） -->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5">
+          <div class="bd-sub-title"
+               title="MatAnyone 2 神经网络逐帧抠像（约8倍时长，非实时）：把录播换成任意背景或导出 alpha，边缘远好于直播档">🎬 录播增强
+            <span class="bd-hint">影视级抠像 · 约 8 倍时长离线跑</span></div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>录播文件</label>
+              <div class="flex gap-1.5">
+                <select x-model="ma.input" class="flex-1 min-w-0">
+                  <option value="">— 选择已上传的录播 —</option>
+                  <template x-for="it in ma.inputs" :key="'ma-'+it.name">
+                    <option :value="it.name" x-text="it.name+'（'+it.mb+'MB）'"></option>
+                  </template>
+                </select>
+                <label class="bd-act ghost cursor-pointer shrink-0"
+                       :class="ma.upBusy?'off':''" title="上传录播视频（mp4/mov/avi/webm，≤2GB，可按住 Ctrl 多选批量上传）">
+                  <span x-text="ma.upBusy?'上传中…':'⬆ 上传录播'"></span>
+                  <input type="file" multiple accept=".mp4,.mov,.avi,.m4v,.webm" class="hidden" @change="maUpload($event)">
+                </label>
+              </div>
+            </div>
+            <div class="bd-field">
+              <label>合成背景</label>
+              <select x-model="ma.bg" class="w-full">
+                <option value="green">绿幕底（后期键控）</option>
+                <option value="none">只出 alpha 通道</option>
+                <template x-for="im in bgImageOptions()" :key="'mab-'+im">
+                  <option :value="im" x-text="(bgIsVideo(im)?'▶ ':'')+im"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <button @click="maStart(false)" :disabled="ma.busy || maRunning()" class="bd-act primary"
+                    x-text="maRunning()?'处理中…':(ma.busy?'启动中…':'🎬 开始增强')"></button>
+            <button x-show="perf.streaming && !maRunning()" @click="maStart(true)" :disabled="ma.busy"
+                    class="bd-act amber"
+                    title="不等停播，立即占满 GPU 开跑（可能影响直播帧率）">⚡ 立即跑</button>
+            <button x-show="(ma.inputs||[]).length>1" @click="maEnqueueAll()" :disabled="ma.busy"
+                    class="bd-act ghost"
+                    title="列表里所有录播按当前背景/导出设置依次排队处理">全部入队</button>
+            <label class="flex items-center gap-1.5 cursor-pointer shrink-0"
+                   title="额外导出 ProRes 4444 带 alpha 的 .mov（剪辑软件直接用，文件很大：约 1GB/分钟@1080p）">
+              <input type="checkbox" x-model="ma.prores" class="accent-blue-500">
+              <span class="text-[13px] text-hub-muted">ProRes</span>
+              <span x-show="ma.prores && ma.diskFree>=0" class="text-[12px]"
+                    :class="ma.diskFree<40 ? 'text-hub-orange' : 'text-hub-muted/60'"
+                    x-text="'磁盘余'+ma.diskFree+'G'"></span>
+            </label>
+          </div>
+          <div x-show="maRunning()" class="space-y-1">
+            <div class="flex items-center gap-2 text-[12px] text-hub-muted">
+              <span x-text="ma.job.state==='loading' ? '模型加载中（首跑约1分钟）…'
+                            : ((ma.job.n||0)+'/'+(ma.job.total||'?')+' 帧 · '+(ma.job.ms||0)+'ms/帧 · 剩余约 '+maEta())"></span>
+              <button @click="maCancel()" class="text-hub-orange hover:underline shrink-0">取消</button>
+            </div>
+            <div x-show="ma.job.note" class="text-[12px] text-hub-orange/80" x-text="'ⓘ '+ma.job.note"></div>
+            <div class="h-1.5 rounded bg-hub-bg overflow-hidden border border-hub-border/60">
+              <div class="h-full bg-hub-blue transition-all" :style="'width:'+maPct()+'%'"></div>
+            </div>
+          </div>
+          <div x-show="!maRunning() && ma.job.state==='done'" class="text-[12px] text-green-400 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span x-text="'✓ '+(ma.job.input||'')+' 完成（'+(ma.job.n||0)+'帧）下载：'"></span>
+            <template x-for="o in (ma.job.outputs||[])" :key="'mo-'+o">
+              <a :href="maDl(o)" class="underline hover:text-hub-blue" x-text="maKind(o)"></a>
+            </template>
+          </div>
+          <div x-show="!maRunning() && ma.job.state==='error'" class="text-[12px] text-hub-orange"
+               x-text="'✗ 增强失败：'+(ma.job.error||'未知错误')"></div>
+          <div x-show="perf.streaming && !maRunning() && !(ma.queue||[]).length" class="text-[12px] text-hub-muted">
+            ⓘ 正在推流：点「开始增强」将自动排队，停播后开跑</div>
+          <div x-show="(ma.queue||[]).length>0" class="text-[12px] text-hub-muted space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span x-text="'⏳ 队列 '+ma.queue.length+' 条（停播或上一任务完成后自动开跑）'"></span>
+              <button @click="maCancelQueue()" class="text-hub-orange hover:underline shrink-0">清空</button>
+            </div>
+            <template x-for="(q,qi) in (ma.queue||[])" :key="'maq-'+qi">
+              <div class="flex flex-wrap items-center gap-x-2 pl-2">
+                <span x-text="'#'+(qi+1)+' '+q.input"></span>
+                <button @click="maCancelQueue(qi)" class="text-hub-muted hover:text-hub-orange underline">移除</button>
+              </div>
+            </template>
+          </div>
+          <div x-show="(ma.history||[]).length>0 && !maRunning()" class="text-[12px] text-hub-muted space-y-0.5 pt-1 border-t border-hub-border/40">
+            <div class="text-[12px]">最近任务</div>
+            <template x-for="h in (ma.history||[]).slice(0,3)" :key="'mah-'+h.id">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span x-text="(h.state==='done'?'✓':'✗')+' '+(h.input||'')+' · '+(h.n||0)+'帧'"></span>
+                <template x-for="o in (h.outputs||[])" :key="'moh-'+h.id+'-'+o">
+                  <a :href="maDl(o)" class="underline hover:text-hub-blue" x-text="maKind(o)"></a>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- C-2 双人换脸 face_map -->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5">
+          <div class="bd-sub-title">
+            <label class="flex items-center gap-2 cursor-pointer"
+                   title="双人同框：画面左脸=槽0、右脸=槽1 各换各脸；第三人自动回退槽0。启用时「锁主脸」自动让位（引擎按槽全换），关闭即恢复">
+              <span class="bd-switch"><input type="checkbox" x-model="faceMap.enabled"><i></i></span>
+              <span>👥 双人换脸</span>
+            </label>
+            <span class="bd-hint">左脸=槽0 · 右脸=槽1</span>
+          </div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>槽0（左）</label>
+              <select x-model="faceMap.slots[0]" class="w-full">
+                <option value="">当前激活角色</option>
+                <template x-for="p in profiles" :key="'fm0-'+p.name">
+                  <option :value="p.name" x-text="p.name"></option>
+                </template>
+              </select>
+            </div>
+            <div class="bd-field">
+              <label>槽1（右）</label>
+              <select x-model="faceMap.slots[1]" class="w-full">
+                <option value="">当前激活角色</option>
+                <template x-for="p in profiles" :key="'fm1-'+p.name">
+                  <option :value="p.name" x-text="p.name"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <button @click="saveFaceMap()" :disabled="faceMapBusy" class="bd-act primary"
+                    x-text="faceMapBusy?'保存中…':'💾 保存映射'"></button>
+          </div>
+        </div>
+
+        <!-- C-3 发型场次定妆（离线 5-10s，写进角色；实时零开销）-->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5">
+          <div class="bd-sub-title" title="🧪 离线约5-10秒：用 8001 当前激活发型给角色生成「定妆脸」，直播用它当换脸源(实时零开销)">💇 发型定妆
+            <span class="bd-hint">离线 5-10s 写进角色 · 直播零开销</span>
+            <a href="http://127.0.0.1:8001/ui" target="_blank" class="ml-auto text-[13px] font-normal text-hub-muted hover:text-hub-blue shrink-0">↗ 管理发型样式</a>
+          </div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>作用角色</label>
+              <select x-model="hairPresetProfile" class="w-full" @change="lookHistZoom=''; refreshLookHistIfOpen(); checkFittingStored(); faceHair.assetsFor=''; loadFaceHairAssets()">
+                <option value="">— 用当前激活角色 —</option>
+                <template x-for="p in profiles" :key="'hp-'+p.name">
+                  <option :value="p.name" x-text="p.name"></option>
+                </template>
+              </select>
+            </div>
+            <div class="bd-field" x-show="hairStyles.length">
+              <label>发型样式 <span class="text-hub-muted/70">(阶段8 直选)</span></label>
+              <div class="flex items-center gap-2">
+                <select x-model="hairStyleSel" class="w-full" title="选定后「生成定妆脸」和「一键定妆包」都用它；留空=8001 当前激活样式">
+                  <option value="">— 用 8001 当前激活 —</option>
+                  <template x-for="s in hairStyles" :key="'hs-'+s">
+                    <option :value="s" x-text="s"></option>
+                  </template>
+                </select>
+                <img x-show="hairStyleSel" :src="'/api/hair/thumb?name='+encodeURIComponent(hairStyleSel)"
+                     class="w-9 h-9 rounded border border-hub-border object-cover shrink-0" alt="发型预览" loading="lazy">
+              </div>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <!-- P0 三态：就绪=直接生成 / 服务离线=点击后自动启动再生成(冷启动提示) / 生成中 -->
+            <button @click="runHairPreset()" :disabled="hairPresetBusy" class="bd-act amber"
+                    :title="labSvc.hair && !labSvc.hair.up ? '发型服务(8001)未启动：点击后自动启动并继续，首次约 20-60 秒' : '离线约5-10秒，定妆结果写进角色，直播零开销'"
+                    x-text="hairPresetBusy?'生成中…':(labSvc.hair && !labSvc.hair.up ? '🧪 生成定妆脸 · 自动启动服务' : '🧪 生成定妆脸')"></button>
+            <button @click="toggleHairPreset()" class="bd-act ghost"
+                    title="在「原始脸 / 定妆脸」之间切换换脸源">🔁 切换 原脸/定妆</button>
+          </div>
+        </div>
+        <div x-show="hairPresetPreview" class="flex items-center gap-3">
+          <img :src="'data:image/jpeg;base64,'+hairPresetPreview" class="h-20 rounded-lg border border-hub-border" alt="定妆预览">
+          <span class="text-[13px] text-green-400">✓ 定妆脸已写入角色并启用（开播即生效）</span>
+        </div>
+
+        <!-- 换脸 + 发型跟随源照片（离线出片；一张源照片 = 脸 + 发型，无需另传发型图）-->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5">
+          <div class="bd-sub-title" title="🧪 离线约5-15秒：把源照片(当前角色脸/定妆脸)的脸换到目标图，并把源照片自身的发型一并带上。整图回贴保住目标图的身体与背景。">🪄 换脸 + 发型跟随
+            <span class="bd-hint">源照片的脸和发型一起带上 · 离线出片</span>
+          </div>
+          <div class="text-[12px] text-hub-muted leading-snug">
+            源脸=当前作用角色的换脸源（定妆脸优先）。选<b class="text-hub-text">目标图</b>（试衣静图/全身照/上传），
+            生成后：脸+发型来自角色源照片、身体背景来自目标图。
+            <b class="text-hub-text">「一键数字人底片」</b>在此基础上自动写入角色底片并生成待机微动视频，数字人开播即用。
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="flex items-center gap-1.5">
+              <select x-model="faceHair.targetSource" @focus="loadFaceHairAssets()"
+                      class="min-w-[150px]" title="目标图来源：角色已有资产直选（免上传），或上传新图">
+                <option value="upload">🖼️ 上传图片…</option>
+                <template x-for="a in faceHair.assets" :key="'fha-'+a.key">
+                  <option :value="a.key" x-text="'📎 '+a.label"></option>
+                </template>
+              </select>
+              <img x-show="faceHair.targetSource!=='upload'" :src="faceHairAssetThumb()"
+                   class="w-9 h-9 rounded border border-hub-border object-cover shrink-0" alt="目标预览" loading="lazy">
+            </div>
+            <label x-show="faceHair.targetSource==='upload'" class="bd-act ghost cursor-pointer justify-start">
+              <span class="truncate" x-text="faceHair.targetName ? ('🖼️ '+faceHair.targetName) : '🖼️ 选择图片'"></span>
+              <input type="file" accept="image/*" class="hidden" @change="onFaceHairTarget($event)">
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-text cursor-pointer" title="关闭=只换脸不带发型（等价普通换脸出图）">
+              <input type="checkbox" x-model="faceHair.carryHair"> 发型跟随源照片
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-text cursor-pointer" title="开=只把新发型的头发像素贴回目标图，保住身体/背景/换好的脸；关=返回 HairFastGAN 的 1024 头肩裁剪图">
+              <input type="checkbox" x-model="faceHair.pasteBack"> 整图回贴（保背景/身体）
+            </label>
+          </div>
+          <div class="bd-act-row">
+            <button @click="runFaceHair()" :disabled="faceHair.busy || (faceHair.targetSource==='upload' && !faceHair.targetB64)" class="bd-act primary"
+                    x-text="faceHair.busy && !faceHair.liveStep ? '出片中(约5-15s)…' : '🪄 生成 换脸+发型 出片'"></button>
+            <button @click="runFaceHairLive()" :disabled="faceHair.busy || (faceHair.targetSource==='upload' && !faceHair.targetB64)" class="bd-act green"
+                    :title="'全链：换脸+发型 → 写入角色底片 → Ditto待机微动(失败回落静帧)'"
+                    x-text="faceHair.liveStep || '🎬 一键数字人底片'"></button>
+          </div>
+          <div x-show="faceHair.liveVideo" class="text-[12px] text-green-400">
+            ✓ 数字人底片已写入 <span x-text="faceHair.liveAnimated?'idle_video(Ditto微动)':'idle_video(静帧循环)'"></span>
+          </div>
+          <div x-show="faceHair.result" class="flex items-start gap-3">
+            <img x-show="faceHairTargetPreview()" :src="faceHairTargetPreview()" class="h-24 rounded-lg border border-hub-border" alt="目标图" title="目标图">
+            <span class="text-hub-muted self-center">→</span>
+            <img :src="'data:image/jpeg;base64,'+faceHair.result" class="h-24 rounded-lg border border-green-500/60" alt="换脸+发型 结果" title="结果">
+            <div class="text-[12px] leading-snug self-center space-y-0.5">
+              <div class="text-green-400" x-text="faceHair.hairOk?'✓ 脸+发型已合成':'✓ 已换脸（发型步跳过/失败）'"></div>
+              <div class="text-hub-muted" x-show="faceHair.pastedBack">整图回贴 · 保住目标图背景/身体</div>
+              <div class="flex items-center gap-2">
+                <a :href="'data:image/jpeg;base64,'+faceHair.result" download="faceswap_hair.jpg" class="text-hub-blue hover:underline">⬇ 下载结果</a>
+                <button x-show="faceHair.histId" @click="setFaceHairAsBase()"
+                        class="px-1.5 py-0.5 rounded bg-green-500/15 border border-green-500/40 text-green-300 hover:bg-green-500/25"
+                        title="设为角色底片(tryon 位)：再跑一次「待机微动」，数字人就用这张 脸+发型 合成照">📌 设为数字人底片</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C-5 妆容定妆 + Look Pack 一键定妆包（离线 1-3s；链式：发型→妆容 烘进定妆脸）-->
+        <div class="space-y-2 text-xs border-t border-hub-border/60 pt-2.5" x-show="makeupStyles.length">
+          <div class="bd-sub-title" title="🧪 离线约1-3秒：唇色/眼影/腮红/磨皮烘进定妆脸（数字人照片链全量可见）">💄 妆容定妆
+            <span class="bd-hint">离线 1-3s 烘进定妆脸</span>
+            <a href="http://127.0.0.1:8004/ui" target="_blank" class="ml-auto text-[13px] font-normal text-hub-muted hover:text-hub-blue shrink-0">↗ 妆容试妆台</a>
+          </div>
+          <div class="bd-form">
+            <div class="bd-field">
+              <label>妆容样式</label>
+              <select x-model="makeupStyle" class="w-full">
+                <template x-for="s in makeupStyles" :key="'mk-'+s">
+                  <option :value="s" x-text="s"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+          <div class="bd-act-row">
+            <button @click="runLookPack()" :disabled="lookPackBusy" class="bd-act primary"
+                    title="发型(8001 当前样式，服务在线时) + 妆容 一键链式烘焙进定妆脸"
+                    x-text="lookPackBusy?'定妆包生成中…':'✨ 一键定妆包'"></button>
+            <button @click="runMakeupPreset()" :disabled="lookPackBusy" class="bd-act pink"
+                    x-text="lookPackBusy?'生成中…':'💄 妆容定妆'"></button>
+          </div>
+        </div>
+        <!-- C-6 一键出片（阶段9）：发型→妆容→试衣→微动 全链编排（复用各块当前选择，逐步软降级） -->
+        <div class="border-t border-hub-border/60 pt-2 space-y-1.5">
+          <div class="flex items-center gap-3 flex-wrap text-[13px]">
+            <span class="text-hub-green font-semibold">🎬 一键出片</span>
+            <span class="bd-hint">按当前选择串完 发型→妆容→试衣→微动，哪步没料自动跳过</span>
+            <button @click="runFullLook()" :disabled="fullLookBusy"
+                    class="ml-auto px-3 py-1.5 rounded bg-hub-green/20 border border-hub-green/60 text-hub-green hover:bg-hub-green/30 disabled:opacity-50 text-[12px]"
+                    x-text="fullLookBusy?(fullLookStep||'出片中…'):'🎬 一键出片'"></button>
+          </div>
+          <template x-for="(s,i) in fullLookSteps" :key="'fl-'+i">
+            <div class="text-[12px]" :class="s.ok===true?'text-hub-green':(s.ok===false?'text-amber-300':'text-hub-muted')" x-text="s.text"></div>
+          </template>
+        </div>
+
+        <!-- C-7 出片历史（阶段10）：每次定妆/试衣/微动成功自动存档，点缩略图一键回滚 -->
+        <div class="border-t border-hub-border/60 pt-2 space-y-1.5">
+          <div class="flex items-center gap-3 flex-wrap text-[13px]">
+            <span class="text-hub-blue font-semibold">🗂 出片历史</span>
+            <span class="bd-hint">定妆/试衣/微动每次成功自动存档（每角色留 24 版）——试砸了随时回滚</span>
+            <button x-show="lookHistOpen && lookHist.length>1"
+                    @click="lookHistCmpMode=!lookHistCmpMode; lookHistCmp=[]; lookHistZoom=''"
+                    class="ml-auto px-2 py-1 rounded border text-[12px] transition"
+                    :class="lookHistCmpMode ? 'border-amber-400 text-amber-300 bg-amber-500/10' : 'border-hub-border text-hub-muted hover:text-amber-300'"
+                    x-text="lookHistCmpMode?'⇄ 对比中（点图选2张）':'⇄ 对比'"></button>
+            <button @click="toggleLookHist()"
+                    :class="lookHistOpen && lookHist.length>1 ? '' : 'ml-auto'"
+                    class="px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-blue text-[12px]"
+                    x-text="lookHistOpen?'收起':'展开'"></button>
+          </div>
+          <div x-show="lookHistOpen" class="flex gap-2 flex-wrap items-start">
+            <template x-for="e in lookHist" :key="e.id">
+              <div class="rounded-lg border p-1 w-[78px] transition"
+                   :class="lookHistBusy===e.id ? 'border-hub-blue bg-hub-blue/10'
+                           : (lookHistCmp.includes(e.id) ? 'border-amber-400 bg-amber-500/10'
+                           : 'border-hub-border hover:border-hub-blue/50')">
+                <img :src="'/api/profiles/'+encodeURIComponent(hairPresetProfile||active)+'/look_history/'+e.id+'/image?thumb=1'"
+                     class="w-[70px] h-[70px] object-cover rounded cursor-pointer" loading="lazy"
+                     :title="lookHistTitle(e)" @click="lookHistThumbClick(e)">
+                <div class="text-[12px] text-hub-muted truncate max-w-[70px]"
+                     x-text="lookHistLabel(e)" :title="lookHistTitle(e)"></div>
+                <div class="flex gap-1 mt-0.5">
+                  <button x-show="e.kind==='facehair'" @click="restoreLookHist(e)" :disabled="lookHistBusy"
+                          title="设为角色底片(tryon 位)：再跑「待机微动」，数字人即用这张 脸+发型 合成照"
+                          class="flex-1 text-[12px] px-1 rounded bg-green-500/15 border border-green-500/40 text-green-300 hover:bg-green-500/25 disabled:opacity-40"
+                          x-text="lookHistBusy===e.id?'…':'📌底片'"></button>
+                  <a x-show="e.kind==='facehair'"
+                     :href="'/api/profiles/'+encodeURIComponent(hairPresetProfile||active)+'/look_history/'+e.id+'/image'"
+                     :download="'faceswap_hair_'+e.id+'.jpg'"
+                     class="text-[12px] px-1 rounded border border-hub-border text-hub-muted hover:text-hub-blue"
+                     title="下载原图">⬇</a>
+                  <button x-show="e.kind!=='facehair'" @click="restoreLookHist(e)" :disabled="lookHistBusy"
+                          class="flex-1 text-[12px] px-1 rounded bg-hub-blue/15 border border-hub-blue/40 text-hub-blue hover:bg-hub-blue/25 disabled:opacity-40"
+                          x-text="lookHistBusy===e.id?'…':'↩ 回滚'"></button>
+                  <button @click="deleteLookHist(e)" :disabled="lookHistBusy"
+                          class="text-[12px] px-1 rounded border border-hub-border text-hub-muted hover:text-red-400 hover:border-red-400/50 disabled:opacity-40">✕</button>
+                </div>
+              </div>
+            </template>
+            <div x-show="!lookHist.length" class="text-[12px] text-hub-muted py-2">该角色暂无出片历史——跑一次定妆/试衣就有了</div>
+          </div>
+          <div x-show="lookHistOpen && !lookHistCmpMode && lookHistZoom" class="flex items-center gap-3">
+            <img :src="'/api/profiles/'+encodeURIComponent(hairPresetProfile||active)+'/look_history/'+lookHistZoom+'/image'"
+                 class="h-44 rounded-lg border border-hub-border" alt="历史大图">
+            <span class="text-[12px] text-hub-muted">再点缩略图收起大图</span>
+          </div>
+          <!-- 阶段11 对比模式：选中2张并排大图（各带标注+一键用这版），选款不来回点 -->
+          <div x-show="lookHistOpen && lookHistCmpMode && lookHistCmp.length" class="flex gap-3 items-start flex-wrap">
+            <template x-for="cid in lookHistCmp" :key="'cmp-'+cid">
+              <div class="space-y-1">
+                <img :src="'/api/profiles/'+encodeURIComponent(hairPresetProfile||active)+'/look_history/'+cid+'/image'"
+                     class="h-56 rounded-lg border border-amber-400/60" alt="对比图">
+                <div class="flex items-center gap-2 text-[12px]">
+                  <span class="text-amber-200" x-text="lookHistLabel(lookHistById(cid))"></span>
+                  <button @click="restoreLookHist(lookHistById(cid))" :disabled="lookHistBusy"
+                          class="px-1.5 py-0.5 rounded bg-hub-blue/15 border border-hub-blue/40 text-hub-blue hover:bg-hub-blue/25 disabled:opacity-40">↩ 用这版</button>
+                </div>
+              </div>
+            </template>
+            <span class="text-[12px] text-hub-muted self-center" x-show="lookHistCmp.length===1">再点一张缩略图进对比</span>
+          </div>
+        </div>
+
+        <div x-show="lookPackPreview" class="flex items-center gap-3">
+          <img :src="'data:image/jpeg;base64,'+lookPackPreview" class="h-20 rounded-lg border border-hub-border" alt="定妆包预览">
+          <span class="text-[13px] text-green-400">✓ 定妆包已写入角色并启用（开播即生效）</span>
+        </div>
+
+        <!-- C-5b 直播妆容层：换脸输出端逐帧上妆（唇/腮红/眼影，~10ms/帧），独立于离线定妆 -->
+        <div class="border-t border-hub-border/60 pt-2.5 space-y-2">
+          <div class="bd-sub-title">
+            <label class="flex items-center gap-2 cursor-pointer"
+                   title="在换脸输出画面上直接上妆——换脸直播里妆容唯一真正可见的位置。默认关，逐帧开销 ~10ms">
+              <span class="bd-switch"><input type="checkbox" x-model="liveMakeup.enabled"><i></i></span>
+              <span class="text-pink-200">💋 直播妆容层</span>
+            </label>
+            <span class="bd-hint">逐帧上妆 ~10ms/帧</span>
+          </div>
+          <div class="bd-act-row">
+            <button @click="saveLiveMakeup()" :disabled="liveMakeupBusy" class="bd-act pink"
+                    x-text="liveMakeupBusy?'保存中…':'💾 保存并生效'"></button>
+            <button @click="fillLiveMakeupFromStyle()" class="bd-act ghost">← 从上方妆容样式取色</button>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-2 text-[12px]" x-show="liveMakeup.enabled">
+            <div class="flex items-center gap-2">
+              <input type="color" x-model="liveMakeup.lip" class="w-8 h-8 rounded cursor-pointer bg-transparent border border-hub-border">
+              <span class="text-hub-muted w-8">口红</span>
+              <input type="range" min="0" max="100" x-model="liveMakeup.lipS" class="flex-1 accent-pink-400">
+              <span class="w-8 text-right" x-text="liveMakeup.lipS+'%'"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="color" x-model="liveMakeup.blush" class="w-8 h-8 rounded cursor-pointer bg-transparent border border-hub-border">
+              <span class="text-hub-muted w-8">腮红</span>
+              <input type="range" min="0" max="100" x-model="liveMakeup.blushS" class="flex-1 accent-pink-400">
+              <span class="w-8 text-right" x-text="liveMakeup.blushS+'%'"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="color" x-model="liveMakeup.eye" class="w-8 h-8 rounded cursor-pointer bg-transparent border border-hub-border">
+              <span class="text-hub-muted w-8">眼影</span>
+              <input type="range" min="0" max="100" x-model="liveMakeup.eyeS" class="flex-1 accent-pink-400">
+              <span class="w-8 text-right" x-text="liveMakeup.eyeS+'%'"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- C-4 试衣间（FitDiT·离线 ~9s/张）：选装→传照→预览→写入角色底片 -->
+        <div class="border-t border-hub-border/60 pt-2.5 space-y-2">
+          <div class="bd-sub-title">
+            <span class="text-amber-200">👗 试衣间</span>
+            <span x-show="fitting.up" class="bd-badge ok"
+                  x-text="fitting.backend==='fitdit' ? 'FitDiT 高保真' : fitting.backend"></span>
+            <a x-show="labSvc.tryon && labSvc.tryon.up" :href="(labSvc.tryon && labSvc.tryon.ui) || 'http://127.0.0.1:8002/ui'"
+               target="_blank" class="text-[13px] font-normal text-hub-muted hover:text-hub-blue shrink-0"
+               title="🧪 tryon(8002) 专家工作台：批量/参数细调">↗ 专家工作台</a>
+            <button @click="runIdleMotion()" :disabled="idleMotionBusy"
+                    class="ml-auto bd-act sm ghost"
+                    title="用角色现有照片（试衣照>定妆脸>原脸）生成呼吸/眨眼级微动待机视频，替代静态照片待机"
+                    x-text="idleMotionBusy?'生成中…(约20s)':'🌬️ 生成待机微动'"></button>
+          </div>
+          <div x-show="!fitting.up" class="text-[13px] text-hub-muted flex items-center gap-2 flex-wrap">
+            <span>试衣间未就绪 — tryon(8002) 未启动</span>
+            <button @click="startLabSvc('tryon','试衣')" :disabled="svcStartBusy"
+                    class="bd-act sm ghost"
+                    x-text="svcStartBusy==='tryon' ? '▶ 启动中…（约 1-2 分钟）' : '▶ 一键启动试衣服务'"></button>
+          </div>
+          <div x-show="fitting.up" class="space-y-2">
+            <div class="flex items-center gap-2 text-[12px]" x-show="fitting.clothes.length > fittingPageSize">
+              <input x-model="fittingSearch" @input="fittingPage=0" placeholder="🔍 搜服装名…"
+                     class="w-36 px-2 py-1 rounded bg-hub-bg border border-hub-border text-hub-text placeholder:text-hub-muted/60">
+              <span class="text-hub-muted" x-text="fittingFiltered().length + ' 件'"></span>
+              <button @click="fittingPage=Math.max(0,fittingPage-1)" :disabled="fittingPage===0"
+                      class="bd-act sm ghost">‹</button>
+              <span class="text-hub-muted" x-text="(fittingPage+1)+'/'+Math.max(1,Math.ceil(fittingFiltered().length/fittingPageSize))"></span>
+              <button @click="fittingPage=Math.min(Math.ceil(fittingFiltered().length/fittingPageSize)-1,fittingPage+1)"
+                      :disabled="fittingPage>=Math.ceil(fittingFiltered().length/fittingPageSize)-1"
+                      class="bd-act sm ghost">›</button>
+              <span class="text-hub-muted/70 ml-auto">右键缩略图=删除</span>
+            </div>
+            <div class="flex gap-2 flex-wrap items-center text-[12px]">
+              <template x-for="c in fittingPageItems()" :key="'fc-'+c">
+                <button @click="pickFittingCloth(c)" @contextmenu.prevent="deleteFittingCloth(c)"
+                        class="rounded-lg border p-1 transition"
+                        :class="fitting.cloth===c ? 'border-amber-400 bg-amber-500/10' : 'border-hub-border hover:border-hub-border/40'"
+                        :title="c+'（右键删除）'">
+                  <img :src="'/api/tryon/cloth_thumb?name='+encodeURIComponent(c)" class="w-12 h-[72px] object-cover rounded" :alt="c" loading="lazy">
+                  <div class="mt-0.5 max-w-[52px] truncate" :class="fitting.cloth===c?'text-amber-200':'text-hub-muted'" x-text="c"></div>
+                </button>
+              </template>
+              <label class="w-14 h-[92px] rounded-lg border border-dashed border-hub-border flex flex-col items-center justify-center cursor-pointer text-hub-muted hover:text-hub-blue hover:border-hub-blue/60"
+                     title="上传服装图（白底平铺图效果最好）">
+                <span class="text-lg">＋</span><span class="text-[12px]">上传服装</span>
+                <input type="file" accept="image/*" class="hidden" @change="uploadFittingCloth($event)">
+              </label>
+              <label class="w-14 h-[92px] rounded-lg border border-dashed border-amber-400/40 flex flex-col items-center justify-center cursor-pointer text-hub-muted hover:text-amber-200 hover:border-amber-400/70"
+                     :class="fittingExtractBusy ? 'opacity-50 pointer-events-none' : ''"
+                     title="从穿着照/商品截图自动抠出服装并白底化入库（可多选批量，人体解析/背景差分自动选路）">
+                <span class="text-lg" x-text="fittingExtractBusy?'⏳':'✂️'"></span>
+                <span class="text-[12px]" x-text="fittingExtractBusy?fittingExtractProg:'截图抠衣'"></span>
+                <input type="file" accept="image/*" multiple class="hidden" @change="extractFittingCloth($event)">
+              </label>
+            </div>
+            <div class="bd-form text-[12px]">
+              <div class="bd-field">
+                <label>全身/半身照（正面站姿效果最好）</label>
+                <label class="bd-act ghost cursor-pointer justify-start max-w-full"
+                       :title="fitting.personName||'上传全身/半身照（正面站姿效果最好）'">
+                  <span class="truncate" x-text="fitting.personName ? ('📷 '+fitting.personName)
+                        : (fitting.stored ? '📷 用上次存照（点击换新）' : '📷 上传全身照')"></span>
+                  <input type="file" accept="image/*" class="hidden" @change="onFittingPerson($event)">
+                </label>
+                <span class="text-[12px] text-hub-green" x-show="fitting.stored && !fitting.personB64">✓ 该角色已有存照，换装免重传</span>
+              </div>
+              <div class="bd-field">
+                <label>部位</label>
+                <select x-model="fitting.clothType" class="w-full" title="试穿部位（截图抠衣也按此部位抠取）">
+                  <option value="upper">上装</option>
+                  <option value="lower">下装</option>
+                  <option value="dress">连衣裙</option>
+                </select>
+              </div>
+              <div class="bd-field">
+                <label>清晰度</label>
+                <select x-model="fitting.resolution" class="w-full">
+                  <option value="768x1024">标清 ~9s</option>
+                  <option value="1152x1536">高清 ~20s</option>
+                  <option value="1536x2048">超清 更慢</option>
+                </select>
+              </div>
+            </div>
+            <div class="bd-act-row">
+              <button @click="runFittingPreview()" :disabled="fitting.busy||!fitting.personB64"
+                      class="bd-act amber"
+                      x-text="fitting.busy?'试穿中…':'👗 试穿预览'"></button>
+              <button @click="applyFittingToProfile()" :disabled="fitting.applyBusy||!fitting.result"
+                      class="bd-act primary"
+                      title="用当前照片+服装跑正式试衣并写入角色 body_video（带 Ditto 待机微动）"
+                      x-text="fitting.applyBusy?'写入中…(~30s)':'✅ 写入角色底片'"></button>
+              <button @click="runVideoTryon()" :disabled="vtryon.busy"
+                      class="bd-act ghost"
+                      title="给角色的待机微动视频整段换装（CatV2TON 视频试衣，后台 2-6 分钟，动起来衣服不闪不漂）"
+                      x-text="vtryon.busy?'🎬 换装中…':'🎬 动态试衣(视频)'"></button>
+            </div>
+            <div x-show="fitting.result" class="flex items-center gap-3">
+              <img :src="'data:image/jpeg;base64,'+fitting.result" class="h-40 rounded-lg border border-hub-border" alt="试穿预览">
+              <span class="text-[12px] text-hub-muted" x-text="'耗时 '+fitting.elapsed+'s · 满意再点「写入角色底片」'"></span>
+            </div>
+            <!-- 阶段15 动态试衣：作业进度条 + 完成预览 + 一键应用为待机 -->
+            <div x-show="vtryon.busy || vtryon.preview" class="space-y-1.5 rounded-lg border border-hub-border/60 p-2">
+              <div class="flex items-center gap-2 text-[12px]">
+                <span class="text-amber-200">🎬 动态试衣</span>
+                <span class="text-hub-muted" x-text="vtryon.detail || vtryon.state"></span>
+                <span class="ml-auto text-hub-muted tabular-nums"
+                      x-text="vtryon.busy ? (vtryon.progress+'% · '+vtryon.elapsed+'s') : '完成'"></span>
+              </div>
+              <div x-show="vtryon.busy" class="h-1.5 rounded-full bg-hub-bg overflow-hidden">
+                <div class="h-full rounded-full bg-amber-400/80 transition-all duration-500"
+                     :style="'width:'+vtryon.progress+'%'"></div>
+              </div>
+              <div x-show="vtryon.preview" class="flex items-center gap-3">
+                <img :src="vtryon.preview" class="h-40 rounded-lg border border-hub-border" alt="动态试衣预览">
+                <div class="flex flex-col gap-1.5">
+                  <button @click="applyVideoTryon()" :disabled="vtryon.applyBusy||vtryon.applied"
+                          class="bd-act primary sm"
+                          x-text="vtryon.applied?'✓ 已应用为待机':(vtryon.applyBusy?'应用中…':'✅ 应用为待机视频')"></button>
+                <a :href="'/api/videotryon/job/'+vtryon.jobId+'/video'" target="_blank"
+                   class="text-[12px] text-hub-muted hover:text-hub-blue">▶ 看完整视频</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <!-- ── 左列：实时画面（用户/专家都可见）+ 用户·声音线路；xl 粘性跟随，右侧翻面板时预览不离视线 ── -->
+    <div class="order-1 xl:order-none xl:col-start-1 xl:col-span-7 xl:row-start-1 xl:row-span-2 xl:sticky xl:top-14 flex flex-col gap-3 min-w-0">
+
+    <!-- ════ 区三·实时画面 + 健康灯（用户/专家都可见）════ -->
+    <div class="bd-card p-4" id="liveViewCard">
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h2 class="bd-card-title">🖥️ 实时画面</h2>
+          <!-- 健康灯：真人换脸=延迟/失败率裁决；数字人=vcam 引擎+OBS 虚拟摄像头就绪（换脸指标在该模式下不存在，沿用会恒报「未开播」误导） -->
+          <template x-if="broadcastMode!=='avatar_lipsync'">
+            <span class="text-[13px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5"
+                  :class="[streamHealth().text, streamHealth().ring]">
+              <span class="w-2 h-2 rounded-full" :class="streamHealth().dot"></span>
+              <span x-text="streamHealth().label"></span>
+            </span>
+          </template>
+          <template x-if="broadcastMode==='avatar_lipsync'">
+            <span class="text-[13px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5"
+                  :class="vcamPrev.reachable ? (vcamPrev.device.cam_ready ? 'text-hub-green border-hub-green/50' : 'text-hub-orange border-hub-orange/50') : 'text-hub-muted border-hub-border'">
+              <span class="w-2 h-2 rounded-full"
+                    :class="vcamPrev.reachable ? (vcamPrev.device.cam_ready ? 'bg-hub-green animate-pulse' : 'bg-hub-orange') : 'bg-hub-muted'"></span>
+              <span x-text="vcamPrev.reachable ? (vcamPrev.device.cam_ready ? '数字人播出中' : '数字人引擎在线 · OBS 摄像头未就绪') : '未开播'"></span>
+            </span>
+          </template>
+          <span x-show="perf.swap_latency_last>0 && perf.streaming" class="text-[12px] text-hub-muted tabular-nums"
+                :title="'单帧换脸延迟 '+perf.swap_latency_last+'ms'">
+            <span x-text="perf.swap_latency_last+'ms'"></span>
+            <svg x-show="latSparkPoints()" class="lat-spark ml-1" width="40" height="12" viewBox="0 0 40 12" aria-hidden="true">
+              <path :d="latSparkPoints()"></path>
+            </svg>
+          </span>
+          <span x-show="perf.fps>0 && perf.streaming"
+                class="text-[13px] bg-green-900/40 text-hub-green px-2 py-0.5 rounded-full"
+                x-text="perf.fps+' fps'"></span>
+          <!-- P1-4 播中迷你音频电平：预览卡内即可确认有声 -->
+          <span x-show="perf.streaming && audioLive().monLevel>=0" class="inline-flex items-center gap-1 text-[12px] text-hub-muted"
+                :title="audioLive().cableOk?'直播馈线电平':'监听电平'">
+            <span>🎙</span>
+            <span class="w-10 h-1.5 rounded-full bg-hub-border/50 overflow-hidden">
+              <span class="block h-full rounded-full transition-all duration-150"
+                    :class="audioLive().talking?'bg-hub-green':'bg-hub-blue/60'"
+                    :style="'width:'+Math.max(4,audioLive().monLevel)+'%'"></span>
+            </span>
+          </span>
+          <button x-show="needLowPreset()" @click="applyLowLatencyPreset()"
+                  class="bd-act sm soft">⚡ 一键降档</button>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap">
+          <button x-show="mjpegOn && perf.streaming" @click="exportPreviewCompare()" :disabled="exportBusy"
+                  class="text-xs text-hub-blue hover:underline disabled:opacity-50"
+                  x-text="exportBusy?'导出中…':'📸 导出对比图'"></button>
+          <button @click="deviceCheckup()" :disabled="devBusy"
+                  class="text-xs text-hub-blue hover:underline disabled:opacity-50"
+                  title="开播前设备体检：麦克风噪声底(录音3秒) + 摄像头活帧/脸占比 + 虚拟声卡 → 一个总分"
+                  x-text="devBusy?'体检中…':'🎛 设备体检'"></button>
+          <button x-show="perf.streaming" @click="qualityCheck()" :disabled="qcBusy"
+                  class="text-xs text-hub-blue hover:underline disabled:opacity-50"
+                  title="抓当前帧，按脸区对比换脸前后清晰度/亮度，给一句可执行建议"
+                  x-text="qcBusy?'体检中…':'🩺 画质体检'"></button>
+          <button @click="mjpegOn=!mjpegOn" class="text-xs text-hub-blue hover:underline"
+                  x-text="mjpegOn?'关闭预览':'开启预览'"></button>
+        </div>
+      </div>
+      <!-- P0-5 用户模式·背景轻入口（专家完整控制在「视觉效果」面板） -->
+      <div x-show="streamSimple" class="mb-2 flex items-center gap-1.5 flex-wrap text-[13px]">
+        <span class="text-hub-muted shrink-0">背景</span>
+        <div class="bd-seg">
+          <button type="button" :class="(!bgCfg.mode||bgCfg.mode==='none')?'on':''" @click="quickBgMode('none')">关</button>
+          <button type="button" :class="bgCfg.mode==='blur'?'on':''" @click="quickBgMode('blur')">虚化</button>
+          <button type="button" :class="bgCfg.mode==='green'?'on':''" @click="quickBgMode('green')">绿幕</button>
+          <button type="button" :class="bgCfg.mode==='image'?'on':''" @click="quickBgMode('image')">图片</button>
+        </div>
+        <span x-show="bgCfg.up && bgCfg.enabled && bgCfg.mode!=='none'" class="text-[12px] text-hub-green"
+              x-text="'● '+({blur:'虚化',image:'图片',green:'绿幕'}[bgCfg.mode]||bgCfg.mode)"></span>
+      </div>
+      <!-- P6 用户模式·画面比例轻入口：手机竖屏一键切（专家完整控制在「效果调节」面板） -->
+      <div x-show="streamSimple" class="mb-2 flex items-center gap-1.5 flex-wrap text-[13px]">
+        <span class="text-hub-muted shrink-0">画面比例</span>
+        <div class="bd-seg">
+          <button type="button" :class="outputAspect==='portrait916'?'on':''" @click="setAspect('portrait916')"
+                  title="手机全屏 720×1280 — 微信/Telegram 视频通话推荐">📱 竖屏</button>
+          <button type="button" :class="(outputAspect==='landscape169'||outputAspect==='landscape169hd'||!outputAspect)?'on':''"
+                  @click="setAspect('landscape169')" title="横屏 1280×720">🖥 横屏</button>
+          <button type="button" :class="outputAspect==='square11'?'on':''" @click="setAspect('square11')"
+                  title="方形 720×720">方形</button>
+        </div>
+        <span x-show="outputAspect==='portrait916'" class="text-[12px] text-hub-green">● 手机比例 720×1280，开播/自愈不再翻回横屏</span>
+      </div>
+      <!-- D-1 设备体检结果：总分 + 麦/摄像头/CABLE 三行逐项(得分·真相·一句建议) -->
+      <div x-show="devCheck" x-transition.opacity :class="devCheckStripClass()">
+        <div class="flex items-center gap-2 mb-1">
+          <span :class="devCheckTitleClass()"
+                x-text="devCheck ? ('设备体检 '+devCheck.score+' 分') : ''"></span>
+          <span class="text-hub-muted" x-text="devCheck ? devCheck.verdict : ''"></span>
+          <span class="text-[12px] text-hub-muted/70" x-text="devCheck ? (devCheck.took_ms+'ms') : ''"></span>
+          <button @click="devCheck=null" class="ml-auto shrink-0 opacity-70 hover:opacity-100">✕</button>
+        </div>
+        <template x-for="it in (devCheck ? devCheck.items : [])" :key="it.key">
+          <div class="flex items-start gap-2 py-0.5 border-t border-white/5">
+            <span class="shrink-0 w-3 text-center"
+                  x-text="it.level==='good' ? '🟢' : it.level==='warn' ? '🟡' : it.level==='bad' ? '🔴' : '⚪'"></span>
+            <span class="shrink-0 w-24 text-hub-muted" x-text="it.label"></span>
+            <span class="shrink-0 text-[13px] font-mono"
+                  x-text="it.measured ? (it.score+'/'+it.max) : '未测'"></span>
+            <div class="min-w-0 flex-1 text-[13px]">
+              <span class="text-hub-muted" x-text="it.detail"></span>
+              <span x-show="it.advice" class="block text-hub-orange" x-text="it.advice ? ('→ '+it.advice) : ''"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+      <!-- 体检结果条：一句可执行建议 + 关键数字（点按钮才算，不常驻轮询）-->
+      <div x-show="qc" x-transition.opacity :class="qcStripClass()">
+        <span class="shrink-0 strip-em" x-text="qc && qc.level==='good' ? '✅' : '💡'"></span>
+        <div class="min-w-0 flex-1">
+          <span x-text="qc ? qc.advice : ''"></span>
+          <span x-show="qc && qc.ok" class="text-[13px] opacity-80 block mt-0.5" x-text="qcDetailLine()"></span>
+        </div>
+        <button @click="qc=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+      </div>
+      <!-- 摄像头选择（开播中可热切换，5 秒内生效）；数字人模式不吃摄像头，隐藏防误导 -->
+      <div x-show="broadcastMode!=='avatar_lipsync'" class="flex items-center gap-2 mb-2">
+        <label class="text-xs text-hub-muted whitespace-nowrap">摄像头<span class="text-hub-muted/60">（热切换）</span></label>
+        <select x-model.number="selectedCamera" @change="setCamera(selectedCamera)"
+                class="flex-1 min-w-0 text-xs py-1">
+          <option :value="-1">-- 自动 --</option>
+          <template x-for="c in cameras" :key="c.index">
+            <option :value="c.index" x-text="c.label+' ('+c.resolution+')'"></option>
+          </template>
+        </select>
+        <button @click="loadCameras()" class="bd-tap text-hub-muted text-xs hover:text-hub-blue px-1">⟳</button>
+      </div>
+      <!-- 内嵌 换脸前/后 对比预览：固定 16:9 + object-contain，绝不拉伸变形（解决此前必须弹窗的痛点）。
+           数字人模式用 x-if 整块摘除：display:none 的 <img> 仍会随心跳打 /realtime/*.jpg(该模式下恒 503)，摘除才真正止血 -->
+      <template x-if="broadcastMode!=='avatar_lipsync'">
+      <div x-show="mjpegOn" class="space-y-2">
+        <div class="grid grid-cols-2 gap-2">
+          <div class="relative rounded-lg overflow-hidden border border-hub-border bg-black/50" style="aspect-ratio:16/9">
+            <img :src="'/realtime/raw.jpg?t='+previewTick" alt="换脸前原始画面" loading="lazy"
+                 class="w-full h-full object-contain" @error="$el.style.opacity=0.15" @load="$el.style.opacity=1">
+            <span class="absolute top-1.5 left-1.5 text-[12px] px-1.5 py-0.5 rounded bg-black/60 text-hub-muted">换脸前 · 原始</span>
+          </div>
+          <div class="relative rounded-lg overflow-hidden border border-hub-green/40 bg-black/50 select-none" style="aspect-ratio:16/9; cursor:zoom-in"
+               title="按住画面＝看原始镜头，松开＝回到换脸效果（同位置 A/B 对比）"
+               @mousedown.prevent="holdRaw=true" @mouseup="holdRaw=false" @mouseleave="holdRaw=false"
+               @touchstart.prevent="holdRaw=true" @touchend="holdRaw=false" @touchcancel="holdRaw=false">
+            <img :src="(holdRaw?'/realtime/raw.jpg?t=':'/realtime/swapped.jpg?t=')+previewTick" alt="换脸后直播画面" loading="lazy"
+                 class="w-full h-full object-contain pointer-events-none" @error="$el.style.opacity=0.15" @load="$el.style.opacity=1">
+            <span class="absolute top-1.5 left-1.5 text-[12px] px-1.5 py-0.5 rounded flex items-center gap-1"
+                  :class="holdRaw ? 'bg-orange-900/60 text-hub-orange' : 'bg-hub-green/30 text-hub-green'">
+              <span class="w-1.5 h-1.5 rounded-full" :class="holdRaw?'bg-hub-orange':(perf.streaming?'bg-hub-red animate-pulse':'bg-hub-muted')"></span>
+              <span x-text="holdRaw ? '原始镜头（松开回效果）' : '换脸后 · 直播画面'"></span>
+            </span>
+          </div>
+        </div>
+        <div class="flex items-center justify-between flex-wrap gap-1">
+          <span class="text-[12px] text-hub-muted">按住右图看原始镜头做同位对比 · 可点「📸 导出对比图」分享 · 卡顿点「⚡ 一键降档」</span>
+          <button @click="window.open('/realtime/dual_preview','avatar_preview','width=1100,height=760')"
+                  class="text-[13px] text-hub-blue hover:underline">⤢ 放大独立窗口</button>
+        </div>
+      </div>
+      </template>
+      <!-- 数字人模式：实时画面 = vcam 广播预览（与推给 OBS 虚拟摄像头的是同一路帧，观众所见即所得）。
+           内层 x-if 承担 MJPEG 连接生命周期：关预览/切模式/引擎掉线即销毁 <img>，浏览器随之断开长连接不空耗 -->
+      <div x-show="mjpegOn && broadcastMode==='avatar_lipsync'" class="space-y-2">
+        <div class="relative rounded-lg overflow-hidden border bg-black/50 mx-auto w-full"
+             :class="vcamPrev.reachable ? 'border-hub-green/40' : 'border-hub-border'"
+             style="aspect-ratio:16/9; max-width:760px">
+          <template x-if="mjpegOn && broadcastMode==='avatar_lipsync' && vcamPrev.reachable">
+            <img :src="'/api/vcam/preview.mjpeg?fps=10&t='+vcamPrevNonce" alt="数字人直播画面"
+                 class="w-full h-full object-contain" @error="$el.style.opacity=0.15" @load="$el.style.opacity=1">
+          </template>
+          <div x-show="!vcamPrev.reachable" class="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-hub-muted">
+            <span class="text-[13px]">数字人画面引擎未运行</span>
+            <span class="text-[12px] opacity-70">点上方「🚀 开始数字人直播」，画面会出现在这里并同步进 OBS 虚拟摄像头</span>
+          </div>
+          <span class="absolute top-1.5 left-1.5 text-[12px] px-1.5 py-0.5 rounded flex items-center gap-1"
+                :class="vcamPrev.reachable ? 'bg-hub-green/30 text-hub-green' : 'bg-black/60 text-hub-muted'">
+            <span class="w-1.5 h-1.5 rounded-full" :class="vcamPrev.reachable ? 'bg-hub-red animate-pulse' : 'bg-hub-muted'"></span>
+            <span x-text="vcamPrev.reachable ? '数字人 · 直播画面' : '数字人 · 未运行'"></span>
+          </span>
+        </div>
+        <div class="flex items-center justify-between flex-wrap gap-1">
+          <span class="text-[12px] text-hub-muted">观众所见即此画面：已同步输出到「OBS Virtual Camera」虚拟摄像头（直播软件里选它即可上播）</span>
+          <button @click="window.open('/api/vcam/preview.mjpeg?fps=10&t='+Date.now(),'vcam_preview','width=820,height=640')"
+                  class="text-[13px] text-hub-blue hover:underline">⤢ 放大独立窗口</button>
+        </div>
+      </div>
+      <div x-show="!mjpegOn" class="text-hub-muted text-xs text-center py-6"
+           x-text="broadcastMode==='avatar_lipsync' ? '点击右上角「开启预览」查看数字人直播画面（与 OBS 虚拟摄像头同一路）' : '点击右上角「开启预览」查看 换脸前 / 换脸后 实时画面'"></div>
+    </div>
+
+    <!-- P1-1 监控与守护（专家）：从实时画面卡抽出，分组+人话化 -->
+    <section x-show="!streamSimple" class="bd-panel">
+      <button type="button" class="bd-panel-head" @click="togglePanel('monitor')" :aria-expanded="panelOpen.monitor?'true':'false'">
+        <h2 class="bd-card-title">📊 监控与守护</h2>
+        <span class="bd-panel-sum" x-text="monitorSummary()"></span>
+        <span class="bd-panel-chev">▾</span>
+      </button>
+      <div x-show="panelOpen.monitor" x-transition.opacity.duration.150ms class="bd-panel-body space-y-4">
+        <!-- 监控灵敏度 -->
+        <div class="space-y-2">
+          <div class="text-[13px] text-hub-muted font-semibold">监控灵敏度</div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="bd-seg">
+              <button type="button" :class="sensPresetActive()==='tight'?'on':''" @click="applySensPreset('tight')" title="卡顿判定 650/400ms · 失败告警 8%">灵敏</button>
+              <button type="button" :class="sensPresetActive()==='standard'?'on':''" @click="applySensPreset('standard')" title="卡顿判定 800/500ms · 失败告警 10%">标准</button>
+              <button type="button" :class="sensPresetActive()==='loose'?'on':''" @click="applySensPreset('loose')" title="卡顿判定 1000/650ms · 失败告警 15%">宽松</button>
+            </div>
+            <button type="button" @click="monitorCustomOpen=!monitorCustomOpen" class="text-[12px] text-hub-blue hover:underline"
+                    x-text="monitorCustomOpen?'收起自定义':'自定义阈值…'"></button>
+            <span x-show="perf.swap_latency_last>0" class="bd-badge muted tabular-nums"
+                  :title="'frame-v2 单帧 '+perf.swap_latency_last+'ms · 均值 '+perf.swap_latency_avg+'ms'"
+                  x-text="perf.swap_latency_last+'ms'+(perf.swap_latency_avg>0?(' · avg '+perf.swap_latency_avg+'ms'):'')"></span>
+          </div>
+          <div x-show="monitorCustomOpen || !sensPresetActive()" class="bd-form">
+            <div class="bd-field">
+              <label title="原名高延迟阈值">卡顿判定 (ms)</label>
+              <input type="number" min="200" max="2000" step="50" x-model.number="perfThreshold.lat_high" class="w-ctl-sm">
+            </div>
+            <div class="bd-field">
+              <label title="原名中延迟阈值">波动判定 (ms)</label>
+              <input type="number" min="200" max="1500" step="50" x-model.number="perfThreshold.lat_mid" class="w-ctl-sm">
+            </div>
+            <div class="bd-field">
+              <label title="原名失败率阈值">失败告警线 (%)</label>
+              <input type="number" min="1" max="50" step="1" x-model.number="perfThreshold.fail" class="w-ctl-sm">
+            </div>
+          </div>
+        </div>
+        <!-- 实时统计 -->
+        <div class="space-y-2">
+          <div class="text-[13px] text-hub-muted font-semibold">换脸统计</div>
+          <div class="flex flex-wrap items-center gap-2 text-[13px]">
+            <span class="bd-badge ok" :title="swapStatsTitle()" x-text="swapStatsLine()"></span>
+            <span x-show="perf.faces_tgt" class="bd-badge muted"
+                  x-text="'检测 '+(perf.faces_tgt||0)+' 张 · 用 '+(perf.faces_used||0)+' / 滤 '+(perf.faces_filtered||0)"></span>
+            <span x-show="perf.detect_ms" class="bd-badge muted"
+                  x-text="'检测 '+(perf.detect_ms||0)+'ms · 换脸 '+(perf.swap_ms||0)+'ms · 精修 '+(perf.enhance_ms||0)+'ms'"></span>
+          </div>
+          <div x-show="perfSuggestion().tone!=='muted'" class="bd-strip text-[13px] px-2.5 py-1.5"
+               :class="perfSuggestion().tone==='red'?'err':(perfSuggestion().tone==='orange'?'warn':(perfSuggestion().tone==='green'?'ok':'info'))">
+            <span class="font-semibold">提示：</span><span x-text="perfSuggestion().msg"></span>
+          </div>
+        </div>
+        <!-- 自动化 -->
+        <div class="space-y-2 border-t border-hub-border/50 pt-3">
+          <div class="text-[13px] text-hub-muted font-semibold">自动化</div>
+          <div class="grid sm:grid-cols-2 gap-2 text-[13px]">
+            <label class="flex items-center gap-2 cursor-pointer" title="延迟超阈时自动套用流畅优先预设">
+              <span class="bd-switch"><input type="checkbox" x-model="autoLowPreset"><i></i></span>
+              <span>高延迟自动降档</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer" title="无人值守·全程：无脸换源/腾显存/拉起变声等，不依赖本页是否打开">
+              <span class="bd-switch"><input type="checkbox" x-model="autoHealServer" @change="setHealConfig({autoheal:autoHealServer})"><i></i></span>
+              <span>智能守护 · 全程</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer" title="本页打开时的兜底自愈；开启智能守护后破坏类动作让渡给服务端">
+              <span class="bd-switch"><input type="checkbox" x-model="autoHeal" @change="persistAutoHeal()"><i></i></span>
+              <span>页面守护 · 仅本页</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer" title="变声进行中设备被拔且持续25s→服务端自动热切推荐设备">
+              <span class="bd-switch"><input type="checkbox" x-model="devAutoSwOn" @change="setHealConfig({dev_autoswitch:devAutoSwOn})"><i></i></span>
+              <span>设备缺席自动热切</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer" title="无人上镜30分钟/画面死更10分钟→自动下播释放算力（僵尸直播会阻塞唱歌/MV任务排产）">
+              <span class="bd-switch"><input type="checkbox" x-model="idleLiveGovOn" @change="setHealConfig({idle_live_govern:idleLiveGovOn})"><i></i></span>
+              <span>空转直播自动下播</span>
+            </label>
+          </div>
+        </div>
+        <!-- 告警 -->
+        <div class="space-y-2 border-t border-hub-border/50 pt-3">
+          <div class="text-[13px] text-hub-muted font-semibold">告警</div>
+          <div class="flex flex-wrap items-center gap-2 text-[13px]">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <span class="bd-switch"><input type="checkbox" x-model="healAlertsOn" @change="setHealConfig({alerts:healAlertsOn})"><i></i></span>
+              <span>开播健康告警</span>
+            </label>
+            <button @click="testAlert()" :disabled="testAlertBusy" class="bd-btn bd-btn-ghost bd-btn-sm"
+                    title="发一条测试告警，验证 webhook/本地弹窗">
+              <span x-text="testAlertBusy?'发送中…':'发测试通知'"></span>
+            </button>
+            <span x-show="healCfg && healCfg.channels && healCfg.channels.webhook_count===0 && !webhookHintDismissed"
+                  class="bd-badge muted inline-flex items-center gap-1">
+              仅本地弹窗
+              <button @click="dismissWebhookHint()" class="opacity-60 hover:opacity-100" title="不再提示">✕</button>
+            </span>
+          </div>
+        </div>
+        <!-- P14-A1 直播排班：到点开播/下播 + 断播自动重开（无人值守的"时长"保障） -->
+        <div class="space-y-2 border-t border-hub-border/50 pt-3">
+          <button @click="schedOpen=!schedOpen; if(schedOpen) schedLoad()"
+                  class="text-[13px] text-hub-muted hover:text-hub-blue flex items-center gap-1 w-full text-left">
+            <span x-text="schedOpen?'▾':'▸'"></span> ⏰ 直播排班
+            <span class="text-hub-muted/70" x-text="schedNextText"></span>
+            <span x-show="schedRt&&schedRt.owned" class="bd-badge ok ml-1">排班在播</span>
+          </button>
+          <div x-show="schedOpen" x-cloak class="space-y-2">
+            <div class="text-[12px] text-hub-muted leading-snug">
+              到点自动开播/下播；播中断了自动重开（每场最多 3 次，间隔 2 分钟）。窗口内你手动停播＝本场交还给你、不再自动重开（下一场照常）；你手动开的播，排班到点也绝不替你下播。排班开播时若「智能守护」未开会自动打开。支持跨零点场（如 22:00–02:00）。
+            </div>
+            <template x-for="(e,i) in schedList" :key="e.id||('n'+i)">
+              <div class="flex flex-wrap items-center gap-1.5 text-[12px] rounded-lg border px-2 py-1.5"
+                   :class="(schedRt&&schedRt.active_id===e.id)?'border-hub-green/50 bg-green-900/10':'border-hub-border/60'">
+                <span class="bd-switch" title="启用/停用这场"><input type="checkbox" x-model="e.enabled"><i></i></span>
+                <input x-model="e.label" placeholder="场次名" maxlength="12"
+                       class="w-20 bg-hub-bg border border-hub-border rounded px-1.5 py-0.5">
+                <template x-for="(dn,di) in ['一','二','三','四','五','六','日']" :key="'sd'+di">
+                  <button @click="schedToggleDay(e,di+1)"
+                          class="w-6 h-6 rounded-full border transition"
+                          :class="e.days.includes(di+1)?'border-hub-blue bg-blue-900/40 text-hub-blue':'border-hub-border text-hub-muted hover:text-hub-text'"
+                          x-text="dn"></button>
+                </template>
+                <input type="time" x-model="e.start" class="bg-hub-bg border border-hub-border rounded px-1 py-0.5">
+                <span class="text-hub-muted">–</span>
+                <input type="time" x-model="e.end" class="bg-hub-bg border border-hub-border rounded px-1 py-0.5">
+                <select x-model="e.mode" class="bg-hub-bg border border-hub-border rounded px-1 py-0.5">
+                  <option value="">跟当前模式</option>
+                  <option value="real_faceswap">真人换脸</option>
+                  <option value="avatar_lipsync">数字人</option>
+                </select>
+                <select x-model="e.profile" class="bg-hub-bg border border-hub-border rounded px-1 py-0.5 max-w-[9rem]">
+                  <option value="">跟当前角色</option>
+                  <template x-for="p in schedProfiles" :key="'sp'+p"><option :value="p" x-text="p"></option></template>
+                </select>
+                <button @click="schedList.splice(i,1)" title="删除这场" class="bd-act sm red ml-auto shrink-0">✕</button>
+              </div>
+            </template>
+            <div class="flex flex-wrap items-center gap-2 text-[12px]">
+              <button @click="schedAdd()" class="bd-act sm ghost">➕ 加一场</button>
+              <button @click="schedSave()" :disabled="schedBusy" class="bd-act sm green"
+                      x-text="schedBusy?'…':'保存排班'"></button>
+              <span x-show="schedRt&&schedRt.active_overridden" class="text-hub-yellow">
+                本场已被手动停播豁免
+                <button @click="schedClearOverride()" class="underline hover:text-hub-text">恢复接管</button>
+              </span>
+              <span class="text-hub-muted ml-auto truncate max-w-[60%]" :title="schedLast" x-text="schedLast"></span>
+            </div>
+          </div>
+        </div>
+        <!-- 复盘时间线 -->
+        <div class="border-t border-hub-border/50 pt-3">
+          <button @click="healthTLOpen=!healthTLOpen; if(healthTLOpen) loadHealthTimeline()"
+                  class="text-[13px] text-hub-muted hover:text-hub-blue flex items-center gap-1 w-full text-left">
+            <span x-text="healthTLOpen?'▾':'▸'"></span> 🕓 复盘时间线
+            <span x-show="healthStats" class="text-hub-muted/70"
+                  x-text="healthStats?('· 跳迁'+healthStats.transitions+' · 丢脸'+healthStats.noface+' · 自愈'+healthStats.auto_free_vram):''"></span>
+          </button>
+          <div x-show="healthTLOpen" x-transition.opacity.duration.200ms
+               class="mt-1.5 rounded-lg border border-hub-border bg-hub-bg/40 p-2 space-y-1 max-h-52 overflow-auto">
+            <div class="flex items-center justify-between text-[12px]">
+              <span :class="healthAutohealOn?'text-hub-green':'text-hub-muted'"
+                    x-text="healthAutohealOn?'智能守护：已开启（无人值守·换源重连/腾显存）':'智能守护：未开启（仅观测留痕）'"></span>
+              <button @click="loadHealthTimeline()" :disabled="healthTLLoading"
+                      class="text-hub-muted hover:text-hub-blue">⟳ 刷新</button>
+            </div>
+            <template x-if="healthSessions.length">
+              <div class="space-y-0.5 border-b border-hub-border/40 pb-1">
+                <template x-for="(x,si) in healthSessions.slice(0,4)" :key="si">
+                  <div class="flex items-center gap-2 text-[12px]">
+                    <span class="px-1 rounded shrink-0" :class="x.open?'bg-hub-red/20 text-hub-red':'bg-hub-muted/15 text-hub-muted'"
+                          x-text="x.open?'本场':'收播'"></span>
+                    <span class="text-hub-muted/70 tabular-nums shrink-0" x-text="fmtClock(x.start)+' · '+fmtDur(x.dur_s)"></span>
+                    <span :class="(x.noface||x.svc_down||x.restart||x.alert)?'text-hub-orange':'text-hub-green'"
+                          x-text="sessTitle(x)"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+            <template x-if="!healthTimeline.length">
+              <div class="text-[12px] text-hub-muted/70 text-center py-2"
+                   x-text="healthTLLoading?'加载中…':'暂无事件（开播后将记录状态变化）'"></div>
+            </template>
+            <template x-for="(e,i) in healthTimeline" :key="i">
+              <div class="flex items-center gap-2 text-[12px] border-b border-hub-border/40 pb-0.5">
+                <span class="text-hub-muted/70 tabular-nums" x-text="fmtClock(e.ts)"></span>
+                <span :class="e.event==='alert'?'text-hub-red':(e.event==='auto_heal'?'text-hub-blue':'text-hub-text')"
+                      x-text="(healEventIcon(e)?healEventIcon(e)+' ':'')+(e.label||'')"></span>
+                <span x-show="e.dwell_s>1" class="text-hub-muted/60 ml-auto"
+                      x-text="'持续'+e.dwell_s+'s'"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  <!-- ════ 用户·声音线路卡（P1-2）：链路讲成一句话 + 当场试音/试听，不暴露设备表 ════ -->
+  <div x-show="streamSimple" class="bd-card p-4 space-y-2">
+    <div class="flex items-center justify-between">
+      <h2 class="bd-card-title">🔊 声音线路</h2>
+      <div class="flex items-center gap-2">
+        <button @click="micTestRun()" :disabled="micTest.busy"
+                title="录 3 秒麦克风：看收音正不正常，还能回放听效果"
+                class="bd-act sm soft"
+                x-text="micTest.busy?'录音中…':'🎙 试音'"></button>
+        <button @click="outTestRun()" :disabled="outTest.busy"
+                title="向输出设备播 1 秒提示音；走直播声卡时自动回环验证观众侧"
+                class="bd-act sm soft"
+                x-text="outTest.busy?'播放中…':'🔊 试听'"></button>
+        <button @click="setStreamMode(true)" class="text-[13px] text-hub-muted hover:text-hub-blue" title="进专家模式手动更换具体设备">🛠 更换设备</button>
+      </div>
+    </div>
+    <div class="flex items-center gap-1.5 flex-wrap text-[13px]">
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border"
+            :class="audioChain().micOk?'border-hub-green/40 bg-hub-bg/60':'border-hub-border bg-hub-bg/40'"
+            :title="'当前麦克风：'+audioChain().mic">
+        <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="audioChain().talking?'bg-hub-green animate-pulse':(audioChain().micOk?'bg-hub-green':'bg-hub-muted')"></span>
+        <span>🎤</span><span class="font-semibold text-hub-text" x-text="audioChain().mic"></span>
+        <span x-show="audioChain().talking" class="text-hub-green text-[12px]">有声</span>
+      </span>
+      <span class="text-hub-muted/50">→</span>
+      <span class="px-2.5 py-1.5 rounded-lg border border-hub-border bg-hub-bg/40">🎭 变声</span>
+      <span class="text-hub-muted/50">→</span>
+      <span class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border"
+            :class="audioChain().outLive?'border-hub-green/40 bg-hub-bg/60':(audioChain().outWarn?'border-hub-orange/50 bg-orange-900/10':'border-hub-border bg-hub-bg/40')"
+            :title="'当前输出：'+audioChain().out">
+        <span x-text="audioChain().outLive?'✅':'🔈'"></span>
+        <span class="font-semibold text-hub-text" x-text="audioChain().outLive?'直播声卡':audioChain().out"></span>
+      </span>
+      <span class="text-hub-muted/50">→</span>
+      <span class="px-2.5 py-1.5 rounded-lg border border-hub-border bg-hub-bg/40">📺 OBS → 观众</span>
+    </div>
+    <div class="text-[13px] text-hub-muted">观众听到的是走「直播声卡」的这一路；耳机/音箱只是自己监听。设备已自动配好，一般无需手动改。</div>
+    <div x-show="audioChain().outWarn" class="text-[13px] bd-strip warn text-hub-orange px-2.5 py-1.5"
+         x-text="'⚠️ '+audioOutWarn()"></div>
+    <!-- P2-1 拔插自愈：偏好设备缺席的驻留提示（用户模式同样要看得到）；P3-1 变声在跑时附一键热切 -->
+    <div x-show="devLostLine('in')" class="text-[13px] bd-strip warn text-hub-orange px-2.5 py-1.5 flex items-start gap-1.5">
+      <span class="min-w-0 flex-1" x-text="'🔌 '+devLostLine('in')"></span>
+      <button x-show="devHotOffer('in')" @click="devHotSwitch('strip','in')" :disabled="devHotBusy"
+              title="正在变声中：把变声线路切到当前推荐设备并重启拾音（约 2 秒，不打断画面；原设备插回后自动恢复）"
+              class="shrink-0 px-2 py-0.5 rounded-md border border-hub-orange/60 hover:bg-hub-orange/15 disabled:opacity-40 font-semibold"
+              x-text="devHotBusy?'⏳ 切换中…':'⚡ 切到推荐并重启变声'"></button>
+    </div>
+    <div x-show="devLostLine('out')" class="text-[13px] bd-strip warn text-hub-orange px-2.5 py-1.5 flex items-start gap-1.5">
+      <span class="min-w-0 flex-1" x-text="'🔌 '+devLostLine('out')"></span>
+      <button x-show="devHotOffer('out')" @click="devHotSwitch('strip','out')" :disabled="devHotBusy"
+              title="正在变声中：把变声线路切到当前推荐设备并重启拾音（约 2 秒，不打断画面；原设备插回后自动恢复）"
+              class="shrink-0 px-2 py-0.5 rounded-md border border-hub-orange/60 hover:bg-hub-orange/15 disabled:opacity-40 font-semibold"
+              x-text="devHotBusy?'⏳ 切换中…':'⚡ 切到推荐并重启变声'"></button>
+    </div>
+    <!-- P3-1b 首选插回但变声还挂在顶替设备：不自动切（避免说话中 2 秒断声），时机让主播挑 -->
+    <template x-for="bk in ['in','out']" :key="'ubk'+bk">
+      <div x-show="devBackLine(bk)" class="text-[13px] bd-strip info text-hub-blue px-2.5 py-1.5 flex items-start gap-1.5">
+        <span class="min-w-0 flex-1" x-text="'🔌 '+devBackLine(bk)"></span>
+        <button @click="devHotSwitch('back',bk)" :disabled="devHotBusy"
+                title="把变声线路切回首选设备并重启拾音（约 2 秒声音间隙，找说话空档点）"
+                class="shrink-0 px-2 py-0.5 rounded-md border border-hub-blue/60 hover:bg-hub-blue/15 disabled:opacity-40 font-semibold"
+                x-text="devHotBusy?'⏳ 切换中…':'⚡ 切回首选并重启变声'"></button>
+      </div>
+    </template>
+    <!-- P8-1 自动热切失败自救卡：常驻（toast 会溜走）；变声恢复在跑/任一次切换成功/✕ 才退场 -->
+    <div x-show="autoSwFail" x-cloak class="text-[13px] bd-strip err text-hub-red px-2.5 py-1.5 flex items-start gap-1.5"
+         title="服务端自动热切没成功，变声可能已停止（直播恐无声/裸声）。左键=再试一次整条热切链（重挑设备）；右键=设备其实已恢复时直接重启变声最快">
+      <span class="min-w-0 flex-1" x-text="'🚨 自动热切失败：'+(autoSwFail?.detail||'未知原因')+'——变声可能已停止，请立即处理'"></span>
+      <button @click="devHotSwitch('rescue','in')" :disabled="devHotBusy"
+              class="shrink-0 px-2 py-0.5 rounded-md border border-hub-red/60 hover:bg-hub-red/15 disabled:opacity-40 font-semibold"
+              x-text="devHotBusy?'⏳ 处理中…':'⚡ 再试一次热切'"></button>
+      <button @click="autoSwRescueRestart()" :disabled="devHotBusy"
+              class="shrink-0 px-2 py-0.5 rounded-md border border-hub-border hover:bg-hub-card disabled:opacity-40">▶ 直接重启变声</button>
+      <button @click="autoSwFail=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+    </div>
+    <!-- P7-2 数据驱动的开启建议：用主播自己的手动热切战绩说话，一次性出现（开启/不再提示都永久退场） -->
+    <div x-show="autoSwAdvice" x-cloak class="text-[13px] bd-strip ok text-hub-green px-2.5 py-1.5 flex items-start gap-1.5"
+         title="依据：你的手动一键热切历史成功率（数据在 ops 看板「设备自愈漏斗」可查）。开启后设备被拔约 25 秒自动恢复，无需人在场；切换瞬间约 1.5 秒断声">
+      <span class="min-w-0 flex-1" x-text="'💡 '+(autoSwAdvice?.reason||'')"></span>
+      <button @click="autoSwHintEnable()" class="shrink-0 px-2 py-0.5 rounded-md border border-hub-green/60 hover:bg-hub-green/15 font-semibold">⚡ 开启自动热切</button>
+      <button @click="autoSwHintDismiss()" class="shrink-0 px-2 py-0.5 rounded-md border border-hub-border text-hub-muted hover:text-hub-text">不再提示</button>
+    </div>
+    <!-- 试音/试听结果条（与专家区共用状态，两卡按模式互斥显示） -->
+    <div x-show="micTest.res" x-transition.opacity :class="micTestStripClass()+' text-[13px]'">
+      <span class="shrink-0 strip-em" x-text="micTest.res&&micTest.res.ok?(micTest.res.level==='good'?'✅':'💡'):'❌'"></span>
+      <div class="min-w-0 flex-1">
+        <span x-text="micTest.res?(micTest.res.ok?micTest.res.verdict:('试音失败：'+(micTest.res.detail||''))):''"></span>
+        <span x-show="micTest.res&&micTest.res.ok" class="block opacity-75 mt-0.5"
+              x-text="micTest.res&&micTest.res.ok?('人声 '+micTest.res.speech_dbfs+'dB · 底噪 '+micTest.res.floor_dbfs+'dB · 信噪比 '+micTest.res.snr_db+'dB'):''"></span>
+      </div>
+      <button x-show="micTest.url" @click="micTestPlay()" class="shrink-0 underline hover:opacity-80">▶ 回放</button>
+      <button @click="micTest.res=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+    </div>
+    <div x-show="outTest.res" x-transition.opacity :class="outTestStripClass()+' text-[13px]'">
+      <span class="shrink-0 strip-em" x-text="outTestGood()?'✅':'💡'"></span>
+      <span class="min-w-0 flex-1" x-text="outTestText()"></span>
+      <button @click="outTest.res=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+    </div>
+  </div>
+  </div>
+
+  <!-- ── 右列·下半：设备 / RVC 变声 / 前置检查（专家）── -->
+  <div x-show="!streamSimple" class="order-3 xl:order-none xl:col-start-8 xl:col-span-5 xl:row-start-2 flex flex-col gap-3 min-w-0">
+
+  <!-- ════ 专家·设备：视频来源 + 麦克风 + 直播声卡（设备单一真相，开播与变声共用）
+        P0 改版：默认「人话分组视图」(去重合并/翻译/危险项折叠)，「显示全部原始设备」一键回到完整列表 ════ -->
+  <section class="bd-panel">
+    <button type="button" class="bd-panel-head" @click="togglePanel('dev')" :aria-expanded="panelOpen.dev?'true':'false'">
+      <h2 class="bd-card-title">🎚️ 设备</h2>
+      <span class="bd-panel-sum" x-text="devSummary()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="panelOpen.dev" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div class="text-[13px] text-hub-muted">用户模式下设备由「一键开播」自动选择；如需手动指定，在此修改。</div>
+      <div class="flex items-center gap-3 shrink-0">
+        <label class="text-[13px] text-hub-muted flex items-center gap-1 cursor-pointer"
+               title="关=人话分组视图（同一设备的 MME/DirectSound/WASAPI 重复项已合并，虚拟/系统设备折叠）；开=系统原始设备全列表（排障/调音台高级路由用）">
+          <input type="checkbox" :checked="devShowAll" @change="devToggleShowAll()" class="accent-hub-blue">
+          <span>显示全部原始设备</span>
+        </label>
+        <button @click="rvcRefreshDevices(); loadCameras()" class="text-xs text-hub-blue hover:underline">🔄 刷新设备</button>
+      </div>
+    </div>
+    <div class="text-[13px] text-hub-muted">声音链路：<span class="text-hub-text/90">🎤 麦克风 → 🎭 变声 → ✅ 直播声卡(CABLE) → OBS → 观众</span>，耳机/音箱只是自己监听。</div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div>
+        <label class="text-[13px] text-hub-muted">视频来源</label>
+        <select x-model="videoSource" class="w-full text-xs mt-1">
+          <option value="auto">自动（推荐 · 优先手机摄像头）</option>
+          <option value="scrcpy">手机 USB 投屏（画质最好，需数据线）</option>
+          <option value="camera">电脑摄像头</option>
+        </select>
+        <div x-show="videoSource==='auto'" class="text-[12px] mt-1 flex items-center gap-1 flex-wrap">
+          <span :class="phoneRelayCam.live?'text-hub-green':'text-hub-muted'"
+                x-text="phoneRelayCam.live?('📷 手机摄像头在线 '+phoneRelayCam.w+'×'+phoneRelayCam.h+' @'+phoneRelayCam.fps+'fps'):'📷 手机摄像头未推流（见上方手机向导）'"></span>
+          <button type="button" @click="loadPhoneRelayCam()" class="text-hub-blue hover:underline">⟳</button>
+        </div>
+        <div x-show="videoSource==='camera'" class="text-[12px] text-hub-muted mt-1">在上方「实时画面」选择具体摄像头并可热切换。</div>
+      </div>
+      <div>
+        <label class="text-[13px] text-hub-muted">麦克风（音频输入）——你对着说话的那只</label>
+        <div class="flex gap-1 mt-1">
+          <!-- 人话分组视图（默认）：后端结构化数据在才启用，否则自动落回原始列表 -->
+          <template x-if="!devShowAll && rvcInputsEx">
+            <select x-model="audioInput" @change="onPickAudioInput()" class="flex-1 min-w-0 text-xs">
+              <option value="">跟随系统默认</option>
+              <template x-for="g in audioGroups('in')" :key="g.key">
+                <optgroup :label="g.label">
+                  <template x-for="a in g.items" :key="a.value">
+                    <option :value="a.value" :title="(a.fresh?'变声启动后新插入，切换需重启变声  ·  ':'')+(a.note?a.note+'  ·  ':'')+'原始名: '+a.base"
+                            x-text="a.label+(a.danger?' ⚠':'')+(a.fresh?' 🆕':'')"></option>
+                  </template>
+                </optgroup>
+              </template>
+            </select>
+          </template>
+          <!-- 完整原始列表（排障/高级）-->
+          <template x-if="devShowAll || !rvcInputsEx">
+            <select x-model="audioInput" @change="onPickAudioInput()" class="flex-1 min-w-0 text-xs">
+              <option value="">跟随系统默认</option>
+              <template x-for="a in rvcInputDevices" :key="a"><option :value="a" x-text="a"></option></template>
+            </select>
+          </template>
+          <button @click="micTestRun()" :disabled="micTest.busy"
+                  title="录 3 秒选中的麦克风：电平/底噪/信噪比 + 可回放（测的就是这只，不是系统默认）"
+                  class="bd-act soft shrink-0"
+                  x-text="micTest.busy?'录音中…':'🎙 试音'"></button>
+        </div>
+        <div class="text-[12px] mt-0.5" :class="rvcInputDevices.length?'text-hub-muted':'text-hub-orange'"
+             x-text="rvcInputDevices.length?(audioCountLine('in')+(audioPickHint('in')?(' · '+audioPickHint('in')):'')):'未检测到音频输入，点刷新或确认手机投屏'"></div>
+        <!-- P4-3 转换中新插设备提示（🆕 徽章的说明；转换停止后自动消失） -->
+        <div x-show="rvcFreshNote" class="mt-1 text-[12px] bd-strip info text-hub-blue px-2 py-1"
+             x-text="'🆕 '+rvcFreshNote"></div>
+        <!-- P2-1 偏好设备缺席警告条（toast 只弹一次，这条驻留到插回/改选）；P3-1 变声在跑时附一键热切 -->
+        <div x-show="devLostLine('in')" class="mt-1 text-[13px] bd-strip warn text-hub-orange px-2 py-1.5 flex items-start gap-1.5">
+          <span class="min-w-0 flex-1" x-text="'🔌 '+devLostLine('in')"></span>
+          <button x-show="devHotOffer('in')" @click="devHotSwitch('strip','in')" :disabled="devHotBusy"
+                  title="正在变声中：把变声线路切到当前推荐设备并重启拾音（约 2 秒；原设备插回后自动恢复）"
+                  class="bd-act sm amber shrink-0"
+                  x-text="devHotBusy?'⏳ 切换中…':'⚡ 切到推荐并重启变声'"></button>
+        </div>
+        <div x-show="devBackLine('in')" class="mt-1 text-[13px] bd-strip info text-hub-blue px-2 py-1.5 flex items-start gap-1.5">
+          <span class="min-w-0 flex-1" x-text="'🔌 '+devBackLine('in')"></span>
+          <button @click="devHotSwitch('back','in')" :disabled="devHotBusy"
+                  title="把变声线路切回首选设备并重启拾音（约 2 秒声音间隙，找说话空档点）"
+                  class="bd-act sm soft shrink-0"
+                  x-text="devHotBusy?'⏳ 切换中…':'⚡ 切回首选并重启变声'"></button>
+        </div>
+        <!-- P8-1 自动热切失败自救卡（专家区同款，常驻直到解除） -->
+        <div x-show="autoSwFail" x-cloak class="mt-1 text-[13px] bd-strip err text-hub-red px-2 py-1.5 flex items-start gap-1.5"
+             title="服务端自动热切没成功，变声可能已停止。⚡=再试整条热切链（重挑设备）；▶=设备已恢复时直接重启变声最快">
+          <span class="min-w-0 flex-1" x-text="'🚨 自动热切失败：'+(autoSwFail?.detail||'未知原因')+'——变声可能已停止'"></span>
+          <button @click="devHotSwitch('rescue','in')" :disabled="devHotBusy"
+                  class="shrink-0 px-2 py-0.5 rounded-md border border-hub-red/60 hover:bg-hub-red/15 disabled:opacity-40 font-semibold"
+                  x-text="devHotBusy?'⏳':'⚡ 再试热切'"></button>
+          <button @click="autoSwRescueRestart()" :disabled="devHotBusy"
+                  class="shrink-0 px-2 py-0.5 rounded-md border border-hub-border hover:bg-hub-card disabled:opacity-40">▶ 重启变声</button>
+          <button @click="autoSwFail=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+        </div>
+        <!-- P7-2 数据驱动的开启建议（专家区同款，一次性） -->
+        <div x-show="autoSwAdvice" x-cloak class="mt-1 text-[13px] bd-strip ok text-hub-green px-2 py-1.5 flex items-start gap-1.5"
+             title="依据：你的手动一键热切历史成功率（ops「设备自愈漏斗」可查）。开启后设备被拔约 25 秒自动恢复；切换瞬间约 1.5 秒断声">
+          <span class="min-w-0 flex-1" x-text="'💡 '+(autoSwAdvice?.reason||'')"></span>
+          <button @click="autoSwHintEnable()" class="shrink-0 px-2 py-0.5 rounded-md border border-hub-green/60 hover:bg-hub-green/15 font-semibold">⚡ 开启</button>
+          <button @click="autoSwHintDismiss()" class="shrink-0 px-2 py-0.5 rounded-md border border-hub-border text-hub-muted hover:text-hub-text">不再提示</button>
+        </div>
+        <div x-show="micTest.res" x-transition.opacity :class="micTestStripClass()+' text-[13px] mt-1'">
+          <span class="shrink-0 strip-em" x-text="micTest.res&&micTest.res.ok?(micTest.res.level==='good'?'✅':'💡'):'❌'"></span>
+          <div class="min-w-0 flex-1">
+            <span x-text="micTest.res?(micTest.res.ok?micTest.res.verdict:('试音失败：'+(micTest.res.detail||''))):''"></span>
+            <span x-show="micTest.res&&micTest.res.ok" class="block opacity-75 mt-0.5"
+                  x-text="micTest.res&&micTest.res.ok?('人声 '+micTest.res.speech_dbfs+'dB · 底噪 '+micTest.res.floor_dbfs+'dB · 信噪比 '+micTest.res.snr_db+'dB'):''"></span>
+          </div>
+          <button x-show="micTest.url" @click="micTestPlay()" class="shrink-0 underline hover:opacity-80">▶ 回放</button>
+          <button @click="micTest.res=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+        </div>
+        <button @click="rvcSetupPhoneAudio()" class="mt-1 text-[13px] text-orange-300 hover:underline">📱 自动配手机麦克风 (DroidCam)</button>
+        <div x-show="rvcPhoneAudioMsg" x-text="rvcPhoneAudioMsg" class="text-[12px] text-hub-muted mt-0.5"></div>
+      </div>
+      <div>
+        <label class="text-[13px] text-hub-muted">直播声卡（音频输出）——观众听到的这一路</label>
+        <div class="flex gap-1 mt-1">
+          <template x-if="!devShowAll && rvcOutputsEx">
+            <select x-model="audioOutput" @change="onPickAudioOutput()" class="flex-1 min-w-0 text-xs">
+              <option value="">跟随系统默认</option>
+              <template x-for="g in audioGroups('out')" :key="g.key">
+                <optgroup :label="g.label">
+                  <template x-for="a in g.items" :key="a.value">
+                    <option :value="a.value" :title="(a.fresh?'变声启动后新插入，切换需重启变声  ·  ':'')+(a.note?a.note+'  ·  ':'')+'原始名: '+a.base"
+                            x-text="a.label+(a.danger?' ⚠':'')+(a.fresh?' 🆕':'')"></option>
+                  </template>
+                </optgroup>
+              </template>
+            </select>
+          </template>
+          <template x-if="devShowAll || !rvcOutputsEx">
+            <select x-model="audioOutput" @change="onPickAudioOutput()" class="flex-1 min-w-0 text-xs">
+              <option value="">跟随系统默认</option>
+              <template x-for="a in rvcOutputDevices" :key="a"><option :value="a" x-text="a"></option></template>
+            </select>
+          </template>
+          <button @click="outTestRun()" :disabled="outTest.busy"
+                  title="向选中输出播 1 秒「叮」：耳机/音箱=人耳确认（前后面板分不清就靠它）；直播声卡=自动回环验证观众侧"
+                  class="bd-act soft shrink-0"
+                  x-text="outTest.busy?'播放中…':'🔊 试听'"></button>
+        </div>
+        <div class="text-[12px] mt-0.5" :class="rvcOutputDevices.length?'text-hub-muted':'text-hub-orange'"
+             x-text="rvcOutputDevices.length?(audioCountLine('out')+(audioPickHint('out')?(' · '+audioPickHint('out')):'')):'未检测到虚拟声卡，安装 VB-Cable 后点刷新'"></div>
+        <div x-show="devLostLine('out')" class="mt-1 text-[13px] bd-strip warn text-hub-orange px-2 py-1.5 flex items-start gap-1.5">
+          <span class="min-w-0 flex-1" x-text="'🔌 '+devLostLine('out')"></span>
+          <button x-show="devHotOffer('out')" @click="devHotSwitch('strip','out')" :disabled="devHotBusy"
+                  title="正在变声中：把变声线路切到当前推荐设备并重启拾音（约 2 秒；原设备插回后自动恢复）"
+                  class="bd-act sm amber shrink-0"
+                  x-text="devHotBusy?'⏳ 切换中…':'⚡ 切到推荐并重启变声'"></button>
+        </div>
+        <div x-show="devBackLine('out')" class="mt-1 text-[13px] bd-strip info text-hub-blue px-2 py-1.5 flex items-start gap-1.5">
+          <span class="min-w-0 flex-1" x-text="'🔌 '+devBackLine('out')"></span>
+          <button @click="devHotSwitch('back','out')" :disabled="devHotBusy"
+                  title="把变声线路切回首选设备并重启拾音（约 2 秒声音间隙，找说话空档点）"
+                  class="bd-act sm soft shrink-0"
+                  x-text="devHotBusy?'⏳ 切换中…':'⚡ 切回首选并重启变声'"></button>
+        </div>
+        <div x-show="audioOutWarn()" class="mt-1 text-[13px] bd-strip warn text-hub-orange px-2 py-1.5"
+             x-text="'⚠️ '+audioOutWarn()"></div>
+        <div x-show="outTest.res" x-transition.opacity :class="outTestStripClass()+' text-[13px] mt-1'">
+          <span class="shrink-0 strip-em" x-text="outTestGood()?'✅':'💡'"></span>
+          <span class="min-w-0 flex-1" x-text="outTestText()"></span>
+          <button @click="outTest.res=null" class="shrink-0 opacity-70 hover:opacity-100">✕</button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </section>
+
+  <!-- ════ 专家·RVC 变声手调（设备见上方「设备」区，本区只保留模型与参数）════ -->
+  <section class="bd-panel">
+    <button type="button" class="bd-panel-head" @click="togglePanel('rvc')" :aria-expanded="panelOpen.rvc?'true':'false'">
+      <h2 class="text-hub-purple font-bold text-sm">🎙️ RVC 变声手调</h2>
+      <span class="bd-panel-sum" x-text="rvcSummary()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="panelOpen.rvc" x-transition.opacity.duration.150ms class="bd-panel-body">
+    <div class="flex items-center justify-end mb-2">
+      <button @click="startRvcApi()" class="bd-act sm purple">▶ 启动服务</button>
+    </div>
+    <div x-show="!services.rvc" class="text-hub-orange text-xs bg-orange-900/20 rounded-lg px-3 py-2 mb-3">
+      ⚠️ 变声服务未运行；点「一键开播」会自动拉起，或点「启动服务」手动启动。
+    </div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <!-- 模型 -->
+      <div>
+        <label class="text-xs text-hub-muted">变声模型 (.pth)</label>
+        <div class="flex gap-1 mt-1">
+          <select x-model="rvc.model" class="flex-1 text-xs">
+            <option value="">-- 手动输入或选择 --</option>
+            <template x-for="m in rvcModels" :key="m"><option :value="m" x-text="rvcLabel(m)"></option></template>
+          </select>
+          <button @click="rvcRefreshModels()" class="bd-tap text-hub-muted text-xs hover:text-hub-blue px-1">⟳</button>
+        </div>
+        <input x-show="!rvcModels.length" x-model="rvc.model" placeholder="weights/model.pth"
+               class="w-full mt-1 text-xs">
+        <div x-show="!rvcModels.length" class="text-[12px] text-hub-muted mt-0.5"
+             x-text="'放入: '+rvcWeightsDir"></div>
+      </div>
+      <!-- 音调 -->
+      <div>
+        <label class="text-xs text-hub-muted" title="以半音为单位整体升降调：男声变女声约 +12，女声变男声约 -12，同性别微调 ±2 以内">变调 (半音) <span class="bd-val" x-text="rvc.pitch"></span></label>
+        <input type="range" x-model.number="rvc.pitch" min="-24" max="24" step="1" class="w-full mt-2">
+        <div class="flex justify-between text-[13px] text-hub-muted"><span>-24 变男声</span><span>0</span><span>+24 变女声</span></div>
+      </div>
+      <!-- 高级 -->
+      <div :class="rvcIndexActive===false ? 'opacity-50' : ''">
+        <label class="text-xs text-hub-muted" title="原名「索引影响 index_rate」：越高越贴近目标音色，但过高可能带电音/吞字；常用 0.3~0.75">音色贴合度 <span class="bd-val" x-text="rvc.indexRate.toFixed(2)"></span></label>
+        <input type="range" x-model.number="rvc.indexRate" min="0" max="1" step="0.05" class="w-full mt-2" :disabled="rvcIndexActive===false">
+        <div class="flex justify-between text-[13px] text-hub-muted"><span>更自然</span><span>更像目标音色</span></div>
+        <!-- RVC-P1 诚实滑块：无 .index 检索文件时引擎强制关闭检索，此滑块实际无效——置灰并说明，不再假装有效 -->
+        <div x-show="rvcIndexActive===false" class="text-[12px] text-hub-orange mt-0.5">该模型不带 .index 检索文件，此滑块不生效（音色由模型本身决定）</div>
+      </div>
+      <div>
+        <label class="text-xs text-hub-muted" title="原名「保护强度 protect」：保护清辅音和呼吸声不被变声糊掉，咬字更清楚；默认 0.33，咬字发糊就调大">咬字保护 <span class="bd-val" x-text="rvc.protect.toFixed(2)"></span></label>
+        <input type="range" x-model.number="rvc.protect" min="0" max="0.5" step="0.01" class="w-full mt-2">
+        <div class="flex justify-between text-[13px] text-hub-muted"><span>关</span><span>咬字最清楚</span></div>
+        <!-- RVC-P1 诚实滑块：实时链路(api_240604 实时推理)不支持 protect，只有录音试听/离线配音生效 -->
+        <div class="text-[12px] text-hub-muted mt-0.5">仅对下方「录音试听」和离线配音生效；实时变声暂不支持</div>
+      </div>
+    </div>
+    <!-- 控制按钮 -->
+    <div class="bd-act-row mt-3">
+      <button @click="rvcStartConversion()" :disabled="!services.rvc || rvcActive"
+              class="bd-act primary">
+        ▶ 开始变声
+      </button>
+      <button @click="rvcApplyConfig()" :disabled="!services.rvc"
+              class="bd-act soft">
+        💾 应用变声配置
+      </button>
+      <button @click="rvcSaveToProfile()" :disabled="!active"
+              title="将当前滑块参数保存到激活角色"
+              class="bd-act green">
+        📌 保存到角色
+      </button>
+      <button @click="rvcStopConversion()" :disabled="!rvcActive"
+              class="bd-act red">
+        ⏹ 停止
+      </button>
+    </div>
+    <div x-show="rvcMsg" x-text="rvcMsg"
+         :class="rvcOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+         class="text-xs text-center py-1.5 rounded-lg mt-2"></div>
+    <!-- RVC-P1 引擎真实状态行：拾音流真在跑才显示（模型/变调/推理耗时/输出电平，4s 轮询顺风车） -->
+    <div x-show="rvcStatusLine()" class="text-[12px] text-hub-muted text-center mt-1.5" x-text="rvcStatusLine()"></div>
+    <!-- RVC-P1 输出静音告警：变声在跑但输出电平持续 ≥20s 为 0（说话间隙不误报） -->
+    <div x-show="rvcSilenceWarn()" class="mt-1.5 text-[13px] bd-strip warn text-hub-orange px-2 py-1.5">
+      ⚠️ 变声在跑，但输出已持续静音——观众可能听不到。请确认：① 听/推流的是「CABLE Output」而不是麦克风监听；② 输出设备选择正确；③ 麦克风有拾到声音
+    </div>
+    <!-- RVC-P1 录 5 秒 AB 试听：不接 OBS 也能自证变声效果（走离线转换，不打断实时变声） -->
+    <div class="mt-3 pt-3 border-t border-white/5">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-hub-muted" title="录 5 秒你的声音，用当前模型与滑块参数离线转换，原声/变声一键对比——确认效果再开播">效果自证：</span>
+        <button @click="rvcAb.state==='rec' ? rvcAbStop() : rvcAbRecord()" :disabled="rvcAb.busy"
+                class="bd-act sm" :class="rvcAb.state==='rec'?'red':'soft'"
+                x-text="rvcAb.state==='rec' ? ('■ 停止（'+rvcAb.sec+'/5s）') : (rvcAb.busy ? '⏳ 转换中…' : '🎤 录5秒试听')"></button>
+        <button x-show="rvcAb.rawUrl" @click="rvcAbPlay('raw')" class="bd-act sm soft"
+                x-text="rvcAb.playing==='raw'?'⏸ 原声':'▶ 原声'"></button>
+        <button x-show="rvcAb.outB64" @click="rvcAbPlay('out')" class="bd-act sm purple"
+                x-text="rvcAb.playing==='out'?'⏸ 变声':'▶ 变声'"></button>
+        <span x-show="rvcAb.busy" class="text-[12px] text-hub-muted">首次加载模型可能 10~30 秒</span>
+      </div>
+    </div>
+    </div>
+  </section>
+
+  <!-- 环境检测（专家 / 装机期）——P1-3 人话化：中文名 + 它管什么 + 逐项修复入口 -->
+  <section class="bd-panel">
+    <button type="button" class="bd-panel-head" @click="togglePanel('pre')" :aria-expanded="panelOpen.pre?'true':'false'">
+      <h2 class="text-hub-orange font-bold text-sm">⚙️ 前置检查</h2>
+      <span class="bd-panel-sum" x-text="preSummary()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="panelOpen.pre" x-transition.opacity.duration.150ms class="bd-panel-body">
+    <div class="flex items-center justify-end mb-1">
+      <button @click="checkEnv()" class="bd-act sm soft">⟳ 重新检测</button>
+    </div>
+    <div class="grid sm:grid-cols-2 gap-1">
+      <template x-for="c in envChecks" :key="c.item">
+        <div class="text-xs py-0.5">
+          <div class="flex items-center gap-1.5">
+            <span :class="c.ok?'text-hub-green':'text-hub-red'" x-text="c.ok?'✅':'❌'"></span>
+            <span :title="c.item+(c.path?('  ·  '+c.path):'')" x-text="c.cn||c.item"></span>
+            <button x-show="!c.ok && c.fix && c.fix.label" @click="envFixAct(c)"
+                    class="ml-auto shrink-0 text-[13px] text-hub-blue hover:underline"
+                    x-text="c.fix?c.fix.label:''"></button>
+          </div>
+          <div x-show="!c.ok && c.why" class="text-[12px] text-hub-muted ml-5 leading-snug" x-text="c.why"></div>
+        </div>
+      </template>
+      <div x-show="!envChecks.length" class="col-span-full text-hub-muted text-xs">点击"重新检测"</div>
+    </div>
+    <!-- VB-Cable 安装向导（点「安装向导」内联展开；装好点重新检测即消）-->
+    <div x-show="vbWizard" x-transition.opacity class="mt-2 rounded-lg border border-hub-blue/40 bg-hub-bg/60 p-3 text-xs space-y-1.5">
+      <div class="flex items-center gap-2">
+        <span class="font-bold" :class="vbWizard&&vbWizard.ready?'text-hub-green':'text-hub-blue'"
+              x-text="vbWizard&&vbWizard.ready?'✅ 直播声卡已就绪，无需安装':'🧩 VB-Cable 直播声卡安装向导（约 2 分钟，装完需重启电脑）'"></span>
+        <button @click="vbWizard=null" class="ml-auto opacity-70 hover:opacity-100">✕</button>
+      </div>
+      <template x-for="s in ((vbWizard&&vbWizard.steps)||[])" :key="s.n">
+        <div class="flex gap-1.5"><span class="text-hub-blue font-bold shrink-0" x-text="s.n+'.'"></span><span x-text="s.text"></span></div>
+      </template>
+      <div class="bd-act-row mt-1.5">
+        <a :href="(vbWizard&&vbWizard.download_url)||'#'" target="_blank" class="bd-act sm soft">⬇ 下载 VB-Cable</a>
+        <button @click="vbWizardRecheck()" :disabled="vbWizardBusy"
+                class="bd-act sm green"
+                x-text="vbWizardBusy?'检测中…':'✅ 已装好，重新检测'"></button>
+      </div>
+    </div>
+    </div>
+  </section>
+  </div><!-- /右列·下半 -->
+  </div><!-- /v2 主工作区双栏网格 -->
+</div>

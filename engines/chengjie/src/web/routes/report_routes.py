@@ -21,12 +21,13 @@ def register_report_routes(app, ctx) -> None:
     _api_auth = ctx.api_auth
     _kb_store = ctx.kb_store
 
+    def _get_sm():
+        from src.web.web_context import resolve_skill_manager
+        return resolve_skill_manager(telegram_client, app)
+
     def _get_strategy_tracker():
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "strategy_tracker", None)
-        return None
+        sm = _get_sm()
+        return getattr(sm, "strategy_tracker", None) if sm else None
 
     @app.get("/api/report/daily")
     async def api_daily_report(request: Request, hours: int = 24):
@@ -132,10 +133,9 @@ def register_report_routes(app, ctx) -> None:
         # 6. at_risk 用户
         try:
             ctx_store = None
-            if telegram_client:
-                sm = getattr(telegram_client, "skill_manager", None)
-                if sm:
-                    ctx_store = getattr(sm, "_context_store", None)
+            sm = _get_sm()
+            if sm:
+                ctx_store = getattr(sm, "_context_store", None)
             if ctx_store:
                 risk_count = sum(
                     1 for c in ctx_store._cache.values()
@@ -245,8 +245,33 @@ def register_report_routes(app, ctx) -> None:
         except Exception:
             report["feedback"] = {}
 
+        # AI 价值总账（2026-08-06 P1-3）：拟稿/投递/主动触达回复率/出站量——持久口径
+        # 聚合见 src/ops/value_report.py（F4 原有的 KB 两项是 KB 时代产物，价值面早已
+        # 长到它外面）。拿不到 inbox_store（测试装配/异常态）→ 空段，周报其余部分照出。
+        try:
+            from src.ops.value_report import build_weekly_value
+            _inbox = getattr(request.app.state, "inbox_store", None)
+            # P2 2026-08-09：goals 段数据源显式解析（configured store；goals 未启用
+            # 时 build_weekly_value 内部会因两周皆零而不出段）——主消费面不靠 peek
+            # 的初始化时序运气。解析失败回落 None＝peek 兜底。
+            _gs = None
+            try:
+                from src.companion.goals import service as _goal_svc
+                if _goal_svc.goals_enabled(config_manager.config or {}):
+                    _gs = _goal_svc.get_configured_store(
+                        config_manager.config or {},
+                        getattr(config_manager, "config_path", None))
+            except Exception:
+                _gs = None
+            report["value"] = (build_weekly_value(_inbox, goal_store=_gs)
+                               if _inbox is not None else {})
+        except Exception:
+            report["value"] = {}
+
         # 生成可读摘要
         lines = ["📊 运营周报", ""]
+        for vl in (report.get("value") or {}).get("text_lines", []):
+            lines.append(vl)
         kb = report.get("kb", {})
         if kb:
             tw = kb.get("this_week", {})

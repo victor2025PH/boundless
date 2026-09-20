@@ -18,14 +18,33 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/voice", bilingual: true, locales: ["ko", "ja"], changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/face", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/interpreting", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  { slug: "/fate", bilingual: true, changeFrequency: "weekly", priority: 0.7, enPriority: 0.6 },
   { slug: "/growth", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  // 2026-08-19 Token 定价改版：/pricing=报价决策页（档位/Token 费率/计算器），/order=结算页。
+  { slug: "/pricing", bilingual: true, changeFrequency: "weekly", priority: 0.9, enPriority: 0.8 },
   { slug: "/order", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  // 实施50 P4（2026-08-21）：企业销售件（年框/私有化叙事 + 站内留资表单）
+  { slug: "/enterprise", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/download", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  { slug: "/download/chatx", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/manual", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.5 },
   { slug: "/videos", bilingual: true, changeFrequency: "weekly", priority: 0.6, enPriority: 0.5 },
+  // 2026-09-17：智聊 12 集视频教程合集（lib/chatx-tutorials.ts 单一真相）；正片中文，英文页仅界面英文
+  { slug: "/chatx/tutorials", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.5 },
+  { slug: "/film", bilingual: true, changeFrequency: "monthly", priority: 0.8, enPriority: 0.7 },
   { slug: "/brand", bilingual: true, changeFrequency: "monthly", priority: 0.5, enPriority: 0.45 },
   { slug: "/privacy", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
   { slug: "/terms", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
+  // WP-4/WS-1（2026-08-17）：合规协议模板页 + 竞品对比 lander
+  { slug: "/compliance/crisis-protocol", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
+  // P2 销售件（2026-08-18）：合规能力页（EU AI Act 生效窗口期的搜索/销售入口）
+  { slug: "/compliance", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  { slug: "/compare/respond-io", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  { slug: "/compare/salesmartly", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  // 实施77 渠道四（2026-08-27）：GEO 对比矩阵扩容——选型指南枢纽页 + 两个新竞品对比页
+  { slug: "/compare", bilingual: true, changeFrequency: "weekly", priority: 0.7, enPriority: 0.7 },
+  { slug: "/compare/sleekflow", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  { slug: "/compare/wati", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
 ];
 
 /** 合规隔离：主站对外可见的页面 = SITE_PAGES 去掉 gated（高风险）slug。

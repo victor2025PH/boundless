@@ -33,11 +33,17 @@ def build_account_signals(
     limiter: Any = None,
     now: Optional[float] = None,
     extra: Optional[Dict[str, Any]] = None,
+    risk_source: Any = None,
 ) -> Dict[str, Any]:
     """装配单账号风控信号（best-effort，缺数据视为良性）。
 
     返回字段对齐 ``account_health`` / ``companion_send_gate``：
-    ``account_id, age_days?, proxy_bound, banned, sends_today?, _circuit_open?``。
+    ``account_id, age_days?, proxy_bound, banned, sends_today?, _circuit_open?,
+    flood_waits_24h?, errors_24h?``。
+
+    ``risk_source``：近 24h flood/error 计数来源（缺省走 ``risk_events.risk_counts_24h``，
+    可注入假对象单测）。这是反封号反馈闭环的读侧——``ban_signal`` 记的事件在此读回，
+    喂 ``account_health`` 扣分轴，让被风控狂限的号自动降 ``recommended_cap``。
     """
     now = float(now if now is not None else time.time())
     sig: Dict[str, Any] = {"account_id": str(account_id or "")}
@@ -60,6 +66,12 @@ def build_account_signals(
     status = str(acc.get("status") or "")
     meta = acc.get("meta") or {}
     sig["banned"] = bool(meta.get("banned")) or status == "removed"
+    # 官方资料变更频次（accounts.profile_push 审计）→ account_health 扣分轴
+    try:
+        from src.integrations.account_profile_push import profile_churn_count
+        sig["profile_churn_7d"] = int(profile_churn_count(meta, now, days=7))
+    except Exception:
+        sig["profile_churn_7d"] = 0
 
     if limiter is not None:
         try:
@@ -69,6 +81,21 @@ def build_account_signals(
                 sig["_circuit_open"] = True
         except Exception:
             pass
+
+    # 反封号反馈闭环：近 24h flood/error 计数 → account_health 扣分轴（缺数据视为良性）
+    try:
+        rc = risk_source
+        if rc is None:
+            from src.ops.risk_events import risk_counts_24h as rc
+        counts = rc(platform, account_id, now=now) or {}
+        floods = int(counts.get("flood") or 0)
+        errors = int(counts.get("error") or 0)
+        if floods:
+            sig["flood_waits_24h"] = floods
+        if errors:
+            sig["errors_24h"] = errors
+    except Exception:
+        pass
 
     if extra:
         for k, v in extra.items():
@@ -136,18 +163,46 @@ def fleet_overview(
         sigs.append(sig)
         stage = lifecycle_stage(sig, status, warmup_ramp_days=ramp)
         lifecycle[stage] = lifecycle.get(stage, 0) + 1
+        # P2 2026-08-13 额度双道随行（闸门启用时）：used/cap/auto_cap/reserve
+        # 与发送护栏同一 evaluate——机群卡显示的数就是闸门比较的数。None=闸门未启用。
+        quota = None
+        try:
+            from src.skills.companion_send_gate import evaluate, gate_enabled
+            if gate_enabled(config):
+                _dm = evaluate(sig, config, origin="manual")
+                _da = evaluate(sig, config, origin="auto")
+                quota = {
+                    "used": int(sig.get("sends_today") or 0),
+                    "cap": int(_dm.get("recommended_cap") or 0),
+                    "auto_cap": int(_da.get("auto_cap") or 0),
+                    "reserve": int(_dm.get("reserve_for_manual") or 0),
+                    # daily_cap=现名 / warmup_cap=历史值，双认（P3 更名兼容）
+                    "auto_blocked": bool(
+                        not _da.get("allowed", True)
+                        and _da.get("reason") in ("daily_cap", "warmup_cap")),
+                }
+        except Exception:
+            quota = None
         detail.append({
             "platform": str(platform or "").lower(),
             "account_id": str(account_id or ""),
             "stage": stage,
+            "profile_churn_7d": int(sig.get("profile_churn_7d") or 0),
+            "quota": quota,
         })
 
     fleet = aggregate_fleet(sigs, config)
+    # 机群级资料变更热点（运营一眼看谁在狂改资料）
+    churn_hot = sorted(
+        [d for d in detail if int(d.get("profile_churn_7d") or 0) >= 3],
+        key=lambda x: -int(x.get("profile_churn_7d") or 0),
+    )[:8]
     return {
         "fleet": fleet,
         "lifecycle": lifecycle,
         "accounts": detail,
         "total": len(detail),
+        "profile_churn_hot": churn_hot,
     }
 
 

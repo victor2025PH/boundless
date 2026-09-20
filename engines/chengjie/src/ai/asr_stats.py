@@ -17,10 +17,19 @@ import time
 from typing import Any, Dict, Optional
 
 
+# ASR P0（2026-09-12）事件计数白名单：缓存命中 / 先验重转（含真改了结果的）/ 低置信 /
+# 服务端 no_speech 闸丢弃 / prompt 回声丢弃。白名单外的名字一律丢弃（防拼错撑爆键空间）。
+ASR_EVENT_KINDS = (
+    "cache_hit", "lang_retry", "lang_retry_changed", "low_confidence",
+    "no_speech_gate", "prompt_echo_dropped",
+    "correction",   # ASR P2：坐席改正转写（POST /api/unified-inbox/asr-correction）
+)
+
+
 class ASRTranscribeStats:
     __slots__ = (
         "_lock", "_primary_ok", "_fallback_ok", "_all_failed",
-        "_hallucination_dropped", "_by_provider", "_started_at", "_last_ts",
+        "_hallucination_dropped", "_by_provider", "_events", "_started_at", "_last_ts",
     )
 
     def __init__(self) -> None:
@@ -30,8 +39,20 @@ class ASRTranscribeStats:
         self._all_failed = 0                    # 全链均未产出可用转录
         self._hallucination_dropped = 0         # 幻觉守卫丢弃的转录（等同该级返空）
         self._by_provider: Dict[str, int] = {}  # 回落成功的 provider 分布 {FasterWhisperTranscriber: N}
+        self._events: Dict[str, int] = {k: 0 for k in ASR_EVENT_KINDS}
         self._started_at = time.time()
         self._last_ts = 0.0
+
+    def record_event(self, kind: str) -> None:
+        """记一次白名单事件（缓存命中/先验重转/低置信…）；未知名字静默丢弃。"""
+        try:
+            k = str(kind or "").strip()
+            if k not in self._events:
+                return
+            with self._lock:
+                self._events[k] += 1
+        except Exception:
+            pass
 
     def record(self, *, ok: bool, level: int = 0, provider: str = "") -> None:
         """记一次**顶层**转录结果。
@@ -78,7 +99,17 @@ class ASRTranscribeStats:
                 "fallback_rate": round(self._fallback_ok / attempts, 4) if attempts else 0,
                 "failure_rate": round(self._all_failed / attempts, 4) if attempts else 0,
                 "by_fallback_provider": dict(sorted(self._by_provider.items())),
+                "events": dict(self._events),
+                "transcript_cache": self._cache_stats(),
             }
+
+    @staticmethod
+    def _cache_stats() -> Dict[str, Any]:
+        try:
+            from src.voice_transcriber import get_transcript_cache
+            return get_transcript_cache().stats()
+        except Exception:
+            return {}
 
     def dump_prom(self) -> str:
         lines = [
@@ -92,6 +123,8 @@ class ASRTranscribeStats:
             "# TYPE asr_transcribe_hallucination_dropped_total counter",
             "# HELP asr_transcribe_fallback_ok_by_provider_total Fallback successes by provider",
             "# TYPE asr_transcribe_fallback_ok_by_provider_total counter",
+            "# HELP asr_transcribe_events_total ASR side events (cache_hit / lang_retry / low_confidence / ...)",
+            "# TYPE asr_transcribe_events_total counter",
         ]
         with self._lock:
             lines.append(f"asr_transcribe_primary_ok_total {self._primary_ok}")
@@ -102,6 +135,8 @@ class ASRTranscribeStats:
             for prov, n in sorted(self._by_provider.items()):
                 lines.append(
                     f'asr_transcribe_fallback_ok_by_provider_total{{provider="{_esc(prov)}"}} {int(n)}')
+            for kind, n in self._events.items():
+                lines.append(f'asr_transcribe_events_total{{kind="{_esc(kind)}"}} {int(n)}')
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -111,6 +146,8 @@ class ASRTranscribeStats:
             self._all_failed = 0
             self._hallucination_dropped = 0
             self._by_provider.clear()
+            for k in self._events:
+                self._events[k] = 0
             self._last_ts = 0.0
 
 

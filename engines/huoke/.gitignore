@@ -49,6 +49,9 @@ config/certs/*.pem
 
 # VPN 配置池（含代理账号密码，勿提交）
 src/config/vpn_pool.json
+# VPN 节点真值（含 VLESS UUID + 端点）。2026-08-27 P0：该文件曾被跟踪约 4 个月，
+# 明文 UUID 已按泄露处置；模板见 config/vpn_config.example.json。
+config/vpn_config.json
 
 # 虚拟环境
 venv/

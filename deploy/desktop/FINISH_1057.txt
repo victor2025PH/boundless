@@ -1,0 +1,12 @@
+1.0.57 is built but the public pointer is still 1.0.56.
+Cause: VPS SSH hung on openssl sha512 of the 545MB exe. HTTP site is up.
+Recovery (on 117, after SSH to ubuntu@165.154.233.121 works again):
+
+python -u C:\Users\Administrator\tmp_finish_1057.py
+
+That script flips latest.yml/manifest/announcements and posts channel+group.
+If the script is gone, do what publish_chatx.ps1 does after the exe is already on the VPS:
+  scp latest.yml manifest.json announcements.json to /home/ubuntu/yuntech/public/downloads/
+  pm2 restart yuntech
+  then bash /tmp/_vps_bcast.sh with CHANNEL_NOTICE_FULL.txt
+Do NOT announce while https://bd2026.cc/downloads/latest.yml still says 1.0.56.

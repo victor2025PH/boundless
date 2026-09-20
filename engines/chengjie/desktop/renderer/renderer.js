@@ -1,6 +1,21 @@
 "use strict";
 
+// 壳渲染进程文案单源＝renderer/shell-i18n.js（index.html 的 <head> 内同步加载，
+// 故此处 window.SH 必然已就位）。这行只兜「打包漏文件」的极端情形：宁可显示 key
+// 也绝不让一个 ReferenceError 把整个壳打白。
+if (typeof window.SH !== "function") window.SH = function (k) { return String(k == null ? "" : k); };
+
 const ICONS = { telegram: "✈️", whatsapp: "🟢", line: "💬", messenger: "💠", instagram: "📷", x: "𝕏", zalo: "💙", signal: "🔵" };
+
+// 标签条自有图标（收件箱/新增）：lucide 单色描边，与工作台 ui_icons 同风格、吃 currentColor
+// 主题色——28px 小标签里 emoji 渲染粗糙且不随激活态变色（platform-icons.js 只管平台图标）。
+const INBOX_TAB_SVG =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/>' +
+  '<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>';
+const PLUS_TAB_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 
 // 平台图标：优先真实品牌原生图标(platform-icons.js)，缺库时回落 emoji。
 // inlineDefs 使渐变自包含，跨 shadow / 独立场景均可渲染。
@@ -16,6 +31,8 @@ const INBOX_ID = "__inbox__";
 // 可内嵌官方网页并注入的平台（须与 inject/profiles.js 的 BUILTIN_PROFILES[*].supported 对齐）。
 // telegram/whatsapp：完整定制档；instagram/messenger/x/zalo：通用工厂档（翻译/智能回复/状态可用，
 // 同步回流默认关闭待选择器现场校准，可经 /api/desktop/selector-profiles 热更新打开）。
+// 2026-08-13：后四者在 platform-caps 标 assistOnly——标签「人工」+ 诚实条 + 禁止 HostBridge/
+// conv-ops 伪全自动；全自动产能只认统一收件箱（Messenger=messenger-web 服务器登录）。
 // LINE 无可用完整网页版聊天（line.me 为营销页）→ 仍不内嵌，统一引导到收件箱。
 const EMBEDDABLE = {
   telegram: true, whatsapp: true, instagram: true, messenger: true, x: true, zalo: true,
@@ -39,8 +56,10 @@ function backendLoginJS(cred, path) {
     "(function(){try{" +
     "var c=" + JSON.stringify(cred || {}) + ";" +
     "var b=Object.keys(c).map(function(k){return k+'='+encodeURIComponent(c[k]);}).join('&');" +
+    // X-ChatX-Auto-Login：向服务端自报「这是壳的代登，不是人按的登录按钮」——刚主动退出时
+    // 服务端据此精确拒绝（否则只能靠「120s 内且不带 manual=1」的启发式）。同源 fetch 不触发预检。
     "fetch('/login',{method:'POST'," +
-    "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b," +
+    "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'},body:b," +
     "credentials:'same-origin'})" +
     ".then(function(){" + repl + "})" +
     ".catch(function(){" + repl + "});" +
@@ -103,11 +122,94 @@ function resolveAccounts(cfg) {
     .filter((a) => a.id && a.url);
 }
 
+// ── 融合标题栏（titlebar merge P2 2026-08-22）────────────────────────────────
+// 主窗 titleBarStyle:hidden（win32）后由这条 32px 壳级细条承接拖拽/窗控让位/应急⋯菜单。
+// 点亮判据＝main.js loadFile 带的 ?tb=1（与 ?lang= 同一权威源：主进程知道自己开没开
+// 融合模式，renderer 不做平台猜测）；不带参 → body 类不加、CSS 保持 display:none。
+// ⋯菜单动作全部经 shell.titlebarMenu 回主进程（关于/诊断/更新的实现只有主进程有）；
+// 亮暗档随工作台页面主题：页面 menuAction(theme_*) → 主进程 → cx-titlebar-theme 回推。
+function initTitlebar() {
+  let on = false;
+  try { on = new URLSearchParams(location.search).get("tb") === "1"; } catch (e) { on = false; }
+  const bar = document.getElementById("cx-titlebar");
+  if (!on || !bar) return;
+  document.body.classList.add("cx-tb-on");
+  const ttl = document.getElementById("cx-tb-title");
+  if (ttl) ttl.textContent = document.title || "";
+  const more = document.getElementById("cx-tb-more");
+  const menu = document.getElementById("cx-tb-menu");
+  if (more && menu) {
+    more.addEventListener("click", (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+    document.addEventListener("click", () => { if (!menu.hidden) menu.hidden = true; });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) menu.hidden = true; });
+    menu.addEventListener("click", (e) => {
+      const b = e.target && e.target.closest ? e.target.closest("button[data-tbm]") : null;
+      if (!b) return;
+      menu.hidden = true;
+      try {
+        if (window.shell && typeof window.shell.titlebarMenu === "function") {
+          window.shell.titlebarMenu(b.getAttribute("data-tbm") || "");
+        }
+      } catch (err) { /* 应急菜单桥缺席时静默（老 preload 混装态） */ }
+    });
+  }
+  try {
+    if (window.shell && typeof window.shell.onTitlebarTheme === "function") {
+      window.shell.onTitlebarTheme((mode) => {
+        document.body.classList.toggle("cx-tb-light", String(mode) === "light");
+      });
+    }
+  } catch (err) { /* 主题回推缺席＝保持暗档 */ }
+  // 全屏进出（P2b）：原生窗控在全屏下自动消失，细条同步收起，退出还原
+  try {
+    if (window.shell && typeof window.shell.onTitlebarFs === "function") {
+      window.shell.onTitlebarFs((on) => {
+        document.body.classList.toggle("cx-tb-fs", !!on);
+      });
+    }
+  } catch (err) { /* 回推缺席＝细条常驻，仅损失全屏纯净度 */ }
+}
+initTitlebar();
+
 (async function () {
   const cfg = await window.shell.getConfig();
   // Option C：默认只保留统一收件箱（与网页同源同款），关掉左侧账号栏 rail + 内嵌官方网页 Tab。
   // 置 config.embedded_official_pages.enabled=true 可整套恢复（免真机扫码 + 注入栈）。
-  const EMBEDDED_ON = ((cfg.embedded_official_pages || {}).enabled === true);
+  let EMBEDDED_ON = ((cfg.embedded_official_pages || {}).enabled === true);
+  // ── ui_visibility.manual_console（2026-08-14）：服务端「内部功能显隐」开关统一压制
+  // 内嵌官方网页版整套（rail 平台标签 + ➕新增 + 页内标签条 + openEmbedded 深链）——
+  // 本地配置开着也要过服务端闸（开发者页 /developer 才能放行）。仅在本地已启用时才探
+  // （省一次启动请求）；端点缺席/后端未起＝维持本地配置（fail-open，旧后端零回归）。
+  // ⚠ 必须经主进程 IPC（desktop:ui-flags → backendGet）取数：壳页面是 file:// 源、
+  // 后端默认不回 CORS 头，renderer 直接 fetch 会被 CORS 拦下永远走 fail-open
+  //（2026-08-15 实锤：1.0.33 首包压制全程失效的根因）。
+  // ⚠ 首探失败必须重试（2026-08-15 173 实锤）：坐席机 spawn.enabled=true 时壳与
+  // backend sidecar 同秒启动，sidecar 冷启动 10s+，一次性 2.5s 探针必失败 →
+  // fail-open 把该藏的 rail 留下。故拿不到确定答案时每 5s 补探（最多 2 分钟），
+  // 拿到 manual_console=false 再补挂 no-embedded 类（CSS 整条藏 rail，事后加同样生效）。
+  if (EMBEDDED_ON && window.shell && window.shell.uiFlags) {
+    const applyUiFlags = (d) => {
+      if (!(d && d.ok && d.flags)) return false;          // 未起/失败＝无定论，继续探
+      if (d.flags.manual_console === false) {
+        EMBEDDED_ON = false;
+        const appEl = document.getElementById("app");
+        if (appEl) appEl.classList.add("no-embedded");
+        try { pushShellState(true); } catch (_) {}        // 通知页面收「打开官方网页版」入口
+      }
+      return true;                                        // 有定论（无论显/藏）即停
+    };
+    let settled = false;
+    try { settled = applyUiFlags(await window.shell.uiFlags()); } catch (_) {}
+    if (!settled) {
+      let tries = 0;
+      const t = setInterval(async () => {
+        if (!EMBEDDED_ON || ++tries > 24) { clearInterval(t); return; }
+        let d = null;
+        try { d = await window.shell.uiFlags(); } catch (_) {}
+        if (applyUiFlags(d)) clearInterval(t);
+      }, 5000);
+    }
+  }
   if (!EMBEDDED_ON) {
     const appEl = document.getElementById("app");
     if (appEl) appEl.classList.add("no-embedded");
@@ -133,13 +235,56 @@ function resolveAccounts(cfg) {
   }
   const rail = document.getElementById("rail");
   const stage = document.getElementById("webviews");
+  // 竖栏纵向滚动是原生手势，无需旧横条时代的 wheel→scrollLeft 换轴处理。
+  // Ctrl+1..9 快捷切标签（批次三）：按竖栏可见顺序取第 N 个标签（不含 ➕），复用各标签
+  // 自己的 click 逻辑（via-inbox 项照常跳工作台）。已知边界：焦点落在 webview 页面内部时
+  // 按键被页面吞掉，本快捷键只覆盖壳 UI 持焦的场景（全局劫持需 main 层 before-input-event，
+  // 会连官方网页输入框一起吃 Ctrl+数字，刻意不做）。
+  document.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    if (e.key < "1" || e.key > "9") return;
+    const target = visibleRailItems()[Number(e.key) - 1];
+    if (target) { e.preventDefault(); target.click(); }
+  });
+  function visibleRailItems() {
+    return Array.from(rail.querySelectorAll(".rail-item:not(.rail-add)"))
+      .filter((el) => el.offsetParent !== null);
+  }
+  // 快捷键可发现性：tooltip 里标注 Ctrl+N 序号。不用 MutationObserver 盯 DOM——tooltip
+  // 只在 hover 时显示，鼠标进栏那一刻惰性重算一次即可（序号跟 keydown 同一枚举口径，
+  // 永不漂移）。title 被别处改写时（cur≠上次合成值）以新值为基，不吞外部更新。
+  function refreshRailShortcutHints() {
+    visibleRailItems().forEach((el, i) => {
+      const cur = el.getAttribute("title") || "";
+      if (cur !== el.dataset.tipComposed) el.dataset.tipBase = cur;
+      const base = el.dataset.tipBase || "";
+      const composed = i < 9 ? (base ? base + "\n" : "") + SH("tab.shortcut_hint", { n: i + 1 }) : base;
+      if (composed !== cur) { el.title = composed; el.dataset.tipComposed = composed; }
+    });
+  }
+  rail.addEventListener("mouseenter", refreshRailShortcutHints);
   ACCOUNTS = mergeRuntimeAccounts(resolveAccounts(cfg), loadRuntimeAccounts());
   ACCOUNTS.forEach((a) => {
     ACCOUNT_BY_ID[a.id] = a;
   });
 
+  // ── 页内标签条接管（P2 2026-08-14）：/workspace 页在自己头部（ws-top）之下渲染
+  // cx-shell-strip（数据=本壳 pushShellState），渲染成功经桥回报 stripReady →
+  // 工作台标签激活期间壳竖栏整条让位（视觉上「状态栏移到工作台状态栏下面」）。
+  // 页面每次导航 stripReady 归零（旧页面/加载失败/落在 /login 都不让位——竖栏兜底，
+  // 绝不出现「rail 藏了、页里又没标签条」的死路）；切到内嵌官方页标签时竖栏回归。
+  let _activeTabId = INBOX_ID;
+  let _pageStripLive = false;
+  function syncPageStripTakeover() {
+    const appEl = document.getElementById("app");
+    if (!appEl) return;
+    appEl.classList.toggle("rail-page-strip", _pageStripLive && _activeTabId === INBOX_ID);
+  }
+
   function activate(id) {
     const isInbox = id === INBOX_ID;
+    _activeTabId = id;
+    syncPageStripTakeover();
     document.querySelectorAll(".rail-item").forEach((el) => el.classList.toggle("active", el.dataset.id === id));
     document.querySelectorAll("#webviews webview").forEach((wv) => wv.classList.toggle("active", wv.dataset.id === id));
     // 收件箱(/workspace)页面**永远自带**完整业务助手右栏 → 激活收件箱时一律隐藏桌面原生 #copilot,
@@ -157,6 +302,8 @@ function resolveAccounts(cfg) {
     // 注入状态条只属于内嵌平台 Tab：收件箱激活时隐藏
     InjectStatus.activeId = isInbox ? null : id;
     renderInjectStatus();
+    // Path2 assist-only 诚实条：Messenger 等官方网页可聊但不接全自动
+    if (typeof syncAssistOnlyBanner === "function") syncAssistOnlyBanner(isInbox ? null : id);
   }
   Inbox.activate = activate; // 暴露给模块级「在收件箱打开会话」深链使用
 
@@ -176,14 +323,33 @@ function resolveAccounts(cfg) {
     if (!id) { el.hidden = true; return; }
     const st = deriveInjectState(InjectStatus.byId[id]);
     el.className = "is-" + st.cls;
-    el.querySelector(".is-text").textContent = st.text;
-    el.title = st.detail;
+    // 纯函数只给 code + 插值变量，文案在此按当前壳语言取（见 inject-status.js 顶部说明）
+    el.querySelector(".is-text").textContent = SH("inject." + st.code);
+    el.title = SH("inject." + st.code + ".d", st.vars);
     el.hidden = false;
   }
   function onInjectStatus(payload, wv) {
     if (!payload || !wv) return;
     InjectStatus.byId[wv.dataset.id] = payload;
+    updateRailHealth(wv.dataset.id);   // 每个号刷自己的栏点(不只当前聚焦),这才是「一眼看全」
     if (InjectStatus.activeId === wv.dataset.id) renderInjectStatus();
+  }
+
+  // 账号栏健康三态点：把该账号最近一次 inject-status 经 webmulti.railBadge 滚成一枚角标点
+  // （dot=on/warn/off/idle）。当前 renderer 只有 inject 这一维可靠（session 在线 / translate
+  // 可达尚未逐账号接线）→ 直接用 inject 的 cls 驱动,诚实反映「已知的」；将来接了另两维,
+  // 换成 accountHealthState(三维取最差) 即可,railBadge 出参形状不变、这里零改动。
+  function updateRailHealth(id) {
+    if (typeof railBadge !== "function") return; // webmulti 未加载：静默降级,不影响主链
+    const item = document.querySelector('.rail-item[data-id="' + id + '"]');
+    if (!item) return;
+    const dot = item.querySelector(".rail-dot");
+    if (!dot) return;
+    const st = deriveInjectState(InjectStatus.byId[id]);
+    const badge = railBadge({ level: st.cls, textKey: "inject." + st.code });
+    dot.className = "rail-dot " + badge.dot;
+    dot.title = badge.textKey ? SH(badge.textKey) : "";
+    pushShellState();   // 健康变化同步回推页面抽屉（内容级去重，常态零流量）
   }
   buildInjectStatusPill();
 
@@ -196,21 +362,45 @@ function resolveAccounts(cfg) {
     const base = (backend.base_url || "http://127.0.0.1:18799").replace(/\/+$/, "");
     // navPath=用于路由判定的纯路径；navTarget=实际加载/登录回跳的相对地址（含 ?lang= 语言对齐）
     const navPath = ui.path || "/workspace";
-    const lang = ui.lang || "";
-    let navTarget = navPath + (lang ? (navPath.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(lang) : "");
-    // 桌面壳是深色专属 → 给嵌入的 /workspace 强制 ?theme=dark，避免独立 webview 分区 auto→跟随系统出现「深色壳里白聊天」。
-    navTarget += (navTarget.includes("?") ? "&" : "?") + "theme=dark";
-    const fullUrl = base + navTarget;
+    // ?lang= 只镜像壳配置 unified_inbox.lang（首帧对齐；空=跟随系统不带）。工作台里切语言
+    // 时主进程同步配置并回推（onShellLang 第二参），这里随之重算——否则 homeUrl/登录回跳
+    // 一直带着启动那一刻的 ?lang=，中间件 ?lang= > cookie，切完语言一回「家」就被钉回旧语。
+    function inboxTargets(langCfg) {
+      const lang = String(langCfg || "");
+      let t = navPath + (lang ? (navPath.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(lang) : "");
+      // 桌面壳是深色专属 → 给嵌入的 /workspace 强制 ?theme=dark，避免独立 webview 分区 auto→跟随系统出现「深色壳里白聊天」。
+      t += (t.includes("?") ? "&" : "?") + "theme=dark";
+      return { navTarget: t, fullUrl: base + t };
+    }
+    let { navTarget, fullUrl } = inboxTargets(ui.lang);
+    Inbox.setLangConfig = function (langCfg) {
+      const next = String(langCfg == null ? "" : langCfg);
+      if (next === String(ui.lang || "")) return false;
+      ui.lang = next;                       // cfg 快照同步（后续读 cfg.unified_inbox.lang 的都跟上）
+      ({ navTarget, fullUrl } = inboxTargets(next));
+      Inbox.homeUrl = fullUrl;
+      return true;
+    };
     // 凭据链：优先 token，回退用户名/密码（token 为空或失效时自动接力）
+    // 用户管理 P0-2：backend.auto_login=false（坐席机开关）→ 不自动登录，每次启动露出登录页
+    // 让操作员用自己的子帐号登录；backend.token 仍供 sidecar/API 使用，两者解耦。
     const creds = [];
-    if (backend.token) creds.push({ auth_token: backend.token });
-    if (backend.user && backend.pass) creds.push({ username: backend.user, password: backend.pass });
+    if (backend.auto_login !== false) {
+      if (backend.token) creds.push({ auth_token: backend.token });
+      if (backend.user && backend.pass) creds.push({ username: backend.user, password: backend.pass });
+    }
 
     const item = document.createElement("div");
     item.className = "rail-item active";
     item.dataset.id = INBOX_ID;
-    item.title = "智聊 · 统一收件箱";
-    item.innerHTML = `<span class="ic">📥</span><span>${ui.label || "统一收件箱"}</span>`;
+    item.title = SH("rail.inbox.title");
+    item.setAttribute("aria-label", SH("console.manual"));
+    // rail-badge＝全局未读徽标：数据由 /workspace 页面经 inbox-preload.js 桥回推
+    // （cmd=badge），壳自己不另拉后端——未读口径单源在页面聚合逻辑里。
+    // rail-chip「AI+人工」＝模式徽章：与官方平台组的「人工」chip 构成两类入口的色彩语义。
+    item.innerHTML = `<span class="ic">${INBOX_TAB_SVG}</span><span>${ui.label || SH("console.manual")}</span>` +
+      `<span class="rail-chip" title="${SH("rail.inbox.chip_title")}">${SH("rail.inbox.chip")}</span>` +
+      '<span class="rail-badge" id="rail-inbox-badge" hidden></span>';
     item.addEventListener("click", () => activate(INBOX_ID));
     rail.appendChild(item);
 
@@ -218,11 +408,30 @@ function resolveAccounts(cfg) {
     wv.dataset.id = INBOX_ID;
     wv.dataset.kind = "backend";
     wv.className = "active";
-    wv.setAttribute("src", fullUrl);
+    // 启动闸门：先挂空白页，等后端探活通过再 loadURL（见 bootLoad）。
+    // 直接把 fullUrl 写进 src 会与后端冷启动赛跑——输了这一跑，工作台的
+    // Service Worker 会用离线壳接管这次导航（HTTP 200 且 URL 不变），
+    // 壳误判为加载成功 → 遮罩消失 + 自动重连停摆 → 用户只能手点「重新连接」。
+    wv.setAttribute("src", "about:blank");
     wv.setAttribute("partition", "persist:backend-workspace");
     wv.setAttribute("allowpopups", "true");
+    // 反向桥 preload：向 /workspace 页面暴露 window.__chatxShell（打开官方网页版标签 /
+    // 未读徽标回推）。preload 属性须在挂载(appendChild)前设置；跨导航（登录回跳）持续生效。
+    // 纯浏览器打开同一页面时没有这份 preload → 页面按「桥不存在」降级，模板零分叉。
+    try { wv.setAttribute("preload", new URL("inbox-preload.js", window.location.href).toString()); } catch (_) {}
+    wv.addEventListener("ipc-message", (e) => {
+      if (e.channel === "chatx-bridge") onShellBridge(e.args[0]);
+    });
+    // 页面每次导航（登录回跳/手动刷新）preload 内的状态快照清零 → 强制重推当前标签状态；
+    // 页内标签条同步归零（新页面须重新 stripReady 才让位竖栏，防「藏了 rail 页里又没条」死路）
+    wv.addEventListener("dom-ready", () => {
+      _pageStripLive = false;
+      syncPageStripTakeover();
+      pushShellState(true);
+    });
     wv._loginIdx = 0;       // 凭据链游标
     wv._loginPending = false; // 登录尝试进行中标记
+    wv._manualLogin = false;  // 人主动退出后的手动登录态（/login?manual=1 置位，进站/重试清零）
     stage.appendChild(wv);
 
     // ── 连接遮罩（loading / error）：盖在收件箱 webview 上 ──────────────
@@ -231,8 +440,8 @@ function resolveAccounts(cfg) {
     overlay.innerHTML =
       '<div class="inbox-overlay-card">' +
       '<div class="inbox-spinner"></div>' +
-      '<div class="inbox-msg">正在连接后台…</div>' +
-      '<button class="inbox-retry" hidden>重试连接</button>' +
+      `<div class="inbox-msg">${SH("conn.connecting")}</div>` +
+      `<button class="inbox-retry" hidden>${SH("conn.retry")}</button>` +
       "</div>";
     stage.appendChild(overlay);
     const msgEl = overlay.querySelector(".inbox-msg");
@@ -242,6 +451,10 @@ function resolveAccounts(cfg) {
     Inbox.wv = wv;
     Inbox.overlay = overlay;
     Inbox.phase = "loading";
+    // #158：收件箱「家」地址（含 ?lang=/&theme=）——onOpenWorkspace 判 webview 是否漂去了
+    // 子页（/workspace/drafts 等）并据此导航回来；单源在此（切语言经 Inbox.setLangConfig 重算），
+    // 别在承接处再拼一份。
+    Inbox.homeUrl = fullUrl;
 
     function setPhase(phase, msg) {
       Inbox.phase = phase;
@@ -253,6 +466,11 @@ function resolveAccounts(cfg) {
       // 仅在本标签激活时显示遮罩；ready 态彻底隐藏
       const active = item.classList.contains("active");
       overlay.style.display = (phase !== "ready" && active) ? "flex" : "none";
+      // 开机动画层（splash.js）镜像同一状态机：phase/msg 单源在此，splash 不自算一套
+      //（error 文案 verbatim 透传、ready 收幕；splash 缺席时该事件无人消费，零影响）。
+      try {
+        window.dispatchEvent(new CustomEvent("aitr:inbox-phase", { detail: { phase: phase, msg: msg || "" } }));
+      } catch (e) { /* 事件桥异常不影响遮罩 */ }
     }
     // 供 rail 切换联动：切到收件箱时按阶段恢复遮罩，切走时隐藏
     Inbox.applyVisibility = function (active) {
@@ -276,9 +494,9 @@ function resolveAccounts(cfg) {
           const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
           const phase = st && st.status;
           if (phase === "starting" || phase === "probing")
-            setPhase("error", "正在启动后台服务，请稍候…（首次启动较慢）");
+            setPhase("error", SH("conn.spawning"));
           else if (phase === "failed")
-            setPhase("error", "后台启动失败：" + (st.lastError || "未知错误") + "\n详见 用户数据/logs/backend.log；将持续重试…");
+            setPhase("error", SH("conn.spawn_failed", { err: st.lastError || SH("conn.err_unknown") }));
         } catch (e) {}
         Inbox._reconnectTimer = setTimeout(tick, 2000);
       };
@@ -286,71 +504,201 @@ function resolveAccounts(cfg) {
     }
 
     function reload() {
+      Inbox._bootAborted = true; // 手动重试接管启动闸门，避免闸门稍后再导航一次
       stopReconnectPoll();
       wv._loginIdx = 0;
       wv._loginPending = false;
+      wv._manualLogin = false; // 手动重试 = 用户要回自动登录
+      wv._manualFlashed = false;
       wv._phase = undefined;
-      setPhase("loading", "正在连接后台…");
+      setPhase("loading", SH("conn.connecting"));
       try { wv.loadURL(fullUrl); } catch (e) { try { wv.reload(); } catch (e2) {} }
     }
     retryBtn.addEventListener("click", reload);
+    // 开机动画故障面板的「重试连接」：回派事件复用同一 reload 闭环（绝不长第二套重试逻辑）。
+    window.addEventListener("aitr:splash-retry", reload);
 
     // 单一导航处理：凭据链自动登录 + 三态遮罩。
     // _loginIdx 指向下一组待试凭据；_loginPending 防同一次 /login 加载被 dom-ready+did-navigate 重复触发。
     function onNav(url) {
+      if (!url || url.indexOf("about:") === 0) return; // 启动闸门期的空白页，不参与状态判定
       let p = "";
       try { p = new URL(url).pathname; } catch (e) { return; }
-      if (p === navPath) { wv._phase = "done"; wv._loginIdx = 0; setPhase("ready"); return; }
+      if (p === navPath) {
+        // 路径对 ≠ 真的进了工作台：PWA 离线壳被 SW 回落时 URL 仍是 navPath 且 200。
+        // 用页面自带的 data-ws-offline 标记区分，识破后回到 error 态继续自动重连。
+        wv.executeJavaScript(
+          "!!(document.body && document.body.dataset && document.body.dataset.wsOffline)"
+        ).then((isOfflineShell) => {
+          if (!isOfflineShell) { wv._phase = "done"; wv._loginIdx = 0; wv._manualLogin = false; wv._manualFlashed = false; setPhase("ready"); return; }
+          wv._phase = "error";
+          setPhase("error", SH("conn.offline_shell", { base: base }));
+          startReconnectPoll();
+        }).catch(() => {
+          // 旧后端不带该标记 / 取值失败 → 保持原行为，不因探测失败卡住用户
+          wv._phase = "done"; wv._loginIdx = 0; wv._manualLogin = false; wv._manualFlashed = false; setPhase("ready");
+        });
+        return;
+      }
       if (p === "/login") {
         if (wv._loginPending) return; // 本次登录尝试进行中，等其 location.replace
+        // 用户管理 P0-1：/logout 落地 /login?manual=1 =「人主动退出」——进入手动登录态，
+        // 不再跑凭据链（否则退出被壳秒级令牌重登吃掉，子帐号永远见不到登录表单）。
+        // 态是粘性的：密码错重渲染的 /login 无 query 也不自动登录；进站成功 / 手动重试解除。
+        try { if (new URL(url).searchParams.get("manual") === "1") wv._manualLogin = true; } catch (e) {}
+        if (wv._manualLogin) {
+          wv._phase = "manual";
+          setPhase("ready");
+          if (!wv._manualFlashed) { wv._manualFlashed = true; flash(SH("conn.login_manual_out")); }
+          return;
+        }
         const idx = wv._loginIdx || 0;
         if (idx < creds.length) {
           wv._loginIdx = idx + 1;
           wv._loginPending = true;
-          setPhase("loading", idx === 0 ? "正在登录后台…" : "首选凭据失败，尝试备用凭据…");
-          wv.executeJavaScript(backendLoginJS(creds[idx], navTarget)).catch(() => {});
+          setPhase("loading", SH(idx === 0 ? "conn.logging_in" : "conn.logging_in_alt"));
+          // B95：回跳目标优先取 /login?next=（会话中途过期时=用户本次真想去的页），
+          // 无 next 才回工作台首页——否则「点数据洞察」重登后被弹回工作台，静默且诡异。
+          let dest = navTarget;
+          try {
+            const nx = new URL(url).searchParams.get("next") || "";
+            if (nx && nx.charAt(0) === "/" && nx.indexOf("//") !== 0) dest = nx;
+          } catch (e) { /* keep navTarget */ }
+          wv.executeJavaScript(backendLoginJS(creds[idx], dest)).catch(() => {});
         } else {
           // 凭据用尽（或未配置）：露出登录页让人工处理
           wv._phase = "failed";
           setPhase("ready");
-          if (creds.length) flash("自动登录失败，请在页面手动登录");
+          if (creds.length) flash(SH("conn.login_manual"));
         }
         return;
       }
-      // 其它后台子路径（/setup 等）：直接展示
+      // 其它后台子路径（/setup、/workspace/dash 等）：直接展示；已进站 = 手动登录态结束
+      wv._manualLogin = false; wv._manualFlashed = false;
       setPhase("ready");
     }
 
     wv.addEventListener("did-start-loading", () => {
       wv._loginPending = false; // 新一次加载开始（含 replace 跳转），解除登录进行中标记
-      if (wv._phase !== "done") setPhase("loading", Inbox.phase === "loading" ? msgEl.textContent : "正在连接后台…");
+      if (wv._phase !== "done") setPhase("loading", Inbox.phase === "loading" ? msgEl.textContent : SH("conn.connecting"));
     });
-    wv.addEventListener("dom-ready", () => { try { onNav(wv.getURL()); } catch (e) {} });
-    wv.addEventListener("did-navigate", (e) => onNav(e.url));
+    wv.addEventListener("dom-ready", () => { wv._navAlive = true; try { onNav(wv.getURL()); } catch (e) {} });
+    wv.addEventListener("did-navigate", (e) => { wv._navAlive = true; onNav(e.url); });
     wv.addEventListener("page-title-updated", (e) => {
       const t = String(e.title || "").trim();
-      if (!t || !window.shell || !window.shell.setWindowTitle) return;
+      if (!t) return;
+      // 融合标题栏细条同步镜像（系统标题栏隐藏后，这里是标题唯一可见处）
+      try {
+        const el = document.getElementById("cx-tb-title");
+        if (el && document.body.classList.contains("cx-tb-on")) el.textContent = t;
+      } catch (err) { /* 细条缺席不影响 OS 标题透传 */ }
+      if (!window.shell || !window.shell.setWindowTitle) return;
       // 嵌入页 title 已由后端按生效品牌渲染（白标可改），直接透传到 OS 窗口标题——
       // 不再硬编码「智聊」，否则白标客户会被强改回默认品牌。
       window.shell.setWindowTitle(t);
     });
     wv.addEventListener("did-fail-load", (e) => {
       if (!e.isMainFrame) return;
+      wv._navAlive = true; // 失败也是「导航链活着」——看门狗只抓完全静默的吞导航
       if (e.errorCode === -3) return; // ERR_ABORTED：重定向/replace 的正常中断，忽略
       wv._phase = "error";
-      setPhase("error", "无法连接后台服务（" + (e.errorDescription || ("错误 " + e.errorCode)) + "）。\n正在等待后台启动并自动重连…\n后端地址：" + base);
+      setPhase("error", SH("conn.fail_load", {
+        why: e.errorDescription || SH("conn.err_code", { code: e.errorCode }),
+        base: base,
+      }));
       startReconnectPoll();
     });
 
+    // ── 启动闸门：后端可达后才真正加载工作台 ─────────────────────────────
+    // 安装版的 backend.exe 冷启动常需 15-30s（PyInstaller 解压 + 初始化）。
+    // 先探活再导航，把「和后端赛跑」变成「等后端就位」，顺带让首屏不再闪 /login。
+    const BOOT_POLL_MS = 700;
+    const BOOT_ESCAPE_MS = 20000; // 超过它就露出可点的错误态（但后台继续自愈，不放弃）
+    async function bootLoad() {
+      // 探活 API 缺失（老壳/异常打包）→ 退回「直接加载」旧行为，绝不把用户卡在遮罩后面
+      if (!window.shell || typeof window.shell.backendHealth !== "function") {
+        try { wv.loadURL(fullUrl); } catch (e) { wv.setAttribute("src", fullUrl); }
+        return;
+      }
+      const t0 = Date.now();
+      Inbox._bootAborted = false;
+      for (;;) {
+        if (Inbox._bootAborted) return; // 用户点了「重试连接」，导航交给 reload()
+        let ok = false, conflict = null;
+        try {
+          const h = await window.shell.backendHealth();
+          ok = !!(h && h.ok);
+          if (h && h.conflict) conflict = String(h.error || "");
+        } catch (e) {}
+        // 端口冲突：继续等只会一直等（对方一直在应答），必须立刻告诉用户怎么办。
+        if (conflict !== null) {
+          setPhase("error", SH("conn.port_conflict", { who: conflict, base: base }));
+          return;
+        }
+        if (ok) break;
+
+        const secs = Math.round((Date.now() - t0) / 1000);
+        let spawnPhase = "", spawnErr = "";
+        try {
+          const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
+          spawnPhase = (st && st.status) || "";
+          spawnErr = (st && st.lastError) || "";
+        } catch (e) {}
+
+        // 20s 内静默等待（正常冷启动），之后升级为 error 态：重试按钮可见、
+        // 后台轮询不停。既不让用户面对无出口的转圈，也不放弃自动恢复。
+        if (Date.now() - t0 > BOOT_ESCAPE_MS || spawnPhase === "failed") {
+          const why = spawnPhase === "failed"
+            ? SH("conn.spawn_failed_short", { err: spawnErr || SH("conn.err_unknown") })
+            : SH("conn.waiting_secs", { secs: secs });
+          setPhase("error", SH("conn.auto_retry", { why: why, base: base }));
+        } else if (secs >= 3) {
+          // B38（P2-9 2026-08-22）：真·首启（本壳从未成功连上过后端）等待期
+          // 说人话——sidecar 冷启动要解包初始化，泛泛的「启动中」让用户以为
+          // 卡死（_209 实录）。标记在首次探活成功时落，此后永远走常规文案，
+          // 「仅此一次」绝不对老用户复读。
+          let _first = false;
+          try { _first = !localStorage.getItem("aitr.shell.booted_once"); } catch (e) {}
+          setPhase("loading", SH(_first ? "conn.first_boot_init" : "conn.starting_secs", { secs: secs }));
+        }
+        await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
+      }
+      if (Inbox._bootAborted) return;
+      try { localStorage.setItem("aitr.shell.booted_once", "1"); } catch (e) {}
+      setPhase("loading", SH("conn.loading_ws"));
+      wv._navAlive = false;
+      try { wv.loadURL(fullUrl); } catch (e) { wv.setAttribute("src", fullUrl); }
+      // 装载看门狗（2026-08-15 117 实锤）：分区里 v5 之前的旧 Service Worker 会把
+      // /workspace 导航整个吞掉——dom-ready / did-navigate / did-fail-load 全静默，
+      // 遮罩钉死「正在载入工作台…」；且 SW 只在成功导航时才自更新，被吞就永远自锁。
+      // 后端探活刚通过（bootLoad 前提）而导航 25s 无任何动静＝按 SW 挂死处理：
+      // 经主进程清该分区 serviceworkers+cachestorage 后重载一次（仅一次防循环；
+      // 老壳无 clearWorkspaceSw 则只重载，不劣于旧行为）。
+      setTimeout(async () => {
+        if (wv._navAlive || Inbox._bootAborted || wv._swPurged) return;
+        wv._swPurged = true;
+        try {
+          if (window.shell && window.shell.clearWorkspaceSw) await window.shell.clearWorkspaceSw();
+        } catch (e) {}
+        reload();
+      }, 25000);
+    }
+
     // 主动先点亮 loading 遮罩，遮住首屏可能的 /login 闪屏（不依赖 did-start-loading 时序）
-    setPhase("loading", "正在连接后台…");
+    setPhase("loading", SH("conn.connecting"));
+    bootLoad();
     return true;
   }
 
   const inboxOn = buildInboxTab();
+  // 收件箱未启用（纯内嵌账号模式）＝没有启动闸门可等：立刻通知开机动画收幕，
+  // 否则 splash 等一个永远不会来的 ready 事件（唯一的死等路径，堵死）。
+  if (!inboxOn) {
+    try { window.dispatchEvent(new CustomEvent("aitr:inbox-phase", { detail: { phase: "ready", msg: "" } })); } catch (e) { /* ignore */ }
+  }
 
   if (!ACCOUNTS.length && !inboxOn) {
-    stage.innerHTML = '<div class="placeholder">config.json 里没有启用任何账号</div>';
+    stage.innerHTML = `<div class="placeholder">${SH("stage.no_accounts")}</div>`;
     return;
   }
 
@@ -359,6 +707,18 @@ function resolveAccounts(cfg) {
 
   let railAddBtn = null;
   let addMenuEl = null;
+
+  // 竖栏 64px 只放得下短名：取「账号N」尾缀或首 4 字，全名恒在 tooltip（title）里
+  // 尾缀正则须同时认中英两种自动标签（account.auto_label 双语，见 shell-i18n.js）——
+  // 只认中文时英文壳的「Telegram Account 2」会被截成「Tele…」，同平台多号全长一样。
+  function shortTabLabel(label) {
+    const s = String(label || "").trim();
+    const m = s.match(/((?:账号|Account)\s*\d+)$/i);
+    // 中文尾缀去掉词与数字间的空格（「账号 2」→「账号2」，64px 竖栏省一个字位）；
+    // 英文「Account 2」必须留空格。按字符判语言，避免在代码里再写一遍中文字面量。
+    if (m) return /[\u4e00-\u9fff]/.test(m[1]) ? m[1].replace(/\s+/g, "") : m[1].trim();
+    return s.length > 5 ? s.slice(0, 4) + "…" : s;
+  }
 
   // ── 单个内嵌平台账号 → rail Tab + webview。初始渲染与运行时新增共用，按 id 幂等。──────
   function addAccountTab(a, opts) {
@@ -373,10 +733,21 @@ function resolveAccounts(cfg) {
     const item = document.createElement("div");
     item.className = "rail-item" + (active ? " active" : "");
     item.dataset.id = a.id;
-    item.title = `${a.label}（${a.platform}:${a.id}）`;
+    const _pc = window.PlatformCaps;
+    const _assistTagKey = (_pc && _pc.assistOnlyTabTagKey(a.platform)) || "";
+    const _assistTag = _assistTagKey ? SH(_assistTagKey) : "";
+    item.title = _assistTag
+      ? SH("tab.assist_title", { label: a.label })
+      : SH("tab.plain_title", { label: a.label, platform: a.platform, id: a.id });
+    item.setAttribute("aria-label", a.label);
     // 运行时新增的账号(_auto)带「✕」可就地移除；config.json 定义的账号不可在此删（交配置管理）
-    const rmHtml = a._auto ? '<span class="rm" title="移除该内嵌标签">✕</span>' : "";
-    item.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${a.label}</span>${rmHtml}`;
+    const rmHtml = a._auto ? `<span class="rm" title="${SH("tab.remove")}">✕</span>` : "";
+    const tagHtml = _assistTag
+      ? `<span class="via-tag assist" title="${SH("tab.assist_chip_title")}">${_assistTag}</span>`
+      : "";
+    // rail-dot＝账号健康三态点；rail-meta 把 chip/点/✕ 收成一行，竖栏标签不无限长高。
+    item.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${shortTabLabel(a.label)}</span>` +
+      `<span class="rail-meta">${tagHtml}<span class="rail-dot idle" title="${SH("tab.dot_idle")}"></span>${rmHtml}</span>`;
     item.addEventListener("click", (e) => {
       if (e.target && e.target.classList && e.target.classList.contains("rm")) {
         e.stopPropagation();
@@ -384,6 +755,12 @@ function resolveAccounts(cfg) {
         return;
       }
       activate(a.id);
+    });
+    // 浏览器习惯：鼠标中键关标签（仅运行时新增的 _auto 账号，与 ✕ 同权限规则）
+    item.addEventListener("auxclick", (e) => {
+      if (e.button !== 1 || !a._auto) return;
+      e.preventDefault();
+      removeEmbeddedAccount(a.id);
     });
     railInsert(item);
 
@@ -404,6 +781,7 @@ function resolveAccounts(cfg) {
     wv.addEventListener("ipc-message", (e) => {
       if (e.channel === "active-chat") onActiveChat(e.args[0], wv);
       else if (e.channel === "inject-status") onInjectStatus(e.args[0], wv);
+      else if (e.channel === "fill-result") onFillResult(e.args[0]);
     });
     wv.addEventListener("dom-ready", () => {
       try {
@@ -413,6 +791,7 @@ function resolveAccounts(cfg) {
       }
     });
     stage.appendChild(wv);
+    syncRailVisibility();
     return true;
   }
 
@@ -422,13 +801,16 @@ function resolveAccounts(cfg) {
     const ri = document.createElement("div");
     ri.className = "rail-item via-inbox";
     ri.dataset.id = "viainbox:" + a.id;
-    ri.title = `${a.label}（${a.platform}）无官方网页版聊天，请在「统一收件箱」中使用`;
-    ri.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${a.label}</span><span class="via-tag">↪收件箱</span>`;
+    ri.title = SH("tab.via_inbox_title", { label: a.label, platform: a.platform });
+    ri.setAttribute("aria-label", a.label);
+    ri.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${shortTabLabel(a.label)}</span>` +
+      `<span class="via-tag">${SH("tab.via_workbench")}</span>`;
     ri.addEventListener("click", () => {
       activate(INBOX_ID);
-      flash(`${a.label} 无官方网页版，已切到统一收件箱`);
+      flash(SH("tab.via_inbox_flash", { label: a.label }));
     });
     railInsert(ri);
+    syncRailVisibility();
   }
 
   // 新 Tab 一律插在「➕新增」按钮之前，保持 ➕ 常驻队尾
@@ -437,12 +819,62 @@ function resolveAccounts(cfg) {
     else rail.appendChild(node);
   }
 
+  // 标签条按需出现（rail-solo）：只剩收件箱一个标签（无任何内嵌/↪收件箱 Tab）时整条隐藏，
+  // 常态桌面与网页版零差异；从抽屉「打开官方网页版」开出第一个标签才浮现（浏览器心智），
+  // 关掉最后一个自动消失——入口由页面账号抽屉兜底，不会死路。
+  // 收件箱未启用（纯内嵌形态）时标签条是唯一导航，恒显示；Option C（EMBEDDED_ON=false）
+  // 仍由 no-embedded 类整条隐藏，不归这里管。
+  function syncRailVisibility() {
+    const appEl = document.getElementById("app");
+    if (!appEl || !EMBEDDED_ON) return;
+    const hasTabs = !!rail.querySelector('.rail-item:not(.rail-add):not([data-id="' + INBOX_ID + '"])');
+    appEl.classList.toggle("rail-solo", inboxOn && !hasTabs);
+    pushShellState();   // 标签增删与状态回推同触发点（内部按内容去重，不会刷噪音）
+  }
+
+  // ── 壳 → 页 状态回推（P2）：已打开的内嵌标签清单 + 注入健康 ─────────────────
+  // 抽屉「打开官方网页版」入口据此升级为「切换到网页版标签 + 健康提示」——
+  // 「这个号的网页版开没开、注入健不健康」终于在账号抽屉一处看全。
+  // 传输走 wv.send("chatx-bridge-state")（preload 转 postMessage 进页面世界）；
+  // health 沿用 railBadge 的 dot 词表（on/warn/off/idle），与标签条圆点同源同义。
+  let _lastShellStateJson = "";
+  function collectShellState() {
+    const embedded = [];
+    const _pcState = window.PlatformCaps;
+    ACCOUNTS.forEach((a) => {
+      if (!RENDERED.has(a.id)) return;
+      const st = deriveInjectState(InjectStatus.byId[a.id]);
+      const dot = (typeof railBadge === "function")
+        ? railBadge({ level: st.cls }).dot : "idle";
+      embedded.push({
+        id: a.id, platform: a.platform, label: a.label, health: dot,
+        // assist＝assist-only 平台（Messenger/IG/X/Zalo 官方网页仅人工），页内标签条据此挂「人工」角标
+        assist: !!(_pcState && _pcState.isAssistOnlyEmbed(a.platform)),
+      });
+    });
+    // enabled＝内嵌能力总闸（Option C）。页面据此决定「打开官方网页版」入口显隐——
+    // 壳明说关了还渲染入口，点了只会弹「未启用」＝死入口。Option C 下唯一的推送点
+    // 是收件箱 dom-ready 强推（syncRailVisibility/updateRailHealth 都不会跑），
+    // 每次页面加载必达，页面不需要超时兜底。
+    // strip＝本壳支持「页内标签条接管」（stripReady 握手 + openEmbedded 认 shell_tab_id）。
+    // 旧壳无此键 → 页面不渲染 cx-shell-strip，双向前向兼容（老包热更页面零变化）。
+    return { enabled: EMBEDDED_ON, strip: true, embedded };
+  }
+  function pushShellState(force) {
+    if (!Inbox.wv) return;
+    const state = collectShellState();
+    const j = JSON.stringify(state);
+    if (!force && j === _lastShellStateJson) return;   // 健康点常态不变，重复推送只是噪音
+    _lastShellStateJson = j;
+    try { Inbox.wv.send("chatx-bridge-state", state); } catch (_) { /* 收件箱未就绪，下次触发再推 */ }
+  }
+
   // ── 运行时新增内嵌账号（无需改 config.json / 重启）：➕ → 选平台 → 起 webview 内扫码 ──────
   function buildRailAddButton() {
     const btn = document.createElement("div");
     btn.className = "rail-item rail-add";
-    btn.title = "新增内嵌账号标签（Telegram / WhatsApp 网页版，在标签内扫码登录）";
-    btn.innerHTML = '<span class="ic">➕</span><span>新增</span>';
+    btn.title = SH("tab.add_title");
+    btn.innerHTML = `<span class="ic">${PLUS_TAB_SVG}</span><span>${SH("tab.add_label")}</span>`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleAddMenu(btn);
@@ -456,8 +888,14 @@ function resolveAccounts(cfg) {
     const menu = document.createElement("div");
     menu.className = "rail-add-menu";
     const embeddables = Object.keys(EMBEDDABLE).filter((p) => EMBEDDABLE[p]);
+    const _pcMenu = window.PlatformCaps;
     menu.innerHTML = embeddables
-      .map((p) => `<button data-plat="${p}"><span class="ic">${platIconHtml(p, 16)}</span>${(TEMPLATES[p] && TEMPLATES[p].name) || p}</button>`)
+      .map((p) => {
+        const name = (TEMPLATES[p] && TEMPLATES[p].name) || p;
+        const hintKey = (_pcMenu && _pcMenu.assistOnlyMenuHintKey(p)) || "";
+        const hint = hintKey ? SH(hintKey) : "";
+        return `<button data-plat="${p}"><span class="ic">${platIconHtml(p, 16)}</span>${name}${hint}</button>`;
+      })
       .join("");
     menu.addEventListener("click", (e) => {
       const b = e.target.closest("[data-plat]");
@@ -466,9 +904,12 @@ function resolveAccounts(cfg) {
       closeAddMenu();
     });
     document.body.appendChild(menu);
+    // 标签栏在左侧竖排 → 菜单贴锚点右侧弹出，底部不够时向上收
     const r = anchor.getBoundingClientRect();
-    menu.style.left = r.right + 6 + "px";
-    menu.style.top = r.top + "px";
+    menu.style.left = Math.round(r.right + 6) + "px";
+    const mh = menu.offsetHeight || 0;
+    const top = Math.min(Math.round(r.top), Math.max(8, window.innerHeight - mh - 8));
+    menu.style.top = top + "px";
     addMenuEl = menu;
     // 下一拍起监听全局点击关菜单（避免本次 ➕ 点击立即触发；关闭时显式移除，防监听堆积）
     setTimeout(() => document.addEventListener("click", closeAddMenu), 0);
@@ -483,20 +924,21 @@ function resolveAccounts(cfg) {
   function nextLabel(platform) {
     const base = (TEMPLATES[platform] && TEMPLATES[platform].name) || platform;
     const n = ACCOUNTS.filter((a) => a.platform === platform).length + 1;
-    return `${base} 账号${n}`;
+    return SH("account.auto_label", { base: base, n: n });
   }
 
   async function addEmbeddedAccount(platform) {
-    if (!isEmbeddable(platform)) return flash("该平台无可内嵌网页版");
+    if (!isEmbeddable(platform)) return flash(SH("add.no_web"));
     const id = `auto-${platform}-${Date.now().toString(36)}`;
     const acc = buildRuntimeAccount({ id, platform, label: nextLabel(platform), template: TEMPLATES[platform] });
-    if (!acc) return flash("无法新增：缺少该平台网页地址");
+    if (!acc) return flash(SH("add.no_url"));
     if (isWhatsappPlatform(platform)) await ensureWhatsappSessionUa(acc);
     ACCOUNTS.push(acc);
-    if (!addAccountTab(acc, { active: true })) return flash("新增失败");
+    if (!addAccountTab(acc, { active: true })) return flash(SH("add.failed"));
     persistRuntimeAccounts();
     activate(acc.id);
-    flash(`已新增内嵌标签：${acc.label}（请在标签内扫码登录）`);
+    flash(SH("add.done", { label: acc.label }));
+    return acc; // 双面板融合 P0：调用方（openEmbedded 深链）需要新标签的账号对象做会话定位
   }
 
   function removeEmbeddedAccount(id) {
@@ -516,19 +958,107 @@ function resolveAccounts(cfg) {
       const fb = inboxOn ? INBOX_ID : ((ACCOUNTS.find((a) => isEmbeddable(a.platform)) || {}).id || INBOX_ID);
       activate(fb);
     }
-    flash("已移除内嵌标签");
+    syncRailVisibility();
+    flash(SH("tab.removed"));
+  }
+
+  // ── 收件箱页 → 壳 反向桥（inbox-preload.js 经 sendToHost 抵达）──────────────
+  // 双栏融合后「打开官方网页版」入口下沉到页面账号抽屉（网页版是账号的一种打开方式，
+  // 不再是与收件箱并列的一级导航）；页面按钮点击经此桥驱动壳侧标签。
+  //   cmd=openEmbedded：已有该平台标签→切过去；没有→按 ➕新增 同一条路径现建
+  //                     （UA 伪装 / persist 分区 / 注入 preload 全复用）。
+  //   cmd=badge：收件箱未读总数 → 收件箱标签徽标（口径单源=页面聚合逻辑）。
+  function onShellBridge(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.cmd === "badge") { updateInboxBadge(msg.unread); return; }
+    // stripReady＝页面已渲染 cx-shell-strip（P2 握手）：工作台激活期间壳竖栏让位。
+    // 只在收到本报文后才藏 rail——页面加载失败/旧模板/落在 /login 都不会发，竖栏兜底。
+    if (msg.cmd === "stripReady") {
+      _pageStripLive = true;
+      syncPageStripTakeover();
+      return;
+    }
+    if (msg.cmd === "openEmbedded") {
+      const plat = String(msg.platform || "").toLowerCase();
+      // 双面板融合 P0（2026-08-13）：opts 从「前向兼容占位」升级为深链载荷
+      // {thread, account_id}——工作台会话头「原生页打开」带会话定位。旧页面
+      // 不带 opts / 旧壳收到 opts 都按「仅切标签」降级，桥契约双向前向兼容。
+      const opts = (msg.opts && typeof msg.opts === "object") ? msg.opts : {};
+      if (!EMBEDDED_ON) {
+        flash(SH("web.disabled"));
+        return;
+      }
+      // shell_tab_id＝页内标签条精确点名某个壳标签（chatx-bridge-state.embedded[].id 原样回传），
+      // 优先于按平台猜首个——同平台多号时点谁切谁。查无此 id（标签刚被移除）回落平台匹配。
+      const tabId = String(opts.shell_tab_id || "");
+      if (tabId && RENDERED.has(tabId) && ACCOUNT_BY_ID[tabId]) {
+        activate(tabId);
+        locateEmbeddedThread(tabId, ACCOUNT_BY_ID[tabId].platform, opts);
+        return;
+      }
+      if (!isEmbeddable(plat)) { flash(SH("web.no_embeddable")); return; }
+      // 账号选择＝该平台首个已渲染标签（桌面标签与后端账号无强映射，P0 语义；
+      // 多标签同平台时若需精确映射，后续在账号配置补 backend_account_id 再升级）。
+      const existing = ACCOUNTS.find((a) => a.platform === plat && RENDERED.has(a.id));
+      if (existing) {
+        activate(existing.id);
+        locateEmbeddedThread(existing.id, plat, opts);
+        flash(SH("web.switched", { label: existing.label }));
+        return;
+      }
+      addEmbeddedAccount(plat).then((acc) => {
+        if (acc && acc.id) locateEmbeddedThread(acc.id, plat, opts);
+      }).catch(() => {});
+    }
+  }
+
+  // 深链定位：切到/建出标签后，把 webview 导航到该平台的会话直达 URL
+  // （thread-url.js 纯函数；messenger=messenger.com/t/<id>）。不支持 URL 路由的
+  // 平台 threadUrl 返回 "" → 仅切标签（旧行为）。webview 的 src 赋值即触发导航；
+  // 新建标签的 webview 由 addAccountTab 同步建出，改 src ＝以会话页为首个导航。
+  // 定位失败绝不影响「切标签」本身（try/catch 吞掉，深链是增强不是前提）。
+  function locateEmbeddedThread(accountId, platform, opts) {
+    try {
+      const th = String((opts && opts.thread) || "").trim();
+      if (!th || typeof threadUrl !== "function") return;
+      const url = threadUrl(platform, th);
+      if (!url) return;
+      const wv = document.querySelector('#webviews webview[data-id="' + accountId + '"]');
+      if (wv) wv.src = url;
+    } catch (_) { /* 深链失败不影响切标签 */ }
+  }
+  function updateInboxBadge(n) {
+    const b = document.getElementById("rail-inbox-badge");
+    if (!b) return;
+    const v = Number(n) || 0;
+    b.hidden = v <= 0;
+    b.textContent = v > 99 ? "99+" : String(v);
   }
 
   // Option C：内嵌官方网页关闭时，桌面只剩统一收件箱（rail 由 #app.no-embedded 隐藏），
   // 不渲染任何内嵌平台 Tab / webview / ➕新增，与网页 /workspace 完全一致。
   if (EMBEDDED_ON) {
+    // 分组标题「官方平台 · 人工」：把常驻首标签（人工操作台）与账号标签在竖栏内分区。
+    // 只剩收件箱时整条 rail 由 rail-solo 隐藏，故无需单独管理本标题显隐。
+    const grp = document.createElement("div");
+    grp.className = "rail-group-label";
+    grp.textContent = SH("web.group_assist");
+    grp.title = SH("web.group_assist_title");
+    rail.appendChild(grp);
     buildRailAddButton();
     ACCOUNTS.forEach((a, idx) => {
       if (!isEmbeddable(a.platform)) return addViaInboxItem(a);
       // 统一收件箱开启时它占首屏，内嵌平台一律非激活；未开启时回退老行为（首个可内嵌账号激活）
       addAccountTab(a, { active: !inboxOn && idx === firstEmbeddableIdx });
     });
+    syncRailVisibility();   // 零内嵌账号的初始态：标签条按需隐藏（与网页版零差异）
   }
+
+  // 启动首屏对齐：收件箱是首屏时必须走一遍 activate()——buildInboxTab 只置 active class，
+  // 而「隐藏桌面 #copilot」的逻辑只活在 activate() 里。漏掉这步 = 开机即「两个业务助手」
+  // （页面自带右栏 + 桌面空壳侧栏并排；Option C 默认无 rail 可点，activate 永远不会被触发，
+  // 双栏成为常态——2026-08-03 安装版实锤）。
+  if (inboxOn) activate(INBOX_ID);
 
   initCopilot();
   if (inboxOn) {
@@ -539,28 +1069,24 @@ function resolveAccounts(cfg) {
 })();
 
 // ── 业务右栏逻辑 ─────────────────────────────────────────────────────────────
+// （2026-08-15）「全自动托管」HostBridge autopilot 已整体下线：与收件箱「🚀 全自动」档
+// （auto_ai + 受控出站队列 D4b）功能重复，且绕过服务端 send-gate/kill-switch/预算闸门，
+// 两开同会话必双发。全自动唯一入口＝统一收件箱的会话自动化档位。
 const Copilot = {
   ctx: null, // {platform, chat_key, name, messages, webview}
   tplLoaded: false,
   activeTab: "reply", // reply | customer | tools
   chatActive: false,
-  // 全自动托管：当前会话收到客户消息 → 生成 → 过风控 → 自动发（默认关）
-  autopilot: { on: false, busy: false, lastSendAt: 0, handled: {} },
 };
-
-// 托管节流/拟人参数
-const AUTO_COOLDOWN_MS = 6000; // 两次自动发的最小间隔，防刷屏
-const AUTO_DELAY_MIN_MS = 2000; // 发送前拟人延迟下限
-const AUTO_DELAY_MAX_MS = 4000; // 发送前拟人延迟上限
 
 // 与网页 unified_inbox 共用 sidebar-chrome（shared/copilot/sidebar-chrome.js）
 const _sc = () => (window.CopilotShared && window.CopilotShared.sidebarChrome) || {};
 let _desktopTabBadges = null;
 
 // 可折叠卡片：与网页 unified_inbox 同源（sidebar-chrome.createCardController）。
-// 默认折叠集（draft/nba/profile 默认展开）；组件 id → 所属卡（懒取数按卡展开态决定是否喂 context）。
-const _CP_CARD_DEF_COLLAPSED = { voice: 1, script: 1, kb: 1, tpl: 1, relstage: 1, collab: 1, chain: 1, analysis: 1 };
-const _CP_CARD_OF = { "cp-relstage": "relstage", "cp-nba": "nba", "cp-script": "script", "cp-collab": "collab", "cp-chain": "chain", "cp-voice": "voice" };
+// 默认折叠集（draft/profile 默认展开）；组件 id → 所属卡（懒取数按卡展开态决定是否喂 context）。
+const _CP_CARD_DEF_COLLAPSED = { voice: 1, kb: 1, tpl: 1, relstage: 1, collab: 1, chain: 1, analysis: 1 };
+const _CP_CARD_OF = { "cp-relstage": "relstage", "cp-collab": "collab", "cp-chain": "chain", "cp-voice": "voice" };
 let _cpCardCtrl = null;
 function _cpCardCollapsed(name) {
   return _cpCardCtrl ? _cpCardCtrl.isCollapsed(name) : !!_CP_CARD_DEF_COLLAPSED[name];
@@ -583,12 +1109,18 @@ function _feedCardComponent(id, ctx) {
   else el.context = ctx;
 }
 // 卡头状态 pill：组件 cp-data-loaded → 折叠态也能一眼读懂面板内容（复用共享 pillMetaFromCpLoaded）
-const _CP_PILL_BY_PANEL = { "cp-draft": "cpp-draft", "cp-relstage": "cpp-relstage", "cp-collab": "cpp-collab", "cp-chain": "cpp-chain", "cp-script": "cpp-script", "cp-nba": "cpp-nba" };
+const _CP_PILL_BY_PANEL = { "cp-draft": "cpp-draft", "cp-relstage": "cpp-relstage", "cp-collab": "cpp-collab", "cp-chain": "cpp-chain" };
 const _CP_PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
+// 共享组件（pillMetaFromCpLoaded / initDesktopTabBadges）按网页宿主的 inbox.pill.* 键取词，
+// 桌面壳没有 window.T → 这里做「共享键 → 壳词典」的唯一映射层。**别再复制第二份**：
+// 早先卡头 pill 与 tab 徽标各带一份中文字面量表，改一处漏一处（本批已合流至此）。
 function _deskPillT(key, vars) {
   const m = {
-    "inbox.pill.guard_high": "高风险", "inbox.pill.guard_medium": "中风险", "inbox.pill.draft_ready": "已生成",
-    "inbox.pill.chain_failed": "{n} 失败", "inbox.pill.chain_running": "{n} 运行中", "inbox.pill.topics": "{n} 话题",
+    "inbox.pill.guard_high": SH("pill.guard_high"),
+    "inbox.pill.guard_medium": SH("pill.guard_medium"),
+    "inbox.pill.draft_ready": SH("pill.draft_ready"),
+    "inbox.pill.chain_failed": SH("pill.chain_failed"),
+    "inbox.pill.chain_running": SH("pill.chain_running"),
   };
   let s = m[key] || key;
   if (vars) Object.keys(vars).forEach((p) => { s = s.split("{" + p + "}").join(String(vars[p])); });
@@ -629,6 +1161,30 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// 副驾空状态渲染成「能力橱窗」：把竞品没有的能力（AI 人设拟稿/受控出站人审/知识库/
+// 关系阶段/语音克隆）在第一屏显性化。数据来自 shared/copilot/cp-capabilities.js（单源，浏览器全局纯函数）；
+// 内容全是我们自己的静态文案（非用户输入）→ innerHTML 安全。函数/数据缺失静默保留原有兜底文案。
+function renderCopilotShowcase() {
+  try {
+    const el = $("cp-empty");
+    if (!el || typeof capabilityShowcase !== "function") return;
+    const items = capabilityShowcase() || [];
+    if (!items.length) return;
+    const head = typeof showcaseHeadline === "function" ? showcaseHeadline() : "";
+    const esc = (s) => String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const rows = items.map((it) =>
+      '<li><span class="cp-sc-dot"></span><div>' +
+      '<b>' + esc(it.title) + '</b><span>' + esc(it.desc) + '</span></div></li>'
+    ).join("");
+    el.innerHTML =
+      '<div class="cp-showcase">' +
+      (head ? '<div class="cp-sc-hd">' + esc(head) + '</div>' : '') +
+      '<ul class="cp-sc-list">' + rows + '</ul>' +
+      '<div class="cp-sc-ft">' + esc(SH("cp.showcase_ft")) + '</div></div>';
+  } catch (e) { /* 橱窗只是空状态美化,任何异常都不该影响副驾主链 */ }
+}
+
 function initCopilot() {
   $("cp-toggle").addEventListener("click", () => {
     const el = $("copilot");
@@ -667,6 +1223,7 @@ function initCopilot() {
     _cpCardCtrl.bindClicks("copilot");
     _cpCardCtrl.apply();
   }
+  renderCopilotShowcase();   // 空状态＝能力橱窗（对标翻译型竞品,显性化我们独有的能力）
   if (sc.decorateCardIcons) sc.decorateCardIcons(document, 14);
   document.addEventListener("cp-data-loaded", (e) => _updateCardPill((e && e.detail) || {}));
   if (sc.initDesktopTabBadges) {
@@ -674,18 +1231,8 @@ function initCopilot() {
       badgeReply: "cp-tab-badge-reply",
       badgeCustomer: "cp-tab-badge-customer",
       badgeTools: "cp-tab-badge-tools",
-      snoozedLabel: "搁置中",
-      translate: (key, vars) => {
-        const m = {
-          "inbox.pill.guard_high": "高风险",
-          "inbox.pill.guard_medium": "中风险",
-          "inbox.pill.chain_failed": "{n} 失败",
-          "inbox.pill.chain_running": "{n} 运行中",
-        };
-        let s = m[key] || key;
-        if (vars) Object.keys(vars).forEach((p) => { s = s.split("{" + p + "}").join(String(vars[p])); });
-        return s;
-      },
+      snoozedLabel: SH("pill.snoozed"),
+      translate: _deskPillT,
     });
   }
   // 关系阶段动作(确认进阶/降级/回暖/对齐)完成后:刷新档案,联动后续可在此扩展
@@ -693,8 +1240,6 @@ function initCopilot() {
   if (relEl) {
     relEl.addEventListener("cp-rel-changed", () => {
       loadProfile();
-      const nba = $("cp-nba"), sc = $("cp-script");
-      if (nba) nba.refresh(); if (sc) sc.refresh();
     });
   }
   // 共享组件 cp-fill:回填输入框(桥到 webview composer);cp-action-done:刷新关系阶段
@@ -707,7 +1252,14 @@ function initCopilot() {
     const text = e && e.detail && e.detail.text;
     if (text) fillComposer(text, true);
   });
-  document.addEventListener("cp-action-done", () => {
+  document.addEventListener("cp-action-done", (e) => {
+    // 对齐网页宿主 P1-198：执行类动作（任务/标签/升级/注解）必须有可见结果反馈——
+    // 此前桌面零反馈，服务端如实报的失败原因（如「会话未关联客户档案」）被静默吞掉，
+    // 坐席眼里就是「点了没反应」（2026-08-13 198 实录）。ok→轻提示；fail→显示原因。
+    const d = (e && e.detail) || {};
+    if (d.ok) flash(SH("exec.done"));
+    else flash(d.error ? String(d.error) : SH("exec.failed"));
+    shellBeacon(d.ok ? "cpshell_exec_ok" : "cpshell_exec_fail");
     const rel = $("cp-relstage");
     if (rel) rel.refresh();
     const chain = $("cp-chain");
@@ -721,11 +1273,14 @@ function initCopilot() {
   // <cp-draft> 钉绑人设 / 改回复语言后,同步给 webview 浮钮(保持原生「智能回复」一致)
   document.addEventListener("cp-persona-pinned", () => pushPersonaToWebview());
   document.addEventListener("cp-lang-changed", () => pushReplyLangToWebview());
-  setupAutopilot();
   setupAccountsPanel();
   setupIframeMode();
   const openInboxBtn = $("cp-open-inbox");
-  if (openInboxBtn) openInboxBtn.addEventListener("click", openInInbox);
+  if (openInboxBtn) openInboxBtn.addEventListener("click", () => openInInbox());
+  const assistInboxBtn = document.getElementById("assist-only-inbox-btn");
+  if (assistInboxBtn) {
+    assistInboxBtn.addEventListener("click", () => openInInbox({ fromAssistBanner: true }));
+  }
   const cpVoice = $("cp-voice");
   if (cpVoice && window.CopilotShared) cpVoice.client = window.CopilotShared.createCopilotClient();
   const cpDraft = $("cp-draft");
@@ -737,10 +1292,16 @@ function initCopilot() {
 }
 
 // ── 会话深链：内嵌平台 Tab 当前会话 → 切到统一收件箱并打开同一会话 ──────────
-function openInInbox() {
+function openInInbox(opts) {
+  opts = opts || {};
   const c = Copilot.ctx;
-  if (!c || !c.chat_key) { flash("请先在会话里选中一个对话"); return; }
-  if (!Inbox.wv || !Inbox.activate) { flash("统一收件箱未启用"); return; }
+  if (!Inbox.wv || !Inbox.activate) { flash(SH("inbox.disabled")); return; }
+  // 诚实条 CTA：无会话也可切到收件箱（Messenger 全自动入口）
+  if (!c || !c.chat_key) {
+    Inbox.activate(INBOX_ID);
+    flash(SH(opts.fromAssistBanner ? "inbox.switched_assist" : "inbox.switched"));
+    return;
+  }
   Inbox.activate(INBOX_ID);
   const payload = {
     platform: c.platform,
@@ -752,7 +1313,7 @@ function openInInbox() {
     "window.__desktopOpenConversation && window.__desktopOpenConversation(" +
     JSON.stringify(payload) + ");";
   deliverToInbox(js);
-  flash("已在统一收件箱打开 📥");
+  flash(SH(opts.fromAssistBanner ? "inbox.opened_assist" : "inbox.opened"));
 }
 
 // 收件箱可能仍在加载/登录：轮询到 ready（约 12s）再投递 executeJavaScript
@@ -762,9 +1323,87 @@ function deliverToInbox(js, tries) {
     Inbox.wv.executeJavaScript(js).catch(() => {});
     return;
   }
-  if (tries <= 0) { flash("收件箱尚未就绪，请稍后重试"); return; }
+  if (tries <= 0) { flash(SH("inbox.not_ready")); return; }
   setTimeout(() => deliverToInbox(js, tries - 1), 250);
 }
+
+// ── 壳内「坐席工作台」路由承接（2026-08-29，与 main.js focusMainInbox 成对）────
+// 后台弹窗/任意壳内页面点「坐席工作台」→ 主进程不再开原生弹窗，转发到这里：
+// 切收件箱标签；?conv=/?focus= 深链复用页面 open-conv postMessage 契约站内开会话
+// （deliverToInbox 自带 ready 轮询——webview 还在登录/启动时深链不丢）。
+// 参数口径与 _win_unique._deepLinkParts 对齐：conv|focus / mid / flag / case。
+function wsDeepLinkParts(url) {
+  try {
+    const u = new URL(String(url || ""), "http://cx.local");
+    const q = u.searchParams;
+    const cid = q.get("conv") || q.get("focus") || "";
+    if (!cid) return null;
+    return { cid, mid: q.get("mid") || "", flag: q.get("flag") || "", caseId: q.get("case") || "" };
+  } catch (e) { return null; }
+}
+// #158（2026-09-04，「审批页进得去出不来」）：收件箱页的「去审批」是同窗 location.href
+// → 主窗收件箱 webview **自己**漂到了 /workspace/drafts；再点「聊天」经 _win_unique →
+// window.open → focusMainInbox 回到这里，旧承接只 Inbox.activate（标签本来就激活）
+// ＝点了什么都没发生。现在先问 ws-home-route：webview 不在收件箱主路径就把它导航回去
+// （深链参数并进 URL，页面自带 ?conv= 解析）；在主路径才走 postMessage 站内切会话。
+function inboxCurrentUrl() {
+  try { return Inbox.wv ? String(Inbox.wv.getURL() || "") : ""; } catch (e) { return ""; }
+}
+function routeWorkspaceOpen(reqUrl) {
+  const mod = window.WsHomeRoute;
+  if (mod && typeof mod.resolveWorkspaceHome === "function") {
+    return mod.resolveWorkspaceHome(inboxCurrentUrl(), Inbox.homeUrl || "", reqUrl);
+  }
+  const p = wsDeepLinkParts(reqUrl);          // 模块缺席：退回旧行为（只切标签 + 深链 postMessage）
+  return p ? { action: "deliver", parts: p } : { action: "none", parts: null };
+}
+try {
+  if (window.shell && typeof window.shell.onOpenWorkspace === "function") {
+    window.shell.onOpenWorkspace((payload) => {
+      try {
+        if (typeof Inbox.activate === "function") Inbox.activate(INBOX_ID);
+        const reqUrl = (payload && payload.url) || "";
+        const route = routeWorkspaceOpen(reqUrl);
+        if (route.action === "navigate" && Inbox.wv) {
+          try { Inbox.wv.loadURL(route.url); } catch (e) { try { Inbox.wv.setAttribute("src", route.url); } catch (e2) { /* 导航失败：标签已切，至少不静默 deny 主窗聚焦 */ } }
+          return;
+        }
+        const p = route.parts;
+        if (p) {
+          deliverToInbox("window.postMessage(" + JSON.stringify({
+            aitr: "open-conv", cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId,
+          }) + ", location.origin);");
+        }
+      } catch (e) { /* 路由承接异常不伤壳主链 */ }
+    });
+  }
+} catch (e) { /* 桥缺席（极老 preload）＝保持旧行为 */ }
+
+// #151：工作台切语言 → 主进程同步壳配置 + 重建原生菜单后回推 → 壳 renderer 就地换词
+// （shell-i18n.setLang：静态 data-sh-i18n / <html lang> / title），不整窗重载。
+// 动态拼出的文案（rail 标题/chip）在下一次重建时自然跟上；这里补最显眼的收件箱标签。
+try {
+  if (window.shell && typeof window.shell.onShellLang === "function") {
+    window.shell.onShellLang((lang, cfgLang) => {
+      // 第二参=壳配置原值（""=跟随系统）：先让收件箱 homeUrl/登录回跳的 ?lang= 跟上配置
+      // （老主进程不传 → undefined → 不动），再换壳自身静态词。两步独立：配置同步不依赖
+      // 壳词典是否真的换成功（vi/th/id 壳词典回落 en，setLang 可能返回 false）。
+      try {
+        if (cfgLang !== undefined && typeof Inbox.setLangConfig === "function") Inbox.setLangConfig(cfgLang);
+      } catch (e) { /* homeUrl 重算失败：下次启动按配置对齐 */ }
+      try {
+        if (!(window.shellI18n && window.shellI18n.setLang(lang))) return;
+        const item = document.querySelector('.rail-item[data-id="' + INBOX_ID + '"]');
+        if (item) {
+          item.title = SH("rail.inbox.title");
+          item.setAttribute("aria-label", SH("console.manual"));
+          const chip = item.querySelector(".rail-chip");
+          if (chip) { chip.textContent = SH("rail.inbox.chip"); chip.title = SH("rail.inbox.chip_title"); }
+        }
+      } catch (e) { /* 换词失败不伤壳主链（下次启动 ?lang= 会对齐） */ }
+    });
+  }
+} catch (e) { /* 桥缺席（极老 preload）＝保持旧行为 */ }
 
 // 账号管理面板（全局，不依赖会话）：👥 切换显隐，首次打开挂 client 触发加载
 function setupAccountsPanel() {
@@ -803,12 +1442,25 @@ function setupIframeMode() {
   if (Copilot.useIframe) enableIframe();
 }
 
+// 壳层 UI 埋点（fire-and-forget，失败静默）：cpshell_* 前缀供「原生 aside 退役」决策读数
+// （周审 /api/admin/ui-event-trend?prefix=cpshell_：手动切回≈0 且回退仅现于重启窗 → 可删原生）
+function shellBeacon(action) {
+  try {
+    if (window.shell && typeof window.shell.uiEvent === "function") {
+      window.shell.uiEvent({ page: "desktop-shell", action: String(action || "") });
+    }
+  } catch (e) { /* 埋点绝不影响壳 */ }
+}
+
 function toggleIframeMode() {
+  Copilot._autoFellBack = false;   // 用户手动切换＝明示意愿，看门狗自动恢复不再介入
   Copilot.useIframe = !Copilot.useIframe;
+  shellBeacon(Copilot.useIframe ? "cpshell_manual_iframe" : "cpshell_manual_native");
   try { localStorage.setItem("cp_use_iframe", Copilot.useIframe ? "1" : "0"); } catch (e) {}
   const btn = $("cp-mode-toggle");
   if (btn) btn.classList.toggle("active", Copilot.useIframe);
-  if (Copilot.useIframe) enableIframe(); else disableIframe();
+  // 手动切回原生＝明示意愿：停掉后台就绪轮询（否则轮询会替用户切回 iframe）
+  if (Copilot.useIframe) enableIframe(); else { clearFrameRetry(); disableIframe(); }
 }
 
 async function frameBackend() {
@@ -834,18 +1486,131 @@ async function enableIframe() {
   // 将来若壳可切换，iframe 自动跟随)，使统一 App 副驾与深色壳一致，消除 iframe 模式「一黑一白」
   const hostTheme = document.documentElement.getAttribute("data-cp-theme") === "light" ? "light" : "dark";
   const src = `${base}/copilot/app.html?theme=${hostTheme}#token=${encodeURIComponent(b.token || "")}`;
+  Copilot._frameSrc = src;
   console.log("[iframe] enable origin=" + Copilot._frameOrigin + " src=" + src);
   frame.onload = function () { console.log("[iframe] onload fired"); };
-  // 仅在 src 变化(首次/换后端)时重置 ready 并加载;否则沿用已就绪的 iframe
-  if (frame.getAttribute("src") !== src) {
-    Copilot._frameReady = false;
-    frame.setAttribute("src", src);
+  // 已就绪且地址未变（手动切换回来 / lateReady 自愈恢复）→ 沿用现成 iframe，只补喂上下文
+  if (Copilot._frameReady && frame.getAttribute("src") === src) {
+    feedActiveChat();
+    return;
+  }
+  // 三壳合一 P2（2026-08-13 坐席机实锤）：坐席机后端由壳自拉起，冷启动几十秒；
+  // iframe 撞 ERR_CONNECTION_REFUSED 错误页后【永不自愈】——同值 src 不触发重载、
+  // 错误页也永远不会 postMessage cp-ready → 旧实现里坐席每次开机都被钉死在原生
+  // aside，与网页端长期呈现「两套工具箱」。对齐收件箱 webview 的启动闸门语义：
+  // 后端就绪才导航；冷启动窗不再回退原生（旧面板此时同样取不到数据）——面板位
+  // 直接给启动叙事占位（spawn 三态文案），后端就绪由轮询接管加载。
+  let healthy = false;
+  try { const h = await window.shell.backendHealth(); healthy = !!(h && h.ok); } catch (e) {}
+  if (healthy) {
+    navigateFrame(frame, src);
+    // 看门狗只在真正发起过导航后武装：管「后端健康但没有 /copilot/app.html」（旧
+    // 后端）这类死面板——12s 没等到 cp-ready → 回退原生 aside。刻意不写
+    // localStorage —— 下次启动仍先试统一 App（后端升级后自动恢复），手动 🧪 不受影响。
+    if (!Copilot._frameReady) startFrameWatchdog();
+  } else {
+    setFrameBootOverlay(true, await bootPhaseText());
+    scheduleFrameRetry();
+    // 冷启动窗读数（经主进程排队通道，后端就绪后补发落库）：
+    // 「这台坐席机经历了几次启动闸门等待」= 1.0.24 起舰队遥测的健康主信号
+    shellBeacon("cpshell_boot_gate_wait");
   }
   // 已有会话则补喂(未 ready 时缓存,cp-ready 后 flush)
   feedActiveChat();
 }
 
+// 冷启动占位：iframe 区盖一层启动叙事（元素在 index.html #cp-appframe-wrap 内，
+// 非 iframe-mode 时随 wrap 一起隐藏，无需额外互斥）。
+function setFrameBootOverlay(show, phaseText) {
+  const ov = $("cp-boot-overlay");
+  if (!ov) return;
+  ov.hidden = !show;
+  if (show && phaseText) {
+    const p = $("cp-boot-phase");
+    if (p) p.textContent = String(phaseText);
+  }
+}
+
+// 启动阶段文案：复用收件箱同款 backendSpawnStatus 三态，如实告知在等什么。
+async function bootPhaseText() {
+  try {
+    const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
+    const phase = st && st.status;
+    if (phase === "failed") return SH("boot.failed");
+    if (phase === "port-conflict") return SH("boot.port_conflict");
+    if (phase === "starting" || phase === "probing") return SH("boot.sub");
+  } catch (e) { /* 拿不到阶段就用缺省文案 */ }
+  return SH("boot.connecting");
+}
+
+// 强制导航：iframe 对「同值 src」不触发重载——加载失败的错误页会永久驻留，
+// 必须先归零到 about:blank 再设真实地址，保证必然发生一次新导航。
+function navigateFrame(frame, src) {
+  Copilot._frameReady = false;
+  try { frame.setAttribute("src", "about:blank"); } catch (e) { /* ignore */ }
+  setTimeout(() => { try { frame.setAttribute("src", src); } catch (e) { /* ignore */ } }, 0);
+}
+
+// 后端就绪轮询（单实例）：冷启动/后端重启窗内每 2s 探活，就绪即真正加载统一 App；
+// cp-ready 到达后由 onFrameMessage 的 lateReady 分支自动从原生回退档切回 iframe 档。
+function scheduleFrameRetry() {
+  if (Copilot._frameRetryTimer) return;
+  Copilot._frameRetryTimer = setInterval(async () => {
+    if (Copilot._frameReady) { clearFrameRetry(); setFrameBootOverlay(false); return; }
+    let ok = false;
+    try { const h = await window.shell.backendHealth(); ok = !!(h && h.ok); } catch (e) {}
+    if (!ok) {
+      // 冷启动进行中：把 spawn 阶段（启动中/失败/端口冲突）如实刷进占位文案
+      if (Copilot.useIframe) setFrameBootOverlay(true, await bootPhaseText());
+      return;
+    }
+    clearFrameRetry();
+    const frame = $("cp-appframe");
+    if (frame && Copilot._frameSrc) {
+      console.log("[iframe] 后端已就绪 → 加载统一业务面板");
+      if (Copilot.useIframe) setFrameBootOverlay(true, SH("iframe.loading"));
+      navigateFrame(frame, Copilot._frameSrc);
+      startFrameWatchdog();
+      // 与 boot_gate_wait 配对：等待后成功进入加载＝闸门闭环（差值=卡死量）
+      shellBeacon("cpshell_boot_gate_load");
+    }
+  }, 2000);
+}
+
+function clearFrameRetry() {
+  if (Copilot._frameRetryTimer) { clearInterval(Copilot._frameRetryTimer); Copilot._frameRetryTimer = null; }
+}
+
+function startFrameWatchdog() {
+  clearFrameWatchdog();
+  Copilot._frameWatchdog = setTimeout(() => {
+    Copilot._frameWatchdog = null;
+    if (Copilot._frameReady || !Copilot.useIframe) return;
+    console.warn("[iframe] cp-ready 超时，自动回退原生副驾（iframe 保留在后台，就绪后自动恢复）");
+    shellBeacon("cpshell_iframe_fallback");
+    Copilot._autoFellBack = true;   // 标记：是看门狗回退的，不是用户选择——迟到的 cp-ready 可自动恢复
+    Copilot.useIframe = false;
+    const btn = $("cp-mode-toggle");
+    if (btn) btn.classList.remove("active");
+    disableIframe();
+    flash(SH("iframe.timeout"));
+    // 后端未就绪（冷启动/重启窗）→ 保持后台轮询，就绪后重载 iframe 走 lateReady 自愈；
+    // 后端本就健康却超时（如旧后端没有 /copilot/app.html）→ 维持单次尝试语义，不无限重载。
+    (async () => {
+      let ok = false;
+      try { const h = await window.shell.backendHealth(); ok = !!(h && h.ok); } catch (e) {}
+      if (!ok) scheduleFrameRetry();
+    })();
+  }, 12000);
+}
+
+function clearFrameWatchdog() {
+  if (Copilot._frameWatchdog) { clearTimeout(Copilot._frameWatchdog); Copilot._frameWatchdog = null; }
+}
+
 function disableIframe() {
+  clearFrameWatchdog();
+  setFrameBootOverlay(false);
   document.getElementById("copilot").classList.remove("iframe-mode");
   // 回到原生模式:按当前会话刷新原生面板
   if (Copilot.ctx && Copilot.chatActive) {
@@ -857,27 +1622,38 @@ function disableIframe() {
 }
 
 function onFrameMessage(e) {
-  if (!Copilot.useIframe) return;
-  console.log("[iframe] msg origin=" + e.origin + " type=" + (e.data && e.data.type));
-  if (Copilot._frameOrigin && e.origin !== Copilot._frameOrigin) return; // 仅信任后端源
   const msg = e && e.data;
+  // 看门狗回退期间仍放行迟到的 cp-ready（iframe 留在后台自愈重载，就绪即自动恢复）
+  const lateReady = !!(msg && msg.type === "cp-ready" && Copilot._autoFellBack);
+  if (!Copilot.useIframe && !lateReady) return;
+  console.log("[iframe] msg origin=" + e.origin + " type=" + (msg && msg.type));
+  if (Copilot._frameOrigin && e.origin !== Copilot._frameOrigin) return; // 仅信任后端源
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "cp-ready") {
     Copilot._frameReady = true;
+    clearFrameWatchdog();
+    setFrameBootOverlay(false);
+    if (lateReady && !Copilot.useIframe) {
+      // 后端重启窗/冷启动解包期看门狗回退过 → 统一 App 现已真就绪，自动恢复 iframe 档
+      shellBeacon("cpshell_iframe_recover");
+      Copilot._autoFellBack = false;
+      Copilot.useIframe = true;
+      const btn = $("cp-mode-toggle");
+      if (btn) btn.classList.add("active");
+      enableIframe();
+      flash(SH("iframe.restored"));
+      return;
+    }
     if (Copilot._pendingFrameCtx) postFrameContext(Copilot._pendingFrameCtx);
     return;
   }
   if (msg.type === "cp-fill" && msg.text) { fillComposer(msg.text, false); return; }
   if (msg.type === "cp-send" && msg.text) { sendComposer(msg.text); return; }
-  // 全自动托管开关由统一 App 上吐 → 落到桌面壳的 webview 自动回复能力（HostBridge）
-  if (msg.type === "cp-autopilot") {
-    if (Copilot.autopilot) Copilot.autopilot.on = !!msg.on;
-    try { localStorage.setItem("desktop_autopilot", msg.on ? "1" : "0"); } catch (e) {}
-    const t = $("cp-auto-toggle"); if (t) t.checked = !!msg.on;
-    if (typeof setAutopilotStatus === "function") {
-      setAutopilotStatus(msg.on ? "待命中（收到客户消息将自动回复）" : "已关闭", msg.on ? "on" : "off");
-    }
-    flash(msg.on ? "⚠ 已开启全自动托管：当前会话将自动回复客户" : "已关闭全自动托管");
+  // （cp-autopilot 消息已下线：HostBridge 托管开关与收件箱 auto_ai 档重复，见 Copilot 定义处注释。
+  //   旧版 app.html 若仍上吐该消息，此处静默忽略即可。）
+  // Path2 assist-only 诚实卡 CTA → 切到统一收件箱（可带当前会话深链）
+  if (msg.type === "cp-open-inbox") {
+    if (typeof openInInbox === "function") openInInbox({ fromAssistBanner: true });
     return;
   }
 }
@@ -887,7 +1663,7 @@ function sendComposer(text) {
   const t = String(text || "").trim();
   if (!t || !Copilot.ctx || !Copilot.ctx.webview) return;
   Copilot.ctx.webview.send("fill-composer", { text: t, send: true });
-  flash("已填入并发送 ✓");
+  flash(SH("send.filled_sent"));
 }
 
 async function feedActiveChat() {
@@ -896,21 +1672,22 @@ async function feedActiveChat() {
   try {
     const acc = currentAccountId(c);
     const cid = window.CopilotShared.conversationId(c.platform, acc, c.chat_key);
+    const assist = currentIsAssistOnly();
+    const preferInbox = !!(window.PlatformCaps && window.PlatformCaps.prefersInboxAuto(c.platform));
     const ctx = {
       type: "cp-context",
       conversationId: cid,
       chatKey: c.chat_key,
       platform: c.platform,
       accountId: acc,
-      // 桌面壳具备「内嵌官方网页 webview 自动回复」能力 → 声明 autopilot，统一 App 才显示托管开关
-      caps: { autopilot: true },
-      autopilotOn: !!(Copilot.autopilot && Copilot.autopilot.on),
+      // assistOnly：官方网页不接 ingest → conv-ops 诚实态
+      caps: { assistOnly: assist, preferInboxAuto: preferInbox },
       customer: {
         platform: c.platform,
         account_id: acc,
         account_label: c.account_label || "",
         chat_key: c.chat_key,
-        summary: c.name ? ("会话对象：" + c.name) : "",
+        summary: c.name ? (SH("send.peer_prefix") + c.name) : "",
       },
     };
     if (Copilot._frameReady) postFrameContext(ctx); else Copilot._pendingFrameCtx = ctx;
@@ -962,122 +1739,28 @@ async function pushReplyLangToWebview() {
 
 // 对比语言已迁移至 <cp-draft contrast>（按会话记忆于 cp_contrastlang:<conversationId>）
 
-// ── 全自动托管：当前会话收到客户消息自动回复（低风险自动发，命中风控转人工）──
-function setupAutopilot() {
-  const t = $("cp-auto-toggle");
-  if (!t) return;
-  let on = false;
-  try {
-    on = localStorage.getItem("desktop_autopilot") === "1";
-  } catch (e) {}
-  t.checked = on;
-  Copilot.autopilot.on = on;
-  setAutopilotStatus(on ? "待命中（收到客户消息将自动回复）" : "已关闭", on ? "on" : "off");
-  t.addEventListener("change", () => {
-    Copilot.autopilot.on = t.checked;
-    try {
-      localStorage.setItem("desktop_autopilot", t.checked ? "1" : "0");
-    } catch (e) {}
-    if (t.checked) {
-      setAutopilotStatus("待命中（收到客户消息将自动回复）", "on");
-      flash("⚠ 已开启全自动托管：当前会话将自动回复客户");
-    } else {
-      setAutopilotStatus("已关闭", "off");
-      flash("已关闭全自动托管");
-    }
-  });
-}
-
-function setAutopilotStatus(text, kind) {
-  const el = $("cp-auto-status");
-  if (!el) return;
-  el.textContent = text;
-  el.className = "cp-auto-status" + (kind ? " " + kind : "");
-}
-
-// onActiveChat 末尾调用：判断是否应自动回复当前会话最后一条客户消息
-function maybeAutopilot(payload, switched) {
-  const ap = Copilot.autopilot;
-  if (!ap.on) return;
+// ── Path2 assist-only（官方网页不接全自动）────────────────────────────────
+function currentIsAssistOnly() {
   const c = Copilot.ctx;
-  if (!c || !c.webview) return;
-  const msgs = (payload && payload.messages) || [];
-  const last = msgs[msgs.length - 1];
-  if (!last || last.direction !== "in") return; // 仅在客户说完、轮到我们时触发
-  const lastText = (last.text || "").trim();
-  if (!lastText) return;
-  const sig = c.chat_key + "|" + lastText;
-  // 刚切进会话：把当前最后一条标记为已处理，不主动补发旧消息（只托管新来的）
-  if (switched) {
-    ap.handled[c.chat_key] = sig;
-    return;
-  }
-  if (ap.handled[c.chat_key] === sig) return; // 这条已处理过，避免重复回
-  if (ap.busy) return; // 一次只处理一条
-  const now = Date.now();
-  if (now - ap.lastSendAt < AUTO_COOLDOWN_MS) return; // 冷却中，下次扫描再说
-  ap.busy = true;
-  ap.handled[c.chat_key] = sig;
-  runAutopilotReply(c, sig).finally(() => {
-    ap.busy = false;
-  });
+  return !!(c && window.PlatformCaps && window.PlatformCaps.isAssistOnlyEmbed(c.platform));
 }
 
-async function runAutopilotReply(c, sig) {
-  const ap = Copilot.autopilot;
-  try {
-    setAutopilotStatus("生成回复中…", "on");
-    await ensureFullThread();
-    const replyLang = selectedReplyLang();
-    const res = await window.shell.smartReply({
-      messages: contextMessages(),
-      platform: c.platform,
-      chat_key: c.chat_key,
-      persona_id: await selectedPersonaId(c),
-      target_lang: replyLang,
-    });
-    // 会话可能在生成期间被切走/对方又说话，确认仍是同一条再发
-    if (!ap.on || !Copilot.ctx || Copilot.ctx.chat_key !== c.chat_key) {
-      setAutopilotStatus("待命中（收到客户消息将自动回复）", "on");
-      return;
-    }
-    if (!res || !res.ok || !res.reply) {
-      setAutopilotStatus("生成失败，已跳过（仍待命）", "warn");
-      return;
-    }
-    const text = ((replyLang && res.translated) || res.reply || "").trim();
-    if (!text) {
-      setAutopilotStatus("空回复，已跳过（仍待命）", "warn");
-      return;
-    }
-    // 风控：仅 low 自动发；medium/high 填入待人工，不自动发
-    let risk = "low";
-    try {
-      const v = await window.shell.guardCheck({ text });
-      if (v && v.ok !== false && v.risk) risk = v.risk;
-    } catch (e) {
-      /* 护栏不可用：保守起见仍发，但不阻断 */
-    }
-    if (risk === "high" || risk === "medium") {
-      fillComposer(text, false); // 只填入，转人工
-      setAutopilotStatus(`⚠ 命中${risk === "high" ? "高" : "中"}风险，已填入待人工发送`, "warn");
-      flash("⚠ 风控命中，已转人工（未自动发送）");
-      return;
-    }
-    // 拟人延迟后自动发送
-    const delay = AUTO_DELAY_MIN_MS + Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
-    await new Promise((r) => setTimeout(r, delay));
-    if (!ap.on || !Copilot.ctx || Copilot.ctx.chat_key !== c.chat_key) {
-      setAutopilotStatus("待命中（收到客户消息将自动回复）", "on");
-      return;
-    }
-    sendComposer(text);
-    ap.lastSendAt = Date.now();
-    setAutopilotStatus("已自动回复 ✓（待命中）", "on");
-  } catch (e) {
-    setAutopilotStatus("出错已跳过（仍待命）", "warn");
-  }
+function syncAssistOnlyBanner(accountId) {
+  const el = document.getElementById("assist-only-banner");
+  if (!el) return;
+  if (!accountId) { el.hidden = true; return; }
+  const a = ACCOUNT_BY_ID[accountId];
+  const pc = window.PlatformCaps;
+  if (!pc || !a || !pc.isAssistOnlyEmbed(a.platform)) { el.hidden = true; return; }
+  const txt = el.querySelector(".aob-text");
+  const bannerKey = pc.assistOnlyBannerKey(a.platform);
+  if (txt) txt.textContent = bannerKey ? SH(bannerKey) : "";
+  el.hidden = false;
 }
+
+// （2026-08-15）「全自动托管」函数族（setupAutopilot / maybeAutopilot / runAutopilotReply
+//   / setAutopilotStatus / syncAssistOnlyAutopilotUi）已整体下线，理由见 Copilot 定义处注释。
+//   历史 localStorage 键 desktop_autopilot 不再被读取，残值无害。
 
 // 草拟用的 persona_id：下拉选中优先；为空时回落 config 账号绑定
 async function selectedPersonaId(c) {
@@ -1101,7 +1784,7 @@ async function fillComposer(text, send) {
   // 一键「填入并发送」前过发送风控闸门；纯「填入」由人工复核，不拦
   if (send && !(await guardConfirm(t))) return;
   Copilot.ctx.webview.send("fill-composer", { text: t, send: !!send });
-  flash(send ? "已填入并发送 ✓" : "已填入 ✓");
+  flash(SH(send ? "send.filled_sent" : "send.filled"));
 }
 
 // ── D4b：受控桌面出站轮询 ────────────────────────────────────────────────────
@@ -1110,6 +1793,52 @@ async function fillComposer(text, send) {
 // 安全：只对**当前已打开对应会话**的账号拉取（chat_key 过滤）——注入 fill-composer 只填
 // 当前打开的 composer、不会按 chat_key 导航，故未打开的会话命令留队列等打开，绝不发错聊天。
 let _outboundTimer = null;
+
+// fill-composer 回执等待表：token → resolve。注入侧发完/填完经 sendToHost("fill-result")
+// 回来，这里把它变成一个可 await 的结果。等不到＝注入没装载/页面在跳转（不是「发失败」，
+// 见 FILL_ACK_TIMEOUT_MS 处的说明）。
+const _fillWaiters = new Map();
+let _fillSeq = 0;
+const FILL_ACK_TIMEOUT_MS = 8000; // > 注入侧 150ms 起手 + 1500ms 清空回读，留足余量
+function onFillResult(payload) {
+  const token = payload && payload.token;
+  const w = token ? _fillWaiters.get(token) : null;
+  if (!w) return; // 迟到的回执（已超时）：丢弃，本轮已按未确认处理
+  _fillWaiters.delete(token);
+  clearTimeout(w.timer);
+  w.resolve({ received: true, ok: payload.ok === true, reason: String(payload.reason || "") });
+}
+function sendAndAwaitFill(wv, text) {
+  const token = `f${Date.now().toString(36)}${++_fillSeq}`;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      _fillWaiters.delete(token);
+      // 超时**不等于失败**：多半是注入层压根没装载（如 1.016/1.017 漏包）或页面正在跳转。
+      // 交主进程判成「不 ack」→ 服务端 180s 后回收重取，注入恢复即自愈。
+      resolve({ received: false, ok: false, reason: "no_inject_ack", timeout: true });
+    }, FILL_ACK_TIMEOUT_MS);
+    _fillWaiters.set(token, { resolve, timer });
+    try {
+      wv.send("fill-composer", { text, send: true, token });
+    } catch (e) {
+      _fillWaiters.delete(token);
+      clearTimeout(timer);
+      resolve({ received: false, ok: false, reason: "webview_send_failed", timeout: true });
+    }
+  });
+}
+
+// 注入侧压根不可能发出去的账号（无选择器档案）→ 不拉命令。
+// 拉了就是「认领 → 等不到回执 → 不 ack → 180s 回收 → 再认领」的空转，attempts 白涨到
+// 上限被判死；不拉则命令留 pending 等注入恢复/换平台，语义与「会话没打开」一致。
+// 只拦 unsupported（确定性事实）；warn/bad 仍尝试——失配未必发不出去，宁可试。
+function injectSendable(accountId) {
+  try {
+    const st = deriveInjectState(InjectStatus.byId[accountId]);
+    return !st || st.cls !== "bad" || st.code !== "unsupported";
+  } catch (e) { return true; } // 判不出来就照旧尝试，绝不因诊断层出问题停掉回复
+}
+
 async function pollOutboundOnce() {
   if (!window.shell || !window.shell.outboundPull) return;
   const wvs = document.querySelectorAll('#webviews webview[data-account]');
@@ -1119,26 +1848,53 @@ async function pollOutboundOnce() {
     if (!account_id || !platform) continue;
     const chat_key = ACTIVE_CHAT_BY_ACCOUNT[account_id];
     if (!chat_key) continue; // 该账号未打开任何会话 → 不拉（命令留队列等打开）
+    if (!injectSendable(account_id)) continue;
     let res;
     try {
       res = await window.shell.outboundPull({ platform, account_id, chat_key, limit: 10 });
     } catch (e) { continue; }
     const items = (res && res.items) || [];
     for (const it of items) {
+      // ① 拟人节奏：策略在主进程（outbound-pace.js）。不可用则退化成旧的固定间隔，
+      //    绝不因为节奏层出问题就不回复客户。
+      let plan = { typingMs: 0, waitMs: 600, throttled: false };
       try {
-        wv.send("fill-composer", { text: it.text, send: true });
-        await window.shell.outboundAck({ id: it.id, ok: true });
-        // 多条间隔，避免连发把 composer 冲掉（注入 send 后 ~150ms 才点发送）
-        await new Promise((r) => setTimeout(r, 600));
-      } catch (e) {
-        try { await window.shell.outboundAck({ id: it.id, ok: false, error: String(e) }); } catch (_) {}
-      }
+        if (window.shell.pacePlan) plan = await window.shell.pacePlan({ account_id, text: it.text });
+      } catch (e) { /* 用兜底 plan */ }
+      if (plan && plan.throttled) break; // 本账号已撞每分钟安全阀：剩下的留在队列（不 ack）
+      // 与上一条的自然间隔 + 打字耗时。填入会派发 input 事件 → 对端看到「正在输入…」，
+      // 故 typing 段先等再填**不**等价于空耗：等的是「像人一样想一下」。
+      if (plan && plan.waitMs > 0) await sleep(plan.waitMs);
+      if (plan && plan.typingMs > 0) await sleep(plan.typingMs);
+      // 等待期间坐席可能切走会话/关掉账号 → 复核，避免把回复填进已切换的聊天
+      if (ACTIVE_CHAT_BY_ACCOUNT[account_id] !== chat_key) break;
+
+      // ② 诚实回执：等注入告诉我们「填上了吗/发出去了吗」，由主进程按三档语义决定
+      //    ack 成功 / ack 失败 / 不 ack（旧实现无条件 ack 成功，注入一死就集体谎报送达）
+      const result = await sendAndAwaitFill(wv, it.text);
+      try {
+        if (window.shell.outboundReport) {
+          await window.shell.outboundReport({ id: it.id, account_id, result });
+        } else {
+          await window.shell.outboundAck({ id: it.id, ok: result.ok, error: result.reason });
+        }
+      } catch (e) { /* 回执发不出：服务端回收机制兜底 */ }
+      if (!result.ok) break; // 这个账号的发送链当前不通，别把整队命令喂进黑洞
     }
   }
 }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+// 拟人节奏把一轮派发从「N×600ms」拉长到「N×(间隔+打字)」＝可达数十秒，远超 5s 轮询间隔
+// → 必须防重入。不防的话多个循环并行给同一账号发，节奏被有效对折（频控虽仍兜着上限，
+// 但「像人」这个目标就没了），且回执 token 表也会无谓膨胀。
+let _pollBusy = false;
 function startOutboundPoll() {
   if (_outboundTimer) return;
-  _outboundTimer = setInterval(() => { pollOutboundOnce().catch(() => {}); }, 5000);
+  _outboundTimer = setInterval(() => {
+    if (_pollBusy) return;
+    _pollBusy = true;
+    pollOutboundOnce().catch(() => {}).finally(() => { _pollBusy = false; });
+  }, 5000);
 }
 
 // 发送前风控：命中支付/密码=high 需确认；优惠/投诉=medium 提醒；AI 口吻提醒。护栏不可用不阻断。
@@ -1150,16 +1906,18 @@ async function guardConfirm(text) {
     return true;
   }
   if (!v || v.ok === false) return true;
-  const terms = (v.hits || []).map((h) => h.term).filter(Boolean).join("、");
-  const robo = (v.robotic || []).join("、");
+  // 枚举分隔符随语言走（中文顿号 vs 英文逗号）——直接硬编「、」会让英文确认框读成中文标点
+  const sep = SH("sep.enum");
+  const terms = (v.hits || []).map((h) => h.term).filter(Boolean).join(sep);
+  const robo = (v.robotic || []).join(sep);
   if (v.risk === "high") {
-    return window.confirm(`⚠ 高风险内容，命中敏感词：${terms}\n（支付/密码/账号安全类）\n\n确认仍要直接发送给客户吗？`);
+    return window.confirm(SH("send.confirm_high", { terms }));
   }
   if (v.risk === "medium") {
-    return window.confirm(`提醒：命中需谨慎词：${terms}\n（优惠/投诉/法律类）\n\n确认发送？`);
+    return window.confirm(SH("send.confirm_medium", { terms }));
   }
   if (robo) {
-    return window.confirm(`提醒：回复像 AI 口吻（含「${robo}」），可能露馅。\n\n仍要发送吗？`);
+    return window.confirm(SH("send.confirm_robotic", { robo }));
   }
   return true;
 }
@@ -1169,9 +1927,9 @@ async function copyText(text) {
   try {
     if (window.shell.copy) await window.shell.copy(t);
     else await navigator.clipboard.writeText(t);
-    flash("已复制 ✓");
+    flash(SH("act.copied"));
   } catch (e) {
-    flash("复制失败");
+    flash(SH("act.copy_failed"));
   }
 }
 
@@ -1204,9 +1962,9 @@ function actionRow(text) {
     });
     return b;
   };
-  row.appendChild(mk("填入", "primary", () => fillComposer(get(), false)));
-  row.appendChild(mk("填入并发送", "send", () => fillComposer(get(), true)));
-  row.appendChild(mk("复制", "ghost", () => copyText(get())));
+  row.appendChild(mk(SH("act.fill"), "primary", () => fillComposer(get(), false)));
+  row.appendChild(mk(SH("act.fill_send"), "send", () => fillComposer(get(), true)));
+  row.appendChild(mk(SH("act.copy"), "ghost", () => copyText(get())));
   return row;
 }
 
@@ -1222,11 +1980,13 @@ function onActiveChat(payload, webview) {
   if (accountId) ACTIVE_CHAT_BY_ACCOUNT[accountId] = payload.chat_key;
 
   const _accId = currentAccountId(Copilot.ctx);
+  const _assist = !!(window.PlatformCaps && window.PlatformCaps.isAssistOnlyEmbed(payload.platform));
   const _cpCtx = window.CopilotShared ? {
     platform: payload.platform,
     accountId: _accId,
     chatKey: payload.chat_key,
     conversationId: window.CopilotShared.conversationId(payload.platform, _accId, payload.chat_key),
+    caps: { assistOnly: _assist },
   } : null;
   const cpVoice = $("cp-voice");
   if (cpVoice && _cpCtx) _feedCardComponent("cp-voice", _cpCtx); // 语音卡默认折叠 → 懒取数
@@ -1238,7 +1998,7 @@ function onActiveChat(payload, webview) {
   $("cp-tabs").hidden = false;
   Copilot.chatActive = true;
   renderSections();
-  $("cp-title").textContent = payload.name || "业务助手";
+  $("cp-title").textContent = payload.name || SH("cp.title");
 
   if (switched) {
     $("cp-analyze").hidden = true;
@@ -1258,7 +2018,6 @@ function onActiveChat(payload, webview) {
   }
   feedActiveChat();
   loadTemplatesOnce();
-  maybeAutopilot(payload, switched);
 }
 
 // 拉取该会话在后台 store 的完整历史（P1 已同步），供「分析所有对话」与人设回复使用
@@ -1300,7 +2059,7 @@ function cleanText(s) {
   const segs = t.split(/[/\n]/).map((x) => x.replace(/\s+/g, " ").trim());
   if (segs.length > 3) {
     const f = segs.find((x) => FILE_EXT.test(x));
-    if (f) return "[文件] " + f;
+    if (f) return SH("msg.file_prefix") + f;
   }
   // ③ 去重复时间戳（webk 把时间渲染两份：「10:5610:56」）
   t = t.replace(/(\d{1,2}:\d{2})\1+/g, "");
@@ -1358,7 +2117,7 @@ async function runAnalyze() {
   const reps = $("cp-analyze-replies");
   btn.disabled = true;
   const old = btn.textContent;
-  btn.textContent = "分析中…";
+  btn.textContent = SH("an.running");
   reps.innerHTML = "";
   try {
     await ensureFullThread();
@@ -1369,13 +2128,13 @@ async function runAnalyze() {
     const a = (res && res.analysis) || {};
     if (!res || !res.ok) {
       box.hidden = false;
-      box.textContent = "分析失败";
+      box.textContent = SH("an.failed");
       return;
     }
     const chips = [];
-    if (a.intent) chips.push(`<span class="tag">意图：${esc(a.intent)}</span>`);
-    if (a.sentiment) chips.push(`<span class="tag">情绪：${esc(a.sentiment)}</span>`);
-    if (a.detected_lang) chips.push(`<span class="tag">语种：${esc(a.detected_lang)}</span>`);
+    if (a.intent) chips.push(`<span class="tag">${esc(SH("an.intent"))}${esc(a.intent)}</span>`);
+    if (a.sentiment) chips.push(`<span class="tag">${esc(SH("an.sentiment"))}${esc(a.sentiment)}</span>`);
+    if (a.detected_lang) chips.push(`<span class="tag">${esc(SH("an.lang"))}${esc(a.detected_lang)}</span>`);
     (a.risk_signals || []).forEach((r) => {
       const label = typeof r === "string" ? r : r.type || r.label || "";
       if (label) chips.push(`<span class="tag danger">⚠ ${esc(label)}</span>`);
@@ -1401,17 +2160,32 @@ async function runAnalyze() {
     });
   } catch (e) {
     box.hidden = false;
-    box.textContent = "分析失败";
+    box.textContent = SH("an.failed");
   } finally {
     btn.disabled = false;
     btn.textContent = old;
   }
 }
 
+// 关系阶段机器码 → 本地化标签。词条长在 cp-i18n（`cp.rel.stage.<code>`，共享组件
+// <cp-rel-stage> 用的同一份），故经 window.CP_T 取：壳侧不再复制一份阶段词表，
+// 免得两处译名分叉。取不到 → 服务端 label → 裸码（旧后端/新码零破坏）。
+function relStageLabel(code, fallbackLabel) {
+  const c = String(code || "").trim().toLowerCase();
+  if (c && typeof window.CP_T === "function") {
+    try {
+      const key = "cp.rel.stage." + c;
+      const v = window.CP_T(key);
+      if (v && v !== key) return v;
+    } catch (e) { /* 词典未就绪＝按回落链走 */ }
+  }
+  return fallbackLabel || code || "";
+}
+
 async function loadProfile() {
   const c = Copilot.ctx;
   const box = $("cp-profile");
-  box.textContent = "加载中…";
+  box.textContent = SH("profile.loading");
   try {
     const res = await window.shell.profile({
       platform: c.platform,
@@ -1419,22 +2193,25 @@ async function loadProfile() {
       chat_key: c.chat_key,
     });
     if (!res || !res.ok || !res.profile) {
-      box.textContent = "暂无档案（会话刚同步，稍后重试）";
+      box.textContent = SH("profile.empty");
       return;
     }
     const p = res.profile;
     const rel = p.relationship || {};
     const act = p.activity || {};
     const tags = [];
-    if (rel.stage) tags.push(`阶段：${rel.stage}`);
-    if (p.language) tags.push(`语言：${p.language}`);
-    if (rel.intimacy_score != null) tags.push(`亲密度：${rel.intimacy_score}`);
-    if (act.message_count != null) tags.push(`消息：${act.message_count}`);
+    // rel.stage 是**机器码**（warming/steady/…），服务端的 stage_label 恒为中文
+    // （STAGE_LABEL_ZH）——所以走 cp 词典按码取本地化标签，查不到才回落服务端 label /
+    // 裸码。与共享组件 <cp-rel-stage>._stLabel 同一口径，两处不得各译一套。
+    if (rel.stage) tags.push(SH("profile.stage") + relStageLabel(rel.stage, rel.stage_label));
+    if (p.language) tags.push(SH("profile.lang") + p.language);
+    if (rel.intimacy_score != null) tags.push(SH("profile.intimacy") + rel.intimacy_score);
+    if (act.message_count != null) tags.push(SH("profile.msgs") + act.message_count);
     box.innerHTML =
       `<div style="font-weight:600;margin-bottom:6px">${esc(p.display_name || c.name || c.chat_key)}</div>` +
       tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("");
   } catch (e) {
-    box.textContent = "档案加载失败";
+    box.textContent = SH("profile.load_failed");
   }
 }
 
@@ -1446,15 +2223,15 @@ async function runKbSearch() {
   const q = $("cp-kb-input").value.trim();
   const list = $("cp-kb");
   if (!q) {
-    list.innerHTML = '<div class="cp-hint">输入关键词搜索知识库</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.hint_input")) + '</div>';
     return;
   }
-  list.innerHTML = '<div class="cp-hint">搜索中…</div>';
+  list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.searching")) + '</div>';
   try {
     const res = await window.shell.kbSearch({ q, platform: c ? c.platform : "", intent: "" });
     const entries = (res && res.entries) || [];
     if (!entries.length) {
-      list.innerHTML = '<div class="cp-hint">无匹配条目</div>';
+      list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.no_match")) + '</div>';
       return;
     }
     list.innerHTML = "";
@@ -1463,13 +2240,13 @@ async function runKbSearch() {
       const item = document.createElement("div");
       item.className = "cp-item";
       item.innerHTML =
-        `<div class="it-title">${esc(en.title || en.category || "条目")}</div>` +
+        `<div class="it-title">${esc(en.title || en.category || SH("kb.entry"))}</div>` +
         `<div>${esc(ans.slice(0, 160))}${ans.length > 160 ? "…" : ""}</div>`;
       item.appendChild(actionRow(ans));
       list.appendChild(item);
     });
   } catch (e) {
-    list.innerHTML = '<div class="cp-hint">搜索失败</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.search_failed")) + '</div>';
   }
 }
 
@@ -1481,7 +2258,7 @@ async function loadTemplatesOnce() {
     const res = await window.shell.templates();
     const tpls = (res && res.templates) || [];
     if (!tpls.length) {
-      list.innerHTML = '<div class="cp-hint">暂无快捷回复模板</div>';
+      list.innerHTML = '<div class="cp-hint">' + esc(SH("tpl.empty")) + '</div>';
       return;
     }
     list.innerHTML = "";
@@ -1498,7 +2275,7 @@ async function loadTemplatesOnce() {
       list.appendChild(item);
     });
   } catch (e) {
-    list.innerHTML = '<div class="cp-hint">模板加载失败</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("tpl.load_failed")) + '</div>';
   }
 }
 
@@ -1524,7 +2301,7 @@ async function loadRelStage() {
       c.platform, currentAccountId(c), c.chat_key
     );
     const client = copilotClient();
-    ["cp-relstage", "cp-nba", "cp-script", "cp-collab", "cp-chain"].forEach((id) => {
+    ["cp-relstage", "cp-collab", "cp-chain"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.client = client;
@@ -1547,3 +2324,99 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])
   );
 }
+
+// ── 壳级通知条（更新就绪 / 官方公告，P0 2026-08-14）──────────────────────────
+// 数据与决策全在主进程（update-notify.pickNotice）：这里只消费「当前该显示的一条」。
+// 主按钮语义随 kind 变：更新=「立即重启更新」；公告带链接=「查看详情」（读后即销）。
+// ✕ 语义：更新=稍后（4h 后再提醒，不打断当下工作）；公告=已读（不再出现）。
+(function initShellNotice() {
+  const bar = document.getElementById("shell-notice");
+  const sh = window.shell;
+  if (!bar || !sh || typeof sh.shellNotice !== "function") return;
+  const badge = document.getElementById("sn-badge");
+  const text = document.getElementById("sn-text");
+  const primary = document.getElementById("sn-primary");
+  const dismiss = document.getElementById("sn-dismiss");
+  let cur = null;
+
+  function render(n) {
+    cur = n && n.kind ? n : null;
+    if (!cur) { bar.hidden = true; return; }
+    bar.className = "sn-" + (cur.tone || "info");
+    badge.textContent = cur.badge || "";
+    // 更新类回 textKey(+vars) 由壳词典取词；公告类是服务端下发内容，回 text 原样显示。
+    const body = cur.textKey ? SH(cur.textKey, cur.vars || {}) : (cur.text || "");
+    text.textContent = body;
+    text.title = body; // 超长省略时 hover 看全文
+    primary.disabled = false;
+    if (cur.kind === "update" && cur.action === "restart") {
+      primary.textContent = SH("notice.update_restart");
+      primary.hidden = false;
+    } else if (cur.kind === "announcement" && cur.action === "open") {
+      primary.textContent = SH("notice.open_detail");
+      primary.hidden = false;
+    } else {
+      primary.hidden = true;
+    }
+    // 强制升级（forced=版本已低于官方支持线）：横幅不可关闭——「稍后」对必须完成的
+    // 事是假选项；主按钮（就绪后的「立即重启更新」）是唯一出口，应用其余功能不锁。
+    dismiss.hidden = !!cur.forced;
+    bar.hidden = false;
+  }
+
+  primary.addEventListener("click", async () => {
+    if (!cur) return;
+    try {
+      if (cur.kind === "update") {
+        primary.disabled = true;
+        primary.textContent = SH("notice.restarting");
+        const r = await sh.updateRestart();
+        if (!r || !r.ok) render(await sh.shellNotice()); // 没就绪等罕见态：回读真状态复位按钮
+      } else if (cur.kind === "announcement") {
+        sh.noticeOpen(cur.id);
+        render(await sh.noticeAck({ action: "read", id: cur.id }));
+      }
+    } catch (e) { console.log(`[notice] 主按钮失败: ${e}`); }
+  });
+  dismiss.addEventListener("click", async () => {
+    if (!cur) return;
+    try {
+      const args = cur.kind === "update" ? { action: "snooze" } : { action: "read", id: cur.id };
+      render(await sh.noticeAck(args));
+    } catch (e) { console.log(`[notice] 关闭失败: ${e}`); }
+  });
+
+  if (typeof sh.onShellNotice === "function") sh.onShellNotice(render);
+  sh.shellNotice().then(render).catch(() => {});
+})();
+
+// ── #254 D-P2 局域网开放常驻小横幅 ────────────────────────────────────────────
+// 出厂态后端只绑 127.0.0.1，横幅不存在；用户在系统设置打开「允许局域网设备连接」后
+// （主进程广播 cx-lan-access）常驻显示「后台对局域网开放 · 192.168.x.x:18799」——
+// 后台正对整个局域网可达这件事必须一直看得见，而不是藏在设置页里。
+// 「手机扫码」直达收件箱页小智的配对弹窗（assistant-agent.js 暴露 window.XZAgent.pair）。
+(function initLanOpenBanner() {
+  const bar = document.getElementById("lan-open-banner");
+  const sh = window.shell;
+  if (!bar || !sh || typeof sh.lanAccess !== "function") return;
+  const addr = document.getElementById("lan-open-addr");
+  const qr = document.getElementById("lan-open-qr");
+  function render(st) {
+    if (!st || st.lan_access !== true) { bar.hidden = true; return; }
+    if (addr) addr.textContent = st.lan_ip ? `${st.lan_ip}:${st.port || ""}` : "";
+    bar.hidden = false;
+  }
+  if (qr) {
+    qr.addEventListener("click", () => {
+      try { if (typeof Inbox.activate === "function") Inbox.activate(INBOX_ID); } catch (e) { /* 收件箱未就绪 */ }
+      try {
+        if (Inbox.wv && typeof Inbox.wv.executeJavaScript === "function") {
+          Inbox.wv.executeJavaScript(
+            "(function(){try{if(window.XZAgent&&window.XZAgent.pair){window.XZAgent.pair();}}catch(e){}})();", true);
+        }
+      } catch (e) { console.log(`[lan-access] open pair modal failed: ${e}`); }
+    });
+  }
+  if (typeof sh.onLanAccess === "function") sh.onLanAccess(render);
+  sh.lanAccess({ action: "status" }).then(render).catch(() => {});
+})();

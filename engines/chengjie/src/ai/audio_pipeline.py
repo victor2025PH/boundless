@@ -208,12 +208,20 @@ class AudioPipeline:
         *,
         language_hint: Optional[str] = None,
         timeout_sec: float = 30.0,
+        want_segments: bool = False,
     ) -> TranscribeResult:
-        """异步转写。失败返回 ok=False + error；调用方自行降级。"""
+        """异步转写。失败返回 ok=False + error；调用方自行降级。
+
+        ``want_segments=True`` → 结果 ``extra["segment_list"]``（[{start,end,text}]，秒）
+        ——SRT 字幕消费方 opt-in（P3 2026-08-18）。语音主链默认 False 零变化；
+        openai 后端对老 176 服务（无 verbose_json）优雅降级为空列表。
+        （``extra["segments"]`` 是存量**计数**键，勿混用。）
+        """
         rv = await self._transcribe_file_once(
             path,
             language_hint=language_hint,
             timeout_sec=timeout_sec,
+            want_segments=want_segments,
         )
         if not self._should_try_fallback(rv):
             return rv
@@ -224,6 +232,7 @@ class AudioPipeline:
             path,
             language_hint=language_hint,
             timeout_sec=timeout_sec,
+            want_segments=want_segments,
         )
         fb.extra["primary_ok"] = rv.ok
         fb.extra["primary_text"] = rv.text[:200]
@@ -281,6 +290,7 @@ class AudioPipeline:
         *,
         language_hint: Optional[str] = None,
         timeout_sec: float = 30.0,
+        want_segments: bool = False,
     ) -> TranscribeResult:
         rv = TranscribeResult(model=self._model_label())
         if not self.enabled:
@@ -319,16 +329,25 @@ class AudioPipeline:
                     avg_logprobs = []
                     no_speech_probs = []
                     compression_ratios = []
+                    seg_list = []
                     for seg in segments:
                         txt = str(getattr(seg, "text", "") or "").strip()
                         if txt:
                             texts.append(txt)
+                            if want_segments:
+                                seg_list.append({
+                                    "start": round(float(getattr(seg, "start", 0.0) or 0.0), 3),
+                                    "end": round(float(getattr(seg, "end", 0.0) or 0.0), 3),
+                                    "text": txt,
+                                })
                         if getattr(seg, "avg_logprob", None) is not None:
                             avg_logprobs.append(float(getattr(seg, "avg_logprob")))
                         if getattr(seg, "no_speech_prob", None) is not None:
                             no_speech_probs.append(float(getattr(seg, "no_speech_prob")))
                         if getattr(seg, "compression_ratio", None) is not None:
                             compression_ratios.append(float(getattr(seg, "compression_ratio")))
+                    if want_segments and seg_list:
+                        out.extra["segment_list"] = seg_list
                     out.text = " ".join(texts).strip()
                     out.language = str(getattr(info, "language", "") or "")
                     out.duration_sec = float(
@@ -355,14 +374,36 @@ class AudioPipeline:
                         kwargs: Dict[str, Any] = {
                             "model": self.online_model,
                             "file": f,
-                            "response_format": "json",
+                            # want_segments → verbose_json（新 176 服务回 segments；
+                            # 老服务不认该值按默认 json 回 {"text"}，优雅降级零风险）
+                            "response_format": "verbose_json" if want_segments else "json",
                         }
                         if lang:
                             kwargs["language"] = lang
                         resp = self._model.audio.transcriptions.create(**kwargs)
                     text = str(getattr(resp, "text", "") or "").strip()
                     out.text = text
-                    out.language = lang or ""
+                    out.language = str(getattr(resp, "language", "") or "") or (lang or "")
+                    if want_segments:
+                        try:
+                            segs = getattr(resp, "segments", None) or []
+                            seg_list = []
+                            for s in segs:
+                                g = (lambda k: (s.get(k) if isinstance(s, dict)
+                                                else getattr(s, k, None)))
+                                st = str(g("text") or "").strip()
+                                if not st:
+                                    continue
+                                seg_list.append({
+                                    "start": round(float(g("start") or 0.0), 3),
+                                    "end": round(float(g("end") or 0.0), 3),
+                                    "text": st,
+                                })
+                            if seg_list:
+                                out.extra["segment_list"] = seg_list
+                        except Exception:
+                            logger.debug("[audio_pipeline] verbose_json segments 解析失败（忽略）",
+                                         exc_info=True)
                     out.ok = bool(text)
                 else:
                     out.error = f"unknown_backend: {self.backend}"

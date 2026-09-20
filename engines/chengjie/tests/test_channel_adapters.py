@@ -19,7 +19,10 @@ from src.inbox.channel_adapters import (
     TelegramInboxAdapter,
     WebInboxAdapter,
     collect_chats_via_adapters,
+    count_group_chats,
     default_inbox_adapters,
+    note_group_list_count,
+    reset_group_count_watch,
     send_via_adapters,
     status_via_adapters,
 )
@@ -142,6 +145,28 @@ def test_collect_isolates_failing_adapter():
     assert len(chats) == 1 and chats[0]["platform"] == "line"
 
 
+def test_group_count_watch_logs_on_change(caplog):
+    """#32③：群数量变化可观测；首扫不打、同数不打。"""
+    reset_group_count_watch()
+    mixed = [
+        {"chat_type": "private"},
+        {"chat_type": "group"},
+        {"chat_type": "channel"},
+        {"is_group": True, "chat_type": ""},
+    ]
+    assert count_group_chats(mixed) == 3
+    with caplog.at_level("INFO"):
+        prev, now = note_group_list_count(mixed)
+        assert prev is None and now == 3
+        assert "group count changed" not in caplog.text
+        prev, now = note_group_list_count(mixed)
+        assert prev == 3 and now == 3
+        assert "group count changed" not in caplog.text
+        prev, now = note_group_list_count(mixed[:1])
+        assert prev == 3 and now == 0
+        assert "group count changed 3 -> 0" in caplog.text
+
+
 # ── A2 写路径：status / send 适配器对称 ─────────────────────────────
 
 class _SvcWithStatusSend:
@@ -163,8 +188,16 @@ def test_status_via_adapters_merges_keys():
     st = status_via_adapters(req, default_inbox_adapters())
     assert st["line_line1"]["running"] is True
     assert st["line_line1"]["label"] == "LINE One"
-    # telegram 始终上报（无 client 时 running=False）
+    # 有 A 线 client 时 telegram 上报 default 行
     assert "telegram" in st and st["telegram"]["platform"] == "telegram"
+
+
+def test_telegram_status_absent_without_client():
+    """telegram 未配置（无 client）时不得上报幽灵 default 行——
+    该行不在注册表里，删除/登出全是空操作，会在连接中心显示成
+    「永远断线且删不掉的主账号」（2026-07-21 生产实测）。"""
+    st = status_via_adapters(_req(), default_inbox_adapters())
+    assert "telegram" not in st
 
 
 def test_status_isolates_failing_adapter():
@@ -539,11 +572,23 @@ def test_line_send_fake_send_to_chat_still_works(monkeypatch):
 # ── 已移除账号：只读历史展示（看不到之前聊天记录的修复） ──────────────
 
 class _FakeRegistry:
+    """镜像真实 AccountRegistry.list 的签名与语义。
+
+    ⚠ 教训（2026-07-31）：旧版 fake 的 ``list()`` 无 include_removed 参数且返回全部行
+    ——与真实注册表「默认排除 removed」行为不符，导致 ``_protocol_ids`` 的
+    include_removed 死代码 bug 被这套测试**假阳性掩盖**（真实环境 removed 桶恒空，
+    测试环境却有数据）。fake 必须忠实还原默认排除语义。
+    """
+
     def __init__(self, rows):
         self._rows = rows
 
-    def list(self):
-        return self._rows
+    def list(self, platform=None, *, include_removed=False):
+        out = [r for r in self._rows
+               if platform is None or r.get("platform") == platform]
+        if not include_removed:
+            out = [r for r in out if r.get("status") != "removed"]
+        return out
 
 
 class _FakeProtoStore:

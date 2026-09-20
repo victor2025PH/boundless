@@ -89,3 +89,157 @@ def test_normal_inbound_not_treated_as_request(tmp_path):
     assert r.status_code == 200, r.text
     assert store.get_automation_mode_if_set(cid) is None
     store.close()
+
+
+# ── 2026-08-11 请求可视化：is_request 落库 → chats 透传 → 出站自动清 → 显式处置 ──
+
+
+def test_request_flag_persisted_and_passed_through(tmp_path):
+    """ingest 携带 is_request → conversations 列落库 + store_row_to_chat 透传（前端徽章依据）。"""
+    from src.inbox.normalizer import store_row_to_chat
+    c, store = _client(tmp_path)
+    cid = conv_id("messenger", "acc1", "stranger_vis")
+    r = c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "stranger_vis", "name": "New Lead",
+        "text": "hello?", "ts": 1780000010.0, "direction": "in",
+        "is_request": True, "request_category": "general",
+    })
+    assert r.status_code == 200, r.text
+    row = store.get_conversation(cid) or {}
+    assert int(row.get("is_request") or 0) == 1
+    assert row.get("request_category") == "general"
+    chat = store_row_to_chat(row)
+    assert chat["is_request"] is True
+    assert chat["request_category"] == "general"
+    # 普通好友入站不带标记（缺省 0/空 → 前端零徽章）
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "friend2", "name": "F", "text": "hi",
+        "ts": 1780000011.0, "direction": "in",
+    })
+    row2 = store.get_conversation(conv_id("messenger", "acc1", "friend2")) or {}
+    assert int(row2.get("is_request") or 0) == 0
+    assert store_row_to_chat(row2)["is_request"] is False
+    store.close()
+
+
+def test_outbound_message_clears_request_flag(tmp_path):
+    """回复即接受：出站消息一落库自动撤请求标记；入站不清；重复出站幂等。"""
+    from src.inbox.models import InboxMessage
+    c, store = _client(tmp_path)
+    cid = conv_id("messenger", "acc1", "stranger_reply")
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "stranger_reply", "name": "Lead",
+        "text": "hi", "ts": 1780000020.0, "direction": "in",
+        "is_request": True, "request_category": "general",
+    })
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 1
+    # 又一条入站：标记仍在（客户连发不算处置）
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "stranger_reply", "name": "Lead",
+        "text": "u there?", "ts": 1780000021.0, "direction": "in",
+        "is_request": True, "request_category": "general",
+    })
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 1
+    # 出站镜像落库 → 标记自动清（任何发送路径共用 ingest_message 这一写点）
+    assert store.ingest_message(InboxMessage(
+        conversation_id=cid, direction="out", text="你好，很高兴认识",
+        ts=1780000022.0)) is True
+    row = store.get_conversation(cid) or {}
+    assert int(row.get("is_request") or 0) == 0
+    assert row.get("request_category") == ""
+    store.close()
+
+
+def test_request_setters_idempotent(tmp_path):
+    """mark/clear setter 幂等；clear 对非请求会话零影响。"""
+    c, store = _client(tmp_path)
+    cid = conv_id("messenger", "acc1", "s1")
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "s1", "name": "S", "text": "yo",
+        "ts": 1780000030.0, "direction": "in",
+    })
+    store.mark_conversation_request(cid, "spam")
+    store.mark_conversation_request(cid, "spam")
+    assert (store.get_conversation(cid) or {}).get("request_category") == "spam"
+    store.clear_conversation_request(cid)
+    store.clear_conversation_request(cid)
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 0
+    store.close()
+
+
+def test_request_action_route_validates_and_clears_on_accept(tmp_path, monkeypatch):
+    """代理路由：参数校验 400；accept 成功（mock worker）→ 本地标记被清。"""
+    import src.integrations.messenger_web_login as mwl
+    c, store = _client(tmp_path)
+    cid = conv_id("messenger", "acc1", "stranger_btn")
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "stranger_btn", "name": "Lead",
+        "text": "hi", "ts": 1780000040.0, "direction": "in",
+        "is_request": True, "request_category": "general",
+    })
+    # 参数校验
+    r = c.post("/api/platforms/messenger/acc1/request-action",
+               json={"action": "accept"})
+    assert r.status_code == 400
+    r = c.post("/api/platforms/messenger/acc1/request-action",
+               json={"chat_key": "stranger_btn", "action": "report"})
+    assert r.status_code == 400
+    # worker 打桩：accept 成功
+    calls = {}
+
+    async def _fake_post(url, payload, timeout=30.0):
+        calls["url"] = url
+        calls["payload"] = payload
+        return {"ok": True, "action": "accept", "was_request": True}
+
+    monkeypatch.setattr(mwl, "_post_json", _fake_post)
+    r = c.post("/api/platforms/messenger/acc1/request-action",
+               json={"chat_key": "stranger_btn", "action": "accept"})
+    assert r.status_code == 200, r.text
+    assert r.json().get("ok") is True
+    assert calls["payload"] == {"jid": "stranger_btn", "action": "accept",
+                                "confirm": False}
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 0
+    store.close()
+
+
+def test_request_action_decline_probe_keeps_flag(tmp_path, monkeypatch):
+    """decline 未 confirm（worker 返回 probe）→ 未真删，本地标记保留。"""
+    import src.integrations.messenger_web_login as mwl
+    c, store = _client(tmp_path)
+    cid = conv_id("messenger", "acc1", "stranger_keep")
+    c.post("/api/internal/protocol/ingest", json={
+        "platform": "messenger", "account_id": "acc1",
+        "chat_key": "stranger_keep", "name": "Lead",
+        "text": "hi", "ts": 1780000050.0, "direction": "in",
+        "is_request": True, "request_category": "spam",
+    })
+
+    async def _fake_post(url, payload, timeout=30.0):
+        return {"ok": True, "action": "decline", "probe": True,
+                "button_found": True}
+
+    monkeypatch.setattr(mwl, "_post_json", _fake_post)
+    r = c.post("/api/platforms/messenger/acc1/request-action",
+               json={"chat_key": "stranger_keep", "action": "decline"})
+    assert r.status_code == 200
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 1
+    # confirm 真删成功 → 标记清除
+    async def _fake_post2(url, payload, timeout=30.0):
+        assert payload["confirm"] is True
+        return {"ok": True, "action": "decline", "deleted": True}
+
+    monkeypatch.setattr(mwl, "_post_json", _fake_post2)
+    r = c.post("/api/platforms/messenger/acc1/request-action",
+               json={"chat_key": "stranger_keep", "action": "decline",
+                     "confirm": True})
+    assert r.status_code == 200
+    assert r.json().get("deleted") is True
+    assert int((store.get_conversation(cid) or {}).get("is_request") or 0) == 0
+    store.close()

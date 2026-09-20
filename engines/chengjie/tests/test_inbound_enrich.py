@@ -106,6 +106,36 @@ def test_peer_media_explicit_fields_win_over_text():
     assert ctx["_media_desc"] == "显式描述"
 
 
+def test_peer_media_transcribed_voice_is_not_media_block():
+    """A 线语音转写成功不得置 _peer_message_is_media（8/16 键盘驻留事故）。"""
+    ctx = peer_media_context(
+        "来聊一聊今天的新闻", media_type="voice", media_ref="voice/abc.ogg",
+    )
+    assert ctx.get("_peer_message_is_voice") is True
+    assert "_peer_message_is_media" not in ctx
+    assert "_media_desc" not in ctx
+    assert ctx.get("_media_ref") == "voice/abc.ogg"
+
+
+def test_peer_media_voice_placeholder_still_media():
+    """转写失败的裸 [语音] 仍走媒体块（坐席/模型知道对方发了语音但没听清）。"""
+    ctx = peer_media_context("[语音]", media_type="voice")
+    assert ctx.get("_peer_message_is_media") is True
+    assert ctx.get("_media_kind") == "voice"
+
+
+def test_peer_media_wechat_duration_is_untranscribed():
+    """电脑微信「语音11秒」不得当已转写（否则模型会把占位当对方说的话）。"""
+    ctx = peer_media_context("语音11秒", media_type="voice")
+    assert ctx.get("_peer_message_is_media") is True
+    assert ctx.get("_media_kind") == "voice"
+    assert ctx.get("_peer_message_is_voice") is not True
+    # 无 media_type 时也能从占位文案认出语音（UIA 类名偶尔认不出）
+    ctx2 = peer_media_context("语音9秒")
+    assert ctx2.get("_media_kind") == "voice"
+    assert ctx2.get("_peer_message_is_media") is True
+
+
 def test_language_switch_hint_en_to_ja():
     hist = [
         {"role": "user", "content": "How are you today?"},

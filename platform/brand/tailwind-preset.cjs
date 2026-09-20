@@ -66,6 +66,8 @@ module.exports = {
         lingo: categoryColor("lingo"),
         // primary 别名 → 智连蓝（供智控王等 growth 系产品沿用 primary-* 写法迁移）
         primary: categoryColor("growth"),
+        // 皇冠资产强调色（集团控制台 /console 专属；数值同 warning，语义独立）
+        crown: { ...stripMeta(tokens.crown.scale), DEFAULT: tokens.crown.accent },
         // 语义色
         success: stripMeta(tokens.semantic.success),
         warning: stripMeta(tokens.semantic.warning),

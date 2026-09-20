@@ -258,6 +258,15 @@ class LineRpaStateStore:
                 )
             except Exception as e:
                 logger.debug("ALTER last_mentioned 跳过: %s", e)
+        # 会话语言契约（lang_policy）：稳定检测缓存 + 用户明确请求偏好
+        for _lang_col in ("detected_lang", "user_lang_pref", "user_lang_pref_input"):
+            if _lang_col not in cs_cols:
+                try:
+                    self._conn.execute(
+                        f"ALTER TABLE line_rpa_chat_state ADD COLUMN {_lang_col} TEXT DEFAULT ''"
+                    )
+                except Exception as e:
+                    logger.debug("ALTER %s 跳过: %s", _lang_col, e)
         # P7-C: 对话层语言落库（runs）
         if "reply_lang" not in cols:
             try:
@@ -350,6 +359,46 @@ class LineRpaStateStore:
         return [dict(r) for r in rows]
 
     # ── 运行历史 ─────────────────────────────────────────
+
+    def set_lang_state(
+        self,
+        chat_key: str,
+        *,
+        detected_lang: Optional[str] = None,
+        user_lang_pref: Optional[str] = None,
+        user_lang_pref_input: Optional[str] = None,
+    ) -> None:
+        """会话语言契约（lang_policy）状态写入；None = 不更新该列。"""
+        fields: Dict[str, str] = {}
+        if detected_lang is not None:
+            fields["detected_lang"] = str(detected_lang or "").strip().lower()
+        if user_lang_pref is not None:
+            fields["user_lang_pref"] = str(user_lang_pref or "").strip().lower()
+        if user_lang_pref_input is not None:
+            fields["user_lang_pref_input"] = str(user_lang_pref_input or "").strip().lower()
+        if not fields:
+            return
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT chat_key FROM line_rpa_chat_state WHERE chat_key=?", (chat_key,)
+            ).fetchone()
+            if row:
+                sets = ", ".join(f"{k}=?" for k in fields) + ", updated_at=?"
+                self._conn.execute(
+                    f"UPDATE line_rpa_chat_state SET {sets} WHERE chat_key=?",
+                    (*fields.values(), now, chat_key),
+                )
+            else:
+                cols = ", ".join(["chat_key", *fields.keys(),
+                                  "last_peer_text", "last_peer_hash", "last_reply",
+                                  "last_screen_sha256", "updated_at"])
+                phs = ", ".join("?" * (len(fields) + 6))
+                self._conn.execute(
+                    f"INSERT INTO line_rpa_chat_state ({cols}) VALUES ({phs})",
+                    (chat_key, *fields.values(), "", "", "", "", now),
+                )
+            self._conn.commit()
 
     def set_forced_lang(self, chat_key: str, lang: Optional[str]) -> None:
         """P7-D: 锁定或解除锁定对话级语言。lang=None 表示解除。"""

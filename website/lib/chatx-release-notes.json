@@ -1,0 +1,1311 @@
+[
+  {
+    "version": "1.0.93",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "升级安装再修一刀：关闭旧版由安装器自己接管，不再弹「无法关闭」",
+      "en": "Upgrade install, round two: setup now closes the old version itself"
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "1.0.92 之后仍有用户装到一半弹「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」——这个弹窗来自安装器框架自带的那段检查，它留给关闭程序的时间只有约 6 秒，而智聊退出时要先把后端与边车干净带走（按设计最多 8 秒，电脑微信副驾在跑时更久），于是慢一点的电脑必然超时",
+        "本版把「关闭旧版」整段收归自己做：先正常请求关闭（让后端干净退出，账号不用重登），再按实际安装目录强制清理，每一步都轮询确认真的退干净了才继续，不再用固定等待赌运气",
+        "自选过安装目录的用户以前不在清理范围内（只认默认目录），本版按真实安装路径匹配，这个漏洞一并补上",
+        "万一仍有进程关不掉（例如智聊是以管理员身份启动的），安装继续进行并如实说明，不再把人顶在「点重试」上；诊断信息写入 %TEMP%\\chatx_install_reap.log，报障时带上这个文件即可定位",
+        "数据、各平台登录状态一律不受影响"
+      ],
+      "en": [
+        "Some users still hit \"ChatX cannot be closed - close it manually and click Retry\" after 1.0.92. That dialog comes from the installer framework's own check, which allows only ~6s for the app to go away, while ChatX deliberately takes up to 8s (longer with the WeChat PC copilot running) to shut its backend and sidecars down cleanly - so slower machines always lost that race",
+        "Setup now owns the whole \"close the old version\" step: ask nicely first (so the backend exits cleanly and accounts never need to log in again), then force by the real install directory, polling for proof at every step instead of sleeping a fixed amount and hoping",
+        "Custom install folders were previously outside the sweep (only the default folder matched); it now matches the actual install path",
+        "If something truly cannot be closed (for example ChatX was started as administrator), setup carries on and says so instead of parking you on a Retry button; details go to %TEMP%\\chatx_install_reap.log for support",
+        "Your data and account logins are untouched"
+      ]
+    }
+  },
+  {
+    "version": "1.0.92",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "修复升级安装卡「智聊无法关闭」「卸载旧版失败: 2」",
+      "en": "Fix upgrades stalling on \"cannot close ChatX\" / \"uninstall old files: 2\""
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "升级安装不再卡在「智聊 无法关闭，请手动关闭」或「Failed to uninstall old application files: 2」，不用再点重试、也不用重启电脑",
+        "根因：安装器清理后台进程那一步按进程路径匹配，而该路径在安装器环境下读不到，等于一直空转；1.0.90 起随包的电脑微信副驾后台进程因此一直占着安装目录",
+        "旧版本万一仍被占用，现在会自动清理重试，再不行就直接覆盖安装并如实告知，不会再让升级中途失败",
+        "数据、账号登录状态一律不受影响"
+      ],
+      "en": [
+        "Upgrades no longer stall on \"ChatX cannot be closed\" or \"Failed to uninstall old application files: 2\" - no retry clicking, no reboot",
+        "Root cause: the installer's background-process sweep matched on a process path that is unreadable from an installer context, so it never killed anything; since 1.0.90 the bundled WeChat PC copilot backend kept the install folder busy",
+        "If the old version is still busy, setup now clears it, retries, and finally installs over it while saying so - instead of failing mid-upgrade",
+        "Your data and account logins are untouched"
+      ]
+    }
+  },
+  {
+    "version": "1.0.91",
+    "date": "2026-09-20",
+    "title": {
+      "zh": "电脑微信一键副驾、可发语音、接管即停（安装包重打）",
+      "en": "WeChat PC copilot, outbound voice, takeover late gate (rebuild)"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "电脑微信：工作台 → 账号管理 → 个人微信 · PC 副驾，三步检测/选档/启动。问小智「个人微信怎么用」",
+        "全自动档可发人设语音（电脑微信 4.1.9+，引导第①步 VB-CABLE）。对方语音听不到会请打字。问小智「微信怎么发语音」",
+        "点接管或切手动后，还在路上的那一稿也会弃发。问小智「点了接管为什么还在自动发」",
+        "人设工坊成人政策「不设限」：未见该档=部署未开启。问小智「不设限怎么用」"
+      ],
+      "en": [
+        "Personal WeChat: Accounts → Personal WeChat · PC copilot, three steps detect / pick tier / Start",
+        "Full-auto can send clone-voice clips (WeChat 4.1.9+, VB-CABLE in step 1); inbound voice asks them to type",
+        "Take over drops a draft still waiting to send",
+        "Persona studio Unrestricted adult policy; missing option means the deployment has not enabled it"
+      ]
+    }
+  },
+  {
+    "version": "1.0.90",
+    "date": "2026-09-19",
+    "title": {
+      "zh": "电脑微信一键副驾、可发语音、接管即停、人设可开不设限",
+      "en": "WeChat PC copilot in one click, outbound voice, takeover stops in-flight sends, Unrestricted adult policy"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "电脑微信不用再复制启动命令：工作台 → 账号管理 → 个人微信 · PC 副驾，三步检测/选档/启动。开「微信登录后自动启动」后扫码登录即开始。问小智「个人微信怎么用」",
+        "全自动档可发人设语音（电脑微信 4.1.9+，引导第①步装/检测 VB-CABLE）。对方发来的语音听不到，人设会请打字。问小智「微信怎么发语音」",
+        "会话点接管或切手动后，还在等待发出的那一稿也会弃发。问小智「点了接管为什么还在自动发」",
+        "人设工坊成人政策多一档「不设限」：按人设接住露骨话题；自称未成年仍转人工。未见该档=部署未开启。问小智「不设限怎么用」",
+        "安装包里的后端可自己拉起副驾（不必另装 Python）；用户端打不开开发者工具"
+      ],
+      "en": [
+        "Personal WeChat no longer needs a pasted PowerShell command: Accounts → Personal WeChat · PC copilot, three steps detect / pick tier / Start. Auto-start after WeChat signs in",
+        "Full-auto can send clone-voice clips (WeChat 4.1.9+, VB-CABLE in step 1). Inbound voice cannot be heard; the persona asks them to type",
+        "Take over or Manual drops a draft still waiting to send",
+        "Persona studio adds Unrestricted adult policy; self-identified minors still hand off. Missing option means the deployment has not enabled it",
+        "The packaged backend can spawn the copilot without a system Python; DevTools stay off in the shipped app"
+      ]
+    }
+  },
+  {
+    "version": "1.0.89",
+    "date": "2026-09-18",
+    "title": {
+      "zh": "群进工作台、间隔记忆、西语不再翻成英文、刚发过图不再空口承诺",
+      "en": "Group inbox, time-gap memory, Spanish stays Spanish, no empty photo promises"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "Telegram 群即使没触发自动回复也会进统一收件箱「群组动态」，会话名用群名。某个群完全看不到：把 chat_id 加进灰度白名单。问小智「群消息怎么进工作台」",
+        "对方隔几天再来，拟稿按真实间隔说话，并能接上上次提过的事。问小智「隔很久再聊会乱记时间吗」",
+        "带 ¿ / ¡ 的西语短句不再被当成英文再译成英文发出去。问小智「西语为什么回成英文」",
+        "刚从工作台发过图，下一条拟稿不再说「等我再发一张」；对方发来的图会认。问小智「刚发过图为什么还说要发」",
+        "本机模型偶发连不上时不再一冻两分钟，第一次毛刺会马上重试"
+      ],
+      "en": [
+        "Telegram group lines land in Group activity even when auto-reply does not fire; the thread keeps the group title. A missing group is usually off the allowlist",
+        "After a few days away, drafts use the real gap and can pick up the last topic",
+        "Short Spanish lines with ¿ / ¡ stay Spanish instead of being re-translated into English",
+        "Drafts see photos already sent, so they do not promise another one immediately",
+        "A brief local-model blip is retried instead of skipping the endpoint for two minutes"
+      ]
+    }
+  },
+  {
+    "version": "1.0.88",
+    "date": "2026-09-18",
+    "title": {
+      "zh": "公网认人、跟图闸、免打扰原文、WA 边车进包",
+      "en": "Hosted face ID, follow-photo gate, quiet-hours verbatim, WA sidecar in the installer"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户发来带人脸的照片时，拟稿自动多一句内部说明（人设 / 本人 / 关系人 / 不要猜可以问）。外网走官网网关，不用开开关；对方说「是我」才记成事实。问小智「图中是谁怎么用」",
+        "客户只发图或回「好的」不再自动跟一张相册图；对方话里真要图或你已承诺才出图",
+        "关怀原文在免打扰时段按「保留」策略不会被挤出安静窗",
+        "WhatsApp 解密失败（Bad MAC）在工作台可见，边车已随本包"
+      ],
+      "en": [
+        "Customer photos with a face get one internal drafting note (persona / self / relation / don't guess). Hosted installs use the site gateway with no toggle; only that's me becomes a fact",
+        "Inbound photos or an ok no longer auto-follow with an album send; only a real ask or a kept promise fires the album",
+        "Verbatim care lines on keep-quiet-hours stay in the quiet window instead of being shifted out",
+        "WhatsApp decrypt failures (Bad MAC) are visible in the workspace; the sidecar ships in this build"
+      ]
+    }
+  },
+  {
+    "version": "1.0.87",
+    "date": "2026-09-17",
+    "title": {
+      "zh": "本机模型离线不静默、配文跟语言、生成图归属、拦截人话",
+      "en": "No silence when local model is offline, captions follow language, generated-photo provenance, plain block reasons"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "会话选了「无限制」而本机模型离线时不再静默不回：自动按标准档回复，会话头黄条「切回标准」，模式菜单离线项淡显带原因",
+        "发图配文跟会话语言走：日语、泰语等非中英会话不再冒出中文固定配文",
+        "有真人相册的人设默认不再发 AI 生成的脸；相册页给生成图打「AI 生成」角标，可筛选清理，并新增「允许 AI 生成」开关",
+        "节奏页「最近 24 小时」拦截原因改人话：写清与哪条相近、相似度、已改写几次，行尾直达会话；近重复第二次先换角度改写再转人工",
+        "AI 体检面板「为什么没回」新增「本机模型离线」与最近拦截时间线，不用再翻日志",
+        "承诺发图连续落空时自动收口，不再一轮一轮说「马上拍给你」；草稿预览里不再露出 [PHOTO …] 指令原码",
+        "克隆声不支持会话语种时，会话头一行提示，不再每条告警，也不再误报「语音出站断档」",
+        "人设生活小事在日语、英语等会话里不再跨日重讲成「今天」的新鲜事",
+        "顶栏「急需处理」只在全部都是严重超时时才这么标，混有「超过提醒线」的会话时显示「待处理」",
+        "[图片] / [Image] / [Voice] 等系统占位不再原样外发；「刚拍的」「这张就是我」这类没图却说发了图的话会被撤回改写"
+      ],
+      "en": [
+        "Unrestricted chats no longer go silent when the local model is offline: the AI answers on the standard profile, the header offers Switch back to standard, and the offline option is dimmed in the mode menu with the reason",
+        "Photo captions follow the chat language: Japanese, Thai and other non-Chinese/English chats no longer receive canned Chinese captions",
+        "Personas with a real album no longer send AI-generated faces by default; generated photos carry an AI generated badge in the album, can be filtered for cleanup, and a new Allow AI generation switch controls it",
+        "Block reasons on the pacing page's Last 24 hours now read as plain text with which message it matched, similarity and rewrite count, plus a link into the chat; a second near-duplicate gets an angle-changing rewrite before handoff",
+        "The AI diagnosis panel's Why no reply now lists Local model offline and a recent block timeline, no log digging needed",
+        "Repeated unfulfilled photo promises are reined in automatically instead of another \"I'll take one right now\"; draft previews no longer show raw [PHOTO …] directives",
+        "When the clone voice cannot speak the chat language, the header shows a one-line note; no per-message warnings and no false voice outage alerts",
+        "Persona life snippets are no longer retold as \"today's\" news across days in Japanese, English and other non-Chinese chats",
+        "The top-bar Urgent pill is only labelled Urgent when every item is critically overdue; mixed lists show To handle",
+        "System placeholders like [Image] / [Voice] no longer leak into outgoing messages; lines claiming a photo was sent when none was are retracted and rewritten"
+      ]
+    }
+  },
+  {
+    "version": "1.0.86",
+    "date": "2026-09-16",
+    "title": {
+      "zh": "发送真相四闸与大文件媒体",
+      "en": "Send-truth gates and large media"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "客户只发图不说话时，不再自动跟一张相册图；对方话里真要图或你已承诺才出图",
+        "出站翻译空串会重试、换引擎、必要时重起草；仍失败不发原文，会话头可「重试翻译」",
+        "全部账号列表顶：单人端默认隐藏休眠/风控/停联系统筹码，打开才出人话标签",
+        "人设相册可传更大静图与视频，带上传进度；iPhone HEIC 尽量转 JPEG 入库",
+        "相册删图与「删除所选」不再整页跳回顶；缩略图在页内灯箱打开",
+        "聊天发视频按各平台上限（LINE/TG 更大，Messenger 仍约 25MB）；超限提示还差多少",
+        "静图过大可「压后发送」，默认仍发原图；上传超时随体积加长",
+        "相册上传失败原因与重试仍在结果条；系统识图描述里的「自拍」不再当索图",
+        "报障 outbox 补传纳入看门狗，源码态实例网络恢复后也会自动补传",
+        "人设工坊半成品渲染与报障中文 note 头编码两处根修"
+      ],
+      "en": [
+        "Inbound photos alone no longer auto-follow with an album send; only a real ask or a kept promise fires the album",
+        "Outbound translate empty retries, switches engine, may redraft; still failing holds the line with Retry translate — never sends Chinese as-is",
+        "All-accounts strip hides dormant/risk/stop-contact chips on single-seat until System tags are opened (plain labels)",
+        "Persona album accepts larger stills and videos with upload progress; iPhone HEIC converts to JPEG when possible",
+        "Album delete and Delete selected no longer jump to the top; thumbnails open an in-page lightbox",
+        "Chat videos follow platform caps (higher on LINE/TG; Messenger still ~25MB); over-limit toasts show how much over",
+        "Large stills can Compress then send (default remains original); upload timeout scales with size",
+        "Album upload failures stay visible with retry; system selfie captions are not treated as photo asks",
+        "Diag outbox flush is on the watchdog so source-mode instances also re-upload after network recovery",
+        "Persona studio half-wired render and support-note encoding fixed at the root"
+      ]
+    }
+  },
+  {
+    "version": "1.0.85",
+    "date": "2026-09-13",
+    "title": {
+      "zh": "客户当地时间、接力记忆、单人端不再误认领、切档不双发",
+      "en": "Peer local time, handoff memory, single-seat default, no double-send on yield"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "客户当地时间：打开会话 → 右栏画像确认城市后，AI 按客户当地钟，不再问几点 / 白天还是晚上；深夜主动触达也读这只钟，不按服务器钟半夜发。",
+        "人工发出的图 / 语音进入本会话记忆：工作台手发后气泡带「人工」角标，顶栏切回全自动即可接着认，不会装没看见。",
+        "单人端点开会话不再误出「处理中 · 释放认领」。团队要认领：自动回复设置 → 打开「多坐席协作」→ 保存，约 1 分钟后生效。",
+        "切档同一句只发一次；切到全自动会作废陈旧待确认稿。会话头状态带会写清「首回故意慢一点」等真原因。",
+        "筛选面板把休眠 / 风控 / 停联收进「系统标签 ▸ N」（单人端默认收起）；顶栏「发前确认」只计还能点通过的稿，审批台可清空超龄稿。",
+        "人设 → 相册批量上传逐张显示成功 / 失败，失败可展开原因并重试；会话头提示「相册没有匹配」时可点进去补标签。",
+        "客户说「我发张图给你」不再被当成向你索图而拒绝；入站图说明不夸大张数。",
+        "画像不把人设自称（客户喊的 Mizuki）写成客户名；目标面板摸底进度卡上的确认 / 拒绝钮不再被裁，能点。",
+        "输入框上方「模型 / 模式」两个入口：模型选谁答，模式选规矩（标准 / 无限制 + 上下文深度）。无限制需本机私有模型在线。"
+      ],
+      "en": [
+        "Customer local time: open a thread → confirm city on the right-hand profile. The AI then uses their clock and stops asking what time it is; proactive outreach uses the same clock and will not text in their late night.",
+        "Photos and voice you send by hand enter this thread's memory (Sent by you badge). Switch the header back to Full auto and the AI can claim them instead of pretending it never saw them.",
+        "A single seat no longer shows In progress · release claim. For a team: Reply settings → turn on Multi-seat collaboration → save; it applies within about a minute.",
+        "Switching back to Full auto sends a yielded line once (never twice) and cancels stale pending-approval drafts. The header band names the real reason, such as a deliberate slow first reply.",
+        "Inbox filters fold dormant / risk / stop-contact under System tags ▸ N (collapsed on one seat). The Pending approval pill counts only drafts you can still act on; the approval desk can clear stale ones.",
+        "Persona → Album batch upload reports each file; failures expand with a reason and Retry. A header note Album had no match opens the album so you can add tags.",
+        "If the customer offers to send their own photo, full-auto no longer treats that as a request for yours. Inbound captions are not inflated.",
+        "The profile never stores the persona name as the customer's name. Confirm / reject on the discovery progress card stay visible and tappable.",
+        "Above the composer, Model picks who answers and Mode picks the rules (Standard / Unrestricted + context depth). Unrestricted needs the local private model online."
+      ]
+    }
+  },
+  {
+    "version": "1.0.84",
+    "date": "2026-09-12",
+    "title": {
+      "zh": "群聊永不自动软回、五类硬拦、Messenger 失败可见、语言与克隆声诚实",
+      "en": "Groups never auto-soft-reply, five hard stops, visible Messenger failures, honest language and clone voice"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "群聊、报障群、人审 / 手动档永不自动发（含成人软回应）；软回应只在全自动私聊经出站闸发出，失败不发、不用套话顶替。",
+        "风控只拦五类：未成年、自伤、威胁、要钱 / 要凭据、确认诈骗；其余不停全自动。点「需人工」摘标或顶栏切回全自动，旧持有立刻释放，下一条按全自动走（TTL 2 小时）。",
+        "Messenger 发送失败在工作台写明原因并按原文自动重试；连败出铃铛。PIN 待确认出黄条；手机发出的消息带回抄并打「手机发出」角标。",
+        "画像 / 记忆只写客户原话里能核到的事实（couple months 不会写成职业）。无值「已提及」确认钮禁用；有值点 ✓ 必有打勾或红字。",
+        "客户叫我的名字用「对方怎么叫我」，不纠正成人设名。本会话 30 分钟内刚发过图，对方问「是你吗」必认领、不发第二张。",
+        "「发→」语言只跟本会话；目录 34 种含粤语。对方语言未知按人设语言回，会话头标注「对方语言未知 · 按人设语言回」。",
+        "克隆声不支持的语种不再偷偷换系统音，自动链改发文字；红条可「改发文字」或二次确认「用系统音发」。语音语种必须与文本一致。登记成功后结果面板可停留。",
+        "会话头第一条状态带写清「AI 会不会回、为什么」和下一步动作（摘标 / 立即接回 / 重试起草 / 确认 PIN）。",
+        "界面语言在顶栏地球按钮切换（简/繁/英/越/泰/印 + 跟随系统），整页刷新一次即生效。"
+      ],
+      "en": [
+        "Groups, the support group, and review / manual mode never auto-send (including adult soft replies). A soft reply only goes out in a full-auto private thread through the outbound gate; if generation fails, nothing is sent and no canned line is used.",
+        "Risk control only hard-stops five categories: minors, self-harm, threats, asking for money / credentials, confirmed scam. Everything else stays full-auto. Clearing the Needs-human tag or switching the header back to Full auto releases the old hold at once; the next message follows full-auto (TTL 2h).",
+        "A failed Messenger send shows the reason in the workspace and retries the same text automatically; a bell appears after consecutive failures. A yellow bar flags a pending PIN; messages sent from the phone are copied back with a Sent-from-phone badge.",
+        "Profile / memory only writes facts found in the customer's own words (couple months is never stored as a job). Confirm is disabled on a mention with no value; with a value, tapping Confirm always shows a tick or red text.",
+        "When the customer calls you by name, that name is What they call me — never corrected to the persona name. If they ask is that you after a photo sent in this thread within 30 minutes, the AI claims that photo and does not send a second one.",
+        "Send language is per thread; the catalog has 34 languages including Cantonese. If the peer language is unknown the AI replies in the persona language and the header notes Peer language unknown, replying in persona language.",
+        "Clone voice no longer silently falls back to a system voice for unsupported languages; the auto chain sends text. The red bar offers Send as text, or Use system voice with a second confirm. Voice language must match the text. After enrollment a result panel stays on the page.",
+        "The first line of the thread header is a status band: whether the AI will reply, why, and the next action (clear tag / resume now / retry draft / confirm PIN).",
+        "Switch the interface language from the top-bar globe (Simplified / Traditional / English / Vietnamese / Thai / Indonesian + follow system); it applies after one page reload."
+      ]
+    }
+  },
+  {
+    "version": "1.0.83",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "语言切换根修 + 自动出站单一闸门 + Messenger 代发止血 + 事实门二期",
+      "en": "Language switching fixed, single auto-outbound gate, Messenger relay hardening, fact gate v2"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "界面语言切换修复：切换后整页按所选语言显示，不再被旧链接参数钉回；桌面版菜单与页面同步，越南语 / 泰语 / 印尼语菜单不再落成中文",
+        "语言菜单升级：顶栏 / 用户菜单 / 登录页 / 初始化页统一为六语选择器（含「跟随系统语言」），当前项与跟随状态按真实来源显示，覆盖不足的语种自动标 β 并注明未翻译部分显示英文",
+        "桌面版新增越南语 / 泰语 / 印尼语界面词典（壳与副驾），切换语言后运行时即时补装",
+        "自动出站单一闸门：所有 AI 自动出站（含成人软回应）统一过守卫；群 / 频道 / 报障群、人审手动档、同事账号永不自动回复",
+        "Messenger 网页代发链止血：发送失败在工作台显示具体原因并可一键重试；e2ee PIN 待输入时黄条提示；手机端发出的消息带角标；边车 composer 重绑不再静默 40 秒",
+        "客户画像 / 记忆 / 目标回填共用一道事实门：只写能在客户原话里逐字核到的事实，AI 自己问出来的答案不再回填；目标面板对无值线索显示「AI 有线索，待补值」而非「已提取未确认」"
+      ],
+      "en": [
+        "Interface language switching fixed: the page now shows the language you pick instead of being pinned back by a stale URL parameter; desktop menus follow the page, and Vietnamese / Thai / Indonesian menus no longer fall back to Chinese",
+        "Language menu upgraded: top bar, user menu, login and setup pages share one six-language picker (with Follow system language); the current item and follow state reflect the real source, and low-coverage languages are marked β with a note that untranslated parts show in English",
+        "Desktop app gains Vietnamese / Thai / Indonesian dictionaries for the shell and copilot, loaded on the fly after switching",
+        "Single gate for automatic outbound: every AI-initiated send (including adult soft replies) passes the guard; groups / channels / support groups, manual-review mode and colleague accounts are never auto-replied",
+        "Messenger web relay send chain hardened: failed sends show a concrete reason in the workspace with one-click retry; a yellow bar flags a pending e2ee PIN; phone-sent messages carry a badge; composer rebinding no longer stalls silently for 40 seconds",
+        "Profile / memory / goal backfill share one fact gate: only facts verifiable verbatim in the customer's own messages are written, answers elicited by the AI's own questions are no longer backfilled; the goal panel shows \"AI has a clue, value pending\" instead of \"extracted, unconfirmed\" for value-less hints"
+      ]
+    }
+  },
+  {
+    "version": "1.0.82",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "全自动让位不丢稿、今日拦截卡、画像只写可锚定事实、退出登录真退出",
+      "en": "Yield defers instead of dropping, Blocked-today card, anchored profile facts, real logout"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "全自动会话里坐席手发后 AI「让位」改为延后不丢稿：坐席手发或打字后 60 秒内客户来消息，AI 稿留队等待，会话头出蓝色胶囊「AI 让位中 · 坐席 60s 内发过 · N s 后接回」倒数，窗过自动发出；点胶囊或顶栏重选「全自动」即刻接回。此前这 60 秒内客户的消息会被直接丢掉不回。",
+        "新增「🚧 今日拦截 · AI 为什么没回」卡：自动回复设置 → 「风控分级」卡下方，按原因（成人内容 / 风险保持 / 需人工 / 让位 / 档位切换 / 班表休息）统计最近 24 小时自动回复被拦次数，并列出最近 5 条（会话 · 时间 · 原因 · 命中词）；体检面板在让位期间出黄行并带「立即让 AI 接回」按钮。",
+        "成人词表消歧：印式英语「message cum reply」（cum = and）、「summa cum laude」不再判成人内容；孤立的歧义词（cock / pussy / nude 等）在没有施压语境时只记提及，不再把全自动会话掐成「需人工」。",
+        "客户画像 AI 推断只写可锚定事实：年龄只收 16–99 数字或年龄段（30s / 三十多 / 90后），职业 / 坐标 / 居住地只收 24 字以内短语、整句不写；候选必须带客户原话且能在最近 30 条入站里逐字查到；我方回复、译文、关怀稿不再进抽取；值语种与客户主语种不符的丢弃。",
+        "画像进度 N/10 只数坐席已确认的槽，AI 推断另显「待确认 M」；年龄输入框改数字键盘，填错先提示不发请求；过长的值按 24 字省略显示，悬停看全文；AI 推断卡保留 ✓ 确认 / ✕ 拒绝。",
+        "退出登录真退出：头像 → 退出登录后停在登录页，桌面端自动登录暂停，可换子帐号登录，重开应用恢复自动登录；坐席机可在配置里设 backend.auto_login=false 彻底关闭自动登录。",
+        "用户管理页：卡上「🔑 重置密码」（至少 6 位）→ 弹一次性「登录信息」卡可复制；创建子帐号后同样弹一次；删除改为逐字输入帐号名确认（红键，输对才可点）；页头显示「帐号所在后端」，坐席机连错后端时一眼可见。",
+        "对话翻译弹层自适应：1024 宽桌面壳展开右栏时弹层不再被裁掉；发送方式 / 反译校验 / 语气 / 语音收进出站选项区；选语屏「自动 · 跟对方」整句显示、常用 / 更多语言分节 + 搜索；Esc 逐级关闭。",
+        "修复目标面板槽位「确认（无现值）」与「✎ 改」两枚按钮在桌面端点了没反应（1.0.79–1.0.81 受影响）。",
+        "老板页新增「AI 花了多少钱」卡：今天（内部估算）/ 本月累计 / 昨日与厂商账单核对 / 余额还能撑几天，点「看去向 / 导账单 →」进成本明细页。"
+      ],
+      "en": [
+        "Yield now defers instead of dropping: in a full-auto thread, when a customer writes within 60s after the agent sent or typed, the AI draft waits in queue and the header shows a blue chip AI yielding · agent sent within 60s · resumes in Ns counting down; it auto-sends once the window passes. Click the chip or re-pick Full auto in the header to resume at once. Previously those messages were dropped with no reply.",
+        "New Blocked today · why the AI didn't reply card: Reply settings, below the Risk grading card. Counts auto-replies held back in the last 24h by reason (adult content / risk hold / needs human / yield / mode switched / off-hours schedule) and lists the last 5 (thread · time · reason · matched words); the diagnosis panel shows a yellow row with Let AI resume now while yielding.",
+        "Adult word list disambiguation: Indian English message cum reply (cum = and) and summa cum laude are no longer graded as adult content; isolated ambiguous words (cock / pussy / nude ...) without pressure context are logged as mentions only and no longer flip a full-auto thread to Needs human.",
+        "Profile AI inference writes only anchored facts: age accepts a number 16–99 or an age band (30s / late twenties) only; occupation / location / residence must be a phrase of 24 characters or fewer, never a full sentence; every candidate needs the customer's own words, verifiable in the last 30 inbound messages; our replies, translations and care drafts no longer feed extraction; values whose language differs from the customer's main language are dropped.",
+        "Profile progress N/10 counts only slots confirmed by the agent; AI-inferred ones show as N unconfirmed; the age field uses a numeric keypad and validates before sending; long values are clipped to 24 characters with the full text on hover; AI-inferred cards keep the ✓ confirm / ✕ reject buttons.",
+        "Logout really logs out: avatar → Log out stays on the login page, desktop auto-login pauses so you can sign in with a sub-account, and resumes when the app is reopened; seat machines can set backend.auto_login=false to disable auto-login entirely.",
+        "Users page: Reset password on a card (6 characters minimum) shows a one-time Login details card you can copy; creating a sub-account shows it once too; delete now requires typing the account name exactly (red button, enabled only on a match); the header shows Account backend so a seat connected to the wrong backend is visible at a glance.",
+        "Translation popover adapts: no longer clipped when the right pane is open in a 1024-wide desktop window; send mode / back-translation check / tone / voice are grouped into outbound options; the language screen shows Auto · follow peer as a full line, splits common / more languages and adds search; Esc closes step by step.",
+        "Fixed the goal panel slot buttons Confirm (no current value) and ✎ Edit doing nothing on desktop (affected 1.0.79–1.0.81).",
+        "New What the AI cost card on the Boss page: today (internal estimate) / this month / yesterday vs vendor bill / how many days the balance lasts, with Breakdown / import bill → opening the cost detail page."
+      ]
+    }
+  },
+  {
+    "version": "1.0.81",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "发送语言按会话、风控三级分级、单一版本",
+      "en": "Per-thread send language, three-tier risk grading, one build for everyone"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "发送语言按会话生效：翻译工具条「我的消息→ 某语言」只影响当前会话，切到别的会话不再带过去；没设过的会话显示「自动 · 跟对方：English」，AI 回复跟对方语言、手发原样。",
+        "手发前语种确认：手工发送的目标语言与客户语言不一致时先弹「将译成 X 发给 Y 客户，确定发送？」，确认前不发；「对方消息→」仍是全局默认。",
+        "风控三级分级：高（自伤 / 未成年 / 威胁 / 要钱要凭据 / 诈骗 / 支付词）转人审并保持「需人工」；中（成人内容、索要联系方式 / 照片 / 见面、停联）只打「风险 · 中」标签按人设政策委婉处理；低（隐私词、照片 / 钱 / 电话的叙述性提及）只记日志。",
+        "「承诺」类风控只评我们自己要发出的话，客户叙述「他们给我发的照片」「你的电话」不再被误判转人工。",
+        "摘标冷却：人工发送或点「我知道了」后，同类别 30 分钟内不重复打标、不重弹横幅；会话头「风险保持 · 类别」胶囊与横幅写明命中类别和命中词。",
+        "新增「🧯 风控分级」卡：自动回复设置 → 查看全部 15 个类别的词表 / 级别 / 动作，选人设可把「索要照片 / 视频」等类别改高 / 中 / 低并保存。",
+        "本版起只发一个版本：内测机与坐席机装同一个安装包，不再区分内测版；已在用内测版的机器装完本版后自动跟随正式更新渠道。"
+      ],
+      "en": [
+        "Send language is per thread: the toolbar's My messages → language applies only to the current thread and no longer carries over; an unset thread shows Auto · follow peer: English — AI replies follow the customer's language, manual sends go as typed.",
+        "Confirm before a mismatched manual send: when the target language differs from the customer's, a confirmation appears first and nothing is sent until you confirm; Receive → stays a global default.",
+        "Three-tier risk grading: High (self-harm / minor / threat / asking for money or credentials / scam / payment words) goes to human review and holds Needs human; Medium (adult content, asking for contact / photos / meetup, stop-contact) only gets a Risk · medium tag and the persona policy defers softly; Low (privacy words, narrative mentions of photos / money / phone) is log only.",
+        "Commitment checks now apply only to our own outbound text, so customer narration such as the photos they sent me or your phone is no longer misjudged as high risk.",
+        "Tag cooldown: after a human send or Got it, the same category is not re-tagged and no banner reappears for 30 minutes; the header chip Risk hold · category and the banner state the matched category and words.",
+        "New Risk grading card in Reply settings: see all 15 categories with word lists / tier / action, and per persona move categories such as asking for photos between high / medium / low.",
+        "One build from now on: testers and seat machines install the same package, no separate internal flavor; machines still on the internal flavor follow the regular update channel after installing this version."
+      ]
+    }
+  },
+  {
+    "version": "1.0.80",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "人设与记忆不再被裁光、主链 Flash、上下文深度四档",
+      "en": "Persona and memory no longer trimmed away, Flash primary, four context-depth tiers"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "聊天不再丢人设和记忆：提示裁剪不再把中文人设/硬规则/长期记忆砍光；默认预算提到 12k，人设段永不裁。",
+        "主链改为 DeepSeek V4.1-Flash（deepseek-flash），备用硅基 DeepSeek-V4-Flash；退役别名自动归一，官方接口默认关思维链。",
+        "自动回复设置新增「上下文与记忆深度」：标准 / 深度 / 最大 / 超大（约 900k，与 DeepSeek 1M 窗口平齐）。入口：自动回复设置 → 风格卡 → 下拉选档 → 保存，不用重启。越深越记得住也越贵。",
+        "同一页「用量模式」：完整按深度档；经济只留最近 4 条、压缩人设、少抽取。钱包用尽时即使选完整也会自动进经济档，避免断线。",
+        "微信 / QQ / TikTok 通道已进包但出厂关闭：工作台没看到入口＝这台还没打开对应开关，不是没装上。",
+        "目标页「现在就问一个」、主题浅色/深色即生效、需人工卡片会写明「命中：成人内容」并可一键软回应。"
+      ],
+      "en": [
+        "Chat no longer drops persona or memory: the prompt trimmer no longer cuts the Chinese persona, hard rules or long-term memory. Default budget is 12k; the persona block is never trimmed.",
+        "Primary model is DeepSeek V4.1-Flash (deepseek-flash), with SiliconFlow DeepSeek-V4-Flash as backup. Retired aliases are normalized; official API thinking is off by default.",
+        "Reply settings gains Context & memory depth: Standard / Deep / Max / Ultra (~900k, on par with DeepSeek's 1M window). Path: Reply settings → style card → pick a tier → save, no restart. Deeper remembers more and costs more.",
+        "Usage mode on the same page: Full follows the depth tier; Economy keeps the last 4 messages, a compact persona and fewer extracts. An empty token wallet still drops Full into Economy so chat does not go dark.",
+        "WeChat / QQ / TikTok are in the package but ship off. No entry in the workbench means that switch is still off, not that the build is missing them.",
+        "Goals page \"Ask one now\", light/dark theme applies immediately, and needs-human cards name \"adult content\" with a one-tap soft reply."
+      ]
+    }
+  },
+  {
+    "version": "1.0.79",
+    "date": "2026-09-10",
+    "title": {
+      "zh": "行为止血版：重装不群发、草稿即将发文本、发图不说谎、不答应见面、已知不再问、切手动即停、撤回错误默认",
+      "en": "Behavior hotfix release: no mass-send on reinstall, draft equals sent text, honest photos, no meetups, known facts never re-asked, manual switch cancels in-flight, wrong defaults rolled back"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "重装 / 重新登录不再群发：扫码登录同步回来的历史消息一律标 backfill 落库不触发自动起草；72 小时内没来信的旧会话不再自动回，进「有 N 个旧会话等你决定」横幅（忽略 / 我来回 / 让 AI 起草预览）；登录同步完成与切「全自动」都会先弹两栏确认框「会自动回（最近 72 小时有来信）N 个 / 不会碰：旧消息 M · 已停联 K · 我自己 S」；停联名单按账号持久，重装后仍认；「我自己」备忘会话排除全部自动化。",
+        "草稿即将发文本：工作台任何新草稿 / L1 审核稿 / 关怀预览在起草层就已去破折号 / 分号 / 弯引号 / 列表 / 感悟尾 / 反问尾并压到两句以内；新增引用锚点守卫，凡「你之前提过 / you mentioned / last time you」都会到最近 200 条对话和该客户记忆里找依据，找不到整句换成中性问句；每条 AI 稿一行 [draft] 日志；/admin/ops 新增「AI 指纹」卡（破折号率 / 客服腔 / 引用无锚点 / 承诺无动作，近 24 小时）。",
+        "发图不说谎：AI 只能「请求」发图，系统真发成功（拿到平台回执）配文才会出；说要发 / 说发了但没图 → 自动改写或拦下人审；客户说「没收到」→ 自动重发上一张，从没发过就直说没发出去；连说两次没收到转人工；相册里没有对应场景就直接说没有，不再编「还在加载 / 我再发一次」。",
+        "相册 AI 建议词默认参与匹配（卡片标「AI 标注」），顶部一键采纳全部建议词，可按场景（自拍 / 室内 / 户外 / 美食 / 宠物）批量标注；要风景照不会再随机抓自拍。",
+        "现实承诺守卫：AI 不会再答应上门喝茶、给地址、寄东西或打钱；人设「见面政策」默认「永不」，只会委婉延后，被追问仍拒，也不会说「我忘了今晚一定」；20 条邀约 + 10 条要照片门禁全过才发的版。",
+        "客户说过的事按「已知」处理：字段没填也会扫最近 30 轮对话，说过职业就不再问，最多顺着追一句；同一项一天最多问两次没回应当天不再问；24 小时内问过的同类问题出站前拦掉；目标页顶部「暂停全部摸底目标」总开关，卡片「已提及（未确认）」一键确认。",
+        "识破处置：客户一说「你是机器人吧 / 你又问」，该会话全部目标自动停 24 小时并转需人工，这一轮只回一句轻松的「抱歉，你确实说过」，任何时候不再说「我不是机器人」这类自证句；账号昵称与人设名不一致时 AI 知道对方可能用昵称叫自己，不再否认。",
+        "风险挂会话 + 人工优先：隐私 / 承诺 / 停联等风险命中后挂在会话上 24 小时（不只是那一条稿），期间新起草强制人审；切手动、坐席正在打字、坐席手发任一发生都会立刻取消在途的 AI 待发消息（含拟人等待中的），并提示「已取消 N 条待发 AI 消息」。",
+        "撤回错误默认：工作时间班表出厂改为关（1.0.78 升级机被基线补进去的班表 / 额度闸门自动回滚并写日志，你自己改过的一字不动）；开班表必须选时区并给「上海 01:00 ＝ 纽约 13:00」换算核对；休息期扣留每条一行 [work_schedule] hold=off_hours 日志 + 会话标签「作息外 · 到点重新拟稿」；过夜积压的稿复班后默认全部作废重写；AI 发送额度出厂关、人工发送永不限额、进度条 80% 提醒；升级后首次打开工作台弹一次「这版改变了什么」，每行可「保持 / 改回」。",
+        "关怀排期：你亲手写的原话按你定的时间发（不再被安静时段顺延），多条顺延错峰 ≥5 分钟；关怀页显示安静时段 / 时区依据；排期落安静时段弹「仍按 01:20 发 / 顺延到 08:00」。",
+        "画像抽取两链合一：一次抽取同时写记忆和画像；客户昵称「Michael/46/New york/union carpenter」自动预填年龄 / 城市 / 职业；AI 推断和昵称预填都带「待确认」徽标，你点 ✓ 才算确认；连续多轮零抽取时记忆页 / 目标页亮一行提醒。",
+        "AI 未生成对坐席可见：AI 超时默认 30 → 60 秒、读超时不再盲重试；失败一行 [ai] fail conv= reason= latency_ms=；会话头灰标「AI 本轮未生成（超时 · 23:41）」+「重试起草」，新入站成功后自动清。",
+        "出厂态与安全：后台默认只监听 127.0.0.1（netstat 不再见 0.0.0.0）；系统设置新卡「连接与安全」→「允许局域网设备连接」开关默认关，要手机扫码操控时再开（公用网络二次确认）；陪伴域首装知识库为空、系统话术移到系统设置「兜底策略」卡并可预览清理存量；包内 handoff yaml 齐、fatex.db 不再进包；首启体验档文案不再出现 None。",
+        "发送失败现在会写明原因（含「适配器未就绪（后端启动中）」），收件箱 failed 气泡带原因，日志一行 [send] fail conv= reason= kind=。",
+        "告警链接：通知 webhook 可选 links=login / magic / off，magic 为十分钟一次性只读速览页 /ops/glance。"
+      ],
+      "en": [
+        "Reinstall / re-login no longer mass-sends: history pulled in by the login sync is tagged backfill and stored without triggering drafts; conversations silent for more than 72 hours are never auto-answered and go to a \"N dormant conversations waiting for you\" banner (ignore / I'll reply / let AI preview a draft); finishing a login sync or switching an account to Full-auto first shows a two-column confirmation \"will auto-reply (inbound within 72 h) N / will not touch: M old, K stopped, S myself\"; the stop-contact list is persisted per account and survives a reinstall; \"Message yourself\" notes are excluded from all automation.",
+        "Draft = the text that will be sent: every new draft / L1 review draft / care preview is cleaned at drafting time (em dashes, semicolons, curly quotes, lists, summary tails, rhetorical tails; two sentences max); a new claim guard checks any \"you mentioned / last time you / 你之前说\" against the last 200 messages and that customer's memory and rewrites the whole sentence into a neutral question when nothing backs it; one [draft] log line per AI draft; /admin/ops gains an \"AI fingerprint\" card (dash rate / service tone / unanchored claims / promise without action, last 24 h).",
+        "Photos without lies: the AI can only request a photo; the caption goes out only after the platform acknowledges the send; \"I'll send one\" / \"sent it\" without an actual image is rewritten or held for review; \"I didn't get it\" triggers a resend of the last photo, or an honest \"it did not go through\" if nothing was ever sent; a second complaint hands off to a human; when the album has no matching scene the AI says so instead of \"still loading / let me try again\".",
+        "Album AI-suggested tags now take part in matching by default (cards show \"AI tagged\"), a one-click \"adopt all suggestions\" at the top, batch tagging by scene (selfie / indoor / outdoor / food / pet); a request for scenery never returns a random selfie again.",
+        "Real-world commitment guard: the AI no longer agrees to come over for tea, share an address, mail things or send money; the persona \"meeting policy\" defaults to Never, so it only defers politely, keeps declining when pressed and never says \"I forgot, tonight for sure\"; shipped only after a 20-invitation + 10-photo-request gate passed clean.",
+        "What the customer said counts as known: even with empty profile fields the engine scans the last 30 turns, never asks about a job the customer already mentioned (one follow-up at most), asks the same item at most twice a day and sleeps for the day when unanswered, and blocks any question already asked in the last 24 hours before it leaves; a \"Pause all discovery goals\" master switch at the top of the goals page; \"mentioned (unconfirmed)\" slots confirm with one click.",
+        "Exposure handling: as soon as a customer says \"you're a bot / you asked that already\", every goal in that conversation pauses for 24 hours and the thread is flagged needs-human; this turn only replies with one light \"sorry, you did tell me\", and self-proving lines like \"I'm not a robot\" are never sent; when the account nickname differs from the persona name the AI knows the customer may use the nickname and stops denying it.",
+        "Risk pinned to the conversation + human priority: privacy / commitment / stop-contact hits now stay on the conversation for 24 hours (not just one draft) and force human review on new drafts; switching to Manual, an agent typing or an agent sending by hand immediately cancels in-flight AI messages (including those in the human-pacing wait) with a toast \"cancelled N pending AI messages\".",
+        "Wrong defaults rolled back: the working-hours schedule ships OFF (a schedule / send-quota gate that the 1.0.78 baseline inserted is rolled back automatically with a log line; anything you changed yourself is untouched); enabling the schedule now requires a time zone with a \"Shanghai 01:00 = New York 13:00\" cross-check; every off-hours hold logs one [work_schedule] hold=off_hours line and tags the conversation \"off hours · redraft when back\"; overnight backlog drafts are discarded and rewritten when the shift starts; the AI send quota ships OFF, manual sends are never capped, 80% progress warning; after upgrading, the first workbench open shows \"what changed in this version\" once with keep / revert per row.",
+        "Care scheduling: your own verbatim message goes out at the time you set (no longer deferred by quiet hours), multiple deferred items are staggered by at least 5 minutes; the care page shows the quiet window / time-zone source; scheduling into quiet hours asks \"send at 01:20 anyway / defer to 08:00\".",
+        "Profile extraction unified: one extraction writes both memory and profile; a nickname like \"Michael/46/New york/union carpenter\" pre-fills age / city / job; AI-inferred and nickname values carry an \"unconfirmed\" badge until you click ✓; many consecutive empty extractions light a hint on the memory and goals pages.",
+        "AI failures visible to agents: AI timeout default 30 → 60 s, read timeouts are no longer blindly retried; one [ai] fail conv= reason= latency_ms= line per failure; the conversation header shows a grey \"AI did not generate this turn (timeout · 23:41)\" chip with \"retry draft\", cleared automatically once a new inbound succeeds.",
+        "Factory state and security: the backend listens on 127.0.0.1 only by default (no more 0.0.0.0 in netstat); new \"Connection & security\" settings card with an \"Allow LAN devices\" switch, off by default, to enable when you need phone QR control (extra confirmation on public networks); companion-domain clean installs start with an empty knowledge base, system fallback scripts move to a \"Fallback policy\" settings card with a preview-then-clean for leftovers; handoff yaml files are in the package, fatex.db is not; the first-run trial banner no longer shows None.",
+        "Failed sends now state the reason (including \"adapter not ready (backend starting)\"), the inbox failed bubble carries it, and one [send] fail conv= reason= kind= log line is written.",
+        "Alert links: notification webhooks accept links=login / magic / off; magic is a ten-minute single-use read-only glance page at /ops/glance."
+      ]
+    }
+  },
+  {
+    "version": "1.0.78",
+    "date": "2026-09-08",
+    "title": {
+      "zh": "反识破与停联硬停：客户说停最多一句告别、出站去 AI 标点与客服腔、拟人程度三档、引用回复、记忆抽取基线、摸底目标主动问",
+      "en": "Anti-detection and hard stop: one farewell when a customer says stop, de-AI punctuation and tone, human-likeness levels, quote replies, memory extraction baseline, discovery goals that actually ask"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户明确要求停联（please stop / never write me again / 别再发了 / 再发就拉黑）后最多只回一句告别，随即冻结该会话：不再起草、不主动关怀、不推工作目标，切人工并在会话列表打「客户要求停联」标签，通知中心一条升级；解除由坐席在标签面板摘除并拨回档位。高风险稿在全自动档下转人工审而不再直发。",
+        "出站文本确定性去 AI 痕迹：破折号 / 分号 / 弯引号 / 省略号 / 列表与粗体 / 句尾反问（isn't it / 对吧）/ 结尾总结感悟句全部改成人话，默认最多两句；人工手发与原文直发不动。每条出站一行 [outbound] 日志（标点 / 句式修了几处、指纹、前 40 字）；发版门禁 200 条样例零破折号零分号零总结尾句。",
+        "陪伴机的私人聊天底稿换成第一人称真人口吻，不再是客服 / 助理底稿；客服腔守卫：I hear you / Take care / 我的助理 / 如有需要 / 您 之类句子先确定性改写一次，改不掉的转人工审，日志 [persona-guard]。销售机不受影响。",
+        "记忆抽取基线：干净包首装即带可抽取意图白名单（direct_chat / small_talk / greeting / complaint），记忆不再从安装第一天起静默不抽；启动日志说真话——白名单为空时写 WARNING「记忆不会新增」而不是「已启用」。",
+        "人工接管期间你亲手回客户的那一轮，客户说的约定 / 事实同样进该客户记忆（日志 [episodic] … source=manual_out）。",
+        "私事只进该客户的记忆：生日 / 具体时间地点的约定 / 个人情况不会进共享知识库；「你们周六营业吗」这类业务问题照旧可进知识库；学习页私事标签多四类（生日 / 具体时间 / 具体地点 / 个人情况）。",
+        "AI 记忆页顶部新增「自安装以来新增 N 条 · 今日 +T · 已转正 P · 已收客户消息 I 条」；收到 ≥50 条客户消息仍零新增时红字「记忆没有在增长」并链到日志页。",
+        "摸底目标主动腿修好：第 1 天起每天至少自然问一个未填项（客户 30 分钟内 ≥5 条时提前）；客户提到下雨 / 时差 / 上班 / 爸妈 这类话头时本轮必须顺着问对应那一项，没问出来下一轮重问；只有真问出问题才算当天已推进，客户越活跃越不问的死循环解除；看门狗不再把「还没到出手时刻」喊成卡住。",
+        "目标卡片改成三个诚实计数「注入 N 次 · 主动出手 N 次（已 H 小时）· 已采集 N/M · 问出 a 次 / 没问出 m 次」，到了该出手的时刻仍零才标红；画像采集不可用时黄条写出真实原因；新增「现在就问一个」按钮：预览会问哪一项与示例句，点一下 AI 用对方语言顺着最近话题问出去，计入主动出手。",
+        "引用回复规则引擎（Telegram / WhatsApp）：连发 ≥2 条回其中最相关一条、回 30 分钟前的旧消息必引；10–15% 随机基线且每个会话习惯不同；2 分钟内短答 / 连引两条歇两条 / 每小时 ≤6 / 引自己仅补充上一条 禁引；每条出站一行 [quote] 日志。自动回复设置 → 回复节奏与拟人细节 →「引用回复」开关默认开。",
+        "拟人节奏「拟人程度」三档：自动回复设置顶部一键 自然（默认）/ 偏快 / 偏慢，回复按「先读、再想、按手速打字、发出前停一下正在输入」出牌，快慢随字数变、无两条到秒相同，起草到发出不再固定 12–13 秒；出厂档自动补成「自然」（自己改过的不动）；客户连发多条等 8–15 秒合并只回一次；陌生人首条 / 沉寂 6 小时以上后的首回慢 1–5 分钟；凌晨 1 点到早 8 点不自动回、8 点后 0–40 分钟内补发（工作时间可改可关，危机消息穿透）；每条出站一行 [pacing] 日志带 composing 状态（Telegram / WhatsApp 真挂「正在输入」）。",
+        "账号名与人设名不一致时人设页红条提醒，Telegram / WhatsApp 一键按人设改账号名（LINE / Messenger 提示改人设名）；客户沉寂 3 天以上后的首回不再编「太忙 / 手机坏了」这类理由，命中即剥、只说「刚看到」。"
+      ],
+      "en": [
+        "When a customer explicitly asks us to stop (please stop / never write me again / block), at most one farewell line goes out and the conversation is frozen: no more drafts, no proactive care, no goal pushes; it switches to manual, gets a \"customer asked to stop\" tag in the list and one escalation in the notification center; an agent lifts it from the tag panel and restores the mode. High-risk drafts on full-auto now go to human review instead of being sent.",
+        "Deterministic de-AI pass on every outbound text: em dashes / semicolons / curly quotes / ellipses / lists and bold / trailing rhetorical questions (isn't it) / closing summary lines are rewritten into plain speech, two sentences max by default; manually typed and verbatim sends are untouched. One [outbound] log line per message (punctuation / style fixes, fingerprint, first 40 chars); release gate: 200 samples with zero em dashes, semicolons or summary tails.",
+        "Companion machines get a first-person, human \"private chat\" system prompt instead of the support-desk script, plus a service-tone guard: sentences like \"I hear you\" / \"Take care\" / \"my assistant\" / \"feel free to\" are rewritten once, and drafts that cannot be fixed go to human review ([persona-guard] log). Sales machines are unaffected.",
+        "Memory extraction baseline: a clean install now ships the extractable-intent whitelist (direct_chat / small_talk / greeting / complaint), so memory no longer silently stays empty from day one; the startup log tells the truth (an empty whitelist logs a WARNING \"memory will not grow\" instead of \"enabled\").",
+        "While an agent has taken over, what the customer said in that round is extracted into that customer's memory when the agent replies by hand ([episodic] … source=manual_out).",
+        "Private facts stay in that customer's memory only: birthdays, concrete meeting times and places and personal details never go to the shared knowledge base, while business questions (\"are you open Saturday?\") still can; the learner page gains four private-fact badges (birthday / time / place / personal).",
+        "The AI memory page now shows \"N added since install · +T today · P promoted · I customer messages received\" at the top, with a red \"memory is not growing\" alert linking to the logs when 50+ inbound messages produced zero new memories.",
+        "Discovery goals now actually ask: from day 1 the plan carries at least one natural question per day (earlier when the customer sends 5+ messages in 30 minutes); when the customer mentions rain / time zone / work / parents the reply must ask the matching item, retried next turn if it did not; only a real question counts as today's beat, ending the \"the more active the customer, the less we ask\" loop; the watchdog no longer reports \"stalled\" before the first eligible moment.",
+        "Goal cards show three honest counters \"injected N · sent N (H hours) · captured N/M · asked a / missed m\", turning red only when the eligible moment has passed with zero sends; a yellow bar states the real reason when profile capture is unavailable; a new \"Ask one now\" button previews which item and an example line, then asks in the customer's language along the recent topic and counts as a proactive send.",
+        "Quote-reply rule engine (Telegram / WhatsApp): quoting is mandatory for bursts of 2+ messages (the most relevant one) and for replies to messages older than 30 minutes; a 10–15% random baseline that differs per conversation; no quoting for quick short answers within 2 minutes, after two quotes in a row, beyond 6 per hour, and self-quotes only as a follow-up; one [quote] log line per outbound. Auto-reply settings → pacing and human details → \"Quote reply\" switch, on by default.",
+        "Human-likeness levels for reply pacing: one click at the top of Auto-reply settings picks Natural (default) / Faster / Slower; replies now read first, then think, then type at a human speed and pause the typing bubble right before sending, so timing follows word count and no two replies land at the same second (no more fixed 12-13 s from draft to send); the factory level is backfilled to Natural on upgrade (your own choice is kept); bursts of customer messages wait 8-15 s and get one merged reply; the first reply to a stranger or after 6+ hours of silence takes 1-5 minutes; no auto-replies between 01:00 and 08:00 local, catching up 0-40 minutes after 08:00 (Working hours is editable and can be turned off; crisis messages still go through); one [pacing] log line per outbound with the composing state (Telegram / WhatsApp really show typing).",
+        "The persona page shows a red bar when an account's display name does not match its persona name, with a one-click rename to the persona on Telegram / WhatsApp (LINE / Messenger: rename the persona instead); the first reply after 3+ days of silence no longer invents excuses like \"buried in work\" or \"my phone died\" - they are stripped and the reply simply says \"just saw this\"."
+      ]
+    }
+  },
+  {
+    "version": "1.0.77",
+    "date": "2026-09-08",
+    "title": {
+      "zh": "1.0.76 首日复验六件事收口：立即发真投递、备份恢复、相册识别、语音结论、业务域单一来源、目标可追溯",
+      "en": "Fixes from the 1.0.76 day-one re-test: real send-now, backup restore, album AI tagging, single voice verdict, one business-domain setting, traceable goals"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "主动关怀「立即发」点了就发：按钮变「发送中…」、发完卡片写「已发出 几点」，没发出去会写明原因（通道没连 / 急停 / 平台拒收）并留在卡上可再点，再点不会重复发；到点自动那条准点出手（人工指定时间零错峰，卡片写预计出手时刻）；后台发送队列随启动常备、每一拍与每一条出队都落日志，引擎室「发送通道」灯在「开关开着但没在出货」时变红。",
+        "人设备份恢复修好：「从备份恢复…」不再报「_esc is not defined」；恢复前预览「新增 N · 覆盖 N」并列出名字，同名不同 ID 会提示将并存；恢复后回执「已恢复 N 个人设：新增 A · 覆盖 B，含相册引用 M 条」；任何一步失败给人话原因且备份文件不动，日志落 renderer.log。",
+        "相册上传默认 AI 识别：上传即排队识图、进度条「AI 识别中 x/N」，识别完给出触发词建议一键采纳；识图服务不可用时引导条明说原因，不再「0/N」却什么都不说；相册 tab 顶部提示「N 张还没有 AI 识别」与「锚脸基准照尚未设置」，完整度把未打标计入。",
+        "克隆音色登记有反馈：登记成功后 toast 停留 9 秒可关、写明「已登记 xxx.ogg，已写入人设并生效」，语音行常驻「已登记 · ▶ 试听 · 解绑」，试听音频条留在卡上可反复播放；登记本身不再触发「有未保存的修改」。",
+        "业务域单一来源：机器做什么生意（陪伴 / 销售）成为唯一真值，Domain hook / 知识库分类 / 目标模板 / 摸底标签 / 客户画像 / 话术种子全部跟随；陪伴机的客户摸底标签换成 称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产（收入 / 资产默认不勾、勾了 AI 也只顺着话头带出不直接问），可加自定义标签；客户画像不再出现商机区（之前填过的值在「其他已记录」）；「标成交」改「标记达成」（达成结果 + 备注）；界面与日志里的「营销目标」统一为「工作目标」。",
+        "知识库不再预置支付话术：陪伴机首装不导入 GXP 查单 / 回调 / 汇率 / 费率通道等系统话术；已有的在知识库页顶部横幅一键清除且不会回灌；陪伴域分类不再含命理 / 产品价值 / 转化话术 / 异议处理。",
+        "语音面板只给一个结论：结果区只有一条——可发送 / 无声或念错（附原因 + 重新生成）/ 已过期 / 配置需修正，修复「已核有声」与「疑似无声」同屏、以及同语种不译时生成后误报「试听已过期」；配置有问题的人设点生成直接指路语音页修正；TTS 日志统一 [tts] 前缀便于取证。",
+        "工作目标每一拍可追溯：卡片「已推进 N 拍」点开可见每一拍的时刻 / 发到哪个会话 / 发了什么 / 有没有送达；没出手会写明被什么拦住（对方刚说过话 / 会话不是全自动 / 今日上限…）；新目标 24 小时内显示「等待首拍（预计几点）」而不是「自动推进中」，超 24 小时零出手红字提醒；到期那一刻工作台收到结算通知（计划几拍 / 实际几拍 / 为什么没执行），卡片留 7 天；修复目标引擎日志在生产里被静默丢弃的底层问题。"
+      ],
+      "en": [
+        "Proactive care \"Send now\" really sends: the button turns to \"Sending…\", the card then shows \"Sent at hh:mm\"; if it could not go out the card states why (channel not connected / emergency stop / platform rejected) and stays clickable without duplicating; the scheduled one fires on time (no jitter on operator-set times, the card shows the expected moment); the outbound queue starts with the backend, every tick and every dequeue is logged, and the engine-room \"send channel\" light turns red when the switch is on but nothing ships.",
+        "Persona backup restore fixed: \"Restore from backup…\" no longer fails with \"_esc is not defined\"; a preview lists \"N new · N overwritten\" by name and warns when a same-name persona has a different ID; the receipt reads \"Restored N personas: A new · B overwritten, M album references\"; any failure gives a plain-language reason, leaves the backup file untouched and is logged to renderer.log.",
+        "Album uploads are AI-tagged by default: uploads queue for recognition with a progress bar \"Recognizing x/N\", suggested trigger words can be adopted in one click; when the vision service is unreachable the guide bar says so instead of a silent \"0/N\"; the album tab flags \"N photos not yet recognized\" and \"anchor face photo not set\", and completeness counts untagged photos.",
+        "Clone-voice enrollment gives feedback: a 9-second dismissible toast says \"Enrolled xxx.ogg — saved to the persona and active\", the voice row shows \"Enrolled · ▶ Preview · Unbind\" permanently, the preview player stays on the card, and enrolling no longer triggers \"unsaved changes\".",
+        "Single source of business domain: what the machine is for (companionship / sales) is now one setting that the domain hook, knowledge-base categories, goal templates, discovery slots, customer profile and reply seeds all follow; companion machines get discovery slots Name / Location / Job / Age / Interests + Family / Relationship / Income / Residence / Assets (income and assets unchecked by default and only surfaced naturally, never asked outright), plus custom slots; the profile no longer shows a sales-opportunity block (earlier values live under \"Other recorded\"); \"Mark as won\" becomes \"Mark as achieved\" (outcome + note); \"marketing goals\" is renamed \"work goals\" everywhere.",
+        "No more preseeded payment scripts: companion installs do not import GXP order-lookup / callback / rate scripts; existing ones can be removed in one click from a banner on the knowledge-base page and never come back; companion categories drop fortune-telling / product value / conversion scripts / objection handling.",
+        "Voice panel gives one verdict: the result area shows exactly one line — sendable / silent or misread (with reason + regenerate) / expired / configuration needs fixing — fixing \"verified voiced\" and \"suspected silent\" appearing together and the false \"preview expired\" after generating in the same language; a persona with a broken voice setup is pointed straight to its voice page; TTS logs share the [tts] prefix for forensics.",
+        "Every goal beat is traceable: \"Advanced N beats\" opens to show when each beat happened, to which conversation, what was sent and whether it was delivered; when nothing went out the card says what blocked it (customer just spoke / conversation not on full auto / daily cap…); a new goal shows \"Waiting for first beat (about hh:mm)\" for its first 24 hours instead of \"Auto-advancing\", and turns red after 24 hours with zero sends; at expiry the workbench receives a settlement (planned beats / actual beats / why) kept on the card for 7 days; fixes the underlying issue of goal-engine logs being silently dropped in production."
+      ]
+    }
+  },
+  {
+    "version": "1.0.76",
+    "date": "2026-09-07",
+    "title": {
+      "zh": "关怀原文直发 · 出站语言闸 · 发送真相与登录默认半自动 · 发媒体 2MB 闸真根因 · 附件按会话隔离 · 工作台第三轮 · 转化成交类目下线 · 多语种学习队列",
+      "en": "Verbatim care · outbound language gate · send truth and semi-auto login default · 2 MB media cap root cause · per-conversation attachments · workbench round three · conversion goals retired · multilingual learning queue"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "主动关怀止血：「补一条关怀」默认原文直发（你写什么发什么，不经 AI）；要 AI 润色须先看预览再排；AI 稿先对着客户档案（国籍 / 居住地 / 相识时长）核一遍，判错直接拦下；首次对某位客户真发、带地名或人名的到点前先留给你点头；「模拟 / 真发」只剩一个真值，面板直接写明，模拟中点「立即发」会先提示不会真发。",
+        "出站语言闸：目标语言按「会话手动翻译设置 > 客户档案语言 > 客户消息文字系统 > 人设 / 账号默认语言」决定，判不出就不自动发、转人工并写明原因；只发了一句 Hi 的客户按字母表判英文，不再中文直投外国客户；翻译校验失败一律拦下不发原文；表情 / 单字不再进翻译器。",
+        "己方删除同步：你在手机端删掉自己发的消息，工作台该条灰显「已撤回」，AI 不会再接着那句话聊，也不会把它记成你说过的事（Telegram 本版，LINE 下版）。",
+        "发送真相：发送 ✓ 只在拿到平台 / 边车回执后才亮；账号栏对没连上的号标红「未连接」，会话上方红条提示重新登录，此时自动投递与手动发送被同一闸拦下、原文保留；Messenger 边车恢复会话逐个落日志，404 / 500 不再静默。",
+        "登录默认半自动：任何账号登录 / 重登 / 清数据重登后 10 分钟内只起草不投递（账号栏琥珀「冷静期」）；账号默认半自动，全自动要在账号总览按账号显式开启并确认「将对 N 个会话开启」；同账号连续 3 次真实发送失败自动降半自动并红标；已在全自动的老会话不动。",
+        "退避与手动优先：平台退避期间自动链不再每十几秒反复重投续命；坐席手动发送在退避窗内每窗放行一次，成功即解锁；重新登录成功 / 健康探测通过即清退避。",
+        "发前确认原因可见 + 作用域说清：待确认草稿写明原因（刚登录冷静期 / 账号未选人设 / 客户语言未定 / 客户首条来信 / 消息太短·证据不足 / 通道未连接）；会话头部下拉全部带「本会话：」，账号级切档在账号总览做；顶栏胶囊改「全自动会话 N」点击即筛选；切手动默认一直手动，30 分钟接回改为可选。",
+        "发媒体真根因修好：后台一道旧的 2MB 请求闸把大文件一律掐断、前端只能显「结果未知」——本版豁免并改流式上传：50MB 以内视频、平台上限内图片能从工作台发出，超上限的选文件时就写明「文件 X MB 超过上限 Y MB」，上传期间工作台不再转圈；.MOV 选文件时就判（有转码组件的机器自动转 MP4，没有当场拒绝写明）；待发附件跟着会话走、附件条写明「发往 平台 · 客户」、发错会话会拦下；错误提示分四类（格式不支持 / 超过上限 / 发送失败并给原因 / 后台无响应自动重试）。",
+        "工作台第三轮：角标 = 私聊里能点开的未读数，群 / 频道单列，旧的被埋未读一次性清掉；顶栏「自动(N)」点一下页内筛选，不再整页刷新、不再变浅色，主题开关移到头像菜单，徽标改回「旗舰版」，窄窗按三档收缩；多选有专用工具条；右侧「会话工具」整块撤掉，标签 / 归档 / 删除在会话行与 ⋯ 菜单，AI 状态弹层显示全自动运行摘要。",
+        "产品清理：用户版「工作目标」不再有「转化成交」类目（四张预置下线，已建的标「模板已下线」）；目标没绑产品时 AI 主动消息里出现报价 / 开户 / 支付话术整条不发；任一目标的第一条引擎主动消息先进草稿审批；养号面板判词与数字同口径、灰置原因就地可见、附三阶段人话说明；「AI 生成图片」改为开发中态（相册照片可直接发）。",
+        "上游与学习队列：工具箱语音转录并入工作台客户语音同一条链，失败按超时 / 拒绝 / 格式 / 坏文件分说，转录探针夹具随包；学习队列日 / 韩 / 泰 / 越条目都出译文并标真实原语，未译显「翻译失败 + 重试」不留空，同一题目不再两份并列待审。"
+      ],
+      "en": [
+        "Proactive care, stopped bleeding: \"Add a care message\" now sends your text verbatim by default (no AI rewrite); AI polishing requires a preview first; AI drafts are checked against the customer profile (nationality / residence / how long you've known them) and blocked when they get it wrong; the first real send to a customer, or any text naming a place or person, waits for your nod; \"simulation / real send\" has a single source of truth shown on the panel, and \"Send now\" in simulation warns before doing nothing.",
+        "Outbound language gate: target language is decided by \"conversation manual translation setting > customer profile language > script of the customer's message > persona / account default\"; when undecidable the message is held for a human with the reason shown instead of auto-sent; a customer who only said \"Hi\" is treated as English, never Chinese by default; failed translation checks are always held (original text is never sent); emoji and single characters no longer go through the translator.",
+        "Own-deletion sync: delete your own message on the phone and the workbench greys it out as \"recalled\"; the AI stops continuing from it and does not remember it as something you said (Telegram now, LINE next).",
+        "Send truth: the ✓ only lights up after the platform / sidecar confirms delivery; accounts with no live session are flagged \"Not connected\" in the account bar with a red banner asking to log in again, and both auto and manual sends are blocked by the same gate with your text preserved; Messenger sidecar session restores are logged one by one and 404 / 500 are no longer silent.",
+        "Login defaults to semi-auto: after any login / re-login / clear-data re-login the account only drafts for 10 minutes (amber \"cooling\" badge); accounts default to semi-auto and full-auto must be enabled per account from the account overview with a \"this will enable N conversations\" confirmation; 3 consecutive real send failures on an account downgrade it to semi-auto with a red flag; conversations already on full-auto are left as they are.",
+        "Backoff with manual priority: during platform backoff the auto chain no longer re-queues every few seconds; a manual send is let through once per backoff window and unlocks on success; a successful re-login or health probe clears the backoff.",
+        "Pre-send review reasons and clear scope: pending drafts state why they wait (cooling after login / no persona on account / customer language unknown / first message from customer / too short, weak evidence / channel not connected); the conversation header dropdown is prefixed \"This conversation:\", account-level switching lives in the account overview; the top-bar pill reads \"Full-auto conversations N\" and filters on click; switching to manual stays manual by default, the 30-minute hand-back is now optional.",
+        "Media sending, real root cause fixed: an old global 2 MB request cap was cutting off large uploads so the front end could only say \"result unknown\"; this release exempts the media route and streams uploads, so videos up to 50 MB and images within platform limits go out from the workbench, oversized files are refused at file pick with \"X MB exceeds the Y MB limit\", and the workbench no longer freezes during uploads; .MOV is judged at file pick (auto-converted to MP4 where the transcoder ships, otherwise refused with a clear message); pending attachments stay with their conversation, the attachment chip shows \"To platform · customer\", and wrong-conversation sends are blocked; errors are split into four classes (unsupported format / over limit / send failed with reason / backend unresponsive, retrying).",
+        "Workbench round three: the badge equals the unread you can actually open, groups / channels are listed separately and stale buried unread is cleared once; the top-bar \"Auto (N)\" pill filters in place without reloading or switching theme, the theme toggle moves into the avatar menu, the badge reads \"Flagship\" again and the bar collapses in three steps on narrow windows; multi-select has its own toolbar; the right-hand \"conversation tools\" block is removed with tag / archive / delete on the row and the ⋯ menu, and the AI status popover shows the full-auto summary.",
+        "Product cleanup: the client edition no longer offers the \"Conversion\" goal category (four presets retired, existing ones marked \"template retired\"); when a goal has no product bound, any proactive message with pricing / account opening / payment wording is dropped whole; the first engine-initiated message of any goal goes through draft review; the nurture panel's verdict matches its numbers, disabled reasons are shown in place with a plain three-stage explainer; \"AI image generation\" is shown as in development (album photos can still be sent).",
+        "Upstream and learning queue: toolbox voice transcription now shares the workbench customer-voice chain, failures are split into timeout / rejected / format / corrupt file, and the probe fixtures ship in the package; learning-queue entries in Japanese / Korean / Thai / Vietnamese get translations with the real source language, untranslated ones show \"translation failed + retry\" instead of blank, and duplicate topics are merged."
+      ]
+    }
+  },
+  {
+    "version": "1.0.75",
+    "date": "2026-09-06",
+    "title": {
+      "zh": "分条发送出厂关 · 问候不编事实 · 人设语音三态且不换声 · 人设备份与迁移 · 需人工自动摘标 · 断线卡六出口 · 后台按给谁看分层 · 学习队列止血 · 桌面包剥离内网默认 · 贴纸不破图",
+      "en": "Splitting off by default · greetings don't invent facts · tri-state persona voice, no voice swap · persona backup & migration · needs-human auto-clears · six-exit disconnect card · audience-layered console · learning-queue triage · no intranet defaults in desktop · stickers render"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "分条发送出厂关：新装机默认不拆、基线不再自动打开；短回复永不拆；开着分条也只在长回复有显式换行时按行拆；工作台条数与客户手机一致，发送成功提示「已拆 N 条发出」。",
+        "问候不再编造天气 / 行程 / 正在做的事：没有来源的近况陈述出站前被剥掉，历史里随口一说也不再滚成「事实」；「Send me the receipt」这类请求不再被当问候秒回。",
+        "发媒体后台无响应只出一处提示（附件条内联），只有后台真在重启时才说「重启中」，否则说「没拿到发送结果，已自动核对对话记录」。",
+        "人设语音改为三选一：用我上传的录音（克隆声）/ 用预置声（按语言·性别筛选可试听）/ 不发语音；非法组合保存时提示修正不再静默改；克隆引擎失败不再换成默认女声，改发文字并提示；预置声兜底同语种同性别；新建人设默认不发语音。",
+        "人设工作室：底部改「人设备份与迁移」（备份全部 / 从备份恢复先预览 / 导出单个）；JSON 导入对用户不可见、内部版预览勾选二次确认 30 秒可撤销；卡片胶囊「服务中 N 个账号 · M 个会话」与账号侧同源，「应用到→账号默认」也算；「补齐向量」改人话、索引齐全时灰掉、结果不再被底栏遮住。",
+        "「需人工」标在 AI 自动回复成功时自动摘掉，会话头有红色原因条与「去回复台处理 / 我知道了」入口，红标与 AI 蓝标不再同亮；归档里的未读横幅常驻列表上方不随滚动折叠，同时进通知中心，第一次点角标带一行引导。",
+        "断线卡片六个出口（去重连 / 标为已停用 / 登出 / 1 小时 / 24 小时 / 不再提醒此账号），静音换电脑不丢；同一告警刷新只改文字不重弹，多项告警折成一张「有 N 项需要注意」；基础设施类告警只进通知中心不再弹窗。",
+        "SOP「批量挂链」弹层随主题不再灰字看不清，天数框预填 3 带 −/+ 步进、越界回弹，输入即预览「符合 N · 将挂 X · 跳过 M」，确认后 15 秒内可撤销。",
+        "后台按「给谁看」分层：用户版不再显示品牌白标 / 演示数据 / 授权三卡，帮助中心 / 回复策略 / 歌房 / 声音评测四页收起显「功能升级中，如需开通请联系客服」；右上档位徽标与授权卡同一口径；内部人可在开发者页临时打开「开发者模式」看全，退出登录自动关。",
+        "学习队列止血：寒暄 / 系统占位文本不再入队（存量自动进「已拒绝」页）；「全部通过」改「通过已选（N）」加二次确认、每批最多 20 条；「疑似重复」不再假 99%；外语条目带中文译文；含人名 / 金额 / 约定的客户私事通过后写该客户 AI 记忆、不进共享知识库。",
+        "自动回复高级设置：语音回复只剩一个下拉（关闭 / 总是 / 对方发语音才回 / 智能）旁显引擎在线状态；缓冲语并入「AI 接管」卡只在拟稿人审下出现；删掉「人设 ID + 秒数」表；平台专家覆写默认折叠、「跟随全局」显示实际生效值。",
+        "桌面包不再带办公室内网默认地址（语音转写 / 口语改写 / LAN GPU 巡检），客户机不再每 30 分钟红字「LAN GPU 不可达」、转录不再白等两级超时；桌面首启自动生成随机管理密钥，手机扫码的局域网入口不再因出厂密钥退回本机回环。",
+        "客户发来的动图 / 视频贴纸不再破图：按真实格式落盘，视频贴纸会动、动图显缩略图并带角标；识图失败提示具体原因（服务未配置 / 服务忙 / 图上无文字），识图网关上下文放大到 8192 不再拒绝长请求。",
+        "出厂默认真正落到每台机器：「目标自动推进」与「客户安全预警留痕 / 升级」不论装哪个包首启都补开（你手动关过的不动）；内测版有独立更新渠道，装一次内测安装包以后自动更新只跟内测渠道；报障群新规：bug 请让本机 Cursor 提交报告，报告到达自动回单号。"
+      ],
+      "en": [
+        "Message splitting ships OFF by default (fresh installs never split, the baseline no longer turns it on); short replies are never split; even when enabled, only long replies with explicit line breaks are split by line; the workbench shows the same number of bubbles as the customer's phone and confirms \"sent as N messages\".",
+        "Greetings no longer invent weather, whereabouts or \"what I'm doing\": unsourced status claims are stripped before sending and a casual remark in history no longer snowballs into a \"fact\"; requests like \"Send me the receipt\" are no longer answered as greetings.",
+        "When a media send gets no backend response there is exactly one hint (inline on the attachment bar); it only says \"backend restarting\" when that is actually true, otherwise \"no send result received, the conversation was re-checked automatically\".",
+        "Persona voice is now a three-way choice: my uploaded recording (cloned voice) / a preset voice (filter by language and gender, preview) / no voice; invalid combinations are flagged on save instead of being silently rewritten; a failing clone engine no longer falls back to the default female voice — the reply goes out as text with a notice; preset fallback keeps language and gender; new personas default to \"no voice\".",
+        "Persona Studio: the footer becomes \"Persona backup & migration\" (back up all / restore from backup with preview / export one); JSON import is hidden from end users and, for internal builds, requires a preview, checkbox confirmation and offers a 30-second undo; the card pill \"serving N accounts · M chats\" now matches the account side (account-default bindings count); \"rebuild embeddings\" speaks plain language, greys out when complete, and its result is no longer hidden behind the footer.",
+        "The \"needs human\" tag is cleared automatically once the AI replies successfully; the conversation header shows a red reason bar with \"handle in reply desk / got it\"; the red tag and the blue AI badge no longer light up together; the archived-unread banner sits permanently above the list (no longer collapses on scroll) and also lands in the notification center, with a one-line guide the first time you tap the badge.",
+        "The disconnect card offers six exits (reconnect / mark disabled / sign out / 1 h / 24 h / never remind for this account) and mutes survive a machine change; the same alert refreshing only updates its text instead of re-popping; multiple alerts fold into one \"N items need attention\" card; infrastructure-class alerts go to the notification center only.",
+        "The SOP \"bulk attach chain\" dialog follows the theme (no more unreadable grey text), the day field is prefilled with 3 with −/+ steppers and clamps out-of-range values, shows a live preview \"N match · X will be attached · M skipped\", and can be undone within 15 seconds.",
+        "The admin console is now layered by audience: the user edition hides the brand/white-label, demo-data and license cards and collapses Help, Reply Strategy, Karaoke and Voice Evaluation behind \"Feature upgrading — contact support to enable\"; the plan badge and the license card say the same thing; internal staff can temporarily switch on \"Developer mode\" from the developer page (auto-off on logout).",
+        "Learning queue triage: greetings and system placeholders no longer enter the queue (existing ones move to \"rejected\"); \"Approve all\" becomes \"Approve selected (N)\" with a confirmation, max 20 per batch; \"possible duplicate\" no longer shows a fake 99%; foreign-language items carry a Chinese translation; customer-private items (names, amounts, appointments) are written to that customer's AI memory instead of the shared knowledge base.",
+        "Auto-reply advanced settings: voice reply is a single dropdown (off / always / only when they send voice / smart) with the engine's online state next to it; the holding phrase moved into the \"AI takeover\" card and only appears in draft-review mode; the \"persona ID + seconds\" table is gone; per-platform expert overrides are collapsed by default and \"follow global\" shows the value actually in effect.",
+        "The desktop build no longer ships the office intranet as a default (speech-to-text, colloquial rewrite, LAN GPU probe), so customer machines stop showing a red \"LAN GPU unreachable\" toast every 30 minutes and transcription no longer waits through two connection timeouts; first launch generates a random admin secret so the LAN entry for phone QR login no longer falls back to loopback because of the factory key.",
+        "Animated and video stickers from customers no longer render as broken images: they are stored in their real container, video stickers play, animated ones show a thumbnail with a badge; image-recognition failures explain the actual cause (not configured / busy / no text in image) and the recognition gateway's context grows to 8192 so long requests are no longer rejected.",
+        "Factory defaults now really reach every machine: \"goal auto-progress\" and \"customer safety alert logging / escalation\" are switched on at first launch of 1.0.75 whichever package you install (settings you turned off by hand are left alone); the internal-test edition has its own update channel — install the internal package once and auto-update stays on that channel; bug-group rule: report bugs through your local Cursor agent, and the arrival receipt now carries the ticket number."
+      ]
+    }
+  },
+  {
+    "version": "1.0.74",
+    "date": "2026-09-06",
+    "title": {
+      "zh": "AI 不再谎称已发图 · LINE 视频 100MB 且不再误判过期 · 目标为什么没推进写在卡上 · AI 记忆页重做 · 新号先人审 · 未读数字点得开",
+      "en": "No more phantom 'photo sent' · LINE video 100 MB and no false expiry · goals explain why they stall · AI Memory page rebuilt · new accounts start in review · clickable unread"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "AI 不再谎称「已发过照片」：说「刚发了」之前会对照近 30 分钟真发记录，没发过就改口或补发；陪聊人设不再漏出「my assistant / 开户资料 / 团队会联系你」这类客服腔。",
+        "人工接管期间坐席替人设说过的话（如「我有个女儿」）进 AI 记忆并持久；人设答应过的事进「承诺账本」，AI 记忆页能看到「AI 答应过还没做」。",
+        "AI 记忆页重做：「待确认」积压改成例外队列，只有冲突 / 高影响 / 低置信 / 人设自身 / 承诺五类才需要你看一眼；健康卡五格；每位客户的记忆可导出；英文客户的事实不再因为语言不同被漏记。",
+        "工作目标为什么没推进现在看得见：目标卡按引擎真实状态显示、不能出手时点名原因；限时目标按真正出手的次数算进度；工作链卡片有「让路暂停 / 失败原因」解释行。",
+        "新登录账号在你确认接管方式之前一律先人审，不再自动套默认人设；账号栏出「未选人设」引导。",
+        "LINE 媒体：收视频不再 4 分钟就判「已过期」，真过期才提示请客户重发；发视频上限从 25MB 放到 100MB；收长视频不再被 20MB 上限拒下；语音按钮灰着会说明具体原因。",
+        "发图 / 发贴纸后端无响应时改黄字「结果未知」并自动刷消息流，不再红字误导你重发；手动发送不再短暂显示两条。",
+        "账号栏未读数字点得开、条数与数字一致并可一键清零；归档里的未读有常驻入口，可一键取消归档。",
+        "翻译记忆里缓存的引擎废话（如「好的，请发送需要翻译的内容」）会被自动清掉重译。",
+        "知识库首装不再预置厂商产品条目，存量自动标「厂商预置」并从对客检索排除；后台新增「知识库接通性」卡。",
+        "「客户安全预警」页（原危机审计）留痕与人工升级默认开启，严重事件点亮工作台徽标并置顶会话；手动加关怀分「客户的事 / 到点发这句话」两档，不再把操作指令当客户事件。",
+        "人设工作室：历史质检点得开、不再弹「/admin/voice-eval 打不开」、备货 tab 改「上线准备」、相册 tab 试触发置顶、页头不再截断；用户管理页不再堆积僵尸会话；「default —」幽灵账号行不再出现；WhatsApp 客户卡电话默认掩码、点击查看全号；批量挂链按钮能弹出输入层。",
+        "WhatsApp 边车：被限制（403）的账号不再无限重连刷日志；DNS 解析失败短退避重试并在连接提示里说明；配对时长可见。",
+        "全自动模式下客户提到敏感词不再导致 AI 停手，触发到风险只做后台记录（老板决策）。"
+      ],
+      "en": [
+        "The AI no longer claims it \"already sent a photo\": before saying so it checks the last 30 minutes of real sends and rewrites or actually sends; companion personas no longer leak support-desk phrasing such as \"my assistant will reach out\" or \"account details / onboarding guide\".",
+        "What an agent says on the persona's behalf during manual takeover (e.g. \"I have a daughter\") now enters the AI memory and persists; promises the persona made land in a promise ledger, and the AI Memory page shows \"promised but not yet done\".",
+        "AI Memory page rebuilt: the \"pending confirmation\" backlog becomes an exception queue — only conflicts / high-impact facts / low confidence / persona self-facts / promises need your eyes; five-tile health card; per-customer export; facts from English-speaking customers are no longer dropped because of the language mismatch.",
+        "Why a work goal is not progressing is now visible: the goal card reflects the engine's real state and names the blocker; timed goals track progress by real actions taken; chain cards explain \"yielded / failed (reason)\".",
+        "Newly logged-in accounts stay in review mode until you confirm the takeover mode; no more auto-assigned default persona — the account bar shows a \"no persona selected\" prompt instead.",
+        "LINE media: incoming videos are no longer declared \"expired\" after 4 minutes (only a real expiry asks the customer to resend); outbound video limit raised from 25 MB to 100 MB; long inbound videos are no longer rejected by the 20 MB cap; a greyed voice button now says exactly why.",
+        "When the backend gives no response on photo / sticker send, the bubble turns amber \"result unknown\" and the thread refreshes instead of a misleading red failure; manual sends no longer flash twice.",
+        "The unread number on the account bar is clickable, matches the list exactly and can be cleared in one click; unread items hidden in archived chats get a permanent entry point with one-click unarchive.",
+        "Engine chatter cached in translation memory (e.g. \"OK, please send the text to translate\") is purged and re-translated automatically.",
+        "Knowledge base: fresh installs no longer ship vendor product entries; existing ones are tagged \"vendor preset\" and excluded from customer-facing retrieval; new \"knowledge base connectivity\" ops card.",
+        "\"Customer Safety Alerts\" page (formerly crisis audit): logging and human escalation on by default, severe events light the workbench badge and pin the conversation; manual care now has two modes (\"something about the customer\" / \"send exactly this at that time\") so an operator instruction is never mistaken for a customer event.",
+        "Persona studio: history QA opens, no more \"/admin/voice-eval failed to open\" popup, stock tab renamed \"launch readiness\", album tab trial trigger moved to the top, header no longer truncates; user management no longer piles up zombie sessions; the ghost \"default —\" account row is gone; WhatsApp customer card masks the phone number by default (click to reveal); bulk chain-attach button opens an in-page input.",
+        "WhatsApp sidecar: accounts blocked by WhatsApp (403) stop reconnecting forever; DNS failures retry with a short backoff and the connection hint says so; pairing duration is visible.",
+        "In full-auto mode, a customer mentioning a sensitive word no longer makes the AI stop; risk triggers are only logged in the background (owner decision)."
+      ]
+    }
+  },
+  {
+    "version": "1.0.73",
+    "date": "2026-09-04",
+    "title": {
+      "zh": "未读可点 · 黄点绑人设 · 双向称呼 · 全自动不再扣稿 · 撤回不再被提起 · 语音积压不再把后端打死",
+      "en": "Clickable unread · yellow-dot persona bind · two-way names · full-auto no longer holds drafts · withdrawn lines stay quiet · inbound voice no longer kills the backend"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "账号栏未读数字可点：点开弹出的就是这个数字对应的会话，点一行即打开；有具体账号时还可「全部标已读」。",
+        "账号黄点绑人设：黄点表示该号还没绑人设。直接点黄点打开账号抽屉，在人设一栏选好保存。",
+        "双向称呼：打开会话右侧资料卡，填「我怎么叫对方 / 对方怎么叫我」，失焦即保存，之后回复按这个称呼。",
+        "全自动就是全自动：自动回复不再因「高风险」扣稿转人工，触发只后台记台账；坐席自己点发送也不会被二次拦住。",
+        "删掉的消息不再被 AI 主动提起：客户撤回的内容工作台同步删除，回复里也不会再主动提那句话。",
+        "人设目录不再串味也不再全黑：推品按当前人设过滤，绑了人设的货能推出来。",
+        "收件箱右上角不再弹出悬浮副驾清单（原先多余的那块已去掉）。",
+        "后端启动后遇到语音积压不再因文件句柄耗尽自杀：入站语音转录加了并发闸，异常退出后壳会自动把后端拉起来。"
+      ],
+      "en": [
+        "Unread badge on the account bar is clickable: the popover lists exactly the conversations that number counts; click a row to open. For a specific account you can also Mark all read.",
+        "Yellow-dot persona bind: a yellow dot means the account has no persona. Click it to open the account drawer and pick a persona.",
+        "Two-way address names: in the conversation info card, fill \"what I call them / what they call me\"; it saves on blur and later replies use those names.",
+        "Full-auto stays full-auto: auto-replies are no longer held for \"high risk\"—triggers are logged in the back-office ledger only. Agent-typed send is not blocked either.",
+        "Withdrawn messages are not brought up again: deletions sync to the workspace, and replies will not volunteer the withdrawn line.",
+        "Catalog no longer mixes personas or goes dark: product picks follow the current persona, so bound SKUs actually surface.",
+        "The floating copilot tear list in the inbox corner is gone.",
+        "Inbound voice bursts no longer crash the backend on Windows FD limits: transcription is concurrency-capped, and the shell respawns the backend after an abnormal exit."
+      ]
+    }
+  },
+  {
+    "version": "1.0.71",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "克隆声选谁出谁 · 无声误报根治 · 不再贬损自家活动 · 删消息同步 · 菜单栏跟随切语言 · 假失败自动清除 · 语音连发熔断",
+      "en": "Cloned voice plays what you pick, silent false alarms fixed, no more disparaging own promos, deletion sync, menu bar follows language, stale failures auto-clear, voice burst breaker"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆语音「选谁出谁」：工具箱选了某个人设的克隆声，实际合成一定是它——此前新克隆的声音会因未完成挂载而被静默换成别人的标准声、且在下拉里找不到；现在克隆完成即可选可用，选中的人设不存在时会明确提示而不是换声。",
+        "「音频异常（疑似无声）」误报根治：服务端复用语音识别结果做终审——只要产物能被转出文字或检测到能量，就不会再被标成「无声」，红条只在真无声时出现（此前三次返工仍误报的问题至此除根）。",
+        "AI 不再当着客户贬损自家活动/产品：人设会知道公司当前在推的活动清单（需在目录里登记），出站消息里对自家活动的「骚扰广告/骗局/愚蠢奖励」类嘲讽会被自动剥除或改为中性表述。",
+        "手机端删除的消息，工作台同步删除并清理关联记忆：客户或你在手机上撤回/删除的消息，不再残留在工作台会话与 AI 记忆里，避免 AI 之后引用已删内容。",
+        "切换界面语言后，顶部原生菜单栏（文件/编辑/视图/窗口/帮助）与帮助下拉同步切换，不再需要重启软件。",
+        "「媒体发送失败」假提示自动消除：后端重启或短暂断连期间产生的红色失败提示，在连接恢复后会按实际投递记录自动对账清除；重试同一媒体不再产生双发。",
+        "文字消息「重新发送」不再双发：断连期间被误标失败的消息点重发时，服务端按原消息幂等，客户只会收到一条。",
+        "LINE 端到端加密自愈：发送超时触发签名进程重启后，加密钥匙自动恢复、遇到钥匙缺失自动重握手一次，不再需要手动重启软件；对方已过期的视频/媒体给出「已过期，请对方重发」提示而不是无限重试。",
+        "语音连发自动熔断：同一会话一分钟内语音达到阈值（默认 3 条）时自动降级为文字并冷却，防止 AI 对 AI 或异常循环造成语音轰炸与额度消耗（可在语音回复设置里调阈值或关闭）。",
+        "诊断包自带「数据目录年龄」标注，卸载时勾选「彻底删除数据」会明确提示历史故障日志将无法用于排查。"
+      ],
+      "en": [
+        "Cloned voice: what you pick is what plays. Newly cloned voices no longer fall back silently to someone else's stock voice or go missing from the toolbox list; a cloned voice is selectable as soon as cloning finishes, and a missing persona now shows an explicit error instead of swapping voices.",
+        "\"Audio anomaly (possibly silent)\" false alarms fixed for good: the server now reuses the speech-recognition result as the final verdict, so any clip that transcribes or carries energy is never flagged silent; the red banner appears only for truly silent output.",
+        "The AI no longer disparages your own campaigns or products in front of customers: personas are aware of the company's registered promotions (add them to the catalog), and outgoing remarks calling them \"spam / scam / silly bonuses\" are stripped or neutralised automatically.",
+        "Messages deleted on the phone are now deleted in the workspace too, along with related memory entries, so the AI never quotes content that was withdrawn.",
+        "After switching the interface language, the native menu bar (File / Edit / View / Window / Help) and the Help dropdown switch immediately, no restart required.",
+        "Stale \"media send failed\" banners clear themselves: failures raised during a backend restart or brief disconnect are reconciled against the actual delivery record once the connection is back, and retrying the same media no longer double-sends.",
+        "\"Resend\" on a text message no longer double-sends: messages mis-marked as failed during a disconnect are resent idempotently by original message id, so the customer receives exactly one.",
+        "LINE end-to-end encryption self-heals: after a send timeout restarts the signing process, encryption keys are restored automatically and a missing-key error triggers one automatic re-handshake, with no app restart needed; expired incoming videos/media show \"expired, ask the sender to resend\" instead of retrying forever.",
+        "Voice burst circuit breaker: when one conversation hits the voice threshold within a minute (default 3), replies degrade to text and cool down automatically, preventing AI-to-AI or runaway loops from flooding voice and burning quota (threshold adjustable or disable in voice reply settings).",
+        "Diagnostic bundles now carry a \"data directory age\" marker, and choosing \"erase all data\" during uninstall warns that historical logs will no longer be available for troubleshooting."
+      ]
+    }
+  },
+  {
+    "version": "1.0.70",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "防重复不再误拦客户新消息的回复 · 待处理徽标与清单同口径 · 外语会话发图不再切中文",
+      "en": "Duplicate guard no longer drops replies to new messages, badge matches its list, no more Chinese switch after images"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户连着两轮发新消息、AI 两次回复内容相近时，第二条不再被「防重复发送」误拦而静默不发：只有同一轮里的重复才拦，客户每条新消息都会得到回复（WhatsApp 英文/西语会话实测）。",
+        "「防重复」拦下且换说法也没救回时，不再悄悄结束：会话会自动进入「需人工 / 待处理」清单并标明原因「近重复拦截」，坐席一眼可见、点开就能接手。",
+        "顶部「待处理」徽标与点开的清单口径一致：等待超过提醒线（如 30 分钟）的会话现在也会列出，面板分「严重超时 / 超过提醒线」两段，徽标数字就是清单条数，「全部忽略」对两段同样生效。",
+        "修正外语会话里客户发图片/贴纸后 AI 偶发「切中文」的真正原因：识图描述多行时的后半段曾被误当成客户语言证据；现在描述统一压成一行，历史多行描述也会被正确忽略，英文会话继续用英文回复。"
+      ],
+      "en": [
+        "When a customer sends two new messages in a row and the AI's two replies are similar, the second reply is no longer silently dropped by the duplicate-send guard: only repeats within the same turn are blocked, so every new customer message gets a reply (verified on WhatsApp English/Spanish conversations).",
+        "If the duplicate guard does block a reply and rewording cannot rescue it, the conversation no longer ends quietly: it is added to the \"Needs human / To handle\" list with the reason \"near-duplicate guard\", visible at a glance so an agent can take over.",
+        "The \"To handle\" badge now matches the list it opens: conversations past the reminder line (e.g. 30 minutes) are listed too, the panel is split into \"Critically overdue / Past the reminder line\", the badge number equals the list count, and \"Ignore all\" applies to both sections.",
+        "Fixed the real cause of the AI occasionally switching to Chinese after a customer sends a photo or sticker in a non-Chinese chat: multi-line image descriptions leaked their tail into language detection. Descriptions are now stored on one line and older multi-line ones are ignored, so English chats stay in English."
+      ]
+    }
+  },
+  {
+    "version": "1.0.69",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "贴纸不当照片评论 · 图片不再发成文档 · 多语会话配文回复锁语言 · 掉线提示可关",
+      "en": "Stickers not treated as photos, images no longer sent as documents, language-locked media replies, dismissible offline banner"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "表情/贴纸不再被误当成真实照片：AI 不再对贴纸追问「这是你拍的吗/这是谁」，只回应情绪，聊天更自然。",
+        "相册图片发送更可靠：修复个别情况下图片被发成打不开的「文档」的问题（WhatsApp 线实测）。",
+        "多语言会话更稳：在英文/外语会话里发图片或贴纸后，AI 的配文和回复不再偶发跳回中文，统一按你们会话一直在用的语言。",
+        "工作台「通道掉线」提示条现在可以关闭：点右侧 ✕ 关掉本次提醒，或选「1 小时暂缓」；掉线信息不会丢，若再次掉线会重新提醒。"
+      ],
+      "en": [
+        "Stickers are no longer mistaken for real photos: the AI stops asking \"did you take this / who is this\" about a sticker and simply responds to the mood.",
+        "More reliable image sending: fixed a case where an image could be delivered as an unopenable \"document\" (seen on the WhatsApp channel).",
+        "Steadier multilingual chats: after sending an image or sticker in a non-Chinese conversation, AI captions and replies no longer occasionally revert to Chinese and now follow the language you have been using.",
+        "The workspace \"channel offline\" banner can now be dismissed: click the x on the right to close it for now, or choose \"snooze 1 hour\"; no information is lost and you will be alerted again if a channel drops later."
+      ]
+    }
+  },
+  {
+    "version": "1.0.68",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "未读对账与归档入口 · 暂停真发可见可恢复 · LINE 发媒体更稳",
+      "en": "Truthful unread badges with archived entry, visible and recoverable send-pause, stabler LINE media"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "未读徽标与列表同口径：顶部账号/平台徽标只统计未归档私聊的未读；归档里还有未读时，筛选条下出现「归档中还有 N 条未读 · 查看」入口直达归档视图，处理完自动消失。",
+        "全局「暂停真发」不再静默：收件箱顶部亮横幅写明谁、几点、从哪个入口关的；主管点「▶ 恢复真发」一键恢复，可配置到点自动恢复。",
+        "LINE 发图片/视频修复：偶发卡死自动超时恢复；应用重启后发媒体报 423 发不出一并修复。",
+        "翻译修复：中文句子里夹英文单词不再被整句误判成英文导致误翻；粤语消息入站翻译修复。",
+        "语音修复：人设语音设置存了半成品占位配置时不再影响语音合成，按全局克隆音色正常出声。",
+        "体验治理：接入向导账号数如实显示（不再常显「已接 1 个账号」）；通知中心不再出现英文代码串、同类告警去重；报障群不再误登记系统回访播报；后端重启瞬断不再误报「页面脚本出错」。"
+      ],
+      "en": [
+        "Unread badges now match the list view: account/platform badges count only unarchived private chats; when archived conversations still hold unread messages, an amber \"N unread in archived - view\" entry under the filter bar jumps straight to the archived view and hides itself at zero.",
+        "The global send-pause is no longer silent: the inbox shows a banner naming who paused it, when and from where; a supervisor resumes with one click on the banner, and timed auto-resume can be configured.",
+        "LINE media sending fixed: occasional hangs now time out and recover automatically, and the post-restart 423 send failure is fixed.",
+        "Translation fixes: Chinese sentences with embedded English words are no longer mistranslated as English, and inbound Cantonese translation works again.",
+        "Voice fix: half-finished persona voice settings no longer break synthesis - the global cloned voice is used as expected.",
+        "Polish: the setup wizard shows the real connected-account count; the notification center no longer shows raw event codes and deduplicates repeated alerts; support-broadcast messages are no longer misregistered as new tickets; brief backend-restart blips no longer trigger a false \"page script error\"."
+      ]
+    }
+  },
+  {
+    "version": "1.0.67",
+    "date": "2026-09-01",
+    "title": {
+      "zh": "小智全面懂新功能 · 边界诚实回答 · 每周自我迭代",
+      "en": "Xiaozhi knows every new feature, honest boundaries, weekly self-improvement"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "小智全面升级：新功能全都能答、能带路——工作链（SOP 跟进）、成交引擎、克隆音色、识图摘要、AI 生成图片、版本更新、平台支持范围等，问一句就给入口和步骤（13 题金标全绿）。",
+        "小智更诚实：功能边界如实回答——问「怎么导出所有客户的手机号」会明确告知 CSV 不含手机号并给替代方案，而不是装不知道；「帮我写问候语」会带你走输入区「AI回复」拟稿链。",
+        "小智持续自我迭代：真实提问里的未答问题每周自动盘点成清单，语料按单补齐后金标回归验证，答不上的问题会越来越少。",
+        "对话翻译修复：34 语目录与选语第二屏恢复正常，繁体/粤语翻译回归修复。"
+      ],
+      "en": [
+        "Xiaozhi assistant upgraded: it now knows and guides every new feature - workflow SOP chains, deal engine, voice cloning, image summaries, AI image generation, updates and platform coverage; ask once and get the entry point plus steps (13-question golden set all green).",
+        "More honest answers: capability boundaries are stated plainly - asking \"how to export all phone numbers\" gets the truthful \"the CSV has no phone column\" plus the alternative, instead of a shrug; \"write a greeting for me\" routes you to the composer's AI Reply drafting.",
+        "Self-improving weekly: unanswered real questions are collected automatically every week, the corpus is patched accordingly and re-verified against the golden set.",
+        "Chat translation fixes: the 34-language catalogue and the second language-picker page work again; Traditional Chinese / Cantonese regressions fixed."
+      ]
+    }
+  },
+  {
+    "version": "1.0.66",
+    "date": "2026-08-31",
+    "title": {
+      "zh": "聊天流零内部泄漏 · 语音防误触 · 记忆与布局修复",
+      "en": "Clean chat stream, voice dialog guard, memory and layout fixes"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "聊天流更干净：AI 识图/翻译等内部分析内容绝不再以消息气泡出现在会话里（会话与列表预览双收口）。",
+        "克隆音色弹层防误触：试听生成中点到弹层外不再整层丢失，只有 ×/完成/Esc 才关闭。",
+        "语音面板更诚实：如实说明「为什么用了标准音色」（语言不支持/额度/通道），支持一键关翻译重新生成；系统音色明确标注。",
+        "AI 记忆更贴心：客户说「今天是我的生日」也能记住；AI 不再把内部目标备注带进回复。",
+        "工作台修复：小屏幕布局根修（会话列表可滚动）、未读徽标口径修正（只数可见私聊）、「标记成交」按钮修复、打开会话即校准发送上限。",
+        "上手更清爽：移除首启向导与新手导览，装好即用。",
+        "LINE 链路加固：语音时长正确显示，媒体可一键回取并自动补全转写。",
+        "Messenger 发送失败给出人话原因并按提示自动改期重投，失败消息留痕可一键重发。"
+      ],
+      "en": [
+        "Cleaner chat stream: internal AI vision/translation analysis never appears as message bubbles anymore (thread and list preview both sealed).",
+        "Voice-clone dialog guard: clicking outside no longer closes the dialog mid-audition; only X / Done / Esc close it.",
+        "Honest voice panel: it now explains why a standard voice was used (language unsupported / quota / channel), with one-tap regenerate without translation; system voices are clearly labeled.",
+        "Smarter memory: saying \"today is my birthday\" is now remembered; the AI no longer leaks internal goal notes into replies.",
+        "Workspace fixes: small-screen layout root fix (conversation list scrolls), unread badge now counts visible private chats only, \"mark deal\" button fixed, send caps reconcile when opening a conversation.",
+        "Cleaner first run: the first-launch wizard and tour have been removed - install and go.",
+        "LINE pipeline hardened: correct voice durations, one-tap media refetch with automatic transcript backfill.",
+        "Messenger send failures now show human-readable reasons and auto-reschedule per hint; failed messages are kept in the thread with one-tap resend."
+      ]
+    }
+  },
+  {
+    "version": "1.0.65",
+    "date": "2026-08-31",
+    "title": {
+      "zh": "报障闭环修复版：出站守卫三连与接地治理",
+      "en": "Bug-report closure: send-gate guards and grounding"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "v1.0.65（报障闭环修复版）",
+        "一、出站质量三道守卫（内测点名的「修了又犯」，这次装在所有消息出门的最后一道口）",
+        "中英混杂（「I'm 我」类）根治：混语校验上移到全链共过的发送收口点——文字、语音念稿、图片轮回复出站前统一过检，检出先重写、重写不净则剥除；历次报障原句全部进回归金标，防复发",
+        "语音称呼纠正：称呼守卫此前只罩文字出站，现装进语音合成前一站——念稿前按客户档案爱称纠正（baba→babe 等近似变形同样识别）",
+        "语言铆定双保险：会话铆定「发→英」后，生成时就按铆定语言写稿 + 发送口检出语言不符自动翻译再发（修「发图后 AI 回中文」）",
+        "语音转写防翻转：客户语音被误转写成外语（如中文语音转出韩语乱码）不再带跑会话语言——连续两条同语种或客户文字消息确认才算真换语言",
+        "二、「接地或闭嘴」——AI 不再编造",
+        "共同经历叙事锁：AI 编造「我们一起去过那家店」这类从未发生的共同经历会在出站前被拦——刚认识的会话一律禁止叙旧，熟客会话对不上聊天记录/记忆的同样拦截；目标推进话术明令禁止虚构历史当铺垫",
+        "记忆条目治理：「用户称呼自己为X」双解句式已禁用（新条目主语必须明确）；同客户矛盾条目（如 22 岁/21 岁并存）自动收敛保最新、旧值降级备查；存量坏条目提供清扫工具",
+        "真天气接地：默认开启按人设所在地查真实天气（人设编辑器新增「所在地」字段）；查不到天气时禁止说具体天气，「我这边也在下雨」式纯编造断言出站前剥除",
+        "三、语音与采集修复",
+        "「跟随翻译发声→日语」不再超时：等待预算按外语档放宽（日/韩单字合成更慢，实测最坏 28 秒现有充足余量），中文口径不变",
+        "画像采集修正：坐标槽不再被语言词（English）误填；客户明说「我是学生」这类身份自述会正确回填职业槽",
+        "LINE 语音时长显示与媒体收发加固：时长解析多级兜底（无 ffmpeg 机器也能算）、媒体下载自动重试与令牌刷新、支持拉取原件回补转写",
+        "四、其他",
+        "多语种语音底座加固（日/韩克隆语音链路与语种门禁）及多批稳定性优化",
+        "工作链管理页本版随引擎升级重做，此前「页面脚本出错」如仍出现请带截图反馈"
+      ],
+      "en": [
+        "v1.0.65 (Bug-report closure release)",
+        "Three outbound guards at the single send checkpoint (the \"fixed but came back\" family)",
+        "Mixed-language (\"I'm 我\") fixed for good: the language-mix check now sits at the last gate every message passes — text, voice narration and image-turn replies are all checked before sending; detected mixes get rewritten, and stripped if the rewrite is still dirty. Every reported incident sentence is now a regression golden",
+        "Voice pet-name correction: the address guard used to cover text only; it now runs right before speech synthesis — narration text is corrected to the customer's profile pet name (near-variants like baba→babe are recognized)",
+        "Language pinning, double-insured: once a conversation is pinned \"send → English\", generation writes in the pinned language AND the send gate auto-translates anything that still mismatches (fixes \"AI replied in Chinese after a photo\")",
+        "Transcription can no longer flip the conversation language: a single mis-transcribed voice note (e.g. Chinese audio decoded as Korean) no longer drags the reply language — switching requires two consecutive notes in the same language or a text message from the customer",
+        "Grounded or silent — no more fabrication",
+        "Shared-past narrative lock: fabricated \"remember that seafood place we went to\" stories are intercepted before sending — banned outright in newly-acquainted conversations, and blocked in mature ones unless backed by chat history or memory; goal-push copy is hard-banned from inventing shared history as a lead-in",
+        "Memory entry governance: ambiguous \"user calls themselves X\" phrasing is banned (new entries must name their subject); contradictory entries for the same customer (age 22 vs 21) auto-converge to the newest with old values demoted for audit; a sweep tool cleans legacy entries",
+        "Real weather grounding: on by default — the AI checks real weather for the persona's home city (new \"Location\" field in the persona editor); with no weather facts it must stay vague, and fabricated \"it's raining here too\" claims are stripped before sending",
+        "Voice & profile-capture fixes",
+        "\"Speak the translation → Japanese\" no longer times out: the wait budget now has a foreign-language tier (ja/ko synthesis is slower per character; worst observed 28s now has ample headroom); Chinese behavior unchanged",
+        "Profile capture: the Location slot can no longer be filled with a language word (\"English\"); \"I'm a student\" self-descriptions now correctly fill the Occupation slot",
+        "LINE voice duration & media reliability: multi-tier duration resolution (works on machines without ffmpeg), automatic download retry with token refresh, and original-file fetch with transcript backfill",
+        "Misc",
+        "Multilingual voice foundation hardening (ja/ko clone chain and language gates) plus multiple stability batches",
+        "The workflow management page was rebuilt this release; if you still see \"page script error\" please report with a screenshot"
+      ]
+    }
+  },
+  {
+    "version": "1.0.64",
+    "date": "2026-08-30",
+    "title": {
+      "zh": "限时目标冲刺推进引擎：客户沉默也按时间表主动出手，收口话术与全力档",
+      "en": "Sprint engine for timed goals: proactive beats on schedule, closing language and all-out force"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "v1.0.64（限时目标冲刺版）",
+        "一、限时目标全面进化（「3 小时内要结果」终于名副其实）",
+        "冲刺推进引擎：限时目标（今天收口/这轮聊完）不再干等客户开口——客户沉默时 AI 按时间表主动出手，开场/跟进/收口三拍走完整个窗口",
+        "推进力度加度：临近截止自动切「收口」话术（可明确报价、给出下一步、点明时间有限）；新建目标可选「全力档」——不退避不熔断、首拍即可直说、拍数上限 +2",
+        "「⚡ 立即推进」：目标卡新增手动加速按钮，坐席随时让 AI 当场推进一拍（连点不双发）",
+        "调度全透明：实时倒计时活字 + 「已推进几拍 · 下一主动拍几点」状态行——AI 接下来干什么一眼可见",
+        "拿到联系方式自动结成：检出客户留下微信/电话/邮箱即自动标达成（可关）；到期没人确认的「疑似达成」在卡上一键补录，不再被记成失败",
+        "插队冲刺：会话已有长线目标时一键「暂停长线、插入冲刺」，冲刺结束自动恢复长线目标",
+        "安全边界原样保留：客户情绪危机、明确说过别打扰、人工审核会话——AI 绝不主动出手",
+        "二、配套观测",
+        "冲刺目标失败即时提醒（不再等日报聚合），带「曾检出达成信号」标注",
+        "目标报表新增按节奏档（自然天/今天收口/这轮聊完）拆分的达成率与平均用时",
+        "三、其他",
+        "另含当日多批稳定性修复与体验优化（详见频道历史公告）"
+      ],
+      "en": [
+        "v1.0.64 (Sprint Goals release)",
+        "Sprint goals, now for real (\"results within 3 hours\" finally means it)",
+        "Sprint engine: timed goals (close-today / this-session) no longer wait for the customer to speak — when they go quiet, the AI reaches out on schedule across opening / follow-up / closing beats",
+        "Push-force escalation: near the deadline the AI switches to closing language (state the price, give a clear next step, mention time is short); new goals can pick \"All-out\" force — no backoff, no halt, direct from beat one, +2 beat cap",
+        "\"Push now\" button: nudge the AI to advance one beat on the spot (double-clicks never double-send)",
+        "Transparent scheduling: live countdown plus a \"beats pushed · next proactive beat at HH:MM\" status line — you always know what the AI will do next",
+        "Auto-settle on contact info: when the customer shares WeChat / phone / email, the goal is marked won automatically (optional); expired goals with a detected signal offer one-click \"record win\" instead of counting as failures",
+        "Sprint queue-jump: with a long-term goal active, pause it in one click, run the sprint, and the long-term goal resumes automatically afterwards",
+        "Safety boundaries unchanged: emotional-crisis windows, explicit \"stop messaging me\", and human-review conversations are never touched proactively",
+        "Observability",
+        "Instant alert when a sprint goal misses (no more waiting for the daily digest), flagged when a completion signal had been detected",
+        "Goal reports now split done-rate and time-to-done by pace (natural / today / session)",
+        "Misc",
+        "Also carries today's stability fix batches (see channel history)"
+      ]
+    }
+  },
+  {
+    "version": "1.0.63",
+    "date": "2026-08-30",
+    "title": {
+      "zh": "0830 报障集中修复：出站语言卫生、人设档案硬约束、相册与发送真相",
+      "en": "Aug 30 bug-bash fixes: outbound language hygiene, hard persona constraints, album & delivery truth"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "v1.0.63（0830 午批修复版）",
+        "一、AI 回复质量",
+        "中英混杂出站（如 \"I'm 我\"）根治：发出前语种一致性校验，检出混杂自动重写一遍再发（三处翻译出口全部设防）",
+        "舞台指示泄漏根治：(tone shifts to playful)、(smiles)、（语气…）、（撒娇）等中英旁白全家族生成端硬禁+出站剥离",
+        "客户发图后回复漂中文根治：识图描述不再被当成客户语言，纯图片消息按会话语言回复",
+        "二、人设档案说了算",
+        "称呼双向硬约束：人设工作室新增「你称呼对方 / 对方称呼你」两个字段，注入为硬约束并压过 AI 自己的推断记忆；出站再加一道互换自动纠正（good morning baba 自动纠回 babe）",
+        "位置只按档案说：档案写薄荷岛就绝不自称在马尼拉；会话中亲口说过的出差/旅行自动成为临时状态（期间按它叙事、到期回归）；没接天气数据不再断言下雨下雪",
+        "承诺自洽：AI 亲口说过的承诺不否认、没说过的绝不捏造（客户的请求不会被扭成\"我答应过\"）",
+        "三、记忆库管理升级（四问全答）",
+        "每条记忆带来源溯源：悬停即见\"抽取自哪句原话\"",
+        "新增「编辑」：错误记忆改对了再留（保存即人工核准）",
+        "AI 推断条目在生成时自动降权，与档案冲突以档案为准",
+        "四、相册与发送",
+        "相册上传存储迁至数据目录：版本更新不再清空相册（存量自动迁移）；上传加内容完整性校验，损坏文件当场提示重传；\"相册是空的\"误报修正",
+        "手动发送不再误报失败：慢发送（限流期确认要 30-65 秒）超时后先对账再定论，确认已发出就提示勿重发",
+        "「客户不可达」误标修复：标记带来源可回溯、7 天自动到期、任一条消息真实送达立即解除；会话上方新增黄条提示\"自动回复已暂停+原因\"",
+        "五、其他",
+        "诊断包补收桌面壳前端日志（前端层故障从此有第一现场）",
+        "语音转录通道服务端已于当日热修恢复（无需客户端操作）"
+      ],
+      "en": [
+        "v1.0.63 (Aug 30 noon-batch fixes)",
+        "AI reply quality",
+        "Mixed-language outbound (e.g. \"I'm 我\") fixed for good: outbound language-consistency check intercepts and rewrites before sending (all three translation exits guarded)",
+        "Stage-direction leaks eradicated: (tone shifts to playful), (smiles), Chinese aside brackets and the whole family are now hard-banned at generation and stripped at the outbound gate",
+        "Replies no longer drift to Chinese after the customer sends a photo: vision captions are never mistaken for the customer's language",
+        "Persona profile is now authoritative",
+        "Two-way address fields: new \"You call them / They call you\" fields in Persona Studio, injected as hard constraints that override AI-inferred memories; an outbound guard auto-corrects swapped pet names",
+        "Location follows the profile: no more claiming to be in Manila when the profile says Bohol; trips mentioned in chat become a temporary state (narrated during, auto-expiring after); no more asserting rain/snow without real weather data",
+        "Promise integrity: promises the AI actually made are never denied, and ones it never made are never claimed",
+        "Memory management upgrade",
+        "Every memory now carries provenance (hover to see the original message it was extracted from)",
+        "New Edit action: fix a wrong memory and keep it (saving counts as human verification)",
+        "AI-inferred entries are de-prioritized at generation time; the profile wins on conflict",
+        "Album & delivery truth",
+        "Album uploads moved to the data directory: updates no longer wipe albums (existing files migrate automatically); uploads are content-validated so corrupted files are rejected on the spot; the misleading \"album is empty\" error is fixed",
+        "Manual sends no longer report false failures: on timeout the client reconciles with the server before concluding (slow rate-limited confirmations of 30-65s are recognized as sent)",
+        "\"Unreachable customer\" mis-flags fixed: flags carry evidence, expire after 7 days, and clear instantly on any successful delivery; a visible banner explains when auto-reply is paused",
+        "Other",
+        "Diagnostic bundles now include the desktop shell's renderer log",
+        "The voice-transcription relay was hot-fixed server-side the same day (no client action needed)"
+      ]
+    }
+  },
+  {
+    "version": "1.0.62",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "当前最新版 · 手机扫码操控修复、自动回复档位更听话",
+      "en": "Latest · phone QR control fixed, better auto-reply controls"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "手机扫码操控连不上已根治：局域网入口自动放开（安全令牌才放行），连不上时按原因指路，并新增「一键放行防火墙」。",
+        "自动回复档位更听话：「新会话默认档」与「真发总闸」分开控制、切换前明示波及范围；全局停发时会话徽标如实亮「已暂停真发」。",
+        "新登录账号先确认接管方式（全自动/拟稿人审/关闭）再放行；人设「应用到」支持全部已登录账号。",
+        "AI 记得自己刚说过的话，不再前后矛盾：刚说在泡茶不会转头否认，约好下月不会改口约这周。",
+        "克隆语音修复：不再蹦出英文怪词；长文本试听不再退回标准音色。",
+        "若干稳定性与细节修复。"
+      ],
+      "en": [
+        "Phone QR remote control fixed for good: the LAN entrance now opens automatically (strong-token installs only), failures explain themselves, and a one-click firewall allow is built in.",
+        "Auto-reply modes behave: \"default mode for new chats\" and the \"auto-send master switch\" are separate controls with an impact preview; when sending is paused globally, chat badges honestly show \"auto-send paused\".",
+        "New accounts confirm their takeover mode (full-auto / review / off) before going live; \"Apply to\" now lists every logged-in account.",
+        "The AI remembers what it just said — no more contradicting itself minutes later.",
+        "Cloned-voice fixes: no more stray English words read aloud; long previews no longer fall back to the standard voice.",
+        "Assorted stability and polish fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.61",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "克隆语音更稳、发送失败看得见",
+      "en": "Steadier cloned voice, visible send failures"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆语音断链会自动诊断、节点故障自动切换，不再悄悄退化成标准音色。",
+        "发送失败给出人话提示（限流 / 账号受限 / 网络问题），不再一句「发送失败」了事。",
+        "自动回复遇平台限流会自动改期重发。",
+        "手动发送失败会留下记录，可一键重发。",
+        "若干稳定性与细节修复。"
+      ],
+      "en": [
+        "Cloned voice auto-diagnoses dropped links and fails over to a healthy node — no more silently degrading to the standard voice.",
+        "Send failures now explain themselves in plain language (rate limit / restricted account / network) instead of a bare “failed to send”.",
+        "Auto-replies that hit a platform rate limit are automatically rescheduled and retried.",
+        "Manual send failures are logged and can be resent with one click.",
+        "Assorted stability and detail fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.60",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "账号发送额度设置 · LINE 与克隆语音修复",
+      "en": "Account send-quota settings · LINE & cloned-voice fixes"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "修复 LINE 只能发、收不到消息；人设克隆语音不生效已修复，并新增专属语音节点。",
+        "新增「账号发送额度」可视化设置（日上限、预热爬坡、白名单）。",
+        "AI 防复读：重复内容自动换个说法。",
+        "通知中心去噪；查看会话不再误触「接管静音」；「在线顾问」默认对客户隐藏。",
+        "含报障闭环、等待 AI 时网络异常中断、长消息翻译丢失等一批修复。"
+      ],
+      "en": [
+        "Fixed LINE receiving no messages; the persona cloned-voice failure is fixed, with a dedicated voice node added.",
+        "New visual “account send-quota” settings (daily cap, warm-up ramp, allowlist).",
+        "Anti-repeat replies: repeated content is automatically rephrased.",
+        "Quieter notification center; opening a conversation no longer triggers “takeover mute”; the “online advisor” is hidden from customers by default.",
+        "Includes the incident-report loop, network-error interruptions while waiting for AI, and long-message translation loss fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.59",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "LINE 收消息 · 克隆语音 · 报障闭环",
+      "en": "LINE inbound · cloned voice · incident-report loop"
+    },
+    "tags": [
+      "fix",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "根治 LINE 只能发、收不到消息；凭据过期会主动提醒。",
+        "人设克隆语音不生效已修复。",
+        "报障闭环：在小智里报的问题，修好后会主动通知你。",
+        "等待 AI 时「网络异常」中断已根治；小智页面教学（「本页 N 处可讲解」）。",
+        "账号资产中心：可读身份、改名、一键导出迁移包。",
+        "AI 回复长短更自然；外语译文不再夹带中文语气词。"
+      ],
+      "en": [
+        "Root-fixed LINE being able to send but not receive; you are proactively warned when credentials expire.",
+        "Fixed the persona cloned-voice not taking effect.",
+        "Incident-report loop: issues you report in Xiaozhi now notify you once fixed.",
+        "Root-fixed “network error” interruptions while waiting for AI; in-page guidance in Xiaozhi (“N spots explained on this page”).",
+        "Account asset center: readable identities, renaming, one-click migration-pack export.",
+        "AI reply length feels more natural; foreign-language translations no longer carry Chinese filler particles."
+      ]
+    }
+  },
+  {
+    "version": "1.0.58",
+    "date": "2026-08-27",
+    "title": {
+      "zh": "后台热修复通道 · 稳定性大修复",
+      "en": "Background hotfix channel · major stability pass"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "新增「后台热修复」通道：小问题修好后重启即生效，无需重新下载完整安装包。",
+        "修复多账号身份错乱，新增账号交接向导。",
+        "AI 不再「乱回忆」对方没说过的话；关怀消息不再复读。",
+        "小智答不上时会直说，并支持一键报障。",
+        "全站提醒统一为右下角轻提醒 + 消息中心。",
+        "收件箱修复（群聊滚动卡住、编辑草稿误丢）；Messenger / LINE 收发更稳、发图承诺更可靠。"
+      ],
+      "en": [
+        "New “background hotfix” channel: small fixes take effect on restart without re-downloading the full installer.",
+        "Fixed multi-account identity mix-ups; added an account-handover wizard.",
+        "AI no longer “misremembers” things the other side never said; care messages no longer repeat.",
+        "When Xiaozhi can’t answer, it says so directly and supports one-click issue reporting.",
+        "Site-wide alerts unified into a bottom-right light toast plus a message center.",
+        "Inbox fixes (group-chat scroll freezing, accidental draft loss); steadier Messenger / LINE send-receive and more reliable photo-send promises."
+      ]
+    }
+  },
+  {
+    "version": "1.0.56",
+    "date": "2026-08-26",
+    "title": {
+      "zh": "稳定性专项修复",
+      "en": "Stability-focused fixes"
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "修复群聊记录重启后卡在旧消息。",
+        "修复后台数据页与账号资产页打不开。",
+        "修复输入框偶发点不进。",
+        "修复「待审 / 待处理」打开为空。",
+        "Messenger 加密会话发送更稳；平台异常时自动保护账号。",
+        "手机端删除的消息，工作台同步删除。",
+        "整体收发稳定性提升。"
+      ],
+      "en": [
+        "Fixed group-chat history getting stuck on old messages after a restart.",
+        "Fixed the admin data page and account-asset page failing to open.",
+        "Fixed the input box occasionally not accepting clicks.",
+        "Fixed “pending review / pending” opening empty.",
+        "Steadier sending in Messenger encrypted chats; accounts are auto-protected on platform anomalies.",
+        "Messages you delete on your phone are now deleted in the workspace too.",
+        "Overall send-receive stability improvements."
+      ]
+    }
+  },
+  {
+    "version": "1.0.46",
+    "date": "2026-08-21",
+    "title": {
+      "zh": "内测反馈集中修复",
+      "en": "Beta-feedback fixes round-up"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "修复打包版语音、图片发送失败（上传报错）。",
+        "翻译工具提交语音 / 视频改为自动使用官方托管转写，无需任何配置。",
+        "客户发的纯表情消息现在直接显示表情本体（不再是「[表情]」文字）。",
+        "全新安装领取试用后语音登记即刻可用，无需重启。",
+        "带文字的截图报障不再丢失文字（此前会导致 AI 答非所问）。",
+        "人设绑定状态统一，各处显示一致。",
+        "报错提示全面改为人话，不再出现配置键名 / HTTP 状态码；「AI 链路」横幅分「无需操作」与「需处理」两级。",
+        "首启向导绑渠道 / 挑人设改为纯图文指引，不再中途跳走。"
+      ],
+      "en": [
+        "Fixed voice / image send failures in the packaged build (upload error).",
+        "The translation tool now auto-uses hosted transcription for voice / video submissions — no configuration needed.",
+        "Emoji-only messages from customers now show the emoji itself instead of a “[emoji]” placeholder.",
+        "After claiming the trial on a fresh install, voice enrollment works immediately — no restart required.",
+        "Text in screenshot reports is no longer lost (which previously made the AI reply off-topic).",
+        "Persona-binding status is unified and consistent everywhere.",
+        "Error messages are now plain language — no config keys or HTTP status codes; the “AI link” banner is split into “no action needed” and “action required”.",
+        "The first-run wizard’s channel-binding / persona-picking steps are now illustrated guides that don’t navigate you away."
+      ]
+    }
+  },
+  {
+    "version": "1.0.40",
+    "date": "2026-08-18",
+    "title": {
+      "zh": "浮窗 AI 副驾上线 · 工作目标升级",
+      "en": "Floating AI copilot · work-goals upgrade"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "浮窗 AI 副驾上线：副驾面板可悬浮于任意窗口之上，聊天与辅助两不误。",
+        "工作目标体验升级：先了解客户再定目标，目标完成与风险提醒更醒目。",
+        "界面主题统一焕新（工具栏 / 人设列表 / 滚动条）。",
+        "多项稳定性与细节修复。"
+      ],
+      "en": [
+        "Floating AI copilot: the copilot panel can hover over any window, so chatting and assistance no longer compete for space.",
+        "Work-goals experience upgraded: understand the customer first, then set goals; completion and risk reminders are more prominent.",
+        "Unified UI theme refresh (toolbar / persona list / scrollbars).",
+        "Assorted stability and detail fixes."
+      ]
+    }
+  }
+]

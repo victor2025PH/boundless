@@ -97,7 +97,7 @@
   function fillTagOptions(){
     var sel=document.getElementById('cl-tag');
     if(sel.options.length>1){ return; }
-    fetch('/api/workspace/tags').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/tags').then(function(r){return r.json();}).then(function(d){
       (d.tags||[]).forEach(function(t){
         if(t.color) tagColors[t.tag]=t.color;
         var o=document.createElement('option'); o.value=t.tag; o.textContent=t.tag+' ('+t.count+')'; sel.appendChild(o);
@@ -133,7 +133,7 @@
       var intim=(c.intimacy_score!=null)?('<div class="cl-intim">'+window.T('rpa_js_intimacy')+' '+Number(c.intimacy_score).toFixed(0)+'</div>'):'';
       var tags=(c.tags||[]).map(function(t){var col=tagColors[t];var st=col?('background:'+esc(col)+';color:#fff;'):'background:var(--tk-surface-2);color:var(--tk-text-muted);';return '<span class="cl-stage" style="'+st+'">'+esc(t)+'</span>';}).join(' ');
       var fu='';
-      if(c.follow_up_at){ var due=c.follow_up_at<=now; fu='<div style="font-size:11px;margin-top:3px;color:'+(due?'#dc2626':'#92400e')+';">'+(due?'⏰ '+window.T('base.pill.followup')+' ':window.T('msg_js_517')+' ')+fmtTs(c.follow_up_at)+'</div>'; }
+      if(c.follow_up_at){ var due=c.follow_up_at<=now; fu='<div style="font-size:11px;margin-top:3px;color:'+(due?'var(--th-ink-red6,#b91c1c)':'var(--th-ink-amber8,#92400e)')+';">'+(due?'⏰ '+window.T('base.pill.followup')+' ':window.T('msg_js_517')+' ')+fmtTs(c.follow_up_at)+'</div>'; }
       return '<div class="cl-card" onclick="location.href=\'/workspace/contact/'+encodeURIComponent(c.contact_id)+'\'">'
         +'<div><div class="cl-name">'+esc(c.primary_name||window.T('c3_js002'))+(c.has_lead?'<span class="cl-lead">'+window.T('cl_js_002')+'</span>':'')+'</div>'
         +'<div class="cl-meta">'+chans+' · '+window.T('msg_js_1955')+' '+fmtTs(c.last_active_at)+'</div>'+(tags?'<div style="margin-top:4px;">'+tags+'</div>':'')+'</div>'
@@ -143,7 +143,7 @@
   }
   function load(){
     document.getElementById('cl-list').innerHTML='<span class="tk-load">'+window.T('dash.loading')+'</span>';
-    fetch('/api/workspace/contacts/list?'+params()).then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/contacts/list?'+params()).then(function(r){return r.json();}).then(function(d){
       if(!d.ok){ document.getElementById('cl-list').innerHTML='<span class="tk-load">'+window.T('tk_js_004')+'</span>'; return; }
       total=d.total||0; fillStageOptions(d.stage_labels, d.stage_counts); fillTagOptions(); renderStats(d.stage_counts||{});
       render(d.contacts||[]);

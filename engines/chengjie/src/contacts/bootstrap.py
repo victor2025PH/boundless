@@ -7,6 +7,7 @@ main.py 只需调 `bootstrap_contacts_subsystem(config, cfg_dir)` 拿回 Contact
 
     contacts:
       enabled: false                  # 总开关，默认关
+      mode: full                      # full（默认，旧行为）| lite（见下）
       db_path: config/contacts.db     # 可选
       daily_cap: 15
       global_cap: 0                   # 0=不启用全局
@@ -38,6 +39,24 @@ from .store import ContactStore
 
 logger = logging.getLogger(__name__)
 
+#: 运行档位。``full``＝历史行为（后台循环 + RPA hooks + Mobile Bridge 全接）；
+#: ``lite``＝只留「本地库 + 跨平台档案读写/AI 注入」这条纯软件链，显式不起任何
+#: 周期任务、不接 RPA hooks、不起 Mobile Bridge 轮询。
+CONTACTS_MODES = ("full", "lite")
+LITE_MODE = "lite"
+
+
+def resolve_contacts_mode(contacts_cfg: Optional[Dict[str, Any]]) -> str:
+    """``contacts.mode`` → 规范档位；**缺失/非法一律 full**。
+
+    默认必须是 full：存量部署（生产实例、内测坐席机）的 config 里根本没有这个键，
+    默认成 lite 会把它们正在用的衰减/KPI/hooks 静默关掉——那是配置解析的越权。
+    「客户装机走 lite」由种子与基线补齐**显式写值**达成（见 feature_registry），
+    不靠这里猜环境。
+    """
+    raw = str((contacts_cfg or {}).get("mode") or "").strip().lower()
+    return raw if raw in CONTACTS_MODES else "full"
+
 
 @dataclass
 class ContactsSubsystem:
@@ -54,6 +73,7 @@ class ContactsSubsystem:
     intimacy_engine: Any = None   # IntimacyEngine or None
     reactivation: Any = None      # ReactivationScheduler or None
     config_snapshot: Dict[str, Any] = None   # 启动时的配置，Web 可查
+    mode: str = "full"            # full | lite（见 CONTACTS_MODES）
     # W4-定时：后台 asyncio 任务集合（start_background_tasks 后填充）
     _bg_tasks: list = field(default_factory=list)
     # intimacy_refresh 循环活动快照（运营可经 health() 观测「在跑、刷了几个」）
@@ -103,6 +123,19 @@ class ContactsSubsystem:
             "contacts cap_alert 已接到 webhook：thresholds=%s", thresholds)
         return True
 
+    # ── 精简档（lite）：只留纯软件链，重运行时一律不起 ─────
+    @property
+    def is_lite(self) -> bool:
+        return self.mode == LITE_MODE
+
+    def heavy_integrations_enabled(self) -> bool:
+        """外部集成（Mobile Bridge 轮询等）是否允许接入。
+
+        lite 档为 False——那些集成打的是本机/局域网另一套服务（如手机自动化 rig
+        的 18080），客户机上没有它们，每隔十几秒连接被拒只会刷日志、白烧 CPU。
+        """
+        return not self.is_lite
+
     # ── W4-Hooks-Flag：按 channel 查 hook 是否应接入 ─────
     def is_rpa_hook_enabled(self, channel: str) -> bool:
         """main.py 用这个判断某路 runner 是否要接 ContactHooks。
@@ -114,7 +147,11 @@ class ContactsSubsystem:
                 line: true
 
         未配置时按 true（保持向后兼容）；显式 `false` 才跳过。
+        lite 档恒 False：hooks 会在每条入站消息上建 journey/推进漏斗，那是运营
+        场景的记账，客户装机不需要（且会让本地库无声长大）。
         """
+        if self.is_lite:
+            return False
         flags = (self.config_snapshot or {}).get("rpa_hooks") or {}
         key = (channel or "").strip().lower()
         if key not in flags:
@@ -130,8 +167,13 @@ class ContactsSubsystem:
         - `kpi_alert_interval_minutes` (默认 60, 0=关)：每 N 分钟跑一次 KPI 告警检测。
 
         幂等：重复调用只会忽略已在跑的任务。
+        lite 档整体不起（三条循环都是运营记账/告警，客户装机没有对应用法，
+        而它们每小时都在写本地库、发 webhook）。
         """
         if self._bg_tasks:
+            return
+        if self.is_lite:
+            logger.info("contacts 后台任务：精简档（lite），三条周期任务均不启动")
             return
         cfg = self.config_snapshot or {}
         try:
@@ -465,12 +507,17 @@ def bootstrap_contacts_subsystem(
         inject_separator=str(auto_inject_cfg.get("separator") or "\n\n"),
     )
 
+    mode = resolve_contacts_mode(contacts_cfg)
     logger.info(
-        "contacts subsystem bootstrapped: db=%s daily_cap=%s ttl=%sh readiness=%s",
-        db_path, contacts_cfg.get("daily_cap"),
+        "contacts subsystem bootstrapped: mode=%s db=%s daily_cap=%s ttl=%sh readiness=%s",
+        mode, db_path, contacts_cfg.get("daily_cap"),
         contacts_cfg.get("token_ttl_hours", 72),
         contacts_cfg.get("readiness_threshold"),
     )
+    if mode == LITE_MODE:
+        logger.info(
+            "contacts 精简档：仅本地库 + 跨平台档案读写/AI 注入；"
+            "周期任务/RPA hooks/Mobile Bridge 均不启动")
     return ContactsSubsystem(
         store=store,
         handoff_svc=handoff_svc,
@@ -484,6 +531,7 @@ def bootstrap_contacts_subsystem(
         intimacy_engine=intimacy_engine,
         reactivation=reactivation,
         config_snapshot=dict(contacts_cfg),
+        mode=mode,
     )
 
 
@@ -506,16 +554,42 @@ def _get_contacts_cfg(config: Any) -> Dict[str, Any]:
     return (root or {}).get("contacts") or {}
 
 
-def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
-    scripts_path = contacts_cfg.get("scripts_path") or "config/handoff_scripts.yaml"
-    p = Path(scripts_path)
+def _bundled_config_fallback(name: str) -> Optional[Path]:
+    """随包只读种子 ``<_internal>/config/<name>``（P-4 #254 / MTRCH2③）。
+
+    开发态 = 仓库 ``config/``；PyInstaller onedir 下 ``__file__`` 落在
+    ``_internal/src/contacts/bootstrap.py``，``parents[2]`` 即 ``_internal``，与
+    build_backend.py ``DATAS`` 的 ``config`` 落点一致（同 ConfigManager._bundled_example_path）。
+    用户数据区没有这份 yaml（clean 装从不播种它）时回落到这里，转人工话术 / 合规检查
+    才能在客户机上装配起来；用户想改话术就往数据区 config/ 放一份同名文件覆盖。
+    """
+    try:
+        p = Path(__file__).resolve().parents[2] / "config" / name
+        return p if p.is_file() else None
+    except Exception:
+        return None
+
+
+def _resolve_contacts_yaml(cfg_dir: Path, configured: str) -> Path:
+    p = Path(configured)
     if not p.is_absolute():
         p = cfg_dir.parent / p if cfg_dir.name == "config" else cfg_dir / p
     # config/ 下也是常见位置
     if not p.exists():
-        alt = cfg_dir / Path(scripts_path).name
+        alt = cfg_dir / Path(configured).name
         if alt.exists():
             p = alt
+    if not p.exists():
+        bundled = _bundled_config_fallback(Path(configured).name)
+        if bundled is not None:
+            logger.info("contacts: %s 用户数据区缺席，回落随包种子 %s", Path(configured).name, bundled)
+            p = bundled
+    return p
+
+
+def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
+    scripts_path = contacts_cfg.get("scripts_path") or "config/handoff_scripts.yaml"
+    p = _resolve_contacts_yaml(cfg_dir, scripts_path)
     try:
         from src.skills.handoff_renderer import HandoffRenderer
         return HandoffRenderer(p)
@@ -526,13 +600,7 @@ def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
 
 def _safe_init_compliance(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
     comp_path = contacts_cfg.get("compliance_path") or "config/handoff_compliance.yaml"
-    p = Path(comp_path)
-    if not p.is_absolute():
-        p = cfg_dir.parent / p if cfg_dir.name == "config" else cfg_dir / p
-    if not p.exists():
-        alt = cfg_dir / Path(comp_path).name
-        if alt.exists():
-            p = alt
+    p = _resolve_contacts_yaml(cfg_dir, comp_path)
     try:
         from src.skills.handoff_compliance import HandoffComplianceChecker
         return HandoffComplianceChecker(config_path=p)
@@ -549,9 +617,11 @@ def _safe_init_limiter(store, contacts_cfg: Dict[str, Any]):
         thresholds = list(alert_cfg.get("thresholds_pct") or [])
         if not bool(alert_cfg.get("enabled", False)):
             thresholds = []
+        # daily_cap：缺省 15；显式 0 = 不限（`or 15` 会把 0 吞成 15，P2-1 语义统一）
+        _raw_cap = contacts_cfg.get("daily_cap")
         return AccountLimiter(
             store,
-            daily_cap=int(contacts_cfg.get("daily_cap") or 15),
+            daily_cap=15 if _raw_cap is None else int(_raw_cap),
             global_cap=int(contacts_cfg.get("global_cap") or 0),
             alert_thresholds_pct=thresholds,
         )

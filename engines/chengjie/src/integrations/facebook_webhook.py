@@ -11,6 +11,10 @@
 - messaging_type=RESPONSE 在 24h window 内回，过期自动降级为 MESSAGE_TAG
 - 不主动外发，所有出站消息都是被用户激活后的 reply/push
 - echo / delivery / read 事件直接 ack，不喂给 SkillManager
+- 路由**常驻挂载、按实时配置热门控**（2026-08-10）：旧行为是启动时 enabled+三凭证
+  齐全才注册路由——接入向导保存凭证后出站 worker 已热注册、入站 webhook 却要等
+  下次重启才存在（「出站热、入站冷」半截生效态，Meta 侧 Callback 校验 404）。
+  现在路由始终在，未启用时 GET/POST 一律 403；签名硬拒不变（空 app_secret 拒收）
 
 config.yaml 示例：
   facebook_messenger:
@@ -70,6 +74,98 @@ def verify_fb_signature(body: bytes, signature_header: str, app_secret: str) -> 
     return hmac.compare_digest(expected, provided)
 
 
+# Page Token 失效特征（Graph 多以 HTTP 400 + OAuthException/code 190 报鉴权错，
+# 不能只看 401）：命中即视为「凭证坏了」而非普通发送失败。
+_TOKEN_FAIL_MARKERS = (
+    "oauthexception",
+    "error validating access token",
+    "invalid oauth access token",
+    "session has expired",
+    "has not authorized application",
+)
+
+
+def _looks_like_token_failure(status: int, body: str) -> bool:
+    """纯函数：Graph 错误响应是否指向 Page Access Token 失效/吊销。"""
+    if int(status or 0) == 401:
+        return True
+    low = (body or "").lower()
+    if '"code":190' in low.replace(" ", ""):
+        return True
+    return any(m in low for m in _TOKEN_FAIL_MARKERS)
+
+
+def _maybe_alert_page_token(status: int, body: str) -> None:
+    """Page Token 失效 → host_alert（日志 + EventBus 镜像 + 算力机弹窗，6h 去抖）。
+
+    这类凭证坏掉的默认形态是**静默**：token 被吊销/过期后，所有官方通道出站只在
+    WARNING 日志里积灰，坐席与机主零感知，客户消息有来无回。复用 host_alert 出口
+    使其与「云端 Key 失效」同一告警面；恢复无需动作（换 token 后自然不再触发）。
+    """
+    try:
+        if not _looks_like_token_failure(status, body):
+            return
+        from src.utils.host_alert import notify_host
+        notify_host(
+            "Messenger Page Token 异常",
+            "Facebook Page Access Token 疑似失效或被吊销（HTTP "
+            f"{status}）。官方通道出站已受影响，请到「接入向导」更新凭证。\n"
+            f"详情: {(body or '')[:200]}",
+            key="fb_page_token", cooldown_sec=6 * 3600.0,
+        )
+    except Exception:
+        pass
+
+
+def parse_page_probe(status: int, body: str) -> Dict[str, Any]:
+    """Graph ``/me`` 探针响应 → 结构化结论（纯函数，供向导保存探针/凭证体检复用）。
+
+    成功时带回主页身份（page_id/name/picture）——page_id 从「要用户去 Meta 后台
+    抄」变成「token 自己说」，向导可自动回填；失败区分 auth（token 坏）与 http。
+    """
+    try:
+        data = json.loads(body or "")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if int(status or 0) == 200 and data.get("id"):
+        try:
+            pic = str(((data.get("picture") or {}).get("data") or {}).get("url") or "")
+        except Exception:
+            pic = ""
+        return {"ok": True, "page_id": str(data.get("id") or ""),
+                "name": str(data.get("name") or ""), "picture": pic}
+    err = str(((data.get("error") or {}).get("message")) or "") or f"HTTP {status}"
+    etype = str(((data.get("error") or {}).get("type")) or "").lower()
+    kind = "auth" if (int(status or 0) in (401, 403) or "oauth" in etype
+                      or _looks_like_token_failure(status, body)) else "http"
+    return {"ok": False, "error": err, "error_kind": kind}
+
+
+async def fb_probe_page(
+    page_access_token: str, *, timeout_sec: float = 8.0,
+) -> Dict[str, Any]:
+    """用 Page Token 打 Graph ``/me`` 验证凭证并带回主页身份。
+
+    供「接入向导保存前探针」使用：token 抄错一个字符，旧链路要等第一次真实出站
+    失败才暴露；这里 8 秒内给确定性结论。纯出站 egress（LAN 部署无公网入口也能
+    跑）；永不抛异常。
+    """
+    tok = (page_access_token or "").strip()
+    if not tok:
+        return {"ok": False, "error": "empty token", "error_kind": "bad_request"}
+    params = {"access_token": tok, "fields": "id,name,picture{url}"}
+    try:
+        timeout = aiohttp.ClientTimeout(total=max(2.0, float(timeout_sec)))
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{GRAPH_BASE}/me", params=params) as resp:
+                body = await resp.text()
+                return parse_page_probe(resp.status, body)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e), "error_kind": "network"}
+
+
 async def fb_send_message(
     psid: str,
     text: str,
@@ -123,6 +219,7 @@ async def fb_send_message(
                     logger.warning(
                         "FB send_message HTTP %s: %s", resp.status, body[:500]
                     )
+                    _maybe_alert_page_token(resp.status, body)
                     return {
                         "ok": False,
                         "error": f"HTTP {resp.status}: {body[:200]}",
@@ -217,6 +314,7 @@ async def fb_send_attachment(
                 body = await resp.text()
                 if resp.status != 200:
                     logger.warning("FB send_attachment HTTP %s: %s", resp.status, body[:500])
+                    _maybe_alert_page_token(resp.status, body)
                     return {"ok": False, "error": f"HTTP {resp.status}: {body[:200]}"}
                 try:
                     data = json.loads(body)
@@ -292,6 +390,7 @@ async def fb_send_attachment_upload(
                     if resp.status != 200:
                         logger.warning("FB attachment upload HTTP %s: %s",
                                        resp.status, body[:500])
+                        _maybe_alert_page_token(resp.status, body)
                         return {"ok": False, "error": f"HTTP {resp.status}: {body[:200]}"}
                     try:
                         data = json.loads(body)
@@ -321,41 +420,27 @@ def register_fb_messenger_routes(
     config_manager: Any,
     telegram_client: Any,
 ) -> None:
-    """挂载 GET/POST /fb/webhook（路径可在配置里改）。"""
-    cfg = (
-        getattr(config_manager, "config", None) or {}
-    ).get("facebook_messenger") or {}
-    if not cfg.get("enabled"):
-        return
+    """挂载 GET/POST /fb/webhook（路径取注册时配置，默认 /fb/webhook）。
 
-    sm = getattr(telegram_client, "skill_manager", None)
-    if sm is None:
-        logger.warning("FB Messenger 已启用但 SkillManager 不可用，跳过 Webhook")
-        return
+    **常驻挂载 + 实时门控**：开关/凭证每个请求从 ``config_manager.config`` 现读，
+    接入向导保存凭证（写 overlay 后深合并进同一 config 对象）即全链热生效——与
+    出站 worker 的 ``ensure_builtin_workers`` 热注册同一节奏，消灭「出站热、入站
+    冷」的半截生效态。仅 ``webhook_path`` 钉在注册时刻（改路径
+    意味着 Meta 后台也要同步改，属重启级运维动作）。``official_pipeline_enabled``
+    （G4c 主管道开关）同样逐请求现读，随 overlay 热切。
 
-    page_token = (cfg.get("page_access_token") or "").strip()
-    app_secret = (cfg.get("app_secret") or "").strip()
-    verify_token = (cfg.get("verify_token") or "").strip()
-    if not (page_token and app_secret and verify_token):
-        logger.error(
-            "FB Messenger 缺少 page_access_token / app_secret / verify_token，"
-            "Webhook 未注册"
-        )
-        return
+    SkillManager 于**请求期**经 ``resolve_skill_manager`` 解析（telegram_client →
+    app.state 双兜底）：注册发生在 create_app 期间，``app.state.skill_manager``
+    彼时尚未挂载；协议号未配置的部署 ``telegram_client`` 本身就是 None（2026-08-10
+    搭车验证实锤：注册期取 SkillManager 拿不到 → 路由整个没挂 → /fb/webhook 404）。
+    请求期两条通路必有一条就绪；极端仍取不到 → 503 让 Meta 稍后重投。
+    """
+    def _live_cfg() -> Dict[str, Any]:
+        return (
+            getattr(config_manager, "config", None) or {}
+        ).get("facebook_messenger") or {}
 
-    page_id = str(cfg.get("page_id") or "").strip()
-    fallback_tag = str(cfg.get("fallback_message_tag") or "ACCOUNT_UPDATE")
-    unsupported = (cfg.get("unsupported_type_reply") or "").strip() or (
-        "目前仅支持文字消息。"
-    )
-    try:
-        from src.integrations.official_api_worker import official_pipeline_enabled
-        fb_use_pipeline = official_pipeline_enabled(
-            getattr(config_manager, "config", None) or {})
-    except Exception:
-        fb_use_pipeline = False
-
-    path = cfg.get("webhook_path") or "/fb/webhook"
+    path = _live_cfg().get("webhook_path") or "/fb/webhook"
     if isinstance(path, str) and not path.startswith("/"):
         path = "/" + path
     app.state.fb_webhook_path = path
@@ -367,11 +452,20 @@ def register_fb_messenger_routes(
         hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
         hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
     ) -> Response:
+        from src.integrations.official_webhook_stats import record_verify
+        cfg = _live_cfg()
+        if not cfg.get("enabled"):
+            # 渠道未启用：只回拒绝，不记账（公网扫描噪声不该污染握手统计）
+            return Response(status_code=403, content=b"channel disabled")
         if hub_mode != "subscribe":
+            # 裸 GET / 扫描噪声不算握手尝试，不记账
             return Response(status_code=400, content=b"bad mode")
-        if (hub_verify_token or "") != verify_token:
+        verify_token = (cfg.get("verify_token") or "").strip()
+        if not verify_token or (hub_verify_token or "") != verify_token:
             logger.warning("FB Webhook verify_token 不匹配")
+            record_verify("messenger", ok=False)
             return Response(status_code=403, content=b"forbidden")
+        record_verify("messenger", ok=True)
         # 必须原样返回 challenge
         return Response(
             status_code=200, content=(hub_challenge or "").encode("utf-8")
@@ -379,20 +473,60 @@ def register_fb_messenger_routes(
 
     # ── POST：真实事件
     async def fb_webhook_event(request: Request) -> Response:
+        from src.integrations.official_webhook_stats import record_error, record_event
+        cfg = _live_cfg()
+        if not cfg.get("enabled"):
+            return Response(status_code=403, content=b"channel disabled")
         raw = await request.body()
         sig = (
             request.headers.get("X-Hub-Signature-256")
             or request.headers.get("x-hub-signature-256")
             or ""
         )
+        app_secret = (cfg.get("app_secret") or "").strip()
+        if not app_secret:
+            # 启用但缺 app_secret＝配置残缺而非攻击：单独记一类账（与 bad_signature
+            # 区分开），运维在 webhook 状态里能看出「该去补 App Secret」而不是疑心被打
+            logger.warning("FB Webhook 已启用但未配置 app_secret，入站事件拒收")
+            record_error("messenger", "no_app_secret")
+            return Response(status_code=403, content=b"app_secret not configured")
         if not verify_fb_signature(raw, sig, app_secret):
             logger.warning("FB Webhook 签名校验失败")
+            record_error("messenger", "bad_signature")
             return Response(status_code=403, content=b"invalid signature")
 
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception:
+            record_error("messenger", "bad_json")
             return Response(status_code=400, content=b"invalid json")
+        # SkillManager 请求期解析（telegram_client → app.state 双兜底，见函数
+        # docstring）。刻意放在 record_event **之前**：未就绪回 503，Meta 会重投
+        # 同一批事件——先记账再 503 会让重投把到达数翻倍。
+        try:
+            from src.web.web_context import resolve_skill_manager
+            sm = resolve_skill_manager(telegram_client, request.app)
+        except Exception:
+            sm = getattr(telegram_client, "skill_manager", None)
+        if sm is None:
+            logger.warning("FB Webhook 事件到达但 SkillManager 未就绪，回 503 待重投")
+            record_error("messenger", "sm_unready")
+            return Response(status_code=503, content=b"skill manager not ready")
+        # 到达即记（验签已过）：单事件处理失败不影响「回调可达」事实
+        record_event("messenger")
+
+        page_token = (cfg.get("page_access_token") or "").strip()
+        page_id = str(cfg.get("page_id") or "").strip()
+        fallback_tag = str(cfg.get("fallback_message_tag") or "ACCOUNT_UPDATE")
+        unsupported = (cfg.get("unsupported_type_reply") or "").strip() or (
+            "目前仅支持文字消息。"
+        )
+        try:
+            from src.integrations.official_api_worker import official_pipeline_enabled
+            use_pipeline = official_pipeline_enabled(
+                getattr(config_manager, "config", None) or {})
+        except Exception:
+            use_pipeline = False
 
         events = _extract_messaging_events(data)
         for ev in events:
@@ -404,7 +538,7 @@ def register_fb_messenger_routes(
                     fallback_tag=fallback_tag,
                     unsupported=unsupported,
                     page_id_filter=page_id,
-                    use_pipeline=fb_use_pipeline,
+                    use_pipeline=use_pipeline,
                 )
             except Exception as e:
                 logger.exception("FB 事件处理异常: %s", e)
@@ -425,8 +559,7 @@ def register_fb_messenger_routes(
         name="fb_messenger_webhook_event",
     )
     logger.info(
-        "FB Messenger Webhook 已注册: GET %s + POST %s (page_id=%s)",
-        path, path, page_id or "<any>",
+        "FB Messenger Webhook 已挂载（热门控）: GET %s + POST %s", path, path,
     )
 
 
@@ -469,12 +602,16 @@ async def _handle_one_event(
         if atts:
             # Phase I1：入站媒体可见化——先镜像占位（坐席台看到「[图片]」等并可接管），再回不支持
             try:
-                from src.integrations.shared.official_inbound import mirror_inbound_media
-                _atype = str((atts[0] or {}).get("type") or "file") if isinstance(atts, list) and atts else "file"
+                from src.integrations.shared.official_inbound import (
+                    meta_attachment_url, mirror_inbound_media,
+                )
+                _first = (atts[0] or {}) if isinstance(atts, list) and atts else {}
+                _atype = str(_first.get("type") or "file")
                 mirror_inbound_media(
                     platform="messenger", account_id=(page_id or "official"),
                     chat_key=f"fb:user:{sender_id}", media_type=_atype,
-                    name=sender_id, msg_id=str(msg.get("mid") or ""))
+                    name=sender_id, msg_id=str(msg.get("mid") or ""),
+                    media_ref=meta_attachment_url(atts))
             except Exception:
                 pass
             await fb_send_with_window_fallback(

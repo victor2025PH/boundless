@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
 import { TELEGRAM_CHANNEL, TELEGRAM_GROUP, BOT_URL, SITE_URL, siteUtmLink, miniappUtmLink } from "./site";
 import { buildOverviewPost } from "./catalog-posts";
@@ -88,14 +88,15 @@ async function photoTo(
   photo: string,
   caption: string,
   withButton: boolean,
-  campaign = ""
+  campaign = "",
+  site?: SiteButton
 ): Promise<BroadcastResult> {
   const isUrl = /^https?:\/\//i.test(photo);
   try {
     let data: { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (isUrl) {
       const body: Record<string, unknown> = { chat_id: chat, photo, caption, parse_mode: "HTML" };
-      if (withButton) body.reply_markup = richButtons(mediumFor(chat), campaign);
+      if (withButton) body.reply_markup = richButtons(mediumFor(chat), campaign, site);
       data = await callApi(token, "sendPhoto", body);
     } else {
       const buf = await readFile(photo);
@@ -103,7 +104,7 @@ async function photoTo(
       form.append("chat_id", chat);
       form.append("caption", caption);
       form.append("parse_mode", "HTML");
-      if (withButton) form.append("reply_markup", JSON.stringify(richButtons(mediumFor(chat), campaign)));
+      if (withButton) form.append("reply_markup", JSON.stringify(richButtons(mediumFor(chat), campaign, site)));
       form.append("photo", new Blob([new Uint8Array(buf)]), path.basename(photo));
       const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
         method: "POST",
@@ -155,14 +156,101 @@ export async function broadcastPhoto(opts: {
   target: BroadcastTarget;
   withButton: boolean;
   campaign?: string;
+  sitePath?: string;
+  siteLabel?: string;
 }): Promise<{ ok: boolean; results: BroadcastResult[] }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, results: [{ chat: "-", ok: false, error: "no_bot_token" }] };
   const chats = targetChats(opts.target);
+  const site = opts.sitePath || opts.siteLabel ? { path: opts.sitePath, label: opts.siteLabel } : undefined;
   const results = await Promise.all(
-    chats.map((c) => photoTo(token, c, opts.photo, opts.caption, opts.withButton, opts.campaign ?? ""))
+    chats.map((c) => photoTo(token, c, opts.photo, opts.caption, opts.withButton, opts.campaign ?? "", site))
   );
   return { ok: results.length > 0 && results.every((r) => r.ok), results };
+}
+
+// ── 多级降压视频广播（2026-08-07）：日更 feed 此前只有「URL sendVideo→文字」两级，
+// Telegram URL 拉取上限 20MB，长教学片必然降级成纯文字帖（体验大损）。
+// 新阶梯：①本地文件 ≤49MB → multipart 上传真视频帖（bot 上限 50MB；同晨目录帖
+// multipart 图片上传已实证此运行时通路）②超限/失败 → 海报图+链接帖 ③最后才纯文字。
+const MEDIA_ROOT = process.env.MEDIA_FEED_DIR || "/var/www/media/feed";
+const TG_VIDEO_MAX_MB = 49;
+
+async function sendVideoFile(
+  token: string,
+  chat: string,
+  filePath: string,
+  caption: string,
+  keyboard: ReturnType<typeof richButtons>
+): Promise<BroadcastResult> {
+  try {
+    const buf = await readFile(filePath);
+    const form = new FormData();
+    form.append("chat_id", chat);
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+    form.append("supports_streaming", "true");
+    form.append("reply_markup", JSON.stringify(keyboard));
+    form.append("video", new Blob([new Uint8Array(buf)]), path.basename(filePath));
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, {
+      method: "POST",
+      body: form,
+    });
+    const data = await res.json();
+    return {
+      chat,
+      ok: Boolean(data?.ok),
+      error: data?.ok ? undefined : data?.description,
+      messageId: data?.result?.message_id,
+    };
+  } catch (e) {
+    return { chat, ok: false, error: String(e) };
+  }
+}
+
+/** 站内 /media/feed/* 路径 → 服务器本地文件路径；外链/其它路径返回 null。 */
+function mediaLocalPath(src: string): string | null {
+  if (!src.startsWith("/media/feed/")) return null;
+  return path.join(MEDIA_ROOT, path.basename(src));
+}
+
+/** 日更/品牌视频的智能广播阶梯：multipart 真视频 → 海报+链接 → URL 视频 → 文字。 */
+export async function broadcastVideoSmart(opts: {
+  src: string; // 站内路径（/media/feed/..）或 https URL
+  videoUrl: string; // 绝对 URL（阶梯后段与文字帖用）
+  posterUrl?: string; // 海报绝对 URL（photo 帖用，Telegram 自取 ≤5MB 足够）
+  caption: string;
+  campaign?: string;
+  sitePath?: string;
+  siteLabel?: string;
+}): Promise<BroadcastResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { chat: "-", ok: false, error: "no_bot_token" };
+  const chat = `@${TELEGRAM_CHANNEL}`;
+  const buttons = richButtons("channel", opts.campaign ?? "video-feed", {
+    path: opts.sitePath ?? "/videos",
+    label: opts.siteLabel ?? "🎬 更多演示",
+  });
+
+  const local = mediaLocalPath(opts.src);
+  if (local) {
+    try {
+      const sizeMB = (await stat(local)).size / 1048576;
+      if (sizeMB <= TG_VIDEO_MAX_MB) {
+        const up = await sendVideoFile(token, chat, local, opts.caption, buttons);
+        if (up.ok) return up;
+      }
+    } catch {
+      /* 本地不可读则继续走 URL 阶梯 */
+    }
+    // 超限或上传失败：海报图 + 链接（比纯文字体面一级）
+    if (opts.posterUrl) {
+      const cap = `${opts.caption}\n\n▶️ ${opts.videoUrl}`;
+      const ph = await photoTo(token, chat, opts.posterUrl, cap.slice(0, 1024), true, opts.campaign ?? "video-feed");
+      if (ph.ok) return ph;
+    }
+  }
+  return broadcastVideoToChannel(opts);
 }
 
 /** Send a video (https URL ≤20MB — Telegram fetches it) with caption + buttons to the channel.
@@ -244,13 +332,14 @@ export const CHANNEL_BRAND = {
     title: "无界科技 BOUNDLESS · 官方频道",
     description:
       "无界科技官方频道 · 让沟通，无界。" +
-      "🎭换脸 🎙克隆声音 🎬直播换脸换声 🌐实时换语言 💬AI自动成交 🔐私有部署。" +
-      "真实案例 · 新功能 · 限时优惠第一时间发布 · USDT 结算。官网与客服见置顶。",
+      "主推 💬智聊 ChatX：统一收件箱＋AI 自动成交＋拟人互译，下载即免费开始。" +
+      "另有 🎯真机获客 🎭换脸 🎙克隆声音 🎬直播分身 🔐私有部署。" +
+      "新功能 · 限时优惠第一时间发布 · USDT 结算。官网与客服见置顶。",
   },
   group: {
     title: "无界科技 · 交流群",
     description:
-      "无界科技官方交流群 · 换脸/克隆声音/直播分身/实时换语言/AI 自动成交。" +
+      "无界科技官方交流群 · 主聊 💬智聊 ChatX（收件箱/AI 成交/翻译），也聊换脸、克隆声音、直播分身。" +
       "提问、领试用、同行交流。@小界 或点客服随时响应；广告与刷屏将被移除。",
   },
 } as const;
@@ -303,7 +392,7 @@ async function setChatMeta(
 }
 
 /** 无界科技品牌头像（深底圆裁友好）本地路径，供频道/群 setChatPhoto 使用。
- *  由 scripts/build-boundless-marks.ps1 生成 boundless-avatar.png（深底渐变 + ∞ 破框主形）。 */
+ *  由 brand-assets 管线（build_brand_assets.py → sync_brand_targets.py）同步 boundless-avatar.png。 */
 function brandAvatarPath(): string {
   return path.join(process.cwd(), "public", "brand", "logos", "boundless-avatar.png");
 }

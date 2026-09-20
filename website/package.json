@@ -4,9 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/sync-brand.mjs && node scripts/check-content-integrity.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
     "lint": "next lint",
+    "sync:brand": "node scripts/sync-brand.mjs",
+    "sync:facts": "node scripts/sync-product-facts.mjs",
+    "gate:content": "node scripts/check-content-integrity.mjs",
+    "verify:seo": "node scripts/verify-seo-live.mjs",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",
     "perf:robot": "node scripts/robot-perf.mjs",
     "assets:robot": "node scripts/robot-capture.mjs",
@@ -16,7 +21,11 @@
     "qa:intro-motion": "node scripts/qa-intro-motion.mjs",
     "qa:intro-button": "node scripts/qa-intro-button.mjs",
     "qa:intro-button-ios": "node scripts/qa-intro-button-ios.mjs",
-    "qa:intro": "node scripts/qa-intro-motion.mjs && node scripts/qa-intro-button.mjs"
+    "qa:intro": "node scripts/qa-intro-motion.mjs && node scripts/qa-intro-button.mjs",
+    "qa:en-cjk": "node scripts/qa-en-cjk.mjs",
+    "qa:trial": "node scripts/qa-trial-flow.mjs",
+    "qa:cjk": "node scripts/qa-en-cjk.mjs",
+    "qa:m-a11y": "node scripts/qa-mobile-a11y.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -34,6 +43,7 @@
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
+    "js-yaml": "^5.2.2",
     "playwright": "^1.61.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.7",

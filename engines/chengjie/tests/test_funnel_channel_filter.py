@@ -276,10 +276,14 @@ class TestFunnelPartialChipUI:
 
 # (template, expected_default_scope)
 EXPECTED_SCOPES = [
-    ("line_rpa.html",     "'line'"),
-    ("telegram.html",     "'telegram'"),
-    ("whatsapp_rpa.html", "'all'"),   # WhatsApp 不接入 contacts → 看 all
+    ("_channel_body_line.html",     "'line'"),
+    ("_channel_body_telegram.html",     "'telegram'"),
+    ("_channel_body_whatsapp.html", "'all'"),   # WhatsApp 不接入 contacts → 看 all
     ("rpa_overview.html", "'all'"),   # overview 就是跨平台总览
+    # P2-2/P2-3（2026-08-02）：Messenger 的「漏斗 Tab」并入共享 Journey 漏斗
+    # （与自研引流漏斗并存，见 test_rpa_shared_funnel.test_messenger_keeps_own_funnel）
+    # —— 共享 init 按本页平台过滤。
+    ("_channel_body_messenger.html", "'messenger'"),
 ]
 
 
@@ -301,13 +305,7 @@ def test_template_passes_correct_default_scope(template: str, expected: str):
     )
 
 
-def test_messenger_does_not_use_shared_funnel():
-    """Messenger 保留自家增强版 funnel（含 variants/handoff/ab_conclusions）；
-    shared funnel 是给另外 3 个平台 + overview 用的"通用版"。这条边界已
-    由 test_rpa_shared_funnel.py 锁定，这里只做"不重复定义 defaultScope"
-    的二次保险。
-    """
-    text = (TEMPLATES_DIR / "messenger_rpa.html").read_text(encoding="utf-8")
-    assert "rpa.funnel.init" not in text, (
-        "Messenger 不应该调用共享 funnel init（它有自己的 /api/messenger-rpa/funnel）"
-    )
+# （已删）test_messenger_does_not_use_shared_funnel：P2-2 起 Messenger 的漏斗 Tab
+# 并入共享 Journey 漏斗（与自研引流漏斗并存），旧「不得使用共享 init」前提失效；
+# 新不变量＝共享 init 必须带 defaultScope:'messenger'（进 EXPECTED_SCOPES 参数化），
+# 自研漏斗端点仍在由 test_rpa_shared_funnel.test_messenger_keeps_own_funnel 钉住。

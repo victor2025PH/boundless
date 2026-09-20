@@ -44,6 +44,16 @@ def is_write_blocked(path: str, method: str, status: Any) -> bool:
     return True
 
 
+def is_outbound_blocked(status: Any) -> bool:
+    """Sprint2 到期硬阻断：授权失效只读时阻断一切引擎外发（与 Web 写阻断同语义）。
+
+    等价于 ``status.read_only``（enforce=True 且 state∈{expired,invalid}）。enforce 关或
+    宽限/社区/环境缺库 → 恒 False（零破坏）。供 send_guard / protocol / sender 等发送
+    chokepoint 与 Kill-Switch 同层查询。
+    """
+    return bool(getattr(status, "read_only", False))
+
+
 def feature_allowed(status: Any, name: str) -> bool:
     """功能位是否放行：enforce 关 → 恒放行；enforce 开 → 看授权功能位。"""
     if not getattr(status, "enforce", False):

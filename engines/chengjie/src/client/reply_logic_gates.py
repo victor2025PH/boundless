@@ -19,6 +19,18 @@ from typing import Any, Optional, Tuple
 DEFAULT_STREAK_RESET_AFTER = 1800.0
 
 
+def reply_logic_key(account_id: Any, chat_id: Any, user_id: Any) -> str:
+    """冷却/连发计数字典的键——**闸门读与发送后记账写必须同一格式**。
+
+    2026-08-03 实锤：闸门侧（telegram_client）做「双号隔离」时把读键改成
+    ``{account_id}:{chat_id}:{user_id}``，而记账侧（sender._record_auto_reply）
+    仍写旧键 ``{chat_id}:{user_id}`` → 读写永不相交 → ``last_reply_ts`` 恒 None
+    → UI「回复逻辑」的冷却与最大连续回复**静默失效**（SpamBot 80 秒 8 轮空转
+    事故中本该第 3 轮就停）。两侧统一经本函数构键，格式契约由单测钉死。
+    """
+    return f"{account_id}:{chat_id}:{user_id}"
+
+
 def _to_num(value: Any, default: float = 0.0) -> float:
     """宽容数值化：config 里的值可能是 int/float/数字字符串，坏值回退 default。"""
     try:
@@ -108,3 +120,42 @@ def should_ignore_edited(reply_logic_cfg: dict, edit_date: Any) -> bool:
     if not edit_date:
         return False
     return bool((reply_logic_cfg or {}).get("ignore_edited", True))
+
+
+def normalize_chat_type(raw: Any) -> str:
+    """pyrogram ChatType 枚举 / 字符串 → 规范小写名（"supergroup"/"private"…）。
+
+    pyrogram 的 ``chat.type`` 是枚举：``str(ChatType.SUPERGROUP)`` 出
+    ``"ChatType.SUPERGROUP"``——直接 lower 永远匹配不上 ``"supergroup"``，
+    导致群判定恒 False、群消息误入私聊上下文窗（2026-07-25 灰度首日实测）。
+    必须优先取 ``.name``；纯字符串输入（测试/旧版本）原样规范化。
+
+    ``.value`` 兜底（2026-08-20）：只有 ``value`` 的鸭子类型（旧 pyrogram 分支、
+    收件箱侧的桩对象）此前会落到 ``str(对象)``＝``<... object at 0x…>``，归一化出
+    一串垃圾——比返回空串更坏（垃圾值不等于任何已知类型，判定静默走「未知」分支）。
+    真枚举两者都有且 ``name`` 先胜，故这是纯加法。
+    """
+    return str(getattr(raw, "name", None)
+               or getattr(raw, "value", None)
+               or raw or "").strip().lower()
+
+
+def group_allowlist_blocked(group_reply_cfg: dict, chat_id: Any) -> bool:
+    """群聊灰度白名单：该群是否应被跳过（不处理）。
+
+    ``telegram.group_reply.allowlist_chat_ids``（list，元素 int/str 均可）：
+
+    - 缺省 / 空列表 / 非法类型 → 不限制（返回 False，与历史行为一致）；
+    - 非空列表 → 仅名单内的群放行，其余群返回 True（跳过）。
+
+    用途＝群聊功能灰度：先对指定测试群开 ``process_groups``，业务群零触碰；
+    验证后清空名单即全量放开。比对按字符串（TG 群 id 为负数，int/str 混填
+    都能匹配）。每条消息重读 config → 保存即生效，无需重启。
+    """
+    raw = (group_reply_cfg or {}).get("allowlist_chat_ids")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return False
+    allowed = {str(item).strip() for item in raw if str(item).strip()}
+    if not allowed:
+        return False
+    return str(chat_id).strip() not in allowed

@@ -8,12 +8,12 @@ import { LATEST_VERSION } from "@/lib/releaseNotes";
 const LANGUAGES = { "zh-CN": "/manual", en: "/en/manual", "x-default": "/manual" };
 
 export const metadata: Metadata = {
-  title: "AvatarHub User Manual · BOUNDLESS",
+  title: "STUDIO User Manual · BOUNDLESS",
   description:
-    "The complete AvatarHub manual: system requirements, download & install, activation, voice cloning, live face swap, phone interpreting, updates and troubleshooting. Read online or print to PDF.",
+    "The complete STUDIO manual: system requirements, download & install, activation, voice cloning, live face swap, phone interpreting, updates and troubleshooting. Read online or print to PDF.",
   alternates: { canonical: "/en/manual", languages: LANGUAGES },
   openGraph: {
-    title: "AvatarHub User Manual · BOUNDLESS",
+    title: "STUDIO User Manual · BOUNDLESS",
     description: "The complete guide from install to going live. Read online or export as PDF.",
     url: `${SITE_URL}/en/manual`,
   },
@@ -22,8 +22,8 @@ export const metadata: Metadata = {
 const guideLd = {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  headline: "AvatarHub User Manual",
-  about: "Installation, activation, usage and troubleshooting guide for the AvatarHub real-time digital human engine",
+  headline: "STUDIO User Manual",
+  about: "Installation, activation, usage and troubleshooting guide for the STUDIO real-time digital human engine",
   inLanguage: "en",
   version: LATEST_VERSION,
   publisher: { "@type": "Organization", name: "BOUNDLESS", url: SITE_URL },

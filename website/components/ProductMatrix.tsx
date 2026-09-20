@@ -1,15 +1,15 @@
 "use client";
 
-import Image from "next/image";
 import { motion, type MotionProps } from "framer-motion";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
-import { BRAND, PRODUCT_ORDER, PRODUCT_COUNT, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE } from "./productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_PRICE_HINT, PUBLIC_PRODUCT_ORDER, publicProductsInCategory } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
-import { ArrowRight, ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck, Tag } from "lucide-react";
 import { localePath } from "@/lib/site";
 
 const COPY = {
@@ -69,7 +69,7 @@ export default function ProductMatrix() {
           </p>
           <h2 className="mx-auto mt-3 max-w-3xl text-center text-3xl font-bold text-white md:text-4xl">
             {c.headPrefix}
-            {PRODUCT_COUNT}
+            {PUBLIC_PRODUCT_ORDER.length}
             {c.headSuffix}
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-base text-slate-400">
@@ -81,7 +81,8 @@ export default function ProductMatrix() {
           {CATEGORY_ORDER.map((cat) => {
             const cc = CATEGORIES[cat];
             const ui = CATEGORY_UI[cat];
-            const items = productsInCategory(cat);
+            // 公开陈列清单（gated / 未上线线已过滤，见 productMeta.PUBLIC_LIST_HIDDEN）
+            const items = publicProductsInCategory(cat);
             const borderL =
               cat === "growth"
                 ? "border-neon-cyan/50"
@@ -92,24 +93,24 @@ export default function ProductMatrix() {
               <div key={cat}>
                 <Reveal>
                   <div className={`mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 pl-3 ${borderL}`}>
+                    {/* 实施78 P0-2：英文页不做反向双写（「GROWTH 智连」对不识汉字的访客是噪音），
+                        与 Navbar / BrandShowcase 三系标题同一口径 */}
                     <h3 className="text-lg font-bold text-white">
                       {lang === "zh" ? cc.zh : cc.en}
-                      <span className={`ml-2 text-sm font-medium ${ui.label}`}>
-                        {lang === "zh" ? cc.en : cc.zh}
-                      </span>
+                      {lang === "zh" && <span className={`ml-2 text-sm font-medium ${ui.label}`}>{cc.en}</span>}
                     </h3>
                     <span className="text-xs text-slate-500">
                       {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
                     </span>
                   </div>
                 </Reveal>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {/* 每系 ≤2 张卡时收成两列，避免三列网格留空位 */}
+                <div className={`grid gap-4 sm:grid-cols-2 ${items.length > 2 ? "lg:grid-cols-3" : ""}`}>
                   {items.map((key) => {
-                    const idx = PRODUCT_ORDER.indexOf(key);
+                    const idx = PUBLIC_PRODUCT_ORDER.indexOf(key);
                     const p = BRAND.products[key];
                     const landing = PRODUCT_LANDING[key];
                     const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[key];
-                    const optical = PRODUCT_OPTICAL_SCALE[key] ?? 1;
                     return (
                       <Reveal key={key} delay={(idx % 3) * 0.05}>
                         <a
@@ -119,28 +120,31 @@ export default function ProductMatrix() {
                         >
                           <div className="mb-4 flex items-center justify-between">
                             <motion.span className="inline-grid place-items-center rounded-xl" {...iconGlow(idx)}>
-                              <span style={optical !== 1 ? { transform: `scale(${optical})` } : undefined} className="inline-grid">
-                                <Image
-                                  src={PRODUCT_IMG[key]}
-                                  alt={`${p.zh} ${p.en}`}
-                                  width={48}
-                                  height={48}
-                                  className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
-                                  draggable={false}
-                                />
-                              </span>
+                              <ProductIcon
+                                product={key}
+                                size={48}
+                                alt={lang === "zh" ? `${p.zh} ${p.en}` : p.en}
+                                className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
+                              />
                             </motion.span>
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
                           <div className="flex items-baseline gap-2">
-                            <span className="text-xl font-bold text-white">{p.zh}</span>
-                            <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
+                            <span className="text-xl font-bold text-white">{lang === "zh" ? p.zh : p.en}</span>
+                            {lang === "zh" && <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>}
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]} · {p.alt}</p>
                           <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
                           <p className={`mt-3 inline-flex w-fit items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${ui.chip}`}>
                             {c.breakLabel} · {p.break[lang]}
                           </p>
+                          {/* 价格锚：拿着产品名找价的人不用再猜「幻影多少钱」（数字由定价单源派生） */}
+                          {PRODUCT_PRICE_HINT[key] && (
+                            <p className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-neon-cyan/90">
+                              <Tag className="h-3 w-3 shrink-0" />
+                              {PRODUCT_PRICE_HINT[key]![lang]}
+                            </p>
+                          )}
                         </a>
                       </Reveal>
                     );
@@ -150,12 +154,12 @@ export default function ProductMatrix() {
             );
           })}
 
-          {/* 无界底座横幅（托起三系七产品） */}
+          {/* 无界底座横幅（托起三系公开产品线） */}
           <Reveal>
             <div className="relative flex flex-col overflow-hidden rounded-2xl border border-neon-cyan/30 bg-gradient-to-br from-neon-cyan/[0.08] to-neon-violet/[0.08] p-5 sm:flex-row sm:items-center sm:gap-4">
               <motion.span
                 className="mb-4 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-neon-cyan/20 text-neon-cyan sm:mb-0"
-                {...iconGlow(PRODUCT_ORDER.length)}
+                {...iconGlow(PUBLIC_PRODUCT_ORDER.length)}
               >
                 <ShieldCheck className="h-5 w-5" />
               </motion.span>
@@ -169,7 +173,7 @@ export default function ProductMatrix() {
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <a
-            href="#pricing"
+            href={lang === "zh" ? "/order" : "/en/order"}
             onClick={() => track("cta_click", { where: "matrix_primary" })}
             className="group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-3 text-sm font-semibold text-ink-950 transition hover:opacity-90"
           >

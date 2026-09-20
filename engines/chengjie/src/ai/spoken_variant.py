@@ -35,8 +35,10 @@ from typing import Any, Dict, Optional, Tuple
 
 # 标记：要求 LLM 另起一行以此开头输出口语版（方/尖括号、可带冒号都认）
 SPOKEN_MARKER = "[口语版]"
-_MARKER_RE = re.compile(
-    r"^[ \t>*\-]*[\[【]\s*口语版\s*[\]】][:：]?[ \t]*", re.MULTILINE)
+# 刻意**不锚定行首**：实测 DeepSeek 常把标记接在正文末尾同一行（「…来看看？[口语版] 我在
+# 宿舍呢…」）。行首锚定时这类输出既取不到口语版（白吃 token + 口语化静默失效），书面版还
+# 会带着标记连同重复内容发给客户并被 TTS 念出来。宽口径匹配同时修掉这两件事。
+_MARKER_RE = re.compile(r"[ \t>*\-]*[\[【]\s*口语版\s*[\]】][:：]?[ \t]*")
 
 # 暂存：sha1(书面版) -> (expire_monotonic, 口语版)
 _STORE: "OrderedDict[str, Tuple[float, str]]" = OrderedDict()
@@ -103,37 +105,55 @@ def should_request_spoken_variant_autosend(
         return False
 
 
-def build_spoken_variant_instruction(*, disfluency: bool = False) -> str:
+def build_spoken_variant_instruction(*, disfluency: bool = False,
+                                     intensity: str = "natural") -> str:
     """prompt 指令块：正常回复后另起一行输出口语版。
 
     ``disfluency``（⑥ 口误自纠，由调用方按文本 crc 低频开启）：允许口语版带
     **一处**很轻的自然口误自纠（「明天…啊不对，是后天」）——最像真人也最易
     做作，所以确定性低频 + 每条至多一处。
+    ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6，2026-07-24）：
+    vivid 放开「真人随口说」的主观口吻，但**事实红线不变**（意思/数字/承诺不改、不编造）。
     """
     base = (
         "【语音版输出——本条回复将以语音条发送】\n"
         f"正常写完回复后，另起一行，以 {SPOKEN_MARKER} 开头，再写一遍这条回复的"
-        "「说出来」版本：意思不变，改成像微信语音那样的自然口语（短句、顺口、"
-        "可带轻微语气词，去掉书面连接词/列表符号/括号注释），与正文同一种语言。"
+        "口语说法，当成你正拿着手机给对方录语音（P0-1 语音条脚本范式，2026-08-03）：\n"
+        "· 意思和所有事实与正文一致、同一种语言，但按「嘴巴说」重新组织：短句、顺口、"
+        "可以有省略和碎句，去掉书面连接词/列表符号/括号注释/emoji；\n"
+        "· 每句都要短，一句超过十五个字就拆成两句说，句与句用句号或省略号分开；\n"
+        "· 不要用「哈哈/嘿/哎呀/嗨/诶」这类感叹词、笑声或口头禅开头，第一个字直接"
+        "进入正文——笑意和情绪由声音表达，不靠字面；\n"
+        "· 正文若以问题收尾可以保留那个问题，但不要为了找话新加反问。"
     )
+    if str(intensity or "natural").strip().lower() == "vivid":
+        base += (
+            "\n· 可以有一点点「真人随口说」的主观口吻（比如「说真的」「我跟你讲」"
+            "放在句中），像真的在想着对你说，但绝不编造原文没有的事实。"
+        )
     if disfluency:
         base += (
-            "这一版里可以有至多一处很轻的口误自纠（比如「明天…啊不对，后天」），"
+            "\n· 这一版里可以有至多一处很轻的口误自纠（比如「明天…啊不对，后天」），"
             "要自然随意，不要刻意。"
         )
-    return base + "除正文和这一行外不要输出任何解释。"
+    return base + "\n除正文和这一行外不要输出任何解释。"
 
 
 def want_disfluency(raw_cfg: Optional[Dict[str, Any]], text: str) -> bool:
-    """⑥ 口误自纠门控：``colloquial.disfluency`` 开 && crc32(text)%7==0（约 1/7
-    的轮次允许）——LLM 概率自控不可靠，用确定性低频替代。纯函数。"""
+    """⑥ 口误自纠门控：``colloquial.disfluency`` 开 && crc32(text)%N==0。
+
+    默认 N=5（约 1/5，比旧 1/7 略放量——ChatGPT 式口误/思考感）；
+    可用 ``colloquial.disfluency_every`` 覆盖（夹在 2..20）。确定性；纯函数。
+    """
     cfg = raw_cfg or {}
     col = ((cfg.get("avatar_voice") or {}).get("colloquial") or {})
     if not col.get("disfluency", False):
         return False
     try:
         import zlib
-        return zlib.crc32(str(text or "").encode("utf-8")) % 7 == 0
+        every = int(col.get("disfluency_every", 5) or 5)
+        every = max(2, min(20, every))
+        return zlib.crc32(str(text or "").encode("utf-8")) % every == 0
     except Exception:
         return False
 
@@ -181,16 +201,23 @@ def split_spoken_variant(raw: str) -> Tuple[str, Optional[str]]:
     return written, spoken
 
 
-def _key(written: str) -> str:
-    return hashlib.sha1(str(written or "").strip().encode("utf-8")).hexdigest()
+def _key(written: str, scope: str = "") -> str:
+    """书面版哈希；``scope``=account_id 时双号互不抢口语暂存。"""
+    base = hashlib.sha1(str(written or "").strip().encode("utf-8")).hexdigest()
+    sc = str(scope or "").strip()
+    if sc and sc != "default":
+        return f"{sc}:{base}"
+    return base
 
 
-def stash_spoken_variant(written: str, spoken: str) -> None:
+def stash_spoken_variant(
+    written: str, spoken: str, *, scope: str = "",
+) -> None:
     """按书面版哈希暂存口语版（LRU+TTL；best-effort 绝不抛）。"""
     try:
         if not (written and spoken):
             return
-        k = _key(written)
+        k = _key(written, scope)
         now = time.monotonic()
         with _LOCK:
             _STORE[k] = (now + STORE_TTL_SEC, spoken)
@@ -201,10 +228,10 @@ def stash_spoken_variant(written: str, spoken: str) -> None:
         pass
 
 
-def take_spoken_variant(written: str) -> Optional[str]:
+def take_spoken_variant(written: str, *, scope: str = "") -> Optional[str]:
     """取（并消费）书面版对应的口语版；被后处理改过/过期/没有 → None。"""
     try:
-        k = _key(written)
+        k = _key(written, scope)
         with _LOCK:
             hit = _STORE.pop(k, None)
         if not hit:

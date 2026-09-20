@@ -3580,3 +3580,551 @@ flag on(store) 对每个会话逐字段相等（`name`/`last_msg`/`last_ts`/`acc
 **Stage A1 收口**：统一收件箱读路径以 store 为默认事实源，`/chats`+/thread 经「先 live 旁路 ingest 再读 store」
 对当前数据**逐字段等价于实时聚合**，并解锁实时窗口外的历史会话/SLA；等价由强测试守门。路线图 Tier1 #5 完成。
 **下一步**：① 观察生产后决定是否翻代码缺省；② Tier1 #6 稳定平台 message id 收尾。
+
+## 94. 主动关怀 P0-P3：开闸自愈 + 选择器改版 + LLM 影子抽取 + 每联系人主动预算（2026-08-01）
+
+**背景**：「主动关怀」页自 Phase O 建成后一直空转——引擎默认关、生产 overlay 未开闸、
+手动补录要求 conversation_id/platform/chat_key 三个内部字段、页面对断链只字不提。
+当日两条 agent 线接力完成 P0-P3（前线做常备接线+四灯+一键开闸+hero 空态+样本审核，
+本线做选择器/卡片/LLM 影子/预算/保注释，diff 交织在同批文件，详见 git log 本日提交）。
+
+**P0 常备接线 + 配置热闸**：捕获回调无条件注册（内部逐条读实时配置）、派发循环常驻
+（cfg_provider 每 tick 读 enabled/dry_run/max_per_tick）→ 开/关经 overlay 热重载 ~30s
+生效免重启；/api/care/health 四灯自检（引擎/捕获/派发/发送通道+activity）+
+/api/care/engine 三档开闸（enable_dry→go_live 强制先灰度→pause）。messenger runner
+缺失不再挡整循环（telegram/line/whatsapp 走 multiplatform_deferred）。
+
+**P1 人话化**：联系人搜索选择器（复用 /api/unified-inbox/chats，选中自动带全四个内部
+字段，过滤群聊）+ 主题/时间快捷片 + pending 默认卡片时间轴（到点/今天/明天/本周分组、
+TA 的原话引用、人话倒计时）+ 跳过原因人话映射；旧 ID 表单降级「高级」折叠区。
+
+**P2 智能化**：① LLM 抽取影子模式（care_extract_llm 纯函数三件套：八语种廉价门
+time_like / 严格 JSON prompt / 容错解析；care_shadow_scan 与真实捕获共挂同一
+register_new_inbound_cb 事件源，异步 drain 限批限预算，产物只有 logs/care_shadow/
+*.jsonl 对照日志——绝不入库不发送；切主判据=llm_only 条目人工复核正确率）。
+② 效果回流：health.effect=近 7 天真发 48h 回复率（dry_run 不计、未满窗不进分母）。
+③ 草稿预览：build_care_prompt 公共化，/api/care/schedule/{sid}/preview 与派发同一
+prompt 口径（先看后发=真发同源）。④ 真 bug：_care_context 原用 list_messages 取的是
+**最旧** 8 条（AI 引用的「最近对话」是几个月前的开场白）→ 改 list_recent_messages；
+预览实测对粤语会话自动粤语拟稿即此修复的直接证据。
+
+**P3 每联系人主动预算**（真发开闸前置守卫，默认开）：**不新建预算库，把既有
+outreach_log 升格为共享账本**——读侧 last_outreach_ts + count_outreach_since(新增)
+判「距上次主动触达 <min_gap_hours(4h) 或 今日触达数+本次 >max_daily_touches(2)」→
+skip note=contact_budget；写侧 care 真发成功 record_outreach(batch_id=care:<topic>)，
+对 proactive_review 周报与将来消费方可见。纯判定在 care_budget.py；dry_run 不拦
+（样本要流动）、危机关怀豁免（伦理优先）、gate 异常 fail-open（预算是体验优化不是
+安全红线）。方向对齐：proactive_topic/daily_ritual/milestone 本就给 pending care
+让路（has_pending_care），本件补上反向。
+
+**overlay 保注释化**（当日实锤修复）：set_overlay_flag 与 save_overlay_patch 旧实现
+yaml.dump 整文件重写，一次 enable_dry 剃光 config.local.yaml ~30 行运维注释。新增
+set_yaml_key_preserving / merge_yaml_patch_preserving（ruamel round-trip，本机 0.18.x），
+任何失败回落旧路径（写入永不丢）；生产 overlay 实测注释存活、值零失真。
+
+**工具**：tools/verify_care_ui.py（Playwright 只读六不变量：四灯/形态切换/面板齐件/
+选择器选中-恢复/筛选切视图/i18n 无裸键；缺环境 SKIP exit 0）——gate_sweep.ps1 挂接
+待其空闲（当日由另一线活跃编辑）。i18n 全部进 packs/care_page.py（cs2_* 约 90 键
+zh+en）。测试新增 test_care_engine_hot_gate / test_care_extract_llm / test_care_shadow_scan /
+test_care_p2 / test_care_budget / test_overlay_comment_preserve，care 相关合计 ~200 例。
+
+**生产状态（2026-08-01 12:00）**：zhiliao 引擎 enabled+dry_run（试运行：只拟稿不发送），
+LLM 影子 shadow=true budget=150/日，等 3-7 天数据：①样本审核满意→页面「开始真发」；
+②影子 JSONL llm_only 复核→决定 LLM 抽取切主。**踩坑记录**：①测试助手 def _auth(*a,**k)
+作 FastAPI 依赖会被解析成必填 query 参数→全路由 422（改零参）；②本仓陈旧字节码 flaky
+在 care 上再现（生产进程刚编译的 .pyc 抢先），regression.ps1 清缓存是正解。
+
+**P4 增量**（同日午后，切主基建就绪——数据闸口到点后翻 flag 即生效）：① **LLM 真实
+捕获模式**（`llm_extract.enabled`，默认关）：影子扫描器 drain 时 llm_only（LLM 抓到
+且正则漏掉）的约定经 commitment_from_llm 确定性换算后写入 care_schedule 真实排程。
+防双写三层——正则优先（正则命中的消息 ingest 已入库，扫描器只收 llm_only）/ 同联系人
+同事件日已有 pending 跳过（「一天一件事一条关怀」，面试 vs 终面 跨措辞重复从日历维度
+收口，绕开语义嵌入依赖）/ store 同主题邻近去重兜底。计数 captured /
+capture_skipped_pending / capture_invalid 进 health.shadow 与页面影子行。
+② **影子对照周审 CLI** `python -m scripts.care_shadow_report`（数据根走 _data_root
+契约，多实例逐根）：JSONL 聚合出 一致率 / llm_only·regex_only 桶 + 人工复核样本 /
+书写系统分布（cjk/kana/hangul/thai/latin，验证多语种召回真的发生在小语种上）/ 判词
+（llm_only 复核正确率 ≥80% 且样本 ≥20 → 可切主）。计数器随重启清零、JSONL 才是持久
+口径，CLI 只读。③ verify_care_ui 挂进 gate_sweep -Full。④ **刻意不重启**：本批全部
+默认关，装载搭下一次自然重启的便车（当日已 4 次重启窗口，克制；切主前置判据=
+health.shadow 快照出现 captured 字段）。测试 +13（捕获模式六场景 + CLI 聚合/分类/渲染）。
+
+**P5 增量**（同日午后，可见性收口）：① **ops-overview「💗 主动关怀」卡**——零新后端
+（loadCare 直读 /api/care/health），六 KPI（状态/待关怀/24h捕获/已发/48h回复率/LLM影子）
++ 链路灯行 + 直达链接；隐藏判据=403 或 未开启且零记录；catch 不武断隐藏（对齐 loadBazi
+容错惯例——首轮 refreshAll 并发 ~50 接口曾把 health 挤超时、卡被误藏，Playwright 一次性
+验证抓出后改 30s 超时 + 已显示则留错误行）。ops 页真实路径=/admin/ops（不是 /ops-overview）。
+② **CLAUDE.md / AGENTS.md 落「主动关怀主线」段**（回归命令 + 六组不变量 + 三个踩坑），
+后续 agent 免考古。③ 工作台「排个关怀」入口连续第四轮避让（unified_inbox 全天被另一线
+占用）——仍欠。
+
+**P6 增量**（同日午后，工作台入口闭环+提交清单）：① **深链** care 页支持
+`?contact=<conversation_id>`（选择器就绪后自动选中+滚到添加面板；不在最近会话窗
+静默回落手选）——把「工作台入口」拆成两半后，收件箱侧只剩一行链接。② 抓住
+unified_inbox 全天唯一空闲窗（44 分钟）落那一行：客户信息卡 CRM 行下方
+「主动关怀 → 排一条关怀」（纯 <a> 零 handler；词条 `cs2_inbox_entry_*` 刻意放
+care_page 包避开对方活跃的 inbox 词条包——packs 合并视图本就支持跨包引用）。
+③ verify_care_ui 加第 7 组不变量「深链自动选中」，现网 13/13 PASS。④ 提交清单
+分类完成：**纯 care 可独立提交 ~24 文件**（新模块/测试/工具/词条包 + care 四核心），
+**交织文件 ~15 个**（gate_sweep/ops 模板+词条包/unified_inbox/config.example/
+inventory/main/lifecycle/store/config_manager/记忆文件/DEVLOG——每个都混着
+goals/workflows/membership 线当日未提交改动，单方 stage 会打包别人的工作，
+等各线收尾或明确指示后再动）。
+
+## 95. 回复节奏拟人化收口：单一节奏源 + 两段式打字 + 条间真人手速（2026-08-04）
+
+**背景（老板实锤）**：设置页拖了 30-60s 滑杆仍秒回；且分条回复「第一句慢、后面
+两句机关枪」。三个独立根因：① 滑杆值从未保存成功（审计零记录；设置页保存链路
+本身经生产 POST 实测**健全**——是「拖了没点保存」）；② 滑杆只写
+`inbox.l2_autosend.deliver_delay`（B 线），A 线原生 TG 读 `telegram.reply_humanize.
+thinking_delay`（2-9s adaptive 扣掉生成耗时后实测均值 0.8s＝秒回）；③ 分条条间
+`inter_part_delay_sec` 硬编码封顶 6s、每字 0.03s（33 字/秒非人手速）且与首条延迟
+模型的 0.08s/字**双手速**，A 线条间还不挂「正在输入」。
+
+**修法（一个人设一个手速）**：
+- **单一节奏源**：`run_prereply_humanize` 在 thinking_delay **实际为零/未配**时跟随
+  deliver_delay（`platform="telegram"` 透传 → platform_overrides 生效；显式非零=
+  A 线独立覆写优先；`follow: false`=显式退出跟随）。⚠ 判定必须按「值为零」而非
+  「块存在」——出厂基准就是显式 0/0 块，按块存在判定=回落在所有标准部署死路
+  （首版踩过，`test_zero_thinking_delay_block_still_follows_deliver_delay` 钉死）。
+- **两段式延迟**（humanize.run_presend_humanization 新参 typing_lead_sec，None=旧行为）：
+  思考期**静默**、临发前 `estimate_typing_lead`（0.6+per_char×加权长度，夹 [1.2,10]s）
+  秒才挂「正在输入」——全程挂打字＝宣称「打 45 秒字只打出 20 个字」比不挂更假。
+  `resolve_typing_lead` 与思考延迟共用同一 per_char_sec + 人设>平台>全局覆写。
+- **条间真人手速**：`inter_part_delay_sec` 打字分量改**加权长度**、硬顶 6s 改可配
+  `max_gap_sec`（默认 6=行为不变锚）；A 线（telegram_client）/B 线（autosend_helpers）
+  /手动发送（unified_inbox_send_routes._deliver_bubble_parts）三条分条链全部换
+  run_presend_humanization 条间等待（静默→打字续挂，>5s 气泡不断续）。
+- **A 线条间插话中止**：`_interject_stale_abort` 拆出纯判定 `_interject_is_stale`
+  （enabled 闸/群聊旁路在纯判定内，副作用版复用它）；条间延迟后、发下一条前查
+  插话 → 停发剩余条（已发算数），**上下文只记实际发出部分**（记了没发的话下一轮
+  AI 以为自己说过），record_bubble_send 带 partial。B 线条间插话检查刻意未做
+  （worker 无逐会话入站视图，fresh_guard 已挡投递前窗口；下一阶段项）。
+- **生产 overlay（zhiliao）**：deliver_delay 30-60 uniform（老板滑杆意图代落盘，
+  经 /api/reply-settings 热更 apply_deliver_delay 进活体 worker，runtime 回读
+  30/60 确认——顺带端到端证明设置页保存链路可用）；bubbles gap 2-6s +
+  per_char 0.08 + max_gap_sec 20；overlay 的 thinking_delay 2-9s 独立覆写移除
+  （实例基准无该段 → 合并树彻底缺失 → 运行中 v1 回落代码当晚即生效）。
+- **门禁**：test_humanize（typing_lead 语义 4 例 + TypingLead 5 例）、
+  test_sender_prereply_humanize（跟随/退出/覆写/平台覆写 6 例）、test_reply_split
+  （max_gap/加权打字 4 例）、test_interject_absorb（纯判定拆分 + 条间第三关口钉）。
+  设置页页脚 `rps_obs_native` 文案改「未配独立覆写时跟随本页节奏」（zh+en）。
+
+**已知边界（下一阶段候选）**：worker 投递循环全局串行——30-60s 拟人延迟 × 并发
+会话有队头阻塞（当前流量可接受，放量前按会话并行化）；B 线首条延迟仍按整段文本
+估打字时长（10s clamp 兜底，精确按首条需拆分前移）；设置页「客户视角预览」尚未
+演示两段式（静默段+尾部打字）；条间节奏无 UI（只有 yaml）。
+
+## 96. peer_bot_guard 每日预算 P2：轮次台账 + 真人软停 + 熔断可见化（2026-08-04，198 事故修复）
+
+**事故**（198 内测机 16:12，backend.log+inbox.db 实锤）：全自动测试会话静默哑火。
+根因＝预算口径数「当日全部出站 messages」——手动档人工聊掉 27 条 + 切全自动 13 条
+= 40 触顶，AI 实际只跑 7 轮；触顶后 A 线跳过 + AutoDraft 一并跳过拟稿，会话仍亮
+绿色「全自动」，坐席零感知、客户被已读不回。三层修复（全链门禁 20 例新增全绿）：
+
+- **台账口径**：store 新表 `peer_reply_ledger`（cid PK / day / auto_replies /
+  relief_day，跨日自动清零）；分子改「自动链回复轮次」——A 线守卫放行且会话
+  auto_ai 时 +1（`note_auto_reply`，档位让位闸在守卫之后故守卫内自行 resolve 同口
+  径预判）、B 线 autodraft 仅 `allows_direct_autosend(mode)` 时 +1（人审草稿=人的
+  决定不占额）；坐席手发/双气泡拆条/主动触达（自有预算）不再挤占。台账不可用
+  （旧 store/测试假件）回落旧口径（宁严勿松）。**计的是「获准轮次」**：interject/
+  冷却中止会轻微多计，方向安全。
+- **真人软停**：`evaluate` 触顶时无 bot 证据（peer_override≠1）且 < 2× 硬顶 →
+  `Verdict.budget_soft=True`；autodraft 经新 `guard_auto_draft_action` 拿 soft 信号
+  把档位封顶 review（放在 companion 双轨互斥**之前**——封顶后 allows_direct_
+  autosend=False，互斥自然不让位，System Z 接管拟稿；否则就是事故里「A 线停、
+  B 线也让、无人拟稿」）。已判定 bot / 超 2× 硬顶照旧全停（防对面 LLM 无限烧钱）。
+  旧 `guard_auto_draft_should_skip` 保留为兼容包装（软停返回空串=不跳过）。
+- **可见化 + 救济**：`budget_state()` 单一事实源 → GET /api/unified-inbox/automation
+  捎带 budget 段（零新增请求）→ unified_inbox 琥珀横幅（soft/hard 两套文案 +
+  「今日继续自动回复」按钮）→ POST /api/unified-inbox/reply-budget/relief 写
+  relief_day=今天（跨日自动失效，不清计数保观测）。词条独立 pack
+  `i18n_packs/inbox_budget.py`（共享树当晚 inbox_workspace.py 被他线占用，新文件
+  =零撞车）。观测：stats 增 `budget_softened`（budget_hits 子集）。
+- **配置**：desktop.internal 预算 40→200（内测/演示重聊天实锤）+ example 注释
+  对齐新语义；正式租户默认 40 轮/日/会话（轮次口径下比旧 40 条更宽松且更准）。
+- **门禁**：`test_peer_bot_guard_budget.py`（16 例：台账跨日/救济/口径优先/软硬停/
+  2×/A 线只计 auto_ai——手动档 27 条挤占额度的事故口径回归钉/B 线 action 语义/
+  autodraft 软停转 review 端到端）+ `test_reply_budget_route.py`（4 例：GET 捎带/
+  救济往返/503/400）+ 路由清单补登。既有 63 例守卫门禁零改动全绿。
+
+**已知边界（下一阶段候选）**：横幅只在开会话/切档时刷新（会话开着时触顶要重开
+才见——可搭 auto-stats 轮询便车）；bot 会话若在降 manual 前恰好触顶，横幅与 🤖
+徽章并存（救济按钮对 manual 会话无实际效果，噪音级）；ops 卡未展示
+budget_softened（JSON 已有）；198 桌面包需重打安装包才吃到本批修复。
+
+## 97. P1-198 第二批：账号离线可见化 + 工厂自愈 + src.* 日志镜像 + 翻译拒绝拦截（2026-08-05）
+
+**取证修正**（拉 198 活体 account_registry 实锤）：「重启后 Telegram 不恢复」的
+真相不是恢复机制缺失——两个 telegram 号 status=**offline**，其中 8942577244 的
+updated_at=16:17:40 与「正在停止Telegram客户端」精确吻合＝**测试者手动停用**，
+编排器只拉 online 号是按设计工作。真缺口是三件别的事，各有修复+门禁：
+
+- **会话层账号状态可见化**（事故里最伤的一环：账号停了，会话界面零痕迹，坐席
+  继续打字等回复）：注册表新增 `peek_account`（只读现有单例，**绝不隐式建库**，
+  与 cached_business_line 同铁律）→ GET /automation 捎带 `account` 段 →
+  unified_inbox 会话头**红条**（offline/pending 两套文案）+「重新上线」按钮
+  （走既有 POST /api/accounts/{platform}/{id}/start）。词条独立 pack
+  `i18n_packs/inbox_account_state.py`。新增 `_refreshConvStatus` 45s 轻量轮询
+  （只刷横幅**不动**档位下拉，防干扰坐席操作；同时闭掉 §96「触顶要重开会话
+  才见横幅」的边界）。
+- **worker 工厂注册豁免 + 拉号自愈**：`ensure_builtin_workers` 的 telegram 工厂
+  注册此前硬性要求 config 有本地 api_id——托管/中央池桌面（凭据运行期注入）在
+  网关不可达的启动窗口里工厂永远缺位，重启后在线号全不恢复且只有 debug 级痕迹。
+  修①：门槛加 credpool 豁免（与登录侧 maybe_register 同款）；修②：
+  `_start_account` 无工厂时先自愈重试一次 ensure_builtin_workers（凭据晚到 →
+  第一次拉号即自我修复，不必等重启）；修③：「no worker factory」从 debug 升
+  WARNING。门禁 `tests/test_orchestrator_factory_selfheal.py`（6 例，含不该
+  注册/不该自愈的边界）。
+- **src.* 日志桌面全隐身修复**（本次取证最大障碍：198 五个进程会话 backend.log
+  零编排器/登录/健康表痕迹，法证只能拉库反推）：2026-07-12 的
+  attach_src_file_handler 只救「有 app.log 的部署」，桌面 logging.file 为空时
+  不生效。新增 `log_setup.mirror_handlers_to_src`（把主 logger 的 console+file
+  全部镜像给 "src"，按身份+同文件双重去重，幂等），`logging_setup.setup_logging`
+  在**有无 logging 配置段都**调用。session_string 导出失败同步 debug→INFO
+  （198 两个号 meta 均无 session_string 而无日志痕迹）。门禁扩
+  `tests/test_log_setup.py`（+2 例）。
+- **翻译引擎拒绝话术拦截**（6/25 实锤：「1」经出站翻译，LLM 客套拒绝话术被当
+  译文发给客户）：`translation_confidence.looks_like_engine_refusal` 纯函数——
+  双正交信号（译文谈论翻译本身而**源文没有** + 拒绝框架词），源文本来聊翻译/
+  正常意译/短文直译均不误伤；`TranslationService.translate` 成功分支前置检，
+  命中 → ok=False + error=engine_refusal + 回落原文，**绝不进翻译记忆**——
+  出站链回落/HOLD、收件箱译文行不显示、预览如实报错全部零改动获益。门禁
+  `tests/test_translation_refusal.py`（9 例）。
+- **刻意不做**：兜底模型（173 qwen14b）常驻预热——42s 是首用冷载、keep_alive
+  已保后续热答，常驻会与 GLM-4-Voice 抢 173 的 32G 显存，代价>收益。
+- **共享树实录**：本批进行中另一条线活跃于 platform_session_health/
+  health_watchdog/account_routes（账号健康告警方向，与本批互补零冲突）；我首批
+  的 reliefReplyBudget 漏挂 window（模板是 IIFE），**被对方门禁扫出并跨线补接**，
+  本批 restartConvAccount 落地时直接登记进暴露块——门禁互验照设计工作。
+
+**已知边界（下一阶段候选）**：红条的「重新上线」对 session 已被平台吊销的号
+会失败（文案已指路重扫码，但未自动打开扫码抽屉）；ensure_builtin_workers 的
+托管网关（bd2026.cc 注入）形态在「启动时网关不可达且未开 credpool」下仍靠
+拉号自愈兜底（首次 tick 失败、凭据注入后下次 tick 恢复）；offline 号的
+**主动告警**（停用超 N 小时无人处理 → webhook）本批未做——他线正在
+health_watchdog 做相邻工作，避让待其落地后补缺口。
+
+## 98. 有效档位单一事实源：封顶可见化 + A/B 架构一致 + why_no_reply（2026-08-07）
+
+**起因**（.104/.198 内测机「双向全自动只有一边回」排障）：UI 档位只是基础值，
+真正决定「AI 会不会自己发」的还有三层**档位封顶**（平台 platform_modes /
+账号业务线 business_line_modes 默认 translation→review / 冷启动预热 72h），
+全部只长在 B 线拟稿回调里——① A 线（companion）完全不认：同一安全闸在
+两种部署架构行为分叉（System-Z 机新号全进人审、companion 机照样直发）；
+② 对人完全不可见：下拉框仍亮「🚀 全自动」，.198 体感=「产品坏了」；
+③ 排障只能翻代码。本机实锤：8755679833（translation 线）会话档位 auto_ai、
+B 线 8/3 拟的 L1 稿 pending 93h 无人理，A 线却在照常直发。
+
+- **单一事实源** `src/inbox/effective_automation.py`：`compute_mode_caps`
+  （平台→业务线→预热，逐层 fail-open，语义与旧内联逐字等价——平台表活读
+  「键缺席=快照/显式{}=清空」、业务线活读>快照>内置默认、预热判不出不封顶）
+  + `apply_mode_caps`（只降不升，报「真正生效」层）+ `effective_automation`
+  只读出口（API/CLI 用；business_line/connected_at 可显式注入=零写路径）。
+  **刻意不收** peer_bot_guard 行为刹车（事件级、带落库/救济语义，非状态级上限）。
+- **四消费方同源**：B 线 make_auto_draft_cb（三段内联替换为 resolver，顺序
+  不变仍在双轨互斥前）；**A 线档位闸补齐封顶**（telegram_client——8/4 挂账
+  P0 落地；封顶命中让位＋B 线同判定接住 review 拟稿，不双发不丢消息；
+  gate_stats 新计数 automation_capped）；GET /api/unified-inbox/automation
+  新增 effective 段；guard 的 A 线预算预判同口径折叠（防预热期幻影计数——
+  A 线不回但台账每条 +1，72h 能烧穿整份日预算）。
+- **封顶可见化**：档位下拉旁新胶囊 `mode-eff-chip`（effective.caps 非空才显，
+  旧后端无该段=隐藏零依赖）——「🕐 新号预热·转人审（还剩 41h，自动恢复+
+  解除办法）」；词条独立 pack `i18n_packs/inbox_effective_mode.py`（zh/en，
+  与 inbox_budget 同款「保护+何时恢复+怎么解除」文案纪律）。
+- **排障 CLI** `python tools/why_no_reply.py --platform telegram --account X
+  --chat Y [--json]`：零凭据只读（sqlite mode=ro；禁 InboxStore=禁 migration
+  写事务；注册表字段 ro 自取显式注入 resolver），一条命令输出 有效档位/封顶/
+  守卫下一条入站判定（evaluate 纯函数复演：复读/秒回/预算/Tier0）/部署形态
+  （companion vs System-Z、deliver）/待审积压 + 分级判词，exit 1=有红灯。
+  生产冒烟 1.4s 命中 translation 封顶 + 93.6h 孤儿稿。
+- **门禁** `tests/test_effective_automation.py`（25 例：三层语义/回落链/折叠/
+  resolver 出口/四消费方静态接线/词条双语/与旧内联算法逐组合等价扫描）；
+  `test_warmup_review_cap` 接线断言随收口更新（不变量语义原样保留）。
+- **生产行为变化点名**（重启装载后）：companion 架构下 translation 业务线
+  账号与预热期新号的 A 线将开始尊重封顶（转 review 拟稿人审）——这是该
+  标签/预热窗**本来的设计语义**，此前不执行才是缺陷；要恢复某号全自动：
+  摘业务线标签 或 overlay `business_line_modes: {}` / `cold_start.
+  warmup_review: false`。
+- **共享树实录**：gate_sweep 扫出 `--th-bg-amber2` 未定义 token（换用双主题
+  齐备的 `--th-bg-amber100` 即绿）；另两红
+  （test_seed_switch_upgrade_coverage × `inbox.l2_autosend.deliver_delay.
+  adaptive`）归属并行 pacing 线（config.desktop.min.yaml 在其手中 dirty），
+  按协议报告不代改。
+
+**下一阶段候选**：协议薄链 run_autoreply 接同一封顶（deliver=false 直发路径
+目前绕过预热，已避让 pacing 线待其收工）；守卫降档写会话时间线系统事件 +
+一键恢复；舰队互聊演练模式（白名单对+轮数硬顶+守卫豁免+报告）；
+conversation_settings 加 source 列（human/guard/sweep/bootstrap 分来源治理）。
+
+## 99. 双向全自动「对级验收」工具 + 验收 SOP（2026-08-07，与 governance 线互补分工）
+
+**协同实录**：本批开工探活发现另一条线 12 分钟前已登记「P1 automation
+governance」意向并在盘上推进 §98 的下一阶段候选（`conversation_settings.
+source` 列全写点已带来源、`src/inbox/duplex_drill.py` 演练模块成形中）——
+按意向板协议**合流不重写**，本批改做它没覆盖的「验收读数面」：
+
+- **对级验收核心** `src/inbox/duplex_report.py`（纯函数）：连发段应答语义
+  （客户连发 5 条 AI 回 1 条＝答 1 段，与 inbound_merge 同口径）、段级
+  回复延迟 p50/p95、**悬置时长半哑火判据**（首版用应答率被门禁当场证伪
+  ——连发段语义下未回应入站合并成一段，率恒 ≥(n-1)/n 数学退化，勿改回）、
+  复读/秒回风险（**刻意复用 peer_bot_guard 的 normalize_text/占位符豁免**
+  ——警示阈值与真实刹车同一把尺子）、对级判词（ok/warn/block 与
+  why_no_reply 同分级语言；单边哑火只指路不重复实现闸门解释）。
+- **CLI** `python tools/duplex_report.py --a X --b Y [--hours N] [--json]`：
+  零凭据只读（mode=ro、禁 InboxStore、注册表字段显式注入 resolver），
+  两侧档位/封顶/来源 + 动力学读数 + 判词，exit 0＝验收通过（可挂脚本）。
+  生产冒烟命中 8/3 实测对：`duplex_alive ≥5 轮 p50 6s` + `8755679833 悬置
+  5770min` + `business_line 封顶 ⛔`——一条命令复现 §98 整场排障结论。
+  与 duplex_drill 软集成：白名单对显示演练状态行（模块缺失静默跳过）。
+- **验收 SOP** `docs/双向全自动验收指南.md`：开测前 5 项清单（档位/标签/
+  预热/deliver/账号名）、行为红线（复读 3 条/秒回同文/日预算 40）、演练
+  配置示例、两工具判读表、常见误判速查——给 .104/.198 测试者和销售 PoC
+  的操作文档。
+- 门禁 `tests/test_duplex_report.py`（15 例：段语义/悬置/复读尺同源/占位符
+  豁免/判词矩阵/CLI 只读纪律）。**分工边界**：source 列/演练放行/胶囊接线
+  归 governance 线（其意向在册），本批零触碰 store/guard/drill/protocol。
+
+## 100. 分条重开＝「可变节奏」形态：latin 真实手速 + 序列总预算 + holdout 折叠（2026-08-09）
+
+**背景（老板拍板）**：全自动回复拆句发送必须带拟人打字间隔、不能几句秒发；同时
+不能推翻 8/8 的教训（客户点破「why always 2 parts」——**恒定模式**才是 AI 感根因，
+不是拆条本身）。方案＝重开 bubbles 但以可变形态：per_sentence 条数随内容变化 +
+holdout 35% 回合整段 + 条间隔=真人手速。四项代码改动（全数门禁钉住）：
+
+- **拉丁真实手速** `reply_split.typing_time_sec`（纯函数）+ `latin_per_char_sec`
+  配置键（None=旧加权行为锚）：加权刻度（拉丁 0.25 权）是给「分条预算」校准的，
+  挪用到「打字耗时」把英文手速虚高 ~4 倍（60 字符英文只算 1.2s，真人 40-60wpm
+  要 6s+）＝英文会话条间机关枪的根因。`inter_part_delay_sec` /
+  `humanize.estimate_typing_lead` / `resolve_typing_lead` 全接（B 线已透传；
+  A 线/手动发送待下一批——本批两文件被兄弟线活跃编辑，按共享树协议避让）。
+- **条间隔预排 + 序列总预算** `reply_split.plan_bubble_gaps`：整组一次估值，
+  `total_budget_sec`(0=关) 超预算**等比例压缩**保节奏形状（真人赶时间是整体加快，
+  不是前慢后机关枪的砍尾）+ 0.6s 反机关枪地板（地板生效时预算可略超——反机关枪
+  优先，预算是软约束）。B 线 `_send_via` 分条循环改消费预排间隔。
+- **holdout 折叠语义修正**（B 线）：保留组原样发**多行**文本＝「一条消息带结构化
+  换行」，正是 8/8 被点破的形态、比拆条更糟 → 抽中即 `collapse_paragraphs` 成
+  自然单段。门禁 `test_holdout_forces_single_and_records` 断言随语义升级。
+- **协议直发链单段收口** `protocol_autoreply`：该链不具备分条能力，bubbles 开启后
+  拟稿合同=「每行一句」，不折叠就多行泄漏 → 发送前 collapse（bubbles 关时
+  ai_client 出口已折叠过，幂等）。门禁 `test_multiline_reply_collapsed_before_send`。
+
+**配置落盘**：基线 `config.yaml` 修 `reply.split_send` 机关枪（0.35s 恒定 → 2.5±1.5s；
+抖动键此前误放 reply: 层代码读不到=实际恒 0）+ bubbles 新键文档；zhiliao overlay：
+bubbles per_sentence/max_parts 5/per_char 0.10/latin 0.06/budget 75/holdout 0.35
+（**enabled 待重启装载新代码后翻 true**——老代码 holdout 不折叠）、deliver_delay
+30-54 uniform → **adaptive**（min 10/max 54/base 18/per_char 0.10/jitter 0.3：短句
+~10-17s、长回复 ~25-54s；固定带宽本身也是可识别模式；B 线 worker 构造期拷贝需
+重启进活体，A 线现读=热更即生效）、LINE/WA/Messenger RPA `human_pacing.inter_msg_ms`
+[700,1800]→[2500,7000]+split_max_chars 120（三端共用模块，亚 2s 连发=bot 指纹）。
+
+**已知边界（下一批）**：A 线 telegram_client 无 holdout/latin/budget（bubbles 开后
+A 线恒拆多句回复，条间 2-20s 无机关枪，仅缺多样性）；手动发送同缺 latin/budget；
+RPA human_pacing 仍是独立切分实现（句中硬切 bug 收编 reply_split 属 P1）；
+`config.example.yaml` 新键文档待补（当时被兄弟线活跃编辑）。engine 根 config.yaml
+有**预先存在**的重复顶层键 `companion`（1161/2042 行，PyYAML 静默取后者），
+不在本批范围，待产品决策合并。门禁：test_reply_split 46 例（+9）/ test_humanize
+（+2）/ test_protocol_autoreply（+1）/ test_autosend_helpers 全绿，共 281 例。
+
+**同日续批收口（第二条 pacing 线合流，2026-08-09 上午）**：上表边界前三项已落——
+① A 线 telegram_client：holdout 抽中即 `collapse_paragraphs` 折叠（与 B 线同语义，
+多行原样单条＝被投诉形态）+ 条间隔换 `plan_bubble_gaps` 预排（latin 手速 + 总预算）
++ 条间打字气泡时长带 latin；② 手动发送 `_deliver_bubble_parts` 同款预排 + latin +
+`record_bubble_gap("manual")` 观测入列（三源 autosend/aline/manual 同口径）；
+③ `config.example.yaml` bubbles 注释示例补全新键（per_sentence/latin/budget/holdout
+可发现）。增量两处：④ **桌面桥折叠收口**（autosend_helpers desktop_bridge 分支在
+分条逻辑**之前**提前返回，bubbles 开+多行稿会原样入队 DOM 一条发出 → 入队前
+collapse，与协议链同款）；⑤ 拟稿多行合同补「行数要自然变化，别每条固定同样行数」
+（prompt 层直击恒定模式）。接线门禁 `tests/test_bubble_pacing_wiring.py`（10 例，
+静态钉三链「预排+latin+预算+holdout 折叠」，任一链回退先红）。**翻闸顺序铁律**：
+先重启装载 8/9 代码 → 再翻 `bubbles.enabled: true`（热更 ~30s）——先翻会让旧代码
+带 35% 不折叠 holdout +35% 频率发出「段1+空行+段2」形态。已执行：10:57:03 重启
+（cases P3 搭车装载 pacing .py）→ 11:08 翻闸 → 11:09:04 热重载确认，双实例 GO。
+
+**P1 同日续（RPA 收编，原«另线意向»闲置 1h 后接手）**：① `human_pacing.
+split_message` sentence 模式**委托 `reply_split.split_reply_parts`**（三 RPA 渠道
+与 orch 三链同一把刀：句界打包+CJK 加权+URL/长单号原子保护），legacy 实现保留作
+异常兜底；「英文超长句按 max_chars 拦腰硬切」的老 bug 就此消灭。② 不拆条出口
+（pacing 关/none 模式/单条）与**条内**（合同 5 行×RPA max_parts 3 → 尾条以 \n
+并入）一律 `collapse_paragraphs` 折叠——RPA 设备注入换行＝「一条消息带换行」。
+③ messenger `_send_reply` 注入前折叠多行（该路径整段注入+单次点发送、无分条能力，
+是 bubbles 开启后最后一个多行泄漏面）。④ LINE/WA 条间隔采样进
+`record_bubble_gap("rpa", platform)`（与 autosend/aline/manual 同口径，设置页
+「实测节奏」可见 RPA 分布）。门禁：`test_bubble_pacing_wiring` 扩至 18 例（英文
+不拦腰/句界切点/URL 完整/折叠×3/委托回落/接线静态断言），legacy 钉
+（test_line_rpa_pacing_and_store / test_wa_pacing_split_legacy）零改动全绿，
+RPA 回归 172 例全绿。**待下次搭车重启装载**（连同 P0 尾巴：桌面桥折叠 +
+拟稿「行数自然变化」提示）。
+
+## 100. 接管即静音可见化 + 自动接回 + why_no_reply API 化 + 群聊/预热护栏（2026-08-09）
+
+.198/.104「设置全自动却不回复」事故第二批收口（第一批＝§98 有效档位单源化；本批
+修的是排障当天暴露的**剩余四缺口**：接管态不可见不可逆、封顶看得见改不了、
+诊断只有工程师 CLI、批量切档误伤群聊）。
+
+- **接管打标 + 让位横幅 + 一键接回**（src/inbox/takeover_rearm.py）：四处坐席
+  出站调用点（send/media/voice 路由 + web_chat 适配器）统一走
+  
+ecord_agent_takeover——source 编码 	akeover_from:<prev> 保留接管前档位，
+  重复接管只刷新时间戳绝不覆盖首次 from。GET /automation 捎带 mode_source/
+  
+earm 段 → 收件箱蓝色横幅「AI 已让位：HH:MM 坐席手动发送后转人工 +
+  [让 AI 接回]」；手动发送成功即回拉档位真值（修「坐席不知道自己关了 AI」，
+  实测曾钉死 manual 27h）。
+- **自动接回 sweep**（watchdog _check_takeover_rearm，配置
+  inbox.takeover_rearm.{enabled,after_minutes} 默认关/桌面种子开 30min/
+  zhiliao overlay 已落）：静默超时把 source=takeover* 的 manual 恢复到接管前
+  档位（无 from 回全局默认）；**显式手动（human）/守卫降档（guard:*/sweep）
+  永不动**；每次人工出站重置计时。种子开关经 _PENDING 登记升级分叉
+  （存量装保持关，给不给存量补齐属产品决策）。
+- **why_no_reply API 化 + AI 状态面板**（src/inbox/reply_diagnosis.py +
+  GET /api/unified-inbox/why-no-reply）：与 CLI 同视角、与 A/B 护栏同源
+  （effective_automation / pbg.evaluate / work_hours_gate / list_drafts），
+  findings 只出码+参数（后端零 CJK，文案在 pack inbox_takeover_diag 按 UI
+  语言渲染）；会话头「🩺 AI 状态」按钮 + 封顶胶囊点击即体检，findings 带
+  一键修复（接回/切全自动/关预热/开待审队列）。新增 finding managed_peer
+  ＝对端是本实例受管账号（AI 对聊环观测，198↔104 互聊场景的薄版守卫）。
+- **预热人审一键关**（POST /api/unified-inbox/warmup-review，主管门禁）：
+  写 overlay cold_start.warmup_review（set_overlay_flag 保注释链路，热重载
+  ~30s 生效）——补掉「封顶胶囊看得见、解除要 SSH 改 YAML」的最后一公里。
+- **群聊全自动确认**（POST /automation）：group/channel 升 auto_ai 且未带
+  confirm_group → 409 group_confirm_required（前端 confirm 后重试）；
+  私聊/降档/会话行缺失 fail-open。修「批量切档把 3 个群顺手切成全自动」。
+- 门禁 	ests/test_takeover_rearm.py（21 例：source 语义/打标保 from/旧签名
+  诚实降级/sweep 只碰 takeover/窗口内不动/路由契约×7/watchdog 接线）；路由
+  清单 +2（并顺手补登并行线漏登记的 conv-probe）；同批更新并行线 source
+  打标后过期的 	est_maybe_bootstrap_persists_auto_ai 断言。前端批次戳
+  20260809-1000。
+- **刻意不做**：跨机 AI 互聊的节奏级告警（interject+冷却+日预算已兜底，
+  纯节奏判据误报风险高，等真实互聊事故语料再定阈）；坐席机 .198/.104 的
+  overlay 先不落 takeover_rearm 键（跑的是打包后端 1.018，代码到不了，
+  待下一次 ChatX 发版随种子生效）。
+
+## 101. 自动化覆盖率老板卡 + 停泊草稿自愈 + 陈旧稿重生成 + send 令牌化（2026-08-09 P1）
+
+§100 的下一批：把「看不见」的最后几块补上，并修掉一个必踩的状态机泄漏。
+
+- **「🤖 自动化覆盖率」ops 卡**（boss 组；核心 src/inbox/automation_coverage.py +
+  GET /api/admin/automation-coverage + store utomation_coverage_rows 单查询）：
+  「多少会话真在全自动跑、被什么压住」一屏读全——每账号 档位分布 × 账号级封顶
+  （compute_mode_caps 与护栏同源）× 接管态（source=takeover*）→ **有效全自动**
+  ＝档位 auto 且账号零封顶（.198「界面亮全自动、实际全进人审」的量化）；另出
+  待审稿龄三桶（<2h / 当天 / >24h）+ 进程窗口接管/接回计数。零会话/无持久层
+  pplicable:false 整卡隐藏。已用 198 真实库副本冒烟（6 会话 100% 有效全自动、
+  1 条 8.2h 待审——与现场一致）。
+- **停泊草稿卡死回收**（watchdog _check_stale_enriching，默认开，
+  health_watchdog.stale_enriching_release.{enabled,after_min=15}）：enriching
+  补全协程有三层失败兜底，**唯独进程重启没人接**——停泊行永久卡死，且
+  auto_generate 幂等保护从此挡住该会话所有后续拟稿（客户无人回、待审队列
+  还看不见它）。桌面机天天重启，必踩。修法＝超时 release 翻 pending（与产线
+  失败兜底同一条降级路径，语义零新增）。
+- **陈旧稿一键重生成** POST /api/drafts/{id}/regenerate：stale 护栏 409 的出路
+  闭环——按**当前**会话上下文重走人设产线（generate_persona_reply 单一事实源）
+  → 生成成功才**原子作废**旧稿（竞态窗内被同事处置 → 409 不铸新稿）→ 铸新
+  pending 稿；autopilot 强制 review 口径（绝不产 L2 自动投递）。UI 按钮因
+  unified_inbox.html 处于并行线活跃编辑窗**顺延**（端点已可脚本/后续接线消费）。
+- **send/send-media/send-voice 接受 Bearer 主令牌**：三个 JSON 端点挂在页面鉴权
+  下，脚本/集成用主令牌调用此前被 303 到登录页 HTML（.198 排障实测要模拟表单
+  登录拿 session+CSRF）。修在**最窄处** _unified_inbox_page_auth（与 _api_auth
+  同口径恒时比较；主令牌本就拥有全 API 权限，不扩权限面）。安全门禁
+  	ests/security/test_page_auth_bearer.py（正确放行到参数校验/错误令牌 303/
+  空 token 部署永不放行）。
+- 门禁：	ests/test_automation_coverage.py（10 例：聚合口径/平台封顶清零/稿龄
+  分桶/路由 applicable/卡三件套/i18n 双语/停泊回收三态）+
+  	ests/test_draft_regenerate.py（5 例：成败/竞态/终态/404）+ 路由清单 +1；
+  同批更新两条并行线过期断言（bootstrap source 打标、degradation_snapshot
+  primary 键）。i18n 新 pack ops_automation_coverage；example 配置补
+  stale_enriching_release 段。
+
+## 102. 档位时间线 + 覆盖率趋势库 + 陈旧稿重生成按钮（2026-08-09 P2）
+
+§100/§101 的第三批。两项「先勘察后动工」的判定也算交付：**账号健康分发现已存在**
+（`/api/accounts/fleet-health`＝M7 account_health × account_signals.fleet_overview，
+rpa_overview + dashboard 已消费——P2 原计划的「新建评分」改判为避免重复建设，
+仅剩「ops-overview 薄消费卡」待模板安静窗）；**待审提示音/角标已存在**
+（draft_created SSE → workspace_base 铃铛 + 面板刷新，原计划砍半）。
+
+- **档位变更时间线**：store 新表 `automation_mode_log`——只记**真实跃迁**
+  （mode/source 变了才落行；接管重刷时间戳、bootstrap 幂等重写零噪音，否则坐席
+  每条手动消息灌一行）；`set_automation_mode` 锁内 SELECT+对比+补记，bulk 直写
+  路径单独补记。读侧 `list_automation_mode_log`（新→旧）→ why-no-reply 响应
+  `mode_history` 段 → AI 状态面板「档位变更历史」区（来源码→人话：坐席手选/
+  新会话默认/守卫降档/批量/接管/自动接回）。「谁在什么时候把档位改成什么」从
+  靠猜变成一屏读——.198 接管钉死 27h 的排障场景直接闭环。
+- **覆盖率趋势库** `src/inbox/automation_coverage_trend.py`：按日 **REPLACE**
+  快照（覆盖率是状态不是流量，与 translation_trend 的增量语义刻意不同）；watchdog
+  `_check_coverage_trend`（`ops.automation_coverage_trend` 默认关/zhiliao 已开，
+  interval_min=60 节流，零会话不落行防冷启动污染）；`/api/admin/automation-coverage`
+  带 `?days=` 出 `trend` 段（关=键缺席）。「有效全自动占比在掉」比当下值更需要
+  行动。卡片 sparkline 待 ops_overview.html 安静窗（cases 线活跃中）。
+- **陈旧稿重生成按钮**：草稿迷你卡 blocked 态（stale/replied 被拦）新增
+  「🔁 重新生成」＝主推出路（调 §101 的 regenerate 端点；409=别的窗口刚处理，
+  刷新即可），编辑按钮回归普通样式。
+- **zhiliao overlay 重复键险情自查**：给 overlay 加 `ops.automation_coverage_trend`
+  时差点在文件头再起一个顶层 `ops:`（866 行外已有一个 → 后者静默吞前者，
+  重启门禁会拦）——`rg '^ops:'` 自查后并入既有段。**给 overlay 加键前先查
+  同名顶层段**，教训记档。
+- 门禁：`tests/test_mode_timeline.py`（5 例：change-only/接回跃迁故事线/bulk/
+  排序上限/路由携带）+ `tests/test_coverage_trend.py`（6 例：REPLACE/排序/配置
+  下限/watchdog 三态/路由 gated，autouse 复位单例替身防跨测试死连接）；
+  前端门禁全绿（regenDraft 暴露/window.T 键/孤儿引用）。前端批次戳 `20260809-1120`。
+
+## 103. ops 老板卡收尾 + 三轮改动线上验收（2026-08-09 P3）
+
+§100-102 的收口批：模板半件补齐 + **搭 10:57 便车重启完成生产验收**（本轮零重启，
+遵守 30min 手动间隔——preflight NO-GO 指路「piggyback verify」，照做）。
+
+- **模板收尾包**（ops_overview.html 安静窗抓到）：① 覆盖率卡补趋势区
+  `autoCovTrend`（`d.trend` ≥2 天才画：有效全自动占比 % + 待审稿数两条
+  sparkline，复用站内 sparkline 助手）；② 新增「🛡️ 账号健康分」老板卡＝
+  **薄消费**既有 `/api/accounts/fleet-health`（M7 评分，与机群总览/发送闸门
+  同源，绝不另算评分）——机群灯/均分/红灯数/预热/受限 KPI + 最差账号表
+  （分数/建议日上限/扣分原因）+ 生命周期 + 改资料热点。i18n 新 pack
+  `ops_fleet_health_card`；三件套门禁进 `test_automation_coverage.py`。
+- **线上验收实录**（zhiliao，全部真值）：cases 线 10:57 重启已顺带装载本线
+  P0+P1（重启 reason 里点名 piggyback）。① GET /automation 出 `mode_source`/
+  `rearm` 段；② why-no-reply 生产可用（健康会话 looks_alive）；③ 覆盖率卡
+  首读数：**251 会话 / 209 有效全自动（83.3%）/ 6 被封顶**；④ 接管演练
+  （收藏消息安全靶，bearer 直调=顺带验 P1 令牌化）：手动发送 → source=takeover
+  打标 + rearm 倒计时 1776s + why-no-reply 出 `takeover_manual` block；
+  一键接回 → auto_ai + source=human + rearm 消失；再接管 →
+  `takeover_from:auto_ai`（保留接管前档位语义实证）；⑤ 群聊确认护栏：真实
+  群聊上开全自动 → 409（靶群即「缅北猪仔赌博」监控群——这道闸存在的理由
+  自己出镜）；⑥ 出站语言守卫顺带实证（中文探针被 lang_mismatch 409 拦下，
+  换英文放行）；⑦ fleet 卡上线首分钟真发现：**10 账号全 amber 65 分＝零独立
+  代理**，机群级封号风险从 RPA 页深处搬到老板首屏。30 分钟自动接回留了
+  活体观察（12:13 到期 + watchdog 5min 窗，后台采证）。
+- **P2 后端（时间线/趋势库）确认未赶上 10:57 班车**（落盘晚于重启 3-10 分钟；
+  探针：mode_history/trend 键缺席，前端优雅降级正常）——随下一次自然批次
+  重启装载，froнt 已就绪零改动点亮。**本轮刻意不为此加一次重启**（30min 间隔
+  + FLAP 纪律；下一班车必然会来）。
+
+## 103. 投递并行化：按会话分组并发（inbox.l2_autosend.parallel_deliver，2026-08-09）
+
+**背景**：分条节奏上线（§100）后，单条全自动投递最长可占 ~2 分钟（deliver_delay
+10-54s + 分条间隔总预算 75s），而 AutosendWorker 的投递循环是串行 for——并发会话
+互相排队，客户 B 苦等客户 A 的「思考时间」（§95 已知边界升级为实际瓶颈）。
+
+- **抽取零漂移**：_tick 的 221 行投递循环体经脚本机械抽取为 `_deliver_one`
+  （dedent+continue→return，ast 校验；翻译→近重复守卫→拟人延迟→过期复查→发送→
+  失败处置全链原样），串行路径同走该方法——抽取本身零语义变化，由既有 worker
+  门禁 138 例回归背书。
+- **调度器 `_deliver_parallel`**（默认关）：按 conversation_id 分组——**同会话
+  保序串行**（顺序/防双发不变量都建立在会话内有序上），跨会话经全局信号量
+  （max_concurrent 夹 [1,8]）并发；gather(return_exceptions=True) 兜底，单组
+  异常不拖累其它组；tick 内 gather（刻意不做跨 tick 在途追踪——复杂度换的
+  收益在当前流量下不成立，事件驱动唤醒让新稿在 gather 结束后立即进下轮）。
+- **并发安全边界**（_deliver_one docstring 钉）：共享状态（计数器/重试队列/
+  封禁表/dup 登记）全在事件循环单线程语义下写入，await 点间写入无撕裂；
+  重试队列 drain 在 tick 头（spawn 前）无竞态。
+- **观测**：autosend-status.parallel_deliver{enabled,max_concurrent,batches}。
+- **配置**：example 注释文档（默认关）；zhiliao overlay enabled+max_concurrent 2
+  （保守起步），worker 构造期读取 → 随下一班搭车重启生效。
+- **门禁**：tests/test_autosend_parallel.py 8 例（跨会话并发在途 max_live=2 /
+  默认串行 max_live=1 / 同会话保序不并发 / 信号量封顶 / 坏组隔离 / 配置夹紧 /
+  快照暴露 / 早退不断批）。
+- **代修两个陈旧断言**（并行线 §100 批的 src 改动没同步测试）：
+  test_autosend_worker_translate 的观测路径 `autosend/slow` →
+  `autosend/telegram/slow`（平台/人设双分维是刻意升级，docstring 有档）、
+  typing 全程续挂 3 次 → 两段式临发前 1 次（§95 语义，断言随行为升级并加
+  「打字必须在发送前」保序断言）。

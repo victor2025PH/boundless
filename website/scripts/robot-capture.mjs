@@ -13,7 +13,23 @@ const BASE = process.env.ROBOT_BASE_URL || "http://localhost:3210";
 const OUT = ".robot-assets";
 mkdirSync(OUT, { recursive: true });
 
-const STILL_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_scan", "idle_news", "idle_spin", "flying", "falling"];
+const STILL_MODES = [
+  "idle_base",
+  "idle_wave",
+  "idle_dance",
+  "idle_scan",
+  "idle_news",
+  "idle_spin",
+  "idle_nod",
+  "idle_stretch",
+  "idle_tilt",
+  "idle_invite",
+  "idle_alert",
+  "idle_clap",
+  "idle_shy",
+  "flying",
+  "falling",
+];
 const VIDEO_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_news"];
 // 皮肤：normal 全套 + demon/loong 精选（彩蛋营销素材）
 const SKINS = [
@@ -32,7 +48,7 @@ const suffix = (skin) => (skin === "normal" ? "" : `-${skin}`);
     for (const mode of stills) {
       await page.goto(`${BASE}/robot-stage?mode=${mode}&skin=${skin}&scale=3&bg=transparent&pool=0`, { waitUntil: "domcontentloaded", timeout: 90000 });
       await page.waitForSelector("[data-stage-ready]", { timeout: 60000 });
-      // 等姿态弹簧落定 / 挥手进入循环段（含五指完全展开）
+      // 等姿态弹簧落定 / 挥手进入循环段（含引力三指扇形展开）
       await page.waitForTimeout(mode === "idle_wave" ? 1800 : mode === "idle_spin" ? 2400 : 1600);
       await page.screenshot({ path: `${OUT}/eve${suffix(skin)}-${mode}@3x.png`, omitBackground: true });
       console.log(`still  eve${suffix(skin)}-${mode}@3x.png`);

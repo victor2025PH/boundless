@@ -26,6 +26,134 @@ MODE_GENTLE_CHECKIN = "gentle_checkin"  # 无记忆钩子，温和问候
 # 长别离阈值（超过则即便有记忆钩子也先柔和重连）
 _LONG_ABSENCE_HOURS = 14 * 24
 
+# ── 沉默分档（P0，2026-07-29：措辞对齐事实）──────────────────────────────
+# 实锤事故：gentle_checkin 指令硬编码「好久没联系了」，而自适应节奏下沉默
+# 4~10 小时就会触发 → 用户昨晚才聊过、今早收到「好久没联系」，一眼机器人。
+# 修法＝按真实沉默时长分档给措辞，「好久没联系」只许在 ≥14 天档出现。
+GAP_SAME_DAY = "same_day"   # < 24h：今天/昨天才聊过
+GAP_FEW_DAYS = "few_days"   # 1~3 天
+GAP_WEEK = "week"           # 3~14 天
+GAP_LONG = "long"           # ≥ 14 天：唯一允许「好久没联系」的档
+
+
+def silence_gap_bucket(silent_hours: float) -> str:
+    """真实沉默时长 → 措辞档位。非法输入按 same_day（最保守，绝不说「好久」）。"""
+    try:
+        sh = float(silent_hours or 0.0)
+    except (TypeError, ValueError):
+        sh = 0.0
+    if sh >= _LONG_ABSENCE_HOURS:
+        return GAP_LONG
+    if sh >= 72:
+        return GAP_WEEK
+    if sh >= 24:
+        return GAP_FEW_DAYS
+    return GAP_SAME_DAY
+
+
+def silence_gap_phrase(silent_hours: float) -> str:
+    """给 prompt 用的人话时长（「大约 6 小时 / 2 天」），供框定层引用事实。"""
+    try:
+        sh = max(0.0, float(silent_hours or 0.0))
+    except (TypeError, ValueError):
+        sh = 0.0
+    if sh < 48:
+        return f"大约 {max(1, int(round(sh)))} 小时"
+    return f"大约 {int(sh // 24)} 天"
+
+
+# gentle_checkin 切入点轮换池（P1，2026-07-29）：同一用户同一天取同一切入点
+# （crc32(key#日期) 确定性，与 outfit/scene 同哲学），隔天自动换——从源头拉开
+# 「每次都问最近怎么样」的同质化。只是参考提示，真实文案仍由 LLM 按人设发挥。
+_CHECKIN_ANGLES = (
+    "分享你此刻正在做的一件小事（在忙什么/刚忙完什么）",
+    "聊聊窗外的天气、光线或此刻的季节感受",
+    "说说你刚吃过或正想吃的东西",
+    "讲一件今天路上/身边碰到的小事",
+    "分享你正在听的歌或在看的剧/书",
+    "提一个你明天的小计划或小期待",
+    "抛一个你突然想到的小问题，想听听TA的看法",
+    "轻轻问一句TA这会儿在忙什么",
+)
+
+
+def checkin_angle(variety_key: str, now: Optional[float] = None) -> str:
+    """当天该用户的问候切入点（确定性轮换；key 为空用日期兜底仍有跨天变化）。"""
+    import zlib
+    ts = now if now is not None else time.time()
+    day = time.strftime("%Y%m%d", time.localtime(ts))
+    seed = f"{variety_key or ''}#{day}".encode("utf-8", "ignore")
+    return _CHECKIN_ANGLES[zlib.crc32(seed) % len(_CHECKIN_ANGLES)]
+
+
+# 早/晚安切入角轮换池（2026-08-18 仪式素材化）：早晚安占主动发送 96.7%，此前
+# directive 只有「道一句早安」——每天同一句式即坐席/客户体感「生硬」的大头。
+# 与 _CHECKIN_ANGLES 同哲学：只是参考方向（真实文案仍由 LLM 按人设发挥），
+# crc32(user#slot#日期) 确定性轮换——同用户同日恒定（缓存/测试友好）、隔天自动换、
+# 同一天早安晚安各自不同、同一天不同用户不同（不会全员同款）。
+_RITUAL_MORNING_ANGLES = (
+    "分享你醒来后正在做的一件小事（刚泡的咖啡/在做早餐/赖床听歌）",
+    "提一句你今天的安排或小期待，顺口问TA今天忙不忙",
+    "聊聊今早窗外的天气或光线（有天气素材就按素材说，没有就别编细节）",
+    "说说你早餐吃了什么或想吃什么，好奇TA早上吃了没",
+    "说说你昨晚睡得怎么样（睡太沉/做了个怪梦/被闹钟吓醒），关心TA睡得好不好",
+    "讲一件你出门路上或楼下碰到的小事",
+    "分享你早上在听的歌或刚刷到的一个小东西",
+    "就一句自然的早安，带上你此刻的一个小细节（不追问、不查岗）",
+)
+
+_RITUAL_NIGHT_ANGLES = (
+    "分享你今天碰到的一件具体小事（刚收工/晚饭吃了什么/路上看到的）",
+    "聊聊你此刻在做什么（在看的剧/书/听的歌），顺口问TA睡前一般干嘛",
+    "提一句你明天的小计划或小期待",
+    "聊聊今晚窗外的天气或夜色（有天气素材就按素材说，没有就别编细节）",
+    "说说你晚饭吃了什么或想吃什么，好奇TA吃了没",
+    "轻轻问一句TA今天过得怎么样（只问一句、别连环追问）",
+    "分享一个今天让你忽然想到TA的瞬间（自然一点、别肉麻）",
+    "就一句温柔的晚安，带上你此刻的一个小细节（不追问）",
+)
+
+
+def ritual_angle(slot: str, variety_key: str, now: Optional[float] = None) -> str:
+    """当天该用户该档（morning/night）的仪式问候切入角；非法档位返回 ""。"""
+    import zlib
+    s = str(slot or "").strip().lower()
+    pool = (_RITUAL_MORNING_ANGLES if s == "morning"
+            else _RITUAL_NIGHT_ANGLES if s == "night" else None)
+    if pool is None:
+        return ""
+    ts = now if now is not None else time.time()
+    day = time.strftime("%Y%m%d", time.localtime(ts))
+    seed = f"{variety_key or ''}#{s}#{day}".encode("utf-8", "ignore")
+    return pool[zlib.crc32(seed) % len(pool)]
+
+
+# 各档 gentle_checkin 指令：短档明令禁止「好久没联系」，并要求带具体内容
+# （分享自己此刻的小事）替代空泛的「最近怎么样」模板问候。
+_CHECKIN_DIRECTIVES = {
+    GAP_SAME_DAY: (
+        "主动开场：你们今天早些时候才聊过，像随手想到TA那样自然搭话——"
+        "分享一件你此刻正在做或刚碰到的小事，或顺口问问TA在忙什么。"
+        "绝不要说「好久没联系/好久不见」（今天才聊过，说这个非常假），"
+        "也不要用「最近怎么样/还好吗」这种模板问候。"
+    ),
+    GAP_FEW_DAYS: (
+        "主动开场：有一两天没聊了，自然地打个招呼——先分享你这两天的一件"
+        "具体小事，或想到TA可能在忙什么就顺口关心一句。"
+        "不要说「好久没联系」（才隔一两天），避免「最近还好吗」这类空泛问候。"
+    ),
+    GAP_WEEK: (
+        "主动开场：好几天没聊了，像朋友忽然想起TA那样自然问候——从你自己"
+        "近况的一件具体小事切入，再关心TA这几天过得怎么样。"
+        "别用「好久没联系」的生分口吻，也别显得刻意找话。"
+    ),
+    GAP_LONG: (
+        "主动开场：确实很久没联系了，像久违的朋友那样温和重连——轻松问候、"
+        "自然承认隔了挺久，关心对方最近过得怎么样，把话题主导权交给对方，"
+        "不要强行找话题或显得刻意。"
+    ),
+}
+
 # P1b：除选中事实外，额外带几条高置信事实作"背景知识"（让开场更有"真记得你"
 # 的质感，但只作背景、不罗列、不连环追问——见 directive 的克制约束）。
 _DEFAULT_CONTEXT_FACTS = 2
@@ -84,6 +212,7 @@ def select_proactive_topic(
     min_silent_hours: float = 24.0,
     max_context_facts: int = _DEFAULT_CONTEXT_FACTS,
     prefer_category: str = "",
+    variety_key: str = "",
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """选出一个主动开场话题种子（确定性）。
@@ -96,6 +225,8 @@ def select_proactive_topic(
         intimacy: 亲密度 0-100（预留）。
         min_silent_hours: 低于此沉默时长不主动开场（避免打扰活跃用户）。
         prefer_category: 优先回访的记忆类目（如 ``story`` 共享经历）；空则不偏好。
+        variety_key: 非空则给 gentle_checkin 附「当日切入点」轮换提示（P1 反同质化，
+            同用户同天恒定、隔天自动换）；空=不附（旧行为）。
         now: 注入"现在"时间戳（测试用）。
 
     Returns:
@@ -111,6 +242,7 @@ def select_proactive_topic(
     empty = {
         "mode": MODE_NONE, "fact": "", "directive": "", "context_facts": [],
         "long_absence": False, "silent_hours": round(sh, 1) if sh >= 0 else 0.0,
+        "gap_bucket": "",
     }
     if sh < 0:
         return empty
@@ -118,18 +250,30 @@ def select_proactive_topic(
         return empty  # 沉默不足，不打扰
 
     long_absence = sh >= _LONG_ABSENCE_HOURS
+    gap_bucket = silence_gap_bucket(sh)
     eligible = _eligible_facts(memory_facts)
     if eligible:
-        best = max(eligible, key=lambda f: _fact_score(f, now, prefer_category))
+        ranked = sorted(
+            eligible, key=lambda f: _fact_score(f, now, prefer_category),
+            reverse=True)
+        best = ranked[0]
+        # P2 事实轮换：argmax 是确定性的 → 同一用户每次回访都盯着同一条事实
+        # （「上次你说在备考」问八遍）。有 variety_key 时在得分 Top-K（≤3）里按
+        # crc32(key#日期) 当日恒定轮换——今天问备考、明天问旅行，都是真事实、
+        # 不降置信门槛；无 variety_key = 旧行为（永远 top-1）。
+        if variety_key and len(ranked) >= 2:
+            import zlib
+            _k = min(3, len(ranked))
+            _day = time.strftime("%Y%m%d", time.localtime(now))
+            _seed = f"{variety_key}#fact#{_day}".encode("utf-8", "ignore")
+            best = ranked[zlib.crc32(_seed) % _k]
         fact = str(best.get("content") or "").strip()
         # P1b：除选中事实外，再挑几条高置信事实作背景（按同一优先级排序，去重）。
         context_facts: List[str] = []
         if max_context_facts > 0:
-            others = sorted(
-                (f for f in eligible if f is not best),
-                key=lambda f: _fact_score(f, now, prefer_category), reverse=True,
-            )
-            for f in others:
+            for f in ranked:
+                if f is best:
+                    continue
                 c = str(f.get("content") or "").strip()
                 if c and c != fact and c not in context_facts:
                     context_facts.append(c)
@@ -147,21 +291,25 @@ def select_proactive_topic(
             )
         if str(stage or "").strip().lower() in ("initial", "warming"):
             directive += "（关系还偏新：点到为止，别显得过分热络或越界。）"
+        if gap_bucket in (GAP_SAME_DAY, GAP_FEW_DAYS):
+            # 短沉默的记忆回访同样不许「久别重逢」腔（框定层也会兜，但指令层先说清）
+            directive += "别用「好久没联系/好久不见」这类隔了很久的口吻。"
         return {
             "mode": MODE_FOLLOW_UP, "fact": fact, "directive": directive,
             "context_facts": context_facts,
             "long_absence": long_absence, "silent_hours": round(sh, 1),
+            "gap_bucket": gap_bucket,
         }
 
-    # 无可回访记忆 → 温和问候
-    directive = (
-        "主动开场：好久没联系了，轻松自然地问候一句、关心对方最近怎么样，"
-        "把话题主导权交给对方，不要强行找话题或显得刻意。"
-    )
+    # 无可回访记忆 → 温和问候（措辞按真实沉默分档，短档禁「好久没联系」）
+    directive = _CHECKIN_DIRECTIVES.get(gap_bucket, _CHECKIN_DIRECTIVES[GAP_WEEK])
+    if variety_key:
+        directive += f"（今天的切入点参考：{checkin_angle(variety_key, now)}——仅参考，说得自然就好。）"
     return {
         "mode": MODE_GENTLE_CHECKIN, "fact": "", "directive": directive,
         "context_facts": [],
         "long_absence": long_absence, "silent_hours": round(sh, 1),
+        "gap_bucket": gap_bucket,
     }
 
 
@@ -191,5 +339,7 @@ def build_proactive_topic_block(
 
 __all__ = [
     "MODE_NONE", "MODE_FOLLOW_UP", "MODE_GENTLE_CHECKIN",
+    "GAP_SAME_DAY", "GAP_FEW_DAYS", "GAP_WEEK", "GAP_LONG",
+    "silence_gap_bucket", "silence_gap_phrase", "checkin_angle",
     "select_proactive_topic", "build_proactive_topic_block",
 ]

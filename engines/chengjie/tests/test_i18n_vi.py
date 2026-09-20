@@ -10,7 +10,9 @@ def test_get_translations_vi_override_and_en_fallback():
     # VI pack 已翻译的高频键
     assert vi.get("inbox.filter.all") == "Tất cả"
     assert vi.get("ws.cmdk.placeholder") == "Nhập lệnh, trang hoặc hội thoại…"
-    assert vi.get("lang_toggle") == "中文"
+    # xlate P3：wsToggleLang 升级五语选择器，lang_toggle 语义从「下一语言名（中文）」
+    # 改为中性「语言」——vi 值随之为 Ngôn ngữ（仍验证「VI 覆盖生效」这一机制本身）。
+    assert vi.get("lang_toggle") == "Ngôn ngữ"
 
     # 未进 VI pack 的键回落英文（非中文、非键名）
     missing_key = "__vi_fallback_probe_key_not_in_any_pack__"

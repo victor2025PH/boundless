@@ -8,11 +8,13 @@ interface CountUpProps {
   suffix?: string;
   duration?: number;
   className?: string;
+  /** 千分位分组（157,500 这类大额 Token 数专用；默认关，存量调用不变） */
+  grouping?: boolean;
 }
 
 /** 数字滚动计数,归位瞬间"锁定":弹跳一下 + 一道掠光扫过,强化"数据落定"的仪式感。
  *  tabular-nums 保证滚动过程数字宽度稳定不抖;reduced-motion 直接显示终值、无闪光。 */
-export default function CountUp({ value, suffix = "", duration = 1.6, className }: CountUpProps) {
+export default function CountUp({ value, suffix = "", duration = 1.6, className, grouping }: CountUpProps) {
   const target = parseFloat(value.replace(/[^0-9.]/g, "")) || 0;
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "-40px" });
@@ -40,7 +42,14 @@ export default function CountUp({ value, suffix = "", duration = 1.6, className 
     return () => cancelAnimationFrame(raf);
   }, [inView, reduced, target, duration]);
 
-  const rounded = target % 1 === 0 ? Math.round(display) : display.toFixed(1);
+  // 小数位跟随输入精度（"0.939" → 3 位），整数照旧取整；防 0.939 被 toFixed(1) 磨成 0.9
+  const decimals = value.includes(".") ? (value.split(".")[1]?.replace(/[^0-9]/g, "").length ?? 1) : 0;
+  const rounded =
+    target % 1 === 0 && decimals === 0
+      ? grouping
+        ? Math.round(display).toLocaleString("en-US")
+        : Math.round(display)
+      : display.toFixed(decimals || 1);
 
   return (
     <span ref={ref} className={`count-wrap ${done ? "count-done " : ""}${className ?? ""}`}>

@@ -34,10 +34,12 @@ def _emit(progress: ProgressCb, done: int, total: int) -> None:
     except Exception:
         logger.debug("[doc-xlate] 进度回调异常（忽略）", exc_info=True)
 
-# .docx/.xlsx 保版式真往返；.pdf 只做文本抽取→译→纯文本（pdf 不可结构化回填）
-SUPPORTED_EXT = (".docx", ".xlsx", ".pdf")
+# .docx/.xlsx/.pptx 保版式真往返；.pdf 只做文本抽取→译→纯文本（pdf 不可结构化回填）；
+# .srt/.vtt 保时间轴逐条译（P1 2026-08-18，外贸高频：客户甩来的视频字幕）
+SUPPORTED_EXT = (".docx", ".xlsx", ".pdf", ".pptx", ".srt", ".vtt")
 _MAX_PARAGRAPHS = 5000
 _MAX_CELLS = 20000
+_MAX_SUBTITLE_LINES = 20000
 
 
 def docx_available() -> bool:
@@ -59,6 +61,14 @@ def xlsx_available() -> bool:
 def pdf_available() -> bool:
     try:
         from pdfminer.high_level import extract_text  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def pptx_available() -> bool:
+    try:
+        import pptx  # noqa: F401
         return True
     except Exception:
         return False
@@ -273,7 +283,222 @@ async def translate_pdf_to_text(
             "stats": res.get("stats", {})}
 
 
+# ── P1（2026-08-18）：.srt/.vtt 字幕保时间轴翻译 ─────────────────────────────
+def classify_subtitle_lines(lines: List[str], kind: str = "srt") -> List[bool]:
+    """逐行判定「是否为待译字幕文本」（True=译，False=原样保留）。纯函数便于金标测试。
+
+    保留：空行 / 时间轴行（含 ``-->``）/ 纯数字序号行 / **紧邻时间轴行之前的 cue id 行**
+    （vtt 允许任意字符串 id）/ vtt 头（``WEBVTT``）与 ``NOTE``/``STYLE``/``REGION``
+    元块（起始行到下一空行整块保留）。其余行=字幕文本。
+    """
+    out: List[bool] = []
+    in_meta = False
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if in_meta:
+            out.append(False)
+            if not line:
+                in_meta = False
+            continue
+        if not line:
+            out.append(False)
+            continue
+        if kind == "vtt" and (
+            line.upper().startswith("WEBVTT")
+            or line.startswith(("NOTE", "STYLE", "REGION"))
+        ):
+            out.append(False)
+            in_meta = True
+            continue
+        if "-->" in line:
+            out.append(False)
+            continue
+        if line.isdigit():
+            out.append(False)
+            continue
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if "-->" in nxt:
+            out.append(False)   # cue id 行（下一行就是时间轴）
+            continue
+        out.append(True)
+    return out
+
+
+async def translate_subtitle(
+    data: bytes,
+    *,
+    xlate: Any,
+    kind: str = "srt",
+    target_lang: str = "zh",
+    source_lang: str = "",
+    style: str = "chat",
+    engine: str = "",
+    bilingual: bool = False,
+    max_concurrency: int = 4,
+    progress: ProgressCb = None,
+) -> Dict[str, Any]:
+    """翻译 .srt/.vtt 字幕字节：**时间轴/序号/cue id/元块逐字节级保留**，只译文本行。
+
+    ``bilingual=True`` → 双语字幕（原文行下加一行译文，SRT/VTT 多行 cue 合法）。
+    返回 {ok, data(bytes)?, stats, reason?}。
+    """
+    try:
+        text = data.decode("utf-8-sig", errors="replace")
+    except Exception:
+        return {"ok": False, "reason": "bad_subtitle", "message": "字幕文件解码失败"}
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    if len(lines) > _MAX_SUBTITLE_LINES:
+        return {"ok": False, "reason": "too_many_segments",
+                "message": f"字幕行数过多（上限 {_MAX_SUBTITLE_LINES}）"}
+    flags = classify_subtitle_lines(lines, kind=kind)
+    idxs = [i for i, f in enumerate(flags) if f]
+    if not idxs:
+        return {"ok": False, "reason": "no_text", "message": "未找到可译字幕文本行"}
+
+    total = len(idxs)
+    sem = asyncio.Semaphore(max(1, int(max_concurrency)))
+    stats = {"total": total, "translated": 0, "failed": 0, "cached": 0}
+    out_lines = list(lines)
+    _emit(progress, 0, total)
+
+    async def _do(idx: int) -> None:
+        src = lines[idx]
+        async with sem:
+            try:
+                res = await xlate.translate(
+                    src, target_lang=target_lang, source_lang=source_lang,
+                    style=style, engine=engine)
+            except Exception:
+                stats["failed"] += 1
+                logger.debug("[srt-xlate] 行翻译异常（保留原文）", exc_info=True)
+                _emit(progress, stats["translated"] + stats["failed"], total)
+                return
+        dst = (res.translated_text or "").strip() if res.ok else ""
+        if res.ok and dst:
+            out_lines[idx] = f"{src}\n{dst}" if bilingual else dst
+            stats["translated"] += 1
+            if getattr(res, "cached", False):
+                stats["cached"] += 1
+        else:
+            stats["failed"] += 1
+        _emit(progress, stats["translated"] + stats["failed"], total)
+
+    await asyncio.gather(*(_do(i) for i in idxs))
+    return {"ok": True, "data": "\n".join(out_lines).encode("utf-8"), "stats": stats}
+
+
+# ── P1（2026-08-18）：.pptx 保版式整篇翻译（与 .docx 同模式） ─────────────────
+def _collect_pptx_paragraphs(prs: Any) -> List[Any]:
+    """收集演示文稿全部待译段落：形状文本框（含组合形状递归）+ 表格单元格 + 备注页。"""
+    out: List[Any] = []
+
+    def _walk_shape(shape: Any) -> None:
+        try:
+            for sub in getattr(shape, "shapes", None) or []:   # 组合形状递归
+                _walk_shape(sub)
+        except Exception:
+            pass
+        try:
+            if getattr(shape, "has_text_frame", False):
+                out.extend(shape.text_frame.paragraphs)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        out.extend(cell.text_frame.paragraphs)
+        except Exception:
+            logger.debug("[pptx-xlate] 形状遍历异常（跳过该形状）", exc_info=True)
+
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            _walk_shape(shape)
+        try:
+            if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
+                out.extend(slide.notes_slide.notes_text_frame.paragraphs)
+        except Exception:
+            pass
+    return out
+
+
+def _set_pptx_paragraph_text(paragraph: Any, text: str) -> None:
+    """译文写回段落首 run、清空其余 run（与 docx 同折中：保住段级字体/样式）。"""
+    runs = paragraph.runs
+    if runs:
+        runs[0].text = text
+        for r in runs[1:]:
+            r.text = ""
+
+
+async def translate_pptx(
+    data: bytes,
+    *,
+    xlate: Any,
+    target_lang: str = "zh",
+    source_lang: str = "",
+    style: str = "chat",
+    engine: str = "",
+    max_concurrency: int = 4,
+    progress: ProgressCb = None,
+) -> Dict[str, Any]:
+    """翻译 .pptx 字节（保幻灯片版式/表格/备注），返回 {ok, data(bytes)?, stats, reason?}。"""
+    if not pptx_available():
+        return {"ok": False, "reason": "pptx_unavailable",
+                "message": "未安装 python-pptx，无法翻译 .pptx"}
+    from pptx import Presentation
+
+    try:
+        prs = await asyncio.to_thread(Presentation, BytesIO(data))
+    except Exception:
+        logger.debug("[pptx-xlate] 打开失败", exc_info=True)
+        return {"ok": False, "reason": "bad_pptx", "message": "文件损坏或非 .pptx 格式"}
+
+    paragraphs = [p for p in _collect_pptx_paragraphs(prs)
+                  if (getattr(p, "text", "") or "").strip()]
+    if len(paragraphs) > _MAX_PARAGRAPHS:
+        return {"ok": False, "reason": "too_many_segments",
+                "message": f"段落过多（上限 {_MAX_PARAGRAPHS}）"}
+
+    total = len(paragraphs)
+    sem = asyncio.Semaphore(max(1, int(max_concurrency)))
+    stats = {"total": total, "translated": 0, "failed": 0, "cached": 0}
+    _emit(progress, 0, total)
+
+    async def _do(paragraph: Any) -> None:
+        text = paragraph.text
+        async with sem:
+            try:
+                res = await xlate.translate(
+                    text, target_lang=target_lang, source_lang=source_lang,
+                    style=style, engine=engine)
+            except Exception:
+                stats["failed"] += 1
+                logger.debug("[pptx-xlate] 段翻译异常（保留原文）", exc_info=True)
+                _emit(progress, stats["translated"] + stats["failed"], total)
+                return
+        dst = (res.translated_text or "").strip() if res.ok else ""
+        if res.ok and dst:
+            _set_pptx_paragraph_text(paragraph, dst)
+            stats["translated"] += 1
+            if getattr(res, "cached", False):
+                stats["cached"] += 1
+        else:
+            stats["failed"] += 1
+        _emit(progress, stats["translated"] + stats["failed"], total)
+
+    await asyncio.gather(*(_do(p) for p in paragraphs))
+
+    out = BytesIO()
+    try:
+        await asyncio.to_thread(prs.save, out)
+    except Exception:
+        logger.debug("[pptx-xlate] 保存失败", exc_info=True)
+        return {"ok": False, "reason": "save_failed", "message": "译文写回失败"}
+    return {"ok": True, "data": out.getvalue(), "stats": stats}
+
+
 __all__ = [
     "translate_docx", "translate_xlsx", "translate_pdf_to_text",
-    "docx_available", "xlsx_available", "pdf_available", "SUPPORTED_EXT",
+    "translate_pptx", "translate_subtitle", "classify_subtitle_lines",
+    "docx_available", "xlsx_available", "pdf_available", "pptx_available",
+    "SUPPORTED_EXT",
 ]

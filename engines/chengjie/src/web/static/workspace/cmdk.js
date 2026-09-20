@@ -31,7 +31,7 @@
     '.cmdk-item .ck-ic{width:18px;text-align:center;flex-shrink:0;opacity:.75;}',
     '.cmdk-item .ck-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
     '.cmdk-item .ck-sub{font-size:11px;color:var(--tk-text-muted,#888);flex-shrink:0;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-    '.cmdk-item .ck-sub em,.cmdk-item .ck-lbl em{background:color-mix(in srgb,var(--tk-warn,#f59e0b) 28%,transparent);color:inherit;font-style:normal;border-radius:2px;padding:0 1px;}',
+    '.cmdk-item .ck-sub em,.cmdk-item .ck-lbl em{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 28%,transparent);color:inherit;font-style:normal;border-radius:2px;padding:0 1px;}',
     '.cmdk-item.active{background:color-mix(in srgb,var(--tk-brand,#2563eb) 12%,transparent);}',
     '.cmdk-item.active .ck-lbl{color:var(--tk-brand,#2563eb);font-weight:600;}',
     '.cmdk-empty{padding:18px 12px;text-align:center;color:var(--tk-text-muted,#888);font-size:13px;}',
@@ -100,7 +100,8 @@
 
   function harvestPages() {
     var out = [], seen = {};
-    var links = document.querySelectorAll('.ws-top a[href], #ws-more-menu a[href]');
+    /* 「更多」下拉已删（2026-08-14）：只采顶栏链接；主管看板经后台 Ctrl+K（nav_schema.CMD_EXTRA_ITEMS）可达 */
+    var links = document.querySelectorAll('.ws-top a[href]');
     links.forEach(function (a) {
       var url = a.getAttribute('href') || '';
       if (!url || url.charAt(0) === '#') return;
@@ -130,7 +131,10 @@
     { fn: 'setFilter', arg: 'waiting', key: 'ws.cmdk.act_filter_waiting', ic: '\u23f3' },
     { fn: 'setFilter', arg: 'sla', key: 'ws.cmdk.act_filter_sla', ic: '\ud83d\udea8' },
     { fn: 'setFilter', arg: 'unread', key: 'ws.cmdk.act_filter_unread', ic: '\u25cf' },
-    { fn: 'resetAllFilters', key: 'ws.cmdk.act_filter_all', ic: '\u27f2' }
+    { fn: 'resetAllFilters', key: 'ws.cmdk.act_filter_all', ic: '\u27f2' },
+    /* 报障（实施49 P1-9）：坐席出事时最快的键盘路径；函数由 _support.html 挂 window，
+       旧页面没有它 → harvestActions 的 typeof 闸自动跳过，不会出现死条目。 */
+    { fn: 'openSupportPanel', key: 'ws.cmdk.act_support', ic: '\ud83e\ude7a' }
   ];
 
   function harvestActions() {

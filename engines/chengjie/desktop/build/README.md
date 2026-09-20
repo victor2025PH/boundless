@@ -25,11 +25,64 @@ npm run build:backend          # = python build/build_backend.py
 cd desktop
 npm install
 npm run dist:win        # 或 dist:mac / dist（当前平台）
+# 改过 src/ 模板后一键：先重打 sidecar 再出安装包
+npm run dist:win:fresh
 ```
 
 `extraResources` 会把 `build/backend-dist/` 复制进安装包的 `resources/backend/`。
 运行时 `backend-launcher.js` 在发布态优先用 `resources/backend/backend(.exe)`，
 开发态回退系统 Python 跑仓库根 `main.py`。
+
+**安装器界面资产（2026-09-05）**：向导的品牌位图 `installerSidebar.bmp` /
+`installerHeader.bmp` 由 `brand-assets/build_installer_art.py` 生成并镜像到本目录（不要手
+工 P 图）；「安装前须知」页是按语言的 `license_zh_CN.rtf` / `license_en_US.rtf`，源文件是
+同目录的 `installer-notice.<lang>.txt`，改完跑 `node build/write-installer-notice.js` 重新生成
+（门禁按源 sha1 核对新鲜度）。`write-build-info.js` 还会写 `build/flavor.nsh`（gitignore）：非
+clean 形态的向导带琥珀「内测版」角标（`*-internal.bmp` 变体）与品牌栏后缀，缺文件按内测处理，
+所以对外干净包必须走 `npm run dist:win:clean`。页面流、颜色令牌、字体、DPI 等全在
+`installer.nsh` 顶部注释与 `.cursor/rules/chatx-desktop-install.mdc`「安装器界面/品牌层」一节。
+改完 `installer.nsh` 用隔离测试用户实弹：`build\smoke_uninstall.ps1`（静默通道契约）+
+`build\smoke_installer_ui.ps1`（交互向导全程截图），都需管理员、用 Windows PowerShell 5.1 跑。
+
+**新鲜度门禁（2026-08-08）**：`predist` / `predist:win` 会跑
+`python build/check_backend_freshness.py`。`build:backend` 成功后在
+`backend-dist/.source-fingerprint.json` 落源码内容指纹；若工作树相对该戳已脏，
+**拒打安装包**（防再出现「版本号新、sidecar 仍是旧 `_cancelMedia`」）。
+手动自检：`npm run check:backend-fresh`。
+
+**增量刷新档（2026-08-18）**：门禁红且变化**只落在 datas 类资产**
+（templates / static / shared/copilot / domains / config 种子 / platform 瘦模块——
+包内运行时按文件路径读，不进 exe）时，`npm run refresh:datas` 秒级把它们同步进
+`backend-dist/_internal` 并重落 stamp，免跑 ~7.5 分钟 PyInstaller。诚实性由
+stamp 逐文件明细的 diff 保证：任何编进 exe 的 `.py` 变了 → exit 3 自拒（须全量
+`build:backend`）；旧格式 stamp 无明细 → exit 4（全量重打一次即自举）。static/
+domains/platform 走与全量构建同一套暂存清洗（隐私/机密剔除断言原样生效）。
+门禁 `tests/test_backend_refresh_datas.py`；`--dry-run` 只看判定不动产物。
+一键智能档：`npm run dist:win:smart`＝先试增量刷新，被拒/失败自动落
+`build:backend`（含冒烟），然后 `dist:win`——不确定改动范围时用它最省心。
+
+**两包两渠道（L-5 2026-09-06，老板决策 D-L1）**：smart / clean 两种包各自有独立的
+自动更新渠道，渠道**烘在包里**（electron-builder 把 `publish.{url,channel}` 写进
+`resources/app-update.yml`，electron-updater 运行时只认这份文件），装了哪种包就永远
+跟哪条渠道，不需要坐席机上任何配置：
+
+| 形态 | 命令 | 产物目录 | 更新 yml | 更新源 |
+|---|---|---|---|---|
+| smart（内测，随包 seed-data） | `npm run dist:win` / `dist:win:smart` / `dist:win:fresh` | `dist/` | `latest-internal.yml` | `https://bd2026.cc/downloads/internal/` |
+| clean（对外干净包） | `npm run dist:win:clean` | `dist-clean/` | `latest.yml` | `https://bd2026.cc/downloads/` |
+| lite（定制精简档：2 人设 + 2 克隆音，计量不封顶） | `npm run dist:win:lite` | `dist-lite/` | `latest-lite.yml` | `https://bd2026.cc/downloads/lite/` |
+
+发布：`website/scripts/publish_chatx.ps1 -DistDir dist-clean`（公共渠道，老流程不变）+
+`publish_chatx.ps1 -DistDir dist -Channel internal`（只写 VPS/R2 的 `downloads/internal/`，
+不碰公共 `latest.yml` / `manifest.json` / 公告 feed）。天然互锁：smart 产物目录里**没有**
+`latest.yml`，不带 `-Channel internal` 去发它会在第一步就失败——K-5 那次「内测机点更新拿到
+干净包、出厂种子整体 no-op」的形态不会再发生。内测机切渠道＝手装一次 smart 包（此后自动更新
+只走 internal）；`deploy/desktop/chatx_fleet_status.ps1` 的 `edition` 列读包内 build-info /
+app-update.yml，一眼看出每台机器装的形态与跟的渠道。lite 同理有自己的渠道
+（`publish_chatx.ps1 -DistDir dist-lite -Channel lite`；2026-09-06 老板「需要拍板的按建议做」——
+此前 lite 跟公共 `latest.yml`，装 lite 的机器点更新会变成 clean 包；09-06 前装的 lite 包不带
+channel，客户要手装一次新 lite 包切渠道）。三条渠道互斥：每种构建只生成自己那一个 yml，
+发错渠道在 publish 第一步就被拒。
 
 ## 运行时行为（生命周期）
 

@@ -27,9 +27,9 @@
   --surf:  #111520;
   --card:  #181e2c;
   --bord:  #262f42;
-  --acc-rgb: var(--bd-acc-rgb, 79 122 255);   /* 跟随 brand.js 同步的中央三元组令牌（服务端+本地，跨设备白标）；无配置时回退无界蓝 */
+  --acc-rgb: var(--bd-acc-rgb, 30 107 240);   /* 跟随 brand.js 同步的中央三元组令牌（服务端+本地，跨设备白标）；无配置时回退无界蓝 */
   --acc:   rgb(var(--acc-rgb));
-  --acc2:  #a855f7;
+  --acc2:  #7a3bf5;
   --ok:    #22c55e;
   --red:   #ef4444;
   --txt:   #e5e9f5;
@@ -620,7 +620,7 @@ select:focus { outline:none; border-color:var(--acc); }
   font-size:16px; font-weight:700; color:#fff;
   background:linear-gradient(135deg, var(--acc), var(--acc2));
   cursor:pointer; transition:transform .1s, opacity .2s; user-select:none;
-  box-shadow:0 4px 18px #4f7aff30;
+  box-shadow:0 4px 18px #1e6bf030;
 }
 .mic:disabled { opacity:.45; cursor:not-allowed; }
 .mic.rec { background:linear-gradient(135deg, var(--red), #c026d3);
@@ -759,7 +759,7 @@ select:focus { outline:none; border-color:var(--acc); }
 /* 控制面板：极淡双色氛围渐变，增加层次 */
 .ctrl{ background:
   radial-gradient(130% 55% at 100% 0%, rgb(var(--acc-rgb) / .06), transparent 60%),
-  radial-gradient(130% 55% at 0% 100%, rgba(168,85,247,.05), transparent 55%),
+  radial-gradient(130% 55% at 0% 100%, rgba(122,59,245,.05), transparent 55%),
   var(--surf); }
 /* 顶栏：玻璃渐变 + 品牌字 */
 header{ background:linear-gradient(180deg,#141a28,#10141f); }
@@ -2690,7 +2690,7 @@ function startWaveAnim(){
     waveCtx2d.clearRect(0,0,w,h);
     // 渐变描边
     const grad=waveCtx2d.createLinearGradient(0,0,w,0);
-    grad.addColorStop(0,'#4f7aff'); grad.addColorStop(0.5,'#a855f7'); grad.addColorStop(1,'#4f7aff');
+    grad.addColorStop(0,'#1e6bf0'); grad.addColorStop(0.5,'#7a3bf5'); grad.addColorStop(1,'#1e6bf0');
     waveCtx2d.strokeStyle=grad; waveCtx2d.lineWidth=2;
     waveCtx2d.beginPath();
     const step=w/data.length;
@@ -2909,7 +2909,7 @@ function typeFlush(){
 const _MOOD_MAP={
   neutral:['😐','平静','rgba(0,0,0,.45)'], happy:['😄','开心','rgba(245,158,11,.55)'],
   excited:['🤩','兴奋','rgba(236,72,153,.55)'], gentle:['🤗','温柔','rgba(16,185,129,.5)'],
-  sad:['😔','低落','rgba(59,130,246,.5)'], surprised:['😮','惊讶','rgba(168,85,247,.55)'],
+  sad:['😔','低落','rgba(59,130,246,.5)'], surprised:['😮','惊讶','rgba(122,59,245,.55)'],
   serious:['🧐','认真','rgba(100,116,139,.55)'], calm:['😌','沉静','rgba(20,184,166,.5)'],
   angry:['😠','生气','rgba(239,68,68,.55)'], fearful:['😨','紧张','rgba(99,102,241,.5)']
 };

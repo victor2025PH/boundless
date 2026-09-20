@@ -16,11 +16,48 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("CrisisEventStore")
+
+# ── 落库即广播（#185 D7，2026-09-05）────────────────────────────────────────
+# R8 升级此前只走 escalation_needed webhook；桌面包没配 webhook ⇒ severe 命中谁也
+# 不知道。留痕行是「有人该看一眼」这个事实的唯一结构化落点，所以在 record() 成功
+# 后把整行推给进程内监听器（工作台徽标/置顶/案例桥接由 wellbeing_escalation_bridge
+# 订阅）。**不改 skill_manager**：它照常只调 record()。
+# 监听器异常一律吞掉——审计与桥接都是旁路，绝不反噬主回复。
+CrisisEventListener = Callable[[Dict[str, Any]], None]
+_LISTENERS: List[CrisisEventListener] = []
+_LISTENERS_LOCK = threading.Lock()
+
+
+def add_crisis_event_listener(fn: CrisisEventListener) -> None:
+    """注册「危机事件已落库」监听器（幂等：同一可调用对象只登记一次）。"""
+    with _LISTENERS_LOCK:
+        if fn not in _LISTENERS:
+            _LISTENERS.append(fn)
+
+
+def remove_crisis_event_listener(fn: CrisisEventListener) -> bool:
+    with _LISTENERS_LOCK:
+        try:
+            _LISTENERS.remove(fn)
+            return True
+        except ValueError:
+            return False
+
+
+def _notify_listeners(event: Dict[str, Any]) -> None:
+    with _LISTENERS_LOCK:
+        fns = list(_LISTENERS)
+    for fn in fns:
+        try:
+            fn(dict(event))
+        except Exception:  # noqa: BLE001
+            logger.debug("crisis_event listener failed: %r", fn, exc_info=True)
 
 
 class CrisisEventStore:
@@ -74,23 +111,37 @@ class CrisisEventStore:
         safety_override: bool = False,
         excerpt: str = "",
     ) -> Optional[int]:
-        """落一条危机事件；返回行 id，失败返回 None（绝不抛，避免影响主回复）。"""
+        """落一条危机事件；返回行 id，失败返回 None（绝不抛，避免影响主回复）。
+
+        落库成功后同步广播给 ``add_crisis_event_listener`` 登记的监听器（携 ``id``）。
+        """
+        now = time.time()
+        row: Dict[str, Any] = {
+            "user_id": str(user_id), "chat_id": str(chat_id), "level": str(level),
+            "category": str(category)[:32], "streak": int(streak),
+            "escalated": bool(escalated), "safety_override": bool(safety_override),
+            "excerpt": str(excerpt or "")[:120], "created_at": now,
+        }
         try:
             cur = self._conn.execute(
                 "INSERT INTO crisis_event (user_id, chat_id, level, category, streak,"
                 " escalated, safety_override, excerpt, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    str(user_id), str(chat_id), str(level), str(category)[:32],
-                    int(streak), 1 if escalated else 0, 1 if safety_override else 0,
-                    str(excerpt or "")[:120], time.time(),
+                    row["user_id"], row["chat_id"], row["level"], row["category"],
+                    row["streak"], 1 if escalated else 0, 1 if safety_override else 0,
+                    row["excerpt"], now,
                 ),
             )
             self._conn.commit()
-            return int(cur.lastrowid) if cur.lastrowid else None
+            rid = int(cur.lastrowid) if cur.lastrowid else None
         except Exception as e:  # noqa: BLE001
             logger.debug("crisis_event record failed: %s", e)
             return None
+        if rid is not None:
+            row["id"] = rid
+            _notify_listeners(row)
+        return rid
 
     def list_recent(
         self,
@@ -99,18 +150,27 @@ class CrisisEventStore:
         only_unhandled: bool = False,
         user_prefix: str = "",
         match_key: str = "",
+        since_id: int = 0,
+        only_escalated: bool = False,
     ) -> List[Dict[str, Any]]:
         """最近危机事件。
 
         ``user_prefix``：仅按 ``user_id`` 前缀筛（后台审计页用）。
         ``match_key``（R9e）：按 ``user_id`` 前缀**或** ``chat_id`` 精确匹配——一个 key
         同时覆盖 1:1 私聊（key=对端 user_id）与群聊（key=群 chat_id），供坐席侧栏用。
+        ``since_id`` / ``only_escalated``（#185 桥接补扫）：只取 id 大于水位且触发过
+        升级的行——看门狗兜底「监听器没接上时漏掉的升级事件」。
         """
         lim = max(1, min(int(limit or 50), 500))
         where = []
         params: List[Any] = []
         if only_unhandled:
             where.append("handled = 0")
+        if int(since_id or 0) > 0:
+            where.append("id > ?")
+            params.append(int(since_id))
+        if only_escalated:
+            where.append("escalated = 1")
         if user_prefix:
             where.append("user_id LIKE ?")
             params.append(f"{user_prefix}%")
@@ -159,6 +219,25 @@ class CrisisEventStore:
             logger.debug("crisis_event mark_handled failed: %s", e)
             return False
 
+    def max_id(self) -> int:
+        """当前最大行 id（0=空表）；看门狗补扫水位初始化用。"""
+        try:
+            row = self._conn.execute("SELECT MAX(id) FROM crisis_event").fetchone()
+            return int(row[0] or 0) if row else 0
+        except Exception:
+            return 0
+
+    def count_since(self, since_ts: float) -> int:
+        """``since_ts`` 之后的事件数（审计页「近 N 天」空态口径）。"""
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM crisis_event WHERE created_at >= ?",
+                (float(since_ts),),
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def count(self, *, only_unhandled: bool = False) -> int:
         try:
             q = "SELECT COUNT(*) FROM crisis_event"
@@ -170,4 +249,8 @@ class CrisisEventStore:
             return 0
 
 
-__all__ = ["CrisisEventStore"]
+__all__ = [
+    "CrisisEventStore",
+    "add_crisis_event_listener",
+    "remove_crisis_event_listener",
+]

@@ -32,12 +32,13 @@ def register_strategy_routes(app, ctx):
     _auto_snapshot = ctx.auto_snapshot
     _get_intent_display_names = ctx.get_intent_display_names
 
+    def _get_sm():
+        from src.web.web_context import resolve_skill_manager
+        return resolve_skill_manager(telegram_client, app)
+
     def _get_strategy_tracker():
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "strategy_tracker", None)
-        return None
+        sm = _get_sm()
+        return getattr(sm, "strategy_tracker", None) if sm else None
 
     @app.get("/strategies", response_class=HTMLResponse)
     async def strategies_page(request: Request, _=Depends(_page_auth)):
@@ -66,13 +67,13 @@ def register_strategy_routes(app, ctx):
         if not ok:
             raise HTTPException(500, msg)
         actor = request.session.get("username", "api")
-        _auto_snapshot("reply_strategies", snap_content, actor)
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm and hasattr(sm, "_refresh_strategies"):
-                sm._refresh_strategies()
+        snap_id = _auto_snapshot("reply_strategies", snap_content, actor) or ""
+        sm = _get_sm()
+        if sm and hasattr(sm, "_refresh_strategies"):
+            sm._refresh_strategies()
         if audit_store:
-            audit_store.log(actor, "update_strategy", strategy_id, "", str(body)[:100])
+            audit_store.log(actor, "update_strategy", strategy_id, "",
+                            str(body)[:100], snap_id)
         return {"ok": True, "strategy_id": strategy_id}
 
     @app.put("/api/strategies/mapping")
@@ -90,10 +91,9 @@ def register_strategy_routes(app, ctx):
         ok, msg = config_manager.save_strategies(rs)
         if not ok:
             raise HTTPException(500, msg)
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm and hasattr(sm, "_refresh_strategies"):
-                sm._refresh_strategies()
+        sm = _get_sm()
+        if sm and hasattr(sm, "_refresh_strategies"):
+            sm._refresh_strategies()
         if audit_store:
             audit_store.log("web_admin", "update_mapping", intent, "", sid)
         return {"ok": True, "intent": intent, "strategy_id": sid}
@@ -250,10 +250,9 @@ def register_strategy_routes(app, ctx):
         ok, msg = config_manager.save_strategies(rs)
         if not ok:
             raise HTTPException(500, msg)
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm and hasattr(sm, "_refresh_strategies"):
-                sm._refresh_strategies()
+        sm = _get_sm()
+        if sm and hasattr(sm, "_refresh_strategies"):
+            sm._refresh_strategies()
         if audit_store:
             audit_store.log(request.session.get("username", "web_admin"),
                             "update_ab_test", intent, "", str(body)[:200])

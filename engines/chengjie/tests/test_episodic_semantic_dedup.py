@@ -7,6 +7,8 @@ min_raw 早退、无 embedding 跳过、consolidate(dedup_threshold) 端到端�
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 from src.utils.episodic_memory_store import EpisodicMemoryStore
 from src.utils.episodic_vector import vec_to_blob
@@ -111,13 +113,15 @@ def test_stable_tier_untouched(mem):
     assert _exists(mem, s) and _exists(mem, r)
 
 
-def test_min_raw_short_circuits(mem):
+def test_min_raw_observe_only_no_delete(mem):
     uid = "u5"
     a = _add(mem, uid, "用户喜欢猫", _oh(0))
     b = _add(mem, uid, "用户养了猫", _oh(0, 1))
-    # raw 只有 2 条 < min_raw(默认6) → 直接跳过
+    # raw 只有 2 条 < min_raw(默认6) → 观察不删
     res = mem.merge_near_duplicates(uid)
     assert res["merged"] == 0
+    assert res["observe_only"] is True
+    assert res["held_merges"] >= 1  # 近义对本应并
     assert _exists(mem, a) and _exists(mem, b)
 
 
@@ -159,3 +163,159 @@ def test_consolidate_without_dedup_unchanged(mem):
     res = mem.consolidate(uid, min_hits=2)
     assert res["merged"] == 0
     assert res["promoted"] == 0
+
+
+# ── 灰区观测（2026-07-26：bge-m3 校准证明应并/禁并分布重叠 → 阈值不能降，
+#    「差一点就并」的对数是决策 LLM 仲裁合并的直接读数；只计数绝不影响合并）──
+
+
+def _vec_cos(c: float):
+    """与 _oh(0) 的余弦恰为 c 的单位向量。"""
+    v = [0.0] * _DIM
+    v[0] = c
+    v[1] = (1.0 - c * c) ** 0.5
+    return v
+
+
+def test_gray_zone_counted_not_merged(mem):
+    uid = "g1"
+    _pad(uid, mem)
+    a = _add(mem, uid, "那里正在下大雨", _oh(0))
+    b = _add(mem, uid, "用户那边下雨了", _vec_cos(0.80))  # 0.75≤0.80<0.92 灰区
+    res = mem.merge_near_duplicates(uid, threshold=0.92)
+    assert res["merged"] == 0
+    assert res["gray_pairs"] == 1
+    assert _exists(mem, a) and _exists(mem, b)
+
+
+def test_below_gray_band_not_counted(mem):
+    uid = "g2"
+    _pad(uid, mem)
+    _add(mem, uid, "用户喜欢猫", _oh(0))
+    _add(mem, uid, "用户住在北京", _vec_cos(0.5))  # < 0.92-0.17=0.75 不进灰区
+    res = mem.merge_near_duplicates(uid, threshold=0.92)
+    assert res["merged"] == 0
+    assert res["gray_pairs"] == 0
+
+
+def test_merged_pair_not_double_counted_as_gray(mem):
+    uid = "g3"
+    _pad(uid, mem)
+    _add(mem, uid, "用户喜欢猫", _oh(0))
+    _add(mem, uid, "用户养了一只猫", _vec_cos(0.95))  # ≥阈值 → 真并，不算灰区
+    res = mem.merge_near_duplicates(uid, threshold=0.92)
+    assert res["merged"] == 1
+    assert res["gray_pairs"] == 0
+
+
+def test_consolidate_passes_gray_pairs_through(mem):
+    uid = "g4"
+    _pad(uid, mem)
+    _add(mem, uid, "那里正在下大雨", _oh(0), hits=1)
+    _add(mem, uid, "用户那边下雨了", _vec_cos(0.80), hits=1)
+    res = mem.consolidate(uid, min_hits=2, dedup_threshold=0.92)
+    assert res["merged"] == 0
+    assert res["gray_pairs"] == 1
+    # 不传 dedup_threshold → 不扫描 → 灰区恒 0
+    res2 = mem.consolidate(uid, min_hits=2)
+    assert res2["gray_pairs"] == 0
+
+
+# ── 进程级去重观测快照（P5：workspace metrics 消费）─────────────────────
+
+
+def test_dedup_stats_accumulate_and_snapshot_isolated(mem):
+    uid = "g5"
+    _pad(uid, mem)
+    _add(mem, uid, "那里正在下大雨", _oh(0))
+    _add(mem, uid, "用户那边下雨了", _vec_cos(0.80))   # 灰区
+    _add(mem, uid, "用户喜欢猫", _oh(1))
+    _add(mem, uid, "用户养了一只猫", [0.0, 0.95, (1 - 0.95**2) ** 0.5]
+         + [0.0] * (_DIM - 3))                          # 与 _oh(1) 余弦 0.95 → 真并
+    mem.merge_near_duplicates(uid, threshold=0.92)
+    mem.merge_near_duplicates(uid, threshold=0.92)      # 第二轮（并后仍有灰区对）
+    snap = mem.dedup_stats_snapshot()
+    assert snap["scans"] == 2
+    assert snap["merged"] == 1
+    assert snap["gray_pairs"] >= 2
+    assert snap["last_gray_at"] > 0
+    assert "×" in snap["last_gray_example"]
+    # 快照是拷贝：外部改动不得污染内部状态
+    snap["scans"] = 999
+    assert mem.dedup_stats_snapshot()["scans"] == 2
+
+
+def test_observe_only_below_min_raw_counts_never_merges(mem):
+    """P7：raw < min_raw 仍扫灰区，但绝不 DELETE（观察与合并门槛解耦）。"""
+    uid = "g6"
+    a = _add(mem, uid, "那里正在下大雨", _oh(0))
+    b = _add(mem, uid, "用户那边下雨了", _vec_cos(0.80))   # 灰区
+    c = _add(mem, uid, "用户喜欢猫", _oh(1))
+    d = _add(mem, uid, "用户养了一只猫",
+             [0.0, 0.95, (1 - 0.95 ** 2) ** 0.5] + [0.0] * (_DIM - 3))
+    res = mem.merge_near_duplicates(uid, threshold=0.92)  # 默认 min_raw=6
+    assert res["observe_only"] is True
+    assert res["merged"] == 0
+    assert res["gray_pairs"] >= 1
+    assert res["held_merges"] >= 1  # 猫近义对本应并，被门槛挡住
+    assert all(_exists(mem, rid) for rid in (a, b, c, d))
+    snap = mem.dedup_stats_snapshot()
+    assert snap["scans"] == 1 and snap["observe_only_scans"] == 1
+    assert snap["merged"] == 0 and snap["held_merges"] >= 1
+
+
+def test_raw_lt_2_still_short_circuits(mem):
+    uid = "g6b"
+    _add(mem, uid, "用户喜欢猫", _oh(0))
+    res = mem.merge_near_duplicates(uid, threshold=0.92, min_raw=6)
+    assert res["merged"] == 0 and res["gray_pairs"] == 0
+    assert mem.dedup_stats_snapshot()["scans"] == 0
+
+
+def test_workspace_metrics_exposes_episodic_dedup(mem):
+    # 注意：本文件有 `from __future__ import annotations`，_auth 的 Request 注解
+    # 是惰性字符串——FastAPI 解析依赖注解时按模块全局解析，故 fastapi 导入必须在
+    # 模块级（放函数内会解析失败 → r 被当查询参数 → 422）。
+    from src.web.routes.drafts_routes import register_metrics_route
+
+    uid = "g7"
+    _pad(uid, mem)
+    _add(mem, uid, "那里正在下大雨", _oh(0))
+    _add(mem, uid, "用户那边下雨了", _vec_cos(0.80))
+    mem.merge_near_duplicates(uid, threshold=0.92)
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _inject(req: Request, call_next):
+        req.scope["session"] = {"role": "admin", "user_id": "u1"}
+        return await call_next(req)
+
+    class _SM:  # 只需 _episodic_store 属性的最小桩
+        pass
+
+    def _auth(r: Request):
+        return True
+
+    sm = _SM()
+    sm._episodic_store = mem
+    app.state.skill_manager = sm
+    register_metrics_route(app, api_auth=_auth)
+    c = TestClient(app, raise_server_exceptions=True)
+
+    m = c.get("/api/workspace/metrics").json()
+    ed = m.get("episodic_dedup")
+    assert ed is not None
+    assert ed["scans"] == 1 and ed["gray_pairs"] == 1
+
+    # store 未接（无 skill_manager）→ 键缺省而非报错
+    app2 = FastAPI()
+
+    @app2.middleware("http")
+    async def _inject2(req: Request, call_next):
+        req.scope["session"] = {"role": "admin", "user_id": "u1"}
+        return await call_next(req)
+
+    register_metrics_route(app2, api_auth=_auth)
+    c2 = TestClient(app2, raise_server_exceptions=True)
+    assert "episodic_dedup" not in c2.get("/api/workspace/metrics").json()

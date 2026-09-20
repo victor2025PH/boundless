@@ -1,17 +1,58 @@
-/* 亮色语义色(网页端)。宿主在 <html data-cp-theme="light">。 */
+/* 亮色语义色(网页端)。宿主在 <html data-cp-theme="light">。
+   强调色接无界智连蓝 --bl-growth（需宿主先挂 brand.css；缺省时 fallback
+   仍是同一色值，保证未挂品牌令牌时也不回落到旧 Tailwind 蓝）。 */
 :root[data-cp-theme="light"],
 .cp-theme-light {
+  /* UA 原生件（滚动条/表单件）跟随亮色；iframe(app.html) 是独立文档，
+     不继承宿主的 color-scheme —— 必须在主题文件里自带（2026-08-17）。 */
+  color-scheme: light;
+  /* 统一细滚动条 thumb 色（cp-panel-base 注入 scrollbar-color 消费；track 恒透明） */
+  --cp-sb-thumb: rgba(100, 116, 139, .45);
   --cp-bg: #f8fafc;
   --cp-surface: #ffffff;
   --cp-surface-2: #f1f5f9;
   --cp-border: #e2e8f0;
   --cp-text: #1e293b;
-  --cp-text-dim: #64748b;
-  --cp-text-tiny: #94a3b8;
-  --cp-accent: #2563eb;
-  --cp-accent-weak: rgba(37, 99, 235, .1);
+  /* 2026-08-28 亮色同批收口：旧值 dim #64748b 贴 --cp-surface-2 只有 4.35:1、
+     tiny #94a3b8 白底仅 2.56:1（远低于 WCAG AA 4.5，是「说明文字看不清」在亮色
+     侧的同一个病）。改为与 base.html 亮色 --t2/--t3 同档，两种面上都过线。 */
+  --cp-text-dim: #4b5563;
+  --cp-text-tiny: #5b6b85;
+  --cp-accent: var(--bl-growth, #1e8cf2);
+  --cp-accent-hover: var(--bl-growth-600, #0d76d9);
+  --cp-accent-weak: rgba(30, 140, 242, .12);
+  /* accent-deep=强调深档(直说 pill 文字/色条)；accent-bg=淡强调底；bg-soft=柔和底 */
+  --cp-accent-deep: var(--bl-growth-700, #0b64b7);
+  --cp-accent-bg: var(--bl-growth-50, #eef6fe);
+  /* accent-border=info 级提示描边（cp-voice 语种改道说明等「说明非警告」条） */
+  --cp-accent-border: rgba(30, 140, 242, .38);
+  --cp-bg-soft: #f1f5f9;
   --cp-ok: #0f9d75;
   --cp-warn: #d97706;
   --cp-danger: #dc2626;
+  /* violet=协作/@提及/关系阶段(暧昧档)强调色（cp-collab 阶段 chip 用；
+     cp-goal 自定义目标高亮卡同色） */
+  --cp-violet: #7c3aed;
+  /* goal-*=工作目标场景类别色（cp-goal 建目标向导：卡片色条/图标/弹层色带）
+     转化=琥珀 关系=玫红 唤回=天蓝 摸底=青绿 */
+  --cp-goal-conv: #b45309;
+  --cp-goal-rel: #e11d48;
+  --cp-goal-eng: #0284c7;
+  --cp-goal-disc: #0d9488;
+  /* sprint=限时节奏（今天收口 / 这轮聊完）弹层色带；与转化琥珀同系、再亮一档 */
+  --cp-goal-sprint: #d97706;
+  /* gold=目标「达成」收入时刻金带（cp-goal 终局卡；与工作台达成 toast 同色系） */
+  --cp-gold: #ca8a04;
   --cp-track: #e2e8f0;
+  /* 语义状态 底/描边/文字（2026-08-17）：组件内禁再裸写亮色 hex——
+     暗色主题下浅色实心底=白块，配近白 --cp-text 直接不可读
+     （cp-persona 选中卡实锤事故）。亮色值恒=迁移前字面量（零视觉回归）。 */
+  --cp-ok-bg: #ecfdf5;
+  /* ok-border=成功态描边（cp-voice 结论行 .pv-verdict.ok，N-4 B）；与 warn-border 同档：亮色取 emerald-200 */
+  --cp-ok-border: #a7f3d0;
+  --cp-warn-bg: #fffbeb;
+  --cp-warn-border: #fde68a;
+  --cp-warn-ink: #b45309;
+  /* danger-bg=危险淡底（cp-nurture go_live 确认框/真跑 chip 等危险确认面） */
+  --cp-danger-bg: #fef2f2;
 }

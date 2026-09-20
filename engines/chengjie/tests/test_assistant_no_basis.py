@@ -1,0 +1,425 @@
+# -*- coding: utf-8 -*-
+"""小智「没依据」哨兵门禁（实施74 P4，2026-08-27）。
+
+## 背景
+
+提示词里一直写着「参考条目覆盖不到时诚实说明」，但那句话**只对用户生效**：
+路由无从判断 LLM 究竟是答了还是拒了，于是
+
+  * `qa_log` 恒记 `answered=True` → 自答率虚高、ops「未答清单」看不见缺口；
+  * `report_hint` 不亮 → 用户在最该有出路的时刻反而没有出路。
+
+## 为什么是哨兵，不是「答前先判一次」
+
+先做过可行性测量，两条路都否了：
+
+  * **嵌入余弦分不开**（2026-08-27 实测）：正样本 query↔命中条目余弦最低
+    0.455，而最危险的「产品形状但语料没覆盖」类负样本是 0.56~0.61，**全部落在
+    正样本区间内**。余弦量的是话题相关性，不是「这段文档能否回答这个问题」。
+  * **再调一次 LLM 当裁判**要多一个往返，给每条问答加延迟。
+
+而**正在答题的那个 LLM 本来就同时看着问题和参考条目**——它就是最合适的裁判，
+让它自己声明 `NO_BASIS` 等于零额外成本。
+
+## 本门禁守的三条
+
+1. **命中哨兵时用户一个字都看不到**（首段缓冲；先吐半句再撤回比不撤更糟）；
+2. **`answered=False` 要记真话**（否则自答率继续骗人）；
+3. **fail-open**：哨兵出现在正文中间不算数，正常回答绝不被误伤。
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from src.web.routes.assistant_routes import _is_no_basis
+
+ROOT = Path(__file__).resolve().parents[1]
+ROUTES = ROOT / "src" / "web" / "routes" / "assistant_routes.py"
+BALL = ROOT / "shared" / "assistant" / "assistant-ball.js"
+
+
+# ── 1. 判定函数本身 ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("text", [
+    "NO_BASIS",
+    "NO_BASIS\n",
+    "  NO_BASIS  ",
+    "no_basis",                      # 大小写不敏感
+    "NO_BASIS 参考条目里没有相关内容",
+])
+def test_sentinel_detected(text):
+    assert _is_no_basis(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "在「用量与额度」页可以看到本月消耗。[S1]",
+    # 关键：哨兵出现在**正文中间**不算数——否则一条正常回答里只要提到这个词
+    # 就会被整段吞掉（用户什么也看不到，比答错更糟）
+    "你可以这样做：如果系统返回 NO_BASIS 说明没有依据。",
+    "no basis",                      # 少了下划线，不是哨兵
+    None,
+])
+def test_sentinel_not_falsely_triggered(text):
+    assert _is_no_basis(text) is False
+
+
+# ── 2. 流式门闸：命中哨兵必须零输出 ─────────────────────────────────────────
+
+def _simulate_stream(pieces, sentinel="NO_BASIS"):
+    """复刻路由里的首段缓冲门闸逻辑，返回 (吐给用户的文本, 完整答案)。
+
+    刻意复刻而不是导入：那段逻辑长在一个巨大的 async 生成器里，端到端跑要拉起
+    整个 app + 假 LLM。这里守的是**算法不变量**；接线由
+    `test_route_wiring_uses_the_gate` 用静态断言兜住。
+    """
+    answer = ""
+    emitted = []
+    head_buf = ""
+    gate_open = False
+    for piece in pieces:
+        answer += piece
+        if gate_open:
+            emitted.append(piece)
+            continue
+        head_buf += piece
+        if len(head_buf.lstrip()) < len(sentinel):
+            continue
+        if head_buf.lstrip().upper().startswith(sentinel):
+            break
+        gate_open = True
+        emitted.append(head_buf)
+    if not gate_open and head_buf and not head_buf.lstrip().upper().startswith(sentinel):
+        emitted.append(head_buf)
+    return "".join(emitted), answer
+
+
+def test_stream_emits_nothing_when_sentinel():
+    """逐 token 到达时也必须一个字都不吐。"""
+    out, answer = _simulate_stream(["NO", "_BA", "SIS", "\n没有依据"])
+    assert out == "", f"命中哨兵却吐了内容：{out!r}"
+    assert answer.startswith("NO_BASIS")
+
+
+def test_stream_emits_everything_when_normal():
+    """正常回答一个字都不能少（缓冲不得吞掉开头）。"""
+    pieces = ["在「用量", "与额度」", "页可以看到", "本月消耗。[S1]"]
+    out, answer = _simulate_stream(pieces)
+    assert out == answer == "".join(pieces)
+
+
+def test_stream_handles_answer_shorter_than_sentinel():
+    """回答比哨兵还短时不能把它吞掉（首版最容易漏的边界）。"""
+    out, answer = _simulate_stream(["好的"])
+    assert out == answer == "好的"
+
+
+def test_stream_sentinel_midway_is_not_swallowed():
+    """哨兵词出现在正文中间 → 正常输出，不误伤。"""
+    pieces = ["这个功能在设置页；", "若返回 NO_BASIS 表示没查到。"]
+    out, _ = _simulate_stream(pieces)
+    assert out == "".join(pieces)
+
+
+# ── 3. 接线（静态）─────────────────────────────────────────────────────────
+
+def test_route_wiring_uses_the_gate():
+    src = ROUTES.read_text(encoding="utf-8")
+    assert "_NO_BASIS = \"NO_BASIS\"" in src, "哨兵常量丢了"
+    assert "def _is_no_basis" in src, "判定函数丢了"
+    assert "head_buf" in src and "gate_open" in src, "流式首段缓冲门闸丢了"
+    # 非流式回落路径也必须先判后吐
+    assert "if not _is_no_basis(answer):" in src, (
+        "非流式回落路径未做哨兵判定——那条路会把 NO_BASIS 原样吐给用户"
+    )
+
+
+def test_prompt_teaches_the_sentinel_in_both_languages():
+    """中英两套提示词都要教 LLM 这个约定，否则对应语种全程不生效。"""
+    src = ROUTES.read_text(encoding="utf-8")
+    zh = src.split("你是本客服系统的产品内置帮助助手", 1)
+    en = src.split("You are the in-product help assistant", 1)
+    assert len(zh) == 2 and len(en) == 2, "找不到中/英提示词块"
+    for name, blob in (("zh", zh[1][:1500]), ("en", en[1][:1500])):
+        assert "_NO_BASIS" in blob or "NO_BASIS" in blob, (
+            f"{name} 提示词没有教 NO_BASIS 约定"
+        )
+
+
+def test_no_basis_records_answered_false():
+    """自答率必须记真话——这是 ops「未答清单」能看见缺口的前提。"""
+    src = ROUTES.read_text(encoding="utf-8")
+    block = src.split("if _is_no_basis(answer):", 1)
+    assert len(block) == 2, "找不到哨兵处置分支"
+    # 窗口 900→2600（2026-09-02）：实施93 在分支头部加了「NO_BASIS 客观复核」
+    # 确定性护栏（强命中 ≥120 转告条目原文并如实记 answered=True——那是真答上
+    # 了，不是骗），拒答记账被推到 900 字符之外；本门禁守的是**拒答路径记真话**，
+    # 窗口只需盖住整个分支。
+    seg = block[1][:2600]
+    assert "answered=False" in seg, "哨兵分支仍记 answered=True，自答率会继续骗人"
+    # 用「调用 + 参数」两段判，别钉整串字面量：2026-08-29 这行因为要多带
+    # refusal 分型而换行了，钉字面量只会在下次换行时再红一次。
+    assert "record_query(" in seg and "answered=False" in seg, "stats 未同步记未答"
+    assert "asb.a.no_hit" in seg, "未给用户诚实说明（复用零命中同一文案）"
+
+
+def test_client_shows_report_entry_on_unanswered():
+    """答不上来时前端必须给报障入口——只看 meta.report_hint 会漏掉这一刻。"""
+    js = BALL.read_text(encoding="utf-8")
+    assert re.search(r"done\.answered\s*===\s*false", js), (
+        "assistant-ball.js 未按 done.answered===false 补报障入口"
+    )
+    assert "noBasis" in js and "to-report" in js
+
+
+# ── 4. 端到端：真跑一遍路由 ─────────────────────────────────────────────────
+# 复用 test_assistant_routes 的夹具（单一事实源，别再造第二套 app 装配）。
+
+def test_end_to_end_sentinel_never_leaks_to_user(monkeypatch, tmp_path):
+    """假 LLM 返回 `NO_BASIS` → 用户看到的是诚实说明，且**绝不出现哨兵**。
+
+    这条比模拟流更硬：真的过一遍路由（非流式回落路径），验证
+    「判定 → 不吐原文 → 换诚实文案 → answered=False」整条链。
+    """
+    from tests.test_assistant_routes import (
+        _FakeAI, _client, _mk_app, _stream_events,
+    )
+
+    app, ai, log, *_ = _mk_app(monkeypatch, tmp_path,
+                               fake_ai=_FakeAI(answer="NO_BASIS"))
+    c = _client(app)
+    r = c.post("/api/assistant/query",
+               json={"q": "怎么发语音", "page": "/workspace"})
+    assert r.status_code == 200
+    evs = _stream_events(r)
+    kinds = [e["ev"] for e in evs]
+    assert kinds == ["meta", "delta", "done"], kinds
+
+    body = evs[1].get("text") or ""
+    assert "NO_BASIS" not in body.upper(), f"哨兵泄露给用户了：{body!r}"
+    assert body.strip(), "拒答时也必须给用户一句话，不能空白"
+    assert evs[2]["answered"] is False, "哨兵命中却记成答上了"
+
+
+def test_end_to_end_records_refusal_kind_and_health_surfaces_it(
+        monkeypatch, tmp_path):
+    """端到端：哨兵拒答后，健康端点能看见「是哨兵拒的」而不只是「没答上」。
+
+    这是本机制**能不能被观测**的验收：哨兵依赖模型行为（LLM 得肯输出
+    NO_BASIS），不单独计数就无从判断它到底在不在工作。
+    """
+    from tests.test_assistant_routes import _FakeAI, _client, _mk_app
+
+    app, *_ = _mk_app(monkeypatch, tmp_path, fake_ai=_FakeAI(answer="NO_BASIS"))
+    c = _client(app)
+    c.post("/api/assistant/query", json={"q": "怎么发语音", "page": "/workspace"})
+
+    h = c.get("/api/assistant/health").json()
+    proc = h["process"]
+    assert proc["miss_no_basis"] == 1, f"进程计数没记到哨兵拒答：{proc}"
+    assert proc["miss_no_hit"] == 0
+    qa = h["qa_7d"]
+    assert qa["miss_no_basis"] == 1, f"持久口径没记到哨兵拒答：{qa}"
+    assert qa["no_basis_share"] == 1.0
+
+
+def test_end_to_end_zero_hit_counts_as_no_hit(monkeypatch, tmp_path):
+    """检索零命中且**连产品事实卡也答不了** → 记成 no_hit（补语料）。
+
+    ⚠ 前提在 2026-08-29 变了：零命中不再自动等于「未答」——它先转产品事实卡/
+    通用知识链，那一轮很可能真的答出来（那正是「支持抖音吗」该走的路）。所以
+    要测 no_hit，假 LLM 必须回 NO_BASIS，代表「这条链也答不了」。
+    分型语义本身不变：answered=0 且没有 top_score（零命中没得可传）＝ no_hit。
+    """
+    from tests.test_assistant_routes import _FakeAI, _client, _mk_app
+
+    app, *_ = _mk_app(monkeypatch, tmp_path, fake_ai=_FakeAI(answer="NO_BASIS"))
+    c = _client(app)
+    # 纯拉丁乱词 → BM25 零命中（与 test_assistant_core 同款探针）
+    c.post("/api/assistant/query",
+           json={"q": "qqxyzzy foobar zzzz", "page": "/workspace"})
+
+    h = c.get("/api/assistant/health").json()
+    assert h["process"]["miss_no_hit"] == 1, h["process"]
+    assert h["process"]["miss_no_basis"] == 0
+    assert h["qa_7d"]["miss_no_hit"] == 1
+    assert h["qa_7d"]["no_basis_share"] == 0.0
+
+
+def test_end_to_end_zero_hit_can_now_be_answered(monkeypatch, tmp_path):
+    """零命中但产品事实卡答得了 → 记 answered=True，**不该**进未答清单。
+
+    这是本次行为变更的正向断言：老板实录「支持抖音吗」被拒答，而答案就在
+    产品事实卡里。若它仍被记成 miss，ops 的「未答清单」会催人去补一条根本
+    不缺的语料。
+    """
+    from tests.test_assistant_routes import _FakeAI, _client, _mk_app
+
+    app, *_ = _mk_app(monkeypatch, tmp_path,
+                      fake_ai=_FakeAI(answer="目前对接 Telegram 等，抖音暂不支持。"))
+    c = _client(app)
+    c.post("/api/assistant/query",
+           json={"q": "qqxyzzy foobar zzzz", "page": "/workspace"})
+
+    h = c.get("/api/assistant/health").json()
+    assert h["process"]["miss_no_hit"] == 0, h["process"]
+    assert h["process"]["miss_no_basis"] == 0
+
+
+def test_qa_log_infers_kind_from_top_score_without_schema_change(tmp_path):
+    """分型靠既有 top_score 列推断——**零改表**，且对历史数据同样成立。
+
+    判据：`answered=0 且 top_score>0` = 检索命中但 LLM 拒答（哨兵）；
+    `answered=0 且 top_score<=0` = 检索零命中。这条不变量一旦被改（比如
+    有人给零命中分支补传 top_score），历史账会被重新解释成另一个含义。
+    """
+    from src.assistant.qa_log import AssistantQALog
+
+    log = AssistantQALog(tmp_path / "qa.db")
+    common = dict(user_id="u", role="admin", page="/p")
+    log.record(q="a", answered=True, top_score=88.0, **common)
+    log.record(q="b", answered=False, top_score=0.0, **common)     # 零命中
+    log.record(q="c", answered=False, top_score=61.5, **common)    # 哨兵
+    log.record(q="d", answered=False, top_score=42.0, **common)    # 哨兵
+
+    s = log.stats(days=7)
+    assert s["n"] == 4 and s["answered"] == 1
+    assert s["miss"] == 3
+    assert s["miss_no_hit"] == 1
+    assert s["miss_no_basis"] == 2
+    assert s["no_basis_share"] == round(2 / 3, 3)
+
+
+def test_stats_refusal_kind_is_backward_compatible():
+    """旧调用方不传 refusal 也不能炸，且只进总数不污染分型。"""
+    from src.assistant.stats import AssistantStats
+
+    st = AssistantStats()
+    st.record_query(answered=False)                      # 旧签名
+    st.record_query(answered=False, refusal="no_hit")
+    st.record_query(answered=False, refusal="no_basis")
+    st.record_query(answered=True)
+    d = st.dump()
+    assert d["miss"] == 3, "总数必须包含未分型的那条"
+    assert d["miss_no_hit"] == 1 and d["miss_no_basis"] == 1
+    assert d["answered"] == 1
+    prom = st.dump_prom()
+    assert "assistant_miss_no_basis_total 1" in prom
+    assert "assistant_miss_no_hit_total 1" in prom
+
+
+def test_route_tags_both_refusal_kinds():
+    """两种拒答成因都必须被标出来——漏一个就把它们混成一个数。
+
+    2026-08-29 起两条路合流成一处 record（零命中先走产品事实卡链），分型由
+    `refusal="no_basis" if strong else "no_hit"` 现算，所以这里只钉「两个值都
+    在」；「跟随 strong」由 test_refusal_kind_follows_retrieval 单独钉死。
+    """
+    src = ROUTES.read_text(encoding="utf-8")
+    assert '"no_hit"' in src, "零命中成因未标 refusal 类型"
+    assert '"no_basis"' in src, "哨兵成因未标 refusal 类型"
+
+
+# ── 5. 拒答分型的可观测性（实施74 P5）──────────────────────────────────────
+# 哨兵是**依赖模型行为**的机制（LLM 得肯输出约定词）。它不工作时不会报错，
+# 只会退回「把沾边条目硬凑成答案」——在别处完全看不出来。所以「哨兵触发了
+# 多少次」必须可观测，否则整个机制是黑箱。
+
+def test_stats_split_is_derived_from_top_score(tmp_path):
+    """分型语义：`answered=0 且 top_score>0` = 哨兵拒答，`<=0` = 零命中。
+
+    这是**零迁移**方案（不加列，靠既有 top_score 推导），代价是语义隐含在
+    两个 record() 调用点的参数差异里——本用例把它变成显式契约。
+    """
+    from src.assistant.qa_log import AssistantQALog
+
+    log = AssistantQALog(tmp_path / "qa.db")
+    log.record(user_id="u", role="admin", page="/p", q="答得上的",
+               answered=True, top_score=88.0, sources="howto:x")
+    # 零命中：不传 top_score/sources（与路由零命中分支一致）
+    log.record(user_id="u", role="admin", page="/p", q="零命中的", answered=False)
+    # 哨兵：命中了但 LLM 自认答不了 → 必带 top_score
+    log.record(user_id="u", role="admin", page="/p", q="没依据的",
+               answered=False, top_score=96.4, sources="term:btn_export")
+
+    s = log.stats(days=7)
+    assert s["n"] == 3 and s["answered"] == 1
+    assert s["miss"] == 2
+    assert s["miss_no_hit"] == 1, "零命中未被正确归类"
+    assert s["miss_no_basis"] == 1, "哨兵拒答未被正确归类"
+    assert s["no_basis_share"] == 0.5
+
+
+def test_top_score_is_bound_to_retrieval_not_to_branch():
+    """top_score **只在检索真命中时**才进记账——分型语义的唯一支点。
+
+    ⚠ 2026-08-29 起实现形态变了（原先是「零命中分支 vs 哨兵分支」两处 record，
+    各自参数不同）：零命中不再直接拒答，而是转入产品事实卡/通用知识链，于是
+    两条路合流成一处 record，靠 `if strong:` 决定带不带 top_score。
+    语义完全没变（`answered=0 且 top_score>0` ＝哨兵；`<=0` ＝零命中），
+    但断言必须跟着钉新形态——否则这条门禁只是在找一段已经不存在的文本。
+    """
+    src = ROUTES.read_text(encoding="utf-8")
+    head, sep, tail = src.partition("_rec: Dict[str, Any] = {")
+    assert sep, "找不到统一记账字典 _rec（记账形态又变了？）"
+    seg = tail[:400]
+    assert "if strong:" in seg and '_rec["top_score"]' in seg, (
+        "top_score 未与 strong 绑定——docless 轮压根没有检索命中，"
+        "给它记一个分数会让零命中被算成「哨兵拒答」，看板两个数对调"
+    )
+    # 反向：字典**初始化**里不许直接塞 top_score（那会无条件带上）
+    init = seg.split("if strong:", 1)[0]
+    assert "top_score" not in init, "top_score 进了无条件初始化，分型会永远反转"
+
+
+def test_refusal_kind_follows_retrieval():
+    """拒答归因必须跟随 strong：命中了才叫 no_basis，没命中就是 no_hit。"""
+    src = ROUTES.read_text(encoding="utf-8")
+    assert 'refusal="no_basis" if strong else "no_hit"' in src, (
+        "拒答分型未跟随检索结果——两种成因会混成一个数，"
+        "运营分不清该补语料（no_hit）还是该改检索/条目（no_basis）"
+    )
+
+
+def test_ops_card_surfaces_the_breakdown():
+    """分型必须真的画到 ops 卡上——算出来没人看等于没做。
+
+    额外钉住「哨兵零触发亮黄」：那是本行存在的**主要理由**（有拒答但哨兵
+    一次没响 = 机制没在工作），不能被简化掉。
+    """
+    tpl = (ROOT / "src" / "web" / "templates" / "ops_overview.html").read_text(
+        encoding="utf-8")
+    for key in ("ov2_as_refuse", "ov2_as_refuse_hit", "ov2_as_refuse_basis",
+                "ov2_as_refuse_silent", "ov2_as_refuse_tip"):
+        assert key in tpl, f"ops 卡未消费 {key}"
+    assert "miss_no_basis" in tpl and "miss_no_hit" in tpl, "ops 卡未读分型字段"
+    assert "opsSetCardLight('assist', 'yellow')" in tpl, "哨兵零触发未亮黄"
+
+
+def test_refusal_i18n_keys_are_bilingual():
+    from src.web.i18n_packs.assistant_ball import EN, ZH
+
+    for key in ("ov2_as_refuse", "ov2_as_refuse_hit", "ov2_as_refuse_basis",
+                "ov2_as_refuse_tip", "ov2_as_refuse_none",
+                "ov2_as_refuse_silent"):
+        assert ZH.get(key), f"{key} 缺中文"
+        assert EN.get(key), f"{key} 缺英文"
+
+
+def test_end_to_end_normal_answer_unaffected(monkeypatch, tmp_path):
+    """正常回答一字不改地到达用户（哨兵机制绝不能误伤主路径）。"""
+    from tests.test_assistant_routes import (
+        _FakeAI, _client, _mk_app, _stream_events,
+    )
+
+    normal = "在坐席工作台右栏「语音」组件生成后发送。[S1]"
+    app, *_ = _mk_app(monkeypatch, tmp_path, fake_ai=_FakeAI(answer=normal))
+    c = _client(app)
+    r = c.post("/api/assistant/query",
+               json={"q": "怎么发语音", "page": "/workspace"})
+    evs = _stream_events(r)
+    assert evs[1]["text"] == normal
+    assert evs[2]["answered"] is True

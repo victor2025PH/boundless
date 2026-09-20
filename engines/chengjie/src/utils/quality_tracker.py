@@ -84,8 +84,15 @@ class QualityTracker:
             issues.append("garbled")
         if elapsed_ms > 30000:
             issues.append("slow_response")
-        if r and re.search(r"(作为|我是)(一个)?(AI|人工智能|语言模型)", r):
-            issues.append("identity_leak")
+        # identity_leak 判定与人设守卫共用同一口径（persona_guard，2026-07-20）：
+        # 旧简版正则会把「怕你觉得我是AI客服机器人」这类感知语境打趣误报成泄漏。
+        try:
+            from src.utils.persona_guard import matches_ai_self_identity
+            if r and matches_ai_self_identity(r):
+                issues.append("identity_leak")
+        except Exception:
+            if r and re.search(r"(作为|我是)(一个)?(AI|人工智能|语言模型)", r):
+                issues.append("identity_leak")
         return issues
 
     def get_summary(self) -> Dict:

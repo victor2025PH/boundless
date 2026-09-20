@@ -1,0 +1,10 @@
+{
+  "_comment": "模板。真值文件 config/vpn_config.json 已进 .gitignore，勿提交（2026-08-27 P0：曾以明文 VLESS UUID+端点入库约 4 个月，凭据已按泄露处置）。复制本文件为 vpn_config.json 后填真值；8 个读取方见 src/behavior/vpn_manager.py::_CONFIG_FILE 及同族调用。",
+  "uri": "vless://<UUID>@<SERVER_HOST>:<PORT>?encryption=none&security=none&type=ws&path=%2F#<REMARK>",
+  "protocol": "vless",
+  "server": "<SERVER_HOST>",
+  "port": "<PORT>",
+  "remark": "<REMARK>",
+  "transport": "ws",
+  "updated_at": "1970-01-01 00:00:00"
+}

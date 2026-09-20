@@ -30,6 +30,31 @@ logger = logging.getLogger(__name__)
 # 身份陈述保护（这些语境里名字自称是**合法**的，绝不改写）：
 # "我是林小雨" "我叫林小雨" "叫我林小雨/小雨就行" "这里是林小雨"
 _IDENTITY_LEAD_RE = r"(?:我是|我叫|叫我|这里是|人家是|就是)\s*"
+# 名字「提及」保护（2026-07-26 实锤：问对方名字的句子被改坏——
+# 「所以你是叫"林小雨"还是另有其名呀？」→「所以你是叫"我"还是另有其名呀？」真发出去了）。
+# 引号包住的名字、「叫＋名」命名语境、「你是/是不是＋名＋吗/还是」问名句式里，
+# 名字是被当作**名字本身**在谈论（mention），不是第三人称自称（use），改成「我」必坏语义。
+_Q_OPEN_CLS = "[「『“‘\"'＂＇]"
+_Q_CLOSE_CLS = "[」』”’\"'＂＇]"
+
+
+def _mention_protect_patterns(esc: str) -> list:
+    """名字被「提及」而非「自称」的语境模式（按序护住，宁护勿改）。"""
+    opt_q = _Q_OPEN_CLS + r"?\s*"
+    return [
+        # 引号内的名字（"林小雨"/「林小雨」）＝对名字本身的提及
+        _Q_OPEN_CLS + r"\s*" + esc + r"\s*" + _Q_CLOSE_CLS,
+        # 身份陈述（原有语义）+ 允许引号（我是"林小雨"）
+        _IDENTITY_LEAD_RE + opt_q + esc,
+        # 「叫＋名」命名语境：你是叫X / 也叫X / 名字叫X / 就叫X…
+        r"叫\s*" + opt_q + esc,
+        # 问名/认名句式：你是X吗 / 是不是X呀 / 你是X还是…（名后须接疑问尾/连接词，
+        # 「你是X的粉丝」这类真第三人称仍照常改写）
+        r"(?:你是|您是|是不是)\s*" + opt_q + esc
+        + r"(?=还是|[吗呀吧呢啊哦嘛么？?!！，。、\s]|$)",
+        # 「名字是＋名」
+        r"(?:名字|真名|昵称|大名|艺名|网名|花名)\s*(?:是|为)\s*" + opt_q + esc,
+    ]
 
 
 def sanitize_self_reference(text: str, persona_name: str) -> Tuple[str, int]:
@@ -37,7 +62,8 @@ def sanitize_self_reference(text: str, persona_name: str) -> Tuple[str, int]:
 
     保护语境：
       - 身份陈述（"我是{名}/我叫{名}/叫我{名}"）——合法自我介绍；
-      - 名字后紧跟「说/觉得/表示」且前面出现引号——转述他人评价（罕见，保守放过）。
+      - 名字提及（引号内 / 「叫＋名」 / 问名句式 / 「名字是＋名」）——谈论名字本身，
+        改写必坏语义（2026-07-26 实锤：「你是叫"林小雨"还是另有其名」被改成「叫"我"」）。
     其余出现一律视为第三人称自称（"{名}现在不太方便" "{名}今天好开心"），
     正常人聊天不这样说话（2026-07-15 实锤穿帮）。名字后紧跟「我」时去重
     （"{名}我跟你说" → "我跟你说"）。空名/文本不含名 → 原样零成本返回。
@@ -47,14 +73,16 @@ def sanitize_self_reference(text: str, persona_name: str) -> Tuple[str, int]:
     if not t or not name or name not in t:
         return t, 0
     esc = re.escape(name)
-    # ① 先把身份陈述用占位符护住
+    # ① 先把「身份陈述/名字提及」语境用占位符护住
     protected: list = []
 
     def _protect(m: "re.Match") -> str:
         protected.append(m.group(0))
         return f"\x00{len(protected) - 1}\x01"
 
-    guarded = re.sub(_IDENTITY_LEAD_RE + esc, _protect, t)
+    guarded = t
+    for pat in _mention_protect_patterns(esc):
+        guarded = re.sub(pat, _protect, guarded)
     # ② 剩余名字出现 → 「我」；名字后原本就跟着「我」→ 直接去掉名字防"我我"
     n = len(re.findall(esc, guarded))
     if n:
@@ -64,6 +92,28 @@ def sanitize_self_reference(text: str, persona_name: str) -> Tuple[str, int]:
     for i, seg in enumerate(protected):
         guarded = guarded.replace(f"\x00{i}\x01", seg)
     return guarded, n
+
+
+# 句尾悬空开括号清理（2026-07-26 实锤：LLM 偶发只吐半截「うーん…「」就停——
+# 停在开括号上的输出必然是残句，砍掉悬空开括号后至少还是句完整的话）。
+# 只收无歧义的**开**符号；ASCII 直引号 "/' 开闭同形，句尾出现可能是合法闭引号，不动。
+_DANGLING_OPENERS = "「『（【《〈[{(“‘"
+
+
+def strip_dangling_opener(text: str) -> Tuple[str, int]:
+    """去掉文本**末尾**悬空的开括号/开引号（纯函数，只动结尾、宁少勿多）。
+
+    返回 (清理后文本, 清理个数)。剩余为空时不动原文（绝不产出空消息）。
+    """
+    t = str(text or "")
+    stripped = t.rstrip()
+    n = 0
+    while stripped and stripped[-1] in _DANGLING_OPENERS:
+        stripped = stripped[:-1].rstrip()
+        n += 1
+    if n and stripped:
+        return stripped, n
+    return t, 0
 
 
 def _normalize_for_repeat(text: str) -> str:
@@ -115,13 +165,24 @@ def get_outbound_guard() -> OutboundRecentGuard:
 
 def outbound_quality_pass(
     text: str, *, chat_id: Any = None, persona_name: str = "",
+    lang_mix: bool = True,
 ) -> str:
     """发送口统一过检：自称改写 + 复读检测（指标/日志），返回应发送的文本。
 
     任何内部异常都返回原文——质量关卡绝不能把消息卡死。
+
+    ``lang_mix``（#97 实施91）：出站收口点混语兜底——A 线原生回复的**发送口**
+    也过一道确定性剥除（出稿口守卫之后文本仍可能被后续层改写，且历史上
+    「守卫罩不到的路径」正是击穿点；本参数默认开，纯确定性零 LLM）。
     """
     try:
         out = str(text or "")
+        cleaned, dn = strip_dangling_opener(out)
+        if dn:
+            logger.warning(
+                "[outbound_quality] 句尾悬空开括号已清理 ×%d: %r → %r",
+                dn, out[:60], cleaned[:60])
+            out = cleaned
         fixed, n = sanitize_self_reference(out, persona_name)
         if n:
             logger.warning(
@@ -133,6 +194,21 @@ def outbound_quality_pass(
             except Exception:
                 pass
             out = fixed
+        if lang_mix:
+            try:
+                from src.ai.outbound_text_guard import sendpoint_lang_mix_pass
+                deflected, act = sendpoint_lang_mix_pass(out)
+                if act == "hard_stripped":
+                    logger.warning(
+                        "[outbound_quality] 发送口混语兜底已剥 CJK（#97）: "
+                        "%r → %r", out[:60], deflected[:60])
+                    out = deflected
+                elif act == "hard_kept":
+                    logger.warning(
+                        "[outbound_quality] 发送口混语命中但剥后过短，保留原文"
+                        "（#97）: %r", out[:60])
+            except Exception:
+                pass
         if get_outbound_guard().note_and_check(chat_id, out):
             logger.warning(
                 "[outbound_quality] 出站复读（同会话近 5 条内一字不差）chat=%s: %r",

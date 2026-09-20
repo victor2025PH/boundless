@@ -23,8 +23,9 @@ import os
 import tempfile
 import threading
 import time
+import zlib
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.ai.voice_fitness import VoiceDecision
 
@@ -211,6 +212,27 @@ def preflight_voice_synth(
     return None
 
 
+async def _refine_emotion(voice_ctx: Dict[str, Any], text: str) -> Any:
+    """关键词读不出情绪时让小模型补判一次（见 voice_emotion_llm 的三条自我约束）。
+
+    默认关；出任何岔子都退回 ``resolve_effective_voice_context`` 的确定性结果——
+    这层的上限是「语气更贴」，下限必须是「和没有它时一样」。
+    """
+    spec = voice_ctx.get("emotion")
+    try:
+        from src.ai.voice_emotion_llm import refine_emotion
+        vc = voice_ctx.get("voice_cfg") or {}
+        # 端点借口语化链的（``avatar_voice.colloquial.llm_endpoints``，与
+        # TTSPipeline.prepass_colloquial_llm 同一处取值）；老形状也认一下
+        av = vc.get("avatar_voice") if isinstance(vc.get("avatar_voice"), dict) else {}
+        col = av.get("colloquial") or vc.get("colloquial")
+        return await refine_emotion(
+            spec, text, voice_cfg=vc, colloquial_cfg=col)
+    except Exception:
+        logger.debug("[voice_autosend] 情绪补判异常（忽略）", exc_info=True)
+        return spec
+
+
 def _reject_edge_fallback(meta: VoiceStageMeta, no_edge: bool) -> bool:
     """True=应拒发（克隆不可达却走了 edge 兜底）。"""
     if not no_edge:
@@ -278,6 +300,15 @@ def record_voice_sent(
         if meta.get("truncation_retried"):
             _METRICS["truncation_retries"] = int(
                 _METRICS.get("truncation_retries", 0)) + 1
+    # 语音断档台账（2026-08-02）：本函数是 B 线「真发出语音」的既有单一出口，
+    # 顺带喂 voice_outage（低流量下连续失败的看门狗判据）。best-effort 绝不阻塞。
+    try:
+        from src.ai.voice_outage import get_voice_outage
+        # 桌面桥（wechat_pc 虚拟声卡）单独成链，避免被其它 autosend 成功盖住断档灯
+        src = "desktop_bridge" if prov == "desktop_bridge" else "autosend"
+        get_voice_outage().record_voice_attempt(True, src)
+    except Exception:
+        pass
 
 
 def record_voice_fallback(reason: str) -> None:
@@ -287,6 +318,14 @@ def record_voice_fallback(reason: str) -> None:
         _METRICS["last_reason"] = r
         _bump_counter(_METRICS.setdefault("fallback_reasons", {}), r)
         _METRICS["last_ts"] = time.time()
+    # 语音断档台账（2026-08-02）：B 线「已决定发语音但失败回落文字」的单一出口。
+    try:
+        from src.ai.voice_outage import get_voice_outage
+        # driver_* = 桌面桥守卫/配额（mic_busy / voice_daily_cap / record / play）
+        src = "desktop_bridge" if r.startswith("driver_") else "autosend"
+        get_voice_outage().record_voice_attempt(False, src, r)
+    except Exception:
+        pass
 
 
 def record_voice_decision(send_voice: bool, reason: str) -> None:
@@ -324,11 +363,65 @@ def resolve_voice_autosend_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+def global_voice_reply_off(config: Optional[Dict[str, Any]]) -> bool:
+    """B120（实施74）：全局「启用语音回复」是否被**显式关闭**。
+
+    自动回复设置页的「启用语音回复」开关写 ``inbox.l2_autosend.voice.enabled``
+    （见 reply_settings.html data-hot-chip）。0826 ``_588/_589`` + 0827 07:18
+    实录：用户关了它，主动关怀/仪式链的语音照发——各自动语音链各读各的开关，
+    没有一个「总闸」语义。
+
+    统一语义（本函数是唯一判定口）：
+
+    - **显式 false**（键存在且为假）＝用户明确关声 → 所有自动语音链路禁声：
+      B 线 autosend（本就读同键）、主动触达/仪式 opener（proactive_topic）、
+      A 线 TG voice_reply（sender）。
+    - **键缺席** ＝ 保持各链自己的开关各管各（存量部署零行为变化）。
+    - 坐席手动 send-voice **刻意豁免**——人的明示决定不受 AI 自动开关约束
+      （与「人工通过≠AI自动发」同一原则）。
+    - RPA 平台链（whatsapp/line/messenger 的 ``voice_output``）各平台页有独立
+      可见开关，且 runner 只持平台段配置——本闸暂不透传（实施74 备案，如需
+      「一关全关」属结构改动走后续批次）。
+    """
+    try:
+        vb = (((config or {}).get("inbox") or {}).get("l2_autosend") or {}).get(
+            "voice")
+        return isinstance(vb, dict) and "enabled" in vb and not bool(
+            vb.get("enabled"))
+    except Exception:
+        return False
+
+
+# 客户**明确点名要语音/唱歌**时，放宽长度上限到该硬帽（~30s 语音；避免绝口不发，
+# 也避免几分钟语音）。低于此仍强制走语音——「发条语音/唱首歌」得不到语音是实录事故。
+_REQUEST_HARD_CAP = 300
+
+
+def effective_voice_block(
+    voice_block: Dict[str, Any], platform: str = "",
+) -> Dict[str, Any]:
+    """按平台套用 ``voice.platform_triggers`` 触发覆写（纯函数，P1 2026-08-03）。
+
+    ``platform_triggers = {platform: trigger}``：如 Messenger 语音链路弱 →
+    ``{messenger: never}`` 只关一个平台的语音，其余平台不受影响。非法触发值/
+    未知平台 → 忽略（跟随全局 trigger）。返回副本且剥除 ``platform_triggers``
+    自身键，喂 ``decide_voice`` 的块保持旧契约。
+    """
+    vb = dict(voice_block or {})
+    pt = vb.pop("platform_triggers", None)
+    if platform and isinstance(pt, dict):
+        t = str(pt.get(str(platform).lower()) or "").strip().lower()
+        if t in _VALID_TRIGGERS:
+            vb["trigger"] = t
+    return vb
+
+
 def decide_voice(
     voice_block: Dict[str, Any],
     text: str,
     *,
     peer_sent_voice: bool = False,
+    peer_requested_voice: bool = False,
     recent_voice_ratio: float = 0.0,
     peer_emotion: str = "",
     peer_emotion_intensity: float = -1.0,
@@ -339,6 +432,9 @@ def decide_voice(
 
     统一 4 档 trigger 与 smart 评分的**单一入口**；``should_send_voice`` 是其布尔投影。
     - ``enabled=false`` / 空文本 / 长度越界 → 文字（reason: disabled/empty/too_short/too_long）。
+    - ``peer_requested_voice``（客户点名「发条语音/唱首歌/想听你声音」）→ **强制语音**
+      （2026-07-29 对练补漏：打字要语音永远得不到语音，AI 打字冒充唱歌）；仅 never
+      档 / 空 / 超硬上限(300) 例外，绕过 smart/频率/对等判定。
     - ``trigger``：``never`` / ``always`` / ``when_peer_voice``（默认，对等）/ ``smart``。
     - ``smart``：委托 ``ai.voice_fitness.voice_fitness``——按**回复情绪 + 客户此刻情绪 +
       亲密度 + 频率**综合评分，``score ≥ threshold`` 才语音。调用方采集并传入
@@ -359,11 +455,16 @@ def decide_voice(
         min_chars, max_chars = 1, _DEFAULT_MAX_CHARS
     if n < min_chars:
         return VoiceDecision(False, 0.0, "too_short")
-    if n > max_chars:
-        return VoiceDecision(False, 0.0, "too_long")
     trigger = str(vb.get("trigger", "when_peer_voice") or "when_peer_voice").lower()
     if trigger not in _VALID_TRIGGERS:
         trigger = "when_peer_voice"
+    # 客户点名要语音：强制（never 除外；长度放宽到硬上限）——先于 max_chars/smart 判。
+    if peer_requested_voice and trigger != "never":
+        if n > max(max_chars, _REQUEST_HARD_CAP):
+            return VoiceDecision(False, 0.0, "too_long")
+        return VoiceDecision(True, 1.0, "peer_requested")
+    if n > max_chars:
+        return VoiceDecision(False, 0.0, "too_long")
     if trigger == "never":
         return VoiceDecision(False, 0.0, "trigger_never")
     if trigger == "always":
@@ -390,6 +491,7 @@ def should_send_voice(
     text: str,
     *,
     peer_sent_voice: bool = False,
+    peer_requested_voice: bool = False,
     recent_voice_ratio: float = 0.0,
     peer_emotion: str = "",
     peer_emotion_intensity: float = -1.0,
@@ -399,6 +501,7 @@ def should_send_voice(
     """``decide_voice`` 的布尔投影（向后兼容）。含 reason 的完整决策见 ``decide_voice``。"""
     return decide_voice(
         voice_block, text, peer_sent_voice=peer_sent_voice,
+        peer_requested_voice=peer_requested_voice,
         recent_voice_ratio=recent_voice_ratio, peer_emotion=peer_emotion,
         peer_emotion_intensity=peer_emotion_intensity, intimacy=intimacy,
         crisis_block=crisis_block).send_voice
@@ -455,6 +558,42 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         logger.debug("[voice_autosend] resolve_voice_cfg 失败", exc_info=True)
         _set_synth_failure("resolve_voice_failed")
         return None, meta
+    voice_ctx["emotion"] = await _refine_emotion(voice_ctx, text)
+    # L-2 #205 三态「不发语音」（D-L4 新建人设缺省）：合成前就判文字，不打引擎、
+    # 不算合成失败（metrics 原因=persona_voice_off，与引擎故障分开看）。
+    if str((voice_cfg.get("voice_profile") or {}).get("voice_mode") or "").lower() == "off":
+        meta["voice_mode"] = "off"
+        _set_synth_failure("persona_voice_off")
+        logger.info("[voice_autosend] 人设设为不发语音 → 文字 pid=%s", persona_id)
+        return None, meta
+    # L-2 #205 三态「不发语音」：合成前直接回落文字（不进语言路由/快检/TTS，
+    # metrics 原因独立成桶，别与「合成失败」混在一起）。
+    if (voice_cfg.get("voice_profile") or {}).get("voice_mode") == "off":
+        meta["voice_mode"] = "off"
+        _set_synth_failure("persona_voice_off")
+        logger.info("[voice_autosend] 人设设为不发语音 pid=%s → 文字", persona_id)
+        return None, meta
+    # 语言路由（粤语→粤语音色 + follow_text 音色跟随文本语种）：主动选择而非
+    # 兜底降级 → 免受 no_edge 拒发/快检。必须在 preflight 之前：路由命中后
+    # backend 已非克隆类，"克隆不可达"快检自然放行。
+    _lang_route = ""
+    try:
+        from src.ai.lang_voice_route import is_reject_tag, route_voice_cfg_for_text
+        voice_cfg, _lang_route = route_voice_cfg_for_text(voice_cfg, text, config)
+        if is_reject_tag(_lang_route):
+            # 拒发守卫：文本语种明确但无匹配音色——发错语言的语音比不发更糟
+            # （生产实锤：ja 音色念中文被客户当"讲日语"投诉）→ 回落文字。
+            meta["lang_route"] = _lang_route
+            _set_synth_failure("lang_mismatch")
+            logger.info(
+                "[voice_autosend] 语言不匹配拒发语音（%s）pid=%s len=%d → 回落文字",
+                _lang_route, persona_id, meta["synth_text_len"])
+            return None, meta
+        if _lang_route:
+            meta["lang_route"] = _lang_route
+            _no_edge = False
+    except Exception:
+        logger.debug("[voice_autosend] 语言路由异常（忽略）", exc_info=True)
     skip = preflight_voice_synth(
         config, _vb, persona_id, text, voice_cfg=voice_cfg)
     if skip:
@@ -475,7 +614,9 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
     _spoken = None
     try:
         from src.ai.spoken_variant import take_spoken_variant
-        _spoken = take_spoken_variant(text)
+        _spoken = take_spoken_variant(
+            text, scope=str(account_id or ""),
+        )
     except Exception:
         _spoken = None
     synth_src = _spoken or text
@@ -491,9 +632,13 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
             suspect_tts_truncation,
         )
         tts = TTSPipeline(voice_cfg)
+        # Q-22 #304：会话计划语种（Q-21 conv_lang_plan.tts_lang；未合并前为空=
+        # 管线按出站文本检测语种）
+        from src.ai.tts_pipeline import log_skip_voice, plan_tts_lang
         result = await tts.synthesize(
             synth_src, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
-            pre_colloquialized=bool(_spoken))
+            pre_colloquialized=bool(_spoken),
+            tts_lang=plan_tts_lang(platform, account_id or "default", contact_key or ""))
     except Exception:
         logger.debug("[voice_autosend] TTS 合成异常", exc_info=True)
         _set_synth_failure("synth_exception")
@@ -501,6 +646,11 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
     if not getattr(result, "ok", False) or not getattr(result, "audio_path", ""):
         meta["provider"] = str(getattr(result, "provider", "") or "")
         meta["error"] = str(getattr(result, "error", "") or "")
+        # Q-22 C：克隆不可用 / 语种不一致 → 一行 skip_voice，改发文字（不出系统音）
+        _skip = log_skip_voice(
+            result, conv=f"{platform}:{account_id or 'default'}:{contact_key or ''}")
+        if _skip:
+            meta["skip_voice"] = _skip
         _set_synth_failure(str(meta["error"] or "synth_failed"))
         return None, meta
 
@@ -589,14 +739,317 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         return None, meta
 
     audio_path = result.audio_path
+    # PTT 硬闸：转码失败 / 非 ogg-opus → 回落文字，禁止 WAV/MP3 按 voice 出站
+    # （2026-08-04 智拓 .198：Baileys 硬标 opus，假格式=客户侧「无法下载音频」）
     try:
-        from src.client.voice_sender import convert_to_ogg_opus
-        converted = await asyncio.to_thread(convert_to_ogg_opus, audio_path, delete_src=True)
+        from src.client.voice_ptt_gate import ensure_ptt_ogg
+        converted, why = await asyncio.to_thread(
+            ensure_ptt_ogg, audio_path, delete_src=True, platform=platform)
         if converted:
             return converted, meta
+        _set_synth_failure(why or "ptt_convert_failed")
+        meta["ptt_reject"] = why or "ptt_convert_failed"
+        logger.warning(
+            "[voice_autosend] PTT 闸拒绝 → 回落文字 reason=%s pid=%s",
+            why or "ptt_convert_failed", persona_id)
     except Exception:
-        logger.debug("[voice_autosend] OGG 转码失败，按原格式", exc_info=True)
-    return audio_path, meta
+        _set_synth_failure("ptt_gate_error")
+        meta["ptt_reject"] = "ptt_gate_error"
+        logger.warning("[voice_autosend] PTT 闸异常 → 回落文字", exc_info=True)
+        try:
+            os.unlink(audio_path)
+        except Exception:
+            pass
+    return None, meta
+
+
+# ── B 线分条发送（P0-4，2026-08-03「20 秒长语音」修复）────────────────────────
+# 生产实测 B 线语音均长 56 字（p90=97）＝20~30 秒一整条；真人微信语音是 3-10 秒
+# 碎条、常连发。A 线 telegram.voice_reply 早有 split_send，B 线（全平台 autosend）
+# 此前只会一条到底。配置 ``inbox.l2_autosend.voice.split_send``（键名与 A 线对齐：
+# enabled / min_total_chars / part_max_chars / max_parts / min_tail_chars），默认关。
+
+
+def resolve_split_send_cfg(voice_block: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``inbox.l2_autosend.voice.split_send`` 解析（B 线分条，默认关）。纯函数。"""
+    raw = (voice_block or {}).get("split_send")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _i(key: str, dv: int) -> int:
+        try:
+            return int(raw.get(key, dv) or dv)
+        except (TypeError, ValueError):
+            return dv
+
+    try:
+        gap_max = float(raw.get("gap_max_sec", 6.0) or 6.0)
+    except (TypeError, ValueError):
+        gap_max = 6.0
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "min_total_chars": _i("min_total_chars", 40),
+        "part_max_chars": _i("part_max_chars", 36),
+        "max_parts": _i("max_parts", 3),
+        "min_tail_chars": _i("min_tail_chars", 8),
+        "gap_max_sec": gap_max,
+    }
+
+
+def part_gap_seconds(
+    part_text: str, duration_ms: int, *, gap_max_sec: float = 6.0,
+) -> float:
+    """发下一条语音前的等待秒数（条间节奏拟人）。纯函数、确定性。
+
+    真人连发语音的物理约束：上一条发出后，下一条要**按住录完**才能发——
+    间隔与「本条时长」正相关。crc32(文本) 做确定性抖动（可测可复现，无 RNG）。
+    夹 [0.9, gap_max_sec]，绝不把投递拖过分钟级。
+    """
+    dur_sec = max(0.0, float(duration_ms or 0) / 1000.0)
+    seed = zlib.crc32(str(part_text or "").encode("utf-8"))
+    jitter = (seed % 100) / 100.0 * 1.2
+    gap = 0.6 + dur_sec * 0.45 + jitter
+    try:
+        cap = float(gap_max_sec or 6.0)
+    except (TypeError, ValueError):
+        cap = 6.0
+    return max(0.9, min(cap, gap))
+
+
+async def stage_voice_parts(
+    config: Dict[str, Any],
+    platform: str,
+    account_id: str,
+    persona_id: str,
+    text: str,
+    *,
+    out_dir: Optional[str] = None,
+    contact_key: Optional[str] = None,
+) -> Optional[List[Tuple[str, str, VoiceStageMeta]]]:
+    """B 线分条 staging：长回复切 2-3 条短语音，**全部合成成功**才返回列表。
+
+    不满足（未开 / 文本短 / 切不出 ≥2 条）或任一条失败 → None，调用方回落
+    ``stage_voice_file`` 单条整段旧路径——行为绝不劣化；「先全部合成成功才逐条发」
+    的 A 线不变量在本层保证（绝不「说一半」）。消费掉的生成层口语版失败时会
+    **重新入暂存**，单条路径仍可取用。每条 meta 附 ``part_text``（该条转写，
+    调用方作 inbox 镜像）与 ``part_index``/``parts_total``。
+    """
+    vb = resolve_voice_autosend_cfg(config)
+    sp = resolve_split_send_cfg(vb)
+    if not sp["enabled"]:
+        return None
+    core = str(text or "").strip()
+    # 2026-09-12：总长门槛按文字系统折算（英文 40 字符≈8 个词，切两条毫无意义）
+    from src.ai.voice_clone_client import effective_min_total as _emt
+    if len(core) < _emt(core, sp["min_total_chars"]):
+        return None
+    od = out_dir or str(Path(tempfile.gettempdir()) / "autosend_voice")
+
+    # ── 上下文/路由/预检（与 _synth_ogg 同口径，各一次）─────────────────────
+    no_edge = resolve_no_edge_fallback(config, vb)
+    try:
+        from src.ai.persona_voice import resolve_effective_voice_context
+        voice_ctx = resolve_effective_voice_context(
+            config or {}, persona_id=persona_id or None,
+            chat_key=contact_key, contact_key=contact_key,
+            platform=platform, account_id=account_id, text=core)
+        voice_cfg = voice_ctx.get("voice_cfg") or {}
+    except Exception:
+        logger.debug("[voice_autosend] 分条 resolve_voice_cfg 失败 → 回落单条",
+                     exc_info=True)
+        return None
+    voice_ctx["emotion"] = await _refine_emotion(voice_ctx, core)
+    try:
+        from src.ai.lang_voice_route import is_reject_tag, route_voice_cfg_for_text
+        voice_cfg, _route = route_voice_cfg_for_text(voice_cfg, core, config)
+        if is_reject_tag(_route):
+            return None        # 语言不匹配：交单条路径做拒发记账（同判定）
+        if _route:
+            no_edge = False
+    except Exception:
+        logger.debug("[voice_autosend] 分条语言路由异常（忽略）", exc_info=True)
+    if preflight_voice_synth(config, vb, persona_id, core, voice_cfg=voice_cfg):
+        return None            # 克隆不可达等：交单条路径记 skip 原因
+    voice_cfg["enabled"] = True
+    voice_cfg["out_dir"] = od
+    if no_edge:
+        voice_cfg["fallback_on_error"] = False
+    if "tts_cache" not in voice_cfg:
+        voice_cfg["tts_cache"] = {"enabled": False}
+
+    # ── 生成层口语版（一次，按整段书面稿哈希取）→ 整段 LLM 口语化（一次）────
+    _spoken = None
+    try:
+        from src.ai.spoken_variant import take_spoken_variant
+        _spoken = take_spoken_variant(core, scope=str(account_id or ""))
+    except Exception:
+        _spoken = None
+    synth_src = _spoken or core
+
+    def _restash_spoken() -> None:
+        if not _spoken:
+            return
+        try:
+            from src.ai.spoken_variant import stash_spoken_variant
+            stash_spoken_variant(core, _spoken, scope=str(account_id or ""))
+        except Exception:
+            pass
+
+    try:
+        from src.ai.tts_pipeline import TTSPipeline
+        tts = TTSPipeline(voice_cfg)
+    except Exception:
+        logger.debug("[voice_autosend] 分条 TTSPipeline 构造失败", exc_info=True)
+        _restash_spoken()
+        return None
+    if not _spoken:
+        try:
+            _pre = await tts.prepass_colloquial_llm(
+                synth_src, spec=voice_ctx.get("emotion"), colloquial_lead=True)
+            if _pre:
+                synth_src = _pre
+        except Exception:
+            logger.debug("[voice_autosend] 分条整段口语化异常（忽略）", exc_info=True)
+
+    from src.ai.voice_clone_client import pack_voice_parts
+    parts = pack_voice_parts(
+        synth_src,
+        part_max_chars=sp["part_max_chars"],
+        max_parts=sp["max_parts"],
+        min_tail_chars=sp["min_tail_chars"])
+    if len(parts) < 2:
+        _restash_spoken()
+        return None
+
+    # ── 逐条合成（全成才发；任一失败 → 清理已 stage 文件回落单条）────────────
+    staged: List[Tuple[str, str, VoiceStageMeta]] = []
+
+    def _cleanup() -> None:
+        for _loc, _u, _m in staged:
+            try:
+                os.remove(_loc)
+            except Exception:
+                pass
+
+    try:
+        from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+        _qg = resolve_quality_gate(vb)
+    except Exception:
+        _qg = {"enabled": False, "min_sec_per_unit": 0.0, "min_units": 0}
+    for i, part in enumerate(parts):
+        try:
+            result = await tts.synthesize(
+                part, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                colloquial_lead=(i == 0),
+                pre_colloquialized=bool(_spoken),
+                skip_llm_colloquial=True,
+                split_part=True)
+        except Exception:
+            logger.debug("[voice_autosend] 分条第 %d 条合成异常", i, exc_info=True)
+            _cleanup()
+            _restash_spoken()
+            return None
+        if not getattr(result, "ok", False) or not getattr(result, "audio_path", ""):
+            logger.info(
+                "[voice_autosend] 分条第 %d/%d 条合成失败（%s）→ 回落单条",
+                i + 1, len(parts), str(getattr(result, "error", "") or "?"))
+            _cleanup()
+            _restash_spoken()
+            return None
+        if should_reject_voice_tts_result(result, no_edge=no_edge):
+            _cleanup()
+            _restash_spoken()
+            try:
+                os.unlink(result.audio_path)
+            except Exception:
+                pass
+            return None
+        if _qg.get("enabled"):
+            _bad, _why = looks_truncated(
+                part, float(getattr(result, "duration_sec", 0) or 0),
+                min_sec_per_unit=_qg["min_sec_per_unit"],
+                min_units=_qg["min_units"])
+            if _bad:
+                logger.info(
+                    "[voice_autosend] 分条第 %d 条疑似截断(%s) → 回落单条",
+                    i + 1, _why)
+                _cleanup()
+                _restash_spoken()
+                try:
+                    os.unlink(result.audio_path)
+                except Exception:
+                    pass
+                return None
+        audio_path = result.audio_path
+        try:
+            from src.client.voice_ptt_gate import ensure_ptt_ogg, looks_like_ogg_opus
+            converted, why = await asyncio.to_thread(
+                ensure_ptt_ogg, audio_path, delete_src=True, platform=platform)
+            if not converted:
+                logger.warning(
+                    "[voice_autosend] 分条第 %d 条 PTT 闸拒绝(%s) → 回落单条/文字",
+                    i + 1, why or "ptt_convert_failed")
+                _set_synth_failure(why or "ptt_convert_failed")
+                _cleanup()
+                _restash_spoken()
+                return None
+            audio_path = converted
+        except Exception:
+            logger.warning(
+                "[voice_autosend] 分条第 %d 条 PTT 闸异常 → 回落", i + 1,
+                exc_info=True)
+            _set_synth_failure("ptt_gate_error")
+            _cleanup()
+            _restash_spoken()
+            try:
+                os.unlink(audio_path)
+            except Exception:
+                pass
+            return None
+        try:
+            with open(audio_path, "rb") as fh:
+                data = fh.read()
+        except Exception:
+            data = b""
+        finally:
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+        if not data or not looks_like_ogg_opus(data):
+            _set_synth_failure("ptt_not_ogg_opus")
+            _cleanup()
+            _restash_spoken()
+            return None
+        try:
+            from src.integrations.protocol_bridge import save_outbound_media
+            local, url, _mt = save_outbound_media(
+                platform, account_id, os.path.basename(audio_path), data)
+        except Exception:
+            logger.debug("[voice_autosend] 分条落出站媒体失败", exc_info=True)
+            _cleanup()
+            _restash_spoken()
+            return None
+        meta: VoiceStageMeta = {
+            "provider": str(getattr(result, "provider", "") or ""),
+            "voice": str(getattr(result, "voice", "") or ""),
+            "fallback_from": str(
+                (getattr(result, "extra", None) or {}).get("fallback_from") or ""),
+            "synth_text_len": len(part),
+            "persona_id": str(persona_id or ""),
+            "latency_ms": int(getattr(result, "latency_ms", 0) or 0),
+            "part_text": part,
+            "part_index": i,
+            "parts_total": len(parts),
+            "spoken_variant": bool(_spoken),
+        }
+        if getattr(result, "duration_sec", 0):
+            meta["wav_duration_ms"] = int(float(result.duration_sec) * 1000)
+        staged.append((local, url, meta))
+    logger.info(
+        "[voice_autosend] 分条 staging 完成 parts=%d lens=%s pid=%s",
+        len(staged), [len(p) for p in parts], persona_id)
+    return staged
 
 
 async def stage_voice_file(
@@ -619,7 +1072,11 @@ async def stage_voice_file(
         config, persona_id, text, out_dir=od, contact_key=contact_key,
         platform=platform, account_id=account_id)
     if not audio_path:
-        _set_synth_failure("empty_audio")
+        # 保留 _synth_ogg 已写入的具体原因（ptt_* / truncation_* / …）
+        with _LAST_SYNTH_FAIL_LOCK:
+            has_reason = bool(_LAST_SYNTH_FAIL.get("reason"))
+        if not has_reason:
+            _set_synth_failure("empty_audio")
         return None
     try:
         with open(audio_path, "rb") as fh:
@@ -637,6 +1094,14 @@ async def stage_voice_file(
         _set_synth_failure("empty_audio_bytes")
         return None
     try:
+        from src.client.voice_ptt_gate import looks_like_ogg_opus
+        if not looks_like_ogg_opus(data):
+            _set_synth_failure("ptt_not_ogg_opus")
+            return None
+    except Exception:
+        _set_synth_failure("ptt_gate_error")
+        return None
+    try:
         from src.integrations.protocol_bridge import save_outbound_media
         local, url, _mt = save_outbound_media(
             platform, account_id, os.path.basename(audio_path), data)
@@ -650,6 +1115,7 @@ async def stage_voice_file(
 __all__ = [
     "resolve_voice_autosend_cfg", "decide_voice", "should_send_voice",
     "persona_allowed_for_voice", "stage_voice_file", "VoiceStageMeta",
+    "stage_voice_parts", "resolve_split_send_cfg", "part_gap_seconds",
     "record_voice_sent", "record_voice_fallback", "record_voice_decision",
     "metrics_snapshot", "no_edge_fallback_enabled", "preflight_voice_synth",
     "pop_synth_failure_reason", "defer_during_image_enabled",

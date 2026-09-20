@@ -25,6 +25,60 @@ def test_all_green():
     assert h["summary"]["fail"] == 0
 
 
+# ── 草稿 SLA 严重超时组件（2026-07-29）──────────────────────────
+# 动机（实测）：一条 L3 草稿无人认领躺了 6.7 天，而队列总数远低于阈值 → queue 组件
+# 全绿；K2 自动再分配只管「已认领+坐席断线」的、永远跳过无主草稿 → 无灯可亮。
+
+def test_sla_backlog_absent_no_component():
+    """watcher 未挂载（None）→ 不出该组件（向后兼容，旧调用方零影响）。"""
+    h = _base()
+    assert not [c for c in h["components"] if c["id"] == "sla_backlog"]
+    assert h["light"] == "green"
+
+
+def test_sla_backlog_unclaimed_is_warn():
+    h = _base(sla_backlog={"breaching_now": 1, "max_wait_min": 9659,
+                           "escalating_now": 1, "unclaimed_escalating": 1})
+    c = next(x for x in h["components"] if x["id"] == "sla_backlog")
+    assert c["status"] == "warn"
+    assert "无人认领" in c["detail"]
+    assert "161h" in c["detail"]          # 9659min ≈ 161h，点明严重度
+    assert h["light"] == "yellow"
+
+
+def test_sla_backlog_claimed_is_milder_warn():
+    h = _base(sla_backlog={"breaching_now": 2, "max_wait_min": 1500,
+                           "escalating_now": 1, "unclaimed_escalating": 0})
+    c = next(x for x in h["components"] if x["id"] == "sla_backlog")
+    assert c["status"] == "warn"
+    assert "已认领" in c["detail"]
+    assert "无人认领" not in c["detail"]
+
+
+def test_sla_backlog_clean_is_ok():
+    h = _base(sla_backlog={"breaching_now": 0, "max_wait_min": 0,
+                           "escalating_now": 0, "unclaimed_escalating": 0})
+    c = next(x for x in h["components"] if x["id"] == "sla_backlog")
+    assert c["status"] == "ok"
+    assert h["light"] == "green"
+
+
+def test_sla_backlog_breaching_but_not_escalated_is_ok():
+    """越线但未到升级线 → ok（breach 已有自己的退避告警，此灯只管「严重」级）。"""
+    h = _base(sla_backlog={"breaching_now": 3, "max_wait_min": 300,
+                           "escalating_now": 0, "unclaimed_escalating": 0})
+    c = next(x for x in h["components"] if x["id"] == "sla_backlog")
+    assert c["status"] == "ok"
+    assert "越线 3 条" in c["detail"]
+
+
+def test_sla_backlog_tolerates_missing_keys():
+    """快照字段缺失（旧 watcher/取数失败）→ 不抛，按无严重超时处理。"""
+    h = _base(sla_backlog={})
+    c = next(x for x in h["components"] if x["id"] == "sla_backlog")
+    assert c["status"] == "ok"
+
+
 def test_db_down_is_red():
     h = _base(db_ok=False)
     assert h["light"] == "red"

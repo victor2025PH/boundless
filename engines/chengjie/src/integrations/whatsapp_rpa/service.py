@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -28,6 +29,26 @@ from src.integrations.whatsapp_rpa.proactive_templates import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _business_cap(raw: Any) -> int:
+    """业务日上限统一读法：0/负=不限；``outbound.unlimited_mode`` 归 0。软依赖绝不抛。"""
+    try:
+        from src.ops.outbound_policy import business_cap
+        return int(business_cap(raw))
+    except Exception:
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+
+def _note_outbound_block(reason: str) -> None:
+    try:
+        from src.ops.outbound_policy import record_block
+        record_block("business", reason, platform="whatsapp")
+    except Exception:
+        pass
 
 
 class WhatsAppRpaService:
@@ -139,7 +160,7 @@ class WhatsAppRpaService:
             },
             "human_pacing": {
                 "enabled": True,
-                "split_strategy": "sentence",
+                "split_mode": "sentence",
                 "split_max_chars": 80,
                 "split_max_parts": 5,
                 "read_pause_ms": [800, 2000],
@@ -167,6 +188,13 @@ class WhatsAppRpaService:
                 d[k] = merged_sub
             else:
                 d[k] = v
+        # legacy 归一：旧版页面把分条策略存成 human_pacing.split_strategy；
+        # 默认块现在提供 split_mode，若不归一会遮蔽用户旧值（用户没显式给 split_mode 时才回落）。
+        hp_user = self._cfg.get("human_pacing")
+        if isinstance(hp_user, dict) and not hp_user.get("split_mode"):
+            legacy_split = hp_user.get("split_strategy")
+            if legacy_split and isinstance(d.get("human_pacing"), dict):
+                d["human_pacing"]["split_mode"] = legacy_split
         return d
 
     def reconfigure(self, new_cfg: Dict[str, Any]) -> None:
@@ -250,12 +278,13 @@ class WhatsAppRpaService:
                     break
                 continue
 
-            # daily_cap 守门
-            _cap = int(self._merged_cfg.get("daily_cap") or 0)
+            # daily_cap 守门（业务日上限：0=不限 / outbound.unlimited_mode 归 0）
+            _cap = _business_cap(self._merged_cfg.get("daily_cap"))
             if _cap > 0:
                 _stats = self._state.run_stats(24.0)
                 _today_sent = int((_stats or {}).get("sent") or 0)
                 if _today_sent >= _cap:
+                    _note_outbound_block("wa_rpa_daily_cap")
                     _secs = 86400 - (int(time.time()) % 86400)
                     logger.info(
                         "WA daily_cap=%d reached (sent=%d), sleeping %ds",
@@ -441,8 +470,9 @@ class WhatsAppRpaService:
 
         self._reset_proactive_counter_if_needed()
 
-        daily_cap = int(cfg.get("daily_cap") or 0)
+        daily_cap = _business_cap(cfg.get("daily_cap"))
         if daily_cap > 0 and self._proactive_sent_today >= daily_cap:
+            _note_outbound_block("wa_rpa_proactive_daily_cap")
             return
 
         if not self._within_time_window(cfg):
@@ -450,7 +480,8 @@ class WhatsAppRpaService:
 
         silence_min = float(cfg.get("silence_minutes") or 60.0)
         per_chat_cooldown = float(cfg.get("per_chat_cooldown_minutes") or 240.0)
-        max_per_tick = int(cfg.get("max_per_tick") or 1)
+        # 「0=不限」：max_per_tick<=0 不截断候选（缺省仍 1）
+        max_per_tick = int(cfg.get("max_per_tick", 1) if cfg.get("max_per_tick") is not None else 1)
 
         try:
             rows = self._state.recent_conversations(limit=50, hours=96.0)
@@ -496,7 +527,7 @@ class WhatsAppRpaService:
             return
 
         candidates.sort(key=lambda r: r.get("silence_secs", 0), reverse=True)
-        selected = candidates[:max_per_tick]
+        selected = candidates if max_per_tick <= 0 else candidates[:max_per_tick]
 
         for cand in selected:
             chat_key = cand["chat_key"]

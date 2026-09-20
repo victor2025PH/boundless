@@ -213,10 +213,49 @@ export async function GET(req: NextRequest) {
     ctaByWhere[w] = (ctaByWhere[w] ?? 0) + 1;
   }
 
+  // ── 品牌片漏斗（2026-08-07 上线）：film_play → 25/50/75 → film_done，按语言分桶；
+  //    另出章节点击热度（哪一幕最勾人=后续剪辑/投放的证据）。受 ?days= 窗约束。
+  const filmByLang: Record<string, { play: number; p25: number; p50: number; p75: number; done: number }> = {};
+  const filmChapters: Record<string, number> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    if (!ev.startsWith("film_")) continue;
+    const lang = propStr(e, "lang") || "?";
+    const f = (filmByLang[lang] ??= { play: 0, p25: 0, p50: 0, p75: 0, done: 0 });
+    if (ev === "film_play") f.play++;
+    else if (ev === "film_progress") {
+      const pv2 = Number((e.props as Record<string, unknown> | null)?.pct ?? 0);
+      if (pv2 === 25) f.p25++;
+      else if (pv2 === 50) f.p50++;
+      else if (pv2 === 75) f.p75++;
+    } else if (ev === "film_done") f.done++;
+    else if (ev === "film_chapter") {
+      const key = `${lang}@${propStr(e, "t") || "?"}s`;
+      filmChapters[key] = (filmChapters[key] ?? 0) + 1;
+    }
+  }
+  const film = {
+    byLang: Object.fromEntries(
+      Object.entries(filmByLang).map(([k, f]) => [
+        k,
+        { ...f, doneRate: pct(f.done, f.play), halfRate: pct(f.p50, f.play) },
+      ])
+    ),
+    chapters: Object.entries(filmChapters)
+      .map(([key, n]) => ({ key, n }))
+      .sort((a, b) => b.n - a.n),
+  };
+
   // ── 机器人 IP（EveBot）互动：会话级漏斗（浏览→互动→点开客服→留资）+ 播报效果 ──
-  // 互动 = 悬停/让它飞/点播报/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
+  // 互动 = 悬停/让它飞/点播报/点贴身短句/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
   // 只统计带 sid 的网站会话（miniapp 有独立漏斗），受 ?days= 时间窗约束。
-  const SPRITE_ENGAGE = new Set(["sprite_hover", "sprite_fly", "sprite_news_click", "ai_sprite_click"]);
+  const SPRITE_ENGAGE = new Set([
+    "sprite_hover",
+    "sprite_fly",
+    "sprite_news_click",
+    "sprite_speech_click",
+    "ai_sprite_click",
+  ]);
   const spriteBySid: Record<string, Set<string>> = {};
   for (const e of winEvents) {
     const ev = String(e.event ?? "");
@@ -240,10 +279,28 @@ export async function GET(req: NextRequest) {
       continue;
     }
     spEngaged++;
-    if (arr.some((x) => x === "ai_sprite_click" || x === "ai_chat_open:sprite" || x === "ai_chat_open:hologram")) spOpened++;
+    /* sprite_* 含贴身短句开客服（sprite_greet / sprite_invite / …） */
+    if (
+      arr.some(
+        (x) =>
+          x === "ai_sprite_click" ||
+          x === "ai_chat_open:hologram" ||
+          x === "ai_chat_open:hologram_demon" ||
+          x.startsWith("ai_chat_open:sprite")
+      )
+    )
+      spOpened++;
     if (set.has("lead_submit")) spLeads++;
   }
   const spriteNewsAgg: Record<string, { imp: number; clk: number }> = {};
+  const speechByKind: Record<string, number> = {};
+  const speechClickByKind: Record<string, number> = {};
+  let speech = 0;
+  let speechClick = 0;
+  let shy = 0;
+  let alert = 0;
+  let demonUnlock = 0;
+  let demonRevert = 0;
   for (const e of winEvents) {
     if (e.event === "sprite_news_impression") {
       const s = propStr(e, "section") || "?";
@@ -251,6 +308,22 @@ export async function GET(req: NextRequest) {
     } else if (e.event === "sprite_news_click") {
       const s = propStr(e, "section") || "?";
       (spriteNewsAgg[s] ??= { imp: 0, clk: 0 }).clk++;
+    } else if (e.event === "sprite_speech") {
+      speech++;
+      const k = propStr(e, "kind") || "?";
+      speechByKind[k] = (speechByKind[k] ?? 0) + 1;
+    } else if (e.event === "sprite_speech_click") {
+      speechClick++;
+      const k = propStr(e, "kind") || "?";
+      speechClickByKind[k] = (speechClickByKind[k] ?? 0) + 1;
+    } else if (e.event === "sprite_shy") {
+      shy++;
+    } else if (e.event === "sprite_alert") {
+      alert++;
+    } else if (e.event === "sprite_demon_unlock") {
+      demonUnlock++;
+    } else if (e.event === "sprite_demon_revert") {
+      demonRevert++;
     }
   }
   const sprite = {
@@ -259,6 +332,15 @@ export async function GET(req: NextRequest) {
     greet: winEvents.filter((e) => e.event === "sprite_greet").length,
     newsImpressions: winEvents.filter((e) => e.event === "sprite_news_impression").length,
     newsClicks: winEvents.filter((e) => e.event === "sprite_news_click").length,
+    speech,
+    speechClick,
+    speechByKind,
+    speechClickByKind,
+    shy,
+    alert,
+    demonUnlock,
+    demonRevert,
+    speechCtr: pct(speechClick, speech),
     funnel: {
       sessions: spSessions,
       engaged: spEngaged,
@@ -378,6 +460,81 @@ export async function GET(req: NextRequest) {
       v.ctr = v.expose > 0 ? Number(((v.click / v.expose) * 100).toFixed(2)) : 0;
     }
   }
+
+  // ── 下载中心漏斗：入口点击 → 下载页到达 → 安装包下载点击（计数 + 会话级，受 ?days= 窗约束）──
+  // 客户端口径：chatx=/download/chatx 专页；avatarhub=下载中心 hub（其详情区嵌在 /download）；
+  // matrixx=/matrix/download（gated 页）。rate = 下载点击/页面到达（计数比，非会话比）。
+  const dlPageKind = (p: string): string | null => {
+    const norm = p.replace(/^\/en(?=\/|$)/, "").replace(/\/+$/, "") || "/";
+    if (norm === "/download/chatx") return "chatx";
+    if (norm === "/matrix/download") return "matrixx";
+    if (norm === "/download") return "avatarhub"; // hub 页承载 AvatarHub 详情区
+    return null;
+  };
+  const DL_CLICK_EV: Record<string, string> = {
+    download_click: "avatarhub",
+    chatx_download_click: "chatx",
+    matrixx_download_click: "matrixx",
+  };
+  const dlEntryMenu: Record<string, number> = {};
+  const dlEntryHub: Record<string, number> = {};
+  const dlPv: Record<string, number> = {};
+  const dlClicks: Record<string, number> = {};
+  const dlFaq: Record<string, number> = {};
+  const dlBySid: Record<string, { reach: boolean; clicked: boolean }> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    const sid = String(e.sid ?? "");
+    if (ev === "download_menu_click") {
+      const c = propStr(e, "client") || "?";
+      dlEntryMenu[c] = (dlEntryMenu[c] ?? 0) + 1;
+    } else if (ev === "download_hub_click") {
+      const c = propStr(e, "client") || "?";
+      dlEntryHub[c] = (dlEntryHub[c] ?? 0) + 1;
+    } else if (ev === "chatx_faq_open") {
+      const q = propStr(e, "q") || "?";
+      dlFaq[q] = (dlFaq[q] ?? 0) + 1;
+    } else if (ev === "pageview") {
+      const kind = dlPageKind(String(e.path ?? ""));
+      if (kind) {
+        dlPv[kind] = (dlPv[kind] ?? 0) + 1;
+        if (sid) (dlBySid[sid] ??= { reach: false, clicked: false }).reach = true;
+      }
+    } else {
+      const client = DL_CLICK_EV[ev];
+      if (client) {
+        dlClicks[client] = (dlClicks[client] ?? 0) + 1;
+        if (sid) (dlBySid[sid] ??= { reach: false, clicked: false }).clicked = true;
+      }
+    }
+  }
+  let dlSessions = 0;
+  let dlConverted = 0;
+  for (const s of Object.values(dlBySid)) {
+    if (!s.reach) continue; // 只统计真正到达下载页的会话
+    dlSessions++;
+    if (s.clicked) dlConverted++;
+  }
+  const dlClients = ["chatx", "avatarhub", "matrixx"].map((key) => ({
+    key,
+    pv: dlPv[key] ?? 0,
+    clicks: dlClicks[key] ?? 0,
+    rate: pct(dlClicks[key] ?? 0, dlPv[key] ?? 0),
+  }));
+  const dlFaqTop = Object.entries(dlFaq)
+    .map(([q, n]) => ({ q, n }))
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 8);
+  const downloads = {
+    entry: { menu: dlEntryMenu, hub: dlEntryHub },
+    clients: dlClients,
+    funnel: {
+      sessions: dlSessions,
+      converted: dlConverted,
+      rate: pct(dlConverted, dlSessions),
+    },
+    faqTop: dlFaqTop,
+  };
 
   // ── 获客归因：会话级「来源 → 留资」转化 ──
   // 会话来源 = 该会话内首个非空 utm（"source/medium/campaign"）；无 utm 按 referrer 兜底分类。
@@ -577,6 +734,17 @@ export async function GET(req: NextRequest) {
   for (const e of miOpens) bump(miOpenSeries, e.t ?? e.ts);
   for (const e of miCta) bump(miCtaSeries, e.t ?? e.ts);
   for (const e of miLead) bump(miLeadSeries, e.t ?? e.ts);
+  // 下载中心 14 天序列（页面到达 / 安装包点击）：固定 14 天语义，用全量 events 不受 ?days= 窗影响
+  const dlPvSeries = new Array(14).fill(0);
+  const dlClickSeries = new Array(14).fill(0);
+  for (const e of events) {
+    const ev = String(e.event ?? "");
+    if (ev === "pageview") {
+      if (dlPageKind(String(e.path ?? ""))) bump(dlPvSeries, e.t ?? e.ts);
+    } else if (DL_CLICK_EV[ev]) {
+      bump(dlClickSeries, e.t ?? e.ts);
+    }
+  }
   const sumRange = (arr: number[], a: number, b: number) =>
     arr.slice(a, b).reduce((x, y) => x + y, 0);
   const wow = {
@@ -634,7 +802,9 @@ export async function GET(req: NextRequest) {
       leads: leads.filter(recent).length,
     },
     ctaByWhere,
+    film,
     sprite,
+    downloads: { ...downloads, series: { pv: dlPvSeries, clicks: dlClickSeries } },
     dragon: { events: dragonEvents, store: dragonStore, compare: dragonCompare },
     ab: abStats,
     attribution,

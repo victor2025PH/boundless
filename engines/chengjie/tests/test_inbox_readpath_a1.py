@@ -125,6 +125,44 @@ def test_store_row_to_chat_bad_mode_defaults_review():
     assert chat["automation_mode"] == "review"
 
 
+# ── P0 未读可信化：读路径有效未读 + 占位标志 ─────────────────────────────────
+
+def test_store_row_to_chat_effective_unread_read():
+    """已读水位覆盖末条 → 对外 unread=0，但保留 synced_unread 供灰徽标。"""
+    row = {"platform": "whatsapp", "account_id": "wa1", "chat_key": "c",
+           "unread": 5, "last_ts": 100.0, "last_read_ts": 100.0}
+    chat = store_row_to_chat(row, message_count=3)
+    assert chat["unread"] == 0            # 有效未读归零
+    assert chat["synced_unread"] == 5     # 同步原始值保留
+    assert chat["is_placeholder"] is False  # 有本地消息，非占位
+
+
+def test_store_row_to_chat_effective_unread_unread():
+    """末条晚于已读水位 → 真未读透出。"""
+    row = {"platform": "whatsapp", "account_id": "wa1", "chat_key": "c",
+           "unread": 5, "last_ts": 200.0, "last_read_ts": 100.0}
+    chat = store_row_to_chat(row, message_count=3)
+    assert chat["unread"] == 5
+    assert chat["synced_unread"] == 5
+
+
+def test_store_row_to_chat_placeholder_flag():
+    """占位会话：有同步未读但本地零消息 → is_placeholder=True。"""
+    row = {"platform": "whatsapp", "account_id": "wa1", "chat_key": "c",
+           "unread": 3, "last_ts": 100.0, "last_read_ts": 0.0}
+    chat = store_row_to_chat(row, message_count=0)
+    assert chat["is_placeholder"] is True
+    assert chat["synced_unread"] == 3
+
+
+def test_store_row_to_chat_no_unread_no_placeholder():
+    chat = store_row_to_chat(
+        {"platform": "line", "account_id": "a", "chat_key": "k",
+         "unread": 0, "last_ts": 10.0}, message_count=0)
+    assert chat["unread"] == 0
+    assert chat["is_placeholder"] is False
+
+
 # ── /chats 灰度 ────────────────────────────────────────────────────
 
 def test_chats_default_is_live_aggregation(tmp_path):
@@ -421,6 +459,7 @@ def test_extract_platform_msg_id_per_platform():
     assert extract_platform_msg_id({"id": 123}, "telegram") == "123"
     assert extract_platform_msg_id({"wamid": "ABC"}, "whatsapp") == "ABC"
     assert extract_platform_msg_id({"mid": "x"}, "messenger") == "x"
+    assert extract_platform_msg_id({"msg_id": "m_ab"}, "messenger") == "m_ab"
     # LINE 不取裸 id（房间 id），仅取 message_id/server_id
     assert extract_platform_msg_id({"id": "room1"}, "line") == ""
     assert extract_platform_msg_id({"message_id": "m1", "id": "room1"}, "line") == "m1"
@@ -609,4 +648,57 @@ def test_thread_served_from_store_when_not_live(tmp_path):
     assert data["ok"] is True
     assert data["messages"] and data["messages"][0]["from_store"] is True
     assert data["chat"] is not None and data["chat"]["conversation_id"] == cid
+    store.close()
+
+
+# ── P0 未读可信化：mark-read 端点 ─────────────────────────────────────────────
+
+def test_mark_read_endpoint_persists_and_zeros_unread(tmp_path):
+    """POST mark-read → 落已读水位；再读 /chats 该会话有效未读=0、灰徽标源保留。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    c = _client(inbox_store=store, read_from_store=True)
+    # 建一个协议号占位会话（有同步未读、末条 ts=100）
+    from src.inbox.store import InboxConversation
+    store.upsert_conversation(InboxConversation(
+        conversation_id="whatsapp:wa1:c", platform="whatsapp", account_id="wa1",
+        chat_key="c", display_name="Cust", last_text="hi", last_ts=100.0, unread=4))
+    # 注册表让 protocol 适配器认这个号
+    from src.integrations.account_registry import get_account_registry
+    import src.integrations.account_registry as armod
+    reg = armod.AccountRegistry(tmp_path / "reg.db")
+    reg.upsert("whatsapp", "wa1", mode="protocol", status="online")
+    _orig = get_account_registry
+    armod.get_account_registry = lambda *a, **k: reg
+    try:
+        r = c.post("/api/unified-inbox/mark-read", json={
+            "platform": "whatsapp", "account_id": "wa1", "chat_key": "c"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True and body["last_read_ts"] == 100.0
+        row = store.get_conversation("whatsapp:wa1:c")
+        assert store.effective_unread(row) == 0
+    finally:
+        armod.get_account_registry = _orig
+        store.close()
+
+
+def test_mark_read_endpoint_by_conversation_id(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    c = _client(inbox_store=store, read_from_store=True)
+    from src.inbox.store import InboxConversation
+    store.upsert_conversation(InboxConversation(
+        conversation_id="web:default:v1", platform="web", account_id="default",
+        chat_key="v1", display_name="V", last_text="hi", last_ts=88.0, unread=2))
+    r = c.post("/api/unified-inbox/mark-read",
+               json={"conversation_id": "web:default:v1"})
+    assert r.status_code == 200
+    assert r.json()["last_read_ts"] == 88.0
+    store.close()
+
+
+def test_mark_read_endpoint_missing_key_400(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    c = _client(inbox_store=store, read_from_store=True)
+    r = c.post("/api/unified-inbox/mark-read", json={"platform": "web"})
+    assert r.status_code == 400
     store.close()

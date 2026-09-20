@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { streamDeepSeek, deepseekEnabled, type ChatTurn } from "@/lib/deepseek";
 import { matchFreeText, buildFallback, detectKnowledgeLang, type BotLang } from "@/lib/bot-knowledge";
 import { cleanMarkdown } from "@/lib/clean-markdown";
@@ -35,10 +36,7 @@ function textStream(text: string): ReadableStream<Uint8Array> {
 }
 
 export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "anon";
+  const ip = clientIp(req);
   if (limited(ip)) {
     return NextResponse.json({ ok: false, error: "rate_limited" }, { status: 429 });
   }

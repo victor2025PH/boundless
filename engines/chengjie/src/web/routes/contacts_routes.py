@@ -1350,6 +1350,11 @@ def register_contacts_routes(
                 "summary_length": len(summary),
             }
 
+    # ── RH-P1：流失预警榜 60s TTL 缓存（注册级实例——每次 register 各一份，防测试互串）──
+    # 榜单每人做 now/now-7d 两次亲密度事件重放 + 逐人 inbox/变现富集，是全站最贵的读接口
+    # 之一；页面轮询读缓存即可，「刷新」按钮带 force=1 绕过。mark-sent 显式失效。
+    _board_cache = SingleEntryTTLCache(ttl_s=60.0)
+
     # ── Phase P：单人关系健康卡 + 流失预警榜 ───────────────
     # 复用 IntimacyEngine 事件重放（now / now-7d 两快照算趋势）+ 纯函数打分器。
     # 与全域 /api/relations/digest 的区别：digest 全盘聚合，本组逐联系人 + 排序 + 给建议。
@@ -1663,18 +1668,28 @@ def register_contacts_routes(
         @app.get("/api/relations/health-board")
         async def relation_health_board(
             limit: int = 20, risk: str = "", min_intimacy: float = 0.0,
-            scan: int = 300, _=Depends(api_auth),
+            scan: int = 300, force: int = 0, _=Depends(api_auth),
         ):
             """流失预警榜：按关系强度扫 top-N journey，逐个打健康分，排序输出最该干预的。
 
             排序：value_at_risk（高价值正流失）优先，再按健康分升序（越不健康越靠前）。
             R3（可选，config 开）：同分相邻行按 inbox 高流失 / 情绪恶化次级 tie-break。
             ``risk`` 可过滤 healthy/watch/at_risk/critical；``min_intimacy`` 过滤弱关系噪声。
+            RH-P1：60s TTL 缓存（key=全部查询参数+排序开关），``force=1`` 绕过——
+            事件重放成本随数据量线性涨，别让看板轮询变成全量重算。
             """
             import time as _t
             now = int(_t.time())
             lim = max(1, min(int(limit), 100))
             scan_n = max(lim, min(int(scan), 1000))
+            inbox_sort = _health_board_inbox_sort_enabled()
+            payer_sort = _health_board_payer_priority_enabled()
+            cache_key = (lim, str(risk or ""), float(min_intimacy or 0.0),
+                         scan_n, inbox_sort, payer_sort)
+            if not force:
+                hit = _board_cache.get(cache_key)
+                if hit is not None:
+                    return {**hit, "cached": True}
             try:
                 with contacts_store._lock:  # noqa: SLF001
                     rows = contacts_store._conn.execute(  # noqa: SLF001
@@ -1759,8 +1774,6 @@ def register_contacts_routes(
                     _item["story_bonus"] = _sb
                     _item["effective_intimacy"] = round(_eff, 1)
                 items.append(_item)
-            inbox_sort = _health_board_inbox_sort_enabled()
-            payer_sort = _health_board_payer_priority_enabled()
             if inbox_sort and items:
                 # R3：tie-break 需 inbox 信号参与排序 → 先批量富集全部候选再 sort
                 inbox_all = _inbox_batch(
@@ -1802,15 +1815,66 @@ def register_contacts_routes(
                     mb = mon_by.get(it["journey_id"])
                     if mb:
                         it["monetization"] = mb
+            # RH-P1 任务台可读性：上榜行补 contact 姓名/ID（一次批量 SQL，随 limit 不随 scan）。
+            # journey_id 哈希对坐席是零信息量，姓名才是「今天该挽回谁」的最小可读单元。
+            if top:
+                try:
+                    cids = list(
+                        {contact_by.get(it["journey_id"]) or "" for it in top} - {""})
+                    name_by: dict = {}
+                    if cids:
+                        ph = ",".join("?" * len(cids))
+                        with contacts_store._lock:  # noqa: SLF001
+                            for r in contacts_store._conn.execute(  # noqa: SLF001
+                                "SELECT contact_id, primary_name FROM contacts "
+                                f"WHERE contact_id IN ({ph})", cids,
+                            ).fetchall():
+                                name_by[r[0]] = r[1] or ""
+                    for it in top:
+                        cid = contact_by.get(it["journey_id"]) or ""
+                        it["contact_id"] = cid
+                        it["contact_name"] = name_by.get(cid, "")
+                except Exception:
+                    logger.debug("health-board name enrich failed", exc_info=True)
             payer_count = sum(
                 1 for it in top
                 if (it.get("monetization") or {}).get("is_payer")
                 or (it.get("monetization") or {}).get("is_member"))
-            return {"ok": True, "items": top,
-                    "scanned": len(jids), "count": min(len(items), lim),
-                    "inbox_sort_tiebreak": inbox_sort,
-                    "payer_sort_priority": payer_sort,
-                    "payer_count": payer_count}
+            payload = {"ok": True, "items": top,
+                       "scanned": len(jids), "count": min(len(items), lim),
+                       "inbox_sort_tiebreak": inbox_sort,
+                       "payer_sort_priority": payer_sort,
+                       "payer_count": payer_count}
+            _board_cache.put(cache_key, payload)
+            return {**payload, "cached": False}
+
+        # ── RH-P2：挽回效果统计（发现→话术→发送→回来了 的最后一环）─────
+        @app.get("/api/relations/winback-stats")
+        async def relation_winback_stats(
+            days: int = 30, reply_window_days: int = 7, _=Depends(api_auth),
+        ):
+            """按 ``reactivation_sent`` 事件统计挽回漏斗。
+
+            判定：发送后 ``reply_window_days`` 内该 journey 出现 ``msg_in``
+            ＝挽回成功。**分母只算已到期样本**（matured：已回复 或 观察窗已满）
+            ——刚发出去还没到窗的记 pending，不算失败，防止把「还没来得及回」
+            压成低挽回率。逻辑单源在 ``src/contacts/winback_stats.py``
+            （周报 CLI 同口径），本处只做薄包装。
+            """
+            from src.contacts.winback_stats import compute_winback
+            try:
+                return compute_winback(
+                    contacts_store._conn, contacts_store._lock,  # noqa: SLF001
+                    days=days, reply_window_days=reply_window_days,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("winback-stats failed: %s", e)
+                return {"ok": True,
+                        "days": max(1, min(int(days or 30), 365)),
+                        "reply_window_days": max(1, min(int(reply_window_days or 7), 30)),
+                        "until_offset_days": 0,
+                        "sent": 0, "replied": 0, "matured": 0,
+                        "pending": 0, "rate": None}
 
     # ── Q 延伸·回填状态查询 + 按需 dry_run 触发 ───────────────
     @app.get("/api/relations/backfill-status")
@@ -1872,6 +1936,7 @@ def register_contacts_routes(
                                      _=Depends(api_auth)):
             user = _extract_user(request)
             reactivation_scheduler.mark_sent(journey_id, note=f"by:{user or 'system'}")
+            _board_cache.clear()  # RH-P1：处置后看板即时反映（reactivation 事件影响卡口径）
             # W3-3G：联动 draft_log——如果该 journey 有最新未发草稿，标记已发
             linked_draft_id = ""
             try:

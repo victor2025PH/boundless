@@ -1,0 +1,366 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('bp_title', '经营日报') }}{% endblock %}
+{% block head %}
+<style>
+  /* 老板日报（WP-3）：大数字 + 趋势 + 人话解读；全部 --tk-* 令牌自适配日夜 */
+  .bp-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px 20px 40px;}
+  .bp-inner{max-width:980px;margin:0 auto;}
+  .bp-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+  .bp-header h2{margin:0;font-size:20px;color:var(--tk-text);}
+  .bp-sub{font-size:12px;color:var(--tk-text-muted);margin:4px 0 16px;}
+  .bp-actions{display:flex;gap:8px;}
+  .bp-btn{padding:7px 14px;border-radius:9px;border:1px solid var(--tk-border);cursor:pointer;
+    background:var(--tk-surface);color:var(--tk-text);font:inherit;font-size:13px;}
+  .bp-btn:hover{border-color:var(--tk-brand,#1e8cf2);}
+  .bp-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px;}
+  .bp-kpi{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:14px;padding:16px 18px;}
+  .bp-kpi .val{font-size:30px;font-weight:800;color:var(--tk-text);font-variant-numeric:tabular-nums;}
+  .bp-kpi .val small{font-size:14px;font-weight:600;color:var(--tk-text-muted);margin-left:2px;}
+  .bp-kpi .lbl{font-size:12px;color:var(--tk-text-muted);margin-top:4px;}
+  .bp-kpi .cmp{font-size:11px;margin-top:6px;color:var(--tk-text-muted);}
+  .bp-kpi .cmp.up{color:var(--tk-emerald-ink,#059669);}
+  .bp-kpi .cmp.down{color:var(--tk-amber-ink,#b45309);}
+  .bp-say{background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 7%, var(--tk-surface));
+    border:1px solid color-mix(in srgb, var(--tk-brand,#1e8cf2) 22%, transparent);
+    border-radius:14px;padding:13px 16px;font-size:14px;line-height:1.7;color:var(--tk-text);margin-bottom:16px;}
+  .bp-card{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:14px;
+    padding:14px 18px 16px;margin-bottom:14px;}
+  .bp-card h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
+  .bp-week{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:13px;color:var(--tk-text);}
+  .bp-week b{font-variant-numeric:tabular-nums;}
+  .bp-trend{display:flex;align-items:flex-end;gap:8px;height:120px;padding-top:6px;}
+  .bp-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;}
+  .bp-bars{display:flex;align-items:flex-end;gap:3px;height:92px;}
+  .bp-bar{width:14px;border-radius:4px 4px 0 0;min-height:2px;background:var(--tk-border);}
+  .bp-bar.out{background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 55%, transparent);}
+  .bp-bar.ai{background:var(--tk-emerald,#34d399);}
+  .bp-day .d{font-size:10px;color:var(--tk-text-muted);white-space:nowrap;}
+  .bp-legend{display:flex;gap:14px;font-size:11px;color:var(--tk-text-muted);margin-top:8px;}
+  .bp-dot{display:inline-block;width:9px;height:9px;border-radius:3px;vertical-align:-1px;margin-right:4px;}
+  .bp-empty{text-align:center;padding:34px 10px;color:var(--tk-text-muted);}
+  .bp-empty .t{font-size:15px;color:var(--tk-text);margin-bottom:6px;}
+  .bp-note{font-size:11px;color:var(--tk-text-muted);margin-top:4px;}
+</style>
+{% endblock %}
+{% block content %}
+<div class="bp-wrap"><div class="bp-inner">
+  <div class="bp-header">
+    <h2>{{ (i18n or {}).get('bp_title', '经营日报') }}</h2>
+    <div class="bp-actions">
+      <button class="bp-btn" onclick="bpRefresh()">{{ (i18n or {}).get('bp_refresh', '刷新') }}</button>
+      <button class="bp-btn" onclick="bpExport()">{{ (i18n or {}).get('bp_export', '导出本周报告') }}</button>
+    </div>
+  </div>
+  <p class="bp-sub">{{ (i18n or {}).get('bp_sub', 'AI 今天替你做了什么——只看钱和时间，细节都在工作台里。') }}</p>
+
+  <div id="bp-loading" class="bp-empty">{{ (i18n or {}).get('bp_loading', '加载中…') }}</div>
+
+  <div id="bp-body" style="display:none">
+    <div class="bp-hero">
+      <div class="bp-kpi">
+        <div class="val" id="bp-k-replies">0</div>
+        <div class="lbl">{{ (i18n or {}).get('bp_k_replies', '今天 AI 替你发出的回复') }}</div>
+        <div class="cmp" id="bp-c-replies"></div>
+      </div>
+      <div class="bp-kpi">
+        <div class="val"><span id="bp-k-saved">0</span><small id="bp-k-saved-u">{{ (i18n or {}).get('bp_unit_hours', '小时') }}</small></div>
+        <div class="lbl">{{ (i18n or {}).get('bp_k_saved', '折算省下的人工时间') }}</div>
+        <div class="cmp" id="bp-c-saved"></div>
+      </div>
+      <div class="bp-kpi">
+        <div class="val" id="bp-k-outreach">0</div>
+        <div class="lbl">{{ (i18n or {}).get('bp_k_outreach', '今天主动问候的客户') }}</div>
+        <div class="cmp" id="bp-c-outreach"></div>
+      </div>
+      <div class="bp-kpi">
+        <div class="val" id="bp-k-inbound">0</div>
+        <div class="lbl">{{ (i18n or {}).get('bp_k_inbound', '今天收到的客户消息') }}</div>
+        <div class="cmp" id="bp-c-inbound"></div>
+      </div>
+    </div>
+
+    <div class="bp-say" id="bp-say"></div>
+
+    <!-- 「现在」区（P1-8 2026-08-29）：日报是回顾，这张卡回答「此刻有没有事等我」。
+         段缺失（未启用目标/取数失败）＝格子隐藏不摆假零；风险行触发才红。 -->
+    <div class="bp-card" id="bp-now-card" style="display:none">
+      <h3>{{ (i18n or {}).get('bp_now_title', '现在，需要你知道的') }}</h3>
+      <div class="bp-hero" style="margin-bottom:0">
+        <div class="bp-kpi" id="bp-t-active" style="display:none">
+          <div class="val" id="bp-n-active">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_active', '正在推进的客户目标') }}</div>
+        </div>
+        <div class="bp-kpi" id="bp-t-won" style="display:none">
+          <div class="val" id="bp-n-won">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_won', '近 24 小时成交') }}</div>
+          <div class="cmp up" id="bp-nc-won"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-n-pending">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_pending', '等人拍板的回复') }}</div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-n-unans">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_unans', '24 小时没回上的客户') }}</div>
+        </div>
+      </div>
+      <div id="bp-now-risk" class="bp-note" style="display:none"></div>
+    </div>
+
+    <!-- 「AI 花费」卡（成本对账 P2 2026-09-08）：今天/本月花了多少、昨日对账灯、余额跑道；
+         点标题进 /workspace/cost 看去向与导账单。段缺失（账本不可用）＝整卡隐藏。 -->
+    <div class="bp-card" id="bp-cost-card" style="display:none">
+      <h3 style="display:flex;justify-content:space-between;align-items:center">
+        <span>{{ (i18n or {}).get('bp_cost_title', 'AI 花了多少钱') }}</span>
+        <a href="/workspace/cost" style="font-size:12px;font-weight:500;color:var(--tk-brand,#1e8cf2);text-decoration:none">{{ (i18n or {}).get('bp_cost_more', '看去向 / 导账单 →') }}</a>
+      </h3>
+      <div class="bp-hero" style="margin-bottom:0">
+        <div class="bp-kpi">
+          <div class="val"><small>¥</small><span id="bp-cost-today">0.00</span></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_today', '今天（内部估算）') }}</div>
+          <div class="cmp" id="bp-cost-top"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val"><small>¥</small><span id="bp-cost-month">0.00</span></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_month', '本月累计') }}</div>
+          <div class="cmp" id="bp-cost-avg"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-cost-light">⚪</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_recon', '昨日与厂商账单核对') }}</div>
+          <div class="cmp" id="bp-cost-recon-day"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val"><span id="bp-cost-runway">—</span><small>{{ (i18n or {}).get('bp_cost_days', '天') }}</small></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_runway', '余额还能撑') }}</div>
+          <div class="cmp" id="bp-cost-balance"></div>
+        </div>
+      </div>
+      <div id="bp-cost-issues" class="bp-note" style="display:none"></div>
+    </div>
+
+    <div class="bp-card">
+      <h3>{{ (i18n or {}).get('bp_week_title', '本周合计') }}</h3>
+      <div class="bp-week" id="bp-week"></div>
+      <div class="bp-note">{{ (i18n or {}).get('bp_week_note', '按最近 7 天滚动统计；数字来自实例数据库，重启不清零。') }}</div>
+    </div>
+
+    <div class="bp-card">
+      <h3>{{ (i18n or {}).get('bp_trend_title', '近 7 天趋势') }}</h3>
+      <div class="bp-trend" id="bp-trend"></div>
+      <div class="bp-legend">
+        <span><span class="bp-dot" style="background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 55%, transparent)"></span>{{ (i18n or {}).get('bp_legend_out', '发出的消息') }}</span>
+        <span><span class="bp-dot" style="background:var(--tk-emerald,#34d399)"></span>{{ (i18n or {}).get('bp_legend_ai', 'AI 发出的回复') }}</span>
+      </div>
+    </div>
+
+    <div class="bp-note">{{ (i18n or {}).get('bp_coef_note', '「省下的人工时间」按每条回复的人工均时估算，系数可由管理员按团队实情调整。') }}</div>
+  </div>
+
+  <div id="bp-empty" class="bp-empty" style="display:none">
+    <div class="t">{{ (i18n or {}).get('bp_empty_title', '还没有可统计的数据') }}</div>
+    <div>{{ (i18n or {}).get('bp_empty_body', '接入渠道并让 AI 开始接待后，这里会出现你的价值账单。') }}</div>
+  </div>
+</div></div>
+
+<script>
+(function () {
+  'use strict';
+  function T(k) { return window.T ? window.T(k) : k; }
+  function Tf(k, v) { return window.Tf ? window.Tf(k, v) : k; }
+  function el(id) { return document.getElementById(id); }
+  function n(x) { return Number(x || 0); }
+  function seg(o, a, b) { return n(((o || {})[a] || {})[b]); }
+
+  function cmp(elId, cur, prev, unit) {
+    var e = el(elId);
+    if (!e) return;
+    if (prev <= 0 && cur <= 0) { e.textContent = ''; return; }
+    if (prev <= 0) { e.textContent = T('bp_cmp_new'); e.className = 'cmp up'; return; }
+    var d = Math.round((cur - prev) / prev * 100);
+    e.textContent = Tf('bp_cmp_yday', { p: (d >= 0 ? '+' : '') + d });
+    e.className = 'cmp ' + (d >= 0 ? 'up' : 'down');
+  }
+
+  function render(data) {
+    el('bp-loading').style.display = 'none';
+    var daily = data.daily || {};
+    var weekly = data.weekly || {};
+    var td = daily.today || {}, yd = daily.yesterday || {};
+    var tw = weekly.this_week || {}, lw = weekly.last_week || {};
+    var saved = data.saved || {};
+    var hasAny = seg(tw, 'traffic', 'messages_out') + seg(tw, 'traffic', 'messages_in')
+      + seg(tw, 'drafts', 'created') + seg(tw, 'outreach', 'sent')
+      + seg(lw, 'traffic', 'messages_out') > 0;
+    if (!hasAny) { el('bp-empty').style.display = ''; return; }
+    el('bp-body').style.display = '';
+
+    var rToday = seg(td, 'drafts', 'sent');
+    var rYday = seg(yd, 'drafts', 'sent');
+    el('bp-k-replies').textContent = rToday;
+    cmp('bp-c-replies', rToday, rYday);
+
+    var savedTodayH = Math.round(n(saved.today_minutes) / 60 * 10) / 10;
+    var savedYdayH = Math.round(rYday * n(saved.minutes_per_reply) / 60 * 10) / 10;
+    if (n(saved.today_minutes) < 60 && n(saved.today_minutes) > 0) {
+      el('bp-k-saved').textContent = Math.round(n(saved.today_minutes));
+      el('bp-k-saved-u').textContent = T('bp_unit_minutes');
+    } else {
+      el('bp-k-saved').textContent = savedTodayH;
+      el('bp-k-saved-u').textContent = T('bp_unit_hours');
+    }
+    cmp('bp-c-saved', savedTodayH, savedYdayH);
+
+    var oToday = seg(td, 'outreach', 'sent');
+    el('bp-k-outreach').textContent = oToday;
+    var oResp = seg(td, 'outreach', 'responded');
+    el('bp-c-outreach').textContent = oToday
+      ? Tf('bp_outreach_resp', { n: oResp }) : '';
+
+    var inToday = seg(td, 'traffic', 'messages_in');
+    el('bp-k-inbound').textContent = inToday;
+    cmp('bp-c-inbound', inToday, seg(yd, 'traffic', 'messages_in'));
+
+    // 一句话解读（人话，零黑话；数字为零的句子不说）
+    var say = [];
+    if (rToday > 0) {
+      say.push(Tf('bp_say_replies', {
+        n: rToday,
+        h: (n(saved.today_minutes) >= 60
+            ? savedTodayH + ' ' + T('bp_unit_hours')
+            : Math.round(n(saved.today_minutes)) + ' ' + T('bp_unit_minutes')),
+      }));
+    }
+    if (oToday > 0) say.push(Tf('bp_say_outreach', { z: oToday, w: oResp }));
+    if (!say.length) say.push(T('bp_say_quiet'));
+    el('bp-say').textContent = say.join(' ');
+
+    // 本周合计
+    var wkSavedH = Math.round(n(saved.week_minutes) / 60 * 10) / 10;
+    var wk = [
+      Tf('bp_week_replies', { n: seg(tw, 'drafts', 'sent') }),
+      Tf('bp_week_saved', { h: wkSavedH }),
+      Tf('bp_week_outreach', { z: seg(tw, 'outreach', 'sent'),
+                               w: seg(tw, 'outreach', 'responded') }),
+      Tf('bp_week_traffic', { o: seg(tw, 'traffic', 'messages_out'),
+                              i: seg(tw, 'traffic', 'messages_in') }),
+    ];
+    el('bp-week').innerHTML = wk.map(function (s) {
+      return '<span>' + s.replace(/(\d+(?:\.\d+)?)/g, '<b>$1</b>') + '</span>';
+    }).join('');
+
+    // 「现在」区（P1-8）：段缺失=格子隐藏；风险行触发才红，没风险给颗定心丸
+    var nw = data.now || null;
+    if (nw && (nw.goals || nw.waiting || nw.risk)) {
+      el('bp-now-card').style.display = '';
+      var g = nw.goals || null;
+      el('bp-t-active').style.display = g ? '' : 'none';
+      el('bp-t-won').style.display = g ? '' : 'none';
+      if (g) {
+        el('bp-n-active').textContent = n(g.active);
+        el('bp-n-won').textContent = n(g.won_24h);
+        el('bp-nc-won').textContent = n(g.won_amount_24h) > 0
+          ? Tf('bp_now_won_amt', { a: n(g.won_amount_24h) }) : '';
+      }
+      var w = nw.waiting || {};
+      el('bp-n-pending').textContent = n(w.replies_pending);
+      el('bp-n-unans').textContent = n(w.unanswered_24h);
+      var risks = [];
+      var rk = nw.risk || {};
+      if (n(rk.sessions_down) > 0) {
+        risks.push(Tf('bp_now_risk_sessions', { n: n(rk.sessions_down) }));
+      }
+      if (n(rk.frozen) > 0) {
+        risks.push(Tf('bp_now_risk_frozen', { n: n(rk.frozen) }));
+      }
+      if (rk.alert_link && rk.alert_link !== 'healthy') {
+        risks.push(T('bp_now_risk_alert'));
+      }
+      var re = el('bp-now-risk');
+      re.style.display = '';
+      if (risks.length) {
+        re.style.color = 'var(--tk-danger,#dc2626)';
+        re.textContent = '\u26A0 ' + risks.join('\uFF1B');
+      } else {
+        re.style.color = 'var(--tk-emerald-ink,#059669)';
+        re.textContent = T('bp_now_ok');
+      }
+    }
+
+    // 「AI 花费」卡（成本对账 P2）：段缺失整卡隐藏
+    var cs = data.cost || null;
+    var cc = el('bp-cost-card');
+    if (cc) {
+      cc.style.display = cs ? '' : 'none';
+      if (cs) {
+        var f2 = function (v) { return (v === null || v === undefined) ? '—' : Number(v).toFixed(2); };
+        el('bp-cost-today').textContent = f2(cs.today);
+        el('bp-cost-top').textContent = (cs.top || []).map(function (p) {
+          return p.label + ' ¥' + f2(p.cost); }).join(' · ');
+        el('bp-cost-month').textContent = f2(cs.month);
+        el('bp-cost-avg').textContent = '\u8FD1 7 \u5929\u65E5\u5747 ¥' + f2(cs.avg7);
+        el('bp-cost-light').textContent = cs.recon_light || '\u26AA';
+        el('bp-cost-recon-day').textContent = cs.recon_day
+          ? (cs.recon_day + (cs.recon_verdict === 'ok' ? ' \u4E00\u81F4' : cs.recon_verdict === 'mismatch' ? ' \u4E0D\u4E00\u81F4' : ' \u65E0\u8D26\u5355\u771F\u503C'))
+          : '\u5C1A\u672A\u5BF9\u8D26';
+        el('bp-cost-runway').textContent = (cs.runway_days === null || cs.runway_days === undefined) ? '—' : cs.runway_days;
+        el('bp-cost-balance').textContent = (cs.balance === null || cs.balance === undefined)
+          ? '\u4F59\u989D\u672A\u77E5\uFF08\u5728\u6210\u672C\u9875\u586B\u4E00\u6B21\uFF09' : '\u4F59\u989D\u7EA6 ¥' + f2(cs.balance);
+        var ci = el('bp-cost-issues');
+        var issues = (cs.issues || []).slice();
+        if (!cs.pricing_configured) { issues.unshift('\u4EF7\u683C\u8868\u672A\u914D\u7F6E\uFF0C\u91D1\u989D\u4F1A\u4E00\u76F4\u662F 0'); }
+        if (issues.length) {
+          ci.style.display = ''; ci.style.color = 'var(--tk-amber-ink,#b45309)';
+          ci.textContent = '\u26A0 ' + issues.join('\uFF1B');
+        } else { ci.style.display = 'none'; }
+      }
+    }
+
+    // 7 天趋势条
+    var series = data.series || [];
+    var maxOut = 1;
+    series.forEach(function (s) { maxOut = Math.max(maxOut, n(s.messages_out), n(s.drafts_sent)); });
+    el('bp-trend').innerHTML = series.map(function (s) {
+      var hOut = Math.max(2, Math.round(n(s.messages_out) / maxOut * 92));
+      var hAi = Math.max(2, Math.round(n(s.drafts_sent) / maxOut * 92));
+      var d = new Date(n(s.hi) * 1000);
+      var lbl = (d.getMonth() + 1) + '/' + d.getDate();
+      return '<div class="bp-day">'
+        + '<div class="bp-bars">'
+        + '<div class="bp-bar out" style="height:' + hOut + 'px" title="'
+        + n(s.messages_out) + '"></div>'
+        + '<div class="bp-bar ai" style="height:' + hAi + 'px" title="'
+        + n(s.drafts_sent) + '"></div>'
+        + '</div><div class="d">' + lbl + '</div></div>';
+    }).join('');
+  }
+
+  async function load(force) {
+    try {
+      var r = await fetch('/api/workspace/boss-value' + (force ? '?force=1' : ''));
+      var d = await r.json();
+      if (!d || d.ok === false) {
+        el('bp-loading').textContent = T('bp_err');
+        return;
+      }
+      render(d);
+    } catch (e) {
+      el('bp-loading').textContent = T('bp_err');
+    }
+  }
+
+  function bpRefresh() {
+    el('bp-body').style.display = 'none';
+    el('bp-empty').style.display = 'none';
+    el('bp-loading').style.display = '';
+    el('bp-loading').textContent = T('bp_loading_txt');
+    load(true);
+  }
+  function bpExport() { window.open('/api/workspace/boss-export.md', '_blank'); }
+
+  window.bpRefresh = bpRefresh;
+  window.bpExport = bpExport;
+  load(false);
+})();
+</script>
+{% endblock %}

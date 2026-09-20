@@ -34,6 +34,17 @@ def test_confidence_wrong_script_low():
     assert translation_confidence("早上好", "你早上好呀", "en") < 0.5
 
 
+def test_confidence_zh_variant_targets_score_cjk_script():
+    """zh-tw/yue 目标：CJK 译文不因「脚本未知」少一个信号维度（2026-08-29）。"""
+    from src.ai.translation_confidence import confidence_signals
+    for tgt in ("zh-tw", "yue"):
+        sig = confidence_signals("hello friend", "你好朋友", tgt)
+        assert sig["script_ratio"] == 1.0
+        # 拉丁输出对 CJK 变体目标 = 错语种，脚本占比必须打到 0
+        bad = confidence_signals("你好朋友", "hello friend", tgt)
+        assert bad["script_ratio"] == 0.0
+
+
 def test_confidence_signals_shape():
     sig = confidence_signals("hi", "你好", "zh")
     assert set(sig) >= {"empty", "untranslated", "script_ratio", "length_ok"}

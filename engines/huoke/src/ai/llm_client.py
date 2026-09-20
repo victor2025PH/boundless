@@ -148,7 +148,11 @@ class UsageStats:
     low_quality_responses: int = 0   # 响应长度不达标的次数
     fallback_triggers: int = 0       # 主 provider 失败后触发 fallback 的次数
     total_latency_ms: float = 0.0    # 成功调用的总延迟（ms）
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # RLock 而非 Lock：snapshot() 持锁期间会调 latency_p95_sec()，后者再取同一把锁
+    # → 非重入锁在此处死锁（2026-08-27 实测：test_snapshot 卡死，被 pytest-timeout 抓出）。
+    # 影响面不止测试：snapshot() 的线上调用方有 routers/ai.py、api.py 与 health_monitor
+    # 三处，任一调用都会把请求/巡检线程永久挂住。
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     # 2026-05-13: 最近 100 次成功调用延迟 ring-buffer，用于 p95 自适应超时
     _latency_ring: deque = field(
         default_factory=lambda: deque(maxlen=100), repr=False)

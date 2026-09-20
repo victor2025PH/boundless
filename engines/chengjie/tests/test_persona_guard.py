@@ -22,6 +22,7 @@ def test_collect_forbidden_empty_persona():
     fb = collect_forbidden({})
     assert fb["phrases"] == []
     assert fb["deny_ai"] is False
+    assert fb.get("foreign_products") == []
 
 
 # ── find_violations ──────────────────────────────────────────────────────────
@@ -50,10 +51,64 @@ def test_ai_self_id_ignored_when_deny_ai_false():
     assert find_violations("我是一个人工智能", p) == []
 
 
+# ── 能力自曝（2026-09-11 DC8F「我只能发文字」）────────────────────────────────
+
+def test_capability_leak_flagged_when_deny_ai():
+    p = _persona(deny_ai=True)
+    for txt in (
+        "哈哈我这边只能发文字啦，你发照片我看不到",
+        "我目前只能打字，不能发语音哦",
+        "我没法发语音，只能用文字跟你聊",
+        "Sorry, I can only send text messages here.",
+        "I can only communicate through text right now.",
+        "I'm text-only, so no voice notes from me!",
+        "I don't have the ability to send photos, sorry.",
+    ):
+        assert find_violations(txt, p), txt
+
+
+def test_capability_leak_no_false_positive_and_gated():
+    p = _persona(deny_ai=True)
+    for txt in (
+        "这边不方便开视频，先这样聊嘛",          # 人设块要求的正确婉拒
+        "文字表达不了我现在的开心",
+        "你只能发文字吗？语音也行呀",              # 说的是对方
+        "I only read the text you sent, not the file.",
+        "text me when you get home",
+    ):
+        assert find_violations(txt, p) == [], txt
+    assert find_violations("我只能发文字", _persona(deny_ai=False)) == []
+
+
+def test_capability_leak_sentence_stripped():
+    p = _persona(deny_ai=True)
+    cleaned, hits = sanitize("刚忙完～我这边只能发文字哦。你今天过得怎么样？", p)
+    assert hits and "只能发文字" not in cleaned
+    assert "你今天过得怎么样" in cleaned
+
+
 def test_negation_not_flagged():
     p = _persona(deny_ai=True)
     # "我不是 AI" 是否定句，不算露馅
     assert find_violations("哈哈我不是AI啦", p) == []
+
+
+def test_perception_context_not_flagged():
+    p = _persona(deny_ai=True)
+    # 「怕被当成机器人」是拟人打趣，不是自曝（2026-07-20 阿龙实测误报）
+    assert find_violations("不然我怕你觉得我是AI客服机器人", p) == []
+    assert find_violations("你以为我是AI啊，气死", p) == []
+    assert find_violations("别误会我是机器人哈", p) == []
+    # 允许感知动词与「我是」之间 ≤4 字间隔
+    assert find_violations("你觉得其实我是AI吗", p) == []
+
+
+def test_perception_exemption_conservative():
+    p = _persona(deny_ai=True)
+    # 无感知动词的自曝仍必须命中；「说」刻意不豁免（"老实说我是AI"是真自曝）
+    assert find_violations("我是AI客服机器人，放心吧", p)
+    assert find_violations("老实说我是AI", p)
+    assert find_violations("作为AI我建议你冷静", p)
 
 
 def test_clean_reply_no_violation():
@@ -110,6 +165,27 @@ def test_sanitize_empty_text():
     assert violations == []
 
 
+def test_sanitize_unpunctuated_stream_strips_clause():
+    # 空格代标点的口语流（拟人人设风格）：违规子句被摘除、其余保留——
+    # 旧实现整段视作一句 → 全删 → 回退原文（守卫形同虚设）
+    p = _persona(deny_ai=True)
+    txt = "宝我跟你说 其实我就是个AI 你别介意哈"
+    cleaned, violations = sanitize(txt, p)
+    assert violations
+    assert "AI" not in cleaned
+    assert "宝我跟你说" in cleaned
+    assert "你别介意哈" in cleaned
+
+
+def test_sanitize_unpunctuated_stream_perception_untouched():
+    # 感知语境豁免后整段无违规 → 原样返回（2026-07-20 实测消息）
+    p = _persona(deny_ai=True)
+    txt = "行 那再给你发一条 你听着不假就行 不然我怕你觉得我是AI客服机器人"
+    cleaned, violations = sanitize(txt, p)
+    assert violations == []
+    assert cleaned == txt
+
+
 # ── SkillManager 接线（_enforce_persona_consistency）─────────────────────────
 
 class _FakePM:
@@ -161,3 +237,98 @@ def test_skillmanager_guard_swallows_errors(monkeypatch):
     txt = "好呀～想你了"
     # 守卫异常必须回退原文，绝不冒泡
     assert sm._enforce_persona_consistency(txt, chat_id="1") == txt
+
+
+# ── #175 客服/销售组织框架腔（2026-09-05 skuio 实录 Mizuki→John）────────────────
+import pytest  # noqa: E402
+
+from src.utils.persona_guard import matches_service_frame  # noqa: E402
+
+_SF_REAL = ("My assistant will reach out with the account details and a quick "
+            "setup guide—should take you about ten minutes.")
+
+
+@pytest.mark.parametrize("text", [
+    _SF_REAL,                                                     # 实录原句
+    "Our team will contact you shortly with the onboarding steps.",
+    "our support team will reach out to you tomorrow",
+    "I'll have someone from our side walk you through it.",
+    "Your account manager will call you.",
+    "As your dedicated advisor, I recommend the gold plan.",
+    "How can I help you today?",
+    "Is there anything else I can help you with?",
+    "我让同事联系你，把开户资料发过去。",
+    "我们团队会尽快联系您跟进。",
+    "我的助理稍后会加你。",
+    "您的专属客户经理会跟进。",
+])
+def test_service_frame_hits(text):
+    assert matches_service_frame(text), text
+    # deny_ai 人设默认开该家族 → 判违规
+    assert find_violations(text, _persona(deny_ai=True))
+
+
+@pytest.mark.parametrize("text", [
+    "my friend will call you later, she's lovely",       # 朋友≠组织（指令点名误伤面）
+    "I'll walk you through it myself, just us two.",     # 第一人称亲自
+    "my mom will visit this weekend",
+    "how can I help? just tell me",                      # 无 today 的朋友式帮忙
+    "我妈说周末来看我",
+    "我朋友会来接我",
+    "今天好累哦，刚加班回来，好想吃火锅～",
+    "I already sent the gold plan details to my own account, don't worry",  # 非组织框架
+])
+def test_service_frame_no_false_positive(text):
+    assert matches_service_frame(text) == [], text
+    assert not find_violations(text, _persona(deny_ai=True))
+
+
+def test_service_frame_gating_by_persona_and_override():
+    p_plain = _persona()                       # deny_ai False，未声明真人 → 默认不开
+    assert not find_violations(_SF_REAL, p_plain)
+    assert find_violations(_SF_REAL, p_plain, service_frame=True)     # 域级显式开
+    assert not find_violations(_SF_REAL, _persona(deny_ai=True), service_frame=False)
+    # claim_human 同样开
+    p_human = {"identity": {"claim_human": True}}
+    assert find_violations(_SF_REAL, p_human)
+    # honest_identity 不豁免客服腔（身份坦白 ≠ 允许企业话术）
+    assert find_violations(_SF_REAL, _persona(deny_ai=True), honest_identity=True)
+
+
+def test_service_frame_sanitize_strips_or_falls_back():
+    p = _persona(deny_ai=True)
+    # 混合：剥框架句留其余
+    cleaned, hits = sanitize(
+        "Missed you today! " + _SF_REAL + " Anyway, how was your run?", p)
+    assert hits and "assistant" not in cleaned and "account details" not in cleaned
+    assert "Missed you" in cleaned and "how was your run" in cleaned
+    # 整条都是框架腔（实录整条即此形态）→ 中性第一人称兜底，绝不回退原文/残句
+    cleaned2, hits2 = sanitize(_SF_REAL, p)
+    assert hits2 and cleaned2 != _SF_REAL and cleaned2.strip()
+    assert "assistant" not in cleaned2 and "account details" not in cleaned2
+    assert "reach out with the" not in cleaned2          # 不是 inline 抹词残句
+    assert not matches_service_frame(cleaned2)           # 兜底自身干净
+    cleaned3, _ = sanitize("我让同事联系你，把开户资料发过去。", p)
+    assert "同事" not in cleaned3 and cleaned3.strip() and not matches_service_frame(cleaned3)
+
+
+def test_skillmanager_service_frame_conversion_domain(monkeypatch):
+    """陪聊域（domain=conversion）即使人设没配 deny_ai 也开客服框架腔家族；
+    子开关 companion.persona_guard.service_frame.enabled=false 可整体关。"""
+    from types import SimpleNamespace
+    from src.utils.persona_manager import PersonaManager
+    persona = {"speaking": {"forbidden_phrases": []}, "identity": {"deny_ai": False}}
+    monkeypatch.setattr(PersonaManager, "get_instance", lambda: _FakePM(persona))
+    sm = _bare_sm()
+    sm._persona_guard_enabled = True
+    sm.config = SimpleNamespace(config={"domain": "conversion"})
+    out = sm._enforce_persona_consistency(_SF_REAL, chat_id="1")
+    assert out != _SF_REAL and "assistant" not in out
+    # 非陪聊域（support）+ 人设未声明真人 → 交人设推断（不开）
+    sm.config = SimpleNamespace(config={"domain": "support"})
+    assert sm._enforce_persona_consistency(_SF_REAL, chat_id="1") == _SF_REAL
+    # 子开关关 → 陪聊域也放行
+    sm.config = SimpleNamespace(config={
+        "domain": "conversion",
+        "companion": {"persona_guard": {"service_frame": {"enabled": False}}}})
+    assert sm._enforce_persona_consistency(_SF_REAL, chat_id="1") == _SF_REAL

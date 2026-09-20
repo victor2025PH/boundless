@@ -149,7 +149,7 @@ python faceswap_video.py --input 素材.mp4 --output 成片.mp4 \
 ## 五、生成 → 上架流程（/order 展示位）
 
 1. Flow 里每个 Shot 用 Fast 出 2–3 版草稿 → 选构图 → Quality 重出 → 导出选 4K。
-2. 剪映拼 4 段（硬切或 0.2s 叠化）→ 加中文字幕 + 片尾品牌卡（BOUNDLESS · bd2026.cc）+「概念演示」角标。
+2. 剪映拼 4 段（硬切或 0.2s 叠化）→ 加中文字幕 + 片尾品牌卡（BOUNDLESS · usdt2026.cc）+「概念演示」角标。
 3. 保留 4K 母版（YouTube / 给客户）；网页版压 1080p：
    `ffmpeg -i master4k.mp4 -c:v libx264 -crf 23 -preset slow -vf scale=1920:-2 -c:a aac -b:a 128k -movflags +faststart <key>.mp4`
    （30 秒控制在 8–15MB；/order 播放器 preload="none"，不拖慢页面。）

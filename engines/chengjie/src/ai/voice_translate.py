@@ -17,6 +17,7 @@ import logging
 import os
 import tempfile
 import time
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.ai.media_text_cache import get_media_text_cache, hash_file
@@ -74,6 +75,40 @@ def decode_audio_to_temp(audio_b64: str) -> Tuple[Optional[str], str]:
         return None, f"write_failed:{type(exc).__name__}"
 
 
+# ── P6（2026-08-18）：ASR 缓存学会带分段 ─────────────────────────────────
+# 缓存值仍是字符串（MediaTextCache 契约不动）：带分段的条目存版本化 JSON 信封
+# （前缀识别），旧纯文本值原样兼容。修「同一音频第一次上传有字幕、第二次上传
+# （缓存命中）字幕消失」的语义不一致。
+_CACHE_SEG_PREFIX = "ASRJ1:"
+
+
+def _cache_pack(text: str, segments: list) -> str:
+    """有分段 → 信封；无分段 → 纯文本（与历史格式一致，别的消费者零感知）。"""
+    if not segments:
+        return text
+    import json as _json
+    try:
+        return _CACHE_SEG_PREFIX + _json.dumps(
+            {"text": text, "segments": segments}, ensure_ascii=False)
+    except Exception:
+        return text
+
+
+def _cache_unpack(raw: Any) -> Tuple[str, list]:
+    """返回 (text, segments)。坏信封 → ("", [])＝调用方按 miss 重跑（绝不把信封串当转写）。"""
+    s = str(raw or "")
+    if not s.startswith(_CACHE_SEG_PREFIX):
+        return s, []
+    import json as _json
+    try:
+        d = _json.loads(s[len(_CACHE_SEG_PREFIX):])
+        text = str(d.get("text") or "")
+        segs = [x for x in (d.get("segments") or []) if isinstance(x, dict)]
+        return text, segs
+    except Exception:
+        return "", []
+
+
 class VoiceTranslateService:
     def __init__(self, translation_service: TranslationService, transcribe_fn: TranscribeFn) -> None:
         self._xlate = translation_service
@@ -86,7 +121,10 @@ class VoiceTranslateService:
         target_lang: str = "zh",
         source_lang: str = "",
         style: str = "chat",
+        want_segments: bool = False,
     ) -> Dict[str, Any]:
+        """``want_segments=True``＝调用方需要分段（SRT）：缓存命中但缺分段时按 miss
+        重跑一次 ASR 并升级缓存信封（transcribe fn 也须以 want_segments 构建）。"""
         stats = get_provider_stats("asr", "asr")
         cache = get_media_text_cache()
         h = hash_file(audio_path)
@@ -97,9 +135,14 @@ class VoiceTranslateService:
         language = ""
         asr_model = "cache"
         asr_cached = False
+        segments: list = []   # P3：分段时间戳（鲜 ASR opt-in 或 P6 信封命中时非空）
         if cached is not None:
-            transcript, asr_cached = cached, True
-        else:
+            c_text, c_segs = _cache_unpack(cached)
+            if c_text and (c_segs or not want_segments):
+                transcript, asr_cached, segments = c_text, True, c_segs
+            else:
+                cached = None   # 要分段但缓存没有 / 坏信封 → 按 miss 重跑升级
+        if cached is None:
             t0 = time.monotonic()
             try:
                 rv = await self._transcribe(audio_path)
@@ -119,13 +162,19 @@ class VoiceTranslateService:
             extra = getattr(rv, "extra", None) or {}
             if extra.get("fallback_used"):
                 stats.record_fallback()
+            segments = list(extra.get("segment_list") or [])
             if not ok:
                 reason = "no_speech" if getattr(rv, "ok", False) else "asr_failed"
-                return {"ok": False, "reason": reason,
-                        "asr_error": (getattr(rv, "error", "") or "")[:200],
-                        "transcript": ""}
+                err = (getattr(rv, "error", "") or "")[:200]
+                # M-5 D（#225）：失败原因分类（超时 / 被拒 / 不可达 / 格式），路由据此
+                # 取 err.asr.<code> 人话——此前一律「转录服务暂不可用」
+                from src.ai.audio_pipeline_intake import classify_asr_error
+                code = "no_speech" if reason == "no_speech" else classify_asr_error(err)
+                return {"ok": False, "reason": reason, "asr_error": err,
+                        "asr_code": code, "asr_model": asr_model,
+                        "asr_latency_ms": lat, "transcript": ""}
             if transcript and ck:
-                cache.put(ck, transcript)
+                cache.put(ck, _cache_pack(transcript, segments))
 
         if not transcript:
             return {"ok": False, "reason": "no_speech", "transcript": ""}
@@ -134,7 +183,7 @@ class VoiceTranslateService:
         result = await self._xlate.translate(
             transcript, target_lang=target_lang, source_lang=src, style=style,
         )
-        return {
+        out: Dict[str, Any] = {
             "ok": bool(result.ok),
             "transcript": transcript,
             "asr_language": language,
@@ -143,21 +192,206 @@ class VoiceTranslateService:
             "source_lang": result.source_lang,
             "translation": result.to_dict(),
         }
+        if segments:
+            out["segments"] = segments   # SRT 消费方（P4）；P6 起信封命中的缓存路径也带
+        return out
 
 
-def build_audio_transcribe_fn(audio_cfg: Dict[str, Any]) -> TranscribeFn:
-    """生产用 transcribe fn：包一层 AudioPipeline 单例。"""
+# P4-fix（2026-08-18）：**刻意不用全局单例** get_audio_pipeline——那是「首调定型」
+# 语义，而 RPA 各链会拿自己的嵌套 audio_pipeline 配置（实例里全是 enabled:false 的
+# 死默认）先调即抢注，统一收件箱语音翻译整个进程周期被禁用态单例反杀。此处按
+# **配置指纹**缓存独立管线：openai 后端＝轻 HTTP 客户端零成本；faster_whisper
+# 同配置仍只载一次模型。双向隔离，谁也污染不了谁。
+_AP_CACHE: Dict[str, Any] = {}
+_AP_CACHE_MAX = 8
+
+
+def _pipeline_for(audio_cfg: Dict[str, Any]):
+    import hashlib
+    import json as _json
+
+    key = hashlib.sha1(_json.dumps(
+        audio_cfg or {}, sort_keys=True, default=str).encode()).hexdigest()
+    ap = _AP_CACHE.get(key)
+    if ap is None:
+        from src.ai.audio_pipeline import AudioPipeline
+        if len(_AP_CACHE) >= _AP_CACHE_MAX:
+            _AP_CACHE.clear()   # 配置变体极少；粗暴清空防理论上的无界增长
+        ap = AudioPipeline(dict(audio_cfg or {}))
+        _AP_CACHE[key] = ap
+    return ap
+
+
+def resolve_effective_audio_cfg(full_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """翻译工具链的**有效** ASR 配置（B27 2026-08-21，内测实录「处理失败:
+    语音转写未启用 (config.audio_pipeline.enabled)」）。
+
+    客户包顶层 ``audio_pipeline`` 是死默认 ``enabled:false``（重启无效），而托管
+    ASR（``hosted_gateway.ensure_hosted_asr``）只注 ``voice_recognition`` 段——
+    收件箱语音消息识别好好的，翻译工具却报「未启用」。此处收口三条路由共用的
+    配置解析：
+
+    - ``audio_pipeline.enabled`` 开 → 原样返回（内部部署/自配管线零变化）；
+    - 关，但 ``voice_recognition._hosted_asr`` 标记在（ensure_hosted_asr 注入，
+      热重载经 env 回放重放，标记即真相）→ 从注入形状派生网关转写配置：
+      gateway-first 形态取主位 base_url/model，LAN-first 形态取 fallback 里的
+      ``_hosted_asr_entry``；设备令牌**当次**从 ``AITR_HOSTED_AI_KEY`` 解析
+      （AudioPipeline 的 openai 后端不认 "hosted" 占位——它把 api_key 原样塞给
+      OpenAI 客户端；令牌 30 天换新，派生按请求发生 + _AP_CACHE 按配置指纹分桶，
+      换新自然换管线）；
+    - 两者皆无 / 令牌未领 → ``{}``（调用方按未接入处理，报错走人话 i18n）。
+    """
+    full = full_cfg or {}
+    ap = full.get("audio_pipeline")
+    ap = dict(ap) if isinstance(ap, dict) else {}
+    if ap.get("enabled", False):
+        return ap
+    vr = full.get("voice_recognition")
+    vr = vr if isinstance(vr, dict) else {}
+    if not vr.get("_hosted_asr"):
+        return {}
+    hosted_base = ""
+    hosted_model = ""
+    if str(vr.get("api_key") or "").strip().lower() == "hosted":
+        # gateway-first：主位就是网关
+        hosted_base = str(vr.get("base_url") or "").strip()
+        hosted_model = str(vr.get("model") or "").strip()
+    else:
+        # LAN-first：网关在 fallback 链里（_hosted_asr_entry 标记）
+        fb = vr.get("fallback")
+        entries = fb if isinstance(fb, list) else ([fb] if isinstance(fb, dict) else [])
+        for e in entries:
+            if isinstance(e, dict) and e.get("_hosted_asr_entry"):
+                hosted_base = str(e.get("base_url") or "").strip()
+                hosted_model = str(e.get("model") or "").strip()
+                break
+    if not hosted_base:
+        hosted_base = str(os.environ.get("AITR_HOSTED_ASR_BASE_URL") or "").strip()
+    token = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+    if not hosted_base or not token:
+        return {}
+    return {
+        "enabled": True,
+        "backend": "openai",
+        "base_url": hosted_base.rstrip("/"),
+        "api_key": token,
+        "model": hosted_model or "large-v3-turbo",
+        "language": "auto",
+        "_derived_hosted_asr": True,
+    }
+
+
+def build_audio_transcribe_fn(audio_cfg: Dict[str, Any],
+                              *, want_segments: bool = False) -> TranscribeFn:
+    """生产用 transcribe fn：按配置指纹取独立 AudioPipeline（见 _pipeline_for 注释）。
+
+    ``want_segments=True``＝SRT 消费方（视频/音频文件翻译）opt-in 分段时间戳；
+    语音主链默认 False 零变化。
+    """
 
     async def _tr(audio_path: str):
-        from src.ai.audio_pipeline import get_audio_pipeline
-        ap = get_audio_pipeline(audio_cfg)
-        return await ap.transcribe_file(audio_path)
+        ap = _pipeline_for(audio_cfg)
+        return await ap.transcribe_file(audio_path, want_segments=want_segments)
 
     return _tr
 
 
+# ── M-5 D（#225，2026-09-06）：工具箱音频链并入工作台 voice_transcriber ──────────
+# 5NXHUW：工具箱走 audio_pipeline（自己的 openai 客户端：默认 600s/重试 2 次、
+# response_format=json、模型名从 resolve_effective_audio_cfg 派生成 large-v3-turbo），
+# 工作台客户语音走 voice_recognition → OpenAITranscriber（apply_hosted_asr 注入的
+# 网关配置：timeout 45 / max_retries 0 / text / 种子模型名）。同一台机器同一分钟：
+# 前者 APITimeoutError 16.6s，后者 1 秒成功。两条链两套配置，坏一条没人知道为什么。
+# 收口：工具箱默认复用工作台**同一个** transcriber 对象（media_enrich.lazy_voice_
+# transcriber 缓存的那份，含 L-6 B 网关接管 / LAN 回落链），只有「要分段时间戳」
+# （SRT）且显式开了 audio_pipeline 时才走 AudioPipeline（voice_transcriber 不出分段）。
+
+@dataclass
+class WorkspaceTranscribeResult:
+    """把 ``VoiceTranscriber.transcribe_voice_message``（str|None）包成
+    ``TranscribeResult`` 形状，VoiceTranslateService 不用知道两条链的区别。"""
+    ok: bool = False
+    text: str = ""
+    language: str = ""
+    duration_sec: float = 0.0
+    latency_ms: int = 0
+    model: str = ""
+    error: str = ""
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+def workspace_transcriber(full_cfg: Optional[Dict[str, Any]]):
+    """工作台同一份 transcriber（``voice_recognition.enabled`` 关 / 建失败 → None）。"""
+    try:
+        from src.inbox.media_enrich import lazy_voice_transcriber
+        return lazy_voice_transcriber(full_cfg or {})
+    except Exception:
+        logger.debug("workspace transcriber unavailable", exc_info=True)
+        return None
+
+
+def build_workspace_transcribe_fn(full_cfg: Optional[Dict[str, Any]]) -> TranscribeFn:
+    """transcribe fn：走工作台 voice_transcriber（同入口同配置）。
+
+    语言恒传 ``auto``（上传音频不知道客户是谁，不能像收件箱那样按会话语言提示）；
+    失败时把转录器 ``last_error`` 带回 ``error``（路由据此分类超时/被拒/不可达）。
+    """
+
+    async def _tr(audio_path: str):
+        t0 = time.monotonic()
+        out = WorkspaceTranscribeResult(model="workspace")
+        t = workspace_transcriber(full_cfg)
+        if t is None:
+            out.error = "asr_unconfigured: voice_recognition disabled"
+            return out
+        out.model = f"workspace:{t.__class__.__name__}"
+        try:
+            text = await t.transcribe_voice_message(audio_path, language="auto")
+        except Exception as exc:  # noqa: BLE001（基类本不抛；最后防线）
+            text = None
+            out.error = f"{type(exc).__name__}: {exc}"
+        out.latency_ms = int((time.monotonic() - t0) * 1000)
+        if text:
+            out.ok = True
+            out.text = str(text).strip()
+        elif not out.error:
+            out.error = str(getattr(t, "last_error", "") or "empty_result")
+        return out
+
+    return _tr
+
+
+def resolve_toolbox_transcribe(
+    full_cfg: Optional[Dict[str, Any]], *, want_segments: bool = False,
+) -> Tuple[str, Optional[TranscribeFn]]:
+    """工具箱三条翻译路由共用的转写入口选择 → ``(chain, fn)``：
+
+    - ``("pipeline", fn)``：要分段（SRT）且 ``audio_pipeline`` 显式启用 / 托管派生可用
+      ——只有 AudioPipeline 会出 segment_list；
+    - ``("workspace", fn)``：工作台 voice_transcriber 可用（voice_recognition 开，含
+      apply_hosted_asr 网关接管）——**默认路径**；
+    - ``("pipeline", fn)``：工作台没开但 audio_pipeline 开着（内部自配管线，旧行为）；
+    - ``("", None)``：两者皆无 → 调用方报「未接入」。
+    """
+    full = full_cfg or {}
+    audio_cfg = resolve_effective_audio_cfg(full)
+    ap_on = bool(audio_cfg.get("enabled", False))
+    if want_segments and ap_on:
+        return "pipeline", build_audio_transcribe_fn(audio_cfg, want_segments=True)
+    if workspace_transcriber(full) is not None:
+        return "workspace", build_workspace_transcribe_fn(full)
+    if ap_on:
+        return "pipeline", build_audio_transcribe_fn(audio_cfg, want_segments=want_segments)
+    return "", None
+
+
 __all__ = [
     "VoiceTranslateService",
+    "WorkspaceTranscribeResult",
     "decode_audio_to_temp",
     "build_audio_transcribe_fn",
+    "build_workspace_transcribe_fn",
+    "resolve_effective_audio_cfg",
+    "resolve_toolbox_transcribe",
+    "workspace_transcriber",
 ]

@@ -107,13 +107,20 @@ def register_replybus_routes(app, *, api_auth, config_manager=None) -> None:
     ``api_auth``（Bearer token 或 session，天然兼容机器对机器调用——只要调用方带
     ``Authorization: Bearer <token>``）。
 
-    ⚠ 已知对接缺口（不在本文件可改范围内，留给部署侧决定，详情见交付说明）：
-    当前 platform/replybus/client.py（智控王侧瘦客户端）不发送任何 Authorization
-    头。若本部署的 ``web_admin.auth_token`` 已配置（生产环境常见姿势），
-    ``api_auth`` 会对每次真实 decide() 调用返回 401；瘦客户端的 fail-soft 设计会把
-    401 静默收敛为 ``action="fallback"``——现象上不报错、不双发，只是这条总线形同
-    虚设（智控王永远拿不到大脑的真实决策）。修复需要在 client.py 侧补发凭据，那
-    处于本任务"只新增 1 个文件"的边界之外，故只记录、不在本次改动内处理。
+    ✅ 2026-07-20 已修复（原"已知对接缺口"记录见下方存档，问题已不存在）：
+    platform/replybus/client.py（智控王侧瘦客户端）现已支持 ``auth_token`` 构造
+    参数 / ``BOUNDLESS_BUS_TOKEN`` 环境变量，配置后会在每次 decide()/status() 请求
+    上带 ``Authorization: Bearer <token>`` 头。已用真实 HTTP（非 TestClient 内存
+    调用）端到端验证：起一个真绑端口的 FastAPI 实例（本文件 register_replybus_
+    routes + 校验 Bearer 的 api_auth），配置 ``BOUNDLESS_BUS_TOKEN`` 后，智控王侧
+    ``PrivateMessageHandler._shadow_log_task`` 的真实调用能正确带上头并通过鉴权；
+    未配置/配错 token 时按预期收到 401 → 客户端 fail-soft 收敛为 fallback，不 500、
+    不抛异常。两侧配置需保持一致（同一个 token 字符串），部署时留意。
+
+    <details>原缺口记录存档（问题描述已过期，仅保留历史上下文）：曾经
+    platform/replybus/client.py 不发送任何 Authorization 头，若部署配置了
+    ``web_admin.auth_token``，会导致 decide() 每次都 401 后静默 fallback，总线形同
+    虚设——该问题已通过上述修复解决。</details>
     """
 
     @app.post("/api/replybus/decide")

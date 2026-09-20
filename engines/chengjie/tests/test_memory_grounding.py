@@ -60,6 +60,210 @@ def test_ai_client_ground_wrapper():
     assert s._ground_extracted_facts([], "x") == []
 
 
+# ── J-10 A1：引文级接地（跨语言，#183）──────────────────────────────────────
+from src.ai.memory_grounding import (  # noqa: E402
+    DROP_EVIDENCE_MISMATCH,
+    DROP_FACT_UNANCHORED,
+    DROP_NO_EVIDENCE,
+    evidence_matches_user_msg,
+    ground_fact_items,
+    ground_fact_with_evidence,
+    normalize_for_match,
+    summarize_drop_reasons,
+)
+
+
+def test_xlang_english_customer_facts_kept_88mp86():
+    """88MP86 实锤：英文客户的中文事实附原话引文 → 留（旧判据下 100% 被丢）。"""
+    um = "I've only had three boyfriends in my whole life. And I was married once."
+    assert ground_fact_with_evidence(
+        "客户结过一次婚", "I was married once", um) == (True, "")
+    assert ground_fact_with_evidence(
+        "客户一生只交过三个男朋友",
+        "I've only had three boyfriends in my whole life", um) == (True, "")
+    # 指令验收句
+    assert ground_fact_with_evidence(
+        "客户有一个女儿", "I have a daughter",
+        "I have a daughter and she is my greatest treasure") == (True, "")
+    # 旧判据对同一输入的结论（证明修的就是这条）
+    assert not fact_grounded_in_user_msg("客户结过一次婚", um)
+
+
+def test_xlang_thai_japanese_taglish_kept():
+    assert ground_fact_with_evidence(
+        "客户有一个女儿", "ฉันมีลูกสาว", "ฉันมีลูกสาวหนึ่งคน น่ารักมาก") == (True, "")
+    assert ground_fact_with_evidence(
+        "客户有一个女儿", "私には娘がいます", "私には娘がいます。もう高校生です。") == (True, "")
+    assert ground_fact_with_evidence(
+        "客户25岁", "I'm 25 na", "Sige, I'm 25 na. Taga-Davao ako.") == (True, "")
+
+
+def test_evidence_normalization_and_token_overlap():
+    assert normalize_for_match("I’m Tom!!") == normalize_for_match("i'm tom")
+    # 子串（标点/大小写/弯引号差异不算不符）
+    assert evidence_matches_user_msg("I have a daughter", "i HAVE a daughter, yes!!")
+    # LLM 微改引文（she’s→she is）：子串失败但 token 重叠 ≥60%
+    assert evidence_matches_user_msg(
+        "I have a daughter and she is my greatest treasure",
+        "I have a daughter and she’s my greatest treasure!!")
+    # 一半是编的 → 不符
+    assert not evidence_matches_user_msg("lives in Manila with kids", "I live in Cebu")
+    assert not evidence_matches_user_msg("", "anything")
+    assert not evidence_matches_user_msg("anything", "")
+
+
+def test_phase8_incident_still_rejected_under_evidence_rule():
+    """Phase8 事故语料三种形态一条不过：引文抄自助手 / 无引文 / 真引文洗白假事实。"""
+    um = "好呀好呀"
+    assert ground_fact_with_evidence("客户想去大阪玩", "想去大阪玩", um) == (
+        False, DROP_EVIDENCE_MISMATCH)
+    assert ground_fact_with_evidence("客户明天不用上班", "", um) == (
+        False, DROP_NO_EVIDENCE)
+    assert ground_fact_with_evidence("客户想去大阪玩", "好呀好呀", um) == (
+        False, DROP_FACT_UNANCHORED)
+    assert ground_fact_with_evidence(
+        "客户深夜还在线，可能明天休息", "你这么晚还在线", "你在干嘛呢 干嘛呢") == (
+        False, DROP_EVIDENCE_MISMATCH)
+
+
+def test_xlang_filler_and_invariant_token_guards():
+    """跨语种不能被「真引文」洗白：应答词不算引文；事实里的名字/数字必须在原话里。"""
+    assert ground_fact_with_evidence("客户明天不用上班", "yes", "yes")[0] is False
+    assert ground_fact_with_evidence("客户明天不用上班", "yes I do", "yes I do")[0] is False
+    assert ground_fact_with_evidence("客户来自日本", "ok sure haha", "ok sure haha")[0] is False
+    assert ground_fact_with_evidence("客户自称Tom", "I'm Bob", "I'm Bob") == (
+        False, DROP_FACT_UNANCHORED)
+    assert ground_fact_with_evidence("客户自称Bob", "I'm Bob", "I'm Bob") == (True, "")
+    assert ground_fact_with_evidence("客户30岁", "I'm 25", "I'm 25") == (
+        False, DROP_FACT_UNANCHORED)
+
+
+def test_same_language_keeps_legacy_rule():
+    """同语种：旧词汇判据照旧叠加——行为与 Phase8 以来一致，不弱化。"""
+    um = "我现在住在 Cebu，working as a nurse"
+    assert ground_fact_with_evidence("客户住在宿务", "住在 Cebu", um) == (True, "")
+    assert ground_fact_with_evidence("客户是护士", "working as a nurse", um) == (True, "")
+    # 同语种且事实与原话零重叠 → 丢（旧口径）
+    assert ground_fact_with_evidence("客户喜欢猫", "住在 Cebu", um) == (
+        False, DROP_FACT_UNANCHORED)
+
+
+def test_ground_fact_items_batch_and_reason_summary():
+    um = "I have a daughter and she is my greatest treasure"
+    kept, dropped = ground_fact_items([
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter"},
+        {"fact": "客户想去大阪玩", "evidence": "想去大阪玩"},
+        {"fact": "客户明天不用上班", "evidence": ""},
+        {"fact": "", "evidence": "x"},          # 空事实跳过
+        "客户是护士",                            # 裸字符串 → 无引文
+    ], um)
+    assert [k["text"] for k in kept] == ["客户有一个女儿"]
+    assert kept[0]["evidence"] == "I have a daughter"
+    reasons = summarize_drop_reasons(dropped)
+    assert reasons == {DROP_EVIDENCE_MISMATCH: 1, DROP_NO_EVIDENCE: 2}
+    assert ground_fact_items([], um) == ([], [])
+
+
+def test_ai_client_evidence_ground_wrapper():
+    """AIClient._ground_extracted_fact_items：过滤 + 丢弃原因回传 + 输出形状 {fact, evidence}。"""
+    from src.ai.ai_client import AIClient
+
+    class _Stub:
+        logger = __import__("logging").getLogger("t")
+        _ground_extracted_fact_items = AIClient._ground_extracted_fact_items
+        _ground_extracted_facts = AIClient._ground_extracted_facts
+
+    s = _Stub()
+    out = s._ground_extracted_fact_items([
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter"},
+        {"fact": "客户想去大阪玩", "evidence": "想去大阪玩"},
+    ], "I have a daughter and she is my greatest treasure")
+    assert out["candidates"] == 2
+    assert out["facts"] == [{"fact": "客户有一个女儿", "evidence": "I have a daughter"}]
+    assert out["dropped"] == [
+        {"fact": "客户想去大阪玩", "evidence": "想去大阪玩", "reason": DROP_EVIDENCE_MISMATCH}]
+    assert s._ground_extracted_fact_items([], "x") == {"facts": [], "dropped": [], "candidates": 0}
+
+
+def test_ai_client_parses_structured_and_legacy_fact_json():
+    from src.ai.ai_client import AIClient
+
+    class _Stub:
+        _MEMORY_IDENTITY_FILTERS = AIClient._MEMORY_IDENTITY_FILTERS
+        _parse_memory_fact_items = AIClient._parse_memory_fact_items
+        _parse_memory_facts_json = AIClient._parse_memory_facts_json
+
+    s = _Stub()
+    raw = ('```json\n{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter","confidence":0.95},'
+           '{"text":"客户25岁","quote":"I\'m 25","confidence":"1.7"},"客户住在宿务",'
+           '{"fact":"客户是护士","evidence":"night shifts","confidence":"abc"},'
+           '{"fact":"用户称呼助手为小美","evidence":"hi 小美"}]}\n```')
+    items = s._parse_memory_fact_items(raw)
+    assert items == [
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter", "confidence": 0.95},
+        {"fact": "客户25岁", "evidence": "I'm 25", "confidence": 1.0},   # 越界钳到 [0,1]
+        {"fact": "客户住在宿务", "evidence": ""},     # 旧格式 → 无引文（护栏按 no_evidence 丢）、无置信
+        {"fact": "客户是护士", "evidence": "night shifts"},              # 脏置信 → 不带
+    ]                                                   # 助手身份事实被过滤
+    assert s._parse_memory_facts_json(raw) == ["客户有一个女儿", "客户25岁", "客户住在宿务", "客户是护士"]
+    assert s._parse_memory_fact_items("not json") == []
+    assert s._parse_memory_fact_items('{"facts": "x"}') == []
+
+
+def test_ai_client_confidence_passes_grounding_and_tags_low_confidence(tmp_path):
+    """J-10 二期：置信随事实穿过护栏 → add_fact(confidence=) → 低置信进例外队列。"""
+    from src.ai.ai_client import AIClient
+    from src.utils.episodic_memory_store import EpisodicMemoryStore
+
+    class _Stub:
+        logger = __import__("logging").getLogger("t")
+        _ground_extracted_fact_items = AIClient._ground_extracted_fact_items
+        _ground_extracted_facts = AIClient._ground_extracted_facts
+
+    out = _Stub()._ground_extracted_fact_items([
+        {"fact": "客户是护士", "evidence": "night shifts at the hospital", "confidence": 0.55},
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter", "confidence": 0.95},
+        {"fact": "客户想去大阪玩", "evidence": "想去大阪玩", "confidence": 0.9},
+    ], "I work night shifts at the hospital and I have a daughter")
+    assert [f["fact"] for f in out["facts"]] == ["客户是护士", "客户有一个女儿"]
+    assert out["facts"][0]["confidence"] == 0.55 and out["facts"][1]["confidence"] == 0.95
+    st = EpisodicMemoryStore(tmp_path / "m.db")
+    try:
+        low = st.add_fact("k", "客户是护士", source="ai_inferred", confidence=0.55)
+        hi = st.add_fact("k", "客户喜欢喝美式咖啡", source="ai_inferred", confidence=0.95)
+        q = {i["id"]: i for i in st.review_queue(user_id="k")}
+        assert low in q and q[low]["review_reason"] == "low_confidence"
+        assert hi not in q
+    finally:
+        st.close()
+
+
+def test_extract_prompt_pins_evidence_rule():
+    """抽取 prompt 必须要求逐字引文且禁止取自助手回复（措辞可改，语义锚不许丢）。"""
+    import inspect
+    from src.ai.ai_client import AIClient
+    src = inspect.getsource(AIClient.extract_memory_facts)
+    assert "引文铁律" in src
+    assert "evidence" in src and "逐字" in src
+    assert "不能取自 ASSISTANT" in src or "不得取自 ASSISTANT" in src
+    assert "confidence" in src and "【置信】" in src   # J-10 二期：数值置信
+
+
+def test_grounding_eval_gate():
+    """常驻门禁：跨语言 keep 一条不漏，Phase8/洗白 drop 一条不漏网。"""
+    from src.eval.memory_extract_eval import (
+        evaluate_evidence_grounding, format_grounding_report, load_grounding_samples,
+    )
+    samples = load_grounding_samples()
+    assert len(samples) >= 10
+    rep = evaluate_evidence_grounding(samples)
+    assert rep["passed"], "\n接地护栏评测未过：\n" + format_grounding_report(rep)
+    assert rep["summary"]["leaked"] == 0
+    assert rep["summary"]["lost"] == 0
+    assert rep["summary"]["reason_mismatch"] == 0, format_grounding_report(rep)
+    assert "记忆接地护栏报告" in format_grounding_report(rep)
+
+
 # ── 时间断层提示 ─────────────────────────────────────────────────────────────
 def test_time_gap_hint_thresholds():
     assert build_time_gap_hint(0) == ""

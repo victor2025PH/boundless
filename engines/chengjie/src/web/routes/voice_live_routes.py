@@ -52,6 +52,10 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+#: 人设头像目录（绝对，= web 服务真正挂载的静态目录；勿用 CWD 相对路径，见下方用点注释）
+_PERSONA_AVATAR_DIR = (
+    Path(__file__).resolve().parents[1] / "static" / "persona_avatars")
+
 
 def _b64_file(path: str) -> str:
     """读参考音频→base64；失败返回空串（降级到内置音色）。"""
@@ -876,7 +880,10 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
                     pass
                 avatar_url = ""
                 try:
-                    if pid and Path(f"src/web/static/persona_avatars/{pid}.png").is_file():
+                    # 必须按 __file__ 推绝对路径：相对路径按**进程 CWD** 解析，而双实例
+                    # 部署的 CWD 是实例数据根 → 存在性判断永远 False → 人设头像整列不显
+                    # （与 account_self_profile._DEFAULT_AVATAR_DIR 同一类踩点，2026-07-29）。
+                    if pid and (_PERSONA_AVATAR_DIR / f"{pid}.png").is_file():
                         avatar_url = f"/static/persona_avatars/{pid}.png"
                 except Exception:
                     pass
@@ -1108,11 +1115,14 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             from src.ai.tts_pipeline import TTSPipeline
             tts = TTSPipeline(voice_cfg)
             result = await asyncio.wait_for(
-                tts.synthesize(text, timeout_sec=45.0, emotion=voice_ctx.get("emotion")),
+                tts.synthesize(text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                               total_budget_sec=45.0),
                 timeout=50.0)
         except Exception as ex:  # noqa: BLE001
-            logger.warning("[voice/preview] 合成失败: %s", ex)
-            return JSONResponse({"ok": False, "error": f"synth_failed:{str(ex)[:120]}"})
+            # TimeoutError 的 str() 为空 → 带上异常类型名，日志/前端都有排查抓手
+            _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
+            logger.warning("[voice/preview] 合成失败: %s", _exs)
+            return JSONResponse({"ok": False, "error": f"synth_failed:{_exs[:120]}"})
         if not getattr(result, "ok", False):
             return JSONResponse({"ok": False, "error": getattr(result, "error", "synth_failed")})
         try:

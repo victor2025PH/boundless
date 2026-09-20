@@ -24,7 +24,7 @@ DEFAULT_SITE_NAME_SHORT = "无界科技"
 DEFAULT_SIDEBAR_NAME = "无界 · 智聊"
 DEFAULT_LOGIN_SUBTITLE = "管理控制台"
 POWERED_BY_TEXT = "Powered by 无界科技"
-DEFAULT_WEBSITE_URL = "https://ai26.sbs"  # 实施05：主域名迁移，bd2026.cc 弃用
+DEFAULT_WEBSITE_URL = "https://bd2026.cc"  # 合规主站；ai26.sbs 是 2026-07 防封镜像，不作对外官网
 DEFAULT_BRAND_PATH = "/brand"
 
 # 静态资源路径（相对 /static）
@@ -159,6 +159,9 @@ def pwa_manifest(branding: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "scope": "/",
         "display": "standalone",
         "display_override": ["standalone", "minimal-ui", "browser"],
+        # 点任务栏图标 → 聚焦已开的应用窗（不新开、不整页刷新导航——navigate-existing
+        # 会每次点击都重载 /workspace，聊天现场太贵）；没有已开窗才按 start_url 新开。
+        "launch_handler": {"client_mode": "focus-existing"},
         "orientation": "any",
         "background_color": "#1b2038",
         "theme_color": theme,

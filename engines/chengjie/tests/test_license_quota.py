@@ -203,6 +203,85 @@ def test_check_quota_under_limit_allowed(tmp_path, monkeypatch):
     assert out["allowed"] is True and out["remaining"] == 40
 
 
+# ── P4b：charpack 字符加量包 ─────────────────────────────────────────────────
+
+def test_topup_store_idempotent_and_sum(tmp_path):
+    """ref=订单号主键：同单重复入账幂等拒绝；合计按 lic_id 隔离；重开持久。"""
+    store = LicenseQuotaStore(tmp_path / "q.db")
+    assert store.add_topup("L1", 50_000, "ORD-1") is True
+    assert store.add_topup("L1", 50_000, "ORD-1") is False   # 同订单幂等拒绝
+    assert store.add_topup("L1", 30_000, "ORD-2", note="promo") is True
+    assert store.add_topup("L1", 0, "ORD-3") is False        # 非法参数
+    assert store.add_topup("L1", 100, "") is False
+    assert store.topup_chars("L1") == 80_000
+    assert store.topup_chars("L2") == 0                      # 其它授权不串味
+    assert {t["ref"] for t in store.list_topups("L1")} == {"ORD-1", "ORD-2"}
+    assert LicenseQuotaStore(tmp_path / "q.db").topup_chars("L1") == 80_000
+
+
+def test_usage_history_month_aggregation(tmp_path):
+    """按月聚合：跨月/跨类目求和、旧→新排序、months 截断、lic 隔离、空表。"""
+    from datetime import datetime, timezone
+
+    store = LicenseQuotaStore(tmp_path / "q.db")
+
+    def ts(y, m, d):
+        return datetime(y, m, d, tzinfo=timezone.utc).timestamp()
+
+    store.record("L1", "translate", 100, now=ts(2026, 4, 3))
+    store.record("L1", "tts", 50, now=ts(2026, 4, 28))       # 同月异类目并月
+    store.record("L1", "translate", 700, now=ts(2026, 5, 15))
+    store.record("L1", "translate", 900, now=ts(2026, 7, 1))  # 跳月不补零
+    store.record("L2", "translate", 999, now=ts(2026, 5, 2))  # 其它授权不串味
+
+    hist = store.usage_history("L1")
+    assert hist == [
+        {"month": "2026-04", "chars": 150},
+        {"month": "2026-05", "chars": 700},
+        {"month": "2026-07", "chars": 900},
+    ]
+    # months 截断：只留最近 2 个月（仍旧→新）
+    assert store.usage_history("L1", months=2) == [
+        {"month": "2026-05", "chars": 700},
+        {"month": "2026-07", "chars": 900},
+    ]
+    assert store.usage_history("L-none") == []
+
+
+def test_check_quota_folds_topup_into_included(tmp_path, monkeypatch):
+    """加量包并进 included 口径：enforce 超额被拦的授权，充值后立即恢复放行。"""
+    import src.licensing.quota_store as qs
+
+    configure_license_quota_store(db_path=tmp_path / "q.db")
+    st = _fake_status(included=100, enforce=True)
+    monkeypatch.setattr(qs, "_current_status", lambda: st)
+    record_license_chars("translation", 100)          # 恰好耗尽
+    assert check_license_quota()["allowed"] is False
+    res = qs.add_license_topup(50, "ORD-9")
+    assert res["ok"] is True and res["included"] == 150
+    out = check_license_quota()
+    assert out["allowed"] is True and out["exceeded"] is False
+    assert out["included"] == 150 and out["included_base"] == 100
+    assert out["topup_chars"] == 50 and out["remaining"] == 50
+
+
+def test_add_license_topup_guards(tmp_path, monkeypatch):
+    """入账护栏：未激活 / 不限量授权拒绝；重复 ref 幂等报 duplicate_ref。"""
+    import src.licensing.quota_store as qs
+
+    configure_license_quota_store(db_path=tmp_path / "q.db")
+    monkeypatch.setattr(qs, "_current_status",
+                        lambda: _fake_status(licensed=False))
+    assert qs.add_license_topup(100, "R1")["error"] == "not_licensed"
+    monkeypatch.setattr(qs, "_current_status",
+                        lambda: _fake_status(included=0))
+    assert qs.add_license_topup(100, "R1")["error"] == "unlimited"
+    monkeypatch.setattr(qs, "_current_status", lambda: _fake_status())
+    assert qs.add_license_topup(100, "R1")["ok"] is True
+    dup = qs.add_license_topup(100, "R1")
+    assert dup["ok"] is False and dup["error"] == "duplicate_ref"
+
+
 async def test_translation_blocked_and_metered(tmp_path, monkeypatch):
     """翻译热路：enforce+超额 → 引擎调用前被拦（稳定错误码）；未超额时成功翻译记账。"""
     import src.licensing.quota_store as qs
@@ -239,12 +318,12 @@ async def test_tts_blocked_and_metered(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipe, "_synthesize_uncached", _fake_uncached)
 
-    r1 = await pipe.synthesize("hello")          # 5 字符 → 记账
+    r1 = await pipe.synthesize("一二三四五")      # 5 字符、语种对齐默认中文声（Q-22 不再用英文稿撞 lang_mismatch）
     assert r1.ok is True
     assert qs.get_license_quota_store().used_chars("L-TTS") == 5
 
     record_license_chars("tts", 95)              # 合计 100 = 耗尽
-    r2 = await pipe.synthesize("more text")
+    r2 = await pipe.synthesize("还有一些字")
     assert r2.ok is False
     assert r2.error == QUOTA_EXCEEDED_ERROR
 

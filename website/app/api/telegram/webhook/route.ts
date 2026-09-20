@@ -8,9 +8,12 @@ import {
   handleGroupMessage,
   sendDocument,
   sendText,
+  tgCall,
 } from "@/lib/telegram-bot";
+import { appendBugCallback } from "@/lib/bug-callback-store";
 import { bindAdminChat, getAdminChats, unbindAdminChat } from "@/lib/admin-store";
 import { bindOrderNotify, notifyAdmins } from "@/lib/order-store";
+import { customerHandoffTexts, extractBindCodes, redeemForAdmin } from "@/lib/cs-redeem";
 import { bindTelegram, collectPearlByTg, parseStartToken, redeemDragonCode, setRemindByTg, type DragonState } from "@/lib/dragon-store";
 import { isDuplicateUpdate } from "@/lib/tg-dedup";
 import { BOT_HANDLE, TELEGRAM_GROUP, TELEGRAM_DISPLAY, SITE_URL } from "@/lib/site";
@@ -31,10 +34,17 @@ type TgUpdate = {
   callback_query?: {
     id: string;
     data?: string;
-    message?: { chat: { id: number }; message_id?: number };
+    message?: { chat: { id: number }; message_id?: number; text?: string };
     from?: { language_code?: string; id: number; username?: string; first_name?: string };
   };
 };
+
+/** 报障验证按钮（实施82 P2）：callback_data = btv:<ticket>:<y|n>:<reporterId> */
+function parseBugVerify(data: string): { ticket: number; verdict: "y" | "n"; reporterId: number } | null {
+  const m = data.match(/^btv:(\d{1,8}):(y|n):(\d{1,20})$/);
+  if (!m) return null;
+  return { ticket: Number(m[1]), verdict: m[2] as "y" | "n", reporterId: Number(m[3]) };
+}
 
 const BOT_AT = `@${BOT_HANDLE}`.toLowerCase();
 
@@ -225,6 +235,60 @@ export async function POST(req: NextRequest) {
           );
           return NextResponse.json({ ok: true });
         }
+        /* 报障验证按钮（实施82 P2）：即时应答 + 落盘给 117 拉取回写工单。
+           权限＝报障人本人或已绑定管理员——别人点只收 toast 不记账（群里谁都
+           看得到按钮，误点/好奇点不能污染验证结论）。 */
+        const bv = parseBugVerify(data);
+        if (bv) {
+          const zh = String(lang) === "zh";
+          const fromId = cq.from?.id ?? 0;
+          const isReporter = fromId === bv.reporterId;
+          const isAdmin = (await getAdminChats().catch(() => [] as string[]))
+            .includes(String(fromId));
+          if (!isReporter && !isAdmin) {
+            await answerCallback(
+              cq.id,
+              zh ? "只有报障的朋友本人可以点验证哦" : "Only the original reporter can verify this."
+            );
+            return NextResponse.json({ ok: true });
+          }
+          await appendBugCallback({
+            ts: Date.now() / 1000,
+            ticket: bv.ticket,
+            verdict: bv.verdict,
+            from_id: fromId,
+            username: cq.from?.username,
+            first_name: cq.from?.first_name,
+            chat_id: chatId,
+            message_id: cq.message?.message_id,
+          });
+          await answerCallback(
+            cq.id,
+            bv.verdict === "y"
+              ? zh ? "✅ 已记录：确认修复，感谢验证！" : "✅ Recorded — thanks for verifying!"
+              : zh ? "🔁 已记录：还没修好，工程师马上跟进" : "🔁 Recorded — engineers will follow up."
+          );
+          // 点完就地收键盘：原文案追加结论行（拿得到原文时），否则只摘键盘。
+          if (cq.message?.message_id) {
+            const done = bv.verdict === "y"
+              ? (zh ? "\n\n✅ 报障人已确认修复" : "\n\n✅ Verified by the reporter")
+              : (zh ? "\n\n🔁 报障人反馈仍未修复，已转回跟进" : "\n\n🔁 Reporter says still broken — reopened");
+            if (cq.message.text) {
+              await tgCall("editMessageText", {
+                chat_id: chatId,
+                message_id: cq.message.message_id,
+                text: cq.message.text + done,
+              });
+            } else {
+              await tgCall("editMessageReplyMarkup", {
+                chat_id: chatId,
+                message_id: cq.message.message_id,
+                reply_markup: { inline_keyboard: [] },
+              });
+            }
+          }
+          return NextResponse.json({ ok: true });
+        }
         const from = cq.from
           ? { id: cq.from.id, username: cq.from.username, first_name: cq.from.first_name }
           : undefined;
@@ -276,6 +340,28 @@ export async function POST(req: NextRequest) {
     const dragonCode = extractDragonCode(text);
     if (dragonCode) {
       await handleDragonRedeem(chatId, dragonCode, lang === "zh" ? "zh" : "en", msg.from);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 试用赠量绑定码（BC-XXXX-XXXX）：管理员/客服会话直接核销；客户发来则转交客服 ──
+    // 客户端「加客服领 10 万字符」的码。管理员集合复用 /bindadmin 绑定的 admin_chats
+    //（与 /ops /diag 同一信任面）；客户误把码发给 bot 也不白发——转交 + 安抚，人在环。
+    const bcCodes = extractBindCodes(text);
+    if (bcCodes.length) {
+      const isAdmin = (await getAdminChats().catch(() => [] as string[]))
+        .includes(String(chatId));
+      if (isAdmin) {
+        console.log(`[tg-cs-redeem] chat=${chatId} codes=${bcCodes.join(",")}`); // 审计
+        const reply = await redeemForAdmin(bcCodes, chatId);
+        await sendText(chatId, reply, undefined, { plain: true });
+      } else {
+        const who = msg.from?.username
+          ? `@${msg.from.username}`
+          : `${msg.from?.first_name || "客户"}（chat_id: ${chatId}）`;
+        const t = customerHandoffTexts(bcCodes, who, lang === "zh" ? "zh" : "en");
+        await sendText(chatId, t.reply, undefined, { plain: true });
+        await notifyAdmins(t.notify).catch(() => {});
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -369,7 +455,7 @@ export async function POST(req: NextRequest) {
           o
             ? (lang === "zh"
                 ? `🔔 已绑定订单 <code>${o.id}</code>\n到账、开通、临期都会第一时间通知你。当前状态：${
-                    { pending: "待付款", paid: "已到账·开通中", activated: "已开通", cancelled: "已取消" }[o.status] ?? o.status
+                    { pending: "待付款", paid: "已到账·开通中", activated: "已开通", cancelled: "已取消", refunded: "已退款" }[o.status] ?? o.status
                   }。`
                 : `🔔 Bound to order <code>${o.id}</code>\nYou'll get payment, activation and renewal alerts here.`)
             : (lang === "zh"

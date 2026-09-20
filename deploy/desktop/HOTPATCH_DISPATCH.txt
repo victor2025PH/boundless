@@ -1,0 +1,46 @@
+ChatX hotpatch / release dispatch
+================================
+Audience: the Telegram-group monitoring conversation.
+Goal: every user-reported bug becomes a ticket the ops chat can fix,
+ship, and announce. Do NOT build, push, publish, or post to the
+official channel/group yourself.
+
+When a group message needs engineering:
+1. Register it (B-number, user, symptom). Keep doing intake as you do today.
+2. Emit ONE block in the format below. Paste it to the ops conversation
+   that owns hotpatch (chatx session), or drop a .txt into
+   D:\boundless\deploy\desktop\inbox\Bxxx.txt
+3. Stop. Wait for "shipped Bxxx as 1.0.57+pN" or "needs full installer".
+
+HOTPATCH_TICKET
+id: B123
+user: @name
+severity: P0|P1|P2
+scope: shell|sidecar|backend|native
+machine: managed:yunsheng | external | unknown
+symptom: one sentence, user language
+repro: steps / screenshot id
+expect: what good looks like
+notes: anything else
+
+scope meaning
+  shell    = Electron main/renderer/inject JS     -> hotpatch, no installer
+  sidecar  = whatsapp-baileys / messenger-web     -> hotpatch -IncludeServices
+  backend  = Python FastAPI / backend.exe         -> hotpatch -IncludeBackend
+  native   = Electron/ffmpeg/NSIS                 -> FULL installer, not hotpatch
+
+Do not:
+- run make_chatx_hotpatch / push / publish
+- bump package.json version
+- tell the user "restart to get the fix" until ops replies shipped
+- invent a second update channel
+- post to official channel @hykj7 ONLY (ops does that; the linked group @hykjz auto-forwards channel posts — posting the group separately duplicates the announcement, boss flagged this twice 0827/0830)
+
+After ops ships:
+- ops posts CHANNEL_NOTICE_HOTPATCH to channel+group and in-app announcements
+- you may echo the same "重启即可" line in the feedback thread
+- mark the ticket done
+
+User-guide line (after 1.0.57 is installed):
+  打开智聊 -> 顶部点「立即重启更新」-> 关于页应显示 1.057+pN
+  还没升到 1.0.57 的，先去 https://bd2026.cc/download/chatx 装一次

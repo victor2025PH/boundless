@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.client.message_dedup import MessageDedup, PerChatLocks
+from src.client.message_dedup import MessageDedup, PerChatLocks, PollWatermark
 
 
 # ── MessageDedup ─────────────────────────────────────────────────────────────
@@ -61,6 +61,61 @@ def test_size_cap_prunes_oldest():
     assert len(d) <= 3
     assert d.claim(1, 5) is False        # 最新的还在
     assert d.claim(1, 1) is True         # 最老的被剪掉 → 视为新
+
+
+# ── PollWatermark（198 修复：未回复 top_message 周期性重处理） ────────────────
+def test_watermark_blocks_reprocess_regardless_of_ttl():
+    """核心语义：处理过的 mid 不过期地永不重处理——即便 dedup TTL 已过。
+
+    198 实锤：chat=5415685180 mid=18540『[表情]倒脸』一直是 top_message，
+    每过 dedup TTL(600s) 就被轮询重新『发现』一次白跑 _process_message。
+    """
+    w = PollWatermark()
+    assert w.already_processed(555, 18540) is False   # 首见
+    w.mark(555, 18540)
+    assert w.already_processed(555, 18540) is True    # 已处理 → 永久拦（无 TTL）
+    assert w.already_processed(555, 18539) is True     # 更旧的同样拦
+
+
+def test_watermark_lets_newer_message_through():
+    """同 peer 新消息 mid 严格更大 → 必须放行（不能误当旧消息拦掉）。"""
+    w = PollWatermark()
+    w.mark(555, 18540)
+    assert w.already_processed(555, 18541) is False   # 客户发了新消息
+    w.mark(555, 18541)
+    assert w.already_processed(555, 18541) is True
+
+
+def test_watermark_per_chat_isolation():
+    w = PollWatermark()
+    w.mark(1, 100)
+    assert w.already_processed(2, 50) is False        # 另一会话不受影响
+    assert w.already_processed(1, 100) is True
+
+
+def test_watermark_no_mid_and_bad_value_safe():
+    w = PollWatermark()
+    assert w.already_processed(1, 0) is False
+    assert w.already_processed(1, None) is False
+    w.mark(1, 0)          # 无 mid 不登记
+    w.mark(1, "bad")      # 非数字不崩
+    assert len(w) == 0
+
+
+def test_watermark_keeps_max_not_last():
+    """mark 取 max：乱序到达（先 mid 大后 mid 小）水位不回退。"""
+    w = PollWatermark()
+    w.mark(1, 200)
+    w.mark(1, 150)                                     # 更小的 mid 不该拉低水位
+    assert w.already_processed(1, 199) is True
+    assert w.already_processed(1, 201) is False
+
+
+def test_watermark_size_cap_prunes_oldest():
+    w = PollWatermark(max_size=3)
+    for c in range(5):
+        w.mark(c, 10)
+    assert len(w) <= 3
 
 
 # ── PerChatLocks ─────────────────────────────────────────────────────────────
@@ -114,6 +169,7 @@ def _mk_tc():
     tc.config = SimpleNamespace(get_telegram_config=lambda: {"process_private": True})
     tc._rate_limiter = SimpleNamespace(enabled=False)
     tc._msg_dedup = MessageDedup()
+    tc._poll_watermark = PollWatermark()
     tc._boot_timestamp = time.time() - 3600
     tc.user_info = SimpleNamespace(id=999)
     tc._process_message = AsyncMock()
@@ -150,6 +206,25 @@ async def test_poll_processes_new_message_once():
     # 第二轮（回复尚未落地、top_message 仍是进站消息）→ 去重拦下，绝不重复处理
     await tc._poll_inbound_once(30, catchup=600)
     assert tc._process_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_watermark_blocks_ttl_expired_reprocess():
+    """198 事故直接回归：未回复的 top_message 在 dedup TTL 过期后，水位闸仍拦住。
+
+    修复前：mid=18540 每过 600s TTL 就被『发现新进站私聊』重跑一次。这里用
+    可控时钟把 dedup TTL 推过期，验证 _process_message 不会被第二次触发。
+    """
+    tc = _mk_tc()
+    clock = {"t": 10000.0}
+    tc._msg_dedup = MessageDedup(ttl_sec=600.0, clock=lambda: clock["t"])
+    tc._poll_watermark = PollWatermark()
+    _wire_dialogs(tc, [_mk_dialog(5415685180, 18540)])
+    await tc._poll_inbound_once(30, catchup=600)
+    assert tc._process_message.await_count == 1
+    clock["t"] += 601                        # 越过 dedup TTL（旧 bug 触发点）
+    await tc._poll_inbound_once(30, catchup=600)
+    assert tc._process_message.await_count == 1   # 水位闸兜住，绝不重处理
 
 
 @pytest.mark.asyncio

@@ -209,7 +209,8 @@ def register_health_routes(app, ctx) -> None:
 
             # 3. 未处理危机事件（R9c：接 crisis_audit 落库数据）
             try:
-                sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+                from src.web.web_context import resolve_skill_manager
+                sm = resolve_skill_manager(telegram_client, app)
                 if sm:
                     unhandled = sm.crisis_count_for_admin(only_unhandled=True)
                     if unhandled > 0:
@@ -226,7 +227,7 @@ def register_health_routes(app, ctx) -> None:
                             "title": f"{unhandled} 条未处理危机",
                             "body": body,
                             "action_url": "/crisis-audit?only_unhandled=1",
-                            "action_label": "危机审计",
+                            "action_label": "客户安全预警",
                         })
             except Exception:
                 pass
@@ -234,7 +235,8 @@ def register_health_routes(app, ctx) -> None:
             # 4. AI 推断低采纳（R18：采纳率持续偏低=推断在产噪声，提示调阈值）
             #    R19：窗口/样本/采纳率阈值经 memory.adoption_alert 可配（默认 30/10/0.30）
             try:
-                sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+                from src.web.web_context import resolve_skill_manager
+                sm = resolve_skill_manager(telegram_client, app)
                 _mcfg = getattr(config_manager, "config", None) or {}
                 _acfg = ((_mcfg.get("memory") or {}).get("adoption_alert") or {}) \
                     if isinstance(_mcfg, dict) else {}
@@ -265,6 +267,37 @@ def register_health_routes(app, ctx) -> None:
                             ),
                             "action_url": "/episodic-memory",
                             "action_label": "记忆校正",
+                        })
+            except Exception:
+                pass
+
+            # 5. J-10 三期：AI 答应过的事超期没兑现（承诺账本 _promise_log，超期＝开了 7 天没动静）
+            #    memory.promises.overdue_alert.{enabled: true, min_count: 5}——少量属常态不提醒，
+            #    堆到一定数量＝要么人工跟进、要么点「已兑现」清账、要么该收紧抓取口径。
+            try:
+                from src.web.web_context import resolve_skill_manager
+                _sm2 = resolve_skill_manager(telegram_client, app)
+                _mcfg2 = getattr(config_manager, "config", None) or {}
+                _pcfg = (((_mcfg2.get("memory") or {}).get("promises") or {})
+                         .get("overdue_alert") or {}) if isinstance(_mcfg2, dict) else {}
+                if _sm2 and bool(_pcfg.get("enabled", True)):
+                    from src.utils.memory_promises import collect_open_promises
+                    _res = collect_open_promises(
+                        getattr(_sm2, "_context_store", None), overdue_only=True)
+                    _n_over = int((_res.get("counts") or {}).get("overdue", 0) or 0)
+                    _min = max(1, int(_pcfg.get("min_count", 5) or 5))
+                    if _n_over >= _min:
+                        alerts.append({
+                            "level": "warn",
+                            "type": "memory_promise_overdue",
+                            "title": f"AI 答应过 {_n_over} 件事超过 7 天没兑现",
+                            "body": (
+                                f"共 {_n_over} 条人设承诺（打电话 / 见面 / 发东西…）开了 7 天以上没动静。"
+                                "去「AI 记忆」看一眼：该跟进的人工跟进，已经做了的点「已兑现」，"
+                                "不该记的删掉。"
+                            ),
+                            "action_url": "/episodic-memory?promises=overdue",
+                            "action_label": "看未兑现承诺",
                         })
             except Exception:
                 pass

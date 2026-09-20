@@ -69,6 +69,36 @@ class MessageDedup:
         self._prune(now)
         return True
 
+    def reschedule(self, chat_id: Any, message_id: Any,
+                   expire_in_sec: float) -> bool:
+        """把已登记条目的剩余去重寿命改写为约 ``expire_in_sec`` 秒（只提前、不延后）。
+
+        用途（2026-08-09「回复等了 11 分钟」修复）：入站被冷却/interject 一类
+        闸门吞掉且**没有任何补救调度**时，实时路径已 claim 的 mid 要等满整个
+        TTL（600s）才会被轮询兜底当「新进站」重拾——那是一个从未被设计过的
+        重试延迟。本方法把该条目的到期时刻改写为「冷却结束后不久」，轮询兜底
+        即可在正确的时间点重拾（PollWatermark 保证至多重试一次，不会循环）。
+
+        语义约束：
+        - 只对已登记条目生效（返回 False=无此条目，调用方无需兜底）；
+        - **只提前不延后**（取 min）——防被误用成「续期」削弱去重；
+        - ``ttl_sec<=0``（永不过期表）没有「定时到期」可言 → 直接删除条目等效。
+        """
+        if not message_id:
+            return False
+        key = self._key(chat_id, message_id)
+        if key not in self._seen:
+            return False
+        if self.ttl_sec <= 0:
+            del self._seen[key]
+            return True
+        new_ts = self._clock() - self.ttl_sec + max(0.0, float(expire_in_sec))
+        self._seen[key] = min(self._seen[key], new_ts)
+        # 挪到队头：_prune 从最旧端剪，改早的条目应回到「最旧」位置，
+        # 到期后能被正常回收（放队尾会躲过 TTL 剪枝直到容量压力才清）。
+        self._seen.move_to_end(key, last=False)
+        return True
+
     def _prune(self, now: float) -> None:
         while self._seen:
             _k, _ts = next(iter(self._seen.items()))
@@ -80,6 +110,53 @@ class MessageDedup:
 
     def __len__(self) -> int:
         return len(self._seen)
+
+
+class PollWatermark:
+    """轮询兜底 per-chat 已处理水位（最大 message_id）——**不过期**。
+
+    修 198 实锤（chat=5415685180 mid=18540『[表情] 倒脸』被隔约 10 分钟反复
+    「发现新进站私聊」白跑 _process_message 三次）：``_poll_inbound_once`` 的
+    时间闸门 ``after_boot = mts >= boot-5`` 对启动后到达的消息**恒为真**，一条
+    一直是 top_message 的未回复消息，唯一拦截是 ``MessageDedup`` 的 TTL(600s)，
+    而轮询 catchup 也是 600s——TTL 一过就重新「首见」再处理一遍。
+
+    与 ``MessageDedup`` 职责分离：dedup 是**带 TTL** 的 claim（防并发/跨路径
+    双处理，短窗即可）；水位是**永久单调**（同一会话处理过的 mid 及更小的永不
+    再由轮询重处理）。私聊里同 peer 新消息 mid 严格更大，故 ``mid <= 水位``
+    只会命中「已处理过的旧消息」，不会漏掉真新消息。纯内存，重启清空——正是
+    catchup 想要的（重启后补一次宕机期未读，建立水位后不再重复）。
+    """
+
+    def __init__(self, *, max_size: int = 4000):
+        self.max_size = int(max_size)
+        self._hi: "OrderedDict[str, int]" = OrderedDict()  # chat_id -> 最大已处理 mid
+
+    def already_processed(self, chat_id: Any, message_id: Any) -> bool:
+        if not message_id:
+            return False
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return False
+        hi = self._hi.get(str(chat_id))
+        return hi is not None and mid <= hi
+
+    def mark(self, chat_id: Any, message_id: Any) -> None:
+        if not message_id:
+            return
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return
+        key = str(chat_id)
+        self._hi[key] = max(self._hi.get(key, 0), mid)
+        self._hi.move_to_end(key)
+        while len(self._hi) > self.max_size:
+            self._hi.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._hi)
 
 
 class PerChatLocks:

@@ -25,10 +25,14 @@ _RE_THAI = re.compile(r"[\u0e00-\u0e7f]")
 _RE_ARABIC = re.compile(r"[\u0600-\u06ff]")
 
 # 目标语 → 期望脚本判定器（命中即「像目标语」）。CJK 系互相宽容（kanji 与中文同区）。
+# zh-tw/yue：繁体与粤文都在 CJK 统一表意区，与 zh 同判定器（简繁/粤普之分不是
+# 脚本层能判的，交给引擎层 variant_style_hint + 人工审校）。
 _TARGET_SCRIPT = {
     "ja": (_RE_KANA, _RE_CJK),
     "ko": (_RE_HANGUL,),
     "zh": (_RE_CJK,),
+    "zh-tw": (_RE_CJK,),
+    "yue": (_RE_CJK,),
     "en": (_RE_LATIN,), "es": (_RE_LATIN,), "fr": (_RE_LATIN,),
     "de": (_RE_LATIN,), "pt": (_RE_LATIN,), "it": (_RE_LATIN,),
     "id": (_RE_LATIN,), "ms": (_RE_LATIN,), "vi": (_RE_LATIN,), "tr": (_RE_LATIN,),
@@ -112,7 +116,52 @@ def confidence_tier(score: float) -> str:
     return "low"
 
 
+# ── 引擎拒绝话术检测（P1-198，2026-08-05） ──────────────────────────────
+# 生产实锤（198，6/25 历史消息）：坐席经出站翻译发「1」，LLM 引擎没有翻译而是
+# 客套拒绝——「谢谢，您只提供了『1』，没有可翻译的内容。请您提供需要翻译的
+# 文本」，这句**被当译文原样发给了客户**。判定刻意保守（宁漏勿误伤）：
+#
+# 必须同时满足两个正交信号才算拒绝——
+#   ① 译文里出现「谈论翻译本身」的元词（翻译/translat/traduc…）而**源文没有**
+#      （引擎输出在讨论翻译任务＝出戏；源文本来就聊翻译则不算，如
+#      「帮我把这句话转成英文」→ "help me translate this" 是合格意译）；
+#   ② 译文含拒绝框架词（请提供/没有/无法/抱歉/provide/nothing/cannot/sorry…）。
+# 纯函数零网络；消费口在 TranslationService.translate 成功分支前置检
+# （命中 → ok=False, error="engine_refusal"，出站链自动回落原文/HOLD）。
+
+_REFUSAL_META_RE = re.compile(r"翻译|翻譯|译文|譯文|translat|traduc", re.IGNORECASE)
+# #115（0831 钧原图 906）：实弹漏网句「您没有提供需要翻译的消息内容。请发送您
+# 想翻译的文本。」——「没有提供 / 请发送」两个框架形态不在词表（只收了
+# 未提供/请提供），meta 错误话术被当译文放进会话流。补齐简繁两形。
+_REFUSAL_FRAME_RE = re.compile(
+    r"请提供|请您提供|請提供|請您提供|没有可|沒有可|无内容|無內容|无法|無法"
+    r"|不需要|未提供|没有提供|沒有提供|请发送|請發送|抱歉|仅提供|只提供"
+    r"|please provide|provide (?:the |some )?text|please send|nothing to"
+    r"|no (?:text|content)|cannot|can't|unable|sorry",
+    re.IGNORECASE,
+)
+
+
+def looks_like_engine_refusal(source: str, translated: str) -> bool:
+    """译文是不是「引擎拒绝/客套话」而非翻译（True=别把它发给客户）。
+
+    #115：源文**为空**不再直接放行——服务层虽有空文本早退，但直连引擎/
+    历史缓存等旁路仍可能把空输入送到 LLM；空源 + 译文在谈论翻译任务本身
+    ＝最典型的 meta 错误响应，恰恰最该拦。
+    """
+    src = str(source or "").strip()
+    out = str(translated or "").strip()
+    if not out or out == src:
+        return False
+    if not _REFUSAL_META_RE.search(out):
+        return False
+    if src and _REFUSAL_META_RE.search(src):
+        return False   # 源文本来就在聊翻译 → 元词出现在译文是正常的
+    return bool(_REFUSAL_FRAME_RE.search(out))
+
+
 __all__ = [
     "translation_confidence", "confidence_signals", "confidence_tier",
+    "looks_like_engine_refusal",
     "TIER_HIGH", "TIER_LOW",
 ]

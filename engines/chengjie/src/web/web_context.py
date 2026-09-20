@@ -39,6 +39,23 @@ class WebContext:
     domain_web_pages: list = field(default_factory=list)
 
 
+def resolve_skill_manager(telegram_client: Any, app: Any = None) -> Any:
+    """SkillManager 统一获取口（修「协议号实例上身份/记忆 API 永远 503」）。
+
+    legacy 单号部署：SkillManager 挂在主 telegram_client 上；
+    protocol 账号编排实例（如 zhiliao，telegram.phone_number 为空 →
+    assistant.telegram_client=None）：bootstrap 在 create_app 后把
+    assistant.skill_manager 挂到 app.state.skill_manager——路由闭包若只认
+    telegram_client 一条路，这类实例上整族端点会硬 503（CrossPlatformIdentity
+    未就绪）。本 helper 依次尝试两条通路，路由层一律经此取 SkillManager。
+    """
+    sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+    if sm is not None:
+        return sm
+    state = getattr(app, "state", None) if app is not None else None
+    return getattr(state, "skill_manager", None) if state is not None else None
+
+
 @dataclass
 class AdminRouteContext:
     """Phase E1：admin.py 路由拆分用的依赖容器。

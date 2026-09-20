@@ -1,11 +1,12 @@
-# lan_embed_watchdog.ps1 - cross-host embedding failover (client 192.168.1.44 -> LAN bge-m3 host 192.168.1.43)
+# lan_embed_watchdog.ps1 - cross-host embedding failover (client -> LAN bge-m3 host 192.168.0.140)
+#   (host was 192.168.1.43 on the old Wi-Fi segment; re-segmented to 192.168.0.140 in 2026-07)
 #
 # Purpose: this client (telegram-mtproto-ai) periodically probes the LAN Ollama/bge-m3 embedding
-#   endpoint; on repeated failure it SSHes into 192.168.1.43 and brings Ollama back up
+#   endpoint; on repeated failure it SSHes into 192.168.0.140 and brings Ollama back up
 #   (best-effort kill of a stuck process + trigger the OllamaServe scheduled task), then re-checks.
 #
-# This is a SECOND safety net on top of .43's own self-healing (OllamaServe crash-restart +
-#   OllamaHealth per-minute self-check). It covers "self-heal on .43 failed" or "unreachable from
+# This is a SECOND safety net on top of .140's own self-healing (OllamaServe crash-restart +
+#   OllamaHealth per-minute self-check). It covers "self-heal on .140 failed" or "unreachable from
 #   the client's point of view". A same-LAN / connectivity classifier avoids mistaking a network
 #   outage for a dead service (no pointless SSH restart when it's really a network / different-WiFi issue).
 #
@@ -13,16 +14,16 @@
 #   Health+heal : powershell -ExecutionPolicy Bypass -File scripts\lan_embed_watchdog.ps1
 #   Net check   : powershell -ExecutionPolicy Bypass -File scripts\lan_embed_watchdog.ps1 -Preflight
 #
-# Prereq: ~/.ssh/config has `Host lan-embed` (-> 192.168.1.43, User Administrator,
-#   IdentityFile lan_embed_43), and that public key is authorized on .43 (passwordless login works).
+# Prereq: ~/.ssh/config has `Host lan-embed` (-> 192.168.0.140, User Administrator,
+#   IdentityFile lan_embed_43), and that public key is authorized on .140 (passwordless login works).
 #
 # NOTE: ASCII-only on purpose. PowerShell 5.1 mis-decodes UTF-8-without-BOM files as the system
 #   codepage (GBK), which corrupts CJK string literals and breaks parsing. Keep this file ASCII.
 
 param(
-    [string]$EmbedHost   = "192.168.1.43",
+    [string]$EmbedHost   = "192.168.0.140",
     [int]   $EmbedPort   = 11434,
-    [string]$EmbedUrl    = "http://192.168.1.43:11434/api/tags",
+    [string]$EmbedUrl    = "http://192.168.0.140:11434/api/tags",
     [string]$SshHost     = "lan-embed",
     [int]   $Retries     = 3,
     [int]   $RetryGapSec = 5,
@@ -139,12 +140,12 @@ if (Test-Embed) {
     Write-Log "RECOVERED" "embedding back online after remote restart"
     exit 0
 } else {
-    Write-Log "FAILED" "still unreachable after remote restart (manual check needed on 192.168.1.43)"
+    Write-Log "FAILED" "still unreachable after remote restart (manual check needed on 192.168.0.140)"
     exit 3
 }
 
 # -- Register as a scheduled task (run once in an ADMIN PowerShell on this client) --
 # Run under the current logged-in user (whose ~/.ssh has the key), NOT SYSTEM (SYSTEM has no ~/.ssh).
-# $act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File D:\workspace\telegram-mtproto-ai\scripts\lan_embed_watchdog.ps1"
+# $act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File D:\workspace\boundless\engines\chengjie\scripts\lan_embed_watchdog.ps1"
 # $trg = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
 # Register-ScheduledTask -TaskName "LanEmbedWatchdog" -Action $act -Trigger $trg -RunLevel Highest -User $env:USERNAME -Force

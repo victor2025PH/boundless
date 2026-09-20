@@ -3,6 +3,24 @@
 import yaml
 import pytest
 
+from src.web.routes.diff_page_routes import _resolve_current_file
+
+
+class _Cfg:
+    def __init__(self, cfg_dir):
+        self.config_path = cfg_dir / "config.yaml"
+
+
+def test_resolve_current_file_multiword_prefix(tmp_path):
+    """reply_strategies_* 不得被 split('_')[0] 截成 reply。"""
+    cfg = _Cfg(tmp_path)
+    (tmp_path / "reply_strategies.yaml").write_text("x: 1\n", encoding="utf-8")
+    (tmp_path / "templates.yaml").write_text("y: 1\n", encoding="utf-8")
+    p = _resolve_current_file(cfg, "reply_strategies_20260805_120000_admin")
+    assert p is not None and p.name == "reply_strategies.yaml"
+    assert _resolve_current_file(cfg, "templates_20260805_120000_admin").name == "templates.yaml"
+    assert _resolve_current_file(cfg, "unknown_snap") is None
+
 
 @pytest.fixture()
 def with_snapshot(config_dir, auth_client):

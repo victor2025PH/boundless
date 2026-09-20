@@ -21,9 +21,9 @@ def _pm() -> PersonaManager:
 def test_tier_chat_binding():
     pm = _pm()
     pm.bind_chat_persona("c1", {"name": "ChatPers"})
-    pm.upsert_profile("acc", {"name": "AccPers"})
     pm.set_domain_persona({"name": "Domain"})
-    p, tier = pm.get_persona_with_tier("c1", "acc")
+    # 无账号人设时 chat_binding 生效
+    p, tier = pm.get_persona_with_tier("c1", "")
     assert tier == PersonaManager._TIER_CHAT
     assert p["name"] == "ChatPers"
 
@@ -62,12 +62,16 @@ def test_tier_constants_are_strings():
         assert isinstance(c, str) and c
 
 
-def test_tier_chat_binding_wins_over_account():
+def test_tier_account_wins_over_peer_global_chat_binding():
+    """2026-07-24：双协议号同 peer 时账号人设必须压过 peer-global chat_binding。"""
     pm = _pm()
     pm.bind_chat_persona("cx", {"name": "Chat"})
     pm.upsert_profile("p", {"name": "Profile"})
     _, tier = pm.get_persona_with_tier("cx", "p")
-    assert tier == PersonaManager._TIER_CHAT
+    assert tier == PersonaManager._TIER_ACCOUNT
+    # 无人设账号仍可用 chat_binding
+    _, tier2 = pm.get_persona_with_tier("cx", "")
+    assert tier2 == PersonaManager._TIER_CHAT
 
 
 def test_tier_result_consistent_with_get_persona():

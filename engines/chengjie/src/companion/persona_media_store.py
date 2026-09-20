@@ -55,10 +55,30 @@ CREATE TABLE IF NOT EXISTS persona_media (
     last_sent_at   REAL NOT NULL DEFAULT 0,
     created_by     TEXT NOT NULL DEFAULT '',
     created_at     REAL NOT NULL DEFAULT 0,
-    updated_at     REAL NOT NULL DEFAULT 0
+    updated_at     REAL NOT NULL DEFAULT 0,
+    phash          TEXT NOT NULL DEFAULT '',
+    auto_meta      TEXT NOT NULL DEFAULT '{}',
+    tag_status     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_pmedia_persona ON persona_media(persona_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_pmedia_sha ON persona_media(persona_id, sha256);
+-- 2026-07-22 防复读记忆账本：每会话已发媒体（含系列标签）持久记录。
+-- 「同一张/同一系列（同套服装连拍）再发给同一个人」= 像 AI 复读机的穿帮信号；
+-- 进程内 _LAST_SENT 只避上一条且重启即失 → 落库成为跨重启的"发过什么"记忆。
+-- file_key（2026-07-28）：同一张图的**跨链身份**。注册相册链按 DB uuid 记账、
+-- 文件系统相册链按文件名记账 → 两套命名空间互不相认，24h 重发冷却形同虚设
+-- （实录：06:25:14 发 uuid=364afa02…、06:25:27 又发同一个 cafe_white-dress_01.jpg，
+-- 而该系列明明还有 _02.._04 没发过）。两条链都补记文件名，冷却才真的拦得住。
+CREATE TABLE IF NOT EXISTS persona_media_sends (
+    conv_key    TEXT NOT NULL,
+    media_id    TEXT NOT NULL,
+    persona_id  TEXT NOT NULL DEFAULT '',
+    series      TEXT NOT NULL DEFAULT '',
+    sent_at     REAL NOT NULL DEFAULT 0,
+    file_key    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (conv_key, media_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pmsends_conv ON persona_media_sends(conv_key, sent_at);
 """
 
 # update() 允许热改的元数据字段（file_path/url/sha 等身份字段不可改——换文件请删了重传）。
@@ -67,7 +87,9 @@ _UPDATABLE = {
     "enabled", "tier", "min_bond_level", "thumb_url", "duration_ms",
     "width", "height",
 }
-_JSON_COLS = {"triggers", "tags", "caption_i18n"}
+_JSON_COLS = {"triggers", "tags", "caption_i18n", "auto_meta"}
+# JSON 列反序列化失败/缺省时的形态（caption_i18n/auto_meta 是 dict，其余 list）
+_JSON_DICT_COLS = {"caption_i18n", "auto_meta"}
 
 
 def _dumps(v: Any, default: str) -> str:
@@ -92,7 +114,79 @@ class PersonaMediaStore:
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_DDL)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """存量库补列/补表（幂等；调用方已持锁）。失败不抛——建表已成，缺列走降级路径。"""
+        for table, col, decl in (
+            ("persona_media_sends", "file_key", "TEXT NOT NULL DEFAULT ''"),
+            # 实施90（2026-08-30）AI 打标三件套：pHash 近重复指纹 / VLM 打标结论
+            # （建议态 JSON）/ 打标状态机（"" 未标 | pending | tagged | failed | skipped）
+            ("persona_media", "phash", "TEXT NOT NULL DEFAULT ''"),
+            ("persona_media", "auto_meta", "TEXT NOT NULL DEFAULT '{}'"),
+            ("persona_media", "tag_status", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            try:
+                have = {r[1] for r in self._conn.execute(
+                    "PRAGMA table_info(%s)" % table)}
+                if col not in have:
+                    self._conn.execute(
+                        "ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
+            except Exception:
+                logger.debug("[persona_media] 迁移 %s.%s 跳过", table, col,
+                             exc_info=True)
+        # P3 2026-08-22：场景需求日账本（旧库升级路径；新库走 _DDL 一并建）。
+        # scene_demand/unmet 原是进程计数、重启即清零——本机日均 8+ 次重启下
+        # chips 热度排序/补货报告的「需求侧」形同摆设，落库才有跨重启记忆。
+        try:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS scene_demand_daily ("
+                " day TEXT NOT NULL, scene TEXT NOT NULL,"
+                " demand INTEGER NOT NULL DEFAULT 0,"
+                " unmet INTEGER NOT NULL DEFAULT 0,"
+                " PRIMARY KEY (day, scene))")
+        except Exception:
+            logger.debug("[persona_media] scene_demand_daily 建表跳过", exc_info=True)
+
+    # ── 场景需求日账本（P3 2026-08-22：需求侧跨重启记忆）────────────────────
+    def record_scene_demand(self, scene_class: str, *, unmet: bool,
+                            now: Optional[float] = None) -> None:
+        """按日 upsert 场景需求（demand +1；unmet 时 unmet +1）。绝不抛。"""
+        sc = str(scene_class or "").strip().lower()
+        if not sc:
+            return
+        day = time.strftime("%Y-%m-%d",
+                            time.localtime(now if now is not None else time.time()))
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO scene_demand_daily (day, scene, demand, unmet)"
+                    " VALUES (?, ?, 1, ?)"
+                    " ON CONFLICT(day, scene) DO UPDATE SET"
+                    " demand = demand + 1, unmet = unmet + excluded.unmet",
+                    (day, sc, 1 if unmet else 0))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] record_scene_demand 失败（已忽略）",
+                         exc_info=True)
+
+    def scene_demand_window(self, days: int = 14, *,
+                            now: Optional[float] = None) -> Dict[str, Dict[str, int]]:
+        """近 N 天需求汇总 ``{scene: {demand, unmet}}``；失败返回 {}。"""
+        ts = now if now is not None else time.time()
+        since = time.strftime("%Y-%m-%d", time.localtime(ts - max(1, int(days)) * 86400))
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT scene, SUM(demand), SUM(unmet) FROM scene_demand_daily"
+                    " WHERE day >= ? GROUP BY scene", (since,)).fetchall()
+            return {str(r[0]): {"demand": int(r[1] or 0), "unmet": int(r[2] or 0)}
+                    for r in rows}
+        except Exception:
+            logger.debug("[persona_media] scene_demand_window 失败（已忽略）",
+                         exc_info=True)
+            return {}
 
     @staticmethod
     def _row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
@@ -101,9 +195,9 @@ class PersonaMediaStore:
             raw = d.get(col)
             try:
                 d[col] = json.loads(raw) if isinstance(raw, str) and raw else (
-                    {} if col == "caption_i18n" else [])
+                    {} if col in _JSON_DICT_COLS else [])
             except Exception:
-                d[col] = {} if col == "caption_i18n" else []
+                d[col] = {} if col in _JSON_DICT_COLS else []
         d["enabled"] = bool(d.get("enabled"))
         return d
 
@@ -115,6 +209,7 @@ class PersonaMediaStore:
         tier: str = "", min_bond_level: int = 0, bytes_: int = 0,
         width: int = 0, height: int = 0, duration_ms: int = 0, sha256: str = "",
         created_by: str = "", now: Optional[float] = None,
+        phash: str = "", tag_status: str = "",
     ) -> Dict[str, Any]:
         """新增一个媒体条目，返回落库后的行（dict）。"""
         mt = str(media_type or "").strip().lower()
@@ -131,14 +226,17 @@ class PersonaMediaStore:
             int(bytes_ or 0), int(width or 0), int(height or 0),
             int(duration_ms or 0), str(sha256 or ""), 0, 0.0,
             str(created_by or ""), ts, ts,
+            str(phash or ""), "{}", str(tag_status or ""),
         )
         with self._lock:
             self._conn.execute(
                 "INSERT INTO persona_media (id, persona_id, media_type, file_path, "
                 "url, thumb_url, triggers, caption, caption_i18n, tags, weight, "
                 "enabled, tier, min_bond_level, bytes, width, height, duration_ms, "
-                "sha256, hits, last_sent_at, created_by, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                "sha256, hits, last_sent_at, created_by, created_at, updated_at, "
+                "phash, auto_meta, tag_status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                row)
             self._conn.commit()
         got = self.get(mid)
         return got or {}
@@ -219,6 +317,93 @@ class PersonaMediaStore:
             self._conn.commit()
         return row
 
+    def rewrite_file_path_prefix(self, old_prefix: str, new_prefix: str) -> int:
+        """#67-① 存量迁移配套：把 ``file_path`` 的目录前缀整体改写，返回行数。
+
+        发送链按 DB 绝对路径取文件——相册根迁数据根后不改写＝发送仍指旧位置
+        （桌面更新后旧位置蒸发 → pyrogram「Failed to decode」）。仅前缀精确
+        匹配的行被改；幂等（重复调用第二次 0 行）。
+        """
+        old = str(old_prefix or "").strip()
+        new = str(new_prefix or "").strip()
+        if not old or not new or old == new:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE persona_media SET file_path = ? || substr(file_path, ?)"
+                " WHERE substr(file_path, 1, ?) = ?",
+                (new, len(old) + 1, len(old), old))
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    # ── AI 打标机器写点（实施90；与运营 update() 白名单分离，防误改）──────────
+
+    def set_auto_tag(
+        self, media_id: str, *,
+        phash: Optional[str] = None,
+        auto_meta: Optional[Dict[str, Any]] = None,
+        tag_status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        thumb_url: Optional[str] = None,
+        url: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """打标/补齐流水线的专用部分更新（None＝该字段不动）；返回更新后的行。
+
+        ``url``＝策展素材「发布进 /static」的机器补写点（实施90：CLI 入册的
+        62 张 url 为空 → UI 永远裂图；发布后由这里回填，运营 update() 白名单
+        仍不许改 url——身份字段人工只能删了重传）。
+        """
+        sets: List[str] = []
+        args: List[Any] = []
+        if phash is not None:
+            sets.append("phash = ?")
+            args.append(str(phash))
+        if url is not None:
+            sets.append("url = ?")
+            args.append(str(url))
+        if auto_meta is not None:
+            sets.append("auto_meta = ?")
+            args.append(_dumps(dict(auto_meta), "{}"))
+        if tag_status is not None:
+            sets.append("tag_status = ?")
+            args.append(str(tag_status))
+        if tags is not None:
+            sets.append("tags = ?")
+            args.append(_dumps(list(tags), "[]"))
+        if thumb_url is not None:
+            sets.append("thumb_url = ?")
+            args.append(str(thumb_url))
+        if not sets:
+            return self.get(media_id)
+        sets.append("updated_at = ?")
+        args.append(time.time())
+        args.append(str(media_id or ""))
+        try:
+            with self._lock:
+                self._conn.execute(
+                    f"UPDATE persona_media SET {', '.join(sets)} WHERE id = ?",
+                    tuple(args))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] set_auto_tag 失败（已忽略）",
+                         exc_info=True)
+            return None
+        return self.get(media_id)
+
+    def phashes(self, persona_id: str) -> Dict[str, str]:
+        """该人设全部**非空**感知指纹 ``{id: phash}``（上传近重复比对用）。"""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id, phash FROM persona_media "
+                    "WHERE persona_id = ? AND phash != ''",
+                    (str(persona_id or ""),)).fetchall()
+            return {str(r["id"]): str(r["phash"]) for r in rows}
+        except Exception:
+            logger.debug("[persona_media] phashes 读取失败（已忽略）",
+                         exc_info=True)
+            return {}
+
     def record_hit(self, media_id: str, now: Optional[float] = None) -> None:
         """命中一次（hits+1、last_sent_at=now），供轮播避重 + 内容分析。绝不抛。"""
         ts = float(now if now is not None else time.time())
@@ -230,6 +415,113 @@ class PersonaMediaStore:
                 self._conn.commit()
         except Exception:
             logger.debug("[persona_media] record_hit 失败（已忽略）", exc_info=True)
+
+    # ── 每会话已发媒体账本（2026-07-22 防复读记忆）────────────────────────
+
+    def record_send(
+        self, conv_key: str, media_id: str, *,
+        persona_id: str = "", series: str = "",
+        file_key: str = "",
+        now: Optional[float] = None,
+    ) -> None:
+        """记「这条媒体发给过这个会话」（幂等 upsert）。绝不抛。
+
+        ``file_key``＝该媒体的文件名（``Path(file_path).name``，大小写原样——
+        文件系统相册链按 ``Path(f).name`` 精确比对）。两条链都填它，冷却/排除面
+        才能认出「注册相册的 uuid」与「相册文件」是同一张图。
+        """
+        if not conv_key or not media_id:
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO persona_media_sends"
+                    "(conv_key, media_id, persona_id, series, sent_at, file_key) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(conv_key, media_id) DO UPDATE SET sent_at = ?, "
+                    "file_key = CASE WHEN excluded.file_key != '' "
+                    "THEN excluded.file_key ELSE file_key END",
+                    (str(conv_key), str(media_id), str(persona_id or ""),
+                     str(series or ""), ts, str(file_key or ""), ts))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] record_send 失败（已忽略）", exc_info=True)
+
+    def sent_history(
+        self, conv_key: str, *, max_age_days: float = 0,
+        now: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """该会话收过的媒体：``{"ids": set, "series": set, "file_keys": set,
+        "items": [{id,series,ts,file_key}]}``。查失败返回空集合。
+
+        ``max_age_days`` > 0 时只看最近 N 天（时间衰减，2026-07-22）：太久之前
+        发过的图重新可用——真人也会隔几个月重发怀旧照，永久排除反而把相册
+        提前耗尽逼进"翻旧照"模式。0=不衰减（全历史排除）。
+
+        ``file_keys``（2026-07-28）＝跨链身份面：两条相册链各按自己的 id 记账，
+        排除面必须并上文件名才认得出「同一张图刚发过」。
+        """
+        out: Dict[str, Any] = {
+            "ids": set(), "series": set(), "file_keys": set(), "items": []}
+        if not conv_key:
+            return out
+        try:
+            sql = ("SELECT media_id, series, sent_at, file_key "
+                   "FROM persona_media_sends WHERE conv_key = ?")
+            args: list = [str(conv_key)]
+            if max_age_days and max_age_days > 0:
+                ts = float(now if now is not None else time.time())
+                sql += " AND sent_at >= ?"
+                args.append(ts - float(max_age_days) * 86400.0)
+            with self._lock:
+                rows = self._conn.execute(sql, tuple(args)).fetchall()
+            for r in rows:
+                out["ids"].add(str(r["media_id"]))
+                s = str(r["series"] or "")
+                if s:
+                    out["series"].add(s)
+                try:
+                    fk = str(r["file_key"] or "")
+                except (IndexError, KeyError):
+                    fk = ""      # 迁移前的旧行
+                if fk:
+                    out["file_keys"].add(fk)
+                # items：带时间戳的明细（P0 一致性——重发冷却/服装连续性判断用）
+                out["items"].append({
+                    "id": str(r["media_id"]), "series": s,
+                    "ts": float(r["sent_at"] or 0), "file_key": fk})
+        except Exception:
+            logger.debug("[persona_media] sent_history 失败（已忽略）", exc_info=True)
+        return out
+
+    def send_ledger_stats(self) -> Dict[str, Any]:
+        """相册投放观测（自检卡 runtime 用）：库存/投放次数/覆盖会话/已消耗唯一图。
+
+        - ``media_total``/``media_enabled``：库存条目
+        - ``total_sends``：账本累计投放（同图同会话只记一次）
+        - ``convs_covered``：收到过相册媒体的会话数
+        - ``unique_media_sent``：被发出过的唯一条目数（消耗率=unique/enabled）
+        """
+        out = {"media_total": 0, "media_enabled": 0, "total_sends": 0,
+               "convs_covered": 0, "unique_media_sent": 0}
+        try:
+            with self._lock:
+                r1 = self._conn.execute(
+                    "SELECT COUNT(*) c, COALESCE(SUM(enabled),0) e "
+                    "FROM persona_media").fetchone()
+                r2 = self._conn.execute(
+                    "SELECT COUNT(*) c, COUNT(DISTINCT conv_key) k, "
+                    "COUNT(DISTINCT media_id) m FROM persona_media_sends"
+                ).fetchone()
+            out["media_total"] = int(r1["c"] or 0)
+            out["media_enabled"] = int(r1["e"] or 0)
+            out["total_sends"] = int(r2["c"] or 0)
+            out["convs_covered"] = int(r2["k"] or 0)
+            out["unique_media_sent"] = int(r2["m"] or 0)
+        except Exception:
+            logger.debug("[persona_media] send_ledger_stats 失败", exc_info=True)
+        return out
 
     def stats(self, persona_id: Optional[str] = None) -> Dict[str, Any]:
         """条目计数（总/按类型/启用数）。"""
@@ -320,6 +612,16 @@ def get_persona_media_store() -> Optional[PersonaMediaStore]:
     return _STORE
 
 
+def peek_persona_media_store() -> Optional[PersonaMediaStore]:
+    """取**已存在**的单例（绝不懒建）。
+
+    给低价值 best-effort 写点用（如场景需求账本）：生产进程里单例早被媒体链
+    懒建过=写得进；测试进程没人建过=天然零磁盘写入（不会像 get_* 那样把
+    ``config/persona_media.db`` 懒建到测试 CWD——「测试写仓库 config/」教训）。
+    """
+    return _STORE
+
+
 def reset_persona_media_store() -> None:
     """测试钩子：清空单例。"""
     global _STORE
@@ -330,5 +632,5 @@ def reset_persona_media_store() -> None:
 __all__ = [
     "MEDIA_PHOTO", "MEDIA_VIDEO", "DEFAULT_DB_PATH", "PersonaMediaStore",
     "configure_persona_media_store", "get_persona_media_store",
-    "reset_persona_media_store",
+    "peek_persona_media_store", "reset_persona_media_store",
 ]

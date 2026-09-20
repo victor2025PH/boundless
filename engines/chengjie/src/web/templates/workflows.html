@@ -2,158 +2,257 @@
 {% block title %}{{ (i18n or {}).get('wf_s001', "工作流管理") }}{% endblock %}
 {% block head %}
 <style>
-  .wf-wrap{height:100%;overflow-y:auto;background:#f7f8fa;padding:18px;}
-  .wf-tabs{display:flex;gap:0;border-bottom:2px solid #e5e7eb;margin-bottom:18px;}
-  .wf-tab{padding:9px 20px;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:#64748b;}
-  .wf-tab.active{color:#2563eb;border-bottom-color:#2563eb;}
+  /* 页内主题变量：亮值=改造前字面量（亮色观感零变化），暗值语言对齐
+     theme-tokens.css 的 [data-theme=dark] 色板；由双开关（base 系 data-theme /
+     工作台 data-cp-theme）任一进入暗色。此前本页骨架硬编码浅色而动态内容
+     用 th-* token → 暗色下黑白花斑 + 浅底浅字不可读（2026-08-09 修）。 */
+  .wf-wrap{
+    --wf-bg:#f7f8fa; --wf-surface:#fff; --wf-surface-2:#f8fafc;
+    --wf-bd:#e5e7eb; --wf-bd-soft:#f3f4f6; --wf-bd-input:#d1d5db;
+    --wf-ink:#374151; --wf-ink-h:#1e3a5f; --wf-ink-mut:#64748b; --wf-ink-soft:#94a3b8;
+    --wf-input-bg:#fff; --wf-hover:#f3f4f6; --wf-toggle-off:#d1d5db; --wf-dot:#e5e7eb;
+    height:100%;overflow-y:auto;background:var(--wf-bg);padding:18px;color:var(--wf-ink);
+  }
+  [data-theme="dark"] .wf-wrap,[data-cp-theme="dark"] .wf-wrap{
+    --wf-bg:#15171c; --wf-surface:#1e2026; --wf-surface-2:#23252c;
+    --wf-bd:#2c2e36; --wf-bd-soft:#26272e; --wf-bd-input:#3a3d46;
+    --wf-ink:#d7dce4; --wf-ink-h:#dbe4f0; --wf-ink-mut:#94a3b8; --wf-ink-soft:#6b7280;
+    --wf-input-bg:#16181d; --wf-hover:#262931; --wf-toggle-off:#3a3f4b; --wf-dot:#3a3d46;
+  }
+  .wf-tabs{display:flex;gap:0;border-bottom:2px solid var(--wf-bd);margin-bottom:18px;}
+  .wf-tab{padding:9px 20px;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--wf-ink-mut);}
+  .wf-tab.active{color:var(--bl-growth-600,#0d76d9);border-bottom-color:var(--bl-growth-600,#0d76d9);}
   .wf-panel{display:none;} .wf-panel.active{display:block;}
-  .wf-section{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;}
-  .wf-section h3{margin:0 0 12px;font-size:15px;color:#1e3a5f;display:flex;justify-content:space-between;align-items:center;}
+  .wf-section{background:var(--wf-surface);border:1px solid var(--wf-bd);border-radius:12px;padding:16px;margin-bottom:16px;}
+  .wf-section h3{margin:0 0 12px;font-size:15px;color:var(--wf-ink-h);display:flex;justify-content:space-between;align-items:center;}
+  /* #209：标题右侧的操作结果槽为空时不占位——flex gap 会给空 span 留一格「幽灵空元素」（YD2SMM） */
+  #seed-msg:empty{display:none;}
   .wf-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .wf-table th{background:#f8fafc;padding:8px 10px;text-align:left;font-weight:600;color:#374151;border-bottom:2px solid #e5e7eb;}
-  .wf-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:middle;}
+  .wf-table th{background:var(--wf-surface-2);padding:8px 10px;text-align:left;font-weight:600;color:var(--wf-ink);border-bottom:2px solid var(--wf-bd);}
+  .wf-table td{padding:8px 10px;border-bottom:1px solid var(--wf-bd-soft);vertical-align:middle;}
   .wf-table tr:last-child td{border-bottom:0;}
-  .wf-table tr:hover td{background:#f8fafc;}
-  .btn-sm{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;}
-  .btn-sm:hover{background:#f3f4f6;}
-  .btn-primary{background:#2563eb;color:#fff;border-color:#2563eb;}
-  .btn-primary:hover{background:#1d4ed8;}
+  .wf-table tr:hover td{background:var(--wf-surface-2);}
+  .btn-sm{border:1px solid var(--wf-bd-input);background:var(--wf-surface);color:var(--wf-ink);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;}
+  .btn-sm:hover{background:var(--wf-hover);}
+  .btn-primary{background:var(--bl-growth-600,#0d76d9);color:#fff;border-color:var(--bl-growth-600,#0d76d9);}
+  .btn-primary:hover{background:var(--bl-growth-700,#0b64b7);}
   .btn-danger{border-color:#fca5a5;color:#dc2626;}
   .btn-danger:hover{background:#fee2e2;}
+  [data-theme="dark"] .wf-wrap .btn-danger,[data-cp-theme="dark"] .wf-wrap .btn-danger{border-color:rgba(248,81,73,.45);color:#f26d5f;}
+  [data-theme="dark"] .wf-wrap .btn-danger:hover,[data-cp-theme="dark"] .wf-wrap .btn-danger:hover{background:rgba(248,81,73,.16);}
   .badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;}
   .badge-template{background:#d1fae5;color:#065f46;} .badge-task{background:#dbeafe;color:#1e40af;}
   .badge-tag{background:#fef3c7;color:#92400e;} .badge-escalate{background:#fee2e2;color:#991b1b;}
   .badge-chain{background:#ede9fe;color:#5b21b6;} .badge-note{background:#f0fdfa;color:#0f766e;}
   .form-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:flex-start;}
-  .form-row label{font-size:12px;color:#374151;display:block;margin-bottom:3px;}
+  .form-row label{font-size:12px;color:var(--wf-ink);display:block;margin-bottom:3px;}
   .form-row input,.form-row select,.form-row textarea{
-    border:1px solid #d1d5db;border-radius:6px;padding:6px 9px;font-size:13px;width:100%;}
+    border:1px solid var(--wf-bd-input);background:var(--wf-input-bg);color:var(--wf-ink);border-radius:6px;padding:6px 9px;font-size:13px;width:100%;}
   .form-col{flex:1;min-width:140px;}
-  .wf-empty{text-align:center;padding:24px;color:#94a3b8;font-size:13px;}
+  .wf-empty{text-align:center;padding:24px;color:var(--wf-ink-soft);font-size:13px;}
   .toggle-sw{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer;}
   .toggle-sw input{opacity:0;width:0;height:0;}
-  .toggle-slider{position:absolute;top:0;left:0;right:0;bottom:0;background:#d1d5db;border-radius:10px;transition:.2s;}
-  .toggle-sw input:checked + .toggle-slider{background:#2563eb;}
+  .toggle-slider{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--wf-toggle-off);border-radius:10px;transition:.2s;}
+  .toggle-sw input:checked + .toggle-slider{background:var(--bl-growth-600,#0d76d9);}
   .toggle-slider:before{content:'';position:absolute;height:14px;width:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;}
   .toggle-sw input:checked + .toggle-slider:before{left:19px;}
-  .step-card{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:center;}
-  .step-num{width:22px;height:22px;background:#2563eb;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 22px;}
+  .step-card{background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:center;}
+  .step-num{width:22px;height:22px;background:var(--bl-growth-600,#0d76d9);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 22px;}
   .cond-tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:5px;padding:1px 7px;font-size:11px;margin:2px;}
   .badge-running{background:#dbeafe;color:#1e40af;} .badge-completed{background:#d1fae5;color:#065f46;}
   .badge-failed{background:#fee2e2;color:#991b1b;} .badge-cancelled{background:#f3f4f6;color:#6b7280;}
+  /* 暗色 badge/标签：半透明深底 + 高亮字（与 token 暗板同语言），修「浅底徽章浮在黑卡上」 */
+  [data-theme="dark"] .wf-wrap .badge-template,[data-cp-theme="dark"] .wf-wrap .badge-template,
+  [data-theme="dark"] .wf-wrap .badge-completed,[data-cp-theme="dark"] .wf-wrap .badge-completed{background:rgba(46,160,67,.18);color:#56d364;}
+  [data-theme="dark"] .wf-wrap .badge-task,[data-cp-theme="dark"] .wf-wrap .badge-task,
+  [data-theme="dark"] .wf-wrap .badge-running,[data-cp-theme="dark"] .wf-wrap .badge-running{background:rgba(49,109,202,.22);color:#79b8ff;}
+  [data-theme="dark"] .wf-wrap .badge-tag,[data-cp-theme="dark"] .wf-wrap .badge-tag{background:rgba(201,143,47,.2);color:#e3b341;}
+  [data-theme="dark"] .wf-wrap .badge-escalate,[data-cp-theme="dark"] .wf-wrap .badge-escalate,
+  [data-theme="dark"] .wf-wrap .badge-failed,[data-cp-theme="dark"] .wf-wrap .badge-failed{background:rgba(248,81,73,.16);color:#f26d5f;}
+  [data-theme="dark"] .wf-wrap .badge-chain,[data-cp-theme="dark"] .wf-wrap .badge-chain{background:rgba(127,86,217,.22);color:#c4a7f7;}
+  [data-theme="dark"] .wf-wrap .badge-note,[data-cp-theme="dark"] .wf-wrap .badge-note{background:rgba(20,120,110,.22);color:#4dd4c0;}
+  [data-theme="dark"] .wf-wrap .badge-cancelled,[data-cp-theme="dark"] .wf-wrap .badge-cancelled{background:rgba(148,163,184,.14);color:var(--th-ink-slate4,#5b6b85);}
+  [data-theme="dark"] .wf-wrap .cond-tag,[data-cp-theme="dark"] .wf-wrap .cond-tag{background:rgba(99,102,241,.18);color:#a5b4fc;}
   .exec-step-mini{display:flex;gap:2px;margin-top:4px;}
-  .exec-step-dot{width:8px;height:8px;border-radius:50%;background:#e5e7eb;}
+  .exec-step-dot{width:8px;height:8px;border-radius:50%;background:var(--wf-dot);}
   .exec-step-dot.done{background:#34d399;} .exec-step-dot.active{background:#2563eb;}
   .exec-step-dot.pending{background:#fbbf24;}
+  /* 工作链卡片（loadChains 渲染）：结构样式收进类，JS 里不再拼内联色 */
+  .wf-chain-card{background:var(--wf-surface);border:1px solid var(--wf-bd);border-radius:8px;padding:12px 14px;margin-bottom:10px;}
+  .wf-chain-card.off{opacity:.62;}
+  .wf-chain-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+  .wf-chain-nm{font-size:14px;font-weight:700;color:var(--wf-ink);}
+  .wf-chain-sp{flex:1 1 auto;}
+  .wf-run-pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;background:rgba(45,108,223,.12);color:var(--bl-growth-600,#0d76d9);}
+  [data-theme="dark"] .wf-wrap .wf-run-pill,[data-cp-theme="dark"] .wf-wrap .wf-run-pill{background:rgba(88,166,255,.16);color:#79b8ff;}
+  /* P3：每链 72h 回复率 pill（有成熟数才显示；绿系与「运行中」蓝系区分） */
+  .wf-reply-pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;background:rgba(16,185,129,.12);color:#047857;cursor:help;}
+  [data-theme="dark"] .wf-wrap .wf-reply-pill,[data-cp-theme="dark"] .wf-wrap .wf-reply-pill{background:rgba(46,160,67,.18);color:#56d364;}
+  .wf-step-t{color:var(--wf-ink-mut);margin-left:8px;font-size:11px;}
+  .wf-step-note{color:var(--wf-ink-mut);margin-top:2px;}
+  /* ── P2 增量（2026-08-09）：页头价值条 / 漏斗横条 / 步骤连线 / 状态语义色 ──
+     状态色进变量（JS 里 style.color 引用 var()），暗值对齐 token 暗板 */
+  .wf-wrap{--wf-ok:#10b981;--wf-err:#dc2626;}
+  [data-theme="dark"] .wf-wrap,[data-cp-theme="dark"] .wf-wrap{--wf-ok:#3fb950;--wf-err:#f26d5f;}
+  .wf-value-bar{display:none;align-items:center;gap:18px;flex-wrap:wrap;background:var(--wf-surface);
+    border:1px solid var(--wf-bd);border-radius:10px;padding:10px 16px;margin-bottom:14px;}
+  .wf-value-bar.on{display:flex;}
+  .wf-vb-head{font-size:12px;color:var(--wf-ink-mut);flex:0 0 auto;}
+  .wf-vb-item{display:flex;flex-direction:column;gap:1px;min-width:72px;}
+  .wf-vb-n{font-size:17px;font-weight:800;color:var(--wf-ink);line-height:1.15;}
+  .wf-vb-n.ok{color:var(--wf-ok);}
+  .wf-vb-l{font-size:11px;color:var(--wf-ink-mut);}
+  .wf-vb-go{margin-left:auto;font-size:12px;font-weight:600;color:var(--bl-growth-600,#0d76d9);cursor:pointer;}
+  .wf-vb-go:hover{text-decoration:underline;}
+  .wf-funnel-bars{display:flex;flex-direction:column;gap:4px;margin:2px 0 10px;max-width:520px;}
+  .wf-fb-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wf-ink-mut);}
+  .wf-fb-lab{flex:0 0 76px;text-align:right;}
+  .wf-fb-track{display:block;flex:1;background:var(--wf-surface-2);border-radius:5px;height:13px;overflow:hidden;}
+  .wf-fb-fill{display:block;height:100%;border-radius:5px;background:var(--bl-growth-600,#0d76d9);}
+  .wf-fb-fill.done{background:var(--wf-ok);}
+  .wf-fb-fill.fail{background:var(--wf-err);}
+  .wf-fb-n{flex:0 0 34px;font-weight:700;color:var(--wf-ink);}
+  /* 步骤卡间连接段：在卡间空隙画一小节竖线，与步骤圆点(左 12px 内边距+11px 半径≈23px)对齐 */
+  .wf-steps-tl .step-card{position:relative;}
+  .wf-steps-tl .step-card:not(:last-child)::after{content:'';position:absolute;left:22px;bottom:-7px;height:7px;width:2px;background:var(--wf-bd);}
+  /* ── P5：漏斗表格「环节明细」下钻（消费 chain-funnel.chains[].by_step）── */
+  .wf-bs-btn{border:0;background:transparent;color:var(--bl-growth-600,#0d76d9);font-size:12px;cursor:pointer;padding:0 4px;}
+  .wf-bs-btn:hover{text-decoration:underline;}
+  .wf-bs-row td{background:var(--wf-surface-2);padding:8px 12px 10px;}
+  .wf-bs-item{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--wf-ink-mut);padding:2px 0;}
+  .wf-bs-idx{flex:0 0 18px;height:18px;border-radius:50%;background:var(--bl-growth-600,#0d76d9);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .wf-bs-note{color:var(--wf-ink);}
+  .wf-bs-track{display:flex;flex:0 0 120px;background:var(--wf-bg);border-radius:4px;height:10px;overflow:hidden;}
+  .wf-bs-ok{display:block;height:100%;background:var(--wf-ok);}
+  .wf-bs-fail{display:block;height:100%;background:var(--wf-err);}
+  .wf-bs-n{flex:0 0 auto;font-weight:600;}
+  .wf-bs-n .ok{color:var(--wf-ok);} .wf-bs-n .fail{color:var(--wf-err);}
+  /* 实施92d 成交引擎卡旅程示意：主题令牌取色（暗色自适应），不是装饰图而是
+     「这页在管什么」的一图流认知锚 */
+  .de-jn-viz{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0 10px;}
+  .de-jn-node{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:99px;
+    font-size:12px;font-weight:600;background:var(--wf-surface-2);border:1px solid var(--wf-bd);color:var(--wf-ink);}
+  .de-jn-node.hot{background:rgba(45,108,223,.10);border-color:var(--bl-growth-600,#0d76d9);color:var(--bl-growth-600,#0d76d9);}
+  .de-jn-node.win{background:rgba(16,185,129,.12);border-color:var(--wf-ok);color:var(--wf-ok);}
+  .de-jn-arr{color:var(--wf-ink-soft);font-size:12px;}
+  .de-jn-tag{font-size:10px;font-weight:400;color:var(--wf-ink-mut);}
 </style>
 {% endblock %}
 {% block content %}
 <div class="wf-wrap">
-  <h2 style="margin:0 0 16px;font-size:18px;">⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</h2>
-
-  <div class="wf-tabs">
-    <div class="wf-tab active" onclick="WF.tab('actions')">💡 {{ (i18n or {}).get('wf_s002', "自定义动作") }}</div>
-    <div class="wf-tab" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
-    <div class="wf-tab" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
-    <div class="wf-tab" onclick="WF.tab('scripts')">🎭 {{ (i18n or {}).get('wf_s005', "剧本话题") }}</div>
-    <div class="wf-tab" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
+  <h2 style="margin:0 0 16px;font-size:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span>⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</span>
+    <button class="btn-sm" id="wf-tour-btn" onclick="WF.startTour()">{{ (i18n or {}).get('wf_tour_replay', "▶ 播放引导") }}</button>
+  </h2>
+  <!-- P0 2026-08-12 定位说明（认知对齐）：SOP=按时提醒坐席的跟进节奏表，不是自动
+       外发机器人——「启动了客户怎么没收到消息」的期待错位在入口处就说清楚 -->
+  <div style="margin:-8px 0 14px;font-size:12.5px;color:var(--wf-ink-mut);line-height:1.6;">
+    {{ (i18n or {}).get('wf_mode_hint', "跟进 SOP 到点提醒坐席该做什么（工作台弹提示 + 会话右栏 SOP 卡一键转拟稿），不会自动替坐席给客户发消息；建任务/打标签/内部备注类步骤自动执行。") }}
   </div>
 
-  <!-- ── 自定义动作 ── -->
-  <div id="panel-actions" class="wf-panel active">
-    <div class="wf-section">
-      <h3>💡 {{ (i18n or {}).get('wf_s007', "自定义动作库") }}
-        <button class="btn-sm btn-primary" onclick="WF.showActionForm()">+ {{ (i18n or {}).get('wf_s008', "新建动作") }}</button>
-      </h3>
-      <table class="wf-table">
-        <thead>
-          <tr><th>{{ (i18n or {}).get('wf_s009', "图标") }}</th><th>{{ (i18n or {}).get('dash.ws.col_name', "名称") }}</th><th>{{ (i18n or {}).get('msg_js_1042', "类型") }}</th><th>{{ (i18n or {}).get('wa_s107', "触发条件") }}</th><th>{{ (i18n or {}).get('lr_s013', "排序") }}</th><th>{{ (i18n or {}).get('enable', "启用") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr>
-        </thead>
-        <tbody id="actions-tbody">
-          <tr><td colspan="7" class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <!-- P2 价值条：近 14 天 SOP 战绩前置（数据=chain-funnel，与监控 tab 同源缓存；
+       零启动记录整条隐藏——不给空账面撑门面） -->
+  <div id="wf-value-bar" class="wf-value-bar" role="status"></div>
 
-    <!-- 动作表单 -->
-    <div class="wf-section" id="action-form-wrap" style="display:none;">
-      <h3 id="action-form-title">{{ (i18n or {}).get('wf_s008', "新建动作") }}</h3>
-      <div class="form-row">
-        <div class="form-col" style="flex:0 0 60px;"><label>{{ (i18n or {}).get('wf_s009', "图标") }}</label><input id="af-icon" value="💡" style="text-align:center;font-size:18px;"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s010', "动作名称") }} *</label><input id="af-name" placeholder="{{ (i18n or {}).get('wf_s011', '例：情感安抚话术') }}"></div>
-        <div class="form-col" style="flex:0 0 140px;">
-          <label>{{ (i18n or {}).get('wf_s012', "动作类型") }}</label>
-          <select id="af-type" onchange="WF.onTypeChange()">
-            <option value="template">{{ (i18n or {}).get('templates', "话术模板") }}</option>
-            <option value="task">{{ (i18n or {}).get('wf_s013', "创建任务") }}</option>
-            <option value="tag">{{ (i18n or {}).get('wf_s014', "添加标签") }}</option>
-            <option value="note">{{ (i18n or {}).get('wf_s015', "内部备注") }}</option>
-            <option value="escalate">{{ (i18n or {}).get('wf_s016', "升级人工") }}</option>
-            <option value="chain">{{ (i18n or {}).get('wf_s017', "触发工作链") }}</option>
-          </select>
-        </div>
-        <div class="form-col" style="flex:0 0 80px;"><label>{{ (i18n or {}).get('wf_s018', "排序（小在前）") }}</label><input id="af-order" type="number" value="0" min="0"></div>
+  <!-- 一分钟上手（首次可见，「知道了」后本机不再显示；JS 按 localStorage 控显防闪） -->
+  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue08,rgba(45,108,223,.08));border:1px solid var(--th-bd-blue30,rgba(59,130,246,.3));border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--wf-ink);">
+    <div style="flex:1;">
+      <strong style="font-size:13px;">🚀 {{ (i18n or {}).get('wf_onboard_title', "一分钟上手") }}</strong>
+      <div>{{ (i18n or {}).get('wf_onboard_s1', "① 点「导入示例链」拿到 4 条现成跟进 SOP") }}</div>
+      <div>{{ (i18n or {}).get('wf_onboard_s2', "② 到收件箱会话右栏「跟进 SOP（工作链）」卡挂到客户") }}</div>
+      <div>{{ (i18n or {}).get('wf_onboard_s3', "③ 回「执行监控」看漏斗与 72h 回复率") }}</div>
+    </div>
+    <button class="btn-sm btn-primary" onclick="WF.startTour()">{{ (i18n or {}).get('wf_tour_replay', "▶ 播放引导") }}</button>
+    <button class="btn-sm" onclick="WF.dismissOnboard()">{{ (i18n or {}).get('wf_onboard_dismiss', "知道了") }}</button>
+  </div>
+
+  <!-- tab 顺序按坐席使用频率：工作链（默认落点）→ 监控 → 动作 → 路由；
+       data-tab 与 WF.tab 解耦 DOM 顺序（旧实现按 index 对号，重排即错位） -->
+  <div class="wf-tabs">
+    <div class="wf-tab active" data-tab="chains" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
+    <div class="wf-tab" data-tab="monitor" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
+    <div class="wf-tab" data-tab="routing" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
+  </div>
+
+  <!-- （原「自定义动作」tab 已于 2026-08-14 随「AI 下一步」面板整体下线。） -->
+
+  <!-- ── 工作链 ── -->
+  <div id="panel-chains" class="wf-panel active">
+    <!-- 实施92 成交引擎卡：一键接通「打招呼→成交」（旧后端无端点 → 整卡隐藏） -->
+    <div class="wf-section" id="de-card" style="display:none;">
+      <h3><span id="de-title">{{ (i18n or {}).get('wf_de_title', "🚀 成交引擎") }} <span id="de-status-pill"></span></span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span id="de-msg" style="font-size:12px;font-weight:400;"></span>
+          <button class="btn-sm btn-primary" id="de-btn" onclick="WF.toggleDealEngine()"></button>
+        </span>
+      </h3>
+      <p style="font-size:12px;color:var(--wf-ink-mut);margin:0 0 8px;line-height:1.6;">{{ (i18n or {}).get('wf_de_desc', "一键接通「打招呼→成交」：后台按会话往来自动推导客户阶段（建联/培育/报价），进入报价自动挂「报价跟单」、标记成交自动挂「成交后关怀」，客户回复时链自动让路。链动作仍是提醒坐席（除非链自己选了自动推进档）。") }}</p>
+      <!-- 实施92d 旅程示意（93：guide 风味时 JS 按 data-stage/data-viztag 换文案） -->
+      <div class="de-jn-viz" aria-hidden="true">
+        <span class="de-jn-node">👋 {{ (i18n or {}).get('wf_stage_new', "新客") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node">🤝 {{ (i18n or {}).get('wf_stage_contacted', "建联") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node">🌱 {{ (i18n or {}).get('wf_stage_nurturing', "培育") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node hot">💬 <span data-stage="quoting">{{ (i18n or {}).get('wf_stage_quoting', "报价") }}</span><span class="de-jn-tag" data-viztag="quote">⚡{{ (i18n or {}).get('wf_de_viz_quote', "自动挂跟单") }}</span></span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node win">💰 <span data-stage="deal">{{ (i18n or {}).get('wf_stage_deal', "成交") }}</span><span class="de-jn-tag" data-viztag="deal">⚡{{ (i18n or {}).get('wf_de_viz_deal', "自动挂关怀") }}</span></span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node"><span data-stage="repeat">🔁 {{ (i18n or {}).get('wf_stage_repeat', "复购") }}</span></span>
       </div>
-      <!-- 类型相关配置 -->
-      <div id="af-config-template" class="form-row">
-        <div class="form-col" style="flex:1;">
-          <label>{{ (i18n or {}).get('wf_s019', "话术内容（发送时直接填入输入框）") }}</label>
-          <textarea id="af-tpl-text" rows="3" placeholder="{{ (i18n or {}).get('wf_s020', '输入话术内容…') }}"></textarea>
-        </div>
-        <div class="form-col">
-          <label>{{ (i18n or {}).get('wf_s021', "操作提示（仅坐席可见）") }}</label>
-          <input id="af-hint" placeholder="{{ (i18n or {}).get('wf_s022', '例：情绪低落时使用') }}">
-        </div>
+      <div id="de-detail" style="font-size:12px;color:var(--wf-ink-mut);"></div>
+      <!-- 实施92b 自动发送档（引擎开启后可见）：话术步 AI 拟稿自动发 -->
+      <div id="de-auto" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--wf-bd);font-size:12px;color:var(--wf-ink-mut);align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong style="color:var(--wf-ink);">🤖 {{ (i18n or {}).get('wf_de_auto_label', "自动发送") }}</strong>
+        <span id="de-auto-pill"></span>
+        <span id="de-auto-meta"></span>
+        <span style="flex:1 1 auto;"></span>
+        <button class="btn-sm" id="de-auto-btn" onclick="WF.toggleDealEngineAuto()"></button>
       </div>
-      <div id="af-config-task" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s023', "任务说明") }}</label><input id="af-task-note" placeholder="{{ (i18n or {}).get('wf_s024', '跟进事项描述') }}"></div>
-        <div class="form-col" style="flex:0 0 130px;"><label>{{ (i18n or {}).get('wf_s025', "到期时长（小时）") }}</label><input id="af-task-due" type="number" value="72" min="1"></div>
-      </div>
-      <div id="af-config-tag" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s026', "标签选项（英文逗号分隔，多个让坐席选）") }}</label><input id="af-tag-opts" placeholder="{{ (i18n or {}).get('wf_s027', '情绪低落') }},{{ (i18n or {}).get('wf_s028', '需要关注') }},{{ (i18n or {}).get('wf_s029', '积极开朗') }}"></div>
-      </div>
-      <div id="af-config-note" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s030', "备注提示") }}</label><input id="af-note-hint" placeholder="{{ (i18n or {}).get('wf_s031', '提示坐席填写内容') }}"></div>
-      </div>
-      <div id="af-config-escalate" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s032', "升级原因（内部记录）") }}</label><input id="af-esc-reason" placeholder="{{ (i18n or {}).get('wf_s033', '例：高风险情绪干预') }}"></div>
-      </div>
-      <div id="af-config-chain" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s034', "工作链 ID（从") }} "{{ (i18n or {}).get('wf_s035', "工作链") }}" {{ (i18n or {}).get('wf_s036', "面板复制）") }}</label><input id="af-chain-id" placeholder="chain_id"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-col">
-          <label>{{ (i18n or {}).get('wf_s037', "触发信号（多选，决定 AI 是否推荐此动作）") }}</label>
-          <div id="af-triggers" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
-            <label class="cond-tag"><input type="checkbox" value="any" checked> {{ (i18n or {}).get('wf_s038', "任意场景") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="sentiment_negative"> {{ (i18n or {}).get('wf_s039', "情绪负面") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="silent_3d"> {{ (i18n or {}).get('wf_s040', "沉默3天") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="silent_7d"> {{ (i18n or {}).get('wf_s041', "沉默7天") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="complaint"> {{ (i18n or {}).get('tm_s008', "投诉") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="churn_intent"> {{ (i18n or {}).get('rh_js022', "流失风险") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="churn_intent_high"> {{ (i18n or {}).get('wf_s042', "高流失") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="crisis_signal"> {{ (i18n or {}).get('wf_s043', "危机信号") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="long_conversation"> {{ (i18n or {}).get('wf_s044', "长对话") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="high_engagement"> {{ (i18n or {}).get('wf_s045', "活跃互动") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="intimacy_growing"> {{ (i18n or {}).get('wf_s046', "亲密度成长") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="conversation_closing"> {{ (i18n or {}).get('wf_s047', "即将结束") }}</label>
+      <div id="de-auto-warn" style="display:none;margin-top:6px;font-size:11.5px;color:var(--th-ink-amber7,#b45309);"></div>
+    </div>
+    <!-- 实施93 转化目标库（旧后端无端点 → 整卡隐藏） -->
+    <div class="wf-section" id="cta-card" style="display:none;">
+      <h3>{{ (i18n or {}).get('wf_cta_title', "🎯 转化目标") }}
+        <span id="cta-msg" style="font-size:12px;font-weight:400;"></span>
+      </h3>
+      <p style="font-size:12px;color:var(--wf-ink-mut);margin:0 0 8px;line-height:1.6;">{{ (i18n or {}).get('wf_cta_desc', "把用户往哪引（网站/落地页/APP/群）。链的话术步选了目标后，发送时自动带上该客户专属的追踪短链——谁点了、点没点，旅程阶段自动推进。") }}</p>
+      <!-- #132：裸配置键/反代术语从运营界面退场——人话提示 + 就地配置入口
+           （保存写 overlay inbox.cta.public_base；技术细节收进悬浮 title） -->
+      <div id="cta-nobase" style="display:none;margin:0 0 8px;">
+        <div style="font-size:11.5px;color:var(--th-ink-amber7,#b45309);margin-bottom:6px;">{{ (i18n or {}).get('wf_cta_nobase', "⚠ 转化目标短链还没启用——需要一个客户能打开的网址。把你的网站地址填到下面保存即可；不确定填什么就联系为你部署的技术同学。") }}</div>
+        <div class="form-row" style="margin-bottom:0;">
+          <div class="form-col"><input id="cta-base-input" placeholder="{{ (i18n or {}).get('wf_cta_base_ph', '你的网站地址（例：https://你的域名.com）') }}" title="{{ (i18n or {}).get('wf_cta_base_tech_t', '技术说明：需把该域名的 /r/* 路径反向代理到本引擎（配置键 inbox.cta.public_base）') }}"></div>
+          <div class="form-col" style="flex:0 0 auto;">
+            <button class="btn-sm btn-primary" onclick="WF.saveCtaBase()">{{ (i18n or {}).get('wf_cta_base_save', '保存并启用') }}</button>
           </div>
         </div>
       </div>
-      <input type="hidden" id="af-id">
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="btn-sm btn-primary" onclick="WF.saveAction()">{{ (i18n or {}).get('wf_s048', "保存动作") }}</button>
-        <button class="btn-sm" onclick="WF.cancelForm()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-        <span id="af-msg" style="font-size:12px;margin-left:8px;align-self:center;"></span>
+      <div id="cta-list" style="margin-bottom:8px;"></div>
+      <div class="form-row" style="margin-bottom:0;">
+        <div class="form-col" style="flex:0 0 200px;"><input id="cta-name" placeholder="{{ (i18n or {}).get('wf_cta_add_name', '目标名称（例：官网落地页）') }}"></div>
+        <div class="form-col"><input id="cta-url" placeholder="{{ (i18n or {}).get('wf_cta_add_url', 'https://…') }}"></div>
+        <div class="form-col" style="flex:0 0 110px;">
+          <select id="cta-kind">
+            <option value="site">{{ (i18n or {}).get('wf_cta_kind_site', "网站") }}</option>
+            <option value="landing">{{ (i18n or {}).get('wf_cta_kind_landing', "落地页") }}</option>
+            <option value="app">{{ (i18n or {}).get('wf_cta_kind_app', "APP") }}</option>
+            <option value="group">{{ (i18n or {}).get('wf_cta_kind_group', "群") }}</option>
+          </select>
+        </div>
+        <div class="form-col" style="flex:0 0 auto;">
+          <button class="btn-sm btn-primary" onclick="WF.addCtaTarget()">{{ (i18n or {}).get('wf_cta_add_btn', "+ 添加目标") }}</button>
+        </div>
       </div>
     </div>
-  </div>
-
-  <!-- ── 工作链 ── -->
-  <div id="panel-chains" class="wf-panel">
     <div class="wf-section">
       <h3>🔗 {{ (i18n or {}).get('wf_s049', "工作链配置") }}
-        <button class="btn-sm btn-primary" onclick="WF.showChainForm()">+ {{ (i18n or {}).get('wf_s050', "新建工作链") }}</button>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span id="seed-msg" style="font-size:12px;font-weight:400;"></span>
+          <button class="btn-sm" id="wf-seed-btn" onclick="WF.seedChains(this)">📦 {{ (i18n or {}).get('wf_seed_btn', "导入示例链") }}</button>
+          <button class="btn-sm btn-primary" onclick="WF.showChainForm()">+ {{ (i18n or {}).get('wf_s050', "新建工作链") }}</button>
+        </span>
       </h3>
       <div id="chains-list"><div class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     </div>
@@ -162,10 +261,48 @@
       <div class="form-row">
         <div class="form-col"><label>{{ (i18n or {}).get('wf_s051', "工作链名称") }} *</label><input id="cf-name" placeholder="{{ (i18n or {}).get('wf_s052', '例：沉默客户挽回流程') }}"></div>
       </div>
-      <div class="form-row" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+      <!-- P2 2026-08-13 执行档位：remind=到点提醒坐席（默认）/ auto=话术步自动拟稿
+           投料给既有 autosend 管线（需全局 inbox.workflows.auto_advance.enabled +
+           会话为全自动档，四重闸在引擎侧；这里只是链级意愿声明） -->
+      <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+        <div class="form-col" style="flex:0 0 200px;">
+          <label>{{ (i18n or {}).get('wf_exec_mode_label', "执行档位") }}</label>
+          <select id="cf-exec-mode">
+            <option value="remind">{{ (i18n or {}).get('wf_exec_mode_remind', "提醒坐席（默认）") }}</option>
+            <option value="auto">{{ (i18n or {}).get('wf_exec_mode_auto', "自动推进（AI 拟稿自动发）") }}</option>
+          </select>
+        </div>
+        <!-- 实施92：客户回复时的让路档位（''=随全局默认 pause） -->
+        <div class="form-col" style="flex:0 0 240px;">
+          <label>{{ (i18n or {}).get('wf_onreply_label', "客户回复时") }}</label>
+          <select id="cf-on-reply" title="{{ (i18n or {}).get('wf_onreply_hint', '客户来新消息时本链如何让路。唤回类链建议「按完成收束」；关怀回访若必须走完选「不让路」。') }}">
+            <option value="">{{ (i18n or {}).get('wf_onreply_follow', "跟随默认（暂停让人接管）") }}</option>
+            <option value="pause">{{ (i18n or {}).get('wf_onreply_pause', "暂停，交坐席接管") }}</option>
+            <option value="complete">{{ (i18n or {}).get('wf_onreply_complete', "按完成收束（回复=目标达成）") }}</option>
+            <option value="continue">{{ (i18n or {}).get('wf_onreply_continue', "不让路，按节奏走完") }}</option>
+          </select>
+        </div>
+        <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
+          {{ (i18n or {}).get('wf_exec_mode_hint', "自动推进仅对「话术」步生效，且需系统开启 auto_advance 开关 + 会话处于全自动档；静默时段顺延，生成失败自动降级为提醒。建任务/打标签/备注步两档都自动执行。") }}
+          {{ (i18n or {}).get('wf_onreply_hint', "客户来新消息时本链如何让路。唤回类链建议「按完成收束」；关怀回访若必须走完选「不让路」。") }}
+        </div>
+      </div>
+      <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
         <div class="form-col" style="flex:0 0 160px;">
           <label>{{ (i18n or {}).get('wf_s053', "自动触发 · 沉默天数") }}</label>
           <input id="cf-silence-days" type="number" min="0" value="0" placeholder="0={{ (i18n or {}).get('wf_s054', '不自动触发') }}">
+        </div>
+        <!-- 实施92：按旅程阶段自动挂链（成交引擎开启后生效） -->
+        <div class="form-col" style="flex:0 0 190px;">
+          <label>{{ (i18n or {}).get('wf_stage_trigger_label', "自动触发 · 进入阶段") }}</label>
+          <select id="cf-stage-enter" title="{{ (i18n or {}).get('wf_stage_trigger_hint', '需开启下方「成交引擎」（客户旅程阶段）后生效：进入所选阶段的会话自动挂上本链，同一次进入只挂一次。') }}">
+            <option value="">{{ (i18n or {}).get('wf_stage_none', "不按阶段触发") }}</option>
+            <option value="contacted">{{ (i18n or {}).get('wf_stage_contacted', "建联") }}</option>
+            <option value="nurturing">{{ (i18n or {}).get('wf_stage_nurturing', "培育") }}</option>
+            <option value="quoting">{{ (i18n or {}).get('wf_stage_quoting', "报价") }}</option>
+            <option value="deal">{{ (i18n or {}).get('wf_stage_deal', "成交") }}</option>
+            <option value="repeat">{{ (i18n or {}).get('wf_stage_repeat', "复购") }}</option>
+          </select>
         </div>
         <div class="form-col" style="flex:0 0 auto;align-self:flex-end;padding-bottom:4px;">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -173,11 +310,12 @@
             {{ (i18n or {}).get('wf_s055', "仅高流失风险客户") }}
           </label>
         </div>
-        <div class="form-col" style="font-size:11px;color:#64748b;align-self:center;">
-          P44: {{ (i18n or {}).get('wf_s056', "后台定时扫描，满足条件时自动启动本链（防重：同会话同链仅一条 running）") }}
+        <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
+          {{ (i18n or {}).get('wf_auto_trigger_hint', "后台定时扫描，满足条件时自动启动本链（同会话同链仅一条运行中，不会重复）") }}
+          {{ (i18n or {}).get('wf_stage_trigger_hint', "需开启下方「成交引擎」（客户旅程阶段）后生效：进入所选阶段的会话自动挂上本链，同一次进入只挂一次。") }}
         </div>
       </div>
-      <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--th-ink-gray7,#374151);margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
       <div id="cf-steps"></div>
       <button class="btn-sm" style="margin-bottom:10px;" onclick="WF.addStep()">+ {{ (i18n or {}).get('wf_s058', "添加步骤") }}</button>
       <input type="hidden" id="cf-id">
@@ -195,7 +333,7 @@
       <h3>🔀 {{ (i18n or {}).get('wf_s060', "分流路由规则") }}
         <button class="btn-sm btn-primary" onclick="WF.showRoutingForm()">+ {{ (i18n or {}).get('wf_s061', "新建规则") }}</button>
       </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s062', "根据平台、关键词等条件自动将新会话分配给指定坐席。规则按优先级（数值大优先）依次匹配，取最高优先级命中规则。") }}</p>
+      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s062', "根据平台、关键词等条件自动将新会话分配给指定坐席。规则按优先级（数值大优先）依次匹配，取最高优先级命中规则。") }}</p>
       <table class="wf-table">
         <thead>
           <tr><th>{{ (i18n or {}).get('dash.ws.col_name', "名称") }}</th><th>{{ (i18n or {}).get('wf_s063', "条件") }}</th><th>{{ (i18n or {}).get('wf_s064', "分配给") }}</th><th>{{ (i18n or {}).get('msg_js_2014', "优先级") }}</th><th>{{ (i18n or {}).get('enable', "启用") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr>
@@ -250,7 +388,7 @@
           <button class="btn-sm btn-primary" onclick="WF.testRouting()">{{ (i18n or {}).get('wa_js_108', "测试") }}</button>
         </div>
       </div>
-      <div id="rt-result" style="font-size:13px;color:#374151;margin-top:8px;"></div>
+      <div id="rt-result" style="font-size:13px;color:var(--th-ink-gray7,#374151);margin-top:8px;"></div>
     </div>
   </div>
 
@@ -258,12 +396,12 @@
   <div id="panel-monitor" class="wf-panel">
     <div class="wf-section">
       <h3>📊 {{ (i18n or {}).get('wf_s077', "工作链执行监控") }}
-        <span id="mon-running-badge" style="font-size:12px;font-weight:500;color:#1e40af;"></span>
+        <span id="mon-running-badge" style="font-size:12px;font-weight:500;color:var(--th-ink-blue8,#1e40af);"></span>
         <button class="btn-sm" onclick="WF.loadMonitor()" style="margin-left:8px;">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
       </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s078', "实时查看运行中 / 最近完成 / 失败的工作链。后台 ScheduledReporter 每 tick 推进到期步骤。") }}</p>
+      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s078', "实时查看运行中 / 最近完成 / 失败的工作链。后台 ScheduledReporter 每 tick 推进到期步骤。") }}</p>
       <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
-        <select id="mon-filter" onchange="WF.loadMonitor()" style="font-size:12px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;">
+        <select id="mon-filter" onchange="WF.loadMonitor()" style="font-size:12px;padding:4px 8px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:6px;">
           <option value="">{{ (i18n or {}).get('psn_all_status', "全部状态") }}</option>
           <option value="running">{{ (i18n or {}).get('ov_js_running', "运行中") }}</option>
           <option value="completed">{{ (i18n or {}).get('ops.ct.st_completed', "已完成") }}</option>
@@ -271,64 +409,29 @@
           <option value="cancelled">{{ (i18n or {}).get('rpa_js_st_cancelled', "已取消") }}</option>
         </select>
       </div>
+      <div id="funnel-box" style="margin-bottom:12px;"></div>
       <div id="monitor-list"><div class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     </div>
   </div>
 
-  <!-- ── 剧本话题（P40） ── -->
-  <div id="panel-scripts" class="wf-panel">
-    <div class="wf-section">
-      <h3>🎭 {{ (i18n or {}).get('wf_s079', "剧本话题库（按关系阶段）") }}
-        <button class="btn-sm btn-primary" onclick="WF.showScriptForm()">+ {{ (i18n or {}).get('wf_s080', "新建话题") }}</button>
-      </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s081', "阶段与关系亲密度对齐") }} (companion_relationship): initial={{ (i18n or {}).get('wf_s082', "初识") }} → warming={{ (i18n or {}).get('wf_s083', "熟悉") }} → intimate={{ (i18n or {}).get('wf_s084', "深入") }} → steady={{ (i18n or {}).get('rpa_js_intimacy', "亲密") }}</p>
-      <table class="wf-table">
-        <thead><tr><th>{{ (i18n or {}).get('msg_js_1039', "阶段") }}</th><th>{{ (i18n or {}).get('kb_s106', "标题") }}</th><th>{{ (i18n or {}).get('wf_s085', "开场话术") }}</th><th>{{ (i18n or {}).get('psn_tag', "标签") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr></thead>
-        <tbody id="scripts-tbody"><tr><td colspan="5" class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
-      </table>
-    </div>
-    <div class="wf-section" id="script-form-wrap" style="display:none;">
-      <h3 id="script-form-title">{{ (i18n or {}).get('wf_s086', "新建剧本话题") }}</h3>
-      <div class="form-row">
-        <div class="form-col" style="flex:0 0 130px;"><label>{{ (i18n or {}).get('msg_js_1948', "关系阶段") }}</label>
-          <select id="sf-stage">
-            <option value="initial">{{ (i18n or {}).get('c3_js028', "初识") }} initial</option>
-            <option value="warming">{{ (i18n or {}).get('wf_s083', "熟悉") }} warming</option>
-            <option value="intimate">{{ (i18n or {}).get('wf_s084', "深入") }} intimate</option>
-            <option value="steady">{{ (i18n or {}).get('rpa_js_intimacy', "亲密") }} steady</option>
-          </select>
-        </div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s087', "话题标题") }} *</label><input id="sf-title" placeholder="{{ (i18n or {}).get('wf_s088', '例：深夜心事') }}"></div>
-      </div>
-      <div class="form-row"><div class="form-col"><label>{{ (i18n or {}).get('wf_s085', "开场话术") }} *</label><textarea id="sf-opener" rows="3" placeholder="{{ (i18n or {}).get('wf_s089', '坐席可直接使用的话题切入点…') }}"></textarea></div></div>
-      <div class="form-row">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s090', "使用提示") }}</label><input id="sf-hint" placeholder="{{ (i18n or {}).get('wf_s091', '什么场景下推荐使用') }}"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s092', "标签（逗号分隔）") }}</label><input id="sf-tags" placeholder="{{ (i18n or {}).get('inbox.ai.sentiment', '情绪') }},{{ (i18n or {}).get('wf_s093', '倾听') }},reunion"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s094', "关联工作链") }} ID</label><input id="sf-chain" placeholder="{{ (i18n or {}).get('msg_s416', '可选') }}"></div>
-      </div>
-      <input type="hidden" id="sf-id">
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="btn-sm btn-primary" onclick="WF.saveScript()">{{ (i18n or {}).get('save', "保存") }}</button>
-        <button class="btn-sm" onclick="WF.cancelScriptForm()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-      </div>
-    </div>
-  </div>
 </div>
 
 <script>
 (function(){
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-// ── 选项卡切换 ──────────────────────────────────────────────────────────────
+// ── 选项卡切换（data-tab 匹配，与 DOM 顺序解耦；记忆上次停留）────────────────
 var _loaded={};
 var _monTimer=null;
 window.WF={
   tab:function(name){
-    document.querySelectorAll('.wf-tab').forEach(function(el,i){
-      el.classList.toggle('active',['actions','chains','routing','scripts','monitor'][i]===name);
+    document.querySelectorAll('.wf-tab').forEach(function(el){
+      el.classList.toggle('active',el.getAttribute('data-tab')===name);
     });
     document.querySelectorAll('.wf-panel').forEach(function(el){el.classList.remove('active');});
-    document.getElementById('panel-'+name).classList.add('active');
+    var p=document.getElementById('panel-'+name);
+    if(p)p.classList.add('active');
+    try{ localStorage.setItem('wf_last_tab',name); }catch(_){}
     if(!_loaded[name]){ _loaded[name]=true; WF['load'+name[0].toUpperCase()+name.slice(1)](); }
     if(name==='monitor'){
       if(_monTimer) clearInterval(_monTimer);
@@ -339,144 +442,383 @@ window.WF={
   }
 };
 
-// ── 自定义动作 ──────────────────────────────────────────────────────────────
-var _editingActionId=null;
-var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:window.T('wf_s014'),note:window.T('wf_s015'),escalate:window.T('wf_s016'),chain:window.T('wf_s017')};
-var _TYPE_BADGE={template:'badge-template',task:'badge-task',tag:'badge-tag',note:'badge-note',escalate:'badge-escalate',chain:'badge-chain'};
+// （原「自定义动作」tab 的 CRUD/预览 JS 已于 2026-08-14 随「AI 下一步」面板整体下线。）
 
-WF.loadActions=function(){
-  fetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
-    var tbody=document.getElementById('actions-tbody');
-    var acts=d.actions||[];
-    if(!acts.length){tbody.innerHTML='<tr><td colspan="7" class="wf-empty">'+window.T('wf_js001')+' — '+window.T('dash.q.clicked')+' "'+window.T('wf_js002')+'" '+window.T('wf_js003')+'</td></tr>';return;}
-    tbody.innerHTML=acts.map(function(a){
-      var conds=[];try{conds=JSON.parse(a.trigger_conditions||'[]');}catch(_){}
-      return '<tr>'
-        +'<td style="font-size:18px;text-align:center;">'+esc(a.icon||'💡')+'</td>'
-        +'<td><strong>'+esc(a.name)+'</strong></td>'
-        +'<td><span class="badge '+(_TYPE_BADGE[a.action_type]||'')+'">'+(esc(_TYPE_LABELS[a.action_type]||a.action_type))+'</span></td>'
-        +'<td style="font-size:11px;">'+conds.map(function(c){return '<span class="cond-tag">'+esc(c)+'</span>';}).join('')+'</td>'
-        +'<td>'+a.sort_order+'</td>'
-        +'<td><label class="toggle-sw"><input type="checkbox"'+(a.enabled?'checked':'')
-          +' onchange="WF.toggleAction(\''+esc(a.action_id)+'\',this.checked)"><span class="toggle-slider"></span></label></td>'
-        +'<td><button class="btn-sm" onclick="WF.editAction(\''+esc(a.action_id)+'\')">'+window.T('edit')+'</button> '
-          +'<button class="btn-sm btn-danger" onclick="WF.delAction(\''+esc(a.action_id)+'\')">'+window.T('delete')+'</button></td>'
-        +'</tr>';
-    }).join('');
-  }).catch(function(){});
+// ⚠ _TYPE_LABELS＝「步骤动作类型→人话标签」单一事实源：工作链步骤只读视图 / 编辑器
+//   类型下拉 / 监控分步统计三处渲染共用，不属于任何单一面板——2026-08-22 B39 事故：
+//   随上行「自定义动作」面板下线被连带误删，整页初始化 ReferenceError 列表永卡加载中。
+//   勿再随面板批次删除；词条键由 test_template_window_t_keys_resolve 守。
+var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:window.T('wf_s014'),note:window.T('wf_s015'),escalate:window.T('wf_s016'),chain:window.T('wf_s017')};
+
+// ── 实施92 成交引擎：旅程阶段人话标签 + 状态卡 + 一键开关 ────────────────────
+// 实施93：标签随 journey.flavor（sales=报价/成交/复购，guide=已引导/已转化/再转化）
+WF._stageLabel=function(s){
+  var g=((WF._deState&&WF._deState.flavor)||'sales')==='guide';
+  var k={new:'wf_stage_new',contacted:'wf_stage_contacted',nurturing:'wf_stage_nurturing',
+         quoting:g?'wf_stage_quoting_g':'wf_stage_quoting',
+         deal:g?'wf_stage_deal_g':'wf_stage_deal',
+         repeat:g?'wf_stage_repeat_g':'wf_stage_repeat'}[s];
+  return k?window.T(k):String(s||'');
 };
-WF.showActionForm=function(act){
-  _editingActionId=act?act.action_id:null;
-  document.getElementById('action-form-title').textContent=act?window.T('wf_js004'):window.T('wf_s008');
-  document.getElementById('af-id').value=act?act.action_id:'';
-  document.getElementById('af-icon').value=act?act.icon:'💡';
-  document.getElementById('af-name').value=act?act.name:'';
-  document.getElementById('af-type').value=act?act.action_type:'template';
-  document.getElementById('af-order').value=act?act.sort_order:0;
-  var cfg=act?act.config:{};
-  document.getElementById('af-tpl-text').value=cfg.template_text||'';
-  document.getElementById('af-hint').value=cfg.hint||'';
-  document.getElementById('af-task-note').value=cfg.note||'';
-  document.getElementById('af-task-due').value=cfg.due_hours||72;
-  document.getElementById('af-tag-opts').value=(cfg.tag_options||[cfg.tag]).filter(Boolean).join(',');
-  document.getElementById('af-note-hint').value=cfg.hint||'';
-  document.getElementById('af-esc-reason').value=cfg.reason||'';
-  document.getElementById('af-chain-id').value=cfg.chain_id||'';
-  // 触发条件
-  var conds=act?JSON.parse(act.trigger_conditions||'["any"]'):['any'];
-  document.querySelectorAll('#af-triggers input').forEach(function(cb){cb.checked=conds.indexOf(cb.value)>=0;});
-  WF.onTypeChange();
-  document.getElementById('action-form-wrap').style.display='block';
-  document.getElementById('action-form-wrap').scrollIntoView({behavior:'smooth'});
-};
-WF.onTypeChange=function(){
-  var t=document.getElementById('af-type').value;
-  ['template','task','tag','note','escalate','chain'].forEach(function(s){
-    document.getElementById('af-config-'+s).style.display=s===t?'flex':'none';
+// guide 风味：把 Jinja 静态渲染的旅程示意/编辑器下拉换成引导语系文案
+WF._applyFlavorLabels=function(){
+  if(((WF._deState&&WF._deState.flavor)||'sales')!=='guide')return;
+  document.querySelectorAll('.de-jn-viz [data-stage]').forEach(function(el){
+    var s=el.getAttribute('data-stage');
+    el.textContent=(s==='repeat'?'🔁 ':'')+WF._stageLabel(s);
+  });
+  var tags={quote:'wf_de_viz_quote_g',deal:'wf_de_viz_deal_g'};
+  document.querySelectorAll('.de-jn-viz [data-viztag]').forEach(function(el){
+    el.textContent='⚡'+window.T(tags[el.getAttribute('data-viztag')]||'');
+  });
+  var se=document.getElementById('cf-stage-enter');
+  if(se)Array.prototype.forEach.call(se.options,function(o){
+    if(o.value)o.textContent=WF._stageLabel(o.value);
   });
 };
-WF.editAction=function(id){
-  fetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
-    var act=(d.actions||[]).find(function(a){return a.action_id===id;});
-    if(act)WF.showActionForm(act);
-  });
+// ── 实施93 转化目标库（旧后端 404 → 整卡隐藏；步骤编辑器 CTA 下拉共用缓存）──
+WF._ctaTargets=null;
+WF.loadCtaTargets=function(){
+  apiFetch('/api/workspace/cta-targets')
+    .then(function(r){ if(!r.ok)throw 0; return r.json(); })
+    .then(function(d){
+      if(!d||!d.ok)return;
+      WF._ctaTargets=d.targets||[];
+      var card=document.getElementById('cta-card'); if(!card)return;
+      card.style.display='block';
+      var nb=document.getElementById('cta-nobase');
+      if(nb)nb.style.display=d.public_base?'none':'block';
+      var box=document.getElementById('cta-list');
+      if(!box)return;
+      if(!WF._ctaTargets.length){
+        box.innerHTML='<div class="wf-empty" style="padding:8px;">'+window.T('wf_cta_empty')+'</div>';
+        return;
+      }
+      var kinds={site:window.T('wf_cta_kind_site'),landing:window.T('wf_cta_kind_landing'),
+                 app:window.T('wf_cta_kind_app'),group:window.T('wf_cta_kind_group')};
+      box.innerHTML=WF._ctaTargets.map(function(t){
+        var on=!!t.enabled;
+        return '<div class="step-card">'
+          +'<div style="flex:1;font-size:12px;min-width:0;">'
+            +'<strong>'+esc(t.name||t.target_id)+'</strong>'
+            +' <span class="cond-tag">'+esc(kinds[t.kind]||t.kind)+'</span>'
+            +'<div class="wf-step-note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(t.url||'')+'</div>'
+          +'</div>'
+          +'<label class="toggle-sw"><input type="checkbox"'+(on?' checked':'')
+            +' onchange="WF.toggleCtaTarget(\''+esc(t.target_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
+          +'<button class="btn-sm btn-danger" onclick="WF.delCtaTarget(\''+esc(t.target_id)+'\')">×</button>'
+          +'</div>';
+      }).join('');
+    }).catch(function(){});
 };
-WF.cancelForm=function(){document.getElementById('action-form-wrap').style.display='none';};
-WF.saveAction=function(){
-  var t=document.getElementById('af-type').value;
-  var cfg={};
-  if(t==='template'){cfg.template_text=document.getElementById('af-tpl-text').value;cfg.hint=document.getElementById('af-hint').value;}
-  else if(t==='task'){cfg.note=document.getElementById('af-task-note').value;cfg.due_hours=Number(document.getElementById('af-task-due').value);}
-  else if(t==='tag'){var opts=document.getElementById('af-tag-opts').value.split(',').map(function(x){return x.trim();}).filter(Boolean);cfg.tag_options=opts;if(opts.length===1)cfg.tag=opts[0];}
-  else if(t==='note'){cfg.hint=document.getElementById('af-note-hint').value;}
-  else if(t==='escalate'){cfg.reason=document.getElementById('af-esc-reason').value;}
-  else if(t==='chain'){cfg.chain_id=document.getElementById('af-chain-id').value;}
-  var conds=Array.from(document.querySelectorAll('#af-triggers input:checked')).map(function(cb){return cb.value;});
-  var data={
-    action_id:document.getElementById('af-id').value||undefined,
-    icon:document.getElementById('af-icon').value||'💡',
-    name:document.getElementById('af-name').value.trim(),
-    action_type:t, config:cfg,
-    sort_order:Number(document.getElementById('af-order').value)||0,
-    enabled:1,
-    trigger_conditions:JSON.stringify(conds.length?conds:['any']),
-  };
-  if(!data.name){document.getElementById('af-msg').textContent=window.T('psn_js_137');document.getElementById('af-msg').style.color='#ef4444';return;}
-  var url=data.action_id?'/api/workspace/workflow-actions/'+encodeURIComponent(data.action_id):'/api/workspace/workflow-actions';
-  var method=data.action_id?'PUT':'POST';
-  fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+WF._ctaSay=function(text,color){
+  var m=document.getElementById('cta-msg'); if(!m)return;
+  m.textContent=text; m.style.color=color;
+  setTimeout(function(){m.textContent='';},5000);
+};
+WF.addCtaTarget=function(){
+  var name=(document.getElementById('cta-name')||{}).value||'';
+  var url=(document.getElementById('cta-url')||{}).value||'';
+  var kind=(document.getElementById('cta-kind')||{}).value||'site';
+  if(!name.trim()||!/^https?:\/\//i.test(url.trim())){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');return;}
+  apiFetch('/api/workspace/cta-targets',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name.trim(),url:url.trim(),kind:kind})}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('af-msg').textContent=window.T('wa_js_053');document.getElementById('af-msg').style.color='#10b981';WF.loadActions();setTimeout(function(){WF.cancelForm();},1000);}
-      else{document.getElementById('af-msg').textContent=window.T('ov_js_save_fail');document.getElementById('af-msg').style.color='#ef4444';}
+      if(d&&d.ok){
+        WF._ctaSay(window.T('wf_cta_saved'),'var(--wf-ok)');
+        document.getElementById('cta-name').value='';
+        document.getElementById('cta-url').value='';
+        WF.loadCtaTargets();
+      }else WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');
+    }).catch(function(){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');});
+};
+/* #132：转化目标短链公网基址——界面内直接配置（写 overlay），不再让运营去配置文件里找键 */
+WF.saveCtaBase=function(){
+  var inp=document.getElementById('cta-base-input');
+  var v=(inp&&inp.value||'').trim();
+  if(!/^https?:\/\/[^\s\/]+/i.test(v)){
+    WF._ctaSay(window.T('wf_cta_base_invalid'),'var(--wf-err)');
+    return;
+  }
+  apiFetch('/api/workspace/cta-public-base',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({public_base:v})}, {timeoutMs: 60000})
+    .then(function(r){ return r.json().catch(function(){return {};}); })
+    .then(function(d){
+      if(d&&d.ok){
+        WF._ctaSay(window.T('wf_cta_base_saved'),'var(--wf-ok)');
+        WF.loadCtaTargets();
+      }else WF._ctaSay((d&&d.message)||window.T('wf_cta_fail'),'var(--wf-err)');
+    }).catch(function(){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');});
+};
+WF.toggleCtaTarget=function(id,en){
+  var t=(WF._ctaTargets||[]).find(function(x){return x.target_id===id;});
+  if(!t)return;
+  apiFetch('/api/workspace/cta-targets',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({target_id:id,name:t.name,url:t.url,kind:t.kind,utm:t.utm,enabled:en?1:0})}, {timeoutMs: 60000})
+    .then(function(){WF.loadCtaTargets();}).catch(function(){WF.loadCtaTargets();});
+};
+WF.delCtaTarget=function(id){
+  if(!confirm(window.T('wf_cta_del_confirm')))return;
+  apiFetch('/api/workspace/cta-targets/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000})
+    .then(function(){WF.loadCtaTargets();});
+};
+WF._deState=null;
+WF.loadDealEngine=function(){
+  apiFetch('/api/workspace/workflows/deal-engine')
+    .then(function(r){ if(!r.ok)throw 0; return r.json(); })
+    .then(function(d){
+      if(!d||!d.ok)return;
+      WF._deState=d;
+      var card=document.getElementById('de-card'); if(!card)return;
+      card.style.display='block';
+      var on=!!d.engine_on;
+      var pill=document.getElementById('de-status-pill');
+      if(pill)pill.innerHTML='<span class="badge '+(on?'badge-completed':'badge-cancelled')+'">'
+        +(on?window.T('wf_de_on'):window.T('wf_de_off'))+'</span>';
+      var btn=document.getElementById('de-btn');
+      if(btn){btn.textContent=on?window.T('wf_de_btn_off'):window.T('wf_de_btn_on');
+        btn.className='btn-sm'+(on?'':' btn-primary');}
+      var det=document.getElementById('de-detail');
+      if(det)det.innerHTML=
+        '<span class="cond-tag">'+window.T('wf_de_journey')+' '+(d.journey_enabled?'✓':'✗')+'</span>'
+        +'<span class="cond-tag">'+window.T('wf_de_reply_yield')+' '+(d.reply_yield_enabled?'✓':'✗')+'</span>'
+        +(d.chains||[]).map(function(ch){
+          return '<span class="cond-tag">'+esc(ch.name||ch.chain_id)+' ('+WF._stageLabel(ch.stage)+') '
+            +(ch.wired?'✓ '+window.T('wf_de_chain_wired'):'✗ '+window.T('wf_de_chain_unwired'))+'</span>';
+        }).join('');
+      // 实施92b 自动发送区：引擎开着才展示（旧后端响应无 auto_send=隐藏）。
+      // auto_send 键同时是本批 .py（含 bulk-start 端点）已装载的特性探测——
+      // 首次探到时补渲染一次链卡，把「📤 批量挂链」按钮点亮（一次性，防循环）。
+      var au=d.auto_send||null;
+      if(au&&!WF._bulkReady){ WF._bulkReady=true; try{ WF.loadChains(); }catch(_e){} }
+      // 实施93：guide 风味把示意图/编辑器下拉换引导语系文案
+      try{ WF._applyFlavorLabels(); }catch(_e){}
+      var aRow=document.getElementById('de-auto');
+      var aWarn=document.getElementById('de-auto-warn');
+      if(aRow){
+        if(on&&au){
+          aRow.style.display='flex';
+          var aOn=!!au.on;
+          var aPill=document.getElementById('de-auto-pill');
+          if(aPill)aPill.innerHTML='<span class="badge '+(aOn?'badge-running':'badge-cancelled')+'">'
+            +(aOn?'⚡ '+window.T('wf_de_auto_pill_on'):window.T('wf_de_auto_pill_off'))+'</span>';
+          var aMeta=document.getElementById('de-auto-meta');
+          if(aMeta)aMeta.textContent=aOn?window.Tf('wf_de_auto_meta',
+            {qs:au.quiet_start,qe:au.quiet_end,n:au.max_per_day}):'';
+          var aBtn=document.getElementById('de-auto-btn');
+          if(aBtn){aBtn.textContent=aOn?window.T('wf_de_auto_btn_off'):window.T('wf_de_auto_btn_on');
+            aBtn.className='btn-sm'+(aOn?'':' btn-primary');}
+          if(aWarn){
+            var showWarn=aOn&&!au.deliver_wired;
+            aWarn.style.display=showWarn?'block':'none';
+            aWarn.textContent=showWarn?window.T('wf_de_auto_deliver_warn'):'';
+          }
+        }else{
+          aRow.style.display='none';
+          if(aWarn)aWarn.style.display='none';
+        }
+      }
+    }).catch(function(){});
+};
+WF.toggleDealEngineAuto=function(){
+  var st=WF._deState||{};
+  var au=st.auto_send||{};
+  var cur=!!au.on;
+  if(!confirm(window.T(cur?'wf_de_auto_confirm_off':'wf_de_auto_confirm_on')))return;
+  var btn=document.getElementById('de-auto-btn'); if(btn)btn.disabled=true;
+  var msg=document.getElementById('de-msg');
+  apiFetch('/api/workspace/workflows/deal-engine',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enable:true,auto_send:!cur})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(!(d&&d.ok)&&msg){
+        msg.textContent=window.Tf('wf_de_fail',{msg:String((d&&(d.auto_flag_msg||d.flag_msg||d.error))||'?').slice(0,80)});
+        msg.style.color='var(--wf-err)';
+        setTimeout(function(){msg.textContent='';},6000);
+      }
+      WF.loadDealEngine(); WF.loadChains();
+    }).catch(function(){ if(btn)btn.disabled=false; });
+};
+// ── 实施92b 批量挂链：dry-run 预览 → 确认 → 落地（服务端再兜 50 上限+防重）──
+// #173（2026-09-05）：原生 prompt 在 Electron 渲染进程直接抛 → 按钮「点了没反应」；
+// 改走页内弹层 window.uiPrompt（_win_unique.html 引入 /copilot/ui-prompt.js），
+// 弹层缺席时如实提示而不是静默死。
+// #209（L-3 D，YD2SMM）：弹层换主题令牌 + 天数步进器（默认 3，1–90；链自带 silence_days 优先）
+// + 确认前实时预览「符合 N · 将挂 min(N,50) · 跳过 M」（复用 bulk 端点 dry_run）+ 确认即落地
+// （不再二次原生 confirm）+ 结果「已挂 N 个（可撤销）」逐条 cancel 撤回。
+WF.bulkStart=function(chainId){
+  var c=(_chainsCache||[]).find(function(x){return x.chain_id===chainId;});
+  var defDays=Number(c&&c.trigger_conditions&&c.trigger_conditions.silence_days)||3;
+  defDays=Math.min(90,Math.max(1,Math.round(defDays)));
+  var msg=document.getElementById('seed-msg');
+  function _say(text,color,keepMs){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){ if(msg.textContent===text) msg.textContent=''; },keepMs||6000); }
+  if(typeof window.uiPrompt!=='function'){ _say(window.T('wf_bulk_fail'),'var(--wf-err)'); return; }
+  var url='/api/workspace/workflow-chains/'+encodeURIComponent(chainId)+'/bulk-start';
+  function _dry(days){
+    return apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({silent_days_min:days,limit:50,dry_run:true})}, {timeoutMs: 60000})
+      .then(function(r){return r.json();});
+  }
+  window.uiPrompt(window.T('wf_bulk_prompt_title'),String(defDays),{
+    type:'number', min:1, max:90, step:1, unit:window.T('wf_bulk_unit_days'),
+    hint:window.T('wf_bulk_prompt_hint'),
+    ok:window.T('wf_bulk_ok'), cancel:window.T('wf_bulk_cancel'),
+    preview:function(v){
+      var days=Number(v)||0; if(days<=0) return '';
+      return _dry(days).then(function(d){
+        if(!d||!d.ok) return window.T('wf_bulk_preview_fail');
+        var matched=Number(d.matched!=null?d.matched:d.candidates)||0;
+        var will=Number(d.candidates)||0;
+        var skipped=Number(d.skipped)||0;
+        if(!matched) return window.T('wf_bulk_none');
+        return window.Tf('wf_bulk_preview',{n:matched,w:will,s:skipped});
+      }).catch(function(){ return window.T('wf_bulk_preview_fail'); });
+    }
+  }).then(function(days){
+    if(days==null)return;
+    days=Number(days)||0;
+    if(days<=0)return;
+    apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({silent_days_min:days,limit:50,dry_run:false})}, {timeoutMs: 60000})
+      .then(function(r){return r.json();}).then(function(d2){
+        if(!d2||!d2.ok){ _say(window.T('wf_bulk_fail'),'var(--wf-err)'); return; }
+        var n=Number(d2.started)||0;
+        WF.loadChains();
+        if(!n){ _say(window.T('wf_bulk_none'),'var(--wf-ink-soft)'); return; }
+        var ids=Array.isArray(d2.exec_ids)?d2.exec_ids.slice():[];
+        _say(window.Tf('wf_bulk_done',{n:n}),'var(--wf-ok)',15000);
+        // 可撤销：右下卡片带「撤销」——逐条取消刚挂上的执行（服务端只认 running/paused）
+        if(ids.length && window.AITRNotify){
+          AITRNotify.notify({severity:'success', text:window.Tf('wf_bulk_done_undo',{n:n}), center:false, ttlMs:15000,
+            actions:[{label:window.T('wf_bulk_undo'), onClick:function(){
+              var done=0, fail=0;
+              Promise.all(ids.map(function(id){
+                return apiFetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',
+                  {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'bulk_undo'})},{timeoutMs:30000})
+                  .then(function(r){ if(r.ok) done++; else fail++; }).catch(function(){ fail++; });
+              })).then(function(){
+                _say(fail?window.Tf('wf_bulk_undo_partial',{n:done,f:fail}):window.Tf('wf_bulk_undo_done',{n:done}), fail?'var(--wf-err)':'var(--wf-ok)');
+                WF.loadChains();
+              });
+            }}]});
+        }
+      }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
+  });
+};
+WF.toggleDealEngine=function(){
+  var on=!!(WF._deState&&WF._deState.engine_on);
+  if(!confirm(window.T(on?'wf_de_confirm_off':'wf_de_confirm_on')))return;
+  var btn=document.getElementById('de-btn'); if(btn)btn.disabled=true;
+  var msg=document.getElementById('de-msg');
+  apiFetch('/api/workspace/workflows/deal-engine',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enable:!on})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(d&&d.ok){
+        if(msg){msg.textContent=!on?window.Tf('wf_de_done_on',{n:(d.backfilled||0)}):window.T('wf_de_done_off');msg.style.color='var(--wf-ok)';}
+      }else{
+        if(msg){msg.textContent=window.Tf('wf_de_fail',{msg:String((d&&(d.flag_msg||d.error))||'?').slice(0,80)});msg.style.color='var(--wf-err)';}
+      }
+      setTimeout(function(){if(msg)msg.textContent='';},6000);
+      WF.loadDealEngine(); WF.loadChains();
+    }).catch(function(){
+      if(btn)btn.disabled=false;
+      if(msg){msg.textContent=window.Tf('wf_de_fail',{msg:'network'});msg.style.color='var(--wf-err)';}
     });
-};
-WF.toggleAction=function(id,enabled){
-  fetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'PUT',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})});
-};
-WF.delAction=function(id){
-  if(!confirm(window.T('wf_js005')))return;
-  fetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'DELETE'})
-    .then(function(){WF.loadActions();});
 };
 
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
+var _chainsCache=[];
 WF.loadChains=function(){
-  fetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
+  // 并行拉「运行中执行」按链聚合成徽标；执行接口异常只丢徽标，不影响主渲染
+  var pRun=apiFetch('/api/workspace/chain-executions?status=running&limit=200')
+    .then(function(r){return r.json();}).catch(function(){return {};});
+  // P3：每链 72h 回复率进卡片（决策就地可见，不用切监控）——复用漏斗单飞缓存，
+  // 失败只丢徽标；只给窗口内有成熟数（mature_n>0）的链显示，无数据不装零
+  var pFun=WF._funnelFetch().catch(function(){return null;});
+  apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('chains-list');
     var chains=d.chains||[];
-    if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')+'</div>';return;}
-    box.innerHTML=chains.map(function(c){
-      var steps=c.steps||[];
-      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px;">'
-        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-          +'<strong style="font-size:14px;">🔗 '+esc(c.name)+'</strong>'
-          +'<div><button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
-            +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button></div>'
-        +'</div>'
-        +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
-        +(function(){
-          var tc=c.trigger_conditions||{};
-          var tags=[];
-          if(tc.silence_days)tags.push(window.T('ov_js_th_silent')+'≥'+tc.silence_days+window.T('wa_s158'));
-          if(tc.churn_risk_high)tags.push(window.T('wf_js008'));
-          return tags.length?'<div style="margin-bottom:6px;">'+tags.map(function(t){return '<span class="cond-tag">⚡ '+t+'</span>';}).join('')+'</div>':'';
-        })()
-        +'<div>'
-          +steps.map(function(s,i){
-            return '<div class="step-card">'
-              +'<div class="step-num">'+(i+1)+'</div>'
-              +'<div style="flex:1;font-size:12px;">'
-                +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
-                +(s.delay_hours?'<span style="color:#94a3b8;margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
-                +(s.note?'<div style="color:#64748b;margin-top:2px;">'+esc(s.note)+'</div>':'')
-              +'</div></div>';
-          }).join('')
-        +'</div>'
-        +'</div>';
-    }).join('');
+    _chainsCache=chains;
+    if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')
+      +'<div style="margin-top:6px;font-size:12px;">'+window.T('wf_empty_packs')+'</div>'
+      +'<div style="margin-top:10px;"><button class="btn-sm btn-primary" onclick="WF.seedChains(this)">📦 '+window.T('wf_seed_btn')+'</button></div></div>';return;}
+    Promise.all([pRun,pFun]).then(function(rs){
+      var rd=rs[0], fd=rs[1];
+      var runN={};
+      ((rd&&rd.executions)||[]).forEach(function(ex){ if(ex&&ex.chain_id) runN[ex.chain_id]=(runN[ex.chain_id]||0)+1; });
+      var replyN={};
+      (((fd||{}).chains)||[]).forEach(function(fc){ if(fc&&fc.chain_id) replyN[fc.chain_id]=fc; });
+      box.innerHTML=chains.map(function(c){
+        var steps=c.steps||[];
+        var on=(c.enabled===undefined)?true:!!c.enabled;
+        var running=runN[c.chain_id]||0;
+        var fc=replyN[c.chain_id];
+        var replyPill=(fc&&fc.mature_n>0&&fc.reply_rate!=null)
+          ?('<span class="wf-reply-pill" title="'+window.T('wf_funnel_reply_hint')+'">↩ '
+            +window.Tf('wf_chain_reply_pill',{p:Math.round(fc.reply_rate*100),n:fc.replied_n,m:fc.mature_n})+'</span>')
+          :'';
+        var cum=0;
+        return '<div class="wf-chain-card'+(on?'':' off')+'">'
+          +'<div class="wf-chain-hd">'
+            +'<strong class="wf-chain-nm" title="ID: '+esc(c.chain_id)+'">🔗 '+esc(c.name)+'</strong>'
+            +(c.exec_mode==='auto'?'<span class="wf-run-pill" title="'+window.T('wf_exec_mode_hint')+'">⚡ '+window.T('wf_chain_auto_badge')+'</span>':'')
+            +(c.on_reply==='complete'?'<span class="wf-reply-pill" title="'+window.T('wf_onreply_hint')+'">↩ '+window.T('wf_onreply_badge_complete')+'</span>':'')
+            +(c.on_reply==='continue'?'<span class="wf-run-pill" title="'+window.T('wf_onreply_hint')+'">⏩ '+window.T('wf_onreply_badge_continue')+'</span>':'')
+            +(running?'<span class="wf-run-pill">'+window.Tf('wf_chain_running_n',{n:running})+'</span>':'')
+            +replyPill
+            +(on?'':'<span class="badge badge-cancelled">'+window.T('wf_chain_disabled')+'</span>')
+            +'<span class="wf-chain-sp"></span>'
+            +'<label class="toggle-sw" title="'+window.T('wf_chain_enable_t')+'"><input type="checkbox"'+(on?' checked':'')
+              +' onchange="WF.toggleChain(\''+esc(c.chain_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
+            +((on&&WF._bulkReady)?'<button class="btn-sm" title="'+esc(window.T('wf_bulk_btn_tip'))+'" onclick="WF.bulkStart(\''+esc(c.chain_id)+'\')">'+window.T('wf_bulk_btn')+'</button> ':'')
+            +'<button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
+            +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button>'
+          +'</div>'
+          +(function(){
+            var tc=c.trigger_conditions||{};
+            var tags=[];
+            if(tc.silence_days)tags.push(window.T('ov_js_th_silent')+'≥'+tc.silence_days+window.T('wa_s158'));
+            if(tc.churn_risk_high)tags.push(window.T('wf_js008'));
+            if(tc.stage_enter)tags.push(window.Tf('wf_cond_stage',{stage:WF._stageLabel(tc.stage_enter)}));
+            return tags.length?'<div style="margin-bottom:6px;">'+tags.map(function(t){return '<span class="cond-tag">⚡ '+t+'</span>';}).join('')+'</div>':'';
+          })()
+          +'<div class="wf-steps-tl">'
+            +steps.map(function(s,i){
+              var dh=Number(s.delay_hours)||0;
+              cum+=dh;
+              var t=dh?('+'+dh+'h'+(cum>dh||i>0?'（'+window.Tf('wf_step_cum',{h:cum})+'）':'')):(i===0?window.T('wf_step_imm'):'+0h');
+              return '<div class="step-card">'
+                +'<div class="step-num">'+(i+1)+'</div>'
+                +'<div style="flex:1;font-size:12px;">'
+                  +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
+                  +'<span class="wf-step-t">⏱ '+t+'</span>'
+                  +(s.note?'<div class="wf-step-note">'+esc(s.note)+'</div>':'')
+                +'</div></div>';
+            }).join('')
+          +'</div>'
+          +'</div>';
+      }).join('');
+    });
   });
+};
+// 启用开关：全量 upsert（页面本就是全量 PUT 语义）；失败也重载回真状态。
+// ⚠ 全量 PUT 必须回传 exec_mode/on_reply——漏了会被 upsert 缺省悄悄重置
+//（实施92 补：exec_mode 此前就漏了，切开关=自动推进档静默掉回提醒档）。
+WF.toggleChain=function(id,en){
+  var c=(_chainsCache||[]).find(function(x){return x.chain_id===id;});
+  if(!c)return;
+  apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({chain_id:id,name:c.name,steps:c.steps||[],
+      trigger_conditions:c.trigger_conditions||{},enabled:en?1:0,
+      exec_mode:c.exec_mode||'remind',on_reply:c.on_reply||''})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();})
+    .then(function(){WF.loadChains();})
+    .catch(function(){WF.loadChains();});
 };
 WF.showChainForm=function(chain){
   _chainSteps=chain?JSON.parse(JSON.stringify(chain.steps||[])):[];
@@ -485,8 +827,15 @@ WF.showChainForm=function(chain){
   var tc=chain?(chain.trigger_conditions||{}):{};
   document.getElementById('cf-silence-days').value=tc.silence_days||0;
   document.getElementById('cf-churn-high').checked=!!tc.churn_risk_high;
+  var _se=document.getElementById('cf-stage-enter');
+  if(_se)_se.value=tc.stage_enter||'';
+  var _em=document.getElementById('cf-exec-mode');
+  if(_em)_em.value=(chain&&chain.exec_mode==='auto')?'auto':'remind';
+  var _or=document.getElementById('cf-on-reply');
+  if(_or)_or.value=(chain&&chain.on_reply)||'';
   document.getElementById('chain-form-title').textContent=chain?window.T('wf_js010'):window.T('wf_s050');
   WF.renderSteps();
+  try{ WF._applyFlavorLabels(); }catch(_e){}
   document.getElementById('chain-form-wrap').style.display='block';
   document.getElementById('chain-form-wrap').scrollIntoView({behavior:'smooth'});
 };
@@ -494,25 +843,61 @@ WF.renderSteps=function(){
   var box=document.getElementById('cf-steps');
   if(!_chainSteps.length){box.innerHTML='<div class="wf-empty" style="padding:10px;">'+window.T('wf_js011')+' "'+window.T('wf_js012')+'"</div>';return;}
   box.innerHTML=_chainSteps.map(function(s,i){
+    // 实施92c：延迟输入带单位（小时/天）——运营心智是「第 3 天」，不该让人
+    // 换算 48/72；存储仍是 delay_hours 单一口径（整除 24 且 ≥24 默认展示为天）
+    var dh=Number(s.delay_hours)||0;
+    var isDay=dh>=24&&dh%24===0;
+    var dispV=isDay?(dh/24):dh;
     return '<div class="step-card">'
       +'<div class="step-num">'+(i+1)+'</div>'
       +'<div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;">'
-        +'<select style="font-size:12px;padding:3px 6px;border:1px solid #d1d5db;border-radius:5px;" onchange="_stepField('+i+',\'action_type\',this.value)">'
+        +'<select style="font-size:12px;padding:3px 6px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" onchange="_stepField('+i+',\'action_type\',this.value)">'
           +Object.keys(_TYPE_LABELS).map(function(t){return '<option value="'+t+'"'+(s.action_type===t?' selected':'')+'>'+_TYPE_LABELS[t]+'</option>';}).join('')
         +'</select>'
-        +'<input style="font-size:12px;width:180px;padding:3px 7px;border:1px solid #d1d5db;border-radius:5px;" '
+        +'<input style="font-size:12px;width:180px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
           +'placeholder="'+window.T('wf_js013')+'" value="'+esc(s.note||'')+'" oninput="_stepField('+i+',\'note\',this.value)">'
-        +'<input style="font-size:12px;width:90px;padding:3px 7px;border:1px solid #d1d5db;border-radius:5px;" '
-          +'type="number" min="0" placeholder="'+window.T('wf_js009')+'(h)" value="'+(s.delay_hours||0)+'" oninput="_stepField('+i+',\'delay_hours\',Number(this.value))">'
+        +'<input style="font-size:12px;width:70px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
+          +'type="number" min="0" step="any" placeholder="'+window.T('wf_js009')+'" value="'+dispV+'" oninput="_stepDelayVal('+i+',this)">'
+        +'<select style="font-size:12px;padding:3px 4px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" onchange="_stepDelayUnit('+i+',this)">'
+          +'<option value="h"'+(isDay?'':' selected')+'>'+window.T('wf_unit_hours')+'</option>'
+          +'<option value="d"'+(isDay?' selected':'')+'>'+window.T('wf_unit_days')+'</option>'
+        +'</select>'
+        // 实施93：话术步可选转化目标（发送时自动带追踪短链；detail 见 hint）
+        +(s.action_type==='template'||!s.action_type
+          ?('<select style="font-size:12px;padding:3px 4px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;max-width:150px;" '
+            +'title="'+window.T('wf_step_cta_hint')+'" onchange="_stepField('+i+',\'cta\',this.value)">'
+            +'<option value="">'+window.T('wf_step_cta_none')+'</option>'
+            +'<option value="@primary"'+(s.cta==='@primary'?' selected':'')+'>'+window.T('wf_step_cta_primary')+'</option>'
+            +(WF._ctaTargets||[]).map(function(t){
+              return '<option value="'+esc(t.target_id)+'"'+(s.cta===t.target_id?' selected':'')+'>'
+                +esc(t.name||t.target_id)+'</option>';
+            }).join('')
+          +'</select>'):'')
         +'<button class="btn-sm btn-danger" onclick="_delStep('+i+')">×</button>'
       +'</div></div>';
-  }).join('');
+  }).join('')
+  /* P0 2026-08-12：delay_hours 语义按引擎真实行为写死在编辑器旁——「延迟=距上一步
+     完成后等待多久执行本步；首步的延迟从启动时刻起算」。此前占位符只写「延迟(h)」，
+     种子注释与引擎实现的表述又不一致，运营配错节奏只能靠猜。 */
+  +'<div style="font-size:11.5px;color:var(--th-ink-slate5,#64748b);padding:4px 2px 0;">'+window.T('wf_delay_hint')+'</div>';
 };
 window._stepField=function(i,k,v){_chainSteps[i][k]=v;};
 window._delStep=function(i){_chainSteps.splice(i,1);WF.renderSteps();};
+// 实施92c 延迟单位换算：输入值×单位 → delay_hours（存储单一口径不变）；
+// 切单位=时长不变只换显示（48h ↔ 2天），不整块重渲防打断输入
+window._stepDelayVal=function(i,el){
+  var unit=(el.nextElementSibling&&el.nextElementSibling.value)||'h';
+  var v=Number(el.value)||0;
+  _chainSteps[i].delay_hours=unit==='d'?v*24:v;
+};
+window._stepDelayUnit=function(i,el){
+  var dh=Number(_chainSteps[i].delay_hours)||0;
+  var inp=el.previousElementSibling;
+  if(inp)inp.value=el.value==='d'?Math.round(dh/24*100)/100:dh;
+};
 WF.addStep=function(){_chainSteps.push({action_type:'template',note:'',delay_hours:0});WF.renderSteps();};
 WF.editChain=function(id){
-  fetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var c=(d.chains||[]).find(function(x){return x.chain_id===id;});
     if(c)WF.showChainForm(c);
   });
@@ -526,21 +911,44 @@ WF.saveChain=function(){
   var trigger={};
   if(silenceDays>0)trigger.silence_days=silenceDays;
   if(churnHigh)trigger.churn_risk_high=true;
+  var _seEl=document.getElementById('cf-stage-enter');
+  if(_seEl&&_seEl.value)trigger.stage_enter=_seEl.value;
   var data={chain_id:document.getElementById('cf-id').value||undefined,name:name,steps:_chainSteps,trigger_conditions:trigger};
+  var _emEl=document.getElementById('cf-exec-mode');
+  data.exec_mode=(_emEl&&_emEl.value==='auto')?'auto':'remind';
+  var _orEl=document.getElementById('cf-on-reply');
+  data.on_reply=(_orEl&&_orEl.value)||'';
+  // 保存必须回传当前 enabled（upsert 缺省按 True——否则编辑一条已停用的链会把它悄悄启用）
+  var _cur=data.chain_id?(_chainsCache||[]).find(function(x){return x.chain_id===data.chain_id;}):null;
+  if(_cur&&_cur.enabled!==undefined)data.enabled=_cur.enabled?1:0;
   var url=data.chain_id?'/api/workspace/workflow-chains/'+encodeURIComponent(data.chain_id):'/api/workspace/workflow-chains';
-  fetch(url,{method:data.chain_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:data.chain_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('cf-msg').textContent=window.T('wa_js_053');document.getElementById('cf-msg').style.color='#10b981';WF.loadChains();setTimeout(function(){WF.cancelChainForm();},1000);}
+      if(d.ok){document.getElementById('cf-msg').textContent=window.T('wa_js_053');document.getElementById('cf-msg').style.color='var(--wf-ok)';WF.loadChains();setTimeout(function(){WF.cancelChainForm();},1000);}
     });
 };
 WF.delChain=function(id){
   if(!confirm(window.T('wf_js014')))return;
-  fetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadChains();});
+  apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadChains();});
+};
+// ── B1：出厂模板链一键导入（幂等；已存在同 id 链一律跳过不覆盖）──
+WF.seedChains=function(btn){
+  if(btn)btn.disabled=true;
+  var msg=document.getElementById('seed-msg');
+  function _say(text,color){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){msg.textContent='';},5000); }
+  apiFetch('/api/workspace/workflow-chains/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(!d||!d.ok){_say(window.T('wf_seed_fail'),'var(--wf-err)');return;}
+      var n=(d.imported||[]).length;
+      _say(n?window.Tf('wf_seed_done',{n:n}):window.T('wf_seed_none'), n?'var(--wf-ok)':'var(--wf-ink-soft)');
+      WF.loadChains();
+    }).catch(function(){ if(btn)btn.disabled=false; _say(window.T('wf_seed_fail'),'var(--wf-err)'); });
 };
 
 // ── 分流路由 ──────────────────────────────────────────────────────────────
 WF.loadRouting=function(){
-  fetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
     var tbody=document.getElementById('routing-tbody');
     var rules=d.rules||[];
     if(!rules.length){tbody.innerHTML='<tr><td colspan="6" class="wf-empty">'+window.T('wf_js015')+'</td></tr>';return;}
@@ -549,7 +957,7 @@ WF.loadRouting=function(){
       var condStr=[conds.platform?window.T('inbox.info.platform')+'='+conds.platform:'',conds.keyword?window.T('wf_js016')+'='+conds.keyword:''].filter(Boolean).join('; ')||window.T('wf_js017');
       return '<tr>'
         +'<td><strong>'+esc(r.name)+'</strong></td>'
-        +'<td style="font-size:12px;color:#64748b;">'+esc(condStr)+'</td>'
+        +'<td style="font-size:12px;color:var(--th-ink-slate5,#64748b);">'+esc(condStr)+'</td>'
         +'<td>'+esc(r.assign_to||'—')+'</td>'
         +'<td>'+r.priority+'</td>'
         +'<td><label class="toggle-sw"><input type="checkbox"'+(r.enabled?'checked':'')
@@ -573,7 +981,7 @@ WF.showRoutingForm=function(rule){
   document.getElementById('routing-form-wrap').scrollIntoView({behavior:'smooth'});
 };
 WF.editRule=function(id){
-  fetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
     var rule=(d.rules||[]).find(function(r){return r.rule_id===id;});
     if(rule)WF.showRoutingForm(rule);
   });
@@ -590,92 +998,173 @@ WF.saveRouting=function(){
     priority:Number(document.getElementById('rf-priority').value)||0,
     conditions:conds,enabled:1};
   var url=data.rule_id?'/api/workspace/routing-rules/'+encodeURIComponent(data.rule_id):'/api/workspace/routing-rules';
-  fetch(url,{method:data.rule_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:data.rule_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('rf-msg').textContent=window.T('wa_js_053');document.getElementById('rf-msg').style.color='#10b981';WF.loadRouting();setTimeout(function(){WF.cancelRoutingForm();},1000);}
+      if(d.ok){document.getElementById('rf-msg').textContent=window.T('wa_js_053');document.getElementById('rf-msg').style.color='var(--wf-ok)';WF.loadRouting();setTimeout(function(){WF.cancelRoutingForm();},1000);}
     });
 };
 WF.toggleRule=function(id,enabled){
-  fetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'PUT',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})});
+  apiFetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})}, {timeoutMs: 60000});
 };
 WF.delRule=function(id){
   if(!confirm(window.T('wf_js019')))return;
-  fetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadRouting();});
+  apiFetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadRouting();});
 };
 WF.testRouting=function(){
   var conv={platform:document.getElementById('rt-platform').value,text:document.getElementById('rt-text').value};
-  fetch('/api/workspace/routing-rules/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation:conv})})
+  apiFetch('/api/workspace/routing-rules/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation:conv})}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       var el=document.getElementById('rt-result');
-      if(!d.matched||!d.matched.length){el.textContent=window.T('wf_js020');el.style.color='#94a3b8';return;}
+      if(!d.matched||!d.matched.length){el.textContent=window.T('wf_js020');el.style.color='var(--wf-ink-soft)';return;}
       var best=d.best_match;
       el.innerHTML=window.T('db_js_094')+' '+d.matched.length+' '+window.T('wf_js021')+'<strong>'+esc(best.name)+'</strong> → '+window.T('wf_s064')+' <strong>'+esc(best.assign_to||'—')+'</strong>';
-      el.style.color='#10b981';
+      el.style.color='var(--wf-ok)';
     });
-};
-
-// ── 剧本话题（P40） ──────────────────────────────────────────────────────
-var _STAGE_ZH={initial:window.T('c3_js028'),warming:window.T('wf_s083'),intimate:window.T('wf_s084'),steady:window.T('rpa_js_intimacy')};
-WF.loadScripts=function(){
-  fetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
-    var tbody=document.getElementById('scripts-tbody');
-    var topics=d.topics||[];
-    if(!topics.length){tbody.innerHTML='<tr><td colspan="5" class="wf-empty">'+window.T('wf_js022')+'</td></tr>';return;}
-    tbody.innerHTML=topics.map(function(t){
-      return '<tr><td>'+esc(_STAGE_ZH[t.stage]||t.stage)+'</td><td><strong>'+esc(t.title)+'</strong></td>'
-        +'<td style="font-size:12px;max-width:280px;">'+esc((t.opener||'').slice(0,80))+'</td>'
-        +'<td style="font-size:11px;">'+(t.tags||[]).map(function(x){return '<span class="cond-tag">'+esc(x)+'</span>';}).join('')+'</td>'
-        +'<td><button class="btn-sm" onclick="WF.editScript(\''+esc(t.topic_id)+'\')">'+window.T('edit')+'</button> '
-        +'<button class="btn-sm btn-danger" onclick="WF.delScript(\''+esc(t.topic_id)+'\')">'+window.T('delete')+'</button></td></tr>';
-    }).join('');
-  });
-};
-WF.showScriptForm=function(t){
-  document.getElementById('sf-id').value=t?t.topic_id:'';
-  document.getElementById('sf-stage').value=t?t.stage:'initial';
-  document.getElementById('sf-title').value=t?t.title:'';
-  document.getElementById('sf-opener').value=t?t.opener:'';
-  document.getElementById('sf-hint').value=t?t.hint:'';
-  document.getElementById('sf-tags').value=(t&&t.tags)?t.tags.join(','):'';
-  document.getElementById('sf-chain').value=t?t.chain_id:'';
-  document.getElementById('script-form-title').textContent=t?window.T('wf_js023'):window.T('wf_s086');
-  document.getElementById('script-form-wrap').style.display='block';
-};
-WF.editScript=function(id){
-  fetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
-    var t=(d.topics||[]).find(function(x){return x.topic_id===id;});
-    if(t) WF.showScriptForm(t);
-  });
-};
-WF.cancelScriptForm=function(){document.getElementById('script-form-wrap').style.display='none';};
-WF.saveScript=function(){
-  var data={
-    topic_id:document.getElementById('sf-id').value||undefined,
-    stage:document.getElementById('sf-stage').value,
-    title:document.getElementById('sf-title').value.trim(),
-    opener:document.getElementById('sf-opener').value.trim(),
-    hint:document.getElementById('sf-hint').value.trim(),
-    tags:document.getElementById('sf-tags').value.split(',').map(function(x){return x.trim();}).filter(Boolean),
-    chain_id:document.getElementById('sf-chain').value.trim(),
-  };
-  if(!data.title||!data.opener){alert(window.T('wf_js024'));return;}
-  var url=data.topic_id?'/api/workspace/script-topics/'+encodeURIComponent(data.topic_id):'/api/workspace/script-topics';
-  fetch(url,{method:data.topic_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-    .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){WF.loadScripts();WF.cancelScriptForm();}
-    });
-};
-WF.delScript=function(id){
-  if(!confirm(window.T('kb_js_047')))return;
-  fetch('/api/workspace/script-topics/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadScripts();});
 };
 
 // ── 执行监控（P47） ──────────────────────────────────────────────────────────
+function _fmtDur(sec){
+  sec=Math.max(0,Math.floor(Number(sec)||0));
+  if(sec>=3600){var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+'h'+(m?m+'m':'');}
+  if(sec>=60)return Math.floor(sec/60)+'m';
+  return sec+'s';
+}
+// ── B2：链效果漏斗（近 14 天 + 启动后 72h 回复率，分母只算已满窗口期的执行）──
+// P2：漏斗与页头价值条共享一次取数（单飞 promise；失败清引用下次重试）
+WF._funnelP=null;
+WF._funnelFetch=function(fresh){
+  if(fresh||!WF._funnelP){
+    WF._funnelP=apiFetch('/api/workspace/chain-funnel?days=14')
+      .then(function(r){return r.json();})
+      .catch(function(){ WF._funnelP=null; return null; });
+  }
+  return WF._funnelP;
+};
+// P2 页头价值条：近 14 天 SOP 战绩前置（零启动整条隐藏——不拿空账面撑门面）
+WF.loadValueBar=function(){
+  WF._funnelFetch().then(function(d){
+    var bar=document.getElementById('wf-value-bar'); if(!bar)return;
+    var t=(d&&d.total)||{};
+    if(!t.started){
+      // P3 空账面引导：只在「一分钟上手」条已被关掉后补位（不三重发声——
+      // 首访有 onboard 条 + 自动导览兜着）；点击回工作链 tab 走导入
+      var seen=false;
+      try{ seen=localStorage.getItem('wf_onboard_v1')==='1'; }catch(_){}
+      if(seen&&d){
+        bar.innerHTML='<span class="wf-vb-head">'+window.Tf('wf_vb_head',{d:(d&&d.days)||14})+'</span>'
+          +'<span class="wf-vb-l">'+window.T('wf_vb_empty_note')+'</span>'
+          +'<span class="wf-vb-go" onclick="WF.tab(\'chains\')">'+window.T('wf_vb_empty_cta')+'</span>';
+        bar.className='wf-value-bar on';
+      }else{ bar.className='wf-value-bar'; bar.innerHTML=''; }
+      return;
+    }
+    var reply=(t.reply_rate!=null)?(Math.round(t.reply_rate*100)+'%'):'—';
+    function item(n,label,ok){ return '<span class="wf-vb-item"><span class="wf-vb-n'+(ok?' ok':'')+'">'+n+'</span><span class="wf-vb-l">'+label+'</span></span>'; }
+    bar.innerHTML='<span class="wf-vb-head">'+window.Tf('wf_vb_head',{d:(d&&d.days)||14})+'</span>'
+      +item(t.started,window.T('wf_funnel_started'))
+      +item(t.completed||0,window.T('ops.ct.st_completed'),true)
+      +item(reply,window.T('wf_funnel_reply'),(t.reply_rate!=null&&t.reply_rate>=0.3))
+      +(Number(t.deals_n)>0
+        ?item(t.deals_n+(Number(t.deal_amount)>0?(' / '+t.deal_amount):''),
+              window.T('wf_funnel_deals'),true):'')
+      +(Number(t.attributed)>0?item(t.attributed,window.T('wf_vb_goal')):'')
+      +'<span class="wf-vb-go" onclick="WF.tab(\'monitor\')">'+window.T('wf_vb_go_monitor')+'</span>';
+    bar.className='wf-value-bar on';
+  });
+};
+// P5：环节明细展开态（chain_id → bool）——存变量而非 DOM，30s 轮询整块重渲后回填不丢
+var _stepOpen={};
+WF.toggleStepFunnel=function(cid){
+  _stepOpen[cid]=!_stepOpen[cid];
+  WF.loadFunnel(true);   // 用缓存就地重渲（纯展开态翻转，不值得一次接口往返）
+};
+WF.loadFunnel=function(useCache){
+  WF._funnelFetch(!useCache).then(function(d){
+    var box=document.getElementById('funnel-box'); if(!box||!d) return;
+    var t=(d&&d.total)||{};
+    if(!t.started){ box.innerHTML='<div class="wf-empty" style="padding:10px;">'+window.T('wf_funnel_empty')+'</div>'; return; }
+    function rate(x){ return (x&&x.reply_rate!=null)?(Math.round(x.reply_rate*100)+'% ('+x.replied_n+'/'+x.mature_n+')'):'—'; }
+    // P5：每环节执行明细（goal P1 落的 workflow_step_log 聚合）——「链在哪一环损耗」读数化
+    function bsRows(c){
+      var bs=c.by_step||[];
+      if(!bs.length||!_stepOpen[c.chain_id])return '';
+      var items=bs.map(function(s){
+        var at=Math.max(0,Number(s.attempts)||0);
+        var okW=at?Math.round((s.ok||0)/at*100):0;
+        var failW=at?Math.round((s.failed||0)/at*100):0;
+        return '<div class="wf-bs-item">'
+          +'<span class="wf-bs-idx">'+(Number(s.step_idx)+1)+'</span>'
+          +'<span>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||'')+'</span>'
+          +(s.note?'<span class="wf-bs-note">'+esc(s.note)+'</span>':'')
+          +'<span class="wf-bs-track"><span class="wf-bs-ok" style="width:'+okW+'%"></span><span class="wf-bs-fail" style="width:'+failW+'%"></span></span>'
+          +'<span class="wf-bs-n"><span class="ok">✓'+(s.ok||0)+'</span> <span class="fail">✗'+(s.failed||0)+'</span> / '+at+'</span>'
+          +'</div>';
+      }).join('');
+      return '<tr class="wf-bs-row"><td colspan="6">'+items+'</td></tr>';
+    }
+    var chips='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">'
+      +'<strong style="font-size:13px;margin-right:4px;">'+window.Tf('wf_funnel_title',{d:d.days||14})+'</strong>'
+      +'<span class="badge badge-template">'+window.T('wf_funnel_started')+' '+t.started+'</span>'
+      +'<span class="badge badge-running">'+window.T('ov_js_running')+' '+(t.running||0)+'</span>'
+      +'<span class="badge badge-completed">'+window.T('ops.ct.st_completed')+' '+(t.completed||0)+'</span>'
+      +'<span class="badge badge-failed">'+window.T('rpa_js_st_failed')+' '+(t.failed||0)+'</span>'
+      +'<span class="badge badge-cancelled">'+window.T('rpa_js_st_cancelled')+' '+(t.cancelled||0)+'</span>'
+      +'<span class="badge badge-chain" title="'+window.T('wf_funnel_reply_hint')+'">'+window.T('wf_funnel_reply')+' '+rate(t)+'</span>'
+      +(Number(t.deals_n)>0
+        ? ('<span class="badge badge-completed" title="'+window.T('wf_funnel_deal_hint')+'">💰 '
+           +window.T('wf_funnel_deals')+' '+t.deals_n
+           +(Number(t.deal_amount)>0?(' · '+t.deal_amount):'')+'</span>')
+        : '')
+      +(Number(t.attributed)>0
+        ? ('<span class="badge badge-chain">'+window.Tf('wf_funnel_attr',{n:t.attributed})
+           +(t.attr_reply_rate!=null?(' · '+Math.round(Number(t.attr_reply_rate)*100)+'%'):'')+'</span>')
+        : '')
+      // J 推荐跟随：目标归因启动里「启动的正是推荐链」的占比（分母只算模板有推荐的；零数据隐藏）
+      +((d.rec_follow&&Number(d.rec_follow.eligible)>0)
+        ? ('<span class="badge badge-template" title="'+window.T('wf_funnel_recf_hint')+'">'
+           +window.T('wf_funnel_recf')+' '+d.rec_follow.followed+'/'+d.rec_follow.eligible
+           +(d.rec_follow.rate!=null?(' ('+Math.round(Number(d.rec_follow.rate)*100)+'%)'):'')+'</span>')
+        : '')
+      +'</div>';
+    var rows=(d.chains||[]).map(function(c){
+      var hasBs=(c.by_step||[]).length>0;
+      var bsBtn=hasBs?(' <button class="wf-bs-btn" onclick="WF.toggleStepFunnel(\''+esc(c.chain_id)+'\')">'
+        +(_stepOpen[c.chain_id]?'\u25BE '+window.T('wf_bs_hide'):'\u25B8 '+window.T('wf_bs_show'))+'</button>'):'';
+      var dealCell=Number(c.deals_n)>0
+        ?(c.deals_n+(Number(c.deal_amount)>0?(' · '+c.deal_amount):'')):'—';
+      return '<tr><td>'+esc(c.chain_name||c.chain_id)+bsBtn+'</td><td>'+c.started+'</td><td>'+(c.completed||0)+'</td>'
+        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td>'
+        +'<td title="'+window.T('wf_funnel_deal_hint')+'">'+dealCell+'</td></tr>'
+        +bsRows(c);
+    }).join('');
+    var table=rows?('<table class="wf-table"><thead><tr>'
+      +'<th>'+window.T('wf_funnel_col_chain')+'</th><th>'+window.T('wf_funnel_started')+'</th>'
+      +'<th>'+window.T('ops.ct.st_completed')+'</th><th>'+window.T('rpa_js_st_failed')+'</th>'
+      +'<th>'+window.T('wf_funnel_col_reply')+'</th>'
+      +'<th>'+window.T('wf_funnel_col_deals')+'</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'):'';
+    // P2 横条漏斗：宽度按启动数归一（0 值零宽不画假条）
+    function fbRow(label,n,cls){
+      var w=(n>0&&t.started)?Math.max(2,Math.round(n/t.started*100)):0;
+      return '<div class="wf-fb-row"><span class="wf-fb-lab">'+label+'</span>'
+        +'<span class="wf-fb-track"><span class="wf-fb-fill'+(cls?' '+cls:'')+'" style="width:'+w+'%"></span></span>'
+        +'<span class="wf-fb-n">'+n+'</span></div>';
+    }
+    var bars='<div class="wf-funnel-bars">'
+      +fbRow(window.T('wf_funnel_started'),t.started,'')
+      +fbRow(window.T('ops.ct.st_completed'),t.completed||0,'done')
+      +fbRow(window.T('rpa_js_st_failed'),t.failed||0,'fail')
+      +'</div>';
+    box.innerHTML=chips+bars+table;
+    WF.loadValueBar();   // 同一份新数据顺带刷新页头价值条（复用单飞缓存）
+  }).catch(function(){});
+};
 WF.loadMonitor=function(){
+  WF.loadFunnel();
   var st=document.getElementById('mon-filter').value;
   var url='/api/workspace/chain-executions?limit=60'+(st?'&status='+encodeURIComponent(st):'');
-  fetch(url).then(function(r){return r.json();}).then(function(d){
+  apiFetch(url).then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('monitor-list');
     var badge=document.getElementById('mon-running-badge');
     if(badge) badge.textContent=d.running_count?(' · '+d.running_count+' '+window.T('wf_js025')):'';
@@ -688,20 +1177,20 @@ WF.loadMonitor=function(){
         if(s.done)c+=' done'; else if(s.active)c+=' active';
         return '<div class="'+c+'" title="'+(s.action_label||'')+'"></div>';
       }).join('');
-      var cd=ex.countdown_sec>0?('<span style="color:#b45309;">⏱ '+ex.countdown_sec+'s</span>'):'';
-      var lr=ex.last_result&&ex.last_result.text?('<div style="font-size:11px;color:#64748b;margin-top:3px;">'+window.T('wf_js027')+esc(ex.last_result.text).slice(0,60)+'</div>'):'';
-      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+      var cd=ex.countdown_sec>0?('<span style="color:var(--th-ink-amber7,#b45309);">⏱ '+_fmtDur(ex.countdown_sec)+'</span>'):'';
+      var lr=ex.last_result&&ex.last_result.text?('<div style="font-size:11px;color:var(--th-ink-slate5,#64748b);margin-top:3px;">'+window.T('wf_js027')+esc(ex.last_result.text).slice(0,60)+'</div>'):'';
+      return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
         +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
           +'<div style="flex:1;">'
             +'<div style="font-size:13px;font-weight:600;">'+esc(ex.chain_name||ex.chain_id)+'</div>'
-            +'<div style="font-size:11px;color:#94a3b8;margin-top:2px;">'
+            +'<div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);margin-top:2px;">'
               +esc(ex.display_name||ex.conversation_id||'')+' · '+window.T('tour_step')+' '+ex.current_step_display+'/'+ex.total_steps
               +(ex.current_step_label?' · '+esc(ex.current_step_label):'')+'</div>'
             +'<div class="exec-step-mini">'+dots+'</div>'+lr
           +'</div>'
           +'<div style="text-align:right;flex:0 0 auto;">'
             +'<span class="badge '+(_badgeCls[ex.status]||'')+'">'+esc(ex.status_label||ex.status)+'</span>'
-            +'<div style="font-size:10px;color:#94a3b8;margin-top:4px;">'+cd+'</div>'
+            +'<div style="font-size:10px;color:var(--th-ink-slate4,#5b6b85);margin-top:4px;">'+cd+'</div>'
             +(ex.status==='running'?'<button class="btn-sm btn-danger" style="margin-top:6px;" onclick="WF.cancelExec(\''+esc(ex.exec_id)+'\')">'+window.T('ov_js_cancel')+'</button>':'')
           +'</div>'
         +'</div></div>';
@@ -710,15 +1199,57 @@ WF.loadMonitor=function(){
 };
 WF.cancelExec=function(id){
   if(!confirm(window.T('wf_js028')))return;
-  fetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',{
+  apiFetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',{
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:window.T('wf_js029')})
-  }).then(function(r){return r.json();}).then(function(d){
+  }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d.ok) WF.loadMonitor(); else alert(window.T('msg_js_2058'));
   });
 };
-// ── 初始加载 ─────────────────────────────────────────────────────────────────
-WF.loadActions();
-_loaded.actions=true;
+// ── 一分钟上手条（localStorage 控显；默认 display:none 防「已读用户闪一下」）──
+WF.dismissOnboard=function(){
+  try{ localStorage.setItem('wf_onboard_v1','1'); }catch(_){}
+  var el=document.getElementById('wf-onboard'); if(el) el.style.display='none';
+};
+try{
+  if(!localStorage.getItem('wf_onboard_v1')){
+    var _ob=document.getElementById('wf-onboard'); if(_ob) _ob.style.display='flex';
+  }
+}catch(_){}
+
+// ── 引导式教程（复用 workspace_base 的 blTour 聚光灯组件；锚定真实元素，
+//    目标缺席自动跳步不卡人，Esc/跳过随时退出）─────────────────────────────
+WF.startTour=function(){
+  if(!window.blTour) return;
+  WF.tab('chains');   // 导览主线在工作链 tab，先归位保证锚点在场
+  window.blTour.start([
+    {sel:'[data-tab="chains"]', title:window.T('wf_tour_t1'), body:window.T('wf_tour_b1')},
+    {sel:'#wf-seed-btn',        title:window.T('wf_tour_t2'), body:window.T('wf_tour_b2')},
+    {sel:'#chains-list',        title:window.T('wf_tour_t3'), body:window.T('wf_tour_b3')},
+    {                           title:window.T('wf_tour_t4'), body:window.T('wf_tour_b4')},
+    {sel:'[data-tab="monitor"]',title:window.T('wf_tour_t5'), body:window.T('wf_tour_b5')}
+  ]);
+};
+
+// ── 初始加载：默认落「工作链」；#hash 深链 > 上次停留 > 默认 ────────────────
+var _TABS=['chains','routing','monitor'];
+var _initTab='chains';
+try{
+  var _h=(location.hash||'').replace('#','');
+  if(_TABS.indexOf(_h)>=0)_initTab=_h;
+  else{ var _sv=localStorage.getItem('wf_last_tab'); if(_TABS.indexOf(_sv)>=0)_initTab=_sv; }
+}catch(_){}
+WF.tab(_initTab);
+WF.loadValueBar();   // P2 页头价值条：进页即拉（与监控 tab 共享单飞缓存，零重复请求）
+WF.loadDealEngine(); // 实施92 成交引擎卡（旧后端无端点 → 整卡保持隐藏）
+WF.loadCtaTargets(); // 实施93 转化目标库（旧后端无端点 → 整卡保持隐藏）
+// 首访自动播放引导（play-once：写 key 在播放前——完成/跳过/Esc 任何出口都不再自动纠缠；
+// 手动「▶ 播放引导」按钮不受此限）
+try{
+  if(!localStorage.getItem('wf_tour_v1')){
+    localStorage.setItem('wf_tour_v1','1');
+    setTimeout(function(){ try{ WF.startTour(); }catch(_){} },600);
+  }
+}catch(_){}
 })();
 </script>
 {% endblock %}

@@ -26,8 +26,8 @@ from typing import List
 from fastapi import BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-from src.utils.kb_store import KB_CATEGORIES
-from src.web.kb_ai_helpers import ai_translate_entry, auto_fill_entry
+from src.utils.kb_store import KB_CATEGORIES, seed_kb_format_examples
+from src.web.kb_ai_helpers import _record_kb_usage, ai_translate_entry, auto_fill_entry
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,33 @@ def register_kb_routes(app, ctx):
     _api_auth = ctx.api_auth
     _require_auth = ctx.require_auth
     _fire_webhook = ctx.fire_webhook
+
+    # J-9 #184：桌面首装播 3 条停用态格式示例（非桌面 / 已有用户条目 / 已播过 → no-op）。
+    # 挂在这里而非 admin.py：kb_* 归 J-9，admin.py 归 J-7/J-8，不越界。
+    # P-4 #254（D-P6）：带 cfg 走 system_seed_plan——陪伴域不播（首装 KB 为空，示例改为
+    # 「新建条目」预填模板 GET /api/kb/new-entry-templates）；销售域照旧。
+    try:
+        _fmt_seed = seed_kb_format_examples(_kb_store, cfg=config_manager)
+        if _fmt_seed.get("added"):
+            logger.info("KB 首装格式示例已播种: %s", _fmt_seed)
+        elif _fmt_seed.get("reason") == "companion_empty_kb":
+            logger.info("KB 首装：陪伴域不播格式示例（首装 KB 为空，示例见「新建条目」预填模板）")
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("KB 首装格式示例播种失败（忽略）: %s", _exc)
+
+    # N-3 #240（D-N2）：升级提示——非支付域的库里还躺着 1.0.76 之前播进去的 GXP 支付话术
+    # → 启动一条 WARNING 点名数量与清理入口（KB 页横幅同源 stats.entries_system_payment）。
+    try:
+        from src.utils.kb_store import system_seed_plan
+        _plan = system_seed_plan(config_manager)
+        _n_pay = int((_kb_store.stats() or {}).get("entries_system_payment") or 0)
+        if _n_pay and not _plan.get("payment"):
+            logger.warning(
+                "KB 存量含 %d 条系统预置支付话术（GXP 等），本机业务域=%s 用不上：知识库页「系统预置」"
+                "横幅一键清除，或 POST /api/kb/entries/purge-payment-seeds",
+                _n_pay, _plan.get("business_domain"))
+    except Exception:
+        logger.debug("KB payment-seed upgrade hint skipped", exc_info=True)
 
     def _run_kb_conflict_checkers(data: dict) -> list:
         """Run all registered KB conflict checkers from domain packs."""
@@ -92,15 +119,159 @@ def register_kb_routes(app, ctx):
         category: str = "",
         search: str = "",
         enabled_only: bool = False,
+        source: str = "",
     ):
+        """source: ''=全部；vendor/user/import/system=只看该来源；-vendor=排除该来源（J-9）。"""
         _api_auth(request)
-        entries = _kb_store.list_entries(category=category, enabled_only=enabled_only, search=search)
+        entries = _kb_store.list_entries(
+            category=category, enabled_only=enabled_only, search=search, source=source)
         for e in entries:
             try:
                 e["triggers"] = json.loads(e.get("triggers", "[]"))
             except Exception:
                 e["triggers"] = []
         return {"entries": entries, "total": len(entries)}
+
+    @app.post("/api/kb/entries/purge-source")
+    async def api_kb_purge_source(request: Request):
+        """一键清空某来源的全部条目（KB 页「系统预置·厂商产品 → 一键清空」）。
+
+        只接受 vendor / system / import——user 条目不许整批清（那是用户自己的知识，
+        要清走 /api/kb/purge 全库清空的显式路径）。
+        """
+        _api_auth(request)
+        data = await request.json()
+        src = str(data.get("source") or "").strip().lower()
+        if src not in ("vendor", "system", "import"):
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_source_invalid",
+                        "source must be one of vendor/system/import"))
+        count = _kb_store.purge_by_source(src)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_source", f"{src}:{count} entries")
+        return {"ok": True, "source": src, "count": count}
+
+    @app.post("/api/kb/entries/purge-payment-seeds")
+    async def api_kb_purge_payment_seeds(request: Request):
+        """一键清除系统预置里的支付话术系列（N-3 #240 / D-N2）：source=system 且
+        template_key ∈ PAYMENT_SEED_KEYS（13 条 gxp_* + 订单 / 费率 / 通道 / 状态兜底）。
+        只删这一系列，用户改过的通用兜底与【示例】不动；打标后下次启动不灌回。"""
+        _api_auth(request)
+        from src.utils.kb_store import purge_payment_seeds
+        count = purge_payment_seeds(_kb_store)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_payment_seeds", f"{count} entries")
+        return {"ok": True, "count": count}
+
+    @app.get("/api/kb/new-entry-templates")
+    async def api_kb_new_entry_templates(request: Request):
+        """「新建条目」预填模板（P-4 #254 / D-P6）：首装 KB 不再落示例行，格式示例改为
+        点一下就填进抽屉的模板——陪伴域三例（称呼偏好 / 忌聊话题 / 常聊话题），
+        销售域沿用原三例。分类归一到当前生效分类表。"""
+        _api_auth(request)
+        from src.utils.kb_store import new_entry_templates, system_seed_plan
+        plan = system_seed_plan(config_manager)
+        return {"business_domain": plan["business_domain"],
+                "templates": new_entry_templates(plan["business_domain"], KB_CATEGORIES)}
+
+    @app.post("/api/kb/entries/purge-legacy-seeds")
+    async def api_kb_purge_legacy_seeds(request: Request):
+        """一键「清除客服域残留」（P-4 #254 / D-P6）：只碰 source=system 且 enabled=0 且
+        use_count=0 的行（1.0.77 前播进陪伴机的【示例】三条 + complaint / 全局 / 问候 /
+        闲聊兜底 / 测试回复）。**默认 dry_run=true 只列清单不删**；确认删除要显式
+        ``{"dry_run": false, "ids": [...]}``——ids 与清单取交集，dry-run 到点删之间被启用 /
+        命中过的行自动豁免。与 N-5 误删同教训：启动自检里绝不自动跑。"""
+        _api_auth(request)
+        from src.utils.kb_store import legacy_seed_residue, purge_legacy_seed_residue
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        dry_run = data.get("dry_run", True) is not False
+        items = legacy_seed_residue(_kb_store)
+        if dry_run:
+            return {"ok": True, "dry_run": True, "count": len(items), "items": items}
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_legacy_ids_required",
+                        "ids required: run dry_run first and pass the ids you reviewed"))
+        count = purge_legacy_seed_residue(_kb_store, [str(i) for i in ids])
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_legacy_seeds", f"{count} entries")
+        return {"ok": True, "dry_run": False, "count": count}
+
+    @app.post("/api/kb/entries/purge-preset")
+    async def api_kb_purge_preset(request: Request):
+        """一键「清除预置条目」（Q-10 #254 / 22KVXF ⑤）：按来源 vendor / system / help
+        统一入口，替代「vendor 一键清空（不 dry-run）」。**默认 dry_run=true 只列清单不删**
+        （含启用状态 / 命中次数，让用户看清再删）；确认删除要显式
+        ``{"dry_run": false, "sources": [...], "ids": [...]}``——ids 与清单取交集，
+        dry-run 到点删之间被改成 user 来源 / 已删的行自动豁免。user / import / learner 永不入选。
+        与 N-5 误删同教训：启动自检 / 巡检里绝不自动跑。响应附 ``help_corpus``（小智帮助语料
+        在独立库 assistant_help.db 的条数，只读——说明 295 条帮助语料不在用户 KB 里）。"""
+        _api_auth(request)
+        from src.utils.kb_store import PRESET_PURGE_SOURCES, preset_entries, purge_preset_entries
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        dry_run = data.get("dry_run", True) is not False
+        sources = data.get("sources")
+        if sources is None:
+            sources = list(PRESET_PURGE_SOURCES)
+        if not isinstance(sources, list):
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_preset_sources_invalid",
+                        "sources must be a list of vendor/system/help"))
+        sources = [str(s or "").strip().lower() for s in sources]
+        bad = [s for s in sources if s not in PRESET_PURGE_SOURCES]
+        if bad:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_preset_sources_invalid",
+                        "sources must be a list of vendor/system/help"))
+        help_corpus = {}
+        try:
+            from src.assistant.help_kb import help_corpus_status
+            help_corpus = help_corpus_status()
+        except Exception:  # noqa: BLE001
+            help_corpus = {}
+        items = preset_entries(_kb_store, sources)
+        by_source: dict = {}
+        for it in items:
+            by_source[it["source"]] = by_source.get(it["source"], 0) + 1
+        if dry_run:
+            logger.info("[kb] purge_preset dry-run sources=%s count=%d by_source=%s",
+                        ",".join(sources), len(items), by_source)
+            return {"ok": True, "dry_run": True, "sources": sources, "count": len(items),
+                    "by_source": by_source, "items": items, "help_corpus": help_corpus}
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_legacy_ids_required",
+                        "ids required: run dry_run first and pass the ids you reviewed"))
+        res = purge_preset_entries(_kb_store, [str(i) for i in ids], sources)
+        actor = request.session.get("username", "web_admin")
+        logger.info("[kb] purge_preset deleted=%d by_source=%s actor=%s",
+                    res["count"], res["by_source"], actor)
+        if audit_store:
+            audit_store.log(actor, "kb_purge_preset",
+                            f"{res['count']} entries {json.dumps(res['by_source'], ensure_ascii=False)}")
+        return {"ok": True, "dry_run": False, "sources": sources, "count": res["count"],
+                "by_source": res["by_source"], "help_corpus": help_corpus}
+
+    @app.get("/api/kb/health")
+    async def api_kb_health(request: Request, days: int = 7):
+        """KB 自检（J-9 #184）：条目分来源计数 / 向量化数 / 7 天注入命中数 / 最近命中时刻。"""
+        _api_auth(request)
+        return _kb_store.health(days=days)
 
     @app.get("/api/kb/entries/{entry_id}")
     async def api_kb_get_entry(request: Request, entry_id: str):
@@ -346,8 +517,10 @@ def register_kb_routes(app, ctx):
         data = await request.json()
         query = data.get("query", "")
         lang = data.get("lang", "zh")
+        # 默认与对客链路同口径（桌面模式排除 vendor）；管理员显式 include_vendor=true 才放行
+        _inc_vendor = True if data.get("include_vendor") else None
         t0 = time.time()
-        result = _kb_store.search(query, top_k=5, lang=lang)
+        result = _kb_store.search(query, top_k=5, lang=lang, include_vendor=_inc_vendor)
         ai_context = _kb_store.build_ai_context_from_result(result, lang=lang)
         elapsed_ms = int((time.time() - t0) * 1000)
         for e in result.get("entries", []):
@@ -1307,6 +1480,7 @@ def register_kb_routes(app, ctx):
                           "response_format": {"type": "json_object"}},
                 )
             result = resp.json()
+            _record_kb_usage(result, model=model, base_url=base_url)
             raw    = result["choices"][0]["message"]["content"]
         except Exception as _e:
             return {"ok": False, "error": tr(request, "err.kb.ai_call_failed", err=_e)}
@@ -1439,6 +1613,7 @@ def register_kb_routes(app, ctx):
                           "max_tokens": 500, "temperature": 0.7},
                 )
                 result = resp.json()
+                _record_kb_usage(result, model=model, base_url=base_url)
                 reply = result["choices"][0]["message"]["content"]
                 return {"reply": reply.strip(), "ok": True}
         except Exception as _e:

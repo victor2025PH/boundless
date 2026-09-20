@@ -1,0 +1,430 @@
+/* splash.css — 开机动画「赛博朋克首启序列」视觉层（P0 2026-08-22）
+ * ============================================================
+ * 设计约束（改动先读）：
+ * · 色彩全部取 brand.css 的 --bl-* 令牌（无界七色渐变 + 深空墨色阶），
+ *   不引入第八套配色——赛博朋克感来自「品牌渐变当霓虹」而非俗套青品红；
+ * · 动画只用 transform/opacity（合成器通道，坐席低配机友好）；唯一例外是
+ *   进度条 width（低频、区域小）与 fill 的 background-position 流光；
+ * · 光敏安全：任何闪烁 ≤2 步/次 且只在文案切换时触发一次（WCAG 2.3.1）；
+ * · z-index=99900：低于首启向导 99999 / 活动海报 99980（向导叠在动画上交互，
+ *   引导时间与后端冷启动重叠，总感知等待更短），高于其余一切壳层 UI；
+ * · 末行 spAutoHide=150s CSS 保险：splash.js 压根没跑起来（脚本损坏/异常）时
+ *   靠纯 CSS 把层拿掉，绝不把用户永久困在动画后面（驱动层跑起来会立即关掉它）。
+ */
+
+#bl-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 99900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  overflow: hidden;
+  background: var(--bl-ink-950, #05060f);
+  color: #e6edf3;
+  user-select: none;
+  /* 保险丝：驱动层存活时会立刻 style.animation="none" 关掉它 */
+  animation: spAutoHide .6s ease 150s forwards;
+}
+/* 深空渐变 + 中心辉光衬底（放 ::before，不占布局） */
+#bl-splash::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 62% 46% at 50% 40%, rgba(122, 59, 245, .16), transparent 68%),
+    radial-gradient(ellipse 40% 30% at 50% 42%, rgba(30, 107, 240, .12), transparent 70%),
+    var(--bl-gradient-dark-space, linear-gradient(180deg, #1a1d3a 0%, #05060f 100%));
+}
+/* 就绪光波（sp-done 时播一次，单次扫过不闪烁） */
+#bl-splash::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, .14) 50%, transparent 58%);
+  transform: translateX(-130%);
+  pointer-events: none;
+}
+#bl-splash.sp-done::after { animation: spSweep .62s ease .12s forwards; }
+
+/* ── 背景层：透视网格地平线 + 双层光尘 + 慢扫描光带 ─────────────────────── */
+.sp-bg { position: absolute; inset: 0; pointer-events: none; }
+.sp-grid {
+  position: absolute;
+  left: -40%;
+  right: -40%;
+  bottom: -4%;
+  height: 46%;
+  perspective: 460px;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 34%, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 34%, #000 100%);
+  opacity: .5;
+}
+.sp-grid i {
+  position: absolute;
+  inset: -100% 0 0 0;
+  background-image:
+    repeating-linear-gradient(to right, rgba(30, 140, 242, .16) 0 1px, transparent 1px 54px),
+    repeating-linear-gradient(to bottom, rgba(122, 59, 245, .15) 0 1px, transparent 1px 54px);
+  transform: rotateX(74deg);
+  transform-origin: 50% 100%;
+  animation: spGridFlow 8s linear infinite;
+}
+.sp-stars {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -30%;
+  height: 160%;
+  background-repeat: repeat;
+  animation: spDrift 60s linear infinite;
+}
+.sp-stars.s1 {
+  background-image:
+    radial-gradient(1.6px 1.6px at 22% 18%, rgba(0, 176, 240, .8), transparent 55%),
+    radial-gradient(1.2px 1.2px at 68% 44%, rgba(240, 80, 154, .7), transparent 55%),
+    radial-gradient(1px 1px at 84% 12%, rgba(230, 237, 243, .55), transparent 55%);
+  background-size: 420px 380px;
+  opacity: .5;
+}
+.sp-stars.s2 {
+  background-image:
+    radial-gradient(1.2px 1.2px at 12% 62%, rgba(122, 59, 245, .8), transparent 55%),
+    radial-gradient(1px 1px at 48% 84%, rgba(240, 160, 16, .6), transparent 55%),
+    radial-gradient(.8px .8px at 90% 70%, rgba(230, 237, 243, .4), transparent 55%);
+  background-size: 560px 520px;
+  opacity: .38;
+  animation-duration: 96s;
+}
+.sp-beam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -24%;
+  height: 20%;
+  background: linear-gradient(180deg, transparent, rgba(0, 176, 240, .05) 45%, rgba(122, 59, 245, .05) 55%, transparent);
+  animation: spBeam 9s ease-in-out 2s infinite;
+}
+
+/* ── 第一幕：无界母品牌开场 ─────────────────────────────────────────────── */
+.sp-center { position: relative; display: flex; flex-direction: column; align-items: center; min-height: 236px; justify-content: center; }
+.sp-act { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.sp-act1 .sp-mark {
+  width: 132px;
+  height: auto;
+  filter: drop-shadow(0 0 26px rgba(122, 59, 245, .55)) drop-shadow(0 0 60px rgba(30, 107, 240, .3));
+  animation: spMarkIn .9s cubic-bezier(.18, .9, .22, 1) both;
+}
+.sp-act1 .sp-word {
+  font-family: Montserrat, Inter, sans-serif;
+  font-weight: 800;
+  font-size: 30px;
+  letter-spacing: .2em;
+  padding-left: .2em; /* 对冲 letter-spacing 尾隙，视觉居中 */
+  background: var(--bl-gradient-brand, linear-gradient(90deg, #00b0f0, #7a3bf5, #f07800));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: spWordIn 1s cubic-bezier(.2, .8, .2, 1) .12s both;
+}
+.sp-act1 .sp-word-sub {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .52em;
+  padding-left: .52em;
+  color: #8a9bb0;
+  animation: spFadeUp .8s ease .34s both;
+}
+
+/* ── 第二幕：ChatX 主场（默认隐藏，.sp-stage2 时接管） ─────────────────── */
+.sp-act2 { display: none; }
+.sp-act2 .sp-cx {
+  width: 148px;
+  height: auto;
+  filter: drop-shadow(0 0 22px rgba(208, 48, 240, .45)) drop-shadow(0 0 56px rgba(30, 107, 240, .28));
+  animation: spCxIn .72s cubic-bezier(.16, 1.24, .3, 1) both, spBreathe 4.4s ease-in-out 1.2s infinite;
+}
+.sp-act2 .sp-cx-word {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-weight: 800;
+  font-size: 26px;
+  color: #e6edf3;
+  animation: spFadeUp .7s ease .1s both;
+}
+.sp-act2 .sp-cx-word .sp-cx-en {
+  font-family: Montserrat, Inter, sans-serif;
+  letter-spacing: .1em;
+  background: var(--bl-gradient-brand, linear-gradient(90deg, #00b0f0, #7a3bf5, #f07800));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sp-act2 .sp-tagline {
+  font-size: 12.5px;
+  letter-spacing: .32em;
+  padding-left: .32em;
+  color: #6f87a0;
+  animation: spFadeUp .7s ease .22s both;
+}
+#bl-splash.sp-stage2 .sp-act1 { display: none; }
+#bl-splash.sp-stage2 .sp-act2 { display: flex; }
+
+/* ── 启动控制台：氛围行 + 能量导管进度条 + 真实状态行 + 自检终端流 ──────── */
+.sp-console {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(540px, 80vw);
+  opacity: 0;
+  transition: opacity .5s ease;
+}
+#bl-splash.sp-stage2 .sp-console { opacity: 1; }
+
+.sp-amb {
+  min-height: 26px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-align: center;
+  background: var(--bl-gradient-brand, linear-gradient(90deg, #00b0f0, #7a3bf5, #f07800));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 14px rgba(122, 59, 245, .35));
+}
+/* 文案切换的一次性故障闪（steps(2)，≤2 步/次，间隔 ≥2.4s，光敏安全） */
+.sp-amb.glitch { animation: spGlitch .3s steps(2, end) 1; }
+
+.sp-conduit { display: flex; align-items: center; gap: 12px; width: 100%; }
+.sp-track {
+  position: relative;
+  flex: 1;
+  height: 10px;
+  border-radius: 6px;
+  background: rgba(10, 12, 27, .92);
+  border: 1px solid rgba(30, 140, 242, .28);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, .6), 0 0 18px rgba(30, 107, 240, .14);
+}
+.sp-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--bl-gradient-brand, linear-gradient(90deg, #00b0f0, #7a3bf5, #f07800));
+  background-size: 240% 100%;
+  box-shadow: 0 0 12px rgba(122, 59, 245, .55), 0 0 30px rgba(30, 107, 240, .3);
+  animation: spFillFlow 3.2s linear infinite;
+  transition: width .55s cubic-bezier(.25, .72, .3, 1);
+}
+#bl-splash.sp-done .sp-fill { box-shadow: 0 0 18px rgba(240, 80, 154, .8), 0 0 44px rgba(122, 59, 245, .55); }
+/* 里程碑节点（菱形）：进度过线即点亮——分段跳变是真实信号的仪式感 */
+.sp-node {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--bl-ink-700, #1a1d3a);
+  border: 1px solid rgba(138, 155, 176, .45);
+  border-radius: 2px;
+}
+.sp-node.lit {
+  background: var(--bl-brand-cyan, #00b0f0);
+  border-color: rgba(230, 237, 243, .8);
+  box-shadow: 0 0 10px rgba(0, 176, 240, .9);
+  animation: spNodePulse .5s ease 1;
+}
+.sp-pct {
+  font-family: Montserrat, Inter, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+  width: 52px;
+  text-align: right;
+  color: #cdd9e5;
+}
+.sp-real {
+  min-height: 16px;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  letter-spacing: .04em;
+  color: #6f87a0;
+  text-align: center;
+}
+.sp-term {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  height: 58px;
+  overflow: hidden;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  color: rgba(111, 135, 160, .8);
+}
+.sp-term div { animation: spFadeUp .4s ease both; }
+.sp-term div:nth-last-child(3) { opacity: .55; }
+.sp-term div:nth-last-child(n+4) { opacity: .3; }
+
+/* ── 故障态（镜像 renderer 状态机的 error：文案 verbatim，重试回派原 reload） ── */
+.sp-err {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  width: min(560px, 84vw);
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(32, 8, 18, .92);
+  border: 1px solid rgba(240, 80, 110, .5);
+  box-shadow: 0 0 34px rgba(240, 60, 90, .22);
+  text-align: center;
+}
+.sp-err[hidden] { display: none; }
+.sp-err-title {
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: .22em;
+  padding-left: .22em;
+  color: #ff7383;
+  margin-bottom: 8px;
+}
+.sp-err-msg {
+  white-space: pre-wrap;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #e6b8bf;
+  margin-bottom: 12px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+.sp-err-actions { display: flex; gap: 10px; justify-content: center; }
+.sp-err-actions button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+}
+#sp-retry { background: var(--bl-gradient-brand, linear-gradient(90deg, #00b0f0, #7a3bf5, #f07800)); }
+#sp-retry:hover { filter: brightness(1.15); }
+#sp-diag { background: transparent; border: 1px solid rgba(138, 155, 176, .5); color: #cdd9e5; }
+#sp-diag:hover { border-color: #cdd9e5; }
+#bl-splash.sp-error .sp-amb { visibility: hidden; }
+#bl-splash.sp-error .sp-fill { animation-play-state: paused; box-shadow: 0 0 12px rgba(240, 80, 110, .5); }
+#bl-splash.sp-error .sp-beam,
+#bl-splash.sp-error .sp-grid i { animation-play-state: paused; }
+
+/* ── 跳过按钮 + 品牌角标 ───────────────────────────────────────────────── */
+.sp-skip {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  background: transparent;
+  border: 1px solid rgba(138, 155, 176, .35);
+  color: #8a9bb0;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.sp-skip:hover { color: #e6edf3; border-color: rgba(230, 237, 243, .6); }
+.sp-skip[hidden] { display: none; }
+.sp-ver {
+  position: absolute;
+  left: 18px;
+  bottom: 16px;
+  font-family: Montserrat, Inter, sans-serif;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .3em;
+  color: rgba(138, 155, 176, .5);
+}
+
+/* ── 暖启动闪场（≈1.2s）：跳第一幕，ChatX 直出 + 已连接行，无进度导管 ──── */
+#bl-splash.sp-warm .sp-act1 { display: none; }
+#bl-splash.sp-warm .sp-act2 { display: flex; }
+#bl-splash.sp-warm .sp-act2 .sp-cx { animation: spCxIn .5s cubic-bezier(.16, 1.2, .3, 1) both; }
+#bl-splash.sp-warm .sp-conduit,
+#bl-splash.sp-warm .sp-real,
+#bl-splash.sp-warm .sp-term,
+#bl-splash.sp-warm .sp-skip { display: none; }
+#bl-splash.sp-warm .sp-console { opacity: 1; }
+
+/* ── 极简态（Esc/跳过/reduced-motion）：静态 LOGO + 细进度 + 真实行 ─────── */
+#bl-splash.sp-min .sp-bg,
+#bl-splash.sp-min .sp-term,
+#bl-splash.sp-min .sp-skip { display: none; }
+#bl-splash.sp-min .sp-act2 .sp-cx { width: 96px; animation: none; filter: drop-shadow(0 0 16px rgba(122, 59, 245, .4)); }
+#bl-splash.sp-min .sp-act1 .sp-mark,
+#bl-splash.sp-min .sp-act1 .sp-word,
+#bl-splash.sp-min .sp-act1 .sp-word-sub,
+#bl-splash.sp-min .sp-act2 .sp-cx-word,
+#bl-splash.sp-min .sp-act2 .sp-tagline { animation: none; }
+#bl-splash.sp-min .sp-amb { animation: none; filter: none; }
+#bl-splash.sp-min .sp-fill { animation: none; transition: width .3s ease; }
+#bl-splash.sp-min::before { background: var(--bl-ink-950, #05060f); }
+
+/* 系统级减少动态偏好：等同极简（驱动层同时会加 .sp-min，这里是纯 CSS 双保险） */
+@media (prefers-reduced-motion: reduce) {
+  #bl-splash *, #bl-splash::after { animation: none !important; }
+  #bl-splash .sp-fill { transition: width .3s ease; }
+  #bl-splash .sp-bg { display: none; }
+}
+
+/* ── 谢幕 ─────────────────────────────────────────────────────────────── */
+#bl-splash.sp-out {
+  opacity: 0;
+  transform: scale(1.012);
+  transition: opacity .5s ease, transform .5s ease;
+  pointer-events: none;
+}
+
+/* ── keyframes ───────────────────────────────────────────────────────── */
+@keyframes spAutoHide { to { visibility: hidden; opacity: 0; pointer-events: none; } }
+@keyframes spSweep { to { transform: translateX(130%); } }
+@keyframes spGridFlow { from { transform: rotateX(74deg) translateY(0); } to { transform: rotateX(74deg) translateY(54px); } }
+@keyframes spDrift { from { transform: translateY(0); } to { transform: translateY(18%); } }
+@keyframes spBeam { 0% { transform: translateY(0); } 55% { transform: translateY(130vh); } 100% { transform: translateY(130vh); } }
+@keyframes spMarkIn {
+  from { opacity: 0; transform: scale(1.18); filter: blur(14px) drop-shadow(0 0 0 rgba(0, 0, 0, 0)); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes spWordIn {
+  from { opacity: 0; letter-spacing: .5em; }
+  to { opacity: 1; letter-spacing: .2em; }
+}
+@keyframes spFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes spCxIn {
+  from { opacity: 0; transform: scale(.58); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes spBreathe {
+  0%, 100% { filter: drop-shadow(0 0 22px rgba(208, 48, 240, .45)) drop-shadow(0 0 56px rgba(30, 107, 240, .28)); }
+  50% { filter: drop-shadow(0 0 30px rgba(208, 48, 240, .6)) drop-shadow(0 0 72px rgba(30, 107, 240, .4)); }
+}
+@keyframes spGlitch {
+  0% { transform: translateX(0); text-shadow: 2px 0 rgba(0, 176, 240, .8), -2px 0 rgba(240, 80, 154, .8); }
+  50% { transform: translateX(2px); text-shadow: -2px 0 rgba(0, 176, 240, .6), 2px 0 rgba(240, 80, 154, .6); }
+  100% { transform: translateX(0); text-shadow: none; }
+}
+@keyframes spFillFlow { from { background-position: 0% 0; } to { background-position: 240% 0; } }
+@keyframes spNodePulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 176, 240, .8); }
+  100% { box-shadow: 0 0 10px 6px rgba(0, 176, 240, 0); }
+}

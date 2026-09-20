@@ -1,0 +1,8 @@
+盲测答案（听完再看）
+========================================
+林小雨_句1活泼: A=moss  B=index
+林小雨_句2平静: A=index  B=moss
+魏卡斯_句1活泼: A=index  B=moss
+魏卡斯_句2平静: A=moss  B=index
+美月_句1活泼: A=moss  B=index
+美月_句2平静: A=moss  B=index

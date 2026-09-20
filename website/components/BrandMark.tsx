@@ -1,5 +1,5 @@
-// 无界科技 BOUNDLESS 品牌标识：∞ 破框主形（透明底），由 scripts/build-boundless-marks.ps1
-// 从 boundless-mark-white.png 抠白生成各尺寸（boundless-mark-256.png）。
+// 无界科技 BOUNDLESS 品牌标识：∞ 破框主形（透明底）。资产由 brand-assets 管线
+// （build_brand_assets.py → sync_brand_targets.py）从 keyed 母版生成并同步（boundless-mark-256.png）。
 // 这里用 next/image 渲染 256px 版：生产期自动出 AVIF/WebP、按需缩放，导航/页脚轻量。
 
 import Image from "next/image";

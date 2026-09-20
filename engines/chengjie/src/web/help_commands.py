@@ -11,7 +11,10 @@ HELP_SECTIONS: list[dict[str, Any]] = [
     {
         "key": "scripts",
         "tier": "basic",
+        # L-4 C（#198）：原名「话术管理」误导——这四条是 Telegram 主号 Bot 模式的斜杠命令
+        # （TG 时代遗留），与收件箱「话术模板 / 知识库」无关；改名并标注适用范围（scope_key）。
         "title_key": "hp_sec_scripts",
+        "scope_key": "hp_sec_scripts_scope",
         "commands": [
             {
                 "cmd": "/setgreeting",

@@ -2,7 +2,7 @@
 
 守住活人感 P0 的关键不变量：
   - 短句 no-op（保预渲染命中零损耗）
-  - 非中文文本跳过（防中文口语词 garble 外语，与「中文声纹念外语」同族红线）
+  - 日韩跳过；英文走独立轻口语（不加中文词）
   - 确定性（同文本同结果 = TTS 缓存/预渲染键安全）
   - 情绪门控（庄重情绪只做中性词替换；sad/empathetic 句首让位副语言标记）
   - neutral 也改写（日常对话主路，最需要文字层活人感）
@@ -15,6 +15,7 @@ import pytest
 from src.ai.avatar_voice_stats import get_avatar_voice_stats
 from src.ai.voice_colloquial import (
     _is_chinese_dominant,
+    _is_english_dominant,
     _lexical_swap,
     build_voice_style_hint,
     colloquialize,
@@ -51,13 +52,13 @@ def test_defensive_empty_and_dirty():
 
 
 def test_non_chinese_text_skipped():
-    """非中文文本跳过——中文口语词/迟疑词会 garble 外语（安全红线）。"""
+    """日韩仍跳过（中文口语词会 garble）；英文走独立轻口语，不加中文词。"""
     en = "I had a really long and productive day today thanks for asking"
-    assert colloquialize(en, EmotionSpec("warm"), lead_prob=1.0) == en
-    # 日文（含假名）→ 判非中文，不动
+    en_out = colloquialize(en, EmotionSpec("warm"), lead_prob=1.0)
+    assert "productive day" in en_out
+    assert "因此" not in en_out and "其实" not in en_out
     ja = "今日はとても忙しかったですでも楽しかったですありがとう"
     assert colloquialize(ja, EmotionSpec("warm"), lead_prob=1.0) == ja
-    # 韩文谚文 → 不动
     ko = "오늘 정말 바빴어요 그래도 즐거웠어요 고마워요 진짜로"
     assert colloquialize(ko, EmotionSpec("warm"), lead_prob=1.0) == ko
 
@@ -66,6 +67,8 @@ def test_is_chinese_dominant():
     assert _is_chinese_dominant("我今天很开心啊")
     assert _is_chinese_dominant("我今天很happy其实还行")  # 中英混合、中文为主
     assert not _is_chinese_dominant("hello world this is english")
+    assert _is_english_dominant("hello world this is english")
+    assert not _is_english_dominant("我今天很开心啊")
     assert not _is_chinese_dominant("今日はいい天気")       # 含假名
     assert not _is_chinese_dominant("12345 !!! ???")        # 无字母
 

@@ -1,0 +1,31 @@
+{
+  "_readme": "复制为 manifest.json 使用；字段语义见 README.md。source 只允许 origin/pd（版权红线）。",
+  "templates": [
+    {
+      "id": "pd_twinkle",
+      "title": "小星星",
+      "file": "pd_twinkle.wav",
+      "lyrics": "一闪一闪亮晶晶\n满天都是小星星",
+      "lang": "zh",
+      "scene": "goodnight",
+      "mood": "gentle",
+      "gender": "F",
+      "duration_sec": 20,
+      "source": "pd",
+      "enabled": true
+    },
+    {
+      "id": "origin_birthday",
+      "title": "生日小调",
+      "file": "origin_birthday.wav",
+      "lyrics": "祝你生日快乐呀\n吹蜡烛许个愿吧",
+      "lang": "zh",
+      "scene": "birthday",
+      "mood": "playful",
+      "gender": "F",
+      "duration_sec": 18,
+      "source": "origin",
+      "enabled": true
+    }
+  ]
+}

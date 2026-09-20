@@ -1,0 +1,166 @@
+# 小智对话回归金标（tools/xiaozhi_dialog_eval.py 消费）。
+#
+# 口径：每题真跑「BM25 检索 → LLM 引用作答」全链（与线上 /api/assistant/query
+# 同一套路由代码），判定四态：
+#   GUIDED  = 有来源 + 非拒答 + 命中 must_any 任一关键词（答案真的在引导）
+#   WRONG   = 有来源作答但 must_any 全脱靶（答非所问，比拒答更糟）
+#   REFUSED = 诚实拒答（语料缺口——补 help_terms / howto_pack，红线：只写真实行为）
+#   NO-SOURCE = 零检索命中却出了话（检索层缺口）
+#
+# 纪律（2026-09-01 老板指令 · chatx-desktop-install.mdc「频道发版文案纪律」§3）：
+# 每次发版要宣传的新功能，先在这里加金标题目再跑一轮——小智答不上不许发版。
+# must_any 是「至少命中其一」的宽口径：抓跑偏，不逼措辞。
+questions:
+  - tag: sop_workflow
+    q: "SOP 工作链怎么用？怎么给客户挂上跟进链条？"
+    must_any: ["工作链", "/workflows"]
+  - tag: deal_engine
+    q: "成交引擎是什么？在哪里打开？"
+    must_any: ["旅程", "工作链", "管理员"]
+  - tag: vision_summary
+    q: "客户发来的图片，AI 识别的内容摘要在哪里看？"
+    must_any: ["AI 识图", "识图", "展开"]
+  - tag: voice_clone_bind
+    q: "怎么克隆客户的音色并绑定到人设？"
+    must_any: ["克隆音色", "绑定", "语音行"]
+  - tag: birthday_memory
+    q: "客户说今天是他生日，AI 会记住吗？"
+    must_any: ["记住", "记忆", "AI 记忆"]
+  - tag: voice_fallback
+    q: "发语音时为什么用了标准音色而不是克隆音色？"
+    must_any: ["标准音色", "原因", "语言", "额度"]
+  - tag: image_gen
+    q: "AI 生成图片功能怎么用？点了没反应怎么办？"
+    must_any: ["生成图片", "未启用", "工具箱"]
+  - tag: app_update
+    q: "怎么把智聊更新到最新版本？"
+    must_any: ["重启更新", "下载页", "更新"]
+  - tag: getting_started
+    q: "这个软件怎么用？我第一次用该从哪开始？"
+    must_any: ["账号", "人设", "工作台"]
+  - tag: send_voice
+    q: "怎么给客户发语音消息？"
+    must_any: ["语音", "生成", "试听"]
+  # ── 真实缺口批②（2026-09-01 gap_report 首跑高频未答，口径已核实/老板拍板）──
+  - tag: greeting_draft
+    q: "帮我写一句给客户的问候语"
+    must_any: ["AI回复", "会话", "拟稿", "草稿"]
+  - tag: export_phones
+    q: "怎么导出所有客户的手机号？"
+    must_any: ["手机号", "CSV", "客户列表"]
+  - tag: douyin
+    q: "支持抖音吗？"
+    # 「不支持」宽判：LLM 可能答「不支持抖音」或「暂不支持」或给四平台清单，
+    # 三种都是对的——判词抓事实立场，不逼措辞（首版只认「暂不支持」误判过）。
+    must_any: ["不支持", "Telegram", "四个平台"]
+  # ── v1.0.68 发版批（2026-09-02 发版纪律 §3：宣传的新入口先补金标再发版）──
+  - tag: buried_archived_unread
+    q: "「归档中还有 N 条未读」是什么意思？未读徽标数和列表对不上怎么回事？"
+    must_any: ["归档", "未读", "徽标"]
+  - tag: resume_deliver_gate
+    q: "收件箱提示「全局已暂停真发」，自动回复不发了怎么恢复？"
+    must_any: ["恢复真发", "横幅", "主管"]
+  # ── v1.0.73 发版批（I-2 三项入口 + 全自动影子档）──
+  - tag: acct_unread_open
+    q: "未读数字怎么点？账号栏上的未读数字点开能看到哪几条会话？"
+    must_any: ["未读", "账号", "会话"]
+  - tag: bind_persona_yellow
+    q: "账号黄点怎么绑人设？黄色小点是什么意思？"
+    must_any: ["人设", "黄", "账号"]
+  - tag: set_address_names
+    q: "怎么设称呼？怎么让 AI 知道我怎么叫客户、客户怎么叫我？"
+    must_any: ["称呼", "客户", "保存"]
+  - tag: autosend_shadow
+    q: "全自动就是全自动吗？高风险稿还会被扣住不发吗？"
+    must_any: ["放行", "台账", "不拦", "全自动"]
+  # ── v1.0.85 发版批（R85：客户当地时间 / 接力记忆 / 单人端 / 切档 /
+  # 系统标签 / 相册 / 客户发自己的图 / 人设名 / 模型·模式）──
+  - tag: peer_local_time
+    q: "客户说过当地时间为什么还问几点？深夜为什么还主动发？"
+    must_any: ["城市", "当地", "时区", "深夜"]
+  - tag: handoff_memory
+    q: "我手发的图 AI 接回去还认吗？"
+    must_any: ["人工", "记忆", "全自动"]
+  - tag: seat_single
+    q: "为什么点开会话要释放认领？单人端怎么关掉处理中？"
+    must_any: ["认领", "单人", "多坐席"]
+  - tag: yield_no_dup
+    q: "切全自动为什么同一句发了两次？"
+    must_any: ["一次", "切", "让位"]
+  - tag: panel_sys_tags
+    q: "筛选里一堆休眠标签怎么收起来？发前确认数字为什么这么大？"
+    must_any: ["系统标签", "发前确认", "超龄"]
+  - tag: album_upload
+    q: "相册上传失败了怎么看原因？"
+    must_any: ["相册", "失败", "重试"]
+  - tag: offer_media
+    q: "客户说我发张图给你为什么被拒？"
+    must_any: ["自己", "索图", "等图"]
+  - tag: own_name
+    q: "画像为什么把人设名写成客户名？"
+    must_any: ["人设", "画像", "客户"]
+  - tag: composer_model_mode
+    q: "会话里模型和模式有什么区别？"
+    must_any: ["模型", "模式", "上下文"]
+  # ── v1.0.86 发版批（R86：跟图闸 / 翻译重试 / 列表顶系统筹码 / 相册大图 HEIC / 聊天大视频）──
+  - tag: image_send_gate
+    q: "客户发了自拍为什么又回一张图？怎么才不出跟图？"
+    must_any: ["识图", "要图", "相册", "跟图"]
+  - tag: xlate_hold_retry
+    q: "翻译失败了怎么重试？为什么不发中文原文？"
+    must_any: ["重试", "翻译", "原文"]
+  - tag: list_sys_chips
+    q: "全部账号顶上一排 dormant 怎么藏？"
+    must_any: ["系统", "单人", "休眠", "筹码"]
+  - tag: album_big_upload
+    q: "相册能不能传大图和 HEIC？删图为什么跳回顶？"
+    must_any: ["相册", "HEIC", "灯箱", "删除"]
+  - tag: chat_large_media
+    q: "聊天里大视频发不出去怎么办？超限还差多少怎么看？"
+    must_any: ["平台", "上限", "压后", "视频"]
+  # ── v1.0.87 发版批（R87：无限制离线回退 / 配文语言 / 生成图归属 / 拦截人话 / 语音语种旁注）──
+  - tag: route_offline_fallback
+    q: "选了无限制模式全自动为什么不回？本机模型离线怎么办？"
+    must_any: ["标准", "离线", "切回", "无限制"]
+  - tag: caption_lang_pin
+    q: "日语客户为什么收到中文配文？"
+    must_any: ["语言", "配文", "铆定", "发→"]
+  - tag: album_ai_gen_gate
+    q: "发的图不是相册里的，怎么不让 AI 生成图？"
+    must_any: ["生成", "相册", "开关", "角标"]
+  - tag: abort_reason_human
+    q: "拦截原因 dup_guard_blocked 是什么意思？"
+    must_any: ["重复", "拦截", "去会话", "改写"]
+  - tag: voice_clone_lang_note
+    q: "本会话语音不可用是什么意思？为什么日语会话不发语音？"
+    must_any: ["克隆", "语种", "文字", "不支持"]
+  # ── v1.0.88 发版批（公网开脸 / 图中是谁）──
+  - tag: face_identity
+    q: "客户发自拍怎么认人？图中是谁怎么用？"
+    must_any: ["人脸", "是我", "网关", "设置"]
+  # ── v1.0.89 发版批（群进工作台 / 间隔记忆 / 西语 / 媒体账本）──
+  - tag: group_inbox_mirror
+    q: "群里发的消息工作台看不到？群消息怎么进工作台？"
+    must_any: ["群", "工作台", "白名单"]
+  - tag: time_gap_memory
+    q: "隔很久再聊会不会乱记时间？"
+    must_any: ["间隔", "记忆", "设置"]
+  - tag: spanish_punct_lang
+    q: "西语客户为什么回成英文？"
+    must_any: ["西语", "英文", "翻译"]
+  - tag: media_ledger
+    q: "刚发过图为什么还说要发？"
+    must_any: ["图", "发", "设置"]
+  # ── v1.0.90 发版批（电脑微信副驾进包 / 发语音 / 接管迟到闸 / 成人不设限）──
+  - tag: wechat_pc_start
+    q: "个人微信怎么用？PC 副驾怎么启动？"
+    must_any: ["副驾", "账号", "启动", "微信"]
+  - tag: wechat_pc_voice
+    q: "微信怎么给人设发语音？客户发语音为什么听不到？"
+    must_any: ["语音", "打字", "VB-CABLE", "副驾"]
+  - tag: takeover_late_gate
+    q: "点了接管为什么还在自动发？"
+    must_any: ["接管", "弃发", "人工", "档位"]
+  - tag: adult_policy_open
+    q: "人设成人政策不设限怎么用？开了还会转人工吗？"
+    must_any: ["不设限", "人设", "未成年"]

@@ -706,7 +706,7 @@ _CTRL_PAGE = r"""<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  .presets{display:flex;gap:6px;margin:10px 0 8px;flex-wrap:wrap}
  .presets button{flex:1;min-width:60px;background:#232a3a;color:#cdd6ea;border:1px solid transparent;
    border-radius:8px;padding:8px 6px;font-size:12px;font-weight:700;cursor:pointer}
- .presets button.on{background:linear-gradient(135deg,#4f7aff,#a855f7);color:#fff}
+ .presets button.on{background:linear-gradient(135deg,#1e6bf0,#7a3bf5);color:#fff}
  .ratios{display:flex;gap:5px;margin:6px 0 4px;flex-wrap:wrap}
  .ratios button{flex:1;min-width:72px;background:#1a2233;color:#b8c4dc;border:1px solid rgba(255,255,255,.1);
    border-radius:8px;padding:7px 4px;font-size:11px;font-weight:600;cursor:pointer}

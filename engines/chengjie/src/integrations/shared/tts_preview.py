@@ -7,10 +7,13 @@ P15-B: 120s timeout around synthesize() to prevent semaphore starvation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional, Tuple
 
 try:
     from src.ai.tts_pipeline import get_tts_pipeline
@@ -34,6 +37,61 @@ _DEFAULT_MAX_AGE_SEC: float = 24 * 3600      # keep files up to 24 hours
 _last_cleanup_ts: float = 0.0
 _SYNTHESIZE_TIMEOUT_SEC: float = 120.0       # P15-B: hard timeout per synthesis
 
+# ── #59 交互式克隆合成预算（2026-08-30）：按字数动态，试听=发送同口径 ─────────
+# 网关账本实锤（mid=B990 42 发全 200）：克隆耗时随字数线性 ~0.4s/字（隧道中继
+# +IndexTTS-2 RTF 1.7-1.8），旧固定 45s 预算在 76-80 字处被击穿——服务端合成
+# **成功**、引擎侧预算先到期回落默认音（GPU 白烧+成品丢弃+用户听错声三输）。
+# 0.45s/字 + 10s 裕量；下限 45 保住短文本旧行为（预算只放宽不收紧），上限 190
+# 覆盖 400 字顶格输入（tts-test/cp-voice 同一上限）。fast 档=edge 试听，秒回
+# 链路维持 15s 不变。tts-test 与 send-voice 必须同用本函数（试听=发送契约：
+# 同一段文字不能「试听得出来、发送发不出」）。
+#
+# #102（实施91，0831）：0.45s/字是**中文**合成速率口径——「跟随翻译发声」的
+# 日/韩译稿单字显著更慢（网关账实锤：ja 33 字三连 17.6~28.0s ≈ 0.53~0.85s/字，
+# 服务端全 200、引擎预算先到期，成品白扔）。外语档（lang=ja/ko 或文本假名/
+# 谚文实质占比）系数上浮 0.9s/字 + 15s 裕量、地板抬到 60s——33 字最坏 28s
+# 也留一次重试余量。lang 由调用方给（tts-test 译声目标语）；不给时按文本
+# 文字系统自判（send-voice 手打日文同样受益）。
+_CLONE_BUDGET_PER_CHAR_SEC: float = 0.45
+_CLONE_BUDGET_BASE_SEC: float = 10.0
+_CLONE_BUDGET_MIN_SEC: float = 45.0
+_CLONE_BUDGET_MAX_SEC: float = 190.0
+_CLONE_BUDGET_FAST_SEC: float = 15.0
+_CLONE_BUDGET_FOREIGN_PER_CHAR_SEC: float = 0.9
+_CLONE_BUDGET_FOREIGN_BASE_SEC: float = 15.0
+_CLONE_BUDGET_FOREIGN_MIN_SEC: float = 60.0
+_KANA_HANGUL_RE = re.compile(r"[\u3040-\u30ff\uac00-\ud7af]")
+
+
+def _is_foreign_slow_lang(text: str, lang: str) -> bool:
+    """待合成文本是否属「单字更慢」的外语档（ja/ko 显式或文字系统自判）。"""
+    lg = str(lang or "").strip().lower().split("-")[0]
+    if lg in ("ja", "ko"):
+        return True
+    t = str(text or "")
+    if not t:
+        return False
+    kana = len(_KANA_HANGUL_RE.findall(t))
+    return kana >= max(2, len(t) // 4)
+
+
+def clone_budget_sec(text: str, *, fast: bool = False, lang: str = "") -> float:
+    """交互式（有人在等）克隆合成的全链预算（秒）——按待合成字数动态。纯函数。
+
+    ``lang``：待合成文本的目标语种（#102 外语档系数）；空=按文本自判。
+    """
+    if fast:
+        return _CLONE_BUDGET_FAST_SEC
+    n = len(str(text or ""))
+    if _is_foreign_slow_lang(text, lang):
+        return max(_CLONE_BUDGET_FOREIGN_MIN_SEC,
+                   min(_CLONE_BUDGET_MAX_SEC,
+                       _CLONE_BUDGET_FOREIGN_BASE_SEC
+                       + _CLONE_BUDGET_FOREIGN_PER_CHAR_SEC * n))
+    return max(_CLONE_BUDGET_MIN_SEC,
+               min(_CLONE_BUDGET_MAX_SEC,
+                   _CLONE_BUDGET_BASE_SEC + _CLONE_BUDGET_PER_CHAR_SEC * n))
+
 
 def cleanup_tts_previews(max_age_sec: float = _DEFAULT_MAX_AGE_SEC) -> int:
     """P15-A: Delete WAV files older than max_age_sec from tmp_tts_preview/.
@@ -46,7 +104,8 @@ def cleanup_tts_previews(max_age_sec: float = _DEFAULT_MAX_AGE_SEC) -> int:
         return 0
     cutoff = time.time() - max_age_sec
     for f in _TTS_DIR.iterdir():
-        if f.suffix in (".wav", ".mp3", ".ogg") and f.is_file():
+        # .json = 复用契约 sidecar（见 record_preview_meta），随音频同窗清理
+        if f.suffix in (".wav", ".mp3", ".ogg", ".json") and f.is_file():
             try:
                 if f.stat().st_mtime < cutoff:
                     f.unlink(missing_ok=True)
@@ -56,6 +115,144 @@ def cleanup_tts_previews(max_age_sec: float = _DEFAULT_MAX_AGE_SEC) -> int:
     if removed:
         logger.info("tts_preview cleanup: removed %d old file(s)", removed)
     return removed
+
+
+# ── 「所听即所发」复用契约（P1 2026-08-05）────────────────────────────────────
+# 试听（/api/voice/tts-test）与发送（/api/unified-inbox/send-voice）此前是两次
+# 独立合成：坐席听到 A 声、客户可能收到 B 声（克隆链中途恢复/掉线时 provider
+# 漂移），且同一句话烧两份 TTS/字符额度。契约＝试听落盘时写 <音频名>.json
+# sidecar（文本指纹+音色键+元数据），发送带回 filename，服务端**验完整性后
+# 直接把试听音频送进出站管线**。任何校验不过一律回落现场合成——复用是省钱
+# 与一致性优化，绝不能成为发送失败的新原因。
+#
+# persona_key 用**请求侧**的 persona_id（含空串=跟随会话），而非解析后的
+# 人设：试听与发送以同一组请求入参解析音色（「试听=发送」契约），请求键相同
+# ⇒ 解析结果相同；解析后的真实人设/后端记进 meta 只作观测与镜像徽标。
+
+_PREVIEW_NAME_RE = re.compile(r"^ttspreview-[0-9a-f]{10}\.(mp3|ogg|wav)$")
+REUSE_MAX_AGE_SEC: float = 2 * 3600.0   # 同文本同音色的音频不会因时间变质，TTL 只为兜异常
+
+# 复用观测（进程级，风格对齐 outbound_translation_stats）：从第一天就积累
+# 「记了多少契约 / 命中多少 / 未命中卡在哪一环」——miss 原因分布直接指导调参
+# （expired 多=坐席隔久才发该放宽 TTL；text_mismatch 多=改稿忘重生成该强化引导）。
+_REUSE_STATS: Dict[str, Any] = {"recorded": 0, "hits": 0, "misses": {}}
+_MISS_REASON_CAP = 16   # 原因种类有限且代码可控，cap 仅防未来枚举失控
+
+
+def _record_miss(reason: str) -> None:
+    r = str(reason or "unknown")
+    m = _REUSE_STATS["misses"]
+    if r in m or len(m) < _MISS_REASON_CAP:
+        m[r] = int(m.get(r, 0)) + 1
+
+
+def reuse_stats_snapshot() -> Dict[str, Any]:
+    """观测快照（无敏感字段）：hits/recorded/misses{reason: n}/hit_rate。"""
+    misses = dict(_REUSE_STATS["misses"])
+    hits = int(_REUSE_STATS["hits"])
+    attempts = hits + sum(misses.values())
+    return {
+        "recorded": int(_REUSE_STATS["recorded"]),
+        "hits": hits,
+        "misses": misses,
+        "attempts": attempts,
+        "hit_rate": round(hits / attempts, 4) if attempts else None,
+    }
+
+
+def preview_text_key(text: Any) -> str:
+    """试听/发送两侧共用的文本指纹（两侧路由均已 strip，这里再 strip 一次防漂移）。"""
+    return hashlib.sha1(str(text or "").strip().encode("utf-8")).hexdigest()
+
+
+def record_preview_meta(filename: str, *, text: Any, persona_key: str,
+                        meta: Optional[Dict[str, Any]] = None,
+                        target_lang: str = "") -> bool:
+    """试听成功后登记复用 sidecar（best-effort：失败只丢复用资格，不影响试听）。
+
+    ``target_lang``（P0-V2 译声）：试听时的**已解析**目标语（''=未翻译）。文本
+    指纹仍按**请求原文**记（试听=发送以同一组请求入参解析），语言单独成维度
+    ——否则「试听日语 → 切韩语发送」会按 text+persona 命中而把日语音频发出去。
+    调用方负责传入已归一的语种码（本模块只做 strip/lower，不引翻译栈依赖）。
+    """
+    fn = str(filename or "").strip()
+    if not _PREVIEW_NAME_RE.match(fn):
+        return False
+    try:
+        payload = {
+            "v": 1,
+            "text_sha1": preview_text_key(text),
+            "persona_key": str(persona_key or ""),
+            "target_lang": str(target_lang or "").strip().lower(),
+            "created_ts": time.time(),
+            "meta": dict(meta or {}),
+        }
+        side = _TTS_DIR / (fn + ".json")
+        side.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _REUSE_STATS["recorded"] = int(_REUSE_STATS["recorded"]) + 1
+        return True
+    except Exception:
+        logger.debug("record_preview_meta 失败（放弃复用资格）", exc_info=True)
+        return False
+
+
+def resolve_reusable_preview(
+    filename: str, *, text: Any, persona_key: str,
+    max_age_sec: float = REUSE_MAX_AGE_SEC, target_lang: str = "",
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """发送侧校验入口（带观测计数）：命中/未命中原因自动进 reuse_stats_snapshot。"""
+    info, why = _resolve_reusable_preview(
+        filename, text=text, persona_key=persona_key, max_age_sec=max_age_sec,
+        target_lang=target_lang)
+    if info is not None:
+        _REUSE_STATS["hits"] = int(_REUSE_STATS["hits"]) + 1
+    else:
+        _record_miss(why)
+    return info, why
+
+
+def _resolve_reusable_preview(
+    filename: str, *, text: Any, persona_key: str,
+    max_age_sec: float = REUSE_MAX_AGE_SEC, target_lang: str = "",
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """发送侧校验：返回 ``({"path": Path, "meta": dict}, "")`` 或 ``(None, 原因)``。
+
+    校验链（宁可回落合成不可发错内容）：文件名白名单（无路径分隔符，防穿越）→
+    音频在 → sidecar 在且可解析 → 音色键一致 → 文本指纹一致 → **目标语一致**
+    （P0-V2 译声维度；旧 sidecar 无键按 '' 兼容=只匹配未翻译发送）→ 未过期 → 非空壳。
+    """
+    fn = str(filename or "").strip()
+    if not _PREVIEW_NAME_RE.match(fn):
+        return None, "bad_name"
+    audio = _TTS_DIR / fn
+    if not audio.is_file():
+        return None, "missing_audio"
+    side = _TTS_DIR / (fn + ".json")
+    if not side.is_file():
+        return None, "no_sidecar"
+    try:
+        payload = json.loads(side.read_text(encoding="utf-8"))
+    except Exception:
+        return None, "bad_sidecar"
+    if str(payload.get("persona_key") or "") != str(persona_key or ""):
+        return None, "persona_mismatch"
+    if str(payload.get("text_sha1") or "") != preview_text_key(text):
+        return None, "text_mismatch"
+    if (str(payload.get("target_lang") or "").strip().lower()
+            != str(target_lang or "").strip().lower()):
+        return None, "lang_mismatch"
+    try:
+        age = time.time() - float(payload.get("created_ts") or 0.0)
+    except (TypeError, ValueError):
+        return None, "bad_sidecar"
+    if age < 0 or age > max_age_sec:
+        return None, "expired"
+    try:
+        if audio.stat().st_size < 512:
+            return None, "too_small"
+    except OSError:
+        return None, "missing_audio"
+    return {"path": audio, "meta": dict(payload.get("meta") or {})}, ""
 
 
 def _maybe_trigger_cleanup() -> None:

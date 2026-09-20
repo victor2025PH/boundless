@@ -96,13 +96,28 @@ def _dict_cfg(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _save_messenger_cfg(request, config_manager: Any, mr_cfg: Dict[str, Any]) -> None:
+def _save_messenger_cfg(
+    request, config_manager: Any, mr_cfg: Dict[str, Any],
+    patch: Optional[Dict[str, Any]] = None,
+) -> None:
+    """写回 messenger_rpa 配置段（内存）并持久化本次改动。
+
+    patch＝本次真正改动的最小键集（None → 保守整段 mr_cfg）；优先经
+    config_manager.save_overlay_patch 落 config.local.yaml overlay（保住主
+    config.yaml 注释/结构，值不固化进主文件）。兜底：方法缺失（简化 fake）
+    或返回非 bool（MagicMock 桩）→ 回落整文件 save()。
+    """
     root = getattr(config_manager, "config", None)
     if not isinstance(root, dict):
         root = {}
         config_manager.config = root
     root["messenger_rpa"] = mr_cfg
-    ok = config_manager.save()
+    section = patch if patch is not None else mr_cfg
+    saver = getattr(config_manager, "save_overlay_patch", None)
+    ok = (saver({"messenger_rpa": section} if section else {})
+          if callable(saver) else None)
+    if not isinstance(ok, bool):
+        ok = config_manager.save()
     if ok is False:
         raise HTTPException(500, tr(request, "err.rpa.save_config_failed"))
 
@@ -1186,13 +1201,15 @@ def register_messenger_rpa_routes(
     """挂 Messenger RPA 的 Web + REST 路由。"""
 
     # ── Web: HTML 页 ────────────────────────────────
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_messenger.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/messenger-rpa", response_class=HTMLResponse)
     async def messenger_rpa_page(request: Request):
-        # 手动调 page_auth（支持 sync 或 async 都在这里兜）
-        res = page_auth(request)
-        if hasattr(res, "__await__"):
-            await res
-        return templates.TemplateResponse(request, "messenger_rpa.html", {})
+        from fastapi.responses import RedirectResponse
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/messenger" + (f"?{q}" if q else ""), status_code=302
+        )
 
     # ── REST: 状态 ─────────────────────────────────
     @app.get("/api/messenger-rpa/status")
@@ -1379,7 +1396,9 @@ def register_messenger_rpa_routes(
                 mr_cfg[k] = mode
             else:
                 mr_cfg[k] = v
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        # 最小 patch＝body 命中白名单的键（dict_merge/规整后的最终值）
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={k: mr_cfg[k] for k in body.keys()})
         _refresh_service_runtime(request, mr_cfg)
         return {"ok": True, "updated_keys": list(body.keys())}
 
@@ -1407,7 +1426,8 @@ def register_messenger_rpa_routes(
         normalized = _normalize_profiles(request, rp_body)
         mr_cfg = copy.deepcopy(_messenger_cfg(config_manager))
         mr_cfg["reply_profiles"] = normalized
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={"reply_profiles": normalized})
         _refresh_service_runtime(request, mr_cfg)
         return {"ok": True, "reply_profiles": normalized}
 
@@ -1659,7 +1679,8 @@ def register_messenger_rpa_routes(
         normalized = _normalize_profiles(request, rp)
         before = copy.deepcopy(mr_cfg.get("reply_profiles") or {})
         mr_cfg["reply_profiles"] = normalized
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={"reply_profiles": normalized})
         _refresh_service_runtime(request, mr_cfg)
         store = _get_store(request)
         if store is not None and hasattr(store, "append_strategy_audit"):
@@ -1729,7 +1750,8 @@ def register_messenger_rpa_routes(
         normalized = _normalize_profiles(request, rp)
         before_profiles = copy.deepcopy(mr_cfg.get("reply_profiles") or {})
         mr_cfg["reply_profiles"] = normalized
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={"reply_profiles": normalized})
         _refresh_service_runtime(request, mr_cfg)
         store = _get_store(request)
         if store is not None and hasattr(store, "upsert_persona"):
@@ -1787,7 +1809,8 @@ def register_messenger_rpa_routes(
         rp["profiles"] = profiles
         normalized = _normalize_profiles(request, rp) if profiles else {"default": "", "profiles": []}
         mr_cfg["reply_profiles"] = normalized
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={"reply_profiles": normalized})
         _refresh_service_runtime(request, mr_cfg)
         store = _get_store(request)
         if store is not None and hasattr(store, "append_strategy_audit"):
@@ -1923,7 +1946,8 @@ def register_messenger_rpa_routes(
                 if not rp.get("default") and profiles:
                     rp["default"] = str((profiles[0] or {}).get("id") or "")
                 mr_cfg["reply_profiles"] = _normalize_profiles(request, rp) if profiles else {"default": "", "profiles": []}
-            _save_messenger_cfg(request, config_manager, mr_cfg)
+            _save_messenger_cfg(request, config_manager, mr_cfg,
+                                patch={"reply_profiles": mr_cfg["reply_profiles"]})
             _refresh_service_runtime(request, mr_cfg)
         elif target_type == "account":
             if not before:
@@ -2243,7 +2267,9 @@ def register_messenger_rpa_routes(
                 item.pop("persona_id", None)
             changed.append(aid)
         mr_cfg["accounts"] = accounts
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        # accounts 是 list → overlay 侧整体替换（_deep_merge 列表语义），传整表
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={"accounts": accounts})
         _refresh_service_runtime(request, mr_cfg)
         snap = _mobile_auto_snapshot(config_manager)
         snap["ok"] = True
@@ -2332,7 +2358,8 @@ def register_messenger_rpa_routes(
                 mr_cfg[k] = merged
             else:
                 mr_cfg[k] = v
-        _save_messenger_cfg(request, config_manager, mr_cfg)
+        _save_messenger_cfg(request, config_manager, mr_cfg,
+                            patch={k: mr_cfg[k] for k in body.keys()})
         try:
             from src.ai.audio_pipeline import reset_audio_pipeline
             reset_audio_pipeline()
@@ -4327,10 +4354,7 @@ def register_messenger_rpa_routes(
             from src.utils.persona_manager import PersonaManager
             from src.integrations.messenger_rpa.state_store import mrpa_chat_cid
             pm = PersonaManager.get_instance()
-            svc = getattr(
-                getattr(request, "app", None),
-                "state", type("_", (), {})()
-            )
+            svc = getattr(app, "state", type("_", (), {})())
             svc_obj = getattr(svc, "messenger_rpa_service", None)
             prefix = "messenger_rpa"
             try:

@@ -1,0 +1,57 @@
+---
+description: 经典后台（base.html 系）主题令牌、暗色对比度地板、侧栏分组折叠不变量与前端发布纪律速查
+globs: src/web/templates/**/*.html,src/web/static/theme-tokens.css,src/web/nav_schema.py
+alwaysApply: false
+---
+
+# 经典后台主题与可读性约定（2026-08-16 提亮批沉淀）
+
+三套 token 体系各管一段，**别混用**（工作台系另见 frontend-theme.mdc）：
+
+| 体系 | 定义处 | 消费面 |
+|---|---|---|
+| `--bg/--card/--input/--t/--t2/--t3/--bd/--bd2/--sb-*` | `base.html` `:root` + `[data-theme="dark"]` | 经典后台 30+ 管理页的 `<style>` 块与页面链 |
+| `--th-ink-*/--th-bg-*/--th-bd-*` | `static/theme-tokens.css`（**生成物**，源=`tools/inline_color_codemod.py` 色表，改表后 `--emit-css` 重生成，勿手改 css） | 模板内联 style 属性（迁移层） |
+| `--tk-*` | `workspace_base.html` | 工作台壳页面 + `_channel_body_*.html`（渠道体有 ratchet：**新代码禁再加 `--th-*`**，`tests/test_channel_theme_tokens.py` 会红） |
+
+## 暗色可读性地板（2026-08-16 收口，防回退钉在门禁里）
+
+`tests/test_theme_contrast_gate.py::_PAIRS_DARK_FLOORS`——高于 WCAG AA 的**提亮地板**：
+- 二级文字 `--t2`（暗 `#b4b8c0`）@卡面 ≥ 8.0
+- 三级文字 `--t3`（暗 `#9aa0aa`）@卡面/输入面 ≥ 5.5
+- 侧栏 `--sb-txt`（.72 白）≥ 8.0、`--sb-txt-dim`（.62 白）≥ 6.5
+- `--th-ink-slate4/gray4`（暗 `#9aa0aa`）≥ 5.5、`slate5/gray5`（暗 `#b4b8c0`）≥ 7.5
+
+改任何一侧（base.html 色板 / codemod 表 / workspace `--tk-text-muted`）**三处联动**，先跑该门禁。
+
+## 禁则（本批实录教训）
+
+1. **文字禁用 `opacity` 调灰**——透明度叠什么底变什么色，对比度不可控（暗色侧栏 50% 白
+   = 「整条侧栏发灰」主诉根源）。刻意压暗的锁定态（`.nav-locked`）除外。
+2. **说明类文字字号 ≥ .75rem**——`.f-hint` 曾是 .71rem×暗灰双重叠加（看不清主诉）。
+3. **暗色适配未做的页（卡底硬编码 `#fff`）不做单点文字 token 替换**——会产出「浅字浅底」
+   半暗怪胎（goal_report / contact360 / draft_review 属此类，整页暗色 pass 归 owner）。
+4. **暗色常驻面板**（messenger 控制台/弹层这类两主题恒深底）用**常量灰**（`#94a3b8`/
+   `--th-ink-slate3` 族），别用会翻转的 ink token（亮色主题下会变成深字配深底）。
+5. 新提示横幅/空态用 base.html 共享类 `.banner`（`-info/-warn/-danger`）与
+   `.empty-state`，别再逐页手写内联渐变。
+
+## 侧栏分组折叠不变量（2026-08-16 上线）
+
+- 完整模式分组头=真按钮（`.sb-sec-btn`/`.wsb-sec-btn`），开合状态存
+  `localStorage.sb_groups_v1`，**后台壳与工作台壳共用同键**（两壳状态一致）。
+- 含当前激活页的组**强制展开**（load 时判 `.active`）。
+- 收起组的待办徽标由 `syncGrpRollups()` 上卷到组头（`setBadge` 尾部联动）——
+  **折叠不藏待办**，改徽标链别断这口。
+- 60px 图标轨 / 窄屏轨下折叠让位：`.sidebar.collapsed .sb-grp-items{display:block!important}`
+  （图标必须全部可见），别删这条兜底。
+- 简洁模式与矩阵上下文组仍是纯标签，不折叠。
+
+## 发布纪律（改这类文件必做）
+
+- 模板/i18n/CSS 热更新**直接上生产**：每次保存必须自洽（函数先挂 window 再写 onclick）。
+- 静态 CSS 改动 bump `?v=`（theme-tokens.css 引用点共 5 处：base / workspace_base /
+  ops/contacts / ops/merge_reviews / ops/mobile_handoffs）+ `static/workspace/ui-build.txt` 双戳。
+- 收口跑：`test_theme_contrast_gate` / `test_template_inline_color_ratchet`（含 fallback ≡
+  :root 校验）/ `test_channel_theme_tokens` / `test_css_token_refs` / `test_brand_token_bridge`，
+  或直接 `scripts\gate_sweep.ps1`。
