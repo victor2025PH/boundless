@@ -386,80 +386,135 @@ UninstallCaption "$(cxUnCaption)"
   ; Always, not only on failure: "family empty and nothing locked" is exactly the
   ; line that proves the next dialog came from the extract stage instead of here.
   !insertmacro cxLogState "pre-uninstall"
-  ; C10 -- installer unit only: the uninstaller expands this macro too (via
-  ; un.checkAppRunning) and there is no "old version" for it to pre-clean.
+  ; C11 -- installer unit only: the uninstaller expands this macro too (via
+  ; un.checkAppRunning) and there is no "old version" for it to remove.
   !ifndef BUILD_UNINSTALLER
-    !insertmacro cxPreCleanOldInstall
+    !insertmacro cxTakeOverOldUninstall
   !endif
 !macroend
 
-; ---- C10: empty $INSTDIR ourselves BEFORE the old uninstaller runs (2026-09-20) --
+; ---- C11: WE remove the old version; the old uninstaller never runs ----------
+; Round 4, and the first one whose result does not depend on luck.
+;
 ; C9 (customRemoveFiles) lives in the uninstaller we SHIP, so it only protects the
-; NEXT upgrade. The hop that installs it (1.0.92 -> 1.0.93) still runs the OLD
-; uninstaller with `--updated`, i.e. un.atomicRMDir over 9429 files, and any one
-; busy file there = rollback + Abort(2) x5 = 「智聊 无法关闭」 from inside
-; installUtil.nsh -- before customUnInstallCheck can act. The field's 「点两次取消
-; 就能装完」 is exactly two uninstallOldVersion rounds each giving up.
-; What we DO control is what the old uninstaller finds when it starts. This macro
-; runs at the end of customCheckAppRunning (family already reaped, installer unit,
-; before uninstallOldVersion) and empties $INSTDIR NON-atomically: Delete /
-; RMDir /r, errors ignored, whatever will not go is left in place. The old
-; uninstaller itself stays (the template runs it in place via `_?=`), so its
-; atomic pass then has a handful of entries to rename instead of 9429 -- the
-; window in which a transient AV/indexer lock can veto the upgrade shrinks by
-; four orders of magnitude, and its 5x1s retry now covers a stragglers list
-; instead of a whole tree. `--updated` is NOT touched (it is also the
-; "upgrade never wipes data" evidence for both uninstaller-side guards), nothing
-; under %APPDATA% is looked at, and nothing is queued for REBOOTOK/RunOnce (the
-; new version lands in this very directory next).
-; Trade-off, stated plainly: after this ran, an install that fails mid-way leaves
-; the old program dir already empty (old version unusable, user data intact).
-; The template's own atomicRMDir success path has the same consequence (it
-; moves the whole tree away), so this is not a new failure mode.
-; Upgrade detection = the old uninstaller exists in $INSTDIR. Fresh install (dir
-; missing or without it) returns without touching anything.
-!macro cxPreCleanOldInstall
+; NEXT upgrade -- the hop that installs it still runs the OLD uninstaller with
+; `--updated`, i.e. un.atomicRMDir over 9429 files, and any ONE busy file there is
+; rollback + Abort(2), five times, then MessageBox appCannotBeClosed from inside
+; installUtil.nsh's UninstallLoop -- a place customUnInstallCheck cannot reach
+; (handleUninstallResult runs only AFTER that loop gave up).
+;
+; C10 (Devin, 2026-09-20) tried to shrink the exposure: empty $INSTDIR ourselves
+; first so the atomic pass has a handful of entries instead of 9429. MEASURED, and
+; it does not work -- the file that is locked is exactly the file we also cannot
+; delete, so it stays as a leftover and vetoes the atomic pass just the same:
+;   A 1.0.92 -> 1.0.93 (no C10): old-uninstall-failed=1
+;   B 1.0.92 -> 1.0.94 (C10)   : preclean 9429 -> leftovers=2, old-uninstall-failed=1
+; Shrinking the candidate set only helps a RANDOM transient lock; it cannot help
+; the case the field actually reports, where one file is held across the upgrade.
+;
+; So stop negotiating with that step and take it over. installUtil.nsh's
+; uninstallOldVersion returns EARLY, with $R0 = 0 and no errors, when the old
+; UninstallString is not in the registry:
+;   ${if} $uninstallString == "" ... ClearErrors / Return
+; (handleUninstallResult then treats it as success -- no loop, no dialog, and the
+; ops path already relies on this: the 173 robocopy-bypass machines have no
+; uninstaller and upgrade by plain overwrite, see chatx-desktop-install.mdc.)
+; Removing the uninstall entry is also EXACTLY what a successful old uninstall
+; would have done (uninstaller.nsh: DeleteRegKey UNINSTALL_REGISTRY_KEY), and the
+; new install rewrites it at the end, so no dangling "Apps & features" row.
+;
+; Therefore, per root key, in the installer unit, after the family is reaped:
+;   1. sweep the old install dir NON-atomically (locked files stay as leftovers --
+;      harmless, extractAppPackage overwrites that tree next);
+;   2. delete the uninstall entry so the template skips running the old
+;      uninstaller at all -> no atomicRMDir, no Abort, no retry loop, no dialog,
+;      and the outcome no longer depends on whether anything is locked.
+; `--updated` is never touched -- we do not run the old uninstaller, so the
+; "upgrade never wipes data" question does not arise; %APPDATA% is never looked
+; at; nothing is queued for REBOOTOK/RunOnce ($INSTDIR is where the new version
+; lands, a queued delete would erase the fresh install).
+; Trade-off, stated plainly: an install that fails after this point leaves the old
+; program dir empty (old version unusable, user data intact). The template's own
+; atomicRMDir success path has the same consequence -- it moves the whole tree
+; away -- so this is not a new failure mode, but it IS no longer rollback-able.
+!macro cxTakeOverOldUninstall
+  DetailPrint "$(cxStPreClean)"
+  ; before-state in the same black box the rest of the upgrade writes to
+  nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$n=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue).Count; ('[{0}] oldrm start INSTDIR=$INSTDIR files={1}' -f (Get-Date -Format s),$$n) | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
+  Pop $R3
+  ; Both root keys, because the template itself runs uninstallOldVersion for
+  ; SHELL_CONTEXT and again for HKEY_CURRENT_USER when installMode == "all".
+  !insertmacro cxOldRemoveForRoot SHELL_CONTEXT
+  !insertmacro cxOldRemoveForRoot HKEY_CURRENT_USER
+  ; No registry entry (manual/bypass installs, see the 173 notes) but an old tree
+  ; sitting in our target dir: sweep it anyway, the template will skip regardless.
   ${If} ${FileExists} "$INSTDIR\${UNINSTALL_FILENAME}"
-    DetailPrint "$(cxStPreClean)"
-    ; before/after evidence in the same black box (best effort, PowerShell)
-    nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$n=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue).Count; ('[{0}] preclean start INSTDIR=$INSTDIR files={1}' -f (Get-Date -Format s),$$n) | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
-    Pop $R3
-    !insertmacro cxPreCleanSweep
-    ; leftovers = files a process or a scanner still holds; sweep the family once
-    ; more and retry ONCE (a handle we just killed needs a moment to go away)
-    ${If} $R3 != 0
-      !insertmacro cxReapFamily 10
-      Pop $R4
-      Sleep 1500
-      !insertmacro cxPreCleanSweep
+    !insertmacro cxSweepDirNonAtomic $INSTDIR
+  ${EndIf}
+  ; after-state: what survived and whether it is actually locked. When this net
+  ; fails in the field again, THIS is the evidence instead of another round of
+  ; guessing -- exactly how C10 was disproved.
+  nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$r=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue); $$o=@('[{0}] oldrm done leftovers={1}' -f (Get-Date -Format s),$$r.Count); $$r | Select-Object -First 20 | ForEach-Object { $$s='?'; try { $$h=[IO.File]::Open($$_.FullName,'Open','ReadWrite','None'); $$h.Close(); $$s='free' } catch { $$s='LOCKED' }; $$o+=('  left {0} {1}' -f $$s,$$_.FullName) }; $$o | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
+  Pop $R3
+!macroend
+
+; Per root key: sweep the install dir it points at, then drop its uninstall entry.
+; $R4 = UninstallString (proof an old entry exists), $R5 = that install dir.
+!macro cxOldRemoveForRoot ROOT_KEY
+  ReadRegStr $R4 ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    ${If} $R4 == ""
+      ReadRegStr $R4 ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY_2}" "UninstallString"
     ${EndIf}
-    nsExec::Exec `${CX_PS} "$$l=Join-Path $$env:TEMP 'chatx_install_reap.log'; $$r=@(Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $$_.Name -ne '${UNINSTALL_FILENAME}' }); $$o=@('[{0}] preclean done leftovers={1}' -f (Get-Date -Format s),$$r.Count); $$r | Select-Object -First 20 | ForEach-Object { $$s='?'; try { $$h=[IO.File]::Open($$_.FullName,'Open','ReadWrite','None'); $$h.Close(); $$s='free' } catch { $$s='LOCKED' }; $$o+=('  left {0} {1}' -f $$s,$$_.FullName) }; $$o | Add-Content -Path $$l -ErrorAction SilentlyContinue"`
-    Pop $R3
-  ${Else}
-    !insertmacro cxLogLine "[preclean] skipped: no ${UNINSTALL_FILENAME} in $INSTDIR (fresh install)"
+  !endif
+  ${If} $R4 != ""
+    ReadRegStr $R5 ${ROOT_KEY} "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+    ${If} $R5 == ""
+      StrCpy $R5 $INSTDIR
+    ${EndIf}
+    ; A directory only gets swept if it PROVES it is one of ours by holding our
+    ; uninstaller. A corrupt/foreign InstallLocation (think "C:\") must never
+    ; reach RMDir /r -- this predicate is the entire safety story of this macro.
+    ${If} ${FileExists} "$R5\${UNINSTALL_FILENAME}"
+      !insertmacro cxLogLine "[oldrm] ${ROOT_KEY}: sweeping $R5"
+      !insertmacro cxSweepDirNonAtomic $R5
+      ; $R3 = survivors. Dropping the uninstall entry for a tree we could NOT empty
+      ; and are NOT about to install over would orphan it with no way to uninstall,
+      ; so in that one case leave the registry alone and let the template try its
+      ; own way (status quo: C9 recovery + overwrite).
+      ${If} $R3 == 0
+      ${OrIf} $R5 == $INSTDIR
+        DeleteRegKey ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY}"
+        !ifdef UNINSTALL_REGISTRY_KEY_2
+          DeleteRegKey ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY_2}"
+        !endif
+        !insertmacro cxLogLine "[oldrm] ${ROOT_KEY}: uninstall entry removed, template will skip uninstallOldVersion"
+      ${Else}
+        !insertmacro cxLogLine "[oldrm] ${ROOT_KEY}: $R3 left in $R5 which is not our target dir, registry kept"
+      ${EndIf}
+    ${EndIf}
   ${EndIf}
 !macroend
 
-; One non-atomic pass over the top level of $INSTDIR. Everything except the old
-; uninstaller: directories via RMDir /r, files via Delete, both ignore errors
-; and leave stragglers. Sets $R3 = number of top-level entries that survived
-; (0 = clean). Enumerating while deleting is fine for FindFirst/FindNext (a
-; vanished entry just fails its own Delete).
-!macro cxPreCleanSweep
+; One non-atomic pass over the top level of TARGET_DIR: directories via RMDir /r,
+; files via Delete, errors ignored, stragglers left where they are. Sets $R3 =
+; number of top-level entries that survived (0 = clean). Enumerating while
+; deleting is fine for FindFirst/FindNext -- a vanished entry just fails its own
+; Delete. The uninstaller exe is NOT spared: nobody is going to run it.
+!macro cxSweepDirNonAtomic TARGET_DIR
   StrCpy $R3 0
   ClearErrors
-  FindFirst $R1 $R2 "$INSTDIR\*.*"
+  FindFirst $R1 $R2 "${TARGET_DIR}\*.*"
   ${IfNot} ${Errors}
     ${Do}
       ${If} $R2 != "."
       ${AndIf} $R2 != ".."
-      ${AndIf} $R2 != "${UNINSTALL_FILENAME}"
-        ${If} ${FileExists} "$INSTDIR\$R2\*.*"
-          RMDir /r "$INSTDIR\$R2"
+        ${If} ${FileExists} "${TARGET_DIR}\$R2\*.*"
+          RMDir /r "${TARGET_DIR}\$R2"
         ${Else}
-          Delete "$INSTDIR\$R2"
+          Delete "${TARGET_DIR}\$R2"
         ${EndIf}
-        ${If} ${FileExists} "$INSTDIR\$R2"
+        ${If} ${FileExists} "${TARGET_DIR}\$R2"
           IntOp $R3 $R3 + 1
         ${EndIf}
       ${EndIf}
@@ -469,7 +524,7 @@ UninstallCaption "$(cxUnCaption)"
     FindClose $R1
   ${EndIf}
   ClearErrors
-  !insertmacro cxLogLine "[preclean] sweep done, top-level entries left: $R3"
+  !insertmacro cxLogLine "[oldrm] swept ${TARGET_DIR}, top-level entries left: $R3"
 !macroend
 
 ; ---- old-version uninstall: recover instead of dying (2026-09-20) ------------
