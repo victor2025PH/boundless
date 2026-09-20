@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.0.95",
+    "date": "2026-09-21",
+    "title": {
+      "zh": "升级时「智聊 无法关闭」的最后一个出处：一条超过 Windows 路径长度上限的文件",
+      "en": "The last source of \"ChatX cannot be closed\" on upgrade: one file path over the Windows length limit"
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "1.0.94 的「移除旧版」已经由新安装包自己完成，但个别机器在进度条走到「正在安装智聊组件」时仍会弹一次「智聊 无法关闭。请手动关闭它，然后单击重试以继续。」。这次的出处和前两版都不一样，也和有没有关程序、有没有杀软无关",
+        "根因：随包的网页消息组件里带了一份用不上的 Playwright 精简版浏览器（headless shell），它内部有一条路径装到 C:\\Users\\<用户名>\\AppData\\Local\\Programs\\ 下后长达 264 个字符，超过了 Windows 传统的 260 字符上限。安装器（NSIS）删不掉它、也覆盖不了它——「移除旧版」阶段它是唯一残留（安装日志标注 left free，没有被任何进程占用），随后「安装组件」阶段对它的覆盖写失败，框架静默重试 5 次后弹窗",
+        "为什么前两版没剪掉它：打包配置里其实一直写着排除规则，但发版机上这个组件的依赖目录是一个目录联接（junction），打包工具的排除过滤器对联接内的内容不生效，于是 1.0.93/1.0.94 都把这棵树原样打进了包。本版打包时先把联接实体化为真实目录再剪，并加了门禁：包内任一路径按最长安装前缀折算超过上限，打包直接失败，不会再放出去",
+        "剪掉的只是 Playwright 自带的 headless shell 与录屏用 ffmpeg，网页消息登录所依赖的完整 Chromium 保留，回落逻辑显式改为使用它；语音转码用的 ffmpeg 是另一份、不受影响。安装包因此比 1.0.94 小约 82 MB",
+        "从 1.0.93 / 1.0.94 升上来的机器盘上仍留着那棵旧树：本版安装器在移除旧版之后多做一遍长路径清理（走 Windows 的 \\\\?\\ 扩展路径通道，实测 262 ～ 300 字符的路径均可删除），所以这一跳也不会再弹",
+        "诊断信息仍写入 %TEMP%\\chatx_install_reap.log，新增一行 longpath pass … removed=N failed=M",
+        "数据、各平台登录状态一律不受影响"
+      ],
+      "en": [
+        "1.0.94 already lets setup remove the old version itself, yet on some machines the dialog \"ChatX cannot be closed - close it manually and click Retry\" still appeared once, while the progress bar read \"Installing ChatX components\". This source is different from the previous two and has nothing to do with running processes or antivirus",
+        "Root cause: the bundled web-messenger component shipped an unused Playwright headless-shell browser, and one path inside it ends up 264 characters long once installed under C:\\Users\\<name>\\AppData\\Local\\Programs\\ - past the classic 260-character Windows limit. The installer (NSIS) can neither delete nor overwrite it: during \"remove old version\" it was the only leftover (logged as left free, held by no process), and the subsequent overwrite in the \"install components\" phase failed; the framework retries five times silently and then shows the dialog",
+        "Why it was never pruned before: the packaging config has excluded it all along, but on the release machine that component's dependency folder is a directory junction, and the packager's exclude filter does not apply to junction content - so 1.0.93 and 1.0.94 shipped the whole tree. The build now materialises junctions into real folders before pruning, and adds a gate: any packaged path that exceeds the limit against the longest install prefix fails the build outright",
+        "Only Playwright's headless shell and its screen-recording ffmpeg are removed; the full Chromium the web-messenger login relies on stays, and the fallback now selects it explicitly. The ffmpeg used for voice transcoding is a separate copy and is untouched. The installer is about 82 MB smaller than 1.0.94",
+        "Machines upgrading from 1.0.93 / 1.0.94 still have the old tree on disk: after removing the old version, this installer runs one more long-path cleanup pass (via the Windows \\\\?\\ extended-path channel; paths of 262-300 characters were verified deletable), so that hop no longer prompts either",
+        "Diagnostics still go to %TEMP%\\chatx_install_reap.log, now with an extra line: longpath pass ... removed=N failed=M",
+        "Data and platform logins are unaffected"
+      ]
+    }
+  },
+  {
     "version": "1.0.94",
     "date": "2026-09-20",
     "title": {
