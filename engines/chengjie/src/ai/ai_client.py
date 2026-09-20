@@ -4208,6 +4208,12 @@ class AIClient(LoggerMixin):
         _camp = (context.get("_camp_block") or "").strip()
         if _camp:
             prompt_parts.append(_camp)
+        # 域包上下文块（2026-09-20）：DomainHook.on_message_pre_process 返回的
+        # `_domain_context_block`（如 player_care 的只读事实 / 隐藏画像提示）。
+        # 注入侧决定有没有、说什么；这里有块即消费，放目标块之后、坐席指令之前。
+        _dom_blk = (context.get("_domain_context_block") or "").strip()
+        if _dom_blk:
+            prompt_parts.append(_dom_blk)
         # P22：坐席显式指令（「采纳并拟稿」/缺口追问）。放在目标块之后、情感块之前——
         # 权重高于「今日陪伴偏置」但低于危机/人设硬约束；力度为 none 时指令里已写
         # 「只共情带话题不推销」，与目标块不互斥。

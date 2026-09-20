@@ -1960,6 +1960,13 @@ class SkillManager(LoggerMixin):
                 user_context=user_context,
                 extra={"available_skills": set(self.skills.keys())},
             )
+            # 域包 pre-process hook（2026-09-20 接线，与 B 线 generate_inbox_draft 3f
+            # 同口径）：返回 dict 合并进 user_context，`_domain_context_block` 由
+            # ai_client 消费；每轮先清防跨轮泄漏。基类返回 None → 零影响。
+            user_context.pop("_domain_context_block", None)
+            _hook_inj = await _hooks.dispatch_pre_process(_hook_ctx)
+            if isinstance(_hook_inj, dict) and _hook_inj:
+                user_context.update(_hook_inj)
             intent = await _hooks.dispatch_intent_resolved(intent, _hook_ctx)
 
             # Intent inheritance: direct_chat fallback inherits recent business intent
@@ -2982,6 +2989,16 @@ class SkillManager(LoggerMixin):
                     reply, user_context=user_context, log_prefix=log_prefix,
                 )
 
+            # 5d2. 域包 post-process hook（2026-09-20 接线，与 B 线 9d 同口径）：
+            # 域包最后一道安全网；基类原样返回 → 零影响。事实块用完即清。
+            if reply:
+                _hook_ctx.intent = intent
+                _hook_ctx.last_reply = str(reply or "")
+                _post = await _hooks.dispatch_reply_post_process(str(reply), _hook_ctx)
+                if isinstance(_post, str) and _post:
+                    reply = _post
+            user_context.pop("_domain_context_block", None)
+
             # 5e. 危机人工接管/升级（R8）：severe 连续命中 → 触发 handoff 告警（默认关）。
             #     机器兜底之上让真人介入——自动陪聊对真实危机最负责任的处理。
             self._maybe_escalate_crisis(
@@ -3718,6 +3735,32 @@ class SkillManager(LoggerMixin):
             if (user_context.get("_daily_topics_hint") or "").strip():
                 _metric("daily_topics")
 
+            # 3f. 域包 pre-process hook（2026-09-20 接线）：DomainHook 早就定义了
+            # on_message_pre_process / on_reply_post_process，但此前没有任何产线
+            # 调过它们（域包写了也是死代码）。这里给 B 线（收件箱草稿 = replybus /
+            # WA / TG 自动回复的主路径）接上：hook 返回的 dict 合并进 user_context，
+            # 其中 `_domain_context_block` 由 ai_client 作为独立提示块消费。基类默认
+            # 返回 None → 无域包 / 域包未覆写时逐字节零影响。持久 user_context 每轮
+            # 先清该块，防上一轮的事实跨轮泄漏。
+            from src.hooks.base import HookContext
+            from src.hooks.registry import HookRegistry
+            user_context.pop("_domain_context_block", None)
+            _hook_ctx = HookContext(
+                text=text, user_id=str(user_id), chat_id=str(chat_key or ""),
+                reply_lang=str(user_context.get("reply_lang") or ""),
+                user_context=user_context,
+                extra={"platform": platform, "account_id": _acct_id,
+                       "conversation_id": str(conversation_id or ""),
+                       "chain": "draft"},
+            )
+            try:
+                _hook_inj = await HookRegistry.get_instance().dispatch_pre_process(_hook_ctx)
+                if isinstance(_hook_inj, dict) and _hook_inj:
+                    user_context.update(_hook_inj)
+                    _metric("domain_hook_pre")
+            except Exception:
+                self.logger.debug("%s域包 pre hook 跳过", log_prefix, exc_info=True)
+
             # 4. 意图识别（草稿模式不做意图继承/链跟踪，保持无状态纯净）
             intent = self._recognize_intent(text)
             user_context["current_intent"] = intent
@@ -4050,6 +4093,20 @@ class SkillManager(LoggerMixin):
                     "不产出草稿，会话留待处理", log_prefix)
                 return None
 
+            # 9d. 域包 post-process hook（与 3f 成对，2026-09-20 接线）：域包最后一道
+            # 安全网（story_matrix 的身份词 / 联系方式兜底句、player_care 的数字闸）。
+            # 基类原样返回 → 无域包时零影响；hook 异常由 registry 吞掉并放行原文。
+            try:
+                _hook_ctx.intent = intent
+                _hook_ctx.last_reply = str(reply or "")
+                _post = await HookRegistry.get_instance().dispatch_reply_post_process(
+                    str(reply or ""), _hook_ctx)
+                if isinstance(_post, str) and _post and _post != (reply or ""):
+                    reply = _post
+                    _metric("domain_hook_post_changed")
+            except Exception:
+                self.logger.debug("%s域包 post hook 跳过", log_prefix, exc_info=True)
+
             # 10. 回复后状态推进（陪伴 exchange_count/stage、剧情）+ 记忆写回
             try:
                 self._update_after_reply(
@@ -4110,6 +4167,7 @@ class SkillManager(LoggerMixin):
             user_context.pop("_media_pending_hint", None)
             user_context.pop("_song_coherence_hint", None)
             user_context.pop("_current_scene_note", None)
+            user_context.pop("_domain_context_block", None)
             user_context.pop("_media_sent_note", None)
             # P22：坐席指令是瞬时态，绝不能随 ContextStore flush 落库污染下轮自动草稿
             user_context.pop("_agent_instruction", None)
