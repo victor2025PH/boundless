@@ -252,6 +252,24 @@ def windows_view(wins: List[Any], accounts: List[Dict[str, Any]], statuses: List
     return out
 
 
+def readopt_binding(account: Dict[str, Any], accounts: List[Dict[str, Any]], wins: List[Any]) -> Optional[Dict[str, int]]:
+    """绑的 pid/hwnd 已不在桌面上（微信重开进程号变了）→ 若此刻恰好只剩一个没绑给别人的主窗，就把它接过来；
+    否则返回 None（有歧义不猜，靠 expect_wxid 校验或人重选）。纯函数，返回新的 {window_pid, window_hwnd}。"""
+    pid, hwnd = int(account.get("window_pid") or 0), int(account.get("window_hwnd") or 0)
+    if not (pid or hwnd):
+        return None
+    live = [(int(getattr(w, "hwnd", 0) or 0), int(getattr(w, "pid", 0) or 0)) for w in wins]
+    if any((pid and p == pid) or (hwnd and h == hwnd) for h, p in live):
+        return None
+    taken_pid = {int(a.get("window_pid") or 0) for a in accounts if a.get("account_id") != account.get("account_id")}
+    taken_hwnd = {int(a.get("window_hwnd") or 0) for a in accounts if a.get("account_id") != account.get("account_id")}
+    free = [(h, p) for h, p in live if p not in taken_pid and h not in taken_hwnd]
+    if len(free) != 1:
+        return None
+    h, p = free[0]
+    return {"window_pid": p if pid else 0, "window_hwnd": h if hwnd else 0}
+
+
 def get_or_create_pool(app: FastAPI, *, popen: Optional[Callable[..., Any]] = None) -> Any:
     """``app.state.wechat_pc_supervisors``（多账号池）懒创建；``app.state.wechat_pc_supervisor`` 始终指向主账号那个
     （老代码 / 测试把它置 None 即重建整池）。测试可传假 ``popen``。"""
@@ -596,6 +614,25 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
                               "window_pid": a["window_pid"], "expect_wxid": a["expect_wxid"]}
                              for a in accounts_from_cfg(_cfg(request))]}
 
+    async def _readopt(request: Request, sup: Any) -> None:
+        """启动/重启前：绑的进程已消失且桌面上只剩一个没人认领的微信窗 → 自动改绑并落盘，免得用户每次重开微信都要重选。"""
+        import asyncio
+        try:
+            from src.integrations.wechat_pc.win32_windows import find_wechat_main_windows
+            wins = await asyncio.get_event_loop().run_in_executor(None, find_wechat_main_windows)
+        except Exception:
+            return
+        accounts = accounts_from_cfg(_cfg(request))
+        me = next((a for a in accounts if a["account_id"] == sup.account_id), None)
+        if me is None:
+            return
+        new = readopt_binding(me, accounts, wins)
+        if new is None:
+            return
+        rows = merge_account_row(accounts, {"account_id": sup.account_id, **new}, primary_id=accounts[0]["account_id"])
+        _save_patch(request, _extra_rows(request, rows))
+        _resync_pool(request)
+
     @app.post("/api/setup/wechat_pc/copilot/start")
     async def api_pc_copilot_start(request: Request, _=Depends(api_auth)):
         _require_supervisor(request)
@@ -606,6 +643,7 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
             # 跨会话时说「driver_not_ready」会让人去查 uiautomation；点名 engine_not_interactive
             raise HTTPException(409, str(_drv.get("reason") or "driver_not_ready"))
         sup = _sup(request)
+        await _readopt(request, sup)
         sup.reset_backoff()
         r = await asyncio.get_event_loop().run_in_executor(None, lambda: sup.start(force=False))
         if not r.get("ok"):
@@ -627,6 +665,7 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         if not _drv.get("ok"):
             raise HTTPException(409, str(_drv.get("reason") or "driver_not_ready"))
         sup = _sup(request)
+        await _readopt(request, sup)
         sup.reset_backoff()
         r = await asyncio.get_event_loop().run_in_executor(None, sup.restart)
         if not r.get("ok"):

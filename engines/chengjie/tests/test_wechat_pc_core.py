@@ -545,6 +545,33 @@ def test_semi_sends_only_approved_and_acks_denials():
     assert fb.messages["张三"][-1].text == "在的" and fb.messages["张三"][-1].is_self
 
 
+def test_tick_sends_pending_outbound_before_opening_unread_sessions():
+    """出站优先：上一轮生成的回复不等本轮逐个打开未读会话再发；扫完入站有新消息再补认领一次，无新消息不多拉。"""
+    svc, fb, br, notes, clock = _svc("semi")
+    fb.sessions = [SessionRow("张三", unread=1), SessionRow("王五", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    fb.messages["王五"] = [Bubble("hi", runtime_id="9")]
+    svc.tick()
+    br.queue = [{"id": 7, "chat_key": "wx:name:张三", "text": "在的", "kind": "manual"}]
+    fb.messages["王五"].append(Bubble("又来了", runtime_id="10"))
+    fb.sessions[1].unread = 1
+    fb.actions.clear()
+    clock["t"] += 30
+    s = svc.tick()
+    assert s["sent"] == 1 and s["inbound"] == 1
+    opens = [a[1] for a in fb.actions if a[0] == "open_session"]
+    assert opens[0] == "张三" and "王五" in opens, opens
+    assert (7, True, "") in br.acks
+    # 没新入站的一轮：只认领一次（一次 GET），不重复拉
+    calls = {"n": 0}
+    orig = br.pull_outbound
+    br.pull_outbound = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1]
+    fb.sessions = [SessionRow("张三", unread=0), SessionRow("王五", unread=0)]
+    clock["t"] += 30
+    s = svc.tick()
+    assert s["inbound"] == 0 and calls["n"] == 1
+
+
 def test_auto_reply_requires_recent_inbound_and_freezes_on_guard_failure():
     svc, fb, br, notes, clock = _svc("auto_reply")
     # 无入站的会话 → 拒（仅回复原则）
@@ -780,7 +807,7 @@ def test_service_mic_busy_probe_errors_do_not_block_voice():
 
 def test_voice_send_is_atomic_within_tick_no_scan_between_record_and_finish():
     """D7：录音态期间绝不能 list_sessions/open_session 别的会话（语音会发进错的聊天）。
-    tick 单线程：_scan_inbound 先完整跑完，再 _drain_outbound；录音 → 灌音 → 发送在一次 send_voice 里原子完成。"""
+    tick 单线程：_drain_outbound 与 _scan_inbound 顺序执行不交错；录音 → 灌音 → 发送在一次 send_voice 里原子完成。"""
     svc, fb, br, notes, clock = _svc("auto_reply", voice=FakeVoice())
     fb.recorded_seconds = 9
     fb.sessions = [SessionRow("张三", unread=1), SessionRow("李四", unread=3)]
@@ -796,9 +823,9 @@ def test_voice_send_is_atomic_within_tick_no_scan_between_record_and_finish():
     i0, i1 = names.index("start_voice_record"), names.index("finish_voice_record")
     between = fb.actions[i0 + 1:i1]
     assert not [a for a in between if a[0] in ("list_sessions", "open_session", "read_visible_messages")], between
-    # 扫描（含李四）全部发生在录音开始之前
+    # 会话列表在录音前读过（同名计数新鲜）；别的会话（李四）的扫描整体在语音发完之后，绝不夹在中间
     assert names.index("list_sessions") < i0
-    assert any(a[0] == "open_session" and a[1] == "李四" for a in fb.actions[:i0])
+    assert any(a[0] == "open_session" and a[1] == "李四" for a in fb.actions[i1 + 1:])
 
 
 def test_service_manual_voice_bubble_still_mirrored_as_placeholder():

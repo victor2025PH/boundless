@@ -219,6 +219,63 @@ def test_inbox_pc_card_has_in_place_start_and_focus_actions():
     assert "devlink" not in P.ZH["inbox.acct.bridge_off_t"] and "devlink" not in P.EN["inbox.acct.bridge_off_t"]
 
 
+def _tpl_and_i18n_keys(html: str, prefix: str):
+    import re
+    return set(re.findall(r"(?:window\.)?Tf?\('(" + re.escape(prefix) + r"[a-z0-9_.]+)'", html))
+
+
+def test_inbox_pc_card_shows_identity_binding_and_mismatch():
+    """双开微信：工作台账号卡用心跳里的昵称/微信号做身份行、绑定标签（已绑定/账号不符/未绑窗口）、失配红条；
+    离线主 CTA 按 account_id 启动；模板引用的每个 inbox.acct.* 词条 zh/en 都有。"""
+    from pathlib import Path
+    from src.web.i18n_packs import inbox_workspace as P
+    root = Path(__file__).resolve().parent.parent / "src" / "web"
+    html = (root / "templates" / "unified_inbox.html").read_text(encoding="utf-8")
+    css = (root / "static" / "workspace" / "unified-inbox.css").read_text(encoding="utf-8")
+    assert "if(b.account_mismatch) return {cls:'mismatch'" in html, "失配优先于 blind/on"
+    assert "b.account_nick" in html and "b.account_bound_wxid" in html and "b.multi_wechat_unbound" in html
+    assert "startPcCopilot(this,'${esc(h.account_id)}')" in html and "'?account_id='+encodeURIComponent(accountId)" in html
+    for cls in (".acct-bind.ok", ".acct-bind.bad", ".acct-bind.warn", ".acct-mismatch", ".acct-mismatch.warn", ".acct-pill.hist-out.mismatch"):
+        assert cls in css, cls
+    for k in _tpl_and_i18n_keys(html, "inbox.acct.pc_") | _tpl_and_i18n_keys(html, "inbox.acct.bridge_"):
+        assert k in P.ZH and k in P.EN, k
+    for k in ("inbox.acct.bridge_mismatch", "inbox.acct.pc_bound_ok", "inbox.acct.pc_bound_bad", "inbox.acct.pc_unbound", "inbox.acct.pc_mismatch_bar"):
+        assert k in P.ZH and k in P.EN, k
+
+
+def test_pc_guide_step3_multi_account_cards_and_window_picker():
+    """第 ③ 步：/accounts 驱动的账号卡条（选中即切换状态卡/启停/自启目标）、失配红卡、
+    「选微信窗口」向导（/windows 列表 → 绑给当前账号 / 新建账号 / 解绑 / 移除），模板引用词条 zh/en 齐全。"""
+    from pathlib import Path
+    from src.web.i18n_packs import connect_guide as P
+    html = (Path(__file__).resolve().parent.parent / "src" / "web" / "templates" / "connect_guide.html").read_text(encoding="utf-8")
+    assert "api('/api/setup/wechat_pc/accounts')" in html and "api('/api/setup/wechat_pc/windows')" in html
+    assert "'/api/setup/wechat_pc/copilot/'+path+acctQ()" in html and "'/api/setup/wechat_pc/autostart'+acctQ()" in html
+    assert "hb.alive&&hb.account_mismatch) return {cls:'bad'" in html
+    assert "post('/api/setup/wechat_pc/accounts',{account_id:cur,window_pid:pid,window_hwnd:hwnd,expect_wxid:wxid})" in html
+    assert "{method:'DELETE'}" in html and "data-win=\"new\"" in html and "data-win=\"unbind\"" in html
+    assert "if(!multi){ box.innerHTML=''" in html, "单账号+单微信时不出卡条，老页面原样"
+    for k in _tpl_and_i18n_keys(html, "cg.pc."):
+        assert k in P.ZH and k in P.EN, k
+    for k in ("cg.pc.live_mismatch", "cg.pc.acct_pick_win", "cg.pc.win_bind_new", "cg.pc.win_conflict", "cg.pc.meta_who"):
+        assert k in P.ZH and k in P.EN, k
+
+
+def test_pc_readopt_binding_only_when_unambiguous():
+    """微信重开 pid 变了：桌面上恰好只剩一个没绑给别人的主窗 → 接过来；有歧义 / 原窗还在 / 没绑过 → None。"""
+    from types import SimpleNamespace as W
+    from src.web.routes.wechat_pc_setup_routes import readopt_binding
+    a = {"account_id": "a", "window_pid": 111, "window_hwnd": 0}
+    b = {"account_id": "b", "window_pid": 222, "window_hwnd": 0}
+    assert readopt_binding(a, [a, b], [W(hwnd=1, pid=111), W(hwnd=2, pid=222)]) is None, "原窗还在"
+    assert readopt_binding(a, [a, b], [W(hwnd=3, pid=333), W(hwnd=2, pid=222)]) == {"window_pid": 333, "window_hwnd": 0}
+    assert readopt_binding(a, [a, b], [W(hwnd=3, pid=333), W(hwnd=4, pid=444)]) is None, "两个都没主，不猜"
+    assert readopt_binding(a, [a, b], []) is None
+    assert readopt_binding({"account_id": "c"}, [a, b], [W(hwnd=3, pid=333)]) is None, "没绑过的不动"
+    h = {"account_id": "h", "window_pid": 0, "window_hwnd": 9}
+    assert readopt_binding(h, [h], [W(hwnd=5, pid=555)]) == {"window_pid": 0, "window_hwnd": 5}, "按 hwnd 绑的只更新 hwnd"
+
+
 def test_pc_guide_step3_test_message_has_explicit_received_state():
     """第 ③ 步「发一条测试消息」不再只滚一条旧消息：基线 last_ts 之后的对方新消息 → 收到了✓ + 漏斗事件 + rail 副文。"""
     from pathlib import Path

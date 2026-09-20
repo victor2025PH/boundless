@@ -120,6 +120,27 @@
   @keyframes cg-breathe{0%,100%{box-shadow:0 0 0 4px color-mix(in srgb,var(--lv) 18%,transparent);}50%{box-shadow:0 0 0 8px color-mix(in srgb,var(--lv) 6%,transparent);}}
   @keyframes cg-spin-fade{0%,100%{opacity:1;}50%{opacity:.35;}}
   .cg-log{margin:10px 0 0;padding:8px 10px;max-height:160px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.5;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--tk-text-muted);}
+  /* 双开微信：账号卡条（一个账号一张，点选中 → 下方状态卡/按钮都针对它）+ 窗口选择面板 */
+  .cg-accts{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px;}
+  .cg-acct{--av:#9ca3af;flex:1 1 200px;max-width:320px;display:flex;gap:10px;align-items:flex-start;border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;background:var(--tk-surface);cursor:pointer;text-align:left;font:inherit;color:inherit;position:relative;}
+  .cg-acct:hover{border-color:color-mix(in srgb,var(--cg-wx) 45%,var(--tk-border));}
+  .cg-acct.sel{border-color:var(--cg-wx);box-shadow:0 0 0 2px color-mix(in srgb,var(--cg-wx) 25%,transparent);}
+  .cg-acct .av{flex:none;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#fff;background:var(--cg-wx);}
+  .cg-acct .dot{position:absolute;right:10px;top:10px;width:9px;height:9px;border-radius:50%;background:var(--av);box-shadow:0 0 0 3px color-mix(in srgb,var(--av) 18%,transparent);}
+  .cg-acct.ok{--av:var(--cg-wx);} .cg-acct.warn{--av:#f59e0b;} .cg-acct.bad{--av:var(--tk-danger,#e11d48);} .cg-acct.busy{--av:var(--cg-accent,var(--tk-brand));}
+  .cg-acct .nm{font-size:13px;font-weight:800;color:var(--tk-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:16px;}
+  .cg-acct .id{font-size:11px;color:var(--tk-text-muted);font-family:ui-monospace,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cg-acct .tg{display:inline-block;margin-top:4px;padding:0 6px;border-radius:999px;font-size:10px;font-weight:700;line-height:16px;}
+  .cg-acct .tg.ok{color:var(--cg-wx);background:color-mix(in srgb,var(--cg-wx) 12%,transparent);} .cg-acct .tg.warn{color:#b45309;background:rgba(245,158,11,.14);} .cg-acct .tg.bad{color:var(--tk-danger,#e11d48);background:color-mix(in srgb,var(--tk-danger,#e11d48) 12%,transparent);}
+  .cg-acct.add{border-style:dashed;justify-content:center;align-items:center;color:var(--tk-text-muted);font-size:12.5px;font-weight:700;flex:0 1 160px;}
+  .cg-mis{display:flex;gap:8px;align-items:flex-start;margin:0 0 10px;padding:9px 12px;border-radius:10px;font-size:12.5px;line-height:1.45;color:var(--tk-danger,#e11d48);background:color-mix(in srgb,var(--tk-danger,#e11d48) 8%,transparent);border-left:4px solid var(--tk-danger,#e11d48);}
+  .cg-mis.warn{color:#b45309;background:rgba(245,158,11,.10);border-left-color:#f59e0b;}
+  .cg-mis:empty{display:none;}
+  .cg-wins{border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;background:var(--tk-surface);margin:0 0 10px;}
+  .cg-wins .h{font-size:13px;font-weight:800;color:var(--tk-text);display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .cg-win{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--tk-border);font-size:12.5px;}
+  .cg-win:first-of-type{border-top:0;} .cg-win .t{flex:1;min-width:0;} .cg-win .t small{display:block;color:var(--tk-text-muted);font-family:ui-monospace,Consolas,monospace;font-size:11px;}
+  .cg-win .acts{display:flex;gap:6px;flex-wrap:wrap;}
   /* 自启开关：iOS 式滑块 + 一句解释，比「复制注册计划任务命令」少三步 */
   .cg-toggle{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--tk-border);border-radius:12px;padding:12px 14px;background:var(--tk-surface);cursor:pointer;margin:0 0 6px;}
   .cg-toggle input{position:absolute;opacity:0;width:0;height:0;}
@@ -649,6 +670,8 @@
     var pol=state.policy||{work_hours:[8,23]}, hb=st.heartbeat||{};
     var manual=env&&env.can_manage===false;
     if(manual&&!(hb.alive)) return {cls:'manual',title:T('cg.pc.live_manual'),desc:T('cg.pc.live_manual_d'),acts:[]};
+    // 双开：驱动绑的窗里登的不是这个号 → 红卡（已停发），比 online/blind 优先
+    if(hb.alive&&hb.account_mismatch) return {cls:'bad',title:T('cg.pc.live_mismatch'),desc:Tf('cg.pc.live_mismatch_d',{seen:hb.account_nick||hb.account_wxid||'?',bound:hb.account_bound_wxid||'?'}),acts:['pick'].concat(st.attached?[]:['stop'])};
     switch(st.state){
       case 'online': return {cls:'ok',title:Tf('cg.pc.live_online',{tier:tierName(st.tier||hb.tier||'copilot')}),desc:Tf('cg.pc.live_online_d',{s:hb.age_sec||0,a:pol.work_hours[0],b:pol.work_hours[1]})+(st.attached?' · '+T('cg.pc.live_attached'):'')+voiceChip(hb),acts:st.attached?[]:['restart','stop']};
       case 'blind': return {cls:'warn',title:T('cg.pc.live_blind'),desc:T('cg.pc.live_blind_d'),acts:['focus'].concat(st.attached?[]:['stop'])};
@@ -664,7 +687,7 @@
   }
   function actBtn(a,st){
     var m={start:['primary','zap','cg.pc.btn_start'],retry:['primary','refresh','cg.pc.btn_retry'],restart:['','refresh','cg.pc.btn_restart'],stop:['ghost','pause','cg.pc.btn_stop'],
-           focus:['primary','arrow-up-right','cg.pc.focus_wechat'],log:['ghost','scroll','cg.pc.btn_log'],back1:['','reply','cg.pc.s1']}[a];
+           focus:['primary','arrow-up-right','cg.pc.focus_wechat'],log:['ghost','scroll','cg.pc.btn_log'],back1:['','reply','cg.pc.s1'],pick:['','wrench','cg.pc.acct_pick_win']}[a];
     if(!m) return '';
     // 退避倒计时也是每拍变的文本：按钮本身不重建，只改 <span> 文字（见 paintLive 末尾）
     if(a==='retry'&&st.backoff_sec>0) return '<button class="cg-btn" type="button" disabled>'+ic(m[1])+'<span id="cg-retry-in"></span></button>';
@@ -677,6 +700,9 @@
     // pid/已运行 每拍都变：放独立元素只改文本，卡片主体（含按钮）只在状态/文案变化时重建，
     // 否则每 3 秒 innerHTML 一次会把用户正要点的按钮换掉、日志区滚动归零
     var metaTxt=st.managed&&st.pid?Tf('cg.pc.meta_pid',{pid:st.pid,t:fmtUp(st.uptime_sec)}):'';
+    // 身份行：驱动从窗里读到的昵称/微信号（两个号同时登时一眼分清现在看的是哪个）
+    var hb=st.heartbeat||{}, who=hb.account_nick?(hb.account_nick+(hb.account_wxid?' · '+hb.account_wxid:'')):(hb.account_wxid||'');
+    if(who) metaTxt=(metaTxt?metaTxt+' · ':'')+Tf('cg.pc.meta_who',{who:who});
     var acts=IS_SUP?v.acts.map(function(a){ return actBtn(a,st); }).join(''):'';
     var agent=(!IS_SUP&&st.state!=='online'&&st.state!=='blind')?'<div class="meta">'+esc(T('cg.pc.agent_wait'))+'</div>':'';
     var log=(state.logOpen||st.state==='error')&&st.log_tail?'<pre class="cg-log">'+esc((st.log_tail||[]).join('\n')||T('cg.pc.log_empty'))+'</pre>':'';
@@ -691,12 +717,89 @@
     if(st.state==='online'&&!state.trackedOnline){ state.trackedOnline=true; track(st.attached?'online_attached':'online'); }
     var m=el('cg-manual'); if(m){ var showManual=(state.env&&state.env.can_manage===false); if(showManual&&!m.open&&!m.dataset.touched){ m.open=true; loadManual(); } }
   }
+  // ── 多账号（双开微信）：state.acct = 当前选中的 account_id（'' = 主账号）；状态卡 / 启停 / 自启都针对它 ──
+  function acctQ(){ return state.acct?('?account_id='+encodeURIComponent(state.acct)):''; }
+  function acctView(st){
+    var hb=st.heartbeat||{}, v=liveView(st,state.env), b=st.binding||{};
+    var who=hb.account_nick?(hb.account_nick+(hb.account_wxid?' · '+hb.account_wxid:'')):(hb.account_wxid||'');
+    var tag='';
+    if(hb.alive&&hb.account_mismatch) tag='<span class="tg bad">'+esc(T('cg.pc.acct_tag_mismatch'))+'</span>';
+    else if(b.window_pid||b.window_hwnd||b.expect_wxid) tag='<span class="tg ok">'+esc(T('cg.pc.acct_tag_bound'))+'</span>';
+    else if((state.env&&state.env.main_windows>1)||(state.accts&&state.accts.length>1)) tag='<span class="tg warn">'+esc(T('cg.pc.acct_tag_unbound'))+'</span>';
+    return {cls:v.cls,who:who,tag:tag,title:v.title};
+  }
+  function paintAccts(d){
+    var box=el('cg-accts'); if(!box) return;
+    var rows=d.accounts||[]; state.accts=rows; state.primaryId=d.primary_account_id||'';
+    // 只有一个账号且桌面上只有一个微信：不显示卡条，老页面原样（身份已在状态卡 meta 行）
+    var multi=rows.length>1||(state.env&&state.env.main_windows>1)||state.winOpen;
+    if(!multi){ box.innerHTML=''; box.style.display='none'; el('cg-mis').innerHTML=''; return; }
+    box.style.display='';
+    var html=rows.map(function(st){
+      var v=acctView(st), sel=(st.account_id===(state.acct||state.primaryId));
+      var init=(st.label||st.account_id||'?').trim().charAt(0).toUpperCase();
+      return '<button type="button" class="cg-acct '+v.cls+(sel?' sel':'')+'" data-acct="'+esc(st.account_id)+'" title="'+esc(v.title)+'"><span class="av">'+esc(init)+'</span><span style="flex:1;min-width:0;"><div class="nm">'+esc(st.label||st.account_id)+'</div><div class="id">'+esc(v.who||st.account_id)+'</div>'+v.tag+'</span><span class="dot"></span></button>';
+    }).join('');
+    if(IS_SUP) html+='<button type="button" class="cg-acct add" data-acct="__pick">'+ic('plus')+esc(T('cg.pc.acct_pick_win'))+'</button>';
+    if(box.dataset.html!==html){ box.dataset.html=html; box.innerHTML=html; }
+    // 红条：任一账号失配；琥珀条：桌面微信窗比已绑账号多（有个窗没人管 / 有账号没绑窗）
+    var mis=el('cg-mis'), mh='';
+    var bad=rows.filter(function(st){ var hb=st.heartbeat||{}; return hb.alive&&hb.account_mismatch; });
+    if(bad.length){ var hb=bad[0].heartbeat; mh='<div class="cg-mis">'+ic('alert')+'<span>'+esc(Tf('cg.pc.acct_mis_bar',{label:bad[0].label||bad[0].account_id,seen:hb.account_nick||hb.account_wxid||'?',bound:hb.account_bound_wxid||'?'}))+'</span></div>'; }
+    else { var unb=rows.filter(function(st){ var b=st.binding||{}; return !(b.window_pid||b.window_hwnd||b.expect_wxid); }).length;
+      if(state.env&&state.env.main_windows>1&&unb>0) mh='<div class="cg-mis warn">'+ic('alert')+'<span>'+esc(Tf('cg.pc.acct_unbound_bar',{n:state.env.main_windows,m:unb}))+'</span></div>'; }
+    if(mis&&mis.dataset.html!==mh){ mis.dataset.html=mh; mis.innerHTML=mh; }
+  }
   async function pollLive(){
     try{ if(!state.env) { try{ state.env=await api('/api/setup/wechat_pc/env'); }catch(_){ } }
-      var st=await api('/api/setup/wechat_pc/copilot/status'); paintLive(st);
+      var d=await api('/api/setup/wechat_pc/accounts'); paintAccts(d);
+      var rows=d.accounts||[], cur=state.acct||d.primary_account_id;
+      var st=null; for(var i=0;i<rows.length;i++){ if(rows[i].account_id===cur){ st=rows[i]; break; } }
+      if(!st){ state.acct=''; st=rows[0]||await api('/api/setup/wechat_pc/copilot/status'); }
+      paintLive(st);
+      var ck=el('cg-auto'); if(ck&&!ck.disabled&&typeof st.autostart==='boolean') ck.checked=st.autostart;
       // 在线 → 顺手刷新最近一条
       if(st.state==='online') pollRecentPc();
     }catch(e){ var b=el('cg-live'); if(b){ b.className='cg-live bad'; b.innerHTML='<div class="dot"></div><div class="body"><div class="ttl">'+esc(Tf('cg.error_generic',{why:String(e&&e.message||e)}))+'</div></div>'; } }
+  }
+  // ── 「从当前微信窗口选一个」绑定向导：列出桌面上的微信主窗，每行「绑给当前账号」/「新建账号绑它」，不用手填 pid ──
+  function newAcctId(){ var ids=(state.accts||[]).map(function(a){ return a.account_id; }); for(var i=2;i<99;i++){ var c='wechat-pc-'+i; if(ids.indexOf(c)<0) return c; } return 'wechat-pc-'+Date.now(); }
+  async function openWinPicker(){
+    state.winOpen=true; var box=el('cg-wins'); if(!box) return; box.style.display='';
+    box.innerHTML='<div class="h">'+esc(T('cg.pc.win_title'))+'</div><div class="cg-status">'+esc(T('cg.loading'))+'</div>';
+    try{
+      var d=await api('/api/setup/wechat_pc/windows'); var wins=d.windows||[], cur=state.acct||state.primaryId;
+      var curRow=(state.accts||[]).filter(function(a){ return a.account_id===cur; })[0]||{};
+      var h='<div class="h"><span>'+esc(T('cg.pc.win_title'))+'</span><button type="button" class="cg-btn ghost sm" data-win="close">'+ic('x')+esc(T('cg.pc.win_close'))+'</button></div><p class="cg-lead" style="margin:4px 0 6px;">'+esc(Tf('cg.pc.win_lead',{label:curRow.label||cur}))+'</p>';
+      if(!wins.length) h+='<div class="cg-status">'+esc(T('cg.pc.win_none'))+'</div>';
+      wins.forEach(function(w){
+        var who=w.nick?(w.nick+(w.wxid?' · '+w.wxid:'')):(w.wxid||''); var bound=w.bound_account_id;
+        var boundRow=(state.accts||[]).filter(function(a){ return a.account_id===bound; })[0];
+        var sub='PID '+w.pid+' · hwnd '+w.hwnd+(who?' · '+who:'')+(bound?' · '+Tf('cg.pc.win_bound_to',{label:boundRow?boundRow.label:bound}):' · '+T('cg.pc.win_unbound'));
+        var acts='';
+        if(bound===cur) acts='<button type="button" class="cg-btn ghost sm" data-win="unbind" data-pid="'+w.pid+'">'+esc(T('cg.pc.win_unbind'))+'</button>';
+        else { acts='<button type="button" class="cg-btn primary sm" data-win="bind" data-pid="'+w.pid+'" data-hwnd="'+w.hwnd+'" data-wxid="'+esc(w.wxid||'')+'">'+esc(T('cg.pc.win_bind_cur'))+'</button>';
+          if(!bound) acts+='<button type="button" class="cg-btn sm" data-win="new" data-pid="'+w.pid+'" data-hwnd="'+w.hwnd+'" data-wxid="'+esc(w.wxid||'')+'">'+esc(T('cg.pc.win_bind_new'))+'</button>'; }
+        h+='<div class="cg-win"><div class="t">'+esc(w.title||'WeChat')+'<small>'+esc(sub)+'</small></div><div class="acts">'+acts+'</div></div>';
+      });
+      if(cur&&cur!==state.primaryId) h+='<div class="cg-win"><div class="t">'+esc(Tf('cg.pc.win_remove_lead',{label:curRow.label||cur}))+'</div><div class="acts"><button type="button" class="cg-btn ghost sm" data-win="remove">'+esc(T('cg.pc.win_remove'))+'</button></div></div>';
+      h+='<div class="hint" style="font-size:11.5px;color:var(--tk-text-muted);margin-top:6px;">'+esc(T('cg.pc.win_hint'))+'</div>';
+      box.innerHTML=h;
+    }catch(e){ box.innerHTML='<div class="cg-card warn">'+esc(Tf('cg.error_generic',{why:String(e&&e.message||e)}))+'</div>'; }
+  }
+  async function winAct(b){
+    var a=b.getAttribute('data-win'), cur=state.acct||state.primaryId;
+    if(a==='close'){ state.winOpen=false; el('cg-wins').style.display='none'; el('cg-wins').innerHTML=''; return; }
+    b.disabled=true;
+    try{
+      var pid=parseInt(b.getAttribute('data-pid')||'0',10), hwnd=parseInt(b.getAttribute('data-hwnd')||'0',10), wxid=b.getAttribute('data-wxid')||'';
+      if(a==='bind'){ await post('/api/setup/wechat_pc/accounts',{account_id:cur,window_pid:pid,window_hwnd:hwnd,expect_wxid:wxid}); track('acct_bind'); }
+      else if(a==='unbind'){ await post('/api/setup/wechat_pc/accounts',{account_id:cur,window_pid:0,window_hwnd:0}); track('acct_unbind'); }
+      else if(a==='new'){ var id=newAcctId(); await post('/api/setup/wechat_pc/accounts',{account_id:id,label:Tf('cg.pc.acct_new_label',{n:(state.accts||[]).length+1}),window_pid:pid,window_hwnd:hwnd,expect_wxid:wxid}); state.acct=id; track('acct_add'); }
+      else if(a==='remove'){ if(!confirm(T('cg.pc.win_remove_confirm'))) { b.disabled=false; return; } await api('/api/setup/wechat_pc/accounts/'+encodeURIComponent(cur),{method:'DELETE'}); state.acct=''; track('acct_remove'); }
+      setStatus(T('cg.pc.win_saved'),'ok');
+      await pollLive(); await openWinPicker();
+    }catch(e){ var why=String(e&&e.message||e); setStatus(why.indexOf('binding_conflict')>=0?T('cg.pc.win_conflict'):Tf('cg.error_generic',{why:why}),'bad'); b.disabled=false; }
   }
   var _envTick=0;
   async function pollLiveAndEnv(){ if((_envTick++%3)===0){ try{ state.env=await api('/api/setup/wechat_pc/env'); syncRailFromState(); }catch(_){ } } await pollLive(); }
@@ -705,11 +808,12 @@
     if(a==='back1'){ show(0); return; }
     if(a==='log'){ state.logOpen=!state.logOpen; if(state.live) paintLive(state.live); return; }
     if(a==='focus'){ track('focus_wechat'); try{ await post('/api/setup/wechat_pc/launch-wechat'); }catch(e){ setStatus(Tf('cg.error_generic',{why:String(e&&e.message||e)}),'bad'); } setTimeout(pollLive,1200); return; }
+    if(a==='pick'){ openWinPicker(); return; }
     var path={start:'start',retry:'restart',restart:'restart',stop:'stop'}[a]; if(!path) return;
     if(btn){ btn.disabled=true; if(a!=='stop') btn.textContent=T('cg.pc.btn_starting'); }
     if(box&&a!=='stop'){ box.className='cg-live busy'; }
     track(a);
-    try{ var st=await post('/api/setup/wechat_pc/copilot/'+path); paintLive(st); track(a+'_ok'); }
+    try{ var st=await post('/api/setup/wechat_pc/copilot/'+path+acctQ()); paintLive(st); track(a+'_ok'); }
     catch(e){ var why=String(e&&e.message||e); var msg=why.indexOf('driver_not_ready')>=0?T('cg.pc.err_driver'):why.indexOf('admin_token_missing')>=0?T('cg.pc.err_token'):Tf('cg.pc.err_start',{why:why});
       setStatus(msg,'bad'); track(a+'_fail'); pollLive(); }
   }
@@ -730,6 +834,7 @@
     syncRailFromState();
     var auto=!!(state.policy&&state.policy.autostart);
     p.innerHTML='<p class="cg-lead">'+esc(T('cg.pc.s3_lead'))+'</p>'
+      +'<div id="cg-mis"></div><div class="cg-accts" id="cg-accts" style="display:none;"></div><div class="cg-wins" id="cg-wins" style="display:none;"></div>'
       +'<div class="cg-live" id="cg-live" role="status" aria-live="polite"><div class="dot"></div><div class="body"><div class="ttl">'+esc(T('cg.loading'))+'</div></div></div>'
       +(IS_SUP?'<label class="cg-toggle"><input type="checkbox" id="cg-auto" '+(auto?'checked':'')+'><span class="sw"></span><span class="txt"><b>'+esc(T('cg.pc.autostart'))+'</b><small>'+esc(T('cg.pc.autostart_d'))+'</small></span><span class="cg-status" id="cg-auto-st"></span></label>':'')
       +'<div class="cg-sec"><div class="cg-sec-h">'+ic('chat')+esc(T('cg.pc.test_title'))+'</div><p class="cg-lead">'+esc(T('cg.pc.test_lead'))+'</p><div id="cg-recent"></div></div>'
@@ -737,10 +842,13 @@
       +FAQ.map(function(f){ return '<tr><td>'+esc(f.code)+'</td><td>'+esc(f.meaning)+'</td><td>'+esc(f.fix)+'</td></tr>'; }).join('')+'</tbody></table></details>'
       +'<details class="cg-adv" id="cg-manual"><summary>'+ic('wrench')+esc(T('cg.pc.adv_title'))+'</summary><div id="cg-manual-body"></div></details>';
     el('cg-live').addEventListener('click',function(e){ var b=e.target.closest('button[data-act]'); if(b) doAct(b.getAttribute('data-act'),b); });
+    el('cg-accts').addEventListener('click',function(e){ var b=e.target.closest('button[data-acct]'); if(!b) return; var id=b.getAttribute('data-acct');
+      if(id==='__pick'){ openWinPicker(); return; } state.acct=(id===state.primaryId)?'':id; state.logOpen=false; track('acct_switch'); pollLive(); if(state.winOpen) openWinPicker(); });
+    el('cg-wins').addEventListener('click',function(e){ var b=e.target.closest('button[data-win]'); if(b) winAct(b); });
     var man=el('cg-manual'); man.addEventListener('toggle',function(){ man.dataset.touched='1'; if(man.open&&!state.manual) loadManual(); });
     var ck=el('cg-auto'); if(ck) ck.onchange=async function(){
       var on=ck.checked; ck.disabled=true; el('cg-auto-st').textContent=T('cg.kf.saving'); el('cg-auto-st').className='cg-status';
-      try{ var d=await post('/api/setup/wechat_pc/autostart',{enabled:on}); state.policy.autostart=d.autostart; el('cg-auto-st').textContent=T(d.autostart?'cg.pc.autostart_on':'cg.pc.autostart_off'); el('cg-auto-st').className='cg-status ok'; track(on?'autostart_on':'autostart_off'); }
+      try{ var d=await post('/api/setup/wechat_pc/autostart'+acctQ(),{enabled:on}); if(!state.acct) state.policy.autostart=d.autostart; el('cg-auto-st').textContent=T(d.autostart?'cg.pc.autostart_on':'cg.pc.autostart_off'); el('cg-auto-st').className='cg-status ok'; track(on?'autostart_on':'autostart_off'); }
       catch(e){ ck.checked=!on; el('cg-auto-st').textContent=Tf('cg.error_generic',{why:String(e&&e.message||e)}); el('cg-auto-st').className='cg-status bad'; }
       finally{ ck.disabled=false; }
     };

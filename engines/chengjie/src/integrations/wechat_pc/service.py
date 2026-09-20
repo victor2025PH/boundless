@@ -12,6 +12,8 @@
    裁决 → :class:`GuardedSender` 五步发送 → ``ack``。守卫在 title/echo 步失败 → **冻结本账号自动发送**
    ``freeze_on_guard_fail_sec``，绝不盲重试；裁决不通过 → ack 失败（进人审队列可见）。
 
+每 tick 顺序：巡检 → 读会话列表 → **先出站**（上轮已生成的回复不等本轮逐个开未读会话）→ 入站 → 有新入站再补一次出站。
+
 HTTP 经 :class:`BridgeClient`（``http`` 可注入）；时间/睡眠可注入；所有异常在 tick 内吞掉并计数。
 """
 from __future__ import annotations
@@ -698,14 +700,20 @@ class WeChatPcService:
             self._seen[chat_key] = set(list(seen)[-2000:])
         return n
 
-    def _scan_inbound(self) -> int:
-        from src.integrations.wechat_pc.policy import is_system_session
-        all_rows = self.backend.list_sessions()
+    def _list_sessions(self) -> List[Any]:
+        """读一次会话列表并刷新同名计数（出站的同名歧义守卫依赖它）；便宜，贵的是逐个打开未读会话。"""
+        all_rows = list(self.backend.list_sessions())
         counts: Dict[str, int] = {}
         for r in all_rows:
             nm = normalize_display_name(r.display_name)
             counts[nm] = counts.get(nm, 0) + 1
         self._visible_name_counts = counts
+        return all_rows
+
+    def _scan_inbound(self, all_rows: Optional[List[Any]] = None) -> int:
+        from src.integrations.wechat_pc.policy import is_system_session
+        if all_rows is None:
+            all_rows = self._list_sessions()
         rows = [r for r in all_rows if int(r.unread or 0) > 0 and not is_system_session(r.display_name)]
         handled = 0
         for row in rows[: self.max_sessions_per_tick]:
@@ -1138,8 +1146,13 @@ class WeChatPcService:
                 if self.account_mismatch and self._freezes.get(self.ACCOUNT_MISMATCH, 0.0) <= self._now():
                     self.freeze(3600.0, self.ACCOUNT_MISMATCH)
                 self._refresh_voice_ready()
-                summary["inbound"] = self._scan_inbound()
+                # 出站优先：上一轮已生成的回复先发，不等本轮逐个打开未读会话（最多 5 个×几秒）再发；
+                # 同名计数用刚读的列表刷新过，守卫不失准。扫完入站若有新消息再补一次认领，保留「同一轮内秒回」的机会
+                rows = self._list_sessions()
                 summary["sent"] = self._drain_outbound()
+                summary["inbound"] = self._scan_inbound(rows)
+                if summary["inbound"] > 0:
+                    summary["sent"] += self._drain_outbound()
         except Exception:
             self.stats.errors += 1
             logger.debug("[wechat_pc] tick 异常", exc_info=True)

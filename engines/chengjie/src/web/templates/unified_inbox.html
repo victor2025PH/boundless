@@ -3267,6 +3267,9 @@ function _bridgePresence(h){
     :(b.tier==='auto_reply')?window.T('inbox.acct.bridge_tier_auto_reply')
     :window.T('inbox.acct.bridge_tier_copilot');
   if(b.alive){
+    // 双开微信：驱动绑的窗里登的不是这个号 → 已停发（比「窗口不可见」更要紧：发错号比不发严重）
+    if(b.account_mismatch) return {cls:'mismatch', text:window.T('inbox.acct.bridge_mismatch'),
+      tip:window.Tf('inbox.acct.bridge_mismatch_t',{seen:b.account_nick||b.account_wxid||'?',bound:b.account_bound_wxid||'?'})};
     // 进程在线但读不到屏（微信收进托盘 / 退出登录）：不能报「在线」——消息此刻进不来
     if(b.readable===false) return {cls:'blind', text:window.T('inbox.acct.bridge_blind'), tip:window.T('inbox.acct.bridge_blind_t')};
     return {cls:'on', text:window.Tf('inbox.acct.bridge_on',{tier:tier}), tip:window.T('inbox.acct.bridge_on_t')};
@@ -3286,8 +3289,16 @@ function _pcCopilotCardHtml(hist){
   if(rows.length){
     body=rows.map(h=>{
       const bp=_bridgePresence(h);
-      const pill=bp?`<span class="acct-pill ${bp.cls==='on'?'hist-live':(bp.cls==='blind'?'hist-blind':'hist-out')}" title="${esc(bp.tip)}">${esc(bp.text)}</span>`
+      const pill=bp?`<span class="acct-pill ${bp.cls==='on'?'hist-live':(bp.cls==='blind'?'hist-blind':'hist-out')}${bp.cls==='mismatch'?' mismatch':''}" title="${esc(bp.tip)}">${esc(bp.text)}</span>`
                    :`<span class="acct-pill hist-reg" title="${esc(window.T('inbox.acct.desk_tag_t'))}">${esc(window.T('inbox.acct.desk_tag'))}</span>`;
+      // 身份行：驱动从微信窗里读到的昵称 / 微信号（没读到就还是 account_id）——两个号同时登时一眼分清哪张卡是哪个号
+      const b=h.bridge||{};
+      const who=b.account_nick?`${b.account_nick}${b.account_wxid?' · '+b.account_wxid:''}`:(b.account_wxid||'');
+      const idLine=who?esc(who):esc(_maskAcctId(h.account_id));
+      const bindTag=b.account_bound_wxid?`<span class="acct-bind ${b.account_mismatch?'bad':'ok'}" title="${esc(window.Tf('inbox.acct.pc_bound_t',{wxid:b.account_bound_wxid}))}">${esc(window.T(b.account_mismatch?'inbox.acct.pc_bound_bad':'inbox.acct.pc_bound_ok'))}</span>`
+        :(b.multi_wechat_unbound?`<span class="acct-bind warn" title="${esc(window.T('inbox.acct.pc_unbound_t'))}">${esc(window.T('inbox.acct.pc_unbound'))}</span>`:'');
+      const bar=b.account_mismatch?`<div class="acct-mismatch">${uiIcon('alert',14)}<span>${esc(window.Tf('inbox.acct.pc_mismatch_bar',{seen:b.account_nick||b.account_wxid||'?',bound:b.account_bound_wxid||'?'}))}</span></div>`
+        :(b.multi_wechat_unbound?`<div class="acct-mismatch warn">${uiIcon('alert',14)}<span>${esc(window.Tf('inbox.acct.pc_unbound_bar',{n:b.main_windows||2}))}</span></div>`:'');
       // 主 CTA 与状态相称：离线 → 启动；看不到窗口 → 还原微信；在线/无桥 → 查看会话。
       // 动作行恒 3 控件：主 CTA 变成动作时「查看会话」退居次要、「接入流程」缩成图标，主按钮才有整字的宽度
       let primary=`<button type="button" class="acct-btn primary" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}<span class="lbl">${esc(window.T('inbox.acct.hist_view'))}</span></button>`;
@@ -3295,21 +3306,21 @@ function _pcCopilotCardHtml(hist){
       let guide=`<button type="button" class="acct-btn ghost" onclick="openConnect('wechat')">${uiIcon('help',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_flow'))}</span></button>`;
       if(_PC_CARD_SUP&&bp&&(bp.cls==='off'||bp.cls==='blind')){
         primary=(bp.cls==='off')
-          ?`<button type="button" class="acct-btn hist-relogin" title="${esc(bp.tip)}" onclick="startPcCopilot(this)">${uiIcon('zap',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_start'))}</span></button>`
+          ?`<button type="button" class="acct-btn hist-relogin" title="${esc(bp.tip)}" onclick="startPcCopilot(this,'${esc(h.account_id)}')">${uiIcon('zap',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_start'))}</span></button>`
           :`<button type="button" class="acct-btn hist-relogin" title="${esc(bp.tip)}" onclick="focusPcWechat(this)">${uiIcon('refresh',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_focus'))}</span></button>`;
         view=`<button type="button" class="acct-btn ghost iconly" title="${esc(window.T('inbox.acct.hist_view'))}" aria-label="${esc(window.T('inbox.acct.hist_view'))}" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}</button>`;
         guide=`<button type="button" class="acct-btn ghost iconly" title="${esc(window.T('inbox.acct.pc_flow'))}" aria-label="${esc(window.T('inbox.acct.pc_flow'))}" onclick="openConnect('wechat')">${uiIcon('help',14)}</button>`;
       }
-      return `<div class="acct-card ${bp&&bp.cls==='on'?'on':'off'}" data-plat="wechat" data-aid="${esc(h.account_id)}" style="--acct-accent:${pc};">
+      return `<div class="acct-card ${bp&&bp.cls==='on'?'on':'off'}${bp&&bp.cls==='mismatch'?' mismatch':''}" data-plat="wechat" data-aid="${esc(h.account_id)}" style="--acct-accent:${pc};">
         <div class="acct-card-head">
-          ${_acctAvatar('wechat',h.account_id,h.label||_acctLabel('wechat',h.account_id),36,'')}
+          ${_acctAvatar('wechat',h.account_id,b.account_nick||h.label||_acctLabel('wechat',h.account_id),36,'')}
           <div style="flex:1;min-width:0;">
-            <div class="acct-name" title="${esc(h.account_id)}">${esc(h.label||_acctLabel('wechat',h.account_id))}</div>
-            <div class="acct-id">${esc(_maskAcctId(h.account_id))}${h.count?' · '+esc(window.Tf('inbox.acct.hist_convs',{n:h.count})):''}</div>
+            <div class="acct-name" title="${esc(h.account_id)}">${esc(h.label||_acctLabel('wechat',h.account_id))}${bindTag}</div>
+            <div class="acct-id" title="${esc(h.account_id)}">${idLine}${h.count?' · '+esc(window.Tf('inbox.acct.hist_convs',{n:h.count})):''}</div>
           </div>
           ${h.unread?`<span class="ac-unread">${h.unread>99?'99+':h.unread}</span>`:''}
           ${pill}
-        </div>
+        </div>${bar}
         <div class="acct-actions">
           ${primary}${view}${guide}
         </div>
@@ -26299,12 +26310,14 @@ async function restoreAcct(pl,aid,btn){
 // 个人微信 PC 副驾：账号卡就地启动 / 还原微信窗口（2026-09-19）。与引导页第 ③ 步同一端点、同一
 // 错误口径（409 detail：driver_not_ready / admin_token_missing / 其它）。成功后不立即改卡——
 // 心跳 ~10 秒内到，accounts_summary 轮询自然把胶囊变绿；按钮驻留「启动中…」给第二反馈面。
-async function startPcCopilot(btn){
+async function startPcCopilot(btn,accountId){
   _acctBtnBusy(btn,true);
   const lbl=btn&&btn.querySelector('.lbl'); if(lbl) lbl.textContent=window.T('inbox.acct.pc_starting');
   let res=null;
   try{
-    res=await _acctFetch('/api/setup/wechat_pc/copilot/start',{method:'POST'},20000);
+    // 多账号：按卡片的 account_id 拉对应那个驱动（不带 = 主账号）
+    const q=accountId?('?account_id='+encodeURIComponent(accountId)):'';
+    res=await _acctFetch('/api/setup/wechat_pc/copilot/start'+q,{method:'POST'},20000);
     if(!res.okHttp||!(res.data&&res.data.ok)){
       const why=String((res.data&&res.data.detail)||'');
       const key=why.indexOf('driver_not_ready')>=0?'inbox.acct.pc_start_no_driver'
