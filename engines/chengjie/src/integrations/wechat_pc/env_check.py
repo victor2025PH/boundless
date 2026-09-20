@@ -3,8 +3,10 @@
 
 只用 Win32（EnumWindows / 进程映像路径 / 文件版本信息）找窗；UIA 只做**单窗** ``ControlFromHandle`` 类名精判
 （毫秒级、结果缓存），绝不做根枚举——引导页每几秒轮询一次，不能拖慢微信。
-返回 ``{os_windows, running, main_window, login_window, version, version_ok, exe_path, pid}``；
+返回 ``{os_windows, running, main_window, login_window, version, version_ok, exe_path, pid, session, reason}``；
 ``version_ok`` = 主版本 ≥ 4（4.x 的 ``mmui::*`` 锚点是驱动的前提）。纯函数 :func:`parse_version` / :func:`version_ok` 可单测。
+``session`` 见 :func:`session_isolation`——引擎与微信不在同一会话时窗口枚举恒为空，
+``reason=engine_not_interactive`` 把这种「看不见」和「微信真没开」区分开。
 """
 from __future__ import annotations
 
@@ -163,18 +165,67 @@ def _file_version(path: str) -> str:  # pragma: no cover - 平台相关
     return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
 
 
+def current_session_id() -> int:
+    """本进程所在的终端服务会话（拿不到 = -1）。"""
+    if os.name != "nt":
+        return -1
+    try:
+        import ctypes
+        sid = ctypes.c_ulong(0)
+        k32 = ctypes.windll.kernel32
+        if not k32.ProcessIdToSessionId(k32.GetCurrentProcessId(), ctypes.byref(sid)):
+            return -1
+        return int(sid.value)
+    except Exception:
+        return -1
+
+
+def console_session_id() -> int:
+    """当前控制台（交互桌面）会话；无人登录时 Windows 给 0xFFFFFFFF → -1。"""
+    if os.name != "nt":
+        return -1
+    try:
+        import ctypes
+        sid = int(ctypes.windll.kernel32.WTSGetActiveConsoleSessionId())
+        return -1 if sid in (0xFFFFFFFF, -1) else sid
+    except Exception:
+        return -1
+
+
+def session_isolation() -> Dict[str, Any]:
+    """引擎与交互桌面是否不在同一会话——窗口站按会话隔离，跨会话看不见微信。
+
+    Windows 的 ``EnumWindows``/UIA 只能看到**调用者自己会话**的窗口站。引擎由
+    S4U 计划任务（watchdog/开机自愈）拉起时跑在 session 0，用户的微信在 session 1：
+    枚举恒返回空，环境检测于是报「微信未运行」——2026-09-20 实测同一段枚举代码在
+    session 1 里找到 14 个微信窗口、在 session 0 里找到 0 个。这不是微信的问题，
+    报错必须说清楚，否则运维会一直去查微信而不是查会话。
+
+    ``isolated=True`` 仅在「有交互会话 ∧ 引擎不在其中」时成立；无人登录（console=-1）
+    不算隔离——那时本就没有可驱动的桌面，是另一种故障。绝不抛。
+    """
+    eng, con = current_session_id(), console_session_id()
+    return {"engine_session": eng, "console_session": con,
+            "isolated": bool(eng >= 0 and con >= 0 and eng != con)}
+
+
 def check_environment() -> Dict[str, Any]:
     """真机环境快照；非 Windows 或任何异常都给出结构完整的「否」答案，绝不抛。"""
     out: Dict[str, Any] = {"os_windows": os.name == "nt", "running": False, "main_window": False,
-                           "login_window": False, "version": "", "version_ok": False, "exe_path": "", "pid": 0}
+                           "login_window": False, "version": "", "version_ok": False, "exe_path": "", "pid": 0,
+                           "session": {}, "reason": ""}
     if os.name != "nt":
         return out
+    out["session"] = session_isolation()
     try:
         from src.integrations.wechat_pc.win32_windows import find_wechat_windows
         wins = find_wechat_windows(visible_only=False)
     except Exception:
         wins = []
     if not wins:
+        # 跨会话时「找不到窗口」说明不了微信在不在——别把它说成「微信未运行」
+        if out["session"].get("isolated"):
+            out["reason"] = "engine_not_interactive"
         return out
     out["running"] = True
     pid = 0
@@ -263,12 +314,21 @@ def find_wechat_exe() -> str:  # pragma: no cover - 平台相关
 
 
 def driver_ready() -> Dict[str, Any]:
-    """副驾驱动在**后端这台机器**能否跑：Windows + ``uiautomation`` 包 + 解释器路径。"""
+    """副驾驱动在**后端这台机器**能否跑：Windows + ``uiautomation`` 包 + 同一桌面会话。
+
+    会话也是硬前置：驱动进程继承引擎的会话，跨会话的 UIA 连窗口都枚举不到，
+    起来也只能是个瞎子（``copilot/start`` 据此 409，而不是拉一个永远 blind 的驱动）。
+    """
     import importlib.util
     import sys
     has_uia = importlib.util.find_spec("uiautomation") is not None
-    return {"os_windows": os.name == "nt", "uiautomation": has_uia,
-            "python": sys.executable, "ok": bool(os.name == "nt" and has_uia)}
+    sess = session_isolation()
+    out = {"os_windows": os.name == "nt", "uiautomation": has_uia,
+           "python": sys.executable, "session": sess,
+           "ok": bool(os.name == "nt" and has_uia and not sess.get("isolated"))}
+    if sess.get("isolated"):
+        out["reason"] = "engine_not_interactive"
+    return out
 
 
 def voice_environment(*, selftest: bool = False, version: str = "") -> Dict[str, Any]:
@@ -450,4 +510,5 @@ def rebuild_accessibility_via_tray(hwnd: int) -> Dict[str, Any]:  # pragma: no c
 __all__ = ["MIN_MAJOR", "VOICE_MIN_VERSION", "parse_version", "version_ok", "voice_version_ok", "classify_window",
            "window_kind", "check_environment", "find_wechat_exe", "driver_ready", "voice_environment", "launch_wechat",
            "bring_wechat_to_front", "resolve_exe_from_registry_value", "accessibility_tree_empty",
-           "rebuild_accessibility_via_tray"]
+           "rebuild_accessibility_via_tray", "current_session_id", "console_session_id",
+           "session_isolation"]

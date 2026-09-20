@@ -1569,3 +1569,63 @@ def test_deferred_items_are_failed_out_when_service_freezes():
     svc.freeze(600, "test")
     svc.tick()
     assert (41, False, "guard:frozen") in br.acks and not svc._deferred
+
+
+# ── 会话隔离（2026-09-20 事故门禁）────────────────────────────────────────────
+
+def test_session_isolation_only_fires_when_a_desktop_exists_elsewhere():
+    """跨会话 ≠ 无人登录。后者没有可驱动的桌面，是另一种故障，不能混报。"""
+    from src.integrations.wechat_pc import env_check as E
+
+    def _iso(engine, console, monkeypatch):
+        monkeypatch.setattr(E, "current_session_id", lambda: engine)
+        monkeypatch.setattr(E, "console_session_id", lambda: console)
+        return E.session_isolation()
+
+    mp = pytest.MonkeyPatch()
+    try:
+        assert _iso(0, 1, mp)["isolated"] is True, "引擎在 session 0、桌面在 1 = 看不见微信"
+        assert _iso(1, 1, mp)["isolated"] is False
+        assert _iso(0, -1, mp)["isolated"] is False, "无人登录不算隔离"
+        assert _iso(-1, 1, mp)["isolated"] is False, "取不到自己的会话时不妄断"
+        assert _iso(1, 2, mp) == {"engine_session": 1, "console_session": 2, "isolated": True}
+    finally:
+        mp.undo()
+
+
+def test_cross_session_blindness_is_not_reported_as_wechat_not_running(monkeypatch):
+    """窗口枚举为空时，跨会话必须点名 engine_not_interactive。
+
+    2026-09-20：session 0 的引擎枚举恒 0 窗，环境检测照旧答「running=False」，
+    人对着屏上开着的微信查了大半天微信本身。空枚举在跨会话下不构成「微信没开」的证据。
+    """
+    from src.integrations.wechat_pc import env_check as E
+
+    monkeypatch.setattr(E.os, "name", "nt")
+    monkeypatch.setitem(__import__("sys").modules, "src.integrations.wechat_pc.win32_windows",
+                        type("M", (), {"find_wechat_windows": staticmethod(lambda **kw: [])}))
+
+    monkeypatch.setattr(E, "session_isolation",
+                        lambda: {"engine_session": 0, "console_session": 1, "isolated": True})
+    assert E.check_environment()["reason"] == "engine_not_interactive"
+
+    # 同会话下空枚举才是「微信真没开」——那时不该甩锅给会话
+    monkeypatch.setattr(E, "session_isolation",
+                        lambda: {"engine_session": 1, "console_session": 1, "isolated": False})
+    assert E.check_environment()["reason"] == ""
+
+
+def test_driver_is_not_ready_across_sessions(monkeypatch):
+    """跨会话起驱动只会得到一个瞎子；start/restart 该在门口 409，而不是拉起来再 blind。"""
+    from src.integrations.wechat_pc import env_check as E
+
+    monkeypatch.setattr(E.os, "name", "nt")
+    monkeypatch.setattr(E, "session_isolation",
+                        lambda: {"engine_session": 0, "console_session": 1, "isolated": True})
+    d = E.driver_ready()
+    assert d["ok"] is False and d["reason"] == "engine_not_interactive"
+    assert d["uiautomation"] is True, "包是装了的——别让人去查 uiautomation"
+
+    monkeypatch.setattr(E, "session_isolation",
+                        lambda: {"engine_session": 1, "console_session": 1, "isolated": False})
+    assert E.driver_ready()["ok"] is True

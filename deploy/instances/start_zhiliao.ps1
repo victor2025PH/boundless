@@ -18,7 +18,12 @@ param(
     [string]$InstanceId   = 'zhiliao',
     [string]$InstanceName = '智聊 ChatX',
     [int]$Port            = 18799,          # = 实例 config.local.yaml 的 web_admin.port
-    [string]$ProductId    = 'zhiliao'       # CHENGJIE_PRODUCT_ID 遥测产品线（客户实例仍归属产品线）
+    [string]$ProductId    = 'zhiliao',      # CHENGJIE_PRODUCT_ID 遥测产品线（客户实例仍归属产品线）
+    # 引擎该落在哪个会话（2026-09-20，见 _interactive_session.ps1 头注）：
+    #   auto    = 实例要驱动本机桌面 GUI（微信 PC 副驾）才弹进交互会话，否则留在原会话
+    #   require = 强制弹进交互会话，无交互会话即失败（排障/手工拉起）
+    #   never   = 就地起（跳板任务再入本脚本时用，防止无限跳）
+    [ValidateSet('auto', 'require', 'never')][string]$InteractiveSession = 'auto'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,6 +95,43 @@ if ($own.Count) {
         exit 0
     }
     Fail "端口 $Port 被非本引擎进程占用 PID=$($pids -join ',')。双实例模式不自动清杀（可能误伤另一实例/其他服务），请人工核实后再起"
+}
+
+# ── 会话定位：要驱动桌面的实例必须落在交互会话 ──────────────────────────
+# Win32_Process.Create 在调用方的会话里建进程，所以引擎的会话 = 谁拉起了本脚本。
+# watchdog 是 S4U 计划任务（session 0），那里没有用户桌面：微信 PC 副驾的 UIA
+# 枚举恒为空，表现成「微信未运行」。这里在起进程前把自己弹进交互会话。
+# 放在端口幂等检查之后：已在跑就该直接 exit 0，不该为它起跳板任务。
+if ($InteractiveSession -ne 'never') {
+    . (Join-Path $PSScriptRoot '_interactive_session.ps1')
+    $needInteractive = ($InteractiveSession -eq 'require')
+    if (-not $needInteractive) {
+        # 判据窄：只有真要驱动本机 GUI 的实例才弹（交互会话会被用户注销带走）
+        $probe = Join-Path $PSScriptRoot 'needs_interactive_session.py'
+        if (Test-Path -LiteralPath $probe) {
+            $null = & python $probe $DataRoot 2>$null
+            $needInteractive = ($LASTEXITCODE -eq 0)
+        }
+    }
+    if ($needInteractive -and (Test-SessionIsolated)) {
+        $conSess = Get-ConsoleSessionId
+        Write-Host "[start-$InstanceId] 本进程在会话 $(Get-CurrentSessionId)，交互桌面在会话 $conSess；该实例要驱动桌面微信，改经跳板任务在交互会话起"
+        $fwd = @('-InstanceId', $InstanceId, '-InstanceName', $InstanceName,
+                 '-Port', [string]$Port, '-ProductId', $ProductId,
+                 '-DataDir', $DataRoot, '-InteractiveSession', 'never')
+        $r = Invoke-InInteractiveSession -ScriptPath $PSCommandPath -ArgumentList $fwd `
+                -TaskName ("Boundless-Launch-{0}" -f $InstanceId)
+        if (-not $r.ok) {
+            Fail "无法在交互会话起 $InstanceName（$($r.reason)）。桌面微信副驾必须与微信同会话，否则看不见窗口。`n  → 确认有用户登录本机桌面（无人登录时 RDP/控制台任一即可），或临时用 -InteractiveSession never 起一个只做非桌面业务的实例"
+        }
+        Write-Host "[start-$InstanceId] 已在交互会话（$conSess）拉起" -ForegroundColor Green
+        $ens = Join-Path $PSScriptRoot 'ensure_lan_portproxy.ps1'
+        if (Test-Path $ens) { & $ens -Port $Port }
+        exit 0
+    }
+    if ($needInteractive) {
+        Write-Host "[start-$InstanceId] 会话 $(Get-CurrentSessionId) 即交互桌面会话，就地启动（副驾可见桌面微信）"
+    }
 }
 
 # ── 组装子进程环境并启动 ────────────────────────────────────────────────

@@ -357,8 +357,10 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         _require_supervisor(request)
         import asyncio
         from src.integrations.wechat_pc.env_check import driver_ready
-        if not driver_ready().get("ok"):
-            raise HTTPException(409, "driver_not_ready")
+        _drv = driver_ready()
+        if not _drv.get("ok"):
+            # 跨会话时说「driver_not_ready」会让人去查 uiautomation；点名 engine_not_interactive
+            raise HTTPException(409, str(_drv.get("reason") or "driver_not_ready"))
         sup = _sup(request)
         sup.reset_backoff()
         r = await asyncio.get_event_loop().run_in_executor(None, lambda: sup.start(force=False))
@@ -377,8 +379,9 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         _require_supervisor(request)
         import asyncio
         from src.integrations.wechat_pc.env_check import driver_ready
-        if not driver_ready().get("ok"):
-            raise HTTPException(409, "driver_not_ready")
+        _drv = driver_ready()
+        if not _drv.get("ok"):
+            raise HTTPException(409, str(_drv.get("reason") or "driver_not_ready"))
         sup = _sup(request)
         sup.reset_backoff()
         r = await asyncio.get_event_loop().run_in_executor(None, sup.restart)
