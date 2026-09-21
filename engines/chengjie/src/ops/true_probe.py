@@ -27,6 +27,7 @@ import logging
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -245,9 +246,14 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 _ref_txt = _sidecar.read_text(encoding="utf-8").strip()
             except OSError:
                 _ref_txt = ""
+        # 跨机直连 :7865 走 service_auth（回环免鉴、LAN 需 X-AH-Svc），令牌源与生产
+        # 合成腿同一处（avatar_voice.stt.token_file → resolve_service_token 三级回落）。
+        # 2026-09-22 实施102 阶段 1 切 direct 后实锤：生产合成 ok、探针裸打 401 两连败。
+        _av_stt = av.get("stt") if isinstance(av.get("stt"), dict) else {}
         specs.append({
             "domain": "tts_index", "kind": "hub_tts",
             "url": _mc_base.rstrip("/") + "/v1/tts/clone",
+            "token_file": str(_av_stt.get("token_file") or "").strip(),
             "json": {
                 "text": "好的呀",
                 "reference_audio_b64": base64.b64encode(
@@ -664,6 +670,14 @@ def _chat_content(data: Dict[str, Any]) -> str:
         return ""
 
 
+def _is_loopback(url: str) -> bool:
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
 def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
     """执行一个探针规格 → (ok, detail)。阻塞式，调用方须在线程池里跑。绝不抛。"""
     kind = str(spec.get("kind") or "")
@@ -672,7 +686,14 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
     t0 = time.time()
     try:
         if kind == "hub_tts":
-            data = _http_json(url, spec.get("json") or {}, timeout)
+            headers = spec.get("headers")
+            if "token_file" in spec and not _is_loopback(url):
+                from src.ai.avatar_voice import resolve_service_token
+                token = resolve_service_token(str(spec.get("token_file") or ""))
+                if not token:
+                    return False, "X-AH-Svc token unavailable"
+                headers = {**(headers or {}), "X-AH-Svc": token}
+            data = _http_json(url, spec.get("json") or {}, timeout, headers=headers)
             if not data.get("ok"):
                 return False, f"hub ok=false detail={str(data.get('detail'))[:80]}"
             raw = base64.b64decode(str(data.get("audio_base64") or ""), validate=False)

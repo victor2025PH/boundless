@@ -558,6 +558,48 @@ def test_tts_hub_and_index_are_separate_strike_domains(tmp_path, monkeypatch):
     assert st["tts_index"]["fails"] == 0
 
 
+def test_tts_index_probe_sends_svc_token_to_lan_only(tmp_path, monkeypatch):
+    """direct 直连 176:7865 的 tts_index 探针必须带 X-AH-Svc（实施102 阶段 1 实锤
+    401 两连败），令牌源与生产合成腿同一处 avatar_voice.stt.token_file；回环端点
+    与生产 `_svc_headers` 同语义不带头；LAN 端点拿不到令牌时明确红而不是裸打 401。
+    """
+    from src.ops import true_probe as tp
+
+    fixture = tmp_path / "asr_probe.wav"
+    fixture.write_bytes(b"RIFF" + b"\x00" * 40)
+    monkeypatch.setattr(tp, "ASR_FIXTURE", fixture)
+    tok_file = tmp_path / "svc.txt"
+    tok_file.write_text("sekret-token\n", encoding="utf-8")
+
+    cfg = {
+        "avatar_voice": {"enabled": True, "stt": {"token_file": str(tok_file)}},
+        "minicpm_clone": {"enabled": True, "base_url": "http://192.168.0.176:7865"},
+    }
+    spec = {s["domain"]: s for s in build_probe_specs(cfg)}["tts_index"]
+    assert spec["token_file"] == str(tok_file)
+
+    seen = {}
+
+    def _fake_http(url, payload, timeout, headers=None):
+        seen["headers"] = headers
+        return {"ok": True, "audio_base64": "", "format": "wav"}
+
+    monkeypatch.setattr(tp, "_http_json", _fake_http)
+    tp.run_probe(spec)
+    assert seen["headers"] == {"X-AH-Svc": "sekret-token"}
+
+    loop_spec = dict(spec, url="http://127.0.0.1:7865/v1/tts/clone")
+    seen.clear()
+    tp.run_probe(loop_spec)
+    assert seen["headers"] is None
+
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    seen.clear()
+    ok, detail = tp.run_probe(dict(spec, token_file=str(tmp_path / "missing.txt")))
+    assert ok is False and "X-AH-Svc" in detail
+    assert not seen  # 没令牌不裸打
+
+
 # ── true_probe：连败状态机 ──────────────────────────────────────────
 
 
