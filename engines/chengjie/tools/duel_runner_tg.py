@@ -38,6 +38,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from scripts._duel_llm import DEFAULT_BASE as LLM_DEFAULT_BASE  # noqa: E402
+from scripts._duel_llm import DEFAULT_MODEL as LLM_DEFAULT_MODEL  # noqa: E402
+from scripts._duel_llm import chat_once  # noqa: E402
+
 DEFAULT_BASE = "http://127.0.0.1:18799"
 DEFAULT_DATA_ROOT = r"D:\chengjie-instances\zhiliao\data"
 DEFAULT_OUT = _ROOT / "logs" / "duel"
@@ -149,14 +155,8 @@ def ollama_say(base: str, model: str, dialog: List[Dict[str, str]],
                hint: str, timeout: float = 90.0) -> str:
     msgs = ([{"role": "system", "content": OLLAMA_SYSTEM}] + dialog +
             [{"role": "system", "content": f"本轮你必须做的事：{hint}。只输出一条消息。"}])
-    body = json.dumps({"model": model, "messages": msgs, "stream": False,
-                       "keep_alive": "30m",
-                       "options": {"temperature": 0.85, "num_predict": 90}}).encode()
-    req = urllib.request.Request(f"{base}/api/chat", data=body,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        out = json.loads(r.read().decode())
-    txt = str((out.get("message") or {}).get("content") or "").strip()
+    # 2026-09-22：默认 173 vLLM chatx（/v1 兼容）；176 Ollama 是语音主力机，不再给对练钉显存
+    txt = chat_once(base, model, msgs, temperature=0.85, max_tokens=90, timeout=timeout)
     # 小模型偶发旁白/引号，剥掉首尾引号与think残留
     txt = re.sub(r"^[\"'「『]+|[\"'」』]+$", "", txt).strip()
     return txt
@@ -303,8 +303,9 @@ def main(argv=None) -> int:
     ap.add_argument("--token", default="")
     ap.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
     ap.add_argument("--db", default=str(Path(DEFAULT_DATA_ROOT) / "config" / "inbox.db"))
-    ap.add_argument("--ollama", default="http://192.168.0.176:11434")
-    ap.add_argument("--model", default="qwen3:30b-a3b-instruct-2507-q4_K_M")
+    ap.add_argument("--ollama", default=LLM_DEFAULT_BASE,
+                    help="客户方 LLM 端点：/v1 结尾=OpenAI 兼容（默认 173 vLLM chatx），否则 Ollama 原生")
+    ap.add_argument("--model", default=LLM_DEFAULT_MODEL)
     ap.add_argument("--max-wait", type=float, default=300.0, help="每轮等回复上限秒")
     ap.add_argument("--quiet", type=float, default=30.0, help="收多段回复的静默窗秒")
     ap.add_argument("--poll", type=float, default=5.0)

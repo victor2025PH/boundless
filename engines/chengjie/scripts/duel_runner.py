@@ -7,8 +7,10 @@
 炸出 5 类真缺陷（报价幻觉/试用时长错/gated 线泄漏/回复语种雪崩/指令泄漏）。
 
 两侧分工（本地生成 + 云端被测，成本最优）：
-- 客户方＝局域网 Ollama（默认 176 qwen3:30b）。量大免费，且它的口语随意/语种
-  混杂天然是对抗样本。
+- 客户方＝局域网 LLM（默认 **173 vLLM chatx**，OpenAI 兼容 ``/v1``）。量大免费，且它的
+  口语随意/语种混杂天然是对抗样本。2026-09-22 前默认是 176 Ollama qwen3:30b——
+  ``keep_alive 30m`` 会把 176 这台**语音主力机**的 18.7G 显存钉住半小时，IndexTTS 随即
+  超时熔断（实施102 阶段 0 实锤），故改默认；要指回 Ollama 用不带 ``/v1`` 的 base。
 - 引擎方＝生产 ``/api/desktop/smart-reply``。走 ``generate_persona_reply →
   generate_inbox_draft`` 全产线（目标注入/画像采集/人设守卫/出站守卫都在），
   **但不真发消息**——媒体/语音类缺陷仍须走 TG 全链道。
@@ -37,6 +39,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 _ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from scripts._duel_llm import DEFAULT_BASE as LLM_DEFAULT_BASE  # noqa: E402
+from scripts._duel_llm import DEFAULT_MODEL as LLM_DEFAULT_MODEL  # noqa: E402
+from scripts._duel_llm import chat_once  # noqa: E402
+
 DEFAULT_OUT = _ROOT / "logs" / "duel"
 
 
@@ -52,14 +60,13 @@ def _post(url: str, body: Dict[str, Any], timeout: float,
 
 def customer_say(ollama: str, model: str, system_prompt: str,
                  dialog: Sequence[Dict[str, str]], timeout: float = 120.0) -> str:
-    """本地 AI 出「客户下一句」（客户视角：对方=user，客户自己=assistant）。"""
+    """本地 AI 出「客户下一句」（客户视角：对方=user，客户自己=assistant）。
+
+    ``ollama`` 形参名沿用旧口径：以 ``/v1`` 结尾走 OpenAI 兼容（vLLM），否则 Ollama 原生。
+    """
     msgs = [{"role": "system", "content": system_prompt}] + list(dialog)
-    out = _post(f"{ollama}/api/chat", {
-        "model": model, "messages": msgs, "stream": False,
-        "keep_alive": "30m",
-        "options": {"temperature": 0.9, "num_predict": 120},
-    }, timeout)
-    return str((out.get("message") or {}).get("content") or "").strip()
+    return chat_once(ollama, model, msgs, temperature=0.9, max_tokens=120,
+                     timeout=timeout)
 
 
 def engine_reply(base: str, token: str, persona_id: str, account_id: str,
@@ -155,9 +162,10 @@ def main(argv=None) -> int:
     ap.add_argument("--persona", default="su_wan")
     ap.add_argument("--account", default="8244899900")
     ap.add_argument("--ollama", default=os.environ.get(
-        "AITR_OLLAMA_BASE", "http://192.168.0.176:11434"))
+        "AITR_OLLAMA_BASE", LLM_DEFAULT_BASE),
+        help="客户方 LLM 端点：/v1 结尾=OpenAI 兼容（默认 173 vLLM），否则 Ollama 原生")
     ap.add_argument("--model", default=os.environ.get(
-        "AITR_DUEL_MODEL", "qwen3:30b-a3b-instruct-2507-q4_K_M"))
+        "AITR_DUEL_MODEL", LLM_DEFAULT_MODEL))
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--pace", type=float, default=1.0,
                     help="每轮间隔秒（与生产同机时别调到 0）")
