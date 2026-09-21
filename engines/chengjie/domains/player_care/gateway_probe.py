@@ -28,7 +28,9 @@ from .gateway import (
     LookupResult,
     PlayerGateway,
     _urllib_transport,
+    extract_agent,
     extract_games,
+    has_deposit,
     normalize_ph_phone,
     phone_variants,
     resolve_gateway_cfg,
@@ -45,6 +47,13 @@ _KEEP_SHAPE_RE = re.compile(
     r"|\bv?\d+(?:\.\d+){2,}\b"                # 版本号
 )
 _KEY_LIKE = ("key", "token", "secret", "password", "authorization")
+# 值整段遮掉的人身字段（真样例里都是能反查到人的）：代理号 / 登录名 / 昵称 / 号码 / IP
+_PII_KEYS = ("agent", "login_name", "name", "phone", "_ip", "ips")
+_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+# 真网关 chatx_text 每行开头 ``UID x / 昵称 / VIP…``：昵称遮掉
+_SUMMARY_NAME_RE = re.compile(r"(UID\s+\S+\s*/\s*)[^/\n]+?(\s*/)")
+# 保形列表只留前几项（同 IP / 同设备关联用户这类列表能很长，样例文件不必全存）
+_LIST_CAP = 4
 _AGENT_KEY_RE = re.compile(r"agent|代理|affiliate|referr?er|upline|promot(?:er|ion)_?code", re.IGNORECASE)
 _AGENT_LINE_RE = re.compile(r"(?im)^\s*(agent|代理(?:号|人)?|affiliate|referrer|upline)\s*[:：=]")
 
@@ -62,6 +71,8 @@ def redact_text(text: Any, secrets: Optional[List[str]] = None) -> str:
         keep.append(m.group(0))
         return f"\x00{len(keep) - 1}\x00"
 
+    s = _IPV4_RE.sub("0.0.0.0", s)
+    s = _SUMMARY_NAME_RE.sub(r"\1***\2", s)
     s = _KEEP_SHAPE_RE.sub(_hold, s)
     s = _DIGITS_RE.sub(lambda m: "1" + "0" * (len(m.group(0)) - 1), s)
     return re.sub(r"\x00(\d+)\x00", lambda m: keep[int(m.group(1))], s)
@@ -90,17 +101,23 @@ def find_agent_fields(raw: Any, chatx_text: Any = "") -> List[str]:
 
 
 def redact_raw(raw: Any, secrets: Optional[List[str]] = None) -> Any:
-    """返回体递归脱敏：键名像密钥的值整段遮，字符串按 redact_text，数字 ≥ 100 一律换成 100。"""
+    """返回体递归脱敏：键名像密钥的值整段遮，人身字段（agent / login_name / name / phone / ip）
+    的值遮成 ``***``（保留非空与否），字符串按 redact_text，数字 ≥ 100 一律换成 100，
+    键名本身也走 redact_text（网关 ``phone_hits`` 用手机号当键），长列表只留前 _LIST_CAP 项。"""
     if isinstance(raw, dict):
         out: Dict[str, Any] = {}
         for k, v in raw.items():
-            if any(t in str(k).lower() for t in _KEY_LIKE):
-                out[str(k)] = "***"
+            kl = str(k).lower()
+            rk = redact_text(str(k), secrets)
+            if any(t in kl for t in _KEY_LIKE):
+                out[rk] = "***"
+            elif any(t in kl for t in _PII_KEYS) and isinstance(v, (str, list)) and v:
+                out[rk] = "***" if isinstance(v, str) else ["***"] * min(len(v), _LIST_CAP)
             else:
-                out[str(k)] = redact_raw(v, secrets)
+                out[rk] = redact_raw(v, secrets)
         return out
     if isinstance(raw, list):
-        return [redact_raw(v, secrets) for v in raw]
+        return [redact_raw(v, secrets) for v in raw[:_LIST_CAP]]
     if isinstance(raw, bool) or raw is None:
         return raw
     if isinstance(raw, (int, float)):
@@ -126,8 +143,9 @@ def replay_sample(sample: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) 
         "ok": res.ok,
         "found": res.found,
         "error": res.error,
-        "games": extract_games(text) if res.usable else [],
-        "deposit": bool(detect_deposit(text)) if res.usable else False,
+        "games": extract_games(res) if res.usable else [],
+        "deposit": bool(has_deposit(res) or detect_deposit(text)) if res.usable else False,
+        "agent": bool(extract_agent(res)) if res.usable else False,
     }
 
 
@@ -150,7 +168,7 @@ def _record_from_result(name: str, res: LookupResult, *, status: int, body: byte
         "raw_keys": sorted(res.raw.keys()) if isinstance(res.raw, dict) else [],
         "agent_fields": find_agent_fields(res.raw if isinstance(res.raw, dict) else {}, res.chatx_text),
         # 回放用：测试里假 transport 直接回这一对（body 已脱敏，expect 也按脱敏后的 body 算，自洽）
-        "body": redact_body(body_txt, secrets)[:4000],
+        "body": redact_body(body_txt, secrets),
         "raw": redact_raw(res.raw, secrets) if isinstance(res.raw, dict) else {},
         "chatx_text": redact_text(res.chatx_text, secrets),
     }
@@ -221,7 +239,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                 lines.append(f"    | {ln}")
         elif s.get("body"):
             lines.append(f"    body: {str(s['body'])[:300]}")
-        lines.append(f"    games={e.get('games')} deposit={e.get('deposit')}")
+        lines.append(f"    games={e.get('games')} deposit={e.get('deposit')} agent={e.get('agent')}")
     return "\n".join(lines)
 
 

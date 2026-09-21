@@ -26,7 +26,10 @@ from src.hooks.base import DomainHook, HookContext
 
 from .gateway import (
     PlayerGateway,
+    extract_agent,
     extract_games,
+    friend_facts_text,
+    has_deposit,
     extract_phone,
     extract_uid,
     normalize_ph_phone,
@@ -140,7 +143,7 @@ class PlayerCareDomainHook(DomainHook):
 
     # ── 事实块 ───────────────────────────────────────────────────────────
     @staticmethod
-    def _facts_block_visible(chatx_text: str, lang: str) -> str:
+    def _facts_block_visible(chatx_text: str, lang: str, games: Optional[List[Dict[str, str]]] = None) -> str:
         tone = {
             "tl": "口吻：像帮朋友顺手问了一下（\"tinanong ko\" / \"na-check ko\"），不是客服；不列表、不用表格。",
             "en": "Tone: like a friend who asked around for them (\"I checked for you\"), not support staff; no lists.",
@@ -151,7 +154,10 @@ class PlayerCareDomainHook(DomainHook):
             "不得计算、推断、四舍五入或补全；platform 是厂商、game 是游戏名。事实里没有的"
             "东西一律说没查到。】\n"
             f"{chatx_text.strip()}\n"
-            f"{tone}"
+            + ("近期玩过：" + "、".join(
+                g["game"] + (f"（{g['platform']}）" if g.get("platform") else "")
+                for g in games if g.get("game")) + "\n" if games else "")
+            + tone
         )
 
     @staticmethod
@@ -321,8 +327,8 @@ class PlayerCareDomainHook(DomainHook):
             res = None
 
         found = bool(res and res.usable)
-        facts_text = res.chatx_text if found else ""
-        games = extract_games(facts_text) if found else []
+        facts_text = friend_facts_text(res) if found else ""
+        games = extract_games(res) if found else []
         prev = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
         uc[_FACTS_KEY] = {
             "phone": phone or str(prev.get("phone") or ""),
@@ -334,12 +340,17 @@ class PlayerCareDomainHook(DomainHook):
             "error": "" if found else str(getattr(res, "error", "") or ("not_found" if res else "exception")),
             "cached": bool(getattr(res, "cached", False)),
         }
+        if found:
+            uc[_FACTS_KEY]["deposit"] = has_deposit(res)
+            agent = extract_agent(res)
+            if agent:
+                uc[_FACTS_KEY]["agent"] = agent
 
         if asks_account and (phone or uid):
             if found:
                 uc[_VISIBLE_KEY] = True
                 uc[_ROUND_KEY] = "visible"
-                return {"_domain_context_block": self._facts_block_visible(facts_text, lang)}
+                return {"_domain_context_block": self._facts_block_visible(facts_text, lang, games)}
             uc[_ROUND_KEY] = "missing"
             return {"_domain_context_block": self._facts_block_missing(lang)}
         if asks_account:
@@ -363,7 +374,9 @@ class PlayerCareDomainHook(DomainHook):
         round_kind = str(uc.get(_ROUND_KEY) or "")
         lang = _reply_lang(ctx)
         if round_kind == "visible":
-            facts = str((uc.get(_FACTS_KEY) or {}).get("text") or "")
+            pf = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
+            facts = str(pf.get("text") or "") + "\n" + " ".join(
+                f"{g.get('platform') or ''} {g.get('game') or ''}" for g in (pf.get("games") or []) if isinstance(g, dict))
             bad = numbers_not_in_facts(text, facts)
             if bad:
                 logger.info("[player_care] 数字闸：回复含事实外数字 %s → 安全句", bad[:5])

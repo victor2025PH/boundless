@@ -21,7 +21,14 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .commandbus import CommandOutbox, get_outbox, reengage_pool, resolve_commandbus_cfg, send_reengage
-from .gateway import PlayerGateway, extract_games, resolve_gateway_cfg
+from .gateway import (
+    PlayerGateway,
+    extract_agent,
+    extract_games,
+    friend_facts_text,
+    has_deposit,
+    resolve_gateway_cfg,
+)
 from .goal_templates import (
     TEMPLATE_AFTER_DEPOSIT, TEMPLATE_REENGAGE, register_goal_templates,
 )
@@ -211,9 +218,14 @@ def _run_player_sync(cfg_root: Any, config_path: Any, summary: Dict[str, Any], t
         found = bool(res.usable)
         if not found and not res.ok:
             summary["errors"] += 1
-        facts = {"found": found, "text": res.chatx_text if found else "",
-                 "games": extract_games(res.chatx_text) if found else [],
+        facts = {"found": found, "text": friend_facts_text(res) if found else "",
+                 "games": extract_games(res) if found else [],
                  "error": res.error if not found else ""}
+        if found:
+            facts["deposit"] = has_deposit(res)
+            agent = extract_agent(res)
+            if agent:
+                facts["agent"] = agent
         try:
             out = svc.record_sync(row["profile_key"], facts, now=ts)
         except Exception:

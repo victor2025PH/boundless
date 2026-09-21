@@ -242,6 +242,30 @@ async def test_hook_visible_when_asking_account_with_wa_phone():
 
 
 @pytest.mark.asyncio
+async def test_hook_with_real_gateway_sample_uses_structured_games_and_strips_risk():
+    """真网关样例（脱敏）回放进 hook：明用块 = 朋友版事实 + 结构化游戏名，无风控/客服包装；
+    暗用轮拿到 top_games；画像 facts 带 deposit / agent；数字闸放行事实与游戏名里的数字。"""
+    raw = json.loads(_real_found_sample()["body"])
+    res = LookupResult(ok=True, found=True, chatx_text=raw["chatx_text"], raw=raw, status=200)
+    hook = PlayerCareDomainHook(gateway=_FakeGW(res))
+    ctx = _ctx("余额还有多少？", chat_id="639171234567@s.whatsapp.net", reply_lang="zh")
+    blk = (await hook.on_message_pre_process(ctx))["_domain_context_block"]
+    assert "近期玩过：Fortune Gems 2（JILI）" in blk and "余额 100.93" in blk
+    assert "同IP" not in blk and "风险" not in blk and "玩家后台资料" not in blk and "不要猜" not in blk
+    facts = ctx.user_context["_player_facts"]
+    assert facts["deposit"] is True and facts["agent"] == "***"
+    assert facts["games"][0] == {"platform": "JILI", "game": "Fortune Gems 2"}
+    ok = await hook.on_reply_post_process("余额 100.93，最近你玩的 Fortune Gems 2 和 Gates of Olympus 呀。", ctx)
+    assert ok.startswith("余额")
+    assert await hook.on_reply_post_process("余额大概 2,000 吧。", ctx) == _SAFE_LINE["zh"]
+
+    # 暗用：没问账户 → 只给隐藏画像里的游戏名
+    ctx2 = _ctx("好无聊啊", chat_id="639171234567@s.whatsapp.net", reply_lang="zh")
+    hidden = (await PlayerCareDomainHook(gateway=_FakeGW(res)).on_message_pre_process(ctx2))["_domain_context_block"]
+    assert "隐藏画像" in hidden and "Fortune Gems 2（JILI）" in hidden and "余额" not in hidden
+
+
+@pytest.mark.asyncio
 async def test_hook_missing_facts_says_not_found_and_gates_numbers():
     hook = PlayerCareDomainHook(gateway=_FakeGW(MISSING))
     ctx = _ctx("check mo balance ko, number ko 09171234567", reply_lang="en")
@@ -468,10 +492,53 @@ def test_probe_redaction_keeps_json_and_kills_values():
     body = redact_body('{"ok": true, "key": "abc", "balance": 1250, "n": 3, "chatx_text": "uid 778899"}', secrets)
     d = json.loads(body)                                # 仍是合法 JSON
     assert d["key"] == "***" and d["balance"] == 100 and d["n"] == 3 and "778899" not in d["chatx_text"]
-    assert redact_raw({"X-Gateway-Key": "s3cr3t", "agent": "A100"}) == {"X-Gateway-Key": "***", "agent": "A100"}
+    # 人身字段值遮掉（保留非空）；手机号当键名也遮；IP 不走版本号保形
+    assert redact_raw({"X-Gateway-Key": "s3cr3t", "agent": "A100", "agent_x": ""}) == {
+        "X-Gateway-Key": "***", "agent": "***", "agent_x": ""}
+    r = redact_raw({"phone_hits": {"639171234567": "128891843"}, "register_ip": "180.191.72.186"}, secrets)
+    assert list(r["phone_hits"]) == ["*" * 12] and "128891843" not in json.dumps(r) and r["register_ip"] == "***"
+    assert redact_text("reg 180.191.72.186 v1.2.3") == "reg 0.0.0.0 v1.2.3"
+    assert redact_text("UID 128891843 / Juan99 / VIP0 / 正常；余额 1500") == "UID 100000000 / *** / VIP0 / 正常；余额 1000"
     # 日期 / 时间 / 版本号只是形态信息，保留；紧挨着的金额仍毁
     t = redact_text("last deposit: 2,500 on 2026-09-21 18:05:30 (app 3.14.159) uid 445566", secrets)
     assert "2026-09-21 18:05:30" in t and "3.14.159" in t and "2,500" not in t and "445566" not in t
+
+
+def _real_found_sample():
+    return next(s for s in _load_samples() if s["name"] == "found")
+
+
+def test_real_gateway_found_sample_shape():
+    """2026-09-21 真网关样例（已脱敏）：游戏在 players[].top_games，不在 chatx_text；
+    agent 在 players[].agent；充值看 has_deposited / deposit_count；朋友版事实去掉包头包尾和风险尾巴。"""
+    from domains.player_care.gateway import extract_agent, friend_facts_text, has_deposit
+    from domains.player_care.profile import detect_deposit
+
+    s = _real_found_sample()
+    raw = json.loads(s["body"])
+    assert s["status"] == 200 and raw["ok"] is True and raw["players"] and raw["chatx_text"]
+    assert s["agent_fields"] and all(p.endswith(".agent") for p in s["agent_fields"])
+    games = extract_games(raw)
+    assert {"platform": "JILI", "game": "Fortune Gems 2"} in games
+    assert all(g["platform"] and g["game"] for g in games)
+    assert extract_games(raw["chatx_text"]) == []          # 文本里确实没游戏，必须走结构化
+    assert extract_agent(raw) == "***"                      # 样例里遮掉了，但字段存在
+    assert has_deposit(raw) is True                          # 第二个玩家 has_deposited
+    assert has_deposit({"players": [raw["players"][0]]}) is False
+    # 文本兜底：“充 100×3”算充过，“充 0×0”不算
+    lines = [ln for ln in raw["chatx_text"].splitlines() if ln.startswith("UID")]
+    assert detect_deposit(lines[0]) is False and detect_deposit(lines[1]) is True
+    ft = friend_facts_text(raw["chatx_text"])
+    assert "【" not in ft and "不要猜" not in ft and "风险" not in ft and "同IP" not in ft
+    assert ft.count("\n") == 1 and "余额" in ft and "充 100×3" in ft
+
+
+def test_real_gateway_not_found_and_bad_key_samples():
+    by = {s["name"]: s for s in _load_samples()}
+    assert by["not_found"]["status"] == 404 and by["not_found"]["expect"] == {
+        "ok": True, "found": False, "error": "", "games": [], "deposit": False, "agent": False}
+    assert by["bad_key"]["status"] == 401 and by["bad_key"]["expect"]["error"] == "http_401"
+    assert json.loads(by["bad_key"]["body"])["error"] == "unauthorized"
 
 
 def test_probe_find_agent_fields_recursive():

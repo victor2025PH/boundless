@@ -1,48 +1,327 @@
 {
   "probe_version": 1,
-  "_note": "占位样例（按 2026-09-20 老板口径假设的 chatx_text 格式）。拿到真网关样例后用 python -m domains.player_care.gateway_probe --out 覆盖本文件，再按真实格式改 expect 与 extract_games。",
-  "url": "http://gateway.example",
+  "ts": 1790031477,
+  "url": "http://165.154.233.219",
   "lookup_path": "/lookup",
+  "key_env": "GATEWAY_KEY",
+  "key_present": true,
   "samples": [
     {
       "name": "found",
       "status": 200,
-      "body": "{\"ok\": true, \"chatx_text\": \"Player 100000\\nbalance: 100.00\\nturnover: 1000\\nlast deposit: 100 on 1000-00-00 10:00\\nrecent games: platform: JILI, game: Super Ace | platform: PG, game: Mahjong Ways\"}",
+      "latency_ms": 2563,
+      "raw_keys": [
+        "chatx_text",
+        "missing_phones",
+        "ok",
+        "phone_hits",
+        "players",
+        "query"
+      ],
+      "agent_fields": [
+        "players[0].agent",
+        "players[1].agent"
+      ],
+      "body": "{\"ok\": true, \"query\": {\"phones\": [\"***\"], \"uids\": [\"*********\"], \"numbers\": []}, \"phone_hits\": {\"************\": \"100000000\"}, \"missing_phones\": [], \"players\": [{\"uid\": \"*********\", \"internal_id\": 100, \"name\": \"***\", \"vip\": \"VIP0\", \"status\": \"active\", \"status_cn\": \"正常\", \"phone\": \"***\", \"agent\": \"***\", \"site\": \"panalo98\", \"country\": null, \"reg_source\": \"offcial_site\", \"currency\": \"PHP\", \"registered_at\": \"2026-08-24 12:21:06\", \"last_login_at\": \"2026-09-21 00:00:47\", \"register_ip\": \"***\", \"last_login_ip\": \"***\", \"history_ips\": [\"***\", \"***\"], \"available\": 100.0, \"in_bet\": 83.19, \"frozen\": 0, \"locked\": 0, \"deposit_total\": 0, \"deposit_count\": 0, \"deposit_first_amount\": null, \"deposit_first_at\": null, \"deposit_yesterday\": 0, \"has_deposited\": false, \"withdraw_total\": 0, \"withdraw_count\": 0, \"net_deposit\": 0, \"total_bet\": 100, \"win_loss\": 100, \"profit\": 0, \"last_bet_at\": \"2026-09-05 08:00:00\", \"games_sampled_rows\": 5, \"games_total_rows\": 5, \"coding_remaining\": 100.0, \"coding_total\": 100.0, \"coding_current\": 100.0, \"unlock_recharge_needed\": 0, \"credit_score\": 100, \"ban_games\": false, \"ban_payout\": false, \"ban_reason\": null, \"same_ip_count\": 6, \"same_device_count\": 0, \"same_ip_users\": [\"***\", \"***\", \"***\", \"***\"], \"same_device_users\": [], \"top_games\": [{\"platform\": \"JILI\", \"game\": \"Fortune Gems 2\", \"bet_amount\": 100, \"win_loss\": 100.0, \"bet_count\": 2, \"last_played_at\": \"2026-09-05 08:00:00\", \"first_played_at\": \"2026-09-04 08:00:00\"}, {\"platform\": \"PP\", \"game\": \"Gates of Olympus\", \"bet_amount\": 100, \"win_loss\": 15.5, \"bet_count\": 1, \"last_played_at\": \"2026-09-05 08:00:00\", \"first_played_at\": \"2026-09-05 08:00:00\"}, {\"platform\": \"PG\", \"game\": \"Wild Bounty Showdown\", \"bet_amount\": 10, \"win_loss\": 0, \"bet_count\": 1, \"last_played_at\": \"2026-09-05 08:00:00\", \"first_played_at\": \"2026-09-05 08:00:00\"}, {\"platform\": \"JILI\", \"game\": \"Super Ace\", \"bet_amount\": 8, \"win_loss\": 0.2, \"bet_count\": 1, \"last_played_at\": \"2026-09-05 08:00:00\", \"first_played_at\": \"2026-09-05 08:00:00\"}], \"flags\": [\"待打码 100.19\", \"同IP关联 6\"], \"scripts\": [{\"id\": \"balance\", \"label\": \"报余额\", \"text\": \"您这边可用余额 100.93 PHP，投注中 83.19 PHP。\"}, {\"id\": \"wager\", \"label\": \"报打码\", \"text\": \"目前待打码还差 100.19 PHP，满了才能提现。\"}, {\"id\": \"risk\", \"label\": \"核身提醒\", \"text\": \"系统显示同 IP 关联 6 个账号，需要先核身后再处理。\"}, {\"id\": \"game\", \"label\": \"报游戏\", \"text\": \"最近在玩 JILI Fortune Gems 2，最近一次 2026-09-05 08:00:00，该游戏投注 100。\"}], \"summary\": \"UID ********* / *** / VIP0 / 正常；余额 100.93（投注中 83.19）；充 0×0，提 0×0，净存 0；总投注 100，输赢 -100，最近投注 2026-09-05 08:00:00；待打码 100.19。 风险：待打码 100.19，同IP关联 6。\"}, {\"uid\": \"100000000\", \"internal_id\": 100, \"name\": \"***\", \"vip\": \"VIP0\", \"status\": \"active\", \"status_cn\": \"正常\", \"phone\": \"***\", \"agent\": \"***\", \"site\": \"panalo98\", \"country\": null, \"reg_source\": \"promotion\", \"currency\": \"PHP\", \"registered_at\": \"2026-09-15 20:50:42\", \"last_login_at\": \"2026-09-15 23:09:37\", \"register_ip\": \"***\", \"last_login_ip\": \"***\", \"history_ips\": [\"***\"], \"available\": 100, \"in_bet\": 0, \"frozen\": 0, \"locked\": 0, \"deposit_total\": 100, \"deposit_count\": 3, \"deposit_first_amount\": 100, \"deposit_first_at\": \"2026-09-15 21:02:59\", \"deposit_yesterday\": 0, \"has_deposited\": true, \"withdraw_total\": 100, \"withdraw_count\": 1, \"net_deposit\": 100, \"total_bet\": 100, \"win_loss\": -46, \"profit\": 0, \"last_bet_at\": \"2026-09-15 16:11:25\", \"games_sampled_rows\": 100, \"games_total_rows\": 100, \"coding_remaining\": 0, \"coding_total\": 100.0, \"coding_current\": 100.0, \"unlock_recharge_needed\": 0, \"credit_score\": 100, \"ban_games\": false, \"ban_payout\": false, \"ban_reason\": null, \"same_ip_count\": 1, \"same_device_count\": 0, \"same_ip_users\": [\"***\"], \"same_device_users\": [], \"top_games\": [{\"platform\": \"JILI\", \"game\": \"Fortune Gems\", \"bet_amount\": 100, \"win_loss\": 100.0, \"bet_count\": 100, \"last_played_at\": \"2026-09-15 16:11:25\", \"first_played_at\": \"2026-09-15 16:03:52\"}], \"flags\": [\"同IP关联 1\"], \"scripts\": [{\"id\": \"balance\", \"label\": \"报余额\", \"text\": \"您这边可用余额 100 PHP，投注中 0 PHP。\"}, {\"id\": \"wager\", \"label\": \"报打码\", \"text\": \"打码已达标，当前没有待完成流水。\"}, {\"id\": \"risk\", \"label\": \"核身提醒\", \"text\": \"系统显示同 IP 关联 1 个账号，需要先核身后再处理。\"}, {\"id\": \"game\", \"label\": \"报游戏\", \"text\": \"最近在玩 JILI Fortune Gems，最近一次 2026-09-15 16:11:25，该游戏投注 100。\"}], \"summary\": \"UID 100000000 / *** / VIP0 / 正常；余额 100（投注中 0）；充 100×3，提 100×1，净存 100；总投注 100，输赢 -46，最近投注 2026-09-15 16:11:25；打码已达标。 风险：同IP关联 1。\"}], \"chatx_text\": \"【玩家后台资料——只读事实，按此回答，不要编造数字】\\nUID ********* / *** / VIP0 / 正常；余额 100.93（投注中 83.19）；充 0×0，提 0×0，净存 0；总投注 100，输赢 -100，最近投注 2026-09-05 08:00:00；待打码 100.19。 风险：待打码 100.19，同IP关联 6。\\nUID 100000000 / *** / VIP0 / 正常；余额 100（投注中 0）；充 100×3，提 100×1，净存 100；总投注 100，输赢 -46，最近投注 2026-09-15 16:11:25；打码已达标。 风险：同IP关联 1。\\n（余额/充提/打码以本资料为准；不知道的字段说去核实，不要猜。）\"}",
+      "raw": {
+        "ok": true,
+        "query": {
+          "phones": [
+            "***"
+          ],
+          "uids": [
+            "*********"
+          ],
+          "numbers": []
+        },
+        "phone_hits": {
+          "************": "100000000"
+        },
+        "missing_phones": [],
+        "players": [
+          {
+            "uid": "*********",
+            "internal_id": 100,
+            "name": "***",
+            "vip": "VIP0",
+            "status": "active",
+            "status_cn": "正常",
+            "phone": "***",
+            "agent": "***",
+            "site": "panalo98",
+            "country": null,
+            "reg_source": "offcial_site",
+            "currency": "PHP",
+            "registered_at": "2026-08-24 12:21:06",
+            "last_login_at": "2026-09-21 00:00:47",
+            "register_ip": "***",
+            "last_login_ip": "***",
+            "history_ips": [
+              "***",
+              "***"
+            ],
+            "available": 100.0,
+            "in_bet": 83.19,
+            "frozen": 0,
+            "locked": 0,
+            "deposit_total": 0,
+            "deposit_count": 0,
+            "deposit_first_amount": null,
+            "deposit_first_at": null,
+            "deposit_yesterday": 0,
+            "has_deposited": false,
+            "withdraw_total": 0,
+            "withdraw_count": 0,
+            "net_deposit": 0,
+            "total_bet": 100,
+            "win_loss": 100,
+            "profit": 0,
+            "last_bet_at": "2026-09-05 08:00:00",
+            "games_sampled_rows": 5,
+            "games_total_rows": 5,
+            "coding_remaining": 100.0,
+            "coding_total": 100.0,
+            "coding_current": 100.0,
+            "unlock_recharge_needed": 0,
+            "credit_score": 100,
+            "ban_games": false,
+            "ban_payout": false,
+            "ban_reason": null,
+            "same_ip_count": 6,
+            "same_device_count": 0,
+            "same_ip_users": [
+              "***",
+              "***",
+              "***",
+              "***"
+            ],
+            "same_device_users": [],
+            "top_games": [
+              {
+                "platform": "JILI",
+                "game": "Fortune Gems 2",
+                "bet_amount": 100,
+                "win_loss": 100.0,
+                "bet_count": 2,
+                "last_played_at": "2026-09-05 08:00:00",
+                "first_played_at": "2026-09-04 08:00:00"
+              },
+              {
+                "platform": "PP",
+                "game": "Gates of Olympus",
+                "bet_amount": 100,
+                "win_loss": 15.5,
+                "bet_count": 1,
+                "last_played_at": "2026-09-05 08:00:00",
+                "first_played_at": "2026-09-05 08:00:00"
+              },
+              {
+                "platform": "PG",
+                "game": "Wild Bounty Showdown",
+                "bet_amount": 10,
+                "win_loss": 0,
+                "bet_count": 1,
+                "last_played_at": "2026-09-05 08:00:00",
+                "first_played_at": "2026-09-05 08:00:00"
+              },
+              {
+                "platform": "JILI",
+                "game": "Super Ace",
+                "bet_amount": 8,
+                "win_loss": 0.2,
+                "bet_count": 1,
+                "last_played_at": "2026-09-05 08:00:00",
+                "first_played_at": "2026-09-05 08:00:00"
+              }
+            ],
+            "flags": [
+              "待打码 100.19",
+              "同IP关联 6"
+            ],
+            "scripts": [
+              {
+                "id": "balance",
+                "label": "报余额",
+                "text": "您这边可用余额 100.93 PHP，投注中 83.19 PHP。"
+              },
+              {
+                "id": "wager",
+                "label": "报打码",
+                "text": "目前待打码还差 100.19 PHP，满了才能提现。"
+              },
+              {
+                "id": "risk",
+                "label": "核身提醒",
+                "text": "系统显示同 IP 关联 6 个账号，需要先核身后再处理。"
+              },
+              {
+                "id": "game",
+                "label": "报游戏",
+                "text": "最近在玩 JILI Fortune Gems 2，最近一次 2026-09-05 08:00:00，该游戏投注 100。"
+              }
+            ],
+            "summary": "UID ********* / *** / VIP0 / 正常；余额 100.93（投注中 83.19）；充 0×0，提 0×0，净存 0；总投注 100，输赢 -100，最近投注 2026-09-05 08:00:00；待打码 100.19。 风险：待打码 100.19，同IP关联 6。"
+          },
+          {
+            "uid": "100000000",
+            "internal_id": 100,
+            "name": "***",
+            "vip": "VIP0",
+            "status": "active",
+            "status_cn": "正常",
+            "phone": "***",
+            "agent": "***",
+            "site": "panalo98",
+            "country": null,
+            "reg_source": "promotion",
+            "currency": "PHP",
+            "registered_at": "2026-09-15 20:50:42",
+            "last_login_at": "2026-09-15 23:09:37",
+            "register_ip": "***",
+            "last_login_ip": "***",
+            "history_ips": [
+              "***"
+            ],
+            "available": 100,
+            "in_bet": 0,
+            "frozen": 0,
+            "locked": 0,
+            "deposit_total": 100,
+            "deposit_count": 3,
+            "deposit_first_amount": 100,
+            "deposit_first_at": "2026-09-15 21:02:59",
+            "deposit_yesterday": 0,
+            "has_deposited": true,
+            "withdraw_total": 100,
+            "withdraw_count": 1,
+            "net_deposit": 100,
+            "total_bet": 100,
+            "win_loss": -46,
+            "profit": 0,
+            "last_bet_at": "2026-09-15 16:11:25",
+            "games_sampled_rows": 100,
+            "games_total_rows": 100,
+            "coding_remaining": 0,
+            "coding_total": 100.0,
+            "coding_current": 100.0,
+            "unlock_recharge_needed": 0,
+            "credit_score": 100,
+            "ban_games": false,
+            "ban_payout": false,
+            "ban_reason": null,
+            "same_ip_count": 1,
+            "same_device_count": 0,
+            "same_ip_users": [
+              "***"
+            ],
+            "same_device_users": [],
+            "top_games": [
+              {
+                "platform": "JILI",
+                "game": "Fortune Gems",
+                "bet_amount": 100,
+                "win_loss": 100.0,
+                "bet_count": 100,
+                "last_played_at": "2026-09-15 16:11:25",
+                "first_played_at": "2026-09-15 16:03:52"
+              }
+            ],
+            "flags": [
+              "同IP关联 1"
+            ],
+            "scripts": [
+              {
+                "id": "balance",
+                "label": "报余额",
+                "text": "您这边可用余额 100 PHP，投注中 0 PHP。"
+              },
+              {
+                "id": "wager",
+                "label": "报打码",
+                "text": "打码已达标，当前没有待完成流水。"
+              },
+              {
+                "id": "risk",
+                "label": "核身提醒",
+                "text": "系统显示同 IP 关联 1 个账号，需要先核身后再处理。"
+              },
+              {
+                "id": "game",
+                "label": "报游戏",
+                "text": "最近在玩 JILI Fortune Gems，最近一次 2026-09-15 16:11:25，该游戏投注 100。"
+              }
+            ],
+            "summary": "UID 100000000 / *** / VIP0 / 正常；余额 100（投注中 0）；充 100×3，提 100×1，净存 100；总投注 100，输赢 -46，最近投注 2026-09-15 16:11:25；打码已达标。 风险：同IP关联 1。"
+          }
+        ],
+        "chatx_text": "【玩家后台资料——只读事实，按此回答，不要编造数字】\nUID ********* / *** / VIP0 / 正常；余额 100.93（投注中 83.19）；充 0×0，提 0×0，净存 0；总投注 100，输赢 -100，最近投注 2026-09-05 08:00:00；待打码 100.19。 风险：待打码 100.19，同IP关联 6。\nUID 100000000 / *** / VIP0 / 正常；余额 100（投注中 0）；充 100×3，提 100×1，净存 100；总投注 100，输赢 -46，最近投注 2026-09-15 16:11:25；打码已达标。 风险：同IP关联 1。\n（余额/充提/打码以本资料为准；不知道的字段说去核实，不要猜。）"
+      },
+      "chatx_text": "【玩家后台资料——只读事实，按此回答，不要编造数字】\nUID ********* / *** / VIP0 / 正常；余额 100.93（投注中 83.19）；充 0×0，提 0×0，净存 0；总投注 100，输赢 -100，最近投注 2026-09-05 08:00:00；待打码 100.19。 风险：待打码 100.19，同IP关联 6。\nUID 100000000 / *** / VIP0 / 正常；余额 100（投注中 0）；充 100×3，提 100×1，净存 100；总投注 100，输赢 -46，最近投注 2026-09-15 16:11:25；打码已达标。 风险：同IP关联 1。\n（余额/充提/打码以本资料为准；不知道的字段说去核实，不要猜。）",
       "expect": {
         "ok": true,
         "found": true,
         "error": "",
         "games": [
-          {"platform": "JILI", "game": "Super Ace"},
-          {"platform": "PG", "game": "Mahjong Ways"}
+          {
+            "platform": "JILI",
+            "game": "Fortune Gems 2"
+          },
+          {
+            "platform": "PP",
+            "game": "Gates of Olympus"
+          },
+          {
+            "platform": "PG",
+            "game": "Wild Bounty Showdown"
+          },
+          {
+            "platform": "JILI",
+            "game": "Super Ace"
+          },
+          {
+            "platform": "JILI",
+            "game": "Fortune Gems"
+          }
         ],
-        "deposit": true
+        "deposit": true,
+        "agent": true
       }
     },
     {
       "name": "not_found",
-      "status": 200,
-      "body": "{\"ok\": false, \"chatx_text\": \"\", \"error\": \"player not found\"}",
-      "expect": {"ok": true, "found": false, "error": "player not found", "games": [], "deposit": false}
-    },
-    {
-      "name": "not_found_404",
       "status": 404,
-      "body": "{\"error\": \"not found\"}",
-      "expect": {"ok": true, "found": false, "error": "", "games": [], "deposit": false}
+      "latency_ms": 4655,
+      "raw_keys": [],
+      "agent_fields": [],
+      "body": "{\"error\": \"not_found\", \"message\": \"运营方按这个手机号没有找到玩家。已按 0 / 63 前缀交给上游查过：100000000000、1000000000、10000000000。\", \"phones\": [\"***\"], \"tried_phones\": [\"***\", \"***\", \"***\"]}",
+      "raw": {},
+      "chatx_text": "",
+      "expect": {
+        "ok": true,
+        "found": false,
+        "error": "",
+        "games": [],
+        "deposit": false,
+        "agent": false
+      }
     },
     {
       "name": "bad_key",
       "status": 401,
-      "body": "{\"error\": \"unauthorized\"}",
-      "expect": {"ok": false, "found": false, "error": "http_401", "games": [], "deposit": false}
-    },
-    {
-      "name": "timeout",
-      "status": 0,
-      "body": "",
-      "transport_error": "timeout",
-      "expect": {"ok": false, "found": false, "error": "timeout", "games": [], "deposit": false}
+      "latency_ms": 31,
+      "raw_keys": [],
+      "agent_fields": [],
+      "body": "{\"error\": \"unauthorized\", \"message\": \"缺少或错误的 X-Gateway-Key\"}",
+      "raw": {},
+      "chatx_text": "",
+      "expect": {
+        "ok": false,
+        "found": false,
+        "error": "http_401",
+        "games": [],
+        "deposit": false,
+        "agent": false
+      }
     }
   ]
 }

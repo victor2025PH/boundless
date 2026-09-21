@@ -31,8 +31,22 @@ python main.py                   --config config_player\config.yaml
 
 ```
 POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
-{"q": <客户消息>, "phone": <可选 639…>, "uid": <可选>}   →  {"chatx_text": "..."}
+{"q": <客户消息>, "phone": <可选 639…>, "uid": <可选>}
+  → 200 {"ok": true, "query", "phone_hits", "missing_phones", "players": […], "chatx_text": "..."}
+  → 404 {"error": "not_found", …}   401 {"error": "unauthorized"}   400 {"error": "empty_query"}
 ```
+
+**真网关格式（2026-09-21 三探针定稿，脱敏样例 `tests/fixtures/player_care_lookup_samples.json`）**：
+
+- `chatx_text` 是中文摘要：首尾各一行客服式包装（`【玩家后台资料…】` / `（余额/充提/打码以本资料为准…）`），中间每个玩家一行
+  `UID x / 昵称 / VIP0 / 正常；余额 a（投注中 b）；充 总额×次数，提 总额×次数，净存 n；总投注 t，输赢 w，最近投注 时间；打码已达标|待打码 r。 风险：同IP关联 k，禁提…`；
+- **游戏不在文本里**：`players[i].top_games[] = {platform, game, bet_amount, win_loss, bet_count, last_played_at, first_played_at}`（实测 JILI / PP / PG 等厂商，游戏名如 Fortune Gems 2 / Gates of Olympus / Super Ace）；
+  `extract_games(res)` 优先读这里，`platform: X, game: Y` 文本正则只作兜底；
+- **有 `agent` 字段**：`players[i].agent`（代理号 / 渠道码，字符串），`extract_agent(res)` 取它 → 画像 `agent` 列；
+- 充值：`players[i].has_deposited / deposit_count / deposit_total`（`has_deposit(res)`）；文本兜底 `detect_deposit` 认 `充 <金额>×<次数>`（`充 0×0` = 没充）；
+- 同一手机号多账号 → 200 + `multi: true` + `candidates`，没有 `chatx_text` → 按「没查到」；一次传 phone + uid 且是两个人 → `players` 两条；
+- 给人设的事实用 `friend_facts_text(res)`：去掉包头包尾和每行「风险：…」尾巴（同IP关联 / 禁提是后台风控，朋友不该知道），余额 / 充提 / 打码 / 时间原样保留；
+  明用块再附一行「近期玩过：游戏（厂商）…」，数字闸的事实集 = 朋友版文本 + 游戏名（游戏名里的数字不误杀）。
 
 - 手机号任意写法（9… / 09… / +63 9… / WA JID）归一为 `639xxxxxxxxx`；会员号只在带 `uid / member id / account no` 前缀时抽取；
 - 默认关：`enabled` 不为真或缺 url / key → 不发请求；401 / 超时 / bad json → 一律「没资料」；404 = 网关通但没这个人；
@@ -55,7 +69,7 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 
 | 分支 | 触发 | 进提示词的块 | 数字闸 |
 |---|---|---|---|
-| **明用** `visible` | 对方问自己账户（balance / deposit / withdraw / turnover / bonus…）**且**有手机号或会员号，网关查到 | 「只读事实」块 = `chatx_text` 原文 + 「像帮朋友问了一下」口吻 | 回复里出现事实外 ≥3 位数字 → 整句换安全句 |
+| **明用** `visible` | 对方问自己账户（balance / deposit / withdraw / turnover / bonus…）**且**有手机号或会员号，网关查到 | 「只读事实」块 = `friend_facts_text` 事实行 + 「近期玩过：…」 + 「像帮朋友问了一下」口吻 | 回复里出现事实外 ≥3 位数字 → 整句换安全句 |
 | **无资料** `missing` | 问账户但查不到 / 超时 / 网关未配 | 「没查到，稍后再看，绝不编数字」 | 任何 ≥3 位数字 → 安全句 |
 | **不知是谁** `need_identity` | 问账户但没有手机号 / 会员号（TG 数字 id） | 「不编数字；朋友口吻问一句是哪个号」；即使网关按 q 命中也**不给数字** | 同上 |
 | **暗用** `hidden` | 没问账户但有身份线索且查到 | 只有一条**不含数字**的隐藏提示：对方玩过哪些游戏，「你不知道来源、不能提及、对方先聊到才接」 | 不启（日常数字放行） |
@@ -154,7 +168,8 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 
 ## 7. 待老板 / 117 机补的输入
 
-- `GATEWAY_KEY`（写进 player 实例机器的环境变量，不发聊天记录）；
-- `/lookup` **三种真实返回样例**：查到 / 查不到 / 出错或部分字段——最省事的给法：在 player 机跑一次 `python -m domains.player_care.gateway_probe --config ... --phone <真号> --out samples.json`（§3）把输出贴回来，已脱敏；`extract_games` 按真实 `chatx_text` 格式定稿；
-- 是否有 `agent`（代理号）字段——有则 owner 归因用它，没有则用「我方手机槽位 + 我方号码」；
-- player 实例要用的 WA / TG 账号，以及每个账号真实在玩的 2–3 个游戏名（填 persona `style_hint`）。
+- ~~`GATEWAY_KEY`~~ 已在网关项目 `D:\用户数据拉取\.env`（player 实例机上要把它设进环境变量 `GATEWAY_KEY`，不写配置文件）；
+- ~~`/lookup` 三种真实返回样例~~ 2026-09-21 已跑真探针：found 200 / not_found 404 / bad_key 401，脱敏样例已进 `tests/fixtures/player_care_lookup_samples.json`，解析按 §3 定稿；
+- ~~是否有 `agent` 字段~~ 有：`players[i].agent`，已接进画像 `agent` 列；owner 归因用它；
+- 真 LLM 明用 / 暗用各跑一轮确认数字闸不误杀（需 player 实例配上真模型，待做）；
+- player 实例要用的 WA / TG 账号，以及每个账号真实在玩的 2–3 个游戏名（填 persona `style_hint`；网关实测到的厂商 / 游戏名见 §3，可从中选）。

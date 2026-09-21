@@ -3,8 +3,14 @@
 接口（运营方网关，2026-09-20 老板给的口径）：
     POST {url}/lookup   请求头 X-Gateway-Key: <key>
     JSON: {"q": <客户消息>, "phone": <可选>, "uid": <可选>}
-    成功 → 返回体里的 ``chatx_text`` 当只读事实（余额 / 打码 / 充提 / 玩过的游戏，
-    platform=厂商，game=游戏名）。查不到或超时 → 当没资料，绝不编数字。
+    成功（200）→ ``{ok, query, phone_hits, missing_phones, players[], chatx_text}``：
+      ``chatx_text`` 是给模型的中文摘要（每个玩家一行 ``UID x / 名 / VIP / 状态；余额…；
+      充 总额×次数，提 …；总投注…；打码…。 风险：…``），**游戏不在文本里**，在
+      ``players[i].top_games[] = {platform, game, bet_amount, last_played_at, …}``；
+      代理号在 ``players[i].agent``；充值在 ``players[i].has_deposited / deposit_count``。
+      同一手机号多账号 → 200 + ``multi: true`` + ``candidates``，无 chatx_text（按没查到）。
+    404 = 没这个玩家；401 = 密钥错；400 = 空查询。查不到或超时 → 当没资料，绝不编数字。
+    （2026-09-21 真网关三探针定稿，样例见 tests/fixtures/player_care_lookup_samples.json）
     手机号 9 开头 / 补 0 / 补 63 网关都认；我们自己归一成 ``639xxxxxxxxx`` 用来对账。
 
 纪律（与 companion.goals.order_pull 同一套「新子系统约定」）：
@@ -283,7 +289,56 @@ class PlayerGateway:
         return res
 
 
-# ── 事实文本的轻解析（等真实样例后再调；先只做保守抽取）────────────────────
+# ── 结构化事实（真样例定稿：优先读 players[]，文本正则只作兜底）─────────────
+
+def _players(source: Any) -> List[Dict[str, Any]]:
+    raw = source.raw if isinstance(source, LookupResult) else source
+    if not isinstance(raw, dict):
+        return []
+    return [p for p in (raw.get("players") or []) if isinstance(p, dict)]
+
+
+def extract_agent(source: Any) -> str:
+    """``players[0].agent``（代理号 / 渠道码）；没有返回空串。"""
+    for p in _players(source):
+        a = str(p.get("agent") or "").strip()
+        if a:
+            return a
+    return ""
+
+
+def has_deposit(source: Any) -> bool:
+    """任一玩家 ``has_deposited`` 为真或 ``deposit_count`` / ``deposit_total`` > 0（只看事实）。"""
+    for p in _players(source):
+        if p.get("has_deposited") is True:
+            return True
+        for k in ("deposit_count", "deposit_total"):
+            try:
+                if float(p.get(k) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+_RISK_TAIL_RE = re.compile(r"\s*风险[:：].*$", re.MULTILINE)
+_WRAPPER_LINE_RE = re.compile(r"^\s*[【（(].*[】）)]\s*$")
+
+
+def friend_facts_text(source: Any) -> str:
+    """给「朋友」人设看的事实：去掉网关的客服式包头包尾（【玩家后台资料…】/（余额…为准…））
+    和每行的「风险：同IP关联 / 禁提…」尾巴——风控是后台的事，朋友不该知道也不该说。
+    数字（余额 / 充提 / 打码 / 时间）原样保留，数字闸照旧只放行事实里出现过的数。"""
+    text = source.chatx_text if isinstance(source, LookupResult) else str(source or "")
+    keep: List[str] = []
+    for ln in str(text).splitlines():
+        if not ln.strip() or _WRAPPER_LINE_RE.match(ln):
+            continue
+        keep.append(_RISK_TAIL_RE.sub("", ln).rstrip())
+    return "\n".join(keep).strip()
+
+
+# ── 事实文本的轻解析（真样例里游戏不在文本，正则只兜底别家网关格式）────────
 
 _GAME_LINE_RE = re.compile(
     r"(?:platform|厂商|供应商|provider)\s*[:：]\s*(?P<platform>[^\n,;，；|]+?)\s*[,;，；|/]?\s*"
@@ -293,11 +348,29 @@ _GAME_LINE_RE = re.compile(
 _GAME_ONLY_RE = re.compile(r"(?:game|游戏)\s*[:：]\s*(?P<game>[^\n,;，；|]+)", re.IGNORECASE)
 
 
-def extract_games(chatx_text: Any, limit: int = 5) -> List[Dict[str, str]]:
-    """从 chatx_text 里抽「厂商 / 游戏名」对（不含任何数字字段）。抽不到返回空表。"""
-    text = str(chatx_text or "")
+def extract_games(source: Any, limit: int = 5) -> List[Dict[str, str]]:
+    """抽「厂商 / 游戏名」对（不含任何数字字段）。抽不到返回空表。
+
+    ``source`` 可以是 LookupResult / 返回体 dict（读 ``players[].top_games[]``，真网关格式）
+    或 chatx_text 字符串（``platform: X, game: Y`` 正则兜底）。"""
     out: List[Dict[str, str]] = []
     seen = set()
+    for p in _players(source):
+        for g in (p.get("top_games") or []):
+            if not isinstance(g, dict):
+                continue
+            name = str(g.get("game") or "").strip()
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                out.append({"platform": str(g.get("platform") or "").strip(), "game": name})
+    if out:
+        return out[:limit]
+    if isinstance(source, LookupResult):
+        text = source.chatx_text
+    elif isinstance(source, dict):
+        text = str(source.get("chatx_text") or "")
+    else:
+        text = str(source or "")
     for m in _GAME_LINE_RE.finditer(text):
         g = m.group("game").strip()
         p = m.group("platform").strip()

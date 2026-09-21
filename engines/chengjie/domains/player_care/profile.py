@@ -56,11 +56,12 @@ GAME_MENTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# 网关事实里的充值记录：关键词后跟一个 >0 的金额。宁漏勿误——只认这个形状，
-# 真实 chatx_text 样例到手后（B1.5）再定稿。
+# 网关事实里的充值记录：关键词后跟一个 >0 的金额。宁漏勿误——只认这两个形状：
+#   真网关 chatx_text：``充 1500×3，提 …``（总额×次数，``充 0×0`` = 没充过）；
+#   兼容：``deposit / top-up / 充值 / 存款 … <金额>``。结构化字段走 gateway.has_deposit。
 _DEPOSIT_RE = re.compile(
-    r"(?:deposit(?:s|ed)?|top-?ups?|recharge[sd]?|cash-?in|充值|存款|上分)"
-    r"[^\n\d]{0,24}?(?P<amt>\d[\d,]*(?:\.\d+)?)",
+    r"(?:(?:deposit(?:s|ed)?|top-?ups?|recharge[sd]?|cash-?in|充值|存款|上分)"
+    r"[^\n\d]{0,24}?|(?<![\w\u4e00-\u9fff])充\s*)(?P<amt>\d[\d,]*(?:\.\d+)?)",
     re.IGNORECASE,
 )
 
@@ -193,7 +194,7 @@ class PlayerProfileService:
             stage = advance(stage, STAGE_REGISTERED)
             if not prev.get("registered_at"):
                 fields["registered_at"] = int(now)
-            if detect_deposit(ftext):
+            if (facts or {}).get("deposit") is True or detect_deposit(ftext):
                 stage, dep_fields = self._apply_deposit(prev, stage, today, now)
                 fields.update(dep_fields)
         if round_kind == "visible":
@@ -284,7 +285,7 @@ class PlayerProfileService:
             if not prev.get("registered_at"):
                 fields["registered_at"] = int(now)
                 events.append("registered")
-            if detect_deposit(ftext):
+            if facts.get("deposit") is True or detect_deposit(ftext):
                 day = day_key(now)
                 if str(prev.get("deposit_last_day") or "") != day:
                     events.append("deposit")
