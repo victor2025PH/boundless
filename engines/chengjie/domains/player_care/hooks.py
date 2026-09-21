@@ -135,6 +135,14 @@ class PlayerCareDomainHook(DomainHook):
                     break
         uid = extract_uid(ctx.text) or str((stored or {}).get("uid") or "")
         if not uid:
+            # 上轮网关说「这个号下有多个账号」→ 对方直接回一串数字，完全命中候选 UID 才算
+            cands = [str(c) for c in ((stored or {}).get("candidates") or [])]
+            if cands:
+                for n in re.findall(r"\d{5,}", str(ctx.text or "")):
+                    if n in cands:
+                        uid = n
+                        break
+        if not uid:
             for t in reversed(_history_user_texts(ctx)):
                 uid = extract_uid(t)
                 if uid:
@@ -149,10 +157,15 @@ class PlayerCareDomainHook(DomainHook):
             "en": "Tone: like a friend who asked around for them (\"I checked for you\"), not support staff; no lists.",
             "zh": "口吻：像帮朋友顺手问了一下，不是客服；不列表。",
         }[lang]
+        translate = {
+            "tl": "事实是中文摘要：用 Taglish 自然转述，数字 / 时间 / 游戏名原样照抄（不换算币种、不改格式、不翻译游戏名）；",
+            "en": "事实是中文摘要：用英文自然转述，数字 / 时间 / 游戏名原样照抄（不换算币种、不改格式、不翻译游戏名）；",
+            "zh": "",
+        }[lang]
         return (
             "【只读事实——对方在问自己的账户。以下内容只能照抄复述：数字、时间、游戏名一律"
             "不得计算、推断、四舍五入或补全；platform 是厂商、game 是游戏名。事实里没有的"
-            "东西一律说没查到。】\n"
+            f"东西一律说没查到。{translate}只挑对方问到的那一两项说，别把整段资料念出来。】\n"
             f"{chatx_text.strip()}\n"
             + ("近期玩过：" + "、".join(
                 g["game"] + (f"（{g['platform']}）" if g.get("platform") else "")
@@ -308,6 +321,14 @@ class PlayerCareDomainHook(DomainHook):
         ident = self.resolve_identity(ctx)
         phone, uid = ident["phone"], ident["uid"]
         lang = _reply_lang(ctx)
+        prev = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
+        picked_uid = bool(uid and prev.get("multi") and not prev.get("found") and uid in (prev.get("candidates") or []))
+        if picked_uid:
+            # 上轮问了「哪个会员号」，这轮对方回了 UID：算他还在问账户
+            asks_account = True
+        uid_only = bool(uid and (picked_uid or prev.get("uid_only")))
+        if uid_only:
+            phone = ""   # 这个手机号下多账号，再带上去网关只会再给一次候选；以后都只用 UID 查
 
         gw = self.gateway()
         if not gw.configured:
@@ -327,9 +348,9 @@ class PlayerCareDomainHook(DomainHook):
             res = None
 
         found = bool(res and res.usable)
+        multi = bool(res is not None and getattr(res, "multi", False) and not found)
         facts_text = friend_facts_text(res) if found else ""
         games = extract_games(res) if found else []
-        prev = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
         uc[_FACTS_KEY] = {
             "phone": phone or str(prev.get("phone") or ""),
             "uid": uid or str(prev.get("uid") or ""),
@@ -337,9 +358,14 @@ class PlayerCareDomainHook(DomainHook):
             "text": facts_text if found else str(prev.get("text") or ""),
             "games": games or list(prev.get("games") or []),
             "ts": time.time(),
-            "error": "" if found else str(getattr(res, "error", "") or ("not_found" if res else "exception")),
+            "error": "" if found else ("multi" if multi else str(getattr(res, "error", "") or ("not_found" if res else "exception"))),
             "cached": bool(getattr(res, "cached", False)),
         }
+        if multi:
+            uc[_FACTS_KEY]["multi"] = True
+            uc[_FACTS_KEY]["candidates"] = list(res.candidates)
+        if uid_only:
+            uc[_FACTS_KEY]["uid_only"] = True
         if found:
             uc[_FACTS_KEY]["deposit"] = has_deposit(res)
             agent = extract_agent(res)
@@ -351,6 +377,12 @@ class PlayerCareDomainHook(DomainHook):
                 uc[_VISIBLE_KEY] = True
                 uc[_ROUND_KEY] = "visible"
                 return {"_domain_context_block": self._facts_block_visible(facts_text, lang, games)}
+            if multi:
+                # 同一号下多个账号：不报数字也不列候选，让人设问一句是哪个会员号，下轮带 UID 复查
+                uc[_ROUND_KEY] = "ambiguous"
+                return {"_domain_context_block": (
+                    "【账户查询】对方在问自己的账户，但这个手机号下有不止一个账号，现在还不知道是哪一个。"
+                    "不要报任何数字、不要猜；用朋友口吻自然地问一句会员号（UID）是哪个，再帮他看。")}
             uc[_ROUND_KEY] = "missing"
             return {"_domain_context_block": self._facts_block_missing(lang)}
         if asks_account:
@@ -383,7 +415,7 @@ class PlayerCareDomainHook(DomainHook):
                 uc["_player_numeric_gate_hits"] = int(uc.get("_player_numeric_gate_hits") or 0) + 1
                 self._record_gate_hit(ctx)
                 return _SAFE_LINE[lang]
-        elif round_kind in ("missing", "need_identity", "unconfigured"):
+        elif round_kind in ("missing", "need_identity", "ambiguous", "unconfigured"):
             # 没资料那一轮：任何 ≥3 位数字都是编的
             bad = numbers_not_in_facts(text, "")
             if bad:

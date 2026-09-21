@@ -264,6 +264,72 @@ async def test_hook_with_real_gateway_sample_uses_structured_games_and_strips_ri
     hidden = (await PlayerCareDomainHook(gateway=_FakeGW(res)).on_message_pre_process(ctx2))["_domain_context_block"]
     assert "隐藏画像" in hidden and "Fortune Gems 2（JILI）" in hidden and "余额" not in hidden
 
+    # 风控 / 人身 / 后台字段既不进提示词，也不进 user_context（画像只吃 _player_facts 这一份）
+    for leak in ("same_ip", "same_device", "register_ip", "history_ips", "scripts", "credit_score", "ban_payout", "核身"):
+        assert leak not in blk and leak not in hidden
+        assert leak not in json.dumps(facts, ensure_ascii=False)
+    assert set(facts) <= {"phone", "uid", "found", "text", "games", "ts", "error", "cached", "deposit", "agent"}
+
+
+@pytest.mark.asyncio
+async def test_hook_visible_block_tells_model_to_restate_in_reply_language():
+    raw = json.loads(_real_found_sample()["body"])
+    res = LookupResult(ok=True, found=True, chatx_text=raw["chatx_text"], raw=raw, status=200)
+    for lang, marker in (("tl", "Taglish"), ("en", "英文")):
+        ctx = _ctx("magkano pa balance ko?", chat_id="639171234567@s.whatsapp.net", reply_lang=lang)
+        blk = (await PlayerCareDomainHook(gateway=_FakeGW(res)).on_message_pre_process(ctx))["_domain_context_block"]
+        assert "事实是中文摘要" in blk and marker in blk and "原样照抄" in blk and "别把整段资料念出来" in blk
+    ctx = _ctx("余额多少", chat_id="639171234567@s.whatsapp.net", reply_lang="zh")
+    blk = (await PlayerCareDomainHook(gateway=_FakeGW(res)).on_message_pre_process(ctx))["_domain_context_block"]
+    assert "事实是中文摘要" not in blk and "别把整段资料念出来" in blk
+
+
+MULTI_BODY = {"ok": True, "multi": True, "query": {}, "phone_hits": {}, "players": [],
+              "candidates": [{"uid": "128891843", "name": "Juan"}, {"uid": "128899999", "name": "Ana"}],
+              "message": "这个手机号对应多个账号，请用下面的 UID 再查一次拿全档。"}
+
+
+def test_gateway_multi_response_is_not_found_but_keeps_candidate_uids():
+    def _tp(url, headers, body, timeout):
+        return 200, json.dumps(MULTI_BODY).encode()
+
+    gw = _gw(_tp)
+    res = gw.lookup("balance", phone="09171234567")
+    assert res.ok and not res.found and not res.usable and res.error == ""
+    assert res.multi is True and res.candidates == ["128891843", "128899999"]
+    assert extract_games(res) == []
+
+
+@pytest.mark.asyncio
+async def test_hook_multi_accounts_asks_which_uid_then_requeries_with_uid_only():
+    """同号多账号：第一轮 ambiguous（不报数字、不列候选）；对方回一串命中候选的 UID → 只用 UID 复查 → 明用。"""
+    multi = LookupResult(ok=True, found=False, raw=MULTI_BODY, status=200, multi=True,
+                         candidates=["128891843", "128899999"])
+
+    class _GW(_FakeGW):
+        def lookup(self, q, *, phone="", uid=""):
+            self.calls.append({"q": q, "phone": phone, "uid": uid})
+            return FOUND if uid == "128891843" else multi
+
+    gw = _GW(multi)
+    hook = PlayerCareDomainHook(gateway=gw)
+    uc = {}
+    ctx = _ctx("check balance ko", chat_id="639171234567@s.whatsapp.net", uc=uc)
+    blk = (await hook.on_message_pre_process(ctx))["_domain_context_block"]
+    assert "不止一个账号" in blk and "128891843" not in blk
+    assert uc["_player_facts_round"] == "ambiguous" and uc["_player_facts"]["error"] == "multi"
+    assert uc["_player_facts"]["candidates"] == ["128891843", "128899999"]
+    assert await hook.on_reply_post_process("Alin sa 128891843 o 128899999?", ctx) == _SAFE_LINE["tl"]
+    assert (await hook.on_reply_post_process("Alin account mo ba, may dalawa e?", ctx)).startswith("Alin")
+
+    # 对方回 UID（裸数字也认，但要完全命中候选；随手一串别的数字不认）
+    ctx2 = _ctx("ito 128891843", chat_id="639171234567@s.whatsapp.net", uc=uc)
+    blk2 = (await hook.on_message_pre_process(ctx2))["_domain_context_block"]
+    assert gw.calls[-1] == {"q": "ito 128891843", "phone": "", "uid": "128891843"}
+    assert "只读事实" in blk2 and uc["_player_facts_round"] == "visible" and uc["_player_facts"]["uid"] == "128891843"
+    ctx3 = _ctx("ito 55555", chat_id="639171234567@s.whatsapp.net", uc={"_player_facts": dict(uc["_player_facts"], uid="", found=False, multi=True)})
+    assert PlayerCareDomainHook.resolve_identity(ctx3)["uid"] == ""
+
 
 @pytest.mark.asyncio
 async def test_hook_missing_facts_says_not_found_and_gates_numbers():

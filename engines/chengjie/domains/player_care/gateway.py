@@ -183,6 +183,8 @@ class LookupResult:
     status: int = 0
     latency_ms: int = 0
     cached: bool = False
+    multi: bool = False           # 同一手机号下多个账号，网关只给候选、不给资料
+    candidates: List[str] = field(default_factory=list)   # multi 时的候选 UID（只存 uid，不存昵称等）
 
     @property
     def usable(self) -> bool:
@@ -282,14 +284,29 @@ class PlayerGateway:
 
         text = str(data.get("chatx_text") or "").strip()
         explicit_fail = data.get("ok") is False or data.get("success") is False or bool(data.get("error"))
+        multi = data.get("multi") is True and not text
         res = LookupResult(ok=True, found=bool(text) and not explicit_fail, chatx_text=text,
                            raw=data, status=status, latency_ms=latency,
-                           error=str(data.get("error") or "") if explicit_fail else "")
+                           error=str(data.get("error") or "") if explicit_fail else "",
+                           multi=multi, candidates=candidate_uids(data) if multi else [])
         self._cache[ck] = (now, res)
         return res
 
 
 # ── 结构化事实（真样例定稿：优先读 players[]，文本正则只作兜底）─────────────
+
+def candidate_uids(source: Any) -> List[str]:
+    """multi 应答里的候选 UID（去重、保序）；候选项其余字段（昵称 / 代理等）不外露。"""
+    raw = source.raw if isinstance(source, LookupResult) else source
+    if not isinstance(raw, dict):
+        return []
+    out: List[str] = []
+    for c in (raw.get("candidates") or []):
+        u = str((c.get("uid") if isinstance(c, dict) else c) or "").strip()
+        if u and u not in out:
+            out.append(u)
+    return out
+
 
 def _players(source: Any) -> List[Dict[str, Any]]:
     raw = source.raw if isinstance(source, LookupResult) else source

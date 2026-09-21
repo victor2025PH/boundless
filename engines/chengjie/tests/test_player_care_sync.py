@@ -227,6 +227,30 @@ def test_run_sync_new_deposit_spawns_after_deposit_goal(svc, goals):
     assert svc.store.get_player_profile("639170000010")["stage"] == "active"
 
 
+def test_run_sync_multi_account_requeries_with_uid_only(svc):
+    _seed(svc, "639170000012", now=T0, phone="639170000012")
+    svc.record_inbound(key="639170000012", text="uid 128891843", platform="whatsapp", account_id="wa-01",
+                       external_id="639170000012", phone="639170000012", uid="128891843", now=T0 + 5)
+    multi = {"ok": True, "multi": True, "players": [], "candidates": [{"uid": "128891843", "name": "Juan"}]}
+    responses = {"639170000012": (200, multi),
+                 "128891843": (200, {"ok": True, "players": [{"uid": "128891843", "has_deposited": True}],
+                                     "chatx_text": "UID 128891843 / VIP0；余额 100"})}
+    seen = []
+
+    def transport(url, headers, body, timeout):
+        payload = json.loads(body.decode("utf-8"))
+        seen.append((payload.get("phone"), payload.get("uid")))
+        status, data = responses[payload.get("phone") or payload.get("uid")]
+        return status, json.dumps(data).encode("utf-8")
+
+    gw = PlayerGateway(GW_CFG, transport=transport)
+    s = run_player_sync(CFG, gateway=gw, profile=svc, now=T0 + 3600, sleep=lambda _s: None)
+    assert seen == [("639170000012", "128891843"), (None, "128891843")]     # 复查不带手机号
+    assert s["looked_up"] == 1 and s["found"] == 1
+    row = svc.store.get_player_profile("639170000012")
+    assert row["last_found"] and "余额 100" in row["facts_text"] and "Juan" not in json.dumps(row, ensure_ascii=False)
+
+
 def test_run_sync_errors_counted_and_goals_disabled(svc):
     _seed(svc, "639170000011", now=T0, phone="639170000011")
     gw = _fake_gw({"639170000011": (500, {})})

@@ -44,7 +44,7 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
   `extract_games(res)` 优先读这里，`platform: X, game: Y` 文本正则只作兜底；
 - **有 `agent` 字段**：`players[i].agent`（代理号 / 渠道码，字符串），`extract_agent(res)` 取它 → 画像 `agent` 列；
 - 充值：`players[i].has_deposited / deposit_count / deposit_total`（`has_deposit(res)`）；文本兜底 `detect_deposit` 认 `充 <金额>×<次数>`（`充 0×0` = 没充）；
-- 同一手机号多账号 → 200 + `multi: true` + `candidates`，没有 `chatx_text` → 按「没查到」；一次传 phone + uid 且是两个人 → `players` 两条；
+- 同一手机号多账号 → 200 + `multi: true` + `candidates`，没有 `chatx_text` → `LookupResult.multi=True`，只留 `candidates` 里的 uid（昵称 / 代理等不外露）；hook 走 `ambiguous` 分支问一句会员号，对方回的数字**恰好等于**某候选 uid 才认，复查只带 uid 不带手机号（带手机号会再撞 multi）；sync 里画像已有 uid 同样只用 uid 复查；一次传 phone + uid 且是两个人 → `players` 两条；
 - 给人设的事实用 `friend_facts_text(res)`：去掉包头包尾和每行「风险：…」尾巴（同IP关联 / 禁提是后台风控，朋友不该知道），余额 / 充提 / 打码 / 时间原样保留；
   明用块再附一行「近期玩过：游戏（厂商）…」，数字闸的事实集 = 朋友版文本 + 游戏名（游戏名里的数字不误杀）。
 
@@ -69,13 +69,14 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 
 | 分支 | 触发 | 进提示词的块 | 数字闸 |
 |---|---|---|---|
-| **明用** `visible` | 对方问自己账户（balance / deposit / withdraw / turnover / bonus…）**且**有手机号或会员号，网关查到 | 「只读事实」块 = `friend_facts_text` 事实行 + 「近期玩过：…」 + 「像帮朋友问了一下」口吻 | 回复里出现事实外 ≥3 位数字 → 整句换安全句 |
+| **明用** `visible` | 对方问自己账户（balance / deposit / withdraw / turnover / bonus…）**且**有手机号或会员号，网关查到 | 「只读事实」块 = `friend_facts_text` 事实行 + 「近期玩过：…」 + 「像帮朋友问了一下」口吻 + tl/en 时「事实是中文摘要，用对方语言转述，数字 / 时间 / 游戏名原样照抄、不换币种」+「只答问到的一两项」 | 回复里出现事实外 ≥3 位数字 → 整句换安全句 |
+| **多账号** `ambiguous` | 问账户，网关返 `multi`（一号多户） | 「手机号下不止一个账号，不报数、不猜；朋友口吻问会员号」，不列候选 uid | 任何 ≥3 位数字 → 安全句 |
 | **无资料** `missing` | 问账户但查不到 / 超时 / 网关未配 | 「没查到，稍后再看，绝不编数字」 | 任何 ≥3 位数字 → 安全句 |
 | **不知是谁** `need_identity` | 问账户但没有手机号 / 会员号（TG 数字 id） | 「不编数字；朋友口吻问一句是哪个号」；即使网关按 q 命中也**不给数字** | 同上 |
 | **暗用** `hidden` | 没问账户但有身份线索且查到 | 只有一条**不含数字**的隐藏提示：对方玩过哪些游戏，「你不知道来源、不能提及、对方先聊到才接」 | 不启（日常数字放行） |
 | 无线索 | 既没身份也没问账户 | 不打网关，不注入 | 不启 |
 
-每轮结果写进持久 `user_context["_player_facts"]`（phone / uid / found / text / games / ts）供画像与阶段用；提示块 `_domain_context_block` 用完即清，不跨轮泄漏。
+每轮结果写进持久 `user_context["_player_facts"]`（phone / uid / found / text / games / deposit / agent / ts，multi 轮另带 candidates uid 列表）供画像与阶段用——网关原始返回体（same_ip_users / history_ips / scripts / credit_score 等风控与人身字段）**不进** user_context、不进画像、不进提示词，只活在 60s 内存缓存里；提示块 `_domain_context_block` 用完即清，不跨轮泄漏。
 `get_escalation_line()` 返回空——基类的中文客服话术绝不带出去。
 
 ## 5. 顺手修的核心缺口（对所有域生效）

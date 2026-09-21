@@ -209,6 +209,9 @@ def _run_player_sync(cfg_root: Any, config_path: Any, summary: Dict[str, Any], t
         summary["scanned"] += 1
         try:
             res = gw.lookup("player info", phone=phone, uid=uid)
+            if res.multi and uid:
+                # 同号多账号：带手机号只会拿到候选；画像已有 UID 就只用 UID 再查一次
+                res = gw.lookup("player info", uid=uid)
         except Exception:
             logger.debug("[player_sync] lookup 异常", exc_info=True)
             summary["errors"] += 1
