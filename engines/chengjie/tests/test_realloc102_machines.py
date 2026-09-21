@@ -159,6 +159,48 @@ def test_phase0e_parks_musetalk_via_hub_not_kill(rm):
     assert not any("comfy|musetalk|lipsync" in s.cmd for s in p0.steps)
 
 
+def test_phase2_uses_real_task_names_and_ships_repo_asr_server(rm):
+    """现场任务名 AITR_ASR_176 / AITR_ASR_198（不是 AITR_ASR）；176 盘上是 08-18 旧版，先 scp 仓库版并哈希验收，
+    再解 72h 时限、再 Enable；拆 198 放在 overlay 之后且先确认 176 在线、先停看门狗再杀进程。"""
+    p2 = rm.build_phase2()
+    cmds = [s.cmd for s in p2.steps]
+    assert not any(" /TN AITR_ASR " in c or " /TN AITR_ASR;" in c for c in cmds + [s.cmd for s in p2.verify])
+    i_scp = next(i for i, c in enumerate(cmds) if c.startswith("scp:") and c.endswith(":C:/aitr_asr/asr_server.py"))
+    i_hash = next(i for i, c in enumerate(cmds) if "Get-FileHash" in c)
+    i_limit = next(i for i, c in enumerate(cmds) if "ExecutionTimeLimit = 'PT0S'" in c)
+    i_run = next(i for i, c in enumerate(cmds) if "schtasks /Run /TN AITR_ASR_176" in c)
+    i_poll = next(i for i, c in enumerate(cmds) if c.startswith("poll:") and "176:8765" in c)
+    assert i_scp < i_hash < i_limit < i_run < i_poll
+    assert p2.steps[i_scp].host == "local" and rm.H176 + ":" in cmds[i_scp]
+    assert p2.steps[i_hash].expect == rm._file_sha256(rm.ASR_SERVER_SRC) and len(p2.steps[i_hash].expect) == 64
+    assert p2.steps[i_limit].expect == "PT0S"
+    v = p2.verify
+    assert v[0].cmd.startswith("poll:") and "176:8765" in v[0].cmd
+    j_dis = next(i for i, s in enumerate(v) if "AITR_ASR_198 /Disable" in s.cmd and "AITR_ASR_WATCHDOG /Disable" in s.cmd)
+    j_kill = next(i for i, s in enumerate(v) if "asr_server" in s.cmd and "Stop-Process" in s.cmd)
+    assert 0 < j_dis < j_kill and all(v[j].host == rm.H198 for j in (j_dis, j_kill))
+    assert not any("Stop-Process" in s.cmd for s in p2.steps)   # 步骤段不碰 198（overlay 前还在服务）
+
+
+def test_scp_step_dispatches_to_local_scp(rm):
+    fr = FakeRunner()
+    ok, out = rm.run_step(rm.Step("local", "scp:C:/repo/a.py|ganzhi:C:/aitr_asr/a.py", "x"), fr)
+    assert ok and fr.calls == [("local", ("scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                                           "C:/repo/a.py", "ganzhi:C:/aitr_asr/a.py"))]
+    ok, _ = rm.run_step(rm.Step("local", "scp:a|b:c", "x"), FakeRunner(local_rc=1))
+    assert not ok
+
+
+def test_verify_only_skips_steps_and_overlay(rm, tmp_path):
+    """首跑在 overlay 回显处崩掉后只补验收：不再重放步骤（schtasks /Run 二次触发）、不再改 overlay。"""
+    fr = FakeRunner(http_out={"http://192.168.0.176:8765/health": (0, '{"asr_loaded":true}')})
+    rc = rm.run_phase(rm.build_phase2(), apply=True, runner=fr, log_path=tmp_path / "l.jsonl", verify_only=True)
+    assert rc == 0
+    assert not any(c[0] == "local" and "realloc102.py" in " ".join(c[1]) for c in fr.calls)
+    assert not any(c[0] == "ssh" and c[1] == rm.H176 for c in fr.calls)
+    assert any(c[0] == "ssh" and c[1] == rm.H198 and "AITR_ASR_198 /Disable" in c[2] for c in fr.calls)
+
+
 def test_dry_run_executes_nothing(rm, tmp_path, capsys):
     fr = FakeRunner()
     rc = rm.run_phase(rm.build_phase0(), apply=False, runner=fr, log_path=tmp_path / "l.jsonl")

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -31,6 +32,7 @@ from typing import Callable, Dict, List, Optional
 _HERE = Path(__file__).resolve().parent
 _ENGINE = _HERE.parent.parent
 OVERLAY_TOOL = _HERE / "realloc102.py"
+ASR_SERVER_SRC = _ENGINE / "scripts" / "asr176" / "asr_server.py"   # 176/198 共用的服务本体，仓库为准
 LOG_PATH = _ENGINE / "logs" / "realloc102_machines.jsonl"
 
 PHASES = ["phase0", "phase0e", "phase1", "phase2", "phase3", "phase4"]
@@ -162,18 +164,46 @@ def build_phase1() -> Phase:
     ])
 
 
+# 任务名以现场 schtasks /Query 为准（2026-09-22）：176 是 AITR_ASR_176（Disabled），198 是 AITR_ASR_198；看门狗两边同名。
+ASR_TASK_176, ASR_TASK_198, ASR_WATCHDOG = "AITR_ASR_176", "AITR_ASR_198", "AITR_ASR_WATCHDOG"
+
+
+def _kill_asr_server_ps() -> str:
+    return ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -match 'asr_server' } "
+            "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+
+
+def _file_sha256(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest().upper() if p.exists() else ""
+
+
 def build_phase2() -> Phase:
+    lift_limit = (
+        f"$t = Get-ScheduledTask -TaskName {ASR_TASK_176}; $t.Settings.ExecutionTimeLimit = 'PT0S'; "
+        "$t.Settings.DisallowStartIfOnBatteries = $false; $t.Settings.StopIfGoingOnBatteries = $false; "
+        "Set-ScheduledTask -InputObject $t | Out-Null; "
+        f"[string](Get-ScheduledTask -TaskName {ASR_TASK_176}).Settings.ExecutionTimeLimit"
+    )
     return Phase("phase2", "听觉回 176（aitr_asr：whisper + emotion2vec）", steps=[
         Step(H176, "Test-Path C:\\aitr_asr", "176 原属地目录还在（不在 → 从 198 拷，见 scripts/asr176/README.md）",
              expect="True"),
-        Step(H176, _native("schtasks /Change /TN AITR_ASR /Enable; schtasks /Run /TN AITR_ASR"),
+        # 176 盘上是 08-18 旧版（10KB）；09-12 P0 解码纪律只部到了 198。仏库为准推过去，哈希验收。
+        Step("local", f"scp:{ASR_SERVER_SRC}|{H176}:C:/aitr_asr/asr_server.py", "176 部仓库版 asr_server.py（09-12 P0）"),
+        Step(H176, "(Get-FileHash C:\\aitr_asr\\asr_server.py -Algorithm SHA256).Hash", "176 asr_server.py 与仓库一致",
+             expect=_file_sha256(ASR_SERVER_SRC)),
+        Step(H176, lift_limit, "176 任务时限 PT72H→PT0S（98 09-18 72h 自杀同根）", expect="PT0S"),
+        Step(H176, _native(f"schtasks /Change /TN {ASR_TASK_176} /Enable; schtasks /Run /TN {ASR_TASK_176}"),
              "176 启 aitr_asr 任务"),
-        Step(H176, _native("schtasks /Change /TN AITR_ASR_WATCHDOG /Enable"), "176 启 5min 看门狗", optional=True),
+        Step(H176, _native(f"schtasks /Change /TN {ASR_WATCHDOG} /Enable"), "176 启 5min 看门狗", optional=True),
         Step("local", "poll:http://192.168.0.176:8765/health", "等 176 ASR+SER 载入（最长 5min）",
              expect='"ser_loaded":true', timeout=300),
     ], overlay_phase="phase2", verify=[
-        Step(H198, _native("schtasks /Change /TN AITR_ASR /Disable; schtasks /Change /TN AITR_ASR_WATCHDOG /Disable"),
-             "198 停 aitr_asr 任务（释放 ~3.5G；进程随任务结束或手动 Stop-Process）", optional=True),
+        # overlay 热重载 ~30s，先等它切完再拆 198，避免在途请求撕到无监听的 8765
+        Step("local", "poll:http://192.168.0.176:8765/health", "176 ASR+SER 仍在线", expect='"asr_loaded":true', timeout=60),
+        Step(H198, _native(f"schtasks /Change /TN {ASR_TASK_198} /Disable; schtasks /Change /TN {ASR_WATCHDOG} /Disable"),
+             "198 停 aitr_asr 任务+看门狗（否则 5min 内被拉回）", optional=True),
+        Step(H198, f"Start-Sleep 30; schtasks /End /TN {ASR_TASK_198} 2>$null | Out-Null; " + _kill_asr_server_ps() + "; 'stopped'",
+             "198 结束 asr_server 进程（释放 ~3.5G）", expect="stopped", optional=True),
         Step(H198, _native("nvidia-smi --query-gpu=memory.used --format=csv,noheader"), "198 显存应降到 ~6G"),
     ])
 
@@ -265,13 +295,17 @@ class Runner:
 
 
 def run_step(step: Step, runner: Runner) -> tuple[bool, str]:
-    """返回 (ok, 输出摘要)。local 步骤按前缀分派：http/poll/file/skip。"""
+    """返回 (ok, 输出摘要)。local 步骤按前缀分派：http/poll/file/scp/skip。"""
     if step.host == "local":
         if step.cmd.startswith("skip:"):
             return False, step.cmd[5:]
         if step.cmd.startswith("file:"):
             ok = runner.file_exists(step.cmd[5:])
             return ok, ("在" if ok else "不存在")
+        if step.cmd.startswith("scp:"):
+            src, dst = step.cmd[4:].split("|", 1)
+            rc, out = runner.local(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", src, dst], step.timeout)
+            return rc == 0, out.strip()[:300] or "copied"
         if step.cmd.startswith("poll:"):
             url = step.cmd[5:]
             deadline = time.monotonic() + step.timeout
@@ -293,11 +327,13 @@ def run_step(step: Step, runner: Runner) -> tuple[bool, str]:
 
 def run_phase(phase: Phase, *, apply: bool, runner: Optional[Runner] = None,
               overlay_extra: Optional[List[str]] = None,
-              log_path: Path = LOG_PATH) -> int:
+              log_path: Path = LOG_PATH, verify_only: bool = False) -> int:
     runner = runner or Runner()
-    print(f"== {phase.name} · {phase.title} ({'APPLY' if apply else 'dry-run'})")
+    print(f"== {phase.name} · {phase.title} ({'APPLY' if apply else 'dry-run'}{'，只验收' if verify_only else ''})")
     rc_total = 0
     for i, st in enumerate(phase.steps, 1):
+        if verify_only:
+            break
         tag = "可选" if st.optional else "必做"
         print(f"  [{i}] {tag} {st.host}: {st.why}\n       $ {st.cmd}")
         if not apply:
@@ -308,7 +344,7 @@ def run_phase(phase: Phase, *, apply: bool, runner: Optional[Runner] = None,
         if not ok and not st.optional:
             print(f"  停在第 {i} 步（必做步失败）。修好后重跑本阶段（步骤幂等）。")
             return 1
-    if phase.overlay_phase:
+    if phase.overlay_phase and not verify_only:
         argv = [sys.executable, str(OVERLAY_TOOL), phase.overlay_phase, "--apply"] + list(overlay_extra or [])
         print(f"  [overlay] $ {' '.join(argv)}")
         if apply:
@@ -348,11 +384,15 @@ def main() -> int:
                     help="phase0：附带把 176 OLLAMA_HOST 收回 127.0.0.1（先看调用方统计，确认无 LAN 消费方）")
     ap.add_argument("--overlay-arg", action="append", default=[],
                     help="透传给 realloc102.py 的额外参数（如 --svc-token-env NAME）")
+    ap.add_argument("--verify-only", action="store_true", help="跳过步骤与 overlay，只跑阶段验收（重跑/复核用）")
     a = ap.parse_args()
+    # 远端回显带 UTF-8 替代符时别让 GBK 控制台把整轮打死（首跑 phase2 在 overlay 回显处摔过）
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     phase = BUILDERS[a.phase](comfy_task=a.comfy_task, harden_ollama=a.harden_ollama)
     if a.phase == "phase4" and a.apply:
         print("phase4 只做只读预检；迁移本体按 docs/实施102 §7.1 阶段 4 在 04:00 窗手工执行。")
-    return run_phase(phase, apply=a.apply, overlay_extra=a.overlay_arg)
+    return run_phase(phase, apply=a.apply, overlay_extra=a.overlay_arg, verify_only=a.verify_only)
 
 
 if __name__ == "__main__":
