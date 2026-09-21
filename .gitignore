@@ -10,6 +10,8 @@ prod.env.local
 **/服务器密码.txt
 llm_backends.json
 config.yaml
+*.tokenbak
+**/真key.txt
 
 # ---- python ----
 __pycache__/
