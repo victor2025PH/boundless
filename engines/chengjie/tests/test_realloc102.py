@@ -113,6 +113,32 @@ def test_phase1_without_token_env_does_not_write_key(r102):
     assert "svc_token_env" not in d["minicpm_clone"]
 
 
+def test_phase1_direct_path_disables_hub_keeps_engine_leg(r102):
+    """direct：不用 176 角色库——关 hub_fish、本机参考音直连 176:7865；hub 端点保留便于切回。"""
+    d = _overlay_like_prod()
+    notes = r102.apply_phase1(d, voice_path="direct")
+    av = d["avatar_voice"]
+    assert av["hub_fish"]["enabled"] is False
+    assert av["hub_fish"]["base_url"] == "http://192.168.0.176:9000"     # 保留
+    assert av["base_urls"] == ["http://192.168.0.176:7865"]
+    assert av["emotion_channel_threshold"] == 0.5
+    assert d["minicpm_clone"]["base_url"] == "http://192.168.0.176:7865"
+    assert any("hub_fish.enabled: True -> False" in n for n in notes)
+    assert r102.apply_phase1(d, voice_path="direct") == []
+    with pytest.raises(ValueError):
+        r102.apply_phase1(_overlay_like_prod(), voice_path="bogus")
+
+
+def test_probes_skip_hub_for_direct(r102, monkeypatch):
+    asked = []
+    monkeypatch.setattr(r102, "_probe", lambda url, must, timeout=5.0: asked.append(url) or None)
+    r102.run_probes(["phase1"], voice_path="direct")
+    assert asked == ["http://192.168.0.176:7865/health"]
+    asked.clear()
+    r102.run_probes(["phase1"], voice_path="hub")
+    assert "http://192.168.0.176:9000/api/engines" in asked
+
+
 def test_phase2_hearing_to_176(r102):
     d = _overlay_like_prod()
     r102.apply_phase2(d)
@@ -180,7 +206,8 @@ def test_roundtrip_keeps_comments_and_backup(r102, tmp_path, monkeypatch):
 def test_apply_refuses_when_probe_fails(r102, tmp_path, monkeypatch, capsys):
     ov = tmp_path / "config.local.yaml"
     ov.write_text("vision:\n  base_url: http://192.168.0.176:11434/v1\n", encoding="utf-8")
-    monkeypatch.setattr(r102, "run_probes", lambda phases: ["[phase0] http://x 不可达（URLError）"])
+    monkeypatch.setattr(r102, "run_probes",
+                        lambda phases, voice_path="hub": ["[phase0] http://x 不可达（URLError）"])
     monkeypatch.setattr(sys, "argv", ["realloc102", "phase0", "--apply", "--overlay", str(ov)])
     with pytest.raises(SystemExit) as ei:
         r102.main()

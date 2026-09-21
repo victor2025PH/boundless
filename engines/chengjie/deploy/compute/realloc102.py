@@ -130,15 +130,34 @@ def apply_phase0(data) -> List[str]:
     return notes
 
 
-def apply_phase1(data, svc_token_env: str = "") -> List[str]:
-    """语音主路 → 176；第二条腿 → 176:7865；本地路径情感阈值修正。"""
+VOICE_PATHS = ("hub", "direct")
+
+
+def apply_phase1(data, svc_token_env: str = "", voice_path: str = "hub") -> List[str]:
+    """语音主路 → 176；本地腿 → 176:7865；本地路径情感阈值修正。
+
+    ``voice_path``（两条都落在 176 同一块 5090 的 IndexTTS-2 上，差别在怎么到达）：
+    - ``hub``：hub :9000 ``/api/tts_only`` 用 176 角色库档名（profile_map），失败再走本地腿。
+      现生产形态，改动最小。
+    - ``direct``：关 hub_fish，本地腿 ``avatar_voice.base_urls=[176:7865]`` 直连引擎，参考音
+      由本机 ``voice_refs`` 直传（reference_audio_b64 + 逐字稿，指纹生命周期守卫在本机），
+      情感通道 emotion/emo_text/emo_alpha 全带。同时满足 08-29「不用 176 角色库」与今日
+      「176 主跑语音情感」两条指令，也是内测桌面种子 ``config.desktop.internal.yaml``
+      的形态；需 AvatarHub 令牌（117 走 resolve_service_token 缺省路径，或 svc_token_env）。
+    """
+    if voice_path not in VOICE_PATHS:
+        raise ValueError(f"voice_path 须为 {VOICE_PATHS}")
     notes: List[str] = []
     av = _ensure_map(data, "avatar_voice")
     hf = _ensure_map(av, "hub_fish")
-    _set(hf, "enabled", True, notes, "avatar_voice.hub_fish")
-    _set(hf, "base_url", VOICE_HUB, notes, "avatar_voice.hub_fish")
-    _set(hf, "tts_engine", "index_tts", notes, "avatar_voice.hub_fish")
-    _set(hf, "emotion_threshold", HUB_EMOTION_THRESHOLD, notes, "avatar_voice.hub_fish")
+    if voice_path == "hub":
+        _set(hf, "enabled", True, notes, "avatar_voice.hub_fish")
+        _set(hf, "base_url", VOICE_HUB, notes, "avatar_voice.hub_fish")
+        _set(hf, "tts_engine", "index_tts", notes, "avatar_voice.hub_fish")
+        _set(hf, "emotion_threshold", HUB_EMOTION_THRESHOLD, notes, "avatar_voice.hub_fish")
+    else:
+        _set(hf, "enabled", False, notes, "avatar_voice.hub_fish")
+        # base_url/tts_engine 保留：日后切回 hub 只翻 enabled
 
     _set(av, "base_url", VOICE_ENGINE, notes, "avatar_voice")
     urls = av.get("base_urls")
@@ -230,11 +249,12 @@ PHASE_FN: Dict[str, Callable[..., List[str]]] = {
 }
 
 
-def apply_phases(data, phases: List[str], svc_token_env: str = "") -> List[str]:
+def apply_phases(data, phases: List[str], svc_token_env: str = "",
+                 voice_path: str = "hub") -> List[str]:
     notes: List[str] = []
     for p in phases:
         fn = PHASE_FN[p]
-        got = fn(data, svc_token_env) if p == "phase1" else fn(data)
+        got = fn(data, svc_token_env, voice_path) if p == "phase1" else fn(data)
         notes.extend(f"[{p}] {n}" for n in got)
     return notes
 
@@ -260,9 +280,9 @@ def _probe(url: str, must: List[str], timeout: float = 5.0) -> Optional[str]:
 PHASE_PROBES: Dict[str, List[tuple]] = {
     # phase0：198 必须已拉起 qwen3-vl（/api/tags 列出即可；钉常驻见 runbook）
     "phase0": [("http://192.168.0.198:11434/api/tags", [VISION_MODEL])],
-    # phase1：hub 目录能列 index_tts + 引擎本体已载入
-    "phase1": [(VOICE_HUB + "/api/engines", ["index_tts"]),
-               (VOICE_ENGINE + "/health", ['"model_loaded":true'])],
+    # phase1：引擎本体已载入；hub 目录能列 index_tts（direct 形态不查 hub，见 run_probes）
+    "phase1": [(VOICE_ENGINE + "/health", ['"model_loaded":true']),
+               (VOICE_HUB + "/api/engines", ["index_tts"])],
     # phase2：aitr_asr 已在 176 起来且两模型都载入
     "phase2": [(ASR_SER + "/health", ['"asr_loaded":true', '"ser_loaded":true'])],
     # phase3：104 ComfyUI 与 140 CosyVoice 都在
@@ -271,10 +291,12 @@ PHASE_PROBES: Dict[str, List[tuple]] = {
 }
 
 
-def run_probes(phases: List[str]) -> List[str]:
+def run_probes(phases: List[str], voice_path: str = "hub") -> List[str]:
     fails: List[str] = []
     for p in phases:
         for url, must in PHASE_PROBES.get(p, []):
+            if p == "phase1" and voice_path == "direct" and url.startswith(VOICE_HUB):
+                continue
             why = _probe(url, must)
             if why:
                 fails.append(f"[{p}] {why}")
@@ -352,6 +374,9 @@ def main() -> None:
     ap.add_argument("--no-probe", action="store_true", help="--apply 时跳过机器侧前置探活")
     ap.add_argument("--overlay", type=Path, default=DEFAULT_OVERLAY)
     ap.add_argument("--svc-token-env", default="", help="phase1：minicpm_clone 直连 176:7865 的令牌密钥名")
+    ap.add_argument("--voice-path", choices=VOICE_PATHS, default="hub",
+                    help="phase1 语音到达 176 的方式：hub=经 :9000 角色库（现生产形态）；"
+                         "direct=关 hub_fish、本机参考音直连 :7865（不用角色库，桌面种子形态）")
     args = ap.parse_args()
 
     if not args.overlay.exists():
@@ -364,7 +389,7 @@ def main() -> None:
     raw_original = args.overlay.read_text(encoding="utf-8")
     yaml, data = _load_yaml(args.overlay)
     before = _dump_str(yaml, data)
-    notes = apply_phases(data, phases, args.svc_token_env)
+    notes = apply_phases(data, phases, args.svc_token_env, args.voice_path)
     after = _dump_str(yaml, data)
 
     if before == after:
@@ -382,7 +407,7 @@ def main() -> None:
         return
 
     if not args.no_probe:
-        fails = run_probes(phases)
+        fails = run_probes(phases, args.voice_path)
         if fails:
             sys.exit("拒绝落盘：机器侧前置未就位——\n  " + "\n  ".join(fails)
                      + "\n先按 docs/实施102 §七 runbook 把对应机器侧步骤做完，或 --no-probe 强行。")
