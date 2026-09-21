@@ -217,23 +217,31 @@ def build_phase3(comfy_task: str = "") -> Phase:
         Step(H104, "schtasks /Query /FO LIST | Select-String -Pattern 'comfy' -CaseSensitive:$false",
              "104 列 ComfyUI 任务名（8-29 装的）", optional=True),
     ]
+    verify: List[Step] = []
     if comfy_task:
         steps.append(Step(H104, _native(f'schtasks /Change /TN "{comfy_task}" /Enable; schtasks /Run /TN "{comfy_task}"'),
                           f"104 启 ComfyUI 任务 {comfy_task}"))
         steps.append(Step("local", "poll:http://192.168.0.104:8188/system_stats", "等 104 ComfyUI 起来",
                           expect="comfyui_version", timeout=300))
-        steps += COMFY176_STOP
+        # 176 ComfyUI 放到 overlay 之后拆（同 phase2 拆 198 的做法）：overlay 热重载 ~30s，
+        # 先停 176 会让在途自拍打到无监听的 8188
+        verify += [
+            Step("local", "poll:http://192.168.0.104:8188/system_stats", "104 ComfyUI 仍在线（overlay 已切）",
+                 expect="comfyui_version", timeout=60),
+            *COMFY176_STOP,
+        ]
     else:
         steps.append(Step("local", "skip:--comfy-task 未给", "104 ComfyUI 启动：请用 --comfy-task <任务名> 重跑本阶段",
                           optional=True))
     steps += [
         Step(H140, _ollama_generate(VL_MODEL, 0), "140 卸 qwen3-vl（6G；识图已归 198）", expect='"done":true'),
-        Step(H140, _native("schtasks /Run /TN EmotionTTS"), "140 拉起 CosyVoice3 :7852（粤语专用）"),
-        Step("local", "poll:http://192.168.0.140:7852/health", "等 140 CosyVoice 载入", expect="models_loaded", timeout=600),
+        # 任务 08-28 起 Disabled（当时让显存给 qwen3-vl），/Run 之前必须 /Enable；_svc_emotion.bat 自带 7852 健康短路，幂等
+        Step(H140, _native("schtasks /Change /TN EmotionTTS /Enable; schtasks /Run /TN EmotionTTS"),
+             "140 启用并拉起 CosyVoice3 :7852（粤语专用）"),
+        Step("local", "poll:http://192.168.0.140:7852/health", "等 140 CosyVoice 载入", expect='"models_loaded":true', timeout=600),
     ]
-    return Phase("phase3", "104 出图 / 140 粤语", steps=steps, overlay_phase="phase3", verify=[
-        Step("local", "http://192.168.0.140:11434/api/ps", "140 只剩 bge-m3", expect="bge-m3"),
-    ])
+    verify.append(Step("local", "http://192.168.0.140:11434/api/ps", "140 只剩 bge-m3", expect="bge-m3"))
+    return Phase("phase3", "104 出图 / 140 粤语", steps=steps, overlay_phase="phase3", verify=verify)
 
 
 def build_phase4() -> Phase:
@@ -353,14 +361,16 @@ def run_phase(phase: Phase, *, apply: bool, runner: Optional[Runner] = None,
             print(out.strip()[-800:])
             if rc != 0:
                 return 1
-    for st in phase.verify:
-        print(f"  [验收] {st.host}: {st.why}\n       $ {st.cmd}")
+    for i, st in enumerate(phase.verify, 1):
+        print(f"  [验收{i}] {st.host}: {st.why}\n       $ {st.cmd}")
         if apply:
             ok, out = run_step(st, runner)
             _log(log_path, phase.name, st, ok, out)
             print(f"       -> {'OK' if ok else '待复核'} {out[:160]}")
             if not ok and not st.optional:
-                rc_total = 2
+                # 验收里夹着拆旧机（198 ASR / 176 ComfyUI）的动作，前置 poll 不过就不能往下拆
+                print(f"  停在验收第 {i} 步（必做步失败）。修好后用 --verify-only 重跑（验收步幂等）。")
+                return 2
     return rc_total
 
 

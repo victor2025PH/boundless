@@ -297,7 +297,7 @@ PHASE_PROBES: Dict[str, List[tuple]] = {
     "phase2": [(ASR_SER + "/health", ['"asr_loaded":true', '"ser_loaded":true'])],
     # phase3：104 ComfyUI 与 140 CosyVoice 都在
     "phase3": [(COMFY_NEW + "/system_stats", ["comfyui_version"]),
-               (COSY_YUE + "/health", ["models_loaded"])],
+               (COSY_YUE + "/health", ['"models_loaded":true'])],
 }
 
 

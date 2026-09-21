@@ -127,7 +127,7 @@ def test_phase3_comfy_task_placeholder(rm):
     without = rm.build_phase3()
     assert any(s.cmd.startswith("skip:") and s.optional for s in without.steps)
     # 104 没起来就不碰 176 的 ComfyUI（自拍唯一后端）
-    assert not any("ComfyWatchdog" in s.cmd or "8188 -State Listen" in s.cmd for s in without.steps)
+    assert not any("ComfyWatchdog" in s.cmd or "8188 -State Listen" in s.cmd for s in without.steps + without.verify)
     with_task = rm.build_phase3("ComfyUI_Boot")
     assert any('schtasks /Run /TN "ComfyUI_Boot"' in s.cmd for s in with_task.steps)
     assert any(s.cmd == "poll:http://192.168.0.104:8188/system_stats" for s in with_task.steps)
@@ -135,14 +135,29 @@ def test_phase3_comfy_task_placeholder(rm):
 
 def test_phase3_stops_176_comfy_only_after_104_is_up(rm):
     """176 ComfyUI 的停止写死任务名（04:12 发现步查到 ComfyBoot/ComfyWatchdog），且排在 104 poll 之后：
-    先停任务再杀进程（否则 5 分内被看门狗拉回），只杀听 8188 的那一个。"""
-    steps = rm.build_phase3("ComfyUI_Boot").steps
+    先停任务再杀进程（否则 5 分内被看门狗拉回），只杀听 8188 的那一个。
+    拆 176 放在 verify（overlay 之后），且 verify 开头先再确认 104 在线——steps 里不碰 176。"""
+    p3 = rm.build_phase3("ComfyUI_Boot")
+    assert any(s.cmd.startswith("poll:") and "104:8188" in s.cmd for s in p3.steps)
+    assert not any(s.host == rm.H176 for s in p3.steps)
+    steps = p3.verify
     idx_poll = next(i for i, s in enumerate(steps) if s.cmd.startswith("poll:") and "104:8188" in s.cmd)
     idx_task = next(i for i, s in enumerate(steps) if "ComfyWatchdog /Disable" in s.cmd and s.host == rm.H176)
     idx_kill = next(i for i, s in enumerate(steps) if "LocalPort 8188" in s.cmd and s.host == rm.H176)
     assert idx_poll < idx_task < idx_kill
     assert "ComfyBoot /Disable" in steps[idx_task].cmd and not steps[idx_task].optional
     assert "Stop-Process" in steps[idx_kill].cmd and "-Force" in steps[idx_kill].cmd
+
+
+def test_phase3_enables_emotion_tts_before_run(rm):
+    """140 EmotionTTS 任务现场是 Disabled，直接 /Run 会失败；卸 qwen3-vl 必须排在拉起之前（显存先腾出来）。"""
+    steps = rm.build_phase3("ComfyUI104").steps
+    idx_unload = next(i for i, s in enumerate(steps) if "keep_alive" in s.cmd and s.host == rm.H140)
+    idx_run = next(i for i, s in enumerate(steps) if "EmotionTTS /Enable" in s.cmd and "schtasks /Run /TN EmotionTTS" in s.cmd)
+    idx_poll = next(i for i, s in enumerate(steps) if s.cmd == "poll:http://192.168.0.140:7852/health")
+    assert idx_unload < idx_run < idx_poll
+    # /health 在载入中也回 {"models_loaded": false}，只对键名会误判
+    assert steps[idx_poll].expect == '"models_loaded":true'
 
 
 def test_phase0e_parks_musetalk_via_hub_not_kill(rm):
@@ -199,6 +214,30 @@ def test_verify_only_skips_steps_and_overlay(rm, tmp_path):
     assert not any(c[0] == "local" and "realloc102.py" in " ".join(c[1]) for c in fr.calls)
     assert not any(c[0] == "ssh" and c[1] == rm.H176 for c in fr.calls)
     assert any(c[0] == "ssh" and c[1] == rm.H198 and "AITR_ASR_198 /Disable" in c[2] for c in fr.calls)
+
+
+def test_verify_halts_before_teardown_when_new_backend_poll_fails(rm, tmp_path, monkeypatch):
+    """phase3 验收：104 ComfyUI 复查不过 → 不得再去停 176 ComfyWatchdog/杀 8188（自拍会断）。"""
+    clock = {"t": 0.0}
+
+    def fake_monotonic():
+        clock["t"] += 30.0
+        return clock["t"]
+
+    monkeypatch.setattr(rm.time, "monotonic", fake_monotonic)
+    fr = FakeRunner(http_out={"http://192.168.0.104:8188/system_stats": (1, "URLError")})
+    rc = rm.run_phase(rm.build_phase3("ComfyUI104"), apply=True, runner=fr, log_path=tmp_path / "l.jsonl",
+                      verify_only=True)
+    assert rc == 2
+    assert not any(c[0] == "ssh" and c[1] == rm.H176 for c in fr.calls)
+    # 104 在线时才拆 176，且 140 复查也跑到
+    fr2 = FakeRunner(ssh_out={"ComfyWatchdog /Disable": (0, "disabled"), "LocalPort 8188": (0, "done")},
+                     http_out={"http://192.168.0.104:8188/system_stats": (0, '{"system":{"comfyui_version":"0.3"}}'),
+                               "http://192.168.0.140:11434/api/ps": (0, '{"models":[{"name":"bge-m3:latest"}]}')})
+    rc2 = rm.run_phase(rm.build_phase3("ComfyUI104"), apply=True, runner=fr2, log_path=tmp_path / "l2.jsonl",
+                       verify_only=True)
+    assert rc2 == 0
+    assert any(c[0] == "ssh" and c[1] == rm.H176 and "LocalPort 8188" in c[2] for c in fr2.calls)
 
 
 def test_dry_run_executes_nothing(rm, tmp_path, capsys):

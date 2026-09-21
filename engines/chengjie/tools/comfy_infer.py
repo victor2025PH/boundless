@@ -24,7 +24,8 @@ steps/guidance 按模型自适应：schnell=4 步无 FluxGuidance；dev=20 步 g
 （--steps/--guidance 显式给了则尊重调用方）。
 
 环境变量：
-    COMFY_URL         ComfyUI 基址（默认 http://127.0.0.1:8188；生产直连 176:8188）
+    COMFY_URL         ComfyUI 基址（默认 http://127.0.0.1:8188；生产直连 104:8188，实施102 阶段3 起）
+    COMFY_GATE_CAP_RATIO --min-free-gb 相对卡总显存的上限比例（默认 0.85；12G 卡按 10.4G 判）
     COMFY_CKPT        锁脸/默认 checkpoint（默认 flux1-dev-fp8.safetensors）
     COMFY_CKPT_NOFACE 无脸图 checkpoint（默认 flux1-schnell-fp8.safetensors；
                       置空串=不路由，全部用 COMFY_CKPT）
@@ -445,15 +446,33 @@ def resolve_ckpt(preferred: str, fallback: str = "") -> str:
     return avail[0]
 
 
-def _vram_free_gb() -> float:
-    """查 ComfyUI 所在卡的当前空闲显存(GB)；查不到返回 -1（视为未知、不拦）。"""
+def _vram_stats_gb() -> tuple:
+    """查 ComfyUI 所在卡的 (空闲, 总量) 显存(GB)；查不到返回 (-1, -1)（视为未知、不拦）。"""
     try:
         with urllib.request.urlopen(COMFY_URL + "/system_stats", timeout=10) as r:
             j = json.loads(r.read())
         dev = (j.get("devices") or [{}])[0]
-        return float(dev.get("vram_free", 0)) / (1024 ** 3)
+        return (float(dev.get("vram_free", 0)) / (1024 ** 3),
+                float(dev.get("vram_total", 0)) / (1024 ** 3))
     except Exception:
-        return -1.0
+        return -1.0, -1.0
+
+
+def _vram_free_gb() -> float:
+    return _vram_stats_gb()[0]
+
+
+# 闸门相对卡容量的上限：min_free_gb 是按 32G 卡「冷加载 flux 全家桶」估的绝对值，
+# 12G 卡（--lowvram 权重走内存分页）上永远达不到 → 按「卡基本空着」折算。
+GATE_CAP_RATIO = float(os.environ.get("COMFY_GATE_CAP_RATIO", "0.85") or 0.85)
+
+
+def effective_min_free_gb(min_free_gb: float, total_gb: float) -> float:
+    """把绝对闸门压到 ``total*GATE_CAP_RATIO`` 以内；总量未知则原样返回。"""
+    if total_gb <= 0:
+        return min_free_gb
+    cap = round(total_gb * GATE_CAP_RATIO, 1)
+    return min(min_free_gb, cap)
 
 
 def _comfy_reserved_gb() -> float:
@@ -747,9 +766,14 @@ def main() -> int:
         _ollama = args.ollama_url
         if _ollama == "__auto__":
             _ollama = _ollama_url_from_comfy()
-        free = ensure_vram(args.min_free_gb, ollama_url=_ollama)
-        if 0 <= free < args.min_free_gb:
-            _log("显存仍不足 free=%.1fG < %.1fG，放弃出图(回落，不 OOM 换脸栈)" % (free, args.min_free_gb))
+        _total = _vram_stats_gb()[1]
+        min_free = effective_min_free_gb(args.min_free_gb, _total)
+        if min_free != args.min_free_gb:
+            _log("显存闸门 %.1fG 超出卡容量 %.1fG 的 %.0f%% → 按 %.1fG 判"
+                 % (args.min_free_gb, _total, GATE_CAP_RATIO * 100, min_free))
+        free = ensure_vram(min_free, ollama_url=_ollama)
+        if 0 <= free < min_free:
+            _log("显存仍不足 free=%.1fG < %.1fG，放弃出图(回落，不 OOM 换脸栈)" % (free, min_free))
             _log("ERR_CODE=vram_insufficient")
             return 3
 

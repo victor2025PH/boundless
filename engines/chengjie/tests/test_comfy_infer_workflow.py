@@ -248,6 +248,26 @@ def test_ensure_vram_enough_free_short_circuits(monkeypatch):
     assert ci.ensure_vram(14.0, ollama_url="http://x:11434") == 25.0
 
 
+# ── 闸门随卡容量折算（实施102 阶段3：出图 176(32G) → 104(12G)）
+@pytest.mark.parametrize("min_free,total,expected", [
+    (14.0, 12.0, 10.2),    # 4070 12G：14 永远达不到 → 85% 卡容量
+    (14.0, 31.8, 14.0),    # 5090：原值不动
+    (14.0, -1.0, 14.0),    # 查不到总量 → 原值
+    (14.0, 0.0, 14.0),
+    (5.0, 12.0, 5.0),      # 调用方显式给小闸门 → 尊重
+])
+def test_effective_min_free_gb_caps_to_card(min_free, total, expected):
+    assert ci.effective_min_free_gb(min_free, total) == expected
+
+
+def test_vram_stats_unknown_when_comfy_down(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("down")
+    monkeypatch.setattr(ci.urllib.request, "urlopen", boom)
+    assert ci._vram_stats_gb() == (-1.0, -1.0)
+    assert ci._vram_free_gb() == -1.0
+
+
 # ── 保温器：判「保得住吗」的纯函数（--lowvram 下保温物理无效，别白烧 GPU）
 def test_warmup_detects_flags_that_forbid_residency():
     import importlib
