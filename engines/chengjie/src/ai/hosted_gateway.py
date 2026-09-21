@@ -34,6 +34,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -241,12 +242,14 @@ def resolve_instance_id(config: Optional[dict] = None) -> str:
         return env
     data = (os.environ.get("AITR_DATA_DIR") or "").strip()
     if data:
-        from pathlib import Path
-
-        p = Path(data)
-        parts_lower = {x.lower() for x in p.parts}
-        if "chengjie-instances" in parts_lower and p.name.lower() == "data" and p.parent.name:
-            return p.parent.name
+        # 生产数据根是 Windows 路径（D:\chengjie-instances\<iid>\data）；按两种分隔符切，
+        # 让 Linux 上的 CI / 云端会话解析结果与 Windows 一致（此前 Path 在 posix 下把整串
+        # 当一个组件 → 解析为空）。
+        parts = [x for x in re.split(r"[\\/]+", data) if x]
+        parts_lower = [x.lower() for x in parts]
+        if (len(parts) >= 3 and "chengjie-instances" in parts_lower
+                and parts_lower[-1] == "data" and parts[-2]):
+            return parts[-2]
     cfg = config or {}
     lic = cfg.get("licensing") if isinstance(cfg.get("licensing"), dict) else {}
     return str((lic or {}).get("instance_id") or "").strip()
