@@ -145,7 +145,7 @@ alwaysApply: false
 |---|---|---|---|---|
 | 173 | `yuyan` / `yunsheng` | 语言机 | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
 | 198 | `shijue` / `kouxing` | 视觉机 | Win10 | C 盘小；push <3GB 预检现自带**自动处方**（清旧包+陈旧 scoped_dir，见台账）；另有周清任务 `ChatXSeatTempClean`（SUN 06:40，脚本源 `deploy/desktop/seat_temp_clean.ps1`） |
-| 104 | `shengyin` / `lianbei` | 声音机 | Win10 | |
+| 104 | `shengyin` / `lianbei` / `chutu` | 出图机（2026-09-22 实施102 前叫声音机；语音主力回 176） | Win10 | |
 
 **140（`jiyi` / `tingxie`，现名记忆机）已不是坐席**：2026-08-29 改编为算力节点（bge-m3 嵌入 :11434 +
 whisper STT :7854），智聊桌面版 2026-08-24 后未再运行、无自启，台账无 `chatx_seat`。不要往它推包，

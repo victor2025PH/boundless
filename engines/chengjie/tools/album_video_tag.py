@@ -7,7 +7,7 @@
 
 用法：
     python tools/album_video_tag.py --manifest <album>/manifest.json \
-        --db <config>/persona_media.db [--vlm http://192.168.0.176:11434/v1]
+        --db <config>/persona_media.db [--vlm http://192.168.0.198:11434/v1]
 幂等：manifest 里已有 scene 的视频跳过（重跑安全）。
 """
 

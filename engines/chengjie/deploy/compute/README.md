@@ -10,6 +10,21 @@
 
 ## 目标终态（服务落点）
 
+> 📌 **2026-09-22 实施102 五台算力重编**（`docs/实施102_五台算力重编_176语音情绪主力_117退出运行_2026-09-22.md`，
+> 老板令：176 主跑语音克隆与情感情绪，117 不参与任何运行）。下表为**现行目标**；台账单一源
+> `deploy/machines.json`，overlay 分阶段补丁 `deploy/compute/realloc102.py`。
+
+| 主机 | 卡 | 角色（实施102 目标） |
+|---|---|---|
+| 176 声音机 zhongshu/ganzhi | 5090 32G | **语音克隆 + 情感合成 + 客户语音情绪**：IndexTTS-2 :7865（本机参考音直连，情感通道 emotion/emo_text/emo_alpha；不用角色库）· fish :7855 · aitr_asr :8765（whisper + emotion2vec）· Hub :9000 · 人脸边车 :8767。撤走 qwen3:30b / qwen3-vl / ComfyUI / musetalk。常驻 16G |
+| 173 语言机 yunsheng/yuyan | 5090 32G | **vLLM 主对话** `chatx`（:8001/v1）——主链 / 口语化改写 / 语音情绪补判；阶段 4 接收 zhiliao 生产实例（不占显存） |
+| 104 出图机 lianbei/shengyin | 4070 12G | **ComfyUI FLUX + PuLID** :8188（自 176 迁入）；IndexTTS-2 停服留盘 |
+| 198 视觉机 kouxing/shijue | 4070 12G | **qwen3-vl:8b 识图单点**（keep_alive -1，num_ctx 8192）· Lite Hub :9000；aitr_asr 迁回 176 |
+| 140 记忆机 tingxie/jiyi | 4070 12G | bge-m3 嵌入 · whisper/NLLB STT 备份 :7854 · CosyVoice3 :7852 只服务粤语；卸 qwen3-vl |
+| 117 shengbei/zhuji | 3060 12G | 阶段 4 后**退出运行**，只做开发/打包（此前：生产实例宿主） |
+
+<details><summary>2026-08-12 版终态（历史，已被实施102 取代）</summary>
+
 | 主机 | 卡 | 角色 |
 |---|---|---|
 | 173 yunsheng | 5090 32G | **vLLM 主对话**（无审查 32B AWQ，:8000/v1）——同时服务：主链聊天 / ai.fallback / 语音口语化改写 |
@@ -17,6 +32,8 @@
 | 117 shengbei | 3060 12G | 生产实例宿主 + AvatarHub 7852 情感 TTS 主节点 + GPU ASR 兜底 |
 | 140 tingxie | 4070 12G | 嵌入主点 bge-m3 / Whisper STT / MT 兜底 |
 | 198 kouxing | 4070 12G | ~~qwen3:8b 口语化改写备点~~（实测未 pull＝死配置，2026-08-15 已从智聊 overlay 摘除；198 补 pull 后可回列） |
+
+</details>
 
 ## 173 迁移账单（重装前必读——173 不是闲置机）
 
