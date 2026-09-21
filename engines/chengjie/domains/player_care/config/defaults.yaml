@@ -53,4 +53,10 @@ emotion_enhancer_skip:
 #         enabled: true
 #         autonomy: auto
 #         max_per_day: 20
+#     commandbus:                          # B4：智聊→智拓手机 外呼指令出箱（契约 huoke docs/CHATX_COMMANDBUS_CONTRACT.md）
+#       enabled: false                     # 默认关：智拓侧 reengage/stop/note executor 对齐后再开
+#       db_path: ""                        # 空 → <配置目录>/player_commandbus.db
+#       reengage_on_dormant: true          # sync 置 dormant 且有手机号 → 入箱 reengage
+#       stop_on_keyword: true              # 对方整句 STOP/别再发/tanggalin → 入箱 stop（同号其它指令作废）
+#       pull_limit: 20
 # 日报：.venv\Scripts\python.exe -m domains.player_care.report --config config_player\config.yaml [--day YYYY-MM-DD] [--json]

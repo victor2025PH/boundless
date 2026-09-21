@@ -35,6 +35,7 @@ from .gateway import (
 )
 from .goal_templates import register_goal_templates
 from .profile import PlayerProfileService, get_profile_service
+from .commandbus import CommandOutbox, get_outbox, is_stop_message, resolve_commandbus_cfg, send_stop
 
 logger = logging.getLogger("PlayerCareHook")
 
@@ -84,8 +85,10 @@ def _history_user_texts(ctx: HookContext, limit: int = 12) -> List[str]:
 class PlayerCareDomainHook(DomainHook):
     """Friend persona on WA / TG with read-only player facts from the gateway."""
 
-    def __init__(self, config=None, *, gateway: Optional[PlayerGateway] = None):
+    def __init__(self, config=None, *, gateway: Optional[PlayerGateway] = None,
+                 outbox: Optional[CommandOutbox] = None):
         super().__init__(config)
+        self._outbox_override = outbox
         self._gateway_override = gateway
         self._gateway: Optional[PlayerGateway] = gateway
         self._gateway_sig: str = ""
@@ -198,6 +201,33 @@ class PlayerCareDomainHook(DomainHook):
         except Exception:
             logger.debug("[player_care] 画像落库失败（忽略）", exc_info=True)
 
+    # ── B4：对方说 STOP → 给手机侧先发 stop 指令（失败全部忽略，不影响回复）──────────
+    def _outbox(self) -> Optional[CommandOutbox]:
+        if self._outbox_override is not None:
+            return self._outbox_override
+        try:
+            return get_outbox(self._config)
+        except Exception:
+            logger.debug("[player_care] commandbus 出箱不可用", exc_info=True)
+            return None
+
+    def _maybe_send_stop(self, ctx: HookContext, ident: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        if not is_stop_message(ctx.text):
+            return None
+        if not resolve_commandbus_cfg(self._config)["stop_on_keyword"]:
+            return None
+        phone = str(ident.get("phone") or "").strip()
+        if not phone:
+            return None
+        uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
+        extra = ctx.extra or {}
+        account_id = str(extra.get("account_id") or uc.get("account_id") or "")
+        env = send_stop(self._outbox(), account=account_id or "unknown", phone=phone, reason="user_stop")
+        if env is not None:
+            uc["_player_stop_sent"] = env.get("command_id")
+            logger.info("[player_care] STOP → commandbus stop %s", env.get("command_id"))
+        return env
+
     # ── hook 1：入站预处理 → 查网关、决定明用 / 暗用，再落画像 ────────────────
     async def on_message_pre_process(self, ctx: HookContext) -> Optional[Dict[str, Any]]:
         uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
@@ -205,7 +235,12 @@ class PlayerCareDomainHook(DomainHook):
         result = await self._decide(ctx)
         facts = uc.get(_FACTS_KEY) if isinstance(uc.get(_FACTS_KEY), dict) else {}
         looked_up = float((facts or {}).get("ts") or 0) > prev_ts
-        self._persist_round(ctx, self.resolve_identity(ctx), looked_up=looked_up)
+        ident = self.resolve_identity(ctx)
+        self._persist_round(ctx, ident, looked_up=looked_up)
+        try:
+            self._maybe_send_stop(ctx, ident)
+        except Exception:
+            logger.debug("[player_care] STOP 处理失败（忽略）", exc_info=True)
         return result
 
     async def _decide(self, ctx: HookContext) -> Optional[Dict[str, Any]]:

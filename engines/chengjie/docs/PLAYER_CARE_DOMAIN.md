@@ -2,7 +2,7 @@
 
 > 分支 `feat-player-care-loop-2026-09-20`。智拓故事矩阵闭环（拓客 → 聊天转化 → 维护）里
 > **智聊侧**的第二个实例所用域。本文是设计 + 运维单一入口；接口契约见智拓仓
-> `docs/CHATX_COMMANDBUS_CONTRACT.md`（commandbus，待接）。
+> `docs/CHATX_COMMANDBUS_CONTRACT.md`（commandbus，智聊侧 pull/ack 已接，见 §6b）。
 
 ## 1. 一台电脑两套智聊实例（为什么、怎么隔）
 
@@ -89,9 +89,22 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - 网关数字只原样落 `facts_text`，不算不推；失败全吞，不影响巡检主流程。watchdog 侧 `total_player_sync_runs / last_player_sync` 留给 B6 看板。
 - 测试 `tests/test_player_care_sync.py`。
 
-## 6b. 尚未做（B4–B6，按序）
+## 6b. B4 commandbus 发送端（已做）
 
-3. **B4 commandbus**：智聊向智拓发 `reengage / stop / note`（契约已在智拓仓 `CHATX_COMMANDBUS_CONTRACT.md`，智拓侧 executor 在另一条对话做）；
+- 契约（智拓仓 `docs/CHATX_COMMANDBUS_CONTRACT.md`，只读）是 **智聊产指令、手机拉取执行**：智聊侧只需实现
+  `GET /api/commandbus/pull?account=&limit=` → `{"available": true, "commands": [...]}` 和 `POST /api/commandbus/ack {command_id, status: done|failed|rejected, detail}` → `{"available": true}`（幂等）。
+  两端点在 `domains/player_care/web/routes.py`（manifest `web_routes: true`，由 admin 按激活域自动挂 → **只有 player_care 实例有**），鉴权同 leadbus/replybus（Bearer `BOUNDLESS_BUS_TOKEN`）。
+- 出箱 `domains/player_care/commandbus.py::CommandOutbox`（`<配置目录>/player_commandbus.db`，不动核心表）。三种指令，信封形状同契约 `command_id / kind / account / phone / dry_run + 种类字段`：
+  `reengage {messages[], reason}`（话术池：普通朋友问候，不提游戏无数字，手机侧套自己的养号/时段/配额）、`stop {reason}`、`note {text}`。
+  ⚠ 契约目前只列了 `greet / reply`，这三种 kind 是按老板要求新增的，**待老板同步进契约 + 智拓侧 executor**；本域没改契约文件。
+- **STOP 一律先发 stop**：入箱 stop 时同号未拉走的 reengage/note 全部 cancelled，stop 排最前，该号进 stopped 名单 → 之后 reengage 一律拒（`clear_stop` 显式解）。
+  触发：① hooks 入站整句 `STOP / unsubscribe / tanggalin / wag mo na ako i-message / 别再发了…`（`is_stop_message`，整句匹配宁漏勿误）且有手机号 → stop；
+  ② sync 置 dormant 且有手机号 → reengage（`reengage_on_dormant`）；③ 运营 `POST /api/player-care/commands {kind, account, phone, text|messages}`（写权限），`GET` 同路径看出箱/统计。
+- 配置 `player_care.commandbus.{enabled=false(默认关，智拓 executor 对齐后再开), db_path, reengage_on_dormant=true, stop_on_keyword=true, pull_limit=20}`；关着时 pull 永远空、ack 只回 available（fail-soft，手机 poll 空转）。
+- 执行权归手机：本域仍没有任何直接发消息的代码；失败全吞。测试 `tests/test_player_care_commandbus.py`。
+
+## 6c. 尚未做（B5–B6，按序）
+
 4. **B5 handoff**：Messenger → WA/TG 迁移用 `handoff_tokens` 合并身份，手机号是主键；
 5. **B6 看板**：每实例 `/player-care/overview`（联系人数 / 阶段分布 / 明用命中 / 数字闸命中 / 网关健康），上报智控。
 

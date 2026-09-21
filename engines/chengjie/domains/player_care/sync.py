@@ -20,6 +20,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from .commandbus import CommandOutbox, get_outbox, reengage_pool, resolve_commandbus_cfg, send_reengage
 from .gateway import PlayerGateway, extract_games, resolve_gateway_cfg
 from .goal_templates import (
     TEMPLATE_AFTER_DEPOSIT, TEMPLATE_REENGAGE, register_goal_templates,
@@ -124,12 +125,13 @@ def run_player_sync(cfg_root: Any, config_path: Any = None, *,
                     gateway: Optional[PlayerGateway] = None,
                     profile: Optional[PlayerProfileService] = None,
                     goal_store: Any = None,
+                    outbox: Optional[CommandOutbox] = None,
                     now: Optional[float] = None,
                     sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
-    """跑一轮同步，返回摘要 ``{scanned, looked_up, found, deposits, dormant, goals, errors, skipped}``。"""
+    """跑一轮同步，返回摘要 ``{scanned, looked_up, found, deposits, dormant, goals, commands, errors, skipped}``。"""
     ts = float(now if now is not None else time.time())
     summary: Dict[str, Any] = {"scanned": 0, "looked_up": 0, "found": 0, "deposits": 0,
-                               "dormant": 0, "goals": 0, "errors": 0, "skipped": ""}
+                               "dormant": 0, "goals": 0, "commands": 0, "errors": 0, "skipped": ""}
     scfg = resolve_sync_cfg(cfg_root)
     if not scfg["enabled"]:
         summary["skipped"] = "disabled"
@@ -141,13 +143,22 @@ def run_player_sync(cfg_root: Any, config_path: Any = None, *,
     register_goal_templates()
     store = goal_store if goal_store is not None else _goals_store(cfg_root, config_path)
     gcfg = scfg["goals"]
+    cbcfg = resolve_commandbus_cfg(cfg_root)
+    ob = outbox if outbox is not None else (get_outbox(cfg_root) if cbcfg["enabled"] else None)
 
-    # 1) 沉默 → dormant → 轻触目标
+    # 1) 沉默 → dormant → 轻触目标（+ B4：有手机号且 commandbus 开着 → 给手机侧发 reengage 指令）
     for row in svc.dormant_sweep(now=ts):
         summary["dormant"] += 1
         if maybe_create_player_goal(store, row, TEMPLATE_REENGAGE, gcfg=gcfg, now=ts,
                                     params={"stage_before": str(row.get("stage_before_dormant") or "")}):
             summary["goals"] += 1
+        if ob is not None and cbcfg["reengage_on_dormant"] and str(row.get("phone_e164") or "").strip():
+            env = send_reengage(ob, account=str(row.get("account_id") or ""),
+                                phone=str(row.get("phone_e164") or ""),
+                                messages=reengage_pool(str(row.get("reply_lang") or "")),
+                                reason="dormant", now=ts)
+            if env is not None:
+                summary["commands"] += 1
 
     # 2) 活跃联系人刷网关事实
     gw = gateway
