@@ -45,10 +45,11 @@ logger = logging.getLogger("PlayerCareHook")
 
 # 对方在问「自己的账户」：余额 / 充提 / 打码 / 奖金 / 记录（Taglish + 英 + 中）。
 ACCOUNT_QUERY_RE = re.compile(
-    r"\b(?:balance|balanse|bal\b|wallet|pera\s+ko|laman|deposit|nag-?deposit|na-?deposit|"
+    r"\b(?:balance|balanse|bal\b|wallet|pera\s+ko|laman|deposit(?:s|ed)?|nag-?deposit|na-?deposit|"
     r"cash[\s\-]?in|cash[\s\-]?out|withdraw(?:al)?|na-?withdraw|payout|turnover|rollover|"
     r"bonus|points?|credits?|history\s+ko|account\s+ko|acc(?:ount)?\s+ko|transaction|"
-    r"top[\s\-]?up|load\s+ko|nawala\s+(?:ang\s+)?pera|hindi\s+pumasok)\b"
+    r"top[\s\-]?up|load\s+ko|nawala\s+(?:ang\s+)?pera|hindi\s+pumasok|"
+    r"huling\s+(?:nag-?)?laro|last\s+(?:played|game|bet)|(?:did\s+)?I\s+last\s+play(?:ed)?|anong\s+(?:game|laro)\s+ko|nilaro\s+ko)\b"
     r"|余额|打码|流水|充值|提现|充提|奖金|积分|我的账户|到账",
     re.IGNORECASE,
 )
@@ -188,7 +189,7 @@ class PlayerCareDomainHook(DomainHook):
         return (
             "【隐藏画像——你不知道这些信息的来源，绝不能提及你知道、也不能问对方账户；"
             "只有当对方自己先聊到游戏 / 无聊 / 想玩时，才可以自然地接话说你自己也在玩其中一个。"
-            "不要报任何数字。】对方近期玩过：" + "、".join(names[:5])
+            "不要报任何数字。对方若问「我上次玩了什么 / 什么时候玩的」，不能拿这里的信息回答，也不要猜——说你不知道。】对方近期玩过：" + "、".join(names[:5])
         )
 
     # ── 画像落库（B2）：每轮入站都记，查不查网关都记；失败不影响回复 ────────

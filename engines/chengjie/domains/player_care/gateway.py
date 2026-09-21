@@ -243,7 +243,9 @@ class PlayerGateway:
             r = hit[1]
             return LookupResult(**{**r.__dict__, "cached": True})
 
-        payload: Dict[str, Any] = {"q": q_s or "player info"}
+        # bind=false：网关默认会把同一请求里的 phone↔uid 写进它的别名表；聊天里出现的 uid
+        # 可能是别人的 / 打错的，绑定交给运营方手工做，我们只读。
+        payload: Dict[str, Any] = {"q": q_s or "player info", "bind": False}
         if phone_n:
             payload["phone"] = phone_n
         if uid_s:

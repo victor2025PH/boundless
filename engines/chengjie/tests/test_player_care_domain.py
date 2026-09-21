@@ -98,7 +98,12 @@ def test_account_query_regex():
     assert ACCOUNT_QUERY_RE.search("pwede mo ba i-check balance ko")
     assert ACCOUNT_QUERY_RE.search("na-deposit ko kanina hindi pumasok")
     assert ACCOUNT_QUERY_RE.search("我的余额多少")
+    # 真 LLM 试跑里漏过的两句（掉进暗用 → 模型拿隐藏画像“猜”了上次玩的游戏）
+    assert ACCOUNT_QUERY_RE.search("how much have I deposited in total so far?")
+    assert ACCOUNT_QUERY_RE.search("kailan ako huling nag-laro? at anong game?")
+    assert ACCOUNT_QUERY_RE.search("what did I last play")
     assert not ACCOUNT_QUERY_RE.search("boring dito sa office haha")
+    assert not ACCOUNT_QUERY_RE.search("what do you usually play after work?")
     assert not ACCOUNT_QUERY_RE.search("kumain ka na ba")
 
 
@@ -149,7 +154,7 @@ def test_gateway_success_payload_and_headers():
     assert "1,250" in r.chatx_text
     assert seen["url"] == "http://gw/lookup"
     assert seen["headers"]["X-Gateway-Key"] == "k"
-    assert seen["body"] == {"q": "balance ko?", "phone": "639171234567", "uid": "A1"}
+    assert seen["body"] == {"q": "balance ko?", "phone": "639171234567", "uid": "A1", "bind": False}
     assert seen["timeout"] == 1
     assert gw.calls == 1
 
@@ -263,6 +268,7 @@ async def test_hook_with_real_gateway_sample_uses_structured_games_and_strips_ri
     ctx2 = _ctx("好无聊啊", chat_id="639171234567@s.whatsapp.net", reply_lang="zh")
     hidden = (await PlayerCareDomainHook(gateway=_FakeGW(res)).on_message_pre_process(ctx2))["_domain_context_block"]
     assert "隐藏画像" in hidden and "Fortune Gems 2（JILI）" in hidden and "余额" not in hidden
+    assert "不能拿这里的信息回答" in hidden
 
     # 风控 / 人身 / 后台字段既不进提示词，也不进 user_context（画像只吃 _player_facts 这一份）
     for leak in ("same_ip", "same_device", "register_ip", "history_ips", "scripts", "credit_score", "ban_payout", "核身"):
@@ -285,7 +291,7 @@ async def test_hook_visible_block_tells_model_to_restate_in_reply_language():
 
 
 MULTI_BODY = {"ok": True, "multi": True, "query": {}, "phone_hits": {}, "players": [],
-              "candidates": [{"uid": "128891843", "name": "Juan"}, {"uid": "128899999", "name": "Ana"}],
+              "candidates": [{"uid": "120000001", "name": "Juan"}, {"uid": "120000002", "name": "Ana"}],
               "message": "这个手机号对应多个账号，请用下面的 UID 再查一次拿全档。"}
 
 
@@ -296,7 +302,7 @@ def test_gateway_multi_response_is_not_found_but_keeps_candidate_uids():
     gw = _gw(_tp)
     res = gw.lookup("balance", phone="09171234567")
     assert res.ok and not res.found and not res.usable and res.error == ""
-    assert res.multi is True and res.candidates == ["128891843", "128899999"]
+    assert res.multi is True and res.candidates == ["120000001", "120000002"]
     assert extract_games(res) == []
 
 
@@ -304,29 +310,29 @@ def test_gateway_multi_response_is_not_found_but_keeps_candidate_uids():
 async def test_hook_multi_accounts_asks_which_uid_then_requeries_with_uid_only():
     """同号多账号：第一轮 ambiguous（不报数字、不列候选）；对方回一串命中候选的 UID → 只用 UID 复查 → 明用。"""
     multi = LookupResult(ok=True, found=False, raw=MULTI_BODY, status=200, multi=True,
-                         candidates=["128891843", "128899999"])
+                         candidates=["120000001", "120000002"])
 
     class _GW(_FakeGW):
         def lookup(self, q, *, phone="", uid=""):
             self.calls.append({"q": q, "phone": phone, "uid": uid})
-            return FOUND if uid == "128891843" else multi
+            return FOUND if uid == "120000001" else multi
 
     gw = _GW(multi)
     hook = PlayerCareDomainHook(gateway=gw)
     uc = {}
     ctx = _ctx("check balance ko", chat_id="639171234567@s.whatsapp.net", uc=uc)
     blk = (await hook.on_message_pre_process(ctx))["_domain_context_block"]
-    assert "不止一个账号" in blk and "128891843" not in blk
+    assert "不止一个账号" in blk and "120000001" not in blk
     assert uc["_player_facts_round"] == "ambiguous" and uc["_player_facts"]["error"] == "multi"
-    assert uc["_player_facts"]["candidates"] == ["128891843", "128899999"]
-    assert await hook.on_reply_post_process("Alin sa 128891843 o 128899999?", ctx) == _SAFE_LINE["tl"]
+    assert uc["_player_facts"]["candidates"] == ["120000001", "120000002"]
+    assert await hook.on_reply_post_process("Alin sa 120000001 o 120000002?", ctx) == _SAFE_LINE["tl"]
     assert (await hook.on_reply_post_process("Alin account mo ba, may dalawa e?", ctx)).startswith("Alin")
 
     # 对方回 UID（裸数字也认，但要完全命中候选；随手一串别的数字不认）
-    ctx2 = _ctx("ito 128891843", chat_id="639171234567@s.whatsapp.net", uc=uc)
+    ctx2 = _ctx("ito 120000001", chat_id="639171234567@s.whatsapp.net", uc=uc)
     blk2 = (await hook.on_message_pre_process(ctx2))["_domain_context_block"]
-    assert gw.calls[-1] == {"q": "ito 128891843", "phone": "", "uid": "128891843"}
-    assert "只读事实" in blk2 and uc["_player_facts_round"] == "visible" and uc["_player_facts"]["uid"] == "128891843"
+    assert gw.calls[-1] == {"q": "ito 120000001", "phone": "", "uid": "120000001"}
+    assert "只读事实" in blk2 and uc["_player_facts_round"] == "visible" and uc["_player_facts"]["uid"] == "120000001"
     ctx3 = _ctx("ito 55555", chat_id="639171234567@s.whatsapp.net", uc={"_player_facts": dict(uc["_player_facts"], uid="", found=False, multi=True)})
     assert PlayerCareDomainHook.resolve_identity(ctx3)["uid"] == ""
 
@@ -561,10 +567,10 @@ def test_probe_redaction_keeps_json_and_kills_values():
     # 人身字段值遮掉（保留非空）；手机号当键名也遮；IP 不走版本号保形
     assert redact_raw({"X-Gateway-Key": "s3cr3t", "agent": "A100", "agent_x": ""}) == {
         "X-Gateway-Key": "***", "agent": "***", "agent_x": ""}
-    r = redact_raw({"phone_hits": {"639171234567": "128891843"}, "register_ip": "180.191.72.186"}, secrets)
-    assert list(r["phone_hits"]) == ["*" * 12] and "128891843" not in json.dumps(r) and r["register_ip"] == "***"
+    r = redact_raw({"phone_hits": {"639171234567": "120000001"}, "register_ip": "180.191.72.186"}, secrets)
+    assert list(r["phone_hits"]) == ["*" * 12] and "120000001" not in json.dumps(r) and r["register_ip"] == "***"
     assert redact_text("reg 180.191.72.186 v1.2.3") == "reg 0.0.0.0 v1.2.3"
-    assert redact_text("UID 128891843 / Juan99 / VIP0 / 正常；余额 1500") == "UID 100000000 / *** / VIP0 / 正常；余额 1000"
+    assert redact_text("UID 120000001 / Juan99 / VIP0 / 正常；余额 1500") == "UID 100000000 / *** / VIP0 / 正常；余额 1000"
     # 日期 / 时间 / 版本号只是形态信息，保留；紧挨着的金额仍毁
     t = redact_text("last deposit: 2,500 on 2026-09-21 18:05:30 (app 3.14.159) uid 445566", secrets)
     assert "2026-09-21 18:05:30" in t and "3.14.159" in t and "2,500" not in t and "445566" not in t
