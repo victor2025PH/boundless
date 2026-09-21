@@ -103,9 +103,19 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - 配置 `player_care.commandbus.{enabled=false(默认关，智拓 executor 对齐后再开), db_path, reengage_on_dormant=true, stop_on_keyword=true, pull_limit=20}`；关着时 pull 永远空、ack 只回 available（fail-soft，手机 poll 空转）。
 - 执行权归手机：本域仍没有任何直接发消息的代码；失败全吞。测试 `tests/test_player_care_commandbus.py`。
 
-## 6c. 尚未做（B5–B6，按序）
+## 6c. B5 handoff：Messenger → WA/TG（已做）
 
-4. **B5 handoff**：Messenger → WA/TG 迁移用 `handoff_tokens` 合并身份，手机号是主键；
+- 复用核心 `src/contacts/handoff.py` 的 `handoff_tokens`（6 位码、72h、原子消费）：story 实例在 Messenger 发引流话术时已签码；对方在 WA/TG 首条消息里打回来 → `domains/player_care/handoff.py::PlayerHandoffService.try_merge`（hooks 入站落画像后调用，同一 user_context 只合一次，失败全吞）。
+- 找码顺序：**本实例 contacts.db** → `player_care.handoff.source_db_path`（story 实例的 contacts.db，相对配置目录；不存在就只查本库）。
+  - 同库命中（`via=local`）：确保 WA/TG `ChannelIdentity`，走核心 `MergeService.apply_token_merge` 把它 relink 到 Messenger 的 Contact（真身份合并，`linked_via=token` 0.95）；
+  - 跨库命中（`via=source_db`）：来源库只消费 token + 记 `handoff_consumed` 事件 + 漏斗 HANDOFF_SENT→LINE_ENGAGED（核心把「私域接上」统称 LINE_*），不 relink，本地画像记 `handoff_contact_id / handoff_ci_id` 关联。
+- **手机号主键**：WA JID 本身是号；TG 没号时借 Messenger 侧留资属性 `phone`（`capture_lead`）→ `PlayerProfileService.resolve_key` 把占位键 `telegram:<id>` 并进手机号键（计数/时间/阶段按 rebind 规则合）。两边都没号 → 仍占位键，但 handoff 字段照记。
+- 画像新增列（老库幂等 ALTER）：`handoff_source / handoff_token / handoff_contact_id / handoff_ci_id / handoff_via / handoff_at`；阶段至少推到 `chatting`（只前进）。
+- 合并那一轮给人设一条提示（`HANDOFF_CONTEXT_BLOCK`）：像老朋友换地方继续聊，不问“你是谁”、不提码/系统/迁移、无数字。
+- 配置 `player_care.handoff.{enabled=true, source_db_path="", link_local_identity=true}`。不动 story 实例任何画像；不发消息。测试 `tests/test_player_care_handoff.py`。
+
+## 6d. 尚未做
+
 5. **B6 看板**：每实例 `/player-care/overview`（联系人数 / 阶段分布 / 明用命中 / 数字闸命中 / 网关健康），上报智控。
 
 ## 7. 待老板 / 117 机补的输入

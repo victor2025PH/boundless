@@ -316,6 +316,18 @@ PLAYER_PROFILE_COLUMNS = (
     "last_seen", "inbound_count", "mentioned_game_at", "registered_at", "deposit_seen_at",
     "deposit_days", "deposit_last_day", "last_lookup_at", "last_found", "last_error",
     "lookups", "visible_hits", "gate_hits", "facts_text", "updated_at",
+    "handoff_source", "handoff_token", "handoff_contact_id", "handoff_ci_id",
+    "handoff_via", "handoff_at",
+)
+# B5 handoff 列（老库 ALTER TABLE 幂等补齐）：来源渠道 / 消费的引流码 / 来源 contact & ci /
+# 合并方式 local(同库 relink) | source_db(跨库只记关联) / 时间
+PLAYER_PROFILE_HANDOFF_COLUMNS = (
+    ("handoff_source", "TEXT NOT NULL DEFAULT ''"),
+    ("handoff_token", "TEXT NOT NULL DEFAULT ''"),
+    ("handoff_contact_id", "TEXT NOT NULL DEFAULT ''"),
+    ("handoff_ci_id", "TEXT NOT NULL DEFAULT ''"),
+    ("handoff_via", "TEXT NOT NULL DEFAULT ''"),
+    ("handoff_at", "INTEGER NOT NULL DEFAULT 0"),
 )
 PLAYER_DAILY_COUNTERS = (
     "inbound", "lookups", "found", "visible", "gate_hits", "new_profiles", "stage_ups",
@@ -362,6 +374,16 @@ class ContactStore:
                     "CREATE INDEX IF NOT EXISTS idx_contacts_followup "
                     "ON contacts(follow_up_at) WHERE follow_up_at > 0"
                 )
+            pcols = {
+                row[1] for row in self._conn.execute(
+                    "PRAGMA table_info(player_profiles)"
+                ).fetchall()
+            }
+            for col, ddl in PLAYER_PROFILE_HANDOFF_COLUMNS:
+                if col not in pcols:
+                    self._conn.execute(
+                        f"ALTER TABLE player_profiles ADD COLUMN {col} {ddl}"
+                    )
             self._conn.commit()
 
     def close(self) -> None:
@@ -2890,6 +2912,12 @@ class ContactStore:
                         "visible_hits": int(n["visible_hits"]) + int(o["visible_hits"]),
                         "gate_hits": int(n["gate_hits"]) + int(o["gate_hits"]),
                         "facts_text": n["facts_text"] or o["facts_text"],
+                        "handoff_source": n["handoff_source"] or o["handoff_source"],
+                        "handoff_token": n["handoff_token"] or o["handoff_token"],
+                        "handoff_contact_id": n["handoff_contact_id"] or o["handoff_contact_id"],
+                        "handoff_ci_id": n["handoff_ci_id"] or o["handoff_ci_id"],
+                        "handoff_via": n["handoff_via"] or o["handoff_via"],
+                        "handoff_at": max(int(n["handoff_at"]), int(o["handoff_at"])),
                         "updated_at": self._now(),
                     }
                     sets = ", ".join(f"{c}=?" for c in merged)

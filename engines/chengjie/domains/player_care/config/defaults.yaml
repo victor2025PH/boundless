@@ -59,4 +59,8 @@ emotion_enhancer_skip:
 #       reengage_on_dormant: true          # sync 置 dormant 且有手机号 → 入箱 reengage
 #       stop_on_keyword: true              # 对方整句 STOP/别再发/tanggalin → 入箱 stop（同号其它指令作废）
 #       pull_limit: 20
+#     handoff:                             # B5：Messenger→WA/TG 引流码（核心 handoff_tokens）合并身份，手机号主键
+#       enabled: true
+#       source_db_path: ""                 # story 实例的 contacts.db（相对本配置目录，如 ../config/contacts.db）；空/不存在 → 只查本库
+#       link_local_identity: true          # 同库命中时把 WA/TG ChannelIdentity relink 到 Messenger 的 Contact
 # 日报：.venv\Scripts\python.exe -m domains.player_care.report --config config_player\config.yaml [--day YYYY-MM-DD] [--json]

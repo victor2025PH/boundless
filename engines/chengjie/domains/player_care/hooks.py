@@ -36,6 +36,7 @@ from .gateway import (
 from .goal_templates import register_goal_templates
 from .profile import PlayerProfileService, get_profile_service
 from .commandbus import CommandOutbox, get_outbox, is_stop_message, resolve_commandbus_cfg, send_stop
+from .handoff import HANDOFF_CONTEXT_BLOCK, PlayerHandoffService, get_handoff_service
 
 logger = logging.getLogger("PlayerCareHook")
 
@@ -62,6 +63,7 @@ _FACTS_KEY = "_player_facts"
 _VISIBLE_KEY = "_player_facts_visible"
 _ROUND_KEY = "_player_facts_round"
 _PROFILE_KEY = "_player_profile_key"
+_HANDOFF_KEY = "_player_handoff"
 
 
 def _reply_lang(ctx: HookContext) -> str:
@@ -86,9 +88,11 @@ class PlayerCareDomainHook(DomainHook):
     """Friend persona on WA / TG with read-only player facts from the gateway."""
 
     def __init__(self, config=None, *, gateway: Optional[PlayerGateway] = None,
-                 outbox: Optional[CommandOutbox] = None):
+                 outbox: Optional[CommandOutbox] = None,
+                 handoff: Optional[PlayerHandoffService] = None):
         super().__init__(config)
         self._outbox_override = outbox
+        self._handoff_override = handoff
         self._gateway_override = gateway
         self._gateway: Optional[PlayerGateway] = gateway
         self._gateway_sig: str = ""
@@ -228,6 +232,45 @@ class PlayerCareDomainHook(DomainHook):
             logger.info("[player_care] STOP → commandbus stop %s", env.get("command_id"))
         return env
 
+    # ── B5：Messenger → WA/TG 引流码 → 合并身份（手机号主键）；同一画像只合一次，失败全吞 ─────
+    def _handoff(self) -> Optional[PlayerHandoffService]:
+        if self._handoff_override is not None:
+            return self._handoff_override
+        try:
+            return get_handoff_service(self._config, self._profile())
+        except Exception:
+            logger.debug("[player_care] handoff service 不可用", exc_info=True)
+            return None
+
+    def _maybe_handoff(self, ctx: HookContext, ident: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
+        if isinstance(uc.get(_HANDOFF_KEY), dict) and uc[_HANDOFF_KEY].get("token"):
+            return None
+        svc = self._handoff()
+        if svc is None:
+            return None
+        extra = ctx.extra or {}
+        res = svc.try_merge(
+            text=str(ctx.text or ""),
+            platform=str(extra.get("platform") or uc.get("platform") or ""),
+            account_id=str(extra.get("account_id") or uc.get("account_id") or ""),
+            external_id=str(ctx.user_id or ctx.chat_id or ""),
+            phone=ident.get("phone", ""),
+            display_name=str(extra.get("display_name") or uc.get("display_name") or ""),
+            profile=self._profile(),
+            profile_key=str(uc.get(_PROFILE_KEY) or ""),
+        )
+        if res is None:
+            return None
+        uc[_HANDOFF_KEY] = res
+        if res.get("profile_key"):
+            uc[_PROFILE_KEY] = res["profile_key"]
+        if res.get("merged_contact_id"):
+            uc["contact_id"] = res["merged_contact_id"]
+        if res.get("phone") and not uc.get("peer_phone"):
+            uc["peer_phone"] = res["phone"]
+        return res
+
     # ── hook 1：入站预处理 → 查网关、决定明用 / 暗用，再落画像 ────────────────
     async def on_message_pre_process(self, ctx: HookContext) -> Optional[Dict[str, Any]]:
         uc = ctx.user_context if isinstance(ctx.user_context, dict) else {}
@@ -237,6 +280,13 @@ class PlayerCareDomainHook(DomainHook):
         looked_up = float((facts or {}).get("ts") or 0) > prev_ts
         ident = self.resolve_identity(ctx)
         self._persist_round(ctx, ident, looked_up=looked_up)
+        try:
+            if self._maybe_handoff(ctx, ident) is not None:
+                block = str((result or {}).get("_domain_context_block") or "")
+                result = dict(result or {})
+                result["_domain_context_block"] = (block + "\n" + HANDOFF_CONTEXT_BLOCK).strip()
+        except Exception:
+            logger.debug("[player_care] handoff 处理失败（忽略）", exc_info=True)
         try:
             self._maybe_send_stop(ctx, ident)
         except Exception:
