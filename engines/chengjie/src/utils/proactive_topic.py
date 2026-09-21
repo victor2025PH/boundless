@@ -18,6 +18,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+from src.utils.memory_perspective import to_second_person
+
 # 主动开场模式
 MODE_NONE = ""                     # 不主动开场（沉默不足）
 MODE_FOLLOW_UP = "follow_up"       # 回访某条高置信记忆
@@ -267,14 +269,14 @@ def select_proactive_topic(
             _day = time.strftime("%Y%m%d", time.localtime(now))
             _seed = f"{variety_key}#fact#{_day}".encode("utf-8", "ignore")
             best = ranked[zlib.crc32(_seed) % _k]
-        fact = str(best.get("content") or "").strip()
+        fact = to_second_person(str(best.get("content") or "").strip())
         # P1b：除选中事实外，再挑几条高置信事实作背景（按同一优先级排序，去重）。
         context_facts: List[str] = []
         if max_context_facts > 0:
             for f in ranked:
                 if f is best:
                     continue
-                c = str(f.get("content") or "").strip()
+                c = to_second_person(str(f.get("content") or "").strip())
                 if c and c != fact and c not in context_facts:
                     context_facts.append(c)
                 if len(context_facts) >= int(max_context_facts):

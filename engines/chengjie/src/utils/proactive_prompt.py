@@ -18,6 +18,11 @@ import time
 import zlib
 from typing import Any, Dict, List, Optional
 
+from src.utils.memory_perspective import (
+    PERSPECTIVE_NOTE,
+    facts_to_second_person,
+    to_second_person,
+)
 from src.utils.proactive_topic import (
     GAP_FEW_DAYS,
     GAP_LONG,
@@ -372,14 +377,16 @@ def build_proactive_prompt(
             f"绝不要用中文，也不要跟着聊天记录里的其他语言换语言。）\n"
         )
 
-    facts = [
-        str(f).strip() for f in (plan.get("context_facts") or []) if str(f).strip()
-    ]
+    facts = facts_to_second_person(
+        str(f) for f in (plan.get("context_facts") or []))
     if facts:
         prompt += (
             "\n（背景：你还记得关于TA的这些事，仅用来把这一句说得更走心，"
             "绝不要罗列、不要逐条追问）：\n- " + "\n- ".join(facts[:3]) + "\n"
         )
+    if facts or str(plan.get("fact") or "").strip() or (
+            to_second_person(directive) != directive):
+        prompt += PERSPECTIVE_NOTE
     if recent_context:
         prompt += (
             "\n（下面是你们最近的聊天记录，「你」开头的是你自己说过的话。"

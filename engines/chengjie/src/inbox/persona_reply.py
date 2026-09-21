@@ -281,12 +281,13 @@ def trim_stale_history(
     return out
 
 
-#: 出站非图片媒体的中文名（**空正文**出站媒体行的占位「[我方发出的X]」）；未列出的
-#: media_type 原样带出。
-_OUT_MEDIA_WORD = {
-    "voice": "语音", "audio": "语音", "video": "视频", "video_note": "视频",
-    "animation": "动图", "gif": "动图", "document": "文件", "file": "文件",
+#: **空正文**出站媒体行进 assistant 历史时的替身：无方括号、无文字标签，即便被模型
+#: 当模板照抄也只是一个表情符号（形态本身由行上 ``media`` 字段带外承载，见
+#: :func:`media_form_note`）。
+OUT_MEDIA_STANDIN = {
+    "image": "📷", "video": "🎬", "voice": "🎤", "file": "📎", "media": "📎",
 }
+_OUT_STANDINS = frozenset(OUT_MEDIA_STANDIN.values())
 _IMAGE_KINDS = frozenset({"image", "photo", "picture", "sticker"})
 _VOICE_KINDS = frozenset({"voice", "audio"})
 _VIDEO_KINDS = frozenset({"video", "video_note", "animation", "gif"})
@@ -351,11 +352,13 @@ def strip_out_label(text: str) -> str:
         t = rest
 
 
-def _out_media_placeholder(media_type: str) -> str:
-    mt = str(media_type or "").lower()
-    if mt in _IMAGE_KINDS:
-        return "[我方发出的图片]"
-    return f"[我方发出的{_OUT_MEDIA_WORD.get(mt, mt or '媒体')}]"
+def out_media_standin(media_type: str) -> str:
+    """空正文出站媒体行在 LLM 历史里的替身（纯表情，非系统标签）。"""
+    return OUT_MEDIA_STANDIN[media_form(media_type) or "media"]
+
+
+def is_out_media_standin(text: str) -> bool:
+    return str(text or "").strip() in _OUT_STANDINS
 
 
 def normalize_history(
@@ -401,7 +404,7 @@ def normalize_history(
             _mt = str(m.get("media_type") or "").lower()
             _mform = media_form(_mt) or "media"
             if not t:
-                t = _out_media_placeholder(_mt)
+                t = out_media_standin(_mt)
         elif not t and _has_media:
             try:
                 from src.integrations.protocol_bridge import media_placeholder
@@ -456,7 +459,7 @@ def media_form_note(history: List[Dict[str, Any]], *, max_captions: int = 3) -> 
         counts[form] = counts.get(form, 0) + 1
         if form in ("image", "video"):
             c = str(r.get("content") or "").strip()
-            if c and not c.startswith("["):
+            if c and not c.startswith("[") and not is_out_media_standin(c):
                 # 只取配文本身（剔掉尾随的 [图片内容] 描述）
                 j = c.find("[")
                 c = (c[:j] if j > 0 else c).strip()

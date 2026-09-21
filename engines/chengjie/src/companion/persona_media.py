@@ -361,12 +361,34 @@ def is_invite_or_decline(text: Any) -> bool:
     return bool(_INVITE_RE.search(t))
 
 
+_TRIGGER_RE_CACHE: Dict[str, "re.Pattern[str]"] = {}
+_TRIGGER_RE_CACHE_CAP = 2048
+_LATIN_WORD_RE = re.compile(r"^[a-z0-9]+(?:[ '\-][a-z0-9]+)*$")
+
+
+def trigger_term_hit(term: Any, text_norm: str) -> bool:
+    """单个运营触发词是否命中已归一文本。
+
+    - 拉丁字母/数字词（如 ``car`` / ``my dog``）按**整词**匹配（允许 s/es 复数）：
+      ``care`` / ``category`` / ``scarf`` 不再命中 ``car`` / ``cat``（#339 子串误触）。
+    - 含 CJK 等非拉丁字符的词无词界概念，保持子串匹配（``海边`` ∈ ``去海边玩``）。
+    """
+    ts = str(term or "").strip().lower()
+    if not ts or not text_norm:
+        return False
+    if not _LATIN_WORD_RE.match(ts):
+        return ts in text_norm
+    pat = _TRIGGER_RE_CACHE.get(ts)
+    if pat is None:
+        pat = re.compile(r"(?<![a-z0-9])" + re.escape(ts) + r"(?:e?s)?(?![a-z0-9])")
+        if len(_TRIGGER_RE_CACHE) >= _TRIGGER_RE_CACHE_CAP:
+            _TRIGGER_RE_CACHE.clear()
+        _TRIGGER_RE_CACHE[ts] = pat
+    return bool(pat.search(text_norm))
+
+
 def _triggers_hit(triggers: Sequence[Any], text_norm: str) -> bool:
-    for t in triggers or []:
-        ts = str(t or "").strip().lower()
-        if ts and ts in text_norm:
-            return True
-    return False
+    return any(trigger_term_hit(t, text_norm) for t in triggers or [])
 
 
 def _partition(
@@ -866,7 +888,7 @@ __all__ = [
     "POOL_KEYWORD", "POOL_GENERIC", "POOL_NONE", "SCENE_CLASSES", "SCENE_KINDS",
     "normalize_text", "select_media", "explain_match", "pick_media", "caption_for",
     "scene_class_of", "tod_conflicts_with_hour", "row_tod", "row_scene_class",
-    "row_file_key", "series_of", "is_info_question", "is_invite_or_decline",
+    "row_file_key", "series_of", "is_info_question", "is_invite_or_decline", "trigger_term_hit",
     "caption_tod_conflict",
     "infer_scene_kind", "scene_kind_of", "requested_scene_kind",
     "album_kind_counts", "album_trigger_counts", "row_has_match_terms",

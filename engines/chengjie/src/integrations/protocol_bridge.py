@@ -914,7 +914,12 @@ def ingest_incoming(
     用已同步的通讯录名（``protocol_contacts``）兜底，使**所有入站路径**（HTTP 桥 + 进程内
     sink）一致地把裸号码补成真人名，而非仅 HTTP 桥。
     """
+    from src.inbox.inbound_ledger import record as _ledger
     if store is None or not chat_key:
+        _ledger("no_store" if store is None else "no_chat_key",
+                platform=str(platform or ""), account_id=str(account_id or ""),
+                chat_key=str(chat_key or ""), msg_id=str(msg_id or ""), ts=ts,
+                direction=str(direction or "in"))
         return None
     platform = str(platform or "").lower()
     # 号码补名（收口到唯一落库入口，覆盖进程内 sink 与 HTTP 桥）：无来显名或来显名
@@ -997,6 +1002,16 @@ def ingest_incoming(
     if _self_chat:
         src[SELF_CHAT_KEY] = 1
     _quiet = _backfill or _self_chat
+    # 实时入站缺 ts 不许落成 1970：壓碑闸把 ts=0 当历史重放永久丢弃，会话排序也沉底。
+    # 回填路径（历史同步）保持原样。
+    try:
+        _ts_in = float(ts or 0)
+    except Exception:
+        _ts_in = 0.0
+    if direction == "in" and not _backfill and _ts_in <= 0:
+        ts = time.time()
+        _ledger("ts_defaulted", platform=platform, account_id=str(account_id),
+                chat_key=str(chat_key), msg_id=str(msg_id or ""), ts=ts)
     # 群会话名护栏（2026-09-18 P6 实锤）：群入站的 ``name`` 若就是发言人名，不许当会话名。
     # store upsert 对「非空且 ≠ chat_key」的显示名一律覆盖，A 线 @本账号 触发路径曾把
     # 「2026社群聊天」改名成发言人 Katie。调用方已修，但本函数是所有入站路径唯一的落库口，
@@ -1044,9 +1059,12 @@ def ingest_incoming(
     if _decrypt_fail and direction == "in":
         from src.inbox.decrypt_fail_marker import LIST_PREVIEW as _df_preview
         chat["last_msg"] = _df_preview
+    _n = 0
     try:
         _n = ingest_collected_chats(
-            store, [chat], publish_events=(direction == "in" and not _quiet))
+            store, [chat], publish_events=(direction == "in" and not _quiet),
+            ledger_ctx={"platform": platform, "account_id": str(account_id),
+                        "chat_key": str(chat_key), "msg_id": str(msg_id or ""), "ts": ts})
         if _quiet and direction == "in":
             # P-2 A / F 可对账日志：每条回填 / 自聊入站一行（落库了、但没进自动化）
             logger.info(
@@ -1099,8 +1117,12 @@ def ingest_incoming(
         # autosend/主动触达后即时看到气泡，选中会话轮询由 10s 放宽到 30s（见 P1-3）。
         if direction == "out" and _n > 0 and not _quiet:
             _publish_outbound_event(chat)
-    except Exception:
+    except Exception as _exc:
         logger.debug("[protocol_bridge] ingest_collected_chats 失败", exc_info=True)
+        _ledger("store_error", platform=platform, account_id=str(account_id),
+                chat_key=str(chat_key), conversation_id=str(chat.get("conversation_id") or ""),
+                msg_id=str(msg_id or ""), ts=ts, direction=direction,
+                detail=f"{type(_exc).__name__}: {_exc}")
     # P4-11B：入站群消息 @ 本账号 → 置会话「@我」未读旗标（best-effort，不阻断落库）
     if direction == "in" and mentioned:
         try:

@@ -584,7 +584,9 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         # 「翻译引擎没回话 · 这条没发 · 重试翻译」——动作打 POST /api/unified-inbox/drafts/{id}/retranslate
         return _set("xlate_hold", will_send=False, reason_code=str(xh["reason"]),
                     text_key=("inbox.cs.xlate_hold" if xh["engine_silent"]
-                              else "inbox.cs.xlate_hold.other"),
+                              else ("inbox.cs.xlate_hold.low_conf"
+                                    if str(xh["reason"]) == "low_confidence"
+                                    else "inbox.cs.xlate_hold.other")),
                     action="retranslate" if xh["draft_id"] else "none",
                     reason=xh["reason"], target=xh["target"] or None, hhmm=xh["hhmm"],
                     ago_sec=xh["ago_sec"], attempts=xh["attempts"], n=xh["n"],

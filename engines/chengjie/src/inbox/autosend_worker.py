@@ -28,7 +28,7 @@ import random
 import threading
 import time
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,17 @@ def _translate_hold_message(item: Dict[str, Any]) -> str:
             return (f"translate_hold:{reason}: 翻译引擎没回话（target={tgt}，已试 "
                     f"{max(attempts, 1)} 次）· 这条没发 · 会话头点「重试翻译」补投"
                     "（不发原文）")
+        if reason == "low_confidence":
+            # P0-3（#343）：译文像没翻对（目标语脚本缺失 / 原样回吐 / 长度离谱），换引擎也没救回
+            try:
+                _c = float((hold or {}).get("confidence"))
+                _m = float((hold or {}).get("min_confidence"))
+                _cs = f"置信 {_c:.2f} < {_m:.2f}，"
+            except (TypeError, ValueError):
+                _cs = ""
+            return (f"translate_hold:{reason}: 译文质量不过关（{_cs}target={tgt}，已试 "
+                    f"{max(attempts, 1)} 个引擎）· 这条没发 · 点「重试翻译」或手动改稿"
+                    "（不发原文）")
         return (f"translate_hold:{reason}: 翻译失败待确认（target={tgt}），"
                 "已拦截不发原文（无兜底纪律）")
     return "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）"
@@ -178,6 +189,8 @@ class AutosendWorker:
         fresh_guard_cfg: Optional[Dict[str, Any]] = None,
         work_schedule_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         catchup_regenerate_cb: Optional[Callable[..., bool]] = None,
+        fact_gate_cfg: Optional[Dict[str, Any]] = None,
+        opener_guard_cfg: Optional[Dict[str, Any]] = None,
         pilot_guard: Optional[Callable[[str, str], bool]] = None,
         app: Any = None,
     ) -> None:
@@ -337,6 +350,12 @@ class AutosendWorker:
         self.total_dup_blocked_cross_round: int = 0
         self.total_dup_cross_round_released: int = 0
         self.total_dup_blocked_flagged: int = 0
+        # 出站事实门（P0-1 #341/#342）：拦下「编造对方家人 / 运营称谓外泄」的稿子数、重写救回数
+        self.total_fact_gate_blocked: int = 0
+        self.total_fact_gate_rewritten: int = 0
+        # 出站开场词守卫（P0-4 #340）：摘掉复读的感叹开场数、复读但不可摘（只留痕）数
+        self.total_opener_stripped: int = 0
+        self.total_opener_repeat_seen: int = 0
         self.total_superseded: int = 0           # 新入站过期守卫跳过数（fresh_guard，不算 error）
         # 工作时间闸扣留事件数（同一草稿每 tick 重扫会重复计数——这是「扣留中」的
         # 活动信号而非唯一草稿数；复班后自然归零增长）
@@ -378,6 +397,13 @@ class AutosendWorker:
         # 配置由 bootstrap 经 resolve_guard_cfg 注入（本 worker 拿不到全局配置树，
         # 与 _dead_peer_shared 同理）；None/enabled=false = 零行为变更。
         self._dup_guard_cfg: Dict[str, Any] = dict(dup_guard_cfg or {})
+        # 出站事实门（inbox.outbound_fact_gate，默认开；判定纯函数在 src/inbox/outbound_fact_gate.py）：
+        # 真发前核对「文案里点名的对方第三方 / 运营称谓」在客户原话 + 客户口述事实里有没有依据。
+        # 同 dup_guard 注入范式：bootstrap 经 resolve_cfg + attach_sources 注入；None = 门不存在。
+        self._fact_gate_cfg: Dict[str, Any] = dict(fact_gate_cfg or {})
+        # 出站开场词守卫（inbox.opener_guard，默认开；判定纯函数在 src/inbox/opener_guard.py）：
+        # 译后文本的开场感叹词（Ha, / 哈哈，/ Hey～）在本会话最近几条出站里复读 → 摘掉再发。
+        self._opener_guard_cfg: Dict[str, Any] = dict(opener_guard_cfg or {})
 
         # 新入站过期守卫（fresh_guard，2026-08-03，默认关）：拟稿窗口里客户又说了话
         # → 旧稿答非所问且新稿马上会再发一条。配置优先取 bootstrap 注入（完整树解析，
@@ -775,6 +801,143 @@ class AutosendWorker:
             logger.debug("[AutosendWorker] dup 拦截 ops_alert 失败（忽略）",
                          exc_info=True)
         return tagged
+
+    async def _fact_gate_check(
+        self, item: Dict[str, Any], text: str,
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """出站事实门（P0-1）。返回 ``(可发文本, 拦截命中)``：放行 → ``(原文, None)``；
+        命中且「删掉无据内容」重写后复检通过 → ``(重写稿, None)``；命中未救回 →
+        ``(原文, hit)``。支撑集＝本会话客户入站原文 + 客户口述（user_stated）记忆事实；
+        AI 推断事实不算依据。判定 / 取数任何异常一律放行（与 dup_guard 同纪律）。
+        """
+        cfg = self._fact_gate_cfg
+        try:
+            from src.inbox import outbound_fact_gate as _fg
+            conv = str(item.get("conversation_id") or "")
+            rows: List[Dict[str, Any]] = []
+            store = getattr(self._svc, "_store", None)
+            if store is not None and conv and hasattr(store, "list_recent_messages"):
+                try:
+                    rows = list(store.list_recent_messages(
+                        conv, limit=int(cfg.get("history_limit", _fg.DEFAULT_HISTORY_LIMIT))) or [])
+                except Exception:
+                    rows = []
+            facts: List[str] = []
+            facts_fn = cfg.get("facts_fn")
+            if facts_fn is not None:
+                try:
+                    facts = list(facts_fn(
+                        str(item.get("platform") or ""),
+                        str(item.get("account_id") or "default"),
+                        str(item.get("chat_key") or "")) or [])
+                except Exception:
+                    facts = []
+            deny_turns = int(cfg.get("deny_turns", _fg.DEFAULT_DENY_TURNS))
+            hit = _fg.check(text, rows, facts, deny_turns=deny_turns)
+            if hit is None:
+                return text, None
+            logger.warning(
+                "[AutosendWorker] guard=fact_gate 拦截 conv=%s draft=%s kind=%s hit=%r why=%s",
+                conv, item.get("draft_id", ""), hit.get("kind"), hit.get("hit"), hit.get("why"))
+            rewrite_fn = cfg.get("rewrite_fn") if cfg.get("rewrite_retry", True) else None
+            if rewrite_fn is not None:
+                try:
+                    rw = await rewrite_fn(text, _fg.build_rewrite_prompt(hit))
+                except Exception:
+                    logger.debug("[AutosendWorker] fact_gate 重写异常（按未救回）", exc_info=True)
+                    rw = None
+                rw = str(rw or "").strip()
+                if rw and _fg.check(rw, rows, facts, deny_turns=deny_turns) is None:
+                    self.total_fact_gate_rewritten += 1
+                    logger.info(
+                        "[AutosendWorker] fact_gate 删去无据内容后重写通过 conv=%s len %d→%d",
+                        conv, len(text), len(rw))
+                    return rw, None
+            return text, hit
+        except Exception:
+            logger.debug("[AutosendWorker] 出站事实门异常（放行）", exc_info=True)
+            return text, None
+
+    def _fact_gate_escalate(self, item: Dict[str, Any], hit: Dict[str, Any]) -> bool:
+        """事实门拦下且重写没救回 → 不发、绝不静默：打「需人工」(reason=fact_gate_blocked)、
+        拦截台账写人话细节、ops 告警。客户在等一句回复，而这句回复不能发——必须有人接。
+        全程 best-effort，返回是否打了标。
+        """
+        from src.inbox.outbound_fact_gate import REASON as _FG_REASON
+        conv = str(item.get("conversation_id") or "")
+        why = str(hit.get("why") or "")
+        self.total_fact_gate_blocked += 1
+        tagged = False
+        store = getattr(self._svc, "_store", None)
+        try:
+            if store is not None:
+                from src.integrations.protocol_autoreply import tag_needs_human
+                tagged = bool(tag_needs_human(store, {
+                    "platform": str(item.get("platform") or ""),
+                    "account_id": str(item.get("account_id") or "default"),
+                    "chat_key": str(item.get("chat_key") or ""),
+                }, reason=_FG_REASON, source="system"))
+        except Exception:
+            logger.debug("[AutosendWorker] fact_gate 打「需人工」失败（忽略）", exc_info=True)
+        try:
+            if store is not None:
+                from src.inbox import abort_ledger as _al
+                _did = str(item.get("draft_id") or "")
+                if not _al.annotate_last(
+                        store, conversation_id=conv, reason=_FG_REASON,
+                        hit=str(hit.get("hit") or "")[:60], detail=why, draft_id=_did):
+                    _al.record(
+                        store, conversation_id=conv, code="needs_human", stage="fact_gate",
+                        hit=str(hit.get("hit") or "")[:60], source="autosend",
+                        draft_id=_did, reason=_FG_REASON, detail=why)
+        except Exception:
+            logger.debug("[AutosendWorker] fact_gate 台账写入失败（忽略）", exc_info=True)
+        logger.warning(
+            "[AutosendWorker] guard=fact_gate 拦截后未救回 → %s conv=%s draft=%s kind=%s why=%s",
+            "已打「需人工」(reason=fact_gate_blocked)" if tagged else "「需人工」已在/打标不可用，仅留痕",
+            conv, item.get("draft_id", ""), hit.get("kind"), why)
+        try:
+            from src.ops.ops_alert import notify as _ops_notify
+            _ops_notify(
+                _FG_REASON,
+                f"⚠️ 出站事实门拦下一条无据内容 conv={conv}（{why}，已进待处理清单）",
+                account_id=conv, reason=_FG_REASON)
+        except Exception:
+            logger.debug("[AutosendWorker] fact_gate ops_alert 失败（忽略）", exc_info=True)
+        return tagged
+
+    def _opener_guard_apply(self, item: Dict[str, Any], text: str) -> str:
+        """出站开场词守卫（P0-4）：本稿开场词在本会话最近几条出站里复读 → 是感叹 token
+        就摘掉（「Ha, how was…」→「How was…」）；不可摘（每条都同一个实词开头）只计数留痕，
+        不冒险改译文。任何异常原样返回。"""
+        cfg = self._opener_guard_cfg
+        try:
+            from src.inbox import opener_guard as _og
+            conv = str(item.get("conversation_id") or "")
+            store = getattr(self._svc, "_store", None)
+            if store is None or not conv or not hasattr(store, "list_recent_messages"):
+                return text
+            window = int(cfg.get("window", _og.DEFAULT_WINDOW))
+            rows = list(store.list_recent_messages(conv, limit=max(12, window * 3)) or [])
+            recent = _og.recent_out_texts(rows, window=window)
+            hit = _og.inspect(text, recent, min_repeat=int(cfg.get("min_repeat", _og.DEFAULT_MIN_REPEAT)))
+            if hit is None:
+                return text
+            stripped = str(hit.get("stripped") or "")
+            if stripped:
+                self.total_opener_stripped += 1
+                logger.info(
+                    "[AutosendWorker] guard=opener 复读开场「%s」×%d 已摘掉 conv=%s draft=%s",
+                    hit.get("opener"), hit.get("count"), conv, item.get("draft_id", ""))
+                return stripped
+            self.total_opener_repeat_seen += 1
+            logger.warning(
+                "[AutosendWorker] guard=opener 复读开场「%s」×%d 不可摘（非感叹词），原样放行 conv=%s",
+                hit.get("opener"), hit.get("count"), conv)
+            return text
+        except Exception:
+            logger.debug("[AutosendWorker] 开场词守卫异常（原样放行）", exc_info=True)
+            return text
 
     def apply_deliver_delay(self, block: Optional[Dict[str, Any]]) -> None:
         """运行时热更新拟人打字延迟配置（「自动回复设置」页保存后即时生效）。
@@ -2188,6 +2351,13 @@ class AutosendWorker:
             # 已把全部失败面收成 None；此处回调**自身抛异常**同样按 HOLD 处理，
             # 旧「异常发原文」拆除）→ 按投递失败进重试队列，翻译链恢复后自动补投。
             send_text = str(item.get("text", ""))
+            if self._fact_gate_cfg.get("enabled") and not _true_retry:
+                send_text, _fg_hit = await self._fact_gate_check(item, send_text)
+                if _fg_hit is not None:
+                    self._fact_gate_escalate(item, _fg_hit)
+                    return
+                if send_text != str(item.get("text", "")):
+                    item["text"] = send_text
             if self._translate_callback is not None:
                 _tx = send_text
                 try:
@@ -2205,6 +2375,9 @@ class AutosendWorker:
                     if _tx != send_text:
                         self.total_translated += 1
                     send_text = _tx
+            # 开场词守卫不豁免重试：判定不看在途登记、失败行也不计入历史，幂等无自拦风险
+            if self._opener_guard_cfg.get("enabled"):
+                send_text = self._opener_guard_apply(item, send_text)
             # 出站近重复守卫（2026-08-02）：客户短时间连发多条 → 两次独立
             # LLM 生成互不知情 → 同义双发。投递前与最近出站（DB + 在途登记）
             # 最后核对一次，命中即静默跳过——不算投递错误、不喂熔断（重复
@@ -3134,6 +3307,8 @@ class AutosendWorker:
         fresh_guard_cfg: Any = _UNSET,
         work_schedule_provider: Any = _UNSET,
         pilot_guard: Any = _UNSET,
+        fact_gate_cfg: Any = _UNSET,
+        opener_guard_cfg: Any = _UNSET,
     ) -> None:
         """运行时热接线投递能力（P1 2026-08-22「一键全自动」）。
 
@@ -3160,6 +3335,10 @@ class AutosendWorker:
             self._persona_resolver = persona_resolver
         if dup_guard_cfg is not _UNSET:
             self._dup_guard_cfg = dict(dup_guard_cfg or {})
+        if fact_gate_cfg is not _UNSET:
+            self._fact_gate_cfg = dict(fact_gate_cfg or {})
+        if opener_guard_cfg is not _UNSET:
+            self._opener_guard_cfg = dict(opener_guard_cfg or {})
         if fresh_guard_cfg is not _UNSET:
             self._fresh_guard_cfg = (
                 dict(fresh_guard_cfg) if isinstance(fresh_guard_cfg, dict)
@@ -3301,6 +3480,12 @@ class AutosendWorker:
             "total_dup_cross_round_released": self.total_dup_cross_round_released,
             "total_dup_blocked_flagged": self.total_dup_blocked_flagged,
             "dup_guard_enabled": bool(self._dup_guard_cfg.get("enabled")),
+            "total_fact_gate_blocked": self.total_fact_gate_blocked,
+            "total_fact_gate_rewritten": self.total_fact_gate_rewritten,
+            "fact_gate_enabled": bool(self._fact_gate_cfg.get("enabled")),
+            "total_opener_stripped": self.total_opener_stripped,
+            "total_opener_repeat_seen": self.total_opener_repeat_seen,
+            "opener_guard_enabled": bool(self._opener_guard_cfg.get("enabled")),
             "total_superseded": self.total_superseded,  # 新入站过期守卫跳过数
             "fresh_guard_enabled": bool(self._fresh_guard_cfg.get("enabled")),
             # P1 连发地板（2026-08-12）：min_gap_sec 抬升过延迟的次数——

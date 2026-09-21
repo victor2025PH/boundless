@@ -8,6 +8,7 @@
 
 ZH = {
     "rps_al_sub_dup_guard_blocked": "检测到回复与近期内容重复，已暂停发送",
+    "rps_al_sub_fact_gate_blocked": "AI 提到了客户没说过的人或事（如「你妈妈」），已拦下未发",
     "rps_al_sub_empty_reply": "AI 生成了空回复",
     "rps_al_sub_generate_error": "AI 生成出错",
     "rps_al_sub_send_error": "发送失败",
@@ -27,6 +28,7 @@ ZH = {
 
 EN = {
     "rps_al_sub_dup_guard_blocked": "Reply was too close to what was just sent — paused",
+    "rps_al_sub_fact_gate_blocked": "AI mentioned someone the customer never talked about — withheld",
     "rps_al_sub_empty_reply": "AI produced an empty reply",
     "rps_al_sub_generate_error": "AI generation error",
     "rps_al_sub_send_error": "Send failed",
@@ -46,6 +48,7 @@ EN = {
 
 ZH_HANT = {
     "rps_al_sub_dup_guard_blocked": "偵測到回覆與近期內容重複，已暫停發送",
+    "rps_al_sub_fact_gate_blocked": "AI 提到了客戶沒說過的人或事（如「你媽媽」），已攔下未發",
     "rps_al_sub_empty_reply": "AI 生成了空回覆",
     "rps_al_sub_generate_error": "AI 生成出錯",
     "rps_al_sub_send_error": "發送失敗",

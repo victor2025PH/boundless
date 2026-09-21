@@ -2191,6 +2191,22 @@ class InboxStore:
                 (cid,)).fetchone()
         return row is not None
 
+    def tombstone_deleted_at(self, conversation_id: str) -> Optional[float]:
+        """墓碑删除时刻；无墓碑 → None。"""
+        cid = str(conversation_id or "")
+        if not cid:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT deleted_at FROM conversation_tombstones WHERE conversation_id=?",
+                (cid,)).fetchone()
+        if row is None:
+            return None
+        try:
+            return float(row[0] or 0)
+        except Exception:
+            return 0.0
+
     def tombstoned_subset(self, conversation_ids: List[str]) -> set:
         """批量墓碑查询（目录同步每轮 ≤200 行，一次 IN 查询不逐行打点）。"""
         cids = [str(c) for c in (conversation_ids or []) if c]

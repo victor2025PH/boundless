@@ -3629,7 +3629,7 @@ class AIClient(LoggerMixin):
                 "回复风格：简洁干练，少废话，直接给结论和动作。"
                 "**禁止**在句首使用填充语气词：如「嗯」「嗯嗯」「呃」「那个」等；"
                 "可直入主题，或以「好的」「收到」等短承接开头（视语境）。"
-                "若与上文系统提示中「开头多样化可选池」冲突，**以本段为准**。"
+                "若与上文系统提示中的开场白参考冲突，**以本段为准**。"
             ),
             "warm": (
                 "回复风格：温暖、活泼、恋爱向腻聊；可用撒娇/反问/昵称感语气词，避免油腻刷屏。"
@@ -4228,7 +4228,8 @@ class AIClient(LoggerMixin):
             _epi = (context.get("_episodic_memory_text") or "").strip()
             if _epi:
                 prompt_parts.append(
-                    "【用户长期记忆要点（简要事实；与本轮话题相关时自然回带一句——"
+                    "【用户长期记忆要点（简要事实，其中「TA」就是你此刻正在聊的这个人本人，"
+                    "绝不要把TA称作「客户」/your client；与本轮话题相关时自然回带一句——"
                     "如「你上次说的xxx后来怎样了」——让对方感到被记住；"
                     "不要机械复述「我记得你说过」，也别每条都提。"
                     "标注（AI推断）的条目是系统归纳、不是对方原话：可信度低于"
@@ -4461,6 +4462,9 @@ class AIClient(LoggerMixin):
             # P2 用户侧在地化：对方当地时间 + 对方那边的节日（skill_manager 注入，
             # 只吃显式信号——见 `_inject_peer_locale` 的 docstring）。有了这两块，
             # 「对方那边几点、今天是不是 TA 的节日」不再靠 LLM 瞎猜。
+            _peer_place = (context.get("_peer_place_line") or "").strip()
+            if _peer_place:
+                prompt_parts.append(_peer_place)
             _peer_clk = (context.get("_peer_clock_line") or "").strip()
             if _peer_clk:
                 prompt_parts.append(_peer_clk)

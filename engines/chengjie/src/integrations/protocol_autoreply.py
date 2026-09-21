@@ -1100,6 +1100,7 @@ HANDOFF_AUTO_CLEAR_REASONS = frozenset({
     "dup_guard_blocked", "empty_reply", "generate_error", "send_error",
     "quota_hour", "quota_day", "circuit_open", "off_hours",
     "service_tone",   # O-1 C：AI 稿被客服腔守卫扣下＝「AI 没能回上」类，之后回上即摘
+    "fact_gate_blocked",   # P0-1：AI 稿编造对方家人 / 运营称谓外泄被事实门扣下，同属「没能回上」
 })
 
 

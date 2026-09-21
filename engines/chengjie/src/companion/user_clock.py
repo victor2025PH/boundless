@@ -74,6 +74,7 @@ __all__ = [
     "user_month_day",
     "user_time_line",
     "build_tz_bridge_line",
+    "peer_place_line",
     "in_quiet_hours",
     "schedule_clock",
     "shift_hours_to_clock",
@@ -967,6 +968,76 @@ def build_tz_bridge_line(
             "acknowledge the gap naturally (e.g. 'it must be Sunday morning over "
             "there — still Saturday evening here'); never borrow their weekday or "
             "daypart to describe what you yourself are doing."
+        )
+    except Exception:
+        return ""
+
+
+def _city_display(slug: str, lang: str = "zh") -> str:
+    try:
+        from src.companion.persona_location import CITY_PRESETS
+        preset = CITY_PRESETS.get(str(slug or "").strip().lower()) or {}
+        zh_mode = str(lang or "zh").lower().startswith("zh")
+        name = preset.get("city_zh" if zh_mode else "city_en") or preset.get(
+            "city_en") or preset.get("city_zh")
+        return str(name or slug or "").strip()
+    except Exception:
+        return str(slug or "").strip()
+
+
+def peer_place_line(
+    clock: Optional[UserClock],
+    persona_place: Any = None,
+    lang: str = "zh",
+) -> str:
+    """「对方在哪」prompt 行（纯函数）：只吃对方**亲口说过**的城市（``stated_city``）。
+
+    人设侧天气/时钟都按人设居住地算，而对方在哪里此前从不作为事实进 prompt，LLM
+    便把“自己这边”的天气套到对方头上（#82）。两侧城市不同时明说“不同城”；同城时
+    允许“我们这边”。行为/号码/语种推断的时钟不带城市事实 → ""。
+    """
+    try:
+        if clock is None or str(clock.source or "") != "stated_city":
+            return ""
+        slug = str(clock.city_slug or "").strip().lower()
+        if not slug:
+            return ""
+        peer_city = _city_display(slug, lang)
+        if not peer_city:
+            return ""
+        zh_mode = str(lang or "zh").lower().startswith("zh")
+        p_slug = str(getattr(persona_place, "slug", "") or "").strip().lower()
+        p_city = ""
+        if persona_place is not None:
+            try:
+                p_city = str(persona_place.display(lang) or "").strip()
+            except Exception:
+                p_city = ""
+        same = bool(p_slug) and p_slug == slug
+        if zh_mode:
+            if same:
+                return (
+                    f"【对方所在地（内部事实）】对方自述在{peer_city}，与你同城。"
+                    "聊天气/路况可以说“我们这边”，但具体天气现象只按你拿到的天气事实说。"
+                )
+            tail = f"，你在{p_city}" if p_city else ""
+            return (
+                f"【对方所在地（内部事实）】对方自述在{peer_city}{tail}，两人不同城。"
+                "你这边的天气、温度、节气不要套到对方头上（不要说“你那边也下雨了吧”）；"
+                f"对方那边的天气你不知道，想聊就问 TA，或者引用 TA 自己说过的。"
+            )
+        if same:
+            return (
+                f"[Their location — internal] They said they're in {peer_city}, "
+                "same city as you. You may say 'over here' for both, but only state "
+                "weather you actually have facts for."
+            )
+        tail = f"; you are in {p_city}" if p_city else ""
+        return (
+            f"[Their location — internal] They said they're in {peer_city}{tail} — "
+            "different cities. Never project your weather/temperature/season onto "
+            "them (no 'raining on your side too?'); you don't know their weather — "
+            "ask, or refer only to what they told you."
         )
     except Exception:
         return ""

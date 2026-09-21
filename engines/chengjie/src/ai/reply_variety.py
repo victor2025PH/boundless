@@ -106,14 +106,40 @@ def _tail_char(text: str) -> str:
     return ""
 
 
+_LATIN_HEAD_RE = re.compile(r"^[a-z][a-z']*")
+
+
 def _clean_head(text: str) -> str:
-    """取消息开头（去 emoji/标点/空白后前 6 个字符）；过短返回空串。"""
+    """取消息开头：中文去 emoji/标点/空白后前 6 字；拉丁文取首词小写
+    （"Hey there" / "Hey babe" → "hey"）；过短返回空串。"""
     s = _EMOJI_RE.sub("", str(text or "")).strip()
     s = _HEAD_STRIP_RE.sub("", s)
     s = s.strip()
     if len(s) < 2:
         return ""
+    m = _LATIN_HEAD_RE.match(s.lower())
+    if m and len(m.group(0)) >= 2:
+        return m.group(0)
     return s[:6]
+
+
+def _norm_opener(text: str) -> str:
+    s = _EMOJI_RE.sub("", str(text or "")).lower()
+    return re.sub(r"[\W_]+", "", s, flags=re.UNICODE)
+
+
+def message_opener(text: str, openers: List[str]) -> str:
+    """消息是否以人设 ``speaking.openers`` 中某句开场（剔标点/emoji/空白、忽略大小写后
+    前缀匹配），返回命中的原 opener；未命中返回空串。纯函数。"""
+    head = _norm_opener(text)
+    if not head:
+        return ""
+    best = ""
+    for op in openers or []:
+        n = _norm_opener(op)
+        if len(n) >= 2 and head.startswith(n) and len(n) > len(_norm_opener(best)):
+            best = str(op)
+    return best
 
 
 def _cjk_segments(text: str) -> List[str]:
@@ -178,6 +204,8 @@ def collect_overused(
     keyword_limit: int = 3,
     filler_limit: int = 2,
     sentence_limit: int = 2,
+    opener_words: Optional[List[str]] = None,
+    opener_limit: int = 2,
 ) -> Dict[str, Any]:
     """统计最近出站回复里的超限口头禅，返回超限项（无超限返回 ``{}``）。
 
@@ -187,7 +215,10 @@ def collect_overused(
     ``{"laugh": {count, sample}, "tail": {count, sample},``
     `` "heads": [{head, count}], "scene": [{word, count}],``
     `` "keywords": [{word, count}], "fillers": [{word, count}],``
-    `` "sentences": [{text, count}]}``
+    `` "sentences": [{text, count}], "openers": [{word, count}]}``
+
+    ``opener_words``：人设 ``speaking.openers``（中/英均可）——prompt 里“可选池”教模型用，
+    账本就必须能看见它们；英文 opener 前此对前 6 字符“重复开头”完全失明（#340）。
     """
     msgs = [str(t or "").strip() for t in (recent_outbound or [])]
     msgs = [t for t in msgs if t]
@@ -257,6 +288,32 @@ def collect_overused(
     ]
     if heads:
         out["heads"] = heads[:3]
+
+    # c2) 人设开场白池：哪句 opener 被连用（按消息条数，前缀匹配）
+    if opener_words and opener_limit > 0:
+        op_counts: Counter = Counter()
+        for m in msgs:
+            op = message_opener(m, list(opener_words))
+            if op:
+                op_counts[op] += 1
+        ops = [
+            {"word": w, "count": c} for w, c in op_counts.most_common()
+            if c >= opener_limit
+        ]
+        if ops:
+            out["openers"] = ops[:3]
+            # 首词账本已由 opener 账本更准确地覆盖，避免同一事实报两次
+            op_norm = {_norm_opener(d["word"]) for d in ops}
+            if "heads" in out:
+                kept = []
+                for h in out["heads"]:
+                    hn = _norm_opener(h["head"])
+                    if not any(o.startswith(hn) or hn.startswith(o) for o in op_norm):
+                        kept.append(h)
+                if kept:
+                    out["heads"] = kept
+                else:
+                    out.pop("heads")
 
     # d) 场景/口头禅词（调用方传入，如人设 tastes/selfie_scenes 里的名词）
     scene_hits: List[Dict[str, Any]] = []
@@ -371,6 +428,18 @@ def build_variety_hint(
             facts.append(f"repeatedly mentioned {listed}")
             acts.append(f"do NOT mention {listed} again this turn")
 
+    openers = [d for d in (overused.get("openers") or []) if d.get("word")]
+    if openers:
+        o0 = openers[0]
+        listed = "、".join(f"「{d['word']}」" for d in openers[:3]) if zh else \
+            ", ".join(f'"{d["word"]}"' for d in openers[:3])
+        if zh:
+            facts.append(f"有 {o0.get('count', 0)} 条都用 {listed} 开场")
+            acts.append(f"这一轮不要用 {listed} 开场，也不要拿开场白池里的句子换一句——直接进入内容")
+        else:
+            facts.append(f"{o0.get('count', 0)} messages opened with {listed}")
+            acts.append(f"do not open with {listed} or any other stock opener — start with the content itself")
+
     heads = overused.get("heads") or []
     if heads:
         h0 = heads[0]
@@ -434,6 +503,23 @@ def extract_persona_words(persona: Optional[Dict[str, Any]]) -> List[str]:
     return words
 
 
+def extract_persona_openers(persona: Optional[Dict[str, Any]]) -> List[str]:
+    """人设 ``speaking.openers``（原句，中/英均可），保序去重，上限 8。"""
+    p = persona if isinstance(persona, dict) else {}
+    sp = p.get("speaking") if isinstance(p.get("speaking"), dict) else {}
+    raw = sp.get("openers") if isinstance(sp, dict) else None
+    if isinstance(raw, str):
+        raw = [raw]
+    out: List[str] = []
+    for x in (raw or []) if isinstance(raw, (list, tuple)) else []:
+        s = str(x or "").strip()
+        if s and s not in out:
+            out.append(s)
+        if len(out) >= 8:
+            break
+    return out
+
+
 def parse_variety_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """读 ``ai.reply_variety``，返回归一化配置（全有默认值，永不抛）。
 
@@ -463,6 +549,7 @@ def parse_variety_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "keyword_limit": _i("keyword_limit", 3, lo=0, hi=50),
         "filler_limit": _i("filler_limit", 2, lo=0, hi=50),
         "sentence_limit": _i("sentence_limit", 2, lo=0, hi=50),
+        "opener_limit": _i("opener_limit", 2, lo=0, hi=50),
     }
 
 
@@ -470,6 +557,8 @@ __all__ = [
     "collect_overused",
     "build_variety_hint",
     "extract_persona_words",
+    "extract_persona_openers",
+    "message_opener",
     "parse_variety_cfg",
     "message_fillers",
     "message_clauses",

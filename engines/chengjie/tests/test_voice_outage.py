@@ -394,6 +394,8 @@ def test_desktop_bridge_tagged_as_own_source():
     # 占麦/配额是业务态，台账按设计跳过——确认不会冒充断档
     record_voice_fallback("driver_mic_busy")
     record_voice_fallback("driver_voice_daily_cap")
+    # 策略拒（非工作时段等）文字同样发不出，是业务闸门而非语音链断
+    record_voice_fallback("driver_policy")
     snap = vo.get_voice_outage().outage_snapshot()
     assert snap["attempts_24h"] == 3 and snap["ok_24h"] == 1
     db = snap["by_source"]["desktop_bridge"]

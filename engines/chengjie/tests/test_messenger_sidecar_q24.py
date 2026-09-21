@@ -287,11 +287,14 @@ def test_normalize_history_labels_outbound_media():
         {"direction": "in", "text": "好看吗"},
     ])
     assert hist[0]["role"] == "user" and "我方" not in hist[0]["content"]
-    # 空正文出站媒体仍占位（否则这一轮从历史消失）；2026-09-12 起行上另挂带外 media 字段
-    assert hist[1] == {"role": "assistant", "content": "[我方发出的图片]", "media": "image"}
-    # 接力记忆 P0-1：非图片媒体标签用中文名（video → 视频），未知类型仍原样带出
-    assert hist[2]["role"] == "assistant" and hist[2]["content"] == "[我方发出的视频]"
+    # 空正文出站媒体仍占位（否则这一轮从历史消失）；占位是纯表情替身、形态挂带外 media
+    # 字段——assistant 内容里不再有任何方括号系统标签可供模型照抄（#332）
+    assert hist[1] == {"role": "assistant", "content": "📷", "media": "image"}
+    assert hist[2]["role"] == "assistant" and hist[2]["content"] == "🎬"
     assert hist[2]["media"] == "video"
+    for r in hist:
+        if r["role"] == "assistant":
+            assert "[" not in r["content"], r
     assert last_in == "好看吗"
 
 

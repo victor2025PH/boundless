@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from src.utils.episodic_memory_store import facts_for_key
+
 
 def voice_gate_verdict(
     voice_cfg: Dict[str, Any], text: str, rand01: float,
@@ -1555,12 +1557,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 sm = assistant.skill_manager
                 store = getattr(sm, "_episodic_store", None)
                 key = str(memory_key or "").strip()
-                if store is None or not key or not hasattr(store, "list_rows"):
+                if store is None or not key:
                     return []
                 from src.ai.memory_grounding import _content_tokens
                 out: list = []
                 seen: set = set()
-                for f in (store.list_rows(prefix=key, limit=50) or [])[:12]:
+                for f in facts_for_key(store, key, limit=50)[:12]:
                     lat, cjk = _content_tokens(str((f or {}).get("content") or ""))
                     for tok in list(lat) + list(cjk):
                         if tok and tok not in seen:
@@ -2819,18 +2821,25 @@ async def maybe_start_companion_proactive(assistant) -> None:
             # （build_proactive_prompt 无条件注入），这里是后置兜底。best-effort。
             try:
                 from src.utils.proactive_fabrication_guard import (
-                    detect_fabricated_memory,
+                    detect_proactive_fabrication,
                 )
-                _fab, _fab_ev = detect_fabricated_memory(
-                    text, plan.get("context_facts") or [])
+                # 实体级守卫要看该会话的全部可用事实：选中事实 + 背景事实
+                _all_facts = [
+                    str(f) for f in (
+                        [plan.get("fact") or ""]
+                        + list(plan.get("context_facts") or []))
+                    if str(f).strip()]
+                _ctx_facts = list(plan.get("context_facts") or [])
+                _fab, _fab_ev = detect_proactive_fabrication(
+                    text, _ctx_facts, entity_facts=_all_facts)
                 if _fab:
                     _retry = await _gen_text(
                         plan, scene_note=_scene,
                         avoid_texts=(_avoid or []) + [text])
                     _fab2 = True
                     if _retry:
-                        _fab2, _ = detect_fabricated_memory(
-                            _retry, plan.get("context_facts") or [])
+                        _fab2, _ = detect_proactive_fabrication(
+                            _retry, _ctx_facts, entity_facts=_all_facts)
                     if _retry and not _fab2:
                         text = _retry
                     else:

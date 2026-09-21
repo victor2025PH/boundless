@@ -6,17 +6,21 @@ Stored in SQLite (default: same file as ContextStore bot.db), separate table.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
 
 logger = logging.getLogger("EpisodicMemoryStore")
 
 # R3：稳定层（已巩固的人设级记忆）在重排时的小幅加权（仅 use_salience_rerank 时生效）
 _STABLE_TIER_BOOST = 0.05
+
+# 注入批次号的进程内单调序号：同一毫秒内两次 record_recall 也不会共用 batch_id
+_RECALL_BATCH_SEQ = itertools.count()
 
 # 去重灰区带宽：cos ∈ [threshold-带宽, threshold) 记为「差一点就并」观测对。
 # 0.17 取自 2026-07-26 bge-m3 生产校准（应并组 min 0.741 vs 默认阈 0.92）。
@@ -1843,7 +1847,7 @@ class EpisodicMemoryStore:
         if not ids:
             return 0
         ts = float(now if now is not None else time.time())
-        batch = f"{int(ts * 1000):x}-{ids[0]}"
+        batch = f"{int(ts * 1000):x}-{ids[0]}-{next(_RECALL_BATCH_SEQ):x}"
         mk = str(memory_key or "")[:200]
         conv = str(conversation_id or "")[:200]
         ch = str(chain or "")[:32]
@@ -2009,6 +2013,44 @@ class EpisodicMemoryStore:
             SELECT {self._ROW_COLS}
             FROM episodic_memory{clause}
             ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def list_facts(
+        self,
+        user_id: str,
+        limit: int = 50,
+        source: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Recall: active, non-stale rows owned by **exactly** this memory key.
+
+        ``list_rows(prefix=...)`` is an admin search (``user_id LIKE %key%``) and
+        must never feed generation — a short key is a substring of other keys,
+        so another contact's facts leak into this conversation. Callers that
+        put facts into a prompt go through here (or :func:`facts_for_key`).
+        """
+        key = str(user_id or "").strip()
+        if not key:
+            return []
+        limit = max(1, min(int(limit or 50), 500))
+        src = source if source in ("user_stated", "ai_inferred") else ""
+        where = [
+            "user_id = ?",
+            "COALESCE(status, 'active') = 'active'",
+            "COALESCE(tier, 'raw') != 'stale'",
+        ]
+        params: List[Any] = [key]
+        if src:
+            where.append("COALESCE(source, 'user_stated') = ?")
+            params.append(src)
+        params.append(limit)
+        rows = self._conn.execute(
+            f"""
+            SELECT {self._ROW_COLS}
+            FROM episodic_memory WHERE {" AND ".join(where)}
+            ORDER BY created_at DESC, id DESC LIMIT ?
             """,
             params,
         ).fetchall()
@@ -2334,3 +2376,53 @@ class EpisodicMemoryStore:
         )
         self._conn.commit()
         return int(cur.rowcount or 0)
+
+
+@runtime_checkable
+class ExactFactReader(Protocol):
+    """能按精确键召回事实的存储（:class:`EpisodicMemoryStore`）。"""
+
+    def list_facts(
+        self, user_id: str, limit: int = 50, source: str = "",
+    ) -> List[Dict[str, Any]]: ...
+
+
+@runtime_checkable
+class PrefixRowReader(Protocol):
+    """只有管理端前缀搜索的旧适配器 / 测试桦。"""
+
+    def list_rows(
+        self, *, prefix: str = "", limit: int = 50, source: str = "",
+    ) -> List[Dict[str, Any]]: ...
+
+
+def facts_for_key(
+    store: Union[ExactFactReader, PrefixRowReader, None],
+    memory_key: str, *, limit: int = 50, source: str = "",
+) -> List[Dict[str, Any]]:
+    """精确归属召回（给 prompt 注入用）：绝不返回别的键的行。
+
+    存储实现 :class:`ExactFactReader` 时走 :meth:`EpisodicMemoryStore.list_facts`；
+    只有 ``list_rows``（测试桦、旧适配器）时按前缀查再过滤：带 ``memory_key``
+    的行必须等于 ``memory_key``，不带的原样信任。绝不抛。
+    """
+    key = str(memory_key or "").strip()
+    if store is None or not key:
+        return []
+    try:
+        if isinstance(store, ExactFactReader):
+            return list(store.list_facts(key, limit=limit, source=source) or [])
+        if not isinstance(store, PrefixRowReader):
+            return []
+        rows = store.list_rows(prefix=key, limit=limit, source=source) or []
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        owner = str(r.get("memory_key") or "").strip()
+        if owner and owner != key:
+            continue
+        out.append(r)
+    return out

@@ -55,6 +55,7 @@ EXPLICIT_TRIGGERS = frozenset({TRIGGER_ASK, TRIGGER_KEYWORD})
 
 REASON_NO_INTENT = "no_intent"
 REASON_INBOUND_IMAGE = "inbound_image_no_intent"
+REASON_MENTION_ONLY = "photo_mention_no_ask"
 REASON_DUP_MID = "dup_mid"
 REASON_FOLLOW_COOLDOWN = "follow_cooldown"
 REASON_FOLLOW_DAILY_MAX = "follow_daily_max"
@@ -82,6 +83,39 @@ _ASK_VERB_RE = re.compile(
     r"|要张|要張|要个|要個|要一|拍张|拍張|拍个|拍個|拍一)",
     re.I,
 )
+
+
+# P0-2（2026-09-21，#339 / #332-A）：``detect_selfie_request`` 是宽口径「话题里有照片」
+# 判定（「love your picture」「that's a cute selfie」「你的照片真好看」「I just took a selfie」
+# 全为真）——它服务生成端多条链，不能收窄；出图闸这里再加一层**索要句形**：索图动词
+# （has_ask_verb）∨ 求图句式（look like / any pics / 长什么样 / 照片呢 / 问号收尾）。
+# 客户只是**谈**照片 → 不匹配相册、不记 miss、不刷红条、更不跟发。
+_ASK_SHAPE_RE = re.compile(
+    r"look\s+like|\bhow\s+do\s+(?:you|u)\s+look\b|"
+    r"\b(?:got|have|has)\s+(?:any|more|new|other)\b|"
+    r"\b(?:another|one\s+more|more|again|pls|plz|please|want|wanna|need)\b|"
+    r"再来|再來|再发|再發|再拍|再给|再給|一张|一張|几张|幾張|多来|多來|想要|要看|"
+    r"\bany\s+(?:more\s+|new\s+|other\s+)?(?:pics?|photos?|pictures?|selfies?)\b|"
+    r"长什么样|長什麼樣|长啥样|長啥樣|样子|樣子|照片呢|图呢|圖呢|相呢|"
+    r"没收到|沒收到|没看到|沒看到|有相未|有照片未|"
+    r"送|見せ|くれ|보내|보여|manda|env[ií]a|envia|ส่ง|gửi|"
+    r"[?？]\s*$",
+    re.I,
+)
+
+
+def explicit_photo_ask(words: str) -> bool:
+    """客户**在索要**我方照片：宽口径 ``detect_selfie_request`` ∧ 索要句形。纯函数、绝不抛。"""
+    t = str(words or "").strip()
+    if not t:
+        return False
+    try:
+        from src.ai.companion_selfie import detect_selfie_request
+        if not detect_selfie_request(t):
+            return False
+    except Exception:
+        return False
+    return has_ask_verb(t) or bool(_ASK_SHAPE_RE.search(t))
 
 
 @dataclass
@@ -170,14 +204,8 @@ def strict_requested_scene_kind(text: str) -> str:
         return ""
     if not kind:
         return ""
-    if has_ask_verb(t):
+    if has_ask_verb(t) or explicit_photo_ask(t):
         return kind
-    try:
-        from src.ai.companion_selfie import detect_selfie_request
-        if detect_selfie_request(t):
-            return kind
-    except Exception:
-        pass
     return ""
 
 
@@ -223,9 +251,18 @@ def keyword_hit(words: str, trigger_terms: Optional[Iterable[str]]) -> bool:
     nt = _normalize_terms(words)
     if not nt:
         return False
+    try:
+        from src.companion.persona_media import trigger_term_hit
+    except Exception:
+        trigger_term_hit = None
     for term in trigger_terms:
         s = _normalize_terms(term)
-        if s and s in nt:
+        if not s:
+            continue
+        if trigger_term_hit is not None:
+            if trigger_term_hit(s, nt):
+                return True
+        elif s in nt:
             return True
     return False
 
@@ -254,12 +291,15 @@ def compute_image_intent(
     kind = ""
     kw = False
     offer = False
+    mention_only = False
     if words:
-        try:
-            from src.ai.companion_selfie import detect_selfie_request
-            ask = bool(detect_selfie_request(words))
-        except Exception:
-            ask = False
+        ask = explicit_photo_ask(words)
+        if not ask:
+            try:
+                from src.ai.companion_selfie import detect_selfie_request
+                mention_only = bool(detect_selfie_request(words))
+            except Exception:
+                mention_only = False
         kind = strict_requested_scene_kind(words)
         kw = keyword_hit(words, trigger_terms)
         if offer_bridge and not (ask or kind or kw):
@@ -295,6 +335,8 @@ def compute_image_intent(
         return IntentGate(True, TRIGGER_KEYWORD, "", words, img, kind)
     if offer:
         return IntentGate(True, TRIGGER_OFFER_ACCEPT, "", words, img, kind)
+    if mention_only:
+        return IntentGate(False, TRIGGER_NONE, REASON_MENTION_ONLY, words, img, kind)
     return IntentGate(False, TRIGGER_NONE, REASON_NO_INTENT, words, img, kind)
 
 
@@ -722,6 +764,7 @@ __all__ = [
     "format_album_send_log",
     "TRIGGER_ASK", "TRIGGER_KEYWORD", "TRIGGER_OFFER_ACCEPT", "TRIGGER_COMMITMENT",
     "TRIGGER_DIRECTIVE", "TRIGGER_NONE", "EXPLICIT_TRIGGERS",
-    "REASON_NO_INTENT", "REASON_INBOUND_IMAGE", "REASON_DUP_MID",
+    "REASON_NO_INTENT", "REASON_INBOUND_IMAGE", "REASON_DUP_MID", "REASON_MENTION_ONLY",
     "REASON_FOLLOW_COOLDOWN", "REASON_FOLLOW_DAILY_MAX", "REASON_PROMISE_STREAK",
+    "explicit_photo_ask",
 ]

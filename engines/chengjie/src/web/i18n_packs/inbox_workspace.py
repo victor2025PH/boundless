@@ -2461,6 +2461,7 @@ ZH = {
     "inbox.handoff.r_off_hours": "非营业时段",
     # #144（0902）：出站近重复守卫拦下 AI 回复且没救回、客户在等 → 进待处理并说明原因
     "inbox.handoff.r_dup_guard_blocked": "近重复拦截：AI 回复与刚发过的内容相近未发出，客户在等回复",
+    "inbox.handoff.r_fact_gate_blocked": "事实门拦截：AI 回复提到了客户没说过的人或事，未发出，客户在等回复",
     # #207（L-3 A）：打开带「需人工」标的会话 → 顶部原因条（为何/何时/谁打的 + 两条出路）
     "inbox.handoff.r_crisis": "客户消息触发危机升级，需要人看一眼",
     "inbox.handoff.bar": "需人工：{why}——{when} 由{src}打标",
@@ -5679,6 +5680,7 @@ EN = {
     "inbox.handoff.r_circuit_open": "AI service circuit breaker is open",
     "inbox.handoff.r_off_hours": "outside business hours",
     "inbox.handoff.r_dup_guard_blocked": "near-duplicate guard: the AI reply was too close to what was just sent and was withheld; the customer is waiting",
+    "inbox.handoff.r_fact_gate_blocked": "fact gate: the AI reply mentioned someone or something the customer never talked about and was withheld; the customer is waiting",
     # #207 (L-3 A): opening a conversation tagged needs-human → reason bar on top (why / when / who + two exits)
     "inbox.handoff.r_crisis": "the customer's message triggered a crisis escalation; a human should take a look",
     "inbox.handoff.bar": "Needs human: {why} — tagged {when} by {src}",

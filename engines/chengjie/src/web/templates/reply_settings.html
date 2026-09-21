@@ -1656,6 +1656,7 @@ var RPS_AL_I18N = {
   /* R87 #331：needs_human 子原因人话（此前直出 dup_guard_blocked 原码）+ dup 细节行 + 去会话 */
   sub: {
     dup_guard_blocked: {{ (i18n or {}).get('rps_al_sub_dup_guard_blocked', "检测到回复与近期内容重复，已暂停发送")|tojson }},
+    fact_gate_blocked: {{ (i18n or {}).get('rps_al_sub_fact_gate_blocked', "AI 提到了客户没说过的人或事，已拦下未发")|tojson }},
     empty_reply: {{ (i18n or {}).get('rps_al_sub_empty_reply', "AI 生成了空回复")|tojson }},
     generate_error: {{ (i18n or {}).get('rps_al_sub_generate_error', "AI 生成出错")|tojson }},
     send_error: {{ (i18n or {}).get('rps_al_sub_send_error', "发送失败")|tojson }},

@@ -856,6 +856,38 @@ def parse_xlate_retry_cfg(config: Any) -> Dict[str, Any]:
             "redraft": bool(tr.get("redraft", True))}
 
 
+#: P0-3（#343 #326，2026-09-21）：低置信 HOLD 原因码（状态带 / 台账 / 「重试翻译」都认这一串）
+LOW_CONF_REASON = "low_confidence"
+
+
+def parse_xlate_min_confidence(config: Any) -> float:
+    """``inbox.l2_autosend.translate.min_confidence`` → [0,1]；默认 ``TIER_LOW``（0.5）。
+
+    ``translation_confidence`` 是确定性硬错信号（空 / 原样回吐 / 目标脚本缺失 / 长度离谱），
+    只有明确的硬错才会砸破 0.5——门槛是「别把明显错的发出去」，不是语义质检。
+    ``0`` = 关门（旧行为：只要引擎 ok 就发）。"""
+    try:
+        from src.ai.translation_confidence import TIER_LOW as _dflt
+    except Exception:
+        _dflt = 0.5
+    try:
+        tr = ((((config or {}).get("inbox") or {}).get("l2_autosend") or {})
+              .get("translate") or {})
+        v = float(tr.get("min_confidence", _dflt)) if isinstance(tr, dict) else float(_dflt)
+    except (TypeError, ValueError, AttributeError):
+        v = float(_dflt)
+    return max(0.0, min(1.0, v))
+
+
+def _result_confidence(res: Any) -> float:
+    """结果上的确定性置信分；未评分（无字段 / 非数）→ -1.0（不进低置信门）。"""
+    try:
+        c = float(getattr(res, "confidence", -1.0))
+    except (TypeError, ValueError):
+        return -1.0
+    return c if c == c else -1.0   # NaN → 未评分
+
+
 def is_retryable_xlate_error(err: str) -> bool:
     """瓶颈抖动族（ai:empty / timeout / provider_unavailable / translate_exception…）→ True。"""
     e = str(err or "").strip()
@@ -1140,20 +1172,36 @@ async def _translate_outbound_core(
         return bool(_t) and not (_t == text_masked and not _same_text_ok) \
             and not (cjk_conflict and cjk_substantial(_t))
 
-    degraded = (not ok or not translated or not _usable(translated))
+    # ── P0-3（#343）：低置信门。引擎 ok 但确定性置信分 < min_confidence（目标脚本缺失 /
+    # 原样回吐 / 长度离谱）→ 不当成功发，按「换引擎重译 → 重起草 → HOLD」走；同引擎不重打
+    # （同一句同引擎大概率同一个错）。未评分（-1）的结果不进门（旧引擎 / 测试桩零变化）。
+    _min_conf = parse_xlate_min_confidence(cfg_root)
+    _conf = _result_confidence(res)
+
+    def _conf_ok(_r: Any) -> bool:
+        _c = _result_confidence(_r)
+        return _min_conf <= 0.0 or _c < 0.0 or _c >= _min_conf
+
+    _low_conf = bool(ok and translated and _usable(translated) and not _conf_ok(res))
+    if _low_conf:
+        logger.info("[xlate] low confidence conf=%.2f < %.2f provider=%s target=%s conv=%s → 重译",
+                    _conf, _min_conf, provider or "-", target, cid)
+
+    degraded = (not ok or not translated or not _usable(translated) or _low_conf)
     _decided_action = "translated"
     if degraded:
-        _why = (err or ("cjk_residue" if (cjk_conflict and cjk_substantial(translated))
-                        else "translate_degraded"))
+        _why = (LOW_CONF_REASON if _low_conf else
+                (err or ("cjk_residue" if (cjk_conflict and cjk_substantial(translated))
+                         else "translate_degraded")))
         # ── Q-39 B（#326）：可恢复族先重试，不改「不发原文」纪律 ──────────────
         _rt = parse_xlate_retry_cfg(cfg_root)
-        _retryable = (_rt["enabled"] and (not ok or not translated)
-                      and is_retryable_xlate_error(_why)
-                      and hasattr(translation_service, "retry_once"))
+        _retryable = (_rt["enabled"] and hasattr(translation_service, "retry_once")
+                      and (_low_conf or ((not ok or not translated)
+                                         and is_retryable_xlate_error(_why))))
         if _retryable:
             import asyncio as _aio
             _failed_engine = provider if provider not in ("", "none", "identity", "license") else ""
-            _steps = [("same", _failed_engine)]
+            _steps = [] if _low_conf else [("same", _failed_engine)]
             try:
                 _nxt = (translation_service.next_engine_after(_failed_engine, target)
                         if hasattr(translation_service, "next_engine_after") else "")
@@ -1161,6 +1209,8 @@ async def _translate_outbound_core(
                 _nxt = ""
             if _nxt and _nxt != _failed_engine:
                 _steps.append(("next", _nxt))
+            elif _low_conf:
+                logger.info("[xlate] low confidence 无可换引擎 conv=%s target=%s", cid, target)
             for _step, _eng in _steps:
                 if _rt["gap_sec"] > 0 and _step == "same":
                     try:
@@ -1177,15 +1227,19 @@ async def _translate_outbound_core(
                     err = f"{_eng or 'ai'}:{type(_exc).__name__}"
                     continue
                 _t2 = str(getattr(_r, "translated_text", "") or "")
-                if bool(getattr(_r, "ok", False)) and _usable(_t2):
+                if bool(getattr(_r, "ok", False)) and _usable(_t2) and _conf_ok(_r):
                     translated, provider = _t2, str(getattr(_r, "provider", "") or _eng or "")
-                    ok, err, degraded = True, "", False
+                    ok, err, degraded, _low_conf = True, "", False, False
+                    _conf = _result_confidence(_r)
                     logger.info(
                         "[xlate] retry ok step=%s engine=%s attempt=%d conv=%s target=%s（首发 err=%s）",
                         _step, provider or "-", _attempts, cid, target, _why)
                     _decided_action = f"translated_retry_{_step}"
                     break
-                err = str(getattr(_r, "error", "") or err or "translate_failed")
+                if bool(getattr(_r, "ok", False)) and _t2 and not _conf_ok(_r):
+                    err = LOW_CONF_REASON
+                else:
+                    err = str(getattr(_r, "error", "") or err or "translate_failed")
                 logger.info("[xlate] retry fail step=%s engine=%s attempt=%d err=%s conv=%s",
                             _step, _eng or "-", _attempts, err, cid)
             if degraded:
@@ -1221,6 +1275,9 @@ async def _translate_outbound_core(
             provider or "-", err or "-", _attempts, target, decided_by or "-", cid)
         _gate_record("held", conversation_id=cid, target=target)
         _mark_hold(item, _why, target=target, decided_by=decided_by, attempts=_attempts)
+        if _why == LOW_CONF_REASON and isinstance(item.get("_xlate_hold"), dict):
+            item["_xlate_hold"]["confidence"] = round(float(_conf), 2)
+            item["_xlate_hold"]["min_confidence"] = round(float(_min_conf), 2)
         _report_block_safe(cid, target, err or "translate_degraded")
         _log_decision(cid, target, decided_by, "hold", _why)
         # Q-39 B：状态带人话「翻译引擎没回话 · 这条没发 · 重试翻译」（xlate_hold_marker，
@@ -1254,6 +1311,8 @@ async def _translate_outbound_core(
 
 
 __all__ = [
+    "LOW_CONF_REASON",
+    "parse_xlate_min_confidence",
     "cjk_substantial",
     "contains_cjk",
     "lang_is_cjk",

@@ -3819,6 +3819,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_cn.getLogger("admin").warning("Canary 路由注册失败", exc_info=True)
 
+    # ── 入站结局台账只读出口（/api/ops/inbound-ledger） ──
+    try:
+        from src.web.routes.ops_inbound_ledger_routes import register_ops_inbound_ledger_routes
+
+        register_ops_inbound_ledger_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_il
+
+        _log_il.getLogger("admin").warning("入站台账路由注册失败", exc_info=True)
+
     # ── 实施31：反封号健康统一只读出口（/api/ops/account-health） ──
     try:
         from src.web.routes.ops_health_routes import register_ops_health_routes

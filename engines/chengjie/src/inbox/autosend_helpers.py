@@ -2986,6 +2986,19 @@ def build_autosend_support_kwargs(assistant, web_app) -> dict:
     except Exception:
         out["dup_guard_cfg"] = None
     try:
+        from src.inbox.outbound_fact_gate import attach_sources, resolve_cfg
+        out["fact_gate_cfg"] = attach_sources(
+            resolve_cfg(assistant.config.config or {}),
+            ai_client=getattr(assistant, "ai_client", None),
+            skill_manager=getattr(assistant, "skill_manager", None))
+    except Exception:
+        out["fact_gate_cfg"] = None
+    try:
+        from src.inbox.opener_guard import resolve_cfg as _og_resolve
+        out["opener_guard_cfg"] = _og_resolve(assistant.config.config or {})
+    except Exception:
+        out["opener_guard_cfg"] = None
+    try:
         from src.inbox.draft_fresh_guard import parse_fresh_guard_cfg
         out["fresh_guard_cfg"] = parse_fresh_guard_cfg(
             assistant.config.config or {})

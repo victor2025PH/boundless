@@ -30,6 +30,8 @@ def _safe_int_chat_id(v: Any) -> int:
 
 from src.utils.audit_store import AuditStore
 from src.utils.domain_policy import effective_domain_name, payment_plugin_enabled
+from src.utils.episodic_memory_store import facts_for_key as _facts_for_key
+from src.utils.memory_perspective import to_second_person as _to_second_person
 from src.utils.channel_status_format import (
     DISABLED_STATUSES as _CHANNEL_DISABLED_STATUSES,
     format_live_channel_status_text,
@@ -5812,6 +5814,7 @@ class SkillManager(LoggerMixin):
             txt, _used_ids = _with_ids(key, mx, mc, **_gb_kwargs)
         else:
             txt = self._episodic_store.get_bullets_for_prompt(key, mx, mc, **_gb_kwargs)
+        txt = _to_second_person(txt) if txt else txt
         if txt:
             user_context["_episodic_memory_text"] = txt
             try:
@@ -6767,11 +6770,11 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("proactive story teaser skipped", exc_info=True)
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return empty
         try:
             from src.utils.proactive_topic import select_proactive_topic
-            facts = store.list_rows(prefix=key, limit=50) or []
+            facts = _facts_for_key(store, key, limit=50)
             # Phase ④：优先回访剧情回写的「共享经历」（story 类目）→ 转动飞轮。
             _pref = "story"
             try:
@@ -7041,9 +7044,9 @@ class SkillManager(LoggerMixin):
             try:
                 store = getattr(self, "_episodic_store", None)
                 key = str(memory_key or "").strip()
-                if store and key and hasattr(store, "list_rows"):
+                if store and key and (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
                     from src.utils.proactive_topic import select_proactive_topic
-                    facts = store.list_rows(prefix=key, limit=50) or []
+                    facts = _facts_for_key(store, key, limit=50)
                     # variety_key（2026-08-18 素材化）：旧调用不带 → argmax 恒取
                     # top-1，同一条记忆被早晚安天天复读（「轻轻提一句备考」x14）；
                     # 带上后在高分 Top-K 内按日轮换，都是真事实、天天不重样。
@@ -7260,9 +7263,9 @@ class SkillManager(LoggerMixin):
             try:
                 store = getattr(self, "_episodic_store", None)
                 key = str(memory_key or "").strip()
-                if store and key and hasattr(store, "list_rows"):
+                if store and key and (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
                     from src.utils.proactive_topic import select_proactive_topic
-                    facts = store.list_rows(prefix=key, limit=50) or []
+                    facts = _facts_for_key(store, key, limit=50)
                     sel = select_proactive_topic(
                         facts, silent_hours=10 ** 6, min_silent_hours=0.0)
                     fact = str(sel.get("fact") or "")
@@ -7304,13 +7307,13 @@ class SkillManager(LoggerMixin):
         """
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return None
         try:
             from src.utils.birthday import extract_birthday
-            rows = store.list_rows(prefix=key, limit=80, source="user_stated") or []
+            rows = _facts_for_key(store, key, limit=80, source="user_stated")
             if not rows:
-                rows = store.list_rows(prefix=key, limit=80) or []
+                rows = _facts_for_key(store, key, limit=80)
             for r in rows:
                 bd = extract_birthday((r or {}).get("content") or "")
                 if bd is not None:
@@ -7507,13 +7510,13 @@ class SkillManager(LoggerMixin):
         """
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return None
         try:
             from src.companion.bazi_profile import extract_birth_info
-            rows = store.list_rows(prefix=key, limit=80, source="user_stated") or []
+            rows = _facts_for_key(store, key, limit=80, source="user_stated")
             if not rows:
-                rows = store.list_rows(prefix=key, limit=80) or []
+                rows = _facts_for_key(store, key, limit=80)
             for r in rows:
                 info = extract_birth_info((r or {}).get("content") or "")
                 if info is not None:
@@ -7611,6 +7614,7 @@ class SkillManager(LoggerMixin):
         user_context.pop("_peer_holiday_note", None)
         user_context.pop("_peer_local_now", None)
         user_context.pop("_peer_country", None)
+        user_context.pop("_peer_place_line", None)
         try:
             _cfg = self.config.config if hasattr(self.config, "config") else (
                 self.config if isinstance(self.config, dict) else {})
@@ -7653,7 +7657,19 @@ class SkillManager(LoggerMixin):
                 except Exception:
                     pass
             if want_clock and clock is not None:
-                from src.companion.user_clock import user_now, user_time_line
+                from src.companion.user_clock import (
+                    peer_place_line, user_now, user_time_line,
+                )
+                try:
+                    from src.companion.persona_location import (
+                        resolve_place_with_fallback as _rp_place,
+                    )
+                    _pp = _rp_place(self._selfie_persona_for_prompt(user_context))
+                except Exception:
+                    _pp = None
+                _pl_line = peer_place_line(clock, _pp, "zh")
+                if _pl_line:
+                    user_context["_peer_place_line"] = _pl_line
                 _line = user_time_line(clock, "zh")
                 if _line:
                     user_context["_peer_clock_line"] = _line
@@ -7741,16 +7757,19 @@ class SkillManager(LoggerMixin):
         # 取不到就空，绝不为此新增重查询）。人设 dict 一并留存（实施55 地区
         # 分源要按人设 id/居住地国家挑 feeds）。
         persona_words: List[str] = []
+        persona_openers: List[str] = []
         _persona_obj = None
         try:
             _pid = str(user_context.get("account_persona_id") or "").strip()
             if _pid:
                 from src.utils.persona_manager import PersonaManager
-                from src.ai.reply_variety import extract_persona_words
+                from src.ai.reply_variety import extract_persona_openers, extract_persona_words
                 _persona_obj = PersonaManager.get_instance().get_persona_by_id(_pid)
                 persona_words = extract_persona_words(_persona_obj)
+                persona_openers = extract_persona_openers(_persona_obj)
         except Exception:
             persona_words = []
+            persona_openers = []
             _persona_obj = None
         # ① 口头禅账本 → 多样性硬约束
         try:
@@ -7784,6 +7803,8 @@ class SkillManager(LoggerMixin):
                         keyword_limit=vcfg["keyword_limit"],
                         filler_limit=vcfg.get("filler_limit", 2),
                         sentence_limit=vcfg.get("sentence_limit", 2),
+                        opener_words=persona_openers,
+                        opener_limit=vcfg.get("opener_limit", 2),
                     )
                     if overused:
                         _vh = build_variety_hint(
@@ -8926,13 +8947,13 @@ class SkillManager(LoggerMixin):
         """
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return None
         try:
             from src.utils.memory_slots import SLOT_NAME, extract_slot
-            rows = store.list_rows(prefix=key, limit=80, source="user_stated") or []
+            rows = _facts_for_key(store, key, limit=80, source="user_stated")
             if not rows:
-                rows = store.list_rows(prefix=key, limit=80) or []
+                rows = _facts_for_key(store, key, limit=80)
             for r in rows:
                 slot = extract_slot((r or {}).get("content") or "")
                 if slot and slot[0] == SLOT_NAME and slot[1]:
@@ -8949,13 +8970,13 @@ class SkillManager(LoggerMixin):
         """
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return None
         try:
             from src.utils.memory_slots import SLOT_RESIDENCE, extract_slot
-            rows = store.list_rows(prefix=key, limit=80, source="user_stated") or []
+            rows = _facts_for_key(store, key, limit=80, source="user_stated")
             if not rows:
-                rows = store.list_rows(prefix=key, limit=80) or []
+                rows = _facts_for_key(store, key, limit=80)
             for r in rows:
                 slot = extract_slot((r or {}).get("content") or "")
                 if slot and slot[0] == SLOT_RESIDENCE and slot[1]:
@@ -8968,13 +8989,13 @@ class SkillManager(LoggerMixin):
         """从某用户 episodic 记忆里扫出年龄（B50）；扫不到 → None。只读不写。"""
         store = getattr(self, "_episodic_store", None)
         key = str(memory_key or "").strip()
-        if not store or not key or not hasattr(store, "list_rows"):
+        if not store or not key or not (hasattr(store, "list_facts") or hasattr(store, "list_rows")):
             return None
         try:
             from src.utils.memory_slots import SLOT_AGE, extract_slot
-            rows = store.list_rows(prefix=key, limit=80, source="user_stated") or []
+            rows = _facts_for_key(store, key, limit=80, source="user_stated")
             if not rows:
-                rows = store.list_rows(prefix=key, limit=80) or []
+                rows = _facts_for_key(store, key, limit=80)
             for r in rows:
                 slot = extract_slot((r or {}).get("content") or "")
                 if slot and slot[0] == SLOT_AGE and slot[1]:
@@ -10626,7 +10647,9 @@ class SkillManager(LoggerMixin):
                     if _wx_snap is not None:
                         user_context["_persona_weather_snap"] = _wx_snap
                         if _wcfg.get("inject_chat", True):
-                            _wn = weather_chat_note(_wx_snap, "zh")
+                            _wn = weather_chat_note(
+                                _wx_snap, "zh",
+                                place_label=_place.display("zh"))
                             if _wn:
                                 user_context["_persona_weather_note"] = _wn
                         if _wcfg.get("proactive_hook", True):

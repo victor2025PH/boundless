@@ -3697,6 +3697,29 @@ inbox:
     window_sec: 180           # 只比对窗口内的最近出站（秒）
     block_similar: true       # false = 只拦 dup 档（近逐字），similar 档仅计数放行
 
+  # ── 出站事实门（2026-09-21 P0-1，判定核心 src/inbox/outbound_fact_gate.py）──────
+  #   Bug #341/#342：AI 在自动回复里问「你妈妈装修怎么样了」，客户从没提过妈妈。
+  #   真发前核对三件事：① 对客文案不得出现「your client / 你的客户」运营称谓；
+  #   ② 客户刚否认过的人（「我没说过 / who's that」）deny_turns 轮内不再提；
+  #   ③ 文案点名「你妈 / your daughter / 你老板…」时，客户入站原文 + 客户口述记忆
+  #   （user_stated）里必须找得到这个人——AI 推断（ai_inferred）**不算依据**。
+  #   命中先让本地小模型「删掉无据那部分」重写一次再复检；仍不过 → 不发、打「需人工」
+  #   （reason=fact_gate_blocked）+ 拦截台账人话说明。默认**开**：它拦的是一句就穿帮的事故。
+  outbound_fact_gate:
+    enabled: true             # false = 紧急停用（不推荐）
+    history_limit: 200        # 支撑集回看本会话最近多少条消息
+    deny_turns: 10            # 客户否认后多少条出站内不再提同一个人
+    rewrite_retry: true       # 命中后是否先尝试删除无据内容重写（需 ai.fallback 本地模型）
+
+  # ── 出站开场词守卫（2026-09-21 P0-4，判定核心 src/inbox/opener_guard.py）─────────
+  #   Bug #340：连着几条都「Ha,」开头。ai.reply_variety 只是 prompt 侧劝告（且默认关），
+  #   这里是出站侧硬兜底：译后文本的开场词在本会话最近 window 条出站里已出现 min_repeat
+  #   次 → 感叹开场（Ha, / Haha! / 哈哈，/ Hey～）直接摘掉再发；实词开场只计数留痕不改文。
+  opener_guard:
+    enabled: true
+    window: 6                 # 回看最近多少条出站
+    min_repeat: 2             # 同一开场词出现多少次即视为复读
+
   # ── 工作时间班表（2026-08-04，判定核心 src/inbox/work_hours_gate.py）────
   # 账号级「作息表」：非工作时间的账号**不自动回复**入站消息——7×24 秒回既是
   # 拟人破绽（凌晨秒回=一眼假）也是平台风控特征。覆盖三条自动出口（A 线直发 /
@@ -3811,6 +3834,11 @@ inbox:
       enabled: false          # 默认关 → 全自动仍发原文（零行为变更）；true 才投递前翻译
       source_lang: zh         # 检测失败时的兜底源语言（默认中文）；与客户语言相同则自动跳过
       style: chat             # 翻译风格（chat/formal…），透传 TranslationService
+      # P0-3（#343 #326，2026-09-21）译文质量门：确定性置信分（空 / 原样回吐 / 目标语文字缺失 /
+      # 长度离谱）低于此值 → 不当成功发：换路由表下一引擎重译 → 全自动会话按目标语重起草 →
+      # 仍不过关 HOLD（translate_hold:low_confidence，状态带「译文质量不过关 · 重试翻译」）。
+      # 0 = 关门（引擎 ok 即发）。印地 / 孟加拉 / 泰米尔 / 泰卢固 / 马拉地等小语种建议保持默认。
+      min_confidence: 0.5
     # ── 语言硬闸（P1-198，2026-08-03）──────────────────────────────
     # 「中文草稿原样发给外语客户」的最后防线，**独立于 translate.enabled**：
     # translate 关闭时以 gate-only 模式驻守——常规消息原样放行（尊重你关闭翻译的

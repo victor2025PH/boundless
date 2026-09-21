@@ -451,6 +451,24 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                     getattr(assistant, "ai_client", None))
                             except Exception:
                                 _dup_guard_cfg = None
+                            # 出站事实门配置（inbox.outbound_fact_gate，默认开）：同上注入范式；
+                            # 重写走 ai_client.rewrite_local，口述事实按会话键经 skill_manager 精确召回。
+                            try:
+                                from src.inbox.outbound_fact_gate import (
+                                    attach_sources as _fg_attach,
+                                    resolve_cfg as _fg_cfg_fn,
+                                )
+                                _fact_gate_cfg = _fg_attach(
+                                    _fg_cfg_fn(assistant.config.config or {}),
+                                    ai_client=getattr(assistant, "ai_client", None),
+                                    skill_manager=getattr(assistant, "skill_manager", None))
+                            except Exception:
+                                _fact_gate_cfg = None
+                            try:
+                                from src.inbox.opener_guard import resolve_cfg as _og_cfg_fn
+                                _opener_guard_cfg = _og_cfg_fn(assistant.config.config or {})
+                            except Exception:
+                                _opener_guard_cfg = None
                             # 新入站过期守卫配置（inbox.l2_autosend.fresh_guard，默认关）：
                             # 完整树解析（含 auto_draft.min_text_len 镜像——判「新入站会不会
                             # 触发新拟稿」用），worker 只收 l2_autosend 子段拿不到，这里注入。
@@ -506,6 +524,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 typing_callback=_typing_cb,
                                 persona_resolver=_persona_resolver,
                                 dup_guard_cfg=_dup_guard_cfg,
+                                fact_gate_cfg=_fact_gate_cfg,
+                                opener_guard_cfg=_opener_guard_cfg,
                                 fresh_guard_cfg=_fresh_guard_cfg,
                                 work_schedule_provider=_ws_provider,
                                 pilot_guard=_pilot_guard,

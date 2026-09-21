@@ -46,6 +46,7 @@ from src.companion.user_clock import (
     resolve_user_clock,
     schedule_clock,
 )
+from src.utils.episodic_memory_store import facts_for_key
 from src.utils.memory_slots import SLOT_RESIDENCE, extract_slot
 
 logger = logging.getLogger(__name__)
@@ -622,19 +623,10 @@ def _stated_place_with_ts(episodic_store: Any, memory_key: str) -> Tuple[str, fl
     key = str(memory_key or "").strip()
     if not key:
         return "", 0.0
-    rows: List[Any] = []
-    try:
-        rows = list(episodic_store.list_rows(
-            prefix=key, limit=80, source="user_stated") or [])
-    except Exception:
-        logger.debug("[user_clock] list_rows(user_stated) 失败 key=%s", key, exc_info=True)
-        rows = []
+    rows: List[Any] = list(facts_for_key(
+        episodic_store, key, limit=80, source="user_stated"))
     if not rows:
-        try:
-            rows = list(episodic_store.list_rows(prefix=key, limit=80) or [])
-        except Exception:
-            logger.debug("[user_clock] list_rows 失败 key=%s", key, exc_info=True)
-            rows = []
+        rows = list(facts_for_key(episodic_store, key, limit=80))
     best_place = ""
     best_ts: Optional[float] = None
     # 多语兜底的候选单独记一档：`extract_slot` 命中（中文居住地槽，语义最硬）永远优先，

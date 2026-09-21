@@ -295,15 +295,18 @@ def test_normalize_history_outbound_media_form_is_out_of_band():
     assert hist[1]["content"] == "刚拍的\n[图片内容] 海边微笑" and hist[1]["media"] == "image"
     assert hist[2]["content"] == "晚安呀" and hist[2]["media"] == "voice"   # 语音行＝干净念稿
     assert hist[3]["content"] == "已标"                                     # 污染行前缀剥掉
-    assert hist[4]["content"] == "[我方发出的图片]"                          # 空正文才占位
+    # 空正文才占位，且占位是纯表情替身而非方括号标签（#332：带内标签会被照抄再被 MT
+    # 译成「[Image sent by me]」外泄）
+    assert hist[4]["content"] == "📷" and hist[4]["media"] == "image"
     assert hist[5]["role"] == "user" and hist[5]["content"] == "好看" and "media" not in hist[5]
     assert last_in == "好看"
     for r in hist:
-        if r["role"] == "assistant" and r["content"] != "[我方发出的图片]":
-            assert not r["content"].startswith("[我方"), r
+        if r["role"] == "assistant":
+            assert "[我方" not in r["content"], r
     note = media_form_note(hist)
     assert "1 条是以语音发出的" in note and "3 条是随图片一起发出的" in note
     assert "「刚拍的」" in note and "「已标」" in note and "方括号" in note
+    assert "「📷」" not in note
     assert media_form_note([{"role": "assistant", "content": "纯文本"}]) == ""
 
 

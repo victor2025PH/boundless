@@ -128,6 +128,17 @@ def _msg_from_obj(
     )
 
 
+def _tombstone_deleted_at(store: Any, conversation_id: str) -> Optional[float]:
+    """会话墓碑删除时刻；无墓碑 / store 不支持 / 异常 → None。只供台账定性。"""
+    fn = getattr(store, "tombstone_deleted_at", None)
+    if fn is None:
+        return None
+    try:
+        return fn(conversation_id)
+    except Exception:
+        return None
+
+
 def _conv_from_chat(chat: Dict[str, Any]) -> InboxConversation:
     # 「客户语言」列只接受**入站**证据：normalize_chat 把 chat["language"] 取自末条
     # 消息且不分方向，出站镜像（AI 译文/外语人设文案）会把**我们自己说的语言**写进
@@ -222,14 +233,33 @@ def _publish_inbox_message(conv: InboxConversation) -> None:
 
 
 def ingest_collected_chats(
-    store, chats: List[Dict[str, Any]], *, publish_events: bool = False
+    store, chats: List[Dict[str, Any]], *, publish_events: bool = False,
+    ledger_ctx: Optional[Dict[str, Any]] = None,
 ) -> int:
     """旁路写入聚合到的对话列表。返回新插入的消息条数。best-effort，调用方包 try。
 
     publish_events=True 时，对**新插入的入站消息**所属会话发 inbox_message 事件
     （供坐席工作台 SSE 实时刷新）；冷启动首轮应传 False 以免事件洪泛。
+
+    ``ledger_ctx``：实时单条路径（``ingest_incoming``）传入，每条消息的结局进
+    ``inbound_ledger``（新插入 / 重复 / 墓碑 / 空载荷）。聚合重放路径不传 → 不记。
     """
     inserted = 0
+    _lc = dict(ledger_ctx) if ledger_ctx else None
+
+    def _ledger(outcome: str, conv_id: str = "", detail: str = "", direction: str = "in") -> None:
+        if _lc is None:
+            return
+        try:
+            from src.inbox.inbound_ledger import record
+            record(outcome, platform=str(_lc.get("platform") or ""),
+                   account_id=str(_lc.get("account_id") or ""),
+                   chat_key=str(_lc.get("chat_key") or ""),
+                   conversation_id=conv_id, msg_id=str(_lc.get("msg_id") or ""),
+                   ts=_lc.get("ts") or 0, direction=direction, detail=detail)
+        except Exception:
+            pass
+
     for chat in chats or []:
         # store-backed 会话（ProtocolInboxAdapter/WebInboxAdapter 经 store_row_to_chat 读出，
         # 带 from_store=True）已是事实源里的行，再写回毫无意义且有害：其 last_message 由
@@ -238,20 +268,37 @@ def ingest_collected_chats(
         # 凭空多出一条 ``:h:<hash>`` 重复行；更糟的是该“新插入”会再次触发 new_inbound 回调
         # （auto-draft 等），造成重复草稿/重复处理。故 store 读出的会话一律跳过 re-ingest。
         if chat.get("from_store"):
+            _ledger("from_store_skip", str(chat.get("conversation_id") or ""))
             continue
         conv = _conv_from_chat(chat)
         if not conv.conversation_id or not conv.platform:
+            _ledger("no_conv_id", str(chat.get("conversation_id") or ""),
+                    detail=f"platform={conv.platform!r}")
             continue
         contact_id = _apply_contact_id(store, conv)
         msgs: List[InboxMessage] = []
         lm = chat.get("last_message") or {}
+        _lm_dir = str(lm.get("direction") or "in") if isinstance(lm, dict) else "in"
         # 媒体消息可能无文本（如无 caption 的图片/语音/贴纸）——有 media_ref/type 也应落库
         if isinstance(lm, dict) and (
             lm.get("text") or lm.get("media_ref") or lm.get("media_type")
         ):
             msgs.append(_msg_from_obj(conv.conversation_id, lm, platform=conv.platform))
+        elif _lc is not None:
+            _ledger("no_content", conv.conversation_id, direction=_lm_dir,
+                    detail="empty text and no media (sticker/reaction/protocol event?)")
+        _tomb_before = _tombstone_deleted_at(store, conv.conversation_id) if (
+            _lc is not None and msgs) else None
         n = store.ingest_batch(conv, msgs)
         inserted += n
+        if _lc is not None and msgs:
+            if n > 0:
+                _ledger("inserted", conv.conversation_id, direction=_lm_dir)
+            elif _tomb_before is not None and float(msgs[0].ts or 0) <= _tomb_before:
+                _ledger("tombstone", conv.conversation_id, direction=_lm_dir,
+                        detail=f"msg_ts={float(msgs[0].ts or 0):.0f} deleted_at={_tomb_before:.0f}")
+            else:
+                _ledger("duplicate", conv.conversation_id, direction=_lm_dir)
         # P-2 A / F（#259 #252，2026-09-08）：回填历史（登录 / 重连 / 拉历史同步回来的）与
         # 自聊会话（peer == 自己）**已落库**，到此为止——不清 snooze、不发 SSE、不进任何
         # 入站回调（起草 / 关怀 / 目标 / 问候 / 影子扫描）、不更新意图情绪、不做记忆抽取。

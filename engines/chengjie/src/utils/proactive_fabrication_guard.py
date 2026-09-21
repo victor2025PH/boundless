@@ -765,7 +765,111 @@ def detect_profile_contradiction(text: str, profile: Optional[dict]) -> Tuple[bo
     return (False, "")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 第三方实体守卫（#341，2026-09-20）——「你妈妈装修怎么样了」而记忆里没有妈妈
+#
+# 往事守卫只认「你以前/我们上次」这类断言标记；#341 原句 *how your client's mom
+# is doing with the renovation* 一个标记都没有，直接放行。真正该问的是：文案里
+# 提到的 **对方的某个人**（妈妈/女儿/老公/朋友/老板/狗…）在这位客户的事实集里
+# 有没有对应实体。实体级支撑比整句词汇重叠硬得多，且几乎不可能误伤——开场
+# 里点名对方的家人本来就必须有据。
+#
+# 另外「your client / 你的客户」是视角泄漏（运营称谓漏进对客文案）：无论事实
+# 集里有没有，这句都不能发。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (实体组名, 文案里指向对方第三方的正则, 事实集里可作支撑的别名正则)
+_THIRD_PARTY_GROUPS: Tuple[Tuple[str, "re.Pattern[str]", "re.Pattern[str]"], ...] = (
+    ("mother", re.compile(
+        r"(你|您|TA|ta)(的)?(妈|媽|母亲|母親)|\byour\s+(?:mom|mum|mother|mama|mommy)\b", re.I),
+     re.compile(r"妈|媽|母亲|母親|\b(?:mom|mum|mother|mama|mommy)\b", re.I)),
+    ("father", re.compile(
+        r"(你|您|TA|ta)(的)?(爸|父亲|父親)|\byour\s+(?:dad|father|papa|daddy)\b", re.I),
+     re.compile(r"爸|父亲|父親|\b(?:dad|father|papa|daddy)\b", re.I)),
+    ("parents", re.compile(
+        r"(你|您|TA|ta)(的)?(父母|爸妈|爸媽)|\byour\s+(?:parents|folks)\b", re.I),
+     re.compile(r"父母|爸妈|爸媽|妈|媽|爸|\b(?:parents|folks|mom|dad|mother|father)\b", re.I)),
+    ("partner", re.compile(
+        r"(你|您|TA|ta)(的)?(老公|老婆|丈夫|妻子|太太|男朋友|女朋友|男友|女友|对象|對象)"
+        r"|\byour\s+(?:husband|wife|boyfriend|girlfriend|partner|fiance|fiancé|fiancee|fiancée|bf|gf)\b", re.I),
+     re.compile(r"老公|老婆|丈夫|妻子|太太|男朋友|女朋友|男友|女友|对象|對象|已婚|结婚|結婚"
+                r"|\b(?:husband|wife|boyfriend|girlfriend|partner|fiance|fiancé|fiancee|fiancée|married|bf|gf)\b", re.I)),
+    ("children", re.compile(
+        r"(你|您|TA|ta)(的)?(女儿|女兒|儿子|兒子|孩子|小孩|娃|宝宝|寶寶)"
+        r"|\byour\s+(?:daughter|son|kid|kids|child|children|baby|little\s+one)\b", re.I),
+     re.compile(r"女儿|女兒|儿子|兒子|孩子|小孩|娃|宝宝|寶寶"
+                r"|\b(?:daughter|son|kid|kids|child|children|baby)\b", re.I)),
+    ("siblings", re.compile(
+        r"(你|您|TA|ta)(的)?(哥|姐|弟|妹|兄弟|姐妹)|\byour\s+(?:brother|sister|bro|sis|siblings?)\b", re.I),
+     re.compile(r"哥|姐|弟|妹|兄弟|姐妹|\b(?:brother|sister|bro|sis|siblings?)\b", re.I)),
+    ("grandparents", re.compile(
+        r"(你|您|TA|ta)(的)?(奶奶|外婆|姥姥|爷爷|爺爺|外公|姥爷)"
+        r"|\byour\s+(?:grandma|grandmother|grandpa|grandfather|granny|nana)\b", re.I),
+     re.compile(r"奶奶|外婆|姥姥|爷爷|爺爺|外公|姥爷"
+                r"|\b(?:grandma|grandmother|grandpa|grandfather|granny|nana)\b", re.I)),
+    ("boss", re.compile(
+        r"(你|您|TA|ta)(的)?(老板|老闆|上司|领导|領導)|\byour\s+(?:boss|manager|supervisor)\b", re.I),
+     re.compile(r"老板|老闆|上司|领导|領導|\b(?:boss|manager|supervisor)\b", re.I)),
+    ("pet", re.compile(
+        r"(你|您|TA|ta)(的|家)?(狗|猫|貓|宠物|寵物)|\byour\s+(?:dog|cat|puppy|kitten|pet|pup)\b", re.I),
+     re.compile(r"狗|猫|貓|宠物|寵物|柯基|哈士奇|柴犬|金毛|拉布拉多|泰迪|布偶|英短|美短|橘猫"
+                r"|\b(?:dog|cat|puppy|kitten|pet|pup|corgi|husky|shiba|golden|labrador|poodle|ragdoll)\b", re.I)),
+    ("ex", re.compile(
+        r"(你|您|TA|ta)(的)?(前任|前男友|前女友|前夫|前妻)|\byour\s+ex(?:-?(?:husband|wife|boyfriend|girlfriend))?\b", re.I),
+     re.compile(r"前任|前男友|前女友|前夫|前妻|离婚|離婚|分手|\byour\s+ex\b|\bex(?:-?(?:husband|wife|boyfriend|girlfriend))?\b|\bdivorce", re.I)),
+)
+
+# 运营称谓泄漏到对客文案：无论有无事实一律拦（#341 *your client's mom*）
+_PERSPECTIVE_LEAK_RE = re.compile(
+    r"\byour\s+(?:client|customer)s?\b|(你|您)(的)?(客户|客戶|顾客)", re.I)
+
+
+def detect_ungrounded_third_party(
+    text: str, context_facts: Optional[List[str]] = None,
+) -> Tuple[bool, str]:
+    """文案点名了「对方的某个人」但该客户的事实集里没有这个实体 → 编造。
+
+    返回 ``(是否编造, 证据摘要)``。零 IO、绝不抛。只看指向**对方**的第三方
+    （你妈/your mom）；人设自己的家人（我妈/my mom）由人设档案管，这里不判。
+    ``context_facts`` 应是**该会话**的全部可用事实（选中事实 + 背景事实）。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return (False, "")
+    if _PERSPECTIVE_LEAK_RE.search(t):
+        return (True, "对客文案出现运营称谓「客户/your client」（视角泄漏）")
+    facts_blob = " ".join(str(f or "") for f in (context_facts or []))
+    for name, mention_re, support_re in _THIRD_PARTY_GROUPS:
+        m = mention_re.search(t)
+        if not m:
+            continue
+        if facts_blob and support_re.search(facts_blob):
+            continue
+        return (True, f"提到对方的「{m.group(0)}」({name}) 但记忆事实里无此人")
+    return (False, "")
+
+
+def detect_proactive_fabrication(
+    text: str, context_facts: Optional[List[str]] = None,
+    *, entity_facts: Optional[List[str]] = None,
+    strict_when_facts: bool = False,
+) -> Tuple[bool, str]:
+    """主动开场出站前的合并判定：往事断言守卫 + 第三方实体守卫。
+
+    ``context_facts`` 维持往事守卫的既有口径（背景事实）；``entity_facts`` 是实体守卫
+    可用的全部事实（选中事实 + 背景事实），缺省等于 ``context_facts``。
+    """
+    fab, why = detect_fabricated_memory(
+        text, context_facts, strict_when_facts=strict_when_facts)
+    if fab:
+        return (fab, why)
+    return detect_ungrounded_third_party(
+        text, context_facts if entity_facts is None else entity_facts)
+
+
 __all__ = [
+    "detect_ungrounded_third_party",
+    "detect_proactive_fabrication",
     "PLACE_GAZETTEER",
     "normalize_country_code",
     "place_mentions",

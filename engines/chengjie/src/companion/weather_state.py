@@ -207,12 +207,20 @@ def fetch_weather(
         return None
 
 
-def weather_chat_note(snap: Optional[WeatherSnapshot], lang: str = "zh") -> str:
-    """聊天 prompt 内部事实块；空/异常 → ""。"""
+def weather_chat_note(
+    snap: Optional[WeatherSnapshot], lang: str = "zh", place_label: str = "",
+) -> str:
+    """聊天 prompt 内部事实块；空/异常 → ""。
+
+    ``place_label``：人设所在城市展示名。事实块必须点名“这是**你自己**所在城市的天气”——
+    只写“当地天气”时 LLM 会把它当成对方那边的天气去共情（“你那边也下雨了吧”），
+    对方在另一座城市时当场穿帮（#82）。
+    """
     try:
         if snap is None:
             return ""
         zh_mode = str(lang or "zh").lower().startswith("zh")
+        pl = str(place_label or "").strip()
         label = snap.summary_zh if zh_mode else snap.summary_en
         bits = [label]
         if snap.temp_c is not None:
@@ -225,13 +233,19 @@ def weather_chat_note(snap: Optional[WeatherSnapshot], lang: str = "zh") -> str:
         stale = "（数据稍旧，别报精确数字）" if snap.stale and zh_mode else (
             " (slightly stale — avoid exact numbers)" if snap.stale else "")
         if zh_mode:
+            where = f"你所在的{pl}" if pl else "你自己所在的城市"
             return (
-                f"【当地天气（内部事实）】{fact}{stale}。"
+                f"【你当地天气（内部事实）】{where}此刻：{fact}{stale}。"
+                "这是你自己这边的天气，不是对方那边的——对方那边的天气你不知道，"
+                "除非 TA 自己说过，否则不要替 TA 描述或默认“你那边也…”。"
                 "仅当对方问起天气/出门/穿衣，或话题自然相关时口语化顺带提一句；"
                 "不要每条汇报，也不要编造未给出的数值。"
             )
+        where_en = f"in {pl}, where you live" if pl else "in your own city"
         return (
-            f"[Local weather — internal] {fact}{stale}. "
+            f"[Your local weather — internal] Right now {where_en}: {fact}{stale}. "
+            "This is the weather on YOUR side only — you do not know their weather "
+            "unless they told you; never assume it's the same where they are. "
             "Mention only when asked or naturally relevant; never invent numbers."
         )
     except Exception:

@@ -1093,7 +1093,6 @@ def pick_registered_media(
     if not scfg.get("enabled", False):
         return None
     try:
-        from src.ai.companion_selfie import detect_selfie_request
         from src.companion.persona_media import pick_media, scene_class_of
         from src.companion.persona_media_store import get_persona_media_store
     except Exception:
@@ -1138,8 +1137,9 @@ def pick_registered_media(
     # 图入站（带索图配文）只用客户自己敲的字去匹配触发词，识图描述不参与
     if bool(getattr(_gate, "inbound_image", False)) and str(getattr(_gate, "words", "") or ""):
         peer_text = str(getattr(_gate, "words"))
+    # 通用人像池只对「索要」放开（谈照片 ≠ 要照片，见 image_send_gate.explicit_photo_ask）
     generic_ok = (not deny_generic) and (
-        bool(force_generic) or bool(detect_selfie_request(str(peer_text or ""))))
+        bool(force_generic) or _isg.explicit_photo_ask(str(peer_text or "")))
     try:
         _resend_days = float(scfg.get("resend_after_days", 90) or 0)
     except (TypeError, ValueError):
@@ -1167,7 +1167,7 @@ def pick_registered_media(
     # Q-39 C（#323）：scene_class_of / requested_scene_kind 的泛匹配不再单独把 _ask 置真——
     # 闸已判过「须与索图词共现」（strict_requested_scene_kind）；运营触发词命中（keyword）
     # 是「客户点名要那条」不是「要自拍」，无命中不记 miss（与旧行为一致）。
-    _ask = bool(detect_selfie_request(str(peer_text or ""))) or bool(force_generic) or bool(
+    _ask = _isg.explicit_photo_ask(str(peer_text or "")) or bool(force_generic) or bool(
         str(getattr(_gate, "trigger", "")) == _isg.TRIGGER_ASK
         and (_scene_cls or _scene_kind or getattr(_gate, "scene_kind", "")))
     _allow_random = False
@@ -1205,12 +1205,13 @@ def pick_registered_media(
     # P1-3 KBYW8V：客户说 can I see a picture of you —— 整句对不上标签，
     # 通用池又被「索图则关随机」挡住。标签 0 命中时用 selfie 标准查询兜底一张
     # 已启用本人照；仍 0 才记 miss（诚实文字，而不是 Sure 空头）。
+    # 兜底只对**显式索要**（trigger=ask ∧ 索要句形）放开：承诺兑现 / offer-accept /
+    # 触发词命中而无货，走诚实文字，不拿随机自拍顶包（P0-2 #332-A / #339）。
     if row is None and generic_ok and not _scene_kind:
-        try:
-            from src.ai.companion_selfie import detect_selfie_request as _dsr_fb
-            _selfie_ask = bool(_dsr_fb(str(peer_text or "")))
-        except Exception:
-            _selfie_ask = False
+        _selfie_ask = (
+            str(getattr(_gate, "trigger", "")) == _isg.TRIGGER_ASK
+            and not bool(getattr(_gate, "inbound_image", False))
+            and _isg.explicit_photo_ask(str(peer_text or "")))
         if _selfie_ask:
             _tr2: Dict[str, Any] = {}
             row = pick_media(

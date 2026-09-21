@@ -97,6 +97,8 @@ class VoiceOutageLedger:
             for r in rows[-self._MAXLEN:]:
                 try:
                     ts, ok, src, rsn = r
+                    if not ok and is_capability_skip(str(rsn)):
+                        continue
                     self._events.append(
                         (float(ts), bool(ok), str(src), str(rsn)))
                 except Exception:
@@ -274,8 +276,10 @@ class VoiceOutageLedger:
 #: 按设计回落文字的「正常业务态」原因（不入断档台账）：
 #: - 语种能力缺口（克隆声不支持 / 成品念错该语种，R87）
 #: - 桌面桥（2026-09-19 P2）：坐席正在用麦（开会/通话）、语音专属配额到顶——回复本身照发（文字），不是链路断
+#: - 桌面桥策略拒（``driver_policy``：非工作时段 / 日上限 / 对方没来过信）：文字同样发不出去，是业务闸门不是语音链
 _DESIGNED_SKIP_MARKERS = ("clone_lang_unsupported", "clone_lang_garbled",
-                          "mic_busy", "voice_daily_cap", "voice_per_peer_daily_cap")
+                          "mic_busy", "voice_daily_cap", "voice_per_peer_daily_cap",
+                          "driver_policy")
 
 
 def is_capability_skip(reason: str) -> bool:

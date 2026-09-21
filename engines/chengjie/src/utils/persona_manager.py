@@ -2532,7 +2532,9 @@ class PersonaManager:
         openers = s.get("openers", [])
         if openers:
             sample = "、".join(f"「{o}」" for o in openers[:6])
-            lines.append(f"开头多样化，可选池：{sample}等。")
+            lines.append(
+                f"开场白只是偶尔点缀（参考：{sample}等）：大多数回复直接进入内容，"
+                "同一句开场不要在相邻几条里重复出现，也不要把它翻译成外语后再用。")
         forbidden_openers = s.get("forbidden_opener_words", [])
         if forbidden_openers:
             lines.append(f"避免以以下词开头：{'、'.join(f'「{f}」' for f in forbidden_openers)}。")
