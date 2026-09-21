@@ -7,6 +7,7 @@
 
     python deploy/compute/realloc102_machines.py phase0            # 看将要做什么
     python deploy/compute/realloc102_machines.py phase0 --apply
+    python deploy/compute/realloc102_machines.py phase0e --apply   # 只补 0e（泊 musetalk），不重建 198 模型
     python deploy/compute/realloc102_machines.py phase3 --apply --comfy-task <104 上 ComfyUI 任务名>
     python deploy/compute/realloc102_machines.py phase4            # 只做预检清单，不动生产实例
 
@@ -32,7 +33,7 @@ _ENGINE = _HERE.parent.parent
 OVERLAY_TOOL = _HERE / "realloc102.py"
 LOG_PATH = _ENGINE / "logs" / "realloc102_machines.jsonl"
 
-PHASES = ["phase0", "phase1", "phase2", "phase3", "phase4"]
+PHASES = ["phase0", "phase0e", "phase1", "phase2", "phase3", "phase4"]
 
 # ── 别名（machines.json ssh[0]；176 用 ganzhi 因 ssh 配置尚未渲染新别名）──────────
 H176, H173, H104, H140, H198 = "ganzhi", "yuyan", "shengyin", "jiyi", "shijue"
@@ -54,6 +55,12 @@ def _ollama_generate(model: str, keep_alive) -> str:
             f"-ContentType 'application/json' -Body '{body}' -TimeoutSec 280 | ConvertTo-Json -Compress")
 
 
+def _hub_park(name: str) -> str:
+    """AvatarHub 显存管家泊车（POST /api/gpu/park?name=）：停引擎+挂起自愈，带 _park_refuse 防误伤；裸 engine/stop 会被 self-heal 拉回。"""
+    return (f"Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:9000/api/gpu/park?name={name}' "
+            f"-TimeoutSec 200 | ConvertTo-Json -Compress -Depth 4")
+
+
 def _native(cmd: str) -> str:
     """外部命令：让 PowerShell 退出码跟随它（否则 -EncodedCommand 只在脚本抛错时才非 0）。"""
     return f"{cmd}; exit $LASTEXITCODE"
@@ -69,6 +76,19 @@ class Step:
     timeout: int = 120
 
 
+# 176 的 ComfyUI 计划任务名（phase0 发现步 2026-09-22 04:12 现场查到：\ComfyBoot 开机拉起、\ComfyWatchdog 每 5 分拉回）。
+# 先停任务再结束进程，否则 5 分内被拉回；两步都幂等。
+COMFY176_TASKS = ("ComfyWatchdog", "ComfyBoot")
+COMFY176_STOP = [
+    Step(H176, "".join(f"schtasks /Change /TN {t} /Disable; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}; "
+                       for t in COMFY176_TASKS) + "'disabled'",
+         "176 停 ComfyUI 开机/看门狗任务（出图已归 104）", expect="disabled"),
+    Step(H176, "Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue "
+               "| ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }; 'done'",
+         "176 结束 ComfyUI 进程（只杀听 8188 的那一个）"),
+]
+
+
 @dataclass
 class Phase:
     name: str
@@ -76,6 +96,24 @@ class Phase:
     steps: List[Step] = field(default_factory=list)
     overlay_phase: str = ""    # 阶段末尾要跑的 realloc102.py 阶段名
     verify: List[Step] = field(default_factory=list)
+
+
+# 0e：musetalk 泊车。ComfyUI 在 176 **不动**：companion.selfie 到阶段 3 才切 104，提前停会让自拍无后端；
+# --lowvram 空闲实测 torch_vram_total 64MB，不占阶段 0 的 16G 预算。停任务+结束进程挂在 build_phase3 104 起来后。
+PHASE0E_STEPS = [
+    Step(H176, _hub_park("lipsync"),
+         "176 musetalk :8090 经 AvatarHub 显存管家泊车（不裸杀；挂起自愈，否则 20s 被拉回）",
+         timeout=240),
+]
+
+
+def build_phase0e() -> Phase:
+    """phase0 的 0e 子步单独重跑（首跑 04:12 只做了任务名发现）：不重建 198 模型、不碰 overlay。"""
+    return Phase("phase0e", "176 泊 musetalk（phase0 补跑）", steps=list(PHASE0E_STEPS), verify=[
+        Step(H176, _native("nvidia-smi --query-gpu=memory.used --format=csv,noheader"), "176 显存应 ≤ 16000 MiB"),
+        Step(H176, "(Get-NetTCPConnection -LocalPort 8090 -State Listen -EA SilentlyContinue | Measure-Object).Count",
+             "176 :8090 应无监听（musetalk 已泊）", expect="0"),
+    ])
 
 
 def build_phase0(harden_ollama: bool = False) -> Phase:
@@ -104,8 +142,7 @@ def build_phase0(harden_ollama: bool = False) -> Phase:
                    "name=ollama_from_104 dir=in action=allow protocol=TCP localport=11434 remoteip=192.168.0.104 } "
                    "else { 'rule exists' }",
              "198 放行 104（实测 104→198:11434 不通）"),
-        Step(H176, "schtasks /Query /FO LIST | Select-String -Pattern 'comfy|musetalk|lipsync' -CaseSensitive:$false",
-             "176 列出 ComfyUI / musetalk 计划任务名（发现，下一步人工 /Disable）", optional=True),
+    ] + PHASE0E_STEPS + [
         Step(H176, "Get-Content \"$env:LOCALAPPDATA\\Ollama\\server.log\" -Tail 4000 "
                    "| Select-String -SimpleMatch '/api/' | ForEach-Object { ($_.Line -split '\\|')[3].Trim() } "
                    "| Group-Object | Sort-Object Count -Descending | Select-Object -First 8 Count,Name | Format-Table -HideTableHeaders",
@@ -155,6 +192,7 @@ def build_phase3(comfy_task: str = "") -> Phase:
                           f"104 启 ComfyUI 任务 {comfy_task}"))
         steps.append(Step("local", "poll:http://192.168.0.104:8188/system_stats", "等 104 ComfyUI 起来",
                           expect="comfyui_version", timeout=300))
+        steps += COMFY176_STOP
     else:
         steps.append(Step("local", "skip:--comfy-task 未给", "104 ComfyUI 启动：请用 --comfy-task <任务名> 重跑本阶段",
                           optional=True))
@@ -184,6 +222,7 @@ def build_phase4() -> Phase:
 
 BUILDERS: Dict[str, Callable[..., Phase]] = {
     "phase0": lambda **kw: build_phase0(bool(kw.get("harden_ollama", False))),
+    "phase0e": lambda **kw: build_phase0e(),
     "phase1": lambda **kw: build_phase1(),
     "phase2": lambda **kw: build_phase2(),
     "phase3": lambda **kw: build_phase3(kw.get("comfy_task", "")),

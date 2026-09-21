@@ -99,7 +99,7 @@ def test_runner_ssh_sends_encoded_command(rm, monkeypatch):
 
 
 def test_phases_cover_runbook_targets(rm):
-    p0, p1, p2, p3, p4 = (rm.BUILDERS[n]() for n in rm.PHASES)
+    p0, p0e, p1, p2, p3, p4 = (rm.BUILDERS[n]() for n in rm.PHASES)
     assert any("qwen3:30b" in s.cmd and s.host == rm.H176 for s in p0.steps)      # 卸 30b
     assert any("num_ctx 8192" in s.cmd and s.host == rm.H198 for s in p0.steps)   # 198 钉 8k
     assert any("ollama_from_104" in s.cmd for s in p0.steps)                      # 放行 104
@@ -126,9 +126,37 @@ def test_phase0_hardening_is_opt_in(rm):
 def test_phase3_comfy_task_placeholder(rm):
     without = rm.build_phase3()
     assert any(s.cmd.startswith("skip:") and s.optional for s in without.steps)
+    # 104 没起来就不碰 176 的 ComfyUI（自拍唯一后端）
+    assert not any("ComfyWatchdog" in s.cmd or "8188 -State Listen" in s.cmd for s in without.steps)
     with_task = rm.build_phase3("ComfyUI_Boot")
     assert any('schtasks /Run /TN "ComfyUI_Boot"' in s.cmd for s in with_task.steps)
     assert any(s.cmd == "poll:http://192.168.0.104:8188/system_stats" for s in with_task.steps)
+
+
+def test_phase3_stops_176_comfy_only_after_104_is_up(rm):
+    """176 ComfyUI 的停止写死任务名（04:12 发现步查到 ComfyBoot/ComfyWatchdog），且排在 104 poll 之后：
+    先停任务再杀进程（否则 5 分内被看门狗拉回），只杀听 8188 的那一个。"""
+    steps = rm.build_phase3("ComfyUI_Boot").steps
+    idx_poll = next(i for i, s in enumerate(steps) if s.cmd.startswith("poll:") and "104:8188" in s.cmd)
+    idx_task = next(i for i, s in enumerate(steps) if "ComfyWatchdog /Disable" in s.cmd and s.host == rm.H176)
+    idx_kill = next(i for i, s in enumerate(steps) if "LocalPort 8188" in s.cmd and s.host == rm.H176)
+    assert idx_poll < idx_task < idx_kill
+    assert "ComfyBoot /Disable" in steps[idx_task].cmd and not steps[idx_task].optional
+    assert "Stop-Process" in steps[idx_kill].cmd and "-Force" in steps[idx_kill].cmd
+
+
+def test_phase0e_parks_musetalk_via_hub_not_kill(rm):
+    """musetalk 走 AvatarHub 显存管家 /api/gpu/park（挂起自愈），不裸杀 :8090；0e 可单独重跑且不碰 overlay。"""
+    p0e = rm.build_phase0e()
+    assert p0e.overlay_phase == ""
+    park = [s for s in p0e.steps if "/api/gpu/park?name=lipsync" in s.cmd and s.host == rm.H176]
+    assert len(park) == 1 and not park[0].optional
+    assert not any("Stop-Process" in s.cmd or "8090" in s.cmd for s in p0e.steps)
+    assert any("8090" in s.cmd and s.expect == "0" for s in p0e.verify)
+    # phase0 全跑也包含同一步；旧的“发现任务名”步已下线
+    p0 = rm.build_phase0()
+    assert any(s.cmd == park[0].cmd for s in p0.steps)
+    assert not any("comfy|musetalk|lipsync" in s.cmd for s in p0.steps)
 
 
 def test_dry_run_executes_nothing(rm, tmp_path, capsys):
