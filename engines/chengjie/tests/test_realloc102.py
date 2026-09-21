@@ -88,10 +88,11 @@ def test_phase0_vision_to_198(r102):
     assert notes and r102.apply_phase0(d) == []   # 幂等
 
 
-def test_phase1_voice_to_176_and_threshold(r102):
+def test_phase1_hub_path_voice_to_176_and_threshold(r102):
     d = _overlay_like_prod()
-    notes = r102.apply_phase1(d, svc_token_env="AH_SVC_TOKEN")
+    notes = r102.apply_phase1(d, svc_token_env="AH_SVC_TOKEN", voice_path="hub")
     av = d["avatar_voice"]
+    assert av["hub_fish"]["enabled"] is True
     assert av["hub_fish"]["base_url"] == "http://192.168.0.176:9000"
     assert av["hub_fish"]["tts_engine"] == "index_tts"
     assert av["hub_fish"]["emotion_threshold"] == 0.35
@@ -103,8 +104,9 @@ def test_phase1_voice_to_176_and_threshold(r102):
     assert d["minicpm_clone"]["base_url"] == "http://192.168.0.176:7865"
     assert d["minicpm_clone"]["svc_token_env"] == "AH_SVC_TOKEN"
     assert d["minicpm_clone"]["cloud_fallback"] is False               # 不兜底不变
+    assert "stt" not in av                                             # hub 形态不碰令牌文件
     assert any("emotion_channel_threshold: 2 -> 0.5" in n for n in notes)
-    assert r102.apply_phase1(d, svc_token_env="AH_SVC_TOKEN") == []
+    assert r102.apply_phase1(d, svc_token_env="AH_SVC_TOKEN", voice_path="hub") == []
 
 
 def test_phase1_without_token_env_does_not_write_key(r102):
@@ -113,26 +115,37 @@ def test_phase1_without_token_env_does_not_write_key(r102):
     assert "svc_token_env" not in d["minicpm_clone"]
 
 
-def test_phase1_direct_path_disables_hub_keeps_engine_leg(r102):
-    """direct：不用 176 角色库——关 hub_fish、本机参考音直连 176:7865；hub 端点保留便于切回。"""
+def test_phase1_default_is_direct_disables_hub_and_pins_token_file(r102):
+    """默认 direct（09-22 采纳）：不用 176 角色库——关 hub_fish、本机参考音直连 176:7865；
+    hub 端点保留便于切回；集群令牌文件路径显式写进 avatar_voice.stt.token_file。"""
+    assert r102.DEFAULT_VOICE_PATH == "direct"
     d = _overlay_like_prod()
-    notes = r102.apply_phase1(d, voice_path="direct")
+    notes = r102.apply_phase1(d)
     av = d["avatar_voice"]
     assert av["hub_fish"]["enabled"] is False
     assert av["hub_fish"]["base_url"] == "http://192.168.0.176:9000"     # 保留
+    assert av["hub_fish"]["tts_engine"] == "index_tts"
     assert av["base_urls"] == ["http://192.168.0.176:7865"]
     assert av["emotion_channel_threshold"] == 0.5
+    assert av["stt"]["token_file"] == "D:/faceX/mfys/secrets/service_token.txt"
     assert d["minicpm_clone"]["base_url"] == "http://192.168.0.176:7865"
     assert any("hub_fish.enabled: True -> False" in n for n in notes)
-    assert r102.apply_phase1(d, voice_path="direct") == []
+    assert r102.apply_phase1(d) == []
     with pytest.raises(ValueError):
         r102.apply_phase1(_overlay_like_prod(), voice_path="bogus")
+
+
+def test_phase1_direct_respects_explicit_token_file(r102):
+    d = _overlay_like_prod()
+    d["avatar_voice"]["stt"] = {"token_file": "E:/secrets/other.txt"}
+    r102.apply_phase1(d, voice_path="direct")
+    assert d["avatar_voice"]["stt"]["token_file"] == "E:/secrets/other.txt"
 
 
 def test_probes_skip_hub_for_direct(r102, monkeypatch):
     asked = []
     monkeypatch.setattr(r102, "_probe", lambda url, must, timeout=5.0: asked.append(url) or None)
-    r102.run_probes(["phase1"], voice_path="direct")
+    r102.run_probes(["phase1"])                       # 默认 direct：不查 hub
     assert asked == ["http://192.168.0.176:7865/health"]
     asked.clear()
     r102.run_probes(["phase1"], voice_path="hub")

@@ -8,9 +8,11 @@
 阶段（与文档 §七 对齐；每阶段可独立 dry-run / apply）：
 
     phase0   识图切 198（vision.base_url 176:11434 → 198:11434，timeout 3→5；硅基云仍第二位）
-    phase1   语音切 176：hub_fish 钉 176:9000/index_tts/情感阈值 0.35；
-             avatar_voice.base_url(s) 与 minicpm_clone.base_url → 176:7865；
-             avatar_voice.emotion_channel_threshold 2 → 0.5（现值 2 让情感永不触发）
+    phase1   语音切 176（默认 direct 形态）：关 hub_fish，avatar_voice.base_url(s) 与
+             minicpm_clone.base_url → 176:7865 直连（本机参考音直传，不用 176 角色库），
+             avatar_voice.stt.token_file 显式写集群令牌路径；
+             avatar_voice.emotion_channel_threshold 2 → 0.5（现值 2 让情感永不触发）。
+             ``--voice-path hub`` 则保留 09-22 前形态：hub_fish 钉 176:9000/index_tts/0.35
     phase2   听觉回 176：voice_recognition / speech_emotion.remote / audio_pipeline → 176:8765
     phase3   出图切 104（companion.selfie 子树内 176:8188 → 104:8188）；
              粤语克隆 127.0.0.1:7852（已死）→ 140:7852；
@@ -131,9 +133,14 @@ def apply_phase0(data) -> List[str]:
 
 
 VOICE_PATHS = ("hub", "direct")
+DEFAULT_VOICE_PATH = "direct"   # 2026-09-22 采纳：不用 176 角色库 + 176 主跑语音情感 两条同时成立
+# AvatarVoiceClient 直连 LAN 引擎带 X-AH-Svc，令牌读 avatar_voice.stt.token_file → env 设备令牌
+# → 开发机缺省路径。direct 形态把缺省路径写显式，让「这条腿依赖这个文件」在配置里可见
+# （阶段 4 迁 173 时必须把它一起拷过去，见 runbook）。
+CLUSTER_TOKEN_FILE = "D:/faceX/mfys/secrets/service_token.txt"
 
 
-def apply_phase1(data, svc_token_env: str = "", voice_path: str = "hub") -> List[str]:
+def apply_phase1(data, svc_token_env: str = "", voice_path: str = DEFAULT_VOICE_PATH) -> List[str]:
     """语音主路 → 176；本地腿 → 176:7865；本地路径情感阈值修正。
 
     ``voice_path``（两条都落在 176 同一块 5090 的 IndexTTS-2 上，差别在怎么到达）：
@@ -158,6 +165,9 @@ def apply_phase1(data, svc_token_env: str = "", voice_path: str = "hub") -> List
     else:
         _set(hf, "enabled", False, notes, "avatar_voice.hub_fish")
         # base_url/tts_engine 保留：日后切回 hub 只翻 enabled
+        stt = _ensure_map(av, "stt")
+        if not str(stt.get("token_file") or "").strip():
+            _set(stt, "token_file", CLUSTER_TOKEN_FILE, notes, "avatar_voice.stt")
 
     _set(av, "base_url", VOICE_ENGINE, notes, "avatar_voice")
     urls = av.get("base_urls")
@@ -250,7 +260,7 @@ PHASE_FN: Dict[str, Callable[..., List[str]]] = {
 
 
 def apply_phases(data, phases: List[str], svc_token_env: str = "",
-                 voice_path: str = "hub") -> List[str]:
+                 voice_path: str = DEFAULT_VOICE_PATH) -> List[str]:
     notes: List[str] = []
     for p in phases:
         fn = PHASE_FN[p]
@@ -291,7 +301,7 @@ PHASE_PROBES: Dict[str, List[tuple]] = {
 }
 
 
-def run_probes(phases: List[str], voice_path: str = "hub") -> List[str]:
+def run_probes(phases: List[str], voice_path: str = DEFAULT_VOICE_PATH) -> List[str]:
     fails: List[str] = []
     for p in phases:
         for url, must in PHASE_PROBES.get(p, []):
@@ -322,7 +332,9 @@ def cmd_status(overlay: Path) -> None:
         ("avatar_voice.hub_fish.tts_engine", _g(data, "avatar_voice", "hub_fish", "tts_engine")),
         ("avatar_voice.hub_fish.emotion_threshold", _g(data, "avatar_voice", "hub_fish", "emotion_threshold")),
         ("avatar_voice.hub_fish.lang_engines", _g(data, "avatar_voice", "hub_fish", "lang_engines")),
+        ("avatar_voice.hub_fish.enabled", _g(data, "avatar_voice", "hub_fish", "enabled")),
         ("avatar_voice.base_urls", _g(data, "avatar_voice", "base_urls")),
+        ("avatar_voice.stt.token_file", _g(data, "avatar_voice", "stt", "token_file")),
         ("avatar_voice.emotion_channel_threshold", _g(data, "avatar_voice", "emotion_channel_threshold")),
         ("minicpm_clone.base_url", _g(data, "minicpm_clone", "base_url")),
         ("minicpm_clone.svc_token_env", _g(data, "minicpm_clone", "svc_token_env")),
@@ -374,9 +386,9 @@ def main() -> None:
     ap.add_argument("--no-probe", action="store_true", help="--apply 时跳过机器侧前置探活")
     ap.add_argument("--overlay", type=Path, default=DEFAULT_OVERLAY)
     ap.add_argument("--svc-token-env", default="", help="phase1：minicpm_clone 直连 176:7865 的令牌密钥名")
-    ap.add_argument("--voice-path", choices=VOICE_PATHS, default="hub",
-                    help="phase1 语音到达 176 的方式：hub=经 :9000 角色库（现生产形态）；"
-                         "direct=关 hub_fish、本机参考音直连 :7865（不用角色库，桌面种子形态）")
+    ap.add_argument("--voice-path", choices=VOICE_PATHS, default=DEFAULT_VOICE_PATH,
+                    help="phase1 语音到达 176 的方式：direct（默认，已采纳）=关 hub_fish、本机参考音"
+                         "直连 :7865，不用角色库；hub=经 :9000 角色库（09-22 前的生产形态，留作回切）")
     args = ap.parse_args()
 
     if not args.overlay.exists():
