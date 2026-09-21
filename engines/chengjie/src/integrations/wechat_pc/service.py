@@ -35,6 +35,7 @@ from src.integrations.wechat_pc.identity import (
 )
 from src.integrations.wechat_pc.policy import PcPolicy, caps_relaxed, may_send, resolve_policy
 from src.integrations.wechat_pc.risk_screens import NONE, assess, disposition_for
+from src.integrations.wechat_pc.desktop_input import desktop_input
 from src.integrations.wechat_pc.send_guard import GuardedSender, SendOutcome, verify_title
 
 logger = logging.getLogger(__name__)
@@ -544,7 +545,8 @@ class WeChatPcService:
         # 启动时微信收在托盘/未登录 → 自检失败被锁只读；之后窗口回来了要重新自检解锁（否则永远只读）
         if readable and getattr(self.backend, "readonly", False) and callable(getattr(self.backend, "self_check", None)):
             try:
-                rep = self.backend.self_check()
+                with desktop_input():
+                    rep = self.backend.self_check()
                 if not getattr(self.backend, "readonly", True):
                     logger.info("[wechat_pc] 微信窗口回来了，锚点自检通过，解除只读：%s", rep)
                 elif "session_list" in (rep.get("missing") or []):
@@ -718,24 +720,28 @@ class WeChatPcService:
         handled = 0
         for row in rows[: self.max_sessions_per_tick]:
             try:
-                if not self.backend.open_session(row.display_name, index=getattr(row, "index", -1)):
-                    continue
-                title = self.backend.current_title()
-                # 群聊：会话格只有群名、标题带成员数「群名 (12)」→ 标 is_group（群策略默认永不回复）
-                if not row.is_group and is_group_title(title, row.display_name):
-                    row.is_group = True
-                    self.stats.groups_seen += 1
-                elif normalize_display_name(title) != normalize_display_name(row.display_name) and not row.is_group:
-                    continue
-                chat_key = self._resolve_key(row)
-                if not chat_key:
-                    continue
-                handled += self._ingest_bubbles(chat_key, row.display_name, row.is_group,
-                                                self.backend.read_visible_messages())
+                with desktop_input():
+                    handled += self._scan_one_session(row)
             except Exception:
                 self.stats.errors += 1
                 logger.debug("[wechat_pc] 会话扫描失败 %s", row.display_name, exc_info=True)
         return handled
+
+    def _scan_one_session(self, row: Any) -> int:
+        """开一个未读会话→校标题→读气泡（一段连续桌面交互，调用方持桌面输入锁）。"""
+        if not self.backend.open_session(row.display_name, index=getattr(row, "index", -1)):
+            return 0
+        title = self.backend.current_title()
+        # 群聊：会话格只有群名、标题带成员数「群名 (12)」→ 标 is_group（群策略默认永不回复）
+        if not row.is_group and is_group_title(title, row.display_name):
+            row.is_group = True
+            self.stats.groups_seen += 1
+        elif normalize_display_name(title) != normalize_display_name(row.display_name) and not row.is_group:
+            return 0
+        chat_key = self._resolve_key(row)
+        if not chat_key:
+            return 0
+        return self._ingest_bubbles(chat_key, row.display_name, row.is_group, self.backend.read_visible_messages())
 
     # ── 出站 ──
     #: 语音回显最多等多久被扫到（超过就当丢了，不再充实后来的语音）
@@ -1094,7 +1100,8 @@ class WeChatPcService:
             return
         self._identity_read_at = now
         try:
-            ident = fn() or {}
+            with desktop_input():
+                ident = fn() or {}
         except Exception:
             logger.debug("[wechat_pc] 读登录身份失败", exc_info=True)
             return

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
 from src.integrations.wechat_pc.backend import Bubble, WeChatPcBackend
+from src.integrations.wechat_pc.desktop_input import desktop_input
 from src.integrations.wechat_pc.identity import is_group_title, normalize_display_name
 
 STAGES = ("open", "title", "fill", "send", "echo")
@@ -213,7 +214,12 @@ class GuardedSender:
             trace.append(f"waited typing {waited:.0f}s")
 
     def send(self, target_name: str, text: str, *, expected_wxid: str = "") -> SendOutcome:
-        """``expected_wxid`` 非空＝微信号级身份：open 步逐格核对资料卡（同名不同号防发错人）。"""
+        """``expected_wxid`` 非空＝微信号级身份：open 步逐格核对资料卡（同名不同号防发错人）。
+        五步整体持桌面输入锁：双开时另一个驾驶不能在填字→回车之间抓前台。"""
+        with desktop_input():
+            return self._send(target_name, text, expected_wxid=expected_wxid)
+
+    def _send(self, target_name: str, text: str, *, expected_wxid: str = "") -> SendOutcome:
         t0 = time.monotonic()
         trace: List[str] = []
         text = str(text or "")
@@ -284,6 +290,11 @@ class GuardedSender:
         ``expected_sec`` 用于 echo 步核对气泡秒数（None＝只认「新增己方语音气泡」）。
         录音态进入之后的任何失败都先「取消」再返回；取消不成 → ``stage="cancel"``。
         """
+        with desktop_input():
+            return self._send_voice(target_name, play, expected_wxid=expected_wxid, expected_sec=expected_sec)
+
+    def _send_voice(self, target_name: str, play: Callable[[], float], *, expected_wxid: str = "",
+                    expected_sec: Optional[int] = None) -> SendOutcome:
         t0 = time.monotonic()
         trace: List[str] = []
         ready = getattr(self.backend, "voice_ready", None)

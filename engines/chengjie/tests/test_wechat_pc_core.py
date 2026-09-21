@@ -572,6 +572,73 @@ def test_tick_sends_pending_outbound_before_opening_unread_sessions():
     assert s["inbound"] == 0 and calls["n"] == 1
 
 
+def test_desktop_input_lock_is_reentrant_and_exclusive_across_holders():
+    """双开＝两个驾驶进程共用一套鼠标键盘：同持有者可重入；另一个持有者拿不到就等，超时放行不死锁。
+    （Windows 命名互斥量按线程归属，这里用两个线程各持一个实例模拟两个进程；非 Windows 退化为进程内锁只验重入。）"""
+    import os
+    import threading
+    from src.integrations.wechat_pc import desktop_input as D
+    a = D.DesktopInputLock("Local\\chengjie_test_desktop_lock", timeout=0.3)
+    with a:
+        with a:
+            assert a._depth == 2
+        assert a._depth == 1
+        if os.name == "nt":
+            got = {}
+
+            def other():
+                b = D.DesktopInputLock("Local\\chengjie_test_desktop_lock", timeout=0.3)
+                got["first"] = b.acquire()
+                b.release()
+            t = threading.Thread(target=other)
+            t.start()
+            t.join(5)
+            assert got["first"] is False, "A 持锁期间 B 只能超时放行"
+    if os.name == "nt":
+        b = D.DesktopInputLock("Local\\chengjie_test_desktop_lock", timeout=0.3)
+        assert b.acquire() is True, "A 放了 B 就能拿到"
+        b.release()
+    assert a._depth == 0
+
+
+def test_send_and_inbound_scan_hold_desktop_input_lock(monkeypatch):
+    """五步发送整段、每个未读会话「开→读」整段都在桌面输入锁内：另一个驾驶不能夹在填字与回车之间抢前台。"""
+    from src.integrations.wechat_pc import send_guard as SG
+    from src.integrations.wechat_pc import service as S
+
+    class Rec:
+        def __init__(self):
+            self.depth = 0
+            self.events: List[Tuple[str, int]] = []
+
+        def __enter__(self):
+            self.depth += 1
+            self.events.append(("enter", self.depth))
+            return self
+
+        def __exit__(self, *exc):
+            self.events.append(("exit", self.depth))
+            self.depth -= 1
+    rec = Rec()
+    monkeypatch.setattr(SG, "desktop_input", lambda: rec)
+    monkeypatch.setattr(S, "desktop_input", lambda: rec)
+    svc, fb, br, notes, clock = _svc("semi")
+    orig_open, orig_set, orig_send = fb.open_session, fb.set_composer, fb.press_send
+    seen = []
+    fb.open_session = lambda *a, **k: (seen.append(("open", rec.depth)), orig_open(*a, **k))[1]
+    fb.set_composer = lambda *a, **k: (seen.append(("fill", rec.depth)), orig_set(*a, **k))[1]
+    fb.press_send = lambda *a, **k: (seen.append(("send", rec.depth)), orig_send(*a, **k))[1]
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    br.queue = [{"id": 7, "chat_key": "wx:name:张三", "text": "在的", "kind": "manual"}]
+    clock["t"] += 30
+    svc.tick()
+    assert seen and all(d >= 1 for _, d in seen), seen
+    assert rec.depth == 0 and rec.events[-1][0] == "exit"
+    assert ("fill", 1) in seen and ("send", 1) in seen, "填字与回车在同一段持锁区间内"
+
+
 def test_auto_reply_requires_recent_inbound_and_freezes_on_guard_failure():
     svc, fb, br, notes, clock = _svc("auto_reply")
     # 无入站的会话 → 拒（仅回复原则）
