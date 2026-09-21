@@ -306,15 +306,17 @@ avatar_voice:
   prosody:
     enabled: true
     flow_temperature: 1.08
-  # 2026-08-29 域A：104:7865 IndexTTS-2（健康形状 {status:"ok",model_loaded}，
-  # AvatarVoiceClient._probe 已双形状兼容）。140:7852 CosyVoice 08-29 已停，
-  # 不要再写进种子——会连 RST、看板假红。
+  # 2026-09-22 实施102：语音主力回 176 声音机——IndexTTS-2 :7865 直连（健康形状
+  # {status:"ok",model_loaded}，AvatarVoiceClient._probe 双形状兼容），参考音本机直传、
+  # 情感通道 emotion/emo_text/emo_alpha 全带，不用 176 角色库（08-29 决策不变）。
+  # 104:7865 停服（104 改出图机）；140:7852 只服务粤语路由，不写进这里——会连 RST、看板假红。
+  # 176:7865 需 AvatarHub 令牌：坐席机走 resolve_service_token（网关设备令牌）。
   base_urls:
-  - http://192.168.0.104:7865
+  - http://192.168.0.176:7865
   voice_consistency: strict
   hub_fish:
-    # 2026-08-29 与生产对齐关闭（老板拍板不用 176 角色库；智聊克隆统一走 104
-    # IndexTTS-2）。旧值 true 时 LAN 机器 allowlist 人设仍会打 176:9000。
+    # 2026-08-29 与生产对齐关闭（老板拍板不用 176 角色库）；2026-09-22 语音回 176 仍走
+    # 直连 :7865 而非 hub :9000，本键保持 false。旧值 true 时 allowlist 人设会打 176:9000。
     enabled: false
     base_url: http://192.168.0.176:9000
     timeout_sec: 75.0
@@ -563,19 +565,20 @@ platform_login:
     media:
       outbound: true
 
-# ── 视觉（LAN 双活：176 5090 主 / 140 4070 备）──────────────────────────────
+# ── 视觉（实施102 2026-09-22：识图单点 198 视觉机，qwen3-vl 钉常驻）────────────
 # _lan_seed: LAN 不可达时由 hosted_gateway 接管指向官网网关（同一批 GPU），回内网还原直连
+# 旧序 140 首位 / 176 备：坐席包一直在把 140（记忆机，12G 打满）和 176（语音主力机）
+# 当识图端点用，各挂一份 6G qwen3-vl——这就是 140 显存 11.3/12.3、176 超编的来源之一。
+# 老板定「不设兜底」：LAN 只留 198；外网仍由网关接管。
 vision:
   enabled: true
   _lan_seed: true
   provider: openai_compatible
-  # 端点序对齐生产机：140 首位、176 备（2026-08-01 重排，176 修好后仍是备点）
-  base_url: http://192.168.0.140:11434/v1
+  base_url: http://192.168.0.198:11434/v1
   model: qwen3-vl:8b-instruct
   api_key: ollama
   base_urls:
-  - http://192.168.0.140:11434/v1
-  - http://192.168.0.176:11434/v1
+  - http://192.168.0.198:11434/v1
   timeout: 150
   # #333 R7775K：LAN 直连保留 150（140 冷载实测 130s）；被网关接管（外网坐席机）时按
   # 端点分级——网关背后是热态 GPU，45s 足够，超了走降级话术而不是卡 2 分钟。
@@ -1092,10 +1095,11 @@ ops:
   gpu_watermark:
     enabled: true
     hosts:
-    - {name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}
-    - {name: "140-4070", base_url: "http://192.168.0.140:11434", vram_gb: 12}
-    - {name: "173-5090", base_url: "http://192.168.0.173:11434", vram_gb: 32}
-    - {name: "198-4070", base_url: "http://192.168.0.198:11434", vram_gb: 12}
+    - {name: "176-5090 声音机", base_url: "http://192.168.0.176:11434", vram_gb: 32}
+    - {name: "140-4070 记忆机", base_url: "http://192.168.0.140:11434", vram_gb: 12}
+    # 173 出话口是 vLLM :8001（08-28 起），:11434 已死——kind=vllm 探 /v1/models + /metrics
+    - {name: "173-5090 语言机", base_url: "http://192.168.0.173:8001", kind: vllm, vram_gb: 32}
+    - {name: "198-4070 视觉机", base_url: "http://192.168.0.198:11434", vram_gb: 12}
   isolation_trend:
     enabled: true
   dead_peer_registry:
