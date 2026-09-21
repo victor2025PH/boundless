@@ -257,14 +257,14 @@ def test_manifest_roles_registered_into_page_permissions():
     pages = mf["web"]["pages"]
     assert set(pages[0]["roles"]) >= {"master", "admin", "viewer"}
 
-    saved = dict(wus.PAGE_PERMISSIONS)
+    saved, saved_owner = dict(wus.PAGE_PERMISSIONS), dict(wus._DOMAIN_PAGE_OWNER)
     try:
         reg = wus.register_domain_page_permissions(pages + [
             {"key": "settings", "roles": ["viewer"]},            # 核心键：不得放宽
             {"key": "pc_no_roles", "path": "/x"},                 # 无 roles：不注册 → 仅 master
             {"key": "pc_bad_roles", "roles": ["god", "root"]},    # 全是未知角色：不注册
             {"key": "pc_admin_only", "roles": ["ADMIN"]},         # 大小写归一 + master 自动带上
-        ])
+        ], "player_care")
         assert set(reg) == {"player_care_overview", "pc_admin_only"}
         assert wus.PAGE_PERMISSIONS["settings"] == {wus.ROLE_MASTER}
         assert wus.PAGE_PERMISSIONS["pc_admin_only"] == {wus.ROLE_MASTER, wus.ROLE_ADMIN}
@@ -273,10 +273,17 @@ def test_manifest_roles_registered_into_page_permissions():
                          (wus.ROLE_VIEWER, True), (wus.ROLE_AGENT, False)):
             assert chk(None, role, "player_care_overview") is ok, role
         assert chk(None, wus.ROLE_ADMIN, "pc_no_roles") is False and chk(None, wus.ROLE_MASTER, "pc_no_roles") is True
-        # 域再次注册可以改自己的键（热重载 / 多次 create_app），核心键仍不动
-        wus.register_domain_page_permissions([{"key": "pc_admin_only", "roles": ["viewer"]}])
+        # 别的域不能改 player_care 的键（先到先得，不串域）
+        assert wus.register_domain_page_permissions([{"key": "pc_admin_only", "roles": ["agent"]}], "other") == {}
+        assert wus.PAGE_PERMISSIONS["pc_admin_only"] == {wus.ROLE_MASTER, wus.ROLE_ADMIN}
+        # 同一域重注册以最新清单为准：改角色生效、清单里没了的旧键退回仅 master
+        wus.register_domain_page_permissions([{"key": "pc_admin_only", "roles": ["viewer"]}], "player_care")
         assert wus.PAGE_PERMISSIONS["pc_admin_only"] == {wus.ROLE_MASTER, wus.ROLE_VIEWER}
+        assert "player_care_overview" not in wus.PAGE_PERMISSIONS
+        assert chk(None, wus.ROLE_ADMIN, "player_care_overview") is False
+        assert wus.PAGE_PERMISSIONS["settings"] == {wus.ROLE_MASTER}
     finally:
         wus.PAGE_PERMISSIONS.clear()
         wus.PAGE_PERMISSIONS.update(saved)
-        wus._DOMAIN_PAGE_KEYS.difference_update({"pc_admin_only", "player_care_overview"})
+        wus._DOMAIN_PAGE_OWNER.clear()
+        wus._DOMAIN_PAGE_OWNER.update(saved_owner)

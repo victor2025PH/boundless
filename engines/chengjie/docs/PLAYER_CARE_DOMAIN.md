@@ -46,8 +46,8 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 ```
 
 在装了 `GATEWAY_KEY` 的机器上跑一次，依次打三个探针：`found`（真号）/ `not_found`（不存在的号）/ `bad_key`（故意错密钥，应 401/403），
-每个探针输出：HTTP 状态 / ok / found / error / 延迟 / 返回体顶层键名（顺带回答「有没有 agent 字段」）/ 脱敏后的 `chatx_text`
-（≥ 3 位数字换成同长度 `100…`，源号码全遮成 `*`）/ `extract_games` 与 `detect_deposit` 当前解析结果。密钥永不进输出。
+每个探针输出：HTTP 状态 / ok / found / error / 延迟 / 返回体顶层键名 / `agent_fields`（递归找 agent/代理/affiliate/upline 类键的路径，及 chatx_text 里的 agent 行；空 = 没有）/ 脱敏后的 `chatx_text`
+（≥ 3 位数字换成同长度 `100…`，日期/时间/版本号保形，源号码全遮成 `*`）/ `extract_games` 与 `detect_deposit` 当前解析结果。密钥永不进输出。
 `--out` 写的 JSON 就是测试够吃的样例文件格式：`tests/test_player_care_domain.py::test_lookup_samples_file` 逐条回放（假 transport 回放同一 status/body），
 断言 `found` / `error` / `games` / `deposit` 与样例里的 `expect` 一致。拿到真样例后只要把文件换成真的、改 `expect`，再改 `extract_games` 直到绿——不用重写测试。
 
@@ -75,8 +75,8 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 基类默认返回 None / 原文 → 无域包或域包未覆写时逐字节零影响。**副作用**：story 实例升级到本分支后，story_matrix 的 post hook 开始真的生效（更严：识别到 AI 字样 / 链接 / 号码的回复会被换成频道安全句）。
 
 **域页可见角色**：域清单 `web.pages[].roles` 一直有人写（payment 也写了 `[master, admin, viewer]`）但核心从没读过，域页一律掉进「无条目 → 仅 master」。
-现在 `create_app` 读清单后调 `web_user_store.register_domain_page_permissions(pages)`：核心表已有的键不动（域不能放宽核心页），
-未声明 roles / 角色名全不认识的页仍仅 master，master 恒在允许集；侧栏 / 命令面板 / 新手引导三处域页列表同步按 `page_perms` 过滤，看不到的角色不再看到一个点进去就 403 的入口。
+现在 `create_app` 读清单后调 `web_user_store.register_domain_page_permissions(pages, domain)`：核心表已有的键不动（域不能放宽核心页），
+未声明 roles / 角色名全不认识的页仍仅 master，master 恒在允许集；按域记账——同域重注册以最新清单为准（消失的旧键退回仅 master），别的域已占的键不覆盖；侧栏 / 命令面板 / 新手引导三处域页列表同步按 `page_perms` 过滤，看不到的角色不再看到一个点进去就 403 的入口。
 
 ## 6. B2 画像 + 阶段（已做）
 

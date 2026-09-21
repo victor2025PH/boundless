@@ -3,12 +3,15 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger("ai_chat_assistant.web_user_store")
 
 ROLE_MASTER = "master"
 ROLE_ADMIN = "admin"
@@ -83,17 +86,23 @@ PAGE_PERMISSIONS = {
 }
 
 _KNOWN_ROLES = {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER, ROLE_AGENT}
-_DOMAIN_PAGE_KEYS: Set[str] = set()   # 由域清单注册的键（可被后续注册覆写，核心键不可）
+_DOMAIN_PAGE_OWNER: Dict[str, str] = {}   # 域清单注册的键 → 所属域名（核心键不在此表，永不可被域改）
 
 
-def register_domain_page_permissions(pages: Any) -> Dict[str, Set[str]]:
+def register_domain_page_permissions(pages: Any, domain: str = "") -> Dict[str, Set[str]]:
     """把域清单 ``web.pages[].roles`` 注册进 PAGE_PERMISSIONS（域包声明自己页面的可见角色）。
 
     规则：核心表已有的键不动（核心口径优先，域不能放宽核心页）；未声明 roles 或全是未知
     角色名的页不注册（保持「无条目 → 仅 master」的兜底）；master 恒在允许集内。
+    按域记账：同一域重注册（热重载 / 多次 create_app）以最新清单为准——清单里不再出现的旧键
+    退回「仅 master」；别的域已占的键不覆盖（先到先得，不串域）。
     返回本次实际注册的 {page_key: roles}。
     """
+    domain = str(domain or "").strip()
     registered: Dict[str, Set[str]] = {}
+    for stale in [k for k, d in _DOMAIN_PAGE_OWNER.items() if d == domain]:
+        PAGE_PERMISSIONS.pop(stale, None)
+        _DOMAIN_PAGE_OWNER.pop(stale, None)
     for page in (pages or []):
         if not isinstance(page, dict):
             continue
@@ -101,14 +110,17 @@ def register_domain_page_permissions(pages: Any) -> Dict[str, Set[str]]:
         roles_raw = page.get("roles")
         if not key or not isinstance(roles_raw, (list, tuple, set)):
             continue
-        if key in PAGE_PERMISSIONS and key not in _DOMAIN_PAGE_KEYS:
+        owner = _DOMAIN_PAGE_OWNER.get(key)
+        if key in PAGE_PERMISSIONS and owner != domain:
+            logger.warning("域页权限键 %r 已被%s占用，域 %r 的声明忽略",
+                           key, "核心" if owner is None else f"域 {owner!r}", domain)
             continue
         roles = {str(r).strip().lower() for r in roles_raw} & _KNOWN_ROLES
         if not roles:
             continue
         roles.add(ROLE_MASTER)
         PAGE_PERMISSIONS[key] = roles
-        _DOMAIN_PAGE_KEYS.add(key)
+        _DOMAIN_PAGE_OWNER[key] = domain
         registered[key] = roles
     return registered
 

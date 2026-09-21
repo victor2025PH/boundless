@@ -38,16 +38,55 @@ from .profile import detect_deposit
 NOT_FOUND_PHONE = "639000000000"   # 探针用的不存在号（网关认 9 开头 / 补 63）
 BAD_KEY = "probe-invalid-key"
 _DIGITS_RE = re.compile(r"\d{3,}")
+# 保形不毁值的「非敏感数字」：日期 2026-09-21 / 2026/09/21、时间 10:05(:30)、版本 v1.2.3 / 1.2.3
+_KEEP_SHAPE_RE = re.compile(
+    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"          # 日期
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\b"          # 时间
+    r"|\bv?\d+(?:\.\d+){2,}\b"                # 版本号
+)
 _KEY_LIKE = ("key", "token", "secret", "password", "authorization")
+_AGENT_KEY_RE = re.compile(r"agent|代理|affiliate|referr?er|upline|promot(?:er|ion)_?code", re.IGNORECASE)
+_AGENT_LINE_RE = re.compile(r"(?im)^\s*(agent|代理(?:号|人)?|affiliate|referrer|upline)\s*[:：=]")
 
 
 def redact_text(text: Any, secrets: Optional[List[str]] = None) -> str:
-    """≥ 3 位数字全部换成同长度的 ``100…``（保持“是个数”，detect_deposit / 数字闸回放仍能跑，
-    但真值已毁）；``secrets`` 里的串（源号码各写法）先整段遮成 ``*``。"""
+    """≥ 3 位数字换成同长度的 ``100…``（保持“是个数”，detect_deposit / 数字闸回放仍能跑，但真值已毁）；
+    日期 / 时间 / 版本号形态保留（只是数值，不含账户信息；留着好判断真样例格式）；
+    ``secrets`` 里的串（源号码各写法）先整段遮成 ``*``。"""
     s = str(text or "")
     for sec in sorted({x for x in (secrets or []) if x}, key=len, reverse=True):
         s = s.replace(sec, "*" * len(sec))
-    return _DIGITS_RE.sub(lambda m: "1" + "0" * (len(m.group(0)) - 1), s)
+    keep: List[str] = []
+
+    def _hold(m: "re.Match[str]") -> str:
+        keep.append(m.group(0))
+        return f"\x00{len(keep) - 1}\x00"
+
+    s = _KEEP_SHAPE_RE.sub(_hold, s)
+    s = _DIGITS_RE.sub(lambda m: "1" + "0" * (len(m.group(0)) - 1), s)
+    return re.sub(r"\x00(\d+)\x00", lambda m: keep[int(m.group(1))], s)
+
+
+def find_agent_fields(raw: Any, chatx_text: Any = "") -> List[str]:
+    """返回体里所有像「代理 / 上级」的字段路径（递归，如 ``player.agent_id`` / ``meta[0].upline``），
+    以及 chatx_text 里以 agent/代理 开头的行（记为 ``chatx_text:agent``）。空表 = 没有 agent 字段。"""
+    hits: List[str] = []
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                p = f"{path}.{k}" if path else str(k)
+                if _AGENT_KEY_RE.search(str(k)):
+                    hits.append(p)
+                _walk(v, p)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                _walk(v, f"{path}[{i}]")
+
+    _walk(raw, "")
+    for m in _AGENT_LINE_RE.finditer(str(chatx_text or "")):
+        hits.append(f"chatx_text:{m.group(1).lower()}")
+    return hits
 
 
 def redact_raw(raw: Any, secrets: Optional[List[str]] = None) -> Any:
@@ -109,7 +148,7 @@ def _record_from_result(name: str, res: LookupResult, *, status: int, body: byte
         "status": status,
         "latency_ms": res.latency_ms,
         "raw_keys": sorted(res.raw.keys()) if isinstance(res.raw, dict) else [],
-        "has_agent_field": any("agent" in str(k).lower() for k in (res.raw or {}).keys()) if isinstance(res.raw, dict) else False,
+        "agent_fields": find_agent_fields(res.raw if isinstance(res.raw, dict) else {}, res.chatx_text),
         # 回放用：测试里假 transport 直接回这一对（body 已脱敏，expect 也按脱敏后的 body 算，自洽）
         "body": redact_body(body_txt, secrets)[:4000],
         "raw": redact_raw(res.raw, secrets) if isinstance(res.raw, dict) else {},
@@ -176,7 +215,7 @@ def render_report(rep: Dict[str, Any]) -> str:
         e = s.get("expect", {})
         lines.append(f"[{s['name']}] http={s['status']} ok={e.get('ok')} found={e.get('found')} "
                      f"error={e.get('error') or '-'} latency={s['latency_ms']}ms")
-        lines.append(f"    raw_keys={s.get('raw_keys')} agent_field={s.get('has_agent_field')}")
+        lines.append(f"    raw_keys={s.get('raw_keys')} agent_fields={s.get('agent_fields') or '无'}")
         if s.get("chatx_text"):
             for ln in str(s["chatx_text"]).splitlines()[:12]:
                 lines.append(f"    | {ln}")

@@ -469,6 +469,18 @@ def test_probe_redaction_keeps_json_and_kills_values():
     d = json.loads(body)                                # 仍是合法 JSON
     assert d["key"] == "***" and d["balance"] == 100 and d["n"] == 3 and "778899" not in d["chatx_text"]
     assert redact_raw({"X-Gateway-Key": "s3cr3t", "agent": "A100"}) == {"X-Gateway-Key": "***", "agent": "A100"}
+    # 日期 / 时间 / 版本号只是形态信息，保留；紧挨着的金额仍毁
+    t = redact_text("last deposit: 2,500 on 2026-09-21 18:05:30 (app 3.14.159) uid 445566", secrets)
+    assert "2026-09-21 18:05:30" in t and "3.14.159" in t and "2,500" not in t and "445566" not in t
+
+
+def test_probe_find_agent_fields_recursive():
+    from domains.player_care.gateway_probe import find_agent_fields
+
+    raw = {"ok": True, "player": {"uid": 1, "agent_id": "A7"}, "meta": [{"upline": "U1"}, {"x": 1}], "代理号": "C9"}
+    assert find_agent_fields(raw) == ["player.agent_id", "meta[0].upline", "代理号"]
+    assert find_agent_fields({"ok": True}, "balance: 100\nAgent: A7\n代理: B8") == ["chatx_text:agent", "chatx_text:代理"]
+    assert find_agent_fields({"ok": True, "chatx_text": "..."}) == []
 
 
 def test_probe_runs_three_probes_without_leaking_key(tmp_path, capsys):
@@ -482,7 +494,7 @@ def test_probe_runs_three_probes_without_leaking_key(tmp_path, capsys):
             return 401, b'{"error":"unauthorized"}'
         if seen[-1][0].get("phone") == gp.NOT_FOUND_PHONE:
             return 404, b'{"error":"not found"}'
-        return 200, json.dumps({"ok": True, "agent": "AG7", "chatx_text": FOUND.chatx_text}).encode()
+        return 200, json.dumps({"ok": True, "player": {"agent_id": "AG7"}, "chatx_text": FOUND.chatx_text}).encode()
 
     cfg = {"url": "http://gw", "key": "real-key", "key_env": "GATEWAY_KEY", "timeout_sec": 1, "lookup_path": "/lookup"}
     rep = gp.run_probes(cfg, phone="09171234567", transport=_tp)
@@ -491,7 +503,8 @@ def test_probe_runs_three_probes_without_leaking_key(tmp_path, capsys):
     assert [s["expect"]["found"] for s in rep["samples"]] == [True, False, False]
     assert rep["samples"][1]["status"] == 404 and rep["samples"][1]["expect"]["ok"] is True
     assert rep["samples"][2]["expect"]["error"] == "http_401"
-    assert rep["samples"][0]["has_agent_field"] is True and "agent" in rep["samples"][0]["raw_keys"]
+    assert rep["samples"][0]["agent_fields"] == ["player.agent_id"] and "player" in rep["samples"][0]["raw_keys"]
+    assert rep["samples"][1]["agent_fields"] == []
     assert rep["samples"][0]["expect"]["games"] == extract_games(FOUND.chatx_text)
     assert seen[0][0]["phone"] == "639171234567" and seen[2][1] == gp.BAD_KEY
     dumped = json.dumps(rep, ensure_ascii=False)
