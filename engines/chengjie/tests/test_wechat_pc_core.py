@@ -1120,6 +1120,29 @@ def test_uia_backend_explicit_binding_follows_process_and_goes_blind_if_target_g
     assert bh2._bound_windows() == [] and bh2.main_pid() == 0
 
 
+def test_uia_backend_retarget_switches_process_and_keeps_binding_explicit(monkeypatch):
+    from src.integrations.wechat_pc import uia_backend as U
+    from src.integrations.wechat_pc import win32_windows as W
+    a_main, a_dlg, b_main, b_login = _two_wechats()
+    state = {"wins": [b_login, b_main, a_dlg, a_main]}
+    monkeypatch.setattr(W, "find_wechat_windows", lambda **kw: list(state["wins"]))
+    # 首见锚定到 A（枚举里 b_main 在前但 mains[0] 是谁不重要，只看切换语义）
+    b = U.UiaBackend()
+    b._bound_windows()
+    cur = b.main_pid()
+    other = 502 if cur == 501 else 501
+    assert b.other_main_pids() == [other]
+    b._last_raw_names = {"旧窗基线"}
+    assert b.retarget(other) and b.main_pid() == other and b._last_raw_names == set() and not b.bound
+    assert [w.pid for w in b._bound_windows()] == [other, other]
+    assert b.retarget(other) is False and b.retarget(0) is False
+    # 显式 --hwnd 绑到 A，但真实身份说该盯 B → 改成按 B 的进程绑，仍算显式绑定（不回落首见锚定）
+    bh = U.UiaBackend(hwnd=1001)
+    bh._bound_windows()
+    assert bh.retarget(502) and bh.bound and bh.bind_hwnd == 0 and bh.bind_pid == 502
+    assert [w.hwnd for w in bh._bound_windows()] == [2002, 2001]
+
+
 def test_heartbeat_carries_window_binding_when_backend_supports_it():
     svc, fb, br, notes, clock = _svc()
     svc.tick()
@@ -1174,6 +1197,45 @@ def test_account_mismatch_freezes_sends_and_recovers_when_identity_matches_again
     svc.tick()
     assert not svc.frozen() and svc.account_wxid == "xb_2020"
     assert br.heartbeats[-1]["stats"]["account_mismatch"] is False
+
+
+def test_account_mismatch_switches_to_other_window_when_bound_account_is_there():
+    from src.integrations.wechat_pc.service import AccountBinding
+    svc, fb, br, notes, clock = _svc("auto_reply", account_binding=AccountBinding(expected_wxid="xb_2020"))
+    fb.self_nick, fb.self_wxid = "小南", "xn_1999"          # 本窗（pid 501）登的是 B 号
+    fb.other_wechats = {777: {"nick": "路人", "wxid": "lr_1"}, 502: {"nick": "小北", "wxid": "xb_2020"}}
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    assert not svc.frozen(), "另一个窗里登着绑定的号 → 改盯它，不冻结"
+    assert fb.pid == 502 and svc.account_wxid == "xb_2020" and svc.account_nick == "小北"
+    assert [a for a in fb.actions if a[0] == "retarget"] == [("retarget", 777), ("retarget", 502)], "逐个试、对上就停"
+    assert ("account_switched", "501->502:xb_2020") in notes
+    assert not any(k == "account_mismatch" for k, _ in notes)
+    st = br.heartbeats[-1]["stats"]
+    assert st["account_mismatch"] is False and st["account_wxid"] == "xb_2020"
+    # 切窗后这一轮照常收信（入站不再被串号挡住）
+    assert br.ingested and any(a[0] == "open_session" for a in fb.actions)
+
+
+def test_account_mismatch_restores_origin_window_and_blocks_inbound_when_no_window_matches():
+    from src.integrations.wechat_pc.service import AccountBinding
+    svc, fb, br, notes, clock = _svc("auto_reply", account_binding=AccountBinding(expected_wxid="xb_2020"))
+    fb.self_nick, fb.self_wxid = "小南", "xn_1999"
+    fb.other_wechats = {777: {"nick": "路人", "wxid": "lr_1"}}
+    fb.sessions = [SessionRow("张三", unread=1)]
+    fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
+    svc.tick()
+    assert svc.frozen() and svc.stats.freeze_reason == svc.ACCOUNT_MISMATCH
+    assert fb.pid == 501, "候选都不是绑定的号 → 切回原窗"
+    assert [a for a in fb.actions if a[0] == "retarget"] == [("retarget", 777), ("retarget", 501)]
+    assert not br.ingested, "别人号的来信不能记到本账号头上"
+    assert not any(a[0] == "open_session" for a in fb.actions)
+    # 串号期间按短周期复核（不是 30 分钟）：B 号窗里换回了自己的号 → 恢复
+    clock["t"] += svc.ACCOUNT_IDENTITY_RETRY_SEC + 1
+    fb.self_nick, fb.self_wxid = "小北", "xb_2020"
+    svc.tick()
+    assert not svc.frozen() and br.ingested
 
 
 def test_account_identity_read_is_rate_limited_and_rechecked_after_relogin():

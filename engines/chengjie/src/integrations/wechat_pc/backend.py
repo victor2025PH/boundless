@@ -60,6 +60,9 @@ class WeChatPcBackend(Protocol):
     def peer_typing(self) -> bool: ...
     # ── 登录身份（可选能力：service 用 getattr 探；返回 {"nick", "wxid"}，读不到的键为空串）──
     def read_self_identity(self) -> Dict[str, str]: ...
+    # ── 多开切窗（可选能力）：窗里登的不是绑定的号 → service 逐个试其它微信主窗进程，身份对上就改盯它 ──
+    def other_main_pids(self) -> List[int]: ...
+    def retarget(self, pid: int) -> bool: ...
     # ── 语音（2026-09-19，可选能力：没有的后端 voice_ready() 恒 False，其余方法不会被调）──
     # 语音消息在 4.1.9+ 客户端里是「点『发语音』进入录音态 → 麦克风录入 → 点『发送语音』」；
     # 音频由调用方经虚拟声卡当麦克风灌入（见 audio_cable），后端只负责三个按钮与状态确认。
@@ -103,6 +106,9 @@ class FakeBackend:
         # 登录微信的身份（空＝资料卡读不到）
         self.self_nick = ""
         self.self_wxid = ""
+        # 多开：pid → {"nick", "wxid"}（不含自己）；``retarget(pid)`` 把身份切成那个进程的
+        self.other_wechats: Dict[int, Dict[str, str]] = {}
+        self.pid = 501
 
     def screen_state(self) -> ScreenState:
         return ScreenState(self.present, self.window_class, self.logged_in, list(self.dialogs),
@@ -190,6 +196,22 @@ class FakeBackend:
     def read_self_identity(self) -> Dict[str, str]:
         self.actions.append(("read_self_identity",))
         return {"nick": self.self_nick, "wxid": self.self_wxid}
+
+    def main_pid(self) -> int:
+        return int(self.pid)
+
+    def other_main_pids(self) -> List[int]:
+        return [p for p in self.other_wechats if p != self.pid]
+
+    def retarget(self, pid: int) -> bool:
+        self.actions.append(("retarget", pid))
+        if pid not in self.other_wechats or pid == self.pid:
+            return False
+        self.other_wechats[self.pid] = {"nick": self.self_nick, "wxid": self.self_wxid}
+        ident = self.other_wechats[pid]
+        self.pid = pid
+        self.self_nick, self.self_wxid = ident.get("nick", ""), ident.get("wxid", "")
+        return True
 
     # ── 语音 ──
     def voice_ready(self) -> bool:

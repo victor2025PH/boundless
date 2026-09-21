@@ -391,6 +391,8 @@ class WeChatPcService:
     ACCOUNT_IDENTITY_RETRY_SEC = 120.0
     #: 串号冻结的来源名（无 TTL：身份对上即解除）
     ACCOUNT_MISMATCH = "account_mismatch"
+    #: 串号后自动改盯了另一个微信窗（提醒事件：“旧pid->新pid:微信号”）
+    ACCOUNT_SWITCHED = "account_switched"
 
     #: 守卫失败升级为账号级冻结的判据：GUARD_FAIL_WINDOW_SEC 内 ≥ GUARD_FAIL_ESCALATE 个**不同会话**失败
     GUARD_FAIL_ESCALATE = 2
@@ -1095,7 +1097,8 @@ class WeChatPcService:
         if not callable(fn):
             return
         now = self._now()
-        wait = self.ACCOUNT_IDENTITY_RETRY_SEC if self._identity_dirty else self.ACCOUNT_IDENTITY_RECHECK_SEC
+        wait = (self.ACCOUNT_IDENTITY_RETRY_SEC if self._identity_dirty or self.account_mismatch
+                else self.ACCOUNT_IDENTITY_RECHECK_SEC)
         if self._identity_read_at and now - self._identity_read_at < wait:
             return
         self._identity_read_at = now
@@ -1120,10 +1123,57 @@ class WeChatPcService:
             logger.info("[wechat_pc] 账号 %s 绑定登录微信：%s（%s）", self.account_id, nick, wxid)
             return
         if self.account_mismatch:
+            if self._switch_to_bound_window():
+                return
             self.freeze(3600.0, self.ACCOUNT_MISMATCH)
             self._emit_notify(self.ACCOUNT_MISMATCH, f"{self.account_binding.wxid}->{wxid}:{nick}"[:200])
         else:
             self.release_freeze(self.ACCOUNT_MISMATCH)
+
+    def _switch_to_bound_window(self) -> bool:
+        """串号时先别冻：桌面上另一个微信窗里可能就登着绑定的号（双开时两个驱动锚错了窗）。
+
+        逐个改盯其它主窗进程并读资料卡：微信号对上 → 就留在那个窗（``account_switched`` 提醒）；都不对 → 切回原窗。
+        后端没 ``other_main_pids``/``retarget`` 能力或没别的窗 → False（仍走冻结）。"""
+        pids_fn = getattr(self.backend, "other_main_pids", None)
+        retarget = getattr(self.backend, "retarget", None)
+        read = getattr(self.backend, "read_self_identity", None)
+        main_pid = getattr(self.backend, "main_pid", None)
+        if not (callable(pids_fn) and callable(retarget) and callable(read)):
+            return False
+        try:
+            candidates = [int(p) for p in (pids_fn() or []) if int(p) > 0]
+        except Exception:
+            return False
+        if not candidates:
+            return False
+        origin = int(main_pid() or 0) if callable(main_pid) else 0
+        want = self.account_binding.wxid
+        for pid in candidates:
+            try:
+                if not retarget(pid):
+                    continue
+                with desktop_input():
+                    ident = read() or {}
+            except Exception:
+                logger.debug("[wechat_pc] 试窗 pid=%s 失败", pid, exc_info=True)
+                continue
+            wxid = str(ident.get("wxid") or "").strip()
+            if wxid and wxid == want:
+                self.account_wxid = wxid
+                self.account_nick = str(ident.get("nick") or "").strip() or self.account_nick
+                self._seen.clear()
+                self._visible_name_counts.clear()
+                self.release_freeze(self.ACCOUNT_MISMATCH)
+                logger.info("[wechat_pc] 账号 %s 切到登着 %s 的窗（pid=%s）", self.account_id, wxid, pid)
+                self._emit_notify(self.ACCOUNT_SWITCHED, f"{origin}->{pid}:{wxid}"[:200])
+                return True
+        if origin:
+            try:
+                retarget(origin)
+            except Exception:
+                logger.debug("[wechat_pc] 切回原窗失败", exc_info=True)
+        return False
 
     def _account_identity_stats(self) -> Dict[str, Any]:
         return {"account_nick": self.account_nick, "account_wxid": self.account_wxid,
@@ -1150,8 +1200,11 @@ class WeChatPcService:
             self.stats.last_readable = bool(readable)
             if readable:
                 self._refresh_account_identity()
-                if self.account_mismatch and self._freezes.get(self.ACCOUNT_MISMATCH, 0.0) <= self._now():
+            if readable and self.account_mismatch:
+                # 窗里登的是别的号：不仅不发，也不把它的来信当成本账号的入站
+                if self._freezes.get(self.ACCOUNT_MISMATCH, 0.0) <= self._now():
                     self.freeze(3600.0, self.ACCOUNT_MISMATCH)
+            elif readable:
                 self._refresh_voice_ready()
                 # 出站优先：上一轮已生成的回复先发，不等本轮逐个打开未读会话（最多 5 个×几秒）再发；
                 # 同名计数用刚读的列表刷新过，守卫不失准。扫完入站若有新消息再补一次认领，保留「同一轮内秒回」的机会

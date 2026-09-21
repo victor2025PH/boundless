@@ -472,6 +472,37 @@ class UiaBackend:
         return {"window_hwnd": int(self._main_hwnd or 0), "window_pid": self.main_pid(),
                 "window_bound": self.bound, "main_windows": int(self.main_window_count)}
 
+    def other_main_pids(self) -> List[int]:
+        """桌面上**不是**本实例在盯的其它微信主窗进程（串号时候选切换目标；按枚举次序，去重）。"""
+        try:
+            from src.integrations.wechat_pc.win32_windows import find_wechat_windows, main_windows
+        except Exception:
+            return []
+        cur = self.main_pid()
+        out: List[int] = []
+        for w in main_windows(find_wechat_windows(visible_only=True)):
+            if w.pid and w.pid != cur and w.pid not in out:
+                out.append(w.pid)
+        return out
+
+    def retarget(self, pid: int) -> bool:
+        """把本实例改盯另一个 weixin.exe 进程（串号自动切窗）。
+
+        显式 ``--hwnd`` 绑定被真实身份否定了，就改成按进程绑（``bound`` 仍为真，不回落到「首见锚定」）；
+        没绑的直接换锚。会话列表基线/预定位按钮都是旧窗的，一并清掉。"""
+        pid = int(pid or 0)
+        if pid <= 0 or pid == self.main_pid():
+            return False
+        if self.bound:
+            self.bind_hwnd = 0
+            self.bind_pid = pid
+        else:
+            self._main_pid = pid
+        self._main_hwnd = 0
+        self._last_raw_names = set()
+        self._primed_voice_send = None
+        return True
+
     def _find(self, root: Any, key: str, limit: int = 1, max_depth: int = 26) -> List[Any]:
         spec = self.anchors.get(key) or {}
         found: List[Any] = []
