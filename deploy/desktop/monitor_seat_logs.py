@@ -5,6 +5,9 @@
 ------
 0. 坐席名单与中文名从台账 ``deploy/machines.json`` 推导（``chatx_seat: true`` 的机器，
    显示名 = ``IP尾段 zh(主别名)``，如 ``198 视觉机(shijue)``）。改编制只改台账。
+   非坐席算力机（``role`` 为 hub/compute 且不是坐席：176、140）另起一段，
+   带 ``role_short`` 职能、显卡、``watch_ports`` 是否在听。不拉它们的桌面日志——
+   140 已改编记忆机、没有桌面后端，按坐席探活会假报离线（2026-09-18）。
 1. SSH 拉取每台坐席机的 ChatX 后端工作日志
    ``%APPDATA%\\telegram-ai-desktop\\logs\\backend.log``（远端 base64 回传，
    零 GBK 乱码），只取 ERROR/WARNING/Traceback 行 + app 版本 + 文件 mtime。
@@ -43,6 +46,7 @@ import argparse
 import base64
 import json
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -93,6 +97,78 @@ def load_seats(path: Path = MACHINES_JSON) -> List[Dict[str, str]]:
     if not seats:
         raise RuntimeError(f"台账 {path} 里没有 chatx_seat=true 的机器")
     return seats
+
+
+# 非坐席算力：hub / compute 且没有桌面坐席。117 主机是 role=dev，不进这段。
+COMPUTE_ROLES = {"hub", "compute"}
+
+
+def load_compute(path: Path = MACHINES_JSON) -> List[Dict[str, Any]]:
+    """非坐席算力机：``[{id, name, alias, ip, role_short, gpu, ports}]``，台账顺序。
+
+    与 ``load_seats`` 互斥（``chatx_seat`` 的机器走坐席段）。读失败抛 RuntimeError，
+    由 ``scan`` 吞掉后仍巡检坐席——算力段缺失不能把坐席监控一起停掉。
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"读台账失败 {path}: {str(exc)[:120]}") from exc
+    nodes: List[Dict[str, Any]] = []
+    for m in (data.get("machines") or []) if isinstance(data, dict) else []:
+        if not isinstance(m, dict) or m.get("chatx_seat"):
+            continue
+        if str(m.get("role") or "") not in COMPUTE_ROLES:
+            continue
+        mid = str(m.get("id") or "").strip()
+        if not mid:
+            continue
+        ssh_aliases = [str(a) for a in (m.get("ssh") or []) if str(a).strip()]
+        alias = ssh_aliases[0] if ssh_aliases else mid
+        ip = str(m.get("ip") or "")
+        tail = ip.rsplit(".", 1)[-1] if ip else "?"
+        zh = str(m.get("zh") or mid)
+        ports: List[int] = []
+        for raw in m.get("watch_ports") or []:
+            try:
+                ports.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        nodes.append({
+            "id": mid,
+            "name": f"{tail} {zh}({alias})",
+            "alias": alias,
+            "ip": ip,
+            "role_short": str(m.get("role_short") or "").strip(),
+            "gpu": str(m.get("gpu") or "").strip(),
+            "ports": ports,
+        })
+    return nodes
+
+
+def probe_port(ip: str, port: int, timeout: float = 1.5) -> bool:
+    """从监控机直连算力端口。通＝在听；超时/拒绝＝未听。不是桌面 ping。"""
+    if not ip:
+        return False
+    try:
+        with socket.create_connection((ip, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def probe_compute(node: Dict[str, Any], probe=probe_port) -> Dict[str, Any]:
+    """按 ``watch_ports`` 分成 up / down。无端口不算故障（台账没让看）。"""
+    up: List[int] = []
+    down: List[int] = []
+    for port in node.get("ports") or []:
+        if probe(str(node.get("ip") or ""), int(port)):
+            up.append(int(port))
+        else:
+            down.append(int(port))
+    out = dict(node)
+    out["up"] = up
+    out["down"] = down
+    return out
 
 # ── 投递参数 ──────────────────────────────────────────────────────────────────
 # 主通道：@tgzkw_bot 投**运维群**（notify_webhooks.json 里名为 OPS_GROUP_CHANNEL 的
@@ -336,7 +412,9 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
     if since_min > 0:
         since_ts = (datetime.now() - timedelta(minutes=since_min)).strftime("%Y-%m-%d %H:%M:%S")
 
-    report: Dict[str, Any] = {"seats": [], "new_real": [], "all_real": [], "benign_counts": {}}
+    report: Dict[str, Any] = {
+        "seats": [], "compute": [], "new_real": [], "all_real": [], "benign_counts": {},
+    }
     now_alerted = dict(state.get("alerted", {}))
     cutoff = time.time() - 24 * 3600  # 指纹 24h 过期
     now_alerted = {k: v for k, v in now_alerted.items() if v > cutoff}
@@ -348,6 +426,7 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
         # 台账坏了不是「没问题」：当一条 critical 上报（同指纹 24h 一次），本轮 0 台巡检。
         # 不动 last_seen / 指纹——台账恢复后水位还在，不会把旧日志全当新问题重报。
         seats = []
+        compute_nodes = []
         why = "坐席台账不可用（本轮 0 台受监控）"
         sig = signature("ledger", why, str(exc))
         item = {"seat": "台账", "level": "critical", "why": why,
@@ -357,10 +436,17 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
             report["new_real"].append(item)
             now_alerted[sig] = time.time()
     else:
-        # 台账里已不是坐席的机器（如 140 听写→记忆机）：清掉其水位与指纹，不留幽灵
-        keep = {s["id"] for s in seats} | {"ledger"}
-        state["last_seen"] = {k: v for k, v in (state.get("last_seen") or {}).items() if k in keep}
-        now_alerted = {k: v for k, v in now_alerted.items() if k.split("|", 1)[0] in keep}
+        try:
+            compute_nodes = load_compute()
+        except RuntimeError:
+            compute_nodes = []
+        # last_seen 只属于坐席日志水位。已不是坐席的机器清掉水位。
+        # 告警指纹保留坐席 + 算力机（140 的算力端口告警不能被当成「旧坐席」清掉）。
+        keep_seats = {s["id"] for s in seats}
+        keep_alert = keep_seats | {n["id"] for n in compute_nodes} | {"ledger"}
+        state["last_seen"] = {
+            k: v for k, v in (state.get("last_seen") or {}).items() if k in keep_seats}
+        now_alerted = {k: v for k, v in now_alerted.items() if k.split("|", 1)[0] in keep_alert}
 
     for s in seats:
         sid, name, alias = s["id"], s["name"], s["alias"]
@@ -416,6 +502,23 @@ def scan(dry_run: bool, since_min: int, include_benign: bool) -> Dict[str, Any]:
         if not dry_run:
             state.setdefault("last_seen", {})[sid] = max_ts
 
+    for node in compute_nodes:
+        probed = probe_compute(node, probe_port)
+        report["compute"].append(probed)
+        if not probed["down"]:
+            continue
+        ports = ",".join(str(p) for p in probed["down"])
+        fn = probed.get("role_short") or "职能未写"
+        why = f"算力看护端口未听（{fn}）：{ports}"
+        # 不用 signature()：它会把端口号抹成 #，7854 和 11434 会撞成同一条指纹。
+        sig = f"{probed['id']}|compute_down|{ports}"
+        item = {"seat": probed["name"], "level": "warn", "why": why,
+                "ts": "", "line": why, "sig": sig}
+        report["all_real"].append(item)
+        if sig not in now_alerted:
+            report["new_real"].append(item)
+            now_alerted[sig] = time.time()
+
     if not dry_run:
         state["alerted"] = now_alerted
         state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -441,6 +544,22 @@ def render_report(report: Dict[str, Any], baseline: bool) -> str:
                 i["level"] == "critical" and i["seat"] == seat["name"] for i in report["all_real"]) else "🟡")
         lines.append(f"{flag} {seat['name']}  {ver}  新真问题 {rc} · 良性噪声 {bc}")
 
+    compute = report.get("compute") or []
+    if compute:
+        lines.append("")
+        lines.append("算力（非坐席，按台账职能 + watch_ports，不探桌面后端）：")
+        for node in compute:
+            fn = node.get("role_short") or "职能未写"
+            gpu = node.get("gpu") or ""
+            bits = []
+            up = set(node.get("up") or [])
+            for port in node.get("ports") or []:
+                bits.append(f"{port}{'开' if port in up else '关'}")
+            ports = " ".join(bits) or "无看护端口"
+            flag = "🟢" if not node.get("down") else "⚫"
+            gpu_bit = f" · {gpu}" if gpu else ""
+            lines.append(f"{flag} {node['name']}  {fn}{gpu_bit}  {ports}")
+
     if not report["seats"]:
         lines.append("❌ 本轮 0 台坐席受监控（台账 deploy/machines.json 不可用，见下）")
 
@@ -454,8 +573,13 @@ def render_report(report: Dict[str, Any], baseline: bool) -> str:
             lines.append(f"    {it['ts']}  {it['line'][:160]}")
     elif baseline:
         lines.append("")
-        lines.append(f"✅ 当前无新真问题（监控已上线，{len(report['seats'])} 台坐席健康；"
-                     "名单来自 deploy/machines.json chatx_seat）。")
+        offline_n = sum(1 for s in report["seats"] if s.get("offline") or not s.get("ok"))
+        if offline_n:
+            lines.append(
+                f"✅ 本轮无新增真问题（{offline_n} 台坐席仍是已知离线，见上，24h 内不重复告警）。")
+        else:
+            lines.append(f"✅ 当前无新真问题（监控已上线，{len(report['seats'])} 台坐席健康；"
+                         "名单来自 deploy/machines.json chatx_seat）。")
 
     if report.get("include_benign") and report.get("benign_counts"):
         lines.append("")
@@ -641,6 +765,14 @@ def _append_ledger(report: Dict[str, Any], sent: Optional[str]) -> None:
             "> 工具：`monitor_seat_logs.py`（本机每 15 分钟巡检，真问题投递运维群 tg-ywqz）\n",
             encoding="utf-8")
     parts = [f"\n### {now}", f"- 巡检：{seats_line}"]
+    if report.get("compute"):
+        comp = "; ".join(
+            f"{n['name']} {n.get('role_short') or ''} {n.get('gpu') or ''} "
+            + " ".join(
+                f"{p}{'开' if p in set(n.get('up') or []) else '关'}"
+                for p in (n.get("ports") or []))
+            for n in report["compute"])
+        parts.append(f"- 算力：{comp}")
     if report["new_real"]:
         parts.append(f"- 新真问题 {len(report['new_real'])}：")
         for it in report["new_real"][:20]:

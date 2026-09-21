@@ -162,6 +162,8 @@ def test_scan_prunes_state_of_machines_no_longer_seats(msl, tmp_path, monkeypatc
     monkeypatch.setattr(msl, "STATE_PATH", state_path)
     monkeypatch.setattr(msl, "load_seats", lambda: [
         {"id": "kouxing", "name": "198 视觉机(shijue)", "alias": "shijue", "ip": "192.168.0.198"}])
+    # 本例模拟「140 已彻底移出受监控集合」（既不是坐席也不是算力），指纹必须清掉。
+    monkeypatch.setattr(msl, "load_compute", lambda: [])
     monkeypatch.setattr(msl, "pull_seat", lambda alias: {
         "alias": alias, "ok": True, "version": "chengjie 1.087",
         "mtime": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "lines": []})
@@ -196,6 +198,96 @@ def test_scan_reports_ledger_failure_once_and_keeps_state(msl, tmp_path, monkeyp
     assert r2["new_real"] == []                                  # 24h 内不重报
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert saved["last_seen"]["kouxing"] == "2026-09-18 10:00:00"  # 水位没被清
+
+
+def test_load_compute_is_176_and_140_non_seat_compute(msl):
+    """非坐席算力 = 176 + 140（hub/compute 且非坐席），带职能、显卡、看护端口；坐席不重复出现。"""
+    nodes = msl.load_compute()
+    assert [n["id"] for n in nodes] == ["zhongshu", "tingxie"]
+    by_id = {n["id"]: n for n in nodes}
+    assert by_id["zhongshu"]["name"].startswith("176 ")
+    assert by_id["tingxie"]["name"].startswith("140 记忆机(")
+    assert by_id["zhongshu"]["role_short"] and by_id["tingxie"]["role_short"]
+    assert "5090" in by_id["zhongshu"]["gpu"]
+    assert "4070" in by_id["tingxie"]["gpu"]
+    assert by_id["zhongshu"]["ports"] and by_id["tingxie"]["ports"]
+    assert "yunsheng" not in by_id and "lianbei" not in by_id and "kouxing" not in by_id
+
+
+def test_load_compute_synthetic(msl, tmp_path):
+    p = tmp_path / "machines.json"
+    p.write_text(json.dumps({"machines": [
+        {"id": "h", "zh": "枢机", "ip": "10.0.0.1", "ssh": ["h1"], "role": "hub",
+         "role_short": "枢", "gpu": "RTX X", "watch_ports": [9000, "8188", "bad"]},
+        {"id": "s", "zh": "坐席", "ip": "10.0.0.2", "role": "compute", "chatx_seat": True},
+        {"id": "d", "zh": "开发", "ip": "10.0.0.3", "role": "dev"},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    nodes = msl.load_compute(p)
+    assert [n["id"] for n in nodes] == ["h"]
+    assert nodes[0]["name"] == "1 枢机(h1)" and nodes[0]["ports"] == [9000, 8188]
+    with pytest.raises(RuntimeError):
+        msl.load_compute(tmp_path / "missing.json")
+
+
+def test_render_report_shows_compute_function_and_ports(msl):
+    report = {
+        "seats": [{
+            "ok": True, "name": "173 语言机(yuyan)", "version": "chengjie 1.095",
+            "real_count": 0, "benign_count": 0, "offline": False,
+        }],
+        "new_real": [], "all_real": [], "benign_counts": {},
+        "compute": [
+            {"name": "176 声音机(ganzhi)", "role_short": "语音克隆·情感·ASR/SER",
+             "gpu": "RTX 5090 32G", "ports": [9000, 7865], "up": [9000, 7865], "down": []},
+            {"name": "140 记忆机(jiyi)", "role_short": "嵌入·STT",
+             "gpu": "RTX 4070 12G", "ports": [7854, 11434], "up": [11434], "down": [7854]},
+        ],
+    }
+    text = msl.render_report(report, baseline=False)
+    assert "176 声音机(ganzhi)" in text
+    assert "语音克隆·情感·ASR/SER" in text and "RTX 5090 32G" in text
+    assert "9000开" in text and "7865开" in text
+    assert "140 记忆机(jiyi)" in text and "嵌入·STT" in text
+    assert "7854关" in text and "11434开" in text
+    report["seats"][0]["offline"] = True
+    base = msl.render_report(report, baseline=True)
+    assert "坐席健康" not in base
+    assert "已知离线" in base
+
+
+def test_scan_compute_down_port_alerts_once(msl, tmp_path, monkeypatch):
+    """看护端口没听 → 一条 warn；同端口 24h 内不重报。指纹按端口区分，不走去数字。"""
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(msl, "STATE_PATH", state_path)
+    monkeypatch.setattr(msl, "load_seats", lambda: [
+        {"id": "kouxing", "name": "198 视觉机(shijue)", "alias": "shijue", "ip": "192.168.0.198"}])
+    monkeypatch.setattr(msl, "load_compute", lambda: [{
+        "id": "tingxie", "name": "140 记忆机(jiyi)", "alias": "jiyi",
+        "ip": "192.168.0.140", "role_short": "嵌入·STT", "gpu": "RTX 4070 12G",
+        "ports": [7854, 11434],
+    }])
+    monkeypatch.setattr(msl, "pull_seat", lambda alias: {
+        "alias": alias, "ok": True, "version": "chengjie 1.087",
+        "mtime": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "lines": []})
+
+    def _probe(ip, port, timeout=1.5):
+        return int(port) != 7854
+
+    monkeypatch.setattr(msl, "probe_port", _probe)
+    r1 = msl.scan(dry_run=False, since_min=0, include_benign=False)
+    downs = [i for i in r1["new_real"] if "7854" in i["why"]]
+    assert len(downs) == 1
+    assert downs[0]["seat"] == "140 记忆机(jiyi)"
+    assert "嵌入·STT" in downs[0]["why"]
+    assert r1["compute"][0]["down"] == [7854]
+    text = msl.render_report(r1, baseline=False)
+    assert "140 记忆机(jiyi)" in text and "嵌入·STT" in text
+    r2 = msl.scan(dry_run=False, since_min=0, include_benign=False)
+    assert [i for i in r2["new_real"] if "7854" in i["why"]] == []
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "tingxie" not in saved["last_seen"]
+    assert any(k.startswith("tingxie|compute_down|") for k in saved["alerted"])
 
 
 def test_signature_still_separates_kinds_and_seats(msl):
