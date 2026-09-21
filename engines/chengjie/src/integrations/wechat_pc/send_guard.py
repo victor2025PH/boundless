@@ -256,6 +256,7 @@ class GuardedSender:
             self.backend.set_composer("")
             return self._fail("send", "title_changed_before_send", t0, trace)
         if not self.backend.press_send():
+            self.backend.set_composer("")   # 没发出去的稿子不能留在框里等人手一回车
             return self._fail("send", "press_send_failed", t0, trace)
         trace.append("send ok")
         # 5. echo

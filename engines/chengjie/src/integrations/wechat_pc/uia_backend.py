@@ -807,14 +807,32 @@ class UiaBackend:
         if main is None:
             return False
         try:
+            self._activate_for_click(main)
             btns = self._find(main, "send_button")
-            if btns:
+            if btns and not btns[0].IsOffscreen:
                 btns[0].Click(simulateMove=True)
-                return True
+            else:
+                eds = self._find(main, "composer")
+                if not eds:
+                    return False
+                eds[0].Click(simulateMove=True)
+                time.sleep(0.1)
+                eds[0].SendKeys("{Enter}")
+            # 点了「发送」不等于发出去了：双开/用户碰鼠标时点击可能落空，按「输入框已清空」判定
+            for _ in range(6):
+                time.sleep(0.25)
+                if not self.read_composer().strip():
+                    return True
             eds = self._find(main, "composer")
             if eds:
+                eds[0].Click(simulateMove=True)
+                time.sleep(0.1)
                 eds[0].SendKeys("{Enter}")
-                return True
+                for _ in range(6):
+                    time.sleep(0.25)
+                    if not self.read_composer().strip():
+                        return True
+            logger.warning("[wechat_pc.uia] press_send 后输入框仍有内容，视为未发出")
         except Exception:
             logger.debug("[wechat_pc.uia] press_send 失败", exc_info=True)
         return False
