@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}玩家朋友看板 · {{ product_name|default('智聊') }}{% endblock %}
+{% block page_title %}玩家朋友看板{% endblock %}
+{% block head %}
+<style>
+.pc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.9rem;margin-bottom:1.2rem}
+.pc-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem 1.1rem}
+.pc-card .k{font-size:.74rem;color:var(--t2);font-weight:600;letter-spacing:.02em}
+.pc-card .v{font-size:1.6rem;font-weight:700;margin-top:.2rem}
+.pc-card .s{font-size:.72rem;color:var(--t3);margin-top:.15rem}
+.pc-sec{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem 1.1rem;margin-bottom:1.2rem}
+.pc-sec h3{margin:0 0 .7rem;font-size:.9rem}
+.pc-stage{display:flex;align-items:center;gap:.6rem;font-size:.8rem;margin:.3rem 0}
+.pc-stage .n{width:7.5rem;color:var(--t2)}
+.pc-stage .bar{flex:1;height:10px;background:var(--input);border-radius:5px;overflow:hidden}
+.pc-stage .bar i{display:block;height:100%;background:linear-gradient(90deg,#3b82f6,#60a5fa)}
+.pc-stage .c{width:3rem;text-align:right;font-weight:600}
+.pc-tbl{width:100%;border-collapse:collapse;font-size:.8rem}
+.pc-tbl th,.pc-tbl td{padding:.35rem .5rem;border-bottom:1px solid var(--bd);text-align:right}
+.pc-tbl th:first-child,.pc-tbl td:first-child{text-align:left}
+.pc-badge{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.72rem;font-weight:700}
+.pc-ok{background:var(--gs);color:var(--green)}
+.pc-warn{background:var(--as);color:var(--amber)}
+.pc-bad{background:var(--rs);color:var(--red)}
+.pc-muted{background:var(--input);color:var(--t2)}
+.pc-kv{font-size:.78rem;color:var(--t2);display:flex;flex-wrap:wrap;gap:.4rem 1.2rem}
+.pc-kv b{color:var(--t)}
+</style>
+{% endblock %}
+{% block content %}
+<div style="max-width:1100px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
+    <span class="pc-kv">日期 <b id="pc-day">—</b> 更新 <b id="pc-ts">—</b> <span id="pc-notes"></span></span>
+    <button class="btn-sec" id="pc-refresh" style="font-size:.8rem">↻ 刷新</button>
+  </div>
+
+  <div class="pc-grid">
+    <div class="pc-card"><div class="k">联系人</div><div class="v" id="pc-contacts">—</div><div class="s" id="pc-contacts-s"></div></div>
+    <div class="pc-card"><div class="k">7 日活跃</div><div class="v" id="pc-active">—</div><div class="s">近 7 天有来信</div></div>
+    <div class="pc-card"><div class="k">今日来信</div><div class="v" id="pc-inbound">—</div><div class="s" id="pc-inbound-s"></div></div>
+    <div class="pc-card"><div class="k">明用命中</div><div class="v" id="pc-visible">—</div><div class="s">今日对方先聊到游戏且有网关事实</div></div>
+    <div class="pc-card"><div class="k">数字闸命中</div><div class="v" id="pc-gate">—</div><div class="s">今日回复里被拦下的编造数字</div></div>
+    <div class="pc-card"><div class="k">网关</div><div class="v" id="pc-gw">—</div><div class="s" id="pc-gw-s"></div></div>
+  </div>
+
+  <div class="pc-sec">
+    <h3>阶段分布</h3>
+    <div id="pc-stages"></div>
+  </div>
+
+  <div class="pc-sec">
+    <h3>按账号</h3>
+    <table class="pc-tbl">
+      <thead><tr><th>账号</th><th>联系人</th><th>来信</th><th>查网关</th><th>查到</th><th>明用</th><th>数字闸</th><th>新画像</th><th>升阶</th></tr></thead>
+      <tbody id="pc-acct"></tbody>
+    </table>
+  </div>
+
+  <div class="pc-sec">
+    <h3>网关 · 同步 · 出箱</h3>
+    <div class="pc-kv" id="pc-health"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var STAGE_LABEL={new_friend:'新朋友',chatting:'在聊',mentioned_game:'聊到游戏',registered:'已注册',depositing:'有充值',active:'活跃',dormant:'沉默'};
+  var GW_LABEL={ok:['正常','pc-ok'],idle:['无调用','pc-muted'],degraded:['部分出错','pc-warn'],down:['大面积出错','pc-bad'],unconfigured:['未配置','pc-muted']};
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function t(id,v){var el=document.getElementById(id);if(el)el.textContent=v;}
+  function fmtTs(ts){return ts?new Date(ts*1000).toLocaleString():'—';}
+  function render(d){
+    t('pc-day',d.day||'—');t('pc-ts',fmtTs(d.ts));
+    t('pc-notes',(d.notes&&d.notes.length)?('· '+d.notes.join(', ')):'');
+    var c=d.contacts||{},td=d.today||{},gw=d.gateway||{},st=d.stages||{};
+    t('pc-contacts',c.total||0);t('pc-contacts-s','有手机号 '+(c.with_phone||0)+' · 引流接入 '+(c.handoff||0));
+    t('pc-active',c.active_7d||0);
+    t('pc-inbound',td.inbound||0);t('pc-inbound-s','查网关 '+(td.lookups||0)+' · 查到 '+(td.found||0));
+    t('pc-visible',td.visible||0);t('pc-gate',td.gate_hits||0);
+    var gl=GW_LABEL[gw.status]||[gw.status||'—','pc-muted'];
+    document.getElementById('pc-gw').innerHTML='<span class="pc-badge '+gl[1]+'">'+esc(gl[0])+'</span>';
+    var r=gw.recent_24h||{};
+    t('pc-gw-s','24h 查到 '+(r.found||0)+' / 没资料 '+(r.not_found||0)+' / 出错 '+Object.values(r.errors||{}).reduce(function(a,b){return a+b;},0));
+    var tot=st.totals||{},order=st.order||Object.keys(tot),max=1;
+    order.forEach(function(k){max=Math.max(max,tot[k]||0);});
+    document.getElementById('pc-stages').innerHTML=order.map(function(k){var n=tot[k]||0;
+      return '<div class="pc-stage"><span class="n">'+esc(STAGE_LABEL[k]||k)+'</span><span class="bar"><i style="width:'+(n*100/max)+'%"></i></span><span class="c">'+n+'</span></div>';}).join('');
+    var rows=(td.accounts||[]);
+    document.getElementById('pc-acct').innerHTML=rows.length?rows.map(function(a){
+      return '<tr><td>'+esc(a.account_id||'—')+'</td><td>'+(a.contacts||0)+'</td><td>'+(a.inbound||0)+'</td><td>'+(a.lookups||0)+'</td><td>'+(a.found||0)+'</td><td>'+(a.visible||0)+'</td><td>'+(a.gate_hits||0)+'</td><td>'+(a.new_profiles||0)+'</td><td>'+(a.stage_ups||0)+'</td></tr>';
+    }).join(''):'<tr><td colspan="9" style="text-align:center;color:var(--t3)">暂无数据</td></tr>';
+    var sy=d.sync||{},ls=sy.last||{},cb=d.commandbus||{},cs=cb.stats||{},bs=cs.by_status||{};
+    var errs=Object.keys(r.errors||{}).map(function(k){return k+'×'+r.errors[k];}).join(' ');
+    document.getElementById('pc-health').innerHTML=[
+      '网关 <b>'+esc(gw.enabled?(gw.url||'—'):'未启用')+'</b>',
+      '密钥 <b>'+(gw.key_set?'已设':'缺 '+esc(gw.key_env||'GATEWAY_KEY'))+'</b>',
+      '累计查询 <b>'+(gw.lookups_total||0)+'</b>',
+      '最近查询 <b>'+esc(fmtTs(gw.last_lookup_at))+'</b>',
+      errs?'错误 <b>'+esc(errs)+'</b>':'',
+      '同步 <b>'+(sy.enabled?('每 '+sy.interval_min+' 分'):'关')+'</b>',
+      ls.ts?('上轮 <b>'+esc(fmtTs(ls.ts))+'</b> 扫 '+(ls.scanned||0)+' 查 '+(ls.looked_up||0)+' 查到 '+(ls.found||0)+' 充值 '+(ls.deposits||0)+' 沉默 '+(ls.dormant||0)+' 目标 '+(ls.goals||0)+' 指令 '+(ls.commands||0)+' 错 '+(ls.errors||0)+(ls.skipped?(' 跳过:'+esc(ls.skipped)):'')):'上轮 <b>未跑</b>',
+      '出箱 <b>'+(cb.enabled?'开':'关')+'</b>'+(cb.stats?(' 待拉 '+(bs.queued||0)+' 已拉 '+(bs.pulled||0)+' 完成 '+(bs.done||0)+' 失败 '+(bs.failed||0)+' 已 STOP 号 '+(cs.stopped||0)):'')
+    ].filter(Boolean).map(function(s){return '<span>'+s+'</span>';}).join('');
+  }
+  function load(){
+    apiFetch('/api/player-care/overview',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;})
+      .then(function(d){if(d&&d.ok)render(d);else t('pc-notes','· 加载失败');}).catch(function(){t('pc-notes','· 加载失败');});
+  }
+  document.getElementById('pc-refresh').addEventListener('click',load);
+  load();setInterval(load,60000);
+})();
+</script>
+{% endblock %}

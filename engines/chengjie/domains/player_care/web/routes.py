@@ -15,6 +15,10 @@ commandbus 未开（``player_care.commandbus.enabled=false``）→ pull 永远�
 运营侧（本域内部，非契约）：
     POST /api/player-care/commands   {"kind": reengage|stop|note, "account", "phone", ...}   写权限
     GET  /api/player-care/commands?account=&status=&limit=                                 查看出箱
+
+B6 看板：
+    GET  /player-care/overview        HTML 页（manifest web.pages 挂侧栏，页面权限走核心 PAGE_PERMISSIONS）
+    GET  /api/player-care/overview    JSON（联系人数 / 阶段分布 / 明用命中 / 数字闸命中 / 网关健康 / 同步 / 出箱）
 """
 
 from __future__ import annotations
@@ -23,11 +27,13 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from ..commandbus import (
     ACK_STATUSES, KIND_NOTE, KIND_REENGAGE, KIND_STOP, KINDS, CommandOutbox,
     get_outbox, reengage_pool, resolve_commandbus_cfg, send_note, send_reengage, send_stop,
 )
+from ..overview import build_overview
 
 logger = logging.getLogger("PlayerCareWebRoutes")
 
@@ -44,6 +50,8 @@ def register_routes(app, ctx) -> None:
     config_manager = ctx.config_manager
     _api_auth = ctx.api_auth
     _api_write = ctx.api_write_factory
+    _page_auth = ctx.page_auth
+    templates = ctx.templates
 
     # ── 契约端点（手机侧调） ─────────────────────────────────────────────────
     @app.get("/api/commandbus/pull")
@@ -134,7 +142,20 @@ def register_routes(app, ctx) -> None:
             logger.debug("[player_care] 出箱查询失败", exc_info=True)
             return {"enabled": cfg["enabled"], "commands": [], "stats": {}}
 
-    logger.info("player_care web routes registered (commandbus pull/ack + operator commands)")
+    # ── B6 看板 ─────────────────────────────────────────────────────────────
+    @app.get("/api/player-care/overview")
+    async def api_player_care_overview(request: Request, _=Depends(_api_auth)):
+        try:
+            return build_overview(config_manager)
+        except Exception:
+            logger.warning("[player_care] overview 聚合失败", exc_info=True)
+            return {"ok": False, "error": "overview_failed"}
+
+    @app.get("/player-care/overview", response_class=HTMLResponse)
+    async def player_care_overview_page(request: Request, _=Depends(_page_auth)):
+        return templates.TemplateResponse(request, "player_care_overview.html", {})
+
+    logger.info("player_care web routes registered (commandbus pull/ack + operator commands + overview)")
 
 
 __all__ = ["register_routes"]

@@ -31,3 +31,17 @@ i18n:
 # B4：domains/player_care/web/routes.py —— commandbus 智聊侧端点（/api/commandbus/pull、/ack）+ 运营入箱；
 # 由 admin 按激活域自动挂载，只在 domain=player_care 的实例出现。
 web_routes: true
+
+# B6：看板页挂侧栏（运营区）；页面权限键无核心 PAGE_PERMISSIONS 条目 → 只有 master 可看。
+web:
+  routes: true
+  pages:
+    - key: player_care_overview
+      path: /player-care/overview
+      label: "玩家朋友看板"
+      label_simple: "玩家看板"
+      icon: pulse
+      section: ops
+      show_in_simple: true
+      roles: [master]
+      cmd_keys: "player overview 玩家 看板 阶段 网关"

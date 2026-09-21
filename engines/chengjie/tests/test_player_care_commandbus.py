@@ -228,7 +228,8 @@ def _client(cfg, ob):
     def _write(perm):
         return _auth
 
-    ctx = SimpleNamespace(config_manager=SimpleNamespace(config=cfg), api_auth=_auth, api_write_factory=_write)
+    ctx = SimpleNamespace(config_manager=SimpleNamespace(config=cfg), api_auth=_auth, api_write_factory=_write,
+                          page_auth=_auth, templates=None)
     register_routes(app, ctx)
     return TestClient(app)
 

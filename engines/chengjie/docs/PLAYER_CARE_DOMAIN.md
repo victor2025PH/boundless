@@ -114,9 +114,26 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - 合并那一轮给人设一条提示（`HANDOFF_CONTEXT_BLOCK`）：像老朋友换地方继续聊，不问“你是谁”、不提码/系统/迁移、无数字。
 - 配置 `player_care.handoff.{enabled=true, source_db_path="", link_local_identity=true}`。不动 story 实例任何画像；不发消息。测试 `tests/test_player_care_handoff.py`。
 
-## 6d. 尚未做
+## 6d. B6 看板（已做）
 
-5. **B6 看板**：每实例 `/player-care/overview`（联系人数 / 阶段分布 / 明用命中 / 数字闸命中 / 网关健康），上报智控。
+- `GET /player-care/overview`（HTML，页面鉴权 `page_auth`）+ `GET /api/player-care/overview`（JSON，`api_auth`：登录会话或 Bearer），
+  都在 `domains/player_care/web/routes.py`；页面模板 `domains/player_care/web/templates/player_care_overview.html`（域模板目录由 admin 自动加进 Jinja loader）。
+  manifest `web.pages` 挂侧栏「玩家朋友看板」（运营区），页面键 `player_care_overview` 不在核心 `PAGE_PERMISSIONS` 里 → **只有 master 能看**（要放开给 admin/viewer 得改核心表，没动）。
+  同样只在 `domain=player_care` 实例出现，story_matrix 实例无此页。
+- 聚合在 `domains/player_care/overview.py::build_overview`（只读，不查网关不发指令，库打不开 → 空计数 + `notes`）：
+  - `contacts`：总数 / 有手机号 / handoff 接入 / 7 日活跃 / 按账号；
+  - `stages`：七阶段分布（总 + 按账号）；
+  - `today`：当日 `inbound / lookups / found / visible（明用命中）/ gate_hits（数字闸命中）/ new_profiles / stage_ups` + 按账号行（复用 `daily_report`）；
+  - `gateway`：启用 / url / 密钥是否已设（不回密钥本身）/ 累计查询 / 最近查询时间 / 24h 内各画像最后一次 lookup 的 found⁄not_found⁄各 error 分布；
+    `status`：`unconfigured`（没配）/ `idle`（24h 没查过）/ `ok` / `degraded`（有传输或鉴权错）/ `down`（错占比 ≥ 50%）；`not_found` 不算错——查不到是正常业务；
+  - `sync`：开关 / 间隔 / 本进程上一轮 `run_player_sync` 摘要（`sync.last_sync_summary()`，含 `ts`）；
+  - `commandbus`：开关 + 出箱 `stats()`（开着才查）。
+- 库侧新增 `ContactStore.player_overview_counts(active_since, lookup_since)` 一次 SQL 聚合，不加表不加列。
+- 测试 `tests/test_player_care_overview.py`。
+
+## 6e. 尚未做
+
+- 看板上报智控（跨实例汇总）；页面权限放开给 admin/viewer（需动核心 `PAGE_PERMISSIONS`）。
 
 ## 7. 待老板 / 117 机补的输入
 

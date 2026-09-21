@@ -2967,6 +2967,48 @@ class ContactStore:
             out.setdefault(str(r["account_id"]), {})[str(r["stage"])] = int(r["n"])
         return out
 
+    def player_overview_counts(self, *, active_since: int = 0, lookup_since: int = 0) -> Dict[str, Any]:
+        """看板聚合：画像总数 / 有手机号 / 经 handoff 来的 / 活跃（last_seen>=active_since）/
+        按账号数；以及 ``lookup_since`` 以来最后一次查网关的结果分布（found / 各 error）。"""
+        with self._lock:
+            tot = self._conn.execute(
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN phone_e164!='' THEN 1 ELSE 0 END) AS with_phone, "
+                "SUM(CASE WHEN handoff_at>0 THEN 1 ELSE 0 END) AS handoff, "
+                "SUM(CASE WHEN last_seen>=? THEN 1 ELSE 0 END) AS active, "
+                "SUM(lookups) AS lookups_total, MAX(last_lookup_at) AS last_lookup_at "
+                "FROM player_profiles", (int(active_since),),
+            ).fetchone()
+            by_acct = self._conn.execute(
+                "SELECT account_id, COUNT(*) AS n FROM player_profiles GROUP BY account_id"
+            ).fetchall()
+            lk = self._conn.execute(
+                "SELECT last_found, last_error, COUNT(*) AS n FROM player_profiles "
+                "WHERE last_lookup_at>=? AND last_lookup_at>0 GROUP BY last_found, last_error",
+                (int(lookup_since),),
+            ).fetchall()
+        recent = {"total": 0, "found": 0, "not_found": 0, "errors": {}}
+        for r in lk:
+            n = int(r["n"])
+            recent["total"] += n
+            if int(r["last_found"] or 0):
+                recent["found"] += n
+            elif str(r["last_error"] or "") in ("", "not_found"):
+                recent["not_found"] += n
+            else:
+                e = str(r["last_error"])
+                recent["errors"][e] = recent["errors"].get(e, 0) + n
+        return {
+            "total": int(tot["n"] or 0),
+            "with_phone": int(tot["with_phone"] or 0),
+            "handoff": int(tot["handoff"] or 0),
+            "active": int(tot["active"] or 0),
+            "lookups_total": int(tot["lookups_total"] or 0),
+            "last_lookup_at": int(tot["last_lookup_at"] or 0),
+            "by_account": {str(r["account_id"]): int(r["n"]) for r in by_acct},
+            "recent_lookups": recent,
+        }
+
     def bump_player_daily(self, day: str, account_id: str, **counters: int) -> None:
         """日计数自增（只认 PLAYER_DAILY_COUNTERS 里的键）。"""
         inc = {k: int(v) for k, v in counters.items() if k in PLAYER_DAILY_COUNTERS and int(v)}

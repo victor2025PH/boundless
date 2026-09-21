@@ -33,6 +33,13 @@ DEFAULT_INTERVAL_MIN = 30.0
 MIN_INTERVAL_MIN = 5.0
 CREATED_BY = "player_sync"
 
+_last_summary: Dict[str, Any] = {}
+
+
+def last_sync_summary() -> Dict[str, Any]:
+    """本进程最近一轮 ``run_player_sync`` 的摘要（含 ``ts``），没跑过则 ``{}``。"""
+    return dict(_last_summary)
+
 
 def resolve_sync_cfg(cfg_root: Any) -> Dict[str, Any]:
     root = cfg_root
@@ -132,6 +139,18 @@ def run_player_sync(cfg_root: Any, config_path: Any = None, *,
     ts = float(now if now is not None else time.time())
     summary: Dict[str, Any] = {"scanned": 0, "looked_up": 0, "found": 0, "deposits": 0,
                                "dormant": 0, "goals": 0, "commands": 0, "errors": 0, "skipped": ""}
+    try:
+        return _run_player_sync(cfg_root, config_path, summary, ts, gateway=gateway, profile=profile,
+                                goal_store=goal_store, outbox=outbox, sleep=sleep)
+    finally:
+        _last_summary.clear()
+        _last_summary.update(summary, ts=int(ts))
+
+
+def _run_player_sync(cfg_root: Any, config_path: Any, summary: Dict[str, Any], ts: float, *,
+                     gateway: Optional[PlayerGateway], profile: Optional[PlayerProfileService],
+                     goal_store: Any, outbox: Optional[CommandOutbox],
+                     sleep: Callable[[float], None]) -> Dict[str, Any]:
     scfg = resolve_sync_cfg(cfg_root)
     if not scfg["enabled"]:
         summary["skipped"] = "disabled"
