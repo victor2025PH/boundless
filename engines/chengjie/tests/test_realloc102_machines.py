@@ -79,6 +79,16 @@ def test_phases_cover_runbook_targets(rm):
     assert not any(k in s.cmd.lower() for s in p4.steps for k in ("stop_instance", "robocopy", "restart"))
 
 
+def test_phase0_hardening_is_opt_in(rm):
+    """setx OLLAMA_HOST 只在 --harden-ollama 时进步骤；缺省给调用方统计（先看谁在打 176 Ollama）。"""
+    default = rm.build_phase0()
+    assert not any("setx OLLAMA_HOST" in s.cmd for s in default.steps)
+    assert any("server.log" in s.cmd and s.optional for s in default.steps)
+    hard = rm.build_phase0(harden_ollama=True)
+    assert any("setx OLLAMA_HOST" in s.cmd and s.optional for s in hard.steps)
+    assert rm.BUILDERS["phase0"](harden_ollama=True).steps[-1].cmd.startswith("setx OLLAMA_HOST")
+
+
 def test_phase3_comfy_task_placeholder(rm):
     without = rm.build_phase3()
     assert any(s.cmd.startswith("skip:") and s.optional for s in without.steps)

@@ -66,7 +66,12 @@ class Phase:
     verify: List[Step] = field(default_factory=list)
 
 
-def build_phase0() -> Phase:
+def build_phase0(harden_ollama: bool = False) -> Phase:
+    hardening = [
+        Step(H176, "setx OLLAMA_HOST 127.0.0.1:11434 /M",
+             "176 Ollama 只听本机（重启 Ollama 后生效；先确认 translation.engines.ollama_mt 等无 LAN 消费方）",
+             optional=True),
+    ] if harden_ollama else []
     return Phase("phase0", "176 减负 + 识图切 198", steps=[
         Step(H176, _ollama_generate(QWEN30B, 0),
              "176 立即卸载 qwen3:30b（18.7G；调用方对练脚本已改指 173）", expect='"done":true'),
@@ -85,9 +90,11 @@ def build_phase0() -> Phase:
              "198 放行 104（实测 104→198:11434 不通）"),
         Step(H176, 'schtasks /Query /FO LIST | findstr /i "comfy musetalk lipsync"',
              "176 列出 ComfyUI / musetalk 计划任务名（发现，下一步人工 /Disable）", optional=True),
-        Step(H176, "setx OLLAMA_HOST 127.0.0.1:11434 /M",
-             "176 Ollama 只听本机（加固；生效需重启 Ollama，识图切走后无 LAN 消费方）", optional=True),
-    ], overlay_phase="phase0", verify=[
+        Step(H176, 'powershell -NoProfile -Command "Get-Content $env:LOCALAPPDATA\\Ollama\\server.log -Tail 4000 '
+                   '| Select-String -SimpleMatch \'/api/\' | ForEach-Object { ($_.Line -split \'\\|\')[3].Trim() } '
+                   '| Group-Object | Sort-Object Count -Descending | Select-Object -First 8 | Format-Table -HideTableHeaders"',
+             "176 Ollama 最近调用方 IP 统计（决定能不能收 OLLAMA_HOST）", optional=True),
+    ] + hardening, overlay_phase="phase0", verify=[
         Step(H176, "nvidia-smi --query-gpu=memory.used --format=csv,noheader", "176 显存应 ≤ 16000 MiB"),
         Step("local", "http://192.168.0.198:11434/api/ps", "198 qwen3-vl 常驻", expect=VL_MODEL),
     ])
@@ -157,7 +164,7 @@ def build_phase4() -> Phase:
 
 
 BUILDERS: Dict[str, Callable[..., Phase]] = {
-    "phase0": lambda **kw: build_phase0(),
+    "phase0": lambda **kw: build_phase0(bool(kw.get("harden_ollama", False))),
     "phase1": lambda **kw: build_phase1(),
     "phase2": lambda **kw: build_phase2(),
     "phase3": lambda **kw: build_phase3(kw.get("comfy_task", "")),
@@ -272,10 +279,12 @@ def main() -> int:
     ap.add_argument("phase", choices=PHASES)
     ap.add_argument("--apply", action="store_true", help="真跑（默认只打印步骤）")
     ap.add_argument("--comfy-task", default="", help="phase3：104 上 ComfyUI 的计划任务名")
+    ap.add_argument("--harden-ollama", action="store_true",
+                    help="phase0：附带把 176 OLLAMA_HOST 收回 127.0.0.1（先看调用方统计，确认无 LAN 消费方）")
     ap.add_argument("--overlay-arg", action="append", default=[],
                     help="透传给 realloc102.py 的额外参数（如 --svc-token-env NAME）")
     a = ap.parse_args()
-    phase = BUILDERS[a.phase](comfy_task=a.comfy_task)
+    phase = BUILDERS[a.phase](comfy_task=a.comfy_task, harden_ollama=a.harden_ollama)
     if a.phase == "phase4" and a.apply:
         print("phase4 只做只读预检；迁移本体按 docs/实施102 §7.1 阶段 4 在 04:00 窗手工执行。")
     return run_phase(phase, apply=a.apply, overlay_extra=a.overlay_arg)
