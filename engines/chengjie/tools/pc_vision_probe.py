@@ -12,7 +12,7 @@ api_key 随便给——Ollama 忽略 Bearer）。
 
 用法：
   python -m tools.pc_vision_probe                # 默认 176 + 1280x800
-  python -m tools.pc_vision_probe --base-url http://192.168.0.176:11434/v1 --model qwen3-vl:8b-instruct
+  python -m tools.pc_vision_probe --base-url http://192.168.0.198:11434/v1 --model qwen3-vl:8b-instruct
 """
 from __future__ import annotations
 
@@ -135,7 +135,8 @@ def _interpret(nums: List[float], w: int, h: int,
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://192.168.0.176:11434/v1")
+    # 实施102（2026-09-22）：识图单点 198 视觉机
+    ap.add_argument("--base-url", default="http://192.168.0.198:11434/v1")
     ap.add_argument("--model", default="qwen3-vl:8b-instruct")
     ap.add_argument("--api-key", default=os.environ.get("PC_VISION_KEY", "ollama"))
     ap.add_argument("--w", type=int, default=1280)

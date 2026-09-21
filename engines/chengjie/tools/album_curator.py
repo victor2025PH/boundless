@@ -4,7 +4,7 @@
 用法（一次性策展 + 可重复增量）：
     python tools/album_curator.py --src "D:/图库/小生套可爱系列95" \
         --persona lin_xiaoyu --album-root <data>/config/persona_albums \
-        --vlm http://192.168.0.176:11434/v1 --model qwen2.5vl:7b
+        --vlm http://192.168.0.198:11434/v1 --model qwen3-vl:8b-instruct
 
 产出：
   album_root/<persona>/
@@ -112,8 +112,9 @@ def main() -> int:
     ap.add_argument("--src", required=True)
     ap.add_argument("--persona", required=True)
     ap.add_argument("--album-root", required=True)
-    ap.add_argument("--vlm", default="http://192.168.0.176:11434/v1")
-    ap.add_argument("--model", default="qwen2.5vl:7b")
+    # 实施102（2026-09-22）：识图单点 198 视觉机；176 Ollama 不再对外供识图
+    ap.add_argument("--vlm", default="http://192.168.0.198:11434/v1")
+    ap.add_argument("--model", default="qwen3-vl:8b-instruct")
     ap.add_argument("--limit", type=int, default=0, help="调试用：只处理前 N 张")
     args = ap.parse_args()
 

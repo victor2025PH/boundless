@@ -51,8 +51,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--db", required=True)
-    ap.add_argument("--vlm", default="http://192.168.0.176:11434/v1")
-    ap.add_argument("--model", default="qwen2.5vl:7b")
+    # 实施102（2026-09-22）：识图单点 198 视觉机；176 Ollama 不再对外供识图
+    ap.add_argument("--vlm", default="http://192.168.0.198:11434/v1")
+    ap.add_argument("--model", default="qwen3-vl:8b-instruct")
     args = ap.parse_args()
 
     mf_path = Path(args.manifest)
