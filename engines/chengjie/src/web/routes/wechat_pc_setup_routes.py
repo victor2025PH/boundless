@@ -40,6 +40,16 @@ DEFAULT_WORK_HOURS = (8, 23)
 SENDING_TIERS = ("semi", "auto_reply")
 
 
+def _clamp_float(raw: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if v != v:
+        return default
+    return max(lo, min(hi, v))
+
+
 def _cfg(request: Request) -> Dict[str, Any]:
     cm = getattr(request.app.state, "config_manager", None)
     return dict(getattr(cm, "config", None) or {}) if cm is not None else {}
@@ -555,6 +565,39 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         rows = await asyncio.get_event_loop().run_in_executor(None, pool.status_all)
         primary = pool.primary
         return {"ok": True, "primary_account_id": primary.account_id if primary else "", "accounts": rows}
+
+    @app.get("/api/setup/wechat_pc/accounts/{account_id}/report")
+    async def api_pc_account_report(account_id: str, request: Request, _=Depends(api_auth)):
+        """单账号运营日报 + 消息时间线：``?hours=24&limit=30``。收/发条数、联系人数、已回复数、
+        最近收发时间 + 最新 N 条（文本截断）。inbox_store 未挂载 → 全零空表（老部署不 500）。"""
+        import asyncio
+        aid = str(account_id or "").strip()[:40]
+        if not aid:
+            raise HTTPException(404, "unknown_account")
+        hours = _clamp_float(request.query_params.get("hours"), 24.0, 1.0, 24.0 * 31)
+        limit = int(_clamp_float(request.query_params.get("limit"), 30.0, 1.0, 200.0))
+        since = time.time() - hours * 3600.0
+        store = getattr(request.app.state, "inbox_store", None)
+        rep: Dict[str, Any] = {
+            "in_n": 0, "out_n": 0, "peers": 0, "peers_replied": 0,
+            "last_in_ts": 0.0, "last_out_ts": 0.0, "timeline": [],
+        }
+        if store is not None and hasattr(store, "account_activity_report"):
+            try:
+                rep = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: store.account_activity_report("wechat", aid, since_ts=since, limit=limit))
+            except Exception:
+                logger.debug("[pc_setup] 账号日报读取失败", exc_info=True)
+        sup = _pool(request).get(aid)
+        hb: Dict[str, Any] = {}
+        if sup is not None:
+            try:
+                st = await asyncio.get_event_loop().run_in_executor(None, sup.status)
+                hb = {k: st.get(k) for k in ("state", "managed", "tier", "heartbeat", "events")}
+            except Exception:
+                hb = {}
+        return {"ok": True, "account_id": aid, "platform": "wechat", "hours": hours,
+                "since_ts": since, "report": rep, "supervisor": hb}
 
     @app.post("/api/setup/wechat_pc/accounts")
     async def api_pc_accounts_upsert(request: Request, _=Depends(api_auth)):

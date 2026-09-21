@@ -486,3 +486,33 @@ def test_group_inbound_since_returns_humans_in_time_order(tmp_path):
     assert store.group_inbound_since("g1", since_ts=1550.0)[0]["text"] == "多少钱"
     assert store.group_inbound_since("") == []
     store.close()
+
+
+def test_account_activity_report_scopes_by_account_and_window(tmp_path):
+    """每账号日报：只算本平台本账号的会话；窗口外/对端删的消息不计；未回复联系人 = peers - peers_replied；
+    时间线按 ts 降序且文本截断。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv("wechat:A:zhang", platform="wechat", account_id="A", chat_key="zhang", display_name="张三"))
+    store.upsert_conversation(_conv("wechat:A:li", platform="wechat", account_id="A", chat_key="li", display_name="李四"))
+    store.upsert_conversation(_conv("wechat:B:wang", platform="wechat", account_id="B", chat_key="wang", display_name="王五"))
+    now = 1_000_000.0
+    store.ingest_message(InboxMessage(conversation_id="wechat:A:zhang", platform_msg_id="z1", text="在吗", ts=now - 100))
+    store.ingest_message(InboxMessage(conversation_id="wechat:A:zhang", platform_msg_id="z2", direction="out", text="在的" * 60, ts=now - 50))
+    store.ingest_message(InboxMessage(conversation_id="wechat:A:li", platform_msg_id="l1", text="报价多少", ts=now - 30))
+    store.ingest_message(InboxMessage(conversation_id="wechat:A:li", platform_msg_id="old", text="很久以前", ts=now - 90_000))
+    store.ingest_message(InboxMessage(conversation_id="wechat:A:li", platform_msg_id="del", text="撤回了", ts=now - 10))
+    store.soft_delete_by_platform_msg_ids("wechat", "A", ["del"], deleted_by="peer")
+    store.ingest_message(InboxMessage(conversation_id="wechat:B:wang", platform_msg_id="w1", text="B 号的消息", ts=now - 5))
+
+    rep = store.account_activity_report("wechat", "A", since_ts=now - 86_400, limit=10, text_chars=8)
+    assert (rep["in_n"], rep["out_n"], rep["peers"], rep["peers_replied"]) == (2, 1, 2, 1)
+    assert rep["last_in_ts"] == now - 30 and rep["last_out_ts"] == now - 50
+    tl = rep["timeline"]
+    assert [m["display_name"] for m in tl] == ["李四", "张三", "张三"], "ts 降序，窗口外/对端删的不进时间线"
+    assert tl[1]["direction"] == "out" and tl[1]["text"] == "在的在的在的在的…"
+    assert "B 号" not in "".join(m["text"] for m in tl)
+
+    rep_b = store.account_activity_report("wechat", "B", since_ts=now - 86_400)
+    assert (rep_b["in_n"], rep_b["out_n"], rep_b["peers"], rep_b["peers_replied"]) == (1, 0, 1, 0)
+    assert store.account_activity_report("wechat", "", since_ts=0)["timeline"] == []
+    store.close()

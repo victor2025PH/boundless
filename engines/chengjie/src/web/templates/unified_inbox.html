@@ -3282,6 +3282,54 @@ function _bridgePresence(h){
    2026-09-19：离线/看不到窗口时主 CTA 换成就地「启动副驾」/「还原微信窗口」（主管专属；复用引导页第 ③ 步
    的 copilot/start、launch-wechat 端点），不再让人为了一个按钮跳去引导页。 */
 const _PC_CARD_SUP={{ 'true' if is_supervisor else 'false' }};
+/* 每账号 24h 运营日报 + 消息时间线（2026-09-21 P2）：数据来自 GET /api/setup/wechat_pc/accounts/{id}/report，
+   卡片渲染后异步补齐（renderDrawerAccounts 同步出卡，日报晚到只改本卡的 .acct-report 不整体重绘）。
+   _pcReports[aid]={rep, open, ts} 缓存 60s；点「时间线」展开最新 N 条，再点收起。 */
+const _pcReports={};
+function _pcAgo(ts){
+  if(!ts) return window.T('inbox.acct.rep_never');
+  const s=Math.max(0,Math.round(Date.now()/1000-Number(ts)));
+  if(s<60) return window.T('inbox.acct.rep_just_now');
+  if(s<3600) return window.Tf('inbox.acct.rep_min_ago',{n:Math.round(s/60)});
+  if(s<86400) return window.Tf('inbox.acct.rep_hour_ago',{n:Math.round(s/3600)});
+  return window.Tf('inbox.acct.rep_day_ago',{n:Math.round(s/86400)});
+}
+function _pcReportHtml(ent,aid){
+  if(!ent||!ent.rep) return `<div class="acct-rep-line muted">${esc(window.T('inbox.acct.rep_loading'))}</div>`;
+  const r=ent.rep;
+  const pending=Math.max(0,(r.peers||0)-(r.peers_replied||0));
+  const stat=window.Tf('inbox.acct.rep_stat',{in_n:r.in_n||0,out_n:r.out_n||0,peers:r.peers||0});
+  const last=(r.in_n||r.out_n)?window.Tf('inbox.acct.rep_last',{in_ago:_pcAgo(r.last_in_ts),out_ago:_pcAgo(r.last_out_ts)}):window.T('inbox.acct.rep_empty');
+  const warn=pending?`<span class="acct-rep-pending" title="${esc(window.T('inbox.acct.rep_pending_t'))}">${esc(window.Tf('inbox.acct.rep_pending',{n:pending}))}</span>`:'';
+  const tl=(ent.open&&Array.isArray(r.timeline)&&r.timeline.length)?`<ul class="acct-timeline">${r.timeline.map(m=>{
+    const who=m.display_name||'?';
+    const txt=m.text||(m.media_type?`[${m.media_type}]`:'');
+    return `<li class="${m.direction==='out'?'out':'in'}" title="${esc(new Date((m.ts||0)*1000).toLocaleString())}"><span class="tl-ago">${esc(_pcAgo(m.ts))}</span><span class="tl-dir">${m.direction==='out'?'→':'←'}</span><span class="tl-who">${esc(who)}</span><span class="tl-txt">${esc(txt)}</span></li>`;
+  }).join('')}</ul>`:(ent.open?`<div class="acct-rep-line muted">${esc(window.T('inbox.acct.rep_empty'))}</div>`:'');
+  return `<div class="acct-rep-line"><span class="acct-rep-stat">${esc(stat)}</span>${warn}<button type="button" class="acct-rep-toggle" onclick="togglePcTimeline('${esc(aid)}')">${esc(ent.open?window.T('inbox.acct.rep_hide'):window.T('inbox.acct.rep_timeline'))}</button></div>
+    <div class="acct-rep-line muted">${esc(last)}</div>${tl}`;
+}
+function _pcPaintReport(aid){
+  document.querySelectorAll('.acct-report[data-rep-aid="'+String(aid).replace(/"/g,'\\22 ')+'"]').forEach(el=>{ el.innerHTML=_pcReportHtml(_pcReports[String(aid)],aid); });
+}
+async function _pcLoadReport(aid,force){
+  const key=String(aid); const ent=_pcReports[key]||(_pcReports[key]={rep:null,open:false,ts:0});
+  if(!force&&ent.rep&&(Date.now()-ent.ts)<60000) return;
+  try{
+    const res=await _acctFetch(`/api/setup/wechat_pc/accounts/${enc(aid)}/report?hours=24&limit=30`,{},8000);
+    if(res.okHttp&&res.data&&res.data.ok){ ent.rep=res.data.report||{}; ent.ts=Date.now(); }
+    else if(res.status===404) ent.rep={in_n:0,out_n:0,peers:0,peers_replied:0,timeline:[]};
+  }catch(_){}
+  _pcPaintReport(aid);
+}
+function _pcLoadReports(el){
+  (el||document).querySelectorAll('.acct-report[data-rep-aid]').forEach(n=>{ _pcLoadReport(n.getAttribute('data-rep-aid')||''); });
+}
+function togglePcTimeline(aid){
+  const key=String(aid); const ent=_pcReports[key]||(_pcReports[key]={rep:null,open:false,ts:0});
+  ent.open=!ent.open; _pcPaintReport(aid);
+  if(ent.open) _pcLoadReport(aid,true);
+}
 function _pcCopilotCardHtml(hist){
   const rows=(hist||[]).filter(h=>h&&h.platform==='wechat'&&String(h.status||'')==='desktop');
   const pc=platColor('wechat');
@@ -3321,6 +3369,7 @@ function _pcCopilotCardHtml(hist){
           ${h.unread?`<span class="ac-unread">${h.unread>99?'99+':h.unread}</span>`:''}
           ${pill}
         </div>${bar}
+        <div class="acct-report" data-rep-aid="${esc(h.account_id)}">${_pcReportHtml(_pcReports[String(h.account_id)],h.account_id)}</div>
         <div class="acct-actions">
           ${primary}${view}${guide}
         </div>
@@ -14863,7 +14912,7 @@ function renderMessages(c, msgs, opts={}){
     // 的译文行整体不渲染，存量落库的「AI 识图汤」旧译文一并收口。
     const _inMeta=m._xlMeta||((m.translation&&typeof m.translation==='object')?m.translation:null);
     const _xlSrc=_xlateSrcText(m.text);
-    const xlate=(_xlSrc&&_meaningfulXlate(_xlSrc,_xlText))?`<div class="msg-translation${_xlAuto}">${esc(_xlText)}${m._xlCached?`<span class="tm-badge">${window.T('inbox.msg.mem_badge')}</span>`:''}${_inMeta?_xlWarnBadge(_inMeta):''}</div>`:'';
+    const xlate=(_xlSrc&&_meaningfulXlate(_xlSrc,_xlText))?`<div class="msg-translation${_xlAuto}">${esc(_xlText)}${m._xlCached?`<span class="tm-badge">${window.T('inbox.xl.cached')}</span>`:''}${_inMeta?_xlWarnBadge(_inMeta):''}</div>`:'';
     // P0/P1：出向「原文」副行——一击直发后实发为译文（气泡主体），此处回显坐席输入的中文原文。
     // 优先用服务端持久映射（m.agent_original，跨刷新/重启），回退会话级内存 _outOrigMap。
     let _outSub='';
@@ -24335,7 +24384,7 @@ async function xlateMsg(msgId,text){
   try{
     const res=await _doTranslate(text,lang,'inbound_display');   // P4-B：手动译客户消息计入入站成本
     if(res){
-      if(_meaningfulXlate(text,res.text)) _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.msg.mem_badge')+'</span>':'')+_xlWarnBadge(res));
+      if(_meaningfulXlate(text,res.text)) _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.xl.cached')+'</span>':'')+_xlWarnBadge(res));
       else _txPatch(tx,'<span style="opacity:.6;font-size:11px;">'+window.T('inbox.xl.identity_eq')+'</span>');
     }
     else tx.textContent=window.T('inbox.xl.unavailable');
@@ -24510,7 +24559,7 @@ function _applyXlResult(m,lang,res){
     let tx=bub.querySelector('.msg-translation');
     if(!tx){tx=document.createElement('div');tx.className='msg-translation auto';bub.appendChild(tx);}
     tx.classList.remove('xl-skel');
-    _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.msg.mem_badge')+'</span>':'')+_xlWarnBadge(res));
+    _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.xl.cached')+'</span>':'')+_xlWarnBadge(res));
   }
 }
 // 骨架占位：批量请求在途时给待译消息一条 shimmer 行（消除「译文行突然出现」的布局跳动）。
@@ -26111,6 +26160,7 @@ function renderDrawerAccounts(){
     }
   }
   el.innerHTML=html;
+  try{ _pcLoadReports(el); }catch(_){}
   // 引导出现时脉冲首个「同步记录」按钮，把提示锚定到具体控件
   if(el.querySelector('#acct-sync-hint')){
     const need=_tgAccountsNeedingSync();

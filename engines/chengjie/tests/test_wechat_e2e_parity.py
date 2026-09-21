@@ -679,6 +679,25 @@ def test_wechat_kf_connect_guide_backend(wx_env, monkeypatch):
         assert acc["primary_account_id"] == sup.account_id and [a["account_id"] for a in acc["accounts"]] == [sup.account_id, "wx-b"]
         w = client.get("/api/setup/wechat_pc/windows").json()
         assert [x["bound_account_id"] for x in w["windows"]] == ["", "wx-b"]
+        # 每账号 24h 日报/时间线（P2）：只算本账号会话，B 号的不串到主账号；带 supervisor 摘要；不在池里的 id 也能查（全零）
+        from src.inbox.models import InboxConversation, InboxMessage
+        ibx = app.state.inbox_store
+        _t = time.time()
+        for aid, ck, name in ((sup.account_id, "zhang", "张三"), ("wx-b", "wang", "王五")):
+            ibx.upsert_conversation(InboxConversation(conversation_id=f"wechat:{aid}:{ck}", platform="wechat", account_id=aid,
+                                                      chat_key=ck, display_name=name, last_text="x", last_ts=_t))
+        ibx.ingest_message(InboxMessage(conversation_id=f"wechat:{sup.account_id}:zhang", platform_msg_id="r1", text="在吗", ts=_t - 60))
+        ibx.ingest_message(InboxMessage(conversation_id=f"wechat:{sup.account_id}:zhang", platform_msg_id="r2", direction="out", text="在", ts=_t - 30))
+        ibx.ingest_message(InboxMessage(conversation_id="wechat:wx-b:wang", platform_msg_id="r3", text="B 号", ts=_t - 10))
+        rep = client.get(f"/api/setup/wechat_pc/accounts/{sup.account_id}/report?hours=24&limit=5").json()
+        assert rep["ok"] and rep["account_id"] == sup.account_id and rep["hours"] == 24.0
+        assert (rep["report"]["in_n"], rep["report"]["out_n"], rep["report"]["peers"], rep["report"]["peers_replied"]) == (1, 1, 1, 1)
+        assert [m["direction"] for m in rep["report"]["timeline"]] == ["out", "in"] and rep["report"]["timeline"][0]["display_name"] == "张三"
+        assert rep["supervisor"]["managed"] is False and "heartbeat" in rep["supervisor"]
+        repb = client.get("/api/setup/wechat_pc/accounts/wx-b/report?hours=0.001&limit=999").json()
+        assert repb["hours"] == 1.0 and repb["report"]["in_n"] == 1 and repb["report"]["timeline"][0]["text"] == "B 号" and repb["supervisor"]["managed"] is True
+        repx = client.get("/api/setup/wechat_pc/accounts/nope/report").json()
+        assert repx["ok"] and repx["report"]["peers"] == 0 and repx["supervisor"] == {}
         # 同一个窗口不能绑给两个账号；非法 id 拒绝
         assert client.post("/api/setup/wechat_pc/accounts", json={"window_pid": 202}).status_code == 400
         assert client.post("/api/setup/wechat_pc/accounts", json={"account_id": "a b"}).status_code == 400

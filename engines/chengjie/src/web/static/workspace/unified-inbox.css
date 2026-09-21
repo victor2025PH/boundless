@@ -3638,6 +3638,22 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .acct-mismatch.warn{color:var(--tk-warn-ink,#b45309);background:rgba(245,158,11,.10);border-left-color:var(--tk-amber,#f59e0b);}
 .acct-mismatch svg{flex:none;margin-top:1px;}
 .acct-card.mismatch{border-color:color-mix(in srgb,var(--tk-danger,#e11d48) 45%,transparent);}
+/* 每账号 24h 日报 + 时间线（PC 副驾卡） */
+.acct-report{margin:6px 0 0;font-size:11.5px;line-height:1.45;}
+.acct-rep-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.acct-rep-line.muted{color:var(--tk-ink-3,#6b7280);font-size:11px;}
+.acct-rep-stat{font-variant-numeric:tabular-nums;color:var(--tk-ink-2,#374151);}
+.acct-rep-pending{color:var(--tk-warn-ink,#b45309);background:rgba(245,158,11,.12);border-radius:999px;padding:0 7px;font-size:10.5px;}
+.acct-rep-toggle{margin-left:auto;border:0;background:none;color:var(--acct-accent,#16a34a);font-size:11px;cursor:pointer;padding:0 2px;}
+.acct-rep-toggle:hover{text-decoration:underline;}
+.acct-timeline{list-style:none;margin:6px 0 0;padding:6px 0 0;border-top:1px dashed var(--tk-line,#e5e7eb);max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:3px;}
+.acct-timeline li{display:grid;grid-template-columns:56px 12px minmax(48px,88px) 1fr;gap:6px;align-items:baseline;font-size:11px;min-width:0;}
+.acct-timeline .tl-ago{color:var(--tk-ink-3,#6b7280);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.acct-timeline .tl-dir{text-align:center;color:var(--tk-ink-3,#6b7280);}
+.acct-timeline li.out .tl-dir{color:var(--acct-accent,#16a34a);}
+.acct-timeline .tl-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-ink-2,#374151);}
+.acct-timeline .tl-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-ink,#111827);}
+.acct-timeline li.out .tl-txt{color:var(--tk-ink-2,#374151);}
 
 /* ===== 只读历史视角横幅（会话列表顶部，进入视角时点亮）===== */
 .hist-view-banner{display:none;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--warn,#f59e0b) 9%,var(--bg-panel));color:var(--text-main);font-size:12px;line-height:1.45;}

@@ -241,6 +241,15 @@ def test_inbox_pc_card_shows_identity_binding_and_mismatch():
         assert k in P.ZH and k in P.EN, k
     for k in ("inbox.acct.bridge_mismatch", "inbox.acct.pc_bound_ok", "inbox.acct.pc_bound_bad", "inbox.acct.pc_unbound", "inbox.acct.pc_mismatch_bar"):
         assert k in P.ZH and k in P.EN, k
+    # 每账号 24h 日报 + 时间线：卡片带 .acct-report 占位、渲染后异步拉 /accounts/{id}/report、可展开收起
+    assert 'class="acct-report" data-rep-aid=' in html and "_pcLoadReports(el)" in html
+    assert "/api/setup/wechat_pc/accounts/${enc(aid)}/report?hours=24" in html and "togglePcTimeline(" in html
+    for cls in (".acct-report", ".acct-rep-pending", ".acct-rep-toggle", ".acct-timeline li.out"):
+        assert cls in css, cls
+    rep_keys = _tpl_and_i18n_keys(html, "inbox.acct.rep_")
+    assert {"inbox.acct.rep_stat", "inbox.acct.rep_pending", "inbox.acct.rep_timeline", "inbox.acct.rep_hide"} <= rep_keys
+    for k in rep_keys:
+        assert k in P.ZH and k in P.EN, k
 
 
 def test_pc_guide_step3_multi_account_cards_and_window_picker():

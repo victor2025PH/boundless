@@ -10475,6 +10475,79 @@ class InboxStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def account_activity_report(
+        self, platform: str, account_id: str, *,
+        since_ts: float, limit: int = 30, text_chars: int = 60,
+    ) -> Dict[str, Any]:
+        """单账号运营日报 + 消息时间线（工作台账号卡用；跨会话按 conversations.account_id 归属）。
+
+        统计窗口 ``[since_ts, now)``：收/发条数、有来往的联系人数、我方已回复的联系人数、
+        最近一条收/发的时间；``timeline`` 为窗口内最新 ``limit`` 条（ts 降序），文本截到
+        ``text_chars`` 字——卡片只需一眼看出「谁在聊、回了没」，全文仍走会话线程。
+        对端删的消息不计；坐席「仅工作台删除」按业务口径照计（事实未变）。
+        """
+        plat = str(platform or "").strip().lower()
+        acct = str(account_id or "").strip()
+        since = float(since_ts or 0)
+        empty: Dict[str, Any] = {
+            "in_n": 0, "out_n": 0, "peers": 0, "peers_replied": 0,
+            "last_in_ts": 0.0, "last_out_ts": 0.0, "timeline": [],
+        }
+        if not plat or not acct:
+            return empty
+        try:
+            with self._lock:
+                agg = self._conn.execute(
+                    """SELECT
+                         SUM(CASE WHEN m.direction='in'  THEN 1 ELSE 0 END) AS in_n,
+                         SUM(CASE WHEN m.direction='out' THEN 1 ELSE 0 END) AS out_n,
+                         COUNT(DISTINCT m.conversation_id) AS peers,
+                         COUNT(DISTINCT CASE WHEN m.direction='out'
+                                             THEN m.conversation_id END) AS peers_replied,
+                         MAX(CASE WHEN m.direction='in'  THEN m.ts END) AS last_in_ts,
+                         MAX(CASE WHEN m.direction='out' THEN m.ts END) AS last_out_ts
+                       FROM messages m
+                       JOIN conversations c ON c.conversation_id = m.conversation_id
+                       WHERE c.platform = ? AND c.account_id = ? AND m.ts >= ?
+                         AND m.deleted_by != 'peer'""",
+                    (plat, acct, since),
+                ).fetchone()
+                rows = self._conn.execute(
+                    """SELECT m.conversation_id, c.display_name, c.chat_type,
+                              m.direction, m.text, m.media_type, m.ts
+                       FROM messages m
+                       JOIN conversations c ON c.conversation_id = m.conversation_id
+                       WHERE c.platform = ? AND c.account_id = ? AND m.ts >= ?
+                         AND m.deleted_by != 'peer'
+                       ORDER BY m.ts DESC, m.rowid DESC LIMIT ?""",
+                    (plat, acct, since, max(1, min(int(limit), 200))),
+                ).fetchall()
+        except Exception:
+            logger.debug("account_activity_report failed", exc_info=True)
+            return empty
+        cap = max(0, int(text_chars))
+        timeline: List[Dict[str, Any]] = []
+        for r in rows:
+            text = str(r["text"] or "")
+            timeline.append({
+                "conversation_id": str(r["conversation_id"]),
+                "display_name": str(r["display_name"] or ""),
+                "is_group": str(r["chat_type"] or "") == "group",
+                "direction": "out" if str(r["direction"] or "") == "out" else "in",
+                "text": text[:cap] + ("…" if len(text) > cap else ""),
+                "media_type": str(r["media_type"] or ""),
+                "ts": float(r["ts"] or 0),
+            })
+        return {
+            "in_n": int((agg["in_n"] if agg else 0) or 0),
+            "out_n": int((agg["out_n"] if agg else 0) or 0),
+            "peers": int((agg["peers"] if agg else 0) or 0),
+            "peers_replied": int((agg["peers_replied"] if agg else 0) or 0),
+            "last_in_ts": float((agg["last_in_ts"] if agg else 0) or 0),
+            "last_out_ts": float((agg["last_out_ts"] if agg else 0) or 0),
+            "timeline": timeline,
+        }
+
     def conv_exchange_stats(self, conversation_id: str) -> Dict[str, Any]:
         """单会话往来统计（旅程阶段推导用）：双向条数 + 有互动的自然日数。"""
         with self._lock:
