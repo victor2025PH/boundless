@@ -118,7 +118,8 @@ def test_load_seats_from_real_ledger_excludes_140(msl):
     names = " ".join(s["name"] for s in seats)
     for legacy in ("听写", "智拓", "幻颜", "云升", "口型", "脸备", "韵声"):
         assert legacy not in names, names
-    for cur in ("173 语言机(", "104 声音机(", "198 视觉机("):
+    # 2026-09-22 实施102：104 声音机 → 出图机（语音主路回 176）；173 在阶段 4 迁移完成前仍是坐席
+    for cur in ("173 语言机(", "104 出图机(", "198 视觉机("):
         assert cur in names, names
     # 显示名括号里是主别名 ssh[0]；状态键 id 与旧别名一致（水位不丢）
     by_id = {s["id"]: s for s in seats}
@@ -205,12 +206,15 @@ def test_load_compute_is_176_and_140_non_seat_compute(msl):
     nodes = msl.load_compute()
     assert [n["id"] for n in nodes] == ["zhongshu", "tingxie"]
     by_id = {n["id"]: n for n in nodes}
-    assert by_id["zhongshu"]["name"].startswith("176 ")
+    # 实施102 目标编制：176 声音机（语音克隆 + 情感 + ASR/SER），140 记忆机 + 粤语 CosyVoice
+    assert by_id["zhongshu"]["name"].startswith("176 声音机(")
     assert by_id["tingxie"]["name"].startswith("140 记忆机(")
-    assert by_id["zhongshu"]["role_short"] and by_id["tingxie"]["role_short"]
+    assert "语音" in by_id["zhongshu"]["role_short"]
+    assert "嵌入" in by_id["tingxie"]["role_short"]
     assert "5090" in by_id["zhongshu"]["gpu"]
     assert "4070" in by_id["tingxie"]["gpu"]
-    assert by_id["zhongshu"]["ports"] and by_id["tingxie"]["ports"]
+    assert by_id["zhongshu"]["ports"] == [9000, 7865, 7855, 8765]
+    assert by_id["tingxie"]["ports"] == [7854, 11434, 7852]
     assert "yunsheng" not in by_id and "lianbei" not in by_id and "kouxing" not in by_id
 
 

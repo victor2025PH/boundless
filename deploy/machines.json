@@ -7,9 +7,10 @@
     "ssh_deprecated=旧名过渡别名（2026-11-05 日落删除）。角色权威源=engines/avatarhub cluster_map.json，本表 role_now 是其摘要。",
     "resolution=该机实际屏幕（壁纸按此渲染）；accent=机器识别色（壁纸/终端/主题统一用）；watch_ports=桌面哨兵看护的本机算力端口。",
     "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。",
-    "chatx_seat=true 表示该机跑智聊桌面版坐席（127.0.0.1:18799 桌面后端 + %APPDATA%\\telegram-ai-desktop 日志）；deploy/desktop/monitor_seat_logs.py 据此取坐席名单与中文名（zh），改编制只改本字段（2026-09-18 增列，此前脚本硬编码 140 听写 → 改编记忆机后连报假离线）。"
+    "chatx_seat=true 表示该机跑智聊桌面版坐席（127.0.0.1:18799 桌面后端 + %APPDATA%\\telegram-ai-desktop 日志）；deploy/desktop/monitor_seat_logs.py 据此取坐席名单与中文名（zh），改编制只改本字段（2026-09-18 增列，此前脚本硬编码 140 听写 → 改编记忆机后连报假离线）。",
+    "2026-09-22 实施102 五台算力重编（docs/实施102）：本表写的是目标编制——176 声音机（IndexTTS-2 + fish + ASR/SER，主语音与情绪）、104 出图机（ComfyUI）、198 视觉机（qwen3-vl 钉常驻）、140 记忆机（bge-m3 + STT 备份 + CosyVoice 粤语）。watch_ports 按目标写：机器侧步骤未做完前板上/坐席监控算力段会红，红字即待办。阶段 4（117 生产实例 → 173、173 撤坐席）未动，173/117 条目待迁移完成再改。"
   ],
-  "version": "2026-09-18",
+  "version": "2026-09-22",
   "gateway": "192.168.0.1",
   "hub": {
     "id": "zhongshu",
@@ -22,15 +23,17 @@
       "legacy_ids": [
         "huansheng"
       ],
-      "zh": "感知机",
-      "zh_legacy": "中枢",
+      "zh": "声音机",
+      "zh_legacy": "感知机",
       "ssh": [
         "ganzhi",
         "zhongshu",
         "hub176",
         "swap176",
         "interp176",
-        "gpu176"
+        "gpu176",
+        "shengyin176",
+        "voice176"
       ],
       "ssh_deprecated": [
         "huansheng",
@@ -42,8 +45,8 @@
       "user": "user",
       "key": "id_ed25519",
       "role": "hub",
-      "role_short": "出图·AvatarHub主控",
-      "role_now": "感知与生成：ComfyUI 出图 :8188（智聊出图唯一落点）+ AvatarHub 主控 :9000 + ollama 视觉/嵌入 :11434（换脸/同传/渲染链按泊车态，2026-08-29）",
+      "role_short": "语音克隆·情感·ASR/SER",
+      "role_now": "声音：IndexTTS-2 :7865（智聊全人设克隆主路，经 Hub :9000，情感通道 emo_text/emo_alpha）+ fish_speech :7855（ja/ko 等）+ aitr_asr :8765（whisper 转写 + emotion2vec 客户语音情绪，自 198 迁回）+ 人脸边车 :8767（CPU）+ AvatarHub 主控 :9000。撤走：qwen3:30b/qwen3-vl（Ollama 不再对外供 chat/识图）、ComfyUI :8188 → 104、musetalk :8090 泊车（实施102，2026-09-22）",
       "gpu": "RTX 5090 32G",
       "resolution": "1920x1080",
       "accent": "#E8B341",
@@ -72,24 +75,28 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/zhongshu-wallpaper.png",
       "services": [
         "avatar_hub:9000",
+        "indextts2:7865",
+        "fish_tts:7855",
+        "aitr_asr:8765",
+        "face_identity:8767",
         "faceswap:8000",
         "faceswap2:8003",
         "live_interpreter:7900",
-        "fish_tts:7855",
         "sbv2_tts:7861",
         "ditto:8096",
         "musetalk_lipsync:8090",
         "vcam:7870",
         "funasr_stt:7864",
         "dolphin_stt:7867",
-        "live_director:7910",
-        "ollama_embed:11434"
+        "live_director:7910"
       ],
       "watch_ports": [
         9000,
-        8188
+        7865,
+        7855,
+        8765
       ],
-      "note": "开发/打包机；2026-08-29 智聊单点编制：本机=出图唯一落点(ComfyUI 8188)+AvatarHub 主控；faceswap/同传按泊车态，watch 不再盯 8000/7900（板上常年红字即此，勿回填）"
+      "note": "2026-09-22 实施102：语音与情绪主力机。watch 盯 hub 9000 / IndexTTS 7865 / fish 7855 / ASR+SER 8765（8765 在阶段 2 迁回前板上为红）；不再盯 8188（出图迁 104）。faceswap/同传/lipsync 按泊车态，watch 不盯 8000/7900/8090。显存常驻目标 16G（IndexTTS 10 + ASR/SER 3.5 + fish 2.5），余量给并发合成"
     },
     {
       "id": "yunsheng",
@@ -118,7 +125,7 @@
       "role": "compute",
       "chatx_seat": true,
       "role_short": "LAN唯一LLM",
-      "role_now": "语言：vLLM chatx :8001（局域网唯一 LLM，口语化/内容兜底）+ ollama 容灾 :11434；IndexTTS :7865 已泊、智聊 TTS 主力迁 104（2026-08-29）",
+      "role_now": "语言：vLLM chatx :8001（Qwen3-27B AWQ，ai.primary=local 主链；口语化改写、语音情绪补判同源）。ollama :11434 已死（compute_mode DEAD_OLLAMA_173，14B 已删）不再盯；IndexTTS :7865 已泊。实施102 阶段 4：接收 117 生产实例 + 边车，撤坐席桌面包（待迁移完成再改本条 chatx_seat/role）",
       "gpu": "RTX 5090 32G",
       "resolution": "3840x2160",
       "accent": "#C43BF0",
@@ -134,12 +141,10 @@
       "shortcut": "",
       "wallpaper": "brand-assets/05_backgrounds/machines/yunsheng-wallpaper.png",
       "services": [
-        "vllm_chatx:8001",
-        "ollama_llm:11434"
+        "vllm_chatx:8001"
       ],
       "watch_ports": [
-        8001,
-        11434
+        8001
       ],
       "note": "SSH 用 admin@（Administrator 会被 22 端口重置）；显存互斥轮换见 cluster_map _note；全集群唯一 4K 屏"
     },
@@ -169,7 +174,7 @@
       "key": "cluster_controller",
       "role": "dev",
       "role_short": "智聊生产·坐席",
-      "role_now": "智聊生产 + 坐席：智聊实例 :18799 + qwen3_tts :7858 + 四平台 worker（智聊 TTS 主力=104:7865 IndexTTS-2，2026-08-29）",
+      "role_now": "智聊生产（实施102 阶段 4 前）：智聊实例 :18799 + 四平台 worker + okline 桥；qwen3_tts :7858 已于 08-14 退役不再盯。目标：实例迁 173 后本机退出运行，只做开发/打包（改本条 role→dev-only 与阶段 4 同步）",
       "gpu": "RTX 3060 12G",
       "resolution": "1920x1080",
       "accent": "#F0A010",
@@ -195,12 +200,10 @@
       ],
       "wallpaper": "brand-assets/05_backgrounds/machines/shengbei-wallpaper.png",
       "services": [
-        "zhiliao:18799",
-        "qwen3_tts:7858"
+        "zhiliao:18799"
       ],
       "watch_ports": [
-        18799,
-        7858
+        18799
       ],
       "note": "watch 增列 18799（2026-08-29 停电事故沉淀：引擎宕机 5.4h 桌面零提示）；智聊重启窗口 15-30s 内的 svcdown 横幅属预期瞬态"
     },
@@ -209,14 +212,16 @@
       "legacy_ids": [
         "huanyan-node"
       ],
-      "zh": "声音机",
-      "zh_legacy": "脸备",
+      "zh": "出图机",
+      "zh_legacy": "声音机",
       "ssh": [
         "shengyin",
         "lianbei",
         "face104",
         "gpu104",
-        "voice104"
+        "voice104",
+        "chutu",
+        "comfy104"
       ],
       "ssh_deprecated": [
         "huanyan-node",
@@ -229,8 +234,8 @@
       "key": "cluster_controller",
       "role": "compute",
       "chatx_seat": true,
-      "role_short": "智聊语音唯一",
-      "role_now": "声音：IndexTTS-2 :7865 智聊克隆唯一落点（IndexTTS104 开机任务+5min 看护已挂；faceswap 已停用 Disabled，2026-08-29）",
+      "role_short": "出图 ComfyUI",
+      "role_now": "出图：ComfyUI FLUX + PuLID 锁脸 :8188（自 176 迁入；模型 8-29 已在盘上、实测 20s/10s）。IndexTTS-2 :7865 停服留盘（语音主路已回 176）；faceswap 保持 Disabled（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1080",
       "accent": "#B62BF5",
@@ -248,12 +253,12 @@
       "shortcut": "C:\\\\开发\\\\幻颜节点",
       "wallpaper": "brand-assets/05_backgrounds/machines/lianbei-wallpaper.png",
       "services": [
-        "indextts2:7865"
+        "comfyui:8188"
       ],
       "watch_ports": [
-        7865
+        8188
       ],
-      "note": "算力节点：改码只在中枢机，本机 git pull 后重启服务；回切主引擎=PATCH /api/config key=faceswap 指回本机"
+      "note": "2026-09-22 实施102：出图机。watch 盯 ComfyUI 8188（阶段 3 拉起前板上为红）；IndexTTS-2 权重留盘、服务与开机任务 IndexTTS104 禁用（不再盯 7865）。ssh 别名 shengyin/voice104 为历史名保留可用，新别名 chutu/comfy104"
     },
     {
       "id": "tingxie",
@@ -278,8 +283,8 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "compute",
-      "role_short": "嵌入·STT",
-      "role_now": "记忆：bge-m3 嵌入 :11434（智聊记忆/检索主路）+ whisper STT :7854（ASR 备份位）；nemo :7857 已停；CosyVoice :7852 停电后未回（AvatarHub 属地，2026-08-29）",
+      "role_short": "嵌入·STT备份·粤语",
+      "role_now": "记忆：bge-m3 嵌入 :11434（智聊记忆/检索主路，钉常驻）+ whisper/NLLB STT :7854（ASR 备份位）+ CosyVoice3 :7852 复活（唯一会念粤语的引擎，只服务 yue 克隆，不做普通话备胎）；卸载 qwen3-vl（识图归 198）；nemo :7857 已停（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1200",
       "accent": "#F07800",
@@ -298,13 +303,15 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/tingxie-wallpaper.png",
       "services": [
         "ollama_embed:11434",
-        "stt:7854"
+        "stt:7854",
+        "emotion_tts:7852"
       ],
       "watch_ports": [
         7854,
-        11434
+        11434,
+        7852
       ],
-      "note": "算力节点；16:10 屏(1920x1200)，壁纸按原生比例渲染；显存最紧，新增服务先改 cluster_map 账本"
+      "note": "算力节点；16:10 屏(1920x1200)，壁纸按原生比例渲染；显存最紧（16G 内存），新增服务先改 cluster_map 账本。2026-09-22 实施102：watch 加 7852（CosyVoice 粤语，阶段 3 拉起前板上为红）；目标常驻 8.5G = bge 0.7 + STT 4.5 + Cosy 3.3"
     },
     {
       "id": "kouxing",
@@ -330,8 +337,8 @@
       "key": "cluster_controller",
       "role": "dev",
       "chatx_seat": true,
-      "role_short": "识图·ASR+SER",
-      "role_now": "视觉与听觉：qwen3-vl 识图 :11434（智聊识图单点）+ aitr_asr ASR+SER :8765（2026-08-29 迁入，asr_loaded+ser_loaded）；lipsync 热备退役",
+      "role_short": "识图",
+      "role_now": "视觉：qwen3-vl:8b 识图 :11434（智聊识图单点，keep_alive -1 钉常驻，num_ctx 8192）+ Lite Hub :9000 控制面。aitr_asr :8765 迁回 176（听觉与语音情绪同机）；lipsync 热备退役（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1080",
       "accent": "#1E6BF0",
@@ -348,13 +355,13 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/kouxing-wallpaper.png",
       "services": [
         "ollama:11434",
-        "aitr_asr:8765"
+        "avatar_hub_lite:9000"
       ],
       "watch_ports": [
         11434,
-        8765
+        9000
       ],
-      "note": "lipsync 池次位（SVC_LIPSYNC=中枢主+本机溢出）"
+      "note": "lipsync 池次位（SVC_LIPSYNC=中枢主+本机溢出）。2026-09-22 实施102：watch 改盯 11434 + Lite Hub 9000，不再盯 8765（ASR/SER 归 176）。已知：104 → 198:11434 网络不通，需在 198 放行 104"
     }
   ]
 }
