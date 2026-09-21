@@ -241,6 +241,13 @@ PACING_PROFILES: Dict[str, Dict[str, float]] = {
                  jitter=0.3, stop_before_send=1.5, min_gap_sec=12.0, min_residual_sec=3.0),
 }
 PACING_PROFILE_NAMES = tuple(PACING_PROFILES.keys())
+# 渠道级档位参数缺省（键级合并在档位之上、显式块键 / platform_overrides 之下）。
+# wechat（PC 副驾）：稿子到驱动还要 3s 轮询 + 开会话/粘贴/点发送/等回显 ≈ 5–10s 才落地，且微信对端看不到「正在输入」，
+# 打字分量只是空等——读/想/打字都收短，避免和驱动侧延迟叠成 40–60s 才回（2026-09-21）。
+PACING_PLATFORM_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "wechat": dict(read_min=1.5, read_max=4.0, read_cap=10.0, think_min=1.5, think_max=5.0,
+                   cpm_min=90.0, cpm_max=130.0, wpm_min=50.0, wpm_max=65.0, type_cap=30.0),
+}
 _CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 
 
@@ -393,6 +400,7 @@ def resolve_pacing(
     prof = resolve_profile(b)
     if prof:
         params = dict(PACING_PROFILES[prof])
+        params.update(PACING_PLATFORM_DEFAULTS.get(str(platform or "").lower(), {}))
         for k in list(params.keys()):
             if k in b and isinstance(b.get(k), (int, float)) and not isinstance(b.get(k), bool):
                 params[k] = float(b[k])          # 专家显式覆写单个分量参数
@@ -745,7 +753,7 @@ __all__ = [
     "DEFAULT_MIN_TYPING_DELAY_SEC",
     # O-1 D 三档
     "PACING_PROFILES", "PACING_PROFILE_NAMES", "HumanPacing",
-    "resolve_profile", "estimate_human_pacing", "count_words",
+    "resolve_profile", "estimate_human_pacing", "count_words", "PACING_PLATFORM_DEFAULTS",
     "FIRST_REPLY_DEFAULTS", "FIRST_REPLY_PLATFORM_DEFAULTS", "resolve_first_reply_cfg",
     "silence_before_inbound", "first_reply_hold_sec",
 ]

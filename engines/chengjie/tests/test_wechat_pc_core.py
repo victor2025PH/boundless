@@ -1791,7 +1791,7 @@ def test_policy_voice_quota_and_part_gap():
     assert P.may_send(pol, kind="text", voice_sent_today=99, voice_sent_today_to_peer=99, **base).allowed
     # 总配额先于语音配额
     assert P.may_send(pol, kind="voice", voice_sent_today=5, **dict(base, sent_today_to_peer=15)).reason == "per_peer_daily_cap"
-    # 分条节奏：同组 3s 前发过 → 放行；不同组照旧 min_gap（20s）
+    # 分条节奏：同组 3s 前发过 → 放行；不同组照旧 min_gap（默认 8s）
     recent = dict(base, last_sent_to_peer_ts=now.timestamp() - 3)
     assert P.may_send(pol, kind="voice", continues_last_group=True, **recent).allowed
     assert P.may_send(pol, kind="voice", **recent).reason == "min_gap"
@@ -1898,7 +1898,7 @@ def test_caps_relaxed_lists_only_looser_than_default():
         "daily_cap_new": 10, "voice_part_gap_sec": 4.0}}})
     r = P.caps_relaxed(loose)
     assert set(r) == {"daily_cap", "per_peer_daily_cap", "min_gap_sec", "voice_per_peer_daily_cap"}
-    assert r["daily_cap"] == (200, 80) and r["min_gap_sec"] == (5.0, 20.0)
+    assert r["daily_cap"] == (200, 80) and r["min_gap_sec"] == (5.0, 8.0)
 
 
 def test_deferred_item_dedups_against_requeued_pull_and_expires_to_policy_failure():

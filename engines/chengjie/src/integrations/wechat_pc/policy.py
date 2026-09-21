@@ -76,7 +76,9 @@ class PcPolicy:
     daily_cap: int = 80              # 成熟账号日上限
     warmup_days: int = 7
     per_peer_daily_cap: int = 15     # 对同一联系人每日上限（防「机关枪」）
-    min_gap_sec: float = 20.0        # 同一联系人两条出站最小间隔
+    # 同一联系人两条出站最小间隔。与 autosend 拟人档 natural 的 min_gap_sec(8) 对齐——worker 已按档位排过节奏，
+    # 驱动这道只是兜底；原 20s 叠在拟人投递之上是「回复很久不回」的一段（2026-09-21 下调）
+    min_gap_sec: float = 8.0
     # 语音单独更保守（2026-09-19 P2）：语音**同时**计入上面的总配额，再受这两条限制——一天几十条 60 秒内的
     # 合成音比文字更像「机器」，也更耗对方耐心；超了不是不回，而是回落文字（server 端 ack 处理）。
     voice_daily_cap: int = 30        # 语音日上限（所有联系人合计）
@@ -138,7 +140,7 @@ def resolve_policy(config: Optional[Dict[str, Any]]) -> PcPolicy:
         daily_cap=_i("daily_cap", 80, 1, 500),
         warmup_days=_i("warmup_days", 7, 0, 90),
         per_peer_daily_cap=_i("per_peer_daily_cap", 15, 1, 100),
-        min_gap_sec=_f("min_gap_sec", 20.0, 3.0, 600.0),
+        min_gap_sec=_f("min_gap_sec", PcPolicy.min_gap_sec, 3.0, 600.0),
         voice_daily_cap=_i("voice_daily_cap", 30, 1, 200),
         voice_per_peer_daily_cap=_i("voice_per_peer_daily_cap", 6, 1, 50),
         voice_part_gap_sec=_f("voice_part_gap_sec", 2.5, 0.5, 30.0),

@@ -4454,7 +4454,7 @@ platform_login:
     daily_cap: 80
     warmup_days: 7
     per_peer_daily_cap: 15   # 对同一联系人每日上限
-    min_gap_sec: 20          # 同一联系人两条出站最小间隔
+    min_gap_sec: 8           # 同一联系人两条出站最小间隔
     work_hours: [8, 23]      # 本地时间 [start, end)；[0, 24]=全天
     reply_only: true         # 只回最近 reply_window_hours 内有入站的会话，绝不主动开新会话
     reply_window_hours: 72

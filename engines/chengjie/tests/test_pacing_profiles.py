@@ -171,6 +171,31 @@ def test_resolve_pacing_block_explicit_param_overrides_profile_default():
     assert r.profile == "natural"
 
 
+def test_wechat_platform_defaults_shorten_profile_delay_but_yield_to_explicit():
+    """微信 PC 副驾（platform=wechat）：档位参数叠渠道缺省（读/想/打字都收短，打字上限 30s），其它渠道不变；
+    块显式键 / platform_overrides.wechat 仍优先。"""
+    blk = {"profile": "natural"}
+    reply = "好的，那我们周三下午三点在老地方见，到了给你打电话，路上注意安全哈。"   # ~35 字
+    tg = resolve_pacing(blk, text=reply, inbound_text="周三见？", platform="telegram", rng=_mid)
+    wx = resolve_pacing(blk, text=reply, inbound_text="周三见？", platform="wechat", rng=_mid)
+    assert tg.profile == wx.profile == "natural"
+    assert wx.read_sec < tg.read_sec and wx.think_sec < tg.think_sec and wx.type_sec < tg.type_sec
+    assert wx.delay <= 30.0 < tg.delay, (wx.delay, tg.delay)
+    d = hz.PACING_PLATFORM_DEFAULTS["wechat"]
+    assert d["type_cap"] == 30.0 and d["read_max"] <= 4.0 and d["think_max"] <= 5.0
+    long = "字" * 400
+    assert resolve_pacing(blk, text=long, platform="wechat", rng=_mid).type_sec == 30.0
+    # 显式块键 > 渠道缺省
+    ex = resolve_pacing({"profile": "natural", "type_cap": 12.0}, text=long, platform="wechat", rng=_mid)
+    assert ex.type_sec == 12.0
+    ov = resolve_pacing({"profile": "natural", "platform_overrides": {"wechat": {"think_min": 9.0, "think_max": 9.0}}},
+                        text=reply, platform="wechat", rng=_mid)
+    assert ov.think_sec == 9.0
+    # 首回 hold 的微信缺省仍是 5–20s（两处缺省互不影响）
+    assert (resolve_first_reply_cfg(blk, platform="wechat")["min_sec"],
+            resolve_first_reply_cfg(blk, platform="wechat")["max_sec"]) == (5.0, 20.0)
+
+
 def test_legacy_block_untouched():
     block = {"min_sec": 3, "max_sec": 12, "adaptive": True}
     r = resolve_pacing(block, text="hello there", rng=_mid)
