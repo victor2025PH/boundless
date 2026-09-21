@@ -56,12 +56,46 @@ class FakeRunner:
         return self.local_rc, "overlay applied"
 
 
-def test_json_quoting_for_cmd_exe(rm):
+def test_remote_commands_are_powershell_not_curl(rm):
+    """176 默认 shell 是 PowerShell（curl=Invoke-WebRequest 别名）——远端一律 PowerShell 脚本。"""
     cmd = rm._ollama_generate("qwen3-vl:8b-instruct", -1)
-    # cmd.exe 里外层双引号 + 内层 \" 转义；绝不能出现单引号包 JSON
-    assert '-d "{\\"model\\":\\"qwen3-vl:8b-instruct\\",\\"keep_alive\\":-1}"' in cmd
-    assert "'" not in cmd
-    assert "127.0.0.1:11434/api/generate" in cmd
+    assert cmd.startswith("Invoke-RestMethod -Method Post -Uri http://127.0.0.1:11434/api/generate")
+    assert "'{\"model\": \"qwen3-vl:8b-instruct\", \"keep_alive\": -1}'" in cmd
+    assert "ConvertTo-Json -Compress" in cmd
+    for name in rm.PHASES:
+        for st in rm.BUILDERS[name]().steps + rm.BUILDERS[name]().verify:
+            if st.host != "local":
+                assert not st.cmd.lstrip().startswith("curl"), st.cmd
+                assert "findstr" not in st.cmd and ">nul" not in st.cmd and "%TEMP%" not in st.cmd, st.cmd
+
+
+def test_encode_ps_roundtrip(rm):
+    import base64
+    wrapped = rm.encode_ps("Write-Output hi")
+    assert wrapped.startswith("powershell -NoProfile -NonInteractive -EncodedCommand ")
+    b64 = wrapped.rsplit(" ", 1)[1]
+    script = base64.b64decode(b64).decode("utf-16-le")
+    assert script.startswith(rm.PS_PRELUDE) and script.endswith("Write-Output hi")
+    assert "[Console]::OutputEncoding" in script
+
+
+def test_runner_ssh_sends_encoded_command(rm, monkeypatch):
+    seen = {}
+
+    class _P:
+        returncode = 0
+        stdout = b"ok"
+        stderr = b""
+
+    def fake_run(argv, capture_output, timeout):
+        seen["argv"] = argv
+        return _P()
+
+    monkeypatch.setattr(rm.subprocess, "run", fake_run)
+    rc, out = rm.Runner().ssh("ganzhi", "Write-Output x", 30)
+    assert rc == 0 and out == "ok"
+    assert seen["argv"][:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+    assert seen["argv"][5] == "ganzhi" and seen["argv"][6].startswith("powershell -NoProfile")
 
 
 def test_phases_cover_runbook_targets(rm):
@@ -119,7 +153,8 @@ def test_apply_stops_at_first_required_failure(rm, tmp_path):
 def test_apply_optional_failure_continues_and_runs_overlay(rm, tmp_path):
     fr = FakeRunner(
         ssh_out={"api/generate": (0, '{"done":true}'), "ollama list": (0, "qwen3-vl:8b-instruct"),
-                 "setx": (1, "denied"), "findstr": (1, "")},
+                 "vl8k.Modelfile\" -Encoding": (0, "FROM x\nPARAMETER num_ctx 8192"),
+                 "server.log": (1, "no log")},                                  # 可选步失败
         http_out={"http://192.168.0.198:11434/api/ps": (0, '{"models":[{"name":"qwen3-vl:8b-instruct"}]}')},
     )
     rc = rm.run_phase(rm.build_phase0(), apply=True, runner=fr, overlay_extra=["--no-probe"],

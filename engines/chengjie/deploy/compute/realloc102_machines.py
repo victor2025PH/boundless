@@ -10,8 +10,9 @@
     python deploy/compute/realloc102_machines.py phase3 --apply --comfy-task <104 上 ComfyUI 任务名>
     python deploy/compute/realloc102_machines.py phase4            # 只做预检清单，不动生产实例
 
-约定：远端是 Windows OpenSSH，默认 shell 是 cmd.exe——命令按 cmd 写；JSON 用 ``\"`` 转义（cmd 里
-单引号是普通字符，``-d '{...}'`` 会把引号原样送进 Ollama → 400）。别名与机器见 deploy/machines.json。
+约定：远端是 Windows OpenSSH；步骤命令**全部写成 PowerShell**，Runner 编成 ``-EncodedCommand`` 下发
+——176 默认 shell 是 PowerShell、其它机器是 cmd，编码下发对两者一视同仁，且零引号转义问题
+（首跑实锤：按 cmd 写的 curl 在 176 被当成 Invoke-WebRequest）。别名与机器见 deploy/machines.json。
 """
 from __future__ import annotations
 
@@ -40,11 +41,22 @@ VL_MODEL = "qwen3-vl:8b-instruct"
 QWEN30B = "qwen3:30b-a3b-instruct-2507-q4_K_M"
 
 
+# 远端命令一律写成 PowerShell 脚本，Runner.ssh 编成 -EncodedCommand 下发：
+# 176 的 OpenSSH 默认 shell 是 PowerShell（首跑实锤：curl 被解析成 Invoke-WebRequest 报错），
+# 其它机器是 cmd——编码下发后两种默认 shell 都能跑，也没有引号转义问题。
+PS_PRELUDE = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+
+
 def _ollama_generate(model: str, keep_alive) -> str:
-    """cmd.exe 下给 curl 的 JSON：外层双引号，内层 \\\" 转义。"""
-    body = f'{{\\"model\\":\\"{model}\\",\\"keep_alive\\":{keep_alive}}}'
-    return (f'curl -s -X POST http://127.0.0.1:11434/api/generate '
-            f'-H "Content-Type: application/json" -d "{body}"')
+    """Ollama /api/generate 空提示 + keep_alive：0=立即卸载，-1=钉常驻。输出压成一行 JSON。"""
+    body = json.dumps({"model": model, "keep_alive": keep_alive})
+    return (f"Invoke-RestMethod -Method Post -Uri http://127.0.0.1:11434/api/generate "
+            f"-ContentType 'application/json' -Body '{body}' -TimeoutSec 280 | ConvertTo-Json -Compress")
+
+
+def _native(cmd: str) -> str:
+    """外部命令：让 PowerShell 退出码跟随它（否则 -EncodedCommand 只在脚本抛错时才非 0）。"""
+    return f"{cmd}; exit $LASTEXITCODE"
 
 
 @dataclass
@@ -68,34 +80,38 @@ class Phase:
 
 def build_phase0(harden_ollama: bool = False) -> Phase:
     hardening = [
-        Step(H176, "setx OLLAMA_HOST 127.0.0.1:11434 /M",
+        Step(H176, _native("setx OLLAMA_HOST 127.0.0.1:11434 /M"),
              "176 Ollama 只听本机（重启 Ollama 后生效；先确认 translation.engines.ollama_mt 等无 LAN 消费方）",
              optional=True),
     ] if harden_ollama else []
     return Phase("phase0", "176 减负 + 识图切 198", steps=[
         Step(H176, _ollama_generate(QWEN30B, 0),
              "176 立即卸载 qwen3:30b（18.7G；调用方对练脚本已改指 173）", expect='"done":true'),
-        Step(H198, "ollama list", "198 已备 qwen3-vl", expect=VL_MODEL),
-        Step(H198, f"ollama show {VL_MODEL}-orig4k >nul 2>&1 || ollama cp {VL_MODEL} {VL_MODEL}-orig4k",
+        Step(H198, _native("ollama list"), "198 已备 qwen3-vl", expect=VL_MODEL),
+        Step(H198, f"$ErrorActionPreference='SilentlyContinue'; ollama show {VL_MODEL}-orig4k *> $null; "
+                   f"if ($LASTEXITCODE -ne 0) {{ ollama cp {VL_MODEL} {VL_MODEL}-orig4k }}; exit 0",
              "198 备份原 4k tag（已有则跳过，防二次运行把 8k 版覆盖成备份）"),
-        Step(H198, f'cmd /c "(echo FROM {VL_MODEL}-orig4k& echo PARAMETER num_ctx 8192) > %TEMP%\\vl8k.Modelfile"',
-             "198 写 Modelfile：num_ctx 8192（与 176 8-30 同法）"),
-        Step(H198, f"ollama create {VL_MODEL} -f %TEMP%\\vl8k.Modelfile",
+        Step(H198, f"Set-Content -Path \"$env:TEMP\\vl8k.Modelfile\" -Encoding ascii "
+                   f"-Value @('FROM {VL_MODEL}-orig4k','PARAMETER num_ctx 8192'); "
+                   f"Get-Content \"$env:TEMP\\vl8k.Modelfile\"",
+             "198 写 Modelfile：num_ctx 8192（与 176 8-30 同法）", expect="num_ctx 8192"),
+        Step(H198, _native(f'ollama create {VL_MODEL} -f "$env:TEMP\\vl8k.Modelfile"'),
              "198 就地重建同名 tag（8192 上下文）", timeout=600),
         Step(H198, _ollama_generate(VL_MODEL, -1), "198 钉 qwen3-vl 常驻（keep_alive -1）",
              expect='"done":true', timeout=300),
-        Step(H198, "netsh advfirewall firewall show rule name=ollama_from_104 >nul 2>&1 || "
-                   "netsh advfirewall firewall add rule name=ollama_from_104 dir=in action=allow "
-                   "protocol=TCP localport=11434 remoteip=192.168.0.104",
+        Step(H198, "$r = netsh advfirewall firewall show rule name=ollama_from_104 2>$null; "
+                   "if (-not ($r | Select-String ollama_from_104)) { netsh advfirewall firewall add rule "
+                   "name=ollama_from_104 dir=in action=allow protocol=TCP localport=11434 remoteip=192.168.0.104 } "
+                   "else { 'rule exists' }",
              "198 放行 104（实测 104→198:11434 不通）"),
-        Step(H176, 'schtasks /Query /FO LIST | findstr /i "comfy musetalk lipsync"',
+        Step(H176, "schtasks /Query /FO LIST | Select-String -Pattern 'comfy|musetalk|lipsync' -CaseSensitive:$false",
              "176 列出 ComfyUI / musetalk 计划任务名（发现，下一步人工 /Disable）", optional=True),
-        Step(H176, 'powershell -NoProfile -Command "Get-Content $env:LOCALAPPDATA\\Ollama\\server.log -Tail 4000 '
-                   '| Select-String -SimpleMatch \'/api/\' | ForEach-Object { ($_.Line -split \'\\|\')[3].Trim() } '
-                   '| Group-Object | Sort-Object Count -Descending | Select-Object -First 8 | Format-Table -HideTableHeaders"',
+        Step(H176, "Get-Content \"$env:LOCALAPPDATA\\Ollama\\server.log\" -Tail 4000 "
+                   "| Select-String -SimpleMatch '/api/' | ForEach-Object { ($_.Line -split '\\|')[3].Trim() } "
+                   "| Group-Object | Sort-Object Count -Descending | Select-Object -First 8 Count,Name | Format-Table -HideTableHeaders",
              "176 Ollama 最近调用方 IP 统计（决定能不能收 OLLAMA_HOST）", optional=True),
     ] + hardening, overlay_phase="phase0", verify=[
-        Step(H176, "nvidia-smi --query-gpu=memory.used --format=csv,noheader", "176 显存应 ≤ 16000 MiB"),
+        Step(H176, _native("nvidia-smi --query-gpu=memory.used --format=csv,noheader"), "176 显存应 ≤ 16000 MiB"),
         Step("local", "http://192.168.0.198:11434/api/ps", "198 qwen3-vl 常驻", expect=VL_MODEL),
     ])
 
@@ -111,29 +127,31 @@ def build_phase1() -> Phase:
 
 def build_phase2() -> Phase:
     return Phase("phase2", "听觉回 176（aitr_asr：whisper + emotion2vec）", steps=[
-        Step(H176, "dir C:\\aitr_asr", "176 原属地目录还在（不在 → 从 198 拷，见 scripts/asr176/README.md）"),
-        Step(H176, "schtasks /Change /TN AITR_ASR /Enable & schtasks /Run /TN AITR_ASR",
+        Step(H176, "Test-Path C:\\aitr_asr", "176 原属地目录还在（不在 → 从 198 拷，见 scripts/asr176/README.md）",
+             expect="True"),
+        Step(H176, _native("schtasks /Change /TN AITR_ASR /Enable; schtasks /Run /TN AITR_ASR"),
              "176 启 aitr_asr 任务"),
-        Step(H176, "schtasks /Change /TN AITR_ASR_WATCHDOG /Enable", "176 启 5min 看门狗", optional=True),
+        Step(H176, _native("schtasks /Change /TN AITR_ASR_WATCHDOG /Enable"), "176 启 5min 看门狗", optional=True),
         Step("local", "poll:http://192.168.0.176:8765/health", "等 176 ASR+SER 载入（最长 5min）",
              expect='"ser_loaded":true', timeout=300),
     ], overlay_phase="phase2", verify=[
-        Step(H198, "schtasks /Change /TN AITR_ASR /Disable & schtasks /Change /TN AITR_ASR_WATCHDOG /Disable",
+        Step(H198, _native("schtasks /Change /TN AITR_ASR /Disable; schtasks /Change /TN AITR_ASR_WATCHDOG /Disable"),
              "198 停 aitr_asr 任务（释放 ~3.5G；进程随任务结束或手动 Stop-Process）", optional=True),
-        Step(H198, "nvidia-smi --query-gpu=memory.used --format=csv,noheader", "198 显存应降到 ~6G"),
+        Step(H198, _native("nvidia-smi --query-gpu=memory.used --format=csv,noheader"), "198 显存应降到 ~6G"),
     ])
 
 
 def build_phase3(comfy_task: str = "") -> Phase:
     steps = [
-        Step(H104, "schtasks /Change /TN IndexTTS104 /Disable", "104 停 IndexTTS 开机任务（权重留盘）", optional=True),
-        Step(H104, 'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 7865 -State Listen '
-                   '-ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"',
+        Step(H104, _native("schtasks /Change /TN IndexTTS104 /Disable"), "104 停 IndexTTS 开机任务（权重留盘）", optional=True),
+        Step(H104, "Get-NetTCPConnection -LocalPort 7865 -State Listen -ErrorAction SilentlyContinue "
+                   "| ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }; 'done'",
              "104 结束 7865 进程（只杀听 7865 的那一个）", optional=True),
-        Step(H104, 'schtasks /Query /FO LIST | findstr /i comfy', "104 列 ComfyUI 任务名（8-29 装的）", optional=True),
+        Step(H104, "schtasks /Query /FO LIST | Select-String -Pattern 'comfy' -CaseSensitive:$false",
+             "104 列 ComfyUI 任务名（8-29 装的）", optional=True),
     ]
     if comfy_task:
-        steps.append(Step(H104, f'schtasks /Change /TN "{comfy_task}" /Enable & schtasks /Run /TN "{comfy_task}"',
+        steps.append(Step(H104, _native(f'schtasks /Change /TN "{comfy_task}" /Enable; schtasks /Run /TN "{comfy_task}"'),
                           f"104 启 ComfyUI 任务 {comfy_task}"))
         steps.append(Step("local", "poll:http://192.168.0.104:8188/system_stats", "等 104 ComfyUI 起来",
                           expect="comfyui_version", timeout=300))
@@ -142,7 +160,7 @@ def build_phase3(comfy_task: str = "") -> Phase:
                           optional=True))
     steps += [
         Step(H140, _ollama_generate(VL_MODEL, 0), "140 卸 qwen3-vl（6G；识图已归 198）", expect='"done":true'),
-        Step(H140, "schtasks /Run /TN EmotionTTS", "140 拉起 CosyVoice3 :7852（粤语专用）"),
+        Step(H140, _native("schtasks /Run /TN EmotionTTS"), "140 拉起 CosyVoice3 :7852（粤语专用）"),
         Step("local", "poll:http://192.168.0.140:7852/health", "等 140 CosyVoice 载入", expect="models_loaded", timeout=600),
     ]
     return Phase("phase3", "104 出图 / 140 粤语", steps=steps, overlay_phase="phase3", verify=[
@@ -153,12 +171,13 @@ def build_phase3(comfy_task: str = "") -> Phase:
 def build_phase4() -> Phase:
     """只做预检（只读），迁移本体按 §7.1 阶段 4 手工在 04:00 窗执行。"""
     return Phase("phase4", "117 → 173 预检（只读，不动生产）", steps=[
-        Step(H173, 'powershell -NoProfile -Command "(Get-PSDrive D).Free/1GB"', "173 D: 空闲 GB（需 ≥ 50）"),
-        Step(H173, 'powershell -NoProfile -Command "Test-Path $env:UserProfile\\.wslconfig"',
+        Step(H173, "[math]::Round((Get-PSDrive D).Free/1GB)", "173 D: 空闲 GB（需 ≥ 50）"),
+        Step(H173, "Test-Path \"$env:UserProfile\\.wslconfig\"",
              "173 .wslconfig 是否存在（要限 WSL 内存给 Windows 侧留 24G+）", optional=True),
-        Step(H173, 'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 18799 -State Listen -EA SilentlyContinue | Measure-Object | % Count"',
+        Step(H173, "(Get-NetTCPConnection -LocalPort 18799 -State Listen -EA SilentlyContinue | Measure-Object).Count",
              "173 上 18799 占用数（坐席桌面包在 → 迁移前先卸）"),
-        Step(H173, "dir D:\\faceX\\mfys\\secrets\\service_token.txt", "173 是否已有集群令牌文件（阶段 1 direct 依赖）", optional=True),
+        Step(H173, "Test-Path D:\\faceX\\mfys\\secrets\\service_token.txt",
+             "173 是否已有集群令牌文件（阶段 1 direct 依赖）", optional=True),
         Step("local", "file:D:/chengjie-instances/zhiliao/data", "117 实例数据根在（6.2G，robocopy 源）"),
     ])
 
@@ -173,11 +192,18 @@ BUILDERS: Dict[str, Callable[..., Phase]] = {
 
 
 # ── 执行器 ────────────────────────────────────────────────────────────────────
+def encode_ps(script: str) -> str:
+    """PowerShell 脚本 → ``powershell -NoProfile -EncodedCommand <base64(utf-16le)>``（远端任意默认 shell 可跑）。"""
+    import base64
+    b64 = base64.b64encode((PS_PRELUDE + script).encode("utf-16-le")).decode("ascii")
+    return f"powershell -NoProfile -NonInteractive -EncodedCommand {b64}"
+
+
 class Runner:
     """真跑：ssh 别名下发 / 本机 http GET / 文件存在 / 轮询。可被测试替换。"""
 
     def ssh(self, host: str, cmd: str, timeout: int) -> tuple[int, str]:
-        p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, cmd],
+        p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, encode_ps(cmd)],
                            capture_output=True, timeout=timeout)
         return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
 
