@@ -1,14 +1,16 @@
 ﻿# AI 算力反向隧道（117 -> VPS）：把 LAN GPU 服务暴露到 VPS 的 localhost，
 # 供官网网关 /api/ai/* 各路由转发（双活，网关按序试 + 失败冷却降权）：
-#   176:11434 -> VPS 127.0.0.1:18411   识图 VLM 主（VISION_RELAY_URLS）
-#   140:11434 -> VPS 127.0.0.1:18412   识图 VLM 备/分流
-#   104:7865  -> VPS 127.0.0.1:18413   克隆 TTS 主（TTS_RELAY_URLS；2026-08-29 从
-#                117:7852 改指 104 IndexTTS-2——智聊 TTS 主力迁 104、117 CosyVoice
-#                已退役(EmotionTTS_Boot Disabled)，旧指向=外网克隆全灭的根因之一）
-#   140:7852  -> VPS 127.0.0.1:18414   克隆 TTS 备（CosyVoice；断电后未回，AvatarHub 属地）
-#   198:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀；
-#                2026-08-30 从 176:8765 改指 198——ASR 单点断电后迁 198（whisper
-#                large-v3-turbo cuda + SER），旧指向=全网转录瘫 7h 的根因，同 TTS 18413 病）
+#   198:11434 -> VPS 127.0.0.1:18411   识图 VLM 主（VISION_RELAY_URLS；2026-09-22 实施102 阶段 3 从
+#                176 改指 198——176 专职语音克隆/情绪，qwen3-vl 常驻 198（keep_alive -1））
+#   176:11434 -> VPS 127.0.0.1:18412   识图 VLM 冷备（同日从 140 改指 176：140 只留 bge-m3 + CosyVoice，
+#                qwen3-vl 已卸；176 ollama 仍在、tags 有 qwen3-vl，只在 198 5xx/不可达时按需载入）
+#   176:7865  -> VPS 127.0.0.1:18413   克隆 TTS 主（TTS_RELAY_URLS；2026-09-22 从 104 改指 176
+#                IndexTTS-2——104 的 12G 卡让给 ComfyUI 出图，104 IndexTTS 已停；176:7865 要
+#                X-AH-Svc，网关 relayHeaders 已代注 AH_SERVICE_TOKEN，旧 104 是免令牌专机）
+#   140:7852  -> VPS 127.0.0.1:18414   克隆 TTS 备（CosyVoice；阶段 3 EmotionTTS 任务拉起）
+#   176:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀；2026-09-22 阶段 2
+#                从 198 回迁 176（whisper large-v3-turbo cuda + SER，任务时限 PT0S）；198:8765 已停——
+#                05:29 本条未同步改指=外网转录 502 的根因，与 08-30 同病，改机器必须同改本文件）
 #   176:8767  -> VPS 127.0.0.1:18416   人脸嵌入边车（FACE_RELAY_URLS，不带 /v1；#333 视觉
 #                身份层 2026-09-17，CPU onnx，客户图里是谁——网关 /api/ai/v1/face/embed）
 #   173:8001  -> VPS 127.0.0.1:18421   ChatX 27B vLLM（CHATX_RELAY_URLS；model=chatx，
@@ -61,11 +63,11 @@ Log 'vision tunnel runner start'
 while ($true) {
   $script:bindFail = $false
   try {
-    # -N 不执行远程命令；-R 反向转发（识图 176/140 + 克隆TTS 117/140 + GPU ASR 176）；
+    # -N 不执行远程命令；-R 反向转发（识图 198/176 + 克隆TTS 176/140 + GPU ASR 176）；
     # ExitOnForwardFailure 任一端口占用即退出重试（僵尸占端口由下方自清收割）
-    & ssh -N -R 127.0.0.1:18411:192.168.0.176:11434 -R 127.0.0.1:18412:192.168.0.140:11434 `
-      -R 127.0.0.1:18413:192.168.0.104:7865 -R 127.0.0.1:18414:192.168.0.140:7852 `
-      -R 127.0.0.1:18415:192.168.0.198:8765 -R 127.0.0.1:18416:192.168.0.176:8767 `
+    & ssh -N -R 127.0.0.1:18411:192.168.0.198:11434 -R 127.0.0.1:18412:192.168.0.176:11434 `
+      -R 127.0.0.1:18413:192.168.0.176:7865 -R 127.0.0.1:18414:192.168.0.140:7852 `
+      -R 127.0.0.1:18415:192.168.0.176:8765 -R 127.0.0.1:18416:192.168.0.176:8767 `
       -R 127.0.0.1:18421:192.168.0.173:8001 `
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `
