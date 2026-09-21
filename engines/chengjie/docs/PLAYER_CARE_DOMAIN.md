@@ -39,6 +39,18 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - 同联系人 60 s 缓存；密钥只从 `player_gateway.key` 或环境变量 `GATEWAY_KEY` 读，不进日志不进 git；
 - 与 117 机 chengjie 树 `wujie_player.py` 用同一组配置键，以后合并不打架。
 
+**真网关自检（B1.5 前置，不依赖密钥就能写好）**：`domains/player_care/gateway_probe.py`
+
+```
+$env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_probe --config config_player\config.yaml --phone 09xxxxxxxxx [--uid ...] [--out tests\fixtures\player_care_lookup_samples.json]
+```
+
+在装了 `GATEWAY_KEY` 的机器上跑一次，依次打三个探针：`found`（真号）/ `not_found`（不存在的号）/ `bad_key`（故意错密钥，应 401/403），
+每个探针输出：HTTP 状态 / ok / found / error / 延迟 / 返回体顶层键名（顺带回答「有没有 agent 字段」）/ 脱敏后的 `chatx_text`
+（≥ 3 位数字换成同长度 `100…`，源号码全遮成 `*`）/ `extract_games` 与 `detect_deposit` 当前解析结果。密钥永不进输出。
+`--out` 写的 JSON 就是测试够吃的样例文件格式：`tests/test_player_care_domain.py::test_lookup_samples_file` 逐条回放（假 transport 回放同一 status/body），
+断言 `found` / `error` / `games` / `deposit` 与样例里的 `expect` 一致。拿到真样例后只要把文件换成真的、改 `expect`，再改 `extract_games` 直到绿——不用重写测试。
+
 ## 4. 两道闸（`hooks.py`，由 `generate_inbox_draft` 3f/9d 与 `process_message` 派发）
 
 | 分支 | 触发 | 进提示词的块 | 数字闸 |
@@ -61,6 +73,10 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 - `ai_client._build_context_prompt` 新消费 `_domain_context_block`（目标块之后、坐席指令之前）。
 
 基类默认返回 None / 原文 → 无域包或域包未覆写时逐字节零影响。**副作用**：story 实例升级到本分支后，story_matrix 的 post hook 开始真的生效（更严：识别到 AI 字样 / 链接 / 号码的回复会被换成频道安全句）。
+
+**域页可见角色**：域清单 `web.pages[].roles` 一直有人写（payment 也写了 `[master, admin, viewer]`）但核心从没读过，域页一律掉进「无条目 → 仅 master」。
+现在 `create_app` 读清单后调 `web_user_store.register_domain_page_permissions(pages)`：核心表已有的键不动（域不能放宽核心页），
+未声明 roles / 角色名全不认识的页仍仅 master，master 恒在允许集；侧栏 / 命令面板 / 新手引导三处域页列表同步按 `page_perms` 过滤，看不到的角色不再看到一个点进去就 403 的入口。
 
 ## 6. B2 画像 + 阶段（已做）
 
@@ -118,7 +134,8 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 
 - `GET /player-care/overview`（HTML，页面鉴权 `page_auth`）+ `GET /api/player-care/overview`（JSON，`api_auth`：登录会话或 Bearer），
   都在 `domains/player_care/web/routes.py`；页面模板 `domains/player_care/web/templates/player_care_overview.html`（域模板目录由 admin 自动加进 Jinja loader）。
-  manifest `web.pages` 挂侧栏「玩家朋友看板」（运营区），页面键 `player_care_overview` 不在核心 `PAGE_PERMISSIONS` 里 → **只有 master 能看**（要放开给 admin/viewer 得改核心表，没动）。
+  manifest `web.pages` 挂侧栏「玩家朋友看板」（运营区）；页面键 `player_care_overview` 的可见角色由 manifest `roles: [master, admin, supervisor, viewer]` 声明，
+  核心 `register_domain_page_permissions` 在 `create_app` 读清单时注册进 `PAGE_PERMISSIONS`（见 §5）；agent 不给（只用工作台）。
   同样只在 `domain=player_care` 实例出现，story_matrix 实例无此页。
 - 聚合在 `domains/player_care/overview.py::build_overview`（只读，不查网关不发指令，库打不开 → 空计数 + `notes`）：
   - `contacts`：总数 / 有手机号 / handoff 接入 / 7 日活跃 / 按账号；
@@ -133,11 +150,11 @@ POST {player_gateway.url}/lookup   X-Gateway-Key: <key>
 
 ## 6e. 尚未做
 
-- 看板上报智控（跨实例汇总）；页面权限放开给 admin/viewer（需动核心 `PAGE_PERMISSIONS`）。
+- 看板上报智控（跨实例汇总）。
 
 ## 7. 待老板 / 117 机补的输入
 
 - `GATEWAY_KEY`（写进 player 实例机器的环境变量，不发聊天记录）；
-- `/lookup` **三种真实返回样例**：查到 / 查不到 / 出错或部分字段——`extract_games` 的解析规则按真实 `chatx_text` 格式定稿；
+- `/lookup` **三种真实返回样例**：查到 / 查不到 / 出错或部分字段——最省事的给法：在 player 机跑一次 `python -m domains.player_care.gateway_probe --config ... --phone <真号> --out samples.json`（§3）把输出贴回来，已脱敏；`extract_games` 按真实 `chatx_text` 格式定稿；
 - 是否有 `agent`（代理号）字段——有则 owner 归因用它，没有则用「我方手机槽位 + 我方号码」；
 - player 实例要用的 WA / TG 账号，以及每个账号真实在玩的 2–3 个游戏名（填 persona `style_hint`）。

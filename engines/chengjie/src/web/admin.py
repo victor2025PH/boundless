@@ -248,6 +248,12 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             domain_dashboard_widgets = _web_section.get("dashboard_widgets", [])
     except Exception:
         pass
+    # 域页可见角色：manifest web.pages[].roles → PAGE_PERMISSIONS（未声明的页仍仅 master）
+    try:
+        from src.utils.web_user_store import register_domain_page_permissions as _reg_dp
+        _reg_dp(domain_web_pages)
+    except Exception:
+        pass
     # Add domain template directory to Jinja2 search path
     if _domains_dir:
         _domain_tpl_dir = _domains_dir / domain_name / "web" / "templates"

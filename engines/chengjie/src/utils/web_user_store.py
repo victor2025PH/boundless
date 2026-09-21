@@ -82,6 +82,37 @@ PAGE_PERMISSIONS = {
     "workspace":  {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_AGENT},
 }
 
+_KNOWN_ROLES = {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER, ROLE_AGENT}
+_DOMAIN_PAGE_KEYS: Set[str] = set()   # 由域清单注册的键（可被后续注册覆写，核心键不可）
+
+
+def register_domain_page_permissions(pages: Any) -> Dict[str, Set[str]]:
+    """把域清单 ``web.pages[].roles`` 注册进 PAGE_PERMISSIONS（域包声明自己页面的可见角色）。
+
+    规则：核心表已有的键不动（核心口径优先，域不能放宽核心页）；未声明 roles 或全是未知
+    角色名的页不注册（保持「无条目 → 仅 master」的兜底）；master 恒在允许集内。
+    返回本次实际注册的 {page_key: roles}。
+    """
+    registered: Dict[str, Set[str]] = {}
+    for page in (pages or []):
+        if not isinstance(page, dict):
+            continue
+        key = str(page.get("key") or "").strip()
+        roles_raw = page.get("roles")
+        if not key or not isinstance(roles_raw, (list, tuple, set)):
+            continue
+        if key in PAGE_PERMISSIONS and key not in _DOMAIN_PAGE_KEYS:
+            continue
+        roles = {str(r).strip().lower() for r in roles_raw} & _KNOWN_ROLES
+        if not roles:
+            continue
+        roles.add(ROLE_MASTER)
+        PAGE_PERMISSIONS[key] = roles
+        _DOMAIN_PAGE_KEYS.add(key)
+        registered[key] = roles
+    return registered
+
+
 WRITE_PERMISSIONS = {
     "edit_template":  {ROLE_MASTER, ROLE_ADMIN},
     "edit_channel":   {ROLE_MASTER, ROLE_ADMIN},

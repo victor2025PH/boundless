@@ -181,3 +181,37 @@ class TestPaymentDomainRegistrations:
         checkers = app.state.kb_conflict_checkers
         warnings = checkers[0]({"title": "问候语", "category": "常规"})
         assert len(warnings) == 0
+
+
+class TestDomainPageRolesRegistered:
+    """域清单 web.pages[].roles → 核心 PAGE_PERMISSIONS：admin 侧栏见域页、能进；agent 不见、403/跳转。"""
+
+    def _login(self, app, config_dir, username, role):
+        from src.utils.web_user_store import ROLE_MASTER, WebUserStore
+        store = WebUserStore(config_dir / "web_users.db")
+        if store.user_count() == 0:
+            store.create_user("admin", "pass123", ROLE_MASTER)
+        if store.get_user(username) is None:
+            store.create_user(username, "pass123", role)
+        c = TestClient(app, raise_server_exceptions=True)
+        c.get("/login")
+        c.post("/login", data={"username": username, "password": "pass123"}, follow_redirects=True)
+        c.cookies.set("ui_mode", "full")
+        return c
+
+    def test_manifest_roles_land_in_page_permissions(self, app):
+        from src.utils.web_user_store import PAGE_PERMISSIONS
+        assert PAGE_PERMISSIONS.get("ch") == {"master", "admin", "viewer"}
+
+    def test_admin_sees_domain_page_agent_does_not(self, app, config_dir):
+        from src.utils.web_user_store import ROLE_ADMIN, ROLE_AGENT
+        admin = self._login(app, config_dir, "ops_admin", ROLE_ADMIN)
+        r = admin.get("/")
+        assert r.status_code == 200 and 'href="/channels"' in r.text
+        assert admin.get("/channels").status_code == 200
+
+        agent = self._login(app, config_dir, "ops_agent", ROLE_AGENT)
+        r = agent.get("/workspace", follow_redirects=True)
+        assert 'href="/channels"' not in r.text
+        r = agent.get("/channels", follow_redirects=False)
+        assert r.status_code in (302, 303, 307, 403)

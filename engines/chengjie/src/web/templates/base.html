@@ -632,7 +632,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
     {%- endif %}
   {%- endmacro %}
   {%- macro nav_domain(simple_mode) %}
-    {%- for dp in domain_web_pages if (dp.get('show_in_simple') if simple_mode else dp.get('section') == 'ops') %}
+    {%- for dp in domain_web_pages if (dp.get('show_in_simple') if simple_mode else dp.get('section') == 'ops') and (not user_role or user_role == 'master' or user_role in (page_perms or {}).get(dp.key, ['master'])) %}
     <a href="{{ dp.path }}"{% if active == dp.key %} class="active"{% endif %}>
       {{ nav_icons.get(dp.get('icon',''), nav_icons['info'])|safe }}
       <span>{{ (dp.get('label_simple') or dp.get('label','')) if simple_mode else dp.get('label','') }}</span>
@@ -877,7 +877,7 @@ var _cmdPagesAll=[
   {% for it in nav_cmd_items -%}
   {name:{{ (i18n or {}).get(it.label_key, it.label_zh)|tojson }},url:'{{ it.path }}',icon:'{{ nav_icons[it.icon]|safe }}',keys:'{{ it.cmd_keys }}',simple:{{ 'true' if it.simple else 'false' }}},
   {% endfor -%}
-  {% for dp in domain_web_pages -%}
+  {% for dp in domain_web_pages if (not user_role or user_role == 'master' or user_role in (page_perms or {}).get(dp.key, ['master'])) -%}
   {name:'{{ dp.get("label_simple") or dp.get("label","") }}',url:'{{ dp.path }}',icon:'{{ nav_icons.get(dp.get("icon",""), nav_icons["info"])|safe }}',keys:'{{ dp.get("cmd_keys","") }}',simple:{{ 'true' if dp.get('show_in_simple') else 'false' }}},
   {% endfor -%}
   {name:{{ (i18n or {}).get("cmd_reload","刷新当前页面")|tojson }},url:'#reload',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>',keys:'refresh reload 刷新 更新',simple:true},

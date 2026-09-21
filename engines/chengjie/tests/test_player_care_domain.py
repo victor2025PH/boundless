@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from domains.player_care.gateway import (
+    HEADER_KEY,
     LookupResult,
     PlayerGateway,
     extract_games,
@@ -436,3 +437,76 @@ async def test_process_message_dispatches_domain_hooks(tmp_path):
     # A 线自己决定 reply_lang（Taglish 短句可能判成 en）→ 安全句跟随该语言即可
     assert out in _SAFE_LINE.values(), "A 线 post hook 数字闸必须拦下编造数字"
     assert "_domain_context_block" not in sm._get_user_context("639171234567")
+
+
+# ── B1.5 前置：样例文件驱动的 /lookup 解析回放 + gateway_probe 自检 ──────────
+
+_SAMPLES_PATH = Path(__file__).resolve().parent / "fixtures" / "player_care_lookup_samples.json"
+
+
+def _load_samples():
+    return json.loads(_SAMPLES_PATH.read_text(encoding="utf-8"))["samples"]
+
+
+@pytest.mark.parametrize("sample", _load_samples(), ids=lambda s: s["name"])
+def test_lookup_samples_file(sample):
+    """样例文件里的每条 status/body 回放进 PlayerGateway → found / error / games / deposit 必须等于 expect。
+    真网关样例到手后：python -m domains.player_care.gateway_probe --out tests/fixtures/player_care_lookup_samples.json
+    覆盖本文件、改 expect，再调 extract_games / detect_deposit 直到本测试绿。"""
+    from domains.player_care.gateway_probe import replay_sample
+
+    assert replay_sample(sample) == sample["expect"]
+
+
+def test_probe_redaction_keeps_json_and_kills_values():
+    from domains.player_care.gateway_probe import redact_body, redact_raw, redact_text
+
+    secrets = ["639171234567", "09171234567", "9171234567"]
+    t = redact_text("phone 09171234567 balance 1,250.50 turnover 12345 2 araw", secrets)
+    assert "1234567" not in t and "12345" not in t and "250" not in t
+    assert "2 araw" in t                                # 1–2 位日常数字不动
+    body = redact_body('{"ok": true, "key": "abc", "balance": 1250, "n": 3, "chatx_text": "uid 778899"}', secrets)
+    d = json.loads(body)                                # 仍是合法 JSON
+    assert d["key"] == "***" and d["balance"] == 100 and d["n"] == 3 and "778899" not in d["chatx_text"]
+    assert redact_raw({"X-Gateway-Key": "s3cr3t", "agent": "A100"}) == {"X-Gateway-Key": "***", "agent": "A100"}
+
+
+def test_probe_runs_three_probes_without_leaking_key(tmp_path, capsys):
+    from domains.player_care import gateway_probe as gp
+
+    seen = []
+
+    def _tp(url, headers, body, timeout):
+        seen.append((json.loads(body.decode()), headers[HEADER_KEY]))
+        if headers[HEADER_KEY] != "real-key":
+            return 401, b'{"error":"unauthorized"}'
+        if seen[-1][0].get("phone") == gp.NOT_FOUND_PHONE:
+            return 404, b'{"error":"not found"}'
+        return 200, json.dumps({"ok": True, "agent": "AG7", "chatx_text": FOUND.chatx_text}).encode()
+
+    cfg = {"url": "http://gw", "key": "real-key", "key_env": "GATEWAY_KEY", "timeout_sec": 1, "lookup_path": "/lookup"}
+    rep = gp.run_probes(cfg, phone="09171234567", transport=_tp)
+    names = [s["name"] for s in rep["samples"]]
+    assert names == ["found", "not_found", "bad_key"]
+    assert [s["expect"]["found"] for s in rep["samples"]] == [True, False, False]
+    assert rep["samples"][1]["status"] == 404 and rep["samples"][1]["expect"]["ok"] is True
+    assert rep["samples"][2]["expect"]["error"] == "http_401"
+    assert rep["samples"][0]["has_agent_field"] is True and "agent" in rep["samples"][0]["raw_keys"]
+    assert rep["samples"][0]["expect"]["games"] == extract_games(FOUND.chatx_text)
+    assert seen[0][0]["phone"] == "639171234567" and seen[2][1] == gp.BAD_KEY
+    dumped = json.dumps(rep, ensure_ascii=False)
+    assert "real-key" not in dumped and "639171234567" not in dumped and "1,250" not in dumped
+    assert rep["key_present"] is True
+    # 每条样例都自洽：写出去的 body 回放 == expect（测试 test_lookup_samples_file 的前提）
+    for s in rep["samples"]:
+        assert gp.replay_sample(s) == s["expect"]
+    txt = gp.render_report(rep)
+    assert "[found]" in txt and "[bad_key]" in txt and "real-key" not in txt
+
+
+def test_probe_cli_refuses_without_key(monkeypatch, capsys):
+    from domains.player_care import gateway_probe as gp
+
+    monkeypatch.delenv("GATEWAY_KEY", raising=False)
+    assert gp.main(["--url", "http://gw", "--phone", "09171234567"]) == 2
+    assert "GATEWAY_KEY" in capsys.readouterr().err

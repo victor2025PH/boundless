@@ -1,0 +1,48 @@
+{
+  "probe_version": 1,
+  "_note": "占位样例（按 2026-09-20 老板口径假设的 chatx_text 格式）。拿到真网关样例后用 python -m domains.player_care.gateway_probe --out 覆盖本文件，再按真实格式改 expect 与 extract_games。",
+  "url": "http://gateway.example",
+  "lookup_path": "/lookup",
+  "samples": [
+    {
+      "name": "found",
+      "status": 200,
+      "body": "{\"ok\": true, \"chatx_text\": \"Player 100000\\nbalance: 100.00\\nturnover: 1000\\nlast deposit: 100 on 1000-00-00 10:00\\nrecent games: platform: JILI, game: Super Ace | platform: PG, game: Mahjong Ways\"}",
+      "expect": {
+        "ok": true,
+        "found": true,
+        "error": "",
+        "games": [
+          {"platform": "JILI", "game": "Super Ace"},
+          {"platform": "PG", "game": "Mahjong Ways"}
+        ],
+        "deposit": true
+      }
+    },
+    {
+      "name": "not_found",
+      "status": 200,
+      "body": "{\"ok\": false, \"chatx_text\": \"\", \"error\": \"player not found\"}",
+      "expect": {"ok": true, "found": false, "error": "player not found", "games": [], "deposit": false}
+    },
+    {
+      "name": "not_found_404",
+      "status": 404,
+      "body": "{\"error\": \"not found\"}",
+      "expect": {"ok": true, "found": false, "error": "", "games": [], "deposit": false}
+    },
+    {
+      "name": "bad_key",
+      "status": 401,
+      "body": "{\"error\": \"unauthorized\"}",
+      "expect": {"ok": false, "found": false, "error": "http_401", "games": [], "deposit": false}
+    },
+    {
+      "name": "timeout",
+      "status": 0,
+      "body": "",
+      "transport_error": "timeout",
+      "expect": {"ok": false, "found": false, "error": "timeout", "games": [], "deposit": false}
+    }
+  ]
+}

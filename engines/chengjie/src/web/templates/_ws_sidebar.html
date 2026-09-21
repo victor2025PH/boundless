@@ -116,7 +116,7 @@
     {%- endif %}
   {%- endmacro %}
   {%- macro wsb_domain(simple_mode) %}
-    {%- for dp in domain_web_pages if (dp.get('show_in_simple') if simple_mode else dp.get('section') == 'ops') %}
+    {%- for dp in domain_web_pages if (dp.get('show_in_simple') if simple_mode else dp.get('section') == 'ops') and (not user_role or user_role == 'master' or user_role in (page_perms or {}).get(dp.key, ['master'])) %}
     {%- set _dlbl = (dp.get('label_simple') or dp.get('label','')) if simple_mode else dp.get('label','') %}
     <a href="{{ dp.path }}" data-nav="domain"{% if dp.path == _cur_path %} class="active"{% endif %} title="{{ _dlbl }}">
       {{ nav_icons.get(dp.get('icon',''), nav_icons['info'])|safe }}

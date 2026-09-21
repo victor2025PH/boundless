@@ -32,7 +32,8 @@ i18n:
 # 由 admin 按激活域自动挂载，只在 domain=player_care 的实例出现。
 web_routes: true
 
-# B6：看板页挂侧栏（运营区）；页面权限键无核心 PAGE_PERMISSIONS 条目 → 只有 master 可看。
+# B6：看板页挂侧栏（运营区）；roles 由核心 register_domain_page_permissions 注册进 PAGE_PERMISSIONS
+# （只读看板：master / admin / supervisor / viewer；agent 只用工作台，不给）。
 web:
   routes: true
   pages:
@@ -43,5 +44,5 @@ web:
       icon: pulse
       section: ops
       show_in_simple: true
-      roles: [master]
+      roles: [master, admin, supervisor, viewer]
       cmd_keys: "player overview 玩家 看板 阶段 网关"
