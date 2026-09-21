@@ -215,9 +215,11 @@ class GuardedSender:
 
     def send(self, target_name: str, text: str, *, expected_wxid: str = "") -> SendOutcome:
         """``expected_wxid`` 非空＝微信号级身份：open 步逐格核对资料卡（同名不同号防发错人）。
-        五步整体持桌面输入锁：双开时另一个驾驶不能在填字→回车之间抓前台。"""
-        with desktop_input():
-            return self._send(target_name, text, expected_wxid=expected_wxid)
+
+        桌面输入锁只在**要动鼠标键盘**的步骤持有（open 点会话格 / fill 粘贴 / send 点按钮），
+        等对方停止输入、拟人打字时长、等回显这些纯等待/纯读的时段让出桌面给另一个驾驶——
+        每步后端自己先置前台再操作，且回车前重校标题，所以步与步之间被抢一下前台不影响正确性。"""
+        return self._send(target_name, text, expected_wxid=expected_wxid)
 
     def _send(self, target_name: str, text: str, *, expected_wxid: str = "") -> SendOutcome:
         t0 = time.monotonic()
@@ -226,10 +228,11 @@ class GuardedSender:
         if not _norm_text(text):
             return SendOutcome(False, "fill", "empty_text", trace=trace)
         # 1. open（带身份核对）
-        try:
-            opened = self.backend.open_session(target_name, expected_wxid=expected_wxid)
-        except TypeError:  # 旧后端签名
-            opened = self.backend.open_session(target_name)
+        with desktop_input():
+            try:
+                opened = self.backend.open_session(target_name, expected_wxid=expected_wxid)
+            except TypeError:  # 旧后端签名
+                opened = self.backend.open_session(target_name)
         if not opened:
             return self._fail("open", "identity_mismatch" if expected_wxid else "open_session_failed",
                               t0, trace)
@@ -243,21 +246,24 @@ class GuardedSender:
         self._wait_peer_typing(trace)
         before = self.backend.read_visible_messages()
         # 3. fill
-        if not self.backend.set_composer(text):
-            return self._fail("fill", "set_composer_failed", t0, trace)
+        with desktop_input():
+            if not self.backend.set_composer(text):
+                return self._fail("fill", "set_composer_failed", t0, trace)
         self._sleep(max(0.0, float(self._type_time(text) or 0.0)))
         composer = self.backend.read_composer()
         if not verify_composer(composer, text):
-            self.backend.set_composer("")   # 清残留，防下一条把半句一起发出去
+            with desktop_input():
+                self.backend.set_composer("")   # 清残留，防下一条把半句一起发出去
             return self._fail("fill", "composer_mismatch", t0, trace)
         trace.append("fill ok")
         # 4. send —— 回车前再校一次标题：填字期间焦点被抢/来消息把会话顶走的窗口就在这里
-        if not verify_title(self.backend.current_title(), target_name):
-            self.backend.set_composer("")
-            return self._fail("send", "title_changed_before_send", t0, trace)
-        if not self.backend.press_send():
-            self.backend.set_composer("")   # 没发出去的稿子不能留在框里等人手一回车
-            return self._fail("send", "press_send_failed", t0, trace)
+        with desktop_input():
+            if not verify_title(self.backend.current_title(), target_name):
+                self.backend.set_composer("")
+                return self._fail("send", "title_changed_before_send", t0, trace)
+            if not self.backend.press_send():
+                self.backend.set_composer("")   # 没发出去的稿子不能留在框里等人手一回车
+                return self._fail("send", "press_send_failed", t0, trace)
         trace.append("send ok")
         # 5. echo
         for i in range(self.echo_retries):

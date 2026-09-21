@@ -722,17 +722,18 @@ class WeChatPcService:
         handled = 0
         for row in rows[: self.max_sessions_per_tick]:
             try:
-                with desktop_input():
-                    handled += self._scan_one_session(row)
+                handled += self._scan_one_session(row)
             except Exception:
                 self.stats.errors += 1
                 logger.debug("[wechat_pc] 会话扫描失败 %s", row.display_name, exc_info=True)
         return handled
 
     def _scan_one_session(self, row: Any) -> int:
-        """开一个未读会话→校标题→读气泡（一段连续桌面交互，调用方持桌面输入锁）。"""
-        if not self.backend.open_session(row.display_name, index=getattr(row, "index", -1)):
-            return 0
+        """开一个未读会话→校标题→读气泡。只有「点会话格」要动鼠标，持桌面输入锁；后面读标题/读气泡是纯 UIA 读，
+        另一个驾驶这时抢前台不影响本窗已打开的会话。"""
+        with desktop_input():
+            if not self.backend.open_session(row.display_name, index=getattr(row, "index", -1)):
+                return 0
         title = self.backend.current_title()
         # 群聊：会话格只有群名、标题带成员数「群名 (12)」→ 标 is_group（群策略默认永不回复）
         if not row.is_group and is_group_title(title, row.display_name):

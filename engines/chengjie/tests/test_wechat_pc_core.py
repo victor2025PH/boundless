@@ -601,8 +601,9 @@ def test_desktop_input_lock_is_reentrant_and_exclusive_across_holders():
     assert a._depth == 0
 
 
-def test_send_and_inbound_scan_hold_desktop_input_lock(monkeypatch):
-    """五步发送整段、每个未读会话「开→读」整段都在桌面输入锁内：另一个驾驶不能夹在填字与回车之间抢前台。"""
+def test_send_and_inbound_scan_hold_desktop_input_lock_only_for_foreground_steps(monkeypatch):
+    """桌面输入锁只包「要动鼠标键盘」的步骤（开会话格 / 粘贴 / 点发送），拟人打字时长、等回显、读气泡这些纯等待/纯读
+    不持锁——双开时另一个驾驶不用陪着等 A 号「打字」十几秒。"""
     from src.integrations.wechat_pc import send_guard as SG
     from src.integrations.wechat_pc import service as S
 
@@ -628,15 +629,19 @@ def test_send_and_inbound_scan_hold_desktop_input_lock(monkeypatch):
     fb.open_session = lambda *a, **k: (seen.append(("open", rec.depth)), orig_open(*a, **k))[1]
     fb.set_composer = lambda *a, **k: (seen.append(("fill", rec.depth)), orig_set(*a, **k))[1]
     fb.press_send = lambda *a, **k: (seen.append(("send", rec.depth)), orig_send(*a, **k))[1]
+    orig_read = fb.read_visible_messages
+    fb.read_visible_messages = lambda *a, **k: (seen.append(("read", rec.depth)), orig_read(*a, **k))[1]
+    svc.sender._sleep = lambda sec: seen.append(("sleep", rec.depth))
     fb.sessions = [SessionRow("张三", unread=1)]
     fb.messages["张三"] = [Bubble("在吗", runtime_id="1")]
     svc.tick()
     br.queue = [{"id": 7, "chat_key": "wx:name:张三", "text": "在的", "kind": "manual"}]
     clock["t"] += 30
     svc.tick()
-    assert seen and all(d >= 1 for _, d in seen), seen
     assert rec.depth == 0 and rec.events[-1][0] == "exit"
-    assert ("fill", 1) in seen and ("send", 1) in seen, "填字与回车在同一段持锁区间内"
+    assert all(d >= 1 for k, d in seen if k in ("open", "fill", "send")), seen
+    assert all(d == 0 for k, d in seen if k in ("read", "sleep")), f"纯读/纯等待不该持锁：{seen}"
+    assert ("fill", 1) in seen and ("send", 1) in seen and ("sleep", 0) in seen
 
 
 def test_auto_reply_requires_recent_inbound_and_freezes_on_guard_failure():
