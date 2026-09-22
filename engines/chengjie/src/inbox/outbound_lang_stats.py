@@ -40,6 +40,21 @@ _BY_TARGET_OUTCOMES = ("held", "medium_confidence", "complaint")
 _BY_TARGET_CAP = 32
 _LAST_EVENTS_CAP = 8
 _CONV_ID_MAX = 80
+_TARGET_MAX = 16
+
+
+def _norm_target(target: str) -> str:
+    """by_target 桶键与翻译链目标语同码（``outbound_translate.normalize_target``：
+    zh-CN→zh、zh-Hant/zh-HK→zh-tw、pt-BR→pt、auto/unknown→""），任一录入方
+    （翻译闸 / 入站 complaint）给的原始码都先过这一道，避免同一语种散成多桶。"""
+    raw = str(target or "").strip().lower()
+    if not raw:
+        return ""
+    try:
+        from src.inbox.outbound_translate import normalize_target
+        return str(normalize_target(raw) or "")[:_TARGET_MAX]
+    except Exception:
+        return raw[:_TARGET_MAX]
 
 
 class OutboundLangStats:
@@ -58,7 +73,7 @@ class OutboundLangStats:
         if key not in _OUTCOMES:
             return
         cid = str(conversation_id or "")[:_CONV_ID_MAX]
-        tgt = str(target or "").strip().lower()[:16]
+        tgt = _norm_target(target)
         with self._lock:
             self._counts[key] += 1
             if key in _BY_TARGET_OUTCOMES and tgt and (
@@ -70,7 +85,7 @@ class OutboundLangStats:
                 "ts": time.time(),
                 "outcome": key,
                 "conversation_id": cid,
-                "target": str(target or "")[:16],
+                "target": tgt,
             })
 
     def dump(self) -> Dict[str, Any]:

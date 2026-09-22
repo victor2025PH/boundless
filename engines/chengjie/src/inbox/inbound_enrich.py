@@ -413,8 +413,25 @@ def language_complaint_detail(
     if not u_lang or u_lang == a_lang:
         return "", ""
     if _LANG_CONFUSION_RE.search(t) or _PURE_QMARKS_RE.match(t):
-        return "confusion", str(u_lang)
+        return "confusion", _complaint_lang_code(str(u_lang), t)
     return "", ""
+
+
+def _complaint_lang_code(lang: str, text: str) -> str:
+    """complaint 分桶用的客户语种码：与出站翻译目标语同码（``normalize_target``），
+    中文家族再按粤语旁路细分到 ``yue``（翻译链把 yue 当一等目标语，桶键要对得上）。"""
+    try:
+        from src.inbox.outbound_translate import normalize_target
+        code = normalize_target(lang) or str(lang or "")
+    except Exception:
+        code = str(lang or "")
+    if code == "zh":
+        try:
+            from src.ai.translation_service import detect_zh_variant
+            code = detect_zh_variant(text) or code
+        except Exception:
+            pass
+    return code
 
 
 def build_language_recovery_hint() -> str:

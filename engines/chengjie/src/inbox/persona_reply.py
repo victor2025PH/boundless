@@ -1764,12 +1764,14 @@ async def generate_topic_opener(
     reply = None
     if sm is not None and getattr(sm, "ai_client", None) is not None:
         try:
-            # 情景记忆注入：开场跟进「对方提过的具体事」正需要长期事实
+            # 情景记忆注入：开场跟进「对方提过的具体事」正需要长期事实；
+            # 主动开口只拿对方亲口说过的（proactive=True，P3 #341）
             if chat_key and hasattr(sm, "_inject_episodic_into_context"):
                 try:
                     sm._inject_episodic_into_context(
                         ctx, str(chat_key), "",
                         current_user_text="", platform=platform,
+                        proactive=True,
                     )
                 except Exception:
                     logger.debug("[persona_reply] opener 记忆注入跳过", exc_info=True)

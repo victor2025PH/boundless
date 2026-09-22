@@ -126,6 +126,19 @@ def test_skill_manager_injection_records_recall(store: EpisodicMemoryStore):
     s._inject_episodic_into_context(ctx2, uid, uid, current_user_text="狗", platform="telegram")
     byk = store.recent_recalls(memory_key=uid, batches=5)
     assert byk[0]["chain"] == "direct" and _rc(store, b)[0] == 2
+    # P3 #341：proactive=True → 只拿 user_stated；ai_inferred 整行不进主动话术
+    c = store.add_fact(uid, "用户可能在考虑换工作", source="ai_inferred")
+    ctx4 = {}
+    s._inject_episodic_into_context(ctx4, uid, uid, platform="telegram", proactive=True)
+    assert "拿铁" in ctx4["_episodic_memory_text"] and "换工作" not in ctx4["_episodic_memory_text"]
+    ctx5 = {}
+    s._inject_episodic_into_context(ctx5, uid, uid, platform="telegram")
+    assert "换工作" in ctx5["_episodic_memory_text"], "回复链不受影响"
+    s3 = _Stub(); s3._memory_cfg = dict(_Stub._memory_cfg, proactive_stated_only=False)
+    ctx6 = {}
+    s3._inject_episodic_into_context(ctx6, uid, uid, platform="telegram", proactive=True)
+    assert "换工作" in ctx6["_episodic_memory_text"], "开关可关"
+    assert _rc(store, c)[0] == 2
     # 旧/假 store（无 with_ids / record_recall）→ 旧口径，不炸
     legacy = MagicMock(spec=["get_bullets_for_prompt"])
     legacy.get_bullets_for_prompt.return_value = "- x"

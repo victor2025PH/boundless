@@ -121,6 +121,37 @@ def test_complaint_detail_exposes_customer_lang_for_by_target():
     assert "outbound_lang_gate_target_total{outcome=\"complaint\",target=\"en\"} 1" in st.dump_prom()
 
 
+def test_by_target_codes_shared_with_translation_chain():
+    # P3-3：complaint 与翻译闸落同一套目标语码（normalize_target），不再「同语散多桶」
+    from src.inbox.inbound_enrich import language_complaint_detail
+    from src.inbox.outbound_lang_stats import OutboundLangStats
+    from src.inbox.outbound_translate import normalize_target
+    st = OutboundLangStats()
+    st.record("complaint", target="zh-CN")
+    st.record("held", target="zh_Hant")
+    st.record("medium_confidence", target="zh-HK")
+    st.record("held", target="pt-BR")
+    st.record("complaint", target="auto")          # 无效码不开桶但总数照记
+    d = st.dump()
+    assert d["complaint"] == 2 and d["held"] == 2
+    assert d["by_target"]["zh"]["complaint"] == 1
+    assert d["by_target"]["zh-tw"] == {"held": 1, "medium_confidence": 1, "complaint": 0}
+    assert d["by_target"]["pt"]["held"] == 1
+    assert "auto" not in d["by_target"] and "zh-cn" not in d["by_target"]
+    assert d["last_events"][0]["target"] == "zh"
+    # 粤语客户「看不懂」→ yue 桶（翻译链 yue 是一等目标语）；普通中文仍 zh
+    hist = _hist(("user", "你今日做咩嘢呀"),
+                 ("assistant", "Sorry I was busy earlier, what's up my friend?"))
+    v, lang = language_complaint_detail("睇唔明，你講嘅係乜嘢？看不懂", hist)
+    assert v == "confusion" and lang == "yue" == normalize_target("yue")
+    hist_zh = _hist(("user", "你在做什么呀今天"),
+                    ("assistant", "Sorry I was busy earlier, what's up my friend?"))
+    assert language_complaint_detail("看不懂你发的什么", hist_zh) == ("confusion", "zh")
+    _, en = language_complaint_detail(
+        "English please??", _hist(("user", "can you send me the script"), ("assistant", _A_WRONG_ZH)))
+    assert en == "en" == normalize_target("EN")
+
+
 def test_complaint_requires_mismatch_context():
     # 语言一致 → 同样的句式绝不误报（说的是内容不是语言）
     hist_en = _hist(("user", "she left without a word"),

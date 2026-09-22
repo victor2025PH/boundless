@@ -5767,7 +5767,15 @@ class SkillManager(LoggerMixin):
         current_user_text: str = "",
         query_embedding: Optional[List[float]] = None,
         platform: str = "",  # S5
+        proactive: bool = False,
     ) -> None:
+        """把该联系人的长期事实写入 ``user_context["_episodic_memory_text"]``。
+
+        ``proactive=True``（P3 #341）：我方先开口的链（主动开场等）只拿 ``user_stated``
+        条目——AI 推断出来的事不配被主动陈述（与 care 链 ``memory_stated_only`` /
+        ``proactive_topic._eligible_facts`` 同纪律）；由 ``memory.proactive_stated_only``
+        （默认开）控制。回复链（客户先说）不受影响。
+        """
         user_context.pop("_episodic_memory_text", None)
         if not self._episodic_store:
             return
@@ -5807,6 +5815,8 @@ class SkillManager(LoggerMixin):
             recency_weight=rw,
             recency_half_life_days=hl,
         )
+        if proactive and bool(mcfg.get("proactive_stated_only", True)):
+            _gb_kwargs["stated_only"] = True
         # J-10 A3：能给行 id 的 store 走 with_ids（召回记账用）；旧/假 store 走旧口
         _with_ids = getattr(self._episodic_store, "get_bullets_with_ids", None)
         _used_ids: List[int] = []

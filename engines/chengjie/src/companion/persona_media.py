@@ -117,7 +117,11 @@ def infer_scene_kind(parsed: Any, scene_class: str = "") -> str:
 
 
 def scene_kind_of(row: Optional[Dict[str, Any]]) -> str:
-    """条目 kind：``tags kind:`` → auto_meta.scene_kind → 从场景类/识图结论推断。"""
+    """条目 kind：``tags kind:`` → auto_meta.scene_kind → 从场景类/识图结论推断。
+
+    生成图（``auto_generated``）的 selfie 归类由入册时写 ``kind:selfie`` /
+    存量库 ``PersonaMediaStore._backfill_generated_kind`` 落库保证，这里不再按标签兜底。
+    """
     k = _tag_value(row, "kind:").lower()
     if k in SCENE_KINDS:
         return k
@@ -125,11 +129,7 @@ def scene_kind_of(row: Optional[Dict[str, Any]]) -> str:
     ak = str((am or {}).get("scene_kind") or "").strip().lower()
     if ak in SCENE_KINDS:
         return ak
-    kind = infer_scene_kind(am, row_scene_class(row))
-    # 自动定妆入册的生成图必是人设本人自拍：无场景信息时按 selfie 计，不落 other。
-    if kind == "other" and "auto_generated" in ((row or {}).get("tags") or []):
-        return "selfie"
-    return kind
+    return infer_scene_kind(am, row_scene_class(row))
 
 
 def requested_scene_kind(text: Any) -> str:

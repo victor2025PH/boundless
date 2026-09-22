@@ -148,6 +148,44 @@ class PersonaMediaStore:
                 " PRIMARY KEY (day, scene))")
         except Exception:
             logger.debug("[persona_media] scene_demand_daily 建表跳过", exc_info=True)
+        self._backfill_generated_kind()
+
+    def _backfill_generated_kind(self) -> None:
+        """存量生成图补 ``kind:selfie``（幂等；调用方已持锁）。
+
+        自动定妆入册的生成图必是人设本人自拍，早期入册没写 ``kind:`` 标签，只靠
+        ``scene_kind_of`` 读时按 ``auto_generated`` 兜底成 selfie。改为一次性落库：
+        带 ``auto_generated`` 且无 ``kind:`` 标签、又推不出 kind 的行补显式标签，
+        读路径不再需要兜底。失败不抛。
+        """
+        try:
+            from src.companion.persona_media import (
+                SCENE_KINDS,
+                infer_scene_kind,
+                row_scene_class,
+            )
+            rows = self._conn.execute(
+                "SELECT * FROM persona_media WHERE tags LIKE '%auto_generated%'"
+                " AND tags NOT LIKE '%kind:%'").fetchall()
+            n = 0
+            for r in rows:
+                d = self._row_to_dict(r)
+                tags = [str(t) for t in (d.get("tags") or [])]
+                if "auto_generated" not in tags or any(t.startswith("kind:") for t in tags):
+                    continue
+                am = d.get("auto_meta") if isinstance(d.get("auto_meta"), dict) else {}
+                if str(am.get("scene_kind") or "").strip().lower() in SCENE_KINDS:
+                    continue
+                if infer_scene_kind(am, row_scene_class(d)) != "other":
+                    continue
+                self._conn.execute(
+                    "UPDATE persona_media SET tags=? WHERE id=?",
+                    (json.dumps(tags + ["kind:selfie"], ensure_ascii=False), d["id"]))
+                n += 1
+            if n:
+                logger.info("[persona_media] 存量生成图补 kind:selfie %d 条", n)
+        except Exception:
+            logger.debug("[persona_media] 生成图 kind 回填跳过", exc_info=True)
 
     # ── 场景需求日账本（P3 2026-08-22：需求侧跨重启记忆）────────────────────
     def record_scene_demand(self, scene_class: str, *, unmet: bool,

@@ -261,6 +261,66 @@ def test_run_autosend_image_directive_miss_marks_agent_note(monkeypatch):
     assert kw["persona_id"] == "lin" and kw["scene"].startswith("library study")  # 场景可能被补时段
 
 
+def test_pick_registered_media_directive_miss_carries_trigger(monkeypatch):
+    # P3-2：prompt/相册侧 directive 落空与直通侧同出口——持久 marker 也带 trigger=directive
+    from src.inbox import image_autosend as ia
+    from src.inbox import image_send_gate as isg
+
+    inbox = _Store()
+    monkeypatch.setattr(amm, "_default_store", lambda: inbox)
+    album = _AlbumSt([_row(1, triggers=["跳舞"], tags=["kind:selfie"])])
+    monkeypatch.setattr("src.companion.persona_media_store.get_persona_media_store", lambda: album)
+    cfg = {"companion": {"selfie": {"enabled": True}}}
+    ck = "whatsapp:acct1:dmiss"
+    gate = isg.IntentGate(intent=True, trigger=isg.TRIGGER_DIRECTIVE, words="haha nice")
+    assert ia.pick_registered_media(cfg, "nori", "haha nice", conv_key=ck, intent_gate=gate) is None
+    rec = amm.get(ck, store=inbox)
+    assert rec and rec["trigger"] == "directive"
+    # 客户索图落空仍是普通文案（trigger=ask，conv_state 走 album_no_match 键）
+    ck2 = "whatsapp:acct1:amiss"
+    assert ia.pick_registered_media(cfg, "nori", "发张风景照", conv_key=ck2) is None
+    rec2 = amm.get(ck2, store=inbox)
+    assert rec2 and rec2["trigger"] != "directive"
+
+
+def test_run_autosend_image_directive_sent_clears_agent_note(monkeypatch):
+    # P3-2：directive 有货并发出 → 之前的落空旁注清掉，不留过期琥珀条
+    import asyncio
+
+    import src.companion.photo_capability as pc
+    import src.inbox.image_autosend as ia
+
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda pid: True)
+    inbox = _Store()
+    monkeypatch.setattr(amm, "_default_store", lambda: inbox)
+    amm.mark(CID, query="library study", scene="library study", persona_id="lin",
+             store=inbox, trigger="directive")
+    assert amm.get(CID, store=inbox)
+
+    async def _stage(*a, **k):
+        return "/tmp/x.jpg", "", "selfie", {"provider": "gen"}
+
+    monkeypatch.setattr(ia, "stage_image_file", _stage)
+
+    async def _same(path, cap, **k):
+        return cap, "ok"
+
+    monkeypatch.setattr("src.ai.caption_image_guard.ensure_truthful_caption", _same)
+    calls = []
+
+    async def send_fn(*a):
+        calls.append(a)
+        return True
+
+    cfg = {"companion": {"selfie": {"enabled": True}}}
+    ok = asyncio.run(ia.run_autosend_image(
+        cfg, "telegram", "acct1", "chat1", "lin", "haha nice",
+        None, send_fn=send_fn, conv_key=CID, ai_text="just finished studying",
+        directive_override={"kind": "selfie", "scene": "library study"}))
+    assert ok is True and len(calls) == 1
+    assert amm.get(CID, store=inbox) is None
+
+
 # ── ⑤ 词条 ───────────────────────────────────────────────────────────────
 
 def test_note_i18n_keys_bilingual_and_traditional():

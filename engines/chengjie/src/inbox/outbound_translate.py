@@ -114,8 +114,8 @@ _ZH_VARIANTS = {"zh-tw", "zh-hk", "zh-hant"}
 
 
 def normalize_target(lang: str) -> str:
-    """归一化语言码：zh-CN → zh、zh-HK/zh-Hant → zh-tw；空/未知/auto → ""。"""
-    low = str(lang or "").strip().lower()
+    """归一化语言码：zh-CN → zh、zh-HK/zh-Hant/zh_Hant → zh-tw；空/未知/auto → ""。"""
+    low = str(lang or "").strip().lower().replace("_", "-")
     if low in _SKIP_TARGETS:
         return ""
     if low in _ZH_VARIANTS:

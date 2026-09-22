@@ -1225,7 +1225,8 @@ def pick_registered_media(
                 from src.inbox.album_miss_marker import mark as _album_miss_mark
                 _album_miss_mark(str(conv_key), query=str(peer_text or ""),
                                  scene=_scene_kind or _scene_cls or "",
-                                 persona_id=str(persona_id or ""))
+                                 persona_id=str(persona_id or ""),
+                                 trigger=str(getattr(intent_gate, "trigger", "") or ""))
             except Exception:
                 logger.debug("[album_match] album_miss_marker.mark 失败（忽略）", exc_info=True)
     elif row is not None and conv_key:
@@ -1398,7 +1399,9 @@ def _maybe_register_generated_selfie(
         if scene:
             # series 标签让"同场景生成图"互为一个系列（防复读账本按系列排除）
             _tags += [f"scene:{scene}", f"series:auto-{scene}"]
-        else:
+        # 生成图必是人设本人自拍：场景推不出 kind 时显式落 kind:selfie（读路径不再按标签兜底）
+        from src.companion.persona_media import infer_scene_kind, scene_class_of
+        if infer_scene_kind({}, scene_class_of(scene) if scene else "") == "other":
             _tags.append("kind:selfie")
         row = st.add(str(persona_id), "photo", str(dst), "", triggers=[],
                      tags=_tags, created_by="image_autosend")
@@ -1665,6 +1668,12 @@ async def run_autosend_image(
             ok = False
         if ok:
             note_media_receipt(ck, path=local, url=url, media_type="image", mid=_mid)
+            if ck:
+                try:
+                    from src.inbox.album_miss_marker import clear as _album_miss_clear
+                    _album_miss_clear(str(ck))
+                except Exception:
+                    logger.debug("[image_autosend] album_miss_marker.clear 失败（忽略）", exc_info=True)
             if cap_src:
                 record_caption(cap_src, cap)
             if cap_src == "fixed":

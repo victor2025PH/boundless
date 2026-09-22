@@ -77,6 +77,39 @@ def test_legacy_db_migrates_and_reads(tmp_path):
     assert st.phashes("lin") == {"m1": "a" * 16}
 
 
+def test_legacy_generated_rows_backfill_kind_selfie(tmp_path):
+    # P3-4：存量 auto_generated 行无 kind: 标签 → 开库一次性补 kind:selfie；
+    # 已有 kind: / auto_meta.scene_kind / 能推出 kind 的行不动；手动上传图不动
+    from src.companion.persona_media import scene_kind_of
+    db = tmp_path / "legacy_gen.db"
+    _make_legacy_db(db)
+    conn = sqlite3.connect(str(db))
+    for mid, tags in (
+        ("g1", '["auto_generated"]'),
+        ("g2", '["auto_generated", "kind:indoor"]'),
+        ("g3", '["auto_generated", "scene:beach"]'),
+        ("u1", '["scene:home"]'),
+    ):
+        conn.execute(
+            "INSERT INTO persona_media (id, persona_id, media_type, file_path, url,"
+            " tags, sha256, created_at, updated_at) VALUES (?, 'lin', 'photo',"
+            " ?, '', ?, ?, 1, 1)", (mid, f"/x/{mid}.jpg", tags, "s" + mid))
+    conn.commit()
+    conn.close()
+    st = PersonaMediaStore(str(db))
+    assert st.get("g1")["tags"] == ["auto_generated", "kind:selfie"]
+    assert st.get("g2")["tags"] == ["auto_generated", "kind:indoor"]
+    assert st.get("g3")["tags"] == ["auto_generated", "scene:beach"]
+    assert st.get("u1")["tags"] == ["scene:home"]
+    assert scene_kind_of(st.get("g1")) == "selfie"
+    assert scene_kind_of(st.get("g3")) == "outdoor"
+    # 幂等：再开一次不重复追加
+    st2 = PersonaMediaStore(str(db))
+    assert st2.get("g1")["tags"] == ["auto_generated", "kind:selfie"]
+    # 读路径不再兜底：裸 auto_generated 字典行（未经 store）判 other
+    assert scene_kind_of({"tags": ["auto_generated"], "auto_meta": {}}) == "other"
+
+
 def test_set_auto_tag_partial_and_noop():
     st = PersonaMediaStore(":memory:")
     row = st.add("lin", "photo", "/x/a.jpg", "/static/a.jpg")
