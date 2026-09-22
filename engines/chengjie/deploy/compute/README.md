@@ -164,6 +164,8 @@
   旧 32B 版本备份 `vllm_keepalive.ps1.bak_32b`）。防火墙 8010 已放行。
   （**2026-08-15 起**：两 unit 均 disabled 只 start、`VLLM_Keepalive` 已 Disabled，
   持久化整体由中枢 keepwarm 接管——见「统一契约」顶部移交注记。）
+  （**2026-09-22 起**：Hub `cluster/mode` 自 08-29 冻结、keepwarm 接管停摆，`VLLM_Keepalive` 在 173 重新启用并改为
+  S4U + 开机触发（PT1M）+ 登录双触发、不限时，负责 8001 chatx lane；见 docs/实施102 §7.1 ⑤。）
 - **验收**：`powershell -File deploy\compute\verify_vllm.ps1 -BaseUrl http://192.168.0.173:8010 -Model coder -MinTokS 50`
 - **集群化口径**（如实边界）：LLM 推理**不能跨机拼显存**（1GbE 张量并行会掉到个位数
   tok/s），「全网算力一起上」＝按请求分流/多副本，不是单模型变大。当前唯一能扛 27B 的
