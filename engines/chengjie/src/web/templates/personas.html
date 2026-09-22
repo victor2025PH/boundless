@@ -5641,8 +5641,8 @@ var _VX_LEVELS = ['restrained', 'natural', 'vivid', 'dramatic'];
 var _vxTouched = false;
 function _vxNorm(v) {
   v = String(v == null ? '' : v).trim().toLowerCase();
-  var alias = {'克制': 'restrained', low: 'restrained', subtle: 'restrained', '自然': 'natural', 'default': 'natural', normal: 'natural', medium: 'natural',
-               '生动': 'vivid', high: 'vivid', lively: 'vivid', '戏剧': 'dramatic', max: 'dramatic', theatrical: 'dramatic'};
+  var alias = {low: 'restrained', subtle: 'restrained', 'default': 'natural', normal: 'natural', medium: 'natural',
+               high: 'vivid', lively: 'vivid', max: 'dramatic', theatrical: 'dramatic'};
   if (_VX_LEVELS.indexOf(v) >= 0) return v;
   return alias[v] || '';
 }
@@ -5724,7 +5724,9 @@ async function _vxPreview(dir) {
     _vxAudio.onended = _vxAudio.onerror = function () { _vxAudio = null; };
     _vxAudio.play().catch(function () {});
     var vm = d.voice_meta || {};
-    _toast(window.Tf('psn_vx_preview_playing', {level: window.T('psn_vx_' + (vm.expressiveness || lv)), emotion: vm.emotion || '-'}), 'ok');
+    var _vxKey = {restrained: 'psn_vx_restrained', natural: 'psn_vx_natural', vivid: 'psn_vx_vivid', dramatic: 'psn_vx_dramatic'};
+    var _lvEff = _vxNorm(vm.expressiveness || lv);
+    _toast(window.Tf('psn_vx_preview_playing', {level: _lvEff ? window.T(_vxKey[_lvEff]) : window.T('psn_vx_inherit'), emotion: vm.emotion || '-'}), 'ok');
   } catch (e) {
     _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
   } finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
