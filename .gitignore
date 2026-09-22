@@ -131,3 +131,10 @@ website/.wizard-shots-en/
 # 发布物只活在下载服务器（deploy.ps1 [3.5/4] 差量上传通道），不入库
 website/public/downloads/
 website/public/releases/
+# video_songs 生成产物（webm/png/jpg，1.1GB）不入库，脚本/歌词/文案仍入库
+deliverables/video_songs_20260916/out/
+# 本机运行时数据/审计日志/邮箱文件
+config/*.db
+engines/chengjie/*_audit.jsonl
+engines/chengjie/@AutomationLog.txt
+*.mbox
