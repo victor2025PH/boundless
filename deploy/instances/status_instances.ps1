@@ -141,6 +141,10 @@ foreach ($inst in $Instances) {
     # 仍在听 → 幽灵进程告警注记，照常走判定（退役实例复活属异常，必须可见）。
     $retFlag = Join-Path $ProdBase (".ops\retired\{0}.flag" -f $inst.id)
     if (Test-Path -LiteralPath $retFlag) {
+        # 旗标体是 JSON（cutover_merge 写 reason=merged-into-zhiliao；实施102 阶段4 在 117 写
+        # reason=migrated-to-173）——注记照 reason 说话，别把「迁走」写成「并入」。
+        $retReason = 'merged-into-zhiliao'
+        try { $rj = Get-Content -LiteralPath $retFlag -Raw -Encoding UTF8 | ConvertFrom-Json; if ($rj.reason) { $retReason = [string]$rj.reason } } catch {}
         if (-not $pids.Count) {
             $states += [pscustomobject][ordered]@{
                 id = $inst.id; name = $inst.name; port = $inst.port
@@ -153,8 +157,8 @@ foreach ($inst in $Instances) {
                 initialized = $false; overlay = $false
                 domains = $false; spool = $false; license = $false
                 verdict = 'RETIRED'
-                note = ('已退役（并入智聊；旗标 ' + $retFlag + '，cutover 回滚自动摘旗）')
-                note_en = 'retired (merged into zhiliao; flag present, rollback removes it)'
+                note = ('已退役（' + $retReason + '；旗标 ' + $retFlag + '，回滚时摘旗即恢复探测）')
+                note_en = ('retired (' + $retReason + '; flag present, remove it to resume probing)')
                 retired = $true
             }
             continue
