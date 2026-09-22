@@ -127,11 +127,15 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
   两端点在 `domains/player_care/web/routes.py`（manifest `web_routes: true`，由 admin 按激活域自动挂 → **只有 player_care 实例有**），鉴权同 leadbus/replybus（Bearer `BOUNDLESS_BUS_TOKEN`）。
 - 出箱 `domains/player_care/commandbus.py::CommandOutbox`（`<配置目录>/player_commandbus.db`，不动核心表）。三种指令，信封形状同契约 `command_id / kind / account / phone / dry_run + 种类字段`：
   `reengage {messages[], reason}`（话术池：普通朋友问候，不提游戏无数字，手机侧套自己的养号/时段/配额）、`stop {reason}`、`note {text}`。
-  ⚠ 契约目前只列了 `greet / reply`，这三种 kind 是按老板要求新增的，**待老板同步进契约 + 智拓侧 executor**；本域没改契约文件。
+  2026-09-22 已同步进契约（智拓仓分支 `feat-chatx-commandbus-kinds-2026-09-22`：契约 §3 五种 kind 表 + §4 STOP 双保险；`src/integrations/chatx/commandbus.py` 五种 kind 解析、
+  `command_executor.py` 本机 stop 名单 / note 台账 / reengage 挑话术；任务 `chatx_command_poll`（`params.account/limit/dry_run`）；`tests/test_chatx_commandbus.py` 23 例）。
+  端到端已对着本机 player 实例真跑通：`scripts/ops/chatx_commandbus_e2e.py`（入箱 → pull 顺序 stop→note→reengage → 执行(假 sender) → ack → 二次 pull 空 → ack 幂等）。
+  手机侧 `account` 默认=设备序列号，任务 `params.account` 可改成智聊侧 WA/TG 账号名（两边约定同一串即可）。
 - **STOP 一律先发 stop**：入箱 stop 时同号未拉走的 reengage/note 全部 cancelled，stop 排最前，该号进 stopped 名单 → 之后 reengage 一律拒（`clear_stop` 显式解）。
   触发：① hooks 入站整句 `STOP / unsubscribe / tanggalin / wag mo na ako i-message / 别再发了…`（`is_stop_message`，整句匹配宁漏勿误）且有手机号 → stop；
   ② sync 置 dormant 且有手机号 → reengage（`reengage_on_dormant`）；③ 运营 `POST /api/player-care/commands {kind, account, phone, text|messages}`（写权限），`GET` 同路径看出箱/统计。
-- 配置 `player_care.commandbus.{enabled=false(默认关，智拓 executor 对齐后再开), db_path, reengage_on_dormant=true, stop_on_keyword=true, pull_limit=20}`；关着时 pull 永远空、ack 只回 available（fail-soft，手机 poll 空转）。
+- 配置 `player_care.commandbus.{enabled=false(预设默认关；本机 config_player 已开——智拓分支合入且手机侧排上 chatx_command_poll 后才会真发), db_path, reengage_on_dormant=true, stop_on_keyword=true, pull_limit=20}`；关着时 pull 永远空、ack 只回 available（fail-soft，手机 poll 空转）。
+- 手机侧接入步骤：智拓 `config/chatx.yaml` 填 `bus_url=http://<player 实例>:18797` + token（=player 实例 `web_admin.auth_token`）；对设备 `POST /tasks {type: chatx_command_poll, params:{account, dry_run:true}}` 先跑一轮 dry_run 看台账，再关 dry_run / 进 `scheduled_jobs.json` 定时。
 - 执行权归手机：本域仍没有任何直接发消息的代码；失败全吞。测试 `tests/test_player_care_commandbus.py`。
 
 ## 6c. B5 handoff：Messenger → WA/TG（已做）
@@ -166,6 +170,11 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 ## 6e. 尚未做
 
 - 看板上报智控（跨实例汇总）。
+
+## 6f. 运行态小修（2026-09-22）
+
+- `python main.py --config config_player\config.yaml` 以前只对 `--init/--check` 生效，运行态 `AIChatAssistant` 走 `ConfigManager()` 缺省路径 → player 实例会去绑 18796 / 写 `config/` 的库。
+  现在 `__main__` 把 `--config` 注入 `AITR_CONFIG_PATH`（ConfigManager 缺省路径的第一优先级），两套实例真正并行；`config_player/` 整目录进 `.gitignore`（含 token 与运行库）。
 
 ## 7. 待老板 / 117 机补的输入
 

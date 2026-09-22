@@ -381,4 +381,5 @@ runner/.pc_runner_kill
 runner/pc_runner_shots/
 runner/*.audit.jsonl
 tmp_pcvision/
-
+# player 实例整套配置目录（含 web_admin token 与运行库，机器本地）
+config_player/

@@ -131,8 +131,8 @@ def is_stop_message(text: Any) -> bool:
 
 
 def resolve_commandbus_cfg(cfg_root: Any) -> Dict[str, Any]:
-    """``player_care.commandbus`` 段，全部有缺省。默认 **关**：智拓侧 executor 还没上线，
-    开了只会在出箱里积压；老板确认对齐后在 config_player 里打开。"""
+    """``player_care.commandbus`` 段，全部有缺省。预设默认 **关**（开了但手机侧没排
+    ``chatx_command_poll`` 只会在出箱里积压）；智拓侧 executor 已对齐，在 config_player 里打开即生效。"""
     root = cfg_root
     if hasattr(root, "config"):
         root = getattr(root, "config") or {}

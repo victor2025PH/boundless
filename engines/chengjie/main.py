@@ -1453,6 +1453,11 @@ if __name__ == "__main__":
     if args.check:
         sys.exit(run_config_check(args.config))
 
+    # --config 对运行态同样生效：AIChatAssistant 及各子模块都走 ConfigManager() 缺省路径，
+    # 缺省路径优先读 AITR_CONFIG_PATH，故在此统一注入（多实例：config_player/ 与 config/ 并行）。
+    if args.config and not os.environ.get("AITR_CONFIG_PATH"):
+        os.environ["AITR_CONFIG_PATH"] = str(Path(args.config).expanduser().resolve())
+
     # 设置默认事件循环策略（Windows需要）
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
