@@ -408,6 +408,14 @@ FEATURES: Tuple[Feature, ...] = (
         show=False,
         note="单账号日发额度闸门（D-Q2 #267）：会减少发送的开关，出厂关；开启后只拦自动链，"
              "人工发送永不限制；「300 · 推荐」是建议值不是默认值"),
+    # D-M9（1.0.76）：手动是粘的——坐席接管后 AI 全局自动接回**出厂关**（种子曾按「全自动」
+    # 承诺显式开）。B 类：默认关；坐席切手动时可单独选「30 分钟后接回」（takeover_opt_from），
+    # 会恢复自动发送的开关不得由基线替用户打开。
+    Feature(
+        key="inbox.takeover_rearm.enabled", cls="B", slug="takeover_rearm",
+        show=False,
+        note="坐席接管静默后 AI 全局自动接回（takeover_rearm.sweep_takeover_rearm）：会重新"
+             "开启自动发送的开关，D-M9 出厂关；按会话的接回由坐席切手动时自选"),
     # 2026-09-06 老板决策 D-L3（#210，82BF95 付费客户的客户识破 AI）：拆条**出厂关**
     # ——2026-07-31 升 A 的「默认开安全」前提（真发仍逐条前端 opt-in）在 08 月三链
     # 自动拆条接线后已不成立；A 类基线曾让每台桌面机首启被 _ensure_baseline 补成
