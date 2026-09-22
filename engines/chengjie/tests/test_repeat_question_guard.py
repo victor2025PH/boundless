@@ -8,6 +8,7 @@ import time
 from src.inbox.repeat_question_guard import (
     check_repeat_questions,
     is_question,
+    is_weather_question,
     normalize_question,
     own_questions_for,
     similarity,
@@ -102,3 +103,36 @@ def test_hooked_in_draft_humanize_before_claim_guard():
     out, meta = outbound_humanize.apply_draft_humanize(
         "Hey. What do you do for work?", conversation_id="", lang="en", origin="auto")
     assert meta.get("repeat_q") == "clean" and "work" in (out or "")
+
+
+# Q-41 天气问句族（FTGP2T / RZM5CY：换说法再问「你那边天气」，Jaccard 0.6 / 0.29 拦不住）
+def test_is_weather_question_variants():
+    for s in ["What's the weather like where you are today?",
+              "What's the weather like over there today?",
+              "How's the weather there?",
+              "Is it raining there?",
+              "你那边天气怎么样？", "今天你那儿下雨吗", "那边冷不冷呀？"]:
+        assert is_weather_question(s), s
+    for s in ["Do you prefer sunny or rainy days?",
+              "The weather here is lovely.",
+              "Have you checked the weather forecast?",
+              "你喜欢晴天还是雨天？", "我这边天气挺好的"]:
+        assert not is_weather_question(s), s
+
+
+def test_check_strips_rephrased_weather_question():
+    own = [{"text": "What's the weather like where you are today?", "ts": NOW - 5000}]
+    out, rep = check_repeat_questions(
+        "What's the weather like over there today? Do you prefer sunny or rainy days?",
+        conversation_id="w1", lang="en", own_questions=own, now=NOW)
+    assert rep["action"] == "strip" and out == "Do you prefer sunny or rainy days?"
+    out2, rep2 = check_repeat_questions(
+        "You're pretty quiet today. What's the weather like over there right now?",
+        conversation_id="w1", lang="en", own_questions=own, now=NOW)
+    assert rep2["action"] == "strip" and out2 == "You're pretty quiet today."
+    out3, rep3 = check_repeat_questions("你那儿今天天气好吗？", conversation_id="w2", lang="zh",
+                                        own_questions=[{"text": "你那边天气怎么样呀？", "ts": NOW - 600}], now=NOW)
+    assert rep3["action"] == "rewrite" and "？" not in out3
+    out4, rep4 = check_repeat_questions("Do you prefer sunny or rainy days?", conversation_id="w1",
+                                        lang="en", own_questions=own, now=NOW)
+    assert rep4["action"] == "clean" and out4 == "Do you prefer sunny or rainy days?"

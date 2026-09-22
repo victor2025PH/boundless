@@ -356,6 +356,10 @@ class AutosendWorker:
         # 出站开场词守卫（P0-4 #340）：摘掉复读的感叹开场数、复读但不可摘（只留痕）数
         self.total_opener_stripped: int = 0
         self.total_opener_repeat_seen: int = 0
+        # P1 抽样监控：按开场键累计命中（摘掉+不可摘），单键达 alert_after 上报一次 ops_alert——
+        # 上游生成若回退到固定「Ha,」，守卫每条都在摘，这里能看见并喊人，不靠翻日志。
+        self._opener_hits: Dict[str, int] = {}
+        self._opener_alerted: set = set()
         self.total_superseded: int = 0           # 新入站过期守卫跳过数（fresh_guard，不算 error）
         # 工作时间闸扣留事件数（同一草稿每 tick 重扫会重复计数——这是「扣留中」的
         # 活动信号而非唯一草稿数；复班后自然归零增长）
@@ -923,6 +927,7 @@ class AutosendWorker:
             hit = _og.inspect(text, recent, min_repeat=int(cfg.get("min_repeat", _og.DEFAULT_MIN_REPEAT)))
             if hit is None:
                 return text
+            self._opener_monitor(str(hit.get("opener") or ""), conv)
             stripped = str(hit.get("stripped") or "")
             if stripped:
                 self.total_opener_stripped += 1
@@ -938,6 +943,33 @@ class AutosendWorker:
         except Exception:
             logger.debug("[AutosendWorker] 开场词守卫异常（原样放行）", exc_info=True)
             return text
+
+    def _opener_monitor(self, opener: str, conv: str) -> None:
+        """开场复读抽样监控（P1 #340）：同一开场键累计命中达 ``alert_after``（默认 10，≤0 关）
+        → ops_alert 一次（进程内每键只喊一次）。纯计数，任何异常不影响投递。"""
+        try:
+            key = (opener or "").strip().lower()
+            if not key:
+                return
+            n = self._opener_hits.get(key, 0) + 1
+            self._opener_hits[key] = n
+            try:
+                thr = int(self._opener_guard_cfg.get("alert_after", 10))
+            except Exception:
+                thr = 10
+            if thr <= 0 or n < thr or key in self._opener_alerted:
+                return
+            self._opener_alerted.add(key)
+            logger.warning(
+                "[AutosendWorker] guard=opener 开场「%s」累计复读命中 %d 次（≥%d）→ 上游生成疑似回退固定开场 conv=%s",
+                key, n, thr, conv)
+            from src.ops.ops_alert import notify as _ops_notify
+            _ops_notify(
+                "opener_repeat",
+                f"⚠️ 出站开场「{key}」已被守卫命中 {n} 次，疑似生成侧回退固定开场（#340），请查草稿口吻/翻译风格",
+                account_id=conv, reason="opener_repeat")
+        except Exception:
+            logger.debug("[AutosendWorker] 开场监控异常（忽略）", exc_info=True)
 
     def apply_deliver_delay(self, block: Optional[Dict[str, Any]]) -> None:
         """运行时热更新拟人打字延迟配置（「自动回复设置」页保存后即时生效）。
@@ -3486,6 +3518,8 @@ class AutosendWorker:
             "total_opener_stripped": self.total_opener_stripped,
             "total_opener_repeat_seen": self.total_opener_repeat_seen,
             "opener_guard_enabled": bool(self._opener_guard_cfg.get("enabled")),
+            # 开场键命中榜（前 5），零流量即可判「Ha 是否又占了大头」
+            "opener_repeat_top": sorted(self._opener_hits.items(), key=lambda kv: -kv[1])[:5],
             "total_superseded": self.total_superseded,  # 新入站过期守卫跳过数
             "fresh_guard_enabled": bool(self._fresh_guard_cfg.get("enabled")),
             # P1 连发地板（2026-08-12）：min_gap_sec 抬升过延迟的次数——

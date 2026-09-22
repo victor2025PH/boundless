@@ -68,6 +68,8 @@ def test_resolve_cfg():
     assert c["enabled"] is True and c["window"] == 6 and c["min_repeat"] == 2
     c = og.resolve_cfg({"inbox": {"opener_guard": {"enabled": False, "window": 99, "min_repeat": 0}}})
     assert c["enabled"] is False and c["window"] == 20 and c["min_repeat"] == 2
+    assert og.resolve_cfg(None)["alert_after"] == og.DEFAULT_ALERT_AFTER
+    assert og.resolve_cfg({"inbox": {"opener_guard": {"alert_after": -3}}})["alert_after"] == 0
 
 
 # ── worker 接线 ───────────────────────────────────────────────────────────────
@@ -149,6 +151,33 @@ async def test_worker_leaves_text_when_not_repeated_or_not_strippable():
     await w._tick()
     assert sent == ["I think so too, honestly"]
     assert w.total_opener_repeat_seen == 1 and w.total_opener_stripped == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_opener_monitor_alerts_once_per_key(monkeypatch):
+    """P1 #340 抽样监控：同一开场键命中达 alert_after → ops_alert 一次；榜单进快照。"""
+    from src.ops import ops_alert as _oa
+    calls = []
+    monkeypatch.setattr(_oa, "notify", lambda kind, text, **kw: calls.append((kind, text, kw)))
+    svc = _FakeSvc(_out_rows("Ha, that's fun", "Haha! I know"))
+    sent = []
+    w = _worker(svc, sent)
+    w._opener_guard_cfg["alert_after"] = 3
+    for i in range(4):
+        svc.queue = [_draft(f"c-{uuid.uuid4().hex[:8]}", "Ha, tell me more about it", draft_id=f"d{i}")]
+        await w._tick()
+    assert w.total_opener_stripped == 4
+    assert len(calls) == 1 and calls[0][0] == "opener_repeat" and "ha" in calls[0][1]
+    snap = w.status_snapshot()
+    assert snap["opener_repeat_top"][0] == ("ha", 4)
+    # alert_after<=0 → 只计数不喊
+    w2 = _worker(_FakeSvc(_out_rows("Ha, a", "Ha, b")), [])
+    w2._opener_guard_cfg["alert_after"] = 0
+    calls.clear()
+    for i in range(3):
+        w2._svc.queue = [_draft(f"c-{uuid.uuid4().hex[:8]}", "Ha, tell me more about it", draft_id=f"e{i}")]
+        await w2._tick()
+    assert calls == [] and w2._opener_hits.get("ha") == 3
 
 
 @pytest.mark.asyncio

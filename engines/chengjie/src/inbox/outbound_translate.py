@@ -856,6 +856,10 @@ def parse_xlate_retry_cfg(config: Any) -> Dict[str, Any]:
             "redraft": bool(tr.get("redraft", True))}
 
 
+try:
+    from src.ai.translation_confidence import TIER_HIGH as _TIER_HIGH
+except Exception:  # pragma: no cover
+    _TIER_HIGH = 0.8
 #: P0-3（#343 #326，2026-09-21）：低置信 HOLD 原因码（状态带 / 台账 / 「重试翻译」都认这一串）
 LOW_CONF_REASON = "low_confidence"
 
@@ -1288,6 +1292,12 @@ async def _translate_outbound_core(
         return None
     if _url_map:
         translated = _restore_urls(translated, _url_map)
+    # P1（#343）：过门但只到中档置信（[TIER_LOW, TIER_HIGH)）的译文照发，只打点+日志——
+    # 给「Indic 这类引擎摇摆语种」留一条可观测抽样，不改投递纪律。
+    if 0.0 <= _conf < _TIER_HIGH:
+        logger.info("[xlate] medium confidence conf=%.2f provider=%s target=%s conv=%s（照发，抽样观测）",
+                    _conf, provider or "-", target, cid)
+        _gate_record("medium_confidence", conversation_id=cid, target=target)
     _log_decision(cid, target, decided_by, _decided_action)
     _note_target(item, target, "translated")
     _hold_marker_clear(store, cid)

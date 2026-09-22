@@ -26,7 +26,9 @@ import time
 from collections import deque
 from typing import Any, Deque, Dict, Optional
 
-_OUTCOMES = ("held", "rescued", "no_target_sent", "complaint")
+# medium_confidence：译文放行但确定性置信分落在 [TIER_LOW, TIER_HIGH)（P1 #343 抽样监控，
+# 不拦发；抬升说明引擎在该目标语上摇摆，该收 min_confidence / 换引擎）。
+_OUTCOMES = ("held", "rescued", "no_target_sent", "complaint", "medium_confidence")
 _LAST_EVENTS_CAP = 8
 _CONV_ID_MAX = 80
 

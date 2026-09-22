@@ -175,6 +175,28 @@ async def test_unscored_result_not_gated(_no_gap):
     assert out == "Hello, how was your day?" and ts.retry_calls == []
 
 
+async def test_medium_conf_delivers_but_is_sampled(_no_gap):
+    """P1（#343）：conf 在 [TIER_LOW, TIER_HIGH) → 照发不重译，但计进硬闸观测
+    ``medium_confidence``；高置信 / 未评分不计。"""
+    from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+    stats = get_outbound_lang_stats()
+    before = int(stats.dump().get("medium_confidence", 0))
+    ts = _TS(_Res(HI, provider="ai", confidence=0.65))
+    st = _Store()
+    item = _item("whatsapp:a:mid")
+    out = await ot.translate_outbound_text(item, translation_service=ts, store=st, source_lang="zh")
+    assert out == HI and ts.retry_calls == [] and "_xlate_hold" not in item
+    assert int(stats.dump().get("medium_confidence", 0)) == before + 1
+    ev = stats.dump().get("last_events") or []
+    assert ev and ev[-1]["outcome"] == "medium_confidence" and ev[-1]["target"] == "hi"
+    # 高置信 / 未评分 → 不计
+    for conf in (0.97, -1.0):
+        ts2 = _TS(_Res(HI, provider="ai", confidence=conf))
+        await ot.translate_outbound_text(_item("whatsapp:a:hi2"), translation_service=ts2,
+                                         store=_Store(), source_lang="zh")
+    assert int(stats.dump().get("medium_confidence", 0)) == before + 1
+
+
 async def test_min_confidence_zero_disables_gate(_no_gap):
     ts = _TS(_Res("Hello", provider="ai", confidence=0.1))
     st = _Store()

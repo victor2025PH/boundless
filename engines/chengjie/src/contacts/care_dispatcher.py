@@ -30,6 +30,7 @@ from src.contacts.care_schedule import (
     verbatim_quiet_policy,
     CareScheduleStore,
 )
+from src.utils.memory_perspective import PERSPECTIVE_NOTE, facts_to_second_person
 
 logger = logging.getLogger(__name__)
 
@@ -207,8 +208,11 @@ def _compose_extra_blocks(persona_line: str = "", memory_block: str = "",
         parts.append(f"\n【你的说话风格（保持这个人的口吻）】\n{p}")
     m = str(memory_block or "").strip()
     if m:
+        # 记忆事实以运营视角落库（主语「客户」），注入前统一转「TA」并加称谓约定——
+        # 否则英文人设直译成 your client（#341 实锤，与 proactive_prompt 同口径）。
+        m = "\n".join(facts_to_second_person(m.splitlines()))
         parts.append("\n【你记得的关于对方的事（可自然引用一件，别一次全说）】"
-                     f"\n{m}")
+                     f"\n{m}\n{PERSPECTIVE_NOTE.rstrip()}")
     g = str(goal_block or "").strip()
     if g:
         parts.append(f"\n{g}")

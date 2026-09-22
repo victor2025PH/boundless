@@ -25,6 +25,10 @@ Q-29（#305 · 2RKH3H · 2026-09-12）时间问句族：「你那边几点 / 白
 morning or night」（:func:`is_time_question`）打 ``slot:peer_time`` 同族标签（换说法 = 同一件事 → 1.0）；
 且对方当地时间**已知**（画像城市 / 12h 内客户自述，``peer_time.peer_time_known``）时**即使我方没问过也删**——
 客户已经答过 / 说过城市，再问就是「记忆不行」。
+
+Q-41（FTGP2T / RZM5CY · 2026-09-21）天气问句族：「你那边天气怎么样 / what's the weather like
+where you are / is it raining there」（:func:`is_weather_question`）打 ``slot:peer_weather``（换说法 = 同一件事
+→ 1.0）。事故里两次问法 Jaccard 只有 0.6 / 0.29，词法比对拦不住，客户回「I answered」。
 """
 from __future__ import annotations
 
@@ -104,6 +108,43 @@ _TIME_Q_NOT_EN = re.compile(
     r"|\bmy side\b|\bhere\b|\bprefer\b|\b(?:morning|night|evening) (?:person|owl|shift|workout|run)s?\b|\bwork (?:days|nights|mornings)\b")
 
 
+# Q-41 天气问句族：只认「问对方那边此刻 / 今天的天气」。偏好（喜欢晴天还是雨天）、
+# 问我方（我这边）、非问句不算。
+_WX_Q_ZH = [
+    re.compile(r"(?:天气|天氣)[^，,。！？!?]{0,6}?(?:怎么样|怎麼樣|怎样|怎樣|如何|咋样|好吗|好嗎|好不好|冷吗|冷嗎|热吗|熱嗎)"),
+    re.compile(r"(?:那边|那邊|那儿|那兒|那里|那裡|今天|今日|现在|現在)[^，,。！？!?]{0,6}?"
+               r"(?:(?:下雨|下雪|冷|热|熱|晴|阴|陰)(?:了)?(?:吗|嗎|么|麼|吧|没|沒)|冷不冷|热不热|熱不熱|下不下雨)"),
+    re.compile(r"(?:那边|那邊|那儿|那兒|那里|那裡)[^，,。！？!?]{0,4}?(?:多少度|几度|幾度)"),
+]
+_WX_Q_EN = [
+    re.compile(r"\b(?:how(?:'s| is)|what(?:'s| is)) (?:the )?weather\b"),
+    re.compile(r"\bweather (?:like )?(?:there|where you are|over there|on your (?:side|end)|by you|today|right now|these days)\b"),
+    re.compile(r"\b(?:is it|it's|its) (?:still |already )?(?:raining|snowing|sunny|cloudy|cold|hot|warm|chilly|freezing|humid)"
+               r"(?: there| where you are| over there| on your (?:side|end)| by you| today)\b"),
+    re.compile(r"\b(?:how (?:hot|cold|warm)|what(?:'s| is) the temperature) (?:is it )?(?:there|where you are|over there|today)\b"),
+]
+_WX_Q_NOT_ZH = re.compile(
+    r"我这边|我這邊|我那边|我那邊|(?:喜欢|喜歡|习惯|習慣|更爱|更愛|偏好|倾向|傾向)[^，,。！？!?]{0,4}(?:晴|雨|冷|热|熱|天气|天氣)"
+    r"|天气预报|天氣預報")
+_WX_Q_NOT_EN = re.compile(
+    r"\bprefer\b|\bfavou?rite\b|\busually\b|\bnormally\b|\bmy side\b|\bover here\b|\bforecast\b|\bweather (?:app|report|channel)\b")
+
+
+def is_weather_question(sentence: str) -> bool:
+    """句子是否在问**对方那边**此刻 / 今天的天气（Q-41 天气问句族）。纯函数。"""
+    s = str(sentence or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if _CJK_RE.search(s):
+        if _WX_Q_NOT_ZH.search(s):
+            return False
+        return any(rx.search(s) for rx in _WX_Q_ZH)
+    if _WX_Q_NOT_EN.search(low):
+        return False
+    return any(rx.search(low) for rx in _WX_Q_EN)
+
+
 def is_time_question(sentence: str) -> bool:
     """句子是否在问**对方那边**几点 / 白天还是晚上（Q-29 时间问句族）。纯函数。"""
     s = str(sentence or "").strip()
@@ -177,10 +218,13 @@ def _stem_en(w: str) -> str:
 
 def _slot_tags(sentence: str) -> List[str]:
     """句子命中哪些画像槽的问法关键词 → ``slot:<key>``（profile_slots 单一词表；导入失败 → []）。
-    Q-29：问对方几点 / 白天还是晚上 → 追加 ``slot:peer_time``（非画像槽，只作同族标签）。"""
+    Q-29：问对方几点 / 白天还是晚上 → 追加 ``slot:peer_time``（非画像槽，只作同族标签）；
+    Q-41：问对方那边天气 → 追加 ``slot:peer_weather``。"""
     out: List[str] = []
     if is_time_question(sentence):
         out.append("slot:peer_time")
+    if is_weather_question(sentence):
+        out.append("slot:peer_weather")
     try:
         from src.companion.goals.profile_slots import SLOT_ASK_KEYWORDS, _contains_term
     except Exception:
@@ -402,6 +446,7 @@ def check_repeat_questions(
 
 __all__ = [
     "WINDOW_SEC", "SIM_THRESHOLD", "norm_lang", "split_sentences", "is_question", "is_time_question",
+    "is_weather_question",
     "normalize_question", "similarity", "filler_line", "own_questions_for",
     "check_repeat_questions",
 ]

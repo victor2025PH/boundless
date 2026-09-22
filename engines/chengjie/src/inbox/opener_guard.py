@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 DEFAULT_WINDOW = 6
 DEFAULT_MIN_REPEAT = 2
+DEFAULT_ALERT_AFTER = 10
 
 _INTERJ_RE = re.compile(
     r"^\s*(?P<tok>(?:h+a+(?:h+a+)*|he+h+e+|he+y+|hi+|hello+|oh+|ooh+|aw+|hm+|well|wow+|yay|lol|omg"
@@ -121,8 +122,10 @@ def resolve_cfg(root_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "enabled": bool(blk.get("enabled", True)),
         "window": max(1, min(20, int(blk.get("window", DEFAULT_WINDOW) or DEFAULT_WINDOW))),
         "min_repeat": max(1, min(20, int(blk.get("min_repeat", DEFAULT_MIN_REPEAT) or DEFAULT_MIN_REPEAT))),
+        # 同一开场键累计命中达此数 → ops_alert 一次（≤0 关）；见 AutosendWorker._opener_monitor
+        "alert_after": max(0, min(10000, int(blk.get("alert_after", DEFAULT_ALERT_AFTER)))),
     }
 
 
-__all__ = ["DEFAULT_WINDOW", "DEFAULT_MIN_REPEAT", "opener_key", "strip_opener",
+__all__ = ["DEFAULT_WINDOW", "DEFAULT_MIN_REPEAT", "DEFAULT_ALERT_AFTER", "opener_key", "strip_opener",
            "recent_out_texts", "inspect", "resolve_cfg"]

@@ -62,6 +62,19 @@ def test_compose_extra_blocks_sections():
     assert "【工作目标背景】" in out
 
 
+def test_compose_extra_blocks_memory_uses_second_person():
+    """#341：记忆事实「客户的妈妈在装修」注入前转「TA」，并附称谓约定——
+    否则英文人设直译成 your client's mom（与 proactive_prompt 同口径）。"""
+    out = _compose_extra_blocks(
+        memory_block="- 客户的妈妈在装修\n- the customer's dog is sick")
+    assert "TA的妈妈在装修" in out and "TA's dog is sick" in out
+    assert "客户的妈妈" not in out and "customer's" not in out
+    assert "your client" in out  # PERSPECTIVE_NOTE 里的禁用称谓提示
+    assert "TA」「对方」都指你此刻正在聊的这个人本人" in out
+    # 记忆块为空时不追加称谓约定（零 token 开销纪律不变）
+    assert _compose_extra_blocks(persona_line="沉稳").count("称谓约定") == 0
+
+
 def test_build_prompt_with_extras_and_without_is_backward_compatible():
     item = {"topic": "面试", "event_at": NOW, "source_text": "明天面试",
             "topic_norm": "面试"}
