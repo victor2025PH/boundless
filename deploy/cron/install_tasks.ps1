@@ -143,13 +143,13 @@ if ($BaseUrl)   { $commonArgs += " -BaseUrl `"$BaseUrl`"" }
 if ($PythonExe) { $commonArgs += " -PythonExe `"$PythonExe`"" }
 if ($IngestKey) { $commonArgs += " -IngestKey `"$IngestKey`"" }
 
+# 本机账户用 WindowsIdentity 取 MACHINE\user：SSH/非交互会话里 $env:USERDOMAIN 可能是 WORKGROUP，注册 S4U 主体会报 "No mapping between account names and security IDs"
+$currentAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
 $plans = @()
 if ('uploader' -in $Tasks) {
     foreach ($sp in $spools) {
         $suffix = if ($spools.Count -gt 1) { '-' + (Root-Tag $sp) } else { '' }
-# 本机账户用 WindowsIdentity 取 MACHINE\user：SSH/非交互会话里 $env:USERDOMAIN 可能是 WORKGROUP，注册 S4U 主体会报 "No mapping between account names and security IDs"
-$currentAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-
         $plans += [pscustomobject]@{
             Name        = "Boundless-$Engine-uploader$suffix"
             Kind        = 'repeat'
