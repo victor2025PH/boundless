@@ -33,9 +33,27 @@ import threading
 from pathlib import Path
 
 REPO = Path(r"D:\boundless")
-TGKZ_BACKEND = REPO / "tgkz2026" / "backend"
-if not TGKZ_BACKEND.is_dir():  # 仓库根在 D:\workspace\boundless 时的等价路径
-    TGKZ_BACKEND = Path(r"D:\workspace\boundless\tgkz2026\backend")
+
+#: 智控后端源码目录。它被仓库根 .gitignore 整体忽略（tgkz2026/），**不随 git clone 走**——
+#: 换机/重装必须单独同步（deploy/instances/sync_tgkz_backend.ps1），否则池起不来
+#: （实施102 阶段 4 迁 173 首起即 ModuleNotFoundError: config）。可用环境变量 TGKZ_BACKEND 指到别处。
+TGKZ_BACKEND_CANDIDATES = (
+    Path(os.environ.get("TGKZ_BACKEND", "")),
+    REPO / "tgkz2026" / "backend",
+    Path(r"D:\workspace\boundless\tgkz2026\backend"),   # 仓库根在 D:\workspace\boundless 时的等价路径
+)
+TGKZ_BACKEND = next((p for p in TGKZ_BACKEND_CANDIDATES if str(p) and (p / "config.py").is_file()),
+                    TGKZ_BACKEND_CANDIDATES[1])
+
+
+def require_tgkz_backend() -> Path:
+    """后端目录缺失时给一句能照着做的错误，而不是深处的 ModuleNotFoundError。"""
+    if (TGKZ_BACKEND / "config.py").is_file():
+        return TGKZ_BACKEND
+    raise SystemExit(
+        f"找不到智控后端 {TGKZ_BACKEND}\\config.py（tgkz2026/ 被 .gitignore 忽略，不随仓库同步）。\n"
+        "  修法：在有它的机器上跑 deploy\\instances\\sync_tgkz_backend.ps1 -To <本机 ssh 别名>，"
+        "或设环境变量 TGKZ_BACKEND 指向已有目录。")
 CHENGJIE = REPO / "engines" / "chengjie"
 INSTANCE_CFG = Path(r"D:\chengjie-instances\zhiliao\data\config\config.yaml")
 OVERLAY = INSTANCE_CFG.parent / "config.local.yaml"
@@ -96,7 +114,7 @@ def _bind_data_dir(data_dir: str) -> str:
         "TG_SESSIONS_DIR": os.path.join(data_dir, "sessions"),
         "DATABASE_PATH": os.path.join(data_dir, "matrixx.db"),
     })
-    sys.path.insert(0, str(TGKZ_BACKEND))
+    sys.path.insert(0, str(require_tgkz_backend()))
     from config import DATABASE_PATH as _db  # noqa: E402
 
     if Path(data_dir).resolve() not in Path(str(_db)).resolve().parents:
