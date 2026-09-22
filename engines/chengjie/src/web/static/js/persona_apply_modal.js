@@ -38,7 +38,13 @@
     return '/api/personas/registry-account/' + encodeURIComponent(REGISTRY_PLAT[plat] || plat)
       + '/' + encodeURIComponent(aid) + '/assign-profile';
   }
-  var PLAT_LABEL = { tg: 'TG', mrpa: 'Messenger', wa: 'WhatsApp', line: 'LINE' };
+  var PLAT_LABEL = { tg: 'TG', mrpa: 'Messenger', wa: 'WhatsApp', line: 'LINE',
+                     wechat: 'WeChat', wechat_kf: 'WeChat KF', qq: 'QQ', qqbot: 'QQ Bot',
+                     zalo: 'Zalo', instagram: 'Instagram', douyin: 'Douyin',
+                     tiktok: 'TikTok', web: 'Web' };
+  function _platLabel(plat) {
+    return PLAT_LABEL[plat] || String(plat || '').toUpperCase();
+  }
   var ACC_KEY = { tg: 'tg_accounts', mrpa: 'mrpa_accounts', wa: 'wa_accounts',
                   line: 'line_accounts' };
 
@@ -191,6 +197,37 @@
     }
   }
 
+  function _accRow(plat, a, forceSrc) {
+    var aid = a.account_id != null ? String(a.account_id) : '';
+    var name = a.label || aid || '-';
+    var curName = a.active_profile ? (a.active_profile.name || a.active_profile.id || '') : '';
+    var isMine = (a.persona_ids || []).indexOf(_pid) !== -1;
+    // #78：registry 账号（tg 除外）assign 走通用 registry 端点
+    var src = forceSrc || ((a.source === 'registry' && plat !== 'tg') ? 'registry' : '');
+    var subTxt = curName
+      ? (_t('psn_apply_cur_prefix', '当前人设：') + curName) : '-';
+    var aidShort = aid.length > 18 ? (aid.slice(0, 8) + '…' + aid.slice(-4)) : aid;
+    var dispName = (name === aid) ? (aidShort || '-') : name;
+    var uname = a.username ? String(a.username).replace(/^@/, '') : '';
+    var metaBits = '';
+    if (uname && uname !== name) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">@' + _esc(uname) + '</span>';
+    if (aid && name !== aid) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">' + _esc(aidShort) + '</span>';
+    var html = '<div class="psa-row">'
+      + '<span class="psa-plat">' + _esc(_platLabel(plat)) + '</span>'
+      + '<div class="psa-row-main">'
+      +   '<div class="psa-row-name" title="' + _esc(aid) + '">' + _esc(dispName) + metaBits + '</div>'
+      +   '<div class="psa-row-sub">' + _esc(subTxt) + '</div>'
+      + '</div>'
+      + (isMine
+          ? '<span class="psa-cur">' + _esc(_t('psn_apply_current', '✓ 当前人设')) + '</span>'
+            + '<button class="btn btn-sm btn-danger" data-act="clear" data-plat="' + _esc(plat) + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
+            + _esc(_t('psn_apply_clear', '清除')) + '</button>'
+          : '<button class="btn btn-sm btn-primary" data-act="assign" data-plat="' + _esc(plat) + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
+            + _esc(_t('psn_apply_assign', '指定')) + '</button>')
+      + '</div>';
+    return { html: html, mine: isMine };
+  }
+
   function _renderAccountPane(d) {
     var box = document.getElementById('psa-pane-account');
     if (!box) return;
@@ -198,44 +235,20 @@
     var plats = ['tg', 'mrpa', 'wa', 'line'];
     var total = 0, mine = 0, html = '';
     for (var i = 0; i < plats.length; i++) {
-      var plat = plats[i];
-      var accs = d[ACC_KEY[plat]] || [];
+      var accs = d[ACC_KEY[plats[i]]] || [];
       for (var j = 0; j < accs.length; j++) {
-        var a = accs[j] || {};
-        total++;
-        var aid = a.account_id != null ? String(a.account_id) : '';
-        var name = a.label || aid || '—';
-        var curName = a.active_profile ? (a.active_profile.name || a.active_profile.id || '') : '';
-        var isMine = (a.persona_ids || []).indexOf(_pid) !== -1;
-        if (isMine) mine++;
-        // #78：registry 账号（tg 除外）assign 走通用 registry 端点
-        var src = (a.source === 'registry' && plat !== 'tg') ? 'registry' : '';
-        // #78：副行带「当前人设：」前缀——「小柔」是账号名还是人设名此前分不清
-        var subTxt = curName
-          ? (_t('psn_apply_cur_prefix', '当前人设：') + curName) : '—';
-        // #78 二轮（skuio 原图 929）：主标签=账号显示名（后端 label 链已吃
-        // self_name），id 缩小作副显且与主标签重复时不再复读；LINE 长 token
-        // 缩略展示（完整值进 title 悬浮可查）。@username 有则附带。
-        var aidShort = aid.length > 18 ? (aid.slice(0, 8) + '…' + aid.slice(-4)) : aid;
-        var dispName = (name === aid) ? (aidShort || '—') : name;
-        var uname = a.username ? String(a.username).replace(/^@/, '') : '';
-        var metaBits = '';
-        if (uname && uname !== name) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">@' + _esc(uname) + '</span>';
-        if (aid && name !== aid) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">' + _esc(aidShort) + '</span>';
-        html += '<div class="psa-row">'
-          + '<span class="psa-plat">' + PLAT_LABEL[plat] + '</span>'
-          + '<div class="psa-row-main">'
-          +   '<div class="psa-row-name" title="' + _esc(aid) + '">' + _esc(dispName) + metaBits + '</div>'
-          +   '<div class="psa-row-sub">' + _esc(subTxt) + '</div>'
-          + '</div>'
-          + (isMine
-              ? '<span class="psa-cur">' + _esc(_t('psn_apply_current', '✓ 当前人设')) + '</span>'
-                + '<button class="btn btn-sm btn-danger" data-act="clear" data-plat="' + plat + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
-                + _esc(_t('psn_apply_clear', '清除')) + '</button>'
-              : '<button class="btn btn-sm btn-primary" data-act="assign" data-plat="' + plat + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
-                + _esc(_t('psn_apply_assign', '指定')) + '</button>')
-          + '</div>';
+        var row = _accRow(plats[i], accs[j] || {}, '');
+        total++; if (row.mine) mine++; html += row.html;
       }
+    }
+    // 其余平台(微信/QQ/抖音/Zalo/Instagram…)统一来自运行时登记表,按 platform 字段分组
+    var others = d.other_accounts || [];
+    for (var k = 0; k < others.length; k++) {
+      var o = others[k] || {};
+      var plat = String(o.platform || '').toLowerCase();
+      if (!plat) continue;
+      var row2 = _accRow(plat, o, 'registry');
+      total++; if (row2.mine) mine++; html += row2.html;
     }
     _accCount = mine;
     _updateServing();

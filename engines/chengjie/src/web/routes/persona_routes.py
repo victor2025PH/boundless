@@ -2172,7 +2172,9 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
     # #61 的 TG registry 分支同一写法：meta.persona_ids+persona_id 双键、
     # merge_meta=True 铁律（整块替换会抹掉 session_string，2026-07-23 实锤）。
     _REGISTRY_ASSIGN_PLATFORMS = {"line", "whatsapp", "messenger",
-                                  "zalo", "instagram", "qq", "qqbot"}
+                                  "zalo", "instagram", "qq", "qqbot",
+                                  "wechat", "wechat_kf", "douyin",
+                                  "tiktok", "web"}
 
     @app.post("/api/personas/registry-account/{platform}/{account_id}/assign-profile")
     async def api_registry_assign_profile(
@@ -2431,6 +2433,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         # 在「应用到」弹窗永远看不见。与 #61 同一读取口径（meta.persona_ids，
         # parse_persona_ids 容忍历史形态）；removed 行不进枚举。
         line_accounts: list = []
+        other_accounts: list = []
         try:
             from src.integrations.account_registry import (
                 get_account_registry, parse_persona_ids)
@@ -2475,12 +2478,19 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             mrpa_accounts.extend(
                 r for r in _registry_rows("messenger")
                 if r["account_id"] not in _seen_mrpa)
+            _own_plats = {"telegram", "messenger", "whatsapp", "line", ""}
+            for _xp in sorted({str(r.get("platform") or "").lower()
+                               for r in _rt_reg.list()} - _own_plats):
+                for _xr in _registry_rows(_xp):
+                    _xr["platform"] = _xp
+                    other_accounts.append(_xr)
         except Exception:
             pass
 
         # Profiles in active use (across all accounts + chat bindings)
         used_ids: set = set()
-        for acc in tg_accounts + mrpa_accounts + wa_accounts + line_accounts:
+        for acc in (tg_accounts + mrpa_accounts + wa_accounts + line_accounts
+                    + other_accounts):
             used_ids.update(acc["persona_ids"])
         for p in bindings.values():
             pid = p.get("id", "") if isinstance(p, dict) else ""
@@ -2528,6 +2538,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             "mrpa_imported_count": mrpa_imported_count,
             "wa_accounts": wa_accounts,
             "line_accounts": line_accounts,   # #78：LINE 运行时账号（registry）
+            "other_accounts": other_accounts,
             "profiles_in_use": list(used_ids),
             "domain_persona_name": pm._domain_persona.get("name", "") if pm._domain_persona else "",
             "last_changed_at": last_changed_iso,
