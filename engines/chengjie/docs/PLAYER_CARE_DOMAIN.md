@@ -167,9 +167,15 @@ $env:PYTHONPATH=""; .\.venv\Scripts\python.exe -m domains.player_care.gateway_pr
 - 库侧新增 `ContactStore.player_overview_counts(active_since, lookup_since)` 一次 SQL 聚合，不加表不加列。
 - 测试 `tests/test_player_care_overview.py`。
 
-## 6e. 尚未做
+## 6e. 看板上报智控（跨实例汇总，已做，2026-09-22）
 
-- 看板上报智控（跨实例汇总）。
+- 方向选「智控拉、智聊不推」：与 commandbus/leadbus 同向（智控 → 智聊），智聊侧零新代码、零新出口 token；
+  本域 `GET /api/player-care/overview`（Bearer = 本实例 `web_admin.auth_token`）就是上报口。
+- 智控侧（智拓仓同分支 `feat-chatx-commandbus-kinds-2026-09-22`）：`src/integrations/chatx/player_care_client.py` 按 `config/chatx.yaml`
+  `player_instances: [{name,url,token|token_file}]` 逐台拉，联系人/七阶段/当日/出箱计数相加、网关健康取最差、按账号阶段合并；
+  `GET /chatx/player-care/overview`（60s 缓存，`?refresh=1`）/ `GET /chatx/player-care/instances`。单台不通只标
+  `unreachable / needs_token / no_player_care(打到 story 实例=404)`，其余照常汇总。本机对 18797 + 18796 实拉验证通过。
+- 接入：每加一台 player 实例，在智控 chatx.yaml 追加一条 `{url, token_file}` 即可；不需要改本域。
 
 ## 6f. 运行态小修（2026-09-22）
 
