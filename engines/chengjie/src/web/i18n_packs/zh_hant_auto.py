@@ -23146,6 +23146,72 @@ ZH_HANT = {
     'psn_vc_toast_close': '關閉',
     # ── psn_vc_unbind_btn ──
     'psn_vc_unbind_btn': '解綁克隆音色',
+    # ── psn_vx_desc_dramatic ──
+    'psn_vx_desc_dramatic': '表演感最強：無線索也可插笑聲，最多三個語氣標記，節奏拉開；客服場景慎用。',
+    # ── psn_vx_desc_inherit ──
+    'psn_vx_desc_inherit': '沒單獨設定，用語音頁的全域性檔位（出廠為「自然」）。',
+    # ── psn_vx_desc_natural ──
+    'psn_vx_desc_natural': '情緒只在文字有線索時明顯；笑聲需文字有笑點且只用人設自己的錄音；一句最多一個語氣標記。',
+    # ── psn_vx_desc_neutral_note ──
+    'psn_vx_desc_neutral_note': '基線為中性：沒有線索的句子完全保真。',
+    # ── psn_vx_desc_restrained ──
+    'psn_vx_desc_restrained': '無線索時不加情緒，不插笑聲/換氣，口語化只輕改；適合嚴肅、商務、投訴場景。',
+    # ── psn_vx_desc_vivid ──
+    'psn_vx_desc_vivid': '情緒更明顯，允許兩個語氣標記與預置笑聲；接近舊版預設效果。',
+    # ── psn_vx_dramatic ──
+    'psn_vx_dramatic': '戲劇',
+    # ── psn_vx_dramatic_sub ──
+    'psn_vx_dramatic_sub': '表演感強',
+    # ── psn_vx_emo_calm ──
+    'psn_vx_emo_calm': '平靜',
+    # ── psn_vx_emo_empathetic ──
+    'psn_vx_emo_empathetic': '共情',
+    # ── psn_vx_emo_happy ──
+    'psn_vx_emo_happy': '開心',
+    # ── psn_vx_emo_inherit ──
+    'psn_vx_emo_inherit': '跟隨全域性（預設溫和）',
+    # ── psn_vx_emo_neutral ──
+    'psn_vx_emo_neutral': '中性（保真，不加情緒）',
+    # ── psn_vx_emo_playful ──
+    'psn_vx_emo_playful': '俏皮',
+    # ── psn_vx_emo_serious ──
+    'psn_vx_emo_serious': '嚴肅',
+    # ── psn_vx_emo_warm ──
+    'psn_vx_emo_warm': '溫和',
+    # ── psn_vx_emotion ──
+    'psn_vx_emotion': '基線情緒',
+    # ── psn_vx_h ──
+    'psn_vx_h': '語氣表達',
+    # ── psn_vx_inherit ──
+    'psn_vx_inherit': '跟隨全域性',
+    # ── psn_vx_inherit_sub ──
+    'psn_vx_inherit_sub': '用語音頁預設',
+    # ── psn_vx_natural ──
+    'psn_vx_natural': '自然',
+    # ── psn_vx_natural_sub ──
+    'psn_vx_natural_sub': '推薦',
+    # ── psn_vx_preview ──
+    'psn_vx_preview': '試聽這個語氣',
+    # ── psn_vx_preview_lo ──
+    'psn_vx_preview_lo': '對比低一檔',
+    # ── psn_vx_preview_lo_tip ──
+    'psn_vx_preview_lo_tip': '低一檔對比',
+    # ── psn_vx_preview_playing ──
+    'psn_vx_preview_playing': '正在播放：{level} · 情緒 {emotion}',
+    # ── psn_vx_preview_text ──
+    'psn_vx_preview_text': '嗨，我是{name}～今天這麼巧碰到你，真是太好了！有什麼想聊的儘管說。',
+    # ── psn_vx_preview_tip ──
+    'psn_vx_preview_tip': '用當前檔位試聽（未儲存也能聽）',
+    # ── psn_vx_restrained ──
+    'psn_vx_restrained': '剋制',
+    # ── psn_vx_restrained_sub ──
+    'psn_vx_restrained_sub': '近乎平述',
+    # ── psn_vx_sub ──
+    'psn_vx_sub': '控制情緒強度、笑聲/換氣、口語化的總幅度',
+    # ── psn_vx_vivid ──
+    'psn_vx_vivid': '生動',
+    # ── psn_vx_vivid_sub ──
+    'psn_vx_vivid_sub': '情緒更明顯',
     # ── psn_vc_unbind_ok ──
     'psn_vc_unbind_ok': '已解綁',
     # ── psn_vc_unbind_q ──

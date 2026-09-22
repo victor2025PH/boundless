@@ -509,6 +509,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
         chat_key: str = str(body.get("chat_key") or "").strip()
         platform: str = str(body.get("platform") or "telegram").strip().lower()
         account_id: str = str(body.get("account_id") or "").strip()
+        # 人设页「语气表达」对比试听：未保存的档位 / 基线情绪直接进解析链（试听=发送
+        # 同一条 apply_expressiveness 缩放），不传＝旧行为。
+        _expr_override: str = ""
+        _emo_override: str = ""
+        try:
+            from src.ai.voice_emotion import normalize_expressiveness
+            _expr_override = normalize_expressiveness(body.get("expressiveness"))
+            _emo_override = str(body.get("emotion") or "").strip().lower()
+        except Exception:
+            _expr_override, _emo_override = "", ""
 
         # Resolve voice config
         raw_cfg: Dict[str, Any] = {}
@@ -536,12 +546,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 account_persona_id=account_persona_id or None,
                 contact_key=chat_key or None,
                 platform=platform, account_id=account_id or None,
-                text=spoken_text)
+                text=spoken_text,
+                expressiveness=_expr_override or None)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
         except Exception as ex:
             logger.warning("[tts] preview resolve_voice_cfg failed: %s", ex)
             voice_cfg = {}
             voice_ctx = {"persona_id": persona_id or "", "persona_source": "error", "emotion": None}
+        if _emo_override:
+            try:
+                from src.ai.voice_emotion import EMOTIONS, coerce_emotion
+                if _emo_override in EMOTIONS:
+                    voice_ctx["emotion"] = coerce_emotion(_emo_override)
+            except Exception:
+                logger.debug("[tts] preview 情绪覆写跳过", exc_info=True)
 
         # 选声金标（#149，2026-09-02 钧机 KKXSTU）：坐席显式选了人设 X，解析结果
         # 必须就是 X——人设不存在/被偷换/来源标签指认别人 → **拒绝合成**并明说，
@@ -578,6 +596,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
         voice_cfg["enabled"] = True
         if fmt_override:
             voice_cfg["format"] = fmt_override.strip().lower()
+        if _expr_override:
+            voice_cfg["voice_expressiveness"] = _expr_override
+            voice_cfg["voice_expressiveness_source"] = "preview"
 
         # fast=true → force the always-hot edge_tts backend so the preview answers
         # within seconds even when the production clone chain (avatar_clone → hub
@@ -872,32 +893,34 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # 「所听即所发」复用登记（P1 2026-08-05）：sidecar 记文本指纹+音色键+元数据，
         # send-voice 带回 filename 且校验通过时直接复用本音频（省一次合成/额度，
         # 且客户听到的与坐席试听的逐字节一致）。best-effort：失败只丢复用资格。
+        # 带档位/情绪覆写的对比试听不是「发送会出的声」，不登记复用。
         try:
             from src.integrations.shared.tts_preview import record_preview_meta
-            record_preview_meta(
-                preview_path.name, text=text,
-                persona_key=str(persona_id or ""),
-                target_lang=(_vt if _xl.get("translated") else ""),
-                meta={
-                    "resolved_persona_id": voice_ctx.get("persona_id") or "",
-                    "requested_persona_id": str(persona_id or ""),
-                    "persona_source": voice_ctx.get("persona_source") or "",
-                    "provider": result.provider,
-                    "voice": result.voice,
-                    "emotion": (
-                        getattr(voice_ctx.get("emotion"), "emotion", "")
-                        if voice_ctx.get("emotion") else ""
-                    ),
-                    "fallback_from": (result.extra or {}).get("fallback_from", ""),
-                    "duration_sec": result.duration_sec,
-                    "format": result.format,
-                    "fast": bool(fast),
-                    "speech": _speech.get("speech") or "unknown",
-                    "speech_basis": _speech.get("basis") or "",
-                    # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
-                    "spoken_text": (spoken_text if _xl.get("translated") else ""),
-                    "xl_provider": _xl.get("provider") or "",
-                })
+            if not (_expr_override or _emo_override):
+                record_preview_meta(
+                    preview_path.name, text=text,
+                    persona_key=str(persona_id or ""),
+                    target_lang=(_vt if _xl.get("translated") else ""),
+                    meta={
+                        "resolved_persona_id": voice_ctx.get("persona_id") or "",
+                        "requested_persona_id": str(persona_id or ""),
+                        "persona_source": voice_ctx.get("persona_source") or "",
+                        "provider": result.provider,
+                        "voice": result.voice,
+                        "emotion": (
+                            getattr(voice_ctx.get("emotion"), "emotion", "")
+                            if voice_ctx.get("emotion") else ""
+                        ),
+                        "fallback_from": (result.extra or {}).get("fallback_from", ""),
+                        "duration_sec": result.duration_sec,
+                        "format": result.format,
+                        "fast": bool(fast),
+                        "speech": _speech.get("speech") or "unknown",
+                        "speech_basis": _speech.get("basis") or "",
+                        # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
+                        "spoken_text": (spoken_text if _xl.get("translated") else ""),
+                        "xl_provider": _xl.get("provider") or "",
+                    })
         except Exception:
             logger.debug("[tts] preview 复用 sidecar 登记失败（忽略）", exc_info=True)
 
@@ -946,6 +969,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     getattr(voice_ctx.get("emotion"), "emotion", "")
                     if voice_ctx.get("emotion") else ""
                 ),
+                "expressiveness": str(voice_cfg.get("voice_expressiveness") or ""),
+                "expressiveness_source": str(
+                    voice_cfg.get("voice_expressiveness_source") or ""),
                 "fallback_from": (result.extra or {}).get("fallback_from", ""),
                 # B62：克隆名被映射成通用音色（如 steven → zh-CN-Xiaoxiao）时
                 # 前端同样要出「非克隆声」警示——没有 fallback_from 的映射场景

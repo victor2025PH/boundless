@@ -223,6 +223,8 @@ def derive_emotion(
     from_baseline = emo is None
     if emo is None:
         emo = persona_default_emotion(persona)
+        if emo == "neutral":
+            return NEUTRAL
 
     if emo is None:
         emo = default if default in EMOTIONS else "warm"
@@ -260,7 +262,7 @@ def persona_default_emotion(persona: Optional[Dict[str, Any]]) -> Optional[str]:
         explicit = str(vp.get("emotion") or "").strip().lower()
     if not explicit:
         explicit = str(persona.get("voice_emotion") or "").strip().lower()
-    if explicit in EMOTIONS and explicit != "neutral":
+    if explicit in EMOTIONS:
         return explicit
     parts = []
     for key in ("role", "background"):

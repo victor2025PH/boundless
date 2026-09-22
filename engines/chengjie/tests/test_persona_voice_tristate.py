@@ -400,3 +400,27 @@ async def test_preset_catalog_endpoint(app_on):
         assert {"zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "ja-JP-KeitaNeural"} <= ids
         assert any(l["code"] == "ja" for l in d["languages"])
         assert all(v["gender"] in ("female", "male") for v in d["edge_voices"])
+
+
+@pytest.mark.asyncio
+async def test_put_expressiveness_merges_and_survives_mode_patch(app_on):
+    """人设页「语气表达」：patch 只带 expressiveness/emotion 不动三态；改三态不丢表达力；空串清除。"""
+    async with _client(app_on) as c:
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"expressiveness": "restrained", "emotion": "neutral"}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp["expressiveness"] == "restrained" and vp["emotion"] == "neutral"
+        # 切到预置声，表达力保留
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"voice_mode": "preset", "backend": "edge_tts",
+                                    "voice": "zh-CN-XiaoxiaoNeural", "enabled": True}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp["voice_mode"] == "preset" and vp["expressiveness"] == "restrained"
+        # 回到「跟随全局」
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"expressiveness": "", "emotion": ""}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp.get("expressiveness", "") == "" and vp["voice_mode"] == "preset"

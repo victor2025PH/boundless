@@ -173,6 +173,23 @@
 .vmode-status.ok{color:var(--th-ink-green7,#15803d)}
 .vmode-status.warn{color:var(--th-ink-amber7,#b45309)}
 .vmode-status.err{color:var(--th-ink-red7,#b91c1c);background:var(--th-bg-red1,#fee2e2)}
+/* 语气表达（expressiveness）：四档分段 + 基线情绪 + 对比试听 */
+.vexpr-box{border-top:1px dashed var(--bd);margin-top:.6rem;padding-top:.5rem}
+.vexpr-hd{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.78rem;font-weight:600}
+.vexpr-hd small{font-weight:400;color:var(--t3);font-size:.7rem}
+.vexpr-seg{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.3rem;margin-top:.4rem}
+.vexpr-seg label{display:flex;flex-direction:column;align-items:center;gap:.1rem;padding:.4rem .2rem;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:.74rem;text-align:center;line-height:1.3;position:relative}
+.vexpr-seg label input{position:absolute;opacity:0;pointer-events:none}
+.vexpr-seg label b{font-weight:600}
+.vexpr-seg label small{color:var(--t3);font-size:.64rem}
+.vexpr-seg label:hover{border-color:var(--th-ink-blue5,#1d4ed8)}
+.vexpr-seg label:has(input:checked){border-color:var(--th-ink-blue5,#1d4ed8);background:var(--th-bg-slate1,#f1f5f9)}
+.vexpr-seg label[data-lv="restrained"]:has(input:checked){border-color:var(--th-ink-slate6,#475569)}
+.vexpr-seg label[data-lv="vivid"]:has(input:checked){border-color:var(--th-ink-amber7,#b45309)}
+.vexpr-seg label[data-lv="dramatic"]:has(input:checked){border-color:var(--th-ink-red7,#b91c1c)}
+.vexpr-foot{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.4rem;flex-wrap:wrap}
+.vexpr-foot .vexpr-desc{font-size:.72rem;color:var(--t2);line-height:1.45;flex:1 1 12rem}
+.vexpr-foot .vexpr-btns{display:flex;gap:.3rem;flex:none}
 .pe-dev-voice{border-top:1px dashed var(--bd);margin-top:.6rem;padding-top:.5rem}
 .pe-dev-voice summary{font-size:.72rem;color:var(--t3);cursor:pointer;user-select:none}
 .json-import-wrap{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
@@ -1353,6 +1370,40 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         </div>
         <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_voice','音色') }}</label><select id="pe-preset-voice" onchange="_presetVoiceChanged()"></select></div>
         <div class="field-row" style="justify-content:flex-end"><label>&nbsp;</label><button type="button" class="btn btn-sm" id="pe-preset-preview" onclick="_presetPreview()">▶ {{ (i18n or {}).get('psn_vm_preview','试听') }}</button></div>
+      </div>
+      <!-- 语气表达：voice_profile.expressiveness（四档，空=继承全局 emotion.expressiveness）+
+           voice_profile.emotion（基线情绪，无线索时的底色）。不发语音态隐藏。对比试听走
+           /api/voice/tts-test 的 expressiveness/emotion 覆写（与发送同一条缩放链，不登记复用）。 -->
+      <div class="vexpr-box" id="pe-vexpr-box">
+        <div class="vexpr-hd"><span>🎚 {{ (i18n or {}).get('psn_vx_h','语气表达') }}</span><small>{{ (i18n or {}).get('psn_vx_sub','控制情绪强度、笑声/换气、口语化的总幅度') }}</small></div>
+        <div class="vexpr-seg" id="pe-vexpr-seg" role="radiogroup">
+          <label data-lv=""><input type="radio" name="pe-vexpr" value="" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_inherit','跟随全局') }}</b><small id="pe-vexpr-inherit-sub">{{ (i18n or {}).get('psn_vx_inherit_sub','用语音页默认') }}</small></label>
+          <label data-lv="restrained"><input type="radio" name="pe-vexpr" value="restrained" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_restrained','克制') }}</b><small>{{ (i18n or {}).get('psn_vx_restrained_sub','近乎平述') }}</small></label>
+          <label data-lv="natural"><input type="radio" name="pe-vexpr" value="natural" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_natural','自然') }}</b><small>{{ (i18n or {}).get('psn_vx_natural_sub','推荐') }}</small></label>
+          <label data-lv="vivid"><input type="radio" name="pe-vexpr" value="vivid" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_vivid','生动') }}</b><small>{{ (i18n or {}).get('psn_vx_vivid_sub','情绪更明显') }}</small></label>
+          <label data-lv="dramatic"><input type="radio" name="pe-vexpr" value="dramatic" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_dramatic','戏剧') }}</b><small>{{ (i18n or {}).get('psn_vx_dramatic_sub','表演感强') }}</small></label>
+        </div>
+        <div class="ps-row" style="margin-top:.4rem">
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_vx_emotion','基线情绪') }}</label>
+            <select id="pe-vexpr-emotion" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_vx_emo_inherit','跟随全局（默认温和）') }}</option>
+              <option value="neutral">{{ (i18n or {}).get('psn_vx_emo_neutral','中性（保真，不加情绪）') }}</option>
+              <option value="warm">{{ (i18n or {}).get('psn_vx_emo_warm','温和') }}</option>
+              <option value="calm">{{ (i18n or {}).get('psn_vx_emo_calm','平静') }}</option>
+              <option value="happy">{{ (i18n or {}).get('psn_vx_emo_happy','开心') }}</option>
+              <option value="playful">{{ (i18n or {}).get('psn_vx_emo_playful','俏皮') }}</option>
+              <option value="empathetic">{{ (i18n or {}).get('psn_vx_emo_empathetic','共情') }}</option>
+              <option value="serious">{{ (i18n or {}).get('psn_vx_emo_serious','严肃') }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="vexpr-foot">
+          <div class="vexpr-desc" id="pe-vexpr-desc"></div>
+          <div class="vexpr-btns">
+            <button type="button" class="btn btn-sm" id="pe-vexpr-preview" onclick="_vxPreview('')" title="{{ (i18n or {}).get('psn_vx_preview_tip','用当前档位试听（未保存也能听）') }}">▶ {{ (i18n or {}).get('psn_vx_preview','试听这个语气') }}</button>
+            <button type="button" class="btn btn-sm" id="pe-vexpr-preview-lo" onclick="_vxPreview('down')" title="{{ (i18n or {}).get('psn_vx_preview_lo_tip','低一档对比') }}">▼ {{ (i18n or {}).get('psn_vx_preview_lo','对比低一档') }}</button>
+          </div>
+        </div>
       </div>
       <!-- 开发者区：原 backend / Voice ID 手填（含「声音克隆(命令)」通道）。client 形态且未开
            开发者模式（ui_client_hide）→ 隐藏但保留元素（三态 JS 仍把结果同步进来）。 -->
@@ -5585,6 +5636,99 @@ async function _presetPreview() {
     _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
   } finally { if (btn) { btn.disabled = false; btn.textContent = '▶ ' + window.T('psn_vm_preview'); } }
 }
+// ── 语气表达（voice_profile.expressiveness / emotion）：装载→改动→补丁→对比试听 ──
+var _VX_LEVELS = ['restrained', 'natural', 'vivid', 'dramatic'];
+var _vxTouched = false;
+function _vxNorm(v) {
+  v = String(v == null ? '' : v).trim().toLowerCase();
+  var alias = {'克制': 'restrained', low: 'restrained', subtle: 'restrained', '自然': 'natural', 'default': 'natural', normal: 'natural', medium: 'natural',
+               '生动': 'vivid', high: 'vivid', lively: 'vivid', '戏剧': 'dramatic', max: 'dramatic', theatrical: 'dramatic'};
+  if (_VX_LEVELS.indexOf(v) >= 0) return v;
+  return alias[v] || '';
+}
+function _vxLevel() {
+  var el = document.querySelector('input[name="pe-vexpr"]:checked');
+  return el ? el.value : '';
+}
+function _vxEmotion() { return String((document.getElementById('pe-vexpr-emotion') || {}).value || ''); }
+function _vxSetLevel(lv) {
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="pe-vexpr"]'), function (r) { r.checked = (r.value === lv); });
+}
+function _vxLoad(vp) {
+  vp = (vp && typeof vp === 'object') ? vp : {};
+  _vxTouched = false;
+  _vxSetLevel(_vxNorm(vp.expressiveness));
+  var sel = document.getElementById('pe-vexpr-emotion');
+  if (sel) {
+    var emo = String(vp.emotion || '').trim().toLowerCase();
+    if (emo && !Array.prototype.some.call(sel.options, function (o) { return o.value === emo; })) {
+      var o = document.createElement('option'); o.value = emo; o.textContent = emo; sel.appendChild(o);
+    }
+    sel.value = emo;
+  }
+  _vxRenderDesc();
+}
+function _vxRenderDesc() {
+  var d = document.getElementById('pe-vexpr-desc'); if (!d) return;
+  var lv = _vxLevel();
+  var key = lv ? ('psn_vx_desc_' + lv) : 'psn_vx_desc_inherit';
+  var txt = window.T(key);
+  var emo = _vxEmotion();
+  if (emo === 'neutral') txt += ' ' + window.T('psn_vx_desc_neutral_note');
+  d.textContent = txt;
+  var lo = document.getElementById('pe-vexpr-preview-lo');
+  if (lo) lo.disabled = (lv === 'restrained');
+}
+function _vxOnChange() {
+  _vxTouched = true;
+  _vxRenderDesc();
+  try { _markDrawerDirty({target: document.getElementById('pe-vexpr-seg')}); } catch (_e) {}
+}
+// 保存补丁：没动过 → 不碰（深合并保留原值）；动过 → 显式写入（空串 = 清掉人设级覆写，回到跟随全局）
+function _vxCollectPatch(into) {
+  into = into || {};
+  if (!_vxTouched) return into;
+  into.expressiveness = _vxLevel();
+  into.emotion = _vxEmotion();
+  return into;
+}
+var _vxAudio = null;
+// 对比试听：dir='' 用当前档；dir='down' 低一档（“跟随全局”按 natural 算）。音色跟随三态：
+// 预置声 → 同 _presetPreview 的 backend/voice 覆写；克隆声且已保存 → 带 persona_id 走真克隆链；否则 fast Edge。
+async function _vxPreview(dir) {
+  var lv = _vxLevel() || 'natural';
+  if (dir === 'down') { var i = _VX_LEVELS.indexOf(lv); lv = _VX_LEVELS[Math.max(0, i - 1)]; }
+  var btn = document.getElementById(dir === 'down' ? 'pe-vexpr-preview-lo' : 'pe-vexpr-preview');
+  var label = btn ? btn.textContent : '';
+  if (_vxAudio) { try { _vxAudio.pause(); } catch (_e) {} _vxAudio = null; }
+  if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
+  var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
+  var body = {text: window.Tf('psn_vx_preview_text', {name: nm}), format: 'mp3', expressiveness: lv};
+  var emo = _vxEmotion(); if (emo) body.emotion = emo;
+  var mode = _vmMode();
+  var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+  var meta = _vmVoiceMeta(v) || {};
+  if (mode === 'preset' && v) {
+    var isOpenai = meta.backend === 'openai';
+    body.fast = !isOpenai;
+    body.voice_cfg_override = {backend: isOpenai ? 'openai' : 'edge_tts', voice: v, voice_profile: {enabled: false}};
+  } else if (mode === 'clone' && _editingProfileId) {
+    body.fast = false; body.persona_id = _editingProfileId;
+  } else { body.fast = true; }
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await apiFetch('/api/voice/tts-test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
+    _vxAudio = new Audio(d.url || d.audio_url);
+    _vxAudio.onended = _vxAudio.onerror = function () { _vxAudio = null; };
+    _vxAudio.play().catch(function () {});
+    var vm = d.voice_meta || {};
+    _toast(window.Tf('psn_vx_preview_playing', {level: window.T('psn_vx_' + (vm.expressiveness || lv)), emotion: vm.emotion || '-'}), 'ok');
+  } catch (e) {
+    _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
+  } finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+}
 function _vmRefName(vp) { var r = String((vp || {}).reference_audio_path || ''); return r ? r.split(/[\\/]/).pop() : ''; }
 // 状态行：按实际类型给绑定文案（「已绑定克隆声：<录音文件名>」/「预置声：日语 · 女 · 七海」），
 // 非法组合红字「配置需修正」——Mizuki（avatar_clone + ja-JP-NanamiNeural，无录音）在此现形。
@@ -5593,6 +5737,8 @@ function _vmRenderStatus() {
   var picker = document.getElementById('pe-preset-picker');
   var mode = _vmMode(), vp = _vmLoaded.vp || {}, txt = '', cls = '';
   if (picker) picker.style.display = (mode === 'preset') ? '' : 'none';
+  var vx = document.getElementById('pe-vexpr-box');
+  if (vx) vx.style.display = (mode === 'off') ? 'none' : '';
   if (mode === 'clone') {
     var hasId = _vmHasIdentity(vp) && !!_vmInferCloneBackend(vp);
     var vName = String(vp.voice || '').trim();
@@ -5623,6 +5769,7 @@ function _vmLoad(vp, isNew) {
   _vmSetMode(d.mode);
   _vpSyncBackendUi(vp.backend || '');
   var inp = document.getElementById('pe-vp-voice'); if (inp) inp.value = vp.voice || '';
+  _vxLoad(vp);
   _vmLoadCatalog().then(function () {
     _presetRender(d.mode === 'preset' ? (vp.voice || '') : '');
     _vmRenderStatus();
@@ -5666,7 +5813,8 @@ function _vmValidate() {
   return '';
 }
 // 保存补丁：没动过 → 原样回传装载值（不静默迁移存量）；动过 → 按三态产出
-function _vmCollectPatch() {
+function _vmCollectPatch() { return _vxCollectPatch(_vmCollectModePatch()); }
+function _vmCollectModePatch() {
   var vp = _vmLoaded.vp || {};
   var devB = String((document.getElementById('pe-vp-backend') || {}).value || '');
   var devV = String((document.getElementById('pe-vp-voice') || {}).value || '').trim();

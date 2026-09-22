@@ -222,3 +222,45 @@ def test_effective_voice_context_carries_expressiveness(monkeypatch):
         cfg, text="哈哈", platform="telegram", account_id="acc1", chat_key="other",
         expressiveness="生动")
     assert ctx3["expressiveness"] == "vivid"
+
+
+# ── P1 人设页：基线情绪钉 neutral / 三态迁移保留 / 保存回读 ──────────────────
+def test_persona_pinned_neutral_wins_over_trait_inference():
+    from src.ai.voice_emotion import persona_default_emotion
+
+    persona = {"personality": {"traits": ["活泼可爱", "爱笑"]},
+               "voice_profile": {"emotion": "neutral"}}
+    assert persona_default_emotion(persona) == "neutral"
+    # 无线索 → 完全保真；有线索仍走线索
+    assert derive_emotion(text="今天天气不错", persona=persona, baseline_intensity=0.4) == NEUTRAL
+    assert derive_emotion(text="哈哈哈太好笑了", persona=persona).emotion != "neutral"
+    # 未钉 → 旧行为（trait 推断 playful）
+    del persona["voice_profile"]["emotion"]
+    assert derive_emotion(text="今天天气不错", persona=persona, baseline_intensity=0.4).emotion == "playful"
+
+
+def test_tristate_preset_migration_keeps_expressiveness():
+    from src.ai import voice_tristate as vt
+
+    vp, info = vt.coerce_voice_profile_for_import(
+        {"backend": "avatar_clone", "voice": "ja-JP-NanamiNeural",
+         "expressiveness": "restrained", "emotion": "calm"})
+    assert info["action"] == "preset"
+    assert vp["expressiveness"] == "restrained" and vp["emotion"] == "calm"
+
+
+def test_persona_editor_wiring_static():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "src/web/templates/personas.html").read_text(encoding="utf-8")
+    for needle in ('name="pe-vexpr"', 'id="pe-vexpr-emotion"', "_vxCollectPatch(",
+                   "expressiveness: lv", "_vxLoad(vp)"):
+        assert needle in html, needle
+    for lv in ("restrained", "natural", "vivid", "dramatic"):
+        assert f'value="{lv}"' in html
+    route = (root / "src/web/routes/voice_routes.py").read_text(encoding="utf-8")
+    assert 'body.get("expressiveness")' in route
+    assert "expressiveness=_expr_override or None" in route
+    zh = (root / "src/web/i18n_packs/persona_studio.py").read_text(encoding="utf-8")
+    assert zh.count('"psn_vx_desc_dramatic"') == 2, "ZH/EN 各一份"

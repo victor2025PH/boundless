@@ -230,7 +230,7 @@ def synth_gate(vp: Any, *, check_files: bool = False) -> Dict[str, Any]:
     }
 
 
-_PRESET_KEEP_KEYS = ("instruct_style", "emotion", "format", "enabled")
+_PRESET_KEEP_KEYS = ("instruct_style", "emotion", "expressiveness", "format", "enabled")
 
 
 def _preset_backend_for_voice(voice: str) -> str:
