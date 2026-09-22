@@ -92,7 +92,7 @@
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
 <script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912b"></script>
 {% endif %}
-<script src="/copilot/client/copilot-client.js?v=20260912q21"></script>
+<script src="/copilot/client/copilot-client.js?v=20260922a"></script>
 <script src="/copilot/sidebar-chrome.js?v=20260828b"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260817t"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260905a"></script>
@@ -100,7 +100,7 @@
 <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
 <script src="/copilot/components/cp-chain-exec.js?v=20260905b"></script>
 <script src="/copilot/components/cp-draft.js?v=20260912q21"></script>
-<script src="/copilot/components/cp-voice.js?v=20260919a"></script>
+<script src="/copilot/components/cp-voice.js?v=20260922a"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260912q21"></script>
 <script src="/copilot/components/cp-goal.js?v=20260912a"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
@@ -15898,7 +15898,7 @@ async function sendMsg(){
       const idx=threadMsgs.findIndex(m=>m.message_id===optId);
       if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; }
       renderMessages(selectedChat, threadMsgs, {silent:true});
-      showHint(window.Tf('inbox.toast.send_fail',{msg:((det&&det.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
       }
     }
   }catch(e){
@@ -16013,7 +16013,7 @@ async function resendFailed(optId){
         try{ _noteGateBlock(_det2); }catch(_){}
       }
       if(_isMs2){ try{ showHint(_msFailThreeParts(_det2).text); }catch(_){ showHint(String(_det2.message||'')); } }
-      else showHint(window.Tf('inbox.toast.send_fail',{msg:((_det2&&_det2.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      else showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
     }
   }catch(e){
     const i2=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -16052,7 +16052,7 @@ async function resendStoreFailed(mid){
       if(_det && typeof _det==='object' && _det.code==='send_blocked'){
         try{ _noteGateBlock(_det); }catch(_){}
       }
-      showHint(window.Tf('inbox.toast.send_fail',{msg:((_det&&_det.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
     }
   }catch(_e){
     m._resending=false;
@@ -16062,6 +16062,7 @@ async function resendStoreFailed(mid){
 }
 
 function showHint(msg){ document.getElementById('reply-hint').textContent=msg; setTimeout(()=>document.getElementById('reply-hint').textContent='',4000); }
+function errMsgOf(d){ const pick=(v)=>{ if(v==null) return ''; if(typeof v==='string') return v; if(Array.isArray(v)) return v.map(pick).filter(Boolean).join('; '); if(typeof v==='object'){ const inner=v.message||v.msg||v.error||v.detail||v.reason||v.code; if(inner) return pick(inner); try{ return JSON.stringify(v); }catch(_){ return ''; } } return String(v); }; if(!d||typeof d!=='object') return pick(d); const det=d.detail; return pick(det&&typeof det==='object'?det.message:'')||pick(d.message)||pick(det)||pick(d.error)||pick(d.reason)||''; }
 
 /* ===== 打字状态（Phase 11）===== */
 let _typingTimer=null, _typingActive=false, _typingDisplayTimer=null;
@@ -21610,7 +21611,7 @@ async function sendVoiceReply(){
         try{ _noteGateBlock(_gd); }catch(_){}
         onFail(String(_gd.message||''));
       } else {
-        onFail((_gd&&_gd.message)||_gd||d.message||d.reason||'');
+        onFail(errMsgOf(d));
       }
     }
   }catch(_e){

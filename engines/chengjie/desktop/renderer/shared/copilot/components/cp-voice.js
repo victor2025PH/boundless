@@ -1003,6 +1003,24 @@
        （语种超能力 / 额度 / 引擎不可达 / 念错），服务端**没有**替我们换系统音；
        blocked + reason=lang_mismatch ＝ 文本/音色/计划语种不一致，跳过语音。
        两种都只给出路不给「重试」：重试只会再撞同一道闸。 */
+    /* Readable text out of a client error envelope; dict/list ``detail`` is
+       unwrapped instead of stringified to "[object Object]". */
+    static errText(d) {
+      const pick = (v) => {
+        if (v === null || v === undefined) return "";
+        if (typeof v === "string") return v;
+        if (Array.isArray(v)) return v.map(pick).filter(Boolean).join("; ");
+        if (typeof v === "object") {
+          const inner = v.message || v.msg || v.error || v.detail || v.reason || v.code;
+          if (inner) return pick(inner);
+          try { return JSON.stringify(v); } catch (_e) { return ""; }
+        }
+        return String(v);
+      };
+      if (!d || typeof d !== "object") return pick(d);
+      const err = (typeof d.error === "string" && d.error !== "[object Object]") ? d.error : "";
+      return pick(d.message) || err || pick(d.detail) || pick(d.error) || pick(d.reason) || "";
+    }
     static cloneBlocked(d) {
       if (!d || !d.blocked) return null;
       if (d.clone_unavailable && typeof d.clone_unavailable === "object") return d.clone_unavailable;
@@ -1595,7 +1613,7 @@
         this._hint(this._t("cp.voice.blocked_hint"), false);
       } else {
         this._hint(this._t("cp.voice.send_fail",
-          { msg: (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.need_online") }), false);
+          { msg: CpVoice.errText(d) || this._t("cp.voice.need_online") }), false);
       }
     }
 
@@ -1762,7 +1780,7 @@
         d = { ok: false, error: String((e && e.message) || e || "") };
       }
       if (!(d && d.ok)) {
-        const why = (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.req_fail");
+        const why = CpVoice.errText(d) || this._t("cp.voice.req_fail");
         if (hint) hint.textContent = "❌ " + this._t("cp.voice.rebind_fail", { msg: why });
         return;
       }

@@ -48,6 +48,40 @@
     return h;
   }
 
+  /* Convert a FastAPI ``detail`` (string / dict / validation list) to a
+     human-readable string; never yields "[object Object]". */
+  function _detailText(d) {
+    if (d === null || d === undefined) return "";
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d.map(_detailText).filter(Boolean).join("; ");
+    if (typeof d === "object") {
+      const inner = d.message || d.msg || d.error || d.detail || d.reason || d.code;
+      if (inner) return _detailText(inner);
+      try { return JSON.stringify(d); } catch (_e) { return ""; }
+    }
+    return String(d);
+  }
+  /* Normalise a non-2xx JSON body into {ok:false, status, error, message?, code?}.
+     A dict ``detail`` ({code, message, ...}) is hoisted so callers can read
+     ``d.message`` / ``d.code`` directly and ``d.error`` is always a string. */
+  function _errorEnvelope(d, r) {
+    const out = (d && typeof d === "object" && !Array.isArray(d)) ? d : {};
+    if (Array.isArray(d)) out.detail = d;
+    if (out.ok === undefined) out.ok = false;
+    if (out.status === undefined) out.status = r.status;
+    const det = out.detail;
+    if (det && typeof det === "object" && !Array.isArray(det)) {
+      if (!out.message && det.message) out.message = String(det.message);
+      if (!out.code && det.code) out.code = String(det.code);
+      if (!out.reason && det.reason) out.reason = String(det.reason);
+    }
+    if (typeof out.error !== "string" || !out.error) {
+      out.error = _detailText(out.error) || _detailText(det) || out.message
+        || r.statusText || ("HTTP " + r.status);
+    }
+    return out;
+  }
+
   // —— 网页适配器:同源 fetch ——
   class WebCopilotClient {
     /* 读请求：非 2xx 归一化为 {ok:false, status, code, error}（与 _post 同口径）。
@@ -67,11 +101,7 @@
         if (d === null) return { ok: false, status: r.status, code: "badjson", error: "invalid JSON response" };
         return d;
       }
-      const out = (d && typeof d === "object") ? d : {};
-      if (out.ok === undefined) out.ok = false;
-      if (out.status === undefined) out.status = r.status;
-      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
-      return out;
+      return _errorEnvelope(d, r);
     }
     /* 写请求统一出口：自带 CSRF 头；非 2xx 归一化为 {ok:false, status, code, error}
        （error 取后端已 i18n 的 detail，组件据此分型提示，不再一律「请重试」）。
@@ -108,11 +138,7 @@
         const seeded = await _seedCsrfCookie();
         if (seeded) return this._writeJson(method, url, body, true);
       }
-      const out = (d && typeof d === "object") ? d : {};
-      if (out.ok === undefined) out.ok = false;
-      if (out.status === undefined) out.status = r.status;
-      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
-      return out;
+      return _errorEnvelope(d, r);
     }
     /* multipart 写通道（P1 导入上传用）：与 _post 同 CSRF 语义；
        不设 Content-Type（浏览器自带 boundary）。 */
@@ -135,11 +161,7 @@
         const seeded = await _seedCsrfCookie();
         if (seeded) return this._postForm(url, formData, true);
       }
-      const out = (d && typeof d === "object") ? d : {};
-      if (out.ok === undefined) out.ok = false;
-      if (out.status === undefined) out.status = r.status;
-      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
-      return out;
+      return _errorEnvelope(d, r);
     }
     /* 跨平台档案（cp-origin，2026-08-18）：ctx 缺显式三元组时从 conversationId
        （platform:account:chat_key，chat_key 可含冒号）拆解兜底。 */
