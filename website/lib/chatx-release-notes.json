@@ -1,5 +1,41 @@
 [
   {
+    "version": "1.0.96",
+    "date": "2026-09-22",
+    "title": {
+      "zh": "「不误发、不编造」：出站真实性专项收口——发图按需、事实核对、记忆只用亲口所述、翻译不够稳不直发；微信 PC 版双开互不串扰",
+      "en": "Send only what is true: outbound truth controls - photos on request only, fact gate, stated-only memory, no low-confidence translations; WeChat PC dual-account isolation"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "发图更可靠：客户点名要某个场景的照片（比如「发张你在海边的」），相册里没有对应的就如实说没有，不再拿一张无关的自拍或别的图顶上；只有客户明确要图、AI 先前承诺过要发、或客户接受了「给你看张照片」的提议时，才会从通用相册挑图（Bug 群 #332 / #339）",
+        "AI 不再「编」：出站前多一道事实核对——客户没说过的个人情况、没发生过的共同经历、没有依据的第三方消息和「我给你安排好了」式的空头承诺，一律先删掉重写，删不干净就转人工处理而不是发出去（Bug 群 #341 / #342）",
+        "主动搭话只用客户亲口说过的记忆：AI 主动开场、关怀、复聊时引用的记忆，只取客户明确讲过的内容，AI 自己推断出来的印象不再当事实说出口；同一个问题（含天气类问句）24 小时内不会重复问",
+        "固定开场词治理：连续用同一句感叹开场（如「Ha,」）会被自动摘掉；开场复读累计达到阈值会在后台告警，便于及时发现生成质量回退（Bug 群 #340）",
+        "翻译更稳：发给外语客户前，译文置信度不够的不再直接发出，改为重译或转人工；中等置信度按目标语言分桶记录，便于逐语种复核（Bug 群 #343，印地语等小语种重点关注）",
+        "运营下指令要图但相册没货：不再让 AI 对客户改口，改为在坐席侧留下提示，由人来补图或调整；成功补发后提示自动清除",
+        "微信 PC 版多账号：同一台机器双开两个微信互不串扰——每个账号独立驱动、绑定登录窗口与微信号，串号自动切窗，两号发送不再互相排队；账号卡片新增 24 小时活动报告与时间线；全自动节奏对齐自然档",
+        "其他：安装器长路径补删日志收敛（不再被被占用文件的祖先链刷成 failed）；网关实例 ID 解析跨平台修复；语音服务探针令牌来源统一",
+        "数据、各平台登录状态一律不受影响；升级后请重启一次工作台，让新的出站核对生效"
+      ],
+      "en": [
+        "More reliable photo sending: when a customer asks for a specific scene (\"send one of you at the beach\") and the album has no match, the AI now says so honestly instead of substituting an unrelated selfie or random picture; the generic album is only used when the customer explicitly asks for a photo, the AI previously promised one, or the customer accepted an offer to see one (bug group #332 / #339)",
+        "No more made-up facts: a fact gate now runs before every outgoing message - personal details the customer never stated, shared experiences that never happened, unsupported third-party claims and \"I've arranged it for you\" style empty promises are stripped and the reply rewritten; if that fails the conversation is routed to a human instead of being sent (bug group #341 / #342)",
+        "Proactive messages only use memories the customer actually stated: openers, care messages and re-engagement drafts draw only on what the customer explicitly said, never on impressions the AI inferred on its own; the same question (including weather questions) is not asked twice within 24 hours",
+        "Fixed-opener control: repeating the same interjection opener (e.g. \"Ha,\") is stripped automatically, and a repeat-count alarm surfaces generation regressions early (bug group #340)",
+        "Steadier translation: low-confidence translations are no longer sent as-is to foreign-language customers - they are retranslated or handed to a human; medium-confidence sends are recorded per target language for review (bug group #343, with extra attention to Hindi and other smaller languages)",
+        "Operator-directed photo requests with no matching asset no longer make the AI change its story to the customer; a seat-side note is left for a human to add the photo or adjust, and clears automatically once a photo is sent",
+        "WeChat PC multi-account: two WeChat instances on one machine no longer interfere - each account has its own driver bound to its login window and WeChat ID, mis-routed windows are re-targeted automatically, and sends from the two accounts no longer queue behind each other; account cards gain a 24-hour activity report and timeline; full-auto pacing aligned to the natural profile",
+        "Also: installer long-path cleanup logging no longer reports locked-file ancestors as failures; cross-platform fix for gateway instance-ID parsing; unified token source for the voice-service probe",
+        "Data and platform logins are unaffected; restart the workbench once after upgrading so the new outbound checks take effect"
+      ]
+    }
+  },
+  {
     "version": "1.0.95",
     "date": "2026-09-21",
     "title": {
