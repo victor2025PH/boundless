@@ -485,6 +485,26 @@ class TranslationService:
             return result
 
         out = restore_protected(res.text, mapping)
+        if self._cjk_residue(out, source, target):
+            _terms = self._cjk_residue_terms(out)
+            _hint = (glossary_hint + " These words were left untranslated and must be "
+                     "rendered in " + LANG_NAMES.get(target, target)
+                     + " (transliterate names): " + ", ".join(_terms[:12]) + ".")
+            res2 = None
+            if res.engine:
+                try:
+                    res2 = await self._router.translate_with(
+                        res.engine, masked, source_lang=source, target_lang=target,
+                        style=style, glossary_hint=_hint,
+                    )
+                except Exception:
+                    res2 = None
+            out2 = restore_protected(res2.text, mapping) if (res2 and res2.ok and res2.text) else ""
+            fixed = bool(out2) and not self._cjk_residue(out2, source, target)
+            logger.info("[xlate] cjk_residue provider=%s tgt=%s terms=%s fixed=%s",
+                        res.engine or "-", target, "|".join(_terms[:6]), int(fixed))
+            if out2 and (fixed or len(_CJK_RE.findall(out2)) < len(_CJK_RE.findall(out))):
+                out = out2
         # 引擎拒绝话术拦截（P1-198）：LLM 引擎对无意义短文本（"1"/表情）可能
         # 输出「没有可翻译的内容，请提供文本」类客套话——它曾被当译文直接发给
         # 客户（198 实锤）。按失败处理：出站链自动回落原文/HOLD、收件箱译文行
@@ -803,6 +823,23 @@ class TranslationService:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _cjk_residue(text: str, source_lang: str, target_lang: str) -> bool:
+        """源侧含 CJK、目标语为非 CJK 文字系统，但译文仍残留汉字（专名被整段保留）。"""
+        tgt = str(target_lang or "").strip().lower()
+        if not tgt or tgt.split("-")[0] in ("zh", "ja", "ko", "yue"):
+            return False
+        return bool(_CJK_RE.search(str(text or "")))
+
+    @staticmethod
+    def _cjk_residue_terms(text: str) -> list:
+        seen: list = []
+        for m in re.finditer(r"[\u4e00-\u9fff]+", str(text or "")):
+            w = m.group(0)
+            if w not in seen:
+                seen.append(w)
+        return seen
 
     def _glossary_hint(self, text: str) -> str:
         """命中术语注入提示（Phase C2）。仅注入文本中出现的术语，避免噪声。"""

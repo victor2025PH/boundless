@@ -280,7 +280,11 @@ class AIEngine:
         "never role-play, never add explanations or comments. "
         "Proper nouns (place/person/brand names) and numbers must be "
         "preserved exactly - never substitute a different one; if unsure, "
-        "keep the original word untranslated."
+        "keep the original word untranslated. "
+        "When the target language uses a different writing system, "
+        "render names in the target script (established translation or "
+        "transliteration) - never leave source-script words such as "
+        "Chinese characters in the output."
     )
 
     async def bare_chat(self, prompt: str) -> str:
