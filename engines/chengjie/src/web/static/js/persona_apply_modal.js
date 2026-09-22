@@ -43,7 +43,13 @@
                      zalo: 'Zalo', instagram: 'Instagram', douyin: 'Douyin',
                      tiktok: 'TikTok', web: 'Web' };
   function _platLabel(plat) {
-    return PLAT_LABEL[plat] || String(plat || '').toUpperCase();
+    var fb = PLAT_LABEL[plat] || String(plat || '').toUpperCase();
+    return PLAT_LABEL[plat] && ACC_KEY[plat] ? fb : _t('psn_apply_plat_' + plat, fb);
+  }
+  var ST_LABEL = { online: 'Online', offline: 'Offline', pending: 'Not logged in',
+                   error: 'Error', blocked: 'Blocked', expired: 'Expired' };
+  function _stLabel(st) {
+    return _t('psn_apply_st_' + st, ST_LABEL[st] || st);
   }
   var ACC_KEY = { tg: 'tg_accounts', mrpa: 'mrpa_accounts', wa: 'wa_accounts',
                   line: 'line_accounts' };
@@ -124,6 +130,9 @@
     + '.psa-sec-title{font-size:.72rem;font-weight:700;color:var(--t2);margin:.5rem .15rem .3rem}'
     + '.psa-row{display:flex;align-items:center;gap:.55rem;padding:.45rem .3rem;border-bottom:1px dashed var(--bd)}'
     + '.psa-row:last-child{border-bottom:none}'
+    + '.psa-row-off .psa-row-name,.psa-row-off .psa-plat{opacity:.55}'
+    + '.psa-st{display:inline-block;margin-left:.35rem;font-size:.62rem;font-weight:600;padding:0 .35rem;border-radius:4px;border:1px solid var(--bd);color:var(--t2)}'
+    + '.psa-st.on{color:#10b981;border-color:color-mix(in srgb,#10b981 45%,transparent)}'
     + '.psa-plat{flex-shrink:0;font-size:.62rem;font-weight:700;padding:.12rem .42rem;border-radius:5px;background:color-mix(in srgb, var(--p,#1e8cf2) 12%, transparent);color:var(--accent,#5b7cf6);border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 20%, transparent)}'
     + '.psa-row-main{flex:1;min-width:0}'
     + '.psa-row-name{font-size:.8rem;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
@@ -204,6 +213,9 @@
     var isMine = (a.persona_ids || []).indexOf(_pid) !== -1;
     // #78：registry 账号（tg 除外）assign 走通用 registry 端点
     var src = forceSrc || ((a.source === 'registry' && plat !== 'tg') ? 'registry' : '');
+    var st = String(a.status || '').toLowerCase();
+    var off = !!st && st !== 'online';
+    var stChip = st ? ' <span class="psa-st' + (off ? '' : ' on') + '">' + _esc(_stLabel(st)) + '</span>' : '';
     var subTxt = curName
       ? (_t('psn_apply_cur_prefix', '当前人设：') + curName) : '-';
     var aidShort = aid.length > 18 ? (aid.slice(0, 8) + '…' + aid.slice(-4)) : aid;
@@ -212,11 +224,11 @@
     var metaBits = '';
     if (uname && uname !== name) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">@' + _esc(uname) + '</span>';
     if (aid && name !== aid) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">' + _esc(aidShort) + '</span>';
-    var html = '<div class="psa-row">'
+    var html = '<div class="psa-row' + (off ? ' psa-row-off' : '') + '">'
       + '<span class="psa-plat">' + _esc(_platLabel(plat)) + '</span>'
       + '<div class="psa-row-main">'
       +   '<div class="psa-row-name" title="' + _esc(aid) + '">' + _esc(dispName) + metaBits + '</div>'
-      +   '<div class="psa-row-sub">' + _esc(subTxt) + '</div>'
+      +   '<div class="psa-row-sub">' + _esc(subTxt) + stChip + '</div>'
       + '</div>'
       + (isMine
           ? '<span class="psa-cur">' + _esc(_t('psn_apply_current', '✓ 当前人设')) + '</span>'

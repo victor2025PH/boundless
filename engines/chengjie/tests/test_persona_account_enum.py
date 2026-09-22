@@ -123,7 +123,7 @@ def test_78_apply_modal_wires_line_and_registry_endpoint():
     html = (Path(__file__).resolve().parents[1]
             / "src" / "web" / "templates" / "personas.html").read_text(
                 encoding="utf-8")
-    assert "persona_apply_modal.js?v=p4" in html
+    assert "persona_apply_modal.js?v=p5" in html
     # 二轮显示不变量：主标签与 id 重复时不复读、长 token 缩略（完整值进 title）
     assert "aidShort" in js and "dispName" in js
 

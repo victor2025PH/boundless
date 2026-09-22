@@ -2282,6 +2282,18 @@ _ADDITIONS_2026_09_19_WECHAT_PC_VOICE = """
 """
 _BASELINE += _ADDITIONS_2026_09_19_WECHAT_PC_VOICE
 
+# 2026-09-21 微信 PC 多账号（`wechat_pc_setup_routes.py` P1/P2：accounts[] 登记 / 窗口枚举 / 24h 收发报表）
+# + 入账台账查询（`ops_inbound_ledger_routes.py`）。
+_ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT = """
+/api/setup/wechat_pc/accounts	GET,POST
+/api/setup/wechat_pc/accounts/{account_id}	DELETE
+/api/setup/wechat_pc/accounts/{account_id}/report	GET
+/api/setup/wechat_pc/windows	GET
+/api/ops/inbound-ledger	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT
+
+
 
 def _parse_baseline():
     expected = set()

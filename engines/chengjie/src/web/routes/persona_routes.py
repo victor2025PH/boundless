@@ -2466,6 +2466,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                         "name_mismatch": _name_mismatch(
                             _plat, _aid, _self_name, _ap, _pids[0] if _pids else ""),
                         "source": "registry",
+                        "status": str(_row.get("status") or "").lower(),
                     })
                 return out
 

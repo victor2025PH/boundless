@@ -58,6 +58,7 @@ def test_apply_modal_renders_other_accounts_via_registry_endpoint():
     # 未知平台有兜底标签，不会渲染成 undefined
     assert "function _platLabel(plat)" in JS
     assert "PLAT_LABEL[plat] || String(plat || '').toUpperCase()" in JS
+    assert "_t('psn_apply_plat_' + plat, fb)" in JS
     for plat in ("wechat:", "wechat_kf:", "qq:", "douyin:", "zalo:", "instagram:"):
         assert plat in JS, plat
     # 既有四桶不变
@@ -65,5 +66,5 @@ def test_apply_modal_renders_other_accounts_via_registry_endpoint():
 
 
 def test_apply_modal_cache_busted():
-    assert "persona_apply_modal.js?v=p4" in HTML
-    assert "persona_apply_modal.js?v=p3" not in HTML
+    assert "persona_apply_modal.js?v=p5" in HTML
+    assert "persona_apply_modal.js?v=p4" not in HTML
