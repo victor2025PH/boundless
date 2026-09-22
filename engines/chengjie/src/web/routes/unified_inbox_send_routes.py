@@ -2307,6 +2307,10 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "provider": getattr(result, "provider", ""),
             "voice": getattr(result, "voice", ""),
             "emotion": getattr(_emotion, "emotion", "") if _emotion else "",
+            "expressiveness": str(
+                (voice_ctx.get("voice_cfg") or {}).get("voice_expressiveness") or ""),
+            "expressiveness_source": str(
+                (voice_ctx.get("voice_cfg") or {}).get("voice_expressiveness_source") or ""),
             "fallback_from": _extra.get("fallback_from", ""),
             "fallback_reason": _fb_reason,
             "fallback_lang": _fb_lang,

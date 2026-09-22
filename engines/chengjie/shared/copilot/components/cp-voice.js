@@ -162,6 +162,24 @@
                    color:var(--cp-text-dim,#94a3b8); }
       .effdetail > div { margin:2px 0; }
       .effdetail .eff-acts { display:flex; justify-content:flex-end; margin-top:6px; }
+      /* 语气表达行（会话级覆写）：标签 + 五格分段（跟随/克制/自然/生动/戏剧）+ 👎 降一档 */
+      .vxrow { display:flex; align-items:center; gap:6px; margin:6px 0 0;
+               font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); }
+      .vxrow .vxlbl { flex:none; }
+      .vxseg { display:flex; flex:1; min-width:0; border:1px solid var(--cp-border,#2a3544);
+               border-radius:6px; overflow:hidden; }
+      .vxseg button { flex:1; min-width:0; padding:3px 0; border:0; border-radius:0;
+                      background:transparent; color:var(--cp-text-tiny,#94a3b8);
+                      border-left:1px solid var(--cp-border,#2a3544); }
+      .vxseg button:first-child { border-left:0; }
+      .vxseg button.eff { color:var(--cp-text,#e2e8f0); }
+      .vxseg button.on { background:var(--cp-accent-bg,rgba(84,167,245,.18)); color:var(--cp-text,#e2e8f0); }
+      .vxseg button[data-lv="restrained"].on { box-shadow:inset 0 -2px 0 var(--cp-text-tiny,#94a3b8); }
+      .vxseg button[data-lv="natural"].on { box-shadow:inset 0 -2px 0 var(--cp-accent,#3aa0ff); }
+      .vxseg button[data-lv="vivid"].on { box-shadow:inset 0 -2px 0 var(--cp-warn,#d97706); }
+      .vxseg button[data-lv="dramatic"].on { box-shadow:inset 0 -2px 0 var(--cp-danger,#dc2626); }
+      .vxrow .vxdown { flex:none; padding:3px 6px; }
+      .vxhint { margin:3px 0 0; }
       .compose-foot { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px;
                       margin:4px 0 6px; }
       .compose-foot .hint { margin:0; flex:1; min-width:0; }
@@ -418,6 +436,7 @@
         parts.push(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
       }
       if (m.emotion) parts.push(`${this._t("cp.voice.m_emotion")} ${this._emoLabel(m.emotion)}`);
+      if (m.expressiveness) parts.push(`${this._t("cp.voice.m_vx")} ${this._vxLabel(m.expressiveness)}`);
       if (m.fallback_from) parts.push(this._t("cp.voice.m_fallback", { from: this._backendLabel(m.fallback_from) }));
       // #161（2026-09-03）：语种改道走的是标准声，这件事必须写在**实际使用**行上
       // ——蓝条说明会被过期/无声提示按互斥规则藏起来（_syncNotes 单出口），藏掉
@@ -433,6 +452,7 @@
       // chip 化（P1-2）：折行时分隔符跟内容走（同音色状态条 eff-bit 方案，
       // 旧 " · " 拼串窄栏折行会行尾悬挂）；原始代号串进 title，不占坐席眼球。
       const raw = [m.persona_id, m.provider, m.voice, m.emotion,
+        m.expressiveness ? `expressiveness=${m.expressiveness}${m.expressiveness_source ? "/" + m.expressiveness_source : ""}` : "",
         m.fallback_from ? `fallback_from=${m.fallback_from}` : "",
         m.fallback_reason ? `reason=${m.fallback_reason}` : "",
         m.speech ? `speech=${m.speech}${m.speech_basis ? "/" + m.speech_basis : ""}` : ""]
@@ -497,6 +517,71 @@
       const det = this.shadowRoot.querySelector('[data-role="effdetail"]');
       if (box) box.hidden = true;
       if (det) { det.hidden = true; det.innerHTML = ""; }
+      this._renderVx(null);
+    }
+
+    /* 语气表达行：数据源=effective-config（与发送同源解析）。旧后端缺
+       expressiveness 键 → 整行隐藏（特性探测，不显示错的）。分段按钮高亮
+       「会话钉住」的档（on），有效档（可能来自人设/全局）用 eff 类点亮文字，
+       提示行说明来源，👎 以有效档为基准降一档并钉成会话覆写。 */
+    _vxLabel(lv) {
+      const c = String(lv || "").trim().toLowerCase();
+      if (!c) return this._t("cp.voice.vx_inherit");
+      const k = "cp.voice.vx_" + c;
+      const v = this._t(k);
+      return (v && v !== k) ? v : c;
+    }
+    _renderVx(d) {
+      const row = this.shadowRoot.querySelector('[data-role="vxrow"]');
+      const hint = this.shadowRoot.querySelector('[data-role="vxhint"]');
+      if (!row) return;
+      const can = !!(d && ("expressiveness" in d) && this._client && this._client.voiceSessionExpressiveness);
+      if (!can) { row.hidden = true; if (hint) { hint.hidden = true; hint.textContent = ""; } return; }
+      const eff = String(d.expressiveness || "");
+      const sess = String(d.expressiveness_session || "");
+      this._vxEff = eff;
+      row.querySelectorAll('[data-act="vx-set"]').forEach((b) => {
+        const lv = b.getAttribute("data-lv") || "";
+        b.classList.toggle("on", lv === sess);
+        b.classList.toggle("eff", !!lv && lv === eff);
+        b.title = this._t("cp.voice.vx_desc_" + (lv || "inherit"));
+      });
+      const down = row.querySelector('[data-act="vx-down"]');
+      if (down) down.disabled = eff === "restrained";
+      row.hidden = false;
+      if (hint) {
+        const src = String(d.expressiveness_source || "");
+        let srcTxt = "";
+        if (src === "session") srcTxt = this._t("cp.voice.vx_src_session");
+        else if (src === "persona") srcTxt = this._t("cp.voice.vx_src_persona");
+        else srcTxt = this._t("cp.voice.vx_src_global");
+        hint.textContent = this._t("cp.voice.vx_now", {
+          level: this._vxLabel(eff), src: srcTxt,
+          desc: this._t("cp.voice.vx_desc_" + (eff || "inherit")) });
+        hint.hidden = false;
+      }
+    }
+    async _setVx(level, stepDown) {
+      const c = this._ctx;
+      if (!c || !c.chatKey || !this._client || !this._client.voiceSessionExpressiveness) return;
+      const epoch = this._epoch;
+      const body = { platform: c.platform || undefined, account_id: c.accountId || undefined,
+        chat_key: c.chatKey, persona_id: this._persona || undefined };
+      if (stepDown) body.action = "step_down"; else body.level = level || "";
+      try {
+        const d = await this._client.voiceSessionExpressiveness(body);
+        if (epoch !== this._epoch) return;
+        if (!d || d.ok === false) { this._hint(this._t("cp.voice.vx_save_fail"), false); return; }
+        // 已有试听是按旧档合成的：_vxEff 一变，_isStale 就会把它标成过期（禁发，需重新生成）
+        this._vxEff = String(d.effective || "");
+        this._hint(stepDown
+          ? this._t("cp.voice.vx_down_done", { level: this._vxLabel(d.effective) })
+          : this._t("cp.voice.vx_set_done", { level: this._vxLabel(d.effective) }), true);
+        this._syncNotes();
+        await this._refreshEffStatus();
+      } catch (e) {
+        if (epoch === this._epoch) this._hint(this._t("cp.voice.vx_save_fail"), false);
+      }
     }
 
     async _refreshEffStatus() {
@@ -532,6 +617,7 @@
           ? d.voice_langs.map((x) => String(x || "").toLowerCase()) : null;
         this._effIsClone = !!d.is_clone;   // Q-22 B：只对克隆声做「目标语超能力 → 按钮置灰」
         this._syncXlHint();
+        this._renderVx(d);
         const pid = d.persona_id || "";
         let name;
         if (d.persona_source === "system") {
@@ -651,6 +737,8 @@
       this._previewFilename = "";
       this._previewXl = "";
       this._previewXlEff = "";
+      this._previewVx = "";
+      this._vxEff = "";
       this._effConvLang = null;
       this._effVoiceLangs = null;
       this._silent = false;
@@ -685,6 +773,18 @@
           <div data-role="effstatus" data-act="eff-toggle" class="effline" hidden
                title="${this._esc(this._t("cp.voice.eff_more_t"))}"></div>
           <div data-role="effdetail" class="effdetail" hidden></div>
+          <div data-role="vxrow" class="vxrow" hidden>
+            <span class="vxlbl">${this._esc(this._t("cp.voice.vx_lbl"))}</span>
+            <div class="vxseg" role="radiogroup">
+              <button data-act="vx-set" data-lv="">${this._esc(this._t("cp.voice.vx_inherit"))}</button>
+              <button data-act="vx-set" data-lv="restrained">${this._esc(this._t("cp.voice.vx_restrained"))}</button>
+              <button data-act="vx-set" data-lv="natural">${this._esc(this._t("cp.voice.vx_natural"))}</button>
+              <button data-act="vx-set" data-lv="vivid">${this._esc(this._t("cp.voice.vx_vivid"))}</button>
+              <button data-act="vx-set" data-lv="dramatic">${this._esc(this._t("cp.voice.vx_dramatic"))}</button>
+            </div>
+            <button class="vxdown" data-act="vx-down" title="${this._esc(this._t("cp.voice.vx_down_t"))}">👎</button>
+          </div>
+          <div data-role="vxhint" class="hint vxhint" hidden></div>
         </div>
         <div class="row xlrow">
           <label title="${this._esc(this._t("cp.voice.xl_follow_t"))}"><input type="checkbox" data-role="xlfollow"${this._xlOn ? " checked" : ""} /><span>${this._t("cp.voice.xl_follow")}</span></label>
@@ -953,6 +1053,8 @@
       if (act === "cancel-gen") { this._cancelGen(); return; }
       if (act === "xl-off-regen") { this._xlOffRegen(); return; }
       if (act === "eff-toggle") { this._toggleEffDetail(); return; }
+      if (act === "vx-set") { this._setVx(b.getAttribute("data-lv") || "", false); return; }
+      if (act === "vx-down") { this._setVx("", true); return; }
       if (act === "tip-got") { this._dismissTip(); return; }
       if (act === "unbind") return this._unbind();
       /* B115：toggle-enroll / clear-src 分支随工具箱登记块一并撤除——
@@ -1216,6 +1318,8 @@
       // 钧机两次生成一结束发送就灰，用户什么都没改。
       this._previewXlEff = CpVoice.xlBaseline(d, xlt, this._effConvLang);
       const _vm = ((d && d.voice_meta) || {});
+      // 语气基准：服务端实际用的档（旧后端缺键 → 沿用状态行的，都没有就不参与过期判定）
+      this._previewVx = String(_vm.expressiveness || this._vxEff || "");
       const fb = _vm.fallback_from || _vm.voice_mapped_from;
       /* 回落原因分支（P0 2026-08-31 提示风暴复盘）：服务端 fallback_reason
          （additive）优先；老后端缺键时就地推断「语种改道」（本条确已翻译且
@@ -1920,7 +2024,8 @@
           && baseEff && baseEff !== "auto") curEff = baseEff;
       return this._text() !== this._previewText
         || (this._persona || "") !== this._previewPersona
-        || curEff !== baseEff;
+        || curEff !== baseEff
+        || (!!this._previewVx && !!this._vxEff && this._previewVx !== this._vxEff);
     }
 
     /* 结果区状态单出口（P1-1 精简版，2026-08-31 提示风暴复盘）：三条提示互斥，

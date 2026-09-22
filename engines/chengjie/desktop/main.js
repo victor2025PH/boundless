@@ -1172,6 +1172,19 @@ ipcMain.handle("desktop:voice-rebind", async (_e, body) => {
   catch (e) { return { ok: false, error: String(e) }; }
 });
 
+// 会话级「语气表达」覆写（PUT；与 web 客户端 voiceSessionExpressiveness 同形）
+ipcMain.handle("desktop:voice-session-expressiveness", async (_e, body) => {
+  try {
+    const { base_url, token } = config.backend || {};
+    const r = await fetch(`${base_url}/api/voice/session-expressiveness`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body || {}),
+    });
+    try { return await r.json(); } catch (_e2) { return { ok: false, status: r.status }; }
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+
 ipcMain.handle("desktop:voice-enroll", async (_e, payload) => {
   try {
     const p = payload || {};

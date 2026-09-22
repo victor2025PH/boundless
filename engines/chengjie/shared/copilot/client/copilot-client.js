@@ -506,6 +506,13 @@
       });
     }
     async sendVoice(body) { return this._post("/api/unified-inbox/send-voice", body || {}); }
+    /* 会话级「语气表达」覆写（会话 > 人设 > 全局）：{platform, account_id, chat_key, level | action:"step_down"} */
+    async voiceSessionExpressiveness(body) {
+      const r = await fetch("/api/voice/session-expressiveness", {
+        method: "PUT", headers: _writeHeaders(), body: JSON.stringify(body || {}),
+      });
+      return r.json();
+    }
     async voiceReconcile() { return this._get("/api/voice/reconcile"); }
     async voicePurge(body) { return this._post("/api/voice/purge", body || {}); }
     async voicePurgeOrphans() { return this._post("/api/voice/purge-orphans", {}); }
@@ -827,6 +834,10 @@
     async sendVoice(body) {
       const s = this._shell();
       return s.sendVoice ? s.sendVoice(body || {}) : { ok: false };
+    }
+    async voiceSessionExpressiveness(body) {
+      const s = this._shell();
+      return s.voiceSessionExpressiveness ? s.voiceSessionExpressiveness(body || {}) : { ok: false };
     }
     async voiceReconcile() {
       const s = this._shell();

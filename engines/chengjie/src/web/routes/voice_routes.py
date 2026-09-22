@@ -19,6 +19,9 @@ GET  /api/voice/tts-test/{filename}
 GET  /api/voice/effective-config
     Read-only snapshot of the effective voice config for a platform/persona
     (channel-center preview panel).
+
+PUT  /api/voice/session-expressiveness
+    Per-conversation expressiveness override (session > persona > global).
 """
 from __future__ import annotations
 
@@ -1400,6 +1403,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         voice_problem_text = _voice_problem_text(request, _g.get("blocking"))
             except Exception:
                 logger.debug("[tts] effective-config 配置闸预告异常（忽略）", exc_info=True)
+            _expr_session = ""
+            _expr_persona = ""
+            try:
+                from src.ai.persona_voice import get_session_expressiveness
+                from src.ai.voice_emotion import normalize_expressiveness
+                if chat_key and account_id:
+                    _expr_session = get_session_expressiveness(
+                        platform, account_id, chat_key)
+                _rp = ctx.get("persona") or {}
+                _rvp = _rp.get("voice_profile") if isinstance(_rp, dict) else None
+                _expr_persona = normalize_expressiveness(
+                    (_rvp or {}).get("expressiveness") if isinstance(_rvp, dict) else "")
+            except Exception:
+                logger.debug("[tts] effective-config 表达力读取异常（忽略）", exc_info=True)
             return {
                 "ok": True,
                 "platform": platform,
@@ -1407,6 +1424,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "persona_source": ctx.get("persona_source") or "",
                 "backend": str(voice_cfg.get("backend") or ""),
                 "voice": str(voice_cfg.get("voice") or ""),
+                "expressiveness": str(voice_cfg.get("voice_expressiveness") or ""),
+                "expressiveness_source": str(
+                    voice_cfg.get("voice_expressiveness_source") or ""),
+                "expressiveness_session": _expr_session,
+                "expressiveness_persona": _expr_persona,
                 "is_clone": is_clone,
                 "ready": ready,
                 "hub_strict": hub_strict,
@@ -1422,6 +1444,59 @@ def register_voice_routes(app, api_auth, config_manager=None):
             }
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "error": str(ex)[:200]}
+
+    @app.put("/api/voice/session-expressiveness")
+    async def api_voice_session_expressiveness(request: Request, _=Depends(api_auth)):
+        """会话级「语气表达」覆写（会话 > 人设 > 全局）。
+
+        Body: ``{platform, account_id, chat_key, level?, action?}``
+        - ``level``：restrained/natural/vivid/dramatic；空串或 inherit = 清除会话覆写
+        - ``action="step_down"``：以**当前有效档位**为基准降一档并钉成会话覆写
+          （坐席点「太夸张」👎 的落点；已是 restrained 则原地不动）
+        返回 ``{ok, session, effective, source}``，与 effective-config 同字段语义。
+        """
+        body = await request.json()
+        platform = str(body.get("platform") or "telegram").strip().lower()
+        account_id = str(body.get("account_id") or "").strip()
+        chat_key = str(body.get("chat_key") or "").strip()
+        if not account_id or not chat_key:
+            raise HTTPException(400, "account_id / chat_key required")
+        from src.ai.persona_voice import (
+            resolve_account_persona_id, resolve_effective_voice_context,
+            set_session_expressiveness)
+        from src.ai.voice_emotion import step_down_expressiveness
+        raw_cfg: Dict[str, Any] = {}
+        if config_manager and hasattr(config_manager, "config"):
+            raw_cfg = config_manager.config or {}
+
+        def _effective() -> Dict[str, Any]:
+            _acc = ""
+            try:
+                _acc = resolve_account_persona_id(raw_cfg, platform, account_id) or ""
+            except Exception:
+                _acc = ""
+            ctx = resolve_effective_voice_context(
+                raw_cfg, persona_id=str(body.get("persona_id") or "") or None,
+                chat_key=chat_key, account_persona_id=_acc or None,
+                contact_key=chat_key, account_id=account_id,
+                platform=platform, text="")
+            return ctx.get("voice_cfg") or {}
+
+        action = str(body.get("action") or "").strip().lower()
+        if action == "step_down":
+            cur = str(_effective().get("voice_expressiveness") or "")
+            level = set_session_expressiveness(
+                platform, account_id, chat_key, step_down_expressiveness(cur))
+        else:
+            level = set_session_expressiveness(
+                platform, account_id, chat_key, body.get("level"))
+        vc = _effective()
+        return {
+            "ok": True,
+            "session": level,
+            "effective": str(vc.get("voice_expressiveness") or ""),
+            "source": str(vc.get("voice_expressiveness_source") or ""),
+        }
 
     @app.get("/api/voice/profiles")
     async def api_voice_profiles(request: Request, _=Depends(api_auth)):

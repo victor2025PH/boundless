@@ -264,3 +264,35 @@ def test_persona_editor_wiring_static():
     assert "expressiveness=_expr_override or None" in route
     zh = (root / "src/web/i18n_packs/persona_studio.py").read_text(encoding="utf-8")
     assert zh.count('"psn_vx_desc_dramatic"') == 2, "ZH/EN 各一份"
+
+
+def test_inbox_session_expressiveness_wiring_static():
+    """收件箱 cp-voice 会话级覆写：双树一致 + 客户端/桌面桥/i18n 双语齐全 + 元数据可解释。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for tree in ("shared/copilot", "desktop/renderer/shared/copilot"):
+        js = (root / tree / "components/cp-voice.js").read_text(encoding="utf-8")
+        for needle in ('data-role="vxrow"', 'data-act="vx-set"', 'data-act="vx-down"',
+                       "_renderVx(d)", "_setVx(", 'action = "step_down"',
+                       "voiceSessionExpressiveness", "this._previewVx", "m.expressiveness"):
+            assert needle in js, f"{tree}: {needle}"
+        for lv in ("restrained", "natural", "vivid", "dramatic"):
+            assert f'data-lv="{lv}"' in js, f"{tree}: {lv}"
+        client = (root / tree / "client/copilot-client.js").read_text(encoding="utf-8")
+        assert client.count("async voiceSessionExpressiveness(body)") == 2, "web + desktop 两个客户端"
+        assert "/api/voice/session-expressiveness" in client
+        i18n = (root / tree / "i18n/cp-i18n.js").read_text(encoding="utf-8")
+        for k in ("cp.voice.m_vx", "cp.voice.vx_lbl", "cp.voice.vx_inherit",
+                  "cp.voice.vx_restrained", "cp.voice.vx_natural", "cp.voice.vx_vivid",
+                  "cp.voice.vx_dramatic", "cp.voice.vx_down_t", "cp.voice.vx_now",
+                  "cp.voice.vx_src_session", "cp.voice.vx_src_persona", "cp.voice.vx_src_global",
+                  "cp.voice.vx_desc_inherit", "cp.voice.vx_desc_dramatic",
+                  "cp.voice.vx_save_fail", "cp.voice.vx_down_done", "cp.voice.vx_set_done"):
+            assert i18n.count(f'"{k}"') >= 2, f"{tree}: 缺双语词条 {k}"
+    preload = (root / "desktop/shell-preload.js").read_text(encoding="utf-8")
+    main = (root / "desktop/main.js").read_text(encoding="utf-8")
+    assert "desktop:voice-session-expressiveness" in preload
+    assert "desktop:voice-session-expressiveness" in main and 'method: "PUT"' in main
+    send = (root / "src/web/routes/unified_inbox_send_routes.py").read_text(encoding="utf-8")
+    assert '"expressiveness_source"' in send

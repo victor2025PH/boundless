@@ -2293,6 +2293,11 @@ _ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT = """
 """
 _BASELINE += _ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT
 
+# 语音表达力档位：会话级覆写（收件箱 cp-voice「语气」行 / 👎 太夸张）
+_ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS = """
+/api/voice/session-expressiveness	PUT
+"""
+_BASELINE += _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS
 
 
 def _parse_baseline():
