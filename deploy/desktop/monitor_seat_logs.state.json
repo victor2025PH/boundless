@@ -1,14 +1,16 @@
 {
   "last_seen": {
-    "kouxing": "2026-09-01 01:48:54",
-    "lianbei": "2026-09-01 18:59:16",
-    "yunsheng": "2026-09-01 18:58:16",
-    "tingxie": "2026-08-23 05:50:18"
+    "kouxing": "2026-09-21 00:28:56",
+    "lianbei": "2026-09-21 07:15:35",
+    "yunsheng": "2026-09-21 18:59:09"
   },
   "alerted": {
-    "kouxing|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218523.8819888,
-    "lianbei|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218524.4215436,
-    "yunsheng|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1788218525.003915
+    "yunsheng|坐席桌面后端离线/未运行（/api/desktop/ping 无响应）|offline|#-#-#T#:#:#|": 1789950125.39919,
+    "lianbei|坐席桌面后端离线/未运行（/api/desktop/ping 无响应，日志已 #h 未更新）|offline|#-#-#T#:#:#|": 1789969025.2820075,
+    "yunsheng|坐席桌面后端离线/未运行（/api/desktop/ping 无响应，日志已 #h 未更新）|offline|#-#-#T#:#:#|": 1790011323.7711985,
+    "zhongshu|compute_down|8765": 1790021232.4884343,
+    "tingxie|compute_down|7852": 1790021234.0325487,
+    "kouxing|坐席桌面后端离线/未运行（/api/desktop/ping 无响应，日志已 #h 未更新）|offline|#-#-#T#:#:#|": 1790031131.9468393
   },
-  "last_run": "2026-09-02 05:52:11"
+  "last_run": "2026-09-22 08:07:11"
 }

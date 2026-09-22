@@ -1,0 +1,2816 @@
+{
+  "_doc": "智聊 ChatX 教学。规则：①每集完整功能闭环（进入→操作→结果）②主舞台按功能页/真实控件，BOUNDLESS 仅 E3 英文互译可选③指针大红圈④不露脸。",
+  "demo_threads": {
+    "BOUNDLESS": "telegram:8244899900:8506426282",
+    "ZH_DEMO": "telegram:6834964252:me"
+  },
+  "format": {
+    "intro_song_s": 8,
+    "rap_bpm": 92,
+    "subtitle": "karaoke（逐字填色 ASS，按 take 的 ASR 时间轴）",
+    "footage": "1920×1080 真录屏 + 教程指针/得点；每个说唱段落一支 clip",
+    "outro": "尾卡：下一集 + 官网二维码 + 「歌声由幻声生成」"
+  },
+  "features": [
+    {
+      "id": "inbox",
+      "name": "统一收件箱",
+      "desc": "TG/WA/Messenger/LINE 等账号消息一处看；账号页签、筛选、风险标签、急需处理",
+      "ui": "/workspace 左栏 + 顶栏账号页签"
+    },
+    {
+      "id": "channels",
+      "name": "渠道接入",
+      "desc": "扫码/授权接入四平台；渠道健康灯；账号页签「＋新增」",
+      "ui": "/workspace 顶栏账号页签"
+    },
+    {
+      "id": "translate",
+      "name": "拟人互译",
+      "desc": "入站翻译、出站译成客户语言、中文变体、术语库；标准翻译永久免费",
+      "ui": "会话内翻译按钮、回复台"
+    },
+    {
+      "id": "ai_reply",
+      "name": "AI 拟稿与自动回复",
+      "desc": "仅建议 / 值守中 / 全自动；一键采用；接管",
+      "ui": "右栏回复台、顶栏全自动会话"
+    },
+    {
+      "id": "persona",
+      "name": "人设工作室",
+      "desc": "建人设、YAML 导入、试聊、绑定",
+      "ui": "/personas"
+    },
+    {
+      "id": "kb",
+      "name": "知识库",
+      "desc": "导入 FAQ/文档，回答引用命中",
+      "ui": "/knowledge"
+    },
+    {
+      "id": "voice",
+      "name": "克隆语音",
+      "desc": "参考音→生成→试听→人设声发语音",
+      "ui": "右栏工具箱·语音"
+    },
+    {
+      "id": "goals",
+      "name": "工作目标与今日拍",
+      "desc": "下一步英雄卡 / 设目标 / 今日拍",
+      "ui": "右栏客户关系·工作目标"
+    },
+    {
+      "id": "care_memory",
+      "name": "主动关怀与记忆",
+      "desc": "AI 记忆、关怀日程、安静时段",
+      "ui": "care_schedule / AI 记忆"
+    },
+    {
+      "id": "xiaozhi",
+      "name": "小智助手球",
+      "desc": "问怎么用、带我去、报障",
+      "ui": "右下角小球"
+    },
+    {
+      "id": "guardrails",
+      "name": "风险与护栏",
+      "desc": "风险分级、成人策略、频控、opt-out",
+      "ui": "会话标签、reply_settings"
+    },
+    {
+      "id": "billing",
+      "name": "充值与额度",
+      "desc": "免费开始、会员中心、按量充值",
+      "ui": "/membership"
+    },
+    {
+      "id": "install",
+      "name": "安装与首启",
+      "desc": "下载→SmartScreen→向导→主界面",
+      "ui": "/download/chatx"
+    }
+  ],
+  "episodes": [
+    {
+      "id": "E1",
+      "title": "一个收件箱，接住所有平台",
+      "features": [
+        "inbox"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E1_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_overview",
+          "desc": "多平台会话列表 + 账号坞（不绑死 BOUNDLESS）",
+          "steps": [
+            [
+              "caption",
+              "【统一收件箱】左边是所有平台的真实会话",
+              2400
+            ],
+            [
+              "point_css",
+              "#plat-icons, #nav-rail, .nav-plat",
+              "左侧平台轨：TG / LINE / WA…"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_css",
+              ".conv-item",
+              "每一行＝一个真实客户"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "point_css",
+              "#acct-dock, .adk-item",
+              "顶栏【账号坞】切换工作号"
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        },
+        {
+          "clip": "b_filters",
+          "desc": "筛选闭环",
+          "steps": [
+            [
+              "caption",
+              "【筛选】先看该看的",
+              2000
+            ],
+            [
+              "click_css_text",
+              ".ftab",
+              "群组",
+              "点【群组】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "click_css_text",
+              ".ftab",
+              "私聊",
+              "点【私聊】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "click_css_text",
+              ".ftab",
+              "未读",
+              "点【未读】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "click_css_text",
+              ".ftab",
+              "全部",
+              "回到【全部】"
+            ],
+            [
+              "wait",
+              1000
+            ]
+          ]
+        },
+        {
+          "clip": "c_threads",
+          "desc": "打开两个不同真实会话证明多平台",
+          "steps": [
+            [
+              "caption",
+              "打开不同平台的真实会话——不是假数据",
+              2200
+            ],
+            [
+              "open_nth_chat",
+              0,
+              "打开列表第 1 个真实会话"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "scroll_messages",
+              -200
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "open_nth_chat",
+              2,
+              "再打开另一个真实会话"
+            ],
+            [
+              "wait",
+              2400
+            ],
+            [
+              "caption",
+              "一个收件箱，接住多个平台",
+              2200
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        },
+        {
+          "clip": "d_copilot",
+          "desc": "助手三页签导览",
+          "steps": [
+            [
+              "ensure_assist",
+              "打开右侧【业务助手】"
+            ],
+            [
+              "wait",
+              800
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "【客户关系】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "cp_tab",
+              "工具箱",
+              "【工具箱】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "cp_tab",
+              "回复台",
+              "【回复台】"
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E2",
+      "title": "扫码接入四个平台",
+      "features": [
+        "channels"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E2_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_drawer",
+          "desc": "账号管理抽屉完整路径",
+          "steps": [
+            [
+              "caption",
+              "【渠道接入】从账号管理进入",
+              2200
+            ],
+            [
+              "click_css",
+              "#acct-nav-btn",
+              "点【账号管理】"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_css",
+              "#account-drawer, .drawer-body, .acct-plat-header",
+              "各平台接入状态"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_css",
+              ".acct-add-btn",
+              "【＋新增账号】扫码/授权"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "click_css",
+              ".acct-add-btn",
+              "打开新增"
+            ],
+            [
+              "wait",
+              3500
+            ],
+            [
+              "caption",
+              "扫码完成后账号出现在顶栏坞",
+              2400
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "press",
+              "Escape"
+            ],
+            [
+              "wait",
+              800
+            ]
+          ]
+        },
+        {
+          "clip": "b_health",
+          "desc": "账号坞健康灯",
+          "steps": [
+            [
+              "point_css",
+              ".adk-item",
+              "已接入账号一号一格"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_css",
+              ".adk-st.on, .adk-st",
+              "绿灯＝在线"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_css",
+              "#acct-dock",
+              "四个平台都挂在这一条坞上"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E3",
+      "title": "用客户的母语聊，像老乡一样",
+      "features": [
+        "translate"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E3_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_open",
+          "desc": "英文会话 + 译文顶栏",
+          "steps": [
+            [
+              "open_chat",
+              "BOUNDLESS",
+              "打开英文客户【BOUNDLESS】（本集专用）"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "caption",
+              "客户原文是英文——先打开显示译文",
+              2400
+            ],
+            [
+              "point_css",
+              "#xl-show-toggle, #xl-topbar",
+              "顶栏【显示译文】"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "click_css",
+              "#xl-show-toggle",
+              "勾选显示译文"
+            ],
+            [
+              "wait",
+              2800
+            ]
+          ]
+        },
+        {
+          "clip": "b_translate",
+          "desc": "翻译按钮与弹出层",
+          "steps": [
+            [
+              "open_chat",
+              "BOUNDLESS"
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "point_css",
+              "#xlate-toggle-btn",
+              "回复台旁【翻译】"
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "click_css",
+              "#xlate-toggle-btn",
+              "打开翻译菜单"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "caption",
+              "入站可读中文；出站自动成客户语言",
+              2600
+            ],
+            [
+              "point_css",
+              "#reply-ta",
+              "用中文写，发出去是对方母语"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        },
+        {
+          "clip": "c_multilang",
+          "desc": "多语演示会话",
+          "steps": [
+            [
+              "open_chat",
+              "ZH_DEMO",
+              "切到【智聊支持】看多语句子"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "scroll_messages",
+              -240
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "粤语 / 日文 / 韩文也能进同一收件箱",
+              2400
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E4",
+      "title": "仅建议、值守中、全自动",
+      "features": [
+        "ai_reply"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E4_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_modes",
+          "desc": "档位选择闭环",
+          "steps": [
+            [
+              "open_nth_chat",
+              1,
+              "打开一个真实会话看档位"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "caption",
+              "本会话档位：手动 / AI草稿·我审 / 全自动",
+              2400
+            ],
+            [
+              "point_css",
+              "#mode-select",
+              "顶栏【档位】胶囊"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "click_css",
+              "#mode-select",
+              "展开档位"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "press",
+              "Escape"
+            ],
+            [
+              "wait",
+              600
+            ]
+          ]
+        },
+        {
+          "clip": "b_draft",
+          "desc": "底部 AI回复（产品主入口）→ 草稿结果",
+          "steps": [
+            [
+              "open_nth_chat",
+              1,
+              "同一会话准备拟稿"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "caption",
+              "点【AI回复】生成人设化草稿",
+              2400
+            ],
+            [
+              "point_css",
+              "#ai-reply-btn",
+              "回复台工具条【AI回复】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "click_css",
+              "#ai-reply-btn",
+              "生成 AI 草稿"
+            ],
+            [
+              "wait",
+              5000
+            ],
+            [
+              "point_css",
+              "#draft-pick, .draft-pick, [data-st], #cdraft-bar, .dpick",
+              "草稿出来后可勾选发送或去工坊"
+            ],
+            [
+              "wait",
+              2400
+            ],
+            [
+              "point_css",
+              "#tko-btn",
+              "随时【接管】变人工"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E5",
+      "title": "造一个有人设的数字员工",
+      "features": [
+        "persona"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E5_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_studio",
+          "desc": "人设工作室主舞台",
+          "steps": [
+            [
+              "goto",
+              "/personas"
+            ],
+            [
+              "caption",
+              "【人设工作室】语气、边界、背景一次配好",
+              2400
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "click_css",
+              "#tabn-profiles",
+              "打开【人设池】"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "point_text",
+              "JSON",
+              "可从 JSON 导入字段"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "scroll_messages",
+              350
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        },
+        {
+          "clip": "b_bind",
+          "desc": "回到会话做绑定（工具箱）",
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "open_nth_chat",
+              0,
+              "选一个会话准备绑定人设"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "工具箱",
+              "人设绑定在【工具箱】"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "expand_card",
+              "persona",
+              "展开【人设绑定】"
+            ],
+            [
+              "wait",
+              2500
+            ],
+            [
+              "caption",
+              "试聊通过再绑到会话",
+              2200
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E6",
+      "title": "知识库：问什么答什么",
+      "features": [
+        "kb"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E6_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_kb",
+          "desc": "知识库管理页",
+          "steps": [
+            [
+              "goto",
+              "/knowledge"
+            ],
+            [
+              "caption",
+              "【知识库】条目有标题、触发词、示例回复",
+              2600
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "point_text",
+              "新建条目",
+              "【新建条目】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_css",
+              ".entry-card, .kb-tab",
+              "已有知识条目可检索编辑"
+            ],
+            [
+              "wait",
+              2200
+            ]
+          ]
+        },
+        {
+          "clip": "b_slash",
+          "desc": "会话里用 / 引用知识",
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "open_nth_chat",
+              0
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "caption",
+              "回复台输入 / 可插入知识与模板",
+              2400
+            ],
+            [
+              "click_css",
+              "#reply-ta",
+              "聚焦回复台"
+            ],
+            [
+              "wait",
+              600
+            ],
+            [
+              "type",
+              "#reply-ta",
+              "/"
+            ],
+            [
+              "wait",
+              2500
+            ],
+            [
+              "point_css",
+              "#slash-panel, .slash-panel",
+              "【/ 指令】知识库与模板"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "press",
+              "Escape"
+            ],
+            [
+              "wait",
+              800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E7",
+      "title": "用你的声音发语音",
+      "features": [
+        "voice"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E7_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_voice",
+          "desc": "工具箱语音卡完整展开",
+          "steps": [
+            [
+              "open_nth_chat",
+              0,
+              "选会话后才能用语音工具"
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "工具箱",
+              "语音在【工具箱】"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "expand_card",
+              "voice",
+              "展开【语音克隆 / 发送】"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_in_card",
+              "voice",
+              "生成语音",
+              "【生成语音】试听"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "试听通过＝所听即所发",
+              2400
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E8",
+      "title": "每天十秒，今日拍",
+      "features": [
+        "goals"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E8_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_goals",
+          "desc": "工作目标 / 今日拍",
+          "steps": [
+            [
+              "open_nth_chat",
+              0
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "打开【客户关系】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "expand_card",
+              "goal",
+              "展开【工作目标】"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_in_card",
+              "goal",
+              "设定目标",
+              "卡内【设定目标】——先立一条再谈今日拍"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "caption",
+              "今日拍＝对着今日动作十秒反馈（采纳/让路）",
+              2600
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "point_css",
+              "[data-cp-card=goal]",
+              "展开后的工作目标卡＝每日十秒主场"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E9",
+      "title": "它记得你，也知道什么时候别吵你",
+      "features": [
+        "care_memory"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E9_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_care",
+          "desc": "关怀日程独立页",
+          "steps": [
+            [
+              "goto",
+              "/care-schedule"
+            ],
+            [
+              "caption",
+              "【关怀日程】主动跟进，也守安静时段",
+              2600
+            ],
+            [
+              "wait",
+              2800
+            ],
+            [
+              "point_text",
+              "关怀",
+              "关怀规则与日程"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        },
+        {
+          "clip": "b_memory",
+          "desc": "AI 记忆页",
+          "steps": [
+            [
+              "goto",
+              "/episodic-memory"
+            ],
+            [
+              "caption",
+              "【AI 记忆】记得偏好，回答更贴人",
+              2600
+            ],
+            [
+              "wait",
+              3000
+            ],
+            [
+              "scroll_messages",
+              300
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E10",
+      "title": "不会用？问小智",
+      "features": [
+        "xiaozhi"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E10_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_ball",
+          "desc": "小智球打开面板",
+          "steps": [
+            [
+              "caption",
+              "右下角【小智】：问怎么用、带我去",
+              2400
+            ],
+            [
+              "point_css",
+              ".asb-ball",
+              "得点【小智球】"
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "click_css",
+              ".asb-ball",
+              "打开小智面板"
+            ],
+            [
+              "wait",
+              2800
+            ],
+            [
+              "point_css",
+              ".asb-panel, .asb-wrap",
+              "在面板里提问或切教学"
+            ],
+            [
+              "wait",
+              2500
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E11",
+      "title": "该转人的它不乱答",
+      "features": [
+        "guardrails"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E11_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_risk",
+          "desc": "风险会话主镜（不发教学水贴）",
+          "steps": [
+            [
+              "caption",
+              "【风险标签】该转人就不乱答",
+              2400
+            ],
+            [
+              "point_css",
+              ".conv-tag-chip",
+              "列表上的风险标记"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "open_chat",
+              "风险会话",
+              "打开真实风险会话"
+            ],
+            [
+              "wait",
+              2800
+            ],
+            [
+              "point_css",
+              "#cs-band, #ai-diag-btn, #mode-select",
+              "看 AI 是否让位/转人工"
+            ],
+            [
+              "wait",
+              2200
+            ]
+          ]
+        },
+        {
+          "clip": "b_settings",
+          "desc": "风控设置页",
+          "steps": [
+            [
+              "goto",
+              "/reply-settings"
+            ],
+            [
+              "caption",
+              "设置里可配【自动化与风控】",
+              2400
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "point_text",
+              "风控",
+              "风控分级与策略"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "click_text",
+              "风控",
+              "进入风控相关区"
+            ],
+            [
+              "wait",
+              2800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E12",
+      "title": "免费开始，用多少充多少",
+      "features": [
+        "billing"
+      ],
+      "status": "footage_rewritten_v3",
+      "rap": "lyrics/E12_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_membership",
+          "desc": "会员中心：额度总览 + 购买/续费 + 免费翻译说明（不走空 /pricing，不发 BOUNDLESS）",
+          "steps": [
+            [
+              "goto",
+              "/membership"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "【会员中心】额度、档位、购买——都在这里",
+              2400
+            ],
+            [
+              "wait",
+              800
+            ],
+            [
+              "point_css",
+              "#mb-hero",
+              "【额度总览】当前授权一眼看清"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_text",
+              "购买 / 续费",
+              "【购买 / 续费】用多少充多少"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_css",
+              "#mb-buy",
+              "【购买 / 升级】套餐与字符包入口"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_text",
+              "免费标准翻译",
+              "【免费标准翻译】永久免费、公平使用"
+            ],
+            [
+              "wait",
+              2200
+            ],
+            [
+              "caption",
+              "免费起 · 按量走 · 余额用尽也不断线",
+              2600
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R1",
+      "title": "它记得你上次喜欢哪款",
+      "features": [
+        "care_memory"
+      ],
+      "scenario": "nurture",
+      "status": "footage_rewrite_v2",
+      "rap": "lyrics/R1_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_pref",
+          "desc": "真会话：雾霾蓝偏好回访（主舞台）",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "打开中文老客演示会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "caption",
+              "老客回访：还记得上次看中的雾霾蓝",
+              2600
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "scroll_messages",
+              -280
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_text",
+              "雾霾蓝",
+              "偏好写在真消息里"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_text",
+              "尺码",
+              "尺码也记着，开口不用重问"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "不是群发粘贴——一人一句有上下文",
+              2400
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        },
+        {
+          "clip": "b_relation",
+          "desc": "业务助手·客户关系：关怀与分寸",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "回到同一老客会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "打开【客户关系】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_css",
+              ".cp-hero, [data-cp-card=hero]",
+              "关系进展：试探升温 → 稳定陪伴"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "记得偏好只是起点——回访也有小目标",
+              2400
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_css",
+              "[data-cp-card=relstage]",
+              "关系阶段看得见，升温有节奏"
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "title": "用你的声音说包裹到了",
+      "features": [
+        "voice"
+      ],
+      "scenario": "nurture",
+      "status": "footage_rewrite_v2",
+      "rap": "lyrics/R2_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_voice",
+          "desc": "ZH_DEMO + 工具箱语音卡（熟人声）",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "打开中文演示会话（勿点 BOUNDLESS）"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "scroll_messages",
+              -200
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "point_text",
+              "包裹",
+              "物流关怀写在对话里"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "工具箱",
+              "语音在【工具箱】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "expand_card",
+              "voice",
+              "展开【语音克隆 / 发送】"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_in_card",
+              "voice",
+              "生成语音",
+              "【生成语音】先试听再发"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "用你的声说「包裹到了」——老客更信",
+              2600
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "title": "店长口吻稳，先试聊再绑",
+      "features": [
+        "persona"
+      ],
+      "scenario": "nurture",
+      "status": "footage_rewrite_v2",
+      "rap": "lyrics/R3_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_studio",
+          "desc": "人设池：挑店长口吻",
+          "steps": [
+            [
+              "goto",
+              "/personas"
+            ],
+            [
+              "caption",
+              "【人设池】店长口吻统一，老客才不跳戏",
+              2600
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "click_css",
+              "#tabn-profiles",
+              "打开【人设池】"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_text",
+              "完整度",
+              "画像完整才上岗"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "click_text",
+              "已绑定",
+              "筛出已在会话里生效的人设"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "point_text",
+              "服务中",
+              "谁在服务哪几个会话，一眼看清"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "先看清语气与边界，再绑到会话",
+              2400
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        },
+        {
+          "clip": "b_bind",
+          "desc": "中文演示会话里绑定人设",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "绑到中文老客会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "工具箱",
+              "人设绑定在【工具箱】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "expand_card",
+              "persona",
+              "展开【人设绑定】"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "point_in_card",
+              "persona",
+              "绑定",
+              "当前生效人设看得见"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "口吻稳＝客户关系养成的底子",
+              2400
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R4",
+      "title": "给关系定个目标，AI 按 SOP 推进",
+      "features": [
+        "goals"
+      ],
+      "scenario": "nurture",
+      "status": "footage_draft",
+      "rap": "lyrics/R4_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_goal",
+          "desc": "客户关系页签：关系与目标 → 设定工作目标",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "打开中文老客会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "scroll_messages",
+              400
+            ],
+            [
+              "wait",
+              800
+            ],
+            [
+              "point_text",
+              "跟进计划",
+              "养客先排计划：发货 → 签收 → 反馈"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "打开【客户关系】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_css",
+              ".cp-hero, [data-cp-card=hero]",
+              "关系与目标：试探升温 → 稳定陪伴"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "caption",
+              "养客第一步：给这段关系定一个工作目标",
+              2600
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "expand_card",
+              "goal",
+              "看【工作目标】卡"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_in_card",
+              "goal",
+              "设定目标",
+              "【设定目标】AI 按里程碑分天推进"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "目标定了，今天该做哪一步 AI 提醒你",
+              2400
+            ],
+            [
+              "wait",
+              1600
+            ]
+          ]
+        },
+        {
+          "clip": "b_sop",
+          "desc": "跟进 SOP（工作链）：客户没回自动接力",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "回到同一会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "还在【客户关系】"
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "expand_card",
+              "chain",
+              "展开【跟进 SOP（工作链）】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_in_card",
+              "chain",
+              "启动工作链",
+              "客户几小时没回 → SOP 自动接力"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "SOP 写一次，每个客户都按流程走",
+              2400
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "point_in_card",
+              "chain",
+              "管理工作链",
+              "流程节点随时改"
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        },
+        {
+          "clip": "c_draft",
+          "desc": "回复台：AI 按目标与阶段拟稿，一键采用",
+          "steps": [
+            [
+              "open_chat",
+              "智聊支持",
+              "回到同一会话"
+            ],
+            [
+              "wait_chat_ready"
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "回复台",
+              "切到【回复台】"
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "point_text",
+              "生成草稿",
+              "AI 按目标与关系阶段拟稿"
+            ],
+            [
+              "wait",
+              2000
+            ],
+            [
+              "caption",
+              "定目标 → SOP 接力 → AI 拟稿，你只管点采用",
+              2600
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_css",
+              "#reply-ta",
+              "采用后落到回复框，再发出去"
+            ],
+            [
+              "wait",
+              1800
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C1",
+      "title": "凌晨三点，外语询盘它在回",
+      "features": [
+        "translate",
+        "ai_reply"
+      ],
+      "scenario": "crossborder",
+      "status": "footage_draft_c",
+      "rap": "lyrics/C1_rap.txt",
+      "footage_actions": [
+        {
+          "clip": "a_inbox",
+          "desc": "BOUNDLESS 英文询盘进线",
+          "steps": [
+            [
+              "open_chat",
+              "BOUNDLESS",
+              "打开跨境演示会话"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "caption",
+              "【跨境】凌晨外语询盘进统一收件箱",
+              2600
+            ],
+            [
+              "wait",
+              1400
+            ],
+            [
+              "scroll_messages",
+              -180
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "point_css",
+              ".msg-bubble, .bubble, .msg",
+              "真询盘在对话里"
+            ]
+          ]
+        },
+        {
+          "clip": "b_translate",
+          "desc": "翻译 + AI 回复",
+          "steps": [
+            [
+              "open_chat",
+              "BOUNDLESS"
+            ],
+            [
+              "wait",
+              1000
+            ],
+            [
+              "click_css",
+              "#xlate-toggle-btn",
+              "点【翻译】看懂询盘"
+            ],
+            [
+              "wait",
+              1800
+            ],
+            [
+              "caption",
+              "看懂了 → 母语拟稿回客户",
+              2200
+            ],
+            [
+              "wait",
+              1200
+            ],
+            [
+              "point_css",
+              "#ai-reply-btn",
+              "回复台工具条【AI回复】"
+            ],
+            [
+              "wait",
+              1600
+            ],
+            [
+              "caption",
+              "你睡着，它也能把单接住",
+              2400
+            ],
+            [
+              "wait",
+              2000
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T1",
+      "title": "三分钟装好智聊",
+      "features": [
+        "install"
+      ],
+      "status": "assembled_placeholder_cards",
+      "output": "out/T1/T1_install_zh.mp4",
+      "rap": null,
+      "footage_actions": []
+    },
+    {
+      "id": "P1",
+      "title": "凌晨三点，西语询盘来了",
+      "features": [
+        "translate",
+        "ai_reply"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P1_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_inquiry",
+          "desc": "西语询盘到达 → 一键翻译 → AI 拟稿逐条发出",
+          "clear_stage": true,
+          "steps": [
+            [
+              "open_stage",
+              "凌晨三点，独立站的 Telegram 客服号"
+            ],
+            [
+              "incoming",
+              "Hola! ¿Tienen envío a Chile? Quiero el vestido azul, talla M.",
+              "客户用西语来信",
+              "zoom"
+            ],
+            [
+              "narr",
+              "深圳，凌晨三点。阿杰睡了，他的独立站没睡。一条西班牙语询盘进来了。"
+            ],
+            [
+              "narr",
+              "他看不懂，但智聊看得懂。"
+            ],
+            [
+              "xlate_quick_on",
+              "一键开双向翻译",
+              "zoom"
+            ],
+            [
+              "narr",
+              "点一下翻译，对方的话变成中文；他回的中文，会自动变成西语。"
+            ],
+            [
+              "ai_reply_send",
+              "AI 按店铺人设拟稿，逐条发出",
+              "zoom"
+            ],
+            [
+              "narr",
+              "AI 按店铺人设拟好回复，逐条发出，像真人在聊。"
+            ]
+          ]
+        },
+        {
+          "clip": "b_followup",
+          "desc": "客户追问 → 手打中文自动成西语",
+          "steps": [
+            [
+              "open_stage",
+              "同一个客户，几分钟后"
+            ],
+            [
+              "incoming",
+              "Perfecto. ¿Cuánto tarda el envío y aceptan tarjeta?",
+              "客户追问物流与付款",
+              "zoom"
+            ],
+            [
+              "narr",
+              "客户追问物流和付款。"
+            ],
+            [
+              "type_send",
+              "智利七到十天送达，今天下单包邮，支持信用卡。",
+              "手打中文，发出去自动是西语",
+              "zoom"
+            ],
+            [
+              "narr",
+              "阿杰打中文，客户收到的是西语。他不会西语，客户不知道。"
+            ],
+            [
+              "point_css",
+              ".msg-row.out .msg-translation",
+              "发出的译文就在气泡下",
+              "zoom"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "title": "三十七条待回，谁先回",
+      "features": [
+        "urgent_filter",
+        "ai_reply",
+        "handoff"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P3_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_overview",
+          "desc": "主管视角：概览 → 超时/需人工先举手",
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "point_css",
+              ".ws-pill.sev, .ws-pill.warn",
+              "超时待处理一眼看到",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "早上九点，客服主管 Lin 打开工作台：三十七条在等，先看谁最急。"
+            ],
+            [
+              "urgent_filter",
+              "先筛「超时」与「需人工」",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "超时的、需要人工的先举手，其余交给 AI 接着聊。"
+            ]
+          ]
+        },
+        {
+          "clip": "b_complaint",
+          "desc": "新投诉进来 → 打开 → 翻译 → AI 先安抚查单",
+          "clear_stage": true,
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "incoming",
+              "Hi, my order #A1023 still hasn't arrived. It's been 12 days. I want a refund.",
+              "一条新投诉刚进来",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "一条英文投诉刚进来，排到了最上面。"
+            ],
+            [
+              "open_stage",
+              "点开新投诉"
+            ],
+            [
+              "xlate_quick_on",
+              "英文→中文",
+              "zoom"
+            ],
+            [
+              "ai_reply_send",
+              "AI 先安抚再查单，主管过目即发",
+              "zoom"
+            ],
+            [
+              "narr",
+              "投诉先安抚再查单，AI 拟稿，主管过目再发。团队十个人，没有一条漏掉。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "title": "客人来订位，我用自己的声音回",
+      "features": [
+        "translate",
+        "voice_clone"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P4_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_booking",
+          "desc": "Telegram 预约来信 → 翻译 → 克隆声试听 → 发语音",
+          "clear_stage": true,
+          "steps": [
+            [
+              "open_stage",
+              "迪拜华人美容院的 Telegram"
+            ],
+            [
+              "incoming",
+              "Hi! Do you still have a slot tomorrow at 2pm for gel nails? Two of us 💅",
+              "客人问明天两点能不能做美甲",
+              "zoom"
+            ],
+            [
+              "narr",
+              "迪拜，华人美容院。老板娘美玲的客人大多是外国人，来信是英文。"
+            ],
+            [
+              "xlate_quick_on",
+              "一键翻译成中文",
+              "zoom"
+            ],
+            [
+              "narr",
+              "一键翻成中文，看懂了。"
+            ],
+            [
+              "voice_preview",
+              "明天下午两点可以，两位我给你们留好位置，到店直接找我。",
+              "用自己的声音说，先试听再发",
+              "zoom",
+              "send"
+            ],
+            [
+              "narr",
+              "美玲打一句中文，用她自己的克隆声念成客人的语言。先试听，再发出。熟人声，不是机器人腔。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "title": "下播两百条私信，AI 先回",
+      "features": [
+        "ai_reply",
+        "chain"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P5_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_backlog",
+          "desc": "下播后积压：概览 → 最新私信到达 → AI 逐条回",
+          "clear_stage": true,
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "point_css",
+              ".ws-pill.sev, .ws-pill.warn",
+              "下播后积压一眼看到",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "晚上十一点，Mia 刚下播。两百条私信在等，她一个人回不完。"
+            ],
+            [
+              "incoming",
+              "Hey! Is the ring light from tonight's live still in stock? Ship to Canada?",
+              "最新一条私信进来",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "最新一条问补光灯还有没有货，要寄加拿大。"
+            ],
+            [
+              "open_stage",
+              "点开这条私信"
+            ],
+            [
+              "ai_reply_send",
+              "AI 按人设拟稿，逐条发出",
+              "zoom"
+            ],
+            [
+              "narr",
+              "智聊按她的人设拟好回复，逐条发出，语气跟她直播时一样。"
+            ]
+          ]
+        },
+        {
+          "clip": "b_chain",
+          "desc": "跟进 SOP：工作链接着推进",
+          "steps": [
+            [
+              "open_stage",
+              "回到这位观众的会话"
+            ],
+            [
+              "ensure_assist"
+            ],
+            [
+              "cp_tab",
+              "客户关系",
+              "打开【客户关系】",
+              "zoom_panel"
+            ],
+            [
+              "expand_card",
+              "chain",
+              "展开【跟进 SOP · 工作链】",
+              "zoom_panel"
+            ],
+            [
+              "narr",
+              "回完不算完：挂上跟进工作链，几小时没回它自己接着推进。"
+            ],
+            [
+              "point_in_card",
+              "chain",
+              "工作链",
+              "客户几小时未回，AI 按步骤跟进",
+              "zoom_panel"
+            ],
+            [
+              "narr",
+              "两百条私信，一条都没漏掉。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P8",
+      "title": "早上一眼，谁在等我",
+      "features": [
+        "overview",
+        "mode"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P8_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_morning",
+          "desc": "老板早上：概览 → 筛最急 → 自己接手回一句",
+          "clear_stage": true,
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "point_css",
+              ".ws-pill.sev, .ws-pill.warn",
+              "待处理数字一眼看到",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "早上八点，老板打开工作台，先看一件事：谁在等我。"
+            ],
+            [
+              "urgent_filter",
+              "筛「超时」与「需人工」",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "超时的、需要人工的排在最前面。"
+            ],
+            [
+              "incoming",
+              "Morning! Any update on my quote? I need to decide today.",
+              "最急的那条又催了一次",
+              "zoom_list"
+            ],
+            [
+              "narr",
+              "最急的这条又催了一次——今天要定。"
+            ],
+            [
+              "open_stage",
+              "点开最急的这条"
+            ],
+            [
+              "mode_switch",
+              "manual",
+              "这条我自己聊：档位切【手动】，AI 让位",
+              "zoom"
+            ],
+            [
+              "narr",
+              "这种单子老板自己接。档位切手动，AI 立刻让位。"
+            ],
+            [
+              "type_send",
+              "上午十点前把报价发您，今天一定给结果。",
+              "老板自己回一句",
+              "zoom_low"
+            ],
+            [
+              "narr",
+              "一句话定调，客户知道今天有结果。"
+            ],
+            [
+              "mode_switch",
+              "review",
+              "去开会前切【半自动】",
+              "zoom"
+            ],
+            [
+              "narr",
+              "他去开会，档位切成半自动：AI 出草稿，他回来过一眼再发。客户不用干等。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "title": "两个平台同时问价",
+      "features": [
+        "inbox",
+        "translate",
+        "ai_reply"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P2_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_two_platforms",
+          "desc": "搜 MOQ 只看真询价 → Telegram 阿语 + WhatsApp 英文两条同到 → 先接阿语：翻译 + AI 报价 → 再接 WhatsApp",
+          "clear_stage": true,
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "narr",
+              "东莞，工厂外贸部。老周一个人，守着 Telegram 和 WhatsApp 两个平台。"
+            ],
+            [
+              "list_filter",
+              "MOQ",
+              "搜「MOQ」：问起订量的才是真买家",
+              "list_clean"
+            ],
+            [
+              "narr",
+              "他的习惯是先搜 MOQ——问起订量的，才是真买家。"
+            ],
+            [
+              "incoming",
+              "السلام عليكم، نريد عرض سعر لـ 500 قطعة من كابل USB-C. ما هو MOQ وموعد التسليم؟",
+              "Telegram：阿语询价到了",
+              "list_clean"
+            ],
+            [
+              "use_stage",
+              "WA_PH"
+            ],
+            [
+              "incoming",
+              "Hi, we're a distributor in Manila. What's your MOQ for the USB-C cables and lead time for 1,000 pcs?",
+              "WhatsApp：英文询价也到了",
+              "list_clean"
+            ],
+            [
+              "narr",
+              "阿语的从 Telegram 来，英文的从 WhatsApp 来。两个平台，一个收件箱，不用切软件。"
+            ],
+            [
+              "use_stage",
+              "TG_ES"
+            ],
+            [
+              "open_stage",
+              "先接阿语这条"
+            ],
+            [
+              "xlate_quick_on",
+              "一键翻译：阿语变中文",
+              "zoom"
+            ],
+            [
+              "narr",
+              "阿语他一个字不认识。点一下翻译，五百条 USB-C 线，问起订量和交期。"
+            ],
+            [
+              "ai_reply_send",
+              "AI 按工厂报价口径拟稿，逐条发出",
+              "zoom"
+            ],
+            [
+              "narr",
+              "AI 按工厂的报价口径拟好稿，发出去自动是阿语。"
+            ],
+            [
+              "use_stage",
+              "WA_PH"
+            ],
+            [
+              "open_stage",
+              "再接 WhatsApp 这条"
+            ],
+            [
+              "xlate_quick_on",
+              "英文也翻成中文",
+              "zoom"
+            ],
+            [
+              "ai_reply_send",
+              "同一套口径，AI 用英文回",
+              "zoom"
+            ],
+            [
+              "narr",
+              "马尼拉的经销商，同一套口径，AI 用英文回。两条询价，五分钟，都回了。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P7",
+      "title": "客户发来一长段材料问题",
+      "features": [
+        "translate",
+        "kb"
+      ],
+      "scenario": "persona",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P7_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_long_question",
+          "desc": "长英文来信 → 翻译 → / 调知识库答案 → 发出自动成英文 → 客户回谢 → 手打一句",
+          "clear_stage": true,
+          "steps": [
+            [
+              "open_stage",
+              "留学顾问 Grace 的 Telegram"
+            ],
+            [
+              "incoming",
+              "Hi Grace! I got my offer from Manchester 🎉 For the student visa, what documents do I need exactly? Do I need the CAS first? How many days of bank statement history? Do I need a TB test? And is IELTS UKVI required or is my normal IELTS ok? Sorry for the long message 🙏",
+              "客户拿到 offer，一口气问了五个问题",
+              "zoom"
+            ],
+            [
+              "narr",
+              "客户拿到曼彻斯特的 offer，一口气问了五个签证材料问题。"
+            ],
+            [
+              "xlate_quick_on",
+              "长文一键翻译",
+              "zoom"
+            ],
+            [
+              "narr",
+              "一键翻成中文，逐条看懂：CAS、存款天数、肺结核、雅思类型。"
+            ],
+            [
+              "kb_answer",
+              "材料",
+              "签证材料",
+              "输入 / 调知识库：材料清单早就备好",
+              "zoom_low",
+              "send"
+            ],
+            [
+              "narr",
+              "这些问题 Grace 每周被问二十遍。答案在知识库里早就备好，斜杠一调，一键带出，发出去自动成英文。"
+            ],
+            [
+              "incoming",
+              "Perfect, this is exactly what I needed! I'll send you my bank statement tonight 🙏",
+              "客户回：正是我需要的",
+              "zoom"
+            ],
+            [
+              "type_send",
+              "收到后我帮你预审，一般三个工作日给结果。",
+              "手打一句中文，客户收到英文",
+              "zoom_low"
+            ],
+            [
+              "narr",
+              "她打中文，客户收到英文。五个问题，两分钟，一个都没漏。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "title": "群里有人问价了",
+      "features": [
+        "group",
+        "translate",
+        "ai_reply"
+      ],
+      "scenario": "persona",
+      "stage": "TG_GROUP",
+      "status": "published",
+      "chorus": "lyrics/P6_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_group_to_dm",
+          "desc": "切群组 → 搜 2026社群 → 印尼语询价落到群 → 翻译 → 切私聊买家跟进 → AI 报价",
+          "clear_stage": true,
+          "steps": [
+            [
+              "goto",
+              "/workspace"
+            ],
+            [
+              "narr",
+              "阿龙管着一个跨境买家社群。群里每天都有人问价，不能每条都在群里回。"
+            ],
+            [
+              "conv_scope",
+              "group",
+              "切到【群组】：买家群和私聊分开看"
+            ],
+            [
+              "list_filter",
+              "2026社群",
+              "搜「2026社群」：只看这个买家群",
+              "list_clean"
+            ],
+            [
+              "open_stage",
+              "打开买家群"
+            ],
+            [
+              "incoming",
+              "Pak, harga charger GaN 20W berapa? 500 pcs ke Surabaya minggu depan, ada yang bisa?",
+              "群里有人用印尼语问快充头，没 @ 任何人也进工作台",
+              "zoom"
+            ],
+            [
+              "narr",
+              "泗水的买家在群里问快充头。群里报价会被截图比价，他接到私聊。"
+            ],
+            [
+              "xlate_quick_on",
+              "一键翻译：印尼语变中文",
+              "zoom"
+            ],
+            [
+              "use_stage",
+              "TG_ES"
+            ],
+            [
+              "conv_scope",
+              "private",
+              "切回【私聊】把单接住"
+            ],
+            [
+              "open_stage",
+              "打开跟这位买家的私聊"
+            ],
+            [
+              "incoming",
+              "Hi, following the group: 20W GaN charger, 500 pcs to Surabaya, your best price?",
+              "买家跟进到私聊，还是那 500 只快充头",
+              "zoom"
+            ],
+            [
+              "xlate_quick_on",
+              "私聊也开翻译：看懂，回中文她收到英语",
+              "zoom"
+            ],
+            [
+              "ai_reply_send",
+              "AI 按社群口径私聊报价（群里不报价格）",
+              "zoom"
+            ],
+            [
+              "narr",
+              "群里看见问价，私聊把单接住。他打中文，买家收到英语。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "F1",
+      "title": "全自动回复：怎么开，怎么停",
+      "features": [
+        "translate",
+        "auto_reply",
+        "mode"
+      ],
+      "scenario": "persona",
+      "format": "tutorial",
+      "stage": "TG_ES",
+      "status": "footage_draft",
+      "chorus": "lyrics/P1_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_hook",
+          "desc": "钩子：半自动档下客户来信，稿等人审，人不在 → 四档是什么",
+          "clear_stage": true,
+          "steps": [
+            ["open_stage", "阿杰的独立站 Telegram 客服号"],
+            ["say", "现在是半自动档：AI 拟稿，等人来审", "阿杰睡了。这条会话现在是半自动：AI 会拟稿，但要有人点发送。"],
+            ["incoming", "Hola, ¿siguen atendiendo? Tengo una pregunta sobre un vestido.", "客户来信：还在吗？想问一条裙子", "zoom"],
+            ["say", "没有人点发送，客户就一直等", "客户用西语问：还在吗。稿拟好了，没人点发送，客户就等着。接下来五分钟，我们把这条会话交给 AI。"],
+            ["point_css", "#mode-select", "每条会话都有自己的档位", "zoom"],
+            ["say", "🙋 手动：你自己打", "手动，你自己打。"],
+            ["say", "📝 半自动：AI 拟稿，你过目再发", "半自动，AI 拟稿，你过目再发。"],
+            ["say", "🔀 AI 多选：几份稿，你挑一份", "多选，几份稿你挑一份。"],
+            ["say", "🚀 全自动：按人设直接发出去", "全自动，AI 按人设直接发出去，不等你。开它之前，先钉三件事。"]
+          ]
+        },
+        {
+          "clip": "c_setup",
+          "desc": "跟着做 1–4：值守总闸 → 人设绑定 → 双向翻译钉语言 → 知识库斜杠预览",
+          "steps": [
+            ["open_stage", "同一条会话"],
+            ["point_css", "#standby-pill", "第一步：顶栏「AI 值守」要在【值守中】"],
+            ["say", "不在值守中，全自动只出草稿，不真发", "第一步看顶栏：AI 值守。不在值守中，全自动只会出草稿，不会真发。"],
+            ["ensure_assist", "第二步：打开右栏业务助手"],
+            ["cp_tab", "工具箱", "工具箱"],
+            ["expand_card", "persona", "人设绑定：把店铺口径写成数字", "zoom_panel"],
+            ["say", "货、价、几天到、怎么付，写成数字；写一句「不许说稍后」", "第二步，人设绑定。把店铺口径写成数字：有什么货、多少钱、几天到、怎么付。再写一句：不许说稍后。AI 说什么，由它定。"],
+            ["xlate_quick_on", "第三步：一键双向翻译——收→中，发→西语", "zoom"],
+            ["say", "发出去的语言钉成客户的语言，不靠猜", "第三步，回复台点翻译，一键双向。收进来翻成中文；发出去钉成西语。不钉，它会猜，猜错就乱译。"],
+            ["kb_answer", "物流", "拉美物流", "第四步：常问的写进知识库，回复框输 / 就带出来", "zoom_low", "preview"],
+            ["say", "今天不用它，先备着", "第四步，常被问的写进知识库。回复框打斜杠，条目就带出来。今天不用它，先备着。"]
+          ]
+        },
+        {
+          "clip": "d_arm",
+          "desc": "跟着做 5：本会话切全自动 → AI 状态看「全自动运行中」",
+          "steps": [
+            ["open_stage", "同一条会话"],
+            ["mode_switch", "auto_ai", "第五步：本会话档位切【全自动】", "zoom"],
+            ["say", "只切这一条会话；群默认不开", "第五步，会话头，本会话切全自动。只切这一条。群默认不开，要开得再确认一次。"],
+            ["ai_diag", "点【AI 状态】：全自动运行中，会不会回一眼看懂", "zoom"],
+            ["say", "AI 状态：会不会自动回、为什么不回，都在这", "点 AI 状态，它告诉你：这条会话 AI 会不会自动回，不回是为什么。绿了，开闸。"]
+          ]
+        },
+        {
+          "clip": "e_live",
+          "desc": "主戏：两轮西语来信，四条回复 AI 自己发出去，全程不点发送",
+          "steps": [
+            ["ensure_mode", "auto_ai"],
+            ["open_stage", "全自动已开，阿杰离开了电脑"],
+            ["incoming", "Hola! ¿Tienen envío a Chile? Quiero el vestido azul, talla M.", "客户来信：发智利吗？想要蓝色连衣裙 M 码", "zoom"],
+            ["say", "来信自动翻成中文，气泡下面就是译文", "来信进来，中文译文在气泡下面。现在，没有人碰键盘。"],
+            ["wait_outbound", "没有人点发送——AI 按人设自己回，用西语", "zoom"],
+              ["say", "先答问题：有货、39.9 美元；再给交期或反问收货城市", "看右边。先答客户问的：有货，三十九点九美元；再给交期，或者反问发哪个城市。西语发出去，下面那行中文是给你看的。"],
+            ["incoming", "Santiago. ¿Cuánto tarda exactamente y aceptan tarjeta?", "客户追问：圣地亚哥，具体几天？收信用卡吗？", "zoom"],
+            ["say", "追问也不需要人来", "客户追问：圣地亚哥，具体几天，收卡吗。"],
+            ["wait_outbound", "第二轮也自己出去：数字和人设一致", "zoom"],
+              ["say", "两轮口径不漂：7–10 天、Visa / Mastercard / PayPal", "又是它自己回：七到十天，Visa、Mastercard、PayPal。数字和人设里写的一样，口径来自人设，不来自模型的记忆。"]
+          ]
+        },
+        {
+          "clip": "f_list",
+          "desc": "值守全景：列表里超时 / 需人工照样举手，全自动会话挂 AI 角标",
+          "steps": [
+            ["ensure_mode", "auto_ai"],
+            ["goto", "/workspace"],
+            ["conv_scope", "private", "回到会话列表"],
+            ["urgent_filter", "「超时」「需人工」照样举手", "zoom_list"],
+            ["say", "它替你回，不替你藏", "回到列表。超时的、需要人工的，照样举手排最前。全自动替你回，不替你藏。"],
+              ["point_css", ".conv-item[data-cid=\"telegram:6834964252:8244899900\"] .conv-handler.h-ai", "AI 角标：这条会话全自动在跑", "zoom_list"],
+            ["say", "AI 角标 = 这条会话在全自动", "带 AI 角标的，就是交给全自动的会话。一眼知道哪些是机器在回。"]
+          ]
+        },
+        {
+          "clip": "g_takeover",
+          "desc": "接管：批发议价人来，点接管 AI 让位，手打中文客户收西语，AI 不再插话",
+          "steps": [
+            ["ensure_mode", "auto_ai"],
+            ["open_stage", "同一条会话，几分钟后"],
+            ["incoming", "¿Pueden hacer un descuento por 20 piezas para mi tienda?", "客户：我店里要 20 件，能给折扣吗？", "zoom"],
+            ["click_takeover", "第六步：点【接管】，AI 对这条会话立刻让位", "zoom"],
+            ["say", "批发议价这种单，人来。点接管，AI 立刻让位", "客户要二十件问折扣。这种单人来。点接管，AI 对这条会话立刻让位，在途的稿也取消。"],
+            ["type_send", "20 件我可以做到每件 34.9 美元，10 分钟内把报价发您。", "阿杰手打中文，客户收到西语", "zoom_low"],
+            ["assert_quiet", 8, "接管后 AI 沉默：8 秒无 AI 追加气泡", "zoom"],
+            ["say", "人接手后 AI 沉默；手打中文，客户照样收西语", "阿杰打中文，客户收到西语。往后这条会话 AI 不再插话，想交回去，再点一次接管。"]
+          ]
+        },
+        {
+          "clip": "h_guard",
+          "desc": "不会乱回的地方：群默认不自动说，AI 状态看跳过原因",
+          "steps": [
+            ["goto", "/workspace"],
+            ["conv_scope", "group", "切到【群组】"],
+            ["list_filter", "2026社群", "只看这个买家群", "list_clean"],
+            ["use_stage", "TG_GROUP"],
+            ["open_stage", "打开买家群"],
+            ["point_css", "#mode-select", "群会话默认不开全自动；要开，得再确认一次", "zoom"],
+            ["say", "群里默认不自动说话", "群里默认不自动说话，要你确认一次才开。风险会话、超过三天的旧消息，它也跳过，不替你闯祸。"],
+            ["ai_diag", "点【AI 状态】看它为什么没回", "zoom"],
+            ["say", "人设、语言、知识库钉好，再开全自动；随时接管", "人设、语言、知识库钉好，再开全自动。随时接管。免费开始，搜 bd2026.cc。"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "F2",
+      "title": "把微信接进智聊：三步，不碰密码",
+      "features": [
+        "wechat_connect",
+        "inbox"
+      ],
+      "scenario": "persona",
+      "format": "tutorial",
+      "stage": "WX_DEMO",
+      "status": "footage_draft",
+      "chorus": "lyrics/P2_chorus.txt",
+      "footage_actions": [
+        {
+          "clip": "a_hook",
+          "desc": "钩子：左栏各平台都进了同一个收件箱，微信呢 → PC 副驾三句话（不碰协议 / 不经手密码 / 默认只读）",
+          "clear_stage": true,
+          "steps": [
+            ["goto_page", "/workspace", "#plat-icons", "小周的智聊工作台"],
+            ["point_css", "#plat-icons", "左栏：Telegram、WhatsApp、LINE、Messenger 都进了同一个收件箱"],
+            ["say", "微信客户呢？", "小周在义乌卖保温杯，客户全在微信上。Telegram、WhatsApp 都能进智聊的收件箱——微信呢？"],
+            ["point_css", "#plat-icons .nav-plat[data-platform=\"wechat\"], #plat-icons .nav-plat[data-plat=\"wechat\"]", "个人微信 · PC 副驾"],
+            ["say", "个人微信没有官方接口：智聊用「PC 副驾」读你电脑上已登录的微信", "个人微信没有官方接口。智聊的办法叫 PC 副驾：读你电脑上已经登录的微信窗口，AI 给建议，或者替你发。"],
+            ["say", "不碰微信协议 · 不经手密码 · 默认只读", "三句话：不碰微信协议，不经手密码，默认只读。接下来三步，三分钟。"]
+          ]
+        },
+        {
+          "clip": "b_connect",
+          "desc": "第一步：引导页「连接电脑微信」环境体检全绿（红灯不录）",
+          "steps": [
+            ["goto_page", "/workspace/connect/wechat_pc", "#cg-panel", "打开：接入个人微信 · PC 副驾"],
+            ["cg_step", 1],
+            ["point_css", "#cg-rail", "三步：连接电脑微信 → 设置副驾 → 启动并验证", "zoom_guide"],
+            ["say", "第一步：连接电脑微信", "工作台里打开「接入个人微信」，三步。第一步，连接电脑微信：先让电脑微信自己登录好——智聊不经手密码，只看已登录的窗口。"],
+            ["wx_env", "环境体检：电脑微信在跑、版本 4.x、已登录", "zoom_guide"],
+            ["say", "三项全绿，下一步", "电脑微信在跑、版本四点一、窗口已登录，三项全绿。"]
+          ]
+        },
+        {
+          "clip": "c_tier",
+          "desc": "第二步：设置副驾——三档讲清，选半自动，保存立即生效（录完还原老板档位）",
+          "steps": [
+            ["goto_page", "/workspace/connect/wechat_pc", "#cg-panel"],
+            ["wx_tier", "semi", "第二步：设置副驾——选【半自动】", "zoom_guide"],
+            ["say", "只读建议：只看不发 / 半自动：只发你批准的 / 全自动：直接代发，要签知情同意", "第二步，副驾能做到什么程度，你定。只读建议：只同步消息、AI 给建议，绝不代发。半自动：只发你在工作台批准的回复。全自动：AI 直接代发，高风险，得先签知情同意。"],
+            ["say", "选半自动：AI 写稿，你点批准才发；保存立即生效，不用重启", "我们选半自动：AI 写稿，你批准了才从微信发出去。保存，立即生效，不用重启。"]
+          ]
+        },
+        {
+          "clip": "d_verify",
+          "desc": "第三步：启动并验证——副驾在线；发一条测试消息几秒后出现（来信走副驾入站桥；先钉 manual 让测试消息不起稿，e_inbox 再切 review 由追问起稿）；随后无镜头还原档位",
+          "steps": [
+            ["goto_page", "/workspace/connect/wechat_pc", "#cg-panel"],
+            ["wx_verify", "第三步：启动并验证——副驾在线", "zoom_guide"],
+            ["say", "副驾在线：开始同步电脑微信的新消息", "第三步，启动并验证。副驾在线，绿灯：它开始同步你电脑微信的新消息。"],
+            ["ensure_mode", "manual"],
+            ["wx_test_inbound", "你好，上次看的那款保温杯还有货吗？想要两个", "用另一个微信号给这个号发一句话", "zoom_guide"],
+            ["say", "收到了：几秒后出现在这里", "用另一个微信号发一句：保温杯还有货吗，想要两个。几秒，收到了。接通了，去工作台看看。"],
+            ["wx_restore"]
+          ]
+        },
+        {
+          "clip": "e_inbox",
+          "desc": "收件箱：微信来信进同一个列表，本会话半自动，AI 按人设拟稿等你批；采用进回复框，不点发送",
+          "steps": [
+            ["ensure_mode", "review"],
+            ["goto_page", "/workspace", "#plat-icons", "回到工作台"],
+            ["list_filter", "小林", "微信来信进了同一个收件箱", "list_clean"],
+            ["incoming", "两个的话能便宜点吗？顺丰几天到？", "客户追问：两个能便宜点吗？顺丰几天到？", "list_clean"],
+            ["open_stage", "打开小林的会话"],
+            ["point_css", "#mode-select", "本会话：半自动（AI 拟稿，你来发）", "zoom"],
+            ["say", "微信来信和其他平台一样进列表、开会话；这条会话是半自动", "微信来信跟别的平台一样进列表。点开：客户追问，两个能便宜点吗，顺丰几天到。会话头写着：本会话半自动——AI 拟稿，你来发。"],
+            ["wait_draft", "AI 按人设拟好稿，等你过目", "zoom_low"],
+            ["say", "稿里的数字来自人设：两个 168、明天发、顺丰包邮", "稿来了。数字来自人设：两个一百六十八，今天下单明天发，顺丰包邮。不是模型瞎编的。"],
+            ["adopt_draft", "【采用】填进回复框，改两个字再发", "zoom_low"],
+            ["point_css", "#send-btn", "点发送，才从你的电脑微信发出去", "zoom_low"],
+            ["say", "AI 只写稿，发不发你定；半自动档下，批准的才从电脑微信发出去", "点采用，稿进了回复框，改不改你定。点发送，才从你电脑上的微信发出去。三步接微信，AI 写稿你把关。免费开始，搜 bd2026.cc。"]
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "_doc": "【已废弃 2026-09-17】R 系列是功能线（全部店长人设、同一自聊会话），老板定性不是使用场景；由 scenarios_persona.json P 系列取代。保留仅供对照，不再投放。",
+  "superseded_by": "scenarios_persona.json",
+  "series": "nurture",
+  "public_label": "客户关系养成",
+  "banned_public_phrases": ["恋爱养成", "恋爱", "女友", "男友", "暧昧", "谈恋爱", "陪聊赚钱", "说停就停"],
+  "cta_default": "免费开始 · 搜 bd2026.cc",
+  "utm_prefix": "utm_campaign=nurture",
+  "music": {"rap": "warm_rap", "intro": "warm_pop", "note": "v2 换掉 boom bap，用暖 lofi 说唱 + 暖民谣开场，贴「养成」语境"},
+  "episodes": [
+    {
+      "id": "R1",
+      "title": "它记得你上次喜欢哪款",
+      "hook": "老客回访开口就对味",
+      "features": ["care_memory"],
+      "seed": "ZH_DEMO",
+      "seed_need": ["preference_msgs"],
+      "status": "recording_v2",
+      "rap": "lyrics/R1_rap.txt",
+      "intro": "lyrics/R1_intro.txt",
+      "clips": ["a_pref", "b_relation"]
+    },
+    {
+      "id": "R2",
+      "title": "用你的声音说包裹到了",
+      "hook": "熟人声，不是机器人腔",
+      "features": ["voice"],
+      "seed": "ZH_DEMO",
+      "seed_need": ["chat_open"],
+      "status": "recording_v2",
+      "rap": "lyrics/R2_rap.txt",
+      "intro": "lyrics/R2_intro.txt",
+      "clips": ["a_voice"]
+    },
+    {
+      "id": "R3",
+      "title": "店长口吻稳，先试聊再绑",
+      "hook": "人设一致，老客才信",
+      "features": ["persona"],
+      "seed": "ZH_DEMO",
+      "seed_need": ["chat_open"],
+      "status": "recording_v2",
+      "rap": "lyrics/R3_rap.txt",
+      "intro": "lyrics/R3_intro.txt",
+      "clips": ["a_studio", "b_bind"]
+    },
+    {
+      "id": "R4",
+      "title": "给关系定个目标，AI 按 SOP 推进",
+      "hook": "养客不是碰运气：定目标 → AI 推进 → SOP 接力",
+      "features": ["goals"],
+      "seed": "ZH_DEMO",
+      "seed_need": ["plan_msgs"],
+      "status": "recording_v2",
+      "rap": "lyrics/R4_rap.txt",
+      "intro": "lyrics/R4_intro.txt",
+      "clips": ["a_goal", "b_sop", "c_draft"]
+    }
+  ]
+}

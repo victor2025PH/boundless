@@ -1,0 +1,920 @@
+{
+  "_doc": "P 系列＝「人群 × 处境」场景片（公域）。每集一种人、一个真实处境、一条完整因果链：来信到达 → 看懂/翻译 → 回复/语音 → 对方回。取代 R「客户关系养成」功能线。stage 指向两方真会话（客户侧账号在录制中真发外语来信）。",
+  "series": "persona",
+  "public_label": "谁在用智聊",
+  "banned_public_phrases": [
+    "养成",
+    "恋爱",
+    "女友",
+    "男友",
+    "暧昧",
+    "陪聊赚钱",
+    "月入",
+    "稳赚",
+    "保证出单",
+    "App Store"
+  ],
+  "cta_default": "免费开始 · 搜 bd2026.cc",
+  "utm_prefix": "utm_campaign=persona",
+  "stages": {
+    "TG_ES": {
+      "_doc": "卖家视角=智聊支持(6834964252)；客户侧=Katie(8244899900) 真发；卖家人设 chatx_support 克隆声 my_voice 就绪（/api/voice/tts-test 实测 2026-09-17）",
+      "platform": "telegram",
+      "seller_account": "6834964252",
+      "customer_account": "8244899900",
+      "seller_view_conversation": "telegram:6834964252:8244899900",
+      "customer_display": "Katie",
+      "seller_voice_ok": true
+    },
+    "WA_PH": {
+      "_doc": "卖家视角=Wisley(639649321471, 人设林小雨·克隆声 zh/en 就绪)；客户侧=calixa_lopez(639270135480, 菲律宾号) 真发；2026-09-17 两侧 WA 协议会话 running=False（channel_disconnected），待重新登录后可用",
+      "platform": "whatsapp",
+      "seller_account": "639649321471",
+      "customer_account": "639270135480",
+      "seller_view_conversation": "whatsapp:639649321471:639270135480",
+      "customer_display": "calixa_lopez",
+      "seller_voice_ok": true,
+      "available": false
+    },
+    "TG_GROUP": {
+      "_doc": "P6 社群舞台。公开群 t.me/sqlt2026，标题「2026社群聊天」。卖家=智聊支持(htqp456)，客户=Katie 在群里真发。2026-09-18 起引擎未触发群消息也实时镜像入库（telegram_client._mirror_untriggered_group_message，开关 group_reply.mirror_untriggered）；前提是该群在实例 config.local.yaml 的 telegram.group_reply.allowlist_chat_ids 里（灰度白名单不在 → 整条静默丢，是此前「群里看不到」的真根因，不是触发闸）。录制 incoming 先等 8s 直播，没有再 from_latest 兜底（禁止 sync-history 灌旧询价）。",
+      "platform": "telegram",
+      "seller_account": "6834964252",
+      "customer_account": "8244899900",
+      "seller_view_conversation": "telegram:6834964252:-1004309455763",
+      "customer_display": "Katie",
+      "chat_type": "group",
+      "group_chat_key": "-1004309455763",
+      "group_title": "2026社群聊天",
+      "group_username": "sqlt2026",
+      "seller_voice_ok": true
+    },
+    "WX_DEMO": {
+      "_doc": "F2 微信舞台。卖家=本机电脑微信（账号 wechat-pc，mode=desktop，UIA 副驾读屏落库）。微信没有第二个可编程账号当客户（TG 有 Katie），客户来信走副驾同一条入站桥 POST /api/desktop/ingest（与真副驾读到新消息后落库同一函数 ingest_incoming）——工作台看到的到达、拟稿、待审全是真引擎行为，只有「客户在另一台手机上打字」这一步被注入替代。不出站：半自动档下只演到「稿等你批」，不点发送（副驾在 UI 里找不到这个会话会 send_failed）。会话 ephemeral：录完整条硬删，老板收件箱不留假客户。档位预钉 review（账号级决策是 auto_ai，不钉会被当全自动 17s 内出站）。",
+      "platform": "wechat",
+      "seller_account": "wechat-pc",
+      "seller_display": "个人微信 · PC 副驾",
+      "customer_account": "wx:id:demo-f2-xiaolin",
+      "customer_display": "小林",
+      "seller_view_conversation": "wechat:wechat-pc:wx:id:demo-f2-xiaolin",
+      "chat_type": "private",
+      "customer_mode": "desktop_ingest",
+      "ephemeral": true,
+      "seller_voice_ok": false
+    }
+  },
+  "music_palette": {
+    "seller_es": "city pop, warm synth and bass, female mandarin vocal, 104 bpm, late night neon feel, catchy hook",
+    "support_lead": "upbeat electro pop, clean female mandarin vocal, 118 bpm, bright, confident",
+    "shop_owner": "warm acoustic folk pop, guitar and light percussion, gentle female mandarin vocal, 96 bpm",
+    "live_host": "trap pop, punchy 808, mandarin female vocal with hook, 140 bpm",
+    "b2b_sales": "lofi hip hop, relaxed mandarin vocal, 88 bpm, piano and vinyl",
+    "bed_neutral": "soft lofi instrumental, no vocals, piano and warm bass, 86 bpm, minimal",
+    "factory_sales": "chill boom bap hip hop, relaxed male mandarin vocal, 90 bpm, warm brass stabs and upright bass, laid-back confident hook",
+    "consultant": "soft piano ballad pop, gentle female mandarin vocal, 92 bpm, warm strings, sincere and reassuring",
+    "community": "indie pop, bright acoustic guitar and handclaps, relaxed male mandarin vocal, 108 bpm, friendly community energy"
+  },
+  "episodes": [
+    {
+      "id": "P1",
+      "batch": 1,
+      "persona": "阿杰",
+      "job": "独立站卖家 · 一人公司",
+      "company": "深圳出海电商",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "es→zh",
+      "trigger": "凌晨三点，一条西语询盘进来：¿Tienen envío a Chile?",
+      "title": "凌晨三点，西语询盘来了",
+      "hook": "我睁眼，单已回",
+      "features": [
+        "translate",
+        "ai_reply"
+      ],
+      "beats": [
+        "incoming",
+        "xlate_quick_on",
+        "ai_reply_send",
+        "incoming_followup",
+        "type_send"
+      ],
+      "music": "seller_es",
+      "chorus": "lyrics/P1_chorus.txt",
+      "utm": "utm_campaign=persona-p1-seller-es",
+      "en": {
+        "job": "Solo DTC store owner",
+        "title": "3 a.m., a Spanish inquiry lands",
+        "hook": "I woke up — it was already answered",
+        "trigger": "3 a.m., a Spanish inquiry arrives: ¿Tienen envío a Chile?"
+      },
+      "persona_demo": {
+        "_doc": "首批用新纪律重录（2026-09-18）：舞台卖家账号默认人设是智聊支持/烧烤店老板娘，AI 会答非所问或客服腔。录前导入本人设并做会话级绑定，录完解绑 + 删，生产人设库不留演示条目。 language_follow=false + 中文起草：AI 直接写西语短句会被出站翻译判成 en 再乱译（2026-09-18 P1 take1「Sí, llegamos a Chile」→「Yes, we arrived in Chile」实锤）。 2026-09-19 F1 实锤：店铺口径此前写在 style_hint——该键不在人设 schema（persona_manager.PROMPT_CONSUMED_FIELDS），导入只报 unknown_keys、从不进 prompt，全自动 A 线本地模型答「8-12 días hábiles / tarjetas de crédito」纯属编造。口径必须放 background（【你的人生背景】块）+ context.specific_memories。",
+        "bind_stages": [
+          "TG_ES"
+        ],
+        "profile": {
+          "id": "demo_ajie_dtc",
+          "name": "阿杰",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "深圳独立站女装卖家（一人公司），面向拉美 / 西语市场，Telegram 客服号",
+          "background": "你是「阿杰」，深圳一家独立站女装店的老板，一个人做客服，客户多在拉美西语区。回复一律用中文写，工作台会自动翻译成客户的语言发出，不要自己写外语。店铺口径（数字必须照抄，一个都不许改）：蓝色连衣裙（Vestido azul）S / M / L 三个码都有货，售价 US$39.9；发智利、墨西哥、哥伦比亚等拉美国家，专线 7-10 天送达，今天下单包邮；付款支持 Visa / Mastercard / PayPal。客户一问，第一句先直接回答他问的（有没有货 / 能不能发 / 多少钱 / 几天到），并把价格 US$39.9 或时效 7-10 天这类数字带上；第二句给下单方式或再确认一个信息（尺码 / 收货城市）。绝不说「稍后查一下 / 等我确认 / 马上发你」这类拖延话，不闲聊，不编造店里没有的商品或数字。",
+          "context": {
+            "specific_memories": [
+              "蓝色连衣裙 Vestido azul：S/M/L 有货，US$39.9 一件",
+              "拉美专线：智利 / 墨西哥 / 哥伦比亚 7-10 天送达，今天下单包邮",
+              "付款方式：Visa / Mastercard / PayPal，付款后 24 小时内发出"
+            ]
+          },
+          "tags": [
+            "电商",
+            "西语",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "热情",
+              "利落",
+              "靠谱"
+            ],
+            "style": "独立站卖家口吻，先答后问，数字明确（价格 US$39.9、时效 7-10 天照抄），句子短",
+            "emoji_level": "low"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "烧烤",
+              "稍后",
+              "等我确认",
+              "马上发你"
+            ],
+            "max_reply_sentences": 3,
+            "language_follow": false
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": []
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "status": "published"
+    },
+    {
+      "id": "P2",
+      "batch": 2,
+      "persona": "老周",
+      "job": "外贸业务员",
+      "company": "东莞 B2B 工厂",
+      "platform": "telegram+whatsapp",
+      "stage": "TG_ES",
+      "stages": [
+        "TG_ES",
+        "WA_PH"
+      ],
+      "lang_pair": "ar/en→zh",
+      "trigger": "Telegram 阿语询价、WhatsApp 英文询价同时进来",
+      "title": "两个平台同时问价",
+      "hook": "一个收件箱全接住",
+      "features": [
+        "inbox",
+        "translate",
+        "ai_reply"
+      ],
+      "beats": [
+        "list_filter",
+        "incoming",
+        "use_stage",
+        "incoming",
+        "xlate_quick_on",
+        "ai_reply_send",
+        "use_stage",
+        "xlate_quick_on",
+        "ai_reply_send"
+      ],
+      "persona_demo": {
+        "_doc": "两方舞台的卖家账号默认人设是烧烤店老板娘 / 智聊支持 → AI 对 B2B 询价会答「你找错人了我开烧烤店的」（2026-09-18 P2 五录 WA 实锤）。录前按 id 导入本人设并做会话级绑定到各舞台，录完解绑 + 删人设，生产人设库不留演示条目。",
+        "bind_stages": [
+          "TG_ES",
+          "WA_PH"
+        ],
+        "profile": {
+          "id": "demo_zhou_b2b",
+          "name": "老周",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "东莞线材工厂外贸业务经理，主做 USB-C 数据线 / 充电线 OEM 出口",
+          "background": "你是「老周」，东莞一家线材工厂的外贸业务经理，负责海外 B2B 询价。工厂主营 USB-C 数据线、充电线、Lightning 线，可 OEM/ODM 定制线长、颜色、logo、包装。报价口径：USB-C 1m 编织线 FOB 深圳约 US$0.85–1.20/pcs 视规格与数量；MOQ 500 pcs（可混色）；样品 3–5 天，批量 1000 pcs 交期约 15 天，5000 pcs 约 20–25 天；付款 30% 定金、70% 出货前 T/T；认证有 CE / RoHS / FCC，MFi 另议。风格：专业、热情、简洁，先直接回答客户问的每一个问题（MOQ、交期、价格区间），再礼貌追问一个关键信息（目标数量 / 线长 / 是否要 logo），最后邀请对方留邮箱发详细报价单。每次回复不超过 5 句，不闲聊，不发照片，不编造工厂以外的产品。",
+          "tags": [
+            "外贸",
+            "B2B",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "专业",
+              "热情",
+              "干练"
+            ],
+            "style": "外贸业务口吻，条理清晰、数字明确；先答后问，句子短",
+            "emoji_level": "low"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "烧烤"
+            ],
+            "reply_length": "short",
+            "max_reply_sentences": 5,
+            "language_follow": true
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": [
+              "退款",
+              "投诉"
+            ]
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "music": "factory_sales",
+      "chorus": "lyrics/P2_chorus.txt",
+      "utm": "utm_campaign=persona-p2-b2b",
+      "en": {
+        "job": "B2B export sales rep",
+        "title": "Two platforms, two price requests at once",
+        "hook": "One inbox catches them all",
+        "trigger": "Price requests pop up on two platforms at the same time"
+      },
+      "status": "published"
+    },
+    {
+      "id": "P3",
+      "batch": 1,
+      "persona": "Lin",
+      "job": "客服主管",
+      "company": "10 人跨境客服团队",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "en→zh",
+      "trigger": "37 条待回，3 条「需人工」，一条新投诉刚进来",
+      "title": "三十七条待回，谁先回",
+      "hook": "需人工先举手，其余 AI 接",
+      "features": [
+        "urgent_filter",
+        "ai_reply",
+        "handoff"
+      ],
+      "beats": [
+        "inbox_overview",
+        "urgent_filter",
+        "incoming",
+        "open_incoming",
+        "ai_reply_send"
+      ],
+      "music": "support_lead",
+      "chorus": "lyrics/P3_chorus.txt",
+      "utm": "utm_campaign=persona-p3-support-lead",
+      "en": {
+        "job": "Customer support lead",
+        "title": "37 waiting — who goes first",
+        "hook": "'Needs human' raises its hand, AI takes the rest",
+        "trigger": "37 replies pending, 3 flagged 'needs human', and a new complaint just came in"
+      },
+      "sla_demo": {
+        "_doc": "概览段字幕「超时的、需人工的先举手」两次成片压在空列表上（09-17/09-18 实锤）：舞台会话录完都是我方最后一句，其余等回复的挂在离线账号（SLA 对 offline 静默）。录前经内部入站桥 backfill 铺 3 条客户来信（ts 回拨 age_min），≥30min 出「超时」chip、≥2h 进「需人工」页签；录完硬删（墓碑）。chat_key 每次录制带 run 后缀——墓碑只被「ts 晚于删除时刻」的新消息解除，回拨 ts 的同 key 重铺会被当已删历史吞掉。文案与 Lin 的售后语境同频、与 b_complaint 的 #A1023 不撞单号。",
+        "stage": "TG_ES",
+        "rows": [
+          {"key": "demo-sla-carter", "name": "Carter M.", "age_min": 165,
+           "text": "Order #B2041 still hasn't arrived after 11 days. I need a refund or a reshipment today."},
+          {"key": "demo-sla-priya", "name": "Priya S.", "age_min": 140,
+           "text": "Tracking for #B2078 hasn't updated since Monday. Can you check with the carrier?"},
+          {"key": "demo-sla-jonas", "name": "Jonas K.", "age_min": 52,
+           "text": "Got size M instead of L on #B2103. How do I exchange it?"}
+        ]
+      },
+      "persona_demo": {
+        "_doc": "首批用新纪律重录（2026-09-18）：舞台卖家账号默认人设是智聊支持/烧烤店老板娘，AI 会答非所问或客服腔。录前导入本人设并做会话级绑定，录完解绑 + 删，生产人设库不留演示条目。 language_follow=false + 中文起草：AI 直接写西语短句会被出站翻译判成 en 再乱译（2026-09-18 P1 take1「Sí, llegamos a Chile」→「Yes, we arrived in Chile」实锤）。",
+        "bind_stages": [
+          "TG_ES"
+        ],
+        "profile": {
+          "id": "demo_lin_support",
+          "name": "Lin",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "跨境电商 10 人客服团队主管，处理英文订单售后（物流延误 / 退款）",
+          "background": "回复一律用中文写（工作台会自动翻译成客户的语言发出，不要自己写外语，否则出站翻译会把短外语句判错源语言）。你是「Lin」，一个跨境电商客服团队的主管，负责英文售后。客户投诉物流延误时的口径：第一句先道歉并共情（12 天确实太久了，不该让你等）；第二句说明已经在查该订单号的物流，并给出明确时限（2 小时内把最新进展发给你）；第三句给客户选择：若 3 天内仍无物流更新，全额退款或免费补发由客户选。不推责给物流公司，不要求客户「再等等」，不说「稍后」这类没有时限的话。每次不超过 4 句，语气专业、诚恳，不用表情。",
+          "tags": [
+            "客服",
+            "售后",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "专业",
+              "诚恳",
+              "有担当"
+            ],
+            "style": "客服主管口吻，先安抚再给方案，每句都有时限或选择",
+            "emoji_level": "low"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "烧烤",
+              "请耐心等待",
+              "稍后"
+            ],
+            "reply_length": "short",
+            "max_reply_sentences": 4,
+            "language_follow": false
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": []
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "status": "published"
+    },
+    {
+      "id": "P4",
+      "batch": 1,
+      "persona": "美玲",
+      "job": "华人美容院老板娘",
+      "company": "迪拜华人美容院",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "en→zh",
+      "trigger": "外国客人用 Telegram 问明天两点能不能做美甲",
+      "title": "客人来订位，我用自己的声音回",
+      "hook": "熟人声，不是机器人腔",
+      "features": [
+        "translate",
+        "voice_clone"
+      ],
+      "beats": [
+        "incoming",
+        "xlate_quick_on",
+        "voice_preview_send"
+      ],
+      "music": "shop_owner",
+      "chorus": "lyrics/P4_chorus.txt",
+      "utm": "utm_campaign=persona-p4-shop-owner-dxb",
+      "en": {
+        "job": "Chinese beauty-salon owner, Dubai",
+        "title": "A booking comes in — I answer in my own voice",
+        "hook": "A familiar voice, not a robot",
+        "trigger": "A foreign client asks on Telegram whether 2 p.m. tomorrow works for nails"
+      },
+      "status": "published"
+    },
+    {
+      "id": "P5",
+      "batch": 1,
+      "persona": "Mia",
+      "job": "带货主播 / MCN 运营",
+      "company": "直播团队",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "en→zh",
+      "trigger": "下播后两百条私信，最新一条问「还有库存吗」",
+      "title": "下播两百条私信，AI 先回",
+      "hook": "意向先标好，AI 先回",
+      "features": [
+        "ai_reply",
+        "chain"
+      ],
+      "beats": [
+        "inbox_overview",
+        "incoming",
+        "ai_reply_send",
+        "chain"
+      ],
+      "music": "live_host",
+      "chorus": "lyrics/P5_chorus.txt",
+      "utm": "utm_campaign=persona-p5-live-host",
+      "en": {
+        "job": "Live-stream host / MCN ops",
+        "title": "200 DMs after the stream — AI answers first",
+        "hook": "Intent tagged, AI replies first",
+        "trigger": "200 DMs after going offline; the latest one asks 'still in stock?'"
+      },
+      "persona_demo": {
+        "_doc": "首批用新纪律重录（2026-09-18）：舞台卖家账号默认人设是智聊支持/烧烤店老板娘，AI 会答非所问或客服腔。录前导入本人设并做会话级绑定，录完解绑 + 删，生产人设库不留演示条目。 language_follow=false + 中文起草：AI 直接写西语短句会被出站翻译判成 en 再乱译（2026-09-18 P1 take1「Sí, llegamos a Chile」→「Yes, we arrived in Chile」实锤）。",
+        "bind_stages": [
+          "TG_ES"
+        ],
+        "profile": {
+          "id": "demo_mia_live",
+          "name": "Mia",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "带货主播 / MCN 运营，直播后回粉丝私信（英文），主卖直播间同款",
+          "background": "回复一律用中文写（工作台会自动翻译成客户的语言发出，不要自己写外语，否则出站翻译会把短外语句判错源语言）。你是「Mia」，一个带货主播，刚下播在回粉丝私信，语气跟直播间一样热情口语，但每句都要有信息。今晚直播口径（数字照抄）：18 寸 LED 补光灯（三色温、带遥控和三脚架）还有货，直播价 US$49（比日常价便宜 US$10），保留到明晚 12 点；可寄加拿大 / 美国，8–12 天到，满 US$40 包邮；下单链接直接私信发给客户。客户一问，第一句直接回答有没有货 / 能不能寄，第二句给价格和时限，第三句说下单方式。不说「稍后」「等我看看」，每次不超过 4 句，可以带 1 个表情。",
+          "tags": [
+            "直播",
+            "私信",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "热情",
+              "口语",
+              "利落"
+            ],
+            "style": "主播口吻，直播间同款语气，先答后给价，句子短",
+            "emoji_level": "medium"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "烧烤",
+              "稍后",
+              "等我看看"
+            ],
+            "reply_length": "short",
+            "max_reply_sentences": 4,
+            "language_follow": false
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": []
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "status": "published"
+    },
+    {
+      "id": "P6",
+      "batch": 2,
+      "persona": "阿龙",
+      "job": "社群运营",
+      "company": "跨境社群",
+      "platform": "telegram",
+      "stage": "TG_GROUP",
+      "stages": [
+        "TG_GROUP",
+        "TG_ES"
+      ],
+      "lang_pair": "id/en→zh",
+      "trigger": "买家群里有人用印尼语问 20W 快充头报价",
+      "title": "群里有人问价了",
+      "hook": "群里看见，私聊把单接住",
+      "features": [
+        "group",
+        "translate",
+        "ai_reply"
+      ],
+      "beats": [
+        "scope_group",
+        "list_filter",
+        "group_incoming",
+        "xlate_quick_on",
+        "open_private",
+        "dm_incoming",
+        "ai_reply_send"
+      ],
+      "persona_demo": {
+        "_doc": "卖家账号默认人设是智聊支持 → AI 在私聊会按客服口径答。录前导入社群运营人设并绑定 1:1 舞台，录完解绑删除。",
+        "bind_stages": [
+          "TG_ES"
+        ],
+        "profile": {
+          "id": "demo_along_community",
+          "name": "阿龙",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "跨境买家社群运营，主做 USB-C 数据线 / GaN 快充头团购对接工厂",
+          "background": "你是「阿龙」，一个跨境买家社群的运营。群里不报具体价格（避免被截图比价），有人问价 / MOQ / 交期就约到私聊报价。报价口径（数字照抄，不要自行改动）：20W GaN 快充头 FOB 深圳 US$2.9–3.4/pcs，MOQ 500 pcs，500 pcs 交期 12–15 天；USB-C 1m 编织线 FOB 深圳 US$0.85–1.20/pcs，MOQ 500 pcs；样品 3–5 天；付款 30% 定金、70% 出货前 T/T。私聊里客户一问价，第一句就把价格区间、MOQ、交期三个数直接报出来，绝不说「稍后查一下 / 马上发你 / 等我确认」这类拖延话；第二句确认收货城市与插头制式（印尼是 C 型两圆脚）。每次不超过 4 句，不在群里发长文，不编造工厂没有的产品。",
+          "tags": [
+            "社群",
+            "B2B",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "热情",
+              "利落",
+              "靠谱"
+            ],
+            "style": "社群运营口吻，先把人从群里接到私聊，数字明确",
+            "emoji_level": "low"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "烧烤",
+              "稍后",
+              "马上发你",
+              "等我确认",
+              "in a sec"
+            ],
+            "reply_length": "short",
+            "max_reply_sentences": 4,
+            "language_follow": true
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": [
+              "退款",
+              "投诉"
+            ]
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "music": "community",
+      "chorus": "lyrics/P6_chorus.txt",
+      "utm": "utm_campaign=persona-p6-community",
+      "en": {
+        "job": "Community manager",
+        "title": "Someone asks for a price in the group",
+        "hook": "Spot it in the group, close it in DM",
+        "trigger": "A buyer asks in Indonesian for a 20W GaN charger quote in the community group"
+      },
+      "status": "published"
+    },
+    {
+      "id": "P7",
+      "batch": 2,
+      "persona": "Grace",
+      "job": "留学 / 旅行顾问",
+      "company": "中介公司",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "en→zh",
+      "trigger": "客户拿到 offer，一口气发来五个签证材料问题",
+      "title": "客户发来一长段材料问题",
+      "hook": "长文翻译，知识库作答",
+      "features": [
+        "translate",
+        "kb"
+      ],
+      "beats": [
+        "incoming_long",
+        "xlate_quick_on",
+        "kb_answer",
+        "incoming_followup",
+        "type_send"
+      ],
+      "kb_demo_entry": {
+        "_doc": "录制前建、录完即删（source=user，生产 KB 不留演示条目）；record_persona 按 title 校验存在",
+        "title": "英国本科签证材料清单",
+        "category": "常规咨询",
+        "triggers": [
+          "签证材料",
+          "材料清单",
+          "visa documents",
+          "CAS",
+          "资金证明",
+          "肺结核"
+        ],
+        "example_reply_zh": "英国本科学生签证一般需要：1）有效护照；2）学校发的 CAS 确认函；3）资金证明，存款需满 28 天；4）肺结核体检报告（指定机构）；5）英语成绩，学校发 CAS 后普通 IELTS 即可，不一定要 UKVI。材料齐了我帮你预审，一般 3 个工作日给结果。"
+      },
+      "music": "consultant",
+      "chorus": "lyrics/P7_chorus.txt",
+      "utm": "utm_campaign=persona-p7-consultant",
+      "en": {
+        "job": "Study-abroad / travel consultant",
+        "title": "A long wall of paperwork questions",
+        "hook": "Long text translated, answered from the knowledge base",
+        "trigger": "A client sends a long paragraph of document questions"
+      },
+      "status": "published"
+    },
+    {
+      "id": "P8",
+      "batch": 1,
+      "persona": "老板",
+      "job": "小团队老板本人",
+      "company": "任意小团队",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "lang_pair": "en→zh",
+      "trigger": "早上打开工作台：谁在等我",
+      "title": "早上一眼，谁在等我",
+      "hook": "谁在等我，一眼就看到",
+      "features": [
+        "overview",
+        "mode"
+      ],
+      "beats": [
+        "inbox_overview",
+        "urgent_filter",
+        "incoming",
+        "mode_switch",
+        "type_send",
+        "mode_switch"
+      ],
+      "music": "b2b_sales",
+      "chorus": "lyrics/P8_chorus.txt",
+      "utm": "utm_campaign=persona-p8-owner",
+      "en": {
+        "job": "Small-team owner",
+        "title": "One glance in the morning: who's waiting for me",
+        "hook": "Who's waiting — seen at a glance",
+        "trigger": "Open the workspace in the morning: who's waiting for me"
+      },
+      "sla_demo": {
+        "_doc": "与 P3 同一机制（见 P3.sla_demo）：「谁在等我」筛超时/需人工要有真行。老板本人 B2B 语境：隔夜没回的报价/样品/发票。Katie 的「quote」催单随后实时进来排最前。",
+        "stage": "TG_ES",
+        "rows": [
+          {"key": "demo-sla-omar", "name": "Omar A.", "age_min": 610,
+           "text": "Still waiting on the revised quote for 500 pcs. Our meeting is tomorrow morning."},
+          {"key": "demo-sla-lena", "name": "Lena F.", "age_min": 175,
+           "text": "Did the samples ship? I don't see a tracking number yet."},
+          {"key": "demo-sla-diego", "name": "Diego R.", "age_min": 44,
+           "text": "Can you resend the invoice with our VAT number? Finance needs it today."}
+        ]
+      },
+      "status": "published",
+      "badge_pos": "br"
+    },
+    {
+      "id": "F1",
+      "_doc": "F 系列＝功能教学片（一条主线讲透，5 分钟）。F1 全自动回复：六步开 → 客户来信 AI 用客户语言真发（无人点发送）→ 列表全景 → 接管即停 → 群默认不说。舞台复用 TG_ES + 阿杰人设（ref P1）。真发前提：实例 config.local.yaml inbox.peer_bot_guard.never_auto_reply.exempt_peers 含客户侧账号（两方都是本租户账号，否则硬名单 colleague 拦掉 A/B 两线）；顶栏 AI 值守须「值守中」（l2_autosend.deliver=true）。",
+      "batch": 3,
+      "format": "tutorial",
+      "persona": "阿杰",
+      "job": "独立站卖家 · 一人公司",
+      "company": "深圳出海电商",
+      "platform": "telegram",
+      "stage": "TG_ES",
+      "stages": ["TG_ES", "TG_GROUP"],
+      "lang_pair": "es→zh",
+      "out_lang": "es",
+      "trigger": "六步开全自动：来信自己回、用客户的语言发出去、随时接管",
+      "title": "全自动回复：怎么开，怎么停",
+      "hook": "你走开，单还在回",
+      "features": [
+        "translate",
+        "auto_reply",
+        "mode"
+      ],
+      "beats": [
+        "incoming",
+        "modes_overview",
+        "standby_pill",
+        "persona_card",
+        "xlate_quick_on",
+        "kb_preview",
+        "mode_switch_auto",
+        "ai_diag",
+        "incoming_live_1",
+        "wait_outbound",
+        "incoming_live_2",
+        "wait_outbound",
+        "urgent_filter",
+        "incoming_wholesale",
+        "takeover",
+        "type_send",
+        "assert_quiet",
+        "group_guard"
+      ],
+      "music": "seller_es",
+      "chorus": "lyrics/P1_chorus.txt",
+      "chorus_take": "P1_chorus",
+      "narr_voice": "zh-CN-YunyangNeural",
+      "duration_range": [200, 360],
+      "card_label": "智聊教学 · 全自动回复",
+        "utm": "utm_campaign=persona-f1-autoreply",
+        "feed_date": "2026-09-19T12:00:00.000Z",
+      "en": {
+        "job": "Solo DTC store owner",
+        "title": "Full-auto replies: how to turn it on, how to take over",
+        "hook": "Walk away — the orders still get answered",
+        "trigger": "Six steps to full-auto: inbound answered in the customer's language, take over any time"
+      },
+      "persona_demo": {
+        "ref": "P1",
+        "_doc": "复用 P1 的 demo_ajie_dtc（中文起草 + 出站钉 es + 店铺数字口径）；绑定/解绑/删除同 P1。"
+      },
+      "kb_demo_entry": {
+        "_doc": "第四步「常问的写进知识库」只做斜杠预览、不发（send=preview），录完即删。",
+        "title": "拉美物流与付款说明",
+        "category": "常规咨询",
+        "triggers": [
+          "物流",
+          "付款",
+          "运费",
+          "envío",
+          "pago",
+          "tarjeta"
+        ],
+        "example_reply_zh": "发智利、墨西哥、哥伦比亚等拉美国家走专线，7–10 天送达，今天下单包邮。支持 Visa / Mastercard / PayPal 付款，付款后 24 小时内发出，发出后给你物流单号。"
+      },
+      "sla_demo": {
+        "ref": "P3",
+        "_doc": "全景段「超时 / 需人工照样举手」复用 P3 三行演示来信；录完硬删。"
+      },
+      "auto_reply_gate": {
+        "_doc": "gate_persona 对 wait_outbound 记录的出站正文核数字与禁词（不核逐字，LLM 措辞会变）。any=至少命中一项；forbid=中文原稿不得含。",
+        "any": ["39.9", "39,9", "7-10", "7–10", "7 a 10", "7 y 10", "PayPal", "Visa"],
+        "forbid": ["稍后", "等我确认", "马上发你"]
+      },
+      "status": "draft"
+    },
+    {
+      "id": "F2",
+      "_doc": "F2 把微信接进智聊（3 分钟教学）。主线：个人微信没有官方接口 → 智聊「PC 副驾」读你电脑上已登录的微信（不碰协议、不经手密码、默认只读）→ 引导页三步：连接电脑微信（环境体检全绿）→ 设置副驾档位（选半自动：只发你在工作台批准的回复）→ 启动并验证（副驾在线；发一条测试消息几秒后出现）→ 回收件箱：微信来信 AI 拟稿人审，稿等你批，不点发送不出去。舞台 WX_DEMO：来信走副驾入站桥注入（见舞台 _doc），全片零出站。录制前提：本机电脑微信 4.x 已登录且主窗口可见、副驾 online（record_persona.wx_env/wx_verify 红灯即中止不录）；档位改动录完还原（wx_restore + _cleanup 双保险）。",
+      "batch": 3,
+      "format": "tutorial",
+      "persona": "小周",
+      "job": "微信小店店主 · 保温杯",
+      "company": "义乌日用百货",
+      "platform": "wechat",
+      "stage": "WX_DEMO",
+      "lang_pair": "zh→zh",
+      "out_lang": "zh",
+      "trigger": "三步把电脑微信接进智聊：环境体检、选档位、发条测试消息；来信 AI 拟稿等你批",
+      "title": "把微信接进智聊：三步，不碰密码",
+      "hook": "微信客户，也进同一个收件箱",
+      "features": [
+        "wechat_connect",
+        "inbox"
+      ],
+      "beats": [
+        "inbox_platforms",
+        "guide_intro",
+        "env_check",
+        "tier_pick",
+        "tier_save",
+        "copilot_online",
+        "test_inbound",
+        "incoming",
+        "wait_draft",
+        "draft_review",
+        "restore"
+      ],
+      "music": "factory_sales",
+      "chorus": "lyrics/P2_chorus.txt",
+      "chorus_take": "P2_chorus",
+      "narr_voice": "zh-CN-YunxiNeural",
+      "duration_range": [110, 240],
+      "card_label": "智聊教学 · 接入微信",
+      "utm": "utm_campaign=persona-f2-wechat",
+      "feed_date": "2026-09-19T14:00:00.000Z",
+      "en": {
+        "job": "WeChat micro-store owner",
+        "title": "Connect WeChat to ChatX: three steps, no password",
+        "hook": "WeChat customers land in the same inbox",
+        "trigger": "Three steps to connect desktop WeChat: env check, pick a tier, send a test message; inbound gets an AI draft for your review"
+      },
+      "persona_demo": {
+        "_doc": "小周演示人设：会话级绑定到 WX_DEMO（账号级人设是老板在测的 Claire，不动）。口径写进 background（进 prompt）。录完解绑并删。",
+        "bind_stages": ["WX_DEMO"],
+        "profile": {
+          "id": "demo_xiaozhou_wx",
+          "name": "小周",
+          "enabled": true,
+          "kb_access": false,
+          "temper": "off",
+          "role": "义乌微信小店店主，卖保温杯和水壶，客户是微信上的熟人和熟人介绍",
+          "background": "你是「小周」，义乌一家微信小店的店主，卖保温杯和水壶，客户都是微信上的老熟人和熟人介绍，一律用中文聊。店铺口径（数字必须照抄，一个都不许改）：500ml 保温杯 89 元一个，两个 168 元；现货，今天下单明天发；顺丰包邮；付款走微信转账或收款码；7 天无理由退换。客户一问，第一句先直接回答他问的（有没有货 / 多少钱 / 几天到），把 89 / 168 元、明天发这类数字带上；第二句给一个下一步（如「要的话我把收款码发你」）。像微信聊天一样口语、短句，不超过两句。绝不说「稍后查一下 / 等我确认 / 马上发你」这类拖延话，不闲聊，不编造店里没有的商品或数字。",
+          "context": {
+            "specific_memories": [
+              "500ml 保温杯：89 元一个，两个 168 元，现货",
+              "今天下单明天发，顺丰包邮",
+              "付款：微信转账或收款码；7 天无理由退换"
+            ]
+          },
+          "tags": [
+            "微信",
+            "日用百货",
+            "演示"
+          ],
+          "personality": {
+            "traits": [
+              "热情",
+              "实在",
+              "利落"
+            ],
+            "style": "微信小店店主口吻，先答后给下一步，数字明确（89 / 168 元、明天发照抄），句子短",
+            "emoji_level": "low"
+          },
+          "speaking": {
+            "openers": [],
+            "forbidden_phrases": [
+              "亲~",
+              "宝贝",
+              "稍后",
+              "等我确认",
+              "马上发你"
+            ],
+            "max_reply_sentences": 2,
+            "language_follow": false
+          },
+          "identity": {
+            "deny_ai": false,
+            "claim_human": false
+          },
+          "boundaries": {
+            "topics_to_avoid": [
+              "政治",
+              "成人内容"
+            ],
+            "escalation_phrases": []
+          },
+          "voice_profile": {
+            "enabled": false
+          },
+          "capabilities": {
+            "photos": false,
+            "video_call": false
+          }
+        }
+      },
+      "draft_gate": {
+        "_doc": "gate_persona 对 wait_draft 记录的待审草稿核数字与禁词（只拟稿不发，所以核的是稿不是出站）。any=至少命中一项；forbid=稿里不得含。",
+        "any": ["168", "89", "顺丰", "明天发", "现货"],
+        "forbid": ["稍后", "等我确认", "马上发你"]
+      },
+      "status": "draft"
+    }
+  ]
+}

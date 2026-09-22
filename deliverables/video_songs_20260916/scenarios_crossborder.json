@@ -1,0 +1,22 @@
+{
+  "_doc": "下一批场景：跨境询盘（公域）。承接 scenarios_nurture 体例。",
+  "series": "crossborder",
+  "public_label": "跨境电商客服",
+  "cta_default": "免费开始 · 搜 bd2026.cc",
+  "utm_prefix": "utm_campaign=crossborder",
+  "episodes": [
+    {
+      "id": "C1",
+      "title": "凌晨三点，外语询盘它在回",
+      "hook": "你睡着，询盘已被接住",
+      "features": ["translate", "ai_reply"],
+      "seed": "BOUNDLESS",
+      "status": "shipped",
+      "rap": "lyrics/C1_rap.txt",
+      "intro": "lyrics/C1_intro.txt",
+      "picked_take": 472,
+      "output": "out/C1/C1_h472_episode.mp4",
+      "vertical": "out/C1/C1_h472_vertical_cut.mp4"
+    }
+  ]
+}

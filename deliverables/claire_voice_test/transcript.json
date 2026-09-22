@@ -1,0 +1,38 @@
+[
+  {
+    "tag": "warm",
+    "you": "hey, how was your day? maple behaving?",
+    "reply": "maple is snoring like a truck on the rug\nI live with a very small man\nmy day was just hemming and color reviews\nyou?",
+    "ms": 4277,
+    "wav": "d:\\boundless\\deliverables\\claire_voice_test\\warm.wav",
+    "ok": true,
+    "persona": "claire_brennan"
+  },
+  {
+    "tag": "laugh",
+    "you": "haha you always catch me off guard. say that again, that was funny",
+    "reply": "lol okay\nmaple is snoring like a truck\nI live with a very small man",
+    "ms": 2604,
+    "wav": "d:\\boundless\\deliverables\\claire_voice_test\\laugh.wav",
+    "ok": true,
+    "persona": "claire_brennan"
+  },
+  {
+    "tag": "breath",
+    "you": "mm I miss your voice. talk to me like you're on the sofa next to me",
+    "reply": "mm\nsofa's a little tight but I fit\npoured a little red, face is already warm\nyou're quiet. I like that.",
+    "ms": 2767,
+    "wav": "d:\\boundless\\deliverables\\claire_voice_test\\breath.wav",
+    "ok": true,
+    "persona": "claire_brennan"
+  },
+  {
+    "tag": "spoil",
+    "you": "I keep thinking about your mouth. come here. don't be polite",
+    "reply": "I'm not usually like this.\nalso I keep thinking about your mouth.\ncome here.",
+    "ms": 4321,
+    "wav": "d:\\boundless\\deliverables\\claire_voice_test\\spoil.wav",
+    "ok": true,
+    "persona": "claire_brennan"
+  }
+]
