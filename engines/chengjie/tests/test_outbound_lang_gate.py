@@ -199,15 +199,19 @@ async def test_target_unknown_uses_outbound_history_reference():
 
 
 @pytest.mark.asyncio
-async def test_target_unknown_no_reference_blind_send_counted():
+async def test_target_unknown_no_reference_holds_and_counted():
+    # D-M3（2026-09-06）：目标语言五级全无 → HOLD 转人工，不再盲发原文；
+    # 计 held_lang_unknown（此前该埋点不在 _OUTCOMES 里被静默丢弃 → 零观测）
     ts = _FakeTS(_FakeRes("x"), detect="")
     store = _HistStore([{"direction": "in", "text": "😊"}], language="")
+    item = {"conversation_id": "c5", "text": "你好呀朋友"}
     out = await translate_outbound_text(
-        {"conversation_id": "c5", "text": "你好呀朋友"},
-        translation_service=ts, store=store, source_lang="zh", gate_only=True)
-    assert out == "你好呀朋友"                     # 零参照 → 放行（可能真是中文客户）
+        item, translation_service=ts, store=store, source_lang="zh", gate_only=True)
+    assert out is None
     assert ts.calls == []
-    assert get_outbound_lang_stats().dump()["no_target_sent"] == 1
+    assert (item.get("_xlate_hold") or {}).get("reason") == "lang_unknown"
+    d = get_outbound_lang_stats().dump()
+    assert d["held_lang_unknown"] == 1 and d["no_target_sent"] == 0
 
 
 def test_vote_language_direction_out():

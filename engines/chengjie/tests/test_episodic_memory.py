@@ -98,6 +98,24 @@ def test_ai_inferred_mark_takes_precedence(mem_db: EpisodicMemoryStore):
     assert "无原话溯源" not in out
 
 
+def test_stated_only_drops_ai_inferred_rows(mem_db: EpisodicMemoryStore):
+    # P2 #341：主动/关怀链 stated_only=True → AI 推断整行不出（不是标注，是不出）
+    uid = "u341"
+    assert mem_db.add_fact(uid, "在学吉他", source="user_stated",
+                           source_quote="我最近在学吉他") is not None
+    assert mem_db.add_fact(uid, "客户的妈妈在装修", source="ai_inferred") is not None
+    full = mem_db.get_bullets_for_prompt(uid)
+    assert "在学吉他" in full and "装修" in full and "AI推断" in full
+    stated = mem_db.get_bullets_for_prompt(uid, stated_only=True)
+    assert "在学吉他" in stated and "装修" not in stated and "AI推断" not in stated
+    txt, ids = mem_db.get_bullets_with_ids(uid, stated_only=True)
+    assert txt == stated and len(ids) == 1
+    # 只剩推断条目 → 整块为空，而不是退回全量
+    assert mem_db.get_bullets_for_prompt("u341b", stated_only=True) == ""
+    assert mem_db.add_fact("u341b", "喜欢咖啡", source="ai_inferred") is not None
+    assert mem_db.get_bullets_for_prompt("u341b", stated_only=True) == ""
+
+
 def test_extract_prompt_pins_direction_rules():
     """#96-B 抽取 prompt 方向/主语铁律接线钉（措辞可改，语义锚不许丢）。"""
     import inspect

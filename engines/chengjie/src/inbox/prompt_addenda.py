@@ -323,10 +323,20 @@ def time_schedule_addendum(
     return "【当地时间与今日日程】" + "".join(lines)
 
 
+# P2-4：落空话术按触发源区分——我方先开口（offer 被接 / 承诺过要发）却没货，
+# 得**认账**（是我说要发的），不能装成 TA 凭空索图那样轻轻带过。
+_MISS_OWED_TRIGGERS = frozenset({"offer_accept", "commitment"})
+
+
 def album_miss_addendum(
     scene: Any, *, lang: str = "zh", conv_key: str = "", inbound: str = "",
+    trigger: str = "",
 ) -> str:
     """无匹配回喂。scene 空仍给一句（索图但完全没图）；调用方决定是否调用。
+
+    ``trigger``（P2-4）：``offer_accept`` / ``commitment`` = 我方先说要发、TA 答应了 /
+    我方承诺过——落空话术改为**认账**：坦白「我说要发的那张现在没找到合适的」，
+    不许装作 TA 凭空索图般带过，更不许把责任推给 TA；其余触发源沿用自然婉拒。
 
     Q-20 D：相册为空 / 无匹配**但 30 分钟内我方刚发过一张**（多半是人工手发、不在相册）
     → 「无可用照片…只许拒绝」改为「刚发过一张（描述）：TA 问是不是你就认领；要新的照片才按
@@ -334,6 +344,7 @@ def album_miss_addendum(
     ``image_autosend.bound_prompt_conv`` 桥。"""
     sc = str(scene or "").strip() or "照片"
     lg = str(lang or "zh").lower()
+    owed = str(trigger or "").strip().lower() in _MISS_OWED_TRIGGERS
     claim = _recent_media_claim(conv_key, lg, inbound)
     if claim:
         if lg.startswith("en"):
@@ -345,6 +356,21 @@ def album_miss_addendum(
                     "やわらかく断る——それでも「写真は送れない / 機能がない」「送った / 読み込み中 / あとで」は禁止。")
         return (claim + " 如果 TA 要的是**另一张新照片**（别的场景），就说现在没有合适的、"
                 "轻轻带过——照样禁止说「不能发图 / 没这个功能」，禁止说已经发了、加载中、稍后发。")
+    if owed:
+        if lg.startswith("en"):
+            return (
+                f"【no album photo (scene {sc}) — you offered/promised it】You brought up "
+                "sending this photo yourself and there is no matching one. Own it in one "
+                "honest line (\"I said I'd send one but I don't have a good one right now\"), "
+                "then move on. Never act as if TA asked out of the blue, never blame TA. "
+                "Forbidden: already sent / still loading / try again / forgot / I'll send it later."
+            )
+        return (
+            f"【无可用照片（场景 {sc}）· 是你先说要发的】这张照片是你主动提的 / 承诺过的，"
+            "但相册里没有能展示这个场景的图。要**认账**：一句话坦白「说要发的那张现在没找到合适的」，"
+            "然后自然带过。禁止装作是 TA 凭空索图、禁止把责任推给 TA；"
+            "禁止说已经发了、加载中、再试、忘了、稍后发。"
+        )
     if lg.startswith("en"):
         return (
             f"【no album photo (scene {sc})】There is no matching photo. "

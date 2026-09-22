@@ -167,11 +167,13 @@ def _prompt_addenda(
             if row is None:
                 miss = True
                 if ck:
-                    note_album_miss(ck, inbound, scene)
+                    note_album_miss(ck, inbound, scene, trigger=_gate.trigger)
         elif pending:
             miss = True
         if miss:
-            block = album_miss_addendum(scene, lang=lang)
+            _trig = (str(_gate.trigger or "") if _gate.intent else "") or \
+                str((pending or {}).get("trigger") or "")
+            block = album_miss_addendum(scene, lang=lang, trigger=_trig)
             if block:
                 chunks.append(block)
     except Exception:

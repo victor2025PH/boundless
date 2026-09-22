@@ -11,6 +11,10 @@
                         但持续增长说明有会话在无判定依据地发中文，值得看一眼）
   - ``complaint``       客户语言困惑/抱怨检出（P3-198：错语言语境下的「看不懂/??」
                         ——客户已被伤到的**结果面**信号，覆盖闸门管不到的错配类）
+  - ``held_lang_unknown`` 目标语言五级全无 → HOLD 转人工（D-M3 拆「盲发原文」后的
+                        替代信号；``no_target_sent`` 仅存量兼容，新代码不再产生）
+  - ``medium_confidence`` 译文放行但置信分落在 [TIER_LOW, TIER_HIGH)（P1 #343 抽样，
+                        不拦发；``by_target`` 分桶抬升 = 引擎在该语种摇摆）
 
 风格对齐 ``src/web/frontend_error_stats.py``：无新增依赖、线程安全、进程级单例、
 只存计数与消毒后的会话号（不存消息内容）。经 ``dump()`` →
@@ -26,9 +30,12 @@ import time
 from collections import deque
 from typing import Any, Deque, Dict, Optional
 
-# medium_confidence：译文放行但确定性置信分落在 [TIER_LOW, TIER_HIGH)（P1 #343 抽样监控，
-# 不拦发；抬升说明引擎在该目标语上摇摆，该收 min_confidence / 换引擎）。
-_OUTCOMES = ("held", "rescued", "no_target_sent", "complaint", "medium_confidence")
+_OUTCOMES = ("held", "rescued", "no_target_sent", "complaint",
+             "held_lang_unknown", "medium_confidence")
+# 按目标语再分一层桶（P2 #343）：只对「引擎在哪种语言上摇摆」有意义的两类记——
+# 直接回答「是不是 hi/bn/ta 在抖」，不用翻 last_events。
+_BY_TARGET_OUTCOMES = ("held", "medium_confidence")
+_BY_TARGET_CAP = 32
 _LAST_EVENTS_CAP = 8
 _CONV_ID_MAX = 80
 
@@ -39,6 +46,7 @@ class OutboundLangStats:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._counts: Dict[str, int] = {k: 0 for k in _OUTCOMES}
+        self._by_target: Dict[str, Dict[str, int]] = {}
         self._last_events: Deque[Dict[str, Any]] = deque(maxlen=_LAST_EVENTS_CAP)
 
     def record(
@@ -48,8 +56,14 @@ class OutboundLangStats:
         if key not in _OUTCOMES:
             return
         cid = str(conversation_id or "")[:_CONV_ID_MAX]
+        tgt = str(target or "").strip().lower()[:16]
         with self._lock:
             self._counts[key] += 1
+            if key in _BY_TARGET_OUTCOMES and tgt and (
+                    tgt in self._by_target or len(self._by_target) < _BY_TARGET_CAP):
+                row = self._by_target.setdefault(
+                    tgt, {k: 0 for k in _BY_TARGET_OUTCOMES})
+                row[key] += 1
             self._last_events.append({
                 "ts": time.time(),
                 "outcome": key,
@@ -60,12 +74,14 @@ class OutboundLangStats:
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             out: Dict[str, Any] = dict(self._counts)
+            out["by_target"] = {t: dict(r) for t, r in self._by_target.items()}
             out["last_events"] = list(self._last_events)
             return out
 
     def dump_prom(self) -> str:
         with self._lock:
             counts = dict(self._counts)
+            by_t = {t: dict(r) for t, r in self._by_target.items()}
         lines = [
             "# HELP outbound_lang_gate_total 出站语言硬闸事件累计（按结果分桶）",
             "# TYPE outbound_lang_gate_total counter",
@@ -73,11 +89,22 @@ class OutboundLangStats:
         for k in _OUTCOMES:
             lines.append(
                 'outbound_lang_gate_total{outcome="%s"} %d' % (k, counts.get(k, 0)))
+        if by_t:
+            lines += [
+                "# HELP outbound_lang_gate_target_total 出站语言硬闸事件（按目标语×结果）",
+                "# TYPE outbound_lang_gate_target_total counter",
+            ]
+            for t in sorted(by_t):
+                for k in _BY_TARGET_OUTCOMES:
+                    lines.append(
+                        'outbound_lang_gate_target_total{outcome="%s",target="%s"} %d'
+                        % (k, t, by_t[t].get(k, 0)))
         return "\n".join(lines) + "\n"
 
     def reset_for_tests(self) -> None:
         with self._lock:
             self._counts = {k: 0 for k in _OUTCOMES}
+            self._by_target = {}
             self._last_events.clear()
 
 

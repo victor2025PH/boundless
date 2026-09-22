@@ -1616,6 +1616,7 @@ class EpisodicMemoryStore:
         recency_weight: float = 0.10,
         recency_half_life_days: float = 30.0,
         age_hints: bool = True,
+        stated_only: bool = False,
     ) -> str:
         """Newline bullets; optional vector+keyword fusion when query_embedding set.
 
@@ -1626,6 +1627,11 @@ class EpisodicMemoryStore:
         没有年龄的 bullet 会被 LLM 当成「现在时」（「那里正在下大雨」三周后仍被当
         实时状态复述），标注后陈旧事实反而成为自然回访素材（「上次你说下雨…」）。
         stable 层是巩固过的无时效结论（爱好/身份），不标注；48h 内新鲜事实不标注。
+
+        ``stated_only``（P2 #341）：只回 ``user_stated`` 条目，``ai_inferred`` 整行不出——
+        主动 / 关怀这类**我方先开口**的链没有客户当前消息可对质，AI 推断只配当被动
+        回复的背景（带「AI推断」标注），不配被主动陈述（与 ``proactive_topic._eligible_facts``
+        同纪律）。默认关 → 行为与旧版一致。
         """
         return self.get_bullets_with_ids(
             user_id, max_items, max_chars, query_text=query_text,
@@ -1634,6 +1640,7 @@ class EpisodicMemoryStore:
             keyword_weight=keyword_weight, use_salience_rerank=use_salience_rerank,
             salience_weight=salience_weight, recency_weight=recency_weight,
             recency_half_life_days=recency_half_life_days, age_hints=age_hints,
+            stated_only=stated_only,
         )[0]
 
     def get_bullets_with_ids(
@@ -1652,6 +1659,7 @@ class EpisodicMemoryStore:
         recency_weight: float = 0.10,
         recency_half_life_days: float = 30.0,
         age_hints: bool = True,
+        stated_only: bool = False,
     ) -> Tuple[str, List[int]]:
         """同 :meth:`get_bullets_for_prompt`，另回**实际注入的行 id 列表**（顺序＝bullet 顺序）。
 
@@ -1671,6 +1679,8 @@ class EpisodicMemoryStore:
 
         # J-10 A2：软删（ignored）不召回；与 stable 冲突待人选的新条不召回
         # （stable 那条仍在——不自动覆盖、也不让 prompt 里出现两个互相矛盾的事实）
+        _src_cond = (" AND COALESCE(source, 'user_stated') != 'ai_inferred'"
+                     if stated_only else "")
         rows = self._conn.execute(
             """
             SELECT content, embedding, created_at, salience, tier,
@@ -1679,6 +1689,7 @@ class EpisodicMemoryStore:
               AND COALESCE(tier, 'raw') != 'stale'
               AND COALESCE(status, 'active') = 'active'
               AND COALESCE(review_reason, '') != 'conflict'
+            """ + _src_cond + """
             ORDER BY created_at DESC LIMIT ?
             """,
             (user_id, fetch_n),

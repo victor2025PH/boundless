@@ -189,6 +189,10 @@ async def test_medium_conf_delivers_but_is_sampled(_no_gap):
     assert int(stats.dump().get("medium_confidence", 0)) == before + 1
     ev = stats.dump().get("last_events") or []
     assert ev and ev[-1]["outcome"] == "medium_confidence" and ev[-1]["target"] == "hi"
+    # P2：按目标语分桶——直接回答「是不是 hi 在抖」
+    assert stats.dump()["by_target"]["hi"]["medium_confidence"] >= 1
+    assert ('outbound_lang_gate_target_total{outcome="medium_confidence",target="hi"}'
+            in stats.dump_prom())
     # 高置信 / 未评分 → 不计
     for conf in (0.97, -1.0):
         ts2 = _TS(_Res(HI, provider="ai", confidence=conf))

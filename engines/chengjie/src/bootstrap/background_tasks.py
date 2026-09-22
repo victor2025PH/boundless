@@ -156,7 +156,9 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                     out["persona_line"] = seg[:160]
             except Exception:
                 assistant.logger.debug("care persona 增强失败（忽略）", exc_info=True)
-            # ② episodic 记忆要点（按约定主题重排相关性；memory_in_prompt 默认开）
+            # ② episodic 记忆要点（按约定主题重排相关性；memory_in_prompt 默认开）。
+            # P2 #341：关怀是我方先开口，只拿 user_stated（memory_stated_only 默认开）——
+            # AI 推断条目不配被主动陈述，与 proactive_topic._eligible_facts 同纪律。
             try:
                 if bool(cfg_live.get("memory_in_prompt", True)):
                     sm = assistant.skill_manager
@@ -168,7 +170,9 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                         out["memory_block"] = (epi.get_bullets_for_prompt(
                             mkey, max_items=5, max_chars=400,
                             query_text=(topic or None),
-                            rerank_keywords=bool(topic)) or "").strip()
+                            rerank_keywords=bool(topic),
+                            stated_only=bool(cfg_live.get(
+                                "memory_stated_only", True))) or "").strip()
             except Exception:
                 assistant.logger.debug("care 记忆增强失败（忽略）", exc_info=True)
             # ③ 工作目标背景（实施84 care×goal 打通的 P0 面；goal_hint 默认开，

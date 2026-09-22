@@ -941,7 +941,8 @@ _ALBUM_MISS: Dict[str, Dict[str, Any]] = {}
 _ALBUM_MISS_LOCK = threading.Lock()
 
 
-def note_album_miss(conv_key: str, query: str = "", scene: str = "") -> None:
+def note_album_miss(conv_key: str, query: str = "", scene: str = "",
+                    trigger: str = "") -> None:
     ck = str(conv_key or "").strip()
     if not ck:
         return
@@ -949,6 +950,7 @@ def note_album_miss(conv_key: str, query: str = "", scene: str = "") -> None:
         _ALBUM_MISS[ck] = {
             "query": str(query or "")[:120],
             "scene": str(scene or "")[:80],
+            "trigger": str(trigger or "")[:24],
             "ts": time.time(),
         }
 
@@ -1213,7 +1215,8 @@ def pick_registered_media(
     _note_last_match(str(conv_key or ""), int(_trace.get("start") or 0), _picked)
     if row is None and _ask:
         note_album_miss(str(conv_key or ""), str(peer_text or ""),
-                        _scene_kind or _scene_cls or "")
+                        _scene_kind or _scene_cls or "",
+                        trigger=str(getattr(intent_gate, "trigger", "") or ""))
         # Q-35 #306（BPMEWX）：坐席侧可见——AI 侧已改口（上面那条 + album_miss_addendum），
         # 但状态带一字不见，用户只会问「后台传了很多图为什么不发」。旁路记一条持久 note
         # （conv_state 第七只读源 → 琥珀「相册没有匹配『自拍』的图 · AI 已改口 · 去相册补标签」）。

@@ -82,3 +82,19 @@ def test_album_miss_addendum_forbids_delay_and_lies():
     s = album_miss_addendum("风景")
     assert "无可用照片（场景 风景）" in s
     assert "稍后发" in s and "加载中" in s
+    assert "认账" not in s
+
+
+def test_album_miss_addendum_owed_triggers_own_the_promise():
+    # P2-4：offer 被接 / 承诺过要发 → 落空话术要认账，不许装作 TA 凭空索图
+    for trig in ("offer_accept", "commitment"):
+        s = album_miss_addendum("自拍", trigger=trig)
+        assert "是你先说要发的" in s and "认账" in s
+        assert "稍后发" in s and "加载中" in s and "已经发了" in s
+        e = album_miss_addendum("selfie", lang="en", trigger=trig)
+        assert "you offered/promised it" in e and "Own it" in e
+        assert "I'll send it later" in e
+    # 普通索图 / 关键词 / 指令 / 空：沿用自然婉拒
+    for trig in ("ask", "keyword", "directive", "", None):
+        s = album_miss_addendum("自拍", trigger=trig)
+        assert "认账" not in s and "无可用照片（场景 自拍）】" in s

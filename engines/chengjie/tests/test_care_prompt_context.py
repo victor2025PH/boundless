@@ -81,9 +81,12 @@ def test_build_prompt_with_extras_and_without_is_backward_compatible():
     base = build_care_prompt(item, context_block="ctx", now=NOW)
     enriched = build_care_prompt(
         item, context_block="ctx", now=NOW,
-        persona_line="沉稳大方", memory_block="- 喜欢喝美式",
+        persona_line="沉稳大方",
+        memory_block="- 上次面试前很紧张\n- 喜欢喝美式",
         goal_block="【工作目标背景】推进复购。")
-    assert "沉稳大方" in enriched and "美式" in enriched and "复购" in enriched
+    assert "沉稳大方" in enriched and "面试前很紧张" in enriched and "复购" in enriched
+    # J-8 #182：与事件无关的记忆条目被相关性过滤掉，不硬塞进话术
+    assert "美式" not in enriched
     # 无增强时与旧口径等价（不含增强节标题）
     assert "你的说话风格" not in base
     assert "你记得的关于对方的事" not in base
@@ -97,7 +100,8 @@ async def test_dispatcher_passes_extras_into_prompt():
 
     def _extras(item):
         calls.append(dict(item))
-        return {"persona_line": "俏皮活泼", "memory_block": "- 下月去东京",
+        return {"persona_line": "俏皮活泼",
+                "memory_block": "- 面试想去东京的公司\n- 下月去东京",
                 "goal_block": "【工作目标背景】推进订阅。"}
 
     d = CareDispatcher(store=s, ai_client=ai, send_callback=_sender([]),
@@ -105,7 +109,8 @@ async def test_dispatcher_passes_extras_into_prompt():
                        prompt_extras_provider=_extras)
     assert await d.run_once(now=NOW) == 1
     p = ai.prompts[0]
-    assert "俏皮活泼" in p and "东京" in p and "推进订阅" in p
+    assert "俏皮活泼" in p and "面试想去东京" in p and "推进订阅" in p
+    assert "下月去东京" not in p  # J-8 相关性过滤：无关记忆不注入
     assert calls and calls[0].get("topic") == "面试"  # provider 拿到整行
 
 
