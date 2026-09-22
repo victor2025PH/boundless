@@ -73,7 +73,11 @@ foreach ($t in $tasks) {
     if (($benign -notcontains $rc) -and (-not $runRefused)) {
         $failed += ("{0}=rc{1}(@{2:MM-dd HH:mm})" -f $t.TaskName, $rc, $info.LastRunTime)
     }
+    # 「超期」只对有时间类触发器（Time/Daily/Weekly/Monthly）的任务有意义；仅登录/开机/事件
+    # 触发的任务（173 的 BoundlessDesktopAgent/Lively/Xiaojie 等 HUD 桌面任务）按设计一次登录
+    # 跑一次、常驻到注销，26h 不再触发是正常态——2026-09-22 实测它们让哨兵永远 rc=1、淹掉真告警。
     elseif ($StaleHours -gt 0 -and $info.LastRunTime -and $info.LastRunTime -gt [datetime]'2000-01-01' `
+            -and (@($t.Triggers | Where-Object { $_.CimClass.CimClassName -match 'Time|Daily|Weekly|Monthly' }).Count -gt 0) `
             -and ((Get-Date) - $info.LastRunTime).TotalHours -gt $StaleHours) {
         $failed += ("{0}=超期({1:MM-dd HH:mm} 未再跑)" -f $t.TaskName, $info.LastRunTime)
     }
