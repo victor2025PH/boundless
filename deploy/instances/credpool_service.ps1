@@ -107,7 +107,8 @@ if ($InstallTask) {
     $trigger.Delay = 'PT1M'
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable `
-        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2)
+        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero)
     # S4U：无人登录也起（默认 Interactive 主体的开机触发要等该用户登录才真的跑）。
     # 本机账户用 WindowsIdentity 取 MACHINE\user——SSH 会话里 $env:USERDOMAIN 可能是 WORKGROUP。
     $principal = New-ScheduledTaskPrincipal `

@@ -214,8 +214,12 @@ def install_task() -> int:
           "-RepetitionInterval (New-TimeSpan -Minutes 5);"
           "$s=New-ScheduledTaskSettingsSet -StartWhenAvailable "
           "-MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10);"
+          # S4U：无人登录也跑（默认 Interactive 主体只在该用户登录时触发）
+          "$p=New-ScheduledTaskPrincipal "
+          "-UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) "
+          "-LogonType S4U -RunLevel Limited;"
           f"Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t "
-          "-Settings $s -Description '中央凭据池看门狗（health + 真 allocate 探针）' "
+          "-Settings $s -Principal $p -Description '中央凭据池看门狗（health + 真 allocate 探针）' "
           "-Force | Out-Null;"
           f"Write-Host '已注册 {TASK_NAME}（每 5 分钟）'")
     return subprocess.call(["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps])
