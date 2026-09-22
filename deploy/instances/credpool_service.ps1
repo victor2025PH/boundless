@@ -104,12 +104,18 @@ if ($InstallTask) {
         -Argument ('/c ' + $inner) `
         -WorkingDirectory (Split-Path -Parent $PSScriptRoot)
     $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = 'PT1M'
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2)
+    # S4U：无人登录也起（默认 Interactive 主体的开机触发要等该用户登录才真的跑）。
+    # 本机账户用 WindowsIdentity 取 MACHINE\user——SSH 会话里 $env:USERDOMAIN 可能是 WORKGROUP。
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+        -LogonType S4U -RunLevel Highest
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-        -Settings $settings -RunLevel Highest -Force | Out-Null
-    Write-Host "[credpool] 已注册开机自启：$TaskName（开机后自动 serve --port $Port）"
+        -Settings $settings -Principal $principal -Force | Out-Null
+    Write-Host "[credpool] 已注册开机自启：$TaskName（S4U，开机后 1 分钟自动 serve --port $Port）"
     Show-Status
     exit 0
 }
