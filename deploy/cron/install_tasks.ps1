@@ -147,6 +147,9 @@ $plans = @()
 if ('uploader' -in $Tasks) {
     foreach ($sp in $spools) {
         $suffix = if ($spools.Count -gt 1) { '-' + (Root-Tag $sp) } else { '' }
+# 本机账户用 WindowsIdentity 取 MACHINE\user：SSH/非交互会话里 $env:USERDOMAIN 可能是 WORKGROUP，注册 S4U 主体会报 "No mapping between account names and security IDs"
+$currentAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
         $plans += [pscustomobject]@{
             Name        = "Boundless-$Engine-uploader$suffix"
             Kind        = 'repeat'
@@ -333,9 +336,9 @@ foreach ($plan in $plans) {
     $log = Join-Path $LogDir ($plan.Name + '.log')
     $forceS4U = ($plan.PSObject.Properties['ForceS4U'] -and $plan.ForceS4U)
     $acctDesc = if ($forceS4U) {
-        "$env:USERDOMAIN\$env:USERNAME（S4U 不存密码, Highest；watchdog 固定本账户——引擎继承其身份，不吃 -RunAs）"
+        "$currentAccount（S4U 不存密码, Highest；watchdog 固定本账户——引擎继承其身份，不吃 -RunAs）"
     } elseif ($RunAs -eq 'SYSTEM') { 'NT AUTHORITY\SYSTEM（ServiceAccount, Highest）' }
-    else { "$env:USERDOMAIN\$env:USERNAME（S4U 不存密码, Limited）" }
+    else { "$currentAccount（S4U 不存密码, Limited）" }
     Write-Host ''
     Write-Host ("── 任务 {0}/{1} ─ {2} ──────────────────────────────" -f $i, $plans.Count, $plan.Name)
     Write-Host ("  文件夹   {0}" -f $TaskPath)
@@ -375,11 +378,11 @@ foreach ($plan in $plans) {
             -ExecutionTimeLimit (New-TimeSpan -Hours 1)
         $principal = if ($forceS4U) {
             # watchdog 专用：装机用户 S4U + Highest（引擎继承其账户；Highest 才能 taskkill 提权进程）
-            New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Highest
+            New-ScheduledTaskPrincipal -UserId "$currentAccount" -LogonType S4U -RunLevel Highest
         } elseif ($RunAs -eq 'SYSTEM') {
             New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         } else {
-            New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+            New-ScheduledTaskPrincipal -UserId "$currentAccount" -LogonType S4U -RunLevel Limited
         }
         New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
         Register-ScheduledTask -TaskName $plan.Name -TaskPath $TaskPath -Action $action `
