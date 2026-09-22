@@ -244,10 +244,11 @@ if ('watchdog' -in $Tasks) {
         Name        = "Boundless-$Engine-watchdog"
         Kind        = 'repeat'
         Minutes     = $WatchdogEveryMinutes
-        TriggerDesc = "每 $WatchdogEveryMinutes 分钟（-Once 起点 + Repetition，持续 3650 天）"
+        TriggerDesc = "每 $WatchdogEveryMinutes 分钟（-Once 起点 + Repetition，持续 3650 天）+ 开机后 2 分钟（-AtStartup，Delay PT2M）"
         Wrapper     = $wdScript
         WrapperArgs = $commonArgs.Trim()
         ForceS4U    = $true
+        BootTrigger = $true
         Checks      = @(@{ desc = "成套脚本 deploy\instances\{status,start_zhiliao,start_tongyi,stop_instance}.ps1"
                            ok   = ((Test-Path (Join-Path $instDir 'status_instances.ps1')) -and
                                    (Test-Path (Join-Path $instDir 'start_zhiliao.ps1')) -and
@@ -362,6 +363,14 @@ foreach ($plan in $plans) {
             'weekly' { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At $KpiWeeklyAt }
             default  { New-ScheduledTaskTrigger -Daily -At $ExportDailyAt }
         }
+        $triggers = @($trigger)
+        if ($plan.PSObject.Properties['BootTrigger'] -and $plan.BootTrigger) {
+            # 开机触发（S4U 不依赖交互登录）：等网络/服务就位 2 分钟再探，把开机后首轮自愈从
+            # 「≤1 个节拍」提前到固定 2 分钟；watchdog 本身幂等（活着就不碰），双触发不会叠拉
+            $boot = New-ScheduledTaskTrigger -AtStartup
+            $boot.Delay = 'PT2M'
+            $triggers += $boot
+        }
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Hours 1)
         $principal = if ($forceS4U) {
@@ -374,7 +383,7 @@ foreach ($plan in $plans) {
         }
         New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
         Register-ScheduledTask -TaskName $plan.Name -TaskPath $TaskPath -Action $action `
-            -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+            -Trigger $triggers -Settings $settings -Principal $principal -Force | Out-Null
         Say ("已注册: {0}{1}" -f $TaskPath, $plan.Name)
     } catch {
         Warn ("注册失败: {0} —— {1}（SYSTEM 账户/计划任务注册需管理员 PowerShell）" -f $plan.Name, $_.Exception.Message)
