@@ -100,6 +100,27 @@ def test_complaint_reverse_direction_zh_customer():
     assert detect_language_complaint("看不懂你发的什么", hist) == "confusion"
 
 
+def test_complaint_detail_exposes_customer_lang_for_by_target():
+    # P2-7：complaint 按客户语种分桶——detail 返回客户实际语种，未命中为空
+    from src.inbox.inbound_enrich import language_complaint_detail
+    from src.inbox.outbound_lang_stats import OutboundLangStats
+    hist = _hist(("user", "can you send me the script"),
+                 ("assistant", _A_WRONG_ZH))
+    assert language_complaint_detail("English please??", hist) == ("confusion", "en")
+    hist_zh = _hist(("user", "你在做什么呀今天"),
+                    ("assistant", "Sorry I was busy earlier, what's up my friend?"))
+    v, lang = language_complaint_detail("看不懂你发的什么", hist_zh)
+    assert v == "confusion" and lang.startswith("zh")
+    assert language_complaint_detail("i can't understand why she left",
+                                     _hist(("assistant", "ok see you"))) == ("", "")
+    st = OutboundLangStats()
+    st.record("complaint", conversation_id="whatsapp:a:x", target="EN")
+    st.record("complaint", conversation_id="whatsapp:a:y", target="")
+    d = st.dump()
+    assert d["complaint"] == 2 and d["by_target"]["en"]["complaint"] == 1
+    assert "outbound_lang_gate_target_total{outcome=\"complaint\",target=\"en\"} 1" in st.dump_prom()
+
+
 def test_complaint_requires_mismatch_context():
     # 语言一致 → 同样的句式绝不误报（说的是内容不是语言）
     hist_en = _hist(("user", "she left without a word"),

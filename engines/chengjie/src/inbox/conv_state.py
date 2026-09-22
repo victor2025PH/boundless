@@ -355,11 +355,15 @@ def _src_album_miss(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]
             return None
         ts = float(rec.get("ts") or 0.0)
         pid = str(rec.get("persona_id") or "")
+        trig = str(rec.get("trigger") or "")
+        # P2-6：AI 自己想发图（[PHOTO] 指令）落空 ≠ 客户要图落空——文案分开
+        key = ("inbox.cs.note.album_no_match_directive" if trig == "directive"
+               else "inbox.cs.note.album_no_match")
         return {"kind": "album_no_match", "query": str(rec.get("query") or ""),
                 "scene": str(rec.get("scene") or ""), "persona_id": pid,
                 "n": int(rec.get("n") or 1), "ts": ts, "hhmm": _hhmm(ts),
                 "ago_sec": round(max(0.0, now - ts), 0), "link": deep_link(pid),
-                "text_key": "inbox.cs.note.album_no_match"}
+                "trigger": trig, "text_key": key}
     except Exception:
         return None
 

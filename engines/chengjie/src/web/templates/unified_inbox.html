@@ -6945,7 +6945,7 @@ function _csRenderNotes(st){
     if(act){ act.hidden=true; act.textContent=''; }
     box.hidden=false; return;
   }
-  var cnt=Number(n.n||1), k=cnt>1?'inbox.cs.note.album_no_match_n':(String(n.text_key||'')||'inbox.cs.note.album_no_match');
+  var cnt=Number(n.n||1), tk=String(n.text_key||'')||'inbox.cs.note.album_no_match', k=(cnt>1&&tk==='inbox.cs.note.album_no_match')?'inbox.cs.note.album_no_match_n':tk;
   txt.textContent=window.Tf(k,{q:_csNoteQ(n),n:String(cnt),hhmm:String(n.hhmm||'--:--')});
   box.title=_csKeyOr('inbox.cs.note.album_no_match_t',''); box.dataset.kind='album_no_match'; box.dataset.pid=String(n.persona_id||'');
   if(act){ act.hidden=false; act.textContent=window.T('inbox.cs.note.album_go'); act.title=_csKeyOr('inbox.cs.note.album_go_t',''); act.disabled=false; }

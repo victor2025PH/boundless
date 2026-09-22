@@ -1622,6 +1622,15 @@ async def run_autosend_image(
             conv_key=ck)
         if not staged:
             record_image_fallback("directive_stage_failed")
+            # P2-6：AI 自己想发图却没货——客户没要图，AI 不必对客户改口（承诺由调用方
+            # promise 链撤回），但坐席得看见「AI 想发、没货」→ 复用状态带旁注，走 directive 文案。
+            if ck:
+                try:
+                    from src.inbox.album_miss_marker import mark as _album_miss_mark
+                    _album_miss_mark(str(ck), query=_d["scene"], scene=_d["scene"],
+                                     persona_id=str(persona_id or ""), trigger="directive")
+                except Exception:
+                    logger.debug("[image_autosend] album_miss_marker.mark 失败（忽略）", exc_info=True)
             return False
         local, url, kind, sinfo = staged
         # provider=album＝相册来源（后端直选或生成失败兜底两路都是；fallback_from

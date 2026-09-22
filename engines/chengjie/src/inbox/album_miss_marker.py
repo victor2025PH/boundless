@@ -63,8 +63,14 @@ def _parse(raw: Any) -> Optional[Dict[str, Any]]:
 
 
 def mark(cid: str, *, query: str = "", scene: str = "", persona_id: str = "",
-         store: Any = None, ts: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """写 / 累计 note。绝不抛；拿不到 store → None。"""
+         store: Any = None, ts: Optional[float] = None,
+         trigger: str = "") -> Optional[Dict[str, Any]]:
+    """写 / 累计 note。绝不抛；拿不到 store → None。
+
+    ``trigger``（P2-6）：落空的触发源。``directive`` = AI 自己在正文里想发图（[PHOTO] 指令）
+    但相册 / 生图都没货——这不是客户要图，坐席侧文案要说清「AI 想发、没货、承诺已撤」，
+    别让坐席去翻客户到底哪句话要了图。
+    """
     cid = str(cid or "").strip()
     if not cid:
         return None
@@ -80,6 +86,7 @@ def mark(cid: str, *, query: str = "", scene: str = "", persona_id: str = "",
         "query": str(query or "").replace("\n", " ").strip()[:80],
         "scene": str(scene or "")[:40],
         "persona_id": str(persona_id or "")[:64],
+        "trigger": str(trigger or "")[:24],
     }
     try:
         st.set_app_setting(_key(cid), json.dumps(rec, ensure_ascii=False), updated_by="album_miss")

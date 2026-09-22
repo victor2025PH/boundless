@@ -318,7 +318,9 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
         rows = [json.loads(l) for p in clean_ledger.glob("*.jsonl")
                 for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
         outs = {r["draft_id"]: r for r in rows if r.get("kind") == "outcome"}
-        assert outs[d_sent]["outcome"] == "sent" and outs[d_sent]["hold_reason"] == "stop_contact"
+        # R88：stop_contact 类别未锁定 → 主因改名 stop_contact_recorded（只记录不拦），影子台账照记
+        assert outs[d_sent]["outcome"] == "sent"
+        assert outs[d_sent]["hold_reason"] in ("stop_contact", "stop_contact_recorded")
         assert outs[d_cancel]["outcome"] == "cancelled" and outs[d_cancel]["reason"] == "send_blocked"
         assert outs[d_fail]["outcome"] == "delivery_failed"
         assert outs[d_fail]["reason"] == "gate:send_gate: kill_switch active"

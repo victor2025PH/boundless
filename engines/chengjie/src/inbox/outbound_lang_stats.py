@@ -10,7 +10,8 @@
   - ``no_target_sent``  CJK 文本盲发（客户证据 + 出站历史参照双缺位；不算事故，
                         但持续增长说明有会话在无判定依据地发中文，值得看一眼）
   - ``complaint``       客户语言困惑/抱怨检出（P3-198：错语言语境下的「看不懂/??」
-                        ——客户已被伤到的**结果面**信号，覆盖闸门管不到的错配类）
+                        ——客户已被伤到的**结果面**信号，覆盖闸门管不到的错配类；
+                        ``by_target`` 按客户语种分桶 = 哪个语种的客户在受伤）
   - ``held_lang_unknown`` 目标语言五级全无 → HOLD 转人工（D-M3 拆「盲发原文」后的
                         替代信号；``no_target_sent`` 仅存量兼容，新代码不再产生）
   - ``medium_confidence`` 译文放行但置信分落在 [TIER_LOW, TIER_HIGH)（P1 #343 抽样，
@@ -34,7 +35,8 @@ _OUTCOMES = ("held", "rescued", "no_target_sent", "complaint",
              "held_lang_unknown", "medium_confidence")
 # 按目标语再分一层桶（P2 #343）：只对「引擎在哪种语言上摇摆」有意义的两类记——
 # 直接回答「是不是 hi/bn/ta 在抖」，不用翻 last_events。
-_BY_TARGET_OUTCOMES = ("held", "medium_confidence")
+# P2-7：complaint 的 target = 客户实际语种（我们没打中的那一种）
+_BY_TARGET_OUTCOMES = ("held", "medium_confidence", "complaint")
 _BY_TARGET_CAP = 32
 _LAST_EVENTS_CAP = 8
 _CONV_ID_MAX = 80

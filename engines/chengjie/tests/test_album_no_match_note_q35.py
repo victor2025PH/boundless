@@ -172,6 +172,20 @@ def test_conv_state_notes_carry_album_no_match_without_changing_state():
     amm.mark(CID, query="selfie pls", persona_id="lin", store=st2, ts=now - 5)
     out2 = _c(st2, now=now)
     assert out2["state"] == "human" and out2["notes"][0]["kind"] == "album_no_match"
+    assert out2["notes"][0]["trigger"] == ""
+
+
+def test_conv_state_note_directive_miss_uses_own_text_key():
+    # P2-6：AI [PHOTO] 指令落空（客户没要图）→ 同一条旁注、不同文案键，坐席不用翻客户哪句要了图
+    st = _Store("auto_ai")
+    now = time.time()
+    rec = amm.mark(CID, query="library study", scene="library study", persona_id="lin",
+                   store=st, ts=now - 30, trigger="directive")
+    assert rec["trigger"] == "directive"
+    n = _c(st, now=now)["notes"][0]
+    assert n["kind"] == "album_no_match" and n["trigger"] == "directive"
+    assert n["text_key"] == "inbox.cs.note.album_no_match_directive"
+    assert n["link"] == "/personas?pid=lin&pma=1&filter=notrg"
 
 
 def test_conv_state_notes_empty_when_none_or_stale_or_bad_store():
@@ -214,12 +228,46 @@ def test_personas_template_consumes_deep_link():
     assert "['notrg', 'nohit', 'off', 'untagged', 'photo', 'video', 'aigen'].indexOf(_pf)" in s, "filter 只认相册筛选枚举"
 
 
+def test_run_autosend_image_directive_miss_marks_agent_note(monkeypatch):
+    # P2-6：[PHOTO] 指令直通，相册 / 生图都没货 → 不发、坐席旁注 trigger=directive
+    import asyncio
+
+    import src.companion.photo_capability as pc
+    import src.inbox.image_autosend as ia
+
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda pid: True)
+
+    async def _no_stage(*a, **k):
+        return None
+
+    monkeypatch.setattr(ia, "stage_image_file", _no_stage)
+    marks = []
+    monkeypatch.setattr(amm, "mark", lambda cid, **kw: marks.append((cid, kw)) or {})
+    calls = []
+
+    async def send_fn(*a):  # pragma: no cover
+        calls.append(a)
+        return True
+
+    cfg = {"companion": {"selfie": {"enabled": True}}}
+    ok = asyncio.run(ia.run_autosend_image(
+        cfg, "telegram", "acct1", "chat1", "lin", "haha nice",
+        None, send_fn=send_fn, conv_key=CID,
+        directive_override={"kind": "selfie", "scene": "library study"}))
+    assert ok is False and not calls
+    assert len(marks) == 1
+    cid, kw = marks[0]
+    assert cid == CID and kw["trigger"] == "directive"
+    assert kw["persona_id"] == "lin" and kw["scene"].startswith("library study")  # 场景可能被补时段
+
+
 # ── ⑤ 词条 ───────────────────────────────────────────────────────────────
 
 def test_note_i18n_keys_bilingual_and_traditional():
     import importlib
     pack = importlib.import_module("src.web.i18n_packs.conv_state_q26")
     keys = ("inbox.cs.note.album_no_match", "inbox.cs.note.album_no_match_n",
+            "inbox.cs.note.album_no_match_directive",
             "inbox.cs.note.album_no_match_t", "inbox.cs.note.album_go",
             "inbox.cs.note.album_go_t", "inbox.cs.note.album_q_generic")
     for k in keys:

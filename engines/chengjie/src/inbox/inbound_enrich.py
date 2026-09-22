@@ -8,7 +8,7 @@ Telegram 收件箱 auto-draft 此前只传纯 text，导致已开发的「像真
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.integrations.protocol_bridge import media_placeholder
 from src.skills.skill_manager import _is_meaningless_interjection_only
@@ -379,7 +379,15 @@ _PURE_QMARKS_RE = re.compile(r"^[\s!！。.…]*[?？]{2,}[\s?？!！。.…]*$"
 def detect_language_complaint(
     text: str, history: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """客户在抱怨/困惑「语言不对」→ 返回 "confusion"；否则 ""（P3-198）。
+    """客户在抱怨/困惑「语言不对」→ 返回 "confusion"；否则 ""（P3-198）。"""
+    return language_complaint_detail(text, history)[0]
+
+
+def language_complaint_detail(
+    text: str, history: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, str]:
+    """``(verdict, customer_lang)``：verdict 同 :func:`detect_language_complaint`；
+    customer_lang = 客户实际语种（我方本该用的目标语，P2-7 观测分桶用），未检出为 ""。
 
     **错语言语境是必要条件**：我方最近一条有语言证据的消息语种 ≠ 对方语种时，
     困惑句式才被采信——否则 "can't understand why she left" / 中文会话里的
@@ -389,7 +397,7 @@ def detect_language_complaint(
     """
     t = str(text or "").strip()
     if not t or len(t) > 200:
-        return ""
+        return "", ""
     from src.ai.lang_policy import evidence_lang
 
     a_lang = ""
@@ -399,14 +407,14 @@ def detect_language_complaint(
             if a_lang:
                 break
     if not a_lang:
-        return ""
+        return "", ""
     u_lang = evidence_lang(t) or _dominant_recent_user_lang(
         history or [], exclude_text=t)
     if not u_lang or u_lang == a_lang:
-        return ""
+        return "", ""
     if _LANG_CONFUSION_RE.search(t) or _PURE_QMARKS_RE.match(t):
-        return "confusion"
-    return ""
+        return "confusion", str(u_lang)
+    return "", ""
 
 
 def build_language_recovery_hint() -> str:
@@ -713,13 +721,14 @@ def apply_inbound_enrichments(
     # 只在**非钉死工作语言**场景注入——mismatch hint 在场＝运营刻意锁了草稿
     # 语言，「改用对方语言重说」会与之打架，此时只观测、语言决策交给运营。
     try:
-        _lc = detect_language_complaint(t, list(history or []))
+        _lc, _lc_target = language_complaint_detail(t, list(history or []))
         if _lc:
             try:
                 from src.inbox.outbound_lang_stats import get_outbound_lang_stats
                 get_outbound_lang_stats().record(
                     "complaint",
-                    conversation_id=str(user_context.get("chat_id") or ""))
+                    conversation_id=str(user_context.get("chat_id") or ""),
+                    target=_lc_target)
             except Exception:
                 pass
             if not mismatch:
