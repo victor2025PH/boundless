@@ -254,7 +254,8 @@ def plan_autosend_image(
 ) -> Optional[Dict[str, Any]]:
     """按客户最近一条入站文本判断该发什么图（纯函数）。None=不发图（回落文本/语音）。
 
-    - 命中 ``detect_selfie_request`` → ``{kind: "selfie"}``（人设自拍，可走相册）。
+    - 命中 ``image_send_gate.explicit_photo_ask``（索要我方照片）→ ``{kind: "selfie"}``
+      （人设自拍，可走相册）；只是谈到照片不算。
     - 否则开了 ``contextual_images`` 且命中 ``plan_contextual_image`` →
       ``{kind: "object", subject, prompt}``（对话里提到的东西，需真出图后端）。
     自拍优先于物体图（``detect_selfie_request`` 已把"你煮的…"排除，二者互斥不重叠）。
@@ -265,11 +266,9 @@ def plan_autosend_image(
     if not pt.strip():
         return None
     try:
-        from src.ai.companion_selfie import (
-            detect_selfie_request,
-            extract_requested_scene,
-        )
-        if detect_selfie_request(pt):
+        from src.ai.companion_selfie import extract_requested_scene
+        from src.inbox.image_send_gate import explicit_photo_ask
+        if explicit_photo_ask(pt):
             # 客户显式点名场景（"发张你在海边的照片"）→ 随 directive 覆盖轮换场景。
             return {"kind": KIND_SELFIE,
                     "scene": extract_requested_scene(pt)}
@@ -1137,9 +1136,14 @@ def pick_registered_media(
     # 图入站（带索图配文）只用客户自己敲的字去匹配触发词，识图描述不参与
     if bool(getattr(_gate, "inbound_image", False)) and str(getattr(_gate, "words", "") or ""):
         peer_text = str(getattr(_gate, "words"))
-    # 通用人像池只对「索要」放开（谈照片 ≠ 要照片，见 image_send_gate.explicit_photo_ask）
-    generic_ok = (not deny_generic) and (
-        bool(force_generic) or _isg.explicit_photo_ask(str(peer_text or "")))
+    # 通用人像池（无触发词的本人照）只对**显式出图意图**放开：索要（ask）/ 承诺兑现
+    # （commitment，含 force_generic）/ offer-accept / LLM 指令。触发词命中（keyword）是
+    # 「客户点名要那条」，不开通用池；谈照片 ≠ 要照片（photo_mention_no_ask）早在闸前拦下。
+    _trigger = str(getattr(_gate, "trigger", "") or "")
+    _explicit = bool(force_generic) or _trigger in (
+        _isg.TRIGGER_ASK, _isg.TRIGGER_COMMITMENT,
+        _isg.TRIGGER_OFFER_ACCEPT, _isg.TRIGGER_DIRECTIVE)
+    generic_ok = (not deny_generic) and _explicit
     try:
         _resend_days = float(scfg.get("resend_after_days", 90) or 0)
     except (TypeError, ValueError):
@@ -1163,22 +1167,14 @@ def pick_registered_media(
         _scene_kind = requested_scene_kind(str(peer_text or ""))
     except Exception:
         _scene_kind = ""
-    # Q-6 B：随机兜底默认关——整册完全无词 且 非索图/非点名场景 才 random。
     # Q-39 C（#323）：scene_class_of / requested_scene_kind 的泛匹配不再单独把 _ask 置真——
     # 闸已判过「须与索图词共现」（strict_requested_scene_kind）；运营触发词命中（keyword）
     # 是「客户点名要那条」不是「要自拍」，无命中不记 miss（与旧行为一致）。
-    _ask = _isg.explicit_photo_ask(str(peer_text or "")) or bool(force_generic) or bool(
-        str(getattr(_gate, "trigger", "")) == _isg.TRIGGER_ASK
-        and (_scene_cls or _scene_kind or getattr(_gate, "scene_kind", "")))
-    _allow_random = False
-    try:
-        _rows_pre = store.list(str(persona_id or ""), enabled_only=True) if persona_id else []
-        from src.companion.persona_media import row_has_match_terms
-        _album_no_terms = bool(_rows_pre) and not any(
-            row_has_match_terms(r, suggest_ok=_suggest_ok) for r in _rows_pre)
-        _allow_random = _album_no_terms and not _ask
-    except Exception:
-        _allow_random = False
+    _ask = _explicit
+    # 通用池在 select_media 里只经 random 层出图（无词条目本就没有「命中」可言）：
+    # 显式意图且客户没点名场景 kind → 放行随机挑一张本人照；点名 kind 时通用池
+    # 须过 kind 过滤，挑不到就诚实 miss——绝不拿随机照顶包点名场景。
+    _allow_random = generic_ok and not _scene_kind
     # 实施90 季节/地点门：人设「此刻季节 + 所在国」上下文（软失败=不设门）。
     _geo = {"season": "", "country": ""}
     if cc.get("season_gate") or cc.get("place_gate"):
@@ -1202,38 +1198,6 @@ def pick_registered_media(
                       if cc.get("place_gate") else ""),
         allow_random=_allow_random, suggest_ok=_suggest_ok,
         required_scene_kind=_scene_kind, trace=_trace)
-    # P1-3 KBYW8V：客户说 can I see a picture of you —— 整句对不上标签，
-    # 通用池又被「索图则关随机」挡住。标签 0 命中时用 selfie 标准查询兜底一张
-    # 已启用本人照；仍 0 才记 miss（诚实文字，而不是 Sure 空头）。
-    # 兜底只对**显式索要**（trigger=ask ∧ 索要句形）放开：承诺兑现 / offer-accept /
-    # 触发词命中而无货，走诚实文字，不拿随机自拍顶包（P0-2 #332-A / #339）。
-    if row is None and generic_ok and not _scene_kind:
-        _selfie_ask = (
-            str(getattr(_gate, "trigger", "")) == _isg.TRIGGER_ASK
-            and not bool(getattr(_gate, "inbound_image", False))
-            and _isg.explicit_photo_ask(str(peer_text or "")))
-        if _selfie_ask:
-            _tr2: Dict[str, Any] = {}
-            row = pick_media(
-                store, str(persona_id or ""), "selfie 自拍",
-                generic_ok=True, avoid_id=avoid_id, bond_level=bond_level,
-                conv_key=conv_key, resend_after_days=_resend_days,
-                now_hour=cc["now_hour"], required_scene_class="",
-                resend_cooldown_hours=cc["resend_cooldown_hours"],
-                continuity_minutes=cc["continuity_minutes"],
-                no_resend=bool(cc.get("no_resend")),
-                now_season=(str(_geo.get("season") or "")
-                            if cc.get("season_gate") else ""),
-                home_country=(str(_geo.get("country") or "")
-                              if cc.get("place_gate") else ""),
-                allow_random=True, suggest_ok=_suggest_ok,
-                required_scene_kind="", trace=_tr2)
-            if row is not None:
-                _trace = _tr2
-                logger.info(
-                    "[album_match] conv=%s selfie_fallback=1 query=%s picked=%s",
-                    conv_key or "-", str(peer_text or "").replace("\n", " ")[:60],
-                    str(row.get("id") or "-"))
     _picked = str((row or {}).get("id") or "-")
     _fb = str(_trace.get("fallback") or "none")
     if _fb not in ("none", "random"):
@@ -1431,6 +1395,8 @@ def _maybe_register_generated_selfie(
         if scene:
             # series 标签让"同场景生成图"互为一个系列（防复读账本按系列排除）
             _tags += [f"scene:{scene}", f"series:auto-{scene}"]
+        else:
+            _tags.append("kind:selfie")
         row = st.add(str(persona_id), "photo", str(dst), "", triggers=[],
                      tags=_tags, created_by="image_autosend")
         logger.info("[image_autosend] 生成自拍已入册（自动定妆） persona=%s file=%s n=%d",

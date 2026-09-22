@@ -137,4 +137,4 @@ def test_picture_of_you_falls_back_to_enabled_selfie(monkeypatch, caplog):
         cfg, "nori", "can I see a picture of you", conv_key="wa:a:picyou")
     assert row and row["id"] == "1"
     joined = "\n".join(r.message for r in caplog.records)
-    assert "selfie_fallback=1" in joined
+    assert "picked=1 fallback=random" in joined

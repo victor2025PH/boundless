@@ -125,7 +125,11 @@ def scene_kind_of(row: Optional[Dict[str, Any]]) -> str:
     ak = str((am or {}).get("scene_kind") or "").strip().lower()
     if ak in SCENE_KINDS:
         return ak
-    return infer_scene_kind(am, row_scene_class(row))
+    kind = infer_scene_kind(am, row_scene_class(row))
+    # 自动定妆入册的生成图必是人设本人自拍：无场景信息时按 selfie 计，不落 other。
+    if kind == "other" and "auto_generated" in ((row or {}).get("tags") or []):
+        return "selfie"
+    return kind
 
 
 def requested_scene_kind(text: Any) -> str:
