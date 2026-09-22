@@ -110,22 +110,22 @@ def test_offline_signature_stable_across_hours(msl):
 
 
 def test_load_seats_from_real_ledger_excludes_140(msl):
-    """真台账：坐席 = chatx_seat=true 的三台；140（记忆机）不在；名字用台账现名 zh。"""
+    """真台账：坐席 = chatx_seat=true 的两台（104/198）；140（记忆机）、173（阶段 4 起跑生产实例，桌面包已撤）不在；名字用台账现名 zh。"""
     seats = msl.load_seats()
     ids = [s["id"] for s in seats]
     assert "tingxie" not in ids
-    assert set(ids) == {"yunsheng", "lianbei", "kouxing"}
+    assert set(ids) == {"lianbei", "kouxing"}
     names = " ".join(s["name"] for s in seats)
     for legacy in ("听写", "智拓", "幻颜", "云升", "口型", "脸备", "韵声"):
         assert legacy not in names, names
-    # 2026-09-22 实施102：104 声音机 → 出图机（语音主路回 176）；173 在阶段 4 迁移完成前仍是坐席
-    for cur in ("173 语言机(", "104 出图机(", "198 视觉机("):
+    # 2026-09-22 实施102：104 声音机 → 出图机（语音主路回 176）；173 阶段 4 完成后 chatx_seat=false
+    for cur in ("104 出图机(", "198 视觉机("):
         assert cur in names, names
     # 显示名括号里是主别名 ssh[0]；状态键 id 与旧别名一致（水位不丢）
     by_id = {s["id"]: s for s in seats}
     assert by_id["kouxing"]["alias"] == "shijue"
     assert by_id["lianbei"]["alias"] == "shengyin"
-    assert by_id["yunsheng"]["alias"] == "yuyan"
+    assert "yunsheng" not in by_id
 
 
 def test_load_seats_synthetic_and_failures(msl, tmp_path):
@@ -202,9 +202,9 @@ def test_scan_reports_ledger_failure_once_and_keeps_state(msl, tmp_path, monkeyp
 
 
 def test_load_compute_is_176_and_140_non_seat_compute(msl):
-    """非坐席算力 = 176 + 140（hub/compute 且非坐席），带职能、显卡、看护端口；坐席不重复出现。"""
+    """非坐席算力 = 176 + 173 + 140（hub/compute 且非坐席；173 阶段 4 起撤坐席包），带职能、显卡、看护端口；坐席不重复出现。"""
     nodes = msl.load_compute()
-    assert [n["id"] for n in nodes] == ["zhongshu", "tingxie"]
+    assert [n["id"] for n in nodes] == ["zhongshu", "yunsheng", "tingxie"]
     by_id = {n["id"]: n for n in nodes}
     # 实施102 目标编制：176 声音机（语音克隆 + 情感 + ASR/SER），140 记忆机 + 粤语 CosyVoice
     assert by_id["zhongshu"]["name"].startswith("176 声音机(")
@@ -215,7 +215,9 @@ def test_load_compute_is_176_and_140_non_seat_compute(msl):
     assert "4070" in by_id["tingxie"]["gpu"]
     assert by_id["zhongshu"]["ports"] == [9000, 7865, 7855, 8765]
     assert by_id["tingxie"]["ports"] == [7854, 11434, 7852]
-    assert "yunsheng" not in by_id and "lianbei" not in by_id and "kouxing" not in by_id
+    assert by_id["yunsheng"]["name"].startswith("173 语言机(")
+    assert by_id["yunsheng"]["ports"] == [8001, 18799]
+    assert "lianbei" not in by_id and "kouxing" not in by_id
 
 
 def test_load_compute_synthetic(msl, tmp_path):

@@ -209,7 +209,7 @@ foreach ($ip in $Uplinks) {
             if ($DryRun) {
                 Write-Log "DRYRUN" ("would alert: uplink {0} down" -f $ip)
             } else {
-                Send-Alert ("[ChatX] office broadband line {0} looks DOWN: no requests for {1}+ min while other lines flow. Seats pinned to it will see disconnect banners - office seats can switch to the LAN entrance http://192.168.0.117:18799 . Log: uplink_watchdog.log" -f $ip, [int]($SilentSec / 60))
+                Send-Alert ("[ChatX] office broadband line {0} looks DOWN: no requests for {1}+ min while other lines flow. Seats pinned to it will see disconnect banners - office seats can switch to the LAN entrance http://192.168.0.173:18799 . Log: uplink_watchdog.log" -f $ip, [int]($SilentSec / 60))
                 $st[$ip].alerted = $true
             }
         }

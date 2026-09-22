@@ -123,9 +123,9 @@
       "user": "admin",
       "key": "cluster_controller",
       "role": "compute",
-      "chatx_seat": true,
-      "role_short": "LAN唯一LLM",
-      "role_now": "语言：vLLM chatx :8001（Qwen3-27B AWQ，ai.primary=local 主链；口语化改写、语音情绪补判同源）。ollama :11434 已死（compute_mode DEAD_OLLAMA_173，14B 已删）不再盯；IndexTTS :7865 已泊。实施102 阶段 4：接收 117 生产实例 + 边车，撤坐席桌面包（待迁移完成再改本条 chatx_seat/role）",
+      "chatx_seat": false,
+      "role_short": "LAN唯一LLM·智聊生产",
+      "role_now": "语言 + 主机：vLLM chatx :8001（Qwen3-27B AWQ，ai.primary=local 主链；口语化改写、语音情绪补判同源）+ 智聊生产实例 :18799 + 四平台边车 + okline 桥 + 生产/租户/视觉三条 VPS 隧道与看门狗（实施102 阶段 4 于 2026-09-22 08:16 自 117 迁入）。ollama :11434 / IndexTTS :7865 已停。坐席桌面包已撤（端口与实例冲突，本机用生产工作台）",
       "gpu": "RTX 5090 32G",
       "resolution": "3840x2160",
       "accent": "#C43BF0",
@@ -141,10 +141,12 @@
       "shortcut": "",
       "wallpaper": "brand-assets/05_backgrounds/machines/yunsheng-wallpaper.png",
       "services": [
-        "vllm_chatx:8001"
+        "vllm_chatx:8001",
+        "zhiliao:18799"
       ],
       "watch_ports": [
-        8001
+        8001,
+        18799
       ],
       "note": "SSH 用 admin@（Administrator 会被 22 端口重置）；显存互斥轮换见 cluster_map _note；全集群唯一 4K 屏"
     },
@@ -173,8 +175,8 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "dev",
-      "role_short": "智聊生产·坐席",
-      "role_now": "智聊生产（实施102 阶段 4 前）：智聊实例 :18799 + 四平台 worker + okline 桥；qwen3_tts :7858 已于 08-14 退役不再盯。目标：实例迁 173 后本机退出运行，只做开发/打包（改本条 role→dev-only 与阶段 4 同步）",
+      "role_short": "开发/打包（dev-only）",
+      "role_now": "dev-only（实施102 阶段 4 于 2026-09-22 08:13 停机迁出）：智聊实例 / 四平台 worker / okline 桥 / 61 项生产计划任务已全部 Disabled 并在 173 启用；本机 18799 portproxy 改指 173:18799 作过渡 LAN 入口；只做开发/打包与 zhiliao_pilot 试验实例",
       "gpu": "RTX 3060 12G",
       "resolution": "1920x1080",
       "accent": "#F0A010",
@@ -199,13 +201,9 @@
         "D:\\\\开发\\\\智聊"
       ],
       "wallpaper": "brand-assets/05_backgrounds/machines/shengbei-wallpaper.png",
-      "services": [
-        "zhiliao:18799"
-      ],
-      "watch_ports": [
-        18799
-      ],
-      "note": "watch 增列 18799（2026-08-29 停电事故沉淀：引擎宕机 5.4h 桌面零提示）；智聊重启窗口 15-30s 内的 svcdown 横幅属预期瞬态"
+      "services": [],
+      "watch_ports": [],
+      "note": "阶段 4 后不再 watch 18799（实例已在 173）；原 watch 增列 18799（2026-08-29 停电事故沉淀：引擎宕机 5.4h 桌面零提示）；智聊重启窗口 15-30s 内的 svcdown 横幅属预期瞬态"
     },
     {
       "id": "lianbei",
