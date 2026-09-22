@@ -160,6 +160,7 @@ def derive_emotion(
     default: str = "warm",
     persona: Optional[Dict[str, Any]] = None,
     peer_audio_emotion: Optional[Dict[str, Any]] = None,
+    baseline_intensity: Optional[float] = None,
 ) -> EmotionSpec:
     """从会话上下文派生情绪。任何脏输入都安全退化。
 
@@ -168,6 +169,10 @@ def derive_emotion(
 
     ``peer_audio_emotion``：上一条客户语音的音频情绪 dict（见 speech_emotion.map_audio_emotion），
     让「听到的语气」驱动「说出的语气」——**回应式**而非镜像（对方难过→我们温柔而非跟着难过）。
+
+    ``baseline_intensity``：本句**没有任何会话/文本线索**、只靠人设基线或 ``default``
+    兜底时用的强度（由表达力档位给出）；0 → 直接 neutral 保真；None → 旧行为 0.6。
+    线索命中的情绪不受此参数影响。
     """
     # 1) CSAT 极差（强信号）→ 共情安抚，盖过其他
     try:
@@ -215,6 +220,7 @@ def derive_emotion(
             emo = "warm"
 
     # 5) 人设默认声线基调：让「目标人设」不仅换音色，也影响语气。
+    from_baseline = emo is None
     if emo is None:
         emo = persona_default_emotion(persona)
 
@@ -225,6 +231,14 @@ def derive_emotion(
     intensity = 0.6
     if rs in ("intimate", "close", "亲密", "lover"):
         intensity = 0.75
+    if from_baseline and baseline_intensity is not None:
+        try:
+            _bi = float(baseline_intensity)
+        except (TypeError, ValueError):
+            _bi = 0.6
+        if _bi <= 0.0:
+            return NEUTRAL
+        intensity = min(intensity, _bi)
     return EmotionSpec(emo, intensity=intensity)
 
 
@@ -295,6 +309,157 @@ def coerce_emotion(value: Union[None, str, Dict[str, Any], EmotionSpec]) -> Emot
             pace=str(value.get("pace") or "normal"),
         )
     return NEUTRAL
+
+
+# ── 表达力档位（运营可调的「总增益」）──────────────────────────────────────────
+# 「情感太高」不是某个参数过大，而是基线情绪 / emo_text / emo_alpha / 副语言标记 /
+# 罐头笑声 / 口语化软笑 / 分段情绪 六七层各自加料、彼此不知道。档位是贯穿全链的
+# 单一标量：所有层从同一份 ExpressionPolicy 取上限，运营只需理解四个词。
+#   restrained 克制 ：客服/顾问。无线索→neutral 保真；不笑不叹不拼罐头。
+#   natural    自然 ：默认。基线收着（0.4），有线索才饱满；笑只跟真笑点。
+#   vivid      生动 ：陪伴。基线 0.6（=改档前的旧行为），有笑点才拼笑。
+#   dramatic   戏剧 ：直播/娃娃音。允许情绪驱动拼笑、rich 口语化、全段外放。
+EXPRESSIVENESS_LEVELS = ("restrained", "natural", "vivid", "dramatic")
+DEFAULT_EXPRESSIVENESS = "natural"
+_EXPR_ALIASES = {
+    "克制": "restrained", "low": "restrained", "subtle": "restrained",
+    "0": "restrained", "1": "restrained",
+    "自然": "natural", "default": "natural", "normal": "natural",
+    "mid": "natural", "medium": "natural", "2": "natural",
+    "生动": "vivid", "high": "vivid", "lively": "vivid", "3": "vivid",
+    "戏剧": "dramatic", "max": "dramatic", "theatrical": "dramatic",
+    "4": "dramatic",
+}
+
+
+def normalize_expressiveness(value: Any) -> str:
+    """任意输入 → 档位名；识别不出 → ""（调用方决定回落）。"""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        v = float(value)
+        if v > 4:          # 0–100 滑杆
+            v = v / 25.0
+        idx = max(0, min(3, int(round(v)) - 1)) if v >= 1 else 0
+        return EXPRESSIVENESS_LEVELS[idx]
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if s in EXPRESSIVENESS_LEVELS:
+        return s
+    return _EXPR_ALIASES.get(s, "")
+
+
+def resolve_expressiveness(
+    voice_cfg: Optional[Dict[str, Any]],
+    *,
+    persona: Optional[Dict[str, Any]] = None,
+    session: Any = None,
+) -> str:
+    """三层覆写：会话 > 人设 voice_profile.expressiveness > 全局 emotion.expressiveness
+    > DEFAULT。``session`` 由收件箱/自动发送注入（也可预先写进
+    ``voice_cfg["voice_expressiveness"]``）。"""
+    lvl = normalize_expressiveness(session)
+    if lvl:
+        return lvl
+    cfg = voice_cfg if isinstance(voice_cfg, dict) else {}
+    lvl = normalize_expressiveness(cfg.get("voice_expressiveness"))
+    if lvl:
+        return lvl
+    vp_cfg = cfg.get("voice_profile") if isinstance(cfg.get("voice_profile"), dict) else {}
+    vp_persona = (persona.get("voice_profile")
+                  if isinstance(persona, dict)
+                  and isinstance(persona.get("voice_profile"), dict) else {})
+    for src in (vp_cfg, vp_persona):
+        lvl = normalize_expressiveness(src.get("expressiveness"))
+        if lvl:
+            return lvl
+    if isinstance(persona, dict):
+        lvl = normalize_expressiveness(persona.get("voice_expressiveness"))
+        if lvl:
+            return lvl
+    emo_cfg = cfg.get("emotion") if isinstance(cfg.get("emotion"), dict) else {}
+    lvl = normalize_expressiveness(emo_cfg.get("expressiveness"))
+    return lvl or DEFAULT_EXPRESSIVENESS
+
+
+@dataclass(frozen=True)
+class ExpressionPolicy:
+    """一个档位在各表达层的上限。纯数据，各层只读不改。"""
+    level: str = DEFAULT_EXPRESSIVENESS
+    intensity_gain: float = 0.9       # 线索情绪的 intensity 乘子
+    intensity_cap: float = 0.75       # 缩放后的上限（强信号 0.8/0.85 缩后仍 ≥0.7 过强情绪阈值）
+    baseline_intensity: float = 0.4   # 无线索、仅人设/默认基线时的 intensity；0=归 neutral
+    emo_alpha_cap: float = 0.58       # IndexTTS emo_alpha 上限
+    max_marks: int = 1                # CosyVoice 副语言标记条数上限
+    bursts: bool = True               # 允许拼接罐头笑声/呼吸
+    bursts_need_cue: bool = True      # 拼笑必须文本有笑点（不许情绪单独触发）
+    bursts_min_intensity: float = 0.6
+    bursts_stock: bool = False        # 允许用公版罐头素材（否则只用人设自己的 burst_audio）
+    colloquial_cap: str = ""          # 口语化力度上限 light|natural|vivid；""=不限
+    pacing_expressive: Optional[bool] = None  # None=沿用人设启发式；False=钉基调
+    emo_vector_scale: float = 0.6     # IndexTTS 英文 playful 情感向量缩放；0=不发
+
+    def cap_colloquial(self, intensity: str) -> str:
+        order = ("light", "natural", "vivid")
+        cur = str(intensity or "natural").strip().lower()
+        if not self.colloquial_cap or cur not in order or self.colloquial_cap not in order:
+            return cur
+        return order[min(order.index(cur), order.index(self.colloquial_cap))]
+
+
+_EXPRESSION_POLICIES: Dict[str, ExpressionPolicy] = {
+    "restrained": ExpressionPolicy(
+        level="restrained", intensity_gain=0.6, intensity_cap=0.45,
+        baseline_intensity=0.0, emo_alpha_cap=0.45, max_marks=1,
+        bursts=False, bursts_need_cue=True, bursts_min_intensity=1.1,
+        bursts_stock=False, colloquial_cap="light", pacing_expressive=False, emo_vector_scale=0.0),
+    "natural": ExpressionPolicy(
+        level="natural", intensity_gain=0.9, intensity_cap=0.75,
+        baseline_intensity=0.4, emo_alpha_cap=0.58, max_marks=1,
+        bursts=True, bursts_need_cue=True, bursts_min_intensity=0.6,
+        bursts_stock=False, colloquial_cap="", pacing_expressive=None, emo_vector_scale=0.6),
+    "vivid": ExpressionPolicy(
+        level="vivid", intensity_gain=1.0, intensity_cap=0.9,
+        baseline_intensity=0.6, emo_alpha_cap=0.66, max_marks=2,
+        bursts=True, bursts_need_cue=True, bursts_min_intensity=0.5,
+        bursts_stock=True, colloquial_cap="vivid", pacing_expressive=None, emo_vector_scale=1.0),
+    "dramatic": ExpressionPolicy(
+        level="dramatic", intensity_gain=1.15, intensity_cap=1.0,
+        baseline_intensity=0.7, emo_alpha_cap=0.72, max_marks=3,
+        bursts=True, bursts_need_cue=False, bursts_min_intensity=0.0,
+        bursts_stock=True, colloquial_cap="", pacing_expressive=True, emo_vector_scale=1.0),
+}
+
+
+def expression_policy(level: Any, *, hour: Optional[int] = None) -> ExpressionPolicy:
+    """档位 → 策略。深夜（is_quiet_hour）生动/戏剧自动降一档：真人深夜不闹。"""
+    lvl = normalize_expressiveness(level) or DEFAULT_EXPRESSIVENESS
+    if hour is not None and is_quiet_hour(hour) and lvl in ("vivid", "dramatic"):
+        lvl = EXPRESSIVENESS_LEVELS[EXPRESSIVENESS_LEVELS.index(lvl) - 1]
+    return _EXPRESSION_POLICIES.get(lvl) or _EXPRESSION_POLICIES[DEFAULT_EXPRESSIVENESS]
+
+
+def step_down_expressiveness(level: Any) -> str:
+    """「太夸张」反馈：降一档，restrained 到底。"""
+    lvl = normalize_expressiveness(level) or DEFAULT_EXPRESSIVENESS
+    i = EXPRESSIVENESS_LEVELS.index(lvl)
+    return EXPRESSIVENESS_LEVELS[max(0, i - 1)]
+
+
+def apply_expressiveness(spec: EmotionSpec, policy: ExpressionPolicy) -> EmotionSpec:
+    """按档位缩放一次合成的 intensity（同一 spec 只应在管线入口缩一次）。
+
+    只缩 intensity、不换 emotion：骂战 angry 在克制档仍是 angry，只是没那么冲；
+    情绪标签是否出、emo_text 措辞、标记条数都由各层拿缩后 intensity 自行判定。
+    """
+    if spec is None:
+        return NEUTRAL
+    if spec.is_neutral():
+        return spec
+    inten = float(spec.intensity) * float(policy.intensity_gain)
+    inten = min(float(policy.intensity_cap), inten)
+    return EmotionSpec(spec.emotion, intensity=round(inten, 3), pace=spec.pace)
 
 
 def to_openai_instructions(spec: EmotionSpec, *, base: str = "") -> str:
@@ -983,6 +1148,24 @@ _INDEXTTS_EMO_TEXT: Dict[str, Dict[str, tuple]] = {
     },
 }
 
+# 轻版（intensity ≤ 0.5，自然/克制档的日常句）：去掉 giggle / flirty laugh / “几乎要笑出声”
+# 这类会被 QwenEmotion 放大成每句假笑的措辞，只留「带笑意」的底色。没有轻版的情绪
+# （sad/serious/angry…）本来就不往上加料，沿用主表。
+_INDEXTTS_EMO_TEXT_LIGHT: Dict[str, Dict[str, tuple]] = {
+    "en": {
+        "warm": ("warm and easy, a hint of a smile", "relaxed, friendly, unhurried"),
+        "happy": ("quietly pleased, a smile in the voice", "light and upbeat, no laugh"),
+        "excited": ("a little lifted, brighter than usual", "pleasantly keyed up, still natural"),
+        "playful": ("lightly teasing, a smile, no giggle", "playful but understated"),
+    },
+    "zh": {
+        "warm": ("温和自然、带一点笑意", "轻松亲切、不刷存在感"),
+        "happy": ("心情不错、语调略亮", "愉快但不笑出声"),
+        "excited": ("略带兴致、语调稍上扬", "有点开心、仍然自然"),
+        "playful": ("带一点调侃、不撒娇", "轻松俏皮、不夸张"),
+    },
+}
+
 _INDEXTTS_STYLE_EN: Dict[str, str] = {
     "撒娇": "spoiled, soft whine, teasing",
     "俏皮": "playful tease",
@@ -1010,7 +1193,12 @@ def to_indextts_emo_text(
         return ""
     lang = str(language or "zh").strip().lower()
     bank_key = "en" if lang.startswith("en") else "zh"
-    variants = (_INDEXTTS_EMO_TEXT.get(bank_key) or {}).get(spec.emotion)
+    light = spec.intensity <= 0.5
+    variants = None
+    if light:
+        variants = (_INDEXTTS_EMO_TEXT_LIGHT.get(bank_key) or {}).get(spec.emotion)
+    if not variants:
+        variants = (_INDEXTTS_EMO_TEXT.get(bank_key) or {}).get(spec.emotion)
     if not variants:
         return ""
     import zlib
@@ -1032,6 +1220,8 @@ def to_indextts_emo_text(
         core = (
             f"{core}, more feeling, a real laugh if it fits"
             if bank_key == "en" else f"{core}，情绪更饱满")
+    elif light and spec.emotion in (_INDEXTTS_EMO_TEXT_LIGHT.get(bank_key) or {}):
+        pass    # 轻版措辞已经是收着的，不再叠「收着一点」
     elif spec.intensity <= 0.4:
         core = (
             f"{core}, keep it small"
@@ -1043,8 +1233,11 @@ def to_indextts_emo_text(
     return core
 
 
-def indextts_emo_alpha(spec: EmotionSpec, *, default: float = 0.58) -> float:
-    """IndexTTS emo_alpha：日常 0.55 左右，强情绪不超过 0.72（再高音色漂）。"""
+def indextts_emo_alpha(
+    spec: EmotionSpec, *, default: float = 0.58, cap: float = 0.72,
+) -> float:
+    """IndexTTS emo_alpha：日常 0.55 左右，强情绪不超过 0.72（再高音色漂）。
+    ``cap`` 由表达力档位给出（克制 0.45 / 自然 0.58 / 生动 0.66 / 戏剧 0.72）。"""
     if spec is None or spec.is_neutral():
         return 0.0
     try:
@@ -1053,7 +1246,11 @@ def indextts_emo_alpha(spec: EmotionSpec, *, default: float = 0.58) -> float:
         inten = 0.6
     base = float(default or 0.58)
     alpha = base + (inten - 0.6) * 0.25
-    return round(max(0.35, min(0.72, alpha)), 2)
+    try:
+        hi = min(0.72, float(cap))
+    except (TypeError, ValueError):
+        hi = 0.72
+    return round(max(0.35, min(hi, alpha)), 2)
 
 
 def edge_prosody(spec: EmotionSpec) -> Dict[str, str]:
@@ -1078,6 +1275,9 @@ def edge_prosody(spec: EmotionSpec) -> Dict[str, str]:
 __all__ = [
     "EmotionSpec", "NEUTRAL", "EMOTIONS",
     "derive_emotion", "coerce_emotion", "persona_default_emotion",
+    "EXPRESSIVENESS_LEVELS", "DEFAULT_EXPRESSIVENESS", "ExpressionPolicy",
+    "normalize_expressiveness", "resolve_expressiveness", "expression_policy",
+    "step_down_expressiveness", "apply_expressiveness",
     "emotion_tone_descriptor",
     "to_openai_instructions", "to_qwen_instructions",
     "to_elevenlabs_text", "elevenlabs_voice_settings",

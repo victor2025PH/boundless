@@ -235,15 +235,22 @@ def apply_vocal_bursts(
     return _write_wav(out, sr)
 
 
-def resolve_burst_paths(voice_profile: Optional[dict] = None) -> Tuple[str, str]:
-    """Persona ``burst_audio.laugh/breath`` or the stock CC stems."""
+def resolve_burst_paths(
+    voice_profile: Optional[dict] = None, *, stock: bool = True,
+) -> Tuple[str, str]:
+    """Persona ``burst_audio.laugh/breath`` or (``stock=True``) the stock CC stems."""
     vp = voice_profile if isinstance(voice_profile, dict) else {}
     lib = vp.get("burst_audio") if isinstance(vp.get("burst_audio"), dict) else {}
-    laugh = str(lib.get("laugh") or "config/voice_refs/burst_laugh_src.wav").strip()
-    breath = str(lib.get("breath") or "config/voice_refs/burst_breath_src.wav").strip()
+    laugh = str(lib.get("laugh") or (
+        "config/voice_refs/burst_laugh_src.wav" if stock else "")).strip()
+    breath = str(lib.get("breath") or (
+        "config/voice_refs/burst_breath_src.wav" if stock else "")).strip()
     here = Path(__file__).resolve().parents[2]  # engines/chengjie
     out = []
     for p in (laugh, breath):
+        if not p:
+            out.append("")
+            continue
         cand = Path(p)
         if not cand.is_file():
             alt = here / p
@@ -255,26 +262,49 @@ def resolve_burst_paths(voice_profile: Optional[dict] = None) -> Tuple[str, str]
 
 def decorate_clone_wav(
     wav_bytes: bytes, *, text: str = "", emotion: str = "",
-    voice_profile: Optional[dict] = None,
+    voice_profile: Optional[dict] = None, need_text_cue: bool = False,
+    own_stems_only: bool = False,
 ) -> bytes:
-    laugh, breath = resolve_burst_paths(voice_profile)
-    want_l, want_b = burst_cues_from_text(text, emotion)
+    """``need_text_cue``: only splice when the words themselves carry the cue
+    (a laugh in "haha", a breath in "mmm"); the emotion label alone is not
+    enough. ``own_stems_only``: skip the stock CC stems — a canned stranger's
+    laugh in a cloned voice is the loudest "not her" tell; only persona
+    ``burst_audio`` stems qualify."""
+    laugh, breath = resolve_burst_paths(voice_profile, stock=not own_stems_only)
+    want_l, want_b = burst_cues_from_text(text, emotion, need_text_cue=need_text_cue)
     return apply_vocal_bursts(
         wav_bytes, laugh_path=laugh, breath_path=breath,
         want_laugh=want_l, want_breath=want_b,
     )
 
 
-def burst_cues_from_text(text: str, emotion: str = "") -> Tuple[bool, bool]:
-    """When to splice. English companion: laugh on play/heat cues; breath on mm/heat."""
+_LAUGH_CUES = (
+    "haha", "hehe", "lol", "lmao", "giggle", "laugh", "funny",
+    "come here", "mouth", "wine",
+)
+_BREATH_CUES = (
+    "mm", "mmm", "ahh", "aww", "sofa", "breath", "warm", "come here",
+    "mouth", "wine", "pajama",
+)
+
+
+def burst_cues_from_text(
+    text: str, emotion: str = "", *, need_text_cue: bool = False,
+) -> Tuple[bool, bool]:
+    """When to splice. English companion: laugh on play/heat cues; breath on mm/heat.
+
+    Text that already carries a CosyVoice ``[laughter]`` mark or a soft-laugh
+    opener (嘿/哈哈) is laughing once already — never stack a canned laugh on it.
+    """
     t = str(text or "").lower()
     emo = str(emotion or "").lower()
-    laugh = any(k in t for k in (
-        "haha", "hehe", "lol", "lmao", "giggle", "laugh", "funny",
-        "come here", "mouth", "wine",
-    )) or emo in ("playful", "happy", "excited")
-    breath = any(k in t for k in (
-        "mm", "mmm", "ahh", "aww", "sofa", "breath", "warm", "come here",
-        "mouth", "wine", "pajama",
-    )) or emo in ("playful", "warm", "empathetic", "sad")
+    laugh_cue = any(k in t for k in _LAUGH_CUES)
+    breath_cue = any(k in t for k in _BREATH_CUES)
+    if need_text_cue:
+        laugh, breath = laugh_cue, breath_cue
+    else:
+        laugh = laugh_cue or emo in ("playful", "happy", "excited")
+        breath = breath_cue or emo in ("playful", "warm", "empathetic", "sad")
+    if "[laughter]" in t or t.lstrip().startswith(("嘿", "哈哈", "呵呵", "嘻嘻")):
+        laugh = False
     return laugh, breath

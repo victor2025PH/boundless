@@ -143,6 +143,14 @@ telegram:
     emotion:
       enabled: false
       default: warm               # 无情绪信号时的默认基调（见 voice_emotion.EMOTIONS）
+      # 表达力档位（全局层，最低优先级；人设 voice_profile.expressiveness 覆盖全局，
+      # 收件箱会话级覆写再覆盖人设）：
+      #   restrained 克制：无线索归中性保真、不拼笑、口语化只换词、IndexTTS alpha≤0.45
+      #   natural    自然(默认)：人设基线收到 0.4、拼笑需文本笑点且只用人设自带素材、标记≤1
+      #   vivid      生动：接近旧默认（基线 0.6、标记≤2、允许公版罐头笑）
+      #   dramatic   戏剧：全放开（标记≤3、拼笑不需笑点、起伏编排钉开）
+      # 深夜（quiet hour）vivid/dramatic 自动降一档。也接受 克制/自然/生动/戏剧 与 0–100 数值。
+      expressiveness: natural
     # ── P0 TTS 输出缓存（默认开；同 文本+音色+后端+格式+情绪+参考音频指纹 命中即复用）──
     # neutral 输出与升级前一致，缓存对行为无副作用；换参考音频会自动失效。
     tts_cache:
@@ -161,6 +169,11 @@ telegram:
       backend: voice_clone_command
       command_args: []
       command_timeout_sec: 120
+      # 人设级表达力档位（restrained|natural|vivid|dramatic）；空=继承 emotion.expressiveness
+      expressiveness: ""
+      # 人设自带的笑声/呼吸素材（wav 路径）。natural 档只拼人设自带素材、不用公版罐头
+      # （克隆声里公版笑声是最响的「不是她」）；vivid/dramatic 档缺省回落公版素材。
+      burst_audio: {}
 
   # 插话吸收（2026-08-03，Stephanie2「主动等待」）：客户连发短消息在出队口合并成
   # 一条输入一次回答；生成/思考延迟期间客户又补话 → 放弃过期回复（撤销防重登记），

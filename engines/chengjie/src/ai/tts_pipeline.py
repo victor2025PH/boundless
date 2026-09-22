@@ -1151,6 +1151,20 @@ class TTSPipeline:
         emo_cfg = cfg.get("emotion") if isinstance(cfg.get("emotion"), dict) else {}
         self.emotion_enabled = bool(emo_cfg.get("enabled", False))
         self.emotion_default = str(emo_cfg.get("default") or "warm").strip().lower()
+        # 表达力档位：一个标量统控情绪强度/emo_alpha/副语言标记数/罐头笑声/口语化/节奏。
+        # 优先级由 voice_emotion.resolve_expressiveness 定（会话写回的
+        # voice_expressiveness > voice_profile.expressiveness > emotion.expressiveness > natural）。
+        try:
+            from src.ai.voice_emotion import (
+                expression_policy as _exp_pol,
+                resolve_expressiveness as _res_exp,
+            )
+            self.expressiveness = _res_exp(cfg)
+            self.expression = _exp_pol(self.expressiveness)
+        except Exception:
+            from src.ai.voice_emotion import ExpressionPolicy as _EP
+            self.expressiveness = "natural"
+            self.expression = _EP()
         # ── P2-Cloud：ElevenLabs v3 付费情感旗舰档配置 ──
         self.elevenlabs = (
             cfg.get("elevenlabs") if isinstance(cfg.get("elevenlabs"), dict) else {}
@@ -1161,6 +1175,41 @@ class TTSPipeline:
             cfg.get("cost_per_1k_chars")
             if isinstance(cfg.get("cost_per_1k_chars"), dict) else {}
         )
+
+    def _decorate_bursts(
+        self, audio: bytes, *, text: str, emotion: str, spec: Any,
+    ) -> Tuple[bytes, bool]:
+        """按表达力档位拼接罐头笑声/呼吸。返回 ``(audio, applied)``。
+
+        克制档不拼；自然/生动档要求文本本身有笑点且 intensity 达阈；自然档只用
+        人设自己的 burst_audio（公版罐头笑是克隆声里最响的「不是她」）。
+        """
+        pol = self.expression
+        if not pol.bursts:
+            return audio, False
+        try:
+            _inten = float(getattr(spec, "intensity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            _inten = 0.0
+        if _inten < pol.bursts_min_intensity:
+            return audio, False
+        from src.ai.voice_bursts import decorate_clone_wav
+        return decorate_clone_wav(
+            audio, text=text, emotion=emotion,
+            voice_profile=self.voice_profile or {},
+            need_text_cue=pol.bursts_need_cue,
+            own_stems_only=not pol.bursts_stock,
+        ), True
+
+    def _pacing_expressive(self, vp: Optional[Dict[str, Any]] = None) -> bool:
+        """分段编排是否走「起伏」档：档位钉死优先，否则沿用人设启发式。"""
+        forced = self.expression.pacing_expressive
+        if forced is not None:
+            return bool(forced)
+        from src.ai import voice_pacing as _vpac
+        _vp = vp if isinstance(vp, dict) else (self.voice_profile or {})
+        return _vpac.is_expressive(
+            str(_vp.get("instruct_style") or ""), str(_vp.get("emotion") or ""))
 
     def stats(self) -> Dict[str, Any]:
         return {
@@ -1228,7 +1277,12 @@ class TTSPipeline:
           要么在预算内出货，要么带着**具体卡住的级**诚实失败。缺省 None＝生产发送链
           旧行为完全不变（B 线长文本慢 GPU 需要超预算跑完，见 6af80c3）。
         """
-        from src.ai.voice_emotion import NEUTRAL, coerce_emotion, derive_emotion
+        from src.ai.voice_emotion import (
+            NEUTRAL,
+            apply_expressiveness,
+            coerce_emotion,
+            derive_emotion,
+        )
 
         # ── L-2 #205 三态「不发语音」（D-L4 新建人设缺省）：单点判据，任何链路
         # （autosend / voice_reply / 试听 / 主动触达）都在此收口 → 调用方改发文字。
@@ -1292,9 +1346,14 @@ class TTSPipeline:
         if emotion is not None:
             spec = coerce_emotion(emotion)
         elif self.emotion_enabled:
-            spec = derive_emotion(text=text_s, default=self.emotion_default)
+            spec = derive_emotion(
+                text=text_s, default=self.emotion_default,
+                baseline_intensity=self.expression.baseline_intensity)
         else:
             spec = NEUTRAL
+        # 表达力增益只在这里做一次（调用方显式 emotion / 骂战覆写 / 派生一视同仁）：
+        # 标签与语速不动，intensity 按档位 gain×cap，下游后端映射再决定阈值取舍。
+        spec = apply_expressiveness(spec, self.expression)
 
         # ── 强制观测（#137/#140，2026-09-02）：每次合成打一行「生效后端/音色/
         # 来源」INFO。占位串事故里登记、合成、路由三方日志各说各话，「到底哪层
@@ -1663,6 +1722,9 @@ class TTSPipeline:
             except Exception:
                 emo_ref = ""
         emo = spec.cache_key() if spec is not None else ""
+        # 表达力档位并入键：同 spec 不同档位的标记数/拼笑/口语化不同，不得串缓存。
+        if emo and self.expressiveness != "natural":
+            emo = f"{emo}:x{self.expressiveness[0]}"
         try:
             from src.ai.voice_emotion import is_quiet_hour
             _h = datetime.datetime.now().hour if hour is None else hour
@@ -2637,9 +2699,7 @@ class TTSPipeline:
         def _build():
             return vpac.paced_synthesize(
                 spoken, synth_chunk=_synth_chunk, base_emotion=emotion,
-                expressive=vpac.is_expressive(
-                    str(vp.get("instruct_style") or ""),
-                    str(vp.get("emotion") or "")),
+                expressive=self._pacing_expressive(vp),
                 polish=polish_hub_speak_text, tempo=tempo,
                 think_tempo=think_tempo, min_chars=min_chars,
                 max_chunks=max_chunks, breath_loader=breath_loader,
@@ -3029,7 +3089,8 @@ class TTSPipeline:
                     style=str((self.voice_profile or {}).get("instruct_style") or ""),
                     seed_text=text)
                 if emo_text:
-                    emo_alpha = indextts_emo_alpha(spec)
+                    emo_alpha = indextts_emo_alpha(
+                        spec, cap=self.expression.emo_alpha_cap)
                     rv.extra["hub_emo_text"] = emo_text
             except Exception:
                 emo_text = ""
@@ -3070,12 +3131,12 @@ class TTSPipeline:
             synth["path"] = out.with_suffix(f".{fmt}")
             if fmt == "wav":
                 try:
-                    from src.ai.voice_bursts import decorate_clone_wav
-                    audio = decorate_clone_wav(
+                    audio, _applied = self._decorate_bursts(
                         audio, text=text,
                         emotion=str(getattr(spec, "emotion", "") or emotion or ""),
-                        voice_profile=self.voice_profile or {})
-                    rv.extra["vocal_bursts"] = True
+                        spec=spec)
+                    if _applied:
+                        rv.extra["vocal_bursts"] = True
                 except Exception:
                     pass
             synth["path"].write_bytes(audio)
@@ -3364,8 +3425,7 @@ class TTSPipeline:
                 text = _sc
 
         vp = self.voice_profile or {}
-        expressive = vpac.is_expressive(
-            str(vp.get("instruct_style") or ""), str(vp.get("emotion") or ""))
+        expressive = self._pacing_expressive(vp)
         try:
             best_of_chunk = max(1, int(pc.get("best_of_parts", 1) or 1))
         except (TypeError, ValueError):
@@ -3391,7 +3451,8 @@ class TTSPipeline:
                         style=str(vp.get("instruct_style") or ""),
                         seed_text=chunk_text)
                     if _chunk_emo_text:
-                        _chunk_alpha = indextts_emo_alpha(spec)
+                        _chunk_alpha = indextts_emo_alpha(
+                            spec, cap=self.expression.emo_alpha_cap)
                 except Exception:
                     _chunk_emo_text = ""
             audio, fmt = hub_fish_synthesize(
@@ -3528,8 +3589,8 @@ class TTSPipeline:
                 min_chars=int(col_cfg.get("min_chars", 12) or 12),
                 timeout_sec=float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0),
                 disfluency=_disf,
-                intensity=str(col_cfg.get("rewrite_intensity", "natural")
-                              or "natural"),
+                intensity=self.expression.cap_colloquial(
+                    str(col_cfg.get("rewrite_intensity", "natural") or "natural")),
                 provider=str(col_cfg.get("provider", "local") or "local"),
                 llm_endpoints=col_cfg.get("llm_endpoints"),
                 temperature=float(col_cfg.get("temperature", 0.5) or 0.5),
@@ -3569,6 +3630,24 @@ class TTSPipeline:
             _col = None
             _emo_name = getattr(spec, "emotion", "neutral")
             _catch = str(vp.get("catchphrase") or "").strip()
+            # 口语化力度按表达力档位封顶（克制档→light，其余尊重运营显式配置）；
+            # human_ticks（思考重复/轻笑）缺省随封顶后的 vivid 开。轻笑「嘿」与
+            # [laughter]/罐头笑同属「加笑」：档位不许拼笑、情绪强度未达拼笑阈或文本
+            # 已带 CosyVoice 笑标记时一律不加，避免三套加笑叠在一句上。
+            _col_intensity = self.expression.cap_colloquial(
+                str(col_cfg.get("rewrite_intensity", "natural") or "natural"))
+            _ticks = col_cfg.get("human_ticks")
+            if _ticks is None:
+                _ticks = _col_intensity == "vivid"
+            try:
+                _spec_inten = float(getattr(spec, "intensity", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                _spec_inten = 0.0
+            _laugh_ok = (
+                self.expression.bursts
+                and _spec_inten >= self.expression.bursts_min_intensity
+                and "[laughter]" not in synth_text
+            )
             try:
                 from src.ai.voice_colloquial import (
                     build_voice_style_hint,
@@ -3622,9 +3701,7 @@ class TTSPipeline:
                             min_chars=int(col_cfg.get("min_chars", 12) or 12),
                             timeout_sec=_llm_t,
                             disfluency=_disf,
-                            intensity=str(
-                                col_cfg.get("rewrite_intensity", "natural")
-                                or "natural"),
+                            intensity=_col_intensity,
                             provider=str(col_cfg.get("provider", "local") or "local"),
                             llm_endpoints=col_cfg.get("llm_endpoints"),
                             temperature=float(
@@ -3648,11 +3725,6 @@ class TTSPipeline:
                     _lead_prob = float(col_cfg.get("lead_prob", 0.5) or 0.5)
                     if _persona_leads:
                         _lead_prob = min(0.85, _lead_prob + 0.15)
-                    # human_ticks：思考重复词 + 轻笑声（ChatGPT 式真人感，默认随 vivid 开）
-                    _ticks = col_cfg.get("human_ticks")
-                    if _ticks is None:
-                        _ticks = (str(col_cfg.get("rewrite_intensity", "")
-                                      or "").strip().lower() == "vivid")
                     _col = colloquialize(
                         synth_text, spec,
                         min_chars=int(col_cfg.get("min_chars", 12) or 12),
@@ -3663,7 +3735,7 @@ class TTSPipeline:
                             col_cfg.get("sentence_final", False)),
                         enable_lexical=col_cfg.get("lexical", True) is not False,
                         enable_thinking_repeat=bool(_ticks),
-                        enable_soft_laugh=bool(_ticks),
+                        enable_soft_laugh=bool(_ticks) and _laugh_ok,
                         lead_prob=_lead_prob,
                         think_prob=float(col_cfg.get("think_prob", 0.22) or 0.22),
                         laugh_prob=float(col_cfg.get("laugh_prob", 0.18) or 0.18),
@@ -3675,10 +3747,6 @@ class TTSPipeline:
                 rv.extra["colloquial"] = True
 
             # C+：LLM/规则都没带上微特征时，确定性后补一层（互斥，低频）
-            _ticks = col_cfg.get("human_ticks")
-            if _ticks is None:
-                _ticks = (str(col_cfg.get("rewrite_intensity", "")
-                              or "").strip().lower() == "vivid")
             if (bool(_ticks) and spec is not None
                     and not re.match(r"^\s*(哈{2,}|嘿|呵{2,}|嘻{2,})", synth_text)
                     and not re.search(
@@ -3694,7 +3762,7 @@ class TTSPipeline:
                     _seed2 = _z2.crc32(synth_text.encode("utf-8"))
                     _hit = False
                     # 仅 happy/playful/excited 偶发「嘿」；warm 不加笑
-                    if (_seed2 & 1) == 0 and _emo2 in (
+                    if (_seed2 & 1) == 0 and _laugh_ok and _emo2 in (
                             "happy", "playful", "excited"):
                         _nt, _hit = _sl(
                             synth_text, _emo2, _seed2,
@@ -3970,7 +4038,8 @@ class TTSPipeline:
                     style=str(vp.get("instruct_style") or ""),
                     seed_text=rv.text)
                 if emo_text:
-                    emo_alpha = indextts_emo_alpha(spec)
+                    emo_alpha = indextts_emo_alpha(
+                        spec, cap=self.expression.emo_alpha_cap)
                     rv.extra["indextts_emo_text"] = emo_text
             except Exception:
                 emo_text = ""
@@ -3996,7 +4065,8 @@ class TTSPipeline:
                 _before_para = synth_text
                 synth_text = inject_paralinguistic(
                     synth_text, spec,
-                    max_marks=int(para_cfg.get("max_marks", 2) or 2))
+                    max_marks=min(int(para_cfg.get("max_marks", 2) or 2),
+                                  self.expression.max_marks))
                 if synth_text != _before_para:
                     rv.extra["paralinguistic"] = True
             except Exception:
@@ -4014,12 +4084,14 @@ class TTSPipeline:
                 emo_vec = None
                 if str(clone_lang or "").lower().startswith("en"):
                     try:
-                        if spec is not None and getattr(spec, "emotion", "") in (
-                            "playful", "happy", "excited",
-                        ):
+                        _vs = float(self.expression.emo_vector_scale or 0.0)
+                        if _vs > 0 and spec is not None and getattr(
+                            spec, "emotion", "",
+                        ) in ("playful", "happy", "excited"):
                             # IndexTTS-2.5: happy, angry, sad, afraid, disgusted,
                             # melancholic, surprised, calm
-                            emo_vec = [0.88, 0.0, 0.0, 0.0, 0.0, 0.0, 0.18, 0.08]
+                            emo_vec = [round(0.88 * _vs, 3), 0.0, 0.0, 0.0, 0.0,
+                                       0.0, round(0.18 * _vs, 3), 0.08]
                     except Exception:
                         emo_vec = None
                 audio = client.tts(
@@ -4028,12 +4100,12 @@ class TTSPipeline:
                     language=clone_lang, emo_text=emo_text, emo_alpha=emo_alpha,
                     emo_audio_b64=emo_b64, emo_vector=emo_vec)
             try:
-                from src.ai.voice_bursts import decorate_clone_wav
-                audio = decorate_clone_wav(
+                audio, _applied = self._decorate_bursts(
                     audio, text=synth_text,
                     emotion=str(getattr(spec, "emotion", "") or ""),
-                    voice_profile=vp)
-                rv.extra["vocal_bursts"] = True
+                    spec=spec)
+                if _applied:
+                    rv.extra["vocal_bursts"] = True
             except Exception:
                 pass
             av_out.write_bytes(audio)
