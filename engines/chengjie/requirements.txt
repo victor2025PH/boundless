@@ -76,6 +76,10 @@ faster-whisper>=1.0.0
 # 若部署不需要 whisper_local，可整行移除以显著减小体积（faster_whisper/openai 兼容 API 仍可用）。
 openai-whisper>=20231117
 # torch>=2.0.0  # openai-whisper 传递依赖；GPU 部署需用 pytorch cu 索引单独装（见 requirements.lock 注意事项）
+#   实施102 阶段 4（2026-09-22）：173 生产实例装的是 CPU 轮 torch 2.14+cpu（uv 默认索引）；实例本身不在本机
+#   跑 GPU 推理（ASR/SER 在 176、出图 104、识图 198、LLM 走 vLLM），功能全 ok。若日后要本机 CUDA 路径再换 cu 轮。
+#   funasr 未装（依赖 editdistance 需 MSVC 编译；173 无 MSVC）——只是 whisper_local 之外的可选 ASR 提供商，
+#   生产主路 176:8765 不受影响；要装就先 `pip wheel editdistance` 再装。
 
 # 图像理解（智谱 GLM-4V-Flash，方案 A 为主）
 zhipuai>=2.0.0

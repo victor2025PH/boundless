@@ -10,6 +10,7 @@
     python deploy/compute/realloc102_machines.py phase0e --apply   # 只补 0e（泊 musetalk），不重建 198 模型
     python deploy/compute/realloc102_machines.py phase3 --apply --comfy-task <104 上 ComfyUI 任务名>
     python deploy/compute/realloc102_machines.py phase4            # 只做预检清单，不动生产实例
+    python deploy/compute/realloc102_machines.py phase4 --verify-only   # 迁移后验收（173 在跑、117 已退）
 
 约定：远端是 Windows OpenSSH；步骤命令**全部写成 PowerShell**，Runner 编成 ``-EncodedCommand`` 下发
 ——176 默认 shell 是 PowerShell、其它机器是 cmd，编码下发对两者一视同仁，且零引号转义问题
@@ -39,6 +40,7 @@ PHASES = ["phase0", "phase0e", "phase1", "phase2", "phase3", "phase4"]
 
 # ── 别名（machines.json ssh[0]；176 用 ganzhi 因 ssh 配置尚未渲染新别名）──────────
 H176, H173, H104, H140, H198 = "ganzhi", "yuyan", "shengyin", "jiyi", "shijue"
+H117 = "zhuji"
 
 VL_MODEL = "qwen3-vl:8b-instruct"
 QWEN30B = "qwen3:30b-a3b-instruct-2507-q4_K_M"
@@ -244,8 +246,38 @@ def build_phase3(comfy_task: str = "") -> Phase:
     return Phase("phase3", "104 出图 / 140 粤语", steps=steps, overlay_phase="phase3", verify=verify)
 
 
+def _listen_count(port: int) -> str:
+    return f"(Get-NetTCPConnection -LocalPort {port} -State Listen -EA SilentlyContinue | Measure-Object).Count"
+
+
+def _task_state(name: str) -> str:
+    return f"(Get-ScheduledTask -TaskName '{name}' -EA SilentlyContinue).State"
+
+
+# 阶段 4 迁移后验收（只读）。2026-09-22 实测：迁移本体是 tar/scp + 计划任务镜像 + stop/restart_instance
+# 手工序列（§7.0 阶段 4 行），这里只固化「迁完该长什么样」，给 --verify-only 复核用：
+# 173 起（实例 / 中央凭据池 / 三条 VPS 隧道 / 关键任务 Ready）、117 退（引擎不听 18799、生产任务 Disabled）。
+PHASE4_VERIFY: List[Step] = [
+    Step(H173, _listen_count(18799), "173 智聊实例 :18799 在听", expect="1"),
+    Step(H173, _listen_count(8000), "173 中央凭据池 :8000 在听（credpool_stage 需 tgkz2026/backend 在 173）", expect="1"),
+    Step(H173, "(Get-Process ssh -EA SilentlyContinue | Measure-Object).Count",
+         "173 VPS 隧道 ssh 进程数（prod/tenant/vision ≥ 3；少了看 .ops\\*_tunnel.log 的 key 权限）"),
+    Step(H173, "; ".join(_task_state(t) for t in ("CredPoolService", "ProdTunnel", "TenantTunnel", "VisionTunnel",
+                                                  "ProdEdgeWatchdog", "SeatLogMonitor", "ChatXTrialFulfill")),
+         "173 关键任务应 Ready/Running（Disabled = 镜像启用漏了）"),
+    Step(H173, "Test-Path D:\\workspace\\boundless\\tgkz2026\\backend\\config.py",
+         "173 tgkz2026/backend 在（credpool_stage import config 依赖，仓库 gitignore 不带）", expect="True"),
+    Step("local", "http://192.168.0.173:18799/login", "LAN 直连 173 /login 通"),
+    Step(H117, "(Get-NetTCPConnection -LocalPort 18799 -State Listen -EA SilentlyContinue "
+               "| Where-Object { (Get-Process -Id $_.OwningProcess).ProcessName -ne 'svchost' } | Measure-Object).Count",
+         "117 本机引擎不再听 18799（只允许 svchost portproxy 过渡转发）", expect="0", optional=True),
+    Step(H117, "; ".join(_task_state(t) for t in ("CredPoolService", "ProdTunnel", "Boundless-chengjie-watchdog")),
+         "117 生产任务应全 Disabled（否则看门狗会把实例拉回、Telegram 双开）", optional=True),
+]
+
+
 def build_phase4() -> Phase:
-    """只做预检（只读），迁移本体按 §7.1 阶段 4 手工在 04:00 窗执行。"""
+    """steps 只做预检（只读）；迁移本体按 §7.1 阶段 4 手工执行；verify 是迁后验收（--verify-only）。"""
     return Phase("phase4", "117 → 173 预检（只读，不动生产）", steps=[
         Step(H173, "[math]::Round((Get-PSDrive D).Free/1GB)", "173 D: 空闲 GB（需 ≥ 50）"),
         Step(H173, "Test-Path \"$env:UserProfile\\.wslconfig\"",
@@ -255,7 +287,7 @@ def build_phase4() -> Phase:
         Step(H173, "Test-Path D:\\faceX\\mfys\\secrets\\service_token.txt",
              "173 是否已有集群令牌文件（阶段 1 direct 依赖）", optional=True),
         Step("local", "file:D:/chengjie-instances/zhiliao/data", "117 实例数据根在（6.2G，robocopy 源）"),
-    ])
+    ], verify=list(PHASE4_VERIFY))
 
 
 BUILDERS: Dict[str, Callable[..., Phase]] = {
@@ -401,7 +433,8 @@ def main() -> int:
         sys.stdout.reconfigure(errors="replace")
     phase = BUILDERS[a.phase](comfy_task=a.comfy_task, harden_ollama=a.harden_ollama)
     if a.phase == "phase4" and a.apply:
-        print("phase4 只做只读预检；迁移本体按 docs/实施102 §7.1 阶段 4 在 04:00 窗手工执行。")
+        print("phase4 只做只读预检；迁移本体按 docs/实施102 §7.1 阶段 4 手工执行（2026-09-22 已完成），"
+              "迁后复核用 --verify-only。")
     return run_phase(phase, apply=a.apply, overlay_extra=a.overlay_arg, verify_only=a.verify_only)
 
 

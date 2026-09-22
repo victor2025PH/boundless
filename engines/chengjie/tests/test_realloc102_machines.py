@@ -111,6 +111,13 @@ def test_phases_cover_runbook_targets(rm):
     assert p4.overlay_phase == "" and all(s.host in (rm.H173, "local") for s in p4.steps)
     # phase4 只读：不含 stop/restart/robocopy 这类动作
     assert not any(k in s.cmd.lower() for s in p4.steps for k in ("stop_instance", "robocopy", "restart"))
+    # 迁后验收：173 起（实例/凭据池/隧道/任务/tgkz 后端）、117 退（引擎不听 18799、生产任务 Disabled）
+    assert any("18799" in s.cmd and s.host == rm.H173 and s.expect == "1" for s in p4.verify)
+    assert any("8000" in s.cmd and s.host == rm.H173 for s in p4.verify)
+    assert any("tgkz2026" in s.cmd and s.host == rm.H173 for s in p4.verify)
+    assert any(s.host == rm.H117 and s.optional and "svchost" in s.cmd and s.expect == "0" for s in p4.verify)
+    assert all(s.host in (rm.H173, rm.H117, "local") for s in p4.verify)
+    assert not any(k in s.cmd.lower() for s in p4.verify for k in ("stop", "disable", "enable", "remove", "restart"))
 
 
 def test_phase0_hardening_is_opt_in(rm):
