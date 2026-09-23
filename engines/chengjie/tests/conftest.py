@@ -520,6 +520,35 @@ def _isolated_audit_stores(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_runtime_flags(tmp_path):
+    """KillSwitch / CanaryStore 单例重定向到 tmp（否则默认落仓库 ``config/runtime_flags.db``）。
+
+    两者 getter 无参时用 cwd 相对路径 → pytest cwd＝引擎根，且 ``-n auto`` 各 worker
+    共用同一文件：``ban_signal`` 自动急停一写 ``account:messenger:100``，别的 worker 里
+    刚初始化单例的用例读到就被拦（test_messenger_send_semantics 的串扰型 flaky）。
+    每测试前后重置单例并预热到 tmp，用例内显式 ``KillSwitch(path)`` 的不受影响。
+    """
+    import src.ops.canary as cn
+    import src.ops.kill_switch as ks
+
+    old_ks, old_cn = ks._singleton, cn._store
+    ks._singleton = None
+    cn._store = None
+    try:
+        ks.get_kill_switch(tmp_path / "_t_runtime_flags.db")
+    except Exception:
+        pass
+    try:
+        cn.get_canary_store(tmp_path / "_t_runtime_flags.db")
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        ks._singleton, cn._store = old_ks, old_cn
+
+
+@pytest.fixture(autouse=True)
 def _isolated_sticker_store(tmp_path):
     """表情包存储隔离（2026-08-17，防以后）：sticker_store 的默认 DB 是 CWD 相对
     ``config/sticker_packs.db``（pytest cwd＝引擎根 → 会写进仓库 config/），落盘根
