@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.0.97",
+    "date": "2026-09-23",
+    "title": {
+      "zh": "语音语气可调：人设「语气表达」四档 + 会话级覆盖；工具箱语音报错真因、外语译文不再夹中文；人设「应用到…」补全微信 PC 等全部平台",
+      "en": "Adjustable voice expressiveness: four persona levels + per-conversation override; real voice-send error reasons, no Chinese left in translations; persona apply-to covers every connected platform"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "语音更「像人」可调：人设页新增「语气表达」四档（克制 / 自然 / 生动 / 夸张），配合「基线情绪」设置，控制语音里笑声、感叹与情绪起伏的强弱；默认「自然」，觉得情感表达太满就调低一档，即刻生效",
+        "语音预览可对比：人设页语音预览支持同一段话在不同档位下试听对比，选好再保存",
+        "单个会话可临时覆盖：工作台语音面板可为当前客户单独指定档位（不改人设），并显示当前生效档位与来源（会话 / 人设 / 全局）；点「👎」可一键降一档",
+        "语音发送与预览带说明：发送记录与预览结果标出本次使用的表达档位与情绪，便于回看为什么这条语音是这个语气",
+        "工具箱「发送语音给对方」失败提示不再显示 [object Object]，改为直接给出真实原因（平台不支持 / 渠道断开 / 发送受限等）",
+        "中→英等外语翻译不再夹中文：译文若残留「智聊」「西贡十五日」等中文专名，会自动带提示定向重译一次，专名译出或音译",
+        "人设「应用到…」弹窗补全所有已接入平台：微信 PC、微信客服、抖音、QQ 机器人、网页客服等账号均可指定人设；按平台分组、平台名中文化，并显示每个账号在线 / 离线 / 待登录 / 异常等状态，微信 PC 多窗口逐行可辨",
+        "数据、各平台登录状态一律不受影响；升级后请重启一次工作台"
+      ],
+      "en": [
+        "Adjustable voice expressiveness: the persona page gains four levels (restrained / natural / vivid / dramatic) plus a baseline-emotion setting that controls how much laughter, exclamation and emotional swing the voice carries; default is natural - drop one level if it feels too intense, effective immediately",
+        "Compare voice previews: preview the same line at different levels side by side before saving",
+        "Per-conversation override: the workbench voice panel can set a level for the current customer only (persona untouched), shows the effective level and its source (conversation / persona / global), and a thumbs-down lowers it one level",
+        "Explainable sends: send records and previews show the expressiveness level and emotion used, so you can see why a voice note sounds the way it does",
+        "Toolbox \"send voice to customer\" failures no longer show [object Object]; the real reason (platform unsupported / channel disconnected / sending restricted) is displayed",
+        "Translations into English and other non-Chinese languages no longer leave Chinese proper nouns behind: leftover Chinese is re-translated once with targeted hints so names are translated or transliterated",
+        "Persona \"apply to...\" now lists every connected platform: WeChat PC, WeChat Customer Service, Douyin, QQ bot, web chat and more can be assigned a persona; accounts are grouped by platform with localized names and show online / offline / awaiting login / error status, with WeChat PC windows listed individually",
+        "Data and platform logins are unaffected; please restart the workbench once after upgrading"
+      ]
+    }
+  },
+  {
     "version": "1.0.96",
     "date": "2026-09-22",
     "title": {
