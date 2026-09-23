@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}节点机群 · {{ product_name|default('智控') }}{% endblock %}
+{% block page_title %}节点机群{% endblock %}
+{% block head %}
+<style>
+.fc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:.9rem;margin-bottom:1.2rem}
+.fc-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem 1.1rem}
+.fc-card .k{font-size:.74rem;color:var(--t2);font-weight:600}
+.fc-card .v{font-size:1.6rem;font-weight:700;margin-top:.2rem}
+.fc-card .s{font-size:.72rem;color:var(--t3);margin-top:.15rem}
+.fc-sec{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem 1.1rem;margin-bottom:1.2rem}
+.fc-sec h3{margin:0 0 .7rem;font-size:.9rem;display:flex;justify-content:space-between;align-items:center}
+.fc-tbl{width:100%;border-collapse:collapse;font-size:.8rem}
+.fc-tbl th,.fc-tbl td{padding:.4rem .5rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+.fc-badge{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.72rem;font-weight:700}
+.fc-ok{background:var(--gs);color:var(--green)}.fc-warn{background:var(--as);color:var(--amber)}
+.fc-bad{background:var(--rs);color:var(--red)}.fc-muted{background:var(--input);color:var(--t2)}
+.fc-kv{font-size:.78rem;color:var(--t2);display:flex;flex-wrap:wrap;gap:.4rem 1.2rem}.fc-kv b{color:var(--t)}
+.fc-act{display:flex;flex-wrap:wrap;gap:.3rem}
+.fc-act button{font-size:.72rem;padding:.2rem .5rem}
+.fc-code{font-family:ui-monospace,monospace;font-size:1.4rem;letter-spacing:.15em;font-weight:700}
+.fc-pre{font-size:.72rem;max-height:14rem;overflow:auto;background:var(--input);padding:.5rem;border-radius:6px;white-space:pre-wrap}
+</style>
+{% endblock %}
+{% block content %}
+<div style="max-width:1200px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
+    <span class="fc-kv">主控 <b>{{ public_url }}</b> 心跳 <b>{{ heartbeat_sec }}s</b> 更新 <b id="fc-ts">—</b> <span id="fc-notes"></span></span>
+    <span class="fc-act">
+      <button class="btn-sec" id="fc-newcode">＋ 生成注册码</button>
+      <button class="btn-sec" id="fc-refresh">↻ 刷新</button>
+    </span>
+  </div>
+
+  <div class="fc-grid">
+    <div class="fc-card"><div class="k">节点</div><div class="v" id="fc-nodes">—</div><div class="s" id="fc-nodes-s"></div></div>
+    <div class="fc-card"><div class="k">在线</div><div class="v" id="fc-online">—</div><div class="s">最近心跳 ≤ 离线阈值</div></div>
+    <div class="fc-card"><div class="k">账号</div><div class="v" id="fc-acc">—</div><div class="s" id="fc-acc-s"></div></div>
+    <div class="fc-card"><div class="k">待领任务</div><div class="v" id="fc-queued">—</div><div class="s" id="fc-tasks-s"></div></div>
+    <div class="fc-card"><div class="k">24h 失败</div><div class="v" id="fc-failed">—</div><div class="s">failed / rejected / expired</div></div>
+    <div class="fc-card"><div class="k">开放注册码</div><div class="v" id="fc-codes">—</div><div class="s">未用且未过期</div></div>
+  </div>
+
+  <div class="fc-sec" id="fc-codebox" style="display:none">
+    <h3>新注册码 <button class="btn-sec" onclick="document.getElementById('fc-codebox').style.display='none'">收起</button></h3>
+    <div class="fc-kv"><span>注册码 <span class="fc-code" id="fc-code">—</span></span><span>有效至 <b id="fc-code-exp">—</b></span></div>
+    <p style="font-size:.78rem;color:var(--t2);margin:.6rem 0 0">在受控电脑上运行安装包，或命令行：<code>python -m src.fleet.agent enroll --controller {{ public_url }} --code ＜注册码＞</code></p>
+  </div>
+
+  <div class="fc-sec">
+    <h3>节点 <span class="fc-kv"><label>分组 <input id="fc-group" placeholder="全部" style="width:8rem"></label></span></h3>
+    <table class="fc-tbl">
+      <thead><tr><th>状态</th><th>节点</th><th>分组</th><th>主机</th><th>版本</th><th>实例 / 账号</th><th>最近心跳</th><th>操作</th></tr></thead>
+      <tbody id="fc-list"></tbody>
+    </table>
+  </div>
+
+  <div class="fc-sec">
+    <h3>最近任务</h3>
+    <table class="fc-tbl">
+      <thead><tr><th>时间</th><th>节点</th><th>种类</th><th>状态</th><th>结果 / 说明</th></tr></thead>
+      <tbody id="fc-tasks"></tbody>
+    </table>
+  </div>
+
+  <div class="fc-sec" id="fc-detail" style="display:none">
+    <h3>任务结果 <button class="btn-sec" onclick="document.getElementById('fc-detail').style.display='none'">收起</button></h3>
+    <pre class="fc-pre" id="fc-detail-body"></pre>
+  </div>
+</div>
+<script>
+(function(){
+  var STATE={online:['在线','fc-ok'],offline:['离线','fc-bad'],revoked:['已吊销','fc-muted'],pending:['待注册','fc-warn']};
+  var TSTATE={queued:'fc-warn',pulled:'fc-warn',done:'fc-ok',failed:'fc-bad',rejected:'fc-bad',expired:'fc-muted',cancelled:'fc-muted'};
+  var KINDS=['ping','pull_overview','account_health','login_qr','stop_account','restart_instance'];
+  var nodes={};
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function t(id,v){var el=document.getElementById(id);if(el)el.textContent=v;}
+  function fmtTs(ts){return ts?new Date(ts*1000).toLocaleString():'—';}
+  function ago(ts){if(!ts)return '从未';var s=Math.max(0,Math.round(Date.now()/1000-ts));return s<60?(s+' 秒前'):s<3600?(Math.round(s/60)+' 分前'):(Math.round(s/3600)+' 小时前');}
+  function badge(lbl,cls){return '<span class="fc-badge '+cls+'">'+esc(lbl)+'</span>';}
+  function j(r){return r.ok?r.json():r.json().then(function(e){throw new Error(e.detail||r.status);});}
+  function renderOverview(d){
+    t('fc-ts',fmtTs(d.generated_at));var n=d.nodes||{},a=d.accounts||{},tk=(d.tasks||{}).by_status||{};
+    t('fc-nodes',n.total||0);t('fc-nodes-s','离线 '+(n.offline||0)+' · 吊销 '+(n.revoked||0));
+    t('fc-online',n.online||0);t('fc-acc',a.total||0);t('fc-acc-s','在线 '+(a.online||0));
+    t('fc-queued',tk.queued||0);t('fc-tasks-s','已领 '+(tk.pulled||0)+' · 完成 '+(tk.done||0));
+    t('fc-failed',(d.tasks||{}).failed_24h||0);t('fc-codes',d.open_enroll_codes||0);
+  }
+  function renderNodes(list){
+    nodes={};
+    document.getElementById('fc-list').innerHTML=list.length?list.map(function(n){nodes[n.node_id]=n;
+      var st=STATE[n.state]||[n.state,'fc-muted'],hb=n.last_heartbeat||{},inst=hb.instances||[],acc=hb.accounts||{};
+      var up=inst.filter(function(i){return i&&i.up;}).length;
+      var acts=n.status==='revoked'?'':KINDS.map(function(k){return '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="'+k+'">'+k+'</button>';}).join('')+
+        '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__revoke" style="color:var(--red)">吊销</button>';
+      return '<tr><td>'+badge(st[0],st[1])+(n.proto_compatible?'':' '+badge('协议过旧','fc-warn'))+'</td>'+
+        '<td><b>'+esc(n.label||n.node_id)+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.node_id)+' · '+esc(n.machine_id)+'</span></td>'+
+        '<td>'+esc(n.group_name||'—')+'</td><td>'+esc(n.host_name||'—')+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.os||'')+'</span></td>'+
+        '<td>agent '+esc(n.agent_version||'—')+'<br>app '+esc(n.app_version||'—')+'</td>'+
+        '<td>'+up+'/'+inst.length+' 实例 · '+(acc.online||0)+'/'+(acc.total||0)+' 账号'+(hb.errors&&hb.errors.length?'<br>'+badge(hb.errors.length+' 错误','fc-bad'):'')+'</td>'+
+        '<td>'+esc(ago(n.last_seen))+'</td><td class="fc-act">'+acts+'</td></tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3)">还没有节点——点「生成注册码」，在受控电脑上安装并输入注册码</td></tr>';
+  }
+  function renderTasks(list){
+    document.getElementById('fc-tasks').innerHTML=list.length?list.map(function(x){var n=nodes[x.node_id];
+      var res=x.detail||'';if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
+      return '<tr><td>'+esc(fmtTs(x.created_at))+'</td><td>'+esc(n?(n.label||n.host_name||x.node_id):x.node_id)+'</td><td>'+esc(x.kind)+'</td>'+
+        '<td>'+badge(x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
+    }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3)">暂无任务</td></tr>';
+  }
+  function load(){
+    var g=document.getElementById('fc-group').value.trim();
+    Promise.all([apiFetch('/api/fleet/overview').then(j),apiFetch('/api/fleet/nodes?group='+encodeURIComponent(g)).then(j),apiFetch('/api/fleet/tasks?limit=40').then(j)])
+      .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);t('fc-notes','');})
+      .catch(function(e){t('fc-notes','· 加载失败 '+e.message);});
+  }
+  document.getElementById('fc-list').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
+    var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),body={};
+    if(k==='__revoke'){if(!confirm('吊销节点 '+nid+'？其 node_key 立即失效，未领任务全部取消。'))return;
+      apiFetch('/api/fleet/nodes/'+nid+'/revoke',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});return;}
+    if(k==='stop_account'){var ph=prompt('要 STOP 的对方手机号（E.164，不带 +）');if(!ph)return;body.target={phone:ph};}
+    if(k==='login_qr'){var pf=prompt('平台 whatsapp / telegram','whatsapp');if(!pf)return;body.payload={platform:pf};}
+    apiFetch('/api/fleet/nodes/'+nid+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({kind:k},body))})
+      .then(j).then(load).catch(function(e){alert(e.message);});
+  });
+  document.getElementById('fc-tasks').addEventListener('click',function(ev){var a=ev.target.closest('a[data-t]');if(!a)return;ev.preventDefault();
+    apiFetch('/api/fleet/tasks/'+a.getAttribute('data-t')).then(j).then(function(d){var r=d.task.result||{};
+      var box=document.getElementById('fc-detail');box.style.display='';
+      if(r.qr_data_url){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
+      else document.getElementById('fc-detail-body').textContent=JSON.stringify(r,null,2);
+      box.scrollIntoView({behavior:'smooth'});}).catch(function(e){alert(e.message);});
+  });
+  document.getElementById('fc-newcode').addEventListener('click',function(){
+    var g=document.getElementById('fc-group').value.trim();var lbl=prompt('节点名称（可留空，注册后可改）','')||'';
+    apiFetch('/api/fleet/enroll-codes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:lbl,group_name:g})})
+      .then(j).then(function(d){t('fc-code',d.code);t('fc-code-exp',fmtTs(d.expires_at));document.getElementById('fc-codebox').style.display='';load();})
+      .catch(function(e){alert('生成失败 '+e.message);});
+  });
+  document.getElementById('fc-refresh').addEventListener('click',load);
+  document.getElementById('fc-group').addEventListener('change',load);
+  load();setInterval(load,15000);
+})();
+</script>
+{% endblock %}

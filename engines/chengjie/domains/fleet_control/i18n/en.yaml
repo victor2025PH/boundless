@@ -1,0 +1,4 @@
+greeting: "Hello"
+farewell: "Bye"
+error: "Temporarily unavailable"
+not_found: "No data"

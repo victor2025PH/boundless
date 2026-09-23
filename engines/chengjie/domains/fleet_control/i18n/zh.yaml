@@ -1,0 +1,4 @@
+greeting: "你好"
+farewell: "再见"
+error: "系统暂时不可用"
+not_found: "暂无数据"

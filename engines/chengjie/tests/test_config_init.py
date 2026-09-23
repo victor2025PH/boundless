@@ -48,7 +48,10 @@ def test_each_preset_clean_after_filling_credentials(name):
     if name == "__none__":
         pytest.skip("无预设")
     data = load_preset(name)
-    apply_overrides(data, dict(_FILL))
+    fill = dict(_FILL)
+    if "telegram" not in data:  # 无 TG 通道的预设（如 fleet_control 主控）不注入 TG 凭证
+        fill = {k: v for k, v in fill.items() if not k.startswith("telegram.")}
+    apply_overrides(data, fill)
     issues = check_config(data, config_path=_repo_presets_dir() / f"{name}.yaml")
     errs = [str(i) for i in issues if i.severity == "error"]
     assert not errs, f"{name} 填凭证后仍有错误: {errs}"

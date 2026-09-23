@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>智控 · 多机部署与节点主控</title>
+<meta name="description" content="在任意 Windows 电脑上安装智聊 / 智拓，输入注册码即可接入主控：集中查看在线、账号健康与看板，集中下发任务。">
+<style>
+:root{--bg:#0b1020;--card:#121a2f;--bd:#22304f;--t:#e8ecf5;--t2:#a5b0c8;--t3:#6f7a94;--acc:#4f8cff;--acc2:#7cf0c8;--warn:#ffb84d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+a{color:var(--acc)}.wrap{max-width:980px;margin:0 auto;padding:2.5rem 1.25rem}
+header{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:2.5rem}
+.logo{font-weight:800;font-size:1.15rem;letter-spacing:.04em}.logo span{color:var(--acc2)}
+nav a{color:var(--t2);text-decoration:none;margin-left:1.2rem;font-size:.9rem}
+.hero h1{font-size:2.1rem;line-height:1.25;margin:0 0 .8rem}.hero p{color:var(--t2);max-width:640px;margin:0 0 1.6rem}
+.btns{display:flex;flex-wrap:wrap;gap:.7rem;align-items:center}
+.btn{display:inline-block;padding:.75rem 1.4rem;border-radius:10px;font-weight:700;text-decoration:none;border:1px solid var(--bd);color:var(--t)}
+.btn.p{background:var(--acc);border-color:var(--acc);color:#fff}.btn.dis{opacity:.5;pointer-events:none}
+.meta{font-size:.8rem;color:var(--t3);margin-top:.6rem;word-break:break-all}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin:2.5rem 0}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:1.2rem}
+.card h3{margin:0 0 .4rem;font-size:1rem}.card p{margin:0;color:var(--t2);font-size:.9rem}
+.step{display:flex;gap:1rem;margin:1rem 0}.step b{flex:none;width:2rem;height:2rem;border-radius:50%;background:var(--acc);color:#fff;display:flex;align-items:center;justify-content:center}
+code,pre{font-family:ui-monospace,Consolas,monospace;font-size:.85rem}pre{background:#0a0f1d;border:1px solid var(--bd);border-radius:10px;padding:.9rem 1rem;overflow:auto}
+h2{font-size:1.3rem;margin:2.5rem 0 .8rem}
+.note{border-left:3px solid var(--warn);padding:.5rem .9rem;color:var(--t2);font-size:.9rem;background:rgba(255,184,77,.06);border-radius:0 8px 8px 0}
+footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:var(--t3);font-size:.8rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="logo">智控 <span>Fleet</span></div>
+  <nav><a href="#download">下载</a><a href="#install">安装</a><a href="#security">安全</a><a href="/fleet/console">主控后台</a></nav>
+</header>
+
+<section class="hero">
+  <h1>一台主控，管理每一台跑智聊 / 智拓的电脑</h1>
+  <p>在任意 Windows 电脑上安装智聊（ChatX）与智拓，输入一次注册码，它就会<strong>主动连到主控</strong>——不需要公网 IP、不用开端口。主控这边集中看在线状态、账号健康、玩家朋友看板，并向指定电脑下发任务。</p>
+  <div class="btns" id="download">
+    {% if download.installer_url %}
+    <a class="btn p" href="{{ download.installer_url }}">下载 Windows 安装包{% if download.version %} v{{ download.version }}{% endif %}</a>
+    {% else %}
+    <a class="btn p dis" href="#">Windows 安装包（即将发布）</a>
+    {% endif %}
+    {% if download.agent_zip_url %}<a class="btn" href="{{ download.agent_zip_url }}">仅节点 Agent（zip）</a>{% endif %}
+    {% if download.changelog_url %}<a class="btn" href="{{ download.changelog_url }}">更新日志</a>{% endif %}
+  </div>
+  {% if download.sha256 %}<div class="meta">SHA-256：<code>{{ download.sha256 }}</code></div>{% endif %}
+  <div class="meta">主控地址：<code>{{ public_url }}</code> · 协议版本 {{ proto_version }} · 支持 Windows 10 / 11 / Server 2019+</div>
+</section>
+
+<div class="grid">
+  <div class="card"><h3>出站直连</h3><p>受控电脑只往外连主控（HTTPS 长轮询），家庭宽带 / 4G / 机房 NAT 后都能用，断线自动重连。</p></div>
+  <div class="card"><h3>只传指标，不传聊天</h3><p>心跳只带版本、实例、账号数、健康状态、看板汇总数字；聊天原文永远留在本机。</p></div>
+  <div class="card"><h3>一机一钥</h3><p>注册码一次性、限时；注册后签发本机专属 node_key，主控随时可吊销或换钥。</p></div>
+  <div class="card"><h3>任务幂等</h3><p>ping / 拉看板 / 账号健康 / 集中扫码 / STOP 触达 / 重启实例；每条带 TTL，重复送达不重复执行。</p></div>
+</div>
+
+<h2 id="install">三步接入</h2>
+<div class="step"><b>1</b><div><strong>在主控后台生成注册码</strong><br><span style="color:var(--t2)">登录 <a href="/fleet/console">/fleet/console</a> → 「生成注册码」（8 位数字，默认 60 分钟内有效，只能用一次）。</span></div></div>
+<div class="step"><b>2</b><div><strong>在受控电脑安装</strong><br><span style="color:var(--t2)">运行安装包，按提示选择角色（智聊 / 智拓 / 两者），填入主控地址与注册码。已装过智聊的机器也可只用命令行接入：</span>
+<pre>python -m src.fleet.agent enroll --controller {{ public_url }} --code ＜注册码＞
+python -m src.fleet.agent run</pre></div></div>
+<div class="step"><b>3</b><div><strong>回到主控后台</strong><br><span style="color:var(--t2)">几秒内节点变为「在线」，即可查看实例 / 账号状态并下发任务。重装系统后用新注册码重新接入，节点身份不变。</span></div></div>
+
+<h2 id="security">安全与边界</h2>
+<div class="note">
+主控不会反向连接、不会远程桌面、不会读取聊天记录；能做的只有契约里列出的任务种类。
+每台电脑的 node_key 只存在本机 <code>%ProgramData%\ChatX\fleet</code>，主控只保存其哈希。
+所有请求经 HTTPS；注册码过期或用过即失效。完整契约见 <code>docs/FLEET_CONTROL_CONTRACT.md</code>。
+</div>
+
+<footer>
+  <span>© 智控 Fleet · 本页为多机部署产品独立页面</span>
+  <span><a href="https://bd2026.cc/">返回官网</a> · <a href="/fleet/console">主控后台</a></span>
+</footer>
+</div>
+</body>
+</html>

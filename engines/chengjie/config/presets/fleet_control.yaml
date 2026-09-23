@@ -1,0 +1,71 @@
+# 场景预设：智控 · 节点机群主控（fleet_control 域）
+# ─────────────────────────────────────────────────────────────────────
+# 适用：部署在 bd2026.cc 那台 VPS 上的「主控实例」。各受控电脑上的 chatx-agent 出站连到这里：
+#   注册码 → node_key → 心跳 / 长轮询领任务 / 幂等 ack。本实例不接任何频道账号、不聊天。
+#   python main.py --init fleet_control --config config_fleet\config.yaml
+#   python main.py --check             --config config_fleet\config.yaml
+#   python main.py                     --config config_fleet\config.yaml     （端口 18798）
+# 反代：bd2026.cc/fleet/ 与 /api/fleet/ 指到本实例即可，官网其余路径不变（独立主页，不动现有内容）。
+# 契约：docs/FLEET_CONTROL_CONTRACT.md
+# ─────────────────────────────────────────────────────────────────────
+
+domain: fleet_control
+
+fleet_control:
+  db_path: ""                              # 空 → 本配置目录/fleet_control.db
+  heartbeat_sec: 30
+  offline_after_sec: 120
+  enroll_code_ttl_min: 60
+  public_url: "https://bd2026.cc/fleet"    # Agent 连的地址（注册码页 / 安装说明展示）
+  download:
+    version: ""                            # 发布流程写入；空 → 主页显示「即将发布」
+    installer_url: ""
+    sha256: ""
+    changelog_url: ""
+    agent_zip_url: ""
+
+# 主控不调用 LLM；保留占位让 --check 通过
+ai:
+  provider: openai_compatible
+  primary: cloud
+  api_key: "UNUSED"
+  base_url: "http://127.0.0.1:1/v1"
+  model: "unused"
+
+skills:
+  enabled: []
+
+platform_login:
+  enabled: false
+protocol_autoreply:
+  enabled: false
+inbox:
+  enabled: false
+memory:
+  enabled: false
+
+web_admin:
+  enabled: true
+  site_name: "智控 · 节点机群主控"
+  host: 127.0.0.1                          # 反代在前；只监听本机
+  port: 18798
+  auth_token: "CHANGE_ME"                  # ← 必填
+  secret_key: "CHANGE_ME"                  # ← 必填
+
+messenger_rpa:
+  enabled: false
+line_rpa:
+  enabled: false
+
+licensing:
+  enforce: false
+  hosted_ai:
+    enabled: false
+  trial:
+    enabled: false
+    enforce: false
+
+compliance:
+  disclosure:
+    notice: false
+    honest_identity: false

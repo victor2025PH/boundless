@@ -1,0 +1,33 @@
+name: fleet_control
+display_name: "智控 · 节点机群主控"
+version: "0.1"
+description: >
+  多机部署的主控端：每台受控电脑上的 chatx-agent 出站连到本实例（注册码 → node_key →
+  心跳 / 长轮询领任务 / 幂等 ack），这里集中看节点在线、账号健康、看板摘要，并向各节点下发
+  ping / pull_overview / account_health / login_qr / stop_account 等任务。本域不聊天、不接任何
+  频道账号，只在专用主控实例上激活（config_fleet，端口 18798）。契约 docs/FLEET_CONTROL_CONTRACT.md。
+
+skills: []
+
+config_files:
+  - defaults.yaml
+
+hooks: false
+
+i18n:
+  zh: i18n/zh.yaml
+  en: i18n/en.yaml
+
+# domains/fleet_control/web/routes.py：节点端点（Bearer node_key）+ 运营端点（核心 api_auth）+ 两个页面
+web:
+  routes: true
+  pages:
+    - key: fleet_console
+      path: /fleet/console
+      label: "节点机群"
+      label_simple: "机群"
+      icon: grid
+      section: ops
+      show_in_simple: true
+      roles: [master, admin, supervisor, viewer]
+      cmd_keys: "fleet node 节点 机群 主控 心跳 任务"

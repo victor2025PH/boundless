@@ -1,0 +1,25 @@
+domain:
+  name: fleet_control
+  display_name: "智控 · 节点机群主控"
+  version: "0.1"
+
+# 主控实例不聊天：不挂任何技能。
+skills:
+  enabled: []
+
+kb:
+  categories: []
+
+# ── 说明：以下是「根 config.yaml」里的键（不是域包私有配置），写在这里只作文档。
+# fleet_control:
+#   db_path: ""                 # 空 → <配置目录>/fleet_control.db
+#   heartbeat_sec: 30           # 下发给 Agent 的心跳间隔
+#   offline_after_sec: 120      # 超过 N 秒没心跳 → 节点标 offline
+#   enroll_code_ttl_min: 60     # 注册码有效期（分钟）
+#   public_url: "https://bd2026.cc/fleet"   # Agent 连的公网地址（注册码页 / 安装说明里展示）
+#   download:                   # 独立主页 /fleet/ 展示的安装包信息（由发布流程写入）
+#     version: ""
+#     installer_url: ""
+#     sha256: ""
+#     changelog_url: ""
+#     agent_zip_url: ""
