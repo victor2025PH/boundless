@@ -524,7 +524,16 @@
        expressiveness 键 → 整行隐藏（特性探测，不显示错的）。分段按钮高亮
        「会话钉住」的档（on），有效档（可能来自人设/全局）用 eff 类点亮文字，
        提示行说明来源，👎 以有效档为基准降一档并钉成会话覆写。 */
-    _vxLabel(lv) {
+    _vxDesc(lv) {
+    switch (String(lv || "")) {
+      case "restrained": return this._t("cp.voice.vx_desc_restrained");
+      case "natural": return this._t("cp.voice.vx_desc_natural");
+      case "vivid": return this._t("cp.voice.vx_desc_vivid");
+      case "dramatic": return this._t("cp.voice.vx_desc_dramatic");
+      default: return this._t("cp.voice.vx_desc_inherit");
+    }
+  }
+  _vxLabel(lv) {
       const c = String(lv || "").trim().toLowerCase();
       if (!c) return this._t("cp.voice.vx_inherit");
       const k = "cp.voice.vx_" + c;
@@ -544,7 +553,7 @@
         const lv = b.getAttribute("data-lv") || "";
         b.classList.toggle("on", lv === sess);
         b.classList.toggle("eff", !!lv && lv === eff);
-        b.title = this._t("cp.voice.vx_desc_" + (lv || "inherit"));
+        b.title = this._vxDesc(lv);
       });
       const down = row.querySelector('[data-act="vx-down"]');
       if (down) down.disabled = eff === "restrained";
@@ -557,7 +566,7 @@
         else srcTxt = this._t("cp.voice.vx_src_global");
         hint.textContent = this._t("cp.voice.vx_now", {
           level: this._vxLabel(eff), src: srcTxt,
-          desc: this._t("cp.voice.vx_desc_" + (eff || "inherit")) });
+          desc: this._vxDesc(eff) });
         hint.hidden = false;
       }
     }
