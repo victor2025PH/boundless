@@ -37,10 +37,16 @@ export async function POST(req: NextRequest) {
   const rawPath = String(body?.sitePath ?? "");
   const sitePath = rawPath.startsWith("/") ? rawPath.slice(0, 100) : undefined;
   const siteLabel = body?.siteLabel ? String(body.siteLabel).slice(0, 32) : undefined;
+  // 修正已发帖：传 editMessageId 就地 editMessageText（仅纯文字帖），不再新发一条
+  const editMessageId =
+    Number.isInteger(body?.editMessageId) && body.editMessageId > 0 ? Number(body.editMessageId) : undefined;
 
   /* 图文帖：photo 仅接受站内 public 相对路径（/brand/...），本地 multipart 上传（比 URL 拉取稳） */
   const rawPhoto = String(body?.photo ?? "");
   let photoFile: string | null = null;
+  if (editMessageId && rawPhoto) {
+    return NextResponse.json({ ok: false, error: "edit_text_only" }, { status: 400 });
+  }
   if (rawPhoto.startsWith("/") && !rawPhoto.includes("..")) {
     const abs = path.join(process.cwd(), "public", rawPhoto);
     try {
@@ -53,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   const { ok, results } = photoFile
     ? await broadcastPhoto({ photo: photoFile, caption: text, target, withButton, campaign })
-    : await broadcastMessage({ text, target, withButton, campaign, sitePath, siteLabel });
-  if (ok) await recordPublish({ kind: "broadcast", target, summary: text, campaign });
+    : await broadcastMessage({ text, target, withButton, campaign, sitePath, siteLabel, editMessageId });
+  if (ok && !editMessageId) await recordPublish({ kind: "broadcast", target, summary: text, campaign });
   return NextResponse.json({ ok, results });
 }
