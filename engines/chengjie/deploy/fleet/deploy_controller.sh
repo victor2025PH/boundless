@@ -84,7 +84,7 @@ if [ ! -f "$CONF_DIR/config.yaml" ]; then
   TOKEN="$(openssl rand -hex 24)"; SECRET="$(openssl rand -hex 32)"
   (cd "$APP_ROOT/app.new" && "$APP_ROOT/venv/bin/python" main.py --init fleet_control --config "$CONF_DIR/config.yaml" \
       --set "web_admin.auth_token=$TOKEN" --set "web_admin.secret_key=$SECRET" \
-      --set "fleet_control.db_path=$DATA_DIR/fleet.db" --set "fleet_control.public_url=$PUBLIC_URL")
+      --set "fleet_control.db_path=$DATA_DIR/fleet.db" --set "fleet_control.public_url=$PUBLIC_URL" </dev/null)
   # 端口 / host 沿用 preset（127.0.0.1:18798）；--set 写出的是字符串，不用它改数字项
   chown root:"$SVC_USER" "$CONF_DIR/config.yaml"; chmod 640 "$CONF_DIR/config.yaml"
   echo

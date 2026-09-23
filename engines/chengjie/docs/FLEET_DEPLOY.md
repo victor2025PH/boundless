@@ -124,5 +124,11 @@ python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/m
 `main.py --init fleet_control --config <tmp> --set ...` + `--check` 通过（deploy 脚本同款命令）；PyInstaller 实际打出 `chatx-agent.exe`（13.0 MB），
 冻结版 `--help / status / service-status` 正常，sha256 与 manifest 一致；安装器非管理员运行时干净拒绝。
 
-未验证（需要真机 / 生产授权）：管理员真实执行安装器 + 计划任务开机自启 + 一次真实 `upgrade` 换文件；VPS 上跑 `deploy_controller.sh`；nginx include 后公网探针。
-建议：先用一台闲置 Windows 机做首台试装（`-Controller http://<开发机IP>:18798`），跑通 enroll → 心跳 → ping → upgrade 再上机房。
+已在 Windows Server 2022 真机（管理员）跑通全链路：本机主控 + 静态下载目录 → `new-code` → 安装器下载 exe / 读 manifest / sha256 → enroll →
+计划任务 `ChatX Fleet Agent` 以 SYSTEM 运行 → 节点 online → `ping` / `account_health` ack done → `admin upgrade --manifest` 一次真实换文件
+（0.2.1 → 0.2.2：下载校验 → 独立一次性计划任务跑 swap → 旧 exe 留 `.bak` → 任务重新拉起 → 心跳上报新版本）→ 卸载器默认保留 `%ProgramData%\ChatX\fleet`，
+重装同机复用 node_id。真机踩到并修掉的坑：PS 5.1 下原生命令 stderr 在 `$ErrorActionPreference=Stop` 会变终止错误（安装器统一 `Native` 包装）；
+cp1252 控制台打中文帮助崩（entry 强制 UTF-8）；Task Scheduler 会连带杀掉 agent 派生的 swap 子进程（改为注册 `ChatX Fleet Agent Upgrade` 一次性任务）；
+`admin` 过滤在线节点应看 `state` 而非 `status`。
+
+未验证（需要生产授权）：VPS 上跑 `deploy_controller.sh`；nginx include 后公网探针；`https://bd2026.cc/downloads/fleet/` 目前未就位（安装器默认下载地址会 302 循环，需官网侧放置发布物）。

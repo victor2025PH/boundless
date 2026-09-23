@@ -188,6 +188,19 @@ def test_swap_script_windows_and_linux(tmp_path):
     assert upd.swap_command(Path("x.sh")) == ["/bin/sh", "x.sh"]
 
 
+def test_windows_swap_runs_as_independent_scheduled_task():
+    # 实机验证：agent 退出时 Task Scheduler 会连带杀掉 Popen 出来的 swap 子进程，必须借独立一次性任务
+    cmds = upd.build_swap_task_commands(["powershell", "-File", r"C:\x\swap.ps1"])
+    assert [c[1] for c in cmds] == ["/Create", "/Run"]
+    create, run = cmds
+    assert create[create.index("/TN") + 1] == upd.SWAP_TASK_NAME == f"{svc.TASK_NAME} Upgrade"
+    assert "/RU" in create and create[create.index("/RU") + 1] == "SYSTEM" and "/F" in create
+    assert r"C:\x\swap.ps1" in create[create.index("/TR") + 1]
+    assert run[run.index("/TN") + 1] == upd.SWAP_TASK_NAME
+    body, _ = upd.build_swap_script(Path(r"C:\a\chatx-agent.exe"), Path(r"C:\b\new.exe"), 1, windows=True)
+    assert f'schtasks /Delete /TN "{upd.SWAP_TASK_NAME}" /F' in body
+
+
 def test_apply_upgrade_rejects_without_sha_or_when_not_frozen(tmp_path):
     assert upd.apply_upgrade({"url": "http://x/a.exe"}, tmp_path, frozen=True)[0] == STATUS_REJECTED
     st, res, detail = upd.apply_upgrade({"url": "http://x/a.exe", "sha256": "ab"}, tmp_path, frozen=False)

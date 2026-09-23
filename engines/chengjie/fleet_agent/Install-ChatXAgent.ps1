@@ -35,6 +35,12 @@ param(
 $ErrorActionPreference = 'Stop'
 function Say($m) { Write-Host "[chatx-agent] $m" }
 function Fail($m) { Write-Host "[chatx-agent] ERROR: $m" -ForegroundColor Red; exit 1 }
+# 原生程序写 stderr 在 EAP=Stop + 重定向下会变成终止错误（PS 5.1），统一在 Continue 下跑并合并输出
+function Native([string]$exe, [string[]]$a) {
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
+  finally { $ErrorActionPreference = $old }
+}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Fail "run this script as Administrator (scheduled task needs SYSTEM)" }
@@ -62,13 +68,13 @@ if ($Sha256) {
   if ($got -ne $Sha256.ToLower()) { Remove-Item $tmp -Force; Fail "sha256 mismatch: got $($got.Substring(0,12)) want $($Sha256.Substring(0,12))" }
   Say "sha256 ok"
 }
-$ver = & $tmp --help 2>&1 | Select-String -Pattern 'enroll' -Quiet
-if (-not $ver) { Fail "downloaded file does not look like chatx-agent" }
+$help = Native $tmp @('--help')
+if ($help -notmatch 'enroll') { Fail "downloaded file does not look like chatx-agent" }
 
 # 2. place exe (stop running task first: exe may be locked)
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $target = Join-Path $InstallDir "chatx-agent.exe"
-schtasks /End /TN "ChatX Fleet Agent" 2>$null | Out-Null
+Native 'schtasks.exe' @('/End', '/TN', 'ChatX Fleet Agent') | Out-Null
 Get-Process -Name chatx-agent -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination "$target.bak" -Force }
@@ -89,24 +95,25 @@ if (-not $NoInstance) {
     if ($hit) { $ConfigPath = $hit.FullName; Say "detected instance config $ConfigPath" }
     else { Say "no local ChatX config found; instance registered without token (add later: chatx-agent add-instance)" }
   }
-  $args = @("--state-dir", $stateDir, "add-instance", "$InstanceName=$InstanceUrl")
-  if ($AuthToken) { $args += @("--auth-token", $AuthToken) }
-  if ($ConfigPath) { $args += @("--config-path", $ConfigPath) }
-  & $target @args | Out-Null
+  $ia = @("--state-dir", $stateDir, "add-instance", "$InstanceName=$InstanceUrl")
+  if ($AuthToken) { $ia += @("--auth-token", $AuthToken) }
+  if ($ConfigPath) { $ia += @("--config-path", $ConfigPath) }
+  Native $target $ia | Out-Null
+  if ($NativeExit -ne 0) { Fail "add-instance failed" }
   Say "instance $InstanceName -> $InstanceUrl"
 }
 
 # 4. enroll
 if (-not $NoEnroll) {
-  $out = & $target --state-dir $stateDir enroll --controller $Controller --code $Code 2>&1
-  if ($LASTEXITCODE -ne 0) { Fail "enroll failed: $out" }
+  $out = Native $target @('--state-dir', $stateDir, 'enroll', '--controller', $Controller, '--code', $Code)
+  if ($NativeExit -ne 0) { Fail "enroll failed: $out" }
   try { $j = $out | ConvertFrom-Json; Say "enrolled node_id=$($j.node_id) machine=$($j.machine_id)" } catch { Say "enrolled" }
 }
 
 # 5. service
-$svc = & $target --state-dir $stateDir install-service 2>&1
-if ($LASTEXITCODE -ne 0) { Fail "install-service failed: $svc" }
+$svc = Native $target @('--state-dir', $stateDir, 'install-service')
+if ($NativeExit -ne 0) { Fail "install-service failed: $svc" }
 Say "service installed and started (scheduled task 'ChatX Fleet Agent')"
 Start-Sleep -Seconds 2
-& $target --state-dir $stateDir service-status
+Write-Host (Native $target @('--state-dir', $stateDir, 'service-status'))
 Say "done. logs: $stateDir\logs\agent.log ; status: `"$target`" status"

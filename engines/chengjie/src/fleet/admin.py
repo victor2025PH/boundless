@@ -144,7 +144,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "nodes":
         rows = adm.nodes(group=args.group, include_revoked=args.all)
         for r in rows:
-            print(f"{r.get('node_id','')[:14]:14} {str(r.get('status','')):8} {str(r.get('group_name') or '-'):10} "
+            print(f"{r.get('node_id','')[:14]:14} {str(r.get('state') or r.get('status') or ''):8} {str(r.get('group_name') or '-'):10} "
                   f"{str(r.get('label') or r.get('host_name') or ''):24} agent={r.get('agent_version','')} app={r.get('app_version','')}")
         print(f"共 {len(rows)} 台", file=sys.stderr)
         return 0
@@ -163,7 +163,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ids = list(args.node)
         else:
             ids = [str(r.get("node_id")) for r in adm.nodes(group=args.group)
-                   if r.get("status") == "online" and str(r.get("agent_version") or "") != str(mf.get("version") or "")]
+                   if r.get("state") == "online" and str(r.get("agent_version") or "") != str(mf.get("version") or "")]
         if not ids:
             print("没有可升级的在线节点（离线或已是该版本）", file=sys.stderr)
             return 1

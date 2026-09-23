@@ -64,6 +64,9 @@ def download_verified(url: str, sha256: str, dest: Path, *, fetch: Fetch = _fetc
     return dest
 
 
+SWAP_TASK_NAME = TASK_NAME + " Upgrade"
+
+
 def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TASK_NAME,
                       windows: Optional[bool] = None) -> Tuple[str, str]:
     """返回 (脚本文本, 后缀)。等 pid 退出 → 备份旧文件 → 新文件就位 → 重新拉起服务。"""
@@ -77,6 +80,7 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
             f"Copy-Item -LiteralPath '{current}' -Destination '{bak}' -Force",
             f"Move-Item -LiteralPath '{new}' -Destination '{current}' -Force",
             f"schtasks /Run /TN \"{task_name}\" | Out-Null",
+            f"schtasks /Delete /TN \"{SWAP_TASK_NAME}\" /F 2>$null | Out-Null",
         ]) + "\n"
         return body, ".ps1"
     body = "\n".join([
@@ -95,12 +99,27 @@ def swap_command(script: Path) -> List[str]:
     return ["/bin/sh", str(script)]
 
 
+def build_swap_task_commands(cmd: List[str], *, task_name: str = SWAP_TASK_NAME) -> List[List[str]]:
+    """计划任务里跑的进程退出时，Task Scheduler 会连带杀掉它派生的子进程（同一 job object），
+    所以换文件脚本不能直接 Popen，而是注册成独立的一次性计划任务立即 /Run。"""
+    tr = subprocess.list2cmdline(cmd)
+    return [
+        ["schtasks", "/Create", "/TN", task_name, "/TR", tr, "/SC", "ONCE", "/ST", "00:00",
+         "/RU", "SYSTEM", "/RL", "HIGHEST", "/F"],
+        ["schtasks", "/Run", "/TN", task_name],
+    ]
+
+
 def _spawn_detached(cmd: List[str]) -> Any:
     kw: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if os.name == "nt":
-        kw["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kw["start_new_session"] = True
+        last = None
+        for c in build_swap_task_commands(cmd):
+            last = subprocess.run(c, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+            if last.returncode != 0:
+                raise RuntimeError(f"{c[1]} rc={last.returncode}: {(last.stderr or last.stdout).strip()[:200]}")
+        return last
+    kw["start_new_session"] = True
     return subprocess.Popen(cmd, **kw)
 
 
@@ -132,4 +151,5 @@ def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Opti
     return "done", {"version": version, "staged": str(dest), "exit": True}, "swap_scheduled"
 
 
-__all__ = ["sha256_file", "download_verified", "build_swap_script", "swap_command", "apply_upgrade"]
+__all__ = ["sha256_file", "download_verified", "build_swap_script", "build_swap_task_commands", "swap_command",
+           "apply_upgrade"]
