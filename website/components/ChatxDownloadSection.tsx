@@ -28,6 +28,7 @@ import ProductScreenshots from "./ProductScreenshots";
 import { CHATX } from "@/lib/chatxContent";
 import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
+import { getSrc } from "@/lib/attribution";
 import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import type { BrandLang } from "@/lib/brand";
 
@@ -51,6 +52,8 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
   const zh = lang === "zh";
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [mf, setMf] = useState<ChatxManifest | null>(null);
+  // 广告来源码：Telegram 广告 → @ChatX_bot → 本页 ?src=；跟到下载点击埋点与 /dl 分流入口（服务端落账）。
+  const [src, setSrc] = useState("");
 
   const d = CHATX.download;
   // 运行时清单优先（发布脚本随安装包一起更新），构建时常量兜底。
@@ -59,7 +62,11 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
   const sizeLabel = mf?.size_mb ? `${mf.size_mb} MB` : d.size[lang];
   const sha256 = mf?.sha256 || d.sha256;
   // /dl 分流：476MB 大包镜像健康走 R2 边缘，否则自动回落本站 /downloads/
-  const url = dlHref(`downloads/${filename}`);
+  const url = dlHref(`downloads/${filename}`) + (src ? `?src=${encodeURIComponent(src)}` : "");
+
+  useEffect(() => {
+    setSrc(getSrc());
+  }, []);
 
   useEffect(() => {
     fetch(d.manifestUrl)
@@ -176,7 +183,7 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                 <a
                   href={url}
                   download
-                  onClick={() => track("chatx_download_click", { os: "windows", ver: version })}
+                  onClick={() => track("chatx_download_click", { os: "windows", ver: version, src: src || undefined })}
                   className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
                 >
                   <Download className="h-4 w-4" />

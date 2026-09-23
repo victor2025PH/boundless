@@ -83,3 +83,33 @@ export function getLeadUtm(): string {
 function compact(u: Utm): string {
   return [u.s, u.m || "-", u.c || "-"].join("/");
 }
+
+// ── 广告来源码 src（Telegram 广告 → @ChatX_bot /start=<src> → 下载页 ?src=<src>）──
+// 与 utm 分开存：utm 走会话归因，src 是要原样跟到下载点击 / 安装包分流入口的短码。
+// 30 天首触保留：广告点进来先看看、隔天直达回来下载，功劳仍记给那条广告。
+const SRC_KEY = "ml_src";
+const SRC_TTL_MS = 30 * 24 * 3600 * 1000;
+const SRC_RE = /^[A-Za-z0-9_-]{1,48}$/;
+
+/** 当前访客的广告来源码（URL ?src= 优先并落盘；否则读 30 天内存储；无则 ""）。 */
+export function getSrc(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const fromUrl = (new URLSearchParams(window.location.search).get("src") ?? "").trim();
+    if (SRC_RE.test(fromUrl)) {
+      try {
+        localStorage.setItem(SRC_KEY, JSON.stringify({ v: fromUrl, ts: Date.now() }));
+      } catch {
+        /* ignore */
+      }
+      return fromUrl;
+    }
+    const raw = localStorage.getItem(SRC_KEY);
+    if (!raw) return "";
+    const rec = JSON.parse(raw) as { v?: string; ts?: number };
+    if (!rec?.v || !rec.ts || Date.now() - rec.ts >= SRC_TTL_MS || !SRC_RE.test(rec.v)) return "";
+    return rec.v;
+  } catch {
+    return "";
+  }
+}
