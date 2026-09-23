@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
@@ -554,8 +554,50 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
             "sha256": str(dl.get("sha256") or ""),
             "changelog_url": str(dl.get("changelog_url") or ""),
             "agent_zip_url": str(dl.get("agent_zip_url") or ""),
+            "manifest_url": str(dl.get("manifest_url") or ""),
+            "install_script_url": str(dl.get("install_script_url") or ""),
         },
     }
+
+
+_manifest_cache: Dict[str, Any] = {"url": "", "at": 0.0, "data": None}
+MANIFEST_TTL_SEC = 60
+
+
+def _fetch_manifest(url: str) -> Optional[Dict[str, Any]]:
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+def resolve_download(cfg: Dict[str, Any], *, now: Optional[float] = None,
+                     fetch: Callable[[str], Optional[Dict[str, Any]]] = _fetch_manifest) -> Dict[str, Any]:
+    """下载元数据：``download.manifest_url``（build_agent.py 的 manifest.json，publish 后自动生效）优先，
+    显式填写的 ``version / installer_url / sha256`` 覆盖 manifest；60s 缓存，拉不到就用配置里的静态值。"""
+    dl = dict(cfg.get("download") or {})
+    url = str(dl.get("manifest_url") or "")
+    if not url:
+        return dl
+    ts = float(now if now is not None else time.time())
+    if _manifest_cache["url"] != url or ts - float(_manifest_cache["at"]) > MANIFEST_TTL_SEC:
+        _manifest_cache.update({"url": url, "at": ts, "data": fetch(url)})
+    m = _manifest_cache["data"] or {}
+    merged = {
+        "version": str(m.get("version") or ""),
+        "installer_url": str(m.get("url") or ""),
+        "sha256": str(m.get("sha256") or ""),
+        "install_script_url": str(m.get("installer") or ""),
+    }
+    for k, v in merged.items():
+        if v and not dl.get(k):
+            dl[k] = v
+    return dl
 
 
 def get_store(cfg_root: Any) -> Optional[FleetStore]:

@@ -34,7 +34,7 @@ from fastapi.responses import HTMLResponse
 from src.fleet.protocol import (
     ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, TASK_KINDS,
 )
-from src.fleet.store import FleetStore, get_store, resolve_fleet_cfg
+from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
 
 logger = logging.getLogger("FleetControlWebRoutes")
 
@@ -237,7 +237,7 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_overview(request: Request, _=Depends(_api_auth)):
         st = _store_or_503(config_manager)
         out = st.overview()
-        out["download"] = resolve_fleet_cfg(config_manager)["download"]
+        out["download"] = resolve_download(resolve_fleet_cfg(config_manager))
         return {"ok": True, **out}
 
     # ── 页面 ──────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ def register_routes(app, ctx) -> None:
         cfg = resolve_fleet_cfg(config_manager)
         public_url = cfg["public_url"] or str(request.base_url).rstrip("/")
         return templates.TemplateResponse(request, "fleet_home.html",
-                                          {"download": cfg["download"], "public_url": public_url,
+                                          {"download": resolve_download(cfg), "public_url": public_url,
                                            "proto_version": PROTO_VERSION})
 
     @app.get("/fleet/console", response_class=HTMLResponse)

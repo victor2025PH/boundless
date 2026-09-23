@@ -39,10 +39,11 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
   <p>在任意 Windows 电脑上安装智聊（ChatX）与智拓，输入一次注册码，它就会<strong>主动连到主控</strong>——不需要公网 IP、不用开端口。主控这边集中看在线状态、账号健康、玩家朋友看板，并向指定电脑下发任务。</p>
   <div class="btns" id="download">
     {% if download.installer_url %}
-    <a class="btn p" href="{{ download.installer_url }}">下载 Windows 安装包{% if download.version %} v{{ download.version }}{% endif %}</a>
+    <a class="btn p" href="{{ download.installer_url }}">下载节点 Agent（chatx-agent.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
     {% else %}
     <a class="btn p dis" href="#">Windows 安装包（即将发布）</a>
     {% endif %}
+    {% if download.install_script_url %}<a class="btn" href="{{ download.install_script_url }}">一键安装脚本（Install-ChatXAgent.ps1）</a>{% endif %}
     {% if download.agent_zip_url %}<a class="btn" href="{{ download.agent_zip_url }}">仅节点 Agent（zip）</a>{% endif %}
     {% if download.changelog_url %}<a class="btn" href="{{ download.changelog_url }}">更新日志</a>{% endif %}
   </div>
@@ -59,9 +60,11 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
 
 <h2 id="install">三步接入</h2>
 <div class="step"><b>1</b><div><strong>在主控后台生成注册码</strong><br><span style="color:var(--t2)">登录 <a href="/fleet/console">/fleet/console</a> → 「生成注册码」（8 位数字，默认 60 分钟内有效，只能用一次）。</span></div></div>
-<div class="step"><b>2</b><div><strong>在受控电脑安装</strong><br><span style="color:var(--t2)">运行安装包，按提示选择角色（智聊 / 智拓 / 两者），填入主控地址与注册码。已装过智聊的机器也可只用命令行接入：</span>
+<div class="step"><b>2</b><div><strong>在受控电脑安装</strong><br><span style="color:var(--t2)">以管理员打开 PowerShell，一条命令完成下载校验、登记本机智聊实例、注册、开机自启（计划任务 SYSTEM）：</span>
+<pre>powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller {{ public_url }} -Code ＜注册码＞</pre>
+<span style="color:var(--t2)">已有源码环境的机器也可：</span>
 <pre>python -m src.fleet.agent enroll --controller {{ public_url }} --code ＜注册码＞
-python -m src.fleet.agent run</pre></div></div>
+python -m src.fleet.agent install-service</pre></div></div>
 <div class="step"><b>3</b><div><strong>回到主控后台</strong><br><span style="color:var(--t2)">几秒内节点变为「在线」，即可查看实例 / 账号状态并下发任务。重装系统后用新注册码重新接入，节点身份不变。</span></div></div>
 
 <h2 id="security">安全与边界</h2>

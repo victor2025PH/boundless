@@ -94,9 +94,9 @@
 | kind | 优先级 | payload / target | Agent v1 行为 | result |
 |---|---|---|---|---|
 | `stop_account` | 0 | `target.instance`, `target.phone` (E.164) 或 `target.account` | 走本机 `POST /api/player-care/commands` 产 `stop` 指令，**入队时作废同号未拉走任务** | commandbus 回执 |
-| `upgrade` | 2 | `payload.version`, `payload.url`, `payload.sha256` | v1 **rejected** `not_supported_in_agent_v1`（等安装器/自更新落地） | — |
+| `upgrade` | 2 | `payload.version`, `payload.url`, `payload.sha256`（必填） | **Agent ≥0.2.0（打包版）执行**：下载到 `<state>/updates/`、校验 sha256、写换文件脚本、ack `done` 后退出，由计划任务 / systemd 拉起新版；源码运行 rejected `not_frozen`；缺 sha256 rejected `sha256_required` | `staged`, `version`, `exit: true` |
 | `restart_instance` | 3 | `target.instance` | 仅当 Agent 本地 `instances[].restart_cmd` 显式配置才执行，否则 rejected | 退出码 |
-| `push_config` | 4 | `payload.patch` | v1 **rejected** `not_supported_in_agent_v1` | — |
+| `push_config` | 4 | `payload.patch` | **rejected** `not_supported_in_agent_v1`（无安全的配置 patch 设计前不开） | — |
 | `login_qr` | 5 | `target.instance`, `target.platform` (whatsapp/telegram), `payload.proxy_id?`, `payload.use_fingerprint?` | 调本机 `/api/platforms/{p}/login/start`，回二维码 | `login_id`, `qr`(data URL), `expires_in` |
 | `login_status` | 5 | `target.instance`, `payload.login_id` | 调 `/api/platforms/{p}/login/{id}/status` | 登录状态 |
 | `ping` | 7 | `payload.echo?` | 本地回 pong | agent/app 版本、machine_id、host、time、echo |
@@ -124,7 +124,26 @@
 - 测试：`tests/test_fleet_control.py`（store / 协议 / 路由 / Agent / CLI，27 例）。
 - 本机联调：主控 18798 + player 18797 → enroll → heartbeat（实例 up、看板摘要）→ ping / account_health / pull_overview
   done → ack → revoke 后 401，全通。
-- **未做**（P1+）：Windows 服务化 / 安装器打包 / 自动更新 / 代码签名（`upgrade`、`push_config` 因此 v1 拒绝）；
-  控制台集中扫码只做了 `login_qr` 任务层；`bd2026.cc` VPS 部署、反代、正式证书属改生产，需单独授权后执行。
+- **P1 已做（2026-09-24）**：Agent 服务化（`src/fleet/service.py`：Windows 计划任务 ONSTART/SYSTEM，Linux systemd；
+  `run --service` 监督循环，未注册/被吊销/崩溃都退避重试不退出）；`upgrade` 落地（`src/fleet/updater.py`）；
+  单文件打包 `fleet_agent/build_agent.py` → `chatx-agent.exe` + `manifest.json`；一键安装 / 卸载 PowerShell；
+  操作端 CLI `src/fleet/admin.py`；主控落地包 `deploy/fleet/`（systemd / nginx / deploy / publish）。部署手册见 `docs/FLEET_DEPLOY.md`。
+- **未做**：代码签名（exe 未签，SmartScreen 会拦一次）；`push_config`；控制台集中扫码 UI（只有 `login_qr` 任务层）；
+  `bd2026.cc` 上的实际部署 / 反代 include / 证书属改生产，脚本已备好，需单独授权后执行。
 - 域名口径：`/fleet/` 主页与下载元数据从 `fleet_control.public_url` / `fleet_control.download.*` 读取，不写死；
+  `download.manifest_url` 指向 `build_agent.py` 产出的 `manifest.json`（publish 后自动带出版本 / url / sha256，60 s 缓存）；
   既有 `branding.py`（ai26.sbs）与 updater / 授权 40+ 处硬编码 `bd2026.cc` 的收敛属全局改动，本轮不动，列入下一阶段。
+
+## 7. 服务化 / 升级 / 部署口径（P1，2026-09-24）
+
+- **URL 口径**：Agent 与操作端 CLI 一律 `<controller>/api/fleet/...`；公网 `controller = https://bd2026.cc/fleet`，
+  nginx 把 `/fleet/api/` 剥前缀转到 `127.0.0.1:18798/api/`，`/fleet/` 原样转 `/fleet/`（`deploy/fleet/nginx-fleet.conf`）。长轮询 `wait ≤ 25 s`，反代 `proxy_read_timeout ≥ 60 s`。
+- **Windows 服务化**：不引入 pywin32 / NSSM，用 `schtasks /SC ONSTART /RU SYSTEM /RL HIGHEST` 跑 `chatx-agent.exe --state-dir %ProgramData%\ChatX\fleet run --service`；
+  `install-service / uninstall-service / service-status` 三个子命令；日志 `<state>/logs/agent.log`（轮转 5 MB×3）。
+- **监督循环**（`service.supervise`）：未注册 → 每 30 s 重试；被吊销（401）→ 每 60 s 重建 Agent 重试（重注册后自动恢复）；异常 → 5 s 起指数退避到 300 s；`upgrade` 请求退出 → 返回码 3，交给计划任务 / systemd 拉起。
+- **upgrade 流程**：主控 `POST /nodes/{id}/tasks {kind: upgrade, payload: manifest}`（`admin.py upgrade --manifest <url|path> [--group G | --node ID...] --yes`）→ Agent 校验下载 → 写 `<state>/updates/swap-*.ps1|.sh`（等旧进程退出 → 备份 `.bak` → 覆盖 → `schtasks /Run`）→ ack `done {exit:true}` → 退出。
+  升级失败留在 `.bak`，人工 / 下一次 upgrade 回滚；不在 Agent 内做自动回滚（列入 P2）。
+- **发布物**（`fleet_agent/build_agent.py --base-url https://bd2026.cc/downloads/fleet/`）：`chatx-agent.exe`、`.sha256`、`manifest.json {name, version, file, url, sha256, size, os, built_at, installer}`、两份 ps1；
+  `deploy/fleet/publish_agent.ps1` 上传到官网 `public/downloads/fleet/`；主控 `download.manifest_url` 读同一份 manifest。
+- **安全边界**：安装器不含任何主控管理凭据；注册码一次性；本机智聊 `auth_token` 优先从 `-ConfigPath` 读、`-AuthToken` 仅兜底；
+  `service-status / status` 不输出 node_key；升级包 sha256 不符即删除、拒绝落盘。

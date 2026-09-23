@@ -1,0 +1,25 @@
+# /etc/systemd/system/chatx-fleet.service  -- 智控主控（fleet_control 独立实例，只绑 127.0.0.1:18798，nginx 反代）
+# 由 deploy_controller.sh 安装；改端口 / 路径改 /etc/chatx-fleet/config.yaml 与 EnvironmentFile，不改本文件。
+[Unit]
+Description=ChatX Fleet Controller (bd2026.cc/fleet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chatx-fleet
+Group=chatx-fleet
+WorkingDirectory=/opt/chatx-fleet/app
+EnvironmentFile=-/etc/chatx-fleet/env
+Environment=AITR_CONFIG_PATH=/etc/chatx-fleet/config.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/chatx-fleet/venv/bin/python main.py --config /etc/chatx-fleet/config.yaml
+Restart=always
+RestartSec=5
+# 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容；数据目录只此一处可写
+ReadWritePaths=/var/lib/chatx-fleet /opt/chatx-fleet/app/logs /opt/chatx-fleet/app/config
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

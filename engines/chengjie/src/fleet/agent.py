@@ -5,6 +5,8 @@
     python -m src.fleet.agent run            # 前台常驻：心跳 + 长轮询领任务 + 执行 + ack
     python -m src.fleet.agent run --once     # 跑一轮就退（联调 / 计划任务）
     python -m src.fleet.agent status
+    python -m src.fleet.agent install-service   # 开机自启（Windows 计划任务 SYSTEM / Linux systemd）+ 立即启动
+    python -m src.fleet.agent run --service     # 服务实际入口：监督循环（见 service.py）
 
 流程（契约 docs/FLEET_CONTROL_CONTRACT.md）：
     enroll(code, machine_id) → node_key 存 <state_dir>/agent.json（只在本机）
@@ -19,16 +21,17 @@
     login_status    → GET  /api/platforms/{platform}/login/{login_id}/status
     stop_account    → POST /api/player-care/commands {kind: stop, account, phone}
     restart_instance→ 实例条目配了 restart_cmd 才执行，否则 rejected
-    push_config / upgrade → v1 一律 rejected: not_supported（留给安装器 / 自动更新）
+    upgrade         → 下载+sha256 校验+换文件后重启（updater.py；仅冻结 exe，源码态拒绝）
+    push_config     → v1 仍 rejected: not_supported
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import os
+import re
 import platform as _platform
 import subprocess
 import sys
@@ -41,6 +44,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .identity import default_state_dir, host_name, node_machine_id, os_label
+from .service import install_service, service_status, supervise, uninstall_service
+from .updater import apply_upgrade
 from .protocol import (
     DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
@@ -49,7 +54,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.1.0"
+AGENT_VERSION = "0.2.0"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -163,13 +168,27 @@ def _instance_token(inst: Dict[str, Any]) -> str:
     if not cp:
         return ""
     try:
-        import yaml  # 智聊环境必有；单独打包的 agent 则请直接填 auth_token
+        import yaml  # 智聊环境必有；冻结 exe 也随包，缺了走下面的正则回落
 
         with open(cp, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         return str(((cfg.get("web_admin") or {}).get("auth_token")) or "")
+    except ImportError:
+        return _grep_yaml_scalar(cp, "web_admin", "auth_token")
     except Exception:
         return ""
+
+
+def _grep_yaml_scalar(path: str, section: str, key: str) -> str:
+    """无 PyYAML 时读 ``section:\n  key: value`` 两级标量（够用于 auth_token / domain）。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    m = re.search(rf"^{re.escape(section)}:\s*$((?:\n[ \t]+.*)*)", text, re.M)
+    block = m.group(1) if m else text
+    m2 = re.search(rf"^[ \t]*{re.escape(key)}:[ \t]*['\"]?([^'\"\n#]*)", block, re.M)
+    return m2.group(1).strip() if m2 else ""
 
 
 def _instance_domain(inst: Dict[str, Any]) -> str:
@@ -199,6 +218,7 @@ class NodeAgent:
         self.machine_id = node_machine_id(cfg.state_dir)
         self.started_at = clock()
         self.revoked = False
+        self.exit_requested = False   # upgrade 换文件：ack 后由循环退出，服务层重新拉起
         self.last_error = ""
         self.stats = {"heartbeats": 0, "tasks_done": 0, "tasks_failed": 0, "tasks_rejected": 0, "errors": 0}
 
@@ -394,7 +414,12 @@ class NodeAgent:
                 st = STATUS_DONE if proc.returncode == 0 else STATUS_FAILED
                 return st, {"instance": inst.get("name"), "returncode": proc.returncode,
                             "stdout": proc.stdout[-500:], "stderr": proc.stderr[-500:]}, f"rc={proc.returncode}"
-            if kind in (TASK_PUSH_CONFIG, TASK_UPGRADE):
+            if kind == TASK_UPGRADE:
+                status, result, detail = apply_upgrade(payload, self.cfg.state_dir)
+                if status == STATUS_DONE:
+                    self.exit_requested = True
+                return status, result, detail
+            if kind == TASK_PUSH_CONFIG:
                 return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
@@ -417,6 +442,8 @@ class NodeAgent:
             except Exception as e:
                 logger.warning("[agent] ack %s failed: %s", t.get("task_id"), e)
             handled.append({"task_id": t.get("task_id"), "kind": t.get("kind"), "status": status, "detail": detail})
+            if self.exit_requested:
+                break
         return {"heartbeat": {k: hb.get(k) for k in ("ok", "has_tasks", "server_proto")}, "tasks": handled}
 
     def run_forever(self, stop: Optional[threading.Event] = None, *, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -433,6 +460,9 @@ class NodeAgent:
                 for t in tasks:
                     status, result, detail = self.execute(t)
                     self.ack(str(t.get("task_id")), status, result, detail)
+                    if self.exit_requested:
+                        logger.info("[agent] 升级就位，退出让服务层重启")
+                        return
                 backoff = BACKOFF_MIN
                 self.last_error = ""
             except Unauthorized as e:
@@ -541,6 +571,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     r = sub.add_parser("run", help="常驻：心跳 + 领任务")
     r.add_argument("--once", action="store_true")
     r.add_argument("--wait", type=int, default=0, help="--once 时长轮询秒数")
+    r.add_argument("--service", action="store_true", help="监督模式：未注册/被吊销/异常都不退出（计划任务 / systemd 用）")
+    r.add_argument("--log-file", default="", help="日志文件（默认 <state_dir>/logs/agent.log，--service 时自动启用）")
+    sub.add_parser("install-service", help="开机自启 + 立即启动（Windows 计划任务 SYSTEM / Linux systemd）")
+    sub.add_parser("uninstall-service")
+    sub.add_parser("service-status")
     sub.add_parser("status")
     sub.add_parser("heartbeat", help="只发一次心跳并打印")
     args = ap.parse_args(argv)
@@ -548,6 +583,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
     cfg = AgentConfig(Path(args.state_dir) if args.state_dir else None)
+    if args.cmd == "run" and (args.service or args.log_file):
+        _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
+    if args.cmd == "install-service":
+        res = install_service(cfg.state_dir)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0 if res.get("ok") else 1
+    if args.cmd == "uninstall-service":
+        res = uninstall_service()
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0 if res.get("ok") else 1
+    if args.cmd == "service-status":
+        print(json.dumps(service_status(), ensure_ascii=False, indent=2))
+        return 0
     agent = NodeAgent(cfg)
     if args.cmd == "enroll":
         for spec in args.instance:
@@ -574,6 +622,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(agent.heartbeat(), ensure_ascii=False, indent=2))
         return 0
     if args.cmd == "run":
+        if args.service:
+            stop = threading.Event()
+            try:
+                return supervise(lambda: NodeAgent(AgentConfig(cfg.state_dir)), stop)
+            except KeyboardInterrupt:
+                stop.set()
+                return 0
         if args.once:
             print(json.dumps(agent.run_once(wait=args.wait), ensure_ascii=False, indent=2))
             return 0
@@ -584,6 +639,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             stop.set()
         return 2 if agent.revoked else 0
     return 1
+
+
+def _attach_file_log(path: Path) -> None:
+    from logging.handlers import RotatingFileHandler
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        h = RotatingFileHandler(str(path), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(h)
+    except Exception:
+        logger.warning("日志文件不可写 %s", path, exc_info=True)
 
 
 if __name__ == "__main__":
