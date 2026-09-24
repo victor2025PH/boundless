@@ -166,6 +166,16 @@ def _pending_request(cfg: object) -> str:
     return ""
 
 
+def _enroll_followup(cfg: object) -> str:
+    """``pending`` while a request id is open; ``backoff`` while a dead id is being retried."""
+    if _pending_request(cfg):
+        return "pending"
+    data = getattr(cfg, "data", None)
+    if isinstance(data, dict) and data.get("reenroll_not_before"):
+        return "backoff"
+    return ""
+
+
 def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] = None, *,
               sleep: Callable[[float], None] = time.sleep, max_rounds: int = 0) -> int:
     """监督循环：未注册 → 等；被吊销 → 等重新 enroll；异常 → 指数退避重启；``exit_requested`` → 退出（升级换文件）。
@@ -182,13 +192,15 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
         try:
             agent = make_agent()
             cfg = getattr(agent, "cfg")
-            if _pending_request(cfg) and hasattr(agent, "poll_enrollment"):
+            follow = _enroll_followup(cfg)
+            if follow and hasattr(agent, "poll_enrollment"):
                 try:
                     agent.poll_enrollment()
                 except Exception as e:
                     logger.warning("[service] pending poll failed: %s", e)
+                follow = _enroll_followup(cfg)
             if not cfg.node_key:
-                delay = PENDING_POLL_SEC if _pending_request(cfg) else RETRY_UNENROLLED_SEC
+                delay = PENDING_POLL_SEC if follow == "pending" else RETRY_UNENROLLED_SEC
                 logger.info("[service] 尚未注册，%ss 后重试", delay)
                 sleep(delay)
                 continue

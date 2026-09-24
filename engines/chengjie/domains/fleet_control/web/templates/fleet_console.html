@@ -130,7 +130,8 @@
     document.getElementById('fc-pending').innerHTML=list.length?list.map(function(n){
       var inst=(n.instances||[]).map(function(i){return esc(i.name||i.base_url||'');}).join(', ')||'—';
       var revoked=n.was_revoked?' <span class="fc-badge fc-bad">this machine was revoked</span>':'';
-      return '<tr><td><b>'+esc(n.host_name||'—')+'</b>'+revoked+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
+      var dup=n.duplicate_machine?' <span class="fc-badge fc-warn">duplicate machine_id</span>':'';
+      return '<tr><td><b>'+esc(n.host_name||'—')+'</b>'+revoked+dup+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
         '<td><b>'+esc(n.pairing_code||'—')+'</b></td><td>'+esc(n.client_ip||'—')+'</td>'+
         '<td>'+esc(n.requested_group||'—')+'</td><td>'+esc(n.effective_group||'pending-default')+'</td>'+
         '<td>'+esc(n.os||'—')+'</td><td>'+inst+'</td>'+
@@ -179,9 +180,13 @@
   });
   document.getElementById('fc-room-hide').addEventListener('click',function(){document.getElementById('fc-roombox').style.display='none';});
   document.getElementById('fc-roomkey').addEventListener('click',function(){
-    var g=document.getElementById('fc-group').value.trim()||prompt('分组名称','机房')||'';
-    var uses=parseInt(prompt('最多几台','50')||'50',10);if(!uses)return;
-    var hours=parseInt(prompt('多少小时内有效','168')||'168',10);
+    var g=document.getElementById('fc-group').value.trim();
+    if(!g){var typed=prompt('分组名称','机房');if(typed===null)return;g=String(typed).trim();}
+    if(!g)return;
+    var usesRaw=prompt('最多几台','50');if(usesRaw===null)return;
+    var uses=parseInt(usesRaw,10);if(!uses)return;
+    var hoursRaw=prompt('多少小时内有效','168');if(hoursRaw===null)return;
+    var hours=parseInt(hoursRaw,10);
     apiFetch('/api/fleet/room-keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_name:g,max_uses:uses,ttl_hours:hours})})
       .then(j).then(function(d){var el=document.getElementById('fc-room-url');el.value=d.download_url||'';document.getElementById('fc-roombox').style.display='';el.focus();el.select();load();})
       .catch(function(e){alert('生成失败 '+e.message);});

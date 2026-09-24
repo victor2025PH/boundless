@@ -45,7 +45,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detect import detect_instances, is_loopback_url, sanitize_instances
-from .identity import default_state_dir, host_name, lock_state_dir, node_machine_id, os_label
+from .identity import (
+    StateDirLockError, default_state_dir, discard_untrusted_secret, host_name, lock_state_dir,
+    node_machine_id, os_label,
+)
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -61,6 +64,7 @@ CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
 BACKOFF_MIN, BACKOFF_MAX = 2.0, 60.0
+REENROLL_BACKOFF_SEC = 30
 ENV_CONTROLLER = "CHATX_FLEET_CONTROLLER"
 
 HttpFn = Callable[[str, str, Optional[Dict[str, Any]], Dict[str, str], float], Tuple[int, Dict[str, Any]]]
@@ -109,9 +113,12 @@ class AgentConfig:
 
     def load(self) -> None:
         try:
+            discard_untrusted_secret(self.path)
             d = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(d, dict):
                 self.data.update(d)
+        except StateDirLockError:
+            raise
         except Exception:
             pass
         env = (os.environ.get(ENV_CONTROLLER) or "").strip()
@@ -126,8 +133,12 @@ class AgentConfig:
         if os.name != "nt":
             try:
                 os.chmod(self.path, 0o600)
-            except Exception:
-                pass
+            except OSError as e:
+                try:
+                    self.path.unlink()
+                except OSError:
+                    pass
+                raise StateDirLockError(f"chmod agent.json failed: {e}") from e
 
     @property
     def controller_url(self) -> str:
@@ -342,6 +353,8 @@ class NodeAgent:
             return {"ok": True, "status": "active", "node_id": self.cfg.node_id}
         rid = str(self.cfg.data.get("pending_request_id") or "")
         if not rid:
+            if self.cfg.data.get("reenroll_not_before"):
+                return self._restart_enroll("backoff")
             return {"ok": False, "status": "idle"}
         res = self._ctrl("POST", "/api/fleet/enroll/poll",
                          {"request_id": rid, "machine_id": self.machine_id,
@@ -363,7 +376,32 @@ class NodeAgent:
                     return self.enroll("", controller_url=self.cfg.controller_url)
                 except AgentError as e:
                     logger.warning("[agent] re-request after expiry failed: %s", e)
+        elif status in ("unknown", "already_claimed"):
+            return self._restart_enroll(status)
         return {"ok": bool(res.get("ok")), "status": status or "pending"}
+
+    def _restart_enroll(self, why: str) -> Dict[str, Any]:
+        """Drop a dead pending id and start enroll again, with a backoff between tries.
+
+        ``unknown`` and ``already_claimed`` used to leave ``pending_request_id`` set,
+        so the service polled that id forever. A failed restart keeps
+        ``reenroll_not_before`` so the next loop waits instead of spinning.
+        """
+        now = float(self.clock())
+        not_before = float(self.cfg.data.get("reenroll_not_before") or 0)
+        self.cfg.data.pop("pending_request_id", None)
+        if now < not_before:
+            self.cfg.save()
+            return {"ok": False, "status": "backoff"}
+        self.cfg.data["reenroll_not_before"] = now + REENROLL_BACKOFF_SEC
+        self.cfg.save()
+        if not self.cfg.controller_url:
+            return {"ok": False, "status": "backoff"}
+        try:
+            return self.enroll("", controller_url=self.cfg.controller_url)
+        except AgentError as e:
+            logger.warning("[agent] re-enroll after %s failed: %s", why, e)
+            return {"ok": False, "status": "backoff"}
 
     def build_heartbeat(self) -> Dict[str, Any]:
         """本机摘要：实例是否活、账号数 / 生命周期分布、看板核心数字。**不含任何聊天内容。**"""
@@ -732,8 +770,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path)
         room = ""
         if args.room_key_file:
+            key_path = Path(args.room_key_file)
             try:
-                room = Path(args.room_key_file).read_text(encoding="utf-8").strip()
+                if discard_untrusted_secret(key_path):
+                    print("room key file owner is not trusted; refusing to use it", file=sys.stderr)
+                    return 1
+                room = key_path.read_text(encoding="utf-8").strip()
+            except StateDirLockError as e:
+                print(f"room key file refused: {e}", file=sys.stderr)
+                return 1
             except OSError as e:
                 print(f"room key file unreadable: {e}", file=sys.stderr)
                 return 1

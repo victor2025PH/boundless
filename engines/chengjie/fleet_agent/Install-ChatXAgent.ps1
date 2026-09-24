@@ -44,6 +44,30 @@ function Native([string]$exe, [string[]]$a) {
   try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
+function Remove-UntrustedState([string]$Dir) {
+  foreach ($name in @('agent.json', 'machine_id', 'room.key')) {
+    $p = Join-Path $Dir $name
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+    $sid = (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544') {
+      Remove-Item -LiteralPath $p -Force
+      Say "removed untrusted $name"
+    }
+  }
+}
+function Lock-StateDir([string]$Dir) {
+  New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+  Remove-UntrustedState $Dir
+  Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C') | Out-Null
+  if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
+  $children = @(Get-ChildItem -Force -LiteralPath $Dir -ErrorAction SilentlyContinue)
+  if ($children.Count -gt 0) {
+    Native icacls.exe @((Join-Path $Dir '*'), '/reset', '/T', '/C') | Out-Null
+    if ($NativeExit -ne 0) { Fail "icacls reset failed ($NativeExit)" }
+  }
+  Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/T', '/C') | Out-Null
+  if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
+}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Fail "run this script as Administrator (scheduled task needs SYSTEM)" }
@@ -85,8 +109,7 @@ Say "installed $target"
 
 # 3. local instance
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
-New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
-& icacls.exe $stateDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+Lock-StateDir $stateDir
 $detect = $false
 if (-not $NoInstance) {
   if ($ConfigPath -or $AuthToken) {

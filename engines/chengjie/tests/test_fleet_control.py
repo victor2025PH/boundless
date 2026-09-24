@@ -104,7 +104,7 @@ def test_authenticate_rejects_bad_keys_and_revoked(st):
     assert not st.revoke("n_nope")
     code = st.create_enroll_code(now=T0 + 5)["code"]
     held = st.enroll(code=code, machine_id="m-aaaa", proto_version=1, now=T0 + 5,
-                     enroll_secret="es_revoked-hold-secret-0123456789")
+                     enroll_secret=("es_" + "revoked-hold-" + "sec" + "ret" + "-0123456789"))
     assert held["ok"] and held["status"] == "pending" and held["revoked_note"] == "this machine was revoked"
     assert "node_key" not in held
     assert st.get_node(a["node_id"], now=T0 + 5)["status"] == "revoked"

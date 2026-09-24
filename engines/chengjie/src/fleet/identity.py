@@ -77,38 +77,137 @@ def _licensing_fingerprint() -> str:
         return ""
 
 
-def state_dir_acl_command(path: Path) -> List[str]:
-    """SYSTEM + Administrators full control, inheritance removed. Applied before any secret file."""
+class StateDirLockError(RuntimeError):
+    """State directory could not be locked. Callers must not write secrets after this."""
+
+
+# SYSTEM and the built-in Administrators group. A planted file with any other owner is refused.
+TRUSTED_OWNER_SIDS = frozenset({"S-1-5-18", "S-1-5-32-544"})
+_SENSITIVE_NAMES = frozenset({"agent.json", "machine_id", "room.key"})
+
+
+def state_dir_acl_commands(path: Path) -> List[List[str]]:
+    """Owner Administrators, reset children, then SYSTEM + Administrators only.
+
+    ``/reset`` targets ``<dir>\\*`` so it does not wipe the directory grant. The
+    grant is last and carries ``/T`` so files that already exist pick up that
+    DACL instead of the ACL they inherited before the directory was locked.
+    An empty directory skips the reset (icacls has nothing to match).
+    """
+    folder = str(path)
     return [
-        "icacls", str(path), "/inheritance:r", "/grant:r",
-        "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+        ["icacls", folder, "/setowner", "*S-1-5-32-544", "/T", "/C"],
+        ["icacls", str(path / "*"), "/reset", "/T", "/C"],
+        [
+            "icacls", folder, "/inheritance:r", "/grant:r",
+            "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/T", "/C",
+        ],
     ]
 
 
+def state_dir_acl_command(path: Path) -> List[str]:
+    """The inheritance-removed grant (last step of ``state_dir_acl_commands``)."""
+    return state_dir_acl_commands(path)[2]
+
+
+def _run_icacls(argv: List[str]) -> None:
+    proc = subprocess.run(argv, check=False, capture_output=True)
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[:300]
+        raise StateDirLockError(f"icacls exited {proc.returncode}: {err}")
+
+
 def lock_state_dir(path: Path) -> None:
-    """Create the state dir and lock it down before machine_id / agent.json / room.key are written."""
+    """Create the state dir and lock it down before machine_id / agent.json / room.key are written.
+
+    On Windows every icacls step must succeed. A failure raises ``StateDirLockError``
+    and the caller must not write a secret. On POSIX the directory is mode 0700;
+    a chmod failure raises the same error.
+    """
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        try:
-            subprocess.run(state_dir_acl_command(path), check=False, capture_output=True)
-        except Exception:
-            logger.debug("[fleet] icacls failed for %s", path, exc_info=True)
+        commands = state_dir_acl_commands(path)
+        _run_icacls(commands[0])
+        if any(path.iterdir()):
+            _run_icacls(commands[1])
+        _run_icacls(commands[2])
         return
     try:
         os.chmod(path, 0o700)
-    except Exception:
-        logger.debug("[fleet] chmod state dir failed %s", path, exc_info=True)
+    except OSError as e:
+        raise StateDirLockError(f"chmod state dir failed: {e}") from e
+
+
+def file_owner_sid(path: Path) -> str:
+    """Windows owner SID. Empty on other platforms."""
+    if os.name != "nt":
+        return ""
+    import ctypes
+
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    owner = ctypes.c_void_p()
+    sd = ctypes.c_void_p()
+    rc = adv.GetNamedSecurityInfoW(
+        ctypes.c_wchar_p(str(path)),
+        1,  # SE_FILE_OBJECT
+        0x1,  # OWNER_SECURITY_INFORMATION
+        ctypes.byref(owner),
+        None,
+        None,
+        None,
+        ctypes.byref(sd),
+    )
+    if rc != 0:
+        raise StateDirLockError(f"GetNamedSecurityInfo failed: {rc}")
+    try:
+        out = ctypes.c_wchar_p()
+        if not adv.ConvertSidToStringSidW(owner, ctypes.byref(out)):
+            raise StateDirLockError("ConvertSidToStringSid failed")
+        return str(out.value or "")
+    finally:
+        if sd:
+            kernel.LocalFree(sd)
+
+
+def discard_untrusted_secret(path: Path, *, owner_sid: Optional[str] = None) -> bool:
+    """Delete a pre-existing agent.json, machine_id, or room.key with an untrusted owner.
+
+    Windows trusts only SYSTEM (S-1-5-18) and Administrators (S-1-5-32-544).
+    This runs before ``icacls /setowner``, which would otherwise adopt a planted
+    file. ``restart_cmd`` in agent.json is executed with ``shell=True`` as SYSTEM.
+    Returns True when the file was removed. Raises if it cannot be removed.
+    """
+    path = Path(path)
+    if not path.is_file() or path.name not in _SENSITIVE_NAMES:
+        return False
+    if os.name == "nt" or owner_sid is not None:
+        sid = file_owner_sid(path) if owner_sid is None else owner_sid
+        if sid in TRUSTED_OWNER_SIDS:
+            return False
+    else:
+        st = path.stat()
+        if st.st_uid in {0, os.getuid()} and (st.st_mode & 0o022) == 0:
+            return False
+    path.unlink()
+    if path.exists():
+        raise StateDirLockError(f"could not delete untrusted {path.name}")
+    logger.warning("[fleet] removed untrusted %s", path.name)
+    return True
 
 
 def node_machine_id(state_dir: Optional[Path] = None) -> str:
     """稳定的机器标识（形如 ``m-<16hex>``）。"""
     sd = Path(state_dir) if state_dir is not None else default_state_dir()
     cache = sd / "machine_id"
+    discard_untrusted_secret(cache)
     try:
         cached = cache.read_text(encoding="utf-8").strip()
         if cached:
             return cached
+    except StateDirLockError:
+        raise
     except Exception:
         pass
 
@@ -126,6 +225,8 @@ def node_machine_id(state_dir: Optional[Path] = None) -> str:
     try:
         lock_state_dir(sd)
         cache.write_text(mid, encoding="utf-8")
+    except StateDirLockError:
+        raise
     except Exception:
         logger.debug("[fleet] machine_id 写缓存失败 %s", cache, exc_info=True)
     logger.info("[fleet] machine_id=%s (source=%s)", mid, source)
@@ -140,4 +241,5 @@ def os_label() -> str:
 
 
 __all__ = ["default_state_dir", "host_name", "lock_state_dir", "node_machine_id", "os_label",
-           "state_dir_acl_command", "ENV_STATE_DIR"]
+           "state_dir_acl_command", "state_dir_acl_commands", "discard_untrusted_secret",
+           "StateDirLockError", "TRUSTED_OWNER_SIDS", "ENV_STATE_DIR"]

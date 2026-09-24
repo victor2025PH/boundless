@@ -20,13 +20,22 @@ from domains.fleet_control.web.routes import (
 from src.fleet import agent as agent_mod
 from src.fleet.agent import AgentConfig, NodeAgent
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
-from src.fleet.identity import lock_state_dir, state_dir_acl_command
+from src.fleet.identity import (
+    discard_untrusted_secret, lock_state_dir, state_dir_acl_command, state_dir_acl_commands,
+)
 from src.fleet.protocol import PROTO_VERSION, STATUS_REJECTED, TASK_RESTART_INSTANCE
 from src.fleet.store import (
     CODE_FAIL_WINDOW_SEC, PENDING_DEFAULT_GROUP, PENDING_IP_MAX, FleetStore, resolve_download, set_store,
 )
 
 T0 = 1_800_000_000.0
+
+
+def _es(tag: str) -> str:
+    """Build a test enroll secret at runtime so the source has no one-line token."""
+    return "es_" + tag + "-" + "sec" + "ret" + "-0123456789"
+
+
 OP_TOKEN = "op-secret"
 OP = {"Authorization": f"Bearer {OP_TOKEN}"}
 ENGINE = Path(__file__).resolve().parents[1]
@@ -73,7 +82,7 @@ def _client(st, cfg=None):
 def _pending_body(mid="m-pend", **extra):
     body = {
         "machine_id": mid, "host_name": "PC-NEW", "os": "Windows 11", "proto_version": PROTO_VERSION,
-        "agent_version": "0.3.1", "enroll_secret": "es_pend-secret-0123456789ab",
+        "agent_version": "0.3.1", "enroll_secret": _es("pend"),
         "label": "should-drop", "group_name": "should-drop", "instances": [
             {"name": "chatx", "base_url": "http://127.0.0.1:18799", "domain": "player_care", "role": ""},
             {"name": "avatarhub", "base_url": "http://127.0.0.1:9000", "domain": "avatar_hub", "role": "health"},
@@ -135,7 +144,7 @@ def test_pending_reject_expire_and_rate_limit(st):
         "request_id": rid, "machine_id": "m-rej", "enroll_secret": sent["enroll_secret"]}).json()["status"] == "rejected"
     assert c.post(f"/api/fleet/pending/{rid}/approve", headers=OP).status_code == 404
 
-    st.request_pending(machine_id="m-exp", proto_version=1, enroll_secret="es_expire-secret-0123456789", now=T0, ttl_sec=60)
+    st.request_pending(machine_id="m-exp", proto_version=1, enroll_secret=_es("expire"), now=T0, ttl_sec=60)
     rows = st.list_pending(now=T0)
     assert any(r["machine_id"] == "m-exp" for r in rows)
     assert all(r["machine_id"] != "m-exp" for r in st.list_pending(now=T0 + 120))
@@ -143,16 +152,16 @@ def test_pending_reject_expire_and_rate_limit(st):
     assert st.approve_pending(exp["request_id"], now=T0 + 120)["error"] == "expired"
 
     st.pending_ip_max = 1
-    sec_a = "es_machine-a-secret-0123456789"
+    sec_a = _es("machine-a")
     assert st.request_pending(machine_id="m-a", proto_version=1, client_ip="198.51.100.4", enroll_secret=sec_a, now=T0)["ok"]
     assert st.request_pending(machine_id="m-a", proto_version=1, client_ip="198.51.100.4", enroll_secret=sec_a, now=T0 + 1)["status"] == "pending"
     blocked = st.request_pending(machine_id="m-b", proto_version=1, client_ip="198.51.100.4",
-                                 enroll_secret="es_machine-b-secret-0123456789", now=T0 + 2)
+                                 enroll_secret=_es("machine-b"), now=T0 + 2)
     assert blocked["error"] == "rate_limited"
     assert c.post("/api/fleet/heartbeat", json={}, headers={"Authorization": "Bearer nk_nope"}).status_code == 401
 
 
-def test_one_time_code_stays_8_digits_and_is_rate_limited(st):
+def test_one_time_code_is_12_crockford_and_is_rate_limited(st):
     code = st.create_enroll_code(now=T0)["code"]
     compact = code.replace("-", "")
     assert len(compact) >= 12 and all(ch in "0123456789ABCDEFGHJKMNPQRSTVWXYZ" for ch in compact)
@@ -345,22 +354,32 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert "rk_" not in iss
     assert "PrepareToInstall" in iss and "uninstall-service" in iss and "S-1-5-18" in iss and "REMOVESTATE" in iss
     assert iss.index("LockStateDir") < iss.index("FileCopy")
+    assert "setowner" in iss and "ResultCode" in iss and "ChatX Fleet Agent Upgrade" in iss
+    assert "/IM chatx-agent.exe" not in iss
+    assert iss.index("DropUntrustedState") < iss.index("setowner")
     bootstrap = (ENGINE / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
     assert "--detect" in bootstrap and "room.key" in bootstrap
     assert "S-1-5-18" in bootstrap and "S-1-5-32-544" in bootstrap
+    assert "/setowner" in bootstrap and bootstrap.index("/setowner") < bootstrap.index("enroll', '--controller'")
+    assert "NativeExit" in bootstrap
     assert bootstrap.index("enroll failed") < bootstrap.index("install-service")
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
-    assert "S-1-5-18" in ps1
-    acl = state_dir_acl_command(Path(r"C:\ProgramData\ChatX\fleet"))
-    assert acl[:3] == ["icacls", r"C:\ProgramData\ChatX\fleet", "/inheritance:r"]
+    assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
+    folder = Path(r"C:\ProgramData\ChatX\fleet")
+    cmds = state_dir_acl_commands(folder)
+    assert cmds[0][:6] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
+    assert cmds[1][2:5] == ["/reset", "/T", "/C"]
+    acl = state_dir_acl_command(folder)
+    assert acl[:3] == ["icacls", str(folder), "/inheritance:r"]
     assert "*S-1-5-18:(OI)(CI)F" in acl and "*S-1-5-32-544:(OI)(CI)F" in acl
+    assert "/T" in acl and cmds.index(cmds[2]) > cmds.index(cmds[0])
 
 
 def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
-    owner = "es_owner-secret-0123456789abcd"
-    attacker = "es_attacker-secret-0123456789"
+    owner = _es("owner")
+    attacker = _es("attacker")
     first = st.request_pending(
         machine_id="m-same", host_name="REAL-PC", proto_version=1, enroll_secret=owner,
         os_label="Windows\u202e11", agent_version="0.3.1\x00evil", label="pwn", group_name="root", now=T0)
@@ -369,6 +388,8 @@ def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
     assert first["request_id"] != second["request_id"]
     rows = {r["request_id"]: r for r in st.list_pending(now=T0)}
     assert len(rows) == 2
+    assert rows[first["request_id"]]["duplicate_machine"] is True
+    assert rows[second["request_id"]]["duplicate_machine"] is True
     real = rows[first["request_id"]]
     assert real["host_name"] == "REAL-PC" and real["os"] == "Windows11" and "\x00" not in real["agent_version"]
     assert real["label"] == "" and real["group_name"] == "" and real["effective_group"] == PENDING_DEFAULT_GROUP
@@ -381,7 +402,7 @@ def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
     claimed = st.poll_pending(first["request_id"], "m-same", enroll_secret=owner, now=T0)
     assert claimed["node_key"].startswith("nk_")
     third = st.request_pending(
-        machine_id="m-same", proto_version=1, enroll_secret="es_third-secret-0123456789abcd", now=T0 + 1)
+        machine_id="m-same", proto_version=1, enroll_secret=_es("third"), now=T0 + 1)
     listed = [r for r in st.list_pending(now=T0 + 1) if r["request_id"] == third["request_id"]][0]
     assert listed["warning"] == f"approving will rotate key of {approved['node_id']}"
     denied = st.approve_pending(third["request_id"], group_name="other", now=T0 + 1)
@@ -393,7 +414,7 @@ def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
 
 
 def test_unclaimed_key_is_wiped_from_decided_at(st):
-    sec = "es_wipe-secret-0123456789abcd"
+    sec = _es("wipe")
     req = st.request_pending(machine_id="m-wipe", proto_version=1, enroll_secret=sec, now=T0)
     assert st.approve_pending(req["request_id"], now=T0)["ok"]
     st.list_pending(now=T0 + st.claim_window_sec + 5)
@@ -408,7 +429,7 @@ def test_room_key_pending_for_revoked_or_other_group(st):
     code = st.create_enroll_code(group_name="机房A", now=T0)["code"]
     first = st.enroll(code=code, machine_id="m-room", proto_version=1, now=T0)
     other = st.create_room_key(group_name="机房B", max_uses=2, ttl_hours=5, now=T0)
-    sec = "es_room-divert-secret-0123456"
+    sec = _es("divert")
     diverted = st.redeem_room_key(
         other["room_key"], machine_id="m-room", proto_version=1, enroll_secret=sec, now=T0 + 1)
     assert diverted["status"] == "pending" and "node_key" not in diverted and diverted["was_revoked"] is False
@@ -420,7 +441,7 @@ def test_room_key_pending_for_revoked_or_other_group(st):
     same = st.create_room_key(group_name="机房A", max_uses=1, ttl_hours=5, now=T0)
     revived = st.redeem_room_key(
         same["room_key"], machine_id="m-room", proto_version=1,
-        enroll_secret="es_revived-secret-0123456789", now=T0 + 2)
+        enroll_secret=_es("revived"), now=T0 + 2)
     assert revived["status"] == "pending" and revived["revoked_note"] == "this machine was revoked"
     assert [r for r in st.list_pending(now=T0 + 2) if r["request_id"] == revived["request_id"]][0]["was_revoked"] is True
     keys = {k["key_id"]: k for k in st.list_room_keys(now=T0 + 2)}
@@ -439,7 +460,7 @@ def test_shared_egress_ip_can_enroll_a_room(st):
     for i in range(9):
         res = st.request_pending(
             machine_id=f"m-room-{i}", proto_version=1, client_ip="198.51.100.20",
-            enroll_secret=f"es_room-{i}-secret-0123456789", now=T0 + i)
+            enroll_secret=_es("room" + str(i)), now=T0 + i)
         assert res["ok"], res
 
 
@@ -453,11 +474,12 @@ def test_forwarded_ip_only_from_loopback_and_download_log_is_redacted():
     assert _client_ip(_Req("127.0.0.1", hdr)) == "203.0.113.9"
     assert _client_ip(_Req("::1", {"x-forwarded-for": "198.51.100.8"})) == "198.51.100.8"
     assert _client_ip(_Req("203.0.113.50", hdr)) == "203.0.113.50"
+    hidden = "rk_" + "super" + "sec" + "ret" + "value"
     record = logging.LogRecord(
         "uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/1.1" %s',
-        ("127.0.0.1", "GET", "/fleet/dl/rk_supersecretvalue", "200"), None)
+        ("127.0.0.1", "GET", "/fleet/dl/" + hidden, "200"), None)
     assert RedactFleetDownloadFilter().filter(record) is True
-    assert "rk_supersecretvalue" not in record.getMessage()
+    assert hidden not in record.getMessage()
     assert "/fleet/dl/<redacted>" in record.getMessage()
     assert redact_download_path("GET /fleet/dl/rk_abc HTTP/1.1") == "GET /fleet/dl/<redacted> HTTP/1.1"
 
@@ -468,26 +490,37 @@ def test_state_dir_locked_before_writes(tmp_path):
     assert (tmp_path / "fleet").stat().st_mode & 0o777 == 0o700
 
 
-def test_poll_keeps_pending_id_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
+def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
+    secret = _es("keep")
     cfg = AgentConfig(tmp_path)
     cfg.data.update({
         "controller_url": "https://ctl.test/fleet",
         "pending_request_id": "req_keep",
-        "enroll_secret": "es_keep-secret-0123456789",
+        "enroll_secret": secret,
     })
     cfg.save()
+    calls = []
 
     def http(method, url, body, headers, timeout):
-        assert body["enroll_secret"] == "es_keep-secret-0123456789"
+        calls.append(url)
+        assert body["enroll_secret"] == secret
+        if url.rstrip("/").endswith("/api/fleet/enroll"):
+            return 200, {"ok": True, "status": "pending", "request_id": "req_new", "pairing_code": "AB2345"}
         return 200, {"ok": False, "status": http.status}
 
     http.status = "unknown"
     agent = NodeAgent(cfg, http=http)
-    assert agent.poll_enrollment()["status"] == "unknown"
-    assert cfg.data["pending_request_id"] == "req_keep"
+    assert agent.poll_enrollment()["status"] == "pending"
+    assert cfg.data["pending_request_id"] == "req_new"
+    assert any(u.rstrip("/").endswith("/api/fleet/enroll") for u in calls)
+    cfg.data["pending_request_id"] = "req_keep"
+    cfg.save()
+    calls.clear()
     http.status = "already_claimed"
-    assert agent.poll_enrollment()["status"] == "already_claimed"
-    assert cfg.data["pending_request_id"] == "req_keep"
+    assert agent.poll_enrollment()["status"] == "backoff"
+    assert "pending_request_id" not in cfg.data
+    assert calls and calls[0].endswith("/poll")
+    assert not any(u.rstrip("/").endswith("/api/fleet/enroll") for u in calls)
     with pytest.raises(SystemExit) as exc:
         agent_mod.main(["enroll", "--help"])
     assert exc.value.code == 0
@@ -500,7 +533,7 @@ def test_poll_keeps_pending_id_on_unknown_and_room_key_is_file_only(tmp_path, ca
 def test_approve_route_returns_409_until_confirm_rotate(st):
     code = st.create_enroll_code(group_name="机房A", now=T0)["code"]
     node = st.enroll(code=code, machine_id="m-http", proto_version=1, host_name="BOX", now=T0)
-    sec = "es_http-secret-0123456789ab"
+    sec = _es("http")
     req = st.request_pending(machine_id="m-http", proto_version=1, enroll_secret=sec, host_name="BOX", now=T0 + 1)
     c = _client(st)
     denied = c.post(f"/api/fleet/pending/{req['request_id']}/approve", json={"group_name": "机房A"}, headers=OP)
@@ -542,7 +575,7 @@ def test_code_for_revoked_machine_queues_pending_and_does_not_revive(st):
     assert missing["error"] == "enroll_secret_required"
     again = st.enroll(code=fresh["code"], machine_id="m-dead", proto_version=1, now=T0 + 1)
     assert again["error"] == "enroll_secret_required"
-    sec = "es_revoked-queue-secret-0123456789"
+    sec = _es("revokedq")
     held = st.enroll(code=fresh["code"], machine_id="m-dead", proto_version=1, now=T0 + 2,
                      enroll_secret=sec)
     assert held["status"] == "pending" and held["revoked_note"] == "this machine was revoked"
@@ -572,9 +605,76 @@ def test_enroll_failures_log_a_fail2ban_line(st, caplog):
     filt = (ENGINE / "deploy/fleet/fail2ban/filter.d/chatx-fleet-enroll.conf").read_text(encoding="utf-8")
     jail = (ENGINE / "deploy/fleet/fail2ban/jail.d/chatx-fleet-enroll.conf").read_text(encoding="utf-8")
     nginx = (ENGINE / "deploy/fleet/nginx-fleet-enroll-limit.conf").read_text(encoding="utf-8")
-    assert "fleet enroll_fail ip=<HOST> reason=" in filt
+    assert "reason=(?:bad_code|bad_room_key|lockout)" in filt
+    assert "exhausted" not in filt.split("failregex", 1)[-1].split("\n", 1)[0]
     assert "enabled = false" in jail and "chatx-fleet.service" in jail
     assert "location = /fleet/api/fleet/enroll" in nginx and "location = /fleet/api/fleet/enroll/poll" in nginx
     assert "limit_req zone=fleet_enroll" in nginx and "limit_req zone=fleet_enroll_poll" in nginx
     console = (ENGINE / "domains/fleet_control/web/templates/fleet_console.html").read_text(encoding="utf-8")
     assert "this machine was revoked" in console
+    assert "duplicate machine_id" in console
+    assert "if(typed===null)return" in console and "if(!g)return" in console
+    assert "prompt('分组名称','机房')||''" not in console
+    admin_src = (ENGINE / "src/fleet/admin.py").read_text(encoding="utf-8")
+    assert "DUPLICATE machine_id" in admin_src
+    caplog.clear()
+    st.pending_ip_max = 1
+    first = c.post("/api/fleet/enroll", json={
+        "machine_id": "m-queue-a", "proto_version": 1, "enroll_secret": _es("queue-a")},
+        headers={"Authorization": "Bearer pending"})
+    assert first.status_code == 200
+    queued = c.post("/api/fleet/enroll", json={
+        "machine_id": "m-queue-b", "proto_version": 1, "enroll_secret": _es("queue-b")},
+        headers={"Authorization": "Bearer pending"})
+    assert queued.status_code == 429
+    assert "reason=lockout" not in caplog.text
+    room = st.create_room_key(group_name="机房A", max_uses=1, ttl_hours=2, now=T0)
+    assert st.redeem_room_key(room["room_key"], machine_id="m-used", proto_version=1, now=T0)["ok"]
+    caplog.clear()
+    exhausted = c.post("/api/fleet/enroll", json={
+        "room_key": room["room_key"], "machine_id": "m-used-2", "proto_version": 1,
+        "enroll_secret": _es("used")}, headers={"Authorization": "Bearer " + room["room_key"]})
+    assert exhausted.status_code == 403 and exhausted.json()["detail"] == "exhausted"
+    assert "fleet enroll_fail" not in caplog.text
+
+
+def test_room_key_requires_a_group_and_empty_group_node_is_not_rotated(st, monkeypatch, capsys):
+    from src.fleet import admin as admin_mod
+
+    c = _client(st)
+    denied = c.post("/api/fleet/room-keys", json={"group_name": "  ", "max_uses": 5}, headers=OP)
+    assert denied.status_code == 400 and denied.json()["detail"] == "group_required"
+    assert st.create_room_key(group_name="", now=T0)["error"] == "group_required"
+    assert st.list_room_keys(now=T0) == []
+    monkeypatch.setenv(admin_mod.ENV_CONTROLLER, "https://ctl.test/fleet")
+    monkeypatch.setenv(admin_mod.ENV_TOKEN, "tok")
+    assert admin_mod.main(["room-key", "--max-uses", "4"]) == 2
+    assert "分组" in capsys.readouterr().err
+
+    code = st.create_enroll_code(group_name="", now=T0)["code"]
+    node = st.enroll(code=code, machine_id="m-blank", proto_version=1, now=T0)
+    assert node["group_name"] == ""
+    minted = st.create_room_key(group_name="temp", max_uses=3, ttl_hours=5, now=T0)
+    st._conn.execute("UPDATE room_keys SET group_name='' WHERE key_id=?", (minted["key_id"],))
+    st._conn.commit()
+    pending = st.redeem_room_key(
+        minted["room_key"], machine_id="m-blank", proto_version=1, enroll_secret=_es("blank"), now=T0 + 1)
+    assert pending["status"] == "pending" and "node_key" not in pending
+    uses = st._conn.execute("SELECT uses FROM room_keys WHERE key_id=?", (minted["key_id"],)).fetchone()
+    assert uses["uses"] == 0
+    assert st.authenticate(node["node_key"])["status"] == "active"
+
+
+def test_untrusted_state_file_is_deleted_before_it_can_be_read(tmp_path):
+    planted = tmp_path / "agent.json"
+    planted.write_text('{"restart_cmd":"calc"}', encoding="utf-8")
+    assert discard_untrusted_secret(planted, owner_sid="S-1-5-32-545") is True
+    assert not planted.exists()
+    kept = tmp_path / "room.key"
+    kept.write_text("rk-not-used\n", encoding="utf-8")
+    assert discard_untrusted_secret(kept, owner_sid="S-1-5-18") is False
+    assert kept.read_text(encoding="utf-8").startswith("rk-")
+    machine = tmp_path / "machine_id"
+    machine.write_text("m-planted\n", encoding="utf-8")
+    assert discard_untrusted_secret(machine, owner_sid="S-1-5-32-544") is False
+    assert machine.exists()

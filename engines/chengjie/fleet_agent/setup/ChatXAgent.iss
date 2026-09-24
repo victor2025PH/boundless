@@ -88,25 +88,71 @@ begin
   Result := GetController('') + '/console';
 end;
 
+procedure StopOurAgent();
+var
+  ResultCode: Integer;
+  exe, cmd: String;
+begin
+  { End both tasks. Kill only the process whose image is this install path. }
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent Upgrade"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  exe := ExpandConstant('{app}\chatx-agent.exe');
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''chatx-agent.exe'' -and $_.ExecutablePath -eq ''' + exe + ''' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  StopOurAgent();
+end;
+
+function RunIcacls(const Params: String): Boolean;
 var
   ResultCode: Integer;
 begin
-  { Stop the task and the process before copying over a locked exe. }
-  Result := '';
-  NeedsRestart := False;
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM chatx-agent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := Exec(ExpandConstant('{sys}\icacls.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+            and (ResultCode = 0);
+end;
+
+procedure DropUntrustedState(const Dir: String);
+var
+  ResultCode: Integer;
+  cmd: String;
+begin
+  { Owner check BEFORE /setowner, which would adopt a planted agent.json. }
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    '$d=''' + Dir + ''';' +
+    'foreach($n in @(''agent.json'',''machine_id'',''room.key'')){' +
+    '$p=Join-Path $d $n; if(Test-Path -LiteralPath $p){' +
+    '$s=(Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
+    'if(($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')){Remove-Item -LiteralPath $p -Force}}}"';
+  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode))
+     or (ResultCode <> 0) then
+    RaiseException('Could not verify state file owners; install aborted before any secret was written');
 end;
 
 procedure LockStateDir(const Dir: String);
 var
-  ResultCode: Integer;
+  FindRec: TFindRec;
+  hasChild: Boolean;
 begin
-  { SYSTEM (S-1-5-18) and Administrators (S-1-5-32-544) only, before any secret file. }
-  Exec(ExpandConstant('{sys}\icacls.exe'),
-    '"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { Owner Administrators, reset children, then SYSTEM + Administrators only. }
+  if not DirExists(Dir) then
+    if not ForceDirectories(Dir) then
+      RaiseException('Could not create the state directory');
+  DropUntrustedState(Dir);
+  if not RunIcacls('"' + Dir + '" /setowner *S-1-5-32-544 /T /C') then
+    RaiseException('icacls /setowner failed; install aborted before any secret was written');
+  hasChild := FindFirst(AddBackslash(Dir) + '*', FindRec);
+  if hasChild then
+    FindClose(FindRec);
+  if hasChild then
+    if not RunIcacls('"' + Dir + '\*" /reset /T /C') then
+      RaiseException('icacls /reset failed; install aborted before any secret was written');
+  if not RunIcacls('"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C') then
+    RaiseException('icacls grant failed; install aborted before any secret was written');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -122,6 +168,7 @@ begin
   dir := ExpandConstant('{commonappdata}\ChatX\fleet');
   ForceDirectories(dir);
   LockStateDir(dir);
+  { room.key is copied only after icacls succeeded. LockStateDir raises otherwise. }
   if (src <> '') and FileExists(src) then
     FileCopy(src, dir + '\room.key', False);
   WizardForm.StatusLabel.Caption := 'Connecting to the controller...';
@@ -138,7 +185,14 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    StopOurAgent();
+    Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ChatX Fleet Agent Upgrade" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
   { State dir is kept unless the uninstall is started with /REMOVESTATE=1. }
   if (CurUninstallStep = usPostUninstall) and (CmdParam('/REMOVESTATE=') = '1') then
     DelTree(ExpandConstant('{commonappdata}\ChatX\fleet'), True, True, True);

@@ -108,23 +108,28 @@ _BEARER_NOT_CRED = {"", "pending", "none", "anonymous"}
 
 _ENROLL_FAIL_REASON = {
     "invalid_or_expired_code": "bad_code",
-    "rate_limited": "lockout",
     "invalid_room_key": "bad_room_key",
 }
-_ENROLL_FAIL_LOG_REASONS = {"bad_code", "lockout", "bad_room_key", "revoked", "expired", "exhausted"}
+# fail2ban counts only guesses and a real code/room lockout. exhausted / expired /
+# revoked are honest answers to a room that shares one NAT; pending rate_limited
+# is a queue cap, not an attack. Logging those would ban the office egress.
+_ENROLL_FAIL_LOG_REASONS = {"bad_code", "lockout", "bad_room_key"}
+_LOCKOUT_LIMITS = {"code", "room"}
 
 
-def enroll_fail_reason(error: Any) -> str:
+def enroll_fail_reason(error: Any, *, limit: str = "") -> str:
     err = str(error or "enroll_failed")
+    if err == "rate_limited":
+        return "lockout" if str(limit or "") in _LOCKOUT_LIMITS else "rate_limited"
     mapped = _ENROLL_FAIL_REASON.get(err, err)
     if not re.fullmatch(r"[a-z0-9_]{1,40}", mapped):
         return "enroll_failed"
     return mapped
 
 
-def log_enroll_fail(ip: str, error: Any) -> None:
+def log_enroll_fail(ip: str, error: Any, *, limit: str = "") -> None:
     """One greppable line for fail2ban. Never includes the code or room key."""
-    reason = enroll_fail_reason(error)
+    reason = enroll_fail_reason(error, limit=limit)
     if reason not in _ENROLL_FAIL_LOG_REASONS:
         return
     logger.warning("fleet enroll_fail ip=%s reason=%s", (ip or "-")[:64], reason)
@@ -210,7 +215,7 @@ def register_routes(app, ctx) -> None:
                 instances=body.get("instances"), enroll_secret=secret,
                 ttl_sec=int(cfg.get("pending_ttl_sec") or 0) or None, **common)
         if not res.get("ok"):
-            log_enroll_fail(_client_ip(request), res.get("error"))
+            log_enroll_fail(_client_ip(request), res.get("error"), limit=str(res.get("limit") or ""))
             raise _enroll_error(res)
         res["heartbeat_sec"] = cfg["heartbeat_sec"]
         if res.get("node_key"):
@@ -320,9 +325,14 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_room_key_create(request: Request, _=Depends(_api_write("fleet_control"))):
         body = await _json(request)
         st = _store_or_503(config_manager)
-        rec = st.create_room_key(label=str(body.get("label") or ""), group_name=str(body.get("group_name") or ""),
+        group = str(body.get("group_name") or "").strip()
+        if not group:
+            raise HTTPException(status_code=400, detail="group_required")
+        rec = st.create_room_key(label=str(body.get("label") or ""), group_name=group,
                                  max_uses=int(body.get("max_uses") or 50), ttl_hours=int(body.get("ttl_hours") or 168),
                                  created_by=_actor(request))
+        if not rec.get("room_key"):
+            raise HTTPException(status_code=400, detail=str(rec.get("error") or "group_required"))
         cfg = resolve_fleet_cfg(config_manager)
         public = (cfg["public_url"] or str(request.base_url).rstrip("/")).rstrip("/")
         rec["download_url"] = public + rec["download_path"]

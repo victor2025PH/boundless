@@ -142,7 +142,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     rj.add_argument("request_id")
     rk = sub.add_parser("room-key", help="签发机房安装链接（自动进组，用完或到期失效）")
     rk.add_argument("--label", default="")
-    rk.add_argument("--group", default="")
+    rk.add_argument("--group", default="", help="必填。空分组会匹配所有未分组节点，因此拒绝签发")
     rk.add_argument("--max-uses", type=int, default=50)
     rk.add_argument("--ttl-hours", type=int, default=168)
     rr = sub.add_parser("revoke-room", help="吊销一张机房密钥")
@@ -195,7 +195,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"group={str(r.get('effective_group') or 'pending-default'):16} "
                   f"{str(r.get('client_ip') or '-'):16} {str(r.get('os') or '-'):16} inst={inst}"
                   + (f"  {warn}" if warn else "")
-                  + ("  this machine was revoked" if r.get("was_revoked") else ""))
+                  + ("  this machine was revoked" if r.get("was_revoked") else "")
+                  + ("  DUPLICATE machine_id" if r.get("duplicate_machine") else ""))
         print(f"待批准 {len(rows)} 台", file=sys.stderr)
         return 0
     if args.cmd == "approve":
@@ -207,6 +208,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         _print(adm.reject(args.request_id))
         return 0
     if args.cmd == "room-key":
+        if not str(args.group or "").strip():
+            print("room-key 需要非空 --group。空分组会匹配所有未分组节点。", file=sys.stderr)
+            return 2
         res = adm.room_key(label=args.label, group=args.group, max_uses=args.max_uses, ttl_hours=args.ttl_hours)
         _print(res)
         url = res.get("download_url") or ""
@@ -225,7 +229,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"{str(r.get('host_name') or r.get('request_id') or ''):24} "
                       f"pair={r.get('pairing_code') or '-'} ip={r.get('client_ip') or '-'}"
                       + (f"  {r.get('warning')}" if r.get("warning") else "")
-                      + ("  this machine was revoked" if r.get("was_revoked") else ""))
+                      + ("  this machine was revoked" if r.get("was_revoked") else "")
+                      + ("  DUPLICATE machine_id" if r.get("duplicate_machine") else ""))
         rows = adm.nodes(group=args.group, include_revoked=args.all)
         for r in rows:
             print(f"{r.get('node_id','')[:14]:14} {str(r.get('state') or r.get('status') or ''):8} {str(r.get('group_name') or '-'):10} "

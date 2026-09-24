@@ -346,7 +346,7 @@ class FleetStore:
             if client_ip is not None and self._over_limit_locked(
                     ip=_ip_bucket(client_ip), machine_id="", kind="code_fail",
                     window=self.code_fail_window_sec, ip_max=self.code_fail_max, machine_max=0, now=ts):
-                return {"ok": False, "error": "rate_limited"}
+                return {"ok": False, "error": "rate_limited", "limit": "code"}
             row = self._conn.execute("SELECT * FROM enroll_codes WHERE code=?", (code,)).fetchone()
             if row is None or row["used_at"] is not None or row["expires_at"] < ts:
                 if client_ip is not None:
@@ -436,7 +436,7 @@ class FleetStore:
                                        window=self.pending_ip_window_sec, ip_max=self.pending_ip_max,
                                        machine_max=self.pending_machine_max, machine_window=self.pending_machine_window_sec,
                                        now=ts):
-                return {"ok": False, "error": "rate_limited"}
+                return {"ok": False, "error": "rate_limited", "limit": "pending"}
             request_id = "req_" + secrets.token_urlsafe(18)
             pair = _pairing_code()
             flagged = 1 if was_revoked else 0
@@ -467,7 +467,14 @@ class FleetStore:
                 str(n["machine_id"]): str(n["node_id"])
                 for n in self._conn.execute("SELECT machine_id, node_id FROM nodes").fetchall()
             }
-        return [self._pending_public(r, owned.get(str(r["machine_id"]), "")) for r in rows]
+        public = [self._pending_public(r, owned.get(str(r["machine_id"]), "")) for r in rows]
+        counts: Dict[str, int] = {}
+        for item in public:
+            mid = str(item.get("machine_id") or "")
+            counts[mid] = counts.get(mid, 0) + 1
+        for item in public:
+            item["duplicate_machine"] = counts.get(str(item.get("machine_id") or ""), 0) > 1
+        return public
 
     def approve_pending(self, request_id: str, *, label: Optional[str] = None, group_name: Optional[str] = None,
                         decided_by: str = "", confirm_rotate: bool = False,
@@ -574,8 +581,14 @@ class FleetStore:
 
     def create_room_key(self, *, label: str = "", group_name: str = "", max_uses: int = 50, ttl_hours: int = 168,
                         created_by: str = "", now: Optional[float] = None) -> Dict[str, Any]:
-        """签发机房密钥。明文只在这次返回里出现；库里只留 sha256 与指纹。"""
+        """签发机房密钥。明文只在这次返回里出现；库里只留 sha256 与指纹。
+
+        分组必填。空分组会匹配每一台未分组节点，持有 zip 和 machine_id 就能静默换 key。
+        """
         ts = float(now if now is not None else time.time())
+        group = str(group_name or "").strip()
+        if not group:
+            return {"ok": False, "error": "group_required"}
         uses = max(1, min(500, int(max_uses or 1)))
         hours = max(1, min(24 * 90, int(ttl_hours or 168)))
         token = "rk_" + secrets.token_urlsafe(32)
@@ -585,11 +598,12 @@ class FleetStore:
             self._conn.execute(
                 "INSERT INTO room_keys(key_id, key_hash, fingerprint, label, group_name, max_uses, uses, created_by, "
                 "created_at, expires_at) VALUES (?,?,?,?,?,?,0,?,?,?)",
-                (key_id, digest, digest[:12], str(label or "")[:80], str(group_name or "")[:80], uses,
+                (key_id, digest, digest[:12], str(label or "")[:80], group[:80], uses,
                  str(created_by or "")[:80], ts, ts + hours * 3600))
             self._conn.commit()
-        return {"key_id": key_id, "room_key": token, "fingerprint": digest[:12], "label": str(label or ""),
-                "group_name": str(group_name or ""), "max_uses": uses, "uses": 0, "created_at": ts,
+        return {"ok": True, "key_id": key_id, "room_key": token, "fingerprint": digest[:12],
+                "label": str(label or ""),
+                "group_name": group, "max_uses": uses, "uses": 0, "created_at": ts,
                 "expires_at": ts + hours * 3600, "download_path": "/dl/" + token}
 
     def list_room_keys(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -636,7 +650,7 @@ class FleetStore:
             if client_ip is not None and self._over_limit_locked(
                     ip=_ip_bucket(client_ip), machine_id="", kind="room_fail",
                     window=self.room_fail_window_sec, ip_max=self.room_fail_max, machine_max=0, now=ts):
-                return {"ok": False, "error": "rate_limited"}
+                return {"ok": False, "error": "rate_limited", "limit": "room"}
             row = self._conn.execute("SELECT * FROM room_keys WHERE key_hash=?", (_hash_key(token),)).fetchone()
             if row is None:
                 if client_ip is not None:
@@ -651,9 +665,14 @@ class FleetStore:
                 return {"ok": False, "error": "exhausted"}
             existing = self._conn.execute("SELECT * FROM nodes WHERE machine_id=?", (mid,)).fetchone()
             room_group = str(row["group_name"] or "")
+            existing_group = "" if existing is None else str(existing["group_name"] or "")
+            # An existing node with an empty group never auto-rotates, even when the
+            # room key group is also empty. Otherwise one zip plus a machine_id
+            # rotates every ungrouped node.
             if existing is not None and (
                 str(existing["status"]) == NODE_REVOKED
-                or str(existing["group_name"] or "") != room_group
+                or existing_group == ""
+                or existing_group != room_group
             ):
                 # Do not consume a use and do not rotate or revive the node.
                 return self.request_pending(
@@ -694,7 +713,7 @@ class FleetStore:
         with self._lock:
             if self._over_limit_locked(ip=_ip_bucket(client_ip), machine_id="", kind="room_fail",
                                        window=self.room_fail_window_sec, ip_max=self.room_fail_max, machine_max=0, now=ts):
-                return {"ok": False, "error": "rate_limited"}
+                return {"ok": False, "error": "rate_limited", "limit": "room"}
             self._record_attempt_locked(ip=_ip_bucket(client_ip), machine_id=machine_id, kind="room_fail", ts=ts)
             self._conn.commit()
         return {"ok": False, "error": error}
