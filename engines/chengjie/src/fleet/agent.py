@@ -113,6 +113,8 @@ class AgentConfig:
 
     def load(self) -> None:
         try:
+            # Same rule as discard_untrusted_secret: on Windows keep the file only
+            # when the state directory is locked and the owner is SYSTEM or Admins.
             discard_untrusted_secret(self.path)
             d = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(d, dict):

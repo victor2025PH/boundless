@@ -15,6 +15,27 @@ function Native([string]$exe, [string[]]$a) {
   finally { $ErrorActionPreference = $old }
 }
 
+function Test-Reparse([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $item) { return $false }
+  return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+function Assert-StateParent([string]$Dir) {
+  # Parent must be SYSTEM or Administrators. A junction on either path can
+  # redirect /setowner /T and /reset /T at an arbitrary directory.
+  $parent = Split-Path -Parent $Dir
+  if (Test-Reparse $parent) { Say "parent is a reparse point"; exit 3 }
+  if (Test-Reparse $Dir) { Say "state dir is a reparse point"; exit 3 }
+  if (-not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Native icacls.exe @($parent, '/setowner', '*S-1-5-32-544') | Out-Null
+    if ($NativeExit -ne 0) { Say "parent setowner failed ($NativeExit)"; exit 3 }
+  }
+  if (Test-Reparse $parent) { Say "parent is a reparse point"; exit 3 }
+  if (Test-Reparse $Dir) { Say "state dir is a reparse point"; exit 3 }
+  $sid = (Get-Acl -LiteralPath $parent).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544') { Say "parent owner is not trusted"; exit 3 }
+}
 function Test-DirLocked([string]$Dir) {
   $acl = Get-Acl -LiteralPath $Dir
   $sid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
@@ -46,14 +67,18 @@ function Remove-Sensitive([string]$Dir, [bool]$Force) {
   }
 }
 function Lock-StateDir([string]$Dir) {
+  Assert-StateParent $Dir
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-  $wasLocked = $false
-  try { $wasLocked = Test-DirLocked $Dir } catch { Say "could not read state dir ACL"; exit 3 }
+  if (Test-Reparse $Dir) { Say "state dir is a reparse point"; exit 3 }
   Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544') | Out-Null
   if ($NativeExit -ne 0) { Say "icacls setowner failed ($NativeExit)"; exit 3 }
+  # /reset with no /T drops explicit ACEs /grant:r would otherwise leave behind.
+  Native icacls.exe @($Dir, '/reset') | Out-Null
+  if ($NativeExit -ne 0) { Say "icacls reset failed ($NativeExit)"; exit 3 }
   Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F') | Out-Null
   if ($NativeExit -ne 0) { Say "icacls grant failed ($NativeExit)"; exit 3 }
-  try { Remove-Sensitive $Dir (-not $wasLocked) } catch { Say "could not delete untrusted state"; exit 3 }
+  try { if (-not (Test-DirLocked $Dir)) { Say "state dir ACL is not locked"; exit 3 } } catch { Say "could not read state dir ACL"; exit 3 }
+  try { Remove-Sensitive $Dir $false } catch { Say "could not delete untrusted state"; exit 3 }
   Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C') | Out-Null
   if ($NativeExit -ne 0) { Say "icacls setowner failed ($NativeExit)"; exit 3 }
   $children = @(Get-ChildItem -Force -LiteralPath $Dir -ErrorAction SilentlyContinue)
@@ -63,6 +88,7 @@ function Lock-StateDir([string]$Dir) {
   }
   Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/T', '/C') | Out-Null
   if ($NativeExit -ne 0) { Say "icacls grant failed ($NativeExit)"; exit 3 }
+  try { if (-not (Test-DirLocked $Dir)) { Say "state dir ACL is not locked"; exit 3 } } catch { Say "could not read state dir ACL"; exit 3 }
 }
 
 if (-not $InstallDir) { $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path }

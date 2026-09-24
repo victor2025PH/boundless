@@ -89,10 +89,10 @@ _SENSITIVE_NAMES = frozenset({"agent.json", "machine_id", "room.key"})
 def state_dir_acl_commands(path: Path) -> List[List[str]]:
     """icacls steps for ``state_dir_lock_plan``.
 
-    Directory-only setowner and grant come first, with no ``/T``. The recursive
-    setowner is later, after planted children have been removed. ``/reset``
-    targets ``<dir>\\*`` so it does not wipe the directory DACL. The last grant
-    carries ``/T``. An empty directory skips the reset.
+    ``/inheritance:r /grant:r`` does not remove explicit ACEs for other SIDs.
+    ``reset-dir`` is ``icacls <dir> /reset`` with no ``/T``, so the directory
+    itself loses those ACEs before the protected grant. ``/reset`` of children
+    still targets ``<dir>\\*``. An empty directory skips that child reset.
     """
     folder = str(path)
     grant = [
@@ -101,6 +101,7 @@ def state_dir_acl_commands(path: Path) -> List[List[str]]:
     ]
     return [
         ["icacls", folder, "/setowner", "*S-1-5-32-544"],
+        ["icacls", folder, "/reset"],
         list(grant),
         ["icacls", folder, "/setowner", "*S-1-5-32-544", "/T", "/C"],
         ["icacls", str(path / "*"), "/reset", "/T", "/C"],
@@ -109,19 +110,25 @@ def state_dir_acl_commands(path: Path) -> List[List[str]]:
 
 
 def state_dir_lock_plan(path: Path) -> List[tuple]:
-    """Lock order. ``purge-sensitive`` sits before any recursive ``/setowner /T``.
+    """Lock order. Verify the directory after the fresh DACL and again after ``/T``.
 
-    A planted ``agent.json`` must be gone before ``/T`` can adopt it. The purge
-    itself is not an icacls command; ``lock_state_dir`` runs it in this slot.
+    ``reset-dir`` clears explicit ACEs on the directory itself. ``verify-dir``
+    and ``verify-tree`` re-read the locked predicate and abort when it fails.
+    ``purge-sensitive`` runs only after ``verify-dir`` and only drops a child
+    whose owner is not SYSTEM or Administrators, so a previously unlocked but
+    already trusted file survives an upgrade.
     """
     commands = state_dir_acl_commands(path)
     return [
         ("setowner-dir", commands[0]),
-        ("grant-dir", commands[1]),
+        ("reset-dir", commands[1]),
+        ("grant-dir", commands[2]),
+        ("verify-dir", []),
         ("purge-sensitive", []),
-        ("setowner-tree", commands[2]),
-        ("reset-children", commands[3]),
-        ("grant-tree", commands[4]),
+        ("setowner-tree", commands[3]),
+        ("reset-children", commands[4]),
+        ("grant-tree", commands[5]),
+        ("verify-tree", []),
     ]
 
 
@@ -259,11 +266,66 @@ def _windows_dir_locked(path: Path) -> bool:
         kernel.LocalFree(sd)
 
 
+def state_file_trusted(*, dir_locked: bool, owner_sid: str) -> bool:
+    """A Windows secret is trusted only when both checks pass.
+
+    The directory must be locked (protected DACL, only SYSTEM and Administrators)
+    and the file owner must be one of those SIDs. An Administrators-owned file
+    in a directory that still has an Everyone ACE is not trusted: the user can
+    rewrite ``restart_cmd`` and the service would run it as SYSTEM.
+    """
+    return bool(dir_locked) and owner_sid in TRUSTED_OWNER_SIDS
+
+
+def _is_reparse(path: Path) -> bool:
+    """True for a symlink or, on Windows, a junction. False when the path is absent."""
+    try:
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _require_state_parent(path: Path) -> None:
+    """Refuse a reparse point on the state dir or its parent.
+
+    On Windows the parent (``%ProgramData%\\ChatX``) must be owned by SYSTEM or
+    Administrators. A parent we just created is given to Administrators. An
+    existing parent with any other owner is refused, not adopted.
+    """
+    path = Path(path)
+    parent = path.parent
+    if _is_reparse(parent) or _is_reparse(path):
+        raise StateDirLockError("refusing a reparse point in the state directory path")
+    if os.name != "nt":
+        return
+    created = False
+    if not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
+        created = True
+    if _is_reparse(parent) or _is_reparse(path):
+        raise StateDirLockError("refusing a reparse point in the state directory path")
+    if created:
+        _run_icacls(["icacls", str(parent), "/setowner", "*S-1-5-32-544"])
+    if file_owner_sid(parent) not in TRUSTED_OWNER_SIDS:
+        raise StateDirLockError("parent directory owner is not SYSTEM or Administrators")
+
+
+def _require_locked_dir(path: Path) -> None:
+    """Post-check used after the directory grant and again after the ``/T`` grant."""
+    if os.name == "nt":
+        ok = _windows_dir_locked(path)
+    else:
+        ok = _posix_dir_locked(path)
+    if not ok:
+        raise StateDirLockError("state directory ACL is not limited to SYSTEM and Administrators")
+
+
 def _purge_sensitive(path: Path, *, unconditional: bool) -> None:
     """Delete agent.json, machine_id, and room.key. Raise if a delete does not stick.
 
-    ``unconditional`` is set when the directory was not already locked before
-    step 1. A failure here must abort before ``/setowner /T`` adopts the file.
+    On Windows ``unconditional`` is false: the directory DACL was just replaced
+    and verified, so a SYSTEM or Administrators owner is kept and any other
+    owner is removed. A failure aborts before ``/setowner /T`` can adopt the file.
     """
     for name in ("agent.json", "machine_id", "room.key"):
         child = path / name
@@ -284,21 +346,28 @@ def _purge_sensitive(path: Path, *, unconditional: bool) -> None:
 def lock_state_dir(path: Path) -> None:
     """Create the state dir and lock it down before machine_id / agent.json / room.key are written.
 
-    On Windows the plan is directory-only owner and DACL, then purge, then
-    ``/setowner /T``, reset children, and grant ``/T``. "Already locked" is
-    sampled before the first setowner. A purge failure raises and does not
-    adopt the file. On POSIX the directory is mode 0700; a chmod failure raises
-    the same error. A POSIX directory that was not already 0700 and owned by
-    root or the current user loses the three secret files.
+    On Windows the directory owner is set, explicit ACEs are cleared with
+    ``/reset`` (no ``/T``), and a protected SYSTEM+Administrators DACL is
+    written. That result is checked before any child is inspected. Children
+    whose owner is not SYSTEM or Administrators are deleted. Then ``/setowner
+    /T``, child reset, and grant ``/T`` run, and the locked check runs again.
+    On POSIX the directory is mode 0700. A symlink for the directory or its
+    parent is refused. A POSIX directory that was not already 0700 and owned
+    by root or the current user loses the three secret files.
     """
     path = Path(path)
-    existed = path.is_dir()
+    _require_state_parent(path)
+    existed = path.is_dir() and not _is_reparse(path)
     path.mkdir(parents=True, exist_ok=True)
+    if _is_reparse(path) or _is_reparse(path.parent):
+        raise StateDirLockError("refusing a reparse point in the state directory path")
     if os.name == "nt":
-        already = _windows_dir_locked(path) if existed else False
         for step, argv in state_dir_lock_plan(path):
+            if step in ("verify-dir", "verify-tree"):
+                _require_locked_dir(path)
+                continue
             if step == "purge-sensitive":
-                _purge_sensitive(path, unconditional=not already)
+                _purge_sensitive(path, unconditional=False)
                 continue
             if step == "reset-children" and not any(path.iterdir()):
                 continue
@@ -309,6 +378,7 @@ def lock_state_dir(path: Path) -> None:
         os.chmod(path, 0o700)
     except OSError as e:
         raise StateDirLockError(f"chmod state dir failed: {e}") from e
+    _require_locked_dir(path)
     _purge_sensitive(path, unconditional=not already)
 
 
@@ -348,24 +418,26 @@ def file_owner_sid(path: Path) -> str:
             kernel.LocalFree(sd)
 
 
-def discard_untrusted_secret(path: Path, *, owner_sid: Optional[str] = None) -> bool:
-    """Delete a pre-existing agent.json, machine_id, or room.key with an untrusted owner.
+def discard_untrusted_secret(path: Path, *, owner_sid: Optional[str] = None,
+                             dir_locked: Optional[bool] = None) -> bool:
+    """Delete a pre-existing agent.json, machine_id, or room.key that is not trusted.
 
-    Windows trusts SYSTEM (S-1-5-18), Administrators (S-1-5-32-544), and any
-    file that already sits in a locked state directory (protected DACL, trusted
-    owner). An explicit ``owner_sid`` always wins, so tests can still force a
-    delete. ``restart_cmd`` in agent.json is executed with ``shell=True`` as
-    SYSTEM. Returns True when the file was removed. Raises if it cannot be removed.
+    On Windows the file is kept only when ``state_file_trusted`` is true: the
+    parent directory is locked and the owner is SYSTEM or Administrators.
+    Passing ``dir_locked`` forces that rule, including on other platforms.
+    An explicit ``owner_sid`` without ``dir_locked`` is the SID half of the
+    check used by tests. ``restart_cmd`` runs with ``shell=True`` as SYSTEM.
+    Returns True when the file was removed. Raises if it cannot be removed.
     """
     path = Path(path)
     if not path.is_file() or path.name not in _SENSITIVE_NAMES:
         return False
-    if owner_sid is not None:
+    if os.name == "nt" or dir_locked is not None:
+        sid = file_owner_sid(path) if owner_sid is None else owner_sid
+        locked = _windows_dir_locked(path.parent) if dir_locked is None else bool(dir_locked)
+        trusted = state_file_trusted(dir_locked=locked, owner_sid=sid)
+    elif owner_sid is not None:
         trusted = owner_sid in TRUSTED_OWNER_SIDS
-    elif os.name == "nt" and _windows_dir_locked(path.parent):
-        trusted = True
-    elif os.name == "nt":
-        trusted = file_owner_sid(path) in TRUSTED_OWNER_SIDS
     else:
         st = path.stat()
         trusted = st.st_uid in {0, os.getuid()} and (st.st_mode & 0o022) == 0
@@ -424,5 +496,5 @@ def os_label() -> str:
 
 __all__ = ["default_state_dir", "host_name", "lock_state_dir", "node_machine_id", "os_label",
            "state_dir_acl_command", "state_dir_acl_commands", "state_dir_lock_plan",
-           "assign_owner_admins", "discard_untrusted_secret",
+           "assign_owner_admins", "discard_untrusted_secret", "state_file_trusted",
            "StateDirLockError", "TRUSTED_OWNER_SIDS", "ENV_STATE_DIR"]

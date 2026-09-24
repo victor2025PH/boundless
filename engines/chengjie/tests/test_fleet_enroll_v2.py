@@ -22,7 +22,7 @@ from src.fleet.agent import AgentConfig, NodeAgent
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
 from src.fleet.identity import (
     StateDirLockError, discard_untrusted_secret, lock_state_dir, state_dir_acl_command,
-    state_dir_lock_plan,
+    state_dir_lock_plan, state_file_trusted,
 )
 from src.fleet.protocol import PROTO_VERSION, STATUS_REJECTED, TASK_RESTART_INSTANCE
 from src.fleet.store import (
@@ -362,29 +362,45 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert "if(Test-Path -LiteralPath $p){exit 1}" in iss
     assert "service is installed and will retry" not in iss
     dir_only = iss.index("/setowner *S-1-5-32-544')")
+    reset_dir = iss.index("/reset')")
     purge = iss.index("DropUntrustedState(Dir")
     tree = iss.index("/setowner *S-1-5-32-544 /T /C")
-    assert dir_only < purge < tree
+    assert dir_only < reset_dir < purge < tree
+    assert iss.index("if not StateDirWasLocked(Dir)") < purge
+    assert iss.index("if not StateDirWasLocked(Dir)", tree) > tree
+    assert "ReparsePoint" in iss and "AssertStateParent(Dir)" in iss
+    step = iss.split("procedure CurStepChanged")[1]
+    assert step.index("ResultCode <> 0") < step.index("WizardSilent") < step.index("ExitProcess(1)")
     bootstrap = (ENGINE / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
     assert "--detect" in bootstrap and "room.key" in bootstrap
     assert "S-1-5-18" in bootstrap and "S-1-5-32-544" in bootstrap
     assert "/setowner" in bootstrap and bootstrap.index("/setowner") < bootstrap.index("enroll', '--controller'")
     assert "NativeExit" in bootstrap and "exit 3" in bootstrap
     assert "if (Test-Path -LiteralPath $p)" in bootstrap
-    plain = bootstrap.index("'/setowner', '*S-1-5-32-544')")
+    assert "ReparsePoint" in bootstrap and "parent owner is not trusted" in bootstrap
+    b_owner = bootstrap.index("@($Dir, '/setowner', '*S-1-5-32-544')")
+    b_reset = bootstrap.index("@($Dir, '/reset')")
+    b_verify = bootstrap.index("if (-not (Test-DirLocked $Dir))")
     b_purge = bootstrap.index("Remove-Sensitive $Dir")
-    b_tree = bootstrap.index("'/setowner', '*S-1-5-32-544', '/T', '/C'")
-    assert bootstrap.index("$wasLocked = Test-DirLocked") < plain < b_purge < b_tree
+    b_tree = bootstrap.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
+    assert bootstrap.index("Assert-StateParent $Dir") < b_owner < b_reset < b_verify < b_purge < b_tree
+    assert bootstrap.index("if (-not (Test-DirLocked $Dir))", b_tree) > b_tree
     assert bootstrap.index("enroll failed") < bootstrap.index("install-service")
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
+    assert "keep existing enrollment" not in ps1
+    assert "must be approved again" in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
     assert "if (Test-Path -LiteralPath $p)" in ps1
-    p_plain = ps1.index("'/setowner', '*S-1-5-32-544')")
+    assert "ReparsePoint" in ps1 and "parent owner is not trusted" in ps1
+    p_owner = ps1.index("@($Dir, '/setowner', '*S-1-5-32-544')")
+    p_reset = ps1.index("@($Dir, '/reset')")
+    p_verify = ps1.index("if (-not (Test-DirLocked $Dir))")
     p_purge = ps1.index("Remove-Sensitive $Dir")
-    p_tree = ps1.index("'/setowner', '*S-1-5-32-544', '/T', '/C'")
-    assert ps1.index("$wasLocked = Test-DirLocked") < p_plain < p_purge < p_tree
+    p_tree = ps1.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
+    assert ps1.index("Assert-StateParent $Dir") < p_owner < p_reset < p_verify < p_purge < p_tree
+    assert ps1.index("if (-not (Test-DirLocked $Dir))", p_tree) > p_tree
     folder = Path(r"C:\ProgramData\ChatX\fleet")
     acl = state_dir_acl_command(folder)
     assert acl[:3] == ["icacls", str(folder), "/inheritance:r"]
@@ -508,22 +524,29 @@ def test_state_dir_locked_before_writes(tmp_path):
 def test_state_dir_acl_command_order_closes_the_toctou_window():
     folder = Path(r"C:\ProgramData\ChatX\fleet")
     plan = state_dir_lock_plan(folder)
-    assert [name for name, _argv in plan] == [
-        "setowner-dir", "grant-dir", "purge-sensitive",
-        "setowner-tree", "reset-children", "grant-tree",
-    ]
-    assert plan[0][1] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544"]
-    assert "/T" not in plan[0][1] and "/T" not in plan[1][1]
-    assert plan[1][1][2:4] == ["/inheritance:r", "/grant:r"]
-    assert "*S-1-5-18:(OI)(CI)F" in plan[1][1] and "*S-1-5-32-544:(OI)(CI)F" in plan[1][1]
-    assert plan[2][1] == []
-    assert plan[3][1] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
-    assert plan[4][1][2:5] == ["/reset", "/T", "/C"]
-    assert plan[5][1][:3] == ["icacls", str(folder), "/inheritance:r"]
-    assert plan[5][1][-2:] == ["/T", "/C"]
-    assert state_dir_acl_command(folder) == plan[5][1]
     names = [name for name, _argv in plan]
-    assert names.index("purge-sensitive") < names.index("setowner-tree")
+    assert names == [
+        "setowner-dir", "reset-dir", "grant-dir", "verify-dir", "purge-sensitive",
+        "setowner-tree", "reset-children", "grant-tree", "verify-tree",
+    ]
+    by_name = dict(plan)
+    assert by_name["setowner-dir"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544"]
+    assert by_name["reset-dir"] == ["icacls", str(folder), "/reset"]
+    assert "/T" not in by_name["reset-dir"] and "*" not in by_name["reset-dir"][1]
+    assert by_name["grant-dir"][2:4] == ["/inheritance:r", "/grant:r"]
+    assert "/T" not in by_name["grant-dir"]
+    assert by_name["verify-dir"] == [] and by_name["verify-tree"] == []
+    assert names.index("reset-dir") < names.index("grant-dir") < names.index("verify-dir")
+    assert names.index("verify-dir") < names.index("purge-sensitive") < names.index("setowner-tree")
+    assert names.index("grant-tree") < names.index("verify-tree")
+    assert by_name["setowner-tree"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
+    assert by_name["reset-children"][2:5] == ["/reset", "/T", "/C"]
+    assert by_name["grant-tree"][:3] == ["icacls", str(folder), "/inheritance:r"]
+    assert by_name["grant-tree"][-2:] == ["/T", "/C"]
+    assert state_dir_acl_command(folder) == by_name["grant-tree"]
+    assert state_file_trusted(dir_locked=False, owner_sid="S-1-5-32-544") is False
+    assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-544") is True
+    assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-545") is False
 
 
 def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
@@ -782,13 +805,30 @@ def test_room_key_requires_a_group_and_empty_group_node_is_not_rotated(st, monke
 def test_untrusted_state_file_is_deleted_before_it_can_be_read(tmp_path):
     planted = tmp_path / "agent.json"
     planted.write_text('{"restart_cmd":"calc"}', encoding="utf-8")
-    assert discard_untrusted_secret(planted, owner_sid="S-1-5-32-545") is True
+    assert discard_untrusted_secret(planted, owner_sid="S-1-5-32-545", dir_locked=True) is True
     assert not planted.exists()
     kept = tmp_path / "room.key"
     kept.write_text("rk-not-used\n", encoding="utf-8")
-    assert discard_untrusted_secret(kept, owner_sid="S-1-5-18") is False
+    assert discard_untrusted_secret(kept, owner_sid="S-1-5-18", dir_locked=True) is False
     assert kept.read_text(encoding="utf-8").startswith("rk-")
     machine = tmp_path / "machine_id"
     machine.write_text("m-planted\n", encoding="utf-8")
-    assert discard_untrusted_secret(machine, owner_sid="S-1-5-32-544") is False
+    assert discard_untrusted_secret(machine, owner_sid="S-1-5-32-544", dir_locked=True) is False
     assert machine.exists()
+
+
+def test_read_refused_when_state_dir_is_not_locked(tmp_path):
+    planted = tmp_path / "agent.json"
+    planted.write_text(
+        '{"restart_cmd":"calc","controller_url":"https://evil.example/fleet","node_key":"nk_planted"}',
+        encoding="utf-8")
+    assert discard_untrusted_secret(planted, owner_sid="S-1-5-32-544", dir_locked=False) is True
+    assert not planted.exists()
+    cfg = AgentConfig(tmp_path)
+    assert cfg.node_key == ""
+    assert cfg.data.get("restart_cmd") in (None, "")
+    assert "evil.example" not in cfg.controller_url
+    link = tmp_path / "linked"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(StateDirLockError):
+        lock_state_dir(link / "fleet")

@@ -14,7 +14,7 @@
 #   ... -Code 12345678                             # one-time code, skips the pending queue
 #   ... -RoomKeyFile .\room.key                    # room pack; the key is read from the file only
 #   ... -Exe .\chatx-agent.exe                     # offline: use a local exe instead of downloading
-#   ... -NoEnroll                                  # upgrade only, keep existing enrollment
+#   ... -NoEnroll                                  # skip a new enroll. agent.json is kept only when its owner is SYSTEM or Administrators after the state dir is locked; any other owner is removed and the PC must be approved again
 #   ... -ConfigPath C:\path\config.local.yaml      # pin one ChatX instance instead of auto-detect
 #
 # ASCII only (PowerShell 5.1 + GBK console lesson). Never prints node_key / auth tokens.
@@ -43,6 +43,25 @@ function Native([string]$exe, [string[]]$a) {
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
+}
+function Test-Reparse([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $item) { return $false }
+  return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+function Assert-StateParent([string]$Dir) {
+  $parent = Split-Path -Parent $Dir
+  if (Test-Reparse $parent) { Fail "parent is a reparse point" }
+  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
+  if (-not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Native icacls.exe @($parent, '/setowner', '*S-1-5-32-544') | Out-Null
+    if ($NativeExit -ne 0) { Fail "parent setowner failed ($NativeExit)" }
+  }
+  if (Test-Reparse $parent) { Fail "parent is a reparse point" }
+  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
+  $sid = (Get-Acl -LiteralPath $parent).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544') { Fail "parent owner is not trusted" }
 }
 function Test-DirLocked([string]$Dir) {
   $acl = Get-Acl -LiteralPath $Dir
@@ -74,14 +93,17 @@ function Remove-Sensitive([string]$Dir, [bool]$Force) {
   }
 }
 function Lock-StateDir([string]$Dir) {
+  Assert-StateParent $Dir
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-  $wasLocked = $false
-  try { $wasLocked = Test-DirLocked $Dir } catch { Fail "could not read state dir ACL" }
+  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
   Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544') | Out-Null
   if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
+  Native icacls.exe @($Dir, '/reset') | Out-Null
+  if ($NativeExit -ne 0) { Fail "icacls reset failed ($NativeExit)" }
   Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F') | Out-Null
   if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
-  try { Remove-Sensitive $Dir (-not $wasLocked) } catch { Fail "could not delete untrusted state" }
+  try { if (-not (Test-DirLocked $Dir)) { Fail "state dir ACL is not locked" } } catch { Fail "could not read state dir ACL" }
+  try { Remove-Sensitive $Dir $false } catch { Fail "could not delete untrusted state" }
   Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C') | Out-Null
   if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
   $children = @(Get-ChildItem -Force -LiteralPath $Dir -ErrorAction SilentlyContinue)
@@ -91,6 +113,7 @@ function Lock-StateDir([string]$Dir) {
   }
   Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/T', '/C') | Out-Null
   if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
+  try { if (-not (Test-DirLocked $Dir)) { Fail "state dir ACL is not locked" } } catch { Fail "could not read state dir ACL" }
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
