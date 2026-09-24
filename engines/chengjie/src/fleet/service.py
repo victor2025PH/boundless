@@ -68,11 +68,29 @@ def build_schtasks_query(*, task_name: str = TASK_NAME) -> List[str]:
     return ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"]
 
 
-def build_systemd_unit(cmd: Sequence[str], *, state_dir: Optional[Path] = None) -> str:
+def service_workdir() -> Optional[Path]:
+    """源码态 systemd 需要 WorkingDirectory=引擎根，否则 `python -m src.fleet.agent` 找不到包。
+
+    冻结 exe 自带路径，返回 None（不写 WorkingDirectory）。
+    """
+    if is_frozen():
+        return None
+    # service.py -> fleet -> src -> 引擎根 (engines/chengjie)
+    return Path(__file__).resolve().parents[2]
+
+
+def build_systemd_unit(
+    cmd: Sequence[str],
+    *,
+    state_dir: Optional[Path] = None,
+    working_dir: Optional[Path] = None,
+) -> str:
     env = f"Environment=CHATX_FLEET_STATE_DIR={state_dir}\n" if state_dir else ""
+    wd = f"WorkingDirectory={working_dir}\n" if working_dir else ""
     return (
         "[Unit]\nDescription=ChatX Fleet Agent\nAfter=network-online.target\nWants=network-online.target\n\n"
         "[Service]\nType=simple\n"
+        f"{wd}"
         f"ExecStart={shlex.join(list(cmd))}\n{env}"
         "Restart=always\nRestartSec=10\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
@@ -99,7 +117,10 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
                 return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
         return {"ok": True, "kind": "schtasks", "task_name": task_name, "command": cmd, "steps": outs}
     unit = systemd_unit_path()
-    unit.write_text(build_systemd_unit(cmd, state_dir=state_dir), encoding="utf-8")
+    unit.write_text(
+        build_systemd_unit(cmd, state_dir=state_dir, working_dir=service_workdir()),
+        encoding="utf-8",
+    )
     outs = []
     for s in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", SYSTEMD_UNIT]):
         p = run(s)
@@ -174,7 +195,7 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 
 
 __all__ = [
-    "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "agent_command", "build_schtasks_create", "build_schtasks_run",
+    "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command", "build_schtasks_create", "build_schtasks_run",
     "build_schtasks_delete", "build_schtasks_query", "build_systemd_unit", "install_service", "uninstall_service",
     "service_status", "supervise",
 ]

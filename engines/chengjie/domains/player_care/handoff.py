@@ -75,11 +75,21 @@ def resolve_handoff_cfg(cfg_root: Any) -> Dict[str, Any]:
 
 
 def _token_usable(store: ContactStore, token: str) -> Optional[HandoffToken]:
+    """候选码是否仍可消费。不可用时只打日志 + 异常类名（不虚构 HTTP 码）。"""
     try:
         tok = store.get_token(token)
     except Exception:
         return None
-    if tok is None or tok.is_consumed or tok.is_revoked or tok.is_expired(store._now()):  # noqa: SLF001
+    if tok is None:
+        return None  # 等同 TokenNotFound：形状像码但不在库 → 静默换下一个候选
+    if tok.is_revoked:
+        logger.info("[player_care] handoff 码不可用 %s (%s)", token, "TokenRevoked")
+        return None
+    if tok.is_consumed:
+        logger.info("[player_care] handoff 码不可用 %s (%s)", token, "TokenAlreadyConsumed")
+        return None
+    if tok.is_expired(store._now()):  # noqa: SLF001
+        logger.info("[player_care] handoff 码不可用 %s (%s)", token, "TokenExpired")
         return None
     return tok
 

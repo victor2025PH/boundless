@@ -257,3 +257,48 @@ async def test_hook_handoff_failure_is_swallowed(local):
     set_profile_service(_profile(local))
     hook = PlayerCareDomainHook(config={}, gateway=_GW(), handoff=_Boom(local))
     assert await hook.on_message_pre_process(_ctx("abc234", WA_JID)) is None
+
+
+# ── 四类失败：locate 仅日志 + 类名（小组约定，不虚构 HTTP）──────────────────
+
+def test_locate_logs_four_failure_class_names(local, caplog):
+    import logging
+    from src.contacts.handoff import HandoffTokenService
+
+    contact, ci, tok = _issue_messenger_token(local)
+    svc = PlayerHandoffService(local)
+    # AlreadyConsumed
+    HandoffTokenService(local).consume(tok.token, consumed_by_ci_id="wa:wa-01:x")
+    with caplog.at_level(logging.INFO, logger="domains.player_care.handoff"):
+        assert svc.locate(tok.token) is None
+    assert any("TokenAlreadyConsumed" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+
+    # Revoked
+    _, _, tok2 = _issue_messenger_token(local, name="Bob")
+    HandoffTokenService(local).revoke(tok2.token, reason="test")
+    with caplog.at_level(logging.INFO, logger="domains.player_care.handoff"):
+        assert svc.locate(tok2.token) is None
+    assert any("TokenRevoked" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+
+    # Expired
+    _, _, tok3 = _issue_messenger_token(local, name="Cara")
+    with local._lock:
+        local._conn.execute(
+            "UPDATE handoff_tokens SET expires_at=? WHERE token=?",
+            (tok3.issued_at - 10, tok3.token),
+        )
+        local._conn.commit()
+    with caplog.at_level(logging.INFO, logger="domains.player_care.handoff"):
+        assert svc.locate(tok3.token) is None
+    assert any("TokenExpired" in r.getMessage() for r in caplog.records)
+    assert not any("HTTP" in r.getMessage() for r in caplog.records)
+
+
+def test_locate_unknown_token_silent_not_found(local, caplog):
+    import logging
+    svc = PlayerHandoffService(local)
+    with caplog.at_level(logging.INFO, logger="domains.player_care.handoff"):
+        assert svc.locate("abcdef") is None
+    assert not any("handoff 码不可用" in r.getMessage() for r in caplog.records)
