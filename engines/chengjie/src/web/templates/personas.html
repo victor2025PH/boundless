@@ -5610,6 +5610,12 @@ function _presetVoiceChanged() {
   _vmRenderStatus();
   try { _markDrawerDirty({target: document.getElementById('pe-preset-voice')}); } catch (_e) {}
 }
+// 预置声试听稿按音色语种取（目录 preview_samples）：界面语言的默认稿念给外语音色会被语种一致性闸拦下。
+function _vmPreviewText(voiceMeta, key, nm) {
+  var lg = String((voiceMeta || {}).lang || '');
+  var samples = (_vmCatalog && _vmCatalog.preview_samples) || {};
+  return (lg && samples[lg]) ? samples[lg] : window.Tf(key, {name: nm});
+}
 var _presetAudio = null;
 async function _presetPreview() {
   var v = (document.getElementById('pe-preset-voice') || {}).value || '';
@@ -5618,7 +5624,7 @@ async function _presetPreview() {
   if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
   var meta = _vmVoiceMeta(v) || {};
   var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
-  var text = window.Tf('psn_voice_preview_text', {name: nm});
+  var text = _vmPreviewText(meta, 'psn_voice_preview_text', nm);
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     // 试听只认「这把预置声」：voice_cfg_override 显式覆盖 backend/voice、压掉全局克隆档，
@@ -5710,6 +5716,7 @@ async function _vxPreview(dir) {
   var meta = _vmVoiceMeta(v) || {};
   if (mode === 'preset' && v) {
     var isOpenai = meta.backend === 'openai';
+    body.text = _vmPreviewText(meta, 'psn_vx_preview_text', nm);
     body.fast = !isOpenai;
     body.voice_cfg_override = {backend: isOpenai ? 'openai' : 'edge_tts', voice: v, voice_profile: {enabled: false}};
   } else if (mode === 'clone' && _editingProfileId) {
