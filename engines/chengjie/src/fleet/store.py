@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import re
 import secrets
 import sqlite3
 import threading
@@ -37,7 +39,9 @@ NODE_ACTIVE = "active"
 # 机房密钥是另一条凭证：≥128 bit，只存哈希。
 CODE_FAIL_MAX = 8
 CODE_FAIL_WINDOW_SEC = 600
-PENDING_IP_MAX = 8
+# A whole room shares one egress IP. 8/hour rejected a legitimate batch, so the
+# IP cap is high and the per-machine cap (below) stays the tight limit.
+PENDING_IP_MAX = 240
 PENDING_IP_WINDOW_SEC = 3600
 PENDING_MACHINE_MAX = 3
 PENDING_MACHINE_WINDOW_SEC = 3600
@@ -45,6 +49,9 @@ ROOM_FAIL_MAX = 20
 ROOM_FAIL_WINDOW_SEC = 3600
 PENDING_TTL_SEC = 24 * 3600
 CLAIM_WINDOW_SEC = 15 * 60
+PENDING_DEFAULT_GROUP = "pending-default"
+_PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_TEXT_UNSAFE = re.compile("[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -120,7 +127,10 @@ CREATE TABLE IF NOT EXISTS pending_enrollments (
     decided_by    TEXT NOT NULL DEFAULT '',
     node_id       TEXT NOT NULL DEFAULT '',
     claim_key     TEXT NOT NULL DEFAULT '',
-    claimed_at    REAL
+    claimed_at    REAL,
+    enroll_secret_hash TEXT NOT NULL DEFAULT '',
+    pairing_code  TEXT NOT NULL DEFAULT '',
+    requested_group TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_pending_machine ON pending_enrollments(machine_id, status);
 CREATE TABLE IF NOT EXISTS room_keys (
@@ -149,6 +159,34 @@ CREATE INDEX IF NOT EXISTS idx_enroll_attempts ON enroll_attempts(kind, ts);
 
 def _hash_key(key: str) -> str:
     return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
+
+
+def _clean_text(value: Any, limit: int) -> str:
+    """Drop C0 controls, DEL, and bidi overrides before they land in the console."""
+    return _TEXT_UNSAFE.sub("", str(value or ""))[:limit]
+
+
+def _pairing_code() -> str:
+    return "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(6))
+
+
+def _secret_matches(secret: str, stored_hash: str) -> bool:
+    secret = str(secret or "")
+    stored = str(stored_hash or "")
+    if len(secret) < 16 or len(stored) != 64:
+        return False
+    return hmac.compare_digest(_hash_key(secret), stored)
+
+
+def _migrate_pending(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(pending_enrollments)")}
+    for name, decl in (
+        ("enroll_secret_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("pairing_code", "TEXT NOT NULL DEFAULT ''"),
+        ("requested_group", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE pending_enrollments ADD COLUMN {name} {decl}")
 
 
 def _ip_bucket(ip: Optional[str]) -> str:
@@ -211,6 +249,7 @@ class FleetStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            _migrate_pending(self._conn)
             self._conn.commit()
 
     def close(self) -> None:
@@ -291,32 +330,49 @@ class FleetStore:
                         agent_version: str = "", app_version: str = "", os_label: str = "",
                         instances: Any = None, meta: Optional[Dict[str, Any]] = None,
                         label: str = "", group_name: str = "", client_ip: str = "",
+                        enroll_secret: str = "", requested_group: str = "",
                         now: Optional[float] = None, ttl_sec: Optional[int] = None) -> Dict[str, Any]:
-        """无注册码的安装：记一条待批准，不签发 node_key，不进入节点表。"""
+        """无注册码的安装：记一条待批准，不签发 node_key，不进入节点表。
+
+        ``label`` / ``group_name`` 来自未鉴权请求时忽略。分组只在批准时由管理员指定。
+        ``requested_group`` 仅主控内部使用（机房密钥撞上已有节点时记下原组，供控制台展示）。
+        同一 machine_id 只有 enroll_secret 哈希相符才复用申请；否则另开一条。
+        """
+        del label, group_name  # unauthenticated callers must not set these
         ts = float(now if now is not None else time.time())
         mid = str(machine_id or "").strip()
+        secret = str(enroll_secret or "")
         if not mid:
             return {"ok": False, "error": "machine_id_required"}
+        if len(secret) < 16:
+            return {"ok": False, "error": "enroll_secret_required"}
         if not proto_compatible(proto_version):
             return {"ok": False, "error": "proto_incompatible", "server_proto": _server_proto()}
         ip = _ip_bucket(client_ip)
         inst = sanitize_instances(instances)
         ttl = int(ttl_sec if ttl_sec is not None else self.pending_ttl_sec)
         ttl = max(60, min(14 * 24 * 3600, ttl))
+        host = _clean_text(host_name, 120)
+        os_name = _clean_text(os_label, 80)
+        agent_v = _clean_text(agent_version, 40)
+        app_v = _clean_text(app_version, 40)
+        digest = _hash_key(secret)
+        want_group = _clean_text(requested_group, 80)
         with self._lock:
             self._expire_pending_locked(ts)
             open_row = self._conn.execute(
                 "SELECT * FROM pending_enrollments WHERE machine_id=? AND status='pending' AND expires_at>=? "
-                "ORDER BY created_at DESC LIMIT 1", (mid, ts)).fetchone()
+                "AND enroll_secret_hash=? ORDER BY created_at DESC LIMIT 1",
+                (mid, ts, digest)).fetchone()
             if open_row is not None:
                 self._conn.execute(
                     "UPDATE pending_enrollments SET host_name=?, os=?, agent_version=?, app_version=?, client_ip=?, "
                     "instances_json=?, proto_version=?, meta_json=? WHERE request_id=?",
-                    (str(host_name or "")[:120], str(os_label or "")[:80], str(agent_version or "")[:40],
-                     str(app_version or "")[:40], ip[:64], json.dumps(inst, ensure_ascii=False), int(proto_version),
-                     _dumps(meta), open_row["request_id"]))
+                    (host, os_name, agent_v, app_v, ip[:64], json.dumps(inst, ensure_ascii=False),
+                     int(proto_version), _dumps(meta), open_row["request_id"]))
                 self._conn.commit()
                 return {"ok": True, "status": "pending", "request_id": open_row["request_id"],
+                        "pairing_code": open_row["pairing_code"],
                         "expires_at": open_row["expires_at"], "retry_after_sec": 15}
             if self._over_limit_locked(ip=ip, machine_id=mid, kind="pending_new",
                                        window=self.pending_ip_window_sec, ip_max=self.pending_ip_max,
@@ -324,16 +380,19 @@ class FleetStore:
                                        now=ts):
                 return {"ok": False, "error": "rate_limited"}
             request_id = "req_" + secrets.token_urlsafe(18)
+            pair = _pairing_code()
             self._conn.execute(
                 "INSERT INTO pending_enrollments(request_id, machine_id, host_name, label, group_name, os, "
                 "agent_version, app_version, client_ip, instances_json, proto_version, meta_json, status, "
-                "created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?)",
-                (request_id, mid[:80], str(host_name or "")[:120], str(label or "")[:80], str(group_name or "")[:80],
-                 str(os_label or "")[:80], str(agent_version or "")[:40], str(app_version or "")[:40], ip[:64],
-                 json.dumps(inst, ensure_ascii=False), int(proto_version), _dumps(meta), ts, ts + ttl))
+                "created_at, expires_at, enroll_secret_hash, pairing_code, requested_group) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?, ?, ?)",
+                (request_id, mid[:80], host, "", "", os_name, agent_v, app_v, ip[:64],
+                 json.dumps(inst, ensure_ascii=False), int(proto_version), _dumps(meta), ts, ts + ttl,
+                 digest, pair, want_group))
             self._record_attempt_locked(ip=ip, machine_id=mid, kind="pending_new", ts=ts)
             self._conn.commit()
-        return {"ok": True, "status": "pending", "request_id": request_id, "expires_at": ts + ttl, "retry_after_sec": 15}
+        return {"ok": True, "status": "pending", "request_id": request_id, "pairing_code": pair,
+                "expires_at": ts + ttl, "retry_after_sec": 15}
 
     def list_pending(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
         ts = float(now if now is not None else time.time())
@@ -343,11 +402,20 @@ class FleetStore:
             self._conn.commit()
             rows = self._conn.execute(
                 "SELECT * FROM pending_enrollments WHERE status='pending' ORDER BY created_at ASC LIMIT 200").fetchall()
-        return [self._pending_public(r) for r in rows]
+            owned = {
+                str(n["machine_id"]): str(n["node_id"])
+                for n in self._conn.execute("SELECT machine_id, node_id FROM nodes").fetchall()
+            }
+        return [self._pending_public(r, owned.get(str(r["machine_id"]), "")) for r in rows]
 
     def approve_pending(self, request_id: str, *, label: Optional[str] = None, group_name: Optional[str] = None,
-                        decided_by: str = "", now: Optional[float] = None) -> Dict[str, Any]:
-        """批准后签发 node_key，明文只放在待领取槽里，等节点来 poll。管理接口不返回明文。"""
+                        decided_by: str = "", confirm_rotate: bool = False,
+                        now: Optional[float] = None) -> Dict[str, Any]:
+        """批准后签发 node_key，明文只放在待领取槽里，等节点来 poll。管理接口不返回明文。
+
+        分组只用管理员这次传入的值；没传则落入 ``pending-default``。未鉴权请求里的分组不采用。
+        machine_id 已经有节点时必须 ``confirm_rotate``，否则拒绝且不换 key。
+        """
         ts = float(now if now is not None else time.time())
         rid = str(request_id or "").strip()
         with self._lock:
@@ -365,10 +433,18 @@ class FleetStore:
             if row["status"] == "approved":
                 self._conn.commit()
                 return {"ok": True, "status": "approved", "node_id": row["node_id"], "already": True}
-            use_label = row["label"] if label is None else str(label)[:80]
+            existing = self._conn.execute(
+                "SELECT node_id FROM nodes WHERE machine_id=?", (row["machine_id"],)).fetchone()
+            if existing is not None and not confirm_rotate:
+                self._conn.commit()
+                nid = str(existing["node_id"])
+                return {"ok": False, "error": "confirm_rotate", "existing_node_id": nid,
+                        "warning": f"approving will rotate key of {nid}"}
+            use_label = _clean_text(label, 80) if label else ""
             if not use_label:
-                use_label = str(row["host_name"] or "")[:80]
-            use_group = row["group_name"] if group_name is None else str(group_name)[:80]
+                use_label = _clean_text(row["host_name"], 80)
+            supplied = "" if group_name is None else str(group_name).strip()
+            use_group = _clean_text(supplied, 80) if supplied else PENDING_DEFAULT_GROUP
             meta = _loads(row["meta_json"])
             meta["instances"] = _load_list(row["instances_json"])
             meta["enrolled_via"] = "approval"
@@ -382,7 +458,7 @@ class FleetStore:
                 "claimed_at=NULL, decided_at=?, decided_by=? WHERE request_id=?",
                 (use_label, use_group, node_id, key, ts, str(decided_by or "")[:80], rid))
             self._conn.commit()
-        return {"ok": True, "status": "approved", "node_id": node_id}
+        return {"ok": True, "status": "approved", "node_id": node_id, "group_name": use_group}
 
     def reject_pending(self, request_id: str, *, decided_by: str = "", now: Optional[float] = None) -> Dict[str, Any]:
         ts = float(now if now is not None else time.time())
@@ -397,8 +473,9 @@ class FleetStore:
             self._conn.commit()
         return {"ok": True, "status": "rejected"}
 
-    def poll_pending(self, request_id: str, machine_id: str, *, now: Optional[float] = None) -> Dict[str, Any]:
-        """节点来领结果。批准后的 node_key 在领取窗口内可重复取（应对响应丢失），过窗即从库里擦掉。"""
+    def poll_pending(self, request_id: str, machine_id: str, *, enroll_secret: str = "",
+                     now: Optional[float] = None) -> Dict[str, Any]:
+        """节点来领结果。必须带上安装时的 enroll_secret。批准后的 node_key 在领取窗口内可重复取，过窗即擦掉。"""
         ts = float(now if now is not None else time.time())
         rid = str(request_id or "").strip()
         mid = str(machine_id or "").strip()
@@ -406,7 +483,7 @@ class FleetStore:
             self._expire_pending_locked(ts)
             self._wipe_claims_locked(ts)
             row = self._conn.execute("SELECT * FROM pending_enrollments WHERE request_id=?", (rid,)).fetchone()
-            if row is None or str(row["machine_id"]) != mid:
+            if row is None or str(row["machine_id"]) != mid or not _secret_matches(enroll_secret, row["enroll_secret_hash"]):
                 self._conn.commit()
                 return {"ok": False, "status": "unknown", "error": "unknown_request"}
             status = row["status"]
@@ -483,6 +560,7 @@ class FleetStore:
     def redeem_room_key(self, token: str, *, machine_id: str, host_name: str = "", proto_version: Any = 0,
                         agent_version: str = "", app_version: str = "", os_label: str = "",
                         meta: Optional[Dict[str, Any]] = None, client_ip: Optional[str] = None,
+                        enroll_secret: str = "", instances: Any = None,
                         now: Optional[float] = None) -> Dict[str, Any]:
         ts = float(now if now is not None else time.time())
         token = str(token or "").strip()
@@ -510,6 +588,32 @@ class FleetStore:
                 return {"ok": False, "error": "expired"}
             if int(row["uses"]) >= int(row["max_uses"]):
                 return {"ok": False, "error": "exhausted"}
+            existing = self._conn.execute("SELECT * FROM nodes WHERE machine_id=?", (mid,)).fetchone()
+            room_group = str(row["group_name"] or "")
+            if existing is not None and (
+                str(existing["status"]) == NODE_REVOKED
+                or str(existing["group_name"] or "") != room_group
+            ):
+                # Do not consume a use and do not rotate or revive the node.
+                return self.request_pending(
+                    machine_id=mid, host_name=host_name, proto_version=proto_version,
+                    agent_version=agent_version, app_version=app_version, os_label=os_label,
+                    instances=instances, meta=meta, client_ip="" if client_ip is None else str(client_ip),
+                    enroll_secret=enroll_secret, requested_group=room_group, now=ts)
+            cur = self._conn.execute(
+                "UPDATE room_keys SET uses=uses+1 WHERE key_id=? AND uses<max_uses "
+                "AND revoked_at IS NULL AND expires_at>=?",
+                (row["key_id"], ts))
+            if cur.rowcount != 1:
+                fresh = self._conn.execute("SELECT * FROM room_keys WHERE key_id=?", (row["key_id"],)).fetchone()
+                self._conn.commit()
+                if fresh is None:
+                    return {"ok": False, "error": "invalid_room_key"}
+                if fresh["revoked_at"] is not None:
+                    return {"ok": False, "error": "revoked"}
+                if float(fresh["expires_at"]) < ts:
+                    return {"ok": False, "error": "expired"}
+                return {"ok": False, "error": "exhausted"}
             merged = dict(meta or {})
             merged["enrolled_via"] = "room_key"
             merged["room_key_id"] = row["key_id"]
@@ -517,7 +621,6 @@ class FleetStore:
                 machine_id=mid, host_name=host_name, label=row["label"], group_name=row["group_name"],
                 proto_version=proto_version, agent_version=agent_version, app_version=app_version,
                 os_label=os_label, meta=merged, ts=ts)
-            self._conn.execute("UPDATE room_keys SET uses=uses+1 WHERE key_id=?", (row["key_id"],))
             self._conn.commit()
             uses_left = int(row["max_uses"]) - int(row["uses"]) - 1
         return {"ok": True, "status": "active", "node_id": node_id, "node_key": key, "label": row["label"],
@@ -538,8 +641,12 @@ class FleetStore:
                          agent_version: str, app_version: str, os_label: str, meta: Optional[Dict[str, Any]],
                          ts: float):
         key = "nk_" + secrets.token_hex(24)
-        label = str(label or "")[:80]
-        group = str(group_name or "")[:80]
+        label = _clean_text(label, 80)
+        group = _clean_text(group_name, 80)
+        host = _clean_text(host_name, 120)
+        agent_v = _clean_text(agent_version, 40)
+        app_v = _clean_text(app_version, 40)
+        os_name = _clean_text(os_label, 80)
         existing = self._conn.execute("SELECT * FROM nodes WHERE machine_id=?", (machine_id,)).fetchone()
         if existing is not None:
             node_id = existing["node_id"]
@@ -547,9 +654,8 @@ class FleetStore:
                 "UPDATE nodes SET key_hash=?, status=?, host_name=?, label=CASE WHEN ?<>'' THEN ? ELSE label END, "
                 "group_name=CASE WHEN ?<>'' THEN ? ELSE group_name END, proto_version=?, agent_version=?, "
                 "app_version=?, os=?, enrolled_at=?, last_seen=?, meta_json=? WHERE node_id=?",
-                (_hash_key(key), NODE_ACTIVE, str(host_name or "")[:120], label, label, group, group,
-                 int(proto_version), str(agent_version or "")[:40], str(app_version or "")[:40],
-                 str(os_label or "")[:80], ts, ts, _dumps(meta), node_id),
+                (_hash_key(key), NODE_ACTIVE, host, label, label, group, group,
+                 int(proto_version), agent_v, app_v, os_name, ts, ts, _dumps(meta), node_id),
             )
         else:
             node_id = f"n_{uuid.uuid4().hex[:12]}"
@@ -557,9 +663,8 @@ class FleetStore:
                 "INSERT INTO nodes(node_id, machine_id, host_name, label, group_name, key_hash, status, proto_version, "
                 "agent_version, app_version, os, created_at, enrolled_at, last_seen, meta_json) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (node_id, machine_id, str(host_name or "")[:120], label, group, _hash_key(key),
-                 NODE_ACTIVE, int(proto_version), str(agent_version or "")[:40], str(app_version or "")[:40],
-                 str(os_label or "")[:80], ts, ts, ts, _dumps(meta)),
+                (node_id, machine_id, host, label, group, _hash_key(key),
+                 NODE_ACTIVE, int(proto_version), agent_v, app_v, os_name, ts, ts, ts, _dumps(meta)),
             )
         return node_id, key
 
@@ -593,19 +698,27 @@ class FleetStore:
             (ts,))
 
     def _wipe_claims_locked(self, ts: float) -> None:
+        cutoff = ts - self.claim_window_sec
         self._conn.execute(
-            "UPDATE pending_enrollments SET claim_key='' WHERE status='approved' AND claim_key<>'' "
-            "AND claimed_at IS NOT NULL AND claimed_at>0 AND claimed_at<?",
-            (ts - self.claim_window_sec,))
+            "UPDATE pending_enrollments SET claim_key='' WHERE status='approved' AND claim_key<>'' AND ("
+            "(claimed_at IS NOT NULL AND claimed_at>0 AND claimed_at<?) OR "
+            "(decided_at IS NOT NULL AND decided_at>0 AND decided_at<?))",
+            (cutoff, cutoff))
 
-    @staticmethod
-    def _pending_public(row: sqlite3.Row) -> Dict[str, Any]:
+    def _pending_public(self, row: sqlite3.Row, existing_node_id: str = "") -> Dict[str, Any]:
+        group = str(row["group_name"] or "")
+        nid = str(existing_node_id or "")
         return {
             "request_id": row["request_id"],
             "machine_id": row["machine_id"],
             "host_name": row["host_name"],
             "label": row["label"],
-            "group_name": row["group_name"],
+            "group_name": group,
+            "requested_group": str(row["requested_group"] or ""),
+            "effective_group": group or PENDING_DEFAULT_GROUP,
+            "pairing_code": str(row["pairing_code"] or ""),
+            "existing_node_id": nid,
+            "warning": f"approving will rotate key of {nid}" if nid else "",
             "os": row["os"],
             "agent_version": row["agent_version"],
             "app_version": row["app_version"],
@@ -677,9 +790,9 @@ class FleetStore:
                 "app_version=CASE WHEN ?<>'' THEN ? ELSE app_version END, host_name=CASE WHEN ?<>'' THEN ? ELSE host_name END "
                 "WHERE node_id=?",
                 (ts, _dumps(hb), _int_or_none(hb.get("proto_version")),
-                 str(hb.get("agent_version") or "")[:40], str(hb.get("agent_version") or "")[:40],
-                 str(hb.get("app_version") or "")[:40], str(hb.get("app_version") or "")[:40],
-                 str(hb.get("host_name") or "")[:120], str(hb.get("host_name") or "")[:120], str(node_id)),
+                 _clean_text(hb.get("agent_version"), 40), _clean_text(hb.get("agent_version"), 40),
+                 _clean_text(hb.get("app_version"), 40), _clean_text(hb.get("app_version"), 40),
+                 _clean_text(hb.get("host_name"), 120), _clean_text(hb.get("host_name"), 120), str(node_id)),
             )
             self._conn.execute("INSERT INTO node_heartbeats(node_id, ts, summary_json) VALUES (?,?,?)",
                                (str(node_id), ts, _dumps(_hb_summary(hb))))
@@ -1040,13 +1153,7 @@ def resolve_download(cfg: Dict[str, Any], *, now: Optional[float] = None,
 
 
 def _with_setup_url(dl: Dict[str, Any]) -> Dict[str, Any]:
-    """公开下载页的主按钮指向安装包。manifest 没写 setup_url 时，从 chatx-agent.exe 的目录推导。"""
-    if dl.get("setup_url"):
-        return dl
-    src = str(dl.get("installer_url") or "")
-    leaf = src.rsplit("/", 1)[-1]
-    if leaf.startswith("chatx-agent"):
-        dl["setup_url"] = src.rsplit("/", 1)[0] + "/ChatXAgentSetup.exe"
+    """主按钮只在发布流程写了 setup_url 时出现。不从 chatx-agent.exe 猜一个还没上传的安装包地址。"""
     return dl
 
 

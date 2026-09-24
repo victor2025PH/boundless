@@ -15,7 +15,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.3.1"
 #endif
 
 #define AppName "ChatX Fleet Agent"
@@ -40,6 +40,10 @@ ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayName={#AppName}
 VersionInfoVersion={#AppVersion}
 CloseApplications=no
+
+[UninstallRun]
+; Stop the scheduled task before Inno deletes chatx-agent.exe.
+Filename: "{app}\chatx-agent.exe"; Parameters: "uninstall-service"; Flags: runhidden; RunOnceId: "StopChatXFleetAgent"
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
@@ -84,9 +88,30 @@ begin
   Result := GetController('') + '/console';
 end;
 
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  { Stop the task and the process before copying over a locked exe. }
+  Result := '';
+  NeedsRestart := False;
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM chatx-agent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure LockStateDir(const Dir: String);
+var
+  ResultCode: Integer;
+begin
+  { SYSTEM (S-1-5-18) and Administrators (S-1-5-32-544) only, before any secret file. }
+  Exec(ExpandConstant('{sys}\icacls.exe'),
+    '"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  src, dir, params: String;
+  src, dir, params, pair: String;
   ResultCode: Integer;
 begin
   if CurStep <> ssPostInstall then
@@ -96,6 +121,7 @@ begin
     src := ExpandConstant('{src}\room.key');
   dir := ExpandConstant('{commonappdata}\ChatX\fleet');
   ForceDirectories(dir);
+  LockStateDir(dir);
   if (src <> '') and FileExists(src) then
     FileCopy(src, dir + '\room.key', False);
   WizardForm.StatusLabel.Caption := 'Connecting to the controller...';
@@ -104,5 +130,16 @@ begin
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     ResultCode := 1;
   if ResultCode <> 0 then
-    SuppressibleMsgBox('The agent files were copied, but enrollment did not finish. Open "Fleet node status" from the Start menu, or run the installer again.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('The agent files were copied, but enrollment did not finish. The service is installed and will retry. Open "Fleet node status" from the Start menu.', mbError, MB_OK, IDOK);
+  pair := '';
+  if LoadStringFromFile(dir + '\pairing.txt', pair) then
+    WizardForm.FinishedLabel.Caption :=
+      'Pairing code ' + Trim(pair) + '. An admin approves this PC in the fleet console, which shows the same code.';
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  { State dir is kept unless the uninstall is started with /REMOVESTATE=1. }
+  if (CurUninstallStep = usPostUninstall) and (CmdParam('/REMOVESTATE=') = '1') then
+    DelTree(ExpandConstant('{commonappdata}\ChatX\fleet'), True, True, True);
 end;

@@ -18,9 +18,10 @@ import logging
 import os
 import platform
 import socket
+import subprocess
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,30 @@ def _licensing_fingerprint() -> str:
         return ""
 
 
+def state_dir_acl_command(path: Path) -> List[str]:
+    """SYSTEM + Administrators full control, inheritance removed. Applied before any secret file."""
+    return [
+        "icacls", str(path), "/inheritance:r", "/grant:r",
+        "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+    ]
+
+
+def lock_state_dir(path: Path) -> None:
+    """Create the state dir and lock it down before machine_id / agent.json / room.key are written."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        try:
+            subprocess.run(state_dir_acl_command(path), check=False, capture_output=True)
+        except Exception:
+            logger.debug("[fleet] icacls failed for %s", path, exc_info=True)
+        return
+    try:
+        os.chmod(path, 0o700)
+    except Exception:
+        logger.debug("[fleet] chmod state dir failed %s", path, exc_info=True)
+
+
 def node_machine_id(state_dir: Optional[Path] = None) -> str:
     """稳定的机器标识（形如 ``m-<16hex>``）。"""
     sd = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -99,7 +124,7 @@ def node_machine_id(state_dir: Optional[Path] = None) -> str:
         source = "random"
     mid = "m-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     try:
-        sd.mkdir(parents=True, exist_ok=True)
+        lock_state_dir(sd)
         cache.write_text(mid, encoding="utf-8")
     except Exception:
         logger.debug("[fleet] machine_id 写缓存失败 %s", cache, exc_info=True)
@@ -114,4 +139,5 @@ def os_label() -> str:
         return "unknown"
 
 
-__all__ = ["default_state_dir", "host_name", "node_machine_id", "os_label", "ENV_STATE_DIR"]
+__all__ = ["default_state_dir", "host_name", "lock_state_dir", "node_machine_id", "os_label",
+           "state_dir_acl_command", "ENV_STATE_DIR"]

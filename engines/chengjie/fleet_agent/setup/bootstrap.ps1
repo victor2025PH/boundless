@@ -18,6 +18,8 @@ function Native([string]$exe, [string[]]$a) {
 if (-not $InstallDir) { $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $StateDir) { $StateDir = Join-Path $env:ProgramData "ChatX\fleet" }
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+# Lock the dir before machine_id / agent.json / room.key. SYSTEM + Administrators only.
+& icacls.exe $StateDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
 $target = Join-Path $InstallDir "chatx-agent.exe"
 if (-not (Test-Path -LiteralPath $target)) { Say "missing $target"; exit 1 }
 
@@ -33,12 +35,15 @@ if ($enrollment -eq 'enrolled') {
   $enrollArgs = @('--state-dir', $StateDir, 'enroll', '--controller', $Controller, '--detect')
   if (Test-Path -LiteralPath $keyFile) { $enrollArgs += @('--room-key-file', $keyFile) }
   $out = Native $target $enrollArgs
-  if ($NativeExit -ne 0) { Say "enroll failed"; exit 1 }
-  $status = ''
-  try { $status = [string](($out | ConvertFrom-Json).status) } catch { $status = '' }
-  if ($status -eq 'pending') { Say "installed; waiting for admin approval in the console" }
-  elseif ($status -eq 'active') { Say "enrolled" }
-  else { Say "enroll finished" }
+  if ($NativeExit -ne 0) {
+    Say "enroll failed; installing the service so it can retry"
+  } else {
+    $status = ''
+    try { $status = [string](($out | ConvertFrom-Json).status) } catch { $status = '' }
+    if ($status -eq 'pending') { Say "installed; waiting for admin approval in the console" }
+    elseif ($status -eq 'active') { Say "enrolled" }
+    else { Say "enroll finished" }
+  }
 }
 
 $svc = Native $target @('--state-dir', $StateDir, 'install-service')

@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import platform as _platform
 import subprocess
 import sys
@@ -44,7 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detect import detect_instances, is_loopback_url, sanitize_instances
-from .identity import default_state_dir, host_name, node_machine_id, os_label
+from .identity import default_state_dir, host_name, lock_state_dir, node_machine_id, os_label
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -55,7 +56,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.0"
+AGENT_VERSION = "0.3.1"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -118,7 +119,7 @@ class AgentConfig:
             self.data["controller_url"] = env
 
     def save(self) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_state_dir(self.state_dir)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self.path)
@@ -278,6 +279,23 @@ class NodeAgent:
         self.cfg.save()
         self.revoked = False
 
+    def _enroll_secret(self) -> str:
+        sec = str(self.cfg.data.get("enroll_secret") or "")
+        if len(sec) < 16:
+            sec = "es_" + secrets.token_urlsafe(32)
+            self.cfg.data["enroll_secret"] = sec
+            self.cfg.save()
+        return sec
+
+    def _write_pairing(self, code: str) -> None:
+        if not code:
+            return
+        try:
+            lock_state_dir(self.cfg.state_dir)
+            (self.cfg.state_dir / "pairing.txt").write_text(str(code).strip() + "\n", encoding="ascii")
+        except Exception:
+            logger.debug("[agent] pairing code file not written", exc_info=True)
+
     def enroll(self, code: str = "", *, controller_url: str = "", room_key: str = "",
                detect: bool = False) -> Dict[str, Any]:
         """有注册码或机房密钥则立刻拿到 node_key；都没有则登记为待批准（不抛错）。"""
@@ -292,6 +310,7 @@ class NodeAgent:
             "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
             "os": os_label(), "instances": sanitize_instances(self.cfg.instances),
             "meta": {"python": _platform.python_version()},
+            "enroll_secret": self._enroll_secret(),
         }
         if room_key:
             body["room_key"] = room_key
@@ -309,9 +328,12 @@ class NodeAgent:
                     "status": "active"}
         if res.get("ok") and res.get("request_id"):
             self.cfg.data["pending_request_id"] = res["request_id"]
+            self.cfg.data["pairing_code"] = str(res.get("pairing_code") or "")
             self.cfg.data.pop("enroll_rejected", None)
             self.cfg.save()
-            return {"status": "pending", "request_id": res["request_id"], "expires_at": res.get("expires_at")}
+            self._write_pairing(str(res.get("pairing_code") or ""))
+            return {"status": "pending", "request_id": res["request_id"], "expires_at": res.get("expires_at"),
+                    "pairing_code": res.get("pairing_code") or ""}
         raise AgentError("注册失败")
 
     def poll_enrollment(self) -> Dict[str, Any]:
@@ -322,7 +344,8 @@ class NodeAgent:
         if not rid:
             return {"ok": False, "status": "idle"}
         res = self._ctrl("POST", "/api/fleet/enroll/poll",
-                         {"request_id": rid, "machine_id": self.machine_id}, auth=False, bearer=rid)
+                         {"request_id": rid, "machine_id": self.machine_id,
+                          "enroll_secret": self._enroll_secret()}, auth=False, bearer=rid)
         if res.get("node_key"):
             self._store_enrollment(res)
             return {"ok": True, "status": "active", "node_id": res.get("node_id"), "label": res.get("label"),
@@ -332,10 +355,10 @@ class NodeAgent:
             self.cfg.data.pop("pending_request_id", None)
             self.cfg.data["enroll_rejected"] = True
             self.cfg.save()
-        elif status in {"expired", "unknown", "already_claimed"}:
+        elif status == "expired":
             self.cfg.data.pop("pending_request_id", None)
             self.cfg.save()
-            if status == "expired" and self.cfg.controller_url:
+            if self.cfg.controller_url:
                 try:
                     return self.enroll("", controller_url=self.cfg.controller_url)
                 except AgentError as e:
@@ -663,7 +686,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     e = sub.add_parser("enroll", help="接入主控：注册码 / 机房密钥 / 无码待批准")
     e.add_argument("--controller", default="", help="主控地址，如 https://bd2026.cc/fleet")
     e.add_argument("--code", default="", help="一次性注册码；留空则待管理员批准")
-    e.add_argument("--room-key", default="", help="机房密钥（优先用 --room-key-file，避免留在命令行）")
     e.add_argument("--room-key-file", default="", help="只含机房密钥的文件，读完即删")
     e.add_argument("--detect", action="store_true", help="登记前探测本机智聊与幻颜；什么都没有也继续（纯心跳）")
     e.add_argument("--instance", action="append", default=[], help="本机实例 name=http://127.0.0.1:18797（可多次）")
@@ -708,7 +730,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for spec in args.instance:
             name, url = _parse_instance(spec)
             cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path)
-        room = str(args.room_key or "")
+        room = ""
         if args.room_key_file:
             try:
                 room = Path(args.room_key_file).read_text(encoding="utf-8").strip()
@@ -746,6 +768,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             enrollment = "none"
         print(json.dumps({"controller_url": cfg.controller_url, "node_id": cfg.node_id, "enrolled": bool(cfg.node_key),
                           "enrollment": enrollment, "pending": enrollment == "pending",
+                          "pairing_code": str(cfg.data.get("pairing_code") or ""),
                           "machine_id": agent.machine_id,
                           "instances": [{**i, "auth_token": "***" if i.get("auth_token") else ""} for i in cfg.instances],
                           "state_dir": str(cfg.state_dir),

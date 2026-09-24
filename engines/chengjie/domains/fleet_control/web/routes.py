@@ -59,16 +59,48 @@ def _bearer(request: Request) -> str:
     return ""
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_DL_TOKEN = re.compile(r"(/fleet/dl/)[A-Za-z0-9_\-]+")
+
+
+def redact_download_path(text: str) -> str:
+    """Replace a room-pack token in an access-log line. The token is a secret."""
+    return _DL_TOKEN.sub(r"\1<redacted>", str(text))
+
+
+class RedactFleetDownloadFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_download_path(record.msg)
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(redact_download_path(a) if isinstance(a, str) else a for a in args)
+        elif isinstance(args, dict):
+            record.args = {k: redact_download_path(v) if isinstance(v, str) else v for k, v in args.items()}
+        return True
+
+
+def _install_download_log_redaction() -> None:
+    filt = RedactFleetDownloadFilter()
+    for name in ("uvicorn.access", "uvicorn", "httpx"):
+        log = logging.getLogger(name)
+        if not any(isinstance(f, RedactFleetDownloadFilter) for f in log.filters):
+            log.addFilter(filt)
+
+
 def _client_ip(request: Request) -> str:
-    real = str(request.headers.get("x-real-ip") or "").strip()
-    if real:
-        return real.split(",")[0].strip()[:64]
-    xff = str(request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if xff:
-        return xff[:64]
+    """Trust X-Real-IP / X-Forwarded-For only when the TCP peer is this host (nginx)."""
+    peer = ""
     if request.client and request.client.host:
-        return str(request.client.host)[:64]
-    return ""
+        peer = str(request.client.host).strip()
+    if peer.lower() in _LOOPBACK_HOSTS:
+        real = str(request.headers.get("x-real-ip") or "").strip()
+        if real:
+            return real.split(",")[0].strip()[:64]
+        xff = str(request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        if xff:
+            return xff[:64]
+    return peer[:64]
 
 
 _BEARER_NOT_CRED = {"", "pending", "none", "anonymous"}
@@ -143,14 +175,14 @@ def register_routes(app, ctx) -> None:
             meta=body.get("meta") if isinstance(body.get("meta"), dict) else None,
             client_ip=_client_ip(request),
         )
+        secret = str(body.get("enroll_secret") or "")
         if room:
-            res = st.redeem_room_key(room, **common)
+            res = st.redeem_room_key(room, enroll_secret=secret, instances=body.get("instances"), **common)
         elif code:
             res = st.enroll(code=code, **common)
         else:
             res = st.request_pending(
-                instances=body.get("instances"), label=str(body.get("label") or ""),
-                group_name=str(body.get("group_name") or ""),
+                instances=body.get("instances"), enroll_secret=secret,
                 ttl_sec=int(cfg.get("pending_ttl_sec") or 0) or None, **common)
         if not res.get("ok"):
             raise _enroll_error(res)
@@ -167,7 +199,8 @@ def register_routes(app, ctx) -> None:
         body = await _json(request)
         st = _store_or_503(config_manager)
         res = st.poll_pending(str(body.get("request_id") or _bearer(request) or ""),
-                              str(body.get("machine_id") or ""))
+                              str(body.get("machine_id") or ""),
+                              enroll_secret=str(body.get("enroll_secret") or ""))
         if res.get("node_key"):
             res["heartbeat_sec"] = resolve_fleet_cfg(config_manager)["heartbeat_sec"]
             logger.info("[fleet] pending claimed node=%s", res.get("node_id"))
@@ -239,8 +272,11 @@ def register_routes(app, ctx) -> None:
         res = st.approve_pending(
             request_id, decided_by=_actor(request),
             label=body.get("label") if "label" in body else None,
-            group_name=body.get("group_name") if "group_name" in body else None)
+            group_name=body.get("group_name") if "group_name" in body else None,
+            confirm_rotate=bool(body.get("confirm_rotate")))
         if not res.get("ok"):
+            if res.get("error") == "confirm_rotate":
+                raise HTTPException(status_code=409, detail=res.get("warning") or "confirm_rotate")
             status = 410 if res.get("error") == "expired" else 404
             raise HTTPException(status_code=status, detail=res.get("error") or "not_pending")
         logger.info("[fleet] pending approved node=%s by=%s", res.get("node_id"), _actor(request))
@@ -400,7 +436,9 @@ def register_routes(app, ctx) -> None:
             base = public.rsplit("/fleet", 1)[0] if public.endswith("/fleet") else public
             setup = base + "/downloads/fleet/ChatXAgentSetup.exe"
         blob = build_room_pack(
-            room_key=token, controller=public, setup_url=setup, group=str(info.get("group_name") or ""),
+            room_key=token, controller=public, setup_url=setup,
+            setup_sha256=str(dl.get("setup_sha256") or ""),
+            group=str(info.get("group_name") or ""),
             label=str(info.get("label") or ""), expires_at=info.get("expires_at"), max_uses=int(info.get("max_uses") or 1))
         logger.info("[fleet] room pack downloaded id=%s", info.get("key_id"))
         return Response(content=blob, media_type="application/zip", headers={
@@ -408,6 +446,7 @@ def register_routes(app, ctx) -> None:
             "Cache-Control": "no-store",
         })
 
+    _install_download_log_redaction()
     logger.info("fleet_control web routes registered (node enroll/heartbeat/pull/ack + operator console)")
 
 

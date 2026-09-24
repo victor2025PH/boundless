@@ -12,7 +12,7 @@
 # Usage (run as Administrator):
 #   powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller https://bd2026.cc/fleet
 #   ... -Code 12345678                             # one-time code, skips the pending queue
-#   ... -RoomKeyFile .\room.key                    # room pack; the key is not echoed
+#   ... -RoomKeyFile .\room.key                    # room pack; the key is read from the file only
 #   ... -Exe .\chatx-agent.exe                     # offline: use a local exe instead of downloading
 #   ... -NoEnroll                                  # upgrade only, keep existing enrollment
 #   ... -ConfigPath C:\path\config.local.yaml      # pin one ChatX instance instead of auto-detect
@@ -22,7 +22,6 @@
 param(
   [string]$Controller = "https://bd2026.cc/fleet",
   [string]$Code = "",
-  [string]$RoomKey = "",
   [string]$RoomKeyFile = "",
   [string]$Exe = "",
   [string]$DownloadUrl = "https://bd2026.cc/downloads/fleet/chatx-agent.exe",
@@ -87,6 +86,7 @@ Say "installed $target"
 # 3. local instance
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+& icacls.exe $stateDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
 $detect = $false
 if (-not $NoInstance) {
   if ($ConfigPath -or $AuthToken) {
@@ -106,7 +106,7 @@ if (-not $NoInstance) {
 #    Re-running on a machine that is already enrolled or already waiting does not mint another request.
 if (-not $NoEnroll) {
   $skipEnroll = $false
-  if (-not $Code -and -not $RoomKey -and -not $RoomKeyFile) {
+  if (-not $Code -and -not $RoomKeyFile) {
     $stRaw = Native $target @('--state-dir', $stateDir, 'status')
     try {
       $enr = [string](($stRaw | ConvertFrom-Json).enrollment)
@@ -118,14 +118,15 @@ if (-not $NoEnroll) {
   if ($detect) { $enrollArgs += '--detect' }
   if ($Code) { $enrollArgs += @('--code', $Code) }
   if ($RoomKeyFile) { $enrollArgs += @('--room-key-file', $RoomKeyFile) }
-  elseif ($RoomKey) { $enrollArgs += @('--room-key', $RoomKey) }
   $out = Native $target $enrollArgs
-  if ($NativeExit -ne 0) { Fail "enroll failed" }
+  if ($NativeExit -ne 0) { Say "enroll failed; installing the service so it can retry" }
+  else {
   try {
     $j = $out | ConvertFrom-Json
     if ($j.status -eq 'pending') { Say "installed; waiting for admin approval (console: pending)" }
     else { Say "enrolled node_id=$($j.node_id) machine=$($j.machine_id)" }
   } catch { Say "enroll finished" }
+  }
   }
 }
 

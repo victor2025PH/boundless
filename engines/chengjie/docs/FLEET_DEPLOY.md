@@ -83,7 +83,7 @@ powershell -File deploy\fleet\publish_agent.ps1            # scp 到官网 publi
 一台电脑（不用输任何码）：
 
 1. 打开 `https://bd2026.cc/fleet/`，下载 **ChatXAgentSetup.exe**，双击，权限确认里点「是」。
-2. 打开主控后台 `https://bd2026.cc/fleet/console`，这台电脑在「待批准」里，点批准。
+2. 打开主控后台 `https://bd2026.cc/fleet/console`，这台电脑在「待批准」里。安装结束画面上的配对码和控制台同一列对得上，点批准。分组用后台填的；不填就进 `pending-default`。这台电脑如果已经有节点，控制台会先问一句 `approving will rotate key of n_xxx`。
 3. 开始菜单「Fleet node status」能看到本机已接入。没装智聊、也没装幻颜，也一样能批，只是这台电脑没有实例。
 
 一整间机房（不用逐台批准）：
@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 
 静默安装（已经有安装包文件时）：`ChatXAgentSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。机房包里的 `Install-Silent.cmd` 会带上 `/ROOMKEYFILE`。
 
-重装系统：再跑一次安装包即可。machine_id 不变，批准后还是同一个节点（换一把新 key）。
+重装系统：再跑一次安装包即可。machine_id 不变，但批准时必须在控制台或 CLI 显式确认（`approving will rotate key of n_xxx` / `approve --confirm-rotate`），确认后才换新 key。静默重装会先停掉计划任务 `ChatX Fleet Agent` 再覆盖 exe。卸载默认留下 `%ProgramData%\ChatX\fleet`；安装包卸载参数 `/REMOVESTATE=1` 才删它。
 
 排障：`"%ProgramFiles%\ChatX Agent\chatx-agent.exe" --state-dir "%ProgramData%\ChatX\fleet" status`；
 日志 `%ProgramData%\ChatX\fleet\logs\agent.log`；前台调试 `... run -v`（Ctrl-C 退出，不影响计划任务）；
@@ -116,15 +116,16 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 代码合进去之后**不要**手改库。新表（待批准、机房密钥、失败计数）在主控进程启动时自己建好，旧节点和已发出的 node_key 不用迁移。
 
 1. 构建机先有免费的 Inno Setup 6（`winget install --id JRSoftware.InnoSetup -e`），再跑 `python fleet_agent\build_agent.py` 和 `powershell -File deploy\fleet\publish_agent.ps1`。脚本在找得到 `ISCC.exe` 时会打出 `ChatXAgentSetup.exe` 并一起上传。下载目录里要同时有 `chatx-agent.exe`、`ChatXAgentSetup.exe`、`manifest.json`（manifest 里带 `setup_url` / `setup_sha256`）。
-2. `publish_agent.ps1 -PackController` 打主控源码包时会带上 `config/presets`（其余 `config/` 仍排除）。VPS 上 `sudo bash deploy_controller.sh ~/chatx-fleet-src.tar.gz`。脚本把 `/etc/chatx-fleet` 设成 `770` 并 `chgrp` 到 `chatx-fleet`，服务才能在这个目录里建文件；`config.yaml` 仍是 `640`。
+2. `publish_agent.ps1 -PackController` 打主控源码包时会带上 `config/presets`（其余 `config/` 仍排除）。VPS 上 `sudo bash deploy_controller.sh ~/chatx-fleet-src.tar.gz`。`/etc/chatx-fleet` 是 `750`（root:chatx-fleet，配置只读）；可写的是 `/var/lib/chatx-fleet`（`770`，库文件）。systemd 开了 `ProtectSystem=strict`，`ReadWritePaths` 只含数据目录和日志，不含配置目录。`config.yaml` 仍是 `640`。`--check` 只打 `GET /api/fleet/overview`（期望 401），不会往注册接口塞假码。
 3. 把更新后的 `deploy/fleet/nginx-fleet.conf` 再装一次（`deploy_controller.sh` 会重写 snippet）。新增的是 `/fleet/dl/`：反代到主控，并且 **access_log off**，避免机房链接里的密钥进 nginx 日志。没有新的监听端口。装完 `nginx -t && systemctl reload nginx`，然后 `systemctl restart chatx-fleet`。
-4. 主控本机的 uvicorn 访问日志仍可能记下 `/fleet/dl/<token>`。生产不要把这份日志外发。应用自己的日志只记 key id，不记明文。
+4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。
 
 ## 4. 日常操作（操作端 CLI）
 
 ```powershell
-python -m src.fleet.admin pending                         # 待批准：主机名 / IP / 系统 / 实例
+python -m src.fleet.admin pending                         # 待批准：配对码 / 申请分组 / 生效分组 / IP
 python -m src.fleet.admin approve <request_id> --group 机房A
+python -m src.fleet.admin approve <request_id> --confirm-rotate   # 已有节点时才会换 key
 python -m src.fleet.admin reject <request_id>
 python -m src.fleet.admin room-key --group 机房A --max-uses 40 --ttl-hours 168
 python -m src.fleet.admin revoke-room <key_id>
@@ -142,7 +143,7 @@ python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/m
 ## 5. 安全与边界（勿破）
 
 - 公开安装包不含主控管理凭据，也不含机房密钥。没被批准的节点没有 node_key，不能领任务。`web_admin.auth_token` 只在 VPS `/etc/chatx-fleet/config.yaml`（640）与操作端环境变量。机房链接只在签发时出现一次。
-- 节点 node_key 只在 `%ProgramData%\ChatX\fleet\agent.json`（SYSTEM 与管理员可读）；主控只存哈希。
+- 节点 node_key 只在 `%ProgramData%\ChatX\fleet\agent.json`。这个目录在写入 `machine_id` / `agent.json` / `room.key` 之前用 `icacls /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F` 收成 SYSTEM 与 Administrators。主控只存哈希。待批准申请另有一把安装时生成的 `enroll_secret`，主控只存它的 sha256；轮询必须带上它。配对码可以给人看，不是凭证。
 - 心跳 / 回执无聊天原文（协议层 allowlist）。
 - `push_config` 仍拒绝；`restart_instance` 只在本机显式配置 `restart_cmd` 时执行。
 - 本仓库不放任何生产配置 / 证书 / token；`deploy_controller.sh` 生成的 token 只在 VPS 上。
@@ -160,6 +161,6 @@ python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/m
 cp1252 控制台打中文帮助崩（entry 强制 UTF-8）；Task Scheduler 会连带杀掉 agent 派生的 swap 子进程（改为注册 `ChatX Fleet Agent Upgrade` 一次性任务）；
 `admin` 过滤在线节点应看 `state` 而非 `status`。
 
-本次（安装包 / 待批准 / 机房密钥）在仓库里用 `tests/test_fleet_enroll_v2.py` 加上原有的两份 fleet 测试一起跑过（63 例）。`ChatXAgentSetup.exe` 要在 Windows 构建机上装好免费的 Inno Setup 6 再编，这个环境不产生那个 exe。
+本次（安装包 / 待批准 / 机房密钥，以及随后的 enroll_secret、确认换钥、目录 ACL）在仓库里用 `tests/test_fleet_enroll_v2.py` 加上原有的两份 fleet 测试一起跑。`ChatXAgentSetup.exe` 要在 Windows 构建机上装好免费的 Inno Setup 6 再编，这个环境不产生那个 exe。同一出口 IP 一小时内的待批准上限是 240（一整间机房共用一个公网 IP）；单机仍是 3 次。
 
 未验证（需要生产授权）：VPS 上跑 `deploy_controller.sh`；nginx include 后公网探针；`https://bd2026.cc/downloads/fleet/` 目前未就位（安装器默认下载地址会 302 循环，需官网侧放置发布物）。双击安装包的 UAC / 完成页要在 Windows 上点一次才算真机确认。

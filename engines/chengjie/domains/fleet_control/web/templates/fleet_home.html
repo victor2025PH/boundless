@@ -41,10 +41,8 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
   <div class="btns" id="download">
     {% if download.setup_url %}
     <a class="btn p" href="{{ download.setup_url }}">下载安装包（ChatXAgentSetup.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
-    {% elif download.installer_url %}
-    <a class="btn p" href="{{ download.installer_url }}">下载安装包{% if download.version %} v{{ download.version }}{% endif %}</a>
     {% else %}
-    <a class="btn p dis" href="#">Windows 安装包（即将发布）</a>
+    <span class="btn p dis">Windows 安装包（尚未发布）</span>
     {% endif %}
     {% if download.changelog_url %}<a class="btn" href="{{ download.changelog_url }}">更新日志</a>{% endif %}
   </div>

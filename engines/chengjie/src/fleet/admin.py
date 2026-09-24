@@ -63,12 +63,15 @@ class Admin:
         res = self.call("GET", "/api/fleet/pending")
         return list(res.get("pending") or [])
 
-    def approve(self, request_id: str, *, label: str = "", group: str = "") -> Dict[str, Any]:
+    def approve(self, request_id: str, *, label: str = "", group: str = "",
+                confirm_rotate: bool = False) -> Dict[str, Any]:
         body: Dict[str, Any] = {}
         if label:
             body["label"] = label
         if group:
             body["group_name"] = group
+        if confirm_rotate:
+            body["confirm_rotate"] = True
         return self.call("POST", f"/api/fleet/pending/{request_id}/approve", body)
 
     def reject(self, request_id: str) -> Dict[str, Any]:
@@ -132,7 +135,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = sub.add_parser("approve", help="批准一台待批准电脑")
     a.add_argument("request_id")
     a.add_argument("--label", default="")
-    a.add_argument("--group", default="")
+    a.add_argument("--group", default="", help="空则落入 pending-default；不采用安装请求里自报的分组")
+    a.add_argument("--confirm-rotate", action="store_true",
+                   help="machine_id 已有节点时必加：approving will rotate key of n_xxx")
     rj = sub.add_parser("reject", help="拒绝一台待批准电脑")
     rj.add_argument("request_id")
     rk = sub.add_parser("room-key", help="签发机房安装链接（自动进组，用完或到期失效）")
@@ -183,12 +188,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         rows = adm.pending()
         for r in rows:
             inst = ",".join(str(i.get("name") or "") for i in (r.get("instances") or []) if isinstance(i, dict)) or "-"
+            warn = str(r.get("warning") or "")
             print(f"{str(r.get('request_id') or ''):28} {str(r.get('host_name') or '-'):16} "
-                  f"{str(r.get('client_ip') or '-'):16} {str(r.get('os') or '-'):16} inst={inst}")
+                  f"pair={str(r.get('pairing_code') or '-'):8} "
+                  f"req_group={str(r.get('requested_group') or '-'):12} "
+                  f"group={str(r.get('effective_group') or 'pending-default'):16} "
+                  f"{str(r.get('client_ip') or '-'):16} {str(r.get('os') or '-'):16} inst={inst}"
+                  + (f"  {warn}" if warn else ""))
         print(f"待批准 {len(rows)} 台", file=sys.stderr)
         return 0
     if args.cmd == "approve":
-        res = adm.approve(args.request_id, label=args.label, group=args.group)
+        res = adm.approve(args.request_id, label=args.label, group=args.group,
+                          confirm_rotate=bool(args.confirm_rotate))
         _print({k: v for k, v in res.items() if k != "node_key"})
         return 0
     if args.cmd == "reject":
@@ -209,8 +220,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if waiting:
             print(f"待批准 {len(waiting)} 台（approve <request_id>）：", file=sys.stderr)
             for r in waiting:
-                print(f"{'pending':14} {'pending':8} {str(r.get('group_name') or '-'):10} "
-                      f"{str(r.get('host_name') or r.get('request_id') or ''):24} ip={r.get('client_ip') or '-'}")
+                print(f"{'pending':14} {'pending':8} {str(r.get('effective_group') or 'pending-default'):16} "
+                      f"{str(r.get('host_name') or r.get('request_id') or ''):24} "
+                      f"pair={r.get('pairing_code') or '-'} ip={r.get('client_ip') or '-'}"
+                      + (f"  {r.get('warning')}" if r.get("warning") else ""))
         rows = adm.nodes(group=args.group, include_revoked=args.all)
         for r in rows:
             print(f"{r.get('node_id','')[:14]:14} {str(r.get('state') or r.get('status') or ''):8} {str(r.get('group_name') or '-'):10} "

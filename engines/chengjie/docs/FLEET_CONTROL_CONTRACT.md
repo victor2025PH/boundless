@@ -41,11 +41,11 @@
 
 1. **注册码**：Bearer = 注册码（或 body.code）。成功立刻签发 node_key。
 2. **机房密钥** `rk_` + 256 bit（body.room_key，或 Bearer 以 `rk_` 开头）。次数与有效期内自动进组。库里只存 sha256，明文不进日志。
-3. **都没有**（公开安装包）：记一条待批准，**不签发 node_key**，心跳 / 领任务一律 401。同一 machine_id 在有效期内重复登记复用同一条申请，不重复占限速名额。
+3. **都没有**（公开安装包）：记一条待批准，**不签发 node_key**，心跳 / 领任务一律 401。请求必须带本机生成的 `enroll_secret`（主控只存 sha256）。同一 machine_id 只有 secret 相符才复用申请；不相符就另开一条，控制台能看到两台。未鉴权请求里的 `label` / `group_name` 丢弃。批准时的分组只用管理员传入的值，缺省 `pending-default`。machine_id 已属于某个节点时，批准必须带 `confirm_rotate`，否则 409，文案是 `approving will rotate key of n_xxx`。
 
 ```json
 {"code": "...", "machine_id": "m-…", "host_name": "GANZHI-176", "proto_version": 1,
- "agent_version": "0.3.0", "app_version": "1.0.38", "os": "Windows 11", "meta": {"python": "3.12.x"}}
+ "agent_version": "0.3.1", "app_version": "1.0.38", "os": "Windows 11", "meta": {"python": "3.12.x"}}
 → 200 {"ok": true, "status": "active", "node_id": "n_…", "node_key": "<一次性明文>", "label": "…", "group_name": "…", "heartbeat_sec": 30}
 → 403 invalid_or_expired_code / code_and_machine_id_required     → 426 proto_incompatible
 → 429 rate_limited
@@ -54,10 +54,12 @@
 无码时 body 不带 code / room_key（Bearer 用字面量 `pending`，只为过 CSRF）：
 
 ```json
-→ 200 {"ok": true, "status": "pending", "request_id": "req_…", "expires_at": 0, "retry_after_sec": 15, "heartbeat_sec": 30}
+→ 200 {"ok": true, "status": "pending", "request_id": "req_…", "pairing_code": "K7NQ2M", "expires_at": 0, "retry_after_sec": 15, "heartbeat_sec": 30}
 ```
 
-`POST /api/fleet/enroll/poll` `{request_id, machine_id}` 问结果。仍待批准 → `status=pending`。批准后在 15 分钟领取窗口内返回一次 node_key（窗口内可重复取，防响应丢失），过窗擦掉明文。拒绝 / 过期 → `status=rejected|expired`，没有 key。
+`POST /api/fleet/enroll/poll` `{request_id, machine_id, enroll_secret}` 问结果。secret 不对一律 `unknown`。仍待批准 → `status=pending`。批准后在 15 分钟领取窗口内返回 node_key（窗口从 `decided_at` 起算，没来领也会擦掉明文）。拒绝 / 过期 → `status=rejected|expired`，没有 key。
+
+机房密钥如果撞上**已吊销**的节点，或撞上**另一个分组**里的在用节点，不自动激活、不消耗次数，改走待批准（`requested_group` 是机房密钥上的组）。同组重装仍直接换 key。
 
 运营：`GET /api/fleet/pending`，`POST /api/fleet/pending/{request_id}/approve|reject`。批准接口**不**返回 node_key。
 机房：`POST /api/fleet/room-keys` 只在这一次响应里给出 `download_url`；`GET /fleet/dl/<token>` 返回一个小 zip（`Install.cmd` + `room.key`），不是公开下载页上的安装包。`POST /api/fleet/room-keys/{key_id}/revoke` 吊销。nginx 对 `/fleet/dl/` 关 access_log。

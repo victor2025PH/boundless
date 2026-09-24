@@ -57,7 +57,7 @@
   <div class="fc-sec">
     <h3>待批准 <span class="fc-kv" id="fc-pending-n"></span></h3>
     <table class="fc-tbl">
-      <thead><tr><th>主机</th><th>IP</th><th>系统</th><th>实例</th><th>版本</th><th>申请时间</th><th>操作</th></tr></thead>
+      <thead><tr><th>主机</th><th>配对码</th><th>IP</th><th>申请分组</th><th>生效分组</th><th>系统</th><th>实例</th><th>操作</th></tr></thead>
       <tbody id="fc-pending"></tbody>
     </table>
   </div>
@@ -130,11 +130,12 @@
     document.getElementById('fc-pending').innerHTML=list.length?list.map(function(n){
       var inst=(n.instances||[]).map(function(i){return esc(i.name||i.base_url||'');}).join(', ')||'—';
       return '<tr><td><b>'+esc(n.host_name||'—')+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
-        '<td>'+esc(n.client_ip||'—')+'</td><td>'+esc(n.os||'—')+'</td><td>'+inst+'</td>'+
-        '<td>agent '+esc(n.agent_version||'—')+'</td><td>'+esc(fmtTs(n.created_at))+'</td>'+
-        '<td class="fc-act"><button class="btn-sec" data-ok="'+esc(n.request_id)+'">批准</button>'+
+        '<td><b>'+esc(n.pairing_code||'—')+'</b></td><td>'+esc(n.client_ip||'—')+'</td>'+
+        '<td>'+esc(n.requested_group||'—')+'</td><td>'+esc(n.effective_group||'pending-default')+'</td>'+
+        '<td>'+esc(n.os||'—')+'</td><td>'+inst+'</td>'+
+        '<td class="fc-act"><button class="btn-sec" data-ok="'+esc(n.request_id)+'" data-existing="'+esc(n.existing_node_id||'')+'">批准</button>'+
         '<button class="btn-sec" data-no="'+esc(n.request_id)+'" style="color:var(--red)">拒绝</button></td></tr>';
-    }).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--t3)">没有待批准的电脑</td></tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3)">没有待批准的电脑</td></tr>';
   }
   function renderRooms(list){
     document.getElementById('fc-rooms').innerHTML=list.length?list.map(function(k){
@@ -161,6 +162,12 @@
     var ok=b.getAttribute('data-ok'),no=b.getAttribute('data-no');
     if(ok){var g=document.getElementById('fc-group').value.trim();var lbl=prompt('节点名称（可留空，默认用主机名）','')||'';
       var body={label:lbl};if(g)body.group_name=g;
+      var existing=b.getAttribute('data-existing')||'';
+      if(existing){
+        var warn='approving will rotate key of '+existing;
+        if(!confirm(warn))return;
+        body.confirm_rotate=true;
+      }
       apiFetch('/api/fleet/pending/'+encodeURIComponent(ok)+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(j).then(load).catch(function(e){alert(e.message);});}
     if(no){if(!confirm('拒绝这台电脑？'))return;
       apiFetch('/api/fleet/pending/'+encodeURIComponent(no)+'/reject',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});}
