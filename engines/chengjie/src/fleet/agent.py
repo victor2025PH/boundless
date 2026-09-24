@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .detect import detect_instances, is_loopback_url, sanitize_instances
 from .identity import (
     StateDirLockError, assign_owner_admins, default_state_dir, discard_untrusted_secret,
-    host_name, lock_state_dir, node_machine_id, os_label,
+    host_name, lock_state_dir, node_machine_id, os_label, state_dir_is_locked,
 )
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
@@ -100,6 +100,43 @@ class Unauthorized(AgentError):
     pass
 
 
+# Kept across an upgrade from an unlocked directory. Everything else, including
+# instances and restart_cmd, is dropped and rediscovered.
+_IDENTITY_FIELDS = ("node_id", "node_key", "heartbeat_sec", "enroll_secret",
+                    "pending_request_id", "pairing_code")
+
+
+def migrated_agent_data(controller_url: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    """Identity fields plus the installer controller. ``instances`` is always empty."""
+    data: Dict[str, Any] = {
+        "controller_url": str(controller_url or "").rstrip("/"),
+        "node_id": "",
+        "node_key": "",
+        "heartbeat_sec": DEFAULT_HEARTBEAT_SEC,
+        "instances": [],
+    }
+    if not isinstance(source, dict):
+        return data
+    for key in _IDENTITY_FIELDS:
+        if key == "heartbeat_sec":
+            continue
+        val = source.get(key)
+        if isinstance(val, str) and val:
+            data[key] = val
+    if source.get("heartbeat_sec") not in (None, ""):
+        data["heartbeat_sec"] = source.get("heartbeat_sec")
+    return data
+
+
+def migrate_legacy_agent(state_dir: Path, controller_url: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    """Rewrite agent.json after the state dir is locked. Returns the stored data."""
+    cfg = AgentConfig(state_dir)
+    cfg._legacy_source = None
+    cfg.data = migrated_agent_data(controller_url, source)
+    cfg.save()
+    return dict(cfg.data)
+
+
 # ── 配置 ────────────────────────────────────────────────────────────────────
 class AgentConfig:
     """<state_dir>/agent.json。instances: [{name, base_url, auth_token, config_path, domain, restart_cmd}]"""
@@ -109,16 +146,28 @@ class AgentConfig:
         self.path = self.state_dir / CONFIG_NAME
         self.data: Dict[str, Any] = {"controller_url": "", "node_id": "", "node_key": "",
                                      "heartbeat_sec": DEFAULT_HEARTBEAT_SEC, "instances": []}
+        self._legacy_source: Optional[Dict[str, Any]] = None
         self.load()
 
     def load(self) -> None:
+        self._legacy_source = None
+        # Sample before discard. An unlocked file is not merged: identity only.
+        if self.path.is_file() and not state_dir_is_locked(self.state_dir):
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                raw = None
+            if isinstance(raw, dict):
+                self._legacy_source = raw
+                self.data = migrated_agent_data(str(raw.get("controller_url") or ""), raw)
         try:
             # Same rule as discard_untrusted_secret: on Windows keep the file only
             # when the state directory is locked and the owner is SYSTEM or Admins.
             discard_untrusted_secret(self.path)
-            d = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(d, dict):
-                self.data.update(d)
+            if self._legacy_source is None:
+                d = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(d, dict):
+                    self.data.update(d)
         except StateDirLockError:
             raise
         except Exception:
@@ -243,6 +292,10 @@ class NodeAgent:
         self.http = http
         self.clock = clock
         self.app_version = app_version or _detect_app_version()
+        # Persist the identity-only rewrite before machine_id locks the directory.
+        if getattr(cfg, "_legacy_source", None) is not None:
+            cfg.save()
+            cfg._legacy_source = None
         self.machine_id = node_machine_id(cfg.state_dir)
         self.started_at = clock()
         self.revoked = False
@@ -798,6 +851,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub.add_parser("service-status")
     sub.add_parser("status")
     sub.add_parser("heartbeat", help="只发一次心跳并打印")
+    mig = sub.add_parser("migrate-legacy", help="rewrite an unlocked agent.json down to identity fields")
+    mig.add_argument("--controller", default="", help="controller URL written into agent.json")
+    mig.add_argument("--snapshot", default="", help="agent.json copied before the directory was locked")
+    sub.add_parser("detect", help="rediscover local instances; does not enroll")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -807,6 +864,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     except StateDirLockError:
         print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
         return 1
+    if args.cmd == "migrate-legacy":
+        try:
+            source = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
+        except Exception:
+            print("could not read the migration snapshot", file=sys.stderr)
+            return 1
+        if not isinstance(source, dict):
+            print("could not read the migration snapshot", file=sys.stderr)
+            return 1
+        cfg._legacy_source = None
+        cfg.data = migrated_agent_data(args.controller or cfg.controller_url, source)
+        try:
+            cfg.save()
+        except StateDirLockError:
+            print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True}))
+        return 0
     if args.cmd == "run" and (args.service or args.log_file):
         _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
     if args.cmd == "install-service":
@@ -825,6 +900,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except StateDirLockError:
         print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
         return 1
+    if args.cmd == "detect":
+        found = agent._detect_and_add()
+        print(json.dumps({"ok": True, "count": len(found)}))
+        return 0
     if args.cmd == "enroll":
         for spec in args.instance:
             name, url = _parse_instance(spec)

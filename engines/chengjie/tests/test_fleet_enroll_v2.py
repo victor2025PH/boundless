@@ -18,11 +18,11 @@ from domains.fleet_control.web.routes import (
     RedactFleetDownloadFilter, _client_ip, redact_download_path, register_routes,
 )
 from src.fleet import agent as agent_mod
-from src.fleet.agent import AgentConfig, NodeAgent
+from src.fleet.agent import AgentConfig, NodeAgent, migrate_legacy_agent
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
 from src.fleet.identity import (
-    StateDirLockError, discard_untrusted_secret, lock_state_dir, state_dir_acl_command,
-    state_dir_lock_plan, state_file_trusted,
+    StateDirLockError, discard_untrusted_secret, fleet_lock_steps, lock_state_dir,
+    parent_dir_lock_plan, state_dir_acl_command, state_dir_lock_plan, state_file_trusted,
 )
 from src.fleet.protocol import PROTO_VERSION, STATUS_REJECTED, TASK_RESTART_INSTANCE
 from src.fleet.store import (
@@ -369,7 +369,14 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert iss.index("if not StateDirWasLocked(Dir)") < purge
     assert iss.index("if not StateDirWasLocked(Dir)", tree) > tree
     assert "ReparsePoint" in iss and "AssertStateParent(Dir)" in iss
+    assert "S-1-5-32-545:(OI)(CI)RX" in iss
+    lock_body = iss.split("procedure LockStateDir")[1].split("procedure CurStepChanged")[0]
+    assert lock_body.index("AssertStateParent(Dir)") < lock_body.index("ForceDirectories(Dir)")
+    assert lock_body.index("if not wasLocked then") < lock_body.index("/reset')")
+    assert lock_body.index("AssertNoChildReparse(Dir)") < lock_body.index("/setowner *S-1-5-32-544 /T /C")
     step = iss.split("procedure CurStepChanged")[1]
+    assert "ForceDirectories" not in step
+    assert "-Snapshot" in step
     assert step.index("ResultCode <> 0") < step.index("WizardSilent") < step.index("ExitProcess(1)")
     bootstrap = (ENGINE / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
     assert "--detect" in bootstrap and "room.key" in bootstrap
@@ -385,11 +392,16 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     b_tree = bootstrap.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
     assert bootstrap.index("Assert-StateParent $Dir") < b_owner < b_reset < b_verify < b_purge < b_tree
     assert bootstrap.index("if (-not (Test-DirLocked $Dir))", b_tree) > b_tree
+    assert bootstrap.index("$wasLocked") < b_reset
+    assert bootstrap.index("Assert-NoChildReparse $Dir") < b_tree
+    assert "S-1-5-32-545:(OI)(CI)RX" in bootstrap and "Test-ParentLocked" in bootstrap
+    assert "migrate-legacy" in bootstrap and "--snapshot" in bootstrap
+    assert bootstrap.index("migrate-legacy") < bootstrap.index("enroll', '--controller'")
     assert bootstrap.index("enroll failed") < bootstrap.index("install-service")
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
     assert "keep existing enrollment" not in ps1
-    assert "must be approved again" in ps1
+    assert "instances are cleared" in ps1 and "restart_cmd must be set again" in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
     assert "if (Test-Path -LiteralPath $p)" in ps1
@@ -401,6 +413,10 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     p_tree = ps1.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
     assert ps1.index("Assert-StateParent $Dir") < p_owner < p_reset < p_verify < p_purge < p_tree
     assert ps1.index("if (-not (Test-DirLocked $Dir))", p_tree) > p_tree
+    assert ps1.index("$wasLocked") < p_reset
+    assert ps1.index("Assert-NoChildReparse $Dir") < p_tree
+    assert "S-1-5-32-545:(OI)(CI)RX" in ps1 and "Test-ParentLocked" in ps1
+    assert "migrate-legacy" in ps1 and "--snapshot" in ps1
     folder = Path(r"C:\ProgramData\ChatX\fleet")
     acl = state_dir_acl_command(folder)
     assert acl[:3] == ["icacls", str(folder), "/inheritance:r"]
@@ -526,8 +542,8 @@ def test_state_dir_acl_command_order_closes_the_toctou_window():
     plan = state_dir_lock_plan(folder)
     names = [name for name, _argv in plan]
     assert names == [
-        "setowner-dir", "reset-dir", "grant-dir", "verify-dir", "purge-sensitive",
-        "setowner-tree", "reset-children", "grant-tree", "verify-tree",
+        "setowner-dir", "reset-dir", "grant-dir", "verify-dir", "reject-child-reparse",
+        "purge-sensitive", "setowner-tree", "reset-children", "grant-tree", "verify-tree",
     ]
     by_name = dict(plan)
     assert by_name["setowner-dir"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544"]
@@ -537,8 +553,20 @@ def test_state_dir_acl_command_order_closes_the_toctou_window():
     assert "/T" not in by_name["grant-dir"]
     assert by_name["verify-dir"] == [] and by_name["verify-tree"] == []
     assert names.index("reset-dir") < names.index("grant-dir") < names.index("verify-dir")
-    assert names.index("verify-dir") < names.index("purge-sensitive") < names.index("setowner-tree")
+    assert names.index("verify-dir") < names.index("reject-child-reparse") < names.index("purge-sensitive")
+    assert names.index("reject-child-reparse") < names.index("setowner-tree")
     assert names.index("grant-tree") < names.index("verify-tree")
+    assert "reset-dir" not in fleet_lock_steps(True)
+    assert "grant-dir" not in fleet_lock_steps(True)
+    assert "grant-tree" not in fleet_lock_steps(True)
+    assert "reject-child-reparse" in fleet_lock_steps(True)
+    parent = parent_dir_lock_plan(folder.parent)
+    parent_names = [name for name, _argv in parent]
+    assert parent_names == ["parent-setowner", "parent-reset", "parent-grant", "parent-verify"]
+    parent_by = dict(parent)
+    assert "/T" not in parent_by["parent-reset"] and "/T" not in parent_by["parent-grant"]
+    assert "*S-1-5-32-545:(OI)(CI)RX" in parent_by["parent-grant"]
+    assert "*S-1-5-18:(OI)(CI)F" in parent_by["parent-grant"]
     assert by_name["setowner-tree"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
     assert by_name["reset-children"][2:5] == ["/reset", "/T", "/C"]
     assert by_name["grant-tree"][:3] == ["icacls", str(folder), "/inheritance:r"]
@@ -547,6 +575,112 @@ def test_state_dir_acl_command_order_closes_the_toctou_window():
     assert state_file_trusted(dir_locked=False, owner_sid="S-1-5-32-544") is False
     assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-544") is True
     assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-545") is False
+
+
+def test_windows_reparse_uses_file_attributes(monkeypatch):
+    import stat
+
+    from src.fleet import identity as ident
+
+    monkeypatch.setattr(ident.os, "name", "nt")
+
+    def lstat_reparse(_path):
+        return SimpleNamespace(st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+    monkeypatch.setattr(ident.os, "lstat", lstat_reparse)
+    assert ident._is_reparse(Path(r"C:\ProgramData\ChatX\fleet")) is True
+
+    def lstat_dir(_path):
+        return SimpleNamespace(st_file_attributes=stat.FILE_ATTRIBUTE_DIRECTORY)
+
+    monkeypatch.setattr(ident.os, "lstat", lstat_dir)
+    assert ident._is_reparse(Path(r"C:\ProgramData\ChatX\fleet")) is False
+
+
+def test_child_reparse_aborts_before_any_tree_grant(tmp_path):
+    from src.fleet import identity as ident
+
+    fleet = tmp_path / "fleet"
+    fleet.mkdir()
+    (fleet / "logs").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(StateDirLockError):
+        ident._reject_child_reparse(fleet)
+    names = fleet_lock_steps(False)
+    assert names.index("reject-child-reparse") < names.index("setowner-tree")
+    first_tree = next(i for i, name in enumerate(names) if "/T" in " ".join(
+        dict(state_dir_lock_plan(fleet)).get(name) or []))
+    assert names.index("reject-child-reparse") < first_tree
+
+
+def test_locked_dir_skips_reset_and_parent_is_post_checked(tmp_path, monkeypatch):
+    from pathlib import PosixPath
+
+    from src.fleet import identity as ident
+
+    fleet = tmp_path / "ChatX" / "fleet"
+    fleet.parent.mkdir()
+    fleet.mkdir()
+    monkeypatch.setattr(ident.os, "name", "nt")
+    # Path() follows os.name. Keep the temp dir a PosixPath so the skip logic can run here.
+    monkeypatch.setattr(ident, "Path", lambda p: p if isinstance(p, PosixPath) else PosixPath(p))
+    monkeypatch.setattr(ident, "_is_reparse", lambda _path: False)
+    calls = []
+    seen = []
+
+    def locked(path, allow_users_rx=False):
+        seen.append(allow_users_rx)
+        return True
+
+    monkeypatch.setattr(ident, "_windows_dir_locked", locked)
+    monkeypatch.setattr(ident, "_run_icacls", lambda argv: calls.append(list(argv)))
+    ident.lock_state_dir(fleet)
+    assert calls == []
+    assert True in seen
+    assert ident._users_rx_mask_ok(0x1200A9) is True
+    assert ident._users_rx_mask_ok(0x1200A9 | 0x2) is False
+
+
+def test_migrate_legacy_keeps_only_identity_fields(tmp_path):
+    fleet = tmp_path / "fleet"
+    fleet.mkdir()
+    fleet.chmod(0o755)
+    secret = _es("mig")
+    source = {
+        "node_id": "n1",
+        "node_key": "nk_keep",
+        "heartbeat_sec": 15,
+        "enroll_secret": secret,
+        "pending_request_id": "req1",
+        "pairing_code": "AB2345",
+        "controller_url": "https://evil.example/fleet",
+        "reenroll_not_before": 9,
+        "instances": [{
+            "name": "chatx",
+            "restart_cmd": "calc",
+            "base_url": "http://127.0.0.1:1",
+            "auth_token": "tok",
+            "config_path": "C:/secret.yaml",
+        }],
+    }
+    (fleet / "agent.json").write_text(json.dumps(source), encoding="utf-8")
+    out = migrate_legacy_agent(fleet, "https://ctl.test/fleet", source)
+    assert out["node_id"] == "n1"
+    assert out["node_key"] == "nk_keep"
+    assert out["heartbeat_sec"] == 15
+    assert out["enroll_secret"] == secret
+    assert out["pending_request_id"] == "req1"
+    assert out["pairing_code"] == "AB2345"
+    assert out["controller_url"] == "https://ctl.test/fleet"
+    assert out["instances"] == []
+    saved = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    blob = json.dumps(saved)
+    assert saved["instances"] == []
+    assert "restart_cmd" not in blob
+    assert "evil.example" not in blob
+    assert "reenroll_not_before" not in saved
+    assert "auth_token" not in blob
+    assert "config_path" not in blob
+    assert fleet.stat().st_mode & 0o777 == 0o700
 
 
 def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
