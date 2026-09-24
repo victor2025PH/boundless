@@ -46,8 +46,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detect import detect_instances, is_loopback_url, sanitize_instances
 from .identity import (
-    StateDirLockError, default_state_dir, discard_untrusted_secret, host_name, lock_state_dir,
-    node_machine_id, os_label,
+    StateDirLockError, assign_owner_admins, default_state_dir, discard_untrusted_secret,
+    host_name, lock_state_dir, node_machine_id, os_label,
 )
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
@@ -139,6 +139,8 @@ class AgentConfig:
                 except OSError:
                     pass
                 raise StateDirLockError(f"chmod agent.json failed: {e}") from e
+        else:
+            assign_owner_admins(self.path)
 
     @property
     def controller_url(self) -> str:
@@ -287,6 +289,7 @@ class NodeAgent:
         })
         self.cfg.data.pop("pending_request_id", None)
         self.cfg.data.pop("enroll_rejected", None)
+        self.cfg.data.pop("reenroll_not_before", None)
         self.cfg.save()
         self.revoked = False
 
@@ -341,6 +344,7 @@ class NodeAgent:
             self.cfg.data["pending_request_id"] = res["request_id"]
             self.cfg.data["pairing_code"] = str(res.get("pairing_code") or "")
             self.cfg.data.pop("enroll_rejected", None)
+            self.cfg.data.pop("reenroll_not_before", None)
             self.cfg.save()
             self._write_pairing(str(res.get("pairing_code") or ""))
             return {"status": "pending", "request_id": res["request_id"], "expires_at": res.get("expires_at"),
@@ -353,6 +357,11 @@ class NodeAgent:
             return {"ok": True, "status": "active", "node_id": self.cfg.node_id}
         rid = str(self.cfg.data.get("pending_request_id") or "")
         if not rid:
+            if self.cfg.data.get("enroll_rejected"):
+                if "reenroll_not_before" in self.cfg.data:
+                    self.cfg.data.pop("reenroll_not_before", None)
+                    self.cfg.save()
+                return {"ok": False, "status": "idle"}
             if self.cfg.data.get("reenroll_not_before"):
                 return self._restart_enroll("backoff")
             return {"ok": False, "status": "idle"}
@@ -366,6 +375,7 @@ class NodeAgent:
         status = str(res.get("status") or "")
         if status == "rejected":
             self.cfg.data.pop("pending_request_id", None)
+            self.cfg.data.pop("reenroll_not_before", None)
             self.cfg.data["enroll_rejected"] = True
             self.cfg.save()
         elif status == "expired":
@@ -389,7 +399,12 @@ class NodeAgent:
         """
         now = float(self.clock())
         not_before = float(self.cfg.data.get("reenroll_not_before") or 0)
+        rejected = bool(self.cfg.data.get("enroll_rejected"))
         self.cfg.data.pop("pending_request_id", None)
+        if rejected:
+            self.cfg.data.pop("reenroll_not_before", None)
+            self.cfg.save()
+            return {"ok": False, "status": "idle"}
         if now < not_before:
             self.cfg.save()
             return {"ok": False, "status": "backoff"}
@@ -708,6 +723,42 @@ def _int(v: Any) -> int:
         return 0
 
 
+def _load_room_key(cfg: AgentConfig, raw: Path) -> str:
+    """Read a room key. The owner check applies only inside the state directory.
+
+    An operator path such as ``.\\room.key`` is owned by the user who launched
+    the installer. Copy it in after the directory is locked, then check the
+    copy. The source is removed only after that copy is accepted.
+    """
+    raw = Path(raw)
+    state = cfg.state_dir.resolve()
+    try:
+        inside = raw.resolve().is_relative_to(state)
+    except OSError:
+        inside = False
+    if inside:
+        target = raw
+    else:
+        text = raw.read_text(encoding="utf-8")
+        lock_state_dir(cfg.state_dir)
+        target = cfg.state_dir / "room.key"
+        target.write_text(text, encoding="utf-8")
+        assign_owner_admins(target)
+    if discard_untrusted_secret(target):
+        raise StateDirLockError("untrusted room key file")
+    room = target.read_text(encoding="utf-8").strip()
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    if not inside:
+        try:
+            raw.unlink()
+        except OSError:
+            pass
+    return room
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _parse_instance(spec: str) -> Tuple[str, str]:
     if "=" not in spec:
@@ -749,7 +800,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    cfg = AgentConfig(Path(args.state_dir) if args.state_dir else None)
+    try:
+        cfg = AgentConfig(Path(args.state_dir) if args.state_dir else None)
+    except StateDirLockError:
+        print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+        return 1
     if args.cmd == "run" and (args.service or args.log_file):
         _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
     if args.cmd == "install-service":
@@ -763,29 +818,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "service-status":
         print(json.dumps(service_status(), ensure_ascii=False, indent=2))
         return 0
-    agent = NodeAgent(cfg)
+    try:
+        agent = NodeAgent(cfg)
+    except StateDirLockError:
+        print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+        return 1
     if args.cmd == "enroll":
         for spec in args.instance:
             name, url = _parse_instance(spec)
             cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path)
         room = ""
         if args.room_key_file:
-            key_path = Path(args.room_key_file)
             try:
-                if discard_untrusted_secret(key_path):
-                    print("room key file owner is not trusted; refusing to use it", file=sys.stderr)
-                    return 1
-                room = key_path.read_text(encoding="utf-8").strip()
+                room = _load_room_key(cfg, Path(args.room_key_file))
             except StateDirLockError as e:
-                print(f"room key file refused: {e}", file=sys.stderr)
+                if str(e).startswith("untrusted"):
+                    print("room key file owner is not trusted; refusing to use it", file=sys.stderr)
+                else:
+                    print(f"room key file refused: {e}", file=sys.stderr)
                 return 1
             except OSError as e:
                 print(f"room key file unreadable: {e}", file=sys.stderr)
                 return 1
-            try:
-                Path(args.room_key_file).unlink()
-            except OSError:
-                pass
         try:
             res = agent.enroll(args.code, controller_url=args.controller or cfg.controller_url,
                                room_key=room, detect=bool(args.detect))

@@ -44,20 +44,44 @@ function Native([string]$exe, [string[]]$a) {
   try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
-function Remove-UntrustedState([string]$Dir) {
+function Test-DirLocked([string]$Dir) {
+  $acl = Get-Acl -LiteralPath $Dir
+  $sid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544') { return $false }
+  if (-not $acl.AreAccessRulesProtected) { return $false }
+  $aces = @($acl.Access)
+  if ($aces.Count -lt 1) { return $false }
+  foreach ($ace in $aces) {
+    $id = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if ($id -ne 'S-1-5-18' -and $id -ne 'S-1-5-32-544') { return $false }
+  }
+  return $true
+}
+function Remove-Sensitive([string]$Dir, [bool]$Force) {
   foreach ($name in @('agent.json', 'machine_id', 'room.key')) {
     $p = Join-Path $Dir $name
     if (-not (Test-Path -LiteralPath $p)) { continue }
-    $sid = (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-    if ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544') {
+    $drop = $Force
+    if (-not $drop) {
+      $sid = (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+      $drop = ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544')
+    }
+    if ($drop) {
       Remove-Item -LiteralPath $p -Force
-      Say "removed untrusted $name"
+      if (Test-Path -LiteralPath $p) { throw "could not delete $name" }
+      Say "removed $name"
     }
   }
 }
 function Lock-StateDir([string]$Dir) {
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-  Remove-UntrustedState $Dir
+  $wasLocked = $false
+  try { $wasLocked = Test-DirLocked $Dir } catch { Fail "could not read state dir ACL" }
+  Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544') | Out-Null
+  if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
+  Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F') | Out-Null
+  if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
+  try { Remove-Sensitive $Dir (-not $wasLocked) } catch { Fail "could not delete untrusted state" }
   Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C') | Out-Null
   if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
   $children = @(Get-ChildItem -Force -LiteralPath $Dir -ErrorAction SilentlyContinue)

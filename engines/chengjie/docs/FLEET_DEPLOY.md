@@ -157,7 +157,7 @@ python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/m
 ## 5. 安全与边界（勿破）
 
 - 公开安装包不含主控管理凭据，也不含机房密钥。没被批准的节点没有 node_key，不能领任务。`web_admin.auth_token` 只在 VPS `/etc/chatx-fleet/config.yaml`（640）与操作端环境变量。机房链接只在签发时出现一次。
-- 节点 node_key 只在 `%ProgramData%\ChatX\fleet\agent.json`。写入 `machine_id` / `agent.json` / `room.key` 之前先确认已有文件的所有者是 SYSTEM（S-1-5-18）或 Administrators（S-1-5-32-544），否则删掉；然后 `icacls /setowner *S-1-5-32-544 /T /C`，对子项 `/reset /T`，再 `/inheritance:r /grant:r` 只留给 SYSTEM 和 Administrators。任一步失败就中止安装，不写密钥。`restart_cmd` 由 SYSTEM 用 `shell=True` 执行，所以不能信一份来历不明的 `agent.json`。主控只存哈希。待批准申请另有一把安装时生成的 `enroll_secret`，主控只存它的 sha256；轮询必须带上它。配对码可以给人看，不是凭证。
+- 节点 node_key 只在 `%ProgramData%\ChatX\fleet\agent.json`。锁目录的顺序是：先只对目录本身 `icacls /setowner *S-1-5-32-544`（不带 `/T`），再只对目录 `/inheritance:r /grant:r` 给 SYSTEM（S-1-5-18）和 Administrators（S-1-5-32-544）；然后才处理子文件。如果动手之前目录还不是 SYSTEM/Administrators 所有且 DACL 未保护，就无条件删掉 `agent.json`、`machine_id`、`room.key`；已经锁好的目录只删所有者不是这两类的那三个文件。删除失败就中止，绝不继续 `/setowner /T`。最后才 `/setowner /T`、对子项 `/reset /T`、再 `/grant /T`。任一步失败就中止安装，不写密钥。`restart_cmd` 由 SYSTEM 用 `shell=True` 执行，所以不能信一份来历不明的 `agent.json`。主控只存哈希。待批准申请另有一把安装时生成的 `enroll_secret`，主控只存它的 sha256；轮询必须带上它。配对码可以给人看，不是凭证。
 - 心跳 / 回执无聊天原文（协议层 allowlist）。
 - `push_config` 仍拒绝；`restart_instance` 只在本机显式配置 `restart_cmd` 时执行。
 - 本仓库不放任何生产配置 / 证书 / token；`deploy_controller.sh` 生成的 token 只在 VPS 上。

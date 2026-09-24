@@ -21,7 +21,8 @@ from src.fleet import agent as agent_mod
 from src.fleet.agent import AgentConfig, NodeAgent
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
 from src.fleet.identity import (
-    discard_untrusted_secret, lock_state_dir, state_dir_acl_command, state_dir_acl_commands,
+    StateDirLockError, discard_untrusted_secret, lock_state_dir, state_dir_acl_command,
+    state_dir_lock_plan,
 )
 from src.fleet.protocol import PROTO_VERSION, STATUS_REJECTED, TASK_RESTART_INSTANCE
 from src.fleet.store import (
@@ -356,25 +357,39 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert iss.index("LockStateDir") < iss.index("FileCopy")
     assert "setowner" in iss and "ResultCode" in iss and "ChatX Fleet Agent Upgrade" in iss
     assert "/IM chatx-agent.exe" not in iss
-    assert iss.index("DropUntrustedState") < iss.index("setowner")
+    assert "PsLiteral" in iss and "WizardSilent" in iss and "ExitProcess" in iss
+    assert "$ErrorActionPreference=''Stop''" in iss
+    assert "if(Test-Path -LiteralPath $p){exit 1}" in iss
+    assert "service is installed and will retry" not in iss
+    dir_only = iss.index("/setowner *S-1-5-32-544')")
+    purge = iss.index("DropUntrustedState(Dir")
+    tree = iss.index("/setowner *S-1-5-32-544 /T /C")
+    assert dir_only < purge < tree
     bootstrap = (ENGINE / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
     assert "--detect" in bootstrap and "room.key" in bootstrap
     assert "S-1-5-18" in bootstrap and "S-1-5-32-544" in bootstrap
     assert "/setowner" in bootstrap and bootstrap.index("/setowner") < bootstrap.index("enroll', '--controller'")
-    assert "NativeExit" in bootstrap
+    assert "NativeExit" in bootstrap and "exit 3" in bootstrap
+    assert "if (Test-Path -LiteralPath $p)" in bootstrap
+    plain = bootstrap.index("'/setowner', '*S-1-5-32-544')")
+    b_purge = bootstrap.index("Remove-Sensitive $Dir")
+    b_tree = bootstrap.index("'/setowner', '*S-1-5-32-544', '/T', '/C'")
+    assert bootstrap.index("$wasLocked = Test-DirLocked") < plain < b_purge < b_tree
     assert bootstrap.index("enroll failed") < bootstrap.index("install-service")
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
+    assert "if (Test-Path -LiteralPath $p)" in ps1
+    p_plain = ps1.index("'/setowner', '*S-1-5-32-544')")
+    p_purge = ps1.index("Remove-Sensitive $Dir")
+    p_tree = ps1.index("'/setowner', '*S-1-5-32-544', '/T', '/C'")
+    assert ps1.index("$wasLocked = Test-DirLocked") < p_plain < p_purge < p_tree
     folder = Path(r"C:\ProgramData\ChatX\fleet")
-    cmds = state_dir_acl_commands(folder)
-    assert cmds[0][:6] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
-    assert cmds[1][2:5] == ["/reset", "/T", "/C"]
     acl = state_dir_acl_command(folder)
     assert acl[:3] == ["icacls", str(folder), "/inheritance:r"]
     assert "*S-1-5-18:(OI)(CI)F" in acl and "*S-1-5-32-544:(OI)(CI)F" in acl
-    assert "/T" in acl and cmds.index(cmds[2]) > cmds.index(cmds[0])
+    assert "/T" in acl
 
 
 def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
@@ -490,6 +505,27 @@ def test_state_dir_locked_before_writes(tmp_path):
     assert (tmp_path / "fleet").stat().st_mode & 0o777 == 0o700
 
 
+def test_state_dir_acl_command_order_closes_the_toctou_window():
+    folder = Path(r"C:\ProgramData\ChatX\fleet")
+    plan = state_dir_lock_plan(folder)
+    assert [name for name, _argv in plan] == [
+        "setowner-dir", "grant-dir", "purge-sensitive",
+        "setowner-tree", "reset-children", "grant-tree",
+    ]
+    assert plan[0][1] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544"]
+    assert "/T" not in plan[0][1] and "/T" not in plan[1][1]
+    assert plan[1][1][2:4] == ["/inheritance:r", "/grant:r"]
+    assert "*S-1-5-18:(OI)(CI)F" in plan[1][1] and "*S-1-5-32-544:(OI)(CI)F" in plan[1][1]
+    assert plan[2][1] == []
+    assert plan[3][1] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
+    assert plan[4][1][2:5] == ["/reset", "/T", "/C"]
+    assert plan[5][1][:3] == ["icacls", str(folder), "/inheritance:r"]
+    assert plan[5][1][-2:] == ["/T", "/C"]
+    assert state_dir_acl_command(folder) == plan[5][1]
+    names = [name for name, _argv in plan]
+    assert names.index("purge-sensitive") < names.index("setowner-tree")
+
+
 def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
     secret = _es("keep")
     cfg = AgentConfig(tmp_path)
@@ -512,8 +548,10 @@ def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, cap
     agent = NodeAgent(cfg, http=http)
     assert agent.poll_enrollment()["status"] == "pending"
     assert cfg.data["pending_request_id"] == "req_new"
+    assert "reenroll_not_before" not in cfg.data
     assert any(u.rstrip("/").endswith("/api/fleet/enroll") for u in calls)
     cfg.data["pending_request_id"] = "req_keep"
+    cfg.data["reenroll_not_before"] = time.time() + 3600
     cfg.save()
     calls.clear()
     http.status = "already_claimed"
@@ -528,6 +566,82 @@ def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, cap
     assert "--room-key-file" in text
     import re
     assert re.search(r"--room-key(?!-file)", text) is None
+
+
+def test_after_reject_no_further_enroll_attempts(tmp_path):
+    secret = _es("rej")
+    cfg = AgentConfig(tmp_path)
+    cfg.data.update({
+        "controller_url": "https://ctl.test/fleet",
+        "pending_request_id": "req_rej",
+        "enroll_secret": secret,
+        "reenroll_not_before": 1,
+    })
+    cfg.save()
+    calls = []
+
+    def http(method, url, body, headers, timeout):
+        calls.append(url)
+        if url.rstrip("/").endswith("/api/fleet/enroll"):
+            return 200, {"ok": True, "status": "pending", "request_id": "req_new", "pairing_code": "ABCD23"}
+        return 200, {"ok": False, "status": "rejected"}
+
+    agent = NodeAgent(cfg, http=http, clock=lambda: 1_000_000.0)
+    assert agent.poll_enrollment()["status"] == "rejected"
+    assert cfg.data.get("enroll_rejected") is True
+    assert "reenroll_not_before" not in cfg.data
+    assert "pending_request_id" not in cfg.data
+    calls.clear()
+    agent.clock = lambda: 1_000_000.0 + 10_000
+    assert agent.poll_enrollment()["status"] == "idle"
+    assert calls == []
+
+
+def test_room_key_outside_state_dir_is_copied_before_the_owner_check(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir()
+    outside = tmp_path / "room.key"
+    outside.write_text("room-key-from-operator\n", encoding="utf-8")
+    cfg = AgentConfig(state)
+    seen = []
+    real = agent_mod.discard_untrusted_secret
+
+    def wrapped(path, owner_sid=None):
+        seen.append(Path(path).resolve())
+        return real(path, owner_sid=owner_sid)
+
+    monkeypatch.setattr(agent_mod, "discard_untrusted_secret", wrapped)
+    assert agent_mod._load_room_key(cfg, outside) == "room-key-from-operator"
+    assert seen == [(state / "room.key").resolve()]
+    assert not outside.exists()
+    assert not (state / "room.key").exists()
+
+
+def test_status_lock_failure_is_a_friendly_message(tmp_path, monkeypatch, capsys):
+    def boom(_path):
+        raise StateDirLockError("access denied")
+
+    monkeypatch.setattr("src.fleet.identity.lock_state_dir", boom)
+    assert agent_mod.main(["--state-dir", str(tmp_path), "status"]) == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "Run as Administrator" in err
+
+
+def test_unlocked_dir_drops_planted_secrets(tmp_path):
+    fleet = tmp_path / "fleet"
+    fleet.mkdir()
+    fleet.chmod(0o755)
+    planted = fleet / "agent.json"
+    planted.write_text('{"restart_cmd":"calc"}', encoding="utf-8")
+    lock_state_dir(fleet)
+    assert not planted.exists()
+    assert fleet.stat().st_mode & 0o777 == 0o700
+    kept = fleet / "machine_id"
+    kept.write_text("m-kept\n", encoding="utf-8")
+    kept.chmod(0o600)
+    lock_state_dir(fleet)
+    assert kept.read_text(encoding="utf-8").startswith("m-")
 
 
 def test_approve_route_returns_409_until_confirm_rotate(st):

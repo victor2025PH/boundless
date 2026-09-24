@@ -87,27 +87,47 @@ _SENSITIVE_NAMES = frozenset({"agent.json", "machine_id", "room.key"})
 
 
 def state_dir_acl_commands(path: Path) -> List[List[str]]:
-    """Owner Administrators, reset children, then SYSTEM + Administrators only.
+    """icacls steps for ``state_dir_lock_plan``.
 
-    ``/reset`` targets ``<dir>\\*`` so it does not wipe the directory grant. The
-    grant is last and carries ``/T`` so files that already exist pick up that
-    DACL instead of the ACL they inherited before the directory was locked.
-    An empty directory skips the reset (icacls has nothing to match).
+    Directory-only setowner and grant come first, with no ``/T``. The recursive
+    setowner is later, after planted children have been removed. ``/reset``
+    targets ``<dir>\\*`` so it does not wipe the directory DACL. The last grant
+    carries ``/T``. An empty directory skips the reset.
     """
     folder = str(path)
+    grant = [
+        "icacls", folder, "/inheritance:r", "/grant:r",
+        "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+    ]
     return [
+        ["icacls", folder, "/setowner", "*S-1-5-32-544"],
+        list(grant),
         ["icacls", folder, "/setowner", "*S-1-5-32-544", "/T", "/C"],
         ["icacls", str(path / "*"), "/reset", "/T", "/C"],
-        [
-            "icacls", folder, "/inheritance:r", "/grant:r",
-            "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/T", "/C",
-        ],
+        grant + ["/T", "/C"],
+    ]
+
+
+def state_dir_lock_plan(path: Path) -> List[tuple]:
+    """Lock order. ``purge-sensitive`` sits before any recursive ``/setowner /T``.
+
+    A planted ``agent.json`` must be gone before ``/T`` can adopt it. The purge
+    itself is not an icacls command; ``lock_state_dir`` runs it in this slot.
+    """
+    commands = state_dir_acl_commands(path)
+    return [
+        ("setowner-dir", commands[0]),
+        ("grant-dir", commands[1]),
+        ("purge-sensitive", []),
+        ("setowner-tree", commands[2]),
+        ("reset-children", commands[3]),
+        ("grant-tree", commands[4]),
     ]
 
 
 def state_dir_acl_command(path: Path) -> List[str]:
-    """The inheritance-removed grant (last step of ``state_dir_acl_commands``)."""
-    return state_dir_acl_commands(path)[2]
+    """The final inheritance-removed grant (last step of ``state_dir_lock_plan``)."""
+    return state_dir_acl_commands(path)[-1]
 
 
 def _run_icacls(argv: List[str]) -> None:
@@ -117,26 +137,179 @@ def _run_icacls(argv: List[str]) -> None:
         raise StateDirLockError(f"icacls exited {proc.returncode}: {err}")
 
 
+def assign_owner_admins(path: Path) -> None:
+    """Give a newly written secret to Administrators. No-op off Windows.
+
+    ``os.replace`` leaves the creator as owner. A non-UAC admin's user SID is
+    not trusted, so the SYSTEM service would otherwise delete ``agent.json``
+    and lose ``node_key``. A failed ``icacls`` deletes the secret and raises.
+    """
+    if os.name != "nt":
+        return
+    try:
+        _run_icacls(["icacls", str(path), "/setowner", "*S-1-5-32-544"])
+    except StateDirLockError:
+        try:
+            Path(path).unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _posix_dir_locked(path: Path) -> bool:
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    return st.st_uid in {0, os.getuid()} and (st.st_mode & 0o077) == 0
+
+
+def _windows_dir_locked(path: Path) -> bool:
+    """True when the directory owner is SYSTEM or Administrators, the DACL is
+    protected, and every ACE is only those two SIDs. Any query failure is not locked.
+    """
+    import ctypes
+
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv.GetNamedSecurityInfoW.argtypes = [
+        ctypes.c_wchar_p, ctypes.c_int, ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    adv.GetNamedSecurityInfoW.restype = ctypes.c_ulong
+    adv.GetSecurityDescriptorControl.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ushort), ctypes.POINTER(ctypes.c_ulong),
+    ]
+    adv.GetSecurityDescriptorControl.restype = ctypes.c_int
+    adv.GetAce.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_void_p)]
+    adv.GetAce.restype = ctypes.c_int
+    adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    adv.ConvertSidToStringSidW.restype = ctypes.c_int
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+
+    owner = ctypes.c_void_p()
+    dacl = ctypes.c_void_p()
+    sd = ctypes.c_void_p()
+    rc = adv.GetNamedSecurityInfoW(
+        str(path), 1, 0x1 | 0x4,
+        ctypes.byref(owner), None, ctypes.byref(dacl), None, ctypes.byref(sd),
+    )
+    if rc != 0 or not sd.value or not owner.value:
+        if sd.value:
+            kernel.LocalFree(sd)
+        return False
+    sid_buf = ctypes.c_void_p()
+    try:
+        if not adv.ConvertSidToStringSidW(owner, ctypes.byref(sid_buf)) or not sid_buf.value:
+            return False
+        if ctypes.wstring_at(sid_buf.value) not in TRUSTED_OWNER_SIDS:
+            return False
+        kernel.LocalFree(sid_buf)
+        sid_buf = ctypes.c_void_p()
+        control = ctypes.c_ushort()
+        revision = ctypes.c_ulong()
+        if not adv.GetSecurityDescriptorControl(sd, ctypes.byref(control), ctypes.byref(revision)):
+            return False
+        if not (control.value & 0x1000):  # SE_DACL_PROTECTED
+            return False
+        if not dacl.value:
+            return False
+
+        class _ACL(ctypes.Structure):
+            _fields_ = [
+                ("AclRevision", ctypes.c_ubyte),
+                ("Sbz1", ctypes.c_ubyte),
+                ("AclSize", ctypes.c_ushort),
+                ("AceCount", ctypes.c_ushort),
+                ("Sbz2", ctypes.c_ushort),
+            ]
+
+        class _ACE(ctypes.Structure):
+            _fields_ = [
+                ("AceType", ctypes.c_ubyte),
+                ("AceFlags", ctypes.c_ubyte),
+                ("AceSize", ctypes.c_ushort),
+            ]
+
+        acl = _ACL.from_address(dacl.value)
+        if acl.AceCount < 1:
+            return False
+        for index in range(int(acl.AceCount)):
+            ace = ctypes.c_void_p()
+            if not adv.GetAce(dacl, index, ctypes.byref(ace)) or not ace.value:
+                return False
+            header = _ACE.from_address(ace.value)
+            if header.AceType not in (0, 1):
+                return False
+            sid_addr = ace.value + ctypes.sizeof(_ACE) + 4
+            if not adv.ConvertSidToStringSidW(sid_addr, ctypes.byref(sid_buf)) or not sid_buf.value:
+                return False
+            sid = ctypes.wstring_at(sid_buf.value)
+            kernel.LocalFree(sid_buf)
+            sid_buf = ctypes.c_void_p()
+            if sid not in TRUSTED_OWNER_SIDS:
+                return False
+        return True
+    finally:
+        if sid_buf.value:
+            kernel.LocalFree(sid_buf)
+        kernel.LocalFree(sd)
+
+
+def _purge_sensitive(path: Path, *, unconditional: bool) -> None:
+    """Delete agent.json, machine_id, and room.key. Raise if a delete does not stick.
+
+    ``unconditional`` is set when the directory was not already locked before
+    step 1. A failure here must abort before ``/setowner /T`` adopts the file.
+    """
+    for name in ("agent.json", "machine_id", "room.key"):
+        child = path / name
+        if not child.is_file():
+            continue
+        if unconditional:
+            try:
+                child.unlink()
+            except OSError as e:
+                raise StateDirLockError(f"could not delete {name}: {e}") from e
+            if child.exists():
+                raise StateDirLockError(f"could not delete {name}")
+            logger.warning("[fleet] removed %s because the state dir was not locked", name)
+            continue
+        discard_untrusted_secret(child)
+
+
 def lock_state_dir(path: Path) -> None:
     """Create the state dir and lock it down before machine_id / agent.json / room.key are written.
 
-    On Windows every icacls step must succeed. A failure raises ``StateDirLockError``
-    and the caller must not write a secret. On POSIX the directory is mode 0700;
-    a chmod failure raises the same error.
+    On Windows the plan is directory-only owner and DACL, then purge, then
+    ``/setowner /T``, reset children, and grant ``/T``. "Already locked" is
+    sampled before the first setowner. A purge failure raises and does not
+    adopt the file. On POSIX the directory is mode 0700; a chmod failure raises
+    the same error. A POSIX directory that was not already 0700 and owned by
+    root or the current user loses the three secret files.
     """
     path = Path(path)
+    existed = path.is_dir()
     path.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        commands = state_dir_acl_commands(path)
-        _run_icacls(commands[0])
-        if any(path.iterdir()):
-            _run_icacls(commands[1])
-        _run_icacls(commands[2])
+        already = _windows_dir_locked(path) if existed else False
+        for step, argv in state_dir_lock_plan(path):
+            if step == "purge-sensitive":
+                _purge_sensitive(path, unconditional=not already)
+                continue
+            if step == "reset-children" and not any(path.iterdir()):
+                continue
+            _run_icacls(argv)
         return
+    already = _posix_dir_locked(path) if existed else False
     try:
         os.chmod(path, 0o700)
     except OSError as e:
         raise StateDirLockError(f"chmod state dir failed: {e}") from e
+    _purge_sensitive(path, unconditional=not already)
 
 
 def file_owner_sid(path: Path) -> str:
@@ -161,35 +334,43 @@ def file_owner_sid(path: Path) -> str:
     )
     if rc != 0:
         raise StateDirLockError(f"GetNamedSecurityInfo failed: {rc}")
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    pstr = ctypes.c_void_p()
     try:
-        out = ctypes.c_wchar_p()
-        if not adv.ConvertSidToStringSidW(owner, ctypes.byref(out)):
+        if not adv.ConvertSidToStringSidW(owner, ctypes.byref(pstr)):
             raise StateDirLockError("ConvertSidToStringSid failed")
-        return str(out.value or "")
+        return ctypes.wstring_at(pstr.value) if pstr.value else ""
     finally:
-        if sd:
+        if pstr.value:
+            kernel.LocalFree(pstr)
+        if sd.value:
             kernel.LocalFree(sd)
 
 
 def discard_untrusted_secret(path: Path, *, owner_sid: Optional[str] = None) -> bool:
     """Delete a pre-existing agent.json, machine_id, or room.key with an untrusted owner.
 
-    Windows trusts only SYSTEM (S-1-5-18) and Administrators (S-1-5-32-544).
-    This runs before ``icacls /setowner``, which would otherwise adopt a planted
-    file. ``restart_cmd`` in agent.json is executed with ``shell=True`` as SYSTEM.
-    Returns True when the file was removed. Raises if it cannot be removed.
+    Windows trusts SYSTEM (S-1-5-18), Administrators (S-1-5-32-544), and any
+    file that already sits in a locked state directory (protected DACL, trusted
+    owner). An explicit ``owner_sid`` always wins, so tests can still force a
+    delete. ``restart_cmd`` in agent.json is executed with ``shell=True`` as
+    SYSTEM. Returns True when the file was removed. Raises if it cannot be removed.
     """
     path = Path(path)
     if not path.is_file() or path.name not in _SENSITIVE_NAMES:
         return False
-    if os.name == "nt" or owner_sid is not None:
-        sid = file_owner_sid(path) if owner_sid is None else owner_sid
-        if sid in TRUSTED_OWNER_SIDS:
-            return False
+    if owner_sid is not None:
+        trusted = owner_sid in TRUSTED_OWNER_SIDS
+    elif os.name == "nt" and _windows_dir_locked(path.parent):
+        trusted = True
+    elif os.name == "nt":
+        trusted = file_owner_sid(path) in TRUSTED_OWNER_SIDS
     else:
         st = path.stat()
-        if st.st_uid in {0, os.getuid()} and (st.st_mode & 0o022) == 0:
-            return False
+        trusted = st.st_uid in {0, os.getuid()} and (st.st_mode & 0o022) == 0
+    if trusted:
+        return False
     path.unlink()
     if path.exists():
         raise StateDirLockError(f"could not delete untrusted {path.name}")
@@ -225,6 +406,7 @@ def node_machine_id(state_dir: Optional[Path] = None) -> str:
     try:
         lock_state_dir(sd)
         cache.write_text(mid, encoding="utf-8")
+        assign_owner_admins(cache)
     except StateDirLockError:
         raise
     except Exception:
@@ -241,5 +423,6 @@ def os_label() -> str:
 
 
 __all__ = ["default_state_dir", "host_name", "lock_state_dir", "node_machine_id", "os_label",
-           "state_dir_acl_command", "state_dir_acl_commands", "discard_untrusted_secret",
+           "state_dir_acl_command", "state_dir_acl_commands", "state_dir_lock_plan",
+           "assign_owner_admins", "discard_untrusted_secret",
            "StateDirLockError", "TRUSTED_OWNER_SIDS", "ENV_STATE_DIR"]

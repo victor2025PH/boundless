@@ -88,6 +88,32 @@ begin
   Result := GetController('') + '/console';
 end;
 
+procedure ExitProcess(uExitCode: Cardinal);
+  external 'ExitProcess@kernel32.dll stdcall';
+
+function PsLiteral(const S: String): String;
+var
+  i: Integer;
+begin
+  { PowerShell single-quoted literal: a ' inside the value is written as ''. }
+  Result := '';
+  for i := 1 to Length(S) do
+  begin
+    if S[i] = '''' then
+      Result := Result + ''''''
+    else
+      Result := Result + S[i];
+  end;
+end;
+
+procedure FailInstall(const Msg: String);
+begin
+  { RaiseException during ssPostInstall still exits 0 on a silent install. }
+  if WizardSilent then
+    ExitProcess(1);
+  RaiseException(Msg);
+end;
+
 procedure StopOurAgent();
 var
   ResultCode: Integer;
@@ -96,7 +122,7 @@ begin
   { End both tasks. Kill only the process whose image is this install path. }
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent Upgrade"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  exe := ExpandConstant('{app}\chatx-agent.exe');
+  exe := PsLiteral(ExpandConstant('{app}\chatx-agent.exe'));
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''chatx-agent.exe'' -and $_.ExecutablePath -eq ''' + exe + ''' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
@@ -116,43 +142,76 @@ begin
             and (ResultCode = 0);
 end;
 
-procedure DropUntrustedState(const Dir: String);
+function StateDirWasLocked(const Dir: String): Boolean;
 var
   ResultCode: Integer;
   cmd: String;
 begin
-  { Owner check BEFORE /setowner, which would adopt a planted agent.json. }
+  { Sampled before the directory-only setowner. Exit 0 locked, 1 not, 2 error. }
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
-    '$d=''' + Dir + ''';' +
+    '$ErrorActionPreference=''Stop''; try {' +
+    '$a=Get-Acl -LiteralPath ''' + PsLiteral(Dir) + ''';' +
+    '$s=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
+    'if(($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')){ exit 1 };' +
+    'if(-not $a.AreAccessRulesProtected){ exit 1 };' +
+    'if(-not @($a.Access)){ exit 1 };' +
+    'foreach($ace in $a.Access){' +
+    '$id=$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;' +
+    'if(($id -ne ''S-1-5-18'') -and ($id -ne ''S-1-5-32-544'')){ exit 1 }};' +
+    'exit 0 } catch { exit 2 }"';
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    FailInstall('Could not read the state directory ACL; install aborted before any secret was written');
+  if ResultCode = 2 then
+    FailInstall('Could not read the state directory ACL; install aborted before any secret was written');
+  Result := ResultCode = 0;
+end;
+
+procedure DropUntrustedState(const Dir: String; Force: Boolean);
+var
+  ResultCode: Integer;
+  cmd, flag: String;
+begin
+  { After the directory-only grant, before /setowner /T. A failed delete aborts. }
+  if Force then flag := '$true' else flag := '$false';
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    '$ErrorActionPreference=''Stop''; try {' +
+    '$d=''' + PsLiteral(Dir) + '''; $force=' + flag + ';' +
     'foreach($n in @(''agent.json'',''machine_id'',''room.key'')){' +
     '$p=Join-Path $d $n; if(Test-Path -LiteralPath $p){' +
+    '$drop=$force; if(-not $drop){' +
     '$s=(Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
-    'if(($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')){Remove-Item -LiteralPath $p -Force}}}"';
+    '$drop=($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')};' +
+    'if($drop){Remove-Item -LiteralPath $p -Force; if(Test-Path -LiteralPath $p){exit 1}}}}' +
+    '} catch { exit 1 }; exit 0"';
   if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode))
      or (ResultCode <> 0) then
-    RaiseException('Could not verify state file owners; install aborted before any secret was written');
+    FailInstall('Could not delete an untrusted state file; install aborted before any secret was written');
 end;
 
 procedure LockStateDir(const Dir: String);
 var
   FindRec: TFindRec;
-  hasChild: Boolean;
+  hasChild, wasLocked: Boolean;
 begin
-  { Owner Administrators, reset children, then SYSTEM + Administrators only. }
   if not DirExists(Dir) then
     if not ForceDirectories(Dir) then
-      RaiseException('Could not create the state directory');
-  DropUntrustedState(Dir);
+      FailInstall('Could not create the state directory');
+  wasLocked := StateDirWasLocked(Dir);
+  if not RunIcacls('"' + Dir + '" /setowner *S-1-5-32-544') then
+    FailInstall('icacls /setowner failed; install aborted before any secret was written');
+  if not RunIcacls('"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F') then
+    FailInstall('icacls grant failed; install aborted before any secret was written');
+  DropUntrustedState(Dir, not wasLocked);
   if not RunIcacls('"' + Dir + '" /setowner *S-1-5-32-544 /T /C') then
-    RaiseException('icacls /setowner failed; install aborted before any secret was written');
+    FailInstall('icacls /setowner failed; install aborted before any secret was written');
   hasChild := FindFirst(AddBackslash(Dir) + '*', FindRec);
   if hasChild then
     FindClose(FindRec);
   if hasChild then
     if not RunIcacls('"' + Dir + '\*" /reset /T /C') then
-      RaiseException('icacls /reset failed; install aborted before any secret was written');
+      FailInstall('icacls /reset failed; install aborted before any secret was written');
   if not RunIcacls('"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C') then
-    RaiseException('icacls grant failed; install aborted before any secret was written');
+    FailInstall('icacls grant failed; install aborted before any secret was written');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -176,8 +235,11 @@ begin
             '" -Controller "' + GetController('') + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     ResultCode := 1;
+  { bootstrap exits 3 when the state dir could not be locked. The service was not installed. }
+  if ResultCode = 3 then
+    FailInstall('Could not lock the fleet state directory. Install aborted before any secret was written.');
   if ResultCode <> 0 then
-    SuppressibleMsgBox('The agent files were copied, but enrollment did not finish. The service is installed and will retry. Open "Fleet node status" from the Start menu.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
   pair := '';
   if LoadStringFromFile(dir + '\pairing.txt', pair) then
     WizardForm.FinishedLabel.Caption :=
