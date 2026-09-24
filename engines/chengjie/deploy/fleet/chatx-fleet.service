@@ -16,8 +16,9 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/chatx-fleet/venv/bin/python main.py --config /etc/chatx-fleet/config.yaml
 Restart=always
 RestartSec=5
-# 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容；数据目录只此一处可写
-ReadWritePaths=/var/lib/chatx-fleet /opt/chatx-fleet/app/logs /opt/chatx-fleet/app/config
+# 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容。
+# /etc/chatx-fleet 是 770 且属主组为 chatx-fleet，服务要能在里面建文件（config.yaml 本身仍是 640）。
+ReadWritePaths=/var/lib/chatx-fleet /etc/chatx-fleet /opt/chatx-fleet/app/logs /opt/chatx-fleet/app/config
 NoNewPrivileges=true
 PrivateTmp=true
 

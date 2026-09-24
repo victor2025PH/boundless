@@ -26,6 +26,8 @@ fleet_control:
     # 发布清单（fleet_agent/build_agent.py 产出、publish_agent.ps1 上传）；填了就自动带出版本 / 下载地址 / sha256，上面留空即可
     manifest_url: "https://bd2026.cc/downloads/fleet/manifest.json"
     install_script_url: ""
+    setup_url: ""                            # 空 → manifest.setup_url，或与 chatx-agent.exe 同目录的 ChatXAgentSetup.exe
+    setup_sha256: ""
 
 # 主控不调用 LLM；保留占位让 --check 通过
 ai:

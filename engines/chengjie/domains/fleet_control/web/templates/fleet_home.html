@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>智控 · 多机部署与节点主控</title>
-<meta name="description" content="在任意 Windows 电脑上安装智聊 / 智拓，输入注册码即可接入主控：集中查看在线、账号健康与看板，集中下发任务。">
+<meta name="description" content="下载安装包，双击即可。装好的电脑会出现在主控后台的待批准列表里，管理员点批准后开始接收任务。">
 <style>
 :root{--bg:#0b1020;--card:#121a2f;--bd:#22304f;--t:#e8ecf5;--t2:#a5b0c8;--t3:#6f7a94;--acc:#4f8cff;--acc2:#7cf0c8;--warn:#ffb84d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -17,6 +17,7 @@ nav a{color:var(--t2);text-decoration:none;margin-left:1.2rem;font-size:.9rem}
 .btn{display:inline-block;padding:.75rem 1.4rem;border-radius:10px;font-weight:700;text-decoration:none;border:1px solid var(--bd);color:var(--t)}
 .btn.p{background:var(--acc);border-color:var(--acc);color:#fff}.btn.dis{opacity:.5;pointer-events:none}
 .meta{font-size:.8rem;color:var(--t3);margin-top:.6rem;word-break:break-all}
+.adv{font-size:.8rem;color:var(--t3)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin:2.5rem 0}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:1.2rem}
 .card h3{margin:0 0 .4rem;font-size:1rem}.card p{margin:0;color:var(--t2);font-size:.9rem}
@@ -36,42 +37,44 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
 
 <section class="hero">
   <h1>一台主控，管理每一台跑智聊 / 智拓的电脑</h1>
-  <p>在任意 Windows 电脑上安装智聊（ChatX）与智拓，输入一次注册码，它就会<strong>主动连到主控</strong>——不需要公网 IP、不用开端口。主控这边集中看在线状态、账号健康、玩家朋友看板，并向指定电脑下发任务。</p>
+  <p>在任意 Windows 电脑上<strong>下载安装包、双击、点「是」</strong>。电脑会主动连到主控——不需要公网 IP、不用开端口、不用输入注册码。装好后它出现在主控后台的「待批准」里，管理员点批准即可。</p>
   <div class="btns" id="download">
-    {% if download.installer_url %}
-    <a class="btn p" href="{{ download.installer_url }}">下载节点 Agent（chatx-agent.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
+    {% if download.setup_url %}
+    <a class="btn p" href="{{ download.setup_url }}">下载安装包（ChatXAgentSetup.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
+    {% elif download.installer_url %}
+    <a class="btn p" href="{{ download.installer_url }}">下载安装包{% if download.version %} v{{ download.version }}{% endif %}</a>
     {% else %}
     <a class="btn p dis" href="#">Windows 安装包（即将发布）</a>
     {% endif %}
-    {% if download.install_script_url %}<a class="btn" href="{{ download.install_script_url }}">一键安装脚本（Install-ChatXAgent.ps1）</a>{% endif %}
-    {% if download.agent_zip_url %}<a class="btn" href="{{ download.agent_zip_url }}">仅节点 Agent（zip）</a>{% endif %}
     {% if download.changelog_url %}<a class="btn" href="{{ download.changelog_url }}">更新日志</a>{% endif %}
   </div>
-  {% if download.sha256 %}<div class="meta">SHA-256：<code>{{ download.sha256 }}</code></div>{% endif %}
+  <p class="meta">双击安装，在权限确认里点「是」。装好后这台电脑会出现在主控后台的「待批准」里，管理员点批准即可。</p>
+  <p class="adv">高级：<a href="/fleet/advanced/Install-ChatXAgent.ps1">命令行脚本 Install-ChatXAgent.ps1</a>
+    {% if download.installer_url %} · <a href="{{ download.installer_url }}">仅节点程序</a>{% endif %}
+    {% if download.agent_zip_url %} · <a href="{{ download.agent_zip_url }}">zip</a>{% endif %}
+  </p>
+  {% if download.setup_sha256 %}<div class="meta">安装包 SHA-256：<code>{{ download.setup_sha256 }}</code></div>
+  {% elif download.sha256 %}<div class="meta">SHA-256：<code>{{ download.sha256 }}</code></div>{% endif %}
   <div class="meta">主控地址：<code>{{ public_url }}</code> · 协议版本 {{ proto_version }} · 支持 Windows 10 / 11 / Server 2019+</div>
 </section>
 
 <div class="grid">
   <div class="card"><h3>出站直连</h3><p>受控电脑只往外连主控（HTTPS 长轮询），家庭宽带 / 4G / 机房 NAT 后都能用，断线自动重连。</p></div>
   <div class="card"><h3>只传指标，不传聊天</h3><p>心跳只带版本、实例、账号数、健康状态、看板汇总数字；聊天原文永远留在本机。</p></div>
-  <div class="card"><h3>一机一钥</h3><p>注册码一次性、限时；注册后签发本机专属 node_key，主控随时可吊销或换钥。</p></div>
+  <div class="card"><h3>先批准，再发令</h3><p>公开安装包不会自动拿到控制权。管理员在后台点批准之后，这台电脑才有自己的 node_key，才能领任务。</p></div>
   <div class="card"><h3>任务幂等</h3><p>ping / 拉看板 / 账号健康 / 集中扫码 / STOP 触达 / 重启实例；每条带 TTL，重复送达不重复执行。</p></div>
 </div>
 
 <h2 id="install">三步接入</h2>
-<div class="step"><b>1</b><div><strong>在主控后台生成注册码</strong><br><span style="color:var(--t2)">登录 <a href="/fleet/console">/fleet/console</a> → 「生成注册码」（8 位数字，默认 60 分钟内有效，只能用一次）。</span></div></div>
-<div class="step"><b>2</b><div><strong>在受控电脑安装</strong><br><span style="color:var(--t2)">以管理员打开 PowerShell，一条命令完成下载校验、登记本机智聊实例、注册、开机自启（计划任务 SYSTEM）：</span>
-<pre>powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller {{ public_url }} -Code ＜注册码＞</pre>
-<span style="color:var(--t2)">已有源码环境的机器也可：</span>
-<pre>python -m src.fleet.agent enroll --controller {{ public_url }} --code ＜注册码＞
-python -m src.fleet.agent install-service</pre></div></div>
-<div class="step"><b>3</b><div><strong>回到主控后台</strong><br><span style="color:var(--t2)">几秒内节点变为「在线」，即可查看实例 / 账号状态并下发任务。重装系统后用新注册码重新接入，节点身份不变。</span></div></div>
+<div class="step"><b>1</b><div><strong>下载安装包，双击</strong><br><span style="color:var(--t2)">弹出权限确认时点「是」。安装程序会自己找到本机的智聊和幻颜；一台都没有也能装上，只上报这台电脑在线。</span></div></div>
+<div class="step"><b>2</b><div><strong>在主控后台点批准</strong><br><span style="color:var(--t2)">打开 <a href="/fleet/console">主控后台</a>，这台电脑在「待批准」里，能看到主机名、IP 和探测到的实例。点批准之后它才上线。</span></div></div>
+<div class="step"><b>3</b><div><strong>看一眼开始菜单</strong><br><span style="color:var(--t2)">「智控节点状态」能确认本机已经接入。整间机房要一次装很多台时，管理员先在后台生成「机房安装包」，每台电脑打开那个链接再双击 Install.cmd，会直接进指定分组，不用逐台批准。</span></div></div>
 
 <h2 id="security">安全与边界</h2>
 <div class="note">
 主控不会反向连接、不会远程桌面、不会读取聊天记录；能做的只有契约里列出的任务种类。
-每台电脑的 node_key 只存在本机 <code>%ProgramData%\ChatX\fleet</code>，主控只保存其哈希。
-所有请求经 HTTPS；注册码过期或用过即失效。完整契约见 <code>docs/FLEET_CONTROL_CONTRACT.md</code>。
+没被批准的电脑没有 node_key，领不了任务。node_key 只存在本机 <code>%ProgramData%\ChatX\fleet</code>，主控只保存其哈希。
+机房安装链接是密钥，不出现在这个公开下载页上。所有请求经 HTTPS。完整契约见 <code>docs/FLEET_CONTROL_CONTRACT.md</code>。
 </div>
 
 <footer>

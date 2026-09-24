@@ -59,6 +59,28 @@ class Admin:
             body["ttl_min"] = ttl_min
         return self.call("POST", "/api/fleet/enroll-codes", body)
 
+    def pending(self) -> List[Dict[str, Any]]:
+        res = self.call("GET", "/api/fleet/pending")
+        return list(res.get("pending") or [])
+
+    def approve(self, request_id: str, *, label: str = "", group: str = "") -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if label:
+            body["label"] = label
+        if group:
+            body["group_name"] = group
+        return self.call("POST", f"/api/fleet/pending/{request_id}/approve", body)
+
+    def reject(self, request_id: str) -> Dict[str, Any]:
+        return self.call("POST", f"/api/fleet/pending/{request_id}/reject", {})
+
+    def room_key(self, *, label: str = "", group: str = "", max_uses: int = 50, ttl_hours: int = 168) -> Dict[str, Any]:
+        return self.call("POST", "/api/fleet/room-keys", {
+            "label": label, "group_name": group, "max_uses": max_uses, "ttl_hours": ttl_hours})
+
+    def revoke_room_key(self, key_id: str) -> Dict[str, Any]:
+        return self.call("POST", f"/api/fleet/room-keys/{key_id}/revoke", {})
+
     def nodes(self, *, group: str = "", include_revoked: bool = False) -> List[Dict[str, Any]]:
         q = urllib.parse.urlencode({"group": group, "include_revoked": "true" if include_revoked else "false"})
         res = self.call("GET", f"/api/fleet/nodes?{q}")
@@ -101,10 +123,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--token", default=os.environ.get(ENV_TOKEN, ""), help="主控 web_admin.auth_token")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("new-code", help="发一张一次性注册码")
+    c = sub.add_parser("new-code", help="发一张一次性注册码（8 位，单次，短 TTL，失败限速）")
     c.add_argument("--label", default="")
     c.add_argument("--group", default="")
     c.add_argument("--ttl-min", type=int, default=0)
+
+    sub.add_parser("pending", help="列出待批准的电脑")
+    a = sub.add_parser("approve", help="批准一台待批准电脑")
+    a.add_argument("request_id")
+    a.add_argument("--label", default="")
+    a.add_argument("--group", default="")
+    rj = sub.add_parser("reject", help="拒绝一台待批准电脑")
+    rj.add_argument("request_id")
+    rk = sub.add_parser("room-key", help="签发机房安装链接（自动进组，用完或到期失效）")
+    rk.add_argument("--label", default="")
+    rk.add_argument("--group", default="")
+    rk.add_argument("--max-uses", type=int, default=50)
+    rk.add_argument("--ttl-hours", type=int, default=168)
+    rr = sub.add_parser("revoke-room", help="吊销一张机房密钥")
+    rr.add_argument("key_id")
 
     n = sub.add_parser("nodes")
     n.add_argument("--group", default="")
@@ -139,9 +176,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         _print(res)
         code = res.get("code") or (res.get("enroll_code") or {}).get("code")
         if code:
-            print(f"\n机房电脑安装命令：\n  Install-ChatXAgent.ps1 -Controller {args.controller} -Code {code}", file=sys.stderr)
+            print("\n公开安装包不需要这张码。需要当场接入时：\n"
+                  f"  Install-ChatXAgent.ps1 -Controller {args.controller} -Code {code}", file=sys.stderr)
+        return 0
+    if args.cmd == "pending":
+        rows = adm.pending()
+        for r in rows:
+            inst = ",".join(str(i.get("name") or "") for i in (r.get("instances") or []) if isinstance(i, dict)) or "-"
+            print(f"{str(r.get('request_id') or ''):28} {str(r.get('host_name') or '-'):16} "
+                  f"{str(r.get('client_ip') or '-'):16} {str(r.get('os') or '-'):16} inst={inst}")
+        print(f"待批准 {len(rows)} 台", file=sys.stderr)
+        return 0
+    if args.cmd == "approve":
+        res = adm.approve(args.request_id, label=args.label, group=args.group)
+        _print({k: v for k, v in res.items() if k != "node_key"})
+        return 0
+    if args.cmd == "reject":
+        _print(adm.reject(args.request_id))
+        return 0
+    if args.cmd == "room-key":
+        res = adm.room_key(label=args.label, group=args.group, max_uses=args.max_uses, ttl_hours=args.ttl_hours)
+        _print(res)
+        url = res.get("download_url") or ""
+        if url:
+            print("\n机房每台电脑打开这个链接（只显示这一次，不要发到公开下载页）：\n  " + url, file=sys.stderr)
+        return 0
+    if args.cmd == "revoke-room":
+        _print(adm.revoke_room_key(args.key_id))
         return 0
     if args.cmd == "nodes":
+        waiting = adm.pending()
+        if waiting:
+            print(f"待批准 {len(waiting)} 台（approve <request_id>）：", file=sys.stderr)
+            for r in waiting:
+                print(f"{'pending':14} {'pending':8} {str(r.get('group_name') or '-'):10} "
+                      f"{str(r.get('host_name') or r.get('request_id') or ''):24} ip={r.get('client_ip') or '-'}")
         rows = adm.nodes(group=args.group, include_revoked=args.all)
         for r in rows:
             print(f"{r.get('node_id','')[:14]:14} {str(r.get('state') or r.get('status') or ''):8} {str(r.get('group_name') or '-'):10} "

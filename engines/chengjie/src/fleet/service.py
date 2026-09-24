@@ -29,6 +29,7 @@ logger = logging.getLogger("fleet.service")
 TASK_NAME = "ChatX Fleet Agent"
 SYSTEMD_UNIT = "chatx-agent"
 RETRY_UNENROLLED_SEC = 30      # 未注册：等安装器 / 人工 enroll 写入 node_key
+PENDING_POLL_SEC = 15          # 已提交待批准：隔一会儿问主控是否已批准
 RETRY_REVOKED_SEC = 60         # 被吊销：等主控重新发码并 enroll
 CRASH_BACKOFF_MIN, CRASH_BACKOFF_MAX = 5.0, 300.0
 
@@ -158,6 +159,13 @@ def service_status(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str
     return {"installed": systemd_unit_path().exists(), "kind": "systemd", "state": (p.stdout or "").strip()}
 
 
+def _pending_request(cfg: object) -> str:
+    data = getattr(cfg, "data", None)
+    if isinstance(data, dict):
+        return str(data.get("pending_request_id") or "")
+    return ""
+
+
 def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] = None, *,
               sleep: Callable[[float], None] = time.sleep, max_rounds: int = 0) -> int:
     """监督循环：未注册 → 等；被吊销 → 等重新 enroll；异常 → 指数退避重启；``exit_requested`` → 退出（升级换文件）。
@@ -174,9 +182,15 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
         try:
             agent = make_agent()
             cfg = getattr(agent, "cfg")
+            if _pending_request(cfg) and hasattr(agent, "poll_enrollment"):
+                try:
+                    agent.poll_enrollment()
+                except Exception as e:
+                    logger.warning("[service] pending poll failed: %s", e)
             if not cfg.node_key:
-                logger.info("[service] 尚未注册，%ss 后重试", RETRY_UNENROLLED_SEC)
-                sleep(RETRY_UNENROLLED_SEC)
+                delay = PENDING_POLL_SEC if _pending_request(cfg) else RETRY_UNENROLLED_SEC
+                logger.info("[service] 尚未注册，%ss 后重试", delay)
+                sleep(delay)
                 continue
             agent.run_forever(stop)
             if getattr(agent, "exit_requested", False):

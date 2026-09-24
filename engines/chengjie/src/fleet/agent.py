@@ -43,6 +43,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .detect import detect_instances, is_loopback_url, sanitize_instances
 from .identity import default_state_dir, host_name, node_machine_id, os_label
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
@@ -54,7 +55,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.2.1"
+AGENT_VERSION = "0.3.0"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -152,10 +153,13 @@ class AgentConfig:
         return [i for i in v if isinstance(i, dict)] if isinstance(v, list) else []
 
     def add_instance(self, name: str, base_url: str, *, auth_token: str = "", config_path: str = "",
-                     domain: str = "", restart_cmd: str = "") -> None:
+                     domain: str = "", restart_cmd: str = "", role: str = "") -> None:
+        if not is_loopback_url(base_url):
+            raise AgentError("instance URL must be loopback (127.0.0.1 / localhost / ::1)")
         inst = [i for i in self.instances if i.get("name") != name]
         inst.append({"name": name, "base_url": base_url.rstrip("/"), "auth_token": auth_token,
-                     "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd})
+                     "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd,
+                     "role": role})
         self.data["instances"] = inst
 
 
@@ -189,6 +193,14 @@ def _grep_yaml_scalar(path: str, section: str, key: str) -> str:
     block = m.group(1) if m else text
     m2 = re.search(rf"^[ \t]*{re.escape(key)}:[ \t]*['\"]?([^'\"\n#]*)", block, re.M)
     return m2.group(1).strip() if m2 else ""
+
+
+def _health_only(inst: Dict[str, Any]) -> bool:
+    if str(inst.get("role") or "") == "health":
+        return True
+    if str(inst.get("name") or "") == "avatarhub":
+        return True
+    return _instance_domain(inst) == "avatar_hub"
 
 
 def _instance_domain(inst: Dict[str, Any]) -> str:
@@ -241,21 +253,94 @@ class NodeAgent:
             raise AgentError(f"{path} → HTTP {code}: {data.get('detail') or data}")
         return data
 
-    def enroll(self, code: str, *, controller_url: str = "") -> Dict[str, Any]:
-        if controller_url:
-            self.cfg.data["controller_url"] = controller_url.rstrip("/")
-        res = self._ctrl("POST", "/api/fleet/enroll", {
-            "code": str(code).strip(), "machine_id": self.machine_id, "host_name": host_name(),
-            "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
-            "os": os_label(), "meta": {"python": _platform.python_version()},
-        }, auth=False, bearer=str(code).strip())
-        if not res.get("ok") or not res.get("node_key"):
-            raise AgentError(f"注册失败: {res}")
-        self.cfg.data.update({"node_id": res["node_id"], "node_key": res["node_key"],
-                              "heartbeat_sec": int(res.get("heartbeat_sec") or DEFAULT_HEARTBEAT_SEC)})
+    def _detect_and_add(self) -> List[Dict[str, str]]:
+        found = detect_instances(search=(os.name == "nt"))
+        added = False
+        for inst in found:
+            try:
+                self.cfg.add_instance(str(inst.get("name") or "chatx"), str(inst.get("base_url") or ""),
+                                      config_path=str(inst.get("config_path") or ""),
+                                      domain=str(inst.get("domain") or ""), role=str(inst.get("role") or ""))
+                added = True
+            except AgentError:
+                continue
+        if added:
+            self.cfg.save()
+        return found
+
+    def _store_enrollment(self, res: Dict[str, Any]) -> None:
+        self.cfg.data.update({
+            "node_id": res["node_id"], "node_key": res["node_key"],
+            "heartbeat_sec": int(res.get("heartbeat_sec") or DEFAULT_HEARTBEAT_SEC),
+        })
+        self.cfg.data.pop("pending_request_id", None)
+        self.cfg.data.pop("enroll_rejected", None)
         self.cfg.save()
         self.revoked = False
-        return {"node_id": res["node_id"], "label": res.get("label"), "group_name": res.get("group_name")}
+
+    def enroll(self, code: str = "", *, controller_url: str = "", room_key: str = "",
+               detect: bool = False) -> Dict[str, Any]:
+        """有注册码或机房密钥则立刻拿到 node_key；都没有则登记为待批准（不抛错）。"""
+        if controller_url:
+            self.cfg.data["controller_url"] = controller_url.rstrip("/")
+        if detect:
+            self._detect_and_add()
+        code = str(code or "").strip()
+        room_key = str(room_key or "").strip()
+        body: Dict[str, Any] = {
+            "machine_id": self.machine_id, "host_name": host_name(),
+            "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
+            "os": os_label(), "instances": sanitize_instances(self.cfg.instances),
+            "meta": {"python": _platform.python_version()},
+        }
+        if room_key:
+            body["room_key"] = room_key
+            bearer = room_key
+        elif code:
+            body["code"] = code
+            bearer = code
+        else:
+            body["mode"] = "pending"
+            bearer = "pending"
+        res = self._ctrl("POST", "/api/fleet/enroll", body, auth=False, bearer=bearer)
+        if res.get("node_key"):
+            self._store_enrollment(res)
+            return {"node_id": res["node_id"], "label": res.get("label"), "group_name": res.get("group_name"),
+                    "status": "active"}
+        if res.get("ok") and res.get("request_id"):
+            self.cfg.data["pending_request_id"] = res["request_id"]
+            self.cfg.data.pop("enroll_rejected", None)
+            self.cfg.save()
+            return {"status": "pending", "request_id": res["request_id"], "expires_at": res.get("expires_at")}
+        raise AgentError("注册失败")
+
+    def poll_enrollment(self) -> Dict[str, Any]:
+        """待批准时问一次主控。过期则重新登记；被拒绝则停在本机，不再自动重试。"""
+        if self.cfg.node_key:
+            return {"ok": True, "status": "active", "node_id": self.cfg.node_id}
+        rid = str(self.cfg.data.get("pending_request_id") or "")
+        if not rid:
+            return {"ok": False, "status": "idle"}
+        res = self._ctrl("POST", "/api/fleet/enroll/poll",
+                         {"request_id": rid, "machine_id": self.machine_id}, auth=False, bearer=rid)
+        if res.get("node_key"):
+            self._store_enrollment(res)
+            return {"ok": True, "status": "active", "node_id": res.get("node_id"), "label": res.get("label"),
+                    "group_name": res.get("group_name")}
+        status = str(res.get("status") or "")
+        if status == "rejected":
+            self.cfg.data.pop("pending_request_id", None)
+            self.cfg.data["enroll_rejected"] = True
+            self.cfg.save()
+        elif status in {"expired", "unknown", "already_claimed"}:
+            self.cfg.data.pop("pending_request_id", None)
+            self.cfg.save()
+            if status == "expired" and self.cfg.controller_url:
+                try:
+                    return self.enroll("", controller_url=self.cfg.controller_url)
+                except AgentError as e:
+                    logger.warning("[agent] re-request after expiry failed: %s", e)
+        return {"ok": bool(res.get("ok")), "status": status or "pending"}
 
     def build_heartbeat(self) -> Dict[str, Any]:
         """本机摘要：实例是否活、账号数 / 生命周期分布、看板核心数字。**不含任何聊天内容。**"""
@@ -264,7 +349,23 @@ class NodeAgent:
         by_state: Dict[str, int] = {}
         overview_sum: Dict[str, Any] = {}
         for inst in self.cfg.instances:
-            entry = {"name": inst.get("name"), "domain": _instance_domain(inst), "up": False}
+            domain = _instance_domain(inst)
+            if _health_only(inst):
+                entry = {"name": inst.get("name"), "domain": "avatar_hub", "up": False, "role": "health"}
+                last_err = ""
+                for path in ("/health", "/api/health"):
+                    try:
+                        self._local(inst, "GET", path)
+                        entry["up"] = True
+                        last_err = ""
+                        break
+                    except Exception as e:
+                        last_err = str(e)
+                if last_err:
+                    errors.append(f"{inst.get('name')}: avatar health {last_err}")
+                instances.append(entry)
+                continue
+            entry = {"name": inst.get("name"), "domain": domain, "up": False}
             try:
                 fh = self._local(inst, "GET", "/api/accounts/fleet-health")
                 entry["up"] = True
@@ -331,9 +432,10 @@ class NodeAgent:
             raise AgentError(f"local {path} → HTTP {code}: {data.get('detail') or data}")
         return data
 
-    def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "") -> Optional[Dict[str, Any]]:
+    def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "",
+                       allow_health: bool = False) -> Optional[Dict[str, Any]]:
         want = str((task.get("target") or {}).get("instance") or (task.get("payload") or {}).get("instance") or "")
-        insts = self.cfg.instances
+        insts = self.cfg.instances if allow_health else [i for i in self.cfg.instances if not _health_only(i)]
         if want:
             for i in insts:
                 if i.get("name") == want:
@@ -406,7 +508,9 @@ class NodeAgent:
                 res = self._local(inst, "POST", "/api/player-care/commands", body)
                 return STATUS_DONE, {"instance": inst.get("name"), "command": res.get("command")}, "stop_enqueued"
             if kind == TASK_RESTART_INSTANCE:
-                inst = self._pick_instance(task)
+                inst = self._pick_instance(task, allow_health=True)
+                if inst is not None and _health_only(inst):
+                    return STATUS_REJECTED, {}, "health_only"
                 cmd = str((inst or {}).get("restart_cmd") or "")
                 if inst is None or not cmd:
                     return STATUS_REJECTED, {}, "no_restart_cmd"
@@ -556,9 +660,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--state-dir", default="", help="状态目录（默认 %%ProgramData%%\\ChatX\\fleet）")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    e = sub.add_parser("enroll", help="用注册码接入主控")
+    e = sub.add_parser("enroll", help="接入主控：注册码 / 机房密钥 / 无码待批准")
     e.add_argument("--controller", default="", help="主控地址，如 https://bd2026.cc/fleet")
-    e.add_argument("--code", required=True)
+    e.add_argument("--code", default="", help="一次性注册码；留空则待管理员批准")
+    e.add_argument("--room-key", default="", help="机房密钥（优先用 --room-key-file，避免留在命令行）")
+    e.add_argument("--room-key-file", default="", help="只含机房密钥的文件，读完即删")
+    e.add_argument("--detect", action="store_true", help="登记前探测本机智聊与幻颜；什么都没有也继续（纯心跳）")
     e.add_argument("--instance", action="append", default=[], help="本机实例 name=http://127.0.0.1:18797（可多次）")
     e.add_argument("--auth-token", default="", help="实例 web_admin.auth_token（或用 --config-path）")
     e.add_argument("--config-path", default="", help="实例 config.yaml 路径（运行时读 auth_token / domain）")
@@ -601,8 +708,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         for spec in args.instance:
             name, url = _parse_instance(spec)
             cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path)
-        res = agent.enroll(args.code, controller_url=args.controller or cfg.controller_url)
-        print(json.dumps({"ok": True, "machine_id": agent.machine_id, **res, "state_dir": str(cfg.state_dir)}, ensure_ascii=False))
+        room = str(args.room_key or "")
+        if args.room_key_file:
+            try:
+                room = Path(args.room_key_file).read_text(encoding="utf-8").strip()
+            except OSError as e:
+                print(f"room key file unreadable: {e}", file=sys.stderr)
+                return 1
+            try:
+                Path(args.room_key_file).unlink()
+            except OSError:
+                pass
+        try:
+            res = agent.enroll(args.code, controller_url=args.controller or cfg.controller_url,
+                               room_key=room, detect=bool(args.detect))
+        except AgentError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True, "machine_id": agent.machine_id, **res, "state_dir": str(cfg.state_dir)},
+                         ensure_ascii=False))
         return 0
     if args.cmd == "add-instance":
         name, url = _parse_instance(args.spec)
@@ -612,7 +736,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"ok": True, "instances": [i["name"] for i in cfg.instances]}, ensure_ascii=False))
         return 0
     if args.cmd == "status":
+        if cfg.node_key:
+            enrollment = "enrolled"
+        elif cfg.data.get("enroll_rejected"):
+            enrollment = "rejected"
+        elif cfg.data.get("pending_request_id"):
+            enrollment = "pending"
+        else:
+            enrollment = "none"
         print(json.dumps({"controller_url": cfg.controller_url, "node_id": cfg.node_id, "enrolled": bool(cfg.node_key),
+                          "enrollment": enrollment, "pending": enrollment == "pending",
                           "machine_id": agent.machine_id,
                           "instances": [{**i, "auth_token": "***" if i.get("auth_token") else ""} for i in cfg.instances],
                           "state_dir": str(cfg.state_dir),

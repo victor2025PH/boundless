@@ -64,7 +64,12 @@ command -v "$PYTHON" >/dev/null || fail "$PYTHON not found"
 log "1/8 user + dirs"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --home "$APP_ROOT" --shell /usr/sbin/nologin "$SVC_USER"
 mkdir -p "$APP_ROOT" "$CONF_DIR" "$DATA_DIR"
-chown "$SVC_USER:$SVC_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR" "$CONF_DIR"
+chown "$SVC_USER:$SVC_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
+# The service (group $SVC_USER) must be able to create files in /etc/chatx-fleet.
+# config.yaml itself stays root:group 640, created below.
+chown root:"$SVC_USER" "$CONF_DIR"
+chgrp "$SVC_USER" "$CONF_DIR"
+chmod 770 "$CONF_DIR"
 
 log "2/8 unpack -> app.new"
 rm -rf "$APP_ROOT/app.new"; mkdir -p "$APP_ROOT/app.new"

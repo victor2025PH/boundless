@@ -4,22 +4,26 @@
 #   1. get chatx-agent.exe   (-Exe local file, or download -DownloadUrl; sha256 checked when -Sha256 given
 #                             or when manifest.json sits next to the exe URL)
 #   2. copy to %ProgramFiles%\ChatX Agent\  (stops the running task first)
-#   3. register the local ChatX instance (auto-detects %APPDATA%\<app>\data\config\config.yaml,
-#                             default backend http://127.0.0.1:18799)
-#   4. enroll with the one-time code (-Code) -> node_key in %ProgramData%\ChatX\fleet\agent.json
+#   3. detect the local ChatX instance and AvatarHub (127.0.0.1:9000). If nothing is
+#      listening, still enroll as a heartbeat-only node.
+#   4. enroll: -Code (one-time code), -RoomKeyFile (room pack), or neither (pending approval)
 #   5. install-service       (scheduled task "ChatX Fleet Agent", ONSTART, SYSTEM) and start it
 #
 # Usage (run as Administrator):
-#   powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller https://bd2026.cc/fleet -Code ABCD-1234
+#   powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller https://bd2026.cc/fleet
+#   ... -Code 12345678                             # one-time code, skips the pending queue
+#   ... -RoomKeyFile .\room.key                    # room pack; the key is not echoed
 #   ... -Exe .\chatx-agent.exe                     # offline: use a local exe instead of downloading
 #   ... -NoEnroll                                  # upgrade only, keep existing enrollment
-#   ... -InstanceUrl http://127.0.0.1:18799 -AuthToken xxx   # override auto-detection
+#   ... -ConfigPath C:\path\config.local.yaml      # pin one ChatX instance instead of auto-detect
 #
 # ASCII only (PowerShell 5.1 + GBK console lesson). Never prints node_key / auth tokens.
 [CmdletBinding()]
 param(
   [string]$Controller = "https://bd2026.cc/fleet",
   [string]$Code = "",
+  [string]$RoomKey = "",
+  [string]$RoomKeyFile = "",
   [string]$Exe = "",
   [string]$DownloadUrl = "https://bd2026.cc/downloads/fleet/chatx-agent.exe",
   [string]$Sha256 = "",
@@ -44,7 +48,6 @@ function Native([string]$exe, [string[]]$a) {
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Fail "run this script as Administrator (scheduled task needs SYSTEM)" }
-if (-not $NoEnroll -and -not $Code) { Fail "-Code <enroll code> is required (or -NoEnroll for upgrade-only)" }
 
 # 1. obtain exe
 $tmp = Join-Path $env:TEMP ("chatx-agent-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".exe")
@@ -84,30 +87,46 @@ Say "installed $target"
 # 3. local instance
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+$detect = $false
 if (-not $NoInstance) {
-  if (-not $ConfigPath -and -not $AuthToken) {
-    $cands = @()
-    foreach ($root in @($env:APPDATA, (Join-Path $env:SystemDrive 'Users'))) {
-      if ($root) { $cands += Get-ChildItem -Path $root -Filter config.yaml -Recurse -Depth 5 -ErrorAction SilentlyContinue |
-                     Where-Object { $_.FullName -match '\\data\\config\\config\.yaml$' } }
-    }
-    $hit = $cands | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'web_admin' } | Select-Object -First 1
-    if ($hit) { $ConfigPath = $hit.FullName; Say "detected instance config $ConfigPath" }
-    else { Say "no local ChatX config found; instance registered without token (add later: chatx-agent add-instance)" }
+  if ($ConfigPath -or $AuthToken) {
+    $ia = @("--state-dir", $stateDir, "add-instance", "$InstanceName=$InstanceUrl")
+    if ($AuthToken) { $ia += @("--auth-token", $AuthToken) }
+    if ($ConfigPath) { $ia += @("--config-path", $ConfigPath) }
+    Native $target $ia | Out-Null
+    if ($NativeExit -ne 0) { Fail "add-instance failed" }
+    Say "instance $InstanceName -> $InstanceUrl"
+  } else {
+    $detect = $true
+    Say "will detect local ChatX and AvatarHub during enroll (none is ok)"
   }
-  $ia = @("--state-dir", $stateDir, "add-instance", "$InstanceName=$InstanceUrl")
-  if ($AuthToken) { $ia += @("--auth-token", $AuthToken) }
-  if ($ConfigPath) { $ia += @("--config-path", $ConfigPath) }
-  Native $target $ia | Out-Null
-  if ($NativeExit -ne 0) { Fail "add-instance failed" }
-  Say "instance $InstanceName -> $InstanceUrl"
 }
 
-# 4. enroll
+# 4. enroll. No -Code and no room key -> the PC shows up as pending until an admin approves it.
+#    Re-running on a machine that is already enrolled or already waiting does not mint another request.
 if (-not $NoEnroll) {
-  $out = Native $target @('--state-dir', $stateDir, 'enroll', '--controller', $Controller, '--code', $Code)
-  if ($NativeExit -ne 0) { Fail "enroll failed: $out" }
-  try { $j = $out | ConvertFrom-Json; Say "enrolled node_id=$($j.node_id) machine=$($j.machine_id)" } catch { Say "enrolled" }
+  $skipEnroll = $false
+  if (-not $Code -and -not $RoomKey -and -not $RoomKeyFile) {
+    $stRaw = Native $target @('--state-dir', $stateDir, 'status')
+    try {
+      $enr = [string](($stRaw | ConvertFrom-Json).enrollment)
+      if ($enr -eq 'enrolled' -or $enr -eq 'pending') { $skipEnroll = $true; Say "enrollment already $enr" }
+    } catch { }
+  }
+  if ($skipEnroll) { $enrollArgs = @() } else {
+  $enrollArgs = @('--state-dir', $stateDir, 'enroll', '--controller', $Controller)
+  if ($detect) { $enrollArgs += '--detect' }
+  if ($Code) { $enrollArgs += @('--code', $Code) }
+  if ($RoomKeyFile) { $enrollArgs += @('--room-key-file', $RoomKeyFile) }
+  elseif ($RoomKey) { $enrollArgs += @('--room-key', $RoomKey) }
+  $out = Native $target $enrollArgs
+  if ($NativeExit -ne 0) { Fail "enroll failed" }
+  try {
+    $j = $out | ConvertFrom-Json
+    if ($j.status -eq 'pending') { Say "installed; waiting for admin approval (console: pending)" }
+    else { Say "enrolled node_id=$($j.node_id) machine=$($j.machine_id)" }
+  } catch { Say "enroll finished" }
+  }
 }
 
 # 5. service
