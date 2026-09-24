@@ -100,71 +100,53 @@ _USERS_WRITE_MASK = (
     | 0x40000000  # GENERIC_WRITE
 )
 _SENSITIVE_NAMES = frozenset({"agent.json", "machine_id", "room.key"})
-_LOCK_SKIP_WHEN_LOCKED = frozenset({
-    "setowner-dir", "reset-dir", "grant-dir",
-    "setowner-tree", "reset-children", "grant-tree", "verify-tree",
-})
 
 
 def state_dir_acl_commands(path: Path) -> List[List[str]]:
-    """icacls steps for ``state_dir_lock_plan``.
+    """Directory-only icacls for a freshly created ``fleet``. No ``/T``.
 
-    ``/inheritance:r /grant:r`` does not remove explicit ACEs for other SIDs.
-    ``reset-dir`` is ``icacls <dir> /reset`` with no ``/T``, so the directory
-    itself loses those ACEs before the protected grant. ``/reset`` of children
-    still targets ``<dir>\\*``. An empty directory skips that child reset.
+    ``/reset`` clears inherited ACEs on that new directory. ``/inheritance:r
+    /grant:r`` then writes a protected SYSTEM + Administrators DACL. Nothing
+    here walks children.
     """
     folder = str(path)
-    grant = [
-        "icacls", folder, "/inheritance:r", "/grant:r",
-        "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
-    ]
     return [
         ["icacls", folder, "/setowner", "*S-1-5-32-544"],
         ["icacls", folder, "/reset"],
-        list(grant),
-        ["icacls", folder, "/setowner", "*S-1-5-32-544", "/T", "/C"],
-        ["icacls", str(path / "*"), "/reset", "/T", "/C"],
-        grant + ["/T", "/C"],
+        [
+            "icacls", folder, "/inheritance:r", "/grant:r",
+            "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+        ],
     ]
 
 
 def state_dir_lock_plan(path: Path) -> List[tuple]:
-    """Lock order. Verify the directory after the fresh DACL and again after ``/T``.
+    """Lock order for a fleet directory that is not already locked.
 
-    ``reset-dir`` clears explicit ACEs on the directory itself. ``verify-dir``
-    and ``verify-tree`` re-read the locked predicate and abort when it fails.
-    ``reject-child-reparse`` runs after that first check and before any ``/T``,
-    so a junction planted in the reset window is not followed. ``purge-sensitive``
-    runs only after ``verify-dir`` and only drops a child whose owner is not
-    SYSTEM or Administrators.
+    ``retire-legacy`` renames the old directory to ``fleet.legacy-<id>`` before
+    any icacls, so a junction is never the target of a grant. The icacls steps
+    apply only to the new empty directory. ``verify-dir`` checks the locked
+    predicate and that the new directory is not a reparse point.
     """
     commands = state_dir_acl_commands(path)
     return [
+        ("retire-legacy", []),
         ("setowner-dir", commands[0]),
         ("reset-dir", commands[1]),
         ("grant-dir", commands[2]),
         ("verify-dir", []),
-        ("reject-child-reparse", []),
-        ("purge-sensitive", []),
-        ("setowner-tree", commands[3]),
-        ("reset-children", commands[4]),
-        ("grant-tree", commands[5]),
-        ("verify-tree", []),
     ]
 
 
 def fleet_lock_steps(was_locked: bool) -> List[str]:
-    """Step names to run. An already-locked directory skips reset and grant.
+    """Step names to run. An already-locked directory is only re-checked.
 
-    Service ``cfg.save()`` calls this on every write. Repeating ``/reset`` would
-    open the inheritance window again, so a directory that already matches the
-    locked predicate only re-checks, rejects child reparse points, and drops
-    untrusted secret files.
+    There is no recursive grant. Service ``cfg.save()`` therefore cannot follow
+    a junction, and it does not rename a directory that is already locked.
     """
     names = [name for name, _argv in state_dir_lock_plan(Path("."))]
     if was_locked:
-        return [name for name in names if name not in _LOCK_SKIP_WHEN_LOCKED]
+        return ["verify-dir"]
     return names
 
 
@@ -194,7 +176,7 @@ def _users_rx_mask_ok(mask: int) -> bool:
 
 
 def state_dir_acl_command(path: Path) -> List[str]:
-    """The final inheritance-removed grant (last step of ``state_dir_lock_plan``)."""
+    """The directory-only protected grant. No ``/T``."""
     return state_dir_acl_commands(path)[-1]
 
 
@@ -349,52 +331,45 @@ def state_file_trusted(*, dir_locked: bool, owner_sid: str) -> bool:
 def _is_reparse(path: Path) -> bool:
     """True for a symlink or, on Windows, any reparse point (including a junction).
 
-    ``Path.is_symlink()`` does not see a Windows mount-point junction. False
-    when the path is absent.
+    ``Path.is_symlink()`` does not see a Windows mount-point junction. A missing
+    path is not a reparse point. Any other ``lstat`` error is treated as one,
+    so a check that cannot be completed is refused.
     """
     try:
-        if os.name == "nt":
-            return bool(os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-        return path.is_symlink()
-    except OSError:
+        st = os.lstat(path)
+    except FileNotFoundError:
         return False
-
-
-def _reject_child_reparse(path: Path) -> None:
-    """Abort when any child of ``path`` is a reparse point. Do not follow it."""
-    root = Path(path)
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        here = Path(dirpath)
-        kept = []
-        for name in dirnames:
-            child = here / name
-            if _is_reparse(child):
-                raise StateDirLockError("refusing a reparse point under the state directory")
-            kept.append(name)
-        dirnames[:] = kept
-        for name in filenames:
-            if _is_reparse(here / name):
-                raise StateDirLockError("refusing a reparse point under the state directory")
+    except OSError:
+        return True
+    if os.name == "nt":
+        return bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return stat.S_ISLNK(st.st_mode)
 
 
 def _require_state_parent(path: Path) -> None:
-    """Refuse a reparse point on the state dir or its parent, then lock the parent.
+    """Lock ``%ProgramData%\\ChatX`` before ``fleet`` is created or renamed.
 
-    On Windows ``%ProgramData%\\ChatX`` gets a protected DACL: SYSTEM and
-    Administrators full control, Users read and execute only. That DACL is
-    checked after the grant. An already-locked parent skips reset and grant
-    so the inheritance window is not opened again. No ``/T``: other children
-    of ChatX are left alone.
+    The parent gets a protected DACL: SYSTEM and Administrators full control,
+    Users read and execute only, then that predicate is checked again. An
+    already-locked parent skips reset and grant. A reparse point on the parent
+    is refused. A reparse point on ``fleet`` itself is left for
+    ``lock_state_dir`` to rename aside; it is not granted in place.
     """
     path = Path(path)
     parent = path.parent
-    if _is_reparse(parent) or _is_reparse(path):
+    if _is_reparse(parent):
         raise StateDirLockError("refusing a reparse point in the state directory path")
     if os.name != "nt":
         return
-    if not parent.exists():
+    try:
+        parent_exists = parent.lstat() is not None
+    except FileNotFoundError:
+        parent_exists = False
+    except OSError as e:
+        raise StateDirLockError("could not stat the parent directory") from e
+    if not parent_exists:
         parent.mkdir(parents=True, exist_ok=True)
-    if _is_reparse(parent) or _is_reparse(path):
+    if _is_reparse(parent):
         raise StateDirLockError("refusing a reparse point in the state directory path")
     already = _windows_dir_locked(parent, allow_users_rx=True)
     for step, argv in parent_dir_lock_plan(parent):
@@ -405,12 +380,18 @@ def _require_state_parent(path: Path) -> None:
         if already:
             continue
         _run_icacls(argv)
-    if _is_reparse(parent) or _is_reparse(path):
+    if _is_reparse(parent):
         raise StateDirLockError("refusing a reparse point in the state directory path")
 
 
 def _require_locked_dir(path: Path) -> None:
-    """Post-check used after the directory grant and again after the ``/T`` grant."""
+    """Post-check: not a reparse point, and the directory-only locked predicate holds.
+
+    The reparse check uses ``lstat`` and runs before the ACL read, which follows
+    a junction.
+    """
+    if _is_reparse(path):
+        raise StateDirLockError("refusing a reparse point in the state directory path")
     if os.name == "nt":
         ok = _windows_dir_locked(path)
     else:
@@ -422,9 +403,8 @@ def _require_locked_dir(path: Path) -> None:
 def _purge_sensitive(path: Path, *, unconditional: bool) -> None:
     """Delete agent.json, machine_id, and room.key. Raise if a delete does not stick.
 
-    On Windows ``unconditional`` is false: the directory DACL was just replaced
-    and verified, so a SYSTEM or Administrators owner is kept and any other
-    owner is removed. A failure aborts before ``/setowner /T`` can adopt the file.
+    On Windows ``unconditional`` is false: a SYSTEM or Administrators owner is
+    kept and any other owner is removed. A failure aborts.
     """
     for name in ("agent.json", "machine_id", "room.key"):
         child = path / name
@@ -443,65 +423,77 @@ def _purge_sensitive(path: Path, *, unconditional: bool) -> None:
 
 
 def state_dir_is_locked(path: Path) -> bool:
-    """Same locked predicate ``lock_state_dir`` samples before it resets anything."""
+    """Same locked predicate ``lock_state_dir`` samples before it renames anything."""
     path = Path(path)
+    if _is_reparse(path):
+        return False
     try:
-        if not path.is_dir() or _is_reparse(path):
-            return False
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
     except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode):
         return False
     if os.name == "nt":
         return _windows_dir_locked(path)
     return _posix_dir_locked(path)
 
 
+def _rename_legacy_fleet(path: Path) -> Path:
+    """Rename ``fleet`` to ``fleet.legacy-<id>``. ``os.rename`` does not follow a junction."""
+    legacy = path.with_name(f"{path.name}.legacy-{uuid.uuid4().hex}")
+    os.rename(path, legacy)
+    return legacy
+
+
 def lock_state_dir(path: Path) -> None:
     """Create the state dir and lock it down before machine_id / agent.json / room.key are written.
 
-    On Windows the parent is locked first. The fleet directory is sampled with
-    the locked predicate before any reset. When it is already locked, reset
-    and grant (including every ``/T``) are skipped. Otherwise the directory
-    owner is set, explicit ACEs are cleared with ``/reset`` (no ``/T``), and
-    a protected SYSTEM+Administrators DACL is written. That result is checked,
-    then every child is enumerated without following a reparse point. Children
-    whose owner is not SYSTEM or Administrators are deleted. Then ``/setowner
-    /T``, child reset, and grant ``/T`` run, and the locked check runs again.
-    On POSIX the directory is mode 0700. A symlink for the directory or its
-    parent is refused. A POSIX directory that was not already 0700 and owned
-    by root or the current user loses the three secret files.
+    The parent is locked first. If ``fleet`` is already locked, it is checked
+    again and otherwise left alone, including by a service ``save``. If it is
+    missing, unlocked, or a reparse point, it is not passed to icacls: an
+    existing directory is renamed to ``fleet.legacy-<id>`` and kept, then a new
+    empty directory is created. That new directory gets a directory-only
+    protected DACL (or mode 0700). There is no ``/T``. The check after the
+    grant refuses a reparse point and requires the locked predicate.
     """
     path = Path(path)
     _require_state_parent(path)
-    existed = path.is_dir() and not _is_reparse(path)
-    path.mkdir(parents=True, exist_ok=True)
-    if _is_reparse(path) or _is_reparse(path.parent):
+    if _is_reparse(path.parent):
         raise StateDirLockError("refusing a reparse point in the state directory path")
+    try:
+        os.lstat(path)
+        present = True
+    except FileNotFoundError:
+        present = False
+    except OSError as e:
+        raise StateDirLockError("could not stat the state directory") from e
+    was_locked = bool(present) and state_dir_is_locked(path)
+    if present and not was_locked:
+        _rename_legacy_fleet(path)
+        present = False
+    if not present:
+        path.mkdir()
     if os.name == "nt":
-        was_locked = _windows_dir_locked(path) if existed else False
         allowed = set(fleet_lock_steps(was_locked))
         for step, argv in state_dir_lock_plan(path):
-            if step not in allowed:
+            if step not in allowed or step == "retire-legacy":
                 continue
-            if step in ("verify-dir", "verify-tree"):
+            if step == "verify-dir":
                 _require_locked_dir(path)
                 continue
-            if step == "reject-child-reparse":
-                _reject_child_reparse(path)
-                continue
-            if step == "purge-sensitive":
-                _purge_sensitive(path, unconditional=False)
-                continue
-            if step == "reset-children" and not any(path.iterdir()):
-                continue
             _run_icacls(argv)
+        if was_locked:
+            _require_locked_dir(path)
         return
-    already = _posix_dir_locked(path) if existed else False
     try:
         os.chmod(path, 0o700)
     except OSError as e:
         raise StateDirLockError(f"chmod state dir failed: {e}") from e
     _require_locked_dir(path)
-    _purge_sensitive(path, unconditional=not already)
+    if was_locked:
+        _purge_sensitive(path, unconditional=False)
 
 
 def file_owner_sid(path: Path) -> str:

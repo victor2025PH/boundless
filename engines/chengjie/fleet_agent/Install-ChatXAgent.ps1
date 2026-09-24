@@ -45,8 +45,9 @@ function Native([string]$exe, [string[]]$a) {
   finally { $ErrorActionPreference = $old }
 }
 function Test-Reparse([string]$Path) {
-  $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-  if (-not $item) { return $false }
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  try { $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop }
+  catch { return $true }
   return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
 }
 function Test-ParentLocked([string]$Dir) {
@@ -67,37 +68,23 @@ function Test-ParentLocked([string]$Dir) {
 }
 function Assert-StateParent([string]$Dir) {
   $parent = Split-Path -Parent $Dir
-  if (Test-Reparse $parent) { Fail "parent is a reparse point" }
-  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
+  if (Test-Reparse $parent) { throw "parent is a reparse point" }
   if (-not (Test-Path -LiteralPath $parent)) {
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
   }
-  if (Test-Reparse $parent) { Fail "parent is a reparse point" }
-  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
+  if (Test-Reparse $parent) { throw "parent is a reparse point" }
   $parentLocked = $false
   try { $parentLocked = Test-ParentLocked $parent } catch { $parentLocked = $false }
   if (-not $parentLocked) {
     Native icacls.exe @($parent, '/setowner', '*S-1-5-32-544') | Out-Null
-    if ($NativeExit -ne 0) { Fail "parent setowner failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "parent setowner failed ($NativeExit)" }
     Native icacls.exe @($parent, '/reset') | Out-Null
-    if ($NativeExit -ne 0) { Fail "parent reset failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "parent reset failed ($NativeExit)" }
     Native icacls.exe @($parent, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-32-545:(OI)(CI)RX') | Out-Null
-    if ($NativeExit -ne 0) { Fail "parent grant failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "parent grant failed ($NativeExit)" }
   }
-  try { if (-not (Test-ParentLocked $parent)) { Fail "parent owner is not trusted" } } catch { Fail "could not read parent ACL" }
-  if (Test-Reparse $parent) { Fail "parent is a reparse point" }
-  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
-}
-function Assert-NoChildReparse([string]$Dir) {
-  $pending = New-Object System.Collections.Generic.Queue[string]
-  $pending.Enqueue($Dir)
-  while ($pending.Count -gt 0) {
-    $cur = $pending.Dequeue()
-    foreach ($c in @(Get-ChildItem -Force -LiteralPath $cur -ErrorAction SilentlyContinue)) {
-      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail "child reparse point" }
-      if ($c.PSIsContainer) { $pending.Enqueue($c.FullName) }
-    }
-  }
+  try { if (-not (Test-ParentLocked $parent)) { throw "parent owner is not trusted" } } catch { throw }
+  if (Test-Reparse $parent) { throw "parent is a reparse point" }
 }
 function Test-DirLocked([string]$Dir) {
   $acl = Get-Acl -LiteralPath $Dir
@@ -112,54 +99,29 @@ function Test-DirLocked([string]$Dir) {
   }
   return $true
 }
-function Remove-Sensitive([string]$Dir, [bool]$Force) {
-  foreach ($name in @('agent.json', 'machine_id', 'room.key')) {
-    $p = Join-Path $Dir $name
-    if (-not (Test-Path -LiteralPath $p)) { continue }
-    $drop = $Force
-    if (-not $drop) {
-      $sid = (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-      $drop = ($sid -ne 'S-1-5-18' -and $sid -ne 'S-1-5-32-544')
-    }
-    if ($drop) {
-      Remove-Item -LiteralPath $p -Force
-      if (Test-Path -LiteralPath $p) { throw "could not delete $name" }
-      Say "removed $name"
-    }
-  }
-}
 function Lock-StateDir([string]$Dir) {
   Assert-StateParent $Dir
-  $existed = Test-Path -LiteralPath $Dir
-  New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-  if (Test-Reparse $Dir) { Fail "state dir is a reparse point" }
+  $present = Test-Path -LiteralPath $Dir
   $wasLocked = $false
-  if ($existed) {
+  if ($present -and -not (Test-Reparse $Dir)) {
     try { $wasLocked = Test-DirLocked $Dir } catch { $wasLocked = $false }
   }
-  if (-not $wasLocked) {
+  if ($present -and -not $wasLocked) {
+    $legacy = (Split-Path -Leaf $Dir) + ".legacy-" + [guid]::NewGuid().ToString("N")
+    Rename-Item -LiteralPath $Dir -NewName $legacy
+    $present = $false
+  }
+  if (-not $present) {
+    New-Item -ItemType Directory -Path $Dir | Out-Null
     Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544') | Out-Null
-    if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "icacls setowner failed ($NativeExit)" }
     Native icacls.exe @($Dir, '/reset') | Out-Null
-    if ($NativeExit -ne 0) { Fail "icacls reset failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "icacls reset failed ($NativeExit)" }
     Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F') | Out-Null
-    if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
+    if ($NativeExit -ne 0) { throw "icacls grant failed ($NativeExit)" }
   }
-  try { if (-not (Test-DirLocked $Dir)) { Fail "state dir ACL is not locked" } } catch { Fail "could not read state dir ACL" }
-  Assert-NoChildReparse $Dir
-  try { Remove-Sensitive $Dir $false } catch { Fail "could not delete untrusted state" }
-  if (-not $wasLocked) {
-    Native icacls.exe @($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C') | Out-Null
-    if ($NativeExit -ne 0) { Fail "icacls setowner failed ($NativeExit)" }
-    $children = @(Get-ChildItem -Force -LiteralPath $Dir -ErrorAction SilentlyContinue)
-    if ($children.Count -gt 0) {
-      Native icacls.exe @((Join-Path $Dir '*'), '/reset', '/T', '/C') | Out-Null
-      if ($NativeExit -ne 0) { Fail "icacls reset failed ($NativeExit)" }
-    }
-    Native icacls.exe @($Dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/T', '/C') | Out-Null
-    if ($NativeExit -ne 0) { Fail "icacls grant failed ($NativeExit)" }
-    try { if (-not (Test-DirLocked $Dir)) { Fail "state dir ACL is not locked" } } catch { Fail "could not read state dir ACL" }
-  }
+  if (Test-Reparse $Dir) { throw "state dir is a reparse point" }
+  try { if (-not (Test-DirLocked $Dir)) { throw "state dir ACL is not locked" } } catch { throw }
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -200,28 +162,37 @@ if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destinatio
 Move-Item -LiteralPath $tmp -Destination $target -Force
 Say "installed $target"
 
-# 3. local instance. Snapshot before the lock drops an unlocked agent.json.
+# 3. local instance. Snapshot before an unlocked fleet is renamed aside.
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
 $snap = ""
-$preLocked = $false
-if (Test-Path -LiteralPath $stateDir) {
+if ((Test-Path -LiteralPath $stateDir) -and -not (Test-Reparse $stateDir)) {
+  $preLocked = $false
   try { $preLocked = Test-DirLocked $stateDir } catch { $preLocked = $false }
-}
-$agentJson = Join-Path $stateDir "agent.json"
-if ((-not $preLocked) -and (Test-Path -LiteralPath $agentJson)) {
-  $snap = Join-Path $env:TEMP ("chatx-agent-migrate-" + [guid]::NewGuid().ToString("N") + ".json")
-  Copy-Item -LiteralPath $agentJson -Destination $snap -Force
-}
-Lock-StateDir $stateDir
-if ($snap) {
-  Native $target @('--state-dir', $stateDir, 'migrate-legacy', '--controller', $Controller, '--snapshot', $snap) | Out-Null
-  Remove-Item -LiteralPath $snap -Force -ErrorAction SilentlyContinue
-  if ($NativeExit -ne 0) { Fail "migrate failed" }
-  if (-not $NoInstance) {
-    Native $target @('--state-dir', $stateDir, 'detect') | Out-Null
-    if ($NativeExit -ne 0) { Fail "detect failed" }
+  $agentJson = Join-Path $stateDir "agent.json"
+  if ((-not $preLocked) -and (Test-Path -LiteralPath $agentJson) -and -not (Test-Reparse $agentJson)) {
+    $snap = Join-Path $env:TEMP ("chatx-agent-migrate-" + [guid]::NewGuid().ToString("N") + ".json")
+    Copy-Item -LiteralPath $agentJson -Destination $snap -Force
   }
 }
+$lockFailed = $false
+$lockError = ""
+try {
+  Lock-StateDir $stateDir
+  if ($snap) {
+    Native $target @('--state-dir', $stateDir, 'migrate-legacy', '--controller', $Controller, '--snapshot', $snap) | Out-Null
+    if ($NativeExit -ne 0) { throw "migrate failed" }
+    if (-not $NoInstance) {
+      Native $target @('--state-dir', $stateDir, 'detect') | Out-Null
+      if ($NativeExit -ne 0) { throw "detect failed" }
+    }
+  }
+} catch {
+  $lockFailed = $true
+  $lockError = "$_"
+} finally {
+  if ($snap) { Remove-Item -LiteralPath $snap -Force -ErrorAction SilentlyContinue }
+}
+if ($lockFailed) { Fail $lockError }
 $detect = $false
 if (-not $NoInstance) {
   if ($ConfigPath -or $AuthToken) {

@@ -18,7 +18,9 @@ from domains.fleet_control.web.routes import (
     RedactFleetDownloadFilter, _client_ip, redact_download_path, register_routes,
 )
 from src.fleet import agent as agent_mod
-from src.fleet.agent import AgentConfig, NodeAgent, migrate_legacy_agent
+from src.fleet.agent import (
+    DEFAULT_HEARTBEAT_SEC, AgentConfig, NodeAgent, migrate_legacy_agent, migrated_agent_data,
+)
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
 from src.fleet.identity import (
     StateDirLockError, discard_untrusted_secret, fleet_lock_steps, lock_state_dir,
@@ -359,41 +361,35 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert "/IM chatx-agent.exe" not in iss
     assert "PsLiteral" in iss and "WizardSilent" in iss and "ExitProcess" in iss
     assert "$ErrorActionPreference=''Stop''" in iss
-    assert "if(Test-Path -LiteralPath $p){exit 1}" in iss
     assert "service is installed and will retry" not in iss
-    dir_only = iss.index("/setowner *S-1-5-32-544')")
-    reset_dir = iss.index("/reset')")
-    purge = iss.index("DropUntrustedState(Dir")
-    tree = iss.index("/setowner *S-1-5-32-544 /T /C")
-    assert dir_only < reset_dir < purge < tree
-    assert iss.index("if not StateDirWasLocked(Dir)") < purge
-    assert iss.index("if not StateDirWasLocked(Dir)", tree) > tree
+    assert "/T /C" not in iss and "Get-ChildItem" not in iss
+    assert ".legacy-" in iss
+    lock_body = iss.split("procedure LockStateDir")[1].split("procedure CurStepChanged")[0]
+    assert lock_body.index("AssertStateParent(Dir)") < lock_body.index("RetireUnlockedFleet(Dir)")
+    assert lock_body.index("RetireUnlockedFleet(Dir)") < lock_body.index("ForceDirectories(Dir)")
+    assert lock_body.index("/setowner *S-1-5-32-544')") < lock_body.index("/reset')")
+    grant = lock_body.index("/inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F')")
+    assert grant < lock_body.index("DirIsReparse(Dir)") < lock_body.index("StateDirWasLocked(Dir)")
     assert "ReparsePoint" in iss and "AssertStateParent(Dir)" in iss
     assert "S-1-5-32-545:(OI)(CI)RX" in iss
-    lock_body = iss.split("procedure LockStateDir")[1].split("procedure CurStepChanged")[0]
-    assert lock_body.index("AssertStateParent(Dir)") < lock_body.index("ForceDirectories(Dir)")
-    assert lock_body.index("if not wasLocked then") < lock_body.index("/reset')")
-    assert lock_body.index("AssertNoChildReparse(Dir)") < lock_body.index("/setowner *S-1-5-32-544 /T /C")
     step = iss.split("procedure CurStepChanged")[1]
     assert "ForceDirectories" not in step
-    assert "-Snapshot" in step
+    assert "-Snapshot" in step and "finally" in step
     assert step.index("ResultCode <> 0") < step.index("WizardSilent") < step.index("ExitProcess(1)")
     bootstrap = (ENGINE / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
     assert "--detect" in bootstrap and "room.key" in bootstrap
     assert "S-1-5-18" in bootstrap and "S-1-5-32-544" in bootstrap
     assert "/setowner" in bootstrap and bootstrap.index("/setowner") < bootstrap.index("enroll', '--controller'")
     assert "NativeExit" in bootstrap and "exit 3" in bootstrap
-    assert "if (Test-Path -LiteralPath $p)" in bootstrap
     assert "ReparsePoint" in bootstrap and "parent owner is not trusted" in bootstrap
+    assert "/T" not in bootstrap and "Get-ChildItem" not in bootstrap and "Assert-NoChildReparse" not in bootstrap
+    assert ".legacy-" in bootstrap and "finally" in bootstrap
     b_owner = bootstrap.index("@($Dir, '/setowner', '*S-1-5-32-544')")
     b_reset = bootstrap.index("@($Dir, '/reset')")
-    b_verify = bootstrap.index("if (-not (Test-DirLocked $Dir))")
-    b_purge = bootstrap.index("Remove-Sensitive $Dir")
-    b_tree = bootstrap.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
-    assert bootstrap.index("Assert-StateParent $Dir") < b_owner < b_reset < b_verify < b_purge < b_tree
-    assert bootstrap.index("if (-not (Test-DirLocked $Dir))", b_tree) > b_tree
-    assert bootstrap.index("$wasLocked") < b_reset
-    assert bootstrap.index("Assert-NoChildReparse $Dir") < b_tree
+    b_grant = bootstrap.index("@($Dir, '/inheritance:r', '/grant:r'")
+    assert bootstrap.index("Assert-StateParent $Dir") < bootstrap.index("Rename-Item -LiteralPath $Dir") < b_owner
+    assert b_owner < b_reset < b_grant
+    assert b_grant < bootstrap.index("Test-Reparse $Dir", b_grant) < bootstrap.index("Test-DirLocked $Dir", b_grant)
     assert "S-1-5-32-545:(OI)(CI)RX" in bootstrap and "Test-ParentLocked" in bootstrap
     assert "migrate-legacy" in bootstrap and "--snapshot" in bootstrap
     assert bootstrap.index("migrate-legacy") < bootstrap.index("enroll', '--controller'")
@@ -404,24 +400,22 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert "instances are cleared" in ps1 and "restart_cmd must be set again" in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
-    assert "if (Test-Path -LiteralPath $p)" in ps1
     assert "ReparsePoint" in ps1 and "parent owner is not trusted" in ps1
+    assert "'/T'" not in ps1 and "Get-ChildItem" not in ps1 and "Assert-NoChildReparse" not in ps1
+    assert ".legacy-" in ps1 and "finally" in ps1
     p_owner = ps1.index("@($Dir, '/setowner', '*S-1-5-32-544')")
     p_reset = ps1.index("@($Dir, '/reset')")
-    p_verify = ps1.index("if (-not (Test-DirLocked $Dir))")
-    p_purge = ps1.index("Remove-Sensitive $Dir")
-    p_tree = ps1.index("@($Dir, '/setowner', '*S-1-5-32-544', '/T', '/C')")
-    assert ps1.index("Assert-StateParent $Dir") < p_owner < p_reset < p_verify < p_purge < p_tree
-    assert ps1.index("if (-not (Test-DirLocked $Dir))", p_tree) > p_tree
-    assert ps1.index("$wasLocked") < p_reset
-    assert ps1.index("Assert-NoChildReparse $Dir") < p_tree
+    p_grant = ps1.index("@($Dir, '/inheritance:r', '/grant:r'")
+    assert ps1.index("Assert-StateParent $Dir") < ps1.index("Rename-Item -LiteralPath $Dir") < p_owner
+    assert p_owner < p_reset < p_grant
+    assert p_grant < ps1.index("Test-Reparse $Dir", p_grant) < ps1.index("Test-DirLocked $Dir", p_grant)
     assert "S-1-5-32-545:(OI)(CI)RX" in ps1 and "Test-ParentLocked" in ps1
     assert "migrate-legacy" in ps1 and "--snapshot" in ps1
     folder = Path(r"C:\ProgramData\ChatX\fleet")
     acl = state_dir_acl_command(folder)
     assert acl[:3] == ["icacls", str(folder), "/inheritance:r"]
     assert "*S-1-5-18:(OI)(CI)F" in acl and "*S-1-5-32-544:(OI)(CI)F" in acl
-    assert "/T" in acl
+    assert "/T" not in acl
 
 
 def test_pending_secret_separates_requests_and_approve_must_confirm_rotate(st):
@@ -541,25 +535,18 @@ def test_state_dir_acl_command_order_closes_the_toctou_window():
     folder = Path(r"C:\ProgramData\ChatX\fleet")
     plan = state_dir_lock_plan(folder)
     names = [name for name, _argv in plan]
-    assert names == [
-        "setowner-dir", "reset-dir", "grant-dir", "verify-dir", "reject-child-reparse",
-        "purge-sensitive", "setowner-tree", "reset-children", "grant-tree", "verify-tree",
-    ]
+    assert names == ["retire-legacy", "setowner-dir", "reset-dir", "grant-dir", "verify-dir"]
     by_name = dict(plan)
     assert by_name["setowner-dir"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544"]
     assert by_name["reset-dir"] == ["icacls", str(folder), "/reset"]
     assert "/T" not in by_name["reset-dir"] and "*" not in by_name["reset-dir"][1]
     assert by_name["grant-dir"][2:4] == ["/inheritance:r", "/grant:r"]
     assert "/T" not in by_name["grant-dir"]
-    assert by_name["verify-dir"] == [] and by_name["verify-tree"] == []
+    assert by_name["verify-dir"] == []
+    assert names.index("retire-legacy") < names.index("setowner-dir") < names.index("reset-dir")
     assert names.index("reset-dir") < names.index("grant-dir") < names.index("verify-dir")
-    assert names.index("verify-dir") < names.index("reject-child-reparse") < names.index("purge-sensitive")
-    assert names.index("reject-child-reparse") < names.index("setowner-tree")
-    assert names.index("grant-tree") < names.index("verify-tree")
+    assert fleet_lock_steps(True) == ["verify-dir"]
     assert "reset-dir" not in fleet_lock_steps(True)
-    assert "grant-dir" not in fleet_lock_steps(True)
-    assert "grant-tree" not in fleet_lock_steps(True)
-    assert "reject-child-reparse" in fleet_lock_steps(True)
     parent = parent_dir_lock_plan(folder.parent)
     parent_names = [name for name, _argv in parent]
     assert parent_names == ["parent-setowner", "parent-reset", "parent-grant", "parent-verify"]
@@ -567,11 +554,10 @@ def test_state_dir_acl_command_order_closes_the_toctou_window():
     assert "/T" not in parent_by["parent-reset"] and "/T" not in parent_by["parent-grant"]
     assert "*S-1-5-32-545:(OI)(CI)RX" in parent_by["parent-grant"]
     assert "*S-1-5-18:(OI)(CI)F" in parent_by["parent-grant"]
-    assert by_name["setowner-tree"] == ["icacls", str(folder), "/setowner", "*S-1-5-32-544", "/T", "/C"]
-    assert by_name["reset-children"][2:5] == ["/reset", "/T", "/C"]
-    assert by_name["grant-tree"][:3] == ["icacls", str(folder), "/inheritance:r"]
-    assert by_name["grant-tree"][-2:] == ["/T", "/C"]
-    assert state_dir_acl_command(folder) == by_name["grant-tree"]
+    for _name, argv in list(plan) + list(parent):
+        assert "/T" not in argv
+    assert state_dir_acl_command(folder) == by_name["grant-dir"]
+    assert "os.walk" not in Path(state_dir_lock_plan.__code__.co_filename).read_text(encoding="utf-8").split("def state_dir_is_locked")[0]
     assert state_file_trusted(dir_locked=False, owner_sid="S-1-5-32-544") is False
     assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-544") is True
     assert state_file_trusted(dir_locked=True, owner_sid="S-1-5-32-545") is False
@@ -597,19 +583,60 @@ def test_windows_reparse_uses_file_attributes(monkeypatch):
     assert ident._is_reparse(Path(r"C:\ProgramData\ChatX\fleet")) is False
 
 
-def test_child_reparse_aborts_before_any_tree_grant(tmp_path):
+def test_unlocked_fleet_is_renamed_before_a_clean_dir_is_created(tmp_path):
     from src.fleet import identity as ident
 
     fleet = tmp_path / "fleet"
     fleet.mkdir()
-    (fleet / "logs").symlink_to(tmp_path, target_is_directory=True)
+    fleet.chmod(0o755)
+    (fleet / "agent.json").write_text('{"restart_cmd":"calc"}', encoding="utf-8")
+    (fleet / "logs").mkdir()
+    lock_state_dir(fleet)
+    assert fleet.is_dir() and not fleet.is_symlink()
+    assert fleet.stat().st_mode & 0o777 == 0o700
+    assert list(fleet.iterdir()) == []
+    legacies = list(tmp_path.glob("fleet.legacy-*"))
+    assert len(legacies) == 1
+    assert "restart_cmd" in (legacies[0] / "agent.json").read_text(encoding="utf-8")
+    assert (legacies[0] / "logs").is_dir()
+    lock_state_dir(fleet)
+    assert len(list(tmp_path.glob("fleet.legacy-*"))) == 1
+    src = Path(ident.lock_state_dir.__code__.co_filename).read_text(encoding="utf-8")
+    assert "os.walk" not in src and "_reject_child_reparse" not in src
+
+
+def test_reparse_fleet_is_renamed_without_following(tmp_path):
+    from src.fleet import identity as ident
+
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "secret.txt").write_text("keep", encoding="utf-8")
+    fleet = tmp_path / "fleet"
+    fleet.symlink_to(target, target_is_directory=True)
+    lock_state_dir(fleet)
+    assert fleet.is_dir() and not fleet.is_symlink()
+    assert not (fleet / "secret.txt").exists()
+    assert (target / "secret.txt").read_text(encoding="utf-8") == "keep"
+    legacies = list(tmp_path.glob("fleet.legacy-*"))
+    assert len(legacies) == 1 and legacies[0].is_symlink()
     with pytest.raises(StateDirLockError):
-        ident._reject_child_reparse(fleet)
-    names = fleet_lock_steps(False)
-    assert names.index("reject-child-reparse") < names.index("setowner-tree")
-    first_tree = next(i for i, name in enumerate(names) if "/T" in " ".join(
-        dict(state_dir_lock_plan(fleet)).get(name) or []))
-    assert names.index("reject-child-reparse") < first_tree
+        ident._require_locked_dir(legacies[0])
+
+
+def test_reparse_check_fails_closed_when_lstat_errors(monkeypatch):
+    from src.fleet import identity as ident
+
+    def denied(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(ident.os, "lstat", denied)
+    assert ident._is_reparse(Path("/no/such/fleet")) is True
+
+    def missing(_path):
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr(ident.os, "lstat", missing)
+    assert ident._is_reparse(Path("/no/such/fleet")) is False
 
 
 def test_locked_dir_skips_reset_and_parent_is_post_checked(tmp_path, monkeypatch):
@@ -662,7 +689,9 @@ def test_migrate_legacy_keeps_only_identity_fields(tmp_path):
             "config_path": "C:/secret.yaml",
         }],
     }
-    (fleet / "agent.json").write_text(json.dumps(source), encoding="utf-8")
+    planted = fleet / "agent.json"
+    planted.write_text(json.dumps(source), encoding="utf-8")
+    planted.chmod(0o600)
     out = migrate_legacy_agent(fleet, "https://ctl.test/fleet", source)
     assert out["node_id"] == "n1"
     assert out["node_key"] == "nk_keep"
@@ -681,6 +710,67 @@ def test_migrate_legacy_keeps_only_identity_fields(tmp_path):
     assert "auth_token" not in blob
     assert "config_path" not in blob
     assert fleet.stat().st_mode & 0o777 == 0o700
+    legacies = list(fleet.parent.glob("fleet.legacy-*"))
+    assert len(legacies) == 1
+    old_blob = (legacies[0] / "agent.json").read_text(encoding="utf-8")
+    assert "restart_cmd" in old_blob
+    assert not any("restart_cmd" in p.read_text(encoding="utf-8") for p in fleet.rglob("*.json"))
+
+
+def test_migrated_heartbeat_keeps_only_an_int_in_range():
+    kept = migrated_agent_data("https://ctl.test/fleet", {"node_id": "n1", "heartbeat_sec": 15})
+    assert kept["heartbeat_sec"] == 15
+    for bad in ("15", True, False, 1, 0, 3601, 10**9, None, 15.0):
+        got = migrated_agent_data("https://ctl.test/fleet", {"node_id": "n1", "heartbeat_sec": bad})
+        assert got["heartbeat_sec"] == DEFAULT_HEARTBEAT_SEC
+
+
+def test_migrate_snapshot_is_removed_and_the_old_file_leaves_fleet(tmp_path, capsys):
+    fleet = tmp_path / "fleet"
+    fleet.mkdir()
+    fleet.chmod(0o755)
+    old = {
+        "node_id": "n1",
+        "node_key": "nk_keep",
+        "heartbeat_sec": 15,
+        "instances": [{"restart_cmd": "calc"}],
+    }
+    planted = fleet / "agent.json"
+    planted.write_text(json.dumps(old), encoding="utf-8")
+    planted.chmod(0o600)
+    snap = tmp_path / "snap.json"
+    snap.write_text(json.dumps(old), encoding="utf-8")
+    rc = agent_mod.main([
+        "--state-dir", str(fleet), "migrate-legacy",
+        "--controller", "https://ctl.test/fleet", "--snapshot", str(snap),
+    ])
+    assert rc == 0
+    assert not snap.exists()
+    text = capsys.readouterr().out
+    assert '"ok": true' in text and "nk_keep" not in text
+    saved = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert saved["instances"] == [] and "restart_cmd" not in json.dumps(saved)
+    legacies = list(tmp_path.glob("fleet.legacy-*"))
+    assert len(legacies) == 1
+    assert "restart_cmd" in (legacies[0] / "agent.json").read_text(encoding="utf-8")
+
+
+def test_migrate_snapshot_is_removed_when_lock_fails(tmp_path, monkeypatch, capsys):
+    snap = tmp_path / "snap.json"
+    snap.write_text(json.dumps({"node_id": "n1", "node_key": "nk_keep"}), encoding="utf-8")
+
+    def boom(_path):
+        raise StateDirLockError("denied")
+
+    monkeypatch.setattr(agent_mod, "lock_state_dir", boom)
+    rc = agent_mod.main([
+        "--state-dir", str(tmp_path / "fleet"), "migrate-legacy",
+        "--controller", "https://ctl.test/fleet", "--snapshot", str(snap),
+    ])
+    assert rc == 1
+    assert not snap.exists()
+    err = capsys.readouterr().err
+    assert "nk_keep" not in err and "Traceback" not in err
 
 
 def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):

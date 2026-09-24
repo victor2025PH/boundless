@@ -62,6 +62,9 @@ Name: "{autoprograms}\Fleet node status"; Filename: "{app}\Open-Status.cmd"
 Name: "{autoprograms}\Fleet console"; Filename: "{code:GetConsoleUrl}"
 
 [Code]
+var
+  SnapshotToDelete: String;
+
 function CmdParam(const Prefix: String): String;
 var
   i: Integer;
@@ -108,6 +111,10 @@ end;
 
 procedure FailInstall(const Msg: String);
 begin
+  { A snapshot in TEMP holds node_key. Delete it before any exit, including ExitProcess. }
+  if SnapshotToDelete <> '' then
+    DeleteFile(SnapshotToDelete);
+  SnapshotToDelete := '';
   { RaiseException during ssPostInstall still exits 0 on a silent install. }
   if WizardSilent then
     ExitProcess(1);
@@ -166,28 +173,6 @@ begin
   Result := ResultCode = 0;
 end;
 
-procedure DropUntrustedState(const Dir: String; Force: Boolean);
-var
-  ResultCode: Integer;
-  cmd, flag: String;
-begin
-  { After the directory-only grant, before /setowner /T. A failed delete aborts. }
-  if Force then flag := '$true' else flag := '$false';
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
-    '$ErrorActionPreference=''Stop''; try {' +
-    '$d=''' + PsLiteral(Dir) + '''; $force=' + flag + ';' +
-    'foreach($n in @(''agent.json'',''machine_id'',''room.key'')){' +
-    '$p=Join-Path $d $n; if(Test-Path -LiteralPath $p){' +
-    '$drop=$force; if(-not $drop){' +
-    '$s=(Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
-    '$drop=($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')};' +
-    'if($drop){Remove-Item -LiteralPath $p -Force; if(Test-Path -LiteralPath $p){exit 1}}}}' +
-    '} catch { exit 1 }; exit 0"';
-  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode))
-     or (ResultCode <> 0) then
-    FailInstall('Could not delete an untrusted state file; install aborted before any secret was written');
-end;
-
 procedure AssertStateParent(const Dir: String);
 var
   ResultCode: Integer;
@@ -198,11 +183,12 @@ begin
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
     '$ErrorActionPreference=''Stop''; try {' +
     '$d=''' + PsLiteral(Dir) + '''; $p=Split-Path -Parent $d;' +
-    'function Reparse([string]$x){ $i=Get-Item -LiteralPath $x -Force -ErrorAction SilentlyContinue;' +
-    'if(-not $i){ return $false }; return [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint) };' +
-    'if(Reparse $p){ exit 4 }; if(Reparse $d){ exit 4 };' +
+    'function Reparse([string]$x){ if(-not (Test-Path -LiteralPath $x)){ return $false };' +
+    'try { $i=Get-Item -LiteralPath $x -Force -ErrorAction Stop } catch { return $true };' +
+    'return [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint) };' +
+    'if(Reparse $p){ exit 4 };' +
     'if(-not (Test-Path -LiteralPath $p)){ New-Item -ItemType Directory -Force -Path $p | Out-Null };' +
-    'if(Reparse $p){ exit 4 }; if(Reparse $d){ exit 4 };' +
+    'if(Reparse $p){ exit 4 };' +
     'function ParentLocked([string]$x){' +
     '$a=Get-Acl -LiteralPath $x; $s=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
     'if(($s -ne ''S-1-5-18'') -and ($s -ne ''S-1-5-32-544'')){ return $false };' +
@@ -220,45 +206,68 @@ begin
     '& icacls.exe $p /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX | Out-Null;' +
     'if($LASTEXITCODE -ne 0){ exit 5 }; $ErrorActionPreference=''Stop'' };' +
     'if(-not (ParentLocked $p)){ exit 5 };' +
-    'if(Reparse $p){ exit 4 }; if(Reparse $d){ exit 4 }; exit 0' +
+    'if(Reparse $p){ exit 4 }; exit 0' +
     '} catch { exit 2 }"';
   if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode))
      or (ResultCode <> 0) then
     FailInstall('State directory parent is not safe; install aborted before any secret was written');
 end;
 
-procedure AssertNoChildReparse(const Dir: String);
+function RetireUnlockedFleet(const Dir: String): Boolean;
 var
   ResultCode: Integer;
   cmd: String;
 begin
-  { After the directory grant and before any /T. Do not follow a junction. }
+  { Exit 0: already locked, leave it. Exit 1: absent or renamed to fleet.legacy-<guid>. }
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
-    '$ErrorActionPreference=''Stop''; try {' +
-    '$q=New-Object System.Collections.Generic.Queue[string];' +
-    '$q.Enqueue(''' + PsLiteral(Dir) + ''');' +
-    'while($q.Count -gt 0){ $cur=$q.Dequeue();' +
-    'foreach($c in @(Get-ChildItem -Force -LiteralPath $cur -ErrorAction SilentlyContinue)){' +
-    'if($c.Attributes -band [IO.FileAttributes]::ReparsePoint){ exit 4 };' +
-    'if($c.PSIsContainer){ $q.Enqueue($c.FullName) }}}; exit 0' +
-    '} catch { exit 2 }"';
-  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode))
-     or (ResultCode <> 0) then
-    FailInstall('A reparse point is under the state directory; install aborted before any secret was written');
+    '$ErrorActionPreference=''Stop''; $d=''' + PsLiteral(Dir) + ''';' +
+    'function Reparse([string]$x){ if(-not (Test-Path -LiteralPath $x)){ return $false };' +
+    'try { $i=Get-Item -LiteralPath $x -Force -ErrorAction Stop } catch { return $true };' +
+    'return [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint) };' +
+    'if(-not (Test-Path -LiteralPath $d)){ exit 1 };' +
+    '$reparse=Reparse $d; $locked=$false;' +
+    'if(-not $reparse){ try {' +
+    '$a=Get-Acl -LiteralPath $d; $s=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
+    'if((($s -eq ''S-1-5-18'') -or ($s -eq ''S-1-5-32-544'')) -and $a.AreAccessRulesProtected -and @($a.Access)){' +
+    '$ok=$true; foreach($ace in @($a.Access)){' +
+    '$id=$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;' +
+    'if(($id -ne ''S-1-5-18'') -and ($id -ne ''S-1-5-32-544'')){ $ok=$false }}; $locked=$ok }' +
+    '} catch { $locked=$false } };' +
+    'if($locked){ exit 0 };' +
+    '$leaf=Split-Path -Leaf $d;' +
+    'Rename-Item -LiteralPath $d -NewName ($leaf + ''.legacy-'' + [guid]::NewGuid().ToString(''N'')); exit 1"';
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    FailInstall('Could not move the old state directory aside');
+  if ResultCode = 0 then
+    Result := False
+  else if ResultCode = 1 then
+    Result := True
+  else
+    FailInstall('Could not move the old state directory aside');
+end;
+
+function DirIsReparse(const Dir: String): Boolean;
+var
+  ResultCode: Integer;
+  cmd: String;
+begin
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    '$ErrorActionPreference=''Stop''; $d=''' + PsLiteral(Dir) + ''';' +
+    'if(-not (Test-Path -LiteralPath $d)){ exit 4 };' +
+    'try { $i=Get-Item -LiteralPath $d -Force -ErrorAction Stop } catch { exit 4 };' +
+    'if($i.Attributes -band [IO.FileAttributes]::ReparsePoint){ exit 4 }; exit 0"';
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    FailInstall('Could not read the state directory');
+  Result := ResultCode <> 0;
 end;
 
 procedure LockStateDir(const Dir: String);
-var
-  FindRec: TFindRec;
-  hasChild, wasLocked: Boolean;
 begin
   AssertStateParent(Dir);
-  if not DirExists(Dir) then
+  if RetireUnlockedFleet(Dir) then
+  begin
     if not ForceDirectories(Dir) then
       FailInstall('Could not create the state directory');
-  wasLocked := StateDirWasLocked(Dir);
-  if not wasLocked then
-  begin
     if not RunIcacls('"' + Dir + '" /setowner *S-1-5-32-544') then
       FailInstall('icacls /setowner failed; install aborted before any secret was written');
     if not RunIcacls('"' + Dir + '" /reset') then
@@ -266,25 +275,10 @@ begin
     if not RunIcacls('"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F') then
       FailInstall('icacls grant failed; install aborted before any secret was written');
   end;
+  if DirIsReparse(Dir) then
+    FailInstall('state directory is a reparse point');
   if not StateDirWasLocked(Dir) then
     FailInstall('state directory ACL is not limited to SYSTEM and Administrators');
-  AssertNoChildReparse(Dir);
-  DropUntrustedState(Dir, False);
-  if not wasLocked then
-  begin
-    if not RunIcacls('"' + Dir + '" /setowner *S-1-5-32-544 /T /C') then
-      FailInstall('icacls /setowner failed; install aborted before any secret was written');
-    hasChild := FindFirst(AddBackslash(Dir) + '*', FindRec);
-    if hasChild then
-      FindClose(FindRec);
-    if hasChild then
-      if not RunIcacls('"' + Dir + '\*" /reset /T /C') then
-        FailInstall('icacls /reset failed; install aborted before any secret was written');
-    if not RunIcacls('"' + Dir + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C') then
-      FailInstall('icacls grant failed; install aborted before any secret was written');
-    if not StateDirWasLocked(Dir) then
-      FailInstall('state directory ACL is not limited to SYSTEM and Administrators');
-  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -299,34 +293,46 @@ begin
     src := ExpandConstant('{src}\room.key');
   dir := ExpandConstant('{commonappdata}\ChatX\fleet');
   { Sample before LockStateDir. An unlocked agent.json is copied so bootstrap can
-    rewrite it after the lock drops the original. }
+    rewrite it after the old directory is renamed aside. }
   legacy := '';
-  if DirExists(dir) and FileExists(dir + '\agent.json') then
-    if not StateDirWasLocked(dir) then
+  SnapshotToDelete := '';
+  try
+    if DirExists(dir) and (not DirIsReparse(dir)) and FileExists(dir + '\agent.json') then
+      if not StateDirWasLocked(dir) then
+      begin
+        legacy := ExpandConstant('{tmp}\chatx-agent-migrate.json');
+        SnapshotToDelete := legacy;
+        if not FileCopy(dir + '\agent.json', legacy, False) then
+          FailInstall('Could not snapshot agent.json before locking the state directory');
+      end;
+    LockStateDir(dir);
+    { room.key is copied only after icacls succeeded. LockStateDir raises otherwise. }
+    if (src <> '') and FileExists(src) then
+      FileCopy(src, dir + '\room.key', False);
+    WizardForm.StatusLabel.Caption := 'Connecting to the controller...';
+    params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bootstrap.ps1') +
+              '" -Controller "' + GetController('') + '"';
+    if legacy <> '' then
+      params := params + ' -Snapshot "' + legacy + '"';
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      ResultCode := 1;
+    { Any non-zero bootstrap code must fail a silent install. A suppressed message box exits 0. }
+    if ResultCode <> 0 then
     begin
-      legacy := ExpandConstant('{tmp}\chatx-agent-migrate.json');
-      if not FileCopy(dir + '\agent.json', legacy, False) then
-        FailInstall('Could not snapshot agent.json before locking the state directory');
+      if legacy <> '' then
+        DeleteFile(legacy);
+      SnapshotToDelete := '';
+      legacy := '';
+      if WizardSilent then
+        ExitProcess(1);
+      if ResultCode = 3 then
+        RaiseException('Could not lock the fleet state directory. Install aborted before any secret was written.');
+      SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
     end;
-  LockStateDir(dir);
-  { room.key is copied only after icacls succeeded. LockStateDir raises otherwise. }
-  if (src <> '') and FileExists(src) then
-    FileCopy(src, dir + '\room.key', False);
-  WizardForm.StatusLabel.Caption := 'Connecting to the controller...';
-  params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bootstrap.ps1') +
-            '" -Controller "' + GetController('') + '"';
-  if legacy <> '' then
-    params := params + ' -Snapshot "' + legacy + '"';
-  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    ResultCode := 1;
-  { Any non-zero bootstrap code must fail a silent install. A suppressed message box exits 0. }
-  if ResultCode <> 0 then
-  begin
-    if WizardSilent then
-      ExitProcess(1);
-    if ResultCode = 3 then
-      RaiseException('Could not lock the fleet state directory. Install aborted before any secret was written.');
-    SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
+  finally
+    if legacy <> '' then
+      DeleteFile(legacy);
+    SnapshotToDelete := '';
   end;
   pair := '';
   if LoadStringFromFile(dir + '\pairing.txt', pair) then

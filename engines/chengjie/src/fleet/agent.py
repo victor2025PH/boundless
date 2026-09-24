@@ -46,8 +46,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detect import detect_instances, is_loopback_url, sanitize_instances
 from .identity import (
-    StateDirLockError, assign_owner_admins, default_state_dir, discard_untrusted_secret,
-    host_name, lock_state_dir, node_machine_id, os_label, state_dir_is_locked,
+    StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
+    discard_untrusted_secret, host_name, lock_state_dir, node_machine_id, os_label,
+    state_dir_is_locked,
 )
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
@@ -123,8 +124,11 @@ def migrated_agent_data(controller_url: str, source: Dict[str, Any]) -> Dict[str
         val = source.get(key)
         if isinstance(val, str) and val:
             data[key] = val
-    if source.get("heartbeat_sec") not in (None, ""):
-        data["heartbeat_sec"] = source.get("heartbeat_sec")
+    # Only a real integer in the agent range is kept. Strings and out-of-range
+    # values fall back to the default so a planted file cannot stall the service.
+    hb = source.get("heartbeat_sec")
+    if isinstance(hb, int) and not isinstance(hb, bool) and 5 <= hb <= 3600:
+        data["heartbeat_sec"] = hb
     return data
 
 
@@ -152,7 +156,8 @@ class AgentConfig:
     def load(self) -> None:
         self._legacy_source = None
         # Sample before discard. An unlocked file is not merged: identity only.
-        if self.path.is_file() and not state_dir_is_locked(self.state_dir):
+        if (self.path.is_file() and not _is_reparse(self.state_dir) and not _is_reparse(self.path)
+                and not state_dir_is_locked(self.state_dir)):
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
             except Exception:
@@ -865,23 +870,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
         return 1
     if args.cmd == "migrate-legacy":
+        snap = Path(args.snapshot) if args.snapshot else None
         try:
-            source = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
-        except Exception:
-            print("could not read the migration snapshot", file=sys.stderr)
-            return 1
-        if not isinstance(source, dict):
-            print("could not read the migration snapshot", file=sys.stderr)
-            return 1
-        cfg._legacy_source = None
-        cfg.data = migrated_agent_data(args.controller or cfg.controller_url, source)
-        try:
-            cfg.save()
-        except StateDirLockError:
-            print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
-            return 1
-        print(json.dumps({"ok": True}))
-        return 0
+            try:
+                source = json.loads(snap.read_text(encoding="utf-8")) if snap is not None else None
+            except Exception:
+                print("could not read the migration snapshot", file=sys.stderr)
+                return 1
+            if not isinstance(source, dict):
+                print("could not read the migration snapshot", file=sys.stderr)
+                return 1
+            cfg._legacy_source = None
+            cfg.data = migrated_agent_data(args.controller or cfg.controller_url, source)
+            try:
+                cfg.save()
+            except StateDirLockError:
+                print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+                return 1
+            print(json.dumps({"ok": True}))
+            return 0
+        finally:
+            if snap is not None:
+                try:
+                    snap.unlink()
+                except OSError:
+                    pass
     if args.cmd == "run" and (args.service or args.log_file):
         _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
     if args.cmd == "install-service":
