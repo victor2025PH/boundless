@@ -388,6 +388,15 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=True, show=False,
         note="摸底目标 LLM 摘录补槽（Q-5 代 #267）：正则轨盲区由主链 LLM 摘录客户自由表达"
              "填画像槽；clean 包此前恒 profile_llm_off，兴趣槽永远只能人工补录"),
+    # ── 老板例外（2026-09-24，机器码 6117-777B 报「LINE 发不了媒体」）：LINE 出站媒体
+    # 走逆向协议有封号风险、打开后 LINE 也进自拍/相册/语音投递——按三分法本应 C/B，
+    # 老板知情拍板公共包默认开。代码默认仍 False（服务器实例不变），显式 false 永远尊重。
+    Feature(
+        key="platform_login.line.media.outbound", cls="A", slug="line_media_outbound",
+        baseline=True, show=False,
+        note="LINE 出站媒体（老板例外 2026-09-24）：缺键＝LineProtocolWorker 不挂 "
+             "send_media，工作台/AI 报 no_send_media；内测种子早已显式开，公共包缺失。"
+             "A 类补齐让存量安装升级后零操作获得 LINE 发图/语音"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     # 2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：班表 A→B **出厂关**。1.0.78 基线把
     # 08:20–01:00 + 「timezone 空＝本机钟」补进每台机器——桌面机在上海、客户在纽约，

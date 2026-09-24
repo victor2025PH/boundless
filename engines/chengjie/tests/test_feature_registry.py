@@ -109,7 +109,9 @@ def test_baseline_patch_only_fills_missing():
                           "inbox.l2_autosend.deliver_delay.profile",
                           "inbox.auto_draft.inbound_merge.enabled",
                           # 2026-09-09 Q-4（Q-5 代，#267）：摸底目标 LLM 摘录补槽进基线
-                          "companion.goals.profile_llm.enabled"}
+                          "companion.goals.profile_llm.enabled",
+                          # 2026-09-24 老板例外：公共包 LINE 出站媒体默认开
+                          "platform_login.line.media.outbound"}
     # 2026-09-09 D-Q1（#267 KYHGSZ）：班表三键撤出基线（A→B 出厂关；红线②③）
     for k in ("inbox.work_schedule.enabled", "inbox.work_schedule.default.start",
               "inbox.work_schedule.default.end"):
@@ -164,6 +166,8 @@ def test_baseline_patch_only_fills_missing():
                       "vision": {"enabled": True}},
         # 记忆抽取三键：显式空白名单 = 用户关掉，与显式 false 同一条三态语义
         "memory": {"extract": {"enabled": True, "use_llm": False, "intents": []}},
+        # 老板例外：LINE 出站媒体显式关＝用户决定，不补
+        "platform_login": {"line": {"media": {"outbound": False}}},
     }) == {}
 
 

@@ -389,6 +389,10 @@ platform_login:
     protocol_enabled: true
     modes: ["protocol", "device"]
     default: "protocol"
+    # LINE 出站媒体（发图/语音）：老板例外 2026-09-24 公共包默认开，存量安装由
+    # feature_registry A 类基线补齐；代码默认 False，用户显式 false 永远尊重。
+    media:
+      outbound: true
     # LINE 协议扫码（okline 逆向库）随包分发。okline 靠持久 Node 桥跑 LTSM WASM 算 X-Hmac：
     # 客户**无需装 Node** —— PATH 上没有真 node 时自动回落随包 Electron（壳注入
     # AITR_ELECTRON_NODE，见 desktop/backend-launcher.js + line_protocol_login.
