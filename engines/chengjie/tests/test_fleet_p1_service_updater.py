@@ -43,6 +43,15 @@ def test_systemd_unit_contains_exec_restart_and_state_env(tmp_path):
     assert "Restart=always" in unit
     assert f"Environment=CHATX_FLEET_STATE_DIR={tmp_path}" in unit
     assert "WantedBy=multi-user.target" in unit
+    assert "WorkingDirectory=" not in unit  # 未传 working_dir 时不写
+
+    wd = tmp_path / "engine_root"
+    unit_wd = svc.build_systemd_unit(
+        ["/opt/agent/chatx-agent", "run", "--service"],
+        state_dir=tmp_path,
+        working_dir=wd,
+    )
+    assert f"WorkingDirectory={wd}" in unit_wd
 
 
 def test_agent_command_source_vs_frozen(monkeypatch, tmp_path):
@@ -79,6 +88,54 @@ def test_install_service_windows_failure_stops_early(monkeypatch, tmp_path):
     res = svc.install_service(tmp_path, run=run)
     assert not res["ok"] and len(calls) == 1
     assert "denied" in res["steps"][0]["out"]
+
+
+def test_service_workdir_source_vs_frozen(monkeypatch):
+    import sys
+
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    wd = svc.service_workdir()
+    assert wd is not None
+    assert wd == Path(svc.__file__).resolve().parents[2]
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert svc.service_workdir() is None
+
+
+def test_install_service_linux_writes_working_directory(monkeypatch, tmp_path):
+    """源码态 Linux install：unit 含 WorkingDirectory=引擎根。"""
+    engine_root = tmp_path / "engine_root"
+    engine_root.mkdir()
+    unit_path = tmp_path / "chatx-agent.service"
+    monkeypatch.setattr(svc.os, "name", "posix")
+    monkeypatch.setattr(svc, "service_workdir", lambda: engine_root)
+    monkeypatch.setattr(svc, "systemd_unit_path", lambda name=svc.SYSTEMD_UNIT: unit_path)
+
+    def run(cmd):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    res = svc.install_service(tmp_path / "state", run=run)
+    assert res["ok"] and res["kind"] == "systemd"
+    body = unit_path.read_text(encoding="utf-8")
+    assert f"WorkingDirectory={engine_root}" in body
+    assert f"Environment=CHATX_FLEET_STATE_DIR={tmp_path / 'state'}" in body
+
+
+def test_install_service_linux_frozen_omits_working_directory(monkeypatch, tmp_path):
+    """冻结 exe：不写 WorkingDirectory。"""
+    import sys
+
+    monkeypatch.setattr(svc.os, "name", "posix")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    unit_path = tmp_path / "chatx-agent.service"
+    monkeypatch.setattr(svc, "systemd_unit_path", lambda name=svc.SYSTEMD_UNIT: unit_path)
+
+    def run(cmd):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    res = svc.install_service(tmp_path / "state", run=run)
+    assert res["ok"] and res["kind"] == "systemd"
+    body = unit_path.read_text(encoding="utf-8")
+    assert "WorkingDirectory=" not in body
 
 
 def test_service_status_parses_schtasks_list(monkeypatch):

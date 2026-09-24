@@ -178,3 +178,56 @@ class TestActiveTokens:
         active_tokens = {t.token for t in actives}
         assert t2.token in active_tokens
         assert t1.token not in active_tokens
+
+
+class TestLogOnlyFailures:
+    """四类失败：仅日志 + 异常类名可观测，不抛给调用方、不虚构 HTTP 码。"""
+
+    def test_try_consume_logs_expired_class_name(self, store, messenger_ci, line_ci, caplog):
+        import logging
+        svc = HandoffTokenService(store, ttl_seconds=60)
+        tok = svc.issue(messenger_ci.channel_identity_id)
+        with store._lock:
+            store._conn.execute(
+                "UPDATE handoff_tokens SET expires_at=? WHERE token=?",
+                (tok.issued_at - 10, tok.token),
+            )
+            store._conn.commit()
+        with caplog.at_level(logging.INFO, logger="src.contacts.handoff"):
+            assert svc.try_consume_from_text(
+                f"hi {tok.token}", consumed_by_ci_id=line_ci.channel_identity_id,
+            ) is None
+        assert any(
+            "TokenExpired" in r.getMessage() and "token candidate not usable" in r.getMessage()
+            for r in caplog.records
+        )
+        assert not any("HTTP" in r.getMessage() or " status" in r.getMessage().lower() for r in caplog.records)
+
+    def test_try_consume_logs_already_consumed_class_name(self, svc, messenger_ci, line_ci, caplog):
+        import logging
+        tok = svc.issue(messenger_ci.channel_identity_id)
+        svc.consume(tok.token, consumed_by_ci_id=line_ci.channel_identity_id)
+        with caplog.at_level(logging.INFO, logger="src.contacts.handoff"):
+            assert svc.try_consume_from_text(
+                f"again {tok.token}", consumed_by_ci_id=line_ci.channel_identity_id,
+            ) is None
+        assert any("TokenAlreadyConsumed" in r.getMessage() for r in caplog.records)
+
+    def test_try_consume_logs_revoked_class_name(self, svc, messenger_ci, line_ci, caplog):
+        import logging
+        tok = svc.issue(messenger_ci.channel_identity_id)
+        svc.revoke(tok.token, reason="safety")
+        with caplog.at_level(logging.INFO, logger="src.contacts.handoff"):
+            assert svc.try_consume_from_text(
+                f"code {tok.token}", consumed_by_ci_id=line_ci.channel_identity_id,
+            ) is None
+        assert any("TokenRevoked" in r.getMessage() for r in caplog.records)
+
+    def test_try_consume_not_found_is_silent(self, svc, line_ci, caplog):
+        import logging
+        # 形状合法但不在库 → TokenNotFound 静默换候选，不打「not usable」类日志
+        with caplog.at_level(logging.INFO, logger="src.contacts.handoff"):
+            assert svc.try_consume_from_text(
+                "hi abcdef", consumed_by_ci_id=line_ci.channel_identity_id,
+            ) is None
+        assert not any("token candidate not usable" in r.getMessage() for r in caplog.records)
