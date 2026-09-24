@@ -24,7 +24,7 @@
 | 对象 | 说明 |
 |---|---|
 | `machine_id` | `m-<16hex>`，`src/fleet/identity.py`：优先 licensing 指纹 → Windows MachineGuid / Linux machine-id → 持久随机 UUID。同一机器重装 Agent 仍是同一 `machine_id`。 |
-| 注册码 `enroll_code` | 运营在控制台生成，**8 位数字、一次性、默认 60 min 过期**，可预设 label / group。熵不高，靠单次 + 短 TTL + 每 IP 失败限速（10 分钟 8 次）补上。机房批量改用 `room_key`。 |
+| 注册码 `enroll_code` | 运营在控制台生成，**12 位 Crockford base32（不含 I/L/O/U）、一次性、默认 15 min**。展示可分成 `XXXX-XXXX-XXXX`，兑码不区分大小写。库里尚未到期的旧 8 位数字码仍有效；这套变更还没上生产，所以没有在途的 8 位码需要迁移。猜错 8 次 / 10 分钟锁该 IP，有效码在锁定期内不消耗。已吊销的 machine_id 拿码不会复活，改入待批准并标 `this machine was revoked`。 |
 | `node_id` | `n_<12hex>`，主控分配。同一 `machine_id` 再次注册**复用 node_id、轮换 node_key**（旧 key 立即失效）。 |
 | `node_key` | 机器级密钥，只在 enroll 响应里明文出现一次，节点本地存 `%ProgramData%\ChatX\fleet\agent.json`（或 `CHATX_FLEET_STATE_DIR`）；主控只存 sha256 哈希。 |
 | 吊销 | `POST /api/fleet/nodes/{id}/revoke` 后该 key 所有请求 401，Agent 收到 401 停止轮询等待重新注册。 |

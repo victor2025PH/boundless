@@ -154,7 +154,9 @@ def test_pending_reject_expire_and_rate_limit(st):
 
 def test_one_time_code_stays_8_digits_and_is_rate_limited(st):
     code = st.create_enroll_code(now=T0)["code"]
-    assert len(code) == 8 and code.isdigit()
+    compact = code.replace("-", "")
+    assert len(compact) >= 12 and all(ch in "0123456789ABCDEFGHJKMNPQRSTVWXYZ" for ch in compact)
+    assert st.create_enroll_code(now=T0)["expires_at"] == T0 + 15 * 60
     st.code_fail_max = 1
     assert st.enroll(code="00000000", machine_id="m", proto_version=1, now=T0, client_ip="203.0.113.8")["error"] == "invalid_or_expired_code"
     assert st.enroll(code=code, machine_id="m", proto_version=1, now=T0 + 1, client_ip="203.0.113.8")["error"] == "rate_limited"
@@ -409,7 +411,7 @@ def test_room_key_pending_for_revoked_or_other_group(st):
     sec = "es_room-divert-secret-0123456"
     diverted = st.redeem_room_key(
         other["room_key"], machine_id="m-room", proto_version=1, enroll_secret=sec, now=T0 + 1)
-    assert diverted["status"] == "pending" and "node_key" not in diverted
+    assert diverted["status"] == "pending" and "node_key" not in diverted and diverted["was_revoked"] is False
     assert st.list_room_keys(now=T0 + 1)[0]["uses"] == 0
     pending = st.list_pending(now=T0 + 1)[0]
     assert pending["requested_group"] == "机房B"
@@ -419,7 +421,8 @@ def test_room_key_pending_for_revoked_or_other_group(st):
     revived = st.redeem_room_key(
         same["room_key"], machine_id="m-room", proto_version=1,
         enroll_secret="es_revived-secret-0123456789", now=T0 + 2)
-    assert revived["status"] == "pending"
+    assert revived["status"] == "pending" and revived["revoked_note"] == "this machine was revoked"
+    assert [r for r in st.list_pending(now=T0 + 2) if r["request_id"] == revived["request_id"]][0]["was_revoked"] is True
     keys = {k["key_id"]: k for k in st.list_room_keys(now=T0 + 2)}
     assert keys[same["key_id"]]["uses"] == 0
     live_code = st.create_enroll_code(group_name="机房C", now=T0)["code"]
@@ -509,3 +512,69 @@ def test_approve_route_returns_409_until_confirm_rotate(st):
         json={"group_name": "机房A", "confirm_rotate": True}, headers=OP)
     assert ok.status_code == 200 and "node_key" not in ok.json()
     assert st.authenticate(node["node_key"]) is None
+
+
+def test_enroll_code_accepts_case_dashes_aliases_and_legacy_digits(st):
+    minted = st.create_enroll_code(label="desk", group_name="机房A", now=T0)
+    assert minted["expires_at"] == T0 + 15 * 60
+    ok = st.enroll(code=minted["code"].lower(), machine_id="m-case", proto_version=1, now=T0)
+    assert ok["status"] == "active" and ok["group_name"] == "机房A"
+    st._conn.execute(
+        "INSERT INTO enroll_codes(code, label, group_name, created_by, created_at, expires_at) "
+        "VALUES ('0123456789AB','','','',?,?)", (T0, T0 + 900))
+    st._conn.commit()
+    alias = st.enroll(code="ol23-4567-89ab", machine_id="m-alias", proto_version=1, now=T0)
+    assert alias["ok"], alias
+    st._conn.execute(
+        "INSERT INTO enroll_codes(code, label, group_name, created_by, created_at, expires_at) "
+        "VALUES ('12345678','','','',?,?)", (T0, T0 + 3600))
+    st._conn.commit()
+    legacy = st.enroll(code="12345678", machine_id="m-legacy", proto_version=1, now=T0)
+    assert legacy["ok"] and legacy["status"] == "active"
+
+
+def test_code_for_revoked_machine_queues_pending_and_does_not_revive(st):
+    code = st.create_enroll_code(group_name="机房A", now=T0)["code"]
+    first = st.enroll(code=code, machine_id="m-dead", proto_version=1, now=T0)
+    st.revoke(first["node_id"], now=T0)
+    fresh = st.create_enroll_code(group_name="机房A", now=T0 + 1)
+    missing = st.enroll(code=fresh["code"], machine_id="m-dead", proto_version=1, now=T0 + 1)
+    assert missing["error"] == "enroll_secret_required"
+    again = st.enroll(code=fresh["code"], machine_id="m-dead", proto_version=1, now=T0 + 1)
+    assert again["error"] == "enroll_secret_required"
+    sec = "es_revoked-queue-secret-0123456789"
+    held = st.enroll(code=fresh["code"], machine_id="m-dead", proto_version=1, now=T0 + 2,
+                     enroll_secret=sec)
+    assert held["status"] == "pending" and held["revoked_note"] == "this machine was revoked"
+    assert "node_key" not in held
+    assert st.get_node(first["node_id"], now=T0 + 2)["status"] == "revoked"
+    row = st.list_pending(now=T0 + 2)[0]
+    assert row["was_revoked"] is True and row["revoked_note"] == "this machine was revoked"
+    assert row["warning"].startswith("approving will rotate key of ")
+    spent = st.enroll(code=fresh["code"], machine_id="m-other", proto_version=1, now=T0 + 3,
+                      enroll_secret=sec)
+    assert spent["error"] == "invalid_or_expired_code"
+
+
+def test_enroll_failures_log_a_fail2ban_line(st, caplog):
+    caplog.set_level(logging.WARNING)
+    c = _client(st)
+    bad = c.post("/api/fleet/enroll", json={"code": "00000000", "machine_id": "m-guess", "proto_version": 1},
+                 headers={"Authorization": "Bearer 00000000"})
+    assert bad.status_code == 403
+    assert "fleet enroll_fail ip=testclient reason=bad_code" in caplog.text
+    assert "00000000" not in caplog.text.split("fleet enroll_fail")[-1]
+    st.code_fail_max = 1
+    locked = c.post("/api/fleet/enroll", json={"code": "11111111", "machine_id": "m-guess", "proto_version": 1},
+                    headers={"Authorization": "Bearer 11111111"})
+    assert locked.status_code == 429
+    assert "fleet enroll_fail ip=testclient reason=lockout" in caplog.text
+    filt = (ENGINE / "deploy/fleet/fail2ban/filter.d/chatx-fleet-enroll.conf").read_text(encoding="utf-8")
+    jail = (ENGINE / "deploy/fleet/fail2ban/jail.d/chatx-fleet-enroll.conf").read_text(encoding="utf-8")
+    nginx = (ENGINE / "deploy/fleet/nginx-fleet-enroll-limit.conf").read_text(encoding="utf-8")
+    assert "fleet enroll_fail ip=<HOST> reason=" in filt
+    assert "enabled = false" in jail and "chatx-fleet.service" in jail
+    assert "location = /fleet/api/fleet/enroll" in nginx and "location = /fleet/api/fleet/enroll/poll" in nginx
+    assert "limit_req zone=fleet_enroll" in nginx and "limit_req zone=fleet_enroll_poll" in nginx
+    console = (ENGINE / "domains/fleet_control/web/templates/fleet_console.html").read_text(encoding="utf-8")
+    assert "this machine was revoked" in console

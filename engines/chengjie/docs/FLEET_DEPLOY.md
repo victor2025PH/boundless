@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller https://bd2026.cc/fleet -Code 12345678
 ```
 
-无 `-Code` 时和双击安装包一样，进待批准。8 位注册码仍然一次性、默认 60 分钟，并且同一 IP 10 分钟内猜错 8 次会被限速（限速期间不消耗还没用过的码）。它只有约 26 bit，不适合当机房批量密钥；批量用上面的 `rk_` 机房密钥（256 bit，只存哈希，可吊销、有次数和有效期）。
+无 `-Code` 时和双击安装包一样，进待批准。一次性注册码是 12 位 Crockford（展示成 `XXXX-XXXX-XXXX`，不区分大小写），默认 15 分钟，同一 IP 10 分钟内猜错 8 次进入锁定期（锁定期内连对的码也不消耗）。已经发出、还没到期的 8 位数字码仍能兑；这套安装包还没上生产，没有需要交接的在途 8 位码。机房批量仍用 `rk_` 机房密钥。已吊销的电脑即使拿对注册码或机房密钥也不会自动复活，控制台和 `admin pending` 会标 `this machine was revoked`，要管理员再点批准（已有节点还要确认换 key）。
 
 静默安装（已经有安装包文件时）：`ChatXAgentSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。机房包里的 `Install-Silent.cmd` 会带上 `/ROOMKEYFILE`。
 
@@ -118,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 1. 构建机先有免费的 Inno Setup 6（`winget install --id JRSoftware.InnoSetup -e`），再跑 `python fleet_agent\build_agent.py` 和 `powershell -File deploy\fleet\publish_agent.ps1`。脚本在找得到 `ISCC.exe` 时会打出 `ChatXAgentSetup.exe` 并一起上传。下载目录里要同时有 `chatx-agent.exe`、`ChatXAgentSetup.exe`、`manifest.json`（manifest 里带 `setup_url` / `setup_sha256`）。
 2. `publish_agent.ps1 -PackController` 打主控源码包时会带上 `config/presets`（其余 `config/` 仍排除）。VPS 上 `sudo bash deploy_controller.sh ~/chatx-fleet-src.tar.gz`。`/etc/chatx-fleet` 是 `750`（root:chatx-fleet，配置只读）；可写的是 `/var/lib/chatx-fleet`（`770`，库文件）。systemd 开了 `ProtectSystem=strict`，`ReadWritePaths` 只含数据目录和日志，不含配置目录。`config.yaml` 仍是 `640`。`--check` 只打 `GET /api/fleet/overview`（期望 401），不会往注册接口塞假码。
 3. 把更新后的 `deploy/fleet/nginx-fleet.conf` 再装一次（`deploy_controller.sh` 会重写 snippet）。新增的是 `/fleet/dl/`：反代到主控，并且 **access_log off**，避免机房链接里的密钥进 nginx 日志。没有新的监听端口。装完 `nginx -t && systemctl reload nginx`，然后 `systemctl restart chatx-fleet`。
-4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。
+4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。注册失败另打一行 `fleet enroll_fail ip=1.2.3.4 reason=bad_code`（锁定期是 `reason=lockout`），给 fail2ban 用。示例在 `deploy/fleet/fail2ban/` 和 `deploy/fleet/nginx-fleet-enroll-limit.conf`（enroll / poll 的 `limit_req`）。这些文件只是例子，`deploy_controller.sh` 不会装到机器上，也不要为此改生产 nginx 或 fail2ban，除非单独授权。
 
 ## 4. 日常操作（操作端 CLI）
 

@@ -106,6 +106,30 @@ def _client_ip(request: Request) -> str:
 _BEARER_NOT_CRED = {"", "pending", "none", "anonymous"}
 
 
+_ENROLL_FAIL_REASON = {
+    "invalid_or_expired_code": "bad_code",
+    "rate_limited": "lockout",
+    "invalid_room_key": "bad_room_key",
+}
+_ENROLL_FAIL_LOG_REASONS = {"bad_code", "lockout", "bad_room_key", "revoked", "expired", "exhausted"}
+
+
+def enroll_fail_reason(error: Any) -> str:
+    err = str(error or "enroll_failed")
+    mapped = _ENROLL_FAIL_REASON.get(err, err)
+    if not re.fullmatch(r"[a-z0-9_]{1,40}", mapped):
+        return "enroll_failed"
+    return mapped
+
+
+def log_enroll_fail(ip: str, error: Any) -> None:
+    """One greppable line for fail2ban. Never includes the code or room key."""
+    reason = enroll_fail_reason(error)
+    if reason not in _ENROLL_FAIL_LOG_REASONS:
+        return
+    logger.warning("fleet enroll_fail ip=%s reason=%s", (ip or "-")[:64], reason)
+
+
 def _enroll_error(res: Dict[str, Any]) -> HTTPException:
     err = str(res.get("error") or "enroll_failed")
     if err == "proto_incompatible":
@@ -154,7 +178,7 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_enroll(request: Request):
         """三种接入，协议版本不变：
 
-        * 注册码（body.code，或 Bearer 里的 8 位码）——立刻签发 node_key。Bearer 通道是为了过核心 CSRF。
+        * 注册码（body.code，或 Bearer 里的码）——在用节点立刻签发 node_key。已吊销的机器改为待批准。Bearer 通道是为了过核心 CSRF。
         * 机房密钥（body.room_key，或 Bearer 以 rk_ 开头）——在次数 / 有效期内自动批准。
         * 两者都没有——记为待批准，不签发 key，不能领任务。
         """
@@ -179,12 +203,14 @@ def register_routes(app, ctx) -> None:
         if room:
             res = st.redeem_room_key(room, enroll_secret=secret, instances=body.get("instances"), **common)
         elif code:
-            res = st.enroll(code=code, **common)
+            # Code guesses share the same per-IP lockout as other enroll failures (store code_fail).
+            res = st.enroll(code=code, enroll_secret=secret, instances=body.get("instances"), **common)
         else:
             res = st.request_pending(
                 instances=body.get("instances"), enroll_secret=secret,
                 ttl_sec=int(cfg.get("pending_ttl_sec") or 0) or None, **common)
         if not res.get("ok"):
+            log_enroll_fail(_client_ip(request), res.get("error"))
             raise _enroll_error(res)
         res["heartbeat_sec"] = cfg["heartbeat_sec"]
         if res.get("node_key"):

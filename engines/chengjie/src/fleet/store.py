@@ -35,8 +35,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_NAME = "fleet_control.db"
 HEARTBEAT_KEEP = 200
 NODE_ACTIVE = "active"
-# 8 位数字注册码约 26 bit，靠一次性 + 短 TTL + 每 IP 失败限速补强度（见 FLEET_DEPLOY）。
+# 一次性注册码：Crockford base32，至少 12 字符（约 60 bit），默认 15 分钟。
+# 已经发出的 8 位数字码在到期前仍可兑（本变更未上生产，库里若没有就没有在途码）。
 # 机房密钥是另一条凭证：≥128 bit，只存哈希。
+ENROLL_CODE_LEN = 12
+ENROLL_CODE_TTL_MIN = 15
+ENROLL_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32, no I L O U
+REVOKED_MACHINE_NOTE = "this machine was revoked"
 CODE_FAIL_MAX = 8
 CODE_FAIL_WINDOW_SEC = 600
 # A whole room shares one egress IP. 8/hour rejected a legitimate batch, so the
@@ -130,7 +135,8 @@ CREATE TABLE IF NOT EXISTS pending_enrollments (
     claimed_at    REAL,
     enroll_secret_hash TEXT NOT NULL DEFAULT '',
     pairing_code  TEXT NOT NULL DEFAULT '',
-    requested_group TEXT NOT NULL DEFAULT ''
+    requested_group TEXT NOT NULL DEFAULT '',
+    was_revoked   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pending_machine ON pending_enrollments(machine_id, status);
 CREATE TABLE IF NOT EXISTS room_keys (
@@ -184,9 +190,34 @@ def _migrate_pending(conn: sqlite3.Connection) -> None:
         ("enroll_secret_hash", "TEXT NOT NULL DEFAULT ''"),
         ("pairing_code", "TEXT NOT NULL DEFAULT ''"),
         ("requested_group", "TEXT NOT NULL DEFAULT ''"),
+        ("was_revoked", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE pending_enrollments ADD COLUMN {name} {decl}")
+
+
+def normalize_enroll_code(raw: str) -> str:
+    """Strip dashes/spaces, uppercase, and apply Crockford aliases (O→0, I/L→1, U→V)."""
+    chars = []
+    for ch in str(raw or "").strip().upper():
+        if ch in "- \t":
+            continue
+        if ch in "O":
+            ch = "0"
+        elif ch in "IL":
+            ch = "1"
+        elif ch == "U":
+            ch = "V"
+        chars.append(ch)
+    return "".join(chars)
+
+
+def format_enroll_code(canonical: str) -> str:
+    """Group a new-style code as XXXX-XXXX-XXXX. Legacy 8-digit codes stay as stored."""
+    c = str(canonical or "")
+    if len(c) >= ENROLL_CODE_LEN and "-" not in c and all(ch in ENROLL_CODE_ALPHABET for ch in c):
+        return "-".join(c[i:i + 4] for i in range(0, len(c), 4))
+    return c
 
 
 def _ip_bucket(ip: Optional[str]) -> str:
@@ -261,12 +292,13 @@ class FleetStore:
 
     # ── 注册码 ────────────────────────────────────────────────────────────
     def create_enroll_code(self, *, label: str = "", group_name: str = "", created_by: str = "",
-                           ttl_min: int = 60, now: Optional[float] = None) -> Dict[str, Any]:
+                           ttl_min: int = ENROLL_CODE_TTL_MIN, now: Optional[float] = None) -> Dict[str, Any]:
         ts = float(now if now is not None else time.time())
-        ttl = max(1, min(7 * 24 * 60, int(ttl_min or 60)))
+        ttl = max(1, min(7 * 24 * 60, int(ttl_min or ENROLL_CODE_TTL_MIN)))
         with self._lock:
+            code = ""
             for _ in range(20):
-                code = f"{secrets.randbelow(10 ** 8):08d}"
+                code = "".join(secrets.choice(ENROLL_CODE_ALPHABET) for _ in range(ENROLL_CODE_LEN))
                 if self._conn.execute("SELECT 1 FROM enroll_codes WHERE code=?", (code,)).fetchone() is None:
                     break
             self._conn.execute(
@@ -274,7 +306,8 @@ class FleetStore:
                 (code, str(label or "")[:80], str(group_name or "")[:80], str(created_by or "")[:80], ts, ts + ttl * 60),
             )
             self._conn.commit()
-        return {"code": code, "label": label, "group_name": group_name, "expires_at": ts + ttl * 60, "created_at": ts}
+        return {"code": format_enroll_code(code), "label": label, "group_name": group_name,
+                "expires_at": ts + ttl * 60, "created_at": ts}
 
     def list_enroll_codes(self, *, include_used: bool = False, now: Optional[float] = None) -> List[Dict[str, Any]]:
         ts = float(now if now is not None else time.time())
@@ -283,6 +316,7 @@ class FleetStore:
         out = []
         for r in rows:
             d = dict(r)
+            d["code"] = format_enroll_code(str(r["code"]))
             d["status"] = "used" if r["used_at"] else ("expired" if r["expires_at"] < ts else "open")
             if include_used or d["status"] == "open":
                 out.append(d)
@@ -291,16 +325,18 @@ class FleetStore:
     # ── 节点注册 / 鉴权 ───────────────────────────────────────────────────
     def enroll(self, *, code: str, machine_id: str, host_name: str = "", proto_version: Any = 0,
                agent_version: str = "", app_version: str = "", os_label: str = "", meta: Optional[Dict[str, Any]] = None,
-               now: Optional[float] = None, client_ip: Optional[str] = None) -> Dict[str, Any]:
+               now: Optional[float] = None, client_ip: Optional[str] = None,
+               enroll_secret: str = "", instances: Any = None) -> Dict[str, Any]:
         """用注册码换 node_key。返回 ``{"ok": True, "node_id", "node_key", ...}`` 或 ``{"ok": False, "error"}``。
 
-        同一 machine_id 重复注册 → 复用 node_id、签发新 key（旧 key 立即失效）；被吊销的节点
-        也可凭新注册码复活（运维显式发码即授权）。
+        同一 machine_id 的在用节点再次注册 → 复用 node_id、签发新 key。已吊销的节点不复活：
+        有效注册码只开一条待批准，并带 ``this machine was revoked``。码在待批准记下之后才作废。
 
         ``client_ip`` 非 None 时启用失败限速（公开入口必传）。限速期间不消耗仍有效的注册码。
+        新码不区分大小写，可带短横线。库里尚未到期的 8 位数字码仍按原样兑。
         """
         ts = float(now if now is not None else time.time())
-        code = str(code or "").strip()
+        code = normalize_enroll_code(code)
         mid = str(machine_id or "").strip()
         if not code or not mid:
             return {"ok": False, "error": "code_and_machine_id_required"}
@@ -317,11 +353,29 @@ class FleetStore:
                     self._record_attempt_locked(ip=_ip_bucket(client_ip), machine_id=mid, kind="code_fail", ts=ts)
                     self._conn.commit()
                 return {"ok": False, "error": "invalid_or_expired_code"}
+            existing = self._conn.execute("SELECT status FROM nodes WHERE machine_id=?", (mid,)).fetchone()
+            if existing is not None and str(existing["status"]) == NODE_REVOKED:
+                pending = self.request_pending(
+                    machine_id=mid, host_name=host_name, proto_version=proto_version,
+                    agent_version=agent_version, app_version=app_version, os_label=os_label,
+                    instances=instances, meta=meta,
+                    client_ip="" if client_ip is None else str(client_ip),
+                    enroll_secret=enroll_secret, requested_group=str(row["group_name"] or ""),
+                    was_revoked=True, now=ts)
+                if not pending.get("ok"):
+                    return pending
+                self._conn.execute(
+                    "UPDATE enroll_codes SET used_at=?, used_by_node=? WHERE code=?",
+                    (ts, "", row["code"]))
+                self._conn.commit()
+                pending["was_revoked"] = True
+                pending["revoked_note"] = REVOKED_MACHINE_NOTE
+                return pending
             node_id, key = self._activate_locked(
                 machine_id=mid, host_name=host_name, label=row["label"], group_name=row["group_name"],
                 proto_version=proto_version, agent_version=agent_version, app_version=app_version,
                 os_label=os_label, meta=meta, ts=ts)
-            self._conn.execute("UPDATE enroll_codes SET used_at=?, used_by_node=? WHERE code=?", (ts, node_id, code))
+            self._conn.execute("UPDATE enroll_codes SET used_at=?, used_by_node=? WHERE code=?", (ts, node_id, row["code"]))
             self._conn.commit()
         return {"ok": True, "node_id": node_id, "node_key": key, "label": row["label"],
                 "group_name": row["group_name"], "server_proto": _server_proto(), "status": "active"}
@@ -331,6 +385,7 @@ class FleetStore:
                         instances: Any = None, meta: Optional[Dict[str, Any]] = None,
                         label: str = "", group_name: str = "", client_ip: str = "",
                         enroll_secret: str = "", requested_group: str = "",
+                        was_revoked: bool = False,
                         now: Optional[float] = None, ttl_sec: Optional[int] = None) -> Dict[str, Any]:
         """无注册码的安装：记一条待批准，不签发 node_key，不进入节点表。
 
@@ -365,14 +420,17 @@ class FleetStore:
                 "AND enroll_secret_hash=? ORDER BY created_at DESC LIMIT 1",
                 (mid, ts, digest)).fetchone()
             if open_row is not None:
+                flagged = 1 if was_revoked or int(open_row["was_revoked"] or 0) else 0
                 self._conn.execute(
                     "UPDATE pending_enrollments SET host_name=?, os=?, agent_version=?, app_version=?, client_ip=?, "
-                    "instances_json=?, proto_version=?, meta_json=? WHERE request_id=?",
+                    "instances_json=?, proto_version=?, meta_json=?, was_revoked=? WHERE request_id=?",
                     (host, os_name, agent_v, app_v, ip[:64], json.dumps(inst, ensure_ascii=False),
-                     int(proto_version), _dumps(meta), open_row["request_id"]))
+                     int(proto_version), _dumps(meta), flagged, open_row["request_id"]))
                 self._conn.commit()
                 return {"ok": True, "status": "pending", "request_id": open_row["request_id"],
                         "pairing_code": open_row["pairing_code"],
+                        "was_revoked": bool(flagged),
+                        "revoked_note": REVOKED_MACHINE_NOTE if flagged else "",
                         "expires_at": open_row["expires_at"], "retry_after_sec": 15}
             if self._over_limit_locked(ip=ip, machine_id=mid, kind="pending_new",
                                        window=self.pending_ip_window_sec, ip_max=self.pending_ip_max,
@@ -381,17 +439,20 @@ class FleetStore:
                 return {"ok": False, "error": "rate_limited"}
             request_id = "req_" + secrets.token_urlsafe(18)
             pair = _pairing_code()
+            flagged = 1 if was_revoked else 0
             self._conn.execute(
                 "INSERT INTO pending_enrollments(request_id, machine_id, host_name, label, group_name, os, "
                 "agent_version, app_version, client_ip, instances_json, proto_version, meta_json, status, "
-                "created_at, expires_at, enroll_secret_hash, pairing_code, requested_group) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?, ?, ?)",
+                "created_at, expires_at, enroll_secret_hash, pairing_code, requested_group, was_revoked) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?, ?, ?, ?)",
                 (request_id, mid[:80], host, "", "", os_name, agent_v, app_v, ip[:64],
                  json.dumps(inst, ensure_ascii=False), int(proto_version), _dumps(meta), ts, ts + ttl,
-                 digest, pair, want_group))
+                 digest, pair, want_group, flagged))
             self._record_attempt_locked(ip=ip, machine_id=mid, kind="pending_new", ts=ts)
             self._conn.commit()
         return {"ok": True, "status": "pending", "request_id": request_id, "pairing_code": pair,
+                "was_revoked": bool(flagged),
+                "revoked_note": REVOKED_MACHINE_NOTE if flagged else "",
                 "expires_at": ts + ttl, "retry_after_sec": 15}
 
     def list_pending(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -599,7 +660,8 @@ class FleetStore:
                     machine_id=mid, host_name=host_name, proto_version=proto_version,
                     agent_version=agent_version, app_version=app_version, os_label=os_label,
                     instances=instances, meta=meta, client_ip="" if client_ip is None else str(client_ip),
-                    enroll_secret=enroll_secret, requested_group=room_group, now=ts)
+                    enroll_secret=enroll_secret, requested_group=room_group,
+                    was_revoked=str(existing["status"]) == NODE_REVOKED, now=ts)
             cur = self._conn.execute(
                 "UPDATE room_keys SET uses=uses+1 WHERE key_id=? AND uses<max_uses "
                 "AND revoked_at IS NULL AND expires_at>=?",
@@ -708,6 +770,7 @@ class FleetStore:
     def _pending_public(self, row: sqlite3.Row, existing_node_id: str = "") -> Dict[str, Any]:
         group = str(row["group_name"] or "")
         nid = str(existing_node_id or "")
+        revoked = bool(int(row["was_revoked"] or 0))
         return {
             "request_id": row["request_id"],
             "machine_id": row["machine_id"],
@@ -718,6 +781,8 @@ class FleetStore:
             "effective_group": group or PENDING_DEFAULT_GROUP,
             "pairing_code": str(row["pairing_code"] or ""),
             "existing_node_id": nid,
+            "was_revoked": revoked,
+            "revoked_note": REVOKED_MACHINE_NOTE if revoked else "",
             "warning": f"approving will rotate key of {nid}" if nid else "",
             "os": row["os"],
             "agent_version": row["agent_version"],
@@ -1093,7 +1158,7 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
         "db_path": str(fc.get("db_path") or ""),
         "offline_after_sec": _int(fc.get("offline_after_sec")) or DEFAULT_OFFLINE_AFTER_SEC,
         "heartbeat_sec": _int(fc.get("heartbeat_sec")) or 30,
-        "enroll_code_ttl_min": _int(fc.get("enroll_code_ttl_min")) or 60,
+        "enroll_code_ttl_min": _int(fc.get("enroll_code_ttl_min")) or ENROLL_CODE_TTL_MIN,
         "pending_ttl_sec": _int(fc.get("pending_ttl_sec")) or PENDING_TTL_SEC,
         "public_url": str(fc.get("public_url") or ""),
         "download": {

@@ -45,7 +45,7 @@
   <div class="fc-sec" id="fc-codebox" style="display:none">
     <h3>新注册码 <button class="btn-sec" onclick="document.getElementById('fc-codebox').style.display='none'">收起</button></h3>
     <div class="fc-kv"><span>注册码 <span class="fc-code" id="fc-code">—</span></span><span>有效至 <b id="fc-code-exp">—</b></span></div>
-    <p style="font-size:.78rem;color:var(--t2);margin:.6rem 0 0">公开安装包不用这张码。只有当场指定某台电脑时才用：<code>Install-ChatXAgent.ps1 -Controller {{ public_url }} -Code ＜注册码＞</code>。8 位数字只能用一次、短时有效，猜错会被限速。</p>
+    <p style="font-size:.78rem;color:var(--t2);margin:.6rem 0 0">公开安装包不用这张码。只有当场指定某台电脑时才用：<code>Install-ChatXAgent.ps1 -Controller {{ public_url }} -Code ＜注册码＞</code>。12 位码（可带短横线，不区分大小写）只能用一次，默认 15 分钟，猜错会被限速。已吊销的电脑拿码也不会自动复活，会进上面的待批准并标 this machine was revoked。</p>
   </div>
 
   <div class="fc-sec" id="fc-roombox" style="display:none">
@@ -129,7 +129,8 @@
     t('fc-pending-n', (list.length||0)+' 台');
     document.getElementById('fc-pending').innerHTML=list.length?list.map(function(n){
       var inst=(n.instances||[]).map(function(i){return esc(i.name||i.base_url||'');}).join(', ')||'—';
-      return '<tr><td><b>'+esc(n.host_name||'—')+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
+      var revoked=n.was_revoked?' <span class="fc-badge fc-bad">this machine was revoked</span>':'';
+      return '<tr><td><b>'+esc(n.host_name||'—')+'</b>'+revoked+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
         '<td><b>'+esc(n.pairing_code||'—')+'</b></td><td>'+esc(n.client_ip||'—')+'</td>'+
         '<td>'+esc(n.requested_group||'—')+'</td><td>'+esc(n.effective_group||'pending-default')+'</td>'+
         '<td>'+esc(n.os||'—')+'</td><td>'+inst+'</td>'+

@@ -126,7 +126,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--token", default=os.environ.get(ENV_TOKEN, ""), help="主控 web_admin.auth_token")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("new-code", help="发一张一次性注册码（8 位，单次，短 TTL，失败限速）")
+    c = sub.add_parser("new-code", help="发一张一次性注册码（12 位 Crockford，默认 15 分钟，失败限速）")
     c.add_argument("--label", default="")
     c.add_argument("--group", default="")
     c.add_argument("--ttl-min", type=int, default=0)
@@ -194,7 +194,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"req_group={str(r.get('requested_group') or '-'):12} "
                   f"group={str(r.get('effective_group') or 'pending-default'):16} "
                   f"{str(r.get('client_ip') or '-'):16} {str(r.get('os') or '-'):16} inst={inst}"
-                  + (f"  {warn}" if warn else ""))
+                  + (f"  {warn}" if warn else "")
+                  + ("  this machine was revoked" if r.get("was_revoked") else ""))
         print(f"待批准 {len(rows)} 台", file=sys.stderr)
         return 0
     if args.cmd == "approve":
@@ -223,7 +224,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{'pending':14} {'pending':8} {str(r.get('effective_group') or 'pending-default'):16} "
                       f"{str(r.get('host_name') or r.get('request_id') or ''):24} "
                       f"pair={r.get('pairing_code') or '-'} ip={r.get('client_ip') or '-'}"
-                      + (f"  {r.get('warning')}" if r.get("warning") else ""))
+                      + (f"  {r.get('warning')}" if r.get("warning") else "")
+                      + ("  this machine was revoked" if r.get("was_revoked") else ""))
         rows = adm.nodes(group=args.group, include_revoked=args.all)
         for r in rows:
             print(f"{r.get('node_id','')[:14]:14} {str(r.get('state') or r.get('status') or ''):8} {str(r.get('group_name') or '-'):10} "

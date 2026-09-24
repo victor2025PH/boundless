@@ -15,7 +15,7 @@ fleet_control:
   db_path: ""                              # 空 → 本配置目录/fleet_control.db
   heartbeat_sec: 30
   offline_after_sec: 120
-  enroll_code_ttl_min: 60
+  enroll_code_ttl_min: 15
   public_url: "https://bd2026.cc/fleet"    # Agent 连的地址（注册码页 / 安装说明展示）
   download:
     version: ""                            # 发布流程写入；空 → 主页显示「即将发布」
