@@ -67,6 +67,24 @@ function backendLoginJS(cred, path) {
   );
 }
 
+// 页面内 API 会话过期（_api_fetch 打 [chatx:session-expired] 标记）时原地静默重登：
+// 依次试凭据链，redirect:'manual' 只取 303 上的 Set-Cookie，不导航、不丢草稿。
+const SESSION_EXPIRED_MARK = "[chatx:session-expired]";
+function backendSilentReloginJS(creds) {
+  return (
+    "(function(){var cs=" + JSON.stringify(creds || []) + ";" +
+    "function t(i){if(i>=cs.length)return Promise.resolve(false);" +
+    "var c=cs[i];" +
+    "var b=Object.keys(c).map(function(k){return k+'='+encodeURIComponent(c[k]);}).join('&');" +
+    "return fetch('/login',{method:'POST',redirect:'manual'," +
+    "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'},body:b," +
+    "credentials:'same-origin'})" +
+    ".then(function(r){return r.type==='opaqueredirect'?true:t(i+1);})" +
+    ".catch(function(){return t(i+1);});}" +
+    "return t(0);})();"
+  );
+}
+
 // 多账号:把 config.accounts[] 解析成 rail 渲染单元。每个账号引用 platforms[] 的平台模板拿 url/inject。
 // 向后兼容:accounts 为空时,从启用的 platforms 合成单账号(account_id = platform.account_id || `${id}-desktop`)。
 let ACCOUNTS = []; // 解析后的账号列表（rail 渲染源）
@@ -607,6 +625,16 @@ initTitlebar();
         base: base,
       }));
       startReconnectPoll();
+    });
+    // 会话过期静默重登：人主动退出（手动登录态）或未配置凭据时不做；60s 冷却防刷。
+    let silentReloginAt = 0;
+    wv.addEventListener("console-message", (e) => {
+      if (String((e && e.message) || "").indexOf(SESSION_EXPIRED_MARK) < 0) return;
+      if (wv._manualLogin || !creds.length) return;
+      const now = Date.now();
+      if (now - silentReloginAt < 60000) return;
+      silentReloginAt = now;
+      wv.executeJavaScript(backendSilentReloginJS(creds)).catch(() => {});
     });
 
     // ── 启动闸门：后端可达后才真正加载工作台 ─────────────────────────────

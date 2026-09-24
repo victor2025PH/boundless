@@ -1343,12 +1343,27 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             pass
         return resp
 
+    # 新版 Starlette 仅在 session 被修改时才重发 cookie：有效请求按节流写入续签时间戳，
+    # 使 session_max_age 成为「空闲超时」而非「登录后固定时长」。
+    _SESSION_RENEW_SEC = 300
+
+    def _renew_session_cookie(request: Request) -> None:
+        now = int(time.time())
+        try:
+            last = int(request.session.get("_rn") or 0)
+        except (TypeError, ValueError):
+            last = 0
+        if now - last >= _SESSION_RENEW_SEC:
+            request.session["_rn"] = now
+
     def _check_session_valid(request: Request) -> bool:
-        """检查 session jti 是否有效（未被撤销）"""
+        """检查 session jti 是否有效（未被撤销）；有效则按节流续签 cookie"""
         jti = request.session.get("jti")
-        if not jti:
-            return True  # 老式 session（无 jti），兼容过渡期
-        return user_store.touch_session(jti)
+        # 无 jti = 老式 session，兼容过渡期
+        valid = user_store.touch_session(jti) if jti else True
+        if valid:
+            _renew_session_cookie(request)
+        return valid
 
     # 坐席（agent）角色作用域：仅限聊天工作台，进不去任何后台设置/页面。
     # 在 _require_auth / _api_auth 两个鉴权 choke point 内强制（避免 middleware 顺序问题）。

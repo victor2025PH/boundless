@@ -1712,6 +1712,24 @@ function bindBackendPopupLogin(win, intendedUrl) {
       "}catch(e){}})();";
     win.webContents.executeJavaScript(js).catch(() => {});
   });
+  // 页内 API 会话过期（_api_fetch 打 [chatx:session-expired] 标记）：原地静默重登，
+  // redirect:'manual' 只取 303 上的 Set-Cookie，不导航、不丢编辑现场；60s 冷却。
+  const silentJs =
+    "(function(){try{return fetch('/login',{method:'POST',redirect:'manual'," +
+    "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'}," +
+    "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")," +
+    "credentials:'same-origin'})" +
+    ".then(function(r){return r.type==='opaqueredirect';})" +
+    ".catch(function(){return false;});}catch(e){return false;}})();";
+  let lastSilent = 0;
+  win.webContents.on("console-message", (_e, _lvl, msg) => {
+    if (String(msg || "").indexOf("[chatx:session-expired]") < 0) return;
+    if (manual) return;
+    const now = Date.now();
+    if (now - lastSilent < 60000) return;
+    lastSilent = now;
+    win.webContents.executeJavaScript(silentJs).catch(() => {});
+  });
 }
 
 // ── 后台弹窗窗口唯一性（2026-08-14，修「后台管理/坐席工作台越点越多」回归）─────────

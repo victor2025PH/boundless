@@ -172,7 +172,11 @@
         var now = Date.now();
         if(!_sess401First || now - _sess401First > 90000){ _sess401First = now; _sess401 = 0; }
         _sess401 += 1;
-        if(_sess401 >= 2) _sessionBanner();
+        if(_sess401 >= 2){
+          /* 桌面壳监听该控制台标记，原地静默重登（不导航，保草稿） */
+          try{ console.info('[chatx:session-expired]'); }catch(_e){}
+          _sessionBanner();
+        }
       }else if(res.ok){
         _sess401 = 0; _sess401First = 0;
         if(window.AITRNotify){
