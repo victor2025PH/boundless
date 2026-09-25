@@ -37,15 +37,17 @@ _BARE_FETCH_CEILINGS = {
     # 统一层自身的原生 fetch 调用（_oneAttempt 两处 + 老浏览器透传一处）——豁免基线，
     # 全站唯一允许长期保留裸 fetch 的文件。
     "_api_fetch.html": 3,
-    # 2026-08-07 批清尾巴：仅剩 /api/personas/{pid}/media/test 一处（并行线在途文件，
-    # 归零后请顺手除名本条目）。
-    "personas.html": 1,
+    # 2026-09-25：personas.html 裸 fetch 已归零（实测 0），账本下调锁死。
     # 独立整页（布局链无 _api_fetch.html）+ 实时通话链自带 signal 的超时包装——
     # 结构性豁免：为一处迁移给独立页挂统一层，收益低于回归风险，刻意保留。
     "voice_call.html": 1,
     # 群成员提取管理台：独立自包含页（不 extends base.html、无 _api_fetch.html include），
     # 全页仅 api() 一处原生 fetch（同源 + 内建 CSRF 头 + JSON 解析）。同 voice_call 结构性豁免。
     "tg_members.html": 1,
+    # 收件箱启动时拉静态平台注册表。tests/test_douyin_e2e_alignment.py 钉死字面
+    # fetch('/static/platform_registry.json'（PC/PN 没有的平台回落注册表色和正名）。
+    # 改 apiFetch 会改掉这条契约，且该 GET 是 no-store 的静态 JSON，不走统一层超时重试。
+    "unified_inbox.html": 1,
 }
 
 

@@ -318,7 +318,7 @@ function _i18nErrText(code){
 }
 async function loadI18nAll(){
   try{
-    const r=await fetch('/api/templates-i18n');
+    const r=await apiFetch('/api/templates-i18n');
     const d=await r.json();
     if(d && d.ok){ i18nData=d.variants||{}; renderI18n(); }
   }catch(_){}
@@ -369,7 +369,7 @@ async function i18nDraft(){
   const btn=document.getElementById('i18n-draft-btn');
   btn.disabled=true;
   try{
-    const r=await fetch('/api/templates-i18n/draft',{method:'POST',
+    const r=await apiFetch('/api/templates-i18n/draft',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({key:i18nKey,lang:lang})});
     const d=await r.json();
@@ -381,7 +381,7 @@ async function i18nSaveRow(lc,i){
   const ta=document.getElementById('i18n-ta-'+lc+'-'+i);
   if(!ta) return;
   try{
-    const r=await fetch('/api/templates-i18n/save',{method:'POST',
+    const r=await apiFetch('/api/templates-i18n/save',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({key:i18nKey,lang:lc,index:i,text:ta.value,approved:true})});
     const d=await r.json();
@@ -390,7 +390,7 @@ async function i18nSaveRow(lc,i){
 }
 async function i18nConfirm(lc,i){
   try{
-    const r=await fetch('/api/templates-i18n/confirm',{method:'POST',
+    const r=await apiFetch('/api/templates-i18n/confirm',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({key:i18nKey,lang:lc,index:i})});
     const d=await r.json();
@@ -398,9 +398,9 @@ async function i18nConfirm(lc,i){
   }catch(_){ _i18nMsg(_i18nErrText(''), false); }
 }
 async function i18nDeleteRow(lc,i){
-  if(!confirm(window.T('tp_i18n_del_confirm'))) return;
+  if(!(await AITRNotify.confirm(window.T('tp_i18n_del_confirm')))) return;
   try{
-    const r=await fetch('/api/templates-i18n/delete',{method:'POST',
+    const r=await apiFetch('/api/templates-i18n/delete',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({key:i18nKey,lang:lc,index:i})});
     const d=await r.json();

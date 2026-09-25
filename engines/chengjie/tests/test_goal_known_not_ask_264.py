@@ -254,9 +254,13 @@ def test_regression_same_conversation_occupation_answered_never_asked_again(capl
         occ_missed = [e for e in store.list_events(gid, kinds=("probe_missed",))
                       if e["detail"].startswith("occupation@")]
         assert not occ_missed
-        msgs = [r.getMessage() for r in caplog.records]
-        assert not any("target=occupation" in m and "decision=probe" in m and "result=pending" in m
-                       for m in msgs[3:])
+        msgs = [r.getMessage() for r in caplog.records
+                if r.name == "src.companion.goals.service"]
+        # 职业 pending 只允许第一次硬问那一行。魔法切片 msgs[3:] 会在根 logger
+        # 已是 INFO（xdist 邻居 / 3.13）时把这行算进「之后」，误报第二次追问。
+        probes = [m for m in msgs
+                  if "target=occupation" in m and "decision=probe" in m and "result=pending" in m]
+        assert len(probes) <= 1, probes
         # 深化式最多一次（同日）且是 deepen 不是 probe
         deep = store.list_events(gid, kinds=(PROBE_EVENT_DEEPEN,))
         assert len(deep) <= 1

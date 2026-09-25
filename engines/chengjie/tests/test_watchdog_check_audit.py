@@ -145,3 +145,29 @@ def test_audit_covers_all_ticked_checks():
     audited = {r["check"] for r in m.collect()}
     assert ticked - audited == set(), f"_tick 调用了但未被审计：{ticked - audited}"
     assert len(audited) >= 50, f"只审计到 {len(audited)} 个，疑似解析退化"
+
+
+def test_check_phantom_unread_actually_runs(monkeypatch):
+    """真调用 ``_check_phantom_unread``：差额低于阈值时不告警、不改告警位。
+
+    源码字符串断言抓不到函数内导入改名。差额 0 < min_phantom 必须安静返回。
+    """
+    import types
+
+    from src.inbox.health_watchdog import HealthWatchdog
+    from src.inbox import unread_aggregate as ua
+
+    monkeypatch.setattr(
+        ua, "phantom_unread_report",
+        lambda store: {"phantom": 0, "badge": 1, "store": 1, "by_account": {}})
+    fake = types.SimpleNamespace(
+        _config_manager=types.SimpleNamespace(config={
+            "health_watchdog": {"phantom_unread_remind": {
+                "enabled": True, "min_phantom": 5}}}),
+        _inbox=lambda: object(),
+        _pu_alerted=False,
+        _pu_last_remind=0.0,
+    )
+    HealthWatchdog._check_phantom_unread(fake, now=1_700_000_000.0)
+    assert fake._pu_alerted is False
+    assert fake._pu_last_remind == 0.0

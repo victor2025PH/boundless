@@ -54,8 +54,11 @@ def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: st
     _mirror_fail_total += 1
     now = time.monotonic()
     key = str(platform or "?")
-    last = _mirror_fail_last_warn.get(key, 0.0)
-    if now - last < _MIRROR_FAIL_WARN_GAP_SEC:
+    last = _mirror_fail_last_warn.get(key)
+    # 缺 key ≠ 时间戳 0。monotonic 从开机起算，新机器上经常 < 600；
+    # get(..., 0.0) 会把「该平台还没警告过」当成「刚刚警告过」，启动后 10 分钟
+    # 内第一次回写失败只打 debug。
+    if last is not None and now - float(last) < _MIRROR_FAIL_WARN_GAP_SEC:
         logger.debug("[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s（节流）",
                      platform, account_id, chat_key, kind, exc_info=True)
         return

@@ -16,7 +16,10 @@ class _Cfg:
     config_path = None
     config = {
         "domain": "conversion", "web_admin": {"site_name": "T"},
-        "ai": {"ai_name": "苏婉", "reply_style": "亲切"},
+        # reply_style 必须落在 _STYLE_MAP（concise/warm/professional）。
+        # 「亲切」不在表内时，【快速设置覆盖】只靠 ai_name；会话 c1 若被别的用例
+        # 绑了 chat_binding / account_profile，名字会被压掉，整段消失（3.13 xdist）。
+        "ai": {"ai_name": "苏婉", "reply_style": "warm"},
         "companion": {"deep_persona": {"enabled": True}},
     }
 
@@ -29,7 +32,8 @@ def test_deep_persona_block_after_static_sections_before_context(monkeypatch):
     marker = "【深度人设-测试标记】今天心情不错"
     monkeypatch.setattr(dp, "build_deep_persona_block", lambda *a, **k: marker)
     client = AIClient(_Cfg())
-    prompt = client._build_system_instruction({"reply_lang": "en", "chat_id": "c1"})
+    prompt = client._build_system_instruction(
+        {"reply_lang": "en", "chat_id": "layout-cache-prefix-probe"})
     assert marker in prompt, "深度人设块丢了（推后 ≠ 丢弃）"
     i_marker = prompt.find(marker)
     i_quick = prompt.find("【快速设置覆盖】")

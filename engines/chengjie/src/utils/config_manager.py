@@ -392,12 +392,19 @@ class ConfigManager:
             rows = con.execute(
                 "SELECT id, file_path FROM persona_media").fetchall()
             for mid, fp in rows:
-                p = str(fp or "")
-                if not p or Path(p).is_absolute():
+                p = str(fp or "").strip()
+                if not p:
                     continue
+                # 种子在 Windows 上暂存成反斜杠相对路径。Linux 的 Path 不把
+                # ``\`` 当分隔符，直接拼接会变成一个不存在的单文件名。
+                # 盘符绝对路径（``D:\...`` / ``D:/...``）保持原样，不二次拼接。
+                drive = len(p) >= 3 and p[1] == ":" and p[2] in "\\/"
+                if Path(p).is_absolute() or drive or p.startswith("\\\\"):
+                    continue
+                rel = Path(*p.replace("\\", "/").split("/"))
                 con.execute(
                     "UPDATE persona_media SET file_path = ? WHERE id = ?",
-                    (str((data_root / p).resolve()), mid))
+                    (str((data_root / rel).resolve()), mid))
             con.commit()
         finally:
             con.close()

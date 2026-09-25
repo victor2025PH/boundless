@@ -158,7 +158,9 @@ def test_scoped_shape_vs_unscoped_shape(tmp_path):
     # hidden_included＝历史只读视角特性探测标记（2026-08-17，前端据此区分
     # 「后端已放行隐藏行」vs「旧后端忽略了 include_hidden 参数」）
     assert set(scoped.keys()) == {"ok", "ts", "chats", "has_more",
-                                  "oldest_ts", "scope", "hidden_included"}
+                                  "oldest_ts", "scope", "hidden_included",
+                                  # 账号视角同样要能画「真发已暂停」黄态
+                                  "deliver_paused", "deliver_paused_meta"}
     # 未显式带 include_hidden / 无 account_id scoped → 标记必须为 False（默认口径不变）
     assert scoped["hidden_included"] is False
     # 无参数：与现有响应逐字段一致（零回归），含 platform_status、无 scope
@@ -168,6 +170,10 @@ def test_scoped_shape_vs_unscoped_shape(tmp_path):
         "unread_by_platform", "unread_by_account",  # P6 全库有效未读聚合
         "attn_by_account",                          # P8 近窗需人工聚合
         "accounts_summary",                         # P0 账号真相单源（2026-08-17）
+        "archived_unread_by_account",               # 归档里还有未读
+        "unread_breakdown_by_account",              # 四桶明细（store 能算时才带）
+        "ai_skip_groups",                           # 群/频道是否跳过拟稿
+        "deliver_paused", "deliver_paused_meta",    # 全局真发暂停
     }
     assert isinstance(plain["unread_by_platform"], dict)
     assert isinstance(plain["unread_by_account"], dict)
@@ -254,4 +260,7 @@ def test_scoped_without_store_falls_back_to_full_path():
         "ok", "ts", "chats", "platform_status", "has_more", "oldest_ts",
         "unread_by_platform", "unread_by_account", "attn_by_account",
         "accounts_summary",   # P0 账号真相单源（2026-08-17）
+        "archived_unread_by_account",
+        "ai_skip_groups",
+        "deliver_paused", "deliver_paused_meta",
     }

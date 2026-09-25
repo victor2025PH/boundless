@@ -265,6 +265,10 @@ class TestAiRuntimeStatus:
         assert ("/api/workspace/ai-runtime-status", "GET") in live
 
     def test_without_ai_client_reports_normal(self, tmp_path):
+        # 通道快照读的是进程级健康表。全量 xdist 里前序用例可能留下一条
+        # needs_login，这里先清空，断言的是「本请求没有 AI 客户端」而不是邻居状态。
+        from src.integrations.platform_session_health import get_platform_session_health
+        get_platform_session_health().reset()
         client, m = _client_mgr(tmp_path)
         r = client.get("/api/workspace/ai-runtime-status").json()
         # 2026-07-22 起响应多带 channels（平台通道离线快照，驱动坐席端 ws-chandown

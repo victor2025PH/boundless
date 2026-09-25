@@ -137,7 +137,9 @@
         仅 /workspace/channels/* 路径出现,别处保持精简。 -#}
     {%- if _cur_path.startswith('/workspace/channels/') %}
     <div class="wsb-sec">{{ (i18n or {}).get('section_channels', '真机矩阵') }}</div>
-    {%- for it in (nav_matrix_items or []) %}{{ wsb_item(it) }}{%- endfor %}
+    {#- nav_channel_sidebar_items：显隐过滤前的矩阵项（含当前渠道）。
+        matrix_nav 关时 nav_matrix_items 被清空，深链进来会整组消失、当前项无法高亮。 -#}
+    {%- for it in (nav_channel_sidebar_items or nav_matrix_items or []) %}{{ wsb_item(it) }}{%- endfor %}
     {%- endif %}
     <div class="wsb-sec">{{ (i18n or {}).get('section_data_records', '更多') }}</div>
     {%- for it in (nav_simple_more or []) %}

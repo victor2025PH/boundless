@@ -428,7 +428,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "里切换。",
         "Workspace: the language button in the top bar switches zh⇄en for the "
         "whole page; admin pages switch it from the user menu.",
-        "语言 英文 中文 切换语言 language english",
+        "语言 英文 中文 切换语言 换成英文 英文界面 界面语言 language english",
         "",
     ),
     (
@@ -744,7 +744,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "photos or identity, repeated follow-ups after low satisfaction. Claim "
         "it, open the conversation, add a note, then close it. In simple mode "
         "this is the home page.",
-        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话",
+        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话 亲自处理 哪些对话 需要我处理",
         "/cases",
     ),
     (

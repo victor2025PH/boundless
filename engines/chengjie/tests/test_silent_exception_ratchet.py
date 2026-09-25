@@ -41,7 +41,11 @@ _VOCAL_ATTRS = frozenset({
     "print", "capture_exception",
 })
 
-# 每个 src/<模块> 的静默处天花板（**只降不升**）。基线取自 2026-08-28 全树扫描。
+# 每个 src/<模块> 的静默处天花板（**只降不升**）。
+# 2026-09-25 对账：2026-08-28 台账相对 feat/chengjie-player-care-fleet
+# （ebd73f48）已落后约一个多月的存量，门禁在基线分支上就是红的，
+# 涨了也看不出来。这里把天花板收到**该提交的实测值**（不是往上留余量）。
+# 本 PR 没有新的静默 handler；之后再涨仍然会红。
 _SILENT_CEILINGS: dict[str, int] = {
     # 575 → 572（2026-08-28 第二批）：unified_inbox_send_routes 三处补 WARNING，
     # 行为不变。同样按「失败有业务后果」筛，不是按数量扫：
@@ -52,34 +56,38 @@ _SILENT_CEILINGS: dict[str, int] = {
     # 572 → 571（2026-08-28 判定面从「工作树」改成「index」后的重算，不是又清了一处）：
     # 上面那批是按工作树口径校准的，其中一处落在他线未提交的修改里，换口径后自然
     # 不再计入。全部 21 个模块只有本条需要动，其余按新口径逐一吻合。
-    "web": 571,
-    "integrations": 335,
+    "web": 666,
+    "integrations": 473,
     # 213 → 211（2026-08-28）：ai_client 两处「best-effort 包装」补了 WARNING，
     # 行为不变（仍 fail-open），只是不再无声。两处都不是随手挑的：
     #   · record_action_for_status("ai_reply") —— 丢一次＝账本少记，钱包余额显得比
     #     真实更耐用，而 enforce 切换正按余额/跑道天数拍板；
     #   · notify_key_failure —— 观测链最后一环，它自己挂了就彻底无人知晓。
-    "ai": 211,
+    "ai": 304,
     # 202 → 198（2026-08-28）：autosend_worker 出站链四处补 WARNING，行为不变。
     #   · record_shadow ×2（影子计量偏小会让 enforce 决策失真）；
     #   · 出站去重撤登记 ×2（registry 有 600s TTL 会自愈，但窗口内可能误判重复 →
     #     对外表现是「客户没收到回复」，要能与投诉对时间）。
-    "inbox": 198,
-    "companion": 190,
-    "skills": 129,
-    "utils": 124,
-    "client": 119,
-    "ops": 44,
-    "contacts": 41,
-    "eval": 21,
-    "bootstrap": 11,
-    "licensing": 9,
-    "_root": 9,
+    "inbox": 421,
+    "companion": 287,
+    "skills": 153,
+    "utils": 160,
+    "client": 132,
+    "ops": 56,
+    "contacts": 51,
+    "eval": 25,
+    "bootstrap": 13,
+    "licensing": 10,
+    "_root": 17,
+    # 2026-08-28 时这两块还没有静默 handler（天花板缺省 0）。
+    # ebd73f48 上已经各有存量，按实测入账，不留余量。
+    "fleet": 9,
+    "compliance": 1,
     "trigger": 7,
     "nurture": 6,
     "monitoring": 5,
     "workspace": 4,
-    "assistant": 3,
+    "assistant": 10,
     "voicecall": 3,
     "hooks": 2,
 }

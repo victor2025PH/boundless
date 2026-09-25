@@ -185,10 +185,12 @@ def test_decide_risk_hold_keeps_existing_shadow_and_hard_stop():
     assert d.level == "L1" and d.shadow is not None
     assert d.shadow.would_hold_level == "L3" and d.shadow.hold_reason == "money"
     assert d.shadow.risk_hits == ["usdt"] and d.risk_hold == "commitment"
-    # 硬停分支语义不动（停联告别「最多一条」照给）
+    # 硬停先于 risk_hold：原因仍是 stop_contact，不被 privacy 持有改写。
+    # D-O1 / R88（test_drafts_risk_policy 钉死）：未冻结的 shadow×auto_ai
+    # 停联是 L1 人审、不发告别，不是旧的 L2+告别。
     h = decide("high", ["stop_contact"], "low", [], [], automation_mode="auto_ai",
                policy_mode="shadow", conversation_id="c", risk_hold_reason="privacy")
-    assert h.hard_stop == "stop_contact" and h.level == "L2" and h.farewell
+    assert h.hard_stop == "stop_contact" and h.level == "L1" and h.farewell is False
 
 
 # ── B. needs_human 作闸：打标登记持有 / 摘标解除 ─────────────────────────

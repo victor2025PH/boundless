@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -47,19 +48,25 @@ def test_fingerprint_stable_and_content_sensitive(fp_mod, tmp_path):
     assert d3 != d1
 
 
-def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
+def _fake_backend_dist(tmp_path: Path) -> Path:
+    """verify_stamp 先认当前平台的 sidecar（Windows ``backend.exe``，其余 ``backend``），
+    缺了它会在盖章检查之前报 missing dist。假 dist 必须先摆上那份产物。"""
     dist = tmp_path / "backend-dist"
     dist.mkdir()
-    (dist / "backend.exe").write_bytes(b"MZ")
+    name = "backend.exe" if os.name == "nt" else "backend"
+    (dist / name).write_bytes(b"MZ")
+    return dist
+
+
+def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
+    dist = _fake_backend_dist(tmp_path)
     ok, reason, _, _ = fp_mod.verify_stamp(_ENGINE, dist)
     assert ok is False
     assert "source-fingerprint" in reason or "unstamped" in reason
 
 
 def test_verify_rejects_stale_stamp(fp_mod, tmp_path):
-    dist = tmp_path / "backend-dist"
-    dist.mkdir()
-    (dist / "backend.exe").write_bytes(b"MZ")
+    dist = _fake_backend_dist(tmp_path)
     fp_mod.write_stamp(dist, {
         "version": 1,
         "algorithm": "sha256",

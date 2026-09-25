@@ -192,7 +192,7 @@ function saveModal(){
   var tid=document.getElementById('modal-id').value.trim();
   var title=document.getElementById('modal-ttl').value.trim();
   var content=document.getElementById('modal-content').value.trim();
-  if(!title||!content){ alert(window.T('tm_js003')); return; }
+  if(!title||!content){ AITRNotify.alert(window.T('tm_js003')); return; }
   var body={title:title,content:content,language:document.getElementById('modal-lang').value,
     scene:document.getElementById('modal-scene').value,platform:document.getElementById('modal-plat').value};
   var url,method;
@@ -201,16 +201,16 @@ function saveModal(){
   apiFetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ closeModal(); load(); }
-      else { alert((d&&d.detail)||window.T('ov_js_save_fail')); }
-    }).catch(function(){ alert(window.T('draft.net_err')); });
+      else { AITRNotify.alert((d&&d.detail)||window.T('ov_js_save_fail')); }
+    }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
 }
 function delTpl(tid, title){
   if(!confirm(window.T('tm_js004')+' "'+title+'"? '+window.T('tm_js005'))) return;
   apiFetch('/api/reply-templates/'+encodeURIComponent(tid),{method:'DELETE'}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ load(); }
-      else { alert((d&&d.detail)||window.T('tm_js006')); }
-    }).catch(function(){ alert(window.T('draft.net_err')); });
+      else { AITRNotify.alert((d&&d.detail)||window.T('tm_js006')); }
+    }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
 }
 document.getElementById('tm-modal').addEventListener('click', function(e){
   if(e.target===this) closeModal();

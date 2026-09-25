@@ -59,6 +59,9 @@ SEAT_MODE_CHOICES = ("", "single", "multi")
 # 校验约束——两平台无 mark_read/typing，开了会被如实提示不支持）。
 # 2026-09-07：qq（协议登录个人号，Milky）进能力矩阵 → 键域同步扩（typing 是协议层硬限制，
 # 开了会被 validate_platform_flags_caps 如实提示不支持）。
+# douyin / tiktok 已在能力矩阵 WORKERS（官方 worker），但还没进
+# platform_login.SUPPORTED_PLATFORMS。本表必须是登录目录的子集，所以这两项
+# 先不进；差集由 test_platforms_match_worker_registry 钉死。
 PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq")
 # 只对「语音触发覆写」额外放行的桌面桥平台（2026-09-19 P1）：微信 PC 副驾经虚拟声卡发语音，
 # 与协议 worker 无关，不进 PLATFORMS（那张表与能力矩阵 WORKERS 钉死），但运营要能单独关掉

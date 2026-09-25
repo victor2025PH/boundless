@@ -144,7 +144,8 @@ class TestChannelSnapshotName:
         class _FakeReg:
             def get(self, plat, acct):
                 if acct == "61580373548045":
-                    return {"label": "", "meta": {"self_name": "Micah Bindo"}}
+                    return {"label": "", "status": "online",
+                            "meta": {"self_name": "Micah Bindo"}}
                 return None
 
         import src.integrations.account_registry as reg_mod

@@ -736,7 +736,12 @@ def ensure_ops_sweeper(app: Any, config_getter: Callable[[], Dict[str, Any]], *,
         _start()
     except RuntimeError:
         try:
-            app.add_event_handler("startup", _start)
+            # Starlette 1.x 从 App 上拿掉了 add_event_handler；FastAPI 仍把
+            # startup 列表放在 router 上（on_event / router.add_event_handler）。
+            adder = getattr(app, "add_event_handler", None)
+            if adder is None:
+                adder = app.router.add_event_handler
+            adder("startup", _start)
         except Exception:
             logger.debug("[tiktok-huoke] startup 钩子挂载失败", exc_info=True)
     return True

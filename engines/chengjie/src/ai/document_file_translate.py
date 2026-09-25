@@ -139,7 +139,7 @@ async def translate_docx(
             try:
                 res = await xlate.translate(
                     text, target_lang=target_lang, source_lang=source_lang,
-                    style=style, engine=engine)
+                    style=style, engine=engine, allow_short=True)
             except Exception:
                 stats["failed"] += 1
                 logger.debug("[docx-xlate] 段翻译异常（保留原文）", exc_info=True)
@@ -216,7 +216,7 @@ async def translate_xlsx(
             try:
                 res = await xlate.translate(
                     text, target_lang=target_lang, source_lang=source_lang,
-                    style=style, engine=engine)
+                    style=style, engine=engine, allow_short=True)
             except Exception:
                 stats["failed"] += 1
                 _emit(progress, stats["translated"] + stats["failed"], total)
@@ -368,7 +368,7 @@ async def translate_subtitle(
             try:
                 res = await xlate.translate(
                     src, target_lang=target_lang, source_lang=source_lang,
-                    style=style, engine=engine)
+                    style=style, engine=engine, allow_short=True)
             except Exception:
                 stats["failed"] += 1
                 logger.debug("[srt-xlate] 行翻译异常（保留原文）", exc_info=True)
@@ -469,7 +469,7 @@ async def translate_pptx(
             try:
                 res = await xlate.translate(
                     text, target_lang=target_lang, source_lang=source_lang,
-                    style=style, engine=engine)
+                    style=style, engine=engine, allow_short=True)
             except Exception:
                 stats["failed"] += 1
                 logger.debug("[pptx-xlate] 段翻译异常（保留原文）", exc_info=True)

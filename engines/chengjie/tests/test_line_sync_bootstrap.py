@@ -78,7 +78,7 @@ def _worker(config=None) -> LineProtocolWorker:
 
 def _wire(monkeypatch, client, store):
     """把一次性 client 与 inbox store 换成夹具（两处都是函数内 import，patch 模块属性即可）。"""
-    import okline
+    okline = pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline
     import src.integrations.protocol_bridge as pb
     monkeypatch.setattr(okline.OkLine, "from_tokens_file",
                         classmethod(lambda cls, p, **k: client))
@@ -288,7 +288,7 @@ def test_start_schedules_sync_without_blocking(monkeypatch):
     import src.integrations.line_protocol_login as lpl
     monkeypatch.setattr(lpl, "is_okline_available", lambda: True)
     monkeypatch.setattr(lpl, "tokens_path", lambda cfg, acct: __file__)  # 存在即可
-    import okline
+    okline = pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline
     monkeypatch.setattr(okline.OkLine, "from_tokens_file",
                         classmethod(lambda cls, p, **k: _FakeClient()))
 

@@ -226,6 +226,7 @@ class _FakeAuth:
 
 def _run_migrate_with_session_loop(tmp_path, monkeypatch, *, cross_loop: bool):
     """在独立线程 loop 上放一个假 session，验证 _migrate 的执行落点。"""
+    pytest.importorskip("pyrogram")  # CI 只装 requirements-ci.txt，不含 pyrogram
     import threading
     import pyrogram.session as pysess
 
@@ -328,6 +329,7 @@ def test_storage_closed_probe():
 
 def test_migrate_refuses_closed_storage(tmp_path, monkeypatch):
     """storage 已关 → _migrate 直接抛 LoginStorageClosed，不碰 session.stop / storage.dc_id。"""
+    pytest.importorskip("pyrogram")  # CI 只装 requirements-ci.txt，不含 pyrogram
     import pyrogram.session as pysess
     sink: list = []
     login = tpl.TelegramQrLogin(1, "h", str(tmp_path))

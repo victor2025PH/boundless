@@ -727,14 +727,14 @@ async function rhMarkSent(){
   const btn=document.getElementById('rh-sent-btn');btn.disabled=true;
   try{
     const res=await apiFetch('/api/reactivation/'+encodeURIComponent(_rhPendingJid)+'/mark-sent',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
-    if(!res.ok){alert(window.T('inbox.conv.mark_fail')+' '+res.status);return;}
+    if(!res.ok){AITRNotify.alert(window.T('inbox.conv.mark_fail')+' '+res.status);return;}
     /* RH-P3：记账 + 必挽队列自动接续——发完直接带出下一位，不必回榜单再找 */
     _rhFocusDone[_rhPendingJid]=1;
     var nxt=rhQueueNext(_rhPendingJid);
     rhLoad(1);
     if(nxt){rhDraftFor(nxt.jid);}
     else{rhCloseModal();}
-  }catch(e){alert(e);}finally{btn.disabled=false;}
+  }catch(e){AITRNotify.alert(e);}finally{btn.disabled=false;}
 }
 
 /* ── 管理工具：contact_id 回填诊断 ────────────────────── */

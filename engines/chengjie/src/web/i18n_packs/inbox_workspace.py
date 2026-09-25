@@ -2332,7 +2332,7 @@ ZH = {
     "inbox.plat.instagram_desc": "官方 Messaging API 接入 · 专业账号私信 · 填凭证即用（无扫码）",
     "inbox.plat.line_desc": "协议扫码 / 真机接入 · 群聊与 1v1 · 自动翻译 / 引流话术",
     # P2 去黑话（B64 二期）：旧词「线索打标（非主页私信）」是内部行话，新用户读不懂卖点
-    "inbox.plat.messenger_desc": "个人 Messenger 账号接入 · AI 自动回复私信 · 自动发现潜在客户",
+    "inbox.plat.messenger_desc": "个人 Messenger 账号接入 · 非主页私信 · AI 自动回复私信 · 自动发现潜在客户",
     "inbox.plat.none": "未接入账号",
     "inbox.plat.offline": "平台已断开",
     "inbox.plat.online": "平台已连接",
@@ -5553,7 +5553,7 @@ EN = {
     "inbox.pill.tags_n": "{n} tags",
     "inbox.plat.instagram_desc": "Official Messaging API · professional-account DMs · credentials only (no QR)",
     "inbox.plat.line_desc": "Protocol QR / device login · groups & 1:1 · auto-translate / outreach scripts",
-    "inbox.plat.messenger_desc": "Connect a personal Messenger account · AI replies to DMs for you · surfaces potential customers automatically",
+    "inbox.plat.messenger_desc": "Connect a personal Messenger account · not a Page inbox · AI replies to DMs for you · surfaces potential customers automatically",
     "inbox.plat.none": "No account linked",
     "inbox.plat.offline": "Platform disconnected",
     "inbox.plat.online": "Platform connected",

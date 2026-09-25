@@ -554,7 +554,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
        AI 是否停下交给人。人设列只调「记录级别」（标签颜色 / 记录），不影响拦不拦。 -->
   <div class="rps-card" id="rps-sec-risk" style="display:none">
     <h3>{{ (i18n or {}).get('rps_rk_title', "🧯 敏感话题 · AI 遇到这些话会怎么做") }}
-      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:rgba(245,158,11,.14);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的改动") }}</span></h3>
+      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:color-mix(in srgb, var(--amber,#f59e0b) 14%, transparent);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的改动") }}</span></h3>
     <p class="rps-hint" id="rps-rk-hint">{{ (i18n or {}).get('rps_rk_hint', "客户说到下面这些话，AI 默认都会继续回复，只在会话上记一笔。想让某类话 AI 停下来交给人，打开那一行的「锁定」。全球客户同一套规则，不分昼夜。摘掉「需人工」后同类 {n} 分钟内不再重打。") }}</p>
     <div class="rps-row" style="flex-wrap:wrap;gap:.4rem .6rem" id="rps-rk-legend"></div>
     <div class="rps-row">
@@ -607,7 +607,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
        Q-18 最近 5 条（会话 / 时间 / 原因 / 命中词）。数据源 src/inbox/abort_ledger（app_settings KV 滚动 200，来自既有
        Q-18 [autosend] abort + [needs_human] 打标 两处日志点）。旧后端 404 → 整卡隐藏（rpsAlLoad）。 -->
   <div class="rps-card" id="rps-al-card" style="display:none">
-    <h3 id="rps-al-title">{{ (i18n or {}).get('rps_al_title', "🚧 今日拦截 · AI 为什么没回") }} <span class="rps-chip" id="rps-al-total" style="background:rgba(37,99,235,.12);color:var(--tk-brand,#2563eb)"></span></h3>
+    <h3 id="rps-al-title">{{ (i18n or {}).get('rps_al_title', "🚧 今日拦截 · AI 为什么没回") }} <span class="rps-chip" id="rps-al-total" style="background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 12%, transparent);color:var(--tk-brand,#1e8cf2)"></span></h3>
     <p class="rps-hint" id="rps-al-hint">{{ (i18n or {}).get('rps_al_hint', "最近 24 小时自动回复被拦下的次数，按原因码计：成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息。让位两项从 v1.0.82 起只是延后不是丢稿，窗过自动发。") }}</p>
     <div class="rps-row" id="rps-al-counts" style="flex-wrap:wrap;gap:.4rem;border-top:none"></div>
     <table class="rps-po-table" id="rps-al-table"><thead><tr id="rps-al-thead">
@@ -4652,7 +4652,7 @@ async function rpsAlLoad(){
     var cbox = document.getElementById('rps-al-counts');
     if (cbox) cbox.innerHTML = order.map(function(k){
       var n = Number(counts[k] || 0);
-      return '<span class="rps-chip" style="' + (n ? 'background:rgba(220,38,38,.10);color:var(--t)' : 'opacity:.55') + '">' + rpsEsc(rpsAlReason(k)) + ' · ' + n + '</span>';
+      return '<span class="rps-chip" style="' + (n ? 'background:color-mix(in srgb, var(--tk-danger,#e11d48) 10%, transparent);color:var(--t)' : 'opacity:.55') + '">' + rpsEsc(rpsAlReason(k)) + ' · ' + n + '</span>';
     }).join('');
     var rows = d.recent || [], tb = document.getElementById('rps-al-tbody'), tbl = document.getElementById('rps-al-table'), empty = document.getElementById('rps-al-empty');
     if (tb) tb.innerHTML = rows.map(function(x){

@@ -700,4 +700,10 @@ def get_nav_context(config: dict = None, developer_mode: bool = False) -> dict:
             nav_matrix_items=_mark_locked(ctx["nav_matrix_items"], locked),
             nav_cmd_items=_drop_locked(ctx["nav_cmd_items"], locked),
         )
-    return _apply_ui_visibility(ctx, config, developer_mode=bool(developer_mode))
+    # 渠道中心（/workspace/channels/*）的工作台侧栏是该页唯一导航。matrix_nav
+    # 关时五项从常驻菜单和命令面板剔除（nav_matrix_items 仍清空，显隐契约不变），
+    # 但人已经站在渠道页上时必须还能高亮当前渠道并在四渠道间互切——否则侧栏
+    # 渲染了却没有当前项。这份副本带档位锁标注解，不带显隐剔除。
+    channel_items = ctx.get("nav_matrix_items") or []
+    ctx = _apply_ui_visibility(ctx, config, developer_mode=bool(developer_mode))
+    return dict(ctx, nav_channel_sidebar_items=channel_items)

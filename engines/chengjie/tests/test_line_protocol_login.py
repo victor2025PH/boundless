@@ -7,6 +7,8 @@ import os
 import tempfile
 import time
 
+import pytest
+
 from src.integrations import platform_login as pl
 from src.integrations import line_protocol_login as lpl
 from src.integrations.account_registry import AccountRegistry
@@ -118,7 +120,7 @@ def test_maybe_register_skips_when_okline_missing(monkeypatch):
 
 
 def test_provider_flow_authorized_persists(monkeypatch):
-    import okline
+    okline = pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline
     monkeypatch.setattr(okline, "OkLine", _FakeOkLine)
     monkeypatch.setattr(lpl, "is_okline_available", lambda: True)
 

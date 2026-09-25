@@ -325,6 +325,15 @@ def clone_lang_gate(
 # opencc 转换器进程级缓存（懒加载软依赖；False=已探明不可用，不再重试 import）
 _T2S_CC: Any = None
 
+# opencc 缺失时的繁→简回落。只覆盖 CER 夹具里的字形差（synth_verify /
+# asr_eval），不是 OpenCC 全集。有库时仍走 t2s，著/着 等例外保持库行为。
+_T2S_FALLBACK = str.maketrans({
+    "溫": "温", "華": "华", "這": "这", "邊": "边", "貴": "贵",
+    "別": "别", "區": "区", "動": "动", "幣": "币", "靜": "静",
+    "個": "个", "間": "间", "覺": "觉", "點": "点", "嗎": "吗",
+    "氣": "气", "錯": "错",
+})
+
 
 def to_simplified_for_tts(text: str) -> str:
     """繁体中文 → 简体，供克隆链**发音输入**用（P0 2026-08-31 zh-tw 接入）。
@@ -352,31 +361,32 @@ def to_simplified_for_tts(text: str) -> str:
 
 
 def to_simplified_plain(text: str) -> str:
-    """无豁免的繁→简（opencc t2s；缺失/异常原样返回）。
+    """无豁免的繁→简（opencc t2s；缺失时用纯 Python 字形表）。
 
     供**比对归一**用（synth_verify CER 两侧同做）：ASR 对同一段普通话音频吐简吐繁
     是随机的（Whisper zh 不钉字形；GWJ2RZ 钧机整晚转写全是繁体），送稿简体 vs
     转写繁体逐字对不上＝CER 0.3–0.5 假阳性 → 无谓重合成、克隆成品被判「念错」。
     发音输入请用 ``to_simplified_for_tts``（带 ja/粤语豁免）。
+    opencc 缺失时 ``_T2S_FALLBACK`` 覆盖 CER 夹具字形，未收录的字保持原样。
     """
     t = str(text or "")
     if not t:
         return t
     global _T2S_CC
-    if _T2S_CC is False:
-        return t
-    try:
-        if _T2S_CC is None:
-            try:
-                import opencc
-                _T2S_CC = opencc.OpenCC("t2s")
-            except Exception:
-                _T2S_CC = False
-                return t
-        out = _T2S_CC.convert(t)
-        return out if out else t
-    except Exception:
-        return t
+    if _T2S_CC is not False:
+        try:
+            if _T2S_CC is None:
+                try:
+                    import opencc
+                    _T2S_CC = opencc.OpenCC("t2s")
+                except Exception:
+                    _T2S_CC = False
+            if _T2S_CC is not False:
+                out = _T2S_CC.convert(t)
+                return out if out else t
+        except Exception:
+            return t
+    return t.translate(_T2S_FALLBACK)
 
 
 _LATIN_LETTER_RE = re.compile(r"[A-Za-z\u00C0-\u024F]")

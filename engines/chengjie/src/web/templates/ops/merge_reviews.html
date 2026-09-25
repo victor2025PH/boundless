@@ -70,7 +70,7 @@ async function act(rid, kind){
     document.getElementById(`card-${rid}`).style.opacity='0.4';
     setTimeout(load, 500);
   } else {
-    alert(window.T('ops.mr.op_fail')+' status='+r.status);
+    AITRNotify.alert(window.T('ops.mr.op_fail')+' status='+r.status);
   }
 }
 // ── 批量审核（复选框 + 高置信一键勾选 + batch-approve，与旧 ai_studio 同一后端护栏 ≥0.85）──
@@ -84,7 +84,7 @@ function mrUpdateBatchBtn(){
 function mrToggleHighConf(){
   const rows=[...document.querySelectorAll('.card[data-conf]')];
   const high=rows.filter(r=>parseFloat(r.dataset.conf)>=0.85);
-  if(!high.length){alert(window.T('as_js008')+' ≥0.85 '+window.T('as_js009'));return;}
+  if(!high.length){AITRNotify.alert(window.T('as_js008')+' ≥0.85 '+window.T('as_js009'));return;}
   const allChecked=high.every(r=>r.querySelector('.mr-check')?.checked);
   high.forEach(r=>{const cb=r.querySelector('.mr-check');if(cb)cb.checked=!allChecked;});
   mrUpdateBatchBtn();
@@ -104,9 +104,9 @@ async function mrBatchApprove(){
     const parts=[window.Tf('as_merged_ok',{n:d.approved.length})];
     if(d.skipped_low_conf?.length)parts.push(window.Tf('as_skipped_lc',{n:d.skipped_low_conf.length,c:d.min_confidence}));
     if(d.failed?.length)parts.push(window.Tf('as_failed_n',{n:d.failed.length}));
-    alert(parts.join('; '));
+    AITRNotify.alert(parts.join('; '));
     load();
-  }catch(e){alert(window.Tf('as_batch_fail',{msg:e.message}));}
+  }catch(e){AITRNotify.alert(window.Tf('as_batch_fail',{msg:e.message}));}
 }
 async function mrScan(){
   if(!confirm(window.T('as_js010')))return;
@@ -116,7 +116,7 @@ async function mrScan(){
     const r=await apiFetch('/api/merge-reviews/scan',{method:'POST'},{timeoutMs:60000});
     if(!r.ok){const txt=await r.text().catch(()=>'');throw new Error('HTTP '+r.status+' '+txt);}
     const d=await r.json();
-    alert(window.Tf('as_scan_done',{scanned:d.scanned,enq:d.enqueued,auto:d.auto_eligible}));
+    AITRNotify.alert(window.Tf('as_scan_done',{scanned:d.scanned,enq:d.enqueued,auto:d.auto_eligible}));
     load();
   }catch(e){if(list)list.innerHTML='<div class="empty" style="color:red">'+window.T('ln_js_031')+': '+escapeHtml(e.message)+'</div>';}
 }

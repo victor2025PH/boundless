@@ -54,12 +54,26 @@ def test_payload_carries_engine_when_pinned():
 
 
 # ── 2. 档名映射 + 引擎钉住：真正传给 hub 的值 ───────────────────────────────
+def _silent_wav(path: Path) -> str:
+    """1 秒静音 WAV。管线只检查参考音文件存在，不提交真人声纹。"""
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 8000)
+    return str(path)
+
+
 def _spy_hub(tmp_path: Path, ok: bool = True):
     """替 hub_fish_synthesize 打桩，记录实参。"""
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None, **_extra):
         seen.update(base_url=base_url, profile=profile, text=text,
                     tts_engine=tts_engine, audio_format=audio_format)
         if not ok:
@@ -72,11 +86,13 @@ def _spy_hub(tmp_path: Path, ok: bool = True):
 @pytest.mark.asyncio
 async def test_profile_map_redirects_persona_to_mapped_profile(tmp_path):
     fake, seen = _spy_hub(tmp_path)
-    tts = TTSPipeline(_cfg({
+    cfg = _cfg({
         "profile_map": {"lin_xiaoyu": "chengjie_lin_xiaoyu"},
         "tts_engine": "moss_ttsd",
         "response_format": "ogg",
-    }))
+    })
+    cfg["voice_profile"]["reference_audio_path"] = _silent_wav(tmp_path / "ref.wav")
+    tts = TTSPipeline(cfg)
     rv = SimpleNamespace(text=_TEXT, extra={}, ok=False, provider="", format="",
                          audio_path="", duration_sec=-1.0,
                          duration_source="unknown", latency_ms=0, error="")
@@ -92,7 +108,9 @@ async def test_profile_map_redirects_persona_to_mapped_profile(tmp_path):
 async def test_without_map_falls_back_to_persona_id(tmp_path):
     """缺省行为不变：没配映射就还是 persona_id 同名档、不下发引擎。"""
     fake, seen = _spy_hub(tmp_path)
-    tts = TTSPipeline(_cfg({"response_format": "ogg"}))
+    cfg = _cfg({"response_format": "ogg"})
+    cfg["voice_profile"]["reference_audio_path"] = _silent_wav(tmp_path / "ref.wav")
+    tts = TTSPipeline(cfg)
     rv = SimpleNamespace(text=_TEXT, extra={}, ok=False, provider="", format="",
                          audio_path="", duration_sec=-1.0,
                          duration_source="unknown", latency_ms=0, error="")

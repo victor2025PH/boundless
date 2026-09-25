@@ -334,6 +334,7 @@ class TranslationService:
         style: str = "chat",
         engine: str = "",
         tier: str = "",
+        allow_short: bool = False,
     ) -> TranslationResult:
         """``engine``（F+）：会话首选引擎名（如 ``deepl``）。指定且可用 → 强制走该引擎，
         失败再回落现有 failover 路由；空 / 不可用 → 维持原 failover 行为（零回归）。
@@ -380,7 +381,9 @@ class TranslationService:
         # 正文，LLM 引擎只能原样回显或客套一句 → 被 _output_lang_sane 判成
         # target_lang_mismatch（15:37–15:53 实录 30 余条 src_len=1 mismatch 刷屏），出站链
         # 再把它当「翻译失败」处理。identity 早退与占位同口径：入站不渲染译文行、出站放行。
-        if _no_translatable_body(src_text):
+        # 聊天孤字（「好」「嗯」）不进引擎。文档单元格（A/B、单字母）是真正文，
+        # 调用方传 allow_short=True 跳过这条早退，否则引擎偏好根本到不了路由。
+        if not allow_short and _no_translatable_body(src_text):
             return TranslationResult(src_text, src_text, source, target, True, provider="identity")
         if source == target:
             # #139-3 粤语旁路（2026-09-02）：detect 对粤语恒回 zh（实施89 契约），

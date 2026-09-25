@@ -1307,10 +1307,18 @@ class TestPlatformExpert:
     """平台专家覆写：白名单/校验/合并/能力护栏/溯源/键域一致性。"""
 
     def test_platforms_match_worker_registry(self):
-        # PLATFORMS 刻意本地定义（纯函数模块零依赖）——与能力矩阵 WORKERS
-        # 注册表的平台集合必须一致，漂移即红（新平台上线两处都要登记）。
+        # PLATFORMS 刻意本地定义（纯函数模块零依赖）。键域必须等于
+        # 「WORKERS 平台 ∩ 登录目录 SUPPORTED_PLATFORMS」：进了登录目录却没进
+        # 节奏表 → 红。节奏表里出现登录目录没有的名字，由
+        # test_reply_pacing_platforms_are_supported_subset 拒绝。
+        # douyin / tiktok 已在能力矩阵，尚未进登录目录，因此也不能进 PLATFORMS
+        # 或 ACTION_PLATFORMS。这组差集钉死，防静默漏登记。
         from src.integrations.platform_capabilities import WORKERS
-        assert set(rps.PLATFORMS) == {p for p, _m, _mod, _c in WORKERS}
+        from src.integrations.platform_login import SUPPORTED_PLATFORMS
+        worker_plats = {p for p, _m, _mod, _c in WORKERS}
+        supported = set(SUPPORTED_PLATFORMS)
+        assert set(rps.PLATFORMS) == worker_plats & supported
+        assert worker_plats - supported == {"douyin", "tiktok"}
 
     def test_sanitize_platform_modes(self):
         clean, errors = rps.sanitize_patch({_PM: {"Messenger": "Review"}})
@@ -1331,7 +1339,7 @@ class TestPlatformExpert:
         assert errors == []
         assert clean[_PLAT_OV]["messenger"] == {
             "min_sec": 10, "max_sec": 30, "adaptive": True}
-        _, errors = rps.sanitize_patch({_PLAT_OV: {"tiktok": {"min_sec": 1}}})
+        _, errors = rps.sanitize_patch({_PLAT_OV: {"snapchat": {"min_sec": 1}}})
         assert errors[0]["code"] == "bad_platform"
         _, errors = rps.sanitize_patch(
             {_PLAT_OV: {"line": {"per_char_sec": 0.1}}})

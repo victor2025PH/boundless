@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
-from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.sessions import Session, SessionMiddleware
 from starlette.testclient import TestClient
 
 from src.companion.goals.store import reset_goal_store
@@ -122,7 +122,7 @@ def _build(tmp_path, *, attach_on=True):
     app.add_middleware(SessionMiddleware, secret_key="t")
 
     def auth_dep(request: Request) -> None:
-        request.scope["session"] = {"role": "", "user": "tester"}
+        request.scope["session"] = Session({"role": "", "user": "tester"})
 
     register_goal_routes(app, auth_dep, cm)
     register_workflow_routes(app, api_auth=_api_auth)

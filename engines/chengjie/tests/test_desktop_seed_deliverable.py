@@ -43,19 +43,41 @@ BUILD_BACKEND = ENGINE_ROOT / "desktop" / "build" / "build_backend.py"
 #: 那正是这类事故能长期潜伏的原因。
 
 
+def _extra_resources_declares(token: str) -> bool:
+    pkg = json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))
+    extra = ((pkg.get("build") or {}).get("extraResources") or [])
+    return any(token in str(e.get("to") or e.get("from") or "")
+               for e in extra if isinstance(e, dict))
+
+
+def _pack_time_still_requires(fragment: str) -> bool:
+    """node_modules / 兜底浏览器是打包机产物，不进 git。
+
+    源码 CI 没有这些目录。真正「漏跑 npm ci 也会打进客户包」的闸在
+    ``desktop/build/after-pack.js`` 的 REQUIRED / REQUIRED_GLOB——本门禁在
+    node_modules 缺席时改为钉住那条打包闸还在，避免源码树恒红、打包闸被删却没人看见。
+    node_modules 在的时候仍按目录实查（打包机 / 本机已 npm ci）。
+    """
+    text = (ENGINE_ROOT / "desktop" / "build" / "after-pack.js").read_text(
+        encoding="utf-8", errors="replace")
+    return fragment in text
+
+
 def _wa_baileys_bundled() -> str:
     """WhatsApp 协议边车：源码 + 依赖在仓库里，且 electron-builder 声明随包。"""
     svc = ENGINE_ROOT / "services" / "whatsapp-baileys"
     if not (svc / "server.js").is_file():
         return "services/whatsapp-baileys/server.js 不存在"
     if not (svc / "node_modules").is_dir():
-        return ("services/whatsapp-baileys/node_modules 不存在——打包前须先 "
-                "`cd services/whatsapp-baileys && npm ci`，否则边车随包后必 MODULE_NOT_FOUND")
-    pkg = json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))
-    extra = ((pkg.get("build") or {}).get("extraResources") or [])
-    declared = any("whatsapp-baileys" in str(e.get("to") or e.get("from") or "")
-                   for e in extra if isinstance(e, dict))
-    if not declared:
+        if not (svc / "package-lock.json").is_file():
+            return ("services/whatsapp-baileys 既无 node_modules 也无 package-lock.json"
+                    "——依赖无法复现，边车随包后必 MODULE_NOT_FOUND")
+        if not _pack_time_still_requires(
+                'path.join("services", "whatsapp-baileys", "node_modules")'):
+            return ("源码树没有 node_modules，且 after-pack.js 不再把 "
+                    "whatsapp-baileys/node_modules 列为打包必检——构建机漏跑 npm ci "
+                    "会静默打出坏包")
+    if not _extra_resources_declares("whatsapp-baileys"):
         return "desktop/package.json 的 build.extraResources 没声明 whatsapp-baileys（不会进安装包）"
     return ""
 
@@ -71,22 +93,31 @@ def _messenger_web_bundled() -> str:
     svc = ENGINE_ROOT / "services" / "messenger-web"
     if not (svc / "server.js").is_file():
         return "services/messenger-web/server.js 不存在"
-    if not (svc / "node_modules").is_dir():
-        return ("services/messenger-web/node_modules 不存在——打包前须先 "
-                "`cd services/messenger-web && npm ci`")
-    browsers = svc / "node_modules" / "playwright-core" / ".local-browsers"
-    # `chromium-*` 只匹配完整（可 headed）构建；headless shell 是 chromium_headless_shell-*
-    # （下划线），刻意不算——桌面登录是人工交互，要的是能显示窗口的那个。
-    if not browsers.is_dir() or not any(browsers.glob("chromium-*")):
-        return ("随包兜底 Chromium 缺失——打包前须在构建机跑 "
-                "`cd services/messenger-web && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright "
-                "install chromium`（Windows 用 `$env:PLAYWRIGHT_BROWSERS_PATH='0'`）。"
-                "缺了它，没装 Chrome 的客户机点登录后浏览器起不来")
-    pkg = json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))
-    extra = ((pkg.get("build") or {}).get("extraResources") or [])
-    declared = any("messenger-web" in str(e.get("to") or e.get("from") or "")
-                   for e in extra if isinstance(e, dict))
-    if not declared:
+    modules = svc / "node_modules"
+    if not modules.is_dir():
+        if not (svc / "package-lock.json").is_file():
+            return ("services/messenger-web 既无 node_modules 也无 package-lock.json"
+                    "——依赖无法复现，边车随包后必 MODULE_NOT_FOUND")
+        if not _pack_time_still_requires(
+                'path.join("services", "messenger-web", "node_modules")'):
+            return ("源码树没有 node_modules，且 after-pack.js 不再把 "
+                    "messenger-web/node_modules 列为打包必检——构建机漏跑 npm ci "
+                    "会静默打出坏包")
+        # 兜底 Chromium 同样是打包机产物（playwright install），不进 git。
+        # after-pack.js REQUIRED_GLOB 的 chromium- 前缀是那道闸。
+        if not _pack_time_still_requires('"chromium-"'):
+            return ("源码树没有随包 Chromium，且 after-pack.js 不再要求 chromium- "
+                    "前缀——没装 Chrome 的客户机点登录后浏览器起不来")
+    else:
+        browsers = modules / "playwright-core" / ".local-browsers"
+        # `chromium-*` 只匹配完整（可 headed）构建；headless shell 是 chromium_headless_shell-*
+        # （下划线），刻意不算——桌面登录是人工交互，要的是能显示窗口的那个。
+        if not browsers.is_dir() or not any(browsers.glob("chromium-*")):
+            return ("随包兜底 Chromium 缺失——打包前须在构建机跑 "
+                    "`cd services/messenger-web && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright "
+                    "install chromium`（Windows 用 `$env:PLAYWRIGHT_BROWSERS_PATH='0'`）。"
+                    "缺了它，没装 Chrome 的客户机点登录后浏览器起不来")
+    if not _extra_resources_declares("messenger-web"):
         return "desktop/package.json 的 build.extraResources 没声明 messenger-web（不会进安装包）"
     return ""
 

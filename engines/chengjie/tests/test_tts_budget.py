@@ -52,11 +52,25 @@ def _rv(text: str = _TEXT) -> SimpleNamespace:
                            duration_source="unknown", latency_ms=0, error="")
 
 
+def _silent_wav(path: Path) -> str:
+    """1 秒静音 WAV。管线只检查参考音文件存在，不提交真人声纹。"""
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 8000)
+    return str(path)
+
+
 def _spy_hub(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None, **_extra):
         seen.update(profile=profile, text=text)
         if not ok:
             raise RuntimeError("hub down")
@@ -82,7 +96,7 @@ async def test_hub_skipped_when_budget_exhausted(tmp_path):
 @pytest.mark.asyncio
 async def test_hub_budget_cap_none_keeps_old_behavior(tmp_path):
     fake, seen = _spy_hub()
-    tts = TTSPipeline(_cfg({}))
+    tts = TTSPipeline(_cfg({}, ref_path=_silent_wav(tmp_path / "ref.wav")))
     rv = _rv()
     with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
         out = await tts._try_hub_fish(
@@ -94,7 +108,7 @@ async def test_hub_budget_cap_none_keeps_old_behavior(tmp_path):
 @pytest.mark.asyncio
 async def test_hub_generous_cap_still_attempts(tmp_path):
     fake, seen = _spy_hub()
-    tts = TTSPipeline(_cfg({}))
+    tts = TTSPipeline(_cfg({}, ref_path=_silent_wav(tmp_path / "ref.wav")))
     rv = _rv()
     with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
         out = await tts._try_hub_fish(
@@ -124,7 +138,8 @@ def _spy_hub_bestof(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None, **_extra):
         seen.update(profile=profile, best_of=best_of)
         if not ok:
             raise RuntimeError("hub down")
@@ -137,7 +152,9 @@ def _spy_hub_bestof(ok: bool = True):
 async def test_hub_best_of_parts_applies_only_to_split_parts(tmp_path):
     """分条单条按 best_of_parts 取候选；整段发送不受影响（synth_verify 兜坏 take）。"""
     fake, seen = _spy_hub_bestof()
-    tts = TTSPipeline(_cfg({"best_of": 2, "best_of_parts": 1}))
+    tts = TTSPipeline(_cfg(
+        {"best_of": 2, "best_of_parts": 1},
+        ref_path=_silent_wav(tmp_path / "ref.wav")))
     with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
         out = await tts._try_hub_fish(
             _rv(), tmp_path / "a.wav", time.monotonic(), spec=None,
@@ -153,7 +170,7 @@ async def test_hub_best_of_parts_applies_only_to_split_parts(tmp_path):
 async def test_hub_best_of_parts_default_keeps_old_behavior(tmp_path):
     """未配 best_of_parts：分条也沿用 best_of——缺省零行为变化。"""
     fake, seen = _spy_hub_bestof()
-    tts = TTSPipeline(_cfg({"best_of": 2}))
+    tts = TTSPipeline(_cfg({"best_of": 2}, ref_path=_silent_wav(tmp_path / "ref.wav")))
     with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
         out = await tts._try_hub_fish(
             _rv(), tmp_path / "c.wav", time.monotonic(), spec=None,
@@ -170,7 +187,8 @@ def _col_cfg() -> dict:
 async def test_colloquial_llm_skipped_on_tight_budget(tmp_path):
     from src.ai.voice_emotion import coerce_emotion
     fake, seen = _spy_hub()
-    tts = TTSPipeline(_cfg({}, colloquial=_col_cfg()))
+    tts = TTSPipeline(_cfg(
+        {}, colloquial=_col_cfg(), ref_path=_silent_wav(tmp_path / "ref.wav")))
     rv = _rv()
     called = {"llm": 0}
 
@@ -195,7 +213,8 @@ async def test_colloquial_llm_skipped_on_tight_budget(tmp_path):
 async def test_colloquial_llm_runs_without_deadline(tmp_path):
     from src.ai.voice_emotion import coerce_emotion
     fake, _ = _spy_hub()
-    tts = TTSPipeline(_cfg({}, colloquial=_col_cfg()))
+    tts = TTSPipeline(_cfg(
+        {}, colloquial=_col_cfg(), ref_path=_silent_wav(tmp_path / "ref.wav")))
     rv = _rv()
     called = {"llm": 0}
 
@@ -283,7 +302,7 @@ async def test_synthesize_total_budget_honest_error(tmp_path):
 async def test_synthesize_without_budget_unchanged(tmp_path):
     """不传 total_budget_sec：走完整旧链（本例 hub 命中出货）。"""
     fake, _ = _spy_hub()
-    cfg = _cfg({})
+    cfg = _cfg({}, ref_path=_silent_wav(tmp_path / "ref.wav"))
     tts = TTSPipeline(cfg)
     with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
         rv = await tts.synthesize(_TEXT)

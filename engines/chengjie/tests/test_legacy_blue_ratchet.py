@@ -113,7 +113,15 @@ _TAILWIND_CEILINGS = {
     # 若改用 toast 色板常量可回收本处 +1。
     # 2026-08-17 额度批回收 1：预算救济 toast 成功色从 var(--th-bg-blue6,#2563eb)
     # 改语义绿 #16a34a（toast 色板常量口径），16 → 15。
-    "src/web/templates/unified_inbox.html": 15,
+    # 2026-09-25 15→6：信息 toast / 横幅 / 亮档 color-mix 里的 Tailwind 蓝改品牌色
+    # #1e8cf2 或 var(--tk-brand)。剩下 6 处逐点保留：
+    #   回复预览蓝框 --xl-info-bg/#eff6ff + --xl-info-border/#dbeafe（多色预览族的蓝臂）2
+    #   暗档信息徽章 --bdg-info-bg/rgba(96,165,250) + --bdg-info-ink/#93c5fd
+    #   （亮档已跟品牌变量；暗档与危险/警示/成功臂同为字面量，一臂改变量会拆掉五档）2
+    #   头像渐变池 _AV_GRAD 蓝臂 #60a5fa（12 色池一臂，跟变量会让账号头像塌成同色）1
+    #   平台色表 PC.web='#3b82f6'（与 platform_registry.json / 收件箱 PC 表契约同色，
+    #   改品牌变量会让 web 渠道脱离注册表色；test_douyin_e2e_alignment 钉死该字面）1
+    "src/web/templates/unified_inbox.html": 6,
     # 10 转 3 留 7 → P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js
     # 带走 JS 侧 3 处（在下方 JS 条目续记），模板余 4：KPI 卡色 2 + 选择条 on-indigo 1 +
     # dc-tab/dc-bar-cell 品牌蓝回落 1

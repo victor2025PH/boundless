@@ -85,6 +85,9 @@ def test_clear_logs_send_clear_by_clear(tmp_path, caplog):
     """清除语义：``send=clear by=clear``（clear:true 覆盖 body 里残留的 lang/source）。"""
     c = _client(tmp_path)
     _post(c, lang="ja", source="ui_select")
+    # 铺垫那次落库也会打 [lang_pref]。logger 已是 INFO 时（xdist 邻居 / --log-level）
+    # 它会进 caplog；断言只看清除这一次。
+    caplog.clear()
     with caplog.at_level("INFO", logger=_LOGGER):
         d = _post(c, lang="ja", clear=True, source="ui_select")
     assert d["ok"] is True and d["lang"] == ""
@@ -95,6 +98,7 @@ def test_empty_noop_does_not_log(tmp_path, caplog):
     """空串 no-op 没落库 → 不留 [lang_pref]（假审计比没审计更糟）。"""
     c = _client(tmp_path)
     _post(c, lang="ja", source="ui_select")
+    caplog.clear()
     with caplog.at_level("INFO", logger=_LOGGER):
         d = _post(c, lang="")
     assert d["noop"] is True

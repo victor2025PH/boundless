@@ -836,6 +836,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             # Q-8 B（#264）：无目标会话也有「阶段 · 今日主线」（不建目标行）
             out["stage_plan"] = _stage_plan_view(conv, platform, account_id, chat_key,
                                                  lang=_lang(request))
+            # N-3 #241：无目标卡片同样带业务域戳（陪伴不渲染成交画像；有目标分支同源）
+            out["business_domain"] = _business_domain()
             return out
         lang = _lang(request)
         view = _attach_notified(

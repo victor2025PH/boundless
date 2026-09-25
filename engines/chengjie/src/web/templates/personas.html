@@ -1227,7 +1227,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="field-row" id="ad-row">
       <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span>
         <!-- 2026-09-19：机器级 adult_grader.default_policy 已配置时亮出来——否则运营以为「跟随域默认」还有人工闸 -->
-        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:rgba(255,120,60,.14);color:#e0783c;vertical-align:middle"></span>
+        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:color-mix(in srgb, var(--tk-orange,#f97316) 14%, transparent);color:var(--tk-orange,#f97316);vertical-align:middle"></span>
       </label>
       <div class="opt-cards" id="ad-cards">
         <div class="opt-card" data-val="" onclick="_selAdultPolicy(this)"><span class="oc-ico">🧭</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_default','跟随域默认') }}</span></div>
@@ -1342,6 +1342,13 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <label class="vmode-opt"><input type="radio" name="pe-vmode" value="off" onchange="_vmOnChange()"><span><b>🔇 {{ (i18n or {}).get('psn_vm_off','不发语音') }}</b><small>{{ (i18n or {}).get('psn_vm_off_sub','这个人设只回文字（新建人设默认）') }}</small></span></label>
       </div>
       <div id="pe-vmode-status" class="vmode-status"></div>
+      <div class="field-row" style="margin-top:.55rem">
+        <label>{{ (i18n or {}).get('psn_dialect','口语方言') }}</label>
+        <select id="pe-vp-dialect">
+          <option value="">{{ (i18n or {}).get('psn_dialect_none','不指定（普通话）') }}</option>
+          <option value="cantonese">{{ (i18n or {}).get('psn_dialect_yue','粤语') }}</option>
+        </select>
+      </div>
       <div id="pe-preset-picker" class="ps-row" style="display:none;margin-top:.45rem">
         <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_lang','语言') }}</label><select id="pe-preset-lang" onchange="_presetFilterChanged()"></select></div>
         <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_gender','性别') }}</label>
@@ -1694,7 +1701,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   </div>
 </div>
 
-<!-- ══ Persona Picker Modal（账号 → 人设 统一选择器，替换 prompt()）═══════════ -->
+<!-- ══ Persona Picker Modal（账号 → 人设 统一选择器，替换原生输入框）═══════════ -->
 <div id="pp-modal-ov" class="pp-modal-ov" onclick="_ppModalOvClick(event)">
   <div class="pp-modal">
     <div class="pp-modal-hd">
@@ -2720,7 +2727,7 @@ async function previewPrompt() {
 }
 
 async function unbindChat(chatId) {
-  if (!confirm(window.T('psn_js_067') + chatId + window.T('psn_js_068'))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_js_067') + chatId + window.T('psn_js_068')))) return;
   try {
     await apiFetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId})}, {timeoutMs: 60000});
     _toast(window.T('psn_js_056') + chatId, 'info');
@@ -2764,7 +2771,7 @@ function _renderNameMismatchBar(d) {
   return s + '</div>';
 }
 async function _pushPersonaName(platform, accountId, personaName, btn) {
-  if (!confirm(window.T('psn_nm_confirm').replace('{name}', personaName))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_nm_confirm').replace('{name}', personaName)))) return;
   if (btn) { btn.disabled = true; btn.textContent = window.T('psn_nm_pushing'); }
   try {
     const r = await apiFetch(`/api/accounts/${encodeURIComponent(platform)}/${encodeURIComponent(accountId)}/profile`, {
@@ -3135,7 +3142,7 @@ function _stockCopyPrint() {
     try { navigator.clipboard.writeText(ta.value); } catch (e) {}
   }
   ta.blur();
-  alert(window.T('psn_stock_print_copied'));
+  AITRNotify.alert(window.T('psn_stock_print_copied'));
 }
 async function _stockSavePrint(pid) {
   const ta = document.getElementById('pe-stock-print-snippet');
@@ -3340,7 +3347,7 @@ async function pmaFaceUpload() {
 
 async function pmaFaceDelete() {
   const pid = _pmaPid();
-  if (!pid || !confirm(window.T('pma_faceref_del_confirm'))) return;
+  if (!pid || !(await AITRNotify.confirm(window.T('pma_faceref_del_confirm')))) return;
   try {
     await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref', { method: 'DELETE' }, {timeoutMs: 60000});
     pmaFaceLoad();
@@ -3442,14 +3449,14 @@ async function pmaEnableSelfieGate() {
     if (!r.ok) {
       let msg = '';
       try { msg = ((await r.json()) || {}).detail || ''; } catch (e) { /* keep */ }
-      alert(window.T('pma_gate_fail') + (msg ? ('：' + msg) : ''));
+      AITRNotify.alert(window.T('pma_gate_fail') + (msg ? ('：' + msg) : ''));
       if (btn) btn.disabled = false;
       return;
     }
     if (typeof showToast === 'function') showToast(window.T('pma_gate_saved'));
     pmaLoad();
   } catch (e) {
-    alert(window.T('pma_gate_fail') + '：' + e);
+    AITRNotify.alert(window.T('pma_gate_fail') + '：' + e);
     if (btn) btn.disabled = false;
   }
 }
@@ -3744,7 +3751,7 @@ async function _alDeleteSelected() {
   const pid = _pmaPid();
   const ids = Object.keys(_alSel);
   if (!pid || !ids.length) return;
-  if (!confirm(window.Tf('al_del_sel_confirm', { n: String(ids.length) }))) return;
+  if (!(await AITRNotify.confirm(window.Tf('al_del_sel_confirm', { n: String(ids.length) })))) return;
   const okIds = []; let fail = 0;
   for (const mid of ids) {
     try {
@@ -3915,7 +3922,7 @@ function _pmaCard(raw) {
     + '</select>';
   const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:color-mix(in srgb, var(--card,#fff) 85%, transparent);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips
@@ -4409,7 +4416,7 @@ async function pmaUpload(retryFiles) {
 
 async function pmaDeleteItem(mid) {
   const pid = _pmaPid();
-  if (!pid || !confirm(window.T('pma_del_confirm'))) return;
+  if (!pid || !(await AITRNotify.confirm(window.T('pma_del_confirm')))) return;
   // Q-40 #322（Q7HJDU）：成功只摘这张卡 + 刷计数（_pmaRemoveCards），不 pmaLoad 整页重绘回顶；
   // 失败 / 异常才整刷对齐服务端，并保住滚动位置。
   try {
@@ -4493,18 +4500,18 @@ function _resetEditorExtras() {
 // ── P7-E: Promote mrpa-imported profile to operator-owned ────
 async function promoteProfile(pid) {
   if (!pid) return;
-  if (!confirm(window.Tf('psn_js_361', {pid: pid}))) return;
+  if (!(await AITRNotify.confirm(window.Tf('psn_js_361', {pid: pid})))) return;
   try {
     const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/promote', { method: 'POST' }, {timeoutMs: 60000});
-    if (r.status === 403) { alert(window.T('psn_js_091')); return; }
+    if (r.status === 403) { AITRNotify.alert(window.T('psn_js_091')); return; }
     const d = await r.json();
     if (d.ok) {
       loadProfileList();
       refreshStatus();
     } else {
-      alert(window.T('psn_js_092') + (d.detail || JSON.stringify(d)));
+      AITRNotify.alert(window.T('psn_js_092') + (d.detail || JSON.stringify(d)));
     }
-  } catch(e) { alert(window.T('psn_js_031') + e); }
+  } catch(e) { AITRNotify.alert(window.T('psn_js_031') + e); }
 }
 
 // ── P6-D: Sync operator profiles to personas.yaml ────────────
@@ -4512,7 +4519,7 @@ async function syncToConfig() {
   const st = document.getElementById('sync-config-status');
   const btn = document.getElementById('sync-config-btn');
   if (!st) return;
-  if (!confirm(window.T('psn_js_360'))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_js_360')))) return;
   st.textContent = window.T('psn_js_093'); st.className = 'tts-status';
   if (btn) btn.disabled = true;
   try {
@@ -4674,7 +4681,7 @@ function _pbReceipt(d, albumRefs) {
 async function pbConfirmRestore() {
   if (!_pbPending) return;
   var pv = _pbPending.preview || {};
-  if (!confirm(window.Tf('psn_restore_confirm_q', {add: String(pv.add || 0), over: String(pv.overwrite || 0)}))) return;
+  if (!(await AITRNotify.confirm(window.Tf('psn_restore_confirm_q', {add: String(pv.add || 0), over: String(pv.overwrite || 0)})))) return;
   _pbStatus(window.T('psn_restore_working'));
   try {
     var r = await apiFetch('/api/personas/profiles/import', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -5224,8 +5231,8 @@ async function _scanCleanEpisodic() {
       if (r.ok && d && d.ok) total += (d.matched || 0);
     }
     if (!total) { _toast(window.Tf('psn_scan_act_clean_done', {n: '0'}), 'ok'); return; }
-    if (!confirm(window.Tf('psn_scan_act_clean_confirm',
-        {n: String(total), terms: terms.join('，')}))) return;
+    if (!(await AITRNotify.confirm(window.Tf('psn_scan_act_clean_confirm',
+        {n: String(total), terms: terms.join('，')})))) return;
     var deleted = 0;
     for (var j = 0; j < terms.length; j++) {
       var r2 = await apiFetch('/api/episodic-memory/bulk-delete', {
@@ -5623,6 +5630,8 @@ function _vmLoad(vp, isNew) {
   _vmSetMode(d.mode);
   _vpSyncBackendUi(vp.backend || '');
   var inp = document.getElementById('pe-vp-voice'); if (inp) inp.value = vp.voice || '';
+  var dsel = document.getElementById('pe-vp-dialect');
+  if (dsel) dsel.value = (vp.dialect_flavor === 'cantonese') ? 'cantonese' : '';
   _vmLoadCatalog().then(function () {
     _presetRender(d.mode === 'preset' ? (vp.voice || '') : '');
     _vmRenderStatus();
@@ -5667,6 +5676,12 @@ function _vmValidate() {
 }
 // 保存补丁：没动过 → 原样回传装载值（不静默迁移存量）；动过 → 按三态产出
 function _vmCollectPatch() {
+  var patch = _vmCollectPatchBody();
+  var dsel = document.getElementById('pe-vp-dialect');
+  if (dsel) patch.dialect_flavor = String(dsel.value || '');
+  return patch;
+}
+function _vmCollectPatchBody() {
   var vp = _vmLoaded.vp || {};
   var devB = String((document.getElementById('pe-vp-backend') || {}).value || '');
   var devV = String((document.getElementById('pe-vp-voice') || {}).value || '').trim();
@@ -6270,7 +6285,7 @@ async function saveProfile() {
 async function deleteCurrentProfile() {
   var pid = _editingProfileId;
   if (!pid) return;
-  if (!confirm(window.T('psn_js_142') + pid + window.T('psn_js_143'))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_js_142') + pid + window.T('psn_js_143')))) return;
   var prof = _allProfiles.find(function(x){ return x.id === pid; });
   var name = (prof && prof.name) || pid;
   try {
@@ -6326,7 +6341,7 @@ function _toastDeletedUndo(pid, name) {
 async function undoProfile() {
   var pid = _editingProfileId;
   if (!pid) return;
-  if (!confirm(window.T('psn_js_146'))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_js_146')))) return;
   try {
     // 修复：原先调用不存在的 /undo（404 死按钮），改走真实的 /revert 端点
     const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' }, {timeoutMs: 60000});
@@ -7105,7 +7120,7 @@ async function _loadBioStatus() {
 async function _deleteBioDoc() {
   var pid = _editingProfileId;
   if (!pid) return;
-  if (!confirm(window.T('psn_bio_del_confirm'))) return;
+  if (!(await AITRNotify.confirm(window.T('psn_bio_del_confirm')))) return;
   await _deleteBioDocReq(pid, false);
 }
 async function _deleteBioDocReq(pid, force) {
@@ -7119,7 +7134,7 @@ async function _deleteBioDocReq(pid, force) {
     try { d = await r.json(); } catch (e2) {}
     if (r.ok && d && d.ok) _toast(window.T('psn_bio_deleted'), 'ok');
     else if (r.status === 409 && !force && d && d.detail) {
-      if (confirm(String(d.detail) + '\n\n' + window.T('psn_bio_del_bound_confirm'))) {
+      if (await AITRNotify.confirm(String(d.detail) + '\n\n' + window.T('psn_bio_del_bound_confirm'))) {
         return _deleteBioDocReq(pid, true);
       }
     }
@@ -7913,7 +7928,7 @@ async function _autoRefreshStatus() {
   } catch(e) {}
 }
 
-// ── 统一人设选择器（替换 prompt()，四平台共用）────────────────────────────────
+// ── 统一人设选择器（替换原生输入框，四平台共用）────────────────────────────────
 var _ppCtx = { platform: '', accountId: '', currentPid: '' };
 var PLAT_LABEL = { tg: 'Telegram', mrpa: 'Messenger', wa: 'WhatsApp', line: 'LINE' };
 var PLAT_ENDPOINT = {
@@ -8235,7 +8250,7 @@ function _updateBulkBar() {
 async function _bulkDelete() {
   var pids = Array.from(_selectedProfiles);
   if (!pids.length) return;
-  if (!confirm(window.Tf('psn_js_362', {n: pids.length, list: pids.join('\n')}))) return;
+  if (!(await AITRNotify.confirm(window.Tf('psn_js_362', {n: pids.length, list: pids.join('\n')})))) return;
   var ok = 0, fail = 0;
   _bulkProgressStart(pids.length);
   for (var i = 0; i < pids.length; i++) {
@@ -10283,7 +10298,7 @@ async function peVcUnbind(){
   var pid = _peVcPid;
   var c = _peVcCli();
   if (!pid || !c || !c.voiceUnbind) return;
-  if (!confirm(window.Tf('psn_vc_unbind_q', {pid: pid}))) return;
+  if (!(await AITRNotify.confirm(window.Tf('psn_vc_unbind_q', {pid: pid})))) return;
   var purge = confirm(window.T('psn_vc_purge_q'));
   try {
     var r = await c.voiceUnbind({ persona_id: pid, purge_cloud: purge });

@@ -12,6 +12,7 @@ aiohttp>=3.9.0
 
 # 工具和实用程序
 PyYAML>=6.0.1
+ruamel.yaml>=0.18.0  # config overlay round-trip 保注释（set_yaml_key_preserving）。缺库时写入器拒绝降级整写
 colorama>=0.4.6
 # 多语言 TTS 语言识别（src/integrations/whatsapp_rpa/lang_detect.py 软依赖；
 # 缺失时 Latin 语种会退化为 fallback）

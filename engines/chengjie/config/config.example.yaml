@@ -1429,6 +1429,9 @@ whatsapp_rpa:
 # messenger_rpa.reply_profiles 继续有效（向后兼容 alias，读取时优先级最低）
 # Telegram 通过 telegram.voice_reply 和本节 voice_profile 选择音色
 personas:
+  # 从文档创建人设（persona_doc_import）。默认关；生产在 config.local.yaml 开。
+  doc_import:
+    enabled: false
   default: warm_companion
   profiles:
     - id: warm_companion

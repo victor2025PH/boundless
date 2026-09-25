@@ -2282,6 +2282,21 @@ _ADDITIONS_2026_09_19_WECHAT_PC_VOICE = """
 """
 _BASELINE += _ADDITIONS_2026_09_19_WECHAT_PC_VOICE
 
+# 有意新增（拆分之后的产品端点，不是搬迁漏登记）：
+#   GET  /api/ops/inbound-ledger                         入站账本只读
+#   GET/POST /api/setup/wechat_pc/accounts               PC 微信多账号列表/登记
+#   DELETE /api/setup/wechat_pc/accounts/{account_id}
+#   GET  /api/setup/wechat_pc/accounts/{account_id}/report
+#   GET  /api/setup/wechat_pc/windows                    本机微信窗口枚举
+_ADDITIONS_2026_09_25_INBOUND_AND_WECHAT_PC_ACCOUNTS = """
+/api/ops/inbound-ledger	GET
+/api/setup/wechat_pc/accounts	GET,POST
+/api/setup/wechat_pc/accounts/{account_id}	DELETE
+/api/setup/wechat_pc/accounts/{account_id}/report	GET
+/api/setup/wechat_pc/windows	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_25_INBOUND_AND_WECHAT_PC_ACCOUNTS
+
 
 def _parse_baseline():
     expected = set()

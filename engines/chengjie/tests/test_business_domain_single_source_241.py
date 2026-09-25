@@ -592,7 +592,17 @@ def test_card_and_report_payloads_carry_business_domain():
     client = _build_client({"business_domain": "companion"})
     store = get_goal_store(":memory:")
     d0 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
-    assert d0 == {"goal": None, "last": None}        # 无目标：旧契约原样（卡片此时不渲染画像/达成表单）
+    # 无目标：goal/last 仍为空（不渲染画像/达成表单）。业务域戳必须在，
+    # 卡片据此决定陪伴不出现成交字段。键集封闭——多出来的键只有已登记的
+    # 卡片状态（默认目标 / 摸底暂停 / 阶段主线），不能再膨胀成任意字段。
+    assert d0["goal"] is None and d0["last"] is None
+    assert d0["business_domain"] == "companion"
+    assert set(d0) <= {
+        "goal", "last", "business_domain",
+        "default_goal", "discovery_paused", "stage_plan",
+    }
+    assert d0.get("default_goal") is None
+    assert "amount" not in d0 and "product" not in d0
     g = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
                           chat_key="100", template="profile_discovery",
                           params={"slots": "age,family_status"}, autonomy="auto", deadline_days=10)

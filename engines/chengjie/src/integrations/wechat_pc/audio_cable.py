@@ -27,7 +27,18 @@ import json
 import logging
 import os
 import time
-from ctypes import HRESULT, POINTER, c_int, c_void_p, c_wchar_p, wintypes
+# HRESULT / wintypes 是 Windows COM 才有的 ctypes 名字。Linux CI（含 3.13）
+# import 直接 ImportError，而本模块的静音裁剪/响度归一是纯 numpy，不该被 COM
+# 类型拖死。COM 接口类整体包在下方 `if _COM_OK and HRESULT is not None`。
+from ctypes import POINTER, c_int, c_void_p, c_wchar_p
+try:
+    from ctypes import HRESULT, wintypes
+except ImportError:  # POSIX
+    HRESULT = None  # type: ignore
+    try:
+        from ctypes import wintypes  # type: ignore
+    except ImportError:
+        wintypes = None  # type: ignore
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -35,12 +46,16 @@ logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - 环境相关
     import numpy as _np
+except Exception:  # pragma: no cover
+    _np = None
+try:  # pragma: no cover - 环境相关
     import sounddevice as _sd
     import soundfile as _sf
-    _AUDIO_OK = True
 except Exception:  # pragma: no cover
-    _np = _sd = _sf = None
-    _AUDIO_OK = False
+    _sd = _sf = None
+# 静音裁剪 / 响度归一只依赖 numpy。声卡播放缺 sounddevice/soundfile 时
+# 仍应能跑纯数组函数（Linux CI 不装这两样）。
+_AUDIO_OK = _np is not None and _sd is not None and _sf is not None
 
 try:  # pragma: no cover - 环境相关
     import comtypes as _ct
@@ -80,7 +95,7 @@ def available() -> bool:
 
 
 # ── COM：IMMDeviceEnumerator（端点 id / 友好名 / 默认端点）+ IPolicyConfig（设默认 / 设格式）──────────
-if _COM_OK:  # pragma: no cover - 平台相关
+if _COM_OK and HRESULT is not None:  # pragma: no cover - 平台相关
     class PROPERTYKEY(ctypes.Structure):
         _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
 

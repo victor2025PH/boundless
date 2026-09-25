@@ -524,7 +524,7 @@
   }
 
   function sgOrdersLoad(){
-    fetch('/api/singing/orders?limit=30', {credentials:'same-origin'})
+    apiFetch('/api/singing/orders?limit=30', {credentials:'same-origin'})
       .then(function(r){ return r.json(); })
       .then(function(d){
         if(!d || !d.ok) throw new Error('bad');
@@ -625,7 +625,7 @@
 
   /* ── 供给状态 ── */
   function sgSupplyLoad(){
-    fetch('/api/singing/supply-status', {credentials:'same-origin'})
+    apiFetch('/api/singing/supply-status', {credentials:'same-origin'})
       .then(function(r){ if(!r.ok) throw new Error('http'+r.status); return r.json(); })
       .then(function(d){
         if(!d || !d.ok) throw new Error('bad');
@@ -672,7 +672,7 @@
 
   function sgLoad(){
     if(LOCKED) return;
-    fetch('/api/singing/overview', {credentials:'same-origin'})
+    apiFetch('/api/singing/overview', {credentials:'same-origin'})
       .then(function(r){ return r.json(); })
       .then(function(d){
         if(!d || !d.ok) throw new Error('bad');
@@ -690,7 +690,7 @@
   window.sgLoad = sgLoad;
 
   function post(url, body){
-    return fetch(url, {method:'POST', credentials:'same-origin',
+    return apiFetch(url, {method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
       .then(function(r){ return r.json().then(function(j){ return {ok: r.ok, j: j}; }); });
   }

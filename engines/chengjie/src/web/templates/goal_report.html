@@ -94,7 +94,7 @@
 
   <div id="gr-disabled" class="gr-card" style="display:none;"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_disabled', "工作目标功能未启用（companion.goals.enabled）") }}</div></div>
   <!-- Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0 → 告警行（记忆页 #cs-stall 同口径） -->
-  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);"></div>
+  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:color-mix(in srgb, var(--tk-danger) 8%, transparent);border:1px solid rgba(220,38,38,.35);"></div>
 
   <div id="gr-body">
     <!-- KPI -->
@@ -289,7 +289,7 @@ function grKindTxt(k){ return k==='order'?GR_I18N.kind_order : k==='manual'?GR_I
 async function grLoad(){
   var days = document.getElementById('f-days').value;
   try{
-    var r = await fetch('/api/goals/report/accounts?days='+days);
+    var r = await apiFetch('/api/goals/report/accounts?days='+days);
     if(r.status===403){ document.getElementById('gr-disabled').style.display='block'; document.getElementById('gr-body').style.display='none'; return; }
     document.getElementById('gr-disabled').style.display='none';
     document.getElementById('gr-body').style.display='block';
@@ -367,7 +367,7 @@ async function grLoadContacts(){
     +(acct?('&account_id='+encodeURIComponent(acct)):'');
   var tb = document.getElementById('gr-ct-rows');
   try{
-    var r = await fetch(q);
+    var r = await apiFetch(q);
     if(r.status===403) return;
     var d = await r.json();
     grTotal = d.total||0;
@@ -475,7 +475,7 @@ function grClearSel(){
 // ── P1：一键启动后续链（链缺席时先导入种子链，幂等） ────────────
 async function grLoadChains(){
   try{
-    var r = await fetch('/api/workspace/workflow-chains');
+    var r = await apiFetch('/api/workspace/workflow-chains');
     if(!r.ok){ grChains = null; return; }
     var d = await r.json();
     grChains = {};
@@ -487,11 +487,11 @@ async function grStartChain(p, btn){
   try{
     if(grChains && !grChains[p.chain_id]){
       try{
-        await fetch('/api/workspace/workflow-chains/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        await apiFetch('/api/workspace/workflow-chains/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
         await grLoadChains();
       }catch(_){}
     }
-    var r = await fetch('/api/workspace/conv/'+encodeURIComponent(p.conversation_id)+'/start-chain', {
+    var r = await apiFetch('/api/workspace/conv/'+encodeURIComponent(p.conversation_id)+'/start-chain', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({chain_id: p.chain_id, goal_id: p.goal_id})
     });
@@ -531,7 +531,7 @@ async function grObPreview(){
   var box = document.getElementById('gr-ob-preview');
   if(!text){ box.style.display='block'; box.textContent = GR_I18N.ob_empty_tpl; return; }
   try{
-    var r = await fetch('/api/unified-inbox/outreach/preview', {
+    var r = await apiFetch('/api/unified-inbox/outreach/preview', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({conversation_ids: grObIds()})
     });
@@ -563,7 +563,7 @@ async function grObExecute(){
   var btn = document.getElementById('gr-ob-exec-btn');
   btn.disabled = true; btn.textContent = GR_I18N.ob_sending;
   try{
-    var r = await fetch('/api/unified-inbox/outreach/execute', {
+    var r = await apiFetch('/api/unified-inbox/outreach/execute', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         filters: {conversation_ids: grObIds()},
@@ -621,7 +621,7 @@ function grRenderTrend(trend){
     +'<span>'+esc(days[0])+'</span><span>'+esc(days[Math.floor(days.length/2)])+'</span><span>'+esc(days[days.length-1])+'</span></div>';
   var legend = '<div style="font-size:11px;color:var(--tk-text-muted,#6b7280);margin-bottom:4px;">'
     +'<span style="color:var(--bl-growth-600,#0d76d9);">●</span> '+esc(GR_I18N.trend_done)
-    +'　<span style="color:#ca8a04;">●</span> '+esc(GR_I18N.trend_won)+'</div>';
+    +'　<span style="color:var(--tk-warn-ink,#b45309);">●</span> '+esc(GR_I18N.trend_won)+'</div>';
   document.getElementById('gr-trend').innerHTML = legend + svg + lbl;
 }
 function grRenderHeat(heat){
@@ -678,7 +678,7 @@ async function grExportCsv(){
       +(tpl?('&template='+encodeURIComponent(tpl)):'')
       +(acct?('&account_id='+encodeURIComponent(acct)):'');
     try{
-      var r = await fetch(q);
+      var r = await apiFetch(q);
       if(!r.ok) break;
       var d = await r.json();
       all = all.concat(d.rows||[]);
@@ -724,7 +724,7 @@ async function grSend(){
   var btn = document.getElementById('gr-send-btn');
   btn.disabled = true;
   try{
-    var r = await fetch('/api/unified-inbox/send', {
+    var r = await apiFetch('/api/unified-inbox/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         platform: grSendRow.platform, account_id: grSendRow.account_id,
@@ -751,7 +751,7 @@ function grNext(){ if(grPage*grPageSize<grTotal){ grPage++; grLoadContacts(); } 
 
 async function grLoadTemplates(){
   try{
-    var r = await fetch('/api/goals/templates');
+    var r = await apiFetch('/api/goals/templates');
     if(!r.ok) return;
     var d = await r.json();
     var sel = document.getElementById('f-template');

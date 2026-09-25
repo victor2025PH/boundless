@@ -64,8 +64,11 @@ ai:
   prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
   # ChatX 27B：与办公室同一产品。干净包零 RFC1918；打官网 /api/ai/v1 model=chatx。
   # 聊天主链不拿它顶话（chat_fallback: false）；目录 / 无限制档走这条。
+  # enabled 必须保持 false：feature_registry 把 ai.fallback.enabled 标成 C 类
+  # （主链兜底端点按 LAN Ollama 计，客户机开着只白付超时）。端点配方留在这里
+  # 给显式打开的人，种子本身不开。
   fallback:
-    enabled: true
+    enabled: false
     base_url: https://bd2026.cc/api/ai/v1
     model: chatx
     timeout: 90

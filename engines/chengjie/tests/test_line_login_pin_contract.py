@@ -260,7 +260,7 @@ def test_cancelled_terminal_not_reclassified():
 # ── 三、poll 返回体的跨层契约 ───────────────────────────────────────────────
 
 def _run_provider(monkeypatch, client_cls):
-    import okline
+    okline = pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline
     monkeypatch.setattr(okline, "OkLine", client_cls)
     monkeypatch.setattr(lpl, "is_okline_available", lambda: True)
     d = tempfile.mkdtemp()
@@ -716,6 +716,7 @@ def test_login_client_lifts_http_timeout_above_longpoll_window():
     登录实例必须把 HTTP read timeout 抬到明显大于单轮长轮询窗口，长轮询才能靠网关正常
     408/410 续等。这是那次事故的直接回归钉。
     """
+    pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline（LineConfig 在包内）
     captured: dict = {}
 
     class _CaptureCfg:
@@ -734,6 +735,7 @@ def test_login_client_lifts_http_timeout_above_longpoll_window():
 
 def test_build_okline_falls_back_when_config_rejected():
     """okline 将来换构造签名(不认 config) → 回落无参构造，退回老行为而非把登录整条打死。"""
+    pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline（要先构造出 LineConfig 才会走回落）
     calls: list = []
 
     class _PickyClient:

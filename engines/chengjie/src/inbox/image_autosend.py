@@ -1169,6 +1169,11 @@ def pick_registered_media(
         _scene_kind = requested_scene_kind(str(peer_text or ""))
     except Exception:
         _scene_kind = ""
+    # 「自拍」是通用人像池的默认语义，不是「风景/食物」那种点名 kind。
+    # 未打 kind 标签的本人照就是自拍存货——把 kind=selfie 当成硬过滤会让
+    # 「发张自拍」在只有未标注相册时全部拒发。
+    if _scene_kind == "selfie":
+        _scene_kind = ""
     # Q-39 C（#323）：scene_class_of / requested_scene_kind 的泛匹配不再单独把 _ask 置真——
     # 闸已判过「须与索图词共现」（strict_requested_scene_kind）；运营触发词命中（keyword）
     # 是「客户点名要那条」不是「要自拍」，无命中不记 miss（与旧行为一致）。

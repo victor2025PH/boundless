@@ -251,6 +251,24 @@
        ≈3:1 不可读，2026-08-10 接入弹窗实锤）。别名让所有旧引用点吃到正确的日夜双档；
        新代码一律直接写 --tk-warn-ink（见 .cursor/rules/frontend-theme.mdc）。 */
     --tk-amber-ink:var(--tk-warn-ink);
+    /* 别名：模板/CSS 曾引用这些名字但全站没定义，暗色恒吃亮色回落。 */
+    --tk-ink:var(--tk-text);
+    --tk-ink-2:var(--tk-text);
+    --tk-line:var(--tk-border);
+    --tk-fg-muted:var(--tk-text-muted);
+    --tk-warn:var(--tk-amber);
+    --text:var(--tk-text);
+    --text-muted:var(--tk-text-muted);
+    --panel:var(--tk-surface);
+    --panel-2:var(--tk-surface-2);
+    --warn-fg:var(--tk-warn-ink);
+    --cg-accent:var(--tk-brand);
+    --rps-warn:var(--tk-warn-ink);
+    --wx-kf:#1b6df5;
+    --wx-badge:#07c160;
+    --wx-on-badge:#fff;
+    --wx-muted:#9ca3af;
+    --wx-warn:#f59e0b;
     --tk-danger-ink:#b91c1c;
     --tk-vio-ink:#6d28d9;
     --tk-grad:linear-gradient(135deg,#22d3ee,var(--bl-growth,#1e8cf2));        /* 科技青→品牌智连蓝 */
@@ -4920,7 +4938,7 @@ window.__wsMultiWin = (function(){
   }
   function probe(){
     if(done) return;
-    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+    apiFetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
       return r.ok ? r.json() : null;
     }).then(function(b){
       if(b&&b.ok&&b.enabled){ inject(b); return; }

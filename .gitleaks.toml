@@ -1,0 +1,15 @@
+# Local allowlist on top of the default gitleaks rules.
+# .gitleaksignore still holds the older path:rule:line fingerprints.
+# Those fingerprints include the line number, so inserting lines above a
+# hit makes the old entry miss. This file names the two assignments instead.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "localStorage key names, not credentials. Both strings are unchanged from ebd73f48 (secrets green). This PR only inserted CSS aliases above them, which moved the lines off .gitleaksignore (PR_KEY 2496 -> 2514). LS_KEY was not reported on the base file because its byte offset sat 29 bytes before a 10KB fragment boundary, so the assignment was split across chunks; the same insert moved it fully inside one fragment (now line 4353)."
+regexTarget = "line"
+regexes = [
+  # (?:...) keeps this file from containing a contiguous key='…' literal.
+  '''var PR_KEY='(?:aitr\.ws\.presence\.v1)';''',
+  '''var LS_KEY='(?:ws_notify_prefs_v1)';''',
+]

@@ -267,8 +267,16 @@ class TestForConversation:
         assert r.status_code == 200
         # Q-1 E（#264）：无目标路也带总开关现状 discovery_paused
         # Q-8 A/B（#264）：默认目标现状 default_goal + 阶段计划 stage_plan（销售域 / 未设 → None）
-        assert r.json() == {"goal": None, "last": None, "discovery_paused": False,
-                            "default_goal": None, "stage_plan": None}
+        body = r.json()
+        assert body["goal"] is None and body["last"] is None
+        assert body["discovery_paused"] is False
+        assert body["default_goal"] is None and body["stage_plan"] is None
+        # 无目标路同样带业务域戳（缺显式配置时服务器推导为 sales）
+        assert body["business_domain"] == "sales"
+        assert set(body) == {
+            "goal", "last", "discovery_paused", "default_goal",
+            "stage_plan", "business_domain",
+        }
 
     def test_active_goal_view_with_today(self):
         client, _ = _build_client()

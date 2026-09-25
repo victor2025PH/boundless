@@ -43,6 +43,9 @@ _MODE_WRITER_ALLOWLIST = {
     "src/web/routes/cases_routes.py":                      "工单结案勾「转人工」（显式勾选）",
     "src/web/routes/web_chat_routes.py":                   "网站访客会话默认档（新会话预建）",
     "src/inbox/stop_contact.py":                           "O-1 A（#252 #253 · D-O1）客户要求停联 / 自伤硬停守卫：冻结 → manual（guard:stop_contact_from:<原档>），人工解冻还原——守卫类，与 peer_bot_guard 同族",
+    "src/assistant/actions.py":                            "助手显式「对齐档位 / 撤销对齐」：坐席确认后批量写档，不是打开会话",
+    "src/inbox/commitment_guard.py":                       "承诺守卫二次坚持：auto_ai → review（source=guard:commitment），守卫降档",
+    "src/inbox/dormant_review.py":                         "沉睡会话三按钮里「转手动」：坐席显式点选，不是查看",
 }
 
 # ── 允许清单：调 record_agent_takeover（接管即静音）的文件 ─────────────────────

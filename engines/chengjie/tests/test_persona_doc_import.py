@@ -654,8 +654,11 @@ async def test_routes_extract_validation_and_busy(app_on, monkeypatch):
 # ── 8. 生产配置可解析 ────────────────────────────────────────────────────────
 
 def test_production_yaml_parse_and_new_section():
-    base = yaml.safe_load(
-        (_ENGINE_ROOT / "config" / "config.yaml").read_text(encoding="utf-8"))
+    # config.yaml 被 gitignore；CI 读出厂 config.example.yaml。
+    path = _ENGINE_ROOT / "config" / "config.yaml"
+    if not path.is_file():
+        path = _ENGINE_ROOT / "config" / "config.example.yaml"
+    base = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(base, dict)
     sect = (base.get("personas") or {}).get("doc_import") or {}
     assert sect.get("enabled") is False          # 基线默认关

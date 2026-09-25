@@ -218,7 +218,7 @@
     var s = document.getElementById('vev-s-'+id);
     if(s){s.textContent = I.saving; s.classList.remove('ok');}
     var body = {id:id}; Object.keys(patch).forEach(function(k){body[k]=patch[k];});
-    return fetch(API+'/rate', {method:'POST', headers:{'Content-Type':'application/json'},
+    return apiFetch(API+'/rate', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){
         if(!j.ok) throw new Error(j.error||'fail');
         STATE.ratings[id] = Object.assign(STATE.ratings[id]||{}, patch);
@@ -254,7 +254,7 @@
     });
   }
 
-  fetch(API+'/state').then(function(r){return r.json();}).then(function(st){
+  apiFetch(API+'/state').then(function(r){return r.json();}).then(function(st){
     STATE = st;
     var items = (st.manifest||{}).items||{};
     var list = document.getElementById('vev-list'); list.innerHTML='';

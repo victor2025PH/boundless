@@ -120,7 +120,7 @@ def test_warnbar_reuses_existing_banner_infra():
     html = _base()
     assert "tone: lvl === 'over' ? 'error' : 'warn'" in html, "over/warn 语义分档被删"
     assert "dedupKey: 'uqw:' + lvl" in html, "每档每日一次的去重键被删"
-    assert "location.href = '/workspace/usage'" in html, "点击直达用量页的入口被删"
+    assert "wsNav('/workspace/usage')" in html, "点击直达用量页的入口被删"
 
 
 # ── ops_overview.html：「字符额度」卡（详细三件套断言在 test_ops_overview.py）────

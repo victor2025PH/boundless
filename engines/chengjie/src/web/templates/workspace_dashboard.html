@@ -345,7 +345,7 @@
       add('result', T('dash.card.new_contacts'), card(nc,T('dash.card.new_contacts')), _zeroish(nc));
       add('result', T('dash.card.leads'), card(ld,T('dash.card.leads')), _zeroish(ld));
       add('result', T('dash.card.handoffs'), card(ho,T('dash.card.handoffs')), _zeroish(ho));
-      add('result', T('dash.card.done'), _doneCard(dn,_wonCountFromStages(d.stage_counts)), _zeroish(dn));
+      add('result', T('dash.card.done'), _doneCard(_doneCountFromStages(d.stage_counts),_wonCountFromStages(d.stage_counts)), _zeroish(dn));
       add('result', T('dash.card.web_sessions'), card(ws,T('dash.card.web_sessions')), _zeroish(ws));
     }
     var frtV=fr.today_responded?fmtDur(fr.today_avg_sec):'—';
@@ -979,8 +979,8 @@
           body: JSON.stringify({type:'report',data:{period:period,text:text}})
         }, {timeoutMs: 60000});
       })
-      .then(function(r){ if(r.ok) alert(T('dash.report.push_ok')); else alert(T('dash.report.push_fail')); })
-      .catch(function(e){ alert(Tf('dash.report.push_err',{err:e})); });
+      .then(function(r){ if(r.ok) AITRNotify.alert(T('dash.report.push_ok')); else AITRNotify.alert(T('dash.report.push_fail')); })
+      .catch(function(e){ AITRNotify.alert(Tf('dash.report.push_err',{err:e})); });
   };
   // J1: 团队在线状态（主管专属）
   function loadPresence(){
@@ -1536,8 +1536,8 @@
           // 同步循环批发（≤200 张）可跑分钟级 → 10min 显式预算保证必然 settle
           apiFetch('/api/drafts/bulk-autosend',{method:'POST',headers:{'Content-Type':'application/json'}},{timeoutMs:600000})
             .then(function(r){return r.json();}).then(function(d){
-              alert(Tf('dash.qa.sent',{sent:d.sent})+(d.errors?Tf('dash.qa.errors',{n:d.errors}):''));
-            }).catch(function(){ alert(T('dash.qa.fail')); });
+              AITRNotify.alert(Tf('dash.qa.sent',{sent:d.sent})+(d.errors?Tf('dash.qa.errors',{n:d.errors}):''));
+            }).catch(function(){ AITRNotify.alert(T('dash.qa.fail')); });
         };
       }
     }
