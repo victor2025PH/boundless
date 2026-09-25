@@ -1996,7 +1996,7 @@ def test_channel_setup_status_detects_missing_and_filled():
     from src.utils.channel_setup import channel_status
     cfg = {
         "telegram": {"enabled": True, "api_id": 12345,
-                     "api_hash": "0" * 32, "phone_number": ""},
+                     "api_hash": "test-api-hash-not-a-secret", "phone_number": ""},
         "line": {"enabled": False, "channel_access_token": "YOUR_TOKEN"},
     }
     st = {c["id"]: c for c in channel_status(cfg)}

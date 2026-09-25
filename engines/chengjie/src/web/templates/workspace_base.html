@@ -2511,14 +2511,14 @@ document.addEventListener('click',function(e){
   // 打回在线（旧 init 无条件 setPresence('online')）；② 多窗口各按本窗值心跳互相覆盖
   // （待机窗现在传 status:'' → 服务端保留现状，last_seen 照常刷新）；③ 关任一窗口即
   // 全局置离线（待机窗关闭不再置离线）；④ 席位满 403 被静默吞掉（现在回退+显式提示）。
-  var PR_STORE='aitr.ws.'+'presence'+'.v1';
+  var PR_KEY='aitr.ws.presence.v1';
   var PR_RESTORE_MS=4*3600*1000;   // 手选忙碌的跨会话恢复窗：4h 内重开页面仍是忙碌
   var PR_TOAST={online:'base.presence.switched_online',busy:'base.presence.switched_busy',offline:'base.presence.switched_offline'};
   var _prSt='online';
-  function _prPersist(st){ try{ localStorage.setItem(PR_STORE, JSON.stringify({v:st, ts:Date.now(), id:window.__wsAgent.id})); }catch(_){ } }
+  function _prPersist(st){ try{ localStorage.setItem(PR_KEY, JSON.stringify({v:st, ts:Date.now(), id:window.__wsAgent.id})); }catch(_){ } }
   function _prRestore(){
     try{
-      var rec=JSON.parse(localStorage.getItem(PR_STORE)||'null');
+      var rec=JSON.parse(localStorage.getItem(PR_KEY)||'null');
       if(rec && rec.id===window.__wsAgent.id && rec.v==='busy' && (Date.now()-(rec.ts||0))<PR_RESTORE_MS) return 'busy';
     }catch(_){ }
     return '';
@@ -2631,7 +2631,7 @@ document.addEventListener('click',function(e){
   });
   // 同 profile 其他窗口切了状态 → storage 事件同步本窗 UI 与心跳基准（状态属人不属窗）
   window.addEventListener('storage',function(e){
-    if(!e || e.key!==PR_STORE) return;
+    if(!e || e.key!==PR_KEY) return;
     try{
       var rec=JSON.parse(e.newValue||'null');
       if(rec && rec.id===window.__wsAgent.id && rec.v && rec.v!==_prSt){ _prSt=rec.v; _syncPrUi(rec.v); }
@@ -4350,14 +4350,14 @@ window._pillChainFail=window._pillChainFail||function(fn){
 // 私聊新消息通知引擎：提示音（WebAudio 合成）+ 弹窗（系统通知/应用内提示）。
 // 偏好存 localStorage（本机级、跨设备不同步），群组默认不打扰（改走「群组动态」）。
 window.__wsNotify = (function(){
-  var NOTIFY_PREFS='ws_notify'+'_prefs_v1';
+  var LS_KEY='ws_notify_prefs_v1';
   // impl85 阶段5（工单#30 值守承诺）：客户消息弹窗默认关——弹窗带消息内容预览，
   // 客户拍板「不再弹系统通知」（隐私 + 打扰）；提示音保留默认开（无内容、保回复
   // 及时性）。想开回弹窗：铃铛面板「提示设置」→ 新消息弹窗（坐席显式保存过的
   // 旧偏好不受影响——load() 里存量键优先于 DEF）。
   var DEF={sound:true, volume:0.6, popup:'off', groups:false};
-  function load(){ try{ return Object.assign({},DEF,JSON.parse(localStorage.getItem(NOTIFY_PREFS)||'{}')); }catch(_){ return Object.assign({},DEF); } }
-  function save(p){ try{ localStorage.setItem(NOTIFY_PREFS, JSON.stringify(p)); }catch(_){ } }
+  function load(){ try{ return Object.assign({},DEF,JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(_){ return Object.assign({},DEF); } }
+  function save(p){ try{ localStorage.setItem(LS_KEY, JSON.stringify(p)); }catch(_){ } }
   var prefs=load();
   var _ctx=null, _unlocked=false;
   function _audioCtx(){ if(_ctx) return _ctx; try{ _ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(_){ _ctx=null; } return _ctx; }
