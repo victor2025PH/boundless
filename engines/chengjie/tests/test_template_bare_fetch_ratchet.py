@@ -44,6 +44,10 @@ _BARE_FETCH_CEILINGS = {
     # 群成员提取管理台：独立自包含页（不 extends base.html、无 _api_fetch.html include），
     # 全页仅 api() 一处原生 fetch（同源 + 内建 CSRF 头 + JSON 解析）。同 voice_call 结构性豁免。
     "tg_members.html": 1,
+    # 收件箱启动时拉静态平台注册表。tests/test_douyin_e2e_alignment.py 钉死字面
+    # fetch('/static/platform_registry.json'（PC/PN 没有的平台回落注册表色和正名）。
+    # 改 apiFetch 会改掉这条契约，且该 GET 是 no-store 的静态 JSON，不走统一层超时重试。
+    "unified_inbox.html": 1,
 }
 
 

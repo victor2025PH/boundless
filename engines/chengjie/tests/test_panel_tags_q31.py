@@ -327,9 +327,13 @@ def test_stop_contact_confirm_moves_tag_to_meta_guard_still_blocks(store):
     store.set_automation_mode(cid, "auto_ai", source="human")
     _push(store, ck, "please stop", time.time() - 60, "s1")
     d1 = svc.auto_generate_draft(conv, "please stop", automation_mode="auto_ai", enrich=True)
-    # D-O1：未冻结的停联不再给客户写告别稿，但必须留下一条可审草稿并冻结会话。
-    assert d1
-    assert sc.frozen_reason(store, cid) == "stop_contact"
+    # R88 缺省：未锁定的停联出普通 L2 稿、不写告别、不冻结。
+    # 本例测的是「已经冻结之后」确认把标挪进 meta、守卫仍拦第二条——冻结落点显式调用。
+    assert d1 and not sc.is_farewell_draft(store.get_draft(d1))
+    sc.freeze_conversation(
+        store, platform=PLAT, account_id=ACCT, chat_key=ck,
+        conversation_id=cid, reason="stop_contact",
+    )
     assert sc.frozen_reason(store, cid) == "stop_contact"
     tags = store.get_conv_tags(cid)
     assert HANDOFF_TAG in tags and sc.STOP_CONTACT_TAG in tags
