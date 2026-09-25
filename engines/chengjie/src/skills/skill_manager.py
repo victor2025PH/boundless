@@ -12760,7 +12760,8 @@ class SkillManager(LoggerMixin):
                                         intent, consecutive, last_msg, chat_title):
         """发�€�人工升�?webhook 通知（独立实现，不依�?admin.py�?"""
         try:
-            cfg_dir = Path(self.config.config_path).parent if hasattr(self.config, "config_path") else Path("config")
+            from src.licensing.data_paths import runtime_dir
+            cfg_dir = runtime_dir(self.config.config_path) if hasattr(self.config, "config_path") else Path("config")
             wh_path = cfg_dir / "webhook_settings.json"
             if not wh_path.exists():
                 return
@@ -12877,8 +12878,9 @@ class SkillManager(LoggerMixin):
     async def _fire_crisis_webhook(self, user_id, chat_id, streak, chat_title):
         """危机告警 webhook（复用 escalation_needed 事件通道，附 category=crisis）。"""
         try:
+            from src.licensing.data_paths import runtime_dir
             cfg_dir = (
-                Path(self.config.config_path).parent
+                runtime_dir(self.config.config_path)
                 if hasattr(self.config, "config_path") else Path("config")
             )
             wh_path = cfg_dir / "webhook_settings.json"

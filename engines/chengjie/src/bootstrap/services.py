@@ -13,6 +13,7 @@ def setup_contacts_subsystem(assistant):
     LINE/Messenger/WhatsApp RPA 服务、注册进程级 intimacy provider 与 cap-alert。"""
     try:
         from src.contacts import bootstrap_contacts_subsystem
+        # 传入 YAML 目录（话术/合规）。contacts.db 由 bootstrap 按 runtime_dir 另算。
         cfg_dir_for_contacts = Path(assistant.config.config_path).parent
         assistant.contacts = bootstrap_contacts_subsystem(
             assistant.config, cfg_dir_for_contacts,

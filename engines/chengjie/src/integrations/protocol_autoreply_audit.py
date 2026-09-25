@@ -264,6 +264,7 @@ def get_autoreply_audit(db_path: Optional[Path] = None) -> AutoReplyAudit:
     if _audit is None:
         with _audit_lock:
             if _audit is None:
-                path = Path(db_path) if db_path else Path("config/autoreply_audit.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("autoreply_audit.db")
                 _audit = AutoReplyAudit(path)
     return _audit

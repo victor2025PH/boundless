@@ -6,8 +6,6 @@ Endpoints:
 - POST /api/kb/import/save — save parsed entries to KB store
 """
 
-from pathlib import Path
-
 from fastapi import Depends, HTTPException, Request
 
 
@@ -48,7 +46,8 @@ def register_kb_import_routes(app, auth_dep, config_manager, audit_store=None):
         kb = None
         try:
             from src.utils.kb_store import KnowledgeBaseStore
-            kb_path = Path(config_manager.config_path).parent / "knowledge_base.db"
+            from src.licensing.data_paths import runtime_file
+            kb_path = runtime_file("knowledge_base.db", config_manager.config_path)
             if kb_path.exists():
                 kb = KnowledgeBaseStore(kb_path)
         except Exception:

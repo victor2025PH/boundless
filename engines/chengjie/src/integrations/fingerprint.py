@@ -177,6 +177,7 @@ def get_fingerprint_store(db_path: Optional[Path] = None) -> FingerprintStore:
     if _store is None:
         with _store_lock:
             if _store is None:
-                path = Path(db_path) if db_path else Path("config/fingerprints.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("fingerprints.db")
                 _store = FingerprintStore(path)
     return _store

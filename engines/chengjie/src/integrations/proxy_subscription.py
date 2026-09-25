@@ -433,7 +433,8 @@ def get_proxy_subscriptions(db_path: Optional[Path] = None) -> ProxySubscription
     if _store is None:
         with _store_lock:
             if _store is None:
-                path = Path(db_path) if db_path else Path("config/proxy_subscriptions.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("proxy_subscriptions.db")
                 _store = ProxySubscriptionStore(path)
     return _store
 

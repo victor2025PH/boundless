@@ -22,7 +22,8 @@ def reset_kb_singleton_cache() -> None:
 def _db_path(config) -> Optional[Path]:
     if not hasattr(config, "config_path"):
         return None
-    return Path(config.config_path).parent / "knowledge_base.db"
+    from src.licensing.data_paths import runtime_file
+    return runtime_file("knowledge_base.db", config.config_path)
 
 
 def get_kb_store(config, *, require_exists: bool) -> Optional[Any]:

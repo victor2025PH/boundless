@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Query, Request
@@ -68,7 +67,8 @@ def register_learner_routes(app, ctx):
     telegram_client = ctx.telegram_client
     audit_store = ctx.audit_store
     _api_auth = ctx.api_auth
-    _kb_db_path = Path(config_manager.config_path).parent / "knowledge_base.db"
+    from src.licensing.data_paths import runtime_file
+    _kb_db_path = runtime_file("knowledge_base.db", config_manager.config_path)
 
     def _memory_writer(conversation_id: str, content: str, quote: str):
         """私事条目 → 该客户 AI 记忆（与工作台「跨平台档案」写事实同一条路）。

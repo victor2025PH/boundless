@@ -107,7 +107,8 @@ def get_canary_store(db_path: Optional[Path] = None) -> CanaryStore:
     if _store is None:
         with _store_lock:
             if _store is None:
-                path = Path(db_path) if db_path else Path("config/runtime_flags.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("runtime_flags.db")
                 _store = CanaryStore(path)
     return _store
 

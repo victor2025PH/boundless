@@ -67,8 +67,14 @@ def _resolve_fernet() -> Any:
     return _fernet
 
 
+def default_key_path() -> Path:
+    """Fernet 密钥文件。与注册表同一分裂规则，避免库在数据根、密钥仍在安装树。"""
+    from src.licensing.data_paths import cwd_or_data_file
+    return cwd_or_data_file(_DEFAULT_KEY_FILE.name)
+
+
 def _load_or_create_key_file(Fernet: Any) -> Optional[bytes]:
-    path = Path(os.environ.get("ACCOUNT_REGISTRY_KEY_FILE") or _DEFAULT_KEY_FILE)
+    path = Path(os.environ.get("ACCOUNT_REGISTRY_KEY_FILE") or default_key_path())
     try:
         if path.exists():
             return path.read_bytes().strip() or None

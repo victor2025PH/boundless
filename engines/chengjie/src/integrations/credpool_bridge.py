@@ -271,7 +271,8 @@ def machine_id() -> str:
     try:
         from src.utils.config_manager import ConfigManager
 
-        path = Path(ConfigManager().config_path).parent / ".credpool_machine_id"
+        from src.licensing.data_paths import runtime_file
+        path = runtime_file(".credpool_machine_id", ConfigManager().config_path)
         if path.is_file():
             got = path.read_text(encoding="utf-8").strip()
             if got:

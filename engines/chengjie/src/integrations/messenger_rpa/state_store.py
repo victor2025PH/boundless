@@ -336,13 +336,14 @@ CREATE INDEX IF NOT EXISTS idx_msgr_send_queue_status_ts
 def default_state_db_path(
     config_path: Path | str, account_id: str = "default"
 ) -> Path:
-    """状态库路径默认与 config.yaml 同目录。
+    """状态库路径默认在运行时目录（同树布局＝config.yaml 旁）。
 
     P5-1：account_id != 'default' 时使用独立文件
     ``messenger_rpa_state_{account_id}.db``；'default' 保留旧路径
     ``messenger_rpa_state.db`` 以实现零迁移向后兼容。
     """
-    parent = Path(config_path).parent
+    from src.licensing.data_paths import runtime_dir
+    parent = runtime_dir(config_path)
     if account_id and account_id != "default":
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in account_id)
         return parent / f"messenger_rpa_state_{safe}.db"

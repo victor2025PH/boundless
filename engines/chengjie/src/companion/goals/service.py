@@ -237,7 +237,10 @@ def sprint_engine_status(cfg_root: Any, *, platform: str = "") -> Dict[str, Any]
 
 
 def resolve_db_path(cfg_root: Any, config_path: Any = None) -> str:
-    """目标库路径：``companion.goals.db_path`` 显式值 > ``<config 目录>/marketing_goals.db``。"""
+    """目标库路径：``companion.goals.db_path`` 显式值 > 运行时目录 ``marketing_goals.db``。"""
+    from src.licensing.data_paths import (
+        cwd_or_data_file, runtime_dir, runtime_file,
+    )
     cfg = resolve_goals_cfg(cfg_root)
     explicit = str(cfg.get("db_path") or "").strip()
     if explicit == ":memory:":
@@ -245,11 +248,11 @@ def resolve_db_path(cfg_root: Any, config_path: Any = None) -> str:
     if explicit:
         p = Path(explicit)
         if not p.is_absolute() and config_path:
-            p = Path(config_path).parent / p
+            p = runtime_dir(config_path) / p
         return str(p)
     if config_path:
-        return str(Path(config_path).parent / DEFAULT_DB_NAME)
-    return str(Path("config") / DEFAULT_DB_NAME)
+        return str(runtime_file(DEFAULT_DB_NAME, config_path))
+    return str(cwd_or_data_file(DEFAULT_DB_NAME))
 
 
 def get_configured_store(cfg_root: Any, config_path: Any = None) -> GoalStore:

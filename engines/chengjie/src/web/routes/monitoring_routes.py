@@ -163,12 +163,13 @@ def register_monitoring_routes(app, ctx):
             try:
                 learner = getattr(state, "_daily_learner", None)
                 if learner is None and _kb_store is not None:
+                    from src.licensing.data_paths import runtime_file
                     from src.utils.daily_learner import DailyLearner, resolve_learner_ai
                     _ai = resolve_learner_ai(app, telegram_client)
                     learner = DailyLearner(
                         _kb_store, _ai,
-                        db_path=Path(config_manager.config_path).parent
-                        / "knowledge_base.db")
+                        db_path=runtime_file(
+                            "knowledge_base.db", config_manager.config_path))
                     state._daily_learner = learner
                 if learner is not None:
                     # stats() 是全表 COUNT——旧口径 len(list_drafts()) 受默认

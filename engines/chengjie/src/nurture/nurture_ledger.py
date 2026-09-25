@@ -130,7 +130,11 @@ _singleton_path: str = ""
 def get_nurture_ledger(path: Any = None) -> NurtureLedger:
     """按路径单例（路径变则重建，与其它 store 单例同款）。"""
     global _singleton, _singleton_path
-    p = str(path or "config/nurture_ledger.json")
+    if path:
+        p = str(path)
+    else:
+        from src.licensing.data_paths import cwd_or_data_file
+        p = str(cwd_or_data_file("nurture_ledger.json"))
     if _singleton is None or p != _singleton_path:
         _singleton = NurtureLedger(p)
         _singleton_path = p

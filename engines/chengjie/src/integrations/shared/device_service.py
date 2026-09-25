@@ -79,12 +79,8 @@ def _build_runner(
             from src.integrations.line_rpa.state_store import (
                 LineRpaStateStore, default_state_db_path,
             )
-            from pathlib import Path
             account_id = platform_cfg.get("account_id") or "default"
-            if account_id and account_id != "default":
-                db_path = Path(config_manager.config_path).parent / f"line_rpa_state_{account_id}.db"
-            else:
-                db_path = default_state_db_path(config_manager.config_path)
+            db_path = default_state_db_path(config_manager.config_path, account_id)
             state = LineRpaStateStore(db_path)
             return LineRpaRunner(
                 config_manager=config_manager,
@@ -98,12 +94,8 @@ def _build_runner(
             from src.integrations.whatsapp_rpa.state_store import (
                 WaRpaStateStore, default_state_db_path as wa_db_path,
             )
-            from pathlib import Path
             account_id = platform_cfg.get("account_id") or "default"
-            if account_id and account_id != "default":
-                db_path = Path(config_manager.config_path).parent / f"wa_rpa_state_{account_id}.db"
-            else:
-                db_path = wa_db_path(config_manager.config_path)
+            db_path = wa_db_path(config_manager.config_path, account_id)
             state = WaRpaStateStore(db_path)
             return WhatsAppRpaRunner(
                 config_manager=config_manager,
@@ -117,12 +109,8 @@ def _build_runner(
             from src.integrations.messenger_rpa.state_store import (
                 MessengerRpaStateStore, default_state_db_path as msg_db_path,
             )
-            from pathlib import Path
             account_id = platform_cfg.get("account_id") or "default"
-            if account_id and account_id != "default":
-                db_path = Path(config_manager.config_path).parent / f"messenger_rpa_state_{account_id}.db"
-            else:
-                db_path = msg_db_path(config_manager.config_path)
+            db_path = msg_db_path(config_manager.config_path, account_id)
             state = MessengerRpaStateStore(db_path)
             return MessengerRpaRunner(
                 config_manager=config_manager,

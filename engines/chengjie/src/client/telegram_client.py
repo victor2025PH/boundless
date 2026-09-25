@@ -362,7 +362,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
         from src.utils.i18n import I18n
         from src.utils.event_tracker import EventTracker
-        cfg_dir = Path(config.config_path).parent if hasattr(config, "config_path") else Path("config")
+        from src.licensing.data_paths import runtime_dir
+        cfg_dir = runtime_dir(config.config_path) if hasattr(config, "config_path") else Path("config")
         self._cfg_dir = cfg_dir
         self.i18n = I18n(db_path=cfg_dir / "bot.db")
         self.event_tracker = EventTracker(db_path=cfg_dir / "bot.db")

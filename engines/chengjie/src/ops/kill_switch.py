@@ -214,7 +214,8 @@ def get_kill_switch(db_path: Optional[Path] = None) -> KillSwitch:
     if _singleton is None:
         with _singleton_lock:
             if _singleton is None:
-                path = Path(db_path) if db_path else Path("config/runtime_flags.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("runtime_flags.db")
                 _singleton = KillSwitch(path)
     return _singleton
 

@@ -134,6 +134,23 @@ def runtime_file(name: str, config_path: Any = None) -> Path:
     return runtime_dir(config_path) / name
 
 
+def cwd_or_data_file(name: str) -> Path:
+    """历史相对路径 ``config/<name>`` 的落点。
+
+    没有 ``config_path`` 可传的单例（账号注册表、``registry.key``、代理池等）
+    以前写 ``Path("config/<name>")``，按进程 CWD 解析。VPS 的
+    ``WorkingDirectory`` 是安装树 ``/opt/chatx-fleet/app``，文件就进了
+    ``app/config``（升级原子替换会清掉）。分裂布局改落 ``data_file``。
+
+    同树布局（桌面 YAML 在数据根内、只设 ``AITR_DATA_DIR``、裸开发）保持
+    相对路径：桌面壳 CWD 就是数据根，``config/<name>`` 与 ``data_file``
+    重合；pytest 的进程级 ``AITR_DATA_DIR`` 也不会把这些默认库收走。
+    """
+    if data_dir() != config_dir():
+        return Path(data_file(name))
+    return Path("config") / name
+
+
 def plugin_dir(config_path: Any = None) -> Path:
     """插件目录。
 

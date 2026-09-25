@@ -20,8 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 from typing import List
+
+from src.licensing.data_paths import runtime_dir as _kb_runtime_dir
 
 from fastapi import BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -406,9 +407,8 @@ def register_kb_routes(app, ctx):
         title_before = (entry_before or {}).get("title", entry_id)
         _kb_store.delete_entry(entry_id)
         # 同步删除该条目关联的图片文件
-        from pathlib import Path as _P
         img_names = _kb_store.delete_all_entry_images(entry_id)
-        img_dir = _P(config_manager.config_path).parent / "kb_images"
+        img_dir = _kb_runtime_dir(config_manager.config_path) / "kb_images"
         for fname in img_names:
             try:
                 (img_dir / fname).unlink(missing_ok=True)
@@ -800,7 +800,7 @@ def register_kb_routes(app, ctx):
     _embed_progress: dict = {
         "running": False, "total": 0, "done": 0, "failed": 0, "msg": ""
     }
-    _kb_backup_dir = Path(config_manager.config_path).parent / "kb_backups"
+    _kb_backup_dir = _kb_runtime_dir(config_manager.config_path) / "kb_backups"
 
     async def _call_embed_api(texts: List[str]) -> List[List[float]]:
         """调用 Embedding API，批量返回向量列表。
@@ -1325,8 +1325,7 @@ def register_kb_routes(app, ctx):
         if len(data) > 5 * 1024 * 1024:
             raise HTTPException(400, tr(request, "err.kb.img_size"))
         # 确保存储目录存在
-        from pathlib import Path as _P
-        img_dir = _P(config_manager.config_path).parent / "kb_images"
+        img_dir = _kb_runtime_dir(config_manager.config_path) / "kb_images"
         img_dir.mkdir(exist_ok=True)
         # 生成唯一文件名（保留原始扩展名）
         import uuid as _uuid
@@ -1355,8 +1354,7 @@ def register_kb_routes(app, ctx):
         filename = _kb_store.delete_entry_image(img_id)
         if not filename:
             raise HTTPException(404, tr(request, "err.kb.img_not_found"))
-        from pathlib import Path as _P
-        img_file = _P(config_manager.config_path).parent / "kb_images" / filename
+        img_file = _kb_runtime_dir(config_manager.config_path) / "kb_images" / filename
         try:
             img_file.unlink(missing_ok=True)
         except Exception:
@@ -1408,9 +1406,8 @@ def register_kb_routes(app, ctx):
     async def kb_image_serve(filename: str, request: Request):
         """静态服务知识库图片文件"""
         _api_auth(request)
-        from pathlib import Path as _P
         import mimetypes as _mt
-        img_dir = _P(config_manager.config_path).parent / "kb_images"
+        img_dir = _kb_runtime_dir(config_manager.config_path) / "kb_images"
         filepath = img_dir / filename
         # 防路径穿越
         if not filepath.resolve().is_relative_to(img_dir.resolve()):

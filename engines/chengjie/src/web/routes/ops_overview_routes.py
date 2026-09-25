@@ -508,10 +508,10 @@ def register_ops_overview_routes(app, ctx) -> None:
                         .get("ops") or {}).get("contacts_asset_trend") or {}
                 if not _cat.get("enabled", False):
                     return {"ok": True, "enabled": False, "days": []}
-                from pathlib import Path as _P
+                from src.licensing.data_paths import runtime_file
                 store = configure_contacts_asset_trend(
                     enabled=True,
-                    db_path=_P(cm.config_path).parent / "contacts_asset_trend.db",
+                    db_path=runtime_file("contacts_asset_trend.db", cm.config_path),
                     retention_days=float(_cat.get("retention_days", 180)),
                 )
                 if store is None:
