@@ -53,7 +53,7 @@ def _expand(raw: str) -> Optional[Path]:
         return None
     try:
         return Path(text).expanduser()
-    except Exception:  # noqa: BLE001
+    except (OSError, RuntimeError, ValueError):
         return None
 
 
