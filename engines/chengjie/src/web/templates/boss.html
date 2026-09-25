@@ -337,7 +337,7 @@
 
   async function load(force) {
     try {
-      var r = await fetch('/api/workspace/boss-value' + (force ? '?force=1' : ''));
+      var r = await apiFetch('/api/workspace/boss-value' + (force ? '?force=1' : ''));
       var d = await r.json();
       if (!d || d.ok === false) {
         el('bp-loading').textContent = T('bp_err');

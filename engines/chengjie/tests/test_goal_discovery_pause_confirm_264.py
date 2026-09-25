@@ -91,10 +91,10 @@ def _client():
     return TestClient(app), sess
 
 
-def _goal(gs, slots="occupation,age,location"):
+def _goal(gs, slots="occupation,age,location", now=None):
     return gs.create_goal(conversation_id=CONV, platform=PLAT, account_id=ACCT, chat_key=CK,
                           template="profile_discovery", autonomy="auto", deadline_days=3,
-                          params={"slots": slots}, now=T0) or {}
+                          params={"slots": slots}, now=T0 if now is None else now) or {}
 
 
 def _inject(inbox, text, now):
@@ -148,7 +148,9 @@ def test_discovery_pause_endpoints_and_viewer_403(_env):
 def test_slots_progress_state_and_confirm_flow(_env):
     inbox = _env
     gs = get_goal_store(":memory:")
-    _goal(gs)
+    # 限时目标按墙钟结算。锚在 T0（9/8）的 3 天期限到 9/25 已过期，
+    # 第二次 for-conversation 会把目标收成 last=expired。确认流要的是还活着的目标。
+    _goal(gs, now=time.time())
     # 客户说过职业（字段仍空）→ 卡上 occupation=mentioned；age 从没聊 → unknown
     inbox.add("out", "how was your day?", T0 - 700)
     inbox.add("in", "long one. i'm a union carpenter, worked the convention center", T0 - 600)

@@ -2290,12 +2290,12 @@ async function waSettingsTtsTest(){
     }, {timeoutMs: 60000});
     const d = await r.json();
     if(res){
-      if(!d.ok){ res.innerHTML=`<span style="color:var(--th-ink-red6,#b91c1c)">❌ ${rpa.esc(d.error||window.T('rpa_js_st_failed'))}</span>`; return; }
+      if(!d.ok){ res.innerHTML=`<span style="color:var(--red,#b91c1c)">❌ ${rpa.esc(d.error||window.T('rpa_js_st_failed'))}</span>`; return; }
       const dur = d.duration_sec>0?` · ${d.duration_sec}s`:'';
       res.innerHTML=`<audio controls src="${rpa.esc(d.url)}" style="height:30px;vertical-align:middle"></audio>
         <span style="color:var(--th-ink-slate5,#64748b);font-size:11px">${rpa.esc(d.language||'')}${dur} · ${rpa.esc(d.provider||'')}</span>`;
     }
-  }catch(e){ if(res) res.innerHTML=`<span style="color:var(--th-ink-red6,#b91c1c)">❌ ${e}</span>`; }
+  }catch(e){ if(res) res.innerHTML=`<span style="color:var(--red,#b91c1c)">❌ ${e}</span>`; }
   finally{ if(btn){ btn.disabled=false; btn.textContent='▶ '+window.T('wa_s116'); } }
 }
 
@@ -2350,7 +2350,7 @@ async function waTtsTest(btn){
   if(!bar) return;
   const lang = bar.querySelector('.wa-tts-lang-sel')?.value || '';
   const text = (bar.querySelector('.wa-tts-text-inp')?.value || '').trim();
-  if(!text){ alert(window.T('wa_js_062')); return; }
+  if(!text){ AITRNotify.alert(window.T('wa_js_062')); return; }
   const res = bar.querySelector('.wa-tts-test-result');
   btn.disabled = true; btn.textContent = '⏳ '+window.T('wa_js_063')+'…';
   res.innerHTML = '';

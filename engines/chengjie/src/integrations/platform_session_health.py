@@ -819,7 +819,9 @@ def session_expected_online(key: str) -> bool:
     except Exception:
         return True
     if not row:
-        return False
+        # 登录尝试幽灵（msg_* 临时 id，无注册表行）不进横幅。
+        # 其它 id 注册表暂时没有行：仍期望在线，昵称留空——坐席至少看得到掉线。
+        return not str(acct).startswith("msg_")
     status = str(row.get("status") or "")
     if status == "online":
         return True

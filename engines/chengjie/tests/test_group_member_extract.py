@@ -276,6 +276,7 @@ async def test_run_extraction_respects_global_cap():
 
 
 async def test_list_account_groups_filters_to_groups_only():
+    pytest.importorskip("pyrogram")  # CI 只装 requirements-ci.txt，不含 pyrogram
     from pyrogram.enums import ChatType
 
     class _C:

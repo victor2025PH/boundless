@@ -303,7 +303,7 @@
 </div>
 
 <!-- ══ 导入模态框 ═══════════════════════════════════════ -->
-<div id="import-overlay" onclick="closeImportModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
+<div id="import-overlay" onclick="closeImportModal()" style="display:none;position:fixed;inset:0;background:color-mix(in srgb, var(--t) 40%, transparent);z-index:700"></div>
 <div id="import-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(500px,94vw);background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
     <strong>⬆️ {{ (i18n or {}).get('kb_s040', "导入知识库") }}</strong>
@@ -331,7 +331,7 @@
 </div>
 
 <!-- ══ 清除预置条目模态框（Q-10 #254 / 22KVXF ⑤）：dry-run 清单 → 勾选来源 → 确认删除 ═══ -->
-<div id="preset-overlay" onclick="closePresetPurgeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
+<div id="preset-overlay" onclick="closePresetPurgeModal()" style="display:none;position:fixed;inset:0;background:color-mix(in srgb, var(--t) 40%, transparent);z-index:700"></div>
 <div id="preset-modal" role="dialog" aria-labelledby="preset-title" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
     <strong id="preset-title">🧹 {{ (i18n or {}).get('kb2_preset_title', "清除预置条目") }}</strong>

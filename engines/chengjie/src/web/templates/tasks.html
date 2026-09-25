@@ -91,18 +91,18 @@
     },
     done:function(tid){
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/done',{method:'POST'}, {timeoutMs: 60000})
-        .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ alert(window.T('draft.net_err')); });
+        .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     snooze:function(tid, days){
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/snooze',{method:'POST',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({days:days})}, {timeoutMs: 60000})
-        .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ alert(window.T('draft.net_err')); });
+        .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     assign:function(tid, who){
       if(!who) return;
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/assign',{method:'POST',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({assignee:who})}, {timeoutMs: 60000})
-        .then(function(r){return r.json();}).then(function(d){ if(d.ok) TK.load(); else alert(window.T('c3_js016')); }).catch(function(){ alert(window.T('draft.net_err')); });
+        .then(function(r){return r.json();}).then(function(d){ if(d.ok) TK.load(); else AITRNotify.alert(window.T('c3_js016')); }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     }
   };
   loadAgents(); TK.load(); setInterval(TK.load, 60000);

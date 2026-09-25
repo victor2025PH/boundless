@@ -1331,7 +1331,7 @@ class TestPlatformExpert:
         assert errors == []
         assert clean[_PLAT_OV]["messenger"] == {
             "min_sec": 10, "max_sec": 30, "adaptive": True}
-        _, errors = rps.sanitize_patch({_PLAT_OV: {"tiktok": {"min_sec": 1}}})
+        _, errors = rps.sanitize_patch({_PLAT_OV: {"snapchat": {"min_sec": 1}}})
         assert errors[0]["code"] == "bad_platform"
         _, errors = rps.sanitize_patch(
             {_PLAT_OV: {"line": {"per_char_sec": 0.1}}})

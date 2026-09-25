@@ -1777,12 +1777,12 @@ async function restoreSnapshot(filename){
   try{
     const d=await tgApi('/api/telegram/config-restore','POST',{filename});
     if(d.ok){
-      alert(window.T('tg_js_030'));
+      AITRNotify.alert(window.T('tg_js_030'));
       await loadSettings();
       loadSnapshots();
     }
   } catch(e){
-    alert(window.T('ov_js_restore_fail_pre')+e.message);
+    AITRNotify.alert(window.T('ov_js_restore_fail_pre')+e.message);
   }
 }
 

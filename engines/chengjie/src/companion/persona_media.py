@@ -323,6 +323,11 @@ def is_info_question(text: Any) -> bool:
         return False
     if not _QUESTION_RE.search(t):
         return False
+    # 「这是哪里拍的」是在问已经看到的那张，不是再要一张。
+    # 「照片呢」光杆催讨仍算要图；后面接着问拍摄地点则让路。
+    if re.search(r"哪[里裡儿兒].{0,8}拍", t) and not re.search(
+            r"发[我张張]|给我看|給我看|看看|再来|再來", t):
+        return True
     return not _MEDIA_REQ_RE.search(t)
 
 

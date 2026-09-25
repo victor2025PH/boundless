@@ -99,6 +99,20 @@ _PACKAGED_CAPABILITY_LEDGER: Dict[str, Tuple[str, str, str]] = {
         HIDDEN, "", "LAN GPU 水位是自建集群运维项，客户无此拓扑、ops 卡整卡隐藏"),
     "ops.cloud_credentials.enabled": (
         HIDDEN, "", "云端凭证体检针对自备 Key 的自建部署，托管客户无此面"),
+    # 出厂关、且功能总览 show=False（设置页各自有入口，总览零卡片）。
+    # 客户打包视图里不为 on，按「零总览入口」登记；不要标 on——种子没开它们。
+    "inbox.work_schedule.enabled": (
+        HIDDEN, "", "班表会改发送时间，D-Q1 出厂关；总览不展示（show=False），"
+        "开启入口只在自动回复设置页且时区必填"),
+    "companion_send_gate.enabled": (
+        HIDDEN, "", "单账号日发额度闸门 D-Q2 出厂关；总览不展示，设置页自助开，"
+        "只拦自动链"),
+    "inbox.takeover_rearm.enabled": (
+        HIDDEN, "", "坐席接管后全局自动接回 D-M9 出厂关；总览不展示，"
+        "按会话接回由坐席切手动时自选"),
+    "inbox.reply_style.bubbles.enabled": (
+        VISIBLE_LOCK, "", "多句分条出厂关（拆条节奏可被用来识别 AI）；"
+        "零依赖，功能总览里可直接开"),
     # inbox.l2_autosend.deliver：2026-08-22 拍板 C→B 且种子出厂即开（全自动
     # 开箱）——客户视图里已是 on，无需处置行（stale 门禁会点名多余登记）。
 }

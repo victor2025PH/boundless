@@ -1983,8 +1983,19 @@ def test_cross_session_blindness_is_not_reported_as_wechat_not_running(monkeypat
 
 def test_driver_is_not_ready_across_sessions(monkeypatch):
     """跨会话起驱动只会得到一个瞎子；start/restart 该在门口 409，而不是拉起来再 blind。"""
+    import importlib.util
+
     from src.integrations.wechat_pc import env_check as E
 
+    # 断言的是会话隔离，不是「这台 CI 机器装没装 uiautomation」（该包只在 win32 安装）。
+    real_find = importlib.util.find_spec
+
+    def _find(name, *args, **kwargs):
+        if name == "uiautomation":
+            return object()
+        return real_find(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _find)
     monkeypatch.setattr(E.os, "name", "nt")
     monkeypatch.setattr(E, "session_isolation",
                         lambda: {"engine_session": 0, "console_session": 1, "isolated": True})

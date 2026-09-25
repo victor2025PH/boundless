@@ -139,7 +139,7 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
   {# O-2 D（#201 WYNN22）：「自安装以来新增 N 条 · 今日 +T · 已转正 P」——回答「抽取链有没有在产出」；
      入站 ≥50 而记忆 0 条 → 红字「记忆没有在增长」+ 链到日志页（看 [episodic] 行）。旧后端无 growth 字段 → 两行都隐藏 #}
   <div id="cs-growth" hidden style="font-size:.8rem;color:var(--t2);margin:-.1rem 0 .55rem" title="{{ (i18n or {}).get('em_growth_tip', '从记忆库建立（安装）起累计写入的条数，含后来被删除 / 过时的；今日按本机日期 0 点起算') }}"></div>
-  <div id="cs-stall" hidden role="alert" style="font-size:.8rem;font-weight:600;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem;line-height:1.5"></div>
+  <div id="cs-stall" hidden role="alert" style="font-size:.8rem;font-weight:600;color:var(--tk-danger-ink,#dc2626);background:color-mix(in srgb, var(--tk-danger) 8%, transparent);border:1px solid color-mix(in srgb, var(--tk-danger) 35%, transparent);border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem;line-height:1.5"></div>
   {# J-10 B5：「AI 记忆健康」KPI——今日需处理 / AI 已记住 / 未记录（护栏丢弃）/ 被用轮数 / 抽检准确率；
      数据全部来自 A 组新增字段（/summary 的 review / grounding_drops / recall + /correction-stats） #}
   <div class="cs-grid" id="cs-grid">
@@ -839,7 +839,7 @@ async function _emDrvLoadSelf(key,convId){
         var body={memory_key:key,kind:it.kind,ts:it.ts,text:it.text}; if(convId)body.conversation_id=convId;
         var r=await apiFetch('/api/episodic-memory/self-log/mark-done',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(r&&r.ok){_emDrvLoadSelf(key,convId);}
-        else{b.disabled=false;alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
+        else{b.disabled=false;AITRNotify.alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
       });
     });
     Array.prototype.forEach.call(bd.querySelectorAll('button[data-i]'),function(b){
@@ -853,7 +853,7 @@ async function _emDrvLoadSelf(key,convId){
             var body={memory_key:key,kind:it.kind,ts:it.ts,text:it.text}; if(convId)body.conversation_id=convId;
             var r=await apiFetch('/api/episodic-memory/self-log/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
             if(r&&r.ok){_emDrvLoadSelf(key,convId);}
-            else{alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
+            else{AITRNotify.alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
           }
         });
       });
@@ -1131,7 +1131,7 @@ function emIgnore(btn){
     ok:window.T('em_ignore'),
     onOk:async function(){
       var res=await apiFetch('/api/episodic-memory/'+id+'/ignore',{method:'POST'},{timeoutMs:60000});
-      if(!res.ok){alert(window.T('em_review_action_fail')+' '+res.status);return;}
+      if(!res.ok){AITRNotify.alert(window.T('em_review_action_fail')+' '+res.status);return;}
       emLoad(); csLoad(); if(_emDrvOpen())_emDrvReload(); if(typeof _emQueueLoad==='function')_emQueueLoad();
     }
   });
@@ -1141,9 +1141,9 @@ async function emRestore(btn){
   btn.disabled=true;
   try{
     var res=await apiFetch('/api/episodic-memory/'+id+'/restore',{method:'POST'},{timeoutMs:60000});
-    if(!res.ok){alert(window.T('em_review_action_fail')+' '+res.status);btn.disabled=false;return;}
+    if(!res.ok){AITRNotify.alert(window.T('em_review_action_fail')+' '+res.status);btn.disabled=false;return;}
     emLoad(); csLoad(); if(_emDrvOpen())_emDrvReload();
-  }catch(e){alert(e);btn.disabled=false;}
+  }catch(e){AITRNotify.alert(e);btn.disabled=false;}
 }
 function emToggleIgnoredView(){
   _emStatusF=(_emStatusF==='ignored')?'':'ignored';
@@ -1213,12 +1213,12 @@ async function emConfirm(btn) {
   btn.disabled = true;
   try {
     const res = await apiFetch('/api/episodic-memory/' + id + '/confirm', { method: 'POST' }, {timeoutMs: 60000});
-    if (!res.ok) { alert(window.T('em_id_confirm_fail')+' ' + res.status); btn.disabled = false; return; }
+    if (!res.ok) { AITRNotify.alert(window.T('em_id_confirm_fail')+' ' + res.status); btn.disabled = false; return; }
     emLoad();
     csLoad();
     if (_emDrvOpen()) _emDrvReload();
     if (typeof _emQueueLoad === 'function') _emQueueLoad();
-  } catch (e) { alert(e); btn.disabled = false; }
+  } catch (e) { AITRNotify.alert(e); btn.disabled = false; }
 }
 /* memory-mgmt provenance tip (#41): quote the original message when
    recorded; old rows honestly say none was recorded. */
@@ -1442,17 +1442,17 @@ function _emQueueAfter() { _emQueueLoad(); emLoad(); if (_emDrvOpen()) _emDrvRel
 async function emQueueAct(id, action) {
   try {
     var res = await apiFetch('/api/episodic-memory/' + id + '/' + action, {method: 'POST'}, {timeoutMs: 60000});
-    if (!res.ok) { alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
+    if (!res.ok) { AITRNotify.alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
     var row = document.querySelector('[data-qid="' + id + '"]'); if (row) row.remove();   // 处理完自动跳下一条
     _emHealthLoad(); _emQueueAfter();
-  } catch (e) { alert(e); }
+  } catch (e) { AITRNotify.alert(e); }
 }
 async function emQueueResolve(keepId) {
   try {
     var res = await apiFetch('/api/episodic-memory/resolve-conflict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({keep_id: keepId})}, {timeoutMs: 60000});
-    if (!res.ok) { alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
+    if (!res.ok) { AITRNotify.alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
     _emHealthLoad(); _emQueueAfter();
-  } catch (e) { alert(e); }
+  } catch (e) { AITRNotify.alert(e); }
 }
 /* J-10 三期：「AI 答应过还没做」——承诺账本跨客户汇总（/promises/open，超期在前）。
    旧后端无接口 → KPI 格与面板都不出现。 */
@@ -1511,7 +1511,7 @@ async function _emPromisesLoad() {
         var r = await apiFetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({memory_key: it.context_key, kind: 'promise', ts: it.ts, text: it.text})});
         if (r && r.ok) { _emPromisesLoad(); if (_emDrvOpen()) _emDrvReload(); }
-        else { b.disabled = false; alert(window.T('em_review_action_fail') + ' ' + (r ? r.status : '')); }
+        else { b.disabled = false; AITRNotify.alert(window.T('em_review_action_fail') + ' ' + (r ? r.status : '')); }
       });
     });
   } catch (e) { /* 看板失败不阻断主表 */ }

@@ -423,9 +423,9 @@ async function idUnlink(platform,uid){
       body:JSON.stringify({platform,uid})
     },{timeoutMs:60000});
     const d=await r.json();
-    if(!r.ok)alert(window.T('rpa_js_st_failed')+': '+(d.detail||''));
+    if(!r.ok)AITRNotify.alert(window.T('rpa_js_st_failed')+': '+(d.detail||''));
     idLoad();
-  }catch(e){alert(window.T('ln_js_036')+': '+e.message);}
+  }catch(e){AITRNotify.alert(window.T('ln_js_036')+': '+e.message);}
 }
 </script>
 </body></html>

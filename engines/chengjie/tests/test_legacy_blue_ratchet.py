@@ -113,7 +113,9 @@ _TAILWIND_CEILINGS = {
     # 若改用 toast 色板常量可回收本处 +1。
     # 2026-08-17 额度批回收 1：预算救济 toast 成功色从 var(--th-bg-blue6,#2563eb)
     # 改语义绿 #16a34a（toast 色板常量口径），16 → 15。
-    "src/web/templates/unified_inbox.html": 15,
+    # 2026-09-25 15→5：信息 toast / 横幅 / color-mix 里的 Tailwind 蓝改品牌色
+    # #1e8cf2 或 var(--tk-brand)。剩下 5 处是语义调色板（预览蓝框、信息徽章、头像渐变蓝臂）。
+    "src/web/templates/unified_inbox.html": 5,
     # 10 转 3 留 7 → P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js
     # 带走 JS 侧 3 处（在下方 JS 条目续记），模板余 4：KPI 卡色 2 + 选择条 on-indigo 1 +
     # dc-tab/dc-bar-cell 品牌蓝回落 1

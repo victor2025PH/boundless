@@ -23184,6 +23184,12 @@ ZH_HANT = {
     'psn_vm_off': '不發語音',
     # ── psn_vm_off_sub ──
     'psn_vm_off_sub': '這個人設只回文字（新建人設預設）',
+    # ── psn_dialect ──
+    'psn_dialect': '口語方言',
+    # ── psn_dialect_none ──
+    'psn_dialect_none': '不指定（普通話）',
+    # ── psn_dialect_yue ──
+    'psn_dialect_yue': '粵語',
     # ── psn_vm_pick_first ──
     'psn_vm_pick_first': '先在列表裡選一把音色再試聽',
     # ── psn_vm_preset ──

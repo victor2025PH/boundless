@@ -383,6 +383,7 @@ def test_e2ee_material_extracts_key_material_from_plaintext(monkeypatch):
             calls["chan"] = (sender, skid, rkid)
             return 42
 
+    pytest.importorskip("okline")  # CI 只装 requirements-ci.txt，不含 okline
     from okline import e2ee_crypto as fr
     chunks = fr.build_chunks(os.urandom(60), 11, 22)
     msg = {"id": "M", "from": "Usender", "to": "Ume", "contentType": 1,

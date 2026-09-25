@@ -29,9 +29,16 @@ def _account_not_in_cold_start(monkeypatch):
     用例都是「当场 upsert 账号」→ 注册表 ``created_at=now`` → 会被预热闸如实判为新号
     并降级 review（那是它的**正确**行为，专门门禁见 ``test_warmup_review_cap``）。
     不钉住的话这里的断言就同时反映两档封顶，读起来像业务线逻辑坏了。
+
+    同一正交：#156 ``persona_unselected`` 对「注册表有行但 meta 没绑人设」封 review。
+    本文件 upsert 的账号都不带 persona_id，会被这层如实降级——那是人设门的正确行为，
+    不是业务线默认图开始封 companion / 未标注。这里钉成「已选人设」，业务线断言才只
+    反映 business_line_modes。
     """
     import src.inbox.account_connection as ac
+    import src.ai.persona_voice as pv
     monkeypatch.setattr(ac, "resolve_account_connected_at", lambda *a, **k: 1.0)
+    monkeypatch.setattr(pv, "account_persona_unselected", lambda *a, **k: False)
 
 
 # ── 注册表列 + 缓存 ────────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ class _Sender(TelegramSenderMixin):
         self.account_id = "acct7"
         self.logger = logging.getLogger("test_aline_disclosure")
 
-    def _presend_blocked(self, is_autoreply=True):
+    def _presend_blocked(self, is_autoreply=True, peer=None):
         return False
 
     async def _mark_peer_read(self, chat_id):

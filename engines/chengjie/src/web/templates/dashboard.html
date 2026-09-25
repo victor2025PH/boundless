@@ -1489,10 +1489,10 @@ async function _dobPost(path,payload){
     const r=await apiFetch(path,{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})}, {timeoutMs: 60000});
     const d=await r.json();
-    if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.error||window.T('rpa_unknown')));}
+    if(!d.ok){AITRNotify.alert(window.T('ov_js_op_fail_e')+(d.error||window.T('rpa_unknown')));}
     loadDeferredOutbox();
     return d;
-  }catch(e){alert(window.T('db_js_070')+String(e));}
+  }catch(e){AITRNotify.alert(window.T('db_js_070')+String(e));}
 }
 function _dobRetryFailed(){if(confirm(window.T('db_js_071')))_dobPost('/api/deferred-outbox/retry',{status:'failed'});}
 function _dobCancelReason(){const r=prompt(window.T('db_js_072')+' no_sender / quiet_hours / pacing_min_gap）：');if(r)_dobPost('/api/deferred-outbox/cancel',{reason:r.trim()});}

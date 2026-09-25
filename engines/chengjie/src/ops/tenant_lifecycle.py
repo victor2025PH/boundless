@@ -78,10 +78,30 @@ def exports_dir(ops_base: str = DEFAULT_OPS_BASE) -> Path:
     return Path(ops_base) / "exports"
 
 
+def _parent_dir(path_str: str) -> str:
+    """取父目录，``/`` 与 ``\\`` 都当分隔符，并保留原串的分隔符风格。
+
+    实例根由调用方给出（``data_dir`` 的上一级，通常是 ``…/<iid>``，其下才是
+    ``data``）。Linux 的 pathlib 不把反斜杠当分隔符，``Path(win_path).parent``
+    会退化成 ``.``，交付卡就落到进程 cwd 而不是给出的实例根。
+    """
+    raw = str(path_str or "").rstrip("/\\")
+    if not raw:
+        return raw
+    norm = raw.replace("\\", "/")
+    parent = norm.rsplit("/", 1)[0] if "/" in norm else ""
+    if "\\" in str(path_str) and "/" not in str(path_str):
+        parent = parent.replace("/", "\\")
+    return parent
+
+
 def tenant_card_path(data_dir: str) -> Path:
-    """交付卡落数据根同级（D:\\chengjie-instances\\<iid>\\tenant_card.json）——
-    开通守护（下一阶段对接官网订单）直接读这张卡回填订单。"""
-    return Path(data_dir).parent / "tenant_card.json"
+    """交付卡落数据根同级（``<instance_root>/tenant_card.json``）——
+    开通守护（下一阶段对接官网订单）直接读这张卡回填订单。
+
+    实例根＝调用方传入的 ``data_dir`` 的父目录，不写死盘符。
+    """
+    return Path(_parent_dir(data_dir)) / "tenant_card.json"
 
 
 def data_dir_of_service(svc: Dict[str, Any], data_base: str = r"D:\chengjie-instances") -> str:
@@ -105,7 +125,9 @@ def web_port_of_service(svc: Dict[str, Any]) -> Optional[int]:
 
 # ────────────────────────── 纯函数：materialize 计划 ──────────────────────────
 
-SKELETON_SUBDIRS = ("config", "sessions", "logs", "events\\spool", "ledger_outbox")
+# 用正斜杠：pathlib 在 Windows / Linux 都会展开成 events/spool 两级目录。
+# 写成 events\\spool 时，Linux 会建成名字里带反斜杠的单层目录，骨架对不上。
+SKELETON_SUBDIRS = ("config", "sessions", "logs", "events/spool", "ledger_outbox")
 
 
 def materialize(

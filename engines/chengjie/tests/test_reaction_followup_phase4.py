@@ -1,9 +1,12 @@
 """Phase4：TG B 线入站 emoji/sticker 语义 + WA reaction 轻量跟进门禁。"""
 from __future__ import annotations
 
+import os
 import time
 import types
 from pathlib import Path
+
+import pytest
 
 from src.companion.reaction_followup import (
     build_followup_text,
@@ -16,6 +19,21 @@ from src.inbox.store import InboxStore
 from src.integrations import protocol_bridge as pb
 from src.integrations.protocol_bridge import ingest_incoming
 from src.integrations.shared.deferred_outbox import DeferredOutboxStore
+@pytest.fixture(autouse=True)
+def _quiet_hours_use_utc8():
+    """安静窗按本机 localtime。合成时刻 now=1000 在 UTC 落在 23–8 安静窗里会被
+    顺延到 08:00，drain(now=2000) 拿不到；生产服务器是 UTC+8，该时刻已过 8 点。"""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Shanghai"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
 from src.integrations.tg_inbound_text import (
     annotate_inbound_emoji,
     demojize_one,

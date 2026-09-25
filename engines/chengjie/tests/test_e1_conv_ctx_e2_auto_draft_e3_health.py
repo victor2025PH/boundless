@@ -45,6 +45,14 @@ def _legacy_enforce_policy(monkeypatch):
     本文件 E2 段钉的是旧「high→L4 / medium→L3」语义＝``enforce`` 档骨架，显式切 enforce 跑，
     兼作反向验证。shadow 行为见 ``tests/test_drafts_risk_policy.py``。"""
     monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
+    # R88 未锁定类别会把索要句式从 high 降成 medium（→ L3）。本文件钉的是
+    # enforce 旧表 high→L4，分级降档不在这张表里。
+    import src.inbox.risk_grader as rg
+
+    def _keep(svc, conv, text, lang, risk_level, peer_reasons, risk_hits, **k):
+        return risk_level, list(peer_reasons or []), None
+
+    monkeypatch.setattr(rg, "regrade_inbound", _keep)
 
 
 # ──────────────────────────────────────────────────────

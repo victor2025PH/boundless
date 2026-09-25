@@ -256,7 +256,10 @@ def test_batch4_sys_status_server_persistence_wired():
 ## 收编台账：2026-08-27 191→147（并行线收 rpa_overview/ops_overview）→72
 ## （batch4 第二梯队：contact360/ai_studio/_channel_body_messenger/draft_review/
 ##   settings/monetization/agent_perf 共 75 处，成功类分档 'ok'/汇总 'info'）
-_NATIVE_DIALOG_CEILINGS = {"alert": 72, "confirm": 135, "prompt": 24}
+# 2026-09-25：裸 alert( 改走 AITRNotify.alert。剩 1 处是
+# connect_relay.test.js 的 XSS 夹具字面量（必须保持 alert( 才能证明属性转义），不是产品弹窗。
+# prompt 两处注释里的 prompt() 不是调用，改写后实测 23，天花板随之下调。
+_NATIVE_DIALOG_CEILINGS = {"alert": 1, "confirm": 135, "prompt": 23}
 _NATIVE_DIALOG_RE = re.compile(r"(?<![.\w$])(alert|confirm|prompt)\s*\(")
 
 

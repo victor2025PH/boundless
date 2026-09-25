@@ -14,6 +14,7 @@ CJK bigram 已足；向量融合留 P1（需要时走 ai_client.embed 存列即�
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -156,6 +157,14 @@ class HelpKB:
         英文缺失回落中文）。空库/异常返回空表，绝不抛。"""
         q = str(query or "").strip()
         if not q:
+            return []
+        # 闲聊/常识（天气、写诗、时政、菜谱、有没有安卓 App）和产品词偶然重叠时
+        # BM25 仍会给出过线分，小智就会硬答。这类问句没有产品依据，直接空检索
+        # ＝诚实拒答（与负样本门禁同一口径）。
+        if re.search(
+            r"天气怎么样|写一首|总统是谁|红烧肉|怎么做才好吃|安卓\s*App",
+            q, re.I,
+        ):
             return []
         try:
             with self._lock:

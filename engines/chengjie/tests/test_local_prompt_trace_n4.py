@@ -36,14 +36,17 @@ class _FakeChatClient:
             cached_tokens = cached
 
         class _Usage:
-            prompt_tokens = prompt_tokens
-            completion_tokens = 30
-            prompt_tokens_details = _Det()
+            # 类体里 ``prompt_tokens = prompt_tokens`` 会把名字变成类局部，
+            # RHS 在赋值前查找 → NameError。用构造器吃外层形参。
+            def __init__(self, pt, details):
+                self.prompt_tokens = pt
+                self.completion_tokens = 30
+                self.prompt_tokens_details = details
 
         class _Resp:
             def __init__(self, content):
                 self.choices = [_Choice(content)]
-                self.usage = _Usage()
+                self.usage = _Usage(prompt_tokens, _Det())
 
         class _Completions:
             async def create(self, **kw):

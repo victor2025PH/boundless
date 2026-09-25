@@ -235,7 +235,7 @@
   }
   function notify(msg, ok){
     if(typeof window.wsToast==='function'){ window.wsToast(msg, ok?'check':'alert'); }
-    else{ alert(msg); }
+    else{ AITRNotify.alert(msg); }
   }
   /* cid → 尾号（displayName / 字母头像共用） */
   function cidTail(cid){
@@ -286,7 +286,7 @@
         var u=job[0], el=job[1];
         var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
         var tmo=ctl?setTimeout(function(){ try{ctl.abort();}catch(e){} },5000):0;
-        fetch(u,{signal:ctl?ctl.signal:undefined}).then(function(r){
+        apiFetch(u,{signal:ctl?ctl.signal:undefined}).then(function(r){
           if(!r.ok) throw new Error('http');
           return r.blob();
         }).then(function(b){

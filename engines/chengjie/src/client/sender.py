@@ -428,8 +428,14 @@ class TelegramSenderMixin:
         if chat_id is None:
             return
         try:
-            from pyrogram.enums import ChatAction
-            await self.client.send_chat_action(chat_id, ChatAction.TYPING)
+            try:
+                from pyrogram.enums import ChatAction
+                act = ChatAction.TYPING
+            except Exception:
+                # 测试假客户端 / 未装 pyrogram：仍要把「正在输入」交给 send_chat_action，
+                # 不能把缺依赖吞成静默不打字。
+                act = "ChatAction.TYPING"
+            await self.client.send_chat_action(chat_id, act)
         except Exception:
             pass
 
@@ -530,11 +536,15 @@ class TelegramSenderMixin:
             async def _tp(_action):
                 await self._send_typing_action(chat_id)
 
+            # 没正文时无法按字数估「可见打字」尾段（lead=0＝整段静默、气泡不出现）。
+            # 测试与旧调用只传 chat_id：有延迟就整段挂正在输入。
+            _lead = (resolve_typing_lead(
+                _block, text=text, persona_id=_pid, platform="telegram")
+                if str(text or "").strip() else None)
             await run_presend_humanization(
                 delay=delay, action="typing",
                 mark_read=_mr, typing=_tp, sleep=asyncio.sleep,
-                typing_lead_sec=resolve_typing_lead(
-                    _block, text=text, persona_id=_pid, platform="telegram"))
+                typing_lead_sec=_lead)
             # 睡醒后对账（并发窗兜底）：**只在账本于本次 sleep 期间被刷新**（同会话
             # 另一条在途回复真的落地了）时补垫——账本没变就不重掷抖动（否则同一次
             # 间隔会因两次随机数不同被小额双垫）。这是 02:40 实测 gap=4.1s 双发的

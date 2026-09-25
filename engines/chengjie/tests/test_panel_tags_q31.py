@@ -327,7 +327,9 @@ def test_stop_contact_confirm_moves_tag_to_meta_guard_still_blocks(store):
     store.set_automation_mode(cid, "auto_ai", source="human")
     _push(store, ck, "please stop", time.time() - 60, "s1")
     d1 = svc.auto_generate_draft(conv, "please stop", automation_mode="auto_ai", enrich=True)
-    assert d1 and sc.is_farewell_draft(store.get_draft(d1))
+    # D-O1：未冻结的停联不再给客户写告别稿，但必须留下一条可审草稿并冻结会话。
+    assert d1
+    assert sc.frozen_reason(store, cid) == "stop_contact"
     assert sc.frozen_reason(store, cid) == "stop_contact"
     tags = store.get_conv_tags(cid)
     assert HANDOFF_TAG in tags and sc.STOP_CONTACT_TAG in tags

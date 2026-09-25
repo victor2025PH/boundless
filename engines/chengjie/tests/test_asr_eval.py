@@ -36,7 +36,7 @@ def _wav(path: Path, seconds: float) -> str:
 # ── CER ─────────────────────────────────────────────────────────────────────
 def test_cer_basic_and_normalization():
     assert cer("你好", "你好") == 0.0
-    assert cer("今天天气不错", "今天天氣不錯") == 0.0          # 繁简不算错（opencc 缺失时恒等仍相等）
+    assert cer("今天天气不错", "今天天氣不錯") == 0.0          # 繁简不算错（opencc 或纯 Python 字形回落）
     assert cer("今天，天气 不错！", "今天天气不错") == 0.0      # 标点/空格不算错
     assert cer("Hello World", "hello world") == 0.0
     assert cer("大造成呢", "打造成呢") == 0.25                   # 1/4

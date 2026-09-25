@@ -1,4 +1,4 @@
-# 托管租户反向隧道（117 -> VPS）：把本机租户实例端口暴露到 VPS 的 localhost，
+﻿# 托管租户反向隧道（117 -> VPS）：把本机租户实例端口暴露到 VPS 的 localhost，
 # 供 VPS nginx 按子域反代（https://<slug>.bd2026.cc -> VPS 127.0.0.1:<port> -> 本机 <port>）。
 #
 # 与 vision_tunnel.ps1 同模式（一条 ssh 多 -R、断线 10s 重连、只挂 VPS localhost 不上公网），

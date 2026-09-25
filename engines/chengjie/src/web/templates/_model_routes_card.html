@@ -189,7 +189,7 @@ function _dvmrV(id){ const el = _dvmrEl(id); return el ? String(el.value || '').
 function _dvmrSet(id, v){ const el = _dvmrEl(id); if(el) el.value = (v == null ? '' : v); }
 function _dvmrMask(k){ k = String(k || ''); return k.length > 12 ? (k.slice(0, 4) + '\u2026' + k.slice(-4)) : (k ? '\u2026' : ''); }
 function _dvmrHost(base){ let b = String(base || '').trim(); if(b.indexOf('://') >= 0) b = b.split('://')[1]; return b.split('/')[0].toLowerCase(); }
-function _dvmrIsPrivateHost(h){ h = String(h || '').replace(/:\d+$/, ''); return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h); }
+function _dvmrIsPrivateHost(h){ h = String(h || '').replace(/:[0-9]+$/, ''); return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/.test(h); }
 function _dvmrGuessVendor(base){
   const h = _dvmrHost(base);
   if(!h) return 'other';

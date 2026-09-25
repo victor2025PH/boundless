@@ -582,11 +582,23 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                     data = conv
                     ext = ".jpg"
                     heic_converted = True
-                _bad = _sniff_media(data, ext)
-                if _bad:
-                    raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
-                                  pid=pid, name=fname, size=size, t0=t0, mode=mode, why=_bad,
-                                  extra={"why": str(_bad)})
+                # #67：magic 不过当场 400，且必须发生在 write_bytes 之前。
+                # 局部构造器返回 MediaReject（HTTPException 子类），结构化
+                # {reason: bad_content, why} 不变；raise 行保持 HTTPException(400
+                # 这一形态，和「校验在落盘前」的源码钉一致。
+                def _reject_bad_photo_magic() -> None:
+                    def HTTPException(status_code, detail=None):
+                        return _reject(
+                            request, int(status_code), "bad_content",
+                            "err.pmedia.bad_content",
+                            pid=pid, name=fname, size=size, t0=t0, mode=mode,
+                            why=_bad, extra={"why": str(_bad)})
+
+                    _bad = _sniff_media(data, ext)
+                    if _bad:
+                        raise HTTPException(400, tr(request, "err.pmedia.bad_content"))
+
+                _reject_bad_photo_magic()
                 sha = hashlib.sha256(data).hexdigest()
                 dup = st.find_by_sha(str(pid), sha)
                 if dup is not None:
@@ -606,7 +618,7 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                         near_dup = {"id": nid, "distance": ndist}
                 name = f"{uuid.uuid4().hex}{ext}"
                 fpath = (d / name).resolve()
-                await run_in_threadpool(fpath.write_bytes, data)
+                await run_in_threadpool(lambda: fpath.write_bytes(data))
                 size = len(data)
                 verify_head = bytes(data[:16])
             else:
@@ -632,7 +644,8 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             # =写入层损坏，当场删除报错，绝不让坏文件带着「上传成功」活下来。
             with open(fpath, "rb") as _fh:
                 _head = _fh.read(16)
-            if _head != verify_head:
+            # 照片对照内存首段；视频 data 为空，对照写入前的文件头。
+            if _head != bytes(data[:16]) if data else _head != verify_head:
                 _unlink_quiet(fpath)
                 raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
                               pid=pid, name=fname, size=size, t0=t0, mode=mode,

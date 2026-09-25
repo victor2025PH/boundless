@@ -111,7 +111,7 @@ class DocumentTranslateService:
                 try:
                     res = await self._xlate.translate(
                         line, target_lang=target, source_lang=source,
-                        style=style, engine=engine,
+                        style=style, engine=engine, allow_short=True,
                     )
                 except Exception:
                     logger.debug("[doc-xlate] 段翻译异常（回退原文）", exc_info=True)

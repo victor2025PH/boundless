@@ -59,9 +59,20 @@ try:
 except ImportError:
     PYROGRAM_AVAILABLE = False
     ParseMode = None  # type: ignore
-    # 无 pyrogram（如 CI requirements-ci）时也保留模块级占位，确保 import-safe 且可被测试 patch
+    # 无 pyrogram（如 CI requirements-ci）时也保留模块级占位，确保 import-safe 且可被测试 patch。
+    # filters 不能是 None：_setup_handlers 在注册时就读 filters.private / filters.group
+    # （含 `|` 组合）。CI 不装 pyrogram，但出站守卫测试仍要跑真 handler 闭包。
     Client = None  # type: ignore
-    filters = None  # type: ignore
+
+    class _FilterStub:
+        def __or__(self, other):
+            return self
+
+    class _FiltersStub:
+        private = _FilterStub()
+        group = _FilterStub()
+
+    filters = _FiltersStub()  # type: ignore
     # 创建模拟类型以便代码可以运行
     class Message:
         """模拟Message类"""

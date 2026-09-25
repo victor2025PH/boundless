@@ -3,6 +3,8 @@
 
 pytest>=7.4.0
 PyYAML>=6.0.1
+ruamel.yaml>=0.18.0  # overlay 保注释写入（config_manager / duty_update_hint / realloc102）。CI 精简环境此前没装，round-trip 测试整批失败
+brotli>=1.1.0         # 与 requirements.txt 对齐：compression middleware 优先 br；缺库会静默退 gzip，CI 测不到 brotli 路径
 fastapi>=0.100.0
 uvicorn>=0.22.0
 itsdangerous>=2.1.0
@@ -28,5 +30,8 @@ pyflakes>=3.0.0  # tests/test_python_undefined_names.py 未定义名(F821)棘轮
 pytest-timeout>=2.1.0  # CI 挂起保护。本地 scripts/regression.ps1 一直带 --timeout=90，CI 却没装过这个包
                        # → 任一 worker 卡住只能烧满 job 超时再给一个不说明原因的失败（2026-08-27 P0 补齐）
 numpy>=1.26  # tests/test_reference_audit.py 顶层 import numpy。本机开发环境自带，CI 精简环境没有
+emoji>=2.12.0  # 入站纯 emoji demojize（requirements.txt 已有；CI 精简环境缺则 test_reaction_followup_phase4 原样返回）
+websockets>=12  # uvicorn 无 ws 库时升级请求被拒，/ws/device 握手变 HTTP 404（relay 往返测试）
+qrcode>=7.4  # 企微客服客户二维码 PNG（wechat_kf_setup._qr_data_url）；缺库时 qr_image 为空串
              # → 2026-08-28 CI 首次真跑即 collect 中断（1 error），整个回归一条都没跑。
              # 这正是「工作流放错目录、从未执行」被掩盖住的那类缺口。

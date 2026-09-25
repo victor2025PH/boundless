@@ -6,13 +6,31 @@
 读数口径与拦截口径同源（都走 world_clock_guard 纯函数）——报表与守卫
 永远说同一套话。
 """
+import os
 import time
+
+import pytest
 
 from src.companion.persona_location import resolve_persona_place
 from tools.time_consistency_obs import judge_rows, local_hour_for
 
 VAN = resolve_persona_place({"location": "vancouver"})
 TPE = resolve_persona_place({"location": "taipei"})
+
+
+@pytest.fixture(autouse=True)
+def _server_clock_is_utc8():
+    """生产服务器钟是 UTC+8。CI 容器是 UTC 时 mktime/localtime 会把
+    「03:31」读成 UTC，温哥华夏令时落到 20 点而不是正午 12 点。"""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Shanghai"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
 
 
 def _ts(y, mo, d, h, mi=0):

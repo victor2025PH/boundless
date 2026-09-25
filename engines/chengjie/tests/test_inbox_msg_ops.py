@@ -16,6 +16,8 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -511,6 +513,7 @@ def test_restore_route_audited(tmp_path):
 
 async def test_tg_delete_full_history_paginates():
     """raw DeleteHistory 服务端按 offset 分页——一次调用删不完必须续删到 0。"""
+    pytest.importorskip("pyrogram")  # CI 只装 requirements-ci.txt，不含 pyrogram
     from src.integrations.telegram_companion_worker import tg_delete_full_history
 
     calls = []
@@ -538,6 +541,7 @@ async def test_tg_delete_full_history_paginates():
 async def test_tg_delete_full_history_rejects_channel():
     """超级群/频道是 channels.deleteHistory 语义（对他人无 revoke）→ 如实拒绝，
     绝不静默降级成只删自己。"""
+    pytest.importorskip("pyrogram")  # CI 只装 requirements-ci.txt，不含 pyrogram
     from pyrogram.raw.types import InputPeerChannel
 
     from src.integrations.telegram_companion_worker import tg_delete_full_history

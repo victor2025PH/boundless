@@ -179,15 +179,17 @@ async def _resolve_chat(client: Any, peer: Any) -> Dict[str, Any]:
 async def collect_admin_ids(client: Any, chat_id: Any) -> Set[int]:
     """群管理员 user_id 集（剔管理员用）。任何异常 → 空集（宁可不剔也不崩）。"""
     ids: Set[int] = set()
-    flt = None
+    # 枚举类型在 pyrogram 里；CI 不装这个可选依赖。导入失败时若改成「无 filter
+    # 的全员枚举」，管理员集合就是空的，spoke_no_admin 剔不掉管理员。回落枚举的
+    # 字符串值，调用方仍能认出这是一次管理员查询。
+    flt: Any = "administrators"
     try:
         from pyrogram.enums import ChatMembersFilter
         flt = ChatMembersFilter.ADMINISTRATORS
-    except Exception:
-        flt = None
+    except ImportError:
+        pass
     try:
-        agen = (client.get_chat_members(chat_id, filter=flt) if flt is not None
-                else client.get_chat_members(chat_id))
+        agen = client.get_chat_members(chat_id, filter=flt)
         async for m in agen:
             u = getattr(m, "user", None) or m
             uid = getattr(u, "id", None)

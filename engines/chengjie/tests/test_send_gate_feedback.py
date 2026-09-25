@@ -105,10 +105,12 @@ def _patched_limiter(monkeypatch, sends: int, now: float) -> AutoReplyLimiter:
 def test_snapshot_blocked_numbers_match_gate(monkeypatch):
     from src.inbox.send_gate_status import send_gate_snapshot
     now = time.time()
-    _patched_limiter(monkeypatch, sends=3, now=now)   # used=3 >= cap=3 → 拦
+    _patched_limiter(monkeypatch, sends=3, now=now)   # used=3 >= cap=3 → 自动链拦
+    # D-Q2：快照缺省 origin=manual，日额度不再拦人工。这里钉自动链口径。
     snap = send_gate_snapshot(
         "telegram", "default", "999",
-        config=_gate_cfg(target_cap=3), registry=_FakeRegistry(), now=now)
+        config=_gate_cfg(target_cap=3), registry=_FakeRegistry(), now=now,
+        origin="auto")
     assert snap is not None
     assert snap["blocked"] is True
     assert snap["reason"] == "send_gate:daily_cap"   # P3 更名后的新发射值
@@ -467,9 +469,10 @@ def test_gate_decision_reserve_splits_lanes():
     assert d_manual["allowed"] is True
     assert d_auto["auto_cap"] == 7 and d_auto["recommended_cap"] == 10
     assert d_manual["reserve_for_manual"] == 3
-    # used=10 → 两道都拦（人工也不许超总额度）
+    # D-Q2：额度永不限制人工。used=10 自动链仍拦，人工道放行（banned 才拦人工）。
     sig2 = dict(sig, sends_today=10)
-    assert gate_decision(sig2, origin="manual", **kw)["allowed"] is False
+    assert gate_decision(sig2, origin="auto", **kw)["allowed"] is False
+    assert gate_decision(sig2, origin="manual", **kw)["allowed"] is True
     # reserve=0 → 两道同值（与旧行为一致）
     kw0 = dict(kw, reserve_for_manual=0)
     assert gate_decision(sig, origin="auto", **kw0)["allowed"] is True

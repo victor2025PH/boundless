@@ -177,6 +177,18 @@
   --th-bd-red3:#fca5a5;
   --th-bd-violet3:#c4b5fd;
   --th-bd-blue2d:#2d6cdf;
+  --th-bd:#cbd5e1;
+  --th-bd-amber3:rgba(245,158,11,.35);
+  --th-bd-red30:rgba(239,68,68,.3);
+  --th-bd-green30:rgba(34,197,94,.35);
+  --th-bd-teal30:rgba(20,184,166,.35);
+  --th-bg-amber7:#b45309;
+  --th-bg-slate5:#64748b;
+  --th-bg-slate7:#334155;
+  --th-bg-teal100:#ccfbf1;
+  --th-ink-gray6:#64748b;
+  --th-ink-sub:#64748b;
+  --th-ink-teal8:#115e59;
 }
 [data-theme="dark"],[data-cp-theme="dark"]{
   --th-ink-slate4:#9aa0aa;

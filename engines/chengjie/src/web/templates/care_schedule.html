@@ -592,9 +592,9 @@ async function csQuietToggle(enabled){
   try{
     var r=await apiFetch('/api/care/quiet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});
     var d=await r.json();
-    if(!d.ok){alert(window.T('cs_quiet_save_fail')+((d.failed&&d.failed[0]&&d.failed[0].reason)||d.reason||r.status));return;}
+    if(!d.ok){AITRNotify.alert(window.T('cs_quiet_save_fail')+((d.failed&&d.failed[0]&&d.failed[0].reason)||d.reason||r.status));return;}
     csPlanLoad();
-  }catch(e){alert(window.T('cs_quiet_save_fail')+e);}
+  }catch(e){AITRNotify.alert(window.T('cs_quiet_save_fail')+e);}
 }
 
 function _csRenderSteward(d){
@@ -792,10 +792,10 @@ async function csHeldSend(id){
   try{
     var r=await apiFetch('/api/care/schedule/'+id+'/send-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})},{timeoutMs:60000});
     var d=await r.json();
-    if(!d.ok){alert(window.T('cs6_edit_fail')+(d.reason||r.status));return;}
+    if(!d.ok){AITRNotify.alert(window.T('cs6_edit_fail')+(d.reason||r.status));return;}
     csPlanLoad();
     _csHistReload();
-  }catch(e){alert(window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80));}
+  }catch(e){AITRNotify.alert(window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80));}
 }
 
 /* ── 拟稿（dry）/ 最近已发（live） ── */
@@ -941,9 +941,9 @@ async function csEngine(action){
   try{
     var res=await apiFetch('/api/care/engine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})},{timeoutMs:60000});
     var d=await res.json();
-    if(!d.ok){alert(window.T('cs2_op_fail')+(d.reason||res.status));return;}
+    if(!d.ok){AITRNotify.alert(window.T('cs2_op_fail')+(d.reason||res.status));return;}
     csPlanLoad();
-  }catch(e){alert(window.T('cs2_op_fail')+e);}
+  }catch(e){AITRNotify.alert(window.T('cs2_op_fail')+e);}
 }
 
 /* ── 卡片动作：预览 / 立即发 / 改期 / 跳过 ── */
@@ -1114,7 +1114,7 @@ function _csHint(msg){
     _csHintEl.style.display='block';
     clearTimeout(_csHintEl._t);
     _csHintEl._t=setTimeout(function(){_csHintEl.style.display='none';},6000);
-  }catch(_){alert(msg);}
+  }catch(_){AITRNotify.alert(msg);}
 }
 function csResched(id){
   var row=document.getElementById('cs-rs-'+id);
@@ -1151,20 +1151,20 @@ async function csSkip(id){
   try{
     var res=await apiFetch('/api/care/schedule/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     var d=await res.json();
-    if(!d.ok){alert(window.T('cs_js005')+(d.message||d.reason));return;}
+    if(!d.ok){AITRNotify.alert(window.T('cs_js005')+(d.message||d.reason));return;}
     csPlanLoad();
     _csHistReload();
-  }catch(e){alert(e);}
+  }catch(e){AITRNotify.alert(e);}
 }
 async function csCancel(id){
   if(!confirm(window.T('cs_js004')))return;
   try{
     var res=await apiFetch('/api/care/schedule/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     var d=await res.json();
-    if(!d.ok){alert(window.T('cs_js005')+(d.message||d.reason));return;}
+    if(!d.ok){AITRNotify.alert(window.T('cs_js005')+(d.message||d.reason));return;}
     csPlanLoad();
     _csHistReload();
-  }catch(e){alert(e);}
+  }catch(e){AITRNotify.alert(e);}
 }
 
 /* ── 拟稿反馈 ── */
@@ -1687,7 +1687,7 @@ async function csLoad(){
 async function csAdd(){
   const contact=document.getElementById('cs-a-contact').value.trim();
   const topic=document.getElementById('cs-a-topic').value.trim();
-  if(!contact||!topic){alert(window.T('cs_js002'));return;}
+  if(!contact||!topic){AITRNotify.alert(window.T('cs_js002'));return;}
   const payload={
     contact_key:contact,topic:topic,
     platform:document.getElementById('cs-a-platform').value.trim(),
@@ -1697,11 +1697,11 @@ async function csAdd(){
   try{
     const res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}, {timeoutMs: 60000});
     const d=await res.json();
-    if(!d.ok){alert(window.T('c3_js014')+(d.message||d.reason));return;}
+    if(!d.ok){AITRNotify.alert(window.T('c3_js014')+(d.message||d.reason));return;}
     document.getElementById('cs-a-topic').value='';
     csPlanLoad();
     _csHistReload();
-  }catch(e){alert(e);}
+  }catch(e){AITRNotify.alert(e);}
 }
 
 /* ── 深链 ?contact=<conversation_id>：展开补卡面板 + 自动选中该联系人。

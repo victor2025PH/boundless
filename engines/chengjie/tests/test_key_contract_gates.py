@@ -41,6 +41,10 @@ _DOCUMENTED_OPTIONAL = {
     "clone_instruct",
     # 人设级语速覆写（lite_persona_overrides 陈默 1.06；优先于全局 pacing.tempo）
     "pacing_tempo",
+    # 笑声/呼吸素材路径（voice_bursts.resolve_burst_paths）：缺省用仓内 CC
+    # 素材，人设可在 voice_profile.burst_audio.{laugh,breath} 手配覆盖。
+    # 不经 enroll 构建器写出——没有素材就走默认文件，不是漏写的生产者。
+    "burst_audio",
 }
 
 _READ_PAT = re.compile(

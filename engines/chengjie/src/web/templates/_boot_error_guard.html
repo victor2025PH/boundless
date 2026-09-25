@@ -93,7 +93,7 @@
     _netTimer = null;
     try{
       /* 探针只问「服务回来没有」：fetch 一 settle（无论状态码）＝链路通，横幅撤 */
-      fetch('/login', {cache: 'no-store'}).then(_netBarHide, function(){
+      apiFetch('/login', {cache: 'no-store'}).then(_netBarHide, function(){
         if(document.getElementById('fe-boot-guard-net')) _netTimer = setTimeout(_netProbe, 5000);
       });
     }catch(_){ _netBarHide(); }

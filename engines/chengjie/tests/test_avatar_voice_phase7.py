@@ -308,6 +308,42 @@ def _mk_tts(tmp_path, ok_flags):
     return SimpleNamespace(synthesize=synthesize), calls
 
 
+def _install_pyrogram_chat_action_stub():
+    """CI 未装 pyrogram 时，录音状态仍要能调到 send_chat_action。"""
+    import sys
+    import types
+
+    try:
+        from pyrogram.enums import ChatAction  # noqa: F401
+        return None
+    except Exception:
+        pass
+    saved = {name: sys.modules.get(name) for name in ("pyrogram", "pyrogram.enums")}
+    enums = types.ModuleType("pyrogram.enums")
+
+    class ChatAction:
+        RECORD_AUDIO = "record_audio"
+
+    enums.ChatAction = ChatAction
+    pyro = types.ModuleType("pyrogram")
+    pyro.enums = enums
+    sys.modules["pyrogram"] = pyro
+    sys.modules["pyrogram.enums"] = enums
+    return saved
+
+
+def _restore_pyrogram_stub(saved) -> None:
+    import sys
+
+    if saved is None:
+        return
+    for name, mod in saved.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
+
+
 @pytest.mark.asyncio
 async def test_split_send_happy_path(tmp_path, monkeypatch):
     import src.client.sender as sender_mod
@@ -331,10 +367,14 @@ async def test_split_send_happy_path(tmp_path, monkeypatch):
 
     s = _FakeSender(tmp_path)
     tts, calls = _mk_tts(tmp_path, [True, True, True])
-    ok = await s.send_parts(
-        ["第一条。", "第二条。", "第三条。"], tts,
-        {"max_seconds": 60}, {"gap_factor": 1.1, "gap_jitter_sec": [0.5, 1.0],
-                              "max_gap_sec": 20})
+    stub = _install_pyrogram_chat_action_stub()
+    try:
+        ok = await s.send_parts(
+            ["第一条。", "第二条。", "第三条。"], tts,
+            {"max_seconds": 60}, {"gap_factor": 1.1, "gap_jitter_sec": [0.5, 1.0],
+                                  "max_gap_sec": 20})
+    finally:
+        _restore_pyrogram_stub(stub)
     assert ok is True
     assert calls["n"] == 3          # 三条全合成
     # #6：只首条允许口语化「句首迟疑词」，后续条关闭（防连发都同样开头做作）

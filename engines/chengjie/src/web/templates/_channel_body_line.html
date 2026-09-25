@@ -1121,7 +1121,7 @@ async function loadLineRpaPending(){
           await loadLineRpaPending();
         }catch(e){
           btn.disabled=false;
-          alert(window.T('ov_js_op_fail')+': '+e);
+          AITRNotify.alert(window.T('ov_js_op_fail')+': '+e);
         }
       });
     });
@@ -1139,7 +1139,7 @@ async function loadLineRpaPending(){
           setTimeout(()=>loadLineRpaPending(),8000); // 8s 后刷新看是否有新音频
         }catch(e){
           btn.disabled=false; btn.textContent='↻ '+window.T('rpa_retry');
-          alert('TTS '+window.T('wa_js_031')+': '+e);
+          AITRNotify.alert('TTS '+window.T('wa_js_031')+': '+e);
         }
       });
     });
@@ -1197,9 +1197,9 @@ async function _lineSetLang(chatKey, lang) {
       body: JSON.stringify({chat_key: chatKey, lang: lang || null}),
     }, {timeoutMs: 60000});
     const d = await r.json();
-    if (!d.ok) { alert(window.T('ln_js_053')+': ' + (d.detail||'')); return; }
+    if (!d.ok) { AITRNotify.alert(window.T('ln_js_053')+': ' + (d.detail||'')); return; }
     await loadLineRpaPending();
-  } catch(e) { alert(window.T('ln_js_054')+': ' + e); }
+  } catch(e) { AITRNotify.alert(window.T('ln_js_054')+': ' + e); }
 }
 document.addEventListener('keydown', e => { if(e.key==='Escape') _lrRemoveLangPopover(); });
 // P17-B/P18-B: Ctrl+Enter 批量批准, Ctrl+Shift+Enter 批量拒绝
@@ -1686,9 +1686,9 @@ async function lrCancelSendItem(id){
   if(!confirm(window.T('msg_js_2057')+' #'+id+'？')) return;
   try{
     const r=await apiFetch('/api/line-rpa/send-queue/'+id+'/cancel',{method:'POST'}, {timeoutMs: 60000});
-    if(!r.ok){ const t=await r.json(); alert(window.T('msg_js_2058')+': '+(t.detail||r.status)); return; }
+    if(!r.ok){ const t=await r.json(); AITRNotify.alert(window.T('msg_js_2058')+': '+(t.detail||r.status)); return; }
     loadLrSendQueue();
-  }catch(e){ alert(window.T('ov_js_req_fail')+': '+e); }
+  }catch(e){ AITRNotify.alert(window.T('ov_js_req_fail')+': '+e); }
 }
 
 function lrOpenSendManual(){

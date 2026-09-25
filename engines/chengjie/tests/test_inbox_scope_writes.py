@@ -36,6 +36,9 @@ _ALLOWED_WRITERS = {
     "_applyView": True,        # 保存视图=多维一次性写入，自成法定入口
     "resetAllFilters": True,   # 放宽视角（统一律：仍要求调用，实为 no-op）
     "buildAccountChips": False,  # 「账号不在册回落 all」放宽自愈；渲染函数不强求联动
+    # 顶栏账号坞同一条放宽自愈（选中号已不在册 → 回落 all）。渲染中调用
+    # setAccountFilter 会重入 applyFilters，故与 chips 一样登记为放宽写入者。
+    "buildAcctDock": False,
 }
 
 _ASSIGN_RE = re.compile(r"(?<![.\w$])(platFilter|accountFilter)\s*=(?![=])")

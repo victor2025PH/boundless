@@ -220,7 +220,7 @@
   function jfetch(url, timeoutMs){
     var ctl = new AbortController();
     var t = setTimeout(function(){ctl.abort();}, timeoutMs||20000);
-    return fetch(url, {credentials:'same-origin', signal:ctl.signal})
+    return apiFetch(url, {credentials:'same-origin', signal:ctl.signal})
       .finally(function(){clearTimeout(t);});
   }
 
@@ -456,7 +456,7 @@
   function jpost(url, body, timeoutMs){
     var ctl = new AbortController();
     var t = setTimeout(function(){ctl.abort();}, timeoutMs||30000);
-    return fetch(url, {
+    return apiFetch(url, {
       method:'POST', credentials:'same-origin', signal:ctl.signal,
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body||{})

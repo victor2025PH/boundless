@@ -1202,7 +1202,7 @@ WF.cancelExec=function(id){
   apiFetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',{
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:window.T('wf_js029')})
   }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
-    if(d.ok) WF.loadMonitor(); else alert(window.T('msg_js_2058'));
+    if(d.ok) WF.loadMonitor(); else AITRNotify.alert(window.T('msg_js_2058'));
   });
 };
 // ── 一分钟上手条（localStorage 控显；默认 display:none 防「已读用户闪一下」）──

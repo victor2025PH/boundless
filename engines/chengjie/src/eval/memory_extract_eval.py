@@ -157,8 +157,13 @@ def build_llm_extract_fn(
         # 召回假性掉到 50%（2026-07-26 实锤，逐条单跑全过而 harness 批跑随机漏）。
         loop = asyncio.new_event_loop()
         try:
-            _ = loop.run_until_complete(_probe())
+            probed = loop.run_until_complete(_probe())
         except Exception:
+            loop.close()
+            return None
+        # 探针句「我叫小明」抽不出任何事实＝没有可用模型（空 key / 占位端点
+        # 不抛、只回空列表）。按门禁约定跳过，不要把 0% 召回报成失败。
+        if not probed:
             loop.close()
             return None
 

@@ -705,9 +705,10 @@ async def test_pipeline_avatar_clone_unreachable_falls_back_to_edge(tmp_path):
 
     from src.ai.tts_pipeline import TTSPipeline
     tts = TTSPipeline(cfg)
+    # Q-22：克隆引擎离线不再静默换系统音；坐席二次确认后才走 edge。
     with patch.object(AvatarVoiceClient, "health_ok", return_value=False), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
-        rv = await tts.synthesize("测试降级")
+        rv = await tts.synthesize("测试降级", confirm_system_voice=True)
     assert rv.ok
     assert rv.provider == "edge_tts"
     assert rv.extra.get("fallback_from") == "avatar_clone"
@@ -743,10 +744,11 @@ async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
 
     from src.ai.tts_pipeline import TTSPipeline
     tts = TTSPipeline(cfg)
+    # Q-22：合成失败同样要二次确认才回落 edge，自动链改发文字。
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", side_effect=OSError("boom")), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
-        rv = await tts.synthesize("测试合成失败降级")
+        rv = await tts.synthesize("测试合成失败降级", confirm_system_voice=True)
     assert rv.ok
     assert rv.provider == "edge_tts"
 

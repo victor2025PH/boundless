@@ -265,8 +265,16 @@ def _hub_cfg(tmp_path, ref, **hub_over):
     }
 
 
+_ES = "Hola, ¿cómo estás? Quiero saber más sobre esto, señor"
+
+
 async def test_lang_engines_routes_ja_to_mapped_engine(tmp_path):
-    """日文 + {ja→fish_speech} → 闸门放行、hub 请求带改派引擎与 ja 语言。"""
+    """lang_engines 只在目标引擎能力表含该语种时放行并改派。
+
+    #161 起 fish_speech 表撤下 ja（乱音「ゾオパパパ」）。``{ja: fish_speech}``
+    不得开闸——与 test_lang_voice_route 的能力表契约一致。es 在 fish 表内，
+    ``{es: fish_speech}`` 必须放行，hub 请求带改派引擎与 es 语言。
+    """
     from unittest.mock import patch
 
     from src.ai.voice_synth_stats import get_voice_synth_stats
@@ -280,18 +288,30 @@ async def test_lang_engines_routes_ja_to_mapped_engine(tmp_path):
     def fake_hub(base_url, profile, text, **kw):
         seen["tts_engine"] = kw.get("tts_engine")
         seen["language"] = kw.get("language")
+        seen["calls"] = seen.get("calls", 0) + 1
         return _tone_wav(400), "wav"
 
-    tts = TTSPipeline(_hub_cfg(tmp_path, ref))
+    tts_ja = TTSPipeline(_hub_cfg(tmp_path, ref))
     with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
-        rv = await tts.synthesize(_JA)
+        blocked = await tts_ja.synthesize(_JA)
+    assert not blocked.ok
+    assert blocked.extra.get("clone_lang_blocked") == "ja"
+    assert seen.get("calls", 0) == 0
+    assert "ja:fish_speech" not in (stats.dump().get("routed_by_pair") or {})
+
+    stats.reset()
+    seen.clear()
+    tts = TTSPipeline(_hub_cfg(
+        tmp_path, ref, lang_engines={"es": "fish_speech"}))
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize(_ES)
     assert rv.ok and rv.provider == "hub_fish"
     assert seen["tts_engine"] == "fish_speech"
-    assert seen["language"] == "ja"
-    assert rv.extra.get("hub_engine_lang_routed") == "ja:fish_speech"
+    assert seen["language"] == "es"
+    assert rv.extra.get("hub_engine_lang_routed") == "es:fish_speech"
     assert "clone_lang_blocked" not in rv.extra
     # 观测接线：改派命中进 voice_synth_stats（metrics/Prom 零新接线暴露）
-    assert stats.dump()["routed_by_pair"].get("ja:fish_speech") == 1
+    assert stats.dump()["routed_by_pair"].get("es:fish_speech") == 1
     stats.reset()
 
 

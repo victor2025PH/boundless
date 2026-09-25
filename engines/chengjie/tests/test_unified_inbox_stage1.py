@@ -1232,17 +1232,19 @@ def test_unified_inbox_routes_slice38b_register_order_unchanged():
     from src.web.routes import unified_inbox_routes as mod
     src = inspect.getsource(mod.register_unified_inbox_routes)
     names = re.findall(r"^\s+register_(\w+)_routes\(", src, re.MULTILINE)
-    assert len(names) == 34, f"orchestrator 应挂载 34 个子域，实际 {len(names)}"
+    # 34 → 38：msgops（消息置顶/软删）、asr_correction、vision、tg_join 四个真实子域。
+    assert len(names) == 38, f"orchestrator 应挂载 38 个子域，实际 {len(names)}"
     assert names == [
         "workspace_pages",
-        "realtime", "read",
+        "realtime", "read", "msgops",
         "platform_login", "setup", "proxy_fingerprint", "account",
+        "asr_correction",
         "workspace_presence", "workspace_contacts",
         "workspace_escalation", "workspace_prefs",
         "workspace_dashboard", "roi", "quality", "usage", "workspace_tags",
-        "aux_read", "translate", "desktop",
+        "aux_read", "translate", "vision", "desktop",
         "conversion_outreach", "analyze",
-        "stored_read", "send",
+        "stored_read", "send", "tg_join",
         "intel_profile", "template", "batch_notif",
         "queue_webhook", "collab_mention", "collab_context",
         "relationship_stage", "copilot", "workflow",
@@ -2332,9 +2334,15 @@ def test_unified_inbox_template_contains_oneclick_outbound_translation():
     # P1：服务端持久出向原文副行（跨刷新/重启）优先于会话级内存映射
     assert "agent_original" in html
     assert "agent_xlate" in html
-    # P1-2：'auto' 交服务端统一解析（预览与一击同源），前端读 resolved_target 回落
+    # P1-2：'auto' 交服务端统一解析（预览与一击同源），前端读 resolved_target 回落。
+    # 2026-08-09 起会话定位在 _doTranslate 里恒传（不再只包在 lang==='auto' 分支），
+    # auto 仍作为 target_lang 交给同一接口。
     assert "resolved_target" in html
-    assert "lang==='auto'" in html
+    _dt = html.find("async function _doTranslate")
+    assert _dt > 0
+    _dfn = html[_dt:_dt + 2200]
+    assert "target_lang:lang" in _dfn and "selectedChat" in _dfn
+    assert "'auto'" in _dfn
 
 
 def test_unified_inbox_translation_tokens_no_theme_drift():
@@ -2516,7 +2524,10 @@ def test_unified_inbox_template_contains_assign_suggestion():
     html = path.read_text(encoding="utf-8")
     assert "_convSuggestMine" in html          # 判定函数
     assert "conv-suggest-chip" in html          # 徽章样式类
-    assert "建议你接管" in html                 # 徽章文案
+    assert "inbox.conv.suggest" in html         # 徽章走词条
+    pack = (Path(__file__).resolve().parent.parent
+            / "src" / "web" / "i18n_packs" / "inbox_workspace.py").read_text(encoding="utf-8")
+    assert "建议你接管" in pack                 # 文案已迁出模板，行为仍在
     assert "suggested_agent" in html            # 读取后端字段
 
 

@@ -35,6 +35,22 @@ def _isolated_show_store():
     reset_group_show_store()
 
 
+@pytest.fixture(autouse=True)
+def _online_attendance_pool(config_dir):
+    """CI 没有生产注册表。出席/预算/容量都读「在线号」当分母——
+
+    号池为空时排班给出空 assignments（测试会把「没在线号」误读成产品坏了），
+    开口预算也不复制到排练封顶上。这里往本测试的 config 目录种 6 个在线号，
+    与 ``_online_accounts`` 打开的那份库同路径。
+    """
+    from src.integrations.account_registry import AccountRegistry
+
+    reg = AccountRegistry(config_dir / "account_registry.db")
+    for i in range(6):
+        reg.upsert("telegram", f"seat{i + 1}", status="online", mode="protocol")
+    yield
+
+
 @pytest.fixture()
 def _books():
     """仓库自带剧本库（没有剧本就没什么可测的，直接跳过而不是假绿）。"""
