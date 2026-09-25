@@ -1,4 +1,3 @@
 @echo off
-"%~dp0chatx-agent.exe" --state-dir "%ProgramData%\ChatX\fleet" status
-echo.
-pause
+rem Opens the local fleet-node page. Kept so older shortcuts do not dump JSON.
+wscript.exe //B "%~dp0Open-Panel.vbs"

@@ -4,7 +4,8 @@
         --instance player=http://127.0.0.1:18797 --config-path config_player/config.yaml
     python -m src.fleet.agent run            # 前台常驻：心跳 + 长轮询领任务 + 执行 + ack
     python -m src.fleet.agent run --once     # 跑一轮就退（联调 / 计划任务）
-    python -m src.fleet.agent status
+    python -m src.fleet.agent status         # 本机摘要（含主控是否可达、计划任务、最近心跳）
+    python -m src.fleet.agent ui             # 打开本机「舰队节点」页（只监听 127.0.0.1）
     python -m src.fleet.agent install-service   # 开机自启（Windows 计划任务 SYSTEM / Linux systemd）+ 立即启动
     python -m src.fleet.agent run --service     # 服务实际入口：监督循环（见 service.py）
 
@@ -50,6 +51,7 @@ from .identity import (
     discard_untrusted_secret, host_name, lock_state_dir, node_machine_id, os_label,
     state_dir_is_locked,
 )
+from .local_status import build_local_status, record_heartbeat
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -539,6 +541,7 @@ class NodeAgent:
     def heartbeat(self) -> Dict[str, Any]:
         res = self._ctrl("POST", "/api/fleet/heartbeat", self.build_heartbeat())
         self.stats["heartbeats"] += 1
+        record_heartbeat(self.cfg.state_dir, self.clock())
         hb = int(res.get("heartbeat_sec") or 0)
         if hb and hb != self.cfg.heartbeat_sec:
             self.cfg.data["heartbeat_sec"] = hb
@@ -855,6 +858,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub.add_parser("uninstall-service")
     sub.add_parser("service-status")
     sub.add_parser("status")
+    ui = sub.add_parser("ui", help="打开本机「舰队节点」页面（仅监听 127.0.0.1）")
+    ui.add_argument("--port", type=int, default=0, help="0 表示使用面板固定端口")
+    ui.add_argument("--no-browser", action="store_true", help="只启动页面，不打开浏览器")
     sub.add_parser("heartbeat", help="只发一次心跳并打印")
     mig = sub.add_parser("migrate-legacy", help="rewrite an unlocked agent.json down to identity fields")
     mig.add_argument("--controller", default="", help="controller URL written into agent.json")
@@ -951,26 +957,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"ok": True, "instances": [i["name"] for i in cfg.instances]}, ensure_ascii=False))
         return 0
     if args.cmd == "status":
-        if cfg.node_key:
-            enrollment = "enrolled"
-        elif cfg.data.get("enroll_rejected"):
-            enrollment = "rejected"
-        elif cfg.data.get("pending_request_id"):
-            enrollment = "pending"
-        else:
-            enrollment = "none"
-        print(json.dumps({"controller_url": cfg.controller_url, "node_id": cfg.node_id, "enrolled": bool(cfg.node_key),
-                          "enrollment": enrollment, "pending": enrollment == "pending",
-                          "pairing_code": str(cfg.data.get("pairing_code") or ""),
-                          "machine_id": agent.machine_id,
-                          "instances": [{**i, "auth_token": "***" if i.get("auth_token") else ""} for i in cfg.instances],
-                          "state_dir": str(cfg.state_dir),
-                          "agent_version": AGENT_VERSION, "proto_version": PROTO_VERSION}, ensure_ascii=False, indent=2))
+        snap = build_local_status(cfg, machine_id=agent.machine_id)
+        print(json.dumps(snap, ensure_ascii=False, indent=2))
         return 0
+    if args.cmd == "ui":
+        from .panel import PANEL_PORT, run_panel
+        port = int(args.port or 0) or PANEL_PORT
+        return run_panel(cfg, machine_id=agent.machine_id, port=port, open_browser=not args.no_browser)
     if args.cmd == "heartbeat":
         print(json.dumps(agent.heartbeat(), ensure_ascii=False, indent=2))
         return 0
     if args.cmd == "run":
+        if not args.once:
+            from .panel import start_panel_background
+            start_panel_background(cfg, agent.machine_id)
         if args.service:
             stop = threading.Event()
             try:
