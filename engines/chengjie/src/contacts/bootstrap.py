@@ -456,9 +456,19 @@ def bootstrap_contacts_subsystem(
         return None
 
     cfg_dir = Path(cfg_dir)
-    db_path = Path(contacts_cfg.get("db_path") or (cfg_dir / "contacts.db"))
+    # YAML（话术/合规）留在传入的配置目录。库走 runtime_dir：VPS 上 cfg_dir
+    # 是只读的 /etc/chatx-fleet，contacts.db 必须落到 AITR_DATA_DIR。
+    db_root = cfg_dir
+    _cp = getattr(config, "config_path", None)
+    if _cp:
+        try:
+            from src.licensing.data_paths import runtime_dir
+            db_root = runtime_dir(_cp)
+        except Exception:
+            db_root = cfg_dir
+    db_path = Path(contacts_cfg.get("db_path") or (db_root / "contacts.db"))
     if not db_path.is_absolute():
-        db_path = cfg_dir / db_path
+        db_path = db_root / db_path
 
     # ── 核心三件套 ────────────────────────────────────
     store = ContactStore(db_path=db_path)

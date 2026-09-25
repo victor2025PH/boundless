@@ -48,10 +48,7 @@ class LineRpaService:
         self._merged_cfg: Dict[str, Any] = self._merged()
 
         cfg_dir = Path(self._cm.config_path).parent
-        if self.account_id and self.account_id != "default":
-            db_path = Path(self._cm.config_path).parent / f"line_rpa_state_{self.account_id}.db"
-        else:
-            db_path = default_state_db_path(self._cm.config_path)
+        db_path = default_state_db_path(self._cm.config_path, self.account_id)
         self._state = LineRpaStateStore(
             db_path,
             max_runs_kept=int(self._merged_cfg.get("recent_runs_buffer", 500) or 500),

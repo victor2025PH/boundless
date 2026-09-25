@@ -639,7 +639,8 @@ def load_optout_mutes(config_path: Any) -> Dict[str, dict]:
     try:
         if not config_path:
             return {}
-        p = Path(config_path).parent / "companion_optout_mute.json"
+        from src.licensing.data_paths import runtime_file
+        p = runtime_file("companion_optout_mute.json", config_path)
         if not p.exists():
             return {}
         raw = json.loads(p.read_text("utf-8")) or {}

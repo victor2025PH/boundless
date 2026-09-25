@@ -833,6 +833,18 @@ _singleton: Optional["CareScheduleStore"] = None
 _singleton_lock = threading.Lock()
 
 
+def default_care_db_path(config_path=None):
+    """关怀库路径。无配置 → ``:memory:``；有配置走 ``runtime_file``。
+
+    分裂布局（YAML 在 ``/etc``、数据在 ``AITR_DATA_DIR``）落数据根，
+    不再在只读的 YAML 目录里 ``sqlite3`` open。同树布局仍在 YAML 旁。
+    """
+    if config_path is None or not str(config_path).strip():
+        return ":memory:"
+    from src.licensing.data_paths import runtime_file
+    return runtime_file("care_schedule.db", config_path)
+
+
 def get_care_schedule_store(db_path=None) -> "CareScheduleStore":
     """进程内单例。首次调用传入 db_path 落库位置；之后忽略入参返回同一实例。"""
     global _singleton
@@ -843,7 +855,8 @@ def get_care_schedule_store(db_path=None) -> "CareScheduleStore":
     return _singleton
 
 
-__all__ = ["CareScheduleStore", "get_care_schedule_store", "_topic_norm",
+__all__ = ["CareScheduleStore", "get_care_schedule_store", "default_care_db_path",
+           "_topic_norm",
            "CRISIS_CARE_TOPIC", "GOAL_CARE_NORM_PREFIX",
            "VERBATIM_CARE_NORM_PREFIX", "VERBATIM_MAX_CHARS",
            "VERBATIM_QUIET_DEFER_SUFFIX", "QUIET_POLICIES",

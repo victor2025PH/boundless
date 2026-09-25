@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from src.licensing.data_paths import runtime_dir as _state_dir
 from src.utils.episodic_memory_store import facts_for_key
 
 
@@ -814,7 +815,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 "resolve": resolver,
                 "eligible": eligible,
                 "cd": JsonCooldownStore(
-                    Path(assistant.config.config_path).parent
+                    _state_dir(assistant.config.config_path)
                     / f"companion_{slot}_ask_cooldown.json"),
             })
 
@@ -856,7 +857,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
         # 运营删 companion_bad_peers.json 即可恢复。
         _bad_peers: set = set()
         _bad_peers_path = (
-            Path(assistant.config.config_path).parent / "companion_bad_peers.json")
+            _state_dir(assistant.config.config_path) / "companion_bad_peers.json")
         try:
             if _bad_peers_path.exists():
                 _bad_peers.update(
@@ -951,7 +952,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             _optout_days = 30.0
         _optout_mutes: Dict[str, Dict[str, Any]] = {}
         _optout_path = (
-            Path(assistant.config.config_path).parent / "companion_optout_mute.json")
+            _state_dir(assistant.config.config_path) / "companion_optout_mute.json")
         try:
             if _optout_path.exists():
                 _raw_oo = json.loads(_optout_path.read_text("utf-8")) or {}
@@ -978,7 +979,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
         try:
             from src.inbox.account_connection import AccountConnectionLog
             _conn_log = AccountConnectionLog(
-                Path(assistant.config.config_path).parent
+                _state_dir(assistant.config.config_path)
                 / "account_connection.json")
         except Exception:
             _conn_log = None
@@ -1710,7 +1711,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         "[proactive] checkin 门控异常（放行）", exc_info=True)
             return op
 
-        cd_path = Path(assistant.config.config_path).parent / "companion_proactive_cooldown.json"
+        cd_path = _state_dir(assistant.config.config_path) / "companion_proactive_cooldown.json"
         # 账本 v2（P0）：除冷却时间外记「连续未回 streak + 上次主动文案」；
         # 旧 float 格式文件透明升级，读写同一路径。
         _cd_store = JsonProactiveLedger(cd_path)
@@ -1718,7 +1719,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
         # 纯进程内账本会把 72h 窗缩水成「距上次重启」——镜像到实例数据根。
         try:
             set_news_ledger_path(str(
-                Path(assistant.config.config_path).parent
+                _state_dir(assistant.config.config_path)
                 / "companion_news_opener.json"))
         except Exception:
             pass
@@ -1797,7 +1798,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             from src.integrations.companion_sample_store import (
                 get_companion_sample_store,
             )
-            _sdb = Path(assistant.config.config_path).parent / "companion_samples.db"
+            _sdb = _state_dir(assistant.config.config_path) / "companion_samples.db"
             sample_store = get_companion_sample_store(_sdb)
             assistant._web_app.state.companion_sample_store = sample_store
         except Exception:
@@ -3182,7 +3183,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 plan_daily_rituals as _plan_rituals,
             )
             _ritual_cd = JsonCooldownStore(
-                Path(assistant.config.config_path).parent
+                _state_dir(assistant.config.config_path)
                 / "companion_ritual_cooldown.json")
             # 仪式未回退避（2026-08-18，默认开）：连续 ≥3 个仪式日零回复 →
             # 阶梯降频（隔天→每4天→每周）+ 降频期每天至多一档；对方开口即恢复。

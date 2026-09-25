@@ -2660,7 +2660,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # 配置存储路径：{config_dir}/webhook_settings.json
     def _get_webhook_cfg() -> dict:
         try:
-            cfg_dir = config_manager.config_path.parent
             wp = cfg_dir / "webhook_settings.json"
             if wp.exists():
                 import json as _json
@@ -2672,7 +2671,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     def _save_webhook_cfg(cfg: dict):
         try:
-            cfg_dir = config_manager.config_path.parent
             import json as _json
             (cfg_dir / "webhook_settings.json").write_text(
                 _json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -3683,7 +3681,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         kb = None
         try:
             from src.utils.kb_store import KnowledgeBaseStore
-            kb_path = Path(config_manager.config_path).parent / "knowledge_base.db"
+            kb_path = cfg_dir / "knowledge_base.db"
             if kb_path.exists():
                 kb = KnowledgeBaseStore(kb_path)
         except Exception:

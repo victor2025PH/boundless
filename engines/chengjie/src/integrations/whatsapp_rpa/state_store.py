@@ -117,8 +117,13 @@ _MIGRATIONS: List[str] = [
 ]
 
 
-def default_state_db_path(config_path: str) -> Path:
-    return Path(config_path).parent / "wa_rpa_state.db"
+def default_state_db_path(config_path: str, account_id: str = "default") -> Path:
+    """状态库。``account_id`` 非 default 时文件名带后缀，目录走 ``runtime_dir``。"""
+    from src.licensing.data_paths import runtime_dir
+    root = runtime_dir(config_path)
+    if account_id and str(account_id) != "default":
+        return root / f"wa_rpa_state_{account_id}.db"
+    return root / "wa_rpa_state.db"
 
 
 class WaRpaStateStore:

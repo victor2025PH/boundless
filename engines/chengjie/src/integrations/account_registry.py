@@ -386,13 +386,19 @@ _registry: Optional[AccountRegistry] = None
 _registry_lock = threading.Lock()
 
 
+def default_registry_db_path() -> Path:
+    """注册表默认路径。分裂布局落数据根，同树布局仍是 ``config/account_registry.db``。"""
+    from src.licensing.data_paths import cwd_or_data_file
+    return cwd_or_data_file("account_registry.db")
+
+
 def get_account_registry(db_path: Optional[Path] = None) -> AccountRegistry:
-    """进程内单例。首次调用可指定路径，默认 ``config/account_registry.db``。"""
+    """进程内单例。首次调用可指定路径，默认同树 ``config/account_registry.db``。"""
     global _registry
     if _registry is None:
         with _registry_lock:
             if _registry is None:
-                path = Path(db_path) if db_path else Path("config/account_registry.db")
+                path = Path(db_path) if db_path else default_registry_db_path()
                 _registry = AccountRegistry(path)
     return _registry
 

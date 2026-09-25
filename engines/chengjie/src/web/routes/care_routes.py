@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 
 from fastapi import Depends, Request
 
@@ -56,13 +55,15 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         st = getattr(request.app.state, "care_schedule_store", None)
         if st is not None:
             return st
-        from src.contacts.care_schedule import get_care_schedule_store
+        from src.contacts.care_schedule import (
+            default_care_db_path, get_care_schedule_store,
+        )
         db_path = ":memory:"
         try:
             cm = getattr(request.app.state, "config_manager", None) or config_manager
-            base = Path(getattr(cm, "config_path", "") or "").parent
-            if str(base):
-                db_path = base / "care_schedule.db"
+            raw = getattr(cm, "config_path", "") or ""
+            if str(raw).strip():
+                db_path = default_care_db_path(raw)
         except Exception:
             db_path = ":memory:"
         st = get_care_schedule_store(db_path)
@@ -702,9 +703,11 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         """开闸动作追加到 companion_capability_audit.jsonl（与能力开关同一台账，best-effort）。"""
         try:
             import json as _json
-            base = Path(getattr(cm, "config_path", "") or "").parent
-            if not str(base):
+            from src.licensing.data_paths import runtime_dir
+            raw = getattr(cm, "config_path", "") or ""
+            if not str(raw).strip():
                 return
+            base = runtime_dir(raw)
             rec = {"ts": round(time.time(), 3), "actor": actor,
                    "key": "proactive_care.engine", "field": action,
                    "value": True, "path": ";".join(applied), "reason": "care_engine_api"}

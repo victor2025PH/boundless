@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from src.licensing.data_paths import plugin_dir, runtime_dir, runtime_file
+
 
 async def maybe_start_proactive_care(assistant, web_app=None) -> None:
     """Phase O：主动关怀引擎——常备接线 + 配置热闸（P0 2026-08-01 改造）。
@@ -31,10 +33,12 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
     """
     try:
         cfg = ((assistant.config.config.get("companion") or {}).get("proactive_care") or {})
-        from src.contacts.care_schedule import get_care_schedule_store
+        from src.contacts.care_schedule import (
+            default_care_db_path, get_care_schedule_store,
+        )
 
-        _cfg_dir = Path(assistant.config.config_path).parent
-        care_store = get_care_schedule_store(_cfg_dir / "care_schedule.db")
+        care_store = get_care_schedule_store(
+            default_care_db_path(assistant.config.config_path))
         engine_state = {"capture_wired": False, "dispatcher_skip": "",
                         "messenger_rpa": assistant.messenger_rpa_service is not None}
         if web_app is not None:
@@ -636,8 +640,9 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
         # （proactive_care.llm_extract.shadow），常备接线 + 热闸同派发器哲学。
         try:
             from src.contacts.care_shadow_scan import CareShadowScanner
-            _shadow_log_dir = (Path(assistant.config.config_path).parent.parent
-                               / "logs" / "care_shadow")
+            # 与 plugin_dir 同一分裂规则：同树落 <数据根>/logs，VPS 离开 /etc。
+            _shadow_log_dir = (
+                plugin_dir(assistant.config.config_path).parent / "logs" / "care_shadow")
             shadow_scanner = CareShadowScanner(
                 ai_client=assistant.ai_client,
                 cfg_provider=_live_care_cfg,
@@ -684,8 +689,8 @@ async def maybe_start_nurture_engine(assistant, web_app=None) -> None:
         from src.nurture.nurture_ledger import get_nurture_ledger
 
         cfg = ((assistant.config.config.get("ops") or {}).get("nurture") or {})
-        _cfg_dir = Path(assistant.config.config_path).parent
-        ledger = get_nurture_ledger(_cfg_dir / "nurture_ledger.json")
+        ledger = get_nurture_ledger(
+            runtime_file("nurture_ledger.json", assistant.config.config_path))
         engine_state = {"skip": ""}
         if web_app is not None:
             web_app.state.nurture_ledger = ledger
@@ -1020,8 +1025,8 @@ def ensure_deferred_outbox(assistant):
             DeferredDispatcher, DeferredOutboxStore, DeferredSenderNotReady,
         )
 
-        _cfg_dir = Path(assistant.config.config_path).parent
-        store = DeferredOutboxStore(_cfg_dir / "deferred_outbox.db")
+        store = DeferredOutboxStore(
+            runtime_file("deferred_outbox.db", assistant.config.config_path))
 
         async def _universal_send(account_id, chat_key, text, *, platform):
             # 出站自动翻译/语言硬闸（主动触达：care/reactivation 等经 deferred 队列的
@@ -1144,7 +1149,10 @@ async def warmup_embeddings(assistant):
         await asyncio.sleep(5)
         if not assistant.ai_client or not assistant.ai_client.client:
             return
-        cfg_dir = (Path(assistant.config.config_path).parent if hasattr(assistant.config, "config_path") else Path("config")).resolve()
+        if hasattr(assistant.config, "config_path"):
+            cfg_dir = runtime_dir(assistant.config.config_path)
+        else:
+            cfg_dir = Path("config")
         kb_path = (cfg_dir / "knowledge_base.db").resolve()
         if not kb_path.exists():
             assistant.logger.info("向量预热: 知识库文件不存在，跳过 (%s)", kb_path)
@@ -1206,7 +1214,7 @@ async def warmup_embeddings(assistant):
 def maybe_init_monetization(assistant, web_app=None) -> None:
     """Phase K2：C 端变现（默认关，monetization.enabled 开）。
 
-    开启时建 EntitlementStore 单例（落 config/entitlements.db）→ 挂 app.state 供路由用，
+    开启时建 EntitlementStore 单例（落运行时目录 entitlements.db）→ 挂 app.state 供路由用，
     并按 catalog 注入价目；启动可选清理过期订阅。关时不建库（路由会按需懒建只读单例）。
     """
     try:
@@ -1218,8 +1226,8 @@ def maybe_init_monetization(assistant, web_app=None) -> None:
         from src.utils.monetization import merge_catalog
 
         catalog = merge_catalog(mon.get("catalog"))
-        _cfg_dir = Path(assistant.config.config_path).parent
-        store = get_entitlement_store(_cfg_dir / "entitlements.db", catalog=catalog)
+        _rt = runtime_dir(assistant.config.config_path)
+        store = get_entitlement_store(_rt / "entitlements.db", catalog=catalog)
         if web_app is not None:
             web_app.state.entitlement_store = store
         # Stage 1：把真实权益接进对话路径——注册进程级 resolver，让付费剧情闸
@@ -1242,7 +1250,7 @@ def maybe_init_monetization(assistant, web_app=None) -> None:
             from src.utils.companion_funnel_store import (
                 get_companion_funnel_store,
             )
-            funnel = get_companion_funnel_store(_cfg_dir / "companion_funnel.db")
+            funnel = get_companion_funnel_store(_rt / "companion_funnel.db")
             assistant._companion_funnel_store = funnel
             if web_app is not None:
                 web_app.state.companion_funnel_store = funnel

@@ -25,7 +25,10 @@ _path: Path = Path("config/protocol_autoreply.json")
 
 
 def _store_path() -> Path:
-    return _path
+    if _path != Path("config/protocol_autoreply.json"):
+        return _path
+    from src.licensing.data_paths import cwd_or_data_file
+    return cwd_or_data_file("protocol_autoreply.json")
 
 
 def set_store_path(p: Path) -> None:

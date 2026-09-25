@@ -605,6 +605,7 @@ def get_proxy_pool(db_path: Optional[Path] = None) -> ProxyPool:
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                path = Path(db_path) if db_path else Path("config/proxy_pool.db")
+                from src.licensing.data_paths import cwd_or_data_file
+                path = Path(db_path) if db_path else cwd_or_data_file("proxy_pool.db")
                 _pool = ProxyPool(path)
     return _pool

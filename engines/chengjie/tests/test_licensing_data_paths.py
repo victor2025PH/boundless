@@ -89,6 +89,10 @@ def test_split_config_outside_data_root(monkeypatch, tmp_path):
     for name in (
         "web_users.db", "audit.db", "knowledge_base.db", "runtime_flags.db",
         "bot.db", "strategy_events.db", "inbox.db",
+        "care_schedule.db", "deferred_outbox.db", "nurture_ledger.json",
+        "entitlements.db", "companion_funnel.db", "contacts.db",
+        "line_rpa_state.db", "wa_rpa_state.db", "messenger_rpa_state.db",
+        "account_registry.db", "marketing_goals.db",
     ):
         p = data_paths.runtime_file(name, cfg)
         assert p == data / name

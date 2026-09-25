@@ -16,7 +16,6 @@ import asyncio
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.integrations.line_rpa.adb_helpers import get_device_lock
@@ -45,7 +44,6 @@ class MessengerRpaService:
         self._cfg: Dict[str, Any] = dict(messenger_rpa_cfg or {})
         self._merged_cfg: Dict[str, Any] = self._merged()
 
-        cfg_dir = Path(self._cm.config_path).parent
         # ★ P5-1：AccountRegistry 读 accounts 配置；无配置则回到单账号 "default"
         self._account_registry: AccountRegistry = AccountRegistry.from_config(
             self._merged_cfg, self._cm.config_path,

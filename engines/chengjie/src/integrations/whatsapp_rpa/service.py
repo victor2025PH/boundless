@@ -14,7 +14,6 @@ import asyncio
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.integrations.line_rpa.adb_helpers import get_device_lock
@@ -68,10 +67,7 @@ class WhatsAppRpaService:
         self.account_id: str = account_id or self._cfg.get("account_id") or "default"
         self._merged_cfg: Dict[str, Any] = self._merged()
 
-        if self.account_id and self.account_id != "default":
-            db_path = Path(self._cm.config_path).parent / f"wa_rpa_state_{self.account_id}.db"
-        else:
-            db_path = default_state_db_path(self._cm.config_path)
+        db_path = default_state_db_path(self._cm.config_path, self.account_id)
         self._state = WaRpaStateStore(db_path)
         self._runner = WhatsAppRpaRunner(
             config_manager=config_manager,
