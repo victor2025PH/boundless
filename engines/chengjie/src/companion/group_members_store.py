@@ -448,7 +448,7 @@ class GroupMembersStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logger.debug("[group_members] 关闭连接失败（忽略）", exc_info=True)
 
 
 def _resolved_db_path(db_path: Any) -> str:
@@ -506,7 +506,7 @@ def reset_group_members_store() -> None:
             try:
                 _STORE.close()
             except Exception:
-                pass
+                logger.debug("[group_members] 重置时关闭失败（忽略）", exc_info=True)
         _STORE = None
 
 

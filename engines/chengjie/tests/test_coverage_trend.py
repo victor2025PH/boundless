@@ -99,12 +99,15 @@ def test_watchdog_snapshot_gated_and_throttled(tmp_path):
     wd._check_coverage_trend()
     assert ts.recent() == []
 
-    # 开 → 落一行；同 interval 内再 tick 不重写
+    # 开 → 落一行；同 interval 内再 tick 不重写。
+    # 日键是本地日期。贴着本地午夜跑时 now+3700 会跨日，REPLACE 写到新的一天，
+    # recent()[0] 仍是第一行（manual 停在 0）。钉在本地正午，+3700 仍是同一天。
     cfg_on = {"inbox": {"auto_draft": {"automation_mode": "auto_ai"}},
               "ops": {"automation_coverage_trend": {"enabled": True,
                                                     "interval_min": 60}}}
     wd2 = _watchdog(store, cfg_on, ts)
-    now = time.time()
+    lt = time.localtime()
+    now = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 0, 0, 0, 0, -1))
     wd2._check_coverage_trend(now=now)
     assert len(ts.recent()) == 1
     assert ts.recent()[0]["conversations"] == 1

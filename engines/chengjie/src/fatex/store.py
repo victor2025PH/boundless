@@ -222,7 +222,7 @@ class FatexStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logger.debug("[fatex] 关闭连接失败（忽略）", exc_info=True)
 
 
 def _resolved_db_path(db_path: Any) -> str:
