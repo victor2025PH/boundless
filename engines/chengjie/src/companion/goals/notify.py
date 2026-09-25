@@ -205,15 +205,16 @@ _USER_STORE_CACHE: Dict[str, Any] = {}
 
 
 def user_store_for(config_path: Any) -> Any:
-    """web_users.db 惰性单例（按 config 目录缓存；任何失败返 None 绝不抛）。
+    """web_users.db 惰性单例（按运行时目录缓存；任何失败返 None 绝不抛）。
 
-    与 admin/unified_inbox_auth 同一寻址约定：``config_path.parent/web_users.db``
-    ——扫描循环跑在服务进程里，CWD=实例数据根，路径与登录端完全一致。"""
+    与 admin/unified_inbox_auth 同一寻址：``runtime_dir(config_path)/web_users.db``。
+    桌面 YAML 在数据根内时这就是配置目录；VPS 分裂布局时落在 ``AITR_DATA_DIR``。"""
     try:
         if not config_path:
             return None
         from pathlib import Path
-        key = str(Path(config_path).resolve().parent)
+        from src.licensing.data_paths import runtime_dir
+        key = str(runtime_dir(config_path))
         st = _USER_STORE_CACHE.get(key)
         if st is None:
             from src.utils.web_user_store import WebUserStore

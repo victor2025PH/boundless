@@ -1675,16 +1675,50 @@ class TestEscalationAudit:
         assert len(rows) == 3 and rows[0]["ts"] >= rows[-1]["ts"]
         store.close()
 
-    def test_snapshot_today_count(self, cstore, gateway):
+    def test_snapshot_today_count(self, tmp_path, monkeypatch):
+        """today_count 走升级快照，和问责行同一条 inbox 库。
+
+        ``record_escalation`` 只写 escalations 表，再 ``track()`` 把埋点追加到
+        spool。spool 默认是进程级 ``AITR_DATA_DIR/config/events/spool``，
+        ``-n auto`` 下同 worker 的用例共用那份文件。这里钉到本测试 tmp。
+        快照在写库线程上直接算：TestClient 会把读请求丢进 portal 线程，再碰
+        刚写过的同一条 sqlite 连接。3.12 的 xdist 上这条曾把 gw0 打成
+        ``Not properly terminated``，作业日志没有 Timeout 横幅、也没有
+        traceback。
+        """
         import time
+        from starlette.requests import Request
+
         from src.inbox.store import InboxStore
-        d = tempfile.mkdtemp()
-        inbox = InboxStore(Path(d) / "i.db")
-        inbox.record_escalation("web:web:Z", reason="unclaimed", ts=time.time())
-        cli = _client_with_inbox(cstore, gateway, inbox)
-        snap = cli.get("/api/workspace/escalations").json()
-        assert snap["today_count"] >= 1
-        inbox.close()
+        from src.web.routes.unified_inbox_sla import _escalation_snapshot
+
+        monkeypatch.setenv("EVENT_SPOOL_DIR", str(tmp_path / "spool"))
+        inbox = InboxStore(tmp_path / "i.db")
+        try:
+            ts = time.time()
+            assert inbox.record_escalation(
+                "web:web:Z", reason="unclaimed", ts=ts) is True
+            app = FastAPI()
+            app.state.inbox_store = inbox
+            app.state.config_manager = SimpleNamespace(config={})
+            request = Request({
+                "type": "http",
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/api/workspace/escalations",
+                "raw_path": b"/api/workspace/escalations",
+                "query_string": b"",
+                "headers": [],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "app": app,
+            })
+            snap = _escalation_snapshot(request)
+            assert snap["today_count"] >= 1
+            assert snap["ok"] is True
+        finally:
+            inbox.close()
 
 
 class TestEscalationLog:

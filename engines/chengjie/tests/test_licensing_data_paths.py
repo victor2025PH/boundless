@@ -70,6 +70,90 @@ def test_trial_claim_state_follows_license(monkeypatch, tmp_path):
     assert tc.state_path() == root / "config" / "trial_claim.json"
 
 
+def test_split_config_outside_data_root(monkeypatch, tmp_path):
+    """VPS：YAML 在 /etc，AITR_DATA_DIR 在 /var/lib。config_dir 不动，运行时库离开 /etc。"""
+    etc = tmp_path / "etc" / "chatx-fleet"
+    data = tmp_path / "var" / "lib" / "chatx-fleet"
+    cfg = etc / "config.yaml"
+    _fresh(monkeypatch, AITR_CONFIG_PATH=str(cfg), AITR_DATA_DIR=str(data))
+    assert data_paths.config_dir() == etc
+    assert data_paths.data_dir() == data
+    assert data_paths.config_dir() != data_paths.data_dir()
+    for name in (
+        "cost_ledger.db", "license_quota.db", "token_ledger.db",
+        "agent_char_usage.db", "license.key",
+    ):
+        p = Path(data_paths.data_file(name))
+        assert p == data / name
+        assert etc not in p.parents
+    for name in (
+        "web_users.db", "audit.db", "knowledge_base.db", "runtime_flags.db",
+        "bot.db", "strategy_events.db", "inbox.db",
+    ):
+        p = data_paths.runtime_file(name, cfg)
+        assert p == data / name
+    assert data_paths.plugin_dir(cfg) == data / "plugins"
+    assert data_paths.runtime_dir(None) == data
+
+
+def test_other_config_path_is_not_relocated(monkeypatch, tmp_path):
+    """进程级 AITR_DATA_DIR 不得把 pytest / --init 的另一份配置的库收走。"""
+    etc = tmp_path / "etc" / "chatx-fleet"
+    data = tmp_path / "var" / "lib" / "chatx-fleet"
+    cfg = etc / "config.yaml"
+    other = tmp_path / "case" / "config.yaml"
+    _fresh(monkeypatch, AITR_CONFIG_PATH=str(cfg), AITR_DATA_DIR=str(data))
+    assert data_paths.runtime_dir(other) == other.parent
+    assert data_paths.runtime_file("web_users.db", other) == other.parent / "web_users.db"
+    assert data_paths.plugin_dir(other) == other.parent.parent / "plugins"
+
+
+def test_colocated_yaml_stays_inside_data_root(monkeypatch, tmp_path):
+    """桌面：AITR_CONFIG_PATH 在 AITR_DATA_DIR/config 内，库路径与改前一致。"""
+    root = tmp_path / "userdata"
+    cfg = root / "config" / "config.yaml"
+    _fresh(monkeypatch, AITR_DATA_DIR=str(root), AITR_CONFIG_PATH=str(cfg))
+    assert data_paths.config_dir() == cfg.parent
+    assert data_paths.data_dir() == cfg.parent
+    assert Path(data_paths.data_file("license_quota.db")) == root / "config" / "license_quota.db"
+    assert Path(data_paths.data_file("license.key")) == root / "config" / "license.key"
+    assert data_paths.runtime_dir(cfg) == cfg.parent
+    assert data_paths.plugin_dir(cfg) == root / "plugins"
+
+
+def test_fleet_empty_db_path_follows_data_root(monkeypatch, tmp_path):
+    from src.fleet.store import get_store, set_store
+
+    etc = tmp_path / "etc" / "chatx-fleet"
+    data = tmp_path / "var" / "lib" / "chatx-fleet"
+    cfg = etc / "config.yaml"
+    _fresh(monkeypatch, AITR_CONFIG_PATH=str(cfg), AITR_DATA_DIR=str(data))
+
+    class _Cfg:
+        config_path = cfg
+        config = {"fleet_control": {"db_path": ""}}
+
+    set_store(None)
+    try:
+        st = get_store(_Cfg())
+        assert st is not None
+        assert Path(st.db_path) == data / "fleet_control.db"
+        assert etc not in Path(st.db_path).parents
+    finally:
+        set_store(None)
+
+    class _Abs:
+        config_path = cfg
+        config = {"fleet_control": {"db_path": str(data / "fleet.db")}}
+
+    set_store(None)
+    try:
+        st = get_store(_Abs())
+        assert Path(st.db_path) == data / "fleet.db"
+    finally:
+        set_store(None)
+
+
 def test_no_module_computes_config_dir_from_dunder_file():
     """回归钉：这两个模块不得再用 __file__ 往上推 config 目录。
 

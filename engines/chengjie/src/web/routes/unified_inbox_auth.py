@@ -75,8 +75,9 @@ def _user_store_from_config(config_manager: Any) -> Any:
     if config_manager is None:
         return None
     try:
+        from src.licensing.data_paths import runtime_dir
         from src.utils.web_user_store import WebUserStore
-        cfg_dir = config_manager.config_path.parent
+        cfg_dir = runtime_dir(config_manager.config_path)
         return WebUserStore(cfg_dir / "web_users.db")
     except Exception:
         return None

@@ -1250,7 +1250,9 @@ def get_store(cfg_root: Any) -> Optional[FleetStore]:
     cfg_path = getattr(cfg_root, "config_path", None)
     if not cfg_path and (db_path is None or not db_path.is_absolute()):
         return None
-    cfg_dir = Path(cfg_path).parent if cfg_path else Path(".")
+    # 空/相对路径：YAML 在 /etc 而 AITR_DATA_DIR 在 /var/lib 时落数据根，不写配置目录。
+    from src.licensing.data_paths import runtime_dir
+    cfg_dir = runtime_dir(cfg_path) if cfg_path else Path(".")
     if db_path is None:
         db_path = cfg_dir / DEFAULT_DB_NAME
     elif not db_path.is_absolute():

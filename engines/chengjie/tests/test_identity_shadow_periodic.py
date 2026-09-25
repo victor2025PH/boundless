@@ -49,11 +49,16 @@ def _seed_conv(store, platform, chat_key, *, name="", phone="", username="",
 def _seed_dbs(tmp_path):
     inbox_db = tmp_path / "inbox.db"
     store = InboxStore(inbox_db)
-    _seed_conv(store, "telegram", "8921664288", name="张伟",
-               phone="+63 927 013 5480", ts=4000)
-    _seed_conv(store, "whatsapp", "639270135480", name="Zhang Wei", ts=3000)
-    _seed_conv(store, "telegram", "555000111", username="nightwolf88", ts=2000)
-    _seed_conv(store, "line", "U-deadbeef", username="@NightWolf88", ts=1500)
+    try:
+        _seed_conv(store, "telegram", "8921664288", name="张伟",
+                   phone="+63 927 013 5480", ts=4000)
+        _seed_conv(store, "whatsapp", "639270135480", name="Zhang Wei", ts=3000)
+        _seed_conv(store, "telegram", "555000111", username="nightwolf88", ts=2000)
+        _seed_conv(store, "line", "U-deadbeef", username="@NightWolf88", ts=1500)
+    finally:
+        # WAL 写者不关，主库字节还停在 checkpoint 之前。周期扫描是 mode=ro，
+        # 但打开连接会把未合并的 WAL 折进主文件，字节对比会误看成「扫库写了业务库」。
+        store.close()
 
     identity_db = tmp_path / "bot.db"
     cpi = CrossPlatformIdentity(identity_db)

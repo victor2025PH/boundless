@@ -12,12 +12,14 @@ Group=chatx-fleet
 WorkingDirectory=/opt/chatx-fleet/app
 EnvironmentFile=-/etc/chatx-fleet/env
 Environment=AITR_CONFIG_PATH=/etc/chatx-fleet/config.yaml
+Environment=AITR_DATA_DIR=/var/lib/chatx-fleet
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/chatx-fleet/venv/bin/python main.py --config /etc/chatx-fleet/config.yaml
 Restart=always
 RestartSec=5
 # 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容。
-# ProtectSystem=strict 让 ReadWritePaths 真正生效：配置目录只读（750），库在 /var/lib/chatx-fleet（770）。
+# ProtectSystem=strict 让 ReadWritePaths 真正生效：/etc/chatx-fleet 只读（750），
+# 运行时库与插件只写 AITR_DATA_DIR（/var/lib/chatx-fleet，770）。不要把 /etc 加进 ReadWritePaths。
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/chatx-fleet /opt/chatx-fleet/app/logs /opt/chatx-fleet/app/config
