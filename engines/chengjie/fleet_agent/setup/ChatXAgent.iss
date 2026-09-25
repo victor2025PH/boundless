@@ -179,7 +179,9 @@ var
   cmd: String;
 begin
   { Protected parent DACL: SYSTEM and Administrators full, Users read and execute.
-    Refuse a junction on either path. Skip reset when the parent is already locked. }
+    Refuse a junction on either path. Skip reset when the parent is already locked.
+    icacls rights are single-quoted array elements, then splatted. A bare
+    *S-1-5-18:(OI)(CI)F inside -Command is a PowerShell subexpression and exits 5. }
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
     '$ErrorActionPreference=''Stop''; try {' +
     '$d=''' + PsLiteral(Dir) + '''; $p=Split-Path -Parent $d;' +
@@ -201,9 +203,9 @@ begin
     'return $false }; return $true };' +
     '$locked=$false; try { $locked=ParentLocked $p } catch { $locked=$false };' +
     'if(-not $locked){ $ErrorActionPreference=''Continue'';' +
-    '& icacls.exe $p /setowner *S-1-5-32-544 | Out-Null; if($LASTEXITCODE -ne 0){ exit 5 };' +
-    '& icacls.exe $p /reset | Out-Null; if($LASTEXITCODE -ne 0){ exit 5 };' +
-    '& icacls.exe $p /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX | Out-Null;' +
+    '$ia=@($p, ''/setowner'', ''*S-1-5-32-544''); & icacls.exe @ia | Out-Null; if($LASTEXITCODE -ne 0){ exit 5 };' +
+    '$ia=@($p, ''/reset''); & icacls.exe @ia | Out-Null; if($LASTEXITCODE -ne 0){ exit 5 };' +
+    '$ia=@($p, ''/inheritance:r'', ''/grant:r'', ''*S-1-5-18:(OI)(CI)F'', ''*S-1-5-32-544:(OI)(CI)F'', ''*S-1-5-32-545:(OI)(CI)RX''); & icacls.exe @ia | Out-Null;' +
     'if($LASTEXITCODE -ne 0){ exit 5 }; $ErrorActionPreference=''Stop'' };' +
     'if(-not (ParentLocked $p)){ exit 5 };' +
     'if(Reparse $p){ exit 4 }; exit 0' +
@@ -283,7 +285,8 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  src, dir, params, pair, legacy: String;
+  src, dir, params, legacy, pairText: String;
+  pair: AnsiString;
   ResultCode: Integer;
 begin
   if CurStep <> ssPostInstall then
@@ -335,9 +338,13 @@ begin
     SnapshotToDelete := '';
   end;
   pair := '';
+  { LoadStringFromFile's second parameter is AnsiString on Inno Setup 6.3. Pairing codes are ASCII. }
   if LoadStringFromFile(dir + '\pairing.txt', pair) then
+  begin
+    pairText := String(pair);
     WizardForm.FinishedLabel.Caption :=
-      'Pairing code ' + Trim(pair) + '. An admin approves this PC in the fleet console, which shows the same code.';
+      'Pairing code ' + Trim(pairText) + '. An admin approves this PC in the fleet console, which shows the same code.';
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
