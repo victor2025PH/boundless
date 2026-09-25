@@ -16,7 +16,10 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/chatx-fleet/venv/bin/python main.py --config /etc/chatx-fleet/config.yaml
 Restart=always
 RestartSec=5
-# 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容；数据目录只此一处可写
+# 主控只存节点元数据 / 任务 / 心跳摘要，不碰聊天内容。
+# ProtectSystem=strict 让 ReadWritePaths 真正生效：配置目录只读（750），库在 /var/lib/chatx-fleet（770）。
+ProtectSystem=strict
+ProtectHome=true
 ReadWritePaths=/var/lib/chatx-fleet /opt/chatx-fleet/app/logs /opt/chatx-fleet/app/config
 NoNewPrivileges=true
 PrivateTmp=true

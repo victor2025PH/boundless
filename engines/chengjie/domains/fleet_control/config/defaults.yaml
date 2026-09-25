@@ -15,7 +15,7 @@ kb:
 #   db_path: ""                 # 空 → <配置目录>/fleet_control.db
 #   heartbeat_sec: 30           # 下发给 Agent 的心跳间隔
 #   offline_after_sec: 120      # 超过 N 秒没心跳 → 节点标 offline
-#   enroll_code_ttl_min: 60     # 注册码有效期（分钟）
+#   enroll_code_ttl_min: 15     # 注册码有效期（分钟）；新码是 12 位 Crockford，默认 15 分钟
 #   public_url: "https://bd2026.cc/fleet"   # Agent 连的公网地址（注册码页 / 安装说明里展示）
 #   download:                   # 独立主页 /fleet/ 展示的安装包信息（由发布流程写入）
 #     version: ""

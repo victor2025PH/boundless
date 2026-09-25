@@ -32,9 +32,10 @@ check() {
   systemctl is-active --quiet "$SVC_NAME" && log "service: active" || { log "service: NOT active"; rc=1; }
   if curl -fsS -m 5 "http://127.0.0.1:${PORT}/fleet/" -o /dev/null; then log "local /fleet/: 200"; else log "local /fleet/: FAIL"; rc=1; fi
   if curl -fsS -m 8 "${PUBLIC_URL}/" -o /dev/null; then log "public ${PUBLIC_URL}/: 200"; else log "public ${PUBLIC_URL}/: FAIL (nginx snippet included? cert?)"; rc=1; fi
+  # GET overview is the auth wall. Do not POST /api/fleet/enroll: a fake code counts as a failure against this VPS IP.
   local code
-  code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' -X POST "${PUBLIC_URL}/api/fleet/enroll" -H 'Content-Type: application/json' -d '{"code":"x"}' || true)
-  [ "$code" = "401" ] || [ "$code" = "400" ] || [ "$code" = "403" ] && log "public enroll probe: HTTP $code (ok, auth wall)" || { log "public enroll probe: HTTP $code (expected 401/400)"; rc=1; }
+  code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "${PUBLIC_URL}/api/fleet/overview" || true)
+  [ "$code" = "401" ] || [ "$code" = "403" ] && log "public api probe: HTTP $code (ok, auth wall)" || { log "public api probe: HTTP $code (expected 401)"; rc=1; }
   grep -q 'CHANGE_ME' "$CONF_DIR/config.yaml" 2>/dev/null && { log "config still has CHANGE_ME"; rc=1; }
   [ -f "$DATA_DIR/fleet.db" ] && log "db: $DATA_DIR/fleet.db ($(du -h "$DATA_DIR/fleet.db" | cut -f1))" || log "db: not created yet (first enroll creates it)"
   return $rc
@@ -64,7 +65,11 @@ command -v "$PYTHON" >/dev/null || fail "$PYTHON not found"
 log "1/8 user + dirs"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --home "$APP_ROOT" --shell /usr/sbin/nologin "$SVC_USER"
 mkdir -p "$APP_ROOT" "$CONF_DIR" "$DATA_DIR"
-chown "$SVC_USER:$SVC_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR" "$CONF_DIR"
+# Config dir stays root:group 750 (readable, not writable). The service writes the db under DATA_DIR.
+chown root:"$SVC_USER" "$CONF_DIR"
+chmod 750 "$CONF_DIR"
+chown "$SVC_USER:$SVC_USER" "$DATA_DIR"
+chmod 770 "$DATA_DIR"
 
 log "2/8 unpack -> app.new"
 rm -rf "$APP_ROOT/app.new"; mkdir -p "$APP_ROOT/app.new"

@@ -15,12 +15,16 @@ name: chengjie-tests
 
 on:
   push:
-    branches: [main, 'feat-*', 'sprint*/**']
+    # feat/** matches feat/chengjie-player-care-fleet (`*` does not match `/`).
+    # cursor/** matches cloud-agent heads so a push of engines/chengjie actually starts this job.
+    branches: [main, 'feat-*', 'feat/**', 'sprint*/**', 'cursor/**']
     paths:
       - 'engines/chengjie/**'
       - '.github/workflows/chengjie-tests.yml'
   pull_request:
-    branches: [main]
+    # Checks attach to the PR when the base matches. This fleet work targets
+    # feat/chengjie-player-care-fleet, which `main` alone never selected.
+    branches: [main, 'feat-*', 'feat/**', 'sprint*/**']
     paths:
       - 'engines/chengjie/**'
       - '.github/workflows/chengjie-tests.yml'

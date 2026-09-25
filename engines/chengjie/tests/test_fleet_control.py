@@ -63,7 +63,8 @@ def test_protocol_envelope_and_sanitize():
 
 def test_enroll_code_lifecycle(st):
     c = st.create_enroll_code(label="x", ttl_min=10, now=T0)
-    assert len(c["code"]) == 8 and c["code"].isdigit()
+    compact = c["code"].replace("-", "")
+    assert len(compact) >= 12 and all(ch in "0123456789ABCDEFGHJKMNPQRSTVWXYZ" for ch in compact)
     assert [x["code"] for x in st.list_enroll_codes(now=T0)] == [c["code"]]
     assert st.list_enroll_codes(now=T0 + 11 * 60) == []
     assert st.enroll(code=c["code"], machine_id="m-1", proto_version=1, now=T0 + 11 * 60)["error"] == "invalid_or_expired_code"
@@ -101,9 +102,13 @@ def test_authenticate_rejects_bad_keys_and_revoked(st):
     assert [t["status"] for t in st.list_tasks(node_id=a["node_id"])] == [STATUS_CANCELLED]
     assert st.enqueue(a["node_id"], TASK_PING) is None
     assert not st.revoke("n_nope")
-    # 凭新注册码复活
-    c = _enroll(st, "m-aaaa", now=T0 + 5)
-    assert st.authenticate(c["node_key"])["status"] == "active"
+    code = st.create_enroll_code(now=T0 + 5)["code"]
+    held = st.enroll(code=code, machine_id="m-aaaa", proto_version=1, now=T0 + 5,
+                     enroll_secret=("es_" + "revoked-hold-" + "sec" + "ret" + "-0123456789"))
+    assert held["ok"] and held["status"] == "pending" and held["revoked_note"] == "this machine was revoked"
+    assert "node_key" not in held
+    assert st.get_node(a["node_id"], now=T0 + 5)["status"] == "revoked"
+    assert st.authenticate(a["node_key"]) is None
 
 
 # ── store：心跳 / 在线判定 ─────────────────────────────────────────────────────

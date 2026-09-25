@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import platform as _platform
 import subprocess
 import sys
@@ -43,7 +44,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .identity import default_state_dir, host_name, node_machine_id, os_label
+from .detect import detect_instances, is_loopback_url, sanitize_instances
+from .identity import (
+    StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
+    discard_untrusted_secret, host_name, lock_state_dir, node_machine_id, os_label,
+    state_dir_is_locked,
+)
 from .service import install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -54,11 +60,12 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.2.1"
+AGENT_VERSION = "0.3.1"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
 BACKOFF_MIN, BACKOFF_MAX = 2.0, 60.0
+REENROLL_BACKOFF_SEC = 30
 ENV_CONTROLLER = "CHATX_FLEET_CONTROLLER"
 
 HttpFn = Callable[[str, str, Optional[Dict[str, Any]], Dict[str, str], float], Tuple[int, Dict[str, Any]]]
@@ -94,6 +101,46 @@ class Unauthorized(AgentError):
     pass
 
 
+# Kept across an upgrade from an unlocked directory. Everything else, including
+# instances and restart_cmd, is dropped and rediscovered.
+_IDENTITY_FIELDS = ("node_id", "node_key", "heartbeat_sec", "enroll_secret",
+                    "pending_request_id", "pairing_code")
+
+
+def migrated_agent_data(controller_url: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    """Identity fields plus the installer controller. ``instances`` is always empty."""
+    data: Dict[str, Any] = {
+        "controller_url": str(controller_url or "").rstrip("/"),
+        "node_id": "",
+        "node_key": "",
+        "heartbeat_sec": DEFAULT_HEARTBEAT_SEC,
+        "instances": [],
+    }
+    if not isinstance(source, dict):
+        return data
+    for key in _IDENTITY_FIELDS:
+        if key == "heartbeat_sec":
+            continue
+        val = source.get(key)
+        if isinstance(val, str) and val:
+            data[key] = val
+    # Only a real integer in the agent range is kept. Strings and out-of-range
+    # values fall back to the default so a planted file cannot stall the service.
+    hb = source.get("heartbeat_sec")
+    if isinstance(hb, int) and not isinstance(hb, bool) and 5 <= hb <= 3600:
+        data["heartbeat_sec"] = hb
+    return data
+
+
+def migrate_legacy_agent(state_dir: Path, controller_url: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    """Rewrite agent.json after the state dir is locked. Returns the stored data."""
+    cfg = AgentConfig(state_dir)
+    cfg._legacy_source = None
+    cfg.data = migrated_agent_data(controller_url, source)
+    cfg.save()
+    return dict(cfg.data)
+
+
 # ── 配置 ────────────────────────────────────────────────────────────────────
 class AgentConfig:
     """<state_dir>/agent.json。instances: [{name, base_url, auth_token, config_path, domain, restart_cmd}]"""
@@ -103,13 +150,31 @@ class AgentConfig:
         self.path = self.state_dir / CONFIG_NAME
         self.data: Dict[str, Any] = {"controller_url": "", "node_id": "", "node_key": "",
                                      "heartbeat_sec": DEFAULT_HEARTBEAT_SEC, "instances": []}
+        self._legacy_source: Optional[Dict[str, Any]] = None
         self.load()
 
     def load(self) -> None:
+        self._legacy_source = None
+        # Sample before discard. An unlocked file is not merged: identity only.
+        if (self.path.is_file() and not _is_reparse(self.state_dir) and not _is_reparse(self.path)
+                and not state_dir_is_locked(self.state_dir)):
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                raw = None
+            if isinstance(raw, dict):
+                self._legacy_source = raw
+                self.data = migrated_agent_data(str(raw.get("controller_url") or ""), raw)
         try:
-            d = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(d, dict):
-                self.data.update(d)
+            # Same rule as discard_untrusted_secret: on Windows keep the file only
+            # when the state directory is locked and the owner is SYSTEM or Admins.
+            discard_untrusted_secret(self.path)
+            if self._legacy_source is None:
+                d = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(d, dict):
+                    self.data.update(d)
+        except StateDirLockError:
+            raise
         except Exception:
             pass
         env = (os.environ.get(ENV_CONTROLLER) or "").strip()
@@ -117,15 +182,21 @@ class AgentConfig:
             self.data["controller_url"] = env
 
     def save(self) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_state_dir(self.state_dir)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self.path)
         if os.name != "nt":
             try:
                 os.chmod(self.path, 0o600)
-            except Exception:
-                pass
+            except OSError as e:
+                try:
+                    self.path.unlink()
+                except OSError:
+                    pass
+                raise StateDirLockError(f"chmod agent.json failed: {e}") from e
+        else:
+            assign_owner_admins(self.path)
 
     @property
     def controller_url(self) -> str:
@@ -152,10 +223,13 @@ class AgentConfig:
         return [i for i in v if isinstance(i, dict)] if isinstance(v, list) else []
 
     def add_instance(self, name: str, base_url: str, *, auth_token: str = "", config_path: str = "",
-                     domain: str = "", restart_cmd: str = "") -> None:
+                     domain: str = "", restart_cmd: str = "", role: str = "") -> None:
+        if not is_loopback_url(base_url):
+            raise AgentError("instance URL must be loopback (127.0.0.1 / localhost / ::1)")
         inst = [i for i in self.instances if i.get("name") != name]
         inst.append({"name": name, "base_url": base_url.rstrip("/"), "auth_token": auth_token,
-                     "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd})
+                     "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd,
+                     "role": role})
         self.data["instances"] = inst
 
 
@@ -191,6 +265,14 @@ def _grep_yaml_scalar(path: str, section: str, key: str) -> str:
     return m2.group(1).strip() if m2 else ""
 
 
+def _health_only(inst: Dict[str, Any]) -> bool:
+    if str(inst.get("role") or "") == "health":
+        return True
+    if str(inst.get("name") or "") == "avatarhub":
+        return True
+    return _instance_domain(inst) == "avatar_hub"
+
+
 def _instance_domain(inst: Dict[str, Any]) -> str:
     d = str(inst.get("domain") or "")
     if d:
@@ -215,6 +297,10 @@ class NodeAgent:
         self.http = http
         self.clock = clock
         self.app_version = app_version or _detect_app_version()
+        # Persist the identity-only rewrite before machine_id locks the directory.
+        if getattr(cfg, "_legacy_source", None) is not None:
+            cfg.save()
+            cfg._legacy_source = None
         self.machine_id = node_machine_id(cfg.state_dir)
         self.started_at = clock()
         self.revoked = False
@@ -241,21 +327,156 @@ class NodeAgent:
             raise AgentError(f"{path} → HTTP {code}: {data.get('detail') or data}")
         return data
 
-    def enroll(self, code: str, *, controller_url: str = "") -> Dict[str, Any]:
-        if controller_url:
-            self.cfg.data["controller_url"] = controller_url.rstrip("/")
-        res = self._ctrl("POST", "/api/fleet/enroll", {
-            "code": str(code).strip(), "machine_id": self.machine_id, "host_name": host_name(),
-            "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
-            "os": os_label(), "meta": {"python": _platform.python_version()},
-        }, auth=False, bearer=str(code).strip())
-        if not res.get("ok") or not res.get("node_key"):
-            raise AgentError(f"注册失败: {res}")
-        self.cfg.data.update({"node_id": res["node_id"], "node_key": res["node_key"],
-                              "heartbeat_sec": int(res.get("heartbeat_sec") or DEFAULT_HEARTBEAT_SEC)})
+    def _detect_and_add(self) -> List[Dict[str, str]]:
+        found = detect_instances(search=(os.name == "nt"))
+        added = False
+        for inst in found:
+            try:
+                self.cfg.add_instance(str(inst.get("name") or "chatx"), str(inst.get("base_url") or ""),
+                                      config_path=str(inst.get("config_path") or ""),
+                                      domain=str(inst.get("domain") or ""), role=str(inst.get("role") or ""))
+                added = True
+            except AgentError:
+                continue
+        if added:
+            self.cfg.save()
+        return found
+
+    def _store_enrollment(self, res: Dict[str, Any]) -> None:
+        self.cfg.data.update({
+            "node_id": res["node_id"], "node_key": res["node_key"],
+            "heartbeat_sec": int(res.get("heartbeat_sec") or DEFAULT_HEARTBEAT_SEC),
+        })
+        self.cfg.data.pop("pending_request_id", None)
+        self.cfg.data.pop("enroll_rejected", None)
+        self.cfg.data.pop("reenroll_not_before", None)
         self.cfg.save()
         self.revoked = False
-        return {"node_id": res["node_id"], "label": res.get("label"), "group_name": res.get("group_name")}
+
+    def _enroll_secret(self) -> str:
+        sec = str(self.cfg.data.get("enroll_secret") or "")
+        if len(sec) < 16:
+            sec = "es_" + secrets.token_urlsafe(32)
+            self.cfg.data["enroll_secret"] = sec
+            self.cfg.save()
+        return sec
+
+    def _write_pairing(self, code: str) -> None:
+        if not code:
+            return
+        try:
+            lock_state_dir(self.cfg.state_dir)
+            (self.cfg.state_dir / "pairing.txt").write_text(str(code).strip() + "\n", encoding="ascii")
+        except Exception:
+            logger.debug("[agent] pairing code file not written", exc_info=True)
+
+    def enroll(self, code: str = "", *, controller_url: str = "", room_key: str = "",
+               detect: bool = False) -> Dict[str, Any]:
+        """有注册码或机房密钥则立刻拿到 node_key；都没有则登记为待批准（不抛错）。"""
+        if controller_url:
+            self.cfg.data["controller_url"] = controller_url.rstrip("/")
+        if detect:
+            self._detect_and_add()
+        code = str(code or "").strip()
+        room_key = str(room_key or "").strip()
+        body: Dict[str, Any] = {
+            "machine_id": self.machine_id, "host_name": host_name(),
+            "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
+            "os": os_label(), "instances": sanitize_instances(self.cfg.instances),
+            "meta": {"python": _platform.python_version()},
+            "enroll_secret": self._enroll_secret(),
+        }
+        if room_key:
+            body["room_key"] = room_key
+            bearer = room_key
+        elif code:
+            body["code"] = code
+            bearer = code
+        else:
+            body["mode"] = "pending"
+            bearer = "pending"
+        res = self._ctrl("POST", "/api/fleet/enroll", body, auth=False, bearer=bearer)
+        if res.get("node_key"):
+            self._store_enrollment(res)
+            return {"node_id": res["node_id"], "label": res.get("label"), "group_name": res.get("group_name"),
+                    "status": "active"}
+        if res.get("ok") and res.get("request_id"):
+            self.cfg.data["pending_request_id"] = res["request_id"]
+            self.cfg.data["pairing_code"] = str(res.get("pairing_code") or "")
+            self.cfg.data.pop("enroll_rejected", None)
+            self.cfg.data.pop("reenroll_not_before", None)
+            self.cfg.save()
+            self._write_pairing(str(res.get("pairing_code") or ""))
+            return {"status": "pending", "request_id": res["request_id"], "expires_at": res.get("expires_at"),
+                    "pairing_code": res.get("pairing_code") or ""}
+        raise AgentError("注册失败")
+
+    def poll_enrollment(self) -> Dict[str, Any]:
+        """待批准时问一次主控。过期则重新登记；被拒绝则停在本机，不再自动重试。"""
+        if self.cfg.node_key:
+            return {"ok": True, "status": "active", "node_id": self.cfg.node_id}
+        rid = str(self.cfg.data.get("pending_request_id") or "")
+        if not rid:
+            if self.cfg.data.get("enroll_rejected"):
+                if "reenroll_not_before" in self.cfg.data:
+                    self.cfg.data.pop("reenroll_not_before", None)
+                    self.cfg.save()
+                return {"ok": False, "status": "idle"}
+            if self.cfg.data.get("reenroll_not_before"):
+                return self._restart_enroll("backoff")
+            return {"ok": False, "status": "idle"}
+        res = self._ctrl("POST", "/api/fleet/enroll/poll",
+                         {"request_id": rid, "machine_id": self.machine_id,
+                          "enroll_secret": self._enroll_secret()}, auth=False, bearer=rid)
+        if res.get("node_key"):
+            self._store_enrollment(res)
+            return {"ok": True, "status": "active", "node_id": res.get("node_id"), "label": res.get("label"),
+                    "group_name": res.get("group_name")}
+        status = str(res.get("status") or "")
+        if status == "rejected":
+            self.cfg.data.pop("pending_request_id", None)
+            self.cfg.data.pop("reenroll_not_before", None)
+            self.cfg.data["enroll_rejected"] = True
+            self.cfg.save()
+        elif status == "expired":
+            self.cfg.data.pop("pending_request_id", None)
+            self.cfg.save()
+            if self.cfg.controller_url:
+                try:
+                    return self.enroll("", controller_url=self.cfg.controller_url)
+                except AgentError as e:
+                    logger.warning("[agent] re-request after expiry failed: %s", e)
+        elif status in ("unknown", "already_claimed"):
+            return self._restart_enroll(status)
+        return {"ok": bool(res.get("ok")), "status": status or "pending"}
+
+    def _restart_enroll(self, why: str) -> Dict[str, Any]:
+        """Drop a dead pending id and start enroll again, with a backoff between tries.
+
+        ``unknown`` and ``already_claimed`` used to leave ``pending_request_id`` set,
+        so the service polled that id forever. A failed restart keeps
+        ``reenroll_not_before`` so the next loop waits instead of spinning.
+        """
+        now = float(self.clock())
+        not_before = float(self.cfg.data.get("reenroll_not_before") or 0)
+        rejected = bool(self.cfg.data.get("enroll_rejected"))
+        self.cfg.data.pop("pending_request_id", None)
+        if rejected:
+            self.cfg.data.pop("reenroll_not_before", None)
+            self.cfg.save()
+            return {"ok": False, "status": "idle"}
+        if now < not_before:
+            self.cfg.save()
+            return {"ok": False, "status": "backoff"}
+        self.cfg.data["reenroll_not_before"] = now + REENROLL_BACKOFF_SEC
+        self.cfg.save()
+        if not self.cfg.controller_url:
+            return {"ok": False, "status": "backoff"}
+        try:
+            return self.enroll("", controller_url=self.cfg.controller_url)
+        except AgentError as e:
+            logger.warning("[agent] re-enroll after %s failed: %s", why, e)
+            return {"ok": False, "status": "backoff"}
 
     def build_heartbeat(self) -> Dict[str, Any]:
         """本机摘要：实例是否活、账号数 / 生命周期分布、看板核心数字。**不含任何聊天内容。**"""
@@ -264,7 +485,23 @@ class NodeAgent:
         by_state: Dict[str, int] = {}
         overview_sum: Dict[str, Any] = {}
         for inst in self.cfg.instances:
-            entry = {"name": inst.get("name"), "domain": _instance_domain(inst), "up": False}
+            domain = _instance_domain(inst)
+            if _health_only(inst):
+                entry = {"name": inst.get("name"), "domain": "avatar_hub", "up": False, "role": "health"}
+                last_err = ""
+                for path in ("/health", "/api/health"):
+                    try:
+                        self._local(inst, "GET", path)
+                        entry["up"] = True
+                        last_err = ""
+                        break
+                    except Exception as e:
+                        last_err = str(e)
+                if last_err:
+                    errors.append(f"{inst.get('name')}: avatar health {last_err}")
+                instances.append(entry)
+                continue
+            entry = {"name": inst.get("name"), "domain": domain, "up": False}
             try:
                 fh = self._local(inst, "GET", "/api/accounts/fleet-health")
                 entry["up"] = True
@@ -331,9 +568,10 @@ class NodeAgent:
             raise AgentError(f"local {path} → HTTP {code}: {data.get('detail') or data}")
         return data
 
-    def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "") -> Optional[Dict[str, Any]]:
+    def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "",
+                       allow_health: bool = False) -> Optional[Dict[str, Any]]:
         want = str((task.get("target") or {}).get("instance") or (task.get("payload") or {}).get("instance") or "")
-        insts = self.cfg.instances
+        insts = self.cfg.instances if allow_health else [i for i in self.cfg.instances if not _health_only(i)]
         if want:
             for i in insts:
                 if i.get("name") == want:
@@ -406,7 +644,9 @@ class NodeAgent:
                 res = self._local(inst, "POST", "/api/player-care/commands", body)
                 return STATUS_DONE, {"instance": inst.get("name"), "command": res.get("command")}, "stop_enqueued"
             if kind == TASK_RESTART_INSTANCE:
-                inst = self._pick_instance(task)
+                inst = self._pick_instance(task, allow_health=True)
+                if inst is not None and _health_only(inst):
+                    return STATUS_REJECTED, {}, "health_only"
                 cmd = str((inst or {}).get("restart_cmd") or "")
                 if inst is None or not cmd:
                     return STATUS_REJECTED, {}, "no_restart_cmd"
@@ -543,6 +783,42 @@ def _int(v: Any) -> int:
         return 0
 
 
+def _load_room_key(cfg: AgentConfig, raw: Path) -> str:
+    """Read a room key. The owner check applies only inside the state directory.
+
+    An operator path such as ``.\\room.key`` is owned by the user who launched
+    the installer. Copy it in after the directory is locked, then check the
+    copy. The source is removed only after that copy is accepted.
+    """
+    raw = Path(raw)
+    state = cfg.state_dir.resolve()
+    try:
+        inside = raw.resolve().is_relative_to(state)
+    except OSError:
+        inside = False
+    if inside:
+        target = raw
+    else:
+        text = raw.read_text(encoding="utf-8")
+        lock_state_dir(cfg.state_dir)
+        target = cfg.state_dir / "room.key"
+        target.write_text(text, encoding="utf-8")
+        assign_owner_admins(target)
+    if discard_untrusted_secret(target):
+        raise StateDirLockError("untrusted room key file")
+    room = target.read_text(encoding="utf-8").strip()
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    if not inside:
+        try:
+            raw.unlink()
+        except OSError:
+            pass
+    return room
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _parse_instance(spec: str) -> Tuple[str, str]:
     if "=" not in spec:
@@ -556,9 +832,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--state-dir", default="", help="状态目录（默认 %%ProgramData%%\\ChatX\\fleet）")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    e = sub.add_parser("enroll", help="用注册码接入主控")
+    e = sub.add_parser("enroll", help="接入主控：注册码 / 机房密钥 / 无码待批准")
     e.add_argument("--controller", default="", help="主控地址，如 https://bd2026.cc/fleet")
-    e.add_argument("--code", required=True)
+    e.add_argument("--code", default="", help="一次性注册码；留空则待管理员批准")
+    e.add_argument("--room-key-file", default="", help="只含机房密钥的文件，读完即删")
+    e.add_argument("--detect", action="store_true", help="登记前探测本机智聊与幻颜；什么都没有也继续（纯心跳）")
     e.add_argument("--instance", action="append", default=[], help="本机实例 name=http://127.0.0.1:18797（可多次）")
     e.add_argument("--auth-token", default="", help="实例 web_admin.auth_token（或用 --config-path）")
     e.add_argument("--config-path", default="", help="实例 config.yaml 路径（运行时读 auth_token / domain）")
@@ -578,11 +856,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub.add_parser("service-status")
     sub.add_parser("status")
     sub.add_parser("heartbeat", help="只发一次心跳并打印")
+    mig = sub.add_parser("migrate-legacy", help="rewrite an unlocked agent.json down to identity fields")
+    mig.add_argument("--controller", default="", help="controller URL written into agent.json")
+    mig.add_argument("--snapshot", default="", help="agent.json copied before the directory was locked")
+    sub.add_parser("detect", help="rediscover local instances; does not enroll")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    cfg = AgentConfig(Path(args.state_dir) if args.state_dir else None)
+    try:
+        cfg = AgentConfig(Path(args.state_dir) if args.state_dir else None)
+    except StateDirLockError:
+        print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+        return 1
+    if args.cmd == "migrate-legacy":
+        snap = Path(args.snapshot) if args.snapshot else None
+        try:
+            try:
+                source = json.loads(snap.read_text(encoding="utf-8")) if snap is not None else None
+            except Exception:
+                print("could not read the migration snapshot", file=sys.stderr)
+                return 1
+            if not isinstance(source, dict):
+                print("could not read the migration snapshot", file=sys.stderr)
+                return 1
+            cfg._legacy_source = None
+            cfg.data = migrated_agent_data(args.controller or cfg.controller_url, source)
+            try:
+                cfg.save()
+            except StateDirLockError:
+                print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+                return 1
+            print(json.dumps({"ok": True}))
+            return 0
+        finally:
+            if snap is not None:
+                try:
+                    snap.unlink()
+                except OSError:
+                    pass
     if args.cmd == "run" and (args.service or args.log_file):
         _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
     if args.cmd == "install-service":
@@ -596,13 +908,40 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "service-status":
         print(json.dumps(service_status(), ensure_ascii=False, indent=2))
         return 0
-    agent = NodeAgent(cfg)
+    try:
+        agent = NodeAgent(cfg)
+    except StateDirLockError:
+        print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+        return 1
+    if args.cmd == "detect":
+        found = agent._detect_and_add()
+        print(json.dumps({"ok": True, "count": len(found)}))
+        return 0
     if args.cmd == "enroll":
         for spec in args.instance:
             name, url = _parse_instance(spec)
             cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path)
-        res = agent.enroll(args.code, controller_url=args.controller or cfg.controller_url)
-        print(json.dumps({"ok": True, "machine_id": agent.machine_id, **res, "state_dir": str(cfg.state_dir)}, ensure_ascii=False))
+        room = ""
+        if args.room_key_file:
+            try:
+                room = _load_room_key(cfg, Path(args.room_key_file))
+            except StateDirLockError as e:
+                if str(e).startswith("untrusted"):
+                    print("room key file owner is not trusted; refusing to use it", file=sys.stderr)
+                else:
+                    print(f"room key file refused: {e}", file=sys.stderr)
+                return 1
+            except OSError as e:
+                print(f"room key file unreadable: {e}", file=sys.stderr)
+                return 1
+        try:
+            res = agent.enroll(args.code, controller_url=args.controller or cfg.controller_url,
+                               room_key=room, detect=bool(args.detect))
+        except AgentError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True, "machine_id": agent.machine_id, **res, "state_dir": str(cfg.state_dir)},
+                         ensure_ascii=False))
         return 0
     if args.cmd == "add-instance":
         name, url = _parse_instance(args.spec)
@@ -612,7 +951,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"ok": True, "instances": [i["name"] for i in cfg.instances]}, ensure_ascii=False))
         return 0
     if args.cmd == "status":
+        if cfg.node_key:
+            enrollment = "enrolled"
+        elif cfg.data.get("enroll_rejected"):
+            enrollment = "rejected"
+        elif cfg.data.get("pending_request_id"):
+            enrollment = "pending"
+        else:
+            enrollment = "none"
         print(json.dumps({"controller_url": cfg.controller_url, "node_id": cfg.node_id, "enrolled": bool(cfg.node_key),
+                          "enrollment": enrollment, "pending": enrollment == "pending",
+                          "pairing_code": str(cfg.data.get("pairing_code") or ""),
                           "machine_id": agent.machine_id,
                           "instances": [{**i, "auth_token": "***" if i.get("auth_token") else ""} for i in cfg.instances],
                           "state_dir": str(cfg.state_dir),

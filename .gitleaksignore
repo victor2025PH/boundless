@@ -112,3 +112,49 @@ website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:93
 website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:93
 website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:129
 website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:129
+
+# ══════════════════════════════════════════════════════════════════════
+# 2026-09-24 fleet installer PR：gitleaks 8.21.2 在当前行号上的 17 条既有命中。
+# 上面按旧行号登记的条目已经对不上（文件后移），所以门禁仍报这 17 条。
+# 本批只补当前指纹，不关规则。逐条看过，都不是生产凭据：
+#   config.example.yaml 注释里的顺序十六进制 api_hash 样例
+#   cp-nurture.js / workspace_base.html / unified_inbox.html 的 localStorage 键名
+#   测试夹具里的假 api_key / api_hash / chat_key / token
+#   QQ 官方文档公开的回调验签示例向量、微信官方文档公开的回调 AES 示例向量
+#   IndexNow 协议要求公网可读的验证 key（源码注释已写明）
+# 行号变了这条指纹自动失效，需要重看后再登记。
+# ══════════════════════════════════════════════════════════════════════
+engines/chengjie/config/config.example.yaml:generic-api-key:251
+engines\chengjie\config\config.example.yaml:generic-api-key:251
+engines/chengjie/config/config.example.yaml:generic-api-key:259
+engines\chengjie\config\config.example.yaml:generic-api-key:259
+engines/chengjie/desktop/renderer/shared/copilot/components/cp-nurture.js:generic-api-key:49
+engines\chengjie\desktop\renderer\shared\copilot\components\cp-nurture.js:generic-api-key:49
+engines/chengjie/shared/copilot/components/cp-nurture.js:generic-api-key:49
+engines\chengjie\shared\copilot\components\cp-nurture.js:generic-api-key:49
+engines/chengjie/desktop/test/backend-launcher.test.js:generic-api-key:130
+engines\chengjie\desktop\test\backend-launcher.test.js:generic-api-key:130
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2496
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2496
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:13226
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:13226
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:20712
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:20712
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21274
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21274
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21638
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21638
+engines/chengjie/tests/test_model_routes_api.py:generic-api-key:52
+engines\chengjie\tests\test_model_routes_api.py:generic-api-key:52
+engines/chengjie/tests/test_qq_official.py:generic-api-key:42
+engines\chengjie\tests\test_qq_official.py:generic-api-key:42
+engines/chengjie/tests/test_reply_settings.py:generic-api-key:1087
+engines\chengjie\tests\test_reply_settings.py:generic-api-key:1087
+engines/chengjie/tests/test_vision_failure_reason_213.py:generic-api-key:38
+engines\chengjie\tests\test_vision_failure_reason_213.py:generic-api-key:38
+engines/chengjie/tests/test_unified_inbox_stage1.py:generic-api-key:1997
+engines\chengjie\tests\test_unified_inbox_stage1.py:generic-api-key:1997
+engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
+engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
+website/lib/seo.ts:generic-api-key:79
+website\lib\seo.ts:generic-api-key:79

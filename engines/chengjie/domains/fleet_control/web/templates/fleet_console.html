@@ -28,6 +28,7 @@
     <span class="fc-kv">主控 <b>{{ public_url }}</b> 心跳 <b>{{ heartbeat_sec }}s</b> 更新 <b id="fc-ts">—</b> <span id="fc-notes"></span></span>
     <span class="fc-act">
       <button class="btn-sec" id="fc-newcode">＋ 生成注册码</button>
+      <button class="btn-sec" id="fc-roomkey">机房安装包</button>
       <button class="btn-sec" id="fc-refresh">↻ 刷新</button>
     </span>
   </div>
@@ -44,7 +45,29 @@
   <div class="fc-sec" id="fc-codebox" style="display:none">
     <h3>新注册码 <button class="btn-sec" onclick="document.getElementById('fc-codebox').style.display='none'">收起</button></h3>
     <div class="fc-kv"><span>注册码 <span class="fc-code" id="fc-code">—</span></span><span>有效至 <b id="fc-code-exp">—</b></span></div>
-    <p style="font-size:.78rem;color:var(--t2);margin:.6rem 0 0">在受控电脑上运行安装包，或命令行：<code>python -m src.fleet.agent enroll --controller {{ public_url }} --code ＜注册码＞</code></p>
+    <p style="font-size:.78rem;color:var(--t2);margin:.6rem 0 0">公开安装包不用这张码。只有当场指定某台电脑时才用：<code>Install-ChatXAgent.ps1 -Controller {{ public_url }} -Code ＜注册码＞</code>。12 位码（可带短横线，不区分大小写）只能用一次，默认 15 分钟，猜错会被限速。已吊销的电脑拿码也不会自动复活，会进上面的待批准并标 this machine was revoked。</p>
+  </div>
+
+  <div class="fc-sec" id="fc-roombox" style="display:none">
+    <h3>机房安装链接 <button class="btn-sec" id="fc-room-hide">收起</button></h3>
+    <p style="font-size:.78rem;color:var(--t2);margin:0 0 .4rem">只显示这一次。不要贴到公开下载页，装完这批电脑后可以吊销。</p>
+    <input id="fc-room-url" readonly style="width:100%;font-size:.8rem" value="">
+  </div>
+
+  <div class="fc-sec">
+    <h3>待批准 <span class="fc-kv" id="fc-pending-n"></span></h3>
+    <table class="fc-tbl">
+      <thead><tr><th>主机</th><th>配对码</th><th>IP</th><th>申请分组</th><th>生效分组</th><th>系统</th><th>实例</th><th>操作</th></tr></thead>
+      <tbody id="fc-pending"></tbody>
+    </table>
+  </div>
+
+  <div class="fc-sec">
+    <h3>机房密钥</h3>
+    <table class="fc-tbl">
+      <thead><tr><th>状态</th><th>分组</th><th>指纹</th><th>用量</th><th>到期</th><th>操作</th></tr></thead>
+      <tbody id="fc-rooms"></tbody>
+    </table>
   </div>
 
   <div class="fc-sec">
@@ -100,7 +123,29 @@
         '<td>agent '+esc(n.agent_version||'—')+'<br>app '+esc(n.app_version||'—')+'</td>'+
         '<td>'+up+'/'+inst.length+' 实例 · '+(acc.online||0)+'/'+(acc.total||0)+' 账号'+(hb.errors&&hb.errors.length?'<br>'+badge(hb.errors.length+' 错误','fc-bad'):'')+'</td>'+
         '<td>'+esc(ago(n.last_seen))+'</td><td class="fc-act">'+acts+'</td></tr>';
-    }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3)">还没有节点——点「生成注册码」，在受控电脑上安装并输入注册码</td></tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3)">还没有已批准的节点。新装的电脑先出现在上面的「待批准」。</td></tr>';
+  }
+  function renderPending(list){
+    t('fc-pending-n', (list.length||0)+' 台');
+    document.getElementById('fc-pending').innerHTML=list.length?list.map(function(n){
+      var inst=(n.instances||[]).map(function(i){return esc(i.name||i.base_url||'');}).join(', ')||'—';
+      var revoked=n.was_revoked?' <span class="fc-badge fc-bad">this machine was revoked</span>':'';
+      var dup=n.duplicate_machine?' <span class="fc-badge fc-warn">duplicate machine_id</span>':'';
+      return '<tr><td><b>'+esc(n.host_name||'—')+'</b>'+revoked+dup+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.machine_id||'')+'</span></td>'+
+        '<td><b>'+esc(n.pairing_code||'—')+'</b></td><td>'+esc(n.client_ip||'—')+'</td>'+
+        '<td>'+esc(n.requested_group||'—')+'</td><td>'+esc(n.effective_group||'pending-default')+'</td>'+
+        '<td>'+esc(n.os||'—')+'</td><td>'+inst+'</td>'+
+        '<td class="fc-act"><button class="btn-sec" data-ok="'+esc(n.request_id)+'" data-existing="'+esc(n.existing_node_id||'')+'">批准</button>'+
+        '<button class="btn-sec" data-no="'+esc(n.request_id)+'" style="color:var(--red)">拒绝</button></td></tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3)">没有待批准的电脑</td></tr>';
+  }
+  function renderRooms(list){
+    document.getElementById('fc-rooms').innerHTML=list.length?list.map(function(k){
+      var st=k.status==='open'?['可用','fc-ok']:['已结束','fc-muted'];
+      var act=k.status==='open'?'<button class="btn-sec" data-rk="'+esc(k.key_id)+'" style="color:var(--red)">吊销</button>':'';
+      return '<tr><td>'+badge(st[0],st[1])+'</td><td>'+esc(k.group_name||k.label||'—')+'</td><td>'+esc(k.fingerprint||'')+'</td>'+
+        '<td>'+esc(k.uses)+' / '+esc(k.max_uses)+'</td><td>'+esc(fmtTs(k.expires_at))+'</td><td>'+act+'</td></tr>';
+    }).join(''):'<tr><td colspan="6" style="text-align:center;color:var(--t3)">还没有机房密钥</td></tr>';
   }
   function renderTasks(list){
     document.getElementById('fc-tasks').innerHTML=list.length?list.map(function(x){var n=nodes[x.node_id];
@@ -111,10 +156,41 @@
   }
   function load(){
     var g=document.getElementById('fc-group').value.trim();
-    Promise.all([apiFetch('/api/fleet/overview').then(j),apiFetch('/api/fleet/nodes?group='+encodeURIComponent(g)).then(j),apiFetch('/api/fleet/tasks?limit=40').then(j)])
-      .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);t('fc-notes','');})
+    Promise.all([apiFetch('/api/fleet/overview').then(j),apiFetch('/api/fleet/nodes?group='+encodeURIComponent(g)).then(j),apiFetch('/api/fleet/tasks?limit=40').then(j),apiFetch('/api/fleet/pending').then(j),apiFetch('/api/fleet/room-keys').then(j)])
+      .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);renderPending(r[3].pending||[]);renderRooms(r[4].room_keys||[]);t('fc-notes','');})
       .catch(function(e){t('fc-notes','· 加载失败 '+e.message);});
   }
+  document.getElementById('fc-pending').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
+    var ok=b.getAttribute('data-ok'),no=b.getAttribute('data-no');
+    if(ok){var g=document.getElementById('fc-group').value.trim();var lbl=prompt('节点名称（可留空，默认用主机名）','')||'';
+      var body={label:lbl};if(g)body.group_name=g;
+      var existing=b.getAttribute('data-existing')||'';
+      if(existing){
+        var warn='approving will rotate key of '+existing;
+        if(!confirm(warn))return;
+        body.confirm_rotate=true;
+      }
+      apiFetch('/api/fleet/pending/'+encodeURIComponent(ok)+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(j).then(load).catch(function(e){alert(e.message);});}
+    if(no){if(!confirm('拒绝这台电脑？'))return;
+      apiFetch('/api/fleet/pending/'+encodeURIComponent(no)+'/reject',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});}
+  });
+  document.getElementById('fc-rooms').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
+    var id=b.getAttribute('data-rk');if(!id)return;if(!confirm('吊销这张机房密钥？已装上的电脑不受影响，还没装的不能再用。'))return;
+    apiFetch('/api/fleet/room-keys/'+encodeURIComponent(id)+'/revoke',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});
+  });
+  document.getElementById('fc-room-hide').addEventListener('click',function(){document.getElementById('fc-roombox').style.display='none';});
+  document.getElementById('fc-roomkey').addEventListener('click',function(){
+    var g=document.getElementById('fc-group').value.trim();
+    if(!g){var typed=prompt('分组名称','机房');if(typed===null)return;g=String(typed).trim();}
+    if(!g)return;
+    var usesRaw=prompt('最多几台','50');if(usesRaw===null)return;
+    var uses=parseInt(usesRaw,10);if(!uses)return;
+    var hoursRaw=prompt('多少小时内有效','168');if(hoursRaw===null)return;
+    var hours=parseInt(hoursRaw,10);
+    apiFetch('/api/fleet/room-keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_name:g,max_uses:uses,ttl_hours:hours})})
+      .then(j).then(function(d){var el=document.getElementById('fc-room-url');el.value=d.download_url||'';document.getElementById('fc-roombox').style.display='';el.focus();el.select();load();})
+      .catch(function(e){alert('生成失败 '+e.message);});
+  });
   document.getElementById('fc-list').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
     var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),body={};
     if(k==='__revoke'){if(!confirm('吊销节点 '+nid+'？其 node_key 立即失效，未领任务全部取消。'))return;

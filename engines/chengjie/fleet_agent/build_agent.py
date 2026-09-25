@@ -9,6 +9,10 @@
     manifest.json              {version, file, url, sha256, size, built_at}   ← admin upgrade / 下载页 / fleet_control.download 共用
     Install-ChatXAgent.ps1 / Uninstall-ChatXAgent.ps1   随包复制
 
+安装包 ChatXAgentSetup.exe 不在这一步里打（需要 Windows + 免费的 Inno Setup）：
+    powershell -File fleet_agent\\build_setup.ps1
+publish_agent.ps1 在找到 ISCC.exe 时会自己调用它，并把 setup_url / setup_sha256 写进 manifest.json。
+
 与桌面端 build_backend.py 分开：Agent 不含任何业务代码与数据，包体 ~10MB，机房机不必装整套智聊也能受控。
 """
 

@@ -24,7 +24,7 @@
 | 对象 | 说明 |
 |---|---|
 | `machine_id` | `m-<16hex>`，`src/fleet/identity.py`：优先 licensing 指纹 → Windows MachineGuid / Linux machine-id → 持久随机 UUID。同一机器重装 Agent 仍是同一 `machine_id`。 |
-| 注册码 `enroll_code` | 运营在控制台生成，**一次性、默认 60 min 过期**，可预设 label / group。 |
+| 注册码 `enroll_code` | 运营在控制台生成，**12 位 Crockford base32（不含 I/L/O/U）、一次性、代码默认 15 min**。展示可分成 `XXXX-XXXX-XXXX`，兑码不区分大小写。生产配置里的 `enroll_code_ttl_min` 盖过这个默认，上线前要写成 15。库里尚未到期的旧 8 位数字码在到期前仍能兑。猜错 8 次 / 10 分钟锁该 IP，有效码在锁定期内不消耗。已吊销的 machine_id 拿码不会复活，改入待批准并标 `this machine was revoked`。 |
 | `node_id` | `n_<12hex>`，主控分配。同一 `machine_id` 再次注册**复用 node_id、轮换 node_key**（旧 key 立即失效）。 |
 | `node_key` | 机器级密钥，只在 enroll 响应里明文出现一次，节点本地存 `%ProgramData%\ChatX\fleet\agent.json`（或 `CHATX_FLEET_STATE_DIR`）；主控只存 sha256 哈希。 |
 | 吊销 | `POST /api/fleet/nodes/{id}/revoke` 后该 key 所有请求 401，Agent 收到 401 停止轮询等待重新注册。 |
@@ -37,14 +37,32 @@
 
 ### 3.1 注册
 
-`POST /api/fleet/enroll`  Bearer = 注册码（或 body.code）
+`POST /api/fleet/enroll` 协议版本仍是 1。三条路，旧的注册码路径不变：
+
+1. **注册码**：Bearer = 注册码（或 body.code）。成功立刻签发 node_key。
+2. **机房密钥** `rk_` + 256 bit（body.room_key，或 Bearer 以 `rk_` 开头）。次数与有效期内自动进组。库里只存 sha256，明文不进日志。
+3. **都没有**（公开安装包）：记一条待批准，**不签发 node_key**，心跳 / 领任务一律 401。请求必须带本机生成的 `enroll_secret`（主控只存 sha256）。同一 machine_id 只有 secret 相符才复用申请；不相符就另开一条，控制台能看到两台。未鉴权请求里的 `label` / `group_name` 丢弃。批准时的分组只用管理员传入的值，缺省 `pending-default`。machine_id 已属于某个节点时，批准必须带 `confirm_rotate`，否则 409，文案是 `approving will rotate key of n_xxx`。
 
 ```json
 {"code": "...", "machine_id": "m-…", "host_name": "GANZHI-176", "proto_version": 1,
- "agent_version": "0.1.0", "app_version": "1.0.38", "os": "Windows 11", "meta": {"python": "3.12.x"}}
-→ 200 {"ok": true, "node_id": "n_…", "node_key": "<一次性明文>", "label": "…", "group_name": "…", "heartbeat_sec": 30}
+ "agent_version": "0.3.1", "app_version": "1.0.38", "os": "Windows 11", "meta": {"python": "3.12.x"}}
+→ 200 {"ok": true, "status": "active", "node_id": "n_…", "node_key": "<一次性明文>", "label": "…", "group_name": "…", "heartbeat_sec": 30}
 → 403 invalid_or_expired_code / code_and_machine_id_required     → 426 proto_incompatible
+→ 429 rate_limited
 ```
+
+无码时 body 不带 code / room_key（Bearer 用字面量 `pending`，只为过 CSRF）：
+
+```json
+→ 200 {"ok": true, "status": "pending", "request_id": "req_…", "pairing_code": "K7NQ2M", "expires_at": 0, "retry_after_sec": 15, "heartbeat_sec": 30}
+```
+
+`POST /api/fleet/enroll/poll` `{request_id, machine_id, enroll_secret}` 问结果。secret 不对一律 `unknown`。仍待批准 → `status=pending`。批准后在 15 分钟领取窗口内返回 node_key（窗口从 `decided_at` 起算，没来领也会擦掉明文）。拒绝 / 过期 → `status=rejected|expired`，没有 key。
+
+机房密钥如果撞上**已吊销**的节点，或撞上**另一个分组**里的在用节点，不自动激活、不消耗次数，改走待批准（`requested_group` 是机房密钥上的组）。同组重装仍直接换 key。
+
+运营：`GET /api/fleet/pending`，`POST /api/fleet/pending/{request_id}/approve|reject`。批准接口**不**返回 node_key。
+机房：`POST /api/fleet/room-keys` 只在这一次响应里给出 `download_url`；`GET /fleet/dl/<token>` 返回一个小 zip（`Install.cmd` + `room.key`），不是公开下载页上的安装包。`POST /api/fleet/room-keys/{key_id}/revoke` 吊销。nginx 对 `/fleet/dl/` 关 access_log。
 
 ### 3.2 心跳
 

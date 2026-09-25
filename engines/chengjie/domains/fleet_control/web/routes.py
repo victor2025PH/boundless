@@ -26,15 +26,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+import re
+from pathlib import Path
+from typing import Any, Dict
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.fleet.protocol import (
     ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, TASK_KINDS,
 )
+from src.fleet.roompack import build_room_pack
 from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
+
+_INSTALL_PS1 = Path(__file__).resolve().parents[3] / "fleet_agent" / "Install-ChatXAgent.ps1"
+_ROOM_KEY_RE = re.compile(r"^rk_[A-Za-z0-9_-]{20,180}$")
 
 logger = logging.getLogger("FleetControlWebRoutes")
 
@@ -51,6 +57,91 @@ def _bearer(request: Request) -> str:
     if h.lower().startswith("bearer "):
         return h[7:].strip()
     return ""
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_DL_TOKEN = re.compile(r"(/fleet/dl/)[A-Za-z0-9_\-]+")
+
+
+def redact_download_path(text: str) -> str:
+    """Replace a room-pack token in an access-log line. The token is a secret."""
+    return _DL_TOKEN.sub(r"\1<redacted>", str(text))
+
+
+class RedactFleetDownloadFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_download_path(record.msg)
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(redact_download_path(a) if isinstance(a, str) else a for a in args)
+        elif isinstance(args, dict):
+            record.args = {k: redact_download_path(v) if isinstance(v, str) else v for k, v in args.items()}
+        return True
+
+
+def _install_download_log_redaction() -> None:
+    filt = RedactFleetDownloadFilter()
+    for name in ("uvicorn.access", "uvicorn", "httpx"):
+        log = logging.getLogger(name)
+        if not any(isinstance(f, RedactFleetDownloadFilter) for f in log.filters):
+            log.addFilter(filt)
+
+
+def _client_ip(request: Request) -> str:
+    """Trust X-Real-IP / X-Forwarded-For only when the TCP peer is this host (nginx)."""
+    peer = ""
+    if request.client and request.client.host:
+        peer = str(request.client.host).strip()
+    if peer.lower() in _LOOPBACK_HOSTS:
+        real = str(request.headers.get("x-real-ip") or "").strip()
+        if real:
+            return real.split(",")[0].strip()[:64]
+        xff = str(request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        if xff:
+            return xff[:64]
+    return peer[:64]
+
+
+_BEARER_NOT_CRED = {"", "pending", "none", "anonymous"}
+
+
+_ENROLL_FAIL_REASON = {
+    "invalid_or_expired_code": "bad_code",
+    "invalid_room_key": "bad_room_key",
+}
+# fail2ban counts only guesses and a real code/room lockout. exhausted / expired /
+# revoked are honest answers to a room that shares one NAT; pending rate_limited
+# is a queue cap, not an attack. Logging those would ban the office egress.
+_ENROLL_FAIL_LOG_REASONS = {"bad_code", "lockout", "bad_room_key"}
+_LOCKOUT_LIMITS = {"code", "room"}
+
+
+def enroll_fail_reason(error: Any, *, limit: str = "") -> str:
+    err = str(error or "enroll_failed")
+    if err == "rate_limited":
+        return "lockout" if str(limit or "") in _LOCKOUT_LIMITS else "rate_limited"
+    mapped = _ENROLL_FAIL_REASON.get(err, err)
+    if not re.fullmatch(r"[a-z0-9_]{1,40}", mapped):
+        return "enroll_failed"
+    return mapped
+
+
+def log_enroll_fail(ip: str, error: Any, *, limit: str = "") -> None:
+    """One greppable line for fail2ban. Never includes the code or room key."""
+    reason = enroll_fail_reason(error, limit=limit)
+    if reason not in _ENROLL_FAIL_LOG_REASONS:
+        return
+    logger.warning("fleet enroll_fail ip=%s reason=%s", (ip or "-")[:64], reason)
+
+
+def _enroll_error(res: Dict[str, Any]) -> HTTPException:
+    err = str(res.get("error") or "enroll_failed")
+    if err == "proto_incompatible":
+        return HTTPException(status_code=426, detail=err)
+    if err == "rate_limited":
+        return HTTPException(status_code=429, detail=err)
+    return HTTPException(status_code=403, detail=err)
 
 
 async def _json(request: Request) -> Dict[str, Any]:
@@ -90,23 +181,60 @@ def register_routes(app, ctx) -> None:
     # ── 节点侧 ────────────────────────────────────────────────────────────
     @app.post("/api/fleet/enroll")
     async def api_fleet_enroll(request: Request):
-        """注册码即凭证：允许放在 Authorization: Bearer <code>（节点还没有 node_key，
-        走 Bearer 通道以复用核心 CSRF 中间件的 bearer 放行），也允许放在 body.code。"""
+        """三种接入，协议版本不变：
+
+        * 注册码（body.code，或 Bearer 里的码）——在用节点立刻签发 node_key。已吊销的机器改为待批准。Bearer 通道是为了过核心 CSRF。
+        * 机房密钥（body.room_key，或 Bearer 以 rk_ 开头）——在次数 / 有效期内自动批准。
+        * 两者都没有——记为待批准，不签发 key，不能领任务。
+        """
         body = await _json(request)
         st = _store_or_503(config_manager)
-        res = st.enroll(
-            code=str(body.get("code") or _bearer(request) or ""), machine_id=str(body.get("machine_id") or ""),
-            host_name=str(body.get("host_name") or ""), proto_version=body.get("proto_version"),
-            agent_version=str(body.get("agent_version") or ""), app_version=str(body.get("app_version") or ""),
-            os_label=str(body.get("os") or ""),
-            meta=body.get("meta") if isinstance(body.get("meta"), dict) else None,
-        )
-        if not res.get("ok"):
-            code = 426 if res.get("error") == "proto_incompatible" else 403
-            raise HTTPException(status_code=code, detail=res.get("error") or "enroll_failed")
         cfg = resolve_fleet_cfg(config_manager)
+        bearer = _bearer(request)
+        room = str(body.get("room_key") or "").strip()
+        code = str(body.get("code") or "").strip()
+        if not room and bearer.startswith("rk_"):
+            room = bearer
+        if not code and bearer not in _BEARER_NOT_CRED and not bearer.startswith("rk_"):
+            code = bearer
+        common = dict(
+            machine_id=str(body.get("machine_id") or ""), host_name=str(body.get("host_name") or ""),
+            proto_version=body.get("proto_version"), agent_version=str(body.get("agent_version") or ""),
+            app_version=str(body.get("app_version") or ""), os_label=str(body.get("os") or ""),
+            meta=body.get("meta") if isinstance(body.get("meta"), dict) else None,
+            client_ip=_client_ip(request),
+        )
+        secret = str(body.get("enroll_secret") or "")
+        if room:
+            res = st.redeem_room_key(room, enroll_secret=secret, instances=body.get("instances"), **common)
+        elif code:
+            # Code guesses share the same per-IP lockout as other enroll failures (store code_fail).
+            res = st.enroll(code=code, enroll_secret=secret, instances=body.get("instances"), **common)
+        else:
+            res = st.request_pending(
+                instances=body.get("instances"), enroll_secret=secret,
+                ttl_sec=int(cfg.get("pending_ttl_sec") or 0) or None, **common)
+        if not res.get("ok"):
+            log_enroll_fail(_client_ip(request), res.get("error"), limit=str(res.get("limit") or ""))
+            raise _enroll_error(res)
         res["heartbeat_sec"] = cfg["heartbeat_sec"]
-        logger.info("[fleet] node enrolled %s host=%s", res["node_id"], body.get("host_name"))
+        if res.get("node_key"):
+            logger.info("[fleet] node enrolled %s host=%s", res.get("node_id"), body.get("host_name"))
+        else:
+            logger.info("[fleet] pending enrollment host=%s ip=%s", body.get("host_name"), _client_ip(request))
+        return res
+
+    @app.post("/api/fleet/enroll/poll")
+    async def api_fleet_enroll_poll(request: Request):
+        """待批准节点来领结果。未知 / 拒绝 / 过期也返回 200，避免 Agent 把正常等待当成崩溃。"""
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        res = st.poll_pending(str(body.get("request_id") or _bearer(request) or ""),
+                              str(body.get("machine_id") or ""),
+                              enroll_secret=str(body.get("enroll_secret") or ""))
+        if res.get("node_key"):
+            res["heartbeat_sec"] = resolve_fleet_cfg(config_manager)["heartbeat_sec"]
+            logger.info("[fleet] pending claimed node=%s", res.get("node_id"))
         return res
 
     @app.post("/api/fleet/heartbeat")
@@ -162,6 +290,66 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_enroll_code_list(request: Request, include_used: bool = False, _=Depends(_api_auth)):
         st = _store_or_503(config_manager)
         return {"ok": True, "codes": st.list_enroll_codes(include_used=include_used)}
+
+    @app.get("/api/fleet/pending")
+    async def api_fleet_pending(request: Request, _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        return {"ok": True, "pending": st.list_pending()}
+
+    @app.post("/api/fleet/pending/{request_id}/approve")
+    async def api_fleet_pending_approve(request_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        res = st.approve_pending(
+            request_id, decided_by=_actor(request),
+            label=body.get("label") if "label" in body else None,
+            group_name=body.get("group_name") if "group_name" in body else None,
+            confirm_rotate=bool(body.get("confirm_rotate")))
+        if not res.get("ok"):
+            if res.get("error") == "confirm_rotate":
+                raise HTTPException(status_code=409, detail=res.get("warning") or "confirm_rotate")
+            status = 410 if res.get("error") == "expired" else 404
+            raise HTTPException(status_code=status, detail=res.get("error") or "not_pending")
+        logger.info("[fleet] pending approved node=%s by=%s", res.get("node_id"), _actor(request))
+        return res
+
+    @app.post("/api/fleet/pending/{request_id}/reject")
+    async def api_fleet_pending_reject(request_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
+        st = _store_or_503(config_manager)
+        res = st.reject_pending(request_id, decided_by=_actor(request))
+        if not res.get("ok"):
+            raise HTTPException(status_code=404, detail=res.get("error") or "not_pending")
+        return res
+
+    @app.post("/api/fleet/room-keys")
+    async def api_fleet_room_key_create(request: Request, _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        group = str(body.get("group_name") or "").strip()
+        if not group:
+            raise HTTPException(status_code=400, detail="group_required")
+        rec = st.create_room_key(label=str(body.get("label") or ""), group_name=group,
+                                 max_uses=int(body.get("max_uses") or 50), ttl_hours=int(body.get("ttl_hours") or 168),
+                                 created_by=_actor(request))
+        if not rec.get("room_key"):
+            raise HTTPException(status_code=400, detail=str(rec.get("error") or "group_required"))
+        cfg = resolve_fleet_cfg(config_manager)
+        public = (cfg["public_url"] or str(request.base_url).rstrip("/")).rstrip("/")
+        rec["download_url"] = public + rec["download_path"]
+        logger.info("[fleet] room key minted id=%s group=%s", rec["key_id"], rec["group_name"])
+        return {"ok": True, **rec}
+
+    @app.get("/api/fleet/room-keys")
+    async def api_fleet_room_key_list(request: Request, _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        return {"ok": True, "room_keys": st.list_room_keys()}
+
+    @app.post("/api/fleet/room-keys/{key_id}/revoke")
+    async def api_fleet_room_key_revoke(key_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
+        st = _store_or_503(config_manager)
+        if not st.revoke_room_key(key_id):
+            raise HTTPException(status_code=404, detail="room key not found")
+        return {"ok": True}
 
     @app.get("/api/fleet/nodes")
     async def api_fleet_nodes(request: Request, group: str = "", include_revoked: bool = True, _=Depends(_api_auth)):
@@ -257,6 +445,44 @@ def register_routes(app, ctx) -> None:
                                           {"public_url": cfg["public_url"] or str(request.base_url).rstrip("/"),
                                            "heartbeat_sec": cfg["heartbeat_sec"]})
 
+    @app.get("/fleet/advanced/Install-ChatXAgent.ps1")
+    async def fleet_install_script(request: Request):
+        """脚本走附件下载，避免浏览器把 .ps1 当文本打开。"""
+        if not _INSTALL_PS1.is_file():
+            raise HTTPException(status_code=404, detail="install script not packaged")
+        return FileResponse(
+            _INSTALL_PS1, media_type="application/octet-stream",
+            filename="Install-ChatXAgent.ps1", content_disposition_type="attachment",
+            headers={"Cache-Control": "no-cache"})
+
+    @app.get("/fleet/dl/{token}")
+    async def fleet_room_download(token: str, request: Request):
+        """机房链接。密钥在路径里，应用日志不记这条路径；nginx 对该前缀关 access_log。"""
+        if not _ROOM_KEY_RE.match(token or ""):
+            raise HTTPException(status_code=404, detail="not found")
+        st = _store_or_503(config_manager)
+        info = st.room_key_for_download(token)
+        if info is None:
+            raise HTTPException(status_code=404, detail="not found")
+        cfg = resolve_fleet_cfg(config_manager)
+        dl = resolve_download(cfg)
+        public = (cfg["public_url"] or str(request.base_url).rstrip("/")).rstrip("/")
+        setup = str(dl.get("setup_url") or "")
+        if not setup:
+            base = public.rsplit("/fleet", 1)[0] if public.endswith("/fleet") else public
+            setup = base + "/downloads/fleet/ChatXAgentSetup.exe"
+        blob = build_room_pack(
+            room_key=token, controller=public, setup_url=setup,
+            setup_sha256=str(dl.get("setup_sha256") or ""),
+            group=str(info.get("group_name") or ""),
+            label=str(info.get("label") or ""), expires_at=info.get("expires_at"), max_uses=int(info.get("max_uses") or 1))
+        logger.info("[fleet] room pack downloaded id=%s", info.get("key_id"))
+        return Response(content=blob, media_type="application/zip", headers={
+            "Content-Disposition": "attachment; filename=\"ChatXAgent-room.zip\"",
+            "Cache-Control": "no-store",
+        })
+
+    _install_download_log_redaction()
     logger.info("fleet_control web routes registered (node enroll/heartbeat/pull/ack + operator console)")
 
 
