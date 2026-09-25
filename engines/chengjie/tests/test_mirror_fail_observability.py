@@ -18,6 +18,8 @@ def test_emit_incoming_sink_failure_warns_once_per_gap(monkeypatch, caplog):
     monkeypatch.setattr(pb, "_sink", _boom)
     monkeypatch.setattr(pb, "_sink_fail_last_warn", 0.0)
     monkeypatch.setattr(pb, "_sink_fail_total", 0)
+    # 开机 monotonic < 节流窗：缺省 0 不得被当成「刚警告过」。
+    monkeypatch.setattr(pb.time, "monotonic", lambda: 10.0)
     base = pb.sink_fail_total()
     with caplog.at_level(logging.DEBUG, logger="src.integrations.protocol_bridge"):
         pb.emit_incoming({"platform": "whatsapp", "account_id": "a", "direction": "out",
@@ -36,6 +38,7 @@ def test_emit_incoming_sink_failure_warns_once_per_gap(monkeypatch, caplog):
 def test_orchestrator_mirror_fail_warn_throttled_per_platform(monkeypatch, caplog):
     monkeypatch.setattr(ao, "_mirror_fail_last_warn", {})
     monkeypatch.setattr(ao, "_mirror_fail_total", 0)
+    monkeypatch.setattr(ao.time, "monotonic", lambda: 10.0)
     with caplog.at_level(logging.DEBUG, logger="src.integrations.account_orchestrator"):
         ao._warn_mirror_fail("whatsapp", "a", "c1", kind="image")
         ao._warn_mirror_fail("whatsapp", "a", "c2", kind="text")

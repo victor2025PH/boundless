@@ -617,7 +617,11 @@ def emit_incoming(msg: Dict[str, Any]) -> None:
     except Exception:
         _sink_fail_total += 1
         now = time.monotonic()
-        if now - _sink_fail_last_warn >= _SINK_FAIL_WARN_GAP_SEC:
+        # 0 = 还没警告过。monotonic 从开机起算，新机器上经常 < 600；
+        # 把缺省 0 当成「刚刚警告过」会把启动后 10 分钟内的第一次落库失败打成 debug。
+        if _sink_fail_last_warn > 0 and now - _sink_fail_last_warn < _SINK_FAIL_WARN_GAP_SEC:
+            logger.debug("[protocol_bridge] sink 落库失败（节流）", exc_info=True)
+        else:
             _sink_fail_last_warn = now
             try:
                 m = msg if isinstance(msg, dict) else {}
@@ -629,8 +633,6 @@ def emit_incoming(msg: Dict[str, Any]) -> None:
             except Exception:
                 logger.warning("[protocol_bridge] sink 落库失败 total=%d", _sink_fail_total,
                                exc_info=True)
-        else:
-            logger.debug("[protocol_bridge] sink 落库失败（节流）", exc_info=True)
 
 
 def sink_fail_total() -> int:
