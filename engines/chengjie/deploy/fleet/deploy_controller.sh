@@ -5,7 +5,8 @@
 #   sudo bash deploy_controller.sh --check                            # 只体检：服务 / 端口 / 反代 / 配置
 #   sudo bash deploy_controller.sh --rollback                         # 回滚到上一版 app（app.prev）
 #
-# 布局：/opt/chatx-fleet/{app,app.prev,venv}  /etc/chatx-fleet/{config.yaml,env}  /var/lib/chatx-fleet/fleet.db
+# 布局：/opt/chatx-fleet/{app,app.prev,venv}  /etc/chatx-fleet/{config.yaml,env}（只读）
+#       /var/lib/chatx-fleet/（fleet.db 与其余运行时库；AITR_DATA_DIR）
 # 步骤：建用户 → 解包到 app.new → venv + pip（requirements-ci.txt：主控不需要 TG/WA 运行时依赖） → 首次生成 config
 #      （随机 auth_token / secret_key，只打印一次） → --check 体检 → 原子切换 app → systemd → nginx snippet → 健康检查；
 #      健康检查失败自动回滚。**不改现有官网 nginx server 块，只 include 一个 snippet**（需人工加一行，脚本只提示）。
@@ -84,6 +85,42 @@ REQ="$APP_ROOT/app.new/requirements-ci.txt"; [ -f "$REQ" ] || REQ="$APP_ROOT/app
 "$APP_ROOT/venv/bin/pip" install -q --upgrade pip
 "$APP_ROOT/venv/bin/pip" install -q -r "$REQ"
 
+# Move a runtime file (and sqlite -wal/-shm) out of the read-only config dir.
+# Never touches config.yaml / env. If the destination already exists, leave both.
+relocate_runtime_file() {
+  local name="$1"
+  local src="$CONF_DIR/$name"
+  local dst="$DATA_DIR/$name"
+  if [ -f "$src" ] && [ ! -e "$dst" ]; then
+    mv "$src" "$dst"
+    chown "$SVC_USER:$SVC_USER" "$dst"
+    log "moved runtime state $name -> $DATA_DIR"
+    local ext
+    for ext in -wal -shm; do
+      if [ -f "${src}${ext}" ] && [ ! -e "${dst}${ext}" ]; then
+        mv "${src}${ext}" "${dst}${ext}"
+        chown "$SVC_USER:$SVC_USER" "${dst}${ext}"
+      fi
+    done
+  elif [ -f "$src" ] && [ -e "$dst" ]; then
+    log "leave $name in both $CONF_DIR and $DATA_DIR (dest already exists)"
+  fi
+}
+
+relocate_runtime_state() {
+  local name
+  for name in \
+    web_users.db cost_ledger.db audit.db knowledge_base.db \
+    runtime_flags.db inbox.db translation_memory.db \
+    license_quota.db token_ledger.db fleet_control.db \
+    agent_char_usage.db bot.db strategy_events.db \
+    persona_media.db group_members.db quality_trend.db \
+    license.key trial_claim.json audit_log.jsonl
+  do
+    relocate_runtime_file "$name"
+  done
+}
+
 log "4/8 config"
 if [ ! -f "$CONF_DIR/config.yaml" ]; then
   TOKEN="$(openssl rand -hex 24)"; SECRET="$(openssl rand -hex 32)"
@@ -101,8 +138,12 @@ if [ ! -f "$CONF_DIR/config.yaml" ]; then
 else
   log "config exists, keeping $CONF_DIR/config.yaml"
 fi
-(cd "$APP_ROOT/app.new" && sudo -u "$SVC_USER" AITR_CONFIG_PATH="$CONF_DIR/config.yaml" "$APP_ROOT/venv/bin/python" main.py --check --config "$CONF_DIR/config.yaml") \
+(cd "$APP_ROOT/app.new" && sudo -u "$SVC_USER" \
+    AITR_CONFIG_PATH="$CONF_DIR/config.yaml" AITR_DATA_DIR="$DATA_DIR" \
+    "$APP_ROOT/venv/bin/python" main.py --check --config "$CONF_DIR/config.yaml") \
   || fail "config --check failed"
+# One-time: older builds wrote sqlite next to config.yaml. strict makes /etc read-only.
+relocate_runtime_state
 
 log "5/8 switch app (atomic)"
 [ -d "$APP_ROOT/app" ] && { rm -rf "$APP_ROOT/app.prev"; mv "$APP_ROOT/app" "$APP_ROOT/app.prev"; }

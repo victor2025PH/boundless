@@ -898,7 +898,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                                            ROLE_VIEWER, ROLE_AGENT, ROLE_LABELS, PAGE_PERMISSIONS,
                                            UI_MODE_SIMPLE, UI_MODE_FULL, UI_MODE_LABELS,
                                            resolve_ui_mode)
-    cfg_dir = config_manager.config_path.parent
+    from src.licensing.data_paths import runtime_dir
+    cfg_dir = runtime_dir(config_manager.config_path)
     user_store = WebUserStore(cfg_dir / "web_users.db")
     if user_store.user_count() == 0:
         if token:

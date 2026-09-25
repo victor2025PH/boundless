@@ -14,11 +14,18 @@
 
 顺序（与 ConfigManager._resolve_config_path / telemetry._config_dir 一致）：
 ``AITR_CONFIG_PATH`` 的父目录 → ``AITR_DATA_DIR/config`` → 仓内 ``config/``。
+
+VPS 主控把 YAML 放在 ``/etc/chatx-fleet``（只读，``ProtectSystem=strict``），
+运行时库必须落在 ``AITR_DATA_DIR``（``/var/lib/chatx-fleet``）。``config_dir()``
+仍只表示 YAML 所在目录；``data_dir()`` / ``runtime_dir()`` 在「配置目录不在
+数据根里面」时改指数据根本身。桌面布局（YAML 在 ``<data>/config/``）两边重合，
+路径不变。
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, Optional
 
 
 def _engine_root() -> Path:
@@ -27,7 +34,7 @@ def _engine_root() -> Path:
 
 
 def config_dir() -> Path:
-    """当前生效的 config 目录（可写数据区优先）。绝不抛。"""
+    """当前生效的 config 目录（YAML 所在目录）。绝不抛。"""
     try:
         env_path = (os.environ.get("AITR_CONFIG_PATH") or "").strip()
         if env_path:
@@ -40,6 +47,110 @@ def config_dir() -> Path:
     return _engine_root() / "config"
 
 
+def _expand(raw: str) -> Optional[Path]:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return Path(text).expanduser()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _data_root() -> Optional[Path]:
+    return _expand(os.environ.get("AITR_DATA_DIR") or "")
+
+
+def _env_config_file() -> Optional[Path]:
+    return _expand(os.environ.get("AITR_CONFIG_PATH") or "")
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _split_layout() -> bool:
+    """YAML 目录在 AITR_DATA_DIR 之外（VPS：/etc vs /var/lib）。"""
+    root = _data_root()
+    if root is None:
+        return False
+    return not _inside(config_dir(), root)
+
+
+def data_dir() -> Path:
+    """运行时可写根。
+
+    配置目录落在 ``AITR_DATA_DIR`` 里面（只设数据根，或桌面 YAML 在
+    ``<data>/config``）时返回 ``config_dir()``，库仍在 ``.../config/``。
+    配置目录在数据根外面时返回数据根本身。
+    """
+    root = _data_root()
+    if root is not None and _split_layout():
+        return root
+    return config_dir()
+
+
 def data_file(name: str) -> str:
-    """config 目录下某个数据文件的绝对路径（str，便于直接喂给旧签名）。"""
-    return str(config_dir() / name)
+    """数据文件绝对路径（str，便于直接喂给旧签名）。
+
+    与 ``data_dir()`` 相同的分裂规则：桌面/仅 ``AITR_DATA_DIR`` 时仍是
+    ``<data>/config/<name>``；VPS 分裂布局时是 ``<data>/<name>``。
+    """
+    return str(data_dir() / name)
+
+
+def runtime_dir(config_path: Any = None) -> Path:
+    """某个配置文件对应的运行时目录。
+
+    仅当 ``config_path`` 解析后就是 ``AITR_CONFIG_PATH``，且其父目录在
+    ``AITR_DATA_DIR`` 之外时，返回数据根。其它路径（pytest 临时配置、
+    ``--init`` 写到别的文件）仍是该文件的父目录，避免进程级
+    ``AITR_DATA_DIR`` 把每份临时库收走。``runtime_dir(None)`` 等于 ``data_dir()``。
+    """
+    if config_path is None or not str(config_path).strip():
+        return data_dir()
+    try:
+        resolved = Path(config_path).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+        return data_dir()
+    env_cfg = _env_config_file()
+    root = _data_root()
+    if (
+        env_cfg is not None
+        and root is not None
+        and resolved == env_cfg.resolve()
+        and not _inside(resolved.parent, root)
+    ):
+        return root
+    return resolved.parent
+
+
+def runtime_file(name: str, config_path: Any = None) -> Path:
+    """``runtime_dir(config_path) / name``。"""
+    return runtime_dir(config_path) / name
+
+
+def plugin_dir(config_path: Any = None) -> Path:
+    """插件目录。
+
+    分裂布局：``<data root>/plugins``。
+    配置与数据同树：沿用 ``<yaml 父目录的父目录>/plugins``
+    （桌面是 ``<data>/plugins``，不是 ``<data>/config/plugins``）。
+    """
+    if config_path is None or not str(config_path).strip():
+        rt = data_dir()
+        if rt != config_dir():
+            return rt / "plugins"
+        return rt.parent / "plugins"
+    rt = runtime_dir(config_path)
+    try:
+        parent = Path(config_path).expanduser().resolve().parent
+    except Exception:  # noqa: BLE001
+        return rt / "plugins"
+    if rt != parent:
+        return rt / "plugins"
+    return parent.parent / "plugins"

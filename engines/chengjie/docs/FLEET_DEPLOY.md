@@ -116,23 +116,18 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 这次不要手改库，但下面几项要在 `deploy_controller.sh` 之前看完。`deploy_controller.sh --rollback` 只把 `app` 和 `app.prev` 对调再重启服务，**不回滚** systemd unit 文件。unit 改坏了要手工把 `/etc/systemd/system/chatx-fleet.service` 换回去再 `daemon-reload`。
 
 1. `/etc/chatx-fleet/config.yaml` 里写上 `enroll_code_ttl_min: 15`。预设和代码默认已经是 15，但文件里已有的值（例如 60）优先，不改的话新码仍按旧 TTL 发。
-2. `ProtectSystem=strict` 下进程只能写 `ReadWritePaths`。确认 `fleet_control.db_path` 是 `/var/lib/chatx-fleet/fleet.db`（空值会落到配置目录，strict 下写不进去）。`ReadWritePaths` 只有 `/var/lib/chatx-fleet`、`/opt/chatx-fleet/app/logs`、`/opt/chatx-fleet/app/config`。运行时不要写到程序目录的其他位置，也不要写 `/etc/chatx-fleet`。配置目录保持 750、只读。
-3. 生产 nginx 和 fail2ban **已经手工装过**，不在这次 deploy 里重装，也不要用仓库里的示例覆盖它们：
-   - `limit_req` 6r/m、burst 5，挂在 `location = /fleet/api/fleet/enroll`
-   - 文件：`/etc/nginx/snippets/chatx-fleet-enroll-ratelimit.conf`、`/etc/nginx/conf.d/fleet-ratelimit.conf`
-   - fail2ban jail `chatx-fleet-enroll`：`/etc/fail2ban/filter.d/chatx-fleet-enroll.conf`、`/etc/fail2ban/jail.d/chatx-fleet-enroll.conf`
-   - 仓库 `deploy/fleet/nginx-fleet-enroll-limit.conf` 和 `deploy/fleet/fail2ban/` 只是对照用的例子（示例 enroll 是 10r/m burst 4，比现网松）。`deploy_controller.sh` 不会安装它们。
-   - 机房批量安装必须压在 **每个出口 IP 每分钟 6 次以内**，否则现网 `limit_req` 直接 429，这间机房后面的已装节点也会受影响。
-4. fail2ban 只计 `reason=bad_code`、`reason=bad_room_key` 和注册码 / 机房密钥的 `reason=lockout`。不计 `exhausted`、`expired`、`revoked`，也不计待批准队列的限速。一间机房共用一个 NAT、反复兑一张过期密钥时，不应把 80/443 封掉。
+2. `ProtectSystem=strict` + `ProtectHome=true` 下进程只能写 `ReadWritePaths`：`/var/lib/chatx-fleet`、`/opt/chatx-fleet/app/logs`、`/opt/chatx-fleet/app/config`。YAML 仍是 `/etc/chatx-fleet/config.yaml`（`AITR_CONFIG_PATH`），目录保持 `750` root:chatx-fleet，只读。不要把该目录改成 `770`，也不要把 `/etc` 加进 `ReadWritePaths`。unit 必须同时设 `AITR_DATA_DIR=/var/lib/chatx-fleet`：运行时库（`web_users.db`、`cost_ledger.db`、`audit.db`、`knowledge_base.db`、插件目录等）写在数据根下。只设 `AITR_CONFIG_PATH` 时这些文件会落进 `/etc/chatx-fleet`，strict 下 SQLite 写失败，web 后台跳过，18798 不监听。`fleet_control.db_path` 继续用绝对路径 `/var/lib/chatx-fleet/fleet.db`。`deploy_controller.sh` 会把误落在配置目录里的运行时库（含 `-wal`/`-shm`）一次性挪到数据目录；目标已存在则两边都留。不改已有 `config.yaml`，不重新生成 `auth_token` / `secret_key`。
+3. 注册接口的 nginx `limit_req` 和 fail2ban jail `chatx-fleet-enroll` **已由运维撤掉**，不是上线必需，不要按仓库示例再装回去。`deploy/fleet/nginx-fleet-enroll-limit.conf` 和 `deploy/fleet/fail2ban/` 只是历史对照，`deploy_controller.sh` 不会安装它们。应用内锁仍在：同一 IP 10 分钟内猜错 8 次进入锁定期（锁定期内连对的码也不消耗）。
+4. 应用日志里的 `fleet enroll_fail` 仍会打 `reason=bad_code`、`reason=bad_room_key`、`reason=lockout`，以及 `exhausted` / `expired` / `revoked`。这些行只用于排障，不再对应现网 fail2ban。
 
 ## 3.1 发到服务器时运维要做的
 
 代码合进去之后**不要**手改库。新表（待批准、机房密钥、失败计数）在主控进程启动时自己建好，旧节点和已发出的 node_key 不用迁移。
 
 1. 构建机先有免费的 Inno Setup 6（`winget install --id JRSoftware.InnoSetup -e`），再跑 `python fleet_agent\build_agent.py` 和 `powershell -File deploy\fleet\publish_agent.ps1`。脚本在找得到 `ISCC.exe` 时会打出 `ChatXAgentSetup.exe` 并一起上传。下载目录里要同时有 `chatx-agent.exe`、`ChatXAgentSetup.exe`、`manifest.json`（manifest 里带 `setup_url` / `setup_sha256`）。
-2. `publish_agent.ps1 -PackController` 打主控源码包时会带上 `config/presets`（其余 `config/` 仍排除）。VPS 上 `sudo bash deploy_controller.sh ~/chatx-fleet-src.tar.gz`。`/etc/chatx-fleet` 是 `750`（root:chatx-fleet，配置只读）；可写的是 `/var/lib/chatx-fleet`（`770`，库文件）。systemd 开了 `ProtectSystem=strict`，`ReadWritePaths` 只含数据目录和日志，不含配置目录。`config.yaml` 仍是 `640`。`--check` 只打 `GET /api/fleet/overview`（期望 401），不会往注册接口塞假码。
+2. `publish_agent.ps1 -PackController` 打主控源码包时会带上 `config/presets`（其余 `config/` 仍排除）。VPS 上 `sudo bash deploy_controller.sh ~/chatx-fleet-src.tar.gz`。`/etc/chatx-fleet` 是 `750`（root:chatx-fleet，配置只读）；可写的是 `/var/lib/chatx-fleet`（`770`，库文件）。systemd 开了 `ProtectSystem=strict` 和 `ProtectHome=true`，`ReadWritePaths` 只含数据目录、`app/logs`、`app/config`，不含配置目录。unit 里同时有 `AITR_CONFIG_PATH=/etc/chatx-fleet/config.yaml` 和 `AITR_DATA_DIR=/var/lib/chatx-fleet`，这样下次套上 strict 不会把 18798 打挂。`config.yaml` 仍是 `640`。已有配置原样保留。`--check` 只打 `GET /api/fleet/overview`（期望 401），不会往注册接口塞假码，预检时同样带上 `AITR_DATA_DIR`。
 3. 把更新后的 `deploy/fleet/nginx-fleet.conf` 再装一次（`deploy_controller.sh` 会重写 snippet）。新增的是 `/fleet/dl/`：反代到主控，并且 **access_log off**，避免机房链接里的密钥进 nginx 日志。没有新的监听端口。装完 `nginx -t && systemctl reload nginx`，然后 `systemctl restart chatx-fleet`。
-4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。注册失败另打一行 `fleet enroll_fail ip=1.2.3.4 reason=bad_code`（注册码或机房密钥锁定期是 `reason=lockout`，猜错机房密钥是 `reason=bad_room_key`）。对照示例在 `deploy/fleet/fail2ban/` 和 `deploy/fleet/nginx-fleet-enroll-limit.conf`。现网的 limit 和 jail 已经装在第 3.0 节列出的路径里，这次不要覆盖。
+4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。注册失败另打一行 `fleet enroll_fail ip=1.2.3.4 reason=bad_code`（注册码或机房密钥锁定期是 `reason=lockout`，猜错机房密钥是 `reason=bad_room_key`）。仓库里的 `deploy/fleet/fail2ban/` 和 `deploy/fleet/nginx-fleet-enroll-limit.conf` 只是历史对照。现网的 enroll `limit_req` 和 fail2ban jail 已由运维撤掉，不要当成必需项重新装上。
 
 ## 4. 日常操作（操作端 CLI）
 

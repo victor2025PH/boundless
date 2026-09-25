@@ -221,7 +221,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
             from src.utils.webhook import WebhookNotifier
             from src.utils.log_buffer import install_log_buffer
             _log_buf = install_log_buffer()
-            cfg_dir = Path(assistant.config.config_path).parent
+            from src.licensing.data_paths import runtime_dir
+            cfg_dir = runtime_dir(assistant.config.config_path)
             wh_cfg = assistant.config.config.get("webhook", {})
             webhook = WebhookNotifier(wh_cfg) if wh_cfg.get("enabled") else None
             # W4-Cap-Alert：contacts 已 bootstrap 且 webhook 就绪 → 把 cap 阈值事件接上
@@ -289,7 +290,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
             # ── G1 全局 Kill-Switch：初始化单例（回填持久化的冻结态，重启不丢）──
             try:
                 from src.ops.kill_switch import get_kill_switch
-                _cfg_dir0 = Path(assistant.config.config_path).parent
+                _cfg_dir0 = runtime_dir(assistant.config.config_path)
                 _ks_cfg = ((assistant.config.config or {}).get("ops") or {}).get("kill_switch") or {}
                 _ks_db = Path(_ks_cfg.get("db_path") or (_cfg_dir0 / "runtime_flags.db"))
                 if not _ks_db.is_absolute():
@@ -312,7 +313,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                 if _inbox_cfg.get("enabled", True):
                     from src.inbox.store import InboxStore
 
-                    _cfg_dir = Path(assistant.config.config_path).parent
+                    _cfg_dir = runtime_dir(assistant.config.config_path)
                     _inbox_db = Path(_inbox_cfg.get("db_path") or (_cfg_dir / "inbox.db"))
                     if not _inbox_db.is_absolute():
                         _inbox_db = _cfg_dir / _inbox_db

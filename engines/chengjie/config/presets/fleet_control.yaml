@@ -12,7 +12,7 @@
 domain: fleet_control
 
 fleet_control:
-  db_path: ""                              # 空 → 本配置目录/fleet_control.db
+  db_path: ""                              # 空 → 配置与数据同目录时落配置目录；AITR_DATA_DIR 与 YAML 分离时落数据根/fleet_control.db
   heartbeat_sec: 30
   offline_after_sec: 120
   enroll_code_ttl_min: 15

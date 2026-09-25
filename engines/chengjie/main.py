@@ -35,6 +35,8 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "--wechat-pc-
     from src.integrations.wechat_pc.__main__ import main as _wechat_pc_driver_main
     sys.exit(_wechat_pc_driver_main(sys.argv[2:]))
 
+from src.licensing.data_paths import runtime_dir as _runtime_dir
+
 # P3-2（2026-08-12 可靠性复盘）：TelegramClient 顶层 import 已移除——它是死代码
 # （构造点在 bootstrap/services.py::setup_telegram_clients，人家自己函数内 import），
 # 却把 pyrogram 的 ~5s import（raw.types 生成为主，-X importtime 实测 6.98s 链）
@@ -356,7 +358,7 @@ class AIChatAssistant:
                         )
                         configure_local_trial(
                             self.config.config or {},
-                            config_dir=str(self.config.config_path.parent))
+                            config_dir=str(_runtime_dir(self.config.config_path)))
                         _lt = get_local_trial()
                         if _lt is not None:
                             # 首次启动即落锚点：「装完直接能用」不该依赖用户先走完向导。
@@ -757,7 +759,7 @@ class AIChatAssistant:
                 QualityTrendSnapshotter, QualityTrendStore,
             )
 
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = QualityTrendStore(_cfg_dir / "quality_trend.db")
             win_h = float(cfg.get("window_hours", 24))
 
@@ -825,7 +827,7 @@ class AIChatAssistant:
                 self.logger.info("TTS 成本落库未启用（voice_routing.cost_log.enabled=false）")
                 return
             from src.ai.tts_cost_store import configure_tts_cost_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_tts_cost_store(
                 enabled=True,
                 db_path=_cfg_dir / "tts_cost.db",
@@ -852,7 +854,7 @@ class AIChatAssistant:
                     "翻译置信度趋势落库未启用（translation.engines.confidence_switch.trend_log=false）")
                 return
             from src.ai.translation_trend_store import configure_translation_trend_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_translation_trend_store(
                 enabled=True,
                 db_path=_cfg_dir / "xlate_trend.db",
@@ -874,7 +876,7 @@ class AIChatAssistant:
         """
         try:
             from src.companion.persona_media_store import configure_persona_media_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_persona_media_store(_cfg_dir / "persona_media.db")
             if store is not None:
                 self.logger.info("✅ 每人设相册/媒体注册表就绪（persona_media.db）")
@@ -890,7 +892,7 @@ class AIChatAssistant:
         """
         try:
             from src.companion.group_members_store import configure_group_members_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_group_members_store(_cfg_dir / "group_members.db")
             if store is not None:
                 self.logger.info("✅ Telegram 群成员提取库就绪（group_members.db）")
@@ -918,7 +920,7 @@ class AIChatAssistant:
                 return
             from src.fatex import product_badge
             from src.fatex.store import configure_fatex_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_fatex_store(_cfg_dir / "fatex.db")
             if store is not None:
                 self.logger.info("✅ %s 产品库就绪（fatex.db）", product_badge())
@@ -941,7 +943,7 @@ class AIChatAssistant:
                     "前端错误趋势落库未启用（ops.frontend_error_trend.enabled=false）")
                 return
             from src.web.frontend_error_trend import configure_frontend_error_trend
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_frontend_error_trend(
                 enabled=True,
                 db_path=_cfg_dir / "fe_trend.db",
@@ -970,7 +972,7 @@ class AIChatAssistant:
                     "账号接入漏斗趋势落库未启用（ops.login_funnel_trend.enabled=false）")
                 return
             from src.integrations.login_funnel_trend import configure_login_funnel_trend
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_login_funnel_trend(
                 enabled=True,
                 db_path=_cfg_dir / "login_funnel_trend.db",
@@ -999,7 +1001,7 @@ class AIChatAssistant:
                     "UI 事件趋势落库未启用（ops.ui_event_trend.enabled=false）")
                 return
             from src.web.ui_event_trend import configure_ui_event_trend
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_ui_event_trend(
                 enabled=True,
                 db_path=_cfg_dir / "ui_event_trend.db",
@@ -1027,7 +1029,7 @@ class AIChatAssistant:
                     "客户资产趋势落库未启用（ops.contacts_asset_trend.enabled=false）")
                 return
             from src.web.contacts_asset_trend import configure_contacts_asset_trend
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_contacts_asset_trend(
                 enabled=True,
                 db_path=_cfg_dir / "contacts_asset_trend.db",
@@ -1056,7 +1058,7 @@ class AIChatAssistant:
                 self.logger.info("CSRF 趋势落库未启用（ops.csrf_trend.enabled=false）")
                 return
             from src.web.csrf_trend import configure_csrf_trend
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_csrf_trend(
                 enabled=True,
                 db_path=_cfg_dir / "csrf_trend.db",
@@ -1084,7 +1086,7 @@ class AIChatAssistant:
                 self.logger.info("会话身份趋势落库未启用（inbox.identity.trend_log=false）")
                 return
             from src.web.identity_trend_store import configure_identity_trend_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_identity_trend_store(
                 enabled=True,
                 db_path=_cfg_dir / "identity_trend.db",
@@ -1110,7 +1112,7 @@ class AIChatAssistant:
                     "实时语音趋势落库未启用（realtime_voice.trend_log=false）")
                 return
             from src.ai.realtime_voice_trend_store import configure_realtime_voice_trend_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_realtime_voice_trend_store(
                 enabled=True,
                 db_path=_cfg_dir / "rtv_trend.db",
@@ -1137,7 +1139,7 @@ class AIChatAssistant:
                     "出站路由趋势落库未启用（inbox.send_route.trend_log=false）")
                 return
             from src.inbox.send_route_trend_store import configure_send_route_trend_store
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_send_route_trend_store(
                 enabled=True,
                 db_path=_cfg_dir / "send_route_trend.db",
@@ -1170,7 +1172,7 @@ class AIChatAssistant:
             from src.inbox.media_promise_trend_store import (
                 configure_media_promise_trend_store,
             )
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_media_promise_trend_store(
                 enabled=True,
                 db_path=_cfg_dir / "media_promise_trend.db",
@@ -1203,7 +1205,7 @@ class AIChatAssistant:
             from src.web.inject_extract_trend import (
                 configure_inject_extract_trend,
             )
-            _cfg_dir = Path(self.config.config_path).parent
+            _cfg_dir = _runtime_dir(self.config.config_path)
             store = configure_inject_extract_trend(
                 enabled=True,
                 db_path=_cfg_dir / "inject_extract_trend.db",
@@ -1319,7 +1321,7 @@ class AIChatAssistant:
         await asyncio.sleep(300)
         while self.running:
             try:
-                cfg_dir = (Path(self.config.config_path).parent if hasattr(self.config, "config_path") else Path("config")).resolve()
+                cfg_dir = (_runtime_dir(self.config.config_path) if hasattr(self.config, "config_path") else Path("config")).resolve()
                 kb_path = (cfg_dir / "knowledge_base.db").resolve()
                 if kb_path.exists():
                     from src.utils.kb_store import KnowledgeBaseStore
@@ -1360,7 +1362,7 @@ class AIChatAssistant:
         await asyncio.sleep(600)
         while self.running:
             try:
-                cfg_dir = (Path(self.config.config_path).parent
+                cfg_dir = (_runtime_dir(self.config.config_path)
                            if hasattr(self.config, "config_path")
                            else Path("config")).resolve()
                 kb_path = (cfg_dir / "knowledge_base.db").resolve()

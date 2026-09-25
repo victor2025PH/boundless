@@ -346,10 +346,17 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert "--exclude=config" in publish
     deploy = (ENGINE / "deploy/fleet/deploy_controller.sh").read_text(encoding="utf-8")
     assert "chmod 750" in deploy and "chmod 770" in deploy and 'chown root:"$SVC_USER"' in deploy
+    assert 'chmod 770 "$CONF_DIR"' not in deploy
+    assert 'AITR_DATA_DIR="$DATA_DIR"' in deploy
+    assert "relocate_runtime_state" in deploy and "web_users.db" in deploy
+    assert "config.yaml" not in deploy.split("for name in")[1].split("do")[0]
     check_body = deploy.split("check()")[1].split("rollback()")[0]
     assert "-X POST" not in check_body and "/api/fleet/overview" in check_body
     unit = (ENGINE / "deploy/fleet/chatx-fleet.service").read_text(encoding="utf-8")
-    assert "ProtectSystem=strict" in unit and "/etc/chatx-fleet" not in unit.split("ReadWritePaths=")[1].split("\n")[0]
+    assert "ProtectSystem=strict" in unit and "ProtectHome=true" in unit
+    assert "AITR_DATA_DIR=/var/lib/chatx-fleet" in unit
+    assert "AITR_CONFIG_PATH=/etc/chatx-fleet/config.yaml" in unit
+    assert "/etc/chatx-fleet" not in unit.split("ReadWritePaths=")[1].split("\n")[0]
     nginx = (ENGINE / "deploy/fleet/nginx-fleet.conf").read_text(encoding="utf-8")
     assert "location ^~ /fleet/dl/" in nginx and "access_log off" in nginx
     iss = (ENGINE / "fleet_agent/setup/ChatXAgent.iss").read_text(encoding="utf-8")

@@ -473,8 +473,9 @@ class SkillManager(LoggerMixin):
         self.reply_cache: Dict[str, float] = {}  # 内�哈希 -> �€后发送时�?
         self.global_last_reply_time = 0
 
+        from src.licensing.data_paths import runtime_dir
         from src.utils.context_store import ContextStore
-        cfg_dir = Path(config.config_path).parent if hasattr(config, "config_path") else Path("config")
+        cfg_dir = runtime_dir(config.config_path) if hasattr(config, "config_path") else Path("config")
         ttl_days = int(config.config.get("context_store", {}).get("ttl_days", 30)
                        if hasattr(config, "config") else 30)
         self._context_store = ContextStore(db_path=cfg_dir / "bot.db", ttl_days=ttl_days)
@@ -970,10 +971,11 @@ class SkillManager(LoggerMixin):
             self.logger.error(f"Fallback import also failed: {e}")
 
     def _load_plugins(self):
+        from src.licensing.data_paths import plugin_dir
         from src.utils.plugin_loader import PluginLoader
-        plugin_dir = Path(self.config.config_path).parent.parent / "plugins" if hasattr(self.config, "config_path") else Path("plugins")
+        plugins_path = plugin_dir(self.config.config_path) if hasattr(self.config, "config_path") else Path("plugins")
         cfg = self.config.config if hasattr(self.config, "config") else {}
-        self._plugin_loader = PluginLoader(plugin_dir, cfg)
+        self._plugin_loader = PluginLoader(plugins_path, cfg)
         plugins = self._plugin_loader.load_all(Skill, self.ai_client, self.config)
         for name, skill in plugins.items():
             intent_name = f"plugin_{name}"
