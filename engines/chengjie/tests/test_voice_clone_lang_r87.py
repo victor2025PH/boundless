@@ -82,7 +82,8 @@ def test_capability_skip_not_counted_as_outage():
 
 def test_skip_voice_warns_once_then_debug(caplog):
     rv = _rv()
-    with caplog.at_level(logging.DEBUG):
+    # 钉到本模块 logger。只抬根 logger 时，3.13 上子 logger 的 DEBUG 进不了 caplog。
+    with caplog.at_level(logging.DEBUG, logger="src.ai.tts_pipeline"):
         assert log_skip_voice(rv, conv=CID) == "clone_unavailable"
         assert log_skip_voice(rv, conv=CID) == "clone_unavailable"
     warns = [r for r in caplog.records if r.levelno >= logging.WARNING and "skip_voice" in r.getMessage()]

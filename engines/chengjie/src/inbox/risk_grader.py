@@ -650,9 +650,7 @@ def rename_unlocked_hard_reasons(reasons: Sequence[str], cfg: Any = None) -> Tup
         for r in reasons:
             s = str(r)
             cat = _HARD_REASON_CATEGORY.get(s)
-            # 停联 / 自伤是同意与安全硬停（O-1 A），不靠运营去回复设置里勾锁定。
-            # 凭证索要仍按 R88：未锁定就改名、只记录。
-            if cat and s not in ("stop_contact", "self_harm") and not is_locked(cat, cfg):
+            if cat and not is_locked(cat, cfg):
                 out.append(s + RECORDED_SUFFIX)
                 renamed.append(s)
             else:

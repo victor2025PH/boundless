@@ -1343,13 +1343,10 @@ class DraftService:
                         )
                 except Exception:
                     logger.debug("auto_generate_draft 锁定硬停落点失败（已忽略）", exc_info=True)
-                # 不向客户发告别（D-O1），但留一条空的待审行：坐席能看见「已冻结」，
-                # 第二条入站走上方 frozen 早退不再起草（告别最多一条的队列形态）。
+                return None
 
             suggestions = _suggestions(t, lang=lang, intent=intent, emotion=emotion, risk=risk_level)
             draft_text = suggestions[0].text if suggestions else "感谢您的消息，我们稍后为您回复。"
-            if _hard_early:
-                draft_text = ""
             # 锁定的需人工类：回复留白，不写建议句 / 「感谢您的消息」罐头。
             if getattr(_decision, "review_required", False):
                 try:

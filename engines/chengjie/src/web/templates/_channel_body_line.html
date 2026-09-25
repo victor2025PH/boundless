@@ -528,7 +528,7 @@
         <option value="avatar_clone">{{ (i18n or {}).get('lr_voice_backend_avatar', "本机 AvatarHub 克隆声") }}</option>
       </select>
     </label>
-    <label><span>{{ (i18n or {}).get('lr_voice_voice', "TTS 声音名（空=引擎默认）") }}</span><input type="text" id="cfg-voice-voice" placeholder="zh-CN-XiaoxiaoNeural / alloy"></label>
+    <label><span>{{ (i18n or {}).get('lr_voice_voice', "TTS 声音名（空=引擎默认）") }}</span><input type="text" id="cfg-voice-voice" placeholder="e.g. zh-CN-XiaoxiaoNeural / alloy"></label>
     <div class="row2" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
       <input type="text" id="lr-voice-test-text" placeholder="{{ (i18n or {}).get('lr_voice_test_ph', '输入一句试听文本…') }}" style="flex:1;min-width:12rem">
       <button type="button" class="btn btn-xs" id="lr-voice-test-btn" onclick="lrVoiceTtsTest()">{{ (i18n or {}).get('lr_voice_test_btn', "试听") }}</button>

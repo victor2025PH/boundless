@@ -188,14 +188,16 @@ class VideoTranslateService:
         style: str = "chat",
         want_segments: bool = False,
     ) -> Dict[str, Any]:
-        if not ffmpeg_available():
-            return {"ok": False, "reason": "ffmpeg_unavailable",
-                    "message": "服务器未安装 ffmpeg，无法抽取视频音轨"}
+        # 时长已知且超限时先拒绝：CI / 客户机没有 ffmpeg 时，不能把「视频过长」
+        # 报成 ffmpeg_unavailable（probe 可被调用方替换，不依赖本机 ffprobe）。
         dur = await asyncio.to_thread(probe_duration_sec, video_path)
         if dur is not None and dur > self._max_minutes * 60:
             return {"ok": False, "reason": "too_long",
                     "message": f"视频过长（{dur/60:.1f} 分钟，上限 {self._max_minutes} 分钟）",
                     "video_duration_sec": dur}
+        if not ffmpeg_available():
+            return {"ok": False, "reason": "ffmpeg_unavailable",
+                    "message": "服务器未安装 ffmpeg，无法抽取视频音轨"}
         async with _VIDEO_SEM:
             wav, reason = await asyncio.to_thread(extract_audio_wav_sync, video_path)
             if wav is None:

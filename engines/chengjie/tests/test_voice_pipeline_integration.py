@@ -719,6 +719,9 @@ class TestVoiceReplyLangRoute:
             "telegram": {"voice_reply": {
                 "enabled": True, "trigger": "always",
                 "max_text_chars": 500, "max_seconds": 60,
+                # 熔断表是进程级的。全量 xdist 里别的用例可能已经把同一 chat
+                # 打进冷却，本用例会在合成前被挡掉，TTSPipeline 根本不会构造。
+                "burst_alert": {"enabled": False},
             }},
             "voice_lang_route": {"enabled": True},
         }
@@ -736,9 +739,14 @@ class TestVoiceReplyLangRoute:
                 self._last_send_wallclock = 0.0
                 self.account_persona_ids = []
 
+        def _ctx(*_a, **_k):
+            return {"voice_cfg": dict(voice_cfg), "emotion": None}
+
+        # 发送链走 resolve_effective_voice_context（会再并全局人设单例）。
+        # 本用例只钉语言路由，人设解析换成固定 voice_cfg。
         monkeypatch.setattr(
-            "src.ai.persona_voice.resolve_voice_cfg_for_contact",
-            lambda pid, raw, contact_key=None: dict(voice_cfg),
+            "src.ai.persona_voice.resolve_effective_voice_context",
+            _ctx,
         )
         s = _S()
         monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)

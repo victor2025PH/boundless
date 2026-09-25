@@ -2128,7 +2128,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 /* ===== 常量 ===== */
 // wechat（个人微信 PC 副驾，准入区）不进 FIXED_PLATS：仅在该桌面账号真的接入时按「有账号的平台」动态出现，
 // 这里只给它配色/显示名，免得动态出现时退灰色兜底。
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#1e8cf2'};
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6'};
 const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',web:'🌐'};   // wechat_kf / wechat 走 platformIconSVG，文本回落取 PI[p]||默认气泡（实施97：不再各占一个 emoji，emoji ratchet 天花板）
 const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
@@ -2347,7 +2347,7 @@ function avatarInitial(name){ return (name||'?').trim().charAt(0).toUpperCase();
 var _PREG = {};
 (function(){
   try {
-    apiFetch('/static/platform_registry.json', {cache:'no-store'})
+    fetch('/static/platform_registry.json', {cache:'no-store'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
         if (!j || !Array.isArray(j.platforms)) return;

@@ -332,7 +332,7 @@
       /* P3b 临期紧迫：时间 ≥80% 且进度 <50% → 警示色（点开即改期限） */
       .gl-meta-btn.urgent { color:var(--cp-warn,#b45309); font-weight:700; }
       .gl-meta-btn.urgent:hover { color:var(--cp-warn,#b45309); text-decoration:underline; }
-      .gl-meta-pen { margin-left:4px; opacity:.55; font-size:10px; }
+      .gl-meta-pen { margin-left:4px; opacity:.55; font-size:var(--cp-fs-tiny,12px); }
       .gl-dl-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
       .gl-dl-row input { width:64px; flex:0 0 auto; }
       .gl-dl-chips { display:flex; flex-wrap:wrap; gap:4px; }
@@ -347,7 +347,7 @@
                      background:color-mix(in srgb,var(--cp-warn,#d97706) 12%,transparent); }
       .gl-due button { font-size:var(--cp-fs-tiny,11px); padding:1px 8px; }
       .gl-extend { display:inline-flex; gap:4px; margin-left:4px; vertical-align:middle; }
-      .gl-extend button { font-size:10px; padding:1px 6px; }
+      .gl-extend button { font-size:var(--cp-fs-tiny,12px); padding:1px 6px; }
       .gl-meta-txt { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
                      font-variant-numeric:tabular-nums; }
       .gl-meta-txt.urgent { color:var(--cp-warn,#b45309); font-weight:700; }
@@ -357,14 +357,14 @@
                     background:color-mix(in srgb,var(--cp-ok,#0f9d75) 8%,var(--cp-surface-2,#f8fafc)); }
       .gl-outcome-tx { flex:1 1 auto; min-width:0; font-size:var(--cp-fs-sm,12px);
                        color:var(--cp-text,#374151); line-height:1.5; }
-      .gl-outcome button { flex:0 0 auto; font-size:11px; padding:2px 9px; }
+      .gl-outcome button { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:2px 9px; }
       /* 买家信号（问价→趁热开限时目标）：sprint 琥珀系 */
       .gl-buysig { display:flex; gap:6px; align-items:center;
                    border-left-color:var(--cp-goal-sprint,#d97706);
                    background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 9%,var(--cp-surface-2,#f8fafc)); }
       .gl-buysig-tx { flex:1 1 auto; min-width:0; font-size:var(--cp-fs-sm,12px);
                       color:var(--cp-text,#374151); line-height:1.5; }
-      .gl-buysig button.primary { flex:0 0 auto; font-size:11px; padding:2px 9px; }
+      .gl-buysig button.primary { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:2px 9px; }
       .gl-buysig-x { flex:0 0 auto; border:none; background:transparent; cursor:pointer;
                      color:var(--cp-text-tiny,#94a3b8); padding:2px 4px; font-size:12px; }
       .gl-buysig-x:hover { color:var(--cp-text,#1e293b); }
@@ -386,12 +386,12 @@
                   line-height:1.5; flex-wrap:wrap; }
       .gl-today .gl-intent { flex:1 1 auto; min-width:0; }
       .gl-fb { display:flex; gap:4px; margin-left:auto; flex:0 0 auto; align-items:center; }
-      .gl-fb button { font-size:11px; padding:2px 8px; }
+      .gl-fb button { font-size:var(--cp-fs-tiny,12px); padding:2px 8px; }
       .gl-fbmark { flex:0 0 auto; margin-left:auto; font-size:var(--cp-fs-tiny,11px);
                    color:var(--cp-ok,#0f9d75); white-space:nowrap; }
       .gl-undo { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
                  font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
-      .gl-undo button { font-size:11px; padding:1px 8px; color:var(--cp-accent,#4f46e5);
+      .gl-undo button { font-size:var(--cp-fs-tiny,12px); padding:1px 8px; color:var(--cp-accent,#4f46e5);
                         border-color:var(--cp-accent,#4f46e5); }
       .gl-pill { flex:0 0 auto; padding:0 6px; border-radius:99px; font-size:var(--cp-fs-tiny,11px);
                  line-height:18px; white-space:nowrap; background:var(--cp-track,#e2e8f0);
@@ -491,7 +491,7 @@
       .gl-last { display:flex; gap:5px; align-items:center; flex-wrap:wrap;
                  font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8);
                  margin-top:var(--cp-gap-sm,6px); }
-      .gl-last .gl-badge { font-size:10px; padding:0 6px; }
+      .gl-last .gl-badge { font-size:var(--cp-fs-tiny,12px); padding:0 6px; }
       .gl-errline { font-size:var(--cp-fs-sm,12px); color:var(--cp-danger,#dc2626); cursor:pointer; }
       .gl-disabled { font-size:var(--cp-fs-sm,12px); color:var(--cp-text-tiny,#94a3b8);
                      line-height:1.5; padding:4px 0; }
@@ -516,7 +516,7 @@
       .gl-prof-hd { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
       .gl-prof-hd .sp { flex:1 1 auto; }
-      .gl-prof-hd button { font-size:10px; padding:1px 7px; white-space:nowrap; flex:0 0 auto; }
+      .gl-prof-hd button { font-size:var(--cp-fs-tiny,12px); padding:1px 7px; white-space:nowrap; flex:0 0 auto; }
       .gl-prof-t { font-weight:600; white-space:nowrap; }
       .gl-fillrow { display:flex; flex-wrap:wrap; gap:4px 10px; margin-top:5px;
                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
@@ -542,7 +542,7 @@
                  background:var(--cp-accent-weak,rgba(79,70,229,.08)); }
       /* N-3 #241：敏感槽（收入 / 资产）锁标；「+ 自定义标签」虚线加号 chip */
       .gl-chip.sens { border-style:dotted; }
-      .gl-chip.sens::before { content:"\\1F512\\FE0E "; font-size:10px; opacity:.75; }
+      .gl-chip.sens::before { content:"\\1F512\\FE0E "; font-size:var(--cp-fs-tiny,12px); opacity:.75; }
       .gl-chip.add { border-style:dashed; color:var(--cp-text-dim,#64748b); background:transparent; }
       .gl-chip.add:hover { color:var(--cp-accent,#4f46e5); }
       .gl-sens-hint { margin-top:3px; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
@@ -562,7 +562,7 @@
       .gl-ask-q { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#374151); line-height:1.5; }
       .gl-ask .acts { margin-top:4px; justify-content:flex-end; }
       .gl-prof-form { display:grid; grid-template-columns:1fr 1fr; gap:4px 6px; margin-top:4px; }
-      .gl-pf-group { grid-column:1 / -1; font-size:10px; font-weight:700; letter-spacing:.4px;
+      .gl-pf-group { grid-column:1 / -1; font-size:var(--cp-fs-tiny,12px); font-weight:700; letter-spacing:.4px;
                      color:var(--cp-text-tiny,#94a3b8); margin-top:3px; }
       .gl-pf-group:first-child { margin-top:0; }
       .gl-prof-form input { width:100%; box-sizing:border-box; font:inherit;
@@ -591,11 +591,11 @@
       .gl-empty { text-align:center; padding:8px 4px 4px; }
       .gl-empty svg { display:block; margin:0 auto 8px; color:var(--cp-accent,#4f46e5); opacity:.85; }
       .gl-toast { font-size:var(--cp-fs-tiny,11px); color:var(--cp-ok,#0f9d75); margin-top:4px; }
-      .gl-draft-btn { font-size:10px; padding:1px 7px; margin-left:auto; }
+      .gl-draft-btn { font-size:var(--cp-fs-tiny,12px); padding:1px 7px; margin-left:auto; }
       /* ── 建目标向导 · 第一步：分组场景卡（类别色条 + 线稿图标）────────── */
       .gl-scenlist { display:flex; flex-direction:column; gap:4px; }
       .gl-grp { display:flex; align-items:center; gap:5px;
-                font-size:10px; font-weight:700; letter-spacing:.4px;
+                font-size:var(--cp-fs-tiny,12px); font-weight:700; letter-spacing:.4px;
                 color:var(--cp-text-dim,#64748b); margin:7px 0 0;
                 padding-top:6px; border-top:1px dashed var(--cp-border,#e2e8f0); }
       .gl-grp:first-child { margin-top:0; padding-top:0; border-top:none; }
@@ -605,7 +605,7 @@
       .gl-grp.gk-relationship .gl-grp-dot { background:var(--cp-goal-rel,#e11d48); }
       .gl-grp.gk-engagement .gl-grp-dot { background:var(--cp-goal-eng,#0284c7); }
       .gl-grp.gk-discovery .gl-grp-dot { background:var(--cp-goal-disc,#0d9488); }
-      .gl-grp-n { flex:0 0 auto; font-size:9px; font-weight:600; line-height:14px;
+      .gl-grp-n { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); font-weight:600; line-height:14px;
                   min-width:14px; text-align:center; padding:0 4px; border-radius:99px;
                   background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-tiny,#94a3b8); }
       /* 摸底组「从这里开始」引导（只出现在首组，微文案克制不抢卡片） */
@@ -614,14 +614,14 @@
                      display:flex; gap:4px; align-items:flex-start; }
       .gl-grp-hint::before { content:"\u2726"; flex:0 0 auto; opacity:.8; }
       /* 场景卡 30 天基准线（有样本才渲染；帮坐席选前建立合理预期） */
-      .gl-scen-bench { font-size:10px; color:var(--cp-text-tiny,#94a3b8);
+      .gl-scen-bench { font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-tiny,#94a3b8);
                        margin-top:2px; font-variant-numeric:tabular-nums; }
       /* 终局卡：达成金带 + 关键事实 chips + 完成通知状态行 */
       .gl-term-done { border-left:3px solid var(--cp-gold,#ca8a04);
                       border-radius:8px; padding:6px 8px; margin:0 -2px;
                       background:color-mix(in srgb,var(--cp-gold,#ca8a04) 7%,var(--cp-surface,#fff)); }
       .gl-done-facts { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
-      .gl-done-chip { font-size:10px; line-height:17px; padding:0 7px;
+      .gl-done-chip { font-size:var(--cp-fs-tiny,12px); line-height:17px; padding:0 7px;
                       border-radius:99px; font-variant-numeric:tabular-nums;
                       border:1px solid color-mix(in srgb,var(--cp-gold,#ca8a04) 45%,transparent);
                       color:var(--cp-warn,#b45309);
@@ -632,16 +632,16 @@
       .gl-notify { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
                    margin-top:6px; padding-top:5px;
                    border-top:1px dashed var(--cp-border,#e2e8f0); }
-      .gl-notify-ok, .gl-notify-warn { font-size:10px; line-height:1.45; }
+      .gl-notify-ok, .gl-notify-warn { font-size:var(--cp-fs-tiny,12px); line-height:1.45; }
       .gl-notify-ok { color:var(--cp-text-tiny,#94a3b8); }
       .gl-notify-warn { color:var(--cp-warn,#b45309); }
-      .gl-notify-link { font-size:10px; padding:0 8px; line-height:17px;
+      .gl-notify-link { font-size:var(--cp-fs-tiny,12px); padding:0 8px; line-height:17px;
                         border-radius:99px; cursor:pointer;
                         border:1px solid var(--cp-warn,#b45309);
                         color:var(--cp-warn,#b45309); background:transparent; }
       .gl-notify-link:hover { background:color-mix(in srgb,var(--cp-warn,#b45309) 10%,transparent); }
       /* P3b：点名收件人计数 chip（hover 见名单） */
-      .gl-ne-chip { font-size:10px; line-height:17px; color:var(--cp-text-dim,#64748b);
+      .gl-ne-chip { font-size:var(--cp-fs-tiny,12px); line-height:17px; color:var(--cp-text-dim,#64748b);
                     padding:0 6px; border:1px solid var(--cp-border,#e2e8f0);
                     border-radius:99px; cursor:default; }
       /* P3b：「标成交」＝收益动作，emerald 与通用主按钮区分（暂停=素、更多=链） */
@@ -654,7 +654,7 @@
                  font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#1e293b);
                  background:var(--cp-surface,#fff); border:1px solid var(--cp-border,#e2e8f0);
                  border-radius:var(--cp-radius-sm,6px); padding:3px 7px; }
-      .gl-nb-row button { flex:0 0 auto; font-size:10px; }
+      .gl-nb-row button { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); }
       .gl-nb-msg { font-size:var(--cp-fs-tiny,11px); color:var(--cp-warn,#b45309);
                    line-height:1.5; margin-top:3px; }
       .gl-nb-msg.ok { color:var(--cp-ok,#0f9d75); }
@@ -686,9 +686,9 @@
                     gap:6px; flex-wrap:wrap; }
       .gl-scen-d { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
                    line-height:1.45; margin-top:1px; }
-      .gl-scen-rec { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+      .gl-scen-rec { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:0 6px; border-radius:99px;
                      line-height:16px; background:var(--cp-accent,#4f46e5); color:#fff; }
-      .gl-scen-last { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+      .gl-scen-last { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:0 6px; border-radius:99px;
                       line-height:15px; border:1px solid var(--cp-border,#e2e8f0);
                       color:var(--cp-text-tiny,#94a3b8); }
       /* 自定义目标＝独立高亮卡（violet 描边+浅底；比场景卡更醒目的进阶入口） */
@@ -700,7 +700,7 @@
       .gl-scen-custom.sel { border-color:var(--cp-violet,#7c3aed);
                             box-shadow:0 0 0 1px var(--cp-violet,#7c3aed) inset;
                             background:color-mix(in srgb,var(--cp-violet,#7c3aed) 11%,var(--cp-surface,#fff)); }
-      .gl-adv-pill { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+      .gl-adv-pill { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:0 6px; border-radius:99px;
                      line-height:15px; border:1px solid var(--cp-violet,#7c3aed);
                      color:var(--cp-violet,#7c3aed);
                      background:color-mix(in srgb,var(--cp-violet,#7c3aed) 10%,transparent); }
@@ -727,7 +727,7 @@
                      color:var(--cp-text-dim,#64748b); margin-bottom:4px; }
       .gl-slots-row { display:flex; flex-wrap:wrap; gap:4px; max-height:7.5rem; overflow-y:auto; }
       .gl-slotchk { display:inline-flex; align-items:center; gap:3px;
-                    font-size:10px; padding:1px 7px; border-radius:99px;
+                    font-size:var(--cp-fs-tiny,12px); padding:1px 7px; border-radius:99px;
                     border:1px solid var(--cp-border,#e2e8f0);
                     color:var(--cp-text-tiny,#94a3b8); background:transparent; }
       .gl-slotchk.on { color:var(--cp-ok,#0f9d75); border-color:rgba(15,157,117,.45);
@@ -738,12 +738,12 @@
       /* Q-1 E（#264）：「已提及（未确认）」= 琥珀虚边 + 行内「确认」小钮（点了写 confirmed，引擎永不再问） */
       .gl-slotchk.mention { color:var(--cp-warn,#b45309); border-color:rgba(180,83,9,.45);
                             border-style:dashed; background:rgba(180,83,9,.06); }
-      .gl-slot-confirm { font-size:10px; line-height:1; padding:0 5px; margin-left:2px; border-radius:99px;
+      .gl-slot-confirm { font-size:var(--cp-fs-tiny,12px); line-height:1; padding:0 5px; margin-left:2px; border-radius:99px;
                          border:1px solid var(--cp-warn,#b45309); background:transparent;
                          color:var(--cp-warn,#b45309); cursor:pointer; flex-shrink:0; }
       .gl-slot-confirm:hover { background:var(--cp-warn,#b45309); color:#fff; }
       /* Q-5 C（#263）：「AI 推断 · 待确认」/「来自昵称 · 待确认」徽标 + ✕ 否钮（红边） */
-      .gl-slot-badge { font-style:normal; font-size:9px; line-height:1; padding:1px 4px; margin-left:3px;
+      .gl-slot-badge { font-style:normal; font-size:var(--cp-fs-tiny,12px); line-height:1; padding:1px 4px; margin-left:3px;
                        border-radius:99px; background:rgba(180,83,9,.14); color:var(--cp-warn,#b45309); white-space:nowrap; }
       .gl-slot-badge.nick { background:rgba(99,102,241,.14); color:var(--cp-accent,#6366f1); }
       .gl-slot-reject { border-color:var(--cp-danger,#dc2626); color:var(--cp-danger,#dc2626); }
@@ -752,7 +752,7 @@
       .gl-slotchk.mention.clue { border-color:rgba(180,83,9,.3); background:transparent; }
       .gl-slot-confirm:disabled { opacity:.45; cursor:not-allowed; }
       .gl-slot-confirm:disabled:hover { background:transparent; color:var(--cp-warn,#b45309); }
-      .gl-slot-err { font-style:normal; font-size:10px; line-height:1.2; margin-left:4px;
+      .gl-slot-err { font-style:normal; font-size:var(--cp-fs-tiny,12px); line-height:1.2; margin-left:4px;
                      color:var(--cp-danger,#dc2626); white-space:normal; }
       .gl-chip.pending { border-style:dashed; }
       /* Q-19 D（#294）：进度头「待确认 M」小字（幻觉不计入 N/M）；槽位值一律 ≤24 字单行省略 */
@@ -842,9 +842,9 @@
                      background:color-mix(in srgb,var(--cp-ok,#0f9d75) 9%,var(--cp-surface,#fff));
                      border:1px solid color-mix(in srgb,var(--cp-ok,#0f9d75) 30%,transparent); }
       .gl-mrestore button { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:2px 8px; }
-      .gl-scen-draftb { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+      .gl-scen-draftb { flex:0 0 auto; font-size:var(--cp-fs-tiny,12px); padding:0 6px; border-radius:99px;
                         line-height:16px; color:#fff; background:var(--cp-ok,#0f9d75); }
-      .gl-msec-t { font-size:10px; font-weight:700; letter-spacing:.4px;
+      .gl-msec-t { font-size:var(--cp-fs-tiny,12px); font-weight:700; letter-spacing:.4px;
                    color:var(--cp-text-tiny,#94a3b8); margin-bottom:3px; }
       /* 节奏预览（AI 会怎么推进）：编号节点 + 里程碑名 + 推进力度 pill */
       .gl-arc { border:1px solid var(--cp-border,#e2e8f0); border-radius:10px;
@@ -853,7 +853,7 @@
                     font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#374151); }
       .gl-arc-idx { flex:0 0 auto; width:16px; height:16px; border-radius:50%;
                     background:var(--cp-track,#e2e8f0); color:var(--cp-text-dim,#64748b);
-                    font-size:10px; line-height:16px; text-align:center; font-weight:700; }
+                    font-size:var(--cp-fs-tiny,12px); line-height:16px; text-align:center; font-weight:700; }
       .gl-arc-nm { flex:1 1 auto; min-width:0; }
       /* AI 参与度三张单选卡（替代原生 select，选中态 accent 描边） */
       .gl-auto-cards { display:flex; flex-direction:row; flex-wrap:wrap; gap:4px; }
@@ -879,7 +879,7 @@
       .gl-modal.sprint .gl-pace button.on {
         background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 16%,transparent);
         color:var(--cp-goal-sprint,#d97706); }
-      .gl-pace-hint { font-size:10px; color:var(--cp-text-tiny,#94a3b8);
+      .gl-pace-hint { font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-tiny,#94a3b8);
                       line-height:1.4; margin-top:3px; }
       .gl-hz-chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
       .gl-pace-line { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
@@ -898,7 +898,7 @@
       .gl-range-val { flex:0 0 auto; min-width:26px; text-align:right;
                       font-size:var(--cp-fs-sm,12px); font-weight:700;
                       color:var(--cp-accent,#4f46e5); font-variant-numeric:tabular-nums; }
-      .gl-range-scale { display:flex; justify-content:space-between; font-size:10px;
+      .gl-range-scale { display:flex; justify-content:space-between; font-size:var(--cp-fs-tiny,12px);
                         color:var(--cp-text-tiny,#94a3b8); margin-top:1px; }
       /* 示例 chips 行（点击填入 textarea） */
       .gl-exrow { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
@@ -915,7 +915,7 @@
       .gl-chainreco { display:flex; gap:6px; align-items:center; margin-top:6px;
                       font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#374151); }
       .gl-chainreco .tx { flex:1 1 auto; min-width:0; }
-      .gl-chainreco button { font-size:11px; padding:2px 9px; flex:0 0 auto; }
+      .gl-chainreco button { font-size:var(--cp-fs-tiny,12px); padding:2px 9px; flex:0 0 auto; }
       .gl-chainreco.ok { color:var(--cp-ok,#0f9d75); }
       .gl-prog { margin:var(--cp-gap-xs,4px) 0; }
       .gl-prog-btn { background:transparent; border:none; cursor:pointer; padding:2px 0;
