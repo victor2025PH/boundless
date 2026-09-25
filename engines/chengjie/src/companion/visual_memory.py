@@ -557,7 +557,7 @@ def memory_note(store: Optional["VisualMemoryStore"], conv_key: str, *, who: str
         return ""
 
 
-# ── 进程单例（config_dir/visual_memory.db）────────────────────────────────────
+# ── 进程单例（data_dir/visual_memory.db）──────────────────────────────────────
 _STORE: Optional[VisualMemoryStore] = None
 _STORE_LOCK = threading.Lock()
 
@@ -570,8 +570,8 @@ def get_visual_memory_store() -> Optional[VisualMemoryStore]:
         if _STORE is not None:
             return _STORE
         try:
-            from src.licensing.data_paths import config_dir
-            p = Path(config_dir()) / "visual_memory.db"
+            from src.licensing.data_paths import data_dir
+            p = Path(data_dir()) / "visual_memory.db"
         except Exception:
             p = Path("config") / "visual_memory.db"
         try:

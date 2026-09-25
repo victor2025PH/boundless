@@ -151,6 +151,33 @@ def cwd_or_data_file(name: str) -> Path:
     return Path("config") / name
 
 
+def resolve_legacy_config_path(path: Any) -> str:
+    """把历史相对路径 ``config/<单层文件名>`` 收成 :func:`cwd_or_data_file`。
+
+    ``:memory:``、绝对路径、以及不是 ``config/<name>`` 的路径原样返回（保留
+    调用方拼写）。同树布局同样原样返回，这样 pytest 只设 ``AITR_DATA_DIR``
+    时默认库仍相对 CWD，不会被进程级数据根收走。必须在**打开时**调用，不能
+    在 import 时把结果钉死。
+    """
+    if path is None:
+        return ""
+    text = str(path).strip()
+    if not text or text == ":memory:":
+        return text
+    try:
+        parsed = Path(text)
+    except (TypeError, ValueError):
+        return text
+    if parsed.is_absolute():
+        return text
+    parts = parsed.parts
+    if len(parts) != 2 or parts[0] != "config" or parts[1] in ("", ".", ".."):
+        return text
+    if not _split_layout():
+        return text
+    return str(cwd_or_data_file(parts[1]))
+
+
 def plugin_dir(config_path: Any = None) -> Path:
     """插件目录。
 

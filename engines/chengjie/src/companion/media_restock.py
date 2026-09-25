@@ -96,10 +96,16 @@ def qualify_restock_targets(
 
 # ── 计划文件（watchdog 写 / CLI 读，JSON）────────────────────────────────────
 
+def _plan_file(path: Any) -> Path:
+    from src.licensing.data_paths import resolve_legacy_config_path
+    raw = str(path or "") or DEFAULT_PLAN_PATH
+    return Path(resolve_legacy_config_path(raw))
+
+
 def load_plan(path: Any) -> Dict[str, Any]:
     """读补货计划；无/坏文件返回空计划（容错优先）。"""
     try:
-        p = Path(str(path or "") or DEFAULT_PLAN_PATH)
+        p = _plan_file(path)
         if not p.is_file():
             return {"items": []}
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -114,7 +120,7 @@ def load_plan(path: Any) -> Dict[str, Any]:
 def save_plan(path: Any, plan: Dict[str, Any]) -> bool:
     """写计划文件（UTF-8；软失败 False）。"""
     try:
-        p = Path(str(path or "") or DEFAULT_PLAN_PATH)
+        p = _plan_file(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
             json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")

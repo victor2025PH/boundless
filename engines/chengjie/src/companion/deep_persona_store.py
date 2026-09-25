@@ -31,6 +31,10 @@ class DeepPersonaStore:
         self._path = str(db_path)
         self._lock = threading.RLock()
         self._last_consolidate: Dict[str, float] = {}  # 进程级巩固节流（cid → ts）
+        if self._path != ":memory:":
+            parent = Path(self._path).parent
+            if str(parent) not in ("", "."):
+                parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
     def due_for_consolidation(self, conversation_id: str, min_interval_sec: float = 900.0) -> bool:
@@ -390,9 +394,11 @@ def get_deep_persona_store(db_path: str | Path | None = None) -> Optional[DeepPe
     if _SINGLETON is None:
         if db_path is None:
             return None
+        from src.licensing.data_paths import resolve_legacy_config_path
+        opened = resolve_legacy_config_path(db_path)
         with _LOCK:
             if _SINGLETON is None:
-                _SINGLETON = DeepPersonaStore(db_path)
+                _SINGLETON = DeepPersonaStore(opened)
     return _SINGLETON
 
 

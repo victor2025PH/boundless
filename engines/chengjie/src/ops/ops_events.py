@@ -231,7 +231,8 @@ def get_ops_event_store(db_path: str = "config/ops_events.db") -> Optional[OpsEv
         with _store_lock:
             if _store is None:
                 try:
-                    _store = OpsEventStore(db_path)
+                    from src.licensing.data_paths import resolve_legacy_config_path
+                    _store = OpsEventStore(resolve_legacy_config_path(db_path))
                 except Exception:
                     logger.warning("[ops_events] 建库失败，审计降级（不落库）", exc_info=True)
                     _store = None

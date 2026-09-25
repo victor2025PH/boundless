@@ -321,8 +321,9 @@ def get_autoreply_limiter(cfg: Optional[Dict[str, Any]] = None) -> AutoReplyLimi
                 store = None
                 if rate.get("persist", True):
                     try:
-                        store = SendCountStore(
-                            str(rate.get("db_path") or "config/account_sends.db"))
+                        from src.licensing.data_paths import resolve_legacy_config_path
+                        store = SendCountStore(resolve_legacy_config_path(
+                            str(rate.get("db_path") or "config/account_sends.db")))
                     except Exception:
                         logger.warning(
                             "[limiter] SendCountStore 建库失败，降级纯内存计数", exc_info=True)

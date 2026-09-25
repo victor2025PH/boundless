@@ -29,6 +29,10 @@ class DeepPersonaTrendStore:
     def __init__(self, db_path: str | Path):
         self._path = str(db_path)
         self._lock = threading.RLock()
+        if self._path != ":memory:":
+            parent = Path(self._path).parent
+            if str(parent) not in ("", "."):
+                parent.mkdir(parents=True, exist_ok=True)
         self._ensure()
 
     def _conn(self) -> sqlite3.Connection:
@@ -104,9 +108,11 @@ def get_deep_persona_trend(db_path: str | Path | None = None) -> Optional[DeepPe
     if _SINGLETON is None:
         if db_path is None:
             return None
+        from src.licensing.data_paths import resolve_legacy_config_path
+        opened = resolve_legacy_config_path(db_path)
         with _LOCK:
             if _SINGLETON is None:
-                _SINGLETON = DeepPersonaTrendStore(db_path)
+                _SINGLETON = DeepPersonaTrendStore(opened)
     return _SINGLETON
 
 

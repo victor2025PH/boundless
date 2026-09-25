@@ -12,8 +12,9 @@
 节流（≥1h 才重写今天的行），零热路开销。
 
 设计（对齐 risk_events / tts_cost_store 家族）：
-- 默认路径落**可写数据区**（``data_paths.config_dir()``——服务进程＝实例数据根，
-  测试 conftest 已把 AITR_DATA_DIR 指向 tmp → 天然隔离，绝不写仓库 config/）。
+- 默认路径落**可写数据区**（``data_paths.data_dir()``——同树布局等于
+  ``config_dir()``，测试 conftest 的 ``AITR_DATA_DIR`` 仍落 tmp/config；
+  分裂布局落到数据根，不跟 YAML 进只读目录）。
 - **默认关**：``ops.automation_coverage_trend.enabled``（新子系统约定）；关＝零 IO。
 - 模块级单例 + 依赖注入（db_path 可传 tmp）→ 不依赖真库即可单测。
 - 只存日期与计数，绝不存会话内容。
@@ -125,10 +126,10 @@ class CoverageTrendStore:
 
 
 def _default_db_path() -> Path:
-    """默认落可写数据区（与 risk_events 同惯例：认 AITR_DATA_DIR，测试天然隔离）。"""
+    """默认落可写数据区（与 risk_events 同惯例：同树 = config_dir，分裂 = 数据根）。"""
     try:
-        from src.licensing.data_paths import config_dir
-        return Path(config_dir()) / "automation_coverage_trend.db"
+        from src.licensing.data_paths import data_dir
+        return Path(data_dir()) / "automation_coverage_trend.db"
     except Exception:
         return Path("config") / "automation_coverage_trend.db"
 
