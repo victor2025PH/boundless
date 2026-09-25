@@ -372,7 +372,14 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     assert grant < lock_body.index("DirIsReparse(Dir)") < lock_body.index("StateDirWasLocked(Dir)")
     assert "ReparsePoint" in iss and "AssertStateParent(Dir)" in iss
     assert "S-1-5-32-545:(OI)(CI)RX" in iss
+    parent = iss.split("procedure AssertStateParent")[1].split("function RetireUnlockedFleet")[0]
+    assert "& icacls.exe @ia" in parent
+    assert "''*S-1-5-18:(OI)(CI)F''" in parent
+    assert "''*S-1-5-32-544:(OI)(CI)F''" in parent
+    assert "''*S-1-5-32-545:(OI)(CI)RX''" in parent
+    assert "/grant:r *S-1-5-18:" not in parent
     step = iss.split("procedure CurStepChanged")[1]
+    assert "pair: AnsiString" in step and "LoadStringFromFile" in step
     assert "ForceDirectories" not in step
     assert "-Snapshot" in step and "finally" in step
     assert step.index("ResultCode <> 0") < step.index("WizardSilent") < step.index("ExitProcess(1)")
