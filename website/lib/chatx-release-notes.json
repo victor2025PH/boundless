@@ -1,5 +1,29 @@
 [
   {
+    "version": "1.0.100",
+    "date": "2026-09-26",
+    "title": {
+      "zh": "预置声试听修复 + 登录不再 2 小时掉线",
+      "en": "Preset-voice preview fix + sign-in no longer drops after 2 hours"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "修复预置声试听失败：选日语、英语等外语预置声时，试听会自动换成与音色同语种的试听句，不再提示「文本语种与将念出的语种不一致」",
+        "登录不再 2 小时自动失效：只要在使用就会自动续期；桌面端偶遇登录过期时会在后台自动重新登录，不再反复弹出「登录已失效」",
+        "数据与平台登录不受影响；升级后请重启一次工作台"
+      ],
+      "en": [
+        "Fixed preset-voice preview failures: previewing a Japanese, English or other non-Chinese preset voice now uses a sample sentence in that voice's language instead of failing with a language-mismatch error",
+        "Sign-in no longer expires after 2 hours: the session renews automatically while you keep working, and the desktop app silently signs back in if the session does expire, so the repeated \"session expired\" banner is gone",
+        "Data and platform logins are unaffected; please restart the workbench once after upgrading"
+      ]
+    }
+  },
+  {
     "version": "1.0.98",
     "date": "2026-09-24",
     "title": {
