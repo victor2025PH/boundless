@@ -443,3 +443,8 @@ def test_installer_shortcuts_and_finish_page():
     assert "--state-dir" in vbs and " ui" in vbs and "Wscript.Shell" in vbs and ", 0, False" in vbs
     ico = (SETUP / "fleet-node.ico").read_bytes()
     assert ico[:4] == b"\x00\x00\x01\x00"
+    deploy = (ENGINE / "docs/FLEET_DEPLOY.md").read_text(encoding="utf-8")
+    home = (ENGINE / "domains/fleet_control/web/templates/fleet_home.html").read_text(encoding="utf-8")
+    assert "Fleet node status" not in deploy and "Fleet console" not in deploy
+    assert "舰队节点" in deploy and "Open-Panel.vbs" in deploy and "舰队控制台" in deploy
+    assert "智控节点状态" not in home and "舰队节点" in home
