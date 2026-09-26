@@ -368,8 +368,12 @@ def test_schedule_followup_fires_and_replaces(store, bg_loop, monkeypatch):
     from src.integrations.protocol_autoreply import tag_needs_human
     assert tag_needs_human(store, conv, reason="adult:explicit:nudes", source="adult_grader", now=1.0)
     assert ag.schedule_followup(store, conv, level="explicit", tag_ts=1.0, lang="en", svc=svc, delay=30)
+    assert ag.pending_followups() == [cid]
+    # 同会话替换后仍是一枚。这里不能用 0.05s：忙的 runner 上定时器会先触发，
+    # run_followup 把 pending 清掉，下一行断言就看到 []。
+    assert ag.schedule_followup(store, conv, level="explicit", tag_ts=1.0, lang="en", svc=svc, delay=30)
+    assert ag.pending_followups() == [cid]
     assert ag.schedule_followup(store, conv, level="explicit", tag_ts=1.0, lang="en", svc=svc, delay=0.05)
-    assert ag.pending_followups() == [cid]         # 同会话只留一枚
     assert svc.got.wait(3.0), "timer did not fire"
     assert svc.delivered[0]["conversation_id"] == cid
     deadline = time.time() + 2

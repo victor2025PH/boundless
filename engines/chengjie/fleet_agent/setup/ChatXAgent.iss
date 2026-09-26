@@ -1,4 +1,4 @@
-; ChatXAgent.iss -- Inno Setup 6 script for ChatXAgentSetup.exe (free compiler, no paid tools).
+﻿; ChatXAgent.iss -- Inno Setup 6 script for ChatXAgentSetup.exe (free compiler, no paid tools).
 ; Build: powershell -File fleet_agent\build_setup.ps1
 ; Silent mass deploy: ChatXAgentSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ; Room key:          ChatXAgentSetup.exe /ROOMKEYFILE=C:\path\room.key
@@ -49,21 +49,35 @@ Filename: "{app}\chatx-agent.exe"; Parameters: "uninstall-service"; Flags: runhi
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-FinishedHeadingLabel=Installed
-FinishedLabel=This PC is set up. If you used the public installer, an admin still has to approve it in the fleet console (pending). Open "Fleet node status" from the Start menu to check this PC. A room installer joins its group without that extra click.
+FinishedHeadingLabel=安装完成
+FinishedLabel=接下来三步：1. 把配对码发给管理员，舰队控制台里能看到同一个码  2. 管理员批准后，点「打开舰队节点」并刷新本页  3. 状态变为在线后，可从本页打开舰队控制台
+
+[Tasks]
+Name: "desktopicon"; Description: "在桌面创建「舰队节点」快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce
 
 [Files]
 Source: "{#AgentExe}"; DestDir: "{app}"; DestName: "chatx-agent.exe"; Flags: ignoreversion
 Source: "{#SetupDir}\bootstrap.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Status.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SetupDir}\Open-Panel.vbs"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\Fleet node status.lnk"
+Type: files; Name: "{autoprograms}\Fleet console.lnk"
+Type: files; Name: "{autodesktop}\Fleet node status.lnk"
+Type: files; Name: "{autodesktop}\Fleet console.lnk"
 
 [Icons]
-Name: "{autoprograms}\Fleet node status"; Filename: "{app}\Open-Status.cmd"
-Name: "{autoprograms}\Fleet console"; Filename: "{code:GetConsoleUrl}"
+Name: "{autodesktop}\舰队节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"; Tasks: desktopicon
+Name: "{autoprograms}\舰队节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"
+Name: "{autoprograms}\舰队控制台"; Filename: "{code:GetConsoleUrl}"; IconFilename: "{app}\fleet-node.ico"
 
 [Code]
 var
   SnapshotToDelete: String;
+  BootstrapOk: Boolean;
+  ConsoleButton: TNewButton;
 
 function CmdParam(const Prefix: String): String;
 var
@@ -283,6 +297,39 @@ begin
     FailInstall('state directory ACL is not limited to SYSTEM and Administrators');
 end;
 
+procedure ApplyFinishedCopy(const PairText: String);
+begin
+  WizardForm.FinishedHeadingLabel.Caption := '安装完成';
+  if PairText <> '' then
+    WizardForm.FinishedLabel.Caption :=
+      '配对码 ' + PairText + '。' + #13#10 +
+      '1. 把配对码发给管理员，舰队控制台里能看到同一个码' + #13#10 +
+      '2. 管理员批准后，点「打开舰队节点」并刷新本页' + #13#10 +
+      '3. 状态变为在线后，可从本页打开舰队控制台'
+  else
+    WizardForm.FinishedLabel.Caption :=
+      '1. 开机后计划任务会自动连接主控' + #13#10 +
+      '2. 点「打开舰队节点」查看在线、离线或待批准' + #13#10 +
+      '3. 要批准或查看其它电脑时，再打开舰队控制台';
+end;
+
+procedure OpenLocalPanel();
+var
+  ResultCode: Integer;
+  vbs: String;
+begin
+  vbs := ExpandConstant('{app}\Open-Panel.vbs');
+  if not Exec(ExpandConstant('{sys}\wscript.exe'), '//B "' + vbs + '"', '', SW_HIDE, ewNoWait, ResultCode) then
+    ShellExec('', 'http://127.0.0.1:47321/', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+end;
+
+procedure OpenFleetConsoleClick(Sender: TObject);
+var
+  ErrorCode: Integer;
+begin
+  ShellExec('', GetConsoleUrl(''), '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   src, dir, params, legacy, pairText: String;
@@ -291,6 +338,7 @@ var
 begin
   if CurStep <> ssPostInstall then
     Exit;
+  BootstrapOk := False;
   src := CmdParam('/ROOMKEYFILE=');
   if (src = '') and FileExists(ExpandConstant('{src}\room.key')) then
     src := ExpandConstant('{src}\room.key');
@@ -331,20 +379,26 @@ begin
       if ResultCode = 3 then
         RaiseException('Could not lock the fleet state directory. Install aborted before any secret was written.');
       SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
-    end;
+    end
+    else
+      BootstrapOk := True;
   finally
     if legacy <> '' then
       DeleteFile(legacy);
     SnapshotToDelete := '';
   end;
+  if not BootstrapOk then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := '安装未完成';
+    WizardForm.FinishedLabel.Caption := '文件已复制，但没有连上主控，计划任务没有安装。请用管理员身份重新运行安装程序。';
+    Exit;
+  end;
   pair := '';
+  pairText := '';
   { LoadStringFromFile's second parameter is AnsiString on Inno Setup 6.3. Pairing codes are ASCII. }
   if LoadStringFromFile(dir + '\pairing.txt', pair) then
-  begin
-    pairText := String(pair);
-    WizardForm.FinishedLabel.Caption :=
-      'Pairing code ' + Trim(pairText) + '. An admin approves this PC in the fleet console, which shows the same code.';
-  end;
+    pairText := Trim(String(pair));
+  ApplyFinishedCopy(pairText);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -359,4 +413,38 @@ begin
   { State dir is kept unless the uninstall is started with /REMOVESTATE=1. }
   if (CurUninstallStep = usPostUninstall) and (CmdParam('/REMOVESTATE=') = '1') then
     DelTree(ExpandConstant('{commonappdata}\ChatX\fleet'), True, True, True);
+end;
+
+procedure InitializeWizard();
+begin
+  ConsoleButton := TNewButton.Create(WizardForm);
+  ConsoleButton.Parent := WizardForm;
+  ConsoleButton.Caption := '打开舰队控制台';
+  ConsoleButton.OnClick := @OpenFleetConsoleClick;
+  ConsoleButton.Visible := False;
+  ConsoleButton.Width := ScaleX(140);
+  ConsoleButton.Height := WizardForm.NextButton.Height;
+  ConsoleButton.Left := WizardForm.NextButton.Left - ConsoleButton.Width - ScaleX(8);
+  ConsoleButton.Top := WizardForm.NextButton.Top;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  ConsoleButton.Visible := CurPageID = wpFinished;
+  if CurPageID = wpFinished then
+  begin
+    WizardForm.NextButton.Caption := '打开舰队节点';
+    ConsoleButton.Left := WizardForm.NextButton.Left - ConsoleButton.Width - ScaleX(8);
+    ConsoleButton.Top := WizardForm.NextButton.Top;
+    WizardForm.FinishedLabel.WordWrap := True;
+    WizardForm.FinishedLabel.AutoSize := False;
+    WizardForm.FinishedLabel.Height := ScaleY(160);
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpFinished then
+    OpenLocalPanel();
 end;

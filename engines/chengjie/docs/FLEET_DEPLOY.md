@@ -20,12 +20,12 @@
 
 | 用途 | 路径 |
 |---|---|
-| 节点 Agent 核心（CLI：enroll / add-instance / run / install-service / uninstall-service / service-status / status） | `src/fleet/agent.py` |
+| 节点 Agent 核心（CLI：enroll / add-instance / run / install-service / uninstall-service / service-status / status / ui） | `src/fleet/agent.py`；本机页 `src/fleet/panel.py`（只监听 `127.0.0.1:47321`） |
 | 服务化（schtasks / systemd 命令生成 + 监督循环） | `src/fleet/service.py` |
 | 自升级（校验下载 + 换文件脚本） | `src/fleet/updater.py` |
 | 操作端 CLI（new-code / nodes / task / tasks / upgrade） | `src/fleet/admin.py` |
 | 打包（PyInstaller 单文件 + manifest.json） | `fleet_agent/build_agent.py`、`fleet_agent/entry.py` |
-| Windows 双击安装包（Inno Setup 6，免费） | `fleet_agent/setup/ChatXAgent.iss`、`fleet_agent/build_setup.ps1` → `ChatXAgentSetup.exe` |
+| Windows 双击安装包（Inno Setup 6，免费）。桌面与开始菜单「舰队节点」经 `Open-Panel.vbs` 打开本机页；「舰队控制台」仍是主控 `/console` | `fleet_agent/setup/ChatXAgent.iss`、`Open-Panel.vbs`、`fleet_agent/build_setup.ps1` → `ChatXAgentSetup.exe` |
 | Windows 命令行安装 / 卸载（高级） | `fleet_agent/Install-ChatXAgent.ps1`、`fleet_agent/Uninstall-ChatXAgent.ps1` |
 | 主控 systemd 单元 | `deploy/fleet/chatx-fleet.service` |
 | 主控 nginx 片段（主站前缀 A / 子域 B 两种） | `deploy/fleet/nginx-fleet.conf` |
@@ -84,7 +84,7 @@ powershell -File deploy\fleet\publish_agent.ps1            # scp 到官网 publi
 
 1. 打开 `https://bd2026.cc/fleet/`，下载 **ChatXAgentSetup.exe**，双击，权限确认里点「是」。
 2. 打开主控后台 `https://bd2026.cc/fleet/console`，这台电脑在「待批准」里。安装结束画面上的配对码和控制台同一列对得上，点批准。分组用后台填的；不填就进 `pending-default`。这台电脑如果已经有节点，控制台会先问一句 `approving will rotate key of n_xxx`。
-3. 开始菜单「Fleet node status」能看到本机已接入。没装智聊、也没装幻颜，也一样能批，只是这台电脑没有实例。
+3. 桌面或开始菜单的「舰队节点」打开本机管理页（`Open-Panel.vbs` → `chatx-agent ui`，只看这台电脑：待批准 / 在线 / 离线 / 已拒绝）。批准或查看其它电脑用开始菜单「舰队控制台」，或直接打开 `https://bd2026.cc/fleet/console`。没装智聊、也没装幻颜，也一样能批，只是这台电脑没有实例。
 
 一整间机房（不用逐台批准）：
 
@@ -107,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 
 重装系统：再跑一次安装包即可。machine_id 不变，但批准时必须在控制台或 CLI 显式确认（`approving will rotate key of n_xxx` / `approve --confirm-rotate`），确认后才换新 key。静默重装会先停掉计划任务 `ChatX Fleet Agent` 再覆盖 exe。卸载默认留下 `%ProgramData%\ChatX\fleet`；安装包卸载参数 `/REMOVESTATE=1` 才删它。
 
-排障：`"%ProgramFiles%\ChatX Agent\chatx-agent.exe" --state-dir "%ProgramData%\ChatX\fleet" status`；
+排障：先开桌面或开始菜单「舰队节点」（本机页 `http://127.0.0.1:47321/`）。命令行同一份摘要：`"%ProgramFiles%\ChatX Agent\chatx-agent.exe" --state-dir "%ProgramData%\ChatX\fleet" status`；打开页面：同一条命令把 `status` 换成 `ui`。
 日志 `%ProgramData%\ChatX\fleet\logs\agent.log`；前台调试 `... run -v`（Ctrl-C 退出，不影响计划任务）；
 `schtasks /Query /TN "ChatX Fleet Agent" /V`。卸载：`Uninstall-ChatXAgent.ps1 [-PurgeState]`（默认保留状态目录，保节点身份）。
 

@@ -198,10 +198,17 @@ def _today_goal(store: GoalStore):
 
 
 def _fill_cap(store: GoalStore, gid: str, cap: int):
+    """在「今天」记满 cap 拍，且不占当前小时槽。
+
+    用「现在往前推整点」在刚过本地零点时会落到昨天，cap 计数只认当天前缀，
+    主动链就不会再 hold。槽位改成今天日期上、当前小时之后的小时键。
+    """
+    lt = time.localtime(NOW)
+    day = f"{lt.tm_year:04d}-{lt.tm_mon:02d}-{lt.tm_mday:02d}"
     for i in range(cap):
-        store.upsert_action(gid, slot_key("today", NOW - (i + 1) * 3600),
-                            intent=f"p{i}", push_level="soft", status="consumed",
-                            now=NOW - (i + 1) * 3600)
+        slot = f"{day}T{(lt.tm_hour + 1 + i) % 24:02d}"
+        store.upsert_action(gid, slot, intent=f"p{i}", push_level="soft", status="consumed",
+                            now=NOW)
 
 
 def test_passive_inject_ignores_pace_cap_but_proactive_holds_and_records():
