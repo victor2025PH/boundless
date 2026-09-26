@@ -202,6 +202,14 @@ def test_recovery_hint_text_contract():
 
 # ── 扫描工具趋势分桶（scan_db 契约，临时 sqlite） ────────────────────
 
+def _local_noon(now: float | None = None) -> float:
+    """本地正午。一小时内的偏移不会跨日，零点附近的墙钟也不会。"""
+    n = time.time() if now is None else float(now)
+    lt = time.localtime(n)
+    midnight = n - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+    return midnight + 12 * 3600
+
+
 def test_scan_db_by_day_buckets(tmp_path):
     import importlib.util
     p = _ROOT / "tools" / "scan_outbound_lang_mismatch.py"
@@ -215,21 +223,24 @@ def test_scan_db_by_day_buckets(tmp_path):
                 " display_name TEXT)")
     con.execute("CREATE TABLE messages (conversation_id TEXT, direction TEXT,"
                 " text TEXT, ts REAL)")
-    now = time.time()
+    # 锚在本地正午：now-3000 与 now-2000 在 00:28–00:50 会落在相邻两天，
+    # by_day[today].out_rows 就只剩 1。
+    noon = _local_noon()
     con.execute("INSERT INTO conversations VALUES ('c1','telegram','Yasmin')")
     rows = [
-        ("c1", "in", "good morning! how are you today", now - 3600),
-        ("c1", "out", _A_WRONG_ZH, now - 3000),
-        ("c1", "out", "Sure, sending it over tonight.", now - 2000),
+        ("c1", "in", "good morning! how are you today", noon - 3600),
+        ("c1", "out", _A_WRONG_ZH, noon - 3000),
+        ("c1", "out", "Sure, sending it over tonight.", noon - 2000),
     ]
     con.executemany("INSERT INTO messages VALUES (?,?,?,?)", rows)
     con.commit()
     con.close()
 
-    rep = mod.scan_db(db, now - 86400)
+    rep = mod.scan_db(db, noon - 86400)
     s = rep["summary"]
     assert s["mismatch_rows"] == 1 and s["out_rows_checked"] == 2
-    today = time.strftime("%Y-%m-%d", time.localtime(now - 3000))
+    today = time.strftime("%Y-%m-%d", time.localtime(noon - 3000))
+    assert time.strftime("%Y-%m-%d", time.localtime(noon - 2000)) == today
     assert s["by_day"][today]["mismatch_rows"] == 1
     assert s["by_day"][today]["out_rows"] == 2
 
