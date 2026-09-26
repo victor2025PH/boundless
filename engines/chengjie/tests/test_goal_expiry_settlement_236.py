@@ -308,7 +308,7 @@ def test_card_active_only_with_real_send_in_24h(card):
 def test_card_stalled_when_scheduled_but_zero_sends_24h(card):
     """BABY BEAR 形态：建了 2 天、引擎绿、会话全自动、零真发 → stalled 红字 + 上次被拦原因。"""
     store, gid = card.mk(created_ago_sec=2 * 86400)
-    record_beat_blocked(store, gid, "silence", slot="d2026-09-07", now=NOW - 600)
+    record_beat_blocked(store, gid, "silence", slot="d2026-09-07", now=time.time())
     live = card.live()
     assert live["auto_state"] == "stalled" and live["stalled"] is True
     assert live["last_block"]["reason"] == "silence"

@@ -34,6 +34,23 @@ NOW = time.time()
 CONV = "whatsapp:17345893506:13308422244"
 
 
+def _today_pair(older_ago: float, newer_ago: float) -> tuple[float, float]:
+    """两个时间戳都落在 NOW 的本地日历日内，且保持先后。
+
+    模块导入若落在零点后的头几分钟，``NOW - 600`` 会掉到昨天，
+    ``summary.today.blocked`` 就变成 0。
+    """
+    lt = time.localtime(NOW)
+    day0 = NOW - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+    older = NOW - older_ago
+    newer = NOW - newer_ago
+    if older < day0:
+        older = day0
+    if newer <= older:
+        newer = older + 1.0
+    return older, newer
+
+
 def _goal(gs: GoalStore, **kw):
     base = dict(
         conversation_id=CONV, platform="whatsapp", account_id="17345893506",
@@ -216,9 +233,10 @@ def test_build_beats_trace_lists_sent_injected_blocked_with_delivery_truth():
                              conversation_id=CONV, care_id=11)
     gs.add_event(gid, "beat_injected", "draft:2026-09-07", conversation_id=CONV,
                  text_head="顺势提一下周末", now=NOW - 1800)
+    silence_ts, product_ts = _today_pair(600, 300)
     record_beat_blocked(gs, gid, "silence", slot="d2026-09-07",
-                        conversation_id=CONV, now=NOW - 600)
-    gs.add_event(gid, "goal_no_product", "目标未绑定产品，已拦下含报价话术", now=NOW - 300)
+                        conversation_id=CONV, now=silence_ts)
+    gs.add_event(gid, "goal_no_product", "目标未绑定产品，已拦下含报价话术", now=product_ts)
     care = _CareRows([{"id": 11, "sent_text": "Hey, thinking of you today ☀️",
                        "status": "sent", "note": "deferred:501"}])
     outbox = _Outbox([{"id": 501, "status": "sent", "sent_at": NOW - 3500,

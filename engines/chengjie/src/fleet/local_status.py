@@ -137,7 +137,7 @@ def record_heartbeat(state_dir: Path, at: float) -> None:
 def read_heartbeat_at(state_dir: Path) -> Optional[float]:
     try:
         raw = json.loads((Path(state_dir) / HEARTBEAT_STAMP).read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return None
     if not isinstance(raw, dict):
         return None
