@@ -859,6 +859,11 @@ _DB_PATH: str = DEFAULT_DB_PATH
 _CFG_LOCK = threading.Lock()
 
 
+def _resolved_db_path(db_path: Any) -> str:
+    from src.licensing.data_paths import resolve_legacy_config_path
+    return resolve_legacy_config_path(db_path)
+
+
 def configure_group_show_store(db_path: Any = DEFAULT_DB_PATH) -> GroupShowStore:
     """启动期装配（同路径幂等；**换路径则重建**）。双实例部署下各实例指定自己的库。
 
@@ -870,7 +875,7 @@ def configure_group_show_store(db_path: Any = DEFAULT_DB_PATH) -> GroupShowStore
     """
     global _STORE, _DB_PATH
     with _CFG_LOCK:
-        path = str(db_path)
+        path = _resolved_db_path(db_path)
         if _STORE is not None and _DB_PATH != path:
             try:
                 _STORE.close()
@@ -895,7 +900,9 @@ def get_group_show_store(db_path: Any = None) -> GroupShowStore:
         with _CFG_LOCK:
             if _STORE is None:
                 if db_path is not None:
-                    _DB_PATH = str(db_path)
+                    _DB_PATH = _resolved_db_path(db_path)
+                else:
+                    _DB_PATH = _resolved_db_path(_DB_PATH)
                 _STORE = GroupShowStore(_DB_PATH)
     return _STORE
 

@@ -1991,6 +1991,11 @@ _STORE: Optional[PersonaBioStore] = None
 _DB_PATH: str = DEFAULT_DB_PATH
 
 
+def _resolved_db_path(db_path: Any) -> str:
+    from src.licensing.data_paths import resolve_legacy_config_path
+    return resolve_legacy_config_path(db_path)
+
+
 def configure_persona_bio_store(
     db_path: Any = DEFAULT_DB_PATH,
     embed_fn: Any = _UNSET,
@@ -1998,7 +2003,7 @@ def configure_persona_bio_store(
     """启动期/测试装配（幂等）：指定库路径并建库；可选注入 embed_fn。"""
     global _STORE, _DB_PATH
     with _CFG_LOCK:
-        _DB_PATH = str(db_path)
+        _DB_PATH = _resolved_db_path(db_path)
         try:
             kwargs: Dict[str, Any] = {}
             if embed_fn is not _UNSET:
@@ -2012,10 +2017,11 @@ def configure_persona_bio_store(
 
 def get_persona_bio_store() -> Optional[PersonaBioStore]:
     """取 store 单例（未配置则按默认路径懒建）。建库失败返回 None（调用方需容错）。"""
-    global _STORE
+    global _STORE, _DB_PATH
     if _STORE is None:
         with _CFG_LOCK:
             if _STORE is None:
+                _DB_PATH = _resolved_db_path(_DB_PATH)
                 try:
                     _STORE = PersonaBioStore(_DB_PATH)
                 except Exception:

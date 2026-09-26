@@ -14,7 +14,7 @@
 
 设计（对齐 ``kill_switch`` / ``SendCountStore``）
 ------------------------------------------------
-- ops/ 内独立 SQLite（``<data_root>/config/account_risk_events.db``），进程单例。
+- ops/ 内独立 SQLite（``data_dir()/account_risk_events.db``），进程单例。
 - **全 best-effort，永不抛**：记账失败绝不能掩盖原始发送错误、更不能拖垮发送主链。
 - 表恒小：只看 24h，摊还清理 >2 天旧行（留 48h 冗余）。
 - 纯依赖注入（db_path 可传 tmp）→ 不依赖真库即可单测。
@@ -57,12 +57,13 @@ def account_key(platform: str, account_id: str) -> str:
 def _default_db_path() -> Path:
     """默认落 **可写数据区**（服务进程 = 实例数据根；测试 conftest = tmp）。
 
-    用 ``data_paths.config_dir()`` 而非裸 ``config/``：前者认 ``AITR_DATA_DIR``，
-    测试里被 conftest 指向 tmp → 天然隔离，绝不写仓库 config/。取不到再回落裸路径。
+    用 ``data_paths.data_dir()`` 而非裸 ``config/``：同树布局它等于
+    ``config_dir()``（测试 conftest 的 ``AITR_DATA_DIR`` 仍落 tmp/config）；
+    VPS 分裂布局落到数据根，不跟 YAML 进只读的 ``/etc``。
     """
     try:
-        from src.licensing.data_paths import config_dir
-        return Path(config_dir()) / "account_risk_events.db"
+        from src.licensing.data_paths import data_dir
+        return Path(data_dir()) / "account_risk_events.db"
     except Exception:
         return Path("config") / "account_risk_events.db"
 
@@ -122,7 +123,7 @@ _singleton_lock = threading.Lock()
 
 
 def get_risk_event_store(db_path: Optional[Any] = None) -> RiskEventStore:
-    """进程内单例。首次调用可指定路径，默认 ``<data_root>/config/account_risk_events.db``。"""
+    """进程内单例。首次调用可指定路径，默认 ``data_dir()/account_risk_events.db``。"""
     global _singleton
     if _singleton is None:
         with _singleton_lock:

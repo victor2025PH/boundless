@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 DEFAULT_TTL_HOURS = 24.0
-# C 类相对路径：进程 CWD=实例数据根（与 logs/、config/*.db 家族同惯例）
+# 历史相对路径。打开时经 resolve_legacy_config_path：分裂布局落数据根，
+# 同树布局仍是 CWD 相对 config/voice_iou.json。
 DEFAULT_STORE_PATH = Path("config") / "voice_iou.json"
 _MAX_ENTRIES = 500          # 防长期运行撑爆（超限剪最老）
 
@@ -52,7 +53,10 @@ def parse_iou_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _resolve_path(store_path: Optional[Any]) -> Path:
-    return Path(store_path) if store_path is not None else DEFAULT_STORE_PATH
+    from src.licensing.data_paths import resolve_legacy_config_path
+    if store_path is not None:
+        return Path(resolve_legacy_config_path(store_path))
+    return Path(resolve_legacy_config_path(DEFAULT_STORE_PATH))
 
 
 def _ensure_loaded(path: Path) -> None:

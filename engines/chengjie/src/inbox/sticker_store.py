@@ -416,13 +416,19 @@ _STORE: Optional[StickerStore] = None
 _STORE_LOCK = threading.Lock()
 
 
+def _resolved_db_path(db_path: Any) -> str:
+    from src.licensing.data_paths import resolve_legacy_config_path
+    return resolve_legacy_config_path(db_path)
+
+
 def configure_sticker_store(db_path: Any) -> StickerStore:
     """显式指定库路径（main 启动期 / 单测传 ``:memory:`` 或 tmp 路径）。"""
     global _STORE
+    path = _resolved_db_path(db_path)
     with _STORE_LOCK:
         if _STORE is not None:
             _STORE.close()
-        _STORE = StickerStore(db_path)
+        _STORE = StickerStore(path)
     return _STORE
 
 
@@ -433,11 +439,12 @@ def get_sticker_store() -> Optional[StickerStore]:
         return _STORE
     with _STORE_LOCK:
         if _STORE is None:
+            path = _resolved_db_path(DEFAULT_DB_PATH)
             try:
-                _STORE = StickerStore(DEFAULT_DB_PATH)
+                _STORE = StickerStore(path)
             except Exception:
                 logger.warning("[sticker_store] 初始化失败 path=%s",
-                               DEFAULT_DB_PATH, exc_info=True)
+                               path, exc_info=True)
                 return None
     return _STORE
 

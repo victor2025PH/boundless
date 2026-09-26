@@ -429,11 +429,18 @@ def sanitize_topics(
     return kept
 
 
-# ── 缓存（CWD 相对 config/，C 类落点；测试经 cache_path 注入 tmp）──────────────
+def _cache_file(cache_path: Optional[str]) -> Path:
+    """历史 ``config/<name>`` 在分裂布局下改落数据根；显式绝对路径不动。"""
+    from src.licensing.data_paths import resolve_legacy_config_path
+    raw = str(cache_path or "") or DEFAULT_CACHE_PATH
+    return Path(resolve_legacy_config_path(raw))
+
+
+# ── 缓存（默认 config/；分裂布局改落数据根。测试经 cache_path 注入 tmp）──────
 def read_topics_cache(cache_path: Optional[str] = None) -> Dict[str, Any]:
     """读缓存文件；任何异常返回 ``{}``。"""
     try:
-        p = Path(str(cache_path or "") or DEFAULT_CACHE_PATH)
+        p = _cache_file(cache_path)
         if not p.exists():
             return {}
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -443,7 +450,7 @@ def read_topics_cache(cache_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 def _write_cache(cache_path: str, data: Dict[str, Any]) -> None:
-    p = Path(str(cache_path or "") or DEFAULT_CACHE_PATH)
+    p = _cache_file(cache_path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
     except Exception:

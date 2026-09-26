@@ -292,8 +292,11 @@ def _store(config_manager: Any):
             DEFAULT_DB_PATH,
             configure_group_show_store,
         )
-        d = _config_dir(config_manager)
-        path = (d / "group_show.db") if d is not None else DEFAULT_DB_PATH
+        from src.licensing.data_paths import runtime_file
+        cfg_path = getattr(config_manager, "config_path", None)
+        # 场次库是运行时数据。分裂布局落 AITR_DATA_DIR，不能跟 YAML 进 /etc，
+        # 也不能回落成 WorkingDirectory 下的 config/group_show.db。
+        path = runtime_file("group_show.db", cfg_path) if cfg_path else DEFAULT_DB_PATH
         st = configure_group_show_store(path)   # 同路径幂等；换路径会真换库
         return st if getattr(st, "available", False) else None
     except Exception:  # noqa: BLE001

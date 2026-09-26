@@ -323,7 +323,8 @@ def write_lora_registry_entry(
     机器独占文件（``config/persona_lora.json``），不碰人工带注释的 YAML → 零风险不丢注释。
     与 ``companion_selfie.resolve_persona_lora`` 的中间优先级层同一 schema。返回写入后的全量 dict。
     """
-    p = str(path)
+    from src.licensing.data_paths import resolve_legacy_config_path
+    p = resolve_legacy_config_path(str(path))
     data: Dict[str, Any] = {}
     try:
         if os.path.isfile(p):

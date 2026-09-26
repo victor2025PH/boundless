@@ -37,12 +37,11 @@ from typing import Any, Dict, Iterator, List, Optional
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_DB_PATH = Path(__file__).resolve().parents[3] / "config" / "vision_metrics.db"
-
-# 进程内锁——sqlite 自身在多线程下需要明确的连接管理
+# None = 尚未指定。打开时才解析历史 ``config/vision_metrics.db``，
+# 不能在 import 时钉成 ``__file__`` 旁的安装树 config/（舰队 WorkingDirectory）。
 _lock = threading.Lock()
 _initialized = False
-_db_path: Path = _DEFAULT_DB_PATH
+_db_path: Optional[Path] = None
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS vision_calls (
@@ -69,13 +68,23 @@ def configure(db_path: Path | str | None = None) -> None:
         _initialized = False
 
 
+def _active_db_path() -> Path:
+    """显式 configure / 测试覆盖优先；否则按分裂布局解析默认库。"""
+    global _db_path
+    if _db_path is None:
+        from src.licensing.data_paths import resolve_legacy_config_path
+        _db_path = Path(resolve_legacy_config_path("config/vision_metrics.db"))
+    return _db_path
+
+
 def _ensure_init() -> None:
-    global _initialized
+    global _initialized, _db_path
     if _initialized:
         return
     with _lock:
         if _initialized:
             return
+        _db_path = _active_db_path()
         try:
             _db_path.parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(str(_db_path)) as conn:

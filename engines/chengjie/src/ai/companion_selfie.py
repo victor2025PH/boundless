@@ -412,7 +412,8 @@ def _persona_key(persona: Any) -> str:
 
 def load_lora_registry(path: Any = None) -> Dict[str, Any]:
     """读角色 LoRA 注册表 JSON（mtime 缓存；不存在/损坏 → {}）。纯读、绝不抛。"""
-    p = str(path or DEFAULT_LORA_REGISTRY)
+    from src.licensing.data_paths import resolve_legacy_config_path
+    p = resolve_legacy_config_path(str(path or DEFAULT_LORA_REGISTRY))
     try:
         mt = os.path.getmtime(p)
     except OSError:

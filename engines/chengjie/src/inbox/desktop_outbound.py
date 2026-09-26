@@ -701,8 +701,9 @@ def get_desktop_outbound_queue(db_path: Optional[str] = None) -> DesktopOutbound
     if _QUEUE is None:
         with _QUEUE_LOCK:
             if _QUEUE is None:
-                path = (db_path or os.environ.get("DESKTOP_OUTBOUND_DB")
-                        or _DEFAULT_DB)
+                from src.licensing.data_paths import resolve_legacy_config_path
+                path = resolve_legacy_config_path(
+                    db_path or os.environ.get("DESKTOP_OUTBOUND_DB") or _DEFAULT_DB)
                 _QUEUE = DesktopOutboundQueue(path)
     return _QUEUE
 

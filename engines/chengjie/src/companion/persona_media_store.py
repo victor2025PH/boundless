@@ -615,6 +615,18 @@ class PersonaMediaStore:
         ]
         return out
 
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            logger.debug("[persona_media] 关闭连接失败（忽略）", exc_info=True)
+
+
+def _resolved_db_path(db_path: Any) -> str:
+    """默认 ``config/<name>`` 在分裂布局下改落数据根；显式路径（含 :memory:）不动。"""
+    from src.licensing.data_paths import resolve_legacy_config_path
+    return resolve_legacy_config_path(db_path)
+
 
 # ── 模块级单例（懒建；main.py 可用 configure_* 显式指定库路径）───────────────
 _STORE: Optional[PersonaMediaStore] = None
@@ -623,10 +635,21 @@ _CFG_LOCK = threading.Lock()
 
 
 def configure_persona_media_store(db_path: Any = DEFAULT_DB_PATH) -> Optional[PersonaMediaStore]:
-    """启动期装配（幂等）。指定库路径并建库。"""
+    """启动期装配。同路径幂等；路径变了则关掉旧连接再换库。
+
+    懒建若已用另一条路径打开，不能把新路径只写进 ``_DB_PATH`` 而继续用旧连接
+    （否则空库会钉死进程，数据根上的真库没人读）。
+    """
     global _STORE, _DB_PATH
     with _CFG_LOCK:
-        _DB_PATH = str(db_path)
+        path = _resolved_db_path(db_path)
+        if _STORE is not None and _DB_PATH != path:
+            try:
+                _STORE.close()
+            except Exception:
+                logger.debug("[persona_media] 旧库关闭失败（忽略）", exc_info=True)
+            _STORE = None
+        _DB_PATH = path
         if _STORE is None:
             try:
                 _STORE = PersonaMediaStore(_DB_PATH)
@@ -638,10 +661,11 @@ def configure_persona_media_store(db_path: Any = DEFAULT_DB_PATH) -> Optional[Pe
 
 def get_persona_media_store() -> Optional[PersonaMediaStore]:
     """取 store 单例（未配置则按默认路径懒建）。建库失败返回 None（调用方需容错）。"""
-    global _STORE
+    global _STORE, _DB_PATH
     if _STORE is None:
         with _CFG_LOCK:
             if _STORE is None:
+                _DB_PATH = _resolved_db_path(_DB_PATH)
                 try:
                     _STORE = PersonaMediaStore(_DB_PATH)
                 except Exception:
@@ -664,6 +688,11 @@ def reset_persona_media_store() -> None:
     """测试钩子：清空单例。"""
     global _STORE
     with _CFG_LOCK:
+        if _STORE is not None:
+            try:
+                _STORE.close()
+            except Exception:
+                logger.debug("[persona_media] 重置时关闭失败（忽略）", exc_info=True)
         _STORE = None
 
 

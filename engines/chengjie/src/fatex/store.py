@@ -16,6 +16,7 @@ import logging
 import sqlite3
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ class FatexStore:
     def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
+        if self._db_path != ":memory:":
+            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         try:
@@ -215,6 +218,17 @@ class FatexStore:
         except sqlite3.Error:
             return []
 
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            logger.debug("[fatex] 关闭连接失败（忽略）", exc_info=True)
+
+
+def _resolved_db_path(db_path: Any) -> str:
+    from src.licensing.data_paths import resolve_legacy_config_path
+    return resolve_legacy_config_path(db_path)
+
 
 # ── 模块级单例（与 persona_media_store 同范式） ─────────────────────────────────
 
@@ -224,10 +238,17 @@ _CFG_LOCK = threading.Lock()
 
 
 def configure_fatex_store(db_path: Any = DEFAULT_DB_PATH) -> Optional[FatexStore]:
-    """启动期装配（幂等）。指定库路径并建库。"""
+    """启动期装配。同路径幂等；路径变了则关掉旧连接再换库。"""
     global _STORE, _DB_PATH
     with _CFG_LOCK:
-        _DB_PATH = str(db_path)
+        path = _resolved_db_path(db_path)
+        if _STORE is not None and _DB_PATH != path:
+            try:
+                _STORE.close()
+            except Exception:
+                logger.debug("[fatex] 旧库关闭失败（忽略）", exc_info=True)
+            _STORE = None
+        _DB_PATH = path
         if _STORE is None:
             try:
                 _STORE = FatexStore(_DB_PATH)
@@ -252,12 +273,13 @@ def disable_fatex_store() -> None:
 def get_fatex_store() -> Optional[FatexStore]:
     """运行期取单例；未 configure 时按默认路径懒建（失败返 None，绝不抛）；
     :func:`disable_fatex_store` 之后恒 None。"""
-    global _STORE
+    global _STORE, _DB_PATH
     if _DISABLED:
         return None
     if _STORE is None:
         with _CFG_LOCK:
             if _STORE is None:
+                _DB_PATH = _resolved_db_path(_DB_PATH)
                 try:
                     _STORE = FatexStore(_DB_PATH)
                 except Exception:

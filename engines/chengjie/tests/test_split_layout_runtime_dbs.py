@@ -186,6 +186,229 @@ def test_contacts_db_follows_runtime_dir_yaml_dir_unchanged(monkeypatch, tmp_pat
             sub.close()
 
 
+_LEGACY_CONFIG_FILES = (
+    "persona_media.db",
+    "group_members.db",
+    "fatex.db",
+    "persona_bio.db",
+    "persona_quiz.db",
+    "persona_proposals.db",
+    "sticker_packs.db",
+    "group_show.db",
+    "deep_persona.db",
+    "ops_events.db",
+    "desktop_outbound.db",
+    "vision_metrics.db",
+    "account_sends.db",
+    "album_restock_plan.json",
+    "daily_topics_cache.json",
+    "voice_iou.json",
+    "persona_lora.json",
+)
+
+_DATA_DIR_DBS = (
+    "account_risk_events.db",
+    "automation_coverage_trend.db",
+    "visual_memory.db",
+)
+
+
+def test_legacy_config_paths_stay_literal_without_split(monkeypatch, tmp_path):
+    """只设 AITR_DATA_DIR 时，历史 ``config/<name>`` 必须仍是这条相对路径。"""
+    _fresh(monkeypatch, AITR_DATA_DIR=str(tmp_path / "root"))
+    for name in _LEGACY_CONFIG_FILES:
+        assert data_paths.resolve_legacy_config_path(f"config/{name}") == f"config/{name}"
+    explicit = tmp_path / "explicit.db"
+    assert data_paths.resolve_legacy_config_path(":memory:") == ":memory:"
+    assert data_paths.resolve_legacy_config_path(str(explicit)) == str(explicit)
+    assert data_paths.resolve_legacy_config_path("goals.db") == "goals.db"
+
+
+def test_legacy_config_files_open_under_data_root_not_cwd(monkeypatch, tmp_path):
+    """WorkingDirectory 下的 ``config/`` 不得再长出这些运行时库。
+
+    生产症状：``persona_media.db`` 在 ``/opt/chatx-fleet/app/config`` 被懒建成空库，
+    数据根上的真库没人打开。这里把 CWD 指到假的安装树，断言打开落在数据根。
+    """
+    etc, data, cfg = _split(monkeypatch, tmp_path)
+    app = tmp_path / "opt" / "chatx-fleet" / "app"
+    (app / "config").mkdir(parents=True)
+    monkeypatch.chdir(app)
+
+    for name in _LEGACY_CONFIG_FILES:
+        got = Path(data_paths.resolve_legacy_config_path(f"config/{name}"))
+        assert got == data / name
+        assert etc not in got.parents
+        assert app not in got.parents
+
+    import src.companion.persona_media_store as pms
+    import src.companion.group_members_store as gms
+    import src.fatex.store as fatex
+    import src.companion.persona_bio_store as pbio
+    import src.utils.persona_quiz_store as quiz
+    import src.utils.persona_proposal_store as proposals
+    import src.inbox.sticker_store as stickers
+    import src.companion.group_show.store as gshow
+    import src.companion.deep_persona_store as deep
+    import src.companion.persona_self_memory as selfmem
+    import src.companion.deep_persona_trend as trend
+    import src.ops.ops_events as ops
+    import src.inbox.desktop_outbound as dout
+    import src.integrations.messenger_rpa.vision_metrics as vm
+    import src.integrations.protocol_autoreply_limits as limits
+    import src.ops.risk_events as risk
+    import src.inbox.automation_coverage_trend as cov
+    import src.companion.visual_memory as vmem
+    import src.web.routes.group_show_routes as gsr
+    import src.companion.media_restock as restock
+    import src.companion.daily_topics as topics
+    import src.client.voice_iou as vio
+    import src.ai.persona_lora as lora
+
+    def _sqlite_ok(path: Path) -> None:
+        assert path.is_file(), path
+        assert path.read_bytes()[:15] == b"SQLite format 3"
+
+    pms.reset_persona_media_store()
+    pms._DB_PATH = pms.DEFAULT_DB_PATH
+    gms.reset_group_members_store()
+    gms._DB_PATH = gms.DEFAULT_DB_PATH
+    fatex.reset_fatex_store_for_tests()
+    pbio.reset_persona_bio_store()
+    pbio._DB_PATH = pbio.DEFAULT_DB_PATH
+    quiz.reset()
+    quiz._DB_PATH = quiz.DEFAULT_DB_PATH
+    proposals.reset()
+    proposals._DB_PATH = proposals.DEFAULT_DB_PATH
+    stickers.reset_sticker_store()
+    gshow.reset_group_show_store()
+    deep.reset_deep_persona_store()
+    selfmem.reset_persona_self_memory()
+    trend.reset_deep_persona_trend()
+    ops.reset_ops_event_store()
+    dout.reset_desktop_outbound_queue()
+    limits.reset_autoreply_limiter()
+    prev_vm_path, prev_vm_init = vm._db_path, vm._initialized
+    vm._db_path = None
+    vm._initialized = False
+    prev_risk, prev_cov, prev_vmem = risk._singleton, cov._singleton, vmem._STORE
+    risk._singleton = None
+    cov._singleton = None
+    vmem._STORE = None
+    prev_iou_state, prev_iou_loaded = dict(vio._STATE), vio._LOADED_FOR
+    try:
+        media = pms.get_persona_media_store()
+        assert media is not None
+        assert Path(pms._DB_PATH) == data / "persona_media.db"
+        again = pms.configure_persona_media_store(
+            data_paths.runtime_file("persona_media.db", cfg))
+        assert again is media
+        _sqlite_ok(data / "persona_media.db")
+
+        assert gms.get_group_members_store() is not None
+        _sqlite_ok(data / "group_members.db")
+        assert fatex.get_fatex_store() is not None
+        _sqlite_ok(data / "fatex.db")
+        assert pbio.get_persona_bio_store() is not None
+        _sqlite_ok(data / "persona_bio.db")
+        assert quiz.get() is not None
+        _sqlite_ok(data / "persona_quiz.db")
+        assert proposals.get() is not None
+        _sqlite_ok(data / "persona_proposals.db")
+        assert stickers.get_sticker_store() is not None
+        _sqlite_ok(data / "sticker_packs.db")
+
+        class _CM:
+            config_path = str(cfg)
+
+        show = gsr._store(_CM())
+        assert show is not None and show.available
+        assert Path(show._db_path) == data / "group_show.db"
+        _sqlite_ok(data / "group_show.db")
+
+        assert deep.get_deep_persona_store("config/deep_persona.db") is not None
+        assert selfmem.get_persona_self_memory("config/deep_persona.db") is not None
+        assert trend.get_deep_persona_trend("config/deep_persona.db") is not None
+        _sqlite_ok(data / "deep_persona.db")
+
+        assert ops.get_ops_event_store() is not None
+        _sqlite_ok(data / "ops_events.db")
+        assert dout.get_desktop_outbound_queue() is not None
+        _sqlite_ok(data / "desktop_outbound.db")
+
+        vm._ensure_init()
+        _sqlite_ok(data / "vision_metrics.db")
+
+        limits.get_autoreply_limiter({})
+        _sqlite_ok(data / "account_sends.db")
+
+        risk_store = risk.get_risk_event_store()
+        assert Path(risk_store._db_path) == data / "account_risk_events.db"
+        _sqlite_ok(data / "account_risk_events.db")
+        assert cov.get_coverage_trend_store() is not None
+        _sqlite_ok(data / "automation_coverage_trend.db")
+        assert vmem.get_visual_memory_store() is not None
+        _sqlite_ok(data / "visual_memory.db")
+
+        assert restock.save_plan(None, {"items": []}) is True
+        assert (data / "album_restock_plan.json").is_file()
+        topics._write_cache("", {"items": []})
+        assert (data / "daily_topics_cache.json").is_file()
+        vio.record_iou("split-layout-probe", "p", now=1.0)
+        assert (data / "voice_iou.json").is_file()
+        lora.write_lora_registry_entry(
+            "config/persona_lora.json", "split-probe",
+            {"file": "probe.safetensors", "trigger": "probe", "weight": 0.5})
+        assert (data / "persona_lora.json").is_file()
+
+        for name in _LEGACY_CONFIG_FILES + _DATA_DIR_DBS:
+            assert not (app / "config" / name).exists(), name
+            assert not (etc / name).exists(), name
+            assert (data / name).is_file(), name
+    finally:
+        pms.reset_persona_media_store()
+        pms._DB_PATH = pms.DEFAULT_DB_PATH
+        gms.reset_group_members_store()
+        gms._DB_PATH = gms.DEFAULT_DB_PATH
+        fatex.reset_fatex_store_for_tests()
+        pbio.reset_persona_bio_store()
+        pbio._DB_PATH = pbio.DEFAULT_DB_PATH
+        quiz.reset()
+        quiz._DB_PATH = quiz.DEFAULT_DB_PATH
+        proposals.reset()
+        proposals._DB_PATH = proposals.DEFAULT_DB_PATH
+        stickers.reset_sticker_store()
+        gshow.reset_group_show_store()
+        deep.reset_deep_persona_store()
+        selfmem.reset_persona_self_memory()
+        trend.reset_deep_persona_trend()
+        ops.reset_ops_event_store()
+        dout.reset_desktop_outbound_queue()
+        limits.reset_autoreply_limiter()
+        vm._db_path, vm._initialized = prev_vm_path, prev_vm_init
+        if risk._singleton is not None and risk._singleton is not prev_risk:
+            try:
+                risk._singleton._conn.close()
+            except Exception:
+                pass
+        risk._singleton = prev_risk
+        if cov._singleton is not None and cov._singleton is not prev_cov:
+            try:
+                cov._singleton.close()
+            except Exception:
+                pass
+        cov._singleton = prev_cov
+        if vmem._STORE is not None and vmem._STORE is not prev_vmem:
+            try:
+                vmem._STORE.close()
+            except Exception:
+                pass
+        vmem._STORE = prev_vmem
+        vio._STATE.clear()
+        vio._STATE.update(prev_iou_state)
+        vio._LOADED_FOR = prev_iou_loaded
+
+
 def test_startup_sources_do_not_pin_runtime_dbs_to_yaml_dir():
     root = Path(__file__).resolve().parents[1] / "src"
     bg = (root / "bootstrap" / "background_tasks.py").read_text(encoding="utf-8")
