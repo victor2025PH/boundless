@@ -125,11 +125,17 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         entries = _kb_store.list_entries(
             category=category, enabled_only=enabled_only, search=search, source=source)
+        trans: dict = {}
+        with _kb_store._conn() as c:
+            for r in c.execute("SELECT entry_id, lang, auto_translated FROM kb_translations"):
+                trans.setdefault(r[0], {})[r[1]] = {"auto_translated": r[2]}
         for e in entries:
+            e.pop("embedding", None)
             try:
                 e["triggers"] = json.loads(e.get("triggers", "[]"))
             except Exception:
                 e["triggers"] = []
+            e["translations"] = trans.get(e["id"]) or None
         return {"entries": entries, "total": len(entries)}
 
     @app.post("/api/kb/entries/purge-source")
@@ -575,10 +581,11 @@ def register_kb_routes(app, ctx):
 
     # ── 导出 / 导入（Phase 8）----------
     @app.get("/api/kb/export")
-    async def api_kb_export(request: Request, fmt: str = "json"):
-        """导出启用的知识库为 JSON（fmt=json）或 YAML（fmt=yaml，需 PyYAML）"""
+    async def api_kb_export(request: Request, fmt: str = "json", all: int = 0):
+        """导出启用的知识库为 JSON（fmt=json）或 YAML（fmt=yaml，需 PyYAML）；
+        all=1 含停用条目（完整备份，enabled 原样导回）"""
         _api_auth(request)
-        data = _kb_store.export_all()
+        data = _kb_store.export_all(include_disabled=bool(all))
         ts = time.strftime("%Y%m%d_%H%M%S")
         if fmt == "yaml":
             try:
@@ -603,28 +610,110 @@ def register_kb_routes(app, ctx):
     async def api_kb_import(request: Request):
         """
         批量导入知识库。
-        Body: {data: <export dict>, mode: "skip"|"update"}
+        Body: {data: <export dict>, mode: "skip"|"update", dry_run?, skip_examples?}
+          或 {text: "<JSON/YAML 原文>", format: "json"|"yaml", ...}（YAML 由服务端解析）
         """
         _api_auth(request)
         body = await request.json()
-        data = body.get("data") or body   # 支持直接发 export dict 或包装格式
+        if isinstance(body, dict) and isinstance(body.get("text"), str):
+            try:
+                if str(body.get("format") or "").lower() in ("yaml", "yml"):
+                    import yaml as _yaml
+                    data = _yaml.safe_load(body["text"])
+                else:
+                    data = json.loads(body["text"])
+            except Exception:
+                raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
+        else:
+            data = body.get("data") or body   # 支持直接发 export dict 或包装格式
         mode = body.get("mode", "skip")
+        dry_run = bool(body.get("dry_run"))
         # 安全检查：必须含 entries/error_codes/rules 键之一
-        if not any(k in data for k in ("entries", "error_codes", "rules", "version")):
+        if not isinstance(data, dict) or not any(
+                k in data for k in ("entries", "error_codes", "rules", "version")):
             raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
-        result = _kb_store.import_from_data(data, mode=mode)
-        actor = request.session.get("username", "web_admin")
-        if audit_store:
+        fmt = "yaml" if str(body.get("format") or "").lower() in ("yaml", "yml") else "json"
+        result = _kb_store.import_from_data(data, mode=mode, dry_run=dry_run,
+                                            skip_examples=bool(body.get("skip_examples")),
+                                            batch=_batch_meta(request, body, fmt))
+        result["unknown_categories"] = _unknown_categories(result.get("categories"))
+        if audit_store and not dry_run:
+            actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import",
                             f"added={result['added']},updated={result['updated']}")
         return result
 
+    def _unknown_categories(categories) -> List[str]:
+        known = set(KB_CATEGORIES)
+        return [c for c in (categories or []) if c not in known][:10]
+
+    def _batch_meta(request: Request, body: dict, fmt: str) -> dict:
+        return {"filename": str(body.get("filename") or ""), "fmt": fmt,
+                "operator": request.session.get("username", "web_admin")}
+
+    @app.get("/api/kb/import-batches")
+    async def api_kb_import_batches(request: Request):
+        """导入历史（最近 20 批），供「导入记录」面板整批撤销。"""
+        _api_auth(request)
+        return {"ok": True, "batches": _kb_store.list_import_batches()}
+
+    @app.post("/api/kb/import-batches/{batch_id}/undo")
+    async def api_kb_import_batch_undo(batch_id: str, request: Request):
+        """整批撤销一次导入。Body: {force?: bool}——导入后被改过的条目默认保留。"""
+        _api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        actor = request.session.get("username", "web_admin")
+        res = _kb_store.undo_import_batch(batch_id, force=bool((body or {}).get("force")),
+                                          editor=actor)
+        if not res.get("ok"):
+            code = 404 if res.get("reason") == "not_found" else 409
+            raise HTTPException(status_code=code,
+                                detail=tr(request, f"err.kb.undo_{res.get('reason')}"))
+        if audit_store:
+            audit_store.log(actor, "kb_import_undo",
+                            f"batch={batch_id},deleted={res['deleted']},"
+                            f"restored={res['restored']},kept={len(res['kept'])}")
+        return res
+
+    @app.get("/api/kb/import-template")
+    async def api_kb_import_template(request: Request, fmt: str = "xlsx"):
+        """导入模板下载（xlsx / csv / json）。示例行与「新建条目」模板 chip 同源（按业务域），
+        标题带「示例：」前缀，导入时默认跳过。"""
+        _api_auth(request)
+        from src.utils import kb_sheet_io as sio
+        from src.utils.kb_store import system_seed_plan
+        try:
+            domain = system_seed_plan(config_manager)["business_domain"]
+        except Exception:
+            domain = None
+        examples = sio.template_examples(domain, KB_CATEGORIES)
+        if fmt == "csv":
+            return Response(
+                sio.build_csv_template(examples).encode("utf-8"),
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": 'attachment; filename="kb_import_template.csv"'},
+            )
+        if fmt == "json":
+            return Response(
+                json.dumps(sio.build_json_template(examples), ensure_ascii=False, indent=2),
+                media_type="application/json",
+                headers={"Content-Disposition": 'attachment; filename="kb_import_template.json"'},
+            )
+        return Response(
+            sio.build_xlsx_template(examples),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="kb_import_template.xlsx"'},
+        )
+
     @app.get("/api/kb/export-csv")
-    async def api_kb_export_csv(request: Request):
-        """导出知识条目为 CSV（含 BOM，Excel 可直接打开）"""
+    async def api_kb_export_csv(request: Request, all: int = 0):
+        """导出知识条目为 CSV（含 BOM，Excel 可直接打开）；all=1 含停用条目 + 启用列"""
         _api_auth(request)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        content = _kb_store.export_csv()
+        content = _kb_store.export_csv(include_disabled=bool(all))
         return Response(
             content.encode("utf-8"),
             media_type="text/csv; charset=utf-8",
@@ -635,18 +724,35 @@ def register_kb_routes(app, ctx):
     @app.post("/api/kb/import-csv")
     async def api_kb_import_csv(request: Request):
         """
-        从 CSV 文本导入知识条目。
-        Body: {csv: "<csv text>", mode: "skip"|"update"}
+        从表格导入知识条目（表头中英文都认，空单元格不写入）。
+        Body: {csv: "<csv text>" | xlsx_b64: "<base64>", mode: "skip"|"update",
+               dry_run?: bool, skip_examples?: bool（默认 true，跳过「示例：」开头的行）}
         """
         _api_auth(request)
         body = await request.json()
         csv_text = body.get("csv", "")
+        xlsx_b64 = body.get("xlsx_b64", "")
         mode     = body.get("mode", "skip")
-        if not csv_text:
+        dry_run  = bool(body.get("dry_run"))
+        skip_ex  = body.get("skip_examples", True) is not False
+        if not csv_text and not xlsx_b64:
             raise HTTPException(status_code=400, detail=tr(request, "err.kb.csv_empty"))
-        result = _kb_store.import_from_csv(csv_text, mode=mode)
-        actor = request.session.get("username", "web_admin")
-        if audit_store:
+        if xlsx_b64:
+            import base64
+            try:
+                raw = base64.b64decode(xlsx_b64)
+                result = _kb_store.import_from_xlsx(raw, mode=mode, dry_run=dry_run,
+                                                    skip_examples=skip_ex,
+                                                    batch=_batch_meta(request, body, "xlsx"))
+            except Exception:
+                raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
+        else:
+            result = _kb_store.import_from_csv(csv_text, mode=mode, dry_run=dry_run,
+                                               skip_examples=skip_ex,
+                                               batch=_batch_meta(request, body, "csv"))
+        result["unknown_categories"] = _unknown_categories(result.get("categories"))
+        if audit_store and not dry_run:
+            actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import_csv",
                             f"added={result['added']},updated={result['updated']}")
         return result
@@ -1510,16 +1616,16 @@ def register_kb_routes(app, ctx):
         return {"ok": True, "entry": entry, "topic": topic, "category": category}
 
     @app.get("/api/kb/export-markdown")
-    async def api_kb_export_markdown(request: Request):
-        """生成可读的 Markdown 格式知识库文档（按分类组织）"""
+    async def api_kb_export_markdown(request: Request, all: int = 0):
+        """生成可读的 Markdown 格式知识库文档（按分类组织）；all=1 含停用条目（标题标注）"""
         _api_auth(request)
         import re as _re
 
         with _kb_store._conn() as c:
             entries = c.execute(
                 "SELECT category, title, triggers, scenario, steps, principles, "
-                "example_reply_zh, forbidden, use_count "
-                "FROM kb_entries WHERE enabled=1 "
+                "example_reply_zh, forbidden, use_count, enabled "
+                f"FROM kb_entries {'' if all else 'WHERE enabled=1 '}"
                 "ORDER BY category, use_count DESC, title"
             ).fetchall()
 
@@ -1542,7 +1648,7 @@ def register_kb_routes(app, ctx):
                 triggers = []
             trigger_str = " / ".join(f"`{t}`" for t in triggers[:6]) if triggers else "—"
 
-            lines.append(f"### {e['title']}")
+            lines.append(f"### {e['title']}" + ("" if e.get("enabled") else "（已停用）"))
             lines.append(f"\n**触发词**：{trigger_str}")
             if e.get("scenario"):
                 lines.append(f"\n**使用场景**：{e['scenario']}")

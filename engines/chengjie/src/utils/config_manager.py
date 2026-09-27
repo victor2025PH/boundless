@@ -715,12 +715,16 @@ class ConfigManager:
     def _apply_hosted_chatx_env(self) -> None:
         """回放托管 ChatX fallback 改写（LAN 不可达时改走网关）。"""
         try:
-            from src.ai.hosted_gateway import apply_hosted_chatx, _gateway_base
+            from src.ai.hosted_gateway import (
+                apply_hosted_chatx, seed_hosted_chatx, _gateway_base,
+            )
         except Exception:
             self.logger.debug("托管 ChatX 回放不可用（hosted_gateway 导入失败）",
                               exc_info=True)
             return
-        apply_hosted_chatx(self.config, _gateway_base(self.config))
+        gw = _gateway_base(self.config)
+        if not apply_hosted_chatx(self.config, gw):
+            seed_hosted_chatx(self.config, gw)
 
     def _ensure_baseline(self) -> None:
         """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。

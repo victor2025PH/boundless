@@ -23341,7 +23341,8 @@ function _mvRender(){
   var flow=document.getElementById('mv-dataflow');
   if(flow){
     var ep=_mpActiveEp(), via=ep.via||(ep.private?'lan':'cloud'), hostTxt=ep.public_host||'';
-    if(via==='hosted') flow.textContent=window.T('inbox.mp.flow_hosted');
+    if(String(ep.model||'').toLowerCase()==='chatx') flow.textContent=hostTxt;
+    else if(via==='hosted') flow.textContent=window.T('inbox.mp.flow_hosted');
     else if(via==='lan'||ep.private) flow.textContent=window.Tf('inbox.mp.flow_private',{host:hostTxt||window.T('inbox.mp.tag_private')});
     else flow.textContent=hostTxt?window.Tf('inbox.mp.flow_cloud',{host:hostTxt}):'';
     flow.classList.toggle('priv', via==='lan'||via==='hosted');

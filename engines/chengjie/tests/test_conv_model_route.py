@@ -631,11 +631,11 @@ def test_model_catalog_hosted_chatx_uses_public_path_not_rfc1918():
     by = {row["name"]: row for row in conv_route.model_catalog(cfg)}
     row = by["unrestricted"]
     assert row["label"] == conv_route.CHATX_DISPLAY_LABEL and row["via"] == "hosted"
-    assert row["public_host"] == "经官网" and row["private"] is False
+    assert row["public_host"] == conv_route.PUBLIC_HOST_CHATX and row["private"] is False
     assert row["vendor"] == "local"
     assert row["opens_unrestricted"] is True
     spec = conv_route.endpoint_spec(cfg)
-    assert spec["via"] == "hosted" and spec["public_host"] == "经官网"
+    assert spec["via"] == "hosted" and spec["public_host"] == conv_route.PUBLIC_HOST_CHATX
     assert conv_route.public_host_for("192.168.0.173:8001", "chatx") == conv_route.PUBLIC_HOST_LAN_CHATX
     assert conv_route.public_host_for("https://api.deepseek.com/v1", "deepseek-flash") == "api.deepseek.com"
 

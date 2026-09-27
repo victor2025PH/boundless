@@ -128,8 +128,9 @@ _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,40}$")
 #: 坐席可见的 ChatX 产品名（不再带参数规模「27B」）。前端 i18n ``inbox.mp.vendor_local``
 #: 会覆盖展示；本常量是目录 / 端点事实 / 无 i18n 消费方的兜底。
 CHATX_DISPLAY_LABEL = "ChatX聊天模型"
-#: 局域网 ChatX 的路径标签：不暴露 RFC1918，也不再用客户词「办公室」。
-PUBLIC_HOST_LAN_CHATX = "局域网直连"
+#: ChatX 的路径标签。办公室直连和官网中继对外都写这一句，不暴露 RFC1918。
+PUBLIC_HOST_CHATX = "SVIP企业搭建"
+PUBLIC_HOST_LAN_CHATX = PUBLIC_HOST_CHATX
 
 
 @dataclass(frozen=True)
@@ -426,8 +427,10 @@ def public_host_for(host_or_base: str, model: str = "") -> str:
     base = raw if "://" in raw else f"http://{raw}"
     via = _path_via(base)
     chatx = str(model or "").strip().lower() == "chatx"
+    if chatx:
+        return PUBLIC_HOST_CHATX
     if via == "lan":
-        return PUBLIC_HOST_LAN_CHATX if chatx else "自有算力"
+        return "自有算力"
     if via == "hosted":
         return "经官网"
     return raw.split("://", 1)[-1].split("/", 1)[0]
@@ -1398,7 +1401,7 @@ def describe(store: Any, cid: str, config: Any = None) -> Dict[str, Any]:
 
 __all__ = [
     "KEY_PREFIX", "PROFILES", "PROFILE_STANDARD", "PROFILE_UNRESTRICTED",
-    "CHATX_DISPLAY_LABEL", "PUBLIC_HOST_LAN_CHATX",
+    "CHATX_DISPLAY_LABEL", "PUBLIC_HOST_CHATX", "PUBLIC_HOST_LAN_CHATX",
     "DEPTH_CHOICES", "EFFORT_CHOICES", "EFFORT_PARAMS", "UNRESTRICTED_DEFAULTS", "MODEL_FOLLOW",
     "model_opens_unrestricted",
     "FEATURE_NAME", "QUALITY_LAYERS", "SAFETY_LAYERS",

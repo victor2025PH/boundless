@@ -20,9 +20,101 @@
 .kb-pane{display:none}.kb-pane.active{display:block}
 
 /* Toolbar */
-.kb-toolbar{display:flex;align-items:center;gap:.7rem;margin-bottom:1rem;flex-wrap:wrap}
-.kb-toolbar input,.kb-toolbar select{background:var(--input);border:1px solid var(--bd);border-radius:var(--r-sm);padding:.45rem .75rem;font-size:.84rem;color:var(--t)}
-.kb-toolbar input{min-width:220px}
+.kb-toolbar{display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;flex-wrap:wrap}
+.kb-toolbar input[type=search],.kb-toolbar select{background:var(--input);border:1px solid var(--bd);border-radius:var(--r-sm);padding:.42rem .7rem;font-size:.84rem;color:var(--t)}
+/* base.html 全局 select{width:100%} 会让每个筛选下拉独占一行，这里必须收回 */
+.kb-toolbar select{width:auto;min-width:110px;max-width:190px}
+.kb-search{position:relative;flex:1 1 220px;min-width:160px;max-width:360px}
+.kb-search svg{position:absolute;left:.55rem;top:50%;transform:translateY(-50%);color:var(--t3);pointer-events:none}
+.kb-toolbar .kb-search input{width:100%;padding-left:1.8rem}
+.kb-check{display:inline-flex;align-items:center;gap:.35rem;font-size:.83rem;color:var(--t2);white-space:nowrap;cursor:pointer}
+.kb-check input{width:15px;height:15px;margin:0;accent-color:var(--p)}
+.kb-actions{display:flex;align-items:center;gap:.5rem;margin-left:auto;flex-wrap:wrap}
+.kb-actions .btn svg{flex:0 0 auto}
+/* 下拉菜单（<details> 原生可键盘操作） */
+.kb-dd{position:relative}
+.kb-dd>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:.35rem;user-select:none}
+.kb-dd>summary::-webkit-details-marker{display:none}
+.kb-dd>summary .kb-caret{transition:transform .15s}
+.kb-dd[open]>summary .kb-caret{transform:rotate(180deg)}
+.kb-dd-menu{position:absolute;right:0;top:calc(100% + 4px);min-width:260px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r-sm);box-shadow:var(--s2);padding:.3rem;z-index:60;display:flex;flex-direction:column;gap:1px}
+.kb-dd-menu button{display:flex;flex-direction:column;align-items:flex-start;gap:.1rem;width:100%;text-align:left;background:none;border:none;border-radius:6px;padding:.45rem .65rem;cursor:pointer;color:var(--t);font-size:.84rem;font-weight:500}
+.kb-dd-menu button:hover,.kb-dd-menu button:focus-visible{background:var(--input);outline:none}
+.kb-dd-menu button:disabled{cursor:progress;color:var(--t3)}
+.kb-dd-menu small{font-size:.75rem;font-weight:400;color:var(--t3)}
+.kb-dd-menu hr{border:none;border-top:1px solid var(--bd);margin:.25rem .2rem}
+.kb-dd-menu .kb-danger{color:var(--red)}
+.kb-dd-opt{display:flex;align-items:center;gap:.4rem;padding:.4rem .65rem;font-size:.78rem;color:var(--t2);cursor:pointer}
+.kb-dd-opt input{accent-color:var(--p);margin:0}
+.kb-danger{color:var(--red)}
+/* 页面引导 / 预置横幅（共享 .banner 家族） */
+.kb-guide{align-items:flex-start;justify-content:space-between}
+.kb-guide ol{margin:.3rem 0 0 1.1rem;padding:0}
+.kb-guide li{margin:.15rem 0}
+.kb-link{background:none;border:none;padding:0 0 0 .3rem;color:var(--pd);font-weight:600;font-size:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.kb-guide-x{flex:0 0 auto;background:none;border:none;color:var(--pd);font-size:.78rem;font-weight:600;cursor:pointer;white-space:nowrap}
+.kb-notice{align-items:center;flex-wrap:wrap;margin:.6rem 0 .8rem}
+.kb-notice-actions{display:flex;gap:.4rem;margin-left:auto}
+/* 页头满意度：按水位着色，别把 0% 染成绿色 */
+.sat-good{color:var(--green)}.sat-mid{color:var(--t2)}.sat-bad{color:var(--amber)}.sat-none{color:var(--t3)}
+/* 弹窗共享骨架（显隐仍由内联 display 控制） */
+.kb-modal-ov{position:fixed;inset:0;background:var(--th-bg-scrim45,rgba(0,0,0,.45));z-index:700}
+.kb-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem}
+.kb-modal-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+.kb-modal-ft{display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem}
+/* 导入弹窗 */
+.imp-steps{display:flex;gap:.9rem;list-style:none;margin:.45rem 0 0;padding:0;font-size:.76rem;color:var(--t3);counter-reset:imp}
+.imp-steps li{display:flex;align-items:center;gap:.3rem;counter-increment:imp}
+.imp-steps li::before{content:counter(imp);display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1px solid var(--bd2);font-size:.68rem;font-weight:700}
+.imp-steps li.on{color:var(--pd);font-weight:600}
+.imp-steps li.on::before{background:var(--p);border-color:var(--p);color:var(--th-ink-inverse,#fff)}
+.imp-drop{display:flex;flex-direction:column;align-items:center;gap:.3rem;padding:1.3rem 1rem;border:1.5px dashed var(--bd2);border-radius:var(--r);background:var(--input);color:var(--t2);text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+.imp-drop:hover,.imp-drop:focus-visible,.imp-drop.drag{border-color:var(--p);background:var(--ps);outline:none}
+.imp-drop.has-file{border-style:solid;border-color:var(--p)}
+.imp-drop svg{color:var(--p)}
+.imp-drop strong{color:var(--t);font-size:.88rem}
+.imp-drop span{font-size:.76rem;color:var(--t3)}
+.imp-tpl{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin:.8rem 0 .5rem;font-size:.8rem;color:var(--t2)}
+.imp-help{margin:.35rem 0;font-size:.8rem;color:var(--t2)}
+.imp-help>summary{cursor:pointer;color:var(--pd);font-weight:600;padding:.2rem 0}
+.imp-help table{width:100%;border-collapse:collapse;margin:.4rem 0}
+.imp-help th,.imp-help td{padding:.35rem .5rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top;font-size:.78rem}
+.imp-help th{white-space:nowrap;color:var(--t);font-weight:600}
+.imp-help code{font-size:.72rem;color:var(--t3);font-weight:400;margin-left:.25rem}
+.imp-help ul{margin:.35rem 0 0 1.1rem;padding:0;line-height:1.6}
+.imp-help li{margin-bottom:.3rem}
+.imp-dup{border:none;margin:.8rem 0 0;padding:0;font-size:.82rem}
+.imp-dup legend{font-weight:600;color:var(--t);margin-bottom:.3rem;padding:0}
+.imp-dup label{display:flex;align-items:center;gap:.4rem;margin:.2rem 0;color:var(--t2);cursor:pointer}
+.imp-dup input{accent-color:var(--p);margin:0}
+.imp-msg{min-height:1.1rem;margin-top:.6rem;font-size:.8rem;color:var(--red)}
+.imp-summary{font-size:.88rem;font-weight:600;color:var(--t);margin-bottom:.5rem}
+.imp-notes{list-style:none;margin:0 0 .6rem;padding:0;font-size:.79rem;color:var(--t2)}
+.imp-notes li{margin:.2rem 0}
+.imp-notes label{display:inline-flex;align-items:center;gap:.3rem;margin-left:.5rem;color:var(--pd);cursor:pointer}
+.imp-table{width:100%;border-collapse:collapse;font-size:.79rem;margin:.3rem 0}
+.imp-table th{background:var(--input);color:var(--t2);font-weight:600;text-align:left;padding:.4rem .5rem}
+.imp-table td{padding:.4rem .5rem;border-bottom:1px solid var(--bd);vertical-align:top}
+.imp-table .tag-chip{font-size:.7rem;margin:.05rem .1rem}
+.imp-more{font-size:.74rem;color:var(--t3);margin-top:.2rem}
+.imp-issues{margin-top:.7rem;padding:.6rem .8rem;border-radius:var(--r-sm);background:var(--as);font-size:.79rem;color:var(--t2)}
+.imp-issues strong{color:var(--t)}
+.imp-issues ul{margin:.3rem 0 0 1rem;padding:0}
+.imp-issues li.err{color:var(--red)}
+.imp-undo{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-top:.6rem;font-size:.78rem;color:var(--t3)}
+.hist-list{list-style:none;margin:0;padding:0;font-size:.82rem}
+.hist-list li{display:flex;align-items:center;gap:.8rem;padding:.6rem .2rem;border-bottom:1px solid var(--bd)}
+.hist-list li:last-child{border-bottom:none}
+.hist-main{flex:1;min-width:0}
+.hist-main strong{display:block;color:var(--t);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-main small{color:var(--t3);font-size:.74rem}
+.hist-undone{font-size:.74rem;color:var(--t3);white-space:nowrap}
+.kb-more{grid-column:1/-1;display:flex;justify-content:center;padding:.4rem 0 .2rem}
+.hist-empty{padding:1.2rem 0;text-align:center;color:var(--t3);font-size:.82rem}
+/* toast：卡片底 + 语义色条，暗色下也可读 */
+.kb-toast{position:fixed;bottom:1.5rem;right:1.5rem;max-width:min(420px,90vw);padding:.6rem 1rem;border-radius:8px;font-size:.84rem;z-index:9999;background:var(--card);color:var(--t);border:1px solid var(--bd);border-left:4px solid var(--green);box-shadow:var(--s2)}
+.kb-toast.warn{border-left-color:var(--amber)}
+.kb-toast.err{border-left-color:var(--red)}
 /* 触发词 chip：亮色深字浅底公式（--pd=品牌700 于 12% 蓝晕上 5.2:1；--p 只有 4.0）*/
 .tag-chip{display:inline-block;background:var(--ps);color:var(--pd);border-radius:20px;padding:.18rem .6rem;font-size:.75rem;font-weight:500;margin:.15rem}
 .quality-star{color:var(--amber);cursor:pointer}
@@ -31,12 +123,13 @@
 .entry-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
 .entry-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem;position:relative;transition:box-shadow .15s}
 .entry-card:hover{box-shadow:var(--s1)}
-/* 停用态：半透明只是"淡"，配显式徽章（entryCard 渲染）才是"可读的状态" */
-.entry-card.disabled{opacity:.65}
-/* 翻译状态 */
+/* 停用态：虚线框 + 输入底 + 显式「已停用」徽章；不再整卡半透明（成片停用时整页发灰） */
+.entry-card.disabled{background:var(--input);border-style:dashed}
+.entry-card.disabled .entry-title{color:var(--t2)}
+/* 翻译状态：「未翻译」不是错误，用中性色；红色留给真正的失败 */
 .trans-badge{display:inline-flex;align-items:center;gap:.25rem;background:var(--gs);color:var(--green);border-radius:20px;padding:.12rem .5rem;font-size:.7rem;font-weight:600}
 .trans-badge.partial{background:var(--as);color:var(--amber)}
-.trans-badge.none{background:var(--rs);color:var(--red)}
+.trans-badge.none{background:var(--input);color:var(--t3);border:1px solid var(--bd)}
 .trans-pill{display:inline-block;width:24px;height:14px;border-radius:10px;font-size:.6rem;text-align:center;line-height:14px;font-weight:700}
 .trans-pill.ok{background:var(--green);color:#fff}
 .trans-pill.pending{background:var(--bd2);color:var(--t2)}
@@ -51,12 +144,18 @@
 .ai-thinking span:nth-child(3){animation-delay:.4s}
 @keyframes bounce{0%,80%,100%{transform:scale(.8);opacity:.5}40%{transform:scale(1.1);opacity:1}}
 .entry-head{display:flex;align-items:flex-end;gap:.5rem;margin-bottom:.5rem;padding-right:44px}
-.entry-cat-badge{display:inline-block;background:var(--ps);color:var(--pd);border-radius:20px;padding:.2rem .65rem;font-size:.72rem;font-weight:600;margin:0;line-height:1}
-.entry-title{font-size:.95rem;font-weight:600;margin-bottom:.4rem;color:var(--t)}
+/* 分类徽章走中性色：品牌蓝留给触发词 chip / 主按钮，避免满屏同色抢焦点 */
+.entry-cat-badge{display:inline-block;background:var(--input);color:var(--t2);border:1px solid var(--bd);border-radius:20px;padding:.2rem .65rem;font-size:.72rem;font-weight:600;margin:0;line-height:1}
+.entry-title{font-size:1rem;font-weight:650;line-height:1.35;margin-bottom:.4rem;color:var(--t)}
 .entry-scenario{font-size:.8rem;color:var(--t2);margin-bottom:.5rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .entry-triggers{margin-bottom:.6rem}
-.entry-meta{display:flex;justify-content:space-between;align-items:center;font-size:.75rem;color:var(--t3);margin-top:.5rem}
+.entry-meta{display:flex;justify-content:space-between;align-items:center;font-size:.75rem;color:var(--t3);margin-top:.6rem;padding-top:.55rem;border-top:1px solid var(--bd2)}
 .entry-actions{display:flex;gap:.4rem}
+/* 次要动作悬停 / 聚焦时才露出（触屏设备无 hover，保持常显） */
+@media (hover:hover){
+  .entry-actions{opacity:0;transition:opacity .15s}
+  .entry-card:hover .entry-actions,.entry-card:focus-within .entry-actions{opacity:1}
+}
 .entry-toggle{position:absolute;top:.75rem;right:.75rem;width:34px;height:18px;background:var(--bd2);border-radius:20px;cursor:pointer;transition:background .15s}
 .entry-toggle.on{background:var(--p)}
 .entry-toggle::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:transform .15s}
@@ -65,7 +164,8 @@
 /* ── 批量选择 ── */
 .entry-card.sel{outline:2px solid var(--p);outline-offset:2px;background:var(--ps)}
 .entry-card.hl-flash{outline:2px solid var(--p);outline-offset:2px;box-shadow:0 0 0 6px var(--ps)}
-.entry-cb{position:static;width:16px;height:16px;cursor:pointer;accent-color:var(--p);z-index:2;margin:0;flex:0 0 auto;align-self:flex-end}
+.entry-cb{position:static;width:16px;height:16px;cursor:pointer;accent-color:var(--p);z-index:2;margin:0;flex:0 0 auto;align-self:flex-end;display:none}
+.sel-mode .entry-cb{display:block}
 /* 选中模式：整个 card 可点击切换 */
 .sel-mode .entry-card{cursor:pointer}
 /* 批量操作栏 */
@@ -105,7 +205,7 @@
 .ec-table th{background:var(--input);padding:.6rem .8rem;text-align:left;font-weight:600;font-size:.78rem;color:var(--t2)}
 .ec-table td{padding:.6rem .8rem;border-bottom:1px solid var(--bd);vertical-align:top}
 .ec-table tr:last-child td{border-bottom:none}
-.ec-code-badge{display:inline-block;background:#1b2038;color:#a5b4fc;border-radius:6px;padding:.18rem .55rem;font-size:.75rem;font-family:monospace;white-space:nowrap}
+.ec-code-badge{display:inline-block;background:var(--input);color:var(--pd);border:1px solid var(--bd);border-radius:6px;padding:.18rem .55rem;font-size:.75rem;font-family:monospace;white-space:nowrap}
 
 /* Examples */
 .ex-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1rem;margin-bottom:.75rem}
@@ -142,17 +242,6 @@
 .empty-state p{font-size:.9rem}
 </style>
 
-{% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-grn06,rgba(16,185,129,.06)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-grn15,rgba(16,185,129,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
-  <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">📚</span>
-  <div>
-    <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title', "操作说明") }}</strong>
-    <div style="margin-top:.25rem;line-height:1.6">{{ (i18n or {}).get('kb_s002', "知识库存储了 AI 回复用户时参考的知识条目。你可以") }} <strong>{{ (i18n or {}).get('search', "搜索") }}</strong> {{ (i18n or {}).get('kb_s003', "现有条目、点击") }} <strong>{{ (i18n or {}).get('edit', "编辑") }}</strong> {{ (i18n or {}).get('kb_s004', "修改内容，或") }} <strong>{{ (i18n or {}).get('kb_s005', "新建条目") }}</strong> {{ (i18n or {}).get('kb_s006', "添加新知识。每条知识包含标题、触发词和示例回复。") }}</div>
-    <button onclick="this.closest('.simple-guide').style.display='none';localStorage.setItem('_guide_kb','1')" style="background:none;border:none;color:var(--p);cursor:pointer;font-size:.78rem;font-weight:600;padding:0;margin-top:.3rem">{{ (i18n or {}).get('cases_guide_dismiss', "知道了，不再显示") }}</button>
-  </div>
-</div>
-<script>if(localStorage.getItem('_guide_kb')==='1')document.querySelector('.simple-guide').style.display='none';</script>
-{% endif %}
 <!-- 页头 -->
 <div class="kb-header">
   <h1>
@@ -163,12 +252,26 @@
     <div class="kb-stat"><strong id="s-entries">{{ stats.total_entries }}</strong> {{ (i18n or {}).get('db_js_075', "条知识") }}</div>
     <div class="kb-stat pro-only"><strong id="s-examples">{{ stats.examples }}</strong> {{ (i18n or {}).get('kb_s008', "对话示例") }}</div>
     <div class="kb-stat pro-only"><strong id="s-ec">{{ stats.error_codes }}</strong> {{ (i18n or {}).get('kb_s009', "错误码") }}</div>
-    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} <span style="color:var(--green)" id="s-sat">{% if stats.satisfaction_rate is none %}{{ (i18n or {}).get('kb2_sat_none', "暂无反馈") }}{% else %}{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}{% endif %}</span></div>
+    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} {% set _sr = stats.satisfaction_rate if stats.satisfaction_rate is defined else none %}<span id="s-sat" class="{{ 'sat-none' if _sr is none else ('sat-good' if _sr >= 80 else ('sat-bad' if _sr < 50 else 'sat-mid')) }}">{% if stats.satisfaction_rate is none %}{{ (i18n or {}).get('kb2_sat_none', "暂无反馈") }}{% else %}{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}{% endif %}</span></div>
     <!-- 健康分：原本藏在维护面板深处，提到页头常驻可见（点击直达诊断）。刻意不加
          pro-only——简洁模式的运营正是最需要"知识库健不健康"信号的人群。 -->
     <div class="kb-stat" id="kb-health-chip" style="display:none;cursor:pointer" onclick="openMaintPanel();runHealthCheck()" title="{{ (i18n or {}).get('kb2_health_tip', '知识库健康分（点击查看诊断建议与修复入口）') }}">🏥 <strong id="s-health">—</strong> <span id="s-health-grade" style="font-size:.72rem;color:var(--t3)"></span></div>
   </div>
 </div>
+
+<!-- 页面引导：完整 / 简洁模式共用，「不再显示」记在本机 -->
+<div class="banner banner-info kb-guide" id="kb-guide" style="display:none" role="note">
+  <div>
+    <strong>{{ (i18n or {}).get('kb2_guide_title', "三步用好知识库") }}</strong>
+    <ol>
+      <li>{{ (i18n or {}).get('kb2_guide_1', "建知识：新建条目，或把现成的 FAQ 表格导入进来（先下载模板照着填）") }}<button type="button" class="kb-link" onclick="openImportModal()">{{ (i18n or {}).get('kb2_guide_import', "导入表格") }}</button></li>
+      <li>{{ (i18n or {}).get('kb2_guide_2', "试效果：在「沙盒测试」输入一句客户问法，看命中哪条、AI 怎么回") }}<button type="button" class="kb-link" onclick="kbGoSandbox()">{{ (i18n or {}).get('kb2_guide_sandbox', "去沙盒试一句") }}</button></li>
+      <li class="pro-only">{{ (i18n or {}).get('kb2_guide_3', "补盲区：在「效果反馈」里看没答好的问题，补成新条目") }}</li>
+    </ol>
+  </div>
+  <button type="button" class="kb-guide-x" onclick="kbDismissGuide()">{{ (i18n or {}).get('kb2_guide_dismiss', "知道了，不再显示") }}</button>
+</div>
+<script>if(localStorage.getItem('_guide_kb2')!=='1')document.getElementById('kb-guide').style.display='';</script>
 
 <!-- 标签页 -->
 <div class="kb-tabs">
@@ -184,13 +287,12 @@
 <div id="pane-entries" class="kb-pane active">
   <div class="kb-toolbar">
     <!-- 搜索框（防抖 300ms，≥1字符触发） -->
-    <div style="position:relative;flex:1;min-width:160px">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);color:var(--t3);pointer-events:none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <div class="kb-search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input type="search" id="entry-search" placeholder="{{ (i18n or {}).get('kb_s017', '搜索标题 / 触发词…') }}"
-             style="width:100%;padding:.38rem .5rem .38rem 1.8rem;font-size:.82rem"
              oninput="debounceLoadEntries()" autocomplete="off">
     </div>
-    <select id="entry-cat" onchange="loadEntries()" style="min-width:90px">
+    <select id="entry-cat" onchange="loadEntries()">
       <option value="">{{ (i18n or {}).get('kb_s018', "全部分类") }}</option>
       {% for cat in categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
     </select>
@@ -211,70 +313,73 @@
       <option value="use_asc">{{ (i18n or {}).get('kb_s020', "使用最少") }}</option>
       <option value="recent">{{ (i18n or {}).get('set_js_085', "最近更新") }}</option>
     </select>
-    <label style="display:flex;align-items:center;gap:.35rem;font-size:.83rem" class="pro-only">
+    <label class="kb-check pro-only">
       <input type="checkbox" id="entry-enabled-only" onchange="loadEntries()"> {{ (i18n or {}).get('kb_s021', "仅启用") }}
     </label>
-    <button class="btn btn-p btn-sm" data-anchor="kb-new-entry" onclick="openEntryDrawer()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      {{ (i18n or {}).get('kb_s005', "新建条目") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="batchTranslate()" id="btn-batch-trans" title="{{ (i18n or {}).get('kb_s022', '将所有未翻译条目一键翻译为') }} EN/UR/PT/AR">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h7"/><path d="M7 2h1"/><path d="M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>
-      {{ (i18n or {}).get('kb_s023', "批量翻译") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="openVectorPanel()" id="btn-vectorize" title="{{ (i18n or {}).get('kb_s024', '向量化知识库，启用语义搜索') }}">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-      {{ (i18n or {}).get('kb_s025', "向量化") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="exportKb()" title="{{ (i18n or {}).get('kb_s026', '导出知识库为 JSON 文件') }}">
-      ⬇️ {{ (i18n or {}).get('export', "导出") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="openImportModal()" title="{{ (i18n or {}).get('kb_s027', '从 JSON 文件导入知识库') }}">
-      ⬆️ {{ (i18n or {}).get('import', "导入") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="openMaintPanel()" title="{{ (i18n or {}).get('kb_s028', '查重、备份、维护诊断') }}">
-      ⚙️ {{ (i18n or {}).get('db_s012', "维护") }}
-    </button>
-    {# Q-10 #254（22KVXF ⑤）：预置条目按来源 vendor / system / help 两步清——先列清单再删 #}
-    <button class="btn btn-s btn-sm" id="btn-purge-preset" onclick="openPresetPurgeModal()" title="{{ (i18n or {}).get('kb2_preset_btn_tip', '按来源列出厂商 / 系统 / 帮助语料残留的预置条目，看过清单再删；你自己建的条目永不在内') }}">
-      🧹 {{ (i18n or {}).get('kb2_preset_btn', "清除预置条目") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="exportCsv()" title="{{ (i18n or {}).get('kb_s029', '导出为 CSV，可用 Excel 打开编辑') }}">
-      📊 CSV
-    </button>
-    <button class="btn btn-s btn-sm pro-only" id="btn-sel-mode" onclick="toggleSelectMode()"
-            title="{{ (i18n or {}).get('kb_s030', '切换批量选择模式') }}">
-      ☑️ {{ (i18n or {}).get('psn_multiselect', "多选") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="downloadReport()" title="{{ (i18n or {}).get('kb_s031', '生成并下载知识库分析报告') }}">
-      📋 {{ (i18n or {}).get('kb_s032', "报告") }}
-    </button>
-    <button class="btn btn-s btn-sm pro-only" onclick="exportMarkdown()" title="{{ (i18n or {}).get('kb_s033', '导出知识库为 Markdown 文档') }}">
-      📄 Markdown
-    </button>
+    <div class="kb-actions">
+      <button class="btn btn-p btn-sm" data-anchor="kb-new-entry" onclick="openEntryDrawer()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        {{ (i18n or {}).get('kb_s005', "新建条目") }}
+      </button>
+      <button class="btn btn-s btn-sm" data-help="kb_import" onclick="openImportModal()" title="{{ (i18n or {}).get('kb2_tb_import_tip', '从 Excel / CSV / JSON 批量导入知识条目（可先下载模板）') }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        {{ (i18n or {}).get('kb2_tb_import', "导入") }}
+      </button>
+      <details class="kb-dd pro-only" id="kb-dd-export">
+        <summary class="btn btn-s btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          {{ (i18n or {}).get('kb2_tb_export', "导出") }}
+          <svg class="kb-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="kb-dd-menu" role="menu">
+          <button type="button" role="menuitem" onclick="exportKb()">{{ (i18n or {}).get('kb2_exp_json', "JSON 备份") }}<small>{{ (i18n or {}).get('kb2_exp_json_hint', "完整备份，可原样导回") }}</small></button>
+          <button type="button" role="menuitem" onclick="exportCsv()">{{ (i18n or {}).get('kb2_exp_csv', "CSV 表格") }}<small>{{ (i18n or {}).get('kb2_exp_csv_hint', "用 Excel 批量编辑后再导入") }}</small></button>
+          <button type="button" role="menuitem" onclick="exportMarkdown()">{{ (i18n or {}).get('kb2_exp_md', "Markdown 文档") }}<small>{{ (i18n or {}).get('kb2_exp_md_hint', "整理成便于阅读的文档") }}</small></button>
+          <button type="button" role="menuitem" onclick="downloadReport()">{{ (i18n or {}).get('kb2_exp_report', "分析报告") }}<small>{{ (i18n or {}).get('kb2_exp_report_hint', "命中、覆盖与待补的盲区") }}</small></button>
+          <hr>
+          <label class="kb-dd-opt"><input type="checkbox" id="exp-all"> {{ (i18n or {}).get('kb2_exp_all', "CSV / Markdown 也包含已停用的条目") }}</label>
+        </div>
+      </details>
+      <details class="kb-dd" id="kb-dd-more">
+        <summary class="btn btn-s btn-sm">
+          {{ (i18n or {}).get('kb2_tb_more', "更多") }}
+          <svg class="kb-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="kb-dd-menu" role="menu">
+          <button type="button" role="menuitem" onclick="openImportHistory()">{{ (i18n or {}).get('kb2_hist_title', "导入记录") }}<small>{{ (i18n or {}).get('kb2_more_hist_hint', "查看最近的导入，导错了可以整批撤销") }}</small></button>
+          <button type="button" role="menuitem" class="pro-only" id="btn-sel-mode" onclick="toggleSelectMode()">{{ (i18n or {}).get('psn_multiselect', "多选") }}<small>{{ (i18n or {}).get('kb2_more_sel_hint', "批量启用 / 停用 / 改分类 / 导出选中") }}</small></button>
+          <button type="button" role="menuitem" class="pro-only" id="btn-batch-trans" onclick="batchTranslate()">{{ (i18n or {}).get('kb_s023', "批量翻译") }}<small>{{ (i18n or {}).get('kb2_more_trans_hint', "把未翻译条目翻成 EN / UR / PT / AR") }}</small></button>
+          <button type="button" role="menuitem" class="pro-only" id="btn-vectorize" onclick="openVectorPanel()">{{ (i18n or {}).get('kb_s025', "向量化") }}<small>{{ (i18n or {}).get('kb2_more_vec_hint', "启用语义搜索，同义问法也能命中") }}</small></button>
+          <button type="button" role="menuitem" class="pro-only" onclick="openMaintPanel()">{{ (i18n or {}).get('db_s012', "维护") }}<small>{{ (i18n or {}).get('kb2_more_maint_hint', "查重、备份、健康诊断、示例数据") }}</small></button>
+          <hr class="pro-only">
+          {# Q-10 #254（22KVXF ⑤）：预置条目按来源 vendor / system / help 两步清——先列清单再删 #}
+          <button type="button" role="menuitem" class="kb-danger" id="btn-purge-preset" onclick="openPresetPurgeModal()" title="{{ (i18n or {}).get('kb2_preset_btn_tip', '按来源列出厂商 / 系统 / 帮助语料残留的预置条目，看过清单再删；你自己建的条目永不在内') }}">{{ (i18n or {}).get('kb2_preset_btn', "清除预置条目") }}<small>{{ (i18n or {}).get('kb2_more_purge_hint', "清走厂商 / 系统预置条目（先看清单）") }}</small></button>
+        </div>
+      </details>
+    </div>
   </div>
   <!-- 厂商预置条目提示（J-9 #184）：服务端首渲染按 stats.entries_vendor 决定是否可见，
        之后由 refreshStats → _syncVendorNotice 维持；「稍后」只在本会话隐藏，升级后再提醒。 -->
-  <div id="kb-vendor-notice" role="status"
-       style="display:{{ 'flex' if (stats.entries_vendor or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
-    <span>📦 {{ (i18n or {}).get('kb2_vendor_lead', "检测到") }} <strong id="kb-vendor-n">{{ stats.entries_vendor or 0 }}</strong> {{ (i18n or {}).get('kb2_vendor_lead2', "条厂商随包预置的产品说明（不是你的知识）。") }}
-      <span id="kb-vendor-state" style="color:var(--t3)">{% if stats.vendor_excluded %}{{ (i18n or {}).get('kb2_vendor_excluded', "对客回复已排除它们。") }}{% else %}{{ (i18n or {}).get('kb2_vendor_not_excluded', "当前部署对客回复仍会用到它们。") }}{% endif %}</span>
+  <div id="kb-vendor-notice" role="status" class="banner banner-warn kb-notice"
+       style="display:{{ 'flex' if (stats.entries_vendor or 0) > 0 else 'none' }}">
+    <span>{{ (i18n or {}).get('kb2_vendor_lead', "检测到") }} <strong id="kb-vendor-n">{{ stats.entries_vendor or 0 }}</strong> {{ (i18n or {}).get('kb2_vendor_lead2', "条厂商随包预置的产品说明（不是你的知识）。") }}
+      <span id="kb-vendor-state">{% if stats.vendor_excluded %}{{ (i18n or {}).get('kb2_vendor_excluded', "对客回复已排除它们。") }}{% else %}{{ (i18n or {}).get('kb2_vendor_not_excluded', "当前部署对客回复仍会用到它们。") }}{% endif %}</span>
     </span>
-    <span style="display:flex;gap:.4rem;margin-left:auto">
+    <span class="kb-notice-actions">
       <button class="btn btn-s btn-sm" onclick="kbShowVendor()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
-      <button class="btn btn-s btn-sm" onclick="kbPurgeVendor()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_vendor_purge', "一键清空") }}</button>
+      <button class="btn btn-s btn-sm kb-danger" onclick="kbPurgeVendor()">{{ (i18n or {}).get('kb2_vendor_purge', "一键清空") }}</button>
       <button class="btn btn-s btn-sm" onclick="kbDismissVendorNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
     </span>
   </div>
   <!-- 系统预置支付话术提示（N-3 #240 / D-N2）：1.0.76 之前每次启动无条件播进库的 GXP 支付
        话术等（source=system，template_key ∈ PAYMENT_SEED_KEYS）。非支付部署用不上；
        首渲染按 stats.entries_system_payment，之后 refreshStats → _syncSysPayNotice 维持。 -->
-  <div id="kb-syspay-notice" role="status"
-       style="display:{{ 'flex' if (stats.entries_system_payment or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
-    <span>🧾 {{ (i18n or {}).get('kb2_syspay_lead', "知识库里还有") }} <strong id="kb-syspay-n">{{ stats.entries_system_payment or 0 }}</strong> {{ (i18n or {}).get('kb2_syspay_lead2', "条系统预置的支付话术（GXP 查单 / 回调 / 汇率菜单等）——这是支付插件用的，陪伴 / 销售运营用不上，也不是你的知识。") }}</span>
-    <span style="display:flex;gap:.4rem;margin-left:auto">
+  <div id="kb-syspay-notice" role="status" class="banner banner-warn kb-notice"
+       style="display:{{ 'flex' if (stats.entries_system_payment or 0) > 0 else 'none' }}">
+    <span>{{ (i18n or {}).get('kb2_syspay_lead', "知识库里还有") }} <strong id="kb-syspay-n">{{ stats.entries_system_payment or 0 }}</strong> {{ (i18n or {}).get('kb2_syspay_lead2', "条系统预置的支付话术（GXP 查单 / 回调 / 汇率菜单等）——这是支付插件用的，陪伴 / 销售运营用不上，也不是你的知识。") }}</span>
+    <span class="kb-notice-actions">
       <button class="btn btn-s btn-sm" onclick="kbShowSystem()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
-      <button class="btn btn-s btn-sm" onclick="kbPurgePaymentSeeds()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_syspay_purge', "一键清除") }}</button>
+      <button class="btn btn-s btn-sm kb-danger" onclick="kbPurgePaymentSeeds()">{{ (i18n or {}).get('kb2_syspay_purge', "一键清除") }}</button>
       <button class="btn btn-s btn-sm" onclick="kbDismissSysPayNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
     </span>
   </div>
@@ -303,36 +408,106 @@
 </div>
 
 <!-- ══ 导入模态框 ═══════════════════════════════════════ -->
-<div id="import-overlay" onclick="closeImportModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
-<div id="import-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(500px,94vw);background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-    <strong>⬆️ {{ (i18n or {}).get('kb_s040', "导入知识库") }}</strong>
-    <button class="btn btn-s" onclick="closeImportModal()" style="padding:.3rem .6rem">✕</button>
+<div id="import-overlay" class="kb-modal-ov" onclick="closeImportModal()" style="display:none"></div>
+<div id="import-modal" class="kb-modal" role="dialog" aria-modal="true" aria-labelledby="imp-title" style="display:none">
+  <div class="kb-modal-hd">
+    <div>
+      <strong id="imp-title">{{ (i18n or {}).get('kb2_imp_title', "导入知识条目") }}</strong>
+      <ol class="imp-steps">
+        <li data-s="1">{{ (i18n or {}).get('kb2_imp_step1', "选择文件") }}</li>
+        <li data-s="2">{{ (i18n or {}).get('kb2_imp_step2', "预览检查") }}</li>
+        <li data-s="3">{{ (i18n or {}).get('kb2_imp_step3', "完成") }}</li>
+      </ol>
+    </div>
+    <button class="btn btn-s" onclick="closeImportModal()" aria-label="{{ (i18n or {}).get('close', '关闭') }}" style="padding:.3rem .6rem">✕</button>
   </div>
-  <div style="font-size:.82rem;color:var(--t2);margin-bottom:.75rem">
-    {{ (i18n or {}).get('kb_s041', "支持 JSON（之前导出的备份）或 CSV（Excel 编辑后导入）格式。") }}
+
+  <div id="imp-s1">
+    <label class="imp-drop" id="imp-drop" tabindex="0">
+      <input type="file" id="import-file" accept=".xlsx,.csv,.txt,.json,.yaml,.yml" onchange="impPick(this.files[0])" hidden>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <strong id="imp-drop-main">{{ (i18n or {}).get('kb2_imp_drop', "把文件拖到这里，或点击选择") }}</strong>
+      <span>{{ (i18n or {}).get('kb2_imp_drop_hint', "支持 Excel（.xlsx）、CSV、JSON / YAML 备份，最大 5 MB") }}</span>
+    </label>
+    <div class="imp-tpl">
+      {{ (i18n or {}).get('kb2_imp_tpl_lead', "第一次导入？先下载模板照着填：") }}
+      <button type="button" class="btn btn-s btn-xs" onclick="kbDownloadTemplate('xlsx')">{{ (i18n or {}).get('kb2_imp_tpl_xlsx', "Excel 模板（推荐）") }}</button>
+      <button type="button" class="btn btn-s btn-xs" onclick="kbDownloadTemplate('csv')">{{ (i18n or {}).get('kb2_imp_tpl_csv', "CSV 模板") }}</button>
+      <button type="button" class="btn btn-s btn-xs pro-only" onclick="kbDownloadTemplate('json')">{{ (i18n or {}).get('kb2_imp_tpl_json', "JSON 模板") }}</button>
+    </div>
+    <details class="imp-help">
+      <summary>{{ (i18n or {}).get('kb2_imp_fields', "每一列怎么填") }}</summary>
+      <table>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_title', "标题") }}<code>title</code></th><td>{{ (i18n or {}).get('kb2_imp_f_title', "必填。一条知识的名字；标题完全相同视为重复") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_category', "分类") }}<code>category</code></th><td>{{ (i18n or {}).get('kb2_imp_f_category', "建议用页面上已有的分类名；留空归入「其他」") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_triggers', "触发词") }}<code>triggers</code></th><td>{{ (i18n or {}).get('kb2_imp_f_triggers', "客户可能的问法或关键词，多个用逗号、分号或顿号分隔；没有触发词的条目很难被匹配到") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_scenario', "使用场景 / 处理步骤 / 回复原则") }}</th><td>{{ (i18n or {}).get('kb2_imp_f_scenario', "什么情况下用、怎么处理、回复时要遵守什么") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_reply', "标准回复") }}<code>example_reply_zh</code></th><td>{{ (i18n or {}).get('kb2_imp_f_reply', "推荐的回复写法；多条示例之间用单独一行 --- 分隔") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_forbidden', "禁止说的话") }}<code>forbidden</code></th><td>{{ (i18n or {}).get('kb2_imp_f_forbidden', "回复里绝不能出现的说法") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_mode', "回复模式") }}<code>reply_mode</code></th><td>{{ (i18n or {}).get('kb2_imp_f_mode', "AI参考（默认，AI 参考后自由组织）/ AI严格（尽量贴近原文）/ 直接输出（原样发送）") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_negative', "排除词") }}<code>negative_triggers</code></th><td>{{ (i18n or {}).get('kb2_imp_f_negative', "消息里含这些词时不命中本条，分隔方式同触发词") }}</td></tr>
+        <tr><th>{{ (i18n or {}).get('kb2_imp_c_enabled', "启用") }}<code>enabled</code></th><td>{{ (i18n or {}).get('kb2_imp_f_enabled', "是 / 否；留空 = 新条目启用、已有条目不变") }}</td></tr>
+      </table>
+    </details>
+    <details class="imp-help">
+      <summary>{{ (i18n or {}).get('kb2_imp_faq', "常见问题") }}</summary>
+      <ul>
+        <li>{{ (i18n or {}).get('kb2_imp_faq_1', "Excel 保存的 CSV 导入后是乱码？直接上传 .xlsx 最省事；要存 CSV 请选「CSV UTF-8（逗号分隔）」。系统也会自动识别 GBK 编码。") }}</li>
+        <li>{{ (i18n or {}).get('kb2_imp_faq_2', "只有「问题」「答案」两列的 FAQ 表能导吗？能，问题会同时作为标题和触发词。") }}</li>
+        <li>{{ (i18n or {}).get('kb2_imp_faq_3', "模板里的示例行要删吗？以「示例：」开头的行默认跳过，留着参考也没关系。") }}</li>
+        <li>{{ (i18n or {}).get('kb2_imp_faq_4', "单元格留空会怎样？不填这一项；选「更新已有」时也不会清掉已有内容。") }}</li>
+      </ul>
+    </details>
+    <fieldset class="imp-dup">
+      <legend>{{ (i18n or {}).get('kb2_imp_dup', "标题相同的条目：") }}</legend>
+      <label><input type="radio" name="import-mode" value="skip" checked> {{ (i18n or {}).get('kb2_imp_dup_skip', "跳过，保留已有内容（安全）") }}</label>
+      <label><input type="radio" name="import-mode" value="update"> {{ (i18n or {}).get('kb2_imp_dup_update', "用文件内容更新（自动保存版本快照，可回滚）") }}</label>
+    </fieldset>
+    <div id="imp-msg" class="imp-msg" role="alert"></div>
+    <div class="kb-modal-ft">
+      <button class="btn btn-s" onclick="closeImportModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button class="btn btn-p" id="imp-next" onclick="impPreview()" disabled>{{ (i18n or {}).get('kb2_imp_next', "下一步：预览") }}</button>
+    </div>
   </div>
-  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
-    <input type="file" id="import-file" accept=".json,.yaml,.yml,.csv"
-           style="flex:1;font-size:.82rem">
+
+  <div id="imp-s2" hidden>
+    <div id="imp-summary" class="imp-summary"></div>
+    <ul id="imp-notes" class="imp-notes"></ul>
+    <div id="imp-preview"></div>
+    <div id="imp-issues"></div>
+    <div class="kb-modal-ft">
+      <button class="btn btn-s" onclick="impStep(1)">{{ (i18n or {}).get('kb2_imp_back', "上一步") }}</button>
+      <button class="btn btn-p" id="imp-go" onclick="impCommit()"></button>
+    </div>
   </div>
-  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem">
-    <label style="font-size:.82rem">{{ (i18n or {}).get('kb_s042', "重复条目：") }}</label>
-    <select id="import-mode" style="font-size:.82rem">
-      <option value="skip">{{ (i18n or {}).get('kb_s043', "跳过（安全模式，不覆盖已有内容）") }}</option>
-      <option value="update">{{ (i18n or {}).get('kb_s044', "更新（覆盖同名条目，会保存版本快照）") }}</option>
-    </select>
-  </div>
-  <div id="import-result" style="font-size:.8rem;color:var(--t2);min-height:1.2rem;margin-bottom:.75rem"></div>
-  <div style="display:flex;gap:.5rem;justify-content:flex-end">
-    <button class="btn btn-s" onclick="closeImportModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-    <button class="btn btn-p" onclick="doImport()">{{ (i18n or {}).get('psn_start_import', "开始导入") }}</button>
+
+  <div id="imp-s3" hidden>
+    <div id="imp-done"></div>
+    <div id="imp-done-issues"></div>
+    <div class="kb-modal-ft">
+      <button class="btn btn-s" onclick="impViewImported()">{{ (i18n or {}).get('kb2_imp_view', "查看刚导入的条目") }}</button>
+      <button class="btn btn-s" onclick="closeImportModal();kbGoSandbox()">{{ (i18n or {}).get('kb2_guide_sandbox', "去沙盒试一句") }}</button>
+      <button class="btn btn-s pro-only" onclick="closeImportModal();openVectorPanel()">{{ (i18n or {}).get('kb2_imp_vector', "向量化（启用语义搜索）") }}</button>
+      <button class="btn btn-p" onclick="closeImportModal()">{{ (i18n or {}).get('kb2_imp_finish', "完成") }}</button>
+    </div>
   </div>
 </div>
 
+<div id="hist-overlay" class="kb-modal-ov" onclick="closeImportHistory()" style="display:none"></div>
+<div id="hist-modal" class="kb-modal" role="dialog" aria-modal="true" aria-labelledby="hist-title" style="display:none">
+  <div class="kb-modal-hd">
+    <div>
+      <strong id="hist-title">{{ (i18n or {}).get('kb2_hist_title', "导入记录") }}</strong>
+      <div class="imp-more">{{ (i18n or {}).get('kb2_hist_lead', "保留最近 20 次导入。撤销会删掉那次新增的条目、把被覆盖的条目恢复成导入前的样子；导入后你又改过的条目会先保留，再问你要不要一起撤销。") }}</div>
+    </div>
+    <button class="btn btn-s" onclick="closeImportHistory()" aria-label="{{ (i18n or {}).get('kb2_close', '关闭') }}">✕</button>
+  </div>
+  <div id="hist-body"></div>
+</div>
+
 <!-- ══ 清除预置条目模态框（Q-10 #254 / 22KVXF ⑤）：dry-run 清单 → 勾选来源 → 确认删除 ═══ -->
-<div id="preset-overlay" onclick="closePresetPurgeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
-<div id="preset-modal" role="dialog" aria-labelledby="preset-title" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
+<div id="preset-overlay" class="kb-modal-ov" onclick="closePresetPurgeModal()" style="display:none"></div>
+<div id="preset-modal" class="kb-modal" role="dialog" aria-modal="true" aria-labelledby="preset-title" style="display:none;width:min(640px,94vw)">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
     <strong id="preset-title">🧹 {{ (i18n or {}).get('kb2_preset_title', "清除预置条目") }}</strong>
     <button class="btn btn-s" onclick="closePresetPurgeModal()" style="padding:.3rem .6rem">✕</button>
@@ -661,7 +836,7 @@
       <div>{{ (i18n or {}).get('kb_s099', "此条目涉及通道实时数据（成功率/费率/限额/状态等），这些数据由") }}
         <a href="/channels" style="color:var(--th-ink-amber7,#b45309);font-weight:600">{{ (i18n or {}).get('kb_s100', "通道管理面板") }}</a> {{ (i18n or {}).get('kb_s101', "实时控制。") }}</div>
       <ul id="ch-conflict-details"></ul>
-      <div style="font-size:.75rem;color:#a16207;margin-top:.3rem">
+      <div style="font-size:.75rem;color:var(--amber);margin-top:.3rem">
         KB {{ (i18n or {}).get('kb_s102', "中的通道数值") }}<strong>{{ (i18n or {}).get('kb_s103', "不会被机器人使用") }}</strong>。{{ (i18n or {}).get('kb_s104', "如需修改通道数据，请前往通道管理面板。") }}
         KB {{ (i18n or {}).get('kb_s105', "仅用于配置话术风格和回复模板。") }}
       </div>
@@ -765,8 +940,8 @@
 </div>
 
 <!-- ══ 版本 Diff 模态框 ══════════════════════════════════ -->
-<div id="diff-modal-overlay" onclick="closeDiffModal()" style="display:none;position:fixed;inset:0;background:var(--th-bg-scrim45,rgba(0,0,0,.45));z-index:700"></div>
-<div id="diff-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(820px,96vw);max-height:85vh;overflow-y:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.22);z-index:701">
+<div id="diff-modal-overlay" class="kb-modal-ov" onclick="closeDiffModal()" style="display:none"></div>
+<div id="diff-modal" class="kb-modal" role="dialog" aria-modal="true" style="display:none;width:min(820px,96vw);max-height:85vh;padding:0">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.2rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--card);z-index:1">
     <div>
       <strong>📋 {{ (i18n or {}).get('diff', "版本对比") }}</strong>
@@ -877,26 +1052,27 @@ let _selectedIds = new Set();
 let _selModeOn   = false;
 let _allEntryIds = [];
 
-/* ── 标签页切换 ───────────────────────────────────────── */
-function switchTab(name, btn){
-  document.querySelectorAll('.kb-pane').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.kb-tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('pane-'+name).classList.add('active');
-  btn.classList.add('active');
-  if(name==='entries') loadEntries();
-  else if(name==='error-codes') loadEc();
-  else if(name==='examples') loadExamples();
-  else if(name==='feedback'){loadFeedback();loadCategoryStats();}
-}
-
 /* ── 工具函数 ─────────────────────────────────────────── */
-function toast(msg, ok=true){
+/* kind：true / 'ok' = 成功；'warn' = 提醒；false / 'err' / 'error' = 失败 */
+function toast(msg, kind=true){
+  const k=(kind===false||kind==='err'||kind==='error')?'err':(kind==='warn'?'warn':'ok');
   const t=document.createElement('div');
-  t.style.cssText='position:fixed;bottom:1.5rem;right:1.5rem;padding:.6rem 1.1rem;border-radius:8px;font-size:.84rem;z-index:9999;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.2)';
-  t.style.background=ok?'#10b981':'#ef4444';
+  t.className='kb-toast'+(k==='ok'?'':' '+k);
+  t.setAttribute('role', k==='ok'?'status':'alert');
   t.textContent=msg;
   document.body.appendChild(t);
-  setTimeout(()=>t.remove(),2800);
+  setTimeout(()=>t.remove(), k==='ok'?2800:4500);
+}
+
+function kbGoSandbox(){
+  const tab=document.querySelector('.kb-tab[data-tab="sandbox"]');
+  switchTab('sandbox', tab);
+  const inp=document.querySelector('#pane-sandbox textarea, #pane-sandbox input[type=text]');
+  if(inp) inp.focus();
+}
+function kbDismissGuide(){
+  localStorage.setItem('_guide_kb2','1');
+  const g=document.getElementById('kb-guide'); if(g) g.style.display='none';
 }
 
 async function api(method, url, body=null){
@@ -904,12 +1080,6 @@ async function api(method, url, body=null){
   if(body) opts.body=JSON.stringify(body);
   const r=await apiFetch(url,opts);
   return r.ok ? r.json() : Promise.reject(await r.text());
-}
-
-let _debounceTimer=null;
-function debounceLoadEntries(){
-  clearTimeout(_debounceTimer);
-  _debounceTimer=setTimeout(loadEntries,350);
 }
 
 /* ── 知识条目 ─────────────────────────────────────────── */
@@ -936,6 +1106,7 @@ async function loadEntries(){
   const grid=document.getElementById('entry-grid');
   _allEntryIds = (entries||[]).map(e=>String(e.id));   // 更新全选池
   if(!entries.length){
+    _kbEntries=[]; _kbShown=0;
     /* 空态分语义（2026-08-22 P5）：「筛选无结果」与「库真空」是两回事——
        前者给一键清筛，后者给三件套（插画+一句人话+真 CTA：起步包向导/新建）。
        旧实现一行灰字两头凑，违反 /developer 样式指南卡 ⑤。 */
@@ -948,17 +1119,47 @@ async function loadEntries(){
         +'<p style="margin:.6rem auto 1rem;max-width:420px">'+window.T('kb2_empty_lead')+'</p>'
         +'<div style="display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap">'
         +'<a class="btn btn-p btn-sm" href="/workspace/kb-start" style="text-decoration:none">🌱 '+window.T('kb2_empty_seed')+'</a>'
+        +'<button class="btn btn-s btn-sm" onclick="openImportModal()">'+window.T('kb2_guide_import')+'</button>'
         +'<button class="btn btn-s btn-sm" onclick="openEntryDrawer()">＋ '+window.T('kb_s005')+'</button>'
         +'</div></div>';
     }
     return;
   }
-  grid.innerHTML=entries.map(e=>entryCard(e)).join('');
-  // 批量选择模式下保持 checkbox 可见
-  if(_selModeOn){
-    document.querySelectorAll('.entry-cb').forEach(cb=>{ cb.style.display='block'; });
-    grid.classList.add('sel-mode');
-  }
+  _kbEntries=_kbSort(entries, sort);
+  _kbUsesTrans=entries.some(e=>e.translations && Object.keys(e.translations).length);
+  _kbShown=Math.min(entries.length, _KB_PAGE);
+  _kbRenderGrid();
+}
+
+/* 排序在前端做：/api/kb/entries 从来不认 sort_by（后端固定按分类 + 标题） */
+function _kbSort(list, sort){
+  const arr=list.slice();
+  const n=v=>Number(v)||0;
+  if(sort==='use_desc') arr.sort((a,b)=>n(b.use_count)-n(a.use_count));
+  else if(sort==='use_asc') arr.sort((a,b)=>n(a.use_count)-n(b.use_count));
+  else if(sort==='recent') arr.sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||'')));
+  return arr;
+}
+/* 库里一条翻译都没有 = 没在用多语言，卡片不再逐张挂「未翻译」 */
+let _kbUsesTrans=false;
+
+/* 分批渲染：几百条卡片一次性 innerHTML 会卡顿，先出 60 张，其余按「显示更多」追加 */
+const _KB_PAGE=60;
+let _kbEntries=[], _kbShown=0;
+function _kbRenderGrid(){
+  const grid=document.getElementById('entry-grid');
+  const rest=_kbEntries.length-_kbShown;
+  grid.innerHTML=_kbEntries.slice(0,_kbShown).map(e=>entryCard(e)).join('')
+    +(rest>0?`<div class="kb-more"><button class="btn btn-s" onclick="kbShowMore()">${esc(window.Tf('kb2_show_more',{n:Math.min(rest,_KB_PAGE),rest}))}</button></div>`:'');
+  grid.classList.toggle('sel-mode', _selModeOn);
+}
+function kbShowMore(){
+  _kbShown=Math.min(_kbEntries.length, _kbShown+_KB_PAGE);
+  _kbRenderGrid();
+}
+function _kbRevealEntry(id){
+  const i=_kbEntries.findIndex(e=>String(e.id)===String(id));
+  if(i>=_kbShown){ _kbShown=i+1; _kbRenderGrid(); }
 }
 
 function transStatusBadge(trans){
@@ -990,7 +1191,7 @@ function entryCard(e){
       <input type="checkbox" class="entry-cb pro-only" id="cb-${e.id}"
         ${_selectedIds.has(String(e.id))?'checked':''}
         onclick="event.stopPropagation();toggleSelectEntry('${e.id}')">
-      <div class="entry-cat-badge">${e.category||window.T('kb_js_005')}</div>
+      <div class="entry-cat-badge">${esc(e.category||window.T('kb_js_005'))}</div>
       ${e.enabled?'':'<span class="badge b-n" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb2_disabled')+'</span>'}
       ${e.reply_mode==='direct'?'<span class="badge b-g pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_006')+'</span>'
        :e.reply_mode==='ai_strict'?'<span class="badge b-u pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_007')+'</span>':''}
@@ -1002,8 +1203,8 @@ function entryCard(e){
     <div class="entry-triggers">${triggers}</div>
     <div class="entry-meta">
       <span style="display:flex;align-items:center;gap:.4rem">
-        <span class="pro-only" style="color:var(--t3)">${window.Tf('kb_js_p20',{n:e.use_count||0})}</span>
-        <span class="pro-only">${transStatusBadge(e.translations||null)}</span>
+        <span class="pro-only" style="color:var(--t3)">${e.use_count?window.Tf('kb_js_p20',{n:e.use_count}):window.T('kb2_card_unused')}</span>
+        ${_kbUsesTrans?`<span class="pro-only">${transStatusBadge(e.translations||null)}</span>`:''}
       </span>
       <div class="entry-actions">
         <button class="btn btn-s btn-xs pro-only" title="${window.T('kb_js_140')}"
@@ -1405,10 +1606,10 @@ async function loadExamples(){
       <div class="ex-reply">${esc(ex.correct_reply)}</div>
       <div class="ex-meta">
         <span>
-          <span class="tag-chip">${ex.category||window.T('kb_js_005')}</span>
+          <span class="tag-chip">${esc(ex.category||window.T('kb_js_005'))}</span>
           <span class="tag-chip">${langLabel(ex.language)}</span>
           ${ex.quality?'<span class="quality-star">⭐</span>':''}
-          <span style="color:var(--t3)">${ex.source||'manual'}</span>
+          <span style="color:var(--t3)">${esc(ex.source||'manual')}</span>
         </span>
         <button class="btn btn-s btn-xs" style="color:var(--red)" onclick="deleteEx('${ex.id}')">${window.T('delete')}</button>
       </div>
@@ -1691,8 +1892,9 @@ async function refreshStats(){
   document.getElementById('s-ec').textContent=s.error_codes;
   document.getElementById('s-feedback').textContent=s.feedback;
   /* 分母为 0 → 后端回 null，显示「暂无反馈」而不是假 0.0%（J-9） */
-  document.getElementById('s-sat').textContent=(s.satisfaction_rate==null)
-    ? window.T('kb2_sat_none') : (s.satisfaction_rate+'%'+window.T('kb_s010'));
+  const sat=document.getElementById('s-sat'), sr=s.satisfaction_rate;
+  sat.textContent=(sr==null) ? window.T('kb2_sat_none') : (sr+'%'+window.T('kb_s010'));
+  sat.className=(sr==null)?'sat-none':(sr>=80?'sat-good':(sr<50?'sat-bad':'sat-mid'));
   _syncVendorNotice(s);
   _syncSysPayNotice(s);
 }
@@ -2168,87 +2370,279 @@ function debounceLoadEntries(){
   }, 300);
 }
 
-/* ── 导出 / 导入 ─────────────────────────────────────────── */
-async function exportKb(){
-  const btn = document.querySelector('[onclick="exportKb()"]');
-  if(btn){ btn.disabled=true; btn.textContent='⏳ '+window.T('kb_js_096'); }
+/* ── 导出 / 模板下载（统一走 apiFetch → blob，失败有 toast，不再开空白页）──── */
+async function _kbDownload(url, fallbackName){
+  toast(window.T('kb_js_096'));
   try{
-    const resp = await apiFetch('/api/kb/export?fmt=json');
-    if(!resp.ok){ toast(window.T('psn_js_194'),'warn'); return; }
+    const resp = await apiFetch(url);
+    if(!resp.ok){ toast(window.T('psn_js_194'),'err'); return; }
     const blob = await resp.blob();
     const cd = resp.headers.get('Content-Disposition')||'';
-    const fn = cd.match(/filename="([^"]+)"/)?.[1] || 'kb_export.json';
+    const fn = cd.match(/filename="([^"]+)"/)?.[1] || fallbackName;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = fn;
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
     toast(window.T('kb_js_097')+fn);
-  }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⬇️ '+window.T('export'); }
+  }catch(e){
+    toast(window.T('psn_js_194'),'err');
   }
 }
+function _expAll(){ const c=document.getElementById('exp-all'); return c&&c.checked ? '1' : '0'; }
+function exportKb(){ return _kbDownload('/api/kb/export?fmt=json&all=1','kb_export.json'); }
+function exportCsv(){ return _kbDownload('/api/kb/export-csv?all='+_expAll(),'kb_entries.csv'); }
+function kbDownloadTemplate(fmt){ return _kbDownload('/api/kb/import-template?fmt='+encodeURIComponent(fmt),'kb_import_template.'+fmt); }
 
+/* ── 导入：选文件 → dry-run 预览 → 确认写入 ─────────────────────
+   xlsx 以 base64 交后端解析；CSV 先按 UTF-8 严格解码，失败回退 GB18030（Excel 中文版默认另存编码）；
+   JSON / YAML 原文交后端解析（YAML 前端不认）。 */
+const _IMP_MAX = 5*1024*1024;
+let _imp = null;
+function _impEl(id){ return document.getElementById(id); }
+function _impMode(){ const r=document.querySelector('input[name="import-mode"]:checked'); return r?r.value:'skip'; }
+function _errText(e){
+  const s = (e && e.message) ? e.message : String(e||'');
+  try{ const j=JSON.parse(s); return j.detail || s; }catch(_){ return s; }
+}
+function impStep(n){
+  [1,2,3].forEach(i=>{ _impEl('imp-s'+i).hidden = (i!==n); });
+  document.querySelectorAll('#import-modal .imp-steps li').forEach(li=>li.classList.toggle('on', +li.dataset.s<=n));
+}
+function _impDropLabel(file){
+  const main=_impEl('imp-drop-main');
+  main.textContent = file ? `${file.name} · ${(file.size/1024).toFixed(file.size<10240?1:0)} KB` : window.T('kb2_imp_drop');
+  _impEl('imp-drop').classList.toggle('has-file', !!file);
+}
 function openImportModal(){
-  document.getElementById('import-modal').style.display='';
-  document.getElementById('import-overlay').style.display='';
-  document.getElementById('import-result').textContent='';
-  document.getElementById('import-file').value='';
+  _imp = null;
+  _impEl('import-file').value = '';
+  _impEl('imp-msg').textContent = '';
+  _impEl('imp-next').disabled = true;
+  _impDropLabel(null);
+  impStep(1);
+  _impEl('import-overlay').style.display = '';
+  _impEl('import-modal').style.display = '';
+  _impEl('imp-drop').focus();
+  _impCapable().then(ok=>{ document.querySelector('#import-modal .imp-tpl').style.display = ok ? '' : 'none'; });
 }
 function closeImportModal(){
-  document.getElementById('import-modal').style.display='none';
-  document.getElementById('import-overlay').style.display='none';
+  _impEl('import-modal').style.display = 'none';
+  _impEl('import-overlay').style.display = 'none';
+}
+function _decodeText(buf){
+  try{ return {text:new TextDecoder('utf-8',{fatal:true}).decode(buf), gbk:false}; }
+  catch(_){
+    try{ return {text:new TextDecoder('gb18030').decode(buf), gbk:true}; }
+    catch(__){ return {text:new TextDecoder('utf-8').decode(buf), gbk:false}; }
+  }
+}
+function _b64(buf){
+  const b=new Uint8Array(buf); let s='';
+  for(let i=0;i<b.length;i+=0x8000) s+=String.fromCharCode.apply(null, b.subarray(i,i+0x8000));
+  return btoa(s);
+}
+async function impPick(file){
+  const msg=_impEl('imp-msg');
+  msg.textContent=''; _imp=null; _impEl('imp-next').disabled=true;
+  _impDropLabel(file||null);
+  if(!file) return;
+  const name=file.name.toLowerCase();
+  const ext=name.includes('.')?name.slice(name.lastIndexOf('.')+1):'';
+  if(ext==='xls'){ msg.textContent=window.T('kb2_imp_xls_old'); return; }
+  if(!['xlsx','csv','txt','json','yaml','yml'].includes(ext)){ msg.textContent=window.T('kb2_imp_bad_type'); return; }
+  if(file.size>_IMP_MAX){ msg.textContent=window.T('kb2_imp_too_big'); return; }
+  const buf=await file.arrayBuffer();
+  const kind = ext==='xlsx'?'xlsx':(ext==='json'?'json':((ext==='yaml'||ext==='yml')?'yaml':'csv'));
+  const imp={kind, keepEx:false, gbk:false, name:file.name};
+  if(kind==='xlsx') imp.b64=_b64(buf);
+  else { const d=_decodeText(buf); imp.text=d.text; imp.gbk=d.gbk; }
+  _imp=imp;
+  _impEl('imp-next').disabled=false;
+}
+function _impCall(dry){
+  const body={mode:_impMode(), dry_run:dry, skip_examples:!_imp.keepEx, filename:_imp.name||''};
+  if(_imp.kind==='xlsx'){ body.xlsx_b64=_imp.b64; return api('POST','/api/kb/import-csv',body); }
+  if(_imp.kind==='csv'){ body.csv=_imp.text; return api('POST','/api/kb/import-csv',body); }
+  body.text=_imp.text; body.format=_imp.kind;
+  return api('POST','/api/kb/import',body);
+}
+function _impIssues(r){
+  const list=[...(r.errors||[]).map(x=>Object.assign({lvl:'err'},x)), ...(r.warnings||[]).map(x=>Object.assign({lvl:'warn'},x))];
+  if(!list.length) return '';
+  const shown=list.slice(0,12).map(x=>`<li class="${x.lvl}"><b>${esc(window.Tf('kb2_imp_row',{row:x.row}))}</b>${x.title?' · '+esc(x.title):''} — ${esc(window.Tf('kb2_imp_r_'+x.reason,{value:x.value||''}))}</li>`).join('');
+  const more=list.length>12?`<div class="imp-more">${esc(window.Tf('kb2_imp_more_issues',{n:list.length-12}))}</div>`:'';
+  return `<div class="imp-issues"><strong>${esc(window.T('kb2_imp_issues'))}</strong><ul>${shown}</ul>${more}</div>`;
+}
+function _impRenderPreview(r){
+  const go=_impEl('imp-go');
+  const n=(r.added||0)+(r.updated||0);
+  const notes=[];
+  if(r.missing_title_column){
+    _impEl('imp-summary').innerHTML=`<div class="banner banner-danger">${esc(window.T('kb2_imp_no_title_col'))}</div>`;
+  }else{
+    _impEl('imp-summary').textContent=window.Tf('kb2_imp_summary',{total:r.total||0,add:r.added||0,upd:r.updated||0,skip:r.skipped||0,bad:r.failed||0});
+  }
+  if(_imp.gbk) notes.push(esc(window.T('kb2_imp_gbk')));
+  if(r.examples_skipped || _imp.keepEx){
+    notes.push((r.examples_skipped?esc(window.Tf('kb2_imp_examples',{n:r.examples_skipped})):'')
+      +`<label><input type="checkbox" ${_imp.keepEx?'checked':''} onchange="impToggleExamples(this.checked)"> ${esc(window.T('kb2_imp_keep_examples'))}</label>`);
+  }
+  if((r.unknown_headers||[]).length) notes.push(esc(window.Tf('kb2_imp_unknown_cols',{cols:r.unknown_headers.join('、')})));
+  if((r.unknown_categories||[]).length) notes.push(esc(window.Tf('kb2_imp_unknown_cats',{cats:r.unknown_categories.join('、')})));
+  _impEl('imp-notes').innerHTML=notes.map(x=>`<li>${x}</li>`).join('');
+  const rows=(r.preview||[]).map(p=>`<tr><td>${esc(p.title)}</td><td>${esc(p.category||'')}</td>`
+    +`<td>${(p.triggers||[]).map(t=>`<span class="tag-chip">${esc(t)}</span>`).join('')}</td>`
+    +`<td><span class="badge ${p.action==='add'?'b-g':(p.action==='update'?'b-p':'b-n')}">${esc(window.T('kb2_imp_act_'+p.action))}</span></td></tr>`).join('');
+  _impEl('imp-preview').innerHTML = rows
+    ? `<table class="imp-table"><tr><th>${esc(window.T('kb2_imp_th_title'))}</th><th>${esc(window.T('kb2_imp_th_cat'))}</th><th>${esc(window.T('kb2_imp_th_trig'))}</th><th>${esc(window.T('kb2_imp_th_act'))}</th></tr>${rows}</table>`
+      +(((r.added||0)+(r.updated||0)+(r.skipped||0))>(r.preview||[]).length?`<div class="imp-more">${esc(window.Tf('kb2_imp_preview_more',{n:(r.preview||[]).length}))}</div>`:'')
+    : (r.missing_title_column?'':`<div class="imp-more">${esc(window.T('kb2_imp_nothing'))}</div>`);
+  _impEl('imp-issues').innerHTML=_impIssues(r);
+  go.textContent=window.Tf('kb2_imp_go',{n});
+  go.disabled = !n;
+}
+/* 模板热更新先于后端重启生效：旧后端不认 dry_run（预览会真写库）、不收 xlsx / YAML。
+   以新路由 import-template 是否存在判定后端版本，旧后端退回「直接导入 CSV / JSON」。 */
+let _impV2=null;
+async function _impCapable(){
+  if(_impV2===null){
+    try{ _impV2=(await apiFetch('/api/kb/import-template?fmt=json')).ok; }catch(_){ _impV2=false; }
+  }
+  return _impV2;
+}
+async function _impLegacy(){
+  const msg=_impEl('imp-msg');
+  if(_imp.kind==='xlsx'||_imp.kind==='yaml'){ msg.textContent=window.T('kb2_imp_legacy'); return; }
+  let r;
+  try{
+    if(_imp.kind==='csv') r=await api('POST','/api/kb/import-csv',{csv:_imp.text, mode:_impMode()});
+    else r=await api('POST','/api/kb/import',{data:JSON.parse(_imp.text), mode:_impMode()});
+  }catch(e){ msg.textContent=window.T('kb_js_100')+_errText(e); return; }
+  _impShowDone(r);
+}
+function _impShowDone(r){
+  const cls=(r.failed?'banner-warn':'banner-info');
+  const undo = r.batch_id
+    ? `<div class="imp-undo"><span>${esc(window.T('kb2_hist_undo_hint'))}</span><button class="btn btn-s" onclick="kbUndoImport('${esc(r.batch_id)}')">${esc(window.T('kb2_hist_undo_this'))}</button></div>`
+    : '';
+  _impEl('imp-done').innerHTML=`<div class="banner ${cls}"><strong>${esc(window.Tf('kb2_imp_done',{add:r.added||0,upd:r.updated||0,skip:r.skipped||0,bad:r.failed||0}))}</strong></div>${undo}`;
+  _impEl('imp-done-issues').innerHTML=_impIssues(r);
+  impStep(3);
+  loadEntries();
+  refreshStats();
 }
 
-async function doImport(){
-  const fileInput = document.getElementById('import-file');
-  const mode = document.getElementById('import-mode').value;
-  const resEl = document.getElementById('import-result');
-  if(!fileInput.files||!fileInput.files[0]){
-    resEl.textContent=window.T('kb_js_098');return;
-  }
-  resEl.textContent=window.T('psn_js_219');
-  try{
-    const file = fileInput.files[0];
-    const text = await file.text();
-    let r;
-    if(file.name.endsWith('.csv')){
-      // CSV 格式
-      r = await api('POST','/api/kb/import-csv',{csv: text, mode});
-    } else {
-      // JSON / YAML 格式
-      let data;
-      try{ data = JSON.parse(text); }
-      catch(e){ resEl.textContent=window.T('kb_js_099');return; }
-      r = await api('POST','/api/kb/import',{data, mode});
+/* ── 导入记录：最近 20 批，整批撤销（导入后被改过的条目默认保留，可再强制撤销）── */
+async function kbUndoImport(batchId, force){
+  if(!force && !confirm(window.T('kb2_hist_undo_confirm'))) return;
+  let r;
+  try{ r = await api('POST', `/api/kb/import-batches/${encodeURIComponent(batchId)}/undo`, {force:!!force}); }
+  catch(e){ toast(_errText(e),'err'); return; }
+  const done = window.Tf('kb2_hist_undo_done',{del:r.deleted||0,res:r.restored||0});
+  if((r.kept||[]).length){
+    const names = r.kept.slice(0,5).join('、') + (r.kept.length>5 ? '…' : '');
+    if(confirm(done+'\n\n'+window.Tf('kb2_hist_kept_confirm',{n:r.kept.length,names}))){
+      return kbUndoImport(batchId, true);
     }
-    resEl.innerHTML=`<span style="color:var(--green)">✔ ${window.T('tour_done')}</span> · ${window.T('kb_js_162')} <b>${r.added}</b> ${window.T('kb_js_163')} <b>${r.updated}</b> ${window.T('kb_js_164')} ${r.skipped} ${window.T('kb_js_165')} ${r.failed} ${window.T('dash.items')}`;
-    if(r.added||r.updated) loadEntries();
-  }catch(e){
-    resEl.textContent=window.T('kb_js_100')+e.message;
+    toast(done+' · '+window.Tf('kb2_hist_kept',{n:r.kept.length}),'warn');
+  }else{
+    toast(done);
   }
+  const box=_impEl('imp-done'); const u=box&&box.querySelector('.imp-undo'); if(u) u.remove();
+  loadEntries();
+  refreshStats();
+  if(_impEl('hist-modal').style.display!=='none') loadImportHistory();
 }
-
-/* ── CSV 导出 ──────────────────────────────────────────── */
-async function exportCsv(){
-  const btn = document.querySelector('[onclick="exportCsv()"]');
-  if(btn){ btn.disabled=true; btn.textContent='⏳'; }
+function openImportHistory(){
+  _impEl('hist-overlay').style.display='';
+  _impEl('hist-modal').style.display='';
+  loadImportHistory();
+}
+function closeImportHistory(){
+  _impEl('hist-modal').style.display='none';
+  _impEl('hist-overlay').style.display='none';
+}
+async function loadImportHistory(){
+  const box=_impEl('hist-body');
+  box.innerHTML=`<div class="hist-empty">${esc(window.T('kb2_hist_loading'))}</div>`;
+  let d;
+  try{ d = await api('GET','/api/kb/import-batches'); }
+  catch(_){ box.innerHTML=`<div class="hist-empty">${esc(window.T('kb2_hist_unavailable'))}</div>`; return; }
+  const list=d.batches||[];
+  if(!list.length){ box.innerHTML=`<div class="hist-empty">${esc(window.T('kb2_hist_empty'))}</div>`; return; }
+  box.innerHTML='<ul class="hist-list">'+list.map(b=>{
+    const when=(b.created_at||'').replace('T',' ').slice(0,16);
+    const meta=[when, b.operator||'', window.Tf('kb2_hist_counts',{add:b.added||0,upd:b.updated||0})].filter(Boolean).join(' · ');
+    const act=b.undone_at
+      ? `<span class="hist-undone">${esc(window.Tf('kb2_hist_undone_at',{t:b.undone_at.replace('T',' ').slice(5,16)}))}</span>`
+      : `<button class="btn btn-s" onclick="kbUndoImport('${esc(b.id)}')">${esc(window.T('kb2_hist_undo'))}</button>`;
+    return `<li><div class="hist-main"><strong>${esc(b.filename||window.T('kb2_hist_unnamed'))}${b.fmt?' · '+esc(b.fmt.toUpperCase()):''}</strong><small>${esc(meta)}</small></div>${act}</li>`;
+  }).join('')+'</ul>';
+}
+async function impPreview(){
+  if(!_imp){ _impEl('imp-msg').textContent=window.T('kb_js_098'); return; }
+  const btn=_impEl('imp-next'); const orig=btn.textContent;
+  btn.disabled=true; btn.textContent=window.T('kb2_imp_reading');
   try{
-    const resp = await apiFetch('/api/kb/export-csv');
-    if(!resp.ok){ toast('CSV '+window.T('psn_js_194'),'warn'); return; }
-    const blob = await resp.blob();
-    const cd = resp.headers.get('Content-Disposition')||'';
-    const fn = cd.match(/filename="([^"]+)"/)?.[1] || 'kb_entries.csv';
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fn;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast('CSV '+window.T('kb_js_097')+fn);
+    if(!(await _impCapable())){ await _impLegacy(); return; }
+    _impRenderPreview(await _impCall(true));
+    impStep(2);
+  }catch(e){
+    _impEl('imp-msg').textContent=window.T('kb_js_100')+_errText(e);
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='📊 CSV'; }
+    btn.disabled=false; btn.textContent=orig;
   }
 }
+async function impToggleExamples(on){
+  if(!_imp) return;
+  _imp.keepEx=!!on;
+  try{ _impRenderPreview(await _impCall(true)); }
+  catch(e){ toast(window.T('kb_js_100')+_errText(e),'err'); }
+}
+async function impCommit(){
+  const go=_impEl('imp-go'); go.disabled=true;
+  try{
+    _impShowDone(await _impCall(false));
+  }catch(e){
+    toast(window.T('kb_js_100')+_errText(e),'err');
+  }finally{
+    go.disabled=false;
+  }
+}
+function impViewImported(){
+  closeImportModal();
+  kbResetFilters();
+  const sort=_impEl('entry-sort'); if(sort) sort.value='recent';
+  loadEntries();
+  const grid=_impEl('entry-grid'); if(grid) grid.scrollIntoView({behavior:'smooth',block:'start'});
+}
+(function _impBindDrop(){
+  const drop=_impEl('imp-drop');
+  if(!drop) return;
+  drop.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); _impEl('import-file').click(); } });
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop',e=>{ const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f) impPick(f); });
+})();
+
+/* 下拉菜单：点外面或点了菜单项就收起；Esc 关闭最上层弹层 */
+document.addEventListener('click',e=>{
+  document.querySelectorAll('details.kb-dd[open]').forEach(d=>{
+    if(!d.contains(e.target) || e.target.closest('.kb-dd-menu button')) d.removeAttribute('open');
+  });
+});
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape') return;
+  const open=document.querySelector('details.kb-dd[open]');
+  if(open){ open.removeAttribute('open'); open.querySelector('summary').focus(); return; }
+  if(_impEl('import-modal').style.display!=='none'){ closeImportModal(); return; }
+  if(_impEl('hist-modal').style.display!=='none'){ closeImportHistory(); return; }
+  const pm=_impEl('preset-modal'); if(pm && pm.style.display!=='none'){ closePresetPurgeModal(); return; }
+  const dm=_impEl('diff-modal'); if(dm && dm.style.display!=='none'){ closeDiffModal(); return; }
+  if(_impEl('vector-panel').style.display!=='none'){ closeVectorPanel(); return; }
+  if(_impEl('maint-panel').style.display!=='none'){ closeMaintPanel(); }
+});
 
 /* ── 批量选择 ───────────────────────────────────────────── */
 // _selectedIds / _selModeOn / _allEntryIds 已在脚本顶部声明
@@ -2262,15 +2656,12 @@ function toggleSelectMode(){
     btn.style.background = 'var(--ps)';
     btn.style.color = 'var(--p)';
     btn.title = window.T('kb_js_101');
-    // 显示所有 checkbox
-    document.querySelectorAll('.entry-cb').forEach(cb=>{ cb.style.display='block'; });
   } else {
     grid.classList.remove('sel-mode');
     btn.style.background = '';
     btn.style.color = '';
     btn.title = window.T('kb_s030');
     clearSelection();
-    document.querySelectorAll('.entry-cb').forEach(cb=>{ cb.style.display='none'; });
   }
   _updateBatchBar();
 }
@@ -2577,6 +2968,7 @@ async function _focusHashEntry(){
   const m=/^#(?:entry|ec)-(.+)$/.exec(location.hash||'');
   if(!m) return;
   const id=decodeURIComponent(m[1]);
+  _kbRevealEntry(id);
   const card=document.getElementById('ec-'+id);
   if(card){
     card.scrollIntoView({behavior:'smooth',block:'center'});
@@ -2732,12 +3124,7 @@ async function aiGenerate(){
 }
 
 /* ── Markdown 导出 ────────────────────────────────────── */
-function exportMarkdown(){
-  const a=document.createElement('a');
-  a.href='/api/kb/export-markdown';
-  a.target='_blank';
-  a.click();
-}
+function exportMarkdown(){ return _kbDownload('/api/kb/export-markdown?all='+_expAll(),'kb_export.md'); }
 
 /* ── 沙盒 Ctrl+Enter 快捷键 ────────────────────────────── */
 document.addEventListener('keydown', (e)=>{
@@ -2751,12 +3138,7 @@ document.addEventListener('keydown', (e)=>{
 });
 
 /* ── 知识库分析报告下载 ───────────────────────────────── */
-function downloadReport(){
-  const a=document.createElement('a');
-  a.href='/api/kb/report';
-  a.target='_blank';
-  a.click();
-}
+function downloadReport(){ return _kbDownload('/api/kb/report','kb_report.html'); }
 
 /* ── 图片附件管理 ─────────────────────────────────────── */
 async function loadEntryImages(entryId){

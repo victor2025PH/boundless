@@ -28,6 +28,12 @@ except ImportError:
     _np = None        # type: ignore
     _HAS_NUMPY = False
 
+try:
+    from src.utils import kb_sheet_io as _sheet_io
+except ImportError:  # 测试以 src/ 为根导入 utils.kb_store
+    from utils import kb_sheet_io as _sheet_io  # type: ignore
+_split_terms = _sheet_io.split_terms
+
 
 # ── 分类常量（默认值，可被域包覆盖） ────────────────────────
 _DEFAULT_KB_CATEGORIES = [
@@ -550,6 +556,20 @@ class KnowledgeBaseStore:
                 k TEXT PRIMARY KEY,
                 v TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS kb_import_batches (
+                id         TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                filename   TEXT DEFAULT '',
+                fmt        TEXT DEFAULT '',
+                operator   TEXT DEFAULT '',
+                mode       TEXT DEFAULT 'skip',
+                added      INTEGER DEFAULT 0,
+                updated    INTEGER DEFAULT 0,
+                items      TEXT NOT NULL DEFAULT '[]',
+                undone_at  TEXT DEFAULT '',
+                undo_result TEXT DEFAULT ''
+            );
             """)
             # 迁移旧 kb_query_log 表（新增 score / matched_entry_id 列）
             for col, ddl in [
@@ -990,9 +1010,7 @@ class KnowledgeBaseStore:
     def add_entry(self, data: Dict) -> str:
         entry_id = data.get("id") or str(uuid.uuid4())[:8]
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
-        triggers = data.get("triggers", [])
-        if isinstance(triggers, str):
-            triggers = [t.strip() for t in triggers.split(",") if t.strip()]
+        triggers = _split_terms(data.get("triggers", []))
         t_vars = data.get("template_vars", [])
         if isinstance(t_vars, list):
             t_vars = json.dumps(t_vars, ensure_ascii=False)
@@ -1003,9 +1021,7 @@ class KnowledgeBaseStore:
             rds_str = _rds
         else:
             rds_str = json.dumps(_rds, ensure_ascii=False)
-        neg_trig = data.get("negative_triggers", [])
-        if isinstance(neg_trig, str):
-            neg_trig = [t.strip() for t in neg_trig.split(",") if t.strip()]
+        neg_trig = _split_terms(data.get("negative_triggers", []))
         with self._conn() as c:
             c.execute(
                 "INSERT OR REPLACE INTO kb_entries "
@@ -1125,18 +1141,14 @@ class KnowledgeBaseStore:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         triggers = data.get("triggers")
         if triggers is not None:
-            if isinstance(triggers, str):
-                triggers = [t.strip() for t in triggers.split(",") if t.strip()]
-            data["triggers"] = json.dumps(triggers, ensure_ascii=False)
+            data["triggers"] = json.dumps(_split_terms(triggers), ensure_ascii=False)
         if "reply_direct_spec" in data and isinstance(data["reply_direct_spec"], dict):
             data["reply_direct_spec"] = json.dumps(
                 data["reply_direct_spec"], ensure_ascii=False
             )
         neg_trig = data.get("negative_triggers")
         if neg_trig is not None:
-            if isinstance(neg_trig, str):
-                neg_trig = [t.strip() for t in neg_trig.split(",") if t.strip()]
-            data["negative_triggers"] = json.dumps(neg_trig, ensure_ascii=False)
+            data["negative_triggers"] = json.dumps(_split_terms(neg_trig), ensure_ascii=False)
         if "source" in data:
             data["source"] = normalize_kb_source(data["source"])
         allowed = ["category","title","triggers","scenario","steps","principles",
@@ -1242,10 +1254,16 @@ class KnowledgeBaseStore:
         entries = [dict(r) for r in rows]
         if search:
             q_toks = set(_tokenize(search))
-            entries = [
-                e for e in entries
-                if q_toks & set(_tokenize(e.get("title","") + " " + e.get("scenario","")))
-            ]
+            needle = search.strip().lower()
+            scored = []
+            for e in entries:
+                trig = " ".join(_split_terms(e.get("triggers")))
+                text = f"{e.get('title','')} {e.get('scenario','')} {trig}"
+                exact = needle in text.lower()
+                if exact or q_toks & set(_tokenize(text)):
+                    scored.append((0 if exact else 1, e))
+            # 原文包含搜索词的排前面（分词粒度粗，单字重合也算命中）
+            entries = [e for _, e in sorted(scored, key=lambda x: x[0])]
         return entries
 
     def find_trigger_overlaps(
@@ -1923,14 +1941,15 @@ class KnowledgeBaseStore:
 
     # ── 导出 / 导入 ───────────────────────────────────────
 
-    def export_all(self) -> Dict:
+    def export_all(self, include_disabled: bool = False) -> Dict:
         """
-        导出所有启用条目、错误码、硬规则为可序列化字典。
-        不含 embedding 字段（体积大且可重新生成）。
+        导出启用条目（include_disabled=True 时含停用条目，enabled 字段原样保留）、
+        错误码、硬规则为可序列化字典。不含 embedding 字段（体积大且可重新生成）。
         """
+        where = "" if include_disabled else "WHERE enabled=1 "
         with self._conn() as c:
             entries = [dict(r) for r in c.execute(
-                "SELECT * FROM kb_entries WHERE enabled=1 ORDER BY category, created_at"
+                f"SELECT * FROM kb_entries {where}ORDER BY category, created_at"
             ).fetchall()]
             error_codes = [dict(r) for r in c.execute(
                 "SELECT * FROM kb_error_codes WHERE enabled=1"
@@ -1962,6 +1981,7 @@ class KnowledgeBaseStore:
         "category", "title", "triggers", "scenario",
         "steps", "principles", "example_reply_zh", "forbidden",
         "reply_mode", "template_key", "fallback_group", "reply_direct_spec",
+        "negative_triggers",
     ]
 
     # ── 图片附件 CRUD ──────────────────────────────────────────
@@ -2010,98 +2030,151 @@ class KnowledgeBaseStore:
             c.execute("DELETE FROM kb_entry_images WHERE entry_id=?", (entry_id,))
         return [r[0] for r in rows]
 
-    def export_csv(self) -> str:
+    def export_csv(self, include_disabled: bool = False) -> str:
         """
         导出启用条目为 CSV 字符串（UTF-8 with BOM，Excel 可直接打开）。
-        triggers 字段转为分号分隔字符串，方便人工编辑。
+        triggers / negative_triggers 转为分号分隔字符串，方便人工编辑。
+        include_disabled=True 时含停用条目，并多一列 enabled（是/否），导回时保留启停状态。
         """
         import csv
         import io
+        fields = self._CSV_FIELDS + (["enabled"] if include_disabled else [])
         output = io.StringIO()
         writer = csv.DictWriter(
-            output, fieldnames=self._CSV_FIELDS,
+            output, fieldnames=fields,
             extrasaction="ignore", lineterminator="\n",
         )
         writer.writeheader()
+        where = "" if include_disabled else "WHERE enabled=1 "
         with self._conn() as c:
             rows = c.execute(
-                "SELECT category,title,triggers,scenario,steps,principles,"
-                "example_reply_zh,forbidden FROM kb_entries WHERE enabled=1 "
+                f"SELECT {','.join(fields)} FROM kb_entries {where}"
                 "ORDER BY category,title"
             ).fetchall()
         for r in rows:
-            row = dict(r)
-            if row.get("triggers"):
-                try:
-                    tl = json.loads(row["triggers"])
-                    row["triggers"] = "; ".join(tl) if isinstance(tl, list) else row["triggers"]
-                except Exception:
-                    pass
+            row = {k: ("" if v is None else v) for k, v in dict(r).items()}
+            for f in ("triggers", "negative_triggers"):
+                row[f] = "; ".join(_split_terms(row.get(f)))
+            if include_disabled:
+                row["enabled"] = "是" if int(row.get("enabled") or 0) else "否"
             writer.writerow(row)
         return "\ufeff" + output.getvalue()   # BOM → Excel 自动识别 UTF-8
 
-    def import_from_csv(self, csv_text: str, mode: str = "skip") -> Dict:
+    def import_from_csv(self, csv_text: str, mode: str = "skip", *,
+                        dry_run: bool = False, skip_examples: bool = True,
+                        batch: Optional[Dict] = None) -> Dict:
         """
-        从 CSV 字符串批量导入知识条目。
-        - 第一行必须是字段名（至少含 title）
-        - triggers 字段支持分号分隔的字符串
-        - mode 同 import_from_data
+        从 CSV 字符串批量导入知识条目（表头中英文都认，见 kb_sheet_io）。
+        空单元格不写入；mode 同 import_from_data；dry_run 只统计不落库。
         """
-        import csv
-        import io
-        text = csv_text.lstrip("\ufeff")   # 剥离 BOM
-        reader = csv.DictReader(io.StringIO(text))
-        entries = []
-        for row in reader:
-            if not row.get("title"):
-                continue
-            entry: Dict = {"enabled": 1}
-            for field in self._CSV_FIELDS:
-                if field in row:
-                    entry[field] = row[field]
-            # 把分号字符串转回 JSON 数组
-            if entry.get("triggers"):
-                parts = [t.strip() for t in entry["triggers"].split(";") if t.strip()]
-                entry["triggers"] = json.dumps(parts, ensure_ascii=False)
-            entries.append(entry)
-        return self.import_from_data({"entries": entries, "version": "csv"}, mode=mode)
+        header, rows = _sheet_io.read_csv_table(csv_text)
+        return self._import_table(header, rows, mode, dry_run, skip_examples, batch)
 
-    def import_from_data(self, data: Dict, mode: str = "skip") -> Dict:
+    def import_from_xlsx(self, data: bytes, mode: str = "skip", *,
+                         dry_run: bool = False, skip_examples: bool = True,
+                         batch: Optional[Dict] = None) -> Dict:
+        """从 .xlsx（首个工作表或名为「知识条目」的表）导入，口径同 import_from_csv。"""
+        header, rows = _sheet_io.read_xlsx_table(data)
+        return self._import_table(header, rows, mode, dry_run, skip_examples, batch)
+
+    def _import_table(self, header, rows, mode, dry_run, skip_examples, batch=None) -> Dict:
+        entries, report = _sheet_io.rows_to_entries(header, rows, skip_examples=skip_examples)
+        result = self.import_from_data({"entries": entries, "version": "csv"},
+                                       mode=mode, dry_run=dry_run, batch=batch)
+        result["failed"] += len(report["errors"])
+        result["errors"] = report["errors"] + result["errors"]
+        result["total"] += len(report["errors"])
+        result["examples_skipped"] += report["examples_skipped"]
+        for k in ("columns", "unknown_headers", "missing_title_column", "warnings"):
+            result[k] = report[k]
+        return result
+
+    def import_from_data(self, data: Dict, mode: str = "skip", *,
+                         dry_run: bool = False, skip_examples: bool = False,
+                         batch: Optional[Dict] = None) -> Dict:
         """
         批量导入知识库数据。
         mode="skip"  → 遇到同名条目跳过（安全模式）
         mode="update"→ 遇到同名条目覆盖更新
         按 title 去重（跨环境迁移时 ID 不可信，title 才是语义唯一键）。
-        返回: {"added": N, "updated": N, "skipped": N, "failed": N}
+        dry_run=True 只统计将新增 / 更新 / 跳过多少，不写库。
+        返回: {"added", "updated", "skipped", "failed", "total", "errors": [{row, title, reason}],
+               "examples_skipped", "preview": [{row, title, category, triggers, action}], "dry_run",
+               "batch_id"（真导入且有条目落库时，可凭此 undo_import_batch）}
+        batch: {filename, fmt, operator} 批次元信息，写入导入历史。
         """
-        result = {"added": 0, "updated": 0, "skipped": 0, "failed": 0}
+        touched: List[Dict[str, str]] = []
+        result: Dict[str, Any] = {"added": 0, "updated": 0, "skipped": 0, "failed": 0,
+                                  "total": 0, "errors": [], "examples_skipped": 0,
+                                  "preview": [], "categories": [], "dry_run": bool(dry_run)}
         with self._conn() as c:
             existing = {r[0]: r[1] for r in c.execute(
                 "SELECT title, id FROM kb_entries"
             ).fetchall()}   # title → id
 
-        for entry in data.get("entries", []):
+        for idx, raw in enumerate(data.get("entries", []) or [], start=1):
+            if not isinstance(raw, dict):
+                result["total"] += 1
+                result["failed"] += 1
+                result["errors"].append({"row": idx, "title": "", "reason": "bad_entry"})
+                continue
+            entry = dict(raw)
+            row_no = entry.pop("_row", idx)
+            auto_triggers = entry.pop("_auto_triggers", False)
+            title = str(entry.get("title") or "").strip()
+            if title and skip_examples and _sheet_io.is_example_title(title):
+                result["examples_skipped"] += 1
+                continue
+            result["total"] += 1
             try:
-                title = (entry.get("title") or "").strip()
                 if not title:
                     result["failed"] += 1
+                    result["errors"].append({"row": row_no, "title": "", "reason": "no_title"})
                     continue
+                entry["title"] = title
+                cat = str(entry.get("category") or "").strip()
+                if cat and cat not in result["categories"]:
+                    result["categories"].append(cat)
                 if title in existing:
                     if mode == "update":
-                        self.save_version(existing[title], editor="import")
-                        self.update_entry(existing[title], entry)
+                        action = "update"
+                        if auto_triggers:
+                            entry.pop("triggers", None)
+                        if not dry_run:
+                            vid = self.save_version(existing[title], editor="import")
+                            self.update_entry(existing[title], entry)
+                            touched.append({"id": existing[title], "action": "update",
+                                            "vid": vid or "", "title": title})
                         result["updated"] += 1
                     else:
+                        action = "skip"
                         result["skipped"] += 1
                 else:
-                    entry.setdefault("source", "import")
-                    new_id = self.add_entry(entry)
-                    existing[title] = new_id   # 防止同批次重复
+                    action = "add"
+                    if dry_run:
+                        existing[title] = ""
+                    else:
+                        # 文件里的 id 不可信：沿用会让 add_entry 的 INSERT OR REPLACE 覆盖掉
+                        # 同 id 的其他条目（改了标题的备份再导回），撤销时再把它当新增删掉
+                        entry.pop("id", None)
+                        entry.setdefault("source", "import")
+                        existing[title] = self.add_entry(entry)   # 防止同批次重复
+                        touched.append({"id": existing[title], "action": "add",
+                                        "vid": "", "title": title})
                     result["added"] += 1
-            except Exception:
+                if len(result["preview"]) < 8:
+                    result["preview"].append({
+                        "row": row_no, "title": title,
+                        "category": str(entry.get("category") or ""),
+                        "triggers": _split_terms(entry.get("triggers"))[:6],
+                        "action": action,
+                    })
+            except Exception as exc:
                 result["failed"] += 1
+                result["errors"].append({"row": row_no, "title": title,
+                                         "reason": "exception", "detail": str(exc)[:160]})
 
-        for ec in data.get("error_codes", []):
+        for ec in data.get("error_codes", []) or []:
             try:
                 code = (ec.get("code") or "").strip()
                 if not code:
@@ -2109,14 +2182,15 @@ class KnowledgeBaseStore:
                 with self._conn() as c:
                     if not c.execute("SELECT 1 FROM kb_error_codes WHERE code=?",
                                      (code,)).fetchone():
-                        self.add_error_code(ec)
+                        if not dry_run:
+                            self.add_error_code(ec)
                         result["added"] += 1
                     else:
                         result["skipped"] += 1
             except Exception:
                 result["failed"] += 1
 
-        for rule in data.get("rules", []):
+        for rule in data.get("rules", []) or []:
             try:
                 txt = (rule.get("constraint_text") or "").strip()
                 if not txt:
@@ -2125,14 +2199,136 @@ class KnowledgeBaseStore:
                     if not c.execute(
                         "SELECT 1 FROM kb_rules WHERE constraint_text=?", (txt,)
                     ).fetchone():
-                        self.add_rule(rule)
+                        if not dry_run:
+                            self.add_rule(rule)
                         result["added"] += 1
                     else:
                         result["skipped"] += 1
             except Exception:
                 result["failed"] += 1
 
+        if touched and not dry_run:
+            result["batch_id"] = self._record_import_batch(touched, mode, batch or {})
         return result
+
+    # ── 导入批次（历史 / 整批撤销） ────────────────────────
+
+    _IMPORT_BATCH_KEEP = 20
+    _FP_FIELDS = ("category", "title", "triggers", "scenario", "steps", "principles",
+                  "example_reply_zh", "forbidden", "enabled", "reply_mode", "template_key",
+                  "fallback_group", "reply_direct_spec", "negative_triggers", "source")
+
+    @classmethod
+    def _entry_fp(cls, entry: Dict) -> str:
+        """可编辑字段的内容指纹（updated_at 只到秒，同秒内的手工修改分辨不出）。"""
+        import hashlib
+        raw = json.dumps([str(entry.get(k) if entry.get(k) is not None else "")
+                          for k in cls._FP_FIELDS], ensure_ascii=False)
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+    def _record_import_batch(self, touched: List[Dict[str, str]], mode: str,
+                             meta: Dict) -> str:
+        """记录一次真导入；每条目存导入完成时的内容指纹，撤销时据此判断导入后是否被改过。"""
+        ids = [t["id"] for t in touched]
+        with self._conn() as c:
+            fps = {r["id"]: self._entry_fp(dict(r)) for r in c.execute(
+                f"SELECT * FROM kb_entries WHERE id IN ({','.join('?' * len(ids))})",
+                ids,
+            ).fetchall()}
+            for t in touched:
+                t["fp"] = fps.get(t["id"], "")
+            bid = str(uuid.uuid4())[:8]
+            c.execute(
+                "INSERT INTO kb_import_batches "
+                "(id,created_at,filename,fmt,operator,mode,added,updated,items) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (bid, time.strftime("%Y-%m-%dT%H:%M:%S"),
+                 str(meta.get("filename") or "")[:120], str(meta.get("fmt") or "")[:10],
+                 str(meta.get("operator") or "")[:60], mode,
+                 sum(1 for t in touched if t["action"] == "add"),
+                 sum(1 for t in touched if t["action"] == "update"),
+                 json.dumps(touched, ensure_ascii=False)),
+            )
+            c.execute(
+                "DELETE FROM kb_import_batches WHERE id IN (SELECT id FROM kb_import_batches "
+                "ORDER BY created_at DESC LIMIT -1 OFFSET ?)",
+                (self._IMPORT_BATCH_KEEP,),
+            )
+        return bid
+
+    def list_import_batches(self, limit: int = 20) -> List[Dict]:
+        """导入历史（最新在前），不含逐条明细。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id,created_at,filename,fmt,operator,mode,added,updated,undone_at,"
+                "undo_result FROM kb_import_batches ORDER BY created_at DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["undo_result"] = json.loads(d["undo_result"]) if d["undo_result"] else None
+            except Exception:
+                d["undo_result"] = None
+            out.append(d)
+        return out
+
+    def undo_import_batch(self, batch_id: str, *, force: bool = False,
+                          editor: str = "") -> Dict[str, Any]:
+        """
+        整批撤销一次导入：新增的删掉，覆盖更新的恢复到导入前快照。
+        导入后又被手工改过的条目默认保留（kept），force=True 才一并撤销。
+        返回 {ok, deleted, restored, kept: [title], missing, reason?}
+        """
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM kb_import_batches WHERE id=?",
+                            (batch_id,)).fetchone()
+        if not row:
+            return {"ok": False, "reason": "not_found"}
+        if row["undone_at"]:
+            return {"ok": False, "reason": "already_undone"}
+        try:
+            items = json.loads(row["items"] or "[]")
+        except Exception:
+            items = []
+        res: Dict[str, Any] = {"ok": True, "deleted": 0, "restored": 0,
+                               "kept": [], "missing": 0}
+        remaining: List[Dict] = []
+        for it in items:
+            cur = self.get_entry(it.get("id", ""))
+            if not cur:
+                res["missing"] += 1
+                continue
+            if not force and it.get("fp") and self._entry_fp(cur) != it["fp"]:
+                res["kept"].append(it.get("title") or cur.get("title", ""))
+                remaining.append(it)
+                continue
+            if it.get("action") == "add":
+                self.delete_entry(it["id"])
+                res["deleted"] += 1
+                continue
+            ver = self.get_version(it.get("vid") or "") if it.get("vid") else None
+            snap = ver.get("snapshot") if ver else None
+            if not isinstance(snap, dict):
+                res["missing"] += 1
+                continue
+            self.save_version(it["id"], editor=f"before_undo_import_{editor}")
+            self.update_entry(it["id"], dict(snap))
+            res["restored"] += 1
+        with self._conn() as c:
+            if remaining:
+                # 批次只留下被保留的条目，供之后 force 撤销
+                c.execute("UPDATE kb_import_batches SET items=? WHERE id=?",
+                          (json.dumps(remaining, ensure_ascii=False), batch_id))
+            else:
+                c.execute(
+                    "UPDATE kb_import_batches SET undone_at=?, undo_result=? WHERE id=?",
+                    (time.strftime("%Y-%m-%dT%H:%M:%S"),
+                     json.dumps(res, ensure_ascii=False), batch_id),
+                )
+        res["remaining"] = len(remaining)
+        return res
 
     # ── 维护建议（健康诊断） ──────────────────────────────
 

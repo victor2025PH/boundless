@@ -830,8 +830,8 @@ HELP_TERMS: dict = {
         "en": "Vectorize",
         "desc": "将所有知识条目转为数学向量，启用语义搜索（理解含义而非仅关键词匹配）",
         "desc_en": "Convert all knowledge entries into vectors to enable semantic search (meaning, not just keyword matching)",
-        "usage": "点击后等待处理完成。新增条目后建议重新向量化",
-        "usage_en": "Click and wait for processing. Re-vectorize after adding new entries"
+        "usage": "知识库 → 更多 → 向量化 → 开始向量化，等进度走完。导入完成页也有这个按钮。已有向量的条目会跳过，不用重新导入",
+        "usage_en": "Knowledge → More → Vectorize → Start, and wait for the bar. The import-done page has the same button. Entries that already have vectors are skipped; do not re-import"
     },
     "batch_translate": {
         "zh": "批量翻译",
@@ -840,6 +840,14 @@ HELP_TERMS: dict = {
         "desc_en": "Auto-translate all untranslated KB entries into English/Urdu/Portuguese/Arabic",
         "usage": "点击后自动翻译，翻译结果可在「翻译审核」标签页中审核",
         "usage_en": "Click to auto-translate; review the results in the \"Translation Review\" tab"
+    },
+    "kb_import": {
+        "zh": "批量导入",
+        "en": "Bulk Import",
+        "desc": "把现成的 FAQ 表格（Excel / CSV）或 JSON 备份一次导入成知识条目，导入前先预览每行会新增、更新还是跳过",
+        "desc_en": "Turn an existing FAQ sheet (Excel / CSV) or a JSON backup into knowledge entries in one go, with a preview of which rows will be added, updated or skipped",
+        "usage": "先下载模板照着填 → 选文件看预览 → 确认导入；导错了可在「更多 → 导入记录」整批撤销",
+        "usage_en": "Download the template and fill it in → pick the file and check the preview → confirm; undo a whole batch later from More → Import history"
     },
     "hit_rate": {
         "zh": "命中率",

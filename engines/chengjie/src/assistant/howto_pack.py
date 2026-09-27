@@ -298,11 +298,14 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "kb-add",
         "知识库怎么添加条目",
         "How to add a knowledge base entry",
-        "打开「知识库」页 → 新建条目：填分类/标题/触发词/回复模板，保存后建议"
-        "点「向量化」让语义检索生效。也可一键播种起步包快速备货。",
-        "Open the Knowledge page → New entry (category/title/triggers/reply), "
-        "then run embed-all so semantic search picks it up. Starter packs can "
-        "seed a domain in one click.",
+        "打开「知识库」页。新建一条：填分类/标题/触发词/回复，保存。"
+        "已有表格：顶栏「导入」→ 先下载 Excel 模板照着填 → 选文件看预览 → 确认导入。"
+        "导错了到「更多 → 导入记录」整批撤销。"
+        "导入或新建之后点「更多 → 向量化」（导入完成页也有这个按钮），等进度走完，同义问法才能命中；已有向量的条目会跳过，不用把表再导一遍。",
+        "Open Knowledge. New entry: category, title, triggers, reply, then save. "
+        "Existing sheet: Import on the toolbar → download the Excel template → preview → confirm. "
+        "Undo a bad batch from More → Import history. "
+        "After import or a new entry, open More → Vectorize (the import-done page has the same button) and wait for the bar; entries that already have vectors are skipped, so do not re-import the sheet.",
         "知识库 加条目 新建 KB 词条 话术 添加",
         "/knowledge",
     ),
@@ -1669,13 +1672,16 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "会话里模型和模式有什么区别 / 怎么选上下文深度",
         "What is the difference between Model and Mode / how to set context depth",
         "打开会话，输入框上方两个等宽按钮。「模型」选谁来答：云厂商＝标准模式（规则全开）；"
-        "ChatX聊天模型＝无限制（规则让路）。「模式」可再调上下文深度、力度、思考，或从无限制改回标准。"
+        "ChatX聊天模型＝无限制（规则让路），这一行路径写着「SVIP企业搭建」。"
+        "外网安装升级到本版后，模型列表里同样有这一行，点它即无限制，和办公室这台一样。"
+        "「模式」可再调上下文深度、力度、思考，或从无限制改回标准。"
         "密钥在侧栏「模型与密钥」，登录即可改。选完应有保存提示。",
         "Open a thread: two equal buttons sit above the composer. Model picks who answers: a cloud vendor = Standard "
-        "(all rules on); ChatX chat model = Unrestricted (rules step aside). Mode still adjusts context "
+        "(all rules on); ChatX chat model = Unrestricted (rules step aside), and that row's path reads SVIP企业搭建. "
+        "After this version, remote installs show the same row; choosing it turns on Unrestricted. Mode still adjusts context "
         "depth, effort and thinking, or switches Unrestricted back to Standard. Keys live under Models & keys "
         "in the sidebar. A toast confirms the save.",
-        "模型 模式 上下文深度 无限制 ChatX聊天模型 模型与密钥 composer model mode unrestricted depth",
+        "模型 模式 上下文深度 无限制 ChatX聊天模型 SVIP企业搭建 模型与密钥 composer model mode unrestricted depth",
         "/workspace",
     ),
     (
@@ -1894,6 +1900,19 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "option means this build does not ship that tier.",
         "不设限 成人 黄腔 未成年 人设政策 adult open unrestricted",
         "/workspace/personas",
+    ),
+    (
+        "tg-phone-sidebar",
+        "Telegram 手机号登录后侧边栏为什么没有账号",
+        "Why a Telegram phone login does not show the account in the sidebar",
+        "工作台账号面板选 Telegram，用手机号登录，验证码通过后左侧会话列表会出现这个账号，和扫码登录一样。"
+        "旧版会显示已登录，但侧边栏是空的。升级到本版后，用手机号再登录一次即可，不用重装、不用改数据。",
+        "In the workbench account panel choose Telegram and sign in with the phone number. After the code is accepted "
+        "the account appears in the left conversation list, the same as a QR login. Older builds showed signed-in "
+        "but left the sidebar empty. After this version, sign in with the phone number once more; do not reinstall "
+        "and do not wipe data.",
+        "手机号登录 扫码 侧边栏 没有账号 telegram phone login sidebar",
+        "/workspace",
     ),
 ]
 
