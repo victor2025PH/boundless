@@ -165,6 +165,9 @@ ZH = {
     "kb2_imp_unknown_cols": "这些列没认出来，会被忽略：{cols}",
     "kb2_imp_unknown_cats": "这些分类不在现有分类表里，导入后分类筛选里选不到：{cats}",
     "kb2_imp_no_title_col": "没找到「标题」列（或「问题」列）。请用模板的表头，第一行必须是列名。",
+    # P1-3（2026-09-29）：工作台「知识库 · 未命中」chip → 预填客户原话新建条目
+    "kb2_prefill_scenario": "客户原话：{text}",
+    "kb2_prefill_hint": "已按客户原话预填标题与触发词——把示例回复写成能直接发出去的话，保存后这条会自动向量化。",
     "kb2_imp_nothing": "没有可导入的条目",
     "kb2_imp_row": "第 {row} 行",
     "kb2_imp_r_no_title": "缺少标题，整行未导入",
@@ -348,6 +351,8 @@ EN = {
     "kb2_imp_unknown_cols": "These columns were not recognized and will be ignored: {cols}",
     "kb2_imp_unknown_cats": "These categories are not in the category list and won't appear in the filter: {cats}",
     "kb2_imp_no_title_col": "No title (or question) column found. Use the template header; the first row must be column names.",
+    "kb2_prefill_scenario": "Customer said: {text}",
+    "kb2_prefill_hint": "Title and triggers are pre-filled from the customer's words. Write the sample reply as something you could send as-is; the entry is vectorized automatically on save.",
     "kb2_imp_nothing": "Nothing to import",
     "kb2_imp_row": "Row {row}",
     "kb2_imp_r_no_title": "Missing title — row not imported",

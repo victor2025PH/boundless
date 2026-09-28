@@ -1118,6 +1118,18 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_name','名称') }}</label><input id="pe-name" type="text" placeholder="{{ (i18n or {}).get('psn_name_ph','小灵') }}"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_role','角色') }}</label><input id="pe-role" type="text" placeholder="{{ (i18n or {}).get('psn_role_ph','亲密的私聊对象') }}"></div>
     </div>
+    <!-- P0-1（2026-09-29）：工作类型——知识库该不该查、查无怎么办的单一开关（SSOT persona_kind.py）。
+         留空＝按角色 / 标签自动推断，提示行显示当前生效值与来源。 -->
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_kind','工作类型') }}</label>
+      <select id="pe-kind" onchange="_peKindHint()">
+        <option value="">{{ (i18n or {}).get('psn_kind_auto','自动（按角色推断）') }}</option>
+        <option value="support">{{ (i18n or {}).get('psn_kind_support','客服') }}</option>
+        <option value="sales">{{ (i18n or {}).get('psn_kind_sales','销售') }}</option>
+        <option value="companion">{{ (i18n or {}).get('psn_kind_companion','陪聊') }}</option>
+      </select>
+      <span id="pe-kind-eff" style="font-size:.72rem;color:var(--t2);margin-top:.2rem"></span>
+      <span id="pe-kind-hint" style="font-size:.72rem;color:var(--t2)"></span>
+    </div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_personality_style','性格 / 风格') }}</label><textarea id="pe-personality" rows="5" placeholder="{{ (i18n or {}).get('psn_personality_ph','温柔体贴，喜欢用撒娇语气…') }}"></textarea><span id="pe-pers-notice" class="pers-notice">✓ {{ (i18n or {}).get('psn_pers_structured','结构化人设：此处仅编辑说话风格 style，特质等字段随保存原样保留') }}</span><div id="pe-personality-extras"></div></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_tag','标签') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-tags" type="text" placeholder="holiday, vip, companion"></div>
     {% if not ui_client_hide|default(false) %}
@@ -2248,6 +2260,7 @@ async function _cloneProfile(pid) {
     if (idEl) { idEl.value = ''; idEl.readOnly = false; }
     document.getElementById('pe-name').value = (p.name || '') + window.T('psn_js_041');
     document.getElementById('pe-role').value = p.role || '';
+    _peKindView = null; _peKindLoad(p);   // P0-1：复制人设随源人设的显式 kind
     document.getElementById('pe-personality').value = typeof p.personality === 'object' ? (p.personality.style || JSON.stringify(p.personality)) : (p.personality || '');
     document.getElementById('pe-tags').value = (p.tags || []).join(', ');
     const spk = p.speaking || {};
@@ -4966,7 +4979,7 @@ function _renderPersonalityExtras(persObj) {
 // ── C 线：高级字段只读面板 — _loadedProfile 里「表单未管理」的字段可见化 ─────────
 // L-2 #203（5EFS2A）：voice_profile 整棵子树由语音 tab 三态表单接管、capabilities 由相册 tab
 // 「可发照片」开关接管——两者不再以原始 JSON 直出；其余未知字段后台静默保留（保存时原样回传）。
-var _ADV_MANAGED_TOP = ['id','name','role','tags','personality','speaking','identity','voice_profile',
+var _ADV_MANAGED_TOP = ['id','name','role','kind','tags','personality','speaking','identity','voice_profile',
   'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities'];
 var _ADV_MANAGED_SUB = {
   personality: ['style','quirks','humor','temperament'],
@@ -5848,6 +5861,36 @@ function _vmCollectModePatch() {
   return {voice_mode: 'preset', backend: (meta && meta.backend === 'openai') ? 'openai' : 'edge_tts', voice: v};
 }
 
+/* P0-1（2026-09-29）：工作类型选择器。选择器值＝显式 kind（空＝自动）；提示行显示服务端
+   解析的生效值与来源（editProfile 带回的 kind_view；新建 / 复制态无视图 → 只按选择器显示）。 */
+var _peKindView = null;
+var _PE_KIND_LABEL = { companion: 'psn_kind_companion', support: 'psn_kind_support', sales: 'psn_kind_sales' };
+function _peKindLoad(p) {
+  var sel = document.getElementById('pe-kind');
+  if (!sel) return;
+  var k = String((p && p.kind) || '').toLowerCase();
+  sel.value = _PE_KIND_LABEL[k] ? k : '';
+  _peKindHint();
+}
+function _peKindHint() {
+  var sel = document.getElementById('pe-kind');
+  var eff = document.getElementById('pe-kind-eff');
+  var hint = document.getElementById('pe-kind-hint');
+  if (!sel || !eff || !hint) return;
+  var chosen = sel.value || '';
+  var view = _peKindView || {};
+  var kind = chosen || String(view.kind || '');
+  var src = chosen ? 'explicit' : String(view.source || '');
+  if (kind && _PE_KIND_LABEL[kind]) {
+    var srcKey = { explicit: 'psn_kind_src_explicit', tag: 'psn_kind_src_tag', keyword: 'psn_kind_src_keyword', default: 'psn_kind_src_default' }[src];
+    eff.textContent = window.Tf('psn_kind_eff', { label: window.T(_PE_KIND_LABEL[kind]), src: srcKey ? window.T(srcKey) : '—' });
+    hint.textContent = window.T(kind === 'companion' ? 'psn_kind_hint_companion' : 'psn_kind_hint_support');
+  } else {
+    eff.textContent = '';
+    hint.textContent = '';
+  }
+}
+
 function _fillDrawerFields(p) {
   // 换档案装载：清掉上一个人设的删除提示横幅与排查残余（防串味）
   try { _showRemovedBanner([]); } catch (e) {}
@@ -5856,6 +5899,7 @@ function _fillDrawerFields(p) {
   var vp = p.voice_profile || {};
   document.getElementById('pe-name').value = p.name || '';
   document.getElementById('pe-role').value = p.role || '';
+  _peKindLoad(p);   // P0-1：工作类型选择器 + 「当前生效」提示行
   var _persObj = (p.personality && typeof p.personality === 'object' && !Array.isArray(p.personality)) ? p.personality : null;
   document.getElementById('pe-personality').value = _persObj
     ? String(_persObj.style || '') : _normalizePersonality(p.personality || '');
@@ -6152,6 +6196,7 @@ function openNewProfile() {
   _editingProfileId = null;
   var idEl = document.getElementById('pe-id');
   if (idEl) { idEl.value = ''; idEl.readOnly = false; }
+  _peKindView = null;   // P0-1：新建态无服务端视图，选择器回「自动」
   _fillDrawerFields({});
   _loadedProfile = null;
   _loadedRev = '';
@@ -6183,6 +6228,7 @@ async function editProfile(pid) {
     _editingProfileId = pid;
     var idEl = document.getElementById('pe-id');
     if (idEl) { idEl.value = pid; idEl.readOnly = true; }
+    _peKindView = d.kind_view || null;   // P0-1：服务端解析的生效 kind（显式 / 推断 / 缺省）
     _fillDrawerFields(p);
     _loadedProfile = JSON.parse(JSON.stringify(p));
     _loadedRev = d.rev || '';   // P2 乐观锁：记住加载时指纹（老后端无 rev → 空=不启用校验）
@@ -6302,6 +6348,8 @@ async function saveProfile() {
   var patch = {
     name: nameVal.trim(),
     role: document.getElementById('pe-role').value.trim(),
+    // P0-1：空串＝「自动推断」显式落库（merge 语义下不带键会保留旧值，清不掉手动指定）
+    kind: (document.getElementById('pe-kind') || {}).value || '',
     personality: (_loadedProfile && _loadedProfile.personality && typeof _loadedProfile.personality === 'object' && !Array.isArray(_loadedProfile.personality))
       ? { style: _persVal } : _persVal,
     tags: tags,
@@ -8292,6 +8340,7 @@ function _getCurrentFormValues() {
   return {
     name:       v('pe-name'),
     role:       v('pe-role'),
+    kind:       v('pe-kind'),
     personality: v('pe-personality'),
     tags:       v('pe-tags').split(',').map(function(t){ return t.trim(); }).filter(Boolean),
     language:   v('pe-language'),

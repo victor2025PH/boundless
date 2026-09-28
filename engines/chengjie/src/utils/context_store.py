@@ -59,6 +59,9 @@ _NON_PERSIST = frozenset({
     "_camp_block",         # #147: 自家阵营在推活动块，每轮从 site_catalog 重建
     "_known_profile_block",  # B50: 每轮从 episodic 重建（事实源在记忆库）
     "_self_state_block",     # B52: 每轮按 _self_state_log(持久) + TTL 重建
+    "_kb_decision",          # P0-2 kb_policy: 每轮重算的知识库决策（dataclass，不落盘）
+    "_kb_nohit_block",       # P0-4 kb_policy: 查无兜底指令，每轮重建；落盘会把上一题的「查无」带进下一题
+    "kb_context",            # 检索材料每轮重建；落盘只是死重，且会让旧材料跨轮泄漏进 prompt
 })
 
 

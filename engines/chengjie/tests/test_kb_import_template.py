@@ -171,6 +171,75 @@ def client(store, tmp_path):
     return TestClient(app)
 
 
+def test_route_add_entry_auto_embeds_when_endpoint_available(client, store, monkeypatch):
+    """P1-3：保存即向量化——有嵌入端点（网关 /api/ai/v1）时新建 / 改匹配面后台重算这一条；
+    没有端点（裸 DeepSeek 对话端点）一枪不打。"""
+    calls = []
+    # 路由闭包里的 _call_embed_api 不可直接替换 → 在 httpx 层打桩
+    import httpx
+
+    class _Resp:
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            calls.append((url, kw.get("json", {}).get("input")))
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    # 先无端点：不打
+    r = client.post("/api/kb/entries", json={"title": "网站有什么活动", "triggers": ["活动"],
+                                             "category": "活动优惠", "example_reply_zh": "新人礼"}).json()
+    assert r["ok"] and calls == []
+    # 配网关端点：打一枪，向量落库
+    from types import SimpleNamespace
+    cm = SimpleNamespace(config={"ai": {"base_url": "https://bd2026.cc/api/ai/v1", "api_key": "cx.x"}},
+                         config_path="x")
+    # 找到路由闭包里的 config_manager 引用：register_kb_routes 用 ctx.config_manager，
+    # 这里直接改 ctx 对象不可达 → 用第二个 client 重新注册
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.middleware.sessions import SessionMiddleware
+    from src.web.routes.kb_routes import register_kb_routes
+    app2 = FastAPI()
+    app2.add_middleware(SessionMiddleware, secret_key="t")
+    ctx2 = SimpleNamespace(kb_store=store, config_manager=cm, audit_store=None,
+                           api_auth=lambda request: None, require_auth=lambda request: None,
+                           fire_webhook=lambda *a, **k: None)
+    register_kb_routes(app2, ctx2)
+    c2 = TestClient(app2)
+    r2 = c2.post("/api/kb/entries", json={"title": "怎么注册", "triggers": ["注册"],
+                                         "category": "注册登录", "example_reply_zh": "右上角注册"}).json()
+    assert r2["ok"]
+    # 后台任务在同一事件循环里排队；再发一个请求让循环跑完
+    c2.get("/api/kb/embed-progress")
+    assert calls and calls[-1][0].endswith("/embeddings") and "注册" in calls[-1][1][0]
+    assert store.get_entry(r2["id"]).get("embedding")
+
+
+def test_route_new_entry_templates_follow_persona_kinds(client, monkeypatch):
+    """P1-2：新建模板端点按在用人设 kind 前置客服示例，分类表带客服集。"""
+    import src.utils.persona_kind as pk
+    monkeypatch.setattr(pk, "kinds_in_use", lambda cfg=None: ("support",))
+    r = client.get("/api/kb/new-entry-templates").json()
+    assert r["kinds"] == ["support"]
+    assert r["templates"][0]["key"] == "support_promo"
+    assert r["templates"][0]["category"] == "活动优惠"
+    monkeypatch.setattr(pk, "kinds_in_use", lambda cfg=None: ())
+    r2 = client.get("/api/kb/new-entry-templates").json()
+    assert r2["templates"][0]["key"] != "support_promo"
+
+
 def test_route_template_downloads(client):
     r = client.get("/api/kb/import-template?fmt=xlsx")
     assert r.status_code == 200 and r.content[:2] == b"PK"

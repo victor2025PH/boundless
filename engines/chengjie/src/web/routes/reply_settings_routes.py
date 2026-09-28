@@ -857,3 +857,37 @@ def register_reply_settings_routes(
                       old_values={f"persona.{pid}.boundaries.risk_overrides": old})
         return {"ok": True, "persona_id": pid, "overrides": clean, "persisted": persisted,
                 "categories": rg.public_table(pm.get_persona_by_id(pid))}
+
+    # ── P1-5（2026-09-29）：业务域——客户机可改「这台机器做什么生意」────────
+    # 原写入口只在开发者页（_require_dev），客户够不到。本页客户可见；开发者页保留镜像。
+    # 不塞进 /api/reply-settings 白名单快照——业务域不是节奏字段，独立端点更干净。
+    @app.get("/api/reply-settings/business-domain")
+    async def api_reply_settings_bd_get(request: Request, _=Depends(api_auth)):
+        from src.utils.business_domain import business_domain_view
+        cfg = getattr(config_manager, "config", None) or {}
+        return business_domain_view(cfg)
+
+    @app.post("/api/reply-settings/business-domain")
+    async def api_reply_settings_bd_set(request: Request, _=Depends(api_auth)):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        from src.utils.business_domain import apply_business_domain, business_domain_view
+        want = (body or {}).get("business_domain")
+        v, ok = apply_business_domain(config_manager, want)
+        if not v:
+            return {"ok": False, "errors": [{"field": "business_domain", "code": "bad_value",
+                                            "message": tr(request, "rps_bd_bad",
+                                                          name=str(want or ""))}]}
+        if not ok:
+            return {"ok": False, "errors": [{"field": "business_domain", "code": "write_failed",
+                                            "message": tr(request, "rps_bd_write_fail")}]}
+        try:
+            actor = str(request.session.get("username") or "web")
+        except Exception:
+            actor = "web"
+        logger.info("business_domain = %s (by %s via reply-settings)", v, actor)
+        out = business_domain_view(getattr(config_manager, "config", None) or {})
+        out["restart_required"] = True
+        return out

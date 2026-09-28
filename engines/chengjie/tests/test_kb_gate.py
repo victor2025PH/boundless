@@ -89,6 +89,23 @@ def test_content_tokens_filters_stopwords():
         t not in ("怎么", "你哋") for t in content_tokens("怎么办呢你哋"))
 
 
+def test_looks_like_info_query_requires_content():
+    """P1-1：「在问一件事」= 提问样式 + 实词；纯虚词问句 / 寒暄 / 占位符不算。"""
+    from src.utils.kb_gate import looks_like_info_query as q
+    assert q("那都有什么活动")
+    assert q("有没有优惠")
+    assert q("注册要多久")
+    assert q("VIP等级怎么看")
+    assert q("what promotions do you have")
+    assert not q("怎么办呢")
+    assert not q("为什么？")
+    assert not q("why?")
+    assert not q("在呢")
+    assert not q("今天好累")
+    assert not q("好的谢谢")
+    assert not q("[图片内容] 一包怪味胡豆")
+
+
 def test_strong_english_token():
     """单个 ≥4 字英文强词（品牌/产品名）单独即可放行。"""
     entry = {"title": "EDIFIER 耳机推荐", "triggers": "EDIFIER 蓝牙耳机",

@@ -4676,29 +4676,33 @@ class AIClient(LoggerMixin):
                 f"（以上为之前对话的关键信息压缩，请结合当前对话和上条消息回答。）"
             )
 
-        kb_ctx = context.get("kb_context", "").strip()
+        kb_ctx = str(context.get("kb_context") or "").strip()
+        # P0-3（2026-09-29 8E56 实锤）：注入措辞按人设 kind 分套（kb_policy.format_kb_block 单源）——
+        # 客服 / 销售：权威事实、命中以此为准、没有就说没有；陪聊：旧「参考片段（语气用）」；
+        # 支付域只有实时通道数据在场时才附「成功率数值已过期」警告（此前对所有非陪聊部署无差别输出，
+        # 与 kb_store 材料头「必须按步骤执行」互相打架）。
+        _kbd = context.get("_kb_decision")
+        if isinstance(_kbd, dict):
+            _kb_kind = str(_kbd.get("kind") or "")
+            _kb_kind_src = str(_kbd.get("kind_source") or "")
+        else:
+            _kb_kind = str(getattr(_kbd, "kind", "") or "")
+            _kb_kind_src = str(getattr(_kbd, "kind_source", "") or "")
         if kb_ctx and not _live_metrics:
-            if _is_companion:
-                prompt_parts.append(
-                    "\n【参考片段（语气用，非工作指令）】\n"
-                    f"{kb_ctx}\n"
-                    "不要主动提起查单、通道状态、支付、费率等工作话题；除非用户先说到这些词。"
-                )
-            else:
-                _kb_cleaned = kb_ctx
-                if channel_status:
-                    import re as _re
-                    _kb_cleaned = _re.sub(
-                        r'成功率[：:]\s*\d+[\.\d]*%?',
-                        '成功率：见上方实时数据',
-                        _kb_cleaned
-                    )
-                prompt_parts.append(
-                    f"\n【知识库参考（仅供话术风格参考）】\n"
-                    f"⚠️ 重要：知识库中的任何成功率数值、通道状态均已过期，严禁使用！\n"
-                    f"通道的成功率、状态、限额等数据必须且只能使用上方【当前通道实时数据】中的数值。\n"
-                    f"知识库仅用于参考回复的语气和格式：\n{_kb_cleaned}"
-                )
+            try:
+                from src.utils.kb_policy import format_kb_block
+                _kb_block = format_kb_block(
+                    kb_ctx, kind=_kb_kind, kind_source=_kb_kind_src, companion_pack=_is_companion,
+                    live_channel=bool(channel_status),
+                    lang=str(context.get("reply_lang") or "zh"))
+            except Exception:
+                _kb_block = f"\n【知识库参考】\n{kb_ctx}"
+            if _kb_block:
+                prompt_parts.append(_kb_block)
+        # P0-4：客服 / 销售 must 档查无 → 固定话术 / 已转人工指令（kb_policy.nohit_block）
+        _kb_nohit = str(context.get("_kb_nohit_block") or "").strip()
+        if _kb_nohit and not kb_ctx:
+            prompt_parts.append("\n" + _kb_nohit)
         # _live_metrics 时主流程已跳过 KB 检索；若仍带有 kb_context，不注入，避免「商户后台」等模板进入模型
 
         # L4: 用户画像注入

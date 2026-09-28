@@ -595,11 +595,25 @@ def test_list_pending_notify(bi):
 
 def test_wiring_kb_gate_bug_group_exempt():
     # conversion 域「防推销」KB 闸必须豁免报障群（2026-08-18 实测误伤：
-    # 「怎么登录」的正确 KB 命中被丢弃成泛答）
-    src = _read("src/skills/skill_manager.py")
-    assert "_bug_group_kb_exempt" in src
-    seg = src.split("dropped KB inject", 1)[0]
-    assert "is_bug_group" in seg
+    # 「怎么登录」的正确 KB 命中被丢弃成泛答）。
+    # P0-2（2026-09-29）：闸收口到 kb_policy.resolve_kb_policy 单一决策点——豁免判定
+    # 在 bug_group 分支（先于 companion_chat 闲聊闸），两条产线都经它。
+    src = _read("src/utils/kb_policy.py")
+    seg = src.split('"companion_chat"', 1)[0]
+    assert "is_bug_group" in seg and '"bug_group"' in seg
+    sm = _read("src/skills/skill_manager.py")
+    assert "resolve_kb_policy" in sm
+    # 行为级：报障群里的闲聊句不再被闲聊闸跳过
+    from src.utils.kb_policy import resolve_kb_policy
+    cfg = {"domain": "conversion",
+           "bug_intake": {"enabled": True, "groups": ["-100777"]}}
+    d = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
+                          config=cfg, chat_id="-100777")
+    assert d.mode == "optional" and d.reason == "bug_group"
+    # 非报障群同句仍走闲聊闸（旧行为不变）
+    d2 = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
+                           config=cfg, chat_id="-100888")
+    assert d2.mode == "skip" and d2.reason == "companion_chat"
 
 
 def test_wiring_photo_and_pending_routes():

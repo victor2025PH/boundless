@@ -43,6 +43,18 @@ def register_kb_routes(app, ctx):
     _require_auth = ctx.require_auth
     _fire_webhook = ctx.fire_webhook
 
+    def _schedule_webhook(*args):
+        """生产 ``_fire_webhook`` 是 coroutine；测试桩可能是同步 lambda。两种都吃。"""
+        import asyncio as _asyncio
+        try:
+            maybe = _fire_webhook(*args)
+            if _asyncio.iscoroutine(maybe):
+                _asyncio.get_running_loop().create_task(maybe)
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug("[kb] webhook 调度失败（忽略）", exc_info=True)
+
     # J-9 #184：桌面首装播 3 条停用态格式示例（非桌面 / 已有用户条目 / 已播过 → no-op）。
     # 挂在这里而非 admin.py：kb_* 归 J-9，admin.py 归 J-7/J-8，不越界。
     # P-4 #254（D-P6）：带 cfg 走 system_seed_plan——陪伴域不播（首装 KB 为空，示例改为
@@ -103,12 +115,28 @@ def register_kb_routes(app, ctx):
                 )
         return lines
 
+    def _kinds_in_use():
+        """本机在用的人设 kind（P1-2）：分类表 / 新建模板 / 导入模板按它追加客服 / 销售集。"""
+        try:
+            from src.utils.persona_kind import kinds_in_use
+            return kinds_in_use(getattr(config_manager, "config", None))
+        except Exception:
+            return ()
+
+    def _eff_categories():
+        """当前生效分类表 = 域变体 ∪ 在用 kind 追加集（kb_store.effective_kb_categories）。"""
+        try:
+            from src.utils.kb_store import effective_kb_categories
+            return effective_kb_categories(_kinds_in_use())
+        except Exception:
+            return list(KB_CATEGORIES)
+
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge_page(request: Request):
         _require_auth(request)
         stats = _kb_store.stats()
         return templates.TemplateResponse(request, "knowledge.html", {
-            "categories": KB_CATEGORIES,
+            "categories": _eff_categories(),
             "stats": stats,
         })
 
@@ -179,8 +207,11 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         from src.utils.kb_store import new_entry_templates, system_seed_plan
         plan = system_seed_plan(config_manager)
+        _kinds = _kinds_in_use()
         return {"business_domain": plan["business_domain"],
-                "templates": new_entry_templates(plan["business_domain"], KB_CATEGORIES)}
+                "kinds": list(_kinds),
+                "templates": new_entry_templates(plan["business_domain"], _eff_categories(),
+                                                 kinds=_kinds)}
 
     @app.post("/api/kb/entries/purge-legacy-seeds")
     async def api_kb_purge_legacy_seeds(request: Request):
@@ -336,14 +367,10 @@ def register_kb_routes(app, ctx):
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "kb_add_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, data.get("title", entry_id),
-                f"新增知识条目: {data.get('title', entry_id)}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, data.get("title", entry_id),
+            f"新增知识条目: {data.get('title', entry_id)}")
+        _embed_entry_bg(entry_id)   # P1-3：保存即向量化这一条（best-effort）
         return {"id": entry_id, "ok": True,
                 "warnings": conflict_warnings if conflict_warnings else None}
 
@@ -368,14 +395,12 @@ def register_kb_routes(app, ctx):
         ok = _kb_store.update_entry(entry_id, data)
         if audit_store:
             audit_store.log(actor, "kb_update_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, data.get("title", entry_id),
-                f"更新知识条目: {data.get('title', entry_id)}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, data.get("title", entry_id),
+            f"更新知识条目: {data.get('title', entry_id)}")
+        # P1-3：改了匹配面（触发词 / 标题 / 场景 / 回复）→ 旧向量已过期，后台重算这一条
+        if ok and any(k in data for k in ("triggers", "title", "scenario", "steps", "example_reply_zh")):
+            _embed_entry_bg(entry_id)
         return {"ok": ok,
                 "warnings": conflict_warnings if conflict_warnings else None}
 
@@ -423,14 +448,9 @@ def register_kb_routes(app, ctx):
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "kb_delete_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, title_before,
-                f"删除知识条目: {title_before}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, title_before,
+            f"删除知识条目: {title_before}")
         return {"ok": True}
 
     # ---------- 错误码 ----------
@@ -644,7 +664,7 @@ def register_kb_routes(app, ctx):
         return result
 
     def _unknown_categories(categories) -> List[str]:
-        known = set(KB_CATEGORIES)
+        known = set(_eff_categories())
         return [c for c in (categories or []) if c not in known][:10]
 
     def _batch_meta(request: Request, body: dict, fmt: str) -> dict:
@@ -689,7 +709,7 @@ def register_kb_routes(app, ctx):
             domain = system_seed_plan(config_manager)["business_domain"]
         except Exception:
             domain = None
-        examples = sio.template_examples(domain, KB_CATEGORIES)
+        examples = sio.template_examples(domain, _eff_categories(), kinds=list(_kinds_in_use()))
         if fmt == "csv":
             return Response(
                 sio.build_csv_template(examples).encode("utf-8"),
@@ -1008,6 +1028,52 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         cov = _kb_store.embedding_coverage()
         return {**_embed_progress, "coverage": cov}
+
+    async def _embed_entry_now(entry_id: str) -> bool:
+        """向量化单条（P1-3 保存即向量化的执行体）。失败静默——「向量化」按钮仍是兜底。"""
+        try:
+            entry = _kb_store.get_entry(entry_id)
+            if not entry:
+                return False
+            vecs = await _call_embed_api([_build_embed_text(entry)])
+            if not vecs:
+                return False
+            _kb_store.set_single_embedding(entry_id, vecs[0])
+            return True
+        except Exception:
+            logger.debug("[kb] 单条向量化失败（忽略）id=%s", entry_id, exc_info=True)
+            return False
+
+    def _auto_embed_enabled() -> bool:
+        """保存即向量化的前提：有可用的嵌入端点。
+
+        独立嵌入端点 ``ai.embedding_base_url``、官网网关（``ai.base_url`` 含 ``/api/ai/v1``，
+        有 /embeddings 中继）、或显式 ``knowledge_base.auto_embed: true`` 任一满足。
+        裸 DeepSeek 对话端点没有 embedding 能力——那样每次保存都白打一枪还刷 warning。
+        """
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+            kb_cfg = cfg.get("knowledge_base") or {}
+            if "auto_embed" in kb_cfg:
+                return bool(kb_cfg.get("auto_embed"))
+            ai_cfg = cfg.get("ai") or {}
+            if str(ai_cfg.get("embedding_base_url") or "").strip():
+                return True
+            return "/api/ai/v1" in str(ai_cfg.get("base_url") or "")
+        except Exception:
+            return False
+
+    def _embed_entry_bg(entry_id: str) -> None:
+        """保存 / 更新后在事件循环里后台向量化这一条；没有循环（测试同步调用）/ 无端点就跳过。"""
+        import asyncio as _asyncio
+        try:
+            if not _auto_embed_enabled():
+                return
+            _asyncio.get_running_loop().create_task(_embed_entry_now(str(entry_id)))
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug("[kb] 单条向量化调度失败（忽略）", exc_info=True)
 
     @app.post("/api/kb/entries/{entry_id}/embed")
     async def api_kb_embed_single(request: Request, entry_id: str):

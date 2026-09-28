@@ -85,7 +85,6 @@ _INLINE_COLOR_CEILINGS = {
     # 装饰渐变（#ec4899→#db2777），属本台账「映射表外长尾一次性装饰色」既有类别。
     "developer.html": 2,
     "draft_review.html": 3,
-    "knowledge.html": 4,
     # 渠道中心融合：四渠道正文迁 _channel_body_*.html（计数随内容平移）
     "_channel_body_line.html": 1,
     # P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js，

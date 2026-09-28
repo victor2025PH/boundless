@@ -617,33 +617,99 @@ class SkillManager(LoggerMixin):
             self.logger.debug("KB 侧载失败: %s", e)
             return None
 
-    # 陪聊域「防人设推销支付话术」闸的业务词（A 线 2552 段同表；B 线经 _companion_kb_should_skip）
-    _COMPANION_BIZ_KW = (
-        "通道", "订单", "查单", "费率", "代收", "代付", "成功率", "限额", "回调",
-        "转账", "支付", "channel", "order", "payment", "payin", "payout",
-    )
-    _COMPANION_CHAT_INTENTS = ("greeting", "small_talk", "direct_chat", "complaint")
-
     def _companion_kb_should_skip(self, intent: str, text: str, *, chat_id: Any = None) -> bool:
-        """陪聊域 + 闲聊意图 + 无业务词 → 本轮不注 KB（报障群豁免）。任何异常 → False（不拦）。"""
+        """陪聊域 + 闲聊意图 + 无业务词 → 本轮不注 KB（报障群豁免）。任何异常 → False（不拦）。
+
+        P0-2 起只是 :func:`kb_policy.resolve_kb_policy` 的薄封装（无人设 → 陪聊 kind 旧闸），
+        留给零散旧调用方 / 测试；两条产线已直接调决策点。
+        """
         try:
-            _cfg = self.config.config if hasattr(self.config, "config") else {}
-            if not (isinstance(_cfg, dict) and effective_domain_name(_cfg) == "conversion"):
-                return False
-            if str(intent or "") not in self._COMPANION_CHAT_INTENTS:
-                return False
-            _t = str(text or "")
-            if any(k in _t for k in self._COMPANION_BIZ_KW):
-                return False
-            try:
-                from src.ops.bug_intake import is_bug_group
-                if is_bug_group(_cfg, chat_id):
-                    return False
-            except Exception:
-                pass
-            return True
+            from src.utils.kb_policy import resolve_kb_policy
+            return resolve_kb_policy(
+                persona=None, tier="", intent=intent, text=text,
+                config=self.config, chat_id=chat_id, is_media_desc=False,
+            ).skip
         except Exception:
             return False
+
+    def _kb_decide(self, *, intent: str, text: str, chat_key: Any,
+                   persona_id: str, conversation_id: str = "",
+                   tier_aware: bool = False):
+        """P0-2 单一决策点：解析人设 → :func:`kb_policy.resolve_kb_policy`。绝不抛。
+
+        ``tier_aware``：A 线传 True（保留「绑定陪聊人设抑制」旧闸）；B 线 False。
+        """
+        from src.utils.kb_policy import KbDecision, resolve_kb_policy
+        persona, tier = None, ""
+        try:
+            from src.utils.persona_manager import PersonaManager
+            persona, tier = PersonaManager.get_instance().get_persona_with_tier(
+                str(chat_key or ""), str(persona_id or ""),
+                conversation_key=str(conversation_id or ""))
+        except Exception:
+            self.logger.debug("[kb_policy] 人设解析失败，按无人设决策", exc_info=True)
+        try:
+            return resolve_kb_policy(
+                persona=persona, tier=(tier if tier_aware else ""), intent=intent,
+                text=text, config=self.config, chat_id=chat_key,
+            )
+        except Exception:
+            return KbDecision()
+
+    def _kb_after_search(self, user_context: Dict[str, Any], decision: Any, kb_store: Any,
+                         text: str, *, hit: bool, refs: int, conversation_id: str,
+                         lang: str, log_prefix: str = "") -> None:
+        """P0-4 / P0-5：检索后回填决策命中态；客服 / 销售 must 档查无 → 固定话术一次、
+        同会话连续第二次查无 → 标需人工（risk_hold needs_human）+ 注入「已转人工」指令。
+        命中即清零连续计数。绝不抛、绝不影响生成。"""
+        if decision is None:
+            return
+        try:
+            from src.utils import kb_policy as _kp
+            decision.hit = bool(hit)
+            decision.refs = int(refs or 0)
+            cid = str(conversation_id or "")
+            if not decision.must:
+                user_context.pop("_kb_nohit_block", None)
+                return
+            if hit:
+                _kp.nohit_reset(cid)
+                user_context.pop("_kb_nohit_block", None)
+                return
+            # P1-1：查无兜底只对「客户在问一件事」触发——「谢谢」「好的」「在吗」这类句子
+            # 库里本来就不该有条目，按固定话术「我去核实一下」回是答非所问。不问事 → 不计
+            # 连续查无、不注固定话术、不进学习池，按人设正常接话。
+            if not getattr(decision, "asked", False):
+                user_context.pop("_kb_nohit_block", None)
+                return
+            # must 档提问未命中：客户原话一律进学习池（不再受「像不像提问」守门）
+            try:
+                if kb_store is not None and hasattr(kb_store, "log_miss"):
+                    kb_store.log_miss(str(text or "")[:200])
+            except Exception:
+                pass
+            n = _kp.nohit_bump(cid)
+            decision.nohit_n = n
+            fixed = _kp.fixed_nohit_reply(kb_store, lang)
+            _handoff_at = int(_kp.policy_cfg(self.config).get("nohit_handoff_at") or _kp.NOHIT_HANDOFF_AT)
+            user_context["_kb_nohit_block"] = _kp.nohit_block(n, fixed, lang=lang, handoff_at=_handoff_at)
+            if n >= _handoff_at:
+                decision.handoff = True
+                try:
+                    from src.inbox import risk_hold as _rh
+                    from src.integrations.protocol_bridge import get_inbox_store as _kb_gis
+                    _store = _kb_gis()
+                    if _store is not None and cid:
+                        _rh.set(_store, cid, "needs_human", hit="kb_nohit_repeat",
+                                by="kb_policy")
+                except Exception:
+                    self.logger.debug("[kb_policy] needs_human 登记失败（忽略）", exc_info=True)
+            self.logger.info(
+                "%sKB 查无（kind=%s）n=%d handoff=%s conv=%s",
+                log_prefix, decision.kind, n, decision.handoff, cid or "-",
+            )
+        except Exception:
+            self.logger.debug("[kb_policy] after_search 异常（忽略）", exc_info=True)
 
     @staticmethod
     def _cr_skip(user_context: Optional[Dict[str, Any]], layer: str) -> bool:
@@ -2326,43 +2392,41 @@ class SkillManager(LoggerMixin):
                     _kb = self._kb_store_if_exists()
                 else:
                     _kb = None
-                # ── A1 KB 注入守门（2026-07-22，真机事故复盘）────────────────
-                # ① 识图/识视频描述文本不是用户提问 → 整体跳过 KB（环境词噪声
-                #    实测把「怪味胡豆图」撞上「客户端安装指引」）。
-                # ② 显式绑定陪聊人设（chat_binding/account_profile）→ 抑制业务 KB
-                #    （护士人设推销 USDT 付款客服号事故；人设 kb_access: true 可恢复）。
+                # ── A1 KB 注入守门 → P0-2 单一决策点 kb_policy.resolve_kb_policy ──
+                # 原四处闸（媒体描述 / 绑定人设抑制 / 陪聊闲聊闸 / 检索后再丢）收成一处：
+                # 客服 / 销售 kind 必查（不看意图、词表、tier）；陪聊 kind 维持旧闸原样。
+                _kb_decision = None
+                # 检索材料每轮重建：上一轮命中的 kb_context 不得在本轮跳过 / 未命中时残留进 prompt
+                user_context.pop("kb_context", None)
+                user_context.pop("_kb_nohit_block", None)
+                user_context.pop("_kb_decision", None)
                 if _kb is not None:
-                    from src.utils.kb_gate import (
-                        is_media_desc_text,
-                        lexical_overlap_ok,
-                        persona_kb_suppressed,
-                        should_log_kb_miss,
+                    from src.utils.kb_gate import lexical_overlap_ok, should_log_kb_miss
+                    from src.utils.kb_policy import resolve_kb_policy
+                    _kbg_p, _kbg_tier = None, ""
+                    try:
+                        from src.utils.persona_manager import PersonaManager
+                        _kbg_p, _kbg_tier = (
+                            PersonaManager.get_instance().get_persona_with_tier(
+                                str(context.get("chat_id", "") or ""),
+                                str((user_context or {}).get(
+                                    "account_persona_id") or ""),
+                            )
+                        )
+                    except Exception:
+                        self.logger.debug(
+                            "%sKB 人设解析失败，按无人设决策", log_prefix, exc_info=True)
+                    _kb_decision = resolve_kb_policy(
+                        persona=_kbg_p, tier=_kbg_tier, intent=intent, text=text,
+                        config=self.config, chat_id=_chat_id,
                     )
-                    if is_media_desc_text(text):
+                    user_context["_kb_decision"] = _kb_decision
+                    if _kb_decision.skip:
                         _kb = None
                         self.logger.info(
-                            "%sKB 跳过：入站为媒体识别描述（识图/识视频），非用户提问",
-                            log_prefix,
+                            "%sKB 跳过：%s（kind=%s tier=%s）",
+                            log_prefix, _kb_decision.reason, _kb_decision.kind, _kbg_tier or "-",
                         )
-                    else:
-                        try:
-                            from src.utils.persona_manager import PersonaManager
-                            _kbg_p, _kbg_tier = (
-                                PersonaManager.get_instance().get_persona_with_tier(
-                                    str(context.get("chat_id", "") or ""),
-                                    str((user_context or {}).get(
-                                        "account_persona_id") or ""),
-                                )
-                            )
-                            if persona_kb_suppressed(_kbg_p, _kbg_tier):
-                                _kb = None
-                                self.logger.info(
-                                    "%sKB 跳过：陪聊人设会话（tier=%s）抑制业务 KB 注入",
-                                    log_prefix, _kbg_tier,
-                                )
-                        except Exception:
-                            self.logger.debug(
-                                "%sKB 人设守门解析失败，放行", log_prefix, exc_info=True)
                 if _kb:
                     _lang = (user_context or {}).get("reply_lang", "zh")
 
@@ -2581,6 +2645,15 @@ class SkillManager(LoggerMixin):
                             "%sKB 未命中 (BM25=%.3f) msg='%s'",
                             log_prefix, _top_bm25_score, text[:30]
                         )
+                    # P0-4 / P0-5：决策回填命中态；客服 / 销售 must 档查无 → 固定话术 / 二次转人工
+                    self._kb_after_search(
+                        user_context, _kb_decision, _kb, text, hit=_hit,
+                        refs=len((_search_result or {}).get("entries") or []),
+                        conversation_id=str(
+                            (user_context or {}).get("conversation_id")
+                            or f"{(user_context or {}).get('platform') or 'bot'}:{_chat_id}"),
+                        lang=_lang, log_prefix=log_prefix,
+                    )
 
                     #写入查�日志（含分数 + 匹配条目ID，用于弱命中分析�?
                     try:
@@ -2607,30 +2680,16 @@ class SkillManager(LoggerMixin):
             else:
                 user_context.pop("channel_status_info", None)
 
-            if _companion_dom:
-                _biz_kw = (
-                    "通道", "订单", "查单", "费率", "代收", "代付", "成功率", "限额", "回调",
-                    "转账", "支付", "channel", "order", "payment", "payin", "payout",
-                )
-                _raw_t = text or ""
-                _user_biz = any(k in _raw_t for k in _biz_kw)
-                # 报障群豁免（bug_intake，2026-08-18 实测）：这道闸的语义是
-                # 「防陪聊人设推销支付话术」，但值守群的 KB 就是产品答案本体
-                # ——「怎么登录」的正确 KB 命中曾被它丢弃成泛答。
-                _bug_group_kb_exempt = False
-                try:
-                    from src.ops.bug_intake import is_bug_group
-                    _bug_group_kb_exempt = is_bug_group(_cfg_dom, _chat_id)
-                except Exception:
-                    _bug_group_kb_exempt = False
-                if (intent in ("greeting", "small_talk", "direct_chat",
-                               "complaint")
-                        and not _user_biz and not _bug_group_kb_exempt):
-                    if user_context.pop("kb_context", None):
-                        self.logger.info(
-                            "%s companion: dropped KB inject for intent=%s (no biz keywords)",
-                            log_prefix, intent,
-                        )
+            # P0-2：原「陪聊域检索后再按闲聊闸丢一次 kb_context」已并入 resolve_kb_policy
+            # （companion_chat → 检索前即 skip）。这里只剩兜底：决策为 skip 却仍有 kb_context
+            # （hook 侧或旧路径塞入）→ 丢掉；客服 / 销售 must 档永不在此丢。
+            _kbd_a = user_context.get("_kb_decision")
+            if _companion_dom and _kbd_a is not None and getattr(_kbd_a, "skip", False):
+                if user_context.pop("kb_context", None):
+                    self.logger.info(
+                        "%s companion: dropped KB inject（decision=%s intent=%s）",
+                        log_prefix, _kbd_a.reason, intent,
+                    )
 
             # 4b. 选择并执行技能
             skill = self._select_skill(intent, user_context)
@@ -3751,17 +3810,25 @@ class SkillManager(LoggerMixin):
             user_context["_reply_strategy_id"] = strategy_id
 
             # 6. KB 混合检索（与 smart-reply 一致）
+            # P0-2（2026-09-29 8E56 实锤）：查不查由 kb_policy 单一决策点按**人设 kind** 定——
+            # 客服 / 销售必查（不看意图 / 业务词表），陪聊维持 2026-09-18 的闲聊闸原样。
+            # 决策随返回值 kb_decision 透传到 smart-reply / 草稿条（P0-5），查无兜底见 _kb_after_search（P0-4）。
             _kb_refs: list = []
+            _kb_decision = None
+            user_context.pop("_kb_nohit_block", None)
             try:
                 _kb = self._kb_store_if_exists()
-                # 陪聊域闸（2026-09-18，与 A 线 2552 段同口径）：闲聊/问候/直聊且无业务词
-                # → 不注 KB。此前 B 线无此闸，陪聊人设会把支付 KB 条目当聊天素材塞进 prompt
-                # （与人设自相矛盾＝穿帮，且白吃 token）。报障群豁免同 A 线。
-                if _kb and self._companion_kb_should_skip(intent, text, chat_id=chat_key):
-                    self.logger.info(
-                        "%s companion: skip KB inject (intent=%s no biz kw)", log_prefix, intent)
-                    _kb = None
-                    user_context.pop("kb_context", None)
+                if _kb:
+                    _kb_decision = self._kb_decide(
+                        intent=intent, text=text, chat_key=chat_key, persona_id=persona_id,
+                        conversation_id=str(conversation_id or ""), tier_aware=False)
+                    user_context["_kb_decision"] = _kb_decision
+                    if _kb_decision.skip:
+                        self.logger.info(
+                            "%sKB 跳过：%s（kind=%s intent=%s）",
+                            log_prefix, _kb_decision.reason, _kb_decision.kind, intent)
+                        _kb = None
+                        user_context.pop("kb_context", None)
                 if _kb:
                     _lang = (user_context or {}).get("reply_lang", "zh")
                     _res = _kb.search(text, top_k=3, lang=_lang)
@@ -3775,17 +3842,30 @@ class SkillManager(LoggerMixin):
                             _kb_refs = extract_kb_refs(_res)
                         except Exception:
                             _kb_refs = []
+                        self.logger.info(
+                            "%sKB 命中 %d 条（kind=%s mode=%s）", log_prefix,
+                            len((_res or {}).get("entries") or []),
+                            getattr(_kb_decision, "kind", "-"), getattr(_kb_decision, "mode", "-"))
                     else:
                         # 学习漏斗 B 线采集（2026-08-02 断粮复盘）：主流量已迁
                         # 收件箱草稿链，而未命中采集此前只挂在 A 线——陪聊人设
                         # 上线后 A 线整体跳过 KB，学习队列断粮。只收「问题样式」
-                        # 文本（占位符/闲聊不进池，防陪伴域灌爆）。
+                        # 文本（占位符/闲聊不进池，防陪伴域灌爆）；must 档在
+                        # _kb_after_search 里一律入池。
                         try:
                             from src.utils.kb_gate import should_log_kb_miss
-                            if should_log_kb_miss(text):
+                            if should_log_kb_miss(text) and not getattr(_kb_decision, "must", False):
                                 _kb.log_miss(text)
                         except Exception:
                             pass
+                    self._kb_after_search(
+                        user_context, _kb_decision, _kb, text, hit=bool(_kbc),
+                        refs=len((_res or {}).get("entries") or []) if _kbc else 0,
+                        conversation_id=str(conversation_id or f"{platform}:{_acct_id}:{chat_key}"),
+                        lang=_lang, log_prefix=log_prefix)
+                if _kb_decision is not None:
+                    from src.utils.kb_policy import note_decision
+                    note_decision(str(conversation_id or f"{platform}:{_acct_id}:{chat_key}"), _kb_decision)
             except Exception:
                 self.logger.debug("%sKB 检索跳过", log_prefix, exc_info=True)
 
@@ -4085,6 +4165,9 @@ class SkillManager(LoggerMixin):
                 pass
             return {
                 "reply": reply, "intent": intent, "kb_refs": _kb_refs,
+                # P0-5：知识库决策（mode / reason / kind / hit / refs / nohit_n / handoff）
+                # → persona_reply → smart-reply / 草稿条「已引用 N 条 / 未命中 / 本轮未查（原因）」
+                "kb_decision": (_kb_decision.as_dict() if _kb_decision is not None else None),
                 # P25 观测：目标注入结果（injected/reason/push_level/intent）
                 # → persona_reply → smart-reply API 的 goal_applied，坐席可见
                 "goal_applied": user_context.get("_goal_inject_meta"),
@@ -4103,7 +4186,7 @@ class SkillManager(LoggerMixin):
             # 会话路由键是瞬时态（每轮 attach 重算），不随 ContextStore 落库粘到别的链路
             for _rk in ("_route", "_route_strict", "_thinking", "_unrestricted",
                         "_unrestricted_bypass_safety", "_conv_route", "_route_offline",
-                        "_route_fallback"):
+                        "_route_fallback", "_kb_decision", "_kb_nohit_block"):
                 user_context.pop(_rk, None)
             user_context.pop("_slow_think_outline", None)
             user_context.pop("_media_coherence_hint", None)

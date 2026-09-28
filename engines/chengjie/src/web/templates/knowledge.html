@@ -2989,11 +2989,30 @@ try{
   const _srcSel=document.getElementById('entry-source');
   if(_qsSrc && _srcSel && Array.from(_srcSel.options).some(o=>o.value===_qsSrc)) _srcSel.value=_qsSrc;
 }catch(_e){}
-loadEntries().then(_focusHashEntry).then(()=>{
+loadEntries().then(_focusHashEntry).then(async ()=>{
   // P-4 #254：系统设置「兜底策略」→「在知识库里编辑」深链 /knowledge?source=system&edit=<id>
   try{
     const _qsEdit=new URLSearchParams(location.search).get('edit')||'';
     if(_qsEdit) openEntryDrawer(_qsEdit);
+  }catch(_e){}
+  // P1-3（2026-09-29 8E56）：工作台草稿条「知识库 · 未命中」chip 深链
+  // /knowledge?new=1&q=<客户原话>&category=<分类> → 打开新建抽屉，标题 / 触发词 / 场景按客户原话预填。
+  try{
+    const _qs=new URLSearchParams(location.search);
+    const _q=(_qs.get('q')||'').trim().slice(0,120);
+    if(_qs.get('new')&&_q){
+      await openEntryDrawer();
+      const _set=(id,v)=>{ const el=document.getElementById(id); if(el&&!el.value) el.value=v; };
+      _set('f-title',_q);
+      _set('f-triggers',_q);
+      _set('f-scenario',window.Tf('kb2_prefill_scenario',{text:_q}));
+      const _cat=_qs.get('category')||'';
+      const _catSel=document.getElementById('f-category');
+      if(_cat&&_catSel&&Array.from(_catSel.options).some(o=>o.value===_cat)) _catSel.value=_cat;
+      const _ex=document.getElementById('f-example'); if(_ex) _ex.focus();
+      if(typeof toast==='function') toast(window.T('kb2_prefill_hint'),true);
+      history.replaceState(null,'',location.pathname);
+    }
   }catch(_e){}
 }).catch(()=>{});
 loadHealthChip();

@@ -49,6 +49,38 @@ _DEFAULT_KB_CATEGORIES = [
 
 KB_CATEGORIES = list(_DEFAULT_KB_CATEGORIES)
 
+# ── 按人设工作类型追加的分类（P1-2，2026-09-29 8E56 实锤）────────────────
+# 桌面客户机分类表按机器级 business_domain（companion）选出的是人设背景 / 日常话题 /
+# 情感回应…——做客服的客户找不到「活动 / 注册 / 会员」放哪。分类表现在＝域变体 ∪ 机器上
+# **在用的人设 kind** 对应集合（persona_kind.kinds_in_use）：有客服人设就多出客服六类，
+# 有销售人设多出销售五类；纯陪聊机一个字不变。「其他」恒在末位。
+KIND_KB_CATEGORIES: Dict[str, List[str]] = {
+    "support": ["活动优惠", "注册登录", "账户会员", "价格与支付", "常见故障", "规则条款"],
+    "sales": ["产品介绍", "价格与支付", "活动优惠", "异议处理", "下单流程"],
+}
+
+
+def kind_kb_categories(kinds: Any) -> List[str]:
+    """给定 kind 集合 → 追加分类（去重、按 support → sales 顺序）。"""
+    out: List[str] = []
+    for k in ("support", "sales"):
+        if k in set(str(x) for x in (kinds or ())):
+            for c in KIND_KB_CATEGORIES[k]:
+                if c not in out:
+                    out.append(c)
+    return out
+
+
+def effective_kb_categories(kinds: Any = None, base: Optional[List[str]] = None) -> List[str]:
+    """当前生效分类表 = ``base``（缺省 :data:`KB_CATEGORIES`）∪ kind 追加集；「其他」挪到末位。"""
+    cats = [str(c) for c in (base if base is not None else KB_CATEGORIES)]
+    for c in kind_kb_categories(kinds):
+        if c not in cats:
+            cats.append(c)
+    if "其他" in cats:
+        cats = [c for c in cats if c != "其他"] + ["其他"]
+    return cats
+
 
 # ── 条目来源（J-9 #184：厂商产品知识与用户知识隔离）──────────────
 # user   ＝ 用户在 KB 页手工建的；import ＝ 批量导入器写入的；
@@ -956,7 +988,10 @@ class KnowledgeBaseStore:
 
         if result.get("entries"):
             mode = result.get("search_mode", "bm25")
-            parts.append(f"【业务知识库条目（必须按步骤执行，不得跳过）】（检索模式: {mode}）")
+            # P0-3：材料头保持中性——「以此为准」还是「仅语气参考」由 ai_client 按人设 kind
+            # 拼外层块（kb_policy.format_kb_block）决定；此前这里写「必须按步骤执行」而外层写
+            # 「非工作指令」，同一段材料两个相反的指令。条目级「必须执行的步骤」标签保留。
+            parts.append(f"【知识库条目】（检索模式: {mode}）")
             for entry in result["entries"]:
                 r_mode = entry.get("reply_mode", "ai_guided")
                 if r_mode == "direct":
@@ -3575,14 +3610,58 @@ KB_NEW_ENTRY_TEMPLATES_COMPANION: List[Dict] = [
 ]
 
 
+# P1-2：客服 / 销售人设在用时追加的「新建条目」预填模板（机器仍是陪伴域也出现）。
+# 客服三例围绕 8E56 实况：活动 / 注册 / 会员等级；示例回复写成能直接发的话，不写「详见后台」。
+KB_NEW_ENTRY_TEMPLATES_SUPPORT: List[Dict] = [
+    {
+        "key": "support_promo",
+        "category": "活动优惠",
+        "title": "网站现在有什么活动",
+        "triggers": ["活动", "优惠", "有什么活动", "促销", "福利", "promotion", "bonus"],
+        "scenario": "客户问平台当前的活动 / 优惠。把下面改成本期真实活动：名称、条件、截止时间。",
+        "steps": "1. 先报活动名称与核心条件\n2. 说清截止时间与领取方式\n3. 客户追问细则时引导到活动页或客服",
+        "principles": "只说本期真实在跑的活动，不加码、不承诺未写明的条件",
+        "example_reply_zh": "现在有新人注册礼：注册完成后首充送 8%，本月 30 日截止；VIP 等级另有每周返利，具体档位在会员页可以看。",
+        "forbidden": "不要编造折扣或限时活动；不要承诺「一定能拿到」",
+        "reply_mode": "ai_guided",
+    },
+    {
+        "key": "support_register",
+        "category": "注册登录",
+        "title": "怎么注册 / 登录不上",
+        "triggers": ["注册", "怎么注册", "登录", "登不上", "验证码", "忘记密码", "register", "login"],
+        "scenario": "客户问注册流程或登录遇到问题。把步骤改成本平台真实路径。",
+        "steps": "1. 给出注册入口位置与三步流程\n2. 登录不上先问提示语，再按提示分流（密码 / 验证码 / 账号锁定）\n3. 涉及验证码、密码一律引导客户自行操作，不代收",
+        "principles": "验证码和密码永远不经我们的手",
+        "example_reply_zh": "注册从官网右上角「注册」进，手机号 → 收验证码 → 设密码三步就好。登录不上的话，把页面提示发我看一下，我按提示帮你判断。",
+        "forbidden": "不要索取客户的验证码或密码；不要替客户操作账号",
+        "reply_mode": "ai_guided",
+    },
+    {
+        "key": "support_vip",
+        "category": "账户会员",
+        "title": "VIP 等级 / 会员权益怎么看",
+        "triggers": ["VIP", "等级", "会员", "权益", "返利", "升级", "level", "member"],
+        "scenario": "客户问会员等级怎么划分、有什么权益。把档位表改成本平台真实规则。",
+        "steps": "1. 说清等级怎么升（依据什么）\n2. 报当前等级对应的核心权益\n3. 引导到会员页看完整表",
+        "principles": "权益只按官方规则说，数字不猜",
+        "example_reply_zh": "VIP 按累计充值划分，VIP1 到 VIP5，等级越高每周返利比例越高；你现在的等级和下一级差多少，在「会员中心」第一屏就能看到。",
+        "forbidden": "不要报具体返利比例数字，除非条目里写明",
+        "reply_mode": "ai_guided",
+    },
+]
+
+
 def new_entry_templates(business_domain: Optional[str] = None,
-                        categories: Optional[List[str]] = None) -> List[Dict]:
-    """KB 页「新建条目」预填模板（按域）。
+                        categories: Optional[List[str]] = None,
+                        kinds: Any = None) -> List[Dict]:
+    """KB 页「新建条目」预填模板（按域 + 按在用人设 kind）。
 
     陪伴域 → :data:`KB_NEW_ENTRY_TEMPLATES_COMPANION`；其他 → 原三条格式示例
-    （去掉【示例】前缀与 id / enabled，只留字段）。``category`` 归一到当前生效的
-    分类表（``categories`` 未给则用 :data:`KB_CATEGORIES`）：不在表内的落「其他」，
-    避免抽屉下拉选不到、保存后又是一条分类不属于本域的孤儿。绝不抛。
+    （去掉【示例】前缀与 id / enabled，只留字段）。``kinds`` 含 support → 前置客服三例
+    （P1-2）。``category`` 归一到当前生效的分类表（``categories`` 未给则用
+    :data:`KB_CATEGORIES`）：不在表内的落「其他」，避免抽屉下拉选不到、保存后又是一条
+    分类不属于本域的孤儿。绝不抛。
     """
     bd = str(business_domain or "").strip().lower()
     if not bd:
@@ -3594,10 +3673,14 @@ def new_entry_templates(business_domain: Optional[str] = None,
     cats = [str(c) for c in (categories if categories is not None else KB_CATEGORIES)]
     fallback_cat = "其他" if "其他" in cats else (cats[-1] if cats else "其他")
     out: List[Dict] = []
+    kind_set = set(str(k) for k in (kinds or ()))
     if bd == "companion":
         src = [dict(t) for t in KB_NEW_ENTRY_TEMPLATES_COMPANION]
     else:
         src = []
+    if "support" in kind_set:
+        src = [dict(t) for t in KB_NEW_ENTRY_TEMPLATES_SUPPORT] + src
+    if bd != "companion":
         for ex in KB_FORMAT_EXAMPLES:
             t = {k: v for k, v in ex.items() if k not in ("id", "enabled")}
             t["key"] = f"sales_{ex['id'].rsplit('-', 1)[-1]}"

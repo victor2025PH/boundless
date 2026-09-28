@@ -477,6 +477,20 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <p class="rps-hint">{{ (i18n or {}).get('rps_ar_grp_hint', "「AI 为什么没回」的所有开关都在这一组：兜底档位 → 让位规则 → 风控分级 → 成人 / 见面政策 → 今日拦截 → 暂停摸底。人设级覆写在人设工坊本人设「档案」页签，两边互链直达。") }}</p>
   </div>
   <!-- 默认自动化档位（HEEEN9 / Q-4 #267：三层语义——会话 > 账号 > 本页兜底） -->
+  <!-- P1-5（2026-09-29）：业务域从开发者页挪到这里。工作目标是会话级；业务域是机器级，
+       跟兜底档位同一页更贴——客户不用解锁开发者模式。 -->
+  <div class="rps-card" id="rps-sec-bd">
+    <h3>🧭 {{ (i18n or {}).get('rps_bd_title', "这台机器做什么生意") }}</h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_bd_hint', "陪伴：工作目标不出现「转化成交」，知识库不预置支付话术。销售：保留商机标签与成交字段。人设标成客服 / 销售后仍按人设查库。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_bd_label', "业务域") }}</span>
+      <select class="rps-select" id="rps-bd-sel" disabled onchange="rpsBdChange(this)">
+        <option value="">{{ (i18n or {}).get('rps_bd_loading', "读取中…") }}</option>
+      </select>
+      <span class="rps-chip" id="rps-bd-src" style="display:none;background:var(--input);color:var(--t2)"></span>
+    </div>
+    <p class="rps-hint" id="rps-bd-res" style="margin:.2rem 0 0"></p>
+  </div>
   <div class="rps-card" id="rps-sec-mode">
     <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "未设置账号的兜底档位") }}
       <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span>
@@ -4701,6 +4715,68 @@ async function rpsRkSave(){
   }
 }
 
+/* P1-5：业务域（这台机器做什么生意）——独立端点，不进节奏白名单保存条。 */
+function rpsBdRender(d){
+  var sel = document.getElementById('rps-bd-sel');
+  var src = document.getElementById('rps-bd-src');
+  if (!sel) return;
+  var opts = (d && d.options) || [];
+  var cur = (d && d.business_domain) || '';
+  sel.innerHTML = opts.map(function(o){
+    var id = String(o.id || '');
+    var lab = (window.WS_LANG === 'en') ? (o.label_en || id) : (o.label_zh || id);
+    return '<option value="' + rpsEsc(id) + '"' + (id === cur ? ' selected' : '') + '>' + rpsEsc(lab) + '</option>';
+  }).join('');
+  sel.disabled = !opts.length;
+  if (src){
+    src.style.display = opts.length ? '' : 'none';
+    src.textContent = (d && d.explicit)
+      ? window.T('rps_bd_src_explicit')
+      : window.T('rps_bd_src_inferred');
+  }
+}
+async function rpsBdLoad(){
+  var sel = document.getElementById('rps-bd-sel');
+  var res = document.getElementById('rps-bd-res');
+  if (!sel) return;
+  try {
+    var r = await apiFetch('/api/reply-settings/business-domain', {}, {timeoutMs: 15000});
+    if (r.status === 404){ sel.innerHTML = '<option value="">' + rpsEsc(window.T('rps_bd_fail')) + '</option>'; return; }
+    var d = await r.json();
+    if (!r.ok || !d.ok){ sel.innerHTML = '<option value="">' + rpsEsc(window.T('rps_bd_fail')) + '</option>'; return; }
+    rpsBdRender(d);
+  } catch (e) {
+    sel.innerHTML = '<option value="">' + rpsEsc(window.T('rps_bd_fail')) + '</option>';
+  }
+  if (res) res.textContent = '';
+}
+async function rpsBdChange(el){
+  var res = document.getElementById('rps-bd-res');
+  var want = el && el.value;
+  if (!want) return;
+  el.disabled = true;
+  if (res) res.textContent = window.T('rps_master_applying') || '';
+  try {
+    var r = await apiFetch('/api/reply-settings/business-domain', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({business_domain: want})
+    }, {timeoutMs: 15000});
+    var d = await r.json();
+    if (!r.ok || d.ok === false){
+      var msg = (d.errors && d.errors[0] && d.errors[0].message) || window.T('rps_bd_write_fail');
+      if (res) res.textContent = msg;
+      await rpsBdLoad();
+      return;
+    }
+    rpsBdRender(d);
+    if (res) res.textContent = window.T('rps_bd_saved');
+  } catch (e) {
+    if (res) res.textContent = window.T('rps_bd_write_fail');
+  } finally {
+    el.disabled = false;
+  }
+}
+
 async function rpsLoad(){
   try {
     var r = await apiFetch('/api/reply-settings');
@@ -4716,6 +4792,7 @@ async function rpsLoad(){
     rpsRenderPresets(d.presets);
     rpsRenderObsStyle(d.observed_reply_len);
     rpsRenderCaps(d.platform_caps);
+    try{ rpsBdLoad(); }catch(_){}
     // 平台专家矩阵（P1）：后端白名单含平台字段才启用（旧进程整卡隐藏防假脏）
     rpsPlatEnabled = !!((d.meta || {})[RPS_PM_KEY]);
     rpsPlatState.caps = d.platform_caps || null;

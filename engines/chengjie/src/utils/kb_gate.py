@@ -148,6 +148,8 @@ _INTERROGATIVE_MARKERS = (
     "几点", "幾點", "几时", "幾時", "哪里", "哪裡", "哪儿", "哪个", "哪個",
     "能不能", "可不可以", "可以吗", "可以嗎", "行吗", "行嗎", "是不是",
     "有没有", "有沒有", "吗", "嗎", "点解", "點解", "咩",
+    # P1-1（2026-09-29）：客服问句常见形态补齐（「注册要多久」「有哪些活动」「啥活动」）
+    "多久", "哪些", "啥",
 )
 
 _REQUEST_PREFIXES = (
@@ -196,6 +198,50 @@ def should_log_kb_miss(text: str) -> bool:
     return looks_like_kb_query(text)
 
 
+def looks_like_info_query(text: str) -> bool:
+    """文本是不是「在问一件事」（P1-1，2026-09-29）：提问样式 **且** 带实词。
+
+    与 :func:`looks_like_kb_query`（学习漏斗入池，偏召回）的差别在实词门：
+    「为什么？」「怎么办呢」全是虚词，不算在问某件事；「那都有什么活动」「注册要多久」
+    有「活动」「注册」这样的实词才算。kb_policy 用它在**人设没表态 kind** 时绕过陪聊闲聊闸
+    （客户明明在问事，不该按闲聊把知识库整段跳过）；显式 / 推断为陪聊的人设不受影响。
+    """
+    t = str(text or "").strip()
+    if not looks_like_kb_query(t):
+        return False
+    return len(_strip_function_words(t)) >= 2
+
+
+# 「在问一件事」的实词判据：剥掉疑问标记 / 求助前缀 / 语气助词 / 高频虚字 / 英文功能词后
+# 还剩 ≥2 个字符才算带实词。二元组分词对「怎么办呢」会留下「么办 / 办呢」这类伪实词，
+# 故这里不用 content_tokens，改按字符层剥离。
+_FUNCTION_CHARS = frozenset("呢吗嗎啊呀哦哈嘛吧咩的了都那这這有是我你他她它们們就还還也又能要会會给給到在和与與跟个個下点點")
+_EN_FUNCTION_WORDS = frozenset({
+    "how", "what", "whats", "why", "where", "which", "when", "who", "can", "could", "do", "does",
+    "did", "is", "are", "was", "were", "i", "you", "we", "it", "there", "this", "that", "the", "a",
+    "an", "to", "of", "me", "my", "your", "please", "any", "have", "has", "get", "want", "need",
+})
+_PUNCT_RE = re.compile(r"[\s，。！？、；：“”‘’（）《》【】,.!?;:'\"()\[\]<>~～\-—_/\\|]+")
+
+
+def _strip_function_words(text: str) -> str:
+    t = str(text or "")
+    for m in sorted(set(_INTERROGATIVE_MARKERS) | set(_REQUEST_PREFIXES), key=len, reverse=True):
+        t = t.replace(m, " ")
+    words = []
+    for w in _PUNCT_RE.split(t):
+        if not w:
+            continue
+        if re.fullmatch(r"[A-Za-z]+", w):
+            if w.lower() not in _EN_FUNCTION_WORDS:
+                words.append(w)
+            continue
+        kept = "".join(ch for ch in w if ch not in _FUNCTION_CHARS)
+        if kept:
+            words.append(kept)
+    return "".join(words)
+
+
 def persona_kb_suppressed(
     persona: Any,
     tier: str,
@@ -220,6 +266,7 @@ __all__ = [
     "is_media_desc_text",
     "is_system_placeholder",
     "lexical_overlap_ok",
+    "looks_like_info_query",
     "looks_like_kb_query",
     "persona_kb_suppressed",
     "should_log_kb_miss",

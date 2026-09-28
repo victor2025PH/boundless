@@ -334,7 +334,8 @@
            （不依赖模板上下文——模板热更新先于重启，端点缺席时整块提示「重启后可用」）。 -->
       <div class="f-row" id="dv-bd-row">
         <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_bd_title', "业务域（这台机器做什么生意）") }}</div>
-        <div class="f-hint">{{ (i18n or {}).get('dv_bd_sub', "陪伴：工作目标不出现「转化成交」类目，客户摸底 / 画像用陪伴标签集（称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产），知识库不预置支付话术。销售：保留商机标签（痛点 / 平台 / 团队 / 预算 / 决策 / 上线）与成交字段。改动写 config.local.yaml；模板 / 标签 / 画像即时生效，Domain hook 与知识库分类重启后跟随。") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_bd_sub', "陪伴：工作目标不出现「转化成交」类目…") }}</div>
+        <div class="f-hint"><a href="/reply-settings#rps-sec-bd">{{ (i18n or {}).get('dv_bd_moved', "客户不用进开发者模式——到「自动回复设置」里改这项。") }}</a></div>
         <div style="display:flex;align-items:center;gap:.6rem;margin:.5rem 0;flex-wrap:wrap">
           <select id="dv-bd-sel" style="min-width:12rem" disabled onchange="dvBdChange(this)">
             <option value="">{{ (i18n or {}).get('dv_bd_loading', "读取中…") }}</option>

@@ -114,25 +114,8 @@ def register_ui_visibility_routes(app, auth_dep, config_manager=None) -> None:
 
     # ── 业务域（N-3 #241 / D-N1）────────────────────────────────────────────
     def _bd_view() -> Dict[str, Any]:
-        from src.utils.business_domain import (
-            BUSINESS_DOMAINS,
-            active_business_domain,
-            business_domain_label,
-            explicit_business_domain,
-            infer_business_domain,
-        )
-        cfg = _cfg_root()
-        explicit = explicit_business_domain(cfg)
-        return {
-            "ok": True,
-            "business_domain": active_business_domain(cfg),
-            "explicit": explicit,
-            "inferred": infer_business_domain(cfg),
-            "options": [
-                {"id": bd, "label_zh": business_domain_label(bd, "zh"),
-                 "label_en": business_domain_label(bd, "en")}
-                for bd in BUSINESS_DOMAINS],
-        }
+        from src.utils.business_domain import business_domain_view
+        return business_domain_view(_cfg_root())
 
     @app.get("/api/developer/business-domain")
     async def get_business_domain(request: Request, _auth=Depends(auth_dep)):
@@ -146,28 +129,20 @@ def register_ui_visibility_routes(app, auth_dep, config_manager=None) -> None:
         _auth=Depends(auth_dep),
     ):
         _require_dev(request)
-        from src.utils.business_domain import (
-            BUSINESS_DOMAIN_KEY,
-            normalize_business_domain,
-            set_active_business_domain,
-        )
-        want = normalize_business_domain((payload or {}).get("business_domain"))
-        if not want:
+        from src.utils.business_domain import apply_business_domain
+        want = (payload or {}).get("business_domain")
+        v, ok = apply_business_domain(config_manager, want)
+        if not v:
             raise HTTPException(400, tr(request, "err.uiv.bad_business_domain",
-                                        name=str((payload or {}).get("business_domain") or "")))
-        setter = getattr(config_manager, "set_overlay_flag", None)
-        if not callable(setter):
-            raise HTTPException(500, tr(request, "err.uiv.write_failed"))
-        ok, _msg = setter(BUSINESS_DOMAIN_KEY, want)
+                                        name=str(want or "")))
         if not ok:
             raise HTTPException(500, tr(request, "err.uiv.write_failed"))
-        set_active_business_domain(want)
         actor = ""
         try:
             actor = request.session.get("username", "")
         except Exception:
             pass
-        logger.info("business_domain = %s (by %s)", want, actor or "?")
+        logger.info("business_domain = %s (by %s)", v, actor or "?")
         out = _bd_view()
         out["restart_required"] = True   # Domain hook / KB 分类是启动期装配
         return out

@@ -3447,6 +3447,17 @@ inbox:
     store_lookup: true        # 客户端行无 ts 时反查 inbox store 补时间真相
     repeat_guard: true        # 生成稿 vs 最近出站近重复 → 重写一次；仍雷同打 repeat_risk
     repeat_threshold: 0.6     # 归一化相似度阈值（proactive_variety 同源，生产语料校准）
+  # 知识库查不查 / 查无怎么办（P0-2 ～ P1-1，2026-09-29；SSOT src/utils/kb_policy.py）。
+  # 决策首先看**人设工作类型** kind（人设工作室「工作类型」，或按角色 / 标签推断）：
+  #   客服 / 销售 → 每条必查、命中以条目为准；查无按固定话术回一次，客户再追问标「需人工」；
+  #   陪聊       → 闲聊不查（下方业务词表命中 / 人设 kb_access: true / 报障群除外）。
+  # 本段全部可省（缺省即下列值）。
+  # kb_policy:
+  #   biz_keywords: ["活动", "会员"]   # 追加到陪聊闲聊闸的业务词表（默认含 通道/订单/费率/支付…）
+  #   biz_keywords_replace: false    # true = 只用上面的表，不并默认表
+  #   info_query_bypass: true        # 人设没表态 kind 时，「在问一件事」的句子不按闲聊跳过
+  #   nohit_handoff_at: 2            # 客服 / 销售连续查无几次标需人工
+  # 查无固定话术：知识库「系统话术」里建 template_key=kb_nohit_fallback 的条目即可覆盖内置句。
   # 当新入站消息到达时，自动分析风险并生成 AI 回复草稿，供坐席审批。
   # 草稿风险映射：low→L2（自动发送）/ medium→L3（需审批）/ high→L4（拦截）。
   auto_draft:

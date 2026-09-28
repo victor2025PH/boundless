@@ -90,6 +90,42 @@ def _record_panel_identity(chat: Optional[Dict[str, Any]]) -> None:
         logger.debug("[panel] 资料面板就绪度记录失败（已忽略）", exc_info=True)
 
 
+def fill_account_ident(
+    v: Dict[str, Any],
+    *,
+    cfg: Any = None,
+    persona: Any = None,
+    unselected: bool = False,
+) -> None:
+    """账号身份行字段（P1-4）：``persona_kind`` / ``ident_kb`` / ``ident_mode``。原地写，绝不抛。
+
+    账号菜单一眼能看见「这个号正在做客服，知识库必查，档位半自动」。档位口径与
+    ``account_mode_for`` + 登录待确认同层；知识库状态看人设 kind（不看单轮意图）。
+    """
+    try:
+        v["persona_kind"] = ""
+        v["persona_kind_source"] = ""
+        v["ident_kb"] = "unselected"
+        v["ident_mode"] = "global"
+        from src.utils.persona_kind import ident_kb_code, kind_view
+        if not unselected:
+            kv = kind_view(persona, cfg)
+            v["persona_kind"] = str(kv.get("kind") or "")
+            v["persona_kind_source"] = str(kv.get("source") or "")
+            v["ident_kb"] = ident_kb_code(persona, unselected=False, config=cfg)
+        plat = str(v.get("platform") or "")
+        aid = str(v.get("account_id") or "default")
+        gate = v.get("gate") if isinstance(v.get("gate"), dict) else {}
+        if gate.get("login_pending_confirm"):
+            v["ident_mode"] = "pending"
+            return
+        from src.inbox.account_mode_onboarding import account_mode_for
+        m = account_mode_for(plat, aid, cfg)
+        v["ident_mode"] = str(m) if m else "global"
+    except Exception:
+        logger.debug("[chats] 账号身份行填充失败", exc_info=True)
+
+
 def _merge_orchestrator_status(
     platform_status: Dict[str, Any], config_manager,
 ) -> None:
@@ -221,6 +257,7 @@ def _merge_orchestrator_status(
         except Exception:
             _pm = None
         _pname_cache: Dict[str, str] = {}
+        _persona_cache: Dict[str, Any] = {}
 
         # 收尾：对所有 platform_status 条目（含未经编排器的 A 线 default）统一用
         # 注册表 label / self_* 覆盖，确保改名 + 真实身份对每个号都即时反映。
@@ -254,13 +291,15 @@ def _merge_orchestrator_status(
                         registry=registry_obj)
                     if _pid:
                         if _pid not in _pname_cache:
+                            _pobj: Dict[str, Any] = {}
                             _nm = ""
                             try:
                                 if _pm is not None:
-                                    _nm = str((_pm.get_persona_by_id(_pid) or {})
-                                              .get("name") or "")
+                                    _pobj = _pm.get_persona_by_id(_pid) or {}
+                                    _nm = str(_pobj.get("name") or "")
                             except Exception:
-                                _nm = ""
+                                _pobj, _nm = {}, ""
+                            _persona_cache[_pid] = _pobj
                             _pname_cache[_pid] = _nm or _pid   # 拿不到名字回落 id
                         v["persona_id"] = _pid
                         v["persona_name"] = _pname_cache[_pid]
@@ -300,6 +339,9 @@ def _merge_orchestrator_status(
                     str(v.get("account_id") or "default"), config=cfg)
             except Exception:
                 logger.debug("[chats] 账号门禁快照失败 key=%s", k, exc_info=True)
+            fill_account_ident(
+                v, cfg=cfg, persona=_persona_cache.get(v.get("persona_id") or ""),
+                unselected=bool(v.get("persona_unselected")))
             if _sess_key is not None:
                 try:
                     _sk = _sess_key(

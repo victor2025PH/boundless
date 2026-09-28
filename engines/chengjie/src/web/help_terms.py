@@ -244,8 +244,8 @@ HELP_TERMS: dict = {
         "en": "Persona Studio",
         "desc": "管理 AI 人设池、会话绑定与全局人设规则，决定 AI 用什么身份和口吻说话",
         "desc_en": "Manage the persona pool, session bindings and global persona rules — deciding the AI's identity and tone",
-        "usage": "创建/编辑人设 → 设为默认或绑定到指定会话 → 配置全局规则",
-        "usage_en": "Create/edit a persona → set as default or bind to sessions → configure global rules"
+        "usage": "打开人设 → 「工作类型」选客服 / 销售 / 陪聊（做客服必须选客服，回复才会每条先查知识库）→ 保存 → 绑定到账号或会话",
+        "usage_en": "Open a persona → set Work type to Support / Sales / Companion (Support is required for every reply to check the knowledge base) → save → bind to an account or chat"
     },
     "nav_rpa_overview": {
         "zh": "矩阵总览",
@@ -825,6 +825,30 @@ HELP_TERMS: dict = {
         "usage": "输入模拟用户消息 → 查看命中的条目和 AI 生成的回复",
         "usage_en": "Enter a simulated user message → see the matched entry and the AI-generated reply"
     },
+    "persona_kind": {
+        "zh": "工作类型",
+        "en": "Work type",
+        "desc": "人设是做客服、销售还是陪聊。客服 / 销售每条回复先查知识库；陪聊闲聊不查库",
+        "desc_en": "Whether the persona is Support, Sales or Companion. Support / Sales check the knowledge base on every reply; Companion skips it for small talk",
+        "usage": "人设工作室 → 打开人设 → 「工作类型」下拉选择 → 保存。账号菜单能看到这个号当前的类型",
+        "usage_en": "Persona Studio → open the persona → Work type → save. The account menu shows the type on that account"
+    },
+    "business_domain": {
+        "zh": "业务域",
+        "en": "Business domain",
+        "desc": "这台机器做什么生意：陪伴或销售。影响工作目标模板、知识库预置分类，不覆盖单个人设的工作类型",
+        "desc_en": "What this machine is for: Companion or Sales. Affects goal templates and default knowledge categories; does not override a persona's work type",
+        "usage": "自动回复设置 → 「这台机器做什么生意」→ 选陪伴或销售。人设标成客服后仍按人设查库",
+        "usage_en": "Auto-reply Settings → What this machine is for → Companion or Sales. A Support persona still queries the knowledge base"
+    },
+    "kb_miss_chip": {
+        "zh": "知识库未命中",
+        "en": "Knowledge miss",
+        "desc": "本轮查了知识库但没有条目能回答客户这句。客服人设会先用一句固定话术，再追问会标需人工",
+        "desc_en": "This turn queried the knowledge base and found no matching entry. Support personas send one fixed line first; a repeat question is flagged for a human",
+        "usage": "点草稿条上的「知识库 · 未命中」→ 按客户原话预填新建条目 → 写好示例回复保存（有嵌入端点会自动向量化）",
+        "usage_en": "Click Knowledge base · no match on the draft bar → a new entry is pre-filled from the customer's words → write the sample reply and save (vectorized automatically when an embedding endpoint is available)"
+    },
     "vectorize": {
         "zh": "向量化",
         "en": "Vectorize",
@@ -862,8 +886,8 @@ HELP_TERMS: dict = {
         "en": "Miss Log",
         "desc": "用户消息没有匹配到任何 KB 条目时的记录，用于发现知识盲区",
         "desc_en": "Records of user messages that matched no KB entry, used to find knowledge gaps",
-        "usage": "定期查看未命中记录 → 为高频未命中创建新的知识条目",
-        "usage_en": "Review misses regularly → create new entries for frequent misses"
+        "usage": "工作台草稿条点「知识库 · 未命中」按客户原话预填新建；也可定期打开知识库「未命中记录」给高频问题补条目",
+        "usage_en": "Click Knowledge base · no match on the draft bar to prefill a new entry from the customer's words; or review the miss log on the Knowledge page for frequent gaps"
     },
     "kb_feedback": {
         "zh": "效果反馈",

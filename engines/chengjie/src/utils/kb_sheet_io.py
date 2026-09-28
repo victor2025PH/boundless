@@ -213,10 +213,13 @@ def rows_to_entries(header: List[str], rows: List[List[str]], *,
 # ── 模板 ─────────────────────────────────────────────────────
 
 def template_examples(business_domain: Optional[str] = None,
-                      categories: Optional[List[str]] = None, limit: int = 2) -> List[Dict]:
+                      categories: Optional[List[str]] = None, limit: int = 2,
+                      kinds: Optional[List[str]] = None) -> List[Dict]:
+    """导入模板里的示例行。``kinds``（P1-2）含 support 时前置客服示例（活动 / 注册），
+    让做客服的客户下载模板就看到自己那类问题该怎么填。"""
     from src.utils.kb_store import new_entry_templates
     out = []
-    for t in new_entry_templates(business_domain, categories)[:limit]:
+    for t in new_entry_templates(business_domain, categories, kinds=kinds)[:limit]:
         t = dict(t)
         t["title"] = TEMPLATE_EXAMPLE_PREFIX + str(t.get("title", "")).strip()
         out.append(t)

@@ -322,6 +322,75 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "/personas",
     ),
     (
+        "persona-kind",
+        "客服人设为什么不查知识库 / 怎么让回复先查库",
+        "Why a support persona skips the knowledge base and how to make replies check it first",
+        "「人设工作室」→ 打开人设 → 「工作类型」选客服或销售，保存。客服 / 销售人设每条回复先查知识库，"
+        "命中就按条目回答；库里没有的会先按一句固定话术回（知识库「系统话术」里建 template_key 为 "
+        "kb_nohit_fallback 的条目可改这句），客户再追问同一件事就自动标「需人工」。"
+        "留「自动」时按角色 / 标签里的客服、导购、陪聊等词推断；陪聊人设闲聊不查库。"
+        "草稿条会显示「知识库 · 已引用 N 条 / 未命中 / 本轮未查」。点「未命中」会打开知识库新建抽屉，"
+        "标题和触发词已按客户原话填好，写好示例回复保存即向量化这一条。"
+        "账号菜单也能看见这个号的人设、工作类型、知识库必查还是闲聊不查、档位。",
+        "Persona Studio → open the persona → set Work type to Support or Sales and save. "
+        "Support / sales personas check the knowledge base on every reply and answer from matching entries; "
+        "with no match they send one fixed line (edit it via a Knowledge entry with template_key kb_nohit_fallback), "
+        "and a repeat question is flagged for a human. Leaving it on Auto infers the type from role / tags; "
+        "companion personas skip the knowledge base for small talk. The draft bar shows "
+        "\"Knowledge base · N cited / no match / not queried\". Click no match to open a new-entry "
+        "drawer with the customer's words pre-filled; saving vectorizes that entry. "
+        "The account menu also shows this account's persona, work type, knowledge-base status and mode.",
+        "知识库 不查库 没用知识库 客服人设 工作类型 kind 必查 查无 转人工 固定话术 knowledge base not used support persona",
+        "/personas",
+    ),
+    (
+        "kb-miss-add",
+        "知识库未命中怎么补一条",
+        "How to add a knowledge entry when a draft missed the knowledge base",
+        "工作台草稿条上点「知识库 · 未命中」（带 ＋ 的那颗）。会打开知识库新建抽屉，"
+        "标题、触发词、场景已按客户原话预填。把「示例回复」写成能直接发给客户的话，保存。"
+        "有嵌入端点时这一条会自动向量化，不用再整库重跑。做客服请先把人设「工作类型」改成客服，"
+        "分类表才会出现「活动优惠 / 注册登录 / 账户会员」。",
+        "On the workbench draft bar, click Knowledge base · no match (the chip with ＋). "
+        "That opens the new-entry drawer with title, triggers and scenario pre-filled from "
+        "the customer's words. Write the sample reply as something you could send, then save. "
+        "If an embedding endpoint is configured the entry is vectorized automatically. "
+        "For support work, set the persona Work type to Support first so categories like "
+        "Promotions / Sign-in / Membership appear.",
+        "未命中 补条目 新建知识 点chip 活动优惠 miss add knowledge entry vectorize",
+        "/knowledge",
+    ),
+    (
+        "business-domain-machine",
+        "这台机器做什么生意 / 陪伴和销售怎么切",
+        "What this machine is for / how to switch Companion vs Sales",
+        "打开「自动回复设置」，第一张卡「这台机器做什么生意」。陪伴：工作目标不出现转化成交、"
+        "知识库不预置支付话术、人设默认按陪聊闸。销售：保留商机标签与成交字段。"
+        "某个人设在人设工作室标成客服 / 销售后，那个号仍按人设查知识库，不受这项影响。"
+        "改完模板和标签即时生效；知识库分类重启后跟随。不必进开发者模式。",
+        "Open Auto-reply Settings. The first card is What this machine is for. Companion hides "
+        "conversion goals and payment scripts; Sales keeps opportunity tags and deal fields. "
+        "A persona marked Support / Sales in Persona Studio still queries the knowledge base "
+        "regardless of this setting. Templates and tags apply immediately; knowledge-base "
+        "categories follow after a restart. Developer mode is not required.",
+        "业务域 做什么生意 陪伴 销售 companion sales 自动回复设置 转化成交 business domain",
+        "/reply-settings",
+    ),
+    (
+        "account-ident-line",
+        "账号菜单怎么看这个号是做客服还是陪聊",
+        "How to see whether an account is doing support or companion work",
+        "工作台左侧点当前账号，打开账号菜单。每行底下会显示人设名、工作类型（客服 / 销售 / 陪聊）、"
+        "知识库状态（必查 / 已开 / 闲聊不查 / 未选人设）和档位（半自动 / 全自动 / 手动）。"
+        "未选人设会标黄。要改工作类型去「人设工作室」打开这号绑的人设，改「工作类型」后保存。",
+        "Click the current account on the left of the workbench. Each row shows the persona name, "
+        "work type (Support / Sales / Companion), knowledge-base status (required / on / skip on "
+        "chit-chat / no persona) and automation mode. No persona is marked in amber. "
+        "Change the work type in Persona Studio on the bound persona, then save.",
+        "账号菜单 身份 客服 陪聊 知识库必查 档位 ident persona kind account menu",
+        "/workspace",
+    ),
+    (
         "persona-album",
         "人设相册怎么上传图片",
         "How to upload persona album media",

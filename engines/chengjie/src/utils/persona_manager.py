@@ -122,6 +122,13 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 攻击性指令的双源真相。两种历史写法（顶层/嵌套）一并登记。
     "temper",
     "personality.temper",
+    # P0-1（2026-09-29 8E56 实锤）：人设工作类型 companion / support / sales——决定知识库
+    # 该不该查、查无怎么办（SSOT=src/utils/persona_kind.py，消费方 kb_policy）。是策略开关
+    # 不是台词：人设块里说「我是客服类型」只会穿帮，措辞由 ai_client 按 kind 另拼。
+    "kind",
+    # 陪聊人设显式恢复业务知识库（kb_gate.persona_kb_suppressed 早已消费，此前漏登记 →
+    # L-2 JSON 导入闸把它当未知字段拒绝）。同为策略开关，不进 prompt。
+    "kb_access",
 })
 
 # 已表态的字段全集。门禁比对「真实 schema ⊆ 本集合」，
@@ -1560,10 +1567,18 @@ class PersonaManager:
             bc = b_acc + b_chat
             # P6: derive source — mrpa flag takes precedence over _profile_sources
             source = "mrpa" if p.get("_mrpa_source") else self._profile_sources.get(pid, "studio")
+            try:
+                from src.utils.persona_kind import kind_view as _kind_view
+                _kv = _kind_view(p, full_config)
+            except Exception:
+                _kv = {"kind": "", "source": "", "explicit": ""}
             entry = {
                 "id": pid,
                 "name": p.get("name") or pid,
                 "role": p.get("role") or "",
+                # P0-1：工作类型（生效值 + 来源 explicit/tag/keyword/default），卡片角标用
+                "kind": _kv.get("kind") or "",
+                "kind_source": _kv.get("source") or "",
                 "tags": PersonaManager.coerce_profile_tags(p.get("tags")),
                 # L-2 #205 三态：显式「不发语音」→ 卡片无试听键；其余沿旧判据
                 "has_voice": (

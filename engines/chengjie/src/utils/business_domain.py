@@ -189,13 +189,55 @@ def describe(config: Any = None, *, hook_name: str = "", pack: str = "") -> str:
     return f"business_domain={bd}{tail}"
 
 
+def business_domain_view(config: Any = None) -> Dict[str, Any]:
+    """后台读视图（开发者页 / 自动回复设置页共用）。"""
+    cfg = _cfg_dict(config)
+    explicit = explicit_business_domain(cfg)
+    return {
+        "ok": True,
+        "business_domain": active_business_domain(cfg),
+        "explicit": explicit,
+        "inferred": infer_business_domain(cfg),
+        "options": [
+            {"id": bd, "label_zh": business_domain_label(bd, "zh"),
+             "label_en": business_domain_label(bd, "en")}
+            for bd in BUSINESS_DOMAINS],
+    }
+
+
+def apply_business_domain(config_manager: Any, want: Any) -> Tuple[str, bool]:
+    """写 overlay + 刷新进程级 active。返回 ``(normalized, ok)``；非法 → ``("", False)``。"""
+    v = normalize_business_domain(want)
+    if not v:
+        return "", False
+    setter = getattr(config_manager, "set_overlay_flag", None)
+    if not callable(setter):
+        return v, False
+    try:
+        ok, _msg = setter(BUSINESS_DOMAIN_KEY, v)
+    except Exception:
+        logger.debug("business_domain 写入 overlay 异常", exc_info=True)
+        return v, False
+    if ok:
+        set_active_business_domain(v)
+        try:
+            root = getattr(config_manager, "config", None)
+            if isinstance(root, dict):
+                root[BUSINESS_DOMAIN_KEY] = v
+        except Exception:
+            pass
+    return v, bool(ok)
+
+
 __all__ = [
     "BUSINESS_DOMAINS",
     "BUSINESS_DOMAIN_KEY",
     "COMPANION",
     "SALES",
     "active_business_domain",
+    "apply_business_domain",
     "business_domain_label",
+    "business_domain_view",
     "describe",
     "ensure_business_domain",
     "explicit_business_domain",

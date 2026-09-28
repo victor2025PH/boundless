@@ -381,6 +381,7 @@ ZH = {
     # ── 业务域（N-3 #241 / D-N1 2026-09-08）──
     "dv_bd_title": "业务域（这台机器做什么生意）",
     "dv_bd_sub": "陪伴：工作目标不出现「转化成交」类目，客户摸底 / 画像用陪伴标签集（称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产），知识库不预置支付话术。销售：保留商机标签（痛点 / 平台 / 团队 / 预算 / 决策 / 上线）与成交字段。改动写 config.local.yaml；模板 / 标签 / 画像即时生效，Domain hook 与知识库分类重启后跟随。",
+    "dv_bd_moved": "客户不用进开发者模式——到「自动回复设置」里改这项。",
     "dv_bd_loading": "读取中…",
     "dv_bd_src_explicit": "配置里显式设定",
     "dv_bd_src_inferred": "按部署形态推导（桌面客户机 = 陪伴）",
@@ -771,6 +772,7 @@ EN = {
     # ── Business domain (N-3 #241 / D-N1 2026-09-08) ──
     "dv_bd_title": "Business domain (what this machine is for)",
     "dv_bd_sub": "Companion: work goals hide the \"Conversion\" group, customer discovery / profile use the companion tag set (name / location / occupation / age / interests + family / marital / income / residence / assets), and the knowledge base ships no payment scripts. Sales: keeps the opportunity tags (pain point / channels / team / budget / authority / timeline) and the deal fields. Written to config.local.yaml; templates / tags / profile apply immediately, the domain hook and KB categories follow after a restart.",
+    "dv_bd_moved": "Customers don't need developer mode — change this in Auto-Reply Settings.",
     "dv_bd_loading": "Loading…",
     "dv_bd_src_explicit": "set explicitly in config",
     "dv_bd_src_inferred": "inferred from deployment form (desktop client = companion)",

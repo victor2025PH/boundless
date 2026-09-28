@@ -249,7 +249,10 @@ _BASELINE = """
 /api/kb/images/{img_id}	DELETE
 /api/kb/implicit-feedback	POST
 /api/kb/import	POST
+/api/kb/import-batches	GET
+/api/kb/import-batches/{batch_id}/undo	POST
 /api/kb/import-csv	POST
+/api/kb/import-template	GET
 /api/kb/import/save	POST
 /api/kb/maintenance-advice	GET
 /api/kb/miss-log	DELETE

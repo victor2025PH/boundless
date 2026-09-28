@@ -1177,7 +1177,13 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if p is None:
             raise HTTPException(404, f"Profile '{profile_id}' not found")
         # rev＝乐观锁指纹：编辑器加载时记住，保存时带 expected_rev（P2 多开治理）
-        return {"profile_id": profile_id, "persona": p, "rev": profile_rev(p)}
+        # P0-1：kind 生效视图（显式 / 推断 / 机器缺省），编辑器「工作类型」选择器的提示行用
+        try:
+            from src.utils.persona_kind import kind_view
+            _kv = kind_view(p, getattr(config_manager, "config", None))
+        except Exception:
+            _kv = {}
+        return {"profile_id": profile_id, "persona": p, "rev": profile_rev(p), "kind_view": _kv}
 
     @app.get("/api/personas/profiles/{profile_id}/content-scan")
     async def api_profile_content_scan(profile_id: str, request: Request,

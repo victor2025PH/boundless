@@ -1022,6 +1022,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
                 <span class="cdraft-reason" id="cdraft-reason" style="display:none;" title="为什么这条要你确认" data-i18n-title="inbox.l1r.chip_t"></span>
                 <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
+                <span class="cdraft-reason cdraft-kbd" id="cdraft-kbd" style="display:none;" title="这条草稿的知识库使用情况" data-i18n-title="inbox.kbd.chip_t"></span>
                 <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
                 <span class="cdraft-acts">
                   <button type="button" class="cdraft-btn primary" onclick="acceptComposerDraft()" title="填入输入框，可编辑后发送" data-i18n-title="inbox.cdraft.accept_t"><span data-i18n="inbox.cdraft.accept">采用</span><kbd>Tab</kbd></button>
@@ -2532,6 +2533,7 @@ function rebuildAccountMeta(){
     accountMeta[`${pl}:${id}`]={label:a.label||'', running:!!a.running,
       persona_id:a.persona_unselected?'':(a.persona_id||''), persona_name:a.persona_name||'',
       persona_unselected:!!a.persona_unselected,
+      persona_kind:a.persona_kind||'', ident_kb:a.ident_kb||'', ident_mode:a.ident_mode||'',
       self_name:a.self_name||'', self_username:a.self_username||'', self_avatar:a.self_avatar||''};
   });
 }
@@ -2560,6 +2562,12 @@ function _accountsForPlatform(p){
     // + 账号门禁快照（冷静期 / 降级红标 / 登录后待确认）——chip 标签与会话横幅同源
     if(a.channel_state){ map[id].channel_state=String(a.channel_state); map[id].channel_reason=String(a.channel_reason||''); map[id].channel_detail=String(a.channel_detail||''); }
     if(a.gate && typeof a.gate==='object') map[id].gate=a.gate;
+    map[id].persona_unselected=!!a.persona_unselected;
+    map[id].persona_id=a.persona_unselected?'':(a.persona_id||'');
+    map[id].persona_name=a.persona_name||'';
+    map[id].persona_kind=a.persona_kind||'';
+    map[id].ident_kb=a.ident_kb||'';
+    map[id].ident_mode=a.ident_mode||'';
     // platform_status.unread/attn 与 unread/attnByAccount 同源（P6/P8 enrich）；有则先铺底
     if(useSrv && a.unread!=null) map[id].unread=Number(a.unread)||0;
     if(useSrvAttn && a.attn!=null) map[id].attn=Number(a.attn)||0;
@@ -3304,7 +3312,7 @@ function _pcReportHtml(ent,aid){
   const tl=(ent.open&&Array.isArray(r.timeline)&&r.timeline.length)?`<ul class="acct-timeline">${r.timeline.map(m=>{
     const who=m.display_name||'?';
     const txt=m.text||(m.media_type?`[${m.media_type}]`:'');
-    return `<li class="${m.direction==='out'?'out':'in'}" title="${esc(new Date((m.ts||0)*1000).toLocaleString())}"><span class="tl-ago">${esc(_pcAgo(m.ts))}</span><span class="tl-dir">${m.direction==='out'?'→':'←'}</span><span class="tl-who">${esc(who)}</span><span class="tl-txt">${esc(txt)}</span></li>`;
+    return `<li class="${m.direction==='out'?'out':'in'}" title="${esc(m.ts?window.wsFmtDateTime(m.ts):'')}"><span class="tl-ago">${esc(_pcAgo(m.ts))}</span><span class="tl-dir">${m.direction==='out'?'→':'←'}</span><span class="tl-who">${esc(who)}</span><span class="tl-txt">${esc(txt)}</span></li>`;
   }).join('')}</ul>`:(ent.open?`<div class="acct-rep-line muted">${esc(window.T('inbox.acct.rep_empty'))}</div>`:'');
   return `<div class="acct-rep-line"><span class="acct-rep-stat">${esc(stat)}</span>${warn}<button type="button" class="acct-rep-toggle" onclick="togglePcTimeline('${esc(aid)}')">${esc(ent.open?window.T('inbox.acct.rep_hide'):window.T('inbox.acct.rep_timeline'))}</button></div>
     <div class="acct-rep-line muted">${esc(last)}</div>${tl}`;
@@ -3570,7 +3578,7 @@ function _renderAcctPicker(){
     const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(platFilter+':'+aid);
     const ghost=!a.paired;
     const subBits=[];
-    if(meta.persona_name) subBits.push(uiIcon('mask',11)+' '+esc(meta.persona_name));
+    _acctIdentBits(a, meta).forEach(h=>subBits.push(h));
     if(_psToday[aid]>0) subBits.push(esc(window.Tf('inbox.acct.today_convs',{n:_psToday[aid]})));
     rows+=`<div class="ac-pick-row ${accountFilter===aid?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${accountFilter===aid}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}')" onkeydown="_acPickKey(event,'${esc(aid)}')">
       <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
@@ -3884,7 +3892,7 @@ function _renderAcctPickerDock(){
       const ghost=!a.paired;
       const sel=(platFilter===pl&&accountFilter===aid);
       const subBits=[];
-      if(meta.persona_name) subBits.push(uiIcon('mask',11)+' '+esc(meta.persona_name));
+      _acctIdentBits(a, meta).forEach(h=>subBits.push(h));
       if(_psToday[aid]>0) subBits.push(esc(window.Tf('inbox.acct.today_convs',{n:_psToday[aid]})));
       rows+=`<div class="ac-pick-row ${sel?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${sel}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}','${esc(pl)}')" onkeydown="_acPickKey(event,'${esc(aid)}','${esc(pl)}')">
         <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
@@ -17725,11 +17733,15 @@ async function _loadDraftsBody(c){
         ? `<button class="btn-approve" disabled title="${esc(blockTip)}" style="opacity:.45;cursor:not-allowed;">${window.T('inbox.draft_mini.send')}</button>`
         : `<button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>`;
       const l1txt=_l1ReasonText(dr);   // M-2 E（#235）：L1 原因 chip
+      const kbdTxt=_kbDecisionText(dr);   // P0-5：知识库使用情况 chip
       return `<div class="draft-card-mini">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
           <span class="risk ${riskClass}">${esc(dr.autopilot_level||'?')}</span>
           <span class="unsent-badge" title="${esc(window.T('inbox.draft_mini.unsent_t'))}">${esc(window.T('inbox.draft_mini.unsent'))}</span>
           ${l1txt?`<span class="draft-l1r-chip" title="${esc(window.T('inbox.l1r.chip_t'))}">${esc(l1txt)}</span>`:''}
+          ${kbdTxt?(_kbDecisionMiss(dr)
+            ?`<button type="button" class="draft-l1r-chip draft-kbd-chip is-miss is-link" title="${esc(window.T('inbox.kbd.miss_add_t'))}" onclick="event.stopPropagation();openKbMissAdd('${esc(dr.peer_last_text||dr.peer_text||'')}')">${esc(kbdTxt)} ＋</button>`
+            :`<span class="draft-l1r-chip draft-kbd-chip" title="${esc(window.T('inbox.kbd.chip_t'))}">${esc(kbdTxt)}</span>`):''}
           ${ageTxt?`<span class="draft-age-chip${blocked?' is-stale':''}" title="${esc(window.T('inbox.draft_mini.age_t'))}">${esc(ageTxt)}</span>`:''}
           ${blocked?`<span class="draft-block-chip" title="${esc(blockTip)}">${esc(blocked==='replied'?window.T('inbox.draft_mini.chip_replied'):window.T('inbox.draft_mini.chip_stale'))}</span>`:''}
           <span style="font-size:11px;color:var(--text-sub);">${esc(dr.peer_name||dr.chat_name||'')}</span>
@@ -17987,6 +17999,43 @@ function _l1ReasonText(d){
   return k?window.T(k):(code?window.Tf('inbox.l1r.other',{code:code}):window.T('inbox.l1r.generic'));
 }
 window._l1ReasonText=_l1ReasonText;
+/* P0-5（2026-09-29 8E56）：草稿「知识库」chip——服务端 /api/drafts 行内 kb_decision（起草链按会话登记）：
+   must/optional 命中 → 「已引用 N 条」；未命中 → 「未命中（· 已按固定话术 / · 已标需人工）」；
+   skip → 「本轮未查知识库 · 原因」。无字段（重启 / 非 AI 稿）→ 空。 */
+var _KBD_REASON_KEYS={companion_chat:'inbox.kbd.r.companion_chat',persona_bound:'inbox.kbd.r.persona_bound',media_desc:'inbox.kbd.r.media_desc'};
+function _kbDecisionText(d){
+  const k=d&&d.kb_decision;
+  if(!k||typeof k!=='object') return '';
+  if(k.mode==='skip'){
+    const rk=_KBD_REASON_KEYS[String(k.reason||'')];
+    return window.Tf('inbox.kbd.skip',{reason:rk?window.T(rk):window.Tf('inbox.kbd.r.other',{code:String(k.reason||'')})});
+  }
+  if(k.hit===true) return window.Tf('inbox.kbd.cited',{n:Number(k.refs||0)||1});
+  if(k.hit===false){
+    if(k.handoff) return window.T('inbox.kbd.handoff');
+    if(k.mode==='must'&&Number(k.nohit_n||0)>=1) return window.T('inbox.kbd.miss_fixed');
+    // P1-1：客户这句不是在问事（谢谢 / 在吗 / 好的）→ 查无是正常态，不亮 chip 添噪
+    if(k.asked===false) return '';
+    return window.T('inbox.kbd.miss');
+  }
+  return '';
+}
+window._kbDecisionText=_kbDecisionText;
+/* P1-3：未命中 chip 可点——带客户原话跳知识库新建抽屉（/knowledge?new=1&q=…），标题 / 触发词预填，
+   保存后服务端自动向量化这一条。命中 / 未查的 chip 不可点。 */
+function _kbDecisionMiss(d){
+  const k=d&&d.kb_decision;
+  return !!(k&&typeof k==='object'&&k.mode!=='skip'&&k.hit===false&&k.asked!==false);
+}
+function _kbMissAddUrl(peerText){
+  const q=String(peerText||'').trim().slice(0,120);
+  return '/knowledge?new=1&q='+encodeURIComponent(q);
+}
+function openKbMissAdd(peerText){
+  _uiBeacon('kbd.miss_add');
+  window.open(_kbMissAddUrl(peerText),'_blank');
+}
+window.openKbMissAdd=openKbMissAdd;
 /* Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）。起草链每稿登记一份
    {reply_lang, decided_by, persona_lang, peer_known, fallback}；fallback=对方语言判不出、按人设 /
    账号默认语言起草 → 会话头 #lp-bar + 稿头 #lp-cdraft 同文案；对方语言有证据 → 两处都不显。
@@ -18059,6 +18108,20 @@ function _cdraftRender(){
   if(rs){
     const txt=_l1ReasonText(d);
     if(txt){ rs.style.display=''; rs.textContent=txt; } else rs.style.display='none';
+  }
+  // P0-5：草稿条「知识库」行——已引用 N 条 / 未命中 / 本轮未查（原因）
+  const kbd=document.getElementById('cdraft-kbd');
+  if(kbd){
+    const ktxt=_kbDecisionText(d);
+    if(ktxt){
+      const miss=_kbDecisionMiss(d);
+      kbd.style.display=''; kbd.textContent=miss?(ktxt+' ＋'):ktxt;
+      kbd.title=window.T(miss?'inbox.kbd.miss_add_t':'inbox.kbd.chip_t');
+      kbd.classList.toggle('is-miss', miss); kbd.classList.toggle('is-link', miss);
+      // P1-3：未命中 → 点开知识库新建抽屉预填客户原话；其余态不可点
+      kbd.onclick=miss?function(ev){ ev.stopPropagation(); openKbMissAdd(d.peer_text||d.peer_last_text||''); }:null;
+    }
+    else kbd.style.display='none';
   }
   try{ _lpCdraftRender(d); }catch(_){}   // Q-21 B：稿头「对方语言未知 · 按人设语言回」（lp-）
   const n=document.getElementById('cdraft-n');
@@ -20737,6 +20800,7 @@ function _dpickEtaText(){
 async function _dpickGenerate(c, msgs, opts){
   opts=opts||{};
   var cid=c.conversation_id||convKey(c);
+  _dpickKbTxt='';   // P0-5：新一轮生成前清上一轮的知识库状态，防串会话残留
   var lang=''; try{ lang=localStorage.getItem('cp_replylang:'+cid)||''; }catch(_){}
   if(!_dpickOpenLoading(c,opts)) _toast(window.T('inbox.rt.ai_reply_busy'),'#0f9d75');   // 容器缺失兜底：至少保留旧 toast
   _dpickAiBtn(true);
@@ -20761,6 +20825,7 @@ async function _dpickGenerate(c, msgs, opts){
     if(!selectedChat || convKey(selectedChat)!==convKey(c)){ draftPickCancel('switched'); return; }
     if(!d.ok || !d.reply){ _dpickShowError((d&&d.detail)||'',opts); return; }
     _noteGoalApplied(cid, d.goal_applied);          // #152 F2：目标注没注入亮到英雄行
+    try{ _dpickKbTxt=_kbDecisionText({kb_decision:d.kb_decision}); }catch(_){ _dpickKbTxt=''; }   // P0-5
     var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
     _dpickTextLang=d.translated?String(lang||''):String(d.reply_lang||'');
     // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
@@ -20931,13 +20996,14 @@ function openDraftPick(text, persona){
   _dpickSetState('ready');
   return true;
 }
+var _dpickKbTxt='';   // P0-5：本轮 smart-reply 的知识库使用情况（副标题尾部一句）
 function _dpickApplyReadyChrome(){
   var ttl=document.getElementById('dpick-title');
   if(ttl) ttl.textContent=window.T('inbox.dpick.title');
   var sub=document.getElementById('dpick-sub');
-  if(sub) sub.textContent=_dpickPersona
+  if(sub) sub.textContent=(_dpickPersona
     ? window.Tf('inbox.dpick.sub_by',{name:_dpickPersona})
-    : window.T('inbox.dpick.sub');
+    : window.T('inbox.dpick.sub'))+(_dpickKbTxt?(' · '+_dpickKbTxt):'');
   var ava=document.getElementById('dpick-ava');
   if(ava) ava.textContent=_dpickPersona?String(_dpickPersona).charAt(0).toUpperCase():'✦';
 }
@@ -25397,7 +25463,39 @@ function _acctIconLabel(key){
   // i18n label 里当图标用的前缀 emoji（🔄🔗✏️🚪🗑️⬇️等）已由 SVG 取代，剥掉避免重复
   return String(window.T(key)||'').replace(/^[\s\u2190-\u21FF\u2300-\u27BF\u2B00-\u2BFF\uFE0F\u{1F000}-\u{1FAFF}]+/u,'').trim();
 }
-/* P4 价值信息行：上次同步 / 今日会话数 / 建议同步（TG 从未同步过时）。 */
+function _acctIdentBits(a, meta){
+  /* P1-4：账号身份行——人设 · 工作类型 · 知识库 · 档位（账号菜单 / 抽屉卡共用）
+     i18n 键必须是 T() 字面量，禁止 T(前缀+变量)（扫描器会抽成缺译前缀键）。 */
+  const src=Object.assign({}, meta||{}, a||{});
+  const bits=[];
+  const kind=String(src.persona_kind||'');
+  const kLab=kind==='support'?window.T('inbox.acct.kind_support')
+    :kind==='sales'?window.T('inbox.acct.kind_sales')
+    :kind==='companion'?window.T('inbox.acct.kind_companion')
+    :kind==='other'?window.T('inbox.acct.kind_other'):'';
+  const kb=String(src.ident_kb||'');
+  const kbLab=kb==='must'?window.T('inbox.acct.kb_must')
+    :kb==='open'?window.T('inbox.acct.kb_open')
+    :kb==='skip'?window.T('inbox.acct.kb_skip')
+    :kb==='unselected'?window.T('inbox.acct.kb_unselected'):'';
+  const mode=String(src.ident_mode||'');
+  const mLab=mode==='pending'?window.T('inbox.acct.mode_pending')
+    :mode==='review'?window.T('inbox.acct.mode_review')
+    :mode==='auto_ai'?window.T('inbox.acct.mode_auto_ai')
+    :mode==='manual'?window.T('inbox.acct.mode_manual')
+    :mode==='multi_choice'?window.T('inbox.acct.mode_multi_choice')
+    :mode==='global'?window.T('inbox.acct.mode_global'):'';
+  if(src.persona_unselected || (!src.persona_id && !src.persona_name && kb==='unselected')){
+    bits.push(`<span class="acct-badge ident warn">${esc(window.T('inbox.acct.ident_unselected'))}</span>`);
+  }else{
+    const name=src.persona_name||src.persona_id||'';
+    if(name) bits.push(`<span class="acct-badge persona" title="${esc(window.Tf('inbox.acct.badge_persona_t',{id:name}))}">${uiIcon('mask',11)} ${esc(name)}</span>`);
+    if(kLab) bits.push(`<span class="acct-badge kind">${esc(kLab)}</span>`);
+    if(kbLab) bits.push(`<span class="acct-badge kb kb-${esc(kb)}">${esc(kbLab)}</span>`);
+  }
+  if(mLab) bits.push(`<span class="acct-badge mode">${esc(mLab)}</span>`);
+  return bits;
+}
 function _acctValueMetaHtml(pl,a,on){
   const bits=[];
   if(pl==='telegram'){
@@ -25411,10 +25509,7 @@ function _acctValueMetaHtml(pl,a,on){
   }
   const n=Number(a.today_conv_count||0);
   if(n>0) bits.push(esc(window.Tf('inbox.acct.today_convs',{n:n})));
-  // 绑定人设徽标（有 persona_id 即显示）
-  if(a.persona_id){
-    bits.push(`<span class="acct-badge persona" title="${esc(window.Tf('inbox.acct.badge_persona_t',{id:String(a.persona_id)}))}">${uiIcon('mask',11)} ${esc(window.T('inbox.acct.badge_persona'))}</span>`);
-  }
+  _acctIdentBits(a).forEach(h=>bits.push(h));
   // 近 7 天改资料热点徽标（≥3 黄色告警）
   const churn=Number(a.profile_churn_7d||0);
   if(churn>=3){
