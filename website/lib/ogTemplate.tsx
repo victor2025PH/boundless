@@ -1,6 +1,7 @@
 import { ImageResponse } from "next/og";
 import { LANDINGS, type LandingKey } from "@/lib/landingContent";
 import { compareSpecs } from "@/lib/compare-content";
+import { BOT_HERO_COPY, BOT_HERO_SIZE } from "@/lib/chatx-bot-hero";
 
 /** 落地页专属 OG 分享图（TG/社媒分享卡片）。与根 OG 同风格，突出各产品线卖点。 */
 
@@ -249,12 +250,121 @@ export function compareHubOgImage(lang: "zh" | "en") {
 export function downloadOgImage(lang: "zh" | "en") {
   return chatxOgShell({
     kicker: lang === "zh" ? "下载 · BOUNDLESS ChatX" : "DOWNLOAD · BOUNDLESS ChatX",
-    title: lang === "zh" ? "六平台，一个 AI 收件箱" : "One AI inbox,",
-    titleAccent: lang === "zh" ? undefined : "six platforms",
+    title: lang === "zh" ? "AI 全自动聊天" : "AI auto-chat",
+    titleAccent: lang === "zh" ? "客户消息自动回复、自动成交" : "replies & closes for you",
     subtitle: "Telegram · WhatsApp · Messenger · LINE · Zalo · Instagram",
     foot:
       lang === "zh"
         ? "Windows 桌面端 · 免费开始 · 数据留本机"
         : "Windows desktop · free to start · data stays local",
   });
+}
+
+/* ── @ChatX_bot 首条海报（Telegram sendPhoto，960×720 · 4:3）────────────────
+ * 广告 → bot 的第一眼。手机聊天窗按宽度铺满（≈360px），所以只放三层大字：标题 / 副标 / 两条卖点 + CTA 条，
+ * 产品截图（public/products/prod-chatx.jpg）压在右下角当「产品长什么样」的背景，上方深空渐变承载文案。
+ * 强调色走 growth 品类令牌（#1e8cf2），与 /download/chatx 落地页同色。文案与尺寸在 lib/chatx-bot-hero.ts（bot 侧共用）。
+ * 底图由调用方以 data URL 传入（edge route 用 fetch(new URL(..., import.meta.url)) 内联）。 */
+const GROWTH_ACCENT = "#1e8cf2";
+
+export function chatxBotHeroImage(lang: "zh" | "en", bgDataUrl: string) {
+  const c = BOT_HERO_COPY[lang];
+  const { width: W, height: H } = BOT_HERO_SIZE;
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          position: "relative",
+          background: "#05060f",
+          color: "white",
+          fontFamily: "sans-serif",
+        }}
+      >
+        {bgDataUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={bgDataUrl}
+            alt=""
+            width={900}
+            height={600}
+            style={{ position: "absolute", left: 180, top: 300, width: 900, height: 600, objectFit: "cover" }}
+          />
+        ) : null}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: W,
+            height: H,
+            display: "flex",
+            background:
+              "linear-gradient(180deg, #05060f 0%, #05060f 40%, rgba(5,6,15,0.9) 54%, rgba(5,6,15,0.55) 70%, rgba(5,6,15,0.25) 100%)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: W,
+            height: H,
+            display: "flex",
+            background: "linear-gradient(90deg, rgba(5,6,15,0.85) 0%, rgba(5,6,15,0.35) 45%, rgba(5,6,15,0) 75%)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: W,
+            height: H,
+            display: "flex",
+            flexDirection: "column",
+            padding: "56px 60px 0 60px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 30, color: GROWTH_ACCENT, letterSpacing: 3, fontWeight: 700 }}>
+            <div style={{ display: "flex", width: 14, height: 14, borderRadius: 7, background: GROWTH_ACCENT }} />
+            <span>{c.kicker}</span>
+          </div>
+          <div style={{ display: "flex", fontSize: 104, fontWeight: 800, lineHeight: 1.1, marginTop: 18, letterSpacing: -1 }}>
+            {c.title}
+          </div>
+          <div style={{ display: "flex", fontSize: 46, fontWeight: 700, color: GROWTH_ACCENT, marginTop: 10, lineHeight: 1.2 }}>
+            {c.titleAccent}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 44, fontSize: 34, color: "#e2e8f0" }}>
+            {c.points.map((p) => (
+              <div key={p} style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <div style={{ display: "flex", width: 12, height: 12, borderRadius: 6, background: GROWTH_ACCENT }} />
+                <span>{p}</span>
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignSelf: "flex-start",
+              marginTop: 48,
+              padding: "18px 32px",
+              borderRadius: 18,
+              fontSize: 34,
+              fontWeight: 700,
+              color: "white",
+              background: "linear-gradient(135deg, #0070f0 0%, #00c2ff 100%)",
+              boxShadow: "0 12px 40px rgba(30,140,242,0.35)",
+            }}
+          >
+            {c.foot}
+          </div>
+        </div>
+      </div>
+    ),
+    BOT_HERO_SIZE
+  );
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Send, Tag } from "lucide-react";
+import { Monitor, Send, Tag } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useTelegram } from "./TelegramProvider";
 import { CONTACT_URL } from "@/lib/site";
@@ -10,6 +10,8 @@ import { track } from "@/lib/track";
 import { NAV_PRICING, navLabel } from "@/lib/nav";
 import { COOKIE_CONSENT_KEY, COOKIE_DECIDED_EVENT } from "./CookieConsent";
 import { getLocal } from "@/lib/safe-storage";
+import { getSrc, getTgUid } from "@/lib/attribution";
+import { chatxHandoffUrl, handoffShareText, telegramShareHref } from "@/lib/chatx-handoff";
 
 export default function StickyCTA() {
   const { t, lang } = useLang();
@@ -18,6 +20,8 @@ export default function StickyCTA() {
   const [show, setShow] = useState(false);
   // Cookie 横幅与粘性条同在屏幕底部：横幅未处理前让位（否则互相叠压，价格入口被盖住）。
   const [cookiePending, setCookiePending] = useState(false);
+  const [src, setSrc] = useState("");
+  const [tg, setTg] = useState("");
 
   useEffect(() => {
     // 阈值 200px（原 600px）：移动端价格入口是最高价值动线，第一屏轻滚动即出现；
@@ -29,6 +33,8 @@ export default function StickyCTA() {
   }, []);
 
   useEffect(() => {
+    setSrc(getSrc());
+    setTg(getTgUid());
     setCookiePending(!getLocal(COOKIE_CONSENT_KEY));
     const onDecided = () => setCookiePending(false);
     window.addEventListener(COOKIE_DECIDED_EVENT, onDecided);
@@ -43,7 +49,11 @@ export default function StickyCTA() {
   const isZhRoute = !pathname?.match(/^\/(en|ko|ja)(\/|$)/);
   const pricingHref = isZhRoute ? NAV_PRICING.path! : `/en${NAV_PRICING.path!}`;
   // 已在下单页时价格按钮是自链接，只保留咨询 CTA。
-  const onOrderPage = !!pathname?.includes("/order");
+  // 智聊下载落地页（广告流量，手机上装不了 Windows 包）：价格位换成「发到电脑」，链接带 src 保留归因。
+  const onChatxDownload = /\/download\/chatx(\/|$)/.test(pathname ?? "");
+  const hidePricing = !!pathname?.includes("/order") || onChatxDownload;
+  const handoffLang = isZhRoute ? "zh" : "en";
+  const handoffHref = telegramShareHref(chatxHandoffUrl(handoffLang, src, tg), handoffShareText(handoffLang));
 
   return (
     <div
@@ -52,7 +62,19 @@ export default function StickyCTA() {
       }`}
     >
       <div className="glass flex items-center gap-2 border-t border-white/10 px-3 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
-        {!onOrderPage && (
+        {onChatxDownload && (
+          <a
+            href={handoffHref}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => track("cta_click", { where: "sticky_handoff_telegram", src: src || undefined })}
+            className="sticky-cta-secondary flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-full border border-growth-400/40 py-2.5 text-sm font-medium text-slate-200"
+          >
+            <Monitor className="h-4 w-4 text-growth-400" />
+            {isZhRoute ? "发到电脑" : "Send to PC"}
+          </a>
+        )}
+        {!hidePricing && (
           <a
             href={pricingHref}
             onClick={() => track("cta_click", { where: "sticky_pricing" })}

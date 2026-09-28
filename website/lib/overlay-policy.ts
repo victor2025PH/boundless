@@ -33,15 +33,19 @@ const GEO_LANDER = /^\/(en\/)?compare(\/|$)/;
 /** 学习页（2026-09-17 智聊视频教程）：访客在看教程，促销卡叠在播放器旁是抢戏；
  *  页面自身在播放器下方与看完卡里已有下载 CTA，转化不靠浮层。 */
 const LEARNING_PAGE = /^\/(en\/)?chatx\/tutorials(\/|$)/;
+/** 下载落地页（2026-09-23 Telegram 广告 → @ChatX_bot → /download/chatx?src=）：付费流量只有一个目标——点下载；
+ *  线上截图里 6U 新人卡 + cookie 条把下载按钮压在底下，促销卡在这里是纯损耗。 */
+const DOWNLOAD_LANDER = /^\/(en\/)?download\/chatx(\/|$)/;
 
 export function overlayPolicy(pathname: string | null | undefined): OverlayPolicy {
   const p = pathname || "/";
-  const quiet = INTERNATIONAL_ROUTE.test(p) || GEO_LANDER.test(p) || LEARNING_PAGE.test(p);
+  const quiet =
+    INTERNATIONAL_ROUTE.test(p) || GEO_LANDER.test(p) || LEARNING_PAGE.test(p) || DOWNLOAD_LANDER.test(p);
   return { promo: !quiet, gamification: !quiet };
 }
 
-/** 带 campaign 参数即视为投放/深链来的冷流量。 */
-const CAMPAIGN_PARAMS = ["utm_source", "utm_medium", "utm_campaign", "ref"];
+/** 带 campaign 参数即视为投放/深链来的冷流量（src = @ChatX_bot 广告来源码）。 */
+const CAMPAIGN_PARAMS = ["utm_source", "utm_medium", "utm_campaign", "ref", "src"];
 
 /**
  * 冷外部入口判定（供开场动画跳过用）。

@@ -124,12 +124,14 @@ export async function streamDeepSeek(
 /**
  * Ask DeepSeek with grounded knowledge context.
  * Returns the answer string, or null on any failure (caller falls back).
+ * extraSystem：附加系统指令（与 streamDeepSeek 同义，如产品专属 bot 的人设补充）。
  */
 export async function askDeepSeek(
   question: string,
   lang: BotLang,
   history: ChatTurn[] = [],
-  timeoutMs = 12000
+  timeoutMs = 12000,
+  extraSystem = ""
 ): Promise<string | null> {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) return null;
@@ -137,7 +139,7 @@ export async function askDeepSeek(
   if (!q) return null;
   if (!canProceed()) return null;
 
-  const messages = await buildMessages(q, lang, history);
+  const messages = await buildMessages(q, lang, history, extraSystem);
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);

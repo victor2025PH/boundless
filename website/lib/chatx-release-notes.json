@@ -1,5 +1,35 @@
 [
   {
+    "version": "1.0.101",
+    "date": "2026-09-28",
+    "title": {
+      "zh": "知识库可导入并向量化，外网也能用无限制 ChatX",
+      "en": "Knowledge import and vectorization, unrestricted ChatX on remote installs"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "知识库可以按模板导入：打开知识库，点顶栏「导入」，先下载 Excel 模板照着填，看预览再确认。导错了到「更多 → 导入记录」整批撤销。",
+        "导入或新建之后点「更多 → 向量化」（导入完成页也有这个按钮），等进度走完。已经向量化过的条目会跳过，不用重新导入，也不用重装。",
+        "无限制：打开会话，点输入框上方「模型」，选「ChatX聊天模型」（标着无限制，路径写「SVIP企业搭建」）。外网和办公室一样用这一档。点「模式」可以改回标准，或再调上下文、力度、思考。",
+        "Telegram 用手机号登录后，左侧会出现这个账号，和扫码一样。如果侧边栏还是空的，升级后用手机号再登录一次。",
+        "数据都保留。升级后请重启一次工作台。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Import a knowledge sheet: open Knowledge, click Import, download the Excel template, preview, then confirm. Undo a bad batch from More, then Import history.",
+        "After import or a new entry, open More, then Vectorize (the import-done page has the same button) and wait for the bar. Entries that already have vectors are skipped. Do not re-import and do not reinstall.",
+        "Unrestricted: open a chat, click Model above the composer, and choose ChatX chat model. It is marked Unrestricted and the path reads SVIP企业搭建. Remote installs get the same row as the office machine.",
+        "Mode can switch back to Standard, or adjust context, effort and thinking.",
+        "A Telegram phone login shows the account in the left list, the same as a QR login. If the sidebar is still empty, sign in with the phone number once more after upgrading.",
+        "Data is kept. Restart the workbench once after upgrading."
+      ]
+    }
+  },
+  {
     "version": "1.0.100",
     "date": "2026-09-26",
     "title": {

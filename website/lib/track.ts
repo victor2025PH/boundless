@@ -1,4 +1,5 @@
 import { getSessionUtm } from "./attribution";
+import { getSession, setSession } from "./safe-storage";
 
 // 会话级 id：把同一次浏览的离散事件串起来，让后端能算「真实会话漏斗转化率」
 // （进入 N 个会话→最终几个留资），而非分子分母口径不一致的跨事件累加计数。
@@ -22,6 +23,19 @@ function sessionId(): string {
     cachedSid = `m-${gen()}`;
   }
   return cachedSid;
+}
+
+// 会话内只报一次的到达类事件（刷新 / StrictMode 双执行 / 组件重挂不重复计）；
+// 内存集兑底 sessionStorage 不可用的 webview。返回是否真的上报了。
+const onceSent = new Set<string>();
+export function trackOnce(key: string, event: string, props?: Record<string, unknown>): boolean {
+  if (typeof window === "undefined") return false;
+  const k = `ml_once:${key}`;
+  if (onceSent.has(k) || getSession(k)) return false;
+  onceSent.add(k);
+  setSession(k, "1");
+  track(event, props);
+  return true;
 }
 
 export function track(event: string, props?: Record<string, unknown>) {

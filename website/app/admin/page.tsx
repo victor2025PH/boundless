@@ -27,6 +27,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import FxThemeCard from "./FxThemeCard";
+import ChatxDailyCard from "./ChatxDailyCard";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,27 @@ interface Stats {
     funnel: { sessions: number; converted: number; rate: number };
     faqTop: { q: string; n: number }[];
     series?: { pv: number[]; clicks: number[] };
+    chatxBot?: {
+      starts: number;
+      firstStarts: number;
+      views: number;
+      clicks: number;
+      redirects: number;
+      dlUsers?: number;
+      sources: {
+        src: string;
+        starts: number;
+        firstStarts: number;
+        views: number;
+        clicks: number;
+        redirects: number;
+        dlUsers?: number;
+        rate: number;
+        landRate: number;
+        dlRate: number;
+        userRate?: number;
+      }[];
+    };
   };
   /** 龙珠彩蛋：事件漏斗 + 存储层权威计数 */
   dragon?: {
@@ -1843,6 +1865,56 @@ export default function AdminPage() {
                             ))}
                           </div>
                         )}
+                        {stats.downloads.chatxBot && stats.downloads.chatxBot.sources.length > 0 && (
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                            <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                              <span>@ChatX_bot 广告来源（/start → 落地 → 下载）</span>
+                              <span>
+                                start <span className="text-cyan-300">{stats.downloads.chatxBot.starts}</span>
+                                {" · "}首触 <span className="text-slate-300">{stats.downloads.chatxBot.firstStarts}</span>
+                                {" · "}落地 <span className="text-violet-300">{stats.downloads.chatxBot.views}</span>
+                                {" · "}下载 <span className="text-emerald-300">{stats.downloads.chatxBot.clicks}</span>
+                                {" · "}包请求 <span className="text-amber-300">{stats.downloads.chatxBot.redirects}</span>
+                                {" · "}下载人 <span className="text-rose-300">{stats.downloads.chatxBot.dlUsers ?? 0}</span>
+                              </span>
+                            </div>
+                            <table className="w-full text-[11px]">
+                              <thead>
+                                <tr className="text-left text-slate-500">
+                                  <th className="py-1 font-normal">src</th>
+                                  <th className="py-1 text-right font-normal">start</th>
+                                  <th className="py-1 text-right font-normal">首触</th>
+                                  <th className="py-1 text-right font-normal">落地</th>
+                                  <th className="py-1 text-right font-normal">下载</th>
+                                  <th className="py-1 text-right font-normal">包</th>
+                                  <th className="py-1 text-right font-normal" title="请求过安装包的 bot 用户数（去重，下载链 tg=uid 回执）">下载人</th>
+                                  <th className="py-1 text-right font-normal" title="落地 / start">→落地</th>
+                                  <th className="py-1 text-right font-normal" title="下载 / 落地">→下载</th>
+                                  <th className="py-1 text-right font-normal" title="下载 / start">总转化</th>
+                                  <th className="py-1 text-right font-normal" title="下载人 / 首触（按人的真实转化）">人转化</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {stats.downloads.chatxBot.sources.map((r) => (
+                                  <tr key={r.src} className="border-t border-slate-800/60 text-slate-300">
+                                    <td className="py-1 font-mono">{r.src}</td>
+                                    <td className="py-1 text-right">{r.starts}</td>
+                                    <td className="py-1 text-right">{r.firstStarts}</td>
+                                    <td className="py-1 text-right text-violet-300">{r.views}</td>
+                                    <td className="py-1 text-right text-emerald-300">{r.clicks}</td>
+                                    <td className="py-1 text-right text-amber-300">{r.redirects}</td>
+                                    <td className="py-1 text-right text-rose-300">{r.dlUsers ?? 0}</td>
+                                    <td className="py-1 text-right text-slate-400">{r.views > 0 ? `${r.landRate}%` : "–"}</td>
+                                    <td className="py-1 text-right text-slate-400">{r.views > 0 ? `${r.dlRate}%` : "–"}</td>
+                                    <td className="py-1 text-right font-medium text-cyan-300">{r.rate}%</td>
+                                    <td className="py-1 text-right text-slate-400">{r.firstStarts > 0 ? `${r.userRate ?? 0}%` : "–"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <ChatxDailyCard />
                         {stats.downloads.series && (
                           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
                             <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
@@ -3124,7 +3196,10 @@ export default function AdminPage() {
                             </div>
                           </td>
                           <td className="py-1.5 pr-3">{l.interest || "-"}</td>
-                          <td className="py-1.5 pr-3">{l.source}</td>
+                          <td className="py-1.5 pr-3">
+                            {l.source}
+                            {l.utm && <div className="text-[10px] text-slate-500" title="utm source/medium/campaign">{l.utm}</div>}
+                          </td>
                           <td className="py-1.5 pr-3">
                             <div className="flex items-center gap-1">
                               <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${STATUS_META[l.status].cls}`}>

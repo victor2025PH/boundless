@@ -83,3 +83,60 @@ export function getLeadUtm(): string {
 function compact(u: Utm): string {
   return [u.s, u.m || "-", u.c || "-"].join("/");
 }
+
+// ── 广告来源码 src（Telegram 广告 → @ChatX_bot /start=<src> → 下载页 ?src=<src>）──
+// 与 utm 分开存：utm 走会话归因，src 是要原样跟到下载点击 / 安装包分流入口的短码。
+// 30 天首触保留：广告点进来先看看、隔天直达回来下载，功劳仍记给那条广告。
+const SRC_KEY = "ml_src";
+const SRC_TTL_MS = 30 * 24 * 3600 * 1000;
+const SRC_RE = /^[A-Za-z0-9_-]{1,48}$/;
+
+export function isValidSrc(v: string | null | undefined): v is string {
+  return typeof v === "string" && SRC_RE.test(v);
+}
+
+/** 把来源码落盘（小程序从 start_param / initData 回源拿到 src 时也用），非法值忽略。 */
+export function rememberSrc(v: string): void {
+  if (typeof window === "undefined" || !isValidSrc(v)) return;
+  try {
+    localStorage.setItem(SRC_KEY, JSON.stringify({ v, ts: Date.now() }));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 当前访客的广告来源码（URL ?src= 优先并落盘；否则读 30 天内存储；无则 ""）。 */
+export function getSrc(): string {
+  return readParam("src", SRC_KEY, SRC_RE);
+}
+
+// ── bot 用户标识 tg（@ChatX_bot 深链 ?tg=<uid> → 下载页 → /dl 用户级回执）──
+// 与 src 同样 30 天保留、同样只是原样带到安装包分流入口；服务端用它判断「这个 bot 用户下载了没」。
+const TG_KEY = "ml_tg";
+const TG_RE = /^\d{1,20}$/;
+
+export function getTgUid(): string {
+  return readParam("tg", TG_KEY, TG_RE);
+}
+
+function readParam(name: string, key: string, re: RegExp): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const fromUrl = (new URLSearchParams(window.location.search).get(name) ?? "").trim();
+    if (re.test(fromUrl)) {
+      try {
+        localStorage.setItem(key, JSON.stringify({ v: fromUrl, ts: Date.now() }));
+      } catch {
+        /* ignore */
+      }
+      return fromUrl;
+    }
+    const raw = localStorage.getItem(key);
+    if (!raw) return "";
+    const rec = JSON.parse(raw) as { v?: string; ts?: number };
+    if (!rec?.v || !rec.ts || Date.now() - rec.ts >= SRC_TTL_MS || !re.test(rec.v)) return "";
+    return rec.v;
+  } catch {
+    return "";
+  }
+}
