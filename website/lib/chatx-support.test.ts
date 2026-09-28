@@ -31,6 +31,7 @@ process.env.DEEPSEEK_BASE_URL = "https://deepseek.test/v1/chat/completions";
 
 const SUPPORT = -100500;
 const COMMUNITY = -100600;
+const COMMUNITY2 = -100700;
 const USER = 4242;
 
 fs.writeFileSync(
@@ -39,7 +40,9 @@ fs.writeFileSync(
     bots: [],
     chats: [
       { chatId: String(SUPPORT), botId: "chatx", title: "客服群", type: "supergroup", isForum: true, role: "support", enabled: true, botStatus: "administrator", features: {}, discoveredAt: "", updatedAt: "" },
+      { chatId: String(COMMUNITY2), botId: "chatx", title: "主动答疑群", type: "supergroup", role: "community", enabled: true, botStatus: "administrator", features: {}, discoveredAt: "", updatedAt: "" },
       { chatId: String(COMMUNITY), botId: "chatx", title: "交流群", type: "supergroup", role: "community", enabled: true, botStatus: "administrator", features: {}, discoveredAt: "", updatedAt: "" },
+      { chatId: String(COMMUNITY2), botId: "chatx", title: "主动答疑群", type: "supergroup", role: "community", enabled: true, botStatus: "administrator", features: {}, discoveredAt: "", updatedAt: "" },
     ],
     invites: [],
     support: { hours: "00:00-00:00", tzOffset: 8 },
@@ -49,12 +52,13 @@ fs.writeFileSync(
 type Call = { method: string; body: Record<string, unknown> };
 let calls: Call[] = [];
 let llmCalls = 0;
+let llmReply = "点官网下载就行。";
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   if (url.startsWith("https://deepseek.test/")) {
     llmCalls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: "点官网下载就行。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: llmReply } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
   const method = url.split("/").pop() ?? "";
   const body = init?.body && typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
@@ -197,6 +201,30 @@ async function main() {
   calls = [];
   await upd({ message: { message_id: 50, chat: { id: -100999, type: "supergroup" }, from: gFrom, text: "@ctx2026_bot hi" } });
   assert.strictEqual(calls.length, 0, "未登记的群不理");
+
+  // 群：没 @ 时分类——闲聊不理、成员对话不理、疑似提问让 AI 判断（SKIP 就不说）、产品提问主动答
+  {
+    const g2 = (message_id: number, who: { id: number; first_name: string }, text: string, extra: Record<string, unknown> = {}) =>
+      upd({ message: { message_id, chat: { id: COMMUNITY2, type: "supergroup" }, from: { ...who, language_code: "zh" }, text, ...extra } });
+    calls = [];
+    const before = llmCalls;
+    await g2(60, { id: 701, first_name: "A" }, "哈哈哈哈");
+    await g2(61, { id: 702, first_name: "B" }, "早上好");
+    await g2(62, { id: 703, first_name: "C" }, "你那个怎么弄的？", { reply_to_message: { message_id: 60, from: { id: 701, is_bot: false } } });
+    assert.strictEqual(llmCalls, before, "闲聊 / 成员对话不调 AI");
+    llmReply = "SKIP";
+    await g2(63, { id: 704, first_name: "D" }, "明天几点开会？");
+    assert.strictEqual(llmCalls, before + 1, "疑似提问交给 AI 判断");
+    assert.strictEqual(sent(COMMUNITY2).length, 0, "AI 回 SKIP 就不说话");
+    llmReply = "点官网下载就行。";
+    await g2(64, { id: 705, first_name: "E" }, "智聊怎么下载安装？");
+    assert.strictEqual(sent(COMMUNITY2).length, 1, "产品提问主动答");
+    assert.strictEqual((sent(COMMUNITY2)[0].body.reply_parameters as { message_id: number }).message_id, 64, "回复到提问那条");
+    await g2(65, { id: 706, first_name: "F" }, "会员多少钱？");
+    assert.strictEqual(sent(COMMUNITY2).length, 1, "主动答有群冷却，不刷屏");
+    await g2(66, { id: 707, first_name: "G" }, "@ctx2026_bot 会员多少钱");
+    assert.strictEqual(sent(COMMUNITY2).length, 2, "@ 了照常回答");
+  }
 
   await upd({ my_chat_member: { chat: { id: -100777, type: "supergroup", title: "新群" }, from: gFrom, new_chat_member: { status: "administrator" } } });
   const hub = await H.loadHub();

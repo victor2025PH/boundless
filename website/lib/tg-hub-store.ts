@@ -28,6 +28,8 @@ export type HubChatRole = (typeof HUB_ROLES)[number];
 export type HubFeatures = {
   /** 群内被 @ / 回复 / 命令时 AI 作答 */
   ai: boolean;
+  /** 没 @ 时也分析群消息：产品相关提问主动答，闲聊不插话（bot 需为管理员或关闭隐私模式才收得到） */
+  autoReply: boolean;
   /** 新成员欢迎卡 */
   welcome: boolean;
   /** 新成员点按钮验证后才能发言 */
@@ -42,6 +44,7 @@ export type HubFeatures = {
 
 export const DEFAULT_FEATURES: HubFeatures = {
   ai: true,
+  autoReply: true,
   welcome: true,
   verify: false,
   antispam: true,

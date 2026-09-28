@@ -7,11 +7,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 type PublicBot = { id: string; name: string; username?: string; tokenMasked: string; enabled: boolean; builtin: boolean };
-type Features = { ai: boolean; welcome: boolean; verify: boolean; antispam: boolean; privacyGuard: boolean; joinApprove: boolean };
+type Features = { ai: boolean; autoReply: boolean; welcome: boolean; verify: boolean; antispam: boolean; privacyGuard: boolean; joinApprove: boolean };
 type Chat = { chatId: string; botId: string; title: string; type: string; isForum?: boolean; role: string; enabled: boolean; langs?: string[]; features: Features };
 
 const FEATURE_LABEL: Record<keyof Features, string> = {
   ai: "AI 答疑（@/回复）",
+  autoReply: "主动答疑（不 @ 也答产品问题）",
   welcome: "新人欢迎",
   verify: "入群验证",
   antispam: "反广告",
@@ -181,7 +182,7 @@ export function AddChatForm({ bots }: { bots: { id: string; label: string }[] })
 export function ChatControls({ chat, canWrite, roleLabel }: { chat: Chat; canWrite: boolean; roleLabel: Record<string, string> }) {
   const { busy, run } = useAction();
   const upd = (patch: Record<string, unknown>, msg: string) => void run({ action: "update_chat", botId: chat.botId, chatId: chat.chatId, ...patch }, msg);
-  const feats = (chat.type === "channel" ? ["joinApprove"] : chat.role === "support" ? [] : ["ai", "welcome", "verify", "antispam", "privacyGuard", "joinApprove"]) as (keyof Features)[];
+  const feats = (chat.type === "channel" ? ["joinApprove"] : chat.role === "support" ? [] : ["ai", "autoReply", "welcome", "verify", "antispam", "privacyGuard", "joinApprove"]) as (keyof Features)[];
   return (
     <div className="space-y-1.5 text-xs">
       <div className="flex flex-wrap items-center gap-2">

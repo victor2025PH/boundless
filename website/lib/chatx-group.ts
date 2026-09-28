@@ -1,6 +1,6 @@
 /**
  * ChatX bot 在群 / 频道里的行为（只对控制台里「已启用」的群生效）：
- *   · 社群：被 @ / 回复 / /ask 时 AI 简答；新成员欢迎与按钮验证；新成员发链接自动删；
+ *   · 社群：被 @ / 回复 / /ask 时 AI 简答；没 @ 时先分类（chatx-group-intent），产品相关提问主动答、闲聊不插话；新成员欢迎与按钮验证；新成员发链接自动删；
  *     机器码 / 回执号自动删并引导私聊；管理员回复消息发 /ban /mute /unmute。
  *   · 客服群：工单话题里的消息转给用户（见 chatx-support）。
  *   · 频道 / 入群申请：自动批准，按邀请链接名（来源码）归因，并私聊发欢迎。
@@ -13,6 +13,7 @@ import { notifyAdmins } from "./order-store";
 import { BUILTIN_BOT_ID, currentBot, withBot } from "./tg-bot-context";
 import { recordChatMembership, type DiscoveredChat, type HubChat } from "./tg-hub-store";
 import { trackTg } from "./tg-events";
+import { classifyGroupText, isSkipReply, type GroupIntentKind } from "./chatx-group-intent";
 
 export type GroupMsg = AgentMsg & {
   chat: { id: number; type?: string; title?: string; username?: string; is_forum?: boolean };
@@ -20,7 +21,7 @@ export type GroupMsg = AgentMsg & {
   sender_chat?: { id: number };
   entities?: { type: string; offset: number; length: number }[];
   caption_entities?: { type: string; offset: number; length: number }[];
-  reply_to_message?: { message_id: number; from?: { id: number; is_bot?: boolean; username?: string } };
+  reply_to_message?: { message_id: number; from?: { id: number; is_bot?: boolean; username?: string }; sender_chat?: { id: number } };
   forward_from_chat?: unknown;
   forward_origin?: { type?: string };
   new_chat_members?: (TgFrom & { is_bot?: boolean })[];
@@ -34,6 +35,14 @@ const lastUserAsk = new Map<string, number>();
 
 const GROUP_COOLDOWN_MS = 4000;
 const USER_COOLDOWN_MS = 20_000;
+const AUTO_GROUP_COOLDOWN_MS = 30_000;
+const AUTO_USER_COOLDOWN_MS = 90_000;
+const AUTO_CHECK_USER_MS = 60_000;
+const AUTO_HOURLY_MAX = 20;
+const lastAutoReply = new Map<string, number>();
+const lastAutoUser = new Map<string, number>();
+const lastAutoCheck = new Map<string, number>();
+const autoHour = new Map<string, number[]>();
 
 const botId = () => currentBot()?.id ?? BUILTIN_BOT_ID;
 const botUsername = () => currentBot()?.username ?? "";
@@ -237,20 +246,13 @@ function addressedText(msg: GroupMsg, text: string): string | null {
   return null;
 }
 
-async function groupAnswer(msg: GroupMsg, q: string) {
-  const now = Date.now();
-  const gk = String(msg.chat.id);
-  const uk = `${msg.chat.id}:${msg.from!.id}`;
-  if (now - (lastGroupReply.get(gk) ?? 0) < GROUP_COOLDOWN_MS || now - (lastUserAsk.get(uk) ?? 0) < USER_COOLDOWN_MS) return;
-  lastGroupReply.set(gk, now);
-  lastUserAsk.set(uk, now);
-  const lang = detectKnowledgeLang(q);
-  const rule =
-    lang === "zh"
-      ? "你在 Telegram 公开群里回答。回答控制在 3 句以内；不要索要或复述机器码、手机号、账号等隐私；需要个人排查时请对方点私聊按钮。"
-      : "You are answering in a public Telegram group. Keep it within 3 sentences; never ask for or repeat machine codes, phone numbers or account details; for personal troubleshooting ask them to message you privately.";
-  const ans = await askDeepSeek(q, lang, [], 12000, `${chatxSystemHint("tg_group", lang)}\n\n${rule}`);
-  const text = ans ?? (lang === "zh" ? "这个问题我私聊帮你看更方便，点下面按钮找我 👇" : "Easier to sort out in private — tap below 👇");
+const GROUP_RULE = {
+  zh: "你在 Telegram 公开群里回答。回答控制在 3 句以内；不要索要或复述机器码、手机号、账号等隐私；需要个人排查时请对方点私聊按钮。",
+  en: "You are answering in a public Telegram group. Keep it within 3 sentences; never ask for or repeat machine codes, phone numbers or account details; for personal troubleshooting ask them to message you privately.",
+};
+const groupRule = (lang: BotLang) => GROUP_RULE[lang === "zh" ? "zh" : "en"];
+
+async function sendGroupReply(msg: GroupMsg, text: string, lang: BotLang) {
   await tgCall("sendMessage", {
     chat_id: msg.chat.id,
     message_thread_id: msg.message_thread_id,
@@ -259,7 +261,63 @@ async function groupAnswer(msg: GroupMsg, q: string) {
     disable_web_page_preview: true,
     reply_markup: { inline_keyboard: [[{ text: lang === "zh" ? "💬 私聊继续" : "💬 Continue privately", url: privateLink("grp") }]] },
   });
-  await trackTg("chatx_group_ask", { bot: botId(), chat: msg.chat.id, uid: msg.from!.id, ai: Boolean(ans) });
+}
+
+async function groupAnswer(msg: GroupMsg, q: string) {
+  const now = Date.now();
+  const gk = String(msg.chat.id);
+  const uk = `${msg.chat.id}:${msg.from!.id}`;
+  if (now - (lastGroupReply.get(gk) ?? 0) < GROUP_COOLDOWN_MS || now - (lastUserAsk.get(uk) ?? 0) < USER_COOLDOWN_MS) return;
+  lastGroupReply.set(gk, now);
+  lastUserAsk.set(uk, now);
+  const lang = detectKnowledgeLang(q);
+  const ans = await askDeepSeek(q, lang, [], 12000, `${chatxSystemHint("tg_group", lang)}\n\n${groupRule(lang)}`);
+  const text = ans ?? (lang === "zh" ? "这个问题我私聊帮你看更方便，点下面按钮找我 👇" : "Easier to sort out in private — tap below 👇");
+  await sendGroupReply(msg, text, lang);
+  await trackTg("chatx_group_ask", { bot: botId(), chat: msg.chat.id, uid: msg.from!.id, ai: Boolean(ans), mode: "mention" });
+}
+
+
+// ── 群内主动答疑（没 @ 时）─────────────────────────────────────────
+
+const AUTO_RULE = {
+  zh: "这条群消息没有 @ 你，是你旁听到的。只有当它是在问智聊 ChatX / 小界 / 本公司产品或服务（下载、安装、价格、功能、报错等），而且你能给出有用的回答时才回答；如果是闲聊、成员之间的对话、与产品无关的问题，或你没把握，只输出 SKIP 四个字母，不要输出别的。",
+  en: "This group message did NOT mention you; you overheard it. Only answer if it is a question about ChatX / our products or services (download, install, pricing, features, errors) and you can give a useful answer. If it is small talk, a conversation between members, off-topic, or you are unsure, output exactly SKIP and nothing else.",
+};
+
+function autoAllowed(chatId: number, uid: number, now: number): boolean {
+  const gk = String(chatId);
+  if (now - (lastGroupReply.get(gk) ?? 0) < GROUP_COOLDOWN_MS) return false;
+  if (now - (lastAutoReply.get(gk) ?? 0) < AUTO_GROUP_COOLDOWN_MS) return false;
+  if (now - (lastAutoUser.get(`${gk}:${uid}`) ?? 0) < AUTO_USER_COOLDOWN_MS) return false;
+  const hour = (autoHour.get(gk) ?? []).filter((t) => now - t < 3600_000);
+  autoHour.set(gk, hour);
+  return hour.length < AUTO_HOURLY_MAX;
+}
+
+/** 没 @ bot 的消息：分类后决定是否主动答；AI 仍可回 SKIP 放弃。 */
+async function autoAnswer(msg: GroupMsg, text: string, kind: GroupIntentKind, reason: string) {
+  const uid = msg.from!.id;
+  const gk = String(msg.chat.id);
+  const uk = `${gk}:${uid}`;
+  const now = Date.now();
+  if (!autoAllowed(msg.chat.id, uid, now)) return;
+  if (kind === "maybe") {
+    if (now - (lastAutoCheck.get(uk) ?? 0) < AUTO_CHECK_USER_MS) return;
+    lastAutoCheck.set(uk, now);
+  }
+  if (await isAdmin(msg.chat.id, msg)) return;
+  const lang = detectKnowledgeLang(text);
+  const ans = await askDeepSeek(text, lang, [], 12000, `${chatxSystemHint("tg_group", lang)}\n\n${groupRule(lang)}\n\n${AUTO_RULE[lang === "zh" ? "zh" : "en"]}`);
+  if (ans === null || isSkipReply(ans)) {
+    await trackTg("chatx_group_auto_skip", { bot: botId(), chat: msg.chat.id, uid, kind, reason, ai: ans !== null });
+    return;
+  }
+  lastAutoReply.set(gk, now);
+  lastAutoUser.set(uk, now);
+  autoHour.get(gk)?.push(now);
+  await sendGroupReply(msg, ans, lang);
+  await trackTg("chatx_group_ask", { bot: botId(), chat: msg.chat.id, uid, ai: true, mode: "auto", kind, reason });
 }
 
 /** 已启用群里的一条消息。chat 为控制台里的配置。 */
@@ -281,7 +339,13 @@ export async function handleGroupMessage(chat: HubChat, msg: GroupMsg, edited = 
   if (chat.features.antispam && !admin && (await antispam(msg, text))) return;
   if (edited || !chat.features.ai || !text) return;
   const q = addressedText(msg, text);
-  if (q) await groupAnswer(msg, q);
+  if (q) return groupAnswer(msg, q);
+  if (!chat.features.autoReply || admin) return;
+  const r = msg.reply_to_message;
+  const replyToHuman = Boolean(r && ((r.from && !r.from.is_bot) || r.sender_chat));
+  const forwarded = Boolean(msg.forward_from_chat || msg.forward_origin);
+  const intent = classifyGroupText(text, { replyToHuman, forwarded });
+  if (intent.kind !== "skip") await autoAnswer(msg, text, intent.kind, intent.reason);
 }
 
 // ── 入群 / 频道申请 ────────────────────────────────────────────────
