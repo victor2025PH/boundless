@@ -1,5 +1,29 @@
 [
   {
+    "version": "1.0.103",
+    "date": "2026-09-29",
+    "title": {
+      "zh": "开发者工具对所有用户可见",
+      "en": "Developer Tools is visible to every user"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "开发者工具现在所有人都能在软件里打开。",
+        "用法：侧栏点「更多」，再点「开发者工具」（完整模式在「支持」里；也可以按 Ctrl+K 搜「开发者」）。输入开发者密码，在「内部功能显隐」勾选要显示的功能，然后刷新。人工操作台要退出智聊再打开一次。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Developer Tools is now visible for everyone inside the app.",
+        "How: in the sidebar open More, then Developer Tools (under Support in full mode; or press Ctrl+K and search Developer). Enter the developer password, tick the features under Internal feature visibility, then refresh. The manual console needs ChatX closed and opened once.",
+        "Your data is kept."
+      ]
+    }
+  },
+  {
     "version": "1.0.102",
     "date": "2026-09-29",
     "title": {
