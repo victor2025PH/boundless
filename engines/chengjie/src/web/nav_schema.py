@@ -396,10 +396,12 @@ NAV_GROUPS_FULL = [
          items=["crisis_audit", "audit", "asset_center", "bug_tickets"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
          note_key="section_note_system", note_zh="配置这套系统",
-         items=["users", "settings", "logs", "developer"]),
+         items=["users", "settings", "logs"]),
+    # 开发者工具不放主账号专属组：坐席默认简洁模式，完整模式里非主账号也要能点到。
+    # 页内仍是开发者密码闸。
     dict(label_key="section_support", label_zh="支持",
          note_key="section_note_support", note_zh="帮助与个性化",
-         items=["personal_settings", "help"]),
+         items=["personal_settings", "help", "developer"]),
 ]
 
 # ── 简洁模式 ────────────────────────────────────────────────────────────────
@@ -411,8 +413,10 @@ SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
                "reply_settings", "model_keys", "escalation"]
 # usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」
 # 必须在简洁模式可达；折叠区尺寸棘轮 ≤6，本项恰好用满——再加需先精简。
+# developer（2026-09-29）：壳内没有地址栏，用户版又曾把入口从侧栏和 Ctrl+K 拿掉，
+# 指定的人打不开。放进「更多」，所有角色点得到；页内密码闸不动。折叠区因此到 7。
 SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",
-               "personal_settings", "help"]
+               "personal_settings", "help", "developer"]
 
 # 真机矩阵成员（简洁模式上下文导航用：深链进矩阵页时侧栏就地渲染本组，保住
 # 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
@@ -420,8 +424,9 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
                    "whatsapp_rpa")
 
 # 客户形态（ui_visibility.flavor=client / 桌面包）不渲染的导航项：纯运维/开发面，
-# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封（/developer 本就
-# 有密码闸）——内部人员在客户机上直接敲地址仍可进。
+# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封。
+# 「开发者工具」刻意不在此列（2026-09-29）：桌面壳没有地址栏，藏了入口就没有人
+# 进得去。页内开发者密码闸仍在。
 # 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
 # bug_tickets（实施81）＝我方报障群值守的处置台，客户部署没有报障群值守语义。
 # 2026-09-06 L-4 A（D-L2 / D-L6，#197 #198 #212 #199 #211）扩容：
@@ -431,7 +436,7 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
 # - voice_eval  声音评测：只有消费端没有生产端。
 # 「学习队列 learner」刻意不在此列（D-L5 先止血不隐藏，入口本就在简洁模式「更多」）。
 # 三层形态里 partner（代理商版）与 internal 都看得见这些项——本表只对 client 生效。
-CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets",
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "bug_tickets",
                           "help", "strategies", "singing", "voice_eval")
 
 # 代理商版才显（D-L7）：白标 / 演示数据 / 授权激活是代理商 / OEM 的商业面，终端

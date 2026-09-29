@@ -57,9 +57,11 @@ def _partner_paths():
 # ── 清单本身（棘轮：七张单点名的页必须在表里） ──────────────────────────────
 
 def test_client_hidden_list_covers_l4_pages():
-    for cid in ("logs", "developer", "bug_tickets",
+    for cid in ("logs", "bug_tickets",
                 "help", "strategies", "singing", "voice_eval"):
         assert cid in CLIENT_HIDDEN_ITEM_IDS, f"{cid} 应对用户版隐藏（D-L2 / D-L6）"
+    # 2026-09-29：开发者工具对所有用户可见（壳内无地址栏）。密码闸仍在页内。
+    assert "developer" not in CLIENT_HIDDEN_ITEM_IDS
     # 学习队列按 D-L5 止血不隐藏；运营总览是老板读数面
     assert "learner" not in CLIENT_HIDDEN_ITEM_IDS
     assert "ops" not in CLIENT_HIDDEN_ITEM_IDS
@@ -97,6 +99,16 @@ def test_client_flavor_hides_both_lists_everywhere():
     labels = {g.get("label_key") for g in ctx["nav_groups"]}
     assert "section_support" in labels and "section_ai_kb" in labels
     assert "/personal-settings" in paths and "/personas" in paths
+
+
+def test_client_flavor_shows_developer_tools_in_simple_more():
+    """用户版默认简洁模式：侧栏「更多」和命令面板都能点到开发者工具。"""
+    ctx = get_nav_context(CLIENT)
+    simple = {it.get("key") for it in ctx["nav_simple_more"] if isinstance(it, dict)}
+    cmd = {it.get("key") for it in ctx["nav_cmd_items"] if isinstance(it, dict)}
+    assert "developer" in simple
+    assert "developer" in cmd
+    assert "/developer" in _paths(ctx)
 
 
 def test_client_flavor_hides_strategies_and_help_in_simple_lists_too():

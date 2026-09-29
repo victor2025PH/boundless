@@ -8,7 +8,8 @@
    策略效果 2026-08-18 降出侧栏进 CMD_EXTRA（空壳对照，与 /diff 同例）；
 3. 新组「用量与计费」＝用量与额度(/workspace/usage) + 会员中心（仍 master_only）
    ——membership 不得回流系统管理组；
-4. 用量入口必须在简洁模式可达（老板默认简洁模式；SIMPLE_MORE 棘轮 ≤6 用满）；
+4. 用量入口必须在简洁模式可达（老板默认简洁模式；SIMPLE_MORE 棘轮 ≤7，
+   第 7 项是开发者工具）；
 5. 每组必须带一句话定位（note_key/note_zh，zh+en 双语齐备），两套侧栏模板
    （base.html / _ws_sidebar.html）都渲染 title 悬浮——分类语义防再漂移的 UI 锚点；
 6. 改名双面一致：dashboard=今日概览 / monetization=客户营收（词条值级改名，

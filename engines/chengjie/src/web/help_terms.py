@@ -156,8 +156,8 @@ HELP_TERMS: dict = {
         "en": "Developer Tools",
         "desc": "API 密钥、底层参数、安全令牌、Bot 行为（含是否处理私聊）、回复逻辑、意图路由等高级配置（需密码）",
         "desc_en": "Advanced config — API keys, low-level params, security tokens, bot behavior (incl. private chats), reply logic, intent routing (password required)",
-        "usage": "输入开发者密码进入 → 「Bot 行为配置」中勾选「私聊消息」可允许私聊 → 保存",
-        "usage_en": "Enter the developer password → tick \"Private messages\" under Bot Behavior to allow DMs → save"
+        "usage": "侧栏「更多」点「开发者工具」（完整模式在「支持」里；也可按 Ctrl+K 搜「开发者」）→ 输入开发者密码 → 「内部功能显隐」勾选要显示的功能后刷新。人工操作台要退出智聊再打开一次。私聊开关在「Bot 行为配置」里勾选「私聊消息」并保存",
+        "usage_en": "In the sidebar open More → Developer Tools (under Support in full mode; or press Ctrl+K and search Developer) → enter the developer password → under Internal feature visibility tick what should show, then refresh. The manual console needs ChatX closed and opened once. For DMs, tick Private messages under Bot Behavior and save"
     },
     "nav_audit": {
         "zh": "操作记录",
