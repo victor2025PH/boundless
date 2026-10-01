@@ -160,7 +160,7 @@
   `install-service / uninstall-service / service-status` 三个子命令；日志 `<state>/logs/agent.log`（轮转 5 MB×3）。
 - **监督循环**（`service.supervise`）：未注册 → 每 30 s 重试；被吊销（401）→ 每 60 s 重建 Agent 重试（重注册后自动恢复）；异常 → 5 s 起指数退避到 300 s；`upgrade` 请求退出 → 返回码 3，交给计划任务 / systemd 拉起。
 - **upgrade 流程**：主控 `POST /nodes/{id}/tasks {kind: upgrade, payload: manifest}`（`admin.py upgrade --manifest <url|path> [--group G | --node ID...] --yes`）→ Agent 校验下载 → 写 `<state>/updates/swap-*.ps1|.sh`（等旧进程退出 → 备份 `.bak` → 覆盖 → `schtasks /Run`）→ ack `done {exit:true}` → 退出。
-  升级失败留在 `.bak`，人工 / 下一次 upgrade 回滚；不在 Agent 内做自动回滚（列入 P2）。
+  升级后换版脚本等新版写出 `last_heartbeat.json`（`at` 晚于换版时刻），超时（payload `health_timeout_sec`，默认 300，限 60–1800，0 = 关闭）就自动回滚：停任务、新 exe 另存 `.failed-<ver>`、`.bak` 拷回、若换版中挪走了旧状态目录则挪回、agent.json 丢失时从快照写回，再启动任务；过程记到状态目录上一级的 `fleet-upgrade.log`。
 - **发布物**（`fleet_agent/build_agent.py --base-url https://bd2026.cc/downloads/fleet/`）：`chatx-agent.exe`、`.sha256`、`manifest.json {name, version, file, url, sha256, size, os, built_at, installer}`、两份 ps1；
   `deploy/fleet/publish_agent.ps1` 上传到官网 `public/downloads/fleet/`；主控 `download.manifest_url` 读同一份 manifest。
 - **安全边界**：安装器不含任何主控管理凭据；注册码一次性；本机智聊 `auth_token` 优先从 `-ConfigPath` 读、`-AuthToken` 仅兜底；

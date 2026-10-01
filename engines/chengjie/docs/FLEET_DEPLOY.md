@@ -147,7 +147,7 @@ python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/m
 ```
 
 `upgrade` 只会下发给 `agent_version != manifest.version` 且在线的节点；Agent 校验 sha256 → 换文件 → 自动重启，几十秒后 `nodes` 里版本变新。
-回滚 = 用旧版 manifest（`chatx-agent-<旧版>.exe` 仍在 downloads 目录，手写一个 manifest.json 指向它）再下发一次 upgrade。
+新版 Agent 在 `health_timeout_sec`（默认 300 秒）内没发出心跳会自动回滚到 `.bak`（见 FLEET_CONTROL_CONTRACT）。手动回滚 = 用旧版 manifest（`chatx-agent-<旧版>.exe` 仍在 downloads 目录，手写一个 manifest.json 指向它）再下发一次 upgrade。
 
 ## 5. 安全与边界（勿破）
 
