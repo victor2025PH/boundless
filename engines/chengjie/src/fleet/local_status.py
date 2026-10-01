@@ -172,7 +172,10 @@ def probe_controller(url: str, *, timeout: float = PROBE_TIMEOUT_SEC, urlopen=No
 
 
 def _run_quick(cmd, timeout: float = TASK_QUERY_TIMEOUT_SEC) -> subprocess.CompletedProcess:
-    return subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+    from .textio import decode_console_bytes
+
+    p = subprocess.run(list(cmd), capture_output=True, timeout=timeout)
+    return subprocess.CompletedProcess(p.args, p.returncode, decode_console_bytes(p.stdout), decode_console_bytes(p.stderr))
 
 
 def query_task_status(*, timeout: float = TASK_QUERY_TIMEOUT_SEC) -> Dict[str, Any]:

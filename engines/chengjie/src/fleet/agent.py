@@ -994,6 +994,9 @@ def _parse_instance(spec: str) -> Tuple[str, str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from .textio import utf8_stdio
+
+    utf8_stdio()   # ssh 会话里默认 GBK；status / service-status 的中文统一按 UTF-8 输出
     held: List[Any] = []
     try:
         return _main(argv, held)

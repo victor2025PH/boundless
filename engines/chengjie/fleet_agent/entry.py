@@ -16,5 +16,5 @@ def _utf8_console() -> None:
 
 
 if __name__ == "__main__":
-    _utf8_console()
+    _utf8_console()   # main() 里也会再做一次（src.fleet.textio.utf8_stdio），源码态同样生效
     sys.exit(main())
