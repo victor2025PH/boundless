@@ -154,6 +154,8 @@ def build_context() -> dict:
             # v4.1（P1 活体 HUD 增列，机器人同享）：GPU 算力 / 机器识别色 / 现役职能
             "gpu_util": rec.get("u"), "accent": m.get("accent", "#8888AA"),
             "role_now": m.get("role_now", ""),
+            # 2026-08-20：HUD 机器名后缀 IP 尾段（「中枢 176」）——源=machines.json，不双写
+            "ip": m.get("ip", ""),
         })
     events = []
     fresh_bad = False   # 24h 内新起的严重告警才点亮小界红瞳——陈年 firing 常驻红眼=告警疲劳

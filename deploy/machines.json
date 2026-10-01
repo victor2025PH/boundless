@@ -6,9 +6,11 @@
     "命名法：id=功能拼音（跟职能走，本次 v2 全员改名）；ssh[0]=主别名；ssh 其余=职能/统一别名；",
     "ssh_deprecated=旧名过渡别名（2026-11-05 日落删除）。角色权威源=engines/avatarhub cluster_map.json，本表 role_now 是其摘要。",
     "resolution=该机实际屏幕（壁纸按此渲染）；accent=机器识别色（壁纸/终端/主题统一用）；watch_ports=桌面哨兵看护的本机算力端口。",
-    "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。"
+    "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。",
+    "chatx_seat=true 表示该机跑智聊桌面版坐席（127.0.0.1:18799 桌面后端 + %APPDATA%\\telegram-ai-desktop 日志）；deploy/desktop/monitor_seat_logs.py 据此取坐席名单与中文名（zh），改编制只改本字段（2026-09-18 增列，此前脚本硬编码 140 听写 → 改编记忆机后连报假离线）。",
+    "2026-09-22 实施102 五台算力重编（docs/实施102）：本表写的是目标编制——176 声音机（IndexTTS-2 + fish + ASR/SER，主语音与情绪）、104 出图机（ComfyUI）、198 视觉机（qwen3-vl 钉常驻）、140 记忆机（bge-m3 + STT 备份 + CosyVoice 粤语）。watch_ports 按目标写：机器侧步骤未做完前板上/坐席监控算力段会红，红字即待办。阶段 4 已于 2026-09-22 完成（117 生产迁 173）。2026-09-23 117 台账改为实际地址 192.168.0.165、称呼开发机。"
   ],
-  "version": "2026-08-08",
+  "version": "2026-09-22",
   "gateway": "192.168.0.1",
   "hub": {
     "id": "zhongshu",
@@ -21,14 +23,17 @@
       "legacy_ids": [
         "huansheng"
       ],
-      "zh": "中枢",
-      "zh_legacy": "幻声",
+      "zh": "声音机",
+      "zh_legacy": "感知机",
       "ssh": [
+        "ganzhi",
         "zhongshu",
         "hub176",
         "swap176",
         "interp176",
-        "gpu176"
+        "gpu176",
+        "shengyin176",
+        "voice176"
       ],
       "ssh_deprecated": [
         "huansheng",
@@ -40,8 +45,8 @@
       "user": "user",
       "key": "id_ed25519",
       "role": "hub",
-      "role_short": "Hub·换脸主力·同传·渲染",
-      "role_now": "集群大脑：Hub 中枢 :9000 + 换脸主引擎 :8000/:8003 + 实时同传 :7900 + 渲染链(fish/SBV2/ditto/musetalk) + 方言ASR + 智播控场",
+      "role_short": "语音克隆·情感·ASR/SER",
+      "role_now": "声音：IndexTTS-2 :7865（智聊全人设克隆主路，经 Hub :9000，情感通道 emo_text/emo_alpha）+ fish_speech :7855（ja/ko 等）+ aitr_asr :8765（whisper 转写 + emotion2vec 客户语音情绪，自 198 迁回）+ 人脸边车 :8767（CPU）+ AvatarHub 主控 :9000。撤走：qwen3:30b/qwen3-vl（Ollama 不再对外供 chat/识图）、ComfyUI :8188 → 104、musetalk :8090 泊车（实施102，2026-09-22）",
       "gpu": "RTX 5090 32G",
       "resolution": "1920x1080",
       "accent": "#E8B341",
@@ -70,34 +75,38 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/zhongshu-wallpaper.png",
       "services": [
         "avatar_hub:9000",
+        "indextts2:7865",
+        "fish_tts:7855",
+        "aitr_asr:8765",
+        "face_identity:8767",
         "faceswap:8000",
         "faceswap2:8003",
         "live_interpreter:7900",
-        "fish_tts:7855",
         "sbv2_tts:7861",
         "ditto:8096",
         "musetalk_lipsync:8090",
         "vcam:7870",
         "funasr_stt:7864",
         "dolphin_stt:7867",
-        "live_director:7910",
-        "ollama_embed:11434"
+        "live_director:7910"
       ],
       "watch_ports": [
         9000,
-        8000,
-        7900
+        7865,
+        7855,
+        8765
       ],
-      "note": "开发/打包/中枢机；2026-08-02 DUAL-5090 起换脸主引擎收编本机；重启 Hub 必先 hub_restart.py --check"
+      "note": "2026-09-22 实施102：语音与情绪主力机。watch 盯 hub 9000 / IndexTTS 7865 / fish 7855 / ASR+SER 8765（8765 在阶段 2 迁回前板上为红）；不再盯 8188（出图迁 104）。faceswap/同传/lipsync 按泊车态，watch 不盯 8000/7900/8090。显存常驻目标 16G（IndexTTS 10 + ASR/SER 3.5 + fish 2.5），余量给并发合成"
     },
     {
       "id": "yunsheng",
       "legacy_ids": [
         "huanying"
       ],
-      "zh": "韵声",
-      "zh_legacy": "幻影",
+      "zh": "语言机",
+      "zh_legacy": "韵声",
       "ssh": [
+        "yuyan",
         "yunsheng",
         "tts173",
         "llm173",
@@ -114,8 +123,9 @@
       "user": "admin",
       "key": "cluster_controller",
       "role": "compute",
-      "role_short": "质量轨TTS·LLM容灾",
-      "role_now": "质量轨声音：IndexTTS-2 :7865(主力克隆) + CosyVoice3 :7852(情感) + LLM 容灾 qwen14b :11434",
+      "chatx_seat": false,
+      "role_short": "LAN唯一LLM·智聊生产",
+      "role_now": "语言 + 主机：vLLM chatx :8001（Qwen3-27B AWQ，ai.primary=local 主链；口语化改写、语音情绪补判同源）+ 智聊生产实例 :18799 + 四平台边车 + okline 桥 + 生产/租户/视觉三条 VPS 隧道与看门狗（实施102 阶段 4 于 2026-09-22 08:16 自 117 迁入）。ollama :11434 / IndexTTS :7865 已停。坐席桌面包已撤（端口与实例冲突，本机用生产工作台）",
       "gpu": "RTX 5090 32G",
       "resolution": "3840x2160",
       "accent": "#C43BF0",
@@ -131,14 +141,12 @@
       "shortcut": "",
       "wallpaper": "brand-assets/05_backgrounds/machines/yunsheng-wallpaper.png",
       "services": [
-        "index_tts:7865",
-        "emotion_tts:7852",
-        "ollama_llm:11434"
+        "vllm_chatx:8001",
+        "zhiliao:18799"
       ],
       "watch_ports": [
-        7865,
-        7852,
-        11434
+        8001,
+        18799
       ],
       "note": "SSH 用 admin@（Administrator 会被 22 端口重置）；显存互斥轮换见 cluster_map _note；全集群唯一 4K 屏"
     },
@@ -147,9 +155,10 @@
       "legacy_ids": [
         "tongyi"
       ],
-      "zh": "声备",
-      "zh_legacy": "通译",
+      "zh": "开发机",
+      "zh_legacy": "主机",
       "ssh": [
+        "zhuji",
         "shengbei",
         "tts117",
         "seat117",
@@ -160,14 +169,14 @@
         "hub117",
         "pc117"
       ],
-      "ip": "192.168.0.117",
+      "ip": "192.168.0.165",
       "mac": "B4:2E:99:8E:8C:6A",
       "hostname_hint": "MS-DEFYSOMWQYBZ",
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "dev",
-      "role_short": "qwen3·TTS热备·坐席",
-      "role_now": "声音热备 + 坐席：qwen3_tts :7858(现役) + CosyVoice3 :7852(热备,勿与qwen3同压) + 智聊坐席(chengjie)开发",
+      "role_short": "开发/打包（dev-only）",
+      "role_now": "开发与打包，不参与运行（智聊生产已于 2026-09-22 迁至 173）",
       "gpu": "RTX 3060 12G",
       "resolution": "1920x1080",
       "accent": "#F0A010",
@@ -192,26 +201,25 @@
         "D:\\\\开发\\\\智聊"
       ],
       "wallpaper": "brand-assets/05_backgrounds/machines/shengbei-wallpaper.png",
-      "services": [
-        "qwen3_tts:7858",
-        "emotion_tts_standby:7852"
-      ],
-      "watch_ports": [
-        7858
-      ],
-      "note": "⚠️ 热备 cosy 与 qwen3 同驻 12G 有共驻 OOM 实锤(2026-08-03)；watch 只盯现役 7858，热备由中枢实况板看护"
+      "services": [],
+      "watch_ports": [],
+      "note": "2026-09-23 台账 IP 改为网卡实际地址 192.168.0.165（原 .117 已漂移），称呼由主机改为开发机。阶段 4 后不再 watch 18799（实例已在 173）。"
     },
     {
       "id": "lianbei",
       "legacy_ids": [
         "huanyan-node"
       ],
-      "zh": "脸备",
-      "zh_legacy": "幻颜节点",
+      "zh": "出图机",
+      "zh_legacy": "声音机",
       "ssh": [
+        "shengyin",
         "lianbei",
         "face104",
-        "gpu104"
+        "gpu104",
+        "voice104",
+        "chutu",
+        "comfy104"
       ],
       "ssh_deprecated": [
         "huanyan-node",
@@ -223,8 +231,9 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "compute",
-      "role_short": "换脸热备",
-      "role_now": "换脸热备：faceswap :8000 保温（2026-08-02 主引擎收编中枢，本机局域网回退位）",
+      "chatx_seat": true,
+      "role_short": "出图 ComfyUI",
+      "role_now": "出图：ComfyUI FLUX + PuLID 锁脸 :8188（自 176 迁入；模型 8-29 已在盘上、实测 20s/10s）。IndexTTS-2 :7865 停服留盘（语音主路已回 176）；faceswap 保持 Disabled（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1080",
       "accent": "#B62BF5",
@@ -242,21 +251,22 @@
       "shortcut": "C:\\\\开发\\\\幻颜节点",
       "wallpaper": "brand-assets/05_backgrounds/machines/lianbei-wallpaper.png",
       "services": [
-        "faceswap_standby:8000"
+        "comfyui:8188"
       ],
       "watch_ports": [
-        8000
+        8188
       ],
-      "note": "算力节点：改码只在中枢机，本机 git pull 后重启服务；回切主引擎=PATCH /api/config key=faceswap 指回本机"
+      "note": "2026-09-22 实施102：出图机。watch 盯 ComfyUI 8188（阶段 3 拉起前板上为红）；IndexTTS-2 权重留盘、服务与开机任务 IndexTTS104 禁用（不再盯 7865）。ssh 别名 shengyin/voice104 为历史名保留可用，新别名 chutu/comfy104"
     },
     {
       "id": "tingxie",
       "legacy_ids": [
         "tongchuan-node"
       ],
-      "zh": "听写",
-      "zh_legacy": "通传节点",
+      "zh": "记忆机",
+      "zh_legacy": "听写",
       "ssh": [
+        "jiyi",
         "tingxie",
         "stt140",
         "gpu140"
@@ -271,8 +281,8 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "compute",
-      "role_short": "STT专机·whisper+nemo",
-      "role_now": "STT 听写专机：whisper :7854 + nemo 流式 :7857（同传字幕/识别主路由）",
+      "role_short": "嵌入·STT备份·粤语",
+      "role_now": "记忆：bge-m3 嵌入 :11434（智聊记忆/检索主路，钉常驻）+ whisper/NLLB STT :7854（ASR 备份位）+ CosyVoice3 :7852 复活（唯一会念粤语的引擎，只服务 yue 克隆，不做普通话备胎）；卸载 qwen3-vl（识图归 198）；nemo :7857 已停（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1200",
       "accent": "#F07800",
@@ -290,26 +300,30 @@
       "shortcut": "D:\\\\开发\\\\通传节点",
       "wallpaper": "brand-assets/05_backgrounds/machines/tingxie-wallpaper.png",
       "services": [
+        "ollama_embed:11434",
         "stt:7854",
-        "nemo_stt:7857"
+        "emotion_tts:7852"
       ],
       "watch_ports": [
         7854,
-        7857
+        11434,
+        7852
       ],
-      "note": "算力节点；16:10 屏(1920x1200)，壁纸按原生比例渲染；显存最紧，新增服务先改 cluster_map 账本"
+      "note": "算力节点；16:10 屏(1920x1200)，壁纸按原生比例渲染；显存最紧（16G 内存），新增服务先改 cluster_map 账本。2026-09-22 实施102：watch 加 7852（CosyVoice 粤语，阶段 3 拉起前板上为红）；目标常驻 8.5G = bge 0.7 + STT 4.5 + Cosy 3.3"
     },
     {
       "id": "kouxing",
       "legacy_ids": [
         "zhituo"
       ],
-      "zh": "口型",
-      "zh_legacy": "智拓",
+      "zh": "视觉机",
+      "zh_legacy": "口型",
       "ssh": [
+        "shijue",
         "kouxing",
         "lipsync198",
-        "gpu198"
+        "gpu198",
+        "asr198"
       ],
       "ssh_deprecated": [
         "zhituo"
@@ -320,8 +334,9 @@
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "dev",
-      "role_short": "口型热备·获客开发",
-      "role_now": "口型热备 + 获客开发：musetalk lipsync :8090（中枢溢出位）+ 智拓(huoke)开发",
+      "chatx_seat": true,
+      "role_short": "识图",
+      "role_now": "视觉：qwen3-vl:8b 识图 :11434（智聊识图单点，keep_alive -1 钉常驻，num_ctx 8192）+ Lite Hub :9000 控制面。aitr_asr :8765 迁回 176（听觉与语音情绪同机）；lipsync 热备退役（实施102，2026-09-22）",
       "gpu": "RTX 4070 12G",
       "resolution": "1920x1080",
       "accent": "#1E6BF0",
@@ -332,20 +347,19 @@
         "reachx"
       ],
       "primary_brand": "reachx",
-      "dev_paths": [
-        "engines/huoke",
-        "products/zhituo"
-      ],
+      "dev_paths": [],
       "workdir": "D:\\\\boundless",
       "shortcut": "D:\\\\开发\\\\智拓",
       "wallpaper": "brand-assets/05_backgrounds/machines/kouxing-wallpaper.png",
       "services": [
-        "lipsync_standby:8090"
+        "ollama:11434",
+        "avatar_hub_lite:9000"
       ],
       "watch_ports": [
-        8090
+        11434,
+        9000
       ],
-      "note": "lipsync 池次位（SVC_LIPSYNC=中枢主+本机溢出）"
+      "note": "lipsync 池次位（SVC_LIPSYNC=中枢主+本机溢出）。2026-09-22 实施102：watch 改盯 11434 + Lite Hub 9000，不再盯 8765（ASR/SER 归 176）。已知：104 → 198:11434 网络不通，需在 198 放行 104"
     }
   ]
 }

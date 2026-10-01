@@ -151,17 +151,27 @@ def ping_ok(ip: str) -> bool:
 
 
 def fetch_self_status(m: dict) -> dict | None:
+    """一条 ssh 收一台哨兵自报。
+
+    2026-10-01 实锤：Win32-OpenSSH（176 上 9.5/10.0 皆中）远端命令跑完、收到 eof 之后，
+    只要 **stdout 是 python 的管道/文件句柄** 就不退出（#1334 同族），subprocess 9s 超时 →
+    六机 VRAM 全 -1，板上只剩中枢有显存。`ssh -n` / stdin=DEVNULL 都救不了；唯一实测能过的
+    是让 cmd 自己做重定向（`< NUL > file`），0.3s 收工。故这里不再用 capture_output。"""
     try:
         if m["ip"] == HUB_IP:
             return json.loads(LOCAL_STATUS.read_text(encoding="utf-8", errors="replace"))
         alias = str(m["ssh"][0])
-        r = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", alias,
-             r"cmd /c type C:\Users\Public\boundless-hud\status.json"],
-            capture_output=True, text=True, timeout=9, encoding="utf-8", errors="replace",
-        )
-        if r.returncode == 0 and r.stdout.strip().startswith("{"):
-            return json.loads(r.stdout.strip())
+        out = LOCAL_STATUS.parent / f"peer_{m['id']}.json"
+        cmd = (f'ssh -o BatchMode=yes -o ConnectTimeout=5 {alias} '
+               r'"cmd /c type C:\Users\Public\boundless-hud\status.json" '
+               f'< NUL > "{out}" 2> NUL')
+        # shell=True 让 cmd 原样解析重定向；list 形式会被 list2cmdline 二次加引号而语法报错
+        r = subprocess.run(cmd, shell=True, timeout=9, stdin=subprocess.DEVNULL,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode == 0 and out.exists():
+            txt = out.read_text(encoding="utf-8", errors="replace").strip()
+            if txt.startswith("{"):
+                return json.loads(txt)
     except Exception:
         pass
     return None
@@ -743,6 +753,8 @@ def draw_mode_plate(base: Image.Image, mode: dict, s: float) -> None:
         return
     mac = tuple(mode.get("accent") or NEON_VIOLET)
     col = (232, 179, 65) if switching else mac
+    if not switching and mode.get("posture_err"):
+        col = (222, 60, 70)          # 姿态失守：大字牌整体转红（P0 电视台化 2026-08-18）
     x, y = int(28 * s), H - int(120 * s)
     w, h = int(302 * s), int(90 * s)
     frac = 1.0
@@ -762,6 +774,11 @@ def draw_mode_plate(base: Image.Image, mode: dict, s: float) -> None:
     if switching:
         big = f"切换中 {mode.get('progress') or ''}"
         sub = str(mode.get("prog_note") or "")[:26]
+    elif mode.get("posture_err"):
+        # P0 修复动线上板（2026-08-18 电视台化方案）：失守告警旁必须印着修复咒语——
+        # 壁纸是 PNG 点不动，把「怎么修」写在「坏了」旁边（语音归位=两段式确认，安全）
+        big = zh
+        sub = f"失守 {mode['posture_err']} 项 · 说「小界小界，一键归位」"[:26]
     elif mode.get("warm_pending"):
         big = zh
         sub = f"暖机中 {mode['warm_pending']} 步 {str(mode.get('warm_note') or '')}"[:26]
@@ -879,11 +896,23 @@ def render_board(ctx: dict, base_path: Path, out_path: Path, self_id: str = "") 
         rb_txt += f" · 姿态观察 {mode['posture_warn']} 项"
         rb_c = (232, 179, 65)
     leds.append((int(x0 + 32 * s), int(rb_y + rb_h / 2), int(4 * s), rb_c))
-    d.text((x0 + int(44 * s), rb_y + rb_h / 2), rb_txt, font=f_rb, fill=(*rb_c, 250), anchor="lm")
+    # P0 绶带排版让位（2026-08-18 电视台化方案）：右侧「切换于」与长文案（姿态失守红条）
+    # 此前无让位规则会互叠（08-18 18:33 board.png 实锤）——失守红条独占整行（右段让位），
+    # 其余情形左文案按剩余宽度截断（省略号），两段永不相交。
     since = str(mode.get("since_str") or "")
-    if since and not mode.get("switching"):
-        d.text((x0 + pw - int(26 * s), rb_y + rb_h / 2), f"切换于 {since[5:16]}",
-               font=font(F_MED, int(12.5 * s)), fill=(150, 156, 176, 210), anchor="rm")
+    f_since = font(F_MED, int(12.5 * s))
+    show_since = bool(since) and not mode.get("switching") and not mode.get("posture_err")
+    since_txt = f"切换于 {since[5:16]}" if show_since else ""
+    right_w = (d.textlength(since_txt, font=f_since) + int(14 * s)) if show_since else 0
+    avail = max(int(60 * s), (pw - int(44 * s) - int(26 * s)) - right_w)
+    if d.textlength(rb_txt, font=f_rb) > avail:
+        while len(rb_txt) > 2 and d.textlength(rb_txt + "…", font=f_rb) > avail:
+            rb_txt = rb_txt[:-1]
+        rb_txt += "…"
+    d.text((x0 + int(44 * s), rb_y + rb_h / 2), rb_txt, font=f_rb, fill=(*rb_c, 250), anchor="lm")
+    if show_since:
+        d.text((x0 + pw - int(26 * s), rb_y + rb_h / 2), since_txt,
+               font=f_since, fill=(150, 156, 176, 210), anchor="rm")
     # v6 左下角模式大字牌（独立层；失败不拖累整板）
     try:
         draw_mode_plate(base, mode, s)

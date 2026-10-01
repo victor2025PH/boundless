@@ -30,27 +30,27 @@
       "skus": [
         {
           "sku_id": "voicex-starter",
-          "name": "体验",
+          "name": "入门",
           "unit": "month",
-          "price": "18",
+          "price": "19",
           "currency": "USD",
-          "note": "1 音色/1 万字符"
+          "note": "克隆+配音+变声 · 2 并发 · 产出带标识"
         },
         {
           "sku_id": "voicex-std",
-          "name": "标准",
+          "name": "专业",
           "unit": "month",
-          "price": "78",
+          "price": "49",
           "currency": "USD",
-          "note": "5 音色/10 万字符/多语种"
+          "note": "去水印商用交付 · 8 并发 · 唱歌翻唱/成曲"
         },
         {
           "sku_id": "voicex-pro",
-          "name": "专业",
+          "name": "工作室",
           "unit": "month",
-          "price": "198",
+          "price": "99",
           "currency": "USD",
-          "note": "20 音色/50 万字符/变声 API"
+          "note": "站点授权（多机） · 专属对接"
         },
         {
           "sku_id": "voicex-usage",
@@ -128,7 +128,7 @@
           "sku_id": "livex-avatar-buy",
           "name": "形象买断",
           "unit": "one-time",
-          "price": "798",
+          "price": "998",
           "currency": "USD",
           "note": ""
         },
@@ -286,11 +286,11 @@
       "category": "studio",
       "visibility": "public",
       "sku_id": "voicex-starter",
-      "name": "体验",
+      "name": "入门",
       "unit": "month",
-      "price": "18",
+      "price": "19",
       "currency": "USD",
-      "note": "1 音色/1 万字符"
+      "note": "克隆+配音+变声 · 2 并发 · 产出带标识"
     },
     {
       "product": "huansheng",
@@ -298,11 +298,11 @@
       "category": "studio",
       "visibility": "public",
       "sku_id": "voicex-std",
-      "name": "标准",
+      "name": "专业",
       "unit": "month",
-      "price": "78",
+      "price": "49",
       "currency": "USD",
-      "note": "5 音色/10 万字符/多语种"
+      "note": "去水印商用交付 · 8 并发 · 唱歌翻唱/成曲"
     },
     {
       "product": "huansheng",
@@ -310,11 +310,11 @@
       "category": "studio",
       "visibility": "public",
       "sku_id": "voicex-pro",
-      "name": "专业",
+      "name": "工作室",
       "unit": "month",
-      "price": "198",
+      "price": "99",
       "currency": "USD",
-      "note": "20 音色/50 万字符/变声 API"
+      "note": "站点授权（多机） · 专属对接"
     },
     {
       "product": "huansheng",
@@ -396,7 +396,7 @@
       "sku_id": "livex-avatar-buy",
       "name": "形象买断",
       "unit": "one-time",
-      "price": "798",
+      "price": "998",
       "currency": "USD",
       "note": ""
     },

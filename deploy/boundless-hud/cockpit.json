@@ -16,15 +16,16 @@
     "tv=true 恰一块（173 的电视=全场最大屏,客户演示锚点;甩桌面支持 dir=tv 一步直达上大屏。",
     "  若电视实际挂在内侧位,把 tv/zh/role 三个字段挪到 yunsheng-2 即可,id/order 不动）。",
     "C2 环幕世界阶段会给每屏补 pose（物理位姿,卷尺实测）——本版刻意不放猜测值。",
+    "运行时偏航由 hud.html ckCamYaw 按 side 推导（left=-0.28 / right=+0.28 / front=0 / tv=0 英雄机位），不把猜测数写入本文件。",
     "同机多屏（173/117/176 双联）用 URL ?screen= 区分;各屏要独立手机手势时配 &gsid=<屏id>。",
     "params=该屏 URL 追加参数（v2026-08-13e,驾驶舱外壳 cockpit_kiosk.ps1 用它拼完整 URL——",
     "  开哪些能力只改这里,不再人肉拼 URL;白屏/漏 voice=1/安全上下文三类工单的结构性根治）。"
   ],
-  "version": "2026-08-13e",
+  "version": "2026-08-18a",
   "layout": "U",
   "screens": [
     {"id": "yunsheng-1", "machine": "yunsheng", "zh": "左侧·演示大屏(电视)", "order": 1, "side": "left", "role": "bridge", "tv": true,
-     "params": "view=holo"},
+     "params": "view=holo&autoplay=1"},
     {"id": "yunsheng-2", "machine": "yunsheng", "zh": "左侧·韵声二", "order": 2, "side": "left",  "role": "events",
      "params": "gesture=1&gsrc=phone&view=events"},
     {"id": "kouxing-1",  "machine": "kouxing",  "zh": "正前·口型位", "order": 3, "side": "front", "role": "desks",

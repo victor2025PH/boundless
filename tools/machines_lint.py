@@ -154,12 +154,18 @@ def check_c_rendered(data: dict) -> None:
         return
     got = parse_ssh_hosts(RENDERED.read_text(encoding="utf-8"))
     expect: dict[str, tuple[str, str]] = {}
+    primary: set[str] = set()
     for m in data["machines"]:
         for a in all_aliases(m):
             expect[a] = (m["ip"], m["user"])
+        primary |= set(m.get("ssh", []))
     missing = set(expect) - set(got)
-    if missing:
-        red(f"C: 生成产物缺别名 {sorted(missing)}（台账改了没重跑 render）")
+    # 2026-10-01：render_ssh_config.ps1 从来只产 m.ssh（ssh_deprecated 是日落过渡名，故意不下发），
+    # 缺正式别名才是红灯；缺过渡别名只提醒——否则六机对账永远红、真漂移被淹没。
+    if missing & primary:
+        red(f"C: 生成产物缺别名 {sorted(missing & primary)}（台账改了没重跑 render）")
+    if missing - primary:
+        warn(f"C: 过渡别名未下发（预期，2026-11-05 日落）: {sorted(missing - primary)}")
     for a, (ip, user) in expect.items():
         if a in got:
             if got[a].get("hostname") != ip:
@@ -218,7 +224,9 @@ def check_e_remote(data: dict) -> None:
     local_hash = block_hash(cfg.read_text(encoding="utf-8-sig", errors="replace")) if cfg.exists() else ""
     ps = (
         "$c=Join-Path $env:USERPROFILE '.ssh\\config'; "
-        "if (Test-Path $c) { Get-Content $c -Raw -Encoding UTF8 } else { '' }"
+        # 2026-10-01：改传 base64 原始字节——远端 PowerShell 控制台按 GBK 回显，块首行的「—」
+        # 一经转码哈希必不等（六机块内容明明相同却全红）。本地按 utf-8-sig 解码后再算哈希。
+        "if (Test-Path $c) { [Convert]::ToBase64String([IO.File]::ReadAllBytes($c)) } else { '' }"
     )
     import base64
 
@@ -231,31 +239,54 @@ def check_e_remote(data: dict) -> None:
         if m["ip"] == my_ip:
             continue
         alias = m["ssh"][0]
+        # 2026-10-01：Win32-OpenSSH 一次性命令在 stdout 为 python 管道时远端 eof 后不退出（#1334 同族），
+        # capture_output 必 30s 超时→整轮红。改让 cmd 自己重定向到文件（实测 0.3s 收工）。
+        import tempfile
+        tmp = Path(tempfile.gettempdir()) / f"ml_e_{m['id']}.txt"
+        cmd = (f'ssh -o BatchMode=yes -o ConnectTimeout=8 {alias} '
+               f'"powershell -NoProfile -EncodedCommand {b64}" < NUL > "{tmp}" 2> NUL')
         try:
-            r = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", alias,
-                 f"powershell -NoProfile -EncodedCommand {b64}"],
-                capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
-            )
+            r = subprocess.run(cmd, shell=True, timeout=30, stdin=subprocess.DEVNULL)
+            stdout = tmp.read_text(encoding="utf-8-sig", errors="replace") if tmp.exists() else ""
         except Exception as e:  # noqa: BLE001
             red(f"E: {m['id']}({alias}) SSH 失败: {e}")
             continue
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         if r.returncode != 0:
-            red(f"E: {m['id']}({alias}) SSH 退出码 {r.returncode}: {(r.stderr or '').strip()[:120]}")
+            red(f"E: {m['id']}({alias}) SSH 退出码 {r.returncode}")
             continue
-        h = block_hash(r.stdout or "")
+        try:
+            stdout = base64.b64decode("".join(stdout.split())).decode("utf-8-sig", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass  # 旧版远端/异常回显：按原文算，红灯照出
+        h = block_hash(stdout)
         if h != local_hash:
             red(f"E: {m['id']}({alias}) 标记块哈希 {h} != 本地 {local_hash}（网格下发漏机/漂移）")
 
 
 def check_f_wallpapers(data: dict, strict: bool) -> None:
+    """[2026-10-01] 由 mtime 比对改为内容指纹：壁纸 PNG 元数据里的 boundless_roster_fp（生成时
+    由画面相关字段 sha1）== 当前台账算出的指纹才算一致。台账改 note/watch_port 不再假红；
+    IP/别名/角色/颜色改了必红。老壁纸（无指纹）退回 mtime 规则。见 tools/roster_fp.py。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from roster_fp import roster_fingerprint, wallpaper_fingerprint
+    want = roster_fingerprint(data)
     ts = MACHINES.stat().st_mtime
     for m in data["machines"]:
         wp = ROOT / str(m.get("wallpaper", "")).replace("/", "\\")
         if not wp.exists():
             (red if strict else warn)(f"F: {m['id']} 壁纸缺失 {wp.name}（跑 make_machine_wallpapers.py）")
-        elif wp.stat().st_mtime < ts:
-            (red if strict else warn)(f"F: {m['id']} 壁纸旧于台账（重跑 make_machine_wallpapers.py）")
+            continue
+        got = wallpaper_fingerprint(wp)
+        if got is None:
+            if wp.stat().st_mtime < ts:
+                (red if strict else warn)(f"F: {m['id']} 壁纸无指纹且旧于台账（重跑 make_machine_wallpapers.py）")
+        elif got != want:
+            (red if strict else warn)(f"F: {m['id']} 壁纸指纹 {got} != 台账 {want}（画面字段已变，重跑 make_machine_wallpapers.py）")
 
 
 def check_g_mirror() -> None:

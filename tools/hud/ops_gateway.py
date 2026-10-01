@@ -11,11 +11,12 @@ Hub 既有守护通道（HTTP API），自己不持有 ssh 凭据、不直接杀
   wol          → UDP 魔术包（stdlib socket；machines.json mac 台账 2026-08-08 实采增列）
 被误触/被攻破的最坏后果 = 提交一个会被服务端拒绝的请求。
 
-四重护栏（§14.2 全案照落）：
+四重护栏（§14.2 全案照落；2026-08-21 用户拍板拆除刷脸叠加层）：
   1. 服务端判决：每动词前置断言 + fire 时**实时**再查 /api/ops/hub_busy（拿不到=拒，fail-closed）；
   2. 两段式武装点火：arm（8s 无点火自动撤防）→ fire（在场信号确认）→ 可逆动作 10s 撤销窗；
-  3. 授权：P2 首批=在场信号（手势/语音/键盘=人在指挥台前；遥控不许点火）；
-     刷脸授权是 AUTH_MODE="face" 插槽（决策点 5/7 拍板后接 insightface，本批保守降级）；
+     HUD 模式条点击=前端 arm+fire 连发直通（用户拍板「点击即切」；护栏 1/4、忙态、熔断、审计照常）；
+  3. 授权：在场信号（手势/语音/键盘/鼠标=人在指挥台前；遥控不许点火）；
+     刷脸叠加层已整体拆除（含隔空受控；face_auth.py 留作独立工具，恢复登记表也不再生效）；
   4. 应急总闸：logs/hud_ops_disable.flag 存在 → 武装一律拒绝（doctor 可见）。
 外加：审计先行（logs/ops_audit.jsonl 写失败即拒执行——不留「做了没记下」）；
       熔断（10min 点火 >6 次 → 熔断 10min，防手势风暴/误识别雪崩）。
@@ -61,8 +62,8 @@ UNDO_TTL_S = 10          # 可逆动作点火后的撤销窗
 FUSE_WINDOW_S = 600      # 熔断统计窗
 FUSE_MAX_FIRES = 6       # 窗内点火上限，超了熔断
 FUSE_COOL_S = 600        # 熔断时长
-AUTH_MODE = "presence"   # 基线授权=在场信号（手势/语音/键盘）；刷脸是**叠加层**：
-                         # face_auth 登记表非空即自动生效（P2b 已接，登记即开，零配置）
+AUTH_MODE = "presence"   # 授权=在场信号（手势/语音/键盘/鼠标）。刷脸叠加层已于 2026-08-21
+                         # 用户拍板整体拆除（恢复登记表也不再生效；face_auth.py 只是独立工具）
 
 # 换脸路由的两个合法落点（route_switch 白名单——不接受任意 URL）
 FACESWAP_TARGETS = {
@@ -214,12 +215,12 @@ VERBS = {
     "wol":          {"tier": "T1", "reversible": False},
     "svc_restart":  {"tier": "T2", "reversible": False},
     "route_switch": {"tier": "T2", "reversible": True},
-    # P1 2026-08-13：算力模式切换（chatx⇄face⇄code）。两段式+刷脸之外还有第三重：执行不带 force，
+    # P1 2026-08-13：算力模式切换（chatx⇄face⇄code）。武装点火之外还有第三重：执行不带 force，
     # 执行器自己的闸门（hub_busy/同传/出片队列/冷却）在受理时再判一遍——双重把关不越权。
     # reversible=False：切换是分钟级重布局，10s 撤销窗语义不成立（要回去就再切一次）。
     "mode_switch":  {"tier": "T2", "reversible": False},
     # P0 联动 2026-08-14：姿态一键归位=按当前模式 force 重放（Hub /api/cluster/repair，
-    # 复用执行器全部护栏/事件流/回滚）。force 只越闸门不越不变量，故仍 T2 两段式+刷脸。
+    # 复用执行器全部护栏/事件流/回滚）。force 只越闸门不越不变量，故仍 T2。
     "posture_repair": {"tier": "T2", "reversible": False},
 }
 
@@ -337,7 +338,7 @@ def _execute(verb: str, ectx: dict) -> tuple[bool, str]:
         try:
             d = _http("POST", "/api/cluster/mode",
                       body={"target": ectx["target"],
-                            "reason": "隔空指挥（ops_gateway 两段式+刷脸点火）"}, timeout=30)
+                            "reason": "隔空指挥（ops_gateway 武装点火）"}, timeout=30)
         except urllib.error.HTTPError as e:
             try:
                 det = json.loads(e.read().decode("utf-8", "replace")).get("detail") or {}
@@ -354,7 +355,7 @@ def _execute(verb: str, ectx: dict) -> tuple[bool, str]:
     if verb == "posture_repair":
         try:
             d = _http("POST", "/api/cluster/repair",
-                      body={"reason": "隔空指挥（ops_gateway 姿态归位·两段式+刷脸点火）"},
+                      body={"reason": "隔空指挥（ops_gateway 姿态归位·武装点火）"},
                       timeout=30)
         except urllib.error.HTTPError as e:
             try:
@@ -422,7 +423,7 @@ def _expire_check(aid: str) -> None:
              impact="超时未点火，自动撤防", expires=0.0, undo_until=0.0)
 
 
-def fire(aid: str, src: str = "", frame_b64: str = "") -> dict:
+def fire(aid: str, src: str = "") -> dict:
     global _armed, _undo, _fuse_until
     with _lock:
         cur = _armed
@@ -430,25 +431,12 @@ def fire(aid: str, src: str = "", frame_b64: str = "") -> dict:
         return {"ok": False, "error": "没有武装中的动作（先武装再点火）"}
     if time.time() > cur["expires"]:
         return {"ok": False, "error": "武装已超时撤防，请重新武装"}
-    # 授权层 1：在场信号（手势/语音/键盘=人在指挥台前；遥控永远不许点火）
-    if src not in ("gesture", "voice", "key"):
+    # 授权：在场信号（手势/语音/键盘/鼠标=人在指挥台前；遥控永远不许点火）。
+    # 刷脸叠加层已拆除（2026-08-21 用户拍板「点击即切」——mouse 随之入列在场信号）。
+    if src not in ("gesture", "voice", "key", "mouse"):
         _stat("ops_deny", "auth_src", src)
-        return {"ok": False, "error": f"点火只认在场信号（手势/语音/键盘），「{src}」不行"}
-    # 授权层 2（P2b 刷脸·叠加不是替换）：登记表非空即生效——「系统认识主人」。
-    # 判据同源 face_auth（buffalo_l + 0.40 = gallery_audit 同款）；帧内存验证即弃。
+        return {"ok": False, "error": f"点火只认在场信号（手势/语音/键盘/鼠标），「{src}」不行"}
     fired_by = cur["by"]
-    import face_auth  # noqa: PLC0415  惰性：未登记时零开销
-    if face_auth.enabled():
-        okf, who, cos, why = face_auth.verify(frame_b64)
-        if not okf:
-            _audit("deny", id=cur["id"], verb=cur["verb"], src=src,
-                   detail=f"face: {why[:80]} cos={cos:.2f}")
-            _stat("ops_deny", "auth_face", src)
-            _publish("denied", id=cur["id"], verb=cur["verb"], desc=cur["desc"],
-                     impact=f"刷脸未通过：{why[:60]}", ok=False, detail=why[:120],
-                     expires=0.0, undo_until=0.0)
-            return {"ok": False, "error": f"刷脸未通过：{why[:80]}"}
-        fired_by = f"{who}(刷脸 {cos:.2f})"      # 审计记名：谁点的火从此有名有据
     now = time.time()
     fires = [t for t in _fires if now - t < FUSE_WINDOW_S]
     if len(fires) >= FUSE_MAX_FIRES:
@@ -542,12 +530,8 @@ def state() -> dict:
         armed = dict(_armed) if _armed else None
         if armed:
             armed.pop("ectx", None)
-    try:
-        import face_auth  # noqa: PLC0415
-        auth = "presence+face" if face_auth.enabled() else "presence"
-        operators = face_auth.status()["operators"]
-    except Exception:
-        auth, operators = AUTH_MODE, []
+    # 刷脸层已拆除（2026-08-21）：恒纯在场信号；auth_mode/operators 键形保留给 doctor/drill
+    auth, operators = AUTH_MODE, []
     return {"armed": armed, "fuse_until": round(_fuse_until) if _fuse_until > time.time() else 0,
             "flag": DISABLE_FLAG.exists(), "auth_mode": auth, "operators": operators,
             "last_seq": OPS_LAST["seq"],
@@ -632,8 +616,8 @@ def ctrl_state() -> dict:
             "queued": queued}
 
 
-def ctrl_arm(machine: str, by: str = "", src: str = "", frame_b64: str = "") -> dict:
-    """武装受控会话：白名单+已部署+在场信号+推流硬闸+**强制刷脸**（比 ops 更严：登记表空即拒）。"""
+def ctrl_arm(machine: str, by: str = "", src: str = "") -> dict:
+    """武装受控会话：白名单+已部署+在场信号+推流硬闸（刷脸层 2026-08-21 用户拍板拆除）。"""
     global _ctrl
     mid = str(machine or "").strip().lower()
     if CTRL_DISABLE_FLAG.exists() or DISABLE_FLAG.exists():
@@ -655,17 +639,8 @@ def ctrl_arm(machine: str, by: str = "", src: str = "", frame_b64: str = "") -> 
     if verdict != "safe":
         _stat("ctrl_deny", "busy", src)
         return {"ok": False, "error": f"直播/推流中：隔空受控整层冻结（推流硬闸 · {verdict}）"}
-    import face_auth  # noqa: PLC0415
-    if not face_auth.enabled():
-        _stat("ctrl_deny", "noface", src)
-        return {"ok": False, "error": "隔空受控必须刷脸授权，但未登记操作员（先 face_auth.py enroll 主人正脸）"}
-    okf, who, cos, why = face_auth.verify(frame_b64)
-    if not okf:
-        _audit("ctrl_deny", machine=mid, src=src, detail=f"face:{why[:80]} cos={cos:.2f}")
-        _stat("ctrl_deny", "face", src)
-        return {"ok": False, "error": f"刷脸未通过：{why[:80]}"}
     token = _secrets.token_hex(16)
-    fired_by = f"{who}(刷脸 {cos:.2f})"
+    fired_by = (by or "hud")[:40]
     if not _audit("ctrl_arm", machine=mid, by=fired_by, src=src, verdict=verdict):
         return {"ok": False, "error": "审计写入失败——按纪律拒绝武装"}
     with _lock:
@@ -675,7 +650,7 @@ def ctrl_arm(machine: str, by: str = "", src: str = "", frame_b64: str = "") -> 
     _stat("ctrl_arm", mid, src)
     if _deps["notify"]:
         _deps["notify"]()
-    return {"ok": True, "token": token, "machine": mid, "by": who,
+    return {"ok": True, "token": token, "machine": mid, "by": fired_by,
             "until": round(time.time() + CTRL_TTL_S), "ttl": CTRL_TTL_S}
 
 
@@ -685,7 +660,7 @@ def ctrl_action(token: str, kind: str, payload: dict, src: str = "") -> dict:
     with _lock:
         cur = _ctrl
     if not cur or token != cur["token"]:
-        return {"ok": False, "error": "无有效受控会话（先刷脸武装）"}
+        return {"ok": False, "error": "无有效受控会话（先武装受控会话）"}
     if time.time() > cur["until"]:
         _ctrl_end("timeout")
         return {"ok": False, "error": "受控会话已超时，请重新武装"}
@@ -781,7 +756,7 @@ def _ctrl_inject_active(kind: str, payload: dict, src: str) -> dict:
     with _lock:
         cur = _ctrl
     if not cur:
-        return {"ok": False, "error": "没有受控会话（先刷脸武装某台机再打字）"}
+        return {"ok": False, "error": "没有受控会话（先武装某台机再打字）"}
     return ctrl_action(cur["token"], kind, payload, src=src)
 
 

@@ -102,6 +102,25 @@ def drill_tour():
     ck(True, "演练后复位第 0 幕")
 
 
+def drill_focus():
+    """导演位聚焦（P1 电视台化 2026-08-18）：T0 呈现层——聚焦/野机拒/取消/幕切自动清。"""
+    sect("导演位聚焦路由")
+    _, r1 = post("/api/tour", {"focus": "tingxie"})
+    ck(r1.get("ok") and (r1.get("tour") or {}).get("focus", {}).get("m") == "tingxie",
+       "聚焦听写受理")
+    st2, r2 = post("/api/tour", {"focus": "nosuchbox"})
+    ck(st2 == 400 and not r2.get("ok") and "台账" in str(r2.get("error", "")), "野机聚焦人话拒")
+    _, g1 = get("/api/tour")
+    ck(((g1.get("tour") or {}).get("focus") or {}).get("m") == "tingxie", "GET 回读聚焦在位")
+    post("/api/tour", {"step": 0})          # 幕切（含同幕重置）必须一次性清场
+    _, g2 = get("/api/tour")
+    ck((g2.get("tour") or {}).get("focus") is None, "幕切自动清聚焦")
+    _, r3 = post("/api/tour", {"focus": "yunsheng"})
+    _, r4 = post("/api/tour", {"focus": ""})
+    ck(r3.get("ok") and r4.get("ok") and (r4.get("tour") or {}).get("focus") is None,
+       "聚焦→取消聚焦干净")
+
+
 def drill_preflight():
     sect("开演预检")
     st, d = get("/api/preflight")
@@ -214,15 +233,12 @@ def drill_gestlead():
 
 
 def drill_face():
-    sect("刷脸授权态")
+    sect("点火授权态（刷脸层 2026-08-21 用户拍板拆除——恒纯在场信号）")
     _, d = get("/api/ops/state")
     mode = d.get("auth_mode", "")
     ops = d.get("operators") or []
-    ck(mode in ("presence", "presence+face"), f"授权模式可读（{mode}）")
-    if ops:
-        ck(mode == "presence+face", f"已登记操作员 {ops} → 刷脸层开")
-    else:
-        ck(mode == "presence", "未登记 → 纯在场信号（保守降级）")
+    ck(mode == "presence", f"授权模式=纯在场信号（{mode}）")
+    ck(not ops, f"无操作员登记概念（operators={ops}）")
 
 
 def drill_roles():
@@ -278,7 +294,7 @@ def drill_ctrl():
        "agent 错密钥拉→不授予空队列")
     # 已部署/在线态（口型已铺则应 alive）
     dep, alive = cs.get("deployed") or [], cs.get("alive") or []
-    ck(True, f"已部署 {dep or '无'}；在线 agent {alive or '无'}（happy-path 刷脸落点走真机）")
+    ck(True, f"已部署 {dep or '无'}；在线 agent {alive or '无'}（happy-path 武装落点走真机）")
 
 
 def drill_ops_live():
@@ -317,7 +333,7 @@ def main() -> int:
         print("hud_server :7913 不在线，跳过（schtasks /run /tn BoundlessHudServer）")
         return 1
     t0 = time.time()
-    for fn in (drill_tour, drill_preflight, drill_screens, drill_ops_guards,
+    for fn in (drill_tour, drill_focus, drill_preflight, drill_screens, drill_ops_guards,
                drill_cockpit, drill_gestlead, drill_face, drill_roles, drill_voice, drill_desktop, drill_ctrl):
         print(f"== {fn.__doc__ or fn.__name__} ==" if False else f"== {fn.__name__} ==")
         try:

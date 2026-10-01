@@ -48,6 +48,14 @@ h1{font-size:22px;font-weight:900;letter-spacing:1px;
 #navrow button{border:1px solid rgba(34,211,238,.45);border-radius:14px;padding:16px 0;
   background:rgba(34,211,238,.10);color:var(--neon-cyan);font-size:18px;font-weight:900;cursor:pointer}
 #navrow button:active{transform:scale(.96)}
+/* P1 导演位（2026-08-18 电视台化）：点机器名=飞览聚焦该机（欢迎幕/电视台档全场同步） */
+#dirrow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.dm{border:1px solid rgba(34,211,238,.4);border-radius:12px;background:rgba(34,211,238,.08);
+  color:var(--neon-cyan);font-size:14.5px;font-weight:700;padding:13px 0;cursor:pointer}
+.dm:active{transform:scale(.95)}
+.dm.cur{background:rgba(34,211,238,.26);box-shadow:0 0 12px rgba(34,211,238,.35)}
+.dm.clr{grid-column:span 3;color:var(--amber);border-color:rgba(232,179,65,.5);
+  background:rgba(232,179,65,.08)}
 #vrow{display:flex;gap:8px}
 #visitor{flex:1;border:1px solid rgba(139,92,246,.4);border-radius:12px;background:rgba(5,6,15,.6);
   color:var(--txt);font-size:15px;padding:11px 12px;outline:none}
@@ -91,6 +99,9 @@ h1{font-size:22px;font-weight:900;letter-spacing:1px;
   <button id="next">下一幕 ›</button>
 </div>
 
+<div class="sec">导演位 · 跳到某机（飞览聚焦，全场同步；90s 后自动恢复巡览）</div>
+<div id="dirrow"></div>
+
 <div class="sec">开演前预检</div>
 <div id="pf"><div class="pfi"><span class="nt">还没跑过 · 点下方按钮</span></div></div>
 <button id="pfbtn">跑一遍预检</button>
@@ -115,7 +126,7 @@ const SCENES=[
   {n:2,t:"手势演示",s:"掌心唤醒 · 提取 · 放大 · 挥扫"},
   {n:3,t:"语音指挥",s:"「小界」唤醒 · 体检 · 问答"},
   {n:4,t:"手机入列",s:"访客扫码 · 卫星升空"},
-  {n:5,t:"隔空点火",s:"武装-刷脸-点火（P2 上线）",hold:1},
+  {n:5,t:"隔空点火",s:"武装-点火（P2 上线；刷脸层 2026-08-21 拆除）",hold:1},
   {n:6,t:"谢幕",s:"全场调暗 · 品牌呼吸"},
 ];
 let cur=-1,pinNeed=false;
@@ -146,8 +157,11 @@ async function pull(){
     if(d.tour){
       cur=d.tour.step;
       $("nowtxt").textContent=`第${d.tour.step}幕 · ${d.tour.name}`+
-        (d.tour.visitor?` ｜ 署名「${d.tour.visitor}」`:"");
+        (d.tour.visitor?` ｜ 署名「${d.tour.visitor}」`:"")+
+        (d.tour.focus&&d.tour.focus.m?` ｜ 聚焦中`:"");
       renderScenes();
+      const df=(d.tour.focus&&d.tour.focus.m)||"";
+      if(df!==dirCur){ dirCur=df; renderDir(); }
     }
     $("conn").classList.add("on");
   }catch(_){ $("conn").classList.remove("on"); $("nowtxt").textContent="失联 · 重试中"; }
@@ -168,6 +182,28 @@ async function post(step,extra){
 $("scenes").addEventListener("click",e=>{
   const b=e.target.closest(".sc"); if(b) post(+b.dataset.n);
 });
+/* P1 导演位（2026-08-18）：飞览聚焦某机（T0 呈现层；欢迎幕/电视台档生效，幕切自动清） */
+let dirCur="";
+function renderDir(){
+  $("dirrow").innerHTML=FLEET.map(([id,zh])=>
+    `<button class="dm${id===dirCur?" cur":""}" data-m="${id}">${zh}</button>`).join("")
+    +`<button class="dm clr" data-m="">恢复自动巡览（取消聚焦）</button>`;
+}
+async function postFocus(m){
+  const body={focus:m};
+  if(pinNeed) body.pin=localStorage.hudTourPin=$("pin").value||localStorage.hudTourPin||"";
+  try{
+    const r=await fetch("/api/tour",{method:"POST",body:JSON.stringify(body)});
+    if(r.status===401){ toast("PIN 不对"); $("pinrow").classList.add("on"); return; }
+    const d=await r.json();
+    if(d.ok){ dirCur=m||""; renderDir();
+      toast(m?("已聚焦 "+((FLEET.find(f=>f[0]===m)||[])[1]||m)):"已恢复自动巡览"); }
+    else toast("失败："+(d.error||"未知"));
+  }catch(_){ toast("网络失败，再点一次"); }
+}
+$("dirrow").addEventListener("click",e=>{
+  const b=e.target.closest(".dm"); if(b) postFocus(b.dataset.m);
+});
 $("prev").onclick=()=>post("prev");
 $("next").onclick=()=>post("next");
 $("vsave").onclick=()=>{ post(cur<0?0:cur,{visitor:$("visitor").value}); toast("署名已保存"); };
@@ -184,7 +220,7 @@ $("pfbtn").onclick=async()=>{
   $("pfbtn").textContent="再跑一遍预检";
 };
 if(localStorage.hudTourPin) $("pin").value=localStorage.hudTourPin;
-renderScenes(); pull(); setInterval(pull,2500);
+renderScenes(); renderDir(); pull(); setInterval(pull,2500);
 </script>
 </body>
 </html>

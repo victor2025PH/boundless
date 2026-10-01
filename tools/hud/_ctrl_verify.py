@@ -40,7 +40,7 @@ if not og._ctrl_secret("kouxing"):
     r = og.ctrl_arm("kouxing", src="gesture")
     ck("白名单未部署agent拒", not r["ok"] and "未部署" in r["error"])
 
-# 为独立验证 noagent 之后的各闸（auth_src/推流/刷脸），临时假装已部署（monkeypatch 密钥）
+# 为独立验证 noagent 之后的各闸（auth_src/推流），临时假装已部署（monkeypatch 密钥）
 _real_secret = og._ctrl_secret
 og._ctrl_secret = lambda mid: "testsecret" if mid == "kouxing" else ""
 
@@ -57,14 +57,7 @@ r = og.ctrl_arm("kouxing", src="gesture")
 ck("受控总闸开→拒", not r["ok"] and "总闸" in r["error"])
 og.CTRL_DISABLE_FLAG.unlink()
 
-# 刷脸 fail-closed：操作员已登记 + 有密钥 + 无帧 → 拒（happy-path 需真脸，此处证「无脸必拒」）
-import face_auth  # noqa: E402
-if face_auth.enabled():
-    r = og.ctrl_arm("kouxing", src="gesture", frame_b64="")
-    ck("刷脸层开+无帧→拒(fail-closed)", not r["ok"] and "刷脸" in r["error"])
-else:
-    print("  --  刷脸层未开（无操作员），跳过")
-og._ctrl_secret = _real_secret                         # 还原
+og._ctrl_secret = _real_secret          # 还原（刷脸 fail-closed 案随刷脸层拆除删除 2026-08-21）
 
 # ctrl_action 无会话 → 拒
 r = og.ctrl_action("badtoken", "click", {"nx": 0.5, "ny": 0.5}, src="gesture")
@@ -135,16 +128,14 @@ ck("key=enter=按下+抬起(非 unicode)", len(kbd) == 2 and not (kbd[0][1] & ca
 ck("未知动作返回 False", ca.dispatch({"kind": "nope"}) is False)
 ck("坐标钳制 nx=2→1.0 不炸", ca.dispatch({"kind": "move", "nx": 2.0, "ny": -1.0}) is True)
 
-# ---- C. 服务端接合 drill：session→action→agent pull（face 打桩，明示为演练）----
-# 证「刷脸通过后，动作确实进队列、且只投给持正确密钥的该机 agent」——把 happy-path 里
-# 唯一无法自证的刷脸环节 mock 掉，其余全真跑。
+# ---- C. 服务端接合 drill：session→action→agent pull（明示为演练）----
+# 证「武装成功后，动作确实进队列、且只投给持正确密钥的该机 agent」——全真跑
+# （刷脸层 2026-08-21 用户拍板拆除，happy-path 不再需要 face 打桩）。
 og._ctrl_secret = lambda mid: "drillsecret" if mid == "kouxing" else ""
-face_auth.enabled = lambda: True
-face_auth.verify = lambda f: (True, "drill", 0.99, "")
 og._ctrl = None
 og._ctrl_fires = []
-r = og.ctrl_arm("kouxing", src="gesture", frame_b64="mockframe")
-ck("drill 刷脸通过→拿到 token", r["ok"] and len(r.get("token", "")) >= 16)
+r = og.ctrl_arm("kouxing", src="gesture")
+ck("drill 武装成功→拿到 token", r["ok"] and len(r.get("token", "")) >= 16)
 tok = r.get("token", "")
 r2 = og.ctrl_action(tok, "click", {"nx": 0.42, "ny": 0.66}, src="gesture")
 ck("drill 会话内 click 受理", r2["ok"])
@@ -164,14 +155,14 @@ og.ctrl_disarm(tok, src="drill")
 rp3 = og.ctrl_pull("kouxing", "drillsecret")
 ck("drill 撤防后→不授予", not rp3["granted"])
 
-# ---- D. P2b 语音听写路由（voice→ctrl；face 仍打桩为 drill，_tts 打桩免联网）----
+# ---- D. P2b 语音听写路由（voice→ctrl；_tts 打桩免联网）----
 import voice_gateway as vg  # noqa: E402
 vg._tts = lambda s: ""      # 免联网 fish
 vg.configure(ctrl_dictate=og.ctrl_dictate, ctrl_key=og.ctrl_key_active,
              ctrl_active=og.ctrl_active_machine)
 og._ctrl = None
 og._ctrl_fires = []
-r = og.ctrl_arm("kouxing", src="gesture", frame_b64="mock")
+r = og.ctrl_arm("kouxing", src="gesture")
 ck("P2b 会话就绪", r["ok"])
 ck("未武装外的开关：已武装→可开听写", vg.set_dictate(True).get("ok"))
 og.ctrl_pull("kouxing", "drillsecret")            # 清队列

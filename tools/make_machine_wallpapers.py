@@ -276,6 +276,13 @@ def compose(m: dict, fleet: list[dict], version: str, showcase: bool) -> Image.I
         # 现役职能行
         f_role = font(F_MED, int(24 * s))
         role = m.get("role_now", "")
+        role_max = W - int(120 * s)
+        clipped = False
+        while role and d.textlength(role + ("…" if clipped else ""), font=f_role) > role_max:
+            role = role[:-1]
+            clipped = True
+        if clipped:
+            role += "…"
         rw = d.textlength(role, font=f_role)
         d.text(((W - rw) / 2, y + int(52 * s)), role, font=f_role, fill=(195, 200, 214, 230))
 
@@ -385,6 +392,14 @@ def main() -> None:
     only = sys.argv[1] if len(sys.argv) > 1 else None
     OUT.mkdir(parents=True, exist_ok=True)
     STATES_OUT.mkdir(parents=True, exist_ok=True)
+    # [2026-10-01] 把「画到图上的台账字段」指纹写进 PNG 元数据，machines_lint F 据此判一致，
+    # 不再按 mtime（台账加个 note 就六张全红的假阳性）。见 tools/roster_fp.py。
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from roster_fp import PNG_KEY_FP, PNG_KEY_VER, roster_fingerprint
+    from PIL import PngImagePlugin
+    meta = PngImagePlugin.PngInfo()
+    meta.add_text(PNG_KEY_FP, roster_fingerprint(data))
+    meta.add_text(PNG_KEY_VER, str(version))
     for m in fleet:
         if only and only not in m["id"]:
             continue
@@ -392,16 +407,16 @@ def main() -> None:
         s = H0 / 1080.0
         ops = compose(m, fleet, version, showcase=False)
         p1 = OUT / f"{m['id']}-wallpaper.png"
-        ops.save(p1, "PNG", optimize=True)
+        ops.save(p1, "PNG", optimize=True, pnginfo=meta)
         print(f"OK {p1.name} {ops.size}")
         show = compose(m, fleet, version, showcase=True)
         p2 = OUT / f"{m['id']}-showcase.png"
-        show.save(p2, "PNG", optimize=True)
+        show.save(p2, "PNG", optimize=True, pnginfo=meta)
         print(f"OK {p2.name}")
         for st in STATE_SPEC:
             img = make_state(ops, st, s)
             p3 = STATES_OUT / f"{m['id']}-{st}.png"
-            img.save(p3, "PNG", optimize=True)
+            img.save(p3, "PNG", optimize=True, pnginfo=meta)
         print(f"OK states x{len(STATE_SPEC)} for {m['id']}")
     print(f"done -> {OUT}")
 
