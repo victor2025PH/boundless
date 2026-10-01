@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.104",
+    "date": "2026-10-01",
+    "title": {
+      "zh": "内测用户全功能开放：群成员提取等五项出厂即开",
+      "en": "Full feature set for beta users: group extraction and four more on by default"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "内测用户全功能开放：群成员提取、人工操作台、团队协作、AI 与转接设置、驾驶舱这五项不用再去开发者工具逐个勾，装上这版就有。以前在开发者工具里勾过又消失的，这版会自动打开一次。",
+        "群成员提取怎么用：收件箱右栏切到「工具箱」，点「群成员提取」卡上的「打开管理台」。① 勾选用哪些在线的 Telegram 号拉，选目标群和每号每日上限，点「发起提取」；② 在「提取任务」看进度；③ 在「成员库」按群查看、搜名字、导出 CSV。只读提取，不会主动私聊任何人。",
+        "升级后不想看某一项，仍可在开发者工具「内部功能显隐」取消勾选，之后不会再被打开。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Full feature set for beta users: Group member extraction, Manual console, Team collaboration, AI & hand-off settings and Cockpit are on out of the box — no more ticking them one by one in Developer Tools. If you ticked one before and it vanished, this version turns it on once for you.",
+        "How to use Group member extraction: in the inbox right rail open Toolbox and click \"Open console\" on the Group member extraction card. (1) Pick the online Telegram accounts to pull with, choose the target group and the daily cap per account, click Start; (2) watch progress under Extraction jobs; (3) browse by group, search and Export CSV under Member DB. Read-only — it never messages anyone.",
+        "Don't want one of them? Untick it under Developer Tools → Internal feature visibility; it stays off afterwards.",
+        "Your data is kept."
+      ]
+    }
+  },
+  {
     "version": "1.0.103",
     "date": "2026-09-29",
     "title": {
