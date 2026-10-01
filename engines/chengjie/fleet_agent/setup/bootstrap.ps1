@@ -15,6 +15,22 @@ function Native([string]$exe, [string[]]$a) {
   try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
+# stdout only. The agent logs to stderr (e.g. "machine_id=... source=os_guid" right
+# after a migration); merged into the JSON it broke ConvertFrom-Json, the status
+# read as 'none' and an enrolled node sent a redundant pending request (issue g4).
+function NativeOut([string]$exe, [string[]]$a) {
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $o = & $exe @a 2>$null | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
+  finally { $ErrorActionPreference = $old }
+}
+function Stop-StrayAgent([string]$exe) {
+  # Any "run" process of this exe started outside the scheduled task (issue g3).
+  try {
+    Get-CimInstance Win32_Process -Filter "Name='chatx-agent.exe'" -ErrorAction Stop |
+      Where-Object { $_.ExecutablePath -eq $exe -and ([string]$_.CommandLine) -match '\srun(\s|$)' } |
+      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  } catch { Say "could not list agent processes: $_" }
+}
 
 function Test-Reparse([string]$Path) {
   # Missing is not a reparse point. Any other failure is treated as one.
@@ -137,7 +153,7 @@ if ($lockFailed) { exit 3 }
 $target = Join-Path $InstallDir "chatx-agent.exe"
 
 $keyFile = Join-Path $StateDir "room.key"
-$stRaw = Native $target @('--state-dir', $StateDir, 'status')
+$stRaw = NativeOut $target @('--state-dir', $StateDir, 'status')
 $enrollment = 'none'
 try { $enrollment = [string](($stRaw | ConvertFrom-Json).enrollment) } catch { $enrollment = 'none' }
 
@@ -147,7 +163,7 @@ if ($enrollment -eq 'enrolled') {
 } else {
   $enrollArgs = @('--state-dir', $StateDir, 'enroll', '--controller', $Controller, '--detect')
   if (Test-Path -LiteralPath $keyFile) { $enrollArgs += @('--room-key-file', $keyFile) }
-  $out = Native $target $enrollArgs
+  $out = NativeOut $target $enrollArgs
   if ($NativeExit -ne 0) {
     Say "enroll failed; installing the service so it can retry"
   } else {
@@ -159,6 +175,7 @@ if ($enrollment -eq 'enrolled') {
   }
 }
 
+Stop-StrayAgent $target
 $svc = Native $target @('--state-dir', $StateDir, 'install-service')
 if ($NativeExit -ne 0) { Say "install-service failed"; exit 1 }
 Say "service installed (scheduled task ChatX Fleet Agent)"

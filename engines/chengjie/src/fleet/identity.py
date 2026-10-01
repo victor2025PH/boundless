@@ -440,11 +440,38 @@ def state_dir_is_locked(path: Path) -> bool:
     return _posix_dir_locked(path)
 
 
-def _rename_legacy_fleet(path: Path) -> Path:
-    """Rename ``fleet`` to ``fleet.legacy-<id>``. ``os.rename`` does not follow a junction."""
-    legacy = path.with_name(f"{path.name}.legacy-{uuid.uuid4().hex}")
-    os.rename(path, legacy)
-    return legacy
+RENAME_RETRIES = 5
+RENAME_RETRY_SEC = 0.5
+
+
+class LegacyRenameError(StateDirLockError):
+    """The unlocked state directory could not be moved aside (Windows handle still open)."""
+
+
+def _rename_legacy_fleet(path: Path, *, retries: int = RENAME_RETRIES,
+                         sleep=None) -> Path:
+    """Rename ``fleet`` to ``fleet.legacy-<id>``. ``os.rename`` does not follow a junction.
+
+    On Windows a handle still open inside the directory (a log file, a swap
+    script) makes the rename fail with WinError 5. Retry briefly, then raise
+    ``StateDirLockError`` so callers keep the old directory untouched.
+    """
+    import time as _time
+
+    pause = sleep or _time.sleep
+    last: Optional[OSError] = None
+    for attempt in range(max(1, int(retries))):
+        legacy = path.with_name(f"{path.name}.legacy-{uuid.uuid4().hex}")
+        try:
+            os.rename(path, legacy)
+            return legacy
+        except FileNotFoundError:
+            raise
+        except OSError as e:
+            last = e
+            if attempt + 1 < retries:
+                pause(RENAME_RETRY_SEC)
+    raise LegacyRenameError(f"could not move the old state directory aside: {last}")
 
 
 def lock_state_dir(path: Path) -> None:
@@ -593,6 +620,10 @@ def node_machine_id(state_dir: Optional[Path] = None) -> str:
         lock_state_dir(sd)
         cache.write_text(mid, encoding="utf-8")
         assign_owner_admins(cache)
+    except LegacyRenameError:
+        # Only the cache write is skipped (same as before the retry wrapper);
+        # the save() that follows reports the lock failure properly.
+        logger.warning("[fleet] machine_id not cached: %s", sd, exc_info=True)
     except StateDirLockError:
         raise
     except Exception:

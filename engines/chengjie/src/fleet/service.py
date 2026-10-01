@@ -109,6 +109,12 @@ def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess:
 def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
     cmd = agent_command(state_dir) + ["run", "--service"]
     if os.name == "nt":
+        # End a running instance first: /Create /F on a running task leaves the old
+        # process detached from the new definition, so /End no longer reaches it.
+        try:
+            run(["schtasks", "/End", "/TN", task_name])
+        except Exception:
+            pass
         steps = [build_schtasks_create(cmd, task_name=task_name), build_schtasks_run(task_name=task_name)]
         outs = []
         for s in steps:
@@ -157,6 +163,104 @@ def service_status(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str
         return {"installed": installed, "kind": "schtasks", "task_name": task_name, "state": state}
     p = run(["systemctl", "is-active", SYSTEMD_UNIT])
     return {"installed": systemd_unit_path().exists(), "kind": "systemd", "state": (p.stdout or "").strip()}
+
+
+# ── 单实例（FLEET_ISSUES g3：计划任务外多出来的 run 进程） ─────────────────────
+SINGLE_INSTANCE_WAIT_SEC = 30
+_ERROR_ALREADY_EXISTS = 183
+_ERROR_ACCESS_DENIED = 5
+_WAIT_OBJECT_0, _WAIT_ABANDONED, _WAIT_TIMEOUT = 0x0, 0x80, 0x102
+
+
+def single_instance_name(state_dir: Path) -> str:
+    """Per state dir, so a test or second agent with its own --state-dir is not blocked."""
+    import hashlib
+
+    key = os.path.normcase(os.path.abspath(str(state_dir)))
+    return "ChatXFleetAgent-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+class SingleInstance:
+    """Held for the life of a ``run`` process. Released on exit by the OS."""
+
+    def __init__(self, kind: str, handle: object, path: str = "") -> None:
+        self.kind = kind
+        self.handle = handle
+        self.path = path
+
+    def release(self) -> None:
+        h, self.handle = self.handle, None
+        if h is None:
+            return
+        try:
+            if self.kind == "mutex":
+                import ctypes
+
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                k32.ReleaseMutex(h)
+                k32.CloseHandle(h)
+            else:
+                import fcntl
+
+                fcntl.flock(h.fileno(), fcntl.LOCK_UN)
+                h.close()
+        except Exception:
+            pass
+
+
+def _try_mutex(name: str) -> Optional[SingleInstance]:
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.CreateMutexW.restype = wintypes.HANDLE
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    h = k32.CreateMutexW(None, False, "Global\\" + name)
+    if not h:
+        # ERROR_ACCESS_DENIED: a SYSTEM agent owns it and we are a normal user.
+        return None
+    rc = k32.WaitForSingleObject(h, 0)
+    if rc in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
+        return SingleInstance("mutex", h)
+    k32.CloseHandle(h)
+    return None
+
+
+def _try_flock(state_dir: Path, name: str) -> Optional[SingleInstance]:
+    import fcntl
+
+    # Next to the state dir, never inside it: a handle inside ``fleet`` would
+    # block its rename during migration on Windows, and we keep one rule.
+    parent = Path(state_dir).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    path = parent / f".{name}.lock"
+    f = open(path, "a+")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return SingleInstance("flock", f, str(path))
+
+
+def acquire_single_instance(state_dir: Path, *, wait_sec: float = SINGLE_INSTANCE_WAIT_SEC,
+                            sleep: Callable[[float], None] = time.sleep,
+                            clock: Callable[[], float] = time.monotonic) -> Optional[SingleInstance]:
+    """One ``run`` per state dir. Waits up to ``wait_sec`` (an upgrade swap may
+    still be letting the old process exit), then returns None."""
+    name = single_instance_name(state_dir)
+    deadline = clock() + max(0.0, float(wait_sec))
+    while True:
+        got = _try_mutex(name) if os.name == "nt" else _try_flock(state_dir, name)
+        if got is not None:
+            return got
+        if clock() >= deadline:
+            return None
+        sleep(1.0)
 
 
 def _pending_request(cfg: object) -> str:
@@ -223,5 +327,5 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 __all__ = [
     "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command", "build_schtasks_create", "build_schtasks_run",
     "build_schtasks_delete", "build_schtasks_query", "build_systemd_unit", "install_service", "uninstall_service",
-    "service_status", "supervise",
+    "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
 ]

@@ -271,9 +271,12 @@ def test_detect_chatx_and_avatar_health_only(st, tmp_path, monkeypatch):
     skipped.write_text("domain: fleet_control\nweb_admin:\n  port: 1\n", encoding="utf-8")
 
     def probe(url):
-        return url.startswith("http://127.0.0.1:9000/")
+        return url.startswith("http://127.0.0.1:9100/")
 
-    found = detect_instances(probe=probe, config_paths=[cfg_path, skipped], search=False, avatar_url="http://127.0.0.1:9000")
+    # 9000 (the old AvatarHub default) is a live-stream port and is never probed;
+    # a non-live avatar_url still gets the health-only instance.
+    found = detect_instances(probe=probe, config_paths=[cfg_path, skipped], search=False,
+                             avatar_url="http://127.0.0.1:9100", live_stream=False)
     assert [i["name"] for i in found] == ["chatx", "avatarhub"]
     assert found[0]["base_url"] == "http://127.0.0.1:18799" and found[0]["config_path"].endswith("config.local.yaml")
     assert "super-secret" not in json.dumps(sanitize_instances(found))
@@ -411,7 +414,7 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
     assert "keep existing enrollment" not in ps1
-    assert "instances are cleared" in ps1 and "restart_cmd must be set again" in ps1
+    assert "config_path is re-detected" in ps1 and "restart_cmd must be set again" in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
     assert "ReparsePoint" in ps1 and "parent owner is not trusted" in ps1
@@ -714,21 +717,24 @@ def test_migrate_legacy_keeps_only_identity_fields(tmp_path):
     assert out["pending_request_id"] == "req1"
     assert out["pairing_code"] == "AB2345"
     assert out["controller_url"] == "https://ctl.test/fleet"
-    assert out["instances"] == []
+    # issue g2: the embedded instance token survives; restart_cmd / config_path do not.
+    assert out["instances"] == [{
+        "name": "chatx", "base_url": "http://127.0.0.1:1", "auth_token": "tok",
+        "config_path": "", "domain": "", "restart_cmd": "", "role": "",
+    }]
     saved = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
     blob = json.dumps(saved)
-    assert saved["instances"] == []
-    assert "restart_cmd" not in blob
+    assert saved["instances"] == out["instances"]
+    assert "restart_cmd\": \"calc" not in blob and "calc" not in blob
     assert "evil.example" not in blob
     assert "reenroll_not_before" not in saved
-    assert "auth_token" not in blob
-    assert "config_path" not in blob
+    assert "C:/secret.yaml" not in blob
     assert fleet.stat().st_mode & 0o777 == 0o700
     legacies = list(fleet.parent.glob("fleet.legacy-*"))
     assert len(legacies) == 1
     old_blob = (legacies[0] / "agent.json").read_text(encoding="utf-8")
     assert "restart_cmd" in old_blob
-    assert not any("restart_cmd" in p.read_text(encoding="utf-8") for p in fleet.rglob("*.json"))
+    assert not any("calc" in p.read_text(encoding="utf-8") for p in fleet.rglob("*.json"))
 
 
 def test_migrated_heartbeat_keeps_only_an_int_in_range():
