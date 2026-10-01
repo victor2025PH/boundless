@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import urllib.error
@@ -17,6 +18,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger("fleet.detect")
 
 CHATX_PORTS = (18799, 18797)
 # Live-streaming ports. Detect never opens a connection to them and never adds
@@ -80,8 +83,8 @@ def is_live_stream_host(state_dir: Optional[Path] = None) -> bool:
 
             sd = default_state_dir()
             dirs += [sd.parent, sd]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[detect] default_state_dir failed: %s", e)
     for d in dirs:
         try:
             if (d / LIVE_STREAM_FLAG).is_file():

@@ -287,8 +287,8 @@ class AgentConfig:
             os.replace(tmp, self.path)
             try:
                 assign_owner_admins(self.path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[agent] assign_owner_admins failed: %s", e)
             return self.path.is_file()
         except Exception:
             logger.error("[agent] could not restore agent.json after a failed migration", exc_info=True)
@@ -1209,8 +1209,8 @@ def _note_migration_failure(state_dir: Path, err: BaseException) -> None:
         line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} agent {AGENT_VERSION} state dir lock failed: {str(err)[:300]}\n"
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[agent] could not write lock-failure log: %s", e)
 
 
 def _attach_file_log(path: Path) -> None:

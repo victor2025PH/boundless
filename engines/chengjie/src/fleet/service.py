@@ -113,8 +113,8 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
         # process detached from the new definition, so /End no longer reaches it.
         try:
             run(["schtasks", "/End", "/TN", task_name])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[service] schtasks /End failed: %s", e)
         steps = [build_schtasks_create(cmd, task_name=task_name), build_schtasks_run(task_name=task_name)]
         outs = []
         for s in steps:
@@ -204,8 +204,8 @@ class SingleInstance:
 
                 fcntl.flock(h.fileno(), fcntl.LOCK_UN)
                 h.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[service] lock release failed: %s", e)
 
 
 def _try_mutex(name: str) -> Optional[SingleInstance]:
