@@ -1177,6 +1177,8 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
         "db_path": str(fc.get("db_path") or ""),
         "offline_after_sec": _int(fc.get("offline_after_sec")) or DEFAULT_OFFLINE_AFTER_SEC,
         "heartbeat_sec": _int(fc.get("heartbeat_sec")) or 30,
+        # 节点离线超过 N 分钟推送告警（缺省 10；0 = 不推送，控制台仍按 10 分钟标记）
+        "offline_alert_min": fc.get("offline_alert_min"),
         "enroll_code_ttl_min": _int(fc.get("enroll_code_ttl_min")) or ENROLL_CODE_TTL_MIN,
         "pending_ttl_sec": _int(fc.get("pending_ttl_sec")) or PENDING_TTL_SEC,
         "public_url": str(fc.get("public_url") or ""),

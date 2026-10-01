@@ -28,13 +28,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
+from src.fleet.offline_alert import (
+    DEFAULT_OFFLINE_ALERT_MIN, OfflineAlerter, long_offline, resolve_alert_min, start_watch,
+)
 from src.fleet.login_qr import (
     LOGIN_QR_TTL_SEC, LOGIN_STATUS_TTL_SEC, sanitize_login_result, start_payload, strip_qr, valid_instance,
     valid_login_id, valid_platform,
@@ -177,6 +182,21 @@ def register_routes(app, ctx) -> None:
     _api_write = ctx.api_write_factory
     _page_auth = ctx.page_auth
     templates = ctx.templates
+
+    # ── 节点长时间离线告警（P1-7）：fleet_control.offline_alert_min，缺省 10，0 = 不推送 ──
+    _alerter = OfflineAlerter(resolve_alert_min(resolve_fleet_cfg(config_manager).get("offline_alert_min")))
+
+    def _watch_nodes():
+        st = get_store(config_manager)
+        return st.list_nodes(include_revoked=False) if st is not None else []
+
+    def _start_offline_watch():
+        start_watch(_watch_nodes, _alerter)
+
+    try:
+        app.add_event_handler("startup", _start_offline_watch)
+    except Exception:  # noqa: BLE001 — 告警是旁路，挂不上不影响路由
+        logger.warning("fleet offline watch not registered", exc_info=True)
 
     def node_auth(request: Request) -> Dict[str, Any]:
         st = _store_or_503(config_manager)
@@ -489,7 +509,16 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_overview(request: Request, _=Depends(_api_auth)):
         st = _store_or_503(config_manager)
         out = st.overview()
-        out["download"] = resolve_download(resolve_fleet_cfg(config_manager))
+        fcfg = resolve_fleet_cfg(config_manager)
+        out["download"] = resolve_download(fcfg)
+        amin = resolve_alert_min(fcfg.get("offline_alert_min"))
+        mark_min = amin or DEFAULT_OFFLINE_ALERT_MIN
+        out["offline_alert"] = {
+            "after_min": mark_min, "push": amin > 0,
+            # 有 EVENT_INGEST_KEY 才真的推到运维告警通道（TG）；没有就只写日志 + 控制台标红
+            "channel": "ops_alert" if amin > 0 and os.environ.get("EVENT_INGEST_KEY") else "log",
+            "nodes": long_offline(st.list_nodes(include_revoked=False), now=time.time(), after_min=mark_min),
+        }
         return {"ok": True, **out}
 
     # ── 页面 ──────────────────────────────────────────────────────────────

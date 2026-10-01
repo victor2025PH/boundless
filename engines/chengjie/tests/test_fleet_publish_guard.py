@@ -28,7 +28,7 @@ def _text(p: Path) -> str:
 def test_publish_rebuilds_setup_only_with_explicit_switch():
     src = _text(PUBLISH)
     assert "if ($BuildSetup -or $iscc)" not in src
-    build = src.split("if ($BuildSetup) {", 1)[1].split("\n} else {", 1)[0]
+    build = src.split("if ($BuildSetup) {", 1)[1].split("} else {", 1)[0]
     assert "ISCC.exe" in build and "$setupScript" in build
     assert "[switch]$OverwriteSigned" in src and "[switch]$RequireSigned" in src
     assert "refusing to rebuild over a signed" in build

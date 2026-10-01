@@ -1,5 +1,5 @@
 name: fleet_control
-display_name: "智控 · 节点机群主控"
+display_name: "智拓群控 · 节点机群主控"
 version: "0.1"
 description: >
   多机部署的主控端：每台受控电脑上的 chatx-agent 出站连到本实例（注册码 → node_key →

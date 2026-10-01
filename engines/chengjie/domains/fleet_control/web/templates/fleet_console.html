@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}节点机群 · {{ product_name|default('智控') }}{% endblock %}
+{% block title %}节点机群 · {{ product_name|default('智拓群控') }}{% endblock %}
 {% block page_title %}节点机群{% endblock %}
 {% block head %}
 <style>
@@ -20,6 +20,21 @@
 .fc-act button{font-size:.72rem;padding:.2rem .5rem}
 .fc-code{font-family:ui-monospace,monospace;font-size:1.4rem;letter-spacing:.15em;font-weight:700}
 .fc-pre{font-size:.72rem;max-height:14rem;overflow:auto;background:var(--input);padding:.5rem;border-radius:6px;white-space:pre-wrap}
+.fc-act .fc-danger,.fc-danger{color:var(--red)}
+.fc-alert{background:var(--rs);color:var(--red);border:1px solid var(--red);border-radius:var(--r);padding:.7rem 1rem;margin-bottom:1rem;font-size:.84rem;font-weight:600}
+.fc-alert .s{font-weight:400;font-size:.74rem;color:var(--t2);margin-top:.25rem}
+.fc-row-alert td{background:var(--rs)}
+.fc-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999}
+.fc-dlg-box{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.1rem 1.2rem;width:min(460px,92vw);box-shadow:0 10px 40px rgba(0,0,0,.25)}
+.fc-dlg-box h3{margin:0 0 .8rem;font-size:.95rem}
+.fc-f{display:block;font-size:.78rem;color:var(--t2);margin-bottom:.6rem}
+.fc-f input,.fc-f select{display:block;width:100%;margin-top:.25rem;font-size:.85rem}
+.fc-dlg-note{font-size:.76rem;color:var(--t2);margin:.2rem 0 .6rem}
+.fc-dlg-warn{font-size:.78rem;color:var(--red);margin:.2rem 0 .6rem}
+.fc-dlg-err{font-size:.78rem;color:var(--red);min-height:1em;margin:.2rem 0}
+.fc-dlg-btns{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.4rem}
+.fc-toast{position:fixed;right:1.2rem;bottom:1.2rem;z-index:10000;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--green);border-radius:8px;padding:.6rem .9rem;font-size:.82rem;box-shadow:0 4px 18px rgba(0,0,0,.18);max-width:420px}
+.fc-toast.bad{border-left-color:var(--red);color:var(--red)}
 </style>
 {% endblock %}
 {% block content %}
@@ -27,18 +42,20 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
     <span class="fc-kv">主控 <b>{{ public_url }}</b> 心跳 <b>{{ heartbeat_sec }}s</b> 更新 <b id="fc-ts">—</b> <span id="fc-notes"></span></span>
     <span class="fc-act">
-      <button class="btn-sec" id="fc-newcode">＋ 生成注册码</button>
-      <button class="btn-sec" id="fc-roomkey">机房安装包</button>
+      <button class="btn-sec" id="fc-newcode" title="给某一台电脑单独发一张一次性注册码">＋ 生成注册码</button>
+      <button class="btn-sec" id="fc-roomkey" title="一批电脑共用的安装链接">＋ 机房安装包</button>
       <button class="btn-sec" id="fc-refresh">↻ 刷新</button>
     </span>
   </div>
 
+  <div class="fc-alert" id="fc-offline" style="display:none"></div>
+
   <div class="fc-grid">
     <div class="fc-card"><div class="k">节点</div><div class="v" id="fc-nodes">—</div><div class="s" id="fc-nodes-s"></div></div>
-    <div class="fc-card"><div class="k">在线</div><div class="v" id="fc-online">—</div><div class="s">最近心跳 ≤ 离线阈值</div></div>
+    <div class="fc-card"><div class="k">在线</div><div class="v" id="fc-online">—</div><div class="s" id="fc-online-s">最近心跳 ≤ 离线阈值</div></div>
     <div class="fc-card"><div class="k">账号</div><div class="v" id="fc-acc">—</div><div class="s" id="fc-acc-s"></div></div>
     <div class="fc-card"><div class="k">待领任务</div><div class="v" id="fc-queued">—</div><div class="s" id="fc-tasks-s"></div></div>
-    <div class="fc-card"><div class="k">24h 失败</div><div class="v" id="fc-failed">—</div><div class="s">failed / rejected / expired</div></div>
+    <div class="fc-card"><div class="k">24 小时失败</div><div class="v" id="fc-failed">—</div><div class="s">失败 / 被拒绝 / 已过期</div></div>
     <div class="fc-card"><div class="k">开放注册码</div><div class="v" id="fc-codes">—</div><div class="s">未用且未过期</div></div>
   </div>
 
@@ -73,7 +90,7 @@
   <div class="fc-sec">
     <h3>节点 <span class="fc-kv"><label>分组 <input id="fc-group" placeholder="全部" style="width:8rem"></label></span></h3>
     <table class="fc-tbl">
-      <thead><tr><th>状态</th><th>节点</th><th>分组</th><th>主机</th><th>版本</th><th>实例 / 账号</th><th>最近心跳</th><th>操作</th></tr></thead>
+      <thead><tr><th>在线状态</th><th>节点</th><th>分组</th><th>主机</th><th>版本</th><th>实例 / 账号</th><th>最近心跳</th><th>操作</th></tr></thead>
       <tbody id="fc-list"></tbody>
     </table>
   </div>
@@ -81,7 +98,7 @@
   <div class="fc-sec">
     <h3>最近任务</h3>
     <table class="fc-tbl">
-      <thead><tr><th>时间</th><th>节点</th><th>种类</th><th>状态</th><th>结果 / 说明</th></tr></thead>
+      <thead><tr><th>时间</th><th>节点</th><th>操作</th><th>状态</th><th>结果 / 说明</th></tr></thead>
       <tbody id="fc-tasks"></tbody>
     </table>
   </div>
@@ -105,11 +122,22 @@
     <pre class="fc-pre" id="fc-detail-body"></pre>
   </div>
 </div>
+<div class="fc-mask" id="fc-dlg" style="display:none"><div class="fc-dlg-box" role="dialog" aria-modal="true">
+  <h3 id="fc-dlg-title"></h3><div id="fc-dlg-body"></div><p class="fc-dlg-err" id="fc-dlg-err"></p>
+  <div class="fc-dlg-btns"><button class="btn-sec" id="fc-dlg-cancel">取消</button><button class="btn-sec" id="fc-dlg-ok">确定</button></div>
+</div></div>
+<div class="fc-toast" id="fc-toast" style="display:none"></div>
 <script>
 (function(){
   var STATE={online:['在线','fc-ok'],offline:['离线','fc-bad'],revoked:['已吊销','fc-muted'],pending:['待注册','fc-warn']};
   var TSTATE={queued:'fc-warn',pulled:'fc-warn',done:'fc-ok',failed:'fc-bad',rejected:'fc-bad',expired:'fc-muted',cancelled:'fc-muted'};
   var KINDS=['ping','pull_overview','account_health','stop_account','restart_instance'];
+  var KIND_LABEL={ping:'连通测试',pull_overview:'拉取概况',account_health:'账号体检',stop_account:'停止触达',restart_instance:'重启实例',login_qr:'扫码登录',login_status:'扫码状态'};
+  var KIND_TIP={ping:'测一下节点能不能收到任务',pull_overview:'让节点上报一次客户/会话概况',account_health:'让节点检查所有账号状态',stop_account:'对某个号码停止触达',restart_instance:'重启节点上的一个实例'};
+  var DANGER={stop_account:1,restart_instance:1};
+  var TLABEL={queued:'排队中',pulled:'已领取',done:'完成',failed:'失败',rejected:'被拒绝',expired:'已过期',cancelled:'已取消'};
+  var PHONE_RE=/^[0-9]{6,15}$/;
+  var longOff={},alertMin=10,dlg=null;
   var QR_RE=/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+\/]+={0,2}$/;
   var LOGIN_DONE={authorized:1,failed:1,expired:1,cancelled:1};
   var LOGIN_MAX_MS=300000;
@@ -121,22 +149,62 @@
   function ago(ts){if(!ts)return '从未';var s=Math.max(0,Math.round(Date.now()/1000-ts));return s<60?(s+' 秒前'):s<3600?(Math.round(s/60)+' 分前'):(Math.round(s/3600)+' 小时前');}
   function badge(lbl,cls){return '<span class="fc-badge '+cls+'">'+esc(lbl)+'</span>';}
   function j(r){return r.ok?r.json():r.json().then(function(e){throw new Error(e.detail||r.status);});}
+  function val(id){var e=document.getElementById(id);return e?String(e.value||'').trim():'';}
+  function kindName(k){return KIND_LABEL[k]||k;}
+  function toast(m,bad){var e=document.getElementById('fc-toast');e.textContent=m;e.className='fc-toast'+(bad?' bad':'');e.style.display='';
+    clearTimeout(toast.tm);toast.tm=setTimeout(function(){e.style.display='none';},bad?8000:4000);}
+  function fail(pre){return function(e){toast((pre||'操作失败')+'：'+e.message,true);};}
+  function post(url,body){return apiFetch(url,body===undefined?{method:'POST'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(j);}
+  // ── 页面内对话框（替代浏览器 prompt / confirm / alert）──
+  // o: {title, html, ok, danger, focus, submit()} → Promise<值 | null(取消)>；submit 返回 {error:'…'} 时留在框内提示
+  function dlgOpen(o){
+    return new Promise(function(res){
+      if(dlg)dlg.res(null);
+      dlg={res:res,submit:o.submit};
+      t('fc-dlg-title',o.title||'');document.getElementById('fc-dlg-body').innerHTML=o.html||'';t('fc-dlg-err','');
+      var ok=document.getElementById('fc-dlg-ok');ok.textContent=o.ok||'确定';ok.className='btn-sec'+(o.danger?' fc-danger':'');
+      document.getElementById('fc-dlg').style.display='';
+      if(o.onopen)o.onopen();
+      var f=o.focus&&document.getElementById(o.focus);if(f)f.focus();
+    });
+  }
+  function dlgClose(v){var d=dlg;dlg=null;document.getElementById('fc-dlg').style.display='none';if(d)d.res(v);}
+  function confirmBox(title,text,okText){return dlgOpen({title:title,html:'<p class="fc-dlg-warn">'+esc(text)+'</p>',ok:okText||'确定',danger:true});}
+  document.getElementById('fc-dlg-ok').addEventListener('click',function(){if(!dlg)return;
+    var v=dlg.submit?dlg.submit():true;if(v&&v.error){t('fc-dlg-err',v.error);return;}dlgClose(v);});
+  document.getElementById('fc-dlg-cancel').addEventListener('click',function(){dlgClose(null);});
+  document.getElementById('fc-dlg').addEventListener('keydown',function(ev){if(ev.key==='Escape')dlgClose(null);
+    else if(ev.key==='Enter'&&ev.target&&ev.target.tagName==='INPUT')document.getElementById('fc-dlg-ok').click();});
+  document.getElementById('fc-dlg').addEventListener('click',function(ev){if(ev.target&&ev.target.id==='fc-dlg')dlgClose(null);});
   function renderOverview(d){
     t('fc-ts',fmtTs(d.generated_at));var n=d.nodes||{},a=d.accounts||{},tk=(d.tasks||{}).by_status||{};
     t('fc-nodes',n.total||0);t('fc-nodes-s','离线 '+(n.offline||0)+' · 吊销 '+(n.revoked||0));
     t('fc-online',n.online||0);t('fc-acc',a.total||0);t('fc-acc-s','在线 '+(a.online||0));
     t('fc-queued',tk.queued||0);t('fc-tasks-s','已领 '+(tk.pulled||0)+' · 完成 '+(tk.done||0));
     t('fc-failed',(d.tasks||{}).failed_24h||0);t('fc-codes',d.open_enroll_codes||0);
+    var oa=d.offline_alert||{},lo=oa.nodes||[];alertMin=oa.after_min||10;longOff={};
+    lo.forEach(function(x){longOff[x.node_id]=x;});
+    t('fc-online-s','离线 '+(n.offline||0)+' · 超过 '+alertMin+' 分钟 '+lo.length);
+    var box=document.getElementById('fc-offline');
+    if(lo.length){
+      box.innerHTML='⚠ '+lo.length+' 台节点离线超过 '+esc(alertMin)+' 分钟：'+lo.map(function(x){
+        return esc(x.label||x.node_id)+(x.group_name?'（'+esc(x.group_name)+'）':'')+' 已离线 '+esc(x.offline_min)+' 分钟';}).join('；')+
+        '<div class="s">'+(oa.channel==='ops_alert'?'已通过运维告警通道推送（每次离线推一次）。':'未配置推送通道：只在这里标红，并写入主控日志（fleet node_offline_alert）。')+
+        ' 请检查那台电脑是否开机、联网，Agent 服务是否在运行。</div>';
+      box.style.display='';
+    }else{box.innerHTML='';box.style.display='none';}
   }
   function renderNodes(list){
     nodes={};
     document.getElementById('fc-list').innerHTML=list.length?list.map(function(n){nodes[n.node_id]=n;
       var st=STATE[n.state]||[n.state,'fc-muted'],hb=n.last_heartbeat||{},inst=hb.instances||[],acc=hb.accounts||{};
       var up=inst.filter(function(i){return i&&i.up;}).length;
-      var acts=n.status==='revoked'?'':'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__login">扫码登录</button>'+
-        KINDS.map(function(k){return '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="'+k+'">'+k+'</button>';}).join('')+
-        '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__revoke" style="color:var(--red)">吊销</button>';
-      return '<tr><td>'+badge(st[0],st[1])+(n.proto_compatible?'':' '+badge('协议过旧','fc-warn'))+'</td>'+
+      var acts=n.status==='revoked'?'':'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__login" title="在这里扫码登录那台电脑上的账号">扫码登录</button>'+
+        KINDS.map(function(k){return '<button class="btn-sec'+(DANGER[k]?' fc-danger':'')+'" data-n="'+esc(n.node_id)+'" data-k="'+k+'" title="'+esc(KIND_TIP[k]||'')+'">'+esc(kindName(k))+'</button>';}).join('')+
+        '<button class="btn-sec fc-danger" data-n="'+esc(n.node_id)+'" data-k="__revoke" title="让这台电脑的密钥失效">吊销节点</button>';
+      var lo=longOff[n.node_id],off=n.state==='offline'&&n.last_seen?Math.max(0,Math.floor((Date.now()/1000-n.last_seen)/60)):null;
+      var stx=n.state==='offline'?'<br><span style="font-size:.7rem;color:var(--red)">'+(off===null?'从未上线':'已离线 '+off+' 分钟')+'</span>'+(lo?' '+badge('超过 '+alertMin+' 分钟','fc-bad'):''):'';
+      return '<tr'+(lo?' class="fc-row-alert"':'')+'><td>'+badge(st[0],st[1])+(n.proto_compatible===false?' '+badge('协议过旧','fc-warn'):'')+stx+'</td>'+
         '<td><b>'+esc(n.label||n.node_id)+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.node_id)+' · '+esc(n.machine_id)+'</span></td>'+
         '<td>'+esc(n.group_name||'—')+'</td><td>'+esc(n.host_name||'—')+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.os||'')+'</span></td>'+
         '<td>agent '+esc(n.agent_version||'—')+'<br>app '+esc(n.app_version||'—')+'</td>'+
@@ -169,8 +237,8 @@
   function renderTasks(list){
     document.getElementById('fc-tasks').innerHTML=list.length?list.map(function(x){var n=nodes[x.node_id];
       var res=x.detail||'';if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
-      return '<tr><td>'+esc(fmtTs(x.created_at))+'</td><td>'+esc(n?(n.label||n.host_name||x.node_id):x.node_id)+'</td><td>'+esc(x.kind)+'</td>'+
-        '<td>'+badge(x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
+      return '<tr><td>'+esc(fmtTs(x.created_at))+'</td><td>'+esc(n?(n.label||n.host_name||x.node_id):x.node_id)+'</td><td>'+esc(kindName(x.kind))+'</td>'+
+        '<td>'+badge(TLABEL[x.status]||x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
     }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3)">暂无任务</td></tr>';
   }
   function load(){
@@ -181,56 +249,106 @@
   }
   document.getElementById('fc-pending').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
     var ok=b.getAttribute('data-ok'),no=b.getAttribute('data-no');
-    if(ok){var g=document.getElementById('fc-group').value.trim();var lbl=prompt('节点名称（可留空，默认用主机名）','')||'';
-      var body={label:lbl};if(g)body.group_name=g;
-      var existing=b.getAttribute('data-existing')||'';
-      if(existing){
-        var warn='approving will rotate key of '+existing;
-        if(!confirm(warn))return;
-        body.confirm_rotate=true;
-      }
-      apiFetch('/api/fleet/pending/'+encodeURIComponent(ok)+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(j).then(load).catch(function(e){alert(e.message);});}
-    if(no){if(!confirm('拒绝这台电脑？'))return;
-      apiFetch('/api/fleet/pending/'+encodeURIComponent(no)+'/reject',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});}
+    if(ok){var g=val('fc-group'),existing=b.getAttribute('data-existing')||'';
+      var warn='approving will rotate key of '+existing;
+      dlgOpen({title:'批准这台电脑',ok:existing?'批准并更换密钥':'批准',danger:!!existing,focus:'fc-dlg-label',
+        html:'<label class="fc-f">节点名称<input id="fc-dlg-label" maxlength="64" placeholder="可留空，默认用主机名"></label>'+
+          (g?'<p class="fc-dlg-note">分组：<b>'+esc(g)+'</b>（来自节点列表的分组筛选）</p>':'')+
+          (existing?'<p class="fc-dlg-warn">这台电脑以前登记过（'+esc(existing)+'）。批准后它原来的密钥立即失效。<br><span style="font-size:.7rem">'+esc(warn)+'</span></p>':''),
+        submit:function(){return {label:val('fc-dlg-label')};}})
+      .then(function(v){if(!v)return;var body={label:v.label};if(g)body.group_name=g;if(existing)body.confirm_rotate=true;
+        post('/api/fleet/pending/'+encodeURIComponent(ok)+'/approve',body).then(function(){toast('已批准');load();}).catch(fail('批准失败'));});}
+    if(no){confirmBox('拒绝这台电脑','拒绝后这台电脑需要重新申请。','拒绝').then(function(v){if(!v)return;
+      post('/api/fleet/pending/'+encodeURIComponent(no)+'/reject').then(function(){toast('已拒绝');load();}).catch(fail('拒绝失败'));});}
   });
   document.getElementById('fc-rooms').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
-    var id=b.getAttribute('data-rk');if(!id)return;if(!confirm('吊销这张机房密钥？已装上的电脑不受影响，还没装的不能再用。'))return;
-    apiFetch('/api/fleet/room-keys/'+encodeURIComponent(id)+'/revoke',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});
+    var id=b.getAttribute('data-rk');if(!id)return;
+    confirmBox('吊销机房密钥','已装上的电脑不受影响，还没装的电脑不能再用这张密钥。','吊销').then(function(v){if(!v)return;
+      post('/api/fleet/room-keys/'+encodeURIComponent(id)+'/revoke').then(function(){toast('已吊销');load();}).catch(fail('吊销失败'));});
   });
   document.getElementById('fc-room-hide').addEventListener('click',function(){document.getElementById('fc-roombox').style.display='none';});
   document.getElementById('fc-roomkey').addEventListener('click',function(){
-    var g=document.getElementById('fc-group').value.trim();
-    if(!g){var typed=prompt('分组名称','机房');if(typed===null)return;g=String(typed).trim();}
-    if(!g)return;
-    var usesRaw=prompt('最多几台','50');if(usesRaw===null)return;
-    var uses=parseInt(usesRaw,10);if(!uses)return;
-    var hoursRaw=prompt('多少小时内有效','168');if(hoursRaw===null)return;
-    var hours=parseInt(hoursRaw,10);
-    apiFetch('/api/fleet/room-keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_name:g,max_uses:uses,ttl_hours:hours})})
-      .then(j).then(function(d){var el=document.getElementById('fc-room-url');el.value=d.download_url||'';document.getElementById('fc-roombox').style.display='';el.focus();el.select();load();})
-      .catch(function(e){alert('生成失败 '+e.message);});
+    dlgOpen({title:'生成机房安装包',ok:'生成',focus:'fc-dlg-group',
+      html:'<label class="fc-f">分组名称<input id="fc-dlg-group" maxlength="64" value="'+esc(val('fc-group'))+'" placeholder="例：机房A"></label>'+
+        '<label class="fc-f">最多几台<input id="fc-dlg-uses" type="number" min="1" max="1000" value="50"></label>'+
+        '<label class="fc-f">多少小时内有效<input id="fc-dlg-hours" type="number" min="1" max="720" value="168"></label>'+
+        '<p class="fc-dlg-note">链接只显示一次，不要贴到公开下载页。</p>',
+      submit:function(){var g=val('fc-dlg-group'),uses=parseInt(val('fc-dlg-uses'),10),hours=parseInt(val('fc-dlg-hours'),10);
+        if(!g)return {error:'请填写分组名称'};
+        if(!(uses>=1))return {error:'「最多几台」要填 1 以上的整数'};
+        if(!(hours>=1))return {error:'「有效小时」要填 1 以上的整数'};
+        return {group_name:g,max_uses:uses,ttl_hours:hours};}})
+    .then(function(v){if(!v)return;
+      post('/api/fleet/room-keys',v)
+        .then(function(d){var el=document.getElementById('fc-room-url');el.value=d.download_url||'';document.getElementById('fc-roombox').style.display='';el.focus();el.select();load();})
+        .catch(fail('生成失败'));});
   });
   document.getElementById('fc-list').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
-    var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),body={};
-    if(k==='__revoke'){if(!confirm('吊销节点 '+nid+'？其 node_key 立即失效，未领任务全部取消。'))return;
-      apiFetch('/api/fleet/nodes/'+nid+'/revoke',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});return;}
-    if(k==='stop_account'){var ph=prompt('要 STOP 的对方手机号（E.164，不带 +）');if(!ph)return;body.target={phone:ph};}
+    var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),n=nodes[nid]||{},name=n.label||n.host_name||nid;
     if(k==='__login'){lgOpen(nid);return;}
-    apiFetch('/api/fleet/nodes/'+nid+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({kind:k},body))})
-      .then(j).then(load).catch(function(e){alert(e.message);});
+    if(k==='__revoke'){confirmBox('吊销节点「'+name+'」','它的密钥立即失效，还没领取的任务全部取消。要再用这台电脑需要重新安装批准。','吊销节点').then(function(v){if(!v)return;
+      post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/revoke').then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
+    if(k==='stop_account'){stopOpen(nid);return;}
+    if(k==='restart_instance'){restartOpen(nid);return;}
+    sendTask(nid,{kind:k});
   });
+  function sendTask(nid,body){
+    var n=nodes[nid]||{};
+    return post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/tasks',body)
+      .then(function(){toast('已下发「'+kindName(body.kind)+'」到 '+(n.label||n.host_name||nid)+(n.state==='offline'?'（节点离线，上线后才会执行）':''));load();})
+      .catch(fail(kindName(body.kind)+' 下发失败'));
+  }
+  function instOptions(n){var inst=((n.last_heartbeat||{}).instances||[]).filter(function(i){return i&&i.name&&i.role!=='health';});
+    return inst.map(function(i){return '<option value="'+esc(i.name)+'">'+esc(i.name)+(i.up?'':'（未在线）')+'</option>';}).join('');}
+  function restartOpen(nid){var n=nodes[nid]||{};
+    dlgOpen({title:'重启实例 · '+(n.label||n.host_name||nid),ok:'重启',danger:true,
+      html:'<label class="fc-f">实例<select id="fc-dlg-inst"><option value="">自动（第一个业务实例）</option>'+instOptions(n)+'</select></label>'+
+        '<p class="fc-dlg-warn">重启期间该实例上的账号会短暂掉线。</p>',
+      submit:function(){return {instance:val('fc-dlg-inst')};}})
+    .then(function(v){if(!v)return;var body={kind:'restart_instance'};if(v.instance)body.target={instance:v.instance};sendTask(nid,body);});
+  }
+  // 停止触达：账号从该节点最近一次「账号体检」结果里选，号码从该节点任务记录里出现过的号码里选
+  function stopOpen(nid){var n=nodes[nid]||{};
+    apiFetch('/api/fleet/tasks?node_id='+encodeURIComponent(nid)+'&limit=200').then(j).then(function(d){
+      var tasks=d.tasks||[],accs=[],phones=[],seenP={};
+      for(var i=0;i<tasks.length;i++){var x=tasks[i];
+        if(!accs.length&&x.kind==='account_health'&&x.status==='done'){accs=((x.result||{}).accounts||[]).filter(function(a){return a&&a.account_id;});}
+        var ph=String(((x.target||{}).phone)||'');if(ph&&!seenP[ph]){seenP[ph]=1;phones.push({phone:ph,account:String((x.target||{}).account||''),at:x.created_at});}}
+      var accOpt='<option value="">不限账号（这台电脑上全部账号）</option>'+accs.map(function(a){
+        return '<option value="'+esc(a.account_id)+'">'+esc(a.account_id)+(a.platform?' · '+esc(a.platform):'')+(a.stage?' · '+esc(a.stage):'')+'</option>';}).join('');
+      var phOpt=phones.map(function(p){return '<option value="'+esc(p.phone)+'">'+esc(p.phone)+(p.account?' · '+esc(p.account):'')+' · '+esc(fmtTs(p.at))+'</option>';}).join('')+
+        '<option value="__other">其他号码…</option>';
+      dlgOpen({title:'停止触达 · '+(n.label||n.host_name||nid),ok:'停止触达',danger:true,
+        html:'<label class="fc-f">账号'+(accs.length?'':'（还没有账号体检结果，可先点「账号体检」）')+'<select id="fc-dlg-acc">'+accOpt+'</select></label>'+
+          '<label class="fc-f">对方号码<select id="fc-dlg-phone">'+phOpt+'</select></label>'+
+          '<label class="fc-f" id="fc-dlg-other-row"'+(phones.length?' style="display:none"':'')+'>其他号码（国家区号开头，只填数字）<input id="fc-dlg-other" inputmode="numeric" maxlength="20" placeholder="例：639171234567"></label>'+
+          '<p class="fc-dlg-warn">之后不再对这个号码发消息，这台电脑上对它还在排队的任务会被取消。</p>',
+        onopen:function(){var sel=document.getElementById('fc-dlg-phone');sel.addEventListener('change',function(){
+          document.getElementById('fc-dlg-other-row').style.display=sel.value==='__other'?'':'none';});},
+        submit:function(){var p=val('fc-dlg-phone');if(p==='__other'||!p)p=val('fc-dlg-other').replace(/[\s+\-()]/g,'');
+          if(!PHONE_RE.test(p))return {error:'号码格式不对：国家区号开头，6–15 位数字'};
+          var tg={phone:p},a=val('fc-dlg-acc');if(a)tg.account=a;return tg;}})
+      .then(function(v){if(!v)return;sendTask(nid,{kind:'stop_account',target:v});});
+    }).catch(fail('读取号码列表失败'));
+  }
   document.getElementById('fc-tasks').addEventListener('click',function(ev){var a=ev.target.closest('a[data-t]');if(!a)return;ev.preventDefault();
     apiFetch('/api/fleet/tasks/'+a.getAttribute('data-t')).then(j).then(function(d){var r=d.task.result||{};
       var box=document.getElementById('fc-detail');box.style.display='';
       if(r.qr_data_url&&QR_RE.test(r.qr_data_url)){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
       else document.getElementById('fc-detail-body').textContent=JSON.stringify(r,null,2);
-      box.scrollIntoView({behavior:'smooth'});}).catch(function(e){alert(e.message);});
+      box.scrollIntoView({behavior:'smooth'});}).catch(fail('读取结果失败'));
   });
   document.getElementById('fc-newcode').addEventListener('click',function(){
-    var g=document.getElementById('fc-group').value.trim();var lbl=prompt('节点名称（可留空，注册后可改）','')||'';
-    apiFetch('/api/fleet/enroll-codes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:lbl,group_name:g})})
-      .then(j).then(function(d){t('fc-code',d.code);t('fc-code-exp',fmtTs(d.expires_at));document.getElementById('fc-codebox').style.display='';load();})
-      .catch(function(e){alert('生成失败 '+e.message);});
+    var g=val('fc-group');
+    dlgOpen({title:'生成注册码',ok:'生成',focus:'fc-dlg-label',
+      html:'<label class="fc-f">节点名称<input id="fc-dlg-label" maxlength="64" placeholder="可留空，注册后可改"></label>'+
+        '<label class="fc-f">分组<input id="fc-dlg-group" maxlength="64" value="'+esc(g)+'" placeholder="可留空"></label>'+
+        '<p class="fc-dlg-note">公开安装包不需要注册码；只有当场指定某台电脑时才用。</p>',
+      submit:function(){return {label:val('fc-dlg-label'),group_name:val('fc-dlg-group')};}})
+    .then(function(v){if(!v)return;
+      post('/api/fleet/enroll-codes',v)
+        .then(function(d){t('fc-code',d.code);t('fc-code-exp',fmtTs(d.expires_at));document.getElementById('fc-codebox').style.display='';load();})
+        .catch(fail('生成失败'));});
   });
   // ── 集中扫码：login_qr → 轮询 login_status（docs/FLEET_CONSOLE_QR_LOGIN.md）──
   function lgMsg(m){t('fc-login-msg',m);}

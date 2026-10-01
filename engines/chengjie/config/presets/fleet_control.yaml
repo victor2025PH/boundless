@@ -1,4 +1,4 @@
-# 场景预设：智控 · 节点机群主控（fleet_control 域）
+# 场景预设：智拓群控 · 节点机群主控（fleet_control 域）
 # ─────────────────────────────────────────────────────────────────────
 # 适用：部署在 bd2026.cc 那台 VPS 上的「主控实例」。各受控电脑上的 chatx-agent 出站连到这里：
 #   注册码 → node_key → 心跳 / 长轮询领任务 / 幂等 ack。本实例不接任何频道账号、不聊天。
@@ -51,11 +51,18 @@ memory:
 
 web_admin:
   enabled: true
-  site_name: "智控 · 节点机群主控"
+  site_name: "智拓群控 · 节点机群主控"
   host: 127.0.0.1                          # 反代在前；只监听本机
   port: 18798
   auth_token: "CHANGE_ME"                  # ← 必填
   secret_key: "CHANGE_ME"                  # ← 必填
+
+# 群控单独的品牌（登录页标题 / 侧栏 / 控制台标题）；只作用于本实例，其他产品仍用默认「智聊」
+brand:
+  product_name: "智拓群控"
+  site_name: "智拓群控 · 节点机群主控"
+  login_subtitle: "节点机群主控"
+  sidebar_name: "无界 · 智拓群控"
 
 messenger_rpa:
   enabled: false

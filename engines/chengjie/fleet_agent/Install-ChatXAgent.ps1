@@ -36,6 +36,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Pin PSModulePath to this Windows PowerShell 5.1's own module dirs. Started from pwsh 7
+# (directly, or via a setup launched from pwsh 7) the process inherits a 7.x PSModulePath
+# and 5.1 cannot autoload Get-Acl / Get-FileHash / ScheduledTasks.
+if ($PSVersionTable.PSVersion.Major -le 5) {
+  $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules')
+}
 function Say($m) { Write-Host "[chatx-agent] $m" }
 function Fail($m) { Write-Host "[chatx-agent] ERROR: $m" -ForegroundColor Red; exit 1 }
 # 原生程序写 stderr 在 EAP=Stop + 重定向下会变成终止错误（PS 5.1），统一在 Continue 下跑并合并输出
