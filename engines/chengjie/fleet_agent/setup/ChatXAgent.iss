@@ -15,7 +15,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.1"
+  #define AppVersion "0.3.3"
 #endif
 
 #define AppName "ChatX Fleet Agent"
