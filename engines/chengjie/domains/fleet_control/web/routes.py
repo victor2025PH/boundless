@@ -193,8 +193,12 @@ def register_routes(app, ctx) -> None:
     def _start_offline_watch():
         start_watch(_watch_nodes, _alerter)
 
+    # 与 admin.py 一致用 on_event（Starlette 1.x 已去掉 add_event_handler，FastAPI 仍保留 on_event）
     try:
-        app.add_event_handler("startup", _start_offline_watch)
+        if hasattr(app, "on_event"):
+            app.on_event("startup")(_start_offline_watch)
+        else:
+            app.add_event_handler("startup", _start_offline_watch)
     except Exception:  # noqa: BLE001 — 告警是旁路，挂不上不影响路由
         logger.warning("fleet offline watch not registered", exc_info=True)
 

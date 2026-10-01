@@ -234,3 +234,9 @@ def test_console_restart_uses_in_page_dialog_with_instance(tmp_path):
     res = _run(tmp_path, {"kind": "restart_instance", "set": {"fc-dlg-inst": "player"}})
     assert "player" in res["dlgBody"]
     assert ["POST", "/api/fleet/nodes/n1/tasks", {"kind": "restart_instance", "target": {"instance": "player"}}] in res["calls"]
+
+
+def test_offline_watch_registers_via_on_event():
+    # Starlette 1.x (VPS venv) has no add_event_handler; on_event is what admin.py uses too
+    src = (ENGINE / "domains/fleet_control/web/routes.py").read_text(encoding="utf-8")
+    assert 'app.on_event("startup")(_start_offline_watch)' in src
