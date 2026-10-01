@@ -5,8 +5,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>智控 · 多机部署与节点主控</title>
-<meta name="description" content="下载安装包，双击即可。装好的电脑会出现在主控后台的待批准列表里，管理员点批准后开始接收任务。">
+<title>智拓群控 · 多机部署与节点主控</title>
+<meta name="description" content="下载智拓群控安装器，双击即可，不需要输入安装码。装好后把配对码发给管理员，管理员在主控后台点批准后开始接收任务。">
 <style>
 :root{--bg:#0b1020;--card:#121a2f;--bd:#22304f;--t:#e8ecf5;--t2:#a5b0c8;--t3:#6f7a94;--acc:#4f8cff;--acc2:#7cf0c8;--warn:#ffb84d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -26,6 +26,7 @@ nav a{color:var(--t2);text-decoration:none;margin-left:1.2rem;font-size:.9rem}
 .step{display:flex;gap:1rem;margin:1rem 0}.step b{flex:none;width:2rem;height:2rem;border-radius:50%;background:var(--acc);color:#fff;display:flex;align-items:center;justify-content:center}
 code,pre{font-family:ui-monospace,Consolas,monospace;font-size:.85rem}pre{background:#0a0f1d;border:1px solid var(--bd);border-radius:10px;padding:.9rem 1rem;overflow:auto}
 h2{font-size:1.3rem;margin:2.5rem 0 .8rem}
+.tip{border-left:3px solid var(--acc2);padding:.5rem .9rem;color:var(--t2);font-size:.9rem;background:rgba(124,240,200,.06);border-radius:0 8px 8px 0;margin-top:1rem}
 .note{border-left:3px solid var(--warn);padding:.5rem .9rem;color:var(--t2);font-size:.9rem;background:rgba(255,184,77,.06);border-radius:0 8px 8px 0}
 footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:var(--t3);font-size:.8rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
 </style>
@@ -33,24 +34,25 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
 <body>
 <div class="wrap">
 <header>
-  <div class="logo">智控 <span>Fleet</span></div>
+  <div class="logo">智拓<span>群控</span></div>
   <nav><a href="#download">下载</a><a href="#install">安装</a><a href="#reinstall">重装</a><a href="#security">安全</a><a href="{{ console_url }}">主控后台</a></nav>
 </header>
 
 <section class="hero">
   <h1>一台主控，管理每一台跑智聊 / 智拓的电脑</h1>
-  <p>在任意 Windows 电脑上<strong>下载安装包、双击、点「是」</strong>。电脑会主动连到主控——不需要公网 IP、不用开端口、不用输入注册码。装好后它出现在主控后台的「待批准」里，管理员点批准即可。</p>
+  <p>在任意 Windows 电脑上<strong>下载安装器、双击、点「是」</strong>。电脑会主动连到主控——不需要公网 IP、不用开端口，<strong>安装过程不需要输入任何安装码或注册码</strong>。装完后把安装器最后一页显示的配对码发给管理员，管理员在主控后台「待批准」里核对后点批准即可。</p>
   <div class="btns" id="download">
     {% if download.setup_url %}
-    <a class="btn p" href="{{ download.setup_url }}">下载安装包（ChatXAgentSetup.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
+    <a class="btn p" href="{{ download.setup_url }}">下载安装器（ChatXAgentSetup.exe）{% if download.version %} v{{ download.version }}{% endif %}</a>
     {% else %}
-    <span class="btn p dis">Windows 安装包（尚未发布）</span>
+    <span class="btn p dis">Windows 安装器（尚未发布）</span>
     {% endif %}
     {% if download.changelog_url %}<a class="btn" href="{{ download.changelog_url }}">更新日志</a>{% endif %}
   </div>
-  <p class="meta">双击安装，在权限确认里点「是」。装好后这台电脑会出现在主控后台的「待批准」里，管理员点批准即可。</p>
+  <p class="meta">双击安装，在权限确认里点「是」。装好后把配对码发给管理员，这台电脑会出现在主控后台的「待批准」里，管理员核对配对码后点批准即可。</p>
+  <p class="tip">如果出现蓝色窗口「Windows 已保护你的电脑」（SmartScreen）：先点<strong>「更多信息」</strong>，再点<strong>「仍要运行」</strong>。安装器暂未做代码签名，所以会出现这个提示；可以先核对下面的 SHA-256。</p>
   <p class="adv">高级：<a href="/fleet/advanced/Install-ChatXAgent.ps1">命令行脚本 Install-ChatXAgent.ps1</a>
-    {% if download.installer_url %} · <a href="{{ download.installer_url }}">仅节点程序</a>{% endif %}
+    {% if download.installer_url %} · <a href="{{ download.installer_url }}">单文件版 chatx-agent.exe（供升级或技术人员使用）</a>{% endif %}
     {% if download.agent_zip_url %} · <a href="{{ download.agent_zip_url }}">zip</a>{% endif %}
   </p>
   {% if download.setup_sha256 %}<div class="meta">安装包 SHA-256：<code>{{ download.setup_sha256 }}</code></div>
@@ -66,24 +68,24 @@ footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--bd);color:v
 </div>
 
 <h2 id="install">三步接入</h2>
-<div class="step"><b>1</b><div><strong>下载安装包，双击</strong><br><span style="color:var(--t2)">弹出权限确认时点「是」。安装程序会自己找到本机的智聊和幻颜；一台都没有也能装上，只上报这台电脑在线。</span></div></div>
-<div class="step"><b>2</b><div><strong>在主控后台点批准</strong><br><span style="color:var(--t2)">打开 <a href="{{ console_url }}">主控后台</a>，这台电脑在「待批准」里，能看到主机名、IP 和探测到的实例。点批准之后它才上线。</span></div></div>
+<div class="step"><b>1</b><div><strong>下载安装器，双击</strong><br><span style="color:var(--t2)">弹出权限确认时点「是」；被 SmartScreen 拦下时点「更多信息」→「仍要运行」。不需要输入任何码。安装程序会自己找到本机的智聊和幻颜；一台都没有也能装上，只上报这台电脑在线。</span></div></div>
+<div class="step"><b>2</b><div><strong>把配对码发给管理员，在主控后台点批准</strong><br><span style="color:var(--t2)">安装完成页会显示一个配对码。管理员打开 <a href="{{ console_url }}">主控后台</a>，这台电脑在「待批准」里，能看到同一个配对码、主机名、IP 和探测到的实例。核对后点批准，它才上线。</span></div></div>
 <div class="step"><b>3</b><div><strong>打开「舰队节点」</strong><br><span style="color:var(--t2)">桌面或开始菜单的「舰队节点」是这台电脑的本机页，能看到待批准、在线、离线或已拒绝。批准和查看其它电脑仍去<a href="{{ console_url }}">主控后台</a>。整间机房要一次装很多台时，管理员先在后台生成「机房安装包」，每台电脑打开那个链接再双击 Install.cmd，会直接进指定分组，不用逐台批准。</span></div></div>
 
 <h2 id="reinstall">一键重装 / 修复</h2>
-<div class="step"><b>A</b><div><strong>保留身份重装（最常用）</strong><br><span style="color:var(--t2)">直接再运行一次上面的安装包（覆盖安装）。安装程序会先停掉本机节点，再换新文件；这台电脑保留原来的节点身份，<strong>不用重新批准</strong>。{% if download.setup_url %}<a href="{{ download.setup_url }}">下载 v{{ download.version }}</a>{% endif %}</span></div></div>
-<div class="step"><b>B</b><div><strong>彻底重装（换身份）</strong><br><span style="color:var(--t2)">以管理员身份运行 <code>"%ProgramFiles%\ChatX Agent\unins000.exe" /VERYSILENT /REMOVESTATE=1</code>，再运行安装包。电脑会以新身份进「待批准」；如果管理员给了本机房的安装码（机房安装包），双击其中的 <code>Install.cmd</code> 会直接进分组，不用逐台批准。安装码由管理员发放，不在本页公开。</span></div></div>
+<div class="step"><b>A</b><div><strong>保留身份重装（最常用）</strong><br><span style="color:var(--t2)">直接再运行一次上面的安装器（覆盖安装）。安装程序会先停掉本机节点，再换新文件；这台电脑保留原来的节点身份，<strong>不用重新批准</strong>。{% if download.setup_url %}<a href="{{ download.setup_url }}">下载 v{{ download.version }}</a>{% endif %}</span></div></div>
+<div class="step"><b>B</b><div><strong>彻底重装（换身份）</strong><br><span style="color:var(--t2)">以管理员身份运行 <code>"%ProgramFiles%\ChatX Agent\unins000.exe" /VERYSILENT /REMOVESTATE=1</code>，再运行安装器。电脑会以新身份进「待批准」，照第 2 步把新的配对码发给管理员；如果管理员给了本机房的「机房安装包」，双击其中的 <code>Install.cmd</code> 会直接进分组，不用逐台批准。机房安装包由管理员发放，不在本页公开。</span></div></div>
 <div class="step"><b>C</b><div><strong>装完核对</strong><br><span style="color:var(--t2)">打开桌面「舰队节点」看到「在线」；管理员在<a href="{{ console_url }}">主控后台</a>看到这台电脑，版本号与上面一致。</span></div></div>
 
 <h2 id="security">安全与边界</h2>
 <div class="note">
 主控不会反向连接、不会远程桌面、不会读取聊天记录；能做的只有契约里列出的任务种类。
 没被批准的电脑没有 node_key，领不了任务。node_key 只存在本机 <code>%ProgramData%\ChatX\fleet</code>，主控只保存其哈希。
-机房安装链接是密钥，不出现在这个公开下载页上。所有请求经 HTTPS。完整契约见 <code>docs/FLEET_CONTROL_CONTRACT.md</code>。
+机房安装链接是密钥，不出现在这个公开下载页上。所有请求经 HTTPS。完整的任务契约可向管理员索取。
 </div>
 
 <footer>
-  <span>© 智控 Fleet · 本页为多机部署产品独立页面</span>
+  <span>© 智拓群控 · 本页为多机部署产品独立页面</span>
   <span><a href="https://bd2026.cc/">返回官网</a> · <a href="{{ console_url }}">主控后台</a></span>
 </footer>
 </div>

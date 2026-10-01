@@ -5,24 +5,39 @@
 #   powershell -File deploy\fleet\publish_agent.ps1 -PackController -Deploy   # ... and run: sudo bash deploy_controller.sh (production change!)
 #   powershell -File deploy\fleet\publish_agent.ps1 -BuildSetup         # rebuild ChatXAgentSetup.exe first (explicit only)
 #   ... -RequireSigned                                                    # refuse to upload an unsigned ChatXAgentSetup.exe
+#   ... -WhatIf                                                           # dry run: print every ssh/scp/sudo step, render the page locally
+#   ... -NoMirror                                                         # skip the /var/www/dl-mirror sync (not recommended)
 #
 # ChatXAgentSetup.exe is rebuilt ONLY with -BuildSetup. Having ISCC installed no longer
 # triggers a rebuild, so a hand-signed installer in dist\ is uploaded as is. A rebuild
 # over a validly signed installer is refused unless -OverwriteSigned is also given.
 # Before any upload the installer hash must match manifest.setup_sha256 and its .sha256 file.
 #
-# Requires: OpenSSH client (ssh/scp) with key auth to $SshHost. Never embeds tokens. ASCII only.
+# After the upload the versioned files are installed into the nginx mirror $MirrorDir
+# (chatx-agent-<ver>.exe, ChatXAgentSetup-<ver>.exe, matching .sha256 files) and the public
+# download page index.html is regenerated from the real files by render_download_page.py
+# (version, size and SHA-256 are never typed by hand). The old index.html is kept as
+# index.html.bak_<timestamp>. A versioned file already in the mirror with other bytes is refused.
+#
+# Run under Windows PowerShell 5.1 (powershell.exe). PowerShell 7 is not supported.
+# Requires: OpenSSH client (ssh/scp) with key auth to $SshHost (ssh alias vps-bd2026 in
+# ~/.ssh/config; ubuntu@bd2026.cc has no key and fails with publickey), sudo on the VPS for
+# the mirror step, python for the page renderer. Never embeds tokens. ASCII only.
 [CmdletBinding()]
 param(
-  [string]$SshHost = "ubuntu@bd2026.cc",
+  [string]$SshHost = "vps-bd2026",
   [string]$RemoteDownloads = "/home/ubuntu/yuntech/public/downloads/fleet",
   [string]$PublicBase = "https://bd2026.cc/downloads/fleet",
+  [string]$MirrorDir = "/var/www/dl-mirror/downloads/fleet",
+  [string]$Python = "python",
+  [string]$StageDir = "",
   [string]$DistDir = "",
   [switch]$PackController,
   [switch]$Deploy,
   [switch]$BuildSetup,
   [switch]$OverwriteSigned,
   [switch]$RequireSigned,
+  [switch]$NoMirror,
   [switch]$WhatIf
 )
 $ErrorActionPreference = 'Stop'
@@ -88,12 +103,90 @@ $files = $names | Select-Object -Unique | ForEach-Object { Join-Path $DistDir $_
 Run ("scp " + (($files | ForEach-Object { '"' + $_ + '"' }) -join ' ') + " ${SshHost}:$RemoteDownloads/")
 Run "ssh $SshHost 'cp -f $RemoteDownloads/$($m.file) $RemoteDownloads/chatx-agent-$($m.version).exe && ls -la $RemoteDownloads'"
 
+# Mirror: nginx (snippets/fleet-downloads.conf) serves the versioned exes and the download page
+# straight from $MirrorDir. Next.js only sees public/ files that existed at its start.
+$mirrorNames = @()
+$ver = [string]$m.version
+if (-not $NoMirror) {
+  if ($ver -notmatch '^[0-9][0-9.]*$') { throw "manifest.version '$ver' is not a plain version; the nginx mirror location would not match it" }
+  if ($MirrorDir -notmatch '^/[A-Za-z0-9_./-]+$') { throw "MirrorDir '$MirrorDir' must be an absolute path without spaces" }
+  $agentLocal = Join-Path $DistDir $m.file
+  $agentVer = "chatx-agent-$ver.exe"
+  $setupVer = "ChatXAgentSetup-$ver.exe"
+  if (-not $StageDir) { $StageDir = Join-Path $env:TEMP "fleet-mirror-$ver" }
+  if (Test-Path -LiteralPath $StageDir) { Remove-Item -LiteralPath $StageDir -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  $remoteSrc = @{}
+  if (Test-Path -LiteralPath $agentLocal) { $remoteSrc[$agentVer] = "$RemoteDownloads/$($m.file)" } else { throw "missing $agentLocal" }
+  if (Test-Path -LiteralPath $setupExe) { $remoteSrc[$setupVer] = "$RemoteDownloads/ChatXAgentSetup.exe" }
+  foreach ($n in @($agentVer, $setupVer)) {
+    if (-not $remoteSrc.ContainsKey($n)) { continue }
+    $local = $agentLocal; if ($n -eq $setupVer) { $local = $setupExe }
+    $h = (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash.ToLower()
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "$n.sha256"), "$h  $n`n", $utf8)
+    $mirrorNames += $n
+  }
+  $page = Join-Path $StageDir "index.html"
+  if (Test-Path -LiteralPath $setupExe) {
+    $built = ''
+    if ($m.built_at -is [datetime]) { $built = $m.built_at.ToString('yyyy-MM-dd') }
+    elseif ("$($m.built_at)" -match '^\d{4}-\d{2}-\d{2}') { $built = $Matches[0] }
+    $renderer = Join-Path $PSScriptRoot "render_download_page.py"
+    $pyArgs = @($renderer, '--version', $ver, '--setup', $setupExe, '--agent', $agentLocal, '--out', $page)
+    if ($built) { $pyArgs += @('--date', $built) }
+    # Local only, so it also runs under -WhatIf: the page can be reviewed before a real publish.
+    & $Python @pyArgs
+    if ($LASTEXITCODE -ne 0) { throw "render_download_page.py failed" }
+    Say "download page rendered from dist files: $page"
+  } else {
+    $page = ''
+    Say "WARN no $setupExe : the public download page is not regenerated"
+  }
+  $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
+  $rstage = "/tmp/fleet-mirror-$ver-$ts"
+  $stageFiles = @(Get-ChildItem -LiteralPath $StageDir -File | ForEach-Object { '"' + $_.FullName + '"' })
+  Run "ssh $SshHost 'mkdir -p $rstage'"
+  Run ("scp " + ($stageFiles -join ' ') + " ${SshHost}:$rstage/")
+  $steps = @("sudo mkdir -p $MirrorDir")
+  foreach ($n in $mirrorNames) {
+    $srcPath = $remoteSrc[$n]
+    # Versioned files are immutable (served with max-age): never swap the bytes behind a published name.
+    $steps += "if [ -f $MirrorDir/$n ] && ! cmp -s $srcPath $MirrorDir/$n; then echo REFUSED_$n.differs_from_mirror; exit 4; fi"
+    $steps += "sudo install -m 644 -o root -g root $srcPath $MirrorDir/$n"
+    $steps += "sudo install -m 644 -o root -g root $rstage/$n.sha256 $MirrorDir/$n.sha256"
+  }
+  if ($page) {
+    $steps += "if [ -f $MirrorDir/index.html ]; then sudo cp -p $MirrorDir/index.html $MirrorDir/index.html.bak_$ts; fi"
+    $steps += "sudo install -m 644 -o root -g root $rstage/index.html $MirrorDir/index.html"
+  }
+  $steps += "cd $MirrorDir"
+  $steps += "sha256sum -c " + (($mirrorNames | ForEach-Object { "$_.sha256" }) -join ' ')
+  $steps += "rm -rf $rstage"
+  Run ("ssh $SshHost '" + ($steps -join ' && ') + "'")
+} else {
+  Say "WARN -NoMirror: $MirrorDir is not updated; versioned downloads and the download page stay stale"
+}
+
 if (-not $WhatIf) {
   try {
     $remote = Invoke-RestMethod -Uri "$PublicBase/manifest.json?t=$(Get-Date -UFormat %s)" -UseBasicParsing
     if ("$($remote.sha256)" -eq "$($m.sha256)") { Say "public manifest OK: $PublicBase/manifest.json -> $($remote.version)" }
     else { Say "WARN public manifest sha differs (CDN cache?)" }
   } catch { Say "WARN cannot fetch $PublicBase/manifest.json : $($_.Exception.Message)" }
+  foreach ($n in $mirrorNames) {
+    try {
+      $r = Invoke-WebRequest -Uri "$PublicBase/$n" -Method Head -UseBasicParsing
+      Say "public $n -> HTTP $($r.StatusCode)"
+    } catch { Say "WARN public $PublicBase/$n : $($_.Exception.Message)" }
+  }
+  if ($mirrorNames.Count -gt 0) {
+    try {
+      $p = Invoke-WebRequest -Uri "$PublicBase/?t=$(Get-Date -UFormat %s)" -UseBasicParsing
+      if ($p.Content -match ('name="fleet-download-version" content="' + [regex]::Escape($ver) + '"')) { Say "public download page OK: v$ver" }
+      else { Say "WARN public download page does not show v$ver" }
+    } catch { Say "WARN cannot fetch $PublicBase/ : $($_.Exception.Message)" }
+  }
 }
 
 if ($PackController) {

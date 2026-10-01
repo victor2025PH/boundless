@@ -15,6 +15,7 @@ Windows 用计划任务（``schtasks`` ONSTART / SYSTEM / 最高权限）而不�
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import shlex
 import subprocess
@@ -150,16 +151,72 @@ def uninstall_service(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[
     return {"ok": True, "kind": "systemd", "steps": outs}
 
 
+# Task Scheduler TASK_STATE（COM ``IRegisteredTask.State``）：数值与界面语言无关。
+TASK_STATE_NAMES = {0: "Unknown", 1: "Disabled", 2: "Queued", 3: "Ready", 4: "Running"}
+# schtasks 文本兜底：值按界面语言本地化。中文 /FO LIST /V 里 Status 这一项叫「模式」，
+# 「登录状态」「计划任务状态」是别的字段，所以只按整键精确匹配。
+_STATUS_KEYS = ("status", "状态", "模式")
+_STATE_ALIASES = {
+    "running": "Running", "正在运行": "Running",
+    "ready": "Ready", "就绪": "Ready", "准备就绪": "Ready",
+    "disabled": "Disabled", "已禁用": "Disabled",
+    "queued": "Queued", "已排队": "Queued", "排队": "Queued",
+    "unknown": "Unknown", "未知": "Unknown",
+}
+
+
+def _windows_powershell() -> str:
+    """固定用 Windows PowerShell 5.1：从 pwsh 7 启动时 PATH 里的 powershell 也可能被换掉。"""
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    return ntpath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
+def build_task_state_query(*, task_name: str = TASK_NAME) -> List[str]:
+    """经 Schedule.Service COM 读任务的数值状态（0-4），不解析任何本地化文本。
+
+    COM 不依赖 ScheduledTasks 模块，所以不受继承来的 PSModulePath 影响。任务不存在或无权读时 exit 3。
+    """
+    lit = task_name.replace("'", "''")
+    script = ("$ErrorActionPreference='Stop';try{$s=New-Object -ComObject Schedule.Service;$s.Connect();"
+              "[int]$s.GetFolder('\\').GetTask('" + lit + "').State}catch{exit 3}")
+    return [_windows_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
+
+
+def parse_task_state_number(out: str) -> str:
+    """COM 输出的一行数字 → Running / Ready / ...；不是 0-4 的数字返回空串。"""
+    lines = [x.strip() for x in str(out or "").splitlines() if x.strip()]
+    if len(lines) != 1 or not lines[0].isdigit():
+        return ""
+    return TASK_STATE_NAMES.get(int(lines[0]), "")
+
+
+def parse_schtasks_list_state(out: str) -> str:
+    """``schtasks /FO LIST /V`` 文本兜底：英文 Status、中文「模式」（老版本「状态」）。已知值归一成英文。"""
+    for line in str(out or "").splitlines():
+        k, sep, v = line.partition(":")
+        if not sep:
+            continue
+        if k.strip().lower() in _STATUS_KEYS:
+            raw = v.strip()
+            return _STATE_ALIASES.get(raw.lower(), raw)
+    return ""
+
+
 def service_status(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
     if os.name == "nt":
         p = run(build_schtasks_query(task_name=task_name))
         installed = p.returncode == 0
         state = ""
-        for line in (p.stdout or "").splitlines():
-            k, _, v = line.partition(":")
-            if k.strip().lower() in ("status", "状态"):
-                state = v.strip()
-                break
+        if installed:
+            # 先取与语言无关的数值状态；PowerShell 起不来、超时或没权限时才退回解析文本。
+            try:
+                q = run(build_task_state_query(task_name=task_name))
+                if q.returncode == 0:
+                    state = parse_task_state_number(q.stdout or "")
+            except (OSError, subprocess.SubprocessError, ValueError):
+                logger.debug("[service] COM task state query failed; falling back to schtasks text", exc_info=True)
+            if not state:
+                state = parse_schtasks_list_state(p.stdout or "")
         return {"installed": installed, "kind": "schtasks", "task_name": task_name, "state": state}
     p = run(["systemctl", "is-active", SYSTEMD_UNIT])
     return {"installed": systemd_unit_path().exists(), "kind": "systemd", "state": (p.stdout or "").strip()}
@@ -326,6 +383,6 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 
 __all__ = [
     "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command", "build_schtasks_create", "build_schtasks_run",
-    "build_schtasks_delete", "build_schtasks_query", "build_systemd_unit", "install_service", "uninstall_service",
+    "build_schtasks_delete", "build_schtasks_query", "build_task_state_query", "build_systemd_unit", "install_service", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
 ]
