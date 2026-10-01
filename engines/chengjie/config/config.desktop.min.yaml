@@ -427,6 +427,17 @@ assistant:
   vision:
     enabled: true   # 报障截图 VLM 摘要：best-effort（托管识图网关可达即工作，掉线静默）
 
+# 内部功能显隐（老板决策 2026-10-01「内测用户都可以使用全功能」，1.0.104）：
+# 五个纯软件、随包即跑的界面入口出厂即开（与 feature_registry A 类镜像；开发者工具
+# 「内部功能显隐」仍可逐键关）。matrix_nav / group_show 刻意不写＝缺省隐藏：它们打开的
+# 是真机矩阵（LINE/Messenger/WhatsApp RPA，需安卓真机）导航面，桌面包不带＝死入口。
+ui_visibility:
+  group_extract: true     # 群成员提取：收件箱右栏工具箱卡 → /tools/tg-members
+  manual_console: true    # 人工操作台：桌面壳官方网页版页签条 + 「打开官方网页版/原生页」
+  team_collab: true       # 团队协作副驾卡
+  ai_settings: true       # AI 提示词 & 行为配置卡 / 人工客服转接卡 / 侧栏「人工转接」
+  cockpit: true           # 工作台顶栏「驾驶舱」入口
+
 # 首启体验档：桌面装完直接能用（10 万字符尝鲜、无时间窗、用完即止），不要求注册；
 # 注册后经官网领满 100 万（无期限，规格在 chatx_fulfillment.TRIAL_SPEC）。
 # 只在没有授权文件时生效；有正式授权即整段失效（见 config.example.yaml 的详细说明）。

@@ -595,8 +595,8 @@
         b.hidden = false;
         if (probe.status === 403) {
           b.textContent = t(
-            "群成员提取功能未开启：在 config.local.yaml 设 companion.group_members.enabled: true 后重启实例。",
-            "Feature disabled: set companion.group_members.enabled: true in config.local.yaml and restart.");
+            "群成员提取未开启：打开开发者工具，在「内部功能显隐」勾选「群成员提取」，然后刷新本页。",
+            "Group member extraction is off. Open Developer Tools, tick Group member extraction under Internal feature visibility, then refresh.");
         } else {
           b.textContent = t(
             "群成员提取正在就绪（后端需一次重启加载最新组件），请稍后再试。",

@@ -443,9 +443,14 @@ class ConfigManager:
             # ——只回滚「原样基线形态」（用户没改过一个字），用户自己开过的一字不动。
             _rolled_back = self._rollback_baselines_1079()
 
+            # 1.0.104（老板 2026-10-01「内测用户都可以使用全功能」）：内部功能显隐五键
+            # 一次性翻开——内测种子写进 overlay 的显式 false 不是用户表态，带标记翻一次，
+            # 之后开发者页勾/不勾都尊重。单列 intentional，不计入红线① changed。
+            _opened = self._migrate_ui_visibility_full_open_1104()
+
             # Q-4 C：升级回读——overlay 里升级前就存在的显式叶子，升级后必须逐字相等
             # （回滚键除外，单列 rolled_back）。changed 非空＝红线①被破，WARNING 可见。
-            self._log_upgrade_readback(_overlay_before, _rolled_back)
+            self._log_upgrade_readback(_overlay_before, _rolled_back, intentional=_opened)
 
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
@@ -931,6 +936,70 @@ class ConfigManager:
             self.logger.warning("[baseline] rollback 异常（忽略）: %s", exc)
         return rolled
 
+    # ── 1.0.104：内部功能显隐一次性全开（老板 2026-10-01「内测用户都可以使用全功能」）──
+    # 标记键（写进 overlay ui_visibility 段即视为「已翻过」；字符串键不在布尔家族，
+    # resolve_ui_visibility 只搬已知布尔键、不会把它透传进 /api/desktop/ui-flags）。
+    _UIV_FULL_OPEN_MARKER = "full_open_1104"
+    # 要翻开的键＝feature_registry 里 ui_visibility.* 的 A 类（matrix_nav / group_show 刻意不在）。
+
+    def ui_visibility_full_open_patch(self) -> Optional[Dict[str, Any]]:
+        """1.0.104 显隐全开的判定核心（纯读，供迁移与测试）。
+
+        返回要写进 overlay 的 patch：合并视图里**不为真**的 A 类显隐键 → True，外加标记；
+        已有标记 → None（之后用户在开发者页勾/不勾都是表态，不再插手）。没有键需要翻
+        时仍返回「只含标记」的 patch——不落标记就等于每次 load 都会把用户刚关掉的键翻回来。
+        """
+        try:
+            from src.utils.feature_registry import FEATURES, dig
+            uiv = self.config.get("ui_visibility")
+            if isinstance(uiv, dict) and self._UIV_FULL_OPEN_MARKER in uiv:
+                return None
+            flips: Dict[str, Any] = {}
+            for f in FEATURES:
+                if f.cls != "A" or not f.key.startswith("ui_visibility."):
+                    continue
+                if dig(self.config, f.key) is not True:
+                    flips[f.key.split(".", 1)[1]] = True
+            flips[self._UIV_FULL_OPEN_MARKER] = "1.0.104"
+            return {"ui_visibility": flips}
+        except Exception:
+            return None
+
+    def _migrate_ui_visibility_full_open_1104(self) -> List[str]:
+        """桌面态一次性翻开内部功能显隐五键（群成员提取 / 人工操作台 / 团队协作 /
+        AI 与转接设置 / 驾驶舱）。
+
+        背景：内测种子 ``config.desktop.internal.yaml`` 把这些键以显式 false 播进每台内测机
+        的 overlay，``_ensure_baseline`` 只补缺席键（红线①）永远翻不动它们；1.0.103 上
+        花无缺机「开发者页勾了群成员提取、工具箱卡出现又消失」即此。老板决策：内测用户
+        全功能可用——由种子写进去的 false 不算用户表态，翻一次并落标记；服务器实例不动。
+        写入面＝overlay（保注释 + 即时深合并进内存）；一行 WARNING 列出翻过的键；永不抛。
+        返回翻过的点分键（供升级回读单列 intentional，不计入红线① changed）。
+        """
+        flipped: List[str] = []
+        try:
+            if not self._env_truthy("AITR_DESKTOP_MODE"):
+                return flipped
+            patch = self.ui_visibility_full_open_patch()
+            if not patch:
+                return flipped
+            keys = [f"ui_visibility.{k}" for k in patch["ui_visibility"]
+                    if k != self._UIV_FULL_OPEN_MARKER]
+            if self.save_overlay_patch(patch):
+                flipped = keys
+                if keys:
+                    self.logger.warning(
+                        "[upgrade] ui_visibility full-open (1.0.104)：%s → true（内部功能"
+                        "显隐对内测用户全开；要关请在开发者工具「内部功能显隐」取消勾选）",
+                        ", ".join(keys))
+                else:
+                    self.logger.info("[upgrade] ui_visibility full-open (1.0.104)：已全开，仅落标记")
+            else:
+                self.logger.warning("[upgrade] ui_visibility full-open 写入 overlay 失败（忽略）")
+        except Exception as exc:
+            self.logger.warning("[upgrade] ui_visibility full-open 异常（忽略）: %s", exc)
+        return flipped
+
     def _overlay_leaves(self) -> Dict[str, Any]:
         """overlay 文件的显式叶子 {dotted: value}（纯读；缺失/损坏 → {}）。"""
         try:
@@ -955,31 +1024,39 @@ class ConfigManager:
             return {}
 
     def _log_upgrade_readback(self, before: Dict[str, Any],
-                              rolled_back: Optional[List[str]] = None) -> Dict[str, Any]:
+                              rolled_back: Optional[List[str]] = None,
+                              intentional: Optional[List[str]] = None) -> Dict[str, Any]:
         """Q-4 C（#267 65UQRE）：升级回读——``[upgrade] user_flags_preserved=N changed=[]``。
 
         ``before``＝load() 开头 overlay 显式叶子快照；此刻再读一次文件：升级前就存在的
-        每个叶子都必须逐字相等（红线①）。差异分两类：``rolled_back``（D-Q1/D-Q2 有意
-        撤回、单列）与 ``changed``（**不该发生**，WARNING）。返回统计供测试断言。
+        每个叶子都必须逐字相等（红线①）。差异分三类：``rolled_back``（D-Q1/D-Q2 有意
+        撤回、单列）、``intentional``（1.0.104 显隐全开等**带标记的一次性迁移**有意改写、
+        单列）与 ``changed``（**不该发生**，WARNING）。返回统计供测试断言。
         """
-        summary: Dict[str, Any] = {"preserved": 0, "changed": [], "rolled_back": []}
+        summary: Dict[str, Any] = {"preserved": 0, "changed": [], "rolled_back": [],
+                                   "intentional": []}
         try:
             if not before:
                 return summary
             after = self._overlay_leaves()
             rb = set(rolled_back or [])
+            it = set(intentional or [])
             for key, old in before.items():
                 if key in rb:
                     summary["rolled_back"].append(key)
+                    continue
+                if key in it:
+                    summary["intentional"].append(key)
                     continue
                 if key in after and after[key] == old:
                     summary["preserved"] += 1
                 else:
                     summary["changed"].append(
                         {"key": key, "before": old, "after": after.get(key, "<missing>")})
-            msg = ("[upgrade] user_flags_preserved=%d changed=%s rolled_back=%s"
+            msg = ("[upgrade] user_flags_preserved=%d changed=%s rolled_back=%s intentional=%s"
                    % (summary["preserved"],
-                      [c["key"] for c in summary["changed"]], summary["rolled_back"]))
+                      [c["key"] for c in summary["changed"]], summary["rolled_back"],
+                      summary["intentional"]))
             if summary["changed"]:
                 self.logger.warning(msg + "（红线①：升级不得改变用户显式值——请附 overlay 报障）")
                 for c in summary["changed"]:

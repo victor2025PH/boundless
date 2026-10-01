@@ -5503,7 +5503,7 @@ ZH_HANT = {
     # ── dv_uiv_k_group_extract ──
     'dv_uiv_k_group_extract': '群成員提取',
     # ── dv_uiv_k_group_extract_d ──
-    'dv_uiv_k_group_extract_d': '收件箱連結卡 / 運營總覽卡 / 副駕提取元件（後端另有 group_members.enabled 總閘）',
+    'dv_uiv_k_group_extract_d': '收件箱連結卡 / 運營總覽卡 / 副駕提取元件。勾上後管理台即可用',
     # ── dv_uiv_k_group_show ──
     'dv_uiv_k_group_show': '群脈導播台',
     # ── dv_uiv_k_group_show_d ──
@@ -6120,7 +6120,7 @@ ZH_HANT = {
     'err.gm.bad_filter': '過濾器無效（應為 all / spoke / spoke_no_admin）',
     'err.gm.bad_request': '缺少必要引數（account_id / group）',
     'err.gm.client_unavailable': '該 Telegram 賬號當前不線上或不可用',
-    'err.gm.disabled': '群成員提取功能未開啟（config.local.yaml → companion.group_members.enabled）',
+    'err.gm.disabled': '群成員提取未開啟：在開發者工具「內部功能顯隱」勾選「群成員提取」',
     'err.gm.job_not_found': '提取任務不存在',
     'err.gm.job_running': '該任務正在執行中',
     'err.gm.not_group': '該會話不是群/超級群，無法提取成員',

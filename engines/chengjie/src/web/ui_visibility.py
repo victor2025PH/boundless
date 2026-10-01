@@ -11,8 +11,7 @@ simple=True 的既有哲学一致）：
                   cp-tg-members 组件 / App 模式宿主 shared/copilot/app.html
                   的链接卡（静态 hidden 打底 + ui-flags 揭示，2026-08-15 补漏
                   ——首批只接了 collab，这张卡漏了导致桌面副驾常显）。
-                  后端 /api/tg-members* 仍由 group_members.enabled 独立守卫，
-                  两层正交。
+                  后端 /api/tg-members* 在 group_members.enabled 或本键为真时放行。
 - matrix_nav      真机矩阵导航组：侧栏「真机矩阵」组 + 命令面板矩阵项 +
                   矩阵上下文导航（页面本身可直达，仅藏导航面）。
 - group_show      群脉导播台：侧栏「真机矩阵」组内的导播台项 + 命令面板项
@@ -98,8 +97,14 @@ simple=True 的既有哲学一致）：
 
 契约：
 - 配置键 ``ui_visibility.{manual_console,group_extract,matrix_nav,group_show,
-  team_collab,ai_settings}``，缺省 **False=隐藏**（新子系统默认关约定；开启是
+  team_collab,ai_settings}``，代码缺省 **False=隐藏**（新子系统默认关约定；开启是
   运营/开发决策，走 /developer 页写 overlay）。
+- **桌面包例外（1.0.104，老板 2026-10-01「内测用户都可以使用全功能」）**：
+  group_extract / manual_console / team_collab / ai_settings / cockpit 五键进
+  ``feature_registry`` A 类基线（种子显式 true + ``_ensure_baseline`` 补缺席 +
+  ``ConfigManager._migrate_ui_visibility_full_open_1104`` 一次性翻开内测种子写进
+  overlay 的显式 false）。matrix_nav / group_show 不进（真机矩阵导航，桌面包无 RPA
+  真机＝死入口）。服务器实例（无 AITR_DESKTOP_MODE）代码缺省不变。
 - ``ui_visibility.flavor`` / ``ui_visibility.seat_mode`` 是**字符串**键，刻意
   不进 ``UI_VISIBILITY_KEYS`` 布尔家族（``resolve_ui_visibility`` 只搬已知布尔
   键，不会把它们透传进 ``/api/desktop/ui-flags`` 的 flags 里）。

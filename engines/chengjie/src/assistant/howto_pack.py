@@ -1983,6 +1983,26 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "手机号登录 扫码 侧边栏 没有账号 telegram phone login sidebar",
         "/workspace",
     ),
+    (
+        "tg-group-members",
+        "怎么提取 Telegram 群成员 / 工具箱里的「群成员提取」怎么用",
+        "How to extract Telegram group members (Group member extraction tool)",
+        "收件箱右栏切到「工具箱」页签 → 「群成员提取」卡点「🧲 打开管理台」（或直接访问 /tools/tg-members）。"
+        "管理台三步：① 发起提取——勾选用哪些在线的 Telegram 号拉（多选＝多号并行、各拉不同批次），"
+        "选目标群（选号后自动列出，或高级里手输群 id / @用户名），选过滤器（默认「发过言且非管理员」），"
+        "填每号每日上限，点「🧲 发起提取」；② 提取任务——看进度、可停止；③ 成员库——按群查看、搜名字，"
+        "点「导出 CSV」。只读提取，不会主动私聊任何人；私聊触达是独立步骤。1.0.104 起本功能出厂即开，"
+        "若看不到卡片：开发者工具 → 「内部功能显隐」勾选「群成员提取」后刷新。",
+        "In the inbox right rail open the Toolbox tab → Group member extraction card → \"Open console\" "
+        "(or visit /tools/tg-members). Three steps: (1) Start: pick online Telegram accounts (multi-select = "
+        "parallel, disjoint batches), choose the target group (auto-listed, or type an id / @username under "
+        "Advanced), choose the filter (default: spoke and not admin), set the daily cap per account, click Start; "
+        "(2) Jobs: watch progress or stop; (3) Member DB: browse by group, search, Export CSV. Read-only — it "
+        "never messages anyone; outreach is a separate step. Shipped on by default since 1.0.104; if the card is "
+        "missing, tick it under Developer Tools → Internal feature visibility and refresh.",
+        "群成员提取 提取群成员 拉群成员 群成员 工具箱 导出成员 telegram group members extract scrape toolbox",
+        "/tools/tg-members",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请

@@ -51,6 +51,14 @@ def test_disabled_gate_403(client_cm):
     assert c.get("/api/tg-members/members?group_id=-100").status_code == 403
 
 
+def test_visibility_checkbox_opens_the_gate(client_cm):
+    """开发者页勾上群成员提取即可用，不必再写 companion.group_members.enabled。"""
+    c, cm = client_cm
+    cm.config["companion"]["group_members"]["enabled"] = False
+    cm.config["ui_visibility"] = {"group_extract": True}
+    assert c.get("/api/tg-members/quota?account_id=accA").status_code == 200
+
+
 def test_quota_shape(client_cm):
     c, _ = client_cm
     r = c.get("/api/tg-members/quota?account_id=accA")

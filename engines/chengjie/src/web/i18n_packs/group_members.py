@@ -5,7 +5,7 @@
 """
 
 ZH = {
-    "err.gm.disabled": "群成员提取功能未开启（config.local.yaml → companion.group_members.enabled）",
+    "err.gm.disabled": "群成员提取未开启：在开发者工具「内部功能显隐」勾选「群成员提取」",
     "err.gm.store_unavailable": "群成员库未就绪",
     "err.gm.readonly": "只读角色不可发起提取",
     "err.gm.bad_request": "缺少必要参数（account_id / group）",
@@ -27,7 +27,7 @@ ZH = {
 }
 
 EN = {
-    "err.gm.disabled": "Group member extraction is disabled (config.local.yaml -> companion.group_members.enabled)",
+    "err.gm.disabled": "Group member extraction is off. Tick it under Developer Tools → Internal feature visibility",
     "err.gm.store_unavailable": "Group member store is not ready",
     "err.gm.readonly": "Read-only role cannot start extraction",
     "err.gm.bad_request": "Missing required parameter (account_id / group)",

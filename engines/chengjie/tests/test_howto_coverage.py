@@ -89,7 +89,8 @@ def test_howto_paths_point_at_real_pages():
     """
     nav = set(_nav_paths())
     # 已核实存在、但不在侧栏的子页面白名单（新增前请先确认页面真的能打开）
-    known_subpages = {"/dashboard", "/workspace/drafts"}
+    # /tools/tg-members：群成员提取管理台（group_members_routes GET，收件箱工具箱卡深链）
+    known_subpages = {"/dashboard", "/workspace/drafts", "/tools/tg-members"}
     bad = []
     for p in sorted(_howto_paths()):
         if p in nav or p in known_subpages:

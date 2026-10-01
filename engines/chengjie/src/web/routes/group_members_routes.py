@@ -5,7 +5,9 @@
 pyro loop 不同 → ``run_coroutine_threadsafe``），不阻塞 web 请求；进度写任务行，前端轮询。
 
 只读提取（低危）；真正高危的「私聊触达」不在本模块（后续独立步骤 + 人工闸）。
-写操作（建/停任务）viewer 角色 403；全链受 ``companion.group_members.enabled`` 总闸。
+写操作（建/停任务）viewer 角色 403。总闸＝``companion.group_members.enabled``
+**或** 开发者页「群成员提取」显隐（``ui_visibility.group_extract``）。勾上入口即可用，
+不必再改 yaml。两者都关才 403。
 """
 from __future__ import annotations
 
@@ -36,15 +38,28 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
     """
     html_auth = page_auth if page_auth is not None else auth_dep
 
-    def _cfg() -> Dict[str, Any]:
+    def _full() -> Dict[str, Any]:
         try:
             full = (config_manager.config if config_manager is not None else {}) or {}
-            return ((full.get("companion") or {}).get("group_members") or {})
+            return full if isinstance(full, dict) else {}
+        except Exception:
+            return {}
+
+    def _cfg() -> Dict[str, Any]:
+        try:
+            return ((_full().get("companion") or {}).get("group_members") or {})
         except Exception:
             return {}
 
     def _enabled() -> bool:
-        return bool(_cfg().get("enabled", False))
+        """yaml 总闸或开发者页「群成员提取」勾选，任一为真即可用。"""
+        try:
+            if bool(_cfg().get("enabled", False)):
+                return True
+            from src.web.ui_visibility import resolve_ui_visibility
+            return bool(resolve_ui_visibility(_full()).get("group_extract"))
+        except Exception:
+            return False
 
     def _store():
         from src.companion.group_members_store import get_group_members_store

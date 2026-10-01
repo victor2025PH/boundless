@@ -397,6 +397,34 @@ FEATURES: Tuple[Feature, ...] = (
         note="LINE 出站媒体（老板例外 2026-09-24）：缺键＝LineProtocolWorker 不挂 "
              "send_media，工作台/AI 报 no_send_media；内测种子早已显式开，公共包缺失。"
              "A 类补齐让存量安装升级后零操作获得 LINE 发图/语音"),
+    # ── 内部功能显隐（ui_visibility，老板决策 2026-10-01「内测用户都可以使用全功能」）──
+    # 七个显隐键里五个是纯软件、随包即跑的界面入口（群成员提取 / 人工操作台 / 团队协作 /
+    # AI 与转接设置 / 驾驶舱），进 A 类＝种子开 + 升级补齐；存量机 overlay 里由内测种子
+    # 写进去的显式 false 由 ConfigManager._migrate_ui_visibility_full_open_1104 一次性
+    # 翻开（带标记，之后开发者页勾/不勾都是用户表态）。matrix_nav / group_show 刻意不进：
+    # 它们打开的是真机矩阵（LINE/Messenger/WhatsApp RPA 通道页，需安卓真机，桌面包不带）
+    # 的导航面，默认开＝客户档侧栏多出三条死入口（test_packaged_capability_ledger 钉住）。
+    Feature(
+        key="ui_visibility.group_extract", cls="A", slug="uiv_group_extract",
+        baseline=True, show=False,
+        note="群成员提取入口（收件箱工具箱卡 / 运营总览卡 / 副驾组件）；后端 "
+             "/api/tg-members* 在本键或 companion.group_members.enabled 为真时放行"),
+    Feature(
+        key="ui_visibility.manual_console", cls="A", slug="uiv_manual_console",
+        baseline=True, show=False,
+        note="人工操作台（桌面壳内嵌官方网页版页签条 + 收件箱「打开官方网页版/原生页」入口）"),
+    Feature(
+        key="ui_visibility.team_collab", cls="A", slug="uiv_team_collab",
+        baseline=True, show=False,
+        note="团队协作副驾卡（web 收件箱右栏 + 桌面副驾 app.html）"),
+    Feature(
+        key="ui_visibility.ai_settings", cls="A", slug="uiv_ai_settings",
+        baseline=True, show=False,
+        note="「AI 与转接设置」页 AI 提示词 & 行为配置卡 / 人工客服转接卡 / 侧栏「人工转接」项"),
+    Feature(
+        key="ui_visibility.cockpit", cls="A", slug="uiv_cockpit",
+        baseline=True, show=False,
+        note="驾驶舱：工作台顶栏「驾驶舱」入口（/workspace/cockpit，一键接管/交还）"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     # 2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：班表 A→B **出厂关**。1.0.78 基线把
     # 08:20–01:00 + 「timezone 空＝本机钟」补进每台机器——桌面机在上海、客户在纽约，
