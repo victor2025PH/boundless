@@ -1,4 +1,4 @@
-"""本机「舰队节点」页：只绑定 127.0.0.1 的静态页，不代替舰队控制台。
+"""本机「智拓群控节点」页：只绑定 127.0.0.1 的静态页，不代替智拓群控控制台。
 
 ``chatx-agent ui`` 若发现计划任务里的进程已经在听固定端口，就只打开浏览器。
 否则在当前进程兜底起一个页面（测试、以及还没装上服务的时候）。
@@ -39,7 +39,7 @@ PAGE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>舰队节点</title>
+<title>智拓群控节点</title>
 <style>
   :root { color-scheme: light; --ink:#1b2038; --muted:#5c6578; --line:#e4e7ee; --bg:#f3f5f8; --card:#fff; }
   * { box-sizing: border-box; }
@@ -70,7 +70,7 @@ PAGE_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>舰队节点</h1>
+  <h1>智拓群控节点</h1>
   <p class="lead">本页只管理这台电脑。</p>
   <section class="card">
     <div id="badge" class="badge s-offline">离线</div>
@@ -133,7 +133,7 @@ PAGE_HTML = """<!DOCTYPE html>
   }
   function primaryOf(s) {
     if (s.ui_state === "pending") return {act: "copy-code", label: "复制配对码"};
-    if (s.ui_state === "online") return {act: "console", label: "打开舰队控制台"};
+    if (s.ui_state === "online") return {act: "console", label: "打开智拓群控控制台"};
     if (s.ui_state === "rejected") return {act: "logs", label: "打开日志"};
     return {act: "check", label: "检查连接"};
   }

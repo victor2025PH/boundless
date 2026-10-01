@@ -1,4 +1,4 @@
-"""本机状态快照：给 ``chatx-agent status`` 和本机「舰队节点」页用。
+"""本机状态快照：给 ``chatx-agent status`` 和本机「智拓群控节点」页用。
 
 只在原有字段上追加。不包含 node_key / enroll_secret / 实例 token。
 最近一次心跳写在 ``last_heartbeat.json``（只有时间戳），不回写 agent.json。

@@ -5,7 +5,7 @@
     python -m src.fleet.agent run            # 前台常驻：心跳 + 长轮询领任务 + 执行 + ack
     python -m src.fleet.agent run --once     # 跑一轮就退（联调 / 计划任务）
     python -m src.fleet.agent status         # 本机摘要（含主控是否可达、计划任务、最近心跳）
-    python -m src.fleet.agent ui             # 打开本机「舰队节点」页（只监听 127.0.0.1）
+    python -m src.fleet.agent ui             # 打开本机「智拓群控节点」页（只监听 127.0.0.1）
     python -m src.fleet.agent install-service   # 开机自启（Windows 计划任务 SYSTEM / Linux systemd）+ 立即启动
     python -m src.fleet.agent run --service     # 服务实际入口：监督循环（见 service.py）
 
@@ -1037,7 +1037,7 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     sub.add_parser("uninstall-service")
     sub.add_parser("service-status")
     sub.add_parser("status")
-    ui = sub.add_parser("ui", help="打开本机「舰队节点」页面（仅监听 127.0.0.1）")
+    ui = sub.add_parser("ui", help="打开本机「智拓群控节点」页面（仅监听 127.0.0.1）")
     ui.add_argument("--port", type=int, default=0, help="0 表示使用面板固定端口")
     ui.add_argument("--no-browser", action="store_true", help="只启动页面，不打开浏览器")
     sub.add_parser("heartbeat", help="只发一次心跳并打印")

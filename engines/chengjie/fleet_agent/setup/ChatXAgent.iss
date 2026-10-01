@@ -18,7 +18,7 @@
   #define AppVersion "0.3.3"
 #endif
 
-#define AppName "ChatX Fleet Agent"
+#define AppName "智拓群控节点"
 #define AppPublisher "ChatX"
 
 [Setup]
@@ -27,7 +27,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\ChatX Agent
-DefaultGroupName=ChatX Fleet
+DefaultGroupName=智拓群控
 DisableProgramGroupPage=yes
 OutputDir={#DistDir}
 OutputBaseFilename=ChatXAgentSetup
@@ -50,10 +50,10 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
 FinishedHeadingLabel=安装完成
-FinishedLabel=接下来三步：1. 把配对码发给管理员，舰队控制台里能看到同一个码  2. 管理员批准后，点「打开舰队节点」并刷新本页  3. 状态变为在线后，可从本页打开舰队控制台
+FinishedLabel=接下来三步：1. 把配对码发给管理员，智拓群控控制台里能看到同一个码  2. 管理员批准后，点「打开智拓群控节点」并刷新本页  3. 状态变为在线后，可从本页打开智拓群控控制台
 
 [Tasks]
-Name: "desktopicon"; Description: "在桌面创建「舰队节点」快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce
+Name: "desktopicon"; Description: "在桌面创建「智拓群控节点」快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce
 
 [Files]
 Source: "{#AgentExe}"; DestDir: "{app}"; DestName: "chatx-agent.exe"; Flags: ignoreversion
@@ -67,11 +67,15 @@ Type: files; Name: "{autoprograms}\Fleet node status.lnk"
 Type: files; Name: "{autoprograms}\Fleet console.lnk"
 Type: files; Name: "{autodesktop}\Fleet node status.lnk"
 Type: files; Name: "{autodesktop}\Fleet console.lnk"
+; 0.3.x 及以前的中文快捷方式名（已统一改成「智拓群控」）
+Type: files; Name: "{autodesktop}\舰队节点.lnk"
+Type: files; Name: "{autoprograms}\舰队节点.lnk"
+Type: files; Name: "{autoprograms}\舰队控制台.lnk"
 
 [Icons]
-Name: "{autodesktop}\舰队节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"; Tasks: desktopicon
-Name: "{autoprograms}\舰队节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"
-Name: "{autoprograms}\舰队控制台"; Filename: "{code:GetConsoleUrl}"; IconFilename: "{app}\fleet-node.ico"
+Name: "{autodesktop}\智拓群控节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"; Tasks: desktopicon
+Name: "{autoprograms}\智拓群控节点"; Filename: "{sys}\wscript.exe"; Parameters: "//B ""{app}\Open-Panel.vbs"""; IconFilename: "{app}\fleet-node.ico"
+Name: "{autoprograms}\智拓群控控制台"; Filename: "{code:GetConsoleUrl}"; IconFilename: "{app}\fleet-node.ico"
 
 [Code]
 const
@@ -309,14 +313,14 @@ begin
   if PairText <> '' then
     WizardForm.FinishedLabel.Caption :=
       '配对码 ' + PairText + '。' + #13#10 +
-      '1. 把配对码发给管理员，舰队控制台里能看到同一个码' + #13#10 +
-      '2. 管理员批准后，点「打开舰队节点」并刷新本页' + #13#10 +
-      '3. 状态变为在线后，可从本页打开舰队控制台'
+      '1. 把配对码发给管理员，智拓群控控制台里能看到同一个码' + #13#10 +
+      '2. 管理员批准后，点「打开智拓群控节点」并刷新本页' + #13#10 +
+      '3. 状态变为在线后，可从本页打开智拓群控控制台'
   else
     WizardForm.FinishedLabel.Caption :=
       '1. 开机后计划任务会自动连接主控' + #13#10 +
-      '2. 点「打开舰队节点」查看在线、离线或待批准' + #13#10 +
-      '3. 要批准或查看其它电脑时，再打开舰队控制台';
+      '2. 点「打开智拓群控节点」查看在线、离线或待批准' + #13#10 +
+      '3. 要批准或查看其它电脑时，再打开智拓群控控制台';
 end;
 
 procedure OpenLocalPanel();
@@ -425,7 +429,7 @@ procedure InitializeWizard();
 begin
   ConsoleButton := TNewButton.Create(WizardForm);
   ConsoleButton.Parent := WizardForm;
-  ConsoleButton.Caption := '打开舰队控制台';
+  ConsoleButton.Caption := '打开智拓群控控制台';
   ConsoleButton.OnClick := @OpenFleetConsoleClick;
   ConsoleButton.Visible := False;
   ConsoleButton.Width := ScaleX(140);
@@ -439,7 +443,7 @@ begin
   ConsoleButton.Visible := CurPageID = wpFinished;
   if CurPageID = wpFinished then
   begin
-    WizardForm.NextButton.Caption := '打开舰队节点';
+    WizardForm.NextButton.Caption := '打开智拓群控节点';
     ConsoleButton.Left := WizardForm.NextButton.Left - ConsoleButton.Width - ScaleX(8);
     ConsoleButton.Top := WizardForm.NextButton.Top;
     WizardForm.FinishedLabel.WordWrap := True;
