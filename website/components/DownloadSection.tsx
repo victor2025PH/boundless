@@ -49,9 +49,10 @@ const FALLBACK: Build[] = [
   {
     os: "Windows 10/11 (x64)",
     ver: LATEST_VERSION,
-    size: "45 MB",
+    size: "60 MB",
     url: `/releases/AvatarHub-Setup-${LATEST_VERSION}.exe`,
-    sha256: "",
+    // 2026-09-30 176 线随 AvatarHub 1.5.5 发布写入（与 /releases/AvatarHub-Setup-1.5.5.exe 一致）
+    sha256: "ac421287744f78a3bb011a2883eae48a5e0f5f4fd42913316de1bc6e67cd8188",
     filename: `AvatarHub-Setup-${LATEST_VERSION}.exe`,
     ready: true,
   },
