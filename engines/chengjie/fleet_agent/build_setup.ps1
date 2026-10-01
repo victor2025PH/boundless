@@ -6,11 +6,17 @@
 # Install the compiler (no license fee):
 #   winget install --id JRSoftware.InnoSetup -e
 # or set INNO_SETUP to the full path of ISCC.exe.
+# An existing dist\ChatXAgentSetup.exe with a valid Authenticode signature is not
+# overwritten unless -Force is given (re-sign after a forced rebuild).
+# After signing: powershell -File fleet_agent\build_setup.ps1 -ManifestOnly
+#   re-hashes the existing (signed) installer into .sha256 and manifest.json, no ISCC.
 # ASCII only.
 [CmdletBinding()]
 param(
   [string]$DistDir = "",
-  [string]$Iscc = ""
+  [string]$Iscc = "",
+  [switch]$Force,
+  [switch]$ManifestOnly
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -19,8 +25,19 @@ if (-not $DistDir) { $DistDir = Join-Path $here "dist" }
 $agent = Join-Path $DistDir "chatx-agent.exe"
 $iss = Join-Path $here "setup\ChatXAgent.iss"
 $setupDir = Join-Path $here "setup"
+if (-not $ManifestOnly) {
 if (-not (Test-Path -LiteralPath $agent)) { throw "missing $agent -- run: python fleet_agent\build_agent.py" }
 if (-not (Test-Path -LiteralPath $iss)) { throw "missing $iss" }
+$existingSetup = Join-Path $DistDir "ChatXAgentSetup.exe"
+if ((Test-Path -LiteralPath $existingSetup) -and -not $Force) {
+  $sigStatus = ""
+  try { $sigStatus = [string](Get-AuthenticodeSignature -LiteralPath $existingSetup).Status } catch { $sigStatus = "" }
+  if ($sigStatus -eq "Valid") {
+    Write-Host "[setup] $existingSetup is signed; refusing to overwrite it. Re-run with -Force to rebuild (then sign again)."
+    exit 3
+  }
+}
+
 
 if (-not $Iscc) { $Iscc = $env:INNO_SETUP }
 if (-not $Iscc -or -not (Test-Path -LiteralPath $Iscc)) {
@@ -46,6 +63,7 @@ if ($hit) { $ver = $hit.Matches[0].Groups[1].Value }
 Write-Host "[setup] ISCC $Iscc  version $ver"
 & $Iscc "/DAgentExe=$agent" "/DSetupDir=$setupDir" "/DDistDir=$DistDir" "/DAppVersion=$ver" $iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+}
 
 $setup = Join-Path $DistDir "ChatXAgentSetup.exe"
 if (-not (Test-Path -LiteralPath $setup)) { throw "ISCC did not write $setup" }
@@ -60,7 +78,8 @@ if (Test-Path -LiteralPath $mfPath) {
   $mf | Add-Member -NotePropertyName setup_file -NotePropertyValue "ChatXAgentSetup.exe" -Force
   $mf | Add-Member -NotePropertyName setup_url -NotePropertyValue ($base + "ChatXAgentSetup.exe") -Force
   $mf | Add-Member -NotePropertyName setup_sha256 -NotePropertyValue $hash -Force
-  ($mf | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $mfPath -Encoding utf8
+  # PS 5.1 "-Encoding utf8" writes a BOM; controller/admin json.loads("utf-8") rejects it and /fleet/ shows the download as unpublished.
+  [IO.File]::WriteAllText($mfPath, ($mf | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
   Write-Host "[setup] manifest setup_url=$base" "ChatXAgentSetup.exe"
 }
 Write-Host "[setup] $setup"

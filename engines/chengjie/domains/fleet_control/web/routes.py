@@ -436,6 +436,7 @@ def register_routes(app, ctx) -> None:
         public_url = cfg["public_url"] or str(request.base_url).rstrip("/")
         return templates.TemplateResponse(request, "fleet_home.html",
                                           {"download": resolve_download(cfg), "public_url": public_url,
+                                           "console_url": cfg.get("console_url") or "/fleet/console",
                                            "proto_version": PROTO_VERSION})
 
     @app.get("/fleet/console", response_class=HTMLResponse)

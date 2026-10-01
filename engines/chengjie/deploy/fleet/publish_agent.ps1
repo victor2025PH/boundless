@@ -3,6 +3,13 @@
 #   powershell -File deploy\fleet\publish_agent.ps1                       # upload fleet_agent\dist\* -> https://bd2026.cc/downloads/fleet/
 #   powershell -File deploy\fleet\publish_agent.ps1 -PackController      # also tar engines/chengjie -> ~/chatx-fleet-src.tar.gz on VPS
 #   powershell -File deploy\fleet\publish_agent.ps1 -PackController -Deploy   # ... and run: sudo bash deploy_controller.sh (production change!)
+#   powershell -File deploy\fleet\publish_agent.ps1 -BuildSetup         # rebuild ChatXAgentSetup.exe first (explicit only)
+#   ... -RequireSigned                                                    # refuse to upload an unsigned ChatXAgentSetup.exe
+#
+# ChatXAgentSetup.exe is rebuilt ONLY with -BuildSetup. Having ISCC installed no longer
+# triggers a rebuild, so a hand-signed installer in dist\ is uploaded as is. A rebuild
+# over a validly signed installer is refused unless -OverwriteSigned is also given.
+# Before any upload the installer hash must match manifest.setup_sha256 and its .sha256 file.
 #
 # Requires: OpenSSH client (ssh/scp) with key auth to $SshHost. Never embeds tokens. ASCII only.
 [CmdletBinding()]
@@ -14,6 +21,8 @@ param(
   [switch]$PackController,
   [switch]$Deploy,
   [switch]$BuildSetup,
+  [switch]$OverwriteSigned,
+  [switch]$RequireSigned,
   [switch]$WhatIf
 )
 $ErrorActionPreference = 'Stop'
@@ -28,24 +37,50 @@ $m = Get-Content $mf -Raw | ConvertFrom-Json
 Say "agent $($m.version) sha256=$($m.sha256.Substring(0,12))... file=$($m.file)"
 if ($m.url -notlike "$PublicBase/*") { Say "WARN manifest.url=$($m.url) does not start with $PublicBase (rebuild with --base-url)" }
 
-Run "ssh $SshHost 'mkdir -p $RemoteDownloads'"
 $setupScript = Join-Path $engine "fleet_agent\build_setup.ps1"
-$iscc = $env:INNO_SETUP
-if (-not $iscc) {
-  foreach ($c in @(
-    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
-    (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
-  )) { if ($c -and (Test-Path -LiteralPath $c)) { $iscc = $c; break } }
+$setupExe = Join-Path $DistDir "ChatXAgentSetup.exe"
+function SetupSignature([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return "Missing" }
+  try { return [string](Get-AuthenticodeSignature -LiteralPath $path).Status } catch { return "Unknown" }
 }
-if ($BuildSetup -or $iscc) {
-  if (-not $iscc -and $BuildSetup) { throw "ISCC.exe not found. winget install --id JRSoftware.InnoSetup -e" }
-  if ($iscc) {
-    Say "building ChatXAgentSetup.exe"
-    if (-not $WhatIf) { & powershell -NoProfile -File $setupScript -DistDir $DistDir; if ($LASTEXITCODE -ne 0) { throw "build_setup.ps1 failed" } }
+if ($BuildSetup) {
+  $iscc = $env:INNO_SETUP
+  if (-not $iscc) {
+    foreach ($c in @(
+      (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+      (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+    )) { if ($c -and (Test-Path -LiteralPath $c)) { $iscc = $c; break } }
   }
+  if (-not $iscc) { throw "ISCC.exe not found. winget install --id JRSoftware.InnoSetup -e" }
+  if (((SetupSignature $setupExe) -eq "Valid") -and -not $OverwriteSigned) {
+    throw "refusing to rebuild over a signed $setupExe (pass -OverwriteSigned to replace it, then sign again)"
+  }
+  Say "building ChatXAgentSetup.exe (-BuildSetup)"
+  $bsArgs = @('-NoProfile', '-File', $setupScript, '-DistDir', $DistDir)
+  if ($OverwriteSigned) { $bsArgs += '-Force' }
+  if (-not $WhatIf) { & powershell @bsArgs; if ($LASTEXITCODE -ne 0) { throw "build_setup.ps1 failed" } }
+  $m = Get-Content $mf -Raw | ConvertFrom-Json
 } else {
-  Say "WARN Inno Setup (ISCC.exe) not found; public page will not get ChatXAgentSetup.exe. winget install --id JRSoftware.InnoSetup -e"
+  Say "ChatXAgentSetup.exe is not rebuilt (no -BuildSetup); dist\ is uploaded as is"
 }
+# Pre-upload checks: the installer that goes out is the one the manifest pins.
+if (Test-Path -LiteralPath $setupExe) {
+  $actual = (Get-FileHash -LiteralPath $setupExe -Algorithm SHA256).Hash.ToLower()
+  if ($m.setup_sha256 -and ("$($m.setup_sha256)".ToLower() -ne $actual)) {
+    throw "manifest.setup_sha256 does not match $setupExe ($actual); rebuild the manifest after signing"
+  }
+  $side = "$setupExe.sha256"
+  if (Test-Path -LiteralPath $side) {
+    $sideHash = ((Get-Content -LiteralPath $side -Raw) -split '\s+')[0].ToLower()
+    if ($sideHash -ne $actual) { throw "$side does not match $setupExe" }
+  }
+  $sig = SetupSignature $setupExe
+  Say "ChatXAgentSetup.exe sha256=$($actual.Substring(0,12))... signature=$sig"
+  if ($RequireSigned -and $sig -ne "Valid") { throw "-RequireSigned: $setupExe signature is $sig" }
+} elseif ($RequireSigned) {
+  throw "-RequireSigned: $setupExe is missing"
+}
+Run "ssh $SshHost 'mkdir -p $RemoteDownloads'"
 $names = @($m.file, "$($m.file).sha256", "manifest.json", "Install-ChatXAgent.ps1", "Uninstall-ChatXAgent.ps1", "ChatXAgentSetup.exe", "ChatXAgentSetup.exe.sha256")
 if ($m.setup_file) { $names += @([string]$m.setup_file, ([string]$m.setup_file + ".sha256")) }
 $files = $names | Select-Object -Unique | ForEach-Object { Join-Path $DistDir $_ } | Where-Object { Test-Path $_ }
