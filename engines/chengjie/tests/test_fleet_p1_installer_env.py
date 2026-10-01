@@ -97,4 +97,4 @@ def test_pack_controller_whatif_plans_no_download_upload(tmp_path):
 
 def test_pack_controller_excludes_local_backups():
     src = (ENGINE / "deploy/fleet/publish_agent.ps1").read_text(encoding="ascii")
-    assert "--exclude=*.bak_*" in src          # local .bak_<ts> copies never ship to /opt/chatx-fleet/app
+    assert src.count("--exclude=*.bak_*") == 2   # local .bak_<ts> copies never ship (tree + appended config/presets)

@@ -213,7 +213,7 @@ if ($PackController) {
           --exclude=.git .
       if ($LASTEXITCODE -ne 0) { throw "tar failed" }
       if (Test-Path (Join-Path $engine "config\presets")) {
-        & tar -rf $raw config/presets
+        & tar -rf $raw --exclude=*.bak_* config/presets
         if ($LASTEXITCODE -ne 0) { throw "tar append config/presets failed" }
       }
       if (Test-Path $tar) { Remove-Item $tar -Force }
