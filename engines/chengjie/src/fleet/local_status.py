@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -187,6 +188,35 @@ def query_task_status(*, timeout: float = TASK_QUERY_TIMEOUT_SEC) -> Dict[str, A
         return {"installed": False, "kind": "", "task_name": TASK_NAME, "state": "", "query": "error"}
 
 
+# 本机页每 8 秒刷新一次；查计划任务每次都要起 schtasks + powershell 两个进程。
+# 30 秒内复用上次结果；并发请求排队拿同一份，只起一次进程。「刷新状态」按钮带 fresh=1 强制重查。
+TASK_CACHE_TTL_SEC = 30.0
+_task_cache_lock = threading.Lock()
+_task_cache: Dict[str, Any] = {"at": None, "val": None, "fn": None}
+
+
+def reset_task_cache() -> None:
+    with _task_cache_lock:
+        _task_cache["at"] = None
+        _task_cache["val"] = None
+        _task_cache["fn"] = None
+
+
+def query_task_status_cached(*, ttl: float = TASK_CACHE_TTL_SEC, force: bool = False,
+                             clock: Callable[[], float] = time.monotonic,
+                             query: Optional[Callable[[], Dict[str, Any]]] = None) -> Dict[str, Any]:
+    q = query if query is not None else query_task_status
+    with _task_cache_lock:
+        at, val = _task_cache["at"], _task_cache["val"]
+        if not force and at is not None and val is not None and _task_cache["fn"] is q and clock() - at < ttl:
+            return dict(val, cached=True)
+        val = dict(q() or {})
+        _task_cache["at"] = clock()
+        _task_cache["val"] = val
+        _task_cache["fn"] = q
+        return dict(val, cached=False)
+
+
 def _is_secret_key(key: str) -> bool:
     k = str(key or "").lower()
     if k in _SECRET_KEYS:
@@ -222,6 +252,7 @@ def build_local_status(
     probe: Optional[ProbeFn] = None,
     service_status_fn: Optional[ServiceFn] = None,
     host: Optional[str] = None,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     """旧 status 字段原样保留，并追加本机页需要的可达性 / 任务 / 心跳 / 中文状态。"""
     now_f = time.time() if now is None else float(now)
@@ -231,7 +262,7 @@ def build_local_status(
     url = str(getattr(cfg, "controller_url", "") or "").rstrip("/")
     do_probe = probe if probe is not None else probe_controller
     reachable = bool(do_probe(url)) if url else False
-    query = service_status_fn if service_status_fn is not None else query_task_status
+    query = service_status_fn if service_status_fn is not None else (lambda: query_task_status_cached(force=fresh))
     try:
         svc = query() or {}
     except Exception:
