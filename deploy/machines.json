@@ -8,7 +8,7 @@
     "resolution=该机实际屏幕（壁纸按此渲染）；accent=机器识别色（壁纸/终端/主题统一用）；watch_ports=桌面哨兵看护的本机算力端口。",
     "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。",
     "chatx_seat=true 表示该机跑智聊桌面版坐席（127.0.0.1:18799 桌面后端 + %APPDATA%\\telegram-ai-desktop 日志）；deploy/desktop/monitor_seat_logs.py 据此取坐席名单与中文名（zh），改编制只改本字段（2026-09-18 增列，此前脚本硬编码 140 听写 → 改编记忆机后连报假离线）。",
-    "2026-09-22 实施102 五台算力重编（docs/实施102）：本表写的是目标编制——176 声音机（IndexTTS-2 + fish + ASR/SER，主语音与情绪）、104 出图机（ComfyUI）、198 视觉机（qwen3-vl 钉常驻）、140 记忆机（bge-m3 + STT 备份 + CosyVoice 粤语）。watch_ports 按目标写：机器侧步骤未做完前板上/坐席监控算力段会红，红字即待办。阶段 4（117 生产实例 → 173、173 撤坐席）未动，173/117 条目待迁移完成再改。"
+    "2026-09-22 实施102 五台算力重编（docs/实施102）：本表写的是目标编制——176 声音机（IndexTTS-2 + fish + ASR/SER，主语音与情绪）、104 出图机（ComfyUI）、198 视觉机（qwen3-vl 钉常驻）、140 记忆机（bge-m3 + STT 备份 + CosyVoice 粤语）。watch_ports 按目标写：机器侧步骤未做完前板上/坐席监控算力段会红，红字即待办。阶段 4 已于 2026-09-22 完成（117 生产迁 173）。2026-09-23 117 台账改为实际地址 192.168.0.165、称呼开发机。"
   ],
   "version": "2026-09-22",
   "gateway": "192.168.0.1",
@@ -155,8 +155,8 @@
       "legacy_ids": [
         "tongyi"
       ],
-      "zh": "主机",
-      "zh_legacy": "声备",
+      "zh": "开发机",
+      "zh_legacy": "主机",
       "ssh": [
         "zhuji",
         "shengbei",
@@ -169,14 +169,14 @@
         "hub117",
         "pc117"
       ],
-      "ip": "192.168.0.117",
+      "ip": "192.168.0.165",
       "mac": "B4:2E:99:8E:8C:6A",
       "hostname_hint": "MS-DEFYSOMWQYBZ",
       "user": "Administrator",
       "key": "cluster_controller",
       "role": "dev",
       "role_short": "开发/打包（dev-only）",
-      "role_now": "dev-only（实施102 阶段 4 于 2026-09-22 08:13 停机迁出）：智聊实例 / 四平台 worker / okline 桥 / 61 项生产计划任务已全部 Disabled 并在 173 启用；本机 18799 portproxy 改指 173:18799 作过渡 LAN 入口；只做开发/打包与 zhiliao_pilot 试验实例",
+      "role_now": "开发与打包，不参与运行（智聊生产已于 2026-09-22 迁至 173）",
       "gpu": "RTX 3060 12G",
       "resolution": "1920x1080",
       "accent": "#F0A010",
@@ -203,7 +203,7 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/shengbei-wallpaper.png",
       "services": [],
       "watch_ports": [],
-      "note": "阶段 4 后不再 watch 18799（实例已在 173）；原 watch 增列 18799（2026-08-29 停电事故沉淀：引擎宕机 5.4h 桌面零提示）；智聊重启窗口 15-30s 内的 svcdown 横幅属预期瞬态"
+      "note": "2026-09-23 台账 IP 改为网卡实际地址 192.168.0.165（原 .117 已漂移），称呼由主机改为开发机。阶段 4 后不再 watch 18799（实例已在 173）。"
     },
     {
       "id": "lianbei",
