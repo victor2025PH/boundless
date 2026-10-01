@@ -345,7 +345,7 @@ def test_download_page_installer_and_script_attachment(st):
 
 def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     publish = (ENGINE / "deploy/fleet/publish_agent.ps1").read_text(encoding="utf-8")
-    assert "tar -rf $raw config/presets" in publish
+    assert "tar -rf $raw --exclude=*.bak_* config/presets" in publish
     assert "--exclude=config" in publish
     deploy = (ENGINE / "deploy/fleet/deploy_controller.sh").read_text(encoding="utf-8")
     assert "chmod 750" in deploy and "chmod 770" in deploy and 'chown root:"$SVC_USER"' in deploy
