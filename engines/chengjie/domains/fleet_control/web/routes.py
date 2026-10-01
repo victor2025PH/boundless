@@ -17,6 +17,8 @@
     POST /api/fleet/nodes/{node_id}/revoke  POST /api/fleet/nodes/{node_id}  {label, group_name}
     GET  /api/fleet/tasks?node_id=&status=&kind=   GET /api/fleet/tasks/{task_id}   POST /api/fleet/tasks/{task_id}/cancel
     GET  /api/fleet/overview
+    POST /api/fleet/nodes/{node_id}/login-qr                    {platform, instance?, ...} → login_qr 任务
+    POST /api/fleet/nodes/{node_id}/login-qr/{login_id}/status  {platform, instance?}      → login_status 任务
 页面：
     GET  /fleet/            独立主页（下载 + 三步安装 + 主控地址；不需登录，不动官网现有页）
     GET  /fleet/console     节点机群控制台（页面权限走核心 PAGE_PERMISSIONS）
@@ -33,8 +35,13 @@ from typing import Any, Dict
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
+from src.fleet.login_qr import (
+    LOGIN_QR_TTL_SEC, LOGIN_STATUS_TTL_SEC, sanitize_login_result, start_payload, strip_qr, valid_instance,
+    valid_login_id, valid_platform,
+)
 from src.fleet.protocol import (
-    ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, TASK_KINDS,
+    ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, STATUS_PULLED,
+    STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS,
 )
 from src.fleet.roompack import build_room_pack
 from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
@@ -269,8 +276,13 @@ def register_routes(app, ctx) -> None:
         if not tid or status not in ACK_STATUSES:
             raise HTTPException(status_code=400, detail="task_id / status(done|failed|rejected) 必填")
         st = _store_or_503(config_manager)
-        rec = st.ack(tid, node_id=node["node_id"], status=status,
-                     result=body.get("result") if isinstance(body.get("result"), dict) else None,
+        result = body.get("result") if isinstance(body.get("result"), dict) else None
+        if result is not None:
+            known = st.get_task(tid)
+            if known is not None and known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
+                # the console renders qr_data_url as <img src>: keep base64 raster data URLs only
+                result = sanitize_login_result(result)
+        rec = st.ack(tid, node_id=node["node_id"], status=status, result=result,
                      detail=str(body.get("detail") or ""))
         # 未知 / 不属于本节点的 task_id 也 200（fail-soft，Agent 不必重试）
         return {"ok": True, "known": rec is not None, "status": rec["status"] if rec else None}
@@ -406,7 +418,59 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_tasks(request: Request, node_id: str = "", status: str = "", kind: str = "",
                               limit: int = 100, _=Depends(_api_auth)):
         st = _store_or_503(config_manager)
-        return {"ok": True, "tasks": st.list_tasks(node_id=node_id, status=status, kind=kind, limit=limit)}
+        tasks = st.list_tasks(node_id=node_id, status=status, kind=kind, limit=limit)
+        for rec in tasks:
+            rec["result"] = strip_qr(rec.get("result") or {})
+        return {"ok": True, "tasks": tasks}
+
+    # ── 集中扫码（docs/FLEET_CONSOLE_QR_LOGIN.md）──────────────────────────
+    def _login_target(body: Dict[str, Any]) -> Dict[str, Any]:
+        platform = valid_platform(body.get("platform"))
+        if not platform:
+            raise HTTPException(status_code=400, detail="platform 只能是小写字母/数字/下划线（如 whatsapp、telegram、line）")
+        target: Dict[str, Any] = {"platform": platform}
+        raw_inst = str(body.get("instance") or "").strip()
+        if raw_inst:
+            inst = valid_instance(raw_inst)
+            if not inst:
+                raise HTTPException(status_code=400, detail="instance 名称不合法")
+            target["instance"] = inst
+        return target
+
+    @app.post("/api/fleet/nodes/{node_id}/login-qr")
+    async def api_fleet_login_qr_start(node_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        target = _login_target(body)
+        payload = {"platform": target["platform"], **start_payload(body)}
+        st = _store_or_503(config_manager)
+        rec = st.enqueue(node_id, TASK_LOGIN_QR, payload=payload, target=target,
+                         ttl_sec=LOGIN_QR_TTL_SEC, created_by=_actor(request))
+        if rec is None:
+            raise HTTPException(status_code=409, detail="节点不存在 / 已吊销")
+        return {"ok": True, "task": rec}
+
+    @app.post("/api/fleet/nodes/{node_id}/login-qr/{login_id}/status")
+    async def api_fleet_login_qr_status(node_id: str, login_id: str, request: Request,
+                                        _=Depends(_api_write("fleet_control"))):
+        lid = valid_login_id(login_id)
+        if not lid:
+            raise HTTPException(status_code=400, detail="login_id 不合法")
+        body = await _json(request)
+        target = _login_target(body)
+        st = _store_or_503(config_manager)
+        # Dedupe: a second tab / operator polling the same login reuses the probe that is
+        # still waiting for the node instead of stacking another task.
+        for status in (STATUS_QUEUED, STATUS_PULLED):
+            for rec in st.list_tasks(node_id=node_id, kind=TASK_LOGIN_STATUS, status=status, limit=50):
+                pl = rec.get("payload") or {}
+                if pl.get("login_id") == lid and pl.get("platform") == target["platform"] \
+                        and (rec.get("target") or {}).get("instance", "") == target.get("instance", ""):
+                    return {"ok": True, "task": rec, "deduped": True}
+        rec = st.enqueue(node_id, TASK_LOGIN_STATUS, payload={"platform": target["platform"], "login_id": lid},
+                         target=target, ttl_sec=LOGIN_STATUS_TTL_SEC, created_by=_actor(request))
+        if rec is None:
+            raise HTTPException(status_code=409, detail="节点不存在 / 已吊销")
+        return {"ok": True, "task": rec}
 
     @app.get("/api/fleet/tasks/{task_id}")
     async def api_fleet_task(task_id: str, request: Request, _=Depends(_api_auth)):

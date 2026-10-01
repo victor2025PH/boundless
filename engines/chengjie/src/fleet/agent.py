@@ -45,6 +45,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
 from .detect import (
     LIVE_STREAM_PORTS, detect_instances, is_live_port_url, is_live_stream_host, is_loopback_url, sanitize_instances,
     url_port,
@@ -768,26 +769,36 @@ class NodeAgent:
                 inst = self._pick_instance(task)
                 if inst is None:
                     return STATUS_REJECTED, {}, "no_instance"
-                platform = str(payload.get("platform") or "whatsapp").lower()
-                body = {k: payload[k] for k in ("account_id", "label", "group", "proxy_id", "use_fingerprint", "phone", "mode")
-                        if k in payload}
-                res = self._local(inst, "POST", f"/api/platforms/{platform}/login/start", body)
+                # platform goes into a local URL path: whitelist shape only
+                platform = valid_platform(payload.get("platform") or target.get("platform") or "whatsapp")
+                if not platform:
+                    return STATUS_REJECTED, {}, "bad_platform"
+                res = self._local(inst, "POST", f"/api/platforms/{platform}/login/start", login_start_payload(payload))
                 if not res.get("ok", True) and not res.get("login_id"):
                     return STATUS_FAILED, {"detail": res.get("detail"), "reason_code": res.get("reason_code")}, "login_start_failed"
-                out = {k: res.get(k) for k in ("login_id", "status", "detail", "mode", "kind", "account_id", "qr_url", "instruction") if k in res}
+                out = {k: res.get(k) for k in ("login_id", "status", "detail", "mode", "kind", "account_id", "qr_url",
+                                               "instruction", "reason_code") if k in res}
+                if "login_id" in out:
+                    out["login_id"] = valid_login_id(out["login_id"])
                 out["instance"] = inst.get("name")
                 out["platform"] = platform
-                out["qr_data_url"] = str(res.get("qr_image") or "")
+                out["qr_data_url"] = safe_qr_data_url(res.get("qr_image"))
                 return STATUS_DONE, out, "qr_ready" if out["qr_data_url"] else "started"
             if kind == TASK_LOGIN_STATUS:
                 inst = self._pick_instance(task)
-                lid = str(payload.get("login_id") or "")
+                lid = valid_login_id(payload.get("login_id"))
                 if inst is None or not lid:
                     return STATUS_REJECTED, {}, "no_instance_or_login_id"
-                platform = str(payload.get("platform") or "whatsapp").lower()
+                platform = valid_platform(payload.get("platform") or target.get("platform") or "whatsapp")
+                if not platform:
+                    return STATUS_REJECTED, {}, "bad_platform"
                 res = self._local(inst, "GET", f"/api/platforms/{platform}/login/{lid}/status")
-                out = {k: res.get(k) for k in ("login_id", "status", "detail", "account_id", "qr_url") if k in res}
-                out["qr_data_url"] = str(res.get("qr_image") or "")
+                out = {k: res.get(k) for k in ("login_id", "status", "detail", "account_id", "qr_url", "reason_code",
+                                               "retry_after_sec") if k in res}
+                out["login_id"] = lid
+                out["instance"] = inst.get("name")
+                out["platform"] = platform
+                out["qr_data_url"] = safe_qr_data_url(res.get("qr_image"))
                 return STATUS_DONE, out, str(res.get("status") or "ok")
             if kind == TASK_STOP_ACCOUNT:
                 inst = self._pick_instance(task, prefer_domain="player_care")

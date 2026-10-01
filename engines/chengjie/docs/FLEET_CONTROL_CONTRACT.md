@@ -115,8 +115,8 @@
 | `upgrade` | 2 | `payload.version`, `payload.url`, `payload.sha256`（必填） | **Agent ≥0.2.0（打包版）执行**：下载到 `<state>/updates/`、校验 sha256、写换文件脚本、ack `done` 后退出，由计划任务 / systemd 拉起新版；源码运行 rejected `not_frozen`；缺 sha256 rejected `sha256_required` | `staged`, `version`, `exit: true` |
 | `restart_instance` | 3 | `target.instance` | 仅当 Agent 本地 `instances[].restart_cmd` 显式配置才执行，否则 rejected | 退出码 |
 | `push_config` | 4 | `payload.patch` | **rejected** `not_supported_in_agent_v1`（无安全的配置 patch 设计前不开） | — |
-| `login_qr` | 5 | `target.instance`, `target.platform` (whatsapp/telegram), `payload.proxy_id?`, `payload.use_fingerprint?` | 调本机 `/api/platforms/{p}/login/start`，回二维码 | `login_id`, `qr`(data URL), `expires_in` |
-| `login_status` | 5 | `target.instance`, `payload.login_id` | 调 `/api/platforms/{p}/login/{id}/status` | 登录状态 |
+| `login_qr` | 5 | `target.instance`, `target.platform` / `payload.platform`（`^[a-z][a-z0-9_]{1,23}$`），`payload` 白名单：account_id/label/group/proxy_id/use_fingerprint/phone/mode | 调本机 `/api/platforms/{p}/login/start`，回二维码（只留 base64 位图 data URL）；控制台入口 `POST /api/fleet/nodes/{id}/login-qr`，见 FLEET_CONSOLE_QR_LOGIN.md | `login_id`, `qr`(data URL), `expires_in` |
+| `login_status` | 5 | `target.instance`, `payload.login_id`（`^[A-Za-z0-9_.:-]{1,96}$`）, `payload.platform` | 调 `/api/platforms/{p}/login/{id}/status`；控制台入口 `POST /api/fleet/nodes/{id}/login-qr/{login_id}/status` | 登录状态、`reason_code`、`retry_after_sec`、刷新后的二维码 |
 | `ping` | 7 | `payload.echo?` | 本地回 pong | agent/app 版本、machine_id、host、time、echo |
 | `account_health` | 8 | `target.instance?` | `GET /api/accounts/fleet-health`（总数/在线/生命周期/红黄绿分） | 数字摘要 |
 | `pull_overview` | 9 | `target.instance?` | `GET /api/player-care/overview`（联系人/阶段/明用/数字闸/网关健康） | 看板 JSON |
@@ -146,7 +146,7 @@
   `run --service` 监督循环，未注册/被吊销/崩溃都退避重试不退出）；`upgrade` 落地（`src/fleet/updater.py`）；
   单文件打包 `fleet_agent/build_agent.py` → `chatx-agent.exe` + `manifest.json`；一键安装 / 卸载 PowerShell；
   操作端 CLI `src/fleet/admin.py`；主控落地包 `deploy/fleet/`（systemd / nginx / deploy / publish）。部署手册见 `docs/FLEET_DEPLOY.md`。
-- **未做**：代码签名（exe 未签，SmartScreen 会拦一次）；`push_config`；控制台集中扫码 UI（只有 `login_qr` 任务层）；
+- **未做**：代码签名（exe 未签，SmartScreen 会拦一次）；`push_config`；
   `bd2026.cc` 上的实际部署 / 反代 include / 证书属改生产，脚本已备好，需单独授权后执行。
 - 域名口径：`/fleet/` 主页与下载元数据从 `fleet_control.public_url` / `fleet_control.download.*` 读取，不写死；
   `download.manifest_url` 指向 `build_agent.py` 产出的 `manifest.json`（publish 后自动带出版本 / url / sha256，60 s 缓存）；

@@ -86,6 +86,20 @@
     </table>
   </div>
 
+  <div class="fc-sec" id="fc-login" style="display:none">
+    <h3>扫码登录 <button class="btn-sec" id="fc-login-close">收起</button></h3>
+    <div class="fc-kv">
+      <span>节点 <b id="fc-login-node">—</b></span>
+      <label>实例 <select id="fc-login-inst"></select></label>
+      <label>平台 <input id="fc-login-platform" list="fc-login-platforms" value="whatsapp" style="width:8rem"></label>
+      <datalist id="fc-login-platforms"><option value="whatsapp"><option value="telegram"><option value="line"><option value="instagram"><option value="messenger"><option value="tiktok"></datalist>
+      <span class="fc-act"><button class="btn-sec" id="fc-login-go">生成二维码</button><button class="btn-sec" id="fc-login-stop" style="display:none">停止</button></span>
+    </div>
+    <p id="fc-login-msg" style="font-size:.8rem;margin:.6rem 0"></p>
+    <img id="fc-login-qr" alt="登录二维码" style="display:none;max-width:280px;background:#fff;padding:6px;border-radius:6px">
+    <p style="font-size:.72rem;color:var(--t3);margin:.5rem 0 0">二维码由节点 Agent 从该电脑本机的实例取回，经主控转给你；每 4 秒查一次状态，5 分钟没扫就结束。二维码只在这里显示，不要截图外传。要输密码 / 验证码的登录方式仍需在那台电脑上完成。</p>
+  </div>
+
   <div class="fc-sec" id="fc-detail" style="display:none">
     <h3>任务结果 <button class="btn-sec" onclick="document.getElementById('fc-detail').style.display='none'">收起</button></h3>
     <pre class="fc-pre" id="fc-detail-body"></pre>
@@ -95,7 +109,11 @@
 (function(){
   var STATE={online:['在线','fc-ok'],offline:['离线','fc-bad'],revoked:['已吊销','fc-muted'],pending:['待注册','fc-warn']};
   var TSTATE={queued:'fc-warn',pulled:'fc-warn',done:'fc-ok',failed:'fc-bad',rejected:'fc-bad',expired:'fc-muted',cancelled:'fc-muted'};
-  var KINDS=['ping','pull_overview','account_health','login_qr','stop_account','restart_instance'];
+  var KINDS=['ping','pull_overview','account_health','stop_account','restart_instance'];
+  var QR_RE=/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+\/]+={0,2}$/;
+  var LOGIN_DONE={authorized:1,failed:1,expired:1,cancelled:1};
+  var LOGIN_MAX_MS=300000;
+  var lg=null;
   var nodes={};
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   function t(id,v){var el=document.getElementById(id);if(el)el.textContent=v;}
@@ -115,7 +133,8 @@
     document.getElementById('fc-list').innerHTML=list.length?list.map(function(n){nodes[n.node_id]=n;
       var st=STATE[n.state]||[n.state,'fc-muted'],hb=n.last_heartbeat||{},inst=hb.instances||[],acc=hb.accounts||{};
       var up=inst.filter(function(i){return i&&i.up;}).length;
-      var acts=n.status==='revoked'?'':KINDS.map(function(k){return '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="'+k+'">'+k+'</button>';}).join('')+
+      var acts=n.status==='revoked'?'':'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__login">扫码登录</button>'+
+        KINDS.map(function(k){return '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="'+k+'">'+k+'</button>';}).join('')+
         '<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__revoke" style="color:var(--red)">吊销</button>';
       return '<tr><td>'+badge(st[0],st[1])+(n.proto_compatible?'':' '+badge('协议过旧','fc-warn'))+'</td>'+
         '<td><b>'+esc(n.label||n.node_id)+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.node_id)+' · '+esc(n.machine_id)+'</span></td>'+
@@ -196,14 +215,14 @@
     if(k==='__revoke'){if(!confirm('吊销节点 '+nid+'？其 node_key 立即失效，未领任务全部取消。'))return;
       apiFetch('/api/fleet/nodes/'+nid+'/revoke',{method:'POST'}).then(j).then(load).catch(function(e){alert(e.message);});return;}
     if(k==='stop_account'){var ph=prompt('要 STOP 的对方手机号（E.164，不带 +）');if(!ph)return;body.target={phone:ph};}
-    if(k==='login_qr'){var pf=prompt('平台 whatsapp / telegram','whatsapp');if(!pf)return;body.payload={platform:pf};}
+    if(k==='__login'){lgOpen(nid);return;}
     apiFetch('/api/fleet/nodes/'+nid+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({kind:k},body))})
       .then(j).then(load).catch(function(e){alert(e.message);});
   });
   document.getElementById('fc-tasks').addEventListener('click',function(ev){var a=ev.target.closest('a[data-t]');if(!a)return;ev.preventDefault();
     apiFetch('/api/fleet/tasks/'+a.getAttribute('data-t')).then(j).then(function(d){var r=d.task.result||{};
       var box=document.getElementById('fc-detail');box.style.display='';
-      if(r.qr_data_url){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
+      if(r.qr_data_url&&QR_RE.test(r.qr_data_url)){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
       else document.getElementById('fc-detail-body').textContent=JSON.stringify(r,null,2);
       box.scrollIntoView({behavior:'smooth'});}).catch(function(e){alert(e.message);});
   });
@@ -213,6 +232,71 @@
       .then(j).then(function(d){t('fc-code',d.code);t('fc-code-exp',fmtTs(d.expires_at));document.getElementById('fc-codebox').style.display='';load();})
       .catch(function(e){alert('生成失败 '+e.message);});
   });
+  // ── 集中扫码：login_qr → 轮询 login_status（docs/FLEET_CONSOLE_QR_LOGIN.md）──
+  function lgMsg(m){t('fc-login-msg',m);}
+  function lgQr(u){var img=document.getElementById('fc-login-qr');if(u&&QR_RE.test(u)){img.src=u;img.style.display='';}}
+  function lgHideQr(){var img=document.getElementById('fc-login-qr');img.removeAttribute('src');img.style.display='none';}
+  function lgStop(m){
+    if(lg){clearTimeout(lg.timer);lg.tasks.forEach(function(id){apiFetch('/api/fleet/tasks/'+encodeURIComponent(id)+'/cancel',{method:'POST'}).catch(function(){});});}
+    lg=null;document.getElementById('fc-login-stop').style.display='none';document.getElementById('fc-login-go').disabled=false;
+    if(m)lgMsg(m);
+  }
+  function lgWait(s,id,cb){
+    apiFetch('/api/fleet/tasks/'+encodeURIComponent(id)).then(j).then(function(d){if(lg!==s)return;var x=d.task||{};
+      if(x.status==='queued'||x.status==='pulled'){
+        if(Date.now()>s.deadline){lgHideQr();lgStop('超时：节点没有回应（离线或 Agent 过旧？）');return;}
+        s.timer=setTimeout(function(){lgWait(s,id,cb);},2000);return;}
+      s.tasks=s.tasks.filter(function(v){return v!==id;});cb(x);
+    }).catch(function(e){if(lg===s)lgStop('查询任务失败 '+e.message);});
+  }
+  function lgPoll(s){
+    if(lg!==s)return;
+    if(Date.now()>s.deadline){lgHideQr();lgStop('5 分钟内没有完成扫码，已停止。可以重新生成。');return;}
+    apiFetch('/api/fleet/nodes/'+encodeURIComponent(s.node)+'/login-qr/'+encodeURIComponent(s.loginId)+'/status',
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:s.platform,instance:s.instance})})
+      .then(j).then(function(d){if(lg!==s)return;var id=d.task.task_id;s.tasks.push(id);
+        lgWait(s,id,function(x){var r=x.result||{},st=String(r.status||'');
+          if(x.status!=='done'){lgStop('状态查询 '+x.status+(x.detail?(' · '+x.detail):''));return;}
+          lgQr(r.qr_data_url);
+          if(st==='authorized'){lgHideQr();lgStop('登录成功'+(r.account_id?('：'+r.account_id):''));load();return;}
+          if(LOGIN_DONE[st]){lgHideQr();lgStop('已结束：'+st+(r.reason_code?(' ('+r.reason_code+')'):'')+(r.detail?(' · '+r.detail):''));return;}
+          lgMsg('等待扫码… 状态 '+(st||'—')+(r.detail?(' · '+r.detail):''));
+          s.timer=setTimeout(function(){lgPoll(s);},4000);
+        });
+      }).catch(function(e){if(lg===s)lgStop('发起状态查询失败 '+e.message);});
+  }
+  function lgOpen(nid){
+    lgStop('');lgHideQr();lgMsg('');
+    var n=nodes[nid]||{},hb=n.last_heartbeat||{};
+    var inst=(hb.instances||[]).filter(function(i){return i&&i.name&&i.role!=='health';});
+    document.getElementById('fc-login-inst').innerHTML='<option value="">自动</option>'+inst.map(function(i){
+      return '<option value="'+esc(i.name)+'">'+esc(i.name)+(i.up?'':'（未在线）')+'</option>';}).join('');
+    var box=document.getElementById('fc-login');box.setAttribute('data-node',nid);
+    t('fc-login-node',n.label||n.host_name||nid);box.style.display='';box.scrollIntoView({behavior:'smooth'});
+  }
+  document.getElementById('fc-login-go').addEventListener('click',function(){
+    var box=document.getElementById('fc-login'),nid=box.getAttribute('data-node')||'';
+    var pf=String(document.getElementById('fc-login-platform').value||'').trim().toLowerCase();
+    var inst=document.getElementById('fc-login-inst').value||'';
+    if(!nid||!/^[a-z][a-z0-9_]{1,23}$/.test(pf)){lgMsg('平台名不对（例：whatsapp / telegram / line）');return;}
+    lgStop('');lgHideQr();
+    var s={node:nid,platform:pf,instance:inst,loginId:'',timer:0,deadline:Date.now()+LOGIN_MAX_MS,tasks:[]};lg=s;
+    document.getElementById('fc-login-go').disabled=true;document.getElementById('fc-login-stop').style.display='';
+    lgMsg('已下发，等节点取回二维码…');
+    apiFetch('/api/fleet/nodes/'+encodeURIComponent(nid)+'/login-qr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:pf,instance:inst})})
+      .then(j).then(function(d){if(lg!==s)return;var id=d.task.task_id;s.tasks.push(id);
+        lgWait(s,id,function(x){var r=x.result||{};
+          if(x.status!=='done'){lgStop('发起失败：'+x.status+(x.detail?(' · '+x.detail):'')+(r.detail?(' · '+r.detail):''));return;}
+          lgQr(r.qr_data_url);
+          if(!r.login_id){lgStop(r.detail||'节点没有返回 login_id');return;}
+          s.loginId=r.login_id;
+          lgMsg(r.qr_data_url?'请用手机扫码':'已发起：'+(r.instruction||r.detail||r.status||'等待'));
+          s.timer=setTimeout(function(){lgPoll(s);},3000);
+        });
+      }).catch(function(e){if(lg===s)lgStop('发起失败 '+e.message);});
+  });
+  document.getElementById('fc-login-stop').addEventListener('click',function(){lgHideQr();lgStop('已停止');});
+  document.getElementById('fc-login-close').addEventListener('click',function(){lgHideQr();lgStop('');document.getElementById('fc-login').style.display='none';});
   document.getElementById('fc-refresh').addEventListener('click',load);
   document.getElementById('fc-group').addEventListener('change',load);
   load();setInterval(load,15000);
