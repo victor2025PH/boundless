@@ -1583,6 +1583,7 @@ class TelegramSenderMixin:
                     try:
                         fail_state["synth_failed"] = True
                         fail_state["reason"] = str(reason or "")
+                        fail_state["text_fallback"] = self.voice_fail_sends_text(vr_cfg)
                     except Exception:
                         pass
                 if not record:
@@ -1991,6 +1992,14 @@ class TelegramSenderMixin:
                 # 自动改发文字——宁可不回消息，也不发替代品（旧「诚实回落改写+补发
                 # 完整文字」路径整体拆除）。处置＝回复原文转工作台待发队列（内容不丢，
                 # 修好后坐席一键放行）+ 主机弹窗「AI 不可用」+ ERROR 日志上报。
+                # 例外：on_voice_fail=text 的人设 → 补发完整文字（已有语音条送达则不补，防重复）。
+                if self.voice_fail_sends_text(vr_cfg):
+                    if _voice_progress["sent"]:
+                        return
+                    self.logger.warning(
+                        "[voice_reply] text-first 语音最终失败 → on_voice_fail=text 补发文字")
+                    await self._send_reply(original_message, reply_text)
+                    return
                 _chat_id = str(getattr(
                     getattr(original_message, "chat", None), "id", "") or "")
                 _acct = str(getattr(self, "account_id", "") or "default")
@@ -2107,7 +2116,20 @@ class TelegramSenderMixin:
             out["trigger"] = trig
         if isinstance(vp.get("text_voice_split"), bool):
             out["text_voice_split"] = vp["text_voice_split"]
+        on_fail = str(vp.get("on_voice_fail") or "").strip().lower()
+        if on_fail in self._VOICE_FAIL_MODES:
+            out["on_voice_fail"] = on_fail
         return out
+
+    _VOICE_FAIL_MODES = frozenset({"queue", "text"})
+
+    @classmethod
+    def voice_fail_sends_text(cls, vr_cfg: Any) -> bool:
+        """语音尝试失败后是否改发文字：仅 ``on_voice_fail: text`` 显式选择（人设包 /
+        persona_overrides）。缺省 queue＝无兜底纪律（转工作台待发，不替发文字）。"""
+        if not isinstance(vr_cfg, dict):
+            return False
+        return str(vr_cfg.get("on_voice_fail") or "").strip().lower() == "text"
 
     @staticmethod
     def split_text_voice(text: str, *, min_part_chars: int = 6):

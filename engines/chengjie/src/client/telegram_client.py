@@ -3880,7 +3880,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # 记账（未发出的回复不得占冷却位/进 last_reply——幻影回复）。
                 # 注意本分支只拦「语音尝试过且失败」；语音未触发的普通文字回复
                 # 不在此列（那是正文不是替代品）。
-                if _voice_fail_state.get("synth_failed"):
+                # 例外：人设/配置显式 on_voice_fail=text（语音只是加分项的人设，如销售）
+                # → 照常走下方文字发送，不转待发。
+                if _voice_fail_state.get("synth_failed") and \
+                        _voice_fail_state.get("text_fallback"):
+                    self.logger.warning(
+                        "[voice_reply] 语音失败（%s）→ on_voice_fail=text 改发文字 chat=%s",
+                        _voice_fail_state.get("reason") or "synth_failed", chat_id)
+                elif _voice_fail_state.get("synth_failed"):
                     _vb_acct = str(getattr(self, "account_id", "") or "default")
                     _vb_cid = f"telegram:{_vb_acct}:{chat_id}"
                     try:

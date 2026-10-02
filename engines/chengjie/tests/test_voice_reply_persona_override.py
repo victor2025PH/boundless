@@ -117,6 +117,98 @@ def test_split_text_voice_unsplittable(txt):
     assert TelegramSenderMixin.split_text_voice(txt) is None
 
 
+def test_persona_pack_on_voice_fail_text(monkeypatch):
+    _patch_pid(monkeypatch, "my_sales", {"on_voice_fail": "TEXT"})
+    out = _sender()._voice_reply_persona_override({}, {"enabled": True}, _msg())
+    assert out["on_voice_fail"] == "text"
+    assert TelegramSenderMixin.voice_fail_sends_text(out) is True
+
+
+@pytest.mark.parametrize("vr", [
+    {}, {"on_voice_fail": "queue"}, {"on_voice_fail": "bogus"}, None, "text",
+])
+def test_voice_fail_default_keeps_no_fallback_discipline(vr):
+    assert TelegramSenderMixin.voice_fail_sends_text(vr) is False
+
+
+def test_persona_pack_invalid_on_voice_fail_ignored(monkeypatch):
+    _patch_pid(monkeypatch, "my_sales", {"on_voice_fail": "silence"})
+    vr = {"enabled": True}
+    assert _sender()._voice_reply_persona_override({}, vr, _msg()) is vr
+
+
+def _drive_to_lang_reject(monkeypatch, vr_cfg):
+    """把 _maybe_send_voice_reply 推到「已触发后失败」出口（语言拒发），返回 fail_state。"""
+    import asyncio
+
+    import src.ai.lang_voice_route as lvr
+    import src.ai.persona_voice as pv
+    import src.ai.spoken_variant as spv
+    import src.client.voice_burst_guard as vbg
+    import src.inbox.voice_autosend as va
+    import src.ops.bug_intake as bi
+
+    monkeypatch.setattr(va, "global_voice_reply_off", lambda *a, **k: False)
+    monkeypatch.setattr(va, "resolve_defer_during_image", lambda *a, **k: False)
+    monkeypatch.setattr(bi, "voice_suppressed", lambda *a, **k: False)
+    monkeypatch.setattr(vbg, "voice_degrade_reason", lambda *a, **k: "")
+    monkeypatch.setattr(spv, "take_spoken_variant", lambda *a, **k: None)
+    monkeypatch.setattr(pv, "resolve_effective_voice_context",
+                        lambda *a, **k: {"voice_cfg": {}})
+    monkeypatch.setattr(lvr, "route_voice_cfg_for_text",
+                        lambda cfg, *a, **k: (cfg, "reject:en"))
+    monkeypatch.setattr(lvr, "is_reject_tag", lambda tag: True)
+
+    s = _sender()
+    s.config = SimpleNamespace(config={"telegram": {"voice_reply": vr_cfg}})
+    s._voice_reply_persona_override = lambda raw, vr, msg: vr
+    s._presend_blocked = lambda **k: False
+
+    async def _noop(*a, **k):
+        return None
+
+    s._mark_peer_read = _noop
+    msg = SimpleNamespace(chat=SimpleNamespace(id="8125712527"), text="hi")
+    fail_state: dict = {}
+    sent = asyncio.run(s._maybe_send_voice_reply(
+        msg, "你好呀，我是小界。", is_peer_voice=False, fail_state=fail_state))
+    assert sent is False
+    return fail_state
+
+
+def test_voice_fail_state_carries_text_fallback(monkeypatch):
+    fs = _drive_to_lang_reject(
+        monkeypatch, {"enabled": True, "trigger": "always", "on_voice_fail": "text"})
+    assert fs["synth_failed"] is True
+    assert fs["text_fallback"] is True
+
+
+def test_voice_fail_state_default_queues(monkeypatch):
+    fs = _drive_to_lang_reject(monkeypatch, {"enabled": True, "trigger": "always"})
+    assert fs["synth_failed"] is True
+    assert fs["text_fallback"] is False
+
+
+def test_telegram_client_text_fallback_branch_wired():
+    from pathlib import Path
+    tc = (Path(__file__).parent.parent / "src" / "client" / "telegram_client.py"
+          ).read_text(encoding="utf-8")
+    i_fb = tc.index('_voice_fail_state.get("text_fallback")')
+    i_block = tc.index('elif _voice_fail_state.get("synth_failed"):')
+    assert i_fb < i_block
+
+
+def test_wujie_sales_pack_opts_into_text_fallback():
+    from pathlib import Path
+
+    import yaml
+    p = Path(__file__).parent.parent / "config" / "persona_packs" / "wujie_sales.yaml"
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    persona = data.get("persona", data) if isinstance(data, dict) else {}
+    vp = persona.get("voice_profile") or {}
+    assert vp.get("on_voice_fail") == "text"
+
+
 @pytest.mark.parametrize("vr", [
     {"enabled": True, "trigger": "when_peer_voice"},
     {"enabled": True, "persona_overrides": {}},

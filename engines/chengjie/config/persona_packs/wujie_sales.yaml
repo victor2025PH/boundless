@@ -57,6 +57,7 @@ persona:
     human_feel: lively
     reply_trigger: always
     text_voice_split: true
+    on_voice_fail: text
   boundaries:
     topics_to_avoid:
     - 政治
