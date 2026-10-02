@@ -48,3 +48,8 @@ def test_room_pack_readme_named_and_bom():
     from src.fleet.roompack import _readme
     txt = _readme("机房A", "", None, 5)
     assert txt.startswith("\ufeff智拓群控 机房安装包") and "ChatX fleet" not in txt
+
+def test_cli_help_uses_new_brand():
+    for rel in ("src/fleet/agent.py", "src/fleet/admin.py"):
+        txt = (ENGINE / rel).read_text(encoding="utf-8")
+        assert "智拓群控" in txt and 'description="智控' not in txt
