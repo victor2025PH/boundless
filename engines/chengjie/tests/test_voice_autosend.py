@@ -30,6 +30,22 @@ def test_resolve_cfg_present():
     assert out["trigger"] == "always"
 
 
+def test_voice_also_text_scopes():
+    assert va.voice_also_text({}, "p1") is False
+    assert va.voice_also_text({"also_text": False}, "p1") is False
+    assert va.voice_also_text({"also_text": True}, None) is True
+    vb = {"also_text": ["wujie_sales"]}
+    assert va.voice_also_text(vb, "wujie_sales") is True
+    assert va.voice_also_text(vb, "lin_xiaoyu") is False
+    assert va.voice_also_text(vb, "") is False
+    assert va.voice_also_text({"also_text": []}, "wujie_sales") is False
+    assert va.voice_also_text({"also_text": "yes"}, "wujie_sales") is False
+    # 平台覆写不吞掉 also_text
+    eff = va.effective_voice_block({"also_text": ["wujie_sales"], "platform_triggers": {"telegram": "never"}},
+                                   "telegram")
+    assert va.voice_also_text(eff, "wujie_sales") is True
+
+
 # ── should_send_voice 矩阵 ──────────────────────────────────────────
 
 def test_disabled_block_never_sends():

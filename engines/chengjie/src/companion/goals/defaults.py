@@ -259,6 +259,14 @@ def maybe_attach_default_goal(
             logger.info("[goal-default] account=%s:%s conv=%s attached=0 reason=daily_cap",
                         platform, account_id or "-", conv_id)
             return None
+        if str(platform or "").lower() == "telegram" and account_id:
+            from src.companion.group_member_outreach import outreach_context_note
+            ctx = outreach_context_note(account_id, chat_key)
+            if ctx:
+                params = dict(spec.get("params") or {})
+                own = str(params.get("note") or "").strip()
+                params["note"] = f"{ctx}；{own}" if own else ctx
+                spec = dict(spec, params=params)
         goal = _create(store, spec, conversation_id=conv_id, platform=platform,
                        account_id=account_id, chat_key=chat_key, created_by=created_by, now=n)
         if goal is not None:

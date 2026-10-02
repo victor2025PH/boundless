@@ -17,35 +17,38 @@ site:
   support_contact: "Telegram @WJKJ2026（官网页脚同号，谨防仿冒）"
 
 products:
+  # 2026-08-21 充值唯一化：订阅全线停售，只剩「免费开始 + 按充值计费」（website/lib/chatx-pricing.ts）。
   - id: chatx
     name_zh: 智聊 ChatX
     name_en: ChatX
-    pitch_zh: AI 客服成交引擎——多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工随时接管；我自己店里和电商小店的客服就是它在顶
-    pitch_en: AI closing engine — unify accounts across platforms with auto-reply, proactive follow-up and guided closing; humans can take over anytime
-    price_from: $58/月
+    pitch_zh: AI 客服成交引擎——多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工随时接管；下载免费用，按充值计费不订阅，1U=1,500 Token
+    pitch_en: AI closing engine — unify accounts across platforms with auto-reply, proactive follow-up and guided closing; humans can take over anytime. Free to start, pay by top-up (no subscription), 1U = 1,500 tokens
+    price_from: 免费，充值$6
     url: https://bd2026.cc/#autochat
     pains: [客服, 回消息, 回不过来, 回不完, 人手, 招人, 雇人, 人工, 成交, 跟单, 催单,
             客户多, 半夜, 熬夜, 自动回复, 咨询, 售后, 群发, 跟进, 转化, 获客,
             customer service, reply, follow up, leads, support]
     plans:
-      - {key: autochat-entry,    name_zh: 入门版, price: $58/月}
-      - {key: autochat-team,     name_zh: 团队版, price: $198/月, hot: true}
-      - {key: autochat-flagship, name_zh: 旗舰版, price: $598/月}
+      - {key: recharge-newbie-6, name_zh: 新人首充大礼包, price: $6 一次性}
+      - {key: recharge-50,       name_zh: 入门档·充值50U, price: $50 一次性}
+      - {key: recharge-100,      name_zh: 充值100U, price: $100 一次性}
+      - {key: recharge-200,      name_zh: 充值200U, price: $200 一次性, hot: true}
+      - {key: recharge-500,      name_zh: 充值500U, price: $500 一次性}
+      - {key: recharge-1000,     name_zh: 充值1000U, price: $1000 一次性}
 
+  # 2026-08-04 通译并入智聊客户端；2026-08-19 标准翻译免费化，唯一订阅＝翻译工作台（每坐席）。
   - id: lingox
     name_zh: 通译 LingoX
     name_en: LingoX
-    pitch_zh: 多平台聊天双向实时翻译——术语锁定、翻译记忆，不会外语也能在 WhatsApp/Telegram/LINE 上直接谈客户谈供应商；我跟菲律宾供应商砍价全靠它
-    pitch_en: Real-time two-way chat translation across platforms with term-lock glossary and translation memory
-    price_from: $99/月
+    pitch_zh: 多平台聊天双向实时翻译，已内置在智聊客户端里——标准翻译永久免费不限量；纯翻译团队可订翻译工作台（多坐席统一收件箱、术语锁定、翻译记忆）
+    pitch_en: Real-time two-way chat translation built into ChatX — standard translation free and unlimited; translation-only teams can add the per-seat Translation Workbench
+    price_from: 标准翻译免费，工作台$29/坐席/月
     url: https://bd2026.cc/#translate
     pains: [翻译, 语言, 外语, 英语, 听不懂, 看不懂, 沟通, 供应商, 外国客户, 老外,
             菲律宾语, 他加禄, 越南, 泰国, 多语, 语言不通,
             translate, translation, language, english, foreign]
     plans:
-      - {key: translate-team,     name_zh: 团队版, price: $99/月, hot: true}
-      - {key: translate-pro,      name_zh: 专业版, price: $198/月}
-      - {key: translate-charpack, name_zh: 字符包, price: $59 一次性}
+      - {key: translate-workbench, name_zh: 翻译工作台, price: $29/坐席/月, hot: true}
 
 # 运营授权在售活动（P13）——**引擎只转述，永不自行发明折扣**。
 # 只有官网真在跑的活动才填这里；到 valid_until 当天 23:59 后自动失效停止引用。
@@ -85,6 +88,12 @@ claims:
     - Works right after install — no signup needed, 100,000 starter characters included
     - 邀请好友注册，双方各得 10 万字符
     - Invite a friend — you both get 100,000 characters
+    - 标准翻译永久免费、不限字符（公平使用 200 万字符/日）
+    - 每月送 1,000 Token，注册再送 10,000 体验 Token
+    - Standard translation is free forever with unlimited characters
+    - 1,000 free tokens every month, plus 10,000 bonus tokens on signup
+    - 新人首充大礼包 6U 得 18,000 Token（注册 72 小时内、每账号一次）
+    - 首笔充值按档一次性加赠 +5% 到 +40%（每人一次）
 
 # offers:
 #   - id: entry-trial-2608

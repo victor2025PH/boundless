@@ -26,7 +26,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from src.companion.group_members_store import (
     FILTER_ALL,
@@ -123,13 +123,34 @@ def score_member(*, spoke: bool, is_admin: bool, is_bot: bool,
 
 def user_row(user: Any, *, group_id: str, group_title: str, spoke: bool,
              is_admin: bool, source_account_id: str, job_id: str,
-             batch_id: str, now: Optional[float] = None) -> Dict[str, Any]:
-    """pyrogram ``User``（或鸭子类型对象）→ store 成员行 dict（含可聊度分）。"""
+             batch_id: str, now: Optional[float] = None,
+             last_msg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """pyrogram ``User``（或鸭子类型对象）→ store 成员行 dict（含可聊度分）。
+
+    ``last_msg``：``{text, ts}`` 他在群里最近那条（collect_speaker_context 给）；有真实
+    时间就用它做 ``last_spoke_ts``，没有才退回提取时刻。
+    """
     now = time.time() if now is None else now
+    lm = last_msg or {}
+    lm_text = " ".join(str(lm.get("text") or "").split())[:200]
+    try:
+        lm_ts = float(lm.get("ts") or 0.0)
+    except (TypeError, ValueError):
+        lm_ts = 0.0
+    _lang = str(getattr(user, "language_code", "") or "")[:16]
     _uname = str(getattr(user, "username", "") or "")
     _fn = str(getattr(user, "first_name", "") or "")
     _ln = str(getattr(user, "last_name", "") or "")
     _bot = bool(getattr(user, "is_bot", False))
+    _ah = ""
+    try:
+        raw_ah = getattr(user, "access_hash", None)
+        if raw_ah:
+            _ah = str(int(raw_ah))
+            if _ah == "0":
+                _ah = ""
+    except (TypeError, ValueError):
+        _ah = ""
     return {
         "group_id": str(group_id),
         "user_id": str(getattr(user, "id", "") or ""),
@@ -139,7 +160,10 @@ def user_row(user: Any, *, group_id: str, group_title: str, spoke: bool,
         "is_admin": bool(is_admin),
         "is_bot": _bot,
         "spoke": bool(spoke),
-        "last_spoke_ts": now if spoke else 0.0,
+        "last_spoke_ts": (lm_ts or now) if spoke else 0.0,
+        "last_msg_text": lm_text if spoke else "",
+        "last_msg_ts": lm_ts if spoke else 0.0,
+        "lang_code": _lang,
         "group_title": str(group_title or ""),
         "source_account_id": str(source_account_id),
         "job_id": str(job_id),
@@ -148,7 +172,39 @@ def user_row(user: Any, *, group_id: str, group_title: str, spoke: bool,
         "extracted_at": now,
         "score": score_member(spoke=spoke, is_admin=is_admin, is_bot=_bot,
                               username=_uname, first_name=_fn, last_name=_ln),
+        # access_hash 只属于当时拉到这个人的那个号，别的号不能拿去私聊。
+        "access_hash": _ah,
+        "hash_account_id": str(source_account_id or "") if _ah else "",
+        "outreach_at": 0.0,
+        "outreach_error": "",
+        "outreach_account_id": "",
     }
+
+
+async def fill_access_hashes(client: Any, rows: List[Dict[str, Any]], account_id: str) -> int:
+    """补齐缺 access_hash 的行，返回补上的条数。
+
+    pyrogram 2.x 的高层 ``User`` 不带 access_hash（user_row 读不到）；但拉成员 / 扫历史时
+    pyrogram 已把这些人写进本号 session 的 peers 缓存——这里只读本地缓存，不发网络请求。
+    """
+    storage = getattr(client, "storage", None)
+    getter = getattr(storage, "get_peer_by_id", None)
+    if getter is None:
+        return 0
+    n = 0
+    for r in rows:
+        if r.get("access_hash"):
+            continue
+        try:
+            peer = await getter(int(r.get("user_id") or 0))
+            ah = int(getattr(peer, "access_hash", 0) or 0)
+        except Exception:
+            continue
+        if ah:
+            r["access_hash"] = str(ah)
+            r["hash_account_id"] = str(account_id or "")
+            n += 1
+    return n
 
 
 def _is_floodwait(exc: Exception) -> Optional[int]:
@@ -201,13 +257,34 @@ async def collect_admin_ids(client: Any, chat_id: Any) -> Set[int]:
     return ids
 
 
-async def collect_speakers(client: Any, chat_id: Any, scan_limit: int,
-                           self_id: int = 0) -> Dict[int, Any]:
-    """扫群历史收「发过言的人」→ {user_id: user}（保留最近一次出现的 user 对象）。
+def _msg_snippet(msg: Any, limit: int = 200) -> str:
+    """消息里能当「他说过什么」用的文字：text / caption；媒体无字就空。"""
+    text = getattr(msg, "text", None) or getattr(msg, "caption", None) or ""
+    s = " ".join(str(text).split())
+    return s[:limit]
 
-    ``scan_limit``=最多回扫多少条消息（=「发过言」的实现口径）。剔自己/无 from_user。
+
+def _msg_ts(msg: Any) -> float:
+    date = getattr(msg, "date", None)
+    try:
+        if hasattr(date, "timestamp"):
+            return float(date.timestamp())
+        if date:
+            return float(date)
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    return 0.0
+
+
+async def collect_speaker_context(client: Any, chat_id: Any, scan_limit: int,
+                                  self_id: int = 0) -> Tuple[Dict[int, Any], Dict[int, Dict[str, Any]]]:
+    """扫群历史收「发过言的人」→ ({user_id: user}, {user_id: {text, ts}})。
+
+    历史是从新到旧扫的，第一次遇到即他最近那条：把正文摘要和真实时间留下来，AI 开场
+    靠这个写出「我看到你说了什么」。``scan_limit``=最多回扫多少条消息。剔自己/无 from_user。
     """
     seen: Dict[int, Any] = {}
+    ctx: Dict[int, Dict[str, Any]] = {}
     try:
         async for msg in client.get_chat_history(chat_id, limit=int(scan_limit)):
             u = getattr(msg, "from_user", None)
@@ -224,11 +301,24 @@ async def collect_speakers(client: Any, chat_id: Any, scan_limit: int,
                 continue
             if uid not in seen:
                 seen[uid] = u
+                ctx[uid] = {"text": _msg_snippet(msg), "ts": _msg_ts(msg)}
+            elif not ctx[uid].get("text"):
+                # 最近那条是纯媒体 → 往前找他最近一句有字的
+                snip = _msg_snippet(msg)
+                if snip:
+                    ctx[uid]["text"] = snip
     except Exception as exc:
         wait = _is_floodwait(exc)
         if wait is not None:
             raise
         logger.debug("[gm_extract] 扫历史失败 chat=%s", chat_id, exc_info=True)
+    return seen, ctx
+
+
+async def collect_speakers(client: Any, chat_id: Any, scan_limit: int,
+                           self_id: int = 0) -> Dict[int, Any]:
+    """只要人不要话的旧口径（见 collect_speaker_context）。"""
+    seen, _ctx = await collect_speaker_context(client, chat_id, scan_limit, self_id=self_id)
     return seen
 
 
@@ -400,6 +490,8 @@ async def run_extraction(client: Any, store: Any, job_id: str, *,
         pending: List[Dict[str, Any]] = []
         now = time.time()
 
+        speaker_ctx: Dict[int, Dict[str, Any]] = {}
+
         def _consider(u: Any, spoke: bool) -> bool:
             """判定并暂存一个候选；返回是否已达配额（True=该停）。"""
             uid = getattr(u, "id", None)
@@ -423,7 +515,7 @@ async def run_extraction(client: Any, store: Any, job_id: str, *,
             pending.append(user_row(
                 u, group_id=group_id, group_title=group_title, spoke=spoke,
                 is_admin=is_admin, source_account_id=account_id, job_id=job_id,
-                batch_id=batch_id, now=now))
+                batch_id=batch_id, now=now, last_msg=speaker_ctx.get(uid_i)))
             return len(pending) >= budget
 
         try:
@@ -434,7 +526,7 @@ async def run_extraction(client: Any, store: Any, job_id: str, *,
                     if store.is_stop_requested(job_id):
                         break
                     try:
-                        speakers = await collect_speakers(
+                        speakers, speaker_ctx = await collect_speaker_context(
                             client, peer, scan_limit, self_id=self_id)
                         break
                     except Exception as exc:
@@ -466,6 +558,7 @@ async def run_extraction(client: Any, store: Any, job_id: str, *,
             summary["reason"] = "error"
             return summary
 
+        await fill_access_hashes(client, pending, account_id)
         inserted, skipped = (store.record_members(pending) if pending else (0, 0))
         store.bump_job_counters(job_id, pulled=inserted, dedup=skipped,
                                 admins=summary["admins_excluded"])
@@ -482,6 +575,7 @@ async def run_extraction(client: Any, store: Any, job_id: str, *,
 
 __all__ = [
     "local_midnight_ts", "member_in_shard", "should_keep", "score_member",
-    "user_row", "collect_admin_ids", "collect_speakers", "list_account_groups",
+    "user_row", "collect_admin_ids", "collect_speakers", "collect_speaker_context",
+    "list_account_groups", "fill_access_hashes",
     "iter_all_members", "run_extraction",
 ]

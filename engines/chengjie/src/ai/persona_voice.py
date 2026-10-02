@@ -120,6 +120,36 @@ def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> bool:
     return True
 
 
+#: 人设 ``voice_profile.human_feel`` 档位 → ``avatar_voice.colloquial`` 叠加键。
+#: 档位随人设包分发：全局 colloquial 缺省关（客户包）时人设照样有真人感；
+#: mode / provider / 端点等运营键不碰（客户无 LAN 改写模型时走规则档）。
+HUMAN_FEEL_PRESETS: Dict[str, Dict[str, Any]] = {
+    "lively": {"enabled": True, "rewrite_intensity": "vivid", "human_ticks": True,
+               "think_prob": 0.28, "laugh_prob": 0.08,
+               "disfluency": True, "disfluency_every": 5},
+    "natural": {"enabled": True, "rewrite_intensity": "natural",
+                "human_ticks": False, "disfluency": False},
+    "off": {"enabled": False},
+}
+
+
+def apply_persona_human_feel(merged: Dict[str, Any]) -> bool:
+    """把生效 voice_profile 的 ``human_feel`` 档位叠到 ``merged["avatar_voice"]``。"""
+    vp = merged.get("voice_profile")
+    av = merged.get("avatar_voice")
+    if not isinstance(vp, dict) or not isinstance(av, dict):
+        return False
+    preset = HUMAN_FEEL_PRESETS.get(str(vp.get("human_feel") or "").strip().lower())
+    if not preset:
+        return False
+    col = dict(av.get("colloquial") or {}) if isinstance(av.get("colloquial"), dict) else {}
+    col.update(preset)
+    av = dict(av)
+    av["colloquial"] = col
+    merged["avatar_voice"] = av
+    return True
+
+
 def resolve_voice_cfg(
     persona_id: Optional[str],
     full_config: Dict[str, Any],
@@ -232,6 +262,7 @@ def resolve_voice_cfg(
         av = full_config.get("avatar_voice")
         if isinstance(av, dict) and av:
             merged["avatar_voice"] = dict(av)
+            apply_persona_human_feel(merged)
 
         # ── 注入 RVC 变声配置（.176:6242；人设 voice_profile.rvc_voice 指定 66 音色之一时，
         #    在克隆输出 WAV 上再变声成该音色）。令牌走 svc_token_env（secrets），不入库。──
@@ -462,6 +493,7 @@ def resolve_effective_voice_context(
                     voice_cfg, resolved_persona.get("voice_profile") or {}):
                 voice_cfg["voice_source_layer"] = (
                     f"persona:{resolved_id}" if resolved_id else "persona:inline")
+                apply_persona_human_feel(voice_cfg)
             # 人设性别随行（L-2 #205 兜底同性别选声）；resolve_voice_cfg 已注入时不覆盖
             _g = str(resolved_persona.get("gender") or "").strip()
             if _g and voice_cfg and not voice_cfg.get("persona_gender"):

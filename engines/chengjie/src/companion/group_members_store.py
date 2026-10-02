@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger("ai_chat_assistant.group_members_store")
 
@@ -41,8 +41,31 @@ JOB_DONE = "done"
 JOB_STOPPED = "stopped"
 JOB_ERROR = "error"
 
-# 成员触达状态（本 P0 只写 none；后续「触达」步骤流转 queued/sent/replied/skipped）
+# 成员触达状态。提取只写 none。开口步骤（group_member_outreach）才往下流转。
+# queued=今天排上了；approved=文案定了、可以由调度器发；sending=已占坑、消息尚未落定
+# （进程中断由 reap_stale_sending 标 skipped，不重发）。
 OUTREACH_NONE = "none"
+OUTREACH_QUEUED = "queued"
+OUTREACH_APPROVED = "approved"
+OUTREACH_SENDING = "sending"
+OUTREACH_SENT = "sent"
+OUTREACH_REPLIED = "replied"
+OUTREACH_SKIPPED = "skipped"
+OUTREACH_BLOCKED = "blocked"
+# closed=开口 + 一次跟进都没回音，封存；之后对方若主动回话仍会翻成 replied。
+OUTREACH_CLOSED = "closed"
+# 这些状态表示「这个人已经被某个号碰过」，跨群不再另开口。
+OUTREACH_TOUCHED = (
+    OUTREACH_QUEUED, OUTREACH_APPROVED, OUTREACH_SENDING, OUTREACH_SENT,
+    OUTREACH_REPLIED, OUTREACH_SKIPPED, OUTREACH_BLOCKED, OUTREACH_CLOSED,
+)
+# 开口急停的全局行（tg_outreach_holds.account_id）。
+OUTREACH_HOLD_ALL = "*"
+# 每号开口方式：manual=坐席逐条点发；approve=AI 拟稿、坐席批准后调度器发；auto=全自动。
+OUTREACH_MODE_MANUAL = "manual"
+OUTREACH_MODE_APPROVE = "approve"
+OUTREACH_MODE_AUTO = "auto"
+OUTREACH_MODES = (OUTREACH_MODE_MANUAL, OUTREACH_MODE_APPROVE, OUTREACH_MODE_AUTO)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS tg_group_members (
@@ -62,7 +85,40 @@ CREATE TABLE IF NOT EXISTS tg_group_members (
     outreach_state    TEXT NOT NULL DEFAULT 'none',
     extracted_at      REAL NOT NULL DEFAULT 0,
     score             INTEGER NOT NULL DEFAULT 0,
+    access_hash       TEXT NOT NULL DEFAULT '',
+    hash_account_id   TEXT NOT NULL DEFAULT '',
+    outreach_at       REAL NOT NULL DEFAULT 0,
+    outreach_error    TEXT NOT NULL DEFAULT '',
+    outreach_account_id TEXT NOT NULL DEFAULT '',
+    last_msg_text     TEXT NOT NULL DEFAULT '',
+    last_msg_ts       REAL NOT NULL DEFAULT 0,
+    lang_code         TEXT NOT NULL DEFAULT '',
+    opener_text       TEXT NOT NULL DEFAULT '',
+    opener_source     TEXT NOT NULL DEFAULT '',
+    approved_at       REAL NOT NULL DEFAULT 0,
+    opener_persona    TEXT NOT NULL DEFAULT '',
+    followup_at       REAL NOT NULL DEFAULT 0,
+    followup_text     TEXT NOT NULL DEFAULT '',
+    replied_at        REAL NOT NULL DEFAULT 0,
+    reply_text        TEXT NOT NULL DEFAULT '',
+    opener_variant    TEXT NOT NULL DEFAULT '',
+    answered_at       REAL NOT NULL DEFAULT 0,
+    last_in_at        REAL NOT NULL DEFAULT 0,
+    last_out_at       REAL NOT NULL DEFAULT 0,
+    stalled_flagged_at REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, user_id)
+);
+-- 开口急停 / 风控熔断 / 开口方式（按号；account_id='*' 表示全部号今天停止开口）。
+-- 与提取任务分开：停提取不停开口，停开口不停提取。
+CREATE TABLE IF NOT EXISTS tg_outreach_holds (
+    account_id  TEXT NOT NULL PRIMARY KEY,
+    paused      INTEGER NOT NULL DEFAULT 0,
+    flood_until REAL NOT NULL DEFAULT 0,
+    reason      TEXT NOT NULL DEFAULT '',
+    updated_at  REAL NOT NULL DEFAULT 0,
+    mode        TEXT NOT NULL DEFAULT 'manual',
+    last_flood_at REAL NOT NULL DEFAULT 0,
+    next_auto_at  REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_gm_group ON tg_group_members(group_id, outreach_state);
 CREATE INDEX IF NOT EXISTS idx_gm_acct_day ON tg_group_members(source_account_id, extracted_at);
@@ -104,7 +160,11 @@ _MEMBER_COLS = (
     "group_id", "user_id", "username", "first_name", "last_name",
     "is_admin", "is_bot", "spoke", "last_spoke_ts", "group_title",
     "source_account_id", "job_id", "batch_id", "outreach_state", "extracted_at",
-    "score",
+    "score", "access_hash", "hash_account_id", "outreach_at", "outreach_error",
+    "outreach_account_id", "last_msg_text", "last_msg_ts", "lang_code",
+    "opener_text", "opener_source", "approved_at",
+    "opener_persona", "followup_at", "followup_text",
+    "replied_at", "reply_text", "opener_variant", "answered_at",
 )
 
 # update_job 允许热改的字段（其余为不可变身份/审计字段）。
@@ -142,6 +202,30 @@ class GroupMembersStore:
             ("tg_extract_jobs", "group_daily_cap", "INTEGER NOT NULL DEFAULT 0"),
             ("tg_extract_jobs", "global_daily_cap", "INTEGER NOT NULL DEFAULT 0"),
             ("tg_group_members", "score", "INTEGER NOT NULL DEFAULT 0"),
+            ("tg_group_members", "access_hash", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "hash_account_id", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "outreach_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "outreach_error", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "outreach_account_id", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "last_msg_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "last_msg_ts", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "lang_code", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "opener_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "opener_source", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "approved_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_outreach_holds", "mode", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("tg_group_members", "opener_persona", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "followup_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "followup_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_outreach_holds", "last_flood_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_outreach_holds", "next_auto_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "replied_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "reply_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "opener_variant", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "answered_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "last_in_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "last_out_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "stalled_flagged_at", "REAL NOT NULL DEFAULT 0"),
         )
         for table, col, decl in _adds:
             try:
@@ -155,6 +239,10 @@ class GroupMembersStore:
         # 见 _DDL 顶部告警）。IF NOT EXISTS 幂等；单条失败软跳过不影响建库。
         for _idx_sql in (
             "CREATE INDEX IF NOT EXISTS idx_gm_score ON tg_group_members(group_id, score)",
+            "CREATE INDEX IF NOT EXISTS idx_gm_hash_acct "
+            "ON tg_group_members(hash_account_id, outreach_state)",
+            "CREATE INDEX IF NOT EXISTS idx_gm_out_acct "
+            "ON tg_group_members(outreach_account_id, outreach_state)",
         ):
             try:
                 self._conn.execute(_idx_sql)
@@ -195,6 +283,24 @@ class GroupMembersStore:
                     str(r.get("outreach_state") or OUTREACH_NONE),
                     float(r.get("extracted_at") or now),
                     int(r.get("score") or 0),
+                    str(r.get("access_hash") or ""),
+                    str(r.get("hash_account_id") or ""),
+                    float(r.get("outreach_at") or 0.0),
+                    str(r.get("outreach_error") or "")[:200],
+                    str(r.get("outreach_account_id") or ""),
+                    str(r.get("last_msg_text") or "")[:200],
+                    float(r.get("last_msg_ts") or 0.0),
+                    str(r.get("lang_code") or "")[:16],
+                    str(r.get("opener_text") or "")[:500],
+                    str(r.get("opener_source") or "")[:16],
+                    float(r.get("approved_at") or 0.0),
+                    str(r.get("opener_persona") or "")[:64],
+                    float(r.get("followup_at") or 0.0),
+                    str(r.get("followup_text") or "")[:500],
+                    float(r.get("replied_at") or 0.0),
+                    str(r.get("reply_text") or "")[:200],
+                    str(r.get("opener_variant") or "")[:16],
+                    float(r.get("answered_at") or 0.0),
                 )
                 cur = self._conn.execute(
                     "INSERT OR IGNORE INTO tg_group_members (%s) VALUES (%s)"
@@ -205,6 +311,39 @@ class GroupMembersStore:
                     inserted += 1
                 else:
                     skipped += 1
+                    # 同人已在库里但还没有「这个号能私聊」的凭证时，补上。
+                    # 已有凭证不覆盖——access_hash 跟会话绑定，不能换成另一个号的。
+                    ah = str(r.get("access_hash") or "").strip()
+                    hacct = str(r.get("hash_account_id") or "").strip()
+                    if ah and ah != "0" and hacct:
+                        self._conn.execute(
+                            "UPDATE tg_group_members SET access_hash=?, hash_account_id=? "
+                            "WHERE group_id=? AND user_id=? AND access_hash=''",
+                            (ah, hacct, gid, uid),
+                        )
+                    # 再扫到同一个人：他最近说的话 / 发言时间 / 语言取更新的那份
+                    # （AI 开场靠这些写出针对性；旧值只会更陈旧）。
+                    lm_text = str(r.get("last_msg_text") or "")[:200]
+                    lm_ts = float(r.get("last_msg_ts") or 0.0)
+                    lang = str(r.get("lang_code") or "")[:16]
+                    if lm_text or lm_ts or lang:
+                        self._conn.execute(
+                            "UPDATE tg_group_members SET "
+                            "last_msg_text=CASE WHEN ?!='' THEN ? ELSE last_msg_text END, "
+                            "last_msg_ts=CASE WHEN ?>last_msg_ts THEN ? ELSE last_msg_ts END, "
+                            "last_spoke_ts=CASE WHEN ?>last_spoke_ts THEN ? ELSE last_spoke_ts END, "
+                            "lang_code=CASE WHEN ?!='' THEN ? ELSE lang_code END "
+                            "WHERE group_id=? AND user_id=?",
+                            (lm_text, lm_text, lm_ts, lm_ts, lm_ts, lm_ts, lang, lang,
+                             gid, uid),
+                        )
+                    # 先按「全部成员」入库时没发过言、后来说话了 → 补上发言标记，否则永远进不了开口候选
+                    if r.get("spoke"):
+                        self._conn.execute(
+                            "UPDATE tg_group_members SET spoke=1, score=MAX(score, ?) "
+                            "WHERE group_id=? AND user_id=? AND spoke=0",
+                            (int(r.get("score") or 0), gid, uid),
+                        )
             self._conn.commit()
         return inserted, skipped
 
@@ -401,6 +540,661 @@ class GroupMembersStore:
             ).fetchone()
         return bool(row and row[0])
 
+    # ── 开口（同群私聊；与提取配额分开）────────────────────────────────────
+
+    def get_member(self, group_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE group_id=? AND user_id=?",
+                (str(group_id), str(user_id)),
+            ).fetchone()
+        return self._member_to_dict(row) if row else None
+
+    def get_outreach_contact(self, account_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """这个号对这人开过口（已发 / 已回 / 已收口）的那一行，多群同人取最近一次；没有 → None。
+        含 sent：回复链可能先于入站钩子把行翻成 replied。"""
+        acct = str(account_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not acct or not uid:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE user_id=? AND outreach_account_id=? "
+                "AND outreach_state IN (?,?,?) ORDER BY replied_at DESC, outreach_at DESC LIMIT 1",
+                (uid, acct, OUTREACH_REPLIED, OUTREACH_SENT, OUTREACH_CLOSED),
+            ).fetchone()
+        return self._member_to_dict(row) if row else None
+
+    def list_by_hash_account(self, account_id: str, *,
+                             limit: int = 2000) -> List[Dict[str, Any]]:
+        """该号持有 access_hash、因而可以尝试同群开口的成员。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE hash_account_id=? "
+                "AND access_hash!='' LIMIT ?",
+                (str(account_id), max(1, min(int(limit), 5000))),
+            ).fetchall()
+        return [self._member_to_dict(r) for r in rows]
+
+    def touched_user_ids(self) -> Set[str]:
+        """跨群已排队/已发/已回/不可达的 user_id。同一个人只开口一次。"""
+        ph = ",".join(["?"] * len(OUTREACH_TOUCHED))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT user_id FROM tg_group_members "
+                "WHERE outreach_state IN (%s)" % ph,
+                OUTREACH_TOUCHED,
+            ).fetchall()
+        return {str(r[0]) for r in rows}
+
+    def count_outreach_sent_since(self, account_id: str, since_ts: float) -> int:
+        """某号自 since_ts 起真正发出的开口（sent+replied）。排队不算。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members WHERE outreach_account_id=? "
+                "AND outreach_state IN (?,?) AND outreach_at>=?",
+                (str(account_id), OUTREACH_SENT, OUTREACH_REPLIED, float(since_ts)),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def count_outreach_queued(self, account_id: str) -> int:
+        """今天排上还没发的（queued + approved）。都占今日坑位。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members WHERE hash_account_id=? "
+                "AND outreach_state IN (?,?)",
+                (str(account_id), OUTREACH_QUEUED, OUTREACH_APPROVED),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_opener(self, group_id: str, user_id: str, text: str, source: str,
+                   persona_id: Optional[str] = None, variant: Optional[str] = None) -> bool:
+        """给排队中的人写开场文案（ai / template / manual）。已发的不改。
+
+        ``persona_id`` / ``variant`` 给了就记下这条是以谁的身份、哪种切入写的
+        （回复率按人设 / 切入方式切片用）；None = 不动原值。
+        """
+        sets = ["opener_text=?", "opener_source=?"]
+        args: List[Any] = [str(text or "")[:500], str(source or "")[:16]]
+        if persona_id is not None:
+            sets.append("opener_persona=?")
+            args.append(str(persona_id)[:64])
+        if variant is not None:
+            sets.append("opener_variant=?")
+            args.append(str(variant)[:16])
+        args += [str(group_id), str(user_id), OUTREACH_QUEUED, OUTREACH_APPROVED]
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET %s WHERE group_id=? AND user_id=? "
+                "AND outreach_state IN (?,?)" % ", ".join(sets), args)
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def record_sent_text(self, group_id: str, user_id: str, text: str) -> bool:
+        """发出那一刻把实发文案落到行上（坐席临时改过的也记下，回复率归因看得到）。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET opener_text=? WHERE group_id=? AND user_id=? "
+                "AND outreach_state=?",
+                (str(text or "")[:500], str(group_id), str(user_id), OUTREACH_SENDING),
+            )
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def approve_queued(self, account_id: str, now: Optional[float] = None, *,
+                       pairs: Optional[Sequence[Tuple[str, str]]] = None) -> int:
+        """queued → approved。只批有文案的；``pairs`` 给了就只批这些人。"""
+        now = time.time() if now is None else float(now)
+        n = 0
+        with self._lock:
+            if pairs is None:
+                cur = self._conn.execute(
+                    "UPDATE tg_group_members SET outreach_state=?, approved_at=? "
+                    "WHERE hash_account_id=? AND outreach_state=? AND opener_text!=''",
+                    (OUTREACH_APPROVED, now, str(account_id), OUTREACH_QUEUED),
+                )
+                n = int(cur.rowcount or 0)
+            else:
+                for gid, uid in pairs:
+                    cur = self._conn.execute(
+                        "UPDATE tg_group_members SET outreach_state=?, approved_at=? "
+                        "WHERE group_id=? AND user_id=? AND hash_account_id=? "
+                        "AND outreach_state=? AND opener_text!=''",
+                        (OUTREACH_APPROVED, now, str(gid), str(uid), str(account_id),
+                         OUTREACH_QUEUED),
+                    )
+                    n += int(cur.rowcount or 0)
+            self._conn.commit()
+        return n
+
+    def next_approved(self, account_id: str) -> Optional[Dict[str, Any]]:
+        """调度器下一个要发的人：批准最早的那个。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE hash_account_id=? AND outreach_state=? "
+                "AND opener_text!='' ORDER BY approved_at ASC, user_id ASC LIMIT 1",
+                (str(account_id), OUTREACH_APPROVED),
+            ).fetchone()
+        return self._member_to_dict(row) if row else None
+
+    def today_opener_texts(self, account_id: str, since_ts: float) -> List[str]:
+        """这个号今天已定/已发的开场文案（去雷同用）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT opener_text FROM tg_group_members WHERE hash_account_id=? "
+                "AND opener_text!='' AND (outreach_state IN (?,?,?) OR outreach_at>=?)",
+                (str(account_id), OUTREACH_QUEUED, OUTREACH_APPROVED, OUTREACH_SENDING,
+                 float(since_ts)),
+            ).fetchall()
+        return [str(r[0]) for r in rows if r and r[0]]
+
+    def outreach_summary(self, account_id: str, since_ts: float) -> Dict[str, Any]:
+        """今日汇总：发了 / 回了 / 不可达 / 跳过 / 封存 / 跟进，以及没发出去的原因分布。"""
+        out: Dict[str, Any] = {"sent": 0, "replied": 0, "blocked": 0, "skipped": 0,
+                               "closed": 0, "queued": 0, "approved": 0, "followups": 0,
+                               "errors": {}}
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT outreach_state, outreach_error, COUNT(*) FROM tg_group_members "
+                "WHERE hash_account_id=? AND ((outreach_at>=? AND outreach_state IN (?,?,?,?,?)) "
+                "OR outreach_state IN (?,?)) GROUP BY outreach_state, outreach_error",
+                (str(account_id), float(since_ts), OUTREACH_SENT, OUTREACH_REPLIED,
+                 OUTREACH_BLOCKED, OUTREACH_SKIPPED, OUTREACH_CLOSED,
+                 OUTREACH_QUEUED, OUTREACH_APPROVED),
+            ).fetchall()
+            fu = self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members WHERE outreach_account_id=? "
+                "AND followup_at>=?", (str(account_id), float(since_ts)),
+            ).fetchone()
+        for state, err, n in rows:
+            if state in out:
+                out[state] += int(n or 0)
+            if err and state in (OUTREACH_BLOCKED, OUTREACH_SKIPPED):
+                out["errors"][str(err)] = out["errors"].get(str(err), 0) + int(n or 0)
+        out["followups"] = int(fu[0]) if fu else 0
+        return out
+
+    # ── 跟进（72h 一次）/ 封存 ──────────────────────────────────────────────
+
+    def list_followup_due(self, account_id: str, before_ts: float,
+                          limit: int = 50) -> List[Dict[str, Any]]:
+        """这个号发出 ≥N 小时仍没回音、还没跟进过的人（最早发的排前）。拒绝过的不算。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE outreach_account_id=? AND outreach_state=? "
+                "AND followup_at=0 AND outreach_at>0 AND outreach_at<=? AND access_hash!='' "
+                "AND outreach_error!='stop_contact' ORDER BY outreach_at ASC LIMIT ?",
+                (str(account_id), OUTREACH_SENT, float(before_ts), max(1, int(limit))),
+            ).fetchall()
+        return [self._member_to_dict(r) for r in rows]
+
+    def claim_followup(self, group_id: str, user_id: str, now: float) -> bool:
+        """原子占坑：followup_at 从 0 写成 now。两条链（调度器 / 坐席点）只会有一条拿到。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET followup_at=? WHERE group_id=? AND user_id=? "
+                "AND outreach_state=? AND followup_at=0",
+                (float(now), str(group_id), str(user_id), OUTREACH_SENT),
+            )
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def unclaim_followup(self, group_id: str, user_id: str) -> None:
+        """跟进没发出去（客户端不在 / 可重试错误）→ 把坑还回去，下次再跟。"""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tg_group_members SET followup_at=0, followup_text='' "
+                "WHERE group_id=? AND user_id=? AND followup_text=''",
+                (str(group_id), str(user_id)),
+            )
+            self._conn.commit()
+
+    def record_followup_text(self, group_id: str, user_id: str, text: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tg_group_members SET followup_text=? WHERE group_id=? AND user_id=?",
+                (str(text or "")[:500], str(group_id), str(user_id)),
+            )
+            self._conn.commit()
+
+    def count_followups_since(self, account_id: str, since_ts: float) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members WHERE outreach_account_id=? "
+                "AND followup_at>=? AND followup_text!=''",
+                (str(account_id), float(since_ts)),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def last_followup_ts(self, account_id: str) -> float:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(followup_at) FROM tg_group_members WHERE outreach_account_id=? "
+                "AND followup_text!=''", (str(account_id),),
+            ).fetchone()
+        return float(row[0] or 0.0) if row else 0.0
+
+    def close_unanswered(self, before_ts: float, account_id: str = "") -> int:
+        """跟进过、又过了 N 小时仍是 sent → closed（封存，不再碰）。"""
+        sql = ("UPDATE tg_group_members SET outreach_state=?, outreach_error='no_reply' "
+               "WHERE outreach_state=? AND followup_at>0 AND followup_text!='' AND followup_at<=?")
+        args: List[Any] = [OUTREACH_CLOSED, OUTREACH_SENT, float(before_ts)]
+        if account_id:
+            sql += " AND outreach_account_id=?"
+            args.append(str(account_id))
+        with self._lock:
+            cur = self._conn.execute(sql, args)
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    # ── 回复率 / 切片 ────────────────────────────────────────────────────────
+
+    def reply_rate(self, account_id: str, since_ts: float) -> Dict[str, Any]:
+        """这个号自 since_ts 起发出的开口里有多少回了。sent+replied+closed 为分母。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT outreach_state, COUNT(*) FROM tg_group_members "
+                "WHERE outreach_account_id=? AND outreach_at>=? AND outreach_state IN (?,?,?) "
+                "GROUP BY outreach_state",
+                (str(account_id), float(since_ts), OUTREACH_SENT, OUTREACH_REPLIED,
+                 OUTREACH_CLOSED),
+            ).fetchall()
+        n = {str(s): int(c or 0) for s, c in rows}
+        total = sum(n.values())
+        replied = n.get(OUTREACH_REPLIED, 0)
+        return {"sent": total, "replied": replied,
+                "rate": (replied / total) if total else None}
+
+    def outreach_stats(self, since_ts: float, account_id: str = "") -> Dict[str, Any]:
+        """回复率切片：按文案来源 / 人设 / 发出小时 / 账号；外加入库→排队→发出→回复漏斗。
+
+        切片只看真正发出的（sent/replied/closed，按 outreach_at）；漏斗看库里现状。
+        """
+        where = "outreach_at>=? AND outreach_state IN (?,?,?)"
+        args: List[Any] = [float(since_ts), OUTREACH_SENT, OUTREACH_REPLIED, OUTREACH_CLOSED]
+        if account_id:
+            where += " AND outreach_account_id=?"
+            args.append(str(account_id))
+
+        def _slice(expr: str) -> List[Dict[str, Any]]:
+            rows = self._conn.execute(
+                "SELECT %s AS k, COUNT(*), SUM(CASE WHEN outreach_state=? THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN followup_text!='' THEN 1 ELSE 0 END) "
+                "FROM tg_group_members WHERE %s GROUP BY k ORDER BY COUNT(*) DESC" % (expr, where),
+                [OUTREACH_REPLIED, *args],
+            ).fetchall()
+            out = []
+            for k, total, rep, fu in rows:
+                total = int(total or 0)
+                rep = int(rep or 0)
+                out.append({"key": str(k if k is not None else ""), "sent": total,
+                            "replied": rep, "followups": int(fu or 0),
+                            "rate": (rep / total) if total else None})
+            return out
+
+        with self._lock:
+            by_source = _slice("CASE WHEN opener_source='' THEN 'unknown' ELSE opener_source END")
+            by_persona = _slice("CASE WHEN opener_persona='' THEN '-' ELSE opener_persona END")
+            by_hour = _slice("CAST(strftime('%H', outreach_at, 'unixepoch', 'localtime') AS INTEGER)")
+            by_account = _slice("outreach_account_id")
+            by_variant = _slice("CASE WHEN opener_variant='' THEN '-' ELSE opener_variant END")
+            # 首回时延：发出 → 对方第一条私聊（只看真发过、真回了的）
+            lat_rows = self._conn.execute(
+                "SELECT replied_at-outreach_at FROM tg_group_members WHERE %s AND outreach_state=? "
+                "AND replied_at>outreach_at ORDER BY 1" % where,
+                [*args, OUTREACH_REPLIED],
+            ).fetchall()
+            # 漏斗看库里现状；replied 里 outreach_at=0 的是「人家先来找我们」，不算发出；
+            # answered_at>0 = 回了之后我方接上话了（第二跳）
+            fsql = ("SELECT outreach_state, COUNT(*), SUM(CASE WHEN outreach_at>0 THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN answered_at>0 THEN 1 ELSE 0 END) FROM tg_group_members")
+            fargs: List[Any] = []
+            if account_id:
+                fsql += " WHERE hash_account_id=? OR outreach_account_id=?"
+                fargs = [str(account_id), str(account_id)]
+            frows = self._conn.execute(fsql + " GROUP BY outreach_state", fargs).fetchall()
+            recent = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE outreach_state=? AND replied_at>=?%s "
+                "ORDER BY replied_at DESC LIMIT 20" % (" AND outreach_account_id=?" if account_id else ""),
+                [OUTREACH_REPLIED, float(since_ts), *([str(account_id)] if account_id else [])],
+            ).fetchall()
+        st = {str(s): int(c or 0) for s, c, _, _ in frows}
+        contacted = {str(s): int(c2 or 0) for s, _, c2, _ in frows}
+        answered = sum(int(a or 0) for _, _, _, a in frows)
+        total_members = sum(st.values())
+        replied_contacted = contacted.get(OUTREACH_REPLIED, 0)
+        sent_all = st.get(OUTREACH_SENT, 0) + replied_contacted + st.get(OUTREACH_CLOSED, 0)
+        funnel = {
+            "members": total_members,
+            "queued": st.get(OUTREACH_QUEUED, 0) + st.get(OUTREACH_APPROVED, 0),
+            "sent": sent_all,
+            "replied": replied_contacted,
+            "inbound_first": st.get(OUTREACH_REPLIED, 0) - replied_contacted,
+            "answered": answered,
+            "closed": st.get(OUTREACH_CLOSED, 0),
+            "blocked": st.get(OUTREACH_BLOCKED, 0),
+            "skipped": st.get(OUTREACH_SKIPPED, 0),
+        }
+        lats = [float(r[0]) for r in lat_rows if r and r[0] is not None]
+        latency = {"n": len(lats), "median_sec": None, "p75_sec": None}
+        if lats:
+            latency["median_sec"] = int(lats[len(lats) // 2])
+            latency["p75_sec"] = int(lats[min(len(lats) - 1, (len(lats) * 3) // 4)])
+        by_hour.sort(key=lambda r: int(r["key"] or 0))
+        return {"since_ts": float(since_ts), "account_id": str(account_id or ""),
+                "by_source": by_source, "by_persona": by_persona, "by_hour": by_hour,
+                "by_account": by_account, "by_variant": by_variant,
+                "reply_latency": latency, "funnel": funnel,
+                "recent_replies": [dict(r) for r in recent]}
+
+    def mark_outreach_answered(self, account_id: str, user_id: str, ts: float) -> int:
+        """对方回了之后，我方（AI 或坐席/手机）第一次回话 → 记 answered_at。返回首次接上的行数。"""
+        return self.record_outreach_outbound(account_id, user_id, ts)[0]
+
+    def record_outreach_outbound(self, account_id: str, user_id: str,
+                                 ts: float) -> Tuple[int, int]:
+        """对方回过之后我方的每一句出站：推进 last_out_at，首句记 answered_at，清掉本轮打标记号。
+
+        只认 replied 态、且这条出站不早于对方首回（开场/跟进本身的镜像在 sent 态，天然不算）。
+        返回 ``(首次接上行数, 本轮打过需人工标的行数)``——后者 >0 调用方才去收件箱摘标。
+        """
+        uid = str(user_id or "").strip()
+        acct = str(account_id or "").strip()
+        if not uid or not acct:
+            return 0, 0
+        t = float(ts)
+        where = ("WHERE user_id=? AND outreach_account_id=? AND outreach_state=? "
+                 "AND replied_at>0 AND ?>=replied_at")
+        args = (uid, acct, OUTREACH_REPLIED, t)
+        with self._lock:
+            flagged = int(self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members " + where + " AND stalled_flagged_at>0",
+                args).fetchone()[0] or 0)
+            first = int(self._conn.execute(
+                "UPDATE tg_group_members SET answered_at=? " + where + " AND answered_at=0",
+                (t,) + args).rowcount or 0)
+            self._conn.execute(
+                "UPDATE tg_group_members SET last_out_at=MAX(last_out_at, ?), stalled_flagged_at=0 "
+                + where, (t,) + args)
+            self._conn.commit()
+        return first, flagged
+
+    # 「没接上」两种：回了我方从没回话（按首回计时）；接上过、对方又来话我方没再回（按最后来话计时）。
+    # 迁移前接上的行 last_out_at=0，用 answered_at 兜底，免得老会话被误判成又断了。
+    _STALLED_WHERE = (
+        "outreach_state=? AND replied_at>0 AND outreach_error!='stop_contact' AND ("
+        "(answered_at=0 AND replied_at<=?) OR "
+        "(answered_at>0 AND last_in_at>MAX(last_out_at, answered_at) AND last_in_at<=?))")
+
+    def list_stalled_replies(self, before_ts: float, account_id: str = "",
+                             limit: int = 50, *, unflagged_only: bool = False) -> List[Dict[str, Any]]:
+        """到 before_ts 为止对方在等我方回话的人（等得最久的在前）。拒绝联系的不列。
+
+        ``unflagged_only``：只要本轮还没打过需人工标的（坐席手动摘了标不再打回去）。
+        """
+        sql = "SELECT * FROM tg_group_members WHERE " + self._STALLED_WHERE
+        args: List[Any] = [OUTREACH_REPLIED, float(before_ts), float(before_ts)]
+        if unflagged_only:
+            sql += " AND stalled_flagged_at=0"
+        if account_id:
+            sql += " AND outreach_account_id=?"
+            args.append(str(account_id))
+        sql += " ORDER BY CASE WHEN answered_at=0 THEN replied_at ELSE last_in_at END ASC LIMIT ?"
+        args.append(int(limit))
+        with self._lock:
+            rows = self._conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_stalled_flagged(self, group_id: str, user_id: str, ts: float) -> int:
+        """本轮「没接上」已打过需人工标；我方下一次回话（record_outreach_outbound）清零。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET stalled_flagged_at=? "
+                "WHERE group_id=? AND user_id=? AND stalled_flagged_at=0",
+                (float(ts), str(group_id or ""), str(user_id or "")))
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
+    def variant_rates(self, since_ts: float, account_id: str = "") -> Dict[str, Dict[str, int]]:
+        """切入方式 → {sent, replied}（真发出的，按 outreach_at）。开口选法用。"""
+        sql = ("SELECT opener_variant, COUNT(*), SUM(CASE WHEN outreach_state=? THEN 1 ELSE 0 END) "
+               "FROM tg_group_members WHERE outreach_at>=? AND outreach_state IN (?,?,?) "
+               "AND opener_variant!=''")
+        args: List[Any] = [OUTREACH_REPLIED, float(since_ts), OUTREACH_SENT, OUTREACH_REPLIED,
+                           OUTREACH_CLOSED]
+        if account_id:
+            sql += " AND outreach_account_id=?"
+            args.append(str(account_id))
+        with self._lock:
+            rows = self._conn.execute(sql + " GROUP BY opener_variant", args).fetchall()
+        return {str(v): {"sent": int(n or 0), "replied": int(r or 0)} for v, n, r in rows}
+
+    def list_replied_since(self, account_id: str, since_ts: float,
+                           limit: int = 20) -> List[Dict[str, Any]]:
+        """这个号自 since_ts 起收到的回音（含人家先来找的），新的在前。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE outreach_account_id=? AND outreach_state=? "
+                "AND replied_at>=? ORDER BY replied_at DESC LIMIT ?",
+                (str(account_id), OUTREACH_REPLIED, float(since_ts), int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def skip_outreach(self, group_id: str, user_id: str, reason: str = "operator_skip") -> bool:
+        """坐席跳过这个人：queued/approved → skipped，不再碰。"""
+        return self.cas_outreach(
+            group_id, user_id, expect_states=(OUTREACH_QUEUED, OUTREACH_APPROVED),
+            new_state=OUTREACH_SKIPPED, error=reason)
+
+    def mark_outreach_stop_contact(self, user_id: str) -> int:
+        """对方说「别发了」：这个人在所有群、所有号下都不再碰。
+
+        已发/已回的行保留状态（额度统计不变），只记原因；还没发的全部标不可达。
+        """
+        uid = str(user_id or "").strip()
+        if not uid:
+            return 0
+        with self._lock:
+            a = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, outreach_error='stop_contact' "
+                "WHERE user_id=? AND outreach_state IN (?,?,?)",
+                (OUTREACH_BLOCKED, uid, OUTREACH_NONE, OUTREACH_QUEUED, OUTREACH_APPROVED),
+            )
+            b = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_error='stop_contact', "
+                "outreach_state=CASE WHEN outreach_state=? THEN ? ELSE outreach_state END "
+                "WHERE user_id=? AND outreach_state IN (?,?,?)",
+                (OUTREACH_SENT, OUTREACH_REPLIED, uid,
+                 OUTREACH_SENT, OUTREACH_REPLIED, OUTREACH_SENDING),
+            )
+            self._conn.commit()
+        return int(a.rowcount or 0) + int(b.rowcount or 0)
+
+    def get_outreach_mode(self, account_id: str) -> str:
+        mode = str(self.get_hold(account_id).get("mode") or OUTREACH_MODE_MANUAL)
+        return mode if mode in OUTREACH_MODES else OUTREACH_MODE_MANUAL
+
+    def set_outreach_mode(self, account_id: str, mode: str) -> str:
+        mode = str(mode or "").strip()
+        if mode not in OUTREACH_MODES:
+            mode = OUTREACH_MODE_MANUAL
+        self.set_hold(str(account_id), mode=mode)
+        return mode
+
+    def last_outreach_sent_ts(self, account_id: str) -> float:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(outreach_at) FROM tg_group_members "
+                "WHERE outreach_account_id=? AND outreach_state IN (?,?)",
+                (str(account_id), OUTREACH_SENT, OUTREACH_REPLIED),
+            ).fetchone()
+        return float(row[0] or 0.0) if row else 0.0
+
+    def count_unhashed_for_account(self, account_id: str) -> int:
+        """这个号拉进来、但还没有私聊凭证的可聊成员（需要再提取一次才开得了口）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM tg_group_members WHERE source_account_id=? "
+                "AND spoke=1 AND is_admin=0 AND is_bot=0 AND outreach_state=? "
+                "AND (access_hash='' OR hash_account_id='')",
+                (str(account_id), OUTREACH_NONE),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def cas_outreach(self, group_id: str, user_id: str, *, expect_states: Sequence[str],
+                     new_state: str, account_id: str = "", error: str = "",
+                     now: Optional[float] = None) -> bool:
+        """按当前状态占坑。只有 expect 命中才改，避免两条开口打到同一个人。"""
+        expect = [str(s) for s in expect_states if str(s)]
+        if not expect or not str(group_id) or not str(user_id):
+            return False
+        now = time.time() if now is None else float(now)
+        ph = ",".join(["?"] * len(expect))
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, outreach_account_id=?, "
+                "outreach_error=?, outreach_at=? "
+                "WHERE group_id=? AND user_id=? AND outreach_state IN (%s)" % ph,
+                [str(new_state), str(account_id or ""), str(error or "")[:200], now,
+                 str(group_id), str(user_id), *expect],
+            )
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def reap_stale_sending(self, now: Optional[float] = None, *,
+                           max_age_sec: float = 600.0) -> int:
+        """sending 超过 max_age 仍没落定 → 标 skipped，不再对这个人发第二次。
+
+        进程在「Telegram 已收到、状态还没写成 sent」之间挂掉时，这条到底发没发
+        不可知。退回 queued 会重发一次；少一个人比对同一个人连发两条便宜。
+        """
+        now = time.time() if now is None else float(now)
+        cutoff = now - float(max_age_sec)
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, outreach_error=? "
+                "WHERE outreach_state=? AND outreach_at>0 AND outreach_at<?",
+                (OUTREACH_SKIPPED, "stale_sending", OUTREACH_SENDING, cutoff),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
+    def mark_outreach_replied(self, account_id: str, user_id: str,
+                              now: Optional[float] = None, text: str = "") -> int:
+        """对方给这个号发私聊了。
+
+        - 发过（sent/closed）→ replied，记首回时间和首回内容（只记第一条，后面的归收件箱）。
+        - 还在排队（queued/approved，凭证在这个号手里）→ 也标 replied，错误码 ``inbound_first``：
+          人家先来找我们了，冷开口就别再发；``outreach_at`` 保持 0，所以不进回复率分母。
+        不改 outreach_at：日额度统计 sent+replied 都按发出那一刻算。
+        返回改动行数。
+        """
+        uid = str(user_id or "").strip()
+        acct = str(account_id or "").strip()
+        if not uid or not acct:
+            return 0
+        now = time.time() if now is None else float(now)
+        snippet = " ".join(str(text or "").split())[:200]
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, outreach_error='', "
+                "replied_at=CASE WHEN replied_at>0 THEN replied_at ELSE ? END, "
+                "reply_text=CASE WHEN reply_text!='' THEN reply_text ELSE ? END, "
+                "last_in_at=MAX(last_in_at, ?) "
+                "WHERE user_id=? AND outreach_account_id=? AND outreach_state IN (?,?)",
+                (OUTREACH_REPLIED, now, snippet, now, uid, acct, OUTREACH_SENT, OUTREACH_CLOSED),
+            )
+            n = int(cur.rowcount or 0)
+            # 排队时 cas 写过 outreach_at（排队时刻），这里清零：没发过就不该进任何「发出」口径
+            cur2 = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, outreach_error='inbound_first', "
+                "outreach_at=0, replied_at=?, reply_text=?, last_in_at=? "
+                "WHERE user_id=? AND outreach_account_id=? AND outreach_state IN (?,?)",
+                (OUTREACH_REPLIED, now, snippet, now, uid, acct, OUTREACH_QUEUED, OUTREACH_APPROVED),
+            )
+            n += int(cur2.rowcount or 0)
+            # 已在 replied 态的后续来话：推进 last_in_at（「接上后又断了」的计时起点），不计入返回值；
+            # 打标之后对方又来话 = 新一轮等待，清掉打标记号（坐席摘过标也允许再打）
+            if not n:
+                self._conn.execute(
+                    "UPDATE tg_group_members SET last_in_at=MAX(last_in_at, ?), "
+                    "stalled_flagged_at=CASE WHEN ?>stalled_flagged_at THEN 0 ELSE stalled_flagged_at END "
+                    "WHERE user_id=? AND outreach_account_id=? AND outreach_state=?",
+                    (now, now, uid, acct, OUTREACH_REPLIED))
+            self._conn.commit()
+            return n
+
+    def get_hold(self, account_id: str) -> Dict[str, Any]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tg_outreach_holds WHERE account_id=?",
+                (str(account_id),),
+            ).fetchone()
+        if row is None:
+            return {"account_id": str(account_id), "paused": False,
+                    "flood_until": 0.0, "reason": "", "updated_at": 0.0,
+                    "mode": OUTREACH_MODE_MANUAL, "last_flood_at": 0.0, "next_auto_at": 0.0}
+        d = dict(row)
+        d["paused"] = bool(d.get("paused"))
+        d["flood_until"] = float(d.get("flood_until") or 0.0)
+        d["mode"] = str(d.get("mode") or OUTREACH_MODE_MANUAL)
+        d["last_flood_at"] = float(d.get("last_flood_at") or 0.0)
+        d["next_auto_at"] = float(d.get("next_auto_at") or 0.0)
+        return d
+
+    def set_hold(self, account_id: str, *, paused: Optional[bool] = None,
+                 flood_until: Optional[float] = None, reason: Optional[str] = None,
+                 mode: Optional[str] = None, last_flood_at: Optional[float] = None,
+                 next_auto_at: Optional[float] = None,
+                 now: Optional[float] = None) -> Dict[str, Any]:
+        cur = self.get_hold(account_id)
+        if paused is not None:
+            cur["paused"] = bool(paused)
+        if flood_until is not None:
+            cur["flood_until"] = float(flood_until)
+        if reason is not None:
+            cur["reason"] = str(reason)[:200]
+        if mode is not None and str(mode) in OUTREACH_MODES:
+            cur["mode"] = str(mode)
+        if last_flood_at is not None:
+            cur["last_flood_at"] = float(last_flood_at)
+        if next_auto_at is not None:
+            cur["next_auto_at"] = float(next_auto_at)
+        now = time.time() if now is None else float(now)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tg_outreach_holds "
+                "(account_id, paused, flood_until, reason, updated_at, mode, "
+                "last_flood_at, next_auto_at) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(account_id) DO UPDATE SET "
+                "paused=excluded.paused, flood_until=excluded.flood_until, "
+                "reason=excluded.reason, updated_at=excluded.updated_at, mode=excluded.mode, "
+                "last_flood_at=excluded.last_flood_at, next_auto_at=excluded.next_auto_at",
+                (str(account_id), 1 if cur["paused"] else 0, float(cur["flood_until"]),
+                 str(cur["reason"] or ""), now, str(cur.get("mode") or OUTREACH_MODE_MANUAL),
+                 float(cur.get("last_flood_at") or 0.0), float(cur.get("next_auto_at") or 0.0)),
+            )
+            self._conn.commit()
+        return self.get_hold(account_id)
+
+    def clear_outreach_pause(self, account_id: str = "") -> None:
+        """解除人工急停。不清除 flood_until——风控熔断等到点自己过。"""
+        now = time.time()
+        with self._lock:
+            if account_id:
+                self._conn.execute(
+                    "UPDATE tg_outreach_holds SET paused=0, reason='', updated_at=? "
+                    "WHERE account_id=?",
+                    (now, str(account_id)),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE tg_outreach_holds SET paused=0, reason='', updated_at=? "
+                    "WHERE paused=1",
+                    (now,),
+                )
+            self._conn.commit()
+
     # ── ops 观测 ─────────────────────────────────────────────────────────────
 
     def stats(self) -> Dict[str, Any]:
@@ -412,14 +1206,26 @@ class GroupMembersStore:
             jr = self._conn.execute(
                 "SELECT COUNT(*) FROM tg_extract_jobs WHERE status='running'").fetchone()
             jt = self._conn.execute("SELECT COUNT(*) FROM tg_extract_jobs").fetchone()
+            srows = self._conn.execute(
+                "SELECT outreach_state, COUNT(*) FROM tg_group_members "
+                "WHERE outreach_state IN (?,?,?) GROUP BY outreach_state",
+                (OUTREACH_SENT, OUTREACH_REPLIED, OUTREACH_CLOSED),
+            ).fetchall()
         members_total = int(mt[0]) if mt else 0
         jobs_total = int(jt[0]) if jt else 0
+        by = {str(s): int(c or 0) for s, c in srows}
+        sent = sum(by.values())
+        replied = by.get(OUTREACH_REPLIED, 0)
         return {
             "active": bool(members_total or jobs_total),
             "members_total": members_total,
             "groups": int(gt[0]) if gt else 0,
             "jobs_running": int(jr[0]) if jr else 0,
             "jobs_total": jobs_total,
+            # 开口漏斗（库口径累计）：发出过多少、多少回了
+            "outreach_sent": sent,
+            "outreach_replied": replied,
+            "outreach_reply_rate": (replied / sent) if sent else None,
         }
 
     # ── 行 → dict ────────────────────────────────────────────────────────────
@@ -490,6 +1296,11 @@ __all__ = [
     "DEFAULT_DB_PATH", "GroupMembersStore",
     "FILTER_ALL", "FILTER_SPOKE", "FILTER_SPOKE_NO_ADMIN",
     "JOB_DRAFT", "JOB_RUNNING", "JOB_PAUSED", "JOB_DONE", "JOB_STOPPED", "JOB_ERROR",
+    "OUTREACH_NONE", "OUTREACH_QUEUED", "OUTREACH_SENDING", "OUTREACH_SENT",
+    "OUTREACH_REPLIED", "OUTREACH_SKIPPED", "OUTREACH_BLOCKED", "OUTREACH_CLOSED",
+    "OUTREACH_TOUCHED",
+    "OUTREACH_APPROVED", "OUTREACH_HOLD_ALL",
+    "OUTREACH_MODE_MANUAL", "OUTREACH_MODE_APPROVE", "OUTREACH_MODE_AUTO", "OUTREACH_MODES",
     "configure_group_members_store", "get_group_members_store",
     "reset_group_members_store",
 ]

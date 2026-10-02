@@ -530,6 +530,21 @@ def persona_allowed_for_voice(
     return bool(persona_id) and str(persona_id).strip() in names
 
 
+def voice_also_text(voice_block: Dict[str, Any], persona_id: Optional[str]) -> bool:
+    """语音发出后是否再补发同一句文字（``voice.also_text``）。
+
+    ``true`` → 全部人设；人设 id 列表 → 仅名单内（``persona_id`` 须为解析后的真实 id）；
+    缺省 / false / 空列表 → 只发语音（旧行为）。
+    """
+    v = (voice_block or {}).get("also_text")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (list, tuple, set)):
+        names = {str(x).strip() for x in v if str(x).strip()}
+        return bool(persona_id) and str(persona_id).strip() in names
+    return False
+
+
 async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
                      *, out_dir: str, contact_key: Optional[str] = None,
                      platform: str = "telegram",
@@ -1114,7 +1129,7 @@ async def stage_voice_file(
 
 __all__ = [
     "resolve_voice_autosend_cfg", "decide_voice", "should_send_voice",
-    "persona_allowed_for_voice", "stage_voice_file", "VoiceStageMeta",
+    "persona_allowed_for_voice", "voice_also_text", "stage_voice_file", "VoiceStageMeta",
     "stage_voice_parts", "resolve_split_send_cfg", "part_gap_seconds",
     "record_voice_sent", "record_voice_fallback", "record_voice_decision",
     "metrics_snapshot", "no_edge_fallback_enabled", "preflight_voice_synth",

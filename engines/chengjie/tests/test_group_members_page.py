@@ -36,8 +36,17 @@ def test_page_renders_html_shell():
     assert "text/html" in r.headers.get("content-type", "")
     body = r.text
     for marker in ('id="gm-start"', 'id="gm-accts"', 'id="gm-jobs"', 'id="gm-mbody"',
-                   "/api/tg-members/jobs", "/api/accounts"):
+                   'id="gm-outreach"', 'id="gm-out-mode"', 'id="gm-out-compose"',
+                   'id="gm-out-approve-all"', 'id="gm-out-summary"', 'id="gm-out-save"',
+                   "/api/tg-members/jobs",
+                   "/api/tg-members/outreach/preview", "/api/tg-members/outreach/compose",
+                   "/api/tg-members/outreach/approve", "/api/tg-members/outreach/skip",
+                   "/api/tg-members/outreach/mode", "/api/tg-members/outreach/settings",
+                   "/api/tg-members/outreach/followup", "/api/tg-members/outreach/stats",
+                   'id="gm-out-followups"', 'id="gm-out-statsbox"', 'id="gm-out-replied"',
+                   "/api/accounts"):
         assert marker in body, f"管理台缺骨架 {marker}"
+    assert "window.prompt(" not in body     # 开场改稿在卡片里，不再弹 prompt
 
 
 def test_page_renders_even_when_feature_disabled():

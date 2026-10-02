@@ -1988,19 +1988,94 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "怎么提取 Telegram 群成员 / 工具箱里的「群成员提取」怎么用",
         "How to extract Telegram group members (Group member extraction tool)",
         "收件箱右栏切到「工具箱」页签 → 「群成员提取」卡点「🧲 打开管理台」（或直接访问 /tools/tg-members）。"
-        "管理台三步：① 发起提取——勾选用哪些在线的 Telegram 号拉（多选＝多号并行、各拉不同批次），"
+        "管理台四步：① 发起提取——勾选用哪些在线的 Telegram 号拉（多选＝多号并行、各拉不同批次），"
         "选目标群（选号后自动列出，或高级里手输群 id / @用户名），选过滤器（默认「发过言且非管理员」），"
         "填每号每日上限，点「🧲 发起提取」；② 提取任务——看进度、可停止；③ 成员库——按群查看、搜名字，"
-        "点「导出 CSV」。只读提取，不会主动私聊任何人；私聊触达是独立步骤。1.0.104 起本功能出厂即开，"
-        "若看不到卡片：开发者工具 → 「内部功能显隐」勾选「群成员提取」后刷新。",
+        "点「导出 CSV」；④ 今日开口——给提取到的人发第一条私聊（见「同群开口」条目）。①–③ 是只读提取，"
+        "不会私聊任何人。1.0.104 起本功能出厂即开，若看不到卡片：开发者工具 → 「内部功能显隐」勾选"
+        "「群成员提取」后刷新。",
         "In the inbox right rail open the Toolbox tab → Group member extraction card → \"Open console\" "
-        "(or visit /tools/tg-members). Three steps: (1) Start: pick online Telegram accounts (multi-select = "
+        "(or visit /tools/tg-members). Four steps: (1) Start: pick online Telegram accounts (multi-select = "
         "parallel, disjoint batches), choose the target group (auto-listed, or type an id / @username under "
         "Advanced), choose the filter (default: spoke and not admin), set the daily cap per account, click Start; "
-        "(2) Jobs: watch progress or stop; (3) Member DB: browse by group, search, Export CSV. Read-only — it "
-        "never messages anyone; outreach is a separate step. Shipped on by default since 1.0.104; if the card is "
-        "missing, tick it under Developer Tools → Internal feature visibility and refresh.",
+        "(2) Jobs: watch progress or stop; (3) Member DB: browse by group, search, Export CSV; (4) Today's "
+        "openers: send the first private line to extracted people (see the same-group outreach entry). Steps 1-3 "
+        "are read-only and never message anyone. Shipped on by default since 1.0.104; if the card is missing, "
+        "tick it under Developer Tools → Internal feature visibility and refresh.",
         "群成员提取 提取群成员 拉群成员 群成员 工具箱 导出成员 telegram group members extract scrape toolbox",
+        "/tools/tg-members",
+    ),
+    (
+        "persona-reply-style",
+        "怎么让人设说话更像真人 / 每条都发语音 / 语音和文字说不一样的内容",
+        "How to make a persona sound more human, send voice on every reply, or split voice and text",
+        "人设页 → 编辑人设 → 语音区的「语气表达」卡（语音选「不发语音」时这张卡隐藏），三个下拉，默认都是「跟随全局」，"
+        "改完点保存：①「真人感」——活泼＝合成前把句子改成口语，带思考声（嗯……）、轻笑、偶尔一次自我纠正；"
+        "自然＝只改口语不加小动作；关闭＝照稿念。对这个人设的所有语音生效，全局口语化开关关着也生效。"
+        "②「何时发语音」——每条回复都发 / 对方发语音时才发 / 智能判断 / 不发语音。"
+        "③「语音文字分开说」——开＝一条回复前半句用语音说、后半句发文字，内容不重复；太短拆不开的回复照常整条处理。"
+        "②③ 作用于 Telegram 自动回复，前提是语音页的 Telegram 语音回复总开关是开的（总开关关着，人设设置不会强行发语音）。",
+        "Personas page → edit a persona → the \"Tone\" card in the voice section (hidden when voice is set to "
+        "\"No voice\"). Three dropdowns, all default to \"Follow global\"; save after changing. (1) Human feel: "
+        "Lively rewrites the line conversationally before synthesis with a thinking sound, a light laugh and the "
+        "odd self-correction; Natural only makes it conversational; Off reads the text as written. Applies to all "
+        "of this persona's voice, even when global colloquial rewriting is off. (2) When to send voice: every reply / "
+        "only when they send voice / smart / never. (3) Split voice and text: On = the first part of a reply is "
+        "spoken and the rest is sent as text, without repeating; replies too short to split are handled as before. "
+        "(2) and (3) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice "
+        "page to be on.",
+        "真人感 口语化 思考声 笑声 口误 每条都发语音 语音和文字 分开说 语气表达 人设语音 human feel voice every reply split voice text",
+        "/personas",
+    ),
+    (
+        "tg-group-outreach",
+        "怎么给提取到的群成员自动发第一条私聊（同群开口 / AI 开场 / 批准后自动发）",
+        "How to auto-message extracted group members (same-group outreach, AI openers, approve-then-send)",
+        "群成员管理台（/tools/tg-members）第④步「今日开口」。规则先说清：只有「当时拉到这个人的那个号」"
+        "能给他发；每号每天 5–10 个新人（新号从 3 条起 14 天爬到上限）；只在本地 10–21 点发；两条之间至少 25 分钟；"
+        "每条都计入这个号的总发送额度；同一个人只开口一次。操作：选号 → 「生成今日队列」→ 「AI 拟稿」"
+        "（按这个号的人设 + 默认工作目标 + 对方在群里最近说的话写一句开场，不卖货、不带链接、不要联系方式，"
+        "AI 不在时用模板）→ 每人一张卡可改可跳过 → 「批准」。开口方式三档：「手动」逐条点「现在发这一条」；"
+        "「批准后自动发」由后台在时段内每 25–90 分钟随机发一条已批准的；「全自动」自己排队、拟稿、发——"
+        "只有注册满 14 天、近 7 天没撞过风控、回复率不低于地板的号才能切，调度器每轮复核，不达标自动退回"
+        "「批准后自动发」。发出 72 小时没回音会补**一句**跟进（只一次，给台阶不追问），再 72 小时没回就封存。"
+        "发出去的开场和跟进都会镜像进收件箱（我方出站），所以对方回话时回复链知道我们先说了什么，"
+        "接着用这个号的人设聊；页面「今日回音」列出谁回了、回了什么，点名字直达工作台会话。"
+        "还在排队的人如果先来找我们，会自动出队（标「对方先来找」），不再冷开口。对方回了但 48 小时内这个号还没回一句"
+        "（AI 没触发或没人接）→ 页面顶部「回了但没接上」橙色提醒 + 审计记一条，同时给收件箱那条会话打「需人工」"
+        "（原因写明是同群开口没接上，进驾驶舱介入队列），任何一方回一句就自动摘标。接上过、对方又来话而我方 48 小时没再回的"
+        "（「接上后又断了」）同样提醒和打标。每轮只打一次标：坐席手动摘了不会被打回去，对方再来消息才算新一轮。"
+        "对方说「别发了」则跨群跨号都不再碰。"
+        "AI 拟稿会在三种切入方式间做 A/B（接话茬 / 从群切入 / 轻问一句），按近 30 天回复率自动偏向好的那种、留一部分探索；"
+        "没发言的人只能从群切入。页面下方「回复率 / 漏斗」按切入方式 / 文案来源 / 人设 / 发出小时看回复率和首回时延，"
+        "样本小于 10 的行先别下结论。「停止这个号」随时急停；时段与每日条数可在页面直接改。",
+        "Step 4 \"Today's openers\" in the group-members console (/tools/tg-members). Rules first: only the "
+        "account that captured a person can message them; 5-10 new people per account per day (new accounts ramp "
+        "from 3 over 14 days); sends go out 10:00-21:00 local only; at least 25 min between two; every send counts "
+        "toward the account's overall cap; each person is opened once. Flow: pick the account → Build today's "
+        "queue → AI draft (one line per person from this account's persona + default goal + what they last said "
+        "in the group; no pitch, no links, no contact asks; templates when the LLM is down) → edit or skip on "
+        "each card → Approve. Three modes: Manual (click Send now per person); Approve then auto-send (the "
+        "scheduler sends one approved person every 25-90 min inside the window); Fully automatic (queues, drafts "
+        "and sends on its own) - only for accounts 14+ days old with no flood limit in the last 7 days and a reply "
+        "rate above the floor; re-checked every cycle and demoted automatically. After 72h without a reply one "
+        "follow-up nudge is sent (once; soft, no chasing), then closed after another 72h. Every opener and nudge "
+        "is mirrored into the inbox as our outbound line, so when they reply the reply chain knows what we said "
+        "and continues in this account's persona; the 'Replies today' list shows who replied and what, with a "
+        "link into the workspace conversation. Someone still queued who messages us first is pulled out of the "
+        "queue automatically. If they replied and this account has not answered within 48h (AI did not fire or "
+        "nobody picked up) the page shows an orange 'Replied but unanswered' list, an audit entry is written and "
+        "the inbox conversation gets the 'needs human' tag (reason: group outreach unanswered, so it lands in the "
+        "cockpit queue); one reply from our side clears the tag automatically. The same applies when a chat "
+        "went quiet again (we answered once, they wrote again, and we have not replied for 48h). The tag is set "
+        "once per wait: if an agent clears it by hand it is not re-added until they send a new message. "
+        "A 'stop messaging me' blocks that person everywhere. AI drafts A/B three opener "
+        "angles (echo their line / via the group / ask one thing), leaning toward the best 30-day reply rate "
+        "while keeping some exploration; silent members only get the group angle. The Reply rate / funnel panel "
+        "slices by angle / opener source / persona / hour and shows first-reply latency - rows under 10 sends are "
+        "noise. Stop this account is the kill switch; window and daily cap are editable on the page.",
+        "同群开口 开口 自动私聊 主动私聊 第一条私信 AI 开场 打招呼 批准后自动发 全自动 跟进 回复率 回音 切入方式 "
+        "outreach opener auto dm cold message approve auto-send follow-up reply rate replies a/b telegram",
         "/tools/tg-members",
     ),
 ]

@@ -5130,6 +5130,11 @@ async function loadGroupMembers(){
       {label:window.T('ov2_gm_groups'), value:fmt(Number(gm.groups)||0)},
       {label:window.T('ov2_gm_jobs'), value:fmt(Number(gm.jobs_running)||0)+' / '+fmt(Number(gm.jobs_total)||0)},
     ];
+    if(Number(gm.outreach_sent)||0){
+      var rr = gm.outreach_reply_rate;
+      kpis.push({label:window.T('ov2_gm_outreach'), value:fmt(Number(gm.outreach_sent)||0)+' / '+fmt(Number(gm.outreach_replied)||0)+
+        (rr==null?'':' ('+Math.round(rr*100)+'%)')});
+    }
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';

@@ -1474,6 +1474,7 @@ class TelegramSenderMixin:
             except Exception:
                 pass
 
+            vr_cfg = self._voice_reply_persona_override(raw_cfg, vr_cfg, original_message)
             trigger = str(vr_cfg.get("trigger", "when_peer_voice")).strip().lower()
             if trigger == "never":
                 self.logger.debug("[voice_reply] skip: trigger=never")
@@ -1643,6 +1644,19 @@ class TelegramSenderMixin:
                 self.logger.info(
                     "[voice_reply] 命中生成层口语版（len=%d→%d）",
                     len(clean_text), len(_spoken))
+            # 文字/语音分说（text_voice_split）：前段念成语音、后段发文字，两条内容不重复。
+            # 只在语音真发出后补发后段；语音失败时待发队列里仍是整段原文。
+            _split_text = ""
+            _voice_mirror_text = reply_text
+            if vr_cfg.get("text_voice_split", False):
+                _sp = self.split_text_voice(clean_text)
+                if _sp:
+                    synth_source, _split_text = _sp
+                    _voice_mirror_text = synth_source
+                    _spoken = None
+                    self.logger.info(
+                        "[voice_reply] 文字/语音分说 voice=%d字 text=%d字",
+                        len(synth_source), len(_split_text))
 
             # P3：端用户身份（私聊 chat.id 即对端 user_id）→ 会员档分层路由 TTS 后端
             # （VIP→旗舰，免费→降级省成本）。monetization 未就绪 → tier=None → 不路由。
@@ -1770,7 +1784,9 @@ class TelegramSenderMixin:
                             on_part_sent=_note_voice_sent)
                         if split_sent:
                             _note_voice_ok()
-                            if vr_cfg.get("send_text_summary", False):
+                            if _split_text:
+                                await self._send_reply(original_message, _split_text)
+                            elif vr_cfg.get("send_text_summary", False):
                                 await self._send_reply(original_message, reply_text)
                             return True
                         self.logger.info("[voice_reply] 分条路径未完成 → 回落整段单条")
@@ -1895,12 +1911,12 @@ class TelegramSenderMixin:
                     # send_media(inbox_text=念稿) 同口径）；发布失败时 media_ref 为空，
                     # 前端按「无音频存档」转写行展示，media_type 仍如实标 voice。
                     # msg_id＝send_voice 返回的真实 id（回显主键去重，2026-08-02）。
-                    _vclean = " ".join(str(reply_text or "").split())
+                    _vclean = " ".join(str(_voice_mirror_text or "").split())
                     _vmid = getattr(sent, "id", "") or ""
                     # P1-3：语音行带「谁的音色」（人设显示名，best-effort 空串安全）
                     from src.ai.persona_voice import persona_display_name
                     _vwho = persona_display_name(voice_ctx.get("persona_id"))
-                    if vr_cfg.get("send_text_summary", False):
+                    if _split_text or vr_cfg.get("send_text_summary", False):
                         # 语音行本体也要可见/可回放（此前该分支只镜像文本摘要，语音
                         # 条在收件箱隐形）；contacts 由随后的 _send_reply 记一次，
                         # 这里只镜像不重复记账。
@@ -1910,7 +1926,7 @@ class TelegramSenderMixin:
                             sender_name=_vwho)
                         # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
                         # （语音+文本=确有 2 条外发，各记一次属正确口径）。
-                        await self._send_reply(original_message, reply_text)
+                        await self._send_reply(original_message, _split_text or reply_text)
                     else:
                         # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
                         # contacts 预览保留 [语音] 标记（纯文本时间线需要表意）。
@@ -2035,6 +2051,88 @@ class TelegramSenderMixin:
         except Exception as ex:
             self.logger.error("[voice_reply] unexpected error: %s", ex)
             return False
+
+    def _voice_reply_persona_override(self, raw_cfg, vr_cfg, original_message):
+        """``telegram.voice_reply.persona_overrides.<persona_id>`` 浅合并到全局段。
+
+        例：``{wujie_sales: {trigger: always, send_text_summary: true}}`` → 只有该人设
+        每条都发语音并补发同句文字，其余账号沿用全局配置。人设按出站同口径解析
+        （会话覆写 → 账号绑定）；未配 / 解析失败 = 原样返回。
+        """
+        ov_map = vr_cfg.get("persona_overrides")
+        if not isinstance(ov_map, dict):
+            ov_map = {}
+        try:
+            from src.ai.persona_voice import resolve_effective_persona_id
+            pid = resolve_effective_persona_id(
+                raw_cfg, "telegram",
+                str(getattr(self, "account_id", "") or "default"),
+                str(getattr(getattr(original_message, "chat", None), "id", "") or ""))
+        except Exception:
+            pid = ""
+        if not pid and getattr(self, "account_persona_ids", None):
+            pid = str(self.account_persona_ids[0] or "")
+        if not pid:
+            return vr_cfg
+        ov = dict(self._persona_pack_voice_reply(pid))
+        cfg_ov = ov_map.get(pid)
+        if isinstance(cfg_ov, dict):
+            ov.update(cfg_ov)
+        if not ov:
+            return vr_cfg
+        merged = {k: v for k, v in vr_cfg.items() if k != "persona_overrides"}
+        merged.update(ov)
+        self.logger.debug("[voice_reply] persona_overrides 命中 persona=%s keys=%s",
+                          pid, sorted(ov))
+        return merged
+
+    _PACK_TRIGGERS = frozenset({"when_peer_voice", "always", "random", "smart", "never"})
+
+    def _persona_pack_voice_reply(self, pid: str) -> dict:
+        """人设自带的回复形态：``voice_profile.reply_trigger`` / ``text_voice_split``。
+
+        随人设包分发（所有客户导入即生效）；config 里的 ``persona_overrides`` 同键覆盖它。
+        """
+        try:
+            from src.utils.persona_manager import PersonaManager
+            persona = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+        except Exception:
+            return {}
+        vp = persona.get("voice_profile") if isinstance(persona, dict) else None
+        if not isinstance(vp, dict):
+            return {}
+        out: dict = {}
+        trig = str(vp.get("reply_trigger") or "").strip().lower()
+        if trig in self._PACK_TRIGGERS:
+            out["trigger"] = trig
+        if isinstance(vp.get("text_voice_split"), bool):
+            out["text_voice_split"] = vp["text_voice_split"]
+        return out
+
+    @staticmethod
+    def split_text_voice(text: str, *, min_part_chars: int = 6):
+        """把一条回复拆成（语音段, 文字段）：前段念、后段发字，内容不重复。
+
+        按句末标点切句，语音段取前约一半句子（至少 1 句）。不足 2 句或任一段
+        短于 ``min_part_chars`` → ``None``（调用方按原逻辑整段处理）。
+        """
+        import re as _re
+        s = " ".join(str(text or "").split())
+        sents = [x.strip() for x in _re.split(
+            r"(?<=[。！？!?～~…])(?![。！？!?～~…])|(?<=\.)(?=\s)", s) if x.strip()]
+        if len(sents) < 2:
+            return None
+        def _join(xs):
+            out = ""
+            for x in xs:
+                out += (" " if out and out[-1].isascii() and out[-1] != "\n" else "") + x
+            return out.strip()
+
+        k = max(1, len(sents) // 2)
+        voice, rest = _join(sents[:k]), _join(sents[k:])
+        if len(voice) < min_part_chars or len(rest) < min_part_chars:
+            return None
+        return voice, rest
 
     # A1 text-first 后台看护任务引用（防 GC 取消；类级共享等价于进程级）
     _tf_bg_tasks: set = set()

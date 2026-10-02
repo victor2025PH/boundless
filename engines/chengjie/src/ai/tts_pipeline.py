@@ -3737,8 +3737,10 @@ class TTSPipeline:
                         enable_thinking_repeat=bool(_ticks),
                         enable_soft_laugh=bool(_ticks) and _laugh_ok,
                         lead_prob=_lead_prob,
-                        think_prob=float(col_cfg.get("think_prob", 0.22) or 0.22),
-                        laugh_prob=float(col_cfg.get("laugh_prob", 0.18) or 0.18),
+                        think_prob=float(0.22 if col_cfg.get("think_prob") is None
+                                         else col_cfg["think_prob"]),
+                        laugh_prob=float(0.18 if col_cfg.get("laugh_prob") is None
+                                         else col_cfg["laugh_prob"]),
                         persona_leads=_persona_leads)
                 except Exception:
                     _col = None
@@ -3750,7 +3752,7 @@ class TTSPipeline:
             if (bool(_ticks) and spec is not None
                     and not re.match(r"^\s*(哈{2,}|嘿|呵{2,}|嘻{2,})", synth_text)
                     and not re.search(
-                        r"([\u4e00-\u9fff]{2})……\1", synth_text or "")):
+                        r"嗯……|([\u4e00-\u9fff]{2})……\1", synth_text or "")):
                 try:
                     from src.ai.voice_colloquial import (
                         _soft_laugh as _sl,
@@ -3766,15 +3768,17 @@ class TTSPipeline:
                             "happy", "playful", "excited"):
                         _nt, _hit = _sl(
                             synth_text, _emo2, _seed2,
-                            prob=float(col_cfg.get("laugh_prob", 0.08) or 0.08))
+                            prob=float(0.08 if col_cfg.get("laugh_prob") is None
+                                       else col_cfg["laugh_prob"]))
                         if _hit:
                             synth_text = _nt
                             rv.extra["soft_laugh"] = True
                             rv.extra["colloquial"] = True
+                    _tp = col_cfg.get("think_prob")
                     if not _hit:
                         _nt, _hit = _tr(
                             synth_text, _seed2,
-                            prob=float(col_cfg.get("think_prob", 0.22) or 0.22))
+                            prob=float(0.22 if _tp is None else _tp))
                         if _hit:
                             synth_text = _nt
                             rv.extra["thinking_repeat"] = True
@@ -3783,7 +3787,7 @@ class TTSPipeline:
                     pass
             elif re.match(r"^\s*嘿，", synth_text or ""):
                 rv.extra["soft_laugh"] = True
-            elif re.search(r"([\u4e00-\u9fff]{2})……\1", synth_text or ""):
+            elif re.search(r"嗯……|([\u4e00-\u9fff]{2})……\1", synth_text or ""):
                 rv.extra["thinking_repeat"] = True
 
         # ── 开场词会话级去重（P0-2 2026-08-03「嘿病」）────────────────────────

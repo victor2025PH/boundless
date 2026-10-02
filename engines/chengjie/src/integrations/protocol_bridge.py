@@ -614,6 +614,15 @@ def emit_incoming(msg: Dict[str, Any]) -> None:
         return
     try:
         fn(msg)
+        # 同群开口回音：TG 私聊里对方回了 → 成员行 sent→replied；我方回话 → 记接上
+        # （旁支，自己吞异常）
+        try:
+            from src.companion.group_member_outreach import (
+                note_inbound_reply, note_outbound_answer)
+            note_inbound_reply(msg)
+            note_outbound_answer(msg)
+        except Exception:
+            pass
     except Exception:
         _sink_fail_total += 1
         now = time.monotonic()

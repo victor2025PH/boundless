@@ -8,7 +8,7 @@
   数据源：/api/accounts、/api/tg-members/{jobs,groups,members,members/export,quota}。
   正式上线时的 nav 集成 / base.html 主题化 / 更细粒度 UX 属部署窗口内的真机打磨项。
 -->
-<html lang="{{ ui_locale|default('zh-CN') }}">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -56,6 +56,37 @@
     .job { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
     .job .jhd { display:flex; justify-content:space-between; gap:8px; align-items:center; }
     .empty { color:var(--dim); padding:8px 2px; }
+    /* 第④步：每人一张开口卡 */
+    .ocard { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
+    .ocard.approved { border-color:rgba(15,157,117,.5); }
+    .ocard .ohd { display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; }
+    .ocard .osaid { color:var(--dim); font-size:12.5px; margin:6px 0 4px; }
+    .ocard .osaid q { font-style:italic; }
+    .ocard textarea { width:100%; min-height:54px; font:inherit; padding:7px 9px; border:1px solid var(--border);
+                      border-radius:8px; background:var(--card); color:var(--text); resize:vertical; }
+    .ocard .oact { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+    .ocard .ocount { color:var(--dim); font-size:11.5px; margin-left:auto; }
+    .pill.ai { background:rgba(30,140,242,.14); color:var(--accent); }
+    .pill.tpl { background:rgba(107,114,128,.16); color:var(--dim); }
+    .pill.man { background:rgba(217,119,6,.14); color:var(--warn); }
+    .pill.ok { background:rgba(15,157,117,.14); color:var(--ok); }
+    .ocard.fu { border-style:dashed; }
+    .ocard.replied { border-color:rgba(15,157,117,.5); background:rgba(15,157,117,.04); }
+    .ocard.replied.stalled { border-color:rgba(217,119,6,.6); background:rgba(217,119,6,.05); }
+    .pill.warn { background:rgba(217,119,6,.14); color:var(--warn); }
+    .msg.warn { color:var(--warn); }
+    .ocard.replied a { color:inherit; text-decoration:none; }
+    .ocard.replied a:hover { text-decoration:underline; }
+    .funnel { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:8px 0; font-size:12.5px; }
+    .funnel b { font-size:15px; }
+    .funnel .arr { color:var(--dim); }
+    .stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; }
+    .stats-grid table { font-size:12.5px; }
+    .stats-grid h3 { font-size:13px; margin:0 0 6px; color:var(--dim); }
+    .bar { display:inline-block; height:8px; background:var(--dim); opacity:.55; border-radius:4px; vertical-align:middle; }
+    .bar.hot { background:var(--ok); opacity:1; }
+    .bar.warm { background:var(--accent); opacity:1; }
+    .bar.cold { background:var(--danger); opacity:.8; }
     /* 账号卡片（头像+昵称+@+在线点，多选） */
     .gm-acct-card { display:inline-flex; align-items:center; gap:8px; padding:5px 12px 5px 5px;
                     border:1px solid var(--border); border-radius:999px; cursor:pointer;
@@ -154,9 +185,58 @@
         <thead><tr>
           <th id="th-user"></th><th id="th-name"></th><th id="th-score"></th>
           <th id="th-spoke"></th><th id="th-admin"></th><th id="th-src"></th>
+          <th id="th-state"></th>
         </tr></thead>
         <tbody id="gm-mbody"></tbody>
       </table>
+    </section>
+
+    <section class="card" id="gm-outreach">
+      <h2 id="t-outreach"></h2>
+      <div class="msg" id="t-outreach-l"></div>
+      <div class="row">
+        <label id="t-out-acct-l" for="gm-out-acct"></label>
+        <select id="gm-out-acct"></select>
+        <label id="t-out-mode-l" for="gm-out-mode"></label>
+        <select id="gm-out-mode">
+          <option value="manual"></option>
+          <option value="approve"></option>
+          <option value="auto"></option>
+        </select>
+        <span class="msg" id="gm-out-persona"></span>
+      </div>
+      <div class="row">
+        <button type="button" id="gm-out-queue"></button>
+        <button type="button" id="gm-out-compose"></button>
+        <button type="button" class="primary" id="gm-out-approve-all"></button>
+        <button type="button" id="gm-out-stop"></button>
+        <button type="button" id="gm-out-resume"></button>
+      </div>
+      <div class="row gm-out-settings">
+        <label id="t-out-hours-l"></label>
+        <input type="number" id="gm-out-h0" min="0" max="23" style="min-width:64px;width:64px" />
+        <span>–</span>
+        <input type="number" id="gm-out-h1" min="1" max="24" style="min-width:64px;width:64px" />
+        <label id="t-out-cap-l"></label>
+        <input type="number" id="gm-out-cap" min="5" max="10" style="min-width:64px;width:64px" />
+        <button type="button" id="gm-out-save"></button>
+        <span class="msg" id="gm-out-save-note"></span>
+      </div>
+      <div class="msg" id="gm-out-stats"></div>
+      <div class="msg" id="gm-out-summary"></div>
+      <div id="gm-out-list"></div>
+      <div id="gm-out-replied"></div>
+      <div id="gm-out-followups"></div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" id="gm-out-stats-btn"></button>
+        <select id="gm-out-stats-days">
+          <option value="7">7d</option><option value="14">14d</option><option value="30">30d</option>
+        </select>
+        <select id="gm-out-stats-scope">
+          <option value="acct"></option><option value="all"></option>
+        </select>
+      </div>
+      <div id="gm-out-statsbox" hidden></div>
     </section>
   </div>
 
@@ -223,8 +303,8 @@
     function setText() {
       $("t-title").textContent = t("Telegram 群成员提取", "Telegram group member extraction");
       $("t-sub").textContent = t(
-        "多号进群 → 限速分批拉「发过言且非管理员」的成员入库 → 每天控量。只读提取；私聊触达是独立步骤。",
-        "Multi-account join -> rate-limited batched pull of active non-admins -> daily cap. Read-only extraction; outreach is separate.");
+        "入库和开口分开。提取只把人放进库；开口在第④步，每号每天 5–10 人，逐条确认才发。",
+        "Pulling people in and opening a chat are separate. Extraction only fills the library; step 4 sends 5-10 openers a day per account, one confirmed line at a time.");
       $("t-extract").textContent = t("① 发起提取", "① Start extraction");
       $("t-accts-l").textContent = t("选择用哪些号拉（仅显示在线的 Telegram 号；多选=多号并行、各拉不同批次）",
         "Pick accounts (online Telegram only; multi-select = parallel, disjoint batches)");
@@ -248,6 +328,29 @@
       $("th-spoke").textContent = t("发言", "Spoke");
       $("th-admin").textContent = t("管理员", "Admin");
       $("th-src").textContent = t("来源号", "By account");
+      $("th-state").textContent = t("开口", "Outreach");
+      $("t-outreach").textContent = t("④ 今日开口", "④ Today's openers");
+      $("t-outreach-l").textContent = t(
+        "只用「当时拉到这个人的那个号」发第一条私聊。生成队列 → AI 按这个号的人设和目标拟一句开场（可改）→ 批准。「批准后自动发」由后台在时段内每 25–90 分钟随机发一条；「手动」则逐条点发。新号从每天 3 条爬坡，也占这个号的总发送额度。对方回了交给收件箱，对方说别发了就全线不再碰。",
+        "The account that captured the person sends the first private line. Build the queue, let AI draft one opener per person from this account's persona and goal (editable), then approve. In 'approve then auto-send' the scheduler sends one every 25-90 min inside the window; 'manual' sends on click. New accounts ramp from 3 a day and each send counts toward the account's overall cap. Replies go to the inbox; a 'stop messaging me' blocks that person everywhere.");
+      $("t-out-acct-l").textContent = t("用哪个号", "Account");
+      $("t-out-mode-l").textContent = t("开口方式", "Mode");
+      var mo2 = $("gm-out-mode").options;
+      mo2[0].textContent = t("手动：逐条点发", "Manual: send on click");
+      mo2[1].textContent = t("批准后自动发", "Approve, then auto-send");
+      mo2[2].textContent = t("全自动（排队+拟稿+发）", "Fully automatic");
+      $("gm-out-queue").textContent = t("生成今日队列", "Build today's queue");
+      $("gm-out-compose").textContent = t("AI 拟稿", "AI draft");
+      $("gm-out-approve-all").textContent = t("一键批准今日队列", "Approve whole queue");
+      $("gm-out-stop").textContent = t("停止这个号", "Stop this account");
+      $("gm-out-resume").textContent = t("恢复开口", "Resume");
+      $("t-out-hours-l").textContent = t("时段", "Window");
+      $("t-out-cap-l").textContent = t("每天最多", "Daily max");
+      $("gm-out-save").textContent = t("保存", "Save");
+      $("gm-out-stats-btn").textContent = t("回复率 / 漏斗", "Reply rate / funnel");
+      var sc = $("gm-out-stats-scope").options;
+      sc[0].textContent = t("只看这个号", "This account");
+      sc[1].textContent = t("全部号", "All accounts");
       var so = $("gm-msort").options;
       so[0].textContent = t("可聊度优先", "Score first");
       so[1].textContent = t("近发言优先", "Recent first");
@@ -272,6 +375,9 @@
       if (!tg.length) {
         box.innerHTML = '<span class="empty">' +
           t("没有在线的 Telegram 号", "No online Telegram accounts") + "</span>";
+        if ($("gm-out-stats")) {
+          $("gm-out-stats").textContent = t("没有在线的 Telegram 号", "No online Telegram accounts");
+        }
         return;
       }
       _acctName = {};
@@ -299,6 +405,16 @@
         });
       });
       loadAcctQuotas(tg);
+      var osel = $("gm-out-acct");
+      if (osel) {
+        var prev = osel.value;
+        osel.innerHTML = tg.map(function (a) {
+          var nm = a.self_name || a.label || a.account_id;
+          return '<option value="' + esc(a.account_id) + '">' + esc(nm) + "</option>";
+        }).join("");
+        if (prev) osel.value = prev;
+        loadOutreach();
+      }
     }
 
     // 每号今日配额余量（"今日 used/cap"）填进卡片 chip；满额标红。未开启/失败静默跳过。
@@ -319,7 +435,7 @@
             var full = cap && used >= cap;
             chip.innerHTML = '<span class="qbar"><i style="width:' + pctq + '%' +
               (full ? ";background:var(--danger)" : "") + '"></i></span>' +
-              t("今日 ", "today ") + used + "/" + cap;
+              t("入库 ", "pulled ") + used + "/" + cap;
             if (full) chip.style.color = "var(--danger)";
           }).catch(function () {});
       }));
@@ -327,7 +443,7 @@
       if (tot) {
         if (got && sumCap > 0) {
           var tp = Math.min(100, Math.round(sumUsed / sumCap * 100));
-          tot.textContent = t("全机群今日合计 ", "fleet today ") + sumUsed + "/" + sumCap + " (" + tp + "%)";
+          tot.textContent = t("全机群今日入库 ", "fleet pulled today ") + sumUsed + "/" + sumCap + " (" + tp + "%)";
         } else { tot.textContent = ""; }
       }
     }
@@ -574,9 +690,596 @@
           "</td><td>" + scoreChip(m.score) + "</td><td>" +
           (m.spoke ? "✓" : "") + "</td><td>" +
           (m.is_admin ? '<span class="pill adm">admin</span>' : "") + "</td><td>" +
-          esc(m.source_account_id) + "</td></tr>";
+          esc(m.source_account_id) + "</td><td>" + esc(outreachLabel(m.outreach_state)) +
+          "</td></tr>";
       }).join("");
       return r.data;
+    }
+
+    function outreachLabel(state) {
+      var map = {
+        none: t("未开口", "not sent"),
+        queued: t("排队", "queued"),
+        approved: t("已批准", "approved"),
+        sending: t("发送中", "sending"),
+        sent: t("已发", "sent"),
+        replied: t("已回", "replied"),
+        blocked: t("不可达", "unreachable"),
+        skipped: t("跳过", "skipped"),
+        closed: t("已封存", "closed")
+      };
+      return map[state] || (state || "");
+    }
+
+    var _outCache = {};
+
+    function loadOutreach() {
+      var acct = ($("gm-out-acct") && $("gm-out-acct").value) || "";
+      var box = $("gm-out-list");
+      var stats = $("gm-out-stats");
+      if (!acct) {
+        if (stats) stats.textContent = t("没有在线号", "No online account");
+        if (box) box.innerHTML = "";
+        return Promise.resolve();
+      }
+      return api("/api/tg-members/outreach/preview?account_id=" + encodeURIComponent(acct))
+        .then(function (r) {
+          if (!r.ok) {
+            stats.textContent = (r.data && r.data.detail) || String(r.status);
+            box.innerHTML = "";
+            return;
+          }
+          var d = r.data || {};
+          _outCache = {};
+          var hold = d.hold ? (" · " + (d.hold === "paused"
+            ? t("已急停", "paused") : t("风控冷却中", "flood hold"))) : "";
+          var capTxt = (d.used_today || 0) + "/" + (d.effective_cap || d.cap || 0);
+          if (d.warming_up) {
+            capTxt += t("（新号爬坡", " (warming up") +
+              (d.age_days != null ? t("，第 ", ", day ") + Math.floor(d.age_days) + t(" 天", "") : "") +
+              t("，满 14 天到 ", ", reaches ") + (d.cap || 0) + t("）", " after 14 days)");
+          }
+          var hours = d.hours || {};
+          var hoursTxt = t(" · 时段 ", " · window ") + (hours.start || 0) + ":00–" + (hours.end || 0) + ":00" +
+            (hours.ok === false ? t("（现在不发）", " (closed now)") : "");
+          var g = d.gate;
+          var gateTxt = "";
+          if (g) {
+            gateTxt = t(" · 总发送 ", " · total sends ") + g.used + "/" + g.cap +
+              (g.blocked ? t("（闸门已拦）", " (gate blocked)") : "");
+          }
+          stats.textContent = t("开口 ", "openers ") + capTxt +
+            t(" · 排队 ", " · queued ") + (d.queued || 0) +
+            t(" · 还能排 ", " · room ") + (d.remaining || 0) + hold + hoursTxt + gateTxt +
+            ((d.unhashed > 0) ? t(" · 有 ", " · ") + d.unhashed +
+              t(" 人还没有私聊凭证，用这个号再提取一次", " people have no chat credential; extract again with this account") : "");
+          renderOutreachMeta(d);
+          renderReplied(d);
+          renderFollowups(d);
+          var rows = (d.queue || []).concat(d.candidates || []);
+          if (!rows.length) {
+            box.innerHTML = '<div class="empty">' +
+              t("今天没有可开口的人。先入库，并且提取时要由这个号拿到对方。",
+                "Nobody to open today. Extract first, with this account capturing the person.") +
+              "</div>";
+            return;
+          }
+          box.innerHTML = rows.map(renderOpenerCard).join("");
+          bindOpenerCards(box);
+        }).catch(function () {
+          stats.textContent = t("开口状态读取失败", "Could not load outreach");
+        });
+    }
+
+    var _settingsDirty = false;
+
+    // 模式 / 人设+目标 / 今日汇总 / 时段+条数
+    function renderOutreachMeta(d) {
+      var mode = $("gm-out-mode");
+      if (mode && d.mode) mode.value = d.mode;
+      // 全自动门槛：不够格就灰掉选项并写明原因（后端同样拒绝，这里只是别让人白点）
+      var ae = d.auto_eligible || {};
+      var autoOpt = mode ? mode.options[2] : null;
+      if (autoOpt) {
+        var why = { age: t("号未满 14 天", "account under 14 days"),
+                    flood: t("近 7 天撞过风控", "flood limit in last 7 days"),
+                    reply_rate: t("近 7 天回复率低于地板", "7-day reply rate below floor") };
+        autoOpt.disabled = ae.ok === false && d.mode !== "auto";
+        autoOpt.textContent = t("全自动（排队+拟稿+发）", "Fully automatic") +
+          (ae.ok === false ? t(" · 不够格：", " · not eligible: ") + (why[ae.reason] || ae.reason) : "");
+      }
+      var p = d.persona || {}, g = d.goal || {};
+      var pTxt = p.name ? t("人设：", "Persona: ") + p.name : t("人设：账号默认", "Persona: account default");
+      var gTxt = g.name ? t(" · 目标：", " · Goal: ") + g.name : t(" · 目标：未设默认（回复后再挂）", " · Goal: none yet (attached after first reply)");
+      $("gm-out-persona").textContent = pTxt + gTxt;
+      var s = d.summary || {};
+      var errs = s.errors || {};
+      var reasonMap = {
+        privacy: t("隐私设置", "privacy"), deactivated: t("账号注销", "deactivated"),
+        peer_invalid: t("联系不上", "unreachable"), stop_contact: t("对方拒绝", "asked to stop"),
+        operator_skip: t("人工跳过", "skipped by you"), stale_sending: t("发送超时", "send timed out"),
+        opener_rejected: t("文案被拦", "opener rejected"), flood: t("风控", "flood"),
+        inbound_first: t("对方先来找", "they messaged first")
+      };
+      var reasons = Object.keys(errs).filter(function (k) { return k && errs[k]; }).map(function (k) {
+        return (reasonMap[k] || k) + " " + errs[k];
+      });
+      $("gm-out-summary").textContent = t("今日：发了 ", "Today: sent ") + (s.sent || 0) +
+        t(" · 回了 ", " · replied ") + (s.replied || 0) +
+        t(" · 跟进 ", " · follow-ups ") + (s.followups || 0) +
+        t(" · 不可达 ", " · unreachable ") + (s.blocked || 0) +
+        t(" · 跳过 ", " · skipped ") + (s.skipped || 0) +
+        t(" · 封存 ", " · closed ") + (s.closed || 0) +
+        t(" · 已批准待发 ", " · approved pending ") + (s.approved || 0) +
+        (reasons.length ? t("（", " (") + reasons.join(t("，", ", ")) + t("）", ")") : "");
+      var st = d.settings || {};
+      if (!_settingsDirty) {
+        if (st.hours) { $("gm-out-h0").value = st.hours[0]; $("gm-out-h1").value = st.hours[1]; }
+        if (st.daily_cap != null) $("gm-out-cap").value = st.daily_cap;
+      }
+      var ro = st.writable === false;
+      ["gm-out-h0", "gm-out-h1", "gm-out-cap", "gm-out-save"].forEach(function (id) { $(id).disabled = ro; });
+      $("gm-out-save-note").textContent = ro
+        ? t("这台实例不能在线改，请改 config.yaml 的 companion.group_members", "Read-only here; edit companion.group_members in config.yaml")
+        : "";
+      var manual = (d.mode || "manual") === "manual";
+      $("gm-out-approve-all").textContent = manual
+        ? t("一键批准今日队列", "Approve whole queue")
+        : t("一键批准 → 后台自动发", "Approve all → scheduler sends");
+    }
+
+    function sourcePill(src) {
+      if (src === "ai") return '<span class="pill ai">AI</span>';
+      if (src === "manual") return '<span class="pill man">' + t("手改", "edited") + "</span>";
+      if (src === "template") return '<span class="pill tpl">' + t("模板", "template") + "</span>";
+      return "";
+    }
+
+    function renderOpenerCard(m) {
+      var key = m.group_id + "|" + m.user_id;
+      _outCache[key] = m;
+      var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
+      var state = m.outreach_state || "none";
+      var inQueue = state === "queued" || state === "approved";
+      var said = m.last_msg_text
+        ? '<div class="osaid">' + t("TA 在群里说：", "They said in the group: ") + "<q>" + esc(m.last_msg_text) + "</q>" +
+          (m.last_msg_ts ? ' <span>' + esc(ago(m.last_msg_ts)) + "</span>" : "") + "</div>"
+        : '<div class="osaid">' + t("没抓到 TA 的发言内容", "No message text captured") + "</div>";
+      var head = '<div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
+        (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
+        esc(m.group_title || "") + (m.lang_code ? ' <span class="pill tpl">' + esc(m.lang_code) + "</span>" : "") +
+        "</div><div>" + (state === "approved" ? '<span class="pill ok">' : '<span class="pill">') +
+        esc(outreachLabel(state)) + "</span> " + sourcePill(m.opener_source) +
+        (m.opener_variant && m.opener_source === "ai" ? ' <span class="pill" title="' + t("切入方式（A/B）", "opener angle (A/B)") + '">' + esc(variantLabel(m.opener_variant)) + "</span>" : "") +
+        (m.followup_text ? ' <span class="pill tpl">' + t("已跟进", "nudged") + "</span>" : "") + "</div></div>";
+      if (!inQueue) {
+        return '<div class="ocard">' + head + said +
+          '<div class="msg">' + t("点「生成今日队列」后才会拟稿和发送", "Queue them first to draft and send") + "</div></div>";
+      }
+      var text = m.opener_text || m.suggested_opener || "";
+      return '<div class="ocard ' + esc(state) + '" data-out-key="' + esc(key) + '">' + head + said +
+        '<textarea data-out-text="' + esc(key) + '" maxlength="300" placeholder="' +
+        t("还没有文案，点「AI 拟稿」或自己写一句", "No opener yet - click AI draft or write one") + '">' + esc(text) + "</textarea>" +
+        '<div class="oact">' +
+        (state === "queued"
+          ? '<button type="button" class="primary" data-out-approve="' + esc(key) + '">' + t("批准", "Approve") + "</button>"
+          : "") +
+        '<button type="button" data-out-send="' + esc(key) + '">' + t("现在发这一条", "Send now") + "</button>" +
+        '<button type="button" data-out-redraft="' + esc(key) + '">' + t("重新拟稿", "Redraft") + "</button>" +
+        '<button type="button" data-out-skip="' + esc(key) + '">' + t("跳过", "Skip") + "</button>" +
+        '<span class="ocount" data-out-count="' + esc(key) + '">' + text.length + "</span>" +
+        "</div></div>";
+    }
+
+    function bindOpenerCards(box) {
+      function each(sel, fn) { Array.prototype.slice.call(box.querySelectorAll(sel)).forEach(fn); }
+      each("button[data-out-send]", function (b) {
+        b.addEventListener("click", function () { sendOne(b.getAttribute("data-out-send")); });
+      });
+      each("button[data-out-approve]", function (b) {
+        b.addEventListener("click", function () { approveOne(b.getAttribute("data-out-approve")); });
+      });
+      each("button[data-out-skip]", function (b) {
+        b.addEventListener("click", function () { skipOne(b.getAttribute("data-out-skip")); });
+      });
+      each("button[data-out-redraft]", function (b) {
+        b.addEventListener("click", function () { redraftOne(b.getAttribute("data-out-redraft")); });
+      });
+      each("textarea[data-out-text]", function (ta) {
+        ta.addEventListener("input", function () {
+          var c = box.querySelector('[data-out-count="' + ta.getAttribute("data-out-text").replace(/"/g, '\\"') + '"]');
+          if (c) c.textContent = ta.value.length;
+        });
+      });
+    }
+
+    function ago(ts) {
+      var s = Math.max(0, Date.now() / 1000 - ts);
+      if (s < 3600) return t(Math.floor(s / 60) + " 分钟前", Math.floor(s / 60) + " min ago");
+      if (s < 86400) return t(Math.floor(s / 3600) + " 小时前", Math.floor(s / 3600) + " h ago");
+      return t(Math.floor(s / 86400) + " 天前", Math.floor(s / 86400) + " d ago");
+    }
+
+    function cardText(key) {
+      var ta = document.querySelector('textarea[data-out-text="' + key.replace(/"/g, '\\"') + '"]');
+      return ta ? ta.value.trim() : "";
+    }
+
+    function postJSON(url, body) {
+      return api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    }
+
+    var OUT_NOTE = null;
+    function outNote(kind) {
+      if (!OUT_NOTE) OUT_NOTE = {
+        sent: t("已发出。对方回复后会出现在收件箱。", "Sent. A reply shows up in the inbox."),
+        flood: t("这个号触发风控，今天不再开口。", "This account hit a flood limit. No more openers today."),
+        privacy: t("对方不接收陌生人私聊，已标不可达。", "Their privacy blocks this. Marked unreachable."),
+        deactivated: t("对方账号不可用，已标不可达。", "That account is gone. Marked unreachable."),
+        peer_invalid: t("这个号还联系不上对方，已标不可达。", "This account cannot reach them. Marked unreachable."),
+        retryable: t("这次没发出去，人还在队列里。", "Not sent. They stay in the queue."),
+        gap: t("距上一条太近。", "Too soon after the last opener."),
+        cap: t("今天的额度用完了。", "Today's cap is used."),
+        hours: t("不在开口时段，队列留着。", "Outside the window; the queue stays."),
+        gate: t("这个号总发送量到闸门了，今天别再开口。", "Overall send gate hit; no more openers today."),
+        followup_cap: t("今天的跟进条数用完了。", "Today's follow-up quota is used."),
+        followup_early: t("发出还不到 72 小时，先别催。", "Under 72h since the opener; wait."),
+        followup_state: t("这个人现在不能跟进。", "This person is not follow-up eligible now.")
+      };
+      return OUT_NOTE[kind] || "";
+    }
+
+    async function composeAll(force) {
+      var acct = $("gm-out-acct").value;
+      if (!acct) return;
+      $("gm-out-stats").textContent = t("AI 拟稿中…", "Drafting…");
+      var r = await postJSON("/api/tg-members/outreach/compose", { account_id: acct, force: !!force });
+      if (!r.ok) {
+        $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      } else {
+        var d = r.data || {};
+        $("gm-out-stats").textContent = t("拟好 ", "Drafted ") + (d.composed || 0) +
+          t(" 条（AI ", " (AI ") + (d.ai || 0) + t("，模板 ", ", template ") + (d.template || 0) + t("）", ")") +
+          ((d.template || 0) > 0 && !(d.ai || 0) ? t(" · 全是模板：AI 没就绪或都没过守卫", " · all templates: AI unavailable or every draft failed the guard") : "");
+      }
+      loadOutreach();
+    }
+
+    async function redraftOne(key) {
+      var m = _outCache[key];
+      var acct = $("gm-out-acct").value;
+      if (!m || !acct) return;
+      var reset = false;
+      if (m.opener_source === "manual") {
+        reset = window.confirm(t("这条是你手改过的。放弃手改，让 AI 重新拟一句？",
+          "This one was hand-edited. Discard your edit and let AI redraft?"));
+        if (!reset) return;
+      }
+      var r = await postJSON("/api/tg-members/outreach/compose", {
+        account_id: acct, force: true, reset_manual: reset,
+        items: [{ group_id: m.group_id, user_id: m.user_id }]
+      });
+      if (!r.ok) $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      loadOutreach();
+    }
+
+    async function approveOne(key) {
+      var m = _outCache[key];
+      var acct = $("gm-out-acct").value;
+      if (!m || !acct) return;
+      var text = cardText(key);
+      if (!text) { $("gm-out-stats").textContent = t("先写一句或点「AI 拟稿」", "Write a line or click AI draft first"); return; }
+      var r = await postJSON("/api/tg-members/outreach/approve", {
+        account_id: acct, items: [{ group_id: m.group_id, user_id: m.user_id, text: text }]
+      });
+      if (!r.ok) $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      else $("gm-out-stats").textContent = ($("gm-out-mode").value === "manual")
+        ? t("已批准。手动模式下还要点「现在发这一条」。", "Approved. In manual mode click Send now.")
+        : t("已批准，后台会在时段内发出。", "Approved; the scheduler sends it inside the window.");
+      loadOutreach();
+    }
+
+    async function approveAll() {
+      var acct = $("gm-out-acct").value;
+      if (!acct) return;
+      // 先把卡片里改过的文字落下去，再整队批准
+      var items = [];
+      Object.keys(_outCache).forEach(function (key) {
+        var m = _outCache[key];
+        if (m.outreach_state !== "queued") return;
+        var text = cardText(key);
+        if (text && text !== (m.opener_text || "")) items.push({ group_id: m.group_id, user_id: m.user_id, text: text });
+      });
+      if (items.length) await postJSON("/api/tg-members/outreach/approve", { account_id: acct, items: items });
+      var r = await postJSON("/api/tg-members/outreach/approve", { account_id: acct });
+      if (!r.ok) $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      else $("gm-out-stats").textContent = t("已批准 ", "Approved ") + ((r.data && r.data.approved) || 0) + (items.length ? " + " + items.length : "") +
+        (($("gm-out-mode").value === "manual") ? t(" 条。手动模式下仍需逐条点发。", ". Manual mode: still send one by one.") : t(" 条，后台会在时段内每 25–90 分钟发一条。", ". The scheduler sends one every 25-90 min inside the window."));
+      loadOutreach();
+    }
+
+    // 今日回音：对方回了什么、点进工作台接着聊（之后归回复链，这页不再管）
+    // 第二跳状态：回了之后我方接没接上（AI 自动回 / 坐席 / 手机都算）
+    function answeredPill(m, stalledHours) {
+      var lastOut = Math.max(m.last_out_at || 0, m.answered_at || 0);
+      var rebroken = m.answered_at && (m.last_in_at || 0) > lastOut;
+      if (m.answered_at && !rebroken) return '<span class="pill ok">' + t("已接上", "answered") + "</span>";
+      var since = rebroken ? m.last_in_at : m.replied_at;
+      var h = since ? (Date.now() / 1000 - since) / 3600 : 0;
+      if (h >= (stalledHours || 48)) {
+        return '<span class="pill warn">' + (rebroken ? t("接上后又断了 ", "went quiet again ") : t("没接上 ", "unanswered ")) +
+          Math.floor(h) + "h</span>";
+      }
+      return '<span class="pill">' + t("待我方回", "awaiting our reply") + "</span>";
+    }
+
+    function replyCard(m, stalledHours, cls) {
+      var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
+      var href = "/workspace?conv=" + encodeURIComponent(m.conversation_id || "");
+      var first = m.outreach_error === "inbound_first";
+      return '<div class="ocard ' + cls + '"><div class="ohd"><div>' +
+        (m.conversation_id
+          ? '<a href="' + esc(href) + '" target="_blank" rel="noopener"><b>' + esc(name || m.user_id) + "</b> ↗</a> "
+          : "<b>" + esc(name || m.user_id) + "</b> ") +
+        (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
+        esc(m.group_title || "") + '</div><div><span class="pill ok">' +
+        (first ? t("对方先来找", "they messaged first") : t("回了", "replied")) + "</span> " +
+        (m.replied_at ? '<span class="pill">' + esc(ago(m.replied_at)) + "</span> " : "") +
+        answeredPill(m, stalledHours) + "</div></div>" +
+        (first ? "" : '<div class="osaid">' + t("你发的：", "You sent: ") + "<q>" + esc(m.opener_text || "") + "</q></div>") +
+        '<div class="osaid">' + t("TA 回：", "They replied: ") + "<q>" + esc(m.reply_text || "…") + "</q></div></div>";
+    }
+
+    function renderReplied(d) {
+      var box = $("gm-out-replied");
+      var rows = d.replied || [];
+      var stalled = d.stalled || [];
+      var sh = d.stalled_after_hours || 48;
+      if (!box) return;
+      if (!rows.length && !stalled.length) { box.innerHTML = ""; return; }
+      var html = "";
+      if (stalled.length) {
+        html += '<div class="msg warn" style="margin-top:12px"><b>' +
+          t("回了但没接上 ", "Replied but unanswered ") + stalled.length + "</b> · " +
+          t("对方最近一条消息已超过 ", "Their latest message is over ") + sh + t(" 小时，这个号还没回（AI 没触发或没人接；接上过又断了的也在这里）。点名字进会话接上，别让开口白费。",
+            "h old and this account has not replied (AI did not fire or nobody picked up; conversations that went quiet again are listed too). Open the conversation and answer.") +
+          "</div>" + stalled.map(function (m) { return replyCard(m, sh, "replied stalled"); }).join("");
+      }
+      if (rows.length) {
+        html += '<div class="msg" style="margin-top:12px"><b>' +
+          t("今日回音 ", "Replies today ") + rows.length + "</b> · " +
+          t("已交给收件箱的回复链（按这个号的人设接着聊）；点名字进会话", "Handed to the inbox reply chain (same persona); click a name to open the conversation") +
+          "</div>" + rows.map(function (m) { return replyCard(m, sh, "replied"); }).join("");
+      }
+      box.innerHTML = html;
+    }
+
+    // 待跟进：发出 ≥72h 没回音、还没跟进过的人。manual 模式这里点发；approve/auto 由后台在队列空时自动补。
+    function renderFollowups(d) {
+      var box = $("gm-out-followups");
+      var due = d.followups_due || [];
+      var fu = d.followup || {};
+      if (!box) return;
+      if (!fu.enabled || !due.length) { box.innerHTML = ""; return; }
+      var manual = (d.mode || "manual") === "manual";
+      var head = '<div class="msg" style="margin-top:12px"><b>' +
+        t("待跟进（发出满 ", "Follow-ups due (") + (fu.after_hours || 72) +
+        t(" 小时没回音，只补一句，之后再 ", "h without a reply; one nudge only, then closed after another ") +
+        (fu.close_after_hours || 72) + t(" 小时没回就封存）", "h)") + "</b> · " +
+        t("今日 ", "today ") + (fu.used_today || 0) + "/" + (fu.daily_cap || 0) +
+        (manual ? "" : t(" · 后台会在开口队列空时自动补", " · the scheduler sends these once the opener queue is empty")) +
+        "</div>";
+      box.innerHTML = head + due.map(function (m) {
+        var key = m.group_id + "|" + m.user_id;
+        _outCache[key] = m;
+        var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
+        return '<div class="ocard fu"><div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
+          (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
+          esc(m.group_title || "") + '</div><div><span class="pill">' + t("发出 ", "sent ") + esc(ago(m.outreach_at)) + "</span></div></div>" +
+          '<div class="osaid">' + t("上次发的：", "Opener: ") + "<q>" + esc(m.opener_text || "") + "</q></div>" +
+          '<textarea data-fu-text="' + esc(key) + '" maxlength="300" placeholder="' +
+          t("留空 = 让 AI 补一句（轻、给台阶、不卖货）", "Leave empty = AI writes the nudge (light, no pitch)") + '"></textarea>' +
+          '<div class="oact"><button type="button" data-fu-send="' + esc(key) + '">' + t("补一句", "Send nudge") + "</button></div></div>";
+      }).join("");
+      Array.prototype.slice.call(box.querySelectorAll("button[data-fu-send]")).forEach(function (b) {
+        b.addEventListener("click", function () { followupOne(b.getAttribute("data-fu-send")); });
+      });
+    }
+
+    async function followupOne(key) {
+      var m = _outCache[key];
+      var acct = $("gm-out-acct").value;
+      if (!m || !acct) return;
+      var ta = document.querySelector('textarea[data-fu-text="' + key.replace(/"/g, '\\"') + '"]');
+      var text = ta ? ta.value.trim() : "";
+      if (!window.confirm(t("给 ", "Nudge ") + (m.first_name || m.user_id) + t(" 补一句？这是唯一一次跟进。", "? This is the only follow-up.") +
+        (text ? "\n\n" + text : "\n\n" + t("（AI 拟）", "(AI drafted)")))) return;
+      var r = await postJSON("/api/tg-members/outreach/followup", {
+        account_id: acct, group_id: m.group_id, user_id: m.user_id, text: text, confirm: true
+      });
+      var kind = (r.data && (r.data.detail || r.data.kind)) || "";
+      $("gm-out-stats").textContent = r.ok && r.data && r.data.ok
+        ? t("已补一句：", "Nudge sent: ") + (r.data.text || "")
+        : (outNote(kind) || outNote(r.data && r.data.kind) || kind || String(r.status));
+      loadOutreach();
+    }
+
+    function pct(v) { return v == null ? "–" : Math.round(v * 100) + "%"; }
+
+    var VARIANT_LABEL = null;
+    function variantLabel(v) {
+      if (!VARIANT_LABEL) VARIANT_LABEL = {
+        echo: t("接话茬", "echo their line"), group: t("从群切入", "via the group"), ask: t("轻问一句", "ask one thing")
+      };
+      return VARIANT_LABEL[v] || v;
+    }
+
+    // 回复率热度：按样本量显示条长，按回复率上色（样本 <10 一律灰，别被小样本骗）
+    function rateBar(r, max) {
+      var w = Math.round(40 * (r.sent || 0) / max);
+      var cls = (r.sent || 0) < 10 ? "" : (r.rate >= 0.15 ? " hot" : (r.rate >= 0.05 ? " warm" : " cold"));
+      return ' <span class="bar' + cls + '" style="width:' + w + 'px"></span>';
+    }
+
+    function statsTable(title, rows, keyLabel, keyFmt) {
+      if (!rows || !rows.length) return "";
+      var max = Math.max.apply(null, rows.map(function (r) { return r.sent || 0; }).concat([1]));
+      return '<div><h3>' + esc(title) + "</h3><table><thead><tr><th>" + esc(keyLabel) + "</th><th>" +
+        t("发出", "sent") + "</th><th>" + t("回了", "replied") + "</th><th>" + t("回复率", "rate") + "</th></tr></thead><tbody>" +
+        rows.map(function (r) {
+          var k = keyFmt ? keyFmt(r.key) : (keyLabel === "h" ? (r.key + ":00") : r.key);
+          return "<tr><td>" + esc(k) + "</td><td>" + (r.sent || 0) + rateBar(r, max) + "</td><td>" +
+            (r.replied || 0) + "</td><td>" + pct(r.rate) + "</td></tr>";
+        }).join("") + "</tbody></table></div>";
+    }
+
+    function durShort(sec) {
+      if (sec == null) return "–";
+      if (sec < 3600) return t(Math.round(sec / 60) + " 分钟", Math.round(sec / 60) + " min");
+      if (sec < 86400) return t((sec / 3600).toFixed(1) + " 小时", (sec / 3600).toFixed(1) + " h");
+      return t((sec / 86400).toFixed(1) + " 天", (sec / 86400).toFixed(1) + " d");
+    }
+
+    async function loadStats() {
+      var box = $("gm-out-statsbox");
+      var acct = $("gm-out-acct").value;
+      var scope = $("gm-out-stats-scope").value;
+      var days = $("gm-out-stats-days").value;
+      box.hidden = false;
+      box.innerHTML = '<div class="empty">…</div>';
+      var r = await api("/api/tg-members/outreach/stats?days=" + encodeURIComponent(days) +
+        (scope === "acct" && acct ? "&account_id=" + encodeURIComponent(acct) : ""));
+      if (!r.ok) { box.innerHTML = '<div class="empty">' + esc((r.data && r.data.detail) || String(r.status)) + "</div>"; return; }
+      var d = r.data || {};
+      var f = d.funnel || {};
+      var lat = d.reply_latency || {};
+      var srcLabel = { ai: "AI", template: t("模板", "template"), manual: t("手改", "edited"), unknown: "?" };
+      var bySrc = (d.by_source || []).map(function (x) { return Object.assign({}, x, { key: srcLabel[x.key] || x.key }); });
+      box.innerHTML =
+        '<div class="funnel">' +
+          "<span>" + t("入库 ", "members ") + "<b>" + (f.members || 0) + "</b></span><span class='arr'>→</span>" +
+          "<span>" + t("排队中 ", "queued ") + "<b>" + (f.queued || 0) + "</b></span><span class='arr'>→</span>" +
+          "<span>" + t("发出 ", "sent ") + "<b>" + (f.sent || 0) + "</b></span><span class='arr'>→</span>" +
+          "<span>" + t("回了 ", "replied ") + "<b>" + (f.replied || 0) + "</b> (" + pct(f.sent ? f.replied / f.sent : null) + ")</span><span class='arr'>→</span>" +
+          "<span>" + t("接上了 ", "answered ") + "<b>" + (f.answered || 0) + "</b></span>" +
+          '<span class="msg" style="margin-left:8px">' + t("封存 ", "closed ") + (f.closed || 0) + t(" · 不可达 ", " · unreachable ") + (f.blocked || 0) + t(" · 跳过 ", " · skipped ") + (f.skipped || 0) +
+            ((f.inbound_first || 0) ? t(" · 对方先来找 ", " · they messaged first ") + f.inbound_first : "") + "</span>" +
+        "</div>" +
+        '<div class="msg">' + t("切片只算真正发出的（近 ", "Slices count real sends only (last ") + (d.days || days) + t(" 天）。样本小于 10 的行先别下结论。", " days). Rows under 10 sends are noise.") +
+          (lat.n ? t(" · 首回时延：中位 ", " · first reply after: median ") + durShort(lat.median_sec) + " · P75 " + durShort(lat.p75_sec) + t("（", " (") + lat.n + t(" 人）", ")") : "") +
+          "</div>" +
+        '<div class="stats-grid">' +
+          statsTable(t("按切入方式", "By opener angle"), d.by_variant, t("切入", "angle"), function (k) { return k === "-" ? t("模板/手写", "template/manual") : variantLabel(k); }) +
+          statsTable(t("按文案来源", "By opener source"), bySrc, t("来源", "source")) +
+          statsTable(t("按人设", "By persona"), d.by_persona, t("人设", "persona")) +
+          statsTable(t("按发出小时", "By hour sent"), d.by_hour, "h") +
+          (scope === "all" ? statsTable(t("按账号", "By account"), d.by_account, t("账号", "account")) : "") +
+        "</div>" +
+        ((d.recent_replies || []).length
+          ? '<div class="msg" style="margin-top:10px"><b>' + t("最近回音", "Recent replies") + "</b></div>" +
+            d.recent_replies.map(function (m) { return replyCard(m, 48, "replied"); }).join("")
+          : "");
+    }
+
+    async function skipOne(key) {
+      var m = _outCache[key];
+      if (!m) return;
+      var r = await postJSON("/api/tg-members/outreach/skip", {
+        account_id: $("gm-out-acct").value, group_id: m.group_id, user_id: m.user_id
+      });
+      if (!r.ok) $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      loadOutreach();
+    }
+
+    async function changeMode() {
+      var acct = $("gm-out-acct").value;
+      var mode = $("gm-out-mode").value;
+      if (!acct) return;
+      if (mode === "auto" && !window.confirm(t(
+        "全自动：这个号会自己排队、AI 拟稿、在时段内自动发，不再经你批准。所有额度/时段/风控闸门照旧。确定？",
+        "Fully automatic: this account queues, drafts and sends on its own inside the window, without your approval. All caps/window/flood gates still apply. Continue?"))) {
+        loadOutreach();
+        return;
+      }
+      var r = await postJSON("/api/tg-members/outreach/mode", { account_id: acct, mode: mode });
+      if (!r.ok) $("gm-out-stats").textContent = (r.data && r.data.detail) || String(r.status);
+      loadOutreach();
+    }
+
+    async function saveSettings() {
+      var h0 = parseInt($("gm-out-h0").value, 10), h1 = parseInt($("gm-out-h1").value, 10);
+      var cap = parseInt($("gm-out-cap").value, 10);
+      var body = {};
+      if (!isNaN(h0) && !isNaN(h1)) body.hours = [h0, h1];
+      if (!isNaN(cap)) body.daily_cap = cap;
+      var r = await postJSON("/api/tg-members/outreach/settings", body);
+      _settingsDirty = false;
+      $("gm-out-save-note").textContent = r.ok
+        ? t("已保存，对所有号即时生效", "Saved; applies to every account now")
+        : ((r.data && r.data.detail) || String(r.status));
+      loadOutreach();
+    }
+
+    async function buildOutreachQueue() {
+      var acct = $("gm-out-acct").value;
+      if (!acct) return;
+      var r = await api("/api/tg-members/outreach/queue", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: acct })
+      });
+      loadMembers();
+      await loadOutreach();
+      var stats = $("gm-out-stats");
+      if (!r.ok) stats.textContent = (r.data && r.data.detail) || String(r.status);
+      else if (r.data && r.data.empty) stats.textContent = emptyPoolText(r.data.empty);
+    }
+
+    function emptyPoolText(e) {
+      if (!e.pool) {
+        return e.unhashed
+          ? t("一个都没排进：这个号提的 " + e.unhashed + " 人没拿到私聊凭证，请用这个号重新提取一次再排。",
+              "Nothing queued: none of the " + e.unhashed + " people this account extracted came with a DM credential. Re-extract with this account, then queue again.")
+          : t("一个都没排进：这个号还没提取过任何人，先在第①步用这个号提取。",
+              "Nothing queued: this account has not extracted anyone yet. Extract with it in step 1 first.");
+      }
+      return t("一个都没排进：这个号能私聊的 " + e.pool + " 人里，" + e.silent + " 人没在群里发过言（只对发过言的人开口），" +
+               e.admin_or_bot + " 人是管理员或机器人，" + e.touched + " 人已经开过口。换个活跃的群、用默认过滤器「发过言」提取。",
+               "Nothing queued: of the " + e.pool + " people this account can DM, " + e.silent + " never spoke in the group (we only open to people who spoke), " +
+               e.admin_or_bot + " are admins or bots, " + e.touched + " were already contacted. Extract from a more active group with the default \"spoke\" filter.");
+    }
+
+    async function sendOne(key) {
+      var m = _outCache[key];
+      var acct = $("gm-out-acct").value;
+      if (!m || !acct) return;
+      var text = cardText(key);
+      if (!text) { $("gm-out-stats").textContent = t("先写一句或点「AI 拟稿」", "Write a line or click AI draft first"); return; }
+      if (!window.confirm(t("现在就用这个号发给 ", "Send now from this account to ") + (m.first_name || m.user_id) + "？\n\n" + text)) return;
+      var r = await postJSON("/api/tg-members/outreach/release", {
+        account_id: acct, group_id: m.group_id, user_id: m.user_id, text: text, confirm: true
+      });
+      var kind = (r.data && (r.data.detail || r.data.kind)) || "";
+      $("gm-out-stats").textContent = outNote(kind) || outNote(r.data && r.data.kind) || kind || String(r.status);
+      loadOutreach();
+      loadMembers();
+    }
+
+    async function stopOutreach() {
+      var acct = $("gm-out-acct").value || "*";
+      await api("/api/tg-members/outreach/stop", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: acct })
+      });
+      loadOutreach();
+    }
+
+    async function resumeOutreach() {
+      var acct = $("gm-out-acct").value || "*";
+      await api("/api/tg-members/outreach/resume", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: acct })
+      });
+      loadOutreach();
     }
 
     function doExport() {
@@ -606,6 +1309,20 @@
       $("gm-start").addEventListener("click", startExtract);
       $("gm-refresh").addEventListener("click", loadMembers);
       $("gm-export").addEventListener("click", doExport);
+      $("gm-out-acct").addEventListener("change", loadOutreach);
+      $("gm-out-mode").addEventListener("change", changeMode);
+      $("gm-out-queue").addEventListener("click", buildOutreachQueue);
+      $("gm-out-compose").addEventListener("click", function () { composeAll(false); });
+      $("gm-out-approve-all").addEventListener("click", approveAll);
+      $("gm-out-stop").addEventListener("click", stopOutreach);
+      $("gm-out-resume").addEventListener("click", resumeOutreach);
+      $("gm-out-save").addEventListener("click", saveSettings);
+      $("gm-out-stats-btn").addEventListener("click", loadStats);
+      $("gm-out-stats-days").addEventListener("change", function () { if (!$("gm-out-statsbox").hidden) loadStats(); });
+      $("gm-out-stats-scope").addEventListener("change", function () { if (!$("gm-out-statsbox").hidden) loadStats(); });
+      ["gm-out-h0", "gm-out-h1", "gm-out-cap"].forEach(function (id) {
+        $(id).addEventListener("input", function () { _settingsDirty = true; });
+      });
       $("gm-mgroup").addEventListener("change", loadMembers);
       $("gm-monly").addEventListener("change", loadMembers);
       $("gm-mq").addEventListener("keydown", function (e) { if (e.key === "Enter") loadMembers(); });

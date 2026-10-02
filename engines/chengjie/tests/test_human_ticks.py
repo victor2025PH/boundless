@@ -7,17 +7,32 @@ from src.ai.voice_colloquial import (
 from src.ai.voice_emotion import EmotionSpec
 
 
-def test_thinking_repeat_inserts_word_ellipsis_word():
+def test_thinking_pause_lands_on_clause_boundary_not_word_repeat():
     import re
+    raw = "价格的话，基础版一个月一百九十九，三个号起步"
+    out, hit = _thinking_repeat(raw, seed=12345, prob=1.0, min_chars=10)
+    assert hit
+    assert out.count("嗯……") == 1
+    assert re.search(r"[，,]嗯……", out)
+    assert out.replace("嗯……", "") == raw
+    assert not re.search(r"([\u4e00-\u9fff]{2})……\1", out)
+
+
+def test_thinking_pause_needs_a_clause_boundary():
     raw = "我觉得你可以再给自己一点时间慢慢来"
     out, hit = _thinking_repeat(raw, seed=12345, prob=1.0, min_chars=10)
-    assert hit and "……" in out
-    assert re.search(r"([\u4e00-\u9fff]{2})……\1", out)
+    assert not hit and out == raw
+
+
+def test_thinking_pause_not_stacked():
+    raw = "嗯……我想一下，这个其实挺简单的呀"
+    out, hit = _thinking_repeat(raw, seed=12345, prob=1.0, min_chars=10)
+    assert not hit and out == raw
 
 
 def test_thinking_repeat_skips_when_prob_zero():
-    out, hit = _thinking_repeat("我觉得你可以再给自己一点时间", seed=1, prob=0.0)
-    assert not hit and out == "我觉得你可以再给自己一点时间"
+    out, hit = _thinking_repeat("我觉得，你可以再给自己一点时间", seed=1, prob=0.0)
+    assert not hit and out == "我觉得，你可以再给自己一点时间"
 
 
 def test_soft_laugh_happy_only_single_hei():
@@ -35,16 +50,26 @@ def test_soft_laugh_happy_only_single_hei():
 def test_colloquialize_human_ticks_mutex():
     """同条轻笑与思考重复互斥（seed 分流）。"""
     spec = EmotionSpec("happy", intensity=0.8)
-    text = "今天这事办得特别顺利我觉得超开心的呀"
+    text = "今天这事办得特别顺利，我觉得超开心的呀"
     a = colloquialize(
         text, spec, min_chars=8, enable_fillers=False,
         enable_thinking_repeat=True, enable_soft_laugh=True,
         think_prob=1.0, laugh_prob=1.0, max_inserts=2)
     has_laugh = a.startswith("嘿，")
-    has_think = "……" in a and any(
-        f"{w}……{w}" in a for w in ("今天", "这事", "办得", "特别", "顺利", "觉得", "开心")
-    )
+    has_think = "嗯……" in a
     assert has_laugh or has_think
+    assert not (has_laugh and has_think)
     if has_laugh:
         assert "哈哈" not in a[:6]
-        assert not has_think or a.count("……") <= 2
+
+
+def test_remove_stutter():
+    from src.ai.voice_colloquial_llm import remove_stutter
+    assert remove_stutter("我、我跟你说哦") == "我跟你说哦"
+    assert remove_stutter("我觉得……我觉得可以") == "我觉得可以"
+    assert remove_stutter("这个，这个其实挺好") == "这个其实挺好"
+    assert remove_stutter("智聊‖短 智聊能帮你") == "智聊能帮你"
+    # 正常话 / 叠词 / 原文就有的重复不动
+    assert remove_stutter("对，对方说可以") == "对，对方说可以"
+    assert remove_stutter("谢谢你呀，看看这个") == "谢谢你呀，看看这个"
+    assert remove_stutter("好，好，我知道了", "好，好，我知道了") == "好，好，我知道了"

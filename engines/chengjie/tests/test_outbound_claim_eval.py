@@ -337,6 +337,17 @@ def test_product_context_ignores_non_money_counters():
                                    product_context=True) == [], txt
 
 
+def test_product_context_ignores_token_quota():
+    """按充值计费后额度以 Token 计：「每月送 2,000 Token」是额度不是报价，隔空格也认。"""
+    for txt in ("免费版每月送 2,000 Token",
+                "每月送2000tokens，注册再送10,000 Token",
+                "一个月大概用掉 3000 字符"):
+        assert find_price_mismatch(txt, allowed_prices=PRICES,
+                                   product_context=True) == [], txt
+    assert find_price_mismatch("一个月就 2000 Token 起，每月168",
+                               allowed_prices=PRICES, product_context=True) != []
+
+
 def test_product_context_still_needs_period_context():
     """跨轮模式也只在有周期语境的小句里读裸数字（人设自家「一杯38块」不判）。"""
     assert find_price_mismatch("我店里手冲一杯38块，你要不要试试",

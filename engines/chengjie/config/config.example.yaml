@@ -2608,7 +2608,39 @@ companion:
   #   ⚠ 合规：抓群成员 + 冷触达属 Telegram ToS 灰区，务必配合「剔管理员/限速/可退订」护栏。
   group_members:
     enabled: false               # 总开关（默认关；开启走 config.local.yaml overlay）
-    daily_cap_per_account: 200   # 每号每天最多新入库多少人（=该号下游一天能聊完的量级）
+    daily_cap_per_account: 200   # 每号每天最多新入库多少人（入库配额，不是开口配额）
+    outreach_daily_cap: 8        # 同群开口：每号每天新人，代码夹在 5..10（写 200 也会变成 10）
+    outreach_min_gap_sec: 1500   # 同一号两条开口的最小间隔（秒）
+    outreach_warmup_start_cap: 3 # 新号第 0 天每天开口数，按注册表天龄线性爬到 outreach_daily_cap
+    outreach_warmup_ramp_days: 14
+    outreach_hours: [10, 21]     # 本地时间只在这个区间放行发送；排队不限时段（管理台第④步可在线改，写 overlay）
+    # 每条开口还计入 companion_send_gate 的总发送量；红灯 / 总额度满 / 急停时发不出
+    # 开口文案由 AI 按「这个号的人设 + 默认工作目标 + 对方在群里说的话」生成，LLM 不在时回落模板；
+    # 每号「开口方式」在管理台切：manual（逐条点发）/ approve（批准后由调度器发）/ auto（全自动）
+    outreach_runner_enabled: true        # 调度器总闸（只跑本实例编排器 owns 的 TG 号；manual 模式的号它不碰）
+    outreach_runner_interval_sec: 150    # 调度器唤醒间隔（秒）；每次每号最多发 1 条
+    outreach_auto_gap_min_sec: 1500      # 调度器两条自动开口之间的随机抖动下限（25 分钟），叠在 outreach_min_gap_sec 之上
+    outreach_auto_gap_max_sec: 5400      # 抖动上限（90 分钟）
+    # 全自动（auto）门槛：三条硬线，页面上关不掉；调度器每轮复核，不达标自动退回 approve
+    outreach_auto_min_age_days: 14       # 号的注册天龄不满 → 不许全自动（天龄不明也算不满）
+    outreach_auto_flood_lookback_days: 7 # 近 N 天撞过 Telegram 风控 → 不许
+    outreach_auto_min_reply_rate: 0.05   # 近 7 天开口回复率低于此 → 不许（样本 ≥ outreach_auto_min_sample 才看）
+    outreach_auto_min_sample: 10
+    # 72h 单次跟进：发出 N 小时没回音补一句（AI 按人设拟，轻、给台阶、不卖货），只一次；再过 N 小时没回封存
+    outreach_followup_enabled: true
+    outreach_followup_after_hours: 72
+    outreach_followup_close_after_hours: 72
+    outreach_followup_daily_cap: 5       # 每号每天最多跟进几条；跟进不占「每天新人」额度，但计入总发送闸门、共用最小间隔
+    # 第二跳：对方回了、我方（AI 自动回 / 坐席 / 手机）超过这么久还没回话 → 页面「回了但没接上」+ 审计提醒（每号每天一次）
+    outreach_stalled_after_hours: 48
+    # 开口切入方式 A/B（echo 接话茬 / group 从群切入 / ask 轻问一句）：ε-greedy 按近 30 天回复率择优
+    outreach_ab_explore: 0.25            # 探索流量比例（0=只用最好的；1=全随机）
+    outreach_ab_min_sample: 5            # 每种切入至少几条样本才参与「择优」；不够的先补样本
+    outreach_ab_prior_weight: 5          # 先验相当于几条样本（0=不平滑，只看实测）
+    outreach_ab_prior:                   # 先验回复率；跑出切片结论后在这里回灌，不用改代码
+      echo: 0.10
+      ask: 0.08
+      group: 0.06
     scan_limit: 3000             # 「发过言的人」的实现口径：回扫多少条群历史消息取发言人
     group_daily_cap: 0           # 每群每天入库上限（0=不限；多号并行按分片数均摊，防单群被薅太狠太扎眼）
     global_daily_cap: 0          # 全系统每天入库上限（0=不限；= 下游总触达产能的硬顶）

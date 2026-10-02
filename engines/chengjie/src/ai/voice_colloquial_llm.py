@@ -201,7 +201,8 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
 # v4（2026-08-23 老板耳测四轮后定向）：禁笑声标记（引擎念出来怪异），笑意用话带；
 # 语调起伏交给分段+标点；文本口语度再加码（微信语音口吻）。
 # v5（2026-08-30 #92）：红线补自述行为/饮食（与普通改写 v4 同批）。
-_SCRIPT_PROMPT_VERSION = 5
+# v6（2026-10-02 老板耳测）：口误只留自纠式、禁重复字词（结巴）；断句不许拆词组。
+_SCRIPT_PROMPT_VERSION = 6
 
 
 def _build_speech_script_prompt_en(
@@ -257,7 +258,8 @@ def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
         "- 把书面词全换成嘴上说的词：非常→特别、但是→不过、如果→要是、"
         "现在→这会儿、之后→回头、一起→一块儿、可能→说不定、立刻→这就、"
         "研究→琢磨/捣鼓、发现→一看、包括→像什么；",
-        "- 句子说短：一口气最多十二三个字，长句拆成几口气说；",
+        "- 句子说短：长句拆成几口气说，但每一口气都要把一个完整的意思说完；"
+        "词组、人名、数字、固定搭配绝不拆开（「智聊｜ChatX」「一个月｜199」中间都不能停）；",
         "- 语气助词（呀/呢/啦/嘛/哟/啊）自然地撒几个，别每句都有；",
         "- 去客服腔播音腔，「您」改「你」；书面成语换大白话"
         "（丰盛的晚餐→整顿好吃的、令人惊讶→没想到）；",
@@ -288,10 +290,10 @@ def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
         parts.append(f"说话风格：{str(style).strip()}。")
     if disfluency:
         parts.append(
-            "本条允许至多 1 处轻口误（只许在前三分之二的段落里，二选一）："
-            "①重复式＝段首第一个词说两遍（「我、我跟你说」）；"
-            "②自纠式＝把一个普通词说错后马上纠正（「上周…啊不对，上上周」），"
-            "但数字/人名/金额/时间/地名**绝不能**当错词。没有自然的位置就不用。")
+            "本条允许至多 1 处轻口误（只许在前三分之二的段落里）："
+            "把一个普通词说错后马上自己纠正（「上周…啊不对，上上周」），"
+            "但数字/人名/金额/时间/地名**绝不能**当错词。"
+            "**禁止重复字词**（「我、我跟你说」「这个这个」听起来是结巴）。没有自然的位置就不用。")
     parts.append(_ANTI_ANSWER_RULE)
     parts.append(
         "示例输入1：今天店里客人很多，卖得很好。你吃饭了吗？记得休息。\n"
@@ -347,6 +349,7 @@ def sanitize_speech_script(raw: str, original: str, *,
             return None
     if _SCRIPT_FIX_RE.search(str(chunks[-1].get("text") or "")):
         return None
+    t = remove_stutter(t, original)
     plain = strip_speech_script(t)
     if sanitize_llm_output(plain, original, max_expand=max_expand) is None:
         return None
@@ -557,6 +560,29 @@ def sanitize_llm_output(
         logger.info("[voice_colloquial_llm] 拒改写：引入原文没有的餐食词 %s（#92）",
                     _intro[:3])
         return None
+    return remove_stutter(t, core)
+
+
+# 双/三字词：任何停顿分隔都算结巴；单字只认「、」「…」（「对，对方说」是正常话）
+_STUTTER_RE = re.compile(
+    r"([\u4e00-\u9fff]{2,3})(?:[、，,…\s]|‖\s*[短中长])+\1"
+    r"|([\u4e00-\u9fff])[、…]+\2")
+
+
+def remove_stutter(text: str, original: str = "") -> str:
+    """去掉「我、我跟你说」「我觉得……我觉得」这类重复字词（听感＝结巴）。
+
+    原文本来就有的重复（如「好，好」）保留；叠词（「看看」「谢谢」，中间无分隔）不受影响。
+    """
+    t = str(text or "")
+    orig = str(original or "")
+
+    def _fix(m: "re.Match") -> str:
+        return m.group(0) if m.group(0) in orig else (m.group(1) or m.group(2))
+
+    prev = None
+    while prev != t:
+        prev, t = t, _STUTTER_RE.sub(_fix, t)
     return t
 
 

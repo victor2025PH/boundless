@@ -1409,6 +1409,34 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
             </select>
           </div>
         </div>
+        <!-- 回复形态（随人设分发）：voice_profile.human_feel / reply_trigger / text_voice_split。
+             空＝跟随全局；运营 config 的 telegram.voice_reply.persona_overrides 同键优先。 -->
+        <div class="ps-row" style="margin-top:.4rem">
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_human','真人感') }}</label>
+            <select id="pe-rf-human" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="lively">{{ (i18n or {}).get('psn_rf_human_lively','活泼（思考声、轻笑、偶尔口误）') }}</option>
+              <option value="natural">{{ (i18n or {}).get('psn_rf_human_natural','自然（口语化，不加小动作）') }}</option>
+              <option value="off">{{ (i18n or {}).get('psn_rf_human_off','关闭（照稿念）') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_trigger','何时发语音') }}</label>
+            <select id="pe-rf-trigger" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="always">{{ (i18n or {}).get('psn_rf_trigger_always','每条回复都发') }}</option>
+              <option value="when_peer_voice">{{ (i18n or {}).get('psn_rf_trigger_peer','对方发语音时才发') }}</option>
+              <option value="smart">{{ (i18n or {}).get('psn_rf_trigger_smart','智能判断') }}</option>
+              <option value="never">{{ (i18n or {}).get('psn_rf_trigger_never','不发语音') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_split','语音文字分开说') }}</label>
+            <select id="pe-rf-split" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_rf_split_tip','开：一条回复前半句用语音说、后半句发文字，内容不重复') }}">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="on">{{ (i18n or {}).get('psn_rf_on','开') }}</option>
+              <option value="off">{{ (i18n or {}).get('psn_rf_off','关') }}</option>
+            </select>
+          </div>
+        </div>
         <div class="vexpr-foot">
           <div class="vexpr-desc" id="pe-vexpr-desc"></div>
           <div class="vexpr-btns">
@@ -5685,6 +5713,12 @@ function _vxLoad(vp) {
     }
     sel.value = emo;
   }
+  var hf = document.getElementById('pe-rf-human');
+  if (hf) hf.value = ['lively', 'natural', 'off'].indexOf(String(vp.human_feel || '').toLowerCase()) >= 0 ? String(vp.human_feel).toLowerCase() : '';
+  var tg = document.getElementById('pe-rf-trigger');
+  if (tg) tg.value = ['always', 'when_peer_voice', 'smart', 'never'].indexOf(String(vp.reply_trigger || '').toLowerCase()) >= 0 ? String(vp.reply_trigger).toLowerCase() : '';
+  var sp = document.getElementById('pe-rf-split');
+  if (sp) sp.value = vp.text_voice_split === true ? 'on' : (vp.text_voice_split === false ? 'off' : '');
   _vxRenderDesc();
 }
 function _vxRenderDesc() {
@@ -5709,6 +5743,10 @@ function _vxCollectPatch(into) {
   if (!_vxTouched) return into;
   into.expressiveness = _vxLevel();
   into.emotion = _vxEmotion();
+  into.human_feel = String((document.getElementById('pe-rf-human') || {}).value || '');
+  into.reply_trigger = String((document.getElementById('pe-rf-trigger') || {}).value || '');
+  var sp = String((document.getElementById('pe-rf-split') || {}).value || '');
+  into.text_voice_split = sp === 'on' ? true : (sp === 'off' ? false : null);
   return into;
 }
 var _vxAudio = null;
