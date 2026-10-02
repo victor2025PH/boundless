@@ -1355,6 +1355,22 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="tgl-row"><label class="tgl"><input type="checkbox" id="pe-claim-human"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_claim_human','主动声称自己是真人') }}</span></div>
       <div class="tgl-row" title="{{ (i18n or {}).get('psn_public_ai_tip','开：群成员开口可以大方说自己是 AI，并多一种「坦白是 AI」的开场方式参与对比；与上面两项互斥') }}"><label class="tgl"><input type="checkbox" id="pe-public-ai"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_public_ai','公开 AI 身份（开口可直说是 AI）') }}</span></div>
     </div>
+    <div style="border-top:1px solid var(--bd);padding-top:.78rem;margin-top:.6rem">
+      <div style="font-size:.72rem;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.35rem">{{ (i18n or {}).get('psn_sales_title','目标客户（群成员获客）') }}</div>
+      <div style="font-size:.74rem;color:var(--t2);margin-bottom:.55rem">{{ (i18n or {}).get('psn_sales_hint','群里说过这些词的人优先开口、优先在群里接话；说过排除词的人不碰。不填 = 不按意向排序，「群里先接话」也不会列人。') }}</div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_preset','按行业套用') }}</label>
+        <select id="pe-sales-preset" onchange="_salesApplyPreset(this)">
+          <option value="">{{ (i18n or {}).get('psn_sales_preset_pick','选一个行业，词会追加到下面') }}</option>
+          <option value="crossborder">{{ (i18n or {}).get('psn_sales_p_crossborder','跨境电商') }}</option>
+          <option value="b2b">{{ (i18n or {}).get('psn_sales_p_b2b','外贸 B2B') }}</option>
+          <option value="service">{{ (i18n or {}).get('psn_sales_p_service','客服 / 私域运营') }}</option>
+          <option value="edu">{{ (i18n or {}).get('psn_sales_p_edu','教育培训') }}</option>
+          <option value="local">{{ (i18n or {}).get('psn_sales_p_local','本地生活 / 门店') }}</option>
+        </select>
+      </div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_kw','意向关键词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-kw" type="text" placeholder="{{ (i18n or {}).get('psn_sales_kw_ph','客服，自动回复，翻译，获客') }}"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_neg','排除词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-neg" type="text" placeholder="{{ (i18n or {}).get('psn_sales_neg_ph','博彩，裸聊，洗钱') }}"></div>
+    </div>
   </div>
   <!-- Pane: Voice -->
   <div class="dpane" id="dpane-voice">
@@ -4991,6 +5007,35 @@ function _deepMergePersona(base, patch) {
   return out;
 }
 
+// 目标客户（persona.sales）：意向词 / 排除词，逗号分隔；行业预设只追加不覆盖
+var _SALES_PRESETS = {
+  crossborder: ['跨境', '亚马逊', 'shopify', '独立站', '选品', '物流', '清关', '出单', '引流', '投广告', 'tiktok shop', 'amazon', 'dropshipping'],
+  b2b: ['外贸', '询盘', '客户开发', '开发信', '报价', '展会', '阿里国际', '工厂', '跟单', 'buyer', 'inquiry', 'sourcing'],
+  service: ['客服', '自动回复', '回不过来', '回复慢', '消息太多', '私域', '社群运营', '翻译', '多语言', '机器人', 'customer service', 'auto reply'],
+  edu: ['课程', '培训', '报名', '考试', '留学', '辅导', '学费', '招生', 'course', 'tutor'],
+  local: ['门店', '到店', '团购', '预约', '会员', '复购', '外卖', '客流', '同城']
+};
+var _SALES_NEG_DEFAULT = ['博彩', '菠菜', '裸聊', '代收', '洗钱', '跑分'];
+function _salesTerms(raw) {
+  var arr = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).replace(/，/g, ',').split(',');
+  var seen = {}, out = [];
+  arr.forEach(function (t) {
+    var s = String(t == null ? '' : t).trim();
+    var k = s.toLowerCase();
+    if (s && !seen[k]) { seen[k] = 1; out.push(s); }
+  });
+  return out;
+}
+function _salesApplyPreset(sel) {
+  var words = _SALES_PRESETS[sel.value];
+  if (!words) return;
+  var kw = document.getElementById('pe-sales-kw');
+  kw.value = _salesTerms(_salesTerms(kw.value).concat(words)).join(', ');
+  var neg = document.getElementById('pe-sales-neg');
+  if (neg && !neg.value.trim()) neg.value = _SALES_NEG_DEFAULT.join(', ');
+  sel.value = '';
+}
+
 // ── C 线：结构化 personality 只读区（traits chips + quirks/humor/temperament 行）
 function _renderPersonalityExtras(persObj) {
   var box = document.getElementById('pe-personality-extras');
@@ -5016,11 +5061,12 @@ function _renderPersonalityExtras(persObj) {
 // L-2 #203（5EFS2A）：voice_profile 整棵子树由语音 tab 三态表单接管、capabilities 由相册 tab
 // 「可发照片」开关接管——两者不再以原始 JSON 直出；其余未知字段后台静默保留（保存时原样回传）。
 var _ADV_MANAGED_TOP = ['id','name','role','kind','tags','personality','speaking','identity','voice_profile',
-  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities'];
+  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities','sales'];
 var _ADV_MANAGED_SUB = {
   personality: ['style','quirks','humor','temperament'],
   speaking: ['reply_length','emoji_level','forbidden_phrases','openers'],
-  identity: ['deny_ai','claim_human'],
+  identity: ['deny_ai','claim_human','public_ai'],
+  sales: ['intent_keywords','intent_negative'],
   names: ['full_western','english','nickname','usage_notes'],
   context: ['hobbies','specific_memories','emotional_triggers'],
   tastes: ['likes','dislikes','opinions'],
@@ -5964,6 +6010,10 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-deny-ai').checked = !!(ident.deny_ai || p.deny_ai);
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
   var paiEl = document.getElementById('pe-public-ai'); if (paiEl) paiEl.checked = !!ident.public_ai;
+  var sales = (p.sales && typeof p.sales === 'object' && !Array.isArray(p.sales)) ? p.sales : {};
+  var skw = document.getElementById('pe-sales-kw'); if (skw) skw.value = _salesTerms(sales.intent_keywords).join(', ');
+  var sng = document.getElementById('pe-sales-neg'); if (sng) sng.value = _salesTerms(sales.intent_negative).join(', ');
+  var spr = document.getElementById('pe-sales-preset'); if (spr) spr.value = '';
   // L-2 #205：语音三态装载（新建态 = 空对象 → 默认「不发语音」，D-L4）
   _vmLoad(vp, !p || !Object.keys(p).length);
   _fillProfileTabFields(p, _persObj);
@@ -6416,6 +6466,12 @@ async function saveProfile() {
     },
     voice_profile: _vpPatch,
   };
+  if (document.getElementById('pe-sales-kw')) {
+    patch.sales = {
+      intent_keywords: _salesTerms(document.getElementById('pe-sales-kw').value),
+      intent_negative: _salesTerms((document.getElementById('pe-sales-neg') || {}).value),
+    };
+  }
   // C2 线：「档案」页签全字段并入 patch；personality 三补充做形态特殊融合——
   // 对象形态直接并子键；字符串形态且三补充有值时升级为 {style: 原字符串, ...}。
   var pfPatch = _collectProfileTabPatch();
