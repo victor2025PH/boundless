@@ -530,8 +530,19 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         now, _since = _outreach_clock()
         out = st.outreach_stats(now - days * 86400.0, account_id)
         out["days"] = days
-        from src.companion.group_member_outreach import public_member
+        from src.companion.group_member_outreach import attach_won, public_member
         out["recent_replies"] = [public_member(m) for m in (out.get("recent_replies") or [])]
+        out["won"] = None
+        try:
+            from src.companion.goals import service as goal_svc
+            full = _full()
+            if goal_svc.goals_enabled(full):
+                contacted = st.contacted_replies(now - days * 86400.0, account_id)
+                gs = goal_svc.get_configured_store(full, getattr(config_manager, "config_path", None))
+                won = gs.won_chats("telegram", [str(m.get("user_id") or "") for m in contacted])
+                attach_won(out, contacted, won)
+        except Exception:
+            logger.debug("[gm_outreach] 成交归因失败", exc_info=True)
         return out
 
     @app.post("/api/tg-members/outreach/followup")

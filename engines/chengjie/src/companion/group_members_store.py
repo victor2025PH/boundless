@@ -805,6 +805,20 @@ class GroupMembersStore:
         return {"sent": total, "replied": replied,
                 "rate": (replied / total) if total else None}
 
+    def contacted_replies(self, since_ts: float, account_id: str = "") -> List[Dict[str, Any]]:
+        """自 since_ts 起我方开口、对方回了的人（成交归因的底表；不含 access_hash）。"""
+        sql = ("SELECT group_id, group_title, user_id, username, first_name, outreach_account_id, "
+               "opener_variant, opener_source, outreach_at, replied_at FROM tg_group_members "
+               "WHERE outreach_state IN (?,?) AND outreach_at>=? AND outreach_at>0 AND replied_at>0")
+        args: List[Any] = [OUTREACH_REPLIED, OUTREACH_CLOSED, float(since_ts)]
+        if account_id:
+            sql += " AND outreach_account_id=?"
+            args.append(str(account_id))
+        with self._lock:
+            cur = self._conn.execute(sql, args)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
     def outreach_stats(self, since_ts: float, account_id: str = "") -> Dict[str, Any]:
         """回复率切片：按文案来源 / 人设 / 发出小时 / 账号；外加入库→排队→发出→回复漏斗。
 

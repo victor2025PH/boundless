@@ -1127,13 +1127,35 @@
     function statsTable(title, rows, keyLabel, keyFmt) {
       if (!rows || !rows.length) return "";
       var max = Math.max.apply(null, rows.map(function (r) { return r.sent || 0; }).concat([1]));
+      var hasWon = rows.some(function (r) { return r.won != null; });
       return '<div><h3>' + esc(title) + "</h3><table><thead><tr><th>" + esc(keyLabel) + "</th><th>" +
-        t("发出", "sent") + "</th><th>" + t("回了", "replied") + "</th><th>" + t("回复率", "rate") + "</th></tr></thead><tbody>" +
+        t("发出", "sent") + "</th><th>" + t("回了", "replied") + "</th><th>" + t("回复率", "rate") + "</th>" +
+        (hasWon ? "<th>" + t("成交", "won") + "</th>" : "") + "</tr></thead><tbody>" +
         rows.map(function (r) {
           var k = keyFmt ? keyFmt(r.key) : (keyLabel === "h" ? (r.key + ":00") : r.key);
           return "<tr><td>" + esc(k) + "</td><td>" + (r.sent || 0) + rateBar(r, max) + "</td><td>" +
-            (r.replied || 0) + "</td><td>" + pct(r.rate) + "</td></tr>";
+            (r.replied || 0) + "</td><td>" + pct(r.rate) + "</td>" +
+            (hasWon ? "<td>" + (r.won || 0) + "</td>" : "") + "</tr>";
         }).join("") + "</tbody></table></div>";
+    }
+
+    function wonBlock(w) {
+      if (w == null) {
+        return '<div class="msg">' + t("成交统计要先开启「目标」功能：回复的人会自动挂获客目标，下单链接带会话标记，付款或手动「标成交」后这里就能看到。",
+          "Won stats need Goals enabled: repliers get an acquisition goal, order links carry the chat tag, and paid or manually marked deals show up here.") + "</div>";
+      }
+      var groups = (w.by_group || []).map(function (g) {
+        return "<tr><td>" + esc(g.group_title || g.group_id) + "</td><td>" + (g.replied || 0) + "</td><td>" + (g.won || 0) + "</td></tr>";
+      }).join("");
+      var recent = (w.recent || []).map(function (x) {
+        return '<div class="msg">' + esc(x.name || x.user_id) + (x.username ? " @" + esc(x.username) : "") + " · " +
+          esc(x.group_title || "") + (x.variant ? " · " + esc(variantLabel(x.variant)) : "") + " · " + esc(ago(x.done_at)) +
+          (x.manual ? " · " + t("手动标成交", "marked by hand") : " · " + t("官网下单", "site order")) + "</div>";
+      }).join("");
+      return (groups ? '<div class="stats-grid"><div><h3>' + t("按群看成交", "Won by group") + "</h3><table><thead><tr><th>" +
+          t("群", "group") + "</th><th>" + t("回了", "replied") + "</th><th>" + t("成交", "won") + "</th></tr></thead><tbody>" +
+          groups + "</tbody></table></div></div>" : "") +
+        (recent ? '<div class="msg" style="margin-top:10px"><b>' + t("最近成交", "Recent wins") + "</b></div>" + recent : "");
     }
 
     function durShort(sec) {
@@ -1165,6 +1187,7 @@
           "<span>" + t("发出 ", "sent ") + "<b>" + (f.sent || 0) + "</b></span><span class='arr'>→</span>" +
           "<span>" + t("回了 ", "replied ") + "<b>" + (f.replied || 0) + "</b> (" + pct(f.sent ? f.replied / f.sent : null) + ")</span><span class='arr'>→</span>" +
           "<span>" + t("接上了 ", "answered ") + "<b>" + (f.answered || 0) + "</b></span>" +
+          (d.won != null ? "<span class='arr'>→</span><span>" + t("成交 ", "won ") + "<b>" + (f.won || 0) + "</b> (" + pct(d.won.rate) + ")</span>" : "") +
           '<span class="msg" style="margin-left:8px">' + t("封存 ", "closed ") + (f.closed || 0) + t(" · 不可达 ", " · unreachable ") + (f.blocked || 0) + t(" · 跳过 ", " · skipped ") + (f.skipped || 0) +
             ((f.inbound_first || 0) ? t(" · 对方先来找 ", " · they messaged first ") + f.inbound_first : "") + "</span>" +
         "</div>" +
@@ -1177,7 +1200,7 @@
           statsTable(t("按人设", "By persona"), d.by_persona, t("人设", "persona")) +
           statsTable(t("按发出小时", "By hour sent"), d.by_hour, "h") +
           (scope === "all" ? statsTable(t("按账号", "By account"), d.by_account, t("账号", "account")) : "") +
-        "</div>" +
+        "</div>" + wonBlock(d.won) +
         ((d.recent_replies || []).length
           ? '<div class="msg" style="margin-top:10px"><b>' + t("最近回音", "Recent replies") + "</b></div>" +
             d.recent_replies.map(function (m) { return replyCard(m, 48, "replied"); }).join("")

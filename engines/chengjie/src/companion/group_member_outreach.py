@@ -889,6 +889,50 @@ def is_stop_contact(text: str) -> bool:
         return False
 
 
+def attach_won(stats: Dict[str, Any], contacted: Sequence[Dict[str, Any]],
+               won: Dict[tuple, Dict[str, Any]]) -> Dict[str, Any]:
+    """把成交（目标台账 done=order:/manual:）挂回开口统计：漏斗多一级、切入方式切片带成交数、
+    外加按群拆分和最近成交名单。``won`` 来自 ``GoalStore.won_chats``，键 (账号, 对方 user_id)。
+
+    只认开口之后才成交的（done_at ≥ outreach_at），之前就买过的不算这次开口的功劳。"""
+    hits: List[Dict[str, Any]] = []
+    for m in contacted or ():
+        w = won.get((str(m.get("outreach_account_id") or ""), str(m.get("user_id") or "")))
+        if w and float(w.get("done_at") or 0) >= float(m.get("outreach_at") or 0):
+            hits.append((m, w))
+    by_variant: Dict[str, int] = {}
+    by_group: Dict[str, Dict[str, Any]] = {}
+    for m, w in hits:
+        v = str(m.get("opener_variant") or "") or "-"
+        by_variant[v] = by_variant.get(v, 0) + 1
+        g = by_group.setdefault(str(m.get("group_id") or ""), {
+            "group_id": str(m.get("group_id") or ""), "group_title": str(m.get("group_title") or ""),
+            "replied": 0, "won": 0})
+        g["won"] += 1
+    for m in contacted or ():
+        gid = str(m.get("group_id") or "")
+        if gid in by_group:
+            by_group[gid]["replied"] += 1
+    for row in stats.get("by_variant") or []:
+        row["won"] = by_variant.get(str(row.get("key") or ""), 0)
+    funnel = stats.setdefault("funnel", {})
+    funnel["won"] = len(hits)
+    sent = int(funnel.get("sent") or 0)
+    stats["won"] = {
+        "total": len(hits),
+        "manual": sum(1 for _, w in hits if w.get("manual")),
+        "rate": (len(hits) / sent) if sent else None,
+        "by_group": sorted(by_group.values(), key=lambda g: (-g["won"], g["group_title"])),
+        "recent": [{"user_id": str(m.get("user_id") or ""), "username": str(m.get("username") or ""),
+                    "name": str(m.get("first_name") or ""), "group_title": str(m.get("group_title") or ""),
+                    "account_id": str(m.get("outreach_account_id") or ""),
+                    "variant": str(m.get("opener_variant") or ""), "done_at": float(w.get("done_at") or 0),
+                    "manual": bool(w.get("manual"))}
+                   for m, w in sorted(hits, key=lambda x: -float(x[1].get("done_at") or 0))[:20]],
+    }
+    return stats
+
+
 __all__ = [
     "OUTREACH_CAP_DEFAULT", "OUTREACH_CAP_MIN", "OUTREACH_CAP_MAX",
     "OUTREACH_MIN_GAP_SEC", "FLOOD_HOLD_SEC",
@@ -905,5 +949,5 @@ __all__ = [
     "AUTO_MIN_AGE_DAYS", "AUTO_FLOOD_LOOKBACK_DAYS", "AUTO_MIN_REPLY_RATE", "AUTO_MIN_SAMPLE",
     "FOLLOWUP_AFTER_HOURS", "FOLLOWUP_CLOSE_AFTER_HOURS", "FOLLOWUP_DAILY_CAP",
     "auto_mode_block_reason", "followup_due_before", "followup_close_before",
-    "prepare_followup", "finalize_followup",
+    "prepare_followup", "finalize_followup", "attach_won",
 ]

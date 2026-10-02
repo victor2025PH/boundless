@@ -1702,6 +1702,35 @@ class GoalStore:
             logger.debug("contact_outcomes failed: %s", e)
         return out
 
+    def won_chats(self, platform: str, chat_keys: List[str]) -> Dict[tuple, Dict[str, Any]]:
+        """这些会话里成交过的目标（done 且 result 为 order:/manual:，与 outcome_counts 同口径）。
+
+        返回 ``{(account_id, chat_key): {done_at, result, manual}}``，同会话多次成交取最早一次。
+        绝不抛。"""
+        keys = [str(k) for k in dict.fromkeys(chat_keys or []) if str(k)]
+        out: Dict[tuple, Dict[str, Any]] = {}
+        if not keys:
+            return out
+        try:
+            for i in range(0, len(keys), 500):
+                part = keys[i:i + 500]
+                rows = self._conn.execute(
+                    "SELECT account_id, chat_key, done_at, result FROM goals"
+                    " WHERE platform = ? AND status = 'done'"
+                    " AND (result LIKE 'order:%' OR result LIKE 'manual:%')"
+                    f" AND chat_key IN ({','.join('?' * len(part))})"
+                    " ORDER BY done_at ASC",
+                    (str(platform), *part)).fetchall()
+                for r in rows:
+                    k = (str(r[0] or ""), str(r[1] or ""))
+                    if k not in out:
+                        res = str(r[3] or "")
+                        out[k] = {"done_at": float(r[2] or 0.0), "result": res,
+                                  "manual": res.startswith("manual:")}
+        except Exception as e:  # noqa: BLE001
+            logger.debug("won_chats failed: %s", e)
+        return out
+
     def outcome_counts(self, lo: float, hi: float) -> Dict[str, Any]:
         """[lo, hi) 窗口的终态计数 + 赢单金额（AI 价值周报的 goals 段）。绝不抛。"""
         out = {"done": 0, "failed": 0, "expired": 0, "won": 0,
