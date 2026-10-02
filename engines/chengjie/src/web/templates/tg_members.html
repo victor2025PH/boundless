@@ -1141,8 +1141,8 @@
 
     function wonBlock(w) {
       if (w == null) {
-        return '<div class="msg">' + t("成交统计要先开启「目标」功能：回复的人会自动挂获客目标，下单链接带会话标记，付款或手动「标成交」后这里就能看到。",
-          "Won stats need Goals enabled: repliers get an acquisition goal, order links carry the chat tag, and paid or manually marked deals show up here.") + "</div>";
+        return '<div class="msg">' + t("成交统计要先开启「目标」功能，并给这个号或人设设默认获客目标：回复的人会自动挂上，下单链接带会话标记，付款或手动「标成交」后这里就能看到。",
+          "Won stats need Goals enabled plus a default acquisition goal on the account or persona: repliers get it automatically, order links carry the chat tag, and paid or manually marked deals show up here.") + "</div>";
       }
       var groups = (w.by_group || []).map(function (g) {
         return "<tr><td>" + esc(g.group_title || g.group_id) + "</td><td>" + (g.replied || 0) + "</td><td>" + (g.won || 0) + "</td></tr>";

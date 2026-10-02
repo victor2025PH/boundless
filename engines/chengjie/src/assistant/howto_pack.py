@@ -2067,8 +2067,14 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "（「接上后又断了」）同样提醒和打标。每轮只打一次标：坐席手动摘了不会被打回去，对方再来消息才算新一轮。"
         "对方说「别发了」则跨群跨号都不再碰。"
         "AI 拟稿会在三种切入方式间做 A/B（接话茬 / 从群切入 / 轻问一句），按近 30 天回复率自动偏向好的那种、留一部分探索；"
-        "没发言的人只能从群切入。页面下方「回复率 / 漏斗」按切入方式 / 文案来源 / 人设 / 发出小时看回复率和首回时延，"
-        "样本小于 10 的行先别下结论。「停止这个号」随时急停；时段与每日条数可在页面直接改。",
+        "没发言的人只能从群切入。人设工作室里勾了「公开 AI 身份」的人设（如小界）多一种切入「坦白是 AI」，"
+        "开场可以大方说自己是 AI，但绝不冒充真人；没勾的人设仍不许自称 AI。"
+        "先找谁：人设 yaml 的 sales.intent_keywords（如 客服、自动回复、翻译、获客）命中对方群发言的先排，卡片上显示"
+        "「意向 分数：命中词」；命中 sales.intent_negative（如 博彩）的直接不开口。"
+        "页面下方「回复率 / 漏斗」按切入方式 / 文案来源 / 人设 / 发出小时看回复率和首回时延，"
+        "样本小于 10 的行先别下结论。开了「目标」功能时还会算成交：给这个号或人设设了默认获客目标，回了话的人就会自动挂上，下单链接带会话标记，"
+        "官网付款或手动「标成交」后，漏斗多一级「成交」，切入方式表多一列成交数，并按群列出成交和最近成交名单"
+        "（只算开口之后的成交）。「停止这个号」随时急停；时段与每日条数可在页面直接改。",
         "Step 4 \"Today's openers\" in the group-members console (/tools/tg-members). Rules first: only the "
         "account that captured a person can message them; 5-10 new people per account per day (new accounts ramp "
         "from 3 over 14 days); sends go out 10:00-21:00 local only; at least 25 min between two; every send counts "
@@ -2091,11 +2097,21 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "once per wait: if an agent clears it by hand it is not re-added until they send a new message. "
         "A 'stop messaging me' blocks that person everywhere. AI drafts A/B three opener "
         "angles (echo their line / via the group / ask one thing), leaning toward the best 30-day reply rate "
-        "while keeping some exploration; silent members only get the group angle. The Reply rate / funnel panel "
+        "while keeping some exploration; silent members only get the group angle. Personas with 'Public AI "
+        "identity' ticked in Persona Studio (e.g. Xiaojie) get a fourth angle, 'says it's an AI': the opener may "
+        "openly say it is an AI but never poses as a human; other personas still may not call themselves AI. "
+        "Who goes first: people whose group message hits the persona's sales.intent_keywords (e.g. customer "
+        "service, auto reply, translation, leads) are queued first and their card shows 'intent score: hits'; "
+        "hits on sales.intent_negative (e.g. gambling) are never messaged. The Reply rate / funnel panel "
         "slices by angle / opener source / persona / hour and shows first-reply latency - rows under 10 sends are "
-        "noise. Stop this account is the kill switch; window and daily cap are editable on the page.",
+        "noise. With Goals enabled it also counts deals: when the account or persona has a default acquisition "
+        "goal, repliers get it automatically, order links carry the chat tag, and once the site order is paid or the deal is marked won by hand, the funnel gains a Won "
+        "step, the angle table a won column, plus won-by-group and recent wins (only deals after the opener "
+        "count). Stop this account is the kill switch; window and daily cap are editable on the page.",
         "同群开口 开口 自动私聊 主动私聊 第一条私信 AI 开场 打招呼 批准后自动发 全自动 跟进 回复率 回音 切入方式 "
-        "outreach opener auto dm cold message approve auto-send follow-up reply rate replies a/b telegram",
+        "坦白是AI 公开AI 意向 意向关键词 成交 转化 下单 归因 "
+        "outreach opener auto dm cold message approve auto-send follow-up reply rate replies a/b telegram "
+        "intent keywords won deals conversion attribution public ai",
         "/tools/tg-members",
     ),
 ]
