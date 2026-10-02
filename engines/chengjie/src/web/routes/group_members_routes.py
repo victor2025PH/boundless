@@ -545,6 +545,11 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         now, _since = _outreach_clock()
         out = st.outreach_stats(now - days * 86400.0, account_id)
         out["days"] = days
+        try:
+            out["gtouch"] = st.gtouch_stats(now - days * 86400.0, account_id)
+        except Exception:
+            logger.debug("[gm_outreach] 接话统计失败", exc_info=True)
+            out["gtouch"] = None
         from src.companion.group_member_outreach import attach_won, public_member
         out["recent_replies"] = [public_member(m) for m in (out.get("recent_replies") or [])]
         out["won"] = None

@@ -849,6 +849,58 @@ class GroupMembersStore:
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+    def gtouch_stats(self, since_ts: float, account_id: str = "") -> Dict[str, Any]:
+        """群里接话这一层值不值：接了多少人 → 后来多少人回应（私聊回我方开口 / 主动私聊来）；
+        外加同一窗口里的私聊开口按「先在群里接过话」和「冷私聊」分两组比回复率。
+
+        都按人、按号算（接话和私聊可能落在同一个人不同群的行上）。"""
+        acct_sql = " AND gtouch_account_id=?" if account_id else ""
+        out_sql = " AND outreach_account_id=?" if account_id else ""
+        a = [str(account_id)] if account_id else []
+        with self._lock:
+            touched = self._conn.execute(
+                "SELECT user_id, gtouch_account_id, MIN(gtouch_at) FROM tg_group_members "
+                "WHERE gtouch_state='sent' AND gtouch_at>=?%s GROUP BY user_id, gtouch_account_id"
+                % acct_sql, [float(since_ts), *a]).fetchall()
+            all_touch = self._conn.execute(
+                "SELECT user_id, gtouch_account_id, MIN(gtouch_at) FROM tg_group_members "
+                "WHERE gtouch_state='sent'%s GROUP BY user_id, gtouch_account_id"
+                % acct_sql, a).fetchall()
+            contacts = self._conn.execute(
+                "SELECT user_id, outreach_account_id, outreach_state, outreach_at, replied_at, "
+                "outreach_error FROM tg_group_members WHERE outreach_state IN (?,?,?)%s"
+                % out_sql, [OUTREACH_SENT, OUTREACH_REPLIED, OUTREACH_CLOSED, *a]).fetchall()
+        first_touch = {(str(u), str(ac)): float(t or 0) for u, ac, t in all_touch}
+        by_person: Dict[Tuple[str, str], List[Any]] = {}
+        for r in contacts:
+            by_person.setdefault((str(r[0]), str(r[1])), []).append(r)
+        sent = len(touched)
+        responded = inbound = dm_after = 0
+        for u, ac, t in touched:
+            rows = by_person.get((str(u), str(ac)), [])
+            if any(float(r[4] or 0) > 0 and float(r[4] or 0) >= float(t or 0) for r in rows):
+                responded += 1
+            if any(str(r[5]) == "gtouch_inbound" for r in rows):
+                inbound += 1
+            if any(float(r[3] or 0) > float(t or 0) for r in rows):
+                dm_after += 1
+        warm = {"sent": 0, "replied": 0}
+        cold = {"sent": 0, "replied": 0}
+        for r in contacts:
+            oat = float(r[3] or 0)
+            if oat < float(since_ts) or oat <= 0:
+                continue
+            t = first_touch.get((str(r[0]), str(r[1])))
+            bucket = warm if (t is not None and t < oat) else cold
+            bucket["sent"] += 1
+            if float(r[4] or 0) > 0:
+                bucket["replied"] += 1
+        for b in (warm, cold):
+            b["rate"] = (b["replied"] / b["sent"]) if b["sent"] else None
+        return {"sent": sent, "responded": responded, "inbound": inbound, "dm_after": dm_after,
+                "response_rate": (responded / sent) if sent else None,
+                "dm_warm": warm, "dm_cold": cold}
+
     def outreach_stats(self, since_ts: float, account_id: str = "") -> Dict[str, Any]:
         """回复率切片：按文案来源 / 人设 / 发出小时 / 账号；外加入库→排队→发出→回复漏斗。
 

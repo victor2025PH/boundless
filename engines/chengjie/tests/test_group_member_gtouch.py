@@ -439,6 +439,26 @@ def test_context_note_mentions_group_touch_for_dm_in_other_group():
     assert "群里回过TA又私聊了" in note and len(note) <= 80
 
 
+def test_gtouch_stats_layer_and_warm_vs_cold():
+    st = _two_groups()
+    st.record_members([_m("11"), _m("12")])
+    _send_gtouch(st, "-100", "9", NOW)                       # 接话 → 6h 后私聊 → 回了
+    _send_gtouch(st, "-100", "10", NOW + 700)                # 接话 → TA 主动私聊来
+    st.cas_outreach("-200", "9", expect_states=("none",), new_state="sent", account_id="accA",
+                    now=NOW + 7 * 3600)
+    st.mark_outreach_replied("accA", "9", now=NOW + 8 * 3600, text="好")
+    st.mark_outreach_replied("accA", "10", now=NOW + 3600, text="你说的工具是哪个")
+    for uid in ("11", "12"):                                  # 两条冷私聊，一条回了
+        st.cas_outreach("-100", uid, expect_states=("none",), new_state="sent", account_id="accA",
+                        now=NOW + 2 * 3600)
+    st.mark_outreach_replied("accA", "11", now=NOW + 3 * 3600, text="嗯")
+    g = st.gtouch_stats(NOW - 3600, "accA")
+    assert g["sent"] == 2 and g["responded"] == 2 and g["inbound"] == 1 and g["dm_after"] == 1
+    assert g["dm_warm"] == {"sent": 1, "replied": 1, "rate": 1.0}
+    assert g["dm_cold"] == {"sent": 2, "replied": 1, "rate": 0.5}
+    assert st.gtouch_stats(NOW - 3600, "accB")["sent"] == 0
+
+
 # ── 路由 ──
 
 class _CM:

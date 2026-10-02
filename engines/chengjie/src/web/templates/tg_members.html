@@ -1182,12 +1182,29 @@
       var recent = (w.recent || []).map(function (x) {
         return '<div class="msg">' + esc(x.name || x.user_id) + (x.username ? " @" + esc(x.username) : "") + " · " +
           esc(x.group_title || "") + (x.variant ? " · " + esc(variantLabel(x.variant)) : "") + " · " + esc(ago(x.done_at)) +
-          (x.manual ? " · " + t("手动标成交", "marked by hand") : " · " + t("官网下单", "site order")) + "</div>";
+          (x.manual ? " · " + t("手动标成交", "marked by hand") : " · " + t("官网下单", "site order")) +
+          (x.via_gtouch ? " · " + t("群里接话后来找", "came after a group reply") : "") + "</div>";
       }).join("");
       return (groups ? '<div class="stats-grid"><div><h3>' + t("按群看成交", "Won by group") + "</h3><table><thead><tr><th>" +
           t("群", "group") + "</th><th>" + t("回了", "replied") + "</th><th>" + t("成交", "won") + "</th></tr></thead><tbody>" +
           groups + "</tbody></table></div></div>" : "") +
         (recent ? '<div class="msg" style="margin-top:10px"><b>' + t("最近成交", "Recent wins") + "</b></div>" + recent : "");
+    }
+
+    function gtouchBlock(g) {
+      if (!g || !g.sent) return "";
+      var w = g.dm_warm || {}, c = g.dm_cold || {};
+      var cmp = (w.sent || c.sent)
+        ? t("私聊回复率：先在群里接过话 ", "DM reply rate: after a group reply ") + pct(w.rate) + t("（", " (") + (w.sent || 0) + t(" 条）", " sent)") +
+          t(" vs 冷私聊 ", " vs cold DM ") + pct(c.rate) + t("（", " (") + (c.sent || 0) + t(" 条）", " sent)") +
+          ((w.sent || 0) < 10 ? t("。先接话那组不到 10 条，先别下结论", ". Under 10 warm sends; too early to judge") : "")
+        : "";
+      return '<div class="funnel" style="margin-top:10px"><span><b>' + t("群里接话", "Group replies") + "</b></span>" +
+        "<span>" + t("接了 ", "posted ") + "<b>" + g.sent + "</b></span><span class='arr'>→</span>" +
+        "<span>" + t("后来回应 ", "responded ") + "<b>" + (g.responded || 0) + "</b> (" + pct(g.response_rate) + ")</span>" +
+        '<span class="msg" style="margin-left:8px">' + t("其中主动私聊来 ", "came to DM on their own ") + (g.inbound || 0) +
+        t(" · 之后私聊开口 ", " · DMed afterwards ") + (g.dm_after || 0) + "</span></div>" +
+        (cmp ? '<div class="msg">' + cmp + "</div>" : "");
     }
 
     function durShort(sec) {
@@ -1232,7 +1249,7 @@
           statsTable(t("按人设", "By persona"), d.by_persona, t("人设", "persona")) +
           statsTable(t("按发出小时", "By hour sent"), d.by_hour, "h") +
           (scope === "all" ? statsTable(t("按账号", "By account"), d.by_account, t("账号", "account")) : "") +
-        "</div>" + wonBlock(d.won) +
+        "</div>" + gtouchBlock(d.gtouch) + wonBlock(d.won) +
         ((d.recent_replies || []).length
           ? '<div class="msg" style="margin-top:10px"><b>' + t("最近回音", "Recent replies") + "</b></div>" +
             d.recent_replies.map(function (m) { return replyCard(m, 48, "replied"); }).join("")
