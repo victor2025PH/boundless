@@ -1956,6 +1956,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "/workspace",
     ),
     (
+        "takeover-resume-catchup",
+        "接管期间客户发的消息没回，切回自动后 AI 会补答吗",
+        "Will AI answer the message the customer sent while I had taken over",
+        "会。会话头从「人工」切回自动档（或开了自动接回、到点自动交还 AI）时，如果客户最后一条消息还没人回，"
+        "AI 会马上按当前档位补写一条回复，不用等客户再发一句。只补私聊、只补 24 小时内的消息；"
+        "最后一条是你自己发的、或这条会话已有待发草稿时不补，避免重复。",
+        "Yes. When the thread header goes from Manual back to an automatic mode (or auto hand-back returns it "
+        "to AI), and the customer's last message is still unanswered, AI drafts a reply right away under the "
+        "current mode instead of waiting for the next inbound. Private chats only, messages within 24 hours; "
+        "skipped when the last message is yours or the thread already has a pending draft, to avoid duplicates.",
+        "切回自动 接管结束 交还AI 补答 补回复 没回 漏回 自动接回 takeover resume catch up hand back",
+        "/workspace",
+    ),
+    (
         "adult-policy-open",
         "人设成人政策「不设限」怎么用 / 开了还会转人工吗",
         "How persona adult policy Unrestricted works",
@@ -2009,22 +2023,28 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "persona-reply-style",
         "怎么让人设说话更像真人 / 每条都发语音 / 语音和文字说不一样的内容",
         "How to make a persona sound more human, send voice on every reply, or split voice and text",
-        "人设页 → 编辑人设 → 语音区的「语气表达」卡（语音选「不发语音」时这张卡隐藏），三个下拉，默认都是「跟随全局」，"
+        "人设页 → 编辑人设 → 语音区的「语气表达」卡（语音选「不发语音」时这张卡隐藏），四个下拉，默认都是「跟随全局」，"
         "改完点保存：①「真人感」——活泼＝合成前把句子改成口语，带思考声（嗯……）、轻笑、偶尔一次自我纠正；"
         "自然＝只改口语不加小动作；关闭＝照稿念。对这个人设的所有语音生效，全局口语化开关关着也生效。"
         "②「何时发语音」——每条回复都发 / 对方发语音时才发 / 智能判断 / 不发语音。"
         "③「语音文字分开说」——开＝一条回复前半句用语音说、后半句发文字，内容不重复；太短拆不开的回复照常整条处理。"
-        "②③ 作用于 Telegram 自动回复，前提是语音页的 Telegram 语音回复总开关是开的（总开关关着，人设设置不会强行发语音）。",
+        "④「语音失败时」——改发文字＝语音合成失败（引擎掉线、超时等）时照常把整段回复以文字发出，客户不会收不到；"
+        "转待发＝不发，回复进工作台待发队列、主机弹窗提醒，等人放行（跟随全局时默认就是转待发）。"
+        "②③④ 作用于 Telegram 自动回复，前提是语音页的 Telegram 语音回复总开关是开的（总开关关着，人设设置不会强行发语音）。",
         "Personas page → edit a persona → the \"Tone\" card in the voice section (hidden when voice is set to "
-        "\"No voice\"). Three dropdowns, all default to \"Follow global\"; save after changing. (1) Human feel: "
+        "\"No voice\"). Four dropdowns, all default to \"Follow global\"; save after changing. (1) Human feel: "
         "Lively rewrites the line conversationally before synthesis with a thinking sound, a light laugh and the "
         "odd self-correction; Natural only makes it conversational; Off reads the text as written. Applies to all "
         "of this persona's voice, even when global colloquial rewriting is off. (2) When to send voice: every reply / "
         "only when they send voice / smart / never. (3) Split voice and text: On = the first part of a reply is "
         "spoken and the rest is sent as text, without repeating; replies too short to split are handled as before. "
-        "(2) and (3) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice "
+        "(4) If voice fails: Send as text = when synthesis fails (engine offline, timeout) the full reply is sent as "
+        "text so the customer is never left hanging; Hold = nothing is sent, the reply goes to the workbench queue "
+        "with a host alert until someone approves it (Follow global defaults to Hold). "
+        "(2)-(4) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice "
         "page to be on.",
-        "真人感 口语化 思考声 笑声 口误 每条都发语音 语音和文字 分开说 语气表达 人设语音 human feel voice every reply split voice text",
+        "真人感 口语化 思考声 笑声 口误 每条都发语音 语音和文字 分开说 语气表达 人设语音 语音失败 语音发不出去 改发文字 "
+        "human feel voice every reply split voice text voice fails send as text",
         "/personas",
     ),
     (
