@@ -2153,11 +2153,44 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "messages are eligible, so re-extract every day or two (an empty list offers 're-extract with this "
         "account'). Slow-mode groups are retried later; a group where the account is muted stops being listed.",
         "同群开口 开口 自动私聊 主动私聊 第一条私信 AI 开场 打招呼 批准后自动发 全自动 跟进 回复率 回音 切入方式 "
-        "坦白是AI 公开AI 意向 意向关键词 目标客户 排除词 行业预设 成交 转化 下单 归因 号龄 老号 申报号龄 "
-        "群里接话 群里回复 公开回复 先接话 接话后来找 重拟 "
-        "outreach opener auto dm cold message approve auto-send follow-up reply rate replies a/b telegram "
-        "intent keywords target customers industry preset won deals conversion attribution public ai account age "
-        "group reply reply in group warm cold",
+        "坦白是AI 公开AI 意向 成交 转化 归因 号龄 老号 申报号龄 群里接话 公开回复 先接话 接话后来找 重拟 "
+        "outreach opener auto dm cold message approve auto-send follow-up reply rate a/b "
+        "won deals attribution public ai account age reply in the group first before dm warm cold",
+        "/tools/tg-members",
+    ),
+    (
+        "persona-target-customers",
+        "群成员获客按什么找人：人设里的「目标客户」意向词",
+        "Target customers for group outreach: intent keywords in the persona",
+        "人设工作室 → 编辑开口号用的那个人设 →「目标客户（群成员获客）」：填意向关键词（逗号分隔，"
+        "对方群发言命中就优先开口、群里先接话也只列这些人）和排除词（命中就永远不碰，如 博彩）。"
+        "不知道填什么可以在「按行业套用」里选跨境电商、外贸 B2B、客服/私域、教育培训、本地生活，"
+        "词会追加进去，再按自己的生意删改，最后点保存。不填意向词＝不按意向排序，群里接话列表为空。",
+        "Persona Studio -> edit the persona your outreach account uses -> 'Target customers (group outreach)': "
+        "fill intent keywords (comma separated; members whose group messages hit them are messaged first, and "
+        "only they are listed for replying in the group) and exclusions (never contacted, e.g. gambling). Not "
+        "sure what to use? Pick an industry preset (cross-border e-commerce, B2B export, customer service, "
+        "education, local services) to append its words, edit them for your business, then save. No intent "
+        "keywords means no intent ranking and an empty group-reply list.",
+        "目标客户 意向词 意向关键词 排除词 行业预设 按行业套用 获客关键词 找什么人 "
+        "target customers intent keywords exclusions industry preset outreach keywords",
+        "/personas",
+    ),
+    (
+        "gtouch-group-replies",
+        "在群里接话后，对方在群里回我了去哪看",
+        "Someone answered my group reply - where do I see it",
+        "群成员管理台（/tools/tg-members）第②步「群里先接话」下方的「群里回你了（近 3 天）」：列出谁回的"
+        "（被接话的本人或群里别人）、你说的那句和对方回的那句，点「去群里接着聊」直达工作台里那个群接着回。"
+        "只认挂在你那条下面的回复（对着你的消息点了回复）。本人回过的算作回应计入第④步统计，"
+        "之后给 TA 的私聊开场会顺着 TA 在群里回的那句聊。",
+        "Group-members console (/tools/tg-members), step 2 'Reply in the group first', section 'Replied to you "
+        "in the group (last 3 days)': who answered (the member you replied to or someone else), your line and "
+        "their reply, and 'Continue in the group' opens that group in the workspace. Only replies threaded "
+        "under your message count. A reply from the member counts as a response in the step 4 stats, and the "
+        "later DM opener picks up from what they said in the group.",
+        "群里回你了 回了我的消息 接话被回 对方回我了在哪看 去群里接着聊 "
+        "answered someone answered replied to me continue in the group",
         "/tools/tg-members",
     ),
 ]

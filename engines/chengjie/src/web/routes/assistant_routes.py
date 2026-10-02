@@ -645,12 +645,16 @@ def register_assistant_routes(app, ctx) -> None:
         # 「产品形状但语料没覆盖」的问题（如「怎么导出所有客户的手机号」96 分）
         # 用的就是产品词汇，分数天然高，靠分数拦不住——那需要出站前再加一道
         # 「检索到的条目真能回答这个问题吗」的语义核对，属下一阶段。
-        # 2026-10-03 复校：语料 57→403 条后 BM25 分数整体上浮（正样本最低
-        # 41→75），35 已拦不住闲聊（13 条负样本只拦 3 条）；改 57 → 误拒 0/48、
-        # 拦住 7/13，离正样本最低仍有 18 分余量。
+        # 2026-10-03 复校：语料 57→403 条后中文问句分数整体上浮（正样本最低
+        # 41→75），35 已拦不住闲聊（13 条负样本只拦 3 条）；中文改 57 → 误拒 0/48、
+        # 拦住 7/13。英文问句分数低一个量级（正样本 35~70），仍用 35——见
+        # help_kb.min_score_for；min_score_latin 可单独配。
         # 注意：实例配置默认**不带** assistant.query 段，所以这个硬编码默认值
         # 就是线上真正生效的值（只改 config.example.yaml 对生产无效）。
-        min_score = float(qcfg.get("min_score", 57.0) or 0)
+        from src.assistant.help_kb import MIN_SCORE_CJK, MIN_SCORE_LATIN, min_score_for
+        min_score = min_score_for(
+            q, float(qcfg.get("min_score", MIN_SCORE_CJK) or 0),
+            float(qcfg.get("min_score_latin", MIN_SCORE_LATIN) or 0))
         report_hint = _detect_report_hint(q)
 
         # ── 真流式（2026-08-21 P2）：text/event-stream 逐 token 推送。

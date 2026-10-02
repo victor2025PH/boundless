@@ -169,6 +169,33 @@ def test_product_shaped_negatives_are_the_known_remaining_gap(result):
     )
 
 
+def test_keywords_fit_the_stored_column():
+    """HelpKB 落库时 keywords 截到 400 字——超出的词静默丢掉，补了等于没补。"""
+    from src.assistant.seed_corpus import build_all_entries
+
+    long_ = [(e["id"], len(e.get("keywords") or "")) for e in build_all_entries()
+             if len(e.get("keywords") or "") > 400]
+    assert not long_, f"keywords 超 400 字会被截断：{long_}"
+
+
+def test_english_questions_use_latin_line():
+    """英文问句分数低一个量级：中文线（57）会把它们全拒掉，必须走拉丁线。"""
+    from src.assistant.help_kb import MIN_SCORE_CJK, MIN_SCORE_LATIN, min_score_for
+
+    assert min_score_for("怎么改密码") == MIN_SCORE_CJK
+    assert min_score_for("How do I change my password") == MIN_SCORE_LATIN
+    assert min_score_for("tg 怎么登录") == MIN_SCORE_CJK
+    kb = build_eval_kb()
+    for q, want in (("How do I change my password", "howto:change-password"),
+                    ("How do I add to the knowledge base", "page:knowledge")):
+        hits = kb.search(q, top_k=3, lang="en")
+        assert hits and hits[0]["score"] >= min_score_for(q), (q, hits[:1])
+        assert want in [h["id"] for h in hits], (q, [h["id"] for h in hits])
+    for q in ("Tell me a joke", "Write me a poem about spring"):
+        hits = kb.search(q, top_k=3, lang="en")
+        assert not hits or hits[0]["score"] < min_score_for(q), (q, hits[:1])
+
+
 def test_report_is_actionable_on_failure(result):
     """失败信息必须逐条列出未命中项（否则红了也不知道补哪个词）。"""
     text = format_report(result)

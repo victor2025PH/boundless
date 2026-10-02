@@ -76,7 +76,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # 段，所以那个默认值就是线上真正生效的值）。评测必须与它同口径，否则
 # 「评测过了线上还是拒答」。
 DEFAULT_TOP_K = 3
-DEFAULT_MIN_SCORE = 57.0
+from src.assistant.help_kb import MIN_SCORE_CJK as DEFAULT_MIN_SCORE  # noqa: E402  金标全是中文问句
 
 # 负样本：**应该被诚实拒答**的问题（语料里没有依据）。
 # 三类刻意分开，因为它们的可拦截性差别极大（见模块 docstring「校准结论」）：
