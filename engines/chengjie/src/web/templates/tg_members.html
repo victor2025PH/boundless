@@ -1231,7 +1231,8 @@
       return '<div class="funnel" style="margin-top:10px"><span><b>' + t("群里接话", "Group replies") + "</b></span>" +
         "<span>" + t("接了 ", "posted ") + "<b>" + g.sent + "</b></span><span class='arr'>→</span>" +
         "<span>" + t("后来回应 ", "responded ") + "<b>" + (g.responded || 0) + "</b> (" + pct(g.response_rate) + ")</span>" +
-        '<span class="msg" style="margin-left:8px">' + t("其中主动私聊来 ", "came to DM on their own ") + (g.inbound || 0) +
+        '<span class="msg" style="margin-left:8px">' + t("其中在群里回你 ", "replied in the group ") + (g.group_replied || 0) +
+        t(" · 主动私聊来 ", " · came to DM on their own ") + (g.inbound || 0) +
         t(" · 之后私聊开口 ", " · DMed afterwards ") + (g.dm_after || 0) + "</span></div>" +
         (cmp ? '<div class="msg">' + cmp + "</div>" : "");
     }
@@ -1507,14 +1508,27 @@
           box.innerHTML = rows.map(renderGtCard).join("");
         }
         var done = d.sent || [];
-        sent.innerHTML = done.length
+        var reps = d.replies || [];
+        var repHtml = reps.length
+          ? '<div class="msg" style="margin-top:10px"><b>' + t("群里回你了（近 3 天）", "Replied to you in the group (last 3 days)") + "</b></div>" +
+            reps.map(function (m) {
+              var who = m.gtouch_reply_self ? esc(m.first_name || m.user_id) : t("群里别人", "someone else");
+              var link = m.group_conversation_id
+                ? ' · <a href="/workspace?conv=' + encodeURIComponent(m.group_conversation_id) + '" target="_blank" rel="noopener">' + t("去群里接着聊 ↗", "Continue in the group ↗") + "</a>"
+                : "";
+              return '<div class="msg">' + who + " · " + esc(m.group_title || "") + " · " +
+                t("你：", "you: ") + "<q>" + esc(m.gtouch_text || "") + "</q> → " + t("回：", "reply: ") + "<q>" + esc(m.gtouch_reply_text || "") + "</q> · " +
+                esc(ago(m.gtouch_reply_at)) + link + "</div>";
+            }).join("")
+          : "";
+        sent.innerHTML = repHtml + (done.length
           ? '<div class="msg" style="margin-top:10px"><b>' + t("今天在群里接过的话", "Group replies today") + "</b></div>" +
             done.map(function (m) {
               return '<div class="msg">' + esc(m.first_name || m.user_id) + " · " + esc(m.group_title || "") + " · " +
                 t("TA：", "they: ") + "<q>" + esc(m.last_msg_text || "") + "</q> → " + t("你：", "you: ") + "<q>" + esc(m.gtouch_text || "") + "</q> · " +
-                esc(ago(m.gtouch_at)) + "</div>";
+                esc(ago(m.gtouch_at)) + (m.gtouch_reply_self ? t(" · TA 在群里回了", " · they replied in the group") : "") + "</div>";
             }).join("")
-          : "";
+          : "");
       }).catch(function () { stats.textContent = t("接话列表读取失败", "Could not load group replies"); });
     }
 

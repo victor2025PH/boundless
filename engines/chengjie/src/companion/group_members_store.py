@@ -234,6 +234,10 @@ class GroupMembersStore:
             ("tg_group_members", "gtouch_error", "TEXT NOT NULL DEFAULT ''"),
             ("tg_outreach_holds", "declared_age_days", "REAL NOT NULL DEFAULT 0"),
             ("tg_outreach_holds", "declared_age_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "gtouch_msg_id", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_reply_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "gtouch_reply_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_reply_self", "INTEGER NOT NULL DEFAULT 0"),
         )
         for table, col, decl in _adds:
             try:
@@ -253,6 +257,8 @@ class GroupMembersStore:
             "ON tg_group_members(outreach_account_id, outreach_state)",
             "CREATE INDEX IF NOT EXISTS idx_gm_user_gtouch "
             "ON tg_group_members(user_id, gtouch_state)",
+            "CREATE INDEX IF NOT EXISTS idx_gm_gtouch_msg "
+            "ON tg_group_members(group_id, gtouch_msg_id)",
         ):
             try:
                 self._conn.execute(_idx_sql)
@@ -850,7 +856,7 @@ class GroupMembersStore:
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
     def gtouch_stats(self, since_ts: float, account_id: str = "") -> Dict[str, Any]:
-        """群里接话这一层值不值：接了多少人 → 后来多少人回应（私聊回我方开口 / 主动私聊来）；
+        """群里接话这一层值不值：接了多少人 → 后来多少人回应（群里回了 / 私聊回我方开口 / 主动私聊来）；
         外加同一窗口里的私聊开口按「先在群里接过话」和「冷私聊」分两组比回复率。
 
         都按人、按号算（接话和私聊可能落在同一个人不同群的行上）。"""
@@ -859,9 +865,9 @@ class GroupMembersStore:
         a = [str(account_id)] if account_id else []
         with self._lock:
             touched = self._conn.execute(
-                "SELECT user_id, gtouch_account_id, MIN(gtouch_at) FROM tg_group_members "
-                "WHERE gtouch_state='sent' AND gtouch_at>=?%s GROUP BY user_id, gtouch_account_id"
-                % acct_sql, [float(since_ts), *a]).fetchall()
+                "SELECT user_id, gtouch_account_id, MIN(gtouch_at), MAX(gtouch_reply_self) "
+                "FROM tg_group_members WHERE gtouch_state='sent' AND gtouch_at>=?%s "
+                "GROUP BY user_id, gtouch_account_id" % acct_sql, [float(since_ts), *a]).fetchall()
             all_touch = self._conn.execute(
                 "SELECT user_id, gtouch_account_id, MIN(gtouch_at) FROM tg_group_members "
                 "WHERE gtouch_state='sent'%s GROUP BY user_id, gtouch_account_id"
@@ -875,10 +881,13 @@ class GroupMembersStore:
         for r in contacts:
             by_person.setdefault((str(r[0]), str(r[1])), []).append(r)
         sent = len(touched)
-        responded = inbound = dm_after = 0
-        for u, ac, t in touched:
+        responded = inbound = dm_after = group_replied = 0
+        for u, ac, t, gself in touched:
             rows = by_person.get((str(u), str(ac)), [])
-            if any(float(r[4] or 0) > 0 and float(r[4] or 0) >= float(t or 0) for r in rows):
+            if int(gself or 0):
+                group_replied += 1
+            if int(gself or 0) or any(float(r[4] or 0) > 0 and float(r[4] or 0) >= float(t or 0)
+                                      for r in rows):
                 responded += 1
             if any(str(r[5]) == "gtouch_inbound" for r in rows):
                 inbound += 1
@@ -898,6 +907,7 @@ class GroupMembersStore:
         for b in (warm, cold):
             b["rate"] = (b["replied"] / b["sent"]) if b["sent"] else None
         return {"sent": sent, "responded": responded, "inbound": inbound, "dm_after": dm_after,
+                "group_replied": group_replied,
                 "response_rate": (responded / sent) if sent else None,
                 "dm_warm": warm, "dm_cold": cold}
 
@@ -1193,15 +1203,16 @@ class GroupMembersStore:
             return bool(cur.rowcount)
 
     def finish_gtouch(self, group_id: str, user_id: str, *, state: str, text: str = "",
-                      error: str = "", now: Optional[float] = None) -> bool:
-        """占坑后的落定：sent（记文案和时间）/ failed / drafted（还坑，下次再发）。"""
+                      error: str = "", now: Optional[float] = None, msg_id: str = "") -> bool:
+        """占坑后的落定：sent（记文案、时间、我方那条的消息 id）/ failed / drafted（还坑，下次再发）。"""
         if state not in ("sent", "failed", "drafted"):
             return False
         sets = "gtouch_state=?, gtouch_error=?"
         args: List[Any] = [state, str(error or "")[:60]]
         if state == "sent":
-            sets += ", gtouch_text=?, gtouch_at=?"
-            args += [str(text or "")[:500], float(time.time() if now is None else now)]
+            sets += ", gtouch_text=?, gtouch_at=?, gtouch_msg_id=?"
+            args += [str(text or "")[:500], float(time.time() if now is None else now),
+                     str(msg_id or "")[:40]]
         elif state == "drafted":
             sets += ", gtouch_at=0, gtouch_account_id=''"
         with self._lock:
@@ -1238,7 +1249,8 @@ class GroupMembersStore:
 
         接话记在「群+人」那一行上；私聊开口可能落在同一个人的另一个群的行上，所以按人查。"""
         sql = ("SELECT user_id, group_id, group_title, last_msg_text, gtouch_text, gtouch_at, "
-               "gtouch_state FROM tg_group_members WHERE gtouch_account_id=? "
+               "gtouch_state, gtouch_reply_text, gtouch_reply_self "
+               "FROM tg_group_members WHERE gtouch_account_id=? "
                "AND gtouch_state IN ('sent','sending')")
         args: List[Any] = [str(account_id)]
         ids = [str(u) for u in (user_ids or ()) if str(u or "").strip()]
@@ -1301,6 +1313,47 @@ class GroupMembersStore:
                 "SELECT MAX(gtouch_at) FROM tg_group_members WHERE gtouch_account_id=? "
                 "AND gtouch_state IN ('sent','sending')", (str(account_id),)).fetchone()
         return float(row[0] or 0.0) if row else 0.0
+
+    def mark_gtouch_reply(self, account_id: str, group_id: str, reply_to_msg_id: str,
+                          from_user_id: str, text: str, now: float) -> Optional[Dict[str, Any]]:
+        """群里有人回了我方接话那条：记下第一条回复；接话对象本人后来再回，覆盖掉旁人的。
+
+        返回被记上的那一行（没对上 / 已记过 → None）。"""
+        mid = str(reply_to_msg_id or "").strip()
+        if not mid:
+            return None
+        sql = ("SELECT * FROM tg_group_members WHERE group_id=? AND gtouch_msg_id=? "
+               "AND gtouch_state='sent'")
+        args: List[Any] = [str(group_id), mid]
+        if account_id:
+            sql += " AND gtouch_account_id=?"
+            args.append(str(account_id))
+        with self._lock:
+            row = self._conn.execute(sql + " LIMIT 1", args).fetchone()
+            if row is None:
+                return None
+            is_self = 1 if str(from_user_id) == str(row["user_id"]) else 0
+            if float(row["gtouch_reply_at"] or 0) > 0 and (int(row["gtouch_reply_self"] or 0) or not is_self):
+                return None
+            self._conn.execute(
+                "UPDATE tg_group_members SET gtouch_reply_at=?, gtouch_reply_text=?, "
+                "gtouch_reply_self=? WHERE group_id=? AND user_id=?",
+                (float(now), " ".join(str(text or "").split())[:300], is_self,
+                 str(row["group_id"]), str(row["user_id"])))
+            self._conn.commit()
+            out = dict(row)
+        out.update(gtouch_reply_at=float(now), gtouch_reply_self=is_self,
+                   gtouch_reply_text=" ".join(str(text or "").split())[:300])
+        return out
+
+    def list_gtouch_replies(self, account_id: str, since_ts: float,
+                            limit: int = 30) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE gtouch_account_id=? AND gtouch_state='sent' "
+                "AND gtouch_reply_at>=? AND gtouch_reply_at>0 ORDER BY gtouch_reply_at DESC LIMIT ?",
+                (str(account_id), float(since_ts), int(limit))).fetchall()
+        return [dict(r) for r in rows]
 
     def list_gtouch_sent_since(self, account_id: str, since_ts: float,
                                limit: int = 30) -> List[Dict[str, Any]]:

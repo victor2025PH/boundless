@@ -993,6 +993,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 chat_id = getattr(message.chat, 'id', 0)
                 self.logger.info("[群消息] 收到一条群消息 chat_id=%s", chat_id)
 
+                # 群里接话被回：先于白名单 / 触发闸登记（接话的群多半不在自动回复白名单里）
+                if getattr(message, 'reply_to_message_id', None):
+                    try:
+                        from src.companion.group_member_gtouch import note_group_reply
+                        note_group_reply(getattr(self, 'account_id', '') or '', message)
+                    except Exception:
+                        self.logger.debug("[gm_gtouch] 群里回复登记失败（忽略）", exc_info=True)
+
                 # 群聊灰度白名单（P3-1）：allowlist_chat_ids 非空时仅名单内群放行。
                 from src.client.reply_logic_gates import group_allowlist_blocked
                 _gr_cfg = self.config.get('telegram', {}).get('group_reply', {})

@@ -308,7 +308,9 @@ def overlay_gtouch(store: Any, rows: Sequence[Dict[str, Any]],
                      gtouch_at=float(g.get("gtouch_at") or 0.0),
                      gtouch_text=str(g.get("gtouch_text") or ""),
                      gtouch_said=str(g.get("last_msg_text") or ""),
-                     gtouch_group_title=str(g.get("group_title") or ""))
+                     gtouch_group_title=str(g.get("group_title") or ""),
+                     gtouch_reply_text=str(g.get("gtouch_reply_text") or ""),
+                     gtouch_reply_self=int(g.get("gtouch_reply_self") or 0))
         out.append(m)
     return out
 
@@ -392,6 +394,19 @@ def conversation_id_for(member: Dict[str, Any]) -> str:
         return "telegram:%s:%s" % (acct, uid)
 
 
+def group_conversation_id_for(member: Dict[str, Any]) -> str:
+    """接话号所在的那个群在收件箱里的会话 id；没接过话就是空。"""
+    acct = str(member.get("gtouch_account_id") or "").strip()
+    gid = str(member.get("group_id") or "").strip()
+    if not acct or not gid:
+        return ""
+    try:
+        from src.inbox.normalizer import conv_id
+        return conv_id("telegram", acct, gid)
+    except Exception:
+        return "telegram:%s:%s" % (acct, gid)
+
+
 def public_member(member: Dict[str, Any], *, with_opener: bool = False) -> Dict[str, Any]:
     """给管理台的行。access_hash 不出去。"""
     d = {
@@ -429,6 +444,10 @@ def public_member(member: Dict[str, Any], *, with_opener: bool = False) -> Dict[
         "gtouch_text": member.get("gtouch_text") or "",
         "gtouch_at": float(member.get("gtouch_at") or 0.0),
         "gtouch_account_id": member.get("gtouch_account_id") or "",
+        "gtouch_reply_at": float(member.get("gtouch_reply_at") or 0.0),
+        "gtouch_reply_text": member.get("gtouch_reply_text") or "",
+        "gtouch_reply_self": bool(member.get("gtouch_reply_self")),
+        "group_conversation_id": group_conversation_id_for(member),
     }
     if with_opener:
         d["suggested_opener"] = d["opener_text"] or suggest_opener(member)

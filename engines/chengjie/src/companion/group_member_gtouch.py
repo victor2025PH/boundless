@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.companion.group_member_outreach import (
@@ -28,6 +29,7 @@ logger = logging.getLogger("ai_chat_assistant.group_member_gtouch")
 
 GTOUCH_MAX_CHARS_ZH = 120
 GTOUCH_MAX_CHARS_OTHER = 280
+GROUP_REPLY_SHOW_SEC = 3 * 86400
 # 公开场合额外不许的：引人私聊 / @ 人（opener_block_reason 已管链接和加微信）
 _GTOUCH_MARKERS = ("私聊我", "私信我", "私我", "找我聊", "联系我", "dm me", "pm me", "inbox me",
                    "message me", "@")
@@ -107,6 +109,8 @@ def gtouch_preview(store: Any, account_id: str, *, now: float, since_ts: float,
         "hours_ok": not hours_block_reason(policy, now),
         "denied_groups": sorted(denied),
         "sent": [public_member(m) for m in store.list_gtouch_sent_since(account_id, since_ts)],
+        "replies": [public_member(m) for m in store.list_gtouch_replies(
+            account_id, float(now) - GROUP_REPLY_SHOW_SEC)],
         "intent_configured": bool(intent and intent.get("positive")),
     }
 
@@ -178,7 +182,8 @@ def finalize_gtouch(store: Any, *, account_id: str, group_id: str, user_id: str,
                     text: str, result: Dict[str, Any]) -> Dict[str, Any]:
     kind = str((result or {}).get("kind") or "retryable")
     if (result or {}).get("ok"):
-        store.finish_gtouch(group_id, user_id, state="sent", text=text, now=now)
+        store.finish_gtouch(group_id, user_id, state="sent", text=text, now=now,
+                            msg_id=str((result or {}).get("msg_id") or ""))
         requeued = int(store.requeue_after_gtouch(user_id, account_id) or 0)
         logger.info("[gm_gtouch] 群里接话已发 account=%s group=%s user=%s requeued=%d",
                     account_id, group_id, user_id, requeued)
@@ -192,6 +197,36 @@ def finalize_gtouch(store: Any, *, account_id: str, group_id: str, user_id: str,
     else:
         store.finish_gtouch(group_id, user_id, state="drafted", error=kind)
     return {"ok": False, "kind": kind}
+
+
+def note_group_reply(account_id: str, message: Any, *, store: Any = None,
+                     now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """群消息入口调：这条是不是在回我方接话那条。是 → 记下并返回那一行；否则 None。
+
+    放在群白名单 / 触发闸之前：被接话的群多半不在自动回复白名单里，回复也照样要看见。"""
+    reply_to = getattr(message, "reply_to_message_id", None)
+    if not reply_to:
+        return None
+    user = getattr(message, "from_user", None)
+    uid = getattr(user, "id", None)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    if uid is None or chat_id is None or getattr(message, "outgoing", False):
+        return None
+    if store is None:
+        from src.companion.group_members_store import get_group_members_store
+        store = get_group_members_store()
+    if store is None:
+        return None
+    text = str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
+    ts = float(time.time() if now is None else now)
+    acct = str(account_id or "")
+    row = store.mark_gtouch_reply(acct, str(chat_id), str(reply_to), str(uid), text, ts)
+    if row is None and acct in ("", "default"):
+        row = store.mark_gtouch_reply("", str(chat_id), str(reply_to), str(uid), text, ts)
+    if row:
+        logger.info("[gm_gtouch] 群里有人回了接话 account=%s group=%s member=%s self=%s",
+                    account_id, chat_id, row.get("user_id"), row.get("gtouch_reply_self"))
+    return row
 
 
 def gtouch_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
@@ -284,5 +319,5 @@ async def compose_gtouch(ai: Any, *, member: Dict[str, Any], ctx: Dict[str, Any]
 __all__ = [
     "GTOUCH_MAX_CHARS_ZH", "GTOUCH_MAX_CHARS_OTHER", "gtouch_block_reason",
     "classify_group_send_error", "gtouch_preview", "prepare_gtouch", "deliver_gtouch",
-    "finalize_gtouch", "gtouch_prompt", "postprocess_gtouch", "compose_gtouch",
+    "finalize_gtouch", "note_group_reply", "gtouch_prompt", "postprocess_gtouch", "compose_gtouch",
 ]

@@ -459,6 +459,58 @@ def test_gtouch_stats_layer_and_warm_vs_cold():
     assert st.gtouch_stats(NOW - 3600, "accB")["sent"] == 0
 
 
+def _grp_msg(chat_id, uid, reply_to, text="", outgoing=False):
+    return SimpleNamespace(chat=SimpleNamespace(id=int(chat_id)), from_user=SimpleNamespace(id=int(uid)),
+                           reply_to_message_id=reply_to, text=text, caption=None, outgoing=outgoing)
+
+
+def test_group_reply_to_our_touch_is_recorded_member_reply_wins():
+    from src.companion.group_member_gtouch import note_group_reply
+    st = _two_groups()
+    p = prepare_gtouch(st, account_id="accA", group_id="-100", user_id="9", text="先做快捷回复",
+                       now=NOW, since_ts=NOW - 3600, policy=POL)
+    finalize_gtouch(st, account_id="accA", group_id="-100", user_id="9", now=NOW, text=p["text"],
+                    result={"ok": True, "msg_id": "5001"})
+    assert st.get_member("-100", "9")["gtouch_msg_id"] == "5001"
+    # 没回复对象 / 回的是别的消息 / 自己发的：都不算
+    assert note_group_reply("accA", _grp_msg(-100, 9, None, "hi"), store=st, now=NOW + 60) is None
+    assert note_group_reply("accA", _grp_msg(-100, 9, 4999, "hi"), store=st, now=NOW + 60) is None
+    assert note_group_reply("accA", _grp_msg(-100, 1, 5001, "x", outgoing=True), store=st) is None
+    # 旁人先回 → 记上（非本人）；本人再回 → 覆盖；之后再有人回不再改
+    r = note_group_reply("accA", _grp_msg(-100, 10, 5001, "我也想知道"), store=st, now=NOW + 120)
+    assert r and r["gtouch_reply_self"] == 0
+    r = note_group_reply("accA", _grp_msg(-100, 9, 5001, "  好主意，  怎么设置？ "), store=st, now=NOW + 300)
+    assert r and r["gtouch_reply_self"] == 1
+    assert note_group_reply("accA", _grp_msg(-100, 10, 5001, "+1"), store=st, now=NOW + 400) is None
+    row = st.get_member("-100", "9")
+    assert row["gtouch_reply_text"] == "好主意， 怎么设置？" and row["gtouch_reply_at"] == NOW + 300
+    # 其他号的接话对不上；主 client 记作 default 时按群 + 消息 id 兜底
+    assert note_group_reply("accB", _grp_msg(-100, 9, 5001, "?"), store=st) is None
+    g = st.gtouch_stats(NOW - 3600, "accA")
+    assert g["group_replied"] == 1 and g["responded"] == 1
+    pv = gtouch_preview(st, "accA", now=NOW + 600, since_ts=NOW - 3600, policy=POL, intent=TERMS)
+    rep = pv["replies"]
+    assert len(rep) == 1 and rep[0]["gtouch_reply_self"] is True
+    assert rep[0]["group_conversation_id"].endswith(":-100") and "accA" in rep[0]["group_conversation_id"]
+    # 私聊开场接上 TA 在群里回的那句（另一个群的行也叠得到）
+    from src.companion.group_member_outreach import overlay_gtouch
+    other = overlay_gtouch(st, [st.get_member("-200", "9")], "accA")[0]
+    prompt = opener_prompt(persona_block="", member=dict(other, outreach_account_id="accA"), lang="zh",
+                           goal_hint="", avoid=[])
+    assert "TA 在群里接着回了你：「好主意， 怎么设置？」" in prompt
+
+
+def test_group_reply_default_account_falls_back_to_group_and_msg_id():
+    from src.companion.group_member_gtouch import note_group_reply
+    st = _two_groups()
+    p = prepare_gtouch(st, account_id="accA", group_id="-100", user_id="9", text="先做快捷回复",
+                       now=NOW, since_ts=NOW - 3600, policy=POL)
+    finalize_gtouch(st, account_id="accA", group_id="-100", user_id="9", now=NOW, text=p["text"],
+                    result={"ok": True, "msg_id": "5001"})
+    r = note_group_reply("default", _grp_msg(-100, 9, 5001, "谢谢"), store=st, now=NOW + 60)
+    assert r and r["user_id"] == "9" and r["gtouch_reply_self"] == 1
+
+
 # ── 路由 ──
 
 class _CM:

@@ -394,6 +394,9 @@ def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
         else:
             about.append("- 你之前已经在群里公开回过TA这句：「%s」——这条私信顺着那件事接"
                          "（比如接着聊群里没说完的），别装作第一次见" % gt)
+        g_reply = " ".join(str(member.get("gtouch_reply_text") or "").split())[:200]
+        if int(member.get("gtouch_reply_self") or 0) and g_reply:
+            about.append("- TA 在群里接着回了你：「%s」——私信从这句往下聊" % g_reply)
     parts.append("关于对方：\n" + "\n".join(about))
     if goal_hint:
         parts.append("这次建联的方向（只影响切入点和语气，第一条绝不能卖东西）：%s" % goal_hint)
