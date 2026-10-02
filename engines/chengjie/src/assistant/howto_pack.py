@@ -500,7 +500,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "里切换。",
         "Workspace: the language button in the top bar switches zh⇄en for the "
         "whole page; admin pages switch it from the user menu.",
-        "语言 英文 中文 切换语言 language english",
+        "语言 英文 中文 切换语言 英文界面 中文界面 界面语言 换成英文 language english",
         "",
     ),
     (
@@ -582,7 +582,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "档案里改（personality/style）。改动即时生效。",
         "Tune temperature/length on the Reply Strategies page; per-persona "
         "speaking style lives in Persona Studio profiles.",
-        "风格 语气 回复长度 温度 temperature 策略",
+        "风格 语气 回复长度 温度 temperature 策略 啰嗦 太长 调短 简短 话太多 字数",
         "/strategies",
     ),
     (
@@ -637,7 +637,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Connect LINE from the account drawer in the agent workspace. The "
         "channel page has Monitor / Review / Config / Ops / Funnel tabs, with "
         "run-now, pause and manual-send controls at the top.",
-        "line 接入 接账号 扫码 渠道 暂停 触发 手动发送 登录 登陆 上号 line号",
+        "line 接入 接账号 扫码 渠道 暂停 触发 手动发送 登录 登陆 上号 line号 line号登录 line登录 line账号",
         "/workspace/channels/line",
     ),
     (
@@ -816,7 +816,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "photos or identity, repeated follow-ups after low satisfaction. Claim "
         "it, open the conversation, add a note, then close it. In simple mode "
         "this is the home page.",
-        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话",
+        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话 亲自处理 需要我处理 哪些对话",
         "/cases",
     ),
     (
@@ -1352,7 +1352,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     ),
     (
         "set-address-names",
-        "怎么设置我和客户怎么互相称呼",
+        "设置我和客户之间的互相称呼",
         "How to set what I call the customer and what they call me",
         "打开会话后，右栏「客户关系」身份区有两个输入框：「我怎么叫对方」"
         "和「对方怎么叫我」。改完点别处即保存。空着则沿用人设默认称呼；"
@@ -1360,7 +1360,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Open a conversation. On the Customer tab, the two address fields "
         "set how you call them and how they call you. Changes save on blur. "
         "Leave blank to inherit the persona default; clear a field to drop a nickname.",
-        "称呼 怎么叫 爱称 对方怎么叫我 call_peer peer_calls_you 双向称呼",
+        "称呼 爱称 称谓 叫法 我叫对方 对方叫我 call_peer peer_calls_you 双向称呼",
         "/workspace",
     ),
     (
