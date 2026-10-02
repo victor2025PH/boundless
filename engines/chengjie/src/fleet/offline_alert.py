@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OFFLINE_ALERT_MIN = 10
 CHECK_INTERVAL_SEC = 60
+ENV_ALERT_LOCK = "CHATX_FLEET_ALERT_LOCK"   # 多进程只让一个进程推送：文件锁路径（缺省系统临时目录）
 
 
 def resolve_alert_min(value: Any) -> int:
@@ -99,22 +102,63 @@ class OfflineAlerter:
         return new
 
 
+def _default_lock_path() -> str:
+    return os.environ.get(ENV_ALERT_LOCK) or os.path.join(tempfile.gettempdir(), "chatx-fleet-offline-watch.lock")
+
+
+def try_lock(path: str) -> Optional[Any]:
+    """非阻塞独占文件锁；拿到返回打开的文件对象（进程活着就一直持有），拿不到返回 None。
+    进程退出时操作系统自动释放，其他 worker 下一轮就能接手。"""
+    try:
+        fh = open(path, "a+b")
+    except OSError:
+        logger.warning("fleet offline watch lock unavailable: %s", path, exc_info=True)
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except OSError:
+        fh.close()
+        return None
+
+
 def start_watch(get_nodes: Callable[[], List[Dict[str, Any]]], alerter: OfflineAlerter,
-                *, interval_sec: float = CHECK_INTERVAL_SEC) -> Optional[threading.Thread]:
-    """后台守护线程，每 interval_sec 检查一次。after_min<=0 时不启动。"""
+                *, interval_sec: float = CHECK_INTERVAL_SEC,
+                lock_path: Optional[str] = None) -> Optional[threading.Thread]:
+    """后台守护线程，每 interval_sec 检查一次。after_min<=0 时不启动。
+
+    多 worker / 多进程部署时每个进程都会起线程，但只有拿到 ``lock_path`` 文件锁的那个
+    进程真正巡检和推送，避免同一节点离线被重复告警；持锁进程退出后，其他进程下一轮接手。
+    """
     if alerter.after_min <= 0:
         logger.info("fleet offline alert disabled (offline_alert_min=0)")
         return None
+    path = lock_path or _default_lock_path()
+    held: Dict[str, Any] = {}
 
     def _loop() -> None:
         while True:
             try:
-                alerter.check(get_nodes())
+                if "fh" not in held:
+                    fh = try_lock(path)
+                    if fh is not None:
+                        held["fh"] = fh
+                        logger.info("fleet offline watch: this process (pid %s) is the alerter", os.getpid())
+                if "fh" in held:
+                    alerter.check(get_nodes())
             except Exception:  # noqa: BLE001
                 logger.warning("fleet offline watch tick failed", exc_info=True)
             time.sleep(interval_sec)
 
     t = threading.Thread(target=_loop, name="fleet-offline-watch", daemon=True)
     t.start()
-    logger.info("fleet offline watch started (after %s min, every %ss)", alerter.after_min, interval_sec)
+    logger.info("fleet offline watch started (after %s min, every %ss, lock %s)", alerter.after_min, interval_sec, path)
     return t

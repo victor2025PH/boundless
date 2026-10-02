@@ -137,6 +137,7 @@
   var DANGER={stop_account:1,restart_instance:1};
   var TLABEL={queued:'排队中',pulled:'已领取',done:'完成',failed:'失败',rejected:'被拒绝',expired:'已过期',cancelled:'已取消'};
   var PHONE_RE=/^[0-9]{6,15}$/;
+  var DEV_RE=/^[A-Za-z0-9._:\-]{1,64}$/;
   var longOff={},alertMin=10,dlg=null;
   var QR_RE=/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+\/]+={0,2}$/;
   var LOGIN_DONE={authorized:1,failed:1,expired:1,cancelled:1};
@@ -236,7 +237,7 @@
   }
   function renderTasks(list){
     document.getElementById('fc-tasks').innerHTML=list.length?list.map(function(x){var n=nodes[x.node_id];
-      var res=x.detail||'';if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
+      var res=esc(x.detail||'');if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
       return '<tr><td>'+esc(fmtTs(x.created_at))+'</td><td>'+esc(n?(n.label||n.host_name||x.node_id):x.node_id)+'</td><td>'+esc(kindName(x.kind))+'</td>'+
         '<td>'+badge(TLABEL[x.status]||x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
     }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3)">暂无任务</td></tr>';
@@ -316,18 +317,22 @@
         var ph=String(((x.target||{}).phone)||'');if(ph&&!seenP[ph]){seenP[ph]=1;phones.push({phone:ph,account:String((x.target||{}).account||''),at:x.created_at});}}
       var accOpt='<option value="">不限账号（这台电脑上全部账号）</option>'+accs.map(function(a){
         return '<option value="'+esc(a.account_id)+'">'+esc(a.account_id)+(a.platform?' · '+esc(a.platform):'')+(a.stage?' · '+esc(a.stage):'')+'</option>';}).join('');
-      var phOpt=phones.map(function(p){return '<option value="'+esc(p.phone)+'">'+esc(p.phone)+(p.account?' · '+esc(p.account):'')+' · '+esc(fmtTs(p.at))+'</option>';}).join('')+
+      var phOpt='<option value="">不限号码（只按账号 / 设备停）</option>'+phones.map(function(p){return '<option value="'+esc(p.phone)+'">'+esc(p.phone)+(p.account?' · '+esc(p.account):'')+' · '+esc(fmtTs(p.at))+'</option>';}).join('')+
         '<option value="__other">其他号码…</option>';
       dlgOpen({title:'停止触达 · '+(n.label||n.host_name||nid),ok:'停止触达',danger:true,
         html:'<label class="fc-f">账号'+(accs.length?'':'（还没有账号体检结果，可先点「账号体检」）')+'<select id="fc-dlg-acc">'+accOpt+'</select></label>'+
           '<label class="fc-f">对方号码<select id="fc-dlg-phone">'+phOpt+'</select></label>'+
-          '<label class="fc-f" id="fc-dlg-other-row"'+(phones.length?' style="display:none"':'')+'>其他号码（国家区号开头，只填数字）<input id="fc-dlg-other" inputmode="numeric" maxlength="20" placeholder="例：639171234567"></label>'+
-          '<p class="fc-dlg-warn">之后不再对这个号码发消息，这台电脑上对它还在排队的任务会被取消。</p>',
+          '<label class="fc-f" id="fc-dlg-other-row" style="display:none">其他号码（国家区号开头，只填数字）<input id="fc-dlg-other" inputmode="numeric" maxlength="20" placeholder="例：639171234567"></label>'+
+          '<label class="fc-f">设备 ID（可选，获客手机群控：暂停这台设备的触达）<input id="fc-dlg-dev" maxlength="64" placeholder="例：R58M12ABCDE"></label>'+
+          '<p class="fc-dlg-warn">号码、账号、设备至少选一项。选了号码：之后不再对它发消息，排队任务会被取消；只选账号 / 设备：暂停该账号 / 设备的主动触达。</p>',
         onopen:function(){var sel=document.getElementById('fc-dlg-phone');sel.addEventListener('change',function(){
           document.getElementById('fc-dlg-other-row').style.display=sel.value==='__other'?'':'none';});},
-        submit:function(){var p=val('fc-dlg-phone');if(p==='__other'||!p)p=val('fc-dlg-other').replace(/[\s+\-()]/g,'');
-          if(!PHONE_RE.test(p))return {error:'号码格式不对：国家区号开头，6–15 位数字'};
-          var tg={phone:p},a=val('fc-dlg-acc');if(a)tg.account=a;return tg;}})
+        submit:function(){var p=val('fc-dlg-phone');if(p==='__other')p=val('fc-dlg-other').replace(/[\s+\-()]/g,'');
+          var a=val('fc-dlg-acc'),d=val('fc-dlg-dev').trim(),tg={};
+          if(p&&!PHONE_RE.test(p))return {error:'号码格式不对：国家区号开头，6–15 位数字'};
+          if(d&&!DEV_RE.test(d))return {error:'设备 ID 只能是字母、数字和 . _ : -（最长 64）'};
+          if(!p&&!a&&!d)return {error:'号码、账号、设备至少选一项'};
+          if(p)tg.phone=p;if(a)tg.account=a;if(d)tg.device_id=d;return tg;}})
       .then(function(v){if(!v)return;sendTask(nid,{kind:'stop_account',target:v});});
     }).catch(fail('读取号码列表失败'));
   }

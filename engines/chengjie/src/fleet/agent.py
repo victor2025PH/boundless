@@ -48,8 +48,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
 from .detect import (
-    LIVE_STREAM_PORTS, detect_instances, is_live_port_url, is_live_stream_host, is_loopback_url, sanitize_instances,
-    url_port,
+    LIVE_STREAM_PORTS, detect_instances, is_blocked_live_port, is_live_port_url, is_live_stream_host, is_loopback_url,
+    sanitize_instances, url_port,
 )
 from .identity import (
     StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
@@ -76,6 +76,7 @@ REENROLL_BACKOFF_SEC = 30
 ENV_CONTROLLER = "CHATX_FLEET_CONTROLLER"
 HUOKE_DOMAIN = "huoke"            # 本机获客（手机群控）实例：stop_account 同步落到它的 STOP 表 / 设备暂停
 HUOKE_STOP_PATH = "/outreach/stop-account"
+HUOKE_HEALTH_PATH = "/health"
 
 HttpFn = Callable[[str, str, Optional[Dict[str, Any]], Dict[str, str], float], Tuple[int, Dict[str, Any]]]
 
@@ -137,10 +138,11 @@ def _migrated_instances(source: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         name = name.strip()[:40]
         url = url.strip().rstrip("/")
-        if not name or name in seen or not is_loopback_url(url) or is_live_port_url(url):
+        domain = raw.get("domain")
+        if (not name or name in seen or not is_loopback_url(url)
+                or is_blocked_live_port(url, domain if isinstance(domain, str) else "")):
             continue
         tok = raw.get("auth_token")
-        domain = raw.get("domain")
         role = raw.get("role")
         seen.add(name)
         out.append({
@@ -343,7 +345,7 @@ class AgentConfig:
                      allow_live_port: bool = False) -> None:
         if not is_loopback_url(base_url):
             raise AgentError("instance URL must be loopback (127.0.0.1 / localhost / ::1)")
-        if is_live_port_url(base_url) and not allow_live_port:
+        if is_blocked_live_port(base_url, domain, self.state_dir) and not allow_live_port:
             raise AgentError(f"port {url_port(base_url)} is a live-stream port "
                              f"({', '.join(str(p) for p in sorted(LIVE_STREAM_PORTS))}); "
                              "pass --allow-live-port to register it anyway")
@@ -657,6 +659,15 @@ class NodeAgent:
                 instances.append(entry)
                 continue
             entry = {"name": inst.get("name"), "domain": domain, "up": False}
+            if domain == HUOKE_DOMAIN:
+                # huoke 没有智聊的 /api/accounts/fleet-health（一直 404）；探活走它自己的 /health
+                try:
+                    self._local(inst, "GET", HUOKE_HEALTH_PATH)
+                    entry["up"] = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{inst.get('name')}: huoke health {e}")
+                instances.append(entry)
+                continue
             try:
                 fh = self._local(inst, "GET", "/api/accounts/fleet-health")
                 entry["up"] = True
@@ -715,7 +726,8 @@ class NodeAgent:
         base = str(inst.get("base_url") or "").rstrip("/")
         if not base:
             raise AgentError("instance base_url 为空")
-        if is_live_port_url(base) and not inst.get("allow_live_port"):
+        if (is_live_port_url(base) and not inst.get("allow_live_port")
+                and is_blocked_live_port(base, _instance_domain(inst), self.cfg.state_dir)):
             # e.g. an 'avatarhub' at :9000 added by an older detect on a live machine.
             raise AgentError(f"live-stream port {url_port(base)} not probed (remove-instance {inst.get('name')})")
         headers = {}
@@ -731,7 +743,7 @@ class NodeAgent:
         return data
 
     def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "",
-                       allow_health: bool = False) -> Optional[Dict[str, Any]]:
+                       allow_health: bool = False, allow_huoke: bool = False) -> Optional[Dict[str, Any]]:
         want = str((task.get("target") or {}).get("instance") or (task.get("payload") or {}).get("instance") or "")
         insts = self.cfg.instances if allow_health else [i for i in self.cfg.instances if not _health_only(i)]
         if not want and prefer_domain != HUOKE_DOMAIN:
@@ -739,6 +751,9 @@ class NodeAgent:
         if want:
             for i in insts:
                 if i.get("name") == want:
+                    if _instance_domain(i) == HUOKE_DOMAIN and prefer_domain != HUOKE_DOMAIN and not allow_huoke:
+                        # 智聊接口 + X-API-Key 绝不打到 huoke：指名 huoke 实例的智聊任务一律拒绝
+                        return None
                     return i
             return None
         if prefer_domain:
@@ -811,7 +826,8 @@ class NodeAgent:
             if kind == TASK_STOP_ACCOUNT:
                 return self._stop_account(task, target, payload)
             if kind == TASK_RESTART_INSTANCE:
-                inst = self._pick_instance(task, allow_health=True)
+                # restart_cmd 是本机命令、不走 HTTP / API key，指名 huoke 实例时照旧可重启
+                inst = self._pick_instance(task, allow_health=True, allow_huoke=True)
                 if inst is not None and _health_only(inst):
                     return STATUS_REJECTED, {}, "health_only"
                 cmd = str((inst or {}).get("restart_cmd") or "")
@@ -874,9 +890,15 @@ class NodeAgent:
                         "reason": reason[:80], "source": "fleet"}
                 try:
                     r = self._local(inst, "POST", HUOKE_STOP_PATH, body)
-                    hres.append({"instance": inst.get("name"), "ok": bool(r.get("ok")),
-                                 "stopped": len(r.get("stopped") or []),
-                                 "paused_devices": len(r.get("paused_devices") or [])})
+                    item = {"instance": inst.get("name"), "ok": bool(r.get("ok")),
+                            "stopped": len(r.get("stopped") or []),
+                            "paused_devices": len(r.get("paused_devices") or [])}
+                    if not r.get("ok"):
+                        # 200 但 ok:false：保留 huoke 给的原因，任务记 failed（不是 rejected）
+                        why = str(r.get("detail") or r.get("error") or r.get("reason") or r.get("message") or "ok=false")
+                        item["detail"] = why[:200]
+                        errors.append(f"{inst.get('name')}: {why[:120]}")
+                    hres.append(item)
                     ok_any = ok_any or bool(r.get("ok"))
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{inst.get('name')}: {str(e)[:120]}")
