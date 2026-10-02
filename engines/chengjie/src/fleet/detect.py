@@ -69,6 +69,22 @@ def is_live_port_url(url: str) -> bool:
     return url_port(url) in LIVE_STREAM_PORTS
 
 
+# 8000 / 8080 are generic web ports, not only live ones: a worker registered
+# explicitly as domain=huoke may sit there, as long as this machine is not tagged
+# as a live-stream machine (env flag / live-stream.flag). 9000 and the other live
+# ports stay blocked for every instance.
+HUOKE_SHARED_PORTS = frozenset({8000, 8080})
+
+
+def is_blocked_live_port(url: str, domain: str = "", state_dir: Optional[Path] = None) -> bool:
+    """True when ``url`` must not be probed / registered as a live-stream port."""
+    if not is_live_port_url(url):
+        return False
+    if str(domain or "") == "huoke" and url_port(url) in HUOKE_SHARED_PORTS:
+        return is_live_stream_host(state_dir)
+    return True
+
+
 def is_live_stream_host(state_dir: Optional[Path] = None) -> bool:
     """A machine tagged as a live-stream machine: env flag or live-stream.flag
     next to (or inside) the fleet state dir."""

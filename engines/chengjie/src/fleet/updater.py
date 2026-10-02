@@ -92,8 +92,12 @@ def health_timeout_of(payload: Dict[str, Any]) -> int:
 
 
 def _ps_lit(value: Any) -> str:
-    """PowerShell single-quoted literal body."""
-    return str(value).replace("'", "''")
+    """PowerShell single-quoted literal body. PowerShell also treats the curly
+    quotes U+2018..U+201B as single quotes, so each of them is doubled too."""
+    out = str(value)
+    for q in ("'", "\u2018", "\u2019", "\u201a", "\u201b"):
+        out = out.replace(q, q + q)
+    return out
 
 
 def _sh_lit(value: Any) -> str:
@@ -118,6 +122,7 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
             f"$new = '{_ps_lit(new)}'",
             f"$bak = '{_ps_lit(bak)}'",
             f"$task = '{_ps_lit(task_name)}'",
+            f"$swapTask = '{_ps_lit(swap_task_name)}'",
         ]
         if watch:
             lines += [
@@ -136,8 +141,9 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
         lines += [
             f"try {{ Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue }} catch {{}}",
             "Start-Sleep -Seconds 1",
-            f"Copy-Item -LiteralPath '{current}' -Destination '{bak}' -Force",
-            f"Move-Item -LiteralPath '{new}' -Destination '{current}' -Force",
+            # 路径只经 $cur/$new/$bak（单引号字面量已转义 '→''），不再直接拼进命令行
+            "Copy-Item -LiteralPath $cur -Destination $bak -Force",
+            "Move-Item -LiteralPath $new -Destination $cur -Force",
             "$swapped = $?",
         ]
         if watch:
@@ -145,7 +151,7 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
                 "$t0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
             ]
         lines += [
-            f"schtasks /Run /TN \"{task_name}\" | Out-Null",
+            "schtasks /Run /TN \"$task\" | Out-Null",
         ]
         if watch:
             lines += [
@@ -188,14 +194,14 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
                 "$snap = $null",
             ]
         lines += [
-            f"schtasks /Delete /TN \"{swap_task_name}\" /F 2>$null | Out-Null",
+            "schtasks /Delete /TN \"$swapTask\" /F 2>$null | Out-Null",
         ]
         return "\n".join(lines) + "\n", ".ps1"
     lines = [
         "#!/bin/sh",
         f"i=0; while kill -0 {int(pid)} 2>/dev/null && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done",
-        f"cp -f '{current}' '{bak}'",
-        f"mv -f '{new}' '{current}' && chmod +x '{current}'",
+        f"cp -f '{_sh_lit(current)}' '{_sh_lit(bak)}'",
+        f"mv -f '{_sh_lit(new)}' '{_sh_lit(current)}' && chmod +x '{_sh_lit(current)}'",
     ]
     if watch:
         stamp = Path(state_dir) / "last_heartbeat.json"
@@ -213,7 +219,8 @@ def build_swap_script(current: Path, new: Path, pid: int, *, task_name: str = TA
             "if [ $ok -eq 1 ]; then echo \"$(date -Is) upgrade ok\" >> " + f"'{_sh_lit(log)}'; else",
             f"  echo \"$(date -Is) upgrade rollback: no heartbeat\" >> '{_sh_lit(log)}'",
             f"  systemctl stop {SYSTEMD_UNIT} 2>/dev/null || true",
-            f"  cp -f '{current}' '{failed}'; cp -f '{bak}' '{current}' && chmod +x '{current}'",
+            f"  cp -f '{_sh_lit(current)}' '{_sh_lit(failed)}'; cp -f '{_sh_lit(bak)}' '{_sh_lit(current)}'"
+            f" && chmod +x '{_sh_lit(current)}'",
             f"  if [ ! -f '{_sh_lit(aj)}' ] && [ -n \"$snap\" ]; then (umask 077; printf '%s\\n' \"$snap\" > '{_sh_lit(aj)}'); fi",
             f"  systemctl restart {SYSTEMD_UNIT} 2>/dev/null || true",
             "fi",

@@ -79,11 +79,12 @@ def test_default_notify_uses_existing_ops_alert_channel(monkeypatch):
     assert calls[0][2]["source"] == "fleet-controller"
 
 
-def test_start_watch_runs_in_background():
+def test_start_watch_runs_in_background(tmp_path):
     hit = []
     al = oa.OfflineAlerter(10, notify=lambda text, nid, deb: hit.append(nid))
     gone = time.time() - 3600       # 固定最后心跳（P3 起心跳变新会被视作恢复）
-    th = oa.start_watch(lambda: [_n("z", "offline", gone)], al, interval_sec=0.01)
+    th = oa.start_watch(lambda: [_n("z", "offline", gone)], al, interval_sec=0.01,
+                        lock_path=str(tmp_path / "watch.lock"))
     deadline = time.time() + 5
     while not hit and time.time() < deadline:
         time.sleep(0.02)

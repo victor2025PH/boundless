@@ -551,3 +551,137 @@ def test_agent_cli_help_renders(capsys):
         agent_mod.main(["--help"])
     assert ei.value.code == 0
     assert "ProgramData" in capsys.readouterr().out
+
+
+# ── stop_account → huoke（2026-10-02）：本机 domain=huoke 实例同步落 STOP 表 / 设备暂停 ─────────────
+def _huoke_rig(rig, *, with_player=True):
+    if not with_player:
+        rig.cfg.remove_instance("player")
+    rig.cfg.add_instance("huoke", "http://127.0.0.1:18080", auth_token="hk-key", domain="huoke")
+    rig.net.local[("POST", "/api/player-care/commands")] = lambda body: {"ok": True, "command": {"kind": body["kind"]}}
+    rig.net.local[("POST", "/outreach/stop-account")] = lambda body: {
+        "ok": True, "stopped": ["+63917****001"] if body.get("phone") else [],
+        "paused_devices": ["DEV1***"] if body.get("device_id") else [], "accounts": []}
+    return rig
+
+
+def _calls(rig, suffix):
+    return [c for c in rig.net.calls if c[1].endswith(suffix)]
+
+
+def test_stop_account_fans_out_to_chatx_and_huoke(rig):
+    _huoke_rig(rig)
+    st_, res, det = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t1",
+                                       "target": {"phone": "639170000001", "account": "wa-1", "device_id": "DEV1"},
+                                       "payload": {"reason": "opt-out"}})
+    assert st_ == STATUS_DONE and det == "stop_enqueued"
+    assert res["command"]["kind"] == "stop" and res["huoke"] == [{"instance": "huoke", "ok": True, "stopped": 1,
+                                                                   "paused_devices": 1}]
+    hk = _calls(rig, "/outreach/stop-account")[0]
+    assert hk[1] == "http://127.0.0.1:18080/outreach/stop-account"
+    assert hk[2] == {"phone": "639170000001", "account": "wa-1", "device_id": "DEV1", "reason": "opt-out",
+                     "source": "fleet"}
+    assert hk[3] == {"X-API-Key": "hk-key"}                       # huoke: X-API-Key, never Bearer
+    assert _calls(rig, "/api/player-care/commands")[0][3] == {"Authorization": "Bearer local-tok"}
+    assert "639170000001" not in json.dumps(res)                  # result keeps counts only
+
+
+def test_stop_account_named_huoke_instance_only_hits_huoke(rig):
+    _huoke_rig(rig)
+    st_, res, _ = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t2",
+                                     "target": {"instance": "huoke", "device_id": "DEV1"}})
+    assert st_ == STATUS_DONE and res["huoke"][0]["paused_devices"] == 1
+    assert _calls(rig, "/api/player-care/commands") == []
+
+
+def test_stop_account_huoke_only_node_accepts_account_without_phone(rig):
+    _huoke_rig(rig, with_player=False)
+    st_, res, _ = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t3", "target": {"account": "E6FYKRHY"}})
+    assert st_ == STATUS_DONE and "command" not in res
+    assert _calls(rig, "/outreach/stop-account")[0][2]["account"] == "E6FYKRHY"
+
+
+def test_stop_account_huoke_failure_does_not_mask_chatx_success(rig):
+    _huoke_rig(rig)
+    rig.net.local[("POST", "/outreach/stop-account")] = (503, {"detail": "OPENCLAW_API_KEY not configured"})
+    st_, res, _ = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t4", "target": {"phone": "639170000001"}})
+    assert st_ == STATUS_DONE and res["huoke"] == [{"instance": "huoke", "ok": False}] and res["errors"]
+
+
+def test_stop_account_all_sides_fail_is_failed(rig):
+    _huoke_rig(rig, with_player=False)
+    rig.net.local[("POST", "/outreach/stop-account")] = (401, {"detail": "bad key"})
+    st_, res, det = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t5", "target": {"phone": "639170000001"}})
+    assert st_ == STATUS_FAILED and det == "stop_failed"
+
+
+def test_stop_account_without_huoke_keeps_v1_behaviour(rig):
+    st_, _, det = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "t6", "target": {"account": "wa-1"}})
+    assert st_ == STATUS_REJECTED and det == "no_instance_or_phone"
+
+
+def test_chatx_tasks_never_land_on_huoke_instance(rig):
+    _huoke_rig(rig, with_player=False)
+    st_, _, det = rig.agent.execute({"kind": TASK_PULL_OVERVIEW, "task_id": "t7"})
+    assert st_ == STATUS_REJECTED and det == "no_instance"
+    assert rig.net.calls == []
+
+
+# ── PR #38 review fixes（2026-10-02）───────────────────────────────────────────
+def test_heartbeat_probes_huoke_with_its_own_health(rig):
+    _huoke_rig(rig, with_player=False)
+    rig.net.local[("GET", "/health")] = {"status": "ok"}
+    hb = rig.agent.build_heartbeat()
+    hk = [i for i in hb["instances"] if i["name"] == "huoke"][0]
+    assert hk["up"] is True and hk["domain"] == "huoke" and hb["errors"] == []
+    assert [c[1] for c in rig.net.calls] == ["http://127.0.0.1:18080/health"]   # never /api/accounts/fleet-health
+    assert rig.net.calls[0][3] == {"X-API-Key": "hk-key"}
+    rig.net.local[("GET", "/health")] = (503, {"detail": "down"})
+    hb = rig.agent.build_heartbeat()
+    assert [i["up"] for i in hb["instances"] if i["name"] == "huoke"] == [False]
+    assert any("huoke health" in e for e in hb["errors"])
+
+
+def test_stop_account_huoke_ok_false_is_failed_with_reason(rig):
+    _huoke_rig(rig, with_player=False)
+    rig.net.local[("POST", "/outreach/stop-account")] = {"ok": False, "detail": "device not found"}
+    st_, res, det = rig.agent.execute({"kind": TASK_STOP_ACCOUNT, "task_id": "r2", "target": {"device_id": "DEVX"}})
+    assert st_ == STATUS_FAILED and det == "stop_failed"
+    assert res["huoke"][0]["ok"] is False and res["huoke"][0]["detail"] == "device not found"
+    assert any("device not found" in e for e in res["errors"])
+
+
+def test_chatx_task_naming_a_huoke_instance_is_rejected(rig):
+    _huoke_rig(rig)
+    for kind in (TASK_PULL_OVERVIEW, TASK_ACCOUNT_HEALTH):
+        st_, _, det = rig.agent.execute({"kind": kind, "task_id": "r3", "target": {"instance": "huoke"}})
+        assert st_ == STATUS_REJECTED and det == "no_instance"
+    assert rig.net.calls == []                                      # no X-API-Key sent to a 智聊 endpoint
+
+
+def test_huoke_on_generic_port_8000_is_not_treated_as_live(rig, tmp_path, monkeypatch):
+    from src.fleet.detect import is_blocked_live_port
+    monkeypatch.delenv("CHATX_FLEET_LIVE_STREAM", raising=False)
+    assert not is_blocked_live_port("http://127.0.0.1:8000", "huoke", tmp_path / "state")
+    assert is_blocked_live_port("http://127.0.0.1:8000", "player_care", tmp_path / "state")
+    assert is_blocked_live_port("http://127.0.0.1:9000", "huoke", tmp_path / "state")      # 9000 always live
+    rig.cfg.add_instance("huoke8000", "http://127.0.0.1:8000", auth_token="k", domain="huoke")
+    rig.net.local[("GET", "/health")] = {"ok": True}
+    hb = rig.agent.build_heartbeat()
+    assert [i["up"] for i in hb["instances"] if i["name"] == "huoke8000"] == [True]
+    with pytest.raises(agent_mod.AgentError):
+        rig.cfg.add_instance("chatx8000", "http://127.0.0.1:8000", domain="player_care")
+    with pytest.raises(agent_mod.AgentError):
+        rig.cfg.add_instance("huoke9000", "http://127.0.0.1:9000", domain="huoke")
+    monkeypatch.setenv("CHATX_FLEET_LIVE_STREAM", "1")                                   # 直播机：8000 也拦
+    assert is_blocked_live_port("http://127.0.0.1:8000", "huoke", tmp_path / "state")
+    with pytest.raises(agent_mod.AgentError):
+        rig.cfg.add_instance("huoke8000b", "http://127.0.0.1:8000", domain="huoke")
+
+
+def test_console_task_detail_escaped_and_stop_without_phone():
+    html = (Path(__file__).resolve().parents[1] / "domains/fleet_control/web/templates/fleet_console.html").read_text(
+        encoding="utf-8")
+    assert "var res=esc(x.detail||'')" in html and "var res=x.detail||''" not in html
+    assert "不限号码（只按账号 / 设备停）" in html and "号码、账号、设备至少选一项" in html
+    assert "if(d)tg.device_id=d" in html and "if(p&&!PHONE_RE.test(p))" in html

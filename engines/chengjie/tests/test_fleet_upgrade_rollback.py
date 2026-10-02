@@ -47,10 +47,12 @@ def test_windows_script_shape():
     assert suf == ".ps1"
     # snapshot and legacy list are taken before the old process is even gone
     assert body.index("ReadAllBytes($aj)") < body.index("Wait-Process -Id 42") < body.index("Move-Item")
-    assert body.index("$t0 =") < body.index('schtasks /Run /TN "ChatX Fleet Agent"')
+    assert "$task = 'ChatX Fleet Agent'" in body
+    assert body.index("$t0 =") < body.index('schtasks /Run /TN "$task"')
     assert "chatx-agent.exe.failed-0.3.3" in body and "$timeout = 300" in body
     assert "Copy-Item -LiteralPath $bak -Destination $cur" in body
-    assert body.rstrip().endswith('schtasks /Delete /TN "ChatX Fleet Agent Upgrade" /F 2>$null | Out-Null')
+    assert "$swapTask = 'ChatX Fleet Agent Upgrade'" in body
+    assert body.rstrip().endswith('schtasks /Delete /TN "$swapTask" /F 2>$null | Out-Null')
     assert "WriteAllBytes($aj, $snap)" in body and "Out-File" not in body
 
 
