@@ -251,6 +251,8 @@ class GroupMembersStore:
             "ON tg_group_members(hash_account_id, outreach_state)",
             "CREATE INDEX IF NOT EXISTS idx_gm_out_acct "
             "ON tg_group_members(outreach_account_id, outreach_state)",
+            "CREATE INDEX IF NOT EXISTS idx_gm_user_gtouch "
+            "ON tg_group_members(user_id, gtouch_state)",
         ):
             try:
                 self._conn.execute(_idx_sql)
@@ -683,14 +685,23 @@ class GroupMembersStore:
             self._conn.commit()
         return n
 
-    def next_approved(self, account_id: str) -> Optional[Dict[str, Any]]:
-        """调度器下一个要发的人：批准最早的那个。"""
+    def next_approved(self, account_id: str,
+                      gtouch_after_ts: float = 0.0) -> Optional[Dict[str, Any]]:
+        """调度器下一个要发的人：批准最早的那个。
+
+        ``gtouch_after_ts`` > 0：这个号在此刻之后才在群里接过话的人（任何群）先跳过——
+        刚公开回过就私聊像盯人；跳过的人不堵后面的队。"""
+        sql = ("SELECT * FROM tg_group_members m WHERE hash_account_id=? AND outreach_state=? "
+               "AND opener_text!='' ")
+        args: List[Any] = [str(account_id), OUTREACH_APPROVED]
+        if gtouch_after_ts > 0:
+            sql += ("AND NOT EXISTS (SELECT 1 FROM tg_group_members g WHERE g.user_id=m.user_id "
+                    "AND g.gtouch_account_id=? AND g.gtouch_state IN ('sent','sending') "
+                    "AND g.gtouch_at>?) ")
+            args += [str(account_id), float(gtouch_after_ts)]
+        sql += "ORDER BY approved_at ASC, user_id ASC LIMIT 1"
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM tg_group_members WHERE hash_account_id=? AND outreach_state=? "
-                "AND opener_text!='' ORDER BY approved_at ASC, user_id ASC LIMIT 1",
-                (str(account_id), OUTREACH_APPROVED),
-            ).fetchone()
+            row = self._conn.execute(sql, args).fetchone()
         return self._member_to_dict(row) if row else None
 
     def today_opener_texts(self, account_id: str, since_ts: float) -> List[str]:
@@ -822,11 +833,14 @@ class GroupMembersStore:
                 "rate": (replied / total) if total else None}
 
     def contacted_replies(self, since_ts: float, account_id: str = "") -> List[Dict[str, Any]]:
-        """自 since_ts 起我方开口、对方回了的人（成交归因的底表；不含 access_hash）。"""
+        """自 since_ts 起我方开口（私聊开口，或群里接话后 TA 私聊来找）、对方回了的人
+        （成交归因的底表；不含 access_hash）。"""
         sql = ("SELECT group_id, group_title, user_id, username, first_name, outreach_account_id, "
-               "opener_variant, opener_source, outreach_at, replied_at FROM tg_group_members "
-               "WHERE outreach_state IN (?,?) AND outreach_at>=? AND outreach_at>0 AND replied_at>0")
-        args: List[Any] = [OUTREACH_REPLIED, OUTREACH_CLOSED, float(since_ts)]
+               "opener_variant, opener_source, outreach_at, replied_at, gtouch_at, outreach_error "
+               "FROM tg_group_members WHERE outreach_state IN (?,?) AND replied_at>0 "
+               "AND ((outreach_at>=? AND outreach_at>0) "
+               "OR (outreach_error='gtouch_inbound' AND gtouch_at>=?))")
+        args: List[Any] = [OUTREACH_REPLIED, OUTREACH_CLOSED, float(since_ts), float(since_ts)]
         if account_id:
             sql += " AND outreach_account_id=?"
             args.append(str(account_id))
@@ -1091,14 +1105,17 @@ class GroupMembersStore:
         """这个号所在群里、近期说过话（有消息 id）、还没被群里接过话的人。
 
         私聊已经发出去 / 对方回了 / 说过别再发的不再列；私聊因隐私设置发不到的（blocked+privacy）
-        反而要列——群里接话是唯一够得着 TA 的路。"""
+        反而要列——群里接话是唯一够得着 TA 的路。同一个人在别的群已被（任何号）接过话的不再列：
+        一个人只在群里被公开接一次。"""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM tg_group_members WHERE (source_account_id=? OR hash_account_id=?) "
+                "SELECT * FROM tg_group_members m WHERE (source_account_id=? OR hash_account_id=?) "
                 "AND spoke=1 AND is_admin=0 AND is_bot=0 AND last_msg_id!='' AND last_msg_text!='' "
                 "AND last_msg_ts>=? AND gtouch_state IN ('', 'drafted') "
                 "AND outreach_error!='stop_contact' "
                 "AND (outreach_state IN (?,?,?) OR (outreach_state=? AND outreach_error='privacy')) "
+                "AND NOT EXISTS (SELECT 1 FROM tg_group_members g WHERE g.user_id=m.user_id "
+                "AND (g.gtouch_state IN ('sent','sending') OR g.gtouch_error='stale_sending')) "
                 "ORDER BY last_msg_ts DESC LIMIT ?",
                 (str(account_id), str(account_id), float(since_msg_ts), OUTREACH_NONE,
                  OUTREACH_QUEUED, OUTREACH_APPROVED, OUTREACH_BLOCKED, int(limit)),
@@ -1162,6 +1179,60 @@ class GroupMembersStore:
         with self._lock:
             row = self._conn.execute(sql, args).fetchone()
         return int(row[0] or 0) if row else 0
+
+    def gtouch_by_user(self, account_id: str,
+                       user_ids: Optional[Sequence[str]] = None) -> Dict[str, Dict[str, Any]]:
+        """这个号在群里公开接过话的人 → 最近一次接话（哪个群、TA 那句、我方那句、时间）。
+
+        接话记在「群+人」那一行上；私聊开口可能落在同一个人的另一个群的行上，所以按人查。"""
+        sql = ("SELECT user_id, group_id, group_title, last_msg_text, gtouch_text, gtouch_at, "
+               "gtouch_state FROM tg_group_members WHERE gtouch_account_id=? "
+               "AND gtouch_state IN ('sent','sending')")
+        args: List[Any] = [str(account_id)]
+        ids = [str(u) for u in (user_ids or ()) if str(u or "").strip()]
+        if user_ids is not None:
+            if not ids:
+                return {}
+            sql += " AND user_id IN (%s)" % ",".join(["?"] * len(ids))
+            args += ids
+        sql += " ORDER BY gtouch_at ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, args).fetchall()
+        return {str(r["user_id"]): dict(r) for r in rows}
+
+    def gtouched_elsewhere(self, user_id: str, group_id: str) -> bool:
+        """这个人在别的群已被（任何号）公开接过话（含发没发不可知的）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM tg_group_members WHERE user_id=? AND group_id!=? "
+                "AND (gtouch_state IN ('sent','sending') OR gtouch_error='stale_sending') LIMIT 1",
+                (str(user_id), str(group_id))).fetchone()
+        return row is not None
+
+    def requeue_after_gtouch(self, user_id: str, account_id: str) -> int:
+        """群里刚接过话：这个号给这个人排着的私聊开口退回 queued（批准作废），
+        AI/模板拟的开场清掉重拟（新稿会接上群里那句）；坐席手改过的保留，重新过一遍批准。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET outreach_state=?, approved_at=0, "
+                "opener_text=CASE WHEN opener_source='manual' THEN opener_text ELSE '' END "
+                "WHERE user_id=? AND hash_account_id=? AND outreach_state IN (?,?)",
+                (OUTREACH_QUEUED, str(user_id), str(account_id), OUTREACH_QUEUED,
+                 OUTREACH_APPROVED))
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
+    def reap_stale_gtouch(self, now: Optional[float] = None, *, max_age_sec: float = 600.0) -> int:
+        """接话 sending 超时（进程在发出与落定之间挂了）→ failed/stale_sending。
+        发没发不可知：不再列、不重发，和私聊开口的 reap 同一取舍。"""
+        now = time.time() if now is None else float(now)
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET gtouch_state='failed', gtouch_error='stale_sending' "
+                "WHERE gtouch_state='sending' AND gtouch_at>0 AND gtouch_at<?",
+                (now - float(max_age_sec),))
+            self._conn.commit()
+            return int(cur.rowcount or 0)
 
     def gtouch_denied_groups(self, account_id: str) -> List[str]:
         """这个号在哪些群里发不了言（被禁言 / 无权限）——这些群不再列人。"""
@@ -1280,6 +1351,19 @@ class GroupMembersStore:
                 (OUTREACH_REPLIED, now, snippet, now, uid, acct, OUTREACH_QUEUED, OUTREACH_APPROVED),
             )
             n += int(cur2.rowcount or 0)
+            # 没私聊开过口、但这个号在群里公开接过 TA 的话（含隐私挡住私聊的人）→ 也算这条线来的：
+            # 标 replied / gtouch_inbound，outreach_at=0 不进私聊回复率分母；成交按接话时刻归因
+            if not n:
+                cur3 = self._conn.execute(
+                    "UPDATE tg_group_members SET outreach_state=?, outreach_error='gtouch_inbound', "
+                    "outreach_account_id=?, outreach_at=0, replied_at=?, reply_text=?, last_in_at=? "
+                    "WHERE user_id=? AND gtouch_account_id=? AND gtouch_state='sent' "
+                    "AND (outreach_state=? OR (outreach_state=? AND outreach_error='privacy')) "
+                    "AND NOT EXISTS (SELECT 1 FROM tg_group_members r WHERE r.user_id=? "
+                    "AND r.outreach_account_id=? AND r.outreach_state=?)",
+                    (OUTREACH_REPLIED, acct, now, snippet, now, uid, acct, OUTREACH_NONE,
+                     OUTREACH_BLOCKED, uid, acct, OUTREACH_REPLIED))
+                n += int(cur3.rowcount or 0)
             # 已在 replied 态的后续来话：推进 last_in_at（「接上后又断了」的计时起点），不计入返回值；
             # 打标之后对方又来话 = 新一轮等待，清掉打标记号（坐席摘过标也允许再打）
             if not n:
@@ -1341,6 +1425,11 @@ class GroupMembersStore:
                  str(cur["reason"] or ""), now, str(cur.get("mode") or OUTREACH_MODE_MANUAL),
                  float(cur.get("last_flood_at") or 0.0), float(cur.get("next_auto_at") or 0.0)),
             )
+            # 撞了风控 = Telegram 不认这个号的「老号」身份：申报号龄作废，额度回到新号爬坡
+            if last_flood_at is not None and float(last_flood_at) > 0:
+                self._conn.execute(
+                    "UPDATE tg_outreach_holds SET declared_age_days=0, declared_age_at=0 "
+                    "WHERE account_id=?", (str(account_id),))
             self._conn.commit()
         return self.get_hold(account_id)
 

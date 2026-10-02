@@ -26,6 +26,7 @@ ZH = {
     "err.gm.outreach_settings_na": "这台实例不能改配置 overlay，请到 config.yaml 里改 companion.group_members",
     "err.gm.outreach_auto_gate_age": "这个号还不够老（注册未满 14 天或天龄不明），先用「批准后自动发」",
     "err.gm.outreach_auto_gate_flood": "这个号近 7 天撞过 Telegram 风控，暂不能全自动",
+    "err.gm.outreach_auto_gate_declared_unproven": "申报过号龄的号要先在这里发满 10 条开口（近 7 天）才能全自动，先用「批准后自动发」",
     "err.gm.outreach_auto_gate_reply_rate": "这个号近 7 天开口回复率低于地板，先改文案/人设再放手",
     "err.gm.outreach_followup_off": "跟进功能已关（companion.group_members.outreach_followup_enabled）",
     "err.gm.outreach_followup_cap": "这个号今天的跟进条数用完了",
@@ -36,6 +37,7 @@ ZH = {
     "err.gm.gtouch_group_cap": "这个群今天已经接过够多话了，换个群或明天再来",
     "err.gm.gtouch_state": "这个人现在不能在群里接话（不在这个号的群里、已经接过、或没有可回复的那条消息）",
     "err.gm.gtouch_stale": "TA 那句话太久了，现在回会很突兀",
+    "err.gm.gtouch_wait": "刚在群里回过 TA，过几个小时再私聊，紧跟着私聊像盯人",
     "err.gm.gtouch_text": "群里回复不合适：空的、太长、带了链接/联系方式，或在引人私聊、@ 人",
     "err.gm.gtouch_group_denied": "这个号在这个群里发不了言（被禁言或没有发言权限）",
     # ── ops-overview「🧲 群成员提取」卡 ──
@@ -73,6 +75,7 @@ EN = {
     "err.gm.outreach_settings_na": "This instance cannot write the config overlay; edit companion.group_members in config.yaml",
     "err.gm.outreach_auto_gate_age": "This account is too new (under 14 days, or age unknown); use 'approve then auto-send' for now",
     "err.gm.outreach_auto_gate_flood": "This account hit a Telegram flood limit in the last 7 days; fully automatic is off",
+    "err.gm.outreach_auto_gate_declared_unproven": "Accounts with a declared age must send 10 openers here (last 7 days) before going fully automatic; use 'approve then auto-send' for now",
     "err.gm.outreach_auto_gate_reply_rate": "This account's 7-day opener reply rate is below the floor; fix copy/persona before going hands-off",
     "err.gm.outreach_followup_off": "Follow-ups are disabled (companion.group_members.outreach_followup_enabled)",
     "err.gm.outreach_followup_cap": "This account has used today's follow-up quota",
@@ -83,6 +86,7 @@ EN = {
     "err.gm.gtouch_group_cap": "This group already had enough replies today; try another group or tomorrow",
     "err.gm.gtouch_state": "Cannot reply to this person in the group (not in this account's group, already replied, or no message to reply to)",
     "err.gm.gtouch_stale": "Their message is too old; replying now would look odd",
+    "err.gm.gtouch_wait": "You just replied to them in the group; wait a few hours before a DM",
     "err.gm.gtouch_text": "Group reply rejected: empty, too long, has a link/contact, asks for a DM, or @-mentions someone",
     "err.gm.gtouch_group_denied": "This account cannot post in this group (muted or no permission)",
     # -- ops-overview "Group member extraction" card --

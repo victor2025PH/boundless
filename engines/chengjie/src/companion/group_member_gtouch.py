@@ -72,6 +72,7 @@ def gtouch_preview(store: Any, account_id: str, *, now: float, since_ts: float,
                    limit: int = 30) -> Dict[str, Any]:
     """这个号今天能在群里接谁的话。只列有意向分的；私聊被隐私挡住的排前面。"""
     from src.companion.member_intent import member_intent
+    store.reap_stale_gtouch(now)
     msg_since = float(now) - float(policy.gtouch_max_msg_age_hours) * 3600.0
     denied = set(store.gtouch_denied_groups(account_id))
     rows: List[Dict[str, Any]] = []
@@ -113,6 +114,7 @@ def gtouch_preview(store: Any, account_id: str, *, now: float, since_ts: float,
 def prepare_gtouch(store: Any, *, account_id: str, group_id: str, user_id: str, text: str,
                    now: float, since_ts: float, policy: OutreachPolicy) -> Dict[str, Any]:
     """发到群里前的全部闸门 + 占坑。返回 {ok, http, kind, chat_id, reply_to, text}。"""
+    store.reap_stale_gtouch(now)
     block = hold_block_reason(store, account_id, now)
     if block:
         return {"ok": False, "http": 409, "kind": block}
@@ -135,7 +137,8 @@ def prepare_gtouch(store: Any, *, account_id: str, group_id: str, user_id: str, 
             or acct not in (str(row.get("source_account_id") or ""), str(row.get("hash_account_id") or ""))
             or str(row.get("gtouch_state") or "") not in ("", "drafted")
             or str(row.get("outreach_error") or "") == "stop_contact"
-            or not str(row.get("last_msg_id") or "").strip()):
+            or not str(row.get("last_msg_id") or "").strip()
+            or store.gtouched_elsewhere(user_id, group_id)):
         return {"ok": False, "http": 409, "kind": "gtouch_state"}
     msg_since = float(now) - float(policy.gtouch_max_msg_age_hours) * 3600.0
     if float(row.get("last_msg_ts") or 0.0) < msg_since:
@@ -176,9 +179,10 @@ def finalize_gtouch(store: Any, *, account_id: str, group_id: str, user_id: str,
     kind = str((result or {}).get("kind") or "retryable")
     if (result or {}).get("ok"):
         store.finish_gtouch(group_id, user_id, state="sent", text=text, now=now)
-        logger.info("[gm_gtouch] 群里接话已发 account=%s group=%s user=%s",
-                    account_id, group_id, user_id)
-        return {"ok": True, "kind": "sent"}
+        requeued = int(store.requeue_after_gtouch(user_id, account_id) or 0)
+        logger.info("[gm_gtouch] 群里接话已发 account=%s group=%s user=%s requeued=%d",
+                    account_id, group_id, user_id, requeued)
+        return {"ok": True, "kind": "sent", "requeued": requeued}
     if kind == "flood":
         store.set_hold(account_id, flood_until=float(now) + FLOOD_HOLD_SEC,
                        reason="peer_flood", last_flood_at=float(now))

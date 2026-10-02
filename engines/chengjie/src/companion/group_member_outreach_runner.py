@@ -190,7 +190,8 @@ class OutreachRunner:
         if mode == OUTREACH_MODE_AUTO:
             await self._auto_fill(acct, now, since, policy, age)
 
-        row = st.next_approved(acct)
+        wait = float(policy.gtouch_dm_after_hours) * 3600.0
+        row = st.next_approved(acct, gtouch_after_ts=(now - wait) if wait > 0 else 0.0)
         if not row:
             fu = await self._followup_one(acct, now, since, policy, hour=hour)
             if demoted:

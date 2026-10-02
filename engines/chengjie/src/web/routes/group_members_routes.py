@@ -398,6 +398,7 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         "gtouch_text_too_long": "err.gm.gtouch_text",
         "gtouch_text_pitch": "err.gm.gtouch_text",
         "gtouch_text_dm_ask": "err.gm.gtouch_text",
+        "gtouch_wait": "err.gm.gtouch_wait",
     }
 
     def _outreach_policy():
@@ -1053,7 +1054,9 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
             _count_toward_send_gate(account_id, now)
         _audit(request, "tg_members_gtouch_send", account_id,
                "group=%s user=%s kind=%s" % (group_id, user_id, done.get("kind")))
-        return {"ok": bool(done.get("ok")), "kind": done.get("kind")}
+        return {"ok": bool(done.get("ok")), "kind": done.get("kind"),
+                "requeued": int(done.get("requeued") or 0),
+                "dm_after_hours": int(_outreach_policy().gtouch_dm_after_hours)}
 
     @app.post("/api/tg-members/outreach/stop")
     async def outreach_stop(request: Request, _=Depends(auth_dep)):

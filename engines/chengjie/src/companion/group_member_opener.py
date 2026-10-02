@@ -386,8 +386,14 @@ def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
         about.append("- TA 最近在群里说：「%s」" % said)
     gt = group_touch_text(member)
     if gt:
-        about.append("- 你之前已经在群里公开回过TA这句：「%s」——这条私信顺着那件事接"
-                     "（比如接着聊群里没说完的），别装作第一次见" % gt)
+        gt_said = " ".join(str(member.get("gtouch_said") or "").split())[:200]
+        gt_group = str(member.get("gtouch_group_title") or "").strip()
+        if gt_said and gt_said != said:
+            about.append("- 你之前在群「%s」里公开回过TA说的「%s」，你回的是：「%s」——这条私信顺着那件事接"
+                         "（比如接着聊群里没说完的），别装作第一次见" % (gt_group or "-", gt_said, gt))
+        else:
+            about.append("- 你之前已经在群里公开回过TA这句：「%s」——这条私信顺着那件事接"
+                         "（比如接着聊群里没说完的），别装作第一次见" % gt)
     parts.append("关于对方：\n" + "\n".join(about))
     if goal_hint:
         parts.append("这次建联的方向（只影响切入点和语气，第一条绝不能卖东西）：%s" % goal_hint)
@@ -573,10 +579,12 @@ async def compose_queue(store: Any, ai: Any, *, account_id: str, ctx: Dict[str, 
     ``pairs`` 给了只拟这些 (group_id, user_id)。
     返回 {composed, ai, template, skipped, items:[{group_id,user_id,text,source}]}。
     """
+    from src.companion.group_member_outreach import overlay_gtouch
     from src.companion.group_members_store import OUTREACH_APPROVED, OUTREACH_QUEUED
     want = {(str(g), str(u)) for g, u in (pairs or [])} if pairs else None
-    rows = [m for m in store.list_by_hash_account(account_id)
-            if str(m.get("outreach_state") or "") in (OUTREACH_QUEUED, OUTREACH_APPROVED)]
+    rows = overlay_gtouch(store, [m for m in store.list_by_hash_account(account_id)
+                                  if str(m.get("outreach_state") or "") in
+                                  (OUTREACH_QUEUED, OUTREACH_APPROVED)], account_id)
     avoid = list(store.today_opener_texts(account_id, since_ts))
     # 切入方式 A/B：近 30 天这个号各切入的回复率；取不到就当没样本（全探索）
     try:

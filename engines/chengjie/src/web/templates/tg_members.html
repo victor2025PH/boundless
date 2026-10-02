@@ -252,6 +252,7 @@
         <button type="button" id="gm-gt-refresh"></button>
         <span class="msg" id="gm-gt-stats"></span>
       </div>
+      <div class="msg" id="gm-gt-note"></div>
       <div id="gm-gt-list"></div>
       <div id="gm-gt-sent"></div>
     </section>
@@ -818,7 +819,8 @@
         peer_invalid: t("联系不上", "unreachable"), stop_contact: t("对方拒绝", "asked to stop"),
         operator_skip: t("人工跳过", "skipped by you"), stale_sending: t("发送超时", "send timed out"),
         opener_rejected: t("文案被拦", "opener rejected"), flood: t("风控", "flood"),
-        inbound_first: t("对方先来找", "they messaged first")
+        inbound_first: t("对方先来找", "they messaged first"),
+        gtouch_inbound: t("群里接话后来找", "came after a group reply")
       };
       var reasons = Object.keys(errs).filter(function (k) { return k && errs[k]; }).map(function (k) {
         return (reasonMap[k] || k) + " " + errs[k];
@@ -847,8 +849,8 @@
       $("gm-out-age-note").textContent =
         t("登进本系统 ", "In this system ") + (ag.registry_days != null ? Math.floor(ag.registry_days) : "?") + t(" 天", " d") +
         (ag.declared_days != null ? t(" · 申报 ", " · declared ") + Math.floor(ag.declared_days) + t(" 天", " d") : "") +
-        t(" · 按大的算，决定每天能开口几个和能否全自动；新号别乱填，冷私聊最容易封新号",
-          " · the larger one sets the daily ramp and full-auto eligibility; do not overstate a new account, cold DMs get new accounts banned fastest");
+        t(" · 按大的算每天能开口几个。填大了就少了新号爬坡保护，封号风险由这个号承担；申报的号要在这里发满 10 条才能全自动，撞一次风控申报自动作废",
+          " · the larger one sets the daily ramp. Overstating skips the new-account ramp and the ban risk is this account's; declared accounts need 10 sends here before full auto, and a flood limit voids the declaration");
       var manual = (d.mode || "manual") === "manual";
       $("gm-out-approve-all").textContent = manual
         ? t("一键批准今日队列", "Approve whole queue")
@@ -1045,16 +1047,19 @@
     function replyCard(m, stalledHours, cls) {
       var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
       var href = "/workspace?conv=" + encodeURIComponent(m.conversation_id || "");
-      var first = m.outreach_error === "inbound_first";
+      var viaGt = m.outreach_error === "gtouch_inbound";
+      var first = m.outreach_error === "inbound_first" || viaGt;
       return '<div class="ocard ' + cls + '"><div class="ohd"><div>' +
         (m.conversation_id
           ? '<a href="' + esc(href) + '" target="_blank" rel="noopener"><b>' + esc(name || m.user_id) + "</b> ↗</a> "
           : "<b>" + esc(name || m.user_id) + "</b> ") +
         (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
         esc(m.group_title || "") + '</div><div><span class="pill ok">' +
-        (first ? t("对方先来找", "they messaged first") : t("回了", "replied")) + "</span> " +
+        (viaGt ? t("群里接话后来找", "came after your group reply")
+               : first ? t("对方先来找", "they messaged first") : t("回了", "replied")) + "</span> " +
         (m.replied_at ? '<span class="pill">' + esc(ago(m.replied_at)) + "</span> " : "") +
         answeredPill(m, stalledHours) + "</div></div>" +
+        (viaGt && m.gtouch_text ? '<div class="osaid">' + t("你在群里回的：", "Your group reply: ") + "<q>" + esc(m.gtouch_text) + "</q></div>" : "") +
         (first ? "" : '<div class="osaid">' + t("你发的：", "You sent: ") + "<q>" + esc(m.opener_text || "") + "</q></div>") +
         '<div class="osaid">' + t("TA 回：", "They replied: ") + "<q>" + esc(m.reply_text || "…") + "</q></div></div>";
     }
@@ -1356,7 +1361,6 @@
 
     function gtNote(kind) {
       var map = {
-        sent: t("已发到群里。过几个小时这个人会排到私聊开口的最前面。", "Posted in the group. In a few hours this person moves to the front of the DM queue."),
         flood: t("撞到 Telegram 风控，这个号今天停止开口和接话", "Hit a Telegram flood limit; this account stops for today"),
         slowmode: t("群开着慢速模式，稍后再发", "The group is in slow mode; try again later"),
         group_denied: t("这个号在这个群发不了言，这个群不再列人", "This account cannot post in this group; it will not be listed again"),
@@ -1424,7 +1428,7 @@
       var m = _gtCache[key];
       var acct = $("gm-out-acct").value;
       if (!m || !acct) return;
-      var stats = $("gm-gt-stats");
+      var stats = $("gm-gt-note");
       var body = { account_id: acct, group_id: m.group_id, user_id: m.user_id };
       var ta = document.querySelector('[data-gt-text="' + CSS.escape(key) + '"]');
       if (act === "compose") {
@@ -1446,8 +1450,22 @@
       body.confirm = true;
       var s = await postJSON("/api/tg-members/gtouch/send", body);
       var kind = (s.data && s.data.kind) || "";
-      stats.textContent = s.ok ? (gtNote(kind) || kind) : ((s.data && s.data.detail) || String(s.status));
-      loadGtouch();
+      var note = gtNote(kind) || kind;
+      if (s.ok && kind === "sent") {
+        var hrs = (s.data && s.data.dm_after_hours) || 0;
+        note = m.dm_blocked
+          ? t("已发到群里。TA 设了隐私收不到私聊，等 TA 在群里回你或主动来私聊；来私聊会算进这条线的回音。",
+              "Posted in the group. Their privacy settings block DMs, so wait for them to reply in the group or DM you; a DM from them counts as a reply here.")
+          : t("已发到群里。", "Posted in the group. ") +
+            (hrs ? t(hrs + " 小时后这个人排到私聊开口最前面", "In " + hrs + " h this person moves to the front of the DM queue") : t("这个人排到私聊开口最前面", "This person moves to the front of the DM queue")) +
+            ((s.data && s.data.requeued)
+              ? ($("gm-out-mode").value === "auto"
+                  ? t("；TA 排着的私聊开场已退回，后台会重拟成接上群里这句的版本。", "; their queued DM opener was sent back and will be redrafted to pick up this reply.")
+                  : t("；TA 排着的私聊开场已退回重拟，会接上群里这句，拟好后要重新批准。", "; their queued DM opener was sent back for a redraft that picks up this reply. Approve it again once drafted."))
+              : t("。", "."));
+      }
+      stats.textContent = s.ok ? note : ((s.data && s.data.detail) || String(s.status));
+      if (s.data && s.data.requeued) loadOutreach(); else loadGtouch();
     }
 
     function doExport() {

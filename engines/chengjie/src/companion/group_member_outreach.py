@@ -284,6 +284,50 @@ def gtouched_by(member: Dict[str, Any], account_id: str) -> bool:
             and str(member.get("gtouch_account_id") or "") == str(account_id))
 
 
+def overlay_gtouch(store: Any, rows: Sequence[Dict[str, Any]],
+                   account_id: str) -> List[Dict[str, Any]]:
+    """把这个号对某人的群里接话（可能发生在这人的另一个群）叠到这人的每一行上（副本）。
+
+    叠上去的行带 ``gtouch_said``/``gtouch_group_title``：开场要接的是被接话那个群里 TA 的那句，
+    不是这一行所在群的发言。"""
+    rows = list(rows or [])
+    try:
+        gmap = store.gtouch_by_user(str(account_id)) if hasattr(store, "gtouch_by_user") else {}
+    except Exception:
+        logger.debug("[gm_outreach] 读接话记录失败", exc_info=True)
+        gmap = {}
+    if not gmap:
+        return rows
+    out: List[Dict[str, Any]] = []
+    for m in rows:
+        g = gmap.get(str(m.get("user_id") or ""))
+        if g and str(g.get("group_id") or "") != str(m.get("group_id") or ""):
+            m = dict(m)
+            m.update(gtouch_state=str(g.get("gtouch_state") or ""),
+                     gtouch_account_id=str(account_id),
+                     gtouch_at=float(g.get("gtouch_at") or 0.0),
+                     gtouch_text=str(g.get("gtouch_text") or ""),
+                     gtouch_said=str(g.get("last_msg_text") or ""),
+                     gtouch_group_title=str(g.get("group_title") or ""))
+        out.append(m)
+    return out
+
+
+def gtouch_dm_wait_sec(store: Any, account_id: str, user_id: str, *, now: float,
+                       policy: OutreachPolicy) -> int:
+    """这个号在群里接过 TA 的话、还没过 ``gtouch_dm_after_hours`` → 还要等几秒才许私聊；0 = 不用等。"""
+    wait = float(policy.gtouch_dm_after_hours) * 3600.0
+    if wait <= 0 or not hasattr(store, "gtouch_by_user"):
+        return 0
+    try:
+        g = store.gtouch_by_user(str(account_id), [str(user_id)]).get(str(user_id))
+    except Exception:
+        return 0
+    if not g:
+        return 0
+    return max(0, int(float(g.get("gtouch_at") or 0.0) + wait - float(now)))
+
+
 def select_candidates(members: Sequence[Dict[str, Any]], *, account_id: str,
                       slots: int, touched: Set[str],
                       intent: Optional[Dict[str, Sequence[str]]] = None,
@@ -410,7 +454,7 @@ def build_preview(store: Any, account_id: str, *, now: float, since_ts: float,
     used = store.count_outreach_sent_since(account_id, since_ts)
     queued_n = store.count_outreach_queued(account_id)
     slots = max(0, eff_cap - used - queued_n)
-    owned = store.list_by_hash_account(account_id)
+    owned = overlay_gtouch(store, store.list_by_hash_account(account_id), account_id)
     touched = store.touched_user_ids()
     candidates = select_candidates(owned, account_id=account_id, slots=slots, touched=touched,
                                    intent=intent, now=now,
@@ -542,6 +586,9 @@ def prepare_release(store: Any, *, account_id: str, group_id: str, user_id: str,
     ah = str(row.get("access_hash") or "").strip()
     if not ah:
         return {"ok": False, "http": 409, "kind": "state"}
+    gt_wait = gtouch_dm_wait_sec(store, account_id, user_id, now=now, policy=policy)
+    if gt_wait > 0:
+        return {"ok": False, "http": 409, "kind": "gtouch_wait", "gap_wait_sec": gt_wait}
     if not store.cas_outreach(
         group_id, user_id, expect_states=(OUTREACH_QUEUED, OUTREACH_APPROVED),
         new_state=OUTREACH_SENDING, account_id=account_id, now=now,
@@ -605,6 +652,19 @@ def auto_mode_block_reason(store: Any, account_id: str, *, now: float,
     if age is None or age < float(policy.auto_min_age_days):
         return {"ok": False, "reason": "age",
                 "detail": {"age_days": age, "min": int(policy.auto_min_age_days)}}
+    # 申报号龄只放宽爬坡额度，不单独放行全自动：申报过的号得先在本系统里发出够数的开口
+    declared = None
+    if hasattr(store, "declared_age_days"):
+        try:
+            declared = store.declared_age_days(str(account_id), now)
+        except Exception:
+            declared = None
+    if declared is not None:
+        proven = store.reply_rate(str(account_id), float(now) - 7 * 86400.0)
+        if int(proven.get("sent") or 0) < int(policy.auto_min_sample):
+            return {"ok": False, "reason": "declared_unproven",
+                    "detail": {"sent_7d": int(proven.get("sent") or 0),
+                               "min": int(policy.auto_min_sample)}}
     hold = store.get_hold(str(account_id))
     last_flood = float(hold.get("last_flood_at") or 0.0)
     lookback = float(policy.auto_flood_lookback_days) * 86400.0
@@ -839,15 +899,28 @@ def outreach_context_note(account_id: str, user_id: str, store: Any = None) -> s
         row = store.get_outreach_contact(account_id, user_id)
         if not row:
             return ""
-        if str(row.get("outreach_error") or "") == "inbound_first":
+        err = str(row.get("outreach_error") or "")
+        touched = (str(row.get("gtouch_state") or "") == "sent"
+                   and str(row.get("gtouch_account_id") or "") == str(account_id))
+        if not touched and hasattr(store, "gtouch_by_user"):
+            touched = str(user_id) in store.gtouch_by_user(str(account_id), [str(user_id)])
+        if err == "gtouch_inbound" or (touched and err == "inbound_first"):
+            first = "你在群里公开回过TA，TA来私聊"
+        elif err == "inbound_first":
             first = "TA先私聊来找你"
+        elif touched:
+            first = "你在群里回过TA又私聊了，TA回了"
         else:
             first = "你先私聊打了招呼、TA回了"
         title = " ".join(str(row.get("group_title") or "").split())[:16]
         where = f"你们同在「{title}」群" if title else "你们在同一个群"
         said = " ".join(str(row.get("last_msg_text") or "").split())[:18]
+        tail = f"；{first}，先接话熟络，别急着推"
+        # 目标块【背景】只留 80 字：超了先缩 TA 的原话，不丢「怎么认识的」
+        room = 80 - len(f"同群开口：{where}，TA在群里说过「」{tail}")
+        said = said[:max(0, room)]
         heard = f"，TA在群里说过「{said}」" if said else ""
-        return f"同群开口：{where}{heard}；{first}，先接话熟络，别急着推"
+        return f"同群开口：{where}{heard}{tail}"
     except Exception:
         logger.debug("[gm_outreach] 开口背景生成失败", exc_info=True)
         return ""
@@ -951,13 +1024,15 @@ def attach_won(stats: Dict[str, Any], contacted: Sequence[Dict[str, Any]],
     hits: List[Dict[str, Any]] = []
     for m in contacted or ():
         w = won.get((str(m.get("outreach_account_id") or ""), str(m.get("user_id") or "")))
-        if w and float(w.get("done_at") or 0) >= float(m.get("outreach_at") or 0):
+        base = float(m.get("outreach_at") or 0) or float(m.get("gtouch_at") or 0)
+        if w and float(w.get("done_at") or 0) >= base:
             hits.append((m, w))
     by_variant: Dict[str, int] = {}
     by_group: Dict[str, Dict[str, Any]] = {}
     for m, w in hits:
-        v = str(m.get("opener_variant") or "") or "-"
-        by_variant[v] = by_variant.get(v, 0) + 1
+        if float(m.get("outreach_at") or 0) > 0:
+            v = str(m.get("opener_variant") or "") or "-"
+            by_variant[v] = by_variant.get(v, 0) + 1
         g = by_group.setdefault(str(m.get("group_id") or ""), {
             "group_id": str(m.get("group_id") or ""), "group_title": str(m.get("group_title") or ""),
             "replied": 0, "won": 0})
@@ -974,12 +1049,14 @@ def attach_won(stats: Dict[str, Any], contacted: Sequence[Dict[str, Any]],
     stats["won"] = {
         "total": len(hits),
         "manual": sum(1 for _, w in hits if w.get("manual")),
+        "via_gtouch": sum(1 for m, _ in hits if str(m.get("outreach_error") or "") == "gtouch_inbound"),
         "rate": (len(hits) / sent) if sent else None,
         "by_group": sorted(by_group.values(), key=lambda g: (-g["won"], g["group_title"])),
         "recent": [{"user_id": str(m.get("user_id") or ""), "username": str(m.get("username") or ""),
                     "name": str(m.get("first_name") or ""), "group_title": str(m.get("group_title") or ""),
                     "account_id": str(m.get("outreach_account_id") or ""),
                     "variant": str(m.get("opener_variant") or ""), "done_at": float(w.get("done_at") or 0),
+                    "via_gtouch": str(m.get("outreach_error") or "") == "gtouch_inbound",
                     "manual": bool(w.get("manual"))}
                    for m, w in sorted(hits, key=lambda x: -float(x[1].get("done_at") or 0))[:20]],
     }
@@ -1003,7 +1080,7 @@ __all__ = [
     "FOLLOWUP_AFTER_HOURS", "FOLLOWUP_CLOSE_AFTER_HOURS", "FOLLOWUP_DAILY_CAP",
     "auto_mode_block_reason", "followup_due_before", "followup_close_before",
     "prepare_followup", "finalize_followup", "attach_won",
-    "account_age_days", "gtouched_by",
+    "account_age_days", "gtouched_by", "overlay_gtouch", "gtouch_dm_wait_sec",
     "GTOUCH_DAILY_CAP", "GTOUCH_GROUP_DAILY_CAP", "GTOUCH_MIN_GAP_SEC",
     "GTOUCH_MAX_MSG_AGE_HOURS", "GTOUCH_DM_AFTER_HOURS",
 ]

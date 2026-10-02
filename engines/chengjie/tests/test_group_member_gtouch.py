@@ -62,6 +62,35 @@ def test_declared_age_grows_and_takes_the_larger():
     assert st.get_outreach_mode("accA") == "manual"
 
 
+def test_declared_age_does_not_unlock_auto_without_track_record():
+    from src.companion.group_member_outreach import auto_mode_block_reason
+    st = GroupMembersStore(":memory:")
+    st.set_declared_age("accA", 400, NOW)
+    age = account_age_days(None, st, "accA", NOW)
+    g = auto_mode_block_reason(st, "accA", now=NOW, age_days=age, policy=POL)
+    assert g["reason"] == "declared_unproven" and g["detail"]["min"] == POL.auto_min_sample
+    st.record_members([_m(str(i)) for i in range(POL.auto_min_sample)])
+    for i in range(POL.auto_min_sample):
+        st.cas_outreach("-100", str(i), expect_states=("none",), new_state="sent",
+                        account_id="accA", now=NOW - 3600)
+        if i < 3:
+            st.mark_outreach_replied("accA", str(i), now=NOW - 60)
+    assert auto_mode_block_reason(st, "accA", now=NOW, age_days=age, policy=POL)["ok"] is True
+    # 没申报、靠真实天龄够格的号不受这条影响
+    st2 = GroupMembersStore(":memory:")
+    assert auto_mode_block_reason(st2, "accA", now=NOW, age_days=30, policy=POL)["ok"] is True
+
+
+def test_flood_voids_declared_age():
+    st = GroupMembersStore(":memory:")
+    st.set_declared_age("accA", 400, NOW)
+    st.set_hold("accA", paused=True)
+    assert st.declared_age_days("accA", NOW) == pytest.approx(400)
+    st.set_hold("accA", flood_until=NOW + 86400, reason="peer_flood", last_flood_at=NOW)
+    assert st.declared_age_days("accA", NOW) is None
+    assert account_age_days({"created_at": NOW - 2 * 86400}, st, "accA", NOW) == pytest.approx(2)
+
+
 # ── 提取带消息 id ──
 
 def test_speaker_context_keeps_id_of_the_text_message():
@@ -270,6 +299,144 @@ def test_dm_waits_after_group_touch_then_goes_first():
     p2 = opener_prompt(persona_block="", member=dict(c, outreach_account_id="accA"), lang="zh",
                        goal_hint="", avoid=[])
     assert "已经在群里公开回过TA" not in p2
+
+
+# ── 跨群同一个人：接话按人算 ──
+
+def _two_groups():
+    st = GroupMembersStore(":memory:")
+    st.record_members([
+        _m("9"), _m("9", gid="-200", group_title="外贸群", text="今天好忙"),
+        _m("10"), _m("10", gid="-200", group_title="外贸群", text="有没有好用的工具"),
+    ])
+    return st
+
+
+def _send_gtouch(st, gid, uid, now, text="先做快捷回复"):
+    p = prepare_gtouch(st, account_id="accA", group_id=gid, user_id=uid, text=text, now=now,
+                       since_ts=now - 3600, policy=POL)
+    assert p["ok"], p
+    return finalize_gtouch(st, account_id="accA", group_id=gid, user_id=uid, now=now, text=text,
+                           result={"ok": True})
+
+
+def test_gtouch_once_per_person_across_groups():
+    st = _two_groups()
+    _send_gtouch(st, "-100", "9", NOW)
+    cand = {(m["group_id"], m["user_id"])
+            for m in st.list_gtouch_candidates("accA", since_msg_ts=NOW - 48 * 3600)}
+    assert ("-200", "9") not in cand and ("-200", "10") in cand
+    later = NOW + 3600
+    assert prepare_gtouch(st, account_id="accA", group_id="-200", user_id="9", text="好",
+                          now=later, since_ts=later - 3600, policy=POL)["kind"] == "gtouch_state"
+
+
+def test_dm_in_other_group_waits_and_quotes_the_touched_message():
+    from src.companion.group_member_outreach import build_preview
+    st = _two_groups()
+    _send_gtouch(st, "-100", "10", NOW)
+    pv = build_preview(st, "accA", now=NOW + 60, since_ts=NOW - 3600, policy=POL, age_days=30)
+    assert "10" not in {c["user_id"] for c in pv["candidates"]}
+    pv = build_preview(st, "accA", now=NOW + 7 * 3600, since_ts=NOW, policy=POL, age_days=30)
+    ids = [c["user_id"] for c in pv["candidates"]]
+    assert ids[0] == "10"
+    from src.companion.group_member_outreach import overlay_gtouch
+    row = [m for m in overlay_gtouch(st, [st.get_member("-200", "10")], "accA")][0]
+    p = opener_prompt(persona_block="", member=dict(row, outreach_account_id="accA"), lang="zh",
+                      goal_hint="", avoid=[])
+    assert "群「跨境群」里公开回过TA说的「客服回不过来怎么办」" in p and "先做快捷回复" in p
+
+
+def test_queued_dm_is_requeued_and_held_after_group_touch():
+    from src.companion.group_member_outreach import prepare_release
+    st = _two_groups()
+    assert st.cas_outreach("-200", "9", expect_states=("none",), new_state="queued",
+                           account_id="accA", now=NOW - 600)
+    st.set_opener("-200", "9", "你好呀，最近忙啥", "ai")
+    assert st.approve_queued("accA", NOW - 500) == 1
+    out = _send_gtouch(st, "-100", "9", NOW)
+    assert out["requeued"] == 1
+    row = st.get_member("-200", "9")
+    assert row["outreach_state"] == "queued" and row["opener_text"] == ""
+    st.set_opener("-200", "9", "刚群里说的快捷回复，你那边消息量大概多少", "ai")
+    st.approve_queued("accA", NOW + 60)
+    assert st.next_approved("accA", gtouch_after_ts=NOW + 120 - 6 * 3600) is None
+    kw = dict(account_id="accA", group_id="-200", user_id="9", text="", since_ts=NOW,
+              policy=POL, age_days=30)
+    r = prepare_release(st, now=NOW + 120, **kw)
+    assert r["kind"] == "gtouch_wait" and r["gap_wait_sec"] > 5 * 3600
+    t = NOW + 6 * 3600 + 10
+    assert st.next_approved("accA", gtouch_after_ts=t - 6 * 3600)["user_id"] == "9"
+    assert prepare_release(st, now=t, **kw)["ok"]
+
+
+def test_manual_opener_survives_requeue():
+    st = _two_groups()
+    st.cas_outreach("-200", "9", expect_states=("none",), new_state="queued",
+                    account_id="accA", now=NOW - 600)
+    st.set_opener("-200", "9", "坐席手写的", "manual")
+    st.approve_queued("accA", NOW - 500)
+    _send_gtouch(st, "-100", "9", NOW)
+    row = st.get_member("-200", "9")
+    assert row["outreach_state"] == "queued" and row["opener_text"] == "坐席手写的"
+
+
+def test_stale_gtouch_sending_is_reaped_and_not_resent():
+    st = _two_groups()
+    p = prepare_gtouch(st, account_id="accA", group_id="-100", user_id="9", text="好",
+                       now=NOW, since_ts=NOW - 3600, policy=POL)
+    assert p["ok"]
+    assert st.reap_stale_gtouch(NOW + 60) == 0
+    assert st.reap_stale_gtouch(NOW + 700) == 1
+    row = st.get_member("-100", "9")
+    assert row["gtouch_state"] == "failed" and row["gtouch_error"] == "stale_sending"
+    cand = {(m["group_id"], m["user_id"])
+            for m in st.list_gtouch_candidates("accA", since_msg_ts=NOW - 48 * 3600)}
+    assert ("-100", "9") not in cand and ("-200", "9") not in cand
+
+
+# ── 群里接话后 TA 私聊来找：归到这条线 ──
+
+def test_privacy_blocked_member_dming_after_group_touch_is_attributed():
+    from src.companion.group_member_outreach import attach_won, outreach_context_note
+    st = _seeded()                      # 6 号私聊被隐私挡住
+    p = prepare_gtouch(st, account_id="accA", group_id="-100", user_id="6", text="先分类处理",
+                       now=NOW, since_ts=NOW - 3600, policy=POL)
+    finalize_gtouch(st, account_id="accA", group_id="-100", user_id="6", now=NOW, text=p["text"],
+                    result={"ok": True})
+    assert st.mark_outreach_replied("accB", "6", now=NOW + 60, text="你好") == 0
+    assert st.mark_outreach_replied("accA", "6", now=NOW + 600, text="你说的分类怎么做") == 1
+    row = st.get_member("-100", "6")
+    assert row["outreach_state"] == "replied" and row["outreach_error"] == "gtouch_inbound"
+    assert row["outreach_account_id"] == "accA" and row["outreach_at"] == 0
+    assert st.reply_rate("accA", NOW - 86400)["sent"] == 0
+    # 后续来话不重复计
+    assert st.mark_outreach_replied("accA", "6", now=NOW + 900, text="在吗") == 0
+    note = outreach_context_note("accA", "6", store=st)
+    assert "群里公开回过TA，TA来私聊" in note and len(note) <= 80
+    contacted = st.contacted_replies(NOW - 86400, "accA")
+    assert [c["user_id"] for c in contacted] == ["6"]
+    stats = attach_won({"funnel": {"sent": 0}, "by_variant": []}, contacted,
+                       {("accA", "6"): {"done_at": NOW + 3600, "manual": False}})
+    assert stats["won"]["total"] == 1 and stats["won"]["via_gtouch"] == 1
+    assert stats["won"]["recent"][0]["via_gtouch"] is True
+
+
+def test_untouched_member_dming_is_not_attributed():
+    st = _seeded()
+    assert st.mark_outreach_replied("accA", "1", now=NOW, text="hi") == 0
+    assert st.get_member("-100", "1")["outreach_state"] == "none"
+
+
+def test_context_note_mentions_group_touch_for_dm_in_other_group():
+    from src.companion.group_member_outreach import outreach_context_note
+    st = _two_groups()
+    _send_gtouch(st, "-100", "9", NOW)
+    st.cas_outreach("-200", "9", expect_states=("none",), new_state="sent", account_id="accA",
+                    now=NOW + 7 * 3600)
+    st.mark_outreach_replied("accA", "9", now=NOW + 8 * 3600, text="好啊")
+    note = outreach_context_note("accA", "9", store=st)
+    assert "群里回过TA又私聊了" in note and len(note) <= 80
 
 
 # ── 路由 ──
