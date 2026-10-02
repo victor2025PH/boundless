@@ -1,5 +1,39 @@
 [
   {
+    "version": "1.0.106",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "克隆声更像本人；人设可设「语音失败时改发文字」；切回自动后 AI 补答",
+      "en": "Cloned voices sound more like the person; persona option to send text if voice fails; AI catches up when you switch back to auto"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆声更像本人：用 IndexTTS 克隆声时，带情绪的句子（开心、激动等）以前会把声音拉偏、听着像换了个人；现在情绪只做轻微润色，音色保持是你登记的那个人。无需设置，升级即生效。",
+        "人设新增「语音失败时」：打开人设页，编辑人设，语音区「语气表达」卡里第四个下拉（默认「跟随全局」，改完点保存）。",
+        "改发文字：语音合成失败（引擎掉线、超时等）时，照常把整段回复以文字发出去，客户不会收不到回复。适合销售、客服这类「语音只是加分项」的人设。",
+        "转待发（不发）：和以前一样，回复进工作台待发队列并弹窗提醒，等人放行。",
+        "用于 Telegram 自动回复。",
+        "切回自动后 AI 会补答：会话头从「人工」切回自动档（或开了自动接回、到点交还 AI）时，如果客户最后一条消息还没人回，AI 马上补写一条回复，不用等客户再发一句。只补私聊、24 小时内的消息；最后一条是你发的、或已有待发草稿时不补，不会重复。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Cloned voices sound more like the real person: with IndexTTS clone voices, emotional lines (happy, excited, etc.) used to pull the voice off so it sounded like someone else; emotion is now only a light touch and the timbre stays the person you enrolled. Nothing to set up, it works after the update.",
+        "New persona option \"If voice fails\": open the Personas page, edit a persona, and find the fourth dropdown in the \"Tone\" card of the voice section (defaults to \"Follow global\"; save after changing).",
+        "Send as text: when voice synthesis fails (engine offline, timeout, etc.) the full reply is sent as text, so the customer is never left without an answer. Good for sales or support personas where voice is a bonus.",
+        "Hold (don't send): same as before, the reply goes to the workbench queue with an alert until someone approves it.",
+        "Applies to Telegram auto-replies.",
+        "AI catches up when you switch back to auto: when the thread header goes from Manual back to an automatic mode (or auto hand-back returns it to AI) and the customer's last message is still unanswered, AI drafts a reply right away instead of waiting for the next message. Private chats only, messages within 24 hours; skipped when the last message is yours or a draft is already pending, so nothing is sent twice.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
     "version": "1.0.105",
     "date": "2026-10-02",
     "title": {
