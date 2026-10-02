@@ -4,7 +4,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import FilmPlayer from "@/components/FilmPlayer";
 import { BRAND_FILM } from "@/lib/film";
-import { SITE_URL, CHANNEL_URL } from "@/lib/site";
+import { SITE_URL, CHANNEL_URL, TELEGRAM_CHANNEL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Brand Film · 3-minute Live Demo · BOUNDLESS",
@@ -76,7 +76,7 @@ export default function FilmPageEn() {
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               Daily real-engine demos land on the channel first. Questions and trials in the group.
             </p>
-            <span className="mt-3 inline-block text-xs text-neon-cyan">→ t.me/hykj7</span>
+            <span className="mt-3 inline-block text-xs text-neon-cyan">→ t.me/{TELEGRAM_CHANNEL}</span>
           </a>
         </div>
 

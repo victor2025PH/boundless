@@ -4,7 +4,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import FilmPlayer from "@/components/FilmPlayer";
 import { BRAND_FILM } from "@/lib/film";
-import { SITE_URL, CHANNEL_URL } from "@/lib/site";
+import { SITE_URL, CHANNEL_URL, TELEGRAM_CHANNEL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "品牌片 · 3 分钟真机实测 · 无界科技 BOUNDLESS",
@@ -76,7 +76,7 @@ export default function FilmPage() {
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               每日真机实测第一时间发频道，可以直接在群里提问领试用。
             </p>
-            <span className="mt-3 inline-block text-xs text-neon-cyan">→ t.me/hykj7</span>
+            <span className="mt-3 inline-block text-xs text-neon-cyan">→ t.me/{TELEGRAM_CHANNEL}</span>
           </a>
         </div>
 
