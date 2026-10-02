@@ -2633,6 +2633,12 @@ companion:
     outreach_followup_daily_cap: 5       # 每号每天最多跟进几条；跟进不占「每天新人」额度，但计入总发送闸门、共用最小间隔
     # 第二跳：对方回了、我方（AI 自动回 / 坐席 / 手机）超过这么久还没回话 → 页面「回了但没接上」+ 审计提醒（每号每天一次）
     outreach_stalled_after_hours: 48
+    # 群里先接话（管理台第⑤步，只逐条手动发）：公开回复有意向的人近期那句，之后再私聊
+    gtouch_daily_cap: 5                  # 每号每天最多在群里接几次话（0=关）
+    gtouch_group_daily_cap: 2            # 每个群每天最多几次（同群刷屏最招群主反感）
+    gtouch_min_gap_sec: 600              # 两次群里接话至少隔多久
+    gtouch_max_msg_age_hours: 48         # 只接这么新的发言（太旧再回很突兀）
+    gtouch_dm_after_hours: 6             # 群里接过话的人，过这么久才排进私聊开口（排最前）
     # 开口切入方式 A/B（echo 接话茬 / group 从群切入 / ask 轻问一句）：ε-greedy 按近 30 天回复率择优
     outreach_ab_explore: 0.25            # 探索流量比例（0=只用最好的；1=全随机）
     outreach_ab_min_sample: 5            # 每种切入至少几条样本才参与「择优」；不够的先补样本

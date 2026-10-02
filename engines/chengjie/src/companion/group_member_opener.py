@@ -356,6 +356,16 @@ def _identity_rule(public_ai: bool, extra: str = "") -> str:
     return "不要问「在吗」，不要用「您」，不要自称 AI、助理、客服%s。" % extra
 
 
+def group_touch_text(member: Dict[str, Any]) -> str:
+    """开口号自己在群里公开回过 TA 的那句（别的号回的不算）；没有 → ''。"""
+    if str(member.get("gtouch_state") or "") != "sent":
+        return ""
+    me = str(member.get("outreach_account_id") or member.get("hash_account_id") or "")
+    if not me or str(member.get("gtouch_account_id") or "") != me:
+        return ""
+    return " ".join(str(member.get("gtouch_text") or "").split())[:200]
+
+
 def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
                   goal_hint: str, avoid: Sequence[str], variant: str = "",
                   public_ai: bool = False) -> str:
@@ -374,6 +384,10 @@ def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
         about.append("- 你们同在的群：%s" % group)
     if said:
         about.append("- TA 最近在群里说：「%s」" % said)
+    gt = group_touch_text(member)
+    if gt:
+        about.append("- 你之前已经在群里公开回过TA这句：「%s」——这条私信顺着那件事接"
+                     "（比如接着聊群里没说完的），别装作第一次见" % gt)
     parts.append("关于对方：\n" + "\n".join(about))
     if goal_hint:
         parts.append("这次建联的方向（只影响切入点和语气，第一条绝不能卖东西）：%s" % goal_hint)

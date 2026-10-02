@@ -2074,7 +2074,13 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "页面下方「回复率 / 漏斗」按切入方式 / 文案来源 / 人设 / 发出小时看回复率和首回时延，"
         "样本小于 10 的行先别下结论。开了「目标」功能时还会算成交：给这个号或人设设了默认获客目标，回了话的人就会自动挂上，下单链接带会话标记，"
         "官网付款或手动「标成交」后，漏斗多一级「成交」，切入方式表多一列成交数，并按群列出成交和最近成交名单"
-        "（只算开口之后的成交）。「停止这个号」随时急停；时段与每日条数可在页面直接改。",
+        "（只算开口之后的成交）。「停止这个号」随时急停；时段与每日条数可在页面直接改。"
+        "任何号（老号新号都行）切到销售人设（如小界）就能用；系统里的号龄是登进本系统的天数，老号在第④步"
+        "「这个号的真实号龄」填一下，按大的那个算每日额度和能否全自动（新号别多填，冷私聊最容易封新号）。"
+        "第⑤步「群里先接话」：用同一个号，在群里公开回复有意向的人近 48 小时说的那句（挂在 TA 那条下面），"
+        "AI 拟稿只帮忙不推销、不带链接、不说「私聊我」、不 @ 人，坐席逐条点「发到群里」；每号每天 5 条、每群每天 2 条、"
+        "两条隔 10 分钟。接过话的人 6 小时后排到私聊最前面，私信会顺着群里那句开口；私聊被隐私挡住的人也只能这样够到。"
+        "群开慢速模式会稍后再发；这个号在某群被禁言则那个群不再列人。",
         "Step 4 \"Today's openers\" in the group-members console (/tools/tg-members). Rules first: only the "
         "account that captured a person can message them; 5-10 new people per account per day (new accounts ramp "
         "from 3 over 14 days); sends go out 10:00-21:00 local only; at least 25 min between two; every send counts "
@@ -2107,11 +2113,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "noise. With Goals enabled it also counts deals: when the account or persona has a default acquisition "
         "goal, repliers get it automatically, order links carry the chat tag, and once the site order is paid or the deal is marked won by hand, the funnel gains a Won "
         "step, the angle table a won column, plus won-by-group and recent wins (only deals after the opener "
-        "count). Stop this account is the kill switch; window and daily cap are editable on the page.",
+        "count). Stop this account is the kill switch; window and daily cap are editable on the page. "
+        "Any account, old or new, works once switched to a sales persona (e.g. Xiaojie). The system's account age "
+        "counts days since it joined this system, so for an older account fill in 'Real account age' in step 4; the "
+        "larger value sets the daily ramp and full-auto eligibility (do not overstate a new account - cold DMs get "
+        "new accounts banned fastest). Step 5 'Reply in the group first': with the same account, reply publicly to "
+        "a message from the last 48h by someone with intent (threaded under their message). The AI draft helps "
+        "without pitching, links, 'DM me' or @-mentions, and an agent posts each one by hand; 5 per account and 2 "
+        "per group per day, 10 min apart. Six hours later that person goes to the front of the DM queue and the "
+        "DM picks up from the group reply; it is also the only way to reach people whose privacy settings block "
+        "DMs. Slow-mode groups are retried later; a group where the account is muted stops being listed.",
         "同群开口 开口 自动私聊 主动私聊 第一条私信 AI 开场 打招呼 批准后自动发 全自动 跟进 回复率 回音 切入方式 "
-        "坦白是AI 公开AI 意向 意向关键词 成交 转化 下单 归因 "
+        "坦白是AI 公开AI 意向 意向关键词 成交 转化 下单 归因 号龄 老号 群里接话 群里回复 公开回复 先接话 "
         "outreach opener auto dm cold message approve auto-send follow-up reply rate replies a/b telegram "
-        "intent keywords won deals conversion attribution public ai",
+        "intent keywords won deals conversion attribution public ai account age group reply reply in group",
         "/tools/tg-members",
     ),
 ]

@@ -478,13 +478,13 @@ def build_runner_for_assistant(assistant: Any) -> Optional[OutreachRunner]:
             return False, ""
 
     def _age(acct: str, now: float):
+        from src.companion.group_member_outreach import account_age_days
         try:
             reg = _registry()
             row = reg.get("telegram", acct) if reg is not None else None
-            created = float((row or {}).get("created_at") or 0.0)
         except Exception:
-            created = 0.0
-        return None if created <= 0 else max(0.0, (now - created) / 86400.0)
+            row = None
+        return account_age_days(row, store, acct, now)
 
     def _count(acct: str, now: float) -> None:
         try:

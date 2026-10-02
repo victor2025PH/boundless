@@ -52,6 +52,12 @@ FOLLOWUP_CLOSE_AFTER_HOURS = 72
 FOLLOWUP_DAILY_CAP = 5
 # 第二跳：对方回了、我方（AI / 坐席）超过这么久还没接上话 → 列「没接上」提醒
 STALLED_AFTER_HOURS = 48
+# 群里接话：每号每天几条、每群每天几条、两条最少隔多久、只接多新的发言、接完多久才许私聊
+GTOUCH_DAILY_CAP = 5
+GTOUCH_GROUP_DAILY_CAP = 2
+GTOUCH_MIN_GAP_SEC = 10 * 60
+GTOUCH_MAX_MSG_AGE_HOURS = 48
+GTOUCH_DM_AFTER_HOURS = 6
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,11 @@ class OutreachPolicy:
     followup_close_after_hours: int = FOLLOWUP_CLOSE_AFTER_HOURS
     followup_daily_cap: int = FOLLOWUP_DAILY_CAP
     stalled_after_hours: int = STALLED_AFTER_HOURS
+    gtouch_daily_cap: int = GTOUCH_DAILY_CAP
+    gtouch_group_daily_cap: int = GTOUCH_GROUP_DAILY_CAP
+    gtouch_min_gap_sec: int = GTOUCH_MIN_GAP_SEC
+    gtouch_max_msg_age_hours: int = GTOUCH_MAX_MSG_AGE_HOURS
+    gtouch_dm_after_hours: int = GTOUCH_DM_AFTER_HOURS
 
     @classmethod
     def from_config(cls, gm_cfg: Any) -> "OutreachPolicy":
@@ -125,7 +136,32 @@ class OutreachPolicy:
                                             FOLLOWUP_CLOSE_AFTER_HOURS, 12, 24 * 30),
             followup_daily_cap=_int("outreach_followup_daily_cap", FOLLOWUP_DAILY_CAP, 0, 20),
             stalled_after_hours=_int("outreach_stalled_after_hours", STALLED_AFTER_HOURS, 1, 24 * 14),
+            gtouch_daily_cap=_int("gtouch_daily_cap", GTOUCH_DAILY_CAP, 0, 20),
+            gtouch_group_daily_cap=_int("gtouch_group_daily_cap", GTOUCH_GROUP_DAILY_CAP, 1, 10),
+            gtouch_min_gap_sec=_int("gtouch_min_gap_sec", GTOUCH_MIN_GAP_SEC, 60, 6 * 3600),
+            gtouch_max_msg_age_hours=_int("gtouch_max_msg_age_hours", GTOUCH_MAX_MSG_AGE_HOURS,
+                                          1, 24 * 7),
+            gtouch_dm_after_hours=_int("gtouch_dm_after_hours", GTOUCH_DM_AFTER_HOURS, 0, 24 * 7),
         )
+
+
+def account_age_days(registry_row: Any, store: Any, account_id: str,
+                     now: float) -> Optional[float]:
+    """号龄 = max(登进本系统的天数, 坐席申报的真实号龄)。都取不到 → None（按新号爬坡）。"""
+    ages: List[float] = []
+    try:
+        created = float((registry_row or {}).get("created_at") or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        created = 0.0
+    if created > 0:
+        ages.append(max(0.0, (float(now) - created) / 86400.0))
+    try:
+        declared = store.declared_age_days(str(account_id), now) if store is not None else None
+    except Exception:
+        declared = None
+    if declared is not None:
+        ages.append(float(declared))
+    return max(ages) if ages else None
 
 
 def effective_outreach_cap(policy: OutreachPolicy, age_days: Optional[float]) -> int:
@@ -242,13 +278,21 @@ def _candidate_ok(member: Dict[str, Any], account_id: str,
     return True
 
 
+def gtouched_by(member: Dict[str, Any], account_id: str) -> bool:
+    """这个号在群里公开接过 TA 的话（别的号接的不算——私聊时不能拿别人的话当自己的）。"""
+    return (str(member.get("gtouch_state") or "") == "sent"
+            and str(member.get("gtouch_account_id") or "") == str(account_id))
+
+
 def select_candidates(members: Sequence[Dict[str, Any]], *, account_id: str,
                       slots: int, touched: Set[str],
-                      intent: Optional[Dict[str, Sequence[str]]] = None) -> List[Dict[str, Any]]:
+                      intent: Optional[Dict[str, Sequence[str]]] = None,
+                      now: Optional[float] = None,
+                      gtouch_wait_sec: float = 0.0) -> List[Dict[str, Any]]:
     """从 none 里挑今天还能排队的人。跨群 user_id 只留一条。
 
-    排序：意向分（人设关键词命中，见 member_intent）> 有用户名 > 最近发言 > 静态分。
-    命中排除词的人不排。
+    排序：群里接过话的 > 意向分（人设关键词命中，见 member_intent）> 有用户名 > 最近发言 > 静态分。
+    命中排除词的人不排。群里刚接过话、还没过 ``gtouch_wait_sec`` 的先不私聊（紧跟着私聊像盯人）。
     """
     from src.companion.member_intent import member_intent
     slots = max(0, int(slots))
@@ -261,8 +305,12 @@ def select_candidates(members: Sequence[Dict[str, Any]], *, account_id: str,
         score, _hits = member_intent(m, intent)
         if score < 0:
             continue
+        if (gtouched_by(m, account_id) and now is not None
+                and float(m.get("gtouch_at") or 0.0) > float(now) - float(gtouch_wait_sec)):
+            continue
         ranked.append((score, m))
     ranked.sort(key=lambda sm: (
+        0 if gtouched_by(sm[1], account_id) else 1,
         -sm[0],
         0 if str(sm[1].get("username") or "").strip() else 1,
         -float(sm[1].get("last_spoke_ts") or 0.0),
@@ -333,6 +381,10 @@ def public_member(member: Dict[str, Any], *, with_opener: bool = False) -> Dict[
         "last_out_at": float(member.get("last_out_at") or 0.0),
         "opener_variant": member.get("opener_variant") or "",
         "conversation_id": conversation_id_for(member),
+        "gtouch_state": member.get("gtouch_state") or "",
+        "gtouch_text": member.get("gtouch_text") or "",
+        "gtouch_at": float(member.get("gtouch_at") or 0.0),
+        "gtouch_account_id": member.get("gtouch_account_id") or "",
     }
     if with_opener:
         d["suggested_opener"] = d["opener_text"] or suggest_opener(member)
@@ -361,7 +413,8 @@ def build_preview(store: Any, account_id: str, *, now: float, since_ts: float,
     owned = store.list_by_hash_account(account_id)
     touched = store.touched_user_ids()
     candidates = select_candidates(owned, account_id=account_id, slots=slots, touched=touched,
-                                   intent=intent)
+                                   intent=intent, now=now,
+                                   gtouch_wait_sec=float(policy.gtouch_dm_after_hours) * 3600.0)
     queued = [m for m in owned
               if str(m.get("outreach_state") or "") in (OUTREACH_QUEUED, OUTREACH_APPROVED)]
     # 已批准的排前面（调度器就按这个顺序发），其余按近发言
@@ -950,4 +1003,7 @@ __all__ = [
     "FOLLOWUP_AFTER_HOURS", "FOLLOWUP_CLOSE_AFTER_HOURS", "FOLLOWUP_DAILY_CAP",
     "auto_mode_block_reason", "followup_due_before", "followup_close_before",
     "prepare_followup", "finalize_followup", "attach_won",
+    "account_age_days", "gtouched_by",
+    "GTOUCH_DAILY_CAP", "GTOUCH_GROUP_DAILY_CAP", "GTOUCH_MIN_GAP_SEC",
+    "GTOUCH_MAX_MSG_AGE_HOURS", "GTOUCH_DM_AFTER_HOURS",
 ]

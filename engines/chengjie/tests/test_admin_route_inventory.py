@@ -1548,6 +1548,11 @@ _ADDITIONS_2026_08_12_TG_MEMBERS = """
 /api/tg-members/members/export	GET
 /api/tg-members/quota	GET
 /api/tg-members/account-groups	GET
+/api/tg-members/outreach/age	POST
+/api/tg-members/gtouch/preview	GET
+/api/tg-members/gtouch/compose	POST
+/api/tg-members/gtouch/skip	POST
+/api/tg-members/gtouch/send	POST
 /tools/tg-members	GET
 """
 _BASELINE += _ADDITIONS_2026_08_12_TG_MEMBERS

@@ -389,6 +389,15 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         "followup_cap": "err.gm.outreach_followup_cap",
         "followup_state": "err.gm.outreach_followup_state",
         "followup_early": "err.gm.outreach_followup_early",
+        "gtouch_cap": "err.gm.gtouch_cap",
+        "gtouch_group_cap": "err.gm.gtouch_group_cap",
+        "gtouch_state": "err.gm.gtouch_state",
+        "gtouch_stale": "err.gm.gtouch_stale",
+        "group_denied": "err.gm.gtouch_group_denied",
+        "gtouch_text_empty": "err.gm.gtouch_text",
+        "gtouch_text_too_long": "err.gm.gtouch_text",
+        "gtouch_text_pitch": "err.gm.gtouch_text",
+        "gtouch_text_dm_ask": "err.gm.gtouch_text",
     }
 
     def _outreach_policy():
@@ -411,17 +420,17 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         except Exception:
             return None
 
-    def _account_age_days(request: Request, account_id: str, now: float):
-        """注册表 created_at → 天龄。取不到回 None（纯函数按新号爬坡）。"""
+    def _registry_row(request: Request, account_id: str):
         try:
             reg = _registry(request)
-            row = reg.get("telegram", str(account_id)) if reg is not None else None
-            created = float((row or {}).get("created_at") or 0.0)
+            return reg.get("telegram", str(account_id)) if reg is not None else None
         except Exception:
-            created = 0.0
-        if created <= 0:
             return None
-        return max(0.0, (float(now) - created) / 86400.0)
+
+    def _account_age_days(request: Request, account_id: str, now: float):
+        """号龄 = max(注册表 created_at 起算, 坐席申报)。都取不到回 None（按新号爬坡）。"""
+        from src.companion.group_member_outreach import account_age_days
+        return account_age_days(_registry_row(request, account_id), _store(), account_id, now)
 
     def _outreach_gate(request: Request, account_id: str, *, notify: bool):
         """总发送闸门（companion_send_gate + 急停 + 金丝雀）。返回 (blocked, reason)。
@@ -493,6 +502,11 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
             st, account_id, now=now, since_ts=since, policy=_outreach_policy(),
             age_days=_account_age_days(request, account_id, now), intent=ctx.get("intent"))
         out["gate"] = _outreach_gate_quota(request, account_id)
+        from src.companion.group_member_outreach import account_age_days
+        reg_age = account_age_days(_registry_row(request, account_id), None, account_id, now)
+        declared = st.declared_age_days(account_id, now)
+        out["age"] = {"registry_days": round(reg_age, 1) if reg_age is not None else None,
+                      "declared_days": round(declared, 1) if declared is not None else None}
         out["persona"] = {"id": ctx.get("persona_id") or "", "name": ctx.get("persona_name") or ""}
         out["goal"] = {"template": ctx.get("goal_template") or "",
                        "name": ctx.get("goal_name") or ""}
@@ -897,6 +911,147 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         if done.get("ok"):
             _count_toward_send_gate(account_id, now)
         _audit(request, "tg_members_outreach_send", account_id,
+               "group=%s user=%s kind=%s" % (group_id, user_id, done.get("kind")))
+        return {"ok": bool(done.get("ok")), "kind": done.get("kind")}
+
+    @app.post("/api/tg-members/outreach/age")
+    async def outreach_age(request: Request, _=Depends(auth_dep)):
+        """申报这个 TG 号的真实号龄（天）：老号切到销售人设时不用再从每天 3 条爬。0 = 撤销。"""
+        _require_enabled(request)
+        _require_write(request)
+        st = _require_store(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        account_id = str((body or {}).get("account_id") or "").strip()
+        try:
+            days = float((body or {}).get("days"))
+        except (TypeError, ValueError):
+            days = -1.0
+        if not account_id:
+            raise HTTPException(400, tr(request, "err.gm.bad_request"))
+        if not (0.0 <= days <= 3650.0):
+            raise HTTPException(400, tr(request, "err.gm.outreach_age"))
+        now, _since = _outreach_clock()
+        saved = st.set_declared_age(account_id, days, now)
+        _audit(request, "tg_members_outreach_age", account_id, "days=%s" % saved)
+        return {"ok": True, "account_id": account_id, "declared_days": saved,
+                "age_days": _account_age_days(request, account_id, now)}
+
+    # ── 群里接话（公开回复 TA 在群里那句；只逐条手动发）──────────────────────────
+
+    def _gtouch_args(body: Any):
+        b = body if isinstance(body, dict) else {}
+        return (str(b.get("account_id") or "").strip(), str(b.get("group_id") or "").strip(),
+                str(b.get("user_id") or "").strip())
+
+    @app.get("/api/tg-members/gtouch/preview")
+    async def gtouch_preview_route(request: Request, _=Depends(auth_dep)):
+        _require_enabled(request)
+        st = _require_store(request)
+        account_id = str(request.query_params.get("account_id") or "").strip()
+        if not account_id:
+            raise HTTPException(400, tr(request, "err.gm.bad_request"))
+        from src.companion.group_member_gtouch import gtouch_preview
+        from src.companion.group_member_opener import persona_public_ai
+        now, since = _outreach_clock()
+        ctx = _opener_ctx(request, account_id)
+        out = gtouch_preview(st, account_id, now=now, since_ts=since, policy=_outreach_policy(),
+                             intent=ctx.get("intent"))
+        out["persona"] = {"id": ctx.get("persona_id") or "", "name": ctx.get("persona_name") or "",
+                          "public_ai": persona_public_ai(ctx.get("persona"))}
+        return out
+
+    @app.post("/api/tg-members/gtouch/compose")
+    async def gtouch_compose(request: Request, _=Depends(auth_dep)):
+        """AI 给一个人拟群里公开回复并存成草稿。拟不出 → text 空，坐席手写。"""
+        _require_enabled(request)
+        _require_write(request)
+        st = _require_store(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        account_id, group_id, user_id = _gtouch_args(body)
+        if not account_id or not group_id or not user_id:
+            raise HTTPException(400, tr(request, "err.gm.bad_request"))
+        row = st.get_member(group_id, user_id)
+        if row is None or str(row.get("gtouch_state") or "") not in ("", "drafted"):
+            _raise_outreach(request, "gtouch_state", 409)
+        from src.companion.group_member_gtouch import compose_gtouch
+        ctx = _opener_ctx(request, account_id)
+        got = await compose_gtouch(getattr(request.app.state, "ai_client", None), member=row, ctx=ctx)
+        if got.get("text"):
+            st.set_gtouch_draft(group_id, user_id, got["text"])
+        return {"ok": bool(got.get("text")), "text": got.get("text") or "",
+                "reason": got.get("reason") or ""}
+
+    @app.post("/api/tg-members/gtouch/skip")
+    async def gtouch_skip(request: Request, _=Depends(auth_dep)):
+        _require_enabled(request)
+        _require_write(request)
+        st = _require_store(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        account_id, group_id, user_id = _gtouch_args(body)
+        if not group_id or not user_id:
+            raise HTTPException(400, tr(request, "err.gm.bad_request"))
+        ok = st.skip_gtouch(group_id, user_id)
+        _audit(request, "tg_members_gtouch_skip", account_id, "group=%s user=%s" % (group_id, user_id))
+        return {"ok": ok}
+
+    @app.post("/api/tg-members/gtouch/send")
+    async def gtouch_send(request: Request, _=Depends(auth_dep)):
+        """把一条公开回复发到群里（挂在 TA 那条下面）。逐条确认；闸门同开口。"""
+        _require_enabled(request)
+        _require_write(request)
+        st = _require_store(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if (body or {}).get("confirm") is not True:
+            raise HTTPException(400, tr(request, "err.gm.outreach_confirm"))
+        account_id, group_id, user_id = _gtouch_args(body)
+        if not account_id or not group_id or not user_id:
+            raise HTTPException(400, tr(request, "err.gm.bad_request"))
+        text = str((body or {}).get("text") or "")
+        from src.companion.group_member_gtouch import (
+            classify_group_send_error,
+            deliver_gtouch,
+            finalize_gtouch,
+            prepare_gtouch,
+        )
+        now, since = _outreach_clock()
+        gate_blocked, gate_reason = _outreach_gate(request, account_id, notify=True)
+        if gate_blocked:
+            _audit(request, "tg_members_gtouch_send", account_id,
+                   "group=%s user=%s kind=gate reason=%s" % (group_id, user_id, gate_reason))
+            _raise_outreach(request, "gate", 409)
+        prep = prepare_gtouch(st, account_id=account_id, group_id=group_id, user_id=user_id,
+                              text=text, now=now, since_ts=since, policy=_outreach_policy())
+        if not prep.get("ok"):
+            _raise_outreach(request, str(prep.get("kind") or ""), int(prep.get("http") or 409))
+        pyro, loop = _live_pyro(request, account_id)
+        if pyro is None:
+            st.finish_gtouch(group_id, user_id, state="drafted", error="no_client")
+            raise HTTPException(503, tr(request, "err.gm.client_unavailable"))
+        try:
+            sent = await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
+                deliver_gtouch(pyro, chat_id=prep["chat_id"], reply_to=prep["reply_to"],
+                               text=prep["text"]), loop))
+        except Exception as exc:  # noqa: BLE001
+            sent = {"ok": False, "kind": classify_group_send_error(exc)}
+        done = finalize_gtouch(
+            st, account_id=account_id, group_id=group_id, user_id=user_id, now=now,
+            text=prep["text"],
+            result=sent if isinstance(sent, dict) else {"ok": False, "kind": "retryable"})
+        if done.get("ok"):
+            _count_toward_send_gate(account_id, now)
+        _audit(request, "tg_members_gtouch_send", account_id,
                "group=%s user=%s kind=%s" % (group_id, user_id, done.get("kind")))
         return {"ok": bool(done.get("ok")), "kind": done.get("kind")}
 

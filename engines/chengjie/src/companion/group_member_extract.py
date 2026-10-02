@@ -121,6 +121,14 @@ def score_member(*, spoke: bool, is_admin: bool, is_bot: bool,
     return max(0, min(100, s))
 
 
+def _msg_id_str(raw: Any) -> str:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return ""
+    return str(n) if n > 0 else ""
+
+
 def user_row(user: Any, *, group_id: str, group_title: str, spoke: bool,
              is_admin: bool, source_account_id: str, job_id: str,
              batch_id: str, now: Optional[float] = None,
@@ -163,6 +171,7 @@ def user_row(user: Any, *, group_id: str, group_title: str, spoke: bool,
         "last_spoke_ts": (lm_ts or now) if spoke else 0.0,
         "last_msg_text": lm_text if spoke else "",
         "last_msg_ts": lm_ts if spoke else 0.0,
+        "last_msg_id": _msg_id_str(lm.get("id")) if spoke and lm_text else "",
         "lang_code": _lang,
         "group_title": str(group_title or ""),
         "source_account_id": str(source_account_id),
@@ -301,12 +310,14 @@ async def collect_speaker_context(client: Any, chat_id: Any, scan_limit: int,
                 continue
             if uid not in seen:
                 seen[uid] = u
-                ctx[uid] = {"text": _msg_snippet(msg), "ts": _msg_ts(msg)}
+                ctx[uid] = {"text": _msg_snippet(msg), "ts": _msg_ts(msg),
+                            "id": getattr(msg, "id", None)}
             elif not ctx[uid].get("text"):
-                # 最近那条是纯媒体 → 往前找他最近一句有字的
+                # 最近那条是纯媒体 → 往前找他最近一句有字的（群里接话回复到有字的这条）
                 snip = _msg_snippet(msg)
                 if snip:
                     ctx[uid]["text"] = snip
+                    ctx[uid]["id"] = getattr(msg, "id", None)
     except Exception as exc:
         wait = _is_floodwait(exc)
         if wait is not None:

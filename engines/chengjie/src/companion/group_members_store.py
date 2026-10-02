@@ -164,7 +164,7 @@ _MEMBER_COLS = (
     "outreach_account_id", "last_msg_text", "last_msg_ts", "lang_code",
     "opener_text", "opener_source", "approved_at",
     "opener_persona", "followup_at", "followup_text",
-    "replied_at", "reply_text", "opener_variant", "answered_at",
+    "replied_at", "reply_text", "opener_variant", "answered_at", "last_msg_id",
 )
 
 # update_job 允许热改的字段（其余为不可变身份/审计字段）。
@@ -226,6 +226,14 @@ class GroupMembersStore:
             ("tg_group_members", "last_in_at", "REAL NOT NULL DEFAULT 0"),
             ("tg_group_members", "last_out_at", "REAL NOT NULL DEFAULT 0"),
             ("tg_group_members", "stalled_flagged_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "last_msg_id", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_state", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_text", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_at", "REAL NOT NULL DEFAULT 0"),
+            ("tg_group_members", "gtouch_account_id", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_group_members", "gtouch_error", "TEXT NOT NULL DEFAULT ''"),
+            ("tg_outreach_holds", "declared_age_days", "REAL NOT NULL DEFAULT 0"),
+            ("tg_outreach_holds", "declared_age_at", "REAL NOT NULL DEFAULT 0"),
         )
         for table, col, decl in _adds:
             try:
@@ -301,6 +309,7 @@ class GroupMembersStore:
                     str(r.get("reply_text") or "")[:200],
                     str(r.get("opener_variant") or "")[:16],
                     float(r.get("answered_at") or 0.0),
+                    str(r.get("last_msg_id") or "")[:24],
                 )
                 cur = self._conn.execute(
                     "INSERT OR IGNORE INTO tg_group_members (%s) VALUES (%s)"
@@ -326,6 +335,13 @@ class GroupMembersStore:
                     lm_text = str(r.get("last_msg_text") or "")[:200]
                     lm_ts = float(r.get("last_msg_ts") or 0.0)
                     lang = str(r.get("lang_code") or "")[:16]
+                    lm_id = str(r.get("last_msg_id") or "")[:24]
+                    if lm_id and lm_ts:
+                        # 群里接话要回复到具体那条：id 跟着更新的那句走（同一 UPDATE 里读的都是旧值）
+                        self._conn.execute(
+                            "UPDATE tg_group_members SET last_msg_id=? "
+                            "WHERE group_id=? AND user_id=? AND ?>=last_msg_ts",
+                            (lm_id, gid, uid, lm_ts))
                     if lm_text or lm_ts or lang:
                         self._conn.execute(
                             "UPDATE tg_group_members SET "
@@ -1034,6 +1050,143 @@ class GroupMembersStore:
             mode = OUTREACH_MODE_MANUAL
         self.set_hold(str(account_id), mode=mode)
         return mode
+
+    # ── 号龄（坐席申报）────────────────────────────────────────────────────────
+    # 注册表 created_at 只是「登进本系统」的时间；老 TG 号切到销售人设时真实号龄要人报。
+    # 申报值从申报那天起继续长：declared_age_days + (now - declared_age_at) / 86400。
+
+    def set_declared_age(self, account_id: str, days: float, now: Optional[float] = None) -> float:
+        """申报这个 TG 号的真实号龄（天）。0 = 撤销申报。返回落库的天数。"""
+        now = time.time() if now is None else float(now)
+        try:
+            d = max(0.0, min(float(days), 3650.0))
+        except (TypeError, ValueError):
+            d = 0.0
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tg_outreach_holds (account_id, updated_at, declared_age_days, "
+                "declared_age_at) VALUES (?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET "
+                "declared_age_days=excluded.declared_age_days, "
+                "declared_age_at=excluded.declared_age_at, updated_at=excluded.updated_at",
+                (str(account_id), now, d, now if d > 0 else 0.0))
+            self._conn.commit()
+        return d
+
+    def declared_age_days(self, account_id: str, now: Optional[float] = None) -> Optional[float]:
+        """申报号龄推到今天；没申报 → None。"""
+        now = time.time() if now is None else float(now)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT declared_age_days, declared_age_at FROM tg_outreach_holds "
+                "WHERE account_id=?", (str(account_id),)).fetchone()
+        if not row or float(row[0] or 0) <= 0:
+            return None
+        return float(row[0]) + max(0.0, (now - float(row[1] or now)) / 86400.0)
+
+    # ── 群里接话（公开回复 TA 在群里那句，之后再私聊）────────────────────────────
+    # gtouch_state: '' 未碰 / drafted 已拟稿 / sending 占坑中 / sent 已发 / failed 发不出 / skipped 坐席跳过
+
+    def list_gtouch_candidates(self, account_id: str, *, since_msg_ts: float,
+                               limit: int = 200) -> List[Dict[str, Any]]:
+        """这个号所在群里、近期说过话（有消息 id）、还没被群里接过话的人。
+
+        私聊已经发出去 / 对方回了 / 说过别再发的不再列；私聊因隐私设置发不到的（blocked+privacy）
+        反而要列——群里接话是唯一够得着 TA 的路。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE (source_account_id=? OR hash_account_id=?) "
+                "AND spoke=1 AND is_admin=0 AND is_bot=0 AND last_msg_id!='' AND last_msg_text!='' "
+                "AND last_msg_ts>=? AND gtouch_state IN ('', 'drafted') "
+                "AND outreach_error!='stop_contact' "
+                "AND (outreach_state IN (?,?,?) OR (outreach_state=? AND outreach_error='privacy')) "
+                "ORDER BY last_msg_ts DESC LIMIT ?",
+                (str(account_id), str(account_id), float(since_msg_ts), OUTREACH_NONE,
+                 OUTREACH_QUEUED, OUTREACH_APPROVED, OUTREACH_BLOCKED, int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_gtouch_draft(self, group_id: str, user_id: str, text: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET gtouch_text=?, gtouch_state='drafted' "
+                "WHERE group_id=? AND user_id=? AND gtouch_state IN ('', 'drafted')",
+                (str(text or "")[:500], str(group_id), str(user_id)))
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def claim_gtouch(self, group_id: str, user_id: str, account_id: str, now: float) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET gtouch_state='sending', gtouch_account_id=?, "
+                "gtouch_at=? WHERE group_id=? AND user_id=? AND gtouch_state IN ('', 'drafted')",
+                (str(account_id), float(now), str(group_id), str(user_id)))
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def finish_gtouch(self, group_id: str, user_id: str, *, state: str, text: str = "",
+                      error: str = "", now: Optional[float] = None) -> bool:
+        """占坑后的落定：sent（记文案和时间）/ failed / drafted（还坑，下次再发）。"""
+        if state not in ("sent", "failed", "drafted"):
+            return False
+        sets = "gtouch_state=?, gtouch_error=?"
+        args: List[Any] = [state, str(error or "")[:60]]
+        if state == "sent":
+            sets += ", gtouch_text=?, gtouch_at=?"
+            args += [str(text or "")[:500], float(time.time() if now is None else now)]
+        elif state == "drafted":
+            sets += ", gtouch_at=0, gtouch_account_id=''"
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET %s WHERE group_id=? AND user_id=? "
+                "AND gtouch_state='sending'" % sets, [*args, str(group_id), str(user_id)])
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def skip_gtouch(self, group_id: str, user_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tg_group_members SET gtouch_state='skipped' "
+                "WHERE group_id=? AND user_id=? AND gtouch_state IN ('', 'drafted')",
+                (str(group_id), str(user_id)))
+            self._conn.commit()
+            return bool(cur.rowcount)
+
+    def count_gtouch_since(self, account_id: str, since_ts: float, group_id: str = "") -> int:
+        """这个号自 since_ts 起在群里接过几次话（含占坑中的）；给 group_id 只数这个群。"""
+        sql = ("SELECT COUNT(*) FROM tg_group_members WHERE gtouch_account_id=? "
+               "AND gtouch_state IN ('sent','sending') AND gtouch_at>=?")
+        args: List[Any] = [str(account_id), float(since_ts)]
+        if group_id:
+            sql += " AND group_id=?"
+            args.append(str(group_id))
+        with self._lock:
+            row = self._conn.execute(sql, args).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def gtouch_denied_groups(self, account_id: str) -> List[str]:
+        """这个号在哪些群里发不了言（被禁言 / 无权限）——这些群不再列人。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT group_id FROM tg_group_members WHERE gtouch_account_id=? "
+                "AND gtouch_state='failed' AND gtouch_error='group_denied'",
+                (str(account_id),)).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def last_gtouch_ts(self, account_id: str) -> float:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(gtouch_at) FROM tg_group_members WHERE gtouch_account_id=? "
+                "AND gtouch_state IN ('sent','sending')", (str(account_id),)).fetchone()
+        return float(row[0] or 0.0) if row else 0.0
+
+    def list_gtouch_sent_since(self, account_id: str, since_ts: float,
+                               limit: int = 30) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tg_group_members WHERE gtouch_account_id=? AND gtouch_state='sent' "
+                "AND gtouch_at>=? ORDER BY gtouch_at DESC LIMIT ?",
+                (str(account_id), float(since_ts), int(limit))).fetchall()
+        return [dict(r) for r in rows]
 
     def last_outreach_sent_ts(self, account_id: str) -> float:
         with self._lock:

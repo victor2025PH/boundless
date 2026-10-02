@@ -222,6 +222,12 @@
         <button type="button" id="gm-out-save"></button>
         <span class="msg" id="gm-out-save-note"></span>
       </div>
+      <div class="row">
+        <label id="t-out-age-l" for="gm-out-age"></label>
+        <input type="number" id="gm-out-age" min="0" max="3650" style="min-width:80px;width:80px" />
+        <button type="button" id="gm-out-age-save"></button>
+        <span class="msg" id="gm-out-age-note"></span>
+      </div>
       <div class="msg" id="gm-out-stats"></div>
       <div class="msg" id="gm-out-summary"></div>
       <div id="gm-out-list"></div>
@@ -237,6 +243,17 @@
         </select>
       </div>
       <div id="gm-out-statsbox" hidden></div>
+    </section>
+
+    <section class="card" id="gm-gtouch">
+      <h2 id="t-gtouch"></h2>
+      <div class="msg" id="t-gtouch-l"></div>
+      <div class="row">
+        <button type="button" id="gm-gt-refresh"></button>
+        <span class="msg" id="gm-gt-stats"></span>
+      </div>
+      <div id="gm-gt-list"></div>
+      <div id="gm-gt-sent"></div>
     </section>
   </div>
 
@@ -756,6 +773,7 @@
           renderOutreachMeta(d);
           renderReplied(d);
           renderFollowups(d);
+          loadGtouch();
           var rows = (d.queue || []).concat(d.candidates || []);
           if (!rows.length) {
             box.innerHTML = '<div class="empty">' +
@@ -772,6 +790,7 @@
     }
 
     var _settingsDirty = false;
+    var _ageDirty = false;
 
     // 模式 / 人设+目标 / 今日汇总 / 时段+条数
     function renderOutreachMeta(d) {
@@ -822,6 +841,14 @@
       $("gm-out-save-note").textContent = ro
         ? t("这台实例不能在线改，请改 config.yaml 的 companion.group_members", "Read-only here; edit companion.group_members in config.yaml")
         : "";
+      var ag = d.age || {};
+      if (!_ageDirty) $("gm-out-age").value = ag.declared_days != null ? Math.floor(ag.declared_days) : "";
+      $("gm-out-age").disabled = $("gm-out-age-save").disabled = ro;
+      $("gm-out-age-note").textContent =
+        t("登进本系统 ", "In this system ") + (ag.registry_days != null ? Math.floor(ag.registry_days) : "?") + t(" 天", " d") +
+        (ag.declared_days != null ? t(" · 申报 ", " · declared ") + Math.floor(ag.declared_days) + t(" 天", " d") : "") +
+        t(" · 按大的算，决定每天能开口几个和能否全自动；新号别乱填，冷私聊最容易封新号",
+          " · the larger one sets the daily ramp and full-auto eligibility; do not overstate a new account, cold DMs get new accounts banned fastest");
       var manual = (d.mode || "manual") === "manual";
       $("gm-out-approve-all").textContent = manual
         ? t("一键批准今日队列", "Approve whole queue")
@@ -1308,6 +1335,121 @@
       loadOutreach();
     }
 
+    async function saveAge() {
+      var acct = $("gm-out-acct").value;
+      var days = parseFloat($("gm-out-age").value);
+      if (!acct) return;
+      if (isNaN(days)) days = 0;
+      var r = await postJSON("/api/tg-members/outreach/age", { account_id: acct, days: days });
+      _ageDirty = false;
+      $("gm-out-stats").textContent = r.ok
+        ? (days > 0 ? t("号龄已申报，开口额度按新号龄重算", "Account age saved; the daily ramp is recalculated")
+                    : t("已撤销号龄申报", "Declared age cleared"))
+        : ((r.data && r.data.detail) || String(r.status));
+      loadOutreach();
+    }
+
+    // ── ⑤ 群里先接话 ──
+    var _gtCache = {};
+
+    function gtKey(m) { return m.group_id + ":" + m.user_id; }
+
+    function gtNote(kind) {
+      var map = {
+        sent: t("已发到群里。过几个小时这个人会排到私聊开口的最前面。", "Posted in the group. In a few hours this person moves to the front of the DM queue."),
+        flood: t("撞到 Telegram 风控，这个号今天停止开口和接话", "Hit a Telegram flood limit; this account stops for today"),
+        slowmode: t("群开着慢速模式，稍后再发", "The group is in slow mode; try again later"),
+        group_denied: t("这个号在这个群发不了言，这个群不再列人", "This account cannot post in this group; it will not be listed again"),
+        msg_gone: t("TA 那条消息已经没了", "Their message is gone"),
+        retryable: t("没发出去，稍后再试", "Not sent; try again later")
+      };
+      return map[kind] || "";
+    }
+
+    function renderGtCard(m) {
+      var key = gtKey(m);
+      _gtCache[key] = m;
+      var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
+      return '<div class="ocard" data-gt-key="' + esc(key) + '"><div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
+        (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") + esc(m.group_title || "") +
+        ' <span class="pill ok">' + t("意向 ", "intent ") + esc(String(m.intent || 0)) + "：" + esc((m.intent_hits || []).join("、")) + "</span>" +
+        (m.dm_blocked ? ' <span class="pill tpl" title="' + t("TA 设了隐私，私聊发不到，群里接话是唯一的路", "Privacy settings block DMs; a group reply is the only way") + '">' + t("私聊不可达", "DM blocked") + "</span>" : "") +
+        "</div></div>" +
+        '<div class="osaid">' + t("TA 在群里说：", "They said in the group: ") + "<q>" + esc(m.last_msg_text || "") + "</q>" +
+        (m.last_msg_ts ? " <span>" + esc(ago(m.last_msg_ts)) + "</span>" : "") + "</div>" +
+        '<textarea data-gt-text="' + esc(key) + '" maxlength="280" placeholder="' +
+        t("点「AI 拟稿」或自己写一句公开回复：帮上忙、不推销、不放链接、不说私聊我", "Click AI draft or write a public reply: be helpful, no pitch, no links, no 'DM me'") + '">' +
+        esc(m.gtouch_text || "") + "</textarea>" +
+        '<div class="row"><button type="button" data-gt-act="compose" data-gt-k="' + esc(key) + '">' + t("AI 拟稿", "AI draft") + "</button>" +
+        '<button type="button" class="primary" data-gt-act="send" data-gt-k="' + esc(key) + '">' + t("发到群里", "Post in group") + "</button>" +
+        '<button type="button" data-gt-act="skip" data-gt-k="' + esc(key) + '">' + t("跳过", "Skip") + "</button></div></div>";
+    }
+
+    function loadGtouch() {
+      var acct = ($("gm-out-acct") && $("gm-out-acct").value) || "";
+      var box = $("gm-gt-list"), stats = $("gm-gt-stats"), sent = $("gm-gt-sent");
+      if (!acct) { box.innerHTML = ""; sent.innerHTML = ""; stats.textContent = ""; return Promise.resolve(); }
+      return api("/api/tg-members/gtouch/preview?account_id=" + encodeURIComponent(acct)).then(function (r) {
+        if (!r.ok) { stats.textContent = (r.data && r.data.detail) || String(r.status); box.innerHTML = ""; return; }
+        var d = r.data || {};
+        _gtCache = {};
+        stats.textContent = t("今天接话 ", "Group replies today ") + (d.used_today || 0) + "/" + (d.cap || 0) +
+          t(" · 每群每天最多 ", " · max per group/day ") + (d.group_cap || 0) +
+          t(" · 只接 ", " · only messages from the last ") + (d.max_msg_age_hours || 0) + t(" 小时内的发言", " h") +
+          (d.gap_wait_sec > 0 ? t(" · 还要等 ", " · wait ") + Math.ceil(d.gap_wait_sec / 60) + t(" 分钟", " min") : "") +
+          (d.hold ? t(" · 这个号已停", " · account on hold") : "") +
+          (d.hours_ok === false ? t(" · 现在不在时段内", " · outside the window") : "") +
+          ((d.persona || {}).name ? t(" · 人设：", " · persona: ") + d.persona.name : "");
+        var rows = d.candidates || [];
+        if (!rows.length) {
+          box.innerHTML = '<div class="empty">' + (d.intent_configured
+            ? t("近期没有命中意向关键词的发言。重新提取一次可以拿到最新发言。", "No recent messages match the intent keywords. Re-extract to pick up the latest messages.")
+            : t("这个号的人设没配意向关键词（sales.intent_keywords），群里接话只回有意向的人。", "This account's persona has no intent keywords (sales.intent_keywords); group replies only go to people with intent.")) + "</div>";
+        } else {
+          box.innerHTML = rows.map(renderGtCard).join("");
+        }
+        var done = d.sent || [];
+        sent.innerHTML = done.length
+          ? '<div class="msg" style="margin-top:10px"><b>' + t("今天在群里接过的话", "Group replies today") + "</b></div>" +
+            done.map(function (m) {
+              return '<div class="msg">' + esc(m.first_name || m.user_id) + " · " + esc(m.group_title || "") + " · " +
+                t("TA：", "they: ") + "<q>" + esc(m.last_msg_text || "") + "</q> → " + t("你：", "you: ") + "<q>" + esc(m.gtouch_text || "") + "</q> · " +
+                esc(ago(m.gtouch_at)) + "</div>";
+            }).join("")
+          : "";
+      }).catch(function () { stats.textContent = t("接话列表读取失败", "Could not load group replies"); });
+    }
+
+    async function gtAction(act, key) {
+      var m = _gtCache[key];
+      var acct = $("gm-out-acct").value;
+      if (!m || !acct) return;
+      var stats = $("gm-gt-stats");
+      var body = { account_id: acct, group_id: m.group_id, user_id: m.user_id };
+      var ta = document.querySelector('[data-gt-text="' + CSS.escape(key) + '"]');
+      if (act === "compose") {
+        stats.textContent = t("AI 拟稿中…", "Drafting…");
+        var r = await postJSON("/api/tg-members/gtouch/compose", body);
+        if (r.ok && r.data && r.data.text) { if (ta) ta.value = r.data.text; stats.textContent = t("拟好了，看一眼再发", "Drafted; read it before posting"); }
+        else stats.textContent = (r.data && r.data.detail) || t("AI 没拟出合适的，自己写一句", "AI could not draft a usable line; write one yourself");
+        return;
+      }
+      if (act === "skip") {
+        await postJSON("/api/tg-members/gtouch/skip", body);
+        loadGtouch();
+        return;
+      }
+      var text = ta ? ta.value.trim() : "";
+      if (!text) { stats.textContent = t("先写一句或点「AI 拟稿」", "Write a line or click AI draft first"); return; }
+      if (!window.confirm(t("用这个号在「", "Post publicly in \"") + (m.group_title || "") + t("」里公开回复 ", "\" replying to ") + (m.first_name || m.user_id) + "？\n\n" + text)) return;
+      body.text = text;
+      body.confirm = true;
+      var s = await postJSON("/api/tg-members/gtouch/send", body);
+      var kind = (s.data && s.data.kind) || "";
+      stats.textContent = s.ok ? (gtNote(kind) || kind) : ((s.data && s.data.detail) || String(s.status));
+      loadGtouch();
+    }
+
     function doExport() {
       var gid = $("gm-mgroup").value;
       if (!gid) return;
@@ -1348,6 +1490,22 @@
       $("gm-out-stats-scope").addEventListener("change", function () { if (!$("gm-out-statsbox").hidden) loadStats(); });
       ["gm-out-h0", "gm-out-h1", "gm-out-cap"].forEach(function (id) {
         $(id).addEventListener("input", function () { _settingsDirty = true; });
+      });
+      $("t-out-age-l").textContent = t("这个号的真实号龄（天）", "Real account age (days)");
+      $("gm-out-age-save").textContent = t("申报", "Save");
+      $("gm-out-age").addEventListener("input", function () { _ageDirty = true; });
+      $("gm-out-age-save").addEventListener("click", saveAge);
+      $("t-gtouch").textContent = t("⑤ 群里先接话", "5 · Reply in the group first");
+      $("t-gtouch-l").textContent = t(
+        "用第④步选的号，在群里公开回复有意向的人刚说的那句（挂在 TA 那条下面）：先帮上忙，过几个小时再私聊，私信会顺着这件事开口。" +
+        "私聊被隐私挡住的人也只能这样够到。只逐条手动发；每号每天 5 条、每群每天 2 条。",
+        "Using the account picked in step 4, reply publicly to a recent message from someone with intent (threaded under their message): help first, DM a few hours later, and the DM picks up from that reply. " +
+        "It is also the only way to reach people whose privacy settings block DMs. Manual only; 5 per account and 2 per group per day.");
+      $("gm-gt-refresh").textContent = t("刷新", "Refresh");
+      $("gm-gt-refresh").addEventListener("click", loadGtouch);
+      $("gm-gt-list").addEventListener("click", function (e) {
+        var b = e.target.closest("[data-gt-act]");
+        if (b) gtAction(b.getAttribute("data-gt-act"), b.getAttribute("data-gt-k"));
       });
       $("gm-mgroup").addEventListener("change", loadMembers);
       $("gm-monly").addEventListener("change", loadMembers);

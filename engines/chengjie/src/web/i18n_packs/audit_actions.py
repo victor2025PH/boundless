@@ -181,6 +181,9 @@ ZH = {
     "aud_act_tg_members_outreach_auto_demote": "全自动不达标，退回批准后发",
     "aud_act_tg_members_outreach_stalled": "同群开口：对方回了但我方没接上话",
     "aud_act_tg_members_outreach_followup": "手动发出 72h 跟进",
+    "aud_act_tg_members_outreach_age": "申报 TG 号的真实号龄",
+    "aud_act_tg_members_gtouch_send": "在群里公开接话（回复对方那条）",
+    "aud_act_tg_members_gtouch_skip": "跳过一个群里接话对象",
     # ── 联系人：合并审核 / 唤回 / 移动端交接（contacts_routes._safe_audit）──
     "aud_act_merge_review_scan": "扫描联系人合并候选",
     "aud_act_merge_review_approve": "通过联系人合并",
@@ -380,6 +383,9 @@ EN = {
     "aud_act_tg_members_outreach_auto_demote": "Auto mode gate failed; demoted to approve",
     "aud_act_tg_members_outreach_stalled": "Group outreach: they replied but we never answered",
     "aud_act_tg_members_outreach_followup": "Manual 72h follow-up sent",
+    "aud_act_tg_members_outreach_age": "Declare a TG account's real age",
+    "aud_act_tg_members_gtouch_send": "Reply publicly in a group (threaded under their message)",
+    "aud_act_tg_members_gtouch_skip": "Skip one group-reply target",
     # ── Contacts: merge review / reunion / mobile handoff (_safe_audit) ──
     "aud_act_merge_review_scan": "Scan contact-merge candidates",
     "aud_act_merge_review_approve": "Approve contact merge",
