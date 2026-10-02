@@ -420,6 +420,15 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             except Exception:
                 logger.debug("[automation] Q-27 risk_hold release_on_auto 失败（忽略）", exc_info=True)
                 risk_hold_released = None
+        catchup = None
+        if mode != "manual" and str((_prev_meta or {}).get("mode") or "") == "manual":
+            try:
+                from src.inbox.resume_catchup import catchup_on_resume
+                catchup = catchup_on_resume(
+                    request.app.state, _inbox_store(request), cid, mode=mode, by="mode_select")
+            except Exception:
+                logger.debug("[automation] 接回补答失败（忽略）", exc_info=True)
+                catchup = None
         rearm_source = ""
         if mode == "manual" and _rearm in ("30m", "rearm30"):
             try:
@@ -447,6 +456,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             # 接力记忆 P0-3：manual → AI 时的接力摘要结果 {ok, reason, out_n, in_n, media_n, chars}
             # （切到 manual → None；前端据此 toast「AI 已接过 N 条人工消息」）
             "handoff": handoff,
+            # 接回补答：manual → AI 时客户最后一句未回 → 补拟一稿 {dispatched, reason}
+            "catchup": catchup,
         }
 
     @app.post("/api/unified-inbox/agent-yield/resume")

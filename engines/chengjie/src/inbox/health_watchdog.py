@@ -2670,6 +2670,8 @@ class HealthWatchdog:
                 prev_meta={"mode": "manual", "source": row.get("source"),
                            "updated_at": row.get("updated_at")},
                 new_mode=target, by="rearm", now=now)
+            from src.inbox.resume_catchup import catchup_on_resume
+            catchup_on_resume(_app_state, store, cid, mode=target, by="rearm", now=now)
 
         res = sweep_takeover_rearm(store, cfg, now=now, on_restored=_on_restored)
         if int(res.get("restored") or 0) > 0:
