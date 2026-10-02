@@ -67,7 +67,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.3"
+AGENT_VERSION = "0.3.4"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -1086,7 +1086,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _main(argv: Optional[List[str]], held: List[Any]) -> int:
-    ap = argparse.ArgumentParser(prog="chatx-agent", description="智控节点 Agent")
+    ap = argparse.ArgumentParser(prog="chatx-agent", description="智拓群控节点 Agent")
     ap.add_argument("--state-dir", default="", help="状态目录（默认 %%ProgramData%%\\ChatX\\fleet）")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)

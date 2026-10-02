@@ -121,7 +121,7 @@ def _print(obj: Any) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="chatx-fleet-admin", description="智控主控操作端")
+    ap = argparse.ArgumentParser(prog="chatx-fleet-admin", description="智拓群控 主控操作端")
     ap.add_argument("--controller", default=os.environ.get(ENV_CONTROLLER, ""), help="如 https://bd2026.cc/fleet")
     ap.add_argument("--token", default=os.environ.get(ENV_TOKEN, ""), help="主控 web_admin.auth_token")
     sub = ap.add_subparsers(dest="cmd", required=True)

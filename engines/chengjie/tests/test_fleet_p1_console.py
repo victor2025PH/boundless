@@ -55,8 +55,9 @@ def test_alerter_fires_once_per_offline_and_rearms_after_recovery(caplog):
     assert al.check([_n("c", "offline", NOW - 30 * 60)], now=NOW) == [] and len(sent) == 1   # 不重复刷屏
     al.check([_n("c", "online", NOW)], now=NOW)                                             # 恢复
     assert "fleet node_offline_recovered node=c" in caplog.text
+    assert len(sent) == 2 and "已恢复在线" in sent[1][1]                                    # P3：恢复也推一条
     al.check([_n("c", "offline", NOW - 12 * 60)], now=NOW)
-    assert len(sent) == 2                                                                   # 再次离线再告警
+    assert len(sent) == 3                                                                   # 再次离线再告警
 
 
 def test_alerter_disabled_and_notify_failure_is_logged(caplog):
@@ -81,7 +82,8 @@ def test_default_notify_uses_existing_ops_alert_channel(monkeypatch):
 def test_start_watch_runs_in_background(tmp_path):
     hit = []
     al = oa.OfflineAlerter(10, notify=lambda text, nid, deb: hit.append(nid))
-    th = oa.start_watch(lambda: [_n("z", "offline", time.time() - 3600)], al, interval_sec=0.01,
+    gone = time.time() - 3600       # 固定最后心跳（P3 起心跳变新会被视作恢复）
+    th = oa.start_watch(lambda: [_n("z", "offline", gone)], al, interval_sec=0.01,
                         lock_path=str(tmp_path / "watch.lock"))
     deadline = time.time() + 5
     while not hit and time.time() < deadline:
