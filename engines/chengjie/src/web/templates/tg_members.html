@@ -56,7 +56,7 @@
     .job { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
     .job .jhd { display:flex; justify-content:space-between; gap:8px; align-items:center; }
     .empty { color:var(--dim); padding:8px 2px; }
-    /* 第④步：每人一张开口卡 */
+    /* 接话 / 私聊开口：每人一张卡 */
     .ocard { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
     .ocard.approved { border-color:rgba(15,157,117,.5); }
     .ocard .ohd { display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -118,15 +118,30 @@
     .qbar { display:inline-block; width:34px; height:4px; background:var(--border);
             border-radius:999px; overflow:hidden; vertical-align:middle; margin-right:4px; }
     .qbar > i { display:block; height:100%; background:var(--accent); }
+    /* 顶部步骤条 + 开口账号条（吸顶：往下翻到接话 / 开口时还看得见用的是哪个号） */
+    .steps { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:-6px 0 14px; font-size:12.5px; }
+    .steps a { color:var(--accent); text-decoration:none; padding:3px 10px; border:1px solid var(--border);
+               border-radius:999px; background:var(--card); }
+    .steps a:hover { border-color:var(--accent); }
+    .steps .arr { color:var(--dim); }
+    .gm-acct-bar { position:sticky; top:0; z-index:5; padding:10px 16px; }
+    .ocard .gt-confirm { margin-top:8px; padding:8px 10px; border:1px dashed var(--accent); border-radius:8px; }
+    .ocard .gt-confirm q { font-style:italic; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1 id="t-title"></h1>
     <div class="sub" id="t-sub"></div>
+    <nav class="steps" id="gm-steps">
+      <a href="#gm-extract" id="t-step1"></a><span class="arr">→</span>
+      <a href="#gm-gtouch" id="t-step2"></a><span class="arr">→</span>
+      <a href="#gm-outreach" id="t-step3"></a><span class="arr">→</span>
+      <a href="#gm-effect" id="t-step4"></a>
+    </nav>
     <div class="banner" id="gm-disabled" hidden></div>
 
-    <section class="card">
+    <section class="card" id="gm-extract">
       <h2 id="t-extract"></h2>
       <div class="msg" id="t-accts-l"></div>
       <div class="accts" id="gm-accts"><span class="empty" id="gm-accts-empty"></span></div>
@@ -191,10 +206,8 @@
       </table>
     </section>
 
-    <section class="card" id="gm-outreach">
-      <h2 id="t-outreach"></h2>
-      <div class="msg" id="t-outreach-l"></div>
-      <div class="row">
+    <section class="card gm-acct-bar" id="gm-acct-pick">
+      <div class="row" style="margin-bottom:0">
         <label id="t-out-acct-l" for="gm-out-acct"></label>
         <select id="gm-out-acct"></select>
         <label id="t-out-mode-l" for="gm-out-mode"></label>
@@ -205,6 +218,24 @@
         </select>
         <span class="msg" id="gm-out-persona"></span>
       </div>
+    </section>
+
+    <section class="card" id="gm-gtouch">
+      <h2 id="t-gtouch"></h2>
+      <div class="msg" id="t-gtouch-l"></div>
+      <div class="row">
+        <button type="button" id="gm-gt-refresh"></button>
+        <button type="button" id="gm-gt-compose-all"></button>
+        <span class="msg" id="gm-gt-stats"></span>
+      </div>
+      <div class="msg" id="gm-gt-note"></div>
+      <div id="gm-gt-list"></div>
+      <div id="gm-gt-sent"></div>
+    </section>
+
+    <section class="card" id="gm-outreach">
+      <h2 id="t-outreach"></h2>
+      <div class="msg" id="t-outreach-l"></div>
       <div class="row">
         <button type="button" id="gm-out-queue"></button>
         <button type="button" id="gm-out-compose"></button>
@@ -233,7 +264,11 @@
       <div id="gm-out-list"></div>
       <div id="gm-out-replied"></div>
       <div id="gm-out-followups"></div>
-      <div class="row" style="margin-top:12px">
+    </section>
+
+    <section class="card" id="gm-effect">
+      <h2 id="t-effect"></h2>
+      <div class="row">
         <button type="button" id="gm-out-stats-btn"></button>
         <select id="gm-out-stats-days">
           <option value="7">7d</option><option value="14">14d</option><option value="30">30d</option>
@@ -243,18 +278,6 @@
         </select>
       </div>
       <div id="gm-out-statsbox" hidden></div>
-    </section>
-
-    <section class="card" id="gm-gtouch">
-      <h2 id="t-gtouch"></h2>
-      <div class="msg" id="t-gtouch-l"></div>
-      <div class="row">
-        <button type="button" id="gm-gt-refresh"></button>
-        <span class="msg" id="gm-gt-stats"></span>
-      </div>
-      <div class="msg" id="gm-gt-note"></div>
-      <div id="gm-gt-list"></div>
-      <div id="gm-gt-sent"></div>
     </section>
   </div>
 
@@ -321,8 +344,14 @@
     function setText() {
       $("t-title").textContent = t("Telegram 群成员提取", "Telegram group member extraction");
       $("t-sub").textContent = t(
-        "入库和开口分开。提取只把人放进库；开口在第④步，每号每天 5–10 人，逐条确认才发。",
-        "Pulling people in and opening a chat are separate. Extraction only fills the library; step 4 sends 5-10 openers a day per account, one confirmed line at a time.");
+        "提取只把人放进库，不发任何消息。之后先在群里公开接有意向的人的话，过几个小时再私聊开口；每号每天私聊 5–10 人。",
+        "Extraction only fills the library and sends nothing. Then reply publicly in the group to people with intent, and DM them a few hours later; 5-10 DMs a day per account.");
+      $("t-step1").textContent = t("① 提取群成员", "1 · Extract members");
+      $("t-step2").textContent = t("② 群里先接话", "2 · Reply in the group");
+      $("t-step3").textContent = t("③ 私聊开口", "3 · DM openers");
+      $("t-step4").textContent = t("④ 效果与成交", "4 · Results & deals");
+      $("t-effect").textContent = t("④ 效果与成交", "4 · Results & deals");
+      $("gm-gt-compose-all").textContent = t("AI 拟稿今天这批", "AI-draft today's batch");
       $("t-extract").textContent = t("① 发起提取", "① Start extraction");
       $("t-accts-l").textContent = t("选择用哪些号拉（仅显示在线的 Telegram 号；多选=多号并行、各拉不同批次）",
         "Pick accounts (online Telegram only; multi-select = parallel, disjoint batches)");
@@ -333,9 +362,9 @@
       $("t-filter-l").textContent = t("过滤器", "Filter");
       $("t-cap-l").textContent = t("每号每日上限", "Daily cap / account");
       $("gm-start").textContent = t("🧲 发起提取", "🧲 Start");
-      $("t-jobs").textContent = t("② 提取任务", "② Extraction jobs");
+      $("t-jobs").textContent = t("提取任务", "Extraction jobs");
       $("gm-jobs-empty").textContent = t("暂无任务", "No jobs yet");
-      $("t-members").textContent = t("③ 成员库", "③ Member DB");
+      $("t-members").textContent = t("成员库", "Member DB");
       $("t-mgroup-l").textContent = t("群", "Group");
       $("gm-refresh").textContent = t("刷新", "Refresh");
       $("gm-export").textContent = t("导出 CSV", "Export CSV");
@@ -347,7 +376,7 @@
       $("th-admin").textContent = t("管理员", "Admin");
       $("th-src").textContent = t("来源号", "By account");
       $("th-state").textContent = t("开口", "Outreach");
-      $("t-outreach").textContent = t("④ 今日开口", "④ Today's openers");
+      $("t-outreach").textContent = t("③ 私聊开口", "3 · DM openers");
       $("t-outreach-l").textContent = t(
         "只用「当时拉到这个人的那个号」发第一条私聊。生成队列 → AI 按这个号的人设和目标拟一句开场（可改）→ 批准。「批准后自动发」由后台在时段内每 25–90 分钟随机发一条；「手动」则逐条点发。新号从每天 3 条爬坡，也占这个号的总发送额度。对方回了交给收件箱，对方说别发了就全线不再碰。",
         "The account that captured the person sends the first private line. Build the queue, let AI draft one opener per person from this account's persona and goal (editable), then approve. In 'approve then auto-send' the scheduler sends one every 25-90 min inside the window; 'manual' sends on click. New accounts ramp from 3 a day and each send counts toward the account's overall cap. Replies go to the inbox; a 'stop messaging me' blocks that person everywhere.");
@@ -1371,7 +1400,7 @@
       loadOutreach();
     }
 
-    // ── ⑤ 群里先接话 ──
+    // ── ② 群里先接话 ──
     var _gtCache = {};
 
     function gtKey(m) { return m.group_id + ":" + m.user_id; }
@@ -1402,8 +1431,52 @@
         t("点「AI 拟稿」或自己写一句公开回复：帮上忙、不推销、不放链接、不说私聊我", "Click AI draft or write a public reply: be helpful, no pitch, no links, no 'DM me'") + '">' +
         esc(m.gtouch_text || "") + "</textarea>" +
         '<div class="row"><button type="button" data-gt-act="compose" data-gt-k="' + esc(key) + '">' + t("AI 拟稿", "AI draft") + "</button>" +
-        '<button type="button" class="primary" data-gt-act="send" data-gt-k="' + esc(key) + '">' + t("发到群里", "Post in group") + "</button>" +
-        '<button type="button" data-gt-act="skip" data-gt-k="' + esc(key) + '">' + t("跳过", "Skip") + "</button></div></div>";
+        '<button type="button" class="primary" data-gt-act="send" data-gt-k="' + esc(key) + '">' + t("发到群里…", "Post in group…") + "</button>" +
+        '<button type="button" data-gt-act="skip" data-gt-k="' + esc(key) + '">' + t("跳过", "Skip") + "</button></div>" +
+        '<div class="gt-confirm" data-gt-confirm="' + esc(key) + '" hidden></div></div>';
+    }
+
+    function gtConfirmHtml(m, key, text) {
+      return '<div class="msg" style="margin-top:0">' + t("在「", "Post publicly in \"") + esc(m.group_title || "") +
+        t("」里公开回复，挂在 TA 这条下面：", "\", threaded under:") + " <q>" + esc(m.last_msg_text || "") + "</q></div>" +
+        '<div style="margin:6px 0">' + t("你要发的：", "You will post: ") + "<q>" + esc(text) + "</q></div>" +
+        '<div class="row" style="margin-bottom:0"><button type="button" class="primary" data-gt-act="confirm" data-gt-k="' + esc(key) + '">' +
+        t("确认发出", "Post it") + "</button>" +
+        '<button type="button" data-gt-act="cancel" data-gt-k="' + esc(key) + '">' + t("再改改", "Edit more") + "</button>" +
+        '<span class="msg">' + t("群里所有人都看得到，发出后撤不回来", "Everyone in the group sees it; it cannot be taken back") + "</span></div>";
+    }
+
+    function gtGoto(where) {
+      if (where === "extract") {
+        var acct = $("gm-out-acct").value;
+        var box = Array.prototype.slice.call(document.querySelectorAll(".gm-acct")).filter(function (c) { return c.value === acct; })[0];
+        if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event("change")); }
+        $("gm-extract").scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+
+    async function gtComposeAll() {
+      var acct = $("gm-out-acct").value;
+      var note = $("gm-gt-note");
+      var keys = Object.keys(_gtCache).filter(function (k) {
+        var ta = document.querySelector('[data-gt-text="' + CSS.escape(k) + '"]');
+        return ta && !ta.value.trim();
+      });
+      if (!acct || !keys.length) { note.textContent = t("没有待拟稿的人", "Nobody left to draft"); return; }
+      var btn = $("gm-gt-compose-all");
+      btn.disabled = true;
+      var ok = 0;
+      for (var i = 0; i < keys.length; i++) {
+        var m = _gtCache[keys[i]];
+        note.textContent = t("AI 拟稿中 ", "Drafting ") + (i + 1) + "/" + keys.length + "…";
+        var r = await postJSON("/api/tg-members/gtouch/compose", { account_id: acct, group_id: m.group_id, user_id: m.user_id });
+        var ta = document.querySelector('[data-gt-text="' + CSS.escape(keys[i]) + '"]');
+        if (r.ok && r.data && r.data.text && ta) { ta.value = r.data.text; ok++; }
+        if (r.data && r.data.reason === "no_ai") break;
+      }
+      btn.disabled = false;
+      note.textContent = t("拟好 ", "Drafted ") + ok + "/" + keys.length +
+        t("。逐条看一眼再发；没拟出的自己写一句。", ". Read each before posting; write the rest yourself.");
     }
 
     function loadGtouch() {
@@ -1424,8 +1497,12 @@
         var rows = d.candidates || [];
         if (!rows.length) {
           box.innerHTML = '<div class="empty">' + (d.intent_configured
-            ? t("近期没有命中意向关键词的发言。重新提取一次可以拿到最新发言。", "No recent messages match the intent keywords. Re-extract to pick up the latest messages.")
-            : t("这个号的人设没配意向关键词（sales.intent_keywords），群里接话只回有意向的人。", "This account's persona has no intent keywords (sales.intent_keywords); group replies only go to people with intent.")) + "</div>";
+            ? t("近 ", "No messages from the last ") + (d.max_msg_age_hours || 48) +
+              t(" 小时没有命中意向关键词的发言。只接最近的话，隔一两天要重新提取一次拿最新发言。",
+                " h match the intent keywords. Only recent messages qualify, so re-extract every day or two to pick up new ones.") +
+              ' <a href="#gm-extract" data-gt-goto="extract">' + t("用这个号去重新提取 →", "Re-extract with this account →") + "</a>"
+            : t("这个号的人设还没填「目标客户」意向关键词，群里接话只回有意向的人。", "This account's persona has no target-customer intent keywords yet; group replies only go to people with intent.") +
+              ' <a href="/personas" target="_blank" rel="noopener">' + t("去人设工作室填（可按行业一键套用）↗", "Fill them in the persona studio (industry presets available) ↗") + "</a>") + "</div>";
         } else {
           box.innerHTML = rows.map(renderGtCard).join("");
         }
@@ -1460,9 +1537,16 @@
         loadGtouch();
         return;
       }
+      var cf = document.querySelector('[data-gt-confirm="' + CSS.escape(key) + '"]');
+      if (act === "cancel") { if (cf) { cf.hidden = true; cf.innerHTML = ""; } if (ta) ta.focus(); return; }
       var text = ta ? ta.value.trim() : "";
       if (!text) { stats.textContent = t("先写一句或点「AI 拟稿」", "Write a line or click AI draft first"); return; }
-      if (!window.confirm(t("用这个号在「", "Post publicly in \"") + (m.group_title || "") + t("」里公开回复 ", "\" replying to ") + (m.first_name || m.user_id) + "？\n\n" + text)) return;
+      if (act === "send") {
+        if (cf) { cf.innerHTML = gtConfirmHtml(m, key, text); cf.hidden = false; }
+        return;
+      }
+      if (act !== "confirm") return;
+      if (cf) cf.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
       body.text = text;
       body.confirm = true;
       var s = await postJSON("/api/tg-members/gtouch/send", body);
@@ -1530,17 +1614,24 @@
       $("gm-out-age-save").textContent = t("申报", "Save");
       $("gm-out-age").addEventListener("input", function () { _ageDirty = true; });
       $("gm-out-age-save").addEventListener("click", saveAge);
-      $("t-gtouch").textContent = t("⑤ 群里先接话", "5 · Reply in the group first");
+      $("t-gtouch").textContent = t("② 群里先接话", "2 · Reply in the group first");
       $("t-gtouch-l").textContent = t(
-        "用第④步选的号，在群里公开回复有意向的人刚说的那句（挂在 TA 那条下面）：先帮上忙，过几个小时再私聊，私信会顺着这件事开口。" +
+        "用上面选的号，在群里公开回复有意向的人刚说的那句（挂在 TA 那条下面）：先帮上忙，过几个小时再私聊，私信会顺着这件事开口。" +
         "私聊被隐私挡住的人也只能这样够到。只逐条手动发；每号每天 5 条、每群每天 2 条。",
-        "Using the account picked in step 4, reply publicly to a recent message from someone with intent (threaded under their message): help first, DM a few hours later, and the DM picks up from that reply. " +
+        "Using the account picked above, reply publicly to a recent message from someone with intent (threaded under their message): help first, DM a few hours later, and the DM picks up from that reply. " +
         "It is also the only way to reach people whose privacy settings block DMs. Manual only; 5 per account and 2 per group per day.");
       $("gm-gt-refresh").textContent = t("刷新", "Refresh");
       $("gm-gt-refresh").addEventListener("click", loadGtouch);
+      $("gm-gt-compose-all").addEventListener("click", gtComposeAll);
       $("gm-gt-list").addEventListener("click", function (e) {
         var b = e.target.closest("[data-gt-act]");
         if (b) gtAction(b.getAttribute("data-gt-act"), b.getAttribute("data-gt-k"));
+      });
+      $("gm-gtouch").addEventListener("click", function (e) {
+        var a = e.target.closest("[data-gt-goto]");
+        if (!a) return;
+        e.preventDefault();
+        gtGoto(a.getAttribute("data-gt-goto"));
       });
       $("gm-mgroup").addEventListener("change", loadMembers);
       $("gm-monly").addEventListener("change", loadMembers);
