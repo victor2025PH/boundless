@@ -1,4 +1,4 @@
-# Install-ChatXAgent.ps1 -- one-shot installer for the ChatX fleet node Agent (Windows).
+# Install-ChatXAgent.ps1 -- one-shot installer for the 智拓群控 node Agent (Windows).
 #
 # What it does (idempotent, re-run to upgrade):
 #   1. get chatx-agent.exe   (-Exe local file, or download -DownloadUrl; sha256 checked when -Sha256 given

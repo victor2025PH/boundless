@@ -1,4 +1,4 @@
-"""本机状态快照和「舰队节点」页。页面只监听 127.0.0.1。"""
+"""本机状态快照和「智拓群控节点」页。页面只监听 127.0.0.1。"""
 
 from __future__ import annotations
 
@@ -274,7 +274,7 @@ def test_panel_is_loopback_and_renders_node_page(tmp_path, serve):
     assert "default-src 'none'" in headers["content-security-policy"]
     status, raw, _headers = _req(port, "GET", "/")
     page = raw.decode("utf-8")
-    for text in ("舰队节点", "待批准", "在线", "离线", "已拒绝", "详情", "复制诊断"):
+    for text in ("智拓群控节点", "待批准", "在线", "离线", "已拒绝", "详情", "复制诊断"):
         assert text in page
     assert "innerHTML" not in page
     status, raw, _headers = _req(port, "GET", "/api/local/status")
@@ -430,15 +430,15 @@ def test_background_panel_starts_outside_pytest(tmp_path, monkeypatch):
 def test_installer_shortcuts_and_finish_page():
     iss = (SETUP / "ChatXAgent.iss").read_text(encoding="utf-8")
     assert iss.startswith("\ufeff")
-    assert "{autodesktop}\\舰队节点" in iss
+    assert "{autodesktop}\\智拓群控节点" in iss
     assert "Open-Panel.vbs" in iss and "fleet-node.ico" in iss and "desktopicon" in iss
-    assert "打开舰队节点" in iss and "打开舰队控制台" in iss
-    assert "把配对码发给管理员，舰队控制台里能看到同一个码" in iss
+    assert "打开智拓群控节点" in iss and "打开智拓群控控制台" in iss
+    assert "把配对码发给管理员，智拓群控控制台里能看到同一个码" in iss
     assert "开机后计划任务会自动连接主控" in iss
     assert "47321" in iss and str(PANEL_PORT) == "47321"
     icons = iss.split("[Icons]")[1].split("[Code]")[0]
     assert "Open-Status.cmd" not in icons
-    assert "舰队节点" in icons and "舰队控制台" in icons
+    assert "智拓群控节点" in icons and "智拓群控控制台" in icons
     cmd = (SETUP / "Open-Status.cmd").read_text(encoding="utf-8")
     assert "Open-Panel.vbs" in cmd and "pause" not in cmd.lower() and "status" not in cmd.lower()
     vbs = (SETUP / "Open-Panel.vbs").read_text(encoding="utf-8")
@@ -448,5 +448,5 @@ def test_installer_shortcuts_and_finish_page():
     deploy = (ENGINE / "docs/FLEET_DEPLOY.md").read_text(encoding="utf-8")
     home = (ENGINE / "domains/fleet_control/web/templates/fleet_home.html").read_text(encoding="utf-8")
     assert "Fleet node status" not in deploy and "Fleet console" not in deploy
-    assert "舰队节点" in deploy and "Open-Panel.vbs" in deploy and "舰队控制台" in deploy
-    assert "智控节点状态" not in home and "舰队节点" in home
+    assert "智拓群控节点" in deploy and "Open-Panel.vbs" in deploy and "智拓群控控制台" in deploy
+    assert "智控节点状态" not in home and "智拓群控节点" in home

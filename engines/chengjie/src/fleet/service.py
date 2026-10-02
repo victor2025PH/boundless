@@ -104,7 +104,11 @@ def systemd_unit_path(name: str = SYSTEMD_UNIT) -> Path:
 
 
 def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(list(cmd), capture_output=True, text=True, timeout=60)
+    # 不用 text=True：schtasks 在管道里按 OEM 代码页（中文 936）输出，统一由 decode_console_bytes 解码
+    from .textio import decode_console_bytes
+
+    p = subprocess.run(list(cmd), capture_output=True, timeout=60)
+    return subprocess.CompletedProcess(p.args, p.returncode, decode_console_bytes(p.stdout), decode_console_bytes(p.stderr))
 
 
 def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:

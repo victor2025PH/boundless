@@ -62,8 +62,8 @@ def _readme(group: str, label: str, expires_at: Optional[float], max_uses: int) 
     if expires_at:
         when = f"expires_at_unix={int(expires_at)}\n"
     return (
-        "ChatX fleet room installer\n"
-        "==========================\n"
+        "\ufeff智拓群控 机房安装包 (room installer)\n"
+        "======================================\n"
         f"group={group or '-'}\n"
         f"label={label or '-'}\n"
         f"max_uses={int(max_uses)}\n"

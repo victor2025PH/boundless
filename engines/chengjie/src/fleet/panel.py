@@ -1,4 +1,4 @@
-"""本机「舰队节点」页：只绑定 127.0.0.1 的静态页，不代替舰队控制台。
+"""本机「智拓群控节点」页：只绑定 127.0.0.1 的静态页，不代替智拓群控控制台。
 
 ``chatx-agent ui`` 若发现计划任务里的进程已经在听固定端口，就只打开浏览器。
 否则在当前进程兜底起一个页面（测试、以及还没装上服务的时候）。
@@ -39,7 +39,7 @@ PAGE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>舰队节点</title>
+<title>智拓群控节点</title>
 <style>
   :root { color-scheme: light; --ink:#1b2038; --muted:#5c6578; --line:#e4e7ee; --bg:#f3f5f8; --card:#fff; }
   * { box-sizing: border-box; }
@@ -70,7 +70,7 @@ PAGE_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>舰队节点</h1>
+  <h1>智拓群控节点</h1>
   <p class="lead">本页只管理这台电脑。</p>
   <section class="card">
     <div id="badge" class="badge s-offline">离线</div>
@@ -133,7 +133,7 @@ PAGE_HTML = """<!DOCTYPE html>
   }
   function primaryOf(s) {
     if (s.ui_state === "pending") return {act: "copy-code", label: "复制配对码"};
-    if (s.ui_state === "online") return {act: "console", label: "打开舰队控制台"};
+    if (s.ui_state === "online") return {act: "console", label: "打开智拓群控控制台"};
     if (s.ui_state === "rejected") return {act: "logs", label: "打开日志"};
     return {act: "check", label: "检查连接"};
   }
@@ -173,10 +173,10 @@ PAGE_HTML = """<!DOCTYPE html>
     addRow(meta, "enrollment", state.enrollment || "");
     $("raw").textContent = JSON.stringify(state, null, 2);
   }
-  function refresh() {
+  function refresh(fresh) {
     if (busy) return;
     busy = true;
-    fetch("/api/local/status", {cache: "no-store"})
+    fetch("/api/local/status" + (fresh ? "?fresh=1" : ""), {cache: "no-store"})
       .then(function (r) { if (!r.ok) throw new Error("bad"); return r.json(); })
       .then(function (s) { render(s); })
       .catch(function () { note("暂时读不到本机状态"); })
@@ -208,17 +208,19 @@ PAGE_HTML = """<!DOCTYPE html>
     }
     if (act === "logs") { openLogs(); return; }
     note("");
-    refresh();
+    refresh(true);
   }
-  $("refresh").onclick = function () { note(""); refresh(); };
+  $("refresh").onclick = function () { note(""); refresh(true); };
   $("diag").onclick = function () {
     if (!state) return;
     copyText(JSON.stringify(state, null, 2));
     note("已复制诊断");
   };
   $("logs").onclick = openLogs;
-  refresh();
-  setInterval(refresh, 8000);
+  refresh(false);
+  // 页面在后台（最小化 / 切到别的标签）时不轮询；回到前台立刻刷一次。服务端 30 秒内复用任务状态。
+  setInterval(function () { if (!document.hidden) refresh(false); }, 8000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(false); });
 })();
 </script>
 </body>
@@ -393,7 +395,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "service": SERVICE_NAME, "bind": "127.0.0.1"})
             return
         if path == "/api/local/status":
-            self._json(200, self._status())
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self._json(200, self._status(fresh=(qs.get("fresh") or [""])[0] == "1"))
             return
         self._json(404, {"ok": False})
 
@@ -421,14 +424,14 @@ class PanelHandler(BaseHTTPRequestHandler):
             return
         self._open_logs()
 
-    def _status(self) -> dict:
+    def _status(self, *, fresh: bool = False) -> dict:
         if self.status_fn is not None:
             snap = self.status_fn()
         else:
             from .agent import AgentConfig
             try:
                 cfg = AgentConfig(self.state_dir)
-                snap = build_local_status(cfg, machine_id=self.machine_id)
+                snap = build_local_status(cfg, machine_id=self.machine_id, fresh=fresh)
             except Exception:
                 logger.debug("[fleet] local status failed", exc_info=True)
                 snap = {
