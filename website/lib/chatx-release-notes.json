@@ -1,5 +1,41 @@
 [
   {
+    "version": "1.0.105",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "人设回复形态：真人感、每条发语音、语音文字分开说；语音不再结巴；群成员同群开口",
+      "en": "Persona reply style: human feel, voice on every reply, split voice and text; no more stutter; same-group outreach"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "人设说话更像真人，每个人设可以单独设置回复方式。打开人设页，编辑人设，在语音区的「语气表达」卡里有三个新下拉（默认都是「跟随全局」，改完点保存）：",
+        "① 真人感：选「活泼」，语音里会带思考声（嗯……）、轻笑，偶尔自我纠正一下，听起来像真人在说话；选「自然」只改成口语，不加小动作；选「关闭」照稿念。",
+        "② 何时发语音：每条回复都发 / 对方发语音时才发 / 智能判断 / 不发语音。",
+        "③ 语音文字分开说：打开后，一条回复的前半句用语音说、后半句发文字，内容不重复，一次展示两种能力。",
+        "②③ 用于 Telegram 自动回复，需要语音页的 Telegram 语音回复总开关是开着的。",
+        "语音不再结巴：不会重复词，也不会在词组、人名、数字中间断开。",
+        "群成员同群开口：在群成员管理台（收件箱右栏「工具箱」→「群成员提取」→「打开管理台」）新增第④步「今日开口」。选号 → 「生成今日队列」→ 「AI 拟稿」（按这个号的人设和对方在群里说过的话写一句开场）→ 逐条修改或跳过 → 「批准」。可以选手动逐条发、批准后自动发，或全自动（只有注册满 14 天、近期没撞过风控的号才能开）。每号每天 5–10 人，只在白天发；72 小时没回音会补一句跟进，只补一次。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Personas sound more human, and each persona can set its own reply style. Open the Personas page, edit a persona, and find three new dropdowns in the \"Tone\" card of the voice section (all default to \"Follow global\"; save after changing):",
+        "(1) Human feel: \"Lively\" adds thinking sounds, light laughs and the odd self-correction so the voice sounds like a real person; \"Natural\" only makes it conversational; \"Off\" reads the text as written.",
+        "(2) When to send voice: every reply / only when they send voice / smart / never.",
+        "(3) Split voice and text: the first part of a reply is spoken and the rest is sent as text, without repeating, showing both abilities at once.",
+        "(2) and (3) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice page to be on.",
+        "No more stuttering in voice: no repeated words, and no breaks inside phrases, names or numbers.",
+        "Same-group outreach: the group-members console (inbox right rail → Toolbox → Group member extraction → Open console) gains step 4 \"Today's openers\". Pick an account → Build today's queue → AI draft (one opening line from this account's persona and what the person said in the group) → edit or skip each → Approve. Send manually one by one, auto-send after approval, or fully automatic (only for accounts registered 14+ days with no recent rate-limit hits). 5-10 people per account per day, daytime only; one follow-up after 72 hours of silence, once.",
+        "All your data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
     "version": "1.0.104",
     "date": "2026-10-01",
     "title": {
