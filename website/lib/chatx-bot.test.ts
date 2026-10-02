@@ -76,7 +76,7 @@ async function main() {
   assert.ok(!btns.some((b) => b.url?.includes("tg=") && !b.url?.includes("/download/chatx")), "uid 只进下载链，教程/官网链不带");
   assert.ok(btns.some((b) => b.callback_data === "cx_human"), "人工客服是回调（点击能通知管理员），不再是裸外链");
   assert.ok(btns.some((b) => b.url?.includes("/chatx/tutorials") && b.url?.includes("src=ad_biz_a01")), "有教程按钮且带 src");
-  assert.ok(btns.some((b) => b.url === "https://t.me/hykj7"), "有官方频道按钮");
+  assert.ok(btns.some((b) => b.url === "https://t.me/bdccz"), "有官方频道按钮");
   assert.ok(btns.some((b) => /^https:\/\/bd2026\.cc\/\?/.test(b.url ?? "") && b.url?.includes("utm_medium=chatx_bot") && b.url?.includes("utm_campaign=ad_biz_a01")), "有官网按钮且带 utm/来源码");
   assert.ok(!btns.some((b) => b.web_app), "首条键盘不再有小程序按钮（走菜单键）");
   assert.ok(!btns.some((b) => b.url?.includes("/growth")), "不得落到 /growth 泛页");
