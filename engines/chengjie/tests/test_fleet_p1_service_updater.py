@@ -236,9 +236,10 @@ def test_swap_script_windows_and_linux(tmp_path):
     body, suf = upd.build_swap_script(cur, new, 4242, windows=True)
     assert suf == ".ps1"
     assert "Wait-Process -Id 4242" in body
-    assert f"Copy-Item -LiteralPath '{cur}' -Destination '{cur}.bak'" in body
-    assert f"Move-Item -LiteralPath '{new}' -Destination '{cur}'" in body
-    assert f'schtasks /Run /TN "{svc.TASK_NAME}"' in body
+    assert f"$cur = '{cur}'" in body and f"$bak = '{cur}.bak'" in body and f"$new = '{new}'" in body
+    assert "Copy-Item -LiteralPath $cur -Destination $bak -Force" in body
+    assert "Move-Item -LiteralPath $new -Destination $cur -Force" in body
+    assert f"$task = '{svc.TASK_NAME}'" in body and 'schtasks /Run /TN "$task"' in body
     assert upd.swap_command(Path("x.ps1"))[:2] == ["powershell", "-NoProfile"]
 
     body, suf = upd.build_swap_script(Path("/opt/a/chatx-agent"), Path("/var/a/new"), 7, windows=False)
@@ -256,7 +257,7 @@ def test_windows_swap_runs_as_independent_scheduled_task():
     assert r"C:\x\swap.ps1" in create[create.index("/TR") + 1]
     assert run[run.index("/TN") + 1] == upd.SWAP_TASK_NAME
     body, _ = upd.build_swap_script(Path(r"C:\a\chatx-agent.exe"), Path(r"C:\b\new.exe"), 1, windows=True)
-    assert f'schtasks /Delete /TN "{upd.SWAP_TASK_NAME}" /F' in body
+    assert f"$swapTask = '{upd.SWAP_TASK_NAME}'" in body and 'schtasks /Delete /TN "$swapTask" /F' in body
 
 
 def test_apply_upgrade_rejects_without_sha_or_when_not_frozen(tmp_path):

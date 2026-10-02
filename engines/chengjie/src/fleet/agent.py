@@ -21,6 +21,7 @@
     login_qr        → POST /api/platforms/{platform}/login/start → {login_id, qr_image, ...}
     login_status    → GET  /api/platforms/{platform}/login/{login_id}/status
     stop_account    → POST /api/player-care/commands {kind: stop, account, phone}
+                      + 本机 huoke 实例（domain=huoke）→ POST /outreach/stop-account（X-API-Key；号码/账号进 STOP 表、暂停设备触达）
     restart_instance→ 实例条目配了 restart_cmd 才执行，否则 rejected
     upgrade         → 下载+sha256 校验+换文件后重启（updater.py；仅冻结 exe，源码态拒绝）
     push_config     → v1 仍 rejected: not_supported
@@ -47,8 +48,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
 from .detect import (
-    LIVE_STREAM_PORTS, detect_instances, is_live_port_url, is_live_stream_host, is_loopback_url, sanitize_instances,
-    url_port,
+    LIVE_STREAM_PORTS, detect_instances, is_blocked_live_port, is_live_port_url, is_live_stream_host, is_loopback_url,
+    sanitize_instances, url_port,
 )
 from .identity import (
     StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
@@ -73,6 +74,9 @@ LOCAL_TIMEOUT = 8
 BACKOFF_MIN, BACKOFF_MAX = 2.0, 60.0
 REENROLL_BACKOFF_SEC = 30
 ENV_CONTROLLER = "CHATX_FLEET_CONTROLLER"
+HUOKE_DOMAIN = "huoke"            # 本机获客（手机群控）实例：stop_account 同步落到它的 STOP 表 / 设备暂停
+HUOKE_STOP_PATH = "/outreach/stop-account"
+HUOKE_HEALTH_PATH = "/health"
 
 HttpFn = Callable[[str, str, Optional[Dict[str, Any]], Dict[str, str], float], Tuple[int, Dict[str, Any]]]
 
@@ -134,10 +138,11 @@ def _migrated_instances(source: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         name = name.strip()[:40]
         url = url.strip().rstrip("/")
-        if not name or name in seen or not is_loopback_url(url) or is_live_port_url(url):
+        domain = raw.get("domain")
+        if (not name or name in seen or not is_loopback_url(url)
+                or is_blocked_live_port(url, domain if isinstance(domain, str) else "")):
             continue
         tok = raw.get("auth_token")
-        domain = raw.get("domain")
         role = raw.get("role")
         seen.add(name)
         out.append({
@@ -340,7 +345,7 @@ class AgentConfig:
                      allow_live_port: bool = False) -> None:
         if not is_loopback_url(base_url):
             raise AgentError("instance URL must be loopback (127.0.0.1 / localhost / ::1)")
-        if is_live_port_url(base_url) and not allow_live_port:
+        if is_blocked_live_port(base_url, domain, self.state_dir) and not allow_live_port:
             raise AgentError(f"port {url_port(base_url)} is a live-stream port "
                              f"({', '.join(str(p) for p in sorted(LIVE_STREAM_PORTS))}); "
                              "pass --allow-live-port to register it anyway")
@@ -654,6 +659,15 @@ class NodeAgent:
                 instances.append(entry)
                 continue
             entry = {"name": inst.get("name"), "domain": domain, "up": False}
+            if domain == HUOKE_DOMAIN:
+                # huoke 没有智聊的 /api/accounts/fleet-health（一直 404）；探活走它自己的 /health
+                try:
+                    self._local(inst, "GET", HUOKE_HEALTH_PATH)
+                    entry["up"] = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{inst.get('name')}: huoke health {e}")
+                instances.append(entry)
+                continue
             try:
                 fh = self._local(inst, "GET", "/api/accounts/fleet-health")
                 entry["up"] = True
@@ -712,25 +726,34 @@ class NodeAgent:
         base = str(inst.get("base_url") or "").rstrip("/")
         if not base:
             raise AgentError("instance base_url 为空")
-        if is_live_port_url(base) and not inst.get("allow_live_port"):
+        if (is_live_port_url(base) and not inst.get("allow_live_port")
+                and is_blocked_live_port(base, _instance_domain(inst), self.cfg.state_dir)):
             # e.g. an 'avatarhub' at :9000 added by an older detect on a live machine.
             raise AgentError(f"live-stream port {url_port(base)} not probed (remove-instance {inst.get('name')})")
         headers = {}
         tok = _instance_token(inst)
         if tok:
-            headers["Authorization"] = f"Bearer {tok}"
+            if _instance_domain(inst) == HUOKE_DOMAIN:
+                headers["X-API-Key"] = tok          # huoke verify_api_key: X-API-Key（Bearer 只认会话 token）
+            else:
+                headers["Authorization"] = f"Bearer {tok}"
         code, data = self.http(method, base + path, body, headers, LOCAL_TIMEOUT)
         if code >= 400:
             raise AgentError(f"local {path} → HTTP {code}: {data.get('detail') or data}")
         return data
 
     def _pick_instance(self, task: Dict[str, Any], *, prefer_domain: str = "",
-                       allow_health: bool = False) -> Optional[Dict[str, Any]]:
+                       allow_health: bool = False, allow_huoke: bool = False) -> Optional[Dict[str, Any]]:
         want = str((task.get("target") or {}).get("instance") or (task.get("payload") or {}).get("instance") or "")
         insts = self.cfg.instances if allow_health else [i for i in self.cfg.instances if not _health_only(i)]
+        if not want and prefer_domain != HUOKE_DOMAIN:
+            insts = [i for i in insts if _instance_domain(i) != HUOKE_DOMAIN]   # 智聊任务不落到 huoke
         if want:
             for i in insts:
                 if i.get("name") == want:
+                    if _instance_domain(i) == HUOKE_DOMAIN and prefer_domain != HUOKE_DOMAIN and not allow_huoke:
+                        # 智聊接口 + X-API-Key 绝不打到 huoke：指名 huoke 实例的智聊任务一律拒绝
+                        return None
                     return i
             return None
         if prefer_domain:
@@ -801,16 +824,10 @@ class NodeAgent:
                 out["qr_data_url"] = safe_qr_data_url(res.get("qr_image"))
                 return STATUS_DONE, out, str(res.get("status") or "ok")
             if kind == TASK_STOP_ACCOUNT:
-                inst = self._pick_instance(task, prefer_domain="player_care")
-                phone = str(target.get("phone") or "")
-                if inst is None or not phone:
-                    return STATUS_REJECTED, {}, "no_instance_or_phone"
-                body = {"kind": "stop", "phone": phone, "account": str(target.get("account") or ""),
-                        "text": str(payload.get("reason") or "fleet stop")}
-                res = self._local(inst, "POST", "/api/player-care/commands", body)
-                return STATUS_DONE, {"instance": inst.get("name"), "command": res.get("command")}, "stop_enqueued"
+                return self._stop_account(task, target, payload)
             if kind == TASK_RESTART_INSTANCE:
-                inst = self._pick_instance(task, allow_health=True)
+                # restart_cmd 是本机命令、不走 HTTP / API key，指名 huoke 实例时照旧可重启
+                inst = self._pick_instance(task, allow_health=True, allow_huoke=True)
                 if inst is not None and _health_only(inst):
                     return STATUS_REJECTED, {}, "health_only"
                 cmd = str((inst or {}).get("restart_cmd") or "")
@@ -831,6 +848,69 @@ class NodeAgent:
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
             return STATUS_FAILED, {"error": str(e)[:300]}, "exception"
+
+    def _huoke_instances(self, want: str = "") -> List[Dict[str, Any]]:
+        out = [i for i in self.cfg.instances if _instance_domain(i) == HUOKE_DOMAIN]
+        return [i for i in out if i.get("name") == want] if want else out
+
+    def _stop_account(self, task: Dict[str, Any], target: Dict[str, Any],
+                      payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
+        """智聊 commandbus ``stop``（原行为，需 phone）+ 本机 huoke 实例的 STOP 表 / 设备暂停。
+
+        * ``target.instance`` 指名 huoke 实例 → 只落 huoke；指名智聊实例 → 只走智聊（原行为）。
+        * 未指名 → 智聊（有 phone 且有实例时）+ 每个 huoke 实例（best-effort）；任一侧落地即 done，
+          失败侧写进 result（只存状态，不存号码）。
+        """
+        want = str(target.get("instance") or payload.get("instance") or "")
+        phone = str(target.get("phone") or "")
+        account = str(target.get("account") or "")
+        device_id = str(target.get("device_id") or "")
+        reason = str(payload.get("reason") or "fleet stop")
+        huoke = self._huoke_instances(want)
+        chatx = None
+        if not (want and huoke):
+            chatx = self._pick_instance(task, prefer_domain="player_care")
+        result: Dict[str, Any] = {}
+        ok_any = False
+        errors: List[str] = []
+        if chatx is not None and phone:
+            body = {"kind": "stop", "phone": phone, "account": account, "text": reason}
+            try:
+                res = self._local(chatx, "POST", "/api/player-care/commands", body)
+                result.update({"instance": chatx.get("name"), "command": res.get("command")})
+                ok_any = True
+            except Exception as e:  # noqa: BLE001
+                if not huoke:
+                    raise
+                errors.append(f"{chatx.get('name')}: {str(e)[:120]}")
+        if huoke and (phone or account or device_id):
+            hres = []
+            for inst in huoke:
+                body = {"phone": phone, "account": account, "device_id": device_id,
+                        "reason": reason[:80], "source": "fleet"}
+                try:
+                    r = self._local(inst, "POST", HUOKE_STOP_PATH, body)
+                    item = {"instance": inst.get("name"), "ok": bool(r.get("ok")),
+                            "stopped": len(r.get("stopped") or []),
+                            "paused_devices": len(r.get("paused_devices") or [])}
+                    if not r.get("ok"):
+                        # 200 但 ok:false：保留 huoke 给的原因，任务记 failed（不是 rejected）
+                        why = str(r.get("detail") or r.get("error") or r.get("reason") or r.get("message") or "ok=false")
+                        item["detail"] = why[:200]
+                        errors.append(f"{inst.get('name')}: {why[:120]}")
+                    hres.append(item)
+                    ok_any = ok_any or bool(r.get("ok"))
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{inst.get('name')}: {str(e)[:120]}")
+                    hres.append({"instance": inst.get("name"), "ok": False})
+            result["huoke"] = hres
+        if errors:
+            result["errors"] = errors
+        if ok_any:
+            return STATUS_DONE, result, "stop_enqueued"
+        if errors:
+            return STATUS_FAILED, result, "stop_failed"
+        return STATUS_REJECTED, {}, "no_instance_or_phone"
 
     # ── 主循环 ──
     def run_once(self, *, wait: int = 0) -> Dict[str, Any]:

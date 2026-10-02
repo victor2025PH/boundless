@@ -111,7 +111,7 @@
 
 | kind | 优先级 | payload / target | Agent v1 行为 | result |
 |---|---|---|---|---|
-| `stop_account` | 0 | `target.instance`, `target.phone` (E.164) 或 `target.account` | 走本机 `POST /api/player-care/commands` 产 `stop` 指令，**入队时作废同号未拉走任务** | commandbus 回执 |
+| `stop_account` | 0 | `target.instance`, `target.phone` (E.164) 或 `target.account`；huoke 另收 `target.device_id` | 走本机 `POST /api/player-care/commands` 产 `stop` 指令，**入队时作废同号未拉走任务**；本机若登记了 `domain: huoke` 实例，同时 `POST /outreach/stop-account`（X-API-Key = 实例 auth_token）把号码/账号写进 huoke 全局 STOP 表、暂停对应设备的触达（指名 huoke 实例时只落 huoke） | commandbus 回执 + `huoke[]`（只有计数） |
 | `upgrade` | 2 | `payload.version`, `payload.url`, `payload.sha256`（必填） | **Agent ≥0.2.0（打包版）执行**：下载到 `<state>/updates/`、校验 sha256、写换文件脚本、ack `done` 后退出，由计划任务 / systemd 拉起新版；源码运行 rejected `not_frozen`；缺 sha256 rejected `sha256_required` | `staged`, `version`, `exit: true` |
 | `restart_instance` | 3 | `target.instance` | 仅当 Agent 本地 `instances[].restart_cmd` 显式配置才执行，否则 rejected | 退出码 |
 | `push_config` | 4 | `payload.patch` | **rejected** `not_supported_in_agent_v1`（无安全的配置 patch 设计前不开） | — |
