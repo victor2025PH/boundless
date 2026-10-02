@@ -72,6 +72,46 @@ persona:
     - 诈骗
   capabilities:
     video_call: false
+  # 同群开口挑人：对方群发言命中这些词的先发（意向分，见 src/companion/member_intent.py）；
+  # 命中排除词的不开口。画像＝在 TG/WhatsApp 上做生意、消息多、要获客/翻译/多账号的人。
+  sales:
+    intent_keywords:
+    - 客服
+    - 自动回复
+    - 回不过来
+    - 回复不过来
+    - 消息太多
+    - 私信
+    - 咨询
+    - 接待
+    - 翻译
+    - 多开
+    - 多账号
+    - 引流
+    - 获客
+    - 拓客
+    - 客源
+    - 询盘
+    - 外贸
+    - 跨境
+    - 出海
+    - 转化
+    - 成交
+    - 话术
+    - 机器人
+    - 智能回复
+    - customer service
+    - auto reply
+    - autoreply
+    - chatbot
+    - leads
+    - translate
+    intent_negative:
+    - 博彩
+    - 菠菜
+    - 裸聊
+    - 代收
+    - 洗钱
   tags:
   - 销售
   - 无界科技

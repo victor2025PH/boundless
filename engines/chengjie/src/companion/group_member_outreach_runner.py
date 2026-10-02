@@ -362,10 +362,11 @@ class OutreachRunner:
         from src.companion.group_member_outreach import enqueue_today
         st = self.store
         try:
-            if st.count_outreach_queued(acct) == 0:
-                enqueue_today(st, acct, now=now, since_ts=since, policy=policy, age_days=age)
             ctx = build_opener_context(self.cfg_fn() or {}, "telegram", acct, self.inbox_fn(),
                                        registry=self.registry_fn())
+            if st.count_outreach_queued(acct) == 0:
+                enqueue_today(st, acct, now=now, since_ts=since, policy=policy, age_days=age,
+                              intent=ctx.get("intent"))
             await compose_queue(st, self.ai_fn(), account_id=acct, ctx=ctx, since_ts=since)
             st.approve_queued(acct, now)
         except Exception:

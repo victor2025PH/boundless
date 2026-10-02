@@ -848,6 +848,8 @@
       var head = '<div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
         (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
         esc(m.group_title || "") + (m.lang_code ? ' <span class="pill tpl">' + esc(m.lang_code) + "</span>" : "") +
+        (m.intent > 0 ? ' <span class="pill ok" title="' + t("按人设的意向关键词命中，意向高的先排", "matched the persona's intent keywords; higher intent is queued first") + '">' +
+          t("意向 ", "intent ") + esc(String(m.intent)) + "：" + esc((m.intent_hits || []).join("、")) + "</span>" : "") +
         "</div><div>" + (state === "approved" ? '<span class="pill ok">' : '<span class="pill">') +
         esc(outreachLabel(state)) + "</span> " + sourcePill(m.opener_source) +
         (m.opener_variant && m.opener_source === "ai" ? ' <span class="pill" title="' + t("切入方式（A/B）", "opener angle (A/B)") + '">' + esc(variantLabel(m.opener_variant)) + "</span>" : "") +

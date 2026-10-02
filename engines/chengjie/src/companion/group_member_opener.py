@@ -422,6 +422,11 @@ def build_opener_context(cfg: Dict[str, Any], platform: str, account_id: str,
     except Exception:
         logger.debug("[gm_opener] 人设块装配跳过", exc_info=True)
     try:
+        from src.companion.member_intent import intent_terms
+        out["intent"] = intent_terms(out.get("persona"), cfg or {})
+    except Exception:
+        out["intent"] = {"positive": [], "negative": []}
+    try:
         from src.companion.goals import defaults as gdef
         from src.companion.goals.templates import get_template
         spec = gdef.get_default(inbox_store, platform=platform, account_id=account_id,

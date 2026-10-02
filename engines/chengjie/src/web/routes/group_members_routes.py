@@ -488,11 +488,11 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
             raise HTTPException(400, tr(request, "err.gm.bad_request"))
         from src.companion.group_member_outreach import build_preview
         now, since = _outreach_clock()
+        ctx = _opener_ctx(request, account_id)
         out = build_preview(
             st, account_id, now=now, since_ts=since, policy=_outreach_policy(),
-            age_days=_account_age_days(request, account_id, now))
+            age_days=_account_age_days(request, account_id, now), intent=ctx.get("intent"))
         out["gate"] = _outreach_gate_quota(request, account_id)
-        ctx = _opener_ctx(request, account_id)
         out["persona"] = {"id": ctx.get("persona_id") or "", "name": ctx.get("persona_name") or ""}
         out["goal"] = {"template": ctx.get("goal_template") or "",
                        "name": ctx.get("goal_name") or ""}
@@ -808,7 +808,8 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         now, since = _outreach_clock()
         result = enqueue_today(
             st, account_id, now=now, since_ts=since, policy=_outreach_policy(),
-            age_days=_account_age_days(request, account_id, now))
+            age_days=_account_age_days(request, account_id, now),
+            intent=_opener_ctx(request, account_id).get("intent"))
         if not result.get("ok"):
             _raise_outreach(request, str(result.get("kind") or ""), 409)
         _audit(request, "tg_members_outreach_queue", account_id,

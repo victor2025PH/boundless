@@ -243,18 +243,37 @@ def _candidate_ok(member: Dict[str, Any], account_id: str,
 
 
 def select_candidates(members: Sequence[Dict[str, Any]], *, account_id: str,
-                      slots: int, touched: Set[str]) -> List[Dict[str, Any]]:
-    """从 none 里挑今天还能排队的人。有用户名、最近发过言的排前面。跨群 user_id 只留一条。"""
+                      slots: int, touched: Set[str],
+                      intent: Optional[Dict[str, Sequence[str]]] = None) -> List[Dict[str, Any]]:
+    """从 none 里挑今天还能排队的人。跨群 user_id 只留一条。
+
+    排序：意向分（人设关键词命中，见 member_intent）> 有用户名 > 最近发言 > 静态分。
+    命中排除词的人不排。
+    """
+    from src.companion.member_intent import member_intent
     slots = max(0, int(slots))
     if slots <= 0:
         return []
-    ranked = [m for m in members if _candidate_ok(m, account_id, touched)]
-    ranked.sort(key=lambda m: (
-        0 if str(m.get("username") or "").strip() else 1,
-        -float(m.get("last_spoke_ts") or 0.0),
-        -int(m.get("score") or 0),
-        str(m.get("user_id") or ""),
+    ranked = []
+    for m in members:
+        if not _candidate_ok(m, account_id, touched):
+            continue
+        score, _hits = member_intent(m, intent)
+        if score < 0:
+            continue
+        ranked.append((score, m))
+    ranked.sort(key=lambda sm: (
+        -sm[0],
+        0 if str(sm[1].get("username") or "").strip() else 1,
+        -float(sm[1].get("last_spoke_ts") or 0.0),
+        -int(sm[1].get("score") or 0),
+        str(sm[1].get("user_id") or ""),
     ))
+    return _dedup_take([m for _s, m in ranked], touched, slots)
+
+
+def _dedup_take(ranked: Sequence[Dict[str, Any]], touched: Set[str],
+                slots: int) -> List[Dict[str, Any]]:
     seen = set(touched)
     picked: List[Dict[str, Any]] = []
     for m in ranked:
@@ -320,9 +339,19 @@ def public_member(member: Dict[str, Any], *, with_opener: bool = False) -> Dict[
     return d
 
 
+def _with_intent(row: Dict[str, Any], member: Dict[str, Any],
+                 intent: Optional[Dict[str, Sequence[str]]]) -> Dict[str, Any]:
+    from src.companion.member_intent import member_intent
+    score, hits = member_intent(member, intent)
+    row["intent"] = score
+    row["intent_hits"] = hits
+    return row
+
+
 def build_preview(store: Any, account_id: str, *, now: float, since_ts: float,
                   policy: OutreachPolicy, age_days: Optional[float] = None,
-                  hour: Optional[int] = None) -> Dict[str, Any]:
+                  hour: Optional[int] = None,
+                  intent: Optional[Dict[str, Sequence[str]]] = None) -> Dict[str, Any]:
     store.reap_stale_sending(now)
     cap = clamp_outreach_cap(policy.cap)
     eff_cap = effective_outreach_cap(policy, age_days)
@@ -331,7 +360,8 @@ def build_preview(store: Any, account_id: str, *, now: float, since_ts: float,
     slots = max(0, eff_cap - used - queued_n)
     owned = store.list_by_hash_account(account_id)
     touched = store.touched_user_ids()
-    candidates = select_candidates(owned, account_id=account_id, slots=slots, touched=touched)
+    candidates = select_candidates(owned, account_id=account_id, slots=slots, touched=touched,
+                                   intent=intent)
     queued = [m for m in owned
               if str(m.get("outreach_state") or "") in (OUTREACH_QUEUED, OUTREACH_APPROVED)]
     # 已批准的排前面（调度器就按这个顺序发），其余按近发言
@@ -359,8 +389,10 @@ def build_preview(store: Any, account_id: str, *, now: float, since_ts: float,
         "min_gap_sec": int(policy.min_gap_sec),
         "gap_wait_sec": int(gap_wait),
         "unhashed": store.count_unhashed_for_account(account_id),
-        "candidates": [public_member(m, with_opener=True) for m in candidates],
-        "queue": [public_member(m, with_opener=True) for m in queued],
+        "candidates": [_with_intent(public_member(m, with_opener=True), m, intent)
+                       for m in candidates],
+        "queue": [_with_intent(public_member(m, with_opener=True), m, intent) for m in queued],
+        "intent_configured": bool(intent and (intent.get("positive") or intent.get("negative"))),
         # 今日回音：对方回了什么、会话在哪——闭环的最后一眼
         "replied": [public_member(m) for m in store.list_replied_since(account_id, since_ts)],
         # 第二跳没接上：回了 N 小时我方还没回话（AI 没触发 / 坐席没接）——开口成功却掉地的人
@@ -375,13 +407,14 @@ def stalled_before(policy: OutreachPolicy, now: float) -> float:
 
 
 def enqueue_today(store: Any, account_id: str, *, now: float, since_ts: float,
-                  policy: OutreachPolicy, age_days: Optional[float] = None) -> Dict[str, Any]:
+                  policy: OutreachPolicy, age_days: Optional[float] = None,
+                  intent: Optional[Dict[str, Sequence[str]]] = None) -> Dict[str, Any]:
     """把今天还能开口的人标成 queued。不发送。时段外也可以先排好，发的时候再拦。"""
     block = hold_block_reason(store, account_id, now)
     if block:
         return {"ok": False, "kind": block, "queued_now": 0}
     preview = build_preview(store, account_id, now=now, since_ts=since_ts,
-                            policy=policy, age_days=age_days)
+                            policy=policy, age_days=age_days, intent=intent)
     n = 0
     for m in preview["candidates"]:
         if store.cas_outreach(
