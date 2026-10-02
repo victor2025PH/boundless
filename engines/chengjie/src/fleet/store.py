@@ -1180,6 +1180,8 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
         "enroll_code_ttl_min": _int(fc.get("enroll_code_ttl_min")) or ENROLL_CODE_TTL_MIN,
         "pending_ttl_sec": _int(fc.get("pending_ttl_sec")) or PENDING_TTL_SEC,
         "public_url": str(fc.get("public_url") or ""),
+        # 控制台入口（子域上线后填 https://fleet.bd2026.cc/fleet/console；空 = 同站 /fleet/console）
+        "console_url": str(fc.get("console_url") or ""),
         "download": {
             "version": str(dl.get("version") or ""),
             "installer_url": str(dl.get("installer_url") or ""),
@@ -1204,7 +1206,7 @@ def _fetch_manifest(url: str) -> Optional[Dict[str, Any]]:
 
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
-            d = json.loads(r.read().decode("utf-8"))
+            d = json.loads(r.read().decode("utf-8-sig"))  # manifest.json written by PowerShell 5.1 carries a BOM
         return d if isinstance(d, dict) else None
     except Exception:
         return None

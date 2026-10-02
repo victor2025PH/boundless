@@ -14,7 +14,7 @@
 #   ... -Code 12345678                             # one-time code, skips the pending queue
 #   ... -RoomKeyFile .\room.key                    # room pack; the key is read from the file only
 #   ... -Exe .\chatx-agent.exe                     # offline: use a local exe instead of downloading
-#   ... -NoEnroll                                  # skip a new enroll. An unlocked agent.json keeps identity fields only; instances are cleared and restart_cmd must be set again by an admin
+#   ... -NoEnroll                                  # skip a new enroll. An unlocked agent.json keeps identity fields and each instance's name/url/auth_token only; config_path is re-detected and restart_cmd must be set again by an admin
 #   ... -ConfigPath C:\path\config.local.yaml      # pin one ChatX instance instead of auto-detect
 #
 # ASCII only (PowerShell 5.1 + GBK console lesson). Never prints node_key / auth tokens.
@@ -42,6 +42,12 @@ function Fail($m) { Write-Host "[chatx-agent] ERROR: $m" -ForegroundColor Red; e
 function Native([string]$exe, [string[]]$a) {
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { $o = & $exe @a 2>&1 | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
+  finally { $ErrorActionPreference = $old }
+}
+# stdout only: agent log lines go to stderr and would break ConvertFrom-Json (issue g4).
+function NativeOut([string]$exe, [string[]]$a) {
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $o = & $exe @a 2>$null | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
 function Test-Reparse([string]$Path) {
@@ -213,7 +219,7 @@ if (-not $NoInstance) {
 if (-not $NoEnroll) {
   $skipEnroll = $false
   if (-not $Code -and -not $RoomKeyFile) {
-    $stRaw = Native $target @('--state-dir', $stateDir, 'status')
+    $stRaw = NativeOut $target @('--state-dir', $stateDir, 'status')
     try {
       $enr = [string](($stRaw | ConvertFrom-Json).enrollment)
       if ($enr -eq 'enrolled' -or $enr -eq 'pending') { $skipEnroll = $true; Say "enrollment already $enr" }
@@ -224,7 +230,7 @@ if (-not $NoEnroll) {
   if ($detect) { $enrollArgs += '--detect' }
   if ($Code) { $enrollArgs += @('--code', $Code) }
   if ($RoomKeyFile) { $enrollArgs += @('--room-key-file', $RoomKeyFile) }
-  $out = Native $target $enrollArgs
+  $out = NativeOut $target $enrollArgs
   if ($NativeExit -ne 0) { Say "enroll failed; installing the service so it can retry" }
   else {
   try {

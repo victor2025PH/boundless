@@ -337,7 +337,9 @@ def test_panel_status_reloads_pending_config(tmp_path, serve, monkeypatch):
         lambda: {"installed": True, "state": "正在运行", "task_name": TASK_NAME, "query": "ok"},
     )
     monkeypatch.setattr("src.fleet.local_status.probe_controller", lambda url, **kwargs: False)
-    cfg = AgentConfig(tmp_path)
+    # A sub-dir: conftest keeps SQLite files open in tmp_path, so Windows cannot move it aside.
+    state = tmp_path / "fleet"
+    cfg = AgentConfig(state)
     cfg.data.update({
         "controller_url": "https://ctl.test/fleet",
         "pending_request_id": "req-9",
@@ -345,7 +347,7 @@ def test_panel_status_reloads_pending_config(tmp_path, serve, monkeypatch):
         "enroll_secret": "es_secret",
     })
     cfg.save()
-    httpd = serve(tmp_path, machine_id="m-reload")
+    httpd = serve(state, machine_id="m-reload")
     status, raw, _headers = _req(httpd.server_address[1], "GET", "/api/local/status")
     assert status == 200
     snap = json.loads(raw)

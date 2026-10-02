@@ -73,7 +73,8 @@ def test_install_service_windows_runs_create_then_run(monkeypatch, tmp_path):
 
     res = svc.install_service(tmp_path, run=run)
     assert res["ok"] and res["kind"] == "schtasks"
-    assert calls[0][1] == "/Create" and calls[1][1] == "/Run"
+    # /End first: /Create /F on a running task detaches the old process (issue g3).
+    assert [c[1] for c in calls] == ["/End", "/Create", "/Run"]
     assert res["command"][-2:] == ["run", "--service"]
 
 
@@ -86,7 +87,7 @@ def test_install_service_windows_failure_stops_early(monkeypatch, tmp_path):
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: Access is denied.")
 
     res = svc.install_service(tmp_path, run=run)
-    assert not res["ok"] and len(calls) == 1
+    assert not res["ok"] and [c[1] for c in calls] == ["/End", "/Create"]
     assert "denied" in res["steps"][0]["out"]
 
 

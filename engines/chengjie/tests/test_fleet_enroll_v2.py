@@ -24,7 +24,7 @@ from src.fleet.agent import (
 from src.fleet.detect import detect_instances, is_loopback_url, sanitize_instances
 from src.fleet.identity import (
     StateDirLockError, discard_untrusted_secret, fleet_lock_steps, lock_state_dir,
-    parent_dir_lock_plan, state_dir_acl_command, state_dir_lock_plan, state_file_trusted,
+    parent_dir_lock_plan, state_dir_acl_command, state_dir_is_locked, state_dir_lock_plan, state_file_trusted,
 )
 from src.fleet.protocol import PROTO_VERSION, STATUS_REJECTED, TASK_RESTART_INSTANCE
 from src.fleet.store import (
@@ -259,7 +259,7 @@ def test_agent_pending_then_poll_and_no_instance_fallback(st, tmp_path, monkeypa
     assert got["status"] == "active" and got["node_id"] == nid and cfg.node_key.startswith("nk_")
     hb = agent.build_heartbeat()
     assert hb["instances"] == [] and hb["accounts"] == {"total": 0, "online": 0}
-    assert agent_mod.AGENT_VERSION == "0.3.1"
+    assert agent_mod.AGENT_VERSION == "0.3.3"
 
 
 def test_detect_chatx_and_avatar_health_only(st, tmp_path, monkeypatch):
@@ -271,9 +271,12 @@ def test_detect_chatx_and_avatar_health_only(st, tmp_path, monkeypatch):
     skipped.write_text("domain: fleet_control\nweb_admin:\n  port: 1\n", encoding="utf-8")
 
     def probe(url):
-        return url.startswith("http://127.0.0.1:9000/")
+        return url.startswith("http://127.0.0.1:9100/")
 
-    found = detect_instances(probe=probe, config_paths=[cfg_path, skipped], search=False, avatar_url="http://127.0.0.1:9000")
+    # 9000 (the old AvatarHub default) is a live-stream port and is never probed;
+    # a non-live avatar_url still gets the health-only instance.
+    found = detect_instances(probe=probe, config_paths=[cfg_path, skipped], search=False,
+                             avatar_url="http://127.0.0.1:9100", live_stream=False)
     assert [i["name"] for i in found] == ["chatx", "avatarhub"]
     assert found[0]["base_url"] == "http://127.0.0.1:18799" and found[0]["config_path"].endswith("config.local.yaml")
     assert "super-secret" not in json.dumps(sanitize_instances(found))
@@ -411,7 +414,7 @@ def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     ps1 = (ENGINE / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
     assert "-Code <enroll code> is required" not in ps1
     assert "keep existing enrollment" not in ps1
-    assert "instances are cleared" in ps1 and "restart_cmd must be set again" in ps1
+    assert "config_path is re-detected" in ps1 and "restart_cmd must be set again" in ps1
     assert "--detect" in ps1 and "--room-key'" not in ps1 and "-RoomKey " not in ps1
     assert "S-1-5-18" in ps1 and "setowner" in ps1 and "NativeExit" in ps1
     assert "ReparsePoint" in ps1 and "parent owner is not trusted" in ps1
@@ -539,10 +542,20 @@ def test_forwarded_ip_only_from_loopback_and_download_log_is_redacted():
     assert redact_download_path("GET /fleet/dl/rk_abc HTTP/1.1") == "GET /fleet/dl/<redacted> HTTP/1.1"
 
 
+def _assert_private_dir(path: Path) -> None:
+    # POSIX: mode 0700. Windows ignores chmod on directories; check the real ACL
+    # (owner Administrators, no inherited / user-writable ACEs) instead.
+    import os
+    if os.name == "nt":
+        assert state_dir_is_locked(path), path
+    else:
+        assert path.stat().st_mode & 0o777 == 0o700
+
+
 def test_state_dir_locked_before_writes(tmp_path):
     lock_state_dir(tmp_path / "fleet")
     assert (tmp_path / "fleet").is_dir()
-    assert (tmp_path / "fleet").stat().st_mode & 0o777 == 0o700
+    _assert_private_dir(tmp_path / "fleet")
 
 
 def test_state_dir_acl_command_order_closes_the_toctou_window():
@@ -607,7 +620,7 @@ def test_unlocked_fleet_is_renamed_before_a_clean_dir_is_created(tmp_path):
     (fleet / "logs").mkdir()
     lock_state_dir(fleet)
     assert fleet.is_dir() and not fleet.is_symlink()
-    assert fleet.stat().st_mode & 0o777 == 0o700
+    _assert_private_dir(fleet)
     assert list(fleet.iterdir()) == []
     legacies = list(tmp_path.glob("fleet.legacy-*"))
     assert len(legacies) == 1
@@ -661,9 +674,12 @@ def test_locked_dir_skips_reset_and_parent_is_post_checked(tmp_path, monkeypatch
     fleet = tmp_path / "ChatX" / "fleet"
     fleet.parent.mkdir()
     fleet.mkdir()
-    monkeypatch.setattr(ident.os, "name", "nt")
-    # Path() follows os.name. Keep the temp dir a PosixPath so the skip logic can run here.
-    monkeypatch.setattr(ident, "Path", lambda p: p if isinstance(p, PosixPath) else PosixPath(p))
+    import os
+    if os.name != "nt":
+        monkeypatch.setattr(ident.os, "name", "nt")
+        # Path() follows os.name. Keep the temp dir a PosixPath so the skip logic can run here.
+        # (On Windows Path is already WindowsPath and PosixPath cannot be instantiated.)
+        monkeypatch.setattr(ident, "Path", lambda p: p if isinstance(p, PosixPath) else PosixPath(p))
     monkeypatch.setattr(ident, "_is_reparse", lambda _path: False)
     calls = []
     seen = []
@@ -714,21 +730,24 @@ def test_migrate_legacy_keeps_only_identity_fields(tmp_path):
     assert out["pending_request_id"] == "req1"
     assert out["pairing_code"] == "AB2345"
     assert out["controller_url"] == "https://ctl.test/fleet"
-    assert out["instances"] == []
+    # issue g2: the embedded instance token survives; restart_cmd / config_path do not.
+    assert out["instances"] == [{
+        "name": "chatx", "base_url": "http://127.0.0.1:1", "auth_token": "tok",
+        "config_path": "", "domain": "", "restart_cmd": "", "role": "",
+    }]
     saved = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
     blob = json.dumps(saved)
-    assert saved["instances"] == []
-    assert "restart_cmd" not in blob
+    assert saved["instances"] == out["instances"]
+    assert "restart_cmd\": \"calc" not in blob and "calc" not in blob
     assert "evil.example" not in blob
     assert "reenroll_not_before" not in saved
-    assert "auth_token" not in blob
-    assert "config_path" not in blob
-    assert fleet.stat().st_mode & 0o777 == 0o700
+    assert "C:/secret.yaml" not in blob
+    _assert_private_dir(fleet)
     legacies = list(fleet.parent.glob("fleet.legacy-*"))
     assert len(legacies) == 1
     old_blob = (legacies[0] / "agent.json").read_text(encoding="utf-8")
     assert "restart_cmd" in old_blob
-    assert not any("restart_cmd" in p.read_text(encoding="utf-8") for p in fleet.rglob("*.json"))
+    assert not any("calc" in p.read_text(encoding="utf-8") for p in fleet.rglob("*.json"))
 
 
 def test_migrated_heartbeat_keeps_only_an_int_in_range():
@@ -789,7 +808,9 @@ def test_migrate_snapshot_is_removed_when_lock_fails(tmp_path, monkeypatch, caps
 
 def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, capsys):
     secret = _es("keep")
-    cfg = AgentConfig(tmp_path)
+    # Not tmp_path itself: conftest keeps SQLite files open there, so Windows cannot
+    # move an unlocked tmp_path aside (WinError 5).
+    cfg = AgentConfig(tmp_path / "fleet")
     cfg.data.update({
         "controller_url": "https://ctl.test/fleet",
         "pending_request_id": "req_keep",
@@ -831,7 +852,7 @@ def test_poll_restarts_enroll_on_unknown_and_room_key_is_file_only(tmp_path, cap
 
 def test_after_reject_no_further_enroll_attempts(tmp_path):
     secret = _es("rej")
-    cfg = AgentConfig(tmp_path)
+    cfg = AgentConfig(tmp_path / "fleet")   # see test_poll_restarts_enroll_on_unknown_...
     cfg.data.update({
         "controller_url": "https://ctl.test/fleet",
         "pending_request_id": "req_rej",
@@ -897,7 +918,7 @@ def test_unlocked_dir_drops_planted_secrets(tmp_path):
     planted.write_text('{"restart_cmd":"calc"}', encoding="utf-8")
     lock_state_dir(fleet)
     assert not planted.exists()
-    assert fleet.stat().st_mode & 0o777 == 0o700
+    _assert_private_dir(fleet)
     kept = fleet / "machine_id"
     kept.write_text("m-kept\n", encoding="utf-8")
     kept.chmod(0o600)

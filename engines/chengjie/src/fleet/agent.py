@@ -45,14 +45,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .detect import detect_instances, is_loopback_url, sanitize_instances
+from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
+from .detect import (
+    LIVE_STREAM_PORTS, detect_instances, is_live_port_url, is_live_stream_host, is_loopback_url, sanitize_instances,
+    url_port,
+)
 from .identity import (
     StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
     discard_untrusted_secret, host_name, lock_state_dir, node_machine_id, os_label,
     state_dir_is_locked,
 )
 from .local_status import build_local_status, record_heartbeat
-from .service import install_service, service_status, supervise, uninstall_service
+from .service import acquire_single_instance, install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
     DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
@@ -62,7 +66,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.1"
+AGENT_VERSION = "0.3.3"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -103,14 +107,59 @@ class Unauthorized(AgentError):
     pass
 
 
-# Kept across an upgrade from an unlocked directory. Everything else, including
-# instances and restart_cmd, is dropped and rediscovered.
+# Kept across an upgrade from an unlocked directory. restart_cmd and config_path
+# are always dropped; config_path is rediscovered by ``detect``.
 _IDENTITY_FIELDS = ("node_id", "node_key", "heartbeat_sec", "enroll_secret",
                     "pending_request_id", "pairing_code")
+# Per-instance fields carried over from an unlocked agent.json. The embedded
+# auth_token is kept so a 0.2.x instance without config_path keeps working
+# (FLEET_ISSUES_FOR_DEVIN g2). It is only written back after the new state
+# directory is locked. restart_cmd (runs as SYSTEM) and config_path (read as
+# SYSTEM) are never carried over from an unlocked file.
+_MIGRATED_INSTANCE_LIMIT = 8
+
+
+def _migrated_instances(source: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_list = source.get("instances") if isinstance(source, dict) else None
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw_list, list):
+        return out
+    seen = set()
+    for raw in raw_list:
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("name")
+        url = raw.get("base_url")
+        if not isinstance(name, str) or not isinstance(url, str):
+            continue
+        name = name.strip()[:40]
+        url = url.strip().rstrip("/")
+        if not name or name in seen or not is_loopback_url(url) or is_live_port_url(url):
+            continue
+        tok = raw.get("auth_token")
+        domain = raw.get("domain")
+        role = raw.get("role")
+        seen.add(name)
+        out.append({
+            "name": name,
+            "base_url": url[:160],
+            "auth_token": tok if isinstance(tok, str) and len(tok) <= 512 else "",
+            "config_path": "",
+            "domain": domain[:40] if isinstance(domain, str) else "",
+            "restart_cmd": "",
+            "role": role[:20] if isinstance(role, str) else "",
+        })
+        if len(out) >= _MIGRATED_INSTANCE_LIMIT:
+            break
+    return out
 
 
 def migrated_agent_data(controller_url: str, source: Dict[str, Any]) -> Dict[str, Any]:
-    """Identity fields plus the installer controller. ``instances`` is always empty."""
+    """Identity fields plus the installer controller.
+
+    ``instances`` keeps only name / loopback base_url / auth_token / domain / role
+    of each old instance. restart_cmd and config_path are dropped.
+    """
     data: Dict[str, Any] = {
         "controller_url": str(controller_url or "").rstrip("/"),
         "node_id": "",
@@ -131,6 +180,7 @@ def migrated_agent_data(controller_url: str, source: Dict[str, Any]) -> Dict[str
     hb = source.get("heartbeat_sec")
     if isinstance(hb, int) and not isinstance(hb, bool) and 5 <= hb <= 3600:
         data["heartbeat_sec"] = hb
+    data["instances"] = _migrated_instances(source)
     return data
 
 
@@ -153,20 +203,32 @@ class AgentConfig:
         self.data: Dict[str, Any] = {"controller_url": "", "node_id": "", "node_key": "",
                                      "heartbeat_sec": DEFAULT_HEARTBEAT_SEC, "instances": []}
         self._legacy_source: Optional[Dict[str, Any]] = None
+        self._legacy_bytes: Optional[bytes] = None
         self.load()
 
     def load(self) -> None:
         self._legacy_source = None
+        self._legacy_bytes = None
         # Sample before discard. An unlocked file is not merged: identity only.
         if (self.path.is_file() and not _is_reparse(self.state_dir) and not _is_reparse(self.path)
                 and not state_dir_is_locked(self.state_dir)):
             try:
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                blob = self.path.read_bytes()
+                raw = json.loads(blob.decode("utf-8-sig"))
             except Exception:
-                raw = None
+                blob, raw = None, None
             if isinstance(raw, dict):
                 self._legacy_source = raw
+                self._legacy_bytes = blob
                 self.data = migrated_agent_data(str(raw.get("controller_url") or ""), raw)
+        if self._legacy_source is not None:
+            # Do not delete the old agent.json here. It stays on disk until
+            # save() has locked the directory and written the identity-only
+            # copy; if that fails the old file is restored (issue f).
+            env = (os.environ.get(ENV_CONTROLLER) or "").strip()
+            if env:
+                self.data["controller_url"] = env
+            return
         try:
             # Same rule as discard_untrusted_secret: on Windows keep the file only
             # when the state directory is locked and the owner is SYSTEM or Admins.
@@ -183,7 +245,56 @@ class AgentConfig:
         if env:
             self.data["controller_url"] = env
 
+    @property
+    def migrating(self) -> bool:
+        """True while an unlocked agent.json is held in memory and not yet rewritten."""
+        return self._legacy_source is not None
+
     def save(self) -> None:
+        if self._legacy_source is None:
+            self._write_locked()
+            return
+        try:
+            self._write_locked()
+        except Exception as e:
+            restored = self._restore_legacy_file()
+            note = "old agent.json kept" if restored else "old agent.json NOT restored"
+            logger.error("[agent] migration of the unlocked state directory failed: %s (%s)", e, note)
+            raise StateDirLockError(f"migration failed: {e}; {note}") from e
+        self._legacy_source = None
+        self._legacy_bytes = None
+
+    def _restore_legacy_file(self) -> bool:
+        """Put an agent.json with the old identity back after a failed migration.
+
+        If the rename never happened the old file is still there. If the
+        directory was already swapped for a locked one, only the identity-only
+        rewrite goes back, never the unlocked original (it may carry a planted
+        restart_cmd). Returns True when an agent.json with the identity exists.
+        """
+        try:
+            if self.path.is_file() and not _is_reparse(self.path):
+                return True
+            if _is_reparse(self.state_dir) or _is_reparse(self.state_dir.parent):
+                return False
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            if state_dir_is_locked(self.state_dir) or self._legacy_bytes is None:
+                body = json.dumps(self.data, ensure_ascii=False, indent=2).encode("utf-8")
+            else:
+                body = self._legacy_bytes
+            tmp = self.path.with_suffix(".restore")
+            tmp.write_bytes(body)
+            os.replace(tmp, self.path)
+            try:
+                assign_owner_admins(self.path)
+            except Exception as e:
+                logger.debug("[agent] assign_owner_admins failed: %s", e)
+            return self.path.is_file()
+        except Exception:
+            logger.error("[agent] could not restore agent.json after a failed migration", exc_info=True)
+            return False
+
+    def _write_locked(self) -> None:
         lock_state_dir(self.state_dir)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -225,14 +336,31 @@ class AgentConfig:
         return [i for i in v if isinstance(i, dict)] if isinstance(v, list) else []
 
     def add_instance(self, name: str, base_url: str, *, auth_token: str = "", config_path: str = "",
-                     domain: str = "", restart_cmd: str = "", role: str = "") -> None:
+                     domain: str = "", restart_cmd: str = "", role: str = "",
+                     allow_live_port: bool = False) -> None:
         if not is_loopback_url(base_url):
             raise AgentError("instance URL must be loopback (127.0.0.1 / localhost / ::1)")
+        if is_live_port_url(base_url) and not allow_live_port:
+            raise AgentError(f"port {url_port(base_url)} is a live-stream port "
+                             f"({', '.join(str(p) for p in sorted(LIVE_STREAM_PORTS))}); "
+                             "pass --allow-live-port to register it anyway")
         inst = [i for i in self.instances if i.get("name") != name]
-        inst.append({"name": name, "base_url": base_url.rstrip("/"), "auth_token": auth_token,
-                     "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd,
-                     "role": role})
+        item = {"name": name, "base_url": base_url.rstrip("/"), "auth_token": auth_token,
+                "config_path": config_path, "domain": domain, "restart_cmd": restart_cmd,
+                "role": role}
+        if allow_live_port and is_live_port_url(base_url):
+            item["allow_live_port"] = True
+        inst.append(item)
         self.data["instances"] = inst
+
+    def remove_instance(self, name: str) -> bool:
+        """Drop the instance called ``name``. True when something was removed."""
+        before = self.instances
+        after = [i for i in before if i.get("name") != name]
+        if len(after) == len(before):
+            return False
+        self.data["instances"] = after
+        return True
 
 
 def _instance_token(inst: Dict[str, Any]) -> str:
@@ -330,11 +458,26 @@ class NodeAgent:
         return data
 
     def _detect_and_add(self) -> List[Dict[str, str]]:
-        found = detect_instances(search=(os.name == "nt"))
+        found = detect_instances(search=(os.name == "nt"),
+                                 live_stream=is_live_stream_host(self.cfg.state_dir))
+        # Belt and braces: never register a live-stream port from detect.
+        found = [i for i in found if not is_live_port_url(str(i.get("base_url") or ""))]
         added = False
         for inst in found:
+            url = str(inst.get("base_url") or "").rstrip("/")
+            # An instance already registered at the same URL (migrated or added by
+            # hand) keeps its name and auth_token; detect only fills empty fields.
+            same = [i for i in self.cfg.instances if str(i.get("base_url") or "").rstrip("/") == url]
+            if url and same:
+                cur = same[0]
+                for key in ("config_path", "domain", "role"):
+                    val = str(inst.get(key) or "")
+                    if val and not str(cur.get(key) or ""):
+                        cur[key] = val
+                        added = True
+                continue
             try:
-                self.cfg.add_instance(str(inst.get("name") or "chatx"), str(inst.get("base_url") or ""),
+                self.cfg.add_instance(str(inst.get("name") or "chatx"), url,
                                       config_path=str(inst.get("config_path") or ""),
                                       domain=str(inst.get("domain") or ""), role=str(inst.get("role") or ""))
                 added = True
@@ -381,6 +524,13 @@ class NodeAgent:
             self._detect_and_add()
         code = str(code or "").strip()
         room_key = str(room_key or "").strip()
+        if not code and not room_key and self.cfg.node_key:
+            # Already enrolled (e.g. identity migrated by the installer). A pending
+            # request here would only sit in the console and, if approved, rotate
+            # this node's key (FLEET_ISSUES g4). Only a code or room key re-enrolls.
+            if controller_url:
+                self.cfg.save()
+            return {"node_id": self.cfg.node_id, "status": "active", "already_enrolled": True}
         body: Dict[str, Any] = {
             "machine_id": self.machine_id, "host_name": host_name(),
             "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
@@ -562,6 +712,9 @@ class NodeAgent:
         base = str(inst.get("base_url") or "").rstrip("/")
         if not base:
             raise AgentError("instance base_url 为空")
+        if is_live_port_url(base) and not inst.get("allow_live_port"):
+            # e.g. an 'avatarhub' at :9000 added by an older detect on a live machine.
+            raise AgentError(f"live-stream port {url_port(base)} not probed (remove-instance {inst.get('name')})")
         headers = {}
         tok = _instance_token(inst)
         if tok:
@@ -616,26 +769,36 @@ class NodeAgent:
                 inst = self._pick_instance(task)
                 if inst is None:
                     return STATUS_REJECTED, {}, "no_instance"
-                platform = str(payload.get("platform") or "whatsapp").lower()
-                body = {k: payload[k] for k in ("account_id", "label", "group", "proxy_id", "use_fingerprint", "phone", "mode")
-                        if k in payload}
-                res = self._local(inst, "POST", f"/api/platforms/{platform}/login/start", body)
+                # platform goes into a local URL path: whitelist shape only
+                platform = valid_platform(payload.get("platform") or target.get("platform") or "whatsapp")
+                if not platform:
+                    return STATUS_REJECTED, {}, "bad_platform"
+                res = self._local(inst, "POST", f"/api/platforms/{platform}/login/start", login_start_payload(payload))
                 if not res.get("ok", True) and not res.get("login_id"):
                     return STATUS_FAILED, {"detail": res.get("detail"), "reason_code": res.get("reason_code")}, "login_start_failed"
-                out = {k: res.get(k) for k in ("login_id", "status", "detail", "mode", "kind", "account_id", "qr_url", "instruction") if k in res}
+                out = {k: res.get(k) for k in ("login_id", "status", "detail", "mode", "kind", "account_id", "qr_url",
+                                               "instruction", "reason_code") if k in res}
+                if "login_id" in out:
+                    out["login_id"] = valid_login_id(out["login_id"])
                 out["instance"] = inst.get("name")
                 out["platform"] = platform
-                out["qr_data_url"] = str(res.get("qr_image") or "")
+                out["qr_data_url"] = safe_qr_data_url(res.get("qr_image"))
                 return STATUS_DONE, out, "qr_ready" if out["qr_data_url"] else "started"
             if kind == TASK_LOGIN_STATUS:
                 inst = self._pick_instance(task)
-                lid = str(payload.get("login_id") or "")
+                lid = valid_login_id(payload.get("login_id"))
                 if inst is None or not lid:
                     return STATUS_REJECTED, {}, "no_instance_or_login_id"
-                platform = str(payload.get("platform") or "whatsapp").lower()
+                platform = valid_platform(payload.get("platform") or target.get("platform") or "whatsapp")
+                if not platform:
+                    return STATUS_REJECTED, {}, "bad_platform"
                 res = self._local(inst, "GET", f"/api/platforms/{platform}/login/{lid}/status")
-                out = {k: res.get(k) for k in ("login_id", "status", "detail", "account_id", "qr_url") if k in res}
-                out["qr_data_url"] = str(res.get("qr_image") or "")
+                out = {k: res.get(k) for k in ("login_id", "status", "detail", "account_id", "qr_url", "reason_code",
+                                               "retry_after_sec") if k in res}
+                out["login_id"] = lid
+                out["instance"] = inst.get("name")
+                out["platform"] = platform
+                out["qr_data_url"] = safe_qr_data_url(res.get("qr_image"))
                 return STATUS_DONE, out, str(res.get("status") or "ok")
             if kind == TASK_STOP_ACCOUNT:
                 inst = self._pick_instance(task, prefer_domain="player_care")
@@ -831,6 +994,15 @@ def _parse_instance(spec: str) -> Tuple[str, str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    held: List[Any] = []
+    try:
+        return _main(argv, held)
+    finally:
+        for guard in held:
+            guard.release()
+
+
+def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     ap = argparse.ArgumentParser(prog="chatx-agent", description="智控节点 Agent")
     ap.add_argument("--state-dir", default="", help="状态目录（默认 %%ProgramData%%\\ChatX\\fleet）")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -849,6 +1021,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     a.add_argument("--config-path", default="")
     a.add_argument("--domain", default="")
     a.add_argument("--restart-cmd", default="")
+    a.add_argument("--allow-live-port", action="store_true",
+                   help="register a live-stream port (7910/7916/7920/8000/8080/8766/9000) on purpose")
+    rm = sub.add_parser("remove-instance", help="remove a local instance from agent.json")
+    rm.add_argument("name", help="instance name, as shown by status")
     r = sub.add_parser("run", help="常驻：心跳 + 领任务")
     r.add_argument("--once", action="store_true")
     r.add_argument("--wait", type=int, default=0, help="--once 时长轮询秒数")
@@ -901,8 +1077,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     snap.unlink()
                 except OSError:
                     pass
-    if args.cmd == "run" and (args.service or args.log_file):
-        _attach_file_log(Path(args.log_file) if args.log_file else cfg.state_dir / "logs" / "agent.log")
+    want_log = args.cmd == "run" and bool(getattr(args, "service", False) or getattr(args, "log_file", ""))
+    log_file = str(getattr(args, "log_file", "") or "")
+    log_path = Path(log_file) if log_file else cfg.state_dir / "logs" / "agent.log"
+    # An open log file inside an unlocked fleet dir blocks its rename on Windows
+    # (WinError 5), so the log is attached only after the migration (issue f).
+    defer_log = bool(want_log) and cfg.migrating
+    if want_log and not defer_log:
+        _attach_file_log(log_path)
     if args.cmd == "install-service":
         res = install_service(cfg.state_dir)
         print(json.dumps(res, ensure_ascii=False, indent=2))
@@ -914,11 +1096,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "service-status":
         print(json.dumps(service_status(), ensure_ascii=False, indent=2))
         return 0
+    if args.cmd == "run" and not args.once:
+        # One run per state dir (issue g3). Held until main() returns.
+        guard = acquire_single_instance(cfg.state_dir)
+        if guard is None:
+            print("Another chatx-agent run is already active for this state directory; exiting.",
+                  file=sys.stderr)
+            return EXIT_ALREADY_RUNNING
+        held.append(guard)
     try:
         agent = NodeAgent(cfg)
-    except StateDirLockError:
-        print("Could not lock the fleet state directory. Run as Administrator.", file=sys.stderr)
+    except StateDirLockError as e:
+        _note_migration_failure(cfg.state_dir, e)
+        print(f"Could not lock the fleet state directory. Run as Administrator. ({e})", file=sys.stderr)
         return 1
+    if defer_log:
+        _attach_file_log(log_path)
     if args.cmd == "detect":
         found = agent._detect_and_add()
         print(json.dumps({"ok": True, "count": len(found)}))
@@ -951,11 +1144,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.cmd == "add-instance":
         name, url = _parse_instance(args.spec)
-        cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path, domain=args.domain,
-                         restart_cmd=args.restart_cmd)
+        try:
+            cfg.add_instance(name, url, auth_token=args.auth_token, config_path=args.config_path, domain=args.domain,
+                             restart_cmd=args.restart_cmd, allow_live_port=bool(args.allow_live_port))
+        except AgentError as e:
+            print(str(e), file=sys.stderr)
+            return 1
         cfg.save()
         print(json.dumps({"ok": True, "instances": [i["name"] for i in cfg.instances]}, ensure_ascii=False))
         return 0
+    if args.cmd == "remove-instance":
+        removed = cfg.remove_instance(str(args.name))
+        if removed:
+            cfg.save()
+        else:
+            print(f"no instance named {args.name!r}", file=sys.stderr)
+        print(json.dumps({"ok": removed, "removed": str(args.name) if removed else "",
+                          "instances": [i.get("name") for i in cfg.instances]}, ensure_ascii=False))
+        return 0 if removed else 1
     if args.cmd == "status":
         snap = build_local_status(cfg, machine_id=agent.machine_id)
         print(json.dumps(snap, ensure_ascii=False, indent=2))
@@ -988,6 +1194,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             stop.set()
         return 2 if agent.revoked else 0
     return 1
+
+
+MIGRATE_LOG_NAME = "fleet-migrate.log"
+EXIT_ALREADY_RUNNING = 4
+
+
+def _note_migration_failure(state_dir: Path, err: BaseException) -> None:
+    """One line next to the state dir. The dir itself may be half-moved. No secrets."""
+    try:
+        path = Path(state_dir).parent / MIGRATE_LOG_NAME
+        if _is_reparse(path.parent) or _is_reparse(path):
+            return
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} agent {AGENT_VERSION} state dir lock failed: {str(err)[:300]}\n"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        logger.debug("[agent] could not write lock-failure log: %s", e)
 
 
 def _attach_file_log(path: Path) -> None:

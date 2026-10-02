@@ -111,8 +111,8 @@ class Admin:
 def load_manifest(src: str) -> Dict[str, Any]:
     if src.startswith(("http://", "https://")):
         with urllib.request.urlopen(src, timeout=TIMEOUT) as r:
-            return json.loads(r.read().decode("utf-8"))
-    with open(src, "r", encoding="utf-8") as f:
+            return json.loads(r.read().decode("utf-8-sig"))
+    with open(src, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
