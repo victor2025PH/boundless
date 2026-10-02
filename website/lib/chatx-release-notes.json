@@ -1,5 +1,49 @@
 [
   {
+    "version": "1.0.107",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "群成员获客：群里先接话再私聊，回复看得见",
+      "en": "Group outreach: reply in the group first, then DM - and see who replied"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "群成员获客改版：入口在工作台右侧「群成员提取」卡 → 打开管理台。页面顶部是步骤条：① 提取群成员 → ② 群里先接话 → ③ 私聊开口 → ④ 效果与成交；开口账号在页面中间的吸顶条里选一次，②③ 共用。",
+        "目标客户在人设里填：人设页 → 编辑开口号用的人设 →「目标客户（群成员获客）」，填意向关键词和排除词，或在「按行业套用」里选跨境电商、外贸 B2B、客服/私域、教育培训、本地生活一键追加，改完点保存。群发言命中意向词的人先开口，命中排除词的永远不碰；不填意向词，「群里先接话」不会列人。",
+        "群里先接话再私聊：第②步列出近 48 小时说过话、有意向的人，点「AI 拟稿」（或「AI 拟稿今天这批」）→ 看一眼改一改 →「发到群里…」，页面里再确认一次（显示回的是 TA 哪句话）才发。",
+        "一个人只在群里被接一次，在多个群也只接一次。",
+        "接话后 6 小时内不私聊 TA，之后 TA 排到私聊最前面，私信顺着群里那句开口；TA 若已在私聊队列里，开场会退回重拟（你手改过的保留），批准后发的模式需要重新批准。",
+        "私聊被隐私挡住的人，TA 之后主动私聊这个号会记为「群里接话后来找」，回复和成交都算这条线。",
+        "接话只回最近 48 小时的发言，隔一两天在第①步重新提取一次；列表为空时页面有「用这个号去重新提取」入口。",
+        "群里回你了：有人在群里回复了你那条接话，第②步下方「群里回你了（近 3 天）」会列出谁回的、回了什么，点「去群里接着聊」直达工作台里那个群。本人回的算作回应，之后的私聊开场会顺着 TA 回的那句聊。",
+        "效果看得见：第④步统计新增「群里接话」一层——接了多少人、多少人回应（群里回你 / 主动私聊来），以及「先在群里接过话再私聊」和「冷私聊」的回复率对比（不到 10 条会提示先别下结论）；成交名单会标出哪些来自群里接话。",
+        "老号申报号龄更稳：第③步「这个号的真实号龄」填了之后，按大的那个算每日额度；但要先在系统里发满 10 条私聊开口（近 7 天）才能切「全自动」，撞一次 Telegram 风控，申报自动作废、回到新号爬坡。",
+        "小智更诚实：与软件无关的闲聊（天气、做菜、写诗等）会如实说没有依据，不再拿一条沾边的帮助硬答；问「目标客户关键词在哪填」「群里有人回我在哪看」这类新功能也能答上。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Group-member outreach redesigned: open it from the \"Group member extraction\" card on the right of the workbench -> Open console. A step bar runs across the top: 1 Extract members -> 2 Reply in the group first -> 3 DM openers -> 4 Results and deals; pick the sending account once in the sticky bar mid-page and steps 2 and 3 share it.",
+        "Target customers live in the persona: Personas page -> edit the persona your outreach account uses -> \"Target customers (group member outreach)\". Fill intent keywords and exclusions, or append a one-click industry preset (cross-border e-commerce, B2B export, customer service, education, local services), then save. Members whose group messages hit a keyword go first; exclusion hits are never contacted; without keywords, \"Reply in the group first\" lists nobody.",
+        "Reply in the group, then DM: step 2 lists people with intent who spoke in the last 48 hours. Click \"AI draft\" (or \"AI-draft today's batch\"), edit, then \"Post in group...\", and confirm on the page (it shows which of their messages you are answering).",
+        "Each person is replied to in a group only once, even across several groups.",
+        "Nobody is DMed within 6 hours of a group reply; after that they move to the front of the DM queue and the DM picks up from the group reply. If they were already queued, the opener goes back for a redraft (your hand edits are kept) and needs approval again in approve-then-send mode.",
+        "People whose privacy settings block DMs: if they later DM this account it is recorded as \"came to us after a group reply\", and replies and deals are credited to it.",
+        "Only the last 48 hours of messages qualify, so re-extract in step 1 every day or two; an empty list offers \"Re-extract with this account\".",
+        "Replied to you in the group: when someone answers your group reply, step 2 shows it under \"Replied to you in the group (last 3 days)\" with who and what, and \"Continue in the group\" opens that group in the workspace. A reply from the member counts as a response, and the later DM opener picks up from it.",
+        "See the results: step 4 adds a group-reply layer (how many you replied to, how many responded in the group or came to DM) and compares the reply rate of DMs after a group reply against cold DMs (with a warning under 10 sends); the won list marks deals that came after a group reply.",
+        "Safer declared account age: \"Real account age\" in step 3 still sets the daily ramp from the larger value, but full auto only unlocks after 10 DM openers from this system in the last 7 days, and one Telegram flood limit voids the declaration and puts the account back on the new-account ramp.",
+        "A more honest Xiaozhi: off-topic chit-chat (weather, recipes, poems) now gets an honest \"no basis\" instead of a loosely related help article, and questions about the new features (\"where do I set target customer keywords\", \"where do I see group replies\") are answered.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
     "version": "1.0.106",
     "date": "2026-10-02",
     "title": {
