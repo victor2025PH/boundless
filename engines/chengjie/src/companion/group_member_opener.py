@@ -69,17 +69,22 @@ PERSONA_BLOCK_MAX = 700
 # 开口切入方式 A/B：同一人设、同一目标，只换「从哪儿开口」。按回复率切片择优，
 # 留一部分流量探索（ε-greedy），样本不够的方式先多试。
 OPENER_VARIANTS = ("echo", "group", "ask")
+# 公开 AI 身份的人设（identity.public_ai，如销售人设「小界」）多一种切入：坦白自己是 AI。
+AI_INTRO_VARIANT = "ai_intro"
+ALL_VARIANTS = OPENER_VARIANTS + (AI_INTRO_VARIANT,)
 _VARIANT_HINT = {
     "echo": "切入方式：直接接TA在群里说的那句，像顺着话茬聊下去，不要另起话题。",
     "group": "切入方式：从你们同在的这个群聊起（群里最近的事、你为什么在这个群），不要复述TA的原话。",
     "ask": "切入方式：围绕TA说过的事，轻轻问一个具体的小问题，让TA一句话就能答上来。",
+    AI_INTRO_VARIANT: "切入方式：大方说你是个 AI（用人设里的名字和出身），是在这个群里注意到TA才来私聊的；"
+                      "用一句轻松或好奇的话收尾，让TA想回。不讲价格、不列功能。",
 }
 AB_EXPLORE = 0.25
 AB_MIN_SAMPLE = 5
 AB_LOOKBACK_SEC = 30 * 86400.0
 # 先验回复率（经验值）+ 先验权重（相当于几条样本）：样本少时按先验平滑，别被 1/5 vs 2/5 这种噪声带偏。
 # 跑出切片结论后在 config `outreach_ab_prior` 里回灌，不用改代码。
-AB_PRIOR = {"echo": 0.10, "ask": 0.08, "group": 0.06}
+AB_PRIOR = {"echo": 0.10, "ask": 0.08, "group": 0.06, AI_INTRO_VARIANT: 0.08}
 AB_PRIOR_WEIGHT = 5.0
 
 
@@ -103,7 +108,7 @@ def ab_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
     prior = gm.get("outreach_ab_prior")
     if isinstance(prior, dict):
         for k, v in prior.items():
-            if str(k) in OPENER_VARIANTS:
+            if str(k) in ALL_VARIANTS:
                 try:
                     out["prior"][str(k)] = max(0.0, min(float(v), 1.0))
                 except (TypeError, ValueError):
@@ -111,11 +116,22 @@ def ab_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def allowed_variants(member: Dict[str, Any]) -> Tuple[str, ...]:
-    """TA 没说过话就只能从群切入；说过话三种都行。"""
-    if str(member.get("last_msg_text") or "").strip():
-        return OPENER_VARIANTS
-    return ("group",)
+def persona_public_ai(persona: Any) -> bool:
+    """人设显式公开 AI 身份（``identity.public_ai``）且没配否认 AI / 自称真人。
+
+    只认显式开关：编辑器保存总会写 ``deny_ai=false``，不能拿它当「要坦白」的信号。
+    """
+    ident = persona.get("identity") if isinstance(persona, dict) else None
+    if not isinstance(ident, dict):
+        return False
+    return (bool(ident.get("public_ai")) and not ident.get("deny_ai")
+            and not ident.get("claim_human"))
+
+
+def allowed_variants(member: Dict[str, Any], *, public_ai: bool = False) -> Tuple[str, ...]:
+    """TA 没说过话就只能从群切入；说过话三种都行。公开 AI 的人设另加「坦白是 AI」。"""
+    base = OPENER_VARIANTS if str(member.get("last_msg_text") or "").strip() else ("group",)
+    return base + (AI_INTRO_VARIANT,) if public_ai else base
 
 
 def pick_variant(rates: Dict[str, Dict[str, int]], allowed: Sequence[str], *, seed: Any,
@@ -311,12 +327,13 @@ def postprocess_opener(raw: str, *, persona: Optional[Dict[str, Any]], lang: str
             text = str(text or "").strip()
         except Exception:
             logger.debug("[gm_opener] persona_guard 跳过", exc_info=True)
-    try:
-        from src.utils.persona_guard import matches_ai_self_identity
-        if matches_ai_self_identity(text):
-            return {"text": text, "reason": "ai_self_id"}
-    except Exception:
-        pass
+    if not persona_public_ai(persona):
+        try:
+            from src.utils.persona_guard import matches_ai_self_identity
+            if matches_ai_self_identity(text):
+                return {"text": text, "reason": "ai_self_id"}
+        except Exception:
+            pass
     block = opener_block_reason(text)
     if block:
         return {"text": text, "reason": block}
@@ -332,8 +349,16 @@ def postprocess_opener(raw: str, *, persona: Optional[Dict[str, Any]], lang: str
     return {"text": text, "reason": ""}
 
 
+def _identity_rule(public_ai: bool, extra: str = "") -> str:
+    if public_ai:
+        return ("不要问「在吗」，不要用「您」%s。你本来就是 AI，被问或切入需要时可以大方说，"
+                "绝不冒充真人；不要自称客服、助理。" % extra)
+    return "不要问「在吗」，不要用「您」，不要自称 AI、助理、客服%s。" % extra
+
+
 def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
-                  goal_hint: str, avoid: Sequence[str], variant: str = "") -> str:
+                  goal_hint: str, avoid: Sequence[str], variant: str = "",
+                  public_ai: bool = False) -> str:
     name = str(member.get("first_name") or member.get("username") or "对方").strip()
     uname = str(member.get("username") or "").strip()
     group = str(member.get("group_title") or "").strip()
@@ -352,16 +377,17 @@ def opener_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
     parts.append("关于对方：\n" + "\n".join(about))
     if goal_hint:
         parts.append("这次建联的方向（只影响切入点和语气，第一条绝不能卖东西）：%s" % goal_hint)
-    if variant in _VARIANT_HINT and (said or variant == "group"):
+    if variant in _VARIANT_HINT and (said or variant in ("group", AI_INTRO_VARIANT)):
         parts.append(_VARIANT_HINT[variant])
     rules = [
         "只写一句话，不超过 %d 个字符，用%s。" % (limit, lang_name),
-        "像真人随手打的，不客套、不自我介绍一长串。",
+        ("口语、随手打的感觉，不客套、不自我介绍一长串。" if public_ai else
+         "像真人随手打的，不客套、不自我介绍一长串。"),
         ("如果TA说过话，优先接TA说的那句，让TA有话可回。" if said else
          "你不知道TA在群里说过什么、发过什么：别编造TA的发言、表情包、你们之间的往事或称呼，"
          "也别评论TA冒泡多少；可以聊这个群本身，或问一句和群主题相关的轻松问题。"),
         "不要介绍产品或服务，不要链接，不要让TA加微信/WhatsApp/别的联系方式。",
-        "不要问「在吗」，不要用「您」，不要自称 AI、助理、客服。",
+        _identity_rule(public_ai),
     ]
     if avoid:
         rules.append("下面这些是今天已经发给别人的，别写得像它们：\n" +
@@ -433,7 +459,7 @@ async def compose_opener(ai: Any, *, member: Dict[str, Any], ctx: Dict[str, Any]
             prompt = opener_prompt(
                 persona_block=str(ctx.get("persona_block") or ""), member=member,
                 lang=lang, goal_hint=str(ctx.get("goal_hint") or ""), avoid=avoid_now,
-                variant=variant)
+                variant=variant, public_ai=persona_public_ai(persona))
             try:
                 try:
                     from src.ai.llm_purpose import purpose_scope
@@ -456,7 +482,8 @@ async def compose_opener(ai: Any, *, member: Dict[str, Any], ctx: Dict[str, Any]
             "variant": ""}
 
 
-def followup_prompt(*, persona_block: str, member: Dict[str, Any], lang: str) -> str:
+def followup_prompt(*, persona_block: str, member: Dict[str, Any], lang: str,
+                    public_ai: bool = False) -> str:
     name = str(member.get("first_name") or member.get("username") or "对方").strip()
     group = str(member.get("group_title") or "").strip()
     first = " ".join(str(member.get("opener_text") or "").split())[:200]
@@ -480,7 +507,7 @@ def followup_prompt(*, persona_block: str, member: Dict[str, Any], lang: str) ->
         "只写一句话，不超过 %d 个字符，用%s。" % (limit, lang_name),
         "轻描淡写地提一下上次那条，给TA台阶（不方便聊也没事），不追问为什么没回。",
         "不要重复上次的话，不要介绍产品或服务，不要链接，不要让TA加别的联系方式。",
-        "不要问「在吗」，不要用「您」，不要自称 AI、助理、客服，不要道歉式开头。",
+        _identity_rule(public_ai, "，不要道歉式开头"),
     ]
     parts.append("规则：\n" + "\n".join("- " + r for r in rules))
     parts.append("只输出这句话本身，不要引号，不要解释。")
@@ -496,7 +523,8 @@ async def compose_followup(ai: Any, *, member: Dict[str, Any], ctx: Dict[str, An
     last_reason = ""
     if ai is not None and hasattr(ai, "chat"):
         prompt = followup_prompt(persona_block=str(ctx.get("persona_block") or ""),
-                                 member=member, lang=lang)
+                                 member=member, lang=lang,
+                                 public_ai=persona_public_ai(persona))
         try:
             try:
                 from src.ai.llm_purpose import purpose_scope
@@ -550,7 +578,8 @@ async def compose_queue(store: Any, ai: Any, *, account_id: str, ctx: Dict[str, 
         own = str(m.get("opener_text") or "")
         avoid_others = [a for a in avoid if a != own] if own else avoid
         ab = ctx.get("ab") if isinstance(ctx.get("ab"), dict) else {}
-        variant = pick_variant(rates, allowed_variants(m), seed="%s|%s" % (account_id, key[1]),
+        variant = pick_variant(rates, allowed_variants(m, public_ai=persona_public_ai(
+                                   ctx.get("persona"))), seed="%s|%s" % (account_id, key[1]),
                                explore=float(ab.get("explore", AB_EXPLORE)),
                                min_sample=int(ab.get("min_sample", AB_MIN_SAMPLE)),
                                prior=ab.get("prior"),
@@ -583,4 +612,5 @@ __all__ = [
     "compose_followup", "PERSONA_BLOCK_MAX",
     "OPENER_VARIANTS", "AB_EXPLORE", "AB_MIN_SAMPLE", "AB_LOOKBACK_SEC", "AB_PRIOR",
     "AB_PRIOR_WEIGHT", "ab_settings", "allowed_variants", "pick_variant",
+    "AI_INTRO_VARIANT", "ALL_VARIANTS", "persona_public_ai",
 ]

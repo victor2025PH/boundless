@@ -1109,7 +1109,8 @@
     var VARIANT_LABEL = null;
     function variantLabel(v) {
       if (!VARIANT_LABEL) VARIANT_LABEL = {
-        echo: t("接话茬", "echo their line"), group: t("从群切入", "via the group"), ask: t("轻问一句", "ask one thing")
+        echo: t("接话茬", "echo their line"), group: t("从群切入", "via the group"), ask: t("轻问一句", "ask one thing"),
+        ai_intro: t("坦白是 AI", "says it's an AI")
       };
       return VARIANT_LABEL[v] || v;
     }

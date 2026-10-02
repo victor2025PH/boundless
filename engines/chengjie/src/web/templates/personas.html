@@ -1353,6 +1353,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div style="font-size:.72rem;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.65rem">{{ (i18n or {}).get('psn_identity','身份设定') }}</div>
       <div class="tgl-row"><label class="tgl"><input type="checkbox" id="pe-deny-ai"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_deny_ai','被问及时否认是 AI') }}</span></div>
       <div class="tgl-row"><label class="tgl"><input type="checkbox" id="pe-claim-human"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_claim_human','主动声称自己是真人') }}</span></div>
+      <div class="tgl-row" title="{{ (i18n or {}).get('psn_public_ai_tip','开：群成员开口可以大方说自己是 AI，并多一种「坦白是 AI」的开场方式参与对比；与上面两项互斥') }}"><label class="tgl"><input type="checkbox" id="pe-public-ai"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_public_ai','公开 AI 身份（开口可直说是 AI）') }}</span></div>
     </div>
   </div>
   <!-- Pane: Voice -->
@@ -5962,6 +5963,7 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
   document.getElementById('pe-deny-ai').checked = !!(ident.deny_ai || p.deny_ai);
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
+  var paiEl = document.getElementById('pe-public-ai'); if (paiEl) paiEl.checked = !!ident.public_ai;
   // L-2 #205：语音三态装载（新建态 = 空对象 → 默认「不发语音」，D-L4）
   _vmLoad(vp, !p || !Object.keys(p).length);
   _fillProfileTabFields(p, _persObj);
@@ -6410,6 +6412,7 @@ async function saveProfile() {
     identity: {
       deny_ai: document.getElementById('pe-deny-ai').checked,
       claim_human: document.getElementById('pe-claim-human').checked,
+      public_ai: !!(document.getElementById('pe-public-ai') || {}).checked,
     },
     voice_profile: _vpPatch,
   };

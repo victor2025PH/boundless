@@ -1183,11 +1183,11 @@ def test_pick_variant_explores_then_exploits_and_respects_silent_members():
         "outreach_ab_explore": "x", "outreach_ab_min_sample": 3,
         "outreach_ab_prior": {"echo": 0.5, "bogus": 1, "ask": "bad"}}}})
     assert ab["explore"] == 0.25 and ab["min_sample"] == 3 and ab["prior_weight"] == 5.0
-    assert ab["prior"] == {"echo": 0.5, "ask": 0.08, "group": 0.06}
+    assert ab["prior"] == {"echo": 0.5, "ask": 0.08, "group": 0.06, "ai_intro": 0.08}
     # 权重 0 = 不平滑：回到原始 2/5 > 1/5 → group
     assert pick_variant(rates, OPENER_VARIANTS, seed=1, explore=0.0,
                         prior={"echo": 0.9}, prior_weight=0) == "group"
-    assert ab_settings({})["prior"] == {"echo": 0.10, "ask": 0.08, "group": 0.06}
+    assert ab_settings({})["prior"] == {"echo": 0.10, "ask": 0.08, "group": 0.06, "ai_intro": 0.08}
     # 同一个人每次选到的一样（种子稳定）→ 重拟不会在切入上来回跳
     assert pick_variant(rates, OPENER_VARIANTS, seed="accA|7") == pick_variant(rates, OPENER_VARIANTS, seed="accA|7")
     # prompt 带切入提示；没发言的人即使传 echo 也不写（没话可接）
@@ -1199,6 +1199,83 @@ def test_pick_variant_explores_then_exploits_and_respects_silent_members():
     assert "切入方式" not in p2
     assert "别编造" in p2 and "优先接TA说的那句" not in p2
     assert "别编造" not in p and "优先接TA说的那句" in p
+
+
+_PUBLIC_AI = {"id": "wujie_sales", "name": "小界", "role": "智聊的 AI 本体",
+              "identity": {"deny_ai": False, "claim_human": False, "public_ai": True}}
+
+
+def test_persona_public_ai_needs_explicit_flag():
+    from src.companion.group_member_opener import persona_public_ai
+    assert persona_public_ai(_PUBLIC_AI) is True
+    assert persona_public_ai({"identity": {"deny_ai": False, "claim_human": False}}) is False
+    assert persona_public_ai({"identity": {"public_ai": True, "deny_ai": True}}) is False
+    assert persona_public_ai({"identity": {"public_ai": True, "claim_human": True}}) is False
+    assert persona_public_ai(None) is False and persona_public_ai({"identity": "x"}) is False
+
+
+def test_public_ai_persona_allows_ai_intro_and_ai_self_id():
+    from src.companion.group_member_opener import (
+        AI_INTRO_VARIANT, OPENER_VARIANTS, allowed_variants, followup_prompt, opener_prompt)
+    assert allowed_variants({"last_msg_text": "hi"}, public_ai=True) == OPENER_VARIANTS + (AI_INTRO_VARIANT,)
+    assert allowed_variants({"last_msg_text": ""}, public_ai=True) == ("group", AI_INTRO_VARIANT)
+    assert AI_INTRO_VARIANT not in allowed_variants({"last_msg_text": "hi"})
+
+    line = "Neo，我是智聊的 AI 小界，在群里看到你问自动回复，好奇你现在怎么弄的？"
+    assert postprocess_opener(line, persona=_PUBLIC_AI, lang="zh", avoid=[])["reason"] == ""
+    human = {"identity": {"deny_ai": False, "claim_human": False}}
+    assert postprocess_opener("我是AI，在群里看到你", persona=human, lang="zh",
+                              avoid=[])["reason"] == "ai_self_id"
+    assert postprocess_opener("我是AI，加我微信", persona=_PUBLIC_AI, lang="zh",
+                              avoid=[])["reason"] == "pitch"
+
+    m = {"first_name": "Neo", "group_title": "G", "last_msg_text": ""}
+    p = opener_prompt(persona_block="", member=m, lang="zh", goal_hint="", avoid=(),
+                      variant=AI_INTRO_VARIANT, public_ai=True)
+    assert "大方说你是个 AI" in p and "绝不冒充真人" in p and "不要自称 AI" not in p
+    p_h = opener_prompt(persona_block="", member=m, lang="zh", goal_hint="", avoid=(), variant="group")
+    assert "不要自称 AI" in p_h and "绝不冒充真人" not in p_h
+    fp = followup_prompt(persona_block="", member=m, lang="zh", public_ai=True)
+    assert "绝不冒充真人" in fp and "不要自称 AI" not in fp and "道歉式开头" in fp
+    assert "不要自称 AI" in followup_prompt(persona_block="", member=m, lang="zh")
+
+
+def test_compose_opener_public_ai_keeps_ai_draft():
+    m = _row(user_id="7", first_name="Neo", last_msg_text="", lang_code="zh")
+    ctx = {"persona_block": "你是小界。", "goal_hint": "", "persona": _PUBLIC_AI}
+    ai = _AI(["Neo，我是个 AI，在群里看到你，来打个招呼～你平时群消息多吗？"])
+    got = _run(compose_opener(ai, member=m, ctx=ctx, variant="ai_intro"))
+    assert got["source"] == "ai" and got["variant"] == "ai_intro"
+    assert "大方说你是个 AI" in ai.prompts[0]
+    ctx_h = dict(ctx, persona={"identity": {"deny_ai": False}})
+    got_h = _run(compose_opener(_AI(["Neo，我是个 AI，来打个招呼", "Neo，我是AI哦"]),
+                                member=m, ctx=ctx_h, variant="group"))
+    assert got_h["source"] == "template" and got_h["reason"] == "ai_self_id"
+
+
+def test_compose_queue_public_ai_can_pick_ai_intro():
+    st = GroupMembersStore(":memory:")
+    now = 15_000_000.0
+    st.record_members([_row(user_id=str(i), first_name="N%d" % i, last_msg_text="")
+                       for i in range(1, 7)])
+    enqueue_today(st, "accA", now=now, since_ts=now - 1, policy=POLICY, age_days=OLD)
+    replies = ["N1，我是个 AI，群里瞄到你，来认识下～", "N2，这群你来多久啦？",
+               "N3，坦白说我是 AI，好奇你平时忙啥", "N4，群里最近挺热闹的哈",
+               "N5，我是智聊家的 AI 小界，路过打招呼", "N6，你也是做跨境的吗？"]
+    r = _run(compose_queue(st, _AI(replies), account_id="accA",
+                           ctx={"persona": _PUBLIC_AI}, since_ts=now - 1))
+    got = {st.get_member("-100", str(i))["opener_variant"] for i in range(1, 7)}
+    assert r["ai"] == 6 and got <= {"group", "ai_intro"} and "ai_intro" in got
+
+
+def test_wujie_sales_pack_is_public_ai():
+    from pathlib import Path
+
+    import yaml
+
+    from src.companion.group_member_opener import persona_public_ai
+    p = Path(__file__).parent.parent / "config" / "persona_packs" / "wujie_sales.yaml"
+    assert persona_public_ai(yaml.safe_load(p.read_text(encoding="utf-8"))["persona"])
 
 
 def test_compose_queue_records_variant_only_for_ai_drafts():
