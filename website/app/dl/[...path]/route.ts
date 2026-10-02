@@ -6,6 +6,8 @@ import { Readable } from "stream";
 import { R2_PUBLIC_ROOT, DL_PREFIXES } from "@/lib/mirror";
 import { clientIp } from "@/lib/client-ip";
 import { appendDownload, buildRecord, gate, isInstallerPath, type GateDecision } from "@/lib/download-ledger";
+import { isValidTgUid, recordBotDownload } from "@/lib/chatx-dl-ledger";
+import { trackServer } from "@/lib/tg-events";
 
 /**
  * /dl/<path> 安装包智能分流（下载提速 P0 · 2026-08-08）+ 下载台账与扒包防护（2026-09-10）。
@@ -22,6 +24,10 @@ import { appendDownload, buildRecord, gate, isInstallerPath, type GateDecision }
  *   正是因为 302 回 /downloads 会再次进 middleware 形成循环。
  *
  * 安全：路径白名单前缀 + 拒绝 ".."/协议注入；只处理 GET/HEAD；直出前 resolve 后必须仍在 public/ 内。
+ *
+ * 归因：`?src=<广告来源码>`（@ChatX_bot 深链带到下载页、下载页带到这里）服务端落一条
+ * `download_redirect` 事件（events.jsonl），与前端埋点互补：无 JS / 拦截器 / 直接拷链接也能计到安装包请求。
+ * `?tg=<Telegram uid>`（bot 深链带来）再落一条用户级回执（lib/chatx-dl-ledger.ts），bot 追发提醒据此跳过已下载的人。
  */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,6 +40,7 @@ const PROBE_UA = "BD-dl-router/1.0";
 const PUBLIC_DIR = path.resolve(process.env.DOWNLOADS_PUBLIC_DIR || path.join(process.cwd(), "public"));
 
 const health = new Map<string, { ok: boolean; ts: number }>();
+const SRC_RE = /^[A-Za-z0-9_-]{1,48}$/;
 
 function validPath(p: string): boolean {
   if (!DL_PREFIXES.some((pre) => p.startsWith(pre))) return false;
@@ -146,6 +153,18 @@ async function handle(req: NextRequest, params: { path: string[] }, head: boolea
       status: decision.status,
       headers: { "Content-Type": "text/plain", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" },
     });
+  }
+
+  const src = req.nextUrl.searchParams.get("src") ?? "";
+  const tg = req.nextUrl.searchParams.get("tg");
+  if (!head && !req.headers.get("range")) {
+    const file = p.split("/").pop() ?? p;
+    const uid = isValidTgUid(tg) ? Number(tg) : undefined;
+    const hasSrc = SRC_RE.test(src);
+    if (hasSrc || uid !== undefined) {
+      await trackServer("download_redirect", { src: hasSrc ? src : "organic", file, installer, ...(uid !== undefined ? { uid } : {}) }, "/dl", "server", ip);
+    }
+    if (uid !== undefined && installer) void recordBotDownload({ uid, src: hasSrc ? src : "organic", file });
   }
 
   // HEAD 且本地有文件：直接答 200 + Content-Length，不 302 去 R2。HEAD 不传字节，本地答最便宜；

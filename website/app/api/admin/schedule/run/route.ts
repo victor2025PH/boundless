@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { runDuePosts } from "@/lib/schedule-store";
 import { claimDueReminders } from "@/lib/dragon-store";
 import { sendText } from "@/lib/telegram-bot";
+import { runStartReminders } from "@/lib/chatx-bot";
+import { runDailyDigest, runWeeklyDigest } from "@/lib/chatx-daily-digest";
+import { runDailyPush } from "@/lib/chatx-push";
 import { SITE_URL } from "@/lib/site";
 
 export const runtime = "nodejs";
@@ -28,7 +31,7 @@ async function runDragonReminders(): Promise<number> {
   return sent;
 }
 
-/** Manual / external-cron trigger：定时贴发送 + 龙珠每日提醒（同一 cron 复用） */
+/** Manual / external-cron trigger：定时贴发送 + 龙珠每日提醒 + @ChatX_bot 24h 追发 + 用户每日早报 + ChatX 管理员日报+ 周一 ChatX 周报（同一 cron 复用；?digest=1 强制立即发管理员日报，?weekly=1 强制立即发周报，?push=1 强制立即跑一批早报） */
 export async function POST(req: NextRequest) {
   const key = process.env.TELEGRAM_SETUP_KEY;
   if (!key) return NextResponse.json({ ok: false, error: "not_configured" }, { status: 503 });
@@ -36,5 +39,34 @@ export async function POST(req: NextRequest) {
   if (given !== key) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const r = await runDuePosts();
   const reminded = await runDragonReminders().catch(() => 0);
-  return NextResponse.json({ ok: true, ...r, reminded });
+  const chatx = await runStartReminders().catch(() => ({ due: 0, sent: 0, skipped: 0 }));
+  const push = await runDailyPush(Date.now(), req.nextUrl.searchParams.get("push") === "1").catch((e: unknown) => ({
+    day: "",
+    due: 0,
+    sent: 0,
+    skipped: 0,
+    reason: e instanceof Error ? e.message : "error",
+  }));
+  const forceDigest = req.nextUrl.searchParams.get("digest") === "1";
+  const digest = await runDailyDigest(Date.now(), forceDigest).catch((e: unknown) => ({
+    day: "",
+    sent: false,
+    reason: e instanceof Error ? e.message : "error",
+  }));
+  const weekly = await runWeeklyDigest(Date.now(), req.nextUrl.searchParams.get("weekly") === "1").catch((e: unknown) => ({
+    week: "",
+    sent: false,
+    reason: e instanceof Error ? e.message : "error",
+  }));
+  return NextResponse.json({
+    ok: true,
+    ...r,
+    reminded,
+    chatxReminded: chatx.sent,
+    chatxDue: chatx.due,
+    chatxSkippedDownloaded: chatx.skipped,
+    chatxPush: push,
+    chatxDigest: digest,
+    chatxWeekly: weekly,
+  });
 }

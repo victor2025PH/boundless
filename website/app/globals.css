@@ -956,6 +956,9 @@ html[data-mode="day"] .ladder-sweep::before {
 html[data-mode="day"] .keep-dark .text-amber-300 {
   color: #fcd34d;
 }
+/* 智连系实心 CTA（/download/chatx）：白字在蓝底上夜/日两模式都保持——
+ * 日间覆盖表会把 .text-white 翻深，所以按钮不用 .text-white 而用本类 */
+.chatx-cta { color: #fff; }
 /* 竞品对照表本站行左侧发光竖条：日间换深青 */
 html[data-mode="day"] .border-l-neon-cyan\/70 {
   border-left-color: rgba(8, 145, 178, 0.7);
@@ -2143,6 +2146,10 @@ html[data-mode="day"] .text-slate-400 { color: #5b6473; }
 html[data-mode="day"] .text-slate-500 { color: #6b7280; }
 html[data-mode="day"] .text-neon-cyan { color: #0e7490; }
 html[data-mode="day"] .text-neon-violet { color: #6d28d9; }
+/* 智连系（growth）强调文字：夜间浅蓝，日间压到 growth-700 达标 */
+html[data-mode="day"] .text-growth-300,
+html[data-mode="day"] .text-growth-400 { color: #0b64b7; }
+html[data-mode="day"] .text-lingo-400 { color: #b45309; }
 html[data-mode="day"] .text-ink-950 { color: #fff; }
 html[data-mode="day"] .hover\:text-white:hover { color: #0f172a; }
 html[data-mode="day"] .hover\:text-slate-200:hover { color: #1e293b; }

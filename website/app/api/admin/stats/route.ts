@@ -482,9 +482,36 @@ export async function GET(req: NextRequest) {
   const dlClicks: Record<string, number> = {};
   const dlFaq: Record<string, number> = {};
   const dlBySid: Record<string, { reach: boolean; clicked: boolean }> = {};
+  // ── @ChatX_bot 广告归因：按来源码 src 串起 start → 落地页到达 → 下载页点击 → 安装包请求 ──
+  // dlUsers = 下载人数：安装包请求带 tg=uid（bot 深链带来）的去重用户数，与 starts 同为「人」口径。
+  type SrcRow = { starts: number; firstStarts: number; views: number; clicks: number; redirects: number; dlUids: Set<number> };
+  const bySrc: Record<string, SrcRow> = {};
+  const srcRow = (s: string) => (bySrc[s] ??= { starts: 0, firstStarts: 0, views: 0, clicks: 0, redirects: 0, dlUids: new Set() });
   for (const e of winEvents) {
     const ev = String(e.event ?? "");
     const sid = String(e.sid ?? "");
+    if (ev === "chatx_bot_start") {
+      const r = srcRow(propStr(e, "src") || "organic");
+      r.starts++;
+      if ((e.props as Record<string, unknown> | null)?.first === true) r.firstStarts++;
+      continue;
+    }
+    if (ev === "download_redirect") {
+      const r = srcRow(propStr(e, "src") || "organic");
+      r.redirects++;
+      const uid = (e.props as Record<string, unknown> | null)?.uid;
+      if (typeof uid === "number") r.dlUids.add(uid);
+      continue;
+    }
+    if (ev === "chatx_landing_view") {
+      const s = propStr(e, "src");
+      if (s) srcRow(s).views++;
+      continue;
+    }
+    if (ev === "chatx_download_click") {
+      const s = propStr(e, "src");
+      if (s) srcRow(s).clicks++;
+    }
     if (ev === "download_menu_click") {
       const c = propStr(e, "client") || "?";
       dlEntryMenu[c] = (dlEntryMenu[c] ?? 0) + 1;
@@ -525,6 +552,28 @@ export async function GET(req: NextRequest) {
     .map(([q, n]) => ({ q, n }))
     .sort((a, b) => b.n - a.n)
     .slice(0, 8);
+  const chatxSources = Object.entries(bySrc)
+    // rate = start→下载总转化；landRate / dlRate 拆两段，定位流失在 bot 按钮还是落地页。
+    .map(([src, { dlUids, ...r }]) => ({
+      src,
+      ...r,
+      dlUsers: dlUids.size,
+      rate: pct(r.clicks, r.starts),
+      landRate: pct(r.views, r.starts),
+      dlRate: pct(r.clicks, r.views),
+      userRate: pct(dlUids.size, r.firstStarts),
+    }))
+    .sort((a, b) => b.starts - a.starts || b.clicks - a.clicks)
+    .slice(0, 30);
+  const chatxBot = {
+    starts: chatxSources.reduce((n, r) => n + r.starts, 0),
+    firstStarts: chatxSources.reduce((n, r) => n + r.firstStarts, 0),
+    views: chatxSources.reduce((n, r) => n + r.views, 0),
+    clicks: chatxSources.reduce((n, r) => n + r.clicks, 0),
+    redirects: chatxSources.reduce((n, r) => n + r.redirects, 0),
+    dlUsers: chatxSources.reduce((n, r) => n + r.dlUsers, 0),
+    sources: chatxSources,
+  };
   const downloads = {
     entry: { menu: dlEntryMenu, hub: dlEntryHub },
     clients: dlClients,
@@ -534,6 +583,7 @@ export async function GET(req: NextRequest) {
       rate: pct(dlConverted, dlSessions),
     },
     faqTop: dlFaqTop,
+    chatxBot,
   };
 
   // ── 获客归因：会话级「来源 → 留资」转化 ──

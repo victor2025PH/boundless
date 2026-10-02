@@ -5,6 +5,7 @@ import { matchFreeText, buildFallback, detectKnowledgeLang, type BotLang } from 
 import { cleanMarkdown } from "@/lib/clean-markdown";
 import { logChat, dailyGuard } from "@/lib/chat-log";
 import { requireAdmin } from "@/lib/admin-auth";
+import { chatxSystemHint, normalizeSrc } from "@/lib/chatx-bot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "rate_limited" }, { status: 429 });
   }
 
-  let body: { message?: string; lang?: string; history?: ChatTurn[]; kb?: boolean };
+  let body: { message?: string; lang?: string; history?: ChatTurn[]; kb?: boolean; scene?: string; src?: string };
   try {
     body = await req.json();
   } catch {
@@ -61,7 +62,11 @@ export async function POST(req: NextRequest) {
     ko: "Page context: the visitor is on the Korean landing page (/ko/voice). If their language is ambiguous (numbers, brand names, short Latin fragments), reply in Korean by default. Clear language mirroring still takes priority.",
     ja: "Page context: the visitor is on the Japanese landing page (/ja/voice). If their language is ambiguous (numbers, brand names, short Latin fragments), reply in Japanese by default. Clear language mirroring still takes priority.",
   };
-  const extraSystem = PAGE_HINTS[uiLang] ?? "";
+  // ChatX 小程序 / 落地页的 AI 问答：与 @ctx2026_bot 同一条链（小界人设 systemPrompt + 知识库上下文 + ChatX 场景提示），下载链接带来源码
+  const chatx = body?.scene === "chatx";
+  const extraSystem = chatx
+    ? chatxSystemHint(normalizeSrc(typeof body.src === "string" ? body.src : ""), lang, "miniapp")
+    : PAGE_HINTS[uiLang] ?? "";
   const history: ChatTurn[] = Array.isArray(body?.history)
     ? body!.history!
         .filter((h) => (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
@@ -84,10 +89,23 @@ export async function POST(req: NextRequest) {
           ? "ja"
           : "";
 
-  const fallbackText = () => {
-    if (kojaKey) return KOJA_FALLBACK[kojaKey];
-    const fb = matchFreeText(message, lang) ?? buildFallback(lang);
-    return cleanMarkdown(fb.replace(/<\/?[^>]+>/g, ""));
+  // ChatX 场景不用通用兜底菜单（「点下方按钮打开 Mini App」在小程序里没有意义）：AI 不可用时只回知识库命中，没命中就 503 让前端提示稍后再试
+  const fallbackText = (): string | null => {
+    if (kojaKey && !chatx) return KOJA_FALLBACK[kojaKey];
+    const kb = matchFreeText(message, lang);
+    const fb = kb ?? (chatx ? null : buildFallback(lang));
+    return fb === null ? null : cleanMarkdown(fb.replace(/<\/?[^>]+>/g, ""));
+  };
+  const fallbackResponse = (source: "kb" | "capped") => {
+    const text = fallbackText();
+    if (text === null) {
+      void logChat({ q: message, a: "", lang, source: chatx ? `chatx_miniapp_${source === "capped" ? "capped" : "unavailable"}` : source, ip });
+      return NextResponse.json({ ok: false, error: "ai_unavailable" }, { status: 503, headers: { "X-Chat-Source": "none" } });
+    }
+    void logChat({ q: message, a: text, lang, source: chatx ? `chatx_miniapp_${source}` : source, ip });
+    return new Response(textStream(text), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "X-Chat-Source": "kb" },
+    });
   };
 
   // cost guard + AI availability → stream; else single-shot fallback
@@ -95,20 +113,12 @@ export async function POST(req: NextRequest) {
   const forceKb = body?.kb === true && requireAdmin(req);
   const guard = dailyGuard();
   if (!deepseekEnabled() || !guard.allowed || forceKb) {
-    const text = fallbackText();
-    void logChat({ q: message, a: text, lang, source: guard.allowed ? "kb" : "capped", ip });
-    return new Response(textStream(text), {
-      headers: { "Content-Type": "text/plain; charset=utf-8", "X-Chat-Source": "kb" },
-    });
+    return fallbackResponse(guard.allowed ? "kb" : "capped");
   }
 
   const upstream = await streamDeepSeek(message, lang, history, 20000, extraSystem);
   if (!upstream || !upstream.body) {
-    const text = fallbackText();
-    void logChat({ q: message, a: text, lang, source: "kb", ip });
-    return new Response(textStream(text), {
-      headers: { "Content-Type": "text/plain; charset=utf-8", "X-Chat-Source": "kb" },
-    });
+    return fallbackResponse("kb");
   }
 
   const decoder = new TextDecoder();
@@ -147,8 +157,8 @@ export async function POST(req: NextRequest) {
         /* upstream aborted */
       } finally {
         controller.close();
-        const clean = cleanMarkdown(full) || fallbackText();
-        void logChat({ q: message, a: clean, lang, source: "ai", ip });
+        const clean = cleanMarkdown(full) || fallbackText() || "";
+        void logChat({ q: message, a: clean, lang, source: chatx ? "chatx_miniapp_ai" : "ai", ip });
       }
     },
   });

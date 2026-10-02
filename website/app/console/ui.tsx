@@ -21,6 +21,7 @@ import {
   LogOut,
   Plus,
   Radio,
+  Send,
   ReceiptText,
   ScrollText,
   Sparkles,
@@ -316,6 +317,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { href: "/console/funnel", label: "激活漏斗", Icon: Filter },
       { href: "/console/downloads", label: "安装包下载", Icon: Download },
       { href: "/console/channels", label: "渠道", Icon: Radio },
+      { href: "/console/telegram", label: "Telegram 运营", Icon: Send },
     ],
   },
   {

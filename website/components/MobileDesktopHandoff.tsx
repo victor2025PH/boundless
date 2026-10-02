@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy, Monitor, Send } from "lucide-react";
 import { track } from "@/lib/track";
-import { SITE_URL, TELEGRAM_HANDLE } from "@/lib/site";
+import { TELEGRAM_HANDLE } from "@/lib/site";
+import { getSrc, getTgUid } from "@/lib/attribution";
+import { chatxHandoffUrl, handoffShareText, telegramShareHref } from "@/lib/chatx-handoff";
 
 /**
  * 移动端 → 桌面的交接卡（实施78 P1-2，2026-08-28）。
@@ -26,7 +28,13 @@ import { SITE_URL, TELEGRAM_HANDLE } from "@/lib/site";
 export default function MobileDesktopHandoff({ lang }: { lang: "zh" | "en" }) {
   const zh = lang === "zh";
   const [copied, setCopied] = useState(false);
-  const url = `${SITE_URL}${zh ? "" : "/en"}/download/chatx`;
+  const [src, setSrc] = useState("");
+  const [tg, setTg] = useState("");
+  useEffect(() => {
+    setSrc(getSrc());
+    setTg(getTgUid());
+  }, []);
+  const url = chatxHandoffUrl(lang, src, tg);
 
   async function copy() {
     try {
@@ -38,18 +46,16 @@ export default function MobileDesktopHandoff({ lang }: { lang: "zh" | "en" }) {
       const el = document.getElementById("mdh-url") as HTMLInputElement | null;
       el?.select();
     }
-    track("cta_click", { where: "mobile_handoff_copy" });
+    track("cta_click", { where: "mobile_handoff_copy", src: src || undefined });
   }
 
-  const shareHref = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(
-    zh ? "智聊 ChatX 下载（在电脑上打开）" : "ChatX download — open on your computer"
-  )}`;
+  const shareHref = telegramShareHref(url, handoffShareText(lang));
 
   return (
     <section className="px-5 pt-28 md:hidden">
-      <div className="rounded-2xl border border-neon-cyan/25 bg-neon-cyan/[0.06] p-4">
+      <div className="rounded-2xl border border-growth-400/25 bg-growth-500/[0.08] p-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-white">
-          <Monitor className="h-4 w-4 text-neon-cyan" />
+          <Monitor className="h-4 w-4 text-growth-400" />
           {zh ? "这是 Windows 电脑端软件" : "ChatX is a Windows desktop app"}
         </div>
         <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
@@ -68,7 +74,7 @@ export default function MobileDesktopHandoff({ lang }: { lang: "zh" | "en" }) {
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             onClick={copy}
-            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-4 py-2 text-xs font-medium text-ink-950"
+            className="chatx-cta inline-flex items-center gap-1.5 rounded-full bg-growth-600 px-4 py-2 text-xs font-medium"
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             {copied ? (zh ? "已复制" : "Copied") : zh ? "复制链接" : "Copy link"}
@@ -77,7 +83,7 @@ export default function MobileDesktopHandoff({ lang }: { lang: "zh" | "en" }) {
             href={shareHref}
             target="_blank"
             rel="noreferrer"
-            onClick={() => track("cta_click", { where: "mobile_handoff_telegram" })}
+            onClick={() => track("cta_click", { where: "mobile_handoff_telegram", src: src || undefined })}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-4 py-2 text-xs text-slate-200"
           >
             <Send className="h-3.5 w-3.5" />

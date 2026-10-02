@@ -19,7 +19,9 @@ export const dynamic = "force-dynamic";
 //
 // 会话口径与 /api/admin/stats 的发布下钻一致：一个 sid 归首个出现的 campaign；
 // 到达/下载判定看该会话内任意事件（pageview 只在整页加载触发，SPA 内导航靠
-// chatx_* 页内事件兜底，故用「任意事件 path 含 /download/chatx」而非仅 pageview）。
+// chatx_landing_view / chatx_* 页内事件兜底，故用「任意事件 path 含 /download/chatx」而非仅 pageview）。
+// Telegram 广告 bot（@ChatX_bot）深链 medium=chatx_bot（24h 追发为 chatx_bot_remind，小程序内为 chatx_miniapp）、campaign=来源码：
+// ?prefix=ad_ 可按广告位看会话口径漏斗，与 /api/admin/stats 的计数口径（start/落地/下载）互为对照。
 
 const EVENTS = process.env.ANALYTICS_LOG || path.join(ANALYTICS_DIR, "events.jsonl");
 // 读取上限比 stats(5000) 放宽：漏斗要 14-30 天窗，截断时响应里显式标 truncated。
@@ -117,7 +119,8 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 聚合：按 campaign 前缀（日更帖）+ 按 medium（channel/group 全量口径）
+  // 聚合：按 campaign 前缀（日更帖）+ 按 medium（channel/group/bot/chatx_bot 全量口径）
+  const MEDIA = new Set(["channel", "group", "bot", "chatx_bot", "chatx_bot_remind", "chatx_miniapp"]);
   const byCampaign = new Map<string, Seg>();
   const totalPrefix: Seg = { sessions: 0, dl_page: 0, dl_click: 0 };
   const byMedium = new Map<string, Seg>();
@@ -127,7 +130,7 @@ export async function GET(req: NextRequest) {
     if (s.dlClick) agg.dl_click++;
   };
   for (const s of sessions.values()) {
-    if (s.medium === "channel" || s.medium === "group" || s.medium === "bot") {
+    if (MEDIA.has(s.medium)) {
       let m = byMedium.get(s.medium);
       if (!m) byMedium.set(s.medium, (m = { sessions: 0, dl_page: 0, dl_click: 0 }));
       add(m, s);

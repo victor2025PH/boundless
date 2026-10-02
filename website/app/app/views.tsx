@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { Dict, Solution } from "@/lib/content";
 import { CHANNEL_URL, GROUP_URL, CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
+import { splitChatLinks, type ChatLinkAction } from "@/lib/chat-links";
 import { BRAND, FAMILY_PITCH, PRODUCT_ORDER, productLineItems } from "@/lib/brand";
 import ProductIcon from "@/components/ProductIcon";
 import { PRODUCT_VIEW, type View } from "./routing";
@@ -122,7 +123,7 @@ function BeforeAfter({ before, after, t }: { before: string; after: string; t: D
 
 /* ───────────────────────── Chat theater (智聊 ChatX) ───────────────────────── */
 
-function ChatTheater({ t }: { t: Dict }) {
+export function ChatTheater({ t }: { t: Dict }) {
   const d = t.autochat.demo;
   return (
     <div className="rounded-2xl border border-violet-500/40 bg-slate-900/60 p-3">
@@ -515,8 +516,50 @@ export function EngageView({ t, zh, onContact }: { t: Dict; zh: boolean; onConta
 
 /* ───────────────────────── AI chat + lead (used on home) ───────────────────────── */
 
-export function AiChat({ t, zh }: { t: Dict; zh: boolean }) {
-  const [msgs, setMsgs] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+// 品类强调色（Tailwind 需要字面量类名，所以整组枚举）：默认官网 neon-cyan，ChatX 小程序用 growth 蓝与页面其他区块一致
+const CHAT_ACCENT = {
+  cyan: {
+    frame: "border-cyan-700/40",
+    title: "text-cyan-300",
+    user: "bg-cyan-500 text-slate-950",
+    focus: "focus:border-cyan-500",
+    send: "bg-cyan-500 text-slate-950",
+    link: "border-cyan-500/50 bg-cyan-500/10 text-cyan-200",
+  },
+  growth: {
+    frame: "border-growth-400/30",
+    title: "text-growth-300",
+    user: "bg-growth-600 text-white",
+    focus: "focus:border-growth-500",
+    send: "bg-growth-600 text-white",
+    link: "border-growth-400/40 bg-growth-500/10 text-growth-300",
+  },
+} as const;
+
+export function AiChat({
+  t,
+  zh,
+  scene,
+  title,
+  examples,
+  greeting,
+  linkAction,
+  accent = "cyan",
+}: {
+  t: Dict;
+  zh: boolean;
+  /** 专题场景（如 ChatX 小程序）：后端叠对应人设，下载链接带 src */
+  scene?: { name: "chatx"; src: string };
+  title?: string;
+  examples?: string;
+  /** 首条小界问候（作为会话历史一并上下文给 AI） */
+  greeting?: string;
+  /** 回复里的链接怎么渲染：返回按钮定义则变按钮（如下载走页面自己的 CTA + 埋点），返 null 则普通外链 */
+  linkAction?: (url: string) => ChatLinkAction | null;
+  accent?: keyof typeof CHAT_ACCENT;
+}) {
+  const ac = CHAT_ACCENT[accent];
+  const [msgs, setMsgs] = useState<{ role: "user" | "assistant"; content: string }[]>(greeting ? [{ role: "assistant", content: greeting }] : []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -529,15 +572,37 @@ export function AiChat({ t, zh }: { t: Dict; zh: boolean }) {
     setMsgs(next);
     setBusy(true);
     // AI 客服互动是高意向信号、也是留资前置；记首条便于在会话漏斗里识别「engaged/intent」会话
-    track("miniapp_chat", { first: msgs.length === 0 });
+    const firstUser = !msgs.some((m) => m.role === "user");
+    track("miniapp_chat", { first: firstUser, ...(scene ? { scene: scene.name, src: scene.src || "organic" } : {}) });
+    const retry = zh ? "AI 暂时繁忙，请稍后再试或点人工客服。" : "AI is busy right now — try again shortly or tap human support.";
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, lang: zh ? "zh" : "en", history: msgs.slice(-6) }),
+        body: JSON.stringify({
+          message: text,
+          lang: zh ? "zh" : "en",
+          history: msgs.slice(-6),
+          ...(scene ? { scene: scene.name, src: scene.src } : {}),
+        }),
       });
-      const reply = (await res.text()) || (zh ? "稍后客服联系你～" : "Support will reach you soon.");
-      setMsgs([...next, { role: "assistant", content: reply }]);
+      if (!res.ok || !res.body) {
+        setMsgs([...next, { role: "assistant", content: retry }]);
+        return;
+      }
+      // 流式逐字上屏：和真人打字一样，也是 ChatX「AI 自动回复」的现场效果
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let reply = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        reply += dec.decode(value, { stream: true });
+        setMsgs([...next, { role: "assistant", content: reply }]);
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }
+      reply += dec.decode();
+      setMsgs([...next, { role: "assistant", content: reply.trim() || retry }]);
     } catch {
       setMsgs([...next, { role: "assistant", content: zh ? "网络波动，请重试或点人工客服。" : "Network hiccup, try again." }]);
     } finally {
@@ -547,18 +612,44 @@ export function AiChat({ t, zh }: { t: Dict; zh: boolean }) {
   }
 
   return (
-    <section id="ai-chat" className="rounded-2xl border border-cyan-700/40 bg-slate-900/60 p-3">
-      <div className="mb-2 text-sm font-semibold text-cyan-300">🤖 {zh ? "AI 智能客服 · 直接问" : "AI assistant · ask anything"}</div>
+    <section id="ai-chat" className={`rounded-2xl border ${ac.frame} bg-slate-900/60 p-3`}>
+      <div className={`mb-2 text-sm font-semibold ${ac.title}`}>🤖 {title ?? (zh ? "AI 智能客服 · 直接问" : "AI assistant · ask anything")}</div>
       <div ref={scrollRef} className="max-h-60 space-y-2 overflow-y-auto">
-        {msgs.length === 0 && (
-          <div className="text-xs text-slate-500">{zh ? "例如：换脸怎么收费？AI 成交能接哪些平台？私有部署多少钱？" : "e.g. How much is face swap? Which platforms? Private deploy price?"}</div>
-        )}
-        {msgs.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-            <span className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-slate-100"}`}>{m.content}</span>
+        {msgs.map((m, i) => {
+          // 流式未完成的最后一条不抽链接（半截 URL 会闪）
+          const streaming = busy && i === msgs.length - 1;
+          const { text, urls } = m.role === "assistant" && !streaming ? splitChatLinks(m.content) : { text: m.content, urls: [] };
+          return (
+            <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
+              {text && (
+                <span className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? ac.user : "bg-slate-800 text-slate-100"}`}>{text}</span>
+              )}
+              {urls.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {urls.map((u) => {
+                    const act = linkAction?.(u) ?? null;
+                    const cls = `rounded-xl border px-3 py-1.5 text-xs font-medium transition active:scale-[0.98] ${ac.link}`;
+                    return act ? (
+                      <button key={u} type="button" onClick={act.onClick} className={cls}>
+                        {act.label}
+                      </button>
+                    ) : (
+                      <a key={u} href={u} target="_blank" rel="noreferrer" className={cls}>
+                        {u.replace(/^https?:\/\//, "").replace(/\/.*$/, "")} ↗
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!msgs.some((m) => m.role === "user") && (
+          <div className="text-xs text-slate-500">
+            {examples ?? (zh ? "例如：换脸怎么收费？AI 成交能接哪些平台？私有部署多少钱？" : "e.g. How much is face swap? Which platforms? Private deploy price?")}
           </div>
-        ))}
-        {busy && <div className="text-left text-xs text-slate-500">{zh ? "AI 正在输入…" : "AI is typing…"}</div>}
+        )}
+        {busy && msgs[msgs.length - 1]?.role === "user" && <div className="text-left text-xs text-slate-500">{zh ? "AI 正在输入…" : "AI is typing…"}</div>}
       </div>
       <div className="mt-2 flex gap-2">
         <input
@@ -566,9 +657,9 @@ export function AiChat({ t, zh }: { t: Dict; zh: boolean }) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder={zh ? "输入你的问题…" : "Type your question…"}
-          className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+          className={`flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none ${ac.focus}`}
         />
-        <button onClick={send} disabled={busy} className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50">{zh ? "发送" : "Send"}</button>
+        <button onClick={send} disabled={busy} className={`rounded-xl px-4 py-2 text-sm font-medium disabled:opacity-50 ${ac.send}`}>{zh ? "发送" : "Send"}</button>
       </div>
     </section>
   );
@@ -579,6 +670,7 @@ export function LeadForm({
   zh,
   presetInterest,
   view,
+  utm,
   name,
   setName,
   contact,
@@ -588,6 +680,8 @@ export function LeadForm({
   zh: boolean;
   presetInterest: string;
   view?: string;
+  /** 渠道归因（source/medium/campaign 紧凑形式，与官网 getLeadUtm 同格），写进线索 utm 列 */
+  utm?: string;
   name: string;
   setName: (v: string) => void;
   contact: string;
@@ -613,6 +707,7 @@ export function LeadForm({
           interest: presetInterest || (zh ? "小程序留资" : "Mini App lead"),
           source: "miniapp",
           lang: zh ? "zh" : "en",
+          ...(utm ? { utm } : {}),
         }),
       });
       if (res.ok) track("miniapp_lead", { interest: presetInterest || "miniapp", view: view || "home" });
