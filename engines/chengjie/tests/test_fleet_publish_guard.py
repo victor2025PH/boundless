@@ -136,3 +136,41 @@ def test_publish_stops_before_any_upload(tmp_path, extra, needle):
     out = res.stdout + res.stderr
     assert res.returncode != 0 and needle in out
     assert "[publish] ssh" not in out and "[publish] scp" not in out
+
+
+# ── P0-6: default ssh host + mirror sync + generated download page ─────────────
+def test_publish_defaults_to_working_ssh_alias_and_syncs_mirror():
+    src = _text(PUBLISH)
+    assert '[string]$SshHost = "vps-bd2026",' in src and '"ubuntu@bd2026.cc"' not in src.split("param(", 1)[1].split(")", 1)[0]
+    assert '[string]$MirrorDir = "/var/www/dl-mirror/downloads/fleet",' in src and "[switch]$NoMirror" in src
+    mirror = src.split("if (-not $NoMirror) {", 1)[1]
+    for needle in ("render_download_page.py", "sudo install -m 644 -o root -g root", "index.html.bak_$ts",
+                   "sha256sum -c", "cmp -s", "chatx-agent-$ver.exe", "ChatXAgentSetup-$ver.exe"):
+        assert needle in mirror, needle
+    # The page is rendered from the dist files, never from typed-in numbers.
+    assert "'--setup', $setupExe" in mirror and "'--agent', $agentLocal" in mirror
+
+
+@win
+def test_publish_whatif_dry_run_plans_mirror_and_renders_page(tmp_path):
+    import sys
+
+    body = b"MZ unsigned setup for dry run"
+    dist = _dist(tmp_path, body, setup_sha=hashlib.sha256(body).hexdigest())
+    mf = json.loads((dist / "manifest.json").read_bytes().decode("utf-8-sig"))
+    mf["built_at"] = "2026-10-01T10:42:03"
+    (dist / "manifest.json").write_text(json.dumps(mf), encoding="utf-8")
+    stage = tmp_path / "stage"
+    res = _ps(PUBLISH, "-DistDir", str(dist), "-SshHost", "nobody@invalid.invalid",
+              "-PublicBase", "https://invalid.invalid/downloads/fleet", "-Python", sys.executable,
+              "-StageDir", str(stage), "-WhatIf")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "/var/www/dl-mirror/downloads/fleet/chatx-agent-0.0.1.exe" in out
+    assert "/var/www/dl-mirror/downloads/fleet/ChatXAgentSetup-0.0.1.exe" in out
+    assert "index.html.bak_" in out and "sha256sum -c chatx-agent-0.0.1.exe.sha256 ChatXAgentSetup-0.0.1.exe.sha256" in out
+    page = (stage / "index.html").read_text(encoding="utf-8")
+    assert hashlib.sha256(body).hexdigest() in page and "v0.0.1（2026-10-01）" in page
+    assert hashlib.sha256(b"MZ fake agent").hexdigest() in page
+    side = (stage / "ChatXAgentSetup-0.0.1.exe.sha256").read_text(encoding="ascii")
+    assert side == hashlib.sha256(body).hexdigest() + "  ChatXAgentSetup-0.0.1.exe\n"
