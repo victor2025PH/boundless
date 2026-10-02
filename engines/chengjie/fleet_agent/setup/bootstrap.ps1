@@ -9,6 +9,12 @@ param(
   [string]$Snapshot = ""
 )
 $ErrorActionPreference = 'Stop'
+# Pin PSModulePath to this Windows PowerShell 5.1's own module dirs. Started from pwsh 7
+# (directly, or via a setup launched from pwsh 7) the process inherits a 7.x PSModulePath
+# and 5.1 cannot autoload Get-Acl / Get-FileHash / ScheduledTasks.
+if ($PSVersionTable.PSVersion.Major -le 5) {
+  $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules')
+}
 function Say($m) { Write-Host "[chatx-agent] $m" }
 function Native([string]$exe, [string[]]$a) {
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'

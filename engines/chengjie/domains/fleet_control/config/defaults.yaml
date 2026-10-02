@@ -1,6 +1,6 @@
 domain:
   name: fleet_control
-  display_name: "智控 · 节点机群主控"
+  display_name: "智拓群控 · 节点机群主控"
   version: "0.1"
 
 # 主控实例不聊天：不挂任何技能。

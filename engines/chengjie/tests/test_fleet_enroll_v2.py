@@ -345,7 +345,7 @@ def test_download_page_installer_and_script_attachment(st):
 
 def test_publish_and_deploy_ops_fixes_are_in_the_scripts():
     publish = (ENGINE / "deploy/fleet/publish_agent.ps1").read_text(encoding="utf-8")
-    assert "tar -rf $raw config/presets" in publish
+    assert "tar -rf $raw --exclude=*.bak_* config/presets" in publish
     assert "--exclude=config" in publish
     deploy = (ENGINE / "deploy/fleet/deploy_controller.sh").read_text(encoding="utf-8")
     assert "chmod 750" in deploy and "chmod 770" in deploy and 'chown root:"$SVC_USER"' in deploy
@@ -1009,7 +1009,8 @@ def test_enroll_failures_log_a_fail2ban_line(st, caplog):
     console = (ENGINE / "domains/fleet_control/web/templates/fleet_console.html").read_text(encoding="utf-8")
     assert "this machine was revoked" in console
     assert "duplicate machine_id" in console
-    assert "if(typed===null)return" in console and "if(!g)return" in console
+    # P1-7：浏览器 prompt 已换成页面内表单；取消 = 不提交，分组为空时在框内提示
+    assert "prompt(" not in console and "请填写分组名称" in console
     assert "prompt('分组名称','机房')||''" not in console
     admin_src = (ENGINE / "src/fleet/admin.py").read_text(encoding="utf-8")
     assert "DUPLICATE machine_id" in admin_src

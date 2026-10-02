@@ -74,6 +74,12 @@ Name: "{autoprograms}\舰队节点"; Filename: "{sys}\wscript.exe"; Parameters: 
 Name: "{autoprograms}\舰队控制台"; Filename: "{code:GetConsoleUrl}"; IconFilename: "{app}\fleet-node.ico"
 
 [Code]
+const
+  { Every -Command below first pins PSModulePath to this Windows PowerShell 5.1's own module
+    dirs. Setup started from pwsh 7 inherits a 7.x PSModulePath; 5.1 then cannot autoload
+    Get-Acl (Microsoft.PowerShell.Security), the ACL check exits 2 and the install aborts. }
+  PsModuleFix = '$env:PSModulePath=(Join-Path $PSHOME ''Modules'')+'';''+(Join-Path $env:ProgramFiles ''WindowsPowerShell\Modules'');';
+
 var
   SnapshotToDelete: String;
   BootstrapOk: Boolean;
@@ -144,7 +150,7 @@ begin
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent Upgrade"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   exe := PsLiteral(ExpandConstant('{app}\chatx-agent.exe'));
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''chatx-agent.exe'' -and $_.ExecutablePath -eq ''' + exe + ''' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix + 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''chatx-agent.exe'' -and $_.ExecutablePath -eq ''' + exe + ''' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
@@ -169,7 +175,7 @@ var
   cmd: String;
 begin
   { Sampled before the directory-only setowner. Exit 0 locked, 1 not, 2 error. }
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
     '$ErrorActionPreference=''Stop''; try {' +
     '$a=Get-Acl -LiteralPath ''' + PsLiteral(Dir) + ''';' +
     '$s=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;' +
@@ -196,7 +202,7 @@ begin
     Refuse a junction on either path. Skip reset when the parent is already locked.
     icacls rights are single-quoted array elements, then splatted. A bare
     *S-1-5-18:(OI)(CI)F inside -Command is a PowerShell subexpression and exits 5. }
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
     '$ErrorActionPreference=''Stop''; try {' +
     '$d=''' + PsLiteral(Dir) + '''; $p=Split-Path -Parent $d;' +
     'function Reparse([string]$x){ if(-not (Test-Path -LiteralPath $x)){ return $false };' +
@@ -235,7 +241,7 @@ var
   cmd: String;
 begin
   { Exit 0: already locked, leave it. Exit 1: absent or renamed to fleet.legacy-<guid>. }
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
     '$ErrorActionPreference=''Stop''; $d=''' + PsLiteral(Dir) + ''';' +
     'function Reparse([string]$x){ if(-not (Test-Path -LiteralPath $x)){ return $false };' +
     'try { $i=Get-Item -LiteralPath $x -Force -ErrorAction Stop } catch { return $true };' +
@@ -267,7 +273,7 @@ var
   ResultCode: Integer;
   cmd: String;
 begin
-  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
     '$ErrorActionPreference=''Stop''; $d=''' + PsLiteral(Dir) + ''';' +
     'if(-not (Test-Path -LiteralPath $d)){ exit 4 };' +
     'try { $i=Get-Item -LiteralPath $d -Force -ErrorAction Stop } catch { exit 4 };' +
