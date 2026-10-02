@@ -373,7 +373,7 @@ def _http_error(code: int, body: bytes):
 
 
 def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
-    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功；emotion 档保留。"""
+    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功。"""
     from src.ai.avatar_voice import is_emo_text_infer_error
     c = _client(retries=0)
     seen: list = []
@@ -391,7 +391,7 @@ def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
         out = c.tts("你好呀", reference_audio_b64="QQ==", emotion="happy", emo_text="轻松愉快地说", emo_alpha=0.6)
     assert out == wav and len(seen) == 2
     assert seen[0].get("emo_text") == "轻松愉快地说" and seen[0].get("use_emo_text") is True
-    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "happy"
+    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "neutral"
     # 指纹判定：只认 5xx + QwenEmotion/emotion score/Please retry；4xx / 别的 5xx 不算
     assert is_emo_text_infer_error(_http_error(502, bad))
     assert not is_emo_text_infer_error(_http_error(400, bad))

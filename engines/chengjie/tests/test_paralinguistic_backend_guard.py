@@ -167,6 +167,50 @@ def test_avatar_tts_keeps_marks_for_confirmed_cosy_upstream():
     assert "[sigh]" in captured["body"]["text"]
 
 
+# ── IndexTTS-2 音色保真：情绪标签归 neutral + emo_alpha 封顶 ────────────────────
+def test_avatar_tts_indextts_drops_label_and_caps_alpha():
+    c = AvatarVoiceClient({"enabled": True, "base_url": "http://x:7865",
+                           "chunk_max_chars": 0, "retries": 0})
+    av._SHAPE_CACHE["http://x:7865"] = "indextts2"
+    captured: dict = {}
+    with patch.object(AvatarVoiceClient, "_post_any", _fake_post_any(captured)):
+        c.tts("被你发现啦", reference_audio_b64="", emotion="happy",
+              emo_text="俏皮撒娇、带一声轻笑", emo_alpha=0.58)
+    body = captured["body"]
+    assert body["emotion"] == "neutral"
+    assert body["emo_text"] == "俏皮撒娇、带一声轻笑"
+    assert body["emo_alpha"] == 0.35
+
+
+def test_avatar_tts_indextts_alpha_cap_configurable_and_defaulted():
+    c = AvatarVoiceClient({"enabled": True, "base_url": "http://x:7865",
+                           "chunk_max_chars": 0, "retries": 0,
+                           "indextts_emo_alpha_max": 0.45})
+    captured: dict = {}
+    with patch.object(AvatarVoiceClient, "_post_any", _fake_post_any(captured)):
+        c.tts("你好", reference_audio_b64="", emo_text="开心", emo_alpha=0.3)
+    assert captured["body"]["emo_alpha"] == 0.3
+    with patch.object(AvatarVoiceClient, "_post_any", _fake_post_any(captured)):
+        c.tts("你好", reference_audio_b64="", emo_text="开心")
+    assert captured["body"]["emo_alpha"] == 0.45
+    with patch.object(AvatarVoiceClient, "_post_any", _fake_post_any(captured)):
+        c.tts("你好", reference_audio_b64="", emotion="gentle")
+    assert captured["body"]["emotion"] == "neutral"
+    assert "emo_alpha" not in captured["body"]
+
+
+def test_avatar_tts_cosy_upstream_keeps_label_and_alpha():
+    c = AvatarVoiceClient({"enabled": True, "base_url": "http://y:7852",
+                           "chunk_max_chars": 0, "retries": 0})
+    av._SHAPE_CACHE["http://y:7852"] = "cosyvoice"
+    captured: dict = {}
+    with patch.object(AvatarVoiceClient, "_post_any", _fake_post_any(captured)):
+        c.tts("你好", reference_audio_b64="", emotion="happy",
+              emo_text="开心", emo_alpha=0.58)
+    assert captured["body"]["emotion"] == "happy"
+    assert captured["body"]["emo_alpha"] == 0.58
+
+
 def test_voice_clone_client_strips_marks_unconditionally(tmp_path):
     """/v1/tts/clone 契约家族（MiniCPM/fish/IndexTTS-2）无一消费标记 → 恒剥。"""
     from src.ai.voice_clone_client import VoiceCloneClient

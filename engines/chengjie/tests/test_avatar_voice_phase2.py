@@ -235,8 +235,9 @@ async def test_pipeline_dynamic_instruct_channel(tmp_path):
     assert sent["body"]["emotion"] == "neutral"
     assert rv2.extra["avatar_channel"] == "emotion"
 
-    # 强情绪（intensity≥0.7）→ 情感标签切 instruct2 情感路径
+    # 强情绪（intensity≥0.7）→ 情感标签切 instruct2 情感路径（仅 CosyVoice 上游）
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "marks_safe", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", fake_post):
         rv3 = await TTSPipeline(cfg(False)).synthesize(
             "宝贝晚安哦", emotion={"emotion": "warm", "intensity": 0.85})

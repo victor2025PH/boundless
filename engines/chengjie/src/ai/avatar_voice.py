@@ -1541,6 +1541,15 @@ class AvatarVoiceClient:
         self.prosody_enabled: bool = pros.get("enabled", True) is not False
         self.flow_temperature: float = float(pros.get("flow_temperature") or 0)
         self.llm_top_k: int = int(pros.get("llm_top_k") or 0)
+        # IndexTTS-2 音色保真（2026-10-02 林小雨 173 实测，同稿 n=6 声纹余弦）：
+        # 无情绪 0.818 / emotion=happy 0.688 / gentle 0.742 / emo_text α0.35 0.814 /
+        # α0.45 0.79 / α0.58 0.731——情绪标签与高 α 都换掉音色。非 CosyVoice 上游
+        # 标签一律 neutral，情绪只走 emo_text，α 封顶此值。
+        try:
+            self.indextts_emo_alpha_max: float = float(
+                cfg.get("indextts_emo_alpha_max", 0.35))
+        except (TypeError, ValueError):
+            self.indextts_emo_alpha_max = 0.35
 
     @classmethod
     def from_config(cls, full_config: Dict[str, Any]) -> "AvatarVoiceClient":
@@ -1858,6 +1867,7 @@ class AvatarVoiceClient:
         if not self.marks_safe():
             from src.ai.voice_emotion import strip_paralinguistic_marks
             text = strip_paralinguistic_marks(text)
+            emo, emo_alpha = self._indextts_fidelity(emo, emo_text, emo_alpha)
         chunks = self._split(text)
         parts: List[bytes] = []
         for ch in chunks:
@@ -1897,6 +1907,19 @@ class AvatarVoiceClient:
             prosody_variation=pv, flow_temperature=ft, llm_top_k=tk,
             language=language, emo_text=emo_text, emo_alpha=emo_alpha,
             emo_audio_b64=emo_audio_b64, emo_vector=emo_vector))
+
+    def _indextts_fidelity(
+        self, emotion: str, emo_text: str, emo_alpha: Optional[float],
+    ) -> Tuple[str, Optional[float]]:
+        """非 CosyVoice 上游：情绪标签归 neutral，emo_alpha 封顶（见 indextts_emo_alpha_max）。"""
+        if emo_text:
+            try:
+                emo_alpha = min(float(emo_alpha if emo_alpha is not None
+                                      else self.indextts_emo_alpha_max),
+                                self.indextts_emo_alpha_max)
+            except (TypeError, ValueError):
+                emo_alpha = self.indextts_emo_alpha_max
+        return "neutral", emo_alpha
 
     def tts_instruct(
         self, text: str, *, reference_audio_b64: str, instruct: str,
