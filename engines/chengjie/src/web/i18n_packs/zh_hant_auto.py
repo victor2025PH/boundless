@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-19 21:08:04 · OpenCC s2twp + 術語釘 · 17833 鍵（源 zh 全量 18447）
+生成: 2026-10-02 23:40:43 · OpenCC s2twp + 術語釘 · 18187 鍵（源 zh 全量 18805）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1535,6 +1535,40 @@ ZH_HANT = {
     'aud_act_tg_members_extract_start': '開始提取群成員',
     # ── aud_act_tg_members_extract_stop ──
     'aud_act_tg_members_extract_stop': '停止提取群成員',
+    # ── aud_act_tg_members_gtouch_send ──
+    'aud_act_tg_members_gtouch_send': '在群裡公開接話（回覆對方那條）',
+    # ── aud_act_tg_members_gtouch_skip ──
+    'aud_act_tg_members_gtouch_skip': '跳過一個群裡接話物件',
+    # ── aud_act_tg_members_outreach_age ──
+    'aud_act_tg_members_outreach_age': '申報 TG 號的真實號齡',
+    # ── aud_act_tg_members_outreach_approve ──
+    'aud_act_tg_members_outreach_approve': '批准今日開口',
+    # ── aud_act_tg_members_outreach_auto_demote ──
+    'aud_act_tg_members_outreach_auto_demote': '全自動不達標，退回批准後發',
+    # ── aud_act_tg_members_outreach_auto_followup ──
+    'aud_act_tg_members_outreach_auto_followup': '排程器自動發出 72h 跟進',
+    # ── aud_act_tg_members_outreach_auto_send ──
+    'aud_act_tg_members_outreach_auto_send': '排程器自動發出同群開口',
+    # ── aud_act_tg_members_outreach_compose ──
+    'aud_act_tg_members_outreach_compose': 'AI 擬開口文案',
+    # ── aud_act_tg_members_outreach_followup ──
+    'aud_act_tg_members_outreach_followup': '手動發出 72h 跟進',
+    # ── aud_act_tg_members_outreach_mode ──
+    'aud_act_tg_members_outreach_mode': '切換開口方式',
+    # ── aud_act_tg_members_outreach_queue ──
+    'aud_act_tg_members_outreach_queue': '生成今日開口佇列',
+    # ── aud_act_tg_members_outreach_resume ──
+    'aud_act_tg_members_outreach_resume': '恢復開口',
+    # ── aud_act_tg_members_outreach_send ──
+    'aud_act_tg_members_outreach_send': '傳送一條同群開口',
+    # ── aud_act_tg_members_outreach_settings ──
+    'aud_act_tg_members_outreach_settings': '修改開口時段/條數',
+    # ── aud_act_tg_members_outreach_skip ──
+    'aud_act_tg_members_outreach_skip': '跳過一個開口物件',
+    # ── aud_act_tg_members_outreach_stalled ──
+    'aud_act_tg_members_outreach_stalled': '同群開口：對方回了但我方沒接上話',
+    # ── aud_act_tg_members_outreach_stop ──
+    'aud_act_tg_members_outreach_stop': '停止開口',
     # ── aud_act_update_ab_test ──
     'aud_act_update_ab_test': '更新 A/B 測試',
     # ── aud_act_update_autopilot ──
@@ -2941,6 +2975,13 @@ ZH_HANT = {
     'cg.kf.welcome_ph': '例：您好，我是××的客服助手，請問有什麼可以幫您？',
     'cg.loading': '載入中…',
     'cg.next': '下一步',
+    'cg.pc.acct_mis_bar': '「{label}」綁的窗裡登的是「{seen}」，不是 {bound}：這個號已停發，換回原號登入即恢復',
+    'cg.pc.acct_new_label': '個人微信 {n} · PC 副駕',
+    'cg.pc.acct_pick_win': '選微信視窗',
+    'cg.pc.acct_tag_bound': '已繫結',
+    'cg.pc.acct_tag_mismatch': '賬號不符',
+    'cg.pc.acct_tag_unbound': '未綁視窗',
+    'cg.pc.acct_unbound_bar': '桌面上開了 {n} 個微信，還有 {m} 個賬號沒繫結視窗：點「選微信視窗」綁一下，免得兩個號串號',
     'cg.pc.adv_autostart_lead': '開機自啟（註冊計劃任務）：',
     'cg.pc.adv_lead': '在微信所在的 Windows 電腦上開啟 PowerShell，貼上執行。關閉視窗副駕即停止；要常駐請再執行第二條註冊開機自啟。',
     'cg.pc.adv_load_fail': '命令載入失敗：{why}',
@@ -2994,6 +3035,8 @@ ZH_HANT = {
     'cg.pc.live_idle_tray': '微信視窗收進了托盤：先把視窗還原到桌面，副駕才能讀屏',
     'cg.pc.live_manual': '後端不在這台電腦上，無法一鍵啟動',
     'cg.pc.live_manual_d': '請在微信所在的電腦上執行下方「高階」裡的命令；啟動後這裡會自動變綠',
+    'cg.pc.live_mismatch': '窗裡登的不是這個號，已停發',
+    'cg.pc.live_mismatch_d': '副駕綁的微信窗裡現在登的是「{seen}」，而這個賬號繫結的是 {bound}。為免拿別人的號回覆，已暫停傳送；換回原賬號登入就自動恢復，或重新選一個視窗綁給它。',
     'cg.pc.live_offline': '副駕已停止',
     'cg.pc.live_offline_d': '上次線上 {m} 分鐘前',
     'cg.pc.live_online': '副駕線上 · {tier}',
@@ -3007,6 +3050,7 @@ ZH_HANT = {
     'cg.pc.log_empty': '還沒有日誌',
     'cg.pc.login_detected': '已檢測到微信登入，正在進入下一步…',
     'cg.pc.meta_pid': '程序 {pid} · 已執行 {t}',
+    'cg.pc.meta_who': '窗裡登的是 {who}',
     'cg.pc.open_wechat': '開啟電腦微信',
     'cg.pc.opening_wechat': '正在開啟…',
     'cg.pc.privacy_title': '關於安全與隱私',
@@ -3060,6 +3104,21 @@ ZH_HANT = {
     'cg.pc.voice_testing': '自測中…',
     'cg.pc.voice_version_low': '語音回覆（可選）：微信需 {v} 以上才有「發語音」按鈕，當前版本只發文字',
     'cg.pc.voice_where': '語音只在全自動檔、且人設與「回覆設定 → 平台覆寫 → 微信 · 語音觸發」允許時傳送；通路未就緒時自動改發文字。',
+    'cg.pc.win_bind_cur': '綁給當前賬號',
+    'cg.pc.win_bind_new': '新建賬號綁它',
+    'cg.pc.win_bound_to': '已綁給「{label}」',
+    'cg.pc.win_close': '收起',
+    'cg.pc.win_conflict': '這個視窗已綁給另一個賬號：先在那個賬號上解綁',
+    'cg.pc.win_hint': '繫結按程序記；微信重開後程序號會變，副駕會按首次讀到的微訊號校驗身份；如果變灰了再回這裡選一次即可。',
+    'cg.pc.win_lead': '選一個視窗綁給「{label}」：副駕就只看這個窗，不會跳到另一個微信。也可以用另一個窗新建第二個賬號。',
+    'cg.pc.win_none': '沒找到微信主窗：請先在這台電腦上開啟並登入微信',
+    'cg.pc.win_remove': '移除賬號',
+    'cg.pc.win_remove_confirm': '確定移除這個賬號？它的副駕會立即停止。',
+    'cg.pc.win_remove_lead': '不再用「{label}」這個賬號？會停掉它的副駕並從列表移除（會話記錄不動）',
+    'cg.pc.win_saved': '繫結已儲存，副駕在跑的話會自動重啟生效',
+    'cg.pc.win_title': '桌面上的微信視窗',
+    'cg.pc.win_unbind': '解綁',
+    'cg.pc.win_unbound': '未繫結',
     'cg.pc.work_hours': '傳送時段',
     'cg.pc.work_hours_hint': '只在這個時段內傳送（24 小時制）',
     'cg.prev': '上一步',
@@ -4996,6 +5055,8 @@ ZH_HANT = {
     'dv_ai_p_title': '主對話模型位置',
     # ── dv_bd_loading ──
     'dv_bd_loading': '讀取中…',
+    # ── dv_bd_moved ──
+    'dv_bd_moved': '客戶不用進開發者模式——到「自動回覆設定」裡改這項。',
     # ── dv_bd_restart_needed ──
     'dv_bd_restart_needed': '後端需重啟後可用',
     # ── dv_bd_saved_restart ──
@@ -6121,9 +6182,35 @@ ZH_HANT = {
     'err.gm.bad_request': '缺少必要引數（account_id / group）',
     'err.gm.client_unavailable': '該 Telegram 賬號當前不線上或不可用',
     'err.gm.disabled': '群成員提取未開啟：在開發者工具「內部功能顯隱」勾選「群成員提取」',
+    'err.gm.gtouch_cap': '這個號今天在群裡接話的條數用完了',
+    'err.gm.gtouch_group_cap': '這個群今天已經接過夠多話了，換個群或明天再來',
+    'err.gm.gtouch_group_denied': '這個號在這個群裡發不了言（被禁言或沒有發言權限）',
+    'err.gm.gtouch_stale': 'TA 那句話太久了，現在回會很突兀',
+    'err.gm.gtouch_state': '這個人現在不能在群裡接話（不在這個號的群裡、已經接過、或沒有可回覆的那條訊息）',
+    'err.gm.gtouch_text': '群裡回覆不合適：空的、太長、帶了連結/聯絡方式，或在引人私聊、@ 人',
+    'err.gm.gtouch_wait': '剛在群裡回過 TA，過幾個小時再私聊，緊跟著私聊像盯人',
     'err.gm.job_not_found': '提取任務不存在',
     'err.gm.job_running': '該任務正在執行中',
     'err.gm.not_group': '該會話不是群/超級群，無法提取成員',
+    'err.gm.outreach_age': '號齡要填 0–3650 之間的天數（0 = 撤銷申報）',
+    'err.gm.outreach_auto_gate_age': '這個號還不夠老（註冊未滿 14 天或天齡不明），先用「批准後自動發」',
+    'err.gm.outreach_auto_gate_declared_unproven': '申報過號齡的號要先在這裡發滿 10 條開口（近 7 天）才能全自動，先用「批准後自動發」',
+    'err.gm.outreach_auto_gate_flood': '這個號近 7 天撞過 Telegram 風控，暫不能全自動',
+    'err.gm.outreach_auto_gate_reply_rate': '這個號近 7 天開口回覆率低於地板，先改文案/人設再放手',
+    'err.gm.outreach_cap': '這個號今天的開口額度用完了',
+    'err.gm.outreach_confirm': '開口要逐條確認，沒有確認不會發',
+    'err.gm.outreach_followup_cap': '這個號今天的跟進條數用完了',
+    'err.gm.outreach_followup_early': '發出還不到 72 小時，先別催',
+    'err.gm.outreach_followup_off': '跟進功能已關（companion.group_members.outreach_followup_enabled）',
+    'err.gm.outreach_followup_state': '這個人不在「可跟進」狀態（沒發過、已回、已跟進過、或拒絕過聯絡）',
+    'err.gm.outreach_gap': '距上一條開口太近，過一會兒再發',
+    'err.gm.outreach_gate': '這個號的總髮送量已到閘門（紅燈、總額度或急停），今天別再開口',
+    'err.gm.outreach_hold': '這個號今天的開口已停（人工急停或風控熔斷）',
+    'err.gm.outreach_hours': '現在不在開口時段（本地 10:00–21:00），佇列留著，到點再發',
+    'err.gm.outreach_mode': '開口方式只能是 manual / approve / auto',
+    'err.gm.outreach_settings_na': '這台例項不能改配置 overlay，請到 config.yaml 裡改 companion.group_members',
+    'err.gm.outreach_state': '這個人不在今日佇列裡，或已經被處理過',
+    'err.gm.outreach_text': '開場不合適：空的、太長，或帶了連結/加聯絡方式',
     'err.gm.readonly': '只讀角色不可發起提取',
     'err.gm.store_unavailable': '群成員庫未就緒',
     'err.goals.active_limit': '該會話已有 {n} 個進行中的目標，請先完成/取消',
@@ -6289,6 +6376,8 @@ ZH_HANT = {
     'err.kb.skill_mgr_unloaded': 'skill_manager 未載入，請確認 bot 正在執行',
     'err.kb.topic_empty': 'topic 不能為空',
     'err.kb.translate_no_result': '翻譯API無返回',
+    'err.kb.undo_already_undone': '這次匯入已經撤銷過了',
+    'err.kb.undo_not_found': '找不到這次匯入記錄（可能已超出保留的最近 20 批）',
     'err.kb.vec_all_done': '所有條目已完成向量化，無需重新處理',
     'err.kb.vec_running': '向量化任務正在執行中',
     'err.learner.ai_unavailable': 'AI 引擎不可用，無法生成草稿（已有草稿仍可正常稽核）',
@@ -7826,6 +7915,8 @@ ZH_HANT = {
     'inbox.acct.bd_title': '角標 = {scope}裡能點開的未讀數',
     'inbox.acct.bridge_blind': '視窗不可見',
     'inbox.acct.bridge_blind_t': '副駕程序在跑，但讀不到微信主窗（收進托盤或已退出登入）：此刻訊息進不來、回覆發不出，請把電腦微信點開還原',
+    'inbox.acct.bridge_mismatch': '賬號不符 · 已停發',
+    'inbox.acct.bridge_mismatch_t': '副駕綁的微信窗裡現在登的是「{seen}」，但這張卡繫結的是 {bound}：為免發錯號已暫停傳送，換回原賬號登入後自動恢復',
     'inbox.acct.bridge_off': '副駕離線 {m} 分',
     'inbox.acct.bridge_off_t': 'PC 副駕驅動程序已無心跳：新訊息不會進來、回覆不會發出。點本卡「檢視接入流程」，在第 ③ 步點「啟動副駕」',
     'inbox.acct.bridge_on': '副駕線上 · {tier}',
@@ -7940,6 +8031,16 @@ ZH_HANT = {
     'inbox.acct.histview_only_hint': '該賬號未接入自動收發：僅存歷史記錄',
     'inbox.acct.histview_out_hint': '該賬號已退出登入：歷史只讀，重新登入後可繼續收發',
     'inbox.acct.histview_removed_hint': '該賬號已移除：歷史只讀',
+    'inbox.acct.ident_t': '這個號現在：{persona} · {kind} · {kb} · {mode}',
+    'inbox.acct.ident_unselected': '未選人設',
+    'inbox.acct.kb_must': '知識庫必查',
+    'inbox.acct.kb_open': '知識庫已開',
+    'inbox.acct.kb_skip': '閒聊不查',
+    'inbox.acct.kb_unselected': '未選人設',
+    'inbox.acct.kind_companion': '陪聊',
+    'inbox.acct.kind_other': '其他',
+    'inbox.acct.kind_sales': '銷售',
+    'inbox.acct.kind_support': '客服',
     'inbox.acct.last_sync': '上次同步 · {t}',
     'inbox.acct.link_copied': '視角連結已複製：貼上到瀏覽器可直達當前視角（首次開啟需登入）',
     'inbox.acct.link_copy_fail': '複製失敗，請手動從位址列複製',
@@ -7949,6 +8050,12 @@ ZH_HANT = {
     'inbox.acct.logout_ok': '已登出',
     'inbox.acct.logout_title': '登出賬號',
     'inbox.acct.main': '主賬號',
+    'inbox.acct.mode_auto_ai': '全自動',
+    'inbox.acct.mode_global': '跟隨全域性',
+    'inbox.acct.mode_manual': '手動',
+    'inbox.acct.mode_multi_choice': '多選一',
+    'inbox.acct.mode_pending': '半自動（待確認）',
+    'inbox.acct.mode_review': '半自動',
     'inbox.acct.more': '更多操作',
     'inbox.acct.msg_server_note': 'Messenger 需在伺服器上完成一次登入，不支援手機掃碼。',
     'inbox.acct.n_online': '{n} 已接入 · {on} 線上',
@@ -7984,6 +8091,9 @@ ZH_HANT = {
     'inbox.acct.ov_src': '賬號來源',
     'inbox.acct.ov_sync': '上次同步',
     'inbox.acct.ov_today': '今日會話',
+    'inbox.acct.pc_bound_bad': '賬號不符',
+    'inbox.acct.pc_bound_ok': '已繫結',
+    'inbox.acct.pc_bound_t': '這張卡繫結的微訊號：{wxid}（首次讀到就記下，以後窗裡不是它就停發）',
     'inbox.acct.pc_cta': '檢視接入流程',
     'inbox.acct.pc_desc': '讀取你電腦上已登入的微信，AI 給建議或按你批准代發；預設只讀，全自動需確認風險。僅支援 Windows + 微信 4.x。',
     'inbox.acct.pc_flow': '接入流程',
@@ -7991,6 +8101,7 @@ ZH_HANT = {
     'inbox.acct.pc_focus_fail': '沒找到可還原的微信視窗：請在電腦上手動開啟微信並登入',
     'inbox.acct.pc_focus_ok': '已把微信視窗放到最前，幾秒後副駕恢復讀屏',
     'inbox.acct.pc_lead': '個人微信 · PC 副駕',
+    'inbox.acct.pc_mismatch_bar': '窗裡登的是「{seen}」，不是繫結的 {bound}：已停發，換回原號登入即恢復',
     'inbox.acct.pc_start': '啟動副駕',
     'inbox.acct.pc_start_fail': '副駕啟動失敗',
     'inbox.acct.pc_start_no_driver': '後端缺少讀屏元件（uiautomation），請先更新智聊',
@@ -7999,6 +8110,9 @@ ZH_HANT = {
     'inbox.acct.pc_start_ok': '副駕正在啟動，幾秒後賬號卡會變綠',
     'inbox.acct.pc_starting': '啟動中…',
     'inbox.acct.pc_sub_off': '未接入 · 讀屏輔助，非官方介面',
+    'inbox.acct.pc_unbound': '未綁視窗',
+    'inbox.acct.pc_unbound_bar': '桌面上有 {n} 個微信視窗，這個副駕還沒繫結跟哪個：建議到接入引導第 ③ 步選一個，免得兩個號串號',
+    'inbox.acct.pc_unbound_t': '桌面上開了不止一個微信，而這個副駕沒指定跟哪個視窗：去接入引導第 ③ 步「選微信視窗」綁一下',
     'inbox.acct.persona_fill': '從人設填充',
     'inbox.acct.persona_fill_t': '用人設的名稱與形象照填充下方表單，儲存後賬號官方資料與人設對齊',
     'inbox.acct.persona_filled': '已填入人設資料，儲存後生效',
@@ -8075,6 +8189,19 @@ ZH_HANT = {
     'inbox.acct.rename_ph': '人格名',
     'inbox.acct.rename_prompt': '給賬號「{aid}」起個人格名（如 小柔 / 客服A），留空則清除：',
     'inbox.acct.rename_title': '賬號起名',
+    'inbox.acct.rep_day_ago': '{n} 天前',
+    'inbox.acct.rep_empty': '24 小時內沒有訊息',
+    'inbox.acct.rep_hide': '收起',
+    'inbox.acct.rep_hour_ago': '{n} 小時前',
+    'inbox.acct.rep_just_now': '剛剛',
+    'inbox.acct.rep_last': '最近收到：{in_ago} · 最近發出：{out_ago}',
+    'inbox.acct.rep_loading': '正在統計今日往來…',
+    'inbox.acct.rep_min_ago': '{n} 分鐘前',
+    'inbox.acct.rep_never': '沒有',
+    'inbox.acct.rep_pending': '{n} 人未回',
+    'inbox.acct.rep_pending_t': '24 小時內有來訊息但這個號一條都沒回的聯絡人數',
+    'inbox.acct.rep_stat': '24h 收 {in_n} · 發 {out_n} · {peers} 人',
+    'inbox.acct.rep_timeline': '時間線',
     'inbox.acct.req_timeout': '請求超時（服務可能正在重啟），請稍後重試',
     'inbox.acct.restart_btn': '重新上線',
     'inbox.acct.restart_fail': '上線失敗——會話可能已失效，請到頂部賬號欄重新掃碼',
@@ -10106,9 +10233,11 @@ ZH_HANT = {
     'inbox.handoff.r_crisis': '客戶訊息觸發危機升級，需要人看一眼',
     'inbox.handoff.r_dup_guard_blocked': '近重複攔截：AI 回覆與剛發過的內容相近未發出，客戶在等回覆',
     'inbox.handoff.r_empty_reply': 'AI 生成了空回覆',
+    'inbox.handoff.r_fact_gate_blocked': '事實門攔截：AI 回覆提到了客戶沒說過的人或事，未發出，客戶在等回覆',
     'inbox.handoff.r_generate_error': 'AI 生成出錯',
     'inbox.handoff.r_high_risk': '客戶訊息命中高風險攔截',
     'inbox.handoff.r_off_hours': '非營業時段',
+    'inbox.handoff.r_outreach_stalled': '同群開口：對方在等我們回話，已超過兩天沒人接（含接上過又斷了的）——回一句就自動摘標',
     'inbox.handoff.r_quota_day': '觸及當日自動回覆額度',
     'inbox.handoff.r_quota_hour': '觸及每小時自動回覆額度',
     'inbox.handoff.r_send_error': 'AI 回覆傳送失敗',
@@ -10200,6 +10329,17 @@ ZH_HANT = {
     'inbox.kb.pref_t': '推薦展開方式（記在本機，對所有會話生效）',
     'inbox.kb.search_fail': '知識庫搜尋失敗',
     'inbox.kb.suggest_hdr': '相關知識推薦',
+    'inbox.kbd.chip_t': '這條草稿的知識庫使用情況：客服 / 銷售人設每條必查；陪聊人設閒聊不查。查無時按固定話術回一次，客戶再追問自動標需人工',
+    'inbox.kbd.cited': '知識庫 · 已引用 {n} 條',
+    'inbox.kbd.handoff': '知識庫 · 連續查無 · 已標需人工',
+    'inbox.kbd.miss': '知識庫 · 未命中',
+    'inbox.kbd.miss_add_t': '知識庫裡沒有這一題——點選按客戶原話新建條目（標題 / 觸發詞已預填，儲存即向量化）',
+    'inbox.kbd.miss_fixed': '知識庫 · 未命中 · 已按固定話術',
+    'inbox.kbd.r.companion_chat': '陪聊閒聊',
+    'inbox.kbd.r.media_desc': '圖片/影片描述',
+    'inbox.kbd.r.other': '{code}',
+    'inbox.kbd.r.persona_bound': '陪聊人設',
+    'inbox.kbd.skip': '本輪未查知識庫 · {reason}',
     'inbox.keys.acct': '快速切換賬號',
     'inbox.keys.btn_t': '鍵盤快捷鍵速查',
     'inbox.keys.esc': '忽略草稿 / 取消編輯 / 取消媒體',
@@ -11495,8 +11635,12 @@ ZH_HANT = {
     'inbox.xls.yue': '粵',
     'inbox.xls.zh': '中',
     'inbox.xls.zh-tw': '繁',
+    # ── kb2_card_unused ──
+    'kb2_card_unused': '未命中',
     # ── kb2_clearfilter ──
     'kb2_clearfilter': '清除篩選',
+    # ── kb2_close ──
+    'kb2_close': '關閉',
     # ── kb2_disabled ──
     'kb2_disabled': '已停用',
     # ── kb2_empty_lead ──
@@ -11505,12 +11649,242 @@ ZH_HANT = {
     'kb2_empty_seed': '一鍵播種起步包',
     # ── kb2_entry_gone ──
     'kb2_entry_gone': '這條知識已被刪除或改名，無法定位',
+    # ── kb2_exp_all ──
+    'kb2_exp_all': 'CSV / Markdown 也包含已停用的條目',
+    # ── kb2_exp_csv ──
+    'kb2_exp_csv': 'CSV 表格',
+    # ── kb2_exp_csv_hint ──
+    'kb2_exp_csv_hint': '用 Excel 批次編輯後再匯入',
+    # ── kb2_exp_json ──
+    'kb2_exp_json': 'JSON 備份',
+    # ── kb2_exp_json_hint ──
+    'kb2_exp_json_hint': '完整備份（含已停用條目），可原樣導回',
+    # ── kb2_exp_md ──
+    'kb2_exp_md': 'Markdown 文件',
+    # ── kb2_exp_md_hint ──
+    'kb2_exp_md_hint': '整理成便於閱讀的文件',
+    # ── kb2_exp_report ──
+    'kb2_exp_report': '分析報告',
+    # ── kb2_exp_report_hint ──
+    'kb2_exp_report_hint': '命中、覆蓋與待補的盲區',
+    # ── kb2_guide_1 ──
+    'kb2_guide_1': '建知識：新建條目，或把現成的 FAQ 表格匯入進來（先下載模板照著填）',
+    # ── kb2_guide_2 ──
+    'kb2_guide_2': '試效果：在「沙盒測試」輸入一句客戶問法，看命中哪條、AI 怎麼回',
+    # ── kb2_guide_3 ──
+    'kb2_guide_3': '補盲區：在「效果反饋」裡看沒答好的問題，補成新條目',
+    # ── kb2_guide_dismiss ──
+    'kb2_guide_dismiss': '知道了，不再顯示',
+    # ── kb2_guide_import ──
+    'kb2_guide_import': '匯入表格',
+    # ── kb2_guide_sandbox ──
+    'kb2_guide_sandbox': '去沙盒試一句',
+    # ── kb2_guide_title ──
+    'kb2_guide_title': '三步用好知識庫',
     # ── kb2_health_chip ──
     'kb2_health_chip': '健康分',
     # ── kb2_health_tip ──
     'kb2_health_tip': '知識庫健康分（點選檢視診斷建議與修復入口）',
+    # ── kb2_hist_counts ──
+    'kb2_hist_counts': '新增 {add} · 覆蓋 {upd}',
+    # ── kb2_hist_empty ──
+    'kb2_hist_empty': '還沒有匯入記錄',
+    # ── kb2_hist_kept ──
+    'kb2_hist_kept': '{n} 條匯入後改過的已保留',
+    # ── kb2_hist_kept_confirm ──
+    'kb2_hist_kept_confirm': '有 {n} 條匯入後被改過，已先保留：{names}\n要把它們也一起撤銷嗎？（你後來的修改會丟失）',
+    # ── kb2_hist_lead ──
+    'kb2_hist_lead': '保留最近 20 次匯入。撤銷會刪掉那次新增的條目、把被覆蓋的條目恢復成匯入前的樣子；匯入後你又改過的條目會先保留，再問你要不要一起撤銷。',
+    # ── kb2_hist_loading ──
+    'kb2_hist_loading': '載入中…',
+    # ── kb2_hist_title ──
+    'kb2_hist_title': '匯入記錄',
+    # ── kb2_hist_unavailable ──
+    'kb2_hist_unavailable': '匯入記錄需要服務重啟到新版本後才能使用',
+    # ── kb2_hist_undo ──
+    'kb2_hist_undo': '撤銷',
+    # ── kb2_hist_undo_confirm ──
+    'kb2_hist_undo_confirm': '撤銷這次匯入？新增的條目會被刪除，被覆蓋的條目恢復成匯入前的內容。',
+    # ── kb2_hist_undo_done ──
+    'kb2_hist_undo_done': '已撤銷：刪除 {del} 條、恢復 {res} 條',
+    # ── kb2_hist_undo_hint ──
+    'kb2_hist_undo_hint': '導錯了？可以整批撤銷，之後也能在「更多 → 匯入記錄」裡找到。',
+    # ── kb2_hist_undo_this ──
+    'kb2_hist_undo_this': '撤銷這次匯入',
+    # ── kb2_hist_undone_at ──
+    'kb2_hist_undone_at': '已於 {t} 撤銷',
+    # ── kb2_hist_unnamed ──
+    'kb2_hist_unnamed': '未命名檔案',
+    # ── kb2_imp_act_add ──
+    'kb2_imp_act_add': '新增',
+    # ── kb2_imp_act_skip ──
+    'kb2_imp_act_skip': '跳過',
+    # ── kb2_imp_act_update ──
+    'kb2_imp_act_update': '更新',
+    # ── kb2_imp_back ──
+    'kb2_imp_back': '上一步',
+    # ── kb2_imp_bad_type ──
+    'kb2_imp_bad_type': '不支援的檔案型別，請選擇 .xlsx / .csv / .json / .yaml',
+    # ── kb2_imp_c_category ──
+    'kb2_imp_c_category': '分類',
+    # ── kb2_imp_c_enabled ──
+    'kb2_imp_c_enabled': '啟用',
+    # ── kb2_imp_c_forbidden ──
+    'kb2_imp_c_forbidden': '禁止說的話',
+    # ── kb2_imp_c_mode ──
+    'kb2_imp_c_mode': '回覆模式',
+    # ── kb2_imp_c_negative ──
+    'kb2_imp_c_negative': '排除詞',
+    # ── kb2_imp_c_reply ──
+    'kb2_imp_c_reply': '標準回覆',
+    # ── kb2_imp_c_scenario ──
+    'kb2_imp_c_scenario': '使用場景 / 處理步驟 / 回覆原則',
+    # ── kb2_imp_c_title ──
+    'kb2_imp_c_title': '標題',
+    # ── kb2_imp_c_triggers ──
+    'kb2_imp_c_triggers': '觸發詞',
+    # ── kb2_imp_col ──
+    'kb2_imp_col': '列名',
+    # ── kb2_imp_col_desc ──
+    'kb2_imp_col_desc': '說明',
+    # ── kb2_imp_done ──
+    'kb2_imp_done': '匯入完成：新增 {add} · 更新 {upd} · 跳過 {skip} · 失敗 {bad}',
+    # ── kb2_imp_drop ──
+    'kb2_imp_drop': '把檔案拖到這裡，或點選選擇',
+    # ── kb2_imp_drop_hint ──
+    'kb2_imp_drop_hint': '支援 Excel（.xlsx）、CSV、JSON / YAML 備份，最大 5 MB',
+    # ── kb2_imp_dup ──
+    'kb2_imp_dup': '標題相同的條目：',
+    # ── kb2_imp_dup_skip ──
+    'kb2_imp_dup_skip': '跳過，保留已有內容（安全）',
+    # ── kb2_imp_dup_update ──
+    'kb2_imp_dup_update': '用檔案內容更新（自動儲存版本快照，可回滾）',
+    # ── kb2_imp_examples ──
+    'kb2_imp_examples': '已跳過 {n} 條示例行（以「示例：」開頭）',
+    # ── kb2_imp_f_category ──
+    'kb2_imp_f_category': '建議用頁面上已有的分類名；留空歸入「其他」',
+    # ── kb2_imp_f_enabled ──
+    'kb2_imp_f_enabled': '是 / 否；留空 = 新條目啟用、已有條目不變',
+    # ── kb2_imp_f_forbidden ──
+    'kb2_imp_f_forbidden': '回覆裡絕不能出現的說法',
+    # ── kb2_imp_f_mode ──
+    'kb2_imp_f_mode': 'AI參考（預設，AI 參考後自由組織）/ AI嚴格（儘量貼近原文）/ 直接輸出（原樣傳送）',
+    # ── kb2_imp_f_negative ──
+    'kb2_imp_f_negative': '訊息裡含這些詞時不命中本條，分隔方式同觸發詞',
+    # ── kb2_imp_f_reply ──
+    'kb2_imp_f_reply': '推薦的回覆寫法；多條示例之間用單獨一行 --- 分隔',
+    # ── kb2_imp_f_scenario ──
+    'kb2_imp_f_scenario': '什麼情況下用、怎麼處理、回覆時要遵守什麼',
+    # ── kb2_imp_f_title ──
+    'kb2_imp_f_title': '必填。一條知識的名字；標題完全相同視為重複',
+    # ── kb2_imp_f_triggers ──
+    'kb2_imp_f_triggers': '客戶可能的問法或關鍵詞，多個用逗號、分號或頓號分隔；沒有觸發詞的條目很難被匹配到',
+    # ── kb2_imp_faq ──
+    'kb2_imp_faq': '常見問題',
+    # ── kb2_imp_faq_1 ──
+    'kb2_imp_faq_1': 'Excel 儲存的 CSV 匯入後是亂碼？直接上傳 .xlsx 最省事；要存 CSV 請選「CSV UTF-8（逗號分隔）」。系統也會自動識別 GBK 編碼。',
+    # ── kb2_imp_faq_2 ──
+    'kb2_imp_faq_2': '只有「問題」「答案」兩列的 FAQ 表能導嗎？能，問題會同時作為標題和觸發詞。',
+    # ── kb2_imp_faq_3 ──
+    'kb2_imp_faq_3': '模板裡的示例行要刪嗎？以「示例：」開頭的行預設跳過，留著參考也沒關係。',
+    # ── kb2_imp_faq_4 ──
+    'kb2_imp_faq_4': '單元格留空會怎樣？不填這一項；選「更新已有」時也不會清掉已有內容。',
+    # ── kb2_imp_fields ──
+    'kb2_imp_fields': '每一列怎麼填',
+    # ── kb2_imp_finish ──
+    'kb2_imp_finish': '完成',
+    # ── kb2_imp_gbk ──
+    'kb2_imp_gbk': '檢測到 GBK 編碼，已自動轉換',
+    # ── kb2_imp_go ──
+    'kb2_imp_go': '確認匯入 {n} 條',
+    # ── kb2_imp_issues ──
+    'kb2_imp_issues': '需要留意',
+    # ── kb2_imp_keep_examples ──
+    'kb2_imp_keep_examples': '也匯入示例行',
+    # ── kb2_imp_legacy ──
+    'kb2_imp_legacy': '當前服務還沒重啟到新版本，暫不支援 Excel / YAML 匯入和預覽；現在可以直接匯入 CSV / JSON。',
+    # ── kb2_imp_more_issues ──
+    'kb2_imp_more_issues': '另有 {n} 條未列出',
+    # ── kb2_imp_next ──
+    'kb2_imp_next': '下一步：預覽',
+    # ── kb2_imp_no_title_col ──
+    'kb2_imp_no_title_col': '沒找到「標題」列（或「問題」列）。請用模板的表頭，第一行必須是列名。',
+    # ── kb2_imp_nothing ──
+    'kb2_imp_nothing': '沒有可匯入的條目',
+    # ── kb2_imp_preview_more ──
+    'kb2_imp_preview_more': '僅預覽前 {n} 條',
+    # ── kb2_imp_r_bad_enabled ──
+    'kb2_imp_r_bad_enabled': '啟用「{value}」無法識別，已忽略',
+    # ── kb2_imp_r_bad_entry ──
+    'kb2_imp_r_bad_entry': '格式不對，已跳過',
+    # ── kb2_imp_r_bad_reply_mode ──
+    'kb2_imp_r_bad_reply_mode': '回覆模式「{value}」無法識別，已按預設（AI參考）',
+    # ── kb2_imp_r_exception ──
+    'kb2_imp_r_exception': '寫入失敗',
+    # ── kb2_imp_r_no_title ──
+    'kb2_imp_r_no_title': '缺少標題，整行未匯入',
+    # ── kb2_imp_r_no_triggers ──
+    'kb2_imp_r_no_triggers': '沒有觸發詞，客戶訊息可能匹配不到這條',
+    # ── kb2_imp_reading ──
+    'kb2_imp_reading': '正在讀取並檢查…',
+    # ── kb2_imp_row ──
+    'kb2_imp_row': '第 {row} 行',
+    # ── kb2_imp_step1 ──
+    'kb2_imp_step1': '選擇檔案',
+    # ── kb2_imp_step2 ──
+    'kb2_imp_step2': '預覽檢查',
+    # ── kb2_imp_step3 ──
+    'kb2_imp_step3': '完成',
+    # ── kb2_imp_summary ──
+    'kb2_imp_summary': '共 {total} 條：將新增 {add} · 更新 {upd} · 跳過 {skip} · 有問題 {bad}',
+    # ── kb2_imp_th_act ──
+    'kb2_imp_th_act': '處理',
+    # ── kb2_imp_th_cat ──
+    'kb2_imp_th_cat': '分類',
+    # ── kb2_imp_th_title ──
+    'kb2_imp_th_title': '標題',
+    # ── kb2_imp_th_trig ──
+    'kb2_imp_th_trig': '觸發詞',
+    # ── kb2_imp_title ──
+    'kb2_imp_title': '匯入知識條目',
+    # ── kb2_imp_too_big ──
+    'kb2_imp_too_big': '檔案超過 5 MB，請拆分後再匯入',
+    # ── kb2_imp_tpl_csv ──
+    'kb2_imp_tpl_csv': 'CSV 模板',
+    # ── kb2_imp_tpl_json ──
+    'kb2_imp_tpl_json': 'JSON 模板',
+    # ── kb2_imp_tpl_lead ──
+    'kb2_imp_tpl_lead': '第一次匯入？先下載模板照著填：',
+    # ── kb2_imp_tpl_xlsx ──
+    'kb2_imp_tpl_xlsx': 'Excel 模板（推薦）',
+    # ── kb2_imp_unknown_cats ──
+    'kb2_imp_unknown_cats': '這些分類不在現有分類表裡，匯入後分類篩選裡選不到：{cats}',
+    # ── kb2_imp_unknown_cols ──
+    'kb2_imp_unknown_cols': '這些列沒認出來，會被忽略：{cols}',
+    # ── kb2_imp_vector ──
+    'kb2_imp_vector': '向量化（啟用語義搜尋）',
+    # ── kb2_imp_view ──
+    'kb2_imp_view': '檢視剛匯入的條目',
+    # ── kb2_imp_xls_old ──
+    'kb2_imp_xls_old': '不支援舊版 .xls，請在 Excel 中另存為 .xlsx 再匯入',
+    # ── kb2_more_hist_hint ──
+    'kb2_more_hist_hint': '檢視最近的匯入，導錯了可以整批撤銷',
+    # ── kb2_more_maint_hint ──
+    'kb2_more_maint_hint': '查重、備份、健康診斷、示例資料',
+    # ── kb2_more_purge_hint ──
+    'kb2_more_purge_hint': '清走廠商 / 系統預置條目（先看清單）',
+    # ── kb2_more_sel_hint ──
+    'kb2_more_sel_hint': '批次啟用 / 停用 / 改分類 / 匯出選中',
+    # ── kb2_more_trans_hint ──
+    'kb2_more_trans_hint': '把未翻譯條目翻成 EN / UR / PT / AR',
+    # ── kb2_more_vec_hint ──
+    'kb2_more_vec_hint': '啟用語義搜尋，同義問法也能命中',
     # ── kb2_nomatch ──
     'kb2_nomatch': '沒有匹配當前篩選的條目',
+    # ── kb2_prefill_hint ──
+    'kb2_prefill_hint': '已按客戶原話預填標題與觸發詞——把示例回覆寫成能直接發出去的話，儲存後這條會自動向量化。',
+    # ── kb2_prefill_scenario ──
+    'kb2_prefill_scenario': '客戶原話：{text}',
     # ── kb2_preset_btn ──
     'kb2_preset_btn': '清除預置條目',
     # ── kb2_preset_btn_tip ──
@@ -11547,6 +11921,8 @@ ZH_HANT = {
     'kb2_sandbox_try_tip': '儲存前先到沙盒用觸發詞試一次命中效果（不發訊息）',
     # ── kb2_sat_none ──
     'kb2_sat_none': '暫無反饋',
+    # ── kb2_show_more ──
+    'kb2_show_more': '顯示更多 {n} 條（還剩 {rest} 條）',
     # ── kb2_src_all ──
     'kb2_src_all': '全部來源',
     # ── kb2_src_help ──
@@ -11579,6 +11955,14 @@ ZH_HANT = {
     'kb2_syspay_purge_confirm': '確定清除這 {n} 條系統預置支付話術？只刪支付系列（GXP / 訂單 / 費率 / 通道 / 狀態兜底），你自建 / 匯入的知識與其他系統話術不受影響；清除後不會再自動灌回。',
     # ── kb2_syspay_purged ──
     'kb2_syspay_purged': '已清除 {n} 條系統預置支付話術',
+    # ── kb2_tb_export ──
+    'kb2_tb_export': '匯出',
+    # ── kb2_tb_import ──
+    'kb2_tb_import': '匯入',
+    # ── kb2_tb_import_tip ──
+    'kb2_tb_import_tip': '從 Excel / CSV / JSON 批次匯入知識條目（可先下載模板）',
+    # ── kb2_tb_more ──
+    'kb2_tb_more': '更多',
     # ── kb2_tpl_lead ──
     'kb2_tpl_lead': '從模板開始：點一下預填，再改成你的真實內容',
     # ── kb2_vendor_excluded ──
@@ -16791,6 +17175,8 @@ ZH_HANT = {
     'ov2_gm_jobs': '提取任務（執行/總計）',
     # ── ov2_gm_members ──
     'ov2_gm_members': '已入庫成員',
+    # ── ov2_gm_outreach ──
+    'ov2_gm_outreach': '同群開口（發出/回了）',
     # ── ov2_gm_sub ──
     'ov2_gm_sub': '工具箱：多號進群、限速分批拉群成員入庫、每天控量；只讀提取，私聊觸達是獨立步驟。零成員且零任務時整卡隱藏',
     # ── ov2_goal_active ──
@@ -16884,7 +17270,7 @@ ZH_HANT = {
     # ── ov2_goal_fx_tip ──
     'ov2_goal_fx_tip': '建目標彈層體驗（P0 草稿倖存層讀數）。漏斗=開表單→選場景→建立成功（括號=開表單→建立轉化率）；防打斷=編輯期被擋下的外部重新整理（每編輯會話記一次）、誤觸攔=背板誤點被攔截、續寫=草稿恢復次數。程序口徑重啟歸零；「14天」行=按日落庫趨勢（ops.ui_event_trend）',
     # ── ov2_goal_hint ──
-    'ov2_goal_hint': '漏斗：建目標 → 每日拍規劃（情緒讓路/沉默熔斷=剋制護欄生效）→ 注入生成鏈 → 主動橋真發 → 終態歸檔。讓路多屬正常剋制；注入持續為 0 查接線。',
+    'ov2_goal_hint': '漏斗：建目標 → 每日拍規劃（情緒讓路/沉默熔斷=克制護欄生效）→ 注入生成鏈 → 主動橋真發 → 終態歸檔。讓路多屬正常克制；注入持續為 0 查接線。',
     # ── ov2_goal_hold_emotion ──
     'ov2_goal_hold_emotion': '情緒讓路',
     # ── ov2_goal_hold_silent ──
@@ -20958,10 +21344,40 @@ ZH_HANT = {
     'psn_apply_ok_default': '已設為全域性預設',
     # ── psn_apply_ok_unbind ──
     'psn_apply_ok_unbind': '已解綁',
+    # ── psn_apply_plat_douyin ──
+    'psn_apply_plat_douyin': '抖音',
+    # ── psn_apply_plat_instagram ──
+    'psn_apply_plat_instagram': 'Instagram',
+    # ── psn_apply_plat_qq ──
+    'psn_apply_plat_qq': 'QQ',
+    # ── psn_apply_plat_qqbot ──
+    'psn_apply_plat_qqbot': 'QQ機器人',
+    # ── psn_apply_plat_tiktok ──
+    'psn_apply_plat_tiktok': 'TikTok',
+    # ── psn_apply_plat_web ──
+    'psn_apply_plat_web': '網頁客服',
+    # ── psn_apply_plat_wechat ──
+    'psn_apply_plat_wechat': '微信',
+    # ── psn_apply_plat_wechat_kf ──
+    'psn_apply_plat_wechat_kf': '微信客服',
+    # ── psn_apply_plat_zalo ──
+    'psn_apply_plat_zalo': 'Zalo',
     # ── psn_apply_serving ──
     'psn_apply_serving': '當前服務：{a} 個賬號 · {c} 個會話',
     # ── psn_apply_set_default ──
     'psn_apply_set_default': '設為全域性預設',
+    # ── psn_apply_st_blocked ──
+    'psn_apply_st_blocked': '已封禁',
+    # ── psn_apply_st_error ──
+    'psn_apply_st_error': '異常',
+    # ── psn_apply_st_expired ──
+    'psn_apply_st_expired': '已過期',
+    # ── psn_apply_st_offline ──
+    'psn_apply_st_offline': '離線',
+    # ── psn_apply_st_online ──
+    'psn_apply_st_online': '線上',
+    # ── psn_apply_st_pending ──
+    'psn_apply_st_pending': '待登入',
     # ── psn_apply_sub ──
     'psn_apply_sub': '把這個人設用到賬號 / 會話 / 全域性兜底',
     # ── psn_apply_tab_account ──
@@ -22210,6 +22626,30 @@ ZH_HANT = {
     'psn_json_import_field': '從 JSON / YAML 匯入欄位…',
     # ── psn_kbd_help_t ──
     'psn_kbd_help_t': '快捷鍵速查',
+    # ── psn_kind ──
+    'psn_kind': '工作型別',
+    # ── psn_kind_auto ──
+    'psn_kind_auto': '自動（按角色推斷）',
+    # ── psn_kind_companion ──
+    'psn_kind_companion': '陪聊',
+    # ── psn_kind_eff ──
+    'psn_kind_eff': '當前生效：{label}（{src}）',
+    # ── psn_kind_hint_companion ──
+    'psn_kind_hint_companion': '陪聊：閒聊不查知識庫，避免人設推銷業務話術；需要業務知識時在高階欄位加 kb_access: true。',
+    # ── psn_kind_hint_support ──
+    'psn_kind_hint_support': '客服 / 銷售：每條回覆先查知識庫，命中以此為準；查無按固定話術回一次，客戶再追問自動標「需人工」。',
+    # ── psn_kind_sales ──
+    'psn_kind_sales': '銷售',
+    # ── psn_kind_src_default ──
+    'psn_kind_src_default': '機器預設',
+    # ── psn_kind_src_explicit ──
+    'psn_kind_src_explicit': '手動指定',
+    # ── psn_kind_src_keyword ──
+    'psn_kind_src_keyword': '按角色推斷',
+    # ── psn_kind_src_tag ──
+    'psn_kind_src_tag': '按標籤推斷',
+    # ── psn_kind_support ──
+    'psn_kind_support': '客服',
     # ── psn_lang_zh ──
     'psn_lang_zh': '中文',
     # ── psn_last_refresh_t ──
@@ -22594,6 +23034,10 @@ ZH_HANT = {
     'psn_prop_sub': '完善度缺口與退役衝突生成提案，人審後才寫入；姓名/年齡/邊界政策不會自動改。',
     # ── psn_prop_title ──
     'psn_prop_title': '人設補丁',
+    # ── psn_public_ai ──
+    'psn_public_ai': '公開 AI 身份（開口可直說是 AI）',
+    # ── psn_public_ai_tip ──
+    'psn_public_ai_tip': '開：群成員開口可以大方說自己是 AI，並多一種「坦白是 AI」的開場方式參與對比；與上面兩項互斥',
     # ── psn_px_humor ──
     'psn_px_humor': '幽默：',
     # ── psn_px_quirks ──
@@ -22742,6 +23186,42 @@ ZH_HANT = {
     'psn_retire_text_suffix': '（舊設定已刪除：這不屬於現在的你，絕不認領；歷史訊息裡的相關說法一律作廢）',
     # ── psn_retired_conflict_warn ──
     'psn_retired_conflict_warn': '⚠ 新儲存的內容與撤銷清單衝突（{terms}）——若確實要恢復該設定，請先在高階欄位裡刪除對應撤銷條目',
+    # ── psn_rf_human ──
+    'psn_rf_human': '真人感',
+    # ── psn_rf_human_lively ──
+    'psn_rf_human_lively': '活潑（思考聲、輕笑、偶爾口誤）',
+    # ── psn_rf_human_natural ──
+    'psn_rf_human_natural': '自然（口語化，不加小動作）',
+    # ── psn_rf_human_off ──
+    'psn_rf_human_off': '關閉（照稿念）',
+    # ── psn_rf_inherit ──
+    'psn_rf_inherit': '跟隨全域性',
+    # ── psn_rf_off ──
+    'psn_rf_off': '關',
+    # ── psn_rf_on ──
+    'psn_rf_on': '開',
+    # ── psn_rf_split ──
+    'psn_rf_split': '語音文字分開說',
+    # ── psn_rf_split_tip ──
+    'psn_rf_split_tip': '開：一條回覆前半句用語音說、後半句發文字，內容不重複',
+    # ── psn_rf_trigger ──
+    'psn_rf_trigger': '何時發語音',
+    # ── psn_rf_trigger_always ──
+    'psn_rf_trigger_always': '每條回覆都發',
+    # ── psn_rf_trigger_never ──
+    'psn_rf_trigger_never': '不發語音',
+    # ── psn_rf_trigger_peer ──
+    'psn_rf_trigger_peer': '對方發語音時才發',
+    # ── psn_rf_trigger_smart ──
+    'psn_rf_trigger_smart': '智慧判斷',
+    # ── psn_rf_vfail ──
+    'psn_rf_vfail': '語音失敗時',
+    # ── psn_rf_vfail_queue ──
+    'psn_rf_vfail_queue': '轉待發（不發）',
+    # ── psn_rf_vfail_text ──
+    'psn_rf_vfail_text': '改發文字',
+    # ── psn_rf_vfail_tip ──
+    'psn_rf_vfail_tip': '語音合成失敗時怎麼辦：改發文字＝客戶照樣收到整段回覆；轉待發＝不發，回覆進工作台等人放行',
     # ── psn_rl_concise ──
     'psn_rl_concise': '簡潔',
     # ── psn_rl_detailed ──
@@ -22764,6 +23244,44 @@ ZH_HANT = {
     'psn_rules_desc': '所有人設自動套用這些規則，修改即時生效。影響 Telegram / Messenger / LINE / WhatsApp 四端。',
     # ── psn_rules_title ──
     'psn_rules_title': '跨平台 AI 回覆硬約束',
+    # ── psn_sales_hint ──
+    'psn_sales_hint': '群裡說過這些詞的人優先開口、優先在群裡接話；說過排除詞的人不碰。不填 = 不按意向排序，「群裡先接話」也不會列人。',
+    # ── psn_sales_kw ──
+    'psn_sales_kw': '意向關鍵詞',
+    # ── psn_sales_kw_ph ──
+    'psn_sales_kw_ph': '客服，自動回覆，翻譯，獲客',
+    # ── psn_sales_neg ──
+    'psn_sales_neg': '排除詞',
+    # ── psn_sales_neg_default ──
+    'psn_sales_neg_default': '博彩,菠菜,裸聊,代收,洗錢,跑分',
+    # ── psn_sales_neg_ph ──
+    'psn_sales_neg_ph': '博彩，裸聊，洗錢',
+    # ── psn_sales_p_b2b ──
+    'psn_sales_p_b2b': '外貿 B2B',
+    # ── psn_sales_p_crossborder ──
+    'psn_sales_p_crossborder': '跨境電商',
+    # ── psn_sales_p_edu ──
+    'psn_sales_p_edu': '教育培訓',
+    # ── psn_sales_p_local ──
+    'psn_sales_p_local': '本地生活 / 門店',
+    # ── psn_sales_p_service ──
+    'psn_sales_p_service': '客服 / 私域運營',
+    # ── psn_sales_preset ──
+    'psn_sales_preset': '按行業套用',
+    # ── psn_sales_preset_pick ──
+    'psn_sales_preset_pick': '選一個行業，詞會追加到下面',
+    # ── psn_sales_title ──
+    'psn_sales_title': '目標客戶（群成員獲客）',
+    # ── psn_sales_w_b2b ──
+    'psn_sales_w_b2b': '外貿,詢盤,客戶開發,開發信,報價,展會,阿里國際,工廠,跟單,buyer,inquiry,sourcing',
+    # ── psn_sales_w_crossborder ──
+    'psn_sales_w_crossborder': '跨境,亞馬遜,shopify,獨立站,選品,物流,清關,出單,引流,投廣告,tiktok shop,amazon,dropshipping',
+    # ── psn_sales_w_edu ──
+    'psn_sales_w_edu': '課程,培訓,報名,考試,留學,輔導,學費,招生,course,tutor',
+    # ── psn_sales_w_local ──
+    'psn_sales_w_local': '門店,到店,團購,預約,會員,復購,外賣,客流,同城',
+    # ── psn_sales_w_service ──
+    'psn_sales_w_service': '客服,自動回覆,回不過來,回覆慢,訊息太多,私域,社群運營,翻譯,多語言,機器人,customer service,auto reply',
     # ── psn_save ──
     'psn_save': '儲存',
     # ── psn_save_changes ──
@@ -23146,72 +23664,6 @@ ZH_HANT = {
     'psn_vc_toast_close': '關閉',
     # ── psn_vc_unbind_btn ──
     'psn_vc_unbind_btn': '解綁克隆音色',
-    # ── psn_vx_desc_dramatic ──
-    'psn_vx_desc_dramatic': '表演感最強：無線索也可插笑聲，最多三個語氣標記，節奏拉開；客服場景慎用。',
-    # ── psn_vx_desc_inherit ──
-    'psn_vx_desc_inherit': '沒單獨設定，用語音頁的全域性檔位（出廠為「自然」）。',
-    # ── psn_vx_desc_natural ──
-    'psn_vx_desc_natural': '情緒只在文字有線索時明顯；笑聲需文字有笑點且只用人設自己的錄音；一句最多一個語氣標記。',
-    # ── psn_vx_desc_neutral_note ──
-    'psn_vx_desc_neutral_note': '基線為中性：沒有線索的句子完全保真。',
-    # ── psn_vx_desc_restrained ──
-    'psn_vx_desc_restrained': '無線索時不加情緒，不插笑聲/換氣，口語化只輕改；適合嚴肅、商務、投訴場景。',
-    # ── psn_vx_desc_vivid ──
-    'psn_vx_desc_vivid': '情緒更明顯，允許兩個語氣標記與預置笑聲；接近舊版預設效果。',
-    # ── psn_vx_dramatic ──
-    'psn_vx_dramatic': '戲劇',
-    # ── psn_vx_dramatic_sub ──
-    'psn_vx_dramatic_sub': '表演感強',
-    # ── psn_vx_emo_calm ──
-    'psn_vx_emo_calm': '平靜',
-    # ── psn_vx_emo_empathetic ──
-    'psn_vx_emo_empathetic': '共情',
-    # ── psn_vx_emo_happy ──
-    'psn_vx_emo_happy': '開心',
-    # ── psn_vx_emo_inherit ──
-    'psn_vx_emo_inherit': '跟隨全域性（預設溫和）',
-    # ── psn_vx_emo_neutral ──
-    'psn_vx_emo_neutral': '中性（保真，不加情緒）',
-    # ── psn_vx_emo_playful ──
-    'psn_vx_emo_playful': '俏皮',
-    # ── psn_vx_emo_serious ──
-    'psn_vx_emo_serious': '嚴肅',
-    # ── psn_vx_emo_warm ──
-    'psn_vx_emo_warm': '溫和',
-    # ── psn_vx_emotion ──
-    'psn_vx_emotion': '基線情緒',
-    # ── psn_vx_h ──
-    'psn_vx_h': '語氣表達',
-    # ── psn_vx_inherit ──
-    'psn_vx_inherit': '跟隨全域性',
-    # ── psn_vx_inherit_sub ──
-    'psn_vx_inherit_sub': '用語音頁預設',
-    # ── psn_vx_natural ──
-    'psn_vx_natural': '自然',
-    # ── psn_vx_natural_sub ──
-    'psn_vx_natural_sub': '推薦',
-    # ── psn_vx_preview ──
-    'psn_vx_preview': '試聽這個語氣',
-    # ── psn_vx_preview_lo ──
-    'psn_vx_preview_lo': '對比低一檔',
-    # ── psn_vx_preview_lo_tip ──
-    'psn_vx_preview_lo_tip': '低一檔對比',
-    # ── psn_vx_preview_playing ──
-    'psn_vx_preview_playing': '正在播放：{level} · 情緒 {emotion}',
-    # ── psn_vx_preview_text ──
-    'psn_vx_preview_text': '嗨，我是{name}～今天這麼巧碰到你，真是太好了！有什麼想聊的儘管說。',
-    # ── psn_vx_preview_tip ──
-    'psn_vx_preview_tip': '用當前檔位試聽（未儲存也能聽）',
-    # ── psn_vx_restrained ──
-    'psn_vx_restrained': '剋制',
-    # ── psn_vx_restrained_sub ──
-    'psn_vx_restrained_sub': '近乎平述',
-    # ── psn_vx_sub ──
-    'psn_vx_sub': '控制情緒強度、笑聲/換氣、口語化的總幅度',
-    # ── psn_vx_vivid ──
-    'psn_vx_vivid': '生動',
-    # ── psn_vx_vivid_sub ──
-    'psn_vx_vivid_sub': '情緒更明顯',
     # ── psn_vc_unbind_ok ──
     'psn_vc_unbind_ok': '已解綁',
     # ── psn_vc_unbind_q ──
@@ -23332,6 +23784,72 @@ ZH_HANT = {
     'psn_vq_none': '暫無體檢資料',
     # ── psn_vq_title ──
     'psn_vq_title': '音色體檢',
+    # ── psn_vx_desc_dramatic ──
+    'psn_vx_desc_dramatic': '表演感最強：無線索也可插笑聲，最多三個語氣標記，節奏拉開；客服場景慎用。',
+    # ── psn_vx_desc_inherit ──
+    'psn_vx_desc_inherit': '沒單獨設定，用語音頁的全域性檔位（出廠為「自然」）。',
+    # ── psn_vx_desc_natural ──
+    'psn_vx_desc_natural': '情緒只在文字有線索時明顯；笑聲需文字有笑點且只用人設自己的錄音；一句最多一個語氣標記。',
+    # ── psn_vx_desc_neutral_note ──
+    'psn_vx_desc_neutral_note': '基線為中性：沒有線索的句子完全保真。',
+    # ── psn_vx_desc_restrained ──
+    'psn_vx_desc_restrained': '無線索時不加情緒，不插笑聲/換氣，口語化只輕改；適合嚴肅、商務、投訴場景。',
+    # ── psn_vx_desc_vivid ──
+    'psn_vx_desc_vivid': '情緒更明顯，允許兩個語氣標記與預置笑聲；接近舊版預設效果。',
+    # ── psn_vx_dramatic ──
+    'psn_vx_dramatic': '戲劇',
+    # ── psn_vx_dramatic_sub ──
+    'psn_vx_dramatic_sub': '表演感強',
+    # ── psn_vx_emo_calm ──
+    'psn_vx_emo_calm': '平靜',
+    # ── psn_vx_emo_empathetic ──
+    'psn_vx_emo_empathetic': '共情',
+    # ── psn_vx_emo_happy ──
+    'psn_vx_emo_happy': '開心',
+    # ── psn_vx_emo_inherit ──
+    'psn_vx_emo_inherit': '跟隨全域性（預設溫和）',
+    # ── psn_vx_emo_neutral ──
+    'psn_vx_emo_neutral': '中性（保真，不加情緒）',
+    # ── psn_vx_emo_playful ──
+    'psn_vx_emo_playful': '俏皮',
+    # ── psn_vx_emo_serious ──
+    'psn_vx_emo_serious': '嚴肅',
+    # ── psn_vx_emo_warm ──
+    'psn_vx_emo_warm': '溫和',
+    # ── psn_vx_emotion ──
+    'psn_vx_emotion': '基線情緒',
+    # ── psn_vx_h ──
+    'psn_vx_h': '語氣表達',
+    # ── psn_vx_inherit ──
+    'psn_vx_inherit': '跟隨全域性',
+    # ── psn_vx_inherit_sub ──
+    'psn_vx_inherit_sub': '用語音頁預設',
+    # ── psn_vx_natural ──
+    'psn_vx_natural': '自然',
+    # ── psn_vx_natural_sub ──
+    'psn_vx_natural_sub': '推薦',
+    # ── psn_vx_preview ──
+    'psn_vx_preview': '試聽這個語氣',
+    # ── psn_vx_preview_lo ──
+    'psn_vx_preview_lo': '對比低一檔',
+    # ── psn_vx_preview_lo_tip ──
+    'psn_vx_preview_lo_tip': '低一檔對比',
+    # ── psn_vx_preview_playing ──
+    'psn_vx_preview_playing': '正在播放：{level} · 情緒 {emotion}',
+    # ── psn_vx_preview_text ──
+    'psn_vx_preview_text': '嗨，我是{name}～今天這麼巧碰到你，真是太好了！有什麼想聊的儘管說。',
+    # ── psn_vx_preview_tip ──
+    'psn_vx_preview_tip': '用當前檔位試聽（未儲存也能聽）',
+    # ── psn_vx_restrained ──
+    'psn_vx_restrained': '克制',
+    # ── psn_vx_restrained_sub ──
+    'psn_vx_restrained_sub': '近乎平述',
+    # ── psn_vx_sub ──
+    'psn_vx_sub': '控制情緒強度、笑聲/換氣、口語化的總幅度',
+    # ── psn_vx_vivid ──
+    'psn_vx_vivid': '生動',
+    # ── psn_vx_vivid_sub ──
+    'psn_vx_vivid_sub': '情緒更明顯',
     # ── psn_wiz_album_trg ──
     'psn_wiz_album_trg': '相簿有 {n} 張缺觸發詞（去相簿 tab 點「AI 補標」或採納建議詞）',
     # ── psn_wiz_back ──
@@ -24004,6 +24522,26 @@ ZH_HANT = {
     'rps_am_recommended': '推薦',
     # ── rps_am_title ──
     'rps_am_title': '🆕 新賬號接管確認',
+    # ── rps_bd_bad ──
+    'rps_bd_bad': '業務域只能是陪伴或銷售：{name}',
+    # ── rps_bd_fail ──
+    'rps_bd_fail': '讀取失敗，請重新整理重試',
+    # ── rps_bd_hint ──
+    'rps_bd_hint': '陪伴：工作目標不出現「轉化成交」，知識庫不預置支付話術，人設預設按陪聊閘。銷售：保留商機標籤與成交欄位。人設工作室裡把某人設標成「客服 / 銷售」後，那個號仍按人設查知識庫，不受這項影響。改完模板 / 標籤即時生效；知識庫分類重啟後跟隨。',
+    # ── rps_bd_label ──
+    'rps_bd_label': '業務域',
+    # ── rps_bd_loading ──
+    'rps_bd_loading': '讀取中…',
+    # ── rps_bd_saved ──
+    'rps_bd_saved': '已儲存。模板 / 標籤 / 畫像即時生效；知識庫分類請重啟後跟隨。',
+    # ── rps_bd_src_explicit ──
+    'rps_bd_src_explicit': '已設定',
+    # ── rps_bd_src_inferred ──
+    'rps_bd_src_inferred': '按部署形態推導',
+    # ── rps_bd_title ──
+    'rps_bd_title': '這台機器做什麼生意',
+    # ── rps_bd_write_fail ──
+    'rps_bd_write_fail': '寫入失敗，請重試',
     # ── rps_bootstrap_hint ──
     'rps_bootstrap_hint': '出廠關。關著：會話不寫死檔位，之後改本頁或賬號選單，這些會話立刻跟著變。開著：寫死之後改本頁不再影響它們，得逐個會話或按賬號重設——只在「希望老會話鎖住當時檔位」時才開。',
     # ── rps_bootstrap_label ──
@@ -24553,7 +25091,7 @@ ZH_HANT = {
     # ── rps_preset_cautious ──
     'rps_preset_cautious': '偏慢 · 謹慎養號',
     # ── rps_preset_cautious_d ──
-    'rps_preset_cautious_d': '新號 / 防風控：讀 5–10 秒、想 6–14 秒、打字 25–35 詞/分（中文 45–70 字/分），回覆簡短剋制，語音只跟隨對方',
+    'rps_preset_cautious_d': '新號 / 防風控：讀 5–10 秒、想 6–14 秒、打字 25–35 詞/分（中文 45–70 字/分），回覆簡短克制，語音只跟隨對方',
     # ── rps_preset_current ──
     'rps_preset_current': '當前匹配：{name}',
     # ── rps_preset_custom ──

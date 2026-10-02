@@ -492,6 +492,8 @@ _BASELINE = """
 /api/reply-settings/explain	GET
 /api/reply-settings/follow-slider	POST
 /api/reply-settings/health	GET
+/api/reply-settings/business-domain	GET
+/api/reply-settings/business-domain	POST
 /api/report/daily	GET
 /api/report/weekly	GET
 /api/rollback	POST
@@ -1549,6 +1551,18 @@ _ADDITIONS_2026_08_12_TG_MEMBERS = """
 /api/tg-members/quota	GET
 /api/tg-members/account-groups	GET
 /api/tg-members/outreach/age	POST
+/api/tg-members/outreach/preview	GET
+/api/tg-members/outreach/queue	POST
+/api/tg-members/outreach/compose	POST
+/api/tg-members/outreach/approve	POST
+/api/tg-members/outreach/skip	POST
+/api/tg-members/outreach/release	POST
+/api/tg-members/outreach/mode	POST
+/api/tg-members/outreach/settings	POST
+/api/tg-members/outreach/followup	POST
+/api/tg-members/outreach/stats	GET
+/api/tg-members/outreach/stop	POST
+/api/tg-members/outreach/resume	POST
 /api/tg-members/gtouch/preview	GET
 /api/tg-members/gtouch/compose	POST
 /api/tg-members/gtouch/skip	POST

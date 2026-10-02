@@ -1361,15 +1361,15 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_preset','按行业套用') }}</label>
         <select id="pe-sales-preset" onchange="_salesApplyPreset(this)">
           <option value="">{{ (i18n or {}).get('psn_sales_preset_pick','选一个行业，词会追加到下面') }}</option>
-          <option value="crossborder">{{ (i18n or {}).get('psn_sales_p_crossborder','跨境电商') }}</option>
-          <option value="b2b">{{ (i18n or {}).get('psn_sales_p_b2b','外贸 B2B') }}</option>
-          <option value="service">{{ (i18n or {}).get('psn_sales_p_service','客服 / 私域运营') }}</option>
-          <option value="edu">{{ (i18n or {}).get('psn_sales_p_edu','教育培训') }}</option>
-          <option value="local">{{ (i18n or {}).get('psn_sales_p_local','本地生活 / 门店') }}</option>
+          <option value="crossborder" data-words="{{ (i18n or {}).get('psn_sales_w_crossborder','跨境,亚马逊,shopify,独立站,选品,物流,清关,出单,引流,投广告,tiktok shop,amazon,dropshipping') }}">{{ (i18n or {}).get('psn_sales_p_crossborder','跨境电商') }}</option>
+          <option value="b2b" data-words="{{ (i18n or {}).get('psn_sales_w_b2b','外贸,询盘,客户开发,开发信,报价,展会,阿里国际,工厂,跟单,buyer,inquiry,sourcing') }}">{{ (i18n or {}).get('psn_sales_p_b2b','外贸 B2B') }}</option>
+          <option value="service" data-words="{{ (i18n or {}).get('psn_sales_w_service','客服,自动回复,回不过来,回复慢,消息太多,私域,社群运营,翻译,多语言,机器人,customer service,auto reply') }}">{{ (i18n or {}).get('psn_sales_p_service','客服 / 私域运营') }}</option>
+          <option value="edu" data-words="{{ (i18n or {}).get('psn_sales_w_edu','课程,培训,报名,考试,留学,辅导,学费,招生,course,tutor') }}">{{ (i18n or {}).get('psn_sales_p_edu','教育培训') }}</option>
+          <option value="local" data-words="{{ (i18n or {}).get('psn_sales_w_local','门店,到店,团购,预约,会员,复购,外卖,客流,同城') }}">{{ (i18n or {}).get('psn_sales_p_local','本地生活 / 门店') }}</option>
         </select>
       </div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_kw','意向关键词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-kw" type="text" placeholder="{{ (i18n or {}).get('psn_sales_kw_ph','客服，自动回复，翻译，获客') }}"></div>
-      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_neg','排除词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-neg" type="text" placeholder="{{ (i18n or {}).get('psn_sales_neg_ph','博彩，裸聊，洗钱') }}"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_neg','排除词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-neg" type="text" data-default="{{ (i18n or {}).get('psn_sales_neg_default','博彩,菠菜,裸聊,代收,洗钱,跑分') }}" placeholder="{{ (i18n or {}).get('psn_sales_neg_ph','博彩，裸聊，洗钱') }}"></div>
     </div>
   </div>
   <!-- Pane: Voice -->
@@ -5007,17 +5007,9 @@ function _deepMergePersona(base, patch) {
   return out;
 }
 
-// 目标客户（persona.sales）：意向词 / 排除词，逗号分隔；行业预设只追加不覆盖
-var _SALES_PRESETS = {
-  crossborder: ['跨境', '亚马逊', 'shopify', '独立站', '选品', '物流', '清关', '出单', '引流', '投广告', 'tiktok shop', 'amazon', 'dropshipping'],
-  b2b: ['外贸', '询盘', '客户开发', '开发信', '报价', '展会', '阿里国际', '工厂', '跟单', 'buyer', 'inquiry', 'sourcing'],
-  service: ['客服', '自动回复', '回不过来', '回复慢', '消息太多', '私域', '社群运营', '翻译', '多语言', '机器人', 'customer service', 'auto reply'],
-  edu: ['课程', '培训', '报名', '考试', '留学', '辅导', '学费', '招生', 'course', 'tutor'],
-  local: ['门店', '到店', '团购', '预约', '会员', '复购', '外卖', '客流', '同城']
-};
-var _SALES_NEG_DEFAULT = ['博彩', '菠菜', '裸聊', '代收', '洗钱', '跑分'];
+// 目标客户（persona.sales）：意向词 / 排除词，逗号分隔；行业预设词在 option 的 data-words（i18n 包），只追加不覆盖
 function _salesTerms(raw) {
-  var arr = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).replace(/，/g, ',').split(',');
+  var arr = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).replace(/\uFF0C/g, ',').split(',');
   var seen = {}, out = [];
   arr.forEach(function (t) {
     var s = String(t == null ? '' : t).trim();
@@ -5027,12 +5019,13 @@ function _salesTerms(raw) {
   return out;
 }
 function _salesApplyPreset(sel) {
-  var words = _SALES_PRESETS[sel.value];
-  if (!words) return;
+  var opt = sel.options[sel.selectedIndex];
+  var words = _salesTerms(opt ? opt.getAttribute('data-words') : '');
+  if (!words.length) return;
   var kw = document.getElementById('pe-sales-kw');
   kw.value = _salesTerms(_salesTerms(kw.value).concat(words)).join(', ');
   var neg = document.getElementById('pe-sales-neg');
-  if (neg && !neg.value.trim()) neg.value = _SALES_NEG_DEFAULT.join(', ');
+  if (neg && !neg.value.trim()) neg.value = _salesTerms(neg.getAttribute('data-default')).join(', ');
   sel.value = '';
 }
 
