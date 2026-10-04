@@ -25,7 +25,7 @@ import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
 import ProductIcon from "./ProductIcon";
 import ProductScreenshots from "./ProductScreenshots";
-import { CHATX } from "@/lib/chatxContent";
+import { CHATX, CHATX_INTERNAL_BETA } from "@/lib/chatxContent";
 import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
 import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -182,6 +182,20 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                   <Download className="h-4 w-4" />
                   {zh ? "下载" : "Download"} {filename}
                 </a>
+                <a
+                  href={dlHref(CHATX_INTERNAL_BETA.url.replace(/^\//, ""))}
+                  download
+                  onClick={() => track("chatx_download_click", { os: "windows", ver: CHATX_INTERNAL_BETA.version, channel: "internal" })}
+                  className="mt-3 block text-sm text-neon-cyan underline-offset-2 hover:underline"
+                >
+                  {CHATX_INTERNAL_BETA.label[lang]} · v{CHATX_INTERNAL_BETA.version}
+                  {CHATX_INTERNAL_BETA.size[lang] ? ` · ${CHATX_INTERNAL_BETA.size[lang]}` : ""}
+                </a>
+                {CHATX_INTERNAL_BETA.sha256 ? (
+                  <div className="mt-2 break-all font-mono text-[11px] text-slate-600">
+                    SHA-256: {CHATX_INTERNAL_BETA.sha256}
+                  </div>
+                ) : null}
               </div>
               <div className="mt-4 break-all rounded-lg bg-ink-950/60 px-3 py-2 font-mono text-[11px] text-slate-600">
                 SHA-256: {sha256 || (zh ? "发布时公布" : "published at release")}

@@ -22,15 +22,25 @@ export interface Cx<T = string> {
  *  `manifest.json` / `announcements.json` 都在这一层，本页与自动更新只认它。 */
 export const CHATX_RELEASE_BASE = "/downloads";
 
-/** 内测渠道指针（L-5 / 老板决策 D-L1，2026-09-06）：smart 包（随包 seed-data 的内测形态）
- *  的自动更新源在 `/downloads/internal/`，更新清单叫 `latest-internal.yml`（electron-builder
- *  `publish.channel=latest-internal` 烘进包内 `resources/app-update.yml`，由 `npm run dist:win`
- *  出包、`website/scripts/publish_chatx.ps1 -Channel internal` 上架）。
- *  **刻意不在任何页面渲染、不进 JSON-LD、不进 manifest**：它不是客户下载物；写在这里只为
- *  把两条渠道的布局钉在同一个事实源旁边，改路径时两边一起改（`/dl/downloads/internal/...`
- *  同样走 R2 分流，见 lib/mirror.ts DL_PREFIXES）。 */
+/** 内测渠道（2026-10-04）：smart 包（随包 seed-data，含小界人设/声音/销售知识库）
+ *  的自动更新源在 `/downloads/internal/`，更新清单叫 `latest-internal.yml`。
+ *  公开按钮仍只认上面的 clean 包；内测是下载页上的第二链接，不进 JSON-LD、不进公开 manifest。
+ *  `/dl/downloads/internal/...` 走 R2 分流（lib/mirror.ts DL_PREFIXES）。 */
 export const CHATX_INTERNAL_RELEASE_BASE = "/downloads/internal";
 export const CHATX_INTERNAL_UPDATE_MANIFEST = `${CHATX_INTERNAL_RELEASE_BASE}/latest-internal.yml`;
+
+/** 内测安装包。公开 download 字段不要改成这一份。sha256/size 在安装包上架后填。 */
+export const CHATX_INTERNAL_BETA = {
+  version: "1.0.108",
+  filename: "ChatX-Setup-1.0.108.exe",
+  url: `${CHATX_INTERNAL_RELEASE_BASE}/ChatX-Setup-1.0.108.exe`,
+  size: { zh: "559 MB", en: "559 MB" },
+  sha256: "53aba457dfc192d5aa766343b4474b240333724c8926f192630394dfefeff33e",
+  label: {
+    zh: "内测版（含小界人设、声音与知识库）",
+    en: "Internal beta (Xiaojie persona, voice, and knowledge base)",
+  },
+};
 
 /** lite 定制档渠道（2026-09-06 老板「需要拍板的按建议做」）：`npm run dist:win:lite` 出的包
  *  烘入 `publish.channel=latest-lite`，自动更新只在 `/downloads/lite/` 内走——此前 lite 跟公共
