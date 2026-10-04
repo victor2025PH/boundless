@@ -216,6 +216,8 @@
           <option value="approve"></option>
           <option value="auto"></option>
         </select>
+        <label id="t-out-persona-l" for="gm-out-persona-sel"></label>
+        <select id="gm-out-persona-sel"></select>
         <span class="msg" id="gm-out-persona"></span>
       </div>
     </section>
@@ -378,10 +380,11 @@
       $("th-state").textContent = t("开口", "Outreach");
       $("t-outreach").textContent = t("③ 私聊开口", "3 · DM openers");
       $("t-outreach-l").textContent = t(
-        "只用「当时拉到这个人的那个号」发第一条私聊。生成队列 → AI 按这个号的人设和目标拟一句开场（可改）→ 批准。「批准后自动发」由后台在时段内每 25–90 分钟随机发一条；「手动」则逐条点发。新号从每天 3 条爬坡，也占这个号的总发送额度。对方回了交给收件箱，对方说别发了就全线不再碰。",
-        "The account that captured the person sends the first private line. Build the queue, let AI draft one opener per person from this account's persona and goal (editable), then approve. In 'approve then auto-send' the scheduler sends one every 25-90 min inside the window; 'manual' sends on click. New accounts ramp from 3 a day and each send counts toward the account's overall cap. Replies go to the inbox; a 'stop messaging me' blocks that person everywhere.");
+        "只用「当时拉到这个人的那个号」发第一条私聊。生成队列 → AI 按这个号的人设和目标拟一句开场（可改）→ 批准。「批准后自动发」由后台在时段内每 25–90 分钟随机发一条；「手动」则逐条点发。每天条数就是上面的每天最多，新号不再少给，也占这个号的总发送额度。对方回了交给收件箱，对方说别发了就全线不再碰。",
+        "The account that captured the person sends the first private line. Build the queue, let AI draft one opener per person from this account's persona and goal (editable), then approve. In 'approve then auto-send' the scheduler sends one every 25-90 min inside the window; 'manual' sends on click. The daily count is the cap above; new accounts are not given fewer, and each send counts toward the account's overall cap. Replies go to the inbox; a 'stop messaging me' blocks that person everywhere.");
       $("t-out-acct-l").textContent = t("用哪个号", "Account");
       $("t-out-mode-l").textContent = t("开口方式", "Mode");
+      $("t-out-persona-l").textContent = t("人设", "Persona");
       var mo2 = $("gm-out-mode").options;
       mo2[0].textContent = t("手动：逐条点发", "Manual: send on click");
       mo2[1].textContent = t("批准后自动发", "Approve, then auto-send");
@@ -821,6 +824,75 @@
 
     var _settingsDirty = false;
     var _ageDirty = false;
+    var _personaList = null;
+    var _personaLoading = null;
+    var _personaSyncing = false;
+
+    function loadPersonaList() {
+      if (_personaList) return Promise.resolve(_personaList);
+      if (_personaLoading) return _personaLoading;
+      _personaLoading = api("/api/personas/profiles").then(function (r) {
+        var summary = (r.data && r.data.summary) || [];
+        _personaList = summary.filter(function (s) { return s && s.id; }).map(function (s) {
+          return { id: String(s.id), name: String(s.name || s.id) };
+        });
+        _personaList.sort(function (a, b) {
+          return a.name.localeCompare(b.name, "zh");
+        });
+        return _personaList;
+      }).catch(function () {
+        _personaList = [];
+        return _personaList;
+      });
+      return _personaLoading;
+    }
+
+    function fillPersonaSelect(currentId, currentName) {
+      var sel = $("gm-out-persona-sel");
+      if (!sel) return;
+      loadPersonaList().then(function (list) {
+        var html = '<option value="">' +
+          t("不单独绑定（用默认）", "Use the default") + "</option>";
+        var seen = false;
+        (list || []).forEach(function (p) {
+          if (p.id === currentId) seen = true;
+          html += '<option value="' + esc(p.id) + '">' + esc(p.name) + "</option>";
+        });
+        if (currentId && !seen) {
+          html += '<option value="' + esc(currentId) + '">' +
+            esc(currentName || currentId) + "</option>";
+        }
+        _personaSyncing = true;
+        sel.innerHTML = html;
+        sel.value = currentId || "";
+        _personaSyncing = false;
+      });
+    }
+
+    async function savePersona() {
+      if (_personaSyncing) return;
+      var acctEl = $("gm-out-acct");
+      var sel = $("gm-out-persona-sel");
+      var acct = acctEl ? acctEl.value : "";
+      if (!acct || !sel) return;
+      sel.disabled = true;
+      var r = await api("/api/persona/account-persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: "telegram",
+          account_id: acct,
+          profile_id: sel.value || ""
+        })
+      });
+      sel.disabled = false;
+      if (!r.ok) {
+        $("gm-out-persona").textContent = t("人设没绑上：", "Persona not saved: ") +
+          ((r.data && (r.data.detail || r.data.error)) || r.status);
+        return;
+      }
+      loadOutreach();
+    }
 
     // 模式 / 人设+目标 / 今日汇总 / 时段+条数
     function renderOutreachMeta(d) {
@@ -838,9 +910,9 @@
           (ae.ok === false ? t(" · 不够格：", " · not eligible: ") + (why[ae.reason] || ae.reason) : "");
       }
       var p = d.persona || {}, g = d.goal || {};
-      var pTxt = p.name ? t("人设：", "Persona: ") + p.name : t("人设：账号默认", "Persona: account default");
-      var gTxt = g.name ? t(" · 目标：", " · Goal: ") + g.name : t(" · 目标：未设默认（回复后再挂）", " · Goal: none yet (attached after first reply)");
-      $("gm-out-persona").textContent = pTxt + gTxt;
+      fillPersonaSelect(p.id || "", p.name || "");
+      var gTxt = g.name ? t("目标：", "Goal: ") + g.name : t("目标：未设默认（回复后再挂）", "Goal: none yet (attached after first reply)");
+      $("gm-out-persona").textContent = gTxt;
       var s = d.summary || {};
       var errs = s.errors || {};
       var reasonMap = {
@@ -878,8 +950,8 @@
       $("gm-out-age-note").textContent =
         t("登进本系统 ", "In this system ") + (ag.registry_days != null ? Math.floor(ag.registry_days) : "?") + t(" 天", " d") +
         (ag.declared_days != null ? t(" · 申报 ", " · declared ") + Math.floor(ag.declared_days) + t(" 天", " d") : "") +
-        t(" · 按大的算每天能开口几个。填大了就少了新号爬坡保护，封号风险由这个号承担；申报的号要在这里发满 10 条才能全自动，撞一次风控申报自动作废",
-          " · the larger one sets the daily ramp. Overstating skips the new-account ramp and the ban risk is this account's; declared accounts need 10 sends here before full auto, and a flood limit voids the declaration");
+        t(" · 每天条数不再按号龄少给。申报过号龄的号仍要在这里发满 10 条才能全自动，撞一次风控申报自动作废",
+          " · the daily count no longer shrinks with account age. Declared accounts still need 10 sends here before full auto, and a flood limit voids the declaration");
       var manual = (d.mode || "manual") === "manual";
       $("gm-out-approve-all").textContent = manual
         ? t("一键批准今日队列", "Approve whole queue")
@@ -1612,6 +1684,7 @@
       $("gm-export").addEventListener("click", doExport);
       $("gm-out-acct").addEventListener("change", loadOutreach);
       $("gm-out-mode").addEventListener("change", changeMode);
+      $("gm-out-persona-sel").addEventListener("change", savePersona);
       $("gm-out-queue").addEventListener("click", buildOutreachQueue);
       $("gm-out-compose").addEventListener("click", function () { composeAll(false); });
       $("gm-out-approve-all").addEventListener("click", approveAll);

@@ -239,12 +239,15 @@ const MUST_NOT_SHIP_DATAS = [
 for (const [re, what] of MUST_NOT_SHIP_DATAS) {
   ok(!re.test(datasBlock), `build_backend.py DATAS 出现了不该随包的 ${what}`);
 }
+const stagePy = fs.readFileSync(path.join(appDir, "build", "stage_internal_assets.py"), "utf8");
+ok(stagePy.includes("def _write_wujie_kb("), "stage_internal_assets.py 必须从 boundless_sales.yaml 现写小界知识库");
+ok(!/copyfile\([^)]*knowledge_base\.db/.test(stagePy), "禁止把生产机 knowledge_base.db 整份拷进种子");
 ok(Array.isArray(afterPack.FORBIDDEN), "after-pack.js 未导出 FORBIDDEN（「必须不在」清单无人核对）");
 const forbiddenRels = afterPack.FORBIDDEN.map((r) => toPosix(String(r[0])));
 for (const rel of ["backend/_internal/config/fatex.db", "seed-data/config/fatex.db",
   "backend/_internal/config/license.key", "backend/_internal/config/config.yaml",
   "backend/_internal/config/config.local.yaml", "backend/_internal/platform/credpool/data",
-  "seed-data/config/knowledge_base.db"]) {
+  ]) {
   ok(forbiddenRels.includes(rel), `after-pack.js FORBIDDEN 未点名 ${rel}（「必须不在」清单漏项）`);
 }
 // C12：随包 Playwright 浏览器的剪除表与路径长度门禁（2026-09-20）。

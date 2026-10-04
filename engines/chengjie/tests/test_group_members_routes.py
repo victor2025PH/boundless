@@ -265,15 +265,14 @@ def test_outreach_settings_write_overlay_or_503(client_cm):
 
 
 def test_outreach_auto_mode_gate_followup_and_stats(client_cm):
-    """新号切 auto 被拒；老号可切；跟进端点校验；stats 形状。"""
+    """新号也能切 auto（号龄不拦）；跟进端点校验；stats 形状。"""
     c, cm = client_cm
     st = get_group_members_store()
     _seed_queue(c, st)
-    # accNew 刚注册 → 全自动被拒（409 + 原因），预览标出不够格
     r = c.post("/api/tg-members/outreach/mode", json={"account_id": "accNew", "mode": "auto"})
-    assert r.status_code == 409 and "14" in r.json()["detail"]
+    assert r.status_code == 200 and r.json()["mode"] == "auto"
     pv = c.get("/api/tg-members/outreach/preview?account_id=accNew").json()
-    assert pv["auto_eligible"]["ok"] is False and pv["auto_eligible"]["reason"] == "age"
+    assert pv["auto_eligible"]["ok"] is True
     # accA 90 天老号、无风控、无样本 → 可切
     pv = c.get("/api/tg-members/outreach/preview?account_id=accA").json()
     assert pv["auto_eligible"]["ok"] is True and pv["followup"]["enabled"] is True
@@ -333,7 +332,7 @@ def test_outreach_auto_mode_gate_followup_and_stats(client_cm):
 
 
 def test_outreach_new_account_ramps_and_hours_close(client_cm):
-    """刚注册的号只给 3 个坑；时段关了排队照常、发送 409。"""
+    """新号也给满每天额度；时段关了排队照常、发送 409。"""
     c, cm = client_cm
     st = get_group_members_store()
     st.record_members([{
@@ -343,15 +342,15 @@ def test_outreach_new_account_ramps_and_hours_close(client_cm):
         "access_hash": "4%d" % i, "last_spoke_ts": time.time(), "score": 90,
     } for i in range(1, 7)])
     body = c.get("/api/tg-members/outreach/preview?account_id=accNew").json()
-    assert body["effective_cap"] == 3 and body["cap"] == 8 and body["warming_up"] is True
-    assert body["age_days"] == 0.0 and len(body["candidates"]) == 3
+    assert body["effective_cap"] == 8 and body["cap"] == 8 and body["warming_up"] is False
+    assert body["age_days"] == 0.0 and len(body["candidates"]) == 6
     assert body["gate"] is None                      # 总发送闸门没开 → 不显示
     assert c.post("/api/tg-members/outreach/queue",
-                  json={"account_id": "accNew"}).json()["queued_now"] == 3
+                  json={"account_id": "accNew"}).json()["queued_now"] == 6
 
     cm.config["companion"]["group_members"]["outreach_hours"] = [0, 1] if time.localtime().tm_hour > 1 else [23, 24]
     pv = c.get("/api/tg-members/outreach/preview?account_id=accNew").json()
-    assert pv["hours"]["ok"] is False and len(pv["queue"]) == 3
+    assert pv["hours"]["ok"] is False and len(pv["queue"]) == 6
     uid = pv["queue"][0]["user_id"]
     r = c.post("/api/tg-members/outreach/release", json={
         "account_id": "accNew", "group_id": "-100", "user_id": uid,

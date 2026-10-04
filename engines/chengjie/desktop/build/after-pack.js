@@ -282,10 +282,8 @@ const FORBIDDEN = [
   [path.join("services", "qq-personal", "qq-sessions"), "本机 QQ 登录凭据（随包＝把自己的 QQ 会话发给每个用户）"],
   [path.join("services", "qq-personal", "qq-runtime"), "按需下载的 QQ 客户端运行时（体积巨大且属腾讯，绝不随包）"],
   [path.join("services", "qq-personal", "logs"), "本机运行日志"],
-  // J-9 #184（2026-09-05）：生产机 KB 快照曾随内测包出门，用户首装就多出 ~110 条
-  // 厂商自家产品说明污染知识库、AI 对客推销厂商产品。KB 不再随任何形态的包走——
-  // 首启由后端播 3 条格式示例（kb_store.seed_kb_format_examples，source=system，停用态）。
-  [path.join("seed-data", "config", "knowledge_base.db"), "生产机知识库快照（厂商产品条目污染用户 KB）"],
+  // 内测种子里的 knowledge_base.db 只许是打包时从 boundless_sales.yaml 现写的小界库，
+  // 不许是生产机快照（stage_internal_assets._write_wujie_kb）。
   // P-4 #254（MTRCH2①，2026-09-08）「必须不在」清单：命理产品库只随 FateX 产品线；
   // 密钥 / 凭据池库 / 真实运行配置任何形态都不得进用户版。
   [path.join("backend", "_internal", "config", "fatex.db"), "FateX 命理产品库（用户版不带）"],
@@ -313,7 +311,7 @@ const SEED_REQUIRED = [
   [path.join("config", "voice_refs"), "克隆参考音"],
   [path.join("config", "persona_albums"), "人设相册"],
   [path.join("config", "persona_media.db"), "相册注册表"],
-  // knowledge_base.db 已从种子清单移除并列入 FORBIDDEN（J-9 #184）
+  [path.join("config", "knowledge_base.db"), "小界销售知识库（由 boundless_sales.yaml 现写）"],
   [path.join("config", "persona_bio.db"), "人设资料库"],
   [path.join("config", "prerender_lines"), "预渲染台词库"],
   [path.join("assets", "voices"), "预渲染语音成品"],

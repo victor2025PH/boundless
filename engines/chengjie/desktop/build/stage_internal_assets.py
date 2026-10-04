@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -74,6 +75,8 @@ HERE = Path(__file__).resolve().parent            # desktop/build
 DESKTOP = HERE.parent
 REPO = DESKTOP.parent
 DEFAULT_SOURCE = Path(r"D:/chengjie-instances/zhiliao/data")
+WUJIE_PACK = REPO / "config" / "persona_packs" / "wujie_sales.yaml"
+WUJIE_KB_PACK = REPO / "config" / "kb_packs" / "boundless_sales.yaml"
 OUT_DEFAULT = HERE / "seed-data"
 OVERLAY_SEED = REPO / "config" / "config.desktop.internal.yaml"
 
@@ -142,12 +145,20 @@ def _rewrite_media_db(db: Path, staged_albums: Path, source_root: Path) -> tuple
         rows = con.execute("SELECT id, file_path FROM persona_media").fetchall()
         kept = dropped = 0
         src_prefix = str(source_root).replace("/", "\\").rstrip("\\").lower() + "\\"
+        # 数据根从 D:\chengjie-instances\zhiliao\data 迁走后，注册表里还写着旧绝对路径。
+        stale_prefix = (
+            str(Path(r"D:/chengjie-instances/zhiliao/data"))
+            .replace("/", "\\").rstrip("\\").lower() + "\\"
+        )
         for mid, fp in rows:
             raw = str(fp or "")
             norm = raw.replace("/", "\\")
             rel: str | None = None
-            if norm.lower().startswith(src_prefix):
+            low = norm.lower()
+            if low.startswith(src_prefix):
                 rel = norm[len(src_prefix):]
+            elif low.startswith(stale_prefix):
+                rel = norm[len(stale_prefix):]
             elif not _ABS_PATH_RE.match(norm):
                 rel = norm.lstrip("\\")
             if rel is not None:
@@ -404,6 +415,71 @@ def stage_lite(source: Path, out: Path, persona_ids: list[str],
     return 0
 
 
+def _resolve_source(raw: str) -> Path:
+    """生产数据根缺失时，用本机智聊数据根（人设/声音/相册仍在，会话不进白名单）。"""
+    source = Path(raw)
+    if (source / "config").is_dir():
+        return source
+    appdata = os.environ.get("APPDATA", "")
+    fallback = Path(appdata) / "telegram-ai-desktop" / "data" if appdata else None
+    if fallback is not None and (fallback / "config").is_dir():
+        print(f"→ 默认源不存在（{source}），改用本机数据根: {fallback}")
+        return fallback
+    return source
+
+
+def _ensure_wujie(prof_dst: Path) -> None:
+    """种子里没有小界时，从仓库人设包补上。声音仍用林小雨克隆参考音。"""
+    import yaml
+
+    if not prof_dst.exists() or not WUJIE_PACK.exists():
+        return
+    data = yaml.safe_load(prof_dst.read_text(encoding="utf-8")) or {}
+    profs = data.get("profiles") if isinstance(data, dict) else None
+    pack = yaml.safe_load(WUJIE_PACK.read_text(encoding="utf-8")) or {}
+    persona = pack.get("persona") if isinstance(pack, dict) else None
+    if not isinstance(persona, dict) or not persona.get("id"):
+        return
+    pid = str(persona["id"])
+    if isinstance(profs, dict):
+        if pid in profs:
+            return
+        profs[pid] = persona
+    elif isinstance(profs, list):
+        if any(isinstance(p, dict) and str(p.get("id")) == pid for p in profs):
+            return
+        profs.append(persona)
+    else:
+        return
+    prof_dst.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100),
+        encoding="utf-8")
+
+
+def _write_wujie_kb(dst: Path) -> int:
+    """只把小界销售知识库（boundless_sales.yaml）写成种子库。
+
+    不拷生产机 knowledge_base.db：那份库里有厂商话术和运行数据，禁止随包。
+    """
+    import yaml
+
+    if not WUJIE_KB_PACK.exists():
+        raise FileNotFoundError(str(WUJIE_KB_PACK))
+    pack = yaml.safe_load(WUJIE_KB_PACK.read_text(encoding="utf-8")) or {}
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from src.utils.kb_store import KnowledgeBaseStore
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        dst.unlink()
+    store = KnowledgeBaseStore(dst)
+    got = store.import_from_data(
+        pack, mode="skip",
+        batch={"filename": "boundless_sales.yaml", "fmt": "yaml", "operator": "seed"})
+    return int(got.get("added") or 0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=str(DEFAULT_SOURCE),
@@ -426,7 +502,7 @@ def main() -> int:
             [p.strip() for p in str(args.personas).split(",") if p.strip()],
             Path(args.persona_overrides), int(args.trial_chars))
 
-    source = Path(args.source)
+    source = _resolve_source(args.source)
     out = Path(args.out)
     if not (source / "config").is_dir():
         print(f"✗ 源数据根不存在或无 config/: {source}", file=sys.stderr)
@@ -456,7 +532,15 @@ def main() -> int:
             import yaml
             data = yaml.safe_load(prof_dst.read_text(encoding="utf-8")) or {}
             profs = data.get("profiles") if isinstance(data, dict) else None
+            _ensure_wujie(prof_dst)
+            problems += _scan_text_gate(prof_dst)
+            data = yaml.safe_load(prof_dst.read_text(encoding="utf-8")) or {}
+            profs = data.get("profiles") if isinstance(data, dict) else None
             counts["personas"] = len(profs) if isinstance(profs, (list, dict)) else 0
+            ids = (list(profs) if isinstance(profs, dict)
+                   else [str(p.get("id")) for p in profs if isinstance(p, dict)])
+            if "wujie_sales" not in ids:
+                problems.append("种子人设里没有小界（wujie_sales）")
         except Exception as exc:  # noqa: BLE001
             problems.append(f"profiles_runtime.yaml 不可解析: {exc}")
             counts["personas"] = 0
@@ -488,7 +572,13 @@ def main() -> int:
             _sqlite_snapshot(src, out / "config" / name)
         else:
             problems.append(f"缺 {src}")
-    counts["kb_entries"] = 0
+    try:
+        counts["kb_entries"] = _write_wujie_kb(out / "config" / "knowledge_base.db")
+    except Exception as exc:  # noqa: BLE001
+        counts["kb_entries"] = 0
+        problems.append(f"小界知识库种子失败: {exc}")
+    if counts["kb_entries"] < 1:
+        problems.append("小界知识库种子是空的")
 
     media_db = out / "config" / "persona_media.db"
     if media_db.exists():

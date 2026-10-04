@@ -148,21 +148,24 @@ def main() -> int:  # noqa: PLR0915
         ok(f"相册文件 {n_album} 个", n_album >= counts.get("album_files", 50))
         for db in ("persona_bio.db", "persona_media.db"):
             ok(f"{db} 已播种", (data_dir / "config" / db).exists())
-        # J-9 #184：KB 不随包。首启后端自建库只应有系统话术 + 格式示例（source∈system），
-        # 出现 source=vendor 行＝旧种子链没断干净。
+        # 内测包带的是打包时从 boundless_sales.yaml 现写的小界销售库，不是生产机快照。
+        # source=vendor 仍禁止（那是厂商话术污染）。
         kb = data_dir / "config" / "knowledge_base.db"
+        n_kb = n_vendor = -1
         if kb.exists():
             try:
                 con = sqlite3.connect(str(kb))
                 try:
+                    n_kb = int(con.execute("SELECT COUNT(*) FROM kb_entries").fetchone()[0])
                     n_vendor = int(con.execute(
                         "SELECT COUNT(*) FROM kb_entries WHERE COALESCE(source,'user')='vendor'"
                     ).fetchone()[0])
                 finally:
                     con.close()
             except Exception:  # noqa: BLE001
-                n_vendor = -1
-            ok(f"KB 无厂商预置条目（vendor={n_vendor}）", n_vendor == 0)
+                n_kb = n_vendor = -1
+        ok(f"小界知识库已播种（entries={n_kb}）", n_kb >= 1)
+        ok(f"KB 无厂商预置条目（vendor={n_vendor}）", n_vendor == 0)
 
         media_db = data_dir / "config" / "persona_media.db"
         if media_db.exists():
@@ -194,9 +197,9 @@ def main() -> int:  # noqa: PLR0915
                 ids = {str(i) for i in (d.get("ids") or [])}
             except Exception:
                 ids = set()
-        ok(f"人设 {len(ids)} 个（含 lin_xiaoyu/su_wan）",
-           code == 200 and len(ids) >= 10 and {"lin_xiaoyu", "su_wan"} <= ids,
-           f"code={code} ids={sorted(ids)[:6]}…")
+        ok(f"人设 {len(ids)} 个（含 lin_xiaoyu/su_wan/小界）",
+           code == 200 and len(ids) >= 10 and {"lin_xiaoyu", "su_wan", "wujie_sales"} <= ids,
+           f"code={code} ids={sorted(ids)[:8]}…")
 
         code, body = sb._get(opener, base + "/api/setup/features")
         feat_states = {}

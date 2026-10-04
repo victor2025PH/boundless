@@ -74,11 +74,11 @@ def test_policy_from_config_tolerates_bad_values():
     assert (q.hours_start, q.hours_end, q.warmup_days) == (9, 22, 7)
 
 
-def test_new_account_ramps_from_three_to_cap():
+def test_account_age_does_not_change_daily_cap():
     p = OutreachPolicy(cap=8, warmup_start=3, warmup_days=14)
-    assert effective_outreach_cap(p, None) == 3        # 天龄不明按新号
-    assert effective_outreach_cap(p, 0) == 3
-    assert effective_outreach_cap(p, 7) == 5
+    assert effective_outreach_cap(p, None) == 8
+    assert effective_outreach_cap(p, 0) == 8
+    assert effective_outreach_cap(p, 7) == 8
     assert effective_outreach_cap(p, 14) == 8
     assert effective_outreach_cap(p, 400) == 8
     assert effective_outreach_cap(OutreachPolicy(cap=8, warmup_days=0), None) == 8
@@ -161,29 +161,25 @@ def test_queue_send_gap_and_flood_do_not_burn_the_cap():
     assert blocked["kind"] == "flood"
 
 
-def test_warmup_cap_limits_queue_and_send_for_a_new_account():
+def test_new_account_uses_the_full_daily_cap():
     st = GroupMembersStore(":memory:")
     now = 1_500_000.0
     st.record_members([_row(user_id=str(i), username="u%d" % i) for i in range(1, 7)])
     q = enqueue_today(st, "accA", now=now, since_ts=now - 1, policy=POLICY, age_days=0)
-    assert q["queued_now"] == 3                     # 新号第 0 天只排 3 个
+    assert q["queued_now"] == 6
     pv = build_preview(st, "accA", now=now, since_ts=now - 1, policy=POLICY, age_days=0,
                        hour=OPEN_HOUR)
-    assert pv["effective_cap"] == 3 and pv["cap"] == 8 and pv["warming_up"] is True
-    assert pv["remaining"] == 0 and pv["hours"]["ok"] is True
+    assert pv["effective_cap"] == 8 and pv["cap"] == 8 and pv["warming_up"] is False
+    assert pv["hours"]["ok"] is True
 
-    # 三条都发出去后，第四条即使还在队列也被 cap 拦
     t = now
-    for uid in [m["user_id"] for m in pv["queue"]]:
+    for uid in [m["user_id"] for m in pv["queue"][:3]]:
         assert _prep(st, uid, t, since_ts=now - 1, age_days=0)["ok"]
         finalize_release(st, account_id="accA", group_id="-100", user_id=uid, now=t,
                          result={"ok": True, "kind": "sent"})
         t += 2000
-    st.cas_outreach("-100", "6", expect_states=(OUTREACH_NONE,), new_state=OUTREACH_QUEUED,
-                    account_id="accA", now=t)
-    assert _prep(st, "6", t, since_ts=now - 1, age_days=0)["kind"] == "cap"
-    # 养熟的号同样 3 条已发、额度 8 → 放行
-    assert _prep(st, "6", t, since_ts=now - 1, age_days=OLD)["ok"] is True
+    nxt = pv["queue"][3]["user_id"]
+    assert _prep(st, nxt, t, since_ts=now - 1, age_days=0)["ok"] is True
 
 
 def test_outside_hours_blocks_send_but_not_queue():
@@ -673,8 +669,8 @@ def test_auto_mode_gate_age_flood_and_reply_rate():
     st = GroupMembersStore(":memory:")
     now = 8_000_000.0
     p = OutreachPolicy(cap=10, min_gap_sec=60)
-    assert auto_mode_block_reason(st, "accA", now=now, age_days=None, policy=p)["reason"] == "age"
-    assert auto_mode_block_reason(st, "accA", now=now, age_days=13, policy=p)["reason"] == "age"
+    assert auto_mode_block_reason(st, "accA", now=now, age_days=None, policy=p)["ok"] is True
+    assert auto_mode_block_reason(st, "accA", now=now, age_days=13, policy=p)["ok"] is True
     assert auto_mode_block_reason(st, "accA", now=now, age_days=14, policy=p)["ok"] is True
     # 近 7 天撞过风控 → 不许；8 天前的不算
     st.set_hold("accA", last_flood_at=now - 2 * 86400)

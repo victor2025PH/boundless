@@ -41,7 +41,8 @@ FLOOD_HOLD_SEC = 24 * 3600
 OUTREACH_WARMUP_START = 3
 OUTREACH_WARMUP_DAYS = 14
 OUTREACH_HOURS = (10, 21)
-# 全自动门槛：号够老、近期没撞过风控、回复率不太难看（样本够了才看）
+# 全自动门槛：近期没撞过风控、回复率不太难看（样本够了才看）。号龄不拦。
+# AUTO_MIN_AGE_DAYS 只给旧配置字段默认值，判定不再读。
 AUTO_MIN_AGE_DAYS = 14
 AUTO_FLOOD_LOOKBACK_DAYS = 7
 AUTO_MIN_REPLY_RATE = 0.05
@@ -165,14 +166,9 @@ def account_age_days(registry_row: Any, store: Any, account_id: str,
 
 
 def effective_outreach_cap(policy: OutreachPolicy, age_days: Optional[float]) -> int:
-    """新号从 warmup_start 在 warmup_days 内爬到 cap。天龄不明按新号算。"""
-    from src.skills.account_health import warmup_cap
-    cap = clamp_outreach_cap(policy.cap)
-    if int(policy.warmup_days) <= 0:
-        return cap
-    age = float(age_days) if age_days is not None else 0.0
-    return max(1, min(cap, warmup_cap(
-        age, cap, start_cap=int(policy.warmup_start), ramp_days=int(policy.warmup_days))))
+    """每天开口数就是 outreach_daily_cap。号龄不再爬坡。``age_days`` 保留给调用方。"""
+    del age_days
+    return clamp_outreach_cap(policy.cap)
 
 
 def local_hour(now: float) -> int:
@@ -664,13 +660,10 @@ def auto_mode_block_reason(store: Any, account_id: str, *, now: float,
                            age_days: Optional[float], policy: OutreachPolicy) -> Dict[str, Any]:
     """这个号现在够不够格全自动。返回 {ok, reason, detail}。
 
-    reason: ''=够格；age=号太新 / 天龄不明；flood=近 N 天撞过风控；reply_rate=样本够了但
-    回复率低于地板。三条都是「人不盯着就别放手」的硬线，不可在页面上关。
+    reason: ''=够格；flood=近 N 天撞过风控；reply_rate=样本够了但回复率低于地板。
+    号龄不再拦全自动（新号每天几条仍走爬坡）。``age_days`` 保留给调用方，这里不看。
     """
-    age = float(age_days) if age_days is not None else None
-    if age is None or age < float(policy.auto_min_age_days):
-        return {"ok": False, "reason": "age",
-                "detail": {"age_days": age, "min": int(policy.auto_min_age_days)}}
+    del age_days  # 号未满 N 天不再拒绝全自动
     # 申报号龄只放宽爬坡额度，不单独放行全自动：申报过的号得先在本系统里发出够数的开口
     declared = None
     if hasattr(store, "declared_age_days"):

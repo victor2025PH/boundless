@@ -2611,8 +2611,9 @@ companion:
     daily_cap_per_account: 200   # 每号每天最多新入库多少人（入库配额，不是开口配额）
     outreach_daily_cap: 8        # 同群开口：每号每天新人，代码夹在 5..10（写 200 也会变成 10）
     outreach_min_gap_sec: 1500   # 同一号两条开口的最小间隔（秒）
-    outreach_warmup_start_cap: 3 # 新号第 0 天每天开口数，按注册表天龄线性爬到 outreach_daily_cap
-    outreach_warmup_ramp_days: 14
+    # 号龄不爬坡。下面两键只留着兼容旧配置，每天条数直接用 outreach_daily_cap。
+    outreach_warmup_start_cap: 3
+    outreach_warmup_ramp_days: 0
     outreach_hours: [10, 21]     # 本地时间只在这个区间放行发送；排队不限时段（管理台第④步可在线改，写 overlay）
     # 每条开口还计入 companion_send_gate 的总发送量；红灯 / 总额度满 / 急停时发不出
     # 开口文案由 AI 按「这个号的人设 + 默认工作目标 + 对方在群里说的话」生成，LLM 不在时回落模板；
@@ -2621,8 +2622,9 @@ companion:
     outreach_runner_interval_sec: 150    # 调度器唤醒间隔（秒）；每次每号最多发 1 条
     outreach_auto_gap_min_sec: 1500      # 调度器两条自动开口之间的随机抖动下限（25 分钟），叠在 outreach_min_gap_sec 之上
     outreach_auto_gap_max_sec: 5400      # 抖动上限（90 分钟）
-    # 全自动（auto）门槛：三条硬线，页面上关不掉；调度器每轮复核，不达标自动退回 approve
-    outreach_auto_min_age_days: 14       # 号的注册天龄不满 → 不许全自动（天龄不明也算不满）
+    # 全自动（auto）门槛：风控 / 回复率，页面上关不掉；调度器每轮复核，不达标自动退回 approve。
+    # 号龄不拦全自动。outreach_auto_min_age_days 只留着兼容旧配置，判定不再读它。
+    outreach_auto_min_age_days: 0
     outreach_auto_flood_lookback_days: 7 # 近 N 天撞过 Telegram 风控 → 不许
     outreach_auto_min_reply_rate: 0.05   # 近 7 天开口回复率低于此 → 不许（样本 ≥ outreach_auto_min_sample 才看）
     outreach_auto_min_sample: 10
