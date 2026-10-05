@@ -418,7 +418,8 @@ def start_parent_watch(*, ppid: Optional[int] = None, opener: Callable[[int], Op
     def _watch() -> None:
         try:
             (waiter or _win_wait_forever)(handle)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[service] parent watch stopped: %s", e)
             return
         logger.warning("[service] 引导进程 pid=%s 已退出（计划任务被结束），本进程随之退出", pid)
         exit_fn(0)

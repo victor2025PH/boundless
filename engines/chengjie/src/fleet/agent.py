@@ -295,7 +295,8 @@ class AgentConfig:
                     or not state_dir_is_locked(self.state_dir)):
                 return None
             d = json.loads(self.path.read_text(encoding="utf-8-sig"))
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - unreadable edit: keep the in-memory config
+            logger.debug("[agent] agent.json not re-read: %s", e)
             return None
         return d if isinstance(d, dict) else None
 
