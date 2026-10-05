@@ -75,12 +75,21 @@
  "accounts": {"total": 3, "online": 2},
  "metrics": {…}, "fleet_health": {"by_state": {…}},
  "player_overview": {"contacts": 0, "active_7d": 0, "inbound_today": 0, "visible_today": 0, "gate_hits_today": 0, "gateway": "unconfigured"},
- "errors": []}
+ "errors": [],
+ "phones": [{"serial": "E6FY…", "state": "device", "model": "23106RN0DA", "transport": "usb"}], "phones_error": ""}
 → 200 {"ok": true, "server_time": 1790177662.0, "server_proto": 1, "has_tasks": false, "heartbeat_sec": 30}
 ```
 
 只保留白名单顶层键（`src/fleet/protocol.py::HEARTBEAT_KEYS`），其余丢弃。**心跳只有数字与状态，永不含聊天原文、
 手机号、联系人名。** `has_tasks=true` 提示 Agent 立刻 pull。
+
+**0.3.6 只读手机清点**（`src/fleet/phones.py`）：心跳多两个键 `phones: [{serial, state, model, transport}]` 与
+`phones_error`（空串 = 成功）。节点只跑 `adb devices -l`（参数列表、无 shell、5 s 超时）；先用本机 adb 服务的
+`host:version` 只读握手确认服务在跑且与客户端同版本，否则不执行命令（避免 adb 自动起服务 / 版本不符时重启服务），
+`phones_error` 写 `adb_server_not_running` / `adb_version_mismatch …` / `adb_not_found` / `adb_timeout` / `adb_exit_N`。
+失败时 60 s 内有过成功结果就沿用那份。agent.json 可配 `phones_exclude`（默认空；精确 serial、`*` 结尾为前缀如 `192.168.0.50:*`、`model:CPH2653` 按 `devices -l` 的 model 字段）、`adb_path`、
+`phones_enabled`；直播手机 `3B1F4KE5MS140P4X` 固定排除。主控把两个键存进 `nodes.last_heartbeat_json`，
+`GET /api/fleet/nodes` 每行多给顶层 `phones` / `phones_error`（老节点 = `[]` / `""`）。不对手机做任何操作。
 
 ### 3.3 领任务（长轮询）
 

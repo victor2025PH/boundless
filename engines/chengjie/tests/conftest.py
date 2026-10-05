@@ -656,3 +656,18 @@ def viewer_client(app, config_dir):
             follow_redirects=True,
         )
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _fleet_phones_no_real_adb(monkeypatch):
+    """Fleet agent 0.3.6 phone inventory: no test talks to the dev box adb server.
+
+    With no server answering, PhoneCollector stops before it runs any adb
+    command (phones=[], phones_error="adb_server_not_running").
+    test_fleet_phones injects its own fakes per collector.
+    """
+    try:
+        from src.fleet import phones as _phones
+    except Exception:
+        return
+    monkeypatch.setattr(_phones, "adb_server_version", lambda port, timeout=1.0: None)
