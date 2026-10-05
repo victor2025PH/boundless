@@ -35,11 +35,27 @@
 .fc-dlg-btns{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.4rem}
 .fc-toast{position:fixed;right:1.2rem;bottom:1.2rem;z-index:10000;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--green);border-radius:8px;padding:.6rem .9rem;font-size:.82rem;box-shadow:0 4px 18px rgba(0,0,0,.18);max-width:420px}
 .fc-toast.bad{border-left-color:var(--red);color:var(--red)}
+.fc-top{display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem}
+.fc-loading td{text-align:center;color:var(--t3)}
+/* 手机 / 窄屏：卡片两列、表格在区块内横向滚动、按钮加大便于点按 */
+@media (max-width:760px){
+  .fc-top{flex-direction:column;align-items:flex-start}
+  .fc-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+  .fc-card{padding:.7rem .8rem}.fc-card .v{font-size:1.3rem}
+  .fc-sec{padding:.8rem .7rem;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .fc-sec h3{flex-wrap:wrap;gap:.4rem}
+  .fc-tbl{font-size:.74rem;min-width:640px}
+  .fc-tbl th,.fc-tbl td{padding:.35rem .4rem}
+  .fc-act button{font-size:.78rem;padding:.4rem .6rem;min-height:2.1rem}
+  .fc-code{font-size:1.1rem}
+  .fc-toast{left:.8rem;right:.8rem;max-width:none}
+  #fc-login-qr{max-width:100%}
+}
 </style>
 {% endblock %}
 {% block content %}
 <div style="max-width:1200px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
+  <div class="fc-top">
     <span class="fc-kv">主控 <b>{{ public_url }}</b> 心跳 <b>{{ heartbeat_sec }}s</b> 更新 <b id="fc-ts">—</b> <span id="fc-notes"></span></span>
     <span class="fc-act">
       <button class="btn-sec" id="fc-newcode" title="给某一台电脑单独发一张一次性注册码">＋ 生成注册码</button>
@@ -75,7 +91,7 @@
     <h3>待批准 <span class="fc-kv" id="fc-pending-n"></span></h3>
     <table class="fc-tbl">
       <thead><tr><th>主机</th><th>配对码</th><th>IP</th><th>申请分组</th><th>生效分组</th><th>系统</th><th>实例</th><th>操作</th></tr></thead>
-      <tbody id="fc-pending"></tbody>
+      <tbody id="fc-pending"><tr class="fc-loading"><td colspan="8">加载中…</td></tr></tbody>
     </table>
   </div>
 
@@ -83,7 +99,7 @@
     <h3>机房密钥</h3>
     <table class="fc-tbl">
       <thead><tr><th>状态</th><th>分组</th><th>指纹</th><th>用量</th><th>到期</th><th>操作</th></tr></thead>
-      <tbody id="fc-rooms"></tbody>
+      <tbody id="fc-rooms"><tr class="fc-loading"><td colspan="6">加载中…</td></tr></tbody>
     </table>
   </div>
 
@@ -91,7 +107,7 @@
     <h3>节点 <span class="fc-kv"><label>分组 <input id="fc-group" placeholder="全部" style="width:8rem"></label></span></h3>
     <table class="fc-tbl">
       <thead><tr><th>在线状态</th><th>节点</th><th>分组</th><th>主机</th><th>版本</th><th>实例 / 账号</th><th>手机</th><th>最近心跳</th><th>操作</th></tr></thead>
-      <tbody id="fc-list"></tbody>
+      <tbody id="fc-list"><tr class="fc-loading"><td colspan="9">加载中…</td></tr></tbody>
     </table>
   </div>
 
@@ -99,7 +115,7 @@
     <h3>最近任务</h3>
     <table class="fc-tbl">
       <thead><tr><th>时间</th><th>节点</th><th>操作</th><th>状态</th><th>结果 / 说明</th></tr></thead>
-      <tbody id="fc-tasks"></tbody>
+      <tbody id="fc-tasks"><tr class="fc-loading"><td colspan="5">加载中…</td></tr></tbody>
     </table>
   </div>
 
@@ -162,6 +178,7 @@
     if(c.indexOf('adb_exit_')===0)return 'adb 命令失败（退出码 '+c.slice(9)+'）';
     if(c.indexOf('adb_error')===0)return 'adb 出错'+c.slice(9);
     return c;}
+  function hasPhoneOps(n){return (n.caps||[]).indexOf('phone_ops_v1')>=0;}
   function phonesCell(n){var hb=n.last_heartbeat||{},ps=Array.isArray(n.phones)?n.phones:hb.phones,err=n.phones_error||hb.phones_error||'';
     if(!Array.isArray(ps)&&!err)return '<span style="color:var(--t3)" title="agent 0.3.6 起才上报手机">未上报</span>';
     ps=(ps||[]).filter(function(p){return p&&p.serial;});
@@ -227,10 +244,12 @@
       var up=inst.filter(function(i){return i&&i.up;}).length;
       var acts=n.status==='revoked'?'':'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__login" title="在这里扫码登录那台电脑上的账号">扫码登录</button>'+
         KINDS.map(function(k){return '<button class="btn-sec'+(DANGER[k]?' fc-danger':'')+'" data-n="'+esc(n.node_id)+'" data-k="'+k+'" title="'+esc(KIND_TIP[k]||'')+'">'+esc(kindName(k))+'</button>';}).join('')+
+        (hasPhoneOps(n)?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__remote" title="允许经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护直播机除外）">'+(n.remote_ops_enabled?'关闭远程操作':'开启远程操作')+'</button>':'')+
         '<button class="btn-sec fc-danger" data-n="'+esc(n.node_id)+'" data-k="__revoke" title="让这台电脑的密钥失效">吊销节点</button>';
       var lo=longOff[n.node_id],off=n.state==='offline'&&n.last_seen?Math.max(0,Math.floor((Date.now()/1000-n.last_seen)/60)):null;
       var stx=n.state==='offline'?'<br><span style="font-size:.7rem;color:var(--red)">'+(off===null?'从未上线':'已离线 '+off+' 分钟')+'</span>'+(lo?' '+badge('超过 '+alertMin+' 分钟','fc-bad'):''):'';
-      return '<tr'+(lo?' class="fc-row-alert"':'')+'><td>'+badge(st[0],st[1])+(n.proto_compatible===false?' '+badge('协议过旧','fc-warn'):'')+stx+'</td>'+
+      var rop=n.status==='revoked'?'':n.remote_ops_enabled?' '+badge('远程操作已开','fc-warn'):'';
+      return '<tr'+(lo?' class="fc-row-alert"':'')+'><td>'+badge(st[0],st[1])+(n.proto_compatible===false?' '+badge('协议过旧','fc-warn'):'')+rop+stx+'</td>'+
         '<td><b>'+esc(n.label||n.node_id)+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.node_id)+' · '+esc(n.machine_id)+'</span></td>'+
         '<td>'+esc(n.group_name||'—')+'</td><td>'+esc(n.host_name||'—')+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.os||'')+'</span></td>'+
         '<td>agent '+esc(n.agent_version||'—')+'<br>app '+esc(n.app_version||'—')+'</td>'+
@@ -269,11 +288,17 @@
         '<td>'+badge(TLABEL[x.status]||x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
     }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3)">暂无任务</td></tr>';
   }
+  var loadedOnce=false;
+  function loadFailRows(msg){
+    [['fc-pending',8],['fc-rooms',6],['fc-list',9],['fc-tasks',5]].forEach(function(x){
+      document.getElementById(x[0]).innerHTML='<tr class="fc-loading"><td colspan="'+x[1]+'">'+esc(msg)+'</td></tr>';});
+  }
   function load(){
     var g=document.getElementById('fc-group').value.trim();
+    var rb=document.getElementById('fc-refresh');rb.disabled=true;t('fc-notes','· 加载中…');
     Promise.all([apiFetch('/api/fleet/overview').then(j),apiFetch('/api/fleet/nodes?group='+encodeURIComponent(g)).then(j),apiFetch('/api/fleet/tasks?limit=40').then(j),apiFetch('/api/fleet/pending').then(j),apiFetch('/api/fleet/room-keys').then(j)])
-      .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);renderPending(r[3].pending||[]);renderRooms(r[4].room_keys||[]);t('fc-notes','');})
-      .catch(function(e){t('fc-notes','· 加载失败 '+e.message);});
+      .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);renderPending(r[3].pending||[]);renderRooms(r[4].room_keys||[]);t('fc-notes','');loadedOnce=true;rb.disabled=false;})
+      .catch(function(e){t('fc-notes','· 加载失败 '+e.message);if(!loadedOnce)loadFailRows('加载失败：'+e.message+'。点右上角「刷新」重试。');rb.disabled=false;});
   }
   document.getElementById('fc-pending').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
     var ok=b.getAttribute('data-ok'),no=b.getAttribute('data-no');
@@ -314,12 +339,21 @@
   document.getElementById('fc-list').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
     var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),n=nodes[nid]||{},name=n.label||n.host_name||nid;
     if(k==='__login'){lgOpen(nid);return;}
+    if(k==='__remote'){remoteToggle(nid);return;}
     if(k==='__revoke'){confirmBox('吊销节点「'+name+'」','它的密钥立即失效，还没领取的任务全部取消。要再用这台电脑需要重新安装批准。','吊销节点').then(function(v){if(!v)return;
       post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/revoke').then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
     if(k==='stop_account'){stopOpen(nid);return;}
     if(k==='restart_instance'){restartOpen(nid);return;}
     sendTask(nid,{kind:k});
   });
+  // 远程操作开关（缺省关）：开要确认；关掉时主控会取消这台电脑还在排队的手机操作
+  function remoteToggle(nid){var n=nodes[nid]||{},name=n.label||n.host_name||nid,on=!n.remote_ops_enabled;
+    (on?confirmBox('开启远程操作 · '+name,'开启后，智拓管理员和本控制台可以经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护的直播机除外）。不推流，每次操作都记审计（操作人）。','开启'):Promise.resolve(true))
+    .then(function(v){if(!v)return;
+      post('/api/fleet/nodes/'+encodeURIComponent(nid),{remote_ops_enabled:on})
+        .then(function(){toast((on?'已开启 ':'已关闭 ')+name+' 的远程操作'+(on?'':'（排队中的手机操作已取消）'));load();})
+        .catch(fail('远程操作切换失败'));});
+  }
   function sendTask(nid,body){
     var n=nodes[nid]||{};
     return post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/tasks',body)

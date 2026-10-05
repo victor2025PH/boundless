@@ -741,3 +741,33 @@ def test_console_phones_column_readable_errors(tmp_path):
     assert "adb 服务没在运行" in res["list"] and 'title="adb_server_not_running"' in res["list"]
     assert "未上报" in res["list"]
     assert "手机点击" in res["tasks"] and "没开远程操作" in res["tasks"] and "zhituo:alice" in res["tasks"]
+
+
+# ── 8) 控制台：远程操作开关按钮 / 窄屏布局 / 加载态 ────────────────────────────
+def test_console_remote_ops_toggle_on_needs_confirm(tmp_path):
+    nodes = [_cnode("n1", caps=["phone_ops_v1"], remote_ops_enabled=False), _cnode("n2"),
+             _cnode("n3", caps=["phone_ops_v1"], remote_ops_enabled=True)]
+    res = _console_run(tmp_path, {"nodes": nodes, "click": "n1", "confirm": True})
+    assert res["list"].count("开启远程操作") == 1 and res["list"].count("关闭远程操作") == 1
+    assert "远程操作已开" in res["list"]
+    assert "受保护的直播机除外" in res["dlg"]
+    posts = [c for c in res["calls"] if c[0] == "POST"]
+    assert posts == [["POST", "/api/fleet/nodes/n1", {"remote_ops_enabled": True}]]
+    assert "已开启" in res["toast"]
+    cancelled = _console_run(tmp_path, {"nodes": nodes, "click": "n1", "confirm": False})
+    assert [c for c in cancelled["calls"] if c[0] == "POST"] == []
+
+
+def test_console_remote_ops_toggle_off_posts_directly(tmp_path):
+    nodes = [_cnode("n3", caps=["phone_ops_v1"], remote_ops_enabled=True)]
+    res = _console_run(tmp_path, {"nodes": nodes, "click": "n3", "confirm": False})
+    assert [c for c in res["calls"] if c[0] == "POST"] == [["POST", "/api/fleet/nodes/n3", {"remote_ops_enabled": False}]]
+    assert "已关闭" in res["toast"] and "已取消" in res["toast"]
+
+
+def test_console_mobile_layout_and_loading_rows():
+    html = _CONSOLE7.read_text(encoding="utf-8")
+    assert "@media (max-width:760px)" in html and 'class="fc-top"' in html
+    for tb, span in (("fc-pending", 8), ("fc-rooms", 6), ("fc-list", 9), ("fc-tasks", 5)):
+        assert f'<tbody id="{tb}"><tr class="fc-loading"><td colspan="{span}">加载中…</td></tr></tbody>' in html
+    assert "loadFailRows(" in html
