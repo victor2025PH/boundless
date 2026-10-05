@@ -62,23 +62,15 @@ def test_declared_age_grows_and_takes_the_larger():
     assert st.get_outreach_mode("accA") == "manual"
 
 
-def test_declared_age_does_not_unlock_auto_without_track_record():
+def test_declared_age_does_not_block_auto():
     from src.companion.group_member_outreach import auto_mode_block_reason
     st = GroupMembersStore(":memory:")
     st.set_declared_age("accA", 400, NOW)
     age = account_age_days(None, st, "accA", NOW)
     g = auto_mode_block_reason(st, "accA", now=NOW, age_days=age, policy=POL)
-    assert g["reason"] == "declared_unproven" and g["detail"]["min"] == POL.auto_min_sample
-    st.record_members([_m(str(i)) for i in range(POL.auto_min_sample)])
-    for i in range(POL.auto_min_sample):
-        st.cas_outreach("-100", str(i), expect_states=("none",), new_state="sent",
-                        account_id="accA", now=NOW - 3600)
-        if i < 3:
-            st.mark_outreach_replied("accA", str(i), now=NOW - 60)
-    assert auto_mode_block_reason(st, "accA", now=NOW, age_days=age, policy=POL)["ok"] is True
-    # 没申报、靠真实天龄够格的号不受这条影响
+    assert g["ok"] is True and g["reason"] == ""
     st2 = GroupMembersStore(":memory:")
-    assert auto_mode_block_reason(st2, "accA", now=NOW, age_days=30, policy=POL)["ok"] is True
+    assert auto_mode_block_reason(st2, "accA", now=NOW, age_days=None, policy=POL)["ok"] is True
 
 
 def test_flood_voids_declared_age():

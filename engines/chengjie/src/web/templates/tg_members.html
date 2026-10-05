@@ -950,8 +950,8 @@
       $("gm-out-age-note").textContent =
         t("登进本系统 ", "In this system ") + (ag.registry_days != null ? Math.floor(ag.registry_days) : "?") + t(" 天", " d") +
         (ag.declared_days != null ? t(" · 申报 ", " · declared ") + Math.floor(ag.declared_days) + t(" 天", " d") : "") +
-        t(" · 每天条数不再按号龄少给。申报过号龄的号仍要在这里发满 10 条才能全自动，撞一次风控申报自动作废",
-          " · the daily count no longer shrinks with account age. Declared accounts still need 10 sends here before full auto, and a flood limit voids the declaration");
+        t(" · 每天条数不再按号龄少给。填过号龄也不拦全自动",
+          " · the daily count no longer shrinks with account age. A declared age does not block full auto");
       var manual = (d.mode || "manual") === "manual";
       $("gm-out-approve-all").textContent = manual
         ? t("一键批准今日队列", "Approve whole queue")

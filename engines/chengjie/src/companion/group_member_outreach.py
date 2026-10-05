@@ -661,22 +661,9 @@ def auto_mode_block_reason(store: Any, account_id: str, *, now: float,
     """这个号现在够不够格全自动。返回 {ok, reason, detail}。
 
     reason: ''=够格；flood=近 N 天撞过风控；reply_rate=样本够了但回复率低于地板。
-    号龄不再拦全自动（新号每天几条仍走爬坡）。``age_days`` 保留给调用方，这里不看。
+    号龄和申报号龄都不拦全自动。``age_days`` 保留给调用方，这里不看。
     """
-    del age_days  # 号未满 N 天不再拒绝全自动
-    # 申报号龄只放宽爬坡额度，不单独放行全自动：申报过的号得先在本系统里发出够数的开口
-    declared = None
-    if hasattr(store, "declared_age_days"):
-        try:
-            declared = store.declared_age_days(str(account_id), now)
-        except Exception:
-            declared = None
-    if declared is not None:
-        proven = store.reply_rate(str(account_id), float(now) - 7 * 86400.0)
-        if int(proven.get("sent") or 0) < int(policy.auto_min_sample):
-            return {"ok": False, "reason": "declared_unproven",
-                    "detail": {"sent_7d": int(proven.get("sent") or 0),
-                               "min": int(policy.auto_min_sample)}}
+    del age_days  # 号龄、申报号龄都不拒绝全自动
     hold = store.get_hold(str(account_id))
     last_flood = float(hold.get("last_flood_at") or 0.0)
     lookback = float(policy.auto_flood_lookback_days) * 86400.0
