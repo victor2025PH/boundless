@@ -661,3 +661,83 @@ def test_parent_watch_exits_when_bootloader_goes_away():
     assert start_parent_watch(ppid=4242, opener=lambda pid: None, exit_fn=exits.append, executable=exe) is False
     assert start_parent_watch(ppid=0, exit_fn=exits.append) is False
     assert exits == []
+
+
+# ── 7) 控制台：手机列 / 原因码中文 / 手机任务审计人 ────────────────────────────
+import shutil as _sh7  # noqa: E402
+import subprocess as _sp7  # noqa: E402
+
+_CONSOLE7 = _Path(__file__).resolve().parents[1] / "domains" / "fleet_control" / "web" / "templates" / "fleet_console.html"
+_HARNESS7 = r"""
+const fs = require('fs');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const js = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const els = {}, calls = [];
+function el(id) {
+  if (!els[id]) els[id] = {id, textContent: '', innerHTML: '', value: '', className: '', style: {}, attrs: {}, handlers: {},
+    disabled: false, setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+    removeAttribute(k) { delete this.attrs[k]; }, addEventListener(ev, fn) { this.handlers[ev] = fn; },
+    scrollIntoView() {}, focus() {}, select() {}};
+  return els[id];
+}
+global.document = {getElementById: el};
+global.setInterval = () => 0; global.clearTimeout = () => {}; global.setTimeout = () => 1;
+const now = Date.now() / 1000;
+const step = JSON.parse(process.argv[3]);
+function reply(d) { return Promise.resolve({ok: true, json: () => Promise.resolve(d)}); }
+global.apiFetch = (url, opt) => {
+  calls.push([(opt && opt.method) || 'GET', url, opt && opt.body ? JSON.parse(opt.body) : null]);
+  if (url.startsWith('/api/fleet/overview')) return reply({nodes: {total: 3, online: 3}});
+  if (url.startsWith('/api/fleet/nodes?')) return reply({nodes: step.nodes});
+  if (url.startsWith('/api/fleet/tasks?')) return reply({tasks: step.tasks || []});
+  return reply({pending: [], room_keys: [], ok: true});
+};
+eval(js);
+const tick = () => new Promise((r) => setImmediate(r));
+(async () => {
+  for (let i = 0; i < 5; i++) await tick();
+  if (step.click) {
+    const btn = {getAttribute: (k) => ({'data-n': step.click, 'data-k': '__remote'})[k]};
+    el('fc-list').handlers.click({target: {closest: () => btn}});
+    for (let i = 0; i < 5; i++) await tick();
+    if (step.confirm) el('fc-dlg-ok').handlers.click(); else el('fc-dlg-cancel').handlers.click();
+    for (let i = 0; i < 5; i++) await tick();
+  }
+  console.log(JSON.stringify({list: el('fc-list').innerHTML, tasks: el('fc-tasks').innerHTML, calls,
+    dlg: el('fc-dlg-body').innerHTML, toast: el('fc-toast').textContent}));
+})();
+"""
+
+
+def _console_run(tmp_path, step):
+    node = _sh7.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    h = tmp_path / "h7.js"
+    h.write_text(_HARNESS7, encoding="utf-8")
+    out = _sp7.run([node, str(h), str(_CONSOLE7), _json5.dumps(step)], capture_output=True, text=True, timeout=60,
+                   encoding="utf-8")
+    assert out.returncode == 0, out.stderr
+    return _json5.loads(out.stdout.strip().splitlines()[-1])
+
+
+def _cnode(nid, **kw):
+    row = {"node_id": nid, "status": "active", "state": "online", "label": nid.upper(), "last_seen": 1.9e9}
+    row.update(kw)
+    return row
+
+
+def test_console_phones_column_readable_errors(tmp_path):
+    nodes = [
+        _cnode("n1", phones=[{"serial": "E6FY", "model": "23106RN0DA", "state": "device"},
+                             {"serial": "HQ79", "model": "23106RN0DA", "state": "unauthorized"}], phones_error=""),
+        _cnode("n2", phones=[], phones_error="adb_server_not_running"),
+        _cnode("n3"),
+    ]
+    tasks = [{"task_id": "t1", "node_id": "n1", "kind": "phone_tap", "status": "rejected", "detail": "remote_ops_disabled",
+              "created_by": "operator via zhituo:alice", "created_at": 1.9e9, "result": {}}]
+    res = _console_run(tmp_path, {"nodes": nodes, "tasks": tasks})
+    assert "2 台（可用 1）" in res["list"]
+    assert "adb 服务没在运行" in res["list"] and 'title="adb_server_not_running"' in res["list"]
+    assert "未上报" in res["list"]
+    assert "手机点击" in res["tasks"] and "没开远程操作" in res["tasks"] and "zhituo:alice" in res["tasks"]
