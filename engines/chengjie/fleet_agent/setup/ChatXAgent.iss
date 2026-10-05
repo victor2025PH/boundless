@@ -4,6 +4,9 @@
 ; Room key:          ChatXAgentSetup.exe /ROOMKEYFILE=C:\path\room.key
 ;                    (or drop room.key next to this exe; the key is never baked into the public build)
 ; Controller:        ChatXAgentSetup.exe /CONTROLLER=https://bd2026.cc/fleet
+; Keep old id:       ChatXAgentSetup.exe /KEEPIDENTITY=1
+;                    (0.3.5+ re-derives a machine_id cached by 0.3.4 or a cloned disk image from
+;                     this PC's hardware on reinstall; this switch keeps the old id instead)
 
 #ifndef AgentExe
   #define AgentExe "..\dist\chatx-agent.exe"
@@ -15,7 +18,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.4"
+  #define AppVersion "0.3.5"
 #endif
 
 #define AppName "智拓群控节点"
@@ -375,6 +378,8 @@ begin
               '" -Controller "' + GetController('') + '"';
     if legacy <> '' then
       params := params + ' -Snapshot "' + legacy + '"';
+    if CmdParam('/KEEPIDENTITY=') = '1' then
+      params := params + ' -KeepIdentity';
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       ResultCode := 1;
     { Any non-zero bootstrap code must fail a silent install. A suppressed message box exits 0. }

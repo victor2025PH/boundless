@@ -6,7 +6,9 @@ param(
   [string]$Controller = "https://bd2026.cc/fleet",
   [string]$InstallDir = "",
   [string]$StateDir = "",
-  [string]$Snapshot = ""
+  [string]$Snapshot = "",
+  # Keep a machine_id cached by agent 0.3.4 or older as-is (setup /KEEPIDENTITY=1).
+  [switch]$KeepIdentity
 )
 $ErrorActionPreference = 'Stop'
 # Pin PSModulePath to this Windows PowerShell 5.1's own module dirs. Started from pwsh 7
@@ -159,6 +161,22 @@ if ($lockFailed) { exit 3 }
 $target = Join-Path $InstallDir "chatx-agent.exe"
 
 $keyFile = Join-Path $StateDir "room.key"
+# 0.3.5: a machine_id cached by an older agent (or copied over with a cloned disk image)
+# has no hardware fingerprint. Re-derive it from this PC's hardware so two cloned PCs
+# stop sharing one node. An enrollment bound to the old id is dropped, and the enroll
+# below asks for approval again under the new id (it never rotates another PC's key).
+if (-not $KeepIdentity) {
+  $idRaw = NativeOut $target @('--state-dir', $StateDir, 'identity', '--reinstall')
+  if ($NativeExit -ne 0) {
+    Say "identity check failed; keeping the cached machine_id"
+  } else {
+    try {
+      $idInfo = $idRaw | ConvertFrom-Json
+      if ($idInfo.changed) { Say ("machine_id renewed (" + [string]$idInfo.reason + "): " + [string]$idInfo.short_id + "; approval is needed again") }
+      else { Say ("machine_id " + [string]$idInfo.short_id) }
+    } catch { Say "identity check output unreadable" }
+  }
+}
 $stRaw = NativeOut $target @('--state-dir', $StateDir, 'status')
 $enrollment = 'none'
 try { $enrollment = [string](($stRaw | ConvertFrom-Json).enrollment) } catch { $enrollment = 'none' }

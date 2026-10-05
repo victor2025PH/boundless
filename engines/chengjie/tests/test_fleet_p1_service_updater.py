@@ -17,6 +17,7 @@ from src.fleet import admin as admin_mod
 from src.fleet import service as svc
 from src.fleet import updater as upd
 from src.fleet.agent import AgentConfig, NodeAgent, main as agent_main
+from src.fleet.identity import node_machine_id
 from src.fleet.protocol import STATUS_DONE, STATUS_REJECTED, TASK_UPGRADE
 from src.fleet.store import resolve_download
 
@@ -312,7 +313,9 @@ def _http_factory(acks: List[Dict[str, Any]], tasks: List[Dict[str, Any]]):
 
 def test_agent_upgrade_task_acks_done_then_exits_loop(tmp_path, monkeypatch):
     cfg = AgentConfig(tmp_path)
-    cfg.data.update({"controller_url": "https://c", "node_key": "nk", "node_id": "n1"})
+    # Bound to this state dir's machine_id (0.3.5); unbound + fresh id would drop the enrollment.
+    cfg.data.update({"controller_url": "https://c", "node_key": "nk", "node_id": "n1",
+                     "machine_id": node_machine_id(tmp_path)})
     acks: List[Dict[str, Any]] = []
     data, sha = _blob(tmp_path)
     tasks = [{"task_id": "t1", "kind": TASK_UPGRADE, "payload": {"url": "https://c/dl/a.exe", "sha256": sha, "version": "9"}},

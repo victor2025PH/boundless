@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent, main as agent_main
+from src.fleet.identity import node_machine_id
 from src.fleet.local_status import (
     build_local_status, classify_ui_state, mask_secrets, probe_controller, query_task_status,
     record_heartbeat, task_label_of, task_state_running,
@@ -197,7 +198,10 @@ def test_query_timeout_is_not_reported_as_missing(tmp_path, monkeypatch):
 
 def test_heartbeat_stamp_is_timestamp_only(tmp_path):
     cfg = AgentConfig(tmp_path)
-    cfg.data.update({"controller_url": "https://ctl.test/fleet", "node_key": "nk_secret", "node_id": "n1"})
+    # Enrollment bound to this state dir's machine_id (0.3.5): an unbound node_key next to a
+    # freshly generated id is dropped as a possible clone wherever the sidecar can be written.
+    cfg.data.update({"controller_url": "https://ctl.test/fleet", "node_key": "nk_secret", "node_id": "n1",
+                     "machine_id": node_machine_id(tmp_path)})
 
     def http(method, url, body, headers, timeout):
         return 200, {"ok": True}
