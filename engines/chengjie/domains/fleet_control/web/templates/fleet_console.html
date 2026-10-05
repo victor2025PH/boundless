@@ -283,7 +283,7 @@
   function renderTasks(list){
     document.getElementById('fc-tasks').innerHTML=list.length?list.map(function(x){var n=nodes[x.node_id];
       var ph=String(x.kind||'').indexOf('phone_')===0;
-      var res=esc(ph&&x.detail?phoneErr(x.detail):(x.detail||''));if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
+      var res=esc(x.detail||'');if(ph&&x.detail)res=esc(phoneErr(x.detail));if(x.result&&Object.keys(x.result).length){res+=' <a href="#" data-t="'+esc(x.task_id)+'">查看结果</a>';}
       return '<tr><td>'+esc(fmtTs(x.created_at))+'</td><td>'+esc(n?(n.label||n.host_name||x.node_id):x.node_id)+'</td><td title="'+esc(x.created_by||'')+'">'+esc(kindName(x.kind))+(ph&&x.created_by?'<br><span style="color:var(--t3);font-size:.7rem">'+esc(x.created_by)+'</span>':'')+'</td>'+
         '<td>'+badge(TLABEL[x.status]||x.status,TSTATE[x.status]||'fc-muted')+'</td><td>'+res+'</td></tr>';
     }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3)">暂无任务</td></tr>';
