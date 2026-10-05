@@ -430,6 +430,9 @@ def register_routes(app, ctx) -> None:
         if kind not in TASK_KINDS:
             raise HTTPException(status_code=400, detail=f"kind 只能是 {'/'.join(TASK_KINDS)}")
         st = _store_or_503(config_manager)
+        refusal = st.task_refusal(node_id, kind)
+        if refusal.startswith("node_lacks_cap:"):
+            raise HTTPException(status_code=409, detail=refusal)
         rec = st.enqueue(node_id, kind,
                          payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
                          target=body.get("target") if isinstance(body.get("target"), dict) else None,

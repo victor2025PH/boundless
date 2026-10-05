@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 PROTO_VERSION = 1
 MIN_PROTO_VERSION = 1
@@ -120,6 +121,8 @@ def sanitize_heartbeat(body: Any) -> Dict[str, Any]:
 
         out["phones"] = sanitize_phones(out.get("phones"))
         out["phones_error"] = sanitize_phones_error(out.get("phones_error"))
+    if "caps" in out:
+        out["caps"] = sanitize_caps(out.get("caps"))
     return out
 
 
@@ -133,4 +136,58 @@ __all__ = [
     "DEFAULT_ENROLL_CODE_TTL_MIN", "MAX_PULL_LIMIT", "MAX_LONGPOLL_WAIT_SEC",
     "NODE_ONLINE", "NODE_OFFLINE", "NODE_REVOKED", "NODE_PENDING", "HEARTBEAT_KEYS",
     "proto_compatible", "clamp_ttl", "task_envelope", "sanitize_heartbeat",
+]
+
+
+# ── 0.3.7 节点能力（caps）+ 远程手机操作 ─────────────────────────────────────
+# 独立追加块：别的分支往上面的 TASK_KINDS / TASK_PRIORITY / __all__ 里加种类时，
+# 改动落在不同行，rebase 不会和这里冲突（这里只做「在原值上追加」）。
+CAP_PHONE_OPS_V1 = "phone_ops_v1"
+TASK_PHONE_SCREENSHOT = "phone_screenshot"
+TASK_PHONE_TAP = "phone_tap"
+TASK_PHONE_SWIPE = "phone_swipe"
+TASK_PHONE_TEXT = "phone_text"
+TASK_PHONE_KEY = "phone_key"
+PHONE_TASK_KINDS = (TASK_PHONE_SCREENSHOT, TASK_PHONE_TAP, TASK_PHONE_SWIPE, TASK_PHONE_TEXT, TASK_PHONE_KEY)
+PHONE_TASK_TTL_SEC = 60          # 过期的点击比不点更危险：一分钟没被领走就作废
+
+TASK_KINDS = TASK_KINDS + tuple(k for k in PHONE_TASK_KINDS if k not in TASK_KINDS)
+TASK_PRIORITY.update({k: 6 for k in PHONE_TASK_KINDS})
+# 种类 → 节点心跳 caps 里必须有的能力；不在表里的种类不看能力（老种类照旧）
+TASK_REQUIRED_CAPS: Dict[str, str] = {k: CAP_PHONE_OPS_V1 for k in PHONE_TASK_KINDS}
+HEARTBEAT_KEYS = HEARTBEAT_KEYS + ("caps",)
+MAX_CAPS = 16
+_CAP_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
+def sanitize_caps(value: Any) -> List[str]:
+    """心跳 caps：小写标识符列表，去重，最多 MAX_CAPS 个；其他形状 → []。"""
+    out: List[str] = []
+    if not isinstance(value, (list, tuple)):
+        return out
+    for item in value:
+        s = str(item or "").strip().lower() if isinstance(item, str) else ""
+        if s and _CAP_RE.match(s) and s not in out:
+            out.append(s)
+        if len(out) >= MAX_CAPS:
+            break
+    return out
+
+
+def required_cap(kind: Any) -> str:
+    return TASK_REQUIRED_CAPS.get(str(kind or ""), "")
+
+
+def missing_cap(kind: Any, caps: Any) -> str:
+    """该种类要求、而节点 caps 里没有的能力名；不缺 → ""。"""
+    need = required_cap(kind)
+    if need and need not in sanitize_caps(caps):
+        return need
+    return ""
+
+
+__all__ += [
+    "CAP_PHONE_OPS_V1", "TASK_PHONE_SCREENSHOT", "TASK_PHONE_TAP", "TASK_PHONE_SWIPE", "TASK_PHONE_TEXT",
+    "TASK_PHONE_KEY", "PHONE_TASK_KINDS", "PHONE_TASK_TTL_SEC", "TASK_REQUIRED_CAPS", "MAX_CAPS",
+    "sanitize_caps", "required_cap", "missing_cap",
 ]

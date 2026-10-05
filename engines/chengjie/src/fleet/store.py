@@ -26,8 +26,8 @@ from .detect import sanitize_instances
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
-    STATUS_PULLED, STATUS_QUEUED, TASK_KINDS, TASK_PRIORITY, TASK_STOP_ACCOUNT, clamp_ttl,
-    proto_compatible, sanitize_heartbeat, task_envelope,
+    STATUS_PULLED, STATUS_QUEUED, STATUS_REJECTED, TASK_KINDS, TASK_PRIORITY, TASK_STOP_ACCOUNT, clamp_ttl,
+    missing_cap, proto_compatible, sanitize_caps, sanitize_heartbeat, task_envelope,
 )
 
 logger = logging.getLogger(__name__)
@@ -895,6 +895,24 @@ class FleetStore:
         return [{"ts": r["ts"], **_loads(r["summary_json"])} for r in rows]
 
     # ── 任务 ──────────────────────────────────────────────────────────────
+    def task_refusal(self, node_id: str, kind: str) -> str:
+        """入队前的拒绝原因（"" = 可以排）：bad_kind / node_not_found / node_revoked /
+        node_lacks_cap:<cap>（节点最近心跳没声明该种类需要的能力，比如 0.3.6 节点收不了 phone_*）。"""
+        kind = str(kind or "").strip().lower()
+        if kind not in TASK_KINDS:
+            return "bad_kind"
+        with self._lock:
+            row = self._conn.execute("SELECT status, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
+                                     (str(node_id),)).fetchone()
+        if row is None:
+            return "node_not_found"
+        if row["status"] != NODE_ACTIVE:
+            return "node_revoked"
+        cap = missing_cap(kind, _loads(row["last_heartbeat_json"]).get("caps"))
+        if cap:
+            return f"node_lacks_cap:{cap}"
+        return ""
+
     def enqueue(self, node_id: str, kind: str, *, payload: Optional[Dict[str, Any]] = None,
                 target: Optional[Dict[str, Any]] = None, ttl_sec: Any = DEFAULT_TASK_TTL_SEC,
                 created_by: str = "", now: Optional[float] = None) -> Optional[Dict[str, Any]]:
@@ -905,8 +923,11 @@ class FleetStore:
         ts = float(now if now is not None else time.time())
         ttl = clamp_ttl(ttl_sec)
         with self._lock:
-            node = self._conn.execute("SELECT status FROM nodes WHERE node_id=?", (str(node_id),)).fetchone()
+            node = self._conn.execute("SELECT status, last_heartbeat_json FROM nodes WHERE node_id=?",
+                                      (str(node_id),)).fetchone()
             if node is None or node["status"] != NODE_ACTIVE:
+                return None
+            if missing_cap(kind, _loads(node["last_heartbeat_json"]).get("caps")):
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
@@ -948,6 +969,18 @@ class FleetStore:
             ).fetchall()
             if legacy:
                 rows = [r for r in rows if r["kind"] in LEGACY_ALLOWED_KINDS][:limit]
+            # 排队后节点降级 / 关掉能力：要能力的任务不下发，直接 rejected（控制台立刻看到原因）
+            node = self._conn.execute("SELECT last_heartbeat_json FROM nodes WHERE node_id=?", (str(node_id),)).fetchone()
+            caps = _loads(node["last_heartbeat_json"]).get("caps") if node is not None else []
+            keep = []
+            for r in rows:
+                cap = missing_cap(r["kind"], caps)
+                if cap:
+                    self._conn.execute("UPDATE node_tasks SET status=?, detail=?, acked_at=? WHERE task_id=?",
+                                       (STATUS_REJECTED, f"node_lacks_cap:{cap}", ts, r["task_id"]))
+                else:
+                    keep.append(r)
+            rows = keep
             ids = [r["task_id"] for r in rows]
             if ids:
                 self._conn.executemany("UPDATE node_tasks SET status=?, pulled_at=? WHERE task_id=?",
@@ -1104,6 +1137,8 @@ class FleetStore:
             # 0.3.6 只读手机清点；老节点心跳没有这两个键 → 空列表 / 空串
             "phones": hb.get("phones") if isinstance(hb.get("phones"), list) else [],
             "phones_error": hb.get("phones_error") if isinstance(hb.get("phones_error"), str) else "",
+            # 0.3.7 能力声明（老节点没有 → []）
+            "caps": sanitize_caps(hb.get("caps")),
         }
 
     @staticmethod
