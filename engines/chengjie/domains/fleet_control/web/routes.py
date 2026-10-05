@@ -48,6 +48,10 @@ from src.fleet.protocol import (
     ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, STATUS_PULLED,
     STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS,
 )
+from src.fleet.phone_rules import (
+    PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
+)
+from src.fleet.protocol import PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC
 from src.fleet.roompack import build_room_pack
 from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
 
@@ -174,6 +178,18 @@ def _actor(request: Request) -> str:
     except Exception:
         pass
     return "operator"
+
+
+def phone_op_block_reason(node: Dict[str, Any], serial: str) -> str:
+    """节点侧前提（主控按最近心跳判断）："" = 可以排。手机必须在该节点心跳里、state=device。"""
+    if node.get("state") != "online":
+        return "node_offline"
+    phone = next((p for p in node.get("phones") or [] if isinstance(p, dict) and p.get("serial") == serial), None)
+    if phone is None:
+        return "phone_not_reported"
+    if phone.get("state") != "device":
+        return f"phone_not_ready:{phone.get('state') or 'unknown'}"
+    return ""
 
 
 def register_routes(app, ctx) -> None:
@@ -306,6 +322,8 @@ def register_routes(app, ctx) -> None:
             if known is not None and known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
                 # the console renders qr_data_url as <img src>: keep base64 raster data URLs only
                 result = sanitize_login_result(result)
+            elif known is not None and known.get("kind") in PHONE_TASK_KINDS:
+                result = sanitize_phone_result(known["kind"], result)
         rec = st.ack(tid, node_id=node["node_id"], status=status, result=result,
                      detail=str(body.get("detail") or ""))
         # 未知 / 不属于本节点的 task_id 也 200（fail-soft，Agent 不必重试）
@@ -433,6 +451,9 @@ def register_routes(app, ctx) -> None:
         refusal = st.task_refusal(node_id, kind)
         if refusal.startswith("node_lacks_cap:"):
             raise HTTPException(status_code=409, detail=refusal)
+        if kind in PHONE_TASK_KINDS:
+            # 手机操作只走 /api/fleet/nodes/{id}/phones/{serial}/{op}：那里校验参数、目标和受保护手机
+            raise HTTPException(status_code=400, detail="phone_ops_use_phones_endpoint")
         rec = st.enqueue(node_id, kind,
                          payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
                          target=body.get("target") if isinstance(body.get("target"), dict) else None,
@@ -447,8 +468,35 @@ def register_routes(app, ctx) -> None:
         st = _store_or_503(config_manager)
         tasks = st.list_tasks(node_id=node_id, status=status, kind=kind, limit=limit)
         for rec in tasks:
-            rec["result"] = strip_qr(rec.get("result") or {})
+            rec["result"] = strip_png(strip_qr(rec.get("result") or {}))
         return {"ok": True, "tasks": tasks}
+
+    # ── 远程手机操作（0.3.7）：截图 / 点击 / 滑动 / 输入 / HOME·BACK ─────────
+    @app.post("/api/fleet/nodes/{node_id}/phones/{serial}/{op}")
+    async def api_fleet_phone_op(node_id: str, serial: str, op: str, request: Request,
+                                 _=Depends(_api_write("fleet_control"))):
+        kind = kind_for_op(op)
+        if not kind:
+            raise HTTPException(status_code=400, detail="bad_op")
+        body = await _json(request)
+        try:
+            target_serial = check_target(serial)
+            payload = validate_payload(kind, body)
+        except PhoneOpError as e:
+            raise HTTPException(status_code=403 if e.code == "protected_phone" else 400, detail=e.code)
+        st = _store_or_503(config_manager)
+        refusal = st.task_refusal(node_id, kind)
+        if refusal:
+            raise HTTPException(status_code=404 if refusal == "node_not_found" else 409, detail=refusal)
+        node = st.get_node(node_id) or {}
+        reason = phone_op_block_reason(node, target_serial)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
+        rec = st.enqueue(node_id, kind, payload=payload, target={"serial": target_serial},
+                         ttl_sec=PHONE_TASK_TTL_SEC, created_by=_actor(request))
+        if rec is None:
+            raise HTTPException(status_code=409, detail="enqueue_refused")
+        return {"ok": True, "task": rec}
 
     # ── 集中扫码（docs/FLEET_CONSOLE_QR_LOGIN.md）──────────────────────────
     def _login_target(body: Dict[str, Any]) -> Dict[str, Any]:

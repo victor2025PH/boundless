@@ -59,6 +59,7 @@ from .identity import (
 )
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
+from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import acquire_single_instance, install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -476,6 +477,9 @@ class NodeAgent:
             enabled=cfg.data.get("phones_enabled", True) is not False,
             clock=clock,
         )
+        # 0.3.7 远程手机操作：主控只给心跳里声明了 phone_ops_v1 的节点排 phone_* 任务；
+        # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
+        self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data))
 
     # ── 主控调用 ──
     def _ctrl(self, method: str, path: str, body: Optional[Dict[str, Any]] = None, *, auth: bool = True,
@@ -826,6 +830,7 @@ class NodeAgent:
             "errors": errors[:10],
             "phones": phones,
             "phones_error": phones_error,
+            "caps": self.phone_ops.caps(),
         }
 
     def heartbeat(self) -> Dict[str, Any]:
@@ -898,6 +903,8 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
+            if kind in PHONE_TASK_KINDS:
+                return self.phone_ops.execute(kind, payload, target)
             if kind == TASK_PING:
                 return STATUS_DONE, {"pong": True, "agent_version": AGENT_VERSION, "app_version": self.app_version,
                                      "machine_id": self.machine_id, "host_name": host_name(),
@@ -1097,6 +1104,15 @@ class NodeAgent:
                 logger.warning("[agent] loop error: %s (retry in %.0fs)", e, backoff)
                 sleep(backoff)
                 backoff = min(BACKOFF_MAX, backoff * 2)
+
+
+def _phone_ops_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "adb_path": str(data.get("adb_path") or ""),
+        "exclude": data.get("phones_exclude") or [],
+        "enabled": data.get("phone_ops_enabled", True) is not False,
+        "allow_tcp": data.get("phone_ops_allow_tcp") is True,
+    }
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────

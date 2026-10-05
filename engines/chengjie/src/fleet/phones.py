@@ -47,6 +47,8 @@ DEFAULT_PHONES_EXCLUDE: Tuple[str, ...] = ()
 # Live-stream phone on 176 (OnePlus 13 / CPH2653). Never reported, not even when
 # the configured exclude list is empty or replaced.
 PROTECTED_SERIALS: Tuple[str, ...] = ("3B1F4KE5MS140P4X",)
+# The same phone over wireless adb on 176 (192.168.0.148:5555): that host on any port.
+PROTECTED_ADDRESSES: Tuple[str, ...] = ("192.168.0.148",)
 _WINDOWS_ADB_CANDIDATES = (r"C:\platform-tools\adb.exe",)
 
 PHONE_FIELDS = ("serial", "state", "model", "transport")
@@ -130,12 +132,22 @@ def normalize_excludes(entries: Any) -> Tuple[str, ...]:
     return tuple(out)
 
 
+def is_protected(serial: str) -> bool:
+    """Hard-coded live-stream phone: its serial anywhere in the name (mDNS too), or its LAN address on any port."""
+    s = str(serial or "").strip().upper()
+    if not s:
+        return False
+    if any(p.upper() in s for p in PROTECTED_SERIALS):
+        return True
+    host = s.rsplit(":", 1)[0] if ":" in s else s
+    return host.strip("[]") in PROTECTED_ADDRESSES
+
+
 def is_excluded(serial: str, excludes: Iterable[str], model: str = "") -> bool:
     s = str(serial or "").upper()
     m = str(model or "").strip().upper()
-    for p in PROTECTED_SERIALS:
-        if p.upper() in s:
-            return True
+    if is_protected(s):
+        return True
     for e in excludes:
         if e.startswith("MODEL:"):
             if m and m == e[6:].strip():
@@ -315,7 +327,7 @@ def sanitize_phones_error(value: Any) -> str:
 
 __all__ = [
     "ADB_TIMEOUT_SEC", "PHONES_CACHE_SEC", "MAX_PHONES", "PHONE_FIELDS", "PROTECTED_SERIALS",
-    "DEFAULT_PHONES_EXCLUDE", "PhoneCollector", "parse_adb_devices", "parse_client_version",
-    "normalize_excludes", "is_excluded", "adb_server_version", "adb_server_port", "find_adb",
+    "PROTECTED_ADDRESSES", "DEFAULT_PHONES_EXCLUDE", "PhoneCollector", "parse_adb_devices", "parse_client_version",
+    "normalize_excludes", "is_excluded", "is_protected", "adb_server_version", "adb_server_port", "find_adb",
     "sanitize_phones", "sanitize_phones_error",
 ]
