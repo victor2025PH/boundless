@@ -18,7 +18,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.6"
+  #define AppVersion "0.3.7"
 #endif
 
 #define AppName "智拓群控节点"
@@ -53,7 +53,7 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
 FinishedHeadingLabel=安装完成
-FinishedLabel=接下来三步：1. 把配对码发给管理员，智拓群控控制台里能看到同一个码  2. 管理员批准后，点「打开智拓群控节点」并刷新本页  3. 状态变为在线后，可从本页打开智拓群控控制台
+FinishedLabel=请到智拓待批准电脑页批准。把配对码发给管理员，智拓群控控制台里能看到同一个码。开机后计划任务会自动连接主控。
 
 [Tasks]
 Name: "desktopicon"; Description: "在桌面创建「智拓群控节点」快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce
@@ -310,20 +310,52 @@ begin
     FailInstall('state directory ACL is not limited to SYSTEM and Administrators');
 end;
 
-procedure ApplyFinishedCopy(const PairText: String);
+function FinishField(const FileName, Key: String): String;
+var
+  Lines: TArrayOfString;
+  i: Integer;
+  line, prefix: String;
+begin
+  Result := '';
+  prefix := Key + '=';
+  if not LoadStringsFromFile(FileName, Lines) then
+    Exit;
+  for i := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    line := Trim(Lines[i]);
+    if (Length(line) >= Length(prefix)) and (Copy(line, 1, Length(prefix)) = prefix) then
+    begin
+      Result := Trim(Copy(line, Length(prefix) + 1, 200));
+      Exit;
+    end;
+  end;
+end;
+
+procedure ApplyFinishedCopy(const PairText, HostName, ShortId, AdbFlag: String);
+var
+  body, host, short: String;
 begin
   WizardForm.FinishedHeadingLabel.Caption := '安装完成';
-  if PairText <> '' then
-    WizardForm.FinishedLabel.Caption :=
-      '配对码 ' + PairText + '。' + #13#10 +
-      '1. 把配对码发给管理员，智拓群控控制台里能看到同一个码' + #13#10 +
-      '2. 管理员批准后，点「打开智拓群控节点」并刷新本页' + #13#10 +
-      '3. 状态变为在线后，可从本页打开智拓群控控制台'
+  host := Trim(HostName);
+  if host = '' then
+    host := GetComputerNameString;
+  short := Trim(ShortId);
+  body := '计算机名：' + host + #13#10;
+  if short <> '' then
+    body := body + '短机器码：' + short + #13#10
   else
-    WizardForm.FinishedLabel.Caption :=
-      '1. 开机后计划任务会自动连接主控' + #13#10 +
-      '2. 点「打开智拓群控节点」查看在线、离线或待批准' + #13#10 +
-      '3. 要批准或查看其它电脑时，再打开智拓群控控制台';
+    body := body + '短机器码：未能读取' + #13#10;
+  if PairText <> '' then
+    body := body + '配对码：' + PairText + #13#10
+  else
+    body := body + '配对码：暂无' + #13#10;
+  body := body + '请到智拓待批准电脑页批准。' + #13#10 +
+    '把配对码发给管理员，智拓群控控制台里能看到同一个码';
+  if PairText = '' then
+    body := body + #13#10 + '开机后计划任务会自动连接主控';
+  if AdbFlag = '0' then
+    body := body + #13#10 + '如需接手机，请安装 adb';
+  WizardForm.FinishedLabel.Caption := body;
 end;
 
 procedure OpenLocalPanel();
@@ -413,7 +445,10 @@ begin
   { LoadStringFromFile's second parameter is AnsiString on Inno Setup 6.3. Pairing codes are ASCII. }
   if LoadStringFromFile(dir + '\pairing.txt', pair) then
     pairText := Trim(String(pair));
-  ApplyFinishedCopy(pairText);
+  ApplyFinishedCopy(pairText,
+    FinishField(dir + '\install-finish.txt', 'host'),
+    FinishField(dir + '\install-finish.txt', 'short'),
+    FinishField(dir + '\install-finish.txt', 'adb'));
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -453,7 +488,8 @@ begin
     ConsoleButton.Top := WizardForm.NextButton.Top;
     WizardForm.FinishedLabel.WordWrap := True;
     WizardForm.FinishedLabel.AutoSize := False;
-    WizardForm.FinishedLabel.Height := ScaleY(160);
+    WizardForm.FinishedLabel.Width := WizardForm.ClientWidth - ScaleX(48);
+    WizardForm.FinishedLabel.Height := ScaleY(260);
   end;
 end;
 

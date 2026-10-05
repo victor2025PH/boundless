@@ -26,14 +26,16 @@ from .detect import sanitize_instances
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
-    STATUS_PULLED, STATUS_QUEUED, TASK_KINDS, TASK_PRIORITY, TASK_STOP_ACCOUNT, clamp_ttl,
-    proto_compatible, sanitize_heartbeat, task_envelope,
+    PHONE_TASK_KINDS, PRUNED_RESULT, SCREENSHOT_RESULT_KEEP_SEC, STATUS_PULLED, STATUS_QUEUED, STATUS_REJECTED, TASK_KINDS,
+    TASK_PHONE_SCREENSHOT, TASK_PRIORITY, TASK_RESULT_KEEP_SEC, TASK_STOP_ACCOUNT, bound_result, clamp_ttl,
+    missing_cap, proto_compatible, sanitize_caps, sanitize_heartbeat, task_envelope,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_NAME = "fleet_control.db"
 HEARTBEAT_KEEP = 200
+PRUNE_EVERY_SEC = 600      # ack 时顺手清结果，最多每 10 分钟一次
 NODE_ACTIVE = "active"
 # 一次性注册码：Crockford base32，至少 12 字符（约 60 bit），默认 15 分钟。
 # 已经发出的 8 位数字码在到期前仍可兑（本变更未上生产，库里若没有就没有在途码）。
@@ -275,6 +277,8 @@ class FleetStore:
         self.room_fail_window_sec = ROOM_FAIL_WINDOW_SEC
         self.pending_ttl_sec = PENDING_TTL_SEC
         self.claim_window_sec = CLAIM_WINDOW_SEC
+        self.prune_every_sec = PRUNE_EVERY_SEC
+        self._last_prune = 0.0
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -895,6 +899,44 @@ class FleetStore:
         return [{"ts": r["ts"], **_loads(r["summary_json"])} for r in rows]
 
     # ── 任务 ──────────────────────────────────────────────────────────────
+    def task_refusal(self, node_id: str, kind: str) -> str:
+        """入队前的拒绝原因（"" = 可以排）：bad_kind / node_not_found / node_revoked /
+        node_lacks_cap:<cap>（节点最近心跳没声明该种类需要的能力，比如 0.3.6 节点收不了 phone_*）。"""
+        kind = str(kind or "").strip().lower()
+        if kind not in TASK_KINDS:
+            return "bad_kind"
+        with self._lock:
+            row = self._conn.execute("SELECT status, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
+                                     (str(node_id),)).fetchone()
+        if row is None:
+            return "node_not_found"
+        if row["status"] != NODE_ACTIVE:
+            return "node_revoked"
+        cap = missing_cap(kind, _loads(row["last_heartbeat_json"]).get("caps"))
+        if cap:
+            return f"node_lacks_cap:{cap}"
+        if kind in PHONE_TASK_KINDS and not _loads(row["meta_json"]).get("remote_ops_enabled"):
+            return "remote_ops_disabled"
+        return ""
+
+    def set_remote_ops(self, node_id: str, enabled: bool) -> bool:
+        """节点「允许远程操作手机」开关（缺省关）。关掉时作废该节点还没领走的 phone_* 任务。"""
+        with self._lock:
+            row = self._conn.execute("SELECT meta_json FROM nodes WHERE node_id=?", (str(node_id),)).fetchone()
+            if row is None:
+                return False
+            meta = _loads(row["meta_json"])
+            meta["remote_ops_enabled"] = bool(enabled)
+            self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), str(node_id)))
+            if not enabled:
+                marks = ",".join("?" * len(PHONE_TASK_KINDS))
+                self._conn.execute(
+                    f"UPDATE node_tasks SET status=?, detail='remote_ops_disabled', acked_at=? "
+                    f"WHERE node_id=? AND status=? AND kind IN ({marks})",
+                    (STATUS_CANCELLED, time.time(), str(node_id), STATUS_QUEUED, *PHONE_TASK_KINDS))
+            self._conn.commit()
+        return True
+
     def enqueue(self, node_id: str, kind: str, *, payload: Optional[Dict[str, Any]] = None,
                 target: Optional[Dict[str, Any]] = None, ttl_sec: Any = DEFAULT_TASK_TTL_SEC,
                 created_by: str = "", now: Optional[float] = None) -> Optional[Dict[str, Any]]:
@@ -905,8 +947,13 @@ class FleetStore:
         ts = float(now if now is not None else time.time())
         ttl = clamp_ttl(ttl_sec)
         with self._lock:
-            node = self._conn.execute("SELECT status FROM nodes WHERE node_id=?", (str(node_id),)).fetchone()
+            node = self._conn.execute("SELECT status, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
+                                      (str(node_id),)).fetchone()
             if node is None or node["status"] != NODE_ACTIVE:
+                return None
+            if missing_cap(kind, _loads(node["last_heartbeat_json"]).get("caps")):
+                return None
+            if kind in PHONE_TASK_KINDS and not _loads(node["meta_json"]).get("remote_ops_enabled"):
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
@@ -948,6 +995,22 @@ class FleetStore:
             ).fetchall()
             if legacy:
                 rows = [r for r in rows if r["kind"] in LEGACY_ALLOWED_KINDS][:limit]
+            # 排队后节点降级 / 关掉能力：要能力的任务不下发，直接 rejected（控制台立刻看到原因）
+            node = self._conn.execute("SELECT last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
+                                      (str(node_id),)).fetchone()
+            caps = _loads(node["last_heartbeat_json"]).get("caps") if node is not None else []
+            ops_on = bool(_loads(node["meta_json"]).get("remote_ops_enabled")) if node is not None else False
+            keep = []
+            for r in rows:
+                cap = missing_cap(r["kind"], caps)
+                why = f"node_lacks_cap:{cap}" if cap else ("remote_ops_disabled" if r["kind"] in PHONE_TASK_KINDS
+                                                            and not ops_on else "")
+                if why:
+                    self._conn.execute("UPDATE node_tasks SET status=?, detail=?, acked_at=? WHERE task_id=?",
+                                       (STATUS_REJECTED, why, ts, r["task_id"]))
+                else:
+                    keep.append(r)
+            rows = keep
             ids = [r["task_id"] for r in rows]
             if ids:
                 self._conn.executemany("UPDATE node_tasks SET status=?, pulled_at=? WHERE task_id=?",
@@ -976,11 +1039,28 @@ class FleetStore:
             if row["status"] not in FINAL_STATUSES:
                 self._conn.execute(
                     "UPDATE node_tasks SET status=?, detail=?, result_json=?, acked_at=? WHERE task_id=?",
-                    (status, str(detail or "")[:500], _dumps(result), ts, tid),
+                    (status, str(detail or "")[:500], _dumps(bound_result(row["kind"], result)), ts, tid),
                 )
                 self._conn.commit()
                 row = self._conn.execute("SELECT * FROM node_tasks WHERE task_id=?", (tid,)).fetchone()
+            if ts - self._last_prune >= self.prune_every_sec:
+                self.prune_results(now=ts)
         return self._task_record(row)
+
+    def prune_results(self, *, now: Optional[float] = None) -> int:
+        """清空旧结果（行保留做审计）：截图 SCREENSHOT_RESULT_KEEP_SEC，其余 TASK_RESULT_KEEP_SEC。返回清了几条。"""
+        ts = float(now if now is not None else time.time())
+        pruned = _dumps(PRUNED_RESULT)
+        with self._lock:
+            self._last_prune = ts
+            a = self._conn.execute(
+                "UPDATE node_tasks SET result_json=? WHERE kind=? AND acked_at IS NOT NULL AND acked_at<? "
+                "AND result_json NOT IN ('{}', ?)", (pruned, TASK_PHONE_SCREENSHOT, ts - SCREENSHOT_RESULT_KEEP_SEC, pruned))
+            b = self._conn.execute(
+                "UPDATE node_tasks SET result_json=? WHERE acked_at IS NOT NULL AND acked_at<? "
+                "AND result_json NOT IN ('{}', ?)", (pruned, ts - TASK_RESULT_KEEP_SEC, pruned))
+            self._conn.commit()
+        return int(a.rowcount or 0) + int(b.rowcount or 0)
 
     def cancel(self, task_id: str, *, now: Optional[float] = None) -> bool:
         ts = float(now if now is not None else time.time())
@@ -1104,6 +1184,9 @@ class FleetStore:
             # 0.3.6 只读手机清点；老节点心跳没有这两个键 → 空列表 / 空串
             "phones": hb.get("phones") if isinstance(hb.get("phones"), list) else [],
             "phones_error": hb.get("phones_error") if isinstance(hb.get("phones_error"), str) else "",
+            # 0.3.7 能力声明（老节点没有 → []）
+            "caps": sanitize_caps(hb.get("caps")),
+            "remote_ops_enabled": bool(_loads(row["meta_json"]).get("remote_ops_enabled")),
         }
 
     @staticmethod

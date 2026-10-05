@@ -31,6 +31,32 @@ function NativeOut([string]$exe, [string[]]$a) {
   try { $o = & $exe @a 2>$null | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
+function Test-PlatformToolsAdb {
+  # Presence only. Do not download, install, or start adb.
+  $paths = @('C:\platform-tools\adb.exe')
+  if ($env:ANDROID_SDK_ROOT) { $paths += (Join-Path $env:ANDROID_SDK_ROOT 'platform-tools\adb.exe') }
+  if ($env:ANDROID_HOME) { $paths += (Join-Path $env:ANDROID_HOME 'platform-tools\adb.exe') }
+  if ($env:LOCALAPPDATA) { $paths += (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe') }
+  foreach ($p in $paths) {
+    if ($p -and (Test-Path -LiteralPath $p)) { return $true }
+  }
+  $cmd = Get-Command adb.exe -ErrorAction SilentlyContinue
+  if (-not $cmd) { $cmd = Get-Command adb -ErrorAction SilentlyContinue }
+  if ($cmd -and ([string]$cmd.Source) -like '*\platform-tools\adb.exe') { return $true }
+  return $false
+}
+function Write-InstallFinish([string]$Dir, [string]$HostName, [string]$Short, [bool]$AdbOk) {
+  # ASCII note for the setup finish page. No secrets.
+  $safeHost = ([string]$HostName) -replace '[^\x20-\x7E]', ''
+  if (-not $safeHost) { $safeHost = ([string]$env:COMPUTERNAME) -replace '[^\x20-\x7E]', '' }
+  $safeShort = ([string]$Short) -replace '[^A-Za-z0-9\-]', ''
+  if ($safeShort.Length -gt 16) { $safeShort = $safeShort.Substring(0, 16) }
+  $adbFlag = '0'
+  if ($AdbOk) { $adbFlag = '1' }
+  $path = Join-Path $Dir 'install-finish.txt'
+  $body = "host=$safeHost`r`nshort=$safeShort`r`nadb=$adbFlag`r`n"
+  [System.IO.File]::WriteAllText($path, $body)
+}
 function Stop-StrayAgent([string]$exe) {
   # Any "run" process of this exe started outside the scheduled task (issue g3).
   try {
@@ -165,6 +191,8 @@ $keyFile = Join-Path $StateDir "room.key"
 # has no hardware fingerprint. Re-derive it from this PC's hardware so two cloned PCs
 # stop sharing one node. An enrollment bound to the old id is dropped, and the enroll
 # below asks for approval again under the new id (it never rotates another PC's key).
+$finishHost = ''
+$finishShort = ''
 if (-not $KeepIdentity) {
   $idRaw = NativeOut $target @('--state-dir', $StateDir, 'identity', '--reinstall')
   if ($NativeExit -ne 0) {
@@ -174,12 +202,19 @@ if (-not $KeepIdentity) {
       $idInfo = $idRaw | ConvertFrom-Json
       if ($idInfo.changed) { Say ("machine_id renewed (" + [string]$idInfo.reason + "): " + [string]$idInfo.short_id + "; approval is needed again") }
       else { Say ("machine_id " + [string]$idInfo.short_id) }
+      if ($idInfo.short_id) { $finishShort = [string]$idInfo.short_id }
+      if ($idInfo.host_name) { $finishHost = [string]$idInfo.host_name }
     } catch { Say "identity check output unreadable" }
   }
 }
 $stRaw = NativeOut $target @('--state-dir', $StateDir, 'status')
 $enrollment = 'none'
-try { $enrollment = [string](($stRaw | ConvertFrom-Json).enrollment) } catch { $enrollment = 'none' }
+try {
+  $stObj = $stRaw | ConvertFrom-Json
+  $enrollment = [string]$stObj.enrollment
+  if ($stObj.host_name) { $finishHost = [string]$stObj.host_name }
+  if ($stObj.machine_id_short) { $finishShort = [string]$stObj.machine_id_short }
+} catch { $enrollment = 'none' }
 
 if ($enrollment -eq 'enrolled') {
   Say "already enrolled"
@@ -203,4 +238,8 @@ Stop-StrayAgent $target
 $svc = Native $target @('--state-dir', $StateDir, 'install-service')
 if ($NativeExit -ne 0) { Say "install-service failed"; exit 1 }
 Say "service installed (scheduled task ChatX Fleet Agent)"
+try {
+  if (-not $finishHost) { $finishHost = [string]$env:COMPUTERNAME }
+  Write-InstallFinish $StateDir $finishHost $finishShort (Test-PlatformToolsAdb)
+} catch { Say "could not write the finish note" }
 exit 0

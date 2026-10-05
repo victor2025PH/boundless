@@ -51,6 +51,14 @@ def test_generated_page_has_version_size_sha_and_one_primary_button():
     assert "「更多信息」" in page and "「仍要运行」" in page
     assert UNIFIED in page and "配对码" in page and "Install.cmd" in page
     assert "按提示填入" not in page and "以管理员身份运行" not in page
+    assert "智拓群控节点" in page
+    assert "让电脑接入智拓群控，可远程查看在线状态、升级、清点手机。" in page
+    assert "待批准电脑" in page and "用管理员权限运行" in page
+    assert "上报手机清单。" in page and "解决克隆电脑机器码重复。" in page and "0.3.4" in page
+    assert 'class="copy"' in page and "复制 SHA-256" in page and "更多信息 → 仍要运行" in page
+    assert "max-width: 420px" in page and "min-width: 1366px" in page
+    assert "cdn." not in page.lower() and "fonts.googleapis" not in page
+    assert page.count("<h2>能做什么</h2>") == 1 and page.count("<ul class=\"feats\">") == 1
 
 
 def test_generated_page_without_agent_and_bad_input():

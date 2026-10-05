@@ -439,6 +439,12 @@ def test_installer_shortcuts_and_finish_page():
     assert "打开智拓群控节点" in iss and "打开智拓群控控制台" in iss
     assert "把配对码发给管理员，智拓群控控制台里能看到同一个码" in iss
     assert "开机后计划任务会自动连接主控" in iss
+    assert "计算机名" in iss and "短机器码" in iss and "请到智拓待批准电脑页批准" in iss
+    assert "如需接手机，请安装 adb" in iss and "install-finish.txt" in iss
+    boot = (SETUP / "bootstrap.ps1").read_text(encoding="utf-8")
+    assert "Test-PlatformToolsAdb" in boot and "install-finish.txt" in boot
+    assert "Invoke-WebRequest" not in boot and "Start-BitsTransfer" not in boot
+    assert "kill-server" not in boot and "tcpip" not in boot and "9000" not in boot
     assert "47321" in iss and str(PANEL_PORT) == "47321"
     icons = iss.split("[Icons]")[1].split("[Code]")[0]
     assert "Open-Status.cmd" not in icons

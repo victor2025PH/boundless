@@ -59,7 +59,10 @@ from .identity import (
 )
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
-from .service import acquire_single_instance, install_service, service_status, supervise, uninstall_service
+from .phone_ops import PHONE_TASK_KINDS, PhoneOps
+from .service import (
+    acquire_single_instance, install_service, service_status, start_parent_watch, supervise, uninstall_service,
+)
 from .updater import apply_upgrade
 from .protocol import (
     DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
@@ -69,7 +72,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.6"
+AGENT_VERSION = "0.3.7"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -228,6 +231,10 @@ def migrate_legacy_agent(state_dir: Path, controller_url: str, source: Dict[str,
 class AgentConfig:
     """<state_dir>/agent.json。instances: [{name, base_url, auth_token, config_path, domain, restart_cmd}]"""
 
+    # 只由人手改的键（agent 自己从不写）：save() 以磁盘上的为准，运行中的 agent 不会用内存旧值
+    # 盖掉手工改动；NodeAgent 每次心跳前按 mtime 热加载（2026-10-06 176 改 phones_exclude 需重启的教训）。
+    OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp")
+
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
         self.path = self.state_dir / CONFIG_NAME
@@ -281,8 +288,39 @@ class AgentConfig:
         """True while an unlocked agent.json is held in memory and not yet rewritten."""
         return self._legacy_source is not None
 
+    def _read_trusted_disk(self) -> Optional[Dict[str, Any]]:
+        """Same trust rule as load(): only a locked state dir, no reparse points."""
+        try:
+            if (not self.path.is_file() or _is_reparse(self.state_dir) or _is_reparse(self.path)
+                    or not state_dir_is_locked(self.state_dir)):
+                return None
+            d = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        except Exception as e:  # noqa: BLE001 - unreadable edit: keep the in-memory config
+            logger.debug("[agent] agent.json not re-read: %s", e)
+            return None
+        return d if isinstance(d, dict) else None
+
+    def refresh_operator_keys(self) -> bool:
+        """把磁盘上的 OPERATOR_KEYS 抄进内存（磁盘上删掉的键内存里也删）。有变化 → True。"""
+        if self._legacy_source is not None:
+            return False
+        disk = self._read_trusted_disk()
+        if disk is None:
+            return False
+        changed = False
+        for k in self.OPERATOR_KEYS:
+            if k in disk:
+                if k not in self.data or self.data[k] != disk[k]:
+                    self.data[k] = disk[k]
+                    changed = True
+            elif k in self.data:
+                del self.data[k]
+                changed = True
+        return changed
+
     def save(self) -> None:
         if self._legacy_source is None:
+            self.refresh_operator_keys()
             self._write_locked()
             return
         try:
@@ -470,12 +508,26 @@ class NodeAgent:
         self.last_error = ""
         self.stats = {"heartbeats": 0, "tasks_done": 0, "tasks_failed": 0, "tasks_rejected": 0, "errors": 0}
         # 0.3.6 只读手机清点：只跑 adb devices -l；agent.json 可配 phones_exclude / adb_path / phones_enabled
-        self.phones = PhoneCollector(
-            adb_path=str(cfg.data.get("adb_path") or ""),
-            exclude=cfg.data.get("phones_exclude") or [],
-            enabled=cfg.data.get("phones_enabled", True) is not False,
-            clock=clock,
-        )
+        self.phones = PhoneCollector(clock=clock, **_phone_collector_settings(cfg.data))
+        # 0.3.7 远程手机操作：主控只给心跳里声明了 phone_ops_v1 的节点排 phone_* 任务；
+        # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
+        self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data))
+        self._cfg_mtime = _mtime_ns(cfg.path)
+
+    def reload_operator_config(self) -> bool:
+        """agent.json 被改过（mtime 变了）→ 重读手机相关键并重建清点 / 操作设置，不用重启。"""
+        mtime = _mtime_ns(self.cfg.path)
+        if mtime == self._cfg_mtime:
+            return False
+        self._cfg_mtime = mtime
+        if not self.cfg.refresh_operator_keys():
+            return False
+        d = self.cfg.data
+        self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d))
+        self.phone_ops.configure(**_phone_ops_settings(d))
+        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s",
+                    len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off")
+        return True
 
     # ── 主控调用 ──
     def _ctrl(self, method: str, path: str, body: Optional[Dict[str, Any]] = None, *, auth: bool = True,
@@ -826,9 +878,14 @@ class NodeAgent:
             "errors": errors[:10],
             "phones": phones,
             "phones_error": phones_error,
+            "caps": self.phone_ops.caps(),
         }
 
     def heartbeat(self) -> Dict[str, Any]:
+        try:
+            self.reload_operator_config()
+        except Exception as e:  # noqa: BLE001 - a bad edit must not stop the heartbeat
+            logger.warning("[agent] agent.json 热加载失败：%s", e)
         res = self._ctrl("POST", "/api/fleet/heartbeat", self.build_heartbeat())
         self.stats["heartbeats"] += 1
         record_heartbeat(self.cfg.state_dir, self.clock())
@@ -898,6 +955,8 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
+            if kind in PHONE_TASK_KINDS:
+                return self.phone_ops.execute(kind, payload, target)
             if kind == TASK_PING:
                 return STATUS_DONE, {"pong": True, "agent_version": AGENT_VERSION, "app_version": self.app_version,
                                      "machine_id": self.machine_id, "host_name": host_name(),
@@ -1097,6 +1156,30 @@ class NodeAgent:
                 logger.warning("[agent] loop error: %s (retry in %.0fs)", e, backoff)
                 sleep(backoff)
                 backoff = min(BACKOFF_MAX, backoff * 2)
+
+
+def _mtime_ns(path: Path) -> Optional[int]:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _phone_collector_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "adb_path": str(data.get("adb_path") or ""),
+        "exclude": data.get("phones_exclude") or [],
+        "enabled": data.get("phones_enabled", True) is not False,
+    }
+
+
+def _phone_ops_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "adb_path": str(data.get("adb_path") or ""),
+        "exclude": data.get("phones_exclude") or [],
+        "enabled": data.get("phone_ops_enabled", True) is not False,
+        "allow_tcp": data.get("phone_ops_allow_tcp") is True,
+    }
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────
@@ -1418,6 +1501,9 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
             from .panel import start_panel_background
             start_panel_background(cfg, agent.machine_id)
         if args.service:
+            # PyInstaller 单文件：计划任务结束的是引导进程，本进程会变孤儿继续跑并占住单实例锁
+            # （176 2026-10-06 Stop-ScheduledTask 停不掉）。父进程一走本进程就退出。
+            start_parent_watch()
             stop = threading.Event()
             try:
                 return supervise(lambda: NodeAgent(AgentConfig(cfg.state_dir)), stop)

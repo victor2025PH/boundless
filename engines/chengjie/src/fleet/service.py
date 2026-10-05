@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("fleet.service")
 
@@ -341,6 +341,96 @@ def _enroll_followup(cfg: object) -> str:
     return ""
 
 
+def onefile_parent_pid(*, windows: Optional[bool] = None, frozen: Optional[bool] = None,
+                       meipass: Optional[str] = None, executable: Optional[str] = None,
+                       getppid: Callable[[], int] = os.getppid) -> int:
+    """PyInstaller 单文件在 Windows 上是「引导进程 → 本进程」两层；是这种情况就返回引导进程 pid，否则 0。
+
+    单目录构建（_MEIPASS 就是 exe 所在目录）和源码运行都没有引导进程。"""
+    if not ((os.name == "nt") if windows is None else windows):
+        return 0
+    if not (is_frozen() if frozen is None else frozen):
+        return 0
+    mp = getattr(sys, "_MEIPASS", "") if meipass is None else meipass
+    exe = sys.executable if executable is None else executable
+    if not mp:
+        return 0
+    if ntpath.normcase(ntpath.abspath(mp)) == ntpath.normcase(ntpath.dirname(ntpath.abspath(exe))):
+        return 0
+    return int(getppid() or 0)
+
+
+def _win_kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    k.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                             ctypes.POINTER(wintypes.DWORD))
+    k.WaitForSingleObject.restype = wintypes.DWORD
+    k.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    return k
+
+
+def _win_open_parent(pid: int) -> Optional[Tuple[object, str]]:
+    """(handle, image path) of a live process; SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION only."""
+    import ctypes
+    from ctypes import wintypes
+
+    k = _win_kernel32()
+    h = k.OpenProcess(0x00100000 | 0x1000, False, int(pid))
+    if not h:
+        return None
+    buf = ctypes.create_unicode_buffer(32768)
+    size = wintypes.DWORD(len(buf))
+    image = buf.value if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) else ""
+    return h, image
+
+
+def _win_wait_forever(handle: object) -> None:
+    _win_kernel32().WaitForSingleObject(handle, 0xFFFFFFFF)
+
+
+def start_parent_watch(*, ppid: Optional[int] = None, opener: Callable[[int], Optional[Tuple[object, str]]] = None,
+                       waiter: Callable[[object], None] = None, exit_fn: Callable[[int], None] = os._exit,
+                       executable: Optional[str] = None, background: bool = True) -> bool:
+    """单文件构建下，引导进程（计划任务直接拉起的那个）退出 → 本进程立即退出。
+
+    Stop-ScheduledTask / ``schtasks /End`` 只结束引导进程；不跟着退的话本进程成了孤儿，
+    继续心跳并占住单实例锁，下一次 /Run 起来的实例只能直接退出。返回是否装上了看门狗。"""
+    pid = onefile_parent_pid() if ppid is None else int(ppid)
+    if not pid:
+        return False
+    try:
+        opened = (opener or _win_open_parent)(pid)
+    except Exception:  # noqa: BLE001 - best effort; never block the service
+        return False
+    if not opened:
+        return False
+    handle, image = opened
+    exe = sys.executable if executable is None else executable
+    if not image or ntpath.normcase(ntpath.abspath(image)) != ntpath.normcase(ntpath.abspath(exe)):
+        return False      # parent is not our own bootloader (e.g. started from a console): leave it alone
+
+    def _watch() -> None:
+        try:
+            (waiter or _win_wait_forever)(handle)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[service] parent watch stopped: %s", e)
+            return
+        logger.warning("[service] 引导进程 pid=%s 已退出（计划任务被结束），本进程随之退出", pid)
+        exit_fn(0)
+
+    if background:
+        threading.Thread(target=_watch, name="fleet-parent-watch", daemon=True).start()
+    else:
+        _watch()
+    return True
+
+
 def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] = None, *,
               sleep: Callable[[float], None] = time.sleep, max_rounds: int = 0) -> int:
     """监督循环：未注册 → 等；被吊销 → 等重新 enroll；异常 → 指数退避重启；``exit_requested`` → 退出（升级换文件）。
@@ -389,4 +479,5 @@ __all__ = [
     "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command", "build_schtasks_create", "build_schtasks_run",
     "build_schtasks_delete", "build_schtasks_query", "build_task_state_query", "build_systemd_unit", "install_service", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
+    "onefile_parent_pid", "start_parent_watch",
 ]
