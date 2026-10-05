@@ -66,13 +66,15 @@ def _clip(value: Any, n: int) -> str:
 
 
 def _transport(serial: str, attrs: Dict[str, str]) -> str:
+    # adb on Windows prints no ``usb:`` attribute, so anything that is not a network
+    # address (host:port / mDNS name) or an emulator counts as USB.
     if "usb" in attrs:
         return "usb"
     if serial.startswith("emulator-"):
         return "emulator"
-    if _HOST_PORT_RE.match(serial) or "._adb-tls-connect." in serial:
+    if _HOST_PORT_RE.match(serial) or "._adb-tls-connect." in serial or "._adb._tcp" in serial:
         return "tcp"
-    return "unknown"
+    return "usb"
 
 
 def parse_adb_devices(text: str) -> List[Dict[str, str]]:

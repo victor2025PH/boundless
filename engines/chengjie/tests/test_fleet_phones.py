@@ -77,7 +77,24 @@ def test_parse_device_offline_unauthorized_and_models():
 
 def test_parse_plain_devices_line_without_l_attributes():
     assert ph.parse_adb_devices("List of devices attached\nABCDEF\tdevice\n") == [
-        {"serial": "ABCDEF", "state": "device", "model": "", "transport": "unknown"}]
+        {"serial": "ABCDEF", "state": "device", "model": "", "transport": "usb"}]
+
+
+def test_parse_real_windows_output_without_usb_attribute():
+    # 176, 2026-10-06 (adb 1.0.41 on Windows prints no usb: field); 3B1F row shape kept, serials real.
+    text = ("List of devices attached\n"
+            "E6FYKRHYS48HZLAM       device product:gale_global model:23106RN0DA device:gale transport_id:3\n"
+            "L7EYZDQOOZ8LDAKN       unauthorized transport_id:6\n"
+            "192.168.0.148:5555     device product:CPH2653 model:CPH2653 device:OP5D55L1 transport_id:7\n\n")
+    assert ph.parse_adb_devices(text) == [
+        {"serial": "E6FYKRHYS48HZLAM", "state": "device", "model": "23106RN0DA", "transport": "usb"},
+        {"serial": "L7EYZDQOOZ8LDAKN", "state": "unauthorized", "model": "", "transport": "usb"},
+        {"serial": "192.168.0.148:5555", "state": "device", "model": "CPH2653", "transport": "tcp"},
+    ]
+    c = ph.PhoneCollector(run=FakeRun(devices_out=text), server_version=lambda p: 41, locate=lambda cfg: ADB,
+                          exclude=["3B1F4KE5MS140P4X", "192.168.0.148:5555", "192.168.0.148:*", "model:CPH2653"])
+    phones, err = c.collect()
+    assert err == "" and [p["serial"] for p in phones] == ["E6FYKRHYS48HZLAM", "L7EYZDQOOZ8LDAKN"]
 
 
 @pytest.mark.parametrize("text", ["", "List of devices attached\n\n",
@@ -93,7 +110,7 @@ def test_parse_no_permissions_and_garbage():
             "adb: error: something\nlonelytoken\nWEIRD123 sideways\n")
     out = ph.parse_adb_devices(text)
     assert out == [{"serial": "0123456789", "state": "no_permissions", "model": "", "transport": "usb"},
-                   {"serial": "WEIRD123", "state": "unknown", "model": "", "transport": "unknown"}]
+                   {"serial": "WEIRD123", "state": "unknown", "model": "", "transport": "usb"}]
 
 
 # ── collector ───────────────────────────────────────────────────────────────
