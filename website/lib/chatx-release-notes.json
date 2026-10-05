@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.109",
+    "date": "2026-10-05",
+    "title": {
+      "zh": "填过号龄也不再拦住全自动",
+      "en": "A declared account age no longer blocks full auto"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "填过号龄也不再拦住「全自动」。入口：工作台右侧「群成员提取」打开管理台，第③步「私聊开口」，开口方式选「全自动（排队+拟稿+发）」。号龄、以及之前填过的号龄，都不再把这个选项灰掉。",
+        "近 7 天撞过 Telegram 风控，或开口条数已经够多但回复率低于地板的号，仍然不能切全自动。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Declaring an account age no longer blocks Fully automatic. Open the group-members console from the Group member extraction card on the workbench, go to step 3 DM openers, and set the mode to Fully automatic (queue, draft, and send). Account age, including an age you already filled in, no longer greys out that option.",
+        "A flood limit in the last 7 days, or a reply rate below the floor once there are enough openers, still blocks Fully automatic.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
     "version": "1.0.107",
     "date": "2026-10-02",
     "title": {
