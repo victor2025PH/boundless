@@ -1080,6 +1080,9 @@ class FleetStore:
             state = NODE_ONLINE
         else:
             state = NODE_OFFLINE
+        hb = _loads(row["last_heartbeat_json"])
+        if not isinstance(hb, dict):
+            hb = {}
         return {
             "node_id": row["node_id"],
             "machine_id": row["machine_id"],
@@ -1096,8 +1099,11 @@ class FleetStore:
             "created_at": row["created_at"],
             "enrolled_at": row["enrolled_at"],
             "last_seen": row["last_seen"],
-            "last_heartbeat": _loads(row["last_heartbeat_json"]),
+            "last_heartbeat": hb,
             "meta": _loads(row["meta_json"]),
+            # 0.3.6 只读手机清点；老节点心跳没有这两个键 → 空列表 / 空串
+            "phones": hb.get("phones") if isinstance(hb.get("phones"), list) else [],
+            "phones_error": hb.get("phones_error") if isinstance(hb.get("phones_error"), str) else "",
         }
 
     @staticmethod
@@ -1150,6 +1156,7 @@ def _hb_summary(hb: Dict[str, Any]) -> Dict[str, Any]:
         "errors": len(hb.get("errors") or []) if isinstance(hb.get("errors"), list) else 0,
         "cpu_pct": metrics.get("cpu_pct"),
         "mem_pct": metrics.get("mem_pct"),
+        "phones": len(hb.get("phones") or []) if isinstance(hb.get("phones"), list) else 0,
     }
 
 

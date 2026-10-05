@@ -73,6 +73,7 @@ NODE_PENDING = "pending"        # 已发注册码未注册
 HEARTBEAT_KEYS = (
     "agent_version", "proto_version", "app_version", "host_name", "os", "python",
     "uptime_sec", "instances", "accounts", "metrics", "fleet_health", "player_overview", "errors",
+    "phones", "phones_error",   # 0.3.6 只读手机清点 [{serial, state, model, transport}] + 错误原因
 )
 
 
@@ -110,10 +111,16 @@ def task_envelope(*, task_id: str, kind: str, node_id: str, payload: Optional[Di
 
 
 def sanitize_heartbeat(body: Any) -> Dict[str, Any]:
-    """只保留白名单键；非 dict → {}。"""
+    """只保留白名单键；非 dict → {}。phones 只留 serial/state/model/transport 四个字段。"""
     if not isinstance(body, dict):
         return {}
-    return {k: body[k] for k in HEARTBEAT_KEYS if k in body}
+    out = {k: body[k] for k in HEARTBEAT_KEYS if k in body}
+    if "phones" in out or "phones_error" in out:
+        from .phones import sanitize_phones, sanitize_phones_error
+
+        out["phones"] = sanitize_phones(out.get("phones"))
+        out["phones_error"] = sanitize_phones_error(out.get("phones_error"))
+    return out
 
 
 __all__ = [

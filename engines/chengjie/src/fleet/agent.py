@@ -11,7 +11,7 @@
 
 流程（契约 docs/FLEET_CONTROL_CONTRACT.md）：
     enroll(code, machine_id) → node_key 存 <state_dir>/agent.json（只在本机）
-    loop: heartbeat（本机实例摘要，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
+    loop: heartbeat（本机实例摘要 + 本机 adb 手机清点 phones，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -58,6 +58,7 @@ from .identity import (
     regenerate_machine_id, resolve_machine_identity, short_machine_id, state_dir_is_locked,
 )
 from .local_status import build_local_status, record_heartbeat
+from .phones import PhoneCollector
 from .service import acquire_single_instance, install_service, service_status, supervise, uninstall_service
 from .updater import apply_upgrade
 from .protocol import (
@@ -68,7 +69,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.5"
+AGENT_VERSION = "0.3.6"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -468,6 +469,13 @@ class NodeAgent:
         self.exit_requested = False   # upgrade 换文件：ack 后由循环退出，服务层重新拉起
         self.last_error = ""
         self.stats = {"heartbeats": 0, "tasks_done": 0, "tasks_failed": 0, "tasks_rejected": 0, "errors": 0}
+        # 0.3.6 只读手机清点：只跑 adb devices -l；agent.json 可配 phones_exclude / adb_path / phones_enabled
+        self.phones = PhoneCollector(
+            adb_path=str(cfg.data.get("adb_path") or ""),
+            exclude=cfg.data.get("phones_exclude") or [],
+            enabled=cfg.data.get("phones_enabled", True) is not False,
+            clock=clock,
+        )
 
     # ── 主控调用 ──
     def _ctrl(self, method: str, path: str, body: Optional[Dict[str, Any]] = None, *, auth: bool = True,
@@ -805,6 +813,7 @@ class NodeAgent:
                 except Exception as e:
                     errors.append(f"{inst.get('name')}: overview {e}")
             instances.append(entry)
+        phones, phones_error = self.phones.collect()
         return {
             "agent_version": AGENT_VERSION, "proto_version": PROTO_VERSION, "app_version": self.app_version,
             "host_name": host_name(), "os": os_label(), "python": _platform.python_version(),
@@ -815,6 +824,8 @@ class NodeAgent:
             "player_overview": overview_sum,
             "metrics": _metrics(),
             "errors": errors[:10],
+            "phones": phones,
+            "phones_error": phones_error,
         }
 
     def heartbeat(self) -> Dict[str, Any]:
