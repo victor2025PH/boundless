@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from .identity import host_name
+from .identity import host_name, short_machine_id
 from .protocol import PROTO_VERSION
 from .service import TASK_NAME, service_status
 
@@ -291,6 +291,8 @@ def build_local_status(
         item["auth_token"] = "***" if item.get("auth_token") else ""
         instances.append(item)
     log_dir = str(Path(cfg.state_dir) / "logs")
+    host_label = host if host is not None else host_name()
+    mid_short = short_machine_id(str(machine_id or ""))
     out: Dict[str, Any] = {
         "controller_url": url,
         "node_id": str(getattr(cfg, "node_id", "") or ""),
@@ -299,11 +301,15 @@ def build_local_status(
         "pending": enrollment == "pending",
         "pairing_code": str(data.get("pairing_code") or ""),
         "machine_id": str(machine_id or ""),
+        "machine_id_short": mid_short,
+        # Two cloned PCs can share a hostname; the short machine_id tells them apart.
+        "node_display": f"{host_label} · {mid_short}" if mid_short else host_label,
+        "previous_machine_id": str(data.get("previous_machine_id") or ""),
         "instances": instances,
         "state_dir": str(cfg.state_dir),
         "agent_version": _agent_version(),
         "proto_version": PROTO_VERSION,
-        "host_name": host if host is not None else host_name(),
+        "host_name": host_label,
         "controller_reachable": reachable,
         "task_installed": installed,
         "task_running": running,

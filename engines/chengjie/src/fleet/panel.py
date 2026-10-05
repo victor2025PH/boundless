@@ -158,7 +158,9 @@ PAGE_HTML = """<!DOCTYPE html>
     var summary = $("summary");
     clear(summary);
     addRow(summary, "计算机名", state.host_name || "");
+    addRow(summary, "本机标识", state.node_display || state.machine_id_short || state.machine_id || "");
     addRow(summary, "版本", state.agent_version || "");
+    document.title = "智拓群控节点" + (state.node_display ? " · " + state.node_display : "");
     var copyUrl = el("button", "inline", "复制");
     copyUrl.type = "button";
     copyUrl.onclick = function () { copyText(state.controller_url || ""); note("已复制主控地址"); };

@@ -105,7 +105,18 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 
 静默安装（已经有安装包文件时）：`ChatXAgentSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。机房包里的 `Install-Silent.cmd` 会带上 `/ROOMKEYFILE`。
 
-重装系统：再跑一次安装包即可。machine_id 不变，但批准时必须在控制台或 CLI 显式确认（`approving will rotate key of n_xxx` / `approve --confirm-rotate`），确认后才换新 key。静默重装会先停掉计划任务 `ChatX Fleet Agent` 再覆盖 exe。卸载默认留下 `%ProgramData%\ChatX\fleet`；安装包卸载参数 `/REMOVESTATE=1` 才删它。
+重装系统：再跑一次安装包即可。0.3.5 起 machine_id 绑定本机硬件（见下一段）：0.3.5 生成过的 id 重装后不变，但批准时必须在控制台或 CLI 显式确认（`approving will rotate key of n_xxx` / `approve --confirm-rotate`），确认后才换新 key。静默重装会先停掉计划任务 `ChatX Fleet Agent` 再覆盖 exe。卸载默认留下 `%ProgramData%\ChatX\fleet`；安装包卸载参数 `/REMOVESTATE=1` 才删它。
+
+克隆系统盘 / 同名电脑（0.3.5）：0.3.4 及以前 machine_id = sha256(MachineGuid|主机名)。用同一个镜像克隆出来的电脑这两样完全相同，算出同一个 machine_id；主控按 machine_id 复用 node_id 并换新 key，两台电脑轮流把对方挤掉，控制台只剩一行（两台 `PC-20240123AORY` 就是这样）。克隆盘里如果带着 `%ProgramData%\ChatX\fleet\agent.json`，两台甚至直接共用一个 node_key。0.3.5 改为：
+
+- 新 id = sha256(v2|MachineGuid 或授权指纹|主机名|SMBIOS UUID|首块非 USB 物理盘序列号|主网卡 MAC)，格式仍是 `m-<16 hex>`；全零 / 全 F / `To be filled by O.E.M.` 等占位值丢弃，一个硬件值都读不到时用随机 uuid（只生成一次）。
+- `machine_id` 旁边多一个 `machine_id.hw`，记录各硬件值的 sha256 前 16 位（不存原始序列号）。指纹与本机不符（缓存是从别的机器拷来的）→ 重新生成。
+- 0.3.4 留下的、没有指纹的缓存：服务自动升级时原样沿用（没撞号的电脑保持原节点）；**重新运行安装包时**按本机硬件重新生成（不想换号的电脑用 `ChatXAgentSetup.exe /KEEPIDENTITY=1`）。
+- id 一旦换了，`agent.json` 里属于旧 id 的 node_id / node_key / 待批准申请全部丢掉，以新 id 重新进「待批准电脑」，永远不会去换别的电脑的 key。机房包（带 `room.key`）安装时则直接以新 id 建一个新节点。
+- 注册时 `meta` 带 `hw_fp`（指纹摘要）、`id_source`、`previous_machine_id`；主控若对 machine_id 冲突回 HTTP 409 或 `error=machine_id_conflict`，Agent 会自己换新 id 并只以待批准重登。
+- 本机页「本机标识」显示 `主机名 · m-xxxxxxxx`，同名电脑一眼能分开。命令行：`chatx-agent.exe --state-dir "%ProgramData%\ChatX\fleet" identity`。
+
+主控侧建议（尚未实现）：节点表记下 `meta.hw_fp`；注册码 / 机房密钥 / 批准遇到同一 machine_id 但 `hw_fp` 不同的请求时不要换 key，回 409 `machine_id_conflict` 或开一条标 `duplicate machine_id` 的待批准；心跳时 `hw_fp` 对不上也回 409。
 
 排障：先开桌面或开始菜单「智拓群控节点」（本机页 `http://127.0.0.1:47321/`）。命令行同一份摘要：`"%ProgramFiles%\ChatX Agent\chatx-agent.exe" --state-dir "%ProgramData%\ChatX\fleet" status`；打开页面：同一条命令把 `status` 换成 `ui`。
 日志 `%ProgramData%\ChatX\fleet\logs\agent.log`；前台调试 `... run -v`（Ctrl-C 退出，不影响计划任务）；

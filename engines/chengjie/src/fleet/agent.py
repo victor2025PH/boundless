@@ -13,6 +13,7 @@
     enroll(code, machine_id) → node_key 存 <state_dir>/agent.json（只在本机）
     loop: heartbeat（本机实例摘要，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
+    machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
 任务执行只调本机智聊实例已有的 HTTP API（Bearer web_admin.auth_token），不直接碰数据库：
     ping            → 本地回 pong
@@ -52,9 +53,9 @@ from .detect import (
     sanitize_instances, url_port,
 )
 from .identity import (
-    StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
-    discard_untrusted_secret, host_name, lock_state_dir, node_machine_id, os_label,
-    state_dir_is_locked,
+    ORIGIN_GENERATED, StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
+    discard_untrusted_secret, host_name, identity_meta, lock_state_dir, node_machine_id, os_label,
+    regenerate_machine_id, resolve_machine_identity, short_machine_id, state_dir_is_locked,
 )
 from .local_status import build_local_status, record_heartbeat
 from .service import acquire_single_instance, install_service, service_status, supervise, uninstall_service
@@ -67,7 +68,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.4"
+AGENT_VERSION = "0.3.5"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -109,6 +110,30 @@ class AgentError(RuntimeError):
 
 class Unauthorized(AgentError):
     pass
+
+
+class IdentityConflict(AgentError):
+    """The controller says this machine_id belongs to another PC (HTTP 409 / conflict error)."""
+
+
+# Error strings a controller may use for "machine_id already held by different hardware".
+# The current controller never sends them; 0.3.5 agents already react if a later one does.
+IDENTITY_CONFLICT_ERRORS = frozenset({
+    "machine_id_conflict", "machine_id_in_use", "duplicate_machine", "hw_fingerprint_mismatch",
+})
+# Enrollment state that belongs to one machine_id and is dropped when the id changes.
+_ENROLLMENT_FIELDS = ("node_id", "node_key", "pending_request_id", "pairing_code", "enroll_rejected")
+
+
+def _is_identity_conflict(code: int, data: Dict[str, Any]) -> bool:
+    if code == 409:
+        return True
+    if code < 400 or not isinstance(data, dict):
+        return False
+    err = data.get("error") or data.get("detail") or ""
+    if isinstance(err, dict):
+        err = err.get("error") or ""
+    return str(err) in IDENTITY_CONFLICT_ERRORS
 
 
 # Kept across an upgrade from an unlocked directory. restart_cmd and config_path
@@ -437,6 +462,7 @@ class NodeAgent:
             cfg.save()
             cfg._legacy_source = None
         self.machine_id = node_machine_id(cfg.state_dir)
+        self.identity_reset = self._bind_identity()
         self.started_at = clock()
         self.revoked = False
         self.exit_requested = False   # upgrade 换文件：ack 后由循环退出，服务层重新拉起
@@ -458,9 +484,87 @@ class NodeAgent:
         code, data = self.http(method, self.cfg.controller_url + path, body, headers, timeout)
         if code == 401:
             raise Unauthorized(str(data.get("detail") or "unauthorized"))
+        if _is_identity_conflict(code, data):
+            raise IdentityConflict(str(data.get("error") or data.get("detail") or "machine_id_conflict")[:200])
         if code >= 400:
             raise AgentError(f"{path} → HTTP {code}: {data.get('detail') or data}")
         return data
+
+    # ── 机器标识与注册绑定 ──
+    def _bind_identity(self) -> bool:
+        """Keep agent.json's enrollment only for the machine_id it was made under.
+
+        Returns True when an old enrollment was dropped. That happens when the
+        id changed (cloned disk caught by the hardware fingerprint, installer
+        re-derived a 0.3.4 cache, or a controller conflict). The node_key of the
+        old id is never reused, so this PC cannot keep heartbeating as, or
+        rotating the key of, another PC's node. A new pending request follows.
+        """
+        data = self.cfg.data
+        mid = self.machine_id
+        bound = str(data.get("machine_id") or "")
+        if bound == mid:
+            return False
+        has_key = bool(self.cfg.node_key)
+        if not has_key and not (bound and data.get("pending_request_id")):
+            # Nothing that belongs to another id. (An unbound pending request filed
+            # under an older id is answered "unknown" by the controller and restarts.)
+            data["machine_id"] = mid  # saved with the next enrollment
+            return False
+        meta: Dict[str, Any] = {}
+        stale = bool(bound)
+        if not stale:
+            # 0.3.4 agent.json has no binding. Keep it when the id itself was kept
+            # (adopted legacy cache); drop it when the id was freshly generated.
+            meta = identity_meta(self.cfg.state_dir)
+            stale = meta.get("machine_id") == mid and meta.get("origin") == ORIGIN_GENERATED
+        if not stale:
+            data["machine_id"] = mid
+            try:
+                self.cfg.save()
+            except Exception:  # opportunistic: the next real save reports lock problems
+                logger.debug("[agent] machine_id binding not saved", exc_info=True)
+            return False
+        prev = bound or str(meta.get("previous_machine_id") or "")
+        logger.warning("[agent] machine_id changed %s -> %s: old enrollment dropped, requesting approval again",
+                       prev or "?", mid)
+        for key in _ENROLLMENT_FIELDS:
+            data.pop(key, None)
+        data["machine_id"] = mid
+        if prev:
+            data["previous_machine_id"] = prev
+        data["reenroll_not_before"] = 1.0  # service loop re-requests approval right away
+        self.cfg.save()
+        try:
+            (self.cfg.state_dir / "pairing.txt").unlink()
+        except OSError:
+            pass
+        return True
+
+    def _identity_meta_for_enroll(self) -> Dict[str, Any]:
+        try:
+            meta = identity_meta(self.cfg.state_dir)
+        except Exception:
+            meta = {}
+        out: Dict[str, Any] = {"python": _platform.python_version(), "id_scheme": 2}
+        if meta.get("machine_id") == self.machine_id:
+            for src, dst in (("hw_fp", "hw_fp"), ("source", "id_source"), ("origin", "id_origin")):
+                if meta.get(src):
+                    out[dst] = str(meta[src])[:40]
+        prev = str(self.cfg.data.get("previous_machine_id") or "")
+        if prev:
+            out["previous_machine_id"] = prev[:40]
+        return out
+
+    def handle_identity_conflict(self, why: str = "") -> Dict[str, Any]:
+        """Controller conflict: new hardware-bound id, drop the old key, ask for approval (never rotate)."""
+        old = self.machine_id
+        self.machine_id = regenerate_machine_id(self.cfg.state_dir, reason="conflict")
+        logger.warning("[agent] controller reported machine_id conflict (%s): %s -> %s", why or "-", old, self.machine_id)
+        if str(self.cfg.data.get("machine_id") or "") != old:
+            self.cfg.data["machine_id"] = old
+        self.identity_reset = self._bind_identity() or self.identity_reset
+        return {"machine_id": self.machine_id, "previous": old}
 
     def _detect_and_add(self) -> List[Dict[str, str]]:
         found = detect_instances(search=(os.name == "nt"),
@@ -496,6 +600,7 @@ class NodeAgent:
         self.cfg.data.update({
             "node_id": res["node_id"], "node_key": res["node_key"],
             "heartbeat_sec": int(res.get("heartbeat_sec") or DEFAULT_HEARTBEAT_SEC),
+            "machine_id": self.machine_id,
         })
         self.cfg.data.pop("pending_request_id", None)
         self.cfg.data.pop("enroll_rejected", None)
@@ -521,8 +626,12 @@ class NodeAgent:
             logger.debug("[agent] pairing code file not written", exc_info=True)
 
     def enroll(self, code: str = "", *, controller_url: str = "", room_key: str = "",
-               detect: bool = False) -> Dict[str, Any]:
-        """有注册码或机房密钥则立刻拿到 node_key；都没有则登记为待批准（不抛错）。"""
+               detect: bool = False, _after_conflict: bool = False) -> Dict[str, Any]:
+        """有注册码或机房密钥则立刻拿到 node_key；都没有则登记为待批准（不抛错）。
+
+        主控回 machine_id 冲突时：换新的硬件 machine_id，只以待批准重登一次（不带码 / 密钥，
+        不会换掉另一台电脑的 key）。
+        """
         if controller_url:
             self.cfg.data["controller_url"] = controller_url.rstrip("/")
         if detect:
@@ -540,7 +649,7 @@ class NodeAgent:
             "machine_id": self.machine_id, "host_name": host_name(),
             "proto_version": PROTO_VERSION, "agent_version": AGENT_VERSION, "app_version": self.app_version,
             "os": os_label(), "instances": sanitize_instances(self.cfg.instances),
-            "meta": {"python": _platform.python_version()},
+            "meta": self._identity_meta_for_enroll(),
             "enroll_secret": self._enroll_secret(),
         }
         if room_key:
@@ -552,7 +661,13 @@ class NodeAgent:
         else:
             body["mode"] = "pending"
             bearer = "pending"
-        res = self._ctrl("POST", "/api/fleet/enroll", body, auth=False, bearer=bearer)
+        try:
+            res = self._ctrl("POST", "/api/fleet/enroll", body, auth=False, bearer=bearer)
+        except IdentityConflict as e:
+            if _after_conflict:
+                raise AgentError(f"machine_id conflict persists: {e}") from e
+            self.handle_identity_conflict(str(e))
+            return self.enroll("", _after_conflict=True)
         if res.get("node_key"):
             self._store_enrollment(res)
             return {"node_id": res["node_id"], "label": res.get("label"), "group_name": res.get("group_name"),
@@ -956,6 +1071,15 @@ class NodeAgent:
                 self.last_error = f"unauthorized: {e}"
                 logger.error("[agent] node_key 被拒（已吊销？）——停止轮询，等待重新 enroll")
                 return
+            except IdentityConflict as e:
+                self.last_error = f"machine_id conflict: {e}"
+                self.handle_identity_conflict(str(e))
+                if self.cfg.controller_url:
+                    try:
+                        self.enroll("", _after_conflict=True)
+                    except AgentError as err:
+                        logger.warning("[agent] pending request after conflict failed: %s", err)
+                return
             except Exception as e:
                 self.stats["errors"] += 1
                 self.last_error = str(e)[:300]
@@ -1125,6 +1249,11 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     mig.add_argument("--controller", default="", help="controller URL written into agent.json")
     mig.add_argument("--snapshot", default="", help="agent.json copied before the directory was locked")
     sub.add_parser("detect", help="rediscover local instances; does not enroll")
+    ident = sub.add_parser("identity", help="show this PC's machine_id; --reinstall re-derives a cache "
+                                            "without a hardware fingerprint (installer)")
+    ident.add_argument("--reinstall", action="store_true",
+                       help="installer mode: a machine_id cached by 0.3.4 or copied from a cloned disk is "
+                            "re-derived from this PC's hardware; an enrollment bound to the old id is dropped")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -1168,6 +1297,23 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     defer_log = bool(want_log) and cfg.migrating
     if want_log and not defer_log:
         _attach_file_log(log_path)
+    if args.cmd == "identity":
+        try:
+            if cfg.migrating:
+                cfg.save()  # same order as NodeAgent: rewrite an unlocked agent.json before machine_id
+            info = resolve_machine_identity(cfg.state_dir, reinstall=bool(args.reinstall))
+            agent = NodeAgent(cfg)
+        except StateDirLockError as e:
+            _note_migration_failure(cfg.state_dir, e)
+            print(f"Could not lock the fleet state directory. Run as Administrator. ({e})", file=sys.stderr)
+            return 1
+        print(json.dumps({
+            "ok": True, "machine_id": agent.machine_id, "short_id": short_machine_id(agent.machine_id),
+            "host_name": host_name(), "changed": bool(info.get("changed")), "previous": info.get("previous") or "",
+            "reason": info.get("reason") or "", "source": info.get("source") or "", "origin": info.get("origin") or "",
+            "enrollment_reset": bool(agent.identity_reset),
+        }, ensure_ascii=False))
+        return 0
     if args.cmd == "install-service":
         res = install_service(cfg.state_dir)
         print(json.dumps(res, ensure_ascii=False, indent=2))
