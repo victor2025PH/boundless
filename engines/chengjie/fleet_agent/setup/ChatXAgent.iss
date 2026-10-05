@@ -18,7 +18,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.6"
+  #define AppVersion "0.3.7"
 #endif
 
 #define AppName "智拓群控节点"

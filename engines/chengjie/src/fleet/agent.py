@@ -72,7 +72,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.6"
+AGENT_VERSION = "0.3.7"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
