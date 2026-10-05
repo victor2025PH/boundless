@@ -574,3 +574,90 @@ def test_actor_header_recorded_for_audit(st):
     audit = c.get(f"/api/fleet/tasks?node_id={nid}&kind={TASK_PHONE_TAP}", headers=OP).json()["tasks"]
     assert [(x["created_by"], x["target"]["serial"], x["payload"]) for x in audit] == [
         ("operator via zhituo:alicescript", "S1", {"x": 1, "y": 2})]
+
+
+# ── 5) agent.json 热加载 / save 不盖手工改动 / 单文件孤儿进程 ──────────────────
+import json as _json5  # noqa: E402
+
+from src.fleet import agent as _agent_mod  # noqa: E402
+from src.fleet.agent import AgentConfig as _Cfg, NodeAgent as _Agent  # noqa: E402
+from src.fleet.service import onefile_parent_pid, start_parent_watch  # noqa: E402
+
+
+def _edit_disk(cfg, **changes):
+    d = _json5.loads(cfg.path.read_text(encoding="utf-8"))
+    for k, v in changes.items():
+        if v is None:
+            d.pop(k, None)
+        else:
+            d[k] = v
+    cfg.path.write_text(_json5.dumps(d), encoding="utf-8")
+    import os as _os
+    st_ = cfg.path.stat()
+    _os.utime(cfg.path, ns=(st_.st_atime_ns, st_.st_mtime_ns + 5_000_000))
+
+
+def _saved_cfg(tmp_path, monkeypatch, **data):
+    monkeypatch.setattr(_agent_mod, "state_dir_is_locked", lambda _d: True)
+    cfg = _Cfg(tmp_path / "state")
+    cfg.data.update(data)
+    cfg.save()
+    return cfg
+
+
+def test_save_keeps_manual_operator_edits(tmp_path, monkeypatch):
+    cfg = _saved_cfg(tmp_path, monkeypatch, phones_exclude=["A", "model:CPH2653"], adb_path="C:/x/adb.exe")
+    _edit_disk(cfg, phones_exclude=["A"], adb_path=None)          # a person removes the model rule and adb_path
+    cfg.data["heartbeat_sec"] = 45                                # the agent changes its own key
+    cfg.save()
+    disk = _json5.loads(cfg.path.read_text(encoding="utf-8"))
+    assert disk["phones_exclude"] == ["A"] and "adb_path" not in disk and disk["heartbeat_sec"] == 45
+    assert cfg.data["phones_exclude"] == ["A"]
+
+
+def test_refresh_ignores_untrusted_state_dir(tmp_path, monkeypatch):
+    cfg = _saved_cfg(tmp_path, monkeypatch, phones_exclude=["A"])
+    _edit_disk(cfg, phones_exclude=[], adb_path="C:/evil/adb.exe")
+    monkeypatch.setattr(_agent_mod, "state_dir_is_locked", lambda _d: False)
+    assert cfg.refresh_operator_keys() is False and cfg.data["phones_exclude"] == ["A"] and "adb_path" not in cfg.data
+
+
+def test_agent_hot_reloads_phone_settings_on_heartbeat(tmp_path, monkeypatch, st):
+    monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
+    cfg = _saved_cfg(tmp_path, monkeypatch, phones_exclude=["S1", "model:CPH2653"])
+    client = _client(st)
+    agent = _Agent(cfg, http=_FakeNet(client), app_version="t")
+    code = client.post("/api/fleet/enroll-codes", json={}, headers=OP).json()["code"]
+    agent.enroll(code, controller_url="https://ctl.test/fleet")
+    assert "MODEL:CPH2653" in agent.phones.excludes and "S1" in agent.phone_ops.excludes
+    agent.heartbeat()
+    assert agent.reload_operator_config() is False                # nothing changed on disk
+    _edit_disk(cfg, phones_exclude=["S1"], phone_ops_enabled=False)
+    agent.heartbeat()
+    assert "MODEL:CPH2653" not in agent.phones.excludes and "3B1F4KE5MS140P4X" in agent.phones.excludes
+    assert agent.phone_ops.enabled is False and agent.build_heartbeat()["caps"] == []
+    disk = _json5.loads(cfg.path.read_text(encoding="utf-8"))
+    assert disk["phones_exclude"] == ["S1"] and disk["node_key"] == cfg.node_key
+
+
+def test_onefile_parent_pid_detection():
+    kw = dict(windows=True, frozen=True, executable=r"C:\Program Files\ChatX Agent\chatx-agent.exe", getppid=lambda: 4242)
+    assert onefile_parent_pid(meipass=r"C:\Windows\Temp\_MEI12345", **kw) == 4242
+    assert onefile_parent_pid(meipass=r"C:\Program Files\ChatX Agent", **kw) == 0          # onedir
+    assert onefile_parent_pid(meipass="", **kw) == 0
+    assert onefile_parent_pid(meipass=r"C:\T\_MEI1", windows=False, frozen=True, getppid=lambda: 1) == 0
+    assert onefile_parent_pid(meipass=r"C:\T\_MEI1", windows=True, frozen=False, getppid=lambda: 1) == 0
+
+
+def test_parent_watch_exits_when_bootloader_goes_away():
+    exe = r"C:\Program Files\ChatX Agent\chatx-agent.exe"
+    exits = []
+    ok = start_parent_watch(ppid=4242, opener=lambda pid: ("h", exe.upper()), waiter=lambda h: None,
+                            exit_fn=exits.append, executable=exe, background=False)
+    assert ok and exits == [0]
+    exits.clear()
+    assert start_parent_watch(ppid=4242, opener=lambda pid: ("h", r"C:\Windows\explorer.exe"), waiter=lambda h: None,
+                              exit_fn=exits.append, executable=exe, background=False) is False
+    assert start_parent_watch(ppid=4242, opener=lambda pid: None, exit_fn=exits.append, executable=exe) is False
+    assert start_parent_watch(ppid=0, exit_fn=exits.append) is False
+    assert exits == []
