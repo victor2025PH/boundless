@@ -700,7 +700,7 @@ def _probe_posix() -> Dict[str, str]:
     try:
         out["smbios_uuid"] = Path("/sys/class/dmi/id/product_uuid").read_text(encoding="utf-8").strip()
     except Exception:
-        pass
+        logger.debug("[fleet] product_uuid not readable", exc_info=True)
     try:
         for dev in sorted(Path("/sys/class/net").iterdir()):
             if dev.name == "lo" or not (dev / "device").exists():
@@ -708,7 +708,7 @@ def _probe_posix() -> Dict[str, str]:
             out["mac"] = (dev / "address").read_text(encoding="utf-8").strip()
             break
     except Exception:
-        pass
+        logger.debug("[fleet] NIC address not readable", exc_info=True)
     return out
 
 
@@ -721,7 +721,7 @@ def _probe_hardware() -> Dict[str, str]:
             if not (node >> 40) & 1:  # uuid.getnode() falls back to a random multicast number
                 raw["mac"] = f"{node:012X}"
         except Exception:
-            pass
+            logger.debug("[fleet] uuid.getnode failed", exc_info=True)
     return raw
 
 

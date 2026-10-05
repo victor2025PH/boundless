@@ -81,7 +81,7 @@ _SILENT_CEILINGS: dict[str, int] = {
     "_root": 17,
     # 2026-08-28 时这两块还没有静默 handler（天花板缺省 0）。
     # ebd73f48 上已经各有存量，按实测入账，不留余量。
-    "fleet": 9,
+    "fleet": 8,  # 2026-10-06: identity posix/uuid probes log at debug
     "compliance": 1,
     "trigger": 7,
     "nurture": 6,
