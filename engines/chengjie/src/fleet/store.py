@@ -26,7 +26,8 @@ from .detect import sanitize_instances
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
-    STATUS_PULLED, STATUS_QUEUED, STATUS_REJECTED, TASK_KINDS, TASK_PRIORITY, TASK_STOP_ACCOUNT, clamp_ttl,
+    PRUNED_RESULT, SCREENSHOT_RESULT_KEEP_SEC, STATUS_PULLED, STATUS_QUEUED, STATUS_REJECTED, TASK_KINDS,
+    TASK_PHONE_SCREENSHOT, TASK_PRIORITY, TASK_RESULT_KEEP_SEC, TASK_STOP_ACCOUNT, bound_result, clamp_ttl,
     missing_cap, proto_compatible, sanitize_caps, sanitize_heartbeat, task_envelope,
 )
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_NAME = "fleet_control.db"
 HEARTBEAT_KEEP = 200
+PRUNE_EVERY_SEC = 600      # ack 时顺手清结果，最多每 10 分钟一次
 NODE_ACTIVE = "active"
 # 一次性注册码：Crockford base32，至少 12 字符（约 60 bit），默认 15 分钟。
 # 已经发出的 8 位数字码在到期前仍可兑（本变更未上生产，库里若没有就没有在途码）。
@@ -275,6 +277,8 @@ class FleetStore:
         self.room_fail_window_sec = ROOM_FAIL_WINDOW_SEC
         self.pending_ttl_sec = PENDING_TTL_SEC
         self.claim_window_sec = CLAIM_WINDOW_SEC
+        self.prune_every_sec = PRUNE_EVERY_SEC
+        self._last_prune = 0.0
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -1009,11 +1013,28 @@ class FleetStore:
             if row["status"] not in FINAL_STATUSES:
                 self._conn.execute(
                     "UPDATE node_tasks SET status=?, detail=?, result_json=?, acked_at=? WHERE task_id=?",
-                    (status, str(detail or "")[:500], _dumps(result), ts, tid),
+                    (status, str(detail or "")[:500], _dumps(bound_result(row["kind"], result)), ts, tid),
                 )
                 self._conn.commit()
                 row = self._conn.execute("SELECT * FROM node_tasks WHERE task_id=?", (tid,)).fetchone()
+            if ts - self._last_prune >= self.prune_every_sec:
+                self.prune_results(now=ts)
         return self._task_record(row)
+
+    def prune_results(self, *, now: Optional[float] = None) -> int:
+        """清空旧结果（行保留做审计）：截图 SCREENSHOT_RESULT_KEEP_SEC，其余 TASK_RESULT_KEEP_SEC。返回清了几条。"""
+        ts = float(now if now is not None else time.time())
+        pruned = _dumps(PRUNED_RESULT)
+        with self._lock:
+            self._last_prune = ts
+            a = self._conn.execute(
+                "UPDATE node_tasks SET result_json=? WHERE kind=? AND acked_at IS NOT NULL AND acked_at<? "
+                "AND result_json NOT IN ('{}', ?)", (pruned, TASK_PHONE_SCREENSHOT, ts - SCREENSHOT_RESULT_KEEP_SEC, pruned))
+            b = self._conn.execute(
+                "UPDATE node_tasks SET result_json=? WHERE acked_at IS NOT NULL AND acked_at<? "
+                "AND result_json NOT IN ('{}', ?)", (pruned, ts - TASK_RESULT_KEEP_SEC, pruned))
+            self._conn.commit()
+        return int(a.rowcount or 0) + int(b.rowcount or 0)
 
     def cancel(self, task_id: str, *, now: Optional[float] = None) -> bool:
         ts = float(now if now is not None else time.time())

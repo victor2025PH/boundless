@@ -93,3 +93,57 @@ def test_generic_task_route_409_for_node_without_cap(st):
     assert r.status_code == 409 and r.json()["detail"] == "node_lacks_cap:phone_ops_v1"
     assert st.list_tasks(node_id=nid) == []
     assert c.post(f"/api/fleet/nodes/{nid}/tasks", headers=OP, json={"kind": TASK_PING}).status_code == 200
+
+
+# ── 2) 回传结果上限 + 保留期 ───────────────────────────────────────────────────
+from src.fleet.protocol import (  # noqa: E402
+    PRUNED_RESULT, RESULT_MAX_BYTES, SCREENSHOT_RESULT_KEEP_SEC, TASK_RESULT_KEEP_SEC, bound_result, result_limit,
+)
+
+
+def test_bound_result_limits_by_kind():
+    assert result_limit(TASK_PING) == RESULT_MAX_BYTES and result_limit(TASK_PHONE_SCREENSHOT) > 1_000_000
+    small = {"pong": True}
+    assert bound_result(TASK_PING, small) is small
+    big = {"blob": "x" * (RESULT_MAX_BYTES + 10)}
+    out = bound_result(TASK_PING, big)
+    assert out["error"] == "result_too_large" and out["limit"] == RESULT_MAX_BYTES and out["bytes"] > RESULT_MAX_BYTES
+    assert bound_result(TASK_PHONE_SCREENSHOT, big) is big
+    assert bound_result(TASK_PHONE_SCREENSHOT, {"png_b64": "A" * 2_000_000})["error"] == "result_too_large"
+    assert bound_result(TASK_PING, "nope") == {} and bound_result(TASK_PING, {"x": {1, 2}}) == {"error": "result_not_json"}
+
+
+def test_ack_stores_bounded_result(st):
+    nid = _enroll(st)["node_id"]
+    t = st.enqueue(nid, TASK_PING, now=T0)
+    st.pull(nid, now=T0 + 1)
+    rec = st.ack(t["task_id"], node_id=nid, status=STATUS_DONE, result={"blob": "y" * 100_000}, now=T0 + 2)
+    assert rec["result"]["error"] == "result_too_large"
+
+
+def test_prune_clears_old_screenshots_after_an_hour_and_others_after_a_week(st):
+    nid = _node_with_caps(st)
+    shot = st.enqueue(nid, TASK_PHONE_SCREENSHOT, target={"serial": "S1"}, now=T0 + 2)
+    ping = st.enqueue(nid, TASK_PING, now=T0 + 2)
+    st.pull(nid, limit=5, now=T0 + 3)
+    st.ack(shot["task_id"], node_id=nid, status=STATUS_DONE, result={"png_b64": "QUFB", "width": 1}, now=T0 + 4)
+    st.ack(ping["task_id"], node_id=nid, status=STATUS_DONE, result={"pong": True}, now=T0 + 4)
+    assert st.prune_results(now=T0 + 4 + SCREENSHOT_RESULT_KEEP_SEC - 5) == 0
+    assert st.prune_results(now=T0 + 5 + SCREENSHOT_RESULT_KEEP_SEC) == 1
+    assert st.get_task(shot["task_id"])["result"] == PRUNED_RESULT
+    assert st.get_task(shot["task_id"])["status"] == STATUS_DONE          # row kept for audit
+    assert st.get_task(ping["task_id"])["result"] == {"pong": True}
+    assert st.prune_results(now=T0 + 5 + TASK_RESULT_KEEP_SEC) == 1
+    assert st.get_task(ping["task_id"])["result"] == PRUNED_RESULT
+    assert st.prune_results(now=T0 + 10 + TASK_RESULT_KEEP_SEC) == 0
+
+
+def test_ack_triggers_throttled_prune(st):
+    nid = _node_with_caps(st)
+    shot = st.enqueue(nid, TASK_PHONE_SCREENSHOT, target={"serial": "S1"}, now=T0 + 2)
+    st.pull(nid, now=T0 + 3)
+    st.ack(shot["task_id"], node_id=nid, status=STATUS_DONE, result={"png_b64": "QUFB"}, now=T0 + 4)
+    later = st.enqueue(nid, TASK_PING, now=T0 + 2 * SCREENSHOT_RESULT_KEEP_SEC)
+    st.pull(nid, now=T0 + 2 * SCREENSHOT_RESULT_KEEP_SEC + 1)
+    st.ack(later["task_id"], node_id=nid, status=STATUS_DONE, result={}, now=T0 + 2 * SCREENSHOT_RESULT_KEEP_SEC + 2)
+    assert st.get_task(shot["task_id"])["result"] == PRUNED_RESULT

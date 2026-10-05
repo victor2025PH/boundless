@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -185,6 +186,39 @@ def missing_cap(kind: Any, caps: Any) -> str:
         return need
     return ""
 
+
+# 回传结果上限（JSON UTF-8 字节）：截图单独放宽（nginx /fleet/api/ client_max_body_size 2m），其余 64 KB。
+# 超限的结果不入库，只留 {error: result_too_large, bytes, limit}。
+RESULT_MAX_BYTES = 64 * 1024
+RESULT_MAX_BYTES_BY_KIND: Dict[str, int] = {TASK_PHONE_SCREENSHOT: 1_900_000}
+# 结果保留：截图 1 小时后清空（只留行做审计），其余已结束任务的结果 7 天后清空
+SCREENSHOT_RESULT_KEEP_SEC = 3600
+TASK_RESULT_KEEP_SEC = 7 * 86400
+PRUNED_RESULT = {"pruned": True}
+
+
+def result_limit(kind: Any) -> int:
+    return RESULT_MAX_BYTES_BY_KIND.get(str(kind or ""), RESULT_MAX_BYTES)
+
+
+def bound_result(kind: Any, result: Any) -> Dict[str, Any]:
+    """ack 结果按种类限大小；非 dict → {}；不能序列化 → {error: result_not_json}。"""
+    if not isinstance(result, dict):
+        return {}
+    limit = result_limit(kind)
+    try:
+        n = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        return {"error": "result_not_json"}
+    if n <= limit:
+        return result
+    return {"error": "result_too_large", "bytes": n, "limit": limit}
+
+
+__all__ += [
+    "RESULT_MAX_BYTES", "RESULT_MAX_BYTES_BY_KIND", "SCREENSHOT_RESULT_KEEP_SEC", "TASK_RESULT_KEEP_SEC",
+    "PRUNED_RESULT", "result_limit", "bound_result",
+]
 
 __all__ += [
     "CAP_PHONE_OPS_V1", "TASK_PHONE_SCREENSHOT", "TASK_PHONE_TAP", "TASK_PHONE_SWIPE", "TASK_PHONE_TEXT",
