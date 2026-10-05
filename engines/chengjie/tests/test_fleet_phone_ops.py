@@ -19,6 +19,7 @@ CAPS_HB = {"agent_version": "0.3.7", "proto_version": 1, "caps": [CAP_PHONE_OPS_
 def _node_with_caps(st, caps=(CAP_PHONE_OPS_V1,), mid="m-aaaa"):
     nid = _enroll(st, mid=mid)["node_id"]
     st.heartbeat(nid, {"agent_version": "0.3.7", "proto_version": 1, "caps": list(caps)}, now=T0 + 1)
+    st.set_remote_ops(nid, True)
     return nid
 
 
@@ -528,3 +529,48 @@ def test_agent_end_to_end_screenshot_via_controller(st, tmp_path, monkeypatch):
     rec = st.get_task(t["task_id"])
     assert rec["status"] == STATUS_DONE and rec["result"]["png_b64"].startswith("iVBORw0KGgo")
     assert rec["result"]["device_width"] == 720 and fake.actions() == [("-s", "S1", "exec-out", "screencap")]
+
+
+# ── 4) 审计 + 节点「允许远程操作」开关（缺省关） ────────────────────────────────
+def test_remote_ops_default_off_and_toggle_route(st):
+    c = _client(st)
+    nid = _capable(st, remote_ops=False)
+    assert st.get_node(nid)["remote_ops_enabled"] is False
+    r = c.post(f"/api/fleet/nodes/{nid}/phones/S1/screenshot", headers=OP, json={})
+    assert (r.status_code, r.json()["detail"]) == (409, "remote_ops_disabled")
+    assert st.enqueue(nid, TASK_PHONE_SCREENSHOT, target={"serial": "S1"}) is None
+    assert c.post(f"/api/fleet/nodes/{nid}", headers=OP, json={"remote_ops_enabled": "yes"}).status_code == 400
+    assert c.post(f"/api/fleet/nodes/{nid}", json={"remote_ops_enabled": True}).status_code == 401
+    r = c.post(f"/api/fleet/nodes/{nid}", headers=OP, json={"remote_ops_enabled": True})
+    assert r.status_code == 200 and r.json()["node"]["remote_ops_enabled"] is True
+    assert st.get_node(nid)["label"] == "机器A"          # label untouched by the toggle
+    assert c.post(f"/api/fleet/nodes/{nid}/phones/S1/screenshot", headers=OP, json={}).status_code == 200
+    assert c.post("/api/fleet/nodes/n_nope", headers=OP, json={"remote_ops_enabled": True}).status_code == 404
+
+
+def test_disabling_remote_ops_cancels_queued_and_pull_rejects(st):
+    nid = _capable(st)
+    a = st.enqueue(nid, TASK_PHONE_SCREENSHOT, target={"serial": "S1"})
+    st.set_remote_ops(nid, False)
+    assert st.get_task(a["task_id"])["status"] == "cancelled"
+    st.set_remote_ops(nid, True)
+    b = st.enqueue(nid, TASK_PHONE_SCREENSHOT, target={"serial": "S1"})
+    # flip the flag behind the store's back (e.g. a second controller process) → pull still refuses
+    import json as _json
+    st._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_json.dumps({"remote_ops_enabled": False}), nid))
+    st._conn.commit()
+    assert st.pull(nid) == []
+    assert st.get_task(b["task_id"])["detail"] == "remote_ops_disabled"
+
+
+def test_actor_header_recorded_for_audit(st):
+    c = _client(st)
+    nid = _capable(st)
+    h = dict(OP, **{"X-Fleet-Actor": "zhituo:alice<script>"})
+    t = c.post(f"/api/fleet/nodes/{nid}/phones/S1/tap", headers=h, json={"x": 1, "y": 2}).json()["task"]
+    assert t["created_by"] == "operator via zhituo:alicescript"
+    t2 = c.post(f"/api/fleet/nodes/{nid}/phones/S1/key", headers=OP, json={"key": "back"}).json()["task"]
+    assert t2["created_by"] == "operator"
+    audit = c.get(f"/api/fleet/tasks?node_id={nid}&kind={TASK_PHONE_TAP}", headers=OP).json()["tasks"]
+    assert [(x["created_by"], x["target"]["serial"], x["payload"]) for x in audit] == [
+        ("operator via zhituo:alicescript", "S1", {"x": 1, "y": 2})]

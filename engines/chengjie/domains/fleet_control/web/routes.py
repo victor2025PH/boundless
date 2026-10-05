@@ -168,16 +168,23 @@ async def _json(request: Request) -> Dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
+_ACTOR_UNSAFE = re.compile(r"[^\w.@:\-]")
+
+
 def _actor(request: Request) -> str:
+    """任务 created_by：主控登录身份；经智拓代理的请求再带上 ``X-Fleet-Actor``（智拓里点按钮的人），
+    形如 ``operator via zhituo:alice``，用于远程操作审计。头只做标注，鉴权仍是主控自己的。"""
+    base = "operator"
     try:
         u = request.session.get("user") if hasattr(request, "session") else None
         if isinstance(u, dict):
-            return str(u.get("username") or u.get("name") or "operator")
-        if isinstance(u, str) and u:
-            return u
+            base = str(u.get("username") or u.get("name") or "operator")
+        elif isinstance(u, str) and u:
+            base = u
     except Exception:
         pass
-    return "operator"
+    via = _ACTOR_UNSAFE.sub("", str(request.headers.get("x-fleet-actor") or ""))[:40]
+    return f"{base[:36]} via {via}" if via else base
 
 
 def phone_op_block_reason(node: Dict[str, Any], serial: str) -> str:
@@ -428,8 +435,17 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_node_update(node_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
         body = await _json(request)
         st = _store_or_503(config_manager)
-        ok = st.update_node(node_id, label=body.get("label") if "label" in body else None,
-                            group_name=body.get("group_name") if "group_name" in body else None)
+        ops = body.get("remote_ops_enabled")
+        if "remote_ops_enabled" in body and not isinstance(ops, bool):
+            raise HTTPException(status_code=400, detail="remote_ops_enabled must be true/false")
+        ok = False
+        if "label" in body or "group_name" in body:
+            ok = st.update_node(node_id, label=body.get("label") if "label" in body else None,
+                                group_name=body.get("group_name") if "group_name" in body else None)
+        if isinstance(ops, bool):
+            ok = st.set_remote_ops(node_id, ops) or ok
+            if ok:
+                logger.info("fleet remote_ops node=%s enabled=%s by=%s", node_id, ops, _actor(request))
         if not ok:
             raise HTTPException(status_code=404, detail="node not found or nothing to update")
         return {"ok": True, "node": st.get_node(node_id)}
