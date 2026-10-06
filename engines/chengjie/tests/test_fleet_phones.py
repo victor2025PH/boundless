@@ -299,7 +299,7 @@ def test_old_node_without_phones_is_empty_list(tmp_path):
 def test_agent_heartbeat_carries_phones(monkeypatch, tmp_path):
     from src.fleet import agent as agent_mod
 
-    assert agent_mod.AGENT_VERSION == "0.3.12"
+    assert agent_mod.AGENT_VERSION == "0.3.13"
     cfg = agent_mod.AgentConfig(tmp_path / "fleet")
     cfg.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})
     ag = agent_mod.NodeAgent(cfg, http=lambda *a, **k: (200, {}), app_version="t")
