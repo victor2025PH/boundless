@@ -97,6 +97,8 @@
 
 **0.3.8 社交动作**（`phone_post` / `phone_like` / `phone_comment` / `phone_follow`，能力 `phone_flows_v1`）：默认关，需 `phone_ops_v1` 且主控已开远程操作。坐标在 `phone_ui_map.json`（或 agent.json `phone_ui_map`）。受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 直接拒绝，不跑 adb。直播机判定（`is_live_stream_host`）不变。
 
+0.3.12 单文件把 `phone_ui_map.json` 放在冻结的 `phone_flows` 旁边（`_MEIPASS/src/fleet`）。那份文件不在时再读 `%ProgramData%\ChatX\fleet\phone_ui_map.json`。安装器只在该文件还不存在时放一份默认坐标。agent.json `phone_ui_map` 仍优先。公开下载页的 latest 不因这一版改掉。
+
 Social payloads (`phone_post` / `phone_like` / `phone_comment` / `phone_follow` / `phone_warmup` / `phone_dm` / `phone_watch`) accept `dry_run` or `predict_only`. JSON `true` compiles the UI map and returns planned taps/text in permille space (`space: "permille"`) without adb input or screenshots. JSON `false` or a missing flag keeps real execution. `phone_flows_enabled` still has to be JSON `true`; a dry_run on a disabled node is `phone_flows_disabled` and does not touch adb. A non-bool flag, or the two flags disagreeing, is `bad_dry_run`. `enable-phone-flows --node <id> [--yes]` queues `push_config` `{"patch":{"phone_flows_enabled":true}}`.
 
 核对与节奏默认关，避免改掉原来的点击序列和 0.5 s 最短间隔：`robust.verify`（默认 false）、`robust.retries`（默认 2，最多 3 次额外重试）、`robust.jitter_ms`（默认 `[0, 0]`，每端最多 2000 ms，加在每步原有最短间隔之上，不缩短它，也不放开该手机的锁）。agent.json `phone_flow_verify` / `phone_flow_jitter_ms` 热加载，可盖过文件；`phone_flow_verify` 只有 JSON `true` 才强制核对，抖动形状不对就仍用文件。打开核对后，标了 `expect` 的步骤做完再截一张图：画面没变 → `screen_not_reached`；颜色对不上 → `anchor_mismatch`。点开应用（`preflight.after_anchor`，随包是 `app_icon`）之后先看登录标记：登录页颜色在 → `not_logged_in`，已登录颜色不在 → `app_not_ready`，停在这一步，不再发帖或点赞。

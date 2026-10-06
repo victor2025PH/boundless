@@ -1,7 +1,8 @@
 """把发帖 / 点赞 / 评论 / 关注，以及养号 / 私信 / 看短视频，编译成已有的截图、点击、滑动、按键、输入。
 
 坐标在 ``phone_ui_map.json``（或 agent.json ``phone_ui_map`` 指向的文件）里，按应用分开，
-单位是屏幕千分比。每次动作先截一张图量屏幕，再把千分比换成像素。不新增 adb 动词：
+单位是屏幕千分比。agent.json 里的路径优先；路径为空时用本模块旁边的那份，那份不在时再用
+fleet 状态目录里的 ``phone_ui_map.json``。每次动作先截一张图量屏幕，再把千分比换成像素。不新增 adb 动词：
 打开应用是 HOME 再点该应用的 ``app_icon`` 锚点；带图是点相册里已经在手机上的那一格。
 停留（dwell）只在本机睡一会儿，不发 adb。
 
@@ -340,6 +341,21 @@ def bundled_ui_map() -> Dict[str, Any]:
     return validate_ui_map(json.loads(_BUNDLED.read_text(encoding="utf-8")))
 
 
+def default_ui_map_path(state_dir: Optional[Path] = None) -> Path:
+    """Map beside this module, else ``phone_ui_map.json`` in the fleet state dir.
+
+    An explicit agent.json path is not resolved here. Callers that have one use it
+    even when the file is absent. A present bundled file wins over the state dir.
+    """
+    if _BUNDLED.is_file():
+        return _BUNDLED
+    if state_dir is not None:
+        dropped = Path(state_dir) / "phone_ui_map.json"
+        if dropped.is_file():
+            return dropped
+    return _BUNDLED
+
+
 def _px(pm: int, size: int) -> int:
     v = pm * size // 1000
     if v < 0:
@@ -601,22 +617,28 @@ class PhoneFlows:
     """节点上的社交动作执行器。``execute`` 永不抛。"""
 
     def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
-                 verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None) -> None:
+                 verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
+                 state_dir: Optional[Path] = None) -> None:
         self.enabled = False
         self.ui_map_path = ""
+        self.state_dir: Optional[Path] = None
         self.ops = ops
         self._cache: Optional[tuple] = None
         self._verify: Any = None
         self._jitter: Any = None
         self._rng = random.random
-        self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify, jitter_ms=jitter_ms, rng=rng)
+        self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify,
+                       jitter_ms=jitter_ms, rng=rng, state_dir=state_dir)
 
     def configure(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
-                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None) -> None:
+                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
+                  state_dir: Any = _UNSET) -> None:
         path = ui_map_path.strip() if isinstance(ui_map_path, str) else ("invalid" if ui_map_path else "")
-        if path != self.ui_map_path:
+        next_state = self.state_dir if state_dir is _UNSET else state_dir
+        if path != self.ui_map_path or next_state != self.state_dir:
             self._cache = None
         self.ui_map_path = path
+        self.state_dir = next_state
         self.enabled = bool(enabled)
         if ops is not None:
             self.ops = ops
@@ -628,7 +650,7 @@ class PhoneFlows:
             self._rng = rng
 
     def load_map(self) -> Dict[str, Any]:
-        path = Path(self.ui_map_path) if self.ui_map_path else _BUNDLED
+        path = Path(self.ui_map_path) if self.ui_map_path else default_ui_map_path(self.state_dir)
         if not path.is_file():
             raise PhoneOpError("ui_map_missing")
         try:
@@ -838,5 +860,6 @@ class PhoneFlows:
 
 
 __all__ = [
-    "PhoneFlows", "bundled_ui_map", "compile_flow", "compile_flow_checked", "validate_ui_map",
+    "PhoneFlows", "bundled_ui_map", "compile_flow", "compile_flow_checked", "default_ui_map_path",
+    "validate_ui_map",
 ]
