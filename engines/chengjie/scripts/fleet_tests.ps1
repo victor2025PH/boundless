@@ -80,8 +80,17 @@ try {
         }
         if (Get-Command gitleaks -ErrorAction SilentlyContinue) {
             $root = (git rev-parse --show-toplevel)
-            $targets = @($root)
-            if (-not $FullSecrets) { $targets = @($changed | ForEach-Object { (Resolve-Path $_).Path }) }
+            # 目标一律给「仓库根相对、正斜杠」路径：gitleaks dir 的指纹 = 传入路径:规则:行号，
+            # 传绝对 Windows 路径（D:\...）时 .gitleaksignore 里的 engines/chengjie/... 指纹一条都对不上。
+            $rootWin = ($root -replace "/", "\").TrimEnd("\")
+            $targets = @(".")
+            if (-not $FullSecrets) {
+                $targets = @($changed | ForEach-Object {
+                        $full = (Resolve-Path $_).Path
+                        if ($full.StartsWith($rootWin + "\", [StringComparison]::OrdinalIgnoreCase)) {
+                            $full.Substring($rootWin.Length + 1) -replace "\\", "/"
+                        } else { $full } })
+            }
             Push-Location $root
             try {
                 foreach ($tg in $targets) {

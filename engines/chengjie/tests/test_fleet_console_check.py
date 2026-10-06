@@ -67,7 +67,7 @@ def test_detects_page_regex_damage(rendered):
 
 
 def test_run_never_prints_token(monkeypatch, rendered):
-    token = "tok-SECRET-0123456789abcdef"
+    token = "FAKE" * 6                      # 低熵假值，别让 gitleaks 当密钥
     seen = []
 
     def fake_req(method, url, headers=None, data=None, timeout=15.0):
