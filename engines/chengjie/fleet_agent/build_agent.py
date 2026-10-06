@@ -59,6 +59,33 @@ def ui_map_add_data() -> str:
     return f"{src}{os.pathsep}{UI_MAP_DEST}"
 
 
+def assert_phone_flows_startup() -> None:
+    """Refuse to package an agent whose PhoneFlows constructor drops state_dir.
+
+    NodeAgent passes the fleet state directory at process start. A binary whose
+    frozen PhoneFlows.__init__ does not accept that keyword exits immediately.
+    """
+    engine = str(ENGINE)
+    if engine not in sys.path:
+        sys.path.insert(0, engine)
+    import inspect
+
+    from src.fleet.agent import _phone_flows_settings
+    from src.fleet.phone_flows import PhoneFlows
+
+    settings = _phone_flows_settings({}, ENGINE)
+    params = inspect.signature(PhoneFlows.__init__).parameters
+    missing = [key for key in settings if key not in params]
+    if missing or "state_dir" not in params:
+        raise SystemExit(
+            "PhoneFlows.__init__ must accept state_dir and the agent startup keys; "
+            f"missing={missing or ['state_dir']}"
+        )
+    flows = PhoneFlows.from_agent_settings(settings, None)
+    if Path(flows.state_dir or "") != ENGINE:
+        raise SystemExit("PhoneFlows.from_agent_settings dropped state_dir")
+
+
 def agent_version() -> str:
     m = re.search(r'^AGENT_VERSION\s*=\s*"([^"]+)"', (ENGINE / "src/fleet/agent.py").read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else "0.0.0"
@@ -78,6 +105,7 @@ def main() -> int:
     ap.add_argument("--base-url", default="https://bd2026.cc/downloads/fleet/", help="manifest.url 的前缀")
     ap.add_argument("--skip-build", action="store_true", help="只重算 sha256 / manifest（已有 exe）")
     args = ap.parse_args()
+    assert_phone_flows_startup()
 
     if args.clean:
         shutil.rmtree(DIST, ignore_errors=True)

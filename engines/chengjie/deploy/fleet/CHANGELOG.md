@@ -1,5 +1,8 @@
 # 智拓群控节点更新日志
 
+## 0.3.14
+0.3.13 的现场包一启动就退出：构造 `PhoneFlows` 时传入了 `state_dir`，旧的 `__init__` 不收这个参数。0.3.14 的构造函数接收 `state_dir`，节点启动改走 `PhoneFlows.from_agent_settings`，和打包前的检查用的是同一组参数。`push_config` 的坐标路径、json、base64 行为不变。直播机和受保护手机的规则不变。公开下载页的 latest 不因这一版改掉。
+
 ## 0.3.13
 `push_config` 可以写 `phone_flows_enabled`，也可以把 `phone_ui_map` 指到本机已经存在的坐标文件。远程下发坐标用 `phone_ui_map_json` 或 `phone_ui_map_b64`：先按 `validate_ui_map` 检查、不超过 256KiB，再写到 `%ProgramData%\ChatX\fleet\phone_ui_map.remote.json`，然后把 `phone_ui_map` 设成这个路径。回执只带回路径和字节数，不带回坐标正文，日志也不打全文。别的键、空补丁、两种正文同时给、正文和路径同时给，仍是 `not_supported_in_agent_v1`，不写文件。路径不存在是 `ui_map_missing`；JSON 或形状不对是 `ui_map_invalid`；超过 256KiB 是 `ui_map_too_large`。直播机在写入之前拒绝。受保护手机和直播机判定不变。公开下载页的 latest 不因这一版改掉。
 
