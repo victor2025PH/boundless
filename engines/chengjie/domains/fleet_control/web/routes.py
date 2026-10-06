@@ -52,8 +52,9 @@ from src.fleet.phone_rules import (
     PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
 )
 from src.fleet.protocol import PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC
+from src.fleet import remote_ops_watch
 from src.fleet.roompack import build_room_pack
-from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
+from src.fleet.store import REMOTE_OPS_MAX_MIN, FleetStore, get_store, resolve_download, resolve_fleet_cfg
 
 _INSTALL_PS1 = Path(__file__).resolve().parents[3] / "fleet_agent" / "Install-ChatXAgent.ps1"
 _ROOM_KEY_RE = re.compile(r"^rk_[A-Za-z0-9_-]{20,180}$")
@@ -215,6 +216,9 @@ def register_routes(app, ctx) -> None:
 
     def _start_offline_watch():
         start_watch(_watch_nodes, _alerter)
+        # 远程操作开关到期自动关（与离线告警无关，offline_alert_min=0 时也要跑）
+        remote_ops_watch.start_sweep(lambda: get_store(config_manager),
+                                     default_minutes=resolve_fleet_cfg(config_manager)["remote_ops_default_min"])
 
     # 与 admin.py 一致用 on_event（Starlette 1.x 已去掉 add_event_handler，FastAPI 仍保留 on_event）
     try:
@@ -438,14 +442,26 @@ def register_routes(app, ctx) -> None:
         ops = body.get("remote_ops_enabled")
         if "remote_ops_enabled" in body and not isinstance(ops, bool):
             raise HTTPException(status_code=400, detail="remote_ops_enabled must be true/false")
+        mins = body.get("remote_ops_minutes")
+        if mins is not None and (isinstance(mins, bool) or not isinstance(mins, (int, float))
+                                 or not 1 <= mins <= REMOTE_OPS_MAX_MIN):
+            raise HTTPException(status_code=400, detail=f"remote_ops_minutes must be 1-{REMOTE_OPS_MAX_MIN}")
         ok = False
         if "label" in body or "group_name" in body:
             ok = st.update_node(node_id, label=body.get("label") if "label" in body else None,
                                 group_name=body.get("group_name") if "group_name" in body else None)
         if isinstance(ops, bool):
-            ok = st.set_remote_ops(node_id, ops) or ok
-            if ok:
-                logger.info("fleet remote_ops node=%s enabled=%s by=%s", node_id, ops, _actor(request))
+            actor = _actor(request)
+            before = st.get_node(node_id) or {}
+            dflt = resolve_fleet_cfg(config_manager)["remote_ops_default_min"]
+            done = st.set_remote_ops(node_id, ops, minutes=mins if mins is not None else dflt, actor=actor)
+            ok = done or ok
+            if done:
+                logger.info("fleet remote_ops node=%s enabled=%s minutes=%s by=%s", node_id, ops,
+                            mins if ops else "-", actor)
+                # 开（含续期）每次都通知；关只在原来开着时通知（重复点「关」不刷屏）
+                if ops or before.get("remote_ops_enabled"):
+                    remote_ops_watch.notify_toggle(st.get_node(node_id), ops, actor)
         if not ok:
             raise HTTPException(status_code=404, detail="node not found or nothing to update")
         return {"ok": True, "node": st.get_node(node_id)}
@@ -608,7 +624,10 @@ def register_routes(app, ctx) -> None:
         cfg = resolve_fleet_cfg(config_manager)
         return templates.TemplateResponse(request, "fleet_console.html",
                                           {"public_url": cfg["public_url"] or str(request.base_url).rstrip("/"),
-                                           "heartbeat_sec": cfg["heartbeat_sec"]})
+                                           "heartbeat_sec": cfg["heartbeat_sec"],
+                                           "fleet_api_base": cfg["console_api_base"],
+                                           "remote_ops_default_min": cfg["remote_ops_default_min"],
+                                           "remote_ops_max_min": REMOTE_OPS_MAX_MIN})
 
     @app.get("/fleet/advanced/Install-ChatXAgent.ps1")
     async def fleet_install_script(request: Request):

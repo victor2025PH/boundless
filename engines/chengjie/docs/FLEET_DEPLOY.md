@@ -140,6 +140,13 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 3. 把更新后的 `deploy/fleet/nginx-fleet.conf` 再装一次（`deploy_controller.sh` 会重写 snippet）。新增的是 `/fleet/dl/`：反代到主控，并且 **access_log off**，避免机房链接里的密钥进 nginx 日志。没有新的监听端口。装完 `nginx -t && systemctl reload nginx`，然后 `systemctl restart chatx-fleet`。
 4. 主控进程给 uvicorn / httpx 访问日志加了过滤器，把 `/fleet/dl/<token>` 收成 `/fleet/dl/<redacted>`。应用自己的日志只记 key id。注册失败另打一行 `fleet enroll_fail ip=1.2.3.4 reason=bad_code`（注册码或机房密钥锁定期是 `reason=lockout`，猜错机房密钥是 `reason=bad_room_key`）。仓库里的 `deploy/fleet/fail2ban/` 和 `deploy/fleet/nginx-fleet-enroll-limit.conf` 只是历史对照。现网的 enroll `limit_req` 和 fail2ban jail 已由运维撤掉，不要当成必需项重新装上。
 
+## 3.2 控制台 API 前缀、远程操作自动关闭
+
+- **API 前缀**：`fleet_console.html` 里所有接口地址都由 `fa('nodes', id, 'tasks')` 这类调用拼出来，前缀来自路由注入的 `fleet_control.console_api_base`（模板里的 `#fc-cfg[data-api-base]`）。空值就是同站 `/api/fleet/...`。公网 VPS 上控制台挂在 `/fleet/ui`，可以填 `console_api_base: "/fleet/ui"`。以后热修控制台不再需要手工维护一份「带 /fleet/ui 前缀」的差异文件。
+- **VPS 的 HTML 改写中间件**：VPS 自己的 `src/web/admin.py`（不在本仓库）有 `FleetAssetPrefixMiddleware`，会把 HTML 里所有带引号、以 `/` 开头的字面量补成 `/fleet/ui/...`。所以控制台脚本里**不能出现** `'/api/...'`、`'/revoke'` 这类字面量，否则会被改坏（0.3.7 现网控制台的撤销 / 下发任务 / 批准 / 拒绝 / 撤销机房密钥 / 登录二维码 / 取消任务 8 个写接口就是这样被改成 `.../nodes/n1/fleet/ui/revoke`）。`tests/test_fleet_remote_ops_expiry.py` 有两条静态守卫。中间件在场时 `console_api_base` 留空或填 `/fleet/ui` 都能用，不会出现双重前缀。
+- **远程操作自动关闭**：节点开「远程操作」时带一个时长（默认 `remote_ops_default_min`=30 分钟，每次打开可改，最多 240 分钟）。到点后主控的后台巡检（30 秒一轮，文件锁保证多进程只有一个在跑，锁路径可用 `CHATX_FLEET_REMOTE_OPS_LOCK` 改）会自动关掉开关，并把排队中的手机任务取消（`detail=remote_ops_expired`；手动关是 `remote_ops_disabled`）。节点上会记录谁、什么时候打开的，以及到期时间，最近一次关闭记在 `remote_ops_last_off`。控制台和智拓的徽章显示「剩 N 分」。旧库里开着但没有到期时间的记录，上线后第一轮巡检会补上默认时长。
+- **通知**：打开、手动关、到点自动关都走现有的 `src.ops.ops_alert.notify`：审计日志一定写；只有配置了 `EVENT_INGEST_KEY` 时才同时推 TG。没有新增通知渠道。
+
 ## 4. 日常操作（操作端 CLI）
 
 ```powershell

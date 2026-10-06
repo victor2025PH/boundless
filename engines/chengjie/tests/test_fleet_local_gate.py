@@ -38,6 +38,6 @@ def test_gate_list_includes_ci_only_ratchets():
     listed = set(res.stdout.split())
     for name in ("test_silent_exception_ratchet.py", "test_template_bare_fetch_ratchet.py",
                  "test_template_inline_color_ratchet.py", "test_workspace_emoji_ratchet.py",
-                 "test_fleet_phone_ops.py", "test_fleet_local_gate.py",
+                 "test_fleet_phone_ops.py", "test_fleet_remote_ops_expiry.py", "test_fleet_local_gate.py",
                  "test_config_init.py"):
         assert f"tests/{name}" in listed, name

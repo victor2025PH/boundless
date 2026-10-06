@@ -57,6 +57,10 @@ ROOM_FAIL_WINDOW_SEC = 3600
 PENDING_TTL_SEC = 24 * 3600
 CLAIM_WINDOW_SEC = 15 * 60
 PENDING_DEFAULT_GROUP = "pending-default"
+# 0.3.8 远程操作开关自动关：每次开启带有效期（缺省 30 分钟，单次最多 4 小时），到期主控自动关闭
+REMOTE_OPS_DEFAULT_MIN = 30
+REMOTE_OPS_MAX_MIN = 240
+REMOTE_OPS_AUTO_ACTOR = "system:auto-off"
 _PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _TEXT_UNSAFE = re.compile("[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
@@ -260,6 +264,32 @@ def _loads(s: Any) -> Dict[str, Any]:
 
 def _dumps(d: Any) -> str:
     return json.dumps(d if isinstance(d, dict) else {}, ensure_ascii=False)
+
+
+def clamp_remote_ops_min(value: Any, default: Any = REMOTE_OPS_DEFAULT_MIN) -> int:
+    """开启时长（分钟）收进 1..REMOTE_OPS_MAX_MIN；读不出来用 default（再读不出来用 30）。"""
+    for v in (value, default, REMOTE_OPS_DEFAULT_MIN):
+        if v is None or v == "" or isinstance(v, bool):
+            continue
+        try:
+            m = int(float(v))
+        except (TypeError, ValueError):
+            continue
+        return max(1, min(REMOTE_OPS_MAX_MIN, m))
+    return REMOTE_OPS_DEFAULT_MIN
+
+
+def remote_ops_live(meta: Any, now: float) -> bool:
+    """开关开着且没过期。没有到期时间的旧记录（0.3.8 之前开的）算开着，由 expire_remote_ops 补上期限。"""
+    if not isinstance(meta, dict) or not meta.get("remote_ops_enabled"):
+        return False
+    exp = meta.get("remote_ops_expires_at")
+    if exp is None:
+        return True
+    try:
+        return float(exp) > float(now)
+    except (TypeError, ValueError):
+        return False
 
 
 class FleetStore:
@@ -915,27 +945,85 @@ class FleetStore:
         cap = missing_cap(kind, _loads(row["last_heartbeat_json"]).get("caps"))
         if cap:
             return f"node_lacks_cap:{cap}"
-        if kind in PHONE_TASK_KINDS and not _loads(row["meta_json"]).get("remote_ops_enabled"):
+        if kind in PHONE_TASK_KINDS and not remote_ops_live(_loads(row["meta_json"]), time.time()):
             return "remote_ops_disabled"
         return ""
 
-    def set_remote_ops(self, node_id: str, enabled: bool) -> bool:
-        """节点「允许远程操作手机」开关（缺省关）。关掉时作废该节点还没领走的 phone_* 任务。"""
+    def set_remote_ops(self, node_id: str, enabled: bool, *, minutes: Any = None, actor: str = "",
+                       reason: str = "", now: Optional[float] = None) -> bool:
+        """节点「允许远程操作手机」开关（缺省关）。
+
+        开：记下谁开的、什么时候开的、几点到期（minutes 收进 1..REMOTE_OPS_MAX_MIN，缺省 30）；
+        关：记下谁关的 / 为什么（manual / expired），并作废该节点还没领走的 phone_* 任务。
+        """
+        ts = float(now if now is not None else time.time())
         with self._lock:
             row = self._conn.execute("SELECT meta_json FROM nodes WHERE node_id=?", (str(node_id),)).fetchone()
             if row is None:
                 return False
             meta = _loads(row["meta_json"])
-            meta["remote_ops_enabled"] = bool(enabled)
-            self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), str(node_id)))
-            if not enabled:
-                marks = ",".join("?" * len(PHONE_TASK_KINDS))
-                self._conn.execute(
-                    f"UPDATE node_tasks SET status=?, detail='remote_ops_disabled', acked_at=? "
-                    f"WHERE node_id=? AND status=? AND kind IN ({marks})",
-                    (STATUS_CANCELLED, time.time(), str(node_id), STATUS_QUEUED, *PHONE_TASK_KINDS))
+            if enabled:
+                mins = clamp_remote_ops_min(minutes)
+                meta.update({"remote_ops_enabled": True, "remote_ops_minutes": mins,
+                             "remote_ops_expires_at": ts + mins * 60,
+                             "remote_ops_enabled_by": str(actor or "")[:80], "remote_ops_enabled_at": ts})
+                self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), str(node_id)))
+            else:
+                self._disable_remote_ops_locked(str(node_id), meta, ts, actor, reason or "manual")
             self._conn.commit()
         return True
+
+    def _disable_remote_ops_locked(self, node_id: str, meta: Dict[str, Any], ts: float, actor: str,
+                                   reason: str) -> int:
+        was_on = bool(meta.get("remote_ops_enabled"))
+        meta["remote_ops_enabled"] = False
+        meta.pop("remote_ops_expires_at", None)
+        if was_on or "remote_ops_last_off" not in meta:
+            meta["remote_ops_last_off"] = {"at": ts, "by": str(actor or "")[:80], "reason": str(reason)[:20],
+                                           "enabled_by": str(meta.get("remote_ops_enabled_by") or "")[:80]}
+        self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), node_id))
+        marks = ",".join("?" * len(PHONE_TASK_KINDS))
+        detail = "remote_ops_expired" if reason == "expired" else "remote_ops_disabled"
+        cur = self._conn.execute(
+            f"UPDATE node_tasks SET status=?, detail=?, acked_at=? "
+            f"WHERE node_id=? AND status=? AND kind IN ({marks})",
+            (STATUS_CANCELLED, detail, ts, node_id, STATUS_QUEUED, *PHONE_TASK_KINDS))
+        return int(cur.rowcount or 0)
+
+    def expire_remote_ops(self, now: Optional[float] = None,
+                          default_minutes: Any = REMOTE_OPS_DEFAULT_MIN) -> List[Dict[str, Any]]:
+        """到期自动关（后台巡检调用，幂等）。返回本次关掉的节点，供告警 / 审计。
+
+        0.3.8 之前开的、没有到期时间的记录：从现在起补一个缺省期限，不立刻关。
+        """
+        ts = float(now if now is not None else time.time())
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            rows = self._conn.execute("SELECT node_id, label, host_name, meta_json FROM nodes").fetchall()
+            changed = False
+            for r in rows:
+                meta = _loads(r["meta_json"])
+                if not meta.get("remote_ops_enabled"):
+                    continue
+                exp = meta.get("remote_ops_expires_at")
+                if exp is None:
+                    mins = clamp_remote_ops_min(default_minutes)
+                    meta.update({"remote_ops_minutes": mins, "remote_ops_expires_at": ts + mins * 60})
+                    self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), r["node_id"]))
+                    changed = True
+                    continue
+                if remote_ops_live(meta, ts):
+                    continue
+                enabled_by = str(meta.get("remote_ops_enabled_by") or "")
+                enabled_at = meta.get("remote_ops_enabled_at")
+                n = self._disable_remote_ops_locked(r["node_id"], meta, ts, REMOTE_OPS_AUTO_ACTOR, "expired")
+                changed = True
+                out.append({"node_id": r["node_id"], "label": r["label"] or r["host_name"] or r["node_id"],
+                            "enabled_by": enabled_by, "enabled_at": enabled_at, "expired_at": exp,
+                            "cancelled_tasks": n})
+            if changed:
+                self._conn.commit()
+        return out
 
     def enqueue(self, node_id: str, kind: str, *, payload: Optional[Dict[str, Any]] = None,
                 target: Optional[Dict[str, Any]] = None, ttl_sec: Any = DEFAULT_TASK_TTL_SEC,
@@ -953,7 +1041,7 @@ class FleetStore:
                 return None
             if missing_cap(kind, _loads(node["last_heartbeat_json"]).get("caps")):
                 return None
-            if kind in PHONE_TASK_KINDS and not _loads(node["meta_json"]).get("remote_ops_enabled"):
+            if kind in PHONE_TASK_KINDS and not remote_ops_live(_loads(node["meta_json"]), ts):
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
@@ -999,7 +1087,7 @@ class FleetStore:
             node = self._conn.execute("SELECT last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
                                       (str(node_id),)).fetchone()
             caps = _loads(node["last_heartbeat_json"]).get("caps") if node is not None else []
-            ops_on = bool(_loads(node["meta_json"]).get("remote_ops_enabled")) if node is not None else False
+            ops_on = remote_ops_live(_loads(node["meta_json"]), ts) if node is not None else False
             keep = []
             for r in rows:
                 cap = missing_cap(r["kind"], caps)
@@ -1186,7 +1274,26 @@ class FleetStore:
             "phones_error": hb.get("phones_error") if isinstance(hb.get("phones_error"), str) else "",
             # 0.3.7 能力声明（老节点没有 → []）
             "caps": sanitize_caps(hb.get("caps")),
-            "remote_ops_enabled": bool(_loads(row["meta_json"]).get("remote_ops_enabled")),
+            **self._remote_ops_view(_loads(row["meta_json"]), ts),
+        }
+
+    @staticmethod
+    def _remote_ops_view(meta: Dict[str, Any], ts: float) -> Dict[str, Any]:
+        """控制台 / 智拓用：开关状态 + 剩余时间 + 谁开的；过期但巡检还没跑到也显示为关。"""
+        live = remote_ops_live(meta, ts)
+        exp = meta.get("remote_ops_expires_at") if live else None
+        try:
+            remaining = max(0, int(float(exp) - ts)) if exp is not None else None
+        except (TypeError, ValueError):
+            remaining = None
+        last_off = meta.get("remote_ops_last_off") if isinstance(meta.get("remote_ops_last_off"), dict) else None
+        return {
+            "remote_ops_enabled": live,
+            "remote_ops_expires_at": exp,
+            "remote_ops_remaining_sec": remaining,
+            "remote_ops_enabled_by": str(meta.get("remote_ops_enabled_by") or "") if live else "",
+            "remote_ops_enabled_at": meta.get("remote_ops_enabled_at") if live else None,
+            "remote_ops_last_off": last_off,
         }
 
     @staticmethod
@@ -1254,6 +1361,14 @@ def set_store(store: Optional[FleetStore]) -> None:
     _store_sig = "injected" if store is not None else ""
 
 
+_API_BASE_RE = re.compile(r"^(/[A-Za-z0-9._\-]+)*$")
+
+
+def _api_base(v: Any) -> str:
+    s = str(v or "").strip().rstrip("/")
+    return s if _API_BASE_RE.match(s) else ""
+
+
 def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
     """根 config 的 ``fleet_control:`` 段（全部有缺省）。"""
     root = cfg_root
@@ -1274,6 +1389,10 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
         "public_url": str(fc.get("public_url") or ""),
         # 控制台入口（子域上线后填 https://fleet.bd2026.cc/fleet/console；空 = 同站 /fleet/console）
         "console_url": str(fc.get("console_url") or ""),
+        # 控制台 JS 调 API 的路径前缀：空 = 同站 /api/fleet/...；公网 VPS 经 /fleet/ui 反代时填 "/fleet/ui"
+        "console_api_base": _api_base(fc.get("console_api_base")),
+        # 远程操作开关缺省开多久（分钟，1..240，缺省 30）；每次开启可单独指定
+        "remote_ops_default_min": clamp_remote_ops_min(fc.get("remote_ops_default_min")),
         "download": {
             "version": str(dl.get("version") or ""),
             "installer_url": str(dl.get("installer_url") or ""),
