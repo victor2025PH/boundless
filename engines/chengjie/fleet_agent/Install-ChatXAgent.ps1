@@ -201,6 +201,26 @@ function Lock-StateDir([string]$Dir) {
   if (Test-Reparse $Dir) { throw "state dir is a reparse point" }
   try { if (-not (Test-DirLocked $Dir)) { throw "state dir ACL is not locked" } } catch { throw }
 }
+function Copy-DefaultUiMap([string]$ToDir, [string]$Kept) {
+  # Create the state-dir map only when it is absent. A kept snapshot wins over the default.
+  $dest = Join-Path $ToDir 'phone_ui_map.json'
+  if (Test-Path -LiteralPath $dest) { return }
+  if ($Kept -and (Test-Path -LiteralPath $Kept)) {
+    Copy-Item -LiteralPath $Kept -Destination $dest -Force
+    return
+  }
+  $candidates = @()
+  if ($Exe) { $candidates += (Join-Path (Split-Path -Parent $Exe) 'phone_ui_map.json') }
+  $candidates += (Join-Path $PSScriptRoot 'phone_ui_map.json')
+  $candidates += (Join-Path $InstallDir 'phone_ui_map.json')
+  foreach ($src in $candidates) {
+    if ($src -and (Test-Path -LiteralPath $src)) {
+      Copy-Item -LiteralPath $src -Destination $dest -Force
+      Say "placed default phone_ui_map.json"
+      return
+    }
+  }
+}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Fail "run this script as Administrator (scheduled task needs SYSTEM)" }
@@ -244,6 +264,7 @@ Install-BundledPlatformTools $InstallDir $Exe
 # 3. local instance. Snapshot before an unlocked fleet is renamed aside.
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
 $snap = ""
+$uiSnap = ""
 if ((Test-Path -LiteralPath $stateDir) -and -not (Test-Reparse $stateDir)) {
   $preLocked = $false
   try { $preLocked = Test-DirLocked $stateDir } catch { $preLocked = $false }
@@ -251,6 +272,11 @@ if ((Test-Path -LiteralPath $stateDir) -and -not (Test-Reparse $stateDir)) {
   if ((-not $preLocked) -and (Test-Path -LiteralPath $agentJson) -and -not (Test-Reparse $agentJson)) {
     $snap = Join-Path $env:TEMP ("chatx-agent-migrate-" + [guid]::NewGuid().ToString("N") + ".json")
     Copy-Item -LiteralPath $agentJson -Destination $snap -Force
+  }
+  $uiMap = Join-Path $stateDir "phone_ui_map.json"
+  if ((-not $preLocked) -and (Test-Path -LiteralPath $uiMap) -and -not (Test-Reparse $uiMap)) {
+    $uiSnap = Join-Path $env:TEMP ("chatx-phone-ui-map-" + [guid]::NewGuid().ToString("N") + ".json")
+    Copy-Item -LiteralPath $uiMap -Destination $uiSnap -Force
   }
 }
 $lockFailed = $false
@@ -271,7 +297,12 @@ try {
 } finally {
   if ($snap) { Remove-Item -LiteralPath $snap -Force -ErrorAction SilentlyContinue }
 }
-if ($lockFailed) { Fail $lockError }
+if ($lockFailed) {
+  if ($uiSnap) { Remove-Item -LiteralPath $uiSnap -Force -ErrorAction SilentlyContinue }
+  Fail $lockError
+}
+try { Copy-DefaultUiMap $stateDir $uiSnap }
+finally { if ($uiSnap) { Remove-Item -LiteralPath $uiSnap -Force -ErrorAction SilentlyContinue } }
 $detect = $false
 if (-not $NoInstance) {
   if ($ConfigPath -or $AuthToken) {

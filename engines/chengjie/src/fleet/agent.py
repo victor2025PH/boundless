@@ -78,7 +78,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.8"
+AGENT_VERSION = "0.3.12"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -542,7 +542,7 @@ class NodeAgent:
         # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
         self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data, cfg.state_dir))
         # 0.3.8 社交动作缺省关：只有 agent.json phone_flows_enabled=true 才声明 phone_flows_v1
-        self.phone_flows = PhoneFlows(**_phone_flows_settings(cfg.data), ops=self.phone_ops)
+        self.phone_flows = PhoneFlows(**_phone_flows_settings(cfg.data, cfg.state_dir), ops=self.phone_ops)
         self._cfg_mtime = _mtime_ns(cfg.path)
 
     def reload_operator_config(self) -> bool:
@@ -556,7 +556,7 @@ class NodeAgent:
         d = self.cfg.data
         self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d, self.cfg.state_dir))
         self.phone_ops.configure(**_phone_ops_settings(d, self.cfg.state_dir))
-        self.phone_flows.configure(**_phone_flows_settings(d), ops=self.phone_ops)
+        self.phone_flows.configure(**_phone_flows_settings(d, self.cfg.state_dir), ops=self.phone_ops)
         logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s，adb_manage_server %s",
                     len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off",
                     "on" if self.phone_flows.enabled else "off",
@@ -1113,7 +1113,7 @@ class NodeAgent:
         if is_live_stream_host(self.cfg.state_dir):
             return STATUS_REJECTED, {}, "live_stream_host"
         self.cfg.write_operator_keys({"phone_flows_enabled": enabled})
-        self.phone_flows.configure(**_phone_flows_settings(self.cfg.data), ops=self.phone_ops)
+        self.phone_flows.configure(**_phone_flows_settings(self.cfg.data, self.cfg.state_dir), ops=self.phone_ops)
         self._cfg_mtime = _mtime_ns(self.cfg.path)
         return STATUS_DONE, {"phone_flows_enabled": self.phone_flows.enabled}, "ok"
 
@@ -1269,7 +1269,7 @@ def _phone_ops_settings(data: Dict[str, Any], state_dir: Optional[Path] = None) 
     }
 
 
-def _phone_flows_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+def _phone_flows_settings(data: Dict[str, Any], state_dir: Optional[Path] = None) -> Dict[str, Any]:
     raw = data.get("phone_ui_map", "")
     if isinstance(raw, str):
         path = raw.strip()
@@ -1284,7 +1284,7 @@ def _phone_flows_settings(data: Dict[str, Any]) -> Dict[str, Any]:
     if "phone_flow_jitter_ms" in data:
         jitter = parse_jitter_ms(data.get("phone_flow_jitter_ms"))
     return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path,
-            "verify": verify, "jitter_ms": jitter}
+            "verify": verify, "jitter_ms": jitter, "state_dir": state_dir}
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────

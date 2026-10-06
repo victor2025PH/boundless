@@ -35,6 +35,28 @@ HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent
 DIST = HERE / "dist"
 NAME = "chatx-agent"
+# PyInstaller 6.22 onefile does not extract pure-Python modules. The frozen
+# loader sets phone_flows.__file__ to <_MEIPASS>/src/fleet/phone_flows.py
+# (a virtual path). --add-data DEST is a directory under _MEIPASS; joining
+# the source basename puts the JSON at <_MEIPASS>/src/fleet/phone_ui_map.json,
+# which Path(__file__).with_name(...) finds. DEST uses forward slashes;
+# Windows os.path.normpath turns them into src\fleet, matching os.sep in
+# __file__. The CLI separator is os.pathsep (';' on Windows, ':' on POSIX).
+# Checked with a 6.22.3 onefile probe of src.fleet.phone_flows: sibling
+# phone_ui_map.json existed and Path.with_name(...).is_file() was True.
+UI_MAP_REL = Path("src") / "fleet" / "phone_ui_map.json"
+UI_MAP_DEST = "src/fleet"
+
+
+def ui_map_source() -> Path:
+    return ENGINE / UI_MAP_REL
+
+
+def ui_map_add_data() -> str:
+    src = ui_map_source()
+    if not src.is_file():
+        raise SystemExit(f"missing {src}")
+    return f"{src}{os.pathsep}{UI_MAP_DEST}"
 
 
 def agent_version() -> str:
@@ -69,6 +91,7 @@ def main() -> int:
             return 2
         cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
                "--name", NAME, "--paths", str(ENGINE), "--hidden-import", "yaml",
+               "--add-data", ui_map_add_data(),
                "--distpath", str(DIST), "--workpath", str(HERE / "build"), "--specpath", str(HERE / "build"),
                str(HERE / "entry.py")]
         print("→", " ".join(cmd))
@@ -87,6 +110,7 @@ def main() -> int:
     (DIST / (exe.name + ".sha256")).write_text(f"{digest}  {exe.name}\n", encoding="utf-8")
     for ps1 in ("Install-ChatXAgent.ps1", "Uninstall-ChatXAgent.ps1"):
         shutil.copy2(HERE / ps1, DIST / ps1)
+    shutil.copy2(ui_map_source(), DIST / "phone_ui_map.json")
     platform_tools = HERE / "platform-tools"
     if (platform_tools / "adb.exe").is_file():
         dest_pt = DIST / "platform-tools"

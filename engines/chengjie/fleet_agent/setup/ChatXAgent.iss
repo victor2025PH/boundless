@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.8"
+  #define AppVersion "0.3.12"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -66,6 +66,10 @@ Name: "desktopicon"; Description: "在桌面创建「智拓群控节点」快捷
 
 [Files]
 Source: "{#AgentExe}"; DestDir: "{app}"; DestName: "chatx-agent.exe"; Flags: ignoreversion
+; Default UI map, next to the exe. CurStepChanged copies it into the fleet state
+; dir only when that file is absent (after LockStateDir, so an unlocked dir rename
+; cannot drop it into the .legacy folder).
+Source: "..\..\src\fleet\phone_ui_map.json"; DestDir: "{app}"; DestName: "phone_ui_map.json"; Flags: ignoreversion
 Source: "{#SetupDir}\bootstrap.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Status.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Panel.vbs"; DestDir: "{app}"; Flags: ignoreversion
@@ -454,7 +458,7 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  src, dir, params, legacy, pairText: String;
+  src, dir, params, legacy, pairText, uiMap, uiMapSnap: String;
   pair: AnsiString;
   ResultCode: Integer;
 begin
@@ -468,6 +472,7 @@ begin
   { Sample before LockStateDir. An unlocked agent.json is copied so bootstrap can
     rewrite it after the old directory is renamed aside. }
   legacy := '';
+  uiMapSnap := '';
   SnapshotToDelete := '';
   try
     if DirExists(dir) and (not DirIsReparse(dir)) and FileExists(dir + '\agent.json') then
@@ -478,7 +483,23 @@ begin
         if not FileCopy(dir + '\agent.json', legacy, False) then
           FailInstall('Could not snapshot agent.json before locking the state directory');
       end;
+    { Same window: an unlocked fleet dir is renamed aside, so keep a tuned map. }
+    uiMap := dir + '\phone_ui_map.json';
+    if DirExists(dir) and (not DirIsReparse(dir)) and FileExists(uiMap) and (not DirIsReparse(uiMap)) then
+      if not StateDirWasLocked(dir) then
+      begin
+        uiMapSnap := ExpandConstant('{tmp}\chatx-phone-ui-map.json');
+        if not FileCopy(uiMap, uiMapSnap, False) then
+          uiMapSnap := '';
+      end;
     LockStateDir(dir);
+    if not FileExists(dir + '\phone_ui_map.json') then
+    begin
+      if (uiMapSnap <> '') and FileExists(uiMapSnap) then
+        FileCopy(uiMapSnap, dir + '\phone_ui_map.json', False)
+      else if FileExists(ExpandConstant('{app}\phone_ui_map.json')) then
+        FileCopy(ExpandConstant('{app}\phone_ui_map.json'), dir + '\phone_ui_map.json', False);
+    end;
     { room.key is copied only after icacls succeeded. LockStateDir raises otherwise. }
     if (src <> '') and FileExists(src) then
       FileCopy(src, dir + '\room.key', False);
@@ -498,8 +519,11 @@ begin
     begin
       if legacy <> '' then
         DeleteFile(legacy);
+      if uiMapSnap <> '' then
+        DeleteFile(uiMapSnap);
       SnapshotToDelete := '';
       legacy := '';
+      uiMapSnap := '';
       RelaunchOurAgent();
       if WizardSilent then
         ExitProcess(1);
@@ -515,6 +539,8 @@ begin
   finally
     if legacy <> '' then
       DeleteFile(legacy);
+    if uiMapSnap <> '' then
+      DeleteFile(uiMapSnap);
     SnapshotToDelete := '';
   end;
   if not BootstrapOk then

@@ -185,11 +185,26 @@ function Lock-StateDir([string]$Dir) {
   if (Test-Reparse $Dir) { throw "state dir is a reparse point" }
   try { if (-not (Test-DirLocked $Dir)) { throw "state dir ACL is not locked" } } catch { throw }
 }
+function Copy-DefaultUiMap([string]$FromDir, [string]$ToDir, [string]$Kept) {
+  # Create the state-dir map only when it is absent. A kept snapshot wins over the default.
+  $dest = Join-Path $ToDir 'phone_ui_map.json'
+  if (Test-Path -LiteralPath $dest) { return }
+  if ($Kept -and (Test-Path -LiteralPath $Kept)) {
+    Copy-Item -LiteralPath $Kept -Destination $dest -Force
+    return
+  }
+  $src = Join-Path $FromDir 'phone_ui_map.json'
+  if (Test-Path -LiteralPath $src) {
+    Copy-Item -LiteralPath $src -Destination $dest -Force
+    Say "placed default phone_ui_map.json"
+  }
+}
 
 if (-not $InstallDir) { $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $StateDir) { $StateDir = Join-Path $env:ProgramData "ChatX\fleet" }
 # Copy agent.json before an unlocked fleet is renamed aside. Never follow a reparse point.
 $snap = ""
+$uiSnap = ""
 if ($Snapshot -and (Test-Path -LiteralPath $Snapshot)) {
   $snap = $Snapshot
 } elseif ((Test-Path -LiteralPath $StateDir) -and -not (Test-Reparse $StateDir)) {
@@ -199,6 +214,11 @@ if ($Snapshot -and (Test-Path -LiteralPath $Snapshot)) {
   if ((-not $preLocked) -and (Test-Path -LiteralPath $agentJson) -and -not (Test-Reparse $agentJson)) {
     $snap = Join-Path $env:TEMP ("chatx-agent-migrate-" + [guid]::NewGuid().ToString("N") + ".json")
     Copy-Item -LiteralPath $agentJson -Destination $snap -Force
+  }
+  $uiMap = Join-Path $StateDir "phone_ui_map.json"
+  if ((-not $preLocked) -and (Test-Path -LiteralPath $uiMap) -and -not (Test-Reparse $uiMap)) {
+    $uiSnap = Join-Path $env:TEMP ("chatx-phone-ui-map-" + [guid]::NewGuid().ToString("N") + ".json")
+    Copy-Item -LiteralPath $uiMap -Destination $uiSnap -Force
   }
 }
 $lockFailed = $false
@@ -219,7 +239,12 @@ try {
 } finally {
   if ($snap) { Remove-Item -LiteralPath $snap -Force -ErrorAction SilentlyContinue }
 }
-if ($lockFailed) { exit 3 }
+if ($lockFailed) {
+  if ($uiSnap) { Remove-Item -LiteralPath $uiSnap -Force -ErrorAction SilentlyContinue }
+  exit 3
+}
+try { Copy-DefaultUiMap $InstallDir $StateDir $uiSnap }
+finally { if ($uiSnap) { Remove-Item -LiteralPath $uiSnap -Force -ErrorAction SilentlyContinue } }
 $target = Join-Path $InstallDir "chatx-agent.exe"
 
 $keyFile = Join-Path $StateDir "room.key"
