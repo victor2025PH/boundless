@@ -31,14 +31,14 @@ export const CHATX_INTERNAL_UPDATE_MANIFEST = `${CHATX_INTERNAL_RELEASE_BASE}/la
 
 /** 内测安装包。公开 download 字段不要改成这一份。sha256/size 在安装包上架后填。 */
 export const CHATX_INTERNAL_BETA = {
-  version: "1.0.108",
-  filename: "ChatX-Setup-1.0.108.exe",
-  url: `${CHATX_INTERNAL_RELEASE_BASE}/ChatX-Setup-1.0.108.exe`,
-  size: { zh: "559 MB", en: "559 MB" },
-  sha256: "53aba457dfc192d5aa766343b4474b240333724c8926f192630394dfefeff33e",
+  version: "1.0.109",
+  filename: "ChatX-Setup-1.0.109.exe",
+  url: `${CHATX_INTERNAL_RELEASE_BASE}/ChatX-Setup-1.0.109.exe`,
+  size: { zh: "574 MB", en: "574 MB" },
+  sha256: "5700e0017496b0cdb192eadae414d63fd704b1454e0a205351a0069cb1c3a8c1",
   label: {
-    zh: "内测版（含小界人设、声音与知识库）",
-    en: "Internal beta (Xiaojie persona, voice, and knowledge base)",
+    zh: "内测更新渠道（与上面同一安装包）",
+    en: "Internal update channel (same installer as above)",
   },
 };
 
@@ -55,14 +55,14 @@ export const CHATX = {
     // 会被 AI 当事实引用。2026-09-02 随 1.0.70 发版同步（发版流程：改这里四个值
     // version/size/filename/sha256，与 /downloads/manifest.json 对齐，gate:content 检查 5 钉住）。
     // 2026-09-04 随 1.0.73 发版同步；2026-09-06 随 1.0.74 发版同步（K-5 ③）；2026-09-06 随 1.0.75 发版同步（L-7 E）；2026-09-07 随 1.0.76 发版同步（M-6 C）；2026-09-08 随 1.0.77 发版同步（N-5 E）；2026-09-08 随 1.0.78 发版同步（R78）；2026-09-10 随 1.0.79 发版同步（R79）；2026-09-11 随 1.0.80 发版同步（R80）；2026-09-11 随 1.0.81 发版同步（R81，单一版本）；2026-09-11 随 1.0.82 发版同步（R82）；2026-09-12 随 1.0.84 发版同步（R84）；2026-09-13 随 1.0.85 发版同步（R85）；2026-09-16 随 1.0.86 发版同步（R86）；2026-09-17 随 1.0.87 发版同步（R87）；2026-09-18 随 1.0.88 发版同步（R88）；2026-09-18 随 1.0.89 发版同步（R89）。
-    version: "1.0.107",
-    size: { zh: "470 MB", en: "470 MB" },
-    filename: "ChatX-Setup-1.0.107.exe",
+    version: "1.0.109",
+    size: { zh: "574 MB", en: "574 MB" },
+    filename: "ChatX-Setup-1.0.109.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.107.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.109.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "d1435fcca6d889a34fae67d0a8610bedbb58725da9ccdc41dab3f27bec9ad2ca",
+    sha256: "5700e0017496b0cdb192eadae414d63fd704b1454e0a205351a0069cb1c3a8c1",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {

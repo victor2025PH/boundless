@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.0.109",
+    "date": "2026-10-07",
+    "title": {
+      "zh": "正式安装包带上内测的人设、克隆声和相册",
+      "en": "The public installer now includes the internal personas, cloned voices, and albums"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "这一版安装包带上了内测里的人设、克隆参考音和相册。新安装后打开人设页就能看到随包人设。",
+        "已经在用的人设、聊天记录和设置都保留，升级不会盖掉你改过的内容。",
+        "听克隆声：人设页 → 编辑该人设 → 语音区，参考音已经挂在人设上。",
+        "看相册：人设页里打开该人设的相册。",
+        "群成员提取还是工作台右侧「群成员提取」卡，打开管理台后按页面上的步骤走。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "This installer includes the internal personas, cloned-voice references, and albums. After a fresh install, open the Personas page to see the bundled personas.",
+        "Personas, chats, and settings you already have are kept. An upgrade does not overwrite what you changed.",
+        "To hear a cloned voice: Personas → edit that persona → the voice section. The reference audio is already attached.",
+        "To see the photos: open that persona's album from the Personas page.",
+        "Group member extraction is still the \"Group member extraction\" card on the right of the workbench. Open the console and follow the steps on the page.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
     "version": "1.0.107",
     "date": "2026-10-02",
     "title": {
