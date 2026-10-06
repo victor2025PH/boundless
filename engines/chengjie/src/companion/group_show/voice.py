@@ -53,6 +53,12 @@ _RETRY_HINT = (
     "不要用「为您服务」「有什么可以帮您」这类客服用语。"
 )
 
+#: 向导是这场里唯一公开的 AI。重说时不能把它按回普通群友。
+_GUIDE_RETRY_HINT = (
+    "\n\n【重要修正】你是这个群里公开的 AI。重说时要承认自己是 AI，"
+    "只邀请对方私聊你自己试这一件。不要客服腔，不要编设置项。"
+)
+
 
 # ── 人设解析 ────────────────────────────────────────────────────────────────
 
@@ -204,12 +210,13 @@ def inject_persona(
 # ── 出站守卫 ────────────────────────────────────────────────────────────────
 
 
-def check_line_violations(text: str, persona: Optional[Dict[str, Any]] = None) -> List[str]:
+def check_line_violations(text: str, persona: Optional[Dict[str, Any]] = None,
+                          *, allow_ai_disclosure: bool = False) -> List[str]:
     """台词的人设违规片段清单（空＝可发）。守卫不可用时返回空（降级放行）。
 
-    比 1:1 链路多一条：**无论人设有没有开 ``identity.deny_ai``，都查「自曝 AI 身份」**。
-    1:1 里那是人设配置项（有些客服号本来就承认是机器人），群戏里不是——群里冒出一句
-    「作为AI助手」，暴露的是整批号，与这个号自己怎么配置无关。
+    帮手无论人设有没有开 ``identity.deny_ai``，都查「自曝 AI 身份」——群里冒出一句
+    「作为AI助手」，暴露的是整批号。向导是这场唯一公开的 AI，``allow_ai_disclosure``
+    为真时放行身份坦白，客服腔仍然要拦。
     """
     body = str(text or "").strip()
     if not body:
@@ -221,10 +228,12 @@ def check_line_violations(text: str, persona: Optional[Dict[str, Any]] = None) -
         return []
     hits: List[str] = []
     try:
-        hits.extend(find_violations(body, persona or {}) or [])
-        for hit in (matches_ai_self_identity(body) or []):
-            if hit not in hits:
-                hits.append(hit)
+        hits.extend(find_violations(
+            body, persona or {}, honest_identity=allow_ai_disclosure) or [])
+        if not allow_ai_disclosure:
+            for hit in (matches_ai_self_identity(body) or []):
+                if hit not in hits:
+                    hits.append(hit)
     except Exception:  # noqa: BLE001
         logger.debug("[group_show] 台词校验异常，按合规放行", exc_info=True)
         return []
@@ -275,7 +284,9 @@ def persona_generator(
             if not text or not guard:
                 return text
 
-            hits = check_line_violations(text, persona)
+            disclose = str(getattr(speaker, "slot", "") or "").strip().lower() == "guide"
+            hits = check_line_violations(
+                text, persona, allow_ai_disclosure=disclose)
             if not hits:
                 return text
 
@@ -283,10 +294,12 @@ def persona_generator(
             logger.warning(
                 "[group_show] 台词命中人设违规 beat=%s persona=%s 片段=%r，重试一次",
                 beat_id, getattr(speaker, "persona_id", ""), hits[:3])
-            text = await _call_chat(ai_client, prompt + _RETRY_HINT, temperature)
+            hint = _GUIDE_RETRY_HINT if disclose else _RETRY_HINT
+            text = await _call_chat(ai_client, prompt + hint, temperature)
             if not text:
                 return ""
-            hits = check_line_violations(text, persona)
+            hits = check_line_violations(
+                text, persona, allow_ai_disclosure=disclose)
             if not hits:
                 return text
 
