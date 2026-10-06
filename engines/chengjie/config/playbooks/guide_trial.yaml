@@ -51,7 +51,7 @@ beats:
 
   - id: b5_collect
     role: guide
-    intent: 接住刚才的体感和别扭点，告诉对方私聊你之后先看哪一个结果。仍然只围绕这一项功能。
+    intent: 顺着刚才已经说出口的那句，告诉对方私聊你之后先看哪一个结果。仍然只围绕这一项功能。
     product: matrixx
     soft: 3
     pace: slow

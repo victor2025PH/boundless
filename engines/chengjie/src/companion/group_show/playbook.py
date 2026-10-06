@@ -151,6 +151,17 @@ def helper_line_fault(text: str) -> str:
     return ""
 
 
+def _someone_said_uneasy(events: Sequence[Any]) -> bool:
+    """场上已经有人自己说出不放心，才许接着谈这件事。"""
+    for ev in events or ():
+        kind = str(getattr(ev, "kind", "") or "")
+        if kind not in ("line", "media", "human"):
+            continue
+        if "不放心" in str(getattr(ev, "text", "") or ""):
+            return True
+    return False
+
+
 def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
                         events: Sequence[Any] = ()) -> str:
     """这句台词现在能不能发。没向导的旧剧本恒为空串，行为不变。"""
@@ -160,6 +171,11 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
         for role in roles)
     if not has_guide:
         return ""
+    raw_line = str(text or "")
+    if "接住" in raw_line:
+        return "不要把导演说明说出来，直接说事情本身"
+    if "不放心" in raw_line and not _someone_said_uneasy(events):
+        return "没人说过不放心，不要替对方安抚"
     # 开场接话还没进剧本。这时候逼「我是 AI / 私聊」会把闲聊重说成广告。
     # 编造的设置项、拒绝私聊，接话阶段也不许。
     if str(beat_id or "").startswith("warmup_"):

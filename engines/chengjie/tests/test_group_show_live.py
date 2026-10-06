@@ -1143,6 +1143,7 @@ def test_two_seat_guide_playbook_fits_one_independent_pair():
     assert pb.products == ("matrixx",)
     script = "\n".join(b.intent for b in pb.beats)
     assert "手滑" not in script and "发错" not in script
+    assert "接住" not in script and "不放心" not in script
     guide_beats = [b for b in pb.beats if b.role == "guide"]
     assert "我是 AI" in guide_beats[0].intent
     assert "私聊" in guide_beats[-1].intent
@@ -1185,6 +1186,9 @@ def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
         chat_book, "guide", "warmup_1", "不如加个好友，私聊里玩两把")
     assert line_fault_for_beat(
         chat_book, "guide", "warmup_1", "你是困了还是手滑打错了")
+    assert line_fault_for_beat(
+        chat_book, "guide", "b3_keep_the_invite",
+        "接住你的不放心：多个号的消息收在一屏里看就行")
     assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
 
 
