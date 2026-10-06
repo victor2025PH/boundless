@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import struct
 import threading
 import time
@@ -357,6 +358,9 @@ def test_custom_map_file_changes_the_tap(tmp_path):
     assert (taps[-1][-2], taps[-1][-1]) == (str(want_x), str(want_y))
     src["apps"]["facebook"]["anchors"]["like_button"] = [30, 40]
     path.write_text(json.dumps(src), encoding="utf-8")
+    # Same-length JSON can keep mtime_ns, and load_map would serve the cached map.
+    bumped = time.time_ns() + 1_000_000
+    os.utime(path, ns=(bumped, bumped))
     status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
     assert detail == "ok"
     taps = [a for a in fake.actions() if a[4:5] == ("tap",)]
