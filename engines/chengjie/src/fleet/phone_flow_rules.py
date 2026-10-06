@@ -84,8 +84,32 @@ def _anchors(payload: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
     return out
 
 
+def _json_bool(payload: Dict[str, Any], key: str) -> Any:
+    if key not in payload:
+        return None
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise PhoneOpError("bad_dry_run")
+    return value
+
+
+def _wants_dry_run(payload: Dict[str, Any]) -> bool:
+    """JSON true on dry_run or predict_only. Disagreeing flags or non-bools are bad_dry_run."""
+    dry = _json_bool(payload, "dry_run")
+    pred = _json_bool(payload, "predict_only")
+    if dry is not None and pred is not None and dry is not pred:
+        raise PhoneOpError("bad_dry_run")
+    chosen = dry if dry is not None else pred
+    return chosen is True
+
+
 def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
-    """返回规范化 payload（多余的键丢掉）。不合法 → PhoneOpError(原因码)。"""
+    """返回规范化 payload（多余的键丢掉）。不合法 → PhoneOpError(原因码)。
+
+    dry_run / predict_only: only JSON true is kept, normalized to dry_run true.
+    JSON false or a missing flag is omitted (real execution). A non-bool, or the
+    two flags disagreeing, is bad_dry_run.
+    """
     p = payload if isinstance(payload, dict) else {}
     app = str(p.get("app") or "").strip().lower() if isinstance(p.get("app"), str) else ""
     if app not in SOCIAL_APPS:
@@ -126,6 +150,8 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
         out["text"] = _caption(p)
     else:
         raise PhoneOpError("bad_flow")
+    if _wants_dry_run(p):
+        out["dry_run"] = True
     return out
 
 
