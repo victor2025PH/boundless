@@ -20,7 +20,8 @@
 # (version, size and SHA-256 are never typed by hand). The old index.html is kept as
 # index.html.bak_<timestamp>. A versioned file already in the mirror with other bytes is refused.
 #
-# Run under Windows PowerShell 5.1 (powershell.exe). PowerShell 7 is not supported.
+# Runs under Windows PowerShell 5.1 (powershell.exe). Started from pwsh 7 it re-runs itself under
+# powershell.exe with a clean PSModulePath; native stderr never aborts a step (exit codes decide).
 # Requires: OpenSSH client (ssh/scp) with key auth to $SshHost (ssh alias vps-bd2026 in
 # ~/.ssh/config; ubuntu@bd2026.cc has no key and fails with publickey), sudo on the VPS for
 # the mirror step, python for the page renderer. Never embeds tokens. ASCII only.
@@ -43,8 +44,44 @@ param(
   [switch]$WhatIf
 )
 $ErrorActionPreference = 'Stop'
+# --- PowerShell host guard (0.3.8) ------------------------------------------------
+# Started from pwsh 7: re-run this script under Windows PowerShell 5.1 with PSModulePath removed,
+# so 5.1 rebuilds its own module path. (pwsh's Modules dirs shadow Microsoft.PowerShell.Utility /
+# .Security and Get-FileHash / Get-AuthenticodeSignature then fail to autoload.)
+# Started as 5.1 by a pwsh parent: drop the pwsh-only entries before any cmdlet autoloads.
+function ConvertTo-WinPSArgs([hashtable]$Bound) {
+  $out = @()
+  foreach ($k in $Bound.Keys) {
+    $v = $Bound[$k]
+    if ($v -is [System.Management.Automation.SwitchParameter]) { if ($v.IsPresent) { $out += "-$k" } }
+    elseif ("$v" -ne '') { $out += "-$k"; $out += [string]$v }
+  }
+  return $out
+}
+if ($PSVersionTable.PSEdition -eq 'Core') {
+  $winps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $winps)) { throw "Windows PowerShell 5.1 not found at $winps" }
+  Write-Host "[host] pwsh $($PSVersionTable.PSVersion) detected: re-running under Windows PowerShell 5.1"
+  $savedModulePath = $env:PSModulePath
+  Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+  try { & $winps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @(ConvertTo-WinPSArgs $PSBoundParameters) }
+  finally { $env:PSModulePath = $savedModulePath }
+  exit $LASTEXITCODE
+}
+if ($env:PSModulePath) {
+  $env:PSModulePath = (@($env:PSModulePath -split ';') | Where-Object {
+      $_ -and $_ -notmatch '\\PowerShell\\7|\\Documents\\PowerShell\\Modules|\\Program Files\\PowerShell\\Modules' }) -join ';'
+}
+# Native tools (ssh / scp / tar / python / ISCC) write progress and warnings to stderr. Under 5.1
+# with ErrorActionPreference=Stop and redirected output that stderr turns into a terminating
+# NativeCommandError, so native steps run with Continue and are judged by exit code only.
+function Invoke-Native([scriptblock]$Block) {
+  $ErrorActionPreference = 'Continue'
+  & $Block
+}
+# ------------------------------------------------------------------------------------
 function Say($m) { Write-Host "[publish] $m" }
-function Run($cmd) { Say $cmd; if (-not $WhatIf) { Invoke-Expression $cmd; if ($LASTEXITCODE -ne 0) { throw "failed: $cmd" } } }
+function Run($cmd) { Say $cmd; if (-not $WhatIf) { Invoke-Native { Invoke-Expression $cmd }; if ($LASTEXITCODE -ne 0) { throw "failed: $cmd" } } }
 
 $engine = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 # -PackController alone packs the controller and touches nothing under the public downloads.
@@ -81,7 +118,7 @@ if ($doAgentUpload) {
     Say "building ChatXAgentSetup.exe (-BuildSetup)"
     $bsArgs = @('-NoProfile', '-File', $setupScript, '-DistDir', $DistDir)
     if ($OverwriteSigned) { $bsArgs += '-Force' }
-    if (-not $WhatIf) { & powershell @bsArgs; if ($LASTEXITCODE -ne 0) { throw "build_setup.ps1 failed" } }
+    if (-not $WhatIf) { Invoke-Native { & powershell @bsArgs }; if ($LASTEXITCODE -ne 0) { throw "build_setup.ps1 failed" } }
     $m = Get-Content $mf -Raw | ConvertFrom-Json
   } else {
     Say "ChatXAgentSetup.exe is not rebuilt (no -BuildSetup); dist\ is uploaded as is"
@@ -144,7 +181,7 @@ if ($doAgentUpload) {
       $pyArgs = @($renderer, '--version', $ver, '--setup', $setupExe, '--agent', $agentLocal, '--out', $page)
       if ($built) { $pyArgs += @('--date', $built) }
       # Local only, so it also runs under -WhatIf: the page can be reviewed before a real publish.
-      & $Python @pyArgs
+      Invoke-Native { & $Python @pyArgs }
       if ($LASTEXITCODE -ne 0) { throw "render_download_page.py failed" }
       Say "download page rendered from dist files: $page"
     } else {
@@ -208,12 +245,12 @@ if ($PackController) {
       # (GNU tar --exclude cannot "un-exclude" a child; append is the portable form, including Windows tar.)
       $raw = Join-Path $env:TEMP "chatx-fleet-src.tar"
       if (Test-Path $raw) { Remove-Item $raw -Force }
-      & tar -cf $raw --exclude=.venv --exclude=node_modules --exclude=desktop --exclude=tests --exclude=sessions `
+      Invoke-Native { & tar -cf $raw --exclude=.venv --exclude=node_modules --exclude=desktop --exclude=tests --exclude=sessions `
           --exclude=config --exclude=logs --exclude=data --exclude=__pycache__ --exclude=fleet_agent/dist --exclude=fleet_agent/build --exclude=*.bak_* `
-          --exclude=.git .
+          --exclude=.git . }
       if ($LASTEXITCODE -ne 0) { throw "tar failed" }
       if (Test-Path (Join-Path $engine "config\presets")) {
-        & tar -rf $raw --exclude=*.bak_* config/presets
+        Invoke-Native { & tar -rf $raw --exclude=*.bak_* config/presets }
         if ($LASTEXITCODE -ne 0) { throw "tar append config/presets failed" }
       }
       if (Test-Path $tar) { Remove-Item $tar -Force }

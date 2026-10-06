@@ -10,6 +10,7 @@
 # overwritten unless -Force is given (re-sign after a forced rebuild).
 # After signing: powershell -File fleet_agent\build_setup.ps1 -ManifestOnly
 #   re-hashes the existing (signed) installer into .sha256 and manifest.json, no ISCC.
+# Started from pwsh 7 it re-runs itself under powershell.exe (clean PSModulePath).
 # ASCII only.
 [CmdletBinding()]
 param(
@@ -19,6 +20,42 @@ param(
   [switch]$ManifestOnly
 )
 $ErrorActionPreference = 'Stop'
+# --- PowerShell host guard (0.3.8) ------------------------------------------------
+# Started from pwsh 7: re-run this script under Windows PowerShell 5.1 with PSModulePath removed,
+# so 5.1 rebuilds its own module path. (pwsh's Modules dirs shadow Microsoft.PowerShell.Utility /
+# .Security and Get-FileHash / Get-AuthenticodeSignature then fail to autoload.)
+# Started as 5.1 by a pwsh parent: drop the pwsh-only entries before any cmdlet autoloads.
+function ConvertTo-WinPSArgs([hashtable]$Bound) {
+  $out = @()
+  foreach ($k in $Bound.Keys) {
+    $v = $Bound[$k]
+    if ($v -is [System.Management.Automation.SwitchParameter]) { if ($v.IsPresent) { $out += "-$k" } }
+    elseif ("$v" -ne '') { $out += "-$k"; $out += [string]$v }
+  }
+  return $out
+}
+if ($PSVersionTable.PSEdition -eq 'Core') {
+  $winps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $winps)) { throw "Windows PowerShell 5.1 not found at $winps" }
+  Write-Host "[host] pwsh $($PSVersionTable.PSVersion) detected: re-running under Windows PowerShell 5.1"
+  $savedModulePath = $env:PSModulePath
+  Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+  try { & $winps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @(ConvertTo-WinPSArgs $PSBoundParameters) }
+  finally { $env:PSModulePath = $savedModulePath }
+  exit $LASTEXITCODE
+}
+if ($env:PSModulePath) {
+  $env:PSModulePath = (@($env:PSModulePath -split ';') | Where-Object {
+      $_ -and $_ -notmatch '\\PowerShell\\7|\\Documents\\PowerShell\\Modules|\\Program Files\\PowerShell\\Modules' }) -join ';'
+}
+# Native tools (ssh / scp / tar / python / ISCC) write progress and warnings to stderr. Under 5.1
+# with ErrorActionPreference=Stop and redirected output that stderr turns into a terminating
+# NativeCommandError, so native steps run with Continue and are judged by exit code only.
+function Invoke-Native([scriptblock]$Block) {
+  $ErrorActionPreference = 'Continue'
+  & $Block
+}
+# ------------------------------------------------------------------------------------
 $here = $PSScriptRoot
 $engine = Resolve-Path (Join-Path $here "..")
 if (-not $DistDir) { $DistDir = Join-Path $here "dist" }
@@ -61,7 +98,7 @@ $hit = Select-String -Path $agentPy -Pattern 'AGENT_VERSION\s*=\s*"([^"]+)"' | S
 if ($hit) { $ver = $hit.Matches[0].Groups[1].Value }
 
 Write-Host "[setup] ISCC $Iscc  version $ver"
-& $Iscc "/DAgentExe=$agent" "/DSetupDir=$setupDir" "/DDistDir=$DistDir" "/DAppVersion=$ver" $iss
+Invoke-Native { & $Iscc "/DAgentExe=$agent" "/DSetupDir=$setupDir" "/DDistDir=$DistDir" "/DAppVersion=$ver" $iss }
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 }
 
