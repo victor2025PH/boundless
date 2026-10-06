@@ -1124,6 +1124,40 @@ def test_guide_playbook_refuses_live_without_a_fixed_account():
     assert any("guide_account" in w for w in plan.warnings)
 
 
+def test_two_seat_guide_playbook_fits_one_independent_pair():
+    """两个出口只能演两角。向导钉死，另一个号演质疑；同一出口拒演。"""
+    from pathlib import Path
+
+    from src.companion.group_show.playbook import (
+        load_playbook_dir, validate_playbook,
+    )
+
+    books = load_playbook_dir(
+        Path(__file__).resolve().parents[1] / "config" / "playbooks")
+    pb = books["guide_trial_duo"]
+    hard = [w for w in validate_playbook(pb) if not str(w).startswith("warn:")]
+    assert hard == []
+    assert {role.slot for role in pb.roles} == {"guide", "skeptic"}
+    assert pb.products == ("matrixx",)
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True},
+        "guide_account": "a1",
+    }}}
+    plan = plan_live(pb, _candidates(2), group_key="g1",
+                     confirm_live=True, app_config=cfg,
+                     fingerprint_groups=_fps(2), require_outlet=False,
+                     hour=14)
+    assert plan.ok is True, plan.warnings
+    assert plan.casting.by_slot("guide").account_id == "a1"
+    assert plan.casting.by_slot("skeptic").account_id == "a2"
+    blocked = plan_live(
+        pb, _candidates(2), group_key="g1", confirm_live=True, app_config=cfg,
+        fingerprint_groups={"a1": "host", "a2": "host"},
+        require_outlet=False, hour=14)
+    assert blocked.ok is False
+    assert blocked.reason == "understaffed"
+
+
 def test_guide_playbook_pins_the_configured_account():
     cfg = {"companion": {"group_show": {
         "live": {"enabled": True},
