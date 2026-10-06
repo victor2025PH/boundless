@@ -1181,6 +1181,8 @@ def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
         beats=(Beat("b1_one_thing", "guide", "先说我是 AI，并私聊来试"),))
     chat = "你们刚才说的那单，我这边也卡着。"
     assert line_fault_for_beat(chat_book, "guide", "warmup_1", chat) == ""
+    assert line_fault_for_beat(
+        chat_book, "guide", "warmup_1", "不如加个好友，私聊里玩两把")
     assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
 
 

@@ -844,6 +844,15 @@ def test_chat_comes_before_the_script_and_does_not_burn_a_beat():
     assert [b.id for b in d._queue] == ["b2", "b1"]
 
 
+def test_the_same_human_line_is_heard_once():
+    d = _director()
+    d.observe_human("这单客户又不回", sender="老王", ts=T0)
+    d.observe_human("这单客户又不回", sender="老王", ts=T0 + 1)
+    heard = [ev for ev in d.state.events if ev.kind == "human"]
+    assert len(heard) == 1
+    assert d._human_streak == 1
+
+
 def test_takeover_still_ends_a_show_that_has_no_guide():
     d = _director(config={"human_takeover_lines": 2})
     d.observe_human("一", ts=T0)

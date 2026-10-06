@@ -157,9 +157,11 @@ class GroupShowDirector:
         惯性打断——这是群戏与广告机器人最直观的区别。
         """
         now = float(ts if ts is not None else time.time())
+        t = str(text or "").strip()
+        if t and self._heard_just_now(t):
+            return
         self.state.last_human_ts = now
         self._human_streak += 1
-        t = str(text or "").strip()
         if t:
             self._pending_human = t
             self._pending_human_name = str(sender or "")
@@ -189,6 +191,8 @@ class GroupShowDirector:
                 continue
             said = str(said or "").strip()
             if not said or ts <= 0 or ts > float(now):
+                continue
+            if any(said == prev[1] for prev in cleaned[-4:]):
                 continue
             cleaned.append((who.strip() or "群友", said, ts))
         if not cleaned:
@@ -418,6 +422,16 @@ class GroupShowDirector:
             reference_last=True,
             respond_to_human=f"{who}：{self._pending_human}",
         )
+
+    def _heard_just_now(self, text: str) -> bool:
+        """同一句群消息常被多个号各记一笔。接话时只听一遍。"""
+        want = str(text or "").strip()
+        if not want:
+            return False
+        for ev in reversed(self.state.events[-6:]):
+            if ev.kind == "human" and str(ev.text or "").strip() == want:
+                return True
+        return False
 
     def _guide_member(self) -> Optional[CastMember]:
         return self.state.casting.by_slot("guide")

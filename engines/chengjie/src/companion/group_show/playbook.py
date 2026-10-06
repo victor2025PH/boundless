@@ -161,8 +161,9 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
         raw = str(text or "")
         if any(piece in raw for piece in _GUIDE_DRIFT) or "截图" in raw:
             return "不要编设置项，不要提截图，先接对方刚说的事"
-        if any(piece in raw for piece in _HELPER_REFUSAL):
-            return "不要拒绝私聊"
+        # 接话阶段不提私聊。剧本开了才许邀请。
+        if any(piece in raw for piece in ("私聊", "私信", "加好友", "加个好友", "加我", "加你")):
+            return "先在群里接话，不要邀请私聊或加好友"
         return ""
     who = str(slot or "").strip().lower()
     if who == GUIDE_SLOT:
