@@ -143,6 +143,7 @@
   <div class="fc-dlg-btns"><button class="btn-sec" id="fc-dlg-cancel">取消</button><button class="btn-sec" id="fc-dlg-ok">确定</button></div>
 </div></div>
 <div class="fc-toast" id="fc-toast" style="display:none"></div>
+<div id="fc-cfg" hidden data-api-base="{{ fleet_api_base|default('') }}" data-ro-min="{{ remote_ops_default_min|default(30) }}" data-ro-max="{{ remote_ops_max_min|default(240) }}"></div>
 <script>
 (function(){
   var STATE={online:['在线','fc-ok'],offline:['离线','fc-bad'],revoked:['已吊销','fc-muted'],pending:['待注册','fc-warn']};
@@ -161,6 +162,17 @@
   var LOGIN_MAX_MS=300000;
   var lg=null;
   var nodes={};
+  // API 路径前缀由路由注入（fleet_control.console_api_base）：空 = 同站 /api/fleet/...，公网 VPS = /fleet/ui
+  var CFG=document.getElementById('fc-cfg');
+  function cfgAttr(k){var v=CFG&&CFG.getAttribute?CFG.getAttribute(k):null;return v==null?'':String(v);}
+  var API=/^(\/[A-Za-z0-9._\-]+)*$/.test(cfgAttr('data-api-base'))?cfgAttr('data-api-base'):'';
+  // 所有 API 地址只经 fa() 拼：前缀只来自 data-api-base，片段一律不带前导 "/"。
+  // 公网 VPS 的 HTML 改写中间件会给 HTML 里所有带引号、以斜杠开头的路径字面量补 /fleet/ui，
+  // 带前导斜杠的片段（如「/approve」「/tasks」）会被改成 .../fleet/ui/approve，前缀也会被补两遍。
+  var API_ROOT=['','api','fleet',''].join('/');
+  function fa(){var p=[];for(var i=0;i<arguments.length;i++)p.push(arguments[i]);return API+API_ROOT+p.join('/');}
+  var RO_MAX=Math.min(240,Math.max(1,parseInt(cfgAttr('data-ro-max'),10)||240));
+  var RO_MIN=Math.min(RO_MAX,Math.max(1,parseInt(cfgAttr('data-ro-min'),10)||30));
   // 手机清点 / 远程手机操作的原因码 → 中文（与智拓 fleet-phone.js 同一份口径）
   var PHONE_ERR={disabled:'手机清点已关闭（phones_enabled=false）',adb_not_found:'找不到 adb',
     adb_server_not_running:'adb 服务没在运行（agent 不会自动启动）',adb_version_unknown:'读不出 adb 版本',
@@ -178,6 +190,12 @@
     if(c.indexOf('adb_exit_')===0)return 'adb 命令失败（退出码 '+c.slice(9)+'）';
     if(c.indexOf('adb_error')===0)return 'adb 出错'+c.slice(9);
     return c;}
+  // 远程操作剩余时间（主控按 remote_ops_remaining_sec 给，到期由主控自动关）
+  function roLeft(n){var s=n.remote_ops_remaining_sec;if(s==null||s==='')return '';var m=Math.max(0,Math.ceil(Number(s)/60));
+    return m>=60?('剩 '+Math.floor(m/60)+' 小时 '+(m%60)+' 分'):('剩 '+m+' 分');}
+  function roBadge(n){var left=roLeft(n),tip=(n.remote_ops_enabled_by?n.remote_ops_enabled_by+' 于 '+fmtTs(n.remote_ops_enabled_at)+' 开启':'')+
+      (n.remote_ops_expires_at?'，'+fmtTs(n.remote_ops_expires_at)+' 自动关闭':'');
+    return '<span class="fc-badge fc-warn" title="'+esc(tip)+'">'+esc('远程操作已开'+(left?' · '+left:''))+'</span>';}
   function hasPhoneOps(n){return (n.caps||[]).indexOf('phone_ops_v1')>=0;}
   function phonesCell(n){var hb=n.last_heartbeat||{},ps=Array.isArray(n.phones)?n.phones:hb.phones,err=n.phones_error||hb.phones_error||'';
     if(!Array.isArray(ps)&&!err)return '<span style="color:var(--t3)" title="agent 0.3.6 起才上报手机">未上报</span>';
@@ -248,7 +266,7 @@
         '<button class="btn-sec fc-danger" data-n="'+esc(n.node_id)+'" data-k="__revoke" title="让这台电脑的密钥失效">吊销节点</button>';
       var lo=longOff[n.node_id],off=n.state==='offline'&&n.last_seen?Math.max(0,Math.floor((Date.now()/1000-n.last_seen)/60)):null;
       var stx=n.state==='offline'?'<br><span style="font-size:.7rem;color:var(--red)">'+(off===null?'从未上线':'已离线 '+off+' 分钟')+'</span>'+(lo?' '+badge('超过 '+alertMin+' 分钟','fc-bad'):''):'';
-      var rop=n.status==='revoked'?'':n.remote_ops_enabled?' '+badge('远程操作已开','fc-warn'):'';
+      var rop=n.status==='revoked'?'':n.remote_ops_enabled?' '+roBadge(n):'';
       return '<tr'+(lo?' class="fc-row-alert"':'')+'><td>'+badge(st[0],st[1])+(n.proto_compatible===false?' '+badge('协议过旧','fc-warn'):'')+rop+stx+'</td>'+
         '<td><b>'+esc(n.label||n.node_id)+'</b><br><span style="color:var(--t3);font-size:.7rem">'+esc(n.node_id)+' · '+esc(n.machine_id)+'</span></td>'+
         '<td>'+esc(n.group_name||'—')+'</td><td>'+esc(n.host_name||'—')+'<br><span style="color:var(--t3);font-size:.7rem">'+esc(n.os||'')+'</span></td>'+
@@ -296,7 +314,7 @@
   function load(){
     var g=document.getElementById('fc-group').value.trim();
     var rb=document.getElementById('fc-refresh');rb.disabled=true;t('fc-notes','· 加载中…');
-    Promise.all([apiFetch('/api/fleet/overview').then(j),apiFetch('/api/fleet/nodes?group='+encodeURIComponent(g)).then(j),apiFetch('/api/fleet/tasks?limit=40').then(j),apiFetch('/api/fleet/pending').then(j),apiFetch('/api/fleet/room-keys').then(j)])
+    Promise.all([apiFetch(fa('overview')).then(j),apiFetch(fa('nodes?group='+encodeURIComponent(g))).then(j),apiFetch(fa('tasks?limit=40')).then(j),apiFetch(fa('pending')).then(j),apiFetch(fa('room-keys')).then(j)])
       .then(function(r){renderOverview(r[0]);renderNodes(r[1].nodes||[]);renderTasks(r[2].tasks||[]);renderPending(r[3].pending||[]);renderRooms(r[4].room_keys||[]);t('fc-notes','');loadedOnce=true;rb.disabled=false;})
       .catch(function(e){t('fc-notes','· 加载失败 '+e.message);if(!loadedOnce)loadFailRows('加载失败：'+e.message+'。点右上角「刷新」重试。');rb.disabled=false;});
   }
@@ -310,14 +328,14 @@
           (existing?'<p class="fc-dlg-warn">这台电脑以前登记过（'+esc(existing)+'）。批准后它原来的密钥立即失效。<br><span style="font-size:.7rem">'+esc(warn)+'</span></p>':''),
         submit:function(){return {label:val('fc-dlg-label')};}})
       .then(function(v){if(!v)return;var body={label:v.label};if(g)body.group_name=g;if(existing)body.confirm_rotate=true;
-        post('/api/fleet/pending/'+encodeURIComponent(ok)+'/approve',body).then(function(){toast('已批准');load();}).catch(fail('批准失败'));});}
+        post(fa('pending',encodeURIComponent(ok),'approve'),body).then(function(){toast('已批准');load();}).catch(fail('批准失败'));});}
     if(no){confirmBox('拒绝这台电脑','拒绝后这台电脑需要重新申请。','拒绝').then(function(v){if(!v)return;
-      post('/api/fleet/pending/'+encodeURIComponent(no)+'/reject').then(function(){toast('已拒绝');load();}).catch(fail('拒绝失败'));});}
+      post(fa('pending',encodeURIComponent(no),'reject')).then(function(){toast('已拒绝');load();}).catch(fail('拒绝失败'));});}
   });
   document.getElementById('fc-rooms').addEventListener('click',function(ev){var b=ev.target.closest('button');if(!b)return;
     var id=b.getAttribute('data-rk');if(!id)return;
     confirmBox('吊销机房密钥','已装上的电脑不受影响，还没装的电脑不能再用这张密钥。','吊销').then(function(v){if(!v)return;
-      post('/api/fleet/room-keys/'+encodeURIComponent(id)+'/revoke').then(function(){toast('已吊销');load();}).catch(fail('吊销失败'));});
+      post(fa('room-keys',encodeURIComponent(id),'revoke')).then(function(){toast('已吊销');load();}).catch(fail('吊销失败'));});
   });
   document.getElementById('fc-room-hide').addEventListener('click',function(){document.getElementById('fc-roombox').style.display='none';});
   document.getElementById('fc-roomkey').addEventListener('click',function(){
@@ -332,7 +350,7 @@
         if(!(hours>=1))return {error:'「有效小时」要填 1 以上的整数'};
         return {group_name:g,max_uses:uses,ttl_hours:hours};}})
     .then(function(v){if(!v)return;
-      post('/api/fleet/room-keys',v)
+      post(fa('room-keys'),v)
         .then(function(d){var el=document.getElementById('fc-room-url');el.value=d.download_url||'';document.getElementById('fc-roombox').style.display='';el.focus();el.select();load();})
         .catch(fail('生成失败'));});
   });
@@ -341,22 +359,28 @@
     if(k==='__login'){lgOpen(nid);return;}
     if(k==='__remote'){remoteToggle(nid);return;}
     if(k==='__revoke'){confirmBox('吊销节点「'+name+'」','它的密钥立即失效，还没领取的任务全部取消。要再用这台电脑需要重新安装批准。','吊销节点').then(function(v){if(!v)return;
-      post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/revoke').then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
+      post(fa('nodes',encodeURIComponent(nid),'revoke')).then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
     if(k==='stop_account'){stopOpen(nid);return;}
     if(k==='restart_instance'){restartOpen(nid);return;}
     sendTask(nid,{kind:k});
   });
   // 远程操作开关（缺省关）：开要确认；关掉时主控会取消这台电脑还在排队的手机操作
   function remoteToggle(nid){var n=nodes[nid]||{},name=n.label||n.host_name||nid,on=!n.remote_ops_enabled;
-    (on?confirmBox('开启远程操作 · '+name,'开启后，智拓管理员和本控制台可以经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护的直播机除外）。不推流，每次操作都记审计（操作人）。','开启'):Promise.resolve(true))
-    .then(function(v){if(!v)return;
-      post('/api/fleet/nodes/'+encodeURIComponent(nid),{remote_ops_enabled:on})
-        .then(function(){toast((on?'已开启 ':'已关闭 ')+name+' 的远程操作'+(on?'':'（排队中的手机操作已取消）'));load();})
+    (on?dlgOpen({title:'开启远程操作 · '+name,ok:'开启',danger:true,focus:'fc-dlg-mins',
+        html:'<p class="fc-dlg-warn">'+esc('开启后，智拓管理员和本控制台可以经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护的直播机除外）。不推流，每次操作都记审计（操作人）。')+'</p>'+
+          '<p class="fc-dlg-note">到时间主控自动关闭，并取消还在排队的手机操作。</p>'+
+          '<label class="fc-dlg-note">多少分钟后自动关闭（1–'+RO_MAX+'）<br><input id="fc-dlg-mins" type="number" min="1" max="'+RO_MAX+'" step="1" value="'+RO_MIN+'"></label>',
+        submit:function(){var s=val('fc-dlg-mins'),m=s===''?RO_MIN:Number(s);
+          if(!(m>=1&&m<=RO_MAX)||Math.floor(m)!==m)return {error:'自动关闭时间要填 1–'+RO_MAX+' 的整数分钟'};return {minutes:m};}})
+      :Promise.resolve(true))
+    .then(function(v){if(!v)return;var body={remote_ops_enabled:on};if(on)body.remote_ops_minutes=v.minutes;
+      post(fa('nodes',encodeURIComponent(nid)),body)
+        .then(function(){toast((on?'已开启 ':'已关闭 ')+name+' 的远程操作'+(on?'（'+v.minutes+' 分钟后自动关闭）':'（排队中的手机操作已取消）'));load();})
         .catch(fail('远程操作切换失败'));});
   }
   function sendTask(nid,body){
     var n=nodes[nid]||{};
-    return post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/tasks',body)
+    return post(fa('nodes',encodeURIComponent(nid),'tasks'),body)
       .then(function(){toast('已下发「'+kindName(body.kind)+'」到 '+(n.label||n.host_name||nid)+(n.state==='offline'?'（节点离线，上线后才会执行）':''));load();})
       .catch(fail(kindName(body.kind)+' 下发失败'));
   }
@@ -371,7 +395,7 @@
   }
   // 停止触达：账号从该节点最近一次「账号体检」结果里选，号码从该节点任务记录里出现过的号码里选
   function stopOpen(nid){var n=nodes[nid]||{};
-    apiFetch('/api/fleet/tasks?node_id='+encodeURIComponent(nid)+'&limit=200').then(j).then(function(d){
+    apiFetch(fa('tasks?node_id='+encodeURIComponent(nid)+'&limit=200')).then(j).then(function(d){
       var tasks=d.tasks||[],accs=[],phones=[],seenP={};
       for(var i=0;i<tasks.length;i++){var x=tasks[i];
         if(!accs.length&&x.kind==='account_health'&&x.status==='done'){accs=((x.result||{}).accounts||[]).filter(function(a){return a&&a.account_id;});}
@@ -398,7 +422,7 @@
     }).catch(fail('读取号码列表失败'));
   }
   document.getElementById('fc-tasks').addEventListener('click',function(ev){var a=ev.target.closest('a[data-t]');if(!a)return;ev.preventDefault();
-    apiFetch('/api/fleet/tasks/'+a.getAttribute('data-t')).then(j).then(function(d){var r=d.task.result||{};
+    apiFetch(fa('tasks',a.getAttribute('data-t'))).then(j).then(function(d){var r=d.task.result||{};
       var box=document.getElementById('fc-detail');box.style.display='';
       if(r.qr_data_url&&QR_RE.test(r.qr_data_url)){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
       else document.getElementById('fc-detail-body').textContent=JSON.stringify(r,null,2);
@@ -412,7 +436,7 @@
         '<p class="fc-dlg-note">公开安装包不需要注册码；只有当场指定某台电脑时才用。</p>',
       submit:function(){return {label:val('fc-dlg-label'),group_name:val('fc-dlg-group')};}})
     .then(function(v){if(!v)return;
-      post('/api/fleet/enroll-codes',v)
+      post(fa('enroll-codes'),v)
         .then(function(d){t('fc-code',d.code);t('fc-code-exp',fmtTs(d.expires_at));document.getElementById('fc-codebox').style.display='';load();})
         .catch(fail('生成失败'));});
   });
@@ -421,12 +445,12 @@
   function lgQr(u){var img=document.getElementById('fc-login-qr');if(u&&QR_RE.test(u)){img.src=u;img.style.display='';}}
   function lgHideQr(){var img=document.getElementById('fc-login-qr');img.removeAttribute('src');img.style.display='none';}
   function lgStop(m){
-    if(lg){clearTimeout(lg.timer);lg.tasks.forEach(function(id){apiFetch('/api/fleet/tasks/'+encodeURIComponent(id)+'/cancel',{method:'POST'}).catch(function(){});});}
+    if(lg){clearTimeout(lg.timer);lg.tasks.forEach(function(id){apiFetch(fa('tasks',encodeURIComponent(id),'cancel'),{method:'POST'}).catch(function(){});});}
     lg=null;document.getElementById('fc-login-stop').style.display='none';document.getElementById('fc-login-go').disabled=false;
     if(m)lgMsg(m);
   }
   function lgWait(s,id,cb){
-    apiFetch('/api/fleet/tasks/'+encodeURIComponent(id)).then(j).then(function(d){if(lg!==s)return;var x=d.task||{};
+    apiFetch(fa('tasks',encodeURIComponent(id))).then(j).then(function(d){if(lg!==s)return;var x=d.task||{};
       if(x.status==='queued'||x.status==='pulled'){
         if(Date.now()>s.deadline){lgHideQr();lgStop('超时：节点没有回应（离线或 Agent 过旧？）');return;}
         s.timer=setTimeout(function(){lgWait(s,id,cb);},2000);return;}
@@ -436,7 +460,7 @@
   function lgPoll(s){
     if(lg!==s)return;
     if(Date.now()>s.deadline){lgHideQr();lgStop('5 分钟内没有完成扫码，已停止。可以重新生成。');return;}
-    apiFetch('/api/fleet/nodes/'+encodeURIComponent(s.node)+'/login-qr/'+encodeURIComponent(s.loginId)+'/status',
+    apiFetch(fa('nodes',encodeURIComponent(s.node),'login-qr',encodeURIComponent(s.loginId),'status'),
       {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:s.platform,instance:s.instance})})
       .then(j).then(function(d){if(lg!==s)return;var id=d.task.task_id;s.tasks.push(id);
         lgWait(s,id,function(x){var r=x.result||{},st=String(r.status||'');
@@ -467,7 +491,7 @@
     var s={node:nid,platform:pf,instance:inst,loginId:'',timer:0,deadline:Date.now()+LOGIN_MAX_MS,tasks:[]};lg=s;
     document.getElementById('fc-login-go').disabled=true;document.getElementById('fc-login-stop').style.display='';
     lgMsg('已下发，等节点取回二维码…');
-    apiFetch('/api/fleet/nodes/'+encodeURIComponent(nid)+'/login-qr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:pf,instance:inst})})
+    apiFetch(fa('nodes',encodeURIComponent(nid),'login-qr'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:pf,instance:inst})})
       .then(j).then(function(d){if(lg!==s)return;var id=d.task.task_id;s.tasks.push(id);
         lgWait(s,id,function(x){var r=x.result||{};
           if(x.status!=='done'){lgStop('发起失败：'+x.status+(x.detail?(' · '+x.detail):'')+(r.detail?(' · '+r.detail):''));return;}

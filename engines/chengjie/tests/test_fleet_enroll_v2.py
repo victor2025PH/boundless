@@ -336,7 +336,7 @@ def test_download_page_installer_and_script_attachment(st):
         public_url="https://bd2026.cc/fleet", proto_version=1)
     assert "尚未发布" in unpublished and "<a class=\"btn p\"" not in unpublished
     console = (ENGINE / "domains/fleet_control/web/templates/fleet_console.html").read_text(encoding="utf-8")
-    assert "待批准" in console and "/api/fleet/room-keys" in console
+    assert "待批准" in console and "fa('room-keys')" in console
     assert "pairing_code" in console and "requested_group" in console and "effective_group" in console
     assert "approving will rotate key of " in console and "confirm_rotate" in console
     dl = resolve_download({"download": {"manifest_url": "", "installer_url": "https://d/chatx-agent.exe"}})

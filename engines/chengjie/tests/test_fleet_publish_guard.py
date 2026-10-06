@@ -174,3 +174,86 @@ def test_publish_whatif_dry_run_plans_mirror_and_renders_page(tmp_path):
     assert hashlib.sha256(b"MZ fake agent").hexdigest() in page
     side = (stage / "ChatXAgentSetup-0.0.1.exe.sha256").read_text(encoding="ascii")
     assert side == hashlib.sha256(body).hexdigest() + "  ChatXAgentSetup-0.0.1.exe\n"
+
+
+
+# ── 0.3.8: started from pwsh 7 / native stderr must not abort ─────────────────
+def test_scripts_guard_pwsh_host_and_native_stderr():
+    for path in (PUBLISH, BUILD):
+        src = _text(path)
+        guard = src.index("$PSVersionTable.PSEdition -eq 'Core'")
+        assert guard < src.index("Get-FileHash -LiteralPath") and guard < src.index("Get-AuthenticodeSignature -LiteralPath"), path.name
+        assert "Remove-Item Env:PSModulePath" in src and "-File $PSCommandPath" in src
+        assert "\\\\PowerShell\\\\7" in src and "function Invoke-Native" in src
+        assert all(ord(c) < 128 for c in src)
+    pub = _text(PUBLISH)
+    for needle in ("Invoke-Native { Invoke-Expression $cmd }", "Invoke-Native { & powershell @bsArgs }",
+                   "Invoke-Native { & $Python @pyArgs }", "Invoke-Native { & tar -cf $raw",
+                   "Invoke-Native { & tar -rf $raw"):
+        assert needle in pub, needle
+    assert 'Invoke-Native { & $Iscc "/DAgentExe=$agent"' in _text(BUILD)
+
+
+def _polluted_env() -> dict:
+    """What a pwsh 7 parent hands a child powershell.exe: its own module dirs first."""
+    env = _ps_env()
+    home = os.environ.get("USERPROFILE", r"C:\Users\Default")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    env["PSModulePath"] = ";".join([os.path.join(home, "Documents", "PowerShell", "Modules"),
+                                    os.path.join(pf, "PowerShell", "Modules"),
+                                    os.path.join(pf, "PowerShell", "7", "Modules"),
+                                    os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                                 "system32", "WindowsPowerShell", "v1.0", "Modules")])
+    return env
+
+
+@win
+def test_build_setup_manifest_only_with_pwsh_module_path(tmp_path):
+    dist = _dist(tmp_path, b"MZ unsigned setup", setup_sha="00" * 32)
+    res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(BUILD),
+                          "-DistDir", str(dist), "-ManifestOnly"],
+                         capture_output=True, text=True, timeout=120, env=_polluted_env())
+    assert res.returncode == 0, res.stdout + res.stderr
+    want = hashlib.sha256(b"MZ unsigned setup").hexdigest()
+    assert json.loads((dist / "manifest.json").read_bytes().decode("utf-8"))["setup_sha256"] == want
+
+
+@win
+def test_build_setup_started_from_pwsh_reruns_under_winps(tmp_path):
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("pwsh not installed")
+    dist = _dist(tmp_path, b"MZ unsigned setup", setup_sha="00" * 32)
+    res = subprocess.run([pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(BUILD),
+                          "-DistDir", str(dist), "-ManifestOnly"],
+                         capture_output=True, text=True, timeout=180, env=dict(os.environ))
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "re-running under Windows PowerShell 5.1" in out
+    want = hashlib.sha256(b"MZ unsigned setup").hexdigest()
+    assert (dist / "ChatXAgentSetup.exe.sha256").read_text(encoding="ascii").split()[0] == want
+
+
+@win
+def test_publish_whatif_survives_native_stderr(tmp_path):
+    """A caller that redirects the script in-process (`& publish_agent.ps1 ... *> log`) makes 5.1 turn
+    any native stderr line into a NativeCommandError; with ErrorActionPreference=Stop that used to
+    abort the run half way (reproduced on the 0.3.7 script with a python that prints a warning)."""
+    import sys
+
+    body = b"MZ unsigned setup noisy"
+    dist = _dist(tmp_path, body, setup_sha=hashlib.sha256(body).hexdigest())
+    noisy = tmp_path / "noisy_py.cmd"
+    noisy.write_text('@echo off\r\necho WARNING: noise on stderr 1>&2\r\n"%s" %%*\r\n' % sys.executable, encoding="ascii")
+    log = tmp_path / "publish.log"
+    inner = tmp_path / "inner.ps1"
+    inner.write_text(
+        "& '%s' -DistDir '%s' -SshHost nobody@invalid.invalid -PublicBase https://invalid.invalid/downloads/fleet "
+        "-Python '%s' -StageDir '%s' -WhatIf *> '%s'\r\nexit $LASTEXITCODE\r\n"
+        % (PUBLISH, dist, noisy, tmp_path / "stage", log), encoding="ascii")
+    res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(inner)],
+                         capture_output=True, text=True, timeout=120, env=_polluted_env())
+    out = res.stdout + res.stderr + (log.read_text(encoding="utf-16", errors="replace") if log.is_file() else "")
+    assert res.returncode == 0, out
+    assert "download page rendered from dist files" in out and "noise on stderr" in out
+    assert (tmp_path / "stage" / "index.html").is_file()

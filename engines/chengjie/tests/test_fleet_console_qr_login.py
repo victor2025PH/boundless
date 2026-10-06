@@ -186,7 +186,8 @@ def test_agent_drops_non_image_qr_and_keeps_reason_code(rig):
 def test_console_has_qr_login_panel_and_guards():
     html = CONSOLE.read_text(encoding="utf-8")
     assert 'id="fc-login"' in html and 'id="fc-login-qr"' in html and "扫码登录" in html
-    assert "/login-qr'" in html and "/login-qr/'+encodeURIComponent(s.loginId)+'/status'" in html
+    # 地址统一走 fa(...) 拼（API 前缀可配，且不留会被 VPS HTML 改写中间件改坏的 '/...' 字面量）
+    assert "'login-qr')" in html and "'login-qr',encodeURIComponent(s.loginId),'status')" in html
     # the raw login_qr button (prompt only, no polling) is replaced by the panel
     assert "'login_qr'" not in html.split("var KINDS=")[1].split(";")[0]
     # every <img src> assignment goes through the same data-URL check as the server
@@ -194,7 +195,7 @@ def test_console_has_qr_login_panel_and_guards():
     js_re = re.search(r"var QR_RE=/(.+?)/;", html).group(1).replace("\\/", "/")
     assert js_re == r"^data:image/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$"
     assert "LOGIN_MAX_MS=300000" in html and "authorized:1" in html
-    assert "/cancel'" in html                  # stopping cancels still-queued tasks
+    assert "'cancel')" in html                  # stopping cancels still-queued tasks
 
 
 # ── console flow, executed for real in node (skipped when node is missing) ──

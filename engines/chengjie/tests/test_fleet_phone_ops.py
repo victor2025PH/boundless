@@ -19,7 +19,7 @@ CAPS_HB = {"agent_version": "0.3.7", "proto_version": 1, "caps": [CAP_PHONE_OPS_
 def _node_with_caps(st, caps=(CAP_PHONE_OPS_V1,), mid="m-aaaa"):
     nid = _enroll(st, mid=mid)["node_id"]
     st.heartbeat(nid, {"agent_version": "0.3.7", "proto_version": 1, "caps": list(caps)}, now=T0 + 1)
-    st.set_remote_ops(nid, True)
+    st.set_remote_ops(nid, True, now=T0 + 1)          # 0.3.8 起开关有有效期，按测试时钟开
     return nid
 
 
@@ -752,8 +752,8 @@ def test_console_remote_ops_toggle_on_needs_confirm(tmp_path):
     assert "远程操作已开" in res["list"]
     assert "受保护的直播机除外" in res["dlg"]
     posts = [c for c in res["calls"] if c[0] == "POST"]
-    assert posts == [["POST", "/api/fleet/nodes/n1", {"remote_ops_enabled": True}]]
-    assert "已开启" in res["toast"]
+    assert posts == [["POST", "/api/fleet/nodes/n1", {"remote_ops_enabled": True, "remote_ops_minutes": 30}]]
+    assert "已开启" in res["toast"] and "30 分钟后自动关闭" in res["toast"]
     cancelled = _console_run(tmp_path, {"nodes": nodes, "click": "n1", "confirm": False})
     assert [c for c in cancelled["calls"] if c[0] == "POST"] == []
 

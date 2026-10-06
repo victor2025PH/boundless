@@ -659,6 +659,19 @@ def viewer_client(app, config_dir):
 
 
 @pytest.fixture(autouse=True)
+def _fleet_remote_ops_notify_quiet(monkeypatch):
+    """0.3.8 remote_ops 开关通知：测试里不走真实 ops_alert（不推 TG、不写审计库）。
+
+    需要断言通知内容的用例自行 monkeypatch ``remote_ops_watch.notify_hook``。
+    """
+    try:
+        from src.fleet import remote_ops_watch as _row
+    except Exception:
+        return
+    monkeypatch.setattr(_row, "notify_hook", lambda text, node_id, reason: None)
+
+
+@pytest.fixture(autouse=True)
 def _fleet_phones_no_real_adb(monkeypatch):
     """Fleet agent 0.3.6 phone inventory: no test talks to the dev box adb server.
 
