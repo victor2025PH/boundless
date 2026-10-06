@@ -17,7 +17,7 @@ fleet_control:
   offline_after_sec: 120
   enroll_code_ttl_min: 15
   public_url: "https://bd2026.cc/fleet"    # Agent 连的地址（注册码页 / 安装说明展示）
-  console_api_base: ""                     # 控制台 /api/fleet/... 前面加的路径前缀；空 = 同站根路径。VPS 上控制台挂在 /fleet/ui 时填 "/fleet/ui"
+  console_api_base: ""                     # 控制台 /api/fleet/... 前面加的路径前缀；空 = 跟 web_admin.public_prefix 走（都空 = 同站根路径）
   remote_ops_default_min: 30               # 「远程操作」打开后多少分钟自动关（每次打开可改，1–240）；到点主控自动关并取消排队的手机任务
   download:
     version: ""                            # 发布流程写入；空 → 主页显示「即将发布」
@@ -58,6 +58,8 @@ web_admin:
   port: 18798
   auth_token: "CHANGE_ME"                  # ← 必填
   secret_key: "CHANGE_ME"                  # ← 必填
+  public_prefix: ""                        # 公网 nginx 只反代 /fleet/ 时填 "/fleet/ui"：管理台壳走 /fleet/ui/*，登录页 /fleet/login，
+                                           # 静态 /fleet/static（src/web/public_prefix.py）。空 = 站点根路径（本机直连 / 子域整站反代）
 
 # 群控单独的品牌（登录页标题 / 侧栏 / 控制台标题）；只作用于本实例，其他产品仍用默认「智聊」
 brand:

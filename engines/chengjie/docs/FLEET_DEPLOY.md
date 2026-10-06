@@ -49,7 +49,7 @@ sudo bash ~/deploy_controller.sh ~/chatx-fleet-src.tar.gz
 #   1 建用户/目录  2 解包到 app.new  3 venv+pip(requirements-ci.txt)  4 首次生成 /etc/chatx-fleet/config.yaml
 #     → 随机 auth_token / secret_key **只打印一次**，存密码库（操作端 CHATX_FLEET_ADMIN_TOKEN 就是它）
 #   5 原子切换 app（旧版留 app.prev）  6 systemd enable+restart  7 写 /etc/nginx/snippets/chatx-fleet-main.conf
-#   8 健康检查失败自动回滚
+#   8 健康检查 + 控制台体检（console_check.py），任一失败自动回滚
 # 然后人工在 bd2026.cc 的 server{} 里加一行（脚本只提示、不改官网配置）：
 #     include /etc/nginx/snippets/chatx-fleet-main.conf;
 sudo nginx -t && sudo systemctl reload nginx
@@ -143,7 +143,13 @@ powershell -ExecutionPolicy Bypass -File Install-ChatXAgent.ps1 -Controller http
 ## 3.2 控制台 API 前缀、远程操作自动关闭
 
 - **API 前缀**：`fleet_console.html` 里所有接口地址都由 `fa('nodes', id, 'tasks')` 这类调用拼出来，前缀来自路由注入的 `fleet_control.console_api_base`（模板里的 `#fc-cfg[data-api-base]`）。空值就是同站 `/api/fleet/...`。公网 VPS 上控制台挂在 `/fleet/ui`，可以填 `console_api_base: "/fleet/ui"`。以后热修控制台不再需要手工维护一份「带 /fleet/ui 前缀」的差异文件。
-- **VPS 的 HTML 改写中间件**：VPS 自己的 `src/web/admin.py`（不在本仓库）有 `FleetAssetPrefixMiddleware`，会把 HTML 里所有带引号、以 `/` 开头的字面量补成 `/fleet/ui/...`。所以控制台脚本里**不能出现** `'/api/...'`、`'/revoke'` 这类字面量，否则会被改坏（0.3.7 现网控制台的撤销 / 下发任务 / 批准 / 拒绝 / 撤销机房密钥 / 登录二维码 / 取消任务 8 个写接口就是这样被改成 `.../nodes/n1/fleet/ui/revoke`）。`tests/test_fleet_remote_ops_expiry.py` 有两条静态守卫。中间件在场时 `console_api_base` 留空或填 `/fleet/ui` 都能用，不会出现双重前缀。
+- **公网前缀模式（`web_admin.public_prefix`）**：bd2026.cc 的 nginx 只反代 `/fleet/`，管理台壳（登录、设置、控制台外壳）要走 `/fleet/ui/*`。以前这靠 VPS 上 8 个手补的 `src/web` 文件（`FleetUiPrefixMiddleware` / `FleetAssetPrefixMiddleware` 等，不在仓库里），整包部署会把它们冲掉；其中兜底的 `_PAGE` 正则还会把拼接片段 `'/revoke'` 改成 `/fleet/ui/revoke`（0.3.7 控制台 8 个写接口就是这样坏的）。现在收进了仓库的 `src/web/public_prefix.py`，config 里填 `web_admin.public_prefix: "/fleet/ui"` 才开启（默认空 = 行为不变）：
+  - 最外层把 `/fleet/ui/x` 剥成 `/x` 再进路由；`/fleet/login` 是 `/login` 的别名（同样免 CSRF）；`/fleet/static` 继续可用。
+  - 最内层（压缩之前）改写 HTML/CSS/JS：`href/src/action/poster/formaction` 属性、CSS `url()`，以及**首段是已注册路由**的引号字面量补前缀；拼接片段（前面是 `+`）不补；3xx 的 `Location` 也补，`/login` 落到 `/fleet/login`。JSON、附件、已压缩响应不碰，已经带 `/fleet` 或 `/downloads` 的地址不动，改写幂等（不会出现 `/fleet/ui/fleet/ui`）。
+  - `base.html` / `workspace_base.html` 只在前缀模式下注入一小段运行时兜底（fetch / XHR / sendBeacon / 点链接 / 提交表单补前缀）。
+  - `console_api_base` 留空时跟 `public_prefix` 走。控制台脚本仍然只经 `fa()` 拼地址（`tests/test_fleet_remote_ops_expiry.py` 的静态守卫保留）。
+  - **上线顺序**：先在 `/etc/chatx-fleet/config.yaml` 的 `web_admin` 下加 `public_prefix: "/fleet/ui"`，再跑整包部署。`deploy_controller.sh` 发现现网还是手补版、config 却没这项时会在动手前拒绝继续。
+- **控制台体检**：`sudo bash deploy_controller.sh --console-check`（只读，可随时跑）。整包部署在健康检查之后也会自动跑，失败就回滚（`CONSOLE_CHECK=0` 可跳过，只限救火）。体检内容：本机用主令牌登录（`POST /login`，拿会话后 `GET /logout` 收尾；令牌不打印、不进命令行），拉 `/fleet/console`，断言 `#fc-cfg` 和 `fa()` 都在、`data-api-base` 符合配置、前缀后面没有 `/revoke|/tasks|/approve|/reject|/cancel|/login-qr|/status` 这类被改坏的写路径、没有双重前缀、页面链接都在 `/fleet` 下；再从公网探一次 `/fleet/login` 和 `/fleet/ui/static/brand/brand.css`。
 - **远程操作自动关闭**：节点开「远程操作」时带一个时长（默认 `remote_ops_default_min`=30 分钟，每次打开可改，最多 240 分钟）。到点后主控的后台巡检（30 秒一轮，文件锁保证多进程只有一个在跑，锁路径可用 `CHATX_FLEET_REMOTE_OPS_LOCK` 改）会自动关掉开关，并把排队中的手机任务取消（`detail=remote_ops_expired`；手动关是 `remote_ops_disabled`）。节点上会记录谁、什么时候打开的，以及到期时间，最近一次关闭记在 `remote_ops_last_off`。控制台和智拓的徽章显示「剩 N 分」。旧库里开着但没有到期时间的记录，上线后第一轮巡检会补上默认时长。
 - **通知**：打开、手动关、到点自动关都走现有的 `src.ops.ops_alert.notify`：审计日志一定写；只有配置了 `EVENT_INGEST_KEY` 时才同时推 TG。没有新增通知渠道。
 
