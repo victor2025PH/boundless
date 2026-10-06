@@ -336,36 +336,156 @@ def _version_tag(version: str) -> str:
     return "".join(ch for ch in (version or "new") if ch.isalnum() or ch in "._-")[:40] or "new"
 
 
+def _bundled_adb_exe(app_dir: Path) -> str:
+    """Windows path of the adb.exe shipped next to chatx-agent.exe.
+
+    The setup script always runs on Windows, so the join uses backslashes even
+    when this module is imported on another platform.
+    """
+    root = str(app_dir).replace("/", "\\").rstrip("\\")
+    return root + "\\platform-tools\\adb.exe"
+
+
 def build_setup_script(setup: Path, sha256: str, pid: int, state_dir: Path, *,
-                       manage_adb_server: bool = False, keep_identity: bool = False) -> Tuple[str, str]:
+                       manage_adb_server: bool = False, keep_identity: bool = False,
+                       health_timeout: int = HEALTH_TIMEOUT_SEC, poll_sec: int = 5,
+                       task_name: str = TASK_NAME, app_dir: Optional[Path] = None) -> Tuple[str, str]:
     """Wait for this process, refuse a live-stream host, re-check sha256, then run the installer.
 
     The argument list is fixed. ``keep_identity`` adds ``/KEEPIDENTITY=1``.
     ``manage_adb_server`` only adds ``/MANAGEADBSERVER=1``.
+
+    Before the installer starts, the bundled adb is stopped by full path so it
+    cannot lock ``platform-tools\\adb.exe``. A live-stream host exits before that
+    stop. A non-zero installer exit always relaunches the agent task. When
+    ``health_timeout`` > 0, a missing heartbeat after the installer starts
+    relaunches the task and restores ``agent.json`` from the in-memory snapshot
+    if the file is gone.
     """
     flags = setup_installer_flags(manage_adb_server=manage_adb_server, keep_identity=keep_identity)
     arg_list = ", ".join("'" + _ps_lit(flag) + "'" for flag in flags)
+    if app_dir is None:
+        app_dir = Path(sys.executable).parent
+    adb = _bundled_adb_exe(Path(app_dir))
+    timeout = int(health_timeout or 0)
+    watch = timeout > 0
     lines = [
         "$ErrorActionPreference = 'Stop'",
         f"$setup = '{_ps_lit(setup)}'",
         f"$want = '{_ps_lit(sha256.strip().lower())}'",
         f"$state = '{_ps_lit(state_dir)}'",
+        f"$task = '{_ps_lit(task_name)}'",
+        f"$adb = '{_ps_lit(adb)}'",
+        f"$timeout = {timeout}",
+        "$aj = Join-Path $state 'agent.json'",
+        # In memory only: pre-setup agent.json, restored if a failed install removes it.
+        "$snap = $null; try { if (Test-Path -LiteralPath $aj) { $snap = [IO.File]::ReadAllBytes($aj) } } catch {}",
+        "$parent = Split-Path -Parent $state",
+        "$log = Join-Path $parent '" + UPGRADE_LOG_NAME + "'",
+        "function Note([string]$m) { try { Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $m) -Encoding ascii } catch {} }",
+        "function Restore-AgentJson {",
+        "  if ((-not (Test-Path -LiteralPath $aj)) -and $snap) {",
+        "    try {",
+        "      if (-not (Test-Path -LiteralPath $state)) { New-Item -ItemType Directory -Path $state | Out-Null }",
+        "      [IO.File]::WriteAllBytes($aj, $snap)",
+        "      Note 'setup: agent.json restored'",
+        "    } catch { Note ('setup: agent.json not restored: ' + $_.Exception.Message) }",
+        "  }",
+        "}",
+        "function Relaunch-Agent([string]$Why) {",
+        "  Restore-AgentJson",
+        "  try { schtasks /Run /TN \"$task\" | Out-Null } catch { Note ('setup relaunch failed: ' + $_.Exception.Message) }",
+        "  Note ('setup relaunch: ' + $Why)",
+        "}",
         f"try {{ Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue }} catch {{}}",
         "Start-Sleep -Seconds 1",
+        # Live-stream hosts exit here. The bundled adb stop below is not reached.
         "$envLive = [string]$env:CHATX_FLEET_LIVE_STREAM",
-        "if ($envLive -match '^(?i)(1|true|yes|on)$') { exit 2 }",
+        "if ($envLive -match '^(?i)(1|true|yes|on)$') { Relaunch-Agent 'live-stream guard'; exit 2 }",
         "$flagName = 'live-stream.flag'",
         "$roots = @((Split-Path -Parent $state), $state)",
         "if ($env:ProgramData) { $roots += (Join-Path $env:ProgramData 'ChatX') }",
         "foreach ($root in $roots) {",
-        "  if (Test-Path -LiteralPath (Join-Path $root $flagName)) { exit 2 }",
+        "  if (Test-Path -LiteralPath (Join-Path $root $flagName)) { Relaunch-Agent 'live-stream guard'; exit 2 }",
         "}",
-        "$got = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash",
-        "if ($got.ToLower() -ne $want) { exit 1 }",
+        "try { $got = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash } catch { Relaunch-Agent 'sha256 unreadable'; exit 1 }",
+        "if ($got.ToLower() -ne $want) { Relaunch-Agent 'sha256 mismatch'; exit 1 }",
+        # Full path only. Never match adb by image name; other adb.exe copies may be legitimate.
+        # kill-server and the process stop are separate: a missing server must not skip the stop.
+        "try {",
+        "  if (Test-Path -LiteralPath $adb) {",
+        "    & $adb kill-server",
+        "    Start-Sleep -Seconds 1",
+        "  }",
+        "} catch {}",
+        "try {",
+        "  Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        "} catch {}",
         f"$argList = @({arg_list})",
-        "$proc = Start-Process -FilePath $setup -ArgumentList $argList -Wait -PassThru",
-        "if ($null -eq $proc) { exit 1 }",
-        "exit $proc.ExitCode",
+        "$t0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
+        "$wd = $null",
+    ]
+    if watch:
+        lines += [
+            "$snapB64 = ''",
+            "if ($snap) { $snapB64 = [Convert]::ToBase64String($snap) }",
+            "try {",
+            "  $wd = Start-Job -ScriptBlock {",
+            "    param($timeout, $state, $task, $t0, $snapB64)",
+            "    Start-Sleep -Seconds $timeout",
+            "    $ok = $false",
+            "    try {",
+            "      $hb = Get-Content -LiteralPath (Join-Path $state 'last_heartbeat.json') -Raw -ErrorAction Stop | ConvertFrom-Json",
+            "      if ([double]$hb.at -gt [double]$t0) { $ok = $true }",
+            "    } catch {}",
+            "    if ($ok) { return }",
+            "    $aj = Join-Path $state 'agent.json'",
+            "    if ((-not (Test-Path -LiteralPath $aj)) -and $snapB64) {",
+            "      try {",
+            "        if (-not (Test-Path -LiteralPath $state)) { New-Item -ItemType Directory -Path $state | Out-Null }",
+            "        [IO.File]::WriteAllBytes($aj, [Convert]::FromBase64String($snapB64))",
+            "      } catch {}",
+            "    }",
+            "    schtasks /Run /TN \"$task\" | Out-Null",
+            "    try { Add-Content -LiteralPath (Join-Path (Split-Path -Parent $state) '" + UPGRADE_LOG_NAME + "') -Value ((Get-Date -Format s) + ' setup watchdog: no heartbeat; agent task relaunched') -Encoding ascii } catch {}",
+            "  } -ArgumentList $timeout, $state, $task, $t0, $snapB64",
+            "} catch { $wd = $null }",
+        ]
+    lines += [
+        "try {",
+        "  $proc = Start-Process -FilePath $setup -ArgumentList $argList -Wait -PassThru",
+        "} catch {",
+        "  Relaunch-Agent 'setup process missing'",
+        "  exit 1",
+        "}",
+        "if ($null -eq $proc) { Relaunch-Agent 'setup process missing'; exit 1 }",
+        "if ([int]$proc.ExitCode -ne 0) { Relaunch-Agent 'setup exit non-zero'; exit [int]$proc.ExitCode }",
+    ]
+    if watch:
+        lines += [
+            "$remain = [int](($t0 + $timeout) - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())",
+            "if ($remain -lt 0) { $remain = 0 }",
+            "$ok = $false",
+            "$deadline = (Get-Date).AddSeconds($remain)",
+            "while ((Get-Date) -lt $deadline) {",
+            f"  Start-Sleep -Seconds {max(1, int(poll_sec))}",
+            "  try {",
+            "    $hb = Get-Content -LiteralPath (Join-Path $state 'last_heartbeat.json') -Raw -ErrorAction Stop | ConvertFrom-Json",
+            "    if ([double]$hb.at -gt $t0) { $ok = $true; break }",
+            "  } catch {}",
+            "}",
+            "if (-not $ok) {",
+            "  try {",
+            "    $hb = Get-Content -LiteralPath (Join-Path $state 'last_heartbeat.json') -Raw -ErrorAction Stop | ConvertFrom-Json",
+            "    if ([double]$hb.at -gt $t0) { $ok = $true }",
+            "  } catch {}",
+            "}",
+            "if (-not $ok) { Relaunch-Agent 'no heartbeat' }",
+        ]
+    lines += [
+        "if ($wd) { try { Stop-Job $wd -ErrorAction SilentlyContinue; Remove-Job $wd -Force -ErrorAction SilentlyContinue } catch {} }",
+        "$snap = $null",
+        "exit 0",
     ]
     return "\n".join(lines) + "\n", ".ps1"
 
@@ -373,7 +493,8 @@ def build_setup_script(setup: Path, sha256: str, pid: int, state_dir: Path, *,
 def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch = _fetch,
                        spawn: Spawn = _spawn_detached, frozen: Optional[bool] = None,
                        pid: Optional[int] = None, live_stream: Optional[bool] = None,
-                       windows: Optional[bool] = None) -> Tuple[str, Dict[str, Any], str]:
+                       windows: Optional[bool] = None,
+                       current_exe: Optional[Path] = None) -> Tuple[str, Dict[str, Any], str]:
     """Download a verified installer and schedule a silent run. Never falls through to an exe swap."""
     if _as_live_stream(state_dir, live_stream):
         return "rejected", {}, "live_stream_host"
@@ -405,8 +526,11 @@ def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch
     if got.lower() != sha.lower():
         dest.unlink(missing_ok=True)
         return "rejected", {"error": "sha256 mismatch"}, "sha256_mismatch"
+    timeout = health_timeout_of(payload)
+    app_dir = Path(current_exe).parent if current_exe else Path(sys.executable).parent
     body, suffix = build_setup_script(dest, got, pid or os.getpid(), state_dir,
-                                     manage_adb_server=manage, keep_identity=keep)
+                                     manage_adb_server=manage, keep_identity=keep,
+                                     health_timeout=timeout, app_dir=app_dir)
     script = state_dir / "updates" / ("install-setup" + suffix)
     script.write_text(body, encoding="utf-8")
     try:
@@ -415,7 +539,8 @@ def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch
         return "failed", {"error": str(e)[:300]}, "spawn_failed"
     logger.info("[updater] 安装包已校验 %s，静默安装脚本已派生，本进程即将退出", dest)
     return "done", {"version": version, "staged": str(dest), "exit": True, "setup": True,
-                    "manage_adb_server": manage, "keep_identity": keep}, "setup_scheduled"
+                    "manage_adb_server": manage, "keep_identity": keep,
+                    "rollback_after_sec": timeout}, "setup_scheduled"
 
 
 def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Optional[Path] = None,
@@ -428,7 +553,7 @@ def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Opti
     """
     if setup_install_requested(payload):
         return apply_remote_setup(payload, state_dir, fetch=fetch, spawn=spawn, frozen=frozen, pid=pid,
-                                  live_stream=live_stream, windows=windows)
+                                  live_stream=live_stream, windows=windows, current_exe=current_exe)
     url = str(payload.get("url") or "").strip()
     sha = str(payload.get("sha256") or "").strip()
     version = str(payload.get("version") or "").strip()

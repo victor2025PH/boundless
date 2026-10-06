@@ -36,7 +36,8 @@ def test_every_installer_powershell_is_51_by_absolute_path_and_pins_modules():
     execs = re.findall(r"Exec\(ExpandConstant\('([^']*powershell[^']*)'\)", src, re.I)
     assert execs and set(execs) == {r"{sys}\WindowsPowerShell\v1.0\powershell.exe"}
     commands = src.count('-Command "')
-    assert commands == 5 and src.count("-Command \"' + PsModuleFix +") == commands
+    # StopOurAgent, StopBundledAdb, StateDirWasLocked, AssertStateParent, LockStateDir, CurStepChanged.
+    assert commands == 6 and src.count("-Command \"' + PsModuleFix +") == commands
     fix = _iss_fix()
     assert fix.startswith("$env:PSModulePath=") and "$PSHOME" in fix and fix.endswith(";")
     assert '"' not in fix  # lives inside -Command "..."
