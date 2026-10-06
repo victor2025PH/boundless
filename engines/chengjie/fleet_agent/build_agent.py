@@ -87,6 +87,16 @@ def main() -> int:
     (DIST / (exe.name + ".sha256")).write_text(f"{digest}  {exe.name}\n", encoding="utf-8")
     for ps1 in ("Install-ChatXAgent.ps1", "Uninstall-ChatXAgent.ps1"):
         shutil.copy2(HERE / ps1, DIST / ps1)
+    platform_tools = HERE / "platform-tools"
+    if (platform_tools / "adb.exe").is_file():
+        dest_pt = DIST / "platform-tools"
+        if dest_pt.exists():
+            shutil.rmtree(dest_pt)
+        shutil.copytree(platform_tools, dest_pt)
+        print(f"staged platform-tools -> {dest_pt}")
+    else:
+        print("platform-tools/adb.exe not staged; phone-room bundle omitted "
+              "(see fleet_agent/platform-tools/README.txt)")
     manifest = {
         "name": NAME, "version": agent_version(), "file": exe.name,
         "url": args.base_url.rstrip("/") + "/" + exe.name, "sha256": digest, "size": exe.stat().st_size,

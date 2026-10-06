@@ -16,6 +16,8 @@
 #   ... -Exe .\chatx-agent.exe                     # offline: use a local exe instead of downloading
 #   ... -NoEnroll                                  # skip a new enroll. An unlocked agent.json keeps identity fields and each instance's name/url/auth_token only; config_path is re-detected and restart_cmd must be set again by an admin
 #   ... -ConfigPath C:\path\config.local.yaml      # pin one ChatX instance instead of auto-detect
+#   ... -ManageAdbServer                           # phone-room: opt in to the bundled adb server (refused on a live-stream host)
+#   ... -PlatformToolsDir C:\src\platform-tools    # adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll; also picked up from beside this script
 #
 # ASCII only (PowerShell 5.1 + GBK console lesson). Never prints node_key / auth tokens.
 [CmdletBinding()]
@@ -32,7 +34,9 @@ param(
   [string]$ConfigPath = "",
   [string]$AuthToken = "",
   [switch]$NoInstance,
-  [switch]$NoEnroll
+  [switch]$NoEnroll,
+  [switch]$ManageAdbServer,
+  [string]$PlatformToolsDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,6 +115,68 @@ function Test-DirLocked([string]$Dir) {
   }
   return $true
 }
+function Test-LiveStreamHost([string]$Dir) {
+  $v = [string]$env:CHATX_FLEET_LIVE_STREAM
+  $low = $v.ToLower()
+  if ($low -eq '1' -or $low -eq 'true' -or $low -eq 'yes' -or $low -eq 'on') { return $true }
+  $flags = @()
+  if ($env:ProgramData) { $flags += (Join-Path $env:ProgramData 'ChatX\live-stream.flag') }
+  if ($Dir) {
+    $flags += (Join-Path $Dir 'live-stream.flag')
+    $parent = Split-Path -Parent $Dir
+    if ($parent) { $flags += (Join-Path $parent 'live-stream.flag') }
+  }
+  foreach ($f in $flags) {
+    if ($f -and (Test-Path -LiteralPath $f)) { return $true }
+  }
+  return $false
+}
+function Find-PlatformToolsSource([string]$ExePath) {
+  $dirs = @()
+  if ($PlatformToolsDir) { $dirs += $PlatformToolsDir }
+  if ($ExePath) {
+    $parent = Split-Path -Parent $ExePath
+    if ($parent) { $dirs += (Join-Path $parent 'platform-tools') }
+  }
+  $dirs += (Join-Path $PSScriptRoot 'platform-tools')
+  foreach ($d in $dirs) {
+    if ($d -and (Test-Path -LiteralPath (Join-Path $d 'adb.exe'))) { return $d }
+  }
+  return ""
+}
+function Install-BundledPlatformTools([string]$DestRoot, [string]$ExePath) {
+  $src = Find-PlatformToolsSource $ExePath
+  $destExe = Join-Path $DestRoot 'platform-tools\adb.exe'
+  if ($src) {
+    $srcExe = Join-Path $src 'adb.exe'
+    if ([IO.Path]::GetFullPath($srcExe) -eq [IO.Path]::GetFullPath($destExe)) {
+      Say "platform-tools already in place: $destExe"
+      return
+    }
+  }
+  if (-not $src) {
+    if (Test-Path -LiteralPath $destExe) { Say "platform-tools already present: $destExe" }
+    else { Say "no platform-tools staged; phone-room nodes need adb.exe (see fleet_agent\platform-tools\README.txt)" }
+    return
+  }
+  $to = Join-Path $DestRoot 'platform-tools'
+  New-Item -ItemType Directory -Force -Path $to | Out-Null
+  Copy-Item -Path (Join-Path $src '*') -Destination $to -Force
+  Say "platform-tools -> $to"
+}
+function Enable-PhoneAdb([string]$Exe, [string]$Dir) {
+  if (Test-LiveStreamHost $Dir) {
+    Say "live-stream host: bundled adb server management stays off"
+    return
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir 'agent.json'))) {
+    Say "agent.json missing; bundled adb server management not written"
+    return
+  }
+  NativeOut $Exe @('--state-dir', $Dir, 'enable-phone-adb') | Out-Null
+  if ($NativeExit -ne 0) { Fail "could not enable bundled adb server management" }
+  Say "bundled adb server management enabled"
+}
 function Lock-StateDir([string]$Dir) {
   Assert-StateParent $Dir
   $present = Test-Path -LiteralPath $Dir
@@ -173,6 +239,7 @@ Start-Sleep -Milliseconds 800
 if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination "$target.bak" -Force }
 Move-Item -LiteralPath $tmp -Destination $target -Force
 Say "installed $target"
+Install-BundledPlatformTools $InstallDir $Exe
 
 # 3. local instance. Snapshot before an unlocked fleet is renamed aside.
 $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
@@ -248,7 +315,10 @@ if (-not $NoEnroll) {
   }
 }
 
-# 5. service
+# 5. phone-room opt-in, then the service (the flag is on disk before the service starts)
+if ($ManageAdbServer) { Enable-PhoneAdb $target $stateDir }
+
+# 6. service
 $svc = Native $target @('--state-dir', $stateDir, 'install-service')
 if ($NativeExit -ne 0) { Fail "install-service failed: $svc" }
 Say "service installed and started (scheduled task 'ChatX Fleet Agent')"
