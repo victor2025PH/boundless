@@ -142,7 +142,8 @@ def _build_system_prompt(
 
     # 身份锚点：明确「除我之外都是普通群友」，堵死角色认出同伙互相捧哏的可能
     who = str(speaker.display_name or "").strip() or str(speaker.account_id or "").strip()
-    warmup = str(getattr(directive, "beat_id", "") or "").startswith("warmup_")
+    beat_id = str(getattr(directive, "beat_id", "") or "")
+    warmup = beat_id.startswith("warmup_") or beat_id.startswith("chat_")
     if str(getattr(speaker, "slot", "") or "").strip().lower() == "guide" and warmup:
         parts.append(
             f"【你是谁】你在这个群里，名字是「{who}」。这句只聊天。"

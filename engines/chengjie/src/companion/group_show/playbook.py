@@ -178,7 +178,7 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
         return "没人说过不放心，不要替对方安抚"
     # 开场接话还没进剧本。这时候逼「我是 AI / 私聊」会把闲聊重说成广告。
     # 编造的设置项、拒绝私聊，接话阶段也不许。
-    if str(beat_id or "").startswith("warmup_"):
+    if str(beat_id or "").startswith(("warmup_", "chat_")):
         raw = str(text or "")
         if any(piece in raw for piece in _ACCIDENT):
             return "不要说手滑、发错或打错，先正常接话"
@@ -261,6 +261,10 @@ class Playbook:
     beats: Tuple[Beat, ...] = ()
     #: 进剧本前先接群里真人的句数。0＝旧剧本，开场就念稿。
     chat_before_script: int = 0
+    #: 私下要推进的那一件事。有目标就不再念 beats。
+    goal: str = ""
+    #: 真人说到这些，才许把目标带出来一次。
+    goal_cues: Tuple[str, ...] = ()
 
     @property
     def slots(self) -> Tuple[str, ...]:
@@ -432,7 +436,8 @@ def validate_playbook(pb: Playbook) -> List[str]:
     try:
         if not str(pb.id or "").strip():
             problems.append("playbook.id 不能为空")
-        if not pb.beats:
+        goaled = bool(str(getattr(pb, "goal", "") or "").strip())
+        if not pb.beats and not goaled:
             problems.append("playbook.beats 不能为空")
         if pb.system and pb.system not in VALID_SYSTEMS:
             problems.append(f"未知 system: {pb.system}（应为 {VALID_SYSTEMS}）")
@@ -540,6 +545,9 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
     except (TypeError, ValueError):
         chat_first = 0
     chat_first = max(0, min(20, chat_first))
+    cues = d.get("goal_cues") or []
+    if isinstance(cues, str):
+        cues = [cues]
     return Playbook(
         id=str(d.get("id") or "").strip(),
         name=str(d.get("name") or d.get("id") or "").strip(),
@@ -549,6 +557,8 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
         roles=tuple(_coerce_role(r) for r in roles_raw),
         beats=tuple(_coerce_beat(b) for b in beats_raw),
         chat_before_script=chat_first,
+        goal=str(d.get("goal") or "").strip(),
+        goal_cues=tuple(str(c).strip() for c in cues if str(c).strip()),
     )
 
 

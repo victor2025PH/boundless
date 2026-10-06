@@ -858,6 +858,44 @@ def test_an_old_room_does_not_steal_the_opener():
     assert fresh.next_directive().respond_to_human.startswith("老王")
 
 
+def test_a_goal_show_chats_until_someone_opens_the_topic():
+    """没人递话头就只聊天。有人自己说到那件事，向导先接话，下一轮才带一次。"""
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(),
+        goal="多个号的消息放在一处看",
+        goal_cues=("多个号", "看不过来"))
+    casting = Casting(members=(
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {"human_takeover_lines": 2})
+    assert d._queue == []
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert d.select_next_speaker().slot == "guide"
+    first = d.next_directive()
+    assert first.beat_id == "chat_1" and "私聊" not in first.intent
+    _say(d, "a_guide", "chat_1", text="刚进来", ts=T0 + 5)
+    assert d.select_next_speaker().slot == "skeptic"
+    d.observe_human("多个号看不过来", sender="老王", ts=T0 + 20)
+    d.observe_human("我也这样", sender="小李", ts=T0 + 21)
+    assert d.should_terminate(now=T0 + 30) == (False, "")
+    answer = d.next_directive()
+    assert answer.beat_id.startswith("chat_")
+    assert answer.respond_to_human.startswith("小李")
+    assert "私聊" not in answer.intent
+    _say(d, "a_guide", answer.beat_id, text="看不过来最烦", ts=T0 + 40)
+    assert d.next_directive().beat_id.startswith("chat_")
+    _say(d, "a_skp", "chat_3", text="是挺烦", ts=T0 + 50)
+    pushed = d.next_directive()
+    assert pushed.beat_id == "goal_1"
+    assert "我是 AI" in pushed.intent and "私聊" in pushed.intent
+    assert "目标" not in pushed.intent
+
+
 def test_the_same_human_line_is_heard_once():
     d = _director()
     d.observe_human("这单客户又不回", sender="老王", ts=T0)

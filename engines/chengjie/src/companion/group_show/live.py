@@ -335,6 +335,11 @@ def is_solo_playbook(playbook: Any) -> bool:
     声明了却一拍都没安排的角色不算（与 :func:`_understaffed_roles` 同口径）。
     """
     try:
+        if str(getattr(playbook, "goal", "") or "").strip():
+            slots = {str(getattr(r, "slot", "") or "")
+                     for r in (getattr(playbook, "roles", ()) or ())}
+            slots.discard("")
+            return slots == {"advocate"}
         with_beats = {str(getattr(b, "role", "") or "")
                       for b in (getattr(playbook, "beats", ()) or ())}
         with_beats.discard("")
@@ -1008,8 +1013,12 @@ def _understaffed_roles(playbook: Any, casting: Any) -> List[tuple]:
     见 :data:`_BLOCK_ADVICE`。
     """
     try:
-        with_beats = [str(getattr(b, "role", "") or "")
-                      for b in (getattr(playbook, "beats", ()) or ())]
+        if str(getattr(playbook, "goal", "") or "").strip():
+            with_beats = [str(getattr(r, "slot", "") or "")
+                          for r in (getattr(playbook, "roles", ()) or ())]
+        else:
+            with_beats = [str(getattr(b, "role", "") or "")
+                          for b in (getattr(playbook, "beats", ()) or ())]
         filled = {str(getattr(m, "slot", "") or "")
                   for m in (getattr(casting, "members", ()) or ())}
         reason_for = getattr(casting, "reason_for", None)

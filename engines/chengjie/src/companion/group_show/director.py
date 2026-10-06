@@ -69,6 +69,7 @@ _WARMUP_MUST = (
     "不要编手滑、发错号、误发这种事故",
     "不要把话题拐到产品或功能上",
 )
+_ASK_CUES = ("你是谁", "你能做", "什么功能", "怎么用")
 
 # 真人插话里的「疑问 / 产品关切」信号——命中则响应式选人接管本拍
 _HUMAN_QUESTION_RE = re.compile(
@@ -154,6 +155,10 @@ class GroupShowDirector:
             except (TypeError, ValueError):
                 self._chat_need = 0
         self._chat_need = max(0, self._chat_need)
+        self._goal_opened = False
+        if self._goal_mode():
+            self._queue = []
+            self._chat_need = 0
 
     # ── 观测输入 ─────────────────────────────────────────────────────────
 
@@ -173,6 +178,8 @@ class GroupShowDirector:
         if t:
             self._pending_human = t
             self._pending_human_name = str(sender or "")
+            if self._goal_mode() and self._cue_hit(t):
+                self._goal_opened = True
         self.state.append_event(ShowEvent(
             seq=self.state.next_seq, ts=now,
             speaker_account=str(sender or "human"), role="human",
@@ -264,7 +271,8 @@ class GroupShowDirector:
         # 场上有向导时不整场掐掉：帮手退场，向导留下把真人那句接完。
         # 没向导的旧剧本仍是「点着了就退」，这条分支碰不到它们。
         # 接话阶段真人连说几句是正常的，不能据此删掉剧本，也不能就此退场。
-        if (self.warmup_remaining() <= 0
+        if (not self._goal_mode()
+                and self.warmup_remaining() <= 0
                 and self._human_streak >= self.cfg.human_takeover_lines):
             if self._guide_member() is None:
                 return True, "human_takeover"
@@ -279,7 +287,8 @@ class GroupShowDirector:
         if (self.state.started_at > 0
                 and t - self.state.started_at > self.cfg.max_duration_seconds):
             return True, "timeout"
-        if not self._queue and self.warmup_remaining() <= 0:
+        if (not self._queue and self.warmup_remaining() <= 0
+                and not self._goal_mode()):
             return True, "completed"
         return False, ""
 
@@ -302,7 +311,7 @@ class GroupShowDirector:
         **不变量**：正常拍流程（非响应式）里，返回的人永远就是队头拍的角色——
         「谁在说」与「说什么」由同一次重排一起改，绝不脱钩。
         """
-        if self.warmup_remaining() > 0:
+        if self._goal_mode() or self.warmup_remaining() > 0:
             return self._warmup_speaker()
 
         if not self._queue:
@@ -333,6 +342,8 @@ class GroupShowDirector:
 
     def next_directive(self) -> Optional[BeatDirective]:
         """给本拍发言者的意图指令（**没有台词字段**——台词由人设 LLM 现场生成）。"""
+        if self._goal_mode():
+            return self._chat_directive()
         if self.warmup_remaining() > 0:
             return self._warmup_directive()
         if not self._queue:
@@ -417,6 +428,89 @@ class GroupShowDirector:
             if member.account_id != last:
                 return member
         return guide or (members[0] if members else None)
+
+    def _goal_mode(self) -> bool:
+        return bool(str(getattr(self.state.playbook, "goal", "") or "").strip())
+
+    def _cue_hit(self, text: str) -> bool:
+        raw = str(text or "")
+        cues = tuple(getattr(self.state.playbook, "goal_cues", ()) or ())
+        return any(piece and piece in raw for piece in cues + _ASK_CUES)
+
+    def _pusher_slot(self) -> str:
+        slots = [str(role.slot) for role in self.state.playbook.roles]
+        if "guide" in slots:
+            return "guide"
+        if "advocate" in slots:
+            return "advocate"
+        return slots[0] if slots else ""
+
+    def _goal_already_said(self) -> bool:
+        return any(
+            ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("goal_")
+            for ev in self.state.events)
+
+    def _chat_spoken(self) -> int:
+        return sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith(("chat_", "goal_", "warmup_")))
+
+    def _chat_directive(self) -> BeatDirective:
+        member = self._warmup_speaker()
+        slot = member.slot if member is not None else self._pusher_slot()
+        pending = str(self._pending_human).strip()
+        push = (
+            not pending
+            and slot == self._pusher_slot()
+            and self._goal_opened
+            and not self._goal_already_said()
+            and self._chat_spoken() > 0)
+        if pending:
+            intent = _WARMUP_INTENT
+            human = f"{self._pending_human_name or '群友'}：{pending}"
+            beat_id = f"chat_{self._chat_spoken() + 1}"
+        elif self._chat_spoken() == 0:
+            intent = _OPENER_INTENT
+            human = ""
+            beat_id = "chat_1"
+        elif push:
+            intent = self._goal_intent(slot)
+            human = ""
+            beat_id = "goal_1"
+        else:
+            intent = _CONTINUE_INTENT
+            human = ""
+            beat_id = f"chat_{self._chat_spoken() + 1}"
+        must = must_not_for_slot(slot, with_guide=self._has_guide())
+        if push:
+            must = must + ("不要说出目标这两个字", "不要提对方没说过的顾虑")
+        else:
+            must = must + _WARMUP_MUST
+        return BeatDirective(
+            beat_id=beat_id,
+            intent=intent,
+            product=str(self.state.playbook.products[0]) if push and self.state.playbook.products else "",
+            soft_level=3 if push else 0,
+            must_not=must,
+            reference_last=self._chat_spoken() > 0 and not human,
+            respond_to_human=human,
+        )
+
+    def _goal_intent(self, slot: str) -> str:
+        feature = str(self.state.playbook.goal or "").strip()
+        if slot == "guide":
+            return (
+                "用一句人话接对方刚提到的事。然后说我是 AI。"
+                f"只讲这一件：{feature}。"
+                "邀请对方私聊你自己试。不要提对方没说过的顾虑。"
+            )
+        return (
+            "用一句人话接对方刚提到的事。"
+            f"只讲这一件：{feature}。"
+            "邀请对方来找你看一眼。不要提对方没说过的顾虑。"
+        )
 
     def _warmup_directive(self) -> BeatDirective:
         guide = self._guide_member()

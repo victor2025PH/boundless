@@ -1138,15 +1138,10 @@ def test_two_seat_guide_playbook_fits_one_independent_pair():
     hard = [w for w in validate_playbook(pb) if not str(w).startswith("warn:")]
     assert hard == []
     assert {role.slot for role in pb.roles} == {"guide", "skeptic"}
-    assert pb.chat_before_script >= 12
-    assert len(pb.beats) >= 4
+    assert pb.beats == ()
+    assert pb.goal and "多个号" in pb.goal
     assert pb.products == ("matrixx",)
-    script = "\n".join(b.intent for b in pb.beats)
-    assert "手滑" not in script and "发错" not in script
-    assert "接住" not in script and "不放心" not in script
-    guide_beats = [b for b in pb.beats if b.role == "guide"]
-    assert "我是 AI" in guide_beats[0].intent
-    assert "私聊" in guide_beats[-1].intent
+    assert "手滑" not in pb.goal and "接住" not in pb.goal
     cfg = {"companion": {"group_show": {
         "live": {"enabled": True},
         "guide_account": "a1",

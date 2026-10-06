@@ -59,7 +59,7 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def interval_subject(beat: Optional[Beat], beat_id: str) -> Optional[Beat]:
     """接话那几句用轻快档。不能拿剧本第一拍的间隔，否则开场闲聊会被慢拍拖长。"""
-    if str(beat_id or "").startswith("warmup_"):
+    if str(beat_id or "").startswith(("warmup_", "chat_", "goal_")):
         return Beat(id="warmup", role="guide", intent="接话", pace="chatty", soft=0)
     return beat
 

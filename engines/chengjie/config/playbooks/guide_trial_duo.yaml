@@ -1,46 +1,24 @@
-# 向导场 · 两角
-#
-# 先接群里真人正在说的话，接满 chat_before_script 句再打开下面的剧本。
-# 剧本只做一件事：向导说明自己是 AI，邀请私聊看「多个号的消息放在一处」。
-# 不编事故，不把同一个故事说两遍。没人说话时真发会等，不会用剧本把场子填上。
+# 向导场 · 两角。没有剧本，只按目标聊天。
+# 平时接群里正在说的话。有人自己提到号多、消息多，或问向导能做什么，
+# 向导才用一句人话带一次，并邀请对方私聊自己试。
 id: guide_trial_duo
 name: 向导带一项功能 · 两角
 system: growth
 products:
   - matrixx
 soft_ad_level: 3
-chat_before_script: 12
+goal: 多个号的消息放在一处看
+goal_cues:
+  - 多个号
+  - 多号
+  - 切窗口
+  - 来回切
+  - 消息太多
+  - 看不过来
+  - 号太多
 
 roles:
   - slot: guide
-    desc: 这个群里公开的 AI。先接别人的话。轮到剧本时只带一件事，邀请对方私聊自己试。不报功能清单，不发链接，不编设置项。
+    desc: 这个群里公开的 AI。平时只聊天。轮到带目标时只讲一件事，邀请对方私聊自己试。
   - slot: skeptic
     desc: 群里的普通人。顺着别人刚说的话回一句。不要拒绝私聊，不要替向导邀请别人，也不要自己编一个发错号的故事。
-
-beats:
-  - id: b1_one_thing
-    role: guide
-    intent: 先用半句顺着群里刚才的话题，不要另编事故。然后说我是 AI。只讲一件事：多个号的消息可以放在一处看，不用来回切窗口。邀请对方私聊你自己试这一件。
-    product: matrixx
-    soft: 3
-    pace: normal
-
-  - id: b2_not_sold
-    role: skeptic
-    intent: 就着向导刚才那句回一句短的。不要替对方发明顾虑，不要拒绝私聊，不要请对方在群里把步骤讲完，不要另起一个故事。
-    soft: 0
-    pace: chatty
-
-  - id: b3_keep_the_invite
-    role: guide
-    intent: 顺着刚才已经说出口的那句。仍然只谈多个号的消息放在一处看。告诉对方私聊你之后先看收在一起的那一屏，不用一次学完。不要提对方没说过的顾虑，不要念设置路径。
-    product: matrixx
-    soft: 2
-    pace: normal
-
-  - id: b4_ask_the_room
-    role: guide
-    intent: 把私聊的下一步再说一次：私聊你，先看多个号收在一处的那一屏。然后问群里还有谁也想这样看自己的号。问完就停。不要总结功能清单。
-    product: matrixx
-    soft: 3
-    pace: slow
