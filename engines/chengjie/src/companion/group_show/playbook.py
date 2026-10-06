@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,91 @@ def must_not_for_slot(slot: str, *, with_guide: bool = False) -> Tuple[str, ...]
     if with_guide:
         return HELPER_WITH_GUIDE_MUST_NOT
     return DEFAULT_MUST_NOT
+
+
+_COMPACT_SPACE = str.maketrans("", "", " \t\u3000")
+_GUIDE_DRIFT = ("自动回复", "工作时间外", "截图")
+_HELPER_REFUSAL = ("不用私聊", "别私聊", "不用加我", "不用加你")
+
+
+def _compact_line(text: str) -> str:
+    return str(text or "").translate(_COMPACT_SPACE)
+
+
+def _says_they_are_ai(text: str) -> bool:
+    """向导这句有没有承认自己是 AI。否定句不算。"""
+    raw = str(text or "")
+    compact = _compact_line(raw)
+    if "不是AI" in compact or "不是人工智能" in raw:
+        return False
+    if "我是AI" in compact or "我就是AI" in compact or "自己是AI" in compact:
+        return True
+    return "人工智能" in raw and ("我是" in raw or "我就是" in raw)
+
+
+def _invites_private(text: str) -> bool:
+    raw = str(text or "")
+    return ("私聊" in raw) or ("私信" in raw)
+
+
+def guide_line_fault(text: str, *, prior_guide_texts: Sequence[str] = (),
+                     closing: bool = False) -> str:
+    """向导这句能不能发。空串＝可以。否则是重说时要补上的那一条禁令。
+
+    身份和邀请只要本场前面的向导句说过，中间拍不必每句重复。
+    收场那句必须自己把私聊留下。编出来的设置项和截图，任何一句都不许。
+    """
+    raw = str(text or "")
+    if any(piece in raw for piece in _GUIDE_DRIFT):
+        return "不要编设置项，不要提截图，只谈多个号的消息放在一处看"
+    prior = "\n".join(str(item or "") for item in prior_guide_texts)
+    if not _says_they_are_ai(raw) and not _says_they_are_ai(prior):
+        return "先承认自己是 AI"
+    if closing and not _invites_private(raw):
+        return "收场这句要留下私聊你自己试这一件"
+    if not _invites_private(raw) and not _invites_private(prior):
+        return "邀请对方私聊你自己试这一件"
+    return ""
+
+
+def helper_line_fault(text: str) -> str:
+    """帮手这句能不能发。空串＝可以。拒绝私聊、把话题带去别的功能，都不许。"""
+    raw = str(text or "")
+    if any(piece in raw for piece in _HELPER_REFUSAL) or "截图" in raw:
+        return "不要拒绝私聊，不要提截图"
+    if any(piece in raw for piece in _GUIDE_DRIFT[:2]):
+        return "不要把话题带去别的功能"
+    return ""
+
+
+def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
+                        events: Sequence[Any] = ()) -> str:
+    """这句台词现在能不能发。没向导的旧剧本恒为空串，行为不变。"""
+    roles = getattr(playbook, "roles", ()) or ()
+    has_guide = any(
+        str(getattr(role, "slot", "") or "").strip().lower() == GUIDE_SLOT
+        for role in roles)
+    if not has_guide:
+        return ""
+    who = str(slot or "").strip().lower()
+    if who == GUIDE_SLOT:
+        prior = []
+        for ev in events or ():
+            if str(getattr(ev, "role", "") or "").strip().lower() != GUIDE_SLOT:
+                continue
+            if str(getattr(ev, "kind", "") or "") not in ("line", "media"):
+                continue
+            said = str(getattr(ev, "text", "") or "").strip()
+            if said:
+                prior.append(said)
+        guide_ids = [
+            str(getattr(beat, "id", "") or "")
+            for beat in (getattr(playbook, "beats", ()) or ())
+            if str(getattr(beat, "role", "") or "").strip().lower() == GUIDE_SLOT
+        ]
+        closing = bool(guide_ids) and str(beat_id or "") == guide_ids[-1]
+        return guide_line_fault(text, prior_guide_texts=prior, closing=closing)
+    return helper_line_fault(text)
 
 #: 软广强度上限（红区群由 runtime 另行锁死，这里只做 schema 边界）
 SOFT_AD_MAX = 10

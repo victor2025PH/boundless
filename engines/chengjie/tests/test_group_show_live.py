@@ -1138,7 +1138,11 @@ def test_two_seat_guide_playbook_fits_one_independent_pair():
     hard = [w for w in validate_playbook(pb) if not str(w).startswith("warn:")]
     assert hard == []
     assert {role.slot for role in pb.roles} == {"guide", "skeptic"}
+    assert len(pb.beats) >= 8
     assert pb.products == ("matrixx",)
+    guide_beats = [b for b in pb.beats if b.role == "guide"]
+    assert "我是 AI" in guide_beats[0].intent
+    assert "私聊" in guide_beats[-1].intent
     cfg = {"companion": {"group_show": {
         "live": {"enabled": True},
         "guide_account": "a1",
@@ -1156,6 +1160,43 @@ def test_two_seat_guide_playbook_fits_one_independent_pair():
         require_outlet=False, hour=14)
     assert blocked.ok is False
     assert blocked.reason == "understaffed"
+
+
+def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
+    from src.companion.group_show.playbook import guide_line_fault, helper_line_fault
+    bad = "Matrix 里那个自动回复入口藏得有点深，我私发你截图对照一下？"
+    assert guide_line_fault(bad)
+    ok = "我是 AI。多个号的消息放在一处看，私聊我试这一件。"
+    assert guide_line_fault(ok) == ""
+    assert guide_line_fault("先看这一屏就够。", prior_guide_texts=(ok,)) == ""
+    assert guide_line_fault("先看这一屏就够。", prior_guide_texts=(ok,), closing=True)
+    assert helper_line_fault("不用啦，截图还得点开看")
+    assert helper_line_fault("我还是得自己看过才敢信") == ""
+
+
+@pytest.mark.asyncio
+async def test_a_guide_line_that_invents_a_menu_is_said_again():
+    seen = {"n": 0}
+
+    def gen(*_a):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return "自动回复在工作时间外，我发你截图"
+        return "我是 AI。多个号的消息放在一处看，私聊我试这一件。"
+
+    pb = Playbook(
+        id="guide_retry", name="向导", system="growth", products=("matrixx",),
+        soft_ad_level=3, roles=(Role("guide"),),
+        beats=(Beat("b1", "guide", "先说我是 AI，并私聊来试", product="matrixx", soft=3),))
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True}, "guide_account": "a1",
+    }}}
+    res, sender, _ = await _perform(
+        playbook=pb, candidates=_candidates(1), generate=gen, app_config=cfg,
+        fingerprint_groups=_fps(1))
+    assert res.guide_line_retries == 1
+    assert res.sent == 1
+    assert "我是 AI" in sender.calls[0][1]
 
 
 def test_guide_playbook_pins_the_configured_account():

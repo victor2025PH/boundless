@@ -28,7 +28,7 @@ import logging
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from src.companion.group_show.casting import cast_roles, validate_casting
@@ -43,6 +43,7 @@ from src.companion.group_show.playbook import (
     Playbook,
     ShowEvent,
     ShowState,
+    line_fault_for_beat,
     validate_playbook,
 )
 
@@ -311,6 +312,22 @@ async def rehearse(
         if _is_awaitable(text):
             text = await text
         text = str(text or "").strip()
+        fault = line_fault_for_beat(
+            state.playbook, speaker.slot, directive.beat_id, text, state.events)
+        if text and fault:
+            retry_directive = replace(directive, must_not=tuple(
+                directive.must_not or ()) + (fault,))
+            messages = project_history_for(
+                speaker, state.events, directive=retry_directive,
+                group_hint=hint, name_resolver=lambda a: names.get(a, a))
+            text = gen(speaker, messages, retry_directive)
+            if _is_awaitable(text):
+                text = await text
+            text = str(text or "").strip()
+            if line_fault_for_beat(
+                    state.playbook, speaker.slot, directive.beat_id, text,
+                    state.events):
+                text = ""
         if not text:
             # 单拍生成失败：跳过而不是卡死（真发时同理，宁可少说一句）。
             # 但连续失败＝生成侧挂了，必须显式终止——空场报「completed」会骗人。

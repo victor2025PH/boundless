@@ -73,6 +73,7 @@ from src.companion.group_show.playbook import (
     Playbook,
     ShowEvent,
     ShowState,
+    line_fault_for_beat,
     validate_playbook,
 )
 from src.companion.group_show.runtime import (
@@ -157,6 +158,8 @@ class LiveResult:
     gate_waits: int = 0
     #: 复读闸触发次数（生成的台词与本场已发内容雷同，带禁令重试）
     repetition_retries: int = 0
+    #: 向导场台词没亮明身份、把邀请收回、或编了设置项，带禁令重说的次数
+    guide_line_retries: int = 0
     #: 本场观察到的真人插话条数（喂进导演的 observe_human）
     humans_observed: int = 0
     #: 因真人让路窗而暂停的次数
@@ -709,6 +712,25 @@ async def perform(
             if _is_awaitable(text):
                 text = await text
             text = str(text or "").strip()
+            fault = line_fault_for_beat(
+                state.playbook, speaker.slot, directive.beat_id, text, state.events)
+            if text and fault:
+                result.guide_line_retries += 1
+                logger.info("[group_show.live] 向导场台词不合口径，重说 beat=%s",
+                            directive.beat_id)
+                retry_directive = replace(directive, must_not=tuple(
+                    directive.must_not or ()) + (fault,))
+                text = gen(speaker, project_history_for(
+                    speaker, state.events, directive=retry_directive,
+                    group_hint=hint,
+                    name_resolver=lambda a: names.get(a, a)), retry_directive)
+                if _is_awaitable(text):
+                    text = await text
+                text = str(text or "").strip()
+                if line_fault_for_beat(
+                        state.playbook, speaker.slot, directive.beat_id, text,
+                        state.events):
+                    text = ""
 
             # ⑧b 复读闸：与本场已发台词雷同 → 带禁令重试一次，仍雷同就弃拍。
             #    LLM 看得见自己刚说过的话却仍会复读（首场灰度实录：b4 换个句式又
