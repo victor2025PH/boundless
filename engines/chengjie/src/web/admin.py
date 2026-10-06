@@ -576,11 +576,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # 豁免口清单（每条都要能回答「为什么 CSRF 威胁模型不适用」）：
     # - /login /logout /setup：未认证引导入口，无 ambient 会话权限可被借用（S3）；
     # - /api/goals/order-hook：外部服务器回流 webhook，路由自带共享 token 恒时比较（2026-07-27 实锤）；
+    # - /api/cta/convert：官网服务器回流，路由自带 X-CTA-Secret 恒时比较，不借用会话；
     # - /api/telemetry/*：navigator.sendBeacon 无法自定义头，端点只累计**消毒后的计数**
     #   （page/fn/type 白名单化、distinct 封顶），无状态权限可借用；鉴权仍在路由层
     #   ——不豁免则「Referer 被隐私设置剥掉」的环境里观测通道先于业务瞎掉（2026-07-31）。
     _CSRF_EXEMPT_PATHS = {
         "/login", "/logout", "/setup", "/api/goals/order-hook",
+        "/api/cta/convert",
         "/api/telemetry/frontend-error", "/api/telemetry/ui-event",
     }
 
