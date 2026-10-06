@@ -55,6 +55,13 @@ if (-not $Iscc -or -not (Test-Path -LiteralPath $Iscc)) {
   exit 2
 }
 
+$pt = Join-Path $here "platform-tools\adb.exe"
+if (Test-Path -LiteralPath $pt) {
+  Write-Host "[setup] bundling platform-tools from $pt"
+} else {
+  Write-Host "[setup] platform-tools\adb.exe is not staged. The setup still builds."
+  Write-Host "[setup] Phone-room nodes need it. See fleet_agent\platform-tools\README.txt"
+}
 $ver = "0.3.0"
 $agentPy = Join-Path $engine "src\fleet\agent.py"
 $hit = Select-String -Path $agentPy -Pattern 'AGENT_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
