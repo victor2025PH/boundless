@@ -33,8 +33,8 @@ _SERIAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
 _B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _PNG_B64_PREFIX = "iVBORw0KGgo"
 _RESULT_INTS = ("width", "height", "device_width", "device_height", "scale", "x", "y", "x1", "y1", "x2", "y2",
-                "duration_ms", "bytes", "chars", "elapsed_ms")
-_RESULT_STRS = ("serial", "key", "error", "stderr")
+                "duration_ms", "bytes", "chars", "elapsed_ms", "steps", "failed_step", "completed_steps")
+_RESULT_STRS = ("serial", "key", "error", "stderr", "app", "flow")
 
 
 class PhoneOpError(ValueError):

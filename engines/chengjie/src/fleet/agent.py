@@ -59,20 +59,22 @@ from .identity import (
 )
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
+from .phone_flows import PhoneFlows
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
     acquire_single_instance, install_service, service_status, start_parent_watch, supervise, uninstall_service,
 )
 from .updater import apply_upgrade
 from .protocol import (
-    DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
+    CAP_PHONE_FLOWS_V1, CAP_PHONE_OPS_V1, DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PHONE_FLOW_KINDS,
+    PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
     TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.7"
+AGENT_VERSION = "0.3.8"
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -233,7 +235,8 @@ class AgentConfig:
 
     # 只由人手改的键（agent 自己从不写）：save() 以磁盘上的为准，运行中的 agent 不会用内存旧值
     # 盖掉手工改动；NodeAgent 每次心跳前按 mtime 热加载（2026-10-06 176 改 phones_exclude 需重启的教训）。
-    OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp")
+    OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp",
+                     "phone_flows_enabled", "phone_ui_map")
 
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -512,6 +515,8 @@ class NodeAgent:
         # 0.3.7 远程手机操作：主控只给心跳里声明了 phone_ops_v1 的节点排 phone_* 任务；
         # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
         self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data))
+        # 0.3.8 社交动作缺省关：只有 agent.json phone_flows_enabled=true 才声明 phone_flows_v1
+        self.phone_flows = PhoneFlows(**_phone_flows_settings(cfg.data), ops=self.phone_ops)
         self._cfg_mtime = _mtime_ns(cfg.path)
 
     def reload_operator_config(self) -> bool:
@@ -525,8 +530,10 @@ class NodeAgent:
         d = self.cfg.data
         self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d))
         self.phone_ops.configure(**_phone_ops_settings(d))
-        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s",
-                    len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off")
+        self.phone_flows.configure(**_phone_flows_settings(d), ops=self.phone_ops)
+        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s",
+                    len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off",
+                    "on" if self.phone_flows.enabled else "off")
         return True
 
     # ── 主控调用 ──
@@ -810,6 +817,13 @@ class NodeAgent:
             logger.warning("[agent] re-enroll after %s failed: %s", why, e)
             return {"ok": False, "status": "backoff"}
 
+    def _phone_caps(self) -> List[str]:
+        """低层能力来自当前 phone_ops；社交能力只有两边都开着才加。"""
+        caps = list(self.phone_ops.caps())
+        if self.phone_flows.enabled and CAP_PHONE_OPS_V1 in caps and CAP_PHONE_FLOWS_V1 not in caps:
+            caps.append(CAP_PHONE_FLOWS_V1)
+        return caps
+
     def build_heartbeat(self) -> Dict[str, Any]:
         """本机摘要：实例是否活、账号数 / 生命周期分布、看板核心数字。**不含任何聊天内容。**"""
         instances, errors = [], []
@@ -878,7 +892,7 @@ class NodeAgent:
             "errors": errors[:10],
             "phones": phones,
             "phones_error": phones_error,
-            "caps": self.phone_ops.caps(),
+            "caps": self._phone_caps(),
         }
 
     def heartbeat(self) -> Dict[str, Any]:
@@ -955,6 +969,8 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
+            if kind in PHONE_FLOW_KINDS:
+                return self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
             if kind in PHONE_TASK_KINDS:
                 return self.phone_ops.execute(kind, payload, target)
             if kind == TASK_PING:
@@ -1180,6 +1196,17 @@ def _phone_ops_settings(data: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": data.get("phone_ops_enabled", True) is not False,
         "allow_tcp": data.get("phone_ops_allow_tcp") is True,
     }
+
+
+def _phone_flows_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    raw = data.get("phone_ui_map", "")
+    if isinstance(raw, str):
+        path = raw.strip()
+    elif not raw:
+        path = ""
+    else:
+        path = "invalid"
+    return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path}
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────

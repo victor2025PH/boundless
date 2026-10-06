@@ -225,3 +225,28 @@ __all__ += [
     "TASK_PHONE_KEY", "PHONE_TASK_KINDS", "PHONE_TASK_TTL_SEC", "TASK_REQUIRED_CAPS", "MAX_CAPS",
     "sanitize_caps", "required_cap", "missing_cap",
 ]
+
+
+# ── 0.3.8 社交动作（发帖 / 点赞 / 评论 / 关注）────────────────────────────────
+# 仍是追加块。低层 phone_screenshot 等继续只要求 phone_ops_v1；这四个种类另要
+# phone_flows_v1。PHONE_TASK_KINDS 不扩，避免把复合动作塞进单步执行器。
+CAP_PHONE_FLOWS_V1 = "phone_flows_v1"
+TASK_PHONE_POST = "phone_post"
+TASK_PHONE_LIKE = "phone_like"
+TASK_PHONE_COMMENT = "phone_comment"
+TASK_PHONE_FOLLOW = "phone_follow"
+PHONE_FLOW_KINDS = (TASK_PHONE_POST, TASK_PHONE_LIKE, TASK_PHONE_COMMENT, TASK_PHONE_FOLLOW)
+PHONE_FLOW_TTL_SEC = 180
+SOCIAL_APPS = ("facebook", "instagram", "tiktok")
+FLOW_NAMES = ("post", "like", "comment", "follow")
+
+TASK_KINDS = TASK_KINDS + tuple(k for k in PHONE_FLOW_KINDS if k not in TASK_KINDS)
+TASK_PRIORITY.update({k: 6 for k in PHONE_FLOW_KINDS})
+TASK_REQUIRED_CAPS.update({k: CAP_PHONE_FLOWS_V1 for k in PHONE_FLOW_KINDS})
+# 远程操作开关盖住低层点击和社交动作；关掉时两类排队任务一起作废
+REMOTE_PHONE_KINDS = PHONE_TASK_KINDS + PHONE_FLOW_KINDS
+
+__all__ += [
+    "CAP_PHONE_FLOWS_V1", "TASK_PHONE_POST", "TASK_PHONE_LIKE", "TASK_PHONE_COMMENT", "TASK_PHONE_FOLLOW",
+    "PHONE_FLOW_KINDS", "PHONE_FLOW_TTL_SEC", "SOCIAL_APPS", "FLOW_NAMES", "REMOTE_PHONE_KINDS",
+]

@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "note": "Anchors are permille of the screen (0-1000). Each app has its own anchors and step list. Tune this file, or point agent.json phone_ui_map at another file. Opening an app is the home key plus that app's app_icon anchor.",
+  "apps": {
+    "facebook": {
+      "anchors": {
+        "app_icon": [120, 420],
+        "feed_tab": [200, 920],
+        "composer_open": [500, 180],
+        "composer_field": [500, 400],
+        "post_submit": [880, 120],
+        "photo_button": [200, 700],
+        "gallery_0": [160, 300],
+        "gallery_stride": [180, 0],
+        "media_next": [860, 120],
+        "like_button": [900, 560],
+        "feed_swipe_from": [500, 750],
+        "feed_swipe_to": [500, 280],
+        "comment_open": [900, 680],
+        "comment_field": [400, 900],
+        "comment_send": [880, 900],
+        "search_open": [880, 80],
+        "search_field": [500, 160],
+        "search_first": [400, 320],
+        "follow_button": [860, 280]
+      },
+      "flows": {
+        "post": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "feed_tab"},
+          {"op": "tap", "anchor": "composer_open"},
+          {"op": "tap", "anchor": "composer_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "post_media": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "feed_tab"},
+          {"op": "tap", "anchor": "composer_open"},
+          {"op": "tap", "anchor": "photo_button"},
+          {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
+          {"op": "tap", "anchor": "media_next"},
+          {"op": "tap", "anchor": "composer_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "like": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "feed_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "like_button"}
+        ],
+        "comment": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "feed_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "comment_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "comment_send"}
+        ],
+        "follow": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "follow_button"}
+        ]
+      }
+    },
+    "instagram": {
+      "anchors": {
+        "app_icon": [500, 420],
+        "home_tab": [120, 940],
+        "create_tab": [500, 940],
+        "text_mode": [500, 200],
+        "composer_field": [500, 450],
+        "post_submit": [860, 140],
+        "gallery_0": [140, 280],
+        "gallery_stride": [200, 0],
+        "media_next": [880, 140],
+        "caption_field": [500, 500],
+        "like_button": [140, 720],
+        "feed_swipe_from": [360, 800],
+        "feed_swipe_to": [360, 250],
+        "comment_open": [220, 720],
+        "comment_field": [360, 900],
+        "comment_send": [860, 900],
+        "search_open": [380, 940],
+        "search_field": [500, 140],
+        "search_first": [400, 300],
+        "follow_button": [800, 260]
+      },
+      "flows": {
+        "post": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "create_tab"},
+          {"op": "tap", "anchor": "text_mode"},
+          {"op": "tap", "anchor": "composer_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "post_media": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "create_tab"},
+          {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
+          {"op": "tap", "anchor": "media_next"},
+          {"op": "tap", "anchor": "caption_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "like": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "home_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "like_button"}
+        ],
+        "comment": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "home_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "comment_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "comment_send"}
+        ],
+        "follow": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "follow_button"}
+        ]
+      }
+    },
+    "tiktok": {
+      "anchors": {
+        "app_icon": [860, 420],
+        "home_tab": [100, 960],
+        "create_tab": [500, 960],
+        "text_mode": [300, 200],
+        "upload": [700, 200],
+        "composer_field": [500, 400],
+        "post_submit": [800, 900],
+        "gallery_0": [180, 360],
+        "gallery_stride": [220, 0],
+        "media_next": [860, 160],
+        "like_button": [920, 460],
+        "feed_swipe_from": [400, 900],
+        "feed_swipe_to": [400, 200],
+        "comment_open": [920, 560],
+        "comment_field": [400, 880],
+        "comment_send": [860, 880],
+        "search_open": [880, 80],
+        "search_field": [500, 140],
+        "search_first": [400, 280],
+        "follow_button": [920, 380]
+      },
+      "flows": {
+        "post": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "create_tab"},
+          {"op": "tap", "anchor": "text_mode"},
+          {"op": "tap", "anchor": "composer_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "post_media": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "create_tab"},
+          {"op": "tap", "anchor": "upload"},
+          {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
+          {"op": "tap", "anchor": "media_next"},
+          {"op": "tap", "anchor": "composer_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "post_submit"}
+        ],
+        "like": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "home_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "like_button"}
+        ],
+        "comment": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "home_tab"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "comment_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "comment_send"}
+        ],
+        "follow": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon"},
+          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "follow_button"}
+        ]
+      }
+    }
+  }
+}

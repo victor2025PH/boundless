@@ -25,7 +25,8 @@ import threading
 import time
 import zlib
 from array import array
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .phone_rules import (
     KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED, check_target, escape_input_text, valid_serial, validate_payload,
@@ -257,6 +258,43 @@ class PhoneOps:
             self._adb(adb, base + ("shell", "input", "keyevent", KEYCODES[p["key"]]), INPUT_TIMEOUT_SEC)
             return {"key": p["key"]}
         raise PhoneOpError("bad_kind")
+
+    @contextmanager
+    def session(self, serial: str) -> Iterator[Callable[[str, Any], Dict[str, Any]]]:
+        """一把锁跑完一整段复合动作：占一个并发名额、占住这台手机，步骤之间照旧留间隔。
+
+        产出 ``run(kind, payload) -> dict``。校验失败抛 PhoneOpError；
+        ``node_busy`` / ``phone_busy`` 的 ``failed=True``（和单步 execute 一样记失败）。
+        """
+        serial = check_target(serial)
+        if is_excluded(serial, self.excludes):
+            raise PhoneOpError("excluded_phone")
+        if not self.enabled:
+            raise PhoneOpError("phone_ops_disabled")
+        if not self._slots.acquire(timeout=LOCK_WAIT_SEC):
+            raise PhoneOpError("node_busy", failed=True)
+        lock = self._lock_for(serial)
+        locked = False
+        try:
+            if not lock.acquire(timeout=LOCK_WAIT_SEC):
+                raise PhoneOpError("phone_busy", failed=True)
+            locked = True
+            adb = self._ready_adb()
+            self._device(adb, serial)
+
+            def run(kind: str, payload: Any) -> Dict[str, Any]:
+                p = validate_payload(kind, payload)
+                self._pace(serial)
+                try:
+                    return self._do(adb, kind, serial, p)
+                finally:
+                    self._last_op[serial] = self._clock()
+
+            yield run
+        finally:
+            if locked:
+                lock.release()
+            self._slots.release()
 
     def execute(self, kind: str, payload: Any, target: Any) -> Tuple[str, Dict[str, Any], str]:
         if kind not in PHONE_TASK_KINDS:

@@ -26,7 +26,8 @@ from .detect import sanitize_instances
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
-    PHONE_TASK_KINDS, PRUNED_RESULT, SCREENSHOT_RESULT_KEEP_SEC, STATUS_PULLED, STATUS_QUEUED, STATUS_REJECTED, TASK_KINDS,
+    PRUNED_RESULT, REMOTE_PHONE_KINDS, SCREENSHOT_RESULT_KEEP_SEC, STATUS_PULLED, STATUS_QUEUED,
+    STATUS_REJECTED, TASK_KINDS,
     TASK_PHONE_SCREENSHOT, TASK_PRIORITY, TASK_RESULT_KEEP_SEC, TASK_STOP_ACCOUNT, bound_result, clamp_ttl,
     missing_cap, proto_compatible, sanitize_caps, sanitize_heartbeat, task_envelope,
 )
@@ -915,7 +916,7 @@ class FleetStore:
         cap = missing_cap(kind, _loads(row["last_heartbeat_json"]).get("caps"))
         if cap:
             return f"node_lacks_cap:{cap}"
-        if kind in PHONE_TASK_KINDS and not _loads(row["meta_json"]).get("remote_ops_enabled"):
+        if kind in REMOTE_PHONE_KINDS and not _loads(row["meta_json"]).get("remote_ops_enabled"):
             return "remote_ops_disabled"
         return ""
 
@@ -929,11 +930,11 @@ class FleetStore:
             meta["remote_ops_enabled"] = bool(enabled)
             self._conn.execute("UPDATE nodes SET meta_json=? WHERE node_id=?", (_dumps(meta), str(node_id)))
             if not enabled:
-                marks = ",".join("?" * len(PHONE_TASK_KINDS))
+                marks = ",".join("?" * len(REMOTE_PHONE_KINDS))
                 self._conn.execute(
                     f"UPDATE node_tasks SET status=?, detail='remote_ops_disabled', acked_at=? "
                     f"WHERE node_id=? AND status=? AND kind IN ({marks})",
-                    (STATUS_CANCELLED, time.time(), str(node_id), STATUS_QUEUED, *PHONE_TASK_KINDS))
+                    (STATUS_CANCELLED, time.time(), str(node_id), STATUS_QUEUED, *REMOTE_PHONE_KINDS))
             self._conn.commit()
         return True
 
@@ -953,7 +954,7 @@ class FleetStore:
                 return None
             if missing_cap(kind, _loads(node["last_heartbeat_json"]).get("caps")):
                 return None
-            if kind in PHONE_TASK_KINDS and not _loads(node["meta_json"]).get("remote_ops_enabled"):
+            if kind in REMOTE_PHONE_KINDS and not _loads(node["meta_json"]).get("remote_ops_enabled"):
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
@@ -1003,7 +1004,7 @@ class FleetStore:
             keep = []
             for r in rows:
                 cap = missing_cap(r["kind"], caps)
-                why = f"node_lacks_cap:{cap}" if cap else ("remote_ops_disabled" if r["kind"] in PHONE_TASK_KINDS
+                why = f"node_lacks_cap:{cap}" if cap else ("remote_ops_disabled" if r["kind"] in REMOTE_PHONE_KINDS
                                                             and not ops_on else "")
                 if why:
                     self._conn.execute("UPDATE node_tasks SET status=?, detail=?, acked_at=? WHERE task_id=?",
