@@ -619,6 +619,7 @@ class PhoneFlows:
     def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
                  state_dir: Optional[Path] = None) -> None:
+        """``state_dir`` is the fleet state directory. NodeAgent always passes it."""
         self.enabled = False
         self.ui_map_path = ""
         self.state_dir: Optional[Path] = None
@@ -629,6 +630,24 @@ class PhoneFlows:
         self._rng = random.random
         self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify,
                        jitter_ms=jitter_ms, rng=rng, state_dir=state_dir)
+
+    @classmethod
+    def from_agent_settings(cls, settings: Dict[str, Any], ops: Any = None) -> "PhoneFlows":
+        """Construct the way ``NodeAgent`` does at process start.
+
+        ``settings`` is ``_phone_flows_settings``. ``state_dir`` is one of those
+        keys and is passed by name into ``__init__``.
+        """
+        if not isinstance(settings, dict):
+            settings = {}
+        return cls(
+            enabled=settings.get("enabled") is True,
+            ui_map_path=settings.get("ui_map_path") or "",
+            ops=ops,
+            verify=settings.get("verify", _UNSET),
+            jitter_ms=settings.get("jitter_ms", _UNSET),
+            state_dir=settings.get("state_dir"),
+        )
 
     def configure(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
                   verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,

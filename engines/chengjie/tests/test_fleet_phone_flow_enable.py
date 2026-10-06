@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from src.fleet import admin as admin_mod
-from src.fleet.agent import AgentConfig, NodeAgent
+from src.fleet.agent import AgentConfig, NodeAgent, _phone_flows_settings
 from src.fleet.phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
 from src.fleet.phone_flows import PhoneFlows, _MAX_MAP_BYTES, bundled_ui_map, compile_flow
 from src.fleet.phone_rules import PhoneOpError, sanitize_phone_result
@@ -501,3 +502,28 @@ def test_push_config_live_stream_refuses_ui_map(tmp_path, monkeypatch):
     assert (status, detail) == (STATUS_REJECTED, "not_supported_in_agent_v1")
     assert (fleet / "agent.json").read_text(encoding="utf-8") == before
     assert not remote.exists()
+
+
+def test_production_node_agent_starts_with_phone_flows_state_dir(tmp_path):
+    """main() does NodeAgent(cfg). 0.3.13 crashed here: unexpected keyword state_dir."""
+    fleet = tmp_path / "fleet"
+    cfg = AgentConfig(fleet)
+    cfg.data["phones_exclude"] = ["ABC123"]
+    cfg.save()
+    agent = NodeAgent(cfg)
+    assert agent.phone_flows.state_dir == fleet
+    assert "state_dir" in inspect.signature(PhoneFlows.__init__).parameters
+    settings = _phone_flows_settings(cfg.data, cfg.state_dir)
+    assert set(settings) <= set(inspect.signature(PhoneFlows.__init__).parameters)
+    direct = PhoneFlows(**settings, ops=agent.phone_ops)
+    via_factory = PhoneFlows.from_agent_settings(settings, agent.phone_ops)
+    assert direct.state_dir == fleet and via_factory.state_dir == fleet
+    assert direct.enabled is False and via_factory.enabled is False
+    agent.phone_flows.configure(**_phone_flows_settings(
+        {"phone_flows_enabled": True, "phone_ui_map": str(fleet / "phone_ui_map.json")}, fleet,
+    ), ops=agent.phone_ops)
+    assert agent.phone_flows.enabled is True
+    assert agent.phone_flows.state_dir == fleet
+    assert agent.phone_flows.ui_map_path == str(fleet / "phone_ui_map.json")
+    disk = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert disk["phones_exclude"] == ["ABC123"]

@@ -85,7 +85,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.13"
+AGENT_VERSION = "0.3.14"
 # push_config may set these and nothing else. Content keys are not stored; they
 # become a file under the state dir and phone_ui_map is set to that path.
 _PUSH_CONFIG_KEYS = frozenset({"phone_flows_enabled", "phone_ui_map", "phone_ui_map_b64", "phone_ui_map_json"})
@@ -555,7 +555,10 @@ class NodeAgent:
         # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
         self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data, cfg.state_dir))
         # 0.3.8 社交动作缺省关：只有 agent.json phone_flows_enabled=true 才声明 phone_flows_v1
-        self.phone_flows = PhoneFlows(**_phone_flows_settings(cfg.data, cfg.state_dir), ops=self.phone_ops)
+        # 0.3.14: pass state_dir by name. A loose **dict into an older __init__
+        # crashed startup with unexpected keyword argument 'state_dir'.
+        self.phone_flows = PhoneFlows.from_agent_settings(
+            _phone_flows_settings(cfg.data, cfg.state_dir), self.phone_ops)
         self._cfg_mtime = _mtime_ns(cfg.path)
 
     def reload_operator_config(self) -> bool:

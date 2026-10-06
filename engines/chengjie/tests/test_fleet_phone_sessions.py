@@ -318,7 +318,7 @@ def test_agent_advertises_v2_and_runs_warmup(st, tmp_path, monkeypatch):
     from tests.test_fleet_control import _FakeNet
     from tests.test_fleet_phone_flows import FakeAdb
 
-    assert AGENT_VERSION == "0.3.13"
+    assert AGENT_VERSION == "0.3.14"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     client = _client(st)
     cfg = AgentConfig(tmp_path / "state")
