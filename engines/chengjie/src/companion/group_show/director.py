@@ -212,9 +212,10 @@ class GroupShowDirector:
                 speaker_account=who, role="human",
                 beat_id="", text=said, kind="human"))
         who, said, ts = cleaned[-1]
-        self._pending_human = said
-        self._pending_human_name = who
+        # 只有刚说完的话才算待接。更早的记录只作背景，开场先自己开口。
         if 0 <= float(now) - ts < self.cfg.human_yield_seconds:
+            self._pending_human = said
+            self._pending_human_name = who
             self.state.last_human_ts = ts
         return len(kept)
 

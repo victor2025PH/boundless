@@ -838,6 +838,26 @@ def test_chat_comes_before_the_script_and_does_not_burn_a_beat():
     assert d.next_directive().respond_to_human.startswith("小李")
 
 
+def test_an_old_room_does_not_steal_the_opener():
+    """一小时前的话只作背景。开场先自己说，不把旧话当成必须马上接的一句。"""
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(Beat("b1", "guide", "先说我是 AI，并私聊来试"),),
+        chat_before_script=2)
+    casting = Casting(members=(CastMember("guide", "a_guide", "p_guide"),))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    assert d.prime_room([("老王", "昨晚那句", T0 - 600)], now=T0) == 1
+    assert d.next_directive().respond_to_human == ""
+    fresh = GroupShowDirector(ShowState(
+        session_id="s2", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    assert fresh.prime_room([("老王", "我刚到", T0 - 10)], now=T0) == 1
+    assert fresh.next_directive().respond_to_human.startswith("老王")
+
+
 def test_the_same_human_line_is_heard_once():
     d = _director()
     d.observe_human("这单客户又不回", sender="老王", ts=T0)

@@ -93,6 +93,7 @@ def must_not_for_slot(slot: str, *, with_guide: bool = False) -> Tuple[str, ...]
 
 _COMPACT_SPACE = str.maketrans("", "", " \t\u3000")
 _GUIDE_DRIFT = ("自动回复", "工作时间外", "截图")
+_ACCIDENT = ("手滑", "发错", "误发", "打错")
 _HELPER_REFUSAL = ("不用私聊", "别私聊", "不用加我", "不用加你")
 
 
@@ -124,6 +125,8 @@ def guide_line_fault(text: str, *, prior_guide_texts: Sequence[str] = (),
     收场那句必须自己把私聊留下。编出来的设置项和截图，任何一句都不许。
     """
     raw = str(text or "")
+    if any(piece in raw for piece in _ACCIDENT):
+        return "不要编手滑、发错或打错这种事故"
     if any(piece in raw for piece in _GUIDE_DRIFT):
         return "不要编设置项，不要提截图，只谈多个号的消息放在一处看"
     prior = "\n".join(str(item or "") for item in prior_guide_texts)
@@ -139,6 +142,8 @@ def guide_line_fault(text: str, *, prior_guide_texts: Sequence[str] = (),
 def helper_line_fault(text: str) -> str:
     """帮手这句能不能发。空串＝可以。拒绝私聊、把话题带去别的功能，都不许。"""
     raw = str(text or "")
+    if any(piece in raw for piece in _ACCIDENT):
+        return "不要编手滑、发错或打错这种事故"
     if any(piece in raw for piece in _HELPER_REFUSAL) or "截图" in raw:
         return "不要拒绝私聊，不要提截图"
     if any(piece in raw for piece in _GUIDE_DRIFT[:2]):
@@ -159,6 +164,8 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
     # 编造的设置项、拒绝私聊，接话阶段也不许。
     if str(beat_id or "").startswith("warmup_"):
         raw = str(text or "")
+        if any(piece in raw for piece in _ACCIDENT):
+            return "不要说手滑、发错或打错，先正常接话"
         if any(piece in raw for piece in _GUIDE_DRIFT) or "截图" in raw:
             return "不要编设置项，不要提截图，先接对方刚说的事"
         # 接话阶段不提私聊。剧本开了才许邀请。

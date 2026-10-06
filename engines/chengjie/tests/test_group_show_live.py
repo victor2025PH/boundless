@@ -1183,6 +1183,8 @@ def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
     assert line_fault_for_beat(chat_book, "guide", "warmup_1", chat) == ""
     assert line_fault_for_beat(
         chat_book, "guide", "warmup_1", "不如加个好友，私聊里玩两把")
+    assert line_fault_for_beat(
+        chat_book, "guide", "warmup_1", "你是困了还是手滑打错了")
     assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
 
 
