@@ -62,6 +62,15 @@ _ROOM_KEY_RE = re.compile(r"^rk_[A-Za-z0-9_-]{20,180}$")
 logger = logging.getLogger("FleetControlWebRoutes")
 
 
+def _public_prefix(config_manager: Any) -> str:
+    """console_api_base 没配时回落 web_admin.public_prefix（前缀模式下控制台 API 也得走前缀）。"""
+    try:
+        from src.web.public_prefix import resolve_public_prefix
+        return resolve_public_prefix(getattr(config_manager, "config", None) or {}).prefix
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _store_or_503(config_manager: Any) -> FleetStore:
     st = get_store(config_manager)
     if st is None:
@@ -625,7 +634,7 @@ def register_routes(app, ctx) -> None:
         return templates.TemplateResponse(request, "fleet_console.html",
                                           {"public_url": cfg["public_url"] or str(request.base_url).rstrip("/"),
                                            "heartbeat_sec": cfg["heartbeat_sec"],
-                                           "fleet_api_base": cfg["console_api_base"],
+                                           "fleet_api_base": cfg["console_api_base"] or _public_prefix(config_manager),
                                            "remote_ops_default_min": cfg["remote_ops_default_min"],
                                            "remote_ops_max_min": REMOTE_OPS_MAX_MIN})
 

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="{{ ui_locale|default('zh-CN') }}" data-theme="light">
-<head>
+<head>{% if public_prefix %}{% include "_public_prefix_shim.html" %}{% endif %}
 <meta charset="utf-8">
 <!-- interactive-widget：软键盘弹出时收缩布局视口（Chromium 108+），fixed 底栏/输入条不被键盘盖住；其它浏览器安全忽略 -->
 <meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">

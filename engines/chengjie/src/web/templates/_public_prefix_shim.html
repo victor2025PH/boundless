@@ -1,0 +1,44 @@
+{#- 公网前缀模式（web_admin.public_prefix）运行时兜底：只在前缀模式由 base.html 引入。
+    服务端已把 HTML/JS 里的站内根路径补好前缀；这里只兜「运行时拼出来」的地址
+    （fetch / XHR / sendBeacon / 点链接 / 提交表单），已带挂载根或豁免首段的地址不动。 -#}
+<script>
+(function(){
+  var P={{ public_prefix|tojson }}, X={{ public_prefix_exempt|default([])|tojson }};
+  function fix(u){
+    if(typeof u!=='string'||u.charAt(0)!=='/'||u.charAt(1)==='/') return u;
+    var s=u.slice(1).split(/[\/?#]/)[0];
+    for(var i=0;i<X.length;i++){ if(s===X[i]) return u; }
+    if(u===P||u.indexOf(P+'/')===0) return u;
+    return P+u;
+  }
+  window.__publicPrefixFix=fix;
+  if(window.fetch){
+    var of=window.fetch;
+    window.fetch=function(input, init){
+      try{ if(typeof input==='string') input=fix(input); }catch(e){}
+      return of.call(this, input, init);
+    };
+  }
+  if(navigator.sendBeacon){
+    var sb=navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon=function(url, data){ return sb(fix(String(url||'')), data); };
+  }
+  var xo=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(method, url){
+    if(typeof url==='string') arguments[1]=fix(url);
+    return xo.apply(this, arguments);
+  };
+  function retarget(el, attr){
+    var h=el.getAttribute(attr)||'', n=fix(h);
+    if(n!==h) el.setAttribute(attr, n);
+  }
+  document.addEventListener('click', function(e){
+    var a=e.target&&e.target.closest&&e.target.closest('a[href]');
+    if(a) retarget(a,'href');
+  }, true);
+  document.addEventListener('submit', function(e){
+    var f=e.target;
+    if(f&&f.getAttribute&&f.getAttribute('action')) retarget(f,'action');
+  }, true);
+})();
+</script>

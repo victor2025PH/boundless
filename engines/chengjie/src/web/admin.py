@@ -295,6 +295,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     _apply_branding_globals()
     app_branding_refresh = _apply_branding_globals
 
+    # 公网前缀模式（web_admin.public_prefix，默认关）：见 src/web/public_prefix.py。
+    # 全局模板变量每次都写（含空值），避免同进程多次 create_app 时串味。
+    from src.web.public_prefix import resolve_public_prefix as _resolve_pp
+    _public_pp = _resolve_pp(_cfg_obj)
+    templates.env.globals["public_prefix"] = _public_pp.prefix
+    templates.env.globals["public_prefix_exempt"] = sorted(_public_pp.exempt)
+
     app = FastAPI(title=templates.env.globals["site_name"], docs_url=None, redoc_url=None)
 
     # ── C0-3 授权强制：只读模式拦截写操作（enforce 关 / 授权有效时零开销直通）──
@@ -443,6 +450,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             logger.warning("persona_albums 专属挂载失败（回落旧 /static 单挂载）",
                            exc_info=True)
         app.mount("/static", CachedStaticFiles(directory=str(_static_dir)), name="static")
+        if _public_pp.enabled:
+            # 前缀模式：<挂载根>/static 与 <前缀>/static 同源（老页面/书签里的 /fleet/static 继续可用）
+            app.mount(_public_pp.static_prefix, CachedStaticFiles(directory=str(_static_dir)),
+                      name="public_static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
     # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版
     _shared_copilot_dir = Path(__file__).resolve().parents[2] / "shared" / "copilot"
@@ -589,6 +600,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/login", "/logout", "/setup", "/api/goals/order-hook",
         "/api/telemetry/frontend-error", "/api/telemetry/ui-event",
     }
+    if _public_pp.login_path:
+        # 前缀模式的登录别名（如 /fleet/login）与 /login 同一端点、同一威胁模型
+        _CSRF_EXEMPT_PATHS.add(_public_pp.login_path)
 
     def _csrf_admit(request: Request, ticket: str) -> None:
         """写请求放行留痕（P2 收口决策数据面）：
@@ -4518,6 +4532,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_ck
 
         _log_ck.getLogger("admin").debug("驾驶舱路由注册跳过", exc_info=True)
+
+    # 公网前缀模式：登录别名 + 剥前缀（最外层）+ 正文/Location 改写（最内层）。默认关 → 零变化。
+    from src.web.public_prefix import install as _install_pp
+    _install_pp(app, _public_pp)
 
     return app
 

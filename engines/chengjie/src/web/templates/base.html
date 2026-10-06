@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="{{ ui_locale|default('zh-CN') }}" data-theme="dark" data-ui-mode="{{ ui_mode|default('simple') }}"{% if embedded %} data-embedded="1"{% endif %}>
-<head>
+<head>{% if public_prefix %}{% include "_public_prefix_shim.html" %}{% endif %}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}{{ site_name|default((i18n or {}).get('brand', '无界科技 · 智聊')) }}{% endblock %}</title>
@@ -958,7 +958,7 @@ document.addEventListener('keydown',function(e){
   if(!inInput&&e.key==='g'){_gPending=true;clearTimeout(_gTimer);_gTimer=setTimeout(function(){_gPending=false},1500);return}
   if(!inInput&&_gPending){
     _gPending=false;clearTimeout(_gTimer);
-    var nav={d:'/',t:'/templates',c:'/channels',s:'/strategies',a:'/audit',l:'/logs',v:'/diff'};
+    var nav={d:'{{ public_prefix|default('') }}/',t:'/templates',c:'/channels',s:'/strategies',a:'/audit',l:'/logs',v:'/diff'};
     var dest=nav[e.key.toLowerCase()];
     if(dest){e.preventDefault();window.location.href=dest;return}
   }
