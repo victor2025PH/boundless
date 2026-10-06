@@ -9,6 +9,7 @@
     python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/manifest.json [--group 机房A | --node <id>]
     python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/manifest-0.3.8.json --node <id> --setup --manage-adb-server --yes
     python -m src.fleet.admin enable-phone-adb --node <id> --yes
+    python -m src.fleet.admin enable-phone-flows --node <id> --yes
 
 主控 API 需要 ``web_admin.auth_token``（Bearer）。URL 口径与 Agent 一致：``<controller>/api/fleet/...``
 （公网 https://bd2026.cc/fleet/api/fleet/... 由 nginx 剥掉 /fleet 前缀，见 deploy/fleet/nginx-fleet.conf）。
@@ -120,6 +121,9 @@ class Admin:
     def enable_phone_adb(self, node_id: str) -> Dict[str, Any]:
         return self.task(node_id, "enable_phone_adb", payload={}, ttl_sec=600)
 
+    def enable_phone_flows(self, node_id: str) -> Dict[str, Any]:
+        return self.task(node_id, "push_config", payload={"patch": {"phone_flows_enabled": True}}, ttl_sec=600)
+
 
 def load_manifest(src: str) -> Dict[str, Any]:
     if src.startswith(("http://", "https://")):
@@ -165,7 +169,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     n.add_argument("--group", default="")
     n.add_argument("--all", action="store_true", help="含已吊销")
 
-    t = sub.add_parser("task", help="给节点下一个任务")
+    t = sub.add_parser(
+        "task",
+        help="queue a task. Social payloads (post/like/comment/follow/warmup/dm/watch) "
+             "accept dry_run or predict_only: JSON true returns planned taps/text and does not run adb input",
+    )
     t.add_argument("node_id")
     t.add_argument("kind")
     t.add_argument("--payload", default="{}")
@@ -189,6 +197,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     e = sub.add_parser("enable-phone-adb", help="让已带 platform-tools 的节点打开 adb 并拉起自带服务")
     e.add_argument("--node", required=True)
     e.add_argument("--yes", action="store_true", help="不询问直接下发")
+    f = sub.add_parser(
+        "enable-phone-flows",
+        help="set agent.json phone_flows_enabled true on an enrolled node (live-stream hosts refuse)",
+        description=(
+            "Queue push_config {patch:{phone_flows_enabled:true}} for one enrolled node. "
+            "Live-stream hosts (CHATX_FLEET_LIVE_STREAM or live-stream.flag) refuse before any write. "
+            "Social payloads (post/like/comment/follow/warmup/dm/watch) accept dry_run or predict_only: "
+            "JSON true returns the planned taps/text and does not run adb input or mutating screenshots. "
+            "Omit the flag for real execution, which still requires phone_flows_enabled. "
+            "Turn flows off with: task <node> push_config --payload "
+            "'{\"patch\":{\"phone_flows_enabled\":false}}'."
+        ),
+    )
+    f.add_argument("--node", required=True)
+    f.add_argument("--yes", action="store_true", help="queue the task without a confirm prompt")
 
     args = ap.parse_args(argv)
     if not args.controller or not args.token:
@@ -291,6 +314,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.yes and (input("确认? [y/N] ").strip().lower() != "y"):
             return 1
         _print(adm.enable_phone_adb(args.node))
+        return 0
+    if args.cmd == "enable-phone-flows":
+        print(f"queue push_config phone_flows_enabled=true for node {args.node}", file=sys.stderr)
+        print("live-stream hosts refuse this write. Social dry_run/predict_only plans taps and does not run adb input.",
+              file=sys.stderr)
+        if not args.yes and (input("confirm? [y/N] ").strip().lower() != "y"):
+            return 1
+        _print(adm.enable_phone_flows(args.node))
         return 0
     return 2
 

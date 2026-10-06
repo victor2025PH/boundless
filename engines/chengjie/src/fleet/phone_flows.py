@@ -8,6 +8,10 @@
 ``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1 / phone_flows_v2，执行直接拒绝，不碰 adb。
 回传只留应用名、动作、步数、字数和次数，不带回帖子、评论、私信原文或账号名。
 
+dry_run (or predict_only) JSON true compiles the UI map at 1000x1000 permille and
+returns the planned taps/text. It does not open an adb session, take a screenshot,
+or send input. A missing flag is real execution, and only when flows are enabled.
+
 核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
 ``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
 """
@@ -46,6 +50,9 @@ _STEP_KEYS = {
 }
 _NESTED_EXTRA = {"when", "every"}
 _DWELL_KIND = "dwell"
+_DRY_WIDTH = 1000
+_DRY_HEIGHT = 1000
+_PLAN_MAX_STEPS = 128
 _NAME_RE_SRC = r"^[a-z][a-z0-9_]{0,31}$"
 _UNSET = object()
 _CHECK_FAILS = ("screen_not_reached", "not_logged_in", "app_not_ready", "anchor_mismatch", "thread_not_open")
@@ -550,6 +557,24 @@ def compile_flow_checked(app: str, flow_name: str, payload: Dict[str, Any], widt
     return _compile(app, flow_name, payload, width, height, ui_map)
 
 
+def _plan_step(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if kind == TASK_PHONE_TAP:
+        return {"op": "tap", "x": int(payload["x"]), "y": int(payload["y"])}
+    if kind == TASK_PHONE_SWIPE:
+        item = {"op": "swipe"}
+        for key in ("x1", "y1", "x2", "y2", "duration_ms"):
+            item[key] = int(payload[key])
+        return item
+    if kind == TASK_PHONE_KEY:
+        return {"op": "key", "key": str(payload["key"])}
+    if kind == TASK_PHONE_TEXT:
+        text = str(payload["text"])
+        return {"op": "text", "text": text, "chars": len(text)}
+    if kind == _DWELL_KIND:
+        return {"op": "dwell", "lo_ms": int(payload["lo_ms"]), "hi_ms": int(payload["hi_ms"])}
+    raise PhoneOpError("ui_map_invalid")
+
+
 def _status(err: PhoneOpError) -> str:
     return STATUS_FAILED if err.failed else STATUS_REJECTED
 
@@ -704,6 +729,18 @@ class PhoneFlows:
             return STATUS_REJECTED, {}, e.code
         except (KeyError, TypeError):
             return STATUS_REJECTED, {}, "ui_map_invalid"
+        if p.get("dry_run") is True:
+            try:
+                steps = compile_flow(app, map_flow, p, _DRY_WIDTH, _DRY_HEIGHT, ui)
+            except PhoneOpError as e:
+                return _status(e), _result(serial, app, flow, err=e), e.code
+            if len(steps) > _PLAN_MAX_STEPS:
+                return STATUS_REJECTED, _result(serial, app, flow), "plan_too_long"
+            plan = [_plan_step(sk, sp) for sk, sp in steps]
+            return STATUS_DONE, {
+                "serial": serial, "app": app, "flow": flow, "dry_run": True, "space": "permille",
+                "steps": len(plan), "plan": plan,
+            }, "dry_run"
         prog: Dict[str, Any] = {"done": 0, "step": None, "w": None, "h": None}
         t0 = ops._clock()
         chars = 0

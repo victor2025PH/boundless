@@ -27,7 +27,7 @@
     upgrade         → 下载+sha256 校验+换文件后重启（updater.py；仅冻结 exe，源码态拒绝）
                       带 setup_url + setup_sha256 时改为校验后静默跑安装包（直播机拒绝）
     enable_phone_adb→ 已有自带 platform-tools 时打开 adb_manage_server 并拉起 adb（直播机拒绝）
-    push_config     → v1 仍 rejected: not_supported
+    push_config     → only phone_flows_enabled true/false; other patches rejected not_supported_in_agent_v1; live-stream host refused
 """
 
 from __future__ import annotations
@@ -1075,7 +1075,7 @@ class NodeAgent:
             if kind == TASK_ENABLE_PHONE_ADB:
                 return self._enable_phone_adb()
             if kind == TASK_PUSH_CONFIG:
-                return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+                return self._push_phone_flows(payload)
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
@@ -1098,6 +1098,24 @@ class NodeAgent:
             self._cfg_mtime = _mtime_ns(self.cfg.path)
 
         return adb_bundle.enable_phone_adb(self.cfg.state_dir, persist=persist, already=already)
+
+    def _push_phone_flows(self, payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
+        """Write only agent.json phone_flows_enabled. Any other patch stays rejected.
+
+        A live-stream host is refused before the file is touched. Only a JSON bool counts.
+        """
+        patch = payload.get("patch") if isinstance(payload, dict) else None
+        if not isinstance(patch, dict) or set(patch) != {"phone_flows_enabled"}:
+            return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+        enabled = patch.get("phone_flows_enabled")
+        if not isinstance(enabled, bool):
+            return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+        if is_live_stream_host(self.cfg.state_dir):
+            return STATUS_REJECTED, {}, "live_stream_host"
+        self.cfg.write_operator_keys({"phone_flows_enabled": enabled})
+        self.phone_flows.configure(**_phone_flows_settings(self.cfg.data), ops=self.phone_ops)
+        self._cfg_mtime = _mtime_ns(self.cfg.path)
+        return STATUS_DONE, {"phone_flows_enabled": self.phone_flows.enabled}, "ok"
 
     def _huoke_instances(self, want: str = "") -> List[Dict[str, Any]]:
         out = [i for i in self.cfg.instances if _instance_domain(i) == HUOKE_DOMAIN]
