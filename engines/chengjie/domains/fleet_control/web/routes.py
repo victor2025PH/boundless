@@ -52,7 +52,9 @@ from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.phone_rules import (
     PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
 )
-from src.fleet.protocol import PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC
+from src.fleet.protocol import (
+    PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_SESSION_KINDS, PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC,
+)
 from src.fleet.roompack import build_room_pack
 from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
 
@@ -330,7 +332,7 @@ def register_routes(app, ctx) -> None:
             if known is not None and known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
                 # the console renders qr_data_url as <img src>: keep base64 raster data URLs only
                 result = sanitize_login_result(result)
-            elif known is not None and known.get("kind") in (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS):
+            elif known is not None and known.get("kind") in (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS):
                 result = sanitize_phone_result(known["kind"], result)
         rec = st.ack(tid, node_id=node["node_id"], status=status, result=result,
                      detail=str(body.get("detail") or ""))
@@ -471,7 +473,7 @@ def register_routes(app, ctx) -> None:
         if kind in PHONE_TASK_KINDS:
             # 手机操作只走 /api/fleet/nodes/{id}/phones/{serial}/{op}：那里校验参数、目标和受保护手机
             raise HTTPException(status_code=400, detail="phone_ops_use_phones_endpoint")
-        if kind in PHONE_FLOW_KINDS:
+        if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
             raise HTTPException(status_code=400, detail="phone_flows_use_social_endpoint")
         rec = st.enqueue(node_id, kind,
                          payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
@@ -517,7 +519,7 @@ def register_routes(app, ctx) -> None:
             raise HTTPException(status_code=409, detail="enqueue_refused")
         return {"ok": True, "task": rec}
 
-    # ── 社交动作（0.3.8）：发帖 / 点赞 / 评论 / 关注，Facebook / Instagram / TikTok ──
+    # ── 社交动作：发帖 / 点赞 / 评论 / 关注，以及养号 / 私信 / 看短视频 ──
     @app.post("/api/fleet/nodes/{node_id}/phones/{serial}/social/{flow}")
     async def api_fleet_phone_social(node_id: str, serial: str, flow: str, request: Request,
                                      _=Depends(_api_write("fleet_control"))):

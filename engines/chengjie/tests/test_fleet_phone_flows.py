@@ -190,7 +190,7 @@ def test_bundled_map_has_all_apps_and_flows():
     assert set(ui["apps"]) == set(APPS)
     for app in APPS:
         flows = ui["apps"][app]["flows"]
-        assert set(flows) == {"post", "post_media", "like", "comment", "follow"}
+        assert set(flows) == {"post", "post_media", "like", "comment", "follow", "warmup", "dm", "watch"}
         for steps in flows.values():
             assert steps[0] == {"op": "key", "key": "home"}
             assert steps[1]["op"] == "tap" and steps[1]["anchor"] == "app_icon"
@@ -564,7 +564,7 @@ def test_agent_hot_reloads_phone_flows(tmp_path, monkeypatch, st):
     edit(phone_flows_enabled=True)
     agent.heartbeat()
     assert agent.phone_flows.enabled is True
-    assert agent.build_heartbeat()["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1]
+    assert agent.build_heartbeat()["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1, "phone_flows_v2"]
     edit(phone_ops_enabled=False)
     agent.heartbeat()
     assert agent.build_heartbeat()["caps"] == []

@@ -95,6 +95,8 @@
 
 **0.3.8 社交动作**（`phone_post` / `phone_like` / `phone_comment` / `phone_follow`，能力 `phone_flows_v1`）：默认关，需 `phone_ops_v1` 且主控已开远程操作。坐标在 `phone_ui_map.json`（或 agent.json `phone_ui_map`）。受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 直接拒绝，不跑 adb。直播机判定（`is_live_stream_host`）不变。核对与节奏默认关，避免改掉原来的点击序列和 0.5 s 最短间隔：`robust.verify`（默认 false）、`robust.retries`（默认 2，最多 3 次额外重试）、`robust.jitter_ms`（默认 `[0, 0]`，每端最多 2000 ms，加在每步原有最短间隔之上，不缩短它，也不放开该手机的锁）。agent.json `phone_flow_verify` / `phone_flow_jitter_ms` 热加载，可盖过文件；`phone_flow_verify` 只有 JSON `true` 才强制核对，抖动形状不对就仍用文件。打开核对后，标了 `expect` 的步骤做完再截一张图：画面没变 → `screen_not_reached`；颜色对不上 → `anchor_mismatch`。点开应用（`preflight.after_anchor`，随包是 `app_icon`）之后先看登录标记：登录页颜色在 → `not_logged_in`，已登录颜色不在 → `app_not_ready`，停在这一步，不再发帖或点赞。
 
+**养号 / 私信 / 看短视频**（`phone_warmup` / `phone_dm` / `phone_watch`，能力 `phone_flows_v2`）：同一开关 `phone_flows_enabled`。打开后心跳同时带 `phone_flows_v1` 和 `phone_flows_v2`；关着时两项都不声明。仍走 `POST /api/fleet/nodes/{node_id}/phones/{serial}/social/{warmup|dm|watch}`，不要走通用 `/tasks`。坐标仍在各应用的 `phone_ui_map.json`（`warmup` / `dm` / `watch`）。受保护手机与直播机判定不变。payload：养号 `{app, scrolls?:1..8 默认 4, likes?:0..scrolls 默认 0}`；看视频 `{app, watches?:1..8 默认 3, likes?:0..watches 默认 0}`；私信 `{app, handle, text}`，文字规则与 `phone_text` 相同（ASCII）。回执只留次数和字数，不回私信原文、不回账号名。打开核对后，私信点开会话（`preflight.thread.after_anchor`，随包是 `dm_open`）再看会话标记，没有就 `thread_not_open`，不再输入私信正文。养号不发帖。停留只在节点上睡眠，不新增 adb 动词；每台手机锁、0.5 s 最短间隔、同时最多 2 路都不放宽。
+
 ### 3.3 领任务（长轮询）
 
 `GET /api/fleet/tasks/pull?limit=20&wait=25`  `wait` 上限 25 s，队列为空时挂到超时。

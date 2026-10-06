@@ -1,11 +1,12 @@
-"""把发帖 / 点赞 / 评论 / 关注编译成已有的截图、点击、滑动、按键、输入。
+"""把发帖 / 点赞 / 评论 / 关注，以及养号 / 私信 / 看短视频，编译成已有的截图、点击、滑动、按键、输入。
 
 坐标在 ``phone_ui_map.json``（或 agent.json ``phone_ui_map`` 指向的文件）里，按应用分开，
 单位是屏幕千分比。每次动作先截一张图量屏幕，再把千分比换成像素。不新增 adb 动词：
 打开应用是 HOME 再点该应用的 ``app_icon`` 锚点；带图是点相册里已经在手机上的那一格。
+停留（dwell）只在本机睡一会儿，不发 adb。
 
-``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1，执行直接拒绝，不碰 adb。
-回传只留应用名、动作、步数和字数，不带回帖子或评论原文。
+``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1 / phone_flows_v2，执行直接拒绝，不碰 adb。
+回传只留应用名、动作、步数、字数和次数，不带回帖子、评论、私信原文或账号名。
 
 核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
 ``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
@@ -21,28 +22,33 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .phone_flow_robust import (
-    MAX_JITTER_MS, MAX_RETRIES, frame_token, jitter_seconds, probe_matches, resolve_policy,
+    MAX_DWELL_MS, MAX_JITTER_MS, MAX_RETRIES, MIN_DWELL_MS, dwell_seconds, frame_token, jitter_seconds,
+    probe_matches, resolve_policy,
 )
 from .phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
 from .phone_rules import KEYCODES, SWIPE_MS_MAX, SWIPE_MS_MIN, PhoneOpError, check_target
 from .phones import is_excluded
 from .protocol import (
-    PHONE_FLOW_KINDS, SOCIAL_APPS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_KEY,
-    TASK_PHONE_POST, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT,
+    PHONE_FLOW_KINDS, PHONE_SESSION_KINDS, SESSION_FLOW_NAMES, SOCIAL_APPS, STATUS_DONE, STATUS_FAILED,
+    STATUS_REJECTED, TASK_PHONE_KEY, TASK_PHONE_POST, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP,
+    TASK_PHONE_TEXT,
 )
 
 _BUNDLED = Path(__file__).with_name("phone_ui_map.json")
 _MAX_MAP_BYTES = 256 * 1024
-_FLOW_KEYS = ("post", "post_media", "like", "comment", "follow")
+_FLOW_KEYS = ("post", "post_media", "like", "comment", "follow", "warmup", "dm", "watch")
 _STEP_KEYS = {
     "tap": {"op", "anchor", "slot_field", "slot_stride", "expect"},
     "swipe": {"op", "from", "to", "duration_ms", "repeat", "expect"},
     "key": {"op", "key", "expect"},
     "text": {"op", "field", "expect"},
+    "dwell": {"op", "lo_ms", "hi_ms", "expect"},
 }
+_NESTED_EXTRA = {"when", "every"}
+_DWELL_KIND = "dwell"
 _NAME_RE_SRC = r"^[a-z][a-z0-9_]{0,31}$"
 _UNSET = object()
-_CHECK_FAILS = ("screen_not_reached", "not_logged_in", "app_not_ready", "anchor_mismatch")
+_CHECK_FAILS = ("screen_not_reached", "not_logged_in", "app_not_ready", "anchor_mismatch", "thread_not_open")
 
 Step = Tuple[str, Dict[str, Any]]
 
@@ -124,6 +130,105 @@ def _names(raw: Any, probes: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _tap_anchors(steps: List[Dict[str, Any]]) -> set:
+    found = set()
+    for step in steps:
+        if step.get("op") == "tap":
+            found.add(step.get("anchor"))
+        elif step.get("op") == "repeat":
+            found |= _tap_anchors(step.get("steps") or [])
+    return found
+
+
+def _validate_step(step: Any, anchors: Dict[str, Tuple[int, int]], probes: Dict[str, Any], *,
+                   nested: bool) -> Dict[str, Any]:
+    if not isinstance(step, dict):
+        _invalid()
+    op = step.get("op")
+    if op == "repeat":
+        if nested or set(step) - {"op", "count", "steps"}:
+            _invalid()
+        count = step.get("count")
+        if count not in ("scrolls", "watches"):
+            count = _as_int(count, 0, 8)
+        inner = step.get("steps")
+        if not isinstance(inner, list) or not inner or len(inner) > 8:
+            _invalid()
+        return {
+            "op": "repeat", "count": count,
+            "steps": [_validate_step(item, anchors, probes, nested=True) for item in inner],
+        }
+    if op not in _STEP_KEYS:
+        _invalid()
+    allowed = set(_STEP_KEYS[op])
+    if nested:
+        allowed |= _NESTED_EXTRA
+        if op == "swipe" and "repeat" in step:
+            _invalid()
+    if set(step) - allowed:
+        _invalid()
+    clean: Dict[str, Any] = {"op": op}
+    if "when" in step or "every" in step:
+        when = step.get("when")
+        if when == "like":
+            if op != "tap" or "every" in step:
+                _invalid()
+            clean["when"] = "like"
+        elif when == "dwell":
+            if op != "dwell":
+                _invalid()
+            clean["when"] = "dwell"
+            clean["every"] = _as_int(step.get("every"), 2, 8)
+        else:
+            _invalid()
+    if op == "tap":
+        clean["anchor"] = _name(step.get("anchor"))
+        if clean["anchor"] not in anchors:
+            _invalid()
+        has_slot = "slot_field" in step or "slot_stride" in step
+        if has_slot:
+            if step.get("slot_field") != "media_slot":
+                _invalid()
+            stride = _name(step.get("slot_stride"))
+            if stride not in anchors:
+                _invalid()
+            clean["slot_field"] = "media_slot"
+            clean["slot_stride"] = stride
+    elif op == "swipe":
+        clean["from"] = _name(step.get("from"))
+        clean["to"] = _name(step.get("to"))
+        if clean["from"] not in anchors or clean["to"] not in anchors:
+            _invalid()
+        if "duration_ms" in step:
+            clean["duration_ms"] = _as_int(step.get("duration_ms"), SWIPE_MS_MIN, SWIPE_MS_MAX)
+        if "repeat" in step:
+            rep = step.get("repeat")
+            if rep == "scrolls":
+                clean["repeat"] = "scrolls"
+            else:
+                clean["repeat"] = _as_int(rep, 0, 8)
+    elif op == "key":
+        key = step.get("key")
+        if key not in KEYCODES:
+            _invalid()
+        clean["key"] = key
+    elif op == "text":
+        field = step.get("field")
+        if field not in ("text", "handle"):
+            _invalid()
+        clean["field"] = field
+    else:
+        lo = _as_int(step.get("lo_ms"), MIN_DWELL_MS, MAX_DWELL_MS)
+        hi = _as_int(step.get("hi_ms"), MIN_DWELL_MS, MAX_DWELL_MS)
+        if lo > hi:
+            _invalid()
+        clean["lo_ms"] = lo
+        clean["hi_ms"] = hi
+    if "expect" in step:
+        clean["expect"] = _expect(step.get("expect"), probes)
+    return clean
+
+
 def _validate_app(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) - {"anchors", "flows", "note", "probes", "preflight"}:
         _invalid()
@@ -145,58 +250,11 @@ def _validate_app(raw: Any) -> Dict[str, Any]:
         steps_raw = flows_raw.get(flow)
         if not isinstance(steps_raw, list) or not steps_raw or len(steps_raw) > 32:
             _invalid()
-        steps: List[Dict[str, Any]] = []
-        for step in steps_raw:
-            if not isinstance(step, dict):
-                _invalid()
-            op = step.get("op")
-            if op not in _STEP_KEYS or set(step) - _STEP_KEYS[op]:
-                _invalid()
-            clean: Dict[str, Any] = {"op": op}
-            if op == "tap":
-                clean["anchor"] = _name(step.get("anchor"))
-                if clean["anchor"] not in anchors:
-                    _invalid()
-                has_slot = "slot_field" in step or "slot_stride" in step
-                if has_slot:
-                    if step.get("slot_field") != "media_slot":
-                        _invalid()
-                    stride = _name(step.get("slot_stride"))
-                    if stride not in anchors:
-                        _invalid()
-                    clean["slot_field"] = "media_slot"
-                    clean["slot_stride"] = stride
-            elif op == "swipe":
-                clean["from"] = _name(step.get("from"))
-                clean["to"] = _name(step.get("to"))
-                if clean["from"] not in anchors or clean["to"] not in anchors:
-                    _invalid()
-                if "duration_ms" in step:
-                    clean["duration_ms"] = _as_int(step.get("duration_ms"), SWIPE_MS_MIN, SWIPE_MS_MAX)
-                if "repeat" in step:
-                    rep = step.get("repeat")
-                    if rep == "scrolls":
-                        clean["repeat"] = "scrolls"
-                    else:
-                        clean["repeat"] = _as_int(rep, 0, 8)
-            elif op == "key":
-                key = step.get("key")
-                if key not in KEYCODES:
-                    _invalid()
-                clean["key"] = key
-            else:
-                field = step.get("field")
-                if field not in ("text", "handle"):
-                    _invalid()
-                clean["field"] = field
-            if "expect" in step:
-                clean["expect"] = _expect(step.get("expect"), probes)
-            steps.append(clean)
-        flows[flow] = steps
+        flows[flow] = [_validate_step(step, anchors, probes, nested=False) for step in steps_raw]
     preflight = None
     if "preflight" in raw:
         pf = raw.get("preflight")
-        if not isinstance(pf, dict) or set(pf) - {"after_anchor", "require", "forbid", "note"}:
+        if not isinstance(pf, dict) or set(pf) - {"after_anchor", "require", "forbid", "note", "thread"}:
             _invalid()
         after = _name(pf.get("after_anchor"))
         if after not in anchors:
@@ -209,6 +267,20 @@ def _validate_app(raw: Any) -> Dict[str, Any]:
             if not any(s.get("op") == "tap" and s.get("anchor") == after for s in steps):
                 _invalid()
         preflight = {"after_anchor": after, "require": require, "forbid": forbid}
+        if "thread" in pf:
+            th = pf.get("thread")
+            if not isinstance(th, dict) or set(th) - {"after_anchor", "require", "forbid", "note"}:
+                _invalid()
+            th_after = _name(th.get("after_anchor"))
+            if th_after not in anchors:
+                _invalid()
+            th_require = _names(th["require"], probes) if "require" in th else []
+            th_forbid = _names(th["forbid"], probes) if "forbid" in th else []
+            if not th_require and not th_forbid:
+                _invalid()
+            if th_after not in _tap_anchors(flows.get("dm") or []):
+                _invalid()
+            preflight["thread"] = {"after_anchor": th_after, "require": th_require, "forbid": th_forbid}
     out: Dict[str, Any] = {"anchors": anchors, "flows": flows, "probes": probes}
     if preflight is not None:
         out["preflight"] = preflight
@@ -307,7 +379,69 @@ def _label(step: Dict[str, Any]) -> str:
 
 def _blank_check(step: Dict[str, Any]) -> Dict[str, Any]:
     return {"change": False, "probe": "", "retry": None, "preflight": False, "label": _label(step),
-            "require": (), "forbid": ()}
+            "require": (), "forbid": (), "thread": False, "thread_require": (), "thread_forbid": ()}
+
+
+def _pick_slots(n: int, k: int) -> set:
+    """把 k 次点赞均匀摊到 n 次滑动 / 观看上。同一组 n、k 永远同一组下标。"""
+    if k <= 0 or n <= 0:
+        return set()
+    if k >= n:
+        return set(range(n))
+    out = set()
+    for i in range(k):
+        idx = int((i + 1) * n / (k + 1))
+        if idx >= n:
+            idx = n - 1
+        while idx in out and idx + 1 < n:
+            idx += 1
+        out.add(idx)
+    return out
+
+
+def _likes_n(payload: Dict[str, Any]) -> int:
+    if "likes" not in payload:
+        return 0
+    n = payload.get("likes")
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 8:
+        raise PhoneOpError("bad_likes")
+    return n
+
+
+def _session_count(rep: Any, payload: Dict[str, Any]) -> int:
+    if rep == "scrolls":
+        n = payload.get("scrolls", 0)
+        code = "bad_scrolls"
+    elif rep == "watches":
+        n = payload.get("watches", 0)
+        code = "bad_watches"
+    else:
+        return int(rep)
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 8:
+        raise PhoneOpError(code)
+    return n
+
+
+def _expand(steps: List[Dict[str, Any]], payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """把 repeat 展开成具体步骤。点赞落在固定下标上；隔几条才停留的步骤按 every 取。"""
+    out: List[Dict[str, Any]] = []
+    for step in steps:
+        if step.get("op") == "repeat":
+            n = _session_count(step["count"], payload)
+            slots = _pick_slots(n, _likes_n(payload))
+            for i in range(n):
+                for inner in step["steps"]:
+                    when = inner.get("when")
+                    if when == "like" and i not in slots:
+                        continue
+                    if when == "dwell" and (i + 1) % int(inner["every"]) != 0:
+                        continue
+                    out.append(inner)
+            continue
+        n = _repeat(step, payload) if step.get("op") == "swipe" else 1
+        for _ in range(n):
+            out.append(step)
+    return out
 
 
 def _check_for(step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -344,14 +478,14 @@ def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, heig
             raise PhoneOpError("unknown_anchor")
     preflight = spec.get("preflight") if isinstance(spec.get("preflight"), dict) else None
     pf_anchor = str(preflight.get("after_anchor") or "") if preflight else ""
+    thread = preflight.get("thread") if preflight and isinstance(preflight.get("thread"), dict) else None
+    th_anchor = str(thread.get("after_anchor") or "") if thread else ""
     pf_used = False
+    th_used = False
     out: List[Step] = []
     checks: List[Optional[Dict[str, Any]]] = []
-    for step in steps:
+    for step in _expand(steps, payload):
         op = step["op"]
-        n = _repeat(step, payload) if op == "swipe" else 1
-        if n <= 0:
-            continue
         if op == "key":
             item: Step = (TASK_PHONE_KEY, {"key": step["key"]})
         elif op == "text":
@@ -372,6 +506,8 @@ def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, heig
                 x = min(x, 9999)
                 y = min(y, 9999)
             item = (TASK_PHONE_TAP, {"x": x, "y": y})
+        elif op == "dwell":
+            item = (_DWELL_KIND, {"lo_ms": int(step["lo_ms"]), "hi_ms": int(step["hi_ms"])})
         else:
             x1, y1 = _point(step["from"], anchors, overrides, width, height)
             x2, y2 = _point(step["to"], anchors, overrides, width, height)
@@ -386,9 +522,16 @@ def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, heig
             check["require"] = tuple(preflight.get("require") or ())
             check["forbid"] = tuple(preflight.get("forbid") or ())
             pf_used = True
-        for _ in range(n):
-            out.append(item)
-            checks.append(None if check is None else dict(check))
+        if op == "tap" and th_anchor and not th_used and step.get("anchor") == th_anchor:
+            if check is None:
+                check = _blank_check(step)
+            check["thread"] = True
+            check["label"] = str(step.get("anchor") or "")
+            check["thread_require"] = tuple(thread.get("require") or ())
+            check["thread_forbid"] = tuple(thread.get("forbid") or ())
+            th_used = True
+        out.append(item)
+        checks.append(None if check is None else dict(check))
     if not out:
         raise PhoneOpError("ui_map_invalid")
     return out, checks
@@ -504,6 +647,17 @@ class PhoneFlows:
             raise err
         anchors = spec.get("anchors") or {}
         probes = spec.get("probes") or {}
+        if check.get("thread"):
+            for name in check.get("thread_forbid") or ():
+                if self._probe_hit(raw, probes.get(name), anchors, overrides, dw, dh):
+                    err = PhoneOpError("thread_not_open", failed=True)
+                    err.stderr = f"probe:{name}"[:160]  # type: ignore[attr-defined]
+                    raise err
+            for name in check.get("thread_require") or ():
+                if not self._probe_hit(raw, probes.get(name), anchors, overrides, dw, dh):
+                    err = PhoneOpError("thread_not_open", failed=True)
+                    err.stderr = f"probe:{name}"[:160]  # type: ignore[attr-defined]
+                    raise err
         if check.get("preflight"):
             for name in check.get("forbid") or ():
                 if self._probe_hit(raw, probes.get(name), anchors, overrides, dw, dh):
@@ -523,7 +677,7 @@ class PhoneFlows:
 
     def execute(self, kind: str, payload: Any, target: Any, ops: Any = None) -> Tuple[str, Dict[str, Any], str]:
         ops = self.ops if ops is None else ops
-        if kind not in PHONE_FLOW_KINDS:
+        if kind not in PHONE_FLOW_KINDS and kind not in PHONE_SESSION_KINDS:
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         if not self.enabled:
             return STATUS_REJECTED, {}, "phone_flows_disabled"
@@ -591,7 +745,13 @@ class PhoneFlows:
                     res = None
                     for attempt in range(tries):
                         try:
-                            res = run(sk, sp)
+                            if sk == _DWELL_KIND:
+                                held = dwell_seconds((int(sp["lo_ms"]), int(sp["hi_ms"])), self._rng)
+                                if held > 0:
+                                    ops.add_dwell(serial, held)
+                                res = {}
+                            else:
+                                res = run(sk, sp)
                         except PhoneOpError as e:
                             return _status(e), _result(
                                 serial, app, flow, completed=prog["done"], failed_step=i, width=w, height=h, err=e,
@@ -617,6 +777,11 @@ class PhoneFlows:
             }
             if chars:
                 out["chars"] = chars
+            if flow in SESSION_FLOW_NAMES:
+                for key in ("scrolls", "watches", "likes"):
+                    if isinstance(p.get(key), int) and not isinstance(p.get(key), bool):
+                        out[key] = p[key]
+                out["dwells"] = sum(1 for sk, _sp in steps if sk == _DWELL_KIND)
             return STATUS_DONE, out, "ok"
         except PhoneOpError as e:
             return _status(e), _result(

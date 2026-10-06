@@ -250,3 +250,25 @@ __all__ += [
     "CAP_PHONE_FLOWS_V1", "TASK_PHONE_POST", "TASK_PHONE_LIKE", "TASK_PHONE_COMMENT", "TASK_PHONE_FOLLOW",
     "PHONE_FLOW_KINDS", "PHONE_FLOW_TTL_SEC", "SOCIAL_APPS", "FLOW_NAMES", "REMOTE_PHONE_KINDS",
 ]
+
+
+# ── 养号 / 私信 / 看短视频（仍走 phone_flows_enabled，另要 phone_flows_v2）────────
+# 不改 PHONE_FLOW_KINDS / FLOW_NAMES：旧的四个社交动作和它们的能力位保持原样。
+# 这三项默认也关着；只有 phone_flows_enabled 为 JSON true 且已有 phone_ops_v1 时，
+# 心跳才同时带上 phone_flows_v1 和 phone_flows_v2。
+CAP_PHONE_FLOWS_V2 = "phone_flows_v2"
+TASK_PHONE_WARMUP = "phone_warmup"
+TASK_PHONE_DM = "phone_dm"
+TASK_PHONE_WATCH = "phone_watch"
+PHONE_SESSION_KINDS = (TASK_PHONE_WARMUP, TASK_PHONE_DM, TASK_PHONE_WATCH)
+SESSION_FLOW_NAMES = ("warmup", "dm", "watch")
+
+TASK_KINDS = TASK_KINDS + tuple(k for k in PHONE_SESSION_KINDS if k not in TASK_KINDS)
+TASK_PRIORITY.update({k: 6 for k in PHONE_SESSION_KINDS})
+TASK_REQUIRED_CAPS.update({k: CAP_PHONE_FLOWS_V2 for k in PHONE_SESSION_KINDS})
+REMOTE_PHONE_KINDS = REMOTE_PHONE_KINDS + PHONE_SESSION_KINDS
+
+__all__ += [
+    "CAP_PHONE_FLOWS_V2", "TASK_PHONE_WARMUP", "TASK_PHONE_DM", "TASK_PHONE_WATCH",
+    "PHONE_SESSION_KINDS", "SESSION_FLOW_NAMES",
+]
