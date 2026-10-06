@@ -286,7 +286,20 @@ class FleetStore:
         with self._lock:
             self._conn.executescript(_SCHEMA)
             _migrate_pending(self._conn)
+            from .phone_schedule import SCHEDULE_SCHEMA
+            self._conn.executescript(SCHEDULE_SCHEMA)
             self._conn.commit()
+
+    def schedule_txn(self, fn: Callable[[sqlite3.Connection], Any]) -> Any:
+        """给每日计划用的同一把锁、同一条连接。失败回滚。"""
+        with self._lock:
+            try:
+                out = fn(self._conn)
+                self._conn.commit()
+                return out
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def close(self) -> None:
         with self._lock:

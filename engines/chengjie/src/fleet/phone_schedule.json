@@ -1,0 +1,17 @@
+{
+  "active_hours": {"start": "08:00", "end": "23:00"},
+  "tz_offset_min": 480,
+  "jitter_sec": [90, 600],
+  "min_gap_sec": 900,
+  "apps": ["facebook", "instagram", "tiktok"],
+  "pause_holds": ["post"],
+  "daily": {
+    "warmup": {"count": 2, "scrolls": 4, "likes": 1},
+    "post": {"min": 1, "max": 2, "texts": [], "media": 0},
+    "like": {"count": 3, "scrolls": 1},
+    "comment": {"count": 1, "texts": [], "scrolls": 0},
+    "watch": {"count": 2, "watches": 3, "likes": 0},
+    "follow": {"count": 0, "handles": []},
+    "dm": {"count": 0, "handles": [], "texts": []}
+  }
+}
