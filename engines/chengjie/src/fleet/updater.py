@@ -3,6 +3,10 @@
 payload: ``{"url": "...chatx-agent.exe", "sha256": "<hex>", "version": "0.2.0"}``（sha256 必填，缺则拒绝）。
 只支持冻结态（PyInstaller 单文件）；源码态运行的 Agent 拒绝 ``not_frozen``（源码机走 git pull）。
 
+可选安装包（显式才走，缺省仍只换 exe）：``setup_url`` + ``setup_sha256`` 都有时改为下载
+``ChatXAgentSetup``、校验 sha256、等本进程退出后静默运行（``/VERYSILENT /SUPPRESSMSGBOXES /NORESTART``，
+仅当 ``manage_adb_server`` 为 JSON true 时再加 ``/MANAGEADBSERVER=1``）。直播机直接拒绝，不下载。
+
 Windows 不能覆盖正在运行的 exe：先把新文件落到 ``<state_dir>/updates/``，再派生一个脱离的
 PowerShell 等本进程退出后 ``旧→.bak、新→原路径``，然后 ``schtasks /Run`` 拉起；Linux 同理用 sh +
 ``systemctl restart``。Agent 先 ack done 再退出（退出码 3），保证主控看到回执。
@@ -20,11 +24,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from .service import SYSTEMD_UNIT, TASK_NAME, is_frozen
 
@@ -261,10 +267,127 @@ def _spawn_detached(cmd: List[str]) -> Any:
     return subprocess.Popen(cmd, **kw)
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
+_SETUP_FLAGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+_MANAGE_ADB_FLAG = "/MANAGEADBSERVER=1"
+
+
+def setup_install_requested(payload: Any) -> bool:
+    """True when the task asks for the installer. An empty string does not count."""
+    if not isinstance(payload, dict):
+        return False
+    return bool(str(payload.get("setup_url") or "").strip() or str(payload.get("setup_sha256") or "").strip())
+
+
+def _https_setup_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
+
+
+def _as_live_stream(state_dir: Path, live_stream: Optional[bool]) -> bool:
+    if live_stream is None:
+        from .detect import is_live_stream_host
+
+        return bool(is_live_stream_host(state_dir))
+    return bool(live_stream)
+
+
+def _version_tag(version: str) -> str:
+    return "".join(ch for ch in (version or "new") if ch.isalnum() or ch in "._-")[:40] or "new"
+
+
+def build_setup_script(setup: Path, sha256: str, pid: int, state_dir: Path, *,
+                       manage_adb_server: bool = False) -> Tuple[str, str]:
+    """Wait for this process, refuse a live-stream host, re-check sha256, then run the installer.
+
+    The argument list is fixed. ``manage_adb_server`` only adds ``/MANAGEADBSERVER=1``.
+    """
+    flags = list(_SETUP_FLAGS)
+    if manage_adb_server:
+        flags.append(_MANAGE_ADB_FLAG)
+    arg_list = ", ".join("'" + _ps_lit(flag) + "'" for flag in flags)
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$setup = '{_ps_lit(setup)}'",
+        f"$want = '{_ps_lit(sha256.strip().lower())}'",
+        f"$state = '{_ps_lit(state_dir)}'",
+        f"try {{ Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue }} catch {{}}",
+        "Start-Sleep -Seconds 1",
+        "$envLive = [string]$env:CHATX_FLEET_LIVE_STREAM",
+        "if ($envLive -match '^(?i)(1|true|yes|on)$') { exit 2 }",
+        "$flagName = 'live-stream.flag'",
+        "$roots = @((Split-Path -Parent $state), $state)",
+        "if ($env:ProgramData) { $roots += (Join-Path $env:ProgramData 'ChatX') }",
+        "foreach ($root in $roots) {",
+        "  if (Test-Path -LiteralPath (Join-Path $root $flagName)) { exit 2 }",
+        "}",
+        "$got = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash",
+        "if ($got.ToLower() -ne $want) { exit 1 }",
+        f"$argList = @({arg_list})",
+        "$proc = Start-Process -FilePath $setup -ArgumentList $argList -Wait -PassThru",
+        "if ($null -eq $proc) { exit 1 }",
+        "exit $proc.ExitCode",
+    ]
+    return "\n".join(lines) + "\n", ".ps1"
+
+
+def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch = _fetch,
+                       spawn: Spawn = _spawn_detached, frozen: Optional[bool] = None,
+                       pid: Optional[int] = None, live_stream: Optional[bool] = None,
+                       windows: Optional[bool] = None) -> Tuple[str, Dict[str, Any], str]:
+    """Download a verified installer and schedule a silent run. Never falls through to an exe swap."""
+    if _as_live_stream(state_dir, live_stream):
+        return "rejected", {}, "live_stream_host"
+    url = str(payload.get("setup_url") or "").strip()
+    sha = str(payload.get("setup_sha256") or "").strip()
+    version = str(payload.get("version") or "").strip()
+    if not url or not sha:
+        return "rejected", {}, "setup_url_and_sha256_required"
+    if not _SHA256_HEX.match(sha):
+        return "rejected", {}, "setup_sha256_invalid"
+    if not _https_setup_url(url):
+        return "rejected", {}, "setup_url_must_be_https"
+    if not (is_frozen() if frozen is None else frozen):
+        return "rejected", {"hint": "source checkout: git pull instead"}, "not_frozen"
+    win = (os.name == "nt") if windows is None else bool(windows)
+    if not win:
+        return "rejected", {}, "not_windows"
+    manage = payload.get("manage_adb_server") is True
+    dest = state_dir / "updates" / f"ChatXAgentSetup-{_version_tag(version)}.exe"
+    try:
+        download_verified(url, sha, dest, fetch=fetch)
+    except Exception as e:
+        msg = str(e)
+        if "sha256 mismatch" in msg:
+            return "rejected", {"error": msg[:300]}, "sha256_mismatch"
+        return "failed", {"error": msg[:300]}, "download_failed"
+    got = sha256_file(dest)
+    if got.lower() != sha.lower():
+        dest.unlink(missing_ok=True)
+        return "rejected", {"error": "sha256 mismatch"}, "sha256_mismatch"
+    body, suffix = build_setup_script(dest, got, pid or os.getpid(), state_dir, manage_adb_server=manage)
+    script = state_dir / "updates" / ("install-setup" + suffix)
+    script.write_text(body, encoding="utf-8")
+    try:
+        spawn(swap_command(script))
+    except Exception as e:
+        return "failed", {"error": str(e)[:300]}, "spawn_failed"
+    logger.info("[updater] 安装包已校验 %s，静默安装脚本已派生，本进程即将退出", dest)
+    return "done", {"version": version, "staged": str(dest), "exit": True, "setup": True,
+                    "manage_adb_server": manage}, "setup_scheduled"
+
+
 def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Optional[Path] = None,
                   fetch: Fetch = _fetch, spawn: Spawn = _spawn_detached, frozen: Optional[bool] = None,
-                  pid: Optional[int] = None) -> Tuple[str, Dict[str, Any], str]:
-    """返回 (status, result, detail)，status ∈ done / rejected / failed；done 表示换文件脚本已派生，调用方应 ack 后退出。"""
+                  pid: Optional[int] = None, live_stream: Optional[bool] = None,
+                  windows: Optional[bool] = None) -> Tuple[str, Dict[str, Any], str]:
+    """返回 (status, result, detail)，status ∈ done / rejected / failed；done 表示换文件脚本已派生，调用方应 ack 后退出。
+
+    ``setup_url`` / ``setup_sha256`` 任一非空则只走安装包，不再换 exe。
+    """
+    if setup_install_requested(payload):
+        return apply_remote_setup(payload, state_dir, fetch=fetch, spawn=spawn, frozen=frozen, pid=pid,
+                                  live_stream=live_stream, windows=windows)
     url = str(payload.get("url") or "").strip()
     sha = str(payload.get("sha256") or "").strip()
     version = str(payload.get("version") or "").strip()
@@ -293,4 +416,5 @@ def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Opti
 
 
 __all__ = ["sha256_file", "download_verified", "build_swap_script", "build_swap_task_commands", "swap_command",
-           "apply_upgrade", "health_timeout_of", "HEALTH_TIMEOUT_SEC", "UPGRADE_LOG_NAME"]
+           "apply_upgrade", "apply_remote_setup", "setup_install_requested", "build_setup_script",
+           "health_timeout_of", "HEALTH_TIMEOUT_SEC", "UPGRADE_LOG_NAME"]

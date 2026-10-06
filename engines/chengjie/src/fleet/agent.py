@@ -25,6 +25,8 @@
                       + 本机 huoke 实例（domain=huoke）→ POST /outreach/stop-account（X-API-Key；号码/账号进 STOP 表、暂停设备触达）
     restart_instance→ 实例条目配了 restart_cmd 才执行，否则 rejected
     upgrade         → 下载+sha256 校验+换文件后重启（updater.py；仅冻结 exe，源码态拒绝）
+                      带 setup_url + setup_sha256 时改为校验后静默跑安装包（直播机拒绝）
+    enable_phone_adb→ 已有自带 platform-tools 时打开 adb_manage_server 并拉起 adb（直播机拒绝）
     push_config     → v1 仍 rejected: not_supported
 """
 
@@ -71,7 +73,7 @@ from .protocol import (
     PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
-    TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
+    TASK_ENABLE_PHONE_ADB, TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
@@ -1070,12 +1072,32 @@ class NodeAgent:
                 if status == STATUS_DONE:
                     self.exit_requested = True
                 return status, result, detail
+            if kind == TASK_ENABLE_PHONE_ADB:
+                return self._enable_phone_adb()
             if kind == TASK_PUSH_CONFIG:
                 return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
             return STATUS_FAILED, {"error": str(e)[:300]}, "exception"
+
+    def _enable_phone_adb(self) -> Tuple[str, Dict[str, Any], str]:
+        """Set adb_manage_server and start the bundled server. Does not exit the agent.
+
+        Any serial in the task payload is ignored. The protected phone is never addressed.
+        """
+        from . import adb_bundle
+
+        already = self.cfg.data.get("adb_manage_server") is True
+
+        def persist() -> None:
+            self.cfg.write_operator_keys({"adb_manage_server": True})
+            data = self.cfg.data
+            self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(data, self.cfg.state_dir))
+            self.phone_ops.configure(**_phone_ops_settings(data, self.cfg.state_dir))
+            self._cfg_mtime = _mtime_ns(self.cfg.path)
+
+        return adb_bundle.enable_phone_adb(self.cfg.state_dir, persist=persist, already=already)
 
     def _huoke_instances(self, want: str = "") -> List[Dict[str, Any]]:
         out = [i for i in self.cfg.instances if _instance_domain(i) == HUOKE_DOMAIN]

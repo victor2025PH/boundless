@@ -7,6 +7,8 @@
     python -m src.fleet.admin task <node_id> ping [--payload '{"echo":1}'] [--target '{...}'] [--ttl 900]
     python -m src.fleet.admin tasks [--node <id>] [--status queued]
     python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/manifest.json [--group 机房A | --node <id>]
+    python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/manifest-0.3.8.json --node <id> --setup --manage-adb-server --yes
+    python -m src.fleet.admin enable-phone-adb --node <id> --yes
 
 主控 API 需要 ``web_admin.auth_token``（Bearer）。URL 口径与 Agent 一致：``<controller>/api/fleet/...``
 （公网 https://bd2026.cc/fleet/api/fleet/... 由 nginx 剥掉 /fleet 前缀，见 deploy/fleet/nginx-fleet.conf）。
@@ -101,11 +103,22 @@ class Admin:
         res = self.call("GET", f"/api/fleet/tasks?{q}")
         return list(res.get("tasks") or res.get("items") or [])
 
-    def upgrade(self, manifest: Dict[str, Any], *, node_ids: List[str]) -> List[Dict[str, Any]]:
+    def upgrade(self, manifest: Dict[str, Any], *, node_ids: List[str], setup: bool = False,
+                manage_adb_server: bool = False) -> List[Dict[str, Any]]:
+        if setup:
+            payload = {k: manifest.get(k) for k in ("setup_url", "setup_sha256", "version") if manifest.get(k)}
+            if not payload.get("setup_url") or not payload.get("setup_sha256"):
+                raise SystemExit("manifest 缺 setup_url / setup_sha256")
+            if manage_adb_server:
+                payload["manage_adb_server"] = True
+            return [self.task(n, "upgrade", payload=payload, ttl_sec=3600) for n in node_ids]
         payload = {k: manifest.get(k) for k in ("url", "sha256", "version") if manifest.get(k)}
         if not payload.get("url") or not payload.get("sha256"):
             raise SystemExit("manifest 缺 url / sha256")
         return [self.task(n, "upgrade", payload=payload, ttl_sec=3600) for n in node_ids]
+
+    def enable_phone_adb(self, node_id: str) -> Dict[str, Any]:
+        return self.task(node_id, "enable_phone_adb", payload={}, ttl_sec=600)
 
 
 def load_manifest(src: str) -> Dict[str, Any]:
@@ -168,7 +181,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     u.add_argument("--manifest", required=True, help="URL 或本地路径（build_agent.py 产出）")
     u.add_argument("--group", default="")
     u.add_argument("--node", action="append", default=[])
+    u.add_argument("--setup", action="store_true",
+                   help="下发安装包（setup_url + setup_sha256），不换单独的 exe")
+    u.add_argument("--manage-adb-server", action="store_true",
+                   help="安装包加 /MANAGEADBSERVER=1（必须和 --setup 一起）")
     u.add_argument("--yes", action="store_true", help="不询问直接下发")
+    e = sub.add_parser("enable-phone-adb", help="让已带 platform-tools 的节点打开 adb 并拉起自带服务")
+    e.add_argument("--node", required=True)
+    e.add_argument("--yes", action="store_true", help="不询问直接下发")
 
     args = ap.parse_args(argv)
     if not args.controller or not args.token:
@@ -247,6 +267,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"{str(r.get('status','')):9} {str(r.get('detail') or '')[:60]}")
         return 0
     if args.cmd == "upgrade":
+        if args.manage_adb_server and not args.setup:
+            print("--manage-adb-server 需要同时加 --setup", file=sys.stderr)
+            return 2
         mf = load_manifest(args.manifest)
         if args.node:
             ids = list(args.node)
@@ -256,10 +279,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not ids:
             print("没有可升级的在线节点（离线或已是该版本）", file=sys.stderr)
             return 1
-        print(f"将向 {len(ids)} 台节点下发 upgrade → {mf.get('version')} ({mf.get('url')})", file=sys.stderr)
+        target = mf.get("setup_url") if args.setup else mf.get("url")
+        print(f"将向 {len(ids)} 台节点下发 upgrade → {mf.get('version')} ({target})", file=sys.stderr)
         if not args.yes and (input("确认? [y/N] ").strip().lower() != "y"):
             return 1
-        _print(adm.upgrade(mf, node_ids=ids))
+        _print(adm.upgrade(mf, node_ids=ids, setup=bool(args.setup),
+                           manage_adb_server=bool(args.manage_adb_server)))
+        return 0
+    if args.cmd == "enable-phone-adb":
+        print(f"将向节点 {args.node} 下发 enable_phone_adb", file=sys.stderr)
+        if not args.yes and (input("确认? [y/N] ").strip().lower() != "y"):
+            return 1
+        _print(adm.enable_phone_adb(args.node))
         return 0
     return 2
 

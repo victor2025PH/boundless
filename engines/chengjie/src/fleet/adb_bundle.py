@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 logger = logging.getLogger("fleet.adb_bundle")
 
@@ -102,6 +102,39 @@ def ensure_bundled_server(adb: str, *, run: Optional[RunFn] = None, live_stream:
     return True
 
 
+def enable_phone_adb(state_dir: Path, *, persist: Callable[[], None], already: bool = False,
+                     run: Optional[RunFn] = None, exists: Callable[[str], bool] = os.path.isfile,
+                     candidates: Optional[Sequence[str]] = None,
+                     live_stream: Optional[bool] = None) -> Tuple[str, Dict[str, Any], str]:
+    """Turn bundled-adb management on and bring that server up. Idempotent.
+
+    A live-stream host is refused before any write or process. Only an adb.exe
+    from ``bundled_adb_candidates`` is used. A missing bundle does not set the flag.
+    """
+    if live_stream is None:
+        from .detect import is_live_stream_host
+
+        live_stream = bool(is_live_stream_host(state_dir))
+    if live_stream:
+        logger.info("[adb] live-stream host: enable_phone_adb refused")
+        return "rejected", {}, "live_stream_host"
+    seq = tuple(candidates) if candidates is not None else bundled_adb_candidates()
+    adb = ""
+    for cand in seq:
+        if exists(cand) and is_bundled_adb(cand, seq):
+            adb = cand
+            break
+    if not adb:
+        return "rejected", {}, "bundled_adb_missing"
+    persist()
+    started = ensure_bundled_server(adb, run=run, live_stream=False, state_dir=state_dir, candidates=seq)
+    if not started:
+        return "failed", {"adb_manage_server": True, "adb": adb, "server_started": False}, "adb_server_start_failed"
+    return ("done", {"adb_manage_server": True, "adb": adb, "server_started": True,
+                     "idempotent": bool(already)}, "adb_enabled")
+
+
 __all__ = [
     "START_TIMEOUT_SEC", "bundled_adb_candidates", "is_bundled_adb", "ensure_bundled_server",
+    "enable_phone_adb",
 ]

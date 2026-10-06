@@ -8,6 +8,10 @@
 #   ... -RequireSigned                                                    # refuse to upload an unsigned ChatXAgentSetup.exe
 #   ... -WhatIf                                                           # dry run: print every ssh/scp/sudo step, render the page locally
 #   ... -NoMirror                                                         # skip the /var/www/dl-mirror sync (not recommended)
+#   ... -VersionedOnly                                                    # upload ONLY versioned artifacts (chatx-agent-<ver>.exe,
+#                                                                         # ChatXAgentSetup-<ver>.exe, manifest-<ver>.json, sha sidecars).
+#                                                                         # Does not replace the public latest manifest, the unversioned
+#                                                                         # setup, or the download page. Use this for a canary installer.
 #
 # ChatXAgentSetup.exe is rebuilt ONLY with -BuildSetup. Having ISCC installed no longer
 # triggers a rebuild, so a hand-signed installer in dist\ is uploaded as is. A rebuild
@@ -40,6 +44,7 @@ param(
   [switch]$OverwriteSigned,
   [switch]$RequireSigned,
   [switch]$NoMirror,
+  [switch]$VersionedOnly,
   [switch]$WhatIf
 )
 $ErrorActionPreference = 'Stop'
@@ -103,6 +108,62 @@ if ($doAgentUpload) {
   } elseif ($RequireSigned) {
     throw "-RequireSigned: $setupExe is missing"
   }
+  if ($VersionedOnly) {
+    # versioned-only-begin
+    $ver = [string]$m.version
+    if ($ver -notmatch '^[0-9][0-9.]*$') { throw "manifest.version '$ver' is not a plain version; refusing versioned publish" }
+    if (-not (Test-Path -LiteralPath $setupExe)) { throw "versioned publish needs the setup exe in dist" }
+    $agentLocal = Join-Path $DistDir $m.file
+    if (-not (Test-Path -LiteralPath $agentLocal)) { throw "missing $agentLocal" }
+    if ($MirrorDir -notmatch '^/[A-Za-z0-9_./-]+$') { throw "MirrorDir '$MirrorDir' must be an absolute path without spaces" }
+    $agentVer = "chatx-agent-$ver.exe"
+    $setupVer = "ChatXAgentSetup-$ver.exe"
+    $manifestVer = "manifest-$ver.json"
+    if (-not $StageDir) { $StageDir = Join-Path $env:TEMP "fleet-canary-$ver" }
+    if (Test-Path -LiteralPath $StageDir) { Remove-Item -LiteralPath $StageDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    Copy-Item -LiteralPath $agentLocal -Destination (Join-Path $StageDir $agentVer) -Force
+    Copy-Item -LiteralPath $setupExe -Destination (Join-Path $StageDir $setupVer) -Force
+    $agentHash = (Get-FileHash -LiteralPath $agentLocal -Algorithm SHA256).Hash.ToLower()
+    $setupHash = (Get-FileHash -LiteralPath $setupExe -Algorithm SHA256).Hash.ToLower()
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "$agentVer.sha256"), "$agentHash  $agentVer`n", $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "$setupVer.sha256"), "$setupHash  $setupVer`n", $utf8)
+    $safeName = [regex]::Replace([string]$m.name, '[^A-Za-z0-9._-]', '')
+    if (-not $safeName) { $safeName = 'chatx-agent' }
+    $built = ''
+    if ($m.built_at -is [datetime]) { $built = $m.built_at.ToString('o') } else { $built = [string]$m.built_at }
+    $built = ($built -replace '[^0-9A-Za-z:T.+\-]', '')
+    $osName = ([string]$m.os) -replace '[^A-Za-z0-9._-]', ''
+    $agentSize = [int64](Get-Item -LiteralPath $agentLocal).Length
+    $canary = '{"name":"' + $safeName + '","version":"' + $ver + '","channel":"canary","file":"' + $agentVer + '","url":"' + $PublicBase + '/' + $agentVer + '","sha256":"' + $agentHash + '","size":' + $agentSize + ',"os":"' + $osName + '","built_at":"' + $built + '","setup_file":"' + $setupVer + '","setup_url":"' + $PublicBase + '/' + $setupVer + '","setup_sha256":"' + $setupHash + '"}'
+    [System.IO.File]::WriteAllText((Join-Path $StageDir $manifestVer), $canary, $utf8)
+    Say "canary staged: $StageDir ($agentVer, $setupVer, $manifestVer)"
+    $canaryNames = @($agentVer, "$agentVer.sha256", $setupVer, "$setupVer.sha256", $manifestVer)
+    $stageFiles = $canaryNames | ForEach-Object { '"' + (Join-Path $StageDir $_) + '"' }
+    Run "ssh $SshHost 'mkdir -p $RemoteDownloads'"
+    Run ("scp " + ($stageFiles -join ' ') + " ${SshHost}:$RemoteDownloads/")
+    if ($NoMirror) {
+      Say "WARN -NoMirror: versioned files stay only in the remote downloads dir"
+    } else {
+      $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
+      $rstage = "/tmp/fleet-canary-$ver-$ts"
+      Run "ssh $SshHost 'mkdir -p $rstage'"
+      Run ("scp " + ($stageFiles -join ' ') + " ${SshHost}:$rstage/")
+      $steps = @("sudo mkdir -p $MirrorDir")
+      foreach ($n in @($agentVer, $setupVer, $manifestVer)) {
+        $steps += "if [ -f $MirrorDir/$n ] && ! cmp -s $rstage/$n $MirrorDir/$n; then echo REFUSED_$n.differs_from_mirror; exit 4; fi"
+        $steps += "sudo install -m 644 -o root -g root $rstage/$n $MirrorDir/$n"
+      }
+      foreach ($n in @($agentVer, $setupVer)) {
+        $steps += "sudo install -m 644 -o root -g root $rstage/$n.sha256 $MirrorDir/$n.sha256"
+      }
+      $steps += "cd $MirrorDir && sha256sum -c $agentVer.sha256 $setupVer.sha256 && rm -rf $rstage"
+      Run ("ssh $SshHost '" + ($steps -join ' && ') + "'")
+    }
+    Say "canary is versioned only; fleet_control.download and the public download page were not changed"
+    # versioned-only-end
+  } else {
   Run "ssh $SshHost 'mkdir -p $RemoteDownloads'"
   $names = @($m.file, "$($m.file).sha256", "manifest.json", "Install-ChatXAgent.ps1", "Uninstall-ChatXAgent.ps1", "ChatXAgentSetup.exe", "ChatXAgentSetup.exe.sha256")
   if ($m.setup_file) { $names += @([string]$m.setup_file, ([string]$m.setup_file + ".sha256")) }
@@ -196,6 +257,7 @@ if ($doAgentUpload) {
       } catch { Say "WARN cannot fetch $PublicBase/ : $($_.Exception.Message)" }
     }
   }
+  }
 }
 
 if ($PackController) {
@@ -233,5 +295,9 @@ if ($PackController) {
   }
 }
 if ($doAgentUpload) {
-  Say "next: update fleet_control.download.* in /etc/chatx-fleet/config.yaml (version=$($m.version) installer_url=$($m.installer) sha256=$($m.sha256)) or leave /fleet/ page to manifest.json"
+  if ($VersionedOnly) {
+    Say "canary publish finished; the public latest download was left as it was (version=$($m.version))"
+  } else {
+    Say "next: update fleet_control.download.* in /etc/chatx-fleet/config.yaml (version=$($m.version) installer_url=$($m.installer) sha256=$($m.sha256)) or leave /fleet/ page to manifest.json"
+  }
 }
