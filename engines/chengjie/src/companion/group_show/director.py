@@ -53,6 +53,14 @@ from src.companion.group_show.playbook import (
 _SUBSTITUTE_ORDER: Tuple[str, ...] = ("advocate", "asker", "skeptic", "bystander")
 
 # 进剧本之前的接话。意图里不写事故、不写产品，避免占位生成器把禁令念出来。
+_OPENER_INTENT = (
+    "先在群里自然地开口，像刚进来看到大家。一句就好。"
+    "不要提产品，不要发出邀请，不要编事故。"
+)
+_CONTINUE_INTENT = (
+    "接住群里上一句，像普通群友接着聊。一句就好。"
+    "不要提产品，不要发出邀请，不要把人往私下带。"
+)
 _WARMUP_INTENT = (
     "顺着这个人刚说的那件事接一句。"
     "就聊这件事，不要另起一个故事，不要提产品，不要发出邀请。"
@@ -221,8 +229,8 @@ class GroupShowDirector:
         return max(0, self._chat_need - spoken)
 
     def waiting_for_people(self) -> bool:
-        """接话还没够，而且眼前没有可以回的真人句。"""
-        return self.warmup_remaining() > 0 and not str(self._pending_human).strip()
+        """没有可说的话时才等。接话阶段可以自己先开口，真人来了再让。"""
+        return False
 
     def release_warmup(self) -> None:
         """只给排练用：没有真人可接时，不要空转。真发不调用。"""
@@ -294,8 +302,6 @@ class GroupShowDirector:
         「谁在说」与「说什么」由同一次重排一起改，绝不脱钩。
         """
         if self.warmup_remaining() > 0:
-            if not str(self._pending_human).strip():
-                return None
             return self._warmup_speaker()
 
         if not self._queue:
@@ -326,7 +332,7 @@ class GroupShowDirector:
 
     def next_directive(self) -> Optional[BeatDirective]:
         """给本拍发言者的意图指令（**没有台词字段**——台词由人设 LLM 现场生成）。"""
-        if self.warmup_remaining() > 0 and str(self._pending_human).strip():
+        if self.warmup_remaining() > 0:
             return self._warmup_directive()
         if not self._queue:
             return None
@@ -398,29 +404,45 @@ class GroupShowDirector:
             and str(ev.beat_id or "").startswith("warmup_"))
 
     def _warmup_speaker(self) -> Optional[CastMember]:
-        """真人这句由向导接。没有向导时，换一个不是刚说过话的号。"""
+        """真人来了由向导接。没人说话时向导先开口，之后换一个号接着聊。"""
         guide = self._guide_member()
-        if guide is not None:
+        if str(self._pending_human).strip() and guide is not None:
             return guide
         last = self._last_speaker_account()
         members = list(self.state.casting.members)
+        if not last and guide is not None:
+            return guide
         for member in members:
             if member.account_id != last:
                 return member
-        return members[0] if members else None
+        return guide or (members[0] if members else None)
 
     def _warmup_directive(self) -> BeatDirective:
-        slot = "guide" if self._guide_member() is not None else "skeptic"
-        who = self._pending_human_name or "群友"
+        guide = self._guide_member()
+        last = self._last_speaker_account()
+        if str(self._pending_human).strip():
+            slot = "guide" if guide is not None else "skeptic"
+            intent = _WARMUP_INTENT
+            human = f"{self._pending_human_name or '群友'}：{self._pending_human}"
+        elif self._warmup_spoken() == 0:
+            slot = "guide" if guide is not None else "skeptic"
+            intent = _OPENER_INTENT
+            human = ""
+        else:
+            slot = "skeptic"
+            if guide is not None and last and last != guide.account_id:
+                slot = "guide"
+            intent = _CONTINUE_INTENT
+            human = ""
         must = must_not_for_slot(slot, with_guide=self._has_guide()) + _WARMUP_MUST
         return BeatDirective(
             beat_id=f"warmup_{self._warmup_spoken() + 1}",
-            intent=_WARMUP_INTENT,
+            intent=intent,
             product="",
             soft_level=0,
             must_not=must,
-            reference_last=True,
-            respond_to_human=f"{who}：{self._pending_human}",
+            reference_last=self._warmup_spoken() > 0 and not human,
+            respond_to_human=human,
         )
 
     def _heard_just_now(self, text: str) -> bool:

@@ -142,7 +142,15 @@ def _build_system_prompt(
 
     # 身份锚点：明确「除我之外都是普通群友」，堵死角色认出同伙互相捧哏的可能
     who = str(speaker.display_name or "").strip() or str(speaker.account_id or "").strip()
-    if str(getattr(speaker, "slot", "") or "").strip().lower() == "guide":
+    warmup = str(getattr(directive, "beat_id", "") or "").startswith("warmup_")
+    if str(getattr(speaker, "slot", "") or "").strip().lower() == "guide" and warmup:
+        parts.append(
+            f"【你是谁】你在这个群里，名字是「{who}」。这句只聊天。"
+            "不要介绍产品，不要邀请私聊或加好友。"
+            f"标着 [{SPEAKER_PREFIX_LABEL} xxx] 的是群友，"
+            "不要表现出你们事先商量过。"
+        )
+    elif str(getattr(speaker, "slot", "") or "").strip().lower() == "guide":
         parts.append(
             f"【你是谁】你是这个群里公开的 AI，名字是「{who}」。"
             "开口就要让人听出来你是 AI。你只带一件事，并邀请对方私聊你自己试。"
