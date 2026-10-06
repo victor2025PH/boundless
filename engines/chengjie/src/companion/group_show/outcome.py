@@ -180,6 +180,10 @@ class ShowOutcome:
     verdict: str
     truncated: bool = False
     conversion_ids: Tuple[str, ...] = field(default_factory=tuple)
+    #: 向导漏斗，与上面的 conversions / verdict 分开。0 表示没数到，不改判词。
+    guide_added: int = 0
+    guide_tested: int = 0
+    guide_fallback: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -197,6 +201,9 @@ class ShowOutcome:
             "conversions": self.conversions,
             "verdict": self.verdict,
             "truncated": self.truncated,
+            "guide_added": self.guide_added,
+            "guide_tested": self.guide_tested,
+            "guide_fallback": self.guide_fallback,
         }
 
 
@@ -295,4 +302,8 @@ def rollup(outcomes: Sequence[ShowOutcome]) -> Dict[str, Any]:
         "conversions": conversions,
         "avg_first_reply_sec": (sum(lat) / len(lat)) if lat else -1.0,
         "truncated": any(o.truncated for o in (outcomes or ())),
+        # 向导三列是事实计数，pending 的场次也算：人可能在窗口走完之前就来加了。
+        "guide_added": sum(int(o.guide_added) for o in (outcomes or ())),
+        "guide_tested": sum(int(o.guide_tested) for o in (outcomes or ())),
+        "guide_fallback": sum(int(o.guide_fallback) for o in (outcomes or ())),
     }

@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 #: 四角标准戏的角色槽（剧本可只用其中几个，但 beats 引用的槽必须已声明）
 STANDARD_SLOTS: Tuple[str, ...] = ("asker", "advocate", "bystander", "skeptic")
 
+#: 向导是公开的 AI 身份，不是第五个标准槽。放进 ``STANDARD_SLOTS`` 会让旧剧本
+#: 体检去找这个槽；放进推销槽会让它跟种草角一起轮换。它由剧本显式声明，
+#: 并且必须钉在 ``companion.group_show.guide_account`` 上。
+GUIDE_SLOT = "guide"
+
 #: 产品系（与官网 brand 对齐：growth 获客系 / studio 内容陪伴系 / lingo 翻译系）
 VALID_SYSTEMS: Tuple[str, ...] = ("growth", "studio", "lingo")
 
@@ -58,6 +63,32 @@ DEFAULT_MUST_NOT: Tuple[str, ...] = (
     "不要提及或编造你和某个群成员的私聊经历",
     "不要长篇大论，像群友插话一两句为宜",
 )
+
+#: 向导可以说自己是 AI，也可以邀请对方私聊自己试**一项**功能。
+#: 链接、功能清单、让别的号代邀，仍然禁止。
+GUIDE_MUST_NOT: Tuple[str, ...] = (
+    "不要发链接，不要一次报出功能清单",
+    "一次只带一项功能去试，只邀请对方私聊你自己",
+    "不要让别的号代替你邀请对方",
+    "不要编造你和某个群成员已经私聊过",
+    "不要长篇大论，像群里插话几句为宜",
+)
+
+#: 有向导在场时，帮手在默认禁令上再加两条：不代邀、不对着群友种草。
+#: 没向导的旧剧本不带这两条，免得既有排练的指令被改写。
+HELPER_WITH_GUIDE_MUST_NOT: Tuple[str, ...] = DEFAULT_MUST_NOT + (
+    "不要邀请对方加你、私聊你或测试功能",
+    "你在和向导对聊，不要自己介绍产品，也不要和其他号互相种草",
+)
+
+
+def must_not_for_slot(slot: str, *, with_guide: bool = False) -> Tuple[str, ...]:
+    """这一拍该带哪组禁令。向导与帮手分开；没向导的戏仍是 :data:`DEFAULT_MUST_NOT`。"""
+    if str(slot or "").strip().lower() == GUIDE_SLOT:
+        return GUIDE_MUST_NOT
+    if with_guide:
+        return HELPER_WITH_GUIDE_MUST_NOT
+    return DEFAULT_MUST_NOT
 
 #: 软广强度上限（红区群由 runtime 另行锁死，这里只做 schema 边界）
 SOFT_AD_MAX = 10

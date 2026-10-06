@@ -279,7 +279,7 @@ async def test_format_rehearsal_is_readable():
 
 
 @pytest.mark.parametrize("pid", ["growth_matrixx", "lingo_lingox",
-                                 "studio_voicex"])
+                                 "studio_voicex", "guide_trial"])
 @pytest.mark.asyncio
 async def test_shipped_playbooks_actually_rehearse(pid):
     """每套出货模板都必须能被真正演完——这是「交付物可用」的端到端证明。"""

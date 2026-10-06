@@ -1100,3 +1100,38 @@ async def test_distinct_lines_pay_zero_retry_cost():
     assert res.sent == 4
     assert res.repetition_retries == 0 and res.skipped == 0
     assert len(sender.calls) == 4
+
+
+def _guide_playbook() -> Playbook:
+    roles = (Role("guide"), Role("asker"), Role("skeptic"))
+    beats = (
+        Beat("b1", "asker", _intent(1), soft=0),
+        Beat("b2", "guide", _intent(2), product="matrixx", soft=3),
+        Beat("b3", "skeptic", _intent(3), soft=0),
+    )
+    return Playbook(id="guide_trial", name="向导", system="growth",
+                    products=("matrixx",), soft_ad_level=3,
+                    roles=roles, beats=beats)
+
+
+def test_guide_playbook_refuses_live_without_a_fixed_account():
+    plan = plan_live(_guide_playbook(), _candidates(3), group_key="g1",
+                     confirm_live=True, app_config=ARMED,
+                     fingerprint_groups=_fps(3), require_outlet=False,
+                     hour=14)
+    assert plan.ok is False
+    assert plan.reason == "invalid"
+    assert any("guide_account" in w for w in plan.warnings)
+
+
+def test_guide_playbook_pins_the_configured_account():
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True},
+        "guide_account": "a2",
+    }}}
+    plan = plan_live(_guide_playbook(), _candidates(3), group_key="g1",
+                     confirm_live=True, app_config=cfg,
+                     fingerprint_groups=_fps(3), require_outlet=False,
+                     hour=14)
+    assert plan.ok is True, plan.warnings
+    assert plan.casting.by_slot("guide").account_id == "a2"

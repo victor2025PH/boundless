@@ -22,6 +22,7 @@ import itertools
 import pytest
 
 from src.companion.group_show.casting import (
+    BLOCKED_POOL,
     HEALTH_OK,
     MIN_HEALTHY_CAST,
     SLOT_PRIORITY,
@@ -30,6 +31,7 @@ from src.companion.group_show.casting import (
     slot_fill_order,
     validate_casting,
 )
+from src.companion.group_show.roles import is_selling_slot
 from src.companion.group_show.playbook import CastMember, Casting, Playbook, Role
 
 # 一张覆盖全部候选的指纹表：把「同组互斥」这一维钉成常量，让其余维度单独可观测。
@@ -683,3 +685,53 @@ def test_an_empty_prior_table_changes_nothing():
     assert ({m.slot: m.account_id for m in a.members}
             == {m.slot: m.account_id for m in b.members}
             == {m.slot: m.account_id for m in c.members})
+
+
+# ── 向导：钉死、不顶替、不进推销轮换 ────────────────────────────────────────
+
+
+def test_guide_fills_ahead_of_the_standard_four():
+    pb = _playbook(("bystander", "guide", "asker", "advocate"))
+    assert slot_fill_order(pb)[0] == "guide"
+
+
+def test_guide_account_is_pinned_across_seeds_and_is_not_a_selling_slot():
+    """换群也不换向导。向导不是托，不进推销槽轮换。"""
+    pb = _playbook(("guide", "asker", "bystander", "skeptic"), pid="guide_trial")
+    a = cast_roles(pb, _cands(6), guide_account="a3", seed="g1",
+                   fingerprint_groups=_FP_TABLE)
+    b = cast_roles(pb, _cands(6), guide_account="a3", seed="g2",
+                   fingerprint_groups=_FP_TABLE)
+    assert a.by_slot("guide").account_id == "a3"
+    assert b.by_slot("guide").account_id == "a3"
+    assert "advocate" not in a.filled_slots
+    assert is_selling_slot("guide") is False
+    assert _hard(validate_casting(a, pb, fingerprint_groups=_FP_TABLE)) == []
+
+
+def test_a_missing_guide_account_is_not_substituted():
+    """指定的向导不在号池里时，槽空着，不许换一个号用公开身份去邀请。"""
+    pb = _playbook(("guide", "asker"))
+    casting = cast_roles(pb, _cands(4), guide_account="not-in-pool")
+    assert casting.by_slot("guide") is None
+    assert casting.reason_for("guide") == BLOCKED_POOL
+    hard = _hard(_no_fp_noise(validate_casting(casting, pb)))
+    assert any("guide" in p for p in hard)
+
+
+def test_speaker_cap_does_not_drop_the_guide():
+    pb = _playbook(("bystander", "guide", "asker"))
+    casting = cast_roles(pb, _cands(4), guide_account="a2", max_speakers=1)
+    assert {m.slot for m in casting.members} == {"guide"}
+    assert casting.by_slot("guide").account_id == "a2"
+
+
+def test_pinned_guide_locks_its_fingerprint_group():
+    pb = _playbook(("guide", "asker"))
+    cands = [
+        _cand("a0", fingerprint_group="proxy:shared"),
+        _cand("a1", fingerprint_group="proxy:shared"),
+    ]
+    casting = cast_roles(pb, cands, guide_account="a0")
+    assert casting.by_slot("guide").account_id == "a0"
+    assert "asker" in casting.unfilled

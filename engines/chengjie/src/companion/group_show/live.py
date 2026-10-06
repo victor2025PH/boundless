@@ -59,6 +59,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from src.companion.group_show.casting import cast_roles, validate_casting
+from src.companion.group_show.funnel import (
+    configured_guide_account,
+    playbook_declares_guide,
+)
 from src.companion.group_show.director import GroupShowDirector
 from src.companion.group_show.ecp import project_history_for
 from src.companion.group_show.naturalness import line_similarity, naturalness_score
@@ -417,6 +421,17 @@ def plan_live(
     warnings: List[str] = list(validate_playbook(playbook))
     ck = dict(cast_kwargs or {})
     ck.setdefault("seed", str(group_key or ""))
+    ga = str(ck.get("guide_account") or "").strip() or configured_guide_account(
+        app_config)
+    if playbook_declares_guide(playbook) and not ga:
+        plan.reason = "invalid"
+        plan.warnings.extend(warnings)
+        plan.warnings.append(
+            "这本剧本有向导，真发必须配置 companion.group_show.guide_account"
+            "（固定那个公开 AI 号，不轮换，也不许用别的号顶上）")
+        return plan
+    if ga:
+        ck["guide_account"] = ga
     casting = cast_roles(playbook, candidates,
                          fingerprint_groups=fingerprint_groups,
                          persona_gender=persona_gender, **ck)

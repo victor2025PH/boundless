@@ -12,6 +12,8 @@
 - ``GET  /api/group-show/sessions``         —— 最近场次（``GroupShowStore.recent_sessions``）
 - ``GET  /api/group-show/outcomes``         —— 真发场次的效果读数（群内反响 + 私聊转化）
 - ``POST /api/group-show/live``             —— 真发预检 / 后台开演（双锁 + 同群互斥）
+- ``GET  /api/group-show/guide-account``    —— 已钉的向导号 + 注册表里可选的号
+- ``POST /api/group-show/guide-account``    —— 把向导号钉进 overlay（只能钉注册表里有的号）
 - ``GET  /group-show``                      —— 导播台页面（同源会话鉴权）
 
 本模块是 :mod:`src.companion.group_show` 的外壳：排练 / 排班 / 读数走 dry 路径
@@ -40,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -191,6 +194,50 @@ def _online_accounts(config_manager: Any,
     except Exception:  # noqa: BLE001 —— 注册表读不到不该让导播台白屏
         logger.debug("[group_show] 账号注册表不可用", exc_info=True)
         return []
+
+
+_GUIDE_ACCOUNT_ID = re.compile(r"[A-Za-z0-9_.:@+\-]{1,80}")
+
+
+def _registry_account_choices(config_manager: Any,
+                              platform: str = "telegram") -> List[Dict[str, str]]:
+    """注册表里这个平台还在的号。只回 id 和显示名，不回凭据。"""
+    try:
+        from src.integrations.account_registry import AccountRegistry
+        d = _config_dir(config_manager)
+        repo_default = (Path(__file__).resolve().parents[3]
+                        / "config" / "account_registry.db")
+        path = (d / "account_registry.db") if d is not None else repo_default
+        if not path.is_file():
+            path = repo_default
+        if not path.is_file():
+            return []
+        reg = AccountRegistry(path)
+        out: List[Dict[str, str]] = []
+        for row in (reg.list(str(platform or "telegram")) or []):
+            aid = str(row.get("account_id") or "").strip()
+            if not aid:
+                continue
+            label = str(row.get("label") or row.get("display_name") or "").strip()
+            out.append({"account_id": aid, "label": label})
+        return out
+    except Exception:  # noqa: BLE001
+        logger.debug("[group_show] 向导号名单不可用", exc_info=True)
+        return []
+
+
+def _accept_guide_account(raw: Any,
+                          choices: Sequence[Dict[str, str]]) -> Optional[str]:
+    """空串表示取消钉选。不在名单里、或带换行和路径符号，返回 None。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if not _GUIDE_ACCOUNT_ID.fullmatch(text):
+        return None
+    known = {str(item.get("account_id") or "").strip() for item in choices}
+    if text not in known:
+        return None
+    return text
 
 
 # ── 路径与落库 ──────────────────────────────────────────────────────────────
@@ -1113,9 +1160,31 @@ def register_group_show_routes(app, ctx) -> None:
         degraded: List[str] = []
         win = clamp_window_hours(window_hours or DEFAULT_WINDOW_HOURS)
         try:
+            from src.companion.group_members_store import get_group_members_store
+            from src.companion.group_show.funnel import (
+                configured_guide_account,
+                configured_guide_feature,
+                features_by_playbook,
+            )
+            app_cfg = getattr(config_manager, "config", None) or {}
+            guide_feature = configured_guide_feature(app_cfg)
+            feature_map = {}
+            if not guide_feature:
+                api = _load_playbook_api()
+                if api is not None:
+                    try:
+                        feature_map = features_by_playbook(
+                            api[0](playbook_dir(config_manager)))
+                    except Exception:  # noqa: BLE001 —— 剧本读不到就不定功能，不把整卡打挂
+                        logger.debug("[group_show] 剧本功能读取失败", exc_info=True)
+                        feature_map = {}
             items = read_show_outcomes(
                 _store(config_manager), _inbox_store(request),
-                window_hours=win, limit=int(limit or 10), degraded=degraded)
+                window_hours=win, limit=int(limit or 10), degraded=degraded,
+                members=get_group_members_store(),
+                guide_account=configured_guide_account(app_cfg),
+                guide_feature=guide_feature,
+                features=feature_map)
         except Exception:  # noqa: BLE001 —— 效果卡是旁路能力，挂了别拖垮整页
             logger.debug("[group_show] 效果读数不可用", exc_info=True)
             return {"ok": True, "available": False, "outcomes": []}
@@ -1213,15 +1282,22 @@ def register_group_show_routes(app, ctx) -> None:
 
         # 预检：合成武装只为把选角/指纹跑完；静默窗/其它 live.* 仍取真实配置，
         # 否则 overlay 里 quiet_hours:[0,0] 会被合成 dict 抹掉，深夜体检永远假红。
-        real_live = {}
+        gs_node: Dict[str, Any] = {}
         try:
-            real_live = dict(
-                (((app_cfg.get("companion") or {}).get("group_show") or {})
-                 .get("live") or {}))
+            gs_node = dict(
+                ((app_cfg.get("companion") or {}).get("group_show") or {}))
+        except Exception:  # noqa: BLE001
+            gs_node = {}
+        try:
+            real_live = dict(gs_node.get("live") or {})
         except Exception:  # noqa: BLE001
             real_live = {}
         diag_live = {**real_live, "enabled": True}
-        diag_cfg = {"companion": {"group_show": {"live": diag_live}}}
+        # 预检要用和真发同一份向导号，否则体检按「没配向导」拒演、真发却能开。
+        diag_cfg = {"companion": {"group_show": {
+            "live": diag_live,
+            "guide_account": str(gs_node.get("guide_account") or ""),
+        }}}
         plan = plan_live(
             pb, actors, group_key=group_key, platform=platform,
             confirm_live=True, app_config=diag_cfg, cast_kwargs=cast_kw,
@@ -1353,6 +1429,44 @@ def register_group_show_routes(app, ctx) -> None:
             "actors": len(actors), "casting": casting_view,
             "solo": bool(is_solo_playbook(pb)),
         }
+
+    @app.get("/api/group-show/guide-account")
+    async def api_group_show_guide_account(request: Request):
+        """已钉的向导号，以及注册表里可以钉的号。不返回凭据。"""
+        api_auth(request)
+        platform = str(request.query_params.get("platform") or "telegram").strip().lower() or "telegram"
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        cfg = getattr(cm, "config", None) or {}
+        from src.companion.group_show.funnel import configured_guide_account
+        return {
+            "ok": True,
+            "account_id": configured_guide_account(cfg),
+            "accounts": _registry_account_choices(cm, platform),
+        }
+
+    @app.post("/api/group-show/guide-account")
+    async def api_group_show_guide_account_save(
+            request: Request, _=Depends(api_write("manage_ops"))):
+        """把向导号写入 overlay。只能钉注册表里已有的号；空串取消。不发明账号。"""
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        platform = str(body.get("platform") or "telegram").strip().lower() or "telegram"
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        chosen = _accept_guide_account(
+            body.get("account_id"),
+            _registry_account_choices(cm, platform))
+        if chosen is None:
+            raise HTTPException(400, tr(request, "err.gs.guide_account"))
+        setter = getattr(cm, "set_overlay_flag", None)
+        if not callable(setter):
+            raise HTTPException(503, tr(request, "err.gs.unavailable"))
+        ok, msg = setter("companion.group_show.guide_account", chosen)
+        if not ok:
+            raise HTTPException(400, str(msg or tr(request, "err.gs.guide_account")))
+        return {"ok": True, "account_id": chosen}
 
     @app.get("/group-show", response_class=HTMLResponse)
     async def group_show_page(request: Request, _=Depends(page_auth)):

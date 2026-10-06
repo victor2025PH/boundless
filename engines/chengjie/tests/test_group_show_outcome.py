@@ -348,3 +348,314 @@ def test_read_show_outcomes_skips_dm_lookup_when_nobody_spoke():
                              now=s["ended_at"] + 30 * _HOUR, degraded=deg)
     assert got and got[0].verdict == VERDICT_COLD
     assert not deg, "没人开口时不该触发首次私聊查询"
+
+
+class _Members:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def list_members(self, group_id, limit=500):
+        return [r for r in self._rows if r.get("group_id") == group_id]
+
+
+class _GuideInbox(_Inbox):
+    def __init__(self, dms, replies=None, **kw):
+        super().__init__(**kw)
+        self._gdms = list(dms)
+        self._replies = list(replies or [])
+
+    def guide_private_messages(self, *, account_id, chat_keys, platform=""):
+        keys = {str(k) for k in chat_keys}
+        return [r for r in self._gdms
+                if r.get("user_id") in keys and r.get("account_id") == account_id]
+
+    def group_account_outbound_since(self, *, account_id, chat_key,
+                                     since_ts=0, until_ts=0, platform=""):
+        return [r for r in self._replies if r.get("account_id") == account_id]
+
+
+def test_guide_funnel_counts_a_lurker_without_changing_the_verdict():
+    """潜水成员来加向导要单列。旧的冷热判词仍只看「群里说过话再私聊」。"""
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    members = _Members([{"group_id": s["group_key"], "user_id": "lurker"}])
+    dms = [{"user_id": "lurker", "account_id": "guide",
+            "ts": s["started_at"] + 50, "direction": "in", "text": "在吗"}]
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox(dms), members=members, guide_account="guide",
+        window_hours=24.0, limit=5, now=s["ended_at"] + 30 * _HOUR, degraded=[])
+    assert got[0].guide_added == 1
+    assert got[0].guide_tested == 0
+    assert got[0].conversions == 0
+    assert got[0].verdict == VERDICT_COLD
+    assert got[0].to_dict()["guide_added"] == 1
+    assert rollup(got)["guide_added"] == 1
+    assert rollup(got)["response_rate"] == 0.0
+
+
+def test_followup_chat_and_the_wrong_feature_do_not_count_as_tested():
+    """多说一句不算。这场钉了 matrixx 时，做了别的功能也不算。"""
+    from src.companion.group_show.funnel import trial_marker
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    members = _Members([{"group_id": s["group_key"], "user_id": "u1"}])
+    chat = [
+        {"user_id": "u1", "account_id": "guide", "ts": s["started_at"] + 10,
+         "direction": "in", "text": "在吗"},
+        {"user_id": "u1", "account_id": "guide", "ts": s["started_at"] + 20,
+         "direction": "out", "text": "先看这一项"},
+        {"user_id": "u1", "account_id": "guide", "ts": s["started_at"] + 30,
+         "direction": "in", "text": "我按这个走了"},
+    ]
+    kwargs = dict(
+        members=members, guide_account="guide",
+        features={s["playbook_id"]: "matrixx"},
+        window_hours=24.0, limit=5, now=s["ended_at"] + 30 * _HOUR, degraded=[])
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox(chat), **kwargs)
+    assert got[0].guide_added == 1 and got[0].guide_tested == 0
+    chat.append({"user_id": "u1", "account_id": "guide",
+                 "ts": s["started_at"] + 40, "direction": "in",
+                 "text": trial_marker("lingox")})
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox(chat), **kwargs)
+    assert got[0].guide_tested == 0
+    chat[-1]["text"] = trial_marker("matrixx")
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox(chat), **kwargs)
+    assert got[0].guide_tested == 1
+
+
+def test_guide_fallback_lists_speakers_who_never_added_after_the_window():
+    from src.companion.group_show.funnel import trial_marker
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    members = _Members([
+        {"group_id": s["group_key"], "user_id": "u1"},
+        {"group_id": s["group_key"], "user_id": "u2"},
+    ])
+    inbound = [_msg(s["ended_at"] + 100, "u1"), _msg(s["ended_at"] + 120, "u2")]
+    dms = [{"user_id": "u1", "account_id": "guide",
+            "ts": s["started_at"] + 10, "direction": "in",
+            "text": trial_marker("matrixx")}]
+    replies = [{"account_id": "guide", "ts": s["ended_at"] + 150, "text": "接一下"}]
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox(dms, replies=replies, inbound=inbound),
+        members=members, guide_account="guide", window_hours=24.0, limit=5,
+        now=s["ended_at"] + 30 * _HOUR, degraded=[])
+    assert got[0].guide_added == 1 and got[0].guide_tested == 1
+    assert got[0].guide_fallback == 1
+    assert got[0].verdict == VERDICT_WARM
+
+
+def test_fallback_ignores_people_the_guide_never_answered():
+    """向导只接了先开口的人。后开口、向导没再回的，不进兜底。"""
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    members = _Members([
+        {"group_id": s["group_key"], "user_id": "u1"},
+        {"group_id": s["group_key"], "user_id": "u2"},
+    ])
+    inbound = [_msg(s["ended_at"] + 100, "u1"), _msg(s["ended_at"] + 140, "u2")]
+    replies = [{"account_id": "guide", "ts": s["ended_at"] + 120, "text": "接 u1"}]
+    got = read_show_outcomes(
+        _Shows([s]), _GuideInbox([], replies=replies, inbound=inbound),
+        members=members, guide_account="guide", window_hours=24.0, limit=5,
+        now=s["ended_at"] + 30 * _HOUR, degraded=[])
+    assert got[0].guide_fallback == 1
+    assert got[0].guide_added == 0
+
+
+def test_fallback_stays_empty_while_the_window_is_still_open():
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    members = _Members([{"group_id": s["group_key"], "user_id": "u2"}])
+    got = read_show_outcomes(
+        _Shows([s]),
+        _GuideInbox([], inbound=[_msg(s["ended_at"] + 30, "u2")]),
+        members=members, guide_account="guide", window_hours=24.0, limit=5,
+        now=s["ended_at"] + _HOUR, degraded=[])
+    assert got[0].verdict == VERDICT_PENDING
+    assert got[0].guide_fallback == 0
+
+
+def test_missing_guide_dm_reader_is_degraded_instead_of_a_silent_zero():
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    s = _session()
+    deg = []
+    got = read_show_outcomes(
+        _Shows([s]), _Inbox(),
+        members=_Members([{"group_id": s["group_key"], "user_id": "u1"}]),
+        guide_account="guide", window_hours=24.0, limit=5,
+        now=s["ended_at"] + 30 * _HOUR, degraded=deg)
+    assert got[0].guide_added == 0
+    assert "guide_dm" in deg
+
+
+def test_outcomes_without_a_guide_account_do_not_read_members():
+    from src.companion.group_show.ledgers import read_show_outcomes
+
+    class _Boom:
+        def list_members(self, *_a, **_k):
+            raise AssertionError("没配向导号不该去读成员库")
+
+    s = _session()
+    deg = []
+    got = read_show_outcomes(
+        _Shows([s]), _Inbox(), members=_Boom(), guide_account="",
+        window_hours=24.0, limit=5, now=s["ended_at"] + 30 * _HOUR, degraded=deg)
+    assert got[0].guide_added == 0
+    assert not deg
+
+
+def test_guide_private_messages_keeps_the_first_line_and_the_trial_event(tmp_path):
+    from src.inbox.store import InboxStore
+
+    st = InboxStore(str(tmp_path / "inbox.db"))
+    conn = st._conn
+
+    def cols(t):
+        return [r[1] for r in conn.execute(f"PRAGMA table_info({t})").fetchall()]
+
+    def ins(t, **kw):
+        ks = [k for k in kw if k in cols(t)]
+        conn.execute(
+            f"INSERT INTO {t} ({','.join(ks)}) VALUES ({','.join('?' * len(ks))})",
+            [kw[k] for k in ks])
+
+    cv = dict(platform="telegram", account_id="guide", created_at=1, updated_at=1)
+    ins("conversations", conversation_id="c1", chat_key="u1",
+        chat_type="private", last_ts=30, **cv)
+    ins("conversations", conversation_id="c_helper", chat_key="u1",
+        chat_type="private", last_ts=30,
+        platform="telegram", account_id="helper", created_at=1, updated_at=1)
+    ins("messages", conversation_id="c1", ts=10, direction="in",
+        text="在吗", sender_id="u1", ingested_at=1)
+    ins("messages", conversation_id="c1", ts=20, direction="out",
+        text="先看这一项", sender_id="guide", ingested_at=1)
+    ins("messages", conversation_id="c1", ts=30, direction="in",
+        text="guide_trial:matrixx", sender_id="u1", ingested_at=1)
+    ins("messages", conversation_id="c_helper", ts=15, direction="in",
+        text="加我", sender_id="u1", ingested_at=1)
+    conn.commit()
+
+    rows = st.guide_private_messages(account_id="guide", chat_keys=["u1"],
+                                     platform="telegram")
+    texts = [r["text"] for r in rows]
+    assert texts == ["在吗", "guide_trial:matrixx"]
+    assert all(r["account_id"] == "guide" for r in rows)
+
+
+def test_feature_use_is_recorded_off_the_chat_transcript(tmp_path):
+    """做了点名的功能只进事件账。聊天正文、会话预览里都没有 guide_trial。"""
+    from src.companion.group_show.funnel import attribute_inbound
+    from src.inbox.store import InboxStore
+    from src.integrations.protocol_bridge import ingest_incoming
+
+    st = InboxStore(tmp_path / "inbox.db")
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u1",
+        text="在吗", ts=100, msg_id="m1", direction="in")
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u1",
+        text="我按这个走了", ts=200, msg_id="m2", direction="in",
+        feature_used="matrixx")
+    cid = "telegram:guide:u1"
+    visible = [m["text"] for m in st.list_messages(cid, limit=20)]
+    assert visible == ["在吗", "我按这个走了"]
+    last = st._conn.execute(
+        "SELECT last_text FROM conversations WHERE conversation_id=?",
+        (cid,),
+    ).fetchone()
+    assert "guide_trial" not in str(last["last_text"])
+    assert "我按这个走了" in str(last["last_text"])
+    rows = st.guide_private_messages(
+        account_id="guide", chat_keys=["u1"], platform="telegram")
+    assert [r["text"] for r in rows] == ["在吗", "guide_trial:matrixx"]
+    attr = attribute_inbound(
+        [{"user_id": "u1", "group_id": "g1"}], rows,
+        guide_account_id="guide", after=50, group_key="g1", feature="matrixx")
+    assert attr["added"] == ("u1",) and attr["tested"] == ("u1",)
+
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u1",
+        text="又说一句", ts=300, msg_id="m3", direction="in",
+        feature_used="matrixx")
+    rows = st.guide_private_messages(
+        account_id="guide", chat_keys=["u1"], platform="telegram")
+    assert [r["text"] for r in rows].count("guide_trial:matrixx") == 1
+    visible = [m["text"] for m in st.list_messages(cid, limit=20)]
+    assert visible == ["在吗", "我按这个走了", "又说一句"]
+
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u_cold",
+        text="先跟你说", ts=100, msg_id="o1", direction="out")
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u_cold",
+        text="在", ts=200, msg_id="c2", direction="in", feature_used="matrixx")
+    cold = st.guide_private_messages(
+        account_id="guide", chat_keys=["u_cold"], platform="telegram")
+    assert all("guide_trial" not in r["text"] for r in cold)
+
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u_old",
+        text="早", ts=100, msg_id="b1", direction="in",
+        feature_used="matrixx", backfill=True)
+    old = st.guide_private_messages(
+        account_id="guide", chat_keys=["u_old"], platform="telegram")
+    assert all("guide_trial" not in r["text"] for r in old)
+
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u_bad",
+        text="在吗", ts=100, msg_id="d1", direction="in")
+    ingest_incoming(
+        st, platform="telegram", account_id="guide", chat_key="u_bad",
+        text="嗯", ts=200, msg_id="d2", direction="in", feature_used="嗯")
+    bad = st.guide_private_messages(
+        account_id="guide", chat_keys=["u_bad"], platform="telegram")
+    assert [r["text"] for r in bad] == ["在吗"]
+
+
+def test_product_callback_notes_only_the_guide_and_the_pinned_feature(tmp_path):
+    """落地页回传 feature 才记。别的号、别的功能、没先私聊，都不记，正文也不变。"""
+    from src.companion.group_show.guide_trial import note_feature_for_conversation
+    from src.inbox.store import InboxStore
+
+    st = InboxStore(tmp_path / "inbox.db")
+    cfg = {"companion": {"group_show": {
+        "guide_account": "guide", "guide_feature": "matrixx"}}}
+    conn = st._conn
+    conn.execute(
+        """INSERT INTO conversations
+           (conversation_id, platform, account_id, chat_key, chat_type,
+            last_text, last_ts, created_at, updated_at)
+           VALUES ('telegram:guide:u1','telegram','guide','u1','private',
+                   '在吗', 100, 1, 1)""")
+    conn.execute(
+        """INSERT INTO messages
+           (message_id, conversation_id, direction, text, ts, ingested_at)
+           VALUES ('m1','telegram:guide:u1','in','在吗', 100, 100)""")
+    conn.commit()
+    assert note_feature_for_conversation(
+        st, cfg, conversation_id="telegram:guide:u1", feature="matrixx",
+        ts=200) is True
+    assert note_feature_for_conversation(
+        st, cfg, conversation_id="telegram:guide:u1", feature="lingox",
+        ts=300) is False
+    assert note_feature_for_conversation(
+        st, {}, conversation_id="telegram:guide:u1", feature="matrixx") is False
+    rows = st.guide_private_messages(
+        account_id="guide", chat_keys=["u1"], platform="telegram")
+    assert [r["text"] for r in rows] == ["在吗", "guide_trial:matrixx"]
+    assert [m["text"] for m in st.list_messages("telegram:guide:u1")] == ["在吗"]
+    last = conn.execute(
+        "SELECT last_text FROM conversations WHERE conversation_id=?",
+        ("telegram:guide:u1",),
+    ).fetchone()
+    assert last["last_text"] == "在吗"

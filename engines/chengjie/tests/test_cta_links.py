@@ -493,3 +493,71 @@ def test_convert_webhook_light_and_zero_amount_ref(tmp_path):
     # 未知 token / 无会话线索
     r4 = c.post("/api/cta/convert", headers=h, json={"token": "nope"})
     assert r4.json() == {"ok": False, "reason": "unknown_token"}
+
+
+def test_convert_feature_notes_the_guide_trial_off_the_transcript(tmp_path):
+    """回传带 feature 才记向导事件。不带 feature 的安装回传不记，正文也不出现标记。"""
+    cfg = json.loads(json.dumps(_SECRET_CFG))
+    cfg["companion"] = {"group_show": {
+        "guide_account": "a1", "guide_feature": "matrixx"}}
+    c = _client(tmp_path, cfg=cfg)
+    store = c.app.state.inbox_store
+    _seed_conv(store, "tg:a1:w1")
+    with store._lock:
+        store._conn.execute(
+            """INSERT INTO messages
+               (message_id, conversation_id, direction, text, ts, ingested_at)
+               VALUES ('m1','tg:a1:w1','in','在吗', 100, 100)""")
+        store._conn.commit()
+    h = {"X-CTA-Secret": "s3cr3t"}
+    r = c.post("/api/cta/convert", headers=h, json={
+        "conversation_id": "tg:a1:w1", "kind": "install", "feature": "matrixx"})
+    assert r.json()["ok"] is True
+    rows = store.guide_private_messages(
+        account_id="a1", chat_keys=["w1"], platform="telegram")
+    assert [row["text"] for row in rows] == ["在吗", "guide_trial:matrixx"]
+    assert [m["text"] for m in store.list_messages("tg:a1:w1")] == ["在吗"]
+    _seed_conv(store, "tg:a1:w2")
+    with store._lock:
+        store._conn.execute(
+            """INSERT INTO messages
+               (message_id, conversation_id, direction, text, ts, ingested_at)
+               VALUES ('m2','tg:a1:w2','in','在吗', 100, 100)""")
+        store._conn.commit()
+    r2 = c.post("/api/cta/convert", headers=h, json={
+        "conversation_id": "tg:a1:w2", "kind": "install"})
+    assert r2.json()["ok"] is True
+    quiet = store.guide_private_messages(
+        account_id="a1", chat_keys=["w2"], platform="telegram")
+    assert [row["text"] for row in quiet] == ["在吗"]
+
+
+def test_convert_telegram_handle_notes_the_guide_without_a_link(tmp_path):
+    """试用回传只带 Telegram 用户名和功能 id。对得上向导私聊才记，不写正文，不成交。"""
+    cfg = json.loads(json.dumps(_SECRET_CFG))
+    cfg["companion"] = {"group_show": {
+        "guide_account": "a1", "guide_feature": "matrixx"}}
+    c = _client(tmp_path, cfg=cfg)
+    store = c.app.state.inbox_store
+    _seed_conv(store, "tg:a1:w1")
+    with store._lock:
+        store._conn.execute(
+            "UPDATE conversations SET username=? WHERE conversation_id=?",
+            ("bob", "tg:a1:w1"))
+        store._conn.execute(
+            """INSERT INTO messages
+               (message_id, conversation_id, direction, text, ts, ingested_at)
+               VALUES ('m1','tg:a1:w1','in','在吗', 100, 100)""")
+        store._conn.commit()
+    h = {"X-CTA-Secret": "s3cr3t"}
+    r = c.post("/api/cta/convert", headers=h, json={
+        "telegram": "@Bob", "feature": "matrixx"})
+    assert r.json() == {"ok": True, "guide_trial": True}
+    rows = store.guide_private_messages(
+        account_id="a1", chat_keys=["w1"], platform="telegram")
+    assert [row["text"] for row in rows] == ["在吗", "guide_trial:matrixx"]
+    assert [m["text"] for m in store.list_messages("tg:a1:w1")] == ["在吗"]
+    assert store.list_deal_events("tg:a1:w1") == []
+    r2 = c.post("/api/cta/convert", headers=h, json={
+        "telegram": "@other", "feature": "matrixx"})
+    assert r2.json()["guide_trial"] is False

@@ -839,7 +839,9 @@ def register_workflow_routes(app, *, api_auth) -> None:
     async def public_cta_convert(request: Request):
         """实施93b 深转化回传（落地页/网站/服务商服务端调用，无会话鉴权）。
 
-        body: ``{token 或 conversation_id, kind?, amount?, currency?, ref?, note?}``
+        body: ``{token 或 conversation_id, kind?, amount?, currency?, ref?, note?, feature?}``
+        ``feature`` 是向导漏斗的功能 id（如 matrixx）。有它才记「做了这一项」，
+        且只记配置中的向导号；不进聊天正文。没有这个字段时，回传行为与以前相同。
         安全对齐 monetize webhook（S6）：必须配置 ``inbox.cta.webhook_secret``
         并校验 ``X-CTA-Secret`` 头（恒定时间比较）；未配置直接拒绝。
         幂等：``ref`` 已记账（含已撤销）→ 跳过。amount>0 走 record_deal
@@ -862,6 +864,23 @@ def register_workflow_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "reason": "inbox_not_ready"}
+        # 只有用户名、没有短链：试用领取对得上向导私聊时只记功能事件。
+        # 不推进成交阶段，也不写进聊天。
+        _handle = str(body.get("telegram") or "").strip()
+        _feat_only = str(body.get("feature") or "").strip()
+        if (_handle and _feat_only
+                and not str(body.get("token") or "").strip()
+                and not str(body.get("conversation_id") or "").strip()):
+            try:
+                from src.companion.group_show.guide_trial import (
+                    note_feature_for_handle,
+                )
+                noted = note_feature_for_handle(
+                    store, cfg, username=_handle, feature=_feat_only)
+            except Exception:
+                logger.debug("[cta] 按用户名记向导试用失败", exc_info=True)
+                noted = False
+            return {"ok": bool(noted), "guide_trial": bool(noted)}
         # 会话解析：token（短链跳转时带给落地页）优先，其次直给 conversation_id
         cid = ""
         token = str(body.get("token") or "").strip()
@@ -873,6 +892,18 @@ def register_workflow_routes(app, *, api_auth) -> None:
             cid = str(body.get("conversation_id") or "").strip()
         if not cid:
             return {"ok": False, "reason": "unknown_token"}
+        # 点名了功能才记向导漏斗。点击、付款、kind 都不算做了那一项。
+        # 记不上也不影响这次回传本身。
+        _feat = str(body.get("feature") or "").strip()
+        if _feat:
+            try:
+                from src.companion.group_show.guide_trial import (
+                    note_feature_for_conversation,
+                )
+                note_feature_for_conversation(
+                    store, cfg, conversation_id=cid, feature=_feat)
+            except Exception:
+                logger.debug("[cta] 向导试用事件写入失败", exc_info=True)
         ref = str(body.get("ref") or "").strip()
         if ref:
             dup = store.find_deal_event_by_ref(ref)

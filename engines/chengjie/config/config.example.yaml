@@ -2040,6 +2040,10 @@ companion:
   # ``python -m scripts.group_show_live --check`` 跑预检，再用导播台/API 真发。
   # 单号场景请用 ``config/playbooks/solo_*.yaml``（四角剧本 + 一个号会被拒演，防自问自答）。
   group_show:
+    # guide_account: ""      # 固定向导号的 account_id。剧本含 guide 槽时真发必填；不轮换、不许别的号顶替。
+    # guide_feature: ""      # 这一场只带的那一项功能 id（如 matrixx）。不配则用剧本里唯一的产品。
+    # 第一次真正用出结果时回传 feature（领取本身不算）。Telegram 用户名走 telegram 字段，
+    # 对得上向导号私聊里的 username 才记。不要写进聊天正文，也不要为此发链接。
     live:
       enabled: false         # 配置侧那把锁（缺省关；出事时改这里即可全局急停）
       # quiet_hours: [23, 8] # 禁演时段（本地钟点，半开半闭）；配 [0, 0] ＝ 不禁
@@ -2611,8 +2615,9 @@ companion:
     daily_cap_per_account: 200   # 每号每天最多新入库多少人（入库配额，不是开口配额）
     outreach_daily_cap: 8        # 同群开口：每号每天新人，代码夹在 5..10（写 200 也会变成 10）
     outreach_min_gap_sec: 1500   # 同一号两条开口的最小间隔（秒）
-    outreach_warmup_start_cap: 3 # 新号第 0 天每天开口数，按注册表天龄线性爬到 outreach_daily_cap
-    outreach_warmup_ramp_days: 14
+    # 号龄不爬坡。下面两键只留着兼容旧配置，每天条数直接用 outreach_daily_cap。
+    outreach_warmup_start_cap: 3
+    outreach_warmup_ramp_days: 0
     outreach_hours: [10, 21]     # 本地时间只在这个区间放行发送；排队不限时段（管理台第④步可在线改，写 overlay）
     # 每条开口还计入 companion_send_gate 的总发送量；红灯 / 总额度满 / 急停时发不出
     # 开口文案由 AI 按「这个号的人设 + 默认工作目标 + 对方在群里说的话」生成，LLM 不在时回落模板；
@@ -2621,8 +2626,9 @@ companion:
     outreach_runner_interval_sec: 150    # 调度器唤醒间隔（秒）；每次每号最多发 1 条
     outreach_auto_gap_min_sec: 1500      # 调度器两条自动开口之间的随机抖动下限（25 分钟），叠在 outreach_min_gap_sec 之上
     outreach_auto_gap_max_sec: 5400      # 抖动上限（90 分钟）
-    # 全自动（auto）门槛：三条硬线，页面上关不掉；调度器每轮复核，不达标自动退回 approve
-    outreach_auto_min_age_days: 14       # 号的注册天龄不满 → 不许全自动（天龄不明也算不满）
+    # 全自动（auto）门槛：风控 / 回复率，页面上关不掉；调度器每轮复核，不达标自动退回 approve。
+    # 号龄不拦全自动。outreach_auto_min_age_days 只留着兼容旧配置，判定不再读它。
+    outreach_auto_min_age_days: 0
     outreach_auto_flood_lookback_days: 7 # 近 N 天撞过 Telegram 风控 → 不许
     outreach_auto_min_reply_rate: 0.05   # 近 7 天开口回复率低于此 → 不许（样本 ≥ outreach_auto_min_sample 才看）
     outreach_auto_min_sample: 10
@@ -3438,6 +3444,14 @@ inbox:
     #   body {token 或 conversation_id, kind: signup|order|…, amount?, currency?, ref}
     # amount>0 记营收台账并推进成交阶段；ref 幂等防服务商重推重复记账。
     # 留空＝回传端点整体拒绝（不配即不暴露）。
+    # 官网第一次用量上报会打到这里。密钥必须与下面的 webhook_secret 相同，
+    # 不要另做一把，也不要写进仓库。官网进程在 VPS 上，经已有反向隧道访问本引擎。
+    # GUIDE_TRIAL_URL 不填时，官网默认打 http://127.0.0.1:18799/api/cta/convert
+    # （只在该隧道开着时通）。官网 .env.local 只加这一行即可：
+    #   GUIDE_TRIAL_SECRET=<与下面的 webhook_secret 相同>
+    # 本密钥留空＝官网不回传，本端点也整体拒绝。
+    # MatrixX 第一次确认送出消息后，向官网 POST /api/guide-trial
+    # （只带 telegram 用户名和 feature=matrixx，不带本密钥）。官网再用上面的密钥转发。
     webhook_secret: ""
 
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
@@ -4833,6 +4847,8 @@ licensing:
     # 厂商机（私钥离线，scripts/fulfill_trial.py）签发 → 客户端轮询取回并自动
     # 落盘激活。改这里只在自建/私有化部署时需要，公版走默认官网。
     # site_url: https://bd2026.cc
+    # product: chatx                  # 智聊桌面领取单上的产品 id，缺省 chatx。
+    #                                 # MatrixX 客户端不走这条领取，不要在这里写成 matrixx。
     #
     # ── 邀请裂变聚合读数（**只在厂商 ops 实例开**）────────────────
     # ops-overview「🎁 邀请裂变」卡的数据开关：代理官网 /api/trial/referral-stats

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifyGuideTrial } from "@/lib/guide-trial-notify";
 import { getClaim, normalizeFingerprint, recordUsage } from "@/lib/trial-claim-store";
 import { noteInviteeUsage } from "@/lib/referral-store";
 
@@ -52,7 +53,10 @@ export async function POST(req: NextRequest) {
     if (!fp || fp !== claim.fingerprint) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
-    await recordUsage(id, used);
+    const beforeUsed = claim.usedChars || 0;
+    const updated = await recordUsage(id, used);
+    // 第一次用量才回传向导场。之后的水位只服务邀请达标，不重复记「开始测试」。
+    if (updated) await notifyGuideTrial(updated, beforeUsed);
     // 达标推进（该机器是某条邀请的被邀请人时才有效果；其余零副作用）
     await noteInviteeUsage(id, used);
     return NextResponse.json({ ok: true });

@@ -299,6 +299,18 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(conversation_id, ts DESC);
 
+-- 向导漏斗「开始测试」事件。不进 messages：坐席线程、自动回复、会话预览都读不到。
+CREATE TABLE IF NOT EXISTS guide_trial_events (
+    platform    TEXT NOT NULL DEFAULT '',
+    account_id  TEXT NOT NULL,
+    chat_key    TEXT NOT NULL,
+    feature     TEXT NOT NULL,
+    ts          REAL NOT NULL,
+    PRIMARY KEY (platform, account_id, chat_key, feature)
+);
+CREATE INDEX IF NOT EXISTS idx_guide_trial_acct
+    ON guide_trial_events(account_id, chat_key);
+
 -- P1：出向译文旁路表。坐席「一击直发」让后端把中文原文译成客户语言后投递，
 -- 但出向消息回到 messages 的路径异构（web record_message / protocol worker push /
 -- 多数 RPA 根本不回读），无法在 messages 里稳定保存「中文原文 ↔ 实发译文」配对。
@@ -1148,6 +1160,17 @@ _MIGRATIONS = [
     # 即冻结（守卫不弱化），人工解冻（unfreeze_conversation）才清零。写口只有
     # stop_contact.confirm_stop_contact / unfreeze_conversation 两处。
     "ALTER TABLE conversation_meta ADD COLUMN stop_contact_at REAL NOT NULL DEFAULT 0",
+    # 向导漏斗：客户做了点名的那一项功能。独立成表，避免写进对方看得见的聊天正文。
+    # CREATE TABLE / INDEX 都带 IF NOT EXISTS，可安全重跑。
+    """CREATE TABLE IF NOT EXISTS guide_trial_events (
+        platform    TEXT NOT NULL DEFAULT '',
+        account_id  TEXT NOT NULL,
+        chat_key    TEXT NOT NULL,
+        feature     TEXT NOT NULL,
+        ts          REAL NOT NULL,
+        PRIMARY KEY (platform, account_id, chat_key, feature)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_guide_trial_acct ON guide_trial_events(account_id, chat_key)",
 ]
 
 
@@ -2728,6 +2751,26 @@ class InboxStore:
                 (conversation_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def find_private_conversation_id(self, *, account_id: str, username: str) -> str:
+        """这个号的私聊里，username 对得上的那条会话。没有就是空串。"""
+        acct = str(account_id or "").strip()
+        handle = str(username or "").strip().lstrip("@").lower()
+        if not acct or not handle:
+            return ""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT conversation_id FROM conversations "
+                    "WHERE account_id=? AND chat_type IN ('private', '') "
+                    "AND lower(replace(username, '@', ''))=? "
+                    "ORDER BY last_ts DESC LIMIT 1",
+                    (acct, handle),
+                ).fetchone()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 按 username 找私聊失败", exc_info=True)
+            return ""
+        return str(row["conversation_id"] or "") if row else ""
 
     def list_group_speakers(
         self, conversation_id: str, *, limit: int = 80,
@@ -6083,6 +6126,70 @@ class InboxStore:
             })
         return out
 
+    def group_account_outbound_since(
+        self,
+        *,
+        account_id: str = "",
+        chat_key: str = "",
+        since_ts: float = 0.0,
+        until_ts: float = 0.0,
+        platform: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """这个号在该群里发出去的话，``[{ts, account_id, text}, ...]`` 按时间升序。
+
+        用来判断向导有没有接过某句群消息。读挂 → 空列表。
+        """
+        acct = str(account_id or "").strip()
+        key = str(chat_key or "").strip()
+        if not acct or not key:
+            return []
+        clauses = [
+            "c.chat_key=?",
+            "c.account_id=?",
+            "c.chat_type NOT IN ('private', '')",
+            "m.direction='out'",
+            "m.text != ''",
+        ]
+        params: List[Any] = [key, acct]
+        if since_ts and since_ts > 0:
+            clauses.append("m.ts>?")
+            params.append(float(since_ts))
+        if until_ts and until_ts > 0:
+            clauses.append("m.ts<=?")
+            params.append(float(until_ts))
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT m.ts AS ts, m.text AS text, c.account_id AS account_id "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY m.ts ASC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit or 200), 500)))
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 群出向消息查询失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            try:
+                ts = float(r["ts"] or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "ts": ts,
+                "account_id": str(r["account_id"] or acct),
+                "text": str(r["text"] or ""),
+            })
+        return out
+
     def first_private_inbound_ts(
         self,
         chat_keys: Sequence[str],
@@ -6135,6 +6242,195 @@ class InboxStore:
                 continue
             if k and t > 0:
                 out[k] = t
+        return out
+
+    def record_guide_trial(
+        self,
+        *,
+        account_id: str,
+        user_id: str,
+        feature: str,
+        ts: Optional[float] = None,
+        platform: str = "",
+    ) -> bool:
+        """记下「这个人做了这一项功能」。
+
+        只写 ``guide_trial_events``。不插消息、不改会话预览、不发私聊。
+        对方还没先私聊这个号（线程不存在，或第一句是我们发出去的）→ 不记。
+        同一人同一项只留一行。
+        """
+        from src.companion.group_show.funnel import trial_marker
+
+        marker = trial_marker(feature)
+        acct = str(account_id or "").strip()
+        uid = str(user_id or "").strip()
+        plat = str(platform or "").strip()
+        if not marker or not acct or not uid:
+            return False
+        feat = marker.split(":", 1)[1]
+        clauses = [
+            "account_id=?",
+            "chat_key=?",
+            "chat_type IN ('private', '')",
+        ]
+        params: List[Any] = [acct, uid]
+        if plat:
+            clauses.append("platform=?")
+            params.append(plat)
+        sql = (
+            "SELECT conversation_id, platform FROM conversations WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY created_at ASC"
+        )
+        try:
+            with self._lock:
+                convs = self._conn.execute(sql, params).fetchall()
+                picked = None
+                first_ts = 0.0
+                for conv in convs:
+                    cid = str(conv["conversation_id"] or "")
+                    if not cid:
+                        continue
+                    first = self._conn.execute(
+                        "SELECT direction, ts FROM messages "
+                        "WHERE conversation_id=? ORDER BY ts ASC, rowid ASC LIMIT 1",
+                        (cid,),
+                    ).fetchone()
+                    if first is None:
+                        continue
+                    if str(first["direction"] or "") not in ("in", "inbound"):
+                        continue
+                    try:
+                        first_ts = float(first["ts"] or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    if first_ts <= 0:
+                        continue
+                    picked = conv
+                    break
+                if picked is None:
+                    return False
+                event_plat = plat or str(picked["platform"] or "")
+                try:
+                    event_ts = float(ts) if ts is not None else self._now()
+                except (TypeError, ValueError):
+                    event_ts = self._now()
+                if event_ts <= first_ts:
+                    event_ts = first_ts + 0.001
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO guide_trial_events"
+                    "(platform, account_id, chat_key, feature, ts) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (event_plat, acct, uid, feat, event_ts),
+                )
+                self._conn.commit()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 向导试用事件写入失败", exc_info=True)
+            return False
+        return True
+
+    def guide_private_messages(
+        self,
+        *,
+        account_id: str = "",
+        chat_keys: Optional[Sequence[str]] = None,
+        platform: str = "",
+        limit: int = 800,
+    ) -> List[Dict[str, Any]]:
+        """向导号与这些 peer 的私聊：每条线程的第一句，外加 ``guide_trial:`` 事件行。
+
+        给向导漏斗用。第一句用来判断是不是对方先开口；事件行用来判断做了哪一项功能。
+        不在这里做归因——口径在 :mod:`src.companion.group_show.funnel`。
+        读挂 → 空列表（调用方标 degraded，别把查不到写成零添加）。
+        """
+        acct = str(account_id or "").strip()
+        keys = [str(k).strip() for k in (chat_keys or ()) if str(k or "").strip()]
+        keys = list(dict.fromkeys(keys))[:500]
+        if not acct or not keys:
+            return []
+        clauses = [
+            "c.account_id=?",
+            "c.chat_type IN ('private', '')",
+            "c.chat_key IN (" + ",".join("?" for _ in keys) + ")",
+            "(m.ts = (SELECT MIN(m2.ts) FROM messages m2 "
+            "WHERE m2.conversation_id = m.conversation_id) "
+            "OR m.text LIKE ? OR m.text LIKE ?)",
+        ]
+        params: List[Any] = [acct, *keys, "guide_trial:%", "%\nguide_trial:%"]
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT c.chat_key AS user_id, c.account_id AS account_id, "
+            "m.ts AS ts, m.direction AS direction, m.text AS text "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY m.ts ASC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit or 800), 2000)))
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 向导私聊查询失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            uid = str(r["user_id"] or "").strip()
+            if not uid:
+                continue
+            try:
+                ts = float(r["ts"] or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "user_id": uid,
+                "account_id": str(r["account_id"] or acct),
+                "ts": ts,
+                "direction": str(r["direction"] or ""),
+                "text": str(r["text"] or ""),
+            })
+        seen = {r["user_id"] for r in out}
+        ev_keys = [k for k in keys if k in seen]
+        if ev_keys:
+            from src.companion.group_show.funnel import trial_marker
+            ev_sql = (
+                "SELECT chat_key AS user_id, account_id, ts, feature "
+                "FROM guide_trial_events WHERE account_id=? AND chat_key IN ("
+                + ",".join("?" for _ in ev_keys) + ")"
+            )
+            ev_params: List[Any] = [acct, *ev_keys]
+            if platform:
+                ev_sql += " AND platform=?"
+                ev_params.append(str(platform))
+            try:
+                with self._lock:
+                    ev_rows = self._conn.execute(ev_sql, ev_params).fetchall()
+            except Exception:  # noqa: BLE001
+                logger.debug("[inbox] 向导试用事件查询失败", exc_info=True)
+                ev_rows = []
+            for r in ev_rows:
+                uid = str(r["user_id"] or "").strip()
+                marker = trial_marker(r["feature"])
+                if not uid or not marker:
+                    continue
+                try:
+                    ts = float(r["ts"] or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if ts <= 0:
+                    continue
+                out.append({
+                    "user_id": uid,
+                    "account_id": str(r["account_id"] or acct),
+                    "ts": ts,
+                    "direction": "in",
+                    "text": marker,
+                })
+            out.sort(key=lambda row: row["ts"])
         return out
 
     # ── Phase A / C1：坐席绩效聚合 ───────────────────────────

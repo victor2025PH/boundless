@@ -41,12 +41,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.companion.group_show.playbook import (
-    DEFAULT_MUST_NOT,
     Beat,
     BeatDirective,
     CastMember,
     ShowEvent,
     ShowState,
+    must_not_for_slot,
 )
 
 # 角色顶替优先级：核心槽缺位时用谁顶（种草 > 抛问 > 质疑 > 附和）
@@ -166,9 +166,16 @@ class GroupShowDirector:
         """
         if self.state.status == "aborted":
             return True, "aborted"
-        # 真人接管：连续真人发言达阈值——戏的目的就是把场子点着，点着了就该退场
+        # 真人接管：连续真人发言达阈值——戏的目的就是把场子点着，点着了就该退场。
+        # 场上有向导时不整场掐掉：帮手退场，向导留下把真人那句接完。
+        # 没向导的旧剧本仍是「点着了就退」，这条分支碰不到它们。
         if self._human_streak >= self.cfg.human_takeover_lines:
-            return True, "human_takeover"
+            if self._guide_member() is None:
+                return True, "human_takeover"
+            self._sideline_helpers()
+            if not self._queue:
+                return True, "human_takeover"
+            # 向导还留着拍，本拍不收场；条数和时长闸在下面继续生效。
         spoken = sum(1 for e in self.state.events if e.kind in ("line", "media"))
         if spoken >= self.cfg.max_lines:
             return True, "budget"
@@ -184,8 +191,9 @@ class GroupShowDirector:
         """这一拍谁说话？返回 None＝没人能上（选角全空/全被刷屏闸挡下）。
 
         三层决策，从强到弱：
-        ① **响应式覆盖**：有待回应的真人提问 → 让 advocate/skeptic 接（懂产品的
-           人回答问题才自然，让 bystander 去答技术疑问是穿帮点）。选定后把队列里
+        ① **响应式覆盖**：场上有向导时，真人说的任何一句都由向导接，帮手不抢。
+           没有向导时，仍只在真人**提问**时让 advocate/skeptic 接（懂产品的人
+           回答问题才自然，让 bystander 去答技术疑问是穿帮点）。选定后把队列里
            **他自己角色的拍**提前对齐，别让他顶着别人的意图开口；
         ② **自我接话规避**：本拍角色恰是上一个发言者 → 队列里第一个不同角色的拍
            提前（真人群里几乎没人自己接自己）；
@@ -242,7 +250,7 @@ class GroupShowDirector:
             product=beat.product,
             media=beat.media,
             soft_level=soft,
-            must_not=DEFAULT_MUST_NOT,
+            must_not=must_not_for_slot(beat.role, with_guide=self._has_guide()),
             reference_last=reference_last,
             respond_to_human=human_line,
         )
@@ -280,10 +288,34 @@ class GroupShowDirector:
                 return str(ev.speaker_account or "")
         return ""
 
+    def _guide_member(self) -> Optional[CastMember]:
+        return self.state.casting.by_slot("guide")
+
+    def _has_guide(self) -> bool:
+        """剧本声明了向导，或演员表里已经有向导。两者任一为真，禁令和让路都按向导场处理。"""
+        if self._guide_member() is not None:
+            return True
+        slots = getattr(self.state.playbook, "slots", ()) or ()
+        return any(str(s).strip().lower() == "guide" for s in slots)
+
+    def _sideline_helpers(self) -> None:
+        """真人聊起来之后，队列里只留向导的拍。没有向导拍时留队头，给向导一句回应的载体。"""
+        kept = [b for b in self._queue if str(b.role).strip().lower() == "guide"]
+        if kept:
+            self._queue = kept
+            return
+        if self._pending_human and self._queue:
+            self._queue = self._queue[:1]
+
     def _responsive_pick(self) -> Optional[CastMember]:
-        """真人提问时的响应式选人：让最合适的人回答，而不是念下一拍。"""
+        """真人说话时的响应式选人：有向导就由向导接，否则只在提问时让种草/质疑接。"""
         if not self._pending_human:
             return None
+        guide = self._guide_member()
+        if guide is not None:
+            # 向导是公开身份，真人的话由他接。上一句是不是他自己说的无所谓——
+            # 这是对话，不是托儿之间的抢答规避。
+            return guide
         if not _HUMAN_QUESTION_RE.search(self._pending_human):
             return None
         cast = self.state.casting
@@ -314,7 +346,12 @@ class GroupShowDirector:
                 return
 
     def _substitute_for(self, slot: str) -> Optional[CastMember]:
-        """角色槽没配上人时找替补（号不够时的降级演出）。"""
+        """角色槽没配上人时找替补（号不够时的降级演出）。
+
+        向导的嘴不能借给别的号：邀请私聊的只能是钉死的那个公开号。
+        """
+        if str(slot or "").strip().lower() == "guide":
+            return None
         cast = self.state.casting
         for s in _SUBSTITUTE_ORDER:
             if s == slot:

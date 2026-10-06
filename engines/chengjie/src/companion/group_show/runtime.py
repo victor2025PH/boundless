@@ -206,6 +206,7 @@ async def rehearse(
     max_speakers: int = 0,
     session_id: str = "",
     store: Any = None,
+    guide_account: str = "",
 ) -> RehearsalResult:
     """离线演一场戏，返回完整排练结果。**不发任何真消息。**
 
@@ -234,7 +235,8 @@ async def rehearse(
         playbook, candidates,
         fingerprint_groups=fingerprint_groups, persona_gender=persona_gender,
         co_performance=co_performance, max_speakers=max_speakers,
-        seed=str(group_key or ""))
+        seed=str(group_key or ""),
+        guide_account=str(guide_account or ""))
     # 复查必须拿到与选角同一份指纹表。漏传会让 validate_casting 走「没表→跳过」分支，
     # 于是同台关联复查静默失效——这行曾经真的漏了，且因为跳过时不出声而一直没被发现。
     warnings.extend(validate_casting(

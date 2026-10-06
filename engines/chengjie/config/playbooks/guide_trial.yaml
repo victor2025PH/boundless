@@ -1,0 +1,57 @@
+# 向导场 · 公开 AI 带一项功能
+#
+# 和四角种草戏不是同一件事：向导是固定的公开身份，不轮换。
+# 帮手对着向导聊（卡住、试过、指出别扭），不邀请别人加自己，也不报功能清单。
+# 只有向导可以说自己是谁，并邀请对方私聊自己试这一项。
+#
+# 真发必须配置 companion.group_show.guide_account。没配就拒演，不许用别的号顶上。
+# 排练不配这个号时，向导槽会按优先级挑一个预览号，预览结果不能当成「这个号会固定出现」。
+id: guide_trial
+name: 向导带一项功能
+system: growth
+products:
+  - matrixx
+soft_ad_level: 3
+
+roles:
+  - slot: guide
+    desc: 公开的 AI。只带一项功能，说明下一步怎么试，并邀请对方私聊自己。不报功能清单，不发链接。
+  - slot: asker
+    desc: 对向导说自己卡在哪。不要介绍产品，不要邀请别人加你。
+  - slot: bystander
+    desc: 对向导说自己刚试过的一点体感。不要种草，不要喊人私聊。
+  - slot: skeptic
+    desc: 对向导指出这一步别扭在哪。质疑要具体，不要变成吹捧，也不要替向导邀请别人。
+
+beats:
+  - id: b1_snag
+    role: asker
+    intent: 对向导说自己卡在一个具体步骤上，用求助的口吻，不要提别的功能。
+    soft: 0
+    pace: chatty
+
+  - id: b2_one_step
+    role: guide
+    intent: 承认自己是 AI，只讲这一项功能的下一步怎么试，并邀请对方私聊你自己试。不发链接，不报功能清单。
+    product: matrixx
+    soft: 3
+    pace: normal
+
+  - id: b3_friction
+    role: skeptic
+    intent: 对向导指出这一步哪里别扭，语气是真的觉得麻烦，不要抬杠，也不要邀请别人。
+    soft: 0
+    pace: chatty
+
+  - id: b4_tried
+    role: bystander
+    intent: 对向导说自己刚按这一步试了一下，只讲一个具体体感。不要介绍产品，不要喊人来加。
+    soft: 1
+    pace: normal
+
+  - id: b5_collect
+    role: guide
+    intent: 接住刚才的体感和别扭点，告诉对方私聊你之后先看哪一个结果。仍然只围绕这一项功能。
+    product: matrixx
+    soft: 3
+    pace: slow

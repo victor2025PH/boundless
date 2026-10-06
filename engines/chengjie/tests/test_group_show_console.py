@@ -1180,3 +1180,51 @@ def test_nav_item_registered_in_sidebar():
     paths = [it["path"] for g in get_nav_context()["nav_groups"]
              for it in g["items"] if isinstance(it, dict)]
     assert "/group-show" in paths
+
+
+def test_guide_account_pin_only_accepts_a_registry_account(auth_client, monkeypatch):
+    """向导号只能钉注册表里已有的号。空串取消。不把任意字符串写进配置。"""
+    import src.web.routes.group_show_routes as mod
+
+    monkeypatch.setattr(mod, "_registry_account_choices", lambda _cm, platform="telegram": [
+        {"account_id": "acc_guide", "label": "Guide"},
+    ])
+    cm = auth_client.app.state.config_manager
+    saved = {}
+
+    def _set(path, value):
+        saved["path"] = path
+        saved["value"] = value
+        node = cm.config.setdefault("companion", {}).setdefault("group_show", {})
+        node["guide_account"] = value
+        return True, "已保存"
+
+    monkeypatch.setattr(cm, "set_overlay_flag", _set)
+
+    bad = auth_client.post(
+        "/api/group-show/guide-account", json={"account_id": "not-a-real-one"})
+    assert bad.status_code == 400
+    assert saved == {}
+
+    slash = auth_client.post(
+        "/api/group-show/guide-account", json={"account_id": "../x"})
+    assert slash.status_code == 400
+    assert saved == {}
+
+    ok = auth_client.post(
+        "/api/group-show/guide-account", json={"account_id": "acc_guide"})
+    assert ok.status_code == 200
+    assert ok.json()["account_id"] == "acc_guide"
+    assert saved["path"] == "companion.group_show.guide_account"
+    assert saved["value"] == "acc_guide"
+
+    cleared = auth_client.post(
+        "/api/group-show/guide-account", json={"account_id": "  "})
+    assert cleared.status_code == 200
+    assert cleared.json()["account_id"] == ""
+
+    got = auth_client.get("/api/group-show/guide-account")
+    assert got.status_code == 200
+    body = got.json()
+    assert body["account_id"] == ""
+    assert body["accounts"] == [{"account_id": "acc_guide", "label": "Guide"}]

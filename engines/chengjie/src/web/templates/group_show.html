@@ -424,8 +424,17 @@ th[data-help]{text-decoration:underline dotted var(--t3);text-underline-offset:3
       <label for="gs-live-spk">{{ (i18n or {}).get('gs_live_spk', "最多几人开口（可选）") }}</label>
       <input type="number" id="gs-live-spk" value="0" min="0" max="12" style="width:80px">
     </div>
+    <div class="f-grp">
+      <label for="gs-guide-acct">{{ (i18n or {}).get('gs_guide_acct', "固定向导号") }}</label>
+      <select id="gs-guide-acct">
+        <option value="">{{ (i18n or {}).get('gs_guide_acct_none', "不钉（没有向导）") }}</option>
+      </select>
+    </div>
+    <button type="button" class="mini" id="gs-guide-save" onclick="gsSaveGuide()">{{ (i18n or {}).get('gs_guide_acct_save', "钉住这个号") }}</button>
     <button type="button" class="btn btn-p" id="gs-live-check" onclick="gsCheckLive()">{{ (i18n or {}).get('gs_live_run', "只体检，不发消息") }}</button>
   </div>
+  <p class="gs-note" id="gs-guide-hint">{{ (i18n or {}).get('gs_guide_acct_hint', "只有这个号可以说自己是 AI，并邀请对方私聊试一项功能。不轮换，也不发私聊。") }}</p>
+  <p class="gs-run-status" id="gs-guide-status"></p>
   <p class="gs-run-status" id="gs-live-status"></p>
   <div id="gs-live">
     <div class="gs-empty">{{ (i18n or {}).get('gs_live_empty', "选好剧本、填好群 key，点「只体检，不发消息」") }}</div>
@@ -1515,6 +1524,7 @@ Object.assign(window, {
   gsPlanAttendance: gsPlanAttendance, gsMarkJoined: gsMarkJoined,
   gsLoadExposure: gsLoadExposure, gsPlanSchedule: gsPlanSchedule,
   gsCheckLive: gsCheckLive, gsLoadOutcomes: gsLoadOutcomes,
+  gsLoadGuide: gsLoadGuide, gsSaveGuide: gsSaveGuide,
 });
 
 /* 引导条记忆：收起过一次就默认收起（返回用户不再被弹）。走 toggle 事件不挂内联 handler。 */
@@ -1586,6 +1596,12 @@ function gsOutRender(d) {
   html += '<div class="gs-metrics">' +
     '<span class="m"><b>' + (Number(r.conversions) || 0) + '</b> ' +
     gsEsc(window.T('gs_out_js_conv')) + '</span>' +
+    '<span class="m"><b>' + (Number(r.guide_added) || 0) + '</b> ' +
+    gsEsc(window.T('gs_out_js_added')) + '</span>' +
+    '<span class="m"><b>' + (Number(r.guide_tested) || 0) + '</b> ' +
+    gsEsc(window.T('gs_out_js_tested')) + '</span>' +
+    (Number(r.guide_fallback) ? '<span class="m"><b>' + Number(r.guide_fallback) +
+      '</b> ' + gsEsc(window.T('gs_out_js_fallback')) + '</span>' : '') +
     '<span class="m"><b>' + (Number(r.replies) || 0) + '</b> ' +
     gsEsc(window.T('gs_out_js_reply')) + '</span>' +
     '<span class="m">' + gsEsc(window.T('gs_out_js_lat')) + ' <b>' +
@@ -1603,6 +1619,9 @@ function gsOutRender(d) {
       '<span class="gs-mono">' + gsEsc(o.group_key || '—') + '</span>',
       (Number(o.responders) || 0) + ' / ' + (Number(o.replies) || 0),
       String(Number(o.conversions) || 0),
+      (Number(o.guide_added) || 0) + ' / ' + (Number(o.guide_tested) || 0) +
+        (Number(o.guide_fallback) ? '<br>' + gsEsc(window.T('gs_out_js_fallback')) +
+          ' ' + Number(o.guide_fallback) : ''),
       '<span class="gs-chip ' + chipCls + '">' +
         gsEsc(window.T('gs_out_js_v_' + (v || 'pending'))) + '</span>',
     ]);
@@ -1612,6 +1631,7 @@ function gsOutRender(d) {
     '<th>' + gsEsc(window.T('gs_out_js_th_group')) + '</th>' +
     '<th>' + gsEsc(window.T('gs_out_js_th_resp')) + '</th>' +
     '<th>' + gsEsc(window.T('gs_out_js_th_conv')) + '</th>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_guide')) + '</th>' +
     '<th>' + gsEsc(window.T('gs_out_js_th_verdict')) + '</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
@@ -1638,6 +1658,7 @@ function gsOutRender(d) {
   /* 三条口径声明必须跟着数字走，不能只写在文档里：看板会被截图进周报，
      而截图不会带上「这个数是下限」这句话。 */
   html += '<p class="gs-note">' + gsEsc(window.T('gs_out_js_floor')) + '</p>';
+  html += '<p class="gs-note">' + gsEsc(window.T('gs_out_js_guide_note')) + '</p>';
   if (r.truncated) {
     html += '<p class="gs-note warn">' + gsEsc(window.T('gs_out_js_trunc')) + '</p>';
   }
@@ -1692,9 +1713,61 @@ function gsInitNav() {
   secs.forEach(function (s) { io.observe(s); });
 }
 
+async function gsLoadGuide() {
+  var sel = document.getElementById('gs-guide-acct');
+  if (!sel) return;
+  try {
+    var res = await apiFetch('/api/group-show/guide-account');
+    var d = await res.json();
+    if (!res.ok || !d || !d.ok) return;
+    var current = String(d.account_id || '');
+    var accounts = d.accounts || [];
+    var html = '<option value="">' + gsEsc(window.T('gs_guide_acct_none')) + '</option>';
+    accounts.forEach(function (a) {
+      var id = String(a.account_id || '');
+      if (!id) return;
+      var label = String(a.label || id);
+      html += '<option value="' + gsEsc(id) + '">' + gsEsc(label) + '</option>';
+    });
+    sel.innerHTML = html;
+    sel.value = current;
+  } catch (e) {}
+}
+
+async function gsSaveGuide() {
+  var sel = document.getElementById('gs-guide-acct');
+  var st = document.getElementById('gs-guide-status');
+  var btn = document.getElementById('gs-guide-save');
+  if (!sel || !st) return;
+  btn.disabled = true;
+  st.className = 'gs-run-status';
+  st.textContent = '';
+  try {
+    var res = await apiFetch('/api/group-show/guide-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: sel.value }),
+    });
+    var d = await res.json();
+    if (!res.ok || !d || !d.ok) {
+      st.className = 'gs-run-status err';
+      st.textContent = (d && d.detail) ? d.detail : window.T('gs_guide_acct_fail');
+      return;
+    }
+    st.className = 'gs-run-status ok';
+    st.textContent = d.account_id ? window.T('gs_guide_acct_saved') : window.T('gs_guide_acct_cleared');
+  } catch (e) {
+    st.className = 'gs-run-status err';
+    st.textContent = window.T('gs_guide_acct_fail');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', function () {
   gsInitGuide();
   gsInitNav();
+  gsLoadGuide();
   gsLoadPlaybooks();
   gsLoadSessions();
   gsLoadLinkage();

@@ -21,10 +21,12 @@ import pytest
 from src.companion.group_show.director import DirectorConfig, GroupShowDirector
 from src.companion.group_show.playbook import (
     DEFAULT_MUST_NOT,
+    GUIDE_MUST_NOT,
     Beat,
     CastMember,
     Casting,
     Playbook,
+    Role,
     ShowEvent,
     ShowState,
 )
@@ -747,3 +749,61 @@ def test_two_directors_over_the_same_inputs_decide_identically():
         return trace
 
     assert run() == run()
+
+
+# ── 向导场：真人由向导接，帮手退场 ──────────────────────────────────────────
+
+
+def _guide_director(**kw):
+    beats = [
+        Beat("b1", "asker", "对向导说卡住了"),
+        Beat("b2", "guide", "只带一项功能"),
+        Beat("b3", "skeptic", "指出别扭"),
+    ]
+    pb = Playbook(
+        id="guide_trial", name="向导戏",
+        roles=(Role("asker"), Role("guide"), Role("skeptic")),
+        beats=tuple(beats))
+    casting = Casting(members=(
+        CastMember("asker", "a_ask", "p_ask"),
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    return GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), kw.get("config"))
+
+
+def test_any_human_line_goes_to_the_guide_not_a_helper():
+    """不是提问也由向导接。帮手不抢这句。"""
+    d = _guide_director()
+    d.observe_human("我按你说的试了一下", sender="真人甲", ts=T0)
+    assert d.select_next_speaker().account_id == "a_guide"
+    directive = d.next_directive()
+    assert directive.beat_id == "b2"
+    assert directive.must_not == GUIDE_MUST_NOT
+    assert "真人甲" in directive.respond_to_human
+
+
+def test_helper_lines_keep_the_no_invite_rule_only_when_a_guide_is_cast():
+    d = _guide_director()
+    directive = d.next_directive()
+    assert directive.beat_id == "b1"
+    assert "不要邀请对方加你" in "".join(directive.must_not)
+    assert _director().next_directive().must_not == DEFAULT_MUST_NOT
+
+
+def test_human_takeover_sidelines_helpers_but_lets_the_guide_answer():
+    d = _guide_director(config={"human_takeover_lines": 2})
+    d.observe_human("一", sender="甲", ts=T0)
+    d.observe_human("二", sender="乙", ts=T0 + 1)
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert [b.role for b in d._queue] == ["guide"]
+    assert d.select_next_speaker().slot == "guide"
+
+
+def test_takeover_still_ends_a_show_that_has_no_guide():
+    d = _director(config={"human_takeover_lines": 2})
+    d.observe_human("一", ts=T0)
+    d.observe_human("二", ts=T0 + 1)
+    assert d.should_terminate(now=T0 + 10) == (True, "human_takeover")

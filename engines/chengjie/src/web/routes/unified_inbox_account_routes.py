@@ -1662,6 +1662,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             backfill=_backfill,
             backfill_source=_backfill_source,
             decrypt_fail=_decrypt_fail,
+            feature_used=str((body or {}).get("feature_used") or ""),
         )
         # Q-24 A/C（#298）：边车出站回抄的来源标记 ``origin``——
         #   external    手机端 Messenger 发出的消息回抄（sender_id="external" 已随落库，
