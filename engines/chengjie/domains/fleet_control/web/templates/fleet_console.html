@@ -169,7 +169,8 @@
     node_lacks_cap:'agent 太旧，不支持远程操作（需 0.3.7）',phone_ops_disabled:'agent.json 关闭了手机操作',
     phone_not_found:'adb 里找不到这部手机',excluded_phone:'手机在排除名单里',tcp_phone_not_allowed:'无线 adb 手机不允许远程操作',
     out_of_bounds:'坐标超出屏幕',screencap_bad_frame:'截图数据异常',screenshot_too_large:'截图太大',
-    text_non_ascii_unsupported:'只支持英文/数字输入',text_bad_chars:'含不允许的字符',text_too_long:'文字太长'};
+    text_non_ascii_unsupported:'只支持英文/数字输入',text_bad_chars:'含不允许的字符',text_too_long:'文字太长',
+    ime_missing:'这台手机没装 ADB 输入法，暂时只能输英文'};
   var ADB_ST={offline:'离线',unauthorized:'未授权 USB 调试',unknown:'状态未知'};
   function phoneErr(code){var c=String(code||'').trim();if(!c)return '';if(PHONE_ERR[c])return PHONE_ERR[c];
     if(c.indexOf('phone_not_ready:')===0)return '手机未就绪：'+(ADB_ST[c.slice(16)]||c.slice(16));

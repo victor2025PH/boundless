@@ -237,6 +237,15 @@ def test_adb_allowlist_accepts_only_the_fixed_forms(args):
     ("-s", "S1", "install", "x.apk"), ("-s", "S1", "shell", "rm", "-rf", "/sdcard"),
     ("-s", "S1", "shell", "input", "text", "a;reboot"), ("-s", "S1", "shell", "input", "text", "a%b"),
     ("-s", "S1", "shell", "input", "keyevent", "26"), ("-s", "S1", "exec-out", "screencap", "-p"),
+    ("-s", "S1", "shell", "pm", "path", "com.other.app"),
+    ("-s", "S1", "shell", "pm", "path", "com.android.adbkeyboard", "extra"),
+    ("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_TEXT", "--es", "msg", "5L2g5aW9"),
+    ("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", "!!!"),
+    ("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", "aGVsbG8="),
+    ("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", "5L2g5aW9", "extra"),
+    ("-s", "S1", "shell", "ime", "enable", "com.android.adbkeyboard/.AdbIME"),
+    ("-s", "3B1F4KE5MS140P4X", "shell", "pm", "path", "com.android.adbkeyboard"),
+    ("-s", "192.168.0.148:5555", "shell", "pm", "path", "com.android.adbkeyboard"),
     ("-s", "S1", "shell", "input", "tap", "10"), ("-s", "S1", "shell", "input", "tap", "-1", "2"),
     ("-s", "3B1F4KE5MS140P4X", "exec-out", "screencap"), ("-s", "192.168.0.148:5555", "exec-out", "screencap"),
     ("-s", "-x", "exec-out", "screencap"), ("-s", "S1", "forward", "tcp:9000", "tcp:9000"),
@@ -260,7 +269,9 @@ def test_protected_phone_is_hard_coded():
     (TASK_PHONE_TAP, {"x": 1, "y": 10000}, "bad_y"), (TASK_PHONE_TAP, {"x": "1", "y": 2}, "bad_x"),
     (TASK_PHONE_SWIPE, {"x1": 1, "y1": 1, "x2": 2, "y2": 2, "duration_ms": 10}, "bad_duration_ms"),
     (TASK_PHONE_TEXT, {"text": ""}, "bad_text"), (TASK_PHONE_TEXT, {"text": "x" * 201}, "text_too_long"),
-    (TASK_PHONE_TEXT, {"text": "你好"}, "text_non_ascii_unsupported"), (TASK_PHONE_TEXT, {"text": "a;b"}, "text_bad_chars"),
+    (TASK_PHONE_TEXT, {"text": "你" * 501}, "text_too_long"),
+    (TASK_PHONE_TEXT, {"text": "你好\x00"}, "text_bad_chars"), (TASK_PHONE_TEXT, {"text": "你好\t呀"}, "text_bad_chars"),
+    (TASK_PHONE_TEXT, {"text": "a;b"}, "text_bad_chars"),
     (TASK_PHONE_TEXT, {"text": "$(reboot)"}, "text_bad_chars"), (TASK_PHONE_TEXT, {"text": "-e x"}, "text_bad_chars"),
     (TASK_PHONE_KEY, {"key": "power"}, "bad_key"),
 ])
@@ -274,6 +285,8 @@ def test_validate_payload_normalizes():
     assert validate_payload(TASK_PHONE_TAP, {"x": 5.0, "y": 7, "evil": 1}) == {"x": 5, "y": 7}
     assert validate_payload(TASK_PHONE_SWIPE, {"x1": 1, "y1": 2, "x2": 3, "y2": 4})["duration_ms"] == 300
     assert validate_payload(TASK_PHONE_TEXT, {"text": "user@mail.com 123"}) == {"text": "user@mail.com 123"}
+    assert validate_payload(TASK_PHONE_TEXT, {"text": "你好\n世界"}) == {"text": "你好\n世界"}
+    assert validate_payload(TASK_PHONE_TEXT, {"text": "你" * 500}) == {"text": "你" * 500}
     assert validate_payload(TASK_PHONE_KEY, {"key": "HOME"}) == {"key": "home"}
     assert validate_payload(TASK_PHONE_SCREENSHOT, {"anything": 1}) == {}
     assert escape_input_text("a b  c") == "a%sb%s%sc"
@@ -312,6 +325,87 @@ def test_execute_never_starts_or_restarts_the_adb_server(server, locate, code):
     ops = PhoneOps(run=fake, locate=lambda _p: locate, server_version=lambda _port: server)
     assert ops.execute(TASK_PHONE_SCREENSHOT, {}, {"serial": "S1"})[1:] == ({"serial": "S1"}, code)
     assert all(c in (("version",),) for c in fake.calls)          # no devices/-s commands at all
+
+
+class _KeyboardAdb(FakeAdb):
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if args[2:] == ("shell", "pm", "path", "com.android.adbkeyboard"):
+            assert cmd[0] == "adb" and kw["shell"] is False and kw["timeout"] > 0
+            self.calls.append(args)
+            return _NS(returncode=0, stdout=b"package:/data/app/com.android.adbkeyboard/base.apk\n", stderr=b"")
+        return super().__call__(cmd, **kw)
+
+
+def test_ascii_text_still_uses_input_text():
+    ops, fake, _ = _ops()
+    assert ops.execute(TASK_PHONE_TEXT, {"text": "hello"}, {"serial": "S1"})[0] == STATUS_DONE
+    assert fake.actions() == [("-s", "S1", "shell", "input", "text", "hello")]
+
+
+def test_cjk_text_uses_adbkeyboard_broadcast_not_input_text():
+    from src.fleet.phone_rules import encode_input_b64
+    ops, fake, _ = _ops(adb=_KeyboardAdb())
+    text = "你好\n世界"
+    st_, res, detail = ops.execute(TASK_PHONE_TEXT, {"text": text}, {"serial": "S1"})
+    assert (st_, detail) == (STATUS_DONE, "ok") and res["chars"] == len(text)
+    assert fake.actions() == [
+        ("-s", "S1", "shell", "pm", "path", "com.android.adbkeyboard"),
+        ("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", encode_input_b64(text)),
+    ]
+
+
+def test_cjk_text_without_keyboard_is_ime_missing_and_does_not_type():
+    from src.fleet.phone_rules import IME_MISSING_MESSAGE
+    ops, fake, _ = _ops()
+    st_, res, detail = ops.execute(TASK_PHONE_TEXT, {"text": "你好"}, {"serial": "S1"})
+    assert (st_, detail) == (STATUS_REJECTED, "ime_missing")
+    assert res["error"] == IME_MISSING_MESSAGE == "这台手机没装 ADB 输入法，暂时只能输英文"
+    assert fake.actions() == [("-s", "S1", "shell", "pm", "path", "com.android.adbkeyboard")]
+
+
+def test_cjk_probe_package_error_is_ime_missing_but_device_error_is_adb_failure():
+    class _Missing(FakeAdb):
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if args[2:] == ("shell", "pm", "path", "com.android.adbkeyboard"):
+                self.calls.append(args)
+                return _NS(returncode=1, stdout=b"", stderr=b"Error: package not found\n")
+            return super().__call__(cmd, **kw)
+
+    class _Offline(FakeAdb):
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if args[2:] == ("shell", "pm", "path", "com.android.adbkeyboard"):
+                self.calls.append(args)
+                return _NS(returncode=1, stdout=b"", stderr=b"error: device offline\n")
+            return super().__call__(cmd, **kw)
+
+    missing, fake_m, _ = _ops(adb=_Missing())
+    assert missing.execute(TASK_PHONE_TEXT, {"text": "你好"}, {"serial": "S1"})[2] == "ime_missing"
+    assert all(c[2:4] != ("shell", "am") for c in fake_m.actions())
+    offline, _, _ = _ops(adb=_Offline())
+    st_, res, detail = offline.execute(TASK_PHONE_TEXT, {"text": "你好"}, {"serial": "S1"})
+    assert (st_, detail) == (STATUS_FAILED, "adb_exit_1") and res["stderr"] == "error: device offline"
+
+
+def test_keyboard_broadcast_allowlist_rejects_control_chars_and_overlong_payloads():
+    from src.fleet.phone_rules import encode_input_b64
+    check_adb_args(("-s", "S1", "shell", "pm", "path", "com.android.adbkeyboard"))
+    check_adb_args(("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg",
+                    encode_input_b64("你好")))
+    for bad in ("你\x00", "你\r呀", "你" * 501, "hello", "你好\x7f"):
+        with pytest.raises(PhoneOpError) as ei:
+            check_adb_args(("-s", "S1", "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg",
+                            encode_input_b64(bad)))
+        assert ei.value.code == "adb_args_not_allowed"
+
+
+def test_overlong_and_control_text_never_reaches_adb():
+    ops, fake, _ = _ops()
+    assert ops.execute(TASK_PHONE_TEXT, {"text": "你" * 501}, {"serial": "S1"})[2] == "text_too_long"
+    assert ops.execute(TASK_PHONE_TEXT, {"text": "甲\x01乙"}, {"serial": "S1"})[2] == "text_bad_chars"
+    assert fake.calls == []
 
 
 def test_tap_swipe_text_key_argv_and_pacing():
@@ -444,6 +538,9 @@ def test_phone_endpoint_queues_validated_task(st):
     assert t["kind"] == TASK_PHONE_TAP and t["target"] == {"serial": "S1"} and t["payload"] == {"x": 10, "y": 20}
     assert t["expires_at"] - t["created_at"] == pytest.approx(60)
     assert t["status"] == STATUS_QUEUED
+    r = c.post(f"/api/fleet/nodes/{nid}/phones/S1/text", headers=OP, json={"text": "你好"})
+    assert r.status_code == 200, r.text
+    assert r.json()["task"]["payload"] == {"text": "你好"}
 
 
 @pytest.mark.parametrize("serial,op,body,code,detail", [

@@ -5,16 +5,18 @@
 
 参数规则（两侧一致）：
 * tap ``{x, y}``、swipe ``{x1, y1, x2, y2, duration_ms}``：设备像素整数，0 ≤ v < 10000；duration 50–3000 ms。
-* text ``{text}``：1–200 个 ASCII 字符，只允许字母数字、空格和 ``. _ @ + - : / = ,``，不能以 ``-`` 开头。
-  这些字符在设备 shell 里没有特殊含义；空格按 ``input text`` 的约定换成 ``%s``。中文等非 ASCII 一律拒绝
-  （``input text`` 本身不支持，需要输入法 APK，不在本轮范围）。
+* text ``{text}``：纯 ASCII 仍是 1–200 个字符，只允许字母数字、空格和 ``. _ @ + - : / = ,``，不能以 ``-`` 开头。
+  这些字符在设备 shell 里没有特殊含义；空格按 ``input text`` 的约定换成 ``%s``。含非 ASCII（中文等）时
+  上限 500 字，允许换行，其它控制字符拒绝；节点在手机已有 ADBKeyboard 时用广播送入，否则拒绝。
 * key ``{key}``：只有 ``home`` / ``back``。
 """
 
 from __future__ import annotations
 
+import base64
 import re
-from typing import Any, Dict
+import unicodedata
+from typing import Any, Dict, Sequence
 
 from .phones import is_protected
 from .protocol import TASK_PHONE_KEY, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT
@@ -25,9 +27,16 @@ OPS: Dict[str, str] = {
 }
 MAX_COORD = 10000
 TEXT_MAX = 200
+TEXT_CJK_MAX = 500
 SWIPE_MS_MIN, SWIPE_MS_MAX, SWIPE_MS_DEFAULT = 50, 3000, 300
 KEYCODES: Dict[str, str] = {"home": "3", "back": "4"}
 TEXT_ALLOWED = re.compile(r"^[A-Za-z0-9 ._@+\-:/=,]{1,200}$")
+ADB_KEYBOARD_PKG = "com.android.adbkeyboard"
+ADB_INPUT_ACTION = "ADB_INPUT_B64"
+IME_MISSING = "ime_missing"
+IME_MISSING_MESSAGE = "这台手机没装 ADB 输入法，暂时只能输英文"
+# 500 个四字节字符的标准 base64 长度。
+B64_MSG_MAX = 2668
 MAX_PNG_B64 = 1_800_000
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
 _B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
@@ -82,11 +91,15 @@ def validate_payload(kind: str, payload: Any) -> Dict[str, Any]:
         t = p.get("text")
         if not isinstance(t, str) or not t:
             raise PhoneOpError("bad_text")
-        if len(t) > TEXT_MAX:
+        if t.isascii():
+            if len(t) > TEXT_MAX:
+                raise PhoneOpError("text_too_long")
+            if not TEXT_ALLOWED.match(t) or t.startswith("-"):
+                raise PhoneOpError("text_bad_chars")
+            return {"text": t}
+        if len(t) > TEXT_CJK_MAX:
             raise PhoneOpError("text_too_long")
-        if not t.isascii():
-            raise PhoneOpError("text_non_ascii_unsupported")
-        if not TEXT_ALLOWED.match(t) or t.startswith("-"):
+        if _forbidden_control(t):
             raise PhoneOpError("text_bad_chars")
         return {"text": t}
     if kind == TASK_PHONE_KEY:
@@ -110,6 +123,61 @@ def check_target(serial: Any) -> str:
 def escape_input_text(text: str) -> str:
     """``input text`` 的参数：空格 → ``%s``。字符集已被 TEXT_ALLOWED 限死，设备 shell 不会解释任何字符。"""
     return text.replace(" ", "%s")
+
+
+def _forbidden_control(text: str) -> bool:
+    """换行可以留；其它 Cc / Cf / Cs 控制字符不行。"""
+    for ch in text:
+        if ch == "\n":
+            continue
+        if unicodedata.category(ch) in ("Cc", "Cf", "Cs"):
+            return True
+    return False
+
+
+def encode_input_b64(text: str) -> str:
+    """ADBKeyboard ``ADB_INPUT_B64`` 的 msg：UTF-8 再标准 base64，不含换行。"""
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def _b64_msg_ok(msg: str) -> bool:
+    if not isinstance(msg, str) or not msg or len(msg) > B64_MSG_MAX or len(msg) % 4:
+        return False
+    if not _B64_RE.match(msg):
+        return False
+    try:
+        text = base64.b64decode(msg).decode("utf-8")
+    except Exception:
+        return False
+    if not text or text.isascii() or len(text) > TEXT_CJK_MAX or _forbidden_control(text):
+        return False
+    return True
+
+
+def keyboard_adb_allowed(args: Sequence[str]) -> bool:
+    """中文输入只允许两条固定命令：查询 ADBKeyboard 是否在，以及 ``ADB_INPUT_B64`` 广播。
+
+    广播的 msg 必须是通过 ``_b64_msg_ok`` 的 base64。受保护 serial 一律否。
+    """
+    a = tuple(str(x) for x in args)
+    if len(a) < 6 or a[0] != "-s" or valid_serial(a[1]) != a[1] or is_protected(a[1]):
+        return False
+    if a[2:] == ("shell", "pm", "path", ADB_KEYBOARD_PKG):
+        return True
+    if (len(a) == 10 and a[2:9] == ("shell", "am", "broadcast", "-a", ADB_INPUT_ACTION, "--es", "msg")
+            and _b64_msg_ok(a[9])):
+        return True
+    return False
+
+
+def adbkeyboard_present(stdout: bytes) -> bool:
+    """``pm path com.android.adbkeyboard`` 打出 ``package:`` 行才算装了。"""
+    if not isinstance(stdout, (bytes, bytearray)):
+        return False
+    for line in bytes(stdout).splitlines():
+        if line.strip().startswith(b"package:"):
+            return True
+    return False
 
 
 def _clip(value: Any, n: int) -> str:
@@ -148,5 +216,7 @@ def strip_png(result: Any) -> Dict[str, Any]:
 
 __all__ = [
     "OPS", "MAX_COORD", "TEXT_MAX", "KEYCODES", "TEXT_ALLOWED", "MAX_PNG_B64", "PhoneOpError", "valid_serial",
-    "kind_for_op", "validate_payload", "check_target", "escape_input_text", "sanitize_phone_result", "strip_png",
+    "kind_for_op", "validate_payload", "check_target", "escape_input_text", "encode_input_b64",
+    "keyboard_adb_allowed", "adbkeyboard_present", "sanitize_phone_result", "strip_png",
+    "ADB_KEYBOARD_PKG", "ADB_INPUT_ACTION", "IME_MISSING", "IME_MISSING_MESSAGE", "TEXT_CJK_MAX",
 ]

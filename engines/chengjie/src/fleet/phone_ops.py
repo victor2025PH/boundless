@@ -2,7 +2,10 @@
 
 安全栏：
 * adb 只跑白名单参数（``check_adb_args``）：``devices -l``、``version``、``-s <serial> exec-out screencap``、
-  ``-s <serial> shell input tap|swipe|text|keyevent 3|4``。参数列表、不经本机 shell、每条都有超时。
+  ``-s <serial> shell input tap|swipe|text|keyevent 3|4``，以及中文输入的两条：
+  ``-s <serial> shell pm path com.android.adbkeyboard``、
+  ``-s <serial> shell am broadcast -a ADB_INPUT_B64 --es msg <base64>``。
+  参数列表、不经本机 shell、每条都有超时。不会给手机下发安装包。
 * 从不启动 / 停止 / 重启 adb server，也不改端口和连接模式：先按清点同一套办法用 ``host:version``
   问现有 server；没有 server、或本机 adb 客户端版本和 server 不一致（会触发 server 重启）→ 拒绝。
 * 目标必须出现在当前 ``adb devices -l`` 里且 state=device。受保护手机（3B1F… / 192.168.0.148）硬拒；
@@ -28,7 +31,9 @@ from array import array
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .phone_rules import (
-    KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED, check_target, escape_input_text, valid_serial, validate_payload,
+    ADB_INPUT_ACTION, ADB_KEYBOARD_PKG, IME_MISSING_MESSAGE, KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED,
+    adbkeyboard_present, check_target, encode_input_b64, escape_input_text, keyboard_adb_allowed, valid_serial,
+    validate_payload,
 )
 from .phones import (
     adb_server_port, adb_server_version, find_adb, is_excluded, is_protected, normalize_excludes, parse_adb_devices,
@@ -62,6 +67,8 @@ def check_adb_args(args: Sequence[str]) -> None:
     """adb 参数白名单。不在白名单 → PhoneOpError('adb_args_not_allowed')。"""
     a = tuple(str(x) for x in args)
     if a in (("devices", "-l"), ("version",)):
+        return
+    if keyboard_adb_allowed(a):
         return
     if len(a) >= 4 and a[0] == "-s" and valid_serial(a[1]) == a[1] and not is_protected(a[1]):
         rest = a[2:]
@@ -216,6 +223,28 @@ class PhoneOps:
             raise PhoneOpError("tcp_phone_not_allowed")
         return dev
 
+    def _keyboard_ready(self, adb: str, serial: str) -> bool:
+        """只查询固定包名。查不到包算没装；设备本身报错则按 adb 失败抛出。"""
+        args = ("-s", serial, "shell", "pm", "path", ADB_KEYBOARD_PKG)
+        check_adb_args(args)
+        proc = (self._run or subprocess.run)([adb, *args], **_run_kwargs(INPUT_TIMEOUT_SEC))
+        rc = int(getattr(proc, "returncode", 1) or 0)
+        out = getattr(proc, "stdout", b"") or b""
+        err = getattr(proc, "stderr", b"") or b""
+        if not isinstance(out, bytes):
+            out = str(out).encode("utf-8", "replace")
+        if adbkeyboard_present(out):
+            return True
+        if rc == 0:
+            return False
+        err_text = err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)
+        folded = " ".join(err_text.split()).lower()
+        if not folded or "not found" in folded or ADB_KEYBOARD_PKG in folded:
+            return False
+        e = PhoneOpError(f"adb_exit_{rc}", failed=True)
+        e.stderr = " ".join(err_text.split())[:160]  # type: ignore[attr-defined]
+        raise e
+
     def _lock_for(self, serial: str) -> threading.Lock:
         with self._locks_guard:
             return self._locks.setdefault(serial, threading.Lock())
@@ -251,8 +280,16 @@ class PhoneOps:
             self._adb(adb, base + ("shell", "input", "swipe") + vals, INPUT_TIMEOUT_SEC + p["duration_ms"] / 1000)
             return {k: p[k] for k in ("x1", "y1", "x2", "y2", "duration_ms")}
         if kind == TASK_PHONE_TEXT:
-            self._adb(adb, base + ("shell", "input", "text", escape_input_text(p["text"])), INPUT_TIMEOUT_SEC)
-            return {"chars": len(p["text"])}
+            text = p["text"]
+            if text.isascii():
+                self._adb(adb, base + ("shell", "input", "text", escape_input_text(text)), INPUT_TIMEOUT_SEC)
+            else:
+                if not self._keyboard_ready(adb, serial):
+                    raise PhoneOpError("ime_missing")
+                msg = encode_input_b64(text)
+                self._adb(adb, base + ("shell", "am", "broadcast", "-a", ADB_INPUT_ACTION, "--es", "msg", msg),
+                          INPUT_TIMEOUT_SEC)
+            return {"chars": len(text)}
         if kind == TASK_PHONE_KEY:
             self._adb(adb, base + ("shell", "input", "keyevent", KEYCODES[p["key"]]), INPUT_TIMEOUT_SEC)
             return {"key": p["key"]}
@@ -291,6 +328,8 @@ class PhoneOps:
                 lock.release()
         except PhoneOpError as e:
             res: Dict[str, Any] = {"serial": serial}
+            if e.code == "ime_missing":
+                res["error"] = IME_MISSING_MESSAGE
             if getattr(e, "stderr", ""):
                 res["stderr"] = e.stderr  # type: ignore[attr-defined]
             return (STATUS_FAILED if e.failed else STATUS_REJECTED), res, e.code
