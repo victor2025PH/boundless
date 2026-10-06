@@ -244,14 +244,9 @@ def check_line_violations(text: str, persona: Optional[Dict[str, Any]] = None,
 
 
 async def _call_chat(ai_client: Any, prompt: str, temperature: float) -> str:
-    """调 ``ai_client.chat``，兼容同步/异步实现与不认 ``strategy_overrides`` 的老签名。"""
-    try:
-        out = ai_client.chat(prompt, strategy_overrides={"temperature": temperature})
-    except TypeError:
-        out = ai_client.chat(prompt)
-    if inspect.isawaitable(out):
-        out = await out
-    return str(out or "").strip()
+    """中档温度，优先只打本地模型。测试替身没有 tool_chat 时回落 chat。"""
+    from src.companion.group_show.runtime import call_show_model
+    return await call_show_model(ai_client, prompt, temperature=temperature)
 
 
 def persona_generator(
@@ -259,14 +254,14 @@ def persona_generator(
     *,
     persona_manager: Any = None,
     guard: bool = True,
-    temperature: float = 0.9,
+    temperature: float = 0.7,
 ) -> GenerateFn:
     """人设发声版台词生成器（符合 :data:`~...runtime.GenerateFn` 契约）。
 
-    :param ai_client: 提供 ``chat(prompt, strategy_overrides=...)`` 的客户端。
+    :param ai_client: 提供 ``chat`` 或 ``tool_chat`` 的客户端。真发走本地中档。
     :param persona_manager: 缺省取 ``PersonaManager`` 单例；取不到＝无人设降级。
     :param guard: 关掉只在「排练时想看模型原始输出」的场景用；**真发链路别关**。
-    :param temperature: 群聊闲聊需要高一点的随机性，默认 0.9（与 llm_generator 一致）。
+    :param temperature: 坐席中档 0.7。原先 0.9 在本地模型上容易把玩笑接歪。
 
     每一拍：人格描述 → 注入 ECP messages 最前 → ``chat`` → 守卫校验；
     违规重试一次，仍违规返回 ``""``（runtime 跳过这一拍）。任何异常都吞掉返回 ``""``。

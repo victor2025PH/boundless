@@ -322,6 +322,29 @@ async def test_empty_model_output_is_not_retried():
 
 
 @pytest.mark.asyncio
+async def test_a_real_client_is_asked_for_the_local_medium_tier():
+    """真客户端走本地路由、中档温度。没有 tool_chat 的替身仍只调 chat。"""
+    class LocalAI:
+        def __init__(self) -> None:
+            self.tools: list = []
+
+        async def tool_chat(self, prompt, *, purpose="tool", strategy_overrides=None,
+                            strict_route=False, system=None):
+            self.tools.append((purpose, dict(strategy_overrides or {}), strict_route))
+            return "在的，刚看到。"
+
+        async def chat(self, prompt, strategy_overrides=None):
+            raise AssertionError("should use the local route")
+
+    ai = LocalAI()
+    out = await _run(persona_generator(ai, persona_manager=_pm()))
+    assert out == "在的，刚看到。"
+    purpose, overrides, strict = ai.tools[0]
+    assert purpose == "group_show" and strict is True
+    assert overrides["temperature"] == 0.7 and overrides["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
 async def test_legacy_chat_signature_without_strategy_overrides():
     class OldAI:
         def __init__(self) -> None:

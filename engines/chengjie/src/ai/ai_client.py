@@ -2743,6 +2743,21 @@ class AIClient(LoggerMixin):
                 self.logger.info(
                     "记忆抽取默认走本地兜底 model=%s（ai.task_routes.memory_extract 可改）",
                     self._fb_model)
+            # 群戏台词同一条本地端点。调用方用 strict_route，失败不改走云端。
+            # 显式 ai.task_routes.group_show 优先。
+            if ("group_show" not in self._task_routes
+                    and getattr(self, "_fb_client", None)
+                    and str(getattr(self, "_fb_model", "") or "").strip()):
+                self._route_clients.setdefault("_lan_tool", {
+                    "client": self._fb_client,
+                    "model": self._fb_model,
+                    "label": f"{self._fb_model} @ lan (group_show)",
+                    "extra_body": dict(getattr(self, "_fb_extra_body", None) or {}),
+                })
+                self._task_routes["group_show"] = "_lan_tool"
+                self.logger.info(
+                    "群戏台词默认走本地 model=%s（ai.task_routes.group_show 可改）",
+                    self._fb_model)
             if self._route_clients:
                 self.logger.info(
                     "多模型路由已配置: %d 档（%s）；任务映射 %s",
@@ -5934,6 +5949,7 @@ class AIClient(LoggerMixin):
         purpose: str = "tool",
         system: Optional[str] = None,
         strategy_overrides: Optional[Dict[str, Any]] = None,
+        strict_route: bool = False,
     ) -> Optional[str]:
         """工具型调用（抽取 / 分类 / 改写 / 翻译纠错）：裸 system、按 ``purpose``
         归因成本、**不计 ai_reply**、不跑语言守卫 / QualityTracker。
@@ -5943,6 +5959,8 @@ class AIClient(LoggerMixin):
         """
         from src.ai.llm_purpose import purpose_scope
         ctx = self._tool_context(purpose, system=system)
+        if strict_route:
+            ctx["_route_strict"] = True
         with purpose_scope(str(purpose or "tool")):
             return await self.generate_reply(
                 prompt, context=ctx, conversation_history=None,

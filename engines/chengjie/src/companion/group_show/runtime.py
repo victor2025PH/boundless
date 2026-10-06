@@ -140,7 +140,38 @@ def stub_generator(marker: str = "") -> GenerateFn:
     return _gen
 
 
-def llm_generator(ai_client: Any, *, temperature: float = 0.9) -> GenerateFn:
+def _show_model_overrides(temperature: float) -> Dict[str, Any]:
+    """坐席中档：温度沿用调用方，长度用中档上限。"""
+    from src.ai.conv_route import EFFORT_PARAMS
+    medium = EFFORT_PARAMS["medium"]
+    return {
+        "temperature": float(temperature),
+        "max_tokens": int(medium["max_tokens"]),
+    }
+
+
+async def call_show_model(ai_client: Any, prompt: str, *, temperature: float = 0.7) -> str:
+    """群戏台词。有本地路由就只打那一档；没有 tool_chat 的测试替身仍走 chat。"""
+    overrides = _show_model_overrides(temperature)
+    tool = getattr(ai_client, "tool_chat", None)
+    if tool is not None:
+        try:
+            out = tool(
+                prompt, purpose="group_show",
+                strategy_overrides=overrides, strict_route=True)
+        except TypeError:
+            out = tool(prompt, purpose="group_show", strategy_overrides=overrides)
+    else:
+        try:
+            out = ai_client.chat(prompt, strategy_overrides=overrides)
+        except TypeError:
+            out = ai_client.chat(prompt)
+    if hasattr(out, "__await__"):
+        out = await out
+    return str(out or "").strip()
+
+
+def llm_generator(ai_client: Any, *, temperature: float = 0.7) -> GenerateFn:
     """真 LLM 台词生成器（排练用近路）。
 
     ⚠ 这里走 ``ai_client.chat(prompt)`` 的**通用入口**，不是该号的人设发声链。
@@ -153,16 +184,12 @@ def llm_generator(ai_client: Any, *, temperature: float = 0.9) -> GenerateFn:
                    directive: BeatDirective) -> str:
         prompt = flatten_messages(messages)
         try:
-            out = await ai_client.chat(
-                prompt, strategy_overrides={"temperature": temperature})
-        except TypeError:
-            out = await ai_client.chat(prompt)
+            return await call_show_model(ai_client, prompt, temperature=temperature)
         except Exception as exc:  # noqa: BLE001 —— 单拍失败不该炸掉整场排练
             # 但必须留下痕迹：静默返空会演成空场还报「正常收场」
             logger.warning("[group_show] 台词生成失败 beat=%s: %s",
                            directive.beat_id, exc)
             return ""
-        return str(out or "").strip()
 
     return _gen
 
