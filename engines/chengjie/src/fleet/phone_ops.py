@@ -3,8 +3,10 @@
 安全栏：
 * adb 只跑白名单参数（``check_adb_args``）：``devices -l``、``version``、``-s <serial> exec-out screencap``、
   ``-s <serial> shell input tap|swipe|text|keyevent 3|4``。参数列表、不经本机 shell、每条都有超时。
-* 从不启动 / 停止 / 重启 adb server，也不改端口和连接模式：先按清点同一套办法用 ``host:version``
+* 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
   问现有 server；没有 server、或本机 adb 客户端版本和 server 不一致（会触发 server 重启）→ 拒绝。
+  agent.json ``adb_manage_server: true``（默认关）时，仅当没有 server 在应答，才允许安装目录里
+  自带的 adb 把 server 拉起来；直播机永远不拉。PATH 上的 adb 和 ``C:\\platform-tools`` 不会被拉起。
 * 目标必须出现在当前 ``adb devices -l`` 里且 state=device。受保护手机（3B1F… / 192.168.0.148）硬拒；
   agent.json 的 ``phones_exclude``（serial / 前缀* / model:）同样拒；无线（tcp）手机默认拒，
   ``phone_ops_allow_tcp: true`` 才放行。
@@ -26,14 +28,14 @@ import time
 import zlib
 from array import array
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .phone_rules import (
     KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED, check_target, escape_input_text, valid_serial, validate_payload,
 )
 from .phones import (
-    adb_server_port, adb_server_version, find_adb, is_excluded, is_protected, normalize_excludes, parse_adb_devices,
-    parse_client_version,
+    is_excluded, is_protected, normalize_excludes, parse_adb_devices, parse_client_version, prepare_adb,
 )
 from .protocol import (
     CAP_PHONE_OPS_V1, PHONE_TASK_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_KEY,
@@ -148,27 +150,35 @@ class PhoneOps:
                  run: Optional[RunFn] = None, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep,
                  server_version: Optional[Callable[[int], Optional[int]]] = None,
-                 locate: Optional[Callable[[str], str]] = None) -> None:
+                 locate: Optional[Callable[[str], str]] = None,
+                 manage_server: bool = False, live_stream: Optional[bool] = None,
+                 state_dir: Optional[Path] = None) -> None:
         self._run = run
         self._clock = clock
         self._sleep = sleep
         self._server_version = server_version
         self._locate = locate
+        self._live_stream = live_stream
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
         self._last_op: Dict[str, float] = {}
+        self._last_raw: Dict[str, bytes] = {}
         self._screen: Dict[str, Tuple[int, int]] = {}
         self._client_versions: Dict[str, Optional[int]] = {}
-        self.configure(adb_path=adb_path, exclude=exclude, enabled=enabled, allow_tcp=allow_tcp)
+        self.configure(adb_path=adb_path, exclude=exclude, enabled=enabled, allow_tcp=allow_tcp,
+                       manage_server=manage_server, state_dir=state_dir)
 
     def configure(self, *, adb_path: str = "", exclude: Any = None, enabled: bool = True,
-                  allow_tcp: bool = False) -> None:
-        """agent.json 热加载时调用（phones_exclude / adb_path / phone_ops_enabled / phone_ops_allow_tcp）。"""
+                  allow_tcp: bool = False, manage_server: bool = False,
+                  state_dir: Optional[Path] = None) -> None:
+        """agent.json 热加载（phones_exclude / adb_path / phone_ops_* / adb_manage_server）。"""
         self.adb_path = str(adb_path or "")
         self.excludes = normalize_excludes(exclude)
         self.enabled = bool(enabled)
         self.allow_tcp = bool(allow_tcp)
+        self.manage_server = bool(manage_server)
+        self._state_dir = state_dir
 
     def caps(self) -> List[str]:
         return [CAP_PHONE_OPS_V1] if self.enabled else []
@@ -188,12 +198,13 @@ class PhoneOps:
         return out if isinstance(out, bytes) else str(out).encode("utf-8")
 
     def _ready_adb(self) -> str:
-        adb = (self._locate or find_adb)(self.adb_path)
-        if not adb:
-            raise PhoneOpError("adb_not_found")
-        server = (self._server_version or adb_server_version)(adb_server_port())
-        if server is None:
-            raise PhoneOpError("adb_server_not_running")
+        try:
+            adb, server = prepare_adb(
+                self.adb_path, manage_server=self.manage_server, server_version=self._server_version,
+                locate=self._locate, run=self._run, live_stream=self._live_stream, state_dir=self._state_dir,
+            )
+        except RuntimeError as e:
+            raise PhoneOpError(str(e)[:120] or "adb_error") from None
         if adb not in self._client_versions:
             ver = self._adb(adb, ("version",), LIST_TIMEOUT_SEC).decode("utf-8", "replace")
             self._client_versions[adb] = parse_client_version(ver)
@@ -228,6 +239,22 @@ class PhoneOps:
             if wait > 0:
                 self._sleep(wait)
 
+    def add_human_gap(self, serial: str, seconds: float) -> None:
+        """步骤之间额外停一下。不超过 2 秒；停完把「上次操作」拨到现在，后面的最短间隔照旧。
+
+        调用方已经占着这台手机的锁。非正数什么都不做。
+        """
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+            return
+        extra = float(seconds)
+        if extra > 2.0:
+            extra = 2.0
+        self._sleep(extra)
+        self._last_op[serial] = self._clock()
+
+    def last_raw(self, serial: str) -> bytes:
+        return self._last_raw.get(serial, b"")
+
     def _check_bounds(self, serial: str, *coords: int) -> None:
         size = self._screen.get(serial)
         if size and any(c >= max(size) for c in coords):     # either orientation: long side bounds both axes
@@ -240,6 +267,7 @@ class PhoneOps:
             raw = self._adb(adb, base + ("exec-out", "screencap"), SCREENCAP_TIMEOUT_SEC)
             png, w, h, dw, dh, scale = screenshot_png(raw)
             self._screen[serial] = (dw, dh)
+            self._last_raw[serial] = bytes(raw)
             return {"png_b64": base64.b64encode(png).decode("ascii"), "width": w, "height": h,
                     "device_width": dw, "device_height": dh, "scale": scale, "bytes": len(png)}
         if kind == TASK_PHONE_TAP:

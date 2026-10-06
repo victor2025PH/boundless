@@ -4,6 +4,9 @@
 ; Room key:          ChatXAgentSetup.exe /ROOMKEYFILE=C:\path\room.key
 ;                    (or drop room.key next to this exe; the key is never baked into the public build)
 ; Controller:        ChatXAgentSetup.exe /CONTROLLER=https://bd2026.cc/fleet
+; Phone-room adb:    ChatXAgentSetup.exe /MANAGEADBSERVER=1
+;                    (opt in: bundled platform-tools may bring its server up.
+;                     Refused on a live-stream host. Default is off.)
 ; Keep old id:       ChatXAgentSetup.exe /KEEPIDENTITY=1
 ;                    (0.3.5+ re-derives a machine_id cached by 0.3.4 or a cloned disk image from
 ;                     this PC's hardware on reinstall; this switch keeps the old id instead)
@@ -18,7 +21,10 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.7"
+  #define AppVersion "0.3.8"
+#endif
+#ifndef PlatformToolsDir
+  #define PlatformToolsDir "..\platform-tools"
 #endif
 
 #define AppName "智拓群控节点"
@@ -64,6 +70,9 @@ Source: "{#SetupDir}\bootstrap.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Status.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Panel.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
+; Phone-room adb. The directory always contains README.txt; adb.exe is optional
+; (dropped in before the build, see platform-tools\README.txt). Missing files are skipped.
+Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\Fleet node status.lnk"
@@ -412,6 +421,8 @@ begin
       params := params + ' -Snapshot "' + legacy + '"';
     if CmdParam('/KEEPIDENTITY=') = '1' then
       params := params + ' -KeepIdentity';
+    if CmdParam('/MANAGEADBSERVER=') = '1' then
+      params := params + ' -ManageAdbServer';
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       ResultCode := 1;
     { Any non-zero bootstrap code must fail a silent install. A suppressed message box exits 0. }

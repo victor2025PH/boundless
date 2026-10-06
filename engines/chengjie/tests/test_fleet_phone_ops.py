@@ -408,6 +408,70 @@ def test_unknown_kind_and_garbage_target():
     assert ops.execute(TASK_PHONE_TAP, {"x": 1, "y": 1}, "S1")[2] == "bad_serial"
 
 
+def test_opt_in_phone_op_brings_bundled_server_up_then_taps(monkeypatch):
+    from src.fleet import adb_bundle
+
+    bundled = "D:/ChatX Agent/platform-tools/adb.exe"
+    monkeypatch.setattr(adb_bundle, "bundled_adb_candidates", lambda: (bundled,))
+    probes = {"n": 0}
+
+    def probe(_port):
+        probes["n"] += 1
+        return None if probes["n"] == 1 else 41
+
+    class _Run:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, cmd, **kw):
+            assert kw["shell"] is False and kw["timeout"] > 0
+            self.calls.append(tuple(cmd))
+            args = tuple(cmd[1:])
+            if args == ("start-server",):
+                assert cmd[0] == bundled and kw["timeout"] == adb_bundle.START_TIMEOUT_SEC
+                return _NS(returncode=0, stdout=b"", stderr=b"")
+            if args == ("version",):
+                return _NS(returncode=0, stdout=b"Android Debug Bridge version 1.0.41\nVersion 35.0.2\n", stderr=b"")
+            if args == ("devices", "-l"):
+                return _NS(returncode=0, stdout=DEVICES.encode(), stderr=b"")
+            return _NS(returncode=0, stdout=b"", stderr=b"")
+
+    fake = _Run()
+    ops = PhoneOps(run=fake, locate=lambda _p: bundled, server_version=probe, manage_server=True,
+                   live_stream=False, clock=lambda: 100.0, sleep=lambda _s: None)
+    status, result, detail = ops.execute(TASK_PHONE_TAP, {"x": 1, "y": 1}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_DONE, "ok") and result["serial"] == "S1"
+    assert fake.calls[0] == (bundled, "start-server")
+    n = len(fake.calls)
+    assert ops.execute(TASK_PHONE_TAP, {"x": 1, "y": 1}, {"serial": "3B1F4KE5MS140P4X"})[2] == "protected_phone"
+    assert len(fake.calls) == n
+
+
+def test_phone_ops_live_stream_and_default_do_not_bring_a_server_up(monkeypatch):
+    from src.fleet import adb_bundle
+
+    bundled = "D:/ChatX Agent/platform-tools/adb.exe"
+    monkeypatch.setattr(adb_bundle, "bundled_adb_candidates", lambda: (bundled,))
+
+    class _Run:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, cmd, **kw):
+            self.calls.append(tuple(cmd))
+            return _NS(returncode=0, stdout=b"", stderr=b"")
+
+    live_run = _Run()
+    live = PhoneOps(run=live_run, locate=lambda _p: bundled, server_version=lambda _p: None,
+                    manage_server=True, live_stream=True)
+    assert live.execute(TASK_PHONE_TAP, {"x": 1, "y": 1}, {"serial": "S1"})[2] == "adb_server_not_running"
+    assert live_run.calls == []
+    off = _Run()
+    default = PhoneOps(run=off, locate=lambda _p: bundled, server_version=lambda _p: None, manage_server=False)
+    assert default.execute(TASK_PHONE_TAP, {"x": 1, "y": 1}, {"serial": "S1"})[2] == "adb_server_not_running"
+    assert off.calls == []
+
+
 def test_new_modules_have_no_dangerous_adb_or_live_port_tokens():
     root = _Path(po.__file__).resolve().parent
     for name in ("phone_ops.py", "phone_rules.py"):

@@ -59,6 +59,7 @@ from .identity import (
 )
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
+from .phone_flow_robust import parse_jitter_ms
 from .phone_flows import PhoneFlows
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
@@ -236,7 +237,8 @@ class AgentConfig:
     # 只由人手改的键（agent 自己从不写）：save() 以磁盘上的为准，运行中的 agent 不会用内存旧值
     # 盖掉手工改动；NodeAgent 每次心跳前按 mtime 热加载（2026-10-06 176 改 phones_exclude 需重启的教训）。
     OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp",
-                     "phone_flows_enabled", "phone_ui_map")
+                     "adb_manage_server", "phone_flows_enabled", "phone_ui_map",
+                     "phone_flow_verify", "phone_flow_jitter_ms")
 
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -320,6 +322,26 @@ class AgentConfig:
                 del self.data[k]
                 changed = True
         return changed
+
+    def write_operator_keys(self, updates: Dict[str, Any]) -> None:
+        """Persist operator settings. Other operator keys already on disk are kept."""
+        bad = [k for k in updates if k not in self.OPERATOR_KEYS]
+        if bad:
+            raise AgentError(f"not an operator setting: {bad[0]}")
+        if self._legacy_source is not None:
+            raise AgentError("state directory is not locked yet")
+        disk = self._read_trusted_disk()
+        if isinstance(disk, dict):
+            for k in self.OPERATOR_KEYS:
+                if k in updates:
+                    continue
+                if k in disk:
+                    self.data[k] = disk[k]
+                elif k in self.data:
+                    del self.data[k]
+        for k, v in updates.items():
+            self.data[k] = v
+        self._write_locked()
 
     def save(self) -> None:
         if self._legacy_source is None:
@@ -511,10 +533,11 @@ class NodeAgent:
         self.last_error = ""
         self.stats = {"heartbeats": 0, "tasks_done": 0, "tasks_failed": 0, "tasks_rejected": 0, "errors": 0}
         # 0.3.6 只读手机清点：只跑 adb devices -l；agent.json 可配 phones_exclude / adb_path / phones_enabled
-        self.phones = PhoneCollector(clock=clock, **_phone_collector_settings(cfg.data))
+        # 0.3.8 adb_manage_server（默认关）才允许用安装目录里的 adb 把本机 server 拉起来；直播机除外
+        self.phones = PhoneCollector(clock=clock, **_phone_collector_settings(cfg.data, cfg.state_dir))
         # 0.3.7 远程手机操作：主控只给心跳里声明了 phone_ops_v1 的节点排 phone_* 任务；
         # agent.json phone_ops_enabled=false 关掉（不声明能力、全部拒绝），phone_ops_allow_tcp=true 才操作无线手机
-        self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data))
+        self.phone_ops = PhoneOps(**_phone_ops_settings(cfg.data, cfg.state_dir))
         # 0.3.8 社交动作缺省关：只有 agent.json phone_flows_enabled=true 才声明 phone_flows_v1
         self.phone_flows = PhoneFlows(**_phone_flows_settings(cfg.data), ops=self.phone_ops)
         self._cfg_mtime = _mtime_ns(cfg.path)
@@ -528,12 +551,13 @@ class NodeAgent:
         if not self.cfg.refresh_operator_keys():
             return False
         d = self.cfg.data
-        self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d))
-        self.phone_ops.configure(**_phone_ops_settings(d))
+        self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d, self.cfg.state_dir))
+        self.phone_ops.configure(**_phone_ops_settings(d, self.cfg.state_dir))
         self.phone_flows.configure(**_phone_flows_settings(d), ops=self.phone_ops)
-        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s",
+        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s，adb_manage_server %s",
                     len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off",
-                    "on" if self.phone_flows.enabled else "off")
+                    "on" if self.phone_flows.enabled else "off",
+                    "on" if self.phone_ops.manage_server else "off")
         return True
 
     # ── 主控调用 ──
@@ -1181,20 +1205,24 @@ def _mtime_ns(path: Path) -> Optional[int]:
         return None
 
 
-def _phone_collector_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+def _phone_collector_settings(data: Dict[str, Any], state_dir: Optional[Path] = None) -> Dict[str, Any]:
     return {
         "adb_path": str(data.get("adb_path") or ""),
         "exclude": data.get("phones_exclude") or [],
         "enabled": data.get("phones_enabled", True) is not False,
+        "manage_server": data.get("adb_manage_server") is True,
+        "state_dir": state_dir,
     }
 
 
-def _phone_ops_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+def _phone_ops_settings(data: Dict[str, Any], state_dir: Optional[Path] = None) -> Dict[str, Any]:
     return {
         "adb_path": str(data.get("adb_path") or ""),
         "exclude": data.get("phones_exclude") or [],
         "enabled": data.get("phone_ops_enabled", True) is not False,
         "allow_tcp": data.get("phone_ops_allow_tcp") is True,
+        "manage_server": data.get("adb_manage_server") is True,
+        "state_dir": state_dir,
     }
 
 
@@ -1206,7 +1234,14 @@ def _phone_flows_settings(data: Dict[str, Any]) -> Dict[str, Any]:
         path = ""
     else:
         path = "invalid"
-    return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path}
+    verify = None
+    if "phone_flow_verify" in data:
+        verify = data.get("phone_flow_verify") is True
+    jitter = None
+    if "phone_flow_jitter_ms" in data:
+        jitter = parse_jitter_ms(data.get("phone_flow_jitter_ms"))
+    return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path,
+            "verify": verify, "jitter_ms": jitter}
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────
@@ -1358,6 +1393,8 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     r.add_argument("--wait", type=int, default=0, help="--once 时长轮询秒数")
     r.add_argument("--service", action="store_true", help="监督模式：未注册/被吊销/异常都不退出（计划任务 / systemd 用）")
     r.add_argument("--log-file", default="", help="日志文件（默认 <state_dir>/logs/agent.log，--service 时自动启用）")
+    sub.add_parser("enable-phone-adb",
+                   help="机房节点：允许用安装目录里自带的 adb 在没有 server 时把它拉起来（直播机拒绝）")
     sub.add_parser("install-service", help="开机自启 + 立即启动（Windows 计划任务 SYSTEM / Linux systemd）")
     sub.add_parser("uninstall-service")
     sub.add_parser("service-status")
@@ -1434,6 +1471,17 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
             "reason": info.get("reason") or "", "source": info.get("source") or "", "origin": info.get("origin") or "",
             "enrollment_reset": bool(agent.identity_reset),
         }, ensure_ascii=False))
+        return 0
+    if args.cmd == "enable-phone-adb":
+        if is_live_stream_host(cfg.state_dir):
+            print("live-stream host: bundled adb server management stays off", file=sys.stderr)
+            return 2
+        try:
+            cfg.write_operator_keys({"adb_manage_server": True})
+        except (AgentError, StateDirLockError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True, "adb_manage_server": True}))
         return 0
     if args.cmd == "install-service":
         res = install_service(cfg.state_dir)

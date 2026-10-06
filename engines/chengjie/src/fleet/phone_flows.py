@@ -6,16 +6,23 @@
 
 ``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1，执行直接拒绝，不碰 adb。
 回传只留应用名、动作、步数和字数，不带回帖子或评论原文。
+
+核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
+``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
 """
 
 from __future__ import annotations
 
 import json
+import random
 import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .phone_flow_robust import (
+    MAX_JITTER_MS, MAX_RETRIES, frame_token, jitter_seconds, probe_matches, resolve_policy,
+)
 from .phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
 from .phone_rules import KEYCODES, SWIPE_MS_MAX, SWIPE_MS_MIN, PhoneOpError, check_target
 from .phones import is_excluded
@@ -28,12 +35,14 @@ _BUNDLED = Path(__file__).with_name("phone_ui_map.json")
 _MAX_MAP_BYTES = 256 * 1024
 _FLOW_KEYS = ("post", "post_media", "like", "comment", "follow")
 _STEP_KEYS = {
-    "tap": {"op", "anchor", "slot_field", "slot_stride"},
-    "swipe": {"op", "from", "to", "duration_ms", "repeat"},
-    "key": {"op", "key"},
-    "text": {"op", "field"},
+    "tap": {"op", "anchor", "slot_field", "slot_stride", "expect"},
+    "swipe": {"op", "from", "to", "duration_ms", "repeat", "expect"},
+    "key": {"op", "key", "expect"},
+    "text": {"op", "field", "expect"},
 }
 _NAME_RE_SRC = r"^[a-z][a-z0-9_]{0,31}$"
+_UNSET = object()
+_CHECK_FAILS = ("screen_not_reached", "not_logged_in", "app_not_ready", "anchor_mismatch")
 
 Step = Tuple[str, Dict[str, Any]]
 
@@ -54,8 +63,69 @@ def _name(v: Any) -> str:
     return v
 
 
+def _rgb(v: Any) -> Tuple[int, int, int]:
+    if not isinstance(v, (list, tuple)) or len(v) != 3:
+        _invalid()
+    return (_as_int(v[0], 0, 255), _as_int(v[1], 0, 255), _as_int(v[2], 0, 255))
+
+
+def _expect(raw: Any, probes: Dict[str, Any]) -> Dict[str, Any]:
+    if raw == "change":
+        return {"change": True}
+    if not isinstance(raw, dict) or not raw or set(raw) - {"change", "probe", "retry"}:
+        _invalid()
+    out: Dict[str, Any] = {}
+    if "change" in raw:
+        if not isinstance(raw.get("change"), bool):
+            _invalid()
+        if raw["change"]:
+            out["change"] = True
+    if "probe" in raw:
+        probe = _name(raw.get("probe"))
+        if probe not in probes:
+            _invalid()
+        out["probe"] = probe
+    if "retry" in raw:
+        out["retry"] = _as_int(raw.get("retry"), 0, MAX_RETRIES)
+    if "change" not in out and "probe" not in out:
+        _invalid()
+    return out
+
+
+def _probes(raw: Any, anchors: Dict[str, Tuple[int, int]]) -> Dict[str, Dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or len(raw) > 16:
+        _invalid()
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, spec in raw.items():
+        name = _name(name)
+        if not isinstance(spec, dict) or set(spec) - {"at", "rgb", "tol", "note"}:
+            _invalid()
+        at = _name(spec.get("at"))
+        if at not in anchors:
+            _invalid()
+        tol = 32
+        if "tol" in spec:
+            tol = _as_int(spec.get("tol"), 0, 255)
+        out[name] = {"at": at, "rgb": list(_rgb(spec.get("rgb"))), "tol": tol}
+    return out
+
+
+def _names(raw: Any, probes: Dict[str, Any]) -> List[str]:
+    if not isinstance(raw, list) or len(raw) > 8:
+        _invalid()
+    out = []
+    for item in raw:
+        name = _name(item)
+        if name not in probes or name in out:
+            _invalid()
+        out.append(name)
+    return out
+
+
 def _validate_app(raw: Any) -> Dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) - {"anchors", "flows", "note"}:
+    if not isinstance(raw, dict) or set(raw) - {"anchors", "flows", "note", "probes", "preflight"}:
         _invalid()
     anchors_raw = raw.get("anchors")
     flows_raw = raw.get("flows")
@@ -69,6 +139,7 @@ def _validate_app(raw: Any) -> Dict[str, Any]:
         if not isinstance(pt, (list, tuple)) or len(pt) != 2:
             _invalid()
         anchors[name] = (_as_int(pt[0], 0, 1000), _as_int(pt[1], 0, 1000))
+    probes = _probes(raw.get("probes"), anchors) if "probes" in raw else {}
     flows: Dict[str, List[Dict[str, Any]]] = {}
     for flow in _FLOW_KEYS:
         steps_raw = flows_raw.get(flow)
@@ -118,20 +189,72 @@ def _validate_app(raw: Any) -> Dict[str, Any]:
                 if field not in ("text", "handle"):
                     _invalid()
                 clean["field"] = field
+            if "expect" in step:
+                clean["expect"] = _expect(step.get("expect"), probes)
             steps.append(clean)
         flows[flow] = steps
-    return {"anchors": anchors, "flows": flows}
+    preflight = None
+    if "preflight" in raw:
+        pf = raw.get("preflight")
+        if not isinstance(pf, dict) or set(pf) - {"after_anchor", "require", "forbid", "note"}:
+            _invalid()
+        after = _name(pf.get("after_anchor"))
+        if after not in anchors:
+            _invalid()
+        require = _names(pf["require"], probes) if "require" in pf else []
+        forbid = _names(pf["forbid"], probes) if "forbid" in pf else []
+        if not require and not forbid:
+            _invalid()
+        for steps in flows.values():
+            if not any(s.get("op") == "tap" and s.get("anchor") == after for s in steps):
+                _invalid()
+        preflight = {"after_anchor": after, "require": require, "forbid": forbid}
+    out: Dict[str, Any] = {"anchors": anchors, "flows": flows, "probes": probes}
+    if preflight is not None:
+        out["preflight"] = preflight
+    return out
+
+
+def _robust(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {"verify": False, "retries": 2, "jitter_ms": [0, 0]}
+    if not isinstance(raw, dict) or set(raw) - {"verify", "retries", "jitter_ms", "note"}:
+        _invalid()
+    verify = False
+    if "verify" in raw:
+        if not isinstance(raw.get("verify"), bool):
+            _invalid()
+        verify = raw["verify"]
+    retries = 2
+    if "retries" in raw:
+        retries = _as_int(raw.get("retries"), 0, MAX_RETRIES)
+    jitter = [0, 0]
+    if "jitter_ms" in raw:
+        pair = raw.get("jitter_ms")
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            _invalid()
+        lo, hi = _as_int(pair[0], 0, MAX_JITTER_MS), _as_int(pair[1], 0, MAX_JITTER_MS)
+        if lo > hi:
+            _invalid()
+        jitter = [lo, hi]
+    if "note" in raw and (not isinstance(raw.get("note"), str) or len(raw["note"]) > 400):
+        _invalid()
+    return {"verify": verify, "retries": retries, "jitter_ms": jitter}
 
 
 def validate_ui_map(data: Any) -> Dict[str, Any]:
     """坐标文件 → 规范化结构。形状不对 → PhoneOpError('ui_map_invalid')。"""
-    if not isinstance(data, dict) or set(data) - {"version", "apps", "note"}:
+    if not isinstance(data, dict) or set(data) - {"version", "apps", "note", "robust"}:
         _invalid()
     _as_int(data.get("version"), 1, 1000)
     apps = data.get("apps")
     if not isinstance(apps, dict) or set(apps) != set(SOCIAL_APPS):
         _invalid()
-    return {"version": data["version"], "apps": {app: _validate_app(apps[app]) for app in SOCIAL_APPS}}
+    return {
+        "version": data["version"],
+        "robust": _robust(data.get("robust") if "robust" in data else None),
+        "apps": {app: _validate_app(apps[app]) for app in SOCIAL_APPS},
+    }
 
 
 def bundled_ui_map() -> Dict[str, Any]:
@@ -171,9 +294,40 @@ def _repeat(step: Dict[str, Any], payload: Dict[str, Any]) -> int:
     return int(rep)
 
 
-def compile_flow(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
-                 ui_map: Dict[str, Any]) -> List[Step]:
-    """把一个应用的一条流程编成低层 (kind, payload) 列表。不含开头那张用来量屏幕的截图。"""
+def _label(step: Dict[str, Any]) -> str:
+    op = step.get("op")
+    if op == "tap":
+        return str(step.get("anchor") or "")
+    if op == "swipe":
+        return str(step.get("from") or "")
+    if op == "key":
+        return str(step.get("key") or "")
+    return str(step.get("field") or op or "")
+
+
+def _blank_check(step: Dict[str, Any]) -> Dict[str, Any]:
+    return {"change": False, "probe": "", "retry": None, "preflight": False, "label": _label(step),
+            "require": (), "forbid": ()}
+
+
+def _check_for(step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    exp = step.get("expect")
+    if not exp:
+        return None
+    check = _blank_check(step)
+    if exp == "change":
+        check["change"] = True
+        return check
+    if isinstance(exp, dict):
+        check["change"] = bool(exp.get("change"))
+        check["probe"] = str(exp.get("probe") or "")
+        check["retry"] = exp.get("retry") if "retry" in exp else None
+        return check
+    return None
+
+
+def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
+             ui_map: Dict[str, Any]) -> Tuple[List[Step], List[Optional[Dict[str, Any]]]]:
     if app not in SOCIAL_APPS or not isinstance(width, int) or isinstance(width, bool) or width < 1:
         raise PhoneOpError("ui_map_invalid")
     if not isinstance(height, int) or isinstance(height, bool) or height < 1:
@@ -188,7 +342,11 @@ def compile_flow(app: str, flow_name: str, payload: Dict[str, Any], width: int, 
     for name in overrides:
         if name not in anchors:
             raise PhoneOpError("unknown_anchor")
+    preflight = spec.get("preflight") if isinstance(spec.get("preflight"), dict) else None
+    pf_anchor = str(preflight.get("after_anchor") or "") if preflight else ""
+    pf_used = False
     out: List[Step] = []
+    checks: List[Optional[Dict[str, Any]]] = []
     for step in steps:
         op = step["op"]
         n = _repeat(step, payload) if op == "swipe" else 1
@@ -219,11 +377,34 @@ def compile_flow(app: str, flow_name: str, payload: Dict[str, Any], width: int, 
             x2, y2 = _point(step["to"], anchors, overrides, width, height)
             dur = step.get("duration_ms", 350)
             item = (TASK_PHONE_SWIPE, {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": dur})
+        check = _check_for(step)
+        if op == "tap" and pf_anchor and not pf_used and step.get("anchor") == pf_anchor:
+            if check is None:
+                check = _blank_check(step)
+            check["preflight"] = True
+            check["label"] = str(step.get("anchor") or "")
+            check["require"] = tuple(preflight.get("require") or ())
+            check["forbid"] = tuple(preflight.get("forbid") or ())
+            pf_used = True
         for _ in range(n):
             out.append(item)
+            checks.append(None if check is None else dict(check))
     if not out:
         raise PhoneOpError("ui_map_invalid")
-    return out
+    return out, checks
+
+
+def compile_flow(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
+                 ui_map: Dict[str, Any]) -> List[Step]:
+    """把一个应用的一条流程编成低层 (kind, payload) 列表。不含开头那张用来量屏幕的截图。"""
+    steps, _checks = _compile(app, flow_name, payload, width, height, ui_map)
+    return steps
+
+
+def compile_flow_checked(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
+                         ui_map: Dict[str, Any]) -> Tuple[List[Step], List[Optional[Dict[str, Any]]]]:
+    """和 compile_flow 同序。checks[i] 为 None 表示这一步做完不截图复查。"""
+    return _compile(app, flow_name, payload, width, height, ui_map)
 
 
 def _status(err: PhoneOpError) -> str:
@@ -251,14 +432,19 @@ def _result(serial: str, app: str, flow: str, *, completed: Optional[int] = None
 class PhoneFlows:
     """节点上的社交动作执行器。``execute`` 永不抛。"""
 
-    def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None) -> None:
+    def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
+                 verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None) -> None:
         self.enabled = False
         self.ui_map_path = ""
         self.ops = ops
         self._cache: Optional[tuple] = None
-        self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops)
+        self._verify: Any = None
+        self._jitter: Any = None
+        self._rng = random.random
+        self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify, jitter_ms=jitter_ms, rng=rng)
 
-    def configure(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None) -> None:
+    def configure(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
+                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None) -> None:
         path = ui_map_path.strip() if isinstance(ui_map_path, str) else ("invalid" if ui_map_path else "")
         if path != self.ui_map_path:
             self._cache = None
@@ -266,6 +452,12 @@ class PhoneFlows:
         self.enabled = bool(enabled)
         if ops is not None:
             self.ops = ops
+        if verify is not _UNSET:
+            self._verify = verify
+        if jitter_ms is not _UNSET:
+            self._jitter = jitter_ms
+        if rng is not None:
+            self._rng = rng
 
     def load_map(self) -> Dict[str, Any]:
         path = Path(self.ui_map_path) if self.ui_map_path else _BUNDLED
@@ -290,6 +482,44 @@ class PhoneFlows:
         parsed = validate_ui_map(data)
         self._cache = (token, parsed)
         return parsed
+
+    def _probe_hit(self, raw: bytes, probe: Any, anchors: Dict[str, Tuple[int, int]],
+                   overrides: Dict[str, Any], width: int, height: int) -> bool:
+        if not isinstance(probe, dict):
+            return False
+        x, y = _point(str(probe.get("at") or ""), anchors, overrides, width, height)
+        return probe_matches(raw, x, y, probe.get("rgb") or (0, 0, 0), int(probe.get("tol") or 0))
+
+    def _confirm(self, ops: Any, run: Any, serial: str, check: Dict[str, Any], spec: Dict[str, Any],
+                 overrides: Dict[str, Any]) -> None:
+        before = frame_token(ops.last_raw(serial))
+        shot = run(TASK_PHONE_SCREENSHOT, {})
+        raw = ops.last_raw(serial)
+        dw, dh = shot.get("device_width"), shot.get("device_height")
+        if isinstance(dw, bool) or not isinstance(dw, int) or isinstance(dh, bool) or not isinstance(dh, int):
+            raise PhoneOpError("screencap_bad_frame", failed=True)
+        if check.get("change") and frame_token(raw) == before:
+            err = PhoneOpError("screen_not_reached", failed=True)
+            err.stderr = f"anchor:{check.get('label') or ''}"[:160]  # type: ignore[attr-defined]
+            raise err
+        anchors = spec.get("anchors") or {}
+        probes = spec.get("probes") or {}
+        if check.get("preflight"):
+            for name in check.get("forbid") or ():
+                if self._probe_hit(raw, probes.get(name), anchors, overrides, dw, dh):
+                    err = PhoneOpError("not_logged_in", failed=True)
+                    err.stderr = f"probe:{name}"[:160]  # type: ignore[attr-defined]
+                    raise err
+            for name in check.get("require") or ():
+                if not self._probe_hit(raw, probes.get(name), anchors, overrides, dw, dh):
+                    err = PhoneOpError("app_not_ready", failed=True)
+                    err.stderr = f"probe:{name}"[:160]  # type: ignore[attr-defined]
+                    raise err
+        probe_name = str(check.get("probe") or "")
+        if probe_name and not self._probe_hit(raw, probes.get(probe_name), anchors, overrides, dw, dh):
+            err = PhoneOpError("anchor_mismatch", failed=True)
+            err.stderr = f"probe:{probe_name}"[:160]  # type: ignore[attr-defined]
+            raise err
 
     def execute(self, kind: str, payload: Any, target: Any, ops: Any = None) -> Tuple[str, Dict[str, Any], str]:
         ops = self.ops if ops is None else ops
@@ -333,20 +563,52 @@ class PhoneFlows:
                 if isinstance(w, bool) or not isinstance(w, int) or isinstance(h, bool) or not isinstance(h, int):
                     return STATUS_FAILED, _result(serial, app, flow, completed=1), "screencap_bad_frame"
                 prog.update(done=1, w=w, h=h)
+                verify_on, jitter, retries = resolve_policy(ui, self._verify, self._jitter)
                 try:
-                    steps = compile_flow(app, map_flow, p, w, h, ui)
+                    if verify_on or jitter != (0, 0):
+                        steps, checks = compile_flow_checked(app, map_flow, p, w, h, ui)
+                    else:
+                        steps = compile_flow(app, map_flow, p, w, h, ui)
+                        checks = [None] * len(steps)
                 except PhoneOpError as e:
                     return _status(e), _result(serial, app, flow, completed=1, width=w, height=h, err=e), e.code
+                spec = ui["apps"][app]
                 for i, (sk, sp) in enumerate(steps):
                     prog["step"] = i
-                    try:
-                        res = run(sk, sp)
-                    except PhoneOpError as e:
-                        return _status(e), _result(
-                            serial, app, flow, completed=prog["done"], failed_step=i, width=w, height=h, err=e,
-                        ), e.code
+                    if jitter != (0, 0):
+                        gap = jitter_seconds(jitter, self._rng)
+                        if gap > 0:
+                            ops.add_human_gap(serial, gap)
+                    check = checks[i] if verify_on else None
+                    tries = 1
+                    if check is not None:
+                        extra = retries if check.get("retry") is None else int(check["retry"])
+                        if extra < 0:
+                            extra = 0
+                        if extra > MAX_RETRIES:
+                            extra = MAX_RETRIES
+                        tries = 1 + extra
+                    res = None
+                    for attempt in range(tries):
+                        try:
+                            res = run(sk, sp)
+                        except PhoneOpError as e:
+                            return _status(e), _result(
+                                serial, app, flow, completed=prog["done"], failed_step=i, width=w, height=h, err=e,
+                            ), e.code
+                        if check is None:
+                            break
+                        try:
+                            self._confirm(ops, run, serial, check, spec, overrides)
+                            break
+                        except PhoneOpError as e:
+                            if e.code not in _CHECK_FAILS or attempt + 1 >= tries:
+                                return _status(e), _result(
+                                    serial, app, flow, completed=prog["done"], failed_step=i,
+                                    width=w, height=h, err=e,
+                                ), e.code
                     prog["done"] = int(prog["done"]) + 1
-                    if sk == TASK_PHONE_TEXT:
+                    if sk == TASK_PHONE_TEXT and isinstance(res, dict):
                         chars += int(res.get("chars") or 0)
             elapsed = int(max(0.0, ops._clock() - t0) * 1000)
             out: Dict[str, Any] = {
@@ -374,5 +636,5 @@ class PhoneFlows:
 
 
 __all__ = [
-    "PhoneFlows", "bundled_ui_map", "compile_flow", "validate_ui_map",
+    "PhoneFlows", "bundled_ui_map", "compile_flow", "compile_flow_checked", "validate_ui_map",
 ]

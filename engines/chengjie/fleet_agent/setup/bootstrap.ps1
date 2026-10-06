@@ -8,7 +8,10 @@ param(
   [string]$StateDir = "",
   [string]$Snapshot = "",
   # Keep a machine_id cached by agent 0.3.4 or older as-is (setup /KEEPIDENTITY=1).
-  [switch]$KeepIdentity
+  [switch]$KeepIdentity,
+  # Phone-room only (setup /MANAGEADBSERVER=1). Writes adb_manage_server=true.
+  # A live-stream host is refused by the agent as well as by the check below.
+  [switch]$ManageAdbServer
 )
 $ErrorActionPreference = 'Stop'
 # Pin PSModulePath to this Windows PowerShell 5.1's own module dirs. Started from pwsh 7
@@ -31,9 +34,42 @@ function NativeOut([string]$exe, [string[]]$a) {
   try { $o = & $exe @a 2>$null | ForEach-Object { "$_" }; $script:NativeExit = $LASTEXITCODE; return ($o -join "`n") }
   finally { $ErrorActionPreference = $old }
 }
-function Test-PlatformToolsAdb {
-  # Presence only. Do not download, install, or start adb.
+function Test-LiveStreamHost([string]$Dir) {
+  $v = [string]$env:CHATX_FLEET_LIVE_STREAM
+  $low = $v.ToLower()
+  if ($low -eq '1' -or $low -eq 'true' -or $low -eq 'yes' -or $low -eq 'on') { return $true }
+  $flags = @()
+  if ($env:ProgramData) { $flags += (Join-Path $env:ProgramData 'ChatX\live-stream.flag') }
+  if ($Dir) {
+    $flags += (Join-Path $Dir 'live-stream.flag')
+    $parent = Split-Path -Parent $Dir
+    if ($parent) { $flags += (Join-Path $parent 'live-stream.flag') }
+  }
+  foreach ($f in $flags) {
+    if ($f -and (Test-Path -LiteralPath $f)) { return $true }
+  }
+  return $false
+}
+function Enable-PhoneAdb([string]$Exe, [string]$Dir) {
+  # Opt in only. Does not download or launch adb; the agent does that later, and only off a live-stream host.
+  if (Test-LiveStreamHost $Dir) {
+    Say "live-stream host: bundled adb server management stays off"
+    return
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir 'agent.json'))) {
+    Say "agent.json missing; bundled adb server management not written"
+    return
+  }
+  NativeOut $Exe @('--state-dir', $Dir, 'enable-phone-adb') | Out-Null
+  if ($NativeExit -ne 0) { throw "could not enable bundled adb server management" }
+  Say "bundled adb server management enabled"
+}
+function Test-PlatformToolsAdb([string]$Dir) {
+  # Presence only. Do not download or launch adb.
   $paths = @('C:\platform-tools\adb.exe')
+  if ($Dir) { $paths += (Join-Path $Dir 'platform-tools\adb.exe') }
+  if ($env:ProgramData) { $paths += (Join-Path $env:ProgramData 'ChatX\platform-tools\adb.exe') }
+  if ($env:ProgramFiles) { $paths += (Join-Path $env:ProgramFiles 'ChatX Agent\platform-tools\adb.exe') }
   if ($env:ANDROID_SDK_ROOT) { $paths += (Join-Path $env:ANDROID_SDK_ROOT 'platform-tools\adb.exe') }
   if ($env:ANDROID_HOME) { $paths += (Join-Path $env:ANDROID_HOME 'platform-tools\adb.exe') }
   if ($env:LOCALAPPDATA) { $paths += (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe') }
@@ -234,12 +270,13 @@ if ($enrollment -eq 'enrolled') {
   }
 }
 
+if ($ManageAdbServer) { Enable-PhoneAdb $target $StateDir }
 Stop-StrayAgent $target
 $svc = Native $target @('--state-dir', $StateDir, 'install-service')
 if ($NativeExit -ne 0) { Say "install-service failed"; exit 1 }
 Say "service installed (scheduled task ChatX Fleet Agent)"
 try {
   if (-not $finishHost) { $finishHost = [string]$env:COMPUTERNAME }
-  Write-InstallFinish $StateDir $finishHost $finishShort (Test-PlatformToolsAdb)
+  Write-InstallFinish $StateDir $finishHost $finishShort (Test-PlatformToolsAdb $InstallDir)
 } catch { Say "could not write the finish note" }
 exit 0

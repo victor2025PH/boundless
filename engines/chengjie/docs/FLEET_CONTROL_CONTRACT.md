@@ -91,6 +91,10 @@
 `phones_enabled`；直播手机 `3B1F4KE5MS140P4X` 固定排除。主控把两个键存进 `nodes.last_heartbeat_json`，
 `GET /api/fleet/nodes` 每行多给顶层 `phones` / `phones_error`（老节点 = `[]` / `""`）。不对手机做任何操作。
 
+**0.3.8 机房自带 adb**（`src/fleet/adb_bundle.py`）：`find_adb` 在 `adb_path`、`C:\platform-tools\adb.exe` 之后、PATH 之前，再找安装目录 / `%ProgramData%\ChatX\platform-tools\adb.exe` / `%ProgramFiles%\ChatX Agent\platform-tools\adb.exe`。`C:\platform-tools` 仍优先，直播机继续用它自己的 adb。agent.json `adb_manage_server`（默认缺省 = 关，热加载）为 JSON `true` 时，只有「没有 server 在应答」且找到的是上面这份自带 adb，才会让它把 server 拉起来；直播机（`CHATX_FLEET_LIVE_STREAM` 或 `live-stream.flag`）即使写成 true 也不拉。端口不改，受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 仍不出现在清单里、也不能被操作。安装：`Install-ChatXAgent.ps1 -ManageAdbServer -PlatformToolsDir <含 adb.exe 的目录>`，或 `ChatXAgentSetup.exe /MANAGEADBSERVER=1`（打包前把 platform-tools 放到 `fleet_agent/platform-tools/`，见该目录 README.txt）。
+
+**0.3.8 社交动作**（`phone_post` / `phone_like` / `phone_comment` / `phone_follow`，能力 `phone_flows_v1`）：默认关，需 `phone_ops_v1` 且主控已开远程操作。坐标在 `phone_ui_map.json`（或 agent.json `phone_ui_map`）。受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 直接拒绝，不跑 adb。直播机判定（`is_live_stream_host`）不变。核对与节奏默认关，避免改掉原来的点击序列和 0.5 s 最短间隔：`robust.verify`（默认 false）、`robust.retries`（默认 2，最多 3 次额外重试）、`robust.jitter_ms`（默认 `[0, 0]`，每端最多 2000 ms，加在每步原有最短间隔之上，不缩短它，也不放开该手机的锁）。agent.json `phone_flow_verify` / `phone_flow_jitter_ms` 热加载，可盖过文件；`phone_flow_verify` 只有 JSON `true` 才强制核对，抖动形状不对就仍用文件。打开核对后，标了 `expect` 的步骤做完再截一张图：画面没变 → `screen_not_reached`；颜色对不上 → `anchor_mismatch`。点开应用（`preflight.after_anchor`，随包是 `app_icon`）之后先看登录标记：登录页颜色在 → `not_logged_in`，已登录颜色不在 → `app_not_ready`，停在这一步，不再发帖或点赞。
+
 ### 3.3 领任务（长轮询）
 
 `GET /api/fleet/tasks/pull?limit=20&wait=25`  `wait` 上限 25 s，队列为空时挂到超时。
