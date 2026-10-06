@@ -162,7 +162,19 @@ python -m src.fleet.admin task <node_id> account_health
 python -m src.fleet.admin task <node_id> stop_account --target '{"instance":"main","phone":"+8613800000000"}'
 python -m src.fleet.admin tasks --node <node_id> --status done
 python -m src.fleet.admin upgrade --manifest https://bd2026.cc/downloads/fleet/manifest.json --group 机房A --yes
+# 远程手机操作 / 排障（并入了发版时临时用的 fleet_ops*.py 脚本）
+python -m src.fleet.admin caps                             # 能力 / 远程操作（on(剩N分 by 谁) / off）/ 手机错误
+python -m src.fleet.admin remote <node_id> on --minutes 30 --machine-id <mid>   # 到点主控自动关；off 立即关并取消排队任务
+python -m src.fleet.admin phone-op <node_id> <serial> screenshot --actor rollout
+python -m src.fleet.admin task-show <task_id> --save-png shot.png                # 截图只显示长度，可存盘
+python -m src.fleet.admin phone-tasks <node_id>
+python -m src.fleet.admin phones
+python -m src.fleet.admin approve <request_id> --expect-machine <前缀> --expect-pairing <配对码>
+python -m src.fleet.admin update <node_id> --machine-id <mid> --group 机房A
+python -m src.fleet.admin revoke <node_id> --machine-id <mid> --host <主机名>      # 在线节点拒绝
 ```
+
+没有 `web_admin.auth_token` 时，可以用主控的操作员账号：`--env-file D:\projects\huoke\config\launch.env`（或环境变量 `CHATX_FLEET_ENV_FILE`），读 `FLEET_OPERATOR_USER` / `FLEET_OPERATOR_PASSWORD` 登录（会话 + CSRF）。主控地址仍用 `--controller` / `CHATX_FLEET_CONTROLLER`（env 文件里有 `CHATX_FLEET_CONTROLLER` 或 `FLEET_CONTROLLER_URL` 也认）。凭据只在内存里用，输出里带 key / secret / token / password / cookie / hash 的字段一律去掉。智拓本机的自检（`/api/fleet/phones` 等接口、前端资源是否到位、经智拓代理的手机操作）在 huoke 仓库 `scripts/ops/zhituo_fleet_ops.py`。
 
 `upgrade` 只会下发给 `agent_version != manifest.version` 且在线的节点；Agent 校验 sha256 → 换文件 → 自动重启，几十秒后 `nodes` 里版本变新。
 新版 Agent 在 `health_timeout_sec`（默认 300 秒）内没发出心跳会自动回滚到 `.bak`（见 FLEET_CONTROL_CONTRACT）。手动回滚 = 用旧版 manifest（`chatx-agent-<旧版>.exe` 仍在 downloads 目录，手写一个 manifest.json 指向它）再下发一次 upgrade。
