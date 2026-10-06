@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.companion.group_show.playbook import (
     Beat,
@@ -51,6 +51,16 @@ from src.companion.group_show.playbook import (
 
 # 角色顶替优先级：核心槽缺位时用谁顶（种草 > 抛问 > 质疑 > 附和）
 _SUBSTITUTE_ORDER: Tuple[str, ...] = ("advocate", "asker", "skeptic", "bystander")
+
+# 进剧本之前的接话。意图里不写事故、不写产品，避免占位生成器把禁令念出来。
+_WARMUP_INTENT = (
+    "顺着这个人刚说的那件事接一句。"
+    "就聊这件事，不要另起一个故事，不要提产品，不要发出邀请。"
+)
+_WARMUP_MUST = (
+    "不要编手滑、发错号、误发这种事故",
+    "不要把话题拐到产品或功能上",
+)
 
 # 真人插话里的「疑问 / 产品关切」信号——命中则响应式选人接管本拍
 _HUMAN_QUESTION_RE = re.compile(
@@ -121,6 +131,21 @@ class GroupShowDirector:
         self._pending_human_name: str = ""
         # 连续真人发言计数（我们的号一发言就清零）
         self._human_streak: int = 0
+        # 排练没有真人可接时才放开。真发一直等到有人说话，或时长到了。
+        self._warmup_released = False
+        raw_chat = (config or {}).get("chat_before_script", None)
+        if raw_chat is None:
+            try:
+                self._chat_need = int(
+                    getattr(state.playbook, "chat_before_script", 0) or 0)
+            except (TypeError, ValueError):
+                self._chat_need = 0
+        else:
+            try:
+                self._chat_need = int(raw_chat)
+            except (TypeError, ValueError):
+                self._chat_need = 0
+        self._chat_need = max(0, self._chat_need)
 
     # ── 观测输入 ─────────────────────────────────────────────────────────
 
@@ -142,6 +167,62 @@ class GroupShowDirector:
             seq=self.state.next_seq, ts=now,
             speaker_account=str(sender or "human"), role="human",
             beat_id="", text=t, kind="human"))
+
+    def prime_room(self, rows: Sequence[Any], *, now: float) -> int:
+        """开演前群里已经在说的话。用来接，不计入「真人接管」。
+
+        只留最近几句。最新一句若还在让路窗内，就先别抢话。
+        """
+        cleaned: List[Tuple[str, str, float]] = []
+        for item in rows or ():
+            try:
+                if isinstance(item, (tuple, list)) and len(item) >= 3:
+                    who, said, ts = str(item[0]), str(item[1]), float(item[2])
+                elif isinstance(item, dict):
+                    who = str(item.get("sender_name") or item.get("sender_id")
+                              or "群友")
+                    said = str(item.get("text") or "")
+                    ts = float(item.get("ts") or 0.0)
+                else:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            said = str(said or "").strip()
+            if not said or ts <= 0 or ts > float(now):
+                continue
+            cleaned.append((who.strip() or "群友", said, ts))
+        if not cleaned:
+            return 0
+        kept = cleaned[-8:]
+        for who, said, ts in kept:
+            self.state.append_event(ShowEvent(
+                seq=self.state.next_seq, ts=ts,
+                speaker_account=who, role="human",
+                beat_id="", text=said, kind="human"))
+        who, said, ts = cleaned[-1]
+        self._pending_human = said
+        self._pending_human_name = who
+        if 0 <= float(now) - ts < self.cfg.human_yield_seconds:
+            self.state.last_human_ts = ts
+        return len(kept)
+
+    def warmup_remaining(self) -> int:
+        """还要先接几句真人，才许打开剧本。"""
+        if self._warmup_released or self._chat_need <= 0:
+            return 0
+        spoken = sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("warmup_"))
+        return max(0, self._chat_need - spoken)
+
+    def waiting_for_people(self) -> bool:
+        """接话还没够，而且眼前没有可以回的真人句。"""
+        return self.warmup_remaining() > 0 and not str(self._pending_human).strip()
+
+    def release_warmup(self) -> None:
+        """只给排练用：没有真人可接时，不要空转。真发不调用。"""
+        self._warmup_released = True
 
     # ── 五方法接口 ───────────────────────────────────────────────────────
 
@@ -169,7 +250,9 @@ class GroupShowDirector:
         # 真人接管：连续真人发言达阈值——戏的目的就是把场子点着，点着了就该退场。
         # 场上有向导时不整场掐掉：帮手退场，向导留下把真人那句接完。
         # 没向导的旧剧本仍是「点着了就退」，这条分支碰不到它们。
-        if self._human_streak >= self.cfg.human_takeover_lines:
+        # 接话阶段真人连说几句是正常的，不能据此删掉剧本，也不能就此退场。
+        if (self.warmup_remaining() <= 0
+                and self._human_streak >= self.cfg.human_takeover_lines):
             if self._guide_member() is None:
                 return True, "human_takeover"
             self._sideline_helpers()
@@ -183,7 +266,7 @@ class GroupShowDirector:
         if (self.state.started_at > 0
                 and t - self.state.started_at > self.cfg.max_duration_seconds):
             return True, "timeout"
-        if not self._queue:
+        if not self._queue and self.warmup_remaining() <= 0:
             return True, "completed"
         return False, ""
 
@@ -206,6 +289,11 @@ class GroupShowDirector:
         **不变量**：正常拍流程（非响应式）里，返回的人永远就是队头拍的角色——
         「谁在说」与「说什么」由同一次重排一起改，绝不脱钩。
         """
+        if self.warmup_remaining() > 0:
+            if not str(self._pending_human).strip():
+                return None
+            return self._warmup_speaker()
+
         if not self._queue:
             return None
         cast = self.state.casting
@@ -234,6 +322,8 @@ class GroupShowDirector:
 
     def next_directive(self) -> Optional[BeatDirective]:
         """给本拍发言者的意图指令（**没有台词字段**——台词由人设 LLM 现场生成）。"""
+        if self.warmup_remaining() > 0 and str(self._pending_human).strip():
+            return self._warmup_directive()
         if not self._queue:
             return None
         beat = self._queue[0]
@@ -257,6 +347,15 @@ class GroupShowDirector:
 
     def advance_beat(self, event: ShowEvent) -> None:
         """本拍已发出：记账、清真人待回应、出队推进。"""
+        if str(getattr(event, "beat_id", "") or "").startswith("warmup_"):
+            self.state.append_event(event)
+            if event.kind in ("line", "media"):
+                self._human_streak = 0
+                self._pending_human = ""
+                self._pending_human_name = ""
+            if self.state.status == "pending":
+                self.state.status = "running"
+            return
         self.state.append_event(event)
         if event.kind in ("line", "media"):
             self._human_streak = 0
@@ -287,6 +386,38 @@ class GroupShowDirector:
             if ev.kind in ("line", "media"):
                 return str(ev.speaker_account or "")
         return ""
+
+    def _warmup_spoken(self) -> int:
+        return sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("warmup_"))
+
+    def _warmup_speaker(self) -> Optional[CastMember]:
+        """真人这句由向导接。没有向导时，换一个不是刚说过话的号。"""
+        guide = self._guide_member()
+        if guide is not None:
+            return guide
+        last = self._last_speaker_account()
+        members = list(self.state.casting.members)
+        for member in members:
+            if member.account_id != last:
+                return member
+        return members[0] if members else None
+
+    def _warmup_directive(self) -> BeatDirective:
+        slot = "guide" if self._guide_member() is not None else "skeptic"
+        who = self._pending_human_name or "群友"
+        must = must_not_for_slot(slot, with_guide=self._has_guide()) + _WARMUP_MUST
+        return BeatDirective(
+            beat_id=f"warmup_{self._warmup_spoken() + 1}",
+            intent=_WARMUP_INTENT,
+            product="",
+            soft_level=0,
+            must_not=must,
+            reference_last=True,
+            respond_to_human=f"{who}：{self._pending_human}",
+        )
 
     def _guide_member(self) -> Optional[CastMember]:
         return self.state.casting.by_slot("guide")

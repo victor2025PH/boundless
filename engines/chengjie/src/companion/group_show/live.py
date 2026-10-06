@@ -66,7 +66,7 @@ from src.companion.group_show.funnel import (
 from src.companion.group_show.director import GroupShowDirector
 from src.companion.group_show.ecp import project_history_for
 from src.companion.group_show.naturalness import line_similarity, naturalness_score
-from src.companion.group_show.pacing import beat_interval_seconds
+from src.companion.group_show.pacing import beat_interval_seconds, interval_subject
 from src.companion.group_show.platform_policy import platform_live_allowed
 from src.companion.group_show.playbook import (
     Casting,
@@ -99,6 +99,12 @@ MAX_LIVE_SECONDS = 45 * 60.0
 #: 主循环最多转几轮。比 :data:`MAX_LIVE_LINES` 宽裕，留给「等冷却」「跳拍」这些不产出
 #: 消息的轮次；导演逻辑真有回归时，宁可截断也不要挂住一个连着 worker 的协程。
 MAX_ITERATIONS = 60
+
+#: 开演时往回看多久的群消息，用来接已经在进行的聊天，而不是从剧本第一句起念。
+ROOM_LOOKBACK_SEC = 3600.0
+
+#: 没人说话时隔多久再看一眼收件箱。不占主循环轮次。
+WARMUP_POLL_SEC = 15.0
 
 #: 跨群冷却最多等多久（秒）。超过就跳过这一拍——等半小时不如让这拍不说话，戏还能往下演。
 MAX_GATE_WAIT_SEC = 180.0
@@ -609,8 +615,27 @@ async def perform(
     guard = 0
     sent_texts: List[str] = []   # 复读闸的比对面：本场已真发出去的台词
     cast_ids = {m.account_id for m in casting.members}
-    # 开演前一秒起扫：捕获「点开演时群里刚好有人在说」的那几条
+    # 开演前一秒起扫：捕获「点开演时群里刚好有人在说」的那几条。
+    # 有房间历史时，游标改到已读过的最新一条，避免同一句喂两次。
     human_cursor = started - 1.0
+    if human_feed is None and watch is not None and hasattr(watch, "drain_humans"):
+        try:
+            prior = list(watch.drain_humans(
+                since_ts=started - ROOM_LOOKBACK_SEC,
+                exclude_accounts=list(cast_ids), limit=20) or ())
+        except Exception:  # noqa: BLE001
+            logger.debug("[group_show.live] 开演前群消息读不到（已忽略）",
+                         exc_info=True)
+            prior = []
+        result.humans_observed += director.prime_room(prior, now=started)
+        for item in prior:
+            try:
+                ts = float(item[2] if isinstance(item, (tuple, list)) and len(item) >= 3
+                           else (item.get("ts") if isinstance(item, dict) else 0) or 0)
+            except (TypeError, ValueError, AttributeError):
+                ts = 0.0
+            if ts > human_cursor:
+                human_cursor = ts
 
     def _ingest_humans(at: float) -> None:
         """把本群新进向消息喂给导演；失败软吞——让路丢了总好过整场崩。"""
@@ -677,6 +702,23 @@ async def perform(
                 logger.info("[group_show.live] 真人让路 %.0fs group=%s",
                             gap, group_key)
                 await sleep(max(0.0, gap))
+                continue
+
+            if director.waiting_for_people():
+                # 接话没凑够，群里又没新句：等真人，不念剧本。
+                # 轮询不占 MAX_ITERATIONS，否则安静的群十五分钟就被护栏掐掉。
+                seen = t
+                for _poll in range(240):
+                    if not director.waiting_for_people():
+                        break
+                    if seen - started > MAX_LIVE_SECONDS:
+                        break
+                    await sleep(WARMUP_POLL_SEC)
+                    nxt = float(now())
+                    if nxt <= seen:
+                        break
+                    seen = nxt
+                    _ingest_humans(nxt)
                 continue
 
             speaker = director.select_next_speaker()
@@ -778,7 +820,9 @@ async def perform(
             # ⑨ 节奏：等够间隔再发。**扣掉生成耗时**——LLM 那 2~5 秒本来就相当于真人
             #    「正在打字」的时间，不扣的话每个间隔都被推长，实际节奏与排练里看到的
             #    那份时刻表越走越偏，而运营是照着排练那份验收的。
-            beat = state.playbook.beat_at(state.beat_cursor) or state.current_beat
+            beat = interval_subject(
+                state.playbook.beat_at(state.beat_cursor) or state.current_beat,
+                directive.beat_id)
             interval = float(beat_interval_seconds(
                 beat, prev_text_len=prev_len, next_text_len=len(text), rng=rng))
             pause = max(0.0, interval - gen_elapsed)

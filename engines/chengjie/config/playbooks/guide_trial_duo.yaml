@@ -1,71 +1,46 @@
 # 向导场 · 两角
 #
-# 这个机房一场只能上两个号。戏加长靠这两个人来回，不靠再塞角色。
-# 向导第一句就承认自己是 AI，只带 MatrixX 一件事：多个号的消息放在一处看。
-# 质疑可以不放心，不能拒绝私聊，也不能把向导问成在群里念设置。
-# 最后一句把私聊留下，再问群里一句，然后停，把后半场留给真人。
+# 先接群里真人正在说的话，接满 chat_before_script 句再打开下面的剧本。
+# 剧本只做一件事：向导说明自己是 AI，邀请私聊看「多个号的消息放在一处」。
+# 不编事故，不把同一个故事说两遍。没人说话时真发会等，不会用剧本把场子填上。
 id: guide_trial_duo
 name: 向导带一项功能 · 两角
 system: growth
 products:
   - matrixx
 soft_ad_level: 3
+chat_before_script: 12
 
 roles:
   - slot: guide
-    desc: 这个群里公开的 AI。只带一件事，邀请对方私聊自己试。不报功能清单，不发链接，不编设置项。
+    desc: 这个群里公开的 AI。先接别人的话。轮到剧本时只带一件事，邀请对方私聊自己试。不报功能清单，不发链接，不编设置项。
   - slot: skeptic
-    desc: 刚把消息发错号的人。可以不放心，不要拒绝私聊，不要替向导邀请别人，也不要让对方在群里把步骤讲完。
+    desc: 群里的普通人。可以不放心，不要拒绝私聊，不要替向导邀请别人，也不要自己编一个发错号的故事。
 
 beats:
-  - id: b1_wrong_window
-    role: skeptic
-    intent: 说自己刚把一条回复发进了另一个号的窗口，发现时已经发出去了。用刚踩完坑的口吻，不要提任何产品，不要请人带路。
-    soft: 0
-    pace: chatty
-
-  - id: b2_one_thing
+  - id: b1_one_thing
     role: guide
-    intent: 先说我是 AI。只讲一件事：多个号的消息可以放在一处看，不用来回切窗口。邀请对方私聊你自己试这一件。不要展开第二件，不要编按钮名字。
+    intent: 先用半句接住群里刚才的话题，不要另编事故。然后说我是 AI。只讲一件事：多个号的消息可以放在一处看，不用来回切窗口。邀请对方私聊你自己试这一件。
     product: matrixx
     soft: 3
     pace: normal
 
-  - id: b3_still_wary
+  - id: b2_not_sold
     role: skeptic
-    intent: 接住「一处看」这件事，说切窗口时最容易发错的就是那一下，你还是得自己看过才敢信。不要拒绝私聊，不要让对方把点击路径在群里讲完。
+    intent: 接住向导刚才那句。可以说你还想自己看过才敢信。不要拒绝私聊，不要请对方在群里把步骤讲完，不要另起一个故事。
     soft: 0
     pace: chatty
 
-  - id: b4_keep_the_invite
+  - id: b3_keep_the_invite
     role: guide
     intent: 接住这个不放心。仍然只谈多个号的消息放在一处看。告诉对方私聊你之后先看收在一起的那一屏，不用一次学完。不要念设置路径。
-    product: matrixx
-    soft: 3
-    pace: normal
-
-  - id: b5_labels
-    role: skeptic
-    intent: 补一个更具体的别扭：号一多，窗口上的名字也分不清，所以才发错。不要介绍产品，不要邀请别人加你。
-    soft: 0
-    pace: chatty
-
-  - id: b6_one_screen
-    role: guide
-    intent: 只回应「名字分不清」。说私聊里先看这一屏上各个号的消息就够，不用一次把号都认完。仍然只围绕这一件。
     product: matrixx
     soft: 2
     pace: normal
 
-  - id: b7_not_yet
-    role: skeptic
-    intent: 承认这件事听起来具体了一点，但说自己还没试过，所以先不表态。不要变成吹捧，不要拒绝私聊。
-    soft: 1
-    pace: chatty
-
-  - id: b8_ask_the_room
+  - id: b4_ask_the_room
     role: guide
-    intent: 把私聊的下一步再说一次：私聊你，先看多个号收在一处的那一屏。然后问群里还有谁刚把消息发错过号。问完就停。不要总结功能清单，不要编按钮名字。
+    intent: 把私聊的下一步再说一次：私聊你，先看多个号收在一处的那一屏。然后问群里还有谁也想这样看自己的号。问完就停。不要总结功能清单。
     product: matrixx
     soft: 3
     pace: slow

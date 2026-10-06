@@ -802,6 +802,48 @@ def test_human_takeover_sidelines_helpers_but_lets_the_guide_answer():
     assert d.select_next_speaker().slot == "guide"
 
 
+def test_chat_comes_before_the_script_and_does_not_burn_a_beat():
+    """先接真人的话。剧本队列原样留着，接话阶段也不因真人连说而退场。"""
+    beats = [
+        Beat("b1", "guide", "先说我是 AI，并私聊来试"),
+        Beat("b2", "skeptic", "还想自己看过"),
+    ]
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=tuple(beats), chat_before_script=2)
+    casting = Casting(members=(
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {"human_takeover_lines": 2})
+    assert d.waiting_for_people() is True
+    assert d.prime_room([("老王", "这单客户又不回", T0 - 30)], now=T0) == 1
+    assert d.waiting_for_people() is False
+    assert d.select_next_speaker().slot == "guide"
+    first = d.next_directive()
+    assert first.beat_id == "warmup_1"
+    assert "私聊" not in first.intent
+    assert [b.id for b in d._queue] == ["b1", "b2"]
+    d.observe_human("再等等吧", sender="老王", ts=T0 + 1)
+    d.observe_human("我也这么想", sender="小李", ts=T0 + 2)
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert [b.id for b in d._queue] == ["b1", "b2"]
+    _say(d, "a_guide", first.beat_id, text="这单不回最磨人", ts=T0 + 20)
+    assert d.warmup_remaining() == 1
+    assert d.waiting_for_people() is True
+    d.observe_human("你那边呢", sender="老王", ts=T0 + 40)
+    assert d.next_directive().beat_id == "warmup_2"
+    _say(d, "a_guide", "warmup_2", text="我这边也在等", ts=T0 + 50)
+    assert d.warmup_remaining() == 0
+    # 向导刚接完话，下一拍换质疑开口，但不能把剧本拍提前消耗掉。
+    assert d.select_next_speaker().slot == "skeptic"
+    assert d.next_directive().beat_id == "b2"
+    assert [b.id for b in d._queue] == ["b2", "b1"]
+
+
 def test_takeover_still_ends_a_show_that_has_no_guide():
     d = _director(config={"human_takeover_lines": 2})
     d.observe_human("一", ts=T0)

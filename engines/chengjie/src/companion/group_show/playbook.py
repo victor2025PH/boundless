@@ -155,6 +155,15 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
         for role in roles)
     if not has_guide:
         return ""
+    # 开场接话还没进剧本。这时候逼「我是 AI / 私聊」会把闲聊重说成广告。
+    # 编造的设置项、拒绝私聊，接话阶段也不许。
+    if str(beat_id or "").startswith("warmup_"):
+        raw = str(text or "")
+        if any(piece in raw for piece in _GUIDE_DRIFT) or "截图" in raw:
+            return "不要编设置项，不要提截图，先接对方刚说的事"
+        if any(piece in raw for piece in _HELPER_REFUSAL):
+            return "不要拒绝私聊"
+        return ""
     who = str(slot or "").strip().lower()
     if who == GUIDE_SLOT:
         prior = []
@@ -226,6 +235,8 @@ class Playbook:
     soft_ad_level: int = 5
     roles: Tuple[Role, ...] = ()
     beats: Tuple[Beat, ...] = ()
+    #: 进剧本前先接群里真人的句数。0＝旧剧本，开场就念稿。
+    chat_before_script: int = 0
 
     @property
     def slots(self) -> Tuple[str, ...]:
@@ -500,6 +511,11 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
         products = [products]
     roles_raw = _as_items(d.get("roles"), "roles")
     beats_raw = _as_items(d.get("beats"), "beats")
+    try:
+        chat_first = int(d.get("chat_before_script", 0) or 0)
+    except (TypeError, ValueError):
+        chat_first = 0
+    chat_first = max(0, min(20, chat_first))
     return Playbook(
         id=str(d.get("id") or "").strip(),
         name=str(d.get("name") or d.get("id") or "").strip(),
@@ -508,6 +524,7 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
         soft_ad_level=soft,
         roles=tuple(_coerce_role(r) for r in roles_raw),
         beats=tuple(_coerce_beat(b) for b in beats_raw),
+        chat_before_script=chat_first,
     )
 
 

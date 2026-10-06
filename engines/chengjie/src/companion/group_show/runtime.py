@@ -35,7 +35,7 @@ from src.companion.group_show.casting import cast_roles, validate_casting
 from src.companion.group_show.director import GroupShowDirector
 from src.companion.group_show.ecp import project_history_for
 from src.companion.group_show.naturalness import naturalness_score
-from src.companion.group_show.pacing import beat_interval_seconds
+from src.companion.group_show.pacing import beat_interval_seconds, interval_subject
 from src.companion.group_show.playbook import (
     BeatDirective,
     CastMember,
@@ -298,6 +298,11 @@ async def rehearse(
             clock += director.cfg.human_yield_seconds + 1.0
             continue
 
+        # 排练没有真人可接时直接进剧本。真发会在这里等，不调用 release。
+        if director.waiting_for_people():
+            director.release_warmup()
+            continue
+
         speaker = director.select_next_speaker()
         directive = director.next_directive()
         if speaker is None or directive is None:
@@ -346,7 +351,9 @@ async def rehearse(
             continue
         skips = 0
 
-        beat = state.playbook.beat_at(state.beat_cursor) or state.current_beat
+        beat = interval_subject(
+            state.playbook.beat_at(state.beat_cursor) or state.current_beat,
+            directive.beat_id)
         interval = beat_interval_seconds(
             beat, prev_text_len=prev_len, next_text_len=len(text), rng=rng)
         clock += float(interval)

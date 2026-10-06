@@ -57,6 +57,13 @@ def _to_float(value: Any, default: float = 0.0) -> float:
     return v
 
 
+def interval_subject(beat: Optional[Beat], beat_id: str) -> Optional[Beat]:
+    """接话那几句用轻快档。不能拿剧本第一拍的间隔，否则开场闲聊会被慢拍拖长。"""
+    if str(beat_id or "").startswith("warmup_"):
+        return Beat(id="warmup", role="guide", intent="接话", pace="chatty", soft=0)
+    return beat
+
+
 def base_seconds_for_pace(pace: Any) -> float:
     """语速档 → 基础间隔秒；未知/非法档回落 ``normal``。
 
@@ -174,6 +181,7 @@ __all__ = [
     "MIN_INTERVAL_SECONDS",
     "MAX_INTERVAL_SECONDS",
     "NOMINAL_TEXT_LEN",
+    "interval_subject",
     "base_seconds_for_pace",
     "typing_seconds",
     "reading_seconds",

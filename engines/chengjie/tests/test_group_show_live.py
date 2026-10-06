@@ -1138,8 +1138,11 @@ def test_two_seat_guide_playbook_fits_one_independent_pair():
     hard = [w for w in validate_playbook(pb) if not str(w).startswith("warn:")]
     assert hard == []
     assert {role.slot for role in pb.roles} == {"guide", "skeptic"}
-    assert len(pb.beats) >= 8
+    assert pb.chat_before_script >= 12
+    assert len(pb.beats) >= 4
     assert pb.products == ("matrixx",)
+    script = "\n".join(b.intent for b in pb.beats)
+    assert "手滑" not in script and "发错" not in script
     guide_beats = [b for b in pb.beats if b.role == "guide"]
     assert "我是 AI" in guide_beats[0].intent
     assert "私聊" in guide_beats[-1].intent
@@ -1172,6 +1175,13 @@ def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
     assert guide_line_fault("先看这一屏就够。", prior_guide_texts=(ok,), closing=True)
     assert helper_line_fault("不用啦，截图还得点开看")
     assert helper_line_fault("我还是得自己看过才敢信") == ""
+    from src.companion.group_show.playbook import line_fault_for_beat
+    chat_book = Playbook(
+        id="g", name="g", roles=(Role("guide"),),
+        beats=(Beat("b1_one_thing", "guide", "先说我是 AI，并私聊来试"),))
+    chat = "你们刚才说的那单，我这边也卡着。"
+    assert line_fault_for_beat(chat_book, "guide", "warmup_1", chat) == ""
+    assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
 
 
 @pytest.mark.asyncio
