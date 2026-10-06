@@ -662,7 +662,7 @@ def test_console_social_button_and_post(tmp_path):
 # ── 源码栏 ────────────────────────────────────────────────────────────────────
 def test_new_modules_have_no_dangerous_adb_tokens():
     root = Path(__file__).resolve().parents[1] / "src" / "fleet"
-    for name in ("phone_flows.py", "phone_flow_rules.py", "phone_ui_map.json"):
+    for name in ("phone_flows.py", "phone_flow_rules.py", "phone_flow_robust.py", "phone_ui_map.json"):
         text = (root / name).read_text(encoding="utf-8")
         for bad in ("kill-server", "start-server", "tcpip", "reboot", "9000", "connect", "install", "\"usb\"", "root"):
             assert bad not in text, (name, bad)

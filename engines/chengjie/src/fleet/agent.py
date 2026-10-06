@@ -59,6 +59,7 @@ from .identity import (
 )
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
+from .phone_flow_robust import parse_jitter_ms
 from .phone_flows import PhoneFlows
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
@@ -1233,7 +1234,14 @@ def _phone_flows_settings(data: Dict[str, Any]) -> Dict[str, Any]:
         path = ""
     else:
         path = "invalid"
-    return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path}
+    verify = None
+    if "phone_flow_verify" in data:
+        verify = data.get("phone_flow_verify") is True
+    jitter = None
+    if "phone_flow_jitter_ms" in data:
+        jitter = parse_jitter_ms(data.get("phone_flow_jitter_ms"))
+    return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path,
+            "verify": verify, "jitter_ms": jitter}
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────

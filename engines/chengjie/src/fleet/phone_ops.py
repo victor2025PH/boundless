@@ -163,6 +163,7 @@ class PhoneOps:
         self._locks_guard = threading.Lock()
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
         self._last_op: Dict[str, float] = {}
+        self._last_raw: Dict[str, bytes] = {}
         self._screen: Dict[str, Tuple[int, int]] = {}
         self._client_versions: Dict[str, Optional[int]] = {}
         self.configure(adb_path=adb_path, exclude=exclude, enabled=enabled, allow_tcp=allow_tcp,
@@ -238,6 +239,22 @@ class PhoneOps:
             if wait > 0:
                 self._sleep(wait)
 
+    def add_human_gap(self, serial: str, seconds: float) -> None:
+        """步骤之间额外停一下。不超过 2 秒；停完把「上次操作」拨到现在，后面的最短间隔照旧。
+
+        调用方已经占着这台手机的锁。非正数什么都不做。
+        """
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+            return
+        extra = float(seconds)
+        if extra > 2.0:
+            extra = 2.0
+        self._sleep(extra)
+        self._last_op[serial] = self._clock()
+
+    def last_raw(self, serial: str) -> bytes:
+        return self._last_raw.get(serial, b"")
+
     def _check_bounds(self, serial: str, *coords: int) -> None:
         size = self._screen.get(serial)
         if size and any(c >= max(size) for c in coords):     # either orientation: long side bounds both axes
@@ -250,6 +267,7 @@ class PhoneOps:
             raw = self._adb(adb, base + ("exec-out", "screencap"), SCREENCAP_TIMEOUT_SEC)
             png, w, h, dw, dh, scale = screenshot_png(raw)
             self._screen[serial] = (dw, dh)
+            self._last_raw[serial] = bytes(raw)
             return {"png_b64": base64.b64encode(png).decode("ascii"), "width": w, "height": h,
                     "device_width": dw, "device_height": dh, "scale": scale, "bytes": len(png)}
         if kind == TASK_PHONE_TAP:

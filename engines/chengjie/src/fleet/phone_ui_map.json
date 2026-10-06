@@ -22,24 +22,25 @@
         "search_open": [880, 80],
         "search_field": [500, 160],
         "search_first": [400, 320],
-        "follow_button": [860, 280]
+        "follow_button": [860, 280],
+        "login_mark": [500, 640]
       },
       "flows": {
         "post": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "feed_tab"},
-          {"op": "tap", "anchor": "composer_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "feed_tab", "expect": "change"},
+          {"op": "tap", "anchor": "composer_open", "expect": "change"},
           {"op": "tap", "anchor": "composer_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "post_submit"}
         ],
         "post_media": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "feed_tab"},
-          {"op": "tap", "anchor": "composer_open"},
-          {"op": "tap", "anchor": "photo_button"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "feed_tab", "expect": "change"},
+          {"op": "tap", "anchor": "composer_open", "expect": "change"},
+          {"op": "tap", "anchor": "photo_button", "expect": "change"},
           {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
           {"op": "tap", "anchor": "media_next"},
           {"op": "tap", "anchor": "composer_field"},
@@ -48,31 +49,36 @@
         ],
         "like": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "feed_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "feed_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
           {"op": "tap", "anchor": "like_button"}
         ],
         "comment": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "feed_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
-          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "feed_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
+          {"op": "tap", "anchor": "comment_open", "expect": "change"},
           {"op": "tap", "anchor": "comment_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "comment_send"}
         ],
         "follow": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
           {"op": "tap", "anchor": "search_field"},
           {"op": "text", "field": "handle"},
-          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
         ]
-      }
+      },
+      "probes": {
+        "logged_in": {"at": "feed_tab", "rgb": [24, 119, 242], "tol": 48},
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+      },
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
     },
     "instagram": {
       "anchors": {
@@ -95,22 +101,23 @@
         "search_open": [380, 940],
         "search_field": [500, 140],
         "search_first": [400, 300],
-        "follow_button": [800, 260]
+        "follow_button": [800, 260],
+        "login_mark": [500, 640]
       },
       "flows": {
         "post": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "create_tab"},
-          {"op": "tap", "anchor": "text_mode"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "create_tab", "expect": "change"},
+          {"op": "tap", "anchor": "text_mode", "expect": "change"},
           {"op": "tap", "anchor": "composer_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "post_submit"}
         ],
         "post_media": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "create_tab"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "create_tab", "expect": "change"},
           {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
           {"op": "tap", "anchor": "media_next"},
           {"op": "tap", "anchor": "caption_field"},
@@ -119,31 +126,36 @@
         ],
         "like": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "home_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
           {"op": "tap", "anchor": "like_button"}
         ],
         "comment": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "home_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
-          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
+          {"op": "tap", "anchor": "comment_open", "expect": "change"},
           {"op": "tap", "anchor": "comment_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "comment_send"}
         ],
         "follow": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
           {"op": "tap", "anchor": "search_field"},
           {"op": "text", "field": "handle"},
-          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
         ]
-      }
+      },
+      "probes": {
+        "logged_in": {"at": "home_tab", "rgb": [24, 119, 242], "tol": 48},
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+      },
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
     },
     "tiktok": {
       "anchors": {
@@ -166,23 +178,24 @@
         "search_open": [880, 80],
         "search_field": [500, 140],
         "search_first": [400, 280],
-        "follow_button": [920, 380]
+        "follow_button": [920, 380],
+        "login_mark": [500, 640]
       },
       "flows": {
         "post": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "create_tab"},
-          {"op": "tap", "anchor": "text_mode"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "create_tab", "expect": "change"},
+          {"op": "tap", "anchor": "text_mode", "expect": "change"},
           {"op": "tap", "anchor": "composer_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "post_submit"}
         ],
         "post_media": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "create_tab"},
-          {"op": "tap", "anchor": "upload"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "create_tab", "expect": "change"},
+          {"op": "tap", "anchor": "upload", "expect": "change"},
           {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
           {"op": "tap", "anchor": "media_next"},
           {"op": "tap", "anchor": "composer_field"},
@@ -191,31 +204,42 @@
         ],
         "like": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "home_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
           {"op": "tap", "anchor": "like_button"}
         ],
         "comment": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "home_tab"},
-          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls"},
-          {"op": "tap", "anchor": "comment_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "repeat": "scrolls", "expect": "change"},
+          {"op": "tap", "anchor": "comment_open", "expect": "change"},
           {"op": "tap", "anchor": "comment_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "comment_send"}
         ],
         "follow": [
           {"op": "key", "key": "home"},
-          {"op": "tap", "anchor": "app_icon"},
-          {"op": "tap", "anchor": "search_open"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
           {"op": "tap", "anchor": "search_field"},
           {"op": "text", "field": "handle"},
-          {"op": "tap", "anchor": "search_first"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
         ]
-      }
+      },
+      "probes": {
+        "logged_in": {"at": "home_tab", "rgb": [24, 119, 242], "tol": 48},
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+      },
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
     }
+  },
+  "robust": {
+    "verify": false,
+    "retries": 2,
+    "jitter_ms": [0, 0],
+    "note": "Screenshot check and the extra gap default off. Turn verify on to stop when a step misses, and to require the signed-in mark after the app icon."
   }
 }
