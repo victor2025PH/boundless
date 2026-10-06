@@ -27,17 +27,23 @@
     upgrade         → 下载+sha256 校验+换文件后重启（updater.py；仅冻结 exe，源码态拒绝）
                       带 setup_url + setup_sha256 时改为校验后静默跑安装包（直播机拒绝）
     enable_phone_adb→ 已有自带 platform-tools 时打开 adb_manage_server 并拉起 adb（直播机拒绝）
-    push_config     → only phone_flows_enabled true/false; other patches rejected not_supported_in_agent_v1; live-stream host refused
+    push_config     → phone_flows_enabled true/false, and/or phone_ui_map (existing file) or
+                      phone_ui_map_json / phone_ui_map_b64 (written under the state dir, 256KiB,
+                      validate_ui_map). Other patches rejected not_supported_in_agent_v1.
+                      Live-stream host refused before any write. Map body is not logged.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import logging
 import os
 import re
 import secrets
+import stat
 import platform as _platform
 import subprocess
 import sys
@@ -62,7 +68,8 @@ from .identity import (
 from .local_status import build_local_status, record_heartbeat
 from .phones import PhoneCollector
 from .phone_flow_robust import parse_jitter_ms
-from .phone_flows import PhoneFlows
+from .phone_flows import PhoneFlows, _MAX_MAP_BYTES, validate_ui_map
+from .phone_rules import PhoneOpError
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
     acquire_single_instance, install_service, service_status, start_parent_watch, supervise, uninstall_service,
@@ -78,7 +85,13 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.12"
+AGENT_VERSION = "0.3.13"
+# push_config may set these and nothing else. Content keys are not stored; they
+# become a file under the state dir and phone_ui_map is set to that path.
+_PUSH_CONFIG_KEYS = frozenset({"phone_flows_enabled", "phone_ui_map", "phone_ui_map_b64", "phone_ui_map_json"})
+_PUSH_MAP_CONTENT_KEYS = frozenset({"phone_ui_map_b64", "phone_ui_map_json"})
+_REMOTE_UI_MAP_NAME = "phone_ui_map.remote.json"
+_UI_MAP_PATH_MAX = 1024
 CONFIG_NAME = "agent.json"
 HTTP_TIMEOUT = 15
 LOCAL_TIMEOUT = 8
@@ -1100,22 +1113,65 @@ class NodeAgent:
         return adb_bundle.enable_phone_adb(self.cfg.state_dir, persist=persist, already=already)
 
     def _push_phone_flows(self, payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
-        """Write only agent.json phone_flows_enabled. Any other patch stays rejected.
+        """Write agent.json phone_flows_enabled and/or phone_ui_map.
 
-        A live-stream host is refused before the file is touched. Only a JSON bool counts.
+        A live-stream host is refused before any file is touched. Map bytes are
+        checked for size and schema, then stored only as a path. The map body
+        is not logged and is not returned.
         """
         patch = payload.get("patch") if isinstance(payload, dict) else None
-        if not isinstance(patch, dict) or set(patch) != {"phone_flows_enabled"}:
+        if not isinstance(patch, dict) or not patch or not set(patch) <= _PUSH_CONFIG_KEYS:
             return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
-        enabled = patch.get("phone_flows_enabled")
-        if not isinstance(enabled, bool):
+        content_keys = set(patch) & _PUSH_MAP_CONTENT_KEYS
+        if len(content_keys) > 1 or (content_keys and "phone_ui_map" in patch):
             return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+        updates: Dict[str, Any] = {}
+        if "phone_flows_enabled" in patch:
+            enabled = patch.get("phone_flows_enabled")
+            if not isinstance(enabled, bool):
+                return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+            updates["phone_flows_enabled"] = enabled
+        map_path = None
+        map_body = None
+        if "phone_ui_map" in patch:
+            raw_path = patch.get("phone_ui_map")
+            if not isinstance(raw_path, str):
+                return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+            map_path = raw_path
+        elif "phone_ui_map_b64" in patch:
+            raw_b64 = patch.get("phone_ui_map_b64")
+            if not isinstance(raw_b64, str):
+                return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+            map_body = ("b64", raw_b64)
+        elif "phone_ui_map_json" in patch:
+            raw_json = patch.get("phone_ui_map_json")
+            if not isinstance(raw_json, (str, dict)):
+                return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
+            map_body = ("json", raw_json)
         if is_live_stream_host(self.cfg.state_dir):
             return STATUS_REJECTED, {}, "live_stream_host"
-        self.cfg.write_operator_keys({"phone_flows_enabled": enabled})
+        nbytes = 0
+        try:
+            if map_path is not None:
+                checked, nbytes = _accept_ui_map_path(map_path)
+                updates["phone_ui_map"] = checked
+            elif map_body is not None:
+                blob = _decode_ui_map_body(map_body)
+                nbytes = len(blob)
+                updates["phone_ui_map"] = str(_write_remote_ui_map(self.cfg.state_dir, blob))
+        except _UiMapReject as e:
+            return STATUS_REJECTED, {}, e.code
+        self.cfg.write_operator_keys(updates)
         self.phone_flows.configure(**_phone_flows_settings(self.cfg.data, self.cfg.state_dir), ops=self.phone_ops)
         self._cfg_mtime = _mtime_ns(self.cfg.path)
-        return STATUS_DONE, {"phone_flows_enabled": self.phone_flows.enabled}, "ok"
+        result: Dict[str, Any] = {}
+        if "phone_flows_enabled" in updates:
+            result["phone_flows_enabled"] = self.phone_flows.enabled
+        if "phone_ui_map" in updates:
+            result["phone_ui_map"] = updates["phone_ui_map"]
+            result["phone_ui_map_bytes"] = nbytes
+            logger.info("[agent] push_config set phone_ui_map (%d bytes)", nbytes)
+        return STATUS_DONE, result, "ok"
 
     def _huoke_instances(self, want: str = "") -> List[Dict[str, Any]]:
         out = [i for i in self.cfg.instances if _instance_domain(i) == HUOKE_DOMAIN]
@@ -1285,6 +1341,124 @@ def _phone_flows_settings(data: Dict[str, Any], state_dir: Optional[Path] = None
         jitter = parse_jitter_ms(data.get("phone_flow_jitter_ms"))
     return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path,
             "verify": verify, "jitter_ms": jitter, "state_dir": state_dir}
+
+
+class _UiMapReject(Exception):
+    """push_config map rejection. The message is only the reason code."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _require_ui_map_bytes(blob: bytes) -> None:
+    if len(blob) > _MAX_MAP_BYTES:
+        raise _UiMapReject("ui_map_too_large")
+    if not blob:
+        raise _UiMapReject("ui_map_invalid")
+    try:
+        data = json.loads(blob.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise _UiMapReject("ui_map_invalid")
+    try:
+        validate_ui_map(data)
+    except PhoneOpError:
+        raise _UiMapReject("ui_map_invalid")
+
+
+def _accept_ui_map_path(raw: str) -> Tuple[str, int]:
+    """Absolute path of an existing regular file that already passes validate_ui_map."""
+    text = raw.strip()
+    if not text:
+        raise _UiMapReject("ui_map_missing")
+    if len(text) > _UI_MAP_PATH_MAX or "\x00" in text or "\n" in text or "\r" in text:
+        raise _UiMapReject("ui_map_invalid")
+    path = Path(text)
+    if not path.is_absolute():
+        raise _UiMapReject("ui_map_missing")
+    if _is_reparse(path):
+        raise _UiMapReject("ui_map_invalid")
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        raise _UiMapReject("ui_map_missing")
+    except OSError:
+        raise _UiMapReject("ui_map_invalid")
+    if not stat.S_ISREG(st.st_mode):
+        raise _UiMapReject("ui_map_missing")
+    if int(st.st_size) > _MAX_MAP_BYTES:
+        raise _UiMapReject("ui_map_too_large")
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        raise _UiMapReject("ui_map_missing")
+    _require_ui_map_bytes(blob)
+    return str(path), len(blob)
+
+
+def _decode_ui_map_body(spec: Tuple[str, Any]) -> bytes:
+    kind, raw = spec
+    if kind == "b64":
+        compact = "".join(str(raw).split())
+        max_b64 = ((_MAX_MAP_BYTES + 2) // 3) * 4
+        if len(compact) > max_b64:
+            raise _UiMapReject("ui_map_too_large")
+        try:
+            blob = base64.b64decode(compact, validate=True)
+        except (binascii.Error, ValueError):
+            raise _UiMapReject("ui_map_invalid")
+    elif isinstance(raw, str):
+        blob = raw.encode("utf-8")
+        if len(blob) > _MAX_MAP_BYTES:
+            raise _UiMapReject("ui_map_too_large")
+    else:
+        try:
+            blob = json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError):
+            raise _UiMapReject("ui_map_invalid")
+        if len(blob) > _MAX_MAP_BYTES:
+            raise _UiMapReject("ui_map_too_large")
+    _require_ui_map_bytes(blob)
+    return blob
+
+
+def _write_remote_ui_map(state_dir: Path, blob: bytes) -> Path:
+    """Write the map under the fleet state dir. The file name is fixed."""
+    root = Path(state_dir)
+    if _is_reparse(root) or not root.is_dir():
+        raise _UiMapReject("ui_map_invalid")
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        raise _UiMapReject("ui_map_invalid")
+    dest = root / _REMOTE_UI_MAP_NAME
+    tmp = root / (_REMOTE_UI_MAP_NAME + ".tmp")
+    if dest.parent != root or dest.name != _REMOTE_UI_MAP_NAME or _is_reparse(dest) or _is_reparse(tmp):
+        raise _UiMapReject("ui_map_invalid")
+    try:
+        tmp.write_bytes(blob)
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, dest)
+    except OSError:
+        try:
+            if tmp.is_file() and not _is_reparse(tmp):
+                tmp.unlink()
+        except OSError:
+            pass
+        raise _UiMapReject("ui_map_invalid")
+    if os.name == "nt":
+        try:
+            assign_owner_admins(dest)
+        except Exception:
+            logger.debug("[agent] phone_ui_map owner not adjusted")
+    try:
+        written = dest.resolve()
+    except OSError:
+        raise _UiMapReject("ui_map_invalid")
+    if _is_reparse(written) or written.parent != root_resolved:
+        raise _UiMapReject("ui_map_invalid")
+    return written
 
 
 # ── 摘要裁剪（只留数字 / 状态） ──────────────────────────────────────────────
