@@ -239,7 +239,7 @@ class AgentConfig:
     # 盖掉手工改动；NodeAgent 每次心跳前按 mtime 热加载（2026-10-06 176 改 phones_exclude 需重启的教训）。
     OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp",
                      "adb_manage_server", "phone_flows_enabled", "phone_ui_map",
-                     "phone_flow_verify", "phone_flow_jitter_ms")
+                     "phone_flow_verify", "phone_flow_jitter_ms", "phone_live_session")
 
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -920,6 +920,9 @@ class NodeAgent:
             "phones": phones,
             "phones_error": phones_error,
             "caps": self._phone_caps(),
+            # 调度用。只上报，不改变直播机判定，也不在这里点手机。
+            "live_stream": is_live_stream_host(self.cfg.state_dir) is True,
+            "live_session": self.cfg.data.get("phone_live_session") is True,
         }
 
     def heartbeat(self) -> Dict[str, Any]:

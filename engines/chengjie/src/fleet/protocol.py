@@ -124,6 +124,14 @@ def sanitize_heartbeat(body: Any) -> Dict[str, Any]:
         out["phones_error"] = sanitize_phones_error(out.get("phones_error"))
     if "caps" in out:
         out["caps"] = sanitize_caps(out.get("caps"))
+    if "live_stream" in out:
+        # 只有 JSON true/false 留下。别的形状丢掉，调度侧把缺字段当成「不知道是不是直播机」。
+        if out["live_stream"] is True or out["live_stream"] is False:
+            out["live_stream"] = out["live_stream"] is True
+        else:
+            out.pop("live_stream", None)
+    if "live_session" in out:
+        out["live_session"] = out["live_session"] is True
     return out
 
 
@@ -272,3 +280,6 @@ __all__ += [
     "CAP_PHONE_FLOWS_V2", "TASK_PHONE_WARMUP", "TASK_PHONE_DM", "TASK_PHONE_WATCH",
     "PHONE_SESSION_KINDS", "SESSION_FLOW_NAMES",
 ]
+
+# 调度用的心跳旗标。追加在白名单末尾：老心跳没有这两个键，主控不会当成「不是直播机」。
+HEARTBEAT_KEYS = HEARTBEAT_KEYS + ("live_stream", "live_session")

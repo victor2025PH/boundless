@@ -97,6 +97,36 @@
 
 **养号 / 私信 / 看短视频**（`phone_warmup` / `phone_dm` / `phone_watch`，能力 `phone_flows_v2`）：同一开关 `phone_flows_enabled`。打开后心跳同时带 `phone_flows_v1` 和 `phone_flows_v2`；关着时两项都不声明。仍走 `POST /api/fleet/nodes/{node_id}/phones/{serial}/social/{warmup|dm|watch}`，不要走通用 `/tasks`。坐标仍在各应用的 `phone_ui_map.json`（`warmup` / `dm` / `watch`）。受保护手机与直播机判定不变。payload：养号 `{app, scrolls?:1..8 默认 4, likes?:0..scrolls 默认 0}`；看视频 `{app, watches?:1..8 默认 3, likes?:0..watches 默认 0}`；私信 `{app, handle, text}`，文字规则与 `phone_text` 相同（ASCII）。回执只留次数和字数，不回私信原文、不回账号名。打开核对后，私信点开会话（`preflight.thread.after_anchor`，随包是 `dm_open`）再看会话标记，没有就 `thread_not_open`，不再输入私信正文。养号不发帖。停留只在节点上睡眠，不新增 adb 动词；每台手机锁、0.5 s 最短间隔、同时最多 2 路都不放宽。
 
+**每日计划**（`src/fleet/phone_schedule.py` + `phone_schedule.json`，总开关默认关）：主控在活跃时间内把养号 / 发帖 / 点赞 / 评论 / 关注 / 看视频 / 私信排开，到点才入队已有的 `phone_*` 任务。不在节点上另起一套执行器。
+
+计划字段（文件是默认值；库里的覆盖按 全局 → 节点 → 手机 叠上去，只写要改的键）：
+
+```json
+{"active_hours": {"start": "08:00", "end": "23:00"}, "tz_offset_min": 480,
+ "jitter_sec": [90, 600], "min_gap_sec": 900,
+ "apps": ["facebook", "instagram", "tiktok"], "pause_holds": ["post"],
+ "daily": {"warmup": {"count": 2, "scrolls": 4, "likes": 1},
+           "post": {"min": 1, "max": 2, "texts": [], "media": 0},
+           "like": {"count": 3, "scrolls": 1}, "comment": {"count": 1, "texts": [], "scrolls": 0},
+           "watch": {"count": 2, "watches": 3, "likes": 0},
+           "follow": {"count": 0, "handles": []}, "dm": {"count": 0, "handles": [], "texts": []}}}
+```
+
+`tz_offset_min` 是本地时区相对 UTC 的分钟数（默认 480 = UTC+8），不跟服务器时区走。活跃窗口是左闭右开，不跨过午夜。`jitter_sec` 把每条动作放进窗口里均分的格子再抖动；`min_gap_sec` 是两条之间的最短间隔，排不下的记 `window_full`。时刻按 `日|节点|手机` 做种子，同一天不随墙钟重摇。当天还没有任何一条离开 `pending` 时，改次数会重排；已经发出去过就保持原槽（`texts` / `handles` 不参与指纹，改文案不会改时刻，派发当刻再取当前文案）。
+
+`post.min`/`post.max` 默认 1–2（每台每天 1–2 条）。`texts` 为空就不会发，原因码 `post_text_missing`，直到操作员写入 ASCII 文案。评论、关注、私信同样：缺文案或账号名只挂起，不发明文案。关注和私信默认 0 条。
+
+安全：
+
+* 总开关在 `phone_schedule` 作用域 `global` 的 `enabled`。只有 JSON `true` 写成 1；缺省、`false`、`1` 都不开。关着时一轮调度什么都不写。
+* 受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 不建可执行槽，只记 `protected_phone`。
+* 心跳 `live_stream: true` 的节点当天不排，并取消还在排队、由计划发出的任务。`live_stream` 缺席或不是明确的 false（老 agent）按 `live_stream_unknown` 整天不排，等它明确报 false 再排。这只读心跳，不改变 `is_live_stream_host`。
+* 全局 `paused`、该节点 `paused`，或心跳 `live_session: true`（agent.json `phone_live_session` 只有 JSON true，热加载）时，`pause_holds` 里的动作让路。默认只有 `post`。`"pause_holds": ["*"]` 全部让路。窗口内恢复后续上；窗口结束后记 `missed_while_paused`，不在夜里补发。
+* 节点离线、手机不是 `device`、没开远程操作、缺能力：窗口内挂起，结束后记对应原因码。同一节点同时在队的远程手机任务不超过 `MAX_CONCURRENT`（2），同一部手机同时只排一条。0.5 秒最短间隔和每机锁仍只在节点执行时生效，调度器不睡眠。
+* 执行记录和 `POST /api/fleet/schedule/tick` 的返回只有时间、种类、应用、状态、原因码、`task_id`。不回文案、不回账号名。
+
+操作面：`GET/POST /api/fleet/schedule`（总开关、全局暂停、计划片段），`GET/POST /api/fleet/nodes/{node_id}/schedule`（这台电脑的暂停、计划和今天的槽），`POST /api/fleet/nodes/{node_id}/phones/{serial}/schedule`（一部手机的计划；受保护手机 403），`GET /api/fleet/schedule/runs?node_id=&day=`，`POST /api/fleet/schedule/tick`（立刻走一轮）。后台每分钟走一轮；`CHATX_FLEET_SCHEDULE_WATCH=0` 可停。控制台在已声明 `phone_flows_v1` 且远程操作已开的节点上多一个「每日计划」，点开才拉取，不在页面加载时请求。
+
 ### 3.3 领任务（长轮询）
 
 `GET /api/fleet/tasks/pull?limit=20&wait=25`  `wait` 上限 25 s，队列为空时挂到超时。

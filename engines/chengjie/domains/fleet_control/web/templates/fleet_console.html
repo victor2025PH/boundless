@@ -179,7 +179,12 @@
     thread_not_open:'私信会话没打开',
     bad_media_slot:'相册位置要在 0 到 5',bad_anchor:'坐标覆盖不合法',unknown_anchor:'坐标名不在该应用的配置里',
     ui_map_missing:'找不到界面坐标文件',ui_map_invalid:'界面坐标文件不合法',
-    node_busy:'这台电脑正在操作别的手机',phone_busy:'这部手机正在操作中'};
+    node_busy:'这台电脑正在操作别的手机',phone_busy:'这部手机正在操作中',
+    live_stream_host:'这台电脑是直播机，不排计划',live_stream_unknown:'还不知道是不是直播机，先不排',
+    post_text_missing:'发帖文案还没填（只支持英文和数字）',comment_text_missing:'评论文案还没填',
+    missed_while_paused:'暂停期间错过了，过了活跃时间不再补',paused:'暂停中，这一条先不发',
+    live_session:'正在直播，发帖先让路',window_closed:'过了今天的活跃时间',window_full:'今天排不下了',
+    protected_phone:'受保护手机（直播机），不会排进计划'};
   var ADB_ST={offline:'离线',unauthorized:'未授权 USB 调试',unknown:'状态未知'};
   function phoneErr(code){var c=String(code||'').trim();if(!c)return '';if(PHONE_ERR[c])return PHONE_ERR[c];
     if(c.indexOf('phone_not_ready:')===0)return '手机未就绪：'+(ADB_ST[c.slice(16)]||c.slice(16));
@@ -262,6 +267,7 @@
         KINDS.map(function(k){return '<button class="btn-sec'+(DANGER[k]?' fc-danger':'')+'" data-n="'+esc(n.node_id)+'" data-k="'+k+'" title="'+esc(KIND_TIP[k]||'')+'">'+esc(kindName(k))+'</button>';}).join('')+
         (hasPhoneOps(n)?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__remote" title="允许经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护直播机除外）">'+(n.remote_ops_enabled?'关闭远程操作':'开启远程操作')+'</button>':'')+
         (hasPhoneFlows(n)&&n.remote_ops_enabled?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__social" title="发帖 / 点赞 / 评论 / 关注（Facebook、Instagram、TikTok；坐标在节点的 phone_ui_map.json）">社交动作</button>':'')+
+        (hasPhoneFlows(n)&&n.remote_ops_enabled?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__plan" title="每天自动养号、发帖、点赞、评论、看视频。默认关闭。受保护的直播机不排。">每日计划</button>':'')+
         '<button class="btn-sec fc-danger" data-n="'+esc(n.node_id)+'" data-k="__revoke" title="让这台电脑的密钥失效">吊销节点</button>';
       var lo=longOff[n.node_id],off=n.state==='offline'&&n.last_seen?Math.max(0,Math.floor((Date.now()/1000-n.last_seen)/60)):null;
       var stx=n.state==='offline'?'<br><span style="font-size:.7rem;color:var(--red)">'+(off===null?'从未上线':'已离线 '+off+' 分钟')+'</span>'+(lo?' '+badge('超过 '+alertMin+' 分钟','fc-bad'):''):'';
@@ -358,6 +364,7 @@
     if(k==='__login'){lgOpen(nid);return;}
     if(k==='__remote'){remoteToggle(nid);return;}
     if(k==='__social'){socialOpen(nid);return;}
+    if(k==='__plan'){planOpen(nid);return;}
     if(k==='__revoke'){confirmBox('吊销节点「'+name+'」','它的密钥立即失效，还没领取的任务全部取消。要再用这台电脑需要重新安装批准。','吊销节点').then(function(v){if(!v)return;
       post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/revoke').then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
     if(k==='stop_account'){stopOpen(nid);return;}
@@ -412,6 +419,51 @@
     .then(function(v){if(!v)return;
       post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/phones/'+encodeURIComponent(v.serial)+'/social/'+encodeURIComponent(v.flow),v.body)
         .then(function(){toast('已下发「'+kindName('phone_'+v.flow)+'」');load();}).catch(fail('社交动作下发失败'));});
+  }
+  function planNum(spec,key,fallback){var n=spec&&spec[key];return (typeof n==='number')?n:fallback;}
+  function planOpen(nid){
+    apiFetch('/api/fleet/nodes/'+encodeURIComponent(nid)+'/schedule').then(j).then(function(d){
+      var plan=d.plan||{}, daily=plan.daily||{}, postSpec=daily.post||{}, comment=daily.comment||{};
+      var hours=plan.active_hours||{start:'08:00',end:'23:00'};
+      var texts=(postSpec.texts||[]).join('\n'), ctexts=(comment.texts||[]).join('\n');
+      var rows=(d.slots||[]).map(function(s){
+        var when=s.slot_at?new Date(s.slot_at*1000).toLocaleTimeString():'—';
+        var who=s.serial?esc(s.serial):'';
+        return '<tr><td>'+esc(when)+'</td><td>'+who+'</td><td>'+esc(kindName(s.kind))+'</td><td>'+esc(s.app||'')+'</td><td>'+esc(s.state||'')+'</td><td>'+esc(phoneErr(s.detail)||'')+'</td></tr>';
+      }).join('');
+      dlgOpen({title:'每日计划 · '+(nodes[nid]&&(nodes[nid].label||nodes[nid].host_name)||nid),ok:'保存',focus:'fc-plan-texts',
+        html:'<label class="fc-f"><input id="fc-plan-on" type="checkbox"'+(d.enabled?' checked':'')+'> 启用每日计划（总开关，默认关；关掉时所有电脑都不会自动执行）</label>'+
+          '<label class="fc-f"><input id="fc-plan-pause" type="checkbox"'+(d.node_paused?' checked':'')+'> 暂停这台电脑（默认只让发帖让路，养号和点赞继续）</label>'+
+          '<p class="fc-dlg-note">活跃时间 '+esc(hours.start)+'–'+esc(hours.end)+'。每台每天 1–2 条发帖要先填英文文案，没填就不会发。执行记录不显示正文。受保护的直播机和直播电脑不会排进去。</p>'+
+          '<label class="fc-f">养号几次（0–8）<input id="fc-plan-warm" type="number" min="0" max="8" value="'+planNum(daily.warmup,'count',2)+'"></label>'+
+          '<label class="fc-f">发帖最少几条<input id="fc-plan-post-min" type="number" min="0" max="4" value="'+planNum(postSpec,'min',1)+'"></label>'+
+          '<label class="fc-f">发帖最多几条<input id="fc-plan-post-max" type="number" min="0" max="4" value="'+planNum(postSpec,'max',2)+'"></label>'+
+          '<label class="fc-f">发帖文案（一行一条，英文或数字）<textarea id="fc-plan-texts" maxlength="2000" rows="3">'+esc(texts)+'</textarea></label>'+
+          '<label class="fc-f">点赞几次（0–12）<input id="fc-plan-like" type="number" min="0" max="12" value="'+planNum(daily.like,'count',3)+'"></label>'+
+          '<label class="fc-f">评论几次（0–8）<input id="fc-plan-comment" type="number" min="0" max="8" value="'+planNum(comment,'count',1)+'"></label>'+
+          '<label class="fc-f">评论文案（一行一条）<textarea id="fc-plan-ctexts" maxlength="2000" rows="2">'+esc(ctexts)+'</textarea></label>'+
+          '<label class="fc-f">看视频几次（0–8）<input id="fc-plan-watch" type="number" min="0" max="8" value="'+planNum(daily.watch,'count',2)+'"></label>'+
+          '<table class="fc-tbl"><tbody>'+(rows||'<tr><td>今天还没有排期</td></tr>')+'</tbody></table>',
+        submit:function(){
+          function num(id,lo,hi,label){var n=parseInt(val(id),10);if(!(n>=lo&&n<=hi))return {error:label};return n;}
+          var warm=num('fc-plan-warm',0,8,'养号次数要在 0 到 8');if(warm&&warm.error)return warm;
+          var pmin=num('fc-plan-post-min',0,4,'发帖条数要在 0 到 4');if(pmin&&pmin.error)return pmin;
+          var pmax=num('fc-plan-post-max',0,4,'发帖条数要在 0 到 4');if(pmax&&pmax.error)return pmax;
+          if(pmin>pmax)return {error:'发帖最少不能大于最多'};
+          var likes=num('fc-plan-like',0,12,'点赞次数要在 0 到 12');if(likes&&likes.error)return likes;
+          var comments=num('fc-plan-comment',0,8,'评论次数要在 0 到 8');if(comments&&comments.error)return comments;
+          var watches=num('fc-plan-watch',0,8,'看视频次数要在 0 到 8');if(watches&&watches.error)return watches;
+          function lines(id){return val(id).split(/\n+/).map(function(s){return s.trim();}).filter(Boolean);}
+          var on=document.getElementById('fc-plan-on'), pause=document.getElementById('fc-plan-pause');
+          return {enabled:!!(on&&on.checked), paused:!!(pause&&pause.checked), plan:{daily:{
+            warmup:{count:warm}, post:{min:pmin,max:pmax,texts:lines('fc-plan-texts')},
+            like:{count:likes}, comment:{count:comments,texts:lines('fc-plan-ctexts')}, watch:{count:watches}}}};
+        }})
+      .then(function(v){if(!v)return;
+        post('/api/fleet/schedule',{enabled:v.enabled}).then(function(){
+          return post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/schedule',{paused:v.paused,plan:v.plan});
+        }).then(function(){toast('已保存每日计划');load();}).catch(fail('每日计划保存失败'));});
+    }).catch(fail('每日计划加载失败'));
   }
   function sendTask(nid,body){
     var n=nodes[nid]||{};

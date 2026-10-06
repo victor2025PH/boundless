@@ -49,6 +49,11 @@ from src.fleet.protocol import (
     STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS,
 )
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
+from src.fleet import phone_schedule as phone_schedule
+from src.fleet.phone_schedule import (
+    UNSET, ScheduleError, global_view, list_runs, node_view, run_tick, save_global, save_node, save_phone,
+    start_schedule_watch,
+)
 from src.fleet.phone_rules import (
     PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
 )
@@ -218,6 +223,7 @@ def register_routes(app, ctx) -> None:
 
     def _start_offline_watch():
         start_watch(_watch_nodes, _alerter)
+        start_schedule_watch(lambda: get_store(config_manager))
 
     # 与 admin.py 一致用 on_event（Starlette 1.x 已去掉 add_event_handler，FastAPI 仍保留 on_event）
     try:
@@ -496,6 +502,23 @@ def register_routes(app, ctx) -> None:
     @app.post("/api/fleet/nodes/{node_id}/phones/{serial}/{op}")
     async def api_fleet_phone_op(node_id: str, serial: str, op: str, request: Request,
                                  _=Depends(_api_write("fleet_control"))):
+        # /phones/{serial}/schedule 只有一段，会被本路由的 {op} 先匹配到。
+        if op == "schedule":
+            body = await _json(request)
+            st = _store_or_503(config_manager)
+            try:
+                view = save_phone(
+                    st, node_id, serial,
+                    plan=body["plan"] if "plan" in body else UNSET,
+                    now=phone_schedule.clock(),
+                )
+            except ScheduleError as e:
+                if e.code == "protected_phone":
+                    raise HTTPException(status_code=403, detail=e.code)
+                if e.code == "node_not_found":
+                    raise HTTPException(status_code=404, detail=e.code)
+                raise HTTPException(status_code=400, detail=e.code)
+            return {"ok": True, **view}
         kind = kind_for_op(op)
         if not kind:
             raise HTTPException(status_code=400, detail="bad_op")
@@ -545,6 +568,89 @@ def register_routes(app, ctx) -> None:
         if rec is None:
             raise HTTPException(status_code=409, detail="enqueue_refused")
         return {"ok": True, "task": rec}
+
+    def _schedule_error(err: ScheduleError) -> HTTPException:
+        if err.code == "node_not_found":
+            return HTTPException(status_code=404, detail=err.code)
+        if err.code == "protected_phone":
+            return HTTPException(status_code=403, detail=err.code)
+        return HTTPException(status_code=400, detail=err.code)
+
+    # ── 每日计划（默认关；总开关 phone_schedule.enabled 只有 JSON true 才入队）──
+    @app.get("/api/fleet/schedule")
+    async def api_fleet_schedule_get(request: Request, _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        return {"ok": True, **global_view(st, now=phone_schedule.clock())}
+
+    @app.post("/api/fleet/schedule")
+    async def api_fleet_schedule_put(request: Request, _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        try:
+            view = save_global(
+                st,
+                enabled=body["enabled"] if "enabled" in body else UNSET,
+                paused=body["paused"] if "paused" in body else UNSET,
+                plan=body["plan"] if "plan" in body else UNSET,
+                now=phone_schedule.clock(),
+            )
+        except ScheduleError as e:
+            raise _schedule_error(e)
+        return {"ok": True, **view}
+
+    @app.get("/api/fleet/nodes/{node_id}/schedule")
+    async def api_fleet_node_schedule_get(node_id: str, request: Request, _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        try:
+            view = node_view(st, node_id, now=phone_schedule.clock())
+        except ScheduleError as e:
+            raise _schedule_error(e)
+        return {"ok": True, **view}
+
+    @app.post("/api/fleet/nodes/{node_id}/schedule")
+    async def api_fleet_node_schedule_put(node_id: str, request: Request, _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        try:
+            view = save_node(
+                st, node_id,
+                paused=body["paused"] if "paused" in body else UNSET,
+                plan=body["plan"] if "plan" in body else UNSET,
+                now=phone_schedule.clock(),
+            )
+        except ScheduleError as e:
+            raise _schedule_error(e)
+        return {"ok": True, **view}
+
+    @app.post("/api/fleet/nodes/{node_id}/phones/{serial}/schedule")
+    async def api_fleet_phone_schedule_put(node_id: str, serial: str, request: Request,
+                                           _=Depends(_api_write("fleet_control"))):
+        body = await _json(request)
+        st = _store_or_503(config_manager)
+        try:
+            view = save_phone(
+                st, node_id, serial,
+                plan=body["plan"] if "plan" in body else UNSET,
+                now=phone_schedule.clock(),
+            )
+        except ScheduleError as e:
+            raise _schedule_error(e)
+        return {"ok": True, **view}
+
+    @app.get("/api/fleet/schedule/runs")
+    async def api_fleet_schedule_runs(request: Request, _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        return {"ok": True, "runs": list_runs(
+            st, node_id=str(request.query_params.get("node_id") or ""),
+            day=str(request.query_params.get("day") or ""),
+            serial=str(request.query_params.get("serial") or ""),
+        )}
+
+    @app.post("/api/fleet/schedule/tick")
+    async def api_fleet_schedule_tick(request: Request, _=Depends(_api_write("fleet_control"))):
+        st = _store_or_503(config_manager)
+        result = run_tick(st, now=phone_schedule.clock())
+        return {"ok": True, **result}
 
     # ── 集中扫码（docs/FLEET_CONSOLE_QR_LOGIN.md）──────────────────────────
     def _login_target(body: Dict[str, Any]) -> Dict[str, Any]:
