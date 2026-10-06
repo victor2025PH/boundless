@@ -121,6 +121,99 @@ def test_setup_apply_verifies_then_schedules_silent_install(tmp_path):
     assert "CHATX_FLEET_LIVE_STREAM" in text
     assert "/KEEPIDENTITY=1" not in text and res["keep_identity"] is False
     assert spawned[0][:5] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+    assert res["rollback_after_sec"] == upd.HEALTH_TIMEOUT_SEC
+    _assert_bundled_adb_stop(text)
+    _assert_setup_failsafe(text)
+    _assert_setup_watchdog(text, upd.HEALTH_TIMEOUT_SEC)
+
+
+def _assert_bundled_adb_stop(text: str) -> None:
+    """The generated script stops only {app}\\platform-tools\\adb.exe, after the live-stream exit."""
+    assert text.isascii()
+    assert text.index("live-stream.flag") < text.index("kill-server") < text.index("Start-Process")
+    assert text.rindex("exit 2") < text.index("kill-server")
+    assert "& $adb kill-server" in text
+    assert "$_.ExecutablePath -eq $adb" in text
+    assert "\\platform-tools\\adb.exe" in text
+    for bad in ("taskkill", "/IM", "Stop-Process -Name", "Get-Process", "$_.Name",
+                "Name -eq", "-eq 'adb.exe'", '-eq "adb.exe"'):
+        assert bad not in text, bad
+
+
+def _assert_setup_failsafe(text: str) -> None:
+    assert "$task = 'ChatX Fleet Agent'" in text
+    exit_at = text.index("ExitCode -ne 0")
+    window = text[exit_at:exit_at + 160]
+    assert "Relaunch-Agent 'setup exit non-zero'" in window
+    assert 'schtasks /Run /TN "$task"' in text
+    assert "Restore-AgentJson" in text and "ReadAllBytes" in text and "WriteAllBytes" in text
+
+
+def _assert_setup_watchdog(text: str, timeout: int) -> None:
+    assert f"$timeout = {timeout}" in text
+    assert text.index("$t0 = ") < text.index("Start-Job") < text.index("Start-Process")
+    assert "last_heartbeat.json" in text
+    assert "setup watchdog: no heartbeat; agent task relaunched" in text
+    assert "Relaunch-Agent 'no heartbeat'" in text
+    assert text.count("{") == text.count("}")
+
+
+def test_setup_script_stops_bundled_adb_by_full_path_and_watches_health(tmp_path):
+    room = tmp_path / "room"
+    room.mkdir()
+    app = Path("C:/Program Files/ChatX Agent/chatx-agent.exe")
+    res, text = _schedule(room, _payload(health_timeout_sec=120), current_exe=app)
+    assert res["rollback_after_sec"] == 120
+    assert r"$adb = 'C:\Program Files\ChatX Agent\platform-tools\adb.exe'" in text
+    _assert_bundled_adb_stop(text)
+    _assert_setup_failsafe(text)
+    _assert_setup_watchdog(text, 120)
+
+    off = tmp_path / "timeout-off"
+    off.mkdir()
+    res0, text0 = _schedule(off, _payload(health_timeout_sec=0))
+    assert res0["rollback_after_sec"] == 0
+    assert "last_heartbeat.json" not in text0 and "Start-Job" not in text0
+    assert "kill-server" in text0 and "Relaunch-Agent 'setup exit non-zero'" in text0
+    assert text0.rindex("exit 2") < text0.index("kill-server")
+
+
+def test_installer_stops_bundled_adb_before_copy_and_relaunches_on_failure():
+    iss = (Path(__file__).resolve().parents[1] / "fleet_agent/setup/ChatXAgent.iss").read_text(encoding="utf-8")
+    assert iss.startswith("\ufeff")
+    wild = next(ln for ln in iss.splitlines() if ln.startswith('Source: "{#PlatformToolsDir}\\*"'))
+    assert "ignoreversion" in wild and "restartreplace" in wild
+    assert 'Excludes: "adb.exe,AdbWinApi.dll,AdbWinUsbApi.dll"' in wild
+    adb_line = next(ln for ln in iss.splitlines() if ln.startswith('Source: "{#PlatformToolsDir}\\adb.exe"'))
+    assert "restartreplace" in adb_line and "skipifsourcedoesntexist" in adb_line
+    assert "ignoreversion" not in adb_line
+    for name in ("AdbWinApi.dll", "AdbWinUsbApi.dll"):
+        line = next(ln for ln in iss.splitlines() if ln.startswith(f'Source: "{{#PlatformToolsDir}}\\{name}"'))
+        assert "restartreplace" in line and "skipifsourcedoesntexist" in line and "ignoreversion" not in line
+
+    live = iss.split("function IsLiveStreamHost")[1].split("procedure StopBundledAdb")[0]
+    stop = iss.split("procedure StopBundledAdb")[1].split("function PrepareToInstall")[0]
+    relaunch = iss.split("procedure RelaunchOurAgent")[1].split("procedure DeinitializeSetup")[0]
+    deinit = iss.split("procedure DeinitializeSetup")[1].split("procedure FailInstall")[0]
+    for block in (live, stop, relaunch, deinit):
+        block.encode("ascii")
+    assert "CHATX_FLEET_LIVE_STREAM" in live and "live-stream.flag" in live
+    assert stop.index("IsLiveStreamHost()") < stop.index("kill-server")
+    assert "platform-tools\\adb.exe" in stop and "$_.ExecutablePath -eq $adb" in stop
+    for bad in ("taskkill", "/IM", "Get-ChildItem", "Get-Process", "$_.Name", "Stop-Process -Name"):
+        assert bad not in stop, bad
+    prep = iss.split("function PrepareToInstall")[1].split("function RunIcacls")[0]
+    assert prep.index("StopOurAgent()") < prep.index("AgentWasStopped := True") < prep.index("StopBundledAdb()")
+    assert '/Run /TN "ChatX Fleet Agent"' in relaunch
+    assert "AgentWasStopped" in relaunch and "SetupFinishedOk" in deinit
+    fail = iss.split("procedure FailInstall")[1].split("procedure StopOurAgent")[0]
+    assert fail.index("RelaunchOurAgent()") < fail.index("WizardSilent") < fail.index("ExitProcess(1)")
+    step = iss.split("procedure CurStepChanged")[1]
+    assert step.index("ResultCode <> 0") < step.index("RelaunchOurAgent()") < step.index("WizardSilent")
+    assert step.index("WizardSilent") < step.index("ExitProcess(1)")
+    assert "SetupFinishedOk := True" in step
+    uninst = iss.split("procedure CurUninstallStepChanged")[1].split("procedure InitializeWizard")[0]
+    assert "StopBundledAdb" not in uninst and "RelaunchOurAgent" not in uninst
 
 
 def test_enrolled_remote_setup_keeps_identity_fresh_enroll_does_not(tmp_path):

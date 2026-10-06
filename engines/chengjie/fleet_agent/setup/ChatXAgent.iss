@@ -72,7 +72,13 @@ Source: "{#SetupDir}\Open-Panel.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Phone-room adb. The directory always contains README.txt; adb.exe is optional
 ; (dropped in before the build, see platform-tools\README.txt). Missing files are skipped.
-Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; restartreplace: a locked adb.exe must not abort the silent install.
+; StopBundledAdb (PrepareToInstall) releases that lock first, and only for this copy.
+; Versioned binaries are excluded from ignoreversion so an unchanged adb.exe is not overwritten.
+Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion restartreplace recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "adb.exe,AdbWinApi.dll,AdbWinUsbApi.dll"
+Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\Fleet node status.lnk"
@@ -100,6 +106,9 @@ var
   SnapshotToDelete: String;
   BootstrapOk: Boolean;
   ConsoleButton: TNewButton;
+  AgentWasStopped: Boolean;
+  SetupFinishedOk: Boolean;
+  AgentRelaunched: Boolean;
 
 function CmdParam(const Prefix: String): String;
 var
@@ -145,6 +154,24 @@ begin
   end;
 end;
 
+procedure RelaunchOurAgent();
+var
+  ResultCode: Integer;
+begin
+  { PrepareToInstall is the only place that stops the agent. Uninstall must not relaunch. }
+  if AgentRelaunched or (not AgentWasStopped) then
+    Exit;
+  AgentRelaunched := True;
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/Run /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure DeinitializeSetup();
+begin
+  { ExitProcess skips this. FailInstall and the silent bootstrap failure call RelaunchOurAgent first. }
+  if AgentWasStopped and (not SetupFinishedOk) then
+    RelaunchOurAgent();
+end;
+
 procedure FailInstall(const Msg: String);
 begin
   { A snapshot in TEMP holds node_key. Delete it before any exit, including ExitProcess. }
@@ -152,6 +179,7 @@ begin
     DeleteFile(SnapshotToDelete);
   SnapshotToDelete := '';
   { RaiseException during ssPostInstall still exits 0 on a silent install. }
+  RelaunchOurAgent();
   if WizardSilent then
     ExitProcess(1);
   RaiseException(Msg);
@@ -170,11 +198,51 @@ begin
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function IsLiveStreamHost(): Boolean;
+var
+  env: String;
+begin
+  { Same signal as fleet detect.is_live_stream_host: env or a flag file. }
+  env := Trim(GetEnv('CHATX_FLEET_LIVE_STREAM'));
+  if (CompareText(env, '1') = 0) or (CompareText(env, 'true') = 0) or
+     (CompareText(env, 'yes') = 0) or (CompareText(env, 'on') = 0) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{commonappdata}\ChatX\live-stream.flag')) or
+     FileExists(ExpandConstant('{commonappdata}\ChatX\fleet\live-stream.flag')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+procedure StopBundledAdb();
+var
+  ResultCode: Integer;
+  adb, cmd: String;
+begin
+  { Never on a live-stream host. Match this copy only; other adb.exe processes stay. }
+  if IsLiveStreamHost() then
+    Exit;
+  adb := PsLiteral(ExpandConstant('{app}\platform-tools\adb.exe'));
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
+    '$ErrorActionPreference=''Continue'';' +
+    '$adb=''' + adb + ''';' +
+    'if (Test-Path -LiteralPath $adb) { & $adb kill-server; Start-Sleep -Seconds 1 };' +
+    'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
   StopOurAgent();
+  AgentWasStopped := True;
+  StopBundledAdb();
 end;
 
 function RunIcacls(const Params: String): Boolean;
@@ -432,6 +500,7 @@ begin
         DeleteFile(legacy);
       SnapshotToDelete := '';
       legacy := '';
+      RelaunchOurAgent();
       if WizardSilent then
         ExitProcess(1);
       if ResultCode = 3 then
@@ -439,7 +508,10 @@ begin
       SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
     end
     else
+    begin
       BootstrapOk := True;
+      SetupFinishedOk := True;
+    end;
   finally
     if legacy <> '' then
       DeleteFile(legacy);
