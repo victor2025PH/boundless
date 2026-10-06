@@ -149,7 +149,8 @@
   var TSTATE={queued:'fc-warn',pulled:'fc-warn',done:'fc-ok',failed:'fc-bad',rejected:'fc-bad',expired:'fc-muted',cancelled:'fc-muted'};
   var KINDS=['ping','pull_overview','account_health','stop_account','restart_instance'];
   var KIND_LABEL={ping:'连通测试',pull_overview:'拉取概况',account_health:'账号体检',stop_account:'停止触达',restart_instance:'重启实例',login_qr:'扫码登录',login_status:'扫码状态',
-    phone_screenshot:'手机截图',phone_tap:'手机点击',phone_swipe:'手机滑动',phone_text:'手机输入',phone_key:'手机按键'};
+    phone_screenshot:'手机截图',phone_tap:'手机点击',phone_swipe:'手机滑动',phone_text:'手机输入',phone_key:'手机按键',
+    phone_post:'发帖',phone_like:'点赞',phone_comment:'评论',phone_follow:'关注'};
   var KIND_TIP={ping:'测一下节点能不能收到任务',pull_overview:'让节点上报一次客户/会话概况',account_health:'让节点检查所有账号状态',stop_account:'对某个号码停止触达',restart_instance:'重启节点上的一个实例'};
   var DANGER={stop_account:1,restart_instance:1};
   var TLABEL={queued:'排队中',pulled:'已领取',done:'完成',failed:'失败',rejected:'被拒绝',expired:'已过期',cancelled:'已取消'};
@@ -169,16 +170,26 @@
     node_lacks_cap:'agent 太旧，不支持远程操作（需 0.3.7）',phone_ops_disabled:'agent.json 关闭了手机操作',
     phone_not_found:'adb 里找不到这部手机',excluded_phone:'手机在排除名单里',tcp_phone_not_allowed:'无线 adb 手机不允许远程操作',
     out_of_bounds:'坐标超出屏幕',screencap_bad_frame:'截图数据异常',screenshot_too_large:'截图太大',
-    text_non_ascii_unsupported:'只支持英文/数字输入',text_bad_chars:'含不允许的字符',text_too_long:'文字太长'};
+    text_non_ascii_unsupported:'只支持英文/数字输入',text_bad_chars:'含不允许的字符',text_too_long:'文字太长',
+    bad_text:'请填写文字',phone_flows_disabled:'没开社交动作（phone_flows_enabled）',
+    bad_app:'应用只能是 Facebook / Instagram / TikTok',bad_flow:'动作只能是发帖 / 点赞 / 评论 / 关注',
+    bad_handle:'账号名不合法',bad_scrolls:'滑动次数要在 0 到 8',bad_media:'是否带图不合法',
+    bad_media_slot:'相册位置要在 0 到 5',bad_anchor:'坐标覆盖不合法',unknown_anchor:'坐标名不在该应用的配置里',
+    ui_map_missing:'找不到界面坐标文件',ui_map_invalid:'界面坐标文件不合法',
+    node_busy:'这台电脑正在操作别的手机',phone_busy:'这部手机正在操作中'};
   var ADB_ST={offline:'离线',unauthorized:'未授权 USB 调试',unknown:'状态未知'};
   function phoneErr(code){var c=String(code||'').trim();if(!c)return '';if(PHONE_ERR[c])return PHONE_ERR[c];
     if(c.indexOf('phone_not_ready:')===0)return '手机未就绪：'+(ADB_ST[c.slice(16)]||c.slice(16));
+    if(c.indexOf('node_lacks_cap:phone_flows')===0)return 'agent 不支持社交动作（需 0.3.8，并在 agent.json 打开 phone_flows_enabled）';
     if(c.indexOf('node_lacks_cap')===0)return PHONE_ERR.node_lacks_cap;
     if(c.indexOf('adb_version_mismatch')===0)return PHONE_ERR.adb_version_mismatch;
     if(c.indexOf('adb_exit_')===0)return 'adb 命令失败（退出码 '+c.slice(9)+'）';
     if(c.indexOf('adb_error')===0)return 'adb 出错'+c.slice(9);
     return c;}
   function hasPhoneOps(n){return (n.caps||[]).indexOf('phone_ops_v1')>=0;}
+  function hasPhoneFlows(n){return (n.caps||[]).indexOf('phone_flows_v1')>=0;}
+  function devicePhones(n){var hb=n.last_heartbeat||{},ps=Array.isArray(n.phones)?n.phones:(Array.isArray(hb.phones)?hb.phones:[]);
+    return (ps||[]).filter(function(p){return p&&p.serial&&p.state==='device';});}
   function phonesCell(n){var hb=n.last_heartbeat||{},ps=Array.isArray(n.phones)?n.phones:hb.phones,err=n.phones_error||hb.phones_error||'';
     if(!Array.isArray(ps)&&!err)return '<span style="color:var(--t3)" title="agent 0.3.6 起才上报手机">未上报</span>';
     ps=(ps||[]).filter(function(p){return p&&p.serial;});
@@ -245,6 +256,7 @@
       var acts=n.status==='revoked'?'':'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__login" title="在这里扫码登录那台电脑上的账号">扫码登录</button>'+
         KINDS.map(function(k){return '<button class="btn-sec'+(DANGER[k]?' fc-danger':'')+'" data-n="'+esc(n.node_id)+'" data-k="'+k+'" title="'+esc(KIND_TIP[k]||'')+'">'+esc(kindName(k))+'</button>';}).join('')+
         (hasPhoneOps(n)?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__remote" title="允许经主控对这台电脑上的手机单次截图 / 点击 / 滑动 / 输入（受保护直播机除外）">'+(n.remote_ops_enabled?'关闭远程操作':'开启远程操作')+'</button>':'')+
+        (hasPhoneFlows(n)&&n.remote_ops_enabled?'<button class="btn-sec" data-n="'+esc(n.node_id)+'" data-k="__social" title="发帖 / 点赞 / 评论 / 关注（Facebook、Instagram、TikTok；坐标在节点的 phone_ui_map.json）">社交动作</button>':'')+
         '<button class="btn-sec fc-danger" data-n="'+esc(n.node_id)+'" data-k="__revoke" title="让这台电脑的密钥失效">吊销节点</button>';
       var lo=longOff[n.node_id],off=n.state==='offline'&&n.last_seen?Math.max(0,Math.floor((Date.now()/1000-n.last_seen)/60)):null;
       var stx=n.state==='offline'?'<br><span style="font-size:.7rem;color:var(--red)">'+(off===null?'从未上线':'已离线 '+off+' 分钟')+'</span>'+(lo?' '+badge('超过 '+alertMin+' 分钟','fc-bad'):''):'';
@@ -340,6 +352,7 @@
     var nid=b.getAttribute('data-n'),k=b.getAttribute('data-k'),n=nodes[nid]||{},name=n.label||n.host_name||nid;
     if(k==='__login'){lgOpen(nid);return;}
     if(k==='__remote'){remoteToggle(nid);return;}
+    if(k==='__social'){socialOpen(nid);return;}
     if(k==='__revoke'){confirmBox('吊销节点「'+name+'」','它的密钥立即失效，还没领取的任务全部取消。要再用这台电脑需要重新安装批准。','吊销节点').then(function(v){if(!v)return;
       post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/revoke').then(function(){toast('已吊销 '+name);load();}).catch(fail('吊销失败'));});return;}
     if(k==='stop_account'){stopOpen(nid);return;}
@@ -353,6 +366,32 @@
       post('/api/fleet/nodes/'+encodeURIComponent(nid),{remote_ops_enabled:on})
         .then(function(){toast((on?'已开启 ':'已关闭 ')+name+' 的远程操作'+(on?'':'（排队中的手机操作已取消）'));load();})
         .catch(fail('远程操作切换失败'));});
+  }
+  function socialOpen(nid){var n=nodes[nid]||{},name=n.label||n.host_name||nid,ps=devicePhones(n);
+    var phOpt=ps.map(function(p){return '<option value="'+esc(p.serial)+'">'+esc(p.serial)+(p.model?' · '+esc(p.model):'')+'</option>';}).join('');
+    dlgOpen({title:'社交动作 · '+name,ok:'下发',focus:'fc-soc-text',
+      html:'<label class="fc-f">手机<select id="fc-soc-serial">'+phOpt+'</select></label>'+
+        '<label class="fc-f">应用<select id="fc-soc-app"><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option></select></label>'+
+        '<label class="fc-f">动作<select id="fc-soc-flow"><option value="post">发帖</option><option value="like">点赞</option><option value="comment">评论</option><option value="follow">关注</option></select></label>'+
+        '<label class="fc-f">文字（发帖 / 评论）<input id="fc-soc-text" maxlength="200" placeholder="英文或数字"></label>'+
+        '<label class="fc-f">账号（关注）<input id="fc-soc-handle" maxlength="64" placeholder="例：some.user"></label>'+
+        '<label class="fc-f"><input id="fc-soc-media" type="checkbox"> 发帖时点相册里已有的图</label>'+
+        '<label class="fc-f">相册第几张（0–5）<input id="fc-soc-slot" type="number" min="0" max="5" value="0"></label>'+
+        '<label class="fc-f">先滑动几次再点（点赞 / 评论，0–8）<input id="fc-soc-scrolls" type="number" min="0" max="8" value="0"></label>'+
+        '<p class="fc-dlg-note">坐标来自这台电脑的 phone_ui_map.json（Facebook、Instagram、TikTok 各一份，改文件即可，不用改代码）。点的是屏幕位置，不上传图片。受保护的直播机除外。</p>',
+      submit:function(){var serial=val('fc-soc-serial'),app=val('fc-soc-app'),flow=val('fc-soc-flow');
+        if(!serial)return {error:'这台电脑没有可用的手机'};
+        if(!app||!flow)return {error:'请选择应用和动作'};
+        var body={app:app};
+        if(flow==='post'||flow==='comment'){var text=val('fc-soc-text');if(!text)return {error:'请填写文字'};body.text=text;}
+        if(flow==='follow'){var handle=val('fc-soc-handle');if(!handle)return {error:'请填写账号'};body.handle=handle;}
+        if(flow==='post'){var media=document.getElementById('fc-soc-media');body.media=(media&&media.checked)?1:0;
+          if(body.media){var slot=parseInt(val('fc-soc-slot'),10);if(!(slot>=0&&slot<=5))return {error:'相册位置要在 0 到 5'};body.media_slot=slot;}}
+        if(flow==='like'||flow==='comment'){var sc=parseInt(val('fc-soc-scrolls'),10);if(!(sc>=0&&sc<=8))return {error:'滑动次数要在 0 到 8'};body.scrolls=sc;}
+        return {serial:serial,flow:flow,body:body};}})
+    .then(function(v){if(!v)return;
+      post('/api/fleet/nodes/'+encodeURIComponent(nid)+'/phones/'+encodeURIComponent(v.serial)+'/social/'+encodeURIComponent(v.flow),v.body)
+        .then(function(){toast('已下发「'+kindName('phone_'+v.flow)+'」');load();}).catch(fail('社交动作下发失败'));});
   }
   function sendTask(nid,body){
     var n=nodes[nid]||{};
