@@ -14,10 +14,8 @@ import logging
 import os
 import tempfile
 import threading
-import time
 from typing import Any, Callable, Dict, List, Optional
 
-from .offline_alert import try_lock
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +83,30 @@ def sweep_once(store: Any, *, default_minutes: Any = None, now: Optional[float] 
                        h.get("node_id"), h.get("enabled_by"), h.get("cancelled_tasks"))
         _send(auto_off_text(h), str(h.get("node_id") or ""), "expired")
     return hits
+
+
+def try_lock(path: str) -> Optional[Any]:
+    """非阻塞独占文件锁；拿到返回打开的文件对象（进程活着就一直持有），拿不到返回 None。
+    自带实现，不依赖 offline_alert（线上主控的 offline_alert 版本可能更旧、没有这个函数）。"""
+    try:
+        fh = open(path, "a+b")
+    except OSError:
+        logger.warning("fleet remote_ops sweep lock unavailable: %s", path, exc_info=True)
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except OSError:
+        fh.close()
+        return None
 
 
 def _default_lock_path() -> str:
