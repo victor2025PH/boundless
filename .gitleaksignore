@@ -158,3 +158,8 @@ engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
 engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
 website/lib/seo.ts:generic-api-key:79
 website\lib\seo.ts:generic-api-key:79
+# workspace_base.html localStorage 键名（PR_KEY / LS_KEY，非密钥）——行号随模板增长漂移，2026-10-06 按当前行号补指纹（gitleaks dir 模式）
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2514
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2514
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4353
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4353
