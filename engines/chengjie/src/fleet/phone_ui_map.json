@@ -23,6 +23,11 @@
         "search_field": [500, 160],
         "search_first": [400, 320],
         "follow_button": [860, 280],
+        "reels_tab": [500, 920],
+        "dm_open": [700, 280],
+        "dm_field": [400, 880],
+        "dm_send": [880, 880],
+        "thread_mark": [500, 200],
         "login_mark": [500, 640]
       },
       "flows": {
@@ -72,13 +77,47 @@
           {"op": "text", "field": "handle"},
           {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
+        ],
+        "warmup": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "feed_tab", "expect": "change"},
+          {"op": "repeat", "count": "scrolls", "steps": [
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"},
+            {"op": "dwell", "lo_ms": 600, "hi_ms": 1400},
+            {"op": "dwell", "lo_ms": 1800, "hi_ms": 4200, "when": "dwell", "every": 3},
+            {"op": "tap", "anchor": "like_button", "when": "like"}
+          ]}
+        ],
+        "watch": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "reels_tab", "expect": "change"},
+          {"op": "repeat", "count": "watches", "steps": [
+            {"op": "dwell", "lo_ms": 2500, "hi_ms": 7000},
+            {"op": "tap", "anchor": "like_button", "when": "like"},
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"}
+          ]}
+        ],
+        "dm": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
+          {"op": "tap", "anchor": "dm_open", "expect": "change"},
+          {"op": "tap", "anchor": "dm_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "dm_send"}
         ]
       },
       "probes": {
         "logged_in": {"at": "feed_tab", "rgb": [24, 119, 242], "tol": 48},
-        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40},
+        "thread_open": {"at": "thread_mark", "rgb": [20, 180, 80], "tol": 36}
       },
-      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"], "thread": {"after_anchor": "dm_open", "require": ["thread_open"]}}
     },
     "instagram": {
       "anchors": {
@@ -102,6 +141,11 @@
         "search_field": [500, 140],
         "search_first": [400, 300],
         "follow_button": [800, 260],
+        "reels_tab": [700, 940],
+        "dm_open": [720, 260],
+        "dm_field": [360, 860],
+        "dm_send": [840, 860],
+        "thread_mark": [500, 180],
         "login_mark": [500, 640]
       },
       "flows": {
@@ -149,13 +193,47 @@
           {"op": "text", "field": "handle"},
           {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
+        ],
+        "warmup": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "repeat", "count": "scrolls", "steps": [
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"},
+            {"op": "dwell", "lo_ms": 600, "hi_ms": 1400},
+            {"op": "dwell", "lo_ms": 1800, "hi_ms": 4200, "when": "dwell", "every": 3},
+            {"op": "tap", "anchor": "like_button", "when": "like"}
+          ]}
+        ],
+        "watch": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "reels_tab", "expect": "change"},
+          {"op": "repeat", "count": "watches", "steps": [
+            {"op": "dwell", "lo_ms": 2500, "hi_ms": 7000},
+            {"op": "tap", "anchor": "like_button", "when": "like"},
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"}
+          ]}
+        ],
+        "dm": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
+          {"op": "tap", "anchor": "dm_open", "expect": "change"},
+          {"op": "tap", "anchor": "dm_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "dm_send"}
         ]
       },
       "probes": {
         "logged_in": {"at": "home_tab", "rgb": [24, 119, 242], "tol": 48},
-        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40},
+        "thread_open": {"at": "thread_mark", "rgb": [20, 180, 80], "tol": 36}
       },
-      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"], "thread": {"after_anchor": "dm_open", "require": ["thread_open"]}}
     },
     "tiktok": {
       "anchors": {
@@ -179,6 +257,10 @@
         "search_field": [500, 140],
         "search_first": [400, 280],
         "follow_button": [920, 380],
+        "dm_open": [800, 300],
+        "dm_field": [400, 860],
+        "dm_send": [860, 860],
+        "thread_mark": [500, 220],
         "login_mark": [500, 640]
       },
       "flows": {
@@ -227,13 +309,47 @@
           {"op": "text", "field": "handle"},
           {"op": "tap", "anchor": "search_first", "expect": "change"},
           {"op": "tap", "anchor": "follow_button"}
+        ],
+        "warmup": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "repeat", "count": "scrolls", "steps": [
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"},
+            {"op": "dwell", "lo_ms": 600, "hi_ms": 1400},
+            {"op": "dwell", "lo_ms": 1800, "hi_ms": 4200, "when": "dwell", "every": 3},
+            {"op": "tap", "anchor": "like_button", "when": "like"}
+          ]}
+        ],
+        "watch": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "home_tab", "expect": "change"},
+          {"op": "repeat", "count": "watches", "steps": [
+            {"op": "dwell", "lo_ms": 2800, "hi_ms": 8900},
+            {"op": "tap", "anchor": "like_button", "when": "like"},
+            {"op": "swipe", "from": "feed_swipe_from", "to": "feed_swipe_to", "duration_ms": 350, "expect": "change"}
+          ]}
+        ],
+        "dm": [
+          {"op": "key", "key": "home"},
+          {"op": "tap", "anchor": "app_icon", "expect": "change"},
+          {"op": "tap", "anchor": "search_open", "expect": "change"},
+          {"op": "tap", "anchor": "search_field"},
+          {"op": "text", "field": "handle"},
+          {"op": "tap", "anchor": "search_first", "expect": "change"},
+          {"op": "tap", "anchor": "dm_open", "expect": "change"},
+          {"op": "tap", "anchor": "dm_field"},
+          {"op": "text", "field": "text"},
+          {"op": "tap", "anchor": "dm_send"}
         ]
       },
       "probes": {
         "logged_in": {"at": "home_tab", "rgb": [24, 119, 242], "tol": 48},
-        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40}
+        "login_wall": {"at": "login_mark", "rgb": [66, 103, 178], "tol": 40},
+        "thread_open": {"at": "thread_mark", "rgb": [20, 180, 80], "tol": 36}
       },
-      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"]}
+      "preflight": {"after_anchor": "app_icon", "require": ["logged_in"], "forbid": ["login_wall"], "thread": {"after_anchor": "dm_open", "require": ["thread_open"]}}
     }
   },
   "robust": {

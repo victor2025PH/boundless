@@ -1,8 +1,9 @@
 """社交动作的共享规则（主控入队 + 节点执行器用同一份）。
 
-复合动作只认四个种类：发帖 / 点赞 / 评论 / 关注，应用只认 facebook、instagram、tiktok。
-文字规则与低层 ``phone_text`` 相同（ASCII，不支持中文）。坐标覆盖是绝对像素，名字必须是
-小写标识符；这个名字是否属于该应用的锚点表，到节点编译时才对（主控没有那台机器的坐标文件）。
+复合动作认七个种类：发帖 / 点赞 / 评论 / 关注，以及养号 / 私信 / 看短视频。
+应用只认 facebook、instagram、tiktok。文字规则与低层 ``phone_text`` 相同（ASCII，不支持中文）。
+坐标覆盖是绝对像素，名字必须是小写标识符；这个名字是否属于该应用的锚点表，到节点编译时才对
+（主控没有那台机器的坐标文件）。
 """
 
 from __future__ import annotations
@@ -12,12 +13,13 @@ from typing import Any, Dict
 
 from .phone_rules import MAX_COORD, TEXT_ALLOWED, PhoneOpError, validate_payload
 from .protocol import (
-    FLOW_NAMES, SOCIAL_APPS, TASK_PHONE_COMMENT, TASK_PHONE_FOLLOW, TASK_PHONE_LIKE, TASK_PHONE_POST,
-    TASK_PHONE_TEXT,
+    FLOW_NAMES, SESSION_FLOW_NAMES, SOCIAL_APPS, TASK_PHONE_COMMENT, TASK_PHONE_DM, TASK_PHONE_FOLLOW,
+    TASK_PHONE_LIKE, TASK_PHONE_POST, TASK_PHONE_TEXT, TASK_PHONE_WARMUP, TASK_PHONE_WATCH,
 )
 
 _KIND_BY_FLOW = {
     "post": TASK_PHONE_POST, "like": TASK_PHONE_LIKE, "comment": TASK_PHONE_COMMENT, "follow": TASK_PHONE_FOLLOW,
+    "warmup": TASK_PHONE_WARMUP, "dm": TASK_PHONE_DM, "watch": TASK_PHONE_WATCH,
 }
 FLOW_BY_KIND = {v: k for k, v in _KIND_BY_FLOW.items()}
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,64}$")
@@ -89,7 +91,7 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
     if app not in SOCIAL_APPS:
         raise PhoneOpError("bad_app")
     flow = FLOW_BY_KIND.get(kind, "")
-    if flow not in FLOW_NAMES:
+    if flow not in FLOW_NAMES and flow not in SESSION_FLOW_NAMES:
         raise PhoneOpError("bad_flow")
     out: Dict[str, Any] = {"app": app, "anchors": _anchors(p)}
     if not out["anchors"]:
@@ -103,8 +105,27 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
     elif flow == "comment":
         out["text"] = _caption(p)
         out["scrolls"] = _int_field(p, "scrolls", 0, MAX_SCROLLS, "bad_scrolls") if "scrolls" in p else 0
-    else:
+    elif flow == "follow":
         out["handle"] = _handle(p)
+    elif flow == "warmup":
+        scrolls = _int_field(p, "scrolls", 1, MAX_SCROLLS, "bad_scrolls") if "scrolls" in p else 4
+        likes = _int_field(p, "likes", 0, MAX_SCROLLS, "bad_likes") if "likes" in p else 0
+        if likes > scrolls:
+            raise PhoneOpError("bad_likes")
+        out["scrolls"] = scrolls
+        out["likes"] = likes
+    elif flow == "watch":
+        watches = _int_field(p, "watches", 1, MAX_SCROLLS, "bad_watches") if "watches" in p else 3
+        likes = _int_field(p, "likes", 0, MAX_SCROLLS, "bad_likes") if "likes" in p else 0
+        if likes > watches:
+            raise PhoneOpError("bad_likes")
+        out["watches"] = watches
+        out["likes"] = likes
+    elif flow == "dm":
+        out["handle"] = _handle(p)
+        out["text"] = _caption(p)
+    else:
+        raise PhoneOpError("bad_flow")
     return out
 
 

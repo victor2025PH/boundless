@@ -16,6 +16,9 @@ MAX_RETRIES = 3
 DEFAULT_RETRIES = 2
 MAX_JITTER_MS = 2000
 MAX_HUMAN_GAP_SEC = 2.0
+MIN_DWELL_MS = 200
+MAX_DWELL_MS = 12000
+MAX_DWELL_SEC = 12.0
 
 _RAW_ORDERS = {1: "rgba", 2: "rgba", 5: "bgra"}
 
@@ -45,6 +48,25 @@ def jitter_seconds(span: Sequence[int], rng: Callable[[], float]) -> float:
         lo = hi
     if lo == 0 and hi == 0:
         return 0.0
+    if lo == hi:
+        return lo / 1000.0
+    u = float(rng())
+    if u < 0.0:
+        u = 0.0
+    elif u > 1.0:
+        u = 1.0
+    return (lo + (hi - lo) * u) / 1000.0
+
+
+def dwell_seconds(span: Sequence[int], rng: Callable[[], float]) -> float:
+    """停留毫秒 → 秒。两端相等时不调用 rng。上限 12 秒，只给看视频 / 养号的停留用。"""
+    lo, hi = int(span[0]), int(span[1])
+    if hi > MAX_DWELL_MS:
+        hi = MAX_DWELL_MS
+    if lo < 0:
+        lo = 0
+    if lo > hi:
+        lo = hi
     if lo == hi:
         return lo / 1000.0
     u = float(rng())
@@ -108,6 +130,7 @@ def probe_matches(raw: bytes, x: int, y: int, rgb: Sequence[int], tol: int) -> b
 
 
 __all__ = [
-    "DEFAULT_RETRIES", "MAX_HUMAN_GAP_SEC", "MAX_JITTER_MS", "MAX_RETRIES",
-    "frame_token", "jitter_seconds", "parse_jitter_ms", "probe_matches", "resolve_policy",
+    "DEFAULT_RETRIES", "MAX_DWELL_MS", "MAX_DWELL_SEC", "MAX_HUMAN_GAP_SEC", "MAX_JITTER_MS", "MAX_RETRIES",
+    "MIN_DWELL_MS", "dwell_seconds", "frame_token", "jitter_seconds", "parse_jitter_ms", "probe_matches",
+    "resolve_policy",
 ]

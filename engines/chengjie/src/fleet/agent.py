@@ -67,7 +67,8 @@ from .service import (
 )
 from .updater import apply_upgrade
 from .protocol import (
-    CAP_PHONE_FLOWS_V1, CAP_PHONE_OPS_V1, DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC, PHONE_FLOW_KINDS,
+    CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2, CAP_PHONE_OPS_V1, DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC,
+    PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
     TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
@@ -844,8 +845,10 @@ class NodeAgent:
     def _phone_caps(self) -> List[str]:
         """低层能力来自当前 phone_ops；社交能力只有两边都开着才加。"""
         caps = list(self.phone_ops.caps())
-        if self.phone_flows.enabled and CAP_PHONE_OPS_V1 in caps and CAP_PHONE_FLOWS_V1 not in caps:
-            caps.append(CAP_PHONE_FLOWS_V1)
+        if self.phone_flows.enabled and CAP_PHONE_OPS_V1 in caps:
+            for cap in (CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2):
+                if cap not in caps:
+                    caps.append(cap)
         return caps
 
     def build_heartbeat(self) -> Dict[str, Any]:
@@ -993,7 +996,7 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
-            if kind in PHONE_FLOW_KINDS:
+            if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
                 return self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
             if kind in PHONE_TASK_KINDS:
                 return self.phone_ops.execute(kind, payload, target)

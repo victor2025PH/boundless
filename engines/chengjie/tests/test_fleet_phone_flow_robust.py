@@ -12,7 +12,8 @@ from src.fleet.phone_flows import PhoneFlows, bundled_ui_map, compile_flow, comp
 from src.fleet.phone_ops import MAX_CONCURRENT, MIN_INTERVAL_SEC
 from src.fleet.phone_rules import PhoneOpError
 from src.fleet.protocol import (
-    CAP_PHONE_FLOWS_V1, CAP_PHONE_OPS_V1, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_SWIPE, TASK_PHONE_TAP,
+    CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2, CAP_PHONE_OPS_V1, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
+    TASK_PHONE_SWIPE, TASK_PHONE_TAP,
 )
 from tests.test_fleet_phone_flows import (
     W, H, FakeAdb, _assert_actions, _body, _frame, _ops,
@@ -331,7 +332,7 @@ def test_caps_coexist_on_one_agent(tmp_path, monkeypatch):
     ag = agent_mod.NodeAgent(cfg, http=lambda *_a, **_k: (200, {}), app_version="t")
     hb = ag.build_heartbeat()
     assert AGENT_VERSION == "0.3.8"
-    assert hb["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1]
+    assert hb["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2]
     assert ag.phones.manage_server is True and ag.phone_ops.manage_server is True
     assert ag.phone_flows.enabled is True and ag.phone_flows._verify is True
 

@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from .phone_flow_robust import MAX_DWELL_SEC
 from .phone_rules import (
     KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED, check_target, escape_input_text, valid_serial, validate_payload,
 )
@@ -249,6 +250,19 @@ class PhoneOps:
         extra = float(seconds)
         if extra > 2.0:
             extra = 2.0
+        self._sleep(extra)
+        self._last_op[serial] = self._clock()
+
+    def add_dwell(self, serial: str, seconds: float) -> None:
+        """看一条、停一下。不超过 12 秒；停完把「上次操作」拨到现在，0.5 秒最短间隔照旧。
+
+        调用方已经占着这台手机的锁。不发 adb。非正数什么都不做。
+        """
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+            return
+        extra = float(seconds)
+        if extra > MAX_DWELL_SEC:
+            extra = MAX_DWELL_SEC
         self._sleep(extra)
         self._last_op[serial] = self._clock()
 
