@@ -1,7 +1,8 @@
 # 智拓群控节点更新日志
 
 ## 0.3.8
-管理员可让这台电脑上的手机发帖、点赞、评论、关注（Facebook / Instagram / TikTok；需开启远程操作，并在 agent.json 打开社交动作）。
+机房节点可以自带 adb。安装时加 `-ManageAdbServer`（安装包 `/MANAGEADBSERVER=1`）会在 agent.json 写入 `adb_manage_server: true`：本机没有 adb 服务时，只用安装目录里的 adb 把服务拉起来。默认关闭，已有安装不变。直播机不会拉起 adb 服务。
+管理员可让这台电脑上的手机发帖、点赞、评论、关注（Facebook / Instagram / TikTok；需开启远程操作，并在 agent.json 打开社交动作）。同一版心跳可以同时带上 phone_ops_v1 和 phone_flows_v1。
 
 ## 0.3.7
 管理员可远程查看并操作这台电脑上的手机（需在主控为该电脑开启远程操作，直播手机受保护）。

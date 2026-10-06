@@ -3,9 +3,9 @@
 The node lists the Android phones attached to its own adb server and reports
 them in the heartbeat as ``phones`` plus ``phones_error``. Inventory only:
 
-* The only collection command is ``adb devices -l`` (argument list, no shell,
-  5 s timeout). Nothing is sent to any phone (no input, install or shell) and
-  the adb server is never stopped, restarted, re-moded or rebooted by this code.
+* The only collection commands are ``adb devices -l`` and ``adb version``
+  (argument list, no shell, 5 s timeout). Nothing is sent to any phone and the
+  adb server is never stopped, re-moded or rebooted by this code.
 * ``adb devices`` starts a server when none is running, and an adb client
   whose version differs from the running server restarts that server. Both
   would disturb a machine whose adb belongs to another program, so before the
@@ -13,6 +13,10 @@ them in the heartbeat as ``phones`` plus ``phones_error``. Inventory only:
   local socket (``host:version``, read-only). No server, or a version that
   does not match the client, means the command is skipped and
   ``phones_error`` says why. The server port is never changed.
+* 0.3.8, opt-in only: ``adb_manage_server: true`` in agent.json (default off)
+  may ask the adb.exe shipped with this agent to bring a server up when none
+  is answering. A live-stream host never does this. ``C:\\platform-tools`` and
+  an adb found on PATH are never asked to bring a server up.
 * Failure never blocks the heartbeat. A result that succeeded within the last
   ``PHONES_CACHE_SEC`` seconds is reused, otherwise ``phones`` is empty.
 * Phones on the exclude list are dropped before they leave the machine.
@@ -202,8 +206,13 @@ def parse_client_version(text: str) -> Optional[int]:
 
 
 def find_adb(configured: str = "", *, which: Callable[[str], Optional[str]] = shutil.which,
-             exists: Callable[[str], bool] = os.path.isfile) -> str:
-    """configured adb_path (must be a file named adb/adb.exe) -> C:\\platform-tools -> PATH."""
+             exists: Callable[[str], bool] = os.path.isfile,
+             bundled: Optional[Callable[[], Sequence[str]]] = None) -> str:
+    """configured adb_path -> C:\\platform-tools -> bundled platform-tools -> PATH.
+
+    ``C:\\platform-tools`` stays ahead of the bundled copy so a machine that
+    already runs its own adb (the live-stream host) keeps using that one.
+    """
     cand = str(configured or "").strip()
     if cand and Path(cand).name.lower() in ("adb", "adb.exe") and exists(cand):
         return cand
@@ -211,7 +220,40 @@ def find_adb(configured: str = "", *, which: Callable[[str], Optional[str]] = sh
         for c in _WINDOWS_ADB_CANDIDATES:
             if exists(c):
                 return c
+    from . import adb_bundle
+
+    for c in (bundled or adb_bundle.bundled_adb_candidates)():
+        if c and exists(c):
+            return c
     return which("adb") or ""
+
+
+def prepare_adb(configured: str = "", *, manage_server: bool = False,
+                server_version: Optional[Callable[[int], Optional[int]]] = None,
+                locate: Optional[Callable[[str], str]] = None,
+                run: Optional[RunFn] = None,
+                live_stream: Optional[bool] = None,
+                state_dir: Optional[Path] = None) -> Tuple[str, int]:
+    """Resolve adb and a running server version, or raise RuntimeError.
+
+    ``adb_not_found`` / ``adb_server_not_running``. When ``manage_server`` is
+    on and nothing is answering, the bundled adb may bring its own server up
+    (never on a live-stream host). The port is not changed.
+    """
+    adb = (locate or find_adb)(configured)
+    if not adb:
+        raise RuntimeError("adb_not_found")
+    probe = server_version or adb_server_version
+    port = adb_server_port()
+    server = probe(port)
+    if server is None and manage_server:
+        from . import adb_bundle
+
+        if adb_bundle.ensure_bundled_server(adb, run=run, live_stream=live_stream, state_dir=state_dir):
+            server = probe(port)
+    if server is None:
+        raise RuntimeError("adb_server_not_running")
+    return adb, int(server)
 
 
 def _run_kwargs() -> Dict[str, Any]:
@@ -234,14 +276,19 @@ class PhoneCollector:
     def __init__(self, *, adb_path: str = "", exclude: Any = None, enabled: bool = True,
                  run: Optional[RunFn] = None, clock: Callable[[], float] = time.time,
                  server_version: Optional[Callable[[int], Optional[int]]] = None,
-                 locate: Optional[Callable[[str], str]] = None) -> None:
+                 locate: Optional[Callable[[str], str]] = None,
+                 manage_server: bool = False, live_stream: Optional[bool] = None,
+                 state_dir: Optional[Path] = None) -> None:
         self.adb_path = str(adb_path or "")
         self.excludes = normalize_excludes(exclude)
         self.enabled = bool(enabled)
+        self.manage_server = bool(manage_server)
         self._run = run
         self._clock = clock
         self._server_version = server_version
         self._locate = locate
+        self._live_stream = live_stream
+        self._state_dir = state_dir
         self._client_versions: Dict[str, Optional[int]] = {}
         self._last_ok: Optional[Tuple[float, List[Dict[str, str]]]] = None
 
@@ -262,12 +309,10 @@ class PhoneCollector:
     def _collect_once(self) -> List[Dict[str, str]]:
         # Module-level lookups at call time (not bound at construction) so a test
         # harness can patch them once for every collector.
-        adb = (self._locate or find_adb)(self.adb_path)
-        if not adb:
-            raise RuntimeError("adb_not_found")
-        server = (self._server_version or adb_server_version)(adb_server_port())
-        if server is None:
-            raise RuntimeError("adb_server_not_running")
+        adb, server = prepare_adb(
+            self.adb_path, manage_server=self.manage_server, server_version=self._server_version,
+            locate=self._locate, run=self._run, live_stream=self._live_stream, state_dir=self._state_dir,
+        )
         client = self._client_version(adb)
         if client is None:
             raise RuntimeError("adb_version_unknown")
@@ -329,5 +374,5 @@ __all__ = [
     "ADB_TIMEOUT_SEC", "PHONES_CACHE_SEC", "MAX_PHONES", "PHONE_FIELDS", "PROTECTED_SERIALS",
     "PROTECTED_ADDRESSES", "DEFAULT_PHONES_EXCLUDE", "PhoneCollector", "parse_adb_devices", "parse_client_version",
     "normalize_excludes", "is_excluded", "is_protected", "adb_server_version", "adb_server_port", "find_adb",
-    "sanitize_phones", "sanitize_phones_error",
+    "prepare_adb", "sanitize_phones", "sanitize_phones_error",
 ]

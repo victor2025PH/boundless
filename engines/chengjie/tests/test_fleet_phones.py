@@ -341,3 +341,219 @@ def test_phones_module_runs_only_devices_l_and_version():
     assert 'ADB_COLLECT_ARGS = ("devices", "-l")' in text
     assert re.findall(r'"(reboot|install|input|root|remount|disconnect|connect)"', text) == []
     assert "shell=True" not in text and '"shell": False' in text
+
+
+# ── 0.3.8 bundled adb + opt-in server ───────────────────────────────────────
+# Forward slashes so Path.name is adb.exe on Linux CI as well as on Windows.
+BUNDLED = "D:/ChatX Agent/platform-tools/adb.exe"
+
+
+def _bundled(monkeypatch, path=BUNDLED):
+    from src.fleet import adb_bundle
+
+    monkeypatch.setattr(adb_bundle, "bundled_adb_candidates", lambda: (path,))
+    return adb_bundle
+
+
+def _server_run(devices_out=SAMPLE, start_rc=0, start_exc=None):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((list(cmd), kw))
+        args = tuple(cmd[1:])
+        if args == ("start-server",):
+            assert kw.get("shell") is False and kw.get("timeout") == 30
+            if start_exc is not None:
+                raise start_exc
+            err = b"" if start_rc == 0 else b"fail"
+            return subprocess.CompletedProcess(cmd, start_rc, b"", err)
+        if args == ("version",):
+            return subprocess.CompletedProcess(cmd, 0, b"Android Debug Bridge version 1.0.41\n", b"")
+        return subprocess.CompletedProcess(cmd, 0, devices_out.encode(), b"")
+
+    run.calls = calls
+    return run
+
+
+def test_find_adb_order_is_configured_fixed_bundled_then_path(monkeypatch):
+    monkeypatch.setattr(ph.sys, "platform", "win32")
+    configured = "E:/custom/adb.exe"
+    fixed = r"C:\platform-tools\adb.exe"
+    seen = []
+
+    def exists(p):
+        seen.append(p)
+        return False
+
+    assert ph.find_adb(configured, which=lambda _n: "", exists=exists, bundled=lambda: (BUNDLED,)) == ""
+    assert seen[0] == configured and seen.index(fixed) < seen.index(BUNDLED)
+    assert ph.find_adb("", which=lambda _n: r"D:\path\adb.exe", exists=lambda p: p == fixed,
+                       bundled=lambda: (BUNDLED,)) == fixed
+    assert ph.find_adb("", which=lambda _n: r"D:\path\adb.exe", exists=lambda p: p == BUNDLED,
+                       bundled=lambda: (BUNDLED,)) == BUNDLED
+    assert ph.find_adb("", which=lambda _n: r"D:\path\adb.exe", exists=lambda _p: False,
+                       bundled=lambda: (BUNDLED,)) == r"D:\path\adb.exe"
+    assert ph.find_adb(configured, which=lambda _n: "adb", exists=lambda _p: True,
+                       bundled=lambda: (BUNDLED,)) == configured
+
+
+def test_bundled_candidates_are_windows_install_locations(tmp_path, monkeypatch):
+    from src.fleet import adb_bundle
+
+    monkeypatch.setattr(adb_bundle.sys, "platform", "linux")
+    assert adb_bundle.bundled_adb_candidates() == ()
+    monkeypatch.setattr(adb_bundle.sys, "platform", "win32")
+    exe = tmp_path / "ChatX Agent" / "chatx-agent.exe"
+    monkeypatch.setattr(adb_bundle.sys, "executable", str(exe))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "pd"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    cands = adb_bundle.bundled_adb_candidates()
+    assert cands == (
+        str(exe.parent / "platform-tools" / "adb.exe"),
+        str(tmp_path / "pd" / "ChatX" / "platform-tools" / "adb.exe"),
+        str(tmp_path / "pf" / "ChatX Agent" / "platform-tools" / "adb.exe"),
+    )
+    monkeypatch.setattr(adb_bundle.sys, "executable", str(tmp_path / "python.exe"))
+    py_cands = adb_bundle.bundled_adb_candidates()
+    assert all("python" not in c.lower() for c in py_cands)
+    assert py_cands[0] == str(tmp_path / "pd" / "ChatX" / "platform-tools" / "adb.exe")
+    assert adb_bundle.is_bundled_adb(cands[0], cands) is True
+    assert adb_bundle.is_bundled_adb(r"C:\platform-tools\adb.exe", cands) is False
+    assert adb_bundle.is_bundled_adb(str(tmp_path / "notadb.exe"), cands) is False
+
+
+def test_manage_off_does_not_bring_a_server_up(monkeypatch):
+    _bundled(monkeypatch)
+    run = _server_run()
+    c = ph.PhoneCollector(run=run, manage_server=False, live_stream=False,
+                          server_version=lambda _p: None, locate=lambda _c: BUNDLED)
+    assert c.collect() == ([], "adb_server_not_running")
+    assert run.calls == []
+
+
+def test_opt_in_brings_bundled_server_up_and_still_hides_protected_phone(monkeypatch):
+    _bundled(monkeypatch)
+    probes = {"n": 0}
+
+    def probe(_port):
+        probes["n"] += 1
+        return None if probes["n"] == 1 else 41
+
+    devices = SAMPLE + "3B1F4KE5MS140P4X device product:x model:CPH2653 device:x transport_id:8\n"
+    devices += "192.168.0.148:5555 device product:CPH2653 model:CPH2653 device:x transport_id:9\n"
+    run = _server_run(devices)
+    c = ph.PhoneCollector(run=run, clock=Clock(), manage_server=True, live_stream=False,
+                          server_version=probe, locate=lambda _c: BUNDLED)
+    phones, err = c.collect()
+    assert err == "" and probes["n"] == 2
+    serials = [p["serial"] for p in phones]
+    assert "3B1F4KE5MS140P4X" not in serials and "192.168.0.148:5555" not in serials
+    assert "E6FYAAAA1111" in serials
+    assert [cmd[1] for cmd, _kw in run.calls] == ["start-server", "version", "devices"]
+    assert run.calls[0][0][0] == BUNDLED
+    with pytest.raises(RuntimeError, match="adb_args_not_allowed"):
+        c._adb(BUNDLED, ("start-server",))
+
+
+def test_live_stream_and_foreign_adb_never_bring_a_server_up(monkeypatch):
+    _bundled(monkeypatch)
+    run = _server_run()
+    live = ph.PhoneCollector(run=run, manage_server=True, live_stream=True,
+                             server_version=lambda _p: None, locate=lambda _c: BUNDLED)
+    assert live.collect() == ([], "adb_server_not_running") and run.calls == []
+    foreign = ph.PhoneCollector(run=run, manage_server=True, live_stream=False,
+                                server_version=lambda _p: None, locate=lambda _c: ADB)
+    assert foreign.collect()[1] == "adb_server_not_running" and run.calls == []
+
+
+def test_failed_or_slow_server_start_does_not_list_devices(monkeypatch):
+    _bundled(monkeypatch)
+    failed = _server_run(start_rc=1)
+    c = ph.PhoneCollector(run=failed, manage_server=True, live_stream=False,
+                          server_version=lambda _p: None, locate=lambda _c: BUNDLED)
+    assert c.collect() == ([], "adb_server_not_running")
+    assert [cmd[1] for cmd, _kw in failed.calls] == ["start-server"]
+    timed = _server_run(start_exc=subprocess.TimeoutExpired(["adb"], 30))
+    c2 = ph.PhoneCollector(run=timed, manage_server=True, live_stream=False,
+                           server_version=lambda _p: None, locate=lambda _c: BUNDLED)
+    assert c2.collect() == ([], "adb_server_not_running")
+    assert [cmd[1] for cmd, _kw in timed.calls] == ["start-server"]
+
+
+def test_version_mismatch_does_not_bring_a_server_up(monkeypatch):
+    _bundled(monkeypatch)
+    run = _server_run()
+    c = ph.PhoneCollector(run=run, manage_server=True, live_stream=False,
+                          server_version=lambda _p: 40, locate=lambda _c: BUNDLED)
+    phones, err = c.collect()
+    assert phones == [] and err.startswith("adb_version_mismatch")
+    assert [cmd[1] for cmd, _kw in run.calls] == ["version"]
+
+
+def test_manage_flag_is_opt_in_json_true_only():
+    from src.fleet import agent as agent_mod
+
+    assert agent_mod._phone_collector_settings({})["manage_server"] is False
+    assert agent_mod._phone_collector_settings({"adb_manage_server": "true"})["manage_server"] is False
+    assert agent_mod._phone_collector_settings({"adb_manage_server": True})["manage_server"] is True
+    assert agent_mod._phone_ops_settings({"adb_manage_server": True})["manage_server"] is True
+    assert "adb_manage_server" in agent_mod.AgentConfig.OPERATOR_KEYS
+
+
+def test_enable_phone_adb_writes_flag_and_refuses_live_stream(tmp_path, monkeypatch):
+    import json
+
+    from src.fleet import agent as agent_mod
+
+    fleet = tmp_path / "fleet"
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: False)
+    assert agent_mod.main(["--state-dir", str(fleet), "enable-phone-adb"]) == 0
+    data = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert data["adb_manage_server"] is True
+    data["phones_exclude"] = ["ABC123"]
+    (fleet / "agent.json").write_text(json.dumps(data), encoding="utf-8")
+    assert agent_mod.main(["--state-dir", str(fleet), "enable-phone-adb"]) == 0
+    again = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert again["phones_exclude"] == ["ABC123"] and again["adb_manage_server"] is True
+    assert again.get("node_key", "") == ""
+
+    live = tmp_path / "live"
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: True)
+    assert agent_mod.main(["--state-dir", str(live), "enable-phone-adb"]) == 2
+    assert not (live / "agent.json").exists()
+
+
+def test_heartbeat_manage_flag_does_not_spawn_a_process(tmp_path, monkeypatch):
+    from src.fleet import adb_bundle
+    from src.fleet import agent as agent_mod
+
+    _bundled(monkeypatch, path="")
+
+    def boom(*_a, **_k):
+        raise AssertionError("adb process spawned")
+
+    monkeypatch.setattr(ph.subprocess, "run", boom)
+    monkeypatch.setattr(adb_bundle.subprocess, "run", boom)
+    cfg = agent_mod.AgentConfig(tmp_path / "fleet")
+    cfg.data.update({"controller_url": "http://127.0.0.1:1", "instances": [], "adb_manage_server": True})
+    ag = agent_mod.NodeAgent(cfg, http=lambda *_a, **_k: (200, {}), app_version="t")
+    hb = ag.build_heartbeat()
+    assert hb["phones"] == []
+    assert hb["phones_error"] in ("adb_server_not_running", "adb_not_found")
+    assert ag.phones.manage_server is True and ag.phone_ops.manage_server is True
+
+
+def test_server_verb_lives_only_in_the_bundle_module():
+    bundle = (_ROOT / "src/fleet/adb_bundle.py").read_text(encoding="utf-8")
+    assert bundle.count('"start-server"') == 1
+    for bad in ("kill-server", "tcpip", "reboot"):
+        assert bad not in bundle
+    assert '"shell": False' in bundle
+    boot = (_ROOT / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
+    ps1 = (_ROOT / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
+    iss = (_ROOT / "fleet_agent/setup/ChatXAgent.iss").read_text(encoding="utf-8")
+    assert boot.isascii() and "[switch]$ManageAdbServer" in boot and "enable-phone-adb" in boot
+    assert "[switch]$ManageAdbServer" in ps1 and "enable-phone-adb" in ps1 and "PlatformToolsDir" in ps1
+    assert "live-stream.flag" in ps1 and "live-stream.flag" in boot
+    assert "/MANAGEADBSERVER=" in iss and "platform-tools" in iss and "skipifsourcedoesntexist" in iss
+    assert "0.3.8" in (_ROOT / "deploy/fleet/CHANGELOG.md").read_text(encoding="utf-8")

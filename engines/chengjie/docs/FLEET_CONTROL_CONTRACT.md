@@ -91,6 +91,8 @@
 `phones_enabled`；直播手机 `3B1F4KE5MS140P4X` 固定排除。主控把两个键存进 `nodes.last_heartbeat_json`，
 `GET /api/fleet/nodes` 每行多给顶层 `phones` / `phones_error`（老节点 = `[]` / `""`）。不对手机做任何操作。
 
+**0.3.8 机房自带 adb**（`src/fleet/adb_bundle.py`）：`find_adb` 在 `adb_path`、`C:\platform-tools\adb.exe` 之后、PATH 之前，再找安装目录 / `%ProgramData%\ChatX\platform-tools\adb.exe` / `%ProgramFiles%\ChatX Agent\platform-tools\adb.exe`。`C:\platform-tools` 仍优先，直播机继续用它自己的 adb。agent.json `adb_manage_server`（默认缺省 = 关，热加载）为 JSON `true` 时，只有「没有 server 在应答」且找到的是上面这份自带 adb，才会让它把 server 拉起来；直播机（`CHATX_FLEET_LIVE_STREAM` 或 `live-stream.flag`）即使写成 true 也不拉。端口不改，受保护手机 `3B1F4KE5MS140P4X` / `192.168.0.148` 仍不出现在清单里、也不能被操作。安装：`Install-ChatXAgent.ps1 -ManageAdbServer -PlatformToolsDir <含 adb.exe 的目录>`，或 `ChatXAgentSetup.exe /MANAGEADBSERVER=1`（打包前把 platform-tools 放到 `fleet_agent/platform-tools/`，见该目录 README.txt）。
+
 ### 3.3 领任务（长轮询）
 
 `GET /api/fleet/tasks/pull?limit=20&wait=25`  `wait` 上限 25 s，队列为空时挂到超时。
