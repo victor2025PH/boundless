@@ -8,8 +8,13 @@
 /** 引擎在 VPS 上的回环隧道，见 deploy/instances 的 ProdTunnel。 */
 export const GUIDE_TRIAL_TUNNEL_URL = "http://127.0.0.1:18799/api/cta/convert";
 
+type GuideTrialEnv = {
+  GUIDE_TRIAL_URL?: string;
+  GUIDE_TRIAL_SECRET?: string;
+};
+
 export function guideTrialTarget(
-  env: { GUIDE_TRIAL_URL?: string; GUIDE_TRIAL_SECRET?: string } = process.env,
+  env: GuideTrialEnv = process.env as GuideTrialEnv,
 ): { url: string; secret: string } | null {
   const secret = (env.GUIDE_TRIAL_SECRET || "").trim();
   if (!secret) return null;
