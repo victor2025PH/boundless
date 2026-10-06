@@ -5,7 +5,9 @@ payload: ``{"url": "...chatx-agent.exe", "sha256": "<hex>", "version": "0.2.0"}`
 
 可选安装包（显式才走，缺省仍只换 exe）：``setup_url`` + ``setup_sha256`` 都有时改为下载
 ``ChatXAgentSetup``、校验 sha256、等本进程退出后静默运行（``/VERYSILENT /SUPPRESSMSGBOXES /NORESTART``，
-仅当 ``manage_adb_server`` 为 JSON true 时再加 ``/MANAGEADBSERVER=1``）。直播机直接拒绝，不下载。
+仅当 ``manage_adb_server`` 为 JSON true 时再加 ``/MANAGEADBSERVER=1``）。已经登记过的节点
+（agent.json 里有 node_key）再加 ``/KEEPIDENTITY=1``，安装器把它传给 bootstrap.ps1 的
+``-KeepIdentity``，不跑 ``identity --reinstall``。没有 node_key 的新装不带这个开关。直播机直接拒绝，不下载。
 
 Windows 不能覆盖正在运行的 exe：先把新文件落到 ``<state_dir>/updates/``，再派生一个脱离的
 PowerShell 等本进程退出后 ``旧→.bak、新→原路径``，然后 ``schtasks /Run`` 拉起；Linux 同理用 sh +
@@ -22,6 +24,7 @@ PowerShell 等本进程退出后 ``旧→.bak、新→原路径``，然后 ``sch
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -270,6 +273,43 @@ def _spawn_detached(cmd: List[str]) -> Any:
 _SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 _SETUP_FLAGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
 _MANAGE_ADB_FLAG = "/MANAGEADBSERVER=1"
+_KEEP_IDENTITY_FLAG = "/KEEPIDENTITY=1"
+
+
+def state_is_enrolled(state_dir: Path) -> bool:
+    """True when this state dir already has a node key. A pending or empty dir is not enrolled."""
+    path = Path(state_dir) / "agent.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(str(data.get("node_key") or "").strip())
+
+
+def setup_installer_flags(*, manage_adb_server: bool = False, keep_identity: bool = False) -> List[str]:
+    """Fixed silent-install arguments. No operator strings are interpolated."""
+    flags = list(_SETUP_FLAGS)
+    if keep_identity:
+        flags.append(_KEEP_IDENTITY_FLAG)
+    if manage_adb_server:
+        flags.append(_MANAGE_ADB_FLAG)
+    return flags
+
+
+def bootstrap_switches_for_setup(flags: List[str]) -> List[str]:
+    """Switches ChatXAgent.iss appends to bootstrap.ps1 for these installer arguments.
+
+    ``/KEEPIDENTITY=1`` → ``-KeepIdentity`` (skip ``identity --reinstall``).
+    ``/MANAGEADBSERVER=1`` → ``-ManageAdbServer``.
+    """
+    out: List[str] = []
+    if _KEEP_IDENTITY_FLAG in flags:
+        out.append("-KeepIdentity")
+    if _MANAGE_ADB_FLAG in flags:
+        out.append("-ManageAdbServer")
+    return out
 
 
 def setup_install_requested(payload: Any) -> bool:
@@ -297,14 +337,13 @@ def _version_tag(version: str) -> str:
 
 
 def build_setup_script(setup: Path, sha256: str, pid: int, state_dir: Path, *,
-                       manage_adb_server: bool = False) -> Tuple[str, str]:
+                       manage_adb_server: bool = False, keep_identity: bool = False) -> Tuple[str, str]:
     """Wait for this process, refuse a live-stream host, re-check sha256, then run the installer.
 
-    The argument list is fixed. ``manage_adb_server`` only adds ``/MANAGEADBSERVER=1``.
+    The argument list is fixed. ``keep_identity`` adds ``/KEEPIDENTITY=1``.
+    ``manage_adb_server`` only adds ``/MANAGEADBSERVER=1``.
     """
-    flags = list(_SETUP_FLAGS)
-    if manage_adb_server:
-        flags.append(_MANAGE_ADB_FLAG)
+    flags = setup_installer_flags(manage_adb_server=manage_adb_server, keep_identity=keep_identity)
     arg_list = ", ".join("'" + _ps_lit(flag) + "'" for flag in flags)
     lines = [
         "$ErrorActionPreference = 'Stop'",
@@ -353,6 +392,7 @@ def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch
     if not win:
         return "rejected", {}, "not_windows"
     manage = payload.get("manage_adb_server") is True
+    keep = state_is_enrolled(state_dir)
     dest = state_dir / "updates" / f"ChatXAgentSetup-{_version_tag(version)}.exe"
     try:
         download_verified(url, sha, dest, fetch=fetch)
@@ -365,7 +405,8 @@ def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch
     if got.lower() != sha.lower():
         dest.unlink(missing_ok=True)
         return "rejected", {"error": "sha256 mismatch"}, "sha256_mismatch"
-    body, suffix = build_setup_script(dest, got, pid or os.getpid(), state_dir, manage_adb_server=manage)
+    body, suffix = build_setup_script(dest, got, pid or os.getpid(), state_dir,
+                                     manage_adb_server=manage, keep_identity=keep)
     script = state_dir / "updates" / ("install-setup" + suffix)
     script.write_text(body, encoding="utf-8")
     try:
@@ -374,7 +415,7 @@ def apply_remote_setup(payload: Dict[str, Any], state_dir: Path, *, fetch: Fetch
         return "failed", {"error": str(e)[:300]}, "spawn_failed"
     logger.info("[updater] 安装包已校验 %s，静默安装脚本已派生，本进程即将退出", dest)
     return "done", {"version": version, "staged": str(dest), "exit": True, "setup": True,
-                    "manage_adb_server": manage}, "setup_scheduled"
+                    "manage_adb_server": manage, "keep_identity": keep}, "setup_scheduled"
 
 
 def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Optional[Path] = None,
@@ -417,4 +458,5 @@ def apply_upgrade(payload: Dict[str, Any], state_dir: Path, *, current_exe: Opti
 
 __all__ = ["sha256_file", "download_verified", "build_swap_script", "build_swap_task_commands", "swap_command",
            "apply_upgrade", "apply_remote_setup", "setup_install_requested", "build_setup_script",
+           "setup_installer_flags", "bootstrap_switches_for_setup", "state_is_enrolled",
            "health_timeout_of", "HEALTH_TIMEOUT_SEC", "UPGRADE_LOG_NAME"]

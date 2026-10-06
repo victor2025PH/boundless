@@ -19,6 +19,22 @@ param(
   [switch]$ManifestOnly
 )
 $ErrorActionPreference = 'Stop'
+# Get-FileHash / Get-AuthenticodeSignature fail to autoload when this process
+# inherited the other host's PSModulePath (pwsh 7 started from Windows PowerShell
+# 5.1, or 5.1 started from pwsh 7). Pin the running host's own module dir.
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+  $env:PSModulePath = Join-Path $PSHOME 'Modules'
+} elseif ($PSVersionTable.PSVersion.Major -le 5) {
+  $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules')
+}
+function Get-SetupSha256([string]$path) {
+  # .NET, so the manifest hash does not depend on Get-FileHash being autoloaded.
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($path)
+  try { $bytes = $sha.ComputeHash($stream) }
+  finally { $stream.Dispose(); $sha.Dispose() }
+  return ([System.BitConverter]::ToString($bytes)).Replace('-', '').ToLower()
+}
 $here = $PSScriptRoot
 $engine = Resolve-Path (Join-Path $here "..")
 if (-not $DistDir) { $DistDir = Join-Path $here "dist" }
@@ -74,7 +90,7 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 
 $setup = Join-Path $DistDir "ChatXAgentSetup.exe"
 if (-not (Test-Path -LiteralPath $setup)) { throw "ISCC did not write $setup" }
-$hash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLower()
+$hash = Get-SetupSha256 $setup
 Set-Content -LiteralPath ($setup + ".sha256") -Value "$hash  ChatXAgentSetup.exe" -Encoding ascii
 
 $mfPath = Join-Path $DistDir "manifest.json"

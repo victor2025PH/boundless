@@ -45,6 +45,16 @@ def test_publish_checks_hash_and_signature_before_upload():
     assert all(ord(c) < 128 for c in src)
 
 
+def test_build_setup_hashes_without_get_filehash_and_pins_modules():
+    src = _text(BUILD)
+    assert "function Get-SetupSha256" in src and "[System.Security.Cryptography.SHA256]::Create()" in src
+    assert "Get-FileHash -LiteralPath $setup" not in src
+    assert src.index("$env:PSModulePath") < src.index("function Get-SetupSha256")
+    assert src.index("function Get-SetupSha256") < src.index("Get-SetupSha256 $setup")
+    assert "PSVersionTable.PSVersion.Major -ge 7" in src
+    assert "PSVersionTable.PSVersion.Major -le 5" in src
+
+
 def test_build_setup_refuses_to_overwrite_a_signed_installer():
     src = _text(BUILD)
     assert "[switch]$Force" in src and "[switch]$ManifestOnly" in src

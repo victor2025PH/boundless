@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, List
 
@@ -75,6 +76,24 @@ def test_setup_live_host_refuses_before_download(tmp_path, monkeypatch):
     assert fetched == [] and spawned == []
 
 
+def _schedule(tmp_path, payload, **kw):
+    data = _blob()
+    sha = _sha(data)
+    spawned: List[List[str]] = []
+
+    def fetch(url, dest):
+        dest.write_bytes(data)
+
+    body = dict(payload)
+    body["setup_sha256"] = sha
+    st, res, detail = upd.apply_upgrade(
+        body, tmp_path, fetch=fetch, spawn=spawned.append, frozen=True, windows=True,
+        live_stream=False, pid=42, **kw)
+    assert (st, detail) == (STATUS_DONE, "setup_scheduled")
+    text = Path(spawned[0][-1]).read_text(encoding="utf-8")
+    return res, text
+
+
 def test_setup_apply_verifies_then_schedules_silent_install(tmp_path):
     data = _blob()
     sha = _sha(data)
@@ -100,7 +119,65 @@ def test_setup_apply_verifies_then_schedules_silent_install(tmp_path):
         assert flag in text
     assert sha in text
     assert "CHATX_FLEET_LIVE_STREAM" in text
+    assert "/KEEPIDENTITY=1" not in text and res["keep_identity"] is False
     assert spawned[0][:5] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+
+
+def test_enrolled_remote_setup_keeps_identity_fresh_enroll_does_not(tmp_path):
+    enrolled = tmp_path / "enrolled"
+    enrolled.mkdir()
+    (enrolled / "agent.json").write_text(
+        json.dumps({"node_id": "n_room", "node_key": "nk-keep"}), encoding="utf-8")
+    res, text = _schedule(enrolled, _payload(manage_adb_server=True))
+    assert res["keep_identity"] is True and res["manage_adb_server"] is True
+    assert "/KEEPIDENTITY=1" in text and "/MANAGEADBSERVER=1" in text
+    switches = upd.bootstrap_switches_for_setup(upd.setup_installer_flags(manage_adb_server=True, keep_identity=True))
+    assert switches == ["-KeepIdentity", "-ManageAdbServer"]
+    iss = (Path(__file__).resolve().parents[1] / "fleet_agent/setup/ChatXAgent.iss").read_text(encoding="utf-8")
+    step = iss.split("procedure CurStepChanged")[1]
+    assert step.index("CmdParam('/KEEPIDENTITY=') = '1'") < step.index("params := params + ' -KeepIdentity'")
+    assert step.index("params := params + ' -KeepIdentity'") < step.index("Exec(")
+    boot = (Path(__file__).resolve().parents[1] / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
+    assert "if (-not $KeepIdentity)" in boot and "'identity', '--reinstall'" in boot
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "agent.json").write_text(json.dumps({"node_id": "", "node_key": ""}), encoding="utf-8")
+    res2, text2 = _schedule(fresh, _payload(manage_adb_server=True))
+    assert res2["keep_identity"] is False
+    assert "/KEEPIDENTITY=1" not in text2 and "/MANAGEADBSERVER=1" in text2
+    assert upd.bootstrap_switches_for_setup(
+        upd.setup_installer_flags(manage_adb_server=True, keep_identity=False)) == ["-ManageAdbServer"]
+
+    pending = tmp_path / "pending"
+    pending.mkdir()
+    (pending / "agent.json").write_text(json.dumps({"pending_request_id": "req"}), encoding="utf-8")
+    _, text3 = _schedule(pending, _payload())
+    assert "/KEEPIDENTITY=1" not in text3
+
+
+def test_enrolled_setup_on_live_host_is_still_refused(tmp_path):
+    enrolled = tmp_path / "enrolled"
+    enrolled.mkdir()
+    (enrolled / "agent.json").write_text(json.dumps({"node_key": "nk", "node_id": "n_1"}), encoding="utf-8")
+    fetched: List[str] = []
+    spawned: List[Any] = []
+    st, _, detail = upd.apply_upgrade(
+        _payload(), enrolled, fetch=lambda url, dest: fetched.append(url), spawn=spawned.append,
+        frozen=True, windows=True, live_stream=True)
+    assert (st, detail) == (STATUS_REJECTED, "live_stream_host")
+    assert fetched == [] and spawned == []
+    assert not (enrolled / "updates").exists()
+
+
+def test_nginx_serves_versioned_manifest_with_exe_and_sha256():
+    nginx = (Path(__file__).resolve().parents[1] / "deploy/fleet/nginx-fleet.conf").read_text(encoding="utf-8")
+    block = nginx.split('location ~ "^/downloads/fleet/', 1)[1].split("}", 1)[0]
+    assert "chatx-agent-[0-9][0-9.]*\\.exe(\\.sha256)?" in block
+    assert "ChatXAgentSetup-[0-9][0-9.]*\\.exe(\\.sha256)?" in block
+    assert "manifest-[0-9][0-9.]*\\.json" in block
+    assert "root /var/www/dl-mirror;" in nginx
+    assert "manifest.json" not in block
 
 
 def test_setup_manage_flag_is_only_json_true(tmp_path):
@@ -236,7 +313,7 @@ def test_protocol_keeps_enable_phone_adb_off_the_phone_remote_gate():
 
 def test_agent_setup_on_live_host_does_not_exit(tmp_path, monkeypatch):
     monkeypatch.setattr("src.fleet.detect.is_live_stream_host", lambda state_dir=None: True)
-    cfg = AgentConfig(tmp_path)
+    cfg = AgentConfig(tmp_path / "fleet")
     ag = NodeAgent(cfg, http=lambda *a: (200, {}))
     st, _, detail = ag.execute({"task_id": "t", "kind": TASK_UPGRADE, "payload": _payload()})
     assert (st, detail) == (STATUS_REJECTED, "live_stream_host")
@@ -256,7 +333,10 @@ def test_agent_enable_phone_adb_persists_and_is_idempotent(tmp_path, monkeypatch
     monkeypatch.setattr("src.fleet.detect.is_live_stream_host", lambda state_dir=None: False)
     monkeypatch.setattr(adb_bundle, "bundled_adb_candidates", lambda: (str(adb),))
     monkeypatch.setattr(adb_bundle.subprocess, "run", run)
-    cfg = AgentConfig(tmp_path)
+    # Not tmp_path itself: conftest keeps files open there, so Windows cannot
+    # rename that directory (WinError 5). A child directory can be locked in place.
+    fleet = tmp_path / "fleet"
+    cfg = AgentConfig(fleet)
     cfg.data["phones_exclude"] = ["ABC123"]
     cfg.save()
     ag = NodeAgent(cfg, http=lambda *a: (200, {}))
@@ -266,7 +346,7 @@ def test_agent_enable_phone_adb_persists_and_is_idempotent(tmp_path, monkeypatch
     assert (st, detail) == (STATUS_DONE, "adb_enabled")
     assert res["idempotent"] is False and ag.exit_requested is False
     assert ag.phones.manage_server is True and ag.phone_ops.manage_server is True
-    disk = json.loads((tmp_path / "agent.json").read_text(encoding="utf-8"))
+    disk = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
     assert disk["adb_manage_server"] is True and disk["phones_exclude"] == ["ABC123"]
     st2, res2, detail2 = ag.execute(task)
     assert (st2, detail2) == (STATUS_DONE, "adb_enabled") and res2["idempotent"] is True
@@ -277,13 +357,35 @@ def test_agent_enable_phone_adb_persists_and_is_idempotent(tmp_path, monkeypatch
 
 def test_agent_enable_phone_adb_refuses_live_host(tmp_path, monkeypatch):
     monkeypatch.setattr("src.fleet.detect.is_live_stream_host", lambda state_dir=None: True)
-    cfg = AgentConfig(tmp_path)
+    fleet = tmp_path / "fleet"
+    cfg = AgentConfig(fleet)
     ag = NodeAgent(cfg, http=lambda *a: (200, {}))
     st, _, detail = ag.execute({"task_id": "t", "kind": TASK_ENABLE_PHONE_ADB, "payload": {}})
     assert (st, detail) == (STATUS_REJECTED, "live_stream_host")
     assert ag.exit_requested is False and ag.phones.manage_server is False
-    raw = (tmp_path / "agent.json").read_text(encoding="utf-8") if (tmp_path / "agent.json").is_file() else ""
+    raw = (fleet / "agent.json").read_text(encoding="utf-8") if (fleet / "agent.json").is_file() else ""
     assert "adb_manage_server" not in raw
+
+
+def test_lock_falls_back_to_in_place_when_rename_is_denied(tmp_path, monkeypatch):
+    from src.fleet import identity as ident
+
+    fleet = tmp_path / "fleet"
+    fleet.mkdir()
+    (fleet / "agent.json").write_text('{"node_key": "nk"}', encoding="utf-8")
+
+    def denied(path, **kwargs):
+        raise ident.LegacyRenameError("could not move the old state directory aside: [WinError 5] Access is denied")
+
+    monkeypatch.setattr(ident, "_rename_legacy_fleet", denied)
+    ident.lock_state_dir(fleet)
+    assert fleet.is_dir() and (fleet / "agent.json").is_file()
+    assert list(tmp_path.glob("fleet.legacy-*")) == []
+    tmp = fleet / "agent.json.tmp"
+    tmp.write_text('{"node_key": "nk", "adb_manage_server": true}', encoding="utf-8")
+    os.replace(tmp, fleet / "agent.json")
+    saved = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert saved["adb_manage_server"] is True and saved["node_key"] == "nk"
 
 
 def test_admin_setup_payload_and_enable_command():
