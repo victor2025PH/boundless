@@ -81,7 +81,11 @@ _SILENT_CEILINGS: dict[str, int] = {
     "_root": 17,
     # 2026-08-28 时这两块还没有静默 handler（天花板缺省 0）。
     # ebd73f48 上已经各有存量，按实测入账，不留余量。
-    "fleet": 8,  # 2026-10-06: identity posix/uuid probes log at debug
+    # 2026-10-06: identity posix/uuid probes log at debug (9 → 8).
+    # 2026-10-07: operator_alert snapshot/language reads and the interactive
+    # token cleanup log at debug. Those three were the 0.3.15 overage (11 > 8).
+    # Ceiling stays 8; do not raise it to absorb them.
+    "fleet": 8,
     "compliance": 1,
     "trigger": 7,
     "nurture": 6,
