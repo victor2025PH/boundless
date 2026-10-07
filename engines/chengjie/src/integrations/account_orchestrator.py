@@ -41,7 +41,12 @@ _mirror_fail_total = 0
 def _sent_by_for_origin(origin: Any) -> str:
     """出站 origin → messages.sent_by：manual（坐席工作台）=agent；其余（自动回复/主动触达/
     自动语音/群演等自动链）=ai。接力记忆四期：镜像行落库即带发送方。"""
-    return "agent" if str(origin or "auto") == "manual" else "ai"
+    o = str(origin or "auto")
+    if o == "manual":
+        return "agent"
+    if o in ("script", "system"):   # P0-4：脚本演练 / 系统通知单独归因，不算 AI 发言
+        return o
+    return "ai"
 
 
 def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: str) -> None:

@@ -1149,6 +1149,8 @@ _MIGRATIONS = [
     # 出站行 ingest 那一刻按同会话 + 同 hash/ref + 时间窗精确认领 → 直接写列；线程读取
     # 先信本列，老行才回落时间匹配。agent_sends 两列同为此服务。
     "ALTER TABLE messages ADD COLUMN sent_by TEXT NOT NULL DEFAULT ''",
+    # （P0-4，2026-10-08）sent_by 扩为五态 agent/ai/phone/script/system，新出站行缺省 phone、
+    # 不再落 ''；老行不回填（列默认值不变，无需迁移）。见 SENT_BY_VALUES。
     "ALTER TABLE agent_sends ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN claimed_mid TEXT NOT NULL DEFAULT ''",
@@ -1179,15 +1181,45 @@ _MIGRATIONS = [
 AGENT_SEND_CLAIM_WINDOW_SEC = 180.0
 
 
-SENT_BY_VALUES = ("agent", "ai")
+#: 出站行发送方（P0-4 归因，2026-10-08 扩为五态）：
+#:   agent  坐席在工作台手动发出（含图/语音；发送打点认领）
+#:   ai     编排器自动链（自动回复 / 主动触达 / 自动语音 / A 线直回）
+#:   phone  不经本系统打标链路发出——手机端 / 外部设备回抄 / 未识别出站（**出站缺省值**）
+#:   script 脚本 / 演练 / 测试工具发出
+#:   system 系统通知类（模板、回执等非对话自动消息）
+#: 入站永远 ''。此前缺省 '' ＝「未知」，173 上新出站行约 60% 无归因，无法区分人 / AI / 手机。
+SENT_BY_VALUES = ("agent", "ai", "phone", "script", "system")
+SENT_BY_DEFAULT_OUT = "phone"
+_SENT_BY_ALIASES = {
+    "manual": "agent", "human": "agent", "seat": "agent", "operator": "agent",
+    "auto": "ai", "bot": "ai", "autoreply": "ai", "auto_reply": "ai", "llm": "ai",
+    "device": "phone", "mobile": "phone", "external": "phone", "app": "phone",
+    "test": "script", "scripted": "script", "drill": "script", "tool": "script",
+    "sys": "system", "notice": "system",
+}
+
+
+def normalize_sent_by(value: Any) -> str:
+    """发送方取值归一：五态原样；常见别名映射；其余（含空）→ ''（由调用方决定缺省）。"""
+    v = str(value or "").strip().lower()
+    if v in SENT_BY_VALUES:
+        return v
+    return _SENT_BY_ALIASES.get(v, "")
+
+
+def _explicit_sent_by(msg: Any) -> str:
+    """出站行**自带**的发送方（编排器镜像 / A 线 / 轮询兜底等显式打标）；没有 → ''；入站 → ''。"""
+    if str(getattr(msg, "direction", "") or "") != "out":
+        return ""
+    return normalize_sent_by(getattr(msg, "sent_by", ""))
 
 
 def _sent_by_of(msg: Any) -> str:
-    """出站行随消息自带的发送方（编排器镜像 origin → ai/agent）；入站永远空；非法值归空。"""
+    """落库用发送方：入站 ''；出站＝显式值，缺省 ``phone``（非本系统打标链路发出）。
+    坐席打点认领（_claim_agent_send_locked）随后可把 phone 改判为 agent。"""
     if str(getattr(msg, "direction", "") or "") != "out":
         return ""
-    v = str(getattr(msg, "sent_by", "") or "").strip().lower()
-    return v if v in SENT_BY_VALUES else ""
+    return _explicit_sent_by(msg) or SENT_BY_DEFAULT_OUT
 
 
 def agent_send_text_hash(text: str) -> str:
@@ -1667,6 +1699,8 @@ class InboxStore:
                 ),
             )
             inserted = cur.rowcount > 0
+            if not inserted:
+                self._upgrade_sent_by_locked(mid, msg)
             # P0 未读可信化 v2：入站落库即精确推进 last_in_ts（effective_unread
             # 新闸门比对它而非 last_ts——自己的出站绝不再复活未读徽标）。
             if inserted and msg.direction == "in":
@@ -1794,6 +1828,8 @@ class InboxStore:
                 _pmid = str(msg.platform_msg_id or "").strip()
                 _tsf = float(msg.ts or 0)
                 _win = 120.0 if msg.direction == "out" else 0.0
+                _twin_sent_by = ""   # P0-4：被删 hash 孪生的发送方（权威行没自带时继承）
+                _twin_mids: List[str] = []
                 if not _pmid:
                     _twin = self._conn.execute(
                         "SELECT 1 FROM messages WHERE conversation_id=? AND text=? AND ts=? "
@@ -1804,6 +1840,18 @@ class InboxStore:
                         self._dedup_counts["skipped_hash"] += 1
                         continue
                 else:
+                    if msg.direction == "out":
+                        # P0-4：删孪生前先取它的发送方——乐观 hash 行常由 A 线 / 编排器带 ai/agent
+                        # 写入，权威回显行（pmid）却不带；不继承就会把 AI 发言洗成 phone/空。
+                        for _tw in self._conn.execute(
+                                "SELECT message_id, sent_by FROM messages WHERE conversation_id=? AND text=? "
+                                "AND direction=? AND platform_msg_id = '' AND message_id LIKE '%:h:%' "
+                                "AND ABS(ts - ?) <= ?",
+                                (msg.conversation_id, msg.text, msg.direction, _tsf, _win)).fetchall():
+                            _twin_mids.append(str(_tw[0]))
+                            _sb = normalize_sent_by(_tw[1])
+                            if _sb and _sb != SENT_BY_DEFAULT_OUT and not _twin_sent_by:
+                                _twin_sent_by = _sb
                     _cur = self._conn.execute(
                         "DELETE FROM messages WHERE conversation_id=? AND text=? "
                         "AND direction=? AND platform_msg_id = '' AND message_id LIKE '%:h:%' "
@@ -1813,6 +1861,12 @@ class InboxStore:
                     if (_cur.rowcount or 0) > 0:
                         self._dedup_counts["deleted_hash"] += int(_cur.rowcount)
                 mid = _message_pk(msg.conversation_id, msg.platform_msg_id, msg.text, msg.ts)
+                _sb_row = (_explicit_sent_by(msg) or _twin_sent_by) if msg.direction == "out" else ""
+                if _twin_sent_by and not _explicit_sent_by(msg):
+                    try:
+                        msg.sent_by = _twin_sent_by   # 让随后的认领 / 冲突升级看到同一口径
+                    except Exception:
+                        pass
                 cur = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO messages
@@ -1832,7 +1886,7 @@ class InboxStore:
                         str(msg.reply_to_sender or ""), str(msg.mentions_json or "[]"),
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
                         int(getattr(msg, "approx_ts", 0) or 0),
-                        _sent_by_of(msg),
+                        (_sb_row or SENT_BY_DEFAULT_OUT) if msg.direction == "out" else "",
                     ),
                 )
                 if cur.rowcount > 0:
@@ -1840,7 +1894,15 @@ class InboxStore:
                     if msg.direction == "in":
                         _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
                     else:
+                        if _twin_mids:
+                            # 孪生已被打点认领过 → 认领指针挪到权威行（免得打点悬空又被下一条误认）
+                            _ph = ",".join("?" * len(_twin_mids))
+                            self._conn.execute(
+                                f"UPDATE agent_sends SET claimed_mid=? WHERE claimed_mid IN ({_ph})",
+                                [mid, *_twin_mids])
                         self._claim_agent_send_locked(mid, msg)
+                else:
+                    self._upgrade_sent_by_locked(mid, msg)
             if _new_inbound_ts > 0:
                 # P0 未读可信化 v2：本批新入站的最晚 ts 精确收口 last_in_ts
                 # （conv upsert 的「未读增长近似推进」之上的权威值，同一事务内落定）。
@@ -4221,13 +4283,28 @@ class InboxStore:
                 self._claim_row_for_send_locked(int(cur.lastrowid or 0), cid, t, th, ref)
             self._conn.commit()
 
+    def _upgrade_sent_by_locked(self, mid: str, msg: Any) -> None:
+        """P0-4：同主键行已在库（INSERT OR IGNORE 未插）→ 本次若**显式**带了发送方，而库里
+        还是 ''（老行）/ phone（缺省），就升级成显式值。手机回显先到、编排器镜像后到时靠它
+        把 phone 改判为 ai/agent。只升不降，agent 认领过的行不被覆盖。锁内调用、绝不抛。"""
+        try:
+            sb = _explicit_sent_by(msg)
+            if not sb or sb == SENT_BY_DEFAULT_OUT:
+                return
+            self._conn.execute(
+                "UPDATE messages SET sent_by=? WHERE message_id=? AND direction='out' "
+                "AND sent_by IN ('', ?)", (sb, mid, SENT_BY_DEFAULT_OUT))
+        except Exception:
+            logger.debug("[sent_by] 冲突升级失败（忽略）", exc_info=True)
+
     def _claim_agent_send_locked(self, mid: str, msg: Any) -> None:
         """出站行落库 → 找同会话、同 text_hash / media_ref、时间窗内、尚未认领的坐席打点；
         命中 → ``sent_by='agent'`` + 打点记 ``claimed_mid``。锁内调用、绝不抛。"""
         try:
             # 四期：镜像行自带发送方（编排器 origin → ai/agent）时列已在 INSERT 写好；
-            # ai 行不碰打点；agent 行仍把对应打点记 claimed（免得同文本的下一条被它误认）
-            if _sent_by_of(msg) == "ai":
+            # ai / script / system 行不碰打点；agent 行仍把对应打点记 claimed（免得同文本的
+            # 下一条被它误认）；缺省 phone 行可被坐席打点改判为 agent（P0-4）
+            if _explicit_sent_by(msg) in ("ai", "script", "system"):
                 return
             cid = str(getattr(msg, "conversation_id", "") or "")
             th = agent_send_text_hash(getattr(msg, "text", "") or "")
@@ -4253,10 +4330,10 @@ class InboxStore:
             if not send_rowid:
                 return
             # 归一化 hash 需逐行算：只取窗口内最近 20 条未标出站行（打点晚于镜像是罕见路径）
-            # sent_by IN ('', 'agent')：四期编排器镜像行已带 agent，也要与打点连上（记 claimed）；
-            # 已被别的打点认领的行排除；ai 行永不认
+            # sent_by IN ('', 'agent', 'phone')：四期编排器镜像行已带 agent，也要与打点连上（记 claimed）；
+            # phone＝P0-4 起的出站缺省值（老行是 ''）；已被别的打点认领的行排除；ai/script/system 永不认
             q = ("SELECT message_id, text, media_ref FROM messages WHERE conversation_id=? AND direction='out' "
-                 "AND sent_by IN ('', 'agent') "
+                 "AND sent_by IN ('', 'agent', 'phone') "
                  "AND message_id NOT IN (SELECT claimed_mid FROM agent_sends WHERE claimed_mid<>'') "
                  "AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 20")
             rows = self._conn.execute(q, (cid, ts, AGENT_SEND_CLAIM_WINDOW_SEC, ts)).fetchall()
