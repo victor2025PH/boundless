@@ -185,10 +185,10 @@ def test_decide_risk_hold_keeps_existing_shadow_and_hard_stop():
     assert d.level == "L1" and d.shadow is not None
     assert d.shadow.would_hold_level == "L3" and d.shadow.hold_reason == "money"
     assert d.shadow.risk_hits == ["usdt"] and d.risk_hold == "commitment"
-    # 硬停分支语义不动（停联告别「最多一条」照给）
+    # 硬停分支语义不动（锁定硬停：不回客户 → L1 人审、farewell 恒 False，见 autosend_policy.Decision）
     h = decide("high", ["stop_contact"], "low", [], [], automation_mode="auto_ai",
                policy_mode="shadow", conversation_id="c", risk_hold_reason="privacy")
-    assert h.hard_stop == "stop_contact" and h.level == "L2" and h.farewell
+    assert h.hard_stop == "stop_contact" and h.level == "L1" and not h.farewell
 
 
 # ── B. needs_human 作闸：打标登记持有 / 摘标解除 ─────────────────────────

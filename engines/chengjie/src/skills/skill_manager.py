@@ -5561,6 +5561,17 @@ class SkillManager(LoggerMixin):
         """
         if not reply:
             return reply
+        # 智安 P0-3（2026-10-08）：本轮注入过玩家网关事实（``_player_data_block``）→ 出站对余额 /
+        # 充提 / 打码 / 流水金额脱敏（红线「回述真人余额」不出站）。注入块本身已打码，这里兜模型复述。
+        try:
+            if isinstance(user_context, dict) and user_context.get("_player_data_block"):
+                from src.integrations.wujie_player import redact_financials
+                _red, _nred = redact_financials(reply)
+                if _nred:
+                    self.logger.info("%s[player-gateway] 出站金额脱敏 %d 处", log_prefix, _nred)
+                    reply = _red
+        except Exception:
+            self.logger.debug("[player-gateway] 出站脱敏跳过", exc_info=True)
         # #32② / #145⑤：出站不得主动提起对方已撤回的内容（对方本轮又说了则不剥）
         try:
             from src.inbox.withdrawn_cite import apply_to_reply
