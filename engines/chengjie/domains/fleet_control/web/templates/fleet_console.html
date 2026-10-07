@@ -147,13 +147,20 @@
 (function(){
   var STATE={online:['在线','fc-ok'],offline:['离线','fc-bad'],revoked:['已吊销','fc-muted'],pending:['待注册','fc-warn']};
   var TSTATE={queued:'fc-warn',pulled:'fc-warn',done:'fc-ok',failed:'fc-bad',rejected:'fc-bad',expired:'fc-muted',cancelled:'fc-muted'};
-  var KINDS=['ping','pull_overview','account_health','stop_account','restart_instance'];
-  var KIND_LABEL={ping:'连通测试',pull_overview:'拉取概况',account_health:'账号体检',stop_account:'停止触达',restart_instance:'重启实例',login_qr:'扫码登录',login_status:'扫码状态',
+  var KINDS=['ping','pull_overview','account_health','stop_account','restart_instance','net_health'];
+  var KIND_LABEL={ping:'连通测试',pull_overview:'拉取概况',account_health:'账号体检',stop_account:'停止触达',restart_instance:'重启实例',net_health:'网络体检',login_qr:'扫码登录',login_status:'扫码状态',
     phone_screenshot:'手机截图',phone_tap:'手机点击',phone_swipe:'手机滑动',phone_text:'手机输入',phone_key:'手机按键',
     phone_post:'发帖',phone_like:'点赞',phone_comment:'评论',phone_follow:'关注',
     phone_warmup:'养号',phone_dm:'私信',phone_watch:'看视频'};
-  var KIND_TIP={ping:'测一下节点能不能收到任务',pull_overview:'让节点上报一次客户/会话概况',account_health:'让节点检查所有账号状态',stop_account:'对某个号码停止触达',restart_instance:'重启节点上的一个实例'};
+  var KIND_TIP={ping:'测一下节点能不能收到任务',pull_overview:'让节点上报一次客户/会话概况',account_health:'让节点检查所有账号状态',stop_account:'对某个号码停止触达',restart_instance:'重启节点上的一个实例',net_health:'只读：能不能上网、WiFi 还是移动数据、SIM 和信号、流量计数、Facebook 是否安装。剩余话费和剩余流量没有稳定接口，默认不查。'};
   var DANGER={stop_account:1,restart_instance:1};
+  function netHealthText(r){
+    if(!r||!r.remaining_data_note||!r.phones||!r.phones.length) return '';
+    return r.phones.map(function(p){
+      var no=p.wallpaper_no?(p.wallpaper_no+' 号'):(p.unnumbered?'未编号':'');
+      return (no?no+'：':'')+(p.status_zh||'');
+    }).join('\n');
+  }
   var TLABEL={queued:'排队中',pulled:'已领取',done:'完成',failed:'失败',rejected:'被拒绝',expired:'已过期',cancelled:'已取消'};
   var PHONE_RE=/^[0-9]{6,15}$/;
   var DEV_RE=/^[A-Za-z0-9._:\-]{1,64}$/;
@@ -460,7 +467,10 @@
     apiFetch('/api/fleet/tasks/'+a.getAttribute('data-t')).then(j).then(function(d){var r=d.task.result||{};
       var box=document.getElementById('fc-detail');box.style.display='';
       if(r.qr_data_url&&QR_RE.test(r.qr_data_url)){document.getElementById('fc-detail-body').innerHTML='<img src="'+esc(r.qr_data_url)+'" style="max-width:280px;display:block;margin-bottom:.5rem">'+esc(JSON.stringify(Object.assign({},r,{qr_data_url:'…'}),null,2));}
-      else document.getElementById('fc-detail-body').textContent=JSON.stringify(r,null,2);
+      else {
+        var netTxt=netHealthText(r);
+        document.getElementById('fc-detail-body').textContent=netTxt?(netTxt+'\n\n'+JSON.stringify(r,null,2)):JSON.stringify(r,null,2);
+      }
       box.scrollIntoView({behavior:'smooth'});}).catch(fail('读取结果失败'));
   });
   document.getElementById('fc-newcode').addEventListener('click',function(){

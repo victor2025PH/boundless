@@ -1,8 +1,10 @@
 """节点执行远程手机操作（agent 0.3.7）：phone_screenshot / phone_tap / phone_swipe / phone_text / phone_key。
 
 安全栏：
-* adb 只跑白名单参数（``check_adb_args``）：``devices -l``、``version``、``-s <serial> exec-out screencap``、
-  ``-s <serial> shell input tap|swipe|text|keyevent 3|4``。参数列表、不经本机 shell、每条都有超时。
+* adb 只跑白名单参数（``check_adb_args`` → ``adb_allowlist.py``）：原有 ``devices -l``、
+  ``version``、截图、``input``，加上 0.3.18 的只读诊断和仅限 Facebook 的启动。
+  改设置、开关流量、重启、卸载、force-stop 在目录里单独成类，默认拒绝。
+  参数列表、不经本机 shell、每条都有超时。
 * 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
   问现有 server；没有 server、或本机 adb 客户端版本和 server 不一致（会触发 server 重启）→ 拒绝。
   agent.json ``adb_manage_server: true``（默认关）时，仅当没有 server 在应答，才允许安装目录里
@@ -33,10 +35,10 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 from .phone_flow_robust import MAX_DWELL_SEC
 from .phone_rules import (
-    KEYCODES, MAX_PNG_B64, PhoneOpError, TEXT_ALLOWED, check_target, escape_input_text, valid_serial, validate_payload,
+    KEYCODES, MAX_PNG_B64, PhoneOpError, check_target, escape_input_text, validate_payload,
 )
 from .phones import (
-    is_excluded, is_protected, normalize_excludes, parse_adb_devices, parse_client_version, prepare_adb,
+    is_excluded, normalize_excludes, parse_adb_devices, parse_client_version, prepare_adb,
 )
 from .protocol import (
     CAP_PHONE_OPS_V1, PHONE_TASK_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_KEY,
@@ -58,32 +60,16 @@ _PX = "I" if array("I").itemsize == 4 else "L"
 RunFn = Callable[..., Any]
 
 
-def _digits(v: str, hi: int = 99999) -> bool:
-    return v.isdigit() and len(v) <= 5 and int(v) <= hi
+def check_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
+                   allow_experimental_ussd: bool = False) -> None:
+    """Admit ``args`` or raise PhoneOpError.
 
+    The catalog lives in ``adb_allowlist``. Both extra flags default off.
+    """
+    from .adb_allowlist import admit_adb_args
 
-def check_adb_args(args: Sequence[str]) -> None:
-    """adb 参数白名单。不在白名单 → PhoneOpError('adb_args_not_allowed')。"""
-    a = tuple(str(x) for x in args)
-    if a in (("devices", "-l"), ("version",)):
-        return
-    if len(a) >= 4 and a[0] == "-s" and valid_serial(a[1]) == a[1] and not is_protected(a[1]):
-        rest = a[2:]
-        if rest == ("exec-out", "screencap"):
-            return
-        if rest[:2] == ("shell", "input") and len(rest) >= 4:
-            op, vals = rest[2], rest[3:]
-            if op == "tap" and len(vals) == 2 and all(_digits(v) for v in vals):
-                return
-            if op == "swipe" and len(vals) == 5 and all(_digits(v) for v in vals):
-                return
-            if op == "keyevent" and len(vals) == 1 and vals[0] in KEYCODES.values():
-                return
-            if op == "text" and len(vals) == 1:
-                plain = vals[0].replace("%s", " ")
-                if "%" not in plain and TEXT_ALLOWED.match(plain) and not plain.startswith("-"):
-                    return
-    raise PhoneOpError("adb_args_not_allowed")
+    admit_adb_args(args, allow_guarded_writes=allow_guarded_writes,
+                   allow_experimental_ussd=allow_experimental_ussd)
 
 
 def _run_kwargs(timeout: float) -> Dict[str, Any]:

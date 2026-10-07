@@ -44,9 +44,10 @@ from src.fleet.login_qr import (
     LOGIN_QR_TTL_SEC, LOGIN_STATUS_TTL_SEC, sanitize_login_result, start_payload, strip_qr, valid_instance,
     valid_login_id, valid_platform,
 )
+from src.fleet.net_health import sanitize_net_health_result
 from src.fleet.protocol import (
     ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, STATUS_PULLED,
-    STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS,
+    STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_NET_HEALTH,
 )
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.phone_rules import (
@@ -334,6 +335,8 @@ def register_routes(app, ctx) -> None:
                 result = sanitize_login_result(result)
             elif known is not None and known.get("kind") in (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS):
                 result = sanitize_phone_result(known["kind"], result)
+            elif known is not None and known.get("kind") == TASK_NET_HEALTH:
+                result = sanitize_net_health_result(result)
         rec = st.ack(tid, node_id=node["node_id"], status=status, result=result,
                      detail=str(body.get("detail") or ""))
         # 未知 / 不属于本节点的 task_id 也 200（fail-soft，Agent 不必重试）
