@@ -42,7 +42,7 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
             raise HTTPException(503, tr(request, "err.tko.store_unready"))
         from src.inbox.cockpit import cockpit_snapshot
         snap = cockpit_snapshot(store, _cfg(request), force=bool(force))
-        return {"ok": True, "caps": {"resolve": True}, **snap}
+        return {"ok": True, "caps": {"resolve": True, "snooze": True}, **snap}
 
     @app.post("/api/cockpit/resolve")
     async def api_cockpit_resolve(request: Request, _=Depends(api_auth)):
@@ -70,5 +70,95 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
             store.set_conv_tags(cid, [t for t in tags if t != HANDOFF_TAG])
             from src.inbox.cockpit import invalidate_cache
             invalidate_cache()
+            try:
+                from src.inbox.cockpit_hold import note_cleared
+                note_cleared(cid, "resolve")
+            except Exception:
+                logger.debug("[cockpit] 今日清掉记账失败（忽略）", exc_info=True)
             logger.info("[cockpit] resolve needs_human: %s", cid)
         return {"ok": True, "removed": removed}
+
+    def _cid_or_400(request: Request, body: dict) -> str:
+        cid = str((body or {}).get("conversation_id") or "").strip()
+        if not cid:
+            raise HTTPException(400, tr(
+                request, "err.ws.field_required", field="conversation_id"))
+        return cid
+
+    @app.post("/api/cockpit/snooze")
+    async def api_cockpit_snooze(request: Request, _=Depends(api_auth)):
+        """「先不回」：客户在等的这一句先离开主列表。新的一句进来会自己回来。"""
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.tko.store_unready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = _cid_or_400(request, body if isinstance(body, dict) else {})
+        from src.inbox.cockpit import collect_intervention_queue, invalidate_cache
+        from src.inbox.cockpit_hold import item_fingerprint, remember_snooze
+        q = collect_intervention_queue(store, _cfg(request))
+        pool = list(q.get("items") or []) + list(q.get("snoozed") or [])
+        it = next((i for i in pool if str(i.get("conversation_id") or "") == cid), None)
+        if not it or it.get("kind") != "waiting":
+            raise HTTPException(409, tr(request, "err.ck.not_waiting"))
+        remember_snooze(cid, item_fingerprint(it))
+        invalidate_cache()
+        return {"ok": True}
+
+    @app.post("/api/cockpit/unsnooze")
+    async def api_cockpit_unsnooze(request: Request, _=Depends(api_auth)):
+        """把「先不回」收回主列表。"""
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.tko.store_unready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = _cid_or_400(request, body if isinstance(body, dict) else {})
+        from src.inbox.cockpit import invalidate_cache
+        from src.inbox.cockpit_hold import forget_snooze
+        forget_snooze(cid)
+        invalidate_cache()
+        return {"ok": True}
+
+    @app.post("/api/cockpit/cleared")
+    async def api_cockpit_cleared(request: Request, _=Depends(api_auth)):
+        """页内发出一句之后记账。发送本身走统一收件箱，这里只记「今天清掉」。
+
+        ``src=inbox``：完整对话里发送成功后也来这里记同一笔（how=reply）。只有发
+        之前这个人在「客户在等」里才算，同一轮等待只算一次（判据见
+        ``cockpit.inbox_reply_clears``）；发送失败前端不会来。会话放在
+        ``reply_conversation_id`` 而不是 ``conversation_id``：模板热更新先于重启
+        上线，没有这条判据的旧后端会回 400，而不是把收件箱里每一句都记成清掉。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if str(body.get("src") or "").strip() == "inbox":
+            cid = str(body.get("reply_conversation_id") or "").strip()
+            if not cid:
+                raise HTTPException(400, tr(
+                    request, "err.ws.field_required",
+                    field="reply_conversation_id"))
+            from src.inbox.cockpit import invalidate_cache, note_inbox_reply
+            store = getattr(request.app.state, "inbox_store", None)
+            if store is None or not note_inbox_reply(store, cid):
+                return {"ok": True, "counted": False}
+            invalidate_cache()
+            from src.inbox.cockpit_hold import cleared_today
+            return {"ok": True, "counted": True, "cleared_today": cleared_today()}
+        cid = _cid_or_400(request, body)
+        how = str(body.get("how") or "reply").strip()
+        if how not in ("reply", "resolve", "handback"):
+            how = "reply"
+        from src.inbox.cockpit import invalidate_cache
+        from src.inbox.cockpit_hold import cleared_today, note_cleared
+        note_cleared(cid, how)
+        invalidate_cache()
+        return {"ok": True, "counted": True, "cleared_today": cleared_today()}

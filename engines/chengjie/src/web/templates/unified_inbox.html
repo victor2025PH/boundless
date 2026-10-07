@@ -15817,6 +15817,7 @@ async function sendMsg(){
     const d=await r.json();
     if(d.ok){
       _sentOk=true;   // composer P2：成功微反馈
+      _ckNoteInboxReply(body);   // 待人工「今天清掉」（只记成功的）
       // M-2 A1（#232）：✓ 只认平台/边车回执 delivered===true；RPA 入队 → 「已排队发送」；
       // 旧后端无字段 → 「已提交」。此前一律「✓ 已发送」＝乐观显示非边车回执。
       _sentReceipt=(d.delivered===true||(d.result&&d.result.delivered===true))?'delivered':((d.queued||(d.result&&d.result.queued))?'queued':'');
@@ -15917,6 +15918,7 @@ async function sendMsg(){
     try{ _recon=await _reconcileTextSend(optMsg&&optMsg._retryBody); }catch(_){}
     if(_recon==='sent'){
       _sentOk=true;
+      _ckNoteInboxReply(optMsg&&optMsg._retryBody);   // 慢发送对账确认已发出 = 成功
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
       try{ _refreshConvStatus(selectedChat); }catch(_){}
@@ -15977,6 +15979,30 @@ async function sendMsg(){
   }
 }
 
+/* 待人工「今天清掉」：完整对话里发送成功的回复也记一笔，走待人工同一个记账口
+   （src=inbox：服务端判断发之前这位是不是在「客户在等」里，同一轮只算一次；
+   会话放 reply_conversation_id，没有这条判据的旧后端回 400、不会每句都记）。
+   只在发送成功后调；失败不调。顺手给「从待人工打开」的回程记录打上 sent，
+   回到待人工时这张先收起、落到下一张（cockpit.html 读同一键）。不等结果、不提示。 */
+function _ckNoteInboxReply(body){
+  try{
+    if(!body) return;
+    let cid='';
+    const sc=selectedChat;
+    if(sc && String(sc.platform||'')===String(body.platform||'') && String(sc.chat_key||'')===String(body.chat_key||'')){
+      cid=String(sc.conversation_id||'');
+    }
+    if(!cid) cid=[body.platform||'', body.account_id||'default', body.chat_key||''].join(':');
+    if(!body.chat_key) return;
+    apiFetch('/api/cockpit/cleared',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reply_conversation_id:cid, how:'reply', src:'inbox'})}).catch(function(){});
+    try{
+      const rec=JSON.parse(localStorage.getItem('aitr.ck.ret.v1')||'null');
+      if(rec && rec.cid===cid){ rec.sent=Date.now(); localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(rec)); }
+    }catch(_){}
+  }catch(_){}
+}
+
 // P4-9：失败气泡一键重发——原样重放当初的发送 body（含引用/翻译参数），成功即并入真实线程。
 async function resendFailed(optId){
   const idx=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -16002,6 +16028,7 @@ async function resendFailed(optId){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 重发成功（被压制＝原件其实已发出）也是这句回出去了
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       // A1：服务端按原件 id 判「其实已发出/仍在途」→ 压制了本次重发。清掉假失败
       // 气泡之外还得说清楚，否则坐席只看到「点了重发但没多一条」会以为没生效。
