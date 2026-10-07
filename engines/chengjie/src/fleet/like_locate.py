@@ -9,10 +9,19 @@ template match. One weak signal is never a tap.
 Signals
     label       Read-only ``uiautomator dump`` content-desc / text / resource-id.
                 Same needles as huoke's feed Like scan (like / いいね / 赞), plus
-                the icon-only content-desc React. Liked, comment, share, and the
-                reaction names are not targets. A label is not a tap by itself:
-                a thumbs-up template at the same place has to agree. Optional.
-                A dump that fails or comes back empty leaves this signal empty.
+                the icon-only content-desc React, Tagalog (gusto / gustuhin),
+                and the Chinese 点赞 / 讚 / 喜欢 forms. A resource-id that names
+                like or react (including ``feed_story_…like``) counts the same
+                way. Liked, comment, share, and the reaction names are not
+                targets. A label is not a tap by itself: a thumbs-up template
+                at the same place has to agree. Optional. A dump that fails or
+                comes back empty leaves this signal empty.
+    position    Leftmost button of a hierarchy row whose other buttons are
+                Comment / Share (Komento / Ibahagi, 评论 / 分享). This is the
+                icon-only bar when the Like glyph itself has no label. It
+                agrees with a screenshot signal (template, action bar, or
+                silhouette), not with a label from the same dump. Not a tap
+                by itself.
     text        Like / Gusto / I-like / 赞 on a row that also has Comment and Share
                 (Komento / Ibahagi, 评论 / 分享). Liked / Nagustuhan / 已赞 is not a target.
                 Optional. The default build does not import rapidocr, cv2, or onnx.
@@ -35,7 +44,10 @@ Tap rule: template score >= TEMPLATE_HIGH, or at least two signals whose
 centers agree. Shape and template describe the same glyph, so those two alone
 do not agree — the bar (structure) or the Like word (text) has to take part.
 A hierarchy label agrees only with a template, not with the bar or the
-silhouette by itself. Otherwise no target (never the deprecated like_button).
+silhouette by itself. A label without a template does not cancel a separate
+position+screenshot pair. Otherwise no target (never the deprecated
+like_button). ``locate_like_row`` also returns ``diag`` for ``like_probe``.
+The diagnostic does not change the tap.
 
 Text engine: optional ``rapidocr-onnxruntime`` (PP-OCRv4 reads Latin and CJK,
 so Tagalog and 赞 do not need a Windows OCR language pack). Windows.Media.Ocr
@@ -86,14 +98,35 @@ _LIKED = {"liked", "nagustuhan", "已赞"}
 _COMMENT = {"comment", "komento", "评论"}
 _SHARE = {"share", "ibahagi", "分享"}
 # Huoke's feed scan (facebook.py, the Like-button bounds pass) plus the
-# icon-only content-desc "React". "reactions" is a count, not the button.
-_LABEL_NEEDLE = (("like", "like"), ("いいね", "いいね"), ("赞", "赞"), ("gusto", "gusto"))
+# icon-only content-desc "React" and the Tagalog / Chinese labels seen on
+# icon-only bars. Longer needles come first so 点赞 is not recorded as 赞.
+# "reactions" is a count, not the button.
+_LABEL_NEEDLE = (
+    ("thumbs up", "thumbs-up"),
+    ("thumbs-up", "thumbs-up"),
+    ("like", "like"),
+    ("いいね", "いいね"),
+    ("点赞", "点赞"),
+    ("點贊", "點贊"),
+    ("讚", "讚"),
+    ("喜欢", "喜欢"),
+    ("喜歡", "喜歡"),
+    ("赞", "赞"),
+    ("gustuhin", "gustuhin"),
+    ("gusto", "gusto"),
+)
 _LABEL_EXCLUDE = (
     "liked", "unlike", "nagustuhan", "已赞", "取消",
-    "comment", "komento", "评论", "コメント",
+    "comment", "komento", "评论", "コメント", "magkomento",
     "share", "ibahagi", "分享", "シェア",
     "love", "haha", "wow", "sad", "angry", "reactions",
 )
+_COMMENT_NEEDLE = ("comment", "komento", "评论", "コメント", "magkomento")
+_SHARE_NEEDLE = ("share", "ibahagi", "分享", "シェア")
+_LIKED_NEEDLE = ("liked", "unlike", "nagustuhan", "已赞", "取消")
+_REACTION_NEEDLE = ("love", "haha", "wow", "sad", "angry", "care")
+_DIAG_NODES = 24
+_DIAG_STR = 80
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 _EMPTY_PHRASES = (
     "something went wrong",
@@ -300,16 +333,14 @@ def text_hits(boxes: Sequence[Dict[str, Any]], width: int, height: int) -> List[
     return hits
 
 
-def _like_label_token(desc: str, text: str, resource_id: str) -> str:
-    """Huoke's Like-button needle, plus the icon-only content-desc React.
+def _attr_blob(*parts: str) -> str:
+    return " ".join(part.strip() for part in parts if part and part.strip()).casefold().replace("’", "'")
 
-    ``liked`` / comment / share / the reaction names / a ``reactions`` count
-    are not the button. A resource-id is checked with the same words because
-    some builds put the name there and leave the visible text empty.
-    """
-    blob = " ".join(part.strip() for part in (desc, text, resource_id) if part and part.strip())
-    low = blob.casefold().replace("’", "'")
-    if not low or any(needle in low for needle in _LABEL_EXCLUDE):
+
+def _like_token_in(part: str) -> str:
+    """Like / React token in one attribute. The caller already applied excludes."""
+    low = part.strip().casefold().replace("’", "'")
+    if not low:
         return ""
     if "react" in re.findall(r"[a-z]+", low):
         return "react"
@@ -319,50 +350,304 @@ def _like_label_token(desc: str, text: str, resource_id: str) -> str:
     return ""
 
 
-def label_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
-    """Like controls named by the accessibility hierarchy. Empty on a bad dump.
+def _like_label_match(desc: str, text: str, resource_id: str) -> Tuple[str, str]:
+    """``(token, by)`` for one node. ``by`` is content-desc, text, or resource-id.
 
-    Bounds use huoke's button box: at least 20px on a side, and not a banner
-    (wider than 300 or taller than 200). The hit is not a tap by itself.
+    ``liked`` / comment / share / the reaction names / a ``reactions`` count
+    are not the button. A resource-id is checked with the same words because
+    some builds put the name there and leave the visible text empty
+    (``like_button``, ``feed_story_ufi_like``). ``feed_story`` alone is not a
+    Like control.
     """
+    blob = _attr_blob(desc, text, resource_id)
+    if not blob or any(needle in blob for needle in _LABEL_EXCLUDE):
+        return "", ""
+    for by, part in (("content-desc", desc), ("text", text), ("resource-id", resource_id)):
+        token = _like_token_in(part)
+        if token:
+            return token, by
+    return "", ""
+
+
+def _like_label_token(desc: str, text: str, resource_id: str) -> str:
+    return _like_label_match(desc, text, resource_id)[0]
+
+
+def _button_max(width: int, height: int) -> Tuple[int, int]:
+    """Huoke's 300×200 box, widened on a phone-width frame.
+
+    An xxhdpi action button is often about a third of a 1080px screen, so the
+    old 300px cap dropped it. The floor stays 300 on the small test frames.
+    A full-width banner still does not pass (cap 480×280).
+    """
+    max_w = min(480, max(300, int(width * 0.42)))
+    max_h = min(280, max(200, int(height * 0.16)))
+    return max_w, max_h
+
+
+def _button_box_ok(bw: int, bh: int, width: int, height: int) -> bool:
+    if bw < 20 or bh < 20:
+        return False
+    max_w, max_h = _button_max(width, height)
+    return bw <= max_w and bh <= max_h
+
+
+def _clip_diag(value: Any, n: int = _DIAG_STR) -> str:
+    text = "".join(ch for ch in str(value or "") if ch.isprintable() and ch not in "<>")
+    return text[:n]
+
+
+def _parse_hierarchy(hierarchy: Any) -> Optional[ET.Element]:
     if not isinstance(hierarchy, str) or "<hierarchy" not in hierarchy:
-        return []
+        return None
     start = hierarchy.find("<hierarchy")
     end = hierarchy.rfind("</hierarchy>")
     if start < 0 or end < 0:
-        return []
+        return None
     chunk = hierarchy[start:end + len("</hierarchy>")]
     if len(chunk) > 2_000_000:
-        return []
+        return None
     try:
-        root = ET.fromstring(chunk)
+        return ET.fromstring(chunk)
     except ET.ParseError:
+        return None
+
+
+def _dump_status(hierarchy: Any) -> str:
+    if hierarchy is None or hierarchy == "":
+        return "empty"
+    if not isinstance(hierarchy, str) or not hierarchy.strip():
+        return "empty"
+    if "<hierarchy" not in hierarchy:
+        return "bad"
+    return "ok" if _parse_hierarchy(hierarchy) is not None else "bad"
+
+
+def _bar_role(desc: str, text: str, resource_id: str) -> str:
+    blob = _attr_blob(desc, text, resource_id)
+    if not blob:
+        return ""
+    if any(needle in blob for needle in _LIKED_NEEDLE):
+        return "liked"
+    if _like_label_token(desc, text, resource_id):
+        return "like"
+    if any(needle in blob for needle in _COMMENT_NEEDLE):
+        return "comment"
+    if any(needle in blob for needle in _SHARE_NEEDLE):
+        return "share"
+    if any(needle in blob for needle in _REACTION_NEEDLE):
+        return "reaction"
+    return ""
+
+
+def _drop_containers(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop a button that holds another button, so a bar wrapper is not the slot."""
+    kept: List[Dict[str, Any]] = []
+    for node in nodes:
+        area = (node["x1"] - node["x0"]) * (node["y1"] - node["y0"])
+        holds = False
+        for other in nodes:
+            if other is node:
+                continue
+            other_area = (other["x1"] - other["x0"]) * (other["y1"] - other["y0"])
+            if area <= other_area * 1.4:
+                continue
+            if node["x0"] <= other["x"] <= node["x1"] and node["y0"] <= other["y"] <= node["y1"]:
+                holds = True
+                break
+        if not holds:
+            kept.append(node)
+    return kept
+
+
+def _hierarchy_buttons(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
+    """Button-sized nodes, including a wrapper that also carries the label."""
+    root = _parse_hierarchy(hierarchy)
+    if root is None:
         return []
-    hits = []
+    found: List[Dict[str, Any]] = []
     for node in root.iter():
-        token = _like_label_token(
-            str(node.attrib.get("content-desc") or ""),
-            str(node.attrib.get("text") or ""),
-            str(node.attrib.get("resource-id") or ""),
-        )
-        if not token:
-            continue
-        match = _BOUNDS_RE.fullmatch(str(node.attrib.get("bounds") or "").strip())
+        desc = str(node.attrib.get("content-desc") or "")
+        text = str(node.attrib.get("text") or "")
+        rid = str(node.attrib.get("resource-id") or "")
+        bounds = str(node.attrib.get("bounds") or "").strip()
+        match = _BOUNDS_RE.fullmatch(bounds)
         if match is None:
             continue
         x0, y0, x1, y1 = (int(v) for v in match.groups())
         bw, bh = x1 - x0, y1 - y0
-        if bw < 20 or bh < 20 or bw > 300 or bh > 200:
+        if not _button_box_ok(bw, bh, width, height):
             continue
         if not _fully_inside(x0, y0, x1, y1, width, height):
             continue
+        token, by = _like_label_match(desc, text, rid)
         cx, cy = _center(x0, y0, x1, y1)
-        hits.append({
-            "source": "label", "x_pm": _pm(cx, width), "y_pm": _pm(cy, height),
-            "score": 1.0, "label": token, "full": True, "x": cx, "y": cy,
+        found.append({
+            "bounds": bounds, "class": str(node.attrib.get("class") or ""),
+            "content_desc": desc, "resource_id": rid, "text": text,
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1, "x": cx, "y": cy,
+            "label": token, "by": by, "role": _bar_role(desc, text, rid),
         })
+    return found
+
+
+def _button_rows(nodes: Sequence[Dict[str, Any]], height: int) -> List[List[Dict[str, Any]]]:
+    tol = _y_tol(height)
+    ordered = sorted(nodes, key=lambda n: n["y"])
+    rows: List[List[Dict[str, Any]]] = []
+    for node in ordered:
+        placed = False
+        for group in rows:
+            gy = sum(item["y"] for item in group) / len(group)
+            if abs(node["y"] - gy) <= tol:
+                group.append(node)
+                placed = True
+                break
+        if not placed:
+            rows.append([node])
+    for group in rows:
+        group.sort(key=lambda n: n["x0"])
+    return rows
+
+
+def _hit_from_button(node: Dict[str, Any], source: str, width: int, height: int,
+                     label: str) -> Dict[str, Any]:
+    return {
+        "source": source, "x_pm": _pm(node["x"], width), "y_pm": _pm(node["y"], height),
+        "score": 1.0, "label": label, "full": True, "x": node["x"], "y": node["y"],
+        "bounds": node["bounds"], "by": node.get("by") or "",
+        "content_desc": node.get("content_desc") or "", "text": node.get("text") or "",
+        "resource_id": node.get("resource_id") or "", "class": node.get("class") or "",
+    }
+
+
+def label_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
+    """Like controls named by the accessibility hierarchy. Empty on a bad dump.
+
+    Bounds use huoke's button box (at least 20px, not a banner). On a
+    phone-width frame the cap follows the screen so an xxhdpi action button
+    wider than 300px still counts. The hit is not a tap by itself.
+    """
+    hits = []
+    for node in _hierarchy_buttons(hierarchy, width, height):
+        if not node.get("label"):
+            continue
+        hits.append(_hit_from_button(node, "label", width, height, str(node["label"])))
     hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
     return hits
+
+
+def _position_row(group: Sequence[Dict[str, Any]], width: int) -> bool:
+    """True when this row is an action bar and the leftmost slot can be Like."""
+    if not 2 <= len(group) <= 4:
+        return False
+    heights = [n["y1"] - n["y0"] for n in group]
+    if min(heights) <= 0 or max(heights) / min(heights) > 1.85:
+        return False
+    centers = [n["x"] for n in group]
+    if centers[-1] - centers[0] < width * 0.15:
+        return False
+    for prev, nxt in zip(centers, centers[1:]):
+        if nxt - prev < 8:
+            return False
+    if not any(n.get("role") in ("comment", "share") for n in group):
+        return False
+    left = group[0].get("role") or ""
+    return left in ("", "like")
+
+
+def position_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
+    """Leftmost button of a Comment/Share action bar. Not a tap by itself.
+
+    The Like glyph on an icon-only bar often has no word. The row still has
+    a comment button and a share button. The leftmost slot of that row is
+    the candidate. A reaction picker (Love / Haha / Wow) is not a row.
+    """
+    hits = []
+    buttons = _drop_containers(_hierarchy_buttons(hierarchy, width, height))
+    for group in _button_rows(buttons, height):
+        if not _position_row(group, width):
+            continue
+        left = group[0]
+        label = str(left.get("label") or "icon")
+        hits.append(_hit_from_button(left, "position", width, height, label))
+    hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
+    return hits
+
+
+def _diag_node(node: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "bounds": _clip_diag(node.get("bounds") or "", 40),
+        "class": _clip_diag(node.get("class") or ""),
+        "content_desc": _clip_diag(node.get("content_desc") or ""),
+        "resource_id": _clip_diag(node.get("resource_id") or ""),
+        "text": _clip_diag(node.get("text") or ""),
+    }
+
+
+def _unique_attrs(nodes: Sequence[Dict[str, Any]], key: str) -> List[str]:
+    out: List[str] = []
+    for node in nodes:
+        text = _clip_diag(node.get(key) or "")
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _candidate_row(buttons: Sequence[Dict[str, Any]], height: int,
+                   like: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = [group for group in _button_rows(buttons, height) if 1 <= len(group) <= 8]
+    if like is not None:
+        for group in rows:
+            if any(n["bounds"] == like.get("bounds") for n in group):
+                return list(group)[:_DIAG_NODES]
+    for group in rows:
+        # A comment/share sibling is enough to show the operator this row,
+        # even when the span is too short to count as a position hit.
+        if 2 <= len(group) <= 4 and any(n.get("role") in ("comment", "share") for n in group):
+            return list(group)[:_DIAG_NODES]
+    ranked = sorted(rows, key=lambda group: sum(1 for n in group if n.get("content_desc") or n.get("text") or n.get("resource_id")), reverse=True)
+    for group in ranked:
+        if 2 <= len(group) <= 4:
+            return list(group)[:_DIAG_NODES]
+    if like is not None:
+        return [like]
+    return []
+
+
+def _like_match_record(node: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "label": _clip_diag(node.get("label") or "", 32),
+        "by": str(node.get("by") or ""),
+        "content_desc": _clip_diag(node.get("content_desc") or ""),
+        "text": _clip_diag(node.get("text") or ""),
+        "resource_id": _clip_diag(node.get("resource_id") or ""),
+        "bounds": _clip_diag(node.get("bounds") or "", 40),
+    }
+
+
+def hierarchy_diag(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
+    """Compact action-bar attributes. No pixels, no device identity."""
+    status = _dump_status(hierarchy)
+    buttons = _hierarchy_buttons(hierarchy, width, height) if status == "ok" else []
+    likes = [n for n in buttons if n.get("label")]
+    likes.sort(key=lambda n: (n["y"], n["x"]))
+    like = likes[0] if likes else None
+    row = _candidate_row(_drop_containers(buttons), height, like) if buttons else []
+    uia: Dict[str, Any] = {"dump": status, "like_found": like is not None}
+    if like is not None:
+        uia["match"] = _like_match_record(like)
+    return {
+        "uiautomator": uia,
+        "action_bar": {
+            "content_descs": _unique_attrs(row, "content_desc"),
+            "texts": _unique_attrs(row, "text"),
+            "resource_ids": _unique_attrs(row, "resource_id"),
+        },
+        "nodes": [_diag_node(n) for n in row[:_DIAG_NODES]],
+    }
 
 
 def _count_row_ys(boxes: Sequence[Dict[str, Any]], height: int) -> List[float]:
@@ -899,16 +1184,22 @@ def _gray(raw: bytes) -> Optional[Tuple[int, int, int, str, List[int]]]:
     return width, height, hdr, order, luma
 
 
-def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
-                  templates: Optional[Sequence[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def _template_scan(raw: bytes, blobs: Sequence[Dict[str, int]],
+                   templates: Optional[Sequence[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], float]:
+    """Template hits plus the best score, including scores under TEMPLATE_MED.
+
+    Scores under the bar are not hits. The best score is still returned so a
+    probe can show a near miss.
+    """
     decoded = _gray(raw)
     if decoded is None:
-        return []
+        return [], 0.0
     width, height, _hdr, _order, luma = decoded
     pack = list(templates) if templates is not None else load_templates()
     if not pack:
-        return []
+        return [], 0.0
     hits = []
+    best_any = 0.0
     for blob in blobs:
         x0 = max(0, int(blob["x0"]))
         y0 = max(0, int(blob["y0"]))
@@ -943,6 +1234,8 @@ def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
                     break
             if best >= 0.97:
                 break
+        if best > best_any:
+            best_any = best
         if best < TEMPLATE_MED:
             continue
         hx, hy = best_xy
@@ -953,6 +1246,12 @@ def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
             "x": hx, "y": hy,
         })
     hits.sort(key=lambda h: (-h["score"], h["y_pm"], h["x_pm"]))
+    return hits, best_any
+
+
+def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
+                  templates: Optional[Sequence[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    hits, _best = _template_scan(raw, blobs, templates)
     return hits
 
 
@@ -1070,25 +1369,50 @@ def _tap_point(group: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _signals_confirm(sources: set) -> bool:
-    """Two different readings, and a hierarchy label only with a template."""
-    if len(sources) < 2 or sources <= {"shape", "template"}:
-        return False
-    if "label" in sources and "template" not in sources:
+    """Two different readings.
+
+    Shape and template describe the same glyph. A hierarchy label agrees only
+    with a template, so a label without one is dropped before the count and
+    cannot veto a position-plus-screenshot pair. Position (first button of a
+    comment/share row) agrees only with a screenshot signal, not with a label
+    from the same dump.
+    """
+    got = set(sources)
+    if "label" in got and "template" not in got:
+        got.discard("label")
+    if "position" in got and not (got & {"template", "structure", "shape"}):
+        got.discard("position")
+    if len(got) < 2 or got <= {"shape", "template"}:
         return False
     return True
 
 
+def _confirming_hits(group: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Hits that actually counted. A lone label must not appear in the tap."""
+    sources = {str(h["source"]) for h in group}
+    drop = set()
+    if "label" in sources and "template" not in sources:
+        drop.add("label")
+    if "position" in sources and not ((sources - drop) & {"template", "structure", "shape"}):
+        drop.add("position")
+    return [h for h in group if h["source"] not in drop]
+
+
 def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, Any]],
                  structure: Sequence[Dict[str, Any]], shapes: Sequence[Dict[str, Any]] = (),
-                 labels: Sequence[Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
+                 labels: Sequence[Dict[str, Any]] = (),
+                 positions: Sequence[Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
     """Topmost fully visible target. High template, or two agreeing signals.
 
     Shape and template describe the same glyph, so those two alone do not
     agree. A hierarchy label agrees only with a thumbs-up template. The
     action bar or the Like word can still confirm a template or a silhouette
-    when the dump is missing.
+    when the dump is missing. The leftmost button of a comment/share row
+    agrees with a screenshot signal.
     """
-    pool = [h for h in list(text) + list(templates) + list(structure) + list(shapes) + list(labels) if h.get("full")]
+    pool = [h for h in (
+        list(text) + list(templates) + list(structure) + list(shapes) + list(labels) + list(positions)
+    ) if h.get("full")]
     candidates = []
     for hit in pool:
         if hit["source"] == "template" and float(hit["score"]) >= TEMPLATE_HIGH:
@@ -1102,8 +1426,9 @@ def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, A
             if _agree(a, b):
                 group.append(b)
                 sources.add(b["source"])
-        if _signals_confirm(sources):
-            candidates.append(_tap_point(group))
+        kept = _confirming_hits(group)
+        if _signals_confirm({str(h["source"]) for h in kept}):
+            candidates.append(_tap_point(kept))
     if not candidates:
         return None
     full = [c for c in candidates if c.get("full")]
@@ -1157,6 +1482,18 @@ def _like_slot_blobs(blobs: Sequence[Dict[str, int]], height: int) -> List[Dict[
     return chosen
 
 
+def _blank_diag(dump: str) -> Dict[str, Any]:
+    return {
+        "uiautomator": {"dump": dump, "like_found": False},
+        "action_bar": {"content_descs": [], "texts": [], "resource_ids": []},
+        "template_score": 0.0,
+        "template_matched": False,
+        "structure_matched": False,
+        "position_matched": False,
+        "nodes": [],
+    }
+
+
 def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[str, Any]:
     """Locate a Like target. ``target`` is None when the bar is not confident.
 
@@ -1164,20 +1501,25 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     leaves the label signal empty and the screenshot signals still run.
 
     Return keys: target ({x, y, signals, label, score} permille), post (bool),
-    empty_phrase (bool). x/y are the icon center when a template or the action
-    bar took part, otherwise the Like-word center.
+    empty_phrase (bool), diag (per-signal report for ``like_probe``). x/y are
+    the icon center when a template or the action bar took part, otherwise
+    the Like-word center. ``diag`` does not decide the tap.
     """
     norm = normalize_ocr_boxes(boxes)
     try:
         width, height, _hdr, _order = frame_size(raw)
     except ValueError:
-        return {"target": None, "post": False, "empty_phrase": empty_phrase(norm)}
+        return {
+            "target": None, "post": False, "empty_phrase": empty_phrase(norm),
+            "diag": _blank_diag(_dump_status(hierarchy) if hierarchy else "empty"),
+        }
     blobs = extract_blobs(raw)
     text = text_hits(norm, width, height)
     structure = structure_hits(blobs, norm, width, height, composer_centers(raw))
-    templ = template_hits(raw, _like_slot_blobs(blobs, height))
+    templ, template_score = _template_scan(raw, _like_slot_blobs(blobs, height))
     shapes = shape_hits(raw, blobs)
     labels = label_hits(hierarchy, width, height)
+    positions = position_hits(hierarchy, width, height)
     # Drop a candidate whose center is already the liked blue.
     decoded = _gray(raw)
     if decoded is not None:
@@ -1197,13 +1539,20 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         templ = [h for h in templ if not _blue_hit(h)]
         shapes = [h for h in shapes if not _blue_hit(h)]
         labels = [h for h in labels if not _blue_hit(h)]
-    target = fuse_signals(text, templ, structure, shapes, labels)
+        positions = [h for h in positions if not _blue_hit(h)]
+    target = fuse_signals(text, templ, structure, shapes, labels, positions)
     if target is not None:
         target = {k: target[k] for k in ("x", "y", "signals", "label", "score")}
+    diag = hierarchy_diag(hierarchy, width, height)
+    diag["template_score"] = round(float(template_score), 3)
+    diag["template_matched"] = bool(templ)
+    diag["structure_matched"] = bool(structure)
+    diag["position_matched"] = bool(positions)
     return {
         "target": target,
         "post": post_evidence(norm, blobs, width, height),
         "empty_phrase": empty_phrase(norm),
+        "diag": diag,
     }
 
 
@@ -1319,8 +1668,8 @@ def vision_stack_ready(*, ocr: Any = None, template_dir: Optional[Path] = None) 
 __all__ = [
     "AGREE_X_PM", "AGREE_Y_PM", "DEFAULT_LIKE_SWIPES", "FB_BLUE", "FB_BLUE_TOL",
     "TEMPLATE_HIGH", "TEMPLATE_MED", "composer_centers", "empty_phrase", "extract_blobs",
-    "fuse_signals", "label_hits", "like_state_changed", "load_rapidocr", "load_templates", "locate_like_row",
-    "normalize_ocr_boxes", "post_evidence", "rapidocr_available", "read_text_boxes",
-    "render_thumb", "render_thumb_icon", "shape_hits", "structure_hits", "template_hits",
+    "fuse_signals", "hierarchy_diag", "label_hits", "like_state_changed", "load_rapidocr", "load_templates",
+    "locate_like_row", "normalize_ocr_boxes", "position_hits", "post_evidence", "rapidocr_available",
+    "read_text_boxes", "render_thumb", "render_thumb_icon", "shape_hits", "structure_hits", "template_hits",
     "templates_available", "text_hits", "vision_stack_ready", "write_default_templates",
 ]

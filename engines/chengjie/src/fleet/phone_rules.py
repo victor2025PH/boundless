@@ -32,6 +32,14 @@ MAX_PNG_B64 = 1_800_000
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
 _B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _PNG_B64_PREFIX = "iVBORw0KGgo"
+_WALL_RE = re.compile(r"^\d{1,4}$")
+_BOUNDS_RE = re.compile(r"\[\d+,\d+\]\[\d+,\d+\]")
+_DEVICE_QUOTED_RE = re.compile(r"(device\s+')([^']+)('\s+not\s+found)", re.IGNORECASE)
+_DEVICE_BARE_RE = re.compile(
+    r"(device\s+)([A-Za-z0-9][A-Za-z0-9._:\-]{3,63})(\s+not\s+found)", re.IGNORECASE,
+)
+_DIAG_DUMPS = {"ok", "empty", "bad"}
+_DIAG_BY = {"content-desc", "text", "resource-id"}
 _RESULT_INTS = ("width", "height", "device_width", "device_height", "scale", "x", "y", "x1", "y1", "x2", "y2",
                 "duration_ms", "bytes", "chars", "elapsed_ms", "steps", "failed_step", "completed_steps",
                 "scrolls", "likes", "watches", "dwells", "like_x", "like_y", "swipes")
@@ -166,13 +174,157 @@ def _sanitize_plan(plan: Any) -> Any:
     return out
 
 
-def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
+def _redaction_label(wallpaper: Any) -> str:
+    text = str(wallpaper or "").strip()
+    if _WALL_RE.fullmatch(text):
+        try:
+            if int(text) >= 1:
+                return text
+        except ValueError:
+            pass
+    return "[redacted]"
+
+
+def scrub_phone_error_text(text: Any, *, serial: str = "", wallpaper: str = "") -> str:
+    """Replace a raw adb serial in an error string with the wallpaper number.
+
+    A known serial of 4 or more characters is replaced wherever it appears.
+    ``device '…' not found`` is rewritten even when the serial was not passed
+    in, which is the phrase adb prints when the phone is gone. Shorter tokens
+    are left alone so a message such as ``device offline`` stays intact.
+    """
+    if not isinstance(text, str):
+        return ""
+    if not text:
+        return text
+    repl = _redaction_label(wallpaper)
+    known = serial.strip() if isinstance(serial, str) else ""
+    out = text
+    if len(known) >= 4:
+        out = re.sub(re.escape(known), repl, out, flags=re.IGNORECASE)
+
+    def _swap(match: re.Match) -> str:
+        token = match.group(2)
+        if known and token.casefold() == known.casefold():
+            return match.group(1) + repl + match.group(3)
+        if len(token) >= 4:
+            return match.group(1) + repl + match.group(3)
+        return match.group(0)
+
+    out = _DEVICE_QUOTED_RE.sub(_swap, out)
+    return _DEVICE_BARE_RE.sub(_swap, out)
+
+
+def scrub_phone_tree(value: Any, *, serial: str = "", wallpaper: str = "") -> Any:
+    """Scrub serials inside a nested diagnostic. Keys and numbers stay put."""
+    if isinstance(value, str):
+        return scrub_phone_error_text(value, serial=serial, wallpaper=wallpaper)
+    if isinstance(value, list):
+        return [scrub_phone_tree(item, serial=serial, wallpaper=wallpaper) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): scrub_phone_tree(item, serial=serial, wallpaper=wallpaper)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _diag_str(value: Any, n: int = 80) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isprintable() and ch not in "<>")[:n]
+
+
+def _diag_list(value: Any) -> list:
+    out = []
+    if not isinstance(value, list):
+        return out
+    for item in value:
+        text = _diag_str(item)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _sanitize_like_diag(raw: Any) -> Any:
+    """Keep the probe's per-signal report. Drop pixels, unknown keys, and long text."""
+    if not isinstance(raw, dict):
+        return None
+    uia_in = raw.get("uiautomator") if isinstance(raw.get("uiautomator"), dict) else {}
+    dump = uia_in.get("dump")
+    uia: Dict[str, Any] = {
+        "dump": dump if dump in _DIAG_DUMPS else "bad",
+        "like_found": uia_in.get("like_found") is True,
+    }
+    match = uia_in.get("match")
+    if uia["like_found"] and isinstance(match, dict):
+        by = match.get("by")
+        bounds = _diag_str(match.get("bounds"), 40)
+        uia["match"] = {
+            "label": _diag_str(match.get("label"), 32),
+            "by": by if by in _DIAG_BY else "",
+            "content_desc": _diag_str(match.get("content_desc")),
+            "text": _diag_str(match.get("text")),
+            "resource_id": _diag_str(match.get("resource_id")),
+            "bounds": bounds if _BOUNDS_RE.fullmatch(bounds) else "",
+        }
+    bar_in = raw.get("action_bar") if isinstance(raw.get("action_bar"), dict) else {}
+    score = raw.get("template_score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        score_out = 0.0
+    else:
+        score_out = round(max(0.0, min(1.0, float(score))), 3)
+    nodes = []
+    raw_nodes = raw.get("nodes")
+    if isinstance(raw_nodes, list):
+        for item in raw_nodes:
+            if not isinstance(item, dict):
+                continue
+            bounds = _diag_str(item.get("bounds"), 40)
+            if not _BOUNDS_RE.fullmatch(bounds):
+                continue
+            nodes.append({
+                "bounds": bounds,
+                "class": _diag_str(item.get("class")),
+                "content_desc": _diag_str(item.get("content_desc")),
+                "resource_id": _diag_str(item.get("resource_id")),
+                "text": _diag_str(item.get("text")),
+            })
+            if len(nodes) >= 24:
+                break
+    return {
+        "uiautomator": uia,
+        "action_bar": {
+            "content_descs": _diag_list(bar_in.get("content_descs")),
+            "texts": _diag_list(bar_in.get("texts")),
+            "resource_ids": _diag_list(bar_in.get("resource_ids")),
+        },
+        "template_score": score_out,
+        "template_matched": raw.get("template_matched") is True,
+        "structure_matched": raw.get("structure_matched") is True,
+        "position_matched": raw.get("position_matched") is True,
+        "nodes": nodes,
+    }
+
+
+def sanitize_phone_result(kind: str, result: Any, *, serial: str = "", wallpaper: str = "") -> Dict[str, Any]:
     """主控入库前：只留已知的数字 / 短字符串；截图只认 PNG 的 base64（控制台当 <img src> 用）。
 
     A dry_run plan is kept only when dry_run is JSON true. Planned text stays inside
     that plan. The same plan without dry_run is dropped, and top-level text is never kept.
+    ``like_probe`` may also keep ``like_diag`` (text attributes of the action bar).
+    Error strings lose the raw adb serial.
     """
     r = result if isinstance(result, dict) else {}
+    known_serial = serial.strip() if isinstance(serial, str) and serial.strip() else ""
+    if not known_serial and isinstance(r.get("serial"), str):
+        known_serial = r["serial"].strip()
+    wall = wallpaper.strip() if isinstance(wallpaper, str) else ""
+    if not wall:
+        for key in ("wallpaper", "wallpaper_no"):
+            if isinstance(r.get(key), str) and r.get(key).strip():
+                wall = r[key].strip()
+                break
     out: Dict[str, Any] = {}
     for k in _RESULT_INTS:
         v = r.get(k)
@@ -181,7 +333,10 @@ def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
     for k in _RESULT_STRS:
         v = r.get(k)
         if isinstance(v, str) and v:
-            out[k] = _clip(v, 160)
+            clipped = _clip(v, 160)
+            if k in ("error", "stderr"):
+                clipped = scrub_phone_error_text(clipped, serial=known_serial, wallpaper=wall)
+            out[k] = clipped
     if kind == TASK_PHONE_SCREENSHOT:
         png = r.get("png_b64")
         if (isinstance(png, str) and 0 < len(png) <= MAX_PNG_B64 and png.startswith(_PNG_B64_PREFIX)
@@ -196,6 +351,9 @@ def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
             out["plan"] = plan
     if r.get("like_probe") is True:
         out["like_probe"] = True
+        diag = _sanitize_like_diag(r.get("like_diag"))
+        if diag is not None:
+            out["like_diag"] = scrub_phone_tree(diag, serial=known_serial, wallpaper=wall)
     if r.get("like_button_deprecated") is True:
         out["like_button_deprecated"] = True
     return out
@@ -213,5 +371,6 @@ def strip_png(result: Any) -> Dict[str, Any]:
 
 __all__ = [
     "OPS", "MAX_COORD", "TEXT_MAX", "KEYCODES", "TEXT_ALLOWED", "MAX_PNG_B64", "PhoneOpError", "valid_serial",
-    "kind_for_op", "validate_payload", "check_target", "escape_input_text", "sanitize_phone_result", "strip_png",
+    "kind_for_op", "validate_payload", "check_target", "escape_input_text", "sanitize_phone_result",
+    "scrub_phone_error_text", "scrub_phone_tree", "strip_png",
 ]

@@ -331,7 +331,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.19"
+    assert agent_mod.AGENT_VERSION == "0.3.20"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):

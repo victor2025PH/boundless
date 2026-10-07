@@ -19,6 +19,7 @@
            剩余话费/流量没有稳定接口，默认不查。公开 latest 仍是 0.3.7。
     0.3.18 只有图标的动作条也能定位赞（结构 + 模板/轮廓，不靠文字）。打开 Facebook 会轮询约 9 秒，并把信息流拉回顶部再找赞。只读 uiautomator dump 的 Like/赞/React 标签要和模板一致才点。
     0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
+    0.3.20 like_probe 带回每个信号的诊断（无障碍标签、动作条属性、模板分、结构是否命中），只含节点文字属性，不含截图、不含序列号。图标动作条放宽标签 / resource-id / 最左按钮，仍要两个信号一致并且点完复核。手机任务的错误文字在回执前去掉原始序列号，改成壁纸号或打码。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -83,7 +84,7 @@ from .operator_alert import OperatorAlert, operator_alert_diag, parse_wallpaper_
 from .phones import PhoneCollector
 from .phone_flow_robust import parse_jitter_ms
 from .phone_flows import PhoneFlows, _MAX_MAP_BYTES, validate_ui_map
-from .phone_rules import PhoneOpError
+from .phone_rules import PhoneOpError, scrub_phone_error_text, scrub_phone_tree
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
     acquire_single_instance, install_service, service_status, start_parent_watch, supervise, uninstall_service,
@@ -100,7 +101,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.19"
+AGENT_VERSION = "0.3.20"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -911,6 +912,38 @@ class NodeAgent:
         except Exception:
             logger.debug("[agent] operator alert action note failed", exc_info=True)
 
+    def _phone_wallpaper(self, target: Any, result: Any, serial: str) -> str:
+        for src in (target, result if isinstance(result, dict) else None):
+            if not isinstance(src, dict):
+                continue
+            for key in ("wallpaper", "wallpaper_no"):
+                text = str(src.get(key) or "").strip()
+                if text.isdigit() and 1 <= int(text) <= 9999:
+                    return text
+        if not serial:
+            return ""
+        mapped = parse_wallpaper_map(self.cfg.data.get("wallpaper_map") if isinstance(self.cfg.data, dict) else None)
+        return mapped.get(serial.strip().upper(), "")
+
+    def _scrub_phone_report(self, target: Any, result: Any, detail: str) -> Tuple[Dict[str, Any], str]:
+        """Strip the raw serial from phone-task error text before it is sent."""
+        serial = ""
+        if isinstance(target, dict):
+            serial = str(target.get("serial") or "").strip()
+        if not serial and isinstance(result, dict):
+            serial = str(result.get("serial") or "").strip()
+        wallpaper = self._phone_wallpaper(target, result, serial)
+        detail_out = scrub_phone_error_text(str(detail or ""), serial=serial, wallpaper=wallpaper)
+        if not isinstance(result, dict):
+            return {}, detail_out
+        cleaned = dict(result)
+        for key in ("error", "stderr"):
+            if isinstance(cleaned.get(key), str):
+                cleaned[key] = scrub_phone_error_text(cleaned[key], serial=serial, wallpaper=wallpaper)
+        if isinstance(cleaned.get("like_diag"), dict):
+            cleaned["like_diag"] = scrub_phone_tree(cleaned["like_diag"], serial=serial, wallpaper=wallpaper)
+        return cleaned, detail_out
+
     def _phone_caps(self) -> List[str]:
         """低层能力来自当前 phone_ops；社交能力只有两边都开着才加。"""
         caps = list(self.phone_ops.caps())
@@ -1069,10 +1102,12 @@ class NodeAgent:
             if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
                 status, result, detail = self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
                 self._note_phone_action(target, result, status)
+                result, detail = self._scrub_phone_report(target, result, detail)
                 return status, result, detail
             if kind in PHONE_TASK_KINDS:
                 status, result, detail = self.phone_ops.execute(kind, payload, target)
                 self._note_phone_action(target, result, status)
+                result, detail = self._scrub_phone_report(target, result, detail)
                 return status, result, detail
             if kind == TASK_PING:
                 return STATUS_DONE, {"pong": True, "agent_version": AGENT_VERSION, "app_version": self.app_version,

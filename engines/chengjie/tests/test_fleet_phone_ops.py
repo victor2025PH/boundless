@@ -383,6 +383,26 @@ def test_adb_failure_is_failed_with_stderr():
     assert (st_, detail) == (STATUS_FAILED, "adb_exit_1") and res["stderr"] == "error: device offline"
 
 
+def test_agent_scrubs_serial_from_phone_task_error_before_ack(tmp_path, monkeypatch):
+    from src.fleet import agent as agent_mod
+    from src.fleet.protocol import STATUS_FAILED
+
+    serial = "TESTSERIAL01"
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: False)
+    cfg = agent_mod.AgentConfig(tmp_path / "fleet")
+    cfg.data["wallpaper_map"] = {serial: "07"}
+    ag = agent_mod.NodeAgent(cfg, http=lambda *a, **k: (200, {}), app_version="t")
+    phrase = f"error: device '{serial}' not found"
+    ag.phone_ops.execute = lambda *a, **k: (STATUS_FAILED, {"serial": serial, "stderr": phrase}, phrase)
+    status, result, detail = ag.execute({
+        "kind": TASK_PHONE_TAP, "payload": {"x": 1, "y": 1}, "target": {"serial": serial},
+    })
+    assert status == STATUS_FAILED
+    assert serial not in result["stderr"] and serial not in detail
+    assert "07" in result["stderr"] and "07" in detail
+    assert result["serial"] == serial
+
+
 def test_disabled_ops_advertise_nothing_and_reject():
     ops, fake, _ = _ops(enabled=False)
     assert ops.caps() == []
