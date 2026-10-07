@@ -20,10 +20,10 @@ def test_catalog_examples_match_their_category():
     for row in CATALOG:
         found = classify_adb_args(row["example"])
         assert (found.category, found.family) == (row["category"], row["family"]), row["example"]
-        assert row["note"] and row["since"] in {"0.3.7", "0.3.18"}
+        assert row["note"] and row["since"] in {"0.3.7", "0.3.18", "0.3.21"}
         families.add(row["family"])
     for required in (
-        "dumpsys", "uiautomator", "cmd_connectivity", "cmd_activity", "cmd_package", "settings_get",
+        "dumpsys", "uiautomator", "media_pause", "cmd_connectivity", "cmd_activity", "cmd_package", "settings_get",
         "pm_query", "ping", "connectivity_204", "getprop", "ip", "ifconfig", "wm",
         "am_start_facebook", "ussd_dial", "settings_put", "svc_radio", "reboot",
         "pm_mutate", "force_stop", "airplane_mode",

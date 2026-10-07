@@ -423,6 +423,11 @@ def _dump_status(hierarchy: Any) -> str:
     return "ok" if _parse_hierarchy(hierarchy) is not None else "bad"
 
 
+def hierarchy_text_ok(hierarchy: Any) -> bool:
+    """True when ``hierarchy`` contains a parseable ``<hierarchy>`` document."""
+    return _dump_status(hierarchy) == "ok"
+
+
 def _bar_role(desc: str, text: str, resource_id: str) -> str:
     blob = _attr_blob(desc, text, resource_id)
     if not blob:
@@ -636,7 +641,10 @@ def hierarchy_diag(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
     likes.sort(key=lambda n: (n["y"], n["x"]))
     like = likes[0] if likes else None
     row = _candidate_row(_drop_containers(buttons), height, like) if buttons else []
-    uia: Dict[str, Any] = {"dump": status, "like_found": like is not None}
+    uia: Dict[str, Any] = {
+        "dump": status, "like_found": like is not None,
+        "attempts": 0, "via": "", "compressed": False, "error": "",
+    }
     if like is not None:
         uia["match"] = _like_match_record(like)
     return {
@@ -963,9 +971,14 @@ def structure_hits(blobs: Sequence[Dict[str, int]], boxes: Sequence[Dict[str, An
             continue
         left = group[0]
         cx, cyy = _center(left["x0"], left["y0"], left["x1"], left["y1"])
+        row_bounds = "[{},{}][{},{}]".format(
+            min(int(b["x0"]) for b in group), min(int(b["y0"]) for b in group),
+            max(int(b["x1"]) for b in group), max(int(b["y1"]) for b in group),
+        )
         hits.append({
             "source": "structure", "x_pm": _pm(cx, width), "y_pm": _pm(cyy, height),
             "score": 1.0, "label": "icon", "full": True, "x": cx, "y": cyy,
+            "row_bounds": row_bounds,
         })
     hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
     return hits
@@ -1321,13 +1334,90 @@ def _looks_like_thumb(luma: Sequence[int], width: int, height: int) -> bool:
     return (mc - tc) / float(width) >= 0.10
 
 
-def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, Any]]:
-    """Thumb-shaped icon blobs. Not a tap by themselves."""
+def _window_fit(value: float, lo: float, hi: float) -> float:
+    span = max(hi - lo, 1e-6)
+    if lo <= value <= hi:
+        return 1.0
+    if value < lo:
+        return max(0.0, 1.0 - (lo - value) / span)
+    return max(0.0, 1.0 - (value - hi) / span)
+
+
+def _thumb_partial(luma: Sequence[int], width: int, height: int) -> float:
+    """How close a miss is to the thumb silhouette. Never 1.0.
+
+    The tap gate stays ``_looks_like_thumb``. This score is diagnostic only.
+    """
+    if width < 8 or height < 10 or not 0.45 <= (width / float(height)) <= 1.35:
+        return 0.0
+    edge = [False] * (width * height)
+    ink_edges = 0
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            c = int(luma[y * width + x])
+            diff = max(
+                abs(c - int(luma[y * width + x - 1])),
+                abs(c - int(luma[y * width + x + 1])),
+                abs(c - int(luma[(y - 1) * width + x])),
+                abs(c - int(luma[(y + 1) * width + x])),
+            )
+            if diff >= 26:
+                edge[y * width + x] = True
+                ink_edges += 1
+    need = max(12, (width + height) // 2)
+    if ink_edges < need:
+        return min(0.20, 0.20 * ink_edges / float(need))
+    spans = [0] * height
+    centers: List[Optional[float]] = [None] * height
+    for y in range(height):
+        xs = [x for x in range(width) if edge[y * width + x]]
+        if len(xs) < 2:
+            continue
+        spans[y] = xs[-1] - xs[0] + 1
+        centers[y] = (xs[0] + xs[-1]) / 2.0
+    if sum(1 for s in spans if s > 0) < int(height * 0.55):
+        return 0.30
+
+    def _med_span(a: int, b: int) -> int:
+        vals = sorted(spans[i] for i in range(a, b) if spans[i] > 0)
+        if not vals:
+            return 0
+        return vals[len(vals) // 2]
+
+    def _med_center(a: int, b: int) -> Optional[float]:
+        vals = sorted(centers[i] for i in range(a, b) if centers[i] is not None and spans[i] > 0)
+        if not vals:
+            return None
+        return float(vals[len(vals) // 2])
+
+    t1 = max(1, height // 3)
+    m0, m1 = height // 3, (2 * height) // 3
+    if m1 <= m0:
+        return 0.35
+    top_w, mid_w, bot_w = _med_span(0, t1), _med_span(m0, m1), _med_span(m1, height)
+    if mid_w < max(4, int(width * 0.35)) or top_w <= 0 or bot_w <= 0:
+        return 0.45
+    top_fit = _window_fit(top_w / float(mid_w), 0.22, 0.55)
+    bot_fit = _window_fit(bot_w / float(mid_w), 0.48, 0.92)
+    tc, mc = _med_center(0, t1), _med_center(m0, m1)
+    if tc is None or mc is None:
+        return min(0.90, 0.50 + 0.40 * (top_fit + bot_fit) / 2.0)
+    stem = max(0.0, min(1.0, ((mc - tc) / float(width)) / 0.10))
+    return min(0.99, 0.55 + 0.20 * (top_fit + bot_fit) / 2.0 + 0.24 * stem)
+
+
+def shape_report(raw: bytes, blobs: Sequence[Dict[str, int]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Thumb hits plus a score record for every icon-sized blob.
+
+    A hit is exactly what ``_looks_like_thumb`` accepts. A miss keeps a
+    partial score under 1.0 so a probe can show a near miss.
+    """
     decoded = _gray(raw)
     if decoded is None:
-        return []
+        return [], []
     width, height, _hdr, _order, luma = decoded
     hits = []
+    records = []
     for blob in blobs:
         x0 = max(0, int(blob["x0"]))
         y0 = max(0, int(blob["y0"]))
@@ -1337,9 +1427,12 @@ def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, An
         if bw < 8 or bh < 10:
             continue
         patch = [luma[(y0 + yy) * width + (x0 + xx)] for yy in range(bh) for xx in range(bw)]
-        if not _looks_like_thumb(patch, bw, bh):
-            continue
+        passed = _looks_like_thumb(patch, bw, bh)
+        score = 1.0 if passed else min(0.99, _thumb_partial(patch, bw, bh))
         cx, cy = _center(x0, y0, x1, y1)
+        records.append({"x": cx, "y": cy, "score": score})
+        if not passed:
+            continue
         hits.append({
             "source": "shape", "x_pm": _pm(cx, width), "y_pm": _pm(cy, height),
             "score": 1.0, "label": "thumb",
@@ -1347,6 +1440,12 @@ def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, An
             "x": cx, "y": cy,
         })
     hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
+    return hits, records
+
+
+def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, Any]]:
+    """Thumb-shaped icon blobs. Not a tap by themselves."""
+    hits, _records = shape_report(raw, blobs)
     return hits
 
 
@@ -1484,11 +1583,17 @@ def _like_slot_blobs(blobs: Sequence[Dict[str, int]], height: int) -> List[Dict[
 
 def _blank_diag(dump: str) -> Dict[str, Any]:
     return {
-        "uiautomator": {"dump": dump, "like_found": False},
+        "uiautomator": {
+            "dump": dump, "like_found": False,
+            "attempts": 0, "via": "", "compressed": False, "error": "",
+        },
         "action_bar": {"content_descs": [], "texts": [], "resource_ids": []},
         "template_score": 0.0,
         "template_matched": False,
         "structure_matched": False,
+        "structure_bounds": "",
+        "shape_matched": False,
+        "shape_score": 0.0,
         "position_matched": False,
         "nodes": [],
     }
@@ -1517,7 +1622,7 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     text = text_hits(norm, width, height)
     structure = structure_hits(blobs, norm, width, height, composer_centers(raw))
     templ, template_score = _template_scan(raw, _like_slot_blobs(blobs, height))
-    shapes = shape_hits(raw, blobs)
+    shapes, shape_records = shape_report(raw, blobs)
     labels = label_hits(hierarchy, width, height)
     positions = position_hits(hierarchy, width, height)
     # Drop a candidate whose center is already the liked blue.
@@ -1538,6 +1643,7 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         structure = [h for h in structure if not _blue_hit(h)]
         templ = [h for h in templ if not _blue_hit(h)]
         shapes = [h for h in shapes if not _blue_hit(h)]
+        shape_records = [h for h in shape_records if not _blue_hit(h)]
         labels = [h for h in labels if not _blue_hit(h)]
         positions = [h for h in positions if not _blue_hit(h)]
     target = fuse_signals(text, templ, structure, shapes, labels, positions)
@@ -1547,6 +1653,14 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     diag["template_score"] = round(float(template_score), 3)
     diag["template_matched"] = bool(templ)
     diag["structure_matched"] = bool(structure)
+    diag["structure_bounds"] = str(structure[0].get("row_bounds") or "") if structure else ""
+    diag["shape_matched"] = bool(shapes)
+    if shapes:
+        diag["shape_score"] = 1.0
+    elif shape_records:
+        diag["shape_score"] = round(min(0.99, max(float(item["score"]) for item in shape_records)), 3)
+    else:
+        diag["shape_score"] = 0.0
     diag["position_matched"] = bool(positions)
     return {
         "target": target,

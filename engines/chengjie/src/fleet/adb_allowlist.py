@@ -3,9 +3,10 @@
 One catalog, two doors:
 
 * **Open** (admitted with no extra flag): ``phone_control`` (the 0.3.7
-  inventory / screencap / input forms), ``read_only`` diagnostics (including
-  ``uiautomator dump /dev/tty``, which writes the hierarchy to stdout and
-  not to phone storage), and ``app_launch`` (``am start`` that only brings
+  inventory / screencap / input forms, plus a 0.3.21 media-pause key and
+  ``cmd media_session dispatch pause``), ``read_only`` diagnostics (including
+  ``uiautomator dump`` to stdout or to one fixed file, and ``adb pull`` of
+  that file only), and ``app_launch`` (``am start`` that only brings
   Facebook to the foreground).
 * **Closed unless the caller passes a flag**: ``guarded_write`` (settings
   changes, radio toggles, reboot, uninstall/clear, force-stop) needs
@@ -64,6 +65,9 @@ _PKG = re.compile(r"[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+\Z")
 _PKG_FILTER = re.compile(r"[a-zA-Z0-9_.*]{1,128}\Z")
 _HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z")
 _REL_CLASS = re.compile(r"\.[A-Za-z0-9_.]+\Z")
+# One fixed remote. The default ``window_dump.xml`` and any other path stay denied.
+HIERARCHY_REMOTE = "/sdcard/chatx_like_hierarchy.xml"
+_PULL_LOCAL = re.compile(r"[A-Za-z0-9_.:/\\-]{1,240}\Z")
 
 
 def _digits(v: str, hi: int = 99999) -> bool:
@@ -294,6 +298,38 @@ def _curl_ok(args: Tuple[str, ...]) -> bool:
             and args[7] == "8" and args[8] in _GENERATE_204)
 
 
+def hierarchy_pull_local_ok(path: str) -> bool:
+    """A pull destination with no spaces, no ``..``, and no shell metacharacters."""
+    if not isinstance(path, str) or not path or len(path) > 240 or path.startswith("-"):
+        return False
+    if ".." in path:
+        return False
+    return bool(_PULL_LOCAL.fullmatch(path))
+
+
+def _uiautomator_dump_ok(args: Tuple[str, ...]) -> bool:
+    """Stdout or the one fixed file. ``--compressed`` only as the flag before the path."""
+    if len(args) < 3 or args[0] != "uiautomator" or args[1] != "dump":
+        return False
+    body = args[2:]
+    if body[:1] == ("--compressed",):
+        body = body[1:]
+    return len(body) == 1 and body[0] in ("/dev/tty", HIERARCHY_REMOTE)
+
+
+def _hierarchy_pull_ok(rest: Tuple[str, ...]) -> bool:
+    return (len(rest) == 3 and rest[0] == "pull" and rest[1] == HIERARCHY_REMOTE
+            and hierarchy_pull_local_ok(rest[2]))
+
+
+def _media_pause_ok(args: Tuple[str, ...]) -> bool:
+    """Pause only. Play, play/pause, and the power key stay denied."""
+    return args in {
+        ("input", "keyevent", "127"),
+        ("cmd", "media_session", "dispatch", "pause"),
+    }
+
+
 def _getprop_ok(args: Tuple[str, ...]) -> bool:
     if args == ("getprop",):
         return True
@@ -344,9 +380,11 @@ def _classify_shell(args: Tuple[str, ...]) -> AdbClass:
         return AdbClass("read_only", "pm_query")
     if _cmd_package_query(args):
         return AdbClass("read_only", "cmd_package")
-    # Hierarchy to stdout only. A file path, a bare dump, or extra flags
-    # would write storage or change the dump and stay denied.
-    if args == ("uiautomator", "dump", "/dev/tty"):
+    # Hierarchy: stdout, or one fixed file, optionally --compressed before the path.
+    # A bare dump, window_dump.xml, any other path, or the flag after the path stay denied.
+    if _media_pause_ok(args):
+        return AdbClass("phone_control", "media_pause")
+    if _uiautomator_dump_ok(args):
         return AdbClass("read_only", "uiautomator")
     return _DENIED
 
@@ -377,6 +415,8 @@ def classify_adb_args(args: Sequence[str]) -> AdbClass:
             if _input_ok(shell):
                 return AdbClass("phone_control", "input")
             return _classify_shell(shell)
+        if _hierarchy_pull_ok(rest):
+            return AdbClass("read_only", "uiautomator")
     return _DENIED
 
 
@@ -425,7 +465,25 @@ CATALOG: Tuple[Dict[str, Any], ...] = (
      "note": "Home key only (3) or back (4). Pre-existing."},
     {"since": "0.3.18", "category": "read_only", "family": "uiautomator",
      "example": ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty"),
-     "note": "Reads the window hierarchy to stdout for icon-only Like labels. A dump to a file path is not this form and stays denied."},
+     "note": "Reads the window hierarchy to stdout for icon-only Like labels. This form does not write a file. An arbitrary path, including /sdcard/window_dump.xml, stays denied."},
+    {"since": "0.3.21", "category": "read_only", "family": "uiautomator",
+     "example": ("-s", "S1", "shell", "uiautomator", "dump", "--compressed", "/dev/tty"),
+     "note": "Same stdout dump with --compressed before the path. The flag after the path stays denied."},
+    {"since": "0.3.21", "category": "read_only", "family": "uiautomator",
+     "example": ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml"),
+     "note": "Writes the hierarchy to one fixed file so a later pull can read it when stdout never goes idle. No other remote path matches."},
+    {"since": "0.3.21", "category": "read_only", "family": "uiautomator",
+     "example": ("-s", "S1", "shell", "uiautomator", "dump", "--compressed", "/sdcard/chatx_like_hierarchy.xml"),
+     "note": "Compressed dump to the same fixed file. --compressed must come before the path."},
+    {"since": "0.3.21", "category": "read_only", "family": "uiautomator",
+     "example": ("-s", "S1", "pull", "/sdcard/chatx_like_hierarchy.xml", "/tmp/chatx_like_x.xml"),
+     "note": "Pulls only that fixed file to a local path with no spaces and no parent-directory segment. Other remotes stay denied."},
+    {"since": "0.3.21", "category": "phone_control", "family": "media_pause",
+     "example": ("-s", "S1", "shell", "input", "keyevent", "127"),
+     "note": "KEYCODE_MEDIA_PAUSE. Used once to settle an autoplaying feed before a hierarchy dump. Not a phone_key. Play and play/pause stay denied."},
+    {"since": "0.3.21", "category": "phone_control", "family": "media_pause",
+     "example": ("-s", "S1", "shell", "cmd", "media_session", "dispatch", "pause"),
+     "note": "Pauses the active media session. dispatch play does not match."},
 
     {"since": "0.3.18", "category": "read_only", "family": "dumpsys",
      "example": ("-s", "S1", "shell", "dumpsys", "connectivity"),
@@ -631,7 +689,14 @@ DENIED_FOREVER: Tuple[Tuple[str, ...], ...] = (
     ("-s", "S1", "shell", "uiautomator", "dump"),
     ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml"),
     ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty", "--compressed"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml", "--compressed"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/other.xml"),
     ("-s", "S1", "exec-out", "uiautomator", "dump", "/dev/tty"),
+    ("-s", "S1", "pull", "/sdcard/window_dump.xml", "/tmp/chatx_like_x.xml"),
+    ("-s", "S1", "pull", "/sdcard/chatx_like_hierarchy.xml", "/tmp/../x.xml"),
+    ("-s", "S1", "pull", "/sdcard/chatx_like_hierarchy.xml", "/tmp/has space.xml"),
+    ("-s", "S1", "shell", "input", "keyevent", "85"),
+    ("-s", "S1", "shell", "cmd", "media_session", "dispatch", "play"),
     ("-s", "S1", "forward", "tcp:9000", "tcp:9000"),
     ("-s", "S1", "shell", "dumpsys", "wifi"),
     ("-s", "S1", "shell", "pm", "grant", "com.facebook.katana", "android.permission.CAMERA"),
