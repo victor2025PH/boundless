@@ -17,6 +17,7 @@
     0.3.17 Facebook 点赞在截图上找赞（模板 + 动作条 + 可选文字），不再点固定 like_button。
     0.3.18 net_health 只读体检：上网、WiFi/移动数据、SIM 与信号、流量计数、Facebook 是否安装。
            剩余话费/流量没有稳定接口，默认不查。公开 latest 仍是 0.3.7。
+    0.3.18 只有图标的动作条也能定位赞（结构 + 模板/轮廓，不靠文字）。打开 Facebook 会轮询约 9 秒，并把信息流拉回顶部再找赞。只读 uiautomator dump 的 Like/赞/React 标签要和模板一致才点。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 

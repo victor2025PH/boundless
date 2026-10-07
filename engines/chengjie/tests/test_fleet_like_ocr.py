@@ -5,11 +5,13 @@ agreeing signals (text, template, action bar). The fixed like_button is not a ta
 """
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from src.fleet.like_locate import (
     TEMPLATE_HIGH, TEMPLATE_MED, empty_phrase, extract_blobs, fuse_signals, like_state_changed,
-    load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, render_thumb,
+    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, render_thumb, render_thumb_icon,
     structure_hits, template_hits, templates_available, text_hits, write_default_templates,
 )
 from src.fleet.phone_flow_rules import validate_flow_payload
@@ -98,6 +100,72 @@ def _swipes(actions):
     return [a for a in actions if len(a) > 4 and a[4] == "swipe"]
 
 
+def _feed_dirs(actions):
+    """``top`` scrolls toward the start of the feed. ``feed`` scrolls down the feed."""
+    dirs = []
+    for action in _swipes(actions):
+        y1, y2 = int(action[6]), int(action[8])
+        dirs.append("top" if y2 > y1 else "feed")
+    return dirs
+
+
+def _fill(raw, x, y, w, h, color):
+    for yy in range(h):
+        for xx in range(w):
+            px, py = x + xx, y + yy
+            if not (0 <= px < W and 0 <= py < H):
+                continue
+            off = 12 + (py * W + px) * 4
+            raw[off:off + 3] = bytes(color)
+            raw[off + 3] = 255
+
+
+def _light_page():
+    raw = bytearray(_frame())
+    _fill(raw, 0, 0, W, H, (246, 246, 248))
+    return _logged(raw)
+
+
+def _circle(raw, x, y, d, ink=(55, 58, 64)):
+    thick = max(2, d // 8)
+    for yy in range(d):
+        for xx in range(d):
+            dx, dy = xx - (d - 1) / 2.0, yy - (d - 1) / 2.0
+            radius = (dx * dx + dy * dy) ** 0.5
+            if (d * 0.5 - thick) <= radius <= d * 0.48:
+                px, py = x + xx, y + yy
+                if 0 <= px < W and 0 <= py < H:
+                    off = 12 + (py * W + px) * 4
+                    raw[off:off + 3] = bytes(ink)
+
+
+def _arrow(raw, x, y, w, h, ink=(55, 58, 64)):
+    thick = max(2, int(h * 0.12))
+    for yy in range(h):
+        for xx in range(w):
+            shaft = abs(yy - (h - 1) / 2.0) <= thick and xx < int(w * 0.62)
+            head = xx >= int(w * 0.40) and abs(yy - (h - 1) / 2.0) <= (w - 1 - xx) * 0.95
+            if shaft or head:
+                px, py = x + xx, y + yy
+                if 0 <= px < W and 0 <= py < H:
+                    off = 12 + (py * W + px) * 4
+                    raw[off:off + 3] = bytes(ink)
+
+
+def _icon_only_bar(*, thumb=True):
+    """Light feed, outline Like, comment bubble, share arrow, low-contrast composer. No words."""
+    raw = _light_page()
+    if thumb:
+        rgb = render_thumb_icon(18, 22, dark=False, filled=False)
+        _blit(raw, rgb, 18, 22, 22, 248)
+    else:
+        _fill(raw, 22, 248, 18, 18, (55, 58, 64))
+    _circle(raw, 74, 248, 22)
+    _arrow(raw, 126, 248, 20, 22)
+    _fill(raw, 12, 292, 156, 16, (255, 255, 255))
+    return bytes(raw)
+
+
 def _deprecated_tap():
     ax, ay = bundled_ui_map()["apps"]["facebook"]["anchors"]["like_button"]
     return str(ax * W // 1000), str(ay * H // 1000)
@@ -110,6 +178,9 @@ def test_templates_cover_light_dark_and_three_scales():
     for theme in ("light", "dark"):
         for scale in ("s", "m", "l"):
             assert f"like_{theme}_{scale}" in names
+        for style in ("outline", "filled"):
+            for scale in ("s", "m", "l", "xl", "xxl", "xxxl"):
+                assert f"like_{theme}_{style}_{scale}" in names
 
 
 def test_text_row_languages_and_exact_tokens():
@@ -165,6 +236,70 @@ def test_multiple_rows_pick_the_topmost_full_row_and_skip_a_clipped_one():
     assert top is not None and top["y"] == 290
     only_low = fuse_signals(low[:1] + clipped[:1], [], low[1:] + clipped[1:])
     assert only_low is not None and only_low["y"] == 650
+
+
+def _hierarchy(nodes):
+    body = "".join(
+        f'<node text="{text}" content-desc="{desc}" resource-id="{rid}" bounds="{bounds}" />'
+        for text, desc, rid, bounds in nodes
+    )
+    return f"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy>{body}</hierarchy>\nUI hierchary dumped to: /dev/tty\n"
+
+
+def test_hierarchy_label_matches_huoke_needles_and_react():
+    width, height = 1000, 2000
+    like = label_hits(_hierarchy([
+        ("", "Like", "", "[40,700][100,760]"),
+        ("", "赞", "", "[40,900][100,960]"),
+        ("", "React", "", "[40,1100][100,1160]"),
+        ("いいね", "", "", "[40,1300][120,1360]"),
+        ("", "", "com.facebook.katana:id/like_button", "[40,1500][100,1560]"),
+    ]), width, height)
+    assert [h["label"] for h in like] == ["like", "赞", "react", "いいね", "like"]
+    assert label_hits(_hierarchy([
+        ("", "Liked", "", "[40,700][100,760]"),
+        ("", "Unlike", "", "[40,800][100,860]"),
+        ("92 reactions", "", "", "[40,900][160,960]"),
+        ("", "Comment", "", "[40,1000][120,1060]"),
+        ("", "Share", "", "[40,1100][120,1160]"),
+        ("", "Like", "", "[1,700][30,740]"),
+    ]), width, height) == []
+    assert label_hits("not xml", width, height) == []
+    assert label_hits("<hierarchy><node content-desc='Like' bounds='nope' /></hierarchy>", width, height) == []
+
+
+def test_hierarchy_label_needs_a_template():
+    label = [_hit("label", 200, 500, label="react")]
+    medium = [_hit("template", 210, 510, score=TEMPLATE_MED)]
+    assert fuse_signals([], [], [], [], label) is None
+    assert fuse_signals([], [], [_hit("structure", 200, 500)], [], label) is None
+    assert fuse_signals([], [], [], [_hit("shape", 200, 500)], label) is None
+    agreed = fuse_signals([], medium, [], [], label)
+    assert agreed is not None
+    assert agreed["signals"] == "label+template"
+    assert agreed["label"] == "react"
+
+
+def test_painted_thumb_agrees_with_its_accessibility_label():
+    raw, _tmpl, x, y = _with_thumb()
+    # The painted block is 16px. Pad the node so it meets the 20px button box
+    # and the center stays on the glyph.
+    xml = _hierarchy([("", "React", "", f"[{x - 4},{y - 2}][{x + 20},{y + 24}]")])
+    loc = locate_like_row(raw, [], xml)
+    assert loc["target"] is not None
+    assert "label" in loc["target"]["signals"] and "template" in loc["target"]["signals"]
+    assert loc["target"]["label"] == "react"
+
+
+def test_shape_and_template_do_not_confirm_each_other():
+    medium = [_hit("template", 200, 500, score=TEMPLATE_MED)]
+    shape = [_hit("shape", 200, 500)]
+    assert fuse_signals([], medium, [], shape) is None
+    assert fuse_signals([], [], [], shape) is None
+    agreed = fuse_signals([], medium, [_hit("structure", 210, 510)], shape)
+    assert agreed is not None
+    assert "structure" in agreed["signals"]
+    assert "template" in agreed["signals"] or "shape" in agreed["signals"]
 
 
 def test_high_template_taps_medium_template_needs_a_second_signal():
@@ -247,6 +382,72 @@ def test_plain_icons_do_not_pass_the_template_bar():
     assert loc["target"] is None
 
 
+def test_icon_only_bar_locates_like_without_ocr_text():
+    raw = _icon_only_bar()
+    loc = locate_like_row(raw, [])
+    assert loc["empty_phrase"] is False
+    assert loc["post"] is True
+    assert loc["target"] is not None
+    assert "structure" in loc["target"]["signals"]
+    assert "template" in loc["target"]["signals"] or "shape" in loc["target"]["signals"]
+    # Leftmost slot, not the comment bubble or the share arrow.
+    assert loc["target"]["x"] < 300
+
+
+def test_icon_only_squares_are_a_post_but_not_a_tap():
+    raw = _icon_only_bar(thumb=False)
+    loc = locate_like_row(raw, [])
+    assert loc["post"] is True
+    assert loc["target"] is None
+
+
+def test_empty_light_page_is_not_a_post():
+    raw = bytes(_light_page())
+    loc = locate_like_row(raw, [])
+    assert loc["post"] is False
+    assert loc["target"] is None
+
+
+def test_phone_width_icon_bar_still_locates_like():
+    # 540px is past the blob downsample step. The outline has to survive that.
+    width, height = 540, 1200
+    raw = bytearray(struct.pack("<III", width, height, 1) + bytes((246, 246, 248, 255)) * (width * height))
+    rgb = render_thumb_icon(56, 68, dark=False, filled=False)
+
+    def blit(x, y, glyph, gw, gh):
+        for yy in range(gh):
+            for xx in range(gw):
+                off = 12 + ((y + yy) * width + (x + xx)) * 4
+                i = (yy * gw + xx) * 3
+                raw[off:off + 3] = glyph[i:i + 3]
+
+    blit(40, 700, rgb, 56, 68)
+    ink = bytes((55, 58, 64))
+    for yy in range(64):
+        for xx in range(64):
+            dx, dy = xx - 31.5, yy - 31.5
+            radius = (dx * dx + dy * dy) ** 0.5
+            if 24 <= radius <= 31:
+                off = 12 + ((704 + yy) * width + (200 + xx)) * 4
+                raw[off:off + 3] = ink
+    for yy in range(64):
+        for xx in range(56):
+            shaft = abs(yy - 31.5) <= 8 and xx < 34
+            head = xx >= 22 and abs(yy - 31.5) <= (55 - xx) * 0.95
+            if shaft or head:
+                off = 12 + ((706 + yy) * width + (360 + xx)) * 4
+                raw[off:off + 3] = ink
+    for yy in range(36):
+        for xx in range(480):
+            off = 12 + ((820 + yy) * width + (30 + xx)) * 4
+            raw[off:off + 3] = bytes((255, 255, 255))
+    loc = locate_like_row(bytes(raw), [])
+    assert loc["post"] is True
+    assert loc["target"] is not None
+    assert "structure" in loc["target"]["signals"]
+    assert loc["target"]["x"] < 250
+
+
 def test_thumb_plus_neighbor_icons_agrees():
     tmpl, rgb = _light()
     raw = _logged(bytearray(_frame()))
@@ -297,7 +498,10 @@ def test_logged_out_frame_does_not_tap_like():
     assert (status, detail) == (STATUS_FAILED, "app_not_ready")
     assert result["stderr"] == "probe:logged_in"
     assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(fake.actions()))
-    assert _swipes(fake.actions()) == []
+    # The blue pixel never appears, so the open poll scrolls up twice to
+    # reveal a hidden tab bar, then gives up. It does not scroll the feed.
+    assert _feed_dirs(fake.actions()) == ["top", "top"]
+    assert sum(1 for a in fake.actions() if a[2:] == ("exec-out", "screencap")) > 4
 
 
 def test_login_wall_stops_before_the_feed():
@@ -318,7 +522,7 @@ def test_empty_feed_after_the_default_swipe_budget():
     assert (status, detail) == (STATUS_FAILED, "empty_feed")
     assert result["swipes"] == 3
     assert "like_x" not in result
-    assert _swipes(fake.actions())
+    assert _feed_dirs(fake.actions()) == ["top", "top", "feed", "feed", "feed"]
     assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(fake.actions()))
 
 
@@ -327,7 +531,8 @@ def test_like_swipes_zero_scans_once():
     status, result, detail, fake = _run(frame, payload=_body("facebook", "like", like_swipes=0))
     assert (status, detail) == (STATUS_FAILED, "empty_feed")
     assert result["swipes"] == 0
-    assert _swipes(fake.actions()) == []
+    # Search budget is zero. Opening still returns the feed to the top.
+    assert _feed_dirs(fake.actions()) == ["top", "top"]
 
 
 def test_icons_without_a_confident_like_are_not_empty_and_not_tapped():
@@ -353,7 +558,7 @@ def test_text_only_row_is_not_tapped():
                                         payload=_body("facebook", "like", like_swipes=1))
     assert (status, detail) == (STATUS_FAILED, "like_row_not_found")
     assert result["swipes"] == 1
-    assert len(_swipes(fake.actions())) == 1
+    assert _feed_dirs(fake.actions()) == ["top", "top", "feed"]
 
 
 def test_unverified_like_is_not_tapped_twice():
@@ -386,6 +591,7 @@ def test_like_probe_does_not_tap_the_row():
     assert (status, detail) == (STATUS_DONE, "like_probe")
     assert result["like_probe"] is True
     assert result["swipes"] == 0
+    assert result["elapsed_ms"] >= 3000
     assert 0 <= result["like_x"] <= 1000 and 0 <= result["like_y"] <= 1000
     tx = str(result["like_x"] * W // 1000)
     ty = str(result["like_y"] * H // 1000)
@@ -406,7 +612,157 @@ def test_finds_the_row_on_a_later_swipe():
         empty, frames=frames, payload=_body("facebook", "like", like_swipes=3))
     assert (status, detail) == (STATUS_DONE, "ok"), detail
     assert result["swipes"] == 1
-    assert len(_swipes(fake.actions())) == 1
+    assert _feed_dirs(fake.actions()) == ["top", "top", "feed"]
+
+
+class _HierarchyAdb(FakeAdb):
+    """Serves one read-only hierarchy dump. Screenshots stay on ``frame``."""
+
+    def __init__(self, frame, xml):
+        super().__init__(frame=frame)
+        self.xml = xml.encode("utf-8") if isinstance(xml, str) else xml
+
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if len(args) >= 4 and args[2:] == ("shell", "uiautomator", "dump", "/dev/tty"):
+            self.calls.append(args)
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout=self.xml, stderr=b"")
+        return FakeAdb.__call__(self, cmd, **kw)
+
+
+class _RevealAdb(FakeAdb):
+    """No blue Home pixel until two toward-top swipes, then the feed frame."""
+
+    def __init__(self, feed):
+        super().__init__(frame=_frame())
+        self.feed = feed
+        self.top = 0
+        self.shots = 0
+
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if len(args) >= 9 and args[4] == "swipe" and int(args[8]) > int(args[6]):
+            self.top += 1
+        if len(args) >= 4 and args[2:] == ("exec-out", "screencap"):
+            self.shots += 1
+            self.frame = self.feed if self.top >= 2 else _frame()
+        return FakeAdb.__call__(self, cmd, **kw)
+
+
+class _LateFeedAdb(FakeAdb):
+    """The blue Home pixel shows up on the third screenshot, not the first."""
+
+    def __init__(self, feed):
+        super().__init__(frame=_frame())
+        self.feed = feed
+        self.shots = 0
+
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if len(args) >= 4 and args[2:] == ("exec-out", "screencap"):
+            self.shots += 1
+            self.frame = self.feed if self.shots >= 3 else _frame()
+        return FakeAdb.__call__(self, cmd, **kw)
+
+
+def test_hidden_tab_bar_is_revealed_before_the_like_search():
+    feed, _tmpl, _x, _y = _with_thumb()
+    adb = _RevealAdb(feed)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_DONE, "like_probe"), detail
+    assert adb.top >= 2 and adb.shots >= 3
+    assert "like_x" in result
+    tx = str(result["like_x"] * W // 1000)
+    ty = str(result["like_y"] * H // 1000)
+    assert all((a[-2], a[-1]) != (tx, ty) for a in _taps(adb.actions()))
+
+
+def test_feed_blue_on_a_later_poll_is_not_app_not_ready():
+    feed, _tmpl, _x, _y = _with_thumb()
+    adb = _LateFeedAdb(feed)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_DONE, "like_probe"), detail
+    assert adb.shots >= 3
+    assert "like_x" in result
+
+
+def test_like_probe_pairs_the_dump_label_with_the_template():
+    frame, _tmpl, x, y = _with_thumb()
+    xml = _hierarchy([("", "React", "", f"[{x - 4},{y - 2}][{x + 20},{y + 24}]")])
+    adb = _HierarchyAdb(frame, xml)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_DONE, "like_probe"), detail
+    assert "label" in result["like_signals"] and "template" in result["like_signals"]
+    assert result["like_label"] == "react"
+    assert any(a[2:] == ("shell", "uiautomator", "dump", "/dev/tty") for a in adb.actions())
+
+
+def test_dump_label_on_a_square_does_not_tap():
+    frame = _icon_only_bar(thumb=False)
+    xml = _hierarchy([("", "Like", "", "[16,242][46,272]")])
+    adb = _HierarchyAdb(frame, xml)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
+    assert "like_x" not in result
+    assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(adb.actions()))
+
+
+def test_like_probe_finds_an_icon_only_bar_without_ocr():
+    frame = _icon_only_bar()
+    status, result, detail, fake = _run(
+        frame, ocr=lambda _raw: [],
+        payload=_body("facebook", "like", like_swipes=0, like_probe=True))
+    assert (status, detail) == (STATUS_DONE, "like_probe"), detail
+    assert "structure" in result["like_signals"]
+    assert "template" in result["like_signals"] or "shape" in result["like_signals"]
+    assert result["like_x"] < 300
+    tx = str(result["like_x"] * W // 1000)
+    ty = str(result["like_y"] * H // 1000)
+    assert all((a[-2], a[-1]) != (tx, ty) for a in _taps(fake.actions()))
+
+
+def test_icon_only_squares_stay_like_row_not_found():
+    frame = _icon_only_bar(thumb=False)
+    status, result, detail, fake = _run(
+        frame, ocr=lambda _raw: [],
+        payload=_body("facebook", "like", like_swipes=0))
+    assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
+    assert "like_x" not in result
+    assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(fake.actions()))
+
+
+def test_rapidocr_import_is_lazy():
+    import ast
+    from pathlib import Path
+
+    path = Path(locate_like_row.__code__.co_filename)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    banned = {"rapidocr_onnxruntime", "cv2", "onnxruntime", "rapidocr"}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names = {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = {node.module.split(".")[0]}
+        else:
+            continue
+        assert names.isdisjoint(banned)
 
 
 def test_dry_run_keeps_the_deprecated_coordinate_and_never_touches_adb():

@@ -226,6 +226,7 @@ def _ops(adb=None, server=41, **kw):
     ("-s", "S1", "shell", "input", "swipe", "1", "2", "3", "4", "300"),
     ("-s", "S1", "shell", "input", "text", "hello%sworld"),
     ("-s", "S1", "shell", "input", "keyevent", "3"), ("-s", "S1", "shell", "input", "keyevent", "4"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty"),
 ])
 def test_adb_allowlist_accepts_only_the_fixed_forms(args):
     check_adb_args(args)
@@ -237,6 +238,10 @@ def test_adb_allowlist_accepts_only_the_fixed_forms(args):
     ("-s", "S1", "install", "x.apk"), ("-s", "S1", "shell", "rm", "-rf", "/sdcard"),
     ("-s", "S1", "shell", "input", "text", "a;reboot"), ("-s", "S1", "shell", "input", "text", "a%b"),
     ("-s", "S1", "shell", "input", "keyevent", "26"), ("-s", "S1", "exec-out", "screencap", "-p"),
+    ("-s", "S1", "shell", "uiautomator", "dump"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty", "--compressed"),
+    ("-s", "S1", "exec-out", "uiautomator", "dump", "/dev/tty"),
     ("-s", "S1", "shell", "input", "tap", "10"), ("-s", "S1", "shell", "input", "tap", "-1", "2"),
     ("-s", "3B1F4KE5MS140P4X", "exec-out", "screencap"), ("-s", "192.168.0.148:5555", "exec-out", "screencap"),
     ("-s", "-x", "exec-out", "screencap"), ("-s", "S1", "forward", "tcp:9000", "tcp:9000"),

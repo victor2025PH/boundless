@@ -3,8 +3,10 @@
 One catalog, two doors:
 
 * **Open** (admitted with no extra flag): ``phone_control`` (the 0.3.7
-  inventory / screencap / input forms), ``read_only`` diagnostics, and
-  ``app_launch`` (``am start`` that only brings Facebook to the foreground).
+  inventory / screencap / input forms), ``read_only`` diagnostics (including
+  ``uiautomator dump /dev/tty``, which writes the hierarchy to stdout and
+  not to phone storage), and ``app_launch`` (``am start`` that only brings
+  Facebook to the foreground).
 * **Closed unless the caller passes a flag**: ``guarded_write`` (settings
   changes, radio toggles, reboot, uninstall/clear, force-stop) needs
   ``allow_guarded_writes=True``. ``experimental_ussd`` (one USSD dial shape)
@@ -342,6 +344,10 @@ def _classify_shell(args: Tuple[str, ...]) -> AdbClass:
         return AdbClass("read_only", "pm_query")
     if _cmd_package_query(args):
         return AdbClass("read_only", "cmd_package")
+    # Hierarchy to stdout only. A file path, a bare dump, or extra flags
+    # would write storage or change the dump and stay denied.
+    if args == ("uiautomator", "dump", "/dev/tty"):
+        return AdbClass("read_only", "uiautomator")
     return _DENIED
 
 
@@ -417,6 +423,9 @@ CATALOG: Tuple[Dict[str, Any], ...] = (
     {"since": "0.3.7", "category": "phone_control", "family": "input",
      "example": ("-s", "S1", "shell", "input", "keyevent", "3"),
      "note": "Home key only (3) or back (4). Pre-existing."},
+    {"since": "0.3.18", "category": "read_only", "family": "uiautomator",
+     "example": ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty"),
+     "note": "Reads the window hierarchy to stdout for icon-only Like labels. A dump to a file path is not this form and stays denied."},
 
     {"since": "0.3.18", "category": "read_only", "family": "dumpsys",
      "example": ("-s", "S1", "shell", "dumpsys", "connectivity"),
@@ -619,6 +628,10 @@ DENIED_FOREVER: Tuple[Tuple[str, ...], ...] = (
     ("-s", "S1", "shell", "su", "-c", "id"),
     ("-s", "S1", "shell", "input", "keyevent", "26"),
     ("-s", "S1", "exec-out", "screencap", "-p"),
+    ("-s", "S1", "shell", "uiautomator", "dump"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty", "--compressed"),
+    ("-s", "S1", "exec-out", "uiautomator", "dump", "/dev/tty"),
     ("-s", "S1", "forward", "tcp:9000", "tcp:9000"),
     ("-s", "S1", "shell", "dumpsys", "wifi"),
     ("-s", "S1", "shell", "pm", "grant", "com.facebook.katana", "android.permission.CAMERA"),

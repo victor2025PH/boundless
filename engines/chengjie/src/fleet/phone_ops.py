@@ -2,7 +2,8 @@
 
 安全栏：
 * adb 只跑白名单参数（``check_adb_args`` → ``adb_allowlist.py``）：原有 ``devices -l``、
-  ``version``、截图、``input``，加上 0.3.18 的只读诊断和仅限 Facebook 的启动。
+  ``version``、截图、``input``，加上只读诊断（含 ``shell uiautomator dump /dev/tty``，
+  不把界面写到存储；写到文件的 dump 仍拒绝）和仅限 Facebook 的启动。
   改设置、开关流量、重启、卸载、force-stop 在目录里单独成类，默认拒绝。
   参数列表、不经本机 shell、每条都有超时。
 * 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
@@ -254,6 +255,27 @@ class PhoneOps:
 
     def last_raw(self, serial: str) -> bytes:
         return self._last_raw.get(serial, b"")
+
+    def read_ui_hierarchy(self, serial: str) -> str:
+        """Read-only ``uiautomator dump`` to stdout. Empty when the device refuses.
+
+        The caller is already inside ``session`` and holds this phone's lock.
+        A failure is not an error: the Like search then uses the screenshot.
+        """
+        try:
+            adb = self._ready_adb()
+            self._pace(serial)
+            try:
+                raw = self._adb(
+                    adb, ("-s", serial, "shell", "uiautomator", "dump", "/dev/tty"), 12.0,
+                )
+            finally:
+                self._last_op[serial] = self._clock()
+        except PhoneOpError:
+            return ""
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > 2_000_000:
+            return ""
+        return raw.decode("utf-8", "replace")
 
     def _check_bounds(self, serial: str, *coords: int) -> None:
         size = self._screen.get(serial)
