@@ -308,7 +308,7 @@ def test_hierarchy_pulls_the_fixed_file_and_pauses_once():
     assert got["error"] == "" and got["xml"].startswith("<hierarchy")
     dumps = [c for c in adb.calls if len(c) >= 5 and c[2:5] == ("shell", "uiautomator", "dump")]
     assert dumps == [("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml")]
-    assert any(c[2] == "pull" and c[3] == "/sdcard/chatx_like_hierarchy.xml" for c in adb.calls)
+    assert any(len(c) >= 4 and c[2] == "pull" and c[3] == "/sdcard/chatx_like_hierarchy.xml" for c in adb.calls)
     assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 1
     assert sum(1 for c in adb.calls if c[2:] == ("shell", "cmd", "media_session", "dispatch", "pause")) == 1
     taps = [c for c in adb.calls if len(c) > 4 and c[4] == "tap"]
