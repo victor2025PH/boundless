@@ -12,6 +12,12 @@ name: chengjie-tests
 #     1 分钟余量，会变成「偶尔莫名超时」的噪声源，而噪声源最终都会被忽略；
 #   · run 步骤补 --timeout=90（依赖 requirements-ci.txt 新增的 pytest-timeout）：与本地
 #     scripts/regression.ps1 对齐，让挂起的 worker 被点名而不是烧满 job。
+#
+# 2026-10-07：全量已到 ~30k 条，单 job pytest 实测 20–22 分钟，加上装依赖和 collect
+# 整个 job 约 24 分钟，贴着 30 分钟上限（0.3.12 那次 21:42 的 pytest 段）。再涨一轮
+# 就会变成「偶发超时、日志被取消、看不出是哪条挂了」。按文件轮转切 3 片，每片大约
+# 三分之一的用例（按 def test_ 计数偏差 <7%），单片 pytest 落到 ~8 分钟，30 分钟
+# 上限重新留出余量。不把 timeout 再抬高：抬高只会让真挂起更晚才被发现。
 
 on:
   push:
@@ -44,11 +50,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # 两版本互不熔断：一个挂也要看另一个结果，便于定位是否版本特异问题。
+      # 两版本、三片互不熔断：一片挂也要看其余结果，便于定位是否版本特异或某一片偏慢。
       fail-fast: false
       matrix:
         # 3.12 = CI 主支持档；3.13 = 开发机实跑档（防本地能跑/CI 挂的漂移）。
         python-version: ['3.12', '3.13']
+        # 文件名排序后按序号轮转。三片的 def test_ 数量几乎均分；慢文件不会整段
+        # 堆在字母表末尾的同一片里。
+        shard: ['0', '1', '2']
     steps:
       - uses: actions/checkout@v4
 
@@ -68,13 +77,45 @@ jobs:
         # 校验已装依赖之间版本兼容、无缺失子依赖（与 --collect-only 互补）。
         run: pip check
 
-      - name: Collect tests (fast fail on import errors)
-        # pytest.ini 当前 0 ignore（全量纳入）；本步只做 collect，import 期错误会快速失败。
-        # 本机实跑：22,421 条 / 23 秒。
-        run: python -m pytest tests/ --collect-only -q
+      - name: Select regression shard ${{ matrix.shard }}
+        # pytest 默认文件名就是 test_*.py / *_test.py（pytest.ini 没有改 python_files）。
+        # 三片并集必须等于这个集合，否则会静默漏测。空片直接失败，不许空跑变绿。
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path("tests")
+          files = sorted({
+              p.as_posix()
+              for pattern in ("test_*.py", "*_test.py")
+              for p in root.rglob(pattern)
+              if p.is_file() and "__pycache__" not in p.parts
+          })
+          total = 3
+          index = int(os.environ["SHARD_INDEX"])
+          if not files:
+              raise SystemExit("no test files under tests/")
+          picked = [path for i, path in enumerate(files) if i % total == index]
+          Path("/tmp/chengjie-regression-shard.txt").write_text("\n".join(picked) + "\n")
+          print(f"shard {index}/{total}: {len(picked)} files of {len(files)}")
+          if not picked:
+              raise SystemExit(f"shard {index} is empty")
+          PY
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
 
-      - name: Run regression (parallel, file-level isolation)
-        run: python -m pytest tests/ -n auto -q --tb=line --timeout=90 --timeout-method=thread
+      - name: Collect shard (fast fail on import errors)
+        run: |
+          set -euo pipefail
+          mapfile -t files < /tmp/chengjie-regression-shard.txt
+          python -m pytest "${files[@]}" --collect-only -q
+
+      - name: Run regression shard (parallel, file-level isolation)
+        run: |
+          set -euo pipefail
+          mapfile -t files < /tmp/chengjie-regression-shard.txt
+          python -m pytest "${files[@]}" -n auto -q --tb=line --timeout=90 --timeout-method=thread
 
   lint:
     # 与 regression 并行的快速门禁：跑 .pre-commit-config.yaml 中「只检查、不改写」的

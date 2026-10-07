@@ -398,6 +398,9 @@ def _load_snapshot(state_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         raw = json.loads((Path(state_dir) / SNAP_NAME).read_text(encoding="utf-8-sig"))
     except Exception:
+        # Missing or unreadable snapshot is "no notice yet", but it must not be silent:
+        # a corrupt file otherwise looks the same as a fresh state dir.
+        logger.debug("[operator_alert] snapshot unreadable %s", state_dir, exc_info=True)
         return None
     return raw if isinstance(raw, dict) else None
 
@@ -449,6 +452,9 @@ def load_language(state_dir: Path) -> Optional[str]:
     try:
         raw = json.loads((Path(state_dir) / LANG_NAME).read_text(encoding="utf-8-sig"))
     except Exception:
+        # No sidecar yet falls through to agent.json. A broken sidecar used to
+        # do the same with no trace, so a bad write was indistinguishable.
+        logger.debug("[operator_alert] language file unreadable %s", state_dir, exc_info=True)
         return None
     if not isinstance(raw, dict):
         return None
@@ -1005,4 +1011,6 @@ def _spawn_as_user(args: List[str]) -> bool:
             if token:
                 kernel32.CloseHandle(token)
         except Exception:
-            pass
+            # Cleanup must not replace the launch result, but a leaked token
+            # handle has to be visible when debug logging is on.
+            logger.debug("[operator_alert] interactive token cleanup failed", exc_info=True)
