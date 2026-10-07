@@ -13,6 +13,7 @@
     enroll(code, machine_id) → node_key 存 <state_dir>/agent.json（只在本机）
     loop: heartbeat（本机实例摘要 + 本机 adb 手机清点 phones，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
     0.3.15 本机操作员告警（默认关）：手机不能干活或本机 adb 异常时，只在这台电脑上弹窗，不进心跳。
+    0.3.16 push_config 可以写 operator_alert_* / wallpaper_map（直播机仍拒绝，告警保持关闭）。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -30,8 +31,11 @@
     enable_phone_adb→ 已有自带 platform-tools 时打开 adb_manage_server 并拉起 adb（直播机拒绝）
     push_config     → phone_flows_enabled true/false, and/or phone_ui_map (existing file) or
                       phone_ui_map_json / phone_ui_map_b64 (written under the state dir, 256KiB,
-                      validate_ui_map). Other patches rejected not_supported_in_agent_v1.
-                      Live-stream host refused before any write. Map body is not logged.
+                      validate_ui_map), and/or operator_alert_enabled / operator_alert_refresh_sec /
+                      operator_alert_language / operator_alert_fail_streak / wallpaper_map.
+                      Other patches rejected not_supported_in_agent_v1.
+                      Live-stream host refused before any write. Map body and wallpaper serials are not logged.
+    operator_alert_diag → read-only redacted snapshot (wallpaper number + reason). No adb serials.
 """
 
 from __future__ import annotations
@@ -67,7 +71,7 @@ from .identity import (
     regenerate_machine_id, resolve_machine_identity, short_machine_id, state_dir_is_locked,
 )
 from .local_status import build_local_status, record_heartbeat
-from .operator_alert import OperatorAlert
+from .operator_alert import OperatorAlert, operator_alert_diag, parse_wallpaper_map
 from .phones import PhoneCollector
 from .phone_flow_robust import parse_jitter_ms
 from .phone_flows import PhoneFlows, _MAX_MAP_BYTES, validate_ui_map
@@ -82,15 +86,26 @@ from .protocol import (
     PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
-    TASK_ENABLE_PHONE_ADB, TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
+    TASK_ENABLE_PHONE_ADB, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.15"
-# push_config may set these and nothing else. Content keys are not stored; they
-# become a file under the state dir and phone_ui_map is set to that path.
-_PUSH_CONFIG_KEYS = frozenset({"phone_flows_enabled", "phone_ui_map", "phone_ui_map_b64", "phone_ui_map_json"})
+AGENT_VERSION = "0.3.16"
+# push_config may set these and nothing else. Map content keys are not stored;
+# they become a file under the state dir and phone_ui_map is set to that path.
+# Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
+_PUSH_CONFIG_KEYS = frozenset({
+    "phone_flows_enabled", "phone_ui_map", "phone_ui_map_b64", "phone_ui_map_json",
+    "operator_alert_enabled", "operator_alert_refresh_sec", "operator_alert_language",
+    "operator_alert_fail_streak", "wallpaper_map",
+})
+_PUSH_OPERATOR_ALERT_KEYS = frozenset({
+    "operator_alert_enabled", "operator_alert_refresh_sec", "operator_alert_language",
+    "operator_alert_fail_streak", "wallpaper_map",
+})
+_ALERT_LANGS = frozenset({"zh", "en"})
+_WALLPAPER_MAP_MAX_BYTES = 64 * 1024
 _PUSH_MAP_CONTENT_KEYS = frozenset({"phone_ui_map_b64", "phone_ui_map_json"})
 _REMOTE_UI_MAP_NAME = "phone_ui_map.remote.json"
 _UI_MAP_PATH_MAX = 1024
@@ -1123,6 +1138,8 @@ class NodeAgent:
                 return self._enable_phone_adb()
             if kind == TASK_PUSH_CONFIG:
                 return self._push_phone_flows(payload)
+            if kind == TASK_OPERATOR_ALERT_DIAG:
+                return self._operator_alert_diag()
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
@@ -1146,12 +1163,18 @@ class NodeAgent:
 
         return adb_bundle.enable_phone_adb(self.cfg.state_dir, persist=persist, already=already)
 
+    def _operator_alert_diag(self) -> Tuple[str, Dict[str, Any], str]:
+        """Read-only redacted operator-alert summary. No serials, no secrets."""
+        summary = operator_alert_diag(
+            self.cfg.state_dir, self.cfg.data, live_stream=bool(self.operator_alert.live_stream))
+        return STATUS_DONE, summary, "ok"
+
     def _push_phone_flows(self, payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
-        """Write agent.json phone_flows_enabled and/or phone_ui_map.
+        """Write agent.json phone flow settings and/or operator-alert keys.
 
         A live-stream host is refused before any file is touched. Map bytes are
         checked for size and schema, then stored only as a path. The map body
-        is not logged and is not returned.
+        and wallpaper serials are not logged and are not returned.
         """
         patch = payload.get("patch") if isinstance(payload, dict) else None
         if not isinstance(patch, dict) or not patch or not set(patch) <= _PUSH_CONFIG_KEYS:
@@ -1182,6 +1205,10 @@ class NodeAgent:
             if not isinstance(raw_json, (str, dict)):
                 return STATUS_REJECTED, {}, "not_supported_in_agent_v1"
             map_body = ("json", raw_json)
+        alert_updates, alert_err = _accept_operator_alert_patch(patch)
+        if alert_err:
+            return STATUS_REJECTED, {}, alert_err
+        updates.update(alert_updates)
         if is_live_stream_host(self.cfg.state_dir):
             return STATUS_REJECTED, {}, "live_stream_host"
         nbytes = 0
@@ -1205,6 +1232,19 @@ class NodeAgent:
             result["phone_ui_map"] = updates["phone_ui_map"]
             result["phone_ui_map_bytes"] = nbytes
             logger.info("[agent] push_config set phone_ui_map (%d bytes)", nbytes)
+        if "operator_alert_enabled" in updates:
+            result["operator_alert_enabled"] = updates["operator_alert_enabled"] is True
+            logger.info("[agent] push_config set operator_alert %s",
+                        "on" if result["operator_alert_enabled"] else "off")
+        if "operator_alert_refresh_sec" in updates:
+            result["operator_alert_refresh_sec"] = updates["operator_alert_refresh_sec"]
+        if "operator_alert_language" in updates:
+            result["operator_alert_language"] = updates["operator_alert_language"]
+        if "operator_alert_fail_streak" in updates:
+            result["operator_alert_fail_streak"] = updates["operator_alert_fail_streak"]
+        if "wallpaper_map" in updates:
+            result["wallpaper_map_entries"] = len(parse_wallpaper_map(updates["wallpaper_map"]))
+            logger.info("[agent] push_config set wallpaper_map (%d entries)", result["wallpaper_map_entries"])
         return STATUS_DONE, result, "ok"
 
     def _huoke_instances(self, want: str = "") -> List[Dict[str, Any]]:
@@ -1375,6 +1415,52 @@ def _phone_flows_settings(data: Dict[str, Any], state_dir: Optional[Path] = None
         jitter = parse_jitter_ms(data.get("phone_flow_jitter_ms"))
     return {"enabled": data.get("phone_flows_enabled") is True, "ui_map_path": path,
             "verify": verify, "jitter_ms": jitter, "state_dir": state_dir}
+
+
+def _accept_operator_alert_patch(patch: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    """Type-check operator-alert keys. Empty error means the updates may be written.
+
+    Wrong types use the same rejection as any other unsupported patch. Values are
+    stored as given (language lowercased). Observe clamps refresh and streak.
+    """
+    if not (set(patch) & _PUSH_OPERATOR_ALERT_KEYS):
+        return {}, ""
+    updates: Dict[str, Any] = {}
+    if "operator_alert_enabled" in patch:
+        enabled = patch.get("operator_alert_enabled")
+        if not isinstance(enabled, bool):
+            return {}, "not_supported_in_agent_v1"
+        updates["operator_alert_enabled"] = enabled
+    if "operator_alert_refresh_sec" in patch:
+        raw = patch.get("operator_alert_refresh_sec")
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return {}, "not_supported_in_agent_v1"
+        updates["operator_alert_refresh_sec"] = raw
+    if "operator_alert_language" in patch:
+        raw = patch.get("operator_alert_language")
+        if not isinstance(raw, str):
+            return {}, "not_supported_in_agent_v1"
+        lang = raw.strip().lower()
+        if lang not in _ALERT_LANGS:
+            return {}, "not_supported_in_agent_v1"
+        updates["operator_alert_language"] = lang
+    if "operator_alert_fail_streak" in patch:
+        raw = patch.get("operator_alert_fail_streak")
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return {}, "not_supported_in_agent_v1"
+        updates["operator_alert_fail_streak"] = raw
+    if "wallpaper_map" in patch:
+        raw = patch.get("wallpaper_map")
+        if not isinstance(raw, (dict, list)):
+            return {}, "not_supported_in_agent_v1"
+        try:
+            blob = json.dumps(raw, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError):
+            return {}, "not_supported_in_agent_v1"
+        if len(blob) > _WALLPAPER_MAP_MAX_BYTES:
+            return {}, "not_supported_in_agent_v1"
+        updates["wallpaper_map"] = raw
+    return updates, ""
 
 
 class _UiMapReject(Exception):

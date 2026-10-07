@@ -337,6 +337,71 @@ if ($null -ne $script:lockStream) { $script:lockStream.Dispose() }
 """
 
 
+_DIAG_REASONS = frozenset({
+    "offline", "unauthorized", "disconnected", "action_failures", "not_ready",
+    "adb_server_down", "adb_not_found", "adb_timeout", "adb_version", "adb_error",
+    "no_devices", "phones_disabled",
+})
+
+
+def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = False) -> Dict[str, Any]:
+    """Redacted summary for a remote read. No adb serials and no string packs.
+
+    Settings come from agent.json (language sidecar still wins). The phone list
+    comes from the snapshot and keeps only wallpaper number and reason. A
+    live-stream host reports the alert off and an empty list.
+    """
+    cfg = parse_alert_config(cfg_data)
+    root = Path(state_dir)
+    language = resolve_language(root, cfg["language"])
+    snap = _load_snapshot(root)
+    phones: List[Dict[str, Any]] = []
+    pc_reason = ""
+    if isinstance(snap, dict) and not live_stream:
+        raw_phones = snap.get("phones")
+        if isinstance(raw_phones, list):
+            for item in raw_phones:
+                if not isinstance(item, dict):
+                    continue
+                number = str(item.get("wallpaper_no") or "").strip()
+                if not _WALL_RE.match(number) or int(number) < 1:
+                    number = ""
+                reason = str(item.get("reason") or "").strip()
+                if reason not in _DIAG_REASONS:
+                    reason = ""
+                row: Dict[str, Any] = {"wallpaper_no": number, "reason": reason}
+                if item.get("unnumbered") is True or not number:
+                    row["unnumbered"] = True
+                phones.append(row)
+                if len(phones) >= _MAX_MAP:
+                    break
+        pc = snap.get("pc")
+        if isinstance(pc, dict):
+            reason = str(pc.get("reason") or "").strip()
+            if reason in _DIAG_REASONS:
+                pc_reason = reason
+    out: Dict[str, Any] = {
+        "enabled": bool(cfg["enabled"]) and not live_stream,
+        "language": language,
+        "refresh_sec": cfg["refresh_sec"],
+        "fail_streak": cfg["fail_streak"],
+        "live_stream": bool(live_stream),
+        "snapshot": isinstance(snap, dict) and not live_stream,
+        "phones": phones,
+    }
+    if pc_reason:
+        out["pc_reason"] = pc_reason
+    return out
+
+
+def _load_snapshot(state_dir: Path) -> Optional[Dict[str, Any]]:
+    try:
+        raw = json.loads((Path(state_dir) / SNAP_NAME).read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
 def parse_alert_config(data: Any) -> Dict[str, Any]:
     """Flat agent.json keys. ``operator_alert_enabled`` is on only for JSON true."""
     src = data if isinstance(data, dict) else {}

@@ -1,4 +1,4 @@
-"""Local room-PC operator alert (agent 0.3.15).
+"""Local room-PC operator alert (agent 0.3.15, remote enable in 0.3.16).
 
 The desktop window cannot be opened on this runner. These tests cover the
 snapshot the window reads: wallpaper numbers, zh/en copy, and the headless
@@ -12,7 +12,10 @@ import re
 from src.fleet import agent as agent_mod
 from src.fleet import operator_alert as oa
 from src.fleet.phones import PROTECTED_SERIALS
-from src.fleet.protocol import STATUS_DONE, STATUS_FAILED, STATUS_REJECTED
+from src.fleet.protocol import (
+    LEGACY_ALLOWED_KINDS, REMOTE_PHONE_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
+    TASK_KINDS, TASK_OPERATOR_ALERT_DIAG, TASK_PUSH_CONFIG,
+)
 
 SERIAL = "ZZPHONE99"
 OTHER = "OTHERPHONE1"
@@ -328,7 +331,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.15"
+    assert agent_mod.AGENT_VERSION == "0.3.16"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -389,3 +392,155 @@ def test_live_stream_agent_does_not_write_an_alert(tmp_path, monkeypatch):
     assert not (fleet / oa.SNAP_NAME).exists()
     ag.execute({"kind": "phone_tap", "payload": {}, "target": {"serial": SERIAL}})
     assert ag.operator_alert._streaks == {}
+
+
+def _locked_agent(tmp_path, monkeypatch, *, live: bool = False):
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: live)
+    fleet = tmp_path / "fleet"
+    cfg = agent_mod.AgentConfig(fleet)
+    cfg.data["phones_exclude"] = ["ABC123"]
+    cfg.save()
+    agent = agent_mod.NodeAgent(cfg, http=lambda *a, **k: (200, {}), app_version="t")
+    return agent, fleet
+
+
+def _push(patch):
+    return {"task_id": "t-push", "kind": TASK_PUSH_CONFIG, "payload": {"patch": patch}}
+
+
+def test_push_config_writes_operator_alert_keys_and_snapshot_hides_serial(tmp_path, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="fleet.agent")
+    agent, fleet = _locked_agent(tmp_path, monkeypatch)
+    patch = {
+        "operator_alert_enabled": True,
+        "operator_alert_refresh_sec": 60,
+        "operator_alert_language": "EN",
+        "operator_alert_fail_streak": 4,
+        "wallpaper_map": {"07": SERIAL},
+        "phone_flows_enabled": False,
+    }
+    status, result, detail = agent.execute(_push(patch))
+    assert (status, detail) == (STATUS_DONE, "ok")
+    assert result["operator_alert_enabled"] is True
+    assert result["operator_alert_refresh_sec"] == 60
+    assert result["operator_alert_language"] == "en"
+    assert result["operator_alert_fail_streak"] == 4
+    assert result["wallpaper_map_entries"] == 1
+    assert result["phone_flows_enabled"] is False
+    assert SERIAL not in _blob(result)
+    assert SERIAL not in caplog.text
+    disk = json.loads((fleet / "agent.json").read_text(encoding="utf-8"))
+    assert disk["operator_alert_enabled"] is True
+    assert disk["operator_alert_refresh_sec"] == 60
+    assert disk["operator_alert_language"] == "en"
+    assert disk["operator_alert_fail_streak"] == 4
+    assert disk["wallpaper_map"] == {"07": SERIAL}
+    assert disk["phones_exclude"] == ["ABC123"]
+    assert disk["phone_flows_enabled"] is False
+    agent.operator_alert.observe([_phone()], "", agent.cfg.data)
+    snap = json.loads((fleet / oa.SNAP_NAME).read_text(encoding="utf-8"))
+    assert snap["phones"][0]["wallpaper_no"] == "07"
+    assert snap["phones"][0]["reason"] == "offline"
+    assert SERIAL not in _blob(snap)
+    assert all(SERIAL not in text.upper() for text in _texts(snap))
+    for key in (
+        "operator_alert_enabled", "operator_alert_refresh_sec", "operator_alert_language",
+        "operator_alert_fail_streak", "wallpaper_map",
+    ):
+        assert key in agent_mod._PUSH_CONFIG_KEYS
+
+
+def test_push_config_rejects_unknown_and_bad_operator_alert_values(tmp_path, monkeypatch):
+    agent, fleet = _locked_agent(tmp_path, monkeypatch)
+    before = (fleet / "agent.json").read_text(encoding="utf-8")
+    cases = (
+        {},
+        {"operator_alert_enabled": "true"},
+        {"operator_alert_enabled": 1},
+        {"operator_alert_language": "fr"},
+        {"operator_alert_refresh_sec": True},
+        {"operator_alert_refresh_sec": 60.5},
+        {"operator_alert_fail_streak": "3"},
+        {"wallpaper_map": SERIAL},
+        {"operator_alert_enabled": True, "phones_exclude": []},
+        {"operator_alert_bogus": True},
+        {"operator_alert_enabled": True, "node_key": "nk_secret"},
+    )
+    for patch in cases:
+        status, result, detail = agent.execute(_push(patch))
+        assert (status, detail) == (STATUS_REJECTED, "not_supported_in_agent_v1"), patch
+        assert result == {}
+        assert (fleet / "agent.json").read_text(encoding="utf-8") == before
+        assert agent.cfg.data.get("operator_alert_enabled") is not True
+
+
+def test_push_config_live_stream_does_not_enable_operator_alert(tmp_path, monkeypatch):
+    agent, fleet = _locked_agent(tmp_path, monkeypatch, live=True)
+    before = (fleet / "agent.json").read_text(encoding="utf-8")
+    status, result, detail = agent.execute(_push({
+        "operator_alert_enabled": True,
+        "wallpaper_map": {"7": SERIAL},
+    }))
+    assert (status, detail) == (STATUS_REJECTED, "live_stream_host")
+    assert result == {}
+    assert (fleet / "agent.json").read_text(encoding="utf-8") == before
+    assert agent.operator_alert.live_stream is True
+    agent.operator_alert.observe(
+        [_phone()], "", {"operator_alert_enabled": True, "wallpaper_map": {SERIAL: "7"}})
+    assert not (fleet / oa.SNAP_NAME).exists()
+    status, result, detail = agent.execute({"task_id": "t-diag", "kind": TASK_OPERATOR_ALERT_DIAG, "payload": {}})
+    assert (status, detail) == (STATUS_DONE, "ok")
+    assert result["enabled"] is False
+    assert result["live_stream"] is True
+    assert result["phones"] == []
+    assert SERIAL not in _blob(result)
+
+
+def test_operator_alert_diag_redacts_snapshot_serials(tmp_path, monkeypatch):
+    agent, fleet = _locked_agent(tmp_path, monkeypatch)
+    agent.execute(_push({
+        "operator_alert_enabled": True,
+        "operator_alert_language": "zh",
+        "operator_alert_refresh_sec": 90,
+        "operator_alert_fail_streak": 3,
+        "wallpaper_map": [{"wallpaper_no": "07", "serial": SERIAL}],
+    }))
+    poison = {
+        "enabled": True,
+        "language": SERIAL,
+        "refresh_sec": 1,
+        "phones": [{
+            "wallpaper_no": "07",
+            "reason": "offline",
+            "serial": SERIAL,
+            "detail": SERIAL,
+            "_serial": SERIAL,
+            "key": SERIAL,
+        }, {
+            "wallpaper_no": SERIAL,
+            "reason": SERIAL,
+            "unnumbered": False,
+        }],
+        "pc": {"reason": "adb_server_down", "serial": SERIAL},
+        "secret": SERIAL,
+        "strings": {"zh": {"title": SERIAL}},
+    }
+    (fleet / oa.SNAP_NAME).write_text(json.dumps(poison), encoding="utf-8")
+    status, result, detail = agent.execute({"task_id": "t-diag", "kind": TASK_OPERATOR_ALERT_DIAG, "payload": {}})
+    assert (status, detail) == (STATUS_DONE, "ok")
+    assert result["enabled"] is True
+    assert result["language"] == "zh"
+    assert result["refresh_sec"] == 90
+    assert result["fail_streak"] == 3
+    assert result["pc_reason"] == "adb_server_down"
+    assert result["phones"][0] == {"wallpaper_no": "07", "reason": "offline"}
+    assert result["phones"][1]["wallpaper_no"] == ""
+    assert result["phones"][1]["reason"] == ""
+    assert result["phones"][1]["unnumbered"] is True
+    assert "serial" not in result["phones"][0]
+    assert SERIAL not in _blob(result)
+    assert TASK_OPERATOR_ALERT_DIAG in TASK_KINDS
+    assert TASK_OPERATOR_ALERT_DIAG not in REMOTE_PHONE_KINDS
+    assert TASK_OPERATOR_ALERT_DIAG not in LEGACY_ALLOWED_KINDS

@@ -281,3 +281,12 @@ TASK_KINDS = TASK_KINDS + ((TASK_ENABLE_PHONE_ADB,) if TASK_ENABLE_PHONE_ADB not
 TASK_PRIORITY.setdefault(TASK_ENABLE_PHONE_ADB, 3)
 
 __all__ += ["TASK_ENABLE_PHONE_ADB"]
+
+
+# ── 0.3.16 只读操作员告警诊断（不进 REMOTE_PHONE_KINDS，也不进心跳）──────────
+# 机房节点即使没开远程手机操作也能领。回执只有开关、语言、刷新间隔和壁纸编号。
+TASK_OPERATOR_ALERT_DIAG = "operator_alert_diag"
+TASK_KINDS = TASK_KINDS + ((TASK_OPERATOR_ALERT_DIAG,) if TASK_OPERATOR_ALERT_DIAG not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_OPERATOR_ALERT_DIAG, 8)
+
+__all__ += ["TASK_OPERATOR_ALERT_DIAG"]
