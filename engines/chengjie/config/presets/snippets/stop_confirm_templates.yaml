@@ -1,0 +1,33 @@
+# STOP / 退订确认模板（FD-16 式，P1-4，2026-10-08 智语）
+# ─────────────────────────────────────────────────────────────────────
+# 用途：stop_gate 命中 STOP 后**只回这一句**（不走 LLM），然后该会话进停联名单，
+#       此后任何自动出站（回复、主动、召回、群发）都拦下只留痕。
+# 口径：只确认，不挑逗、不挽留、不追问、不带链接/emoji、不提「想回来随时找我」。
+# 选择：persona＝第一人称人设号（陪聊/玩家朋友/故事主持）；brand＝品牌/客服号。
+#       语言按对方这条 STOP 的语言取；取不到用 en。每个会话最多发一次（持久防重）。
+# 不含任何密钥；可直接被 config.yaml 的 compliance.stop_gate.confirm_templates 引用或拷入。
+# ─────────────────────────────────────────────────────────────────────
+schema: zhiliao.stop_confirm.v1
+default_lang: en
+templates:
+  en:
+    persona: "Okay, got it — I won't message you again."
+    brand: "Okay, noted — we won't message you again."
+  tl:
+    persona: "Sige po, noted — hindi na ako magme-message ulit."
+    brand: "Sige po, naitala na — hindi na kami magme-message ulit."
+  taglish:
+    persona: "Okay po, noted — di na ako magme-message ulit."
+    brand: "Okay po, noted — di na kami magme-message ulit."
+  ceb:
+    persona: "Sige, nasabtan nako — dili na ko mo-message nimo pag-usab."
+    brand: "Sige, natala na — dili na mi mo-message nimo pag-usab."
+  hi:
+    persona: "ठीक है, नोट कर लिया — अब आपको दोबारा मैसेज नहीं आएगा।"
+    brand: "ठीक है, नोट कर लिया — अब आपको हमारी ओर से दोबारा मैसेज नहीं आएगा।"
+  zh:
+    persona: "好的，记下了，之后不会再给你发消息。"
+    brand: "好的，已记录，之后不会再给您发消息。"
+  zh_hant:
+    persona: "好的，記下了，之後不會再給你發訊息。"
+    brand: "好的，已記錄，之後不會再給您發訊息。"
