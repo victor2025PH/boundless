@@ -290,3 +290,12 @@ TASK_KINDS = TASK_KINDS + ((TASK_OPERATOR_ALERT_DIAG,) if TASK_OPERATOR_ALERT_DI
 TASK_PRIORITY.setdefault(TASK_OPERATOR_ALERT_DIAG, 8)
 
 __all__ += ["TASK_OPERATOR_ALERT_DIAG"]
+
+
+# ── 0.3.18 只读网络体检（不进 REMOTE_PHONE_KINDS，不要求 caps）──────────────
+# 机房节点没开远程手机操作也能领。回执只有壁纸编号和网络字段，没有序列号。
+TASK_NET_HEALTH = "net_health"
+TASK_KINDS = TASK_KINDS + ((TASK_NET_HEALTH,) if TASK_NET_HEALTH not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_NET_HEALTH, 8)
+
+__all__ += ["TASK_NET_HEALTH"]

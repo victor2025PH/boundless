@@ -249,7 +249,8 @@ function Update-View {
     }
     $pcLabel.Text = $pcText
     $phones = AsArray $snap.phones
-    if ($phones.Length -eq 0 -and [string]::IsNullOrEmpty($pcText)) {
+    $network = AsArray $snap.network
+    if ($phones.Length -eq 0 -and $network.Length -eq 0 -and [string]::IsNullOrEmpty($pcText)) {
       [void]$list.Items.Add((Txt $snap $script:lang 'all_clear'))
     }
     foreach ($p in $phones) {
@@ -258,6 +259,18 @@ function Update-View {
       if ($null -ne $p.detail) { $detail = [string]$p.detail }
       $why = ReasonText $snap $script:lang $p.reason $detail
       $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $why)
+      [void]$list.Items.Add($line)
+    }
+    foreach ($n in $network) {
+      $no = PhoneNo $snap $script:lang $n
+      $status = ''
+      if ($script:lang -eq 'en') {
+        if ($null -ne $n.status_en) { $status = [string]$n.status_en }
+      } elseif ($null -ne $n.status_zh) {
+        $status = [string]$n.status_zh
+      }
+      if ([string]::IsNullOrEmpty($status)) { continue }
+      $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $status)
       [void]$list.Items.Add($line)
     }
     $seq = 0
@@ -380,6 +393,24 @@ def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = F
             reason = str(pc.get("reason") or "").strip()
             if reason in _DIAG_REASONS:
                 pc_reason = reason
+    network: List[Dict[str, Any]] = []
+    if isinstance(snap, dict) and not live_stream and isinstance(snap.get("network"), list):
+        from .net_health import _STATUS_EN, _STATUS_ZH
+
+        for item in snap["network"]:
+            if not isinstance(item, dict):
+                continue
+            number = str(item.get("wallpaper_no") or "").strip()
+            if not _WALL_RE.match(number) or int(number) < 1:
+                number = ""
+            zh = item.get("status_zh") if item.get("status_zh") in _STATUS_ZH else ""
+            en = item.get("status_en") if item.get("status_en") in _STATUS_EN else ""
+            row = {"wallpaper_no": number, "status_zh": zh, "status_en": en}
+            if item.get("unnumbered") is True or not number:
+                row["unnumbered"] = True
+            network.append(row)
+            if len(network) >= _MAX_MAP:
+                break
     out: Dict[str, Any] = {
         "enabled": bool(cfg["enabled"]) and not live_stream,
         "language": language,
@@ -389,6 +420,8 @@ def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = F
         "snapshot": isinstance(snap, dict) and not live_stream,
         "phones": phones,
     }
+    if network:
+        out["network"] = network
     if pc_reason:
         out["pc_reason"] = pc_reason
     return out
@@ -507,6 +540,10 @@ class OperatorAlert:
         self._seq = 0
         self._last_write = 0.0
         self._ever_enabled = False
+        self._network: List[Dict[str, Any]] = []
+        self._net_bad: set = set()
+        self._last_phones: List[Dict[str, Any]] = []
+        self._last_pc: Optional[Dict[str, Any]] = None
 
     def note_action(self, serial: str, status: str) -> None:
         try:
@@ -612,6 +649,8 @@ class OperatorAlert:
         self._seq += 1
         self._last_write = stamp
         self._ever_enabled = True
+        self._last_phones = public_phones
+        self._last_pc = pc_obj
         language = resolve_language(self.state_dir, cfg["language"])
         payload = {
             "enabled": True,
@@ -621,11 +660,65 @@ class OperatorAlert:
             "updated_at": stamp,
             "pc": pc_obj,
             "phones": public_phones,
+            "network": [dict(item) for item in self._network],
             "raised": raised,
             "cleared": cleared,
             "strings": STRINGS,
         }
         self.present(self.state_dir, payload)
+
+    def note_network(self, rows: Any, cfg_data: Any) -> None:
+        """Remember per-phone network lines and refresh the local snapshot.
+
+        A newly bad phone raises the window. A healthy refresh only rewrites
+        the snapshot, so an already-open window updates and a quiet room does
+        not pop. Serials are dropped before the write.
+        """
+        try:
+            self._note_network(rows, cfg_data)
+        except Exception:
+            logger.warning("[operator_alert] note_network skipped", exc_info=True)
+
+    def _note_network(self, rows: Any, cfg_data: Any) -> None:
+        if self.live_stream:
+            return
+        from .net_health import popup_row
+
+        public: List[Dict[str, Any]] = []
+        for row in rows or []:
+            if isinstance(row, dict):
+                public.append(popup_row(row))
+            if len(public) >= 32:
+                break
+        self._network = public
+        cfg = parse_alert_config(cfg_data)
+        if not cfg["enabled"]:
+            return
+        bad = [item["key"] for item in public if item.get("alert") and item.get("key")]
+        raised = [key for key in bad if key not in self._net_bad]
+        self._net_bad = set(bad)
+        stamp = float(self.clock())
+        self._seq += 1
+        self._last_write = stamp
+        self._ever_enabled = True
+        language = resolve_language(self.state_dir, cfg["language"])
+        payload = {
+            "enabled": True,
+            "seq": self._seq,
+            "language": language,
+            "refresh_sec": cfg["refresh_sec"],
+            "updated_at": stamp,
+            "pc": self._last_pc,
+            "phones": [dict(item) for item in self._last_phones],
+            "network": public,
+            "raised": raised,
+            "cleared": [],
+            "strings": STRINGS,
+        }
+        if raised:
+            self.present(self.state_dir, payload)
+            return
+        _atomic_write(self.state_dir / SNAP_NAME, json.dumps(payload, ensure_ascii=False))
 
     def _public_items(self, problems: List[Tuple[str, str, str]], wall: Dict[str, str],
                       stamp: float) -> List[Dict[str, Any]]:
