@@ -1,5 +1,8 @@
 # 智拓群控节点更新日志
 
+## 0.3.17
+Facebook 的 `phone_like` 不再点坐标文件里的固定 `like_button`。现场（壁纸 09）帖子动作条只有图标和计数（`92k`、`1.5k`），没有 Like / Comment / Share 这几个字，旧坐标会点进帖子内容。节点对截图做三件事：可选文字（Like / Gusto / I-like / 赞，同一行还要有评论和分享）、打包进去的浅色/深色赞图标模板（多尺寸）、以及计数行下面那排 2–4 个均匀图标的最左一格。至少两个信号一致，或者模板分足够高，才点一下。点完再截图，图标或文字变成蓝色 / Liked 才算成功；对不上就 `not_verified`，不连点。划了默认 3 次（`like_swipes`，0–8）仍没有帖子是 `empty_feed`，调度可以拿去养号。`like_probe` 走原来的点赞任务（同样受远程操作开关限制），只打开、滑动、截图、定位，不点赞。`dry_run` 仍不碰手机，计划里的 `like_button` 标成 `like_button_deprecated`。模板和文字引擎都没有时拒绝，原因 `ocr_unavailable`，不会退回固定坐标。养号和看视频仍用原来的坐标。`feed_tab` 改为顶部 Home `[82, 124]`。受保护手机、直播机、频率限制和默认关闭都不变。文字引擎是可选的 rapidocr-onnxruntime（拉丁文和中文都能读，不依赖 Windows 语言包）；没装时模板和动作条仍然工作，打包也不失败。公开下载页的 latest 不因这一版改掉。
+
 ## 0.3.16
 `push_config` 可以写本机操作员告警：`operator_alert_enabled`（只有 JSON `true` 才打开）、`operator_alert_refresh_sec`、`operator_alert_language`（`zh` 或 `en`）、`operator_alert_fail_streak`、`wallpaper_map`。这些键写入 agent.json，下一次热加载或观察周期生效。未知键、类型不对、空补丁仍是 `not_supported_in_agent_v1`，不写文件。直播机在写入之前拒绝，告警保持关闭。回执带回开关和壁纸条数，不带回序列号，日志也不打序列号。只读任务 `operator_alert_diag` 返回开关、语言、刷新间隔，以及不能用的手机的壁纸编号和原因，不返回 adb 序列号。受保护手机和直播机判定不变。公开下载页的 latest 不因这一版改掉。
 

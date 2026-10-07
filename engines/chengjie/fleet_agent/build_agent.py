@@ -59,6 +59,32 @@ def ui_map_add_data() -> str:
     return f"{src}{os.pathsep}{UI_MAP_DEST}"
 
 
+def like_templates_add_data() -> str:
+    """Light/dark thumbs-up rasters. Same _MEIPASS dir as phone_ui_map.json."""
+    src = ENGINE / "src" / "fleet" / "like_templates"
+    if not src.is_dir() or not any(src.glob("like_*.png")):
+        raise SystemExit(f"missing like templates in {src}")
+    return f"{src}{os.pathsep}{UI_MAP_DEST}/like_templates"
+
+
+def ocr_collect_flags() -> list:
+    """Bundle rapidocr only when it is installed. The exe still builds without it.
+
+    Icon templates and the action-bar fallback do not need the package. Text
+    (Like / Gusto / 赞) is an optional signal. Windows.Media.Ocr is not used:
+    room PCs often lack the Tagalog and Chinese language packs.
+    """
+    flags = []
+    for mod in ("rapidocr_onnxruntime", "onnxruntime", "cv2"):
+        if importlib.util.find_spec(mod) is not None:
+            flags.extend(["--collect-all", mod])
+    if flags:
+        print("rapidocr stack found; PyInstaller will collect it (onefile grows by the wheel set)")
+    else:
+        print("rapidocr_onnxruntime not installed; Facebook like keeps templates, text signal omitted")
+    return flags
+
+
 def assert_phone_flows_startup() -> None:
     """Refuse to package an agent whose PhoneFlows constructor drops state_dir.
 
@@ -120,6 +146,8 @@ def main() -> int:
         cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
                "--name", NAME, "--paths", str(ENGINE), "--hidden-import", "yaml",
                "--add-data", ui_map_add_data(),
+               "--add-data", like_templates_add_data(),
+               *ocr_collect_flags(),
                "--distpath", str(DIST), "--workpath", str(HERE / "build"), "--specpath", str(HERE / "build"),
                str(HERE / "entry.py")]
         print("→", " ".join(cmd))

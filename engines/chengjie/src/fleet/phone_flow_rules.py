@@ -126,6 +126,19 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
         out["media_slot"] = _int_field(p, "media_slot", 0, MAX_MEDIA_SLOT, "bad_media_slot") if "media_slot" in p else 0
     elif flow == "like":
         out["scrolls"] = _int_field(p, "scrolls", 0, MAX_SCROLLS, "bad_scrolls") if "scrolls" in p else 0
+        # like_swipes / like_probe are the Facebook scan. Other apps keep the fixed coordinate.
+        if "like_swipes" in p:
+            if app != "facebook":
+                raise PhoneOpError("bad_like_swipes")
+            out["like_swipes"] = _int_field(p, "like_swipes", 0, MAX_SCROLLS, "bad_like_swipes")
+        if "like_probe" in p:
+            flag = p.get("like_probe")
+            if not isinstance(flag, bool):
+                raise PhoneOpError("bad_like_probe")
+            if flag and app != "facebook":
+                raise PhoneOpError("bad_like_probe")
+            if flag:
+                out["like_probe"] = True
     elif flow == "comment":
         out["text"] = _caption(p)
         out["scrolls"] = _int_field(p, "scrolls", 0, MAX_SCROLLS, "bad_scrolls") if "scrolls" in p else 0

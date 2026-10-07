@@ -269,6 +269,18 @@ def test_execute_each_app_and_flow(app, flow):
     ops, fake, slept = _ops()
     flows = PhoneFlows(enabled=True)
     status, result, detail = flows.execute(KIND[flow], dict(payload, evil="rm"), {"serial": "S1"}, ops=ops)
+    if app == "facebook" and flow == "like":
+        # Blank frames are not signed in, and the fixed like_button is not a tap target.
+        assert (status, detail) == (STATUS_FAILED, "app_not_ready"), detail
+        assert result["flow"] == "like"
+        ui_fb = bundled_ui_map()["apps"]["facebook"]["anchors"]
+        banned = []
+        for name in ("like_button", "feed_tab"):
+            ax, ay = ui_fb[name]
+            banned.append((str(min(W - 1, ax * W // 1000)), str(min(H - 1, ay * H // 1000))))
+        taps = [a for a in fake.actions() if len(a) > 4 and a[4] == "tap"]
+        assert taps and all((a[-2], a[-1]) not in banned for a in taps)
+        return
     assert (status, detail) == (STATUS_DONE, "ok"), (app, flow, detail)
     assert result["app"] == app and result["flow"] == flow
     assert result["steps"] == 1 + len(compiled)
@@ -345,23 +357,23 @@ def test_bad_map_and_unknown_anchor_do_not_touch_adb(tmp_path):
 
 def test_custom_map_file_changes_the_tap(tmp_path):
     src = json.loads((Path(__file__).resolve().parents[1] / "src" / "fleet" / "phone_ui_map.json").read_text(encoding="utf-8"))
-    src["apps"]["facebook"]["anchors"]["like_button"] = [10, 20]
+    src["apps"]["instagram"]["anchors"]["like_button"] = [10, 20]
     path = tmp_path / "ui.json"
     path.write_text(json.dumps(src), encoding="utf-8")
     ops, fake, _ = _ops()
     flows = PhoneFlows(enabled=True, ui_map_path=str(path))
-    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("instagram", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_DONE, "ok")
     taps = [a for a in fake.actions() if a[4:5] == ("tap",)]
     want_x = min(W - 1, 10 * W // 1000)
     want_y = min(H - 1, 20 * H // 1000)
     assert (taps[-1][-2], taps[-1][-1]) == (str(want_x), str(want_y))
-    src["apps"]["facebook"]["anchors"]["like_button"] = [30, 40]
+    src["apps"]["instagram"]["anchors"]["like_button"] = [30, 40]
     path.write_text(json.dumps(src), encoding="utf-8")
     # Same-length JSON can keep mtime_ns, and load_map would serve the cached map.
     bumped = time.time_ns() + 1_000_000
     os.utime(path, ns=(bumped, bumped))
-    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("instagram", "like"), {"serial": "S1"}, ops=ops)
     assert detail == "ok"
     taps = [a for a in fake.actions() if a[4:5] == ("tap",)]
     assert taps[-1][-2] == str(min(W - 1, 30 * W // 1000))
@@ -507,7 +519,7 @@ def test_ack_keeps_flow_summary_and_drops_text(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.16"
+    assert AGENT_VERSION == "0.3.17"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

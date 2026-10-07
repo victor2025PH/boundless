@@ -34,8 +34,8 @@ _B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _PNG_B64_PREFIX = "iVBORw0KGgo"
 _RESULT_INTS = ("width", "height", "device_width", "device_height", "scale", "x", "y", "x1", "y1", "x2", "y2",
                 "duration_ms", "bytes", "chars", "elapsed_ms", "steps", "failed_step", "completed_steps",
-                "scrolls", "likes", "watches", "dwells")
-_RESULT_STRS = ("serial", "key", "error", "stderr", "app", "flow")
+                "scrolls", "likes", "watches", "dwells", "like_x", "like_y", "swipes")
+_RESULT_STRS = ("serial", "key", "error", "stderr", "app", "flow", "like_label", "like_signals")
 
 
 class PhoneOpError(ValueError):
@@ -194,6 +194,10 @@ def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
         plan = _sanitize_plan(r.get("plan"))
         if plan is not None:
             out["plan"] = plan
+    if r.get("like_probe") is True:
+        out["like_probe"] = True
+    if r.get("like_button_deprecated") is True:
+        out["like_button_deprecated"] = True
     return out
 
 

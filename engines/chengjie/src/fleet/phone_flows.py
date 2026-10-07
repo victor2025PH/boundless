@@ -13,6 +13,13 @@ dry_run (or predict_only) JSON true compiles the UI map at 1000x1000 permille an
 returns the planned taps/text. It does not open an adb session, take a screenshot,
 or send input. A missing flag is real execution, and only when flows are enabled.
 
+Facebook ``phone_like`` does not tap the fixed ``like_button``. It screenshots,
+finds the Like control (text row, thumbs-up template, action-bar slot), and taps
+only when two signals agree or the template score is high. The fixed coordinate
+stays in the dry_run plan and is marked deprecated. Warmup and watch still use it.
+``like_probe`` launches and scrolls and does not tap Like. No posts after the
+swipe budget is ``empty_feed``.
+
 核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
 ``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
 """
@@ -618,8 +625,13 @@ class PhoneFlows:
 
     def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
-                 state_dir: Optional[Path] = None) -> None:
-        """``state_dir`` is the fleet state directory. NodeAgent always passes it."""
+                 state_dir: Optional[Path] = None, ocr: Any = _UNSET) -> None:
+        """``state_dir`` is the fleet state directory. NodeAgent always passes it.
+
+        ``ocr`` is an optional text reader ``(screencap bytes) -> boxes``. The
+        default tries the optional rapidocr package. ``False`` skips text.
+        Icon templates do not use this argument.
+        """
         self.enabled = False
         self.ui_map_path = ""
         self.state_dir: Optional[Path] = None
@@ -628,8 +640,11 @@ class PhoneFlows:
         self._verify: Any = None
         self._jitter: Any = None
         self._rng = random.random
+        self._ocr = None
         self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify,
                        jitter_ms=jitter_ms, rng=rng, state_dir=state_dir)
+        if ocr is not _UNSET:
+            self._ocr = ocr
 
     @classmethod
     def from_agent_settings(cls, settings: Dict[str, Any], ops: Any = None) -> "PhoneFlows":
@@ -741,6 +756,131 @@ class PhoneFlows:
             err.stderr = f"probe:{probe_name}"[:160]  # type: ignore[attr-defined]
             raise err
 
+    def _text_boxes(self, raw: bytes) -> List[Dict[str, Any]]:
+        from .like_locate import normalize_ocr_boxes, read_text_boxes
+
+        reader = self._ocr
+        if reader is False:
+            return []
+        if callable(reader):
+            try:
+                return normalize_ocr_boxes(reader(raw))
+            except Exception:
+                return []
+        return read_text_boxes(raw)
+
+    def _vision_ready(self) -> bool:
+        from .like_locate import vision_stack_ready
+
+        return vision_stack_ready(ocr=self._ocr)
+
+    def _execute_facebook_like(self, serial: str, p: Dict[str, Any], ui: Dict[str, Any],
+                               ops: Any) -> Tuple[str, Dict[str, Any], str]:
+        """Launch Facebook, scroll the feed, tap Like only when the locator is sure.
+
+        Login uses the existing feed_tab color probe. A miss is not retried.
+        ``like_probe`` returns the row and does not tap it.
+        """
+        from .like_locate import DEFAULT_LIKE_SWIPES, like_state_changed, locate_like_row
+
+        if not self._vision_ready():
+            return STATUS_REJECTED, _result(serial, "facebook", "like"), "ocr_unavailable"
+        spec = ui["apps"]["facebook"]
+        anchors = spec["anchors"]
+        probes = spec.get("probes") or {}
+        overrides = p.get("anchors") or {}
+        budget = DEFAULT_LIKE_SWIPES
+        if isinstance(p.get("like_swipes"), int) and not isinstance(p.get("like_swipes"), bool):
+            budget = int(p["like_swipes"])
+        probe = p.get("like_probe") is True
+        swipe = next((step for step in spec["flows"]["like"] if step.get("op") == "swipe"), None)
+        dur = int(swipe.get("duration_ms", 350)) if isinstance(swipe, dict) else 350
+        src_name = str(swipe.get("from") if isinstance(swipe, dict) else "") or "feed_swipe_from"
+        dst_name = str(swipe.get("to") if isinstance(swipe, dict) else "") or "feed_swipe_to"
+        t0 = ops._clock()
+        swipes = 0
+        width: Optional[int] = None
+        height: Optional[int] = None
+        try:
+            with ops.session(serial) as run:
+                shot = run(TASK_PHONE_SCREENSHOT, {})
+                width, height = shot.get("device_width"), shot.get("device_height")
+                if (isinstance(width, bool) or not isinstance(width, int)
+                        or isinstance(height, bool) or not isinstance(height, int)):
+                    return STATUS_FAILED, _result(serial, "facebook", "like", completed=1), "screencap_bad_frame"
+                run(TASK_PHONE_KEY, {"key": "home"})
+                ax, ay = _point("app_icon", anchors, overrides, width, height)
+                run(TASK_PHONE_TAP, {"x": ax, "y": ay})
+                run(TASK_PHONE_SCREENSHOT, {})
+                raw = ops.last_raw(serial)
+                if self._probe_hit(raw, probes.get("login_wall"), anchors, overrides, width, height):
+                    err = PhoneOpError("not_logged_in", failed=True)
+                    err.stderr = "probe:login_wall"  # type: ignore[attr-defined]
+                    raise err
+                if not self._probe_hit(raw, probes.get("logged_in"), anchors, overrides, width, height):
+                    err = PhoneOpError("app_not_ready", failed=True)
+                    err.stderr = "probe:logged_in"  # type: ignore[attr-defined]
+                    raise err
+                fx, fy = _point("feed_tab", anchors, overrides, width, height)
+                run(TASK_PHONE_TAP, {"x": fx, "y": fy})
+                found = None
+                saw_post = False
+                boxes: List[Dict[str, Any]] = []
+                for attempt in range(budget + 1):
+                    run(TASK_PHONE_SCREENSHOT, {})
+                    raw = ops.last_raw(serial)
+                    boxes = self._text_boxes(raw)
+                    loc = locate_like_row(raw, boxes)
+                    if loc.get("post"):
+                        saw_post = True
+                    if loc.get("target"):
+                        found = loc["target"]
+                        break
+                    if attempt < budget:
+                        x1, y1 = _point(src_name, anchors, overrides, width, height)
+                        x2, y2 = _point(dst_name, anchors, overrides, width, height)
+                        run(TASK_PHONE_SWIPE, {
+                            "x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": dur,
+                        })
+                        swipes += 1
+                base: Dict[str, Any] = {
+                    "serial": serial, "app": "facebook", "flow": "like", "swipes": swipes,
+                    "device_width": width, "device_height": height,
+                }
+                if probe:
+                    base["like_probe"] = True
+                if found is None:
+                    return STATUS_FAILED, base, "empty_feed" if not saw_post else "like_row_not_found"
+                base["like_x"] = int(found["x"])
+                base["like_y"] = int(found["y"])
+                base["like_signals"] = str(found.get("signals") or "")
+                label = str(found.get("label") or "")
+                if label:
+                    base["like_label"] = label[:32]
+                if probe:
+                    base["elapsed_ms"] = int(max(0.0, ops._clock() - t0) * 1000)
+                    return STATUS_DONE, base, "like_probe"
+                tx, ty = _px(int(found["x"]), width), _px(int(found["y"]), height)
+                before = raw
+                before_boxes = boxes
+                run(TASK_PHONE_TAP, {"x": tx, "y": ty})
+                run(TASK_PHONE_SCREENSHOT, {})
+                after = ops.last_raw(serial)
+                if not like_state_changed(before, after, tx, ty, before_boxes, self._text_boxes(after)):
+                    return STATUS_FAILED, base, "not_verified"
+                base["elapsed_ms"] = int(max(0.0, ops._clock() - t0) * 1000)
+                return STATUS_DONE, base, "ok"
+        except PhoneOpError as e:
+            res = _result(serial, "facebook", "like", width=width, height=height, err=e)
+            res["swipes"] = swipes
+            return _status(e), res, e.code
+        except subprocess.TimeoutExpired:
+            return STATUS_FAILED, _result(serial, "facebook", "like", width=width, height=height), "adb_timeout"
+        except Exception as e:  # noqa: BLE001 - never raise into the agent loop
+            return STATUS_FAILED, _result(
+                serial, "facebook", "like", width=width, height=height,
+            ), f"error:{type(e).__name__}"
+
     def execute(self, kind: str, payload: Any, target: Any, ops: Any = None) -> Tuple[str, Dict[str, Any], str]:
         ops = self.ops if ops is None else ops
         if kind not in PHONE_FLOW_KINDS and kind not in PHONE_SESSION_KINDS:
@@ -778,10 +918,15 @@ class PhoneFlows:
             if len(steps) > _PLAN_MAX_STEPS:
                 return STATUS_REJECTED, _result(serial, app, flow), "plan_too_long"
             plan = [_plan_step(sk, sp) for sk, sp in steps]
-            return STATUS_DONE, {
+            body: Dict[str, Any] = {
                 "serial": serial, "app": app, "flow": flow, "dry_run": True, "space": "permille",
                 "steps": len(plan), "plan": plan,
-            }, "dry_run"
+            }
+            if app == "facebook" and flow == "like":
+                body["like_button_deprecated"] = True
+            return STATUS_DONE, body, "dry_run"
+        if app == "facebook" and flow == "like":
+            return self._execute_facebook_like(serial, p, ui, ops)
         prog: Dict[str, Any] = {"done": 0, "step": None, "w": None, "h": None}
         t0 = ops._clock()
         chars = 0
