@@ -186,7 +186,7 @@ def test_predict_only_normalizes_and_absent_flag_still_injects():
     omitted = validate_flow_payload(TASK_PHONE_LIKE, {"app": "facebook", "dry_run": False, "predict_only": False})
     assert omitted == {"app": "facebook", "scrolls": 0}
     real_ops, real_fake, real_slept = _ops()
-    status, result, detail = flows.execute(TASK_PHONE_LIKE, {"app": "facebook"}, {"serial": "S1"}, ops=real_ops)
+    status, result, detail = flows.execute(TASK_PHONE_LIKE, {"app": "tiktok"}, {"serial": "S1"}, ops=real_ops)
     assert (status, detail) == (STATUS_DONE, "ok")
     assert result.get("dry_run") is not True
     assert any(args[2:4] == ("shell", "input") for args in real_fake.actions())

@@ -14,6 +14,7 @@
     loop: heartbeat（本机实例摘要 + 本机 adb 手机清点 phones，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
     0.3.15 本机操作员告警（默认关）：手机不能干活或本机 adb 异常时，只在这台电脑上弹窗，不进心跳。
     0.3.16 push_config 可以写 operator_alert_* / wallpaper_map（直播机仍拒绝，告警保持关闭）。
+    0.3.17 Facebook 点赞在截图上找赞（模板 + 动作条 + 可选文字），不再点固定 like_button。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -91,7 +92,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.16"
+AGENT_VERSION = "0.3.17"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).

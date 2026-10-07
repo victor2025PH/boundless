@@ -24,9 +24,9 @@ _LOGGED = (24, 119, 242)
 _WALL = (66, 103, 178)
 
 
-def _px(anchor):
+def _px(anchor, app="facebook"):
     ui = bundled_ui_map()
-    ax, ay = ui["apps"]["facebook"]["anchors"][anchor]
+    ax, ay = ui["apps"][app]["anchors"][anchor]
     return ax * W // 1000, ay * H // 1000
 
 
@@ -86,8 +86,8 @@ def test_bundled_robust_defaults_and_step_marks():
 
 def test_default_execute_matches_the_old_action_and_sleep_contract():
     ui = bundled_ui_map()
-    payload = {"app": "facebook", "scrolls": 0}
-    compiled = compile_flow("facebook", "like", payload, W, H, ui)
+    payload = {"app": "tiktok", "scrolls": 0}
+    compiled = compile_flow("tiktok", "like", payload, W, H, ui)
 
     def boom():
         raise AssertionError("rng called")
@@ -104,8 +104,8 @@ def test_default_execute_matches_the_old_action_and_sleep_contract():
 
 def test_fixed_jitter_is_added_on_top_of_the_minimum_gap():
     ui = bundled_ui_map()
-    payload = {"app": "facebook", "scrolls": 0}
-    compiled = compile_flow("facebook", "like", payload, W, H, ui)
+    payload = {"app": "tiktok", "scrolls": 0}
+    compiled = compile_flow("tiktok", "like", payload, W, H, ui)
     ops, fake, slept = _ops()
     flows = PhoneFlows(enabled=True, jitter_ms=(100, 100))
     status, _res, detail = flows.execute("phone_like", payload, {"serial": "S1"}, ops=ops)
@@ -133,17 +133,17 @@ def test_jitter_clamp_and_illformed_override():
 
 
 def test_verify_identical_frames_stop_at_the_app_icon():
-    icon = tuple(str(v) for v in _px("app_icon"))
-    feed = tuple(str(v) for v in _px("feed_tab"))
+    icon = tuple(str(v) for v in _px("app_icon", "tiktok"))
+    home = tuple(str(v) for v in _px("home_tab", "tiktok"))
     ops, fake, _ = _ops()
     flows = PhoneFlows(enabled=True, verify=True)
-    status, result, detail = flows.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, result, detail = flows.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_FAILED, "screen_not_reached")
     assert result["failed_step"] == 1 and result["completed_steps"] == result["failed_step"] + 1
     assert result["stderr"] == "anchor:app_icon"
     taps = _taps(fake.actions())
     assert len(taps) == 3 and all((a[-2], a[-1]) == icon for a in taps)
-    assert all((a[-2], a[-1]) != feed for a in taps)
+    assert all((a[-2], a[-1]) != home for a in taps)
     assert len(_shots(fake.actions())) == 4
 
 
@@ -151,21 +151,21 @@ def test_unchanged_screen_wins_over_the_login_wall():
     wall = _paint(7, [(*_px("login_mark"), _WALL)])
     ops, _fake, _ = _ops(adb=IndexAdb(lambda _i: wall))
     flows = PhoneFlows(enabled=True, verify=True)
-    status, result, detail = flows.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, result, detail = flows.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_FAILED, "screen_not_reached")
     assert result["stderr"] == "anchor:app_icon"
 
 
 def test_verify_success_when_the_screen_changes_and_the_app_is_signed_in():
-    mark = (*_px("feed_tab"), _LOGGED)
+    mark = (*_px("home_tab", "tiktok"), _LOGGED)
 
     def builder(i):
         return _paint(50 + i, [mark])
 
     ui = bundled_ui_map()
-    payload = {"app": "facebook", "scrolls": 0}
-    compiled = compile_flow("facebook", "like", payload, W, H, ui)
-    _steps, checks = compile_flow_checked("facebook", "like", payload, W, H, ui)
+    payload = {"app": "tiktok", "scrolls": 0}
+    compiled = compile_flow("tiktok", "like", payload, W, H, ui)
+    _steps, checks = compile_flow_checked("tiktok", "like", payload, W, H, ui)
     ops, fake, _ = _ops(adb=IndexAdb(builder))
     flows = PhoneFlows(enabled=True, verify=True)
     status, result, detail = flows.execute("phone_like", payload, {"serial": "S1"}, ops=ops)
@@ -190,7 +190,7 @@ def test_not_logged_in_stops_before_later_taps():
 def test_app_not_ready_when_neither_probe_matches():
     ops, fake, _ = _ops(adb=IndexAdb(lambda i: _paint(40 + i, [])))
     flows = PhoneFlows(enabled=True, verify=True)
-    status, result, detail = flows.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, result, detail = flows.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_FAILED, "app_not_ready")
     assert result["stderr"] == "probe:logged_in"
     assert result["failed_step"] == 1
@@ -201,11 +201,11 @@ def test_anchor_mismatch_after_preflight_passes(tmp_path):
     def mutate(raw):
         raw["robust"]["verify"] = True
         raw["robust"]["retries"] = 0
-        raw["apps"]["facebook"]["flows"]["like"][2]["expect"] = {"change": True, "probe": "logged_in"}
+        raw["apps"]["tiktok"]["flows"]["like"][2]["expect"] = {"change": True, "probe": "logged_in"}
 
     path = _write_map(tmp_path, mutate)
-    mark = (*_px("feed_tab"), _LOGGED)
-    like = tuple(str(v) for v in _px("like_button"))
+    mark = (*_px("home_tab", "tiktok"), _LOGGED)
+    like = tuple(str(v) for v in _px("like_button", "tiktok"))
 
     def builder(i):
         if i <= 1:
@@ -214,7 +214,7 @@ def test_anchor_mismatch_after_preflight_passes(tmp_path):
 
     ops, fake, _ = _ops(adb=IndexAdb(builder))
     flows = PhoneFlows(enabled=True, verify=True, ui_map_path=str(path))
-    status, result, detail = flows.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, result, detail = flows.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_FAILED, "anchor_mismatch")
     assert result["failed_step"] == 2 and result["completed_steps"] == 3
     assert result["stderr"] == "probe:logged_in"
@@ -222,7 +222,7 @@ def test_anchor_mismatch_after_preflight_passes(tmp_path):
 
 
 def test_retry_then_success_and_retry_budget(tmp_path):
-    mark = (*_px("feed_tab"), _LOGGED)
+    mark = (*_px("home_tab", "tiktok"), _LOGGED)
 
     def builder(i):
         if i < 3:
@@ -231,9 +231,9 @@ def test_retry_then_success_and_retry_budget(tmp_path):
 
     ops, fake, _ = _ops(adb=IndexAdb(builder))
     flows = PhoneFlows(enabled=True, verify=True)
-    status, _res, detail = flows.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, _res, detail = flows.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_DONE, "ok"), detail
-    icon = tuple(str(v) for v in _px("app_icon"))
+    icon = tuple(str(v) for v in _px("app_icon", "tiktok"))
     assert sum(1 for a in _taps(fake.actions()) if (a[-2], a[-1]) == icon) == 3
 
     def one(raw):
@@ -242,7 +242,7 @@ def test_retry_then_success_and_retry_budget(tmp_path):
     path = _write_map(tmp_path, one)
     ops2, fake2, _ = _ops()
     flows2 = PhoneFlows(enabled=True, verify=True, ui_map_path=str(path))
-    status, result, detail = flows2.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops2)
+    status, result, detail = flows2.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops2)
     assert (status, detail) == (STATUS_FAILED, "screen_not_reached")
     assert len(_taps(fake2.actions())) == 2
     assert result["failed_step"] == 1
@@ -294,19 +294,19 @@ def test_agent_knobs_and_map_override(tmp_path):
     path = _write_map(tmp_path, turn_on)
     ops, fake, _slept = _ops()
     off = PhoneFlows(enabled=True, verify=False, ui_map_path=str(path))
-    status, _res, detail = off.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, _res, detail = off.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_DONE, "ok")
     assert len(_shots(fake.actions())) == 1
     follow_ops, _follow_fake, _ = _ops()
     follow = PhoneFlows(enabled=True, ui_map_path=str(path))
-    status, result, detail = follow.execute("phone_like", _body("facebook", "like"), {"serial": "S1"}, ops=follow_ops)
+    status, result, detail = follow.execute("phone_like", _body("tiktok", "like"), {"serial": "S1"}, ops=follow_ops)
     assert (status, detail) == (STATUS_FAILED, "screen_not_reached")
     assert result["stderr"] == "anchor:app_icon"
     settings = _phone_flows_settings({"phone_flows_enabled": True, "phone_flow_jitter_ms": "fast"})
     quiet, _fake, slept = _ops()
     flows = PhoneFlows(enabled=True, **{k: settings[k] for k in ("verify", "jitter_ms")})
-    payload = {"app": "facebook", "scrolls": 0}
-    compiled = compile_flow("facebook", "like", payload, W, H, bundled_ui_map())
+    payload = {"app": "tiktok", "scrolls": 0}
+    compiled = compile_flow("tiktok", "like", payload, W, H, bundled_ui_map())
     assert flows.execute("phone_like", payload, {"serial": "S1"}, ops=quiet)[0] == STATUS_DONE
     assert slept == [MIN_INTERVAL_SEC] * len(compiled)
 
@@ -331,7 +331,7 @@ def test_caps_coexist_on_one_agent(tmp_path, monkeypatch):
     })
     ag = agent_mod.NodeAgent(cfg, http=lambda *_a, **_k: (200, {}), app_version="t")
     hb = ag.build_heartbeat()
-    assert AGENT_VERSION == "0.3.16"
+    assert AGENT_VERSION == "0.3.17"
     assert hb["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2]
     assert ag.phones.manage_server is True and ag.phone_ops.manage_server is True
     assert ag.phone_flows.enabled is True and ag.phone_flows._verify is True

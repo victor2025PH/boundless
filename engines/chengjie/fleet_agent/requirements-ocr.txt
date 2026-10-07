@@ -1,0 +1,12 @@
+# Optional text signal for Facebook phone_like (chatx-agent 0.3.17).
+# Not installed by the default agent build or by CI. PyInstaller collects the
+# stack only when this import is already present, and the onefile still builds
+# without it.
+#
+# rapidocr-onnxruntime (PP-OCRv4) reads Latin and CJK, so Like / Gusto / I-like /
+# 赞 and Comment / Komento / 评论 and Share / Ibahagi / 分享 do not need a Windows
+# OCR language pack. Windows.Media.Ocr is intentionally not used.
+#
+# Wallpaper 09 has no Like/Comment/Share words (icons and counts only). The
+# bundled thumbs-up templates and the action-bar fallback do not need this file.
+rapidocr-onnxruntime>=1.3.24,<2
