@@ -1,5 +1,17 @@
 # 智拓群控节点更新日志
 
+## 0.3.19
+Facebook 的发帖、点赞、评论、关注按账号限速，避免一个号在短时间里点太多而被停用。上限在 `config/compliance.yaml` 的 `facebook` 段，缺文件时用同一组内置默认值：赞每小时 6、每天 40；评论和关注每小时 3、每天 15；发帖每小时 1、每天 4。同一账号两次动作至少间隔 60 秒，再加 0–20 秒的固定间隔（由账号和上一次时间算出来，用来把动作摊开，不是用来躲检测）。本地时间按菲律宾 UTC+8，只在 8 点到 22 点之间执行（22 点整不算）。`enabled: false` 是总开关，关掉后这些动作都不再下发。超出上限是 `rate_capped`，不在时段是 `outside_active_hours`，间隔不够是 `min_delay`，总开关关掉是 `compliance_disabled`。主控直接 409，不入队。`like_probe` 和 `dry_run` 只定位或只出计划，不计数、不受这些上限。远程操作开关仍优先：没开还是 `remote_ops_disabled`。计数写在主控库，按节点 + 账号（没有账号就用壁纸号，再没有用序列号）。`GET /api/fleet/social-pace` 和总览里的 `social_pace` 能看到今天相对上限做了多少。节点执行前再查一次本机账本。养号和看视频里的赞还不计。控制台页面还没画这张表。这一版同时带上只读 `net_health`、分组 adb 白名单，以及只有图标的 Facebook 赞定位（见下面 0.3.18 两条，能力都在这个金丝雀里）。公开下载页的 latest 不因这一版改掉。
+
+## 0.3.18
+只读任务 `net_health`：对每台 `state=device` 的手机报告能不能上网（generate_204，失败再 ping / DNS）、当前是 WiFi 还是移动数据、SIM 和信号、飞行模式、移动数据开关、移动流量计数，以及 Facebook 是否安装、前台是不是登录页。手机按壁纸编号显示。本机告警窗口在壁纸号后面加一行，例如 `07 号：网络✓ wifi`、`网络✗ 无流量`、`移动数据弱信号`、`Facebook未安装`、`Facebook未登录`。命令被拒绝或本机没有该命令时，对应字段是 `unavailable`，任务继续，不把整单打成失败。
+
+Android 没有稳定的 adb 接口能读运营商剩余流量或话费。这个字段默认是 `available: false`，说明是 `carrier-specific, not available by default`。只有 agent.json 里 `net_health_ussd_enabled` 为 JSON `true` 且该壁纸号配了 `*数字#` 时，才会试一次 USSD，并标明实验性；拨号不在默认允许的命令里，配置关掉时不会拨。`foreground_facebook: true` 才会用 `am start` 把 Facebook 拉到前台，默认不拉。
+
+adb 白名单在 `adb_allowlist.py`，按类分开：只读诊断、仅限 Facebook 的启动、以及默认关闭的写入（改设置、开关流量、重启、卸载、force-stop）。写入要调用方显式带 `allow_guarded_writes`，没有群控任务会带这个标志。只读诊断里多一条 `shell uiautomator dump /dev/tty`（不写到手机存储）；写到文件的 dump 仍拒绝。公开下载页的 latest 不因这一版改掉。
+
+Facebook 点赞在只有图标的动作条上也能找到赞。现在的帖子底下是反应 / 评论 / 分享图标，加上 `92k`、`1.5k` 这种计数，没有 Like / Comment / Share 这几个字。节点不装 rapidocr 也能定位：评论输入条上方那排 3–4 个均匀图标的最左格，加上赞的轮廓或实心模板（浅色/深色，多尺寸），或者拇指轮廓。仍然要两个信号一致，或者模板分足够高，才点一下；点完仍要变蓝或变成 Liked，否则 `not_verified`。只有一个弱信号不点。打开 Facebook 不再只在 0.5 秒时看一次顶部蓝色 Home：会轮询大约 9 秒。前一次滑动把顶栏藏起来时，这段时间里向上滑，把顶栏带回来。确认已在信息流之后，先滑回顶部并停 3 秒，再找动作条。找赞时先做一次只读的 `uiautomator dump /dev/tty`：无障碍标签是 Like / 赞 / いいね / React（和 huoke 同一套排除，已赞、评论、分享、reactions 计数都不算），再要赞的模板在同一位置对上，才算两个信号。dump 失败或这台机读不到层次时，退回截图上的动作条结构加模板或拇指轮廓。`like_probe` 同样如此，只是不点赞。文字引擎仍是可选的，默认安装包不带 rapidocr / onnx / opencv。公开下载页的 latest 不因这一版改掉。
+
 ## 0.3.17
 Facebook 的 `phone_like` 不再点坐标文件里的固定 `like_button`。现场（壁纸 09）帖子动作条只有图标和计数（`92k`、`1.5k`），没有 Like / Comment / Share 这几个字，旧坐标会点进帖子内容。节点对截图做三件事：可选文字（Like / Gusto / I-like / 赞，同一行还要有评论和分享）、打包进去的浅色/深色赞图标模板（多尺寸）、以及计数行下面那排 2–4 个均匀图标的最左一格。至少两个信号一致，或者模板分足够高，才点一下。点完再截图，图标或文字变成蓝色 / Liked 才算成功；对不上就 `not_verified`，不连点。划了默认 3 次（`like_swipes`，0–8）仍没有帖子是 `empty_feed`，调度可以拿去养号。`like_probe` 走原来的点赞任务（同样受远程操作开关限制），只打开、滑动、截图、定位，不点赞。`dry_run` 仍不碰手机，计划里的 `like_button` 标成 `like_button_deprecated`。模板和文字引擎都没有时拒绝，原因 `ocr_unavailable`，不会退回固定坐标。养号和看视频仍用原来的坐标。`feed_tab` 改为顶部 Home `[82, 124]`。受保护手机、直播机、频率限制和默认关闭都不变。文字引擎是可选的 rapidocr-onnxruntime（拉丁文和中文都能读，不依赖 Windows 语言包）；没装时模板和动作条仍然工作，打包也不失败。公开下载页的 latest 不因这一版改掉。
 

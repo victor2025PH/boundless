@@ -23,6 +23,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .detect import sanitize_instances
+from . import social_pace
+from .social_pace import (
+    ACTION_BY_KIND, ACTIONS, FacebookPace, account_key, counts, decide, load_facebook_policy,
+)
 from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
@@ -163,6 +167,19 @@ CREATE TABLE IF NOT EXISTS enroll_attempts (
     ts         REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_enroll_attempts ON enroll_attempts(kind, ts);
+CREATE TABLE IF NOT EXISTS social_pace_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id      TEXT NOT NULL,
+    app          TEXT NOT NULL,
+    account_key  TEXT NOT NULL,
+    serial       TEXT NOT NULL DEFAULT '',
+    wallpaper    TEXT NOT NULL DEFAULT '',
+    account      TEXT NOT NULL DEFAULT '',
+    action       TEXT NOT NULL,
+    ts           REAL NOT NULL,
+    task_id      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_pace_acct ON social_pace_events(account_key, ts);
 """
 
 
@@ -264,7 +281,8 @@ def _dumps(d: Any) -> str:
 
 
 class FleetStore:
-    def __init__(self, db_path: Any, *, offline_after_sec: int = DEFAULT_OFFLINE_AFTER_SEC) -> None:
+    def __init__(self, db_path: Any, *, offline_after_sec: int = DEFAULT_OFFLINE_AFTER_SEC,
+                 pace_policy: Optional[FacebookPace] = None) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.offline_after_sec = max(15, int(offline_after_sec or DEFAULT_OFFLINE_AFTER_SEC))
@@ -281,6 +299,8 @@ class FleetStore:
         self.prune_every_sec = PRUNE_EVERY_SEC
         self._last_prune = 0.0
         self._lock = threading.RLock()
+        self._pace_local = threading.local()
+        self.pace_policy = pace_policy if isinstance(pace_policy, FacebookPace) else load_facebook_policy()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
@@ -938,14 +958,27 @@ class FleetStore:
             self._conn.commit()
         return True
 
+    def take_social_pace_refusal(self) -> str:
+        """Reason from the last ``enqueue`` on this thread, or "" if it was not a pace skip."""
+        reason = str(getattr(self._pace_local, "reason", "") or "")
+        self._pace_local.reason = ""
+        return reason
+
     def enqueue(self, node_id: str, kind: str, *, payload: Optional[Dict[str, Any]] = None,
                 target: Optional[Dict[str, Any]] = None, ttl_sec: Any = DEFAULT_TASK_TTL_SEC,
                 created_by: str = "", now: Optional[float] = None) -> Optional[Dict[str, Any]]:
-        """给节点下任务。节点不存在 / 已吊销 / kind 非法 → None。stop_account 入队时作废同号未领的其它任务。"""
+        """给节点下任务。节点不存在 / 已吊销 / kind 非法 → None。stop_account 入队时作废同号未领的其它任务。
+
+        Facebook like/comment/follow/post are reserved here, after the remote-ops
+        check. A skip leaves no task; ``take_social_pace_refusal`` returns the reason.
+        ``like_probe`` and ``dry_run`` are not reserved.
+        """
+        self._pace_local.reason = ""
         kind = str(kind or "").strip().lower()
         if kind not in TASK_KINDS:
             return None
         ts = float(now if now is not None else time.time())
+        pace_ts = float(now if now is not None else social_pace.clock())
         ttl = clamp_ttl(ttl_sec)
         with self._lock:
             node = self._conn.execute("SELECT status, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
@@ -958,13 +991,18 @@ class FleetStore:
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
+            tid = f"t_{uuid.uuid4().hex[:16]}"
+            pace_reason = self._reserve_social_pace_locked(
+                str(node_id), kind, payload, target, pace_ts, tid)
+            if pace_reason:
+                self._pace_local.reason = pace_reason
+                return None
             if kind == TASK_STOP_ACCOUNT and target.get("phone"):
                 self._conn.execute(
                     "UPDATE node_tasks SET status=?, detail='superseded_by_stop', acked_at=? "
                     "WHERE node_id=? AND status=? AND kind<>? AND json_extract(target_json, '$.phone')=?",
                     (STATUS_CANCELLED, ts, str(node_id), STATUS_QUEUED, TASK_STOP_ACCOUNT, str(target["phone"])),
                 )
-            tid = f"t_{uuid.uuid4().hex[:16]}"
             self._conn.execute(
                 "INSERT INTO node_tasks(task_id, node_id, kind, target_json, payload_json, priority, status, ttl_sec, "
                 "created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -974,6 +1012,94 @@ class FleetStore:
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM node_tasks WHERE task_id=?", (tid,)).fetchone()
         return self._task_record(row)
+
+    def _reserve_social_pace_locked(self, node_id: str, kind: str, payload: Dict[str, Any],
+                                    target: Dict[str, Any], ts: float, task_id: str) -> str:
+        """Caller holds ``_lock``. Insert a counted event when the action may run.
+
+        Returns a skip reason, or "" when the enqueue may continue. Remote-ops
+        and capability checks have already passed. Probe and dry-run do not insert.
+        """
+        action = ACTION_BY_KIND.get(kind, "")
+        app = str(payload.get("app") or "").strip().lower()
+        if not action or app != "facebook":
+            return ""
+        if payload.get("like_probe") is True or payload.get("dry_run") is True:
+            return ""
+        serial = str(target.get("serial") or payload.get("serial") or "")
+        account = str(target.get("account") or payload.get("account") or "")
+        wallpaper = str(target.get("wallpaper") or target.get("wallpaper_no")
+                        or payload.get("wallpaper") or payload.get("wallpaper_no") or "")
+        key = account_key(node_id, app, serial, account, wallpaper)
+        rows = self._conn.execute(
+            "SELECT action, ts FROM social_pace_events WHERE account_key=? AND ts>=?",
+            (key, ts - 3 * 86400),
+        ).fetchall()
+        events = [(str(r["action"]), float(r["ts"])) for r in rows]
+        policy = self.pace_policy
+        decision = decide(policy, app=app, action=action, events=events, now=ts, account_key=key)
+        if not decision.allow:
+            return decision.reason
+        if not decision.counted:
+            return ""
+        self._conn.execute(
+            "INSERT INTO social_pace_events(node_id, app, account_key, serial, wallpaper, account, action, ts, task_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (node_id, app, key, serial[:80], wallpaper.strip()[:16], account[:80], action, ts, task_id),
+        )
+        self._conn.execute("DELETE FROM social_pace_events WHERE ts<?", (ts - 3 * 86400,))
+        return ""
+
+    def social_pace_usage(self, *, node_id: str = "", now: Optional[float] = None) -> Dict[str, Any]:
+        """Today's counted Facebook actions per account, next to the configured caps.
+
+        The console does not render this yet. Callers (and ``overview``) can read it.
+        """
+        ts = float(now if now is not None else social_pace.clock())
+        policy = self.pace_policy
+        sql = "SELECT * FROM social_pace_events WHERE ts>=?"
+        args: List[Any] = [ts - 3 * 86400]
+        if node_id:
+            sql += " AND node_id=?"
+            args.append(str(node_id))
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, args).fetchall()
+        grouped: Dict[str, List[sqlite3.Row]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["account_key"]), []).append(row)
+        today = []
+        actions_today = 0
+        for key, items in grouped.items():
+            latest = items[-1]
+            ev = [(str(r["action"]), float(r["ts"])) for r in items]
+            actions: Dict[str, Any] = {}
+            account_today = 0
+            for name in ACTIONS:
+                hour_n, day_n = counts(ev, name, ts, policy.tz_offset_hours)
+                actions[name] = {
+                    "hour": hour_n, "day": day_n,
+                    "hour_cap": policy.hourly[name], "day_cap": policy.daily[name],
+                }
+                account_today += day_n
+            if account_today <= 0 and not any(actions[n]["hour"] for n in ACTIONS):
+                continue
+            actions_today += account_today
+            today.append({
+                "node_id": latest["node_id"],
+                "account_key": key,
+                "serial": latest["serial"],
+                "wallpaper": latest["wallpaper"],
+                "account": latest["account"],
+                "actions": actions,
+            })
+        today.sort(key=lambda row: (row["node_id"], row["account_key"]))
+        return {
+            "generated_at": ts,
+            "policy": policy.public(),
+            "accounts": today,
+            "actions_today": actions_today,
+        }
 
     def _expire_locked(self, ts: float) -> None:
         self._conn.execute("UPDATE node_tasks SET status=?, detail='ttl_expired', acked_at=? WHERE status=? AND expires_at<?",
@@ -1150,6 +1276,7 @@ class FleetStore:
             "open_enroll_codes": len(self.list_enroll_codes(now=ts)),
             "pending_enrollments": len(self.list_pending(now=ts)),
             "offline_after_sec": self.offline_after_sec,
+            "social_pace": self.social_pace_usage(now=ts),
         }
 
     # ── 形状 ──────────────────────────────────────────────────────────────

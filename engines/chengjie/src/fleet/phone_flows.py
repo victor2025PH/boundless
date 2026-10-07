@@ -20,6 +20,19 @@ stays in the dry_run plan and is marked deprecated. Warmup and watch still use i
 ``like_probe`` launches and scrolls and does not tap Like. No posts after the
 swipe budget is ``empty_feed``.
 
+Opening Facebook polls the feed for up to 9 seconds. One check at 0.5 seconds
+is not enough: the app is still drawing, and a previous scroll hides the top
+tab bar so the blue Home pixel is missing. If that pixel is still missing
+after a few seconds, the flow scrolls up to bring the bar back, still inside
+the same 9 seconds. Once the feed is up, it scrolls to the top and waits 3
+seconds before looking for the action bar.
+
+Counted Facebook like / comment / follow / post pass through ``social_pace``
+before any tap. Over the per-account cap, outside local active hours, inside
+the minimum gap, or with the kill switch off, the action is rejected and adb
+is not opened. ``like_probe`` and ``dry_run`` are not counted. Instagram and
+TikTok are unchanged. Warmup and watch are unchanged.
+
 核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
 ``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
 """
@@ -38,6 +51,7 @@ from .phone_flow_robust import (
     probe_matches, resolve_policy,
 )
 from .phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
+from .social_pace import PaceLedger
 from .phone_rules import KEYCODES, SWIPE_MS_MAX, SWIPE_MS_MIN, PhoneOpError, check_target
 from .phones import is_excluded
 from .protocol import (
@@ -64,6 +78,13 @@ _PLAN_MAX_STEPS = 128
 _NAME_RE_SRC = r"^[a-z][a-z0-9_]{0,31}$"
 _UNSET = object()
 _CHECK_FAILS = ("screen_not_reached", "not_logged_in", "app_not_ready", "anchor_mismatch", "thread_not_open")
+# Facebook hides the top tab bar after a scroll, so the blue Home pixel is
+# gone and a single 0.5s check reports app_not_ready. Poll, reveal the bar,
+# then sit at the top of the feed before the action-bar search.
+_FB_FEED_OPEN_BUDGET_SEC = 9.0
+_FB_FEED_OPEN_QUIET_SEC = 3.0
+_FB_FEED_TOP_SWIPES = 2
+_FB_FEED_TOP_SETTLE_SEC = 3.0
 
 Step = Tuple[str, Dict[str, Any]]
 
@@ -625,12 +646,16 @@ class PhoneFlows:
 
     def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
-                 state_dir: Optional[Path] = None, ocr: Any = _UNSET) -> None:
+                 state_dir: Optional[Path] = None, ocr: Any = _UNSET, pace: Any = None) -> None:
         """``state_dir`` is the fleet state directory. NodeAgent always passes it.
 
         ``ocr`` is an optional text reader ``(screencap bytes) -> boxes``. The
         default tries the optional rapidocr package. ``False`` skips text.
         Icon templates do not use this argument.
+
+        ``pace`` is an optional ``PaceLedger``. The default loads
+        ``config/compliance.yaml`` and, when ``state_dir`` is set, keeps a
+        local copy of counted Facebook actions there.
         """
         self.enabled = False
         self.ui_map_path = ""
@@ -641,6 +666,8 @@ class PhoneFlows:
         self._jitter: Any = None
         self._rng = random.random
         self._ocr = None
+        self._pace_injected = pace is not None
+        self._pace = pace if isinstance(pace, PaceLedger) else PaceLedger()
         self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify,
                        jitter_ms=jitter_ms, rng=rng, state_dir=state_dir)
         if ocr is not _UNSET:
@@ -682,6 +709,8 @@ class PhoneFlows:
             self._jitter = jitter_ms
         if rng is not None:
             self._rng = rng
+        if getattr(self, "_pace", None) is not None and not getattr(self, "_pace_injected", False):
+            self._pace.bind(self.state_dir)
 
     def load_map(self) -> Dict[str, Any]:
         path = Path(self.ui_map_path) if self.ui_map_path else default_ui_map_path(self.state_dir)
@@ -778,8 +807,10 @@ class PhoneFlows:
                                ops: Any) -> Tuple[str, Dict[str, Any], str]:
         """Launch Facebook, scroll the feed, tap Like only when the locator is sure.
 
-        Login uses the existing feed_tab color probe. A miss is not retried.
-        ``like_probe`` returns the row and does not tap it.
+        After the icon tap, poll the feed for about 9 seconds. A hidden tab
+        bar is scrolled back into view during that window. The search then
+        starts at the top of the feed. ``like_probe`` returns the row and
+        does not tap it.
         """
         from .like_locate import DEFAULT_LIKE_SWIPES, like_state_changed, locate_like_row
 
@@ -811,16 +842,47 @@ class PhoneFlows:
                 run(TASK_PHONE_KEY, {"key": "home"})
                 ax, ay = _point("app_icon", anchors, overrides, width, height)
                 run(TASK_PHONE_TAP, {"x": ax, "y": ay})
-                run(TASK_PHONE_SCREENSHOT, {})
-                raw = ops.last_raw(serial)
-                if self._probe_hit(raw, probes.get("login_wall"), anchors, overrides, width, height):
-                    err = PhoneOpError("not_logged_in", failed=True)
-                    err.stderr = "probe:login_wall"  # type: ignore[attr-defined]
-                    raise err
-                if not self._probe_hit(raw, probes.get("logged_in"), anchors, overrides, width, height):
+                up_x, up_y = _point(dst_name, anchors, overrides, width, height)
+                down_x, down_y = _point(src_name, anchors, overrides, width, height)
+
+                def _swipe_toward_top() -> None:
+                    # Reverse of the feed swipe: the finger moves down, the feed
+                    # returns to the top, and Facebook shows the tab bar again.
+                    run(TASK_PHONE_SWIPE, {
+                        "x1": up_x, "y1": up_y, "x2": down_x, "y2": down_y, "duration_ms": dur,
+                    })
+
+                opened_at = ops._clock()
+                deadline = opened_at + _FB_FEED_OPEN_BUDGET_SEC
+                reveals = 0
+                ready = False
+                while True:
+                    run(TASK_PHONE_SCREENSHOT, {})
+                    raw = ops.last_raw(serial)
+                    if self._probe_hit(raw, probes.get("login_wall"), anchors, overrides, width, height):
+                        err = PhoneOpError("not_logged_in", failed=True)
+                        err.stderr = "probe:login_wall"  # type: ignore[attr-defined]
+                        raise err
+                    if self._probe_hit(raw, probes.get("logged_in"), anchors, overrides, width, height):
+                        ready = True
+                        break
+                    now = ops._clock()
+                    if now >= deadline:
+                        break
+                    # The app may still be drawing. Only after the quiet window
+                    # do we scroll up, which is what brings a hidden tab bar back.
+                    if now >= opened_at + _FB_FEED_OPEN_QUIET_SEC and reveals < _FB_FEED_TOP_SWIPES:
+                        _swipe_toward_top()
+                        reveals += 1
+                if not ready:
                     err = PhoneOpError("app_not_ready", failed=True)
                     err.stderr = "probe:logged_in"  # type: ignore[attr-defined]
                     raise err
+                # Land at the top before the action-bar search. Swipes already
+                # spent revealing the tab bar count toward that.
+                for _ in range(_FB_FEED_TOP_SWIPES - reveals):
+                    _swipe_toward_top()
+                ops.add_dwell(serial, _FB_FEED_TOP_SETTLE_SEC)
                 fx, fy = _point("feed_tab", anchors, overrides, width, height)
                 run(TASK_PHONE_TAP, {"x": fx, "y": fy})
                 found = None
@@ -830,7 +892,16 @@ class PhoneFlows:
                     run(TASK_PHONE_SCREENSHOT, {})
                     raw = ops.last_raw(serial)
                     boxes = self._text_boxes(raw)
-                    loc = locate_like_row(raw, boxes)
+                    # Dump is read-only. A phone that refuses it still has the
+                    # screenshot signals (structure + template / silhouette).
+                    hierarchy = ""
+                    reader = getattr(ops, "read_ui_hierarchy", None)
+                    if callable(reader):
+                        try:
+                            hierarchy = reader(serial) or ""
+                        except Exception:
+                            hierarchy = ""
+                    loc = locate_like_row(raw, boxes, hierarchy)
                     if loc.get("post"):
                         saw_post = True
                     if loc.get("target"):
@@ -925,6 +996,16 @@ class PhoneFlows:
             if app == "facebook" and flow == "like":
                 body["like_button_deprecated"] = True
             return STATUS_DONE, body, "dry_run"
+        if app == "facebook" and flow in ("like", "comment", "follow", "post"):
+            decision = self._pace.allow(
+                app=app, action=flow, serial=serial,
+                account=str((target or {}).get("account") or "") if isinstance(target, dict) else "",
+                wallpaper=str((target or {}).get("wallpaper") or (target or {}).get("wallpaper_no") or "")
+                if isinstance(target, dict) else "",
+                probe=p.get("like_probe") is True,
+            )
+            if not decision.allow:
+                return STATUS_REJECTED, _result(serial, app, flow), decision.reason
         if app == "facebook" and flow == "like":
             return self._execute_facebook_like(serial, p, ui, ops)
         prog: Dict[str, Any] = {"done": 0, "step": None, "w": None, "h": None}

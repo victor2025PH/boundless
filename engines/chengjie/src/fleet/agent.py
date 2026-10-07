@@ -15,6 +15,10 @@
     0.3.15 本机操作员告警（默认关）：手机不能干活或本机 adb 异常时，只在这台电脑上弹窗，不进心跳。
     0.3.16 push_config 可以写 operator_alert_* / wallpaper_map（直播机仍拒绝，告警保持关闭）。
     0.3.17 Facebook 点赞在截图上找赞（模板 + 动作条 + 可选文字），不再点固定 like_button。
+    0.3.18 net_health 只读体检：上网、WiFi/移动数据、SIM 与信号、流量计数、Facebook 是否安装。
+           剩余话费/流量没有稳定接口，默认不查。公开 latest 仍是 0.3.7。
+    0.3.18 只有图标的动作条也能定位赞（结构 + 模板/轮廓，不靠文字）。打开 Facebook 会轮询约 9 秒，并把信息流拉回顶部再找赞。只读 uiautomator dump 的 Like/赞/React 标签要和模板一致才点。
+    0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -37,6 +41,9 @@
                       Other patches rejected not_supported_in_agent_v1.
                       Live-stream host refused before any write. Map body and wallpaper serials are not logged.
     operator_alert_diag → read-only redacted snapshot (wallpaper number + reason). No adb serials.
+    net_health      → read-only per-phone reachability, transport, SIM/signal, usage, Facebook
+                      installed/login. Remaining carrier data is not available by default.
+                      Optional USSD is off unless net_health_ussd_enabled is JSON true.
 """
 
 from __future__ import annotations
@@ -87,12 +94,13 @@ from .protocol import (
     PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
-    TASK_ENABLE_PHONE_ADB, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE, TASK_STOP_ACCOUNT, TASK_UPGRADE,
+    TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE,
+    TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.17"
+AGENT_VERSION = "0.3.19"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -274,7 +282,8 @@ class AgentConfig:
                      "adb_manage_server", "phone_flows_enabled", "phone_ui_map",
                      "phone_flow_verify", "phone_flow_jitter_ms",
                      "operator_alert_enabled", "operator_alert_refresh_sec", "operator_alert_language",
-                     "operator_alert_fail_streak", "wallpaper_map")
+                     "operator_alert_fail_streak", "wallpaper_map",
+                     "net_health_ussd_enabled", "net_health_ussd_codes")
 
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -1141,6 +1150,8 @@ class NodeAgent:
                 return self._push_phone_flows(payload)
             if kind == TASK_OPERATOR_ALERT_DIAG:
                 return self._operator_alert_diag()
+            if kind == TASK_NET_HEALTH:
+                return self._net_health(target, payload)
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
@@ -1163,6 +1174,21 @@ class NodeAgent:
             self._cfg_mtime = _mtime_ns(self.cfg.path)
 
         return adb_bundle.enable_phone_adb(self.cfg.state_dir, persist=persist, already=already)
+
+    def _net_health(self, target: Dict[str, Any], payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
+        """Read-only network probe. Does not change adb server settings."""
+        from .net_health import run_net_health
+
+        status, result, detail = run_net_health(
+            self.phones, self.cfg.data, target, payload,
+            live_stream=bool(self.operator_alert.live_stream),
+        )
+        try:
+            phones = result.get("phones") if isinstance(result, dict) else None
+            self.operator_alert.note_network(phones or [], self.cfg.data)
+        except Exception:
+            logger.warning("[agent] net_health alert skipped", exc_info=True)
+        return status, result, detail
 
     def _operator_alert_diag(self) -> Tuple[str, Dict[str, Any], str]:
         """Read-only redacted operator-alert summary. No serials, no secrets."""
