@@ -1766,6 +1766,20 @@ ai:
   #       base_url: https://open.bigmodel.cn/api/paas/v4
   #       model: glm-4-flash
 
+  # 备用链顺序（可选，P1-2 2026-10-08）：主链失败 / 熔断开路 / 欠费冷却后先试谁。
+  # lane：key_pool（上面的云端备用池）/ local（上面的 ai.fallback，第二推理端）。
+  # 缺省 [key_pool, local]（历史行为不变）。漏写的 lane 自动补在末尾（不会悄悄丢备用链；
+  # 真要不出云请用 ai.primary: local_only）。
+  # 智聊私信承接推荐（主模型 = 自建 chatx，第二推理端 = 另一台 LAN GPU，云池最后兜）：
+  #   base_url: http://192.168.0.173:8001     # 主：chatx（vLLM）
+  #   fallback: { enabled: true, base_url: http://<第二推理端>:11434, model: <模型名>, timeout: 60 }
+  #   key_pool: { keys: [ { name: cloud-1, api_key: <从环境/私有 overlay 注入>, base_url: ..., model: ... } ] }
+  #   fallback_order: [local, key_pool]
+  # 启动后后台探针对第二推理端只打 GET /v1/models（不生成），云池读巡检 ping 快照；
+  # 结果见 /health 的 ai_stats.backup（redundancy: ok / unknown / down / none）。
+  # 已配置的备用全部不可达 → ERROR 日志 + 主机告警「备用模型全部不可达」（30 分钟去抖）。
+  # fallback_order: [local, key_pool]
+
   # ── 多模型路由（像 Cursor 按任务挑模型；可选，默认空=不启用，行为不变）──────────
   # 与 key_pool（主 key 失效才顶班）正交：这里**主动按任务/调用方挑模型或端点**。
   #   models：命名模型档，每档 = 一个独立 OpenAI 兼容端点（本地 vLLM/Ollama 或任意云）。
