@@ -2,6 +2,7 @@
 
 安全栏：
 * adb 只跑白名单参数（``check_adb_args``）：``devices -l``、``version``、``-s <serial> exec-out screencap``、
+  ``-s <serial> shell uiautomator dump /dev/tty``（只读，不把界面写到存储）、
   ``-s <serial> shell input tap|swipe|text|keyevent 3|4``。参数列表、不经本机 shell、每条都有超时。
 * 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
   问现有 server；没有 server、或本机 adb 客户端版本和 server 不一致（会触发 server 重启）→ 拒绝。
@@ -70,6 +71,9 @@ def check_adb_args(args: Sequence[str]) -> None:
     if len(a) >= 4 and a[0] == "-s" and valid_serial(a[1]) == a[1] and not is_protected(a[1]):
         rest = a[2:]
         if rest == ("exec-out", "screencap"):
+            return
+        # Read-only hierarchy. Dumping to a file path is not this form.
+        if rest == ("shell", "uiautomator", "dump", "/dev/tty"):
             return
         if rest[:2] == ("shell", "input") and len(rest) >= 4:
             op, vals = rest[2], rest[3:]
@@ -268,6 +272,27 @@ class PhoneOps:
 
     def last_raw(self, serial: str) -> bytes:
         return self._last_raw.get(serial, b"")
+
+    def read_ui_hierarchy(self, serial: str) -> str:
+        """Read-only ``uiautomator dump`` to stdout. Empty when the device refuses.
+
+        The caller is already inside ``session`` and holds this phone's lock.
+        A failure is not an error: the Like search then uses the screenshot.
+        """
+        try:
+            adb = self._ready_adb()
+            self._pace(serial)
+            try:
+                raw = self._adb(
+                    adb, ("-s", serial, "shell", "uiautomator", "dump", "/dev/tty"), 12.0,
+                )
+            finally:
+                self._last_op[serial] = self._clock()
+        except PhoneOpError:
+            return ""
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > 2_000_000:
+            return ""
+        return raw.decode("utf-8", "replace")
 
     def _check_bounds(self, serial: str, *coords: int) -> None:
         size = self._screen.get(serial)

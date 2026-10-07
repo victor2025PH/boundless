@@ -1,26 +1,48 @@
 """Find a Facebook Like control on a screencap without a fixed coordinate.
 
 Wallpaper 09 (CHINAMI-B, 2026-10-08) shows the post action bar as icons and
-counts only: no Like / Comment / Share words. Text is one signal. A tap also
-needs a second signal, or a high-confidence thumbs-up template match.
+counts only: no Like / Comment / Share words. 0.3.18 locates that icon-only
+bar without rapidocr. Text is one signal when a text engine is installed. A
+tap still needs a second agreeing signal, or a high-confidence thumbs-up
+template match. One weak signal is never a tap.
 
 Signals
+    label       Read-only ``uiautomator dump`` content-desc / text / resource-id.
+                Same needles as huoke's feed Like scan (like / いいね / 赞), plus
+                the icon-only content-desc React. Liked, comment, share, and the
+                reaction names are not targets. A label is not a tap by itself:
+                a thumbs-up template at the same place has to agree. Optional.
+                A dump that fails or comes back empty leaves this signal empty.
     text        Like / Gusto / I-like / 赞 on a row that also has Comment and Share
                 (Komento / Ibahagi, 评论 / 分享). Liked / Nagustuhan / 已赞 is not a target.
-    template    Bundled light/dark thumbs-up rasters, several sizes. Matched by
-                normalized correlation against icon blobs. Stdlib only.
-    structure   A row of 2–4 evenly spaced icons sitting under a reaction-count
-                row (OCR tokens such as 92k / 1.5k, or a shorter glyph row).
-                The leftmost slot is the Like candidate.
+                Optional. The default build does not import rapidocr, cv2, or onnx.
+    template    Bundled thumbs-up rasters: the original light/dark blocks plus
+                outline and filled glyphs at phone scales. Matched by normalized
+                edge correlation. Stdlib only. A window is tried only when the
+                template is close to the blob size, so a small block is not
+                scored against the empty center of a large outline icon.
+    structure   Leftmost slot of a row of 2–4 evenly spaced icons. The row is
+                anchored either under a reaction-count line (OCR tokens such as
+                92k / 1.5k, or a shorter glyph row) or, with no text at all,
+                just above the comment composer (a wide short pill). Order is
+                react, comment, share, and sometimes send.
+    shape       The leftmost cluster's silhouette: narrow stem left of a wider
+                palm, wrist narrower than the palm. A square, a round comment
+                bubble, and a share arrow do not pass. This is the second
+                signal when the template only partly matches the live icon.
 
 Tap rule: template score >= TEMPLATE_HIGH, or at least two signals whose
-centers agree. Otherwise no target (never the deprecated like_button).
+centers agree. Shape and template describe the same glyph, so those two alone
+do not agree — the bar (structure) or the Like word (text) has to take part.
+A hierarchy label agrees only with a template, not with the bar or the
+silhouette by itself. Otherwise no target (never the deprecated like_button).
 
 Text engine: optional ``rapidocr-onnxruntime`` (PP-OCRv4 reads Latin and CJK,
 so Tagalog and 赞 do not need a Windows OCR language pack). Windows.Media.Ocr
-is not used. The import is lazy. A missing text engine leaves the text signal
-empty; templates and the action bar still run. ``ocr_unavailable`` is only when
-the template pack and the text engine are both missing — that is the case where
+is not used. The import is lazy and happens only inside ``load_rapidocr``.
+A missing text engine leaves the text signal empty; templates, the composer
+bar, and the thumb silhouette still run. ``ocr_unavailable`` is only when the
+template pack and the text engine are both missing — that is the case where
 the only remaining aim would be the fixed coordinate, which real likes refuse.
 
 Empty feed: after the swipe budget, no count row, no action bar, and no Like
@@ -30,25 +52,49 @@ mark the same outcome so the scheduler can send the account to warm-up.
 
 from __future__ import annotations
 
+import re
 import struct
+import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TEMPLATE_HIGH = 0.82
-TEMPLATE_MED = 0.58
+# Recorded as a template hit, not enough on its own. Squares on the bundled
+# glyphs score about 0.32; comment bubbles and arrows score under 0.25.
+TEMPLATE_MED = 0.50
 AGREE_X_PM = 72
 AGREE_Y_PM = 56
 DEFAULT_LIKE_SWIPES = 3
 FB_BLUE = (24, 119, 242)
 FB_BLUE_TOL = 48
+# Template vs blob size. A 16px block on a 56px outline reads the empty center.
+_TEMPLATE_SIZE_LO = 0.60
+_TEMPLATE_SIZE_HI = 1.55
 
 _TEMPLATE_DIR = Path(__file__).with_name("like_templates")
+# Edge correlation collapses when the window is one pixel off, and a
+# downsampled blob is quantized by the screencap step. Search a small box
+# around the blob center, nearest offsets first.
+_TEMPLATE_OFFSETS = tuple(sorted(
+    ((dx, dy) for dx in range(-5, 6) for dy in range(-5, 6)),
+    key=lambda p: (abs(p[0]) + abs(p[1]), abs(p[0]), abs(p[1])),
+))
 _RAW_ORDERS = {1: "rgba", 2: "rgba", 5: "bgra"}
 _LIKE = {"like", "gusto", "i-like", "i like", "赞"}
 _LIKED = {"liked", "nagustuhan", "已赞"}
 _COMMENT = {"comment", "komento", "评论"}
 _SHARE = {"share", "ibahagi", "分享"}
+# Huoke's feed scan (facebook.py, the Like-button bounds pass) plus the
+# icon-only content-desc "React". "reactions" is a count, not the button.
+_LABEL_NEEDLE = (("like", "like"), ("いいね", "いいね"), ("赞", "赞"), ("gusto", "gusto"))
+_LABEL_EXCLUDE = (
+    "liked", "unlike", "nagustuhan", "已赞", "取消",
+    "comment", "komento", "评论", "コメント",
+    "share", "ibahagi", "分享", "シェア",
+    "love", "haha", "wow", "sad", "angry", "reactions",
+)
+_BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 _EMPTY_PHRASES = (
     "something went wrong",
     "stories couldn't load",
@@ -57,6 +103,16 @@ _EMPTY_PHRASES = (
     "nothing to show",
 )
 _SCALES = (("s", 16, 20), ("m", 20, 26), ("l", 24, 30))
+# Outline and filled glyphs. ``s`` fits the 180px test frame (blob cap is
+# ~14% of width). The larger steps match xxhdpi action icons (~48–72px).
+_ICON_SCALES = (
+    ("s", 18, 22),
+    ("m", 24, 30),
+    ("l", 32, 40),
+    ("xl", 44, 54),
+    ("xxl", 56, 68),
+    ("xxxl", 72, 88),
+)
 
 
 def _norm_token(text: Any) -> str:
@@ -244,6 +300,71 @@ def text_hits(boxes: Sequence[Dict[str, Any]], width: int, height: int) -> List[
     return hits
 
 
+def _like_label_token(desc: str, text: str, resource_id: str) -> str:
+    """Huoke's Like-button needle, plus the icon-only content-desc React.
+
+    ``liked`` / comment / share / the reaction names / a ``reactions`` count
+    are not the button. A resource-id is checked with the same words because
+    some builds put the name there and leave the visible text empty.
+    """
+    blob = " ".join(part.strip() for part in (desc, text, resource_id) if part and part.strip())
+    low = blob.casefold().replace("’", "'")
+    if not low or any(needle in low for needle in _LABEL_EXCLUDE):
+        return ""
+    if "react" in re.findall(r"[a-z]+", low):
+        return "react"
+    for needle, token in _LABEL_NEEDLE:
+        if needle in low:
+            return token
+    return ""
+
+
+def label_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
+    """Like controls named by the accessibility hierarchy. Empty on a bad dump.
+
+    Bounds use huoke's button box: at least 20px on a side, and not a banner
+    (wider than 300 or taller than 200). The hit is not a tap by itself.
+    """
+    if not isinstance(hierarchy, str) or "<hierarchy" not in hierarchy:
+        return []
+    start = hierarchy.find("<hierarchy")
+    end = hierarchy.rfind("</hierarchy>")
+    if start < 0 or end < 0:
+        return []
+    chunk = hierarchy[start:end + len("</hierarchy>")]
+    if len(chunk) > 2_000_000:
+        return []
+    try:
+        root = ET.fromstring(chunk)
+    except ET.ParseError:
+        return []
+    hits = []
+    for node in root.iter():
+        token = _like_label_token(
+            str(node.attrib.get("content-desc") or ""),
+            str(node.attrib.get("text") or ""),
+            str(node.attrib.get("resource-id") or ""),
+        )
+        if not token:
+            continue
+        match = _BOUNDS_RE.fullmatch(str(node.attrib.get("bounds") or "").strip())
+        if match is None:
+            continue
+        x0, y0, x1, y1 = (int(v) for v in match.groups())
+        bw, bh = x1 - x0, y1 - y0
+        if bw < 20 or bh < 20 or bw > 300 or bh > 200:
+            continue
+        if not _fully_inside(x0, y0, x1, y1, width, height):
+            continue
+        cx, cy = _center(x0, y0, x1, y1)
+        hits.append({
+            "source": "label", "x_pm": _pm(cx, width), "y_pm": _pm(cy, height),
+            "score": 1.0, "label": token, "full": True, "x": cx, "y": cy,
+        })
+    hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
+    return hits
+
+
 def _count_row_ys(boxes: Sequence[Dict[str, Any]], height: int) -> List[float]:
     tol = _y_tol(height)
     counts = []
@@ -351,11 +472,51 @@ def extract_blobs(raw: bytes) -> List[Dict[str, int]]:
         if bh > 0 and not 0.35 <= (bw / bh) <= 2.8:
             continue
         blobs.append(_blob_dict(x0, y0, x1, y1))
+    blobs = _suppress_nested(blobs)
     if len(blobs) > 80:
         target = max(min_side * min_side, int((width * 0.045) ** 2))
         blobs.sort(key=lambda b: abs((b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) - target))
         blobs = blobs[:80]
     return blobs
+
+
+def _suppress_nested(blobs: Sequence[Dict[str, int]]) -> List[Dict[str, int]]:
+    """Drop an edge ring that sits inside a larger icon blob.
+
+    An outline comment bubble often yields the outer stroke and a second
+    component on the inner stroke. The inner one is not its own action.
+    """
+    kept: List[Dict[str, int]] = []
+    for blob in blobs:
+        bw = blob["x1"] - blob["x0"]
+        bh = blob["y1"] - blob["y0"]
+        cx = (blob["x0"] + blob["x1"]) / 2.0
+        cy = (blob["y0"] + blob["y1"]) / 2.0
+        nested = False
+        for other in blobs:
+            if other is blob:
+                continue
+            ow = other["x1"] - other["x0"]
+            oh = other["y1"] - other["y0"]
+            if ow < bw * 1.15 or oh < bh * 1.15:
+                continue
+            if other["x0"] <= cx <= other["x1"] and other["y0"] <= cy <= other["y1"]:
+                nested = True
+                break
+        if not nested:
+            kept.append(blob)
+    return kept
+
+
+def _prune_icon_row(group: Sequence[Dict[str, int]]) -> List[Dict[str, int]]:
+    """Drop a speck that joined an icon row and would break even spacing."""
+    if len(group) < 2:
+        return list(group)
+    areas = sorted((b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) for b in group)
+    med = areas[len(areas) // 2]
+    if med <= 0:
+        return list(group)
+    return [b for b in group if (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) >= med * 0.35]
 
 
 def _rows_of(blobs: Sequence[Dict[str, int]], height: int) -> List[List[Dict[str, int]]]:
@@ -396,15 +557,96 @@ def _even_icon_row(group: Sequence[Dict[str, int]]) -> bool:
     return True
 
 
+def composer_centers(raw: bytes) -> List[float]:
+    """Y centers of wide, short pills — the comment composer under an action bar.
+
+    The composer is a rounded bar spanning most of the width. Icon blobs never
+    include it (it is far wider than an icon), so this scan is separate. A
+    single hairline divider is not a pill: the top and bottom edges have to
+    sit a short distance apart.
+    """
+    try:
+        width, height, hdr, order = frame_size(raw)
+    except ValueError:
+        return []
+    step = 1
+    while width // step > 420:
+        step *= 2
+    sw, sh = width // step, height // step
+    if sw < 16 or sh < 16:
+        return []
+    gray = [0] * (sw * sh)
+    for y in range(sh):
+        sy = min(height - 1, y * step)
+        for x in range(sw):
+            sx = min(width - 1, x * step)
+            gray[y * sw + x] = _luma_at(raw, hdr, width, order, sx, sy)
+    # 8 luma catches a white pill on the near-white feed (about 9 apart). A
+    # 1px border on a flat fill is the same kind of full-width edge.
+    delta = 8
+    need = int(sw * 0.50)
+    strong: List[int] = []
+    for y in range(1, sh - 1):
+        count = 0
+        row = y * sw
+        prev = (y - 1) * sw
+        for x in range(sw):
+            if abs(gray[row + x] - gray[prev + x]) >= delta:
+                count += 1
+        if count >= need:
+            strong.append(y)
+    bands: List[List[int]] = []
+    for y in strong:
+        if bands and y - bands[-1][-1] <= 2:
+            bands[-1].append(y)
+        else:
+            bands.append([y])
+    ys = [sum(band) / len(band) for band in bands]
+    strong_set = set(strong)
+    lo = max(3.0, sh * 0.010)
+    hi = max(lo + 1.0, sh * 0.075)
+    centers: List[float] = []
+    for i, top in enumerate(ys):
+        for bot in ys[i + 1:]:
+            gap = bot - top
+            if gap < lo:
+                continue
+            if gap > hi:
+                break
+            interior = range(int(top) + 1, int(bot))
+            if not interior:
+                continue
+            noisy = sum(1 for y in interior if y in strong_set)
+            # The fill between the two edges is flat. A photo or a stack of
+            # dividers is not a composer.
+            if noisy > max(1, int(0.35 * len(list(interior)))):
+                continue
+            centers.append((top + bot) / 2.0 * step)
+            break
+    return centers
+
+
 def structure_hits(blobs: Sequence[Dict[str, int]], boxes: Sequence[Dict[str, Any]],
-                   width: int, height: int) -> List[Dict[str, Any]]:
-    """Leftmost slot of each action bar under a reaction-count row."""
+                   width: int, height: int, composer_ys: Optional[Sequence[float]] = None) -> List[Dict[str, Any]]:
+    """Leftmost slot of each action bar.
+
+    The bar is a row of 2–4 even icons under a reaction-count line, or a row
+    of 3–4 even icons sitting just above the comment composer. The leftmost
+    slot is the Like / reaction control.
+    """
     count_ys = _count_row_ys(boxes, height)
     rows = _rows_of(blobs, height)
-    icon_rows = [g for g in rows if _even_icon_row(g)]
+    icon_rows = []
+    for group in rows:
+        pruned = _prune_icon_row(group)
+        if _even_icon_row(pruned):
+            icon_rows.append(pruned)
     hits = []
     lo = max(8.0, height * 0.012)
     hi = height * 0.14
+    comp_lo = max(4.0, height * 0.004)
+    comp_hi = height * 0.14
+    composers = list(composer_ys or ())
 
     def _cy(group: Sequence[Dict[str, int]]) -> float:
         return sum((b["y0"] + b["y1"]) / 2.0 for b in group) / len(group)
@@ -423,7 +665,14 @@ def structure_hits(blobs: Sequence[Dict[str, int]], boxes: Sequence[Dict[str, An
             gap = cy - _cy(other)
             if lo <= gap <= hi and _mh(other) <= mh * 0.85:
                 above.append(_cy(other))
-        if not above or not any(lo <= (cy - ay) <= hi for ay in above):
+        count_ok = bool(above) and any(lo <= (cy - ay) <= hi for ay in above)
+        composer_ok = False
+        if composers and 3 <= len(group) <= 4:
+            centers = [(b["x0"] + b["x1"]) / 2.0 for b in group]
+            span = centers[-1] - centers[0]
+            if span >= width * 0.18:
+                composer_ok = any(comp_lo <= (ay - cy) <= comp_hi for ay in composers)
+        if not count_ok and not composer_ok:
             continue
         if not all(_fully_inside(b["x0"], b["y0"], b["x1"], b["y1"], width, height) for b in group):
             continue
@@ -505,13 +754,84 @@ def render_thumb(width: int, height: int, *, dark: bool) -> bytes:
     return bytes(out)
 
 
+def _thumb_silhouette(width: int, height: int) -> List[List[bool]]:
+    """Facebook-style thumbs-up. The stem sits left of the palm."""
+    grid = [[False] * width for _ in range(height)]
+    for y in range(height):
+        ny = (y + 0.5) / height
+        row = grid[y]
+        for x in range(width):
+            nx = (x + 0.5) / width
+            on = False
+            if 0.18 <= nx <= 0.42 and 0.05 <= ny <= 0.48:
+                on = True
+            if 0.16 <= nx <= 0.88 and 0.38 <= ny <= 0.74:
+                on = True
+            if 0.28 <= nx <= 0.72 and 0.66 <= ny <= 0.95:
+                on = True
+            row[x] = on
+    return grid
+
+
+def render_thumb_icon(width: int, height: int, *, dark: bool, filled: bool) -> bytes:
+    """Outline or filled thumbs-up for the icon-only action bar.
+
+    Light: dark glyph on a light pad. Dark: the inverse. The outline stroke
+    is thick enough to stay one connected edge blob after a 4-neighbor scan.
+    """
+    bg = (28, 30, 34) if dark else (246, 246, 248)
+    ink = (232, 234, 238) if dark else (55, 58, 64)
+    grid = _thumb_silhouette(width, height)
+    stroke = max(2, int(round(min(width, height) * 0.075)))
+    if filled:
+        mask = grid
+    else:
+        bound = [[False] * width for _ in range(height)]
+        for y in range(height):
+            for x in range(width):
+                if not grid[y][x]:
+                    continue
+                edge = False
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    yy, xx = y + dy, x + dx
+                    if yy < 0 or xx < 0 or yy >= height or xx >= width or not grid[yy][xx]:
+                        edge = True
+                        break
+                bound[y][x] = edge
+        mask = [row[:] for row in bound]
+        radius = stroke - 1
+        if radius > 0:
+            for y in range(height):
+                for x in range(width):
+                    if not bound[y][x]:
+                        continue
+                    for dy in range(-radius, radius + 1):
+                        for dx in range(-radius, radius + 1):
+                            if max(abs(dx), abs(dy)) > radius:
+                                continue
+                            yy, xx = y + dy, x + dx
+                            if 0 <= yy < height and 0 <= xx < width and grid[yy][xx]:
+                                mask[yy][xx] = True
+    out = bytearray()
+    for y in range(height):
+        for x in range(width):
+            out += bytes(ink if mask[y][x] else bg)
+    return bytes(out)
+
+
 def write_default_templates(dest: Optional[Path] = None) -> Path:
     folder = dest or _TEMPLATE_DIR
     folder.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
+        dark = theme == "dark"
         for name, w, h in _SCALES:
-            rgb = render_thumb(w, h, dark=(theme == "dark"))
+            rgb = render_thumb(w, h, dark=dark)
             _write_png(folder / f"like_{theme}_{name}.png", w, h, rgb)
+        for name, w, h in _ICON_SCALES:
+            _write_png(folder / f"like_{theme}_outline_{name}.png", w, h,
+                       render_thumb_icon(w, h, dark=dark, filled=False))
+            _write_png(folder / f"like_{theme}_filled_{name}.png", w, h,
+                       render_thumb_icon(w, h, dark=dark, filled=True))
     return folder
 
 
@@ -533,6 +853,10 @@ def load_templates(folder: Optional[Path] = None) -> List[Dict[str, Any]]:
 def templates_available(folder: Optional[Path] = None) -> bool:
     names = {item["name"] for item in load_templates(folder)}
     need = {f"like_{theme}_{name}" for theme in ("light", "dark") for name, _w, _h in _SCALES}
+    for style in ("outline", "filled"):
+        for theme in ("light", "dark"):
+            for name, _w, _h in _ICON_SCALES:
+                need.add(f"like_{theme}_{style}_{name}")
     return need <= names
 
 
@@ -593,25 +917,32 @@ def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
         if x1 - x0 < 4 or y1 - y0 < 4:
             continue
         cx, cy = _center(x0, y0, x1, y1)
+        bw, bh = x1 - x0, y1 - y0
         best = 0.0
         best_name = ""
         best_xy = (cx, cy)
         for tmpl in pack:
             tw, th = int(tmpl["w"]), int(tmpl["h"])
-            # Exact-size windows around the blob center. A loose edge box is
-            # not resized onto the template; that washes the score out.
-            for dy in (-2, 0, 2):
-                for dx in (-2, 0, 2):
-                    left = int(round(cx - tw / 2.0)) + dx
-                    top = int(round(cy - th / 2.0)) + dy
-                    if left < 0 or top < 0 or left + tw > width or top + th > height:
-                        continue
-                    patch = [luma[(top + yy) * width + (left + xx)] for yy in range(th) for xx in range(tw)]
-                    score = _ncc(_edge_map(patch, tw, th), tmpl["edge"])
-                    if score > best:
-                        best = score
-                        best_name = str(tmpl["name"])
-                        best_xy = (left + tw / 2.0, top + th / 2.0)
+            if bw < 4 or bh < 4:
+                continue
+            if not (_TEMPLATE_SIZE_LO <= (tw / bw) <= _TEMPLATE_SIZE_HI
+                    and _TEMPLATE_SIZE_LO <= (th / bh) <= _TEMPLATE_SIZE_HI):
+                continue
+            for dx, dy in _TEMPLATE_OFFSETS:
+                left = int(round(cx - tw / 2.0)) + dx
+                top = int(round(cy - th / 2.0)) + dy
+                if left < 0 or top < 0 or left + tw > width or top + th > height:
+                    continue
+                patch = [luma[(top + yy) * width + (left + xx)] for yy in range(th) for xx in range(tw)]
+                score = _ncc(_edge_map(patch, tw, th), tmpl["edge"])
+                if score > best:
+                    best = score
+                    best_name = str(tmpl["name"])
+                    best_xy = (left + tw / 2.0, top + th / 2.0)
+                if best >= 0.97:
+                    break
+            if best >= 0.97:
+                break
         if best < TEMPLATE_MED:
             continue
         hx, hy = best_xy
@@ -625,6 +956,101 @@ def template_hits(raw: bytes, blobs: Sequence[Dict[str, int]],
     return hits
 
 
+def _looks_like_thumb(luma: Sequence[int], width: int, height: int) -> bool:
+    """True when the crop is a left-stem thumbs-up, not a square, bubble, or arrow.
+
+    Spans come from the edge pixels, so a filled glyph and an outline glyph
+    share the same outer silhouette. Gates, measured on the bundled glyphs:
+    stem/palm width about 0.33, wrist/palm about 0.61, stem center left of the
+    palm. A square's rows are the same width. A circle's top is centered.
+    An arrow's head sits on the right, so its top center is not left of the palm.
+    """
+    if width < 8 or height < 10 or not 0.45 <= (width / float(height)) <= 1.35:
+        return False
+    edge = [False] * (width * height)
+    ink_edges = 0
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            c = int(luma[y * width + x])
+            diff = max(
+                abs(c - int(luma[y * width + x - 1])),
+                abs(c - int(luma[y * width + x + 1])),
+                abs(c - int(luma[(y - 1) * width + x])),
+                abs(c - int(luma[(y + 1) * width + x])),
+            )
+            if diff >= 26:
+                edge[y * width + x] = True
+                ink_edges += 1
+    if ink_edges < max(12, (width + height) // 2):
+        return False
+    spans = [0] * height
+    centers: List[Optional[float]] = [None] * height
+    for y in range(height):
+        xs = [x for x in range(width) if edge[y * width + x]]
+        if len(xs) < 2:
+            continue
+        spans[y] = xs[-1] - xs[0] + 1
+        centers[y] = (xs[0] + xs[-1]) / 2.0
+    if sum(1 for s in spans if s > 0) < int(height * 0.55):
+        return False
+
+    def _med_span(a: int, b: int) -> int:
+        vals = sorted(spans[i] for i in range(a, b) if spans[i] > 0)
+        if not vals:
+            return 0
+        return vals[len(vals) // 2]
+
+    def _med_center(a: int, b: int) -> Optional[float]:
+        vals = sorted(centers[i] for i in range(a, b) if centers[i] is not None and spans[i] > 0)
+        if not vals:
+            return None
+        return float(vals[len(vals) // 2])
+
+    t1 = max(1, height // 3)
+    m0, m1 = height // 3, (2 * height) // 3
+    if m1 <= m0:
+        return False
+    top_w, mid_w, bot_w = _med_span(0, t1), _med_span(m0, m1), _med_span(m1, height)
+    if mid_w < max(4, int(width * 0.35)) or top_w <= 0 or bot_w <= 0:
+        return False
+    top_ratio, bot_ratio = top_w / float(mid_w), bot_w / float(mid_w)
+    if not 0.22 <= top_ratio <= 0.55 or not 0.48 <= bot_ratio <= 0.92:
+        return False
+    tc, mc = _med_center(0, t1), _med_center(m0, m1)
+    if tc is None or mc is None:
+        return False
+    return (mc - tc) / float(width) >= 0.10
+
+
+def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, Any]]:
+    """Thumb-shaped icon blobs. Not a tap by themselves."""
+    decoded = _gray(raw)
+    if decoded is None:
+        return []
+    width, height, _hdr, _order, luma = decoded
+    hits = []
+    for blob in blobs:
+        x0 = max(0, int(blob["x0"]))
+        y0 = max(0, int(blob["y0"]))
+        x1 = min(width - 1, int(blob["x1"]))
+        y1 = min(height - 1, int(blob["y1"]))
+        bw, bh = x1 - x0, y1 - y0
+        if bw < 8 or bh < 10:
+            continue
+        patch = [luma[(y0 + yy) * width + (x0 + xx)] for yy in range(bh) for xx in range(bw)]
+        if not _looks_like_thumb(patch, bw, bh):
+            continue
+        cx, cy = _center(x0, y0, x1, y1)
+        hits.append({
+            "source": "shape", "x_pm": _pm(cx, width), "y_pm": _pm(cy, height),
+            "score": 1.0, "label": "thumb",
+            "full": _fully_inside(x0, y0, x1, y1, width, height),
+            "x": cx, "y": cy,
+        })
+    hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
+    return hits
+
+
 def _agree(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     return abs(int(a["x_pm"]) - int(b["x_pm"])) <= AGREE_X_PM and abs(int(a["y_pm"]) - int(b["y_pm"])) <= AGREE_Y_PM
 
@@ -633,7 +1059,7 @@ def _tap_point(group: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     prefer = [h for h in group if h["source"] == "template"] or [h for h in group if h["source"] == "structure"] or list(group)
     anchor = prefer[0]
     sources = sorted({str(h["source"]) for h in group})
-    labels = [str(h.get("label") or "") for h in group if h.get("source") == "text"]
+    labels = [str(h.get("label") or "") for h in group if h.get("source") in ("text", "label") and h.get("label")]
     return {
         "x": int(anchor["x_pm"]), "y": int(anchor["y_pm"]),
         "signals": "+".join(sources),
@@ -643,16 +1069,30 @@ def _tap_point(group: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _signals_confirm(sources: set) -> bool:
+    """Two different readings, and a hierarchy label only with a template."""
+    if len(sources) < 2 or sources <= {"shape", "template"}:
+        return False
+    if "label" in sources and "template" not in sources:
+        return False
+    return True
+
+
 def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, Any]],
-                 structure: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Topmost fully visible target. High template, or two agreeing signals."""
-    pool = [h for h in list(text) + list(templates) + list(structure) if h.get("full")]
+                 structure: Sequence[Dict[str, Any]], shapes: Sequence[Dict[str, Any]] = (),
+                 labels: Sequence[Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
+    """Topmost fully visible target. High template, or two agreeing signals.
+
+    Shape and template describe the same glyph, so those two alone do not
+    agree. A hierarchy label agrees only with a thumbs-up template. The
+    action bar or the Like word can still confirm a template or a silhouette
+    when the dump is missing.
+    """
+    pool = [h for h in list(text) + list(templates) + list(structure) + list(shapes) + list(labels) if h.get("full")]
     candidates = []
-    used = set()
-    for i, hit in enumerate(pool):
+    for hit in pool:
         if hit["source"] == "template" and float(hit["score"]) >= TEMPLATE_HIGH:
             candidates.append(_tap_point([hit]))
-            used.add(i)
     for i, a in enumerate(pool):
         group = [a]
         sources = {a["source"]}
@@ -662,14 +1102,14 @@ def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, A
             if _agree(a, b):
                 group.append(b)
                 sources.add(b["source"])
-        if len(sources) >= 2:
+        if _signals_confirm(sources):
             candidates.append(_tap_point(group))
     if not candidates:
         return None
     full = [c for c in candidates if c.get("full")]
     if not full:
         return None
-    full.sort(key=lambda c: (c["y"], c["x"], -c["score"]))
+    full.sort(key=lambda c: (c["y"], c["x"], -str(c.get("signals") or "").count("+"), -c["score"]))
     return full[0]
 
 
@@ -688,11 +1128,40 @@ def post_evidence(boxes: Sequence[Dict[str, Any]], blobs: Sequence[Dict[str, int
         return True
     # An icon row with no count line is still a post, not an empty feed.
     # It is not enough on its own to tap.
-    return any(_even_icon_row(group) for group in _rows_of(blobs, height))
+    for group in _rows_of(blobs, height):
+        if _even_icon_row(_prune_icon_row(group)):
+            return True
+    return False
 
 
-def locate_like_row(raw: bytes, boxes: Any = ()) -> Dict[str, Any]:
+def _like_slot_blobs(blobs: Sequence[Dict[str, int]], height: int) -> List[Dict[str, int]]:
+    """Blobs worth a template read.
+
+    On an even action bar only the leftmost slot can be Like, so the comment
+    and share icons are not scored. A lone icon is still scored: a high
+    template match does not need the bar.
+    """
+    chosen: List[Dict[str, int]] = []
+    seen = set()
+    for group in _rows_of(blobs, height):
+        pruned = _prune_icon_row(group)
+        pick = [pruned[0]] if _even_icon_row(pruned) else pruned
+        for blob in pick:
+            key = (blob["x0"], blob["y0"], blob["x1"], blob["y1"])
+            if key in seen:
+                continue
+            seen.add(key)
+            chosen.append(blob)
+            if len(chosen) >= 16:
+                return chosen
+    return chosen
+
+
+def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[str, Any]:
     """Locate a Like target. ``target`` is None when the bar is not confident.
+
+    ``hierarchy`` is a ``uiautomator dump`` document. A missing or broken dump
+    leaves the label signal empty and the screenshot signals still run.
 
     Return keys: target ({x, y, signals, label, score} permille), post (bool),
     empty_phrase (bool). x/y are the icon center when a template or the action
@@ -705,8 +1174,10 @@ def locate_like_row(raw: bytes, boxes: Any = ()) -> Dict[str, Any]:
         return {"target": None, "post": False, "empty_phrase": empty_phrase(norm)}
     blobs = extract_blobs(raw)
     text = text_hits(norm, width, height)
-    structure = structure_hits(blobs, norm, width, height)
-    templ = template_hits(raw, blobs)
+    structure = structure_hits(blobs, norm, width, height, composer_centers(raw))
+    templ = template_hits(raw, _like_slot_blobs(blobs, height))
+    shapes = shape_hits(raw, blobs)
+    labels = label_hits(hierarchy, width, height)
     # Drop a candidate whose center is already the liked blue.
     decoded = _gray(raw)
     if decoded is not None:
@@ -724,7 +1195,9 @@ def locate_like_row(raw: bytes, boxes: Any = ()) -> Dict[str, Any]:
         text = [h for h in text if not _blue_hit(h)]
         structure = [h for h in structure if not _blue_hit(h)]
         templ = [h for h in templ if not _blue_hit(h)]
-    target = fuse_signals(text, templ, structure)
+        shapes = [h for h in shapes if not _blue_hit(h)]
+        labels = [h for h in labels if not _blue_hit(h)]
+    target = fuse_signals(text, templ, structure, shapes, labels)
     if target is not None:
         target = {k: target[k] for k in ("x", "y", "signals", "label", "score")}
     return {
@@ -845,9 +1318,9 @@ def vision_stack_ready(*, ocr: Any = None, template_dir: Optional[Path] = None) 
 
 __all__ = [
     "AGREE_X_PM", "AGREE_Y_PM", "DEFAULT_LIKE_SWIPES", "FB_BLUE", "FB_BLUE_TOL",
-    "TEMPLATE_HIGH", "TEMPLATE_MED", "empty_phrase", "extract_blobs", "fuse_signals",
-    "like_state_changed", "load_rapidocr", "load_templates", "locate_like_row",
+    "TEMPLATE_HIGH", "TEMPLATE_MED", "composer_centers", "empty_phrase", "extract_blobs",
+    "fuse_signals", "label_hits", "like_state_changed", "load_rapidocr", "load_templates", "locate_like_row",
     "normalize_ocr_boxes", "post_evidence", "rapidocr_available", "read_text_boxes",
-    "render_thumb", "structure_hits", "template_hits", "templates_available",
-    "text_hits", "vision_stack_ready", "write_default_templates",
+    "render_thumb", "render_thumb_icon", "shape_hits", "structure_hits", "template_hits",
+    "templates_available", "text_hits", "vision_stack_ready", "write_default_templates",
 ]
