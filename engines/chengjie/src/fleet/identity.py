@@ -501,6 +501,9 @@ def lock_state_dir(path: Path) -> None:
     empty directory is created. That new directory gets a directory-only
     protected DACL (or mode 0700). There is no ``/T``. The check after the
     grant refuses a reparse point and requires the locked predicate.
+    If the rename is denied (WinError 5, a handle still open in the directory)
+    and the directory is not a reparse point, the same lock is applied in place
+    and the caller replaces ``agent.json`` atomically.
     """
     path = Path(path)
     _require_state_parent(path)
@@ -515,8 +518,17 @@ def lock_state_dir(path: Path) -> None:
         raise StateDirLockError("could not stat the state directory") from e
     was_locked = bool(present) and state_dir_is_locked(path)
     if present and not was_locked:
-        _rename_legacy_fleet(path)
-        present = False
+        try:
+            _rename_legacy_fleet(path)
+            present = False
+        except LegacyRenameError as e:
+            # Windows denies the rename (WinError 5) when a handle is still open
+            # inside the directory, including pytest's temp root. A reparse point
+            # is still refused. Otherwise lock this directory in place; the caller
+            # replaces agent.json with an atomic write.
+            if _is_reparse(path):
+                raise
+            logger.warning("[fleet] could not move the state directory aside (%s); locking it in place", e)
     if not present:
         path.mkdir()
     if os.name == "nt":

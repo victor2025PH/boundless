@@ -34,8 +34,8 @@ _B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _PNG_B64_PREFIX = "iVBORw0KGgo"
 _RESULT_INTS = ("width", "height", "device_width", "device_height", "scale", "x", "y", "x1", "y1", "x2", "y2",
                 "duration_ms", "bytes", "chars", "elapsed_ms", "steps", "failed_step", "completed_steps",
-                "scrolls", "likes", "watches", "dwells")
-_RESULT_STRS = ("serial", "key", "error", "stderr", "app", "flow")
+                "scrolls", "likes", "watches", "dwells", "like_x", "like_y", "swipes")
+_RESULT_STRS = ("serial", "key", "error", "stderr", "app", "flow", "like_label", "like_signals")
 
 
 class PhoneOpError(ValueError):
@@ -117,8 +117,61 @@ def _clip(value: Any, n: int) -> str:
     return "".join(ch for ch in str(value or "") if ch.isprintable())[:n]
 
 
+_PLAN_MAX_STEPS = 128
+_PLAN_COORD_MAX = 9999
+
+
+def _plan_int(value: Any, lo: int, hi: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and lo <= value <= hi
+
+
+def _sanitize_plan_step(step: Any) -> Any:
+    if not isinstance(step, dict):
+        return None
+    op = step.get("op")
+    if op == "tap" and _plan_int(step.get("x"), 0, _PLAN_COORD_MAX) and _plan_int(step.get("y"), 0, _PLAN_COORD_MAX):
+        return {"op": "tap", "x": step["x"], "y": step["y"]}
+    if op == "swipe":
+        coords = ("x1", "y1", "x2", "y2")
+        if not all(_plan_int(step.get(k), 0, _PLAN_COORD_MAX) for k in coords):
+            return None
+        if not _plan_int(step.get("duration_ms"), SWIPE_MS_MIN, SWIPE_MS_MAX):
+            return None
+        return {"op": "swipe", **{k: step[k] for k in coords}, "duration_ms": step["duration_ms"]}
+    if op == "key" and step.get("key") in KEYCODES:
+        return {"op": "key", "key": step["key"]}
+    if op == "text":
+        text = step.get("text")
+        chars = step.get("chars")
+        if (not isinstance(text, str) or not TEXT_ALLOWED.match(text) or text.startswith("-")
+                or not _plan_int(chars, 1, TEXT_MAX) or chars != len(text)):
+            return None
+        return {"op": "text", "text": text, "chars": chars}
+    if op == "dwell" and _plan_int(step.get("lo_ms"), 0, 12000) and _plan_int(step.get("hi_ms"), 0, 12000):
+        if step["lo_ms"] > step["hi_ms"]:
+            return None
+        return {"op": "dwell", "lo_ms": step["lo_ms"], "hi_ms": step["hi_ms"]}
+    return None
+
+
+def _sanitize_plan(plan: Any) -> Any:
+    if not isinstance(plan, list) or len(plan) > _PLAN_MAX_STEPS:
+        return None
+    out = []
+    for step in plan:
+        clean = _sanitize_plan_step(step)
+        if clean is None:
+            return None
+        out.append(clean)
+    return out
+
+
 def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
-    """主控入库前：只留已知的数字 / 短字符串；截图只认 PNG 的 base64（控制台当 <img src> 用）。"""
+    """主控入库前：只留已知的数字 / 短字符串；截图只认 PNG 的 base64（控制台当 <img src> 用）。
+
+    A dry_run plan is kept only when dry_run is JSON true. Planned text stays inside
+    that plan. The same plan without dry_run is dropped, and top-level text is never kept.
+    """
     r = result if isinstance(result, dict) else {}
     out: Dict[str, Any] = {}
     for k in _RESULT_INTS:
@@ -134,6 +187,17 @@ def sanitize_phone_result(kind: str, result: Any) -> Dict[str, Any]:
         if (isinstance(png, str) and 0 < len(png) <= MAX_PNG_B64 and png.startswith(_PNG_B64_PREFIX)
                 and _B64_RE.match(png)):
             out["png_b64"] = png
+    if r.get("dry_run") is True:
+        out["dry_run"] = True
+        if r.get("space") == "permille":
+            out["space"] = "permille"
+        plan = _sanitize_plan(r.get("plan"))
+        if plan is not None:
+            out["plan"] = plan
+    if r.get("like_probe") is True:
+        out["like_probe"] = True
+    if r.get("like_button_deprecated") is True:
+        out["like_button_deprecated"] = True
     return out
 
 

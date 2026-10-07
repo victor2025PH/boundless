@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.8"
+  #define AppVersion "0.3.17"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -66,13 +66,23 @@ Name: "desktopicon"; Description: "在桌面创建「智拓群控节点」快捷
 
 [Files]
 Source: "{#AgentExe}"; DestDir: "{app}"; DestName: "chatx-agent.exe"; Flags: ignoreversion
+; Default UI map, next to the exe. CurStepChanged copies it into the fleet state
+; dir only when that file is absent (after LockStateDir, so an unlocked dir rename
+; cannot drop it into the .legacy folder).
+Source: "..\..\src\fleet\phone_ui_map.json"; DestDir: "{app}"; DestName: "phone_ui_map.json"; Flags: ignoreversion
 Source: "{#SetupDir}\bootstrap.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Status.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\Open-Panel.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Phone-room adb. The directory always contains README.txt; adb.exe is optional
 ; (dropped in before the build, see platform-tools\README.txt). Missing files are skipped.
-Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; restartreplace: a locked adb.exe must not abort the silent install.
+; StopBundledAdb (PrepareToInstall) releases that lock first, and only for this copy.
+; Versioned binaries are excluded from ignoreversion so an unchanged adb.exe is not overwritten.
+Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion restartreplace recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "adb.exe,AdbWinApi.dll,AdbWinUsbApi.dll"
+Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\Fleet node status.lnk"
@@ -100,6 +110,9 @@ var
   SnapshotToDelete: String;
   BootstrapOk: Boolean;
   ConsoleButton: TNewButton;
+  AgentWasStopped: Boolean;
+  SetupFinishedOk: Boolean;
+  AgentRelaunched: Boolean;
 
 function CmdParam(const Prefix: String): String;
 var
@@ -145,6 +158,24 @@ begin
   end;
 end;
 
+procedure RelaunchOurAgent();
+var
+  ResultCode: Integer;
+begin
+  { PrepareToInstall is the only place that stops the agent. Uninstall must not relaunch. }
+  if AgentRelaunched or (not AgentWasStopped) then
+    Exit;
+  AgentRelaunched := True;
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/Run /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure DeinitializeSetup();
+begin
+  { ExitProcess skips this. FailInstall and the silent bootstrap failure call RelaunchOurAgent first. }
+  if AgentWasStopped and (not SetupFinishedOk) then
+    RelaunchOurAgent();
+end;
+
 procedure FailInstall(const Msg: String);
 begin
   { A snapshot in TEMP holds node_key. Delete it before any exit, including ExitProcess. }
@@ -152,6 +183,7 @@ begin
     DeleteFile(SnapshotToDelete);
   SnapshotToDelete := '';
   { RaiseException during ssPostInstall still exits 0 on a silent install. }
+  RelaunchOurAgent();
   if WizardSilent then
     ExitProcess(1);
   RaiseException(Msg);
@@ -170,11 +202,51 @@ begin
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function IsLiveStreamHost(): Boolean;
+var
+  env: String;
+begin
+  { Same signal as fleet detect.is_live_stream_host: env or a flag file. }
+  env := Trim(GetEnv('CHATX_FLEET_LIVE_STREAM'));
+  if (CompareText(env, '1') = 0) or (CompareText(env, 'true') = 0) or
+     (CompareText(env, 'yes') = 0) or (CompareText(env, 'on') = 0) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{commonappdata}\ChatX\live-stream.flag')) or
+     FileExists(ExpandConstant('{commonappdata}\ChatX\fleet\live-stream.flag')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+procedure StopBundledAdb();
+var
+  ResultCode: Integer;
+  adb, cmd: String;
+begin
+  { Never on a live-stream host. Match this copy only; other adb.exe processes stay. }
+  if IsLiveStreamHost() then
+    Exit;
+  adb := PsLiteral(ExpandConstant('{app}\platform-tools\adb.exe'));
+  cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
+    '$ErrorActionPreference=''Continue'';' +
+    '$adb=''' + adb + ''';' +
+    'if (Test-Path -LiteralPath $adb) { & $adb kill-server; Start-Sleep -Seconds 1 };' +
+    'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
   StopOurAgent();
+  AgentWasStopped := True;
+  StopBundledAdb();
 end;
 
 function RunIcacls(const Params: String): Boolean;
@@ -386,7 +458,7 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  src, dir, params, legacy, pairText: String;
+  src, dir, params, legacy, pairText, uiMap, uiMapSnap: String;
   pair: AnsiString;
   ResultCode: Integer;
 begin
@@ -400,6 +472,7 @@ begin
   { Sample before LockStateDir. An unlocked agent.json is copied so bootstrap can
     rewrite it after the old directory is renamed aside. }
   legacy := '';
+  uiMapSnap := '';
   SnapshotToDelete := '';
   try
     if DirExists(dir) and (not DirIsReparse(dir)) and FileExists(dir + '\agent.json') then
@@ -410,7 +483,23 @@ begin
         if not FileCopy(dir + '\agent.json', legacy, False) then
           FailInstall('Could not snapshot agent.json before locking the state directory');
       end;
+    { Same window: an unlocked fleet dir is renamed aside, so keep a tuned map. }
+    uiMap := dir + '\phone_ui_map.json';
+    if DirExists(dir) and (not DirIsReparse(dir)) and FileExists(uiMap) and (not DirIsReparse(uiMap)) then
+      if not StateDirWasLocked(dir) then
+      begin
+        uiMapSnap := ExpandConstant('{tmp}\chatx-phone-ui-map.json');
+        if not FileCopy(uiMap, uiMapSnap, False) then
+          uiMapSnap := '';
+      end;
     LockStateDir(dir);
+    if not FileExists(dir + '\phone_ui_map.json') then
+    begin
+      if (uiMapSnap <> '') and FileExists(uiMapSnap) then
+        FileCopy(uiMapSnap, dir + '\phone_ui_map.json', False)
+      else if FileExists(ExpandConstant('{app}\phone_ui_map.json')) then
+        FileCopy(ExpandConstant('{app}\phone_ui_map.json'), dir + '\phone_ui_map.json', False);
+    end;
     { room.key is copied only after icacls succeeded. LockStateDir raises otherwise. }
     if (src <> '') and FileExists(src) then
       FileCopy(src, dir + '\room.key', False);
@@ -430,8 +519,12 @@ begin
     begin
       if legacy <> '' then
         DeleteFile(legacy);
+      if uiMapSnap <> '' then
+        DeleteFile(uiMapSnap);
       SnapshotToDelete := '';
       legacy := '';
+      uiMapSnap := '';
+      RelaunchOurAgent();
       if WizardSilent then
         ExitProcess(1);
       if ResultCode = 3 then
@@ -439,10 +532,15 @@ begin
       SuppressibleMsgBox('The agent files were copied, but setup did not finish. The service was not installed.', mbError, MB_OK, IDOK);
     end
     else
+    begin
       BootstrapOk := True;
+      SetupFinishedOk := True;
+    end;
   finally
     if legacy <> '' then
       DeleteFile(legacy);
+    if uiMapSnap <> '' then
+      DeleteFile(uiMapSnap);
     SnapshotToDelete := '';
   end;
   if not BootstrapOk then

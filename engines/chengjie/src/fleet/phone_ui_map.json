@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "note": "Anchors are permille of the screen (0-1000). Each app has its own anchors and step list. Tune this file, or point agent.json phone_ui_map at another file. Opening an app is the home key plus that app's app_icon anchor.",
+  "note": "Anchors are permille of the screen (0-1000). Each app has its own anchors and step list. Tune this file, or point agent.json phone_ui_map at another file. Opening an app is the home key plus that app's app_icon anchor. Facebook feed_tab is the top Home icon. Facebook like_button is deprecated for real phone_like (the agent finds the button on a screenshot). dry_run, warmup, and watch still compile that coordinate.",
   "apps": {
     "facebook": {
       "anchors": {
         "app_icon": [120, 420],
-        "feed_tab": [200, 920],
+        "feed_tab": [82, 124],
         "composer_open": [500, 180],
         "composer_field": [500, 400],
         "post_submit": [880, 120],

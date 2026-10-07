@@ -272,3 +272,21 @@ __all__ += [
     "CAP_PHONE_FLOWS_V2", "TASK_PHONE_WARMUP", "TASK_PHONE_DM", "TASK_PHONE_WATCH",
     "PHONE_SESSION_KINDS", "SESSION_FLOW_NAMES",
 ]
+
+
+# ── 远程打开机房自带 adb（不进 REMOTE_PHONE_KINDS：机房节点可能还没开远程操作）──
+# 也不进 LEGACY_ALLOWED_KINDS。旧节点收不到这个种类；要先用 upgrade 换上认识它的 exe。
+TASK_ENABLE_PHONE_ADB = "enable_phone_adb"
+TASK_KINDS = TASK_KINDS + ((TASK_ENABLE_PHONE_ADB,) if TASK_ENABLE_PHONE_ADB not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_ENABLE_PHONE_ADB, 3)
+
+__all__ += ["TASK_ENABLE_PHONE_ADB"]
+
+
+# ── 0.3.16 只读操作员告警诊断（不进 REMOTE_PHONE_KINDS，也不进心跳）──────────
+# 机房节点即使没开远程手机操作也能领。回执只有开关、语言、刷新间隔和壁纸编号。
+TASK_OPERATOR_ALERT_DIAG = "operator_alert_diag"
+TASK_KINDS = TASK_KINDS + ((TASK_OPERATOR_ALERT_DIAG,) if TASK_OPERATOR_ALERT_DIAG not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_OPERATOR_ALERT_DIAG, 8)
+
+__all__ += ["TASK_OPERATOR_ALERT_DIAG"]

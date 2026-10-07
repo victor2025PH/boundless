@@ -45,6 +45,16 @@ def test_publish_checks_hash_and_signature_before_upload():
     assert all(ord(c) < 128 for c in src)
 
 
+def test_build_setup_hashes_without_get_filehash_and_pins_modules():
+    src = _text(BUILD)
+    assert "function Get-SetupSha256" in src and "[System.Security.Cryptography.SHA256]::Create()" in src
+    assert "Get-FileHash -LiteralPath $setup" not in src
+    assert src.index("$env:PSModulePath") < src.index("function Get-SetupSha256")
+    assert src.index("function Get-SetupSha256") < src.index("Get-SetupSha256 $setup")
+    assert "PSVersionTable.PSVersion.Major -ge 7" in src
+    assert "PSVersionTable.PSVersion.Major -le 5" in src
+
+
 def test_build_setup_refuses_to_overwrite_a_signed_installer():
     src = _text(BUILD)
     assert "[switch]$Force" in src and "[switch]$ManifestOnly" in src
@@ -174,3 +184,51 @@ def test_publish_whatif_dry_run_plans_mirror_and_renders_page(tmp_path):
     assert hashlib.sha256(b"MZ fake agent").hexdigest() in page
     side = (stage / "ChatXAgentSetup-0.0.1.exe.sha256").read_text(encoding="ascii")
     assert side == hashlib.sha256(body).hexdigest() + "  ChatXAgentSetup-0.0.1.exe\n"
+
+
+def _marked(src: str, begin: str, end: str) -> str:
+    return src.split(begin, 1)[1].split(end, 1)[0]
+
+
+def test_versioned_only_publish_does_not_touch_latest():
+    src = _text(PUBLISH)
+    assert "[switch]$VersionedOnly" in src
+    block = _marked(src, "# versioned-only-begin", "# versioned-only-end")
+    for absent in ("index.html", "manifest.json", "cp -f $RemoteDownloads/$($m.file)", "render_download_page.py",
+                   "ChatXAgentSetup.exe", "Install-ChatXAgent.ps1"):
+        assert absent not in block, absent
+    for present in ("chatx-agent-$ver.exe", "ChatXAgentSetup-$ver.exe", "manifest-$ver.json",
+                    '"channel":"canary"', '"setup_url":"', "cmp -s", "sha256sum -c"):
+        assert present in block, present
+    assert block.index("throw") < block.index('Run "ssh $SshHost')
+    rest = src.split("# versioned-only-end", 1)[1]
+    assert "index.html" in rest and "cp -f $RemoteDownloads/$($m.file)" in rest
+    assert "manifest.json" in rest
+    # The public mirror block is unchanged and still the first `if (-not $NoMirror)`.
+    mirror = src.split("if (-not $NoMirror) {", 1)[1]
+    assert "render_download_page.py" in mirror and "index.html.bak_$ts" in mirror
+
+
+@win
+def test_versioned_only_whatif_stages_canary_without_latest(tmp_path):
+    body = b"MZ unsigned setup for canary"
+    dist = _dist(tmp_path, body, setup_sha=hashlib.sha256(body).hexdigest())
+    stage = tmp_path / "canary-stage"
+    res = _ps(PUBLISH, "-DistDir", str(dist), "-SshHost", "nobody@invalid.invalid",
+              "-PublicBase", "https://invalid.invalid/downloads/fleet", "-StageDir", str(stage),
+              "-VersionedOnly", "-WhatIf")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "chatx-agent-0.0.1.exe" in out and "ChatXAgentSetup-0.0.1.exe" in out
+    assert "manifest-0.0.1.json" in out
+    assert "index.html" not in out
+    assert "manifest.json" not in out.replace("manifest-0.0.1.json", "")
+    staged = json.loads((stage / "manifest-0.0.1.json").read_text(encoding="utf-8"))
+    assert staged["channel"] == "canary"
+    assert staged["url"].endswith("/chatx-agent-0.0.1.exe")
+    assert staged["setup_url"].endswith("/ChatXAgentSetup-0.0.1.exe")
+    assert staged["sha256"] == hashlib.sha256(b"MZ fake agent").hexdigest()
+    assert staged["setup_sha256"] == hashlib.sha256(body).hexdigest()
+    assert not (stage / "index.html").exists()
+    assert not (stage / "manifest.json").exists()
+    assert not (stage / "ChatXAgentSetup.exe").exists()

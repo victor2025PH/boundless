@@ -35,6 +35,81 @@ HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent
 DIST = HERE / "dist"
 NAME = "chatx-agent"
+# PyInstaller 6.22 onefile does not extract pure-Python modules. The frozen
+# loader sets phone_flows.__file__ to <_MEIPASS>/src/fleet/phone_flows.py
+# (a virtual path). --add-data DEST is a directory under _MEIPASS; joining
+# the source basename puts the JSON at <_MEIPASS>/src/fleet/phone_ui_map.json,
+# which Path(__file__).with_name(...) finds. DEST uses forward slashes;
+# Windows os.path.normpath turns them into src\fleet, matching os.sep in
+# __file__. The CLI separator is os.pathsep (';' on Windows, ':' on POSIX).
+# Checked with a 6.22.3 onefile probe of src.fleet.phone_flows: sibling
+# phone_ui_map.json existed and Path.with_name(...).is_file() was True.
+UI_MAP_REL = Path("src") / "fleet" / "phone_ui_map.json"
+UI_MAP_DEST = "src/fleet"
+
+
+def ui_map_source() -> Path:
+    return ENGINE / UI_MAP_REL
+
+
+def ui_map_add_data() -> str:
+    src = ui_map_source()
+    if not src.is_file():
+        raise SystemExit(f"missing {src}")
+    return f"{src}{os.pathsep}{UI_MAP_DEST}"
+
+
+def like_templates_add_data() -> str:
+    """Light/dark thumbs-up rasters. Same _MEIPASS dir as phone_ui_map.json."""
+    src = ENGINE / "src" / "fleet" / "like_templates"
+    if not src.is_dir() or not any(src.glob("like_*.png")):
+        raise SystemExit(f"missing like templates in {src}")
+    return f"{src}{os.pathsep}{UI_MAP_DEST}/like_templates"
+
+
+def ocr_collect_flags() -> list:
+    """Bundle rapidocr only when it is installed. The exe still builds without it.
+
+    Icon templates and the action-bar fallback do not need the package. Text
+    (Like / Gusto / 赞) is an optional signal. Windows.Media.Ocr is not used:
+    room PCs often lack the Tagalog and Chinese language packs.
+    """
+    flags = []
+    for mod in ("rapidocr_onnxruntime", "onnxruntime", "cv2"):
+        if importlib.util.find_spec(mod) is not None:
+            flags.extend(["--collect-all", mod])
+    if flags:
+        print("rapidocr stack found; PyInstaller will collect it (onefile grows by the wheel set)")
+    else:
+        print("rapidocr_onnxruntime not installed; Facebook like keeps templates, text signal omitted")
+    return flags
+
+
+def assert_phone_flows_startup() -> None:
+    """Refuse to package an agent whose PhoneFlows constructor drops state_dir.
+
+    NodeAgent passes the fleet state directory at process start. A binary whose
+    frozen PhoneFlows.__init__ does not accept that keyword exits immediately.
+    """
+    engine = str(ENGINE)
+    if engine not in sys.path:
+        sys.path.insert(0, engine)
+    import inspect
+
+    from src.fleet.agent import _phone_flows_settings
+    from src.fleet.phone_flows import PhoneFlows
+
+    settings = _phone_flows_settings({}, ENGINE)
+    params = inspect.signature(PhoneFlows.__init__).parameters
+    missing = [key for key in settings if key not in params]
+    if missing or "state_dir" not in params:
+        raise SystemExit(
+            "PhoneFlows.__init__ must accept state_dir and the agent startup keys; "
+            f"missing={missing or ['state_dir']}"
+        )
+    flows = PhoneFlows.from_agent_settings(settings, None)
+    if Path(flows.state_dir or "") != ENGINE:
+        raise SystemExit("PhoneFlows.from_agent_settings dropped state_dir")
 
 
 def agent_version() -> str:
@@ -56,6 +131,7 @@ def main() -> int:
     ap.add_argument("--base-url", default="https://bd2026.cc/downloads/fleet/", help="manifest.url 的前缀")
     ap.add_argument("--skip-build", action="store_true", help="只重算 sha256 / manifest（已有 exe）")
     args = ap.parse_args()
+    assert_phone_flows_startup()
 
     if args.clean:
         shutil.rmtree(DIST, ignore_errors=True)
@@ -69,6 +145,9 @@ def main() -> int:
             return 2
         cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
                "--name", NAME, "--paths", str(ENGINE), "--hidden-import", "yaml",
+               "--add-data", ui_map_add_data(),
+               "--add-data", like_templates_add_data(),
+               *ocr_collect_flags(),
                "--distpath", str(DIST), "--workpath", str(HERE / "build"), "--specpath", str(HERE / "build"),
                str(HERE / "entry.py")]
         print("→", " ".join(cmd))
@@ -87,6 +166,7 @@ def main() -> int:
     (DIST / (exe.name + ".sha256")).write_text(f"{digest}  {exe.name}\n", encoding="utf-8")
     for ps1 in ("Install-ChatXAgent.ps1", "Uninstall-ChatXAgent.ps1"):
         shutil.copy2(HERE / ps1, DIST / ps1)
+    shutil.copy2(ui_map_source(), DIST / "phone_ui_map.json")
     platform_tools = HERE / "platform-tools"
     if (platform_tools / "adb.exe").is_file():
         dest_pt = DIST / "platform-tools"

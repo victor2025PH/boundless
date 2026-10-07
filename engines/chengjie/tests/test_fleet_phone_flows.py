@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import struct
 import threading
 import time
@@ -268,6 +269,18 @@ def test_execute_each_app_and_flow(app, flow):
     ops, fake, slept = _ops()
     flows = PhoneFlows(enabled=True)
     status, result, detail = flows.execute(KIND[flow], dict(payload, evil="rm"), {"serial": "S1"}, ops=ops)
+    if app == "facebook" and flow == "like":
+        # Blank frames are not signed in, and the fixed like_button is not a tap target.
+        assert (status, detail) == (STATUS_FAILED, "app_not_ready"), detail
+        assert result["flow"] == "like"
+        ui_fb = bundled_ui_map()["apps"]["facebook"]["anchors"]
+        banned = []
+        for name in ("like_button", "feed_tab"):
+            ax, ay = ui_fb[name]
+            banned.append((str(min(W - 1, ax * W // 1000)), str(min(H - 1, ay * H // 1000))))
+        taps = [a for a in fake.actions() if len(a) > 4 and a[4] == "tap"]
+        assert taps and all((a[-2], a[-1]) not in banned for a in taps)
+        return
     assert (status, detail) == (STATUS_DONE, "ok"), (app, flow, detail)
     assert result["app"] == app and result["flow"] == flow
     assert result["steps"] == 1 + len(compiled)
@@ -344,20 +357,23 @@ def test_bad_map_and_unknown_anchor_do_not_touch_adb(tmp_path):
 
 def test_custom_map_file_changes_the_tap(tmp_path):
     src = json.loads((Path(__file__).resolve().parents[1] / "src" / "fleet" / "phone_ui_map.json").read_text(encoding="utf-8"))
-    src["apps"]["facebook"]["anchors"]["like_button"] = [10, 20]
+    src["apps"]["instagram"]["anchors"]["like_button"] = [10, 20]
     path = tmp_path / "ui.json"
     path.write_text(json.dumps(src), encoding="utf-8")
     ops, fake, _ = _ops()
     flows = PhoneFlows(enabled=True, ui_map_path=str(path))
-    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("instagram", "like"), {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_DONE, "ok")
     taps = [a for a in fake.actions() if a[4:5] == ("tap",)]
     want_x = min(W - 1, 10 * W // 1000)
     want_y = min(H - 1, 20 * H // 1000)
     assert (taps[-1][-2], taps[-1][-1]) == (str(want_x), str(want_y))
-    src["apps"]["facebook"]["anchors"]["like_button"] = [30, 40]
+    src["apps"]["instagram"]["anchors"]["like_button"] = [30, 40]
     path.write_text(json.dumps(src), encoding="utf-8")
-    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    # Same-length JSON can keep mtime_ns, and load_map would serve the cached map.
+    bumped = time.time_ns() + 1_000_000
+    os.utime(path, ns=(bumped, bumped))
+    status, _res, detail = flows.execute(TASK_PHONE_LIKE, _body("instagram", "like"), {"serial": "S1"}, ops=ops)
     assert detail == "ok"
     taps = [a for a in fake.actions() if a[4:5] == ("tap",)]
     assert taps[-1][-2] == str(min(W - 1, 30 * W // 1000))
@@ -503,7 +519,7 @@ def test_ack_keeps_flow_summary_and_drops_text(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.8"
+    assert AGENT_VERSION == "0.3.17"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})
@@ -657,6 +673,131 @@ def test_console_social_button_and_post(tmp_path):
     posts = [c for c in res["calls"] if c[0] == "POST"]
     assert posts == [["POST", "/api/fleet/nodes/n1/phones/S1/social/post",
                       {"app": "tiktok", "text": "hello fleet", "media": 1, "media_slot": 2}]]
+
+
+# ── 冻结包缺坐标文件 ──────────────────────────────────────────────────────────
+def _map_with_like(dest: Path, xy):
+    src = Path(__file__).resolve().parents[1] / "src" / "fleet" / "phone_ui_map.json"
+    data = json.loads(src.read_text(encoding="utf-8"))
+    data["apps"]["facebook"]["anchors"]["like_button"] = list(xy)
+    dest.write_text(json.dumps(data), encoding="utf-8")
+    return dest
+
+
+def _like_taps(plan):
+    return [step for step in plan if step.get("op") == "tap"]
+
+
+def test_missing_bundle_uses_state_dir_map(tmp_path, monkeypatch):
+    from src.fleet import phone_flows as pf
+
+    monkeypatch.setattr(pf, "_BUNDLED", tmp_path / "no-bundle" / "phone_ui_map.json")
+    state = tmp_path / "fleet"
+    state.mkdir()
+    _map_with_like(state / "phone_ui_map.json", (11, 22))
+    ops, fake, _slept = _ops()
+    flows = PhoneFlows(enabled=True, state_dir=state, ops=ops)
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, {**_body("facebook", "like"), "dry_run": True}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_DONE, "dry_run")
+    assert fake.calls == []
+    assert {"op": "tap", "x": 11, "y": 22} in _like_taps(result["plan"])
+    assert pf.default_ui_map_path(state) == state / "phone_ui_map.json"
+
+
+def test_present_bundle_wins_over_state_dir(tmp_path):
+    state = tmp_path / "fleet"
+    state.mkdir()
+    _map_with_like(state / "phone_ui_map.json", (11, 22))
+    ops, fake, _slept = _ops()
+    flows = PhoneFlows(enabled=True, state_dir=state, ops=ops)
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, {**_body("facebook", "like"), "dry_run": True}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_DONE, "dry_run")
+    assert fake.calls == []
+    taps = _like_taps(result["plan"])
+    assert {"op": "tap", "x": 900, "y": 560} in taps
+    assert {"op": "tap", "x": 11, "y": 22} not in taps
+
+
+def test_explicit_ui_map_path_does_not_fall_through(tmp_path, monkeypatch):
+    from src.fleet import phone_flows as pf
+
+    state = tmp_path / "fleet"
+    state.mkdir()
+    _map_with_like(state / "phone_ui_map.json", (11, 22))
+    monkeypatch.setattr(pf, "_BUNDLED", tmp_path / "no-bundle" / "phone_ui_map.json")
+    ops, fake, _slept = _ops()
+    missing = tmp_path / "custom" / "missing.json"
+    flows = PhoneFlows(enabled=True, ui_map_path=str(missing), state_dir=state, ops=ops)
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, {**_body("facebook", "like"), "dry_run": True}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_REJECTED, "ui_map_missing")
+    assert fake.calls == []
+    tuned = tmp_path / "custom" / "phone_ui_map.json"
+    tuned.parent.mkdir()
+    _map_with_like(tuned, (33, 44))
+    flows.configure(enabled=True, ui_map_path=str(tuned))
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, {**_body("facebook", "like"), "dry_run": True}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_DONE, "dry_run")
+    assert {"op": "tap", "x": 33, "y": 44} in _like_taps(result["plan"])
+
+
+def test_missing_bundle_and_state_dir_is_ui_map_missing(tmp_path, monkeypatch):
+    from src.fleet import phone_flows as pf
+
+    monkeypatch.setattr(pf, "_BUNDLED", tmp_path / "no-bundle" / "phone_ui_map.json")
+    ops, fake, _slept = _ops()
+    flows = PhoneFlows(enabled=True, state_dir=tmp_path / "empty", ops=ops)
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, {**_body("facebook", "like"), "dry_run": True}, {"serial": "S1"})
+    assert (status, detail) == (STATUS_REJECTED, "ui_map_missing")
+    assert fake.calls == []
+
+
+def test_agent_phone_flows_keeps_state_dir(tmp_path, monkeypatch):
+    from src.fleet.agent import AgentConfig, NodeAgent
+
+    monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
+    cfg = AgentConfig(tmp_path / "state")
+    cfg.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})
+    agent = NodeAgent(cfg, http=lambda *a, **k: (200, {}), app_version="t")
+    assert agent.phone_flows.state_dir == cfg.state_dir
+
+
+def test_build_agent_add_data_sits_beside_frozen_phone_flows():
+    import importlib.util
+    import os
+
+    path = Path(__file__).resolve().parents[1] / "fleet_agent" / "build_agent.py"
+    spec = importlib.util.spec_from_file_location("chatx_build_agent_ui_map", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.UI_MAP_DEST == "src/fleet"
+    src_s, dest = mod.ui_map_add_data().rsplit(os.pathsep, 1)
+    assert dest == "src/fleet"
+    assert Path(src_s).is_file() and Path(src_s).name == "phone_ui_map.json"
+    text = path.read_text(encoding="utf-8")
+    assert "--add-data" in text and "ui_map_add_data()" in text
+    assert "os.pathsep" in text
+
+
+def test_installers_copy_ui_map_only_when_absent():
+    root = Path(__file__).resolve().parents[1]
+    boot = (root / "fleet_agent/setup/bootstrap.ps1").read_text(encoding="utf-8")
+    ps1 = (root / "fleet_agent/Install-ChatXAgent.ps1").read_text(encoding="utf-8")
+    iss = (root / "fleet_agent/setup/ChatXAgent.iss").read_text(encoding="utf-8")
+    assert boot.isascii()
+    for src in (boot, ps1):
+        body = src.split("function Copy-DefaultUiMap", 1)[1].split("\nfunction ", 1)[0]
+        assert body.index("Test-Path -LiteralPath $dest") < body.index("Copy-Item")
+    assert boot.index("exit 3") < boot.index("Copy-DefaultUiMap $InstallDir $StateDir")
+    assert ps1.index("Fail $lockError") < ps1.index("Copy-DefaultUiMap $stateDir")
+    assert r"..\..\src\fleet\phone_ui_map.json" in iss
+    assert 'DestName: "phone_ui_map.json"' in iss and 'DestDir: "{app}"' in iss
+    step = iss.split("procedure CurStepChanged", 1)[1]
+    assert step.index("LockStateDir(dir)") < step.index("if not FileExists(dir + '\\phone_ui_map.json')")
 
 
 # ── 源码栏 ────────────────────────────────────────────────────────────────────
