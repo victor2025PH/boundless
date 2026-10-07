@@ -299,3 +299,12 @@ TASK_KINDS = TASK_KINDS + ((TASK_NET_HEALTH,) if TASK_NET_HEALTH not in TASK_KIN
 TASK_PRIORITY.setdefault(TASK_NET_HEALTH, 8)
 
 __all__ += ["TASK_NET_HEALTH"]
+
+
+# ── 0.3.22 机房现场待办（不进 REMOTE_PHONE_KINDS，不要求 caps）──────────────
+# 主控只发给这一台机房电脑。内容是类别 + 壁纸号，没有序列号。直播机拒绝。
+TASK_SITE_TODO = "site_todo"
+TASK_KINDS = TASK_KINDS + ((TASK_SITE_TODO,) if TASK_SITE_TODO not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_SITE_TODO, 8)
+
+__all__ += ["TASK_SITE_TODO"]

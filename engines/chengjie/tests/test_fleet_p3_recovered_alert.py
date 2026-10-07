@@ -94,13 +94,14 @@ def test_recover_notify_failure_is_logged(caplog):
     assert "node_recovered notify failed node=a" in caplog.text
 
 
-def test_default_channels_use_ops_alert_with_distinct_kinds(monkeypatch):
+def test_default_channels_do_not_call_ops_alert(monkeypatch, caplog):
     calls = []
     import src.ops.ops_alert as ops
     monkeypatch.setattr(ops, "notify", lambda kind, text, **kw: calls.append((kind, text, kw)) or True)
+    caplog.set_level(logging.INFO)
     al = oa.OfflineAlerter(10)
     al.check([_n("c", "offline", NOW - 20 * 60)], now=NOW)
     al.check([_n("c", "online", NOW + 60)], now=NOW + 60)
-    assert [c[0] for c in calls] == ["fleet_node_offline", "fleet_node_recovered"]
-    assert calls[1][2]["account_id"] == "c" and calls[1][2]["source"] == "fleet-controller"
-    assert calls[1][2]["reason"] == "recovered" and "已恢复在线" in calls[1][1]
+    assert calls == []
+    assert "fleet node_offline_alert node=c" in caplog.text
+    assert "fleet node_offline_recovered node=c" in caplog.text

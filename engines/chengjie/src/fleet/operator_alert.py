@@ -71,6 +71,21 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "reason_adb_error": "adb 出错",
         "reason_no_devices": "没有发现手机",
         "reason_phones_disabled": "手机清点已关闭",
+        "title_todo": "机房现场待办",
+        "cat_no_network": "没网",
+        "act_no_network": "开流量或连WiFi",
+        "cat_no_signal": "没信号",
+        "act_no_signal": "查SIM或摆位",
+        "cat_unauthorized": "未授权",
+        "act_unauthorized": "点允许USB调试并贴号",
+        "cat_missing_wallpaper": "补壁纸号",
+        "act_missing_wallpaper": "补号",
+        "cat_usb_unplugged": "USB掉线",
+        "act_usb_unplugged": "重插或换线",
+        "cat_ledger_conflict": "台账冲突",
+        "act_ledger_conflict": "需给其中一部重新编号",
+        "cat_fb_logged_out": "Facebook未登录",
+        "act_fb_logged_out": "在手机上登录Facebook",
     },
     "en": {
         "title": "Room phone alert",
@@ -96,6 +111,21 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "reason_adb_error": "adb error",
         "reason_no_devices": "No phones found",
         "reason_phones_disabled": "Phone inventory is off",
+        "title_todo": "Room to-do",
+        "cat_no_network": "No network",
+        "act_no_network": "Turn on mobile data or join Wi-Fi",
+        "cat_no_signal": "No signal",
+        "act_no_signal": "Check the SIM or move the phone",
+        "cat_unauthorized": "Unauthorized",
+        "act_unauthorized": "Allow USB debugging and label it",
+        "cat_missing_wallpaper": "Missing wallpaper number",
+        "act_missing_wallpaper": "Add the number",
+        "cat_usb_unplugged": "USB unplugged",
+        "act_usb_unplugged": "Reseat or replace the cable",
+        "cat_ledger_conflict": "Ledger conflict",
+        "act_ledger_conflict": "Renumber one of these phones",
+        "cat_fb_logged_out": "Facebook logged out",
+        "act_fb_logged_out": "Log in to Facebook on the phone",
     },
 }
 
@@ -236,7 +266,10 @@ function Update-View {
       return
     }
     $script:lang = Get-Lang $snap
-    $title = Txt $snap $script:lang 'title'
+    $titleKey = 'title'
+    $todoProp = $snap.PSObject.Properties['todos']
+    if ($null -ne $todoProp) { $titleKey = 'title_todo' }
+    $title = Txt $snap $script:lang $titleKey
     $form.Text = $title
     if ($title.Length -gt 63) { $notify.Text = $title.Substring(0, 63) } else { $notify.Text = $title }
     $btn.Text = Txt $snap $script:lang 'toggle'
@@ -250,28 +283,59 @@ function Update-View {
     $pcLabel.Text = $pcText
     $phones = AsArray $snap.phones
     $network = AsArray $snap.network
-    if ($phones.Length -eq 0 -and $network.Length -eq 0 -and [string]::IsNullOrEmpty($pcText)) {
-      [void]$list.Items.Add((Txt $snap $script:lang 'all_clear'))
-    }
-    foreach ($p in $phones) {
-      $no = PhoneNo $snap $script:lang $p
-      $detail = ''
-      if ($null -ne $p.detail) { $detail = [string]$p.detail }
-      $why = ReasonText $snap $script:lang $p.reason $detail
-      $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $why)
-      [void]$list.Items.Add($line)
-    }
-    foreach ($n in $network) {
-      $no = PhoneNo $snap $script:lang $n
-      $status = ''
-      if ($script:lang -eq 'en') {
-        if ($null -ne $n.status_en) { $status = [string]$n.status_en }
-      } elseif ($null -ne $n.status_zh) {
-        $status = [string]$n.status_zh
+    if ($null -ne $todoProp) {
+      $todos = AsArray $todoProp.Value
+      if ($todos.Length -eq 0 -and [string]::IsNullOrEmpty($pcText)) {
+        [void]$list.Items.Add((Txt $snap $script:lang 'all_clear'))
       }
-      if ([string]::IsNullOrEmpty($status)) { continue }
-      $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $status)
-      [void]$list.Items.Add($line)
+      $order = @('no_network','no_signal','unauthorized','missing_wallpaper','usb_unplugged','ledger_conflict','fb_logged_out')
+      foreach ($cat in $order) {
+        $rows = New-Object System.Collections.ArrayList
+        foreach ($t in $todos) {
+          $c = ''
+          if ($null -ne $t.category) { $c = [string]$t.category }
+          if ($c -eq $cat) { [void]$rows.Add($t) }
+        }
+        if ($rows.Count -eq 0) { continue }
+        [void]$list.Items.Add((Txt $snap $script:lang ('cat_' + $cat)))
+        $action = Txt $snap $script:lang ('act_' + $cat)
+        foreach ($t in $rows) {
+          $no = ''
+          if ($null -ne $t.wallpaper_no) { $no = [string]$t.wallpaper_no }
+          $flag = $false
+          if ($null -ne $t.unnumbered) { $flag = [bool]$t.unnumbered }
+          if ($flag -or [string]::IsNullOrWhiteSpace($no)) {
+            $no = Txt $snap $script:lang 'unnumbered'
+            if ($null -ne $t.slot) { $no = $no + ' ' + [string]$t.slot }
+          }
+          $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $action)
+          [void]$list.Items.Add('  ' + $line)
+        }
+      }
+    } else {
+      if ($phones.Length -eq 0 -and $network.Length -eq 0 -and [string]::IsNullOrEmpty($pcText)) {
+        [void]$list.Items.Add((Txt $snap $script:lang 'all_clear'))
+      }
+      foreach ($p in $phones) {
+        $no = PhoneNo $snap $script:lang $p
+        $detail = ''
+        if ($null -ne $p.detail) { $detail = [string]$p.detail }
+        $why = ReasonText $snap $script:lang $p.reason $detail
+        $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $why)
+        [void]$list.Items.Add($line)
+      }
+      foreach ($n in $network) {
+        $no = PhoneNo $snap $script:lang $n
+        $status = ''
+        if ($script:lang -eq 'en') {
+          if ($null -ne $n.status_en) { $status = [string]$n.status_en }
+        } elseif ($null -ne $n.status_zh) {
+          $status = [string]$n.status_zh
+        }
+        if ([string]::IsNullOrEmpty($status)) { continue }
+        $line = (Txt $snap $script:lang 'phone_line').Replace('{no}', $no).Replace('{reason}', $status)
+        [void]$list.Items.Add($line)
+      }
     }
     $seq = 0
     if ($null -ne $snap.seq) { $seq = [int]$snap.seq }
@@ -411,6 +475,13 @@ def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = F
             network.append(row)
             if len(network) >= _MAX_MAP:
                 break
+    todos: List[Dict[str, Any]] = []
+    if isinstance(snap, dict) and not live_stream and isinstance(snap.get("todos"), list):
+        from .site_todo import sanitize_site_todos
+
+        todos = sanitize_site_todos(snap.get("todos"))
+    lock = root / LOCK_NAME
+    panel_running = (not live_stream) and lock.is_file() and _lock_held(lock)
     out: Dict[str, Any] = {
         "enabled": bool(cfg["enabled"]) and not live_stream,
         "language": language,
@@ -419,12 +490,40 @@ def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = F
         "live_stream": bool(live_stream),
         "snapshot": isinstance(snap, dict) and not live_stream,
         "phones": phones,
+        "todos": todos,
+        "panel_running": panel_running,
+        "last_present": _present_view(None if live_stream else snap),
+        "session_id": -1 if live_stream else _session_view(snap),
     }
     if network:
         out["network"] = network
     if pc_reason:
         out["pc_reason"] = pc_reason
     return out
+
+
+_PRESENT_MODES = frozenset({"disabled", "headless", "already_running", "gui"})
+
+
+def _present_view(snap: Any) -> Dict[str, Any]:
+    default = {"ok": False, "mode": "headless", "shown": False}
+    if not isinstance(snap, dict):
+        return default
+    raw = snap.get("present")
+    if not isinstance(raw, dict):
+        return default
+    mode = raw.get("mode")
+    if mode not in _PRESENT_MODES:
+        return default
+    return {"ok": raw.get("ok") is True, "mode": mode, "shown": raw.get("shown") is True}
+
+
+def _session_view(snap: Any) -> int:
+    if isinstance(snap, dict):
+        sid = snap.get("session_id")
+        if isinstance(sid, int) and not isinstance(sid, bool) and -1 <= sid <= 10_000_000:
+            return sid
+    return _current_session_id()
 
 
 def _load_snapshot(state_dir: Path) -> Optional[Dict[str, Any]]:
@@ -544,6 +643,9 @@ class OperatorAlert:
         self._net_bad: set = set()
         self._last_phones: List[Dict[str, Any]] = []
         self._last_pc: Optional[Dict[str, Any]] = None
+        self._todos: Optional[List[Dict[str, Any]]] = None
+        self._hold_present = False
+        self._restore()
 
     def note_action(self, serial: str, status: str) -> None:
         try:
@@ -665,7 +767,13 @@ class OperatorAlert:
             "cleared": cleared,
             "strings": STRINGS,
         }
-        self.present(self.state_dir, payload)
+        self._attach_todos(payload)
+        if self._hold_present and not raised:
+            _atomic_write(self.state_dir / SNAP_NAME, json.dumps(payload, ensure_ascii=False))
+        else:
+            if raised:
+                self._hold_present = False
+            self.present(self.state_dir, payload)
 
     def note_network(self, rows: Any, cfg_data: Any) -> None:
         """Remember per-phone network lines and refresh the local snapshot.
@@ -715,7 +823,9 @@ class OperatorAlert:
             "cleared": [],
             "strings": STRINGS,
         }
+        self._attach_todos(payload)
         if raised:
+            self._hold_present = False
             self.present(self.state_dir, payload)
             return
         _atomic_write(self.state_dir / SNAP_NAME, json.dumps(payload, ensure_ascii=False))
@@ -755,24 +865,138 @@ class OperatorAlert:
         items.sort(key=_phone_sort)
         return items
 
+    def apply_todos(self, todos: Any, cfg_data: Any) -> None:
+        """Write the controller's site list and show the panel when it changed.
+
+        A live-stream host does nothing. The same list after a restart does not
+        call ``present`` again; a new list does.
+        """
+        try:
+            if self.live_stream:
+                return
+            from .site_todo import sanitize_site_todos, site_todo_signature
+
+            clean = sanitize_site_todos(todos)
+            changed = site_todo_signature(self._todos or []) != site_todo_signature(clean) and not (
+                self._todos is None and not clean
+            )
+            if self._todos is None and clean:
+                changed = True
+            self._todos = clean
+            cfg = parse_alert_config(cfg_data)
+            if cfg["enabled"]:
+                self._ever_enabled = True
+            stamp = float(self.clock())
+            self._seq += 1
+            self._last_write = stamp
+            language = resolve_language(self.state_dir, cfg["language"])
+            payload = {
+                "enabled": True,
+                "seq": self._seq,
+                "language": language,
+                "refresh_sec": cfg["refresh_sec"],
+                "updated_at": stamp,
+                "pc": self._last_pc,
+                "phones": [dict(item) for item in self._last_phones],
+                "network": [dict(item) for item in self._network],
+                "raised": ["todos"] if changed else [],
+                "cleared": [],
+                "strings": STRINGS,
+            }
+            self._attach_todos(payload)
+            if changed:
+                self._hold_present = False
+                self.present(self.state_dir, payload)
+                return
+            _atomic_write(self.state_dir / SNAP_NAME, json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            logger.warning("[operator_alert] apply_todos skipped", exc_info=True)
+
+    def _attach_todos(self, payload: Dict[str, Any]) -> None:
+        if self._todos is not None:
+            payload["todos"] = [dict(item) for item in self._todos]
+
+    def _restore(self) -> None:
+        """Keep network rows and site todos across a process restart. Does not show the window."""
+        if self.live_stream:
+            return
+        snap = _load_snapshot(self.state_dir)
+        if not isinstance(snap, dict):
+            return
+        self._hold_present = True
+        updated = snap.get("updated_at")
+        if isinstance(updated, (int, float)) and not isinstance(updated, bool):
+            self._last_write = float(updated)
+        seq = snap.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0:
+            self._seq = seq
+        network = snap.get("network")
+        if isinstance(network, list):
+            restored = []
+            for row in network:
+                if isinstance(row, dict):
+                    restored.append({k: v for k, v in row.items() if k not in {"serial", "_serial"}})
+                if len(restored) >= 32:
+                    break
+            self._network = restored
+            self._net_bad = {str(item.get("key")) for item in restored if item.get("alert") and item.get("key")}
+        phones = snap.get("phones")
+        if isinstance(phones, list):
+            self._last_phones = []
+            for item in phones:
+                if not isinstance(item, dict):
+                    continue
+                public = {k: v for k, v in item.items() if k not in {"serial", "_serial"}}
+                self._last_phones.append(public)
+                key = str(public.get("key") or "")
+                if not key:
+                    continue
+                since = public.get("since")
+                self._active_since[key] = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) else self._last_write
+                self._active_sig[key] = f"{public.get('reason')}|{public.get('detail') or ''}"
+                match = re.search(r"unnumbered:(\d+)", key)
+                if match:
+                    slot = int(match.group(1))
+                    if slot >= self._next_slot:
+                        self._next_slot = slot + 1
+                if len(self._last_phones) >= _MAX_MAP:
+                    break
+        pc = snap.get("pc")
+        if isinstance(pc, dict):
+            self._last_pc = {k: v for k, v in pc.items() if k not in {"serial", "_serial"}}
+            if self._last_pc.get("reason"):
+                since = self._last_pc.get("since")
+                self._active_since["pc"] = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) else self._last_write
+                self._active_sig["pc"] = str(self._last_pc.get("reason") or "")
+        if isinstance(snap.get("todos"), list):
+            from .site_todo import sanitize_site_todos
+
+            self._todos = sanitize_site_todos(snap.get("todos"))
+
 
 def present_operator_alert(state_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Write the snapshot, then try to show the panel. Never raises."""
     try:
         state_dir = Path(state_dir)
-        _atomic_write(state_dir / SNAP_NAME, json.dumps(payload, ensure_ascii=False))
-        if payload.get("enabled") is False:
-            return {"ok": True, "mode": "disabled", "shown": False}
-        if not gui_available():
-            pc = payload.get("pc") if isinstance(payload.get("pc"), dict) else {}
+        body = dict(payload)
+        _atomic_write(state_dir / SNAP_NAME, json.dumps(body, ensure_ascii=False))
+        if body.get("enabled") is False:
+            result = {"ok": True, "mode": "disabled", "shown": False}
+        elif not gui_available():
+            pc = body.get("pc") if isinstance(body.get("pc"), dict) else {}
             logger.info("[operator_alert] headless non_working=%d pc=%s",
-                        len(payload.get("phones") or []), str((pc or {}).get("reason") or ""))
-            return {"ok": True, "mode": "headless", "shown": False}
-        try:
-            return launch_panel(state_dir)
-        except Exception:
-            logger.warning("[operator_alert] panel unavailable; staying headless", exc_info=True)
-            return {"ok": True, "mode": "headless", "shown": False}
+                        len(body.get("phones") or []), str((pc or {}).get("reason") or ""))
+            result = {"ok": True, "mode": "headless", "shown": False}
+        else:
+            try:
+                result = launch_panel(state_dir)
+            except Exception:
+                logger.warning("[operator_alert] panel unavailable; staying headless", exc_info=True)
+                result = {"ok": True, "mode": "headless", "shown": False}
+        body["present"] = {key: result[key] for key in ("ok", "mode", "shown")}
+        body["session_id"] = _current_session_id()
+        _atomic_write(state_dir / SNAP_NAME, json.dumps(body, ensure_ascii=False))
+        return result
     except Exception:
         logger.warning("[operator_alert] present failed", exc_info=True)
         return {"ok": False, "mode": "headless", "shown": False}
