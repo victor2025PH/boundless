@@ -17,6 +17,7 @@
     POST /api/fleet/nodes/{node_id}/revoke  POST /api/fleet/nodes/{node_id}  {label, group_name}
     GET  /api/fleet/tasks?node_id=&status=&kind=   GET /api/fleet/tasks/{task_id}   POST /api/fleet/tasks/{task_id}/cancel
     GET  /api/fleet/overview
+    GET  /api/fleet/social-pace   每个账号今天的 Facebook 动作次数和上限（控制台页面尚未绘制）
     POST /api/fleet/nodes/{node_id}/login-qr                    {platform, instance?, ...} → login_qr 任务
     POST /api/fleet/nodes/{node_id}/login-qr/{login_id}/status  {platform, instance?}      → login_status 任务
 页面：
@@ -49,6 +50,7 @@ from src.fleet.protocol import (
     STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS,
 )
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
+from src.fleet.social_pace import read_optional_labels
 from src.fleet.phone_rules import (
     PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
 )
@@ -530,6 +532,7 @@ def register_routes(app, ctx) -> None:
         try:
             target_serial = check_target(serial)
             payload = validate_flow_payload(kind, body)
+            account, wallpaper = read_optional_labels(body)
         except PhoneOpError as e:
             raise HTTPException(status_code=403 if e.code == "protected_phone" else 400, detail=e.code)
         st = _store_or_503(config_manager)
@@ -540,10 +543,16 @@ def register_routes(app, ctx) -> None:
         reason = phone_op_block_reason(node, target_serial)
         if reason:
             raise HTTPException(status_code=409, detail=reason)
-        rec = st.enqueue(node_id, kind, payload=payload, target={"serial": target_serial},
+        target = {"serial": target_serial}
+        if account:
+            target["account"] = account
+        if wallpaper:
+            target["wallpaper"] = wallpaper
+        rec = st.enqueue(node_id, kind, payload=payload, target=target,
                          ttl_sec=PHONE_FLOW_TTL_SEC, created_by=_actor(request))
         if rec is None:
-            raise HTTPException(status_code=409, detail="enqueue_refused")
+            pace = st.take_social_pace_refusal()
+            raise HTTPException(status_code=409, detail=pace or "enqueue_refused")
         return {"ok": True, "task": rec}
 
     # ── 集中扫码（docs/FLEET_CONSOLE_QR_LOGIN.md）──────────────────────────
@@ -623,6 +632,11 @@ def register_routes(app, ctx) -> None:
             "nodes": long_offline(st.list_nodes(include_revoked=False), now=time.time(), after_min=mark_min),
         }
         return {"ok": True, **out}
+
+    @app.get("/api/fleet/social-pace")
+    async def api_fleet_social_pace(request: Request, node_id: str = "", _=Depends(_api_auth)):
+        st = _store_or_503(config_manager)
+        return {"ok": True, **st.social_pace_usage(node_id=node_id)}
 
     # ── 页面 ──────────────────────────────────────────────────────────────
     @app.get("/fleet/", response_class=HTMLResponse)

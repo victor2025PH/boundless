@@ -50,3 +50,29 @@ tiktok:
     view_profile:    { hourly: 15, daily: 80,  cooldown_sec: 5 }
   daily_total: 350
   hourly_total: 50
+
+# Per-account ceilings for one Facebook login. A person scrolling a feed
+# likes a handful of posts an hour and a few dozen in a day. These are usage
+# limits so the account is not worn out. They are not a bypass of any
+# platform check.
+#
+# The fleet enforces the twin of this block in
+# engines/chengjie/config/compliance.yaml (like/comment/follow/post, a 60s
+# minimum gap, 0–20s stable spacing, local hours 08:00–22:00 at UTC+8, and
+# enabled as the kill switch). ComplianceGuard in this engine still uses its
+# in-code DEFAULT_LIMITS and does not load this file; those in-code numbers
+# stay loose because an empty account id is shared across devices. Do not
+# treat the block below as that shared counter.
+facebook:
+  actions:
+    like:    { hourly: 6, daily: 40, cooldown_sec: 60 }
+    comment: { hourly: 3, daily: 15, cooldown_sec: 60 }
+    follow:  { hourly: 3, daily: 15, cooldown_sec: 60 }
+    post:    { hourly: 1, daily: 4,  cooldown_sec: 60 }
+  min_delay_sec: 60
+  jitter_sec: 20
+  active_hours: [8, 22]
+  tz_offset_hours: 8
+  enabled: true
+  daily_total: 74
+  hourly_total: 13
