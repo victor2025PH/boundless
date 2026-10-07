@@ -1,5 +1,12 @@
 # 智拓群控节点更新日志
 
+## 0.3.21
+Facebook 信息流在播视频时，`uiautomator dump` 经常拿不到 idle，输出有字但解析不出层次。0.3.20 靠 dump 的三路信号（无障碍标签、resource-id、Comment/Share 同行最左按钮）因此一起落空。这一版不改「两个信号一致才点」，也不改 `like_probe` 只定位、`dry_run` 不碰手机。
+
+找赞前先让画面停一下：`cmd media_session dispatch pause`、`input keyevent 127`（只暂停，不播放），再在上一张截图的上半部中点轻点一次。这不是点赞。然后把层次写到固定文件 `/sdcard/chatx_like_hierarchy.xml` 再 `adb pull` 回来读。dump 退出码不是 0 也照样 pull：idle 报错时文件里仍可能有完整 XML。失败就短退避再试：未压缩文件、再一次未压缩文件、`--compressed` 文件、stdout `/dev/tty`、最后才是 stdout `--compressed`。`--compressed` 必须写在路径前面。别的路径，包括 `/sdcard/window_dump.xml`，仍然拒绝。公开下载页的 latest 不因这一版改掉，仍是 0.3.7。
+
+`like_diag` 新增：`uiautomator.attempts`（dump 次数）、`via`（`file` 或 `stdout`）、`compressed`、`error`（报错首行，走原来的序列号脱敏：对得上壁纸号就写成壁纸号，否则 `[redacted]`）。截图路补上 `shape_matched`、`shape_score`（没命中时也写出，最高 0.99），以及 `structure_matched` 命中的动作条整行 `structure_bounds`。这些字段只用于诊断，不参与是否点击。
+
 ## 0.3.20
 `like_probe` 现在带回每个信号的诊断，方便看清只有图标的赞为什么没对上。`like_diag` 里有：uiautomator 有没有找到 Like/React、是靠 content-desc、text 还是 resource-id；动作条区域里实际出现的 content-desc / text / resource-id；模板匹配分（不到门槛也写出来）；结构回退有没有对上；以及候选动作条节点的 bounds、class、content-desc、resource-id、text。只含这些文字属性，不含截图。序列号会从这段文字里去掉。诊断不改变真点赞：仍然要两个信号一致，或者模板分足够高，点完仍要复核。
 

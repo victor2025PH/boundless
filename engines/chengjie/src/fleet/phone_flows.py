@@ -18,9 +18,11 @@ finds the Like control (text row, thumbs-up template, action-bar slot), and taps
 only when two signals agree or the template score is high. The fixed coordinate
 stays in the dry_run plan and is marked deprecated. Warmup and watch still use it.
 ``like_probe`` launches and scrolls and does not tap Like. The result includes
-``like_diag``: which signal fired, the template score, and the action-bar
-node attributes (no screenshot, no serial). No posts after the swipe budget
-is ``empty_feed``.
+``like_diag``: which signal fired, the template score, the shape score, the
+action-bar row bounds, and the action-bar node attributes (no screenshot, no
+serial). The hierarchy dump settles autoplay, writes one fixed file, and
+retries; that transport is diagnostic and does not change the two-signal
+rule. No posts after the swipe budget is ``empty_feed``.
 
 Opening Facebook polls the feed for up to 9 seconds. One check at 0.5 seconds
 is not enough: the app is still drawing, and a previous scroll hides the top
@@ -625,6 +627,24 @@ def _status(err: PhoneOpError) -> str:
     return STATUS_FAILED if err.failed else STATUS_REJECTED
 
 
+def _merge_dump_meta(diag: Dict[str, Any], meta: Any) -> None:
+    """Copy dump transport into ``like_diag``. The text is scrubbed later."""
+    if not isinstance(meta, dict):
+        return
+    uia = diag.get("uiautomator")
+    if not isinstance(uia, dict):
+        return
+    attempts = meta.get("attempts")
+    if isinstance(attempts, bool) or not isinstance(attempts, int):
+        attempts = 0
+    via = meta.get("via")
+    error = meta.get("error")
+    uia["attempts"] = attempts
+    uia["via"] = via if via in ("file", "stdout") else ""
+    uia["compressed"] = meta.get("compressed") is True
+    uia["error"] = error if isinstance(error, str) else ""
+
+
 def _result(serial: str, app: str, flow: str, *, completed: Optional[int] = None,
             failed_step: Optional[int] = None, width: Optional[int] = None, height: Optional[int] = None,
             err: Optional[PhoneOpError] = None) -> Dict[str, Any]:
@@ -898,15 +918,22 @@ class PhoneFlows:
                     # Dump is read-only. A phone that refuses it still has the
                     # screenshot signals (structure + template / silhouette).
                     hierarchy = ""
+                    dump_meta = None
                     reader = getattr(ops, "read_ui_hierarchy", None)
                     if callable(reader):
                         try:
-                            hierarchy = reader(serial) or ""
+                            got = reader(serial)
                         except Exception:
-                            hierarchy = ""
+                            got = ""
+                        if isinstance(got, dict):
+                            hierarchy = str(got.get("xml") or "")
+                            dump_meta = got
+                        elif isinstance(got, str):
+                            hierarchy = got
                     loc = locate_like_row(raw, boxes, hierarchy)
                     if isinstance(loc.get("diag"), dict):
                         last_diag = loc["diag"]
+                        _merge_dump_meta(last_diag, dump_meta)
                     if loc.get("post"):
                         saw_post = True
                     if loc.get("target"):

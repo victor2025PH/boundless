@@ -709,8 +709,11 @@ def test_finds_the_row_on_a_later_swipe():
     assert _feed_dirs(fake.actions()) == ["top", "top", "feed"]
 
 
+_HIERARCHY_REMOTE = "/sdcard/chatx_like_hierarchy.xml"
+
+
 class _HierarchyAdb(FakeAdb):
-    """Serves one read-only hierarchy dump. Screenshots stay on ``frame``."""
+    """Serves one hierarchy. The file dump is pulled; stdout is the fallback."""
 
     def __init__(self, frame, xml):
         super().__init__(frame=frame)
@@ -718,10 +721,22 @@ class _HierarchyAdb(FakeAdb):
 
     def __call__(self, cmd, **kw):
         args = tuple(cmd[1:])
-        if len(args) >= 4 and args[2:] == ("shell", "uiautomator", "dump", "/dev/tty"):
+        if len(args) >= 5 and args[2:5] == ("shell", "uiautomator", "dump"):
             self.calls.append(args)
             from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout=self.xml, stderr=b"")
+            if args[-1] == "/dev/tty":
+                return SimpleNamespace(returncode=0, stdout=self.xml, stderr=b"")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"UI hierchary dumped to: /sdcard/chatx_like_hierarchy.xml\n",
+                stderr=b"",
+            )
+        if len(args) >= 5 and args[2] == "pull" and args[3] == _HIERARCHY_REMOTE:
+            self.calls.append(args)
+            from pathlib import Path
+            from types import SimpleNamespace
+            Path(args[4]).write_bytes(self.xml)
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
         return FakeAdb.__call__(self, cmd, **kw)
 
 
@@ -801,9 +816,17 @@ def test_like_probe_pairs_the_dump_label_with_the_template():
     assert (status, detail) == (STATUS_DONE, "like_probe"), detail
     assert "label" in result["like_signals"] and "template" in result["like_signals"]
     assert result["like_label"] == "react"
-    assert any(a[2:] == ("shell", "uiautomator", "dump", "/dev/tty") for a in adb.actions())
+    assert any(
+        a[2:5] == ("shell", "uiautomator", "dump") and a[-1] == _HIERARCHY_REMOTE and "--compressed" not in a
+        for a in adb.actions()
+    )
+    assert any(len(a) >= 4 and a[2] == "pull" and a[3] == _HIERARCHY_REMOTE for a in adb.actions())
     diag = result["like_diag"]
     assert diag["uiautomator"]["dump"] == "ok"
+    assert diag["uiautomator"]["attempts"] == 1
+    assert diag["uiautomator"]["via"] == "file"
+    assert diag["uiautomator"]["compressed"] is False
+    assert diag["uiautomator"]["error"] == ""
     assert diag["uiautomator"]["like_found"] is True
     assert diag["uiautomator"]["match"]["label"] == "react"
     assert diag["uiautomator"]["match"]["by"] == "content-desc"
@@ -811,6 +834,16 @@ def test_like_probe_pairs_the_dump_label_with_the_template():
     assert diag["template_matched"] is True
     assert diag["template_score"] >= TEMPLATE_MED
     assert isinstance(diag["structure_matched"], bool)
+    assert isinstance(diag["shape_matched"], bool)
+    assert 0.0 <= diag["shape_score"] <= 1.0
+    if diag["shape_matched"]:
+        assert diag["shape_score"] == 1.0
+    else:
+        assert diag["shape_score"] < 1.0
+    if diag["structure_matched"]:
+        assert diag["structure_bounds"].startswith("[")
+    else:
+        assert diag["structure_bounds"] == ""
     assert diag["nodes"] and set(diag["nodes"][0]) == {
         "bounds", "class", "content_desc", "resource_id", "text",
     }
@@ -849,6 +882,10 @@ def test_like_probe_on_a_miss_names_the_label_and_the_weak_template():
     assert diag["template_matched"] is False
     assert diag["template_score"] < TEMPLATE_HIGH
     assert isinstance(diag["structure_matched"], bool)
+    assert diag["shape_matched"] is False
+    assert diag["shape_score"] < 1.0
+    if diag["structure_matched"]:
+        assert diag["structure_bounds"].startswith("[")
     assert diag["nodes"][0]["bounds"] == "[16,242][46,272]"
     assert diag["nodes"][0]["content_desc"] == "Like"
     serial = "TESTSERIAL01"

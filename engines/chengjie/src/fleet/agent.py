@@ -20,6 +20,7 @@
     0.3.18 只有图标的动作条也能定位赞（结构 + 模板/轮廓，不靠文字）。打开 Facebook 会轮询约 9 秒，并把信息流拉回顶部再找赞。只读 uiautomator dump 的 Like/赞/React 标签要和模板一致才点。
     0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
     0.3.20 like_probe 带回每个信号的诊断（无障碍标签、动作条属性、模板分、结构是否命中），只含节点文字属性，不含截图、不含序列号。图标动作条放宽标签 / resource-id / 最左按钮，仍要两个信号一致并且点完复核。手机任务的错误文字在回执前去掉原始序列号，改成壁纸号或打码。公开 latest 仍是 0.3.7。
+    0.3.21 找赞前先让信息流停一下（媒体暂停加画面上半部一次轻点），uiautomator 改成写到固定文件再拉回来，失败就短退避重试，最后才用 --compressed 和 stdout。like_diag 多了 dump 报错首行、重试次数、文件还是 stdout、是否 compressed，以及 shape 分和动作条行 bounds。两信号一致才点、like_probe 只定位、dry_run 不碰手机都不变。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -101,7 +102,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.20"
+AGENT_VERSION = "0.3.21"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).

@@ -252,9 +252,25 @@ def _sanitize_like_diag(raw: Any) -> Any:
         return None
     uia_in = raw.get("uiautomator") if isinstance(raw.get("uiautomator"), dict) else {}
     dump = uia_in.get("dump")
+    attempts = uia_in.get("attempts")
+    if isinstance(attempts, bool) or not isinstance(attempts, int):
+        attempts_out = 0
+    else:
+        attempts_out = max(0, min(20, attempts))
+    via = uia_in.get("via")
+    bounds_row = _diag_str(raw.get("structure_bounds"), 40)
+    shape_score = raw.get("shape_score")
+    if isinstance(shape_score, bool) or not isinstance(shape_score, (int, float)):
+        shape_out = 0.0
+    else:
+        shape_out = round(max(0.0, min(1.0, float(shape_score))), 3)
     uia: Dict[str, Any] = {
         "dump": dump if dump in _DIAG_DUMPS else "bad",
         "like_found": uia_in.get("like_found") is True,
+        "attempts": attempts_out,
+        "via": via if via in ("file", "stdout") else "",
+        "compressed": uia_in.get("compressed") is True,
+        "error": _diag_str(uia_in.get("error"), 160),
     }
     match = uia_in.get("match")
     if uia["like_found"] and isinstance(match, dict):
@@ -302,6 +318,9 @@ def _sanitize_like_diag(raw: Any) -> Any:
         "template_score": score_out,
         "template_matched": raw.get("template_matched") is True,
         "structure_matched": raw.get("structure_matched") is True,
+        "structure_bounds": bounds_row if _BOUNDS_RE.fullmatch(bounds_row) else "",
+        "shape_matched": raw.get("shape_matched") is True,
+        "shape_score": shape_out,
         "position_matched": raw.get("position_matched") is True,
         "nodes": nodes,
     }

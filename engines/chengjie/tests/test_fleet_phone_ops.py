@@ -227,6 +227,12 @@ def _ops(adb=None, server=41, **kw):
     ("-s", "S1", "shell", "input", "text", "hello%sworld"),
     ("-s", "S1", "shell", "input", "keyevent", "3"), ("-s", "S1", "shell", "input", "keyevent", "4"),
     ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "--compressed", "/dev/tty"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "--compressed", "/sdcard/chatx_like_hierarchy.xml"),
+    ("-s", "S1", "pull", "/sdcard/chatx_like_hierarchy.xml", "/tmp/chatx_like_x.xml"),
+    ("-s", "S1", "shell", "input", "keyevent", "127"),
+    ("-s", "S1", "shell", "cmd", "media_session", "dispatch", "pause"),
 ])
 def test_adb_allowlist_accepts_only_the_fixed_forms(args):
     check_adb_args(args)
@@ -241,6 +247,11 @@ def test_adb_allowlist_accepts_only_the_fixed_forms(args):
     ("-s", "S1", "shell", "uiautomator", "dump"),
     ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml"),
     ("-s", "S1", "shell", "uiautomator", "dump", "/dev/tty", "--compressed"),
+    ("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml", "--compressed"),
+    ("-s", "S1", "pull", "/sdcard/window_dump.xml", "/tmp/chatx_like_x.xml"),
+    ("-s", "S1", "pull", "/sdcard/chatx_like_hierarchy.xml", "/tmp/../x.xml"),
+    ("-s", "S1", "shell", "input", "keyevent", "85"),
+    ("-s", "S1", "shell", "cmd", "media_session", "dispatch", "play"),
     ("-s", "S1", "exec-out", "uiautomator", "dump", "/dev/tty"),
     ("-s", "S1", "shell", "input", "tap", "10"), ("-s", "S1", "shell", "input", "tap", "-1", "2"),
     ("-s", "3B1F4KE5MS140P4X", "exec-out", "screencap"), ("-s", "192.168.0.148:5555", "exec-out", "screencap"),
@@ -250,6 +261,138 @@ def test_adb_allowlist_rejects_everything_else(args):
     with pytest.raises(PhoneOpError) as ei:
         check_adb_args(args)
     assert ei.value.code == "adb_args_not_allowed"
+
+
+class _DumpScript(FakeAdb):
+    """One outcome per dump. A missing later step repeats the last one."""
+
+    def __init__(self, steps):
+        super().__init__()
+        self.steps = list(steps)
+        self.dump_n = 0
+        self.pending = None
+
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if len(args) >= 5 and args[2:5] == ("shell", "uiautomator", "dump"):
+            self.calls.append(args)
+            step = self.steps[min(self.dump_n, len(self.steps) - 1)]
+            self.dump_n += 1
+            self.pending = step.get("file")
+            return _NS(returncode=step.get("rc", 0), stdout=step.get("out", b""), stderr=step.get("err", b""))
+        if len(args) >= 4 and args[2] == "pull":
+            self.calls.append(args)
+            if self.pending:
+                from pathlib import Path
+                Path(args[-1]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[-1]).write_bytes(self.pending)
+            return _NS(returncode=0, stdout=b"", stderr=b"")
+        return FakeAdb.__call__(self, cmd, **kw)
+
+
+_HIER_XML = b"<hierarchy rotation=\"0\"></hierarchy>"
+_DUMPED_TO = b"UI hierchary dumped to: /sdcard/chatx_like_hierarchy.xml\n"
+
+
+def _read_hierarchy(steps, *, screen=(180, 400)):
+    adb = _DumpScript(steps)
+    ops, _fake, _slept = _ops(adb=adb)
+    if screen:
+        ops._screen["S1"] = screen
+    return ops.read_ui_hierarchy("S1"), adb
+
+
+def test_hierarchy_pulls_the_fixed_file_and_pauses_once():
+    got, adb = _read_hierarchy([{"out": _DUMPED_TO, "file": _HIER_XML}])
+    assert got["attempts"] == 1 and got["via"] == "file" and got["compressed"] is False
+    assert got["error"] == "" and got["xml"].startswith("<hierarchy")
+    dumps = [c for c in adb.calls if len(c) >= 5 and c[2:5] == ("shell", "uiautomator", "dump")]
+    assert dumps == [("-s", "S1", "shell", "uiautomator", "dump", "/sdcard/chatx_like_hierarchy.xml")]
+    assert any(len(c) >= 4 and c[2] == "pull" and c[3] == "/sdcard/chatx_like_hierarchy.xml" for c in adb.calls)
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 1
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "cmd", "media_session", "dispatch", "pause")) == 1
+    taps = [c for c in adb.calls if len(c) > 4 and c[4] == "tap"]
+    assert taps == [("-s", "S1", "shell", "input", "tap", "90", "112")]
+    assert not any("rm" in c for c in adb.calls)
+
+
+def test_hierarchy_keeps_xml_written_before_the_idle_error():
+    got, adb = _read_hierarchy([{
+        "rc": 1, "err": b"ERROR: could not get idle state\n", "file": _HIER_XML,
+    }])
+    assert got["attempts"] == 1 and got["via"] == "file" and got["error"] == ""
+    assert got["xml"].startswith("<hierarchy")
+    assert adb.dump_n == 1
+
+
+def test_hierarchy_retries_then_compressed_file():
+    idle = {"rc": 1, "err": b"ERROR: could not get idle state\n", "file": None}
+    got, adb = _read_hierarchy([idle, idle, {"out": _DUMPED_TO, "file": _HIER_XML}])
+    assert got["attempts"] == 3 and got["via"] == "file" and got["compressed"] is True
+    assert got["error"] == "" and "<hierarchy" in got["xml"]
+    dumps = [c for c in adb.calls if len(c) >= 5 and c[2:5] == ("shell", "uiautomator", "dump")]
+    assert len(dumps) == 3
+    assert dumps[2][5] == "--compressed" and dumps[2][-1] == "/sdcard/chatx_like_hierarchy.xml"
+    assert sum(1 for c in adb.calls if c[-1:] == ("127",)) == 1
+
+
+def test_hierarchy_falls_back_to_stdout_then_reports_a_scrubbable_error():
+    from src.fleet.phone_rules import sanitize_phone_result
+    from src.fleet.protocol import TASK_PHONE_LIKE
+
+    idle = {"rc": 1, "err": b"ERROR: could not get idle state\n", "file": None}
+    stdout = {"rc": 0, "out": _HIER_XML, "file": None}
+    got, _adb = _read_hierarchy([idle, idle, idle, stdout])
+    assert got["attempts"] == 4 and got["via"] == "stdout" and got["compressed"] is False
+    assert got["xml"].startswith("<hierarchy") and got["error"] == ""
+
+    serial = "ABCDEFGH1234"
+    failed, _adb2 = _read_hierarchy([{
+        "rc": 1, "err": f"error: device '{serial}' not found\n".encode(), "file": None,
+    }])
+    assert failed["attempts"] == 5 and failed["via"] == "stdout" and failed["compressed"] is True
+    assert serial in failed["error"] and "[redacted]" not in failed["error"]
+    assert "could not get idle state" not in failed["error"]
+    diag = {
+        "like_probe": True, "serial": serial,
+        "like_diag": {
+            "uiautomator": {
+                "dump": "bad", "like_found": False,
+                "attempts": failed["attempts"], "via": failed["via"],
+                "compressed": failed["compressed"], "error": failed["error"],
+            },
+            "template_score": 0.318, "template_matched": False,
+            "structure_matched": True, "structure_bounds": "[10,200][160,240]",
+            "shape_matched": False, "shape_score": 0.42, "position_matched": False,
+            "nodes": [], "png_b64": "iVBORw0KGgoAAA", "secret": "nope",
+        },
+    }
+    clean = sanitize_phone_result(TASK_PHONE_LIKE, diag, wallpaper="07")
+    blob = __import__("json").dumps(clean["like_diag"])
+    assert serial not in blob and "png" not in blob and "secret" not in blob
+    assert "07" in clean["like_diag"]["uiautomator"]["error"]
+    assert clean["like_diag"]["uiautomator"]["attempts"] == 5
+    assert clean["like_diag"]["uiautomator"]["via"] == "stdout"
+    assert clean["like_diag"]["uiautomator"]["compressed"] is True
+    assert clean["like_diag"]["shape_score"] == 0.42
+    assert clean["like_diag"]["shape_matched"] is False
+    assert clean["like_diag"]["structure_bounds"] == "[10,200][160,240]"
+    unknown = sanitize_phone_result(TASK_PHONE_LIKE, diag, wallpaper="")
+    assert "[redacted]" in unknown["like_diag"]["uiautomator"]["error"]
+    assert serial not in __import__("json").dumps(unknown["like_diag"])
+    bad = sanitize_phone_result(TASK_PHONE_LIKE, {
+        "like_probe": True,
+        "like_diag": {
+            "uiautomator": {"dump": "bad", "attempts": 99, "via": "socket", "compressed": "yes", "error": "x<y>"},
+            "structure_bounds": "nope", "shape_score": True,
+        },
+    })
+    assert bad["like_diag"]["uiautomator"]["attempts"] == 20
+    assert bad["like_diag"]["uiautomator"]["via"] == ""
+    assert bad["like_diag"]["uiautomator"]["compressed"] is False
+    assert "<" not in bad["like_diag"]["uiautomator"]["error"]
+    assert bad["like_diag"]["structure_bounds"] == ""
+    assert bad["like_diag"]["shape_score"] == 0.0
 
 
 def test_protected_phone_is_hard_coded():

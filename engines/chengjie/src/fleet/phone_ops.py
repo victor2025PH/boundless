@@ -2,8 +2,11 @@
 
 安全栏：
 * adb 只跑白名单参数（``check_adb_args`` → ``adb_allowlist.py``）：原有 ``devices -l``、
-  ``version``、截图、``input``，加上只读诊断（含 ``shell uiautomator dump /dev/tty``，
-  不把界面写到存储；写到文件的 dump 仍拒绝）和仅限 Facebook 的启动。
+  ``version``、截图、``input``，加上只读诊断。界面层次优先写到固定文件
+  ``/sdcard/chatx_like_hierarchy.xml`` 再 pull 回来；``--compressed`` 和
+  ``dump /dev/tty`` 是回退。别的路径（含 ``window_dump.xml``）仍拒绝。
+  找赞前可以发一次媒体暂停（keyevent 127 / ``media_session dispatch pause``）
+  和画面上半部的轻点，用来让自动播放停下来。仅限 Facebook 的启动照旧。
   改设置、开关流量、重启、卸载、force-stop 在目录里单独成类，默认拒绝。
   参数列表、不经本机 shell、每条都有超时。
 * 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
@@ -23,9 +26,11 @@ from __future__ import annotations
 
 import base64
 import math
+import os
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zlib
@@ -49,6 +54,11 @@ from .protocol import (
 SCREENCAP_TIMEOUT_SEC = 15
 INPUT_TIMEOUT_SEC = 10
 LIST_TIMEOUT_SEC = 5
+HIERARCHY_DUMP_TIMEOUT_SEC = 12.0
+HIERARCHY_PULL_TIMEOUT_SEC = 8.0
+HIERARCHY_PAUSE_TIMEOUT_SEC = 4.0
+HIERARCHY_SETTLE_SEC = 0.45
+HIERARCHY_MAX_BYTES = 2_000_000
 MIN_INTERVAL_SEC = 0.5
 MAX_CONCURRENT = 2
 LOCK_WAIT_SEC = 10
@@ -71,6 +81,75 @@ def check_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
 
     admit_adb_args(args, allow_guarded_writes=allow_guarded_writes,
                    allow_experimental_ussd=allow_experimental_ussd)
+
+
+_DUMP_NOISE = (
+    "ui hierchary dumped to:",
+    "ui hierarchy dumped to:",
+)
+
+
+def _hierarchy_text(data: Any) -> str:
+    if isinstance(data, str):
+        raw = data.encode("utf-8", "replace")
+    elif isinstance(data, (bytes, bytearray)):
+        raw = bytes(data)
+    else:
+        return ""
+    if len(raw) > HIERARCHY_MAX_BYTES:
+        return ""
+    return raw.decode("utf-8", "replace")
+
+
+def _hierarchy_ok(text: str) -> bool:
+    if not text or "<hierarchy" not in text:
+        return False
+    from .like_locate import hierarchy_text_ok
+
+    return hierarchy_text_ok(text)
+
+
+def _dump_error_line(*chunks: str) -> str:
+    """First printable dump-error line. The 'dumped to' notice is not an error."""
+    for chunk in chunks:
+        if not isinstance(chunk, str):
+            continue
+        for line in chunk.splitlines():
+            text = " ".join(line.split())
+            if not text:
+                continue
+            low = text.lower()
+            if low.startswith(_DUMP_NOISE) or "hierchary dumped to:" in low or "hierarchy dumped to:" in low:
+                continue
+            clean = "".join(ch for ch in text if ch.isprintable() and ch not in "<>")[:160]
+            if clean:
+                return clean
+    return ""
+
+
+def _hierarchy_local_path(state_dir: Optional[Path]) -> Optional[str]:
+    """A pull destination adb can create. The empty file is removed first.
+
+    ``adb pull`` refuses to overwrite. The name has no device serial. A path
+    with a space or ``..`` is skipped so the allowlist can reject it.
+    """
+    from .adb_allowlist import hierarchy_pull_local_ok
+
+    dirs: List[str] = []
+    if state_dir is not None:
+        dirs.append(str(state_dir))
+    dirs.append(tempfile.gettempdir())
+    for directory in dirs:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix="chatx_like_", suffix=".xml", dir=directory)
+            os.close(fd)
+            os.remove(path)
+        except OSError:
+            continue
+        if hierarchy_pull_local_ok(path):
+            return path
+    return None
 
 
 def _run_kwargs(timeout: float) -> Dict[str, Any]:
@@ -185,6 +264,27 @@ class PhoneOps:
             raise e
         return out if isinstance(out, bytes) else str(out).encode("utf-8")
 
+    def _adb_capture(self, adb: str, args: Sequence[str], timeout: float) -> Tuple[int, bytes, bytes]:
+        """Run an allowlisted command and keep stdout even when the exit code is not zero.
+
+        ``uiautomator dump`` often exits non-zero with ``could not get idle state``
+        after it has already written a usable file. Callers decide whether the
+        bytes parse. A timeout is exit 124 with empty output.
+        """
+        check_adb_args(args)
+        try:
+            proc = (self._run or subprocess.run)([adb, *args], **_run_kwargs(timeout))
+        except subprocess.TimeoutExpired:
+            return 124, b"", b"timeout"
+        rc = int(getattr(proc, "returncode", 1) or 0)
+        out = getattr(proc, "stdout", b"") or b""
+        err = getattr(proc, "stderr", b"") or b""
+        if not isinstance(out, (bytes, bytearray)):
+            out = str(out).encode("utf-8", "replace")
+        if not isinstance(err, (bytes, bytearray)):
+            err = str(err).encode("utf-8", "replace")
+        return rc, bytes(out), bytes(err)
+
     def _ready_adb(self) -> str:
         try:
             adb, server = prepare_adb(
@@ -256,26 +356,133 @@ class PhoneOps:
     def last_raw(self, serial: str) -> bytes:
         return self._last_raw.get(serial, b"")
 
-    def read_ui_hierarchy(self, serial: str) -> str:
-        """Read-only ``uiautomator dump`` to stdout. Empty when the device refuses.
+    def read_ui_hierarchy(self, serial: str) -> Dict[str, Any]:
+        """Read a window hierarchy, settling autoplay first.
 
         The caller is already inside ``session`` and holds this phone's lock.
         A failure is not an error: the Like search then uses the screenshot.
+        The dict is ``xml`` (parseable document, or the last raw text when
+        nothing parsed), ``error`` (first dump-error line, not yet scrubbed),
+        ``attempts``, ``via`` (``file`` or ``stdout``), and ``compressed``.
         """
+        blank = {"xml": "", "error": "", "attempts": 0, "via": "", "compressed": False}
         try:
             adb = self._ready_adb()
-            self._pace(serial)
-            try:
-                raw = self._adb(
-                    adb, ("-s", serial, "shell", "uiautomator", "dump", "/dev/tty"), 12.0,
-                )
-            finally:
-                self._last_op[serial] = self._clock()
         except PhoneOpError:
+            return dict(blank)
+        self._settle_autoplay(adb, serial)
+        plan = (
+            ("file", False, 0.0),
+            ("file", False, 0.35),
+            ("file", True, 0.55),
+            ("stdout", False, 0.35),
+            ("stdout", True, 0.55),
+        )
+        last_xml = ""
+        last_error = ""
+        last_via = ""
+        last_compressed = False
+        attempts = 0
+        for index, (via, compressed, backoff) in enumerate(plan):
+            if index and backoff > 0:
+                self._sleep(backoff)
+                self._last_op[serial] = self._clock()
+            attempts += 1
+            last_via = via
+            last_compressed = compressed
+            xml, error = self._dump_once(adb, serial, via, compressed)
+            if error:
+                last_error = error
+            if xml:
+                last_xml = xml
+            if _hierarchy_ok(xml):
+                return {
+                    "xml": xml, "error": "", "attempts": attempts,
+                    "via": via, "compressed": compressed,
+                }
+        if len(last_xml) > 4000:
+            last_xml = last_xml[:4000]
+        return {
+            "xml": last_xml, "error": last_error, "attempts": attempts,
+            "via": last_via, "compressed": last_compressed,
+        }
+
+    def _settle_autoplay(self, adb: str, serial: str) -> None:
+        """Pause an autoplaying feed once. Failures do not abort the dump.
+
+        Media keys often do nothing inside Facebook, so one light tap on the
+        upper-middle of the last screenshot is the practical pause. It is not
+        a Like tap: the action bar sits far lower.
+        """
+        commands = (
+            ("-s", serial, "shell", "cmd", "media_session", "dispatch", "pause"),
+            ("-s", serial, "shell", "input", "keyevent", "127"),
+        )
+        for args in commands:
+            self._paced_capture(adb, serial, args, HIERARCHY_PAUSE_TIMEOUT_SEC)
+        size = self._screen.get(serial)
+        if size and len(size) == 2:
+            width, height = size
+            if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+                x = width // 2
+                y = int(height * 0.28)
+                self._paced_capture(
+                    adb, serial,
+                    ("-s", serial, "shell", "input", "tap", str(x), str(y)),
+                    HIERARCHY_PAUSE_TIMEOUT_SEC,
+                )
+        self._sleep(HIERARCHY_SETTLE_SEC)
+        self._last_op[serial] = self._clock()
+
+    def _paced_capture(self, adb: str, serial: str, args: Sequence[str], timeout: float) -> Tuple[int, bytes, bytes]:
+        self._pace(serial)
+        try:
+            return self._adb_capture(adb, args, timeout)
+        except PhoneOpError:
+            return 1, b"", b""
+        finally:
+            self._last_op[serial] = self._clock()
+
+    def _dump_once(self, adb: str, serial: str, via: str, compressed: bool) -> Tuple[str, str]:
+        from .adb_allowlist import HIERARCHY_REMOTE
+
+        target = HIERARCHY_REMOTE if via == "file" else "/dev/tty"
+        argv = ["-s", serial, "shell", "uiautomator", "dump"]
+        if compressed:
+            argv.append("--compressed")
+        argv.append(target)
+        _rc, out, err = self._paced_capture(adb, serial, tuple(argv), HIERARCHY_DUMP_TIMEOUT_SEC)
+        stdout = _hierarchy_text(out)
+        stderr = _hierarchy_text(err)
+        pulled = self._pull_hierarchy(adb, serial) if via == "file" else ""
+        if _hierarchy_ok(pulled):
+            return pulled, ""
+        if _hierarchy_ok(stdout):
+            return stdout, ""
+        raw = pulled or stdout or stderr
+        return raw, _dump_error_line(stderr, stdout, pulled)
+
+    def _pull_hierarchy(self, adb: str, serial: str) -> str:
+        from .adb_allowlist import HIERARCHY_REMOTE, hierarchy_pull_local_ok
+
+        path = _hierarchy_local_path(self._state_dir)
+        if path is None or not hierarchy_pull_local_ok(path):
             return ""
-        if not isinstance(raw, (bytes, bytearray)) or len(raw) > 2_000_000:
+        self._paced_capture(
+            adb, serial, ("-s", serial, "pull", HIERARCHY_REMOTE, path), HIERARCHY_PULL_TIMEOUT_SEC,
+        )
+        try:
+            if not os.path.isfile(path):
+                return ""
+            data = Path(path).read_bytes()
+        except OSError:
             return ""
-        return raw.decode("utf-8", "replace")
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return _hierarchy_text(data)
 
     def _check_bounds(self, serial: str, *coords: int) -> None:
         size = self._screen.get(serial)
