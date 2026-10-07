@@ -671,3 +671,14 @@ def _fleet_phones_no_real_adb(monkeypatch):
     except Exception:
         return
     monkeypatch.setattr(_phones, "adb_server_version", lambda port, timeout=1.0: None)
+
+
+@pytest.fixture(autouse=True)
+def _fleet_pace_inside_active_hours(monkeypatch):
+    """Pin the Facebook pace clock to 08:00 Asia/Manila.
+
+    The shipped window is 08:00–22:00 local. Existing fleet tests enqueue or
+    run a single Facebook action and must not depend on the runner's wall
+    clock. Tests of the window pass ``now=`` and do not read this clock.
+    """
+    monkeypatch.setattr("src.fleet.social_pace.clock", lambda: 1735689600.0)

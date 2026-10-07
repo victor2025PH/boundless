@@ -1,0 +1,41 @@
+# Fleet social pace. Loaded by src/fleet/social_pace.py.
+#
+# These ceilings keep one Facebook login inside ordinary human use so the
+# account is not worn out. They are not a way to slip past a platform check.
+# A missing file still enforces the same numbers in code.
+#
+# Per account (one login), not per phone pool:
+#   likes     6/hour, 40/day — a person scrolling a feed taps like a handful
+#             of times an hour and a few dozen times in a day, then stops.
+#   comments  3/hour, 15/day — writing a comment is slower than a tap.
+#   follows   3/hour, 15/day — following is rarer than liking.
+#   posts     1/hour,  4/day — publishing is the rarest of the four.
+#   min_delay_sec 60 — at least a minute between any two counted actions
+#             on the same account (like, comment, follow, or post).
+#   jitter_sec 20 — up to 20 extra seconds on that minute. The extra wait is
+#             a hash of the account and the previous action time, so the gap
+#             is not a fixed metronome. Same inputs always wait the same
+#             amount. This only spreads usage.
+#   active_hours [8, 22) — local clock. Hour 8 is included, hour 22 is not.
+#   tz_offset_hours 8 — Philippines (UTC+8). "Today" resets at local midnight.
+#             The hourly cap is a rolling 60 minutes, not a clock-hour bucket.
+#   enabled true — kill switch. false pauses every counted Facebook action.
+#             like_probe and dry_run stay available: they do not tap.
+#
+# The key is node + account, then wallpaper number, then adb serial.
+# Instagram and TikTok are not covered here. Warmup / watch taps are not
+# counted. Chat STOP and handoff keyword checks are separate and unchanged.
+# Huoke's ComplianceGuard still uses its in-code table; the same facebook
+# block is copied in engines/huoke/config/compliance.yaml for that file.
+
+facebook:
+  enabled: true
+  tz_offset_hours: 8
+  active_hours: [8, 22]
+  min_delay_sec: 60
+  jitter_sec: 20
+  actions:
+    like:    { hourly: 6, daily: 40 }
+    comment: { hourly: 3, daily: 15 }
+    follow:  { hourly: 3, daily: 15 }
+    post:    { hourly: 1, daily: 4 }
