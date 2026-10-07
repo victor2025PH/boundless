@@ -850,12 +850,37 @@ def test_an_old_room_does_not_steal_the_opener():
         session_id="s1", group_key="g1", playbook=pb, casting=casting,
         started_at=T0), {})
     assert d.prime_room([("老王", "昨晚那句", T0 - 600)], now=T0) == 1
+    assert d.state.events[-1].kind == "room"
     assert d.next_directive().respond_to_human == ""
     fresh = GroupShowDirector(ShowState(
         session_id="s2", group_key="g1", playbook=pb, casting=casting,
         started_at=T0), {})
     assert fresh.prime_room([("老王", "我刚到", T0 - 10)], now=T0) == 1
+    assert fresh.state.events[-1].kind == "human"
     assert fresh.next_directive().respond_to_human.startswith("老王")
+
+
+def test_stale_room_lines_are_not_fed_as_questions():
+    """一小时前的提问留在台账，不进模型要回答的对话。"""
+    from src.companion.group_show.ecp import project_history_for
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(), goal="多个号的消息放在一处看")
+    casting = Casting(members=(CastMember("guide", "a_guide", "p_guide"),))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    d.prime_room([
+        ("老王", "你们是男的女的", T0 - 2800),
+        ("老王", "在哪里", T0 - 2500),
+    ], now=T0)
+    assert [ev.kind for ev in d.state.events] == ["room", "room"]
+    msgs = project_history_for(
+        casting.members[0], d.state.events, directive=d.next_directive())
+    blob = "\n".join(item["content"] for item in msgs)
+    assert "你们是男的女的" not in blob
+    assert "在哪里" not in blob
 
 
 def test_a_goal_show_chats_until_someone_opens_the_topic():

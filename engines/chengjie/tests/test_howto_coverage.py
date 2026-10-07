@@ -27,8 +27,9 @@ from __future__ import annotations
 from typing import Dict, Set, Tuple
 
 # 当前缺口天花板：**只降不升**。补完一批 how-to 就把这个数字调低（并在 PR 里
-# 让 diff 说话）。2026-08-27 基线 34 → 第一批补 12 条后 23 → 第二批补 13 条后 10。
-HOWTO_GAP_CEILING = 10
+# 让 diff 说话）。2026-08-27 基线 34 → 第一批补 12 条后 23 → 第二批补 13 条后 10
+# → 2026-10-07 群脉导播台补上按目标聊天的用法后 9。
+HOWTO_GAP_CEILING = 9
 
 
 def _nav_paths() -> Dict[str, str]:

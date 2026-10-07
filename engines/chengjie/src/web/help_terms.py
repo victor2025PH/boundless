@@ -1174,26 +1174,28 @@ HELP_TERMS: dict = {
     "gs_softad": {
         "zh": "软广强度",
         "en": "Soft-ad level",
-        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。剧本里前低后高再回落最像真人；* 表示这一拍单独调过、覆盖了剧本默认值",
-        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. Low-then-high-then-ease reads most human; * means this beat overrides the playbook default"
+        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。按目标聊天时平时是 0，只有有人自己说到那件事之后的那一句才提起。旧戏才按拍前低后高；* 表示这一拍单独调过",
+        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. A goal show stays at 0 until someone in the room opens the topic, then one line may mention it. Only older shows ramp beat by beat; * means this beat was tuned on its own"
     },
     "gs_pace": {
         "zh": "语速档",
         "en": "Pace",
-        "desc": "这一拍的发言节奏：chatty=你一言我一语抢着说，normal=常规群聊，slow=有人在思考或刚看到。节奏本身也会出卖机器人，故按拍设定",
-        "desc_en": "This beat's rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. Rhythm itself can betray a bot, so it's set per beat"
+        "desc": "发言节奏：chatty=你一言我一语，normal=常规群聊，slow=有人在想或刚看到。按目标聊天时跟普通闲聊走，不按拍念稿",
+        "desc_en": "Speaking rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. A goal show uses ordinary chat rhythm and does not read a beat list"
     },
     "gs_beatcount": {
         "zh": "拍数",
         "en": "Beats",
-        "desc": "这出戏由几拍组成。每一拍是一句节拍（谁说、什么意图），台词不写死、由人设 AI 现场生成",
-        "desc_en": "How many beats the show has. Each beat is one step (who speaks, what intent); lines aren't fixed - the persona AI generates them live"
+        "desc": "现在上场的戏按目标聊天，拍数是 0，这是正常的：没人自己提到那件事就只聊天，有人提到了，向导才说自己是 AI 并只讲这一件。有逐拍列表的是旧戏，每一拍只写意图，台词现场生成",
+        "desc_en": "Shows that ship now chat toward a goal, so a beat count of 0 is expected: they only chat until someone in the room opens the topic, then the guide says it is the AI and mentions that one thing. A beat list belongs to an older show; each beat is an intent, and the line is generated live",
+        "usage": "管理台打开群脉导播台（/group-show），选一场已经写了目标的戏再开演。桌面安装包侧栏默认没有这一项",
+        "usage_en": "Open the CrowdX console in the admin app at /group-show and start a show that already has a goal. The desktop installer's sidebar leaves this entry off"
     },
     "gs_prodline": {
         "zh": "产品线",
         "en": "Product line",
-        "desc": "这出戏软推的产品系：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏其实就是选产品",
-        "desc_en": "Which product family the show seeds: growth (acquisition), studio (content companion), lingo (translation). Picking a show is picking a product"
+        "desc": "这出戏要带到的那一件事属于哪条产品线：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏就是选这一件，不是选一份逐拍稿",
+        "desc_en": "Which product family the one thing in this show belongs to: growth (acquisition), studio (content companion), lingo (translation). Picking a show picks that one thing, not a beat-by-beat script"
     },
     "gs_naturalness": {
         "zh": "自然度",

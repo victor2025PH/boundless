@@ -10,15 +10,15 @@ ZH = {
     "gs_guide_title": "第一次用？30 秒看懂这个台子",
     "gs_guide_lead": "把它想成一个微缩剧组：",
     "gs_guide_meta": (
-        "「导演」（系统）拿着剧本大纲，让几个 AI 账号在同一个真实群里，即兴演一场"
-        "看起来像真人闲聊的对话，把产品自然地带进去；旁边的「风控体检」卡片盯着别让"
-        "这批号被看出是一伙机器人。这个页面是它的排练厅——离线彩排 + 风险体检，"
-        "本页永远不发一条真消息。"),
+        "几个 AI 账号在同一个真实群里按一个目标正常聊天。没人自己提到那件事，"
+        "就只聊天；有人提到了，向导才说自己是 AI，并只讲这一件。"
+        "旁边的「风控体检」卡片盯着别让这批号被看出是一伙机器人。"
+        "这个页面可以离线彩排和体检，彩排不发一条真消息。"),
     "gs_guide_flow_h": "推荐顺序（点下面的步骤可直接跳到对应卡片）",
     "gs_guide_glo_h": "名词速查",
     "gs_guide_hide": "收起后不再自动弹出，随时点右下角「?」或本标题展开。",
     "gs_step1": "① 选戏",
-    "gs_step1_d": "挑一个剧本，右边看它每一拍怎么演，确认「校验」是通过",
+    "gs_step1_d": "挑一场已经写了目标的戏。右边没有逐拍列表是正常的：按目标聊天，不念稿",
     "gs_step2": "② 彩排",
     "gs_step2_d": "设演员数，先用占位台词秒出看编排；想看真实文案再勾「用真 LLM」",
     "gs_step3": "③ 体检真号",
@@ -32,7 +32,7 @@ ZH = {
     "gs_gl_soft": "软广",
     "gs_gl_soft_d": "把产品带进对话的力度：0＝只闲聊完全不提，数字越大越明示；* 表示这一拍单独调过、覆盖了剧本默认值",
     "gs_gl_beat": "拍 / beat",
-    "gs_gl_beat_d": "剧本的一个节拍：第几步、由谁说、想表达什么意图——只写意图不写死台词，台词由该号人设 AI 现场生成，所以每次演都不一样",
+    "gs_gl_beat_d": "旧戏才有逐拍大纲：第几步、谁说、什么意图，台词现场生成。现在上场的戏没有拍，按目标聊天",
     "gs_gl_nat": "自然度",
     "gs_gl_nat_d": "这场戏像不像真人：绿＝像真人，黄＝各说各话不像对话，红＝模板复读一眼假。三个指标——熵（用词多样度）、间隔 CV（发言节奏像真人还是像定时器）、均衡度（是不是一个号包场）",
     "gs_gl_cooccur": "共现",
@@ -368,16 +368,16 @@ EN = {
     "gs_guide_title": "First time here? Get this console in 30 seconds",
     "gs_guide_lead": "Think of it as a tiny film crew:",
     "gs_guide_meta": (
-        "A \"director\" (the system) takes a script outline and has a few AI accounts "
-        "improvise a real-looking peer chat in one real group, weaving a product in "
-        "naturally; the \"risk-check\" cards make sure the accounts don't look like a "
-        "coordinated bot ring. This page is the rehearsal room - offline run-throughs "
-        "plus risk checks. It never sends a single real message."),
+        "A few AI accounts chat normally in one real group toward a single goal. "
+        "Until someone in the room opens that topic, they only chat; once someone "
+        "does, the guide says it is the AI and mentions that one thing. "
+        "The risk-check cards watch that the accounts do not look like one bot ring. "
+        "This page can rehearse and check offline. A rehearsal sends nothing."),
     "gs_guide_flow_h": "Recommended order (click a step below to jump to its card)",
     "gs_guide_glo_h": "Glossary",
     "gs_guide_hide": "Once collapsed it won't pop up again; reopen from the \"?\" button or this title.",
     "gs_step1": "1 Pick",
-    "gs_step1_d": "Choose a playbook; see every beat on the right and confirm it passes validation",
+    "gs_step1_d": "Pick a show that already has a goal. An empty beat list on the right is expected: it chats toward the goal and does not read a script",
     "gs_step2": "2 Rehearse",
     "gs_step2_d": "Set the cast size; stub lines are instant - tick \"real LLM\" to preview actual copy",
     "gs_step3": "3 Check accounts",
@@ -391,7 +391,7 @@ EN = {
     "gs_gl_soft": "Soft ad",
     "gs_gl_soft_d": "How hard the product is woven into the chat: 0 = pure chit-chat, never mentioned; higher = more explicit. * means this beat overrides the playbook default.",
     "gs_gl_beat": "Beat",
-    "gs_gl_beat_d": "One script step: which step, who speaks, what intent - intent only, never fixed lines. The line is generated live by that account's persona AI, so every run differs.",
+    "gs_gl_beat_d": "Only an older show has a beat list: which step, who speaks, what intent, with the line generated live. Shows that ship now have no beats and chat toward a goal.",
     "gs_gl_nat": "Naturalness",
     "gs_gl_nat_d": "How human the show looks: green = human, amber = talking past each other, red = robotic repetition. Three metrics - entropy (word variety), interval CV (human rhythm vs a timer), balance (whether one account hogs the floor).",
     "gs_gl_cooccur": "Co-occurrence",

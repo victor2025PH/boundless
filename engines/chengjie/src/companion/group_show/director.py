@@ -55,10 +55,12 @@ _SUBSTITUTE_ORDER: Tuple[str, ...] = ("advocate", "asker", "skeptic", "bystander
 # 进剧本之前的接话。意图里不写事故、不写产品，避免占位生成器把禁令念出来。
 _OPENER_INTENT = (
     "先在群里自然地开口，像刚进来看到大家。一句就好。"
+    "更早的群聊当没看见，不要回答里面的问题。"
     "不要提产品，不要发出邀请，不要编事故。"
 )
 _CONTINUE_INTENT = (
     "顺着群里上一句，像普通群友接着聊。一句就好。"
+    "不要回答更早的旧问题，不要另起一个故事。"
     "不要提产品，不要发出邀请，不要把人往私下带。"
 )
 _WARMUP_INTENT = (
@@ -68,6 +70,7 @@ _WARMUP_INTENT = (
 _WARMUP_MUST = (
     "不要编手滑、发错号、误发这种事故",
     "不要把话题拐到产品或功能上",
+    "不要提对方没刚说过的视频，也不要自报性别、地点或职业",
 )
 _ASK_CUES = ("你是谁", "你能做", "什么功能", "怎么用")
 
@@ -214,10 +217,13 @@ class GroupShowDirector:
             return 0
         kept = cleaned[-8:]
         for who, said, ts in kept:
+            # 让路窗里的才是待接的话。更早的只留在台账，不送进模型当问题。
+            fresh = 0 <= float(now) - ts < self.cfg.human_yield_seconds
+            kind = "human" if fresh else "room"
             self.state.append_event(ShowEvent(
                 seq=self.state.next_seq, ts=ts,
                 speaker_account=who, role="human",
-                beat_id="", text=said, kind="human"))
+                beat_id="", text=said, kind=kind))
         who, said, ts = cleaned[-1]
         # 只有刚说完的话才算待接。更早的记录只作背景，开场先自己开口。
         if 0 <= float(now) - ts < self.cfg.human_yield_seconds:

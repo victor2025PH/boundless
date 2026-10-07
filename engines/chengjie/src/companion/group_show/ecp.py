@@ -55,7 +55,7 @@ SPEAKER_PREFIX_LABEL = "群友"
 UNKNOWN_SPEAKER_NAME = "某群友"
 
 #: 控制类事件（导演让路 / 收尾），群里根本没有这条消息，不进上下文
-_CONTROL_KINDS = frozenset({"yield", "terminate"})
+_CONTROL_KINDS = frozenset({"yield", "terminate", "room"})
 
 #: 默认最多回溯的群消息条数（防 prompt 撑爆；群聊上下文本来就该短）
 DEFAULT_MAX_TURNS = 20

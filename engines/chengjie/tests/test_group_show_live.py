@@ -1185,6 +1185,20 @@ def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
         chat_book, "guide", "b3_keep_the_invite",
         "接住你的不放心：多个号的消息收在一屏里看就行")
     assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
+    from src.companion.group_show.playbook import ShowEvent
+    invented = "这边不方便开视频，先这样聊嘛。"
+    assert line_fault_for_beat(chat_book, "guide", "chat_1", invented)
+    assert line_fault_for_beat(
+        chat_book, "skeptic", "chat_2", "在宿务开咖啡店的啦，女的。")
+    asked = (ShowEvent(
+        seq=1, ts=1, speaker_account="老王", role="human",
+        beat_id="", text="你们是男的女的", kind="human"),)
+    assert line_fault_for_beat(
+        chat_book, "skeptic", "chat_2", "女的。", events=asked) == ""
+    assert line_fault_for_beat(
+        chat_book, "guide", "chat_1", invented, events=(ShowEvent(
+            seq=1, ts=1, speaker_account="老王", role="human",
+            beat_id="", text="要不要开视频", kind="human"),)) == ""
 
 
 @pytest.mark.asyncio

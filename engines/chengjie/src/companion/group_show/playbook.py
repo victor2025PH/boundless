@@ -151,6 +151,25 @@ def helper_line_fault(text: str) -> str:
     return ""
 
 
+_UNGROUNDED = (
+    "视频", "男的", "女的", "男生", "女生", "男性", "女性", "咖啡店", "开店",
+)
+
+
+def _ungrounded_claim(text: str, events: Sequence[Any]) -> str:
+    """对方没刚说过的视频、性别、地点或职业，不许自己编出来。"""
+    raw = str(text or "")
+    if not raw:
+        return ""
+    corpus = "\n".join(
+        str(getattr(ev, "text", "") or "")
+        for ev in events or ()
+        if str(getattr(ev, "kind", "") or "") in ("human", "line", "media"))
+    if any(piece in raw and piece not in corpus for piece in _UNGROUNDED):
+        return "不要提对方没说过的视频、性别、地点或职业"
+    return ""
+
+
 def _someone_said_uneasy(events: Sequence[Any]) -> bool:
     """场上已经有人自己说出不放心，才许接着谈这件事。"""
     for ev in events or ():
@@ -176,6 +195,9 @@ def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
         return "不要把导演说明说出来，直接说事情本身"
     if "不放心" in raw_line and not _someone_said_uneasy(events):
         return "没人说过不放心，不要替对方安抚"
+    claim = _ungrounded_claim(raw_line, events)
+    if claim:
+        return claim
     # 开场接话还没进剧本。这时候逼「我是 AI / 私聊」会把闲聊重说成广告。
     # 编造的设置项、拒绝私聊，接话阶段也不许。
     if str(beat_id or "").startswith(("warmup_", "chat_")):

@@ -2193,6 +2193,24 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "answered someone answered replied to me continue in the group",
         "/tools/tg-members",
     ),
+    (
+        "group-show-goal",
+        "群里怎么按目标聊天，而不是念剧本",
+        "How a group show chats toward a goal instead of reading a script",
+        "管理台打开群脉导播台（/group-show），选一场已经写了目标的戏再开演。"
+        "开演后账号先像普通人一样聊天。群里有人自己说到那件事，向导才说自己是 AI，"
+        "并只讲目标里的那一件，邀请对方私聊试。没人提到，就只聊天。"
+        "右边没有逐拍列表是正常的。桌面安装包的侧栏默认没有这个入口。",
+        "Open the CrowdX console in the admin app (/group-show) and start a show "
+        "that already has a goal. The accounts chat like ordinary people first. "
+        "Only after someone in the room brings up that topic does the guide say "
+        "it is the AI, mention that one thing, and invite a private try. "
+        "If nobody mentions it, they only chat. An empty beat list is expected. "
+        "The desktop installer's sidebar leaves this entry off.",
+        "群脉导播台 按目标聊天 不念剧本 炒群 向导 群里怎么聊 "
+        "goal show no script crowd console",
+        "/group-show",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请
