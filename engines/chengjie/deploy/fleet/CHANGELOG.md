@@ -1,5 +1,8 @@
 # 智拓群控节点更新日志
 
+## 0.3.16
+`push_config` 可以写本机操作员告警：`operator_alert_enabled`（只有 JSON `true` 才打开）、`operator_alert_refresh_sec`、`operator_alert_language`（`zh` 或 `en`）、`operator_alert_fail_streak`、`wallpaper_map`。这些键写入 agent.json，下一次热加载或观察周期生效。未知键、类型不对、空补丁仍是 `not_supported_in_agent_v1`，不写文件。直播机在写入之前拒绝，告警保持关闭。回执带回开关和壁纸条数，不带回序列号，日志也不打序列号。只读任务 `operator_alert_diag` 返回开关、语言、刷新间隔，以及不能用的手机的壁纸编号和原因，不返回 adb 序列号。受保护手机和直播机判定不变。公开下载页的 latest 不因这一版改掉。
+
 ## 0.3.15
 机房电脑可以在本机弹出「哪台手机不能用」。默认关闭。agent.json 里 `operator_alert_enabled` 写成 JSON `true` 才打开。窗口和气泡按壁纸编号列出当前不能用的手机（`wallpaper_map`），不显示 adb 序列号。adb 服务没起来、找不到 adb、或一台手机都没有时，提示这台电脑本身有问题。手机从离线、未授权、断开或连续失败里恢复后，名单会去掉它。窗口上可以在中文和 English 之间切换，选择记在 `%ProgramData%\ChatX\fleet\operator_alert_lang.json`，下次启动仍用这个语言。没有桌面的机器只把状态写进 `operator_alert.json`，不拖垮节点服务。直播机（`CHATX_FLEET_LIVE_STREAM` 或 `live-stream.flag`）即使写成 true 也不弹。受保护手机仍不出现。公开下载页的 latest 不因这一版改掉。
 
