@@ -516,10 +516,35 @@ def test_ack_keeps_flow_summary_and_drops_text(st):
     assert clean == {"app": "tiktok", "flow": "like", "steps": 4}
 
 
+def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
+    serial = "TESTSERIAL01"
+    res = _enroll(st, mid="m-ack-serial")
+    nid, key = res["node_id"], res["node_key"]
+    st.heartbeat(nid, {"caps": [CAP_PHONE_OPS_V1]}, now=time.time())
+    st.set_remote_ops(nid, True)
+    phrase = f"error: device '{serial}' not found"
+    rec = st.enqueue(nid, TASK_PHONE_TAP, payload={"x": 1, "y": 1},
+                     target={"serial": serial, "wallpaper": "07"})
+    c = _client(st)
+    r = c.post("/api/fleet/tasks/ack", headers={"Authorization": f"Bearer {key}"}, json={
+        "task_id": rec["task_id"], "status": "failed", "detail": phrase,
+        "result": {"serial": serial, "stderr": phrase, "error": phrase},
+    })
+    assert r.status_code == 200
+    stored = st.get_task(rec["task_id"])
+    assert stored["result"]["serial"] == serial
+    assert serial not in stored["result"]["stderr"]
+    assert serial not in stored["result"]["error"]
+    assert serial not in stored["detail"]
+    assert "07" in stored["result"]["stderr"] and "07" in stored["detail"]
+    bare = sanitize_phone_result(TASK_PHONE_TAP, {"stderr": phrase})
+    assert serial not in bare["stderr"] and "[redacted]" in bare["stderr"]
+
+
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.19"
+    assert AGENT_VERSION == "0.3.20"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

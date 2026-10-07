@@ -53,7 +53,8 @@ from src.fleet.protocol import (
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.social_pace import read_optional_labels
 from src.fleet.phone_rules import (
-    PhoneOpError, check_target, kind_for_op, sanitize_phone_result, strip_png, validate_payload,
+    PhoneOpError, check_target, kind_for_op, sanitize_phone_result, scrub_phone_error_text, strip_png,
+    validate_payload,
 )
 from src.fleet.protocol import (
     PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_SESSION_KINDS, PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC,
@@ -330,17 +331,28 @@ def register_routes(app, ctx) -> None:
             raise HTTPException(status_code=400, detail="task_id / status(done|failed|rejected) 必填")
         st = _store_or_503(config_manager)
         result = body.get("result") if isinstance(body.get("result"), dict) else None
-        if result is not None:
-            known = st.get_task(tid)
-            if known is not None and known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
+        detail = str(body.get("detail") or "")
+        known = st.get_task(tid)
+        phone_kinds = (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS)
+        phone_kind = known is not None and known.get("kind") in phone_kinds
+        serial = ""
+        wallpaper = ""
+        if phone_kind:
+            target = known.get("target") if isinstance(known.get("target"), dict) else {}
+            serial = str(target.get("serial") or "")
+            wallpaper = str(target.get("wallpaper") or target.get("wallpaper_no") or "")
+            if result is not None and not serial:
+                serial = str(result.get("serial") or "")
+            detail = scrub_phone_error_text(detail, serial=serial, wallpaper=wallpaper)
+        if result is not None and known is not None:
+            if known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
                 # the console renders qr_data_url as <img src>: keep base64 raster data URLs only
                 result = sanitize_login_result(result)
-            elif known is not None and known.get("kind") in (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS):
-                result = sanitize_phone_result(known["kind"], result)
-            elif known is not None and known.get("kind") == TASK_NET_HEALTH:
+            elif phone_kind:
+                result = sanitize_phone_result(known["kind"], result, serial=serial, wallpaper=wallpaper)
+            elif known.get("kind") == TASK_NET_HEALTH:
                 result = sanitize_net_health_result(result)
-        rec = st.ack(tid, node_id=node["node_id"], status=status, result=result,
-                     detail=str(body.get("detail") or ""))
+        rec = st.ack(tid, node_id=node["node_id"], status=status, result=result, detail=detail)
         # 未知 / 不属于本节点的 task_id 也 200（fail-soft，Agent 不必重试）
         return {"ok": True, "known": rec is not None, "status": rec["status"] if rec else None}
 

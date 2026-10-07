@@ -1,5 +1,12 @@
 # 智拓群控节点更新日志
 
+## 0.3.20
+`like_probe` 现在带回每个信号的诊断，方便看清只有图标的赞为什么没对上。`like_diag` 里有：uiautomator 有没有找到 Like/React、是靠 content-desc、text 还是 resource-id；动作条区域里实际出现的 content-desc / text / resource-id；模板匹配分（不到门槛也写出来）；结构回退有没有对上；以及候选动作条节点的 bounds、class、content-desc、resource-id、text。只含这些文字属性，不含截图。序列号会从这段文字里去掉。诊断不改变真点赞：仍然要两个信号一致，或者模板分足够高，点完仍要复核。
+
+图标动作条的定位放宽了，但没有改成看到一个按钮就点。无障碍标签多了英语 / 他加禄语 / 中文（Gustuhin、点赞、讚、喜欢，以及原来的 Like / 赞 / いいね / React）。resource-id 里带 like 或 react 的算标签（例如 `feed_story_…like`）；单独的 `feed_story` 不算。同一行有 Comment / Share 时，最左边那个按钮可以和截图上的动作条、模板或拇指轮廓对上。标签本身仍然只和模板算两个信号。已赞、评论、分享、表情选择（Love / Haha / Wow）和没有评论/分享邻居的空白按钮都不点。点完仍要变蓝或变成 Liked，否则 `not_verified`。
+
+手机任务失败时，回给主控的错误文字不再带原始序列号。节点在发送前回执里替换，主控在入库前再清一次。能对上壁纸号就写成壁纸号，对不上就写成 `[redacted]`。`error: device offline` 这种没有序列号的句子保持原样。公开下载页的 latest 不因这一版改掉，仍是 0.3.7。
+
 ## 0.3.19
 Facebook 的发帖、点赞、评论、关注按账号限速，避免一个号在短时间里点太多而被停用。上限在 `config/compliance.yaml` 的 `facebook` 段，缺文件时用同一组内置默认值：赞每小时 6、每天 40；评论和关注每小时 3、每天 15；发帖每小时 1、每天 4。同一账号两次动作至少间隔 60 秒，再加 0–20 秒的固定间隔（由账号和上一次时间算出来，用来把动作摊开，不是用来躲检测）。本地时间按菲律宾 UTC+8，只在 8 点到 22 点之间执行（22 点整不算）。`enabled: false` 是总开关，关掉后这些动作都不再下发。超出上限是 `rate_capped`，不在时段是 `outside_active_hours`，间隔不够是 `min_delay`，总开关关掉是 `compliance_disabled`。主控直接 409，不入队。`like_probe` 和 `dry_run` 只定位或只出计划，不计数、不受这些上限。远程操作开关仍优先：没开还是 `remote_ops_disabled`。计数写在主控库，按节点 + 账号（没有账号就用壁纸号，再没有用序列号）。`GET /api/fleet/social-pace` 和总览里的 `social_pace` 能看到今天相对上限做了多少。节点执行前再查一次本机账本。养号和看视频里的赞还不计。控制台页面还没画这张表。这一版同时带上只读 `net_health`、分组 adb 白名单，以及只有图标的 Facebook 赞定位（见下面 0.3.18 两条，能力都在这个金丝雀里）。公开下载页的 latest 不因这一版改掉。
 

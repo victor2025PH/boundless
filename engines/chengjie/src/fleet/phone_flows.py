@@ -17,8 +17,10 @@ Facebook ``phone_like`` does not tap the fixed ``like_button``. It screenshots,
 finds the Like control (text row, thumbs-up template, action-bar slot), and taps
 only when two signals agree or the template score is high. The fixed coordinate
 stays in the dry_run plan and is marked deprecated. Warmup and watch still use it.
-``like_probe`` launches and scrolls and does not tap Like. No posts after the
-swipe budget is ``empty_feed``.
+``like_probe`` launches and scrolls and does not tap Like. The result includes
+``like_diag``: which signal fired, the template score, and the action-bar
+node attributes (no screenshot, no serial). No posts after the swipe budget
+is ``empty_feed``.
 
 Opening Facebook polls the feed for up to 9 seconds. One check at 0.5 seconds
 is not enough: the app is still drawing, and a previous scroll hides the top
@@ -887,6 +889,7 @@ class PhoneFlows:
                 run(TASK_PHONE_TAP, {"x": fx, "y": fy})
                 found = None
                 saw_post = False
+                last_diag: Optional[Dict[str, Any]] = None
                 boxes: List[Dict[str, Any]] = []
                 for attempt in range(budget + 1):
                     run(TASK_PHONE_SCREENSHOT, {})
@@ -902,6 +905,8 @@ class PhoneFlows:
                         except Exception:
                             hierarchy = ""
                     loc = locate_like_row(raw, boxes, hierarchy)
+                    if isinstance(loc.get("diag"), dict):
+                        last_diag = loc["diag"]
                     if loc.get("post"):
                         saw_post = True
                     if loc.get("target"):
@@ -920,6 +925,8 @@ class PhoneFlows:
                 }
                 if probe:
                     base["like_probe"] = True
+                    if isinstance(last_diag, dict):
+                        base["like_diag"] = last_diag
                 if found is None:
                     return STATUS_FAILED, base, "empty_feed" if not saw_post else "like_row_not_found"
                 base["like_x"] = int(found["x"])

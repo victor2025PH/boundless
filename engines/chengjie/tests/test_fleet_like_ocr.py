@@ -5,6 +5,7 @@ agreeing signals (text, template, action bar). The fixed like_button is not a ta
 """
 from __future__ import annotations
 
+import json
 import struct
 
 import pytest
@@ -239,10 +240,18 @@ def test_multiple_rows_pick_the_topmost_full_row_and_skip_a_clipped_one():
 
 
 def _hierarchy(nodes):
-    body = "".join(
-        f'<node text="{text}" content-desc="{desc}" resource-id="{rid}" bounds="{bounds}" />'
-        for text, desc, rid, bounds in nodes
-    )
+    parts = []
+    for node in nodes:
+        if len(node) == 4:
+            text, desc, rid, bounds = node
+            cls = "android.widget.ImageView"
+        else:
+            text, desc, rid, bounds, cls = node
+        parts.append(
+            f'<node text="{text}" content-desc="{desc}" resource-id="{rid}" '
+            f'class="{cls}" bounds="{bounds}" />'
+        )
+    body = "".join(parts)
     return f"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy>{body}</hierarchy>\nUI hierchary dumped to: /dev/tty\n"
 
 
@@ -278,6 +287,38 @@ def test_hierarchy_label_needs_a_template():
     assert agreed is not None
     assert agreed["signals"] == "label+template"
     assert agreed["label"] == "react"
+
+
+def test_phone_width_like_button_keeps_label_variants_and_resource_id():
+    # 360px is a normal xxhdpi action button and used to be dropped at 300.
+    wide = label_hits(_hierarchy([("", "React", "", "[40,800][400,900]")]), 1080, 2400)
+    assert [h["label"] for h in wide] == ["react"]
+    assert wide[0]["by"] == "content-desc"
+    # A half-screen banner is still not a button.
+    assert label_hits(_hierarchy([("", "React", "", "[10,800][510,900]")]), 1000, 2000) == []
+    assert label_hits(_hierarchy([
+        ("", "", "com.facebook.katana:id/feed_story_header", "[40,800][140,880]"),
+    ]), 1080, 2400) == []
+    named = label_hits(_hierarchy([
+        ("", "", "com.facebook.katana:id/feed_story_ufi_like_button", "[40,800][140,880]"),
+        ("", "Gustuhin", "", "[40,1000][160,1080]"),
+        ("", "点赞", "", "[40,1200][140,1280]"),
+        ("", "讚", "", "[40,1400][140,1480]"),
+    ]), 1080, 2400)
+    assert [h["label"] for h in named] == ["like", "gustuhin", "点赞", "讚"]
+    assert named[0]["by"] == "resource-id"
+    assert named[1]["by"] == "content-desc"
+
+
+def test_position_needs_a_screenshot_signal():
+    position = [_hit("position", 200, 500, label="icon")]
+    label = [_hit("label", 200, 500, label="react")]
+    assert fuse_signals([], [], [], [], [], position) is None
+    assert fuse_signals([], [], [], [], label, position) is None
+    agreed = fuse_signals([], [], [_hit("structure", 200, 500)], [], label, position)
+    assert agreed is not None
+    assert "position" in agreed["signals"] and "structure" in agreed["signals"]
+    assert "label" not in agreed["signals"]
 
 
 def test_painted_thumb_agrees_with_its_accessibility_label():
@@ -399,6 +440,55 @@ def test_icon_only_squares_are_a_post_but_not_a_tap():
     loc = locate_like_row(raw, [])
     assert loc["post"] is True
     assert loc["target"] is None
+    assert loc["diag"]["template_matched"] is False
+    assert loc["diag"]["uiautomator"]["dump"] == "empty"
+    assert loc["diag"]["uiautomator"]["like_found"] is False
+    assert isinstance(loc["diag"]["template_score"], float)
+
+
+def _action_bar_xml():
+    return _hierarchy([
+        ("", "", "com.facebook.katana:id/feed_story_ufi", "[16,240][48,272]"),
+        ("", "Comment", "", "[64,240][100,272]"),
+        ("", "Share", "", "[116,240][152,272]"),
+    ])
+
+
+def test_unlabeled_first_button_agrees_with_the_pixel_bar():
+    loc = locate_like_row(_icon_only_bar(thumb=False), [], _action_bar_xml())
+    assert loc["target"] is not None
+    assert "position" in loc["target"]["signals"]
+    assert "structure" in loc["target"]["signals"]
+    assert loc["target"]["x"] < 300
+    assert loc["diag"]["position_matched"] is True
+    assert loc["diag"]["uiautomator"]["like_found"] is False
+    assert "Comment" in loc["diag"]["action_bar"]["content_descs"]
+    assert "Share" in loc["diag"]["action_bar"]["content_descs"]
+    assert any("feed_story_ufi" in item for item in loc["diag"]["action_bar"]["resource_ids"])
+    node = loc["diag"]["nodes"][0]
+    assert set(node) == {"bounds", "class", "content_desc", "resource_id", "text"}
+
+
+def test_plain_buttons_and_a_reaction_row_are_not_targets():
+    unlabeled = _hierarchy([
+        ("", "", "", "[16,240][48,272]"),
+        ("", "", "", "[64,240][100,272]"),
+        ("", "", "", "[116,240][152,272]"),
+    ])
+    reactions = _hierarchy([
+        ("", "Love", "", "[16,240][48,272]"),
+        ("", "Haha", "", "[64,240][100,272]"),
+        ("", "Wow", "", "[116,240][152,272]"),
+    ])
+    liked = _hierarchy([
+        ("", "Liked", "", "[16,240][48,272]"),
+        ("", "Comment", "", "[64,240][100,272]"),
+        ("", "Share", "", "[116,240][152,272]"),
+    ])
+    frame = _icon_only_bar(thumb=False)
+    assert locate_like_row(frame, [], unlabeled)["target"] is None
+    assert locate_like_row(frame, [], reactions)["target"] is None
+    assert locate_like_row(frame, [], liked)["target"] is None
 
 
 def test_empty_light_page_is_not_a_post():
@@ -579,6 +669,7 @@ def test_verified_like_taps_once_and_stops():
                                         payload=_body("facebook", "like", like_swipes=2))
     assert (status, detail) == (STATUS_DONE, "ok"), detail
     assert result["swipes"] == 0
+    assert "like_diag" not in result
     tx = str(result["like_x"] * W // 1000)
     ty = str(result["like_y"] * H // 1000)
     assert sum(1 for a in _taps(fake.actions()) if (a[-2], a[-1]) == (tx, ty)) == 1
@@ -599,6 +690,9 @@ def test_like_probe_does_not_tap_the_row():
     clean = sanitize_phone_result(TASK_PHONE_LIKE, {**result, "secret": "nope", "text": "Like"})
     assert clean["like_probe"] is True and clean["like_x"] == result["like_x"]
     assert clean["swipes"] == 0 and "secret" not in clean and "text" not in clean
+    assert clean["like_diag"]["template_matched"] is True
+    assert clean["like_diag"]["uiautomator"]["dump"] == "empty"
+    assert "png" not in json.dumps(clean["like_diag"])
 
 
 def test_finds_the_row_on_a_later_swipe():
@@ -708,6 +802,19 @@ def test_like_probe_pairs_the_dump_label_with_the_template():
     assert "label" in result["like_signals"] and "template" in result["like_signals"]
     assert result["like_label"] == "react"
     assert any(a[2:] == ("shell", "uiautomator", "dump", "/dev/tty") for a in adb.actions())
+    diag = result["like_diag"]
+    assert diag["uiautomator"]["dump"] == "ok"
+    assert diag["uiautomator"]["like_found"] is True
+    assert diag["uiautomator"]["match"]["label"] == "react"
+    assert diag["uiautomator"]["match"]["by"] == "content-desc"
+    assert diag["uiautomator"]["match"]["content_desc"] == "React"
+    assert diag["template_matched"] is True
+    assert diag["template_score"] >= TEMPLATE_MED
+    assert isinstance(diag["structure_matched"], bool)
+    assert diag["nodes"] and set(diag["nodes"][0]) == {
+        "bounds", "class", "content_desc", "resource_id", "text",
+    }
+    assert "S1" not in json.dumps(diag)
 
 
 def test_dump_label_on_a_square_does_not_tap():
@@ -721,6 +828,62 @@ def test_dump_label_on_a_square_does_not_tap():
         {"serial": "S1"}, ops=ops)
     assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
     assert "like_x" not in result
+    assert "like_diag" not in result
+    assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(adb.actions()))
+
+
+def test_like_probe_on_a_miss_names_the_label_and_the_weak_template():
+    frame = _icon_only_bar(thumb=False)
+    xml = _hierarchy([("", "Like", "", "[16,242][46,272]")])
+    adb = _HierarchyAdb(frame, xml)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
+    diag = result["like_diag"]
+    assert diag["uiautomator"]["like_found"] is True
+    assert diag["uiautomator"]["match"]["by"] == "content-desc"
+    assert diag["uiautomator"]["match"]["label"] == "like"
+    assert diag["template_matched"] is False
+    assert diag["template_score"] < TEMPLATE_HIGH
+    assert isinstance(diag["structure_matched"], bool)
+    assert diag["nodes"][0]["bounds"] == "[16,242][46,272]"
+    assert diag["nodes"][0]["content_desc"] == "Like"
+    serial = "TESTSERIAL01"
+    dirty = {
+        "like_probe": True, "serial": serial,
+        "stderr": f"error: device '{serial}' not found",
+        "like_diag": {
+            **diag,
+            "png_b64": "iVBORw0KGgoAAA",
+            "nodes": [{**diag["nodes"][0], "content_desc": f"Like {serial}", "png_b64": "iVBORw0KGgoAAA"}],
+        },
+    }
+    clean = sanitize_phone_result(TASK_PHONE_LIKE, dirty, wallpaper="07")
+    blob = json.dumps(clean["like_diag"]) + clean["stderr"]
+    assert serial not in blob and "iVBORw0KGgo" not in blob and "png" not in blob
+    assert "07" in clean["stderr"] and "07" in clean["like_diag"]["nodes"][0]["content_desc"]
+    assert clean["serial"] == serial
+    offline = sanitize_phone_result(TASK_PHONE_LIKE, {"serial": "S1", "stderr": "error: device offline"})
+    assert offline["stderr"] == "error: device offline"
+
+
+def test_comment_share_row_still_needs_post_tap_verification():
+    frame = _icon_only_bar(thumb=False)
+    adb = _HierarchyAdb(frame, _action_bar_xml())
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "not_verified"), detail
+    assert "position" in result["like_signals"] and "structure" in result["like_signals"]
+    assert "like_diag" not in result
+    tx = str(result["like_x"] * W // 1000)
+    ty = str(result["like_y"] * H // 1000)
+    assert sum(1 for a in _taps(adb.actions()) if (a[-2], a[-1]) == (tx, ty)) == 1
     assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(adb.actions()))
 
 
