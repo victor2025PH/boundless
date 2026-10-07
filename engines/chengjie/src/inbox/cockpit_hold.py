@@ -135,14 +135,33 @@ def forget_snooze(cid: str) -> bool:
         return existed
 
 
-def note_cleared(cid: str, how: str, now: float = None) -> None:
+def note_cleared(cid: str, how: str, now: float = None, by: str = "") -> None:
     ts = time.time() if now is None else float(now)
+    rec = {"ts": ts, "cid": str(cid or ""), "how": str(how or "")}
+    if by:
+        rec["by"] = str(by)[:64]
     with _lock:
         data = _load()
-        data["cleared"].append({
-            "ts": ts, "cid": str(cid or ""), "how": str(how or ""),
-        })
+        data["cleared"].append(rec)
         _save(data)
+
+
+def cleared_recent(cid: str, how: str, within_sec: float,
+                   now: float = None) -> bool:
+    """同一会话同一种清法在 ``within_sec`` 秒内已经记过（防重放/连点重复记）。"""
+    cid = str(cid or "").strip()
+    if not cid:
+        return False
+    ts = time.time() if now is None else float(now)
+    for c in _load()["cleared"]:
+        if str(c.get("cid") or "") != cid or str(c.get("how") or "") != str(how or ""):
+            continue
+        try:
+            if ts - float(c.get("ts") or 0) <= float(within_sec):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def cleared_since(cid: str, since: float) -> bool:

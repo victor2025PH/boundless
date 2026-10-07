@@ -3133,6 +3133,9 @@ window._pillChainFail=window._pillChainFail||function(fn){
       ? window.Tf('base.sla.tip_head_mix',{n:n,crit:g.crit.length,warn:g.warn.length})
       : window.Tf('base.sla.tip_brk',{n:n});
     if(escN>0) head+=' · '+window.Tf('base.sla.tip_esc_n',{esc:escN});
+    // 和「待人工」页主句口径不同（那边只数近 3 天要人动手的），在 tooltip 里说一句，免得两个数对不上
+    var _ckNote=window.T('base.sla.tip_cockpit');
+    if(_ckNote && _ckNote!=='base.sla.tip_cockpit') head+='\n'+_ckNote;
     slaBadge.title=head+'\n'+g.all.slice(0,8).map(function(it){
       // title 是纯文本上下文：塞 SVG 标记会被原样显示成 <svg...> 乱码 → 用文字符号
       var er=g.escMap[it.conversation_id];

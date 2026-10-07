@@ -37,7 +37,7 @@
   .ck-fchip{border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text-muted);border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;}
   .ck-fchip:hover{border-color:var(--tk-brand);color:var(--tk-text);}
   .ck-fchip.on{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
-  .ck-q-list{flex:1;overflow-y:auto;padding:10px 12px;}
+  .ck-q-list{flex:1;overflow-y:auto;padding:10px 12px 84px;}   /* 底部让开右下浮动按钮（问小智） */
   .ck-card{border:1px solid var(--tk-border);border-left-width:4px;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--tk-surface);display:flex;gap:12px;align-items:stretch;}
   .ck-card.p1{border-left-color:var(--tk-danger);}
   .ck-card.p2{border-left-color:var(--tk-orange);}
@@ -55,6 +55,10 @@
   .ck-meta{padding:4px 18px 0;font-size:12px;color:var(--tk-text-muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .ck-meta button{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;}
   .ck-meta button:hover{color:var(--tk-text);}
+  .ck-meta .ck-why-btn{margin-left:auto;text-decoration:underline dotted;text-underline-offset:3px;}
+  .ck-why{margin:6px 18px 0;padding:8px 12px;border-radius:10px;background:var(--tk-surface-2);font-size:12px;line-height:1.65;color:var(--tk-text-muted);}
+  .ck-why p{margin:0;}
+  .ck-why b{color:var(--tk-text);font-weight:600;}
   .ck-grp-h{font-size:12px;font-weight:700;color:var(--tk-text-muted);padding:10px 4px 2px;}
   .ck-card .dt .pv{color:var(--tk-text-muted);margin-right:4px;}
   /* 头像：真头像盖在字母底上，加载失败自动露底（onerror 移除 img） */
@@ -79,6 +83,14 @@
   .ck-reply{display:flex;gap:6px;align-items:center;margin-top:8px;}
   .ck-reply-in{flex:1;min-width:120px;border:1px solid var(--tk-border);border-radius:8px;padding:6px 8px;font-size:13px;background:var(--tk-surface);color:var(--tk-text);}
   .ck-reply-err{font-size:11px;color:var(--tk-danger-ink);}
+  .ck-reply-in:disabled,.ck-send:disabled{opacity:.6;cursor:progress;}
+  /* 一张卡只留一个实心按钮：没打字时「去回」实心；打了字「发送」实心、「去回」退成描边 */
+  .ck-card.has-draft .ck-send{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
+  .ck-card.has-draft a.ck-btn.primary[data-ck-open]{background:var(--tk-surface);border-color:var(--tk-border);color:var(--tk-text);}
+  /* 从完整对话回来落到的那张：描边闪一下 */
+  .ck-card.ck-landed{box-shadow:0 0 0 2px var(--tk-brand);animation:ckLand 1.6s ease-out 1;}
+  @keyframes ckLand{0%{box-shadow:0 0 0 0 transparent;}25%{box-shadow:0 0 0 5px color-mix(in srgb, var(--tk-brand) 45%, transparent);}100%{box-shadow:0 0 0 2px var(--tk-brand);}}
+  .ck-acct{display:inline-block;font-size:10px;font-weight:600;border-radius:5px;padding:1px 6px;background:var(--tk-surface-2);color:var(--tk-text-muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}
   .ck-more{font-size:12px;color:var(--tk-text-muted);}
   .ck-more summary{cursor:pointer;}
   .ck-empty{padding:36px 16px;text-align:center;color:var(--tk-text-muted);}
@@ -90,10 +102,25 @@
   .ck-stale-h.open .ar{transform:rotate(90deg);}
   .ck-stale-sub{font-size:11px;color:var(--tk-text-muted);padding:0 4px 8px;}
   #ck-stale-list .ck-card{opacity:.82;}
+  /* 等待时长三档（P1-10）：<1h 中性 / 1–24h 琥珀 / >24h 红，左边框跟着走；接管超时仍是 p1 红 */
+  .ck-card.t0{border-left-color:var(--tk-border);}
+  .ck-card.t1{border-left-color:var(--tk-amber);}
+  .ck-card.t2{border-left-color:var(--tk-danger);}
+  .ck-card.t0 .wait .wn{color:var(--tk-text);}
+  .ck-card.t1 .wait .wn{color:var(--tk-warn-ink);}
+  .ck-card.t2 .wait .wn{color:var(--tk-danger-ink);}
+  /* 积压紧凑行（P1-7）：一行一人，不带输入框 */
+  .ck-card.ck-row{align-items:center;gap:8px;padding:6px 10px;margin-bottom:4px;border-left-width:3px;border-left-color:var(--tk-border);}
+  .ck-row .nm{font-weight:700;font-size:12.5px;color:var(--tk-text);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;}
+  .ck-row-q{flex:1;min-width:0;font-size:12px;color:var(--tk-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ck-row-age{flex-shrink:0;font-size:11px;color:var(--tk-text-muted);white-space:nowrap;}
+  .ck-row .ck-acts{flex-shrink:0;flex-wrap:nowrap;}
+  .ck-row .ck-btn{padding:2px 9px;font-size:11px;}
+  .ck-meta button.ck-tk-tog[aria-expanded="true"]{color:var(--tk-text);}
   /* 加载骨架屏 */
   .ck-skel{border:1px solid var(--tk-border);border-radius:10px;height:64px;margin-bottom:8px;background:linear-gradient(90deg,var(--tk-surface) 25%,var(--tk-surface-2) 42%,var(--tk-surface) 60%);background-size:220% 100%;animation:ckSkel 1.1s linear infinite;}
   @keyframes ckSkel{from{background-position:180% 0;}to{background-position:-40% 0;}}
-  @media (prefers-reduced-motion:reduce){.ck-skel{animation:none;background:var(--tk-surface-2);}.ck-stale-h .ar{transition:none;}}
+  @media (prefers-reduced-motion:reduce){.ck-skel{animation:none;background:var(--tk-surface-2);}.ck-stale-h .ar{transition:none;}.ck-card.ck-landed{animation:none;}}
   /* 右栏 */
   .ck-rail{width:290px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;}
   .ck-box{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;}
@@ -110,7 +137,34 @@
   .ck-muted{font-size:12px;color:var(--tk-text-muted);}
   .ck-srcwarn{font-size:11px;color:var(--tk-warn-ink);padding:4px 18px;}
   .ck-srcwarn.ck-quiet{color:var(--tk-text-muted);}
-  @media (max-width:900px){ .ck-rail{display:none;} }
+  @media (max-width:900px){
+    .ck-rail{display:none;}
+    /* 右栏收起时，接管名单从顶部「接管中 N」展开到列表上方 */
+    .ck-main{flex-direction:column;}
+    .ck-main.tk-open .ck-rail{display:flex !important;width:auto;max-height:38vh;flex-shrink:0;}
+  }
+  /* 手机（P1-1）：卡片上下排，等待时长挪到名字行右侧，按钮整行排开 */
+  @media (max-width:640px){
+    .ck-bar{padding:10px 12px;gap:8px;}
+    .ck-bar .sub{display:none;}
+    .ck-lead{padding:10px 12px 0;}
+    .ck-meta{padding:4px 12px 0;}
+    .ck-why{margin:6px 12px 0;}
+    .ck-main{padding:8px 6px 10px;}
+    .ck-q-list{padding:8px 8px 84px;}
+    .ck-card{flex-wrap:wrap;position:relative;gap:10px;}
+    .ck-card .body{flex:1 1 calc(100% - 46px);}
+    .ck-card .row1{padding-right:64px;}
+    .ck-card .nm{max-width:100%;}
+    .ck-card .side{flex:1 1 100%;flex-direction:row;align-items:center;justify-content:flex-start;}
+    .ck-card .wait{position:absolute;top:9px;right:12px;}
+    .ck-card .wait .wn{font-size:14px;}
+    .ck-acts{justify-content:flex-start;width:100%;}
+    .ck-reply-in{min-width:0;}
+    .ck-card.ck-row{flex-wrap:wrap;}
+    .ck-row-q{flex:1 1 100%;order:5;}
+    .ck-row .ck-acts{width:auto;margin-left:auto;}
+  }
 </style>
 {% endblock %}
 {% block content %}
@@ -125,31 +179,39 @@
   <div class="ck-lead" id="ck-lead">
     {{ (i18n or {}).get('ck.lead.pre', "还有") }}
     <span class="n" id="ck-k-queue">–</span>
-    {{ (i18n or {}).get('ck.lead.post', "条要你回，其余 AI 在回。") }}
+    <span id="ck-lead-post">{{ (i18n or {}).get('ck.lead.post', "条要你回，其余 AI 在回。") }}</span>
     <span id="ck-lead-extra"></span>
     <span class="roi" id="ck-roi-line"></span>
     <span class="roi" id="ck-cleared"></span>
   </div>
   <div class="ck-meta" id="ck-meta">
     <span>{{ (i18n or {}).get('ck.oldest.pre', "最久已等") }} <span id="ck-k-oldest">–</span></span>
-    <span id="ck-k-takeover-wrap">· {{ (i18n or {}).get('ck.takeover.inline', "接管中") }} <span id="ck-k-takeover">0</span></span>
+    <span id="ck-k-takeover-wrap"><button type="button" class="ck-tk-tog" id="ck-tk-tog" aria-expanded="false" onclick="CK.toggleTk()">· {{ (i18n or {}).get('ck.takeover.inline', "接管中") }} <span id="ck-k-takeover">0</span></button></span>
     <span id="ck-k-stale-wrap"><button type="button" onclick="CK.toggleStale()">· <span id="ck-k-stale">0</span> {{ (i18n or {}).get('ck.stale.inline', "条超过 3 天，收在下面") }}</button></span>
+    <button type="button" class="ck-why-btn" id="ck-why-btn" aria-expanded="false" aria-controls="ck-why" onclick="CK.toggleWhy()">{{ (i18n or {}).get('ck.counts.toggle', "这些数怎么算？") }}</button>
+  </div>
+  <div class="ck-why" id="ck-why" style="display:none;">
+    <p>{{ (i18n or {}).get('ck.counts.lead', "「要你回」只数近 3 天里客户在等、或标了需人工的人；草稿待审、接管超时另外写在后面。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.stale', "超过 3 天没人回的收进下面的「历史积压」，不算进上面的数；人多时先列最近的 40 位，总数照实写。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.pill', "顶栏带时钟的提醒是另一个口径：全站末条是客户、超过提醒线的会话都算，不分新旧，草稿待审和接管中的也算，最多列 50 条，所以通常比这里大。点它能看到名单。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.cleared', "「今天清掉」＝今天在这页摘掉需人工、交还接管，或回了正在等的客户（同一轮等待只算一次）。") }}</p>
   </div>
   <div class="ck-srcwarn" id="ck-srcwarn" style="display:none;"></div>
+  <div class="ck-srcwarn" id="ck-load-warn" style="display:none;"></div>
   <div class="ck-srcwarn" id="ck-acct-alert" style="display:none;"></div>
   <div class="ck-srcwarn ck-quiet" id="ck-scan-note" style="display:none;">{{ (i18n or {}).get('ck.scan.note', "更早的客户可能没列全") }}</div>
   <div class="ck-main">
     <div class="ck-q">
       <div class="ck-q-h">
         <div class="tt"><button type="button" class="ck-btn" onclick="CK.toggleChips()">{{ (i18n or {}).get('ck.filter.toggle', "筛选") }}</button> <span class="ck-muted" id="ck-q-n"></span>
-          <span style="margin-left:auto;font-weight:500;" class="ck-muted">{{ (i18n or {}).get('ck.auto_note', "每 30 秒自动刷新") }}</span></div>
+</div>
         <div class="ck-fchips" id="ck-fchips" style="display:none;"></div>
       </div>
       <div class="ck-q-list">
         <div id="ck-q-list"><div class="ck-skel"></div><div class="ck-skel"></div><div class="ck-skel"></div></div>
         <div class="ck-stale-sub" id="ck-snooze-bar" style="display:none;"></div>
         <div class="ck-stale-h" id="ck-stale-h" style="display:none;" onclick="CK.toggleStale()"><span class="ar">▸</span><span id="ck-stale-t"></span></div>
-        <div class="ck-stale-sub" id="ck-stale-sub" style="display:none;">{{ (i18n or {}).get('ck.stale.sub', "超过 3 天的旧信号——处理完点「已处理」清掉，别让它一直占屏") }}</div>
+        <div class="ck-stale-sub" id="ck-stale-sub" style="display:none;">{{ (i18n or {}).get('ck.stale.hint', "这些客户 3 天以上没人回。能回的点「去回」，不打算回的点「先不回」。") }}</div>
         <div id="ck-stale-list" style="display:none;"></div>
       </div>
     </div>
@@ -226,8 +288,14 @@
     replyPh: {{ (i18n or {}).get('ck.reply.ph', "回一句")|tojson }},
     replySend: {{ (i18n or {}).get('ck.reply.send', "发送")|tojson }},
     replyFail: {{ (i18n or {}).get('ck.reply.fail', "没发出去，还在这张卡上")|tojson }},
+    loadStale: {{ (i18n or {}).get('ck.load.stale', "刚才没刷新成功，显示的是 {t} 的数据")|tojson }},
+    acctTail: {{ (i18n or {}).get('ck.acct.tail', "号 …{tail}")|tojson }},
     more: {{ (i18n or {}).get('ck.more', "更多")|tojson }},
     staleTitle: {{ (i18n or {}).get('ck.stale.title', "历史积压（{n}）")|tojson }},
+    leadPost: {{ (i18n or {}).get('ck.lead.post', "条要你回，其余 AI 在回。")|tojson }},
+    leadPostOne: {{ (i18n or {}).get('ck.lead.post_one', "条要你回，其余 AI 在回。")|tojson }},
+    ageAuto: {{ (i18n or {}).get('ck.age.auto', "{t} 更新 · 自动刷新")|tojson }},
+    staleTitleCap: {{ (i18n or {}).get('ck.stale.title_cap', "历史积压（{total}，先列最近的 {n}）")|tojson }},
     flagMore: {{ (i18n or {}).get('ck.flag.more', "同时命中")|tojson }},
     actOpen: {{ (i18n or {}).get('ck.act.open', "去处理")|tojson }},
     actOpenWait: {{ (i18n or {}).get('ck.act.open_wait', "去回")|tojson }},
@@ -477,10 +545,12 @@
   }
   function replyBox(it){
     var cid=String(it.conversation_id||'');
+    var busy=!!_sending[cid];
     return '<div class="ck-reply">'
       +'<input class="ck-reply-in" maxlength="500" placeholder="'+esc(L.replyPh)+'" data-cid="'+esc(cid)+'"'
-      +' onkeydown="if(event.key===\'Enter\'){event.preventDefault();CK.sendReply(this);}">'
-      +'<button type="button" class="ck-btn primary" onclick="CK.sendReply(this)">'+esc(L.replySend)+'</button>'
+      +' value="'+esc(_drafts[cid]||'')+'"'+(busy?' disabled':'')
+      +' onkeydown="if(event.key===\'Enter\'&&!event.isComposing&&event.keyCode!==229){event.preventDefault();CK.sendReply(this);}">'
+      +'<button type="button" class="ck-btn ck-send"'+(busy?' disabled':'')+' onclick="CK.sendReply(this)">'+esc(L.replySend)+'</button>'
       +'<span class="ck-reply-err" style="display:none;"></span></div>';
   }
   function waitWord(kind){
@@ -501,6 +571,9 @@
   var _snoozeOpen=false;
   var _sent={};
   var _paintKey='';
+  /* 页内回复：每张卡打到一半的字（按会话存，重画后回填）、在途发送、上次失败那次的键 */
+  var _drafts={}, _sending={}, _lastCmid={};
+  var _paintPending=false, _composing=false;
   function snoozeMap(){
     try{ var m=JSON.parse(localStorage.getItem(SNOOZE_KEY)||'{}'); return (m&&typeof m==='object')?m:{}; }
     catch(e){ return {}; }
@@ -523,7 +596,8 @@
     }
     if(!id) return '';
     var plat=String(it.platform||'').toLowerCase();
-    var label=_acctNames[plat+'|'+id]||_acctNames[id]||id;
+    var label=_acctNames[plat+'|'+id]||_acctNames[id]||'';
+    if(!label) label=/^\d{6,}$/.test(id)?fmt(L.acctTail,{tail:id.slice(-4)}):id;
     if(label.length>16) label='…'+label.slice(-6);
     return '<span class="ck-acct" title="'+esc(id)+'">'+esc(label)+'</span>';
   }
@@ -535,8 +609,41 @@
     }
     return fmt(L.why[it.kind]||'',{age:fmtAge(it.age_sec)});
   }
-  function card(it){
-    var p='p'+(it.priority||4);
+  /* 等待时长三档；需人工至少琥珀（人家点名要人），接管超时保持原来的红 */
+  function tierCls(it){
+    if(it.kind==='takeover_overdue') return 'p1';
+    var a=Number(it.age_sec||0);
+    var t=a<3600?0:(a<86400?1:2);
+    if(it.kind==='needs_human' && t<1) t=1;
+    return 't'+t;
+  }
+  function quoteText(it){
+    var q=(it.kind==='takeover_overdue')?String(it.last_text||''):String(it.detail||'');
+    if(q) return '“'+q+'”';
+    if(it.quote_media){
+      var mk=MEDIA_KIND[String(it.quote_media).toLowerCase()]||'other';
+      return L.media[mk]||L.media.other;
+    }
+    return '';
+  }
+  /* 积压紧凑行：名字、平台、一句原话、等了多久、去回（客户在等的再给「先不回」） */
+  function rowCompact(it){
+    var cid=String(it.conversation_id||'');
+    var acts=openLink(cid, it.kind==='draft_pending'?L.actOpenDraft:(it.kind==='waiting'?L.actOpenWait:L.actOpen), false);
+    if(it.kind==='waiting') acts+=btn('', 'snooze', cid, L.actSnooze);
+    else if(it.kind==='needs_human' && _caps.resolve) acts+=btn('', 'resolve', cid, L.actResolve);
+    var q=it.kind==='draft_pending'?(it.detail?(L.draftPrefix+' '+it.detail):''):quoteText(it);
+    return '<div class="ck-card ck-row" data-cid="'+esc(cid)+'" data-kind="'+esc(it.kind||'')+'">'
+      +'<span class="nm">'+esc(displayName(it.name, cid, it.username))+'</span>'
+      +platChip(it.platform)
+      +'<span class="ck-row-q" title="'+esc(q)+'">'+esc(q)+'</span>'
+      +'<span class="ck-row-age">'+esc(fmtAge(it.age_sec))+'</span>'
+      +'<span class="ck-acts">'+acts+'</span>'
+      +'</div>';
+  }
+  function card(it, grouped){
+    grouped=(grouped===true);
+    var p=tierCls(it);
     var extra=(it.flags||[]).filter(function(f){return f!==it.kind;});
     var extraHtml=extra.length?('<span class="ck-muted" style="font-size:10px;">'+esc(L.flagMore)+': '+extra.map(function(f){return esc(L.kinds[f]||f);}).join(' / ')+'</span>'):'';
     var cid=String(it.conversation_id||'');
@@ -553,7 +660,8 @@
         quote='<div class="dt"><span class="pv">'+esc(L.said)+'</span>'+esc(L.media[mk]||L.media.other)+'</div>';
       }
     }
-    var why=whyFor(it);
+    /* why 行只留有具体内容的：需人工（原因）和接管超时（谁接的）；客户在等/草稿待审的 why 和分组头、引用重复 */
+    var why=(it.kind==='needs_human'||it.kind==='takeover_overdue')?whyFor(it):'';
     if(it.kind==='takeover_overdue' && it.detail) why+=' · '+L.tkBy+it.detail;
     var acts='';
     var hand=isTk || it.kind==='takeover_overdue';
@@ -575,18 +683,21 @@
       acts+=moreTake(cid);
     }
     var reply=(it.kind==='waiting' && !hand)?replyBox(it):'';
-    return '<div class="ck-card '+p+'" data-cid="'+esc(cid)+'">'
+    var hasDraft=it.kind==='waiting' && !hand && !!String(_drafts[cid]||'').trim();
+    /* 分组头已经写了类别：单一类别的组（客户在等/稿待审/忘了交还）卡上不再重复；需人工照留，和客户在等区分 */
+    var showKind=!(grouped && it.kind!=='needs_human');
+    return '<div class="ck-card '+p+(hasDraft?' has-draft':'')+'" data-cid="'+esc(cid)+'" data-kind="'+esc(it.kind||'')+'">'
       +avaHtml(it)
       +'<div class="body">'
         +'<div class="row1">'
           +'<span class="nm">'+esc(displayName(it.name, cid, it.username))+'</span>'
           +platChip(it.platform)
           +acctChip(it)
-          +kindChip(it.kind)
+          +(showKind?kindChip(it.kind):'')
           +((it.unread|0)>0?('<span class="ck-unread">'+esc(L.unread)+' '+(it.unread|0)+'</span>'):'')
           +extraHtml+'</div>'
         +quote
-        +'<div class="why">'+esc(why)+'</div>'
+        +(why?'<div class="why">'+esc(why)+'</div>':'')
         +reply
       +'</div>'
       +'<div class="side">'
@@ -609,7 +720,7 @@
     el.innerHTML=html; el.style.display=(_chipsOpen && fresh.length)?'':'none';
   }
   function groupHtml(shown){
-    if(_filter) return shown.map(card).join('');
+    if(_filter) return shown.map(function(it){ return card(it); }).join('');
     var defs=[
       {t:L.grpReply, ks:{waiting:1, needs_human:1}},
       {t:L.grpDraft, ks:{draft_pending:1}},
@@ -620,11 +731,11 @@
       var rows=shown.filter(function(it){return g.ks[it.kind];});
       rows.forEach(function(it){ used[it.conversation_id]=1; });
       if(!rows.length) return;
-      html+='<div class="ck-grp-h">'+esc(g.t)+' '+rows.length+'</div>'+rows.map(card).join('');
+      html+='<div class="ck-grp-h">'+esc(g.t)+' '+rows.length+'</div>'+rows.map(function(it){ return card(it, true); }).join('');
     });
     var rest=shown.filter(function(it){return !used[it.conversation_id];});
-    if(rest.length) html+=rest.map(card).join('');
-    return html || shown.map(card).join('');
+    if(rest.length) html+=rest.map(function(it){ return card(it); }).join('');
+    return html || shown.map(function(it){ return card(it); }).join('');
   }
   function renderSnooze(items){
     var bar=document.getElementById('ck-snooze-bar');
@@ -664,6 +775,12 @@
     var live=items.filter(function(it){return !isSnoozed(it) && !recentlySent(it);});
     var fresh=live.filter(function(it){return !isStale(it);});
     var stale=live.filter(isStale);
+    /* 积压只列最近的 40 条；服务端给了真实总数（stale_total）就照实写，刚回过收起的扣掉 */
+    var staleTotal=stale.length;
+    if(typeof d.stale_total==='number'){
+      var sentStale=items.filter(function(it){return !isSnoozed(it) && isStale(it) && recentlySent(it);}).length;
+      staleTotal=Math.max(stale.length, d.stale_total-sentStale);
+    }
     var note=document.getElementById('ck-scan-note');
     if(note) note.style.display=d.scan_truncated?'':'none';
     var sw=document.getElementById('ck-k-stale-wrap');
@@ -677,7 +794,7 @@
         }),
         f:_filter, o:_staleOpen,
         z:serverSnooze()?((_data&&_data.snoozed)||[]).map(function(it){return it.conversation_id;}):snoozeMap(),
-        n:_acctNames, s:d.sources||{}, t:!!d.scan_truncated, c:d.cleared_today|0,
+        n:_acctNames, s:d.sources||{}, t:!!d.scan_truncated, c:d.cleared_today|0, st:d.stale_total,
         chips:_chipsOpen, snooze:_snoozeOpen, sent:_sent
       });
     }catch(e){ key=''; }
@@ -685,6 +802,11 @@
     _paintKey=key;
     var scroller=document.querySelector('.ck-q-list');
     var keep=scroller?scroller.scrollTop:0;
+    /* 有人正在卡上打字：数字照常更新，列表本轮不重建（重建会冲掉字和输入法），
+       停手（失焦）后或下一轮再画。只是聚焦着空框：照常重建，回填焦点。 */
+    var typing=_typingNow();
+    var refocus=typing?null:_focusSnap();
+    if(typing){ _paintPending=true; _paintKey=''; }
     var clearedEl=document.getElementById('ck-cleared');
     if(clearedEl){
       var cn=d.cleared_today|0;
@@ -697,6 +819,8 @@
       else if(it.kind==='takeover_overdue') nHold++;
     });
     document.getElementById('ck-k-queue').textContent=String(nReply);
+    var lp=document.getElementById('ck-lead-post');
+    if(lp) lp.textContent=(nReply===1)?L.leadPostOne:L.leadPost;
     var bits=[];
     if(nDraft) bits.push(fmt(L.leadDraft,{n:nDraft}));
     if(nHold) bits.push(fmt(L.leadHold,{n:nHold}));
@@ -704,12 +828,14 @@
     if(ex) ex.textContent=bits.length?(' '+L.leadAlso+' '+bits.join('、')):'';
     var oldest=0; fresh.forEach(function(it){ oldest=Math.max(oldest, Number(it.age_sec||0)); });
     document.getElementById('ck-k-oldest').textContent=fresh.length?fmtAge(oldest):'–';
-    document.getElementById('ck-k-stale').textContent=String(stale.length);
+    document.getElementById('ck-k-stale').textContent=String(staleTotal);
     document.getElementById('ck-q-n').textContent='';
     renderChips(fresh);
     var el=document.getElementById('ck-q-list');
     var shown=_filter?fresh.filter(function(it){return it.kind===_filter;}):fresh;
-    if(!fresh.length){
+    if(typing){
+      /* 本轮不动列表 */
+    }else if(!fresh.length){
       el.innerHTML='<div class="ck-empty"><div class="big">'+esc(L.qEmpty)+'</div><div>'+esc(L.qEmptySub)+'</div>'
         +'<div id="ck-empty-roi" style="margin-top:10px;font-size:12px;color:var(--tk-ok-ink);"></div>'
         +'<div id="ck-empty-learn" style="margin-top:6px;font-size:12px;"></div></div>';
@@ -721,14 +847,16 @@
       el.innerHTML=groupHtml(shown);
     }
     renderSnooze(items);
-    if(scroller) scroller.scrollTop=keep;
+    if(scroller && !typing) scroller.scrollTop=keep;
     var sh=document.getElementById('ck-stale-h'), ss=document.getElementById('ck-stale-sub'), sl=document.getElementById('ck-stale-list');
     if(stale.length){
       sh.style.display=''; sh.classList.toggle('open', _staleOpen);
-      document.getElementById('ck-stale-t').textContent=fmt(L.staleTitle,{n:stale.length});
+      document.getElementById('ck-stale-t').textContent=staleTotal>stale.length
+        ? fmt(L.staleTitleCap,{total:staleTotal, n:stale.length})
+        : fmt(L.staleTitle,{n:stale.length});
       ss.style.display=_staleOpen?'':'none';
       sl.style.display=_staleOpen?'':'none';
-      if(_staleOpen) sl.innerHTML=stale.map(card).join('');
+      if(_staleOpen && !typing) sl.innerHTML=stale.map(rowCompact).join('');
     }else{
       sh.style.display='none'; ss.style.display='none'; sl.style.display='none'; _staleOpen=false;
     }
@@ -739,7 +867,32 @@
       w.style.display='';
     }else w.style.display='none';
     paintRoi();
+    if(!typing){ _paintPending=false; _focusRestore(refocus); }
     revealNext();
+  }
+  function _focusedReply(){
+    var ae=document.activeElement, q=document.querySelector('.ck-q-list');
+    return (ae && ae.classList && ae.classList.contains('ck-reply-in') && q && q.contains(ae))?ae:null;
+  }
+  function _typingNow(){
+    var f=_focusedReply();
+    return !!(f && (_composing || String(f.value||'').trim()));
+  }
+  function _focusSnap(){
+    var f=_focusedReply();
+    if(!f) return null;
+    return {cid:f.getAttribute('data-cid')||'', s:f.selectionStart, e:f.selectionEnd};
+  }
+  function _replyInput(cid){
+    var all=document.querySelectorAll('.ck-q-list .ck-reply-in');
+    for(var i=0;i<all.length;i++){ if(all[i].getAttribute('data-cid')===cid) return all[i]; }
+    return null;
+  }
+  function _focusRestore(snap){
+    if(!snap || !snap.cid) return;
+    var inp=_replyInput(snap.cid);
+    if(!inp || inp===document.activeElement || inp.disabled) return;
+    try{ inp.focus({preventScroll:true}); if(snap.s!=null) inp.setSelectionRange(snap.s, snap.e); }catch(e){}
   }
   function revealNext(){
     /* 只在「从完整对话回来」之后定位一次：离开过本页（切走/失焦）、收件箱发出
@@ -762,6 +915,12 @@
     if(!target) return;
     var el=cards[ids.indexOf(target)];
     if(el && el.scrollIntoView) el.scrollIntoView({block:'center'});
+    if(el){
+      el.classList.add('ck-landed');
+      setTimeout(function(){ try{ el.classList.remove('ck-landed'); }catch(e){} }, 2600);
+      var inp=el.querySelector('.ck-reply-in');
+      if(inp && !inp.disabled){ try{ inp.focus({preventScroll:true}); }catch(e){} }
+    }
   }
   function retAway(){ if(readRet()) _retAway=true; }
   function retBack(){
@@ -779,6 +938,10 @@
     document.getElementById('ck-k-takeover').textContent=String(act.length);
     var wrap=document.getElementById('ck-k-takeover-wrap');
     if(wrap) wrap.style.display=act.length?'':'none';
+    if(!act.length){
+      var mn=document.querySelector('.ck-main'); if(mn) mn.classList.remove('tk-open');
+      var tg=document.getElementById('ck-tk-tog'); if(tg) tg.setAttribute('aria-expanded','false');
+    }
     var box=document.getElementById('ck-box-tk');
     if(box) box.style.display=act.length?'':'none';
     var rail=document.querySelector('.ck-rail');
@@ -843,9 +1006,19 @@
         _data=d; _caps=(d.caps&&typeof d.caps==='object')?d.caps:{};
         renderTakeover(d.takeover);   /* 先建接管集，卡片动作才判得对 */
         render();
+        var lw=document.getElementById('ck-load-warn');
+        if(lw) lw.style.display='none';
         var age=document.getElementById('ck-age');
-        if(age&&d.generated_at&&typeof window.wsFmtTime==='function'){ age.textContent=window.wsFmtTime(d.generated_at); }
+        if(age&&d.generated_at&&typeof window.wsFmtTime==='function'){ age.textContent=fmt(L.ageAuto,{t:window.wsFmtTime(d.generated_at)}); }
       }).catch(function(){
+        /* 已有一份在屏：留着卡片，只出一行提示（后端重启那几秒卡片别消失） */
+        var lw=document.getElementById('ck-load-warn');
+        if(_data && lw){
+          var at=(_data.generated_at&&typeof window.wsFmtTime==='function')?window.wsFmtTime(_data.generated_at):'';
+          lw.textContent=fmt(L.loadStale,{t:at||'–'});
+          lw.style.display='';
+          return;
+        }
         document.getElementById('ck-q-list').innerHTML='<div class="ck-empty">'+esc(L.qFail)+'</div>';
       });
       apiFetch('/api/accounts/fleet-health').then(function(r){return r.json();}).then(renderAcctAlert)
@@ -871,6 +1044,8 @@
       var text=String((inp&&inp.value)||'').trim();
       if(!text) return;
       var cid=inp.getAttribute('data-cid')||'';
+      /* 在途锁：回车/连点/重画都不会再发第二条 */
+      if(!cid || _sending[cid]) return;
       var it=null;
       ((_data&&_data.items)||[]).some(function(x){
         if(String(x.conversation_id||'')===cid){ it=x; return true; }
@@ -888,19 +1063,28 @@
           chat=parts.slice(2).join(':');
         }
       }
+      var cmid='ckreply-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+      var body={platform:platform, account_id:account, chat_key:chat, text:text, client_msg_id:cmid};
+      /* 上次同一句「没发出去」可能其实发出去了：带上原件的键，由服务端判断要不要压住这次 */
+      var prior=_lastCmid[cid];
+      if(prior && prior.text===text) body.resend_of_cmid=prior.cmid;
+      _sending[cid]=1;
       var btn=box.querySelector('button');
       if(btn) btn.disabled=true;
+      if(inp) inp.disabled=true;
       if(err) err.style.display='none';
+      function _live(sel){
+        var cur=_replyInput(cid);
+        return cur?(sel?cur.closest('.ck-reply').querySelector(sel):cur):null;
+      }
       apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          platform:platform, account_id:account, chat_key:chat, text:text,
-          client_msg_id:'ckreply-'+Date.now()
-        })
+        body:JSON.stringify(body)
       }).then(function(r){
         return r.json().catch(function(){ return {}; }).then(function(d){
           if(!r.ok || (d && d.ok===false)) throw new Error('send');
         });
       }).then(function(){
+        delete _sending[cid]; delete _drafts[cid]; delete _lastCmid[cid];
         _sent[cid]=Date.now();
         return apiFetch('/api/cockpit/cleared',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({conversation_id:cid, how:'reply'})}).catch(function(){});
@@ -909,14 +1093,34 @@
         _paintKey='';
         CK.load(true);
       }).catch(function(){
-        if(btn) btn.disabled=false;
-        if(err){ err.style.display=''; err.textContent=L.replyFail; }
+        delete _sending[cid];
+        _lastCmid[cid]={text:text, cmid:(prior && prior.text===text)?prior.cmid:cmid};
+        var i2=_live(''), b2=_live('button'), e2=_live('.ck-reply-err');
+        if(b2) b2.disabled=false;
+        if(i2){ i2.disabled=false; try{ i2.focus({preventScroll:true}); }catch(e){} }
+        if(e2){ e2.style.display=''; e2.textContent=L.replyFail; }
       });
     },
     setFilter: function(k){
       _filter=String(k||'');
       if(_data) render();
       beacon('ck_filter_'+(_filter||'all'));
+    },
+    toggleTk: function(){
+      var mn=document.querySelector('.ck-main'), tg=document.getElementById('ck-tk-tog');
+      if(!mn) return;
+      var open=!mn.classList.contains('tk-open');
+      mn.classList.toggle('tk-open', open);
+      if(tg) tg.setAttribute('aria-expanded', open?'true':'false');
+      if(open){ var r=document.querySelector('.ck-rail'); if(r && r.scrollIntoView) try{ r.scrollIntoView({block:'nearest'}); }catch(e){} }
+    },
+    toggleWhy: function(){
+      var w=document.getElementById('ck-why'), b=document.getElementById('ck-why-btn');
+      if(!w) return;
+      var open=w.style.display==='none';
+      w.style.display=open?'':'none';
+      if(b) b.setAttribute('aria-expanded', open?'true':'false');
+      beacon('ck_why_'+(open?'open':'close'));
     },
     toggleStale: function(){
       _staleOpen=!_staleOpen;
@@ -1055,6 +1259,27 @@
     try{ sessionStorage.setItem(NEXT_KEY, next||cid); }catch(e){}
     try{ localStorage.setItem(RET_KEY, JSON.stringify({cid:cid, next:next||cid, ts:Date.now()})); }catch(e){}
   });
+  if(qroot){
+    qroot.addEventListener('input', function(ev){
+      var t=ev.target;
+      if(!t || !t.classList || !t.classList.contains('ck-reply-in')) return;
+      var cid=t.getAttribute('data-cid')||'';
+      var v=String(t.value||'');
+      if(v.trim()) _drafts[cid]=v; else delete _drafts[cid];
+      var c=t.closest('.ck-card');
+      if(c) c.classList.toggle('has-draft', !!v.trim());
+    });
+    qroot.addEventListener('compositionstart', function(){ _composing=true; });
+    qroot.addEventListener('compositionend', function(){ _composing=false; });
+    qroot.addEventListener('focusout', function(ev){
+      /* 停手了补画一次；焦点挪到本区里的按钮（例如「发送」）就不画，免得把按钮换掉、点击落空 */
+      var to=ev.relatedTarget;
+      if(to && qroot.contains(to)) return;
+      setTimeout(function(){
+        if(_paintPending && !_typingNow() && _data){ _paintKey=''; render(); }
+      }, 0);
+    });
+  }
   document.addEventListener('visibilitychange', function(){ if(document.hidden) retAway(); else retBack(); });
   window.addEventListener('blur', retAway);
   window.addEventListener('focus', retBack);

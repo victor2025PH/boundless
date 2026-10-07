@@ -121,6 +121,10 @@ class _FakeStore:
         self.recent_calls.append(conversation_id)
         return [dict(m) for m in self.recent.get(conversation_id, [])][-limit:]
 
+    def get_conversation(self, cid):
+        return next((dict(c) for c in self.convs
+                     if c.get("conversation_id") == cid), None)
+
     # takeover 依赖面（start 用）
     def get_automation_mode_if_set(self, cid):
         return None
@@ -617,7 +621,8 @@ def test_cleared_route_counts_an_inline_reply():
 
     from src.inbox.cockpit_hold import cleared_today
 
-    client = TestClient(_resolve_app(_TagStore()))
+    client = TestClient(_resolve_app(_waiting_store()))
+    client.get("/api/cockpit/overview", params={"force": 1})
     before = cleared_today()
     r = client.post("/api/cockpit/cleared", json={
         "conversation_id": "telegram:a:w1", "how": "reply",
@@ -762,12 +767,12 @@ def test_inbox_reply_not_counted_when_not_waiting():
 
     from src.inbox.cockpit_hold import cleared_today
 
-    # 没有快照：不知道发之前在不在等 → 不算
+    # 没有快照、会话也查不到：不知道发之前在不在等 → 不算
     store = _waiting_store()
     client = TestClient(_resolve_app(store))
     before = cleared_today()
     assert client.post("/api/cockpit/cleared",
-                       json=_inbox_body()).json()["counted"] is False
+                       json=_inbox_body("telegram:a:ghost")).json()["counted"] is False
 
     # 快照里有，但之后 AI 已经回过（早于刚发出去的窗口）→ 不算
     client.get("/api/cockpit/overview", params={"force": 1})
@@ -834,14 +839,159 @@ def test_inbox_reply_needs_its_own_cid_field():
     assert cleared_today() == before
 
 
-def test_inline_reply_still_counts_without_src():
-    """页内回一句（不带 src）照旧直接记，不受收件箱判据影响。"""
+def test_inline_reply_uses_the_same_wait_rule():
+    """页内回一句（不带 src）和收件箱同一套判据：不在等的不记，同一轮只记一次，带上是谁。"""
+    import json as _json
+
     from fastapi.testclient import TestClient
 
-    client = TestClient(_resolve_app(_TagStore()))
+    from src.inbox import cockpit_hold as hold
+
+    client = TestClient(_resolve_app(_waiting_store()))
+    client.get("/api/cockpit/overview", params={"force": 1})
+    before = hold.cleared_today()
     r = client.post("/api/cockpit/cleared",
                     json={"conversation_id": "telegram:a:zz", "how": "reply"})
-    assert r.json()["counted"] is True
+    assert r.json()["counted"] is False
+    ok = client.post("/api/cockpit/cleared",
+                     json={"conversation_id": "telegram:a:w1", "how": "reply"})
+    assert ok.json()["counted"] is True
+    again = client.post("/api/cockpit/cleared",
+                        json={"conversation_id": "telegram:a:w1", "how": "reply"})
+    assert again.json()["counted"] is False
+    assert hold.cleared_today() == before + 1
+    rec = _json.loads(open(hold._path(), encoding="utf-8").read())["cleared"][-1]
+    assert rec["cid"] == "telegram:a:w1" and rec.get("by") == "web-admin"
+    # 交还/已处理走这条路只防重放：两分钟内同一笔不重复记
+    h1 = client.post("/api/cockpit/cleared",
+                     json={"conversation_id": "telegram:a:w9", "how": "handback"})
+    h2 = client.post("/api/cockpit/cleared",
+                     json={"conversation_id": "telegram:a:w9", "how": "handback"})
+    assert h1.json()["counted"] is True and h2.json()["counted"] is False
+
+
+def test_inbox_reply_counts_without_fresh_snapshot():
+    """进程刚起/快照过期时按会话现算：在等就记，AI 已回过、刚等不到宽限期的不记。"""
+    import time as _t
+
+    from fastapi.testclient import TestClient
+
+    from src.inbox.cockpit_hold import cleared_today
+
+    store = _waiting_store()
+    client = TestClient(_resolve_app(store))
+    before = cleared_today()
+    # 从没算过快照：现算 → 在等 → 记
+    assert client.post("/api/cockpit/cleared",
+                       json=_inbox_body()).json()["counted"] is True
+    assert cleared_today() == before + 1
+    # 刚说话（不到 10 分钟宽限期）的不算在等
+    s2 = _waiting_store("telegram:a:new", wait_ago=120.0)
+    c2 = TestClient(_resolve_app(s2))
+    assert c2.post("/api/cockpit/cleared",
+                   json=_inbox_body("telegram:a:new")).json()["counted"] is False
+    # 快照存在但已过期（> 120s）：同样现算，不因为旧快照里没有就丢
+    s3 = _waiting_store("telegram:a:w3")
+    c3 = TestClient(_resolve_app(s3))
+    with ck._listed_lock:
+        ck._listed_at = _t.time() - 600
+    assert c3.post("/api/cockpit/cleared",
+                   json=_inbox_body("telegram:a:w3")).json()["counted"] is True
+    # 群聊不算
+    s4 = _waiting_store("telegram:a:g1")
+    s4.convs[0]["chat_type"] = "group"
+    c4 = TestClient(_resolve_app(s4))
+    with ck._listed_lock:
+        ck._listed_at = 0.0
+    assert c4.post("/api/cockpit/cleared",
+                   json=_inbox_body("telegram:a:g1")).json()["counted"] is False
+    assert cleared_today() == before + 2
+
+
+class _UnansweredStore(_FakeStore):
+    """带 list_unanswered_private / account_directory 的假库（生产路径）。"""
+
+    def __init__(self, rows, own=()):
+        super().__init__()
+        self.rows = rows
+        self.own = own
+
+    def list_unanswered_private(self, *, older_than_ts, limit=1000):
+        got = [dict(r) for r in self.rows
+               if float(r.get("wait_ts") or 0) <= older_than_ts]
+        return {"items": got[:limit], "truncated": len(got) > limit}
+
+    def account_directory(self):
+        return {k: {"count": 1, "last_ts": 0} for k in self.own}
+
+
+def _urow(cid, *, ago, name="客户", text="在吗"):
+    plat, acct, key = cid.split(":", 2)
+    return {"conversation_id": cid, "platform": plat, "account_id": acct,
+            "chat_key": key, "chat_type": "private", "name": name,
+            "last_ts": NOW - ago, "wait_ts": NOW - ago, "inbound_text": text,
+            "unread": 1, "last_read_ts": 0}
+
+
+def test_waiting_dedupes_and_skips_service_and_own_accounts():
+    """并列末条的重复行只算一个；777000 / 收藏夹 / 本实例另一个号发来的不进「客户在等」。"""
+    rows = [
+        _urow("telegram:111:5001", ago=7200, name="真客户"),
+        _urow("telegram:111:5001", ago=7200, name="真客户"),     # 并列重复行
+        _urow("telegram:111:777000", ago=7200, name="Telegram"),
+        _urow("telegram:111:111", ago=7200, name="Saved"),
+        _urow("telegram:111:222", ago=7200, name="智聊支持"),     # 本实例另一个号
+        _urow("whatsapp:639000:639111", ago=7200, name="自家 WA"),
+        _urow("wx:me:wxid_222", ago=7200, name="微信同名"),       # 微信不按号判
+    ]
+    store = _UnansweredStore(rows, own=[("telegram", "111"), ("telegram", "222"),
+                                        ("whatsapp", "639000"),
+                                        ("whatsapp", "639111"), ("wx", "wxid_222")])
+    q = ck.collect_intervention_queue(store, {}, now=NOW)
+    cids = [i["conversation_id"] for i in q["items"] if i["kind"] == "waiting"]
+    assert cids.count("telegram:111:5001") == 1
+    assert "telegram:111:777000" not in cids
+    assert "telegram:111:111" not in cids
+    assert "telegram:111:222" not in cids
+    assert "whatsapp:639000:639111" not in cids
+    assert "wx:me:wxid_222" in cids
+    assert q["fresh_total"] == 2 and q["stale_total"] == 0
+
+
+def test_stale_backlog_lists_newest_first_and_reports_total():
+    """积压超过 40 人：列离 3 天最近的 40 个，总数照实给；第 41 位以后也能先不回。"""
+    from fastapi.testclient import TestClient
+
+    day = 86400.0
+    later = NOW + 30 * day      # NOW 太小，4 天前会落到负时间戳
+    rows = [_urow("telegram:111:%d" % (9000 + i), ago=4 * day + i * 3600 - 30 * day)
+            for i in range(55)]
+    store = _UnansweredStore(rows)
+    q = ck.collect_intervention_queue(store, {}, now=later)
+    stale = [i for i in q["items"] if i["age_sec"] > ck._STALE_FOLD_SEC]
+    assert len(stale) == ck._STALE_KEEP
+    assert q["stale_total"] == 55
+    ages = [i["age_sec"] for i in stale]
+    assert ages == sorted(ages)                  # 最近的在前
+    assert "telegram:111:9000" in {i["conversation_id"] for i in stale}
+    assert "telegram:111:9054" not in {i["conversation_id"] for i in stale}
+
+    # 第 55 位（列表外）先不回 → 200，不再 409；之后从总数里扣掉
+    import time as _t
+    rows2 = [_urow("telegram:111:%d" % (9000 + i), ago=0) for i in range(55)]
+    for i, r in enumerate(rows2):
+        r["wait_ts"] = r["last_ts"] = _t.time() - (4 * day + i * 3600)
+    s2 = _UnansweredStore(rows2)
+    s2.tags = {}
+    s2.get_conv_tags = lambda cid: []
+    client = TestClient(_resolve_app(s2))
+    r = client.post("/api/cockpit/snooze",
+                    json={"conversation_id": "telegram:111:9054"})
+    assert r.status_code == 200, r.text
+    body = client.get("/api/cockpit/overview", params={"force": 1}).json()
+    assert body["stale_total"] == 54
+    assert any(i["conversation_id"] == "telegram:111:9054" for i in body["snoozed"])
+    assert "_waiting_all" not in body
 
 
 def _tpl(name):
@@ -889,3 +1039,71 @@ def test_cockpit_return_lands_on_next_card_across_tabs():
         assert ev in ck_src, ev
     # 收件箱已回过 → 那张先收起（同 _sent 口径）
     assert "absorbRet();" in ck_src
+
+
+def test_cockpit_inline_reply_keeps_draft_and_sends_once():
+    """页内回复：重画不冲掉打到一半的字；在途锁 + 输入法回车不发；失败再发带原件键。"""
+    src = _tpl("cockpit.html")
+    assert "var _drafts={}, _sending={}, _lastCmid={};" in src
+    assert "var typing=_typingNow();" in src
+    assert "if(typing){\n      /* 本轮不动列表 */" in src
+    assert "if(!cid || _sending[cid]) return;" in src
+    assert "!event.isComposing&&event.keyCode!==229" in src
+    assert "body.resend_of_cmid=prior.cmid" in src
+    # 一张卡一个实心按钮：发送默认描边，有字才实心
+    assert 'class="ck-btn ck-send"' in src
+    assert ".ck-card.has-draft .ck-send{" in src
+
+
+def test_cockpit_landing_highlight_and_load_failure_keeps_list():
+    src = _tpl("cockpit.html")
+    assert "el.classList.add('ck-landed');" in src
+    assert 'id="ck-load-warn"' in src
+    i = src.index("}).catch(function(){\n        /* 已有一份在屏")
+    seg = src[i:i + 600]
+    assert seg.index("if(_data && lw){") < seg.index("L.qFail")
+
+
+def test_cockpit_explains_its_counts_in_page():
+    """P0-4：本页说清楚主句、积压、顶栏提醒、今天清掉各自怎么数（三语都有）。"""
+    from src.web.i18n_packs import cockpit_page as pack
+
+    src = _tpl("cockpit.html")
+    assert 'id="ck-why-btn"' in src and 'id="ck-why"' in src
+    assert "toggleWhy" in src and "aria-expanded" in src
+    keys = ("ck.counts.toggle", "ck.counts.lead", "ck.counts.stale",
+            "ck.counts.pill", "ck.counts.cleared")
+    for k in keys:
+        assert "'%s'" % k in src
+        assert pack.ZH.get(k) and pack.EN.get(k) and pack.ZH_HANT.get(k), k
+    assert "50" in pack.ZH["ck.counts.pill"] and "50" in pack.EN["ck.counts.pill"]
+    # 积压只列一截时写总数
+    assert "stale_total" in src and "staleTitleCap" in src
+
+
+def test_shell_sla_pill_tooltip_points_to_cockpit():
+    """P1-8（最小改动）：顶栏超时提醒 tooltip 多一句口径说明，指向「待人工」页；药丸文案/数字/点击不动。"""
+    from src.web.i18n_packs import workspace_shell as shell
+
+    src = _tpl("workspace_base.html")
+    assert "base.sla.tip_cockpit" in src
+    k = "base.sla.tip_cockpit"
+    assert "待人工" in shell.ZH[k] and "Needs a person" in shell.EN[k] and "待人工" in shell.ZH_HANT[k]
+
+
+def test_cockpit_visual_batch_mobile_compact_and_tiers():
+    """视觉批：≤640 上下排、≤900 接管名单可展开；积压紧凑行；时长三档；why 行去重；刷新时间合并。"""
+    from src.web.i18n_packs import cockpit_page as pack
+
+    src = _tpl("cockpit.html")
+    assert "@media (max-width:640px)" in src
+    assert ".ck-main.tk-open .ck-rail" in src and "toggleTk" in src
+    assert "function rowCompact(" in src and "stale.map(rowCompact)" in src
+    assert "function tierCls(" in src and ".ck-card.t2" in src
+    assert "card(it, true)" in src              # 分组里才省类别 chip
+    assert "ck.auto_note" not in src            # 「每 30 秒自动刷新」并进时间戳
+    for k in ("ck.lead.post_one", "ck.age.auto"):
+        assert pack.ZH.get(k) and pack.EN.get(k) and pack.ZH_HANT.get(k), k
+    assert "已处理" not in pack.ZH["ck.stale.hint"] and "先不回" in pack.ZH["ck.stale.hint"]
+    assert "旧信号" not in pack.ZH["ck.stale.hint"]
+    assert pack.EN["ck.lead.post"].startswith("customers need you")

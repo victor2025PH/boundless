@@ -21,6 +21,13 @@ logger = logging.getLogger("ai_chat_assistant.cockpit_routes")
 def register_cockpit_routes(app, api_auth, config_manager=None):
     """挂载驾驶舱 API。``api_auth``＝登录校验依赖。"""
 
+    def _actor(request: Request) -> str:
+        """记账带上是谁清的（与接管同一口径：会话用户名，取不到记 web-admin）。"""
+        try:
+            return str(request.session.get("username") or "web-admin")
+        except Exception:
+            return "web-admin"
+
     def _cfg(request: Request):
         cm = config_manager
         if cm is None:
@@ -72,7 +79,7 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
             invalidate_cache()
             try:
                 from src.inbox.cockpit_hold import note_cleared
-                note_cleared(cid, "resolve")
+                note_cleared(cid, "resolve", by=_actor(request))
             except Exception:
                 logger.debug("[cockpit] 今日清掉记账失败（忽略）", exc_info=True)
             logger.info("[cockpit] resolve needs_human: %s", cid)
@@ -99,7 +106,9 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
         from src.inbox.cockpit import collect_intervention_queue, invalidate_cache
         from src.inbox.cockpit_hold import item_fingerprint, remember_snooze
         q = collect_intervention_queue(store, _cfg(request))
-        pool = list(q.get("items") or []) + list(q.get("snoozed") or [])
+        # 取数池不截断：积压里第 41 位以后的人也能先不回
+        pool = (list(q.get("items") or []) + list(q.get("snoozed") or [])
+                + list(q.get("_waiting_all") or []))
         it = next((i for i in pool if str(i.get("conversation_id") or "") == cid), None)
         if not it or it.get("kind") != "waiting":
             raise HTTPException(409, tr(request, "err.ck.not_waiting"))
@@ -148,7 +157,8 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
                     field="reply_conversation_id"))
             from src.inbox.cockpit import invalidate_cache, note_inbox_reply
             store = getattr(request.app.state, "inbox_store", None)
-            if store is None or not note_inbox_reply(store, cid):
+            if store is None or not note_inbox_reply(
+                    store, cid, config=_cfg(request), by=_actor(request)):
                 return {"ok": True, "counted": False}
             invalidate_cache()
             from src.inbox.cockpit_hold import cleared_today
@@ -157,8 +167,18 @@ def register_cockpit_routes(app, api_auth, config_manager=None):
         how = str(body.get("how") or "reply").strip()
         if how not in ("reply", "resolve", "handback"):
             how = "reply"
-        from src.inbox.cockpit import invalidate_cache
-        from src.inbox.cockpit_hold import cleared_today, note_cleared
-        note_cleared(cid, how)
-        invalidate_cache()
-        return {"ok": True, "counted": True, "cleared_today": cleared_today()}
+        from src.inbox.cockpit import invalidate_cache, note_inbox_reply
+        from src.inbox.cockpit_hold import cleared_recent, cleared_today, note_cleared
+        if how == "reply":
+            # 页内回一句：和收件箱同一套判据——发之前这个人在等、这一轮还没记过
+            store = getattr(request.app.state, "inbox_store", None)
+            counted = bool(store is not None and note_inbox_reply(
+                store, cid, config=_cfg(request), by=_actor(request)))
+        else:
+            # 已处理/交还各自的端点已经记过；这里只防重放，两分钟内同一笔不重复记
+            counted = not cleared_recent(cid, how, 120.0)
+            if counted:
+                note_cleared(cid, how, by=_actor(request))
+        if counted:
+            invalidate_cache()
+        return {"ok": True, "counted": counted, "cleared_today": cleared_today()}

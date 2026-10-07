@@ -187,6 +187,8 @@ def check_source_wiring(ck: Checker) -> None:
     ck.check("页内回复走统一发送", "/api/unified-inbox/send" in src)
     ck.check("打开对话记下下一张", "aitr.ck.next" in src)
     ck.check("回程记录跨窗口（localStorage）", "aitr.ck.ret.v1" in src and "retBack" in src)
+    ck.check("页内回复：在途锁 + 输入法回车不发", "_sending[cid]" in src and "event.isComposing" in src)
+    ck.check("页内回复：失败再发带原件键", "resend_of_cmid" in src)
     ck.check("接管收进「更多」", "ck-more" in src)
 
 
@@ -199,7 +201,10 @@ _STATE_JS = """() => {
       .querySelectorAll('.ck-card'));
   const cardInfo = (c) => ({
     nm: ((c.querySelector('.nm') || {}).textContent || '').trim(),
-    kinds: Array.from(c.querySelectorAll('.ck-kind')).map(k => k.textContent.trim()),
+    // 分组里单一类别的卡不再显示类别 chip（P1-10）：类别以 data-kind 为准，chip 文字照收
+    kinds: Array.from(c.querySelectorAll('.ck-kind')).map(k => k.textContent.trim())
+      .concat([({waiting: '客户在等', needs_human: '需人工', takeover_overdue: '接管超时',
+                 draft_pending: '草稿待审'})[c.getAttribute('data-kind') || ''] || '']),
     btns: Array.from(c.querySelectorAll('.ck-btn')).map(b => b.textContent.trim()),
     plat: ((c.querySelector('.ck-plat') || {}).textContent || '').trim(),
     acct: ((c.querySelector('.ck-acct') || {}).textContent || '').trim(),
@@ -266,8 +271,17 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
 
         # ── 数据面全拦截（生产零读扰动、零写入）───────────────────────────
         def _route_overview(route: Any) -> None:
+            if state.get("fail"):
+                route.fulfill(status=500, content_type="application/json",
+                              body=json.dumps({"ok": False}))
+                return
+            snap = _overview(state["mode"])
+            bump = float(state.get("bump") or 0)
+            for it in snap.get("items") or []:
+                it["age_sec"] = float(it.get("age_sec") or 0) + bump
+            snap.update(state.get("extra") or {})
             route.fulfill(status=200, content_type="application/json",
-                          body=json.dumps(_overview(state["mode"])))
+                          body=json.dumps(snap))
 
         def _route_resolve(route: Any) -> None:
             try:
@@ -663,6 +677,288 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
                 s6 = page.evaluate("() => (window.__ckScrolled||[]).slice()")
                 ck.check("按返回回到待人工：落到下一张", bool(s6) and s6[-1] == b,
                          f"scrolled={s6} want={b}")
+
+        print("== 15. 页内回复：打字不被冲掉 / 回车只发 1 次 / 一个实心按钮 / 落点高亮 / 刷新失败留列表 ==")
+        send_posts: List[Dict[str, Any]] = []
+
+        def _route_send(route: Any) -> None:
+            try:
+                send_posts.append(json.loads(route.request.post_data or "{}"))
+            except Exception:
+                send_posts.append({"__bad": True})
+            if state.get("send_fail"):
+                route.fulfill(status=502, content_type="application/json",
+                              body=json.dumps({"ok": False}))
+                return
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"ok": True}))
+
+        page.route("**/api/unified-inbox/send", _route_send)
+        state.update({"mode": "full", "bump": 0.0, "fail": False, "send_fail": False})
+        page.evaluate("() => { try{ localStorage.removeItem('aitr.ck.ret.v1');"
+                      " sessionStorage.removeItem('aitr.ck.next'); }catch(_e){} }")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.CK", timeout=20000)
+        page.wait_for_timeout(900)
+        W = "whatsapp:b:88997766"
+        _inp = '.ck-q-list .ck-reply-in[data-cid="%s"]' % W
+        _solid_js = ("(cid) => { var c=[].slice.call(document.querySelectorAll('.ck-q-list .ck-card'))"
+                     ".filter(function(x){return x.getAttribute('data-cid')===cid;})[0]; if(!c) return null;"
+                     " return [].slice.call(c.querySelectorAll('.ck-btn')).filter(function(b){"
+                     " return b.offsetWidth && getComputedStyle(b).color==='rgb(255, 255, 255)'; })"
+                     ".map(function(b){ return b.classList.contains('ck-send')?'send':(b.hasAttribute('data-ck-open')?'open':b.textContent); }); }")
+        s0 = page.evaluate(_solid_js, W)
+        ck.check("没打字：卡上只有「去回」一个实心按钮", s0 == ["open"], str(s0))
+        page.click(_inp)
+        page.keyboard.type("测试保留")
+        s1 = page.evaluate(_solid_js, W)
+        ck.check("打了字：只有「发送」实心", s1 == ["send"], str(s1))
+        for _ in range(3):
+            state["bump"] += 90.0      # 等待分钟数变 → 以前每次都整表重建
+            page.evaluate("() => CK.load(false)")
+            page.wait_for_timeout(500)
+        r1 = page.evaluate("(sel) => { var i=document.querySelector(sel); return {v: i?i.value:null,"
+                           " f: document.activeElement===i}; }", _inp)
+        ck.check("聚焦打字时轮询 3 次：字还在、焦点还在", r1["v"] == "测试保留" and r1["f"], str(r1))
+        page.evaluate("() => { document.activeElement && document.activeElement.blur(); }")
+        page.wait_for_timeout(300)
+        state["bump"] += 90.0
+        page.evaluate("() => CK.load(false)")
+        page.wait_for_timeout(600)
+        r2 = page.evaluate("(sel) => { var i=document.querySelector(sel); return i?i.value:null; }", _inp)
+        ck.check("失焦后整表重画：打到一半的字回填", r2 == "测试保留", str(r2))
+        # 输入法组字中的回车不发
+        page.evaluate("(sel) => { var i=document.querySelector(sel); i.focus();"
+                      " i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', isComposing:true, bubbles:true})); }", _inp)
+        page.wait_for_timeout(500)
+        ck.check("输入法组字时按回车不发送", len(send_posts) == 0, str(len(send_posts)))
+        # 第一次失败 → 卡片留着、可再发；再发带上原件键
+        state["send_fail"] = True
+        page.evaluate("(sel) => { var i=document.querySelector(sel); i.focus();"
+                      " i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true})); }", _inp)
+        page.wait_for_timeout(900)
+        r3 = page.evaluate("(sel) => { var i=document.querySelector(sel); var e=i&&i.closest('.ck-reply').querySelector('.ck-reply-err');"
+                           " return {v: i?i.value:null, dis: i?i.disabled:null, err: e?e.style.display!=='none':false}; }", _inp)
+        ck.check("发送失败：字留着、框可再用、出错一行", r3["v"] == "测试保留" and r3["dis"] is False and r3["err"], str(r3))
+        state["send_fail"] = False
+        n_before = len(send_posts)
+        page.evaluate("(sel) => { var i=document.querySelector(sel); i.focus();"
+                      " for (var k=0;k<3;k++) i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true})); }", _inp)
+        page.wait_for_timeout(1500)
+        new_posts = send_posts[n_before:]
+        ck.check("连按 3 次回车只发 1 次", len(new_posts) == 1, f"posts={len(new_posts)}")
+        first_cmid = (send_posts[n_before - 1] or {}).get("client_msg_id") if n_before else ""
+        ck.check("失败后再发带上原件键（服务端判断要不要压住）",
+                 bool(new_posts) and new_posts[0].get("resend_of_cmid") == first_cmid
+                 and new_posts[0].get("client_msg_id") != first_cmid,
+                 str({k: (new_posts[0] if new_posts else {}).get(k) for k in ("client_msg_id", "resend_of_cmid")}))
+        gone = page.evaluate("(cid) => ![].slice.call(document.querySelectorAll('.ck-q-list .ck-card'))"
+                             ".some(function(c){return c.getAttribute('data-cid')===cid;})", W)
+        ck.check("发出后那张先收起", gone)
+        # 落点：高亮 + 聚焦它的输入框
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.CK", timeout=20000)
+        page.wait_for_timeout(900)
+        page.evaluate("(r) => localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(r))",
+                      {"cid": "telegram:a:nh1", "next": W, "ts": int(time.time() * 1000)})
+        page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
+        page.wait_for_timeout(900)
+        r4 = page.evaluate("(cid) => { var c=[].slice.call(document.querySelectorAll('.ck-q-list .ck-card'))"
+                           ".filter(function(x){return x.getAttribute('data-cid')===cid;})[0];"
+                           " var a=document.activeElement; return {hl: !!(c && c.classList.contains('ck-landed')),"
+                           " focus: !!(a && a.classList && a.classList.contains('ck-reply-in') && a.getAttribute('data-cid')===cid)}; }", W)
+        ck.check("落到下一张：描边高亮", r4["hl"], str(r4))
+        ck.check("落到下一张：光标进它的回复框", r4["focus"], str(r4))
+        page.evaluate("() => { document.activeElement && document.activeElement.blur(); }")
+        # 刷新失败：留着卡片，只出一行提示
+        n_cards = page.evaluate("() => document.querySelectorAll('#ck-q-list .ck-card').length")
+        state["fail"] = True
+        page.evaluate("() => CK.load(false)")
+        page.wait_for_timeout(900)
+        r5 = page.evaluate("() => ({n: document.querySelectorAll('#ck-q-list .ck-card').length,"
+                           " w: (function(e){ return e && e.style.display!=='none' ? e.textContent : ''; })(document.getElementById('ck-load-warn'))})")
+        ck.check("刷新返回 500：卡片留着", n_cards > 0 and r5["n"] == n_cards, f"{n_cards}->{r5['n']}")
+        ck.check("刷新返回 500：出一行「刚才没刷新成功」", "没刷新成功" in (r5["w"] or ""), r5["w"])
+        state["fail"] = False
+        page.evaluate("() => CK.load(false)")
+        page.wait_for_timeout(900)
+        ck.check("恢复后提示收起", page.evaluate(
+            "() => document.getElementById('ck-load-warn').style.display==='none'"))
+        # 账号 chip 样式 + 底部让开浮动按钮
+        r6 = page.evaluate("() => { var a=document.querySelector('.ck-q-list .ck-acct');"
+                           " var q=document.querySelector('.ck-q-list');"
+                           " return {fs: a?parseFloat(getComputedStyle(a).fontSize):0,"
+                           " bg: a?getComputedStyle(a).backgroundColor:'', pb: parseFloat(getComputedStyle(q).paddingBottom)}; }")
+        ck.check("账号显示成小号 chip", 0 < r6["fs"] <= 11 and r6["bg"] not in ("", "rgba(0, 0, 0, 0)"), str(r6))
+        ck.check("列表底部留出浮动按钮的位置（≥72px）", r6["pb"] >= 72, str(r6["pb"]))
+
+        # ── 16. 积压只列最近一截：服务端给的真实总数照实写（P0-3）────────────
+        print("\n[16] 积压总数 stale_total")
+        state["extra"] = {"stale_total": 31}
+        page.evaluate("() => CK.load(true)")
+        page.wait_for_timeout(900)
+        r7 = page.evaluate("() => ({k: document.getElementById('ck-k-stale').textContent,"
+                           " h: document.getElementById('ck-stale-t').textContent,"
+                           " n: document.querySelectorAll('#ck-stale-list .ck-card').length})")
+        ck.check("顶部积压数＝服务端总数", r7["k"] == "31", str(r7))
+        ck.check("积压折叠头写明「总数，先列最近的 N」", "31" in r7["h"] and "最近" in r7["h"], r7["h"])
+        state["extra"] = {}
+        page.evaluate("() => CK.load(true)")
+        page.wait_for_timeout(900)
+        r8 = page.evaluate("() => document.getElementById('ck-stale-t').textContent")
+        ck.check("没有截断时照旧只写人数", "最近" not in r8, r8)
+
+        # ── 17. 同屏口径说明（P0-4）：几个数之间各有一句话说清楚 ─────────────
+        print("\n[17] 这些数怎么算")
+        hidden0 = page.evaluate("() => document.getElementById('ck-why').style.display==='none'")
+        ck.check("口径说明默认收起", hidden0)
+        page.click("#ck-why-btn")
+        page.wait_for_timeout(200)
+        r9 = page.evaluate("() => { var w=document.getElementById('ck-why');"
+                           " return {vis: w.style.display!=='none', n: w.querySelectorAll('p').length,"
+                           " t: w.textContent, ax: document.getElementById('ck-why-btn').getAttribute('aria-expanded')}; }")
+        ck.check("点开后出四句：主句 / 积压 / 顶栏提醒 / 今天清掉",
+                 r9["vis"] and r9["n"] == 4 and "3 天" in r9["t"] and "顶栏" in r9["t"] and "清掉" in r9["t"],
+                 str({k: r9[k] for k in ("vis", "n", "ax")}))
+        ck.check("按钮 aria-expanded 跟着变", r9["ax"] == "true", r9["ax"])
+        page.click("#ck-why-btn")
+        page.wait_for_timeout(200)
+        ck.check("再点收起", page.evaluate("() => document.getElementById('ck-why').style.display==='none'"))
+
+        # ── 18. 顶栏超时提醒 tooltip 指向待人工（P1-8 最小改动；只读真实徽标）──
+        print("\n[18] 顶栏提醒 tooltip 口径句")
+        r10 = page.evaluate("() => { var b=document.getElementById('ws-sla');"
+                            " return {k: (window.WS_I18N||{})['base.sla.tip_cockpit']||'',"
+                            " vis: !!(b && b.offsetParent !== null && b.querySelector('.ws-pill-n')), t: b ? (b.title||'') : ''}; }")
+        ck.check("口径句词条已下发到页面", "待人工" in r10["k"], r10["k"][:40])
+        if r10["vis"]:
+            ck.check("徽标亮着时 tooltip 带口径句", "待人工" in r10["t"], r10["t"][:60])
+        else:
+            print("  [SKIP] 徽标当前没亮（没有超时会话），tooltip 不检")
+
+        # ── 19. 视觉批：信息去重 / 时长三档 / 积压紧凑行 / 文案（P1-10 P1-7 P1-12）──
+        print("\n[19] 卡片去重、三档颜色、积压紧凑行、刷新时间")
+        state["mode"] = "full"
+        state["extra"] = {}
+        page.evaluate("() => { CK.load(true); }")
+        page.wait_for_timeout(900)
+        r11 = page.evaluate("""() => {
+          const q = s => document.querySelector(s);
+          const w = q('#ck-q-list .ck-card[data-kind=waiting]');
+          const n = q('#ck-q-list .ck-card[data-kind=needs_human]');
+          const d = q('#ck-q-list .ck-card[data-kind=draft_pending]');
+          const t = q('#ck-q-list .ck-card[data-kind=takeover_overdue]');
+          return {
+            wKind: w ? w.querySelectorAll('.ck-kind').length : -1,
+            wWhy: w ? w.querySelectorAll('.why').length : -1,
+            wTier: w ? ['t0','t1','t2'].filter(c => w.classList.contains(c)) : [],
+            nKind: n ? n.querySelectorAll('.ck-kind').length : -1,
+            nWhy: n ? n.querySelectorAll('.why').length : -1,
+            dTier: d ? ['t0','t1','t2'].filter(c => d.classList.contains(c)) : [],
+            dWhy: d ? d.querySelectorAll('.why').length : -1,
+            tP1: !!(t && t.classList.contains('p1')),
+            tWhy: t ? t.querySelectorAll('.why').length : -1,
+            age: (q('#ck-age') || {}).textContent || '',
+            autoNote: document.body.innerText.indexOf('每 30 秒自动刷新') >= 0,
+          };
+        }""")
+        ck.check("客户在等卡：分组里不再重复「客户在等」chip、没有 why 行",
+                 r11["wKind"] == 0 and r11["wWhy"] == 0, str(r11))
+        ck.check("需人工卡：类别 chip 和原因行照留", r11["nKind"] == 1 and r11["nWhy"] == 1, str(r11))
+        ck.check("接管超时卡：保持红边、why 行（接管人）照留", r11["tP1"] and r11["tWhy"] == 1, str(r11))
+        ck.check("时长三档：等 1 小时＝琥珀、10 分钟草稿＝中性",
+                 r11["wTier"] == ["t1"] and r11["dTier"] == ["t0"] and r11["dWhy"] == 0, str(r11))
+        ck.check("刷新时间并进「更新 · 自动刷新」，不再单列「每 30 秒自动刷新」",
+                 "自动刷新" in r11["age"] and not r11["autoNote"], r11["age"])
+        page.evaluate("() => { if(document.getElementById('ck-stale-list').style.display==='none') CK.toggleStale(); }")
+        page.wait_for_timeout(400)
+        r12 = page.evaluate("""() => {
+          const rows = Array.from(document.querySelectorAll('#ck-stale-list .ck-card'));
+          return {n: rows.length, compact: rows.filter(r => r.classList.contains('ck-row')).length,
+                  inputs: document.querySelectorAll('#ck-stale-list .ck-reply-in').length,
+                  h: rows.length ? Math.round(rows[0].getBoundingClientRect().height) : 0,
+                  sub: (document.getElementById('ck-stale-sub') || {}).textContent || ''};
+        }""")
+        ck.check("积压是紧凑行、不带输入框", r12["n"] >= 1 and r12["compact"] == r12["n"]
+                 and r12["inputs"] == 0 and 0 < r12["h"] <= 48, str(r12))
+        ck.check("积压说明和按钮一致（不再提「已处理」）",
+                 "先不回" in r12["sub"] and "已处理" not in r12["sub"], r12["sub"])
+
+        # ── 20. 手机 / 窄屏（P1-1）：390 / 768 不横向溢出、按钮互不压 ─────────
+        def _layout(width: int, height: int) -> Dict[str, Any]:
+            page.set_viewport_size({"width": width, "height": height})
+            page.wait_for_timeout(300)
+            page.evaluate("() => CK.load(true)")
+            page.wait_for_timeout(900)
+            return page.evaluate("""() => {
+              const iw = window.innerWidth;
+              const list = document.querySelector('.ck-q-list');
+              const bad = [];
+              let outside = 0;
+              document.querySelectorAll('.ck-q-list .ck-card').forEach(c => {
+                const cr = c.getBoundingClientRect();
+                if (cr.right > iw + 0.5 || cr.left < -0.5) outside++;
+                const els = Array.from(c.querySelectorAll('.ck-btn, .ck-reply-in, .ck-more summary, .wait, .nm'))
+                  .filter(e => e.offsetParent !== null)
+                  .map(e => ({e, r: e.getBoundingClientRect()}))
+                  .filter(o => o.r.width > 0 && o.r.height > 0);
+                for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+                  const a = els[i].r, b = els[j].r;
+                  if (els[i].e.contains(els[j].e) || els[j].e.contains(els[i].e)) continue;
+                  const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+                  const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+                  if (ox > 1 && oy > 1) bad.push((c.getAttribute('data-cid') || '') + ': '
+                    + (els[i].e.className || els[i].e.tagName) + ' x ' + (els[j].e.className || els[j].e.tagName));
+                }
+              });
+              const wide = [], wideCk = [];
+              const wrap = document.querySelector('.ck-wrap');
+              document.querySelectorAll('body *').forEach(e => {
+                if (wide.length >= 6 || e.offsetParent === null) return;
+                const r = e.getBoundingClientRect();
+                if (r.right > iw + 0.5 && r.width > 0) {
+                  const kids = Array.from(e.children).some(k => k.getBoundingClientRect().right > iw + 0.5);
+                  const tag = (e.id ? '#' + e.id : e.tagName.toLowerCase())
+                    + (typeof e.className === 'string' && e.className ? '.' + e.className.split(' ').join('.') : '')
+                    + ' r=' + Math.round(r.right);
+                  if (!kids) (wrap && wrap.contains(e) ? wideCk : wide).push(tag);
+                }
+              });
+              return {iw, docW: document.documentElement.scrollWidth, wide, wideCk,
+                      wrapOver: wrap ? wrap.scrollWidth - wrap.clientWidth : 0,
+                      listOver: list ? list.scrollWidth - list.clientWidth : 0,
+                      outside, overlaps: bad.slice(0, 6), nOverlap: bad.length,
+                      cards: document.querySelectorAll('.ck-q-list .ck-card').length};
+            }""")
+
+        for (w, h) in ((390, 844), (768, 1024)):
+            print(f"\n[20] 视口 {w}px")
+            lay = _layout(w, h)
+            # 本页内容（.ck-wrap 以内）必须不横向溢出；共享壳顶栏（头像点等）溢出另记一行，不算本页
+            ck.check(f"{w}px：待人工内容不横向溢出（.ck-wrap 内无元素越过 innerWidth）",
+                     not lay["wideCk"] and lay["wrapOver"] <= 1 and lay["listOver"] <= 1,
+                     f"wrapOver={lay['wrapOver']} listOver={lay['listOver']} wideCk={lay['wideCk']}")
+            if lay["docW"] > lay["iw"]:
+                print(f"  [NOTE] 整页 scrollWidth={lay['docW']} > {lay['iw']}，越界的是共享壳：{lay['wide']}")
+            ck.check(f"{w}px：卡片不出屏", lay["cards"] > 0 and lay["outside"] == 0, str(lay["outside"]))
+            ck.check(f"{w}px：按钮/输入框/时长互不相压", lay["nOverlap"] == 0, "; ".join(lay["overlaps"]))
+        # 768 下右栏收起：接管名单从顶部「接管中 N」展开
+        r13 = page.evaluate("""() => {
+          const rail = document.querySelector('.ck-rail');
+          const before = !!(rail && rail.offsetParent !== null);
+          const tg = document.getElementById('ck-tk-tog');
+          if (tg) tg.click();
+          const after = !!(rail && rail.offsetParent !== null);
+          const txt = (document.getElementById('ck-rail-tk') || {}).textContent || '';
+          const ax = tg ? tg.getAttribute('aria-expanded') : '';
+          if (tg) tg.click();
+          return {before, after, txt: txt.slice(0, 60), ax,
+                  closed: !(rail && rail.offsetParent !== null)};
+        }""")
+        ck.check("768px：接管名单默认收起，点「接管中 N」展开、再点收起",
+                 (not r13["before"]) and r13["after"] and "agentA" in r13["txt"]
+                 and r13["ax"] == "true" and r13["closed"], str(r13))
+        page.set_viewport_size(VIEWPORT)
 
         browser.close()
     return ck.summary()
