@@ -18,6 +18,7 @@
     0.3.18 net_health 只读体检：上网、WiFi/移动数据、SIM 与信号、流量计数、Facebook 是否安装。
            剩余话费/流量没有稳定接口，默认不查。公开 latest 仍是 0.3.7。
     0.3.18 只有图标的动作条也能定位赞（结构 + 模板/轮廓，不靠文字）。打开 Facebook 会轮询约 9 秒，并把信息流拉回顶部再找赞。只读 uiautomator dump 的 Like/赞/React 标签要和模板一致才点。
+    0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -99,7 +100,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.18"
+AGENT_VERSION = "0.3.19"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).

@@ -27,6 +27,12 @@ after a few seconds, the flow scrolls up to bring the bar back, still inside
 the same 9 seconds. Once the feed is up, it scrolls to the top and waits 3
 seconds before looking for the action bar.
 
+Counted Facebook like / comment / follow / post pass through ``social_pace``
+before any tap. Over the per-account cap, outside local active hours, inside
+the minimum gap, or with the kill switch off, the action is rejected and adb
+is not opened. ``like_probe`` and ``dry_run`` are not counted. Instagram and
+TikTok are unchanged. Warmup and watch are unchanged.
+
 核对和随机间隔写在坐标文件的 ``robust`` 里，默认关。agent.json 的 ``phone_flow_verify`` /
 ``phone_flow_jitter_ms`` 可以盖过文件：只有 JSON ``true`` 才强制核对；抖动形状不对就仍用文件里的。
 """
@@ -45,6 +51,7 @@ from .phone_flow_robust import (
     probe_matches, resolve_policy,
 )
 from .phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
+from .social_pace import PaceLedger
 from .phone_rules import KEYCODES, SWIPE_MS_MAX, SWIPE_MS_MIN, PhoneOpError, check_target
 from .phones import is_excluded
 from .protocol import (
@@ -639,12 +646,16 @@ class PhoneFlows:
 
     def __init__(self, *, enabled: bool = False, ui_map_path: str = "", ops: Any = None,
                  verify: Any = _UNSET, jitter_ms: Any = _UNSET, rng: Any = None,
-                 state_dir: Optional[Path] = None, ocr: Any = _UNSET) -> None:
+                 state_dir: Optional[Path] = None, ocr: Any = _UNSET, pace: Any = None) -> None:
         """``state_dir`` is the fleet state directory. NodeAgent always passes it.
 
         ``ocr`` is an optional text reader ``(screencap bytes) -> boxes``. The
         default tries the optional rapidocr package. ``False`` skips text.
         Icon templates do not use this argument.
+
+        ``pace`` is an optional ``PaceLedger``. The default loads
+        ``config/compliance.yaml`` and, when ``state_dir`` is set, keeps a
+        local copy of counted Facebook actions there.
         """
         self.enabled = False
         self.ui_map_path = ""
@@ -655,6 +666,8 @@ class PhoneFlows:
         self._jitter: Any = None
         self._rng = random.random
         self._ocr = None
+        self._pace_injected = pace is not None
+        self._pace = pace if isinstance(pace, PaceLedger) else PaceLedger()
         self.configure(enabled=enabled, ui_map_path=ui_map_path, ops=ops, verify=verify,
                        jitter_ms=jitter_ms, rng=rng, state_dir=state_dir)
         if ocr is not _UNSET:
@@ -696,6 +709,8 @@ class PhoneFlows:
             self._jitter = jitter_ms
         if rng is not None:
             self._rng = rng
+        if getattr(self, "_pace", None) is not None and not getattr(self, "_pace_injected", False):
+            self._pace.bind(self.state_dir)
 
     def load_map(self) -> Dict[str, Any]:
         path = Path(self.ui_map_path) if self.ui_map_path else default_ui_map_path(self.state_dir)
@@ -981,6 +996,16 @@ class PhoneFlows:
             if app == "facebook" and flow == "like":
                 body["like_button_deprecated"] = True
             return STATUS_DONE, body, "dry_run"
+        if app == "facebook" and flow in ("like", "comment", "follow", "post"):
+            decision = self._pace.allow(
+                app=app, action=flow, serial=serial,
+                account=str((target or {}).get("account") or "") if isinstance(target, dict) else "",
+                wallpaper=str((target or {}).get("wallpaper") or (target or {}).get("wallpaper_no") or "")
+                if isinstance(target, dict) else "",
+                probe=p.get("like_probe") is True,
+            )
+            if not decision.allow:
+                return STATUS_REJECTED, _result(serial, app, flow), decision.reason
         if app == "facebook" and flow == "like":
             return self._execute_facebook_like(serial, p, ui, ops)
         prog: Dict[str, Any] = {"done": 0, "step": None, "w": None, "h": None}
