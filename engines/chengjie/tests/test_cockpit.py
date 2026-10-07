@@ -856,7 +856,16 @@ def test_inbox_send_success_paths_note_cleared():
     assert "function _ckNoteInboxReply(body)" in src
     assert "src:'inbox'" in src and "/api/cockpit/cleared" in src
     assert "reply_conversation_id:cid" in src
-    assert src.count("_ckNoteInboxReply(") == 4   # 定义 1 + 调用 3
+    assert src.count("_ckNoteInboxReply(") == 7   # 定义 1 + 文本 3 + 留痕重发 1 + 图片 1 + 语音 1
+    i_store = src.index("async function resendStoreFailed(mid){")
+    seg_s = src[i_store:i_store + 2500]
+    assert seg_s.index("_ckNoteInboxReply(body)") > seg_s.index("if(d&&d.ok){")
+    assert seg_s.index("_ckNoteInboxReply(body)") < seg_s.index("} else {")
+    i_media = src.index("async function _doSendMedia(caption){")
+    seg_m = src[i_media:i_media + 9000]
+    assert seg_m.index("_ckNoteInboxReply({conversation_id:chat.conversation_id") > seg_m.index("if(sent>0){")
+    i_voice = src.index("const onSent=async(meta,reused)=>{")
+    assert "_ckNoteInboxReply({conversation_id:sendChat.conversation_id" in src[i_voice:i_voice + 300]
     i_ok = src.index("_sentOk=true;   // composer P2：成功微反馈")
     assert "_ckNoteInboxReply(body)" in src[i_ok:i_ok + 200]
     i_recon = src.index("if(_recon==='sent'){")

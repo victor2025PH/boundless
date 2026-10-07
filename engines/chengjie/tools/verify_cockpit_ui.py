@@ -116,6 +116,7 @@ def _overview(mode: str) -> Dict[str, Any]:
     else:                             # full
         base["items"] = json.loads(json.dumps(_ITEMS_FULL))
         base["caps"] = {"resolve": True}
+        base["scan_truncated"] = True
     return base
 
 
@@ -183,6 +184,10 @@ def check_source_wiring(ck: Checker) -> None:
              "/api/learner/feed" in src and "/api/learner/stats" in src)
     ck.check("头像代理受控加载在（_avProxyUrl + data-av 队列）",
              "_avProxyUrl" in src and "data-av" in src and "_avPump" in src)
+    ck.check("页内回复走统一发送", "/api/unified-inbox/send" in src)
+    ck.check("打开对话记下下一张", "aitr.ck.next" in src)
+    ck.check("回程记录跨窗口（localStorage）", "aitr.ck.ret.v1" in src and "retBack" in src)
+    ck.check("接管收进「更多」", "ck-more" in src)
 
 
 _STATE_JS = """() => {
@@ -197,6 +202,7 @@ _STATE_JS = """() => {
     kinds: Array.from(c.querySelectorAll('.ck-kind')).map(k => k.textContent.trim()),
     btns: Array.from(c.querySelectorAll('.ck-btn')).map(b => b.textContent.trim()),
     plat: ((c.querySelector('.ck-plat') || {}).textContent || '').trim(),
+    acct: ((c.querySelector('.ck-acct') || {}).textContent || '').trim(),
     quote: ((c.querySelector('.dt') || {}).textContent || '').trim(),
     hasAva: !!c.querySelector('.ck-ava'),
     avaSrc: ((c.querySelector('.ck-ava img') || {}).src || ''),
@@ -217,10 +223,15 @@ _STATE_JS = """() => {
     emptyBig: (document.querySelector('#ck-q-list .ck-empty .big') || {}).textContent || '',
     roiText: txt('ck-empty-roi'),
     railTk: txt('ck-rail-tk'),
-    acctRows: document.querySelectorAll('#ck-rail-acct .ck-acct-row').length,
-    acctSum: txt('ck-acct-sum'),
-    acctMore: ((document.querySelector('#ck-rail-acct .ck-acct-more') || {}).textContent || '').trim(),
-    acctUnVisible: vis('ck-acct-un'),
+    lead: txt('ck-lead'),
+    listText: ((document.getElementById('ck-q-list') || {}).innerText || ''),
+    acctAlert: txt('ck-acct-alert'),
+    scanNote: vis('ck-scan-note'),
+    chipsHidden: (function(){
+      const el = document.getElementById('ck-fchips');
+      return !!el && el.style.display === 'none';
+    })(),
+    replyInputs: document.querySelectorAll('#ck-q-list .ck-reply-in').length,
     learnText: txt('ck-empty-learn'),
     bodyHasRawCid: document.body.innerText.indexOf('whatsapp:b:88997766') >= 0,
   };
@@ -276,6 +287,19 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
 
         page.route("**/api/cockpit/overview*", _route_overview)
         page.route("**/api/cockpit/resolve", _route_resolve)
+        def _route_accounts(route: Any) -> None:
+            path = route.request.url.split("?", 1)[0].rstrip("/")
+            if not path.endswith("/api/accounts"):
+                route.fallback()
+                return
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "accounts": [
+                    {"platform": "telegram", "account_id": "a", "label": "主号甲"},
+                    {"platform": "whatsapp", "account_id": "b", "label": "备号乙"},
+                ],
+            }))
+
+        page.route("**/api/accounts*", _route_accounts)
         page.route("**/api/accounts/fleet-health*", lambda r: r.fulfill(
             status=200, content_type="application/json", body=json.dumps(_FLEET)))
         page.route("**/api/workspace/ai-weekly-brief*", lambda r: r.fulfill(
@@ -315,7 +339,7 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
         st = page.evaluate(_STATE_JS)
 
         print("== 1. KPI 单口径（新鲜/积压分账，接管超时豁免）==")
-        ck.check("需介入=4（5 项中 1 项被折进积压）", st["kQueue"] == "4",
+        ck.check("要回的=2（等待+需人工；稿和接管不进这个数字）", st["kQueue"] == "2",
                  f"got {st['kQueue']}")
         ck.check("历史积压=1", st["kStale"] == "1", f"got {st['kStale']}")
         ck.check("接管中=1", st["kTakeover"] == "1")
@@ -325,20 +349,19 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
         ck.check(">72h 接管超时留在主列表（豁免折叠）",
                  any("接管超时" in " ".join(c["kinds"]) for c in st["mainCards"]))
 
-        print("== 2. 首次引导条 ==")
-        ck.check("首次访问引导条可见", st["hintVisible"])
-        page.evaluate("() => window.CK.dismissHint()")
-        ck.check("「知道了」后隐藏",
-                 not page.evaluate("() => document.getElementById('ck-hint').offsetParent !== null"))
-        page.reload(wait_until="domcontentloaded")
-        page.wait_for_function("() => !!window.CK", timeout=20000)
-        page.wait_for_timeout(900)
-        st = page.evaluate(_STATE_JS)
-        ck.check("刷新后仍隐藏（localStorage 记忆）", not st["hintVisible"])
+        print("== 2. 任务说明常驻（不再靠可关掉的引导条）==")
+        ck.check("顶上写明还有几条要你回", "要你回" in st["lead"], st["lead"])
+        ck.check("稿和忘了交还另说，不叫要你回",
+                 "稿待审" in st["lead"] and "忘了交还" in st["lead"], st["lead"])
+        ck.check("数字在句子里而不是单独的大格子", st["kQueue"] == "2")
 
         print("== 3. 分类筛选 chips ==")
         ck.check("chips 渲染（全部 + ≥3 类）", len(st["chips"]) >= 4,
                  f"got {len(st['chips'])}")
+        ck.check("筛选默认收着", st["chipsHidden"])
+        ck.check("默认分成要回的、要审的稿、忘了交还",
+                 "要回的" in st["listText"] and "要审的稿" in st["listText"]
+                 and "忘了交还" in st["listText"], st["listText"][:80])
         page.evaluate("() => window.CK.setFilter('waiting')")
         page.wait_for_timeout(200)
         st = page.evaluate(_STATE_JS)
@@ -406,6 +429,7 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
         ck.check("空态学习队列引流行（4 条待审 + 链接）",
                  "4" in st["learnText"] and "审核" in st["learnText"], st["learnText"])
         ck.check("空态无源警示（全 ok）", not st["srcWarnVisible"])
+        ck.check("空态不提示扫描截断", not st["scanNote"])
 
         print("== 8/9/10. 源降级警示 / 可读名兜底 / 接管联动 ==")
         state["mode"] = "full"
@@ -423,7 +447,17 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
                          if "接管超时" in " ".join(c["kinds"])), None)
         ck.check("接管在场的卡按钮=「交还 AI」",
                  bool(tko_card) and any("交还" in b for b in tko_card["btns"]))
+        ck.check("接管超时不再把「接管」放成主动作",
+                 bool(tko_card) and not any(b.startswith("接管") for b in tko_card["btns"]))
+        wait_card = next((c for c in st["mainCards"]
+                          if "客户在等" in " ".join(c["kinds"])), None)
+        ck.check("客户在等的主按钮是「去回」，并可以先不回",
+                 bool(wait_card) and any("去回" in b for b in wait_card["btns"])
+                 and any("先不回" in b for b in wait_card["btns"]))
+        ck.check("客户在等可以在卡上回一句", st["replyInputs"] == 1,
+                 f"inputs={st['replyInputs']}")
         ck.check("右栏在场行渲染（agentA）", "agentA" in st["railTk"])
+        ck.check("扫满窗口时说明更老的可能没列进来", st["scanNote"])
 
         print("== 11. 身份卡（P3：头像 / 原话引用 / 平台名 / 接管人归行）==")
         nh_card = next((c for c in st["mainCards"] if c["nm"] == "客户甲"), None)
@@ -471,18 +505,164 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
                  bool(nh_card) and not nh_card["avaSrc"] and nh_card["hasAva"],
                  (nh_card or {}).get("avaSrc", ""))
 
-        print("== 12. 账号健康折叠（状态未知收进一行）==")
-        # _FLEET：active=直列 ok、banned=直列 bad、connecting=未知 → 折叠行
-        ck.check("汇总在（在线 1 / 异常 1）", "1" in st["acctSum"], st["acctSum"])
-        ck.check("未知状态折叠行可见且带计数",
-                 "1" in st["acctMore"], st["acctMore"])
-        ck.check("折叠区默认收起", not st["acctUnVisible"])
-        page.evaluate("() => window.CK.toggleAcctUnknown()")
-        page.wait_for_timeout(200)
-        st = page.evaluate(_STATE_JS)
-        ck.check("点开后未知行可见（3 行齐）",
-                 st["acctUnVisible"] and st["acctRows"] == 3,
-                 f"rows={st['acctRows']}")
+        print("== 12. 账号异常只留一行（未知状态不再铺开）==")
+        # _FLEET：banned 算异常；active / connecting 不铺成名单
+        ck.check("有封禁号时顶上有一行异常",
+                 "异常" in st["acctAlert"] and "1" in st["acctAlert"], st["acctAlert"])
+        ck.check("卡片用账号列表里的名字",
+                 any(c.get("acct") == "主号甲" for c in st["mainCards"])
+                 and any(c.get("acct") == "备号乙" for c in st["mainCards"]),
+                 str([c.get("acct") for c in st["mainCards"]]))
+
+        print("== 13. 从完整对话回来落到下一张（回程记录，零发送）==")
+        # 记下每次 scrollIntoView 落在哪张卡（init script：每次加载都先于页面脚本装上）
+        page.add_init_script(
+            "window.__ckScrolled=[];(function(){var o=Element.prototype.scrollIntoView;"
+            "Element.prototype.scrollIntoView=function(){try{window.__ckScrolled.push("
+            "this.getAttribute('data-cid')||'');}catch(_e){}return o.apply(this,arguments);};})();")
+        state["mode"] = "full"
+        page.evaluate("() => { try{ localStorage.removeItem('aitr.ck.ret.v1');"
+                      " sessionStorage.removeItem('aitr.ck.next'); }catch(_e){} }")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.CK", timeout=20000)
+        page.wait_for_timeout(900)
+        _ids_js = ("() => [].slice.call(document.querySelectorAll('.ck-q-list .ck-card[data-cid]'))"
+                   ".map(function(c){ return c.getAttribute('data-cid'); })")
+        ids = page.evaluate(_ids_js)
+        ok_ids = len(ids) >= 3
+        ck.check("主列表至少 3 张卡可做回程演练", ok_ids, str(ids))
+        if ok_ids:
+            a, b = ids[0], ids[1]
+            _set = ("(r) => { localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(r));"
+                    " window.__ckScrolled=[]; }")
+            page.evaluate(_set, {"cid": a, "next": b, "ts": int(time.time() * 1000)})
+            page.evaluate("() => CK.load(false)")
+            page.wait_for_timeout(700)
+            r1 = page.evaluate("() => ({s: window.__ckScrolled.slice(),"
+                               " rec: localStorage.getItem('aitr.ck.ret.v1')})")
+            ck.check("人还在本页时轮询不消费回程记录", not r1["s"] and bool(r1["rec"]), str(r1["s"]))
+            page.evaluate("() => { window.dispatchEvent(new Event('blur'));"
+                          " window.dispatchEvent(new Event('focus')); }")
+            page.wait_for_timeout(900)
+            r2 = page.evaluate("() => ({s: window.__ckScrolled.slice(),"
+                               " rec: localStorage.getItem('aitr.ck.ret.v1')})")
+            ck.check("切走再回来：落到刚才那条的下一张", bool(r2["s"]) and r2["s"][-1] == b,
+                     f"scrolled={r2['s']} want={b}")
+            ck.check("回程记录用一次就清掉", not r2["rec"])
+            rec = {"cid": a, "next": b, "ts": int(time.time() * 1000),
+                   "sent": int(time.time() * 1000)}
+            page.evaluate(_set, rec)
+            page.evaluate("(r) => window.dispatchEvent(new StorageEvent('storage',"
+                          " {key: 'aitr.ck.ret.v1', newValue: JSON.stringify(r)}))", rec)
+            page.wait_for_timeout(900)
+            r3 = page.evaluate("() => ({s: window.__ckScrolled.slice()})")
+            ids3 = page.evaluate(_ids_js)
+            ck.check("收件箱已回：那张先收起", a not in ids3, str(ids3))
+            ck.check("收件箱已回：落到下一张", bool(r3["s"]) and r3["s"][-1] == b,
+                     f"scrolled={r3['s']} want={b}")
+            page.evaluate("(r) => localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(r))",
+                          {"cid": a, "next": b, "ts": int(time.time() * 1000)})
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_function("() => !!window.CK", timeout=20000)
+            page.wait_for_timeout(900)
+            r4 = page.evaluate("() => window.__ckScrolled.slice()")
+            ck.check("带着回程记录重新打开本页：落到下一张", bool(r4) and r4[-1] == b,
+                     f"scrolled={r4} want={b}")
+
+        print("== 14. 跨窗口真流程：点「去回」→ 收件箱窗记已回 → 待人工收起并落到下一张 ==")
+        cleared_posts: List[Dict[str, Any]] = []
+
+        def _route_ctx_api(route: Any) -> None:
+            url = route.request.url
+            if "/api/cockpit/cleared" in url:
+                try:
+                    cleared_posts.append(json.loads(route.request.post_data or "{}"))
+                except Exception:
+                    cleared_posts.append({"__bad": True})
+                route.fulfill(status=200, content_type="application/json",
+                              body=json.dumps({"ok": True, "counted": True}))
+                return
+            route.abort()   # 收件箱窗不读任何生产数据（页面只渲染模板，接口一律掐断）
+
+        ctx.route("**/api/**", _route_ctx_api)
+        ck_url = page.url
+        # 14a：已开着坐席收件箱窗（常态）→ 点「去回」交给那扇窗切会话，本页不动
+        inbox = ctx.new_page()
+        inbox_errs: List[str] = []
+        inbox.on("pageerror", lambda e: inbox_errs.append(str(e)[:160]))
+        inbox_ok = False
+        try:
+            inbox.goto(base + "/workspace", wait_until="domcontentloaded", timeout=30000)
+            inbox.wait_for_function("() => typeof window._ckNoteInboxReply === 'function'",
+                                    timeout=30000, polling=300)
+            inbox_ok = True
+        except Exception as e:  # noqa: BLE001
+            try:
+                diag = inbox.evaluate("() => ({u: location.pathname, t: document.title,"
+                                      " ck: typeof window._ckNoteInboxReply, rf: typeof window.resendFailed,"
+                                      " src: document.documentElement.innerHTML.indexOf('function _ckNoteInboxReply'),"
+                                      " n: document.scripts.length})")
+            except Exception as e2:  # noqa: BLE001
+                diag = {"evalErr": str(e2)[:80]}
+            ck.check("收件箱窗加载出记账函数", False, f"{str(e)[:60]} diag={diag} errs={inbox_errs[:3]}")
+        page.bring_to_front()
+        page.evaluate("() => { try{ localStorage.removeItem('aitr.ck.ret.v1'); }catch(_e){} }")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.CK", timeout=20000)
+        page.wait_for_timeout(900)
+        ids = page.evaluate(_ids_js)
+        if inbox_ok and len(ids) >= 2:
+            a, b = ids[0], ids[1]
+            page.click('.ck-q-list a[data-ck-open="%s"]' % a)
+            page.wait_for_timeout(2500)   # 交接探活（BroadcastChannel）
+            ck.check("有收件箱窗时点「去回」：待人工页不跳走", page.url == ck_url, page.url)
+            rec0 = page.evaluate("() => localStorage.getItem('aitr.ck.ret.v1')")
+            r0 = json.loads(rec0) if rec0 else {}
+            ck.check("点开时记下回程（刚才那条 + 下一张）",
+                     r0.get("cid") == a and r0.get("next") == b, str(rec0))
+            page.evaluate("() => { window.__ckScrolled=[]; }")
+            parts = a.split(":", 2)
+            inbox.evaluate("(c) => _ckNoteInboxReply(c)", {
+                "conversation_id": a, "platform": parts[0],
+                "account_id": parts[1] if len(parts) > 1 else "default",
+                "chat_key": parts[2] if len(parts) > 2 else ""})
+            page.wait_for_timeout(1500)
+            ck.check("收件箱窗记账走 src=inbox + reply_conversation_id",
+                     any(p.get("src") == "inbox" and p.get("reply_conversation_id") == a
+                         for p in cleared_posts), str(cleared_posts)[:160])
+            s5 = page.evaluate("() => window.__ckScrolled.slice()")
+            ids5 = page.evaluate(_ids_js)
+            ck.check("待人工窗：那张收起", a not in ids5, str(ids5))
+            ck.check("待人工窗：落到下一张", bool(s5) and s5[-1] == b, f"scrolled={s5} want={b}")
+        elif inbox_ok:
+            ck.check("跨窗口演练需要至少 2 张卡", False, str(ids))
+        try:
+            inbox.close()
+        except Exception:
+            pass
+        # 14b：没开收件箱窗 → 本页原地进对话；按「返回」回来落到下一张
+        page.evaluate("() => { try{ localStorage.removeItem('aitr.ck.ret.v1'); }catch(_e){} }")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.CK", timeout=20000)
+        page.wait_for_timeout(900)
+        ids = page.evaluate(_ids_js)
+        if len(ids) >= 2:
+            a, b = ids[0], ids[1]
+            try:
+                with page.expect_navigation(timeout=15000):
+                    page.click('.ck-q-list a[data-ck-open="%s"]' % a)
+                went = "/workspace" in page.url
+            except Exception as e:  # noqa: BLE001
+                went = False
+                print("    nav:", str(e)[:100])
+            ck.check("无收件箱窗：本页进完整对话", went, page.url)
+            if went:
+                page.go_back(wait_until="domcontentloaded")
+                page.wait_for_function("() => !!window.CK", timeout=20000)
+                page.wait_for_timeout(1200)
+                s6 = page.evaluate("() => (window.__ckScrolled||[]).slice()")
+                ck.check("按返回回到待人工：落到下一张", bool(s6) and s6[-1] == b,
+                         f"scrolled={s6} want={b}")
 
         browser.close()
     return ck.summary()

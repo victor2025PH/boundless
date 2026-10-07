@@ -15510,6 +15510,9 @@ async function _doSendMedia(caption){
   if(bar) bar.classList.remove('sending');
   if(aborted) _toast(window.T('inbox.file.canceled'),'#64748b');
   if(sent>0){
+    // 待人工「今天清掉」：这一趟至少发出一件（服务端同一轮只算一次）
+    _ckNoteInboxReply({conversation_id:chat.conversation_id, platform:chat.platform,
+      account_id:chat.account_id||'default', chat_key:chat.chat_key});
     // 发送期间切了会话：输入框里已是新会话的草稿，不清；线程刷新只刷当前视图
     if(selectedChat===chat){ const ta=document.getElementById('reply-ta'); if(ta) ta.value=''; }
     _toast(sent===1?window.T('inbox.media.sent'):window.Tf('inbox.file.sent_n',{n:sent}),'#0f9d75');
@@ -15987,9 +15990,9 @@ async function sendMsg(){
 function _ckNoteInboxReply(body){
   try{
     if(!body) return;
-    let cid='';
+    let cid=String(body.conversation_id||'');
     const sc=selectedChat;
-    if(sc && String(sc.platform||'')===String(body.platform||'') && String(sc.chat_key||'')===String(body.chat_key||'')){
+    if(!cid && sc && String(sc.platform||'')===String(body.platform||'') && String(sc.chat_key||'')===String(body.chat_key||'')){
       cid=String(sc.conversation_id||'');
     }
     if(!cid) cid=[body.platform||'', body.account_id||'default', body.chat_key||''].join(':');
@@ -16002,6 +16005,7 @@ function _ckNoteInboxReply(body){
     }catch(_){}
   }catch(_){}
 }
+window._ckNoteInboxReply=_ckNoteInboxReply;   // 门禁跨窗口演练直接调（本页脚本不挂全局）
 
 // P4-9：失败气泡一键重发——原样重放当初的发送 body（含引用/翻译参数），成功即并入真实线程。
 async function resendFailed(optId){
@@ -16079,6 +16083,7 @@ async function resendStoreFailed(mid){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 自动投递失败那条由坐席重发成功：也是回了
       await loadThread(selectedChat,true);
       await loadChats();
     } else {
@@ -21654,6 +21659,9 @@ async function sendVoiceReply(){
     }
   },1000);
   const onSent=async(meta,reused)=>{
+    /* 待人工「今天清掉」：直发成功与对账确认已发出都走这里，失败不走 */
+    _ckNoteInboxReply({conversation_id:sendChat.conversation_id, platform:sendChat.platform,
+      account_id:sendChat.account_id||'default', chat_key:sendChat.chat_key});
     _voicePreviewReuse=null;   /* 试听产物已消费，防陈旧复用 */
     const m=meta||{};
     let hint=window.T('inbox.voice.sent')+(m.provider?`（${m.provider}${m.emotion?' / '+m.emotion:''}）`:'');
