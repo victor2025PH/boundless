@@ -1,5 +1,8 @@
 # 智拓群控节点更新日志
 
+## 0.3.15
+机房电脑可以在本机弹出「哪台手机不能用」。默认关闭。agent.json 里 `operator_alert_enabled` 写成 JSON `true` 才打开。窗口和气泡按壁纸编号列出当前不能用的手机（`wallpaper_map`），不显示 adb 序列号。adb 服务没起来、找不到 adb、或一台手机都没有时，提示这台电脑本身有问题。手机从离线、未授权、断开或连续失败里恢复后，名单会去掉它。窗口上可以在中文和 English 之间切换，选择记在 `%ProgramData%\ChatX\fleet\operator_alert_lang.json`，下次启动仍用这个语言。没有桌面的机器只把状态写进 `operator_alert.json`，不拖垮节点服务。直播机（`CHATX_FLEET_LIVE_STREAM` 或 `live-stream.flag`）即使写成 true 也不弹。受保护手机仍不出现。公开下载页的 latest 不因这一版改掉。
+
 ## 0.3.14
 0.3.13 的现场包一启动就退出：构造 `PhoneFlows` 时传入了 `state_dir`，旧的 `__init__` 不收这个参数。0.3.14 的构造函数接收 `state_dir`，节点启动改走 `PhoneFlows.from_agent_settings`，和打包前的检查用的是同一组参数。`push_config` 的坐标路径、json、base64 行为不变。直播机和受保护手机的规则不变。公开下载页的 latest 不因这一版改掉。
 

@@ -12,6 +12,7 @@
 流程（契约 docs/FLEET_CONTROL_CONTRACT.md）：
     enroll(code, machine_id) → node_key 存 <state_dir>/agent.json（只在本机）
     loop: heartbeat（本机实例摘要 + 本机 adb 手机清点 phones，无聊天原文）→ pull(wait=25s 长轮询) → 逐条 execute → ack（幂等）
+    0.3.15 本机操作员告警（默认关）：手机不能干活或本机 adb 异常时，只在这台电脑上弹窗，不进心跳。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -66,6 +67,7 @@ from .identity import (
     regenerate_machine_id, resolve_machine_identity, short_machine_id, state_dir_is_locked,
 )
 from .local_status import build_local_status, record_heartbeat
+from .operator_alert import OperatorAlert
 from .phones import PhoneCollector
 from .phone_flow_robust import parse_jitter_ms
 from .phone_flows import PhoneFlows, _MAX_MAP_BYTES, validate_ui_map
@@ -85,7 +87,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.14"
+AGENT_VERSION = "0.3.15"
 # push_config may set these and nothing else. Content keys are not stored; they
 # become a file under the state dir and phone_ui_map is set to that path.
 _PUSH_CONFIG_KEYS = frozenset({"phone_flows_enabled", "phone_ui_map", "phone_ui_map_b64", "phone_ui_map_json"})
@@ -254,7 +256,9 @@ class AgentConfig:
     # 盖掉手工改动；NodeAgent 每次心跳前按 mtime 热加载（2026-10-06 176 改 phones_exclude 需重启的教训）。
     OPERATOR_KEYS = ("phones_exclude", "phones_enabled", "adb_path", "phone_ops_enabled", "phone_ops_allow_tcp",
                      "adb_manage_server", "phone_flows_enabled", "phone_ui_map",
-                     "phone_flow_verify", "phone_flow_jitter_ms")
+                     "phone_flow_verify", "phone_flow_jitter_ms",
+                     "operator_alert_enabled", "operator_alert_refresh_sec", "operator_alert_language",
+                     "operator_alert_fail_streak", "wallpaper_map")
 
     def __init__(self, state_dir: Optional[Path] = None) -> None:
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
@@ -559,6 +563,10 @@ class NodeAgent:
         # crashed startup with unexpected keyword argument 'state_dir'.
         self.phone_flows = PhoneFlows.from_agent_settings(
             _phone_flows_settings(cfg.data, cfg.state_dir), self.phone_ops)
+        # 0.3.15 local desktop alert. Off unless operator_alert_enabled is JSON true.
+        # A live-stream host never raises it, so node 176 and the protected phone stay as they are.
+        self.operator_alert = OperatorAlert(
+            cfg.state_dir, clock=clock, live_stream=is_live_stream_host(cfg.state_dir))
         self._cfg_mtime = _mtime_ns(cfg.path)
 
     def reload_operator_config(self) -> bool:
@@ -573,10 +581,11 @@ class NodeAgent:
         self.phones = PhoneCollector(clock=self.clock, **_phone_collector_settings(d, self.cfg.state_dir))
         self.phone_ops.configure(**_phone_ops_settings(d, self.cfg.state_dir))
         self.phone_flows.configure(**_phone_flows_settings(d, self.cfg.state_dir), ops=self.phone_ops)
-        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s，adb_manage_server %s",
+        logger.info("[agent] agent.json 手机设置已热加载：phones_exclude %d 条，phone_ops %s，phone_flows %s，adb_manage_server %s，operator_alert %s",
                     len(d.get("phones_exclude") or []), "on" if self.phone_ops.enabled else "off",
                     "on" if self.phone_flows.enabled else "off",
-                    "on" if self.phone_ops.manage_server else "off")
+                    "on" if self.phone_ops.manage_server else "off",
+                    "on" if d.get("operator_alert_enabled") is True else "off")
         return True
 
     # ── 主控调用 ──
@@ -860,6 +869,23 @@ class NodeAgent:
             logger.warning("[agent] re-enroll after %s failed: %s", why, e)
             return {"ok": False, "status": "backoff"}
 
+    def _observe_operator_alert(self, phones: Any, phones_error: Any) -> None:
+        try:
+            self.operator_alert.observe(phones, phones_error, self.cfg.data, now=self.clock())
+        except Exception:
+            logger.warning("[agent] operator alert skipped", exc_info=True)
+
+    def _note_phone_action(self, target: Any, result: Any, status: str) -> None:
+        try:
+            serial = ""
+            if isinstance(result, dict):
+                serial = str(result.get("serial") or "")
+            if not serial and isinstance(target, dict):
+                serial = str(target.get("serial") or "")
+            self.operator_alert.note_action(serial, status)
+        except Exception:
+            logger.debug("[agent] operator alert action note failed", exc_info=True)
+
     def _phone_caps(self) -> List[str]:
         """低层能力来自当前 phone_ops；社交能力只有两边都开着才加。"""
         caps = list(self.phone_ops.caps())
@@ -925,6 +951,7 @@ class NodeAgent:
                     errors.append(f"{inst.get('name')}: overview {e}")
             instances.append(entry)
         phones, phones_error = self.phones.collect()
+        self._observe_operator_alert(phones, phones_error)
         return {
             "agent_version": AGENT_VERSION, "proto_version": PROTO_VERSION, "app_version": self.app_version,
             "host_name": host_name(), "os": os_label(), "python": _platform.python_version(),
@@ -1015,9 +1042,13 @@ class NodeAgent:
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
             if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
-                return self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
+                status, result, detail = self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
+                self._note_phone_action(target, result, status)
+                return status, result, detail
             if kind in PHONE_TASK_KINDS:
-                return self.phone_ops.execute(kind, payload, target)
+                status, result, detail = self.phone_ops.execute(kind, payload, target)
+                self._note_phone_action(target, result, status)
+                return status, result, detail
             if kind == TASK_PING:
                 return STATUS_DONE, {"pong": True, "agent_version": AGENT_VERSION, "app_version": self.app_version,
                                      "machine_id": self.machine_id, "host_name": host_name(),

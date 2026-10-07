@@ -259,7 +259,7 @@ def test_agent_pending_then_poll_and_no_instance_fallback(st, tmp_path, monkeypa
     assert got["status"] == "active" and got["node_id"] == nid and cfg.node_key.startswith("nk_")
     hb = agent.build_heartbeat()
     assert hb["instances"] == [] and hb["accounts"] == {"total": 0, "online": 0}
-    assert agent_mod.AGENT_VERSION == "0.3.14"
+    assert agent_mod.AGENT_VERSION == "0.3.15"
 
 
 def test_detect_chatx_and_avatar_health_only(st, tmp_path, monkeypatch):
