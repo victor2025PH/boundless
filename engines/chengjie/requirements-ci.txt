@@ -30,3 +30,13 @@ pytest-timeout>=2.1.0  # CI 挂起保护。本地 scripts/regression.ps1 一直�
 numpy>=1.26  # tests/test_reference_audit.py 顶层 import numpy。本机开发环境自带，CI 精简环境没有
              # → 2026-08-28 CI 首次真跑即 collect 中断（1 error），整个回归一条都没跑。
              # 这正是「工作流放错目录、从未执行」被掩盖住的那类缺口。
+
+# 2026-10-08 回归：下列包已在 requirements.txt（ruamel 同日补进），CI 精简环境没装，
+# 约 56 个节点以 ModuleNotFound / 静默退化失败。不含 torch/whisper，也不含 tgcrypto
+# （pyrogram 的可选原生加速，缺了只慢、不改行为）。
+pyrogram>=2.0.0          # filters.private；TG 出站守卫 / 协议登录 / 群列表
+okline>=2.7.0            # LINE 登录 LineConfig、同步、媒体
+brotli>=1.1.0            # 压缩中间件 Accept: br
+emoji>=2.12.0            # 入站 emoji demojize
+opencc-python-reimplemented>=0.1.7  # 繁简归一；ASR/synth CER
+ruamel.yaml>=0.18        # 保注释写 overlay（config_manager 注释：本机 0.18.x；0.19 本地 round-trip 通过）
