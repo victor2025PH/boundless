@@ -20,6 +20,7 @@ files:
   stop_confirm: stop_confirm.yaml
   handoff_sop: handoff_sop.yaml
   compliance: compliance.yaml
+  wa_fallback_templates: wa_fallback_templates.yaml
 requires:
 - licensed_operator
 - age_verification

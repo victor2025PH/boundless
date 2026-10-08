@@ -265,8 +265,40 @@ def _hub_cfg(tmp_path, ref, **hub_over):
     }
 
 
-async def test_lang_engines_routes_ja_to_mapped_engine(tmp_path):
-    """日文 + {ja→fish_speech} → 闸门放行、hub 请求带改派引擎与 ja 语言。"""
+_ES = "¿Dónde estás ahora? Ya comiste hoy, vamos a pasear un rato por la ciudad."
+
+
+async def test_lang_engines_does_not_clear_withdrawn_ja(tmp_path):
+    """#161：ja 已从 fish_speech 能力表撤下。{ja→fish_speech} 不得开闸。
+
+    hub 一次都不打，仍记 clone_lang_blocked=ja。重新开闸要先过
+    tools/verify_clone_lang.py，不能靠映射表把已撤语种放回来。
+    """
+    from unittest.mock import patch
+
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_tone_wav(200))
+    seen = {"called": 0}
+
+    def fake_hub(base_url, profile, text, **kw):
+        seen["called"] += 1
+        return _tone_wav(400), "wav"
+
+    tts = TTSPipeline(_hub_cfg(tmp_path, ref))
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize(_JA)
+    assert not rv.ok
+    assert seen["called"] == 0
+    assert rv.extra.get("clone_lang_blocked") == "ja"
+    assert "hub_engine_lang_routed" not in rv.extra
+
+
+async def test_lang_engines_routes_es_to_mapped_engine(tmp_path):
+    """西语不在钉住的 index_tts 表内，但在 fish_speech 表内。
+
+    {es→fish_speech} → 闸门放行、hub 请求带改派引擎与 es 语言。
+    这是语种改派还在的正向钉；日语不再拿来当这个例子。
+    """
     from unittest.mock import patch
 
     from src.ai.voice_synth_stats import get_voice_synth_stats
@@ -282,16 +314,16 @@ async def test_lang_engines_routes_ja_to_mapped_engine(tmp_path):
         seen["language"] = kw.get("language")
         return _tone_wav(400), "wav"
 
-    tts = TTSPipeline(_hub_cfg(tmp_path, ref))
+    tts = TTSPipeline(_hub_cfg(
+        tmp_path, ref, lang_engines={"es": "fish_speech"}))
     with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
-        rv = await tts.synthesize(_JA)
+        rv = await tts.synthesize(_ES)
     assert rv.ok and rv.provider == "hub_fish"
     assert seen["tts_engine"] == "fish_speech"
-    assert seen["language"] == "ja"
-    assert rv.extra.get("hub_engine_lang_routed") == "ja:fish_speech"
+    assert seen["language"] == "es"
+    assert rv.extra.get("hub_engine_lang_routed") == "es:fish_speech"
     assert "clone_lang_blocked" not in rv.extra
-    # 观测接线：改派命中进 voice_synth_stats（metrics/Prom 零新接线暴露）
-    assert stats.dump()["routed_by_pair"].get("ja:fish_speech") == 1
+    assert stats.dump()["routed_by_pair"].get("es:fish_speech") == 1
     stats.reset()
 
 

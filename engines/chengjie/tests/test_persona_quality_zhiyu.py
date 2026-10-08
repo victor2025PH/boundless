@@ -138,3 +138,18 @@ def test_live_script_reads_key_without_echo(tmp_path, monkeypatch, capsys):
     assert '"score": 100.0' in out.read_text(encoding="utf-8")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-" + "y" * 20)
     assert mod.resolve_endpoint(str(cfg))["key_source"] == "env"
+
+
+def test_pack_style_forbids_echoing_banned_phrases_even_negated():
+    """10-08 真模型 59/60 的唯一失败：否定句里复述了「保证收益」。人设风格须明确禁止，且自身不含禁词。"""
+    from pathlib import Path
+    import yaml
+    root = Path(__file__).resolve().parents[1] / "config" / "presets"
+    files = sorted((root / "packs").glob("*/persona.yaml")) + [root / "internal" / "gambling_operator" / "persona.yaml"]
+    assert len(files) == 4
+    for f in files:
+        p = yaml.safe_load(f.read_text(encoding="utf-8"))["persona"]
+        style = p["personality"]["style"]
+        assert "否定句" in style and "反问" in style, f
+        for ph in p["speaking"]["forbidden_phrases"]:
+            assert ph.lower() not in style.lower(), (f, ph)
