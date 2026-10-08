@@ -896,6 +896,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                                            resolve_ui_mode)
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
+    if audit_store is not None:
+        # 会话过期清扫（智安 P1-6）结果写审计日志（动作 session_expire_sweep）
+        user_store.audit_fn = audit_store.log
     if user_store.user_count() == 0:
         if token:
             user_store._ensure_master("admin", token)
