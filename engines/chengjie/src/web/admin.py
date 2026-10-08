@@ -3912,6 +3912,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             "WhatsApp Cloud Webhook 注册跳过", exc_info=True
         )
 
+    # ── Telegram Bot API（官方 bot 轨，与个人号协议轨并列；2026-10-08 智聊） ──
+    try:
+        from src.integrations.telegram_bot_official import register_telegram_bot_routes
+
+        register_telegram_bot_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_tgb
+
+        _log_tgb.getLogger("admin").debug(
+            "Telegram Bot Webhook 注册跳过", exc_info=True
+        )
+
     # ── Instagram Messaging（官方，Graph API）Webhook（Phase H） ──
     try:
         from src.integrations.instagram_webhook import register_instagram_routes
