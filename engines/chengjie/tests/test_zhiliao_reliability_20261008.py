@@ -142,30 +142,59 @@ def test_escalation_snapshot_uses_last_in_ts_and_skips_bad_ts(tmp_path):
 
 
 def test_unclaimed_alert_cooldown_one_per_hour():
+    """单连接视角：同会话 1 小时 1 次，会话互不影响，其他原因不节流。"""
     from src.web.routes.unified_inbox_realtime_routes import (
-        UNCLAIMED_ALERT_COOLDOWN_SEC, _esc_alert_allowed,
+        UNCLAIMED_ALERT_COOLDOWN_SEC, EscalationAlertLedger,
     )
     assert UNCLAIMED_ALERT_COOLDOWN_SEC == 3600.0
-    led: dict = {}
+    led = EscalationAlertLedger()
     t = 1_800_000_000.0
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t) is True
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 60) is False
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 3599) is False
-    assert _esc_alert_allowed(led, "c2", "unclaimed", t + 60) is True      # 会话之间互不影响
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 3600) is True    # 满 1 小时再报
+    d: dict = {}
+    ok = lambda cid, reason, now: led.allow(cid, reason, now, conn_started=t - 10, delivered=d)  # noqa: E731
+    assert ok("c1", "unclaimed", t) is True
+    assert ok("c1", "unclaimed", t + 60) is False
+    assert ok("c1", "unclaimed", t + 3599) is False
+    assert ok("c2", "unclaimed", t + 60) is True      # 会话之间互不影响
+    assert ok("c1", "unclaimed", t + 3600) is True    # 满 1 小时再报
     # 其他原因不节流（保持原语义）
-    assert _esc_alert_allowed(led, "c1", "holder_offline", t + 3601) is True
-    assert _esc_alert_allowed(led, "c1", "holder_offline", t + 3602) is True
+    assert ok("c1", "holder_offline", t + 3601) is True
+    assert ok("c1", "holder_offline", t + 3602) is True
     # 软上限
-    big: dict = {f"k{i}": t for i in range(2100)}
-    _esc_alert_allowed(big, "new", "unclaimed", t + 1)
-    assert len(big) <= 2048 and "new" in big
+    small = EscalationAlertLedger(cap=100)
+    for i in range(300):
+        small.allow(f"k{i}", "unclaimed", t + i, conn_started=0, delivered={})
+    assert len(small._events) <= 100
+
+
+def test_unclaimed_alert_is_global_across_sse_connections():
+    """二批④：全局只推一次——告警时在线的连接各一份；之后的新连接/重连不补推；冷却后再报。"""
+    from src.web.routes.unified_inbox_realtime_routes import EscalationAlertLedger
+    led = EscalationAlertLedger()
+    t = 1_800_000_000.0
+    a, b = {}, {}
+    # A、B 都在 t-100 建连；A 在 t 先判到边沿，B 在自己的心跳 t+25 才判到
+    assert led.allow("c1", "unclaimed", t, conn_started=t - 100, delivered=a) is True
+    assert led.allow("c1", "unclaimed", t + 25, conn_started=t - 100, delivered=b) is True
+    # 同一连接同一次告警不再推（恢复后再越线也一样）
+    assert led.allow("c1", "unclaimed", t + 600, conn_started=t - 100, delivered=a) is False
+    assert led.allow("c1", "unclaimed", t + 900, conn_started=t - 100, delivered=b) is False
+    # 告警之后才建的连接（重连 / 新标签页）：冷却期内不补推
+    c = {}
+    assert led.allow("c1", "unclaimed", t + 1200, conn_started=t + 1000, delivered=c) is False
+    # 冷却期满：重新算一次告警，所有在线连接（含 C）各收一份
+    assert led.allow("c1", "unclaimed", t + 3700, conn_started=t + 1000, delivered=c) is True
+    assert led.allow("c1", "unclaimed", t + 3710, conn_started=t - 100, delivered=a) is True
+    assert led.allow("c1", "unclaimed", t + 3720, conn_started=t - 100, delivered=b) is True
+    assert led.allow("c1", "unclaimed", t + 3730, conn_started=t - 100, delivered=a) is False
 
 
 def test_realtime_wiring_records_with_cooldown():
     rt = (_ENGINE / "src" / "web" / "routes" / "unified_inbox_realtime_routes.py").read_text(encoding="utf-8")
+    rt = rt.replace("\r\n", "\n")
     assert "dedup_sec=UNCLAIMED_ALERT_COOLDOWN_SEC" in rt
-    assert "_esc_alert_allowed(\n" in rt.replace("\r\n", "\n")
+    assert "ESC_ALERT_LEDGER.allow(\n" in rt
+    assert "conn_started=_conn_started, delivered=_esc_delivered" in rt
+    assert "_esc_last_emit" not in rt  # 不再按连接各记各的
 
 
 def _mk_escalation_db(path: Path) -> None:
