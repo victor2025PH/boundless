@@ -1214,25 +1214,34 @@ def _explicit_sent_by(msg: Any) -> str:
     return normalize_sent_by(getattr(msg, "sent_by", ""))
 
 
-#: 脚本测试号（2026-10-08 Morgan 确认）：这些**我方账号**发出的出站流量是脚本 / 值守工具
-#: 驱动的测试，归因 ``script``（坐席在工作台亲手发的仍记 agent）。默认含报障群支持号
-#: 6834964252（tools/duty_alert、duty_reply 的发送账号）；环境变量
-#: ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``（逗号分隔）可整体覆盖，设为空串即关闭。
-_SCRIPT_SENDER_ACCOUNTS_DEFAULT = ("6834964252",)
+#: 脚本测试号（2026-10-08 Morgan 确认 6834…252）：这些**我方账号**发出的出站流量是脚本 /
+#: 值守工具驱动的测试，归因 ``script``（坐席在工作台亲手发的仍记 agent）。
+#: 名单只有一份：配置 ``compliance.send_rate_gate.script_accounts``（与智安限速闸共用，
+#: 读取口 ``send_rate_gate.script_accounts()``）；环境变量 ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``
+#: 只作覆盖（逗号分隔，空串＝清空）。zhiliao 实例的取值见 deploy/instances/zhiliao/config.local.yaml。
 
 
 def script_sender_accounts() -> frozenset:
-    import os as _os
-    raw = _os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS")
-    if raw is None:
-        return frozenset(_SCRIPT_SENDER_ACCOUNTS_DEFAULT)
-    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+    """当前生效的脚本测试号名单（兼容旧名；真身在 send_rate_gate.script_accounts）。"""
+    try:
+        from src.compliance.send_rate_gate import script_accounts
+        return frozenset(script_accounts())
+    except Exception:
+        import os as _os
+        raw = _os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS") or ""
+        return frozenset(x.strip() for x in raw.split(",") if x.strip())
 
 
 def _is_script_sender_conv(conversation_id: Any) -> bool:
-    """会话主键 ``platform:account_id:chat_key`` 的账号段是否脚本测试号。"""
+    """会话主键 ``platform:account_id:chat_key`` 的账号是否脚本测试号（与限速闸同一匹配口径）。"""
     parts = str(conversation_id or "").split(":", 2)
-    return len(parts) >= 2 and parts[1] in script_sender_accounts()
+    if len(parts) < 2 or not parts[1]:
+        return False
+    try:
+        from src.compliance.send_rate_gate import is_script_account
+        return is_script_account(parts[0], parts[1])
+    except Exception:
+        return parts[1] in script_sender_accounts()
 
 
 def _resolve_sent_by(msg: Any, inherited: str = "") -> str:

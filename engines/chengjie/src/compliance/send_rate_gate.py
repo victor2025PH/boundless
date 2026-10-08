@@ -78,6 +78,46 @@ def gate_cfg(config: Any = None) -> Dict[str, Any]:
     return out
 
 
+#: 脚本测试号名单的环境变量覆盖（逗号分隔；设为空串＝清空名单）。限速闸与 sent_by 归因共用。
+SCRIPT_ACCOUNTS_ENV = "CHENGJIE_SCRIPT_SENDER_ACCOUNTS"
+
+
+def script_accounts(config: Any = None) -> list:
+    """脚本测试号名单的**唯一**读取口（2026-10-08，限速闸 + ``messages.sent_by`` 归因共用）。
+
+    优先级：环境变量 ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``（设了就整体覆盖，空串＝清空）
+    > 配置 ``compliance.send_rate_gate.script_accounts`` > :data:`DEFAULTS`（空）。
+    ``config`` 缺省时读 ``compliance.runtime.runtime_config()``（装配层注册的实时配置，
+    跟随 overlay 热重载）；条目写 ``platform:account_id`` 或 ``account_id``。绝不抛。"""
+    raw = os.environ.get(SCRIPT_ACCOUNTS_ENV)
+    if raw is not None:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    if config is None:
+        try:
+            from src.compliance.runtime import runtime_config
+            config = runtime_config()
+        except Exception:
+            config = None
+    try:
+        v = gate_cfg(config).get("script_accounts")
+        if isinstance(v, str):
+            v = v.split(",")
+        return [str(x).strip() for x in (v or []) if str(x or "").strip()]
+    except Exception:
+        return []
+
+
+def is_script_account(platform: Any, account_id: Any, config: Any = None) -> bool:
+    """``platform:account_id`` 是否脚本测试号（匹配口径与 :func:`classify_origin` 同一个）。"""
+    acct = str(account_id or "").strip()
+    if not acct:
+        return False
+    try:
+        return _match_list(script_accounts(config), f"{platform or ''}:{acct}", acct)
+    except Exception:
+        return False
+
+
 def _truthy(v: Any, default: bool = True) -> bool:
     if v is None:
         return default
@@ -185,7 +225,7 @@ def classify_origin(origin: Any, *, platform: str = "", account_id: str = "",
         if chat_key and _match_list(g.get("script_peers") or [], str(chat_key)):
             return ORIGIN_SCRIPT
         acct = str(account_id or "")
-        if acct and _match_list(g.get("script_accounts") or [], f"{platform}:{acct}", acct):
+        if acct and _match_list(script_accounts(config), f"{platform}:{acct}", acct):
             return ORIGIN_SCRIPT
     except Exception:
         pass

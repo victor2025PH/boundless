@@ -38,3 +38,12 @@ companion:
   enabled: true
 inbox:
   enabled: true
+
+# ── 脚本测试号（2026-10-08 Morgan 确认 6834…252 是脚本 / 值守工具的测试流量）──
+# 限速闸（send_rate_gate 的 script_daily_cap）与 messages.sent_by=script 归因共用这一份名单
+# （读取口 src/compliance/send_rate_gate.script_accounts）；环境变量 CHENGJIE_SCRIPT_SENDER_ACCOUNTS
+# 只作临时覆盖。⚠ 并入现网 overlay 前先与智安确认 script_daily_cap：缺省 20 条/号/24h，
+# 该号近 7 天约 45 条/天出站，并入后经编排器的发送会被这道日上限拦。
+compliance:
+  send_rate_gate:
+    script_accounts: ["telegram:6834964252"]

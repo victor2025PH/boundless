@@ -384,10 +384,13 @@ def test_aline_mirror_rows_tagged_ai():
 
 
 def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
-    """Morgan 2026-10-08：报障群支持号 6834964252 的出站是脚本测试 → sent_by=script。"""
+    """Morgan 2026-10-08：报障群支持号 6834964252 的出站是脚本测试 → sent_by=script（名单走配置）。"""
+    from src.compliance import runtime as _rt
     from src.inbox.store import script_sender_accounts
     monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
-    assert "6834964252" in script_sender_accounts()
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:6834964252"]}}}
+    monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
+    assert "telegram:6834964252" in script_sender_accounts()
     store = InboxStore(tmp_path / "inbox.db")
     cid = "telegram:6834964252:-1001234567890"
     t = 1_757_000_000.0
@@ -417,6 +420,45 @@ def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
                                       text="关闭后", ts=t + 9))
     assert {r["platform_msg_id"]: r for r in store.list_recent_messages(cid, limit=20)}["d5"]["sent_by"] == "phone"
     store.close()
+
+
+def test_script_accounts_single_source_config_first_env_overrides(monkeypatch):
+    """二批⑤：限速闸与 sent_by 归因共用一份名单——以配置为准，环境变量只覆盖。"""
+    from src.compliance import runtime as _rt
+    from src.compliance import send_rate_gate as g
+    from src.inbox import store as st
+    monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
+    # 无 provider、无配置：名单为空（缺省不臆造脚本号），两边都不判 script
+    monkeypatch.setattr(_rt, "_PROVIDER", None)
+    assert g.script_accounts() == [] and g.DEFAULTS["script_accounts"] == []
+    assert st._is_script_sender_conv("telegram:6834964252:1") is False
+    assert g.classify_origin("auto", platform="telegram", account_id="6834964252") == "ai"
+    # 实时配置（overlay 热重载走 provider）：两边同时生效
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:6834964252"]}}}
+    monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
+    assert g.script_accounts() == ["telegram:6834964252"]
+    assert st._is_script_sender_conv("telegram:6834964252:1") is True
+    assert st._is_script_sender_conv("telegram:111:1") is False
+    assert g.classify_origin("auto", platform="telegram", account_id="6834964252") == "script"
+    # 显式传入的 config 优先于 provider（限速闸调用方传 config 的路径不变）
+    assert g.script_accounts({"compliance": {"send_rate_gate": {"script_accounts": "a1, b2"}}}) == ["a1", "b2"]
+    # 环境变量覆盖：设了就整体替换（两边一起），空串＝清空
+    monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "999")
+    assert g.script_accounts(cfg) == ["999"]
+    assert st._is_script_sender_conv("telegram:6834964252:1") is False
+    assert st._is_script_sender_conv("whatsapp:999:x") is True
+    assert g.classify_origin("auto", platform="telegram", account_id="6834964252", config=cfg) == "ai"
+    monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "")
+    assert g.script_accounts(cfg) == [] and st.script_sender_accounts() == frozenset()
+
+
+def test_zhiliao_overlay_template_declares_script_accounts():
+    import yaml
+    p = _ENGINE.parents[1] / "deploy" / "instances" / "zhiliao" / "config.local.yaml"
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert doc["compliance"]["send_rate_gate"]["script_accounts"] == ["telegram:6834964252"]
+    # 模板只加名单，不碰限速闸其他开关（cap/enabled 以智安缺省 + 现网 overlay 为准）
+    assert set(doc["compliance"]["send_rate_gate"]) == {"script_accounts"}
 
 
 def test_orchestrator_mirror_follows_send_rate_gate_script_scope():
