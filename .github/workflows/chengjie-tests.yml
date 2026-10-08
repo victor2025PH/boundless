@@ -15,7 +15,8 @@ name: chengjie-tests
 
 on:
   push:
-    branches: [main, 'feat-*', 'sprint*/**']
+    # 'devin/**' = 发版分支（1.0.95–1.0.109 均从 devin/... 打包），2026-10-08 起纳入回归门禁。
+    branches: [main, 'feat-*', 'sprint*/**', 'devin/**']
     paths:
       - 'engines/chengjie/**'
       - '.github/workflows/chengjie-tests.yml'
