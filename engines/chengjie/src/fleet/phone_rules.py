@@ -527,6 +527,10 @@ def sanitize_phone_result(kind: str, result: Any, *, serial: str = "", wallpaper
             out["like_diag"] = scrub_phone_tree(diag, serial=known_serial, wallpaper=wall)
     if r.get("like_button_deprecated") is True:
         out["like_button_deprecated"] = True
+    if r.get("media_next") == "gated":
+        out["media_next"] = "gated"
+    if r.get("publish_verified") is True:
+        out["publish_verified"] = True
     if kind == TASK_PHONE_APP_RESTART:
         pkg = _diag_str(r.get("package"), 80)
         if pkg in _FB_PACKAGES:

@@ -17,6 +17,19 @@ dry_run (or predict_only) JSON true compiles the UI map at 1000x1000 permille an
 returns the planned taps/text. It does not open an adb session, take a screenshot,
 or send input. A missing flag is real execution, and only when flows are enabled.
 
+Facebook ``post_media`` does not blind-tap ``media_next``. That control sits on
+the same corner as Publish on some versions, so a stored tap can send the post
+before the caption. The compiled plan drops ``media_next`` and any other pre-caption
+tap inside the separation of ``post_submit``, and it keeps the caption before
+Publish. A live run reads the window once and taps Next only when the label is
+Next and not Post, Share, or Publish. No signal means skip, then caption, then
+``post_submit``. ``verify_publish`` JSON true (post only) reads the window after
+submit and fails with ``post_not_confirmed`` unless a success phrase is showing
+and the publish control is gone. It does not run on dry_run. ``robust.verify``
+still only checks that the frame changed and the login color; it does not prove
+the post went out. Caption text stays the ASCII ``phone_text`` subset, at most
+200 characters. Chinese is ``text_non_ascii_unsupported``.
+
 Facebook ``phone_like`` does not tap the fixed ``like_button``. It screenshots,
 finds the Like control (text row, thumbs-up template, action-bar slot), and taps
 only when two signals agree or the template score is high. The fixed coordinate
@@ -59,6 +72,7 @@ from .phone_flow_robust import (
     MAX_DWELL_MS, MAX_JITTER_MS, MAX_RETRIES, MIN_DWELL_MS, dwell_seconds, frame_token, jitter_seconds,
     probe_matches, resolve_policy,
 )
+from .post_publish import assess_publish, distinct_next_point, ocr_vetoes_next, points_collide
 from .phone_flow_rules import FLOW_BY_KIND, validate_flow_payload
 from .social_pace import PaceLedger
 from .phone_rules import KEYCODES, SWIPE_MS_MAX, SWIPE_MS_MIN, PhoneOpError, check_target
@@ -571,7 +585,7 @@ def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, heig
                 y = min(height - 1, max(0, y + slot * (sy * height // 1000)))
                 x = min(x, 9999)
                 y = min(y, 9999)
-            item = (TASK_PHONE_TAP, {"x": x, "y": y})
+            item = (TASK_PHONE_TAP, {"x": x, "y": y, "_anchor": str(step.get("anchor") or "")})
         elif op == "dwell":
             item = (_DWELL_KIND, {"lo_ms": int(step["lo_ms"]), "hi_ms": int(step["hi_ms"])})
         else:
@@ -598,22 +612,168 @@ def _compile(app: str, flow_name: str, payload: Dict[str, Any], width: int, heig
             th_used = True
         out.append(item)
         checks.append(None if check is None else dict(check))
+    if app == "facebook" and flow_name in ("post", "post_media"):
+        out, checks = _guard_facebook_caption(out, checks, width, height)
     if not out:
         raise PhoneOpError("ui_map_invalid")
     return out, checks
+
+
+def _tap_anchor(step: Step) -> str:
+    kind, payload = step
+    if kind != TASK_PHONE_TAP:
+        return ""
+    name = payload.get("_anchor")
+    return name if isinstance(name, str) else ""
+
+
+def _strip_anchor(steps: List[Step]) -> List[Step]:
+    """Public plans stay ``{x, y}`` taps. The anchor name is only for the executor."""
+    out: List[Step] = []
+    for kind, payload in steps:
+        if kind == TASK_PHONE_TAP and "_anchor" in payload:
+            payload = {key: value for key, value in payload.items() if key != "_anchor"}
+        out.append((kind, payload))
+    return out
+
+
+def _guard_facebook_caption(steps: List[Step], checks: List[Optional[Dict[str, Any]]],
+                            width: int, height: int) -> Tuple[List[Step], List[Optional[Dict[str, Any]]]]:
+    """Never emit a blind Next, and never tap Publish before the caption.
+
+    ``media_next`` is dropped even when its stored point is far from Publish:
+    on a real Next screen that button occupies the Publish corner, so distance
+    alone cannot tell them apart. Any other pre-caption tap inside the
+    separation of ``post_submit`` is dropped too. If a map still lists Publish
+    before the caption, the caption and the composer tap immediately before it
+    move in front of Publish.
+    """
+    paired = [(step, check) for step, check in zip(steps, checks) if _tap_anchor(step) != "media_next"]
+    steps = [step for step, _check in paired]
+    checks = [check for _step, check in paired]
+    if not steps:
+        raise PhoneOpError("ui_map_invalid")
+    submit_at = [i for i, step in enumerate(steps) if _tap_anchor(step) == "post_submit"]
+    text_at = [i for i, (kind, _payload) in enumerate(steps) if kind == TASK_PHONE_TEXT]
+    if not submit_at or not text_at:
+        return steps, checks
+    submit_i = submit_at[-1]
+    text_i = text_at[0]
+    sx = int(steps[submit_i][1]["x"])
+    sy = int(steps[submit_i][1]["y"])
+    kept_s: List[Step] = []
+    kept_c: List[Optional[Dict[str, Any]]] = []
+    for i, (step, check) in enumerate(zip(steps, checks)):
+        if i < text_i and i != submit_i and step[0] == TASK_PHONE_TAP:
+            if points_collide(int(step[1]["x"]), int(step[1]["y"]), sx, sy, width, height):
+                continue
+        kept_s.append(step)
+        kept_c.append(check)
+    steps, checks = kept_s, kept_c
+    if not steps:
+        raise PhoneOpError("ui_map_invalid")
+    submit_at = [i for i, step in enumerate(steps) if _tap_anchor(step) == "post_submit"]
+    text_at = [i for i, (kind, _payload) in enumerate(steps) if kind == TASK_PHONE_TEXT]
+    if not submit_at or not text_at:
+        return steps, checks
+    submit_i = submit_at[-1]
+    text_i = text_at[0]
+    if text_i < submit_i:
+        return steps, checks
+    start = text_i
+    if text_i > 0 and _tap_anchor(steps[text_i - 1]) == "composer_field":
+        start = text_i - 1
+    if start <= submit_i:
+        return steps, checks
+    block_s = steps[start:text_i + 1]
+    block_c = checks[start:text_i + 1]
+    rest_s = steps[:start] + steps[text_i + 1:]
+    rest_c = checks[:start] + checks[text_i + 1:]
+    return rest_s[:submit_i] + block_s + rest_s[submit_i:], rest_c[:submit_i] + block_c + rest_c[submit_i:]
 
 
 def compile_flow(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
                  ui_map: Dict[str, Any]) -> List[Step]:
     """把一个应用的一条流程编成低层 (kind, payload) 列表。不含开头那张用来量屏幕的截图。"""
     steps, _checks = _compile(app, flow_name, payload, width, height, ui_map)
-    return steps
+    return _strip_anchor(steps)
 
 
 def compile_flow_checked(app: str, flow_name: str, payload: Dict[str, Any], width: int, height: int,
                          ui_map: Dict[str, Any]) -> Tuple[List[Step], List[Optional[Dict[str, Any]]]]:
     """和 compile_flow 同序。checks[i] 为 None 表示这一步做完不截图复查。"""
-    return _compile(app, flow_name, payload, width, height, ui_map)
+    steps, checks = _compile(app, flow_name, payload, width, height, ui_map)
+    return _strip_anchor(steps), checks
+
+
+def _ocr_lines(reader: Any, raw: bytes) -> List[str]:
+    """Optional caller-supplied OCR. Does not import the like locator."""
+    if not callable(reader) or not raw:
+        return []
+    try:
+        boxes = reader(raw)
+    except Exception:
+        logger.debug("post ocr unread", exc_info=True)
+        return []
+    if isinstance(boxes, str):
+        return [boxes]
+    if not isinstance(boxes, list):
+        return []
+    lines: List[str] = []
+    for box in boxes:
+        if isinstance(box, str):
+            lines.append(box)
+        elif isinstance(box, dict):
+            text = box.get("text") or box.get("content") or ""
+            if isinstance(text, str) and text:
+                lines.append(text)
+    return lines
+
+
+def _window_xml(ops: Any, serial: str) -> str:
+    reader = getattr(ops, "read_window_xml", None)
+    if not callable(reader):
+        return ""
+    try:
+        got = reader(serial)
+    except Exception:
+        logger.debug("post window unread", exc_info=True)
+        return ""
+    return got if isinstance(got, str) else ""
+
+
+def _at_caption_gate(steps: List[Step], index: int, kind: str, payload: Dict[str, Any]) -> bool:
+    """The step just before the caption is typed. Composer field when it sits there."""
+    if kind == TASK_PHONE_TAP and payload.get("_anchor") == "composer_field":
+        return index + 1 < len(steps) and steps[index + 1][0] == TASK_PHONE_TEXT
+    if kind == TASK_PHONE_TEXT:
+        if index == 0:
+            return True
+        return _tap_anchor(steps[index - 1]) != "composer_field"
+    return False
+
+
+def _maybe_next_tap(ops: Any, serial: str, ocr: Any, width: int, height: int) -> Optional[Tuple[int, int]]:
+    """One quiet dump. A point only when the label is unambiguously Next."""
+    xml = _window_xml(ops, serial)
+    point = distinct_next_point(xml)
+    if point is None:
+        return None
+    if callable(ocr):
+        raw = b""
+        last = getattr(ops, "last_raw", None)
+        if callable(last):
+            try:
+                got = last(serial)
+            except Exception:
+                got = b""
+            if isinstance(got, (bytes, bytearray)):
+                raw = bytes(got)
+        if ocr_vetoes_next(_ocr_lines(ocr, raw)):
+            return None
+    x = max(0, min(int(point[0]), width - 1, 9999))
+    y = max(0, min(int(point[1]), height - 1, 9999))
+    return x, y
 
 
 def _plan_step(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1218,6 +1378,8 @@ class PhoneFlows:
             }
             if app == "facebook" and flow == "like":
                 body["like_button_deprecated"] = True
+            if app == "facebook" and map_flow == "post_media":
+                body["media_next"] = "gated"
             return STATUS_DONE, body, "dry_run"
         if app == "facebook" and flow in ("like", "comment", "follow", "post"):
             decision = self._pace.allow(
@@ -1234,6 +1396,7 @@ class PhoneFlows:
         prog: Dict[str, Any] = {"done": 0, "step": None, "w": None, "h": None}
         t0 = ops._clock()
         chars = 0
+        publish_verified = False
         try:
             with ops.session(serial) as run:
                 try:
@@ -1251,16 +1414,20 @@ class PhoneFlows:
                 prog.update(done=1, w=w, h=h)
                 verify_on, jitter, retries = resolve_policy(ui, self._verify, self._jitter)
                 try:
-                    if verify_on or jitter != (0, 0):
-                        steps, checks = compile_flow_checked(app, map_flow, p, w, h, ui)
-                    else:
-                        steps = compile_flow(app, map_flow, p, w, h, ui)
+                    steps, checks = _compile(app, map_flow, p, w, h, ui)
+                    if not verify_on and jitter == (0, 0):
                         checks = [None] * len(steps)
                 except PhoneOpError as e:
                     return _status(e), _result(serial, app, flow, completed=1, width=w, height=h, err=e), e.code
                 spec = ui["apps"][app]
+                next_gated = False
                 for i, (sk, sp) in enumerate(steps):
                     prog["step"] = i
+                    if app == "facebook" and map_flow == "post_media" and not next_gated and _at_caption_gate(steps, i, sk, sp):
+                        next_gated = True
+                        point = _maybe_next_tap(ops, serial, self._ocr, w, h)
+                        if point is not None:
+                            run(TASK_PHONE_TAP, {"x": point[0], "y": point[1]})
                     if jitter != (0, 0):
                         gap = jitter_seconds(jitter, self._rng)
                         if gap > 0:
@@ -1306,6 +1473,24 @@ class PhoneFlows:
                     prog["done"] = int(prog["done"]) + 1
                     if sk == TASK_PHONE_TEXT and isinstance(res, dict):
                         chars += int(res.get("chars") or 0)
+                if p.get("verify_publish") is True and flow == "post":
+                    extra: List[str] = []
+                    if callable(self._ocr):
+                        raw = b""
+                        last = getattr(ops, "last_raw", None)
+                        if callable(last):
+                            try:
+                                got = last(serial)
+                            except Exception:
+                                got = b""
+                            if isinstance(got, (bytes, bytearray)):
+                                raw = bytes(got)
+                        extra = _ocr_lines(self._ocr, raw)
+                    if assess_publish(_window_xml(ops, serial), extra) != "confirmed":
+                        err = PhoneOpError("post_not_confirmed", failed=True)
+                        err.stderr = "publish:unproven"  # type: ignore[attr-defined]
+                        raise err
+                    publish_verified = True
             elapsed = int(max(0.0, ops._clock() - t0) * 1000)
             out: Dict[str, Any] = {
                 "serial": serial, "app": app, "flow": flow, "steps": int(prog["done"]), "elapsed_ms": elapsed,
@@ -1313,6 +1498,8 @@ class PhoneFlows:
             }
             if chars:
                 out["chars"] = chars
+            if publish_verified:
+                out["publish_verified"] = True
             if flow in SESSION_FLOW_NAMES:
                 for key in ("scrolls", "watches", "likes"):
                     if isinstance(p.get(key), int) and not isinstance(p.get(key), bool):
