@@ -441,3 +441,31 @@ def test_health_route_returns_payload(auth_client):
     assert r.status_code == 200
     body = r.json()
     assert body["platform"] == "whatsapp" and "verdict" in body and "meta_billing" in body
+
+
+# ── 与智安统一闸 src.compliance.stop_gate 的软委托（模块在途；此处用假模块钉契约）──────
+
+def test_soft_delegation_to_compliance_stop_gate(env, monkeypatch):
+    import sys
+    import types
+    calls = []
+    fake = types.ModuleType("src.compliance.stop_gate")
+    fake.detect = lambda text: "tigil na" if "tigil na" in str(text).lower() else ""
+    fake.contact_stopped = lambda store, plat, acct, peer, phone="", **k: (
+        "blocklist_phone" if phone.endswith("0000099") else "")
+    def _record(store, **kw):
+        calls.append(("record", kw["platform"], kw["peer"]))
+        return {"frozen": True, "listed": True, "already": False}
+    fake.record_stop = _record
+    fake.audit = lambda store=None, **kw: calls.append(("audit", kw["action"], kw["path"])) or True
+    monkeypatch.setitem(sys.modules, "src.compliance.stop_gate", fake)
+    # 判定：统一闸词表（他加禄语）命中
+    assert official_stop_gate.detect_stop("Tigil na") == ["tigil na"]
+    # 跨账号 / 同手机号视角：统一闸说停联过 → 本通道也拦，且出站记审计
+    out = asyncio.run(wac.wa_send_text("639170000099", "hi", PNID, TOKEN))
+    assert out["blocked"] == "stop_contact" and out["error"] == "stop_gate:blocklist_phone"
+    assert ("audit", "blocked", "official:whatsapp") in calls
+    # 登记走统一闸 record_stop
+    _post(env.client, _text("tigil na", frm="639171111111"))
+    assert ("record", "whatsapp", "wa:user:639171111111") in calls
+    assert env.sm.calls == [] and env.graph.posts() == []
