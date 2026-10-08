@@ -14,11 +14,12 @@ def test_count_conversations_active_since_groups_by_account(tmp_path):
     store = InboxStore(tmp_path / "inbox.db")
     now = time.time()
     day0 = read_routes._local_day_start_ts(now)
-    # 今日活动：acctA ×2、acctB ×1；昨日活动不应计入
+    # 钉在本日之内。刚过本地零点时 now-120 会落到昨天，acctA 只剩 1 条。
+    inside = day0 + 60
     for i, (aid, ts) in enumerate([
-        ("acctA", now - 60),
-        ("acctA", now - 120),
-        ("acctB", now - 30),
+        ("acctA", inside),
+        ("acctA", inside + 1),
+        ("acctB", inside + 2),
         ("acctA", day0 - 3600),
     ]):
         store.upsert_conversation(InboxConversation(

@@ -313,3 +313,12 @@ TASK_REQUIRED_CAPS.update({k: CAP_PHONE_OPS_V1 for k in PHONE_APP_KINDS})
 REMOTE_PHONE_KINDS = REMOTE_PHONE_KINDS + PHONE_APP_KINDS
 
 __all__ += ["TASK_PHONE_APP_RESTART", "PHONE_APP_KINDS"]
+
+
+# ── 0.3.22 机房现场待办（不进 REMOTE_PHONE_KINDS，不要求 caps）──────────────
+# 主控只发给这一台机房电脑。内容是类别 + 壁纸号，没有序列号。直播机拒绝。
+TASK_SITE_TODO = "site_todo"
+TASK_KINDS = TASK_KINDS + ((TASK_SITE_TODO,) if TASK_SITE_TODO not in TASK_KINDS else ())
+TASK_PRIORITY.setdefault(TASK_SITE_TODO, 8)
+
+__all__ += ["TASK_SITE_TODO"]

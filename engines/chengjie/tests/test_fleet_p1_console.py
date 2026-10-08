@@ -70,13 +70,14 @@ def test_alerter_disabled_and_notify_failure_is_logged(caplog):
     assert "notify failed node=c" in caplog.text
 
 
-def test_default_notify_uses_existing_ops_alert_channel(monkeypatch):
+def test_default_notify_stays_on_the_controller(monkeypatch, caplog):
     calls = []
     import src.ops.ops_alert as ops
     monkeypatch.setattr(ops, "notify", lambda kind, text, **kw: calls.append((kind, text, kw)) or True)
+    caplog.set_level(logging.WARNING)
     oa.OfflineAlerter(10).check([_n("c", "offline", NOW - 20 * 60)], now=NOW)
-    assert calls and calls[0][0] == "fleet_node_offline" and calls[0][2]["account_id"] == "c"
-    assert calls[0][2]["source"] == "fleet-controller"
+    assert calls == []
+    assert "fleet node_offline_alert node=c" in caplog.text
 
 
 def test_start_watch_runs_in_background(tmp_path):
@@ -123,7 +124,7 @@ def test_overview_reports_long_offline_nodes(tmp_path, monkeypatch):
         assert a["after_min"] == 15 and a["push"] is True and a["channel"] == "log"
         assert len(a["nodes"]) == 1 and a["nodes"][0]["offline_min"] >= 59
         monkeypatch.setenv("EVENT_INGEST_KEY", "x")
-        assert c.get("/api/fleet/overview", headers={"Authorization": "Bearer op"}).json()["offline_alert"]["channel"] == "ops_alert"
+        assert c.get("/api/fleet/overview", headers={"Authorization": "Bearer op"}).json()["offline_alert"]["channel"] == "log"
     finally:
         set_store(None)
         st.close()

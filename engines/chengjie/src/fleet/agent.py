@@ -21,7 +21,9 @@
     0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
     0.3.20 like_probe 带回每个信号的诊断（无障碍标签、动作条属性、模板分、结构是否命中），只含节点文字属性，不含截图、不含序列号。图标动作条放宽标签 / resource-id / 最左按钮，仍要两个信号一致并且点完复核。手机任务的错误文字在回执前去掉原始序列号，改成壁纸号或打码。公开 latest 仍是 0.3.7。
     0.3.21 找赞前先让信息流停一下（媒体暂停加画面上半部一次轻点），uiautomator 改成写到固定文件再拉回来，失败就短退避重试，最后才用 --compressed 和 stdout。like_diag 多了 dump 报错首行、重试次数、文件还是 stdout、是否 compressed，以及 shape 分和动作条行 bounds。两信号一致才点、like_probe 只定位、dry_run 不碰手机都不变。公开 latest 仍是 0.3.7。
+    0.3.22 机房现场待办：主控按类别下发 site_todo，只在这台电脑弹窗（中英文）。直播机拒绝。公开 latest 仍是 0.3.7。
     0.3.23 去掉 dump 前的上半部轻点，只留媒体暂停。dump 之后如果前台已经离开信息流，按一次返回。like_diag 增加层级计数，并用截图动作条里的节点作为第二路信号；两信号一致才点、点完复核、like_probe 只定位、dry_run 不碰手机都不变。新增 phone_app_restart：只对可操作池里的手机 force-stop 再打开 Facebook，直播机、173 和受保护手机拒绝。登录检查失败时回执带前台包名和 activity。公开 latest 仍是 0.3.7。
+    0.3.24 金丝雀把 0.3.21 的 dump 加固、0.3.22 的机房弹窗、0.3.23 的找赞定位和 phone_app_restart 收成同一份安装包。点赞仍要两信号一致并复核，like_probe 只定位，dry_run 不碰手机。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -97,13 +99,13 @@ from .protocol import (
     PHONE_APP_KINDS, PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
-    TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE,
+    TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE, TASK_SITE_TODO,
     TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.23"
+AGENT_VERSION = "0.3.24"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -1222,6 +1224,8 @@ class NodeAgent:
                 return self._operator_alert_diag()
             if kind == TASK_NET_HEALTH:
                 return self._net_health(target, payload)
+            if kind == TASK_SITE_TODO:
+                return self._site_todo(payload)
             return STATUS_REJECTED, {}, f"unknown_kind:{kind}"
         except Exception as e:
             logger.warning("[agent] task %s %s failed: %s", task.get("task_id"), kind, e)
@@ -1259,6 +1263,17 @@ class NodeAgent:
         except Exception:
             logger.warning("[agent] net_health alert skipped", exc_info=True)
         return status, result, detail
+
+    def _site_todo(self, payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
+        """Write this PC's site list and show the local panel. A live-stream host is refused first."""
+        if self.operator_alert.live_stream:
+            return STATUS_REJECTED, {}, "live_stream_host"
+        from .site_todo import sanitize_site_todo_payload, sanitize_site_todo_result
+
+        clean = sanitize_site_todo_payload(payload)
+        self.operator_alert.apply_todos(clean.get("todos") or [], self.cfg.data)
+        result = sanitize_site_todo_result({"ok": True, "count": len(clean.get("todos") or [])})
+        return STATUS_DONE, result, "ok"
 
     def _operator_alert_diag(self) -> Tuple[str, Dict[str, Any], str]:
         """Read-only redacted operator-alert summary. No serials, no secrets."""

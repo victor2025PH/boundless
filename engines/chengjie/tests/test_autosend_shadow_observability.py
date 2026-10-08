@@ -249,12 +249,22 @@ def test_reconcile_tolerates_no_store_and_store_errors(clean_ledger):
     assert shadow_log.pending_count() == 1                       # 异常不注销，下轮再试
 
 
+def _inside_today(now: float, offset: float) -> float:
+    """把时间戳留在本地日历日里。刚过零点时 now-100 会落到昨天，today 计数变成 0。"""
+    local = time.localtime(now)
+    day_start = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1))
+    candidate = now - offset
+    if candidate >= day_start:
+        return candidate
+    return day_start + max(offset, 1.0)
+
+
 def test_warm_from_disk_restores_counters_and_pending(clean_ledger):
     """重启后：计数器与待终局登记从 JSONL 回填；已有 outcome 的不再 pending。"""
     now = time.time()
-    shadow_log.record(_hold("d-a", ts=now - 100))
-    shadow_log.record(_hold("d-b", reason="self_harm", ts=now - 90))
-    store = _FakeStore({"d-a": {"sent_at": now - 50, "status": "approved", "decided_by": "autosend_worker"},
+    shadow_log.record(_hold("d-a", ts=_inside_today(now, 100)))
+    shadow_log.record(_hold("d-b", reason="self_harm", ts=_inside_today(now, 90)))
+    store = _FakeStore({"d-a": {"sent_at": _inside_today(now, 50), "status": "approved", "decided_by": "autosend_worker"},
                         "d-b": {"sent_at": 0, "status": "pending"}})      # 还在队列里
     assert shadow_log.reconcile_outcomes(store, now=now) == 1
     # 模拟重启：清进程态，再首次读 snapshot
