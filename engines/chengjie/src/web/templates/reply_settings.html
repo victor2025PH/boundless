@@ -1731,6 +1731,7 @@ var RPS_RK_I18N = {
   lockOn: {{ (i18n or {}).get('rps_rk_lock_on', "已锁定：命中就停 AI")|tojson }},
   lockOff: {{ (i18n or {}).get('rps_rk_lock_off', "未锁定：继续回复，只记录")|tojson }},
   lockImplied: {{ (i18n or {}).get('rps_rk_lock_implied', "强制锁定：成人政策「不设限」时未成年必停，这里关不掉")|tojson }},
+  lockStopGate: {{ (i18n or {}).get('rps_rk_lock_stop_gate', "强制锁定：客户说「别再发 / STOP」后一律停发，这是合规红线，这里关不掉")|tojson }},
   lockNa: {{ (i18n or {}).get('rps_rk_lock_na', "—")|tojson }},
   lockSaved: {{ (i18n or {}).get('rps_rk_lock_saved', "🔒 已更新：{n} 类话会让 AI 停下（{names}）")|tojson }},
   lockSavedNone: {{ (i18n or {}).get('rps_rk_lock_saved_none', "🔓 已更新：所有话题都继续回复，只记录")|tojson }},
@@ -4383,9 +4384,10 @@ function rpsRkWordsCell(c){
 }
 function rpsRkLockCell(c){
   if (!c.lockable) return '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.lockNa) + '</span>';
-  if (!c.locked && c.locked_by === 'adult_open'){
-    // 成人不设限 ⇒ 未成年隐含锁定：开关画成开着且不可关（不是运营勾的，POST locks 也不会带它）
-    return '<label class="rps-switch" title="' + rpsEsc(RPS_RK_I18N.lockImplied) + '" style="opacity:.75">'
+  if (!c.locked && (c.locked_by === 'adult_open' || c.locked_by === 'stop_gate')){
+    // 成人不设限 ⇒ 未成年隐含锁定；STOP 硬闸 ⇒ 停联隐含锁定：开关画成开着且不可关（不是运营勾的，POST locks 也不会带它）
+    var tip = c.locked_by === 'stop_gate' ? RPS_RK_I18N.lockStopGate : RPS_RK_I18N.lockImplied;
+    return '<label class="rps-switch" title="' + rpsEsc(tip) + '" style="opacity:.75">'
       + '<input type="checkbox" checked disabled data-rk-lock-implied="' + rpsEsc(c.id) + '">'
       + '<span class="rps-slider"></span></label>';
   }

@@ -1179,6 +1179,17 @@ class DraftService:
                 _sc_log("skipped", conversation_id=conv_id, reason=_frz,
                         extra="stage=inbound_no_draft")
             return None
+        # 智安 P0-2（2026-10-08）STOP 硬闸：会话没冻结，但账号级名单 / 跨账号同 external_id /
+        # 同手机号已停联（重装丢会话标记、换号承接同一客户）→ 同样不起草，只留痕。
+        try:
+            from src.compliance.stop_gate import outbound_check as _sg_check
+            _sg_src = _sg_check(self._store, path="inbox_autodraft", platform=platform,
+                                account_id=account_id, peer=chat_key, conversation_id=conv_id,
+                                config=self._cfg or None)
+        except Exception:
+            _sg_src = ""
+        if _sg_src:
+            return None
 
         # P-2 B（#259 · D-P1）入站年龄闸：now - inbound_ts > inbox.auto_draft.max_inbound_age_hours
         # （默认 72h）→ 不起草（全自动 = 不发；半自动 = 不出草稿），记 `[draft] skip=stale_inbound`

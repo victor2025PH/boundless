@@ -466,7 +466,9 @@ async def test_r88_protocol_autoreply_unlocked_stop_contact_keeps_replying(store
     async def _send(**kw):
         sent.append(kw["text"])
 
-    cfg = {"protocol_autoreply": {"enabled": True}}      # 缺省：无 inbox.risk_grading.locked
+    # 智安 P0-2（2026-10-08）：停联缺省由 STOP 硬闸隐含锁定；「未锁定 → 继续回复」只在应急开关显式关时成立
+    cfg = {"protocol_autoreply": {"enabled": True},      # 无 inbox.risk_grading.locked
+           "compliance": {"stop_gate": {"enabled": False}}}
 
     def _mode(p, a, c):
         from src.inbox.automation_mode import resolve_automation_mode
@@ -485,8 +487,8 @@ async def test_r88_protocol_autoreply_unlocked_stop_contact_keeps_replying(store
 
 
 def test_r88_draft_service_unlocked_stop_contact_and_self_harm_not_frozen(store):
-    """B 线缺省：停联 / 自伤入站 → 普通 L2 稿（不是告别稿、不带硬停标记），会话不冻结、档位不动。"""
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    """B 线未锁定（STOP 硬闸应急开关关）：停联 / 自伤入站 → 普通 L2 稿（不是告别稿、不带硬停标记），会话不冻结、档位不动。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk, cfg={"compliance": {"stop_gate": {"enabled": False}}})
     store.set_automation_mode(CID, "auto_ai", source="human")
     d1 = svc.auto_generate_draft(_conv(), "please stop", automation_mode="auto_ai", enrich=True)
     row = store.get_draft(d1)
