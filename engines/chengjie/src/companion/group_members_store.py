@@ -106,6 +106,16 @@ CREATE TABLE IF NOT EXISTS tg_group_members (
     last_in_at        REAL NOT NULL DEFAULT 0,
     last_out_at       REAL NOT NULL DEFAULT 0,
     stalled_flagged_at REAL NOT NULL DEFAULT 0,
+    last_msg_id       TEXT NOT NULL DEFAULT '',
+    gtouch_state      TEXT NOT NULL DEFAULT '',
+    gtouch_text       TEXT NOT NULL DEFAULT '',
+    gtouch_at         REAL NOT NULL DEFAULT 0,
+    gtouch_account_id TEXT NOT NULL DEFAULT '',
+    gtouch_error      TEXT NOT NULL DEFAULT '',
+    gtouch_msg_id     TEXT NOT NULL DEFAULT '',
+    gtouch_reply_at   REAL NOT NULL DEFAULT 0,
+    gtouch_reply_text TEXT NOT NULL DEFAULT '',
+    gtouch_reply_self INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, user_id)
 );
 -- 开口急停 / 风控熔断 / 开口方式（按号；account_id='*' 表示全部号今天停止开口）。
@@ -118,7 +128,9 @@ CREATE TABLE IF NOT EXISTS tg_outreach_holds (
     updated_at  REAL NOT NULL DEFAULT 0,
     mode        TEXT NOT NULL DEFAULT 'manual',
     last_flood_at REAL NOT NULL DEFAULT 0,
-    next_auto_at  REAL NOT NULL DEFAULT 0
+    next_auto_at  REAL NOT NULL DEFAULT 0,
+    declared_age_days REAL NOT NULL DEFAULT 0,
+    declared_age_at   REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_gm_group ON tg_group_members(group_id, outreach_state);
 CREATE INDEX IF NOT EXISTS idx_gm_acct_day ON tg_group_members(source_account_id, extracted_at);
