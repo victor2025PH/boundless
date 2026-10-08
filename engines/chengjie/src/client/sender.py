@@ -275,7 +275,7 @@ class TelegramSenderMixin:
     # ── 统一发送护栏/节流/记账（A 线文本回复 + 形象照直发共用一套，防图文混发绕过风控） ──
 
     def _presend_blocked(self, *, is_autoreply: bool = False,
-                         peer: Any = None) -> bool:
+                         peer: Any = None, rate_gate: bool = True) -> bool:
         """发送前统一护栏：G1 全局 Kill-Switch + N 线反封号闸门 + 账号限速/熔断 + 营业时段。
 
         返回 True=应跳过本次外发（冻结/被闸门拦）；任何异常一律静默放行（绝不因护栏自身报错阻断发送）。
@@ -290,6 +290,13 @@ class TelegramSenderMixin:
         （B 线/编排器早有），白名单客户的 A 线自动回复照样被 daily_cap 拦；
         ② 拦截日志带目标 peer（「拦的是白名单客户还是别人」从此可定性）。
         不传＝行为与旧版一致（无豁免、日志无 peer）。
+
+        ``rate_gate``（智安 2026-10-08）：最后一道接智安发送限速闸（``compliance.send_rate_gate``，
+        预热期号滚动 24h 超建议上限 → 拦 + 留痕 ``send_rate_audit``；放行即计一条）。A 线自有
+        外发（自动回复 / 主动触达 / 关怀 / 语音 / 形象照）此前不经 ``send_guard``，预热号照发。
+        ``False``＝调用方已在编排器 ``send_guard`` 判过并计数（``send_message_return_id`` 只给
+        ``TelegramCompanionWorker`` 用），这里不重复判、不重复计。白名单豁免（exempt_peers）只豁免
+        反封号闸门额度，**不**豁免限速闸（与 ``send_guard`` 第 4 道同口径）。
         """
         # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 跳过 A 线外发。
         # 默认 enforce=false → 恒放行，零破坏；fail-open。
@@ -359,7 +366,8 @@ class TelegramSenderMixin:
                     self.logger.info(
                         "[send_gate] 白名单豁免命中 telegram:%s → peer=%s"
                         "（本次发送不受额度限制）", _acct, peer)
-                    return False
+                    return self._presend_rate_blocked(
+                        _gcfg, _acct, peer=peer, is_autoreply=is_autoreply, enabled=rate_gate)
                 # N3 修：A 线此前只传 limiter，缺 registry → age_days/banned/status 恒缺省，
                 # 使「号被封禁/移除」无法自动停发（反封号闸门形同虚设）。补传 registry，
                 # 让 banned=meta.banned or status==removed 真正生效（best-effort，取不到不阻断）。
@@ -387,7 +395,42 @@ class TelegramSenderMixin:
                     return True
         except Exception:
             pass
-        return False
+        return self._presend_rate_blocked(
+            _gcfg, _acct, peer=peer, is_autoreply=is_autoreply, enabled=rate_gate)
+
+    def _presend_rate_blocked(self, gcfg: Any, account_id: Any, *, peer: Any = None,
+                              is_autoreply: bool = False, enabled: bool = True) -> bool:
+        """智安发送限速闸（A 线最后一道）：True＝拦。放行即计一条；拦截写审计 + 运营告警。
+
+        来源：入站自动回复＝``ai``；其余 A 线外发＝``auto``（同样归 ``ai``；脚本号 / 脚本 peer /
+        脚本作用域由闸自己识别成 ``script``）。闸缺省开；``compliance.send_rate_gate.enabled: false``
+        或环境变量 ``ZHILIAO_SEND_RATE_GATE=off`` 关。绝不抛（闸异常 → 放行）。
+        """
+        if not enabled:
+            return False
+        try:
+            from src.compliance.send_rate_gate import check as _rate_check
+            _rd = _rate_check(
+                "telegram", str(account_id or "default"),
+                origin="ai" if is_autoreply else "auto",
+                chat_key="" if peer is None else str(peer),
+                config=gcfg, record=True)
+            if _rd.get("allowed", True):
+                return False
+            _reason = f"send_rate_gate:{_rd.get('reason') or 'blocked'}"
+            self.logger.warning(
+                "[send-rate-gate] 账号 %s A 线外发被限速闸拦截 → peer=%s: %s "
+                "(origin=%s used=%s cap=%s)",
+                account_id, peer if peer is not None else "?", _reason,
+                _rd.get("origin"), _rd.get("used"), _rd.get("cap"))
+            try:
+                from src.integrations.shared.send_guard import notify_send_blocked
+                notify_send_blocked("telegram", str(account_id or "default"), _reason)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     async def _presend_pace(self) -> None:
         """发送间隔节流：距上次外发不足 ``reply.split_send.min_interval_seconds`` 则补足。
@@ -1114,7 +1157,7 @@ class TelegramSenderMixin:
         except Exception:
             return False, None
 
-    async def _send_text_guarded(self, chat_id: int, text: str):
+    async def _send_text_guarded(self, chat_id: int, text: str, *, rate_gate: bool = True):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
 
         - ``ok``：是否成功送出（过护栏且未抛；与旧 ``send_message`` 的 bool 语义一致）。
@@ -1133,7 +1176,7 @@ class TelegramSenderMixin:
             return False, None
         try:
             # 统一发送前护栏：G1 Kill-Switch + N 线反封号闸门（与 _send_reply/send_photo 共用）
-            if self._presend_blocked(peer=chat_id):
+            if self._presend_blocked(peer=chat_id, rate_gate=rate_gate):
                 return False, None
             await self._presend_pace()
             if not self.client:
@@ -1197,7 +1240,9 @@ class TelegramSenderMixin:
         对应出站消息行；旧 ``send_message`` 只回 bool、丢弃了 id，导致 companion 手动发送的
         消息无法显示双勾。best-effort：失败/被拦 → ``(False, "")``。
         """
-        ok, _sent = await self._send_text_guarded(chat_id, text)
+        # 唯一调用方＝编排器 TelegramCompanionWorker：编排器出站已过 send_guard（含限速闸第 4 道
+        # 且已计数）→ 这里不再判限速闸，防一条消息计两次 / 刚放行的那条被自己的计数拦下。
+        ok, _sent = await self._send_text_guarded(chat_id, text, rate_gate=False)
         return ok, (str(getattr(_sent, "id", "") or "") if ok else "")
 
     async def send_photo(self, chat_id: Any, photo_path: str,

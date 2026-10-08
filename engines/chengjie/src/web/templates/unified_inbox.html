@@ -14807,6 +14807,9 @@ function _failReasonText(code){
   if(low.indexOf('mic_busy')>=0) return window.T('inbox.failr.voice_mic_busy');
   if(low.indexOf('voice_daily_cap')>=0) return window.T('inbox.failr.voice_daily_cap');
   if(low.indexOf('voice_per_peer')>=0) return window.T('inbox.failr.voice_per_peer');
+  /* 智安发送限速闸：须在 warmup_cap 通配之前（send_rate_gate:warmup_cap 含 warmup_cap） */
+  if(low.indexOf('send_rate_gate:warmup')>=0) return window.T('inbox.failr.rate_warmup');
+  if(low.indexOf('send_rate_gate:script')>=0) return window.T('inbox.failr.rate_script');
   if(low.indexOf('send_gate:daily_cap')>=0||low.indexOf('warmup_cap')>=0) return window.T('inbox.failr.daily_cap');
   if(low.indexOf('send_gate:health_red')>=0) return window.T('inbox.failr.health_red');
   if(low.indexOf('send_gate:banned')>=0) return window.T('inbox.failr.banned');
@@ -16298,6 +16301,8 @@ function _gateMsg(g){
   else if(reason.indexOf('send_gate:health_red')===0) fam='health';
   else if(reason.indexOf('send_gate:banned')===0) fam='banned';
   else if(reason.indexOf('send_gate:')===0) fam='gate';
+  else if(reason.indexOf('send_rate_gate:warmup')===0) fam='rate_warmup';
+  else if(reason.indexOf('send_rate_gate:script')===0) fam='rate_script';
   else if(reason.indexOf('kill_switch')===0) fam='killswitch';
   else if(reason.indexOf('canary')===0) fam='canary';
   else if(reason.indexOf('license')===0) fam='license';
@@ -16309,6 +16314,16 @@ function _gateMsg(g){
       try{ frees=window.Tf('inbox.gate.quota_frees',{time:window.wsFmtTime(g.frees_at,{hour:'2-digit',minute:'2-digit'})}); }catch(_){ frees=''; }
     }
     return window.Tf('inbox.gate.quota',{used:q.used||0,cap:q.cap||0,frees:frees});
+  }
+  if(fam==='rate_warmup'||fam==='rate_script'){
+    // 智安发送限速闸：已发/上限 + 预计恢复时刻（服务端 send_rate_gate.frees_at，滚动 24h）
+    var rt=(g&&g.rate)||{};
+    var rfrees='';
+    if(g&&g.frees_at){
+      try{ rfrees=window.Tf('inbox.gate.rate_frees',{time:window.wsFmtTime(g.frees_at,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}); }catch(_){ rfrees=''; }
+    }
+    if(!rfrees) rfrees=window.T('inbox.gate.rate_frees_unknown');
+    return window.Tf('inbox.gate.'+fam,{used:rt.used||0,cap:rt.cap||0,frees:rfrees});
   }
   if(fam==='killswitch'){
     // P0 2026-08-23 归因三分化：快照带 kill（重启后新后端）→ 按来源分文案 +
@@ -16438,6 +16453,7 @@ function _noteGateBlock(det){
     quota:{used:(det&&det.used)||0, cap:(det&&det.cap)||0},
     frees_at:(det&&det.frees_at)||null,
     kill:(det&&det.kill)||null,
+    rate:(det&&det.rate)||null,
     can_exempt:!!_prev.can_exempt, can_lift:!!_prev.can_lift};
   _renderGateBanner();
 }

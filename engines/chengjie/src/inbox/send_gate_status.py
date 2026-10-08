@@ -147,6 +147,19 @@ def send_gate_snapshot(
                          exc_info=True)
             kill = None
 
+    rate: Optional[Dict[str, Any]] = None
+    if blocked and str(reason or "").startswith("send_rate_gate:"):
+        # 智安发送限速闸：带「已发/上限/预计恢复时刻」，横幅与 409 告诉坐席什么时候恢复
+        try:
+            from src.compliance.send_rate_gate import block_info
+            rate = block_info(p, a, origin=str(origin or "manual"), chat_key=str(chat_key or ""),
+                              config=cfg, registry=registry, now=now)
+            if rate and rate.get("frees_at"):
+                frees_at = float(rate["frees_at"])
+        except Exception:
+            logger.debug("[send-gate-status] 限速闸详情取数失败（回落通用文案）", exc_info=True)
+            rate = None
+
     if not blocked and quota is None:
         return None
     out: Dict[str, Any] = {
@@ -157,6 +170,8 @@ def send_gate_snapshot(
     }
     if kill:
         out["kill"] = kill
+    if rate:
+        out["rate"] = rate
     return out
 
 
@@ -171,6 +186,11 @@ def blocked_reason_key(reason: str) -> str:
         return "banned"
     if r.startswith("send_gate:"):
         return "gate"
+    # 智安发送限速闸（send_guard 第 4 道）：预热期硬上限 / 脚本测试日上限——各自一条人话
+    if r.startswith("send_rate_gate:warmup"):
+        return "rate_warmup"
+    if r.startswith("send_rate_gate:script"):
+        return "rate_script"
     if r.startswith("kill_switch"):
         return "killswitch"
     if r.startswith("canary"):

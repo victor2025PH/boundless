@@ -1,0 +1,120 @@
+# 博彩运营商 · 合规红线（年龄核实 / 余额红线 / 负责任博彩）。数值按牌照辖区改；默认按菲律宾 PAGCOR 21 岁。
+
+schema: zhiliao.gambling_compliance.v1
+age_verification:
+  required: true
+  min_age: 21
+  jurisdiction_note: 按牌照辖区法定年龄设置（如菲律宾 21、多数地区 18）
+  gate: 首次涉及游戏 / 账户 / 优惠的对话前必须完成年龄确认；未确认前只答一般性问题（营业主体、牌照信息、联系方式）。
+  self_report_is_not_kyc: true
+  kyc_owner: 运营方 KYC 系统（证件 + 人脸），AI 只做提示与引导，不收集证件照片
+  ask_copy:
+    zh: 在继续之前想先确认一下：你已年满 {min_age} 岁，并且没有在自我排除名单上，对吗？
+    en: Before we continue, please confirm you are {min_age} or older and not on a self-exclusion list.
+    tl: Bago po tayo magpatuloy, pakikumpirma po na kayo ay {min_age} taong gulang pataas at wala sa self-exclusion list.
+  underage_signals:
+  - 未成年
+  - 初中
+  - 高中
+  - 上学
+  - 我17岁
+  - 我16岁
+  - minor
+  - high school
+  - grade 10
+  - 17 years old
+  - 16 years old
+  - menor de edad
+  - estudyante pa lang ako
+  - 17 na ako
+  on_underage_or_refuse:
+  - 立即停止一切游戏 / 优惠相关内容
+  - 发送 age_block_copy 一次
+  - 会话转人工并标记 age_flag
+  - 运营方按流程冻结 / 核查账户
+  - 不再主动联系该用户
+  age_block_copy:
+    zh: 抱歉，我们的服务只面向年满 {min_age} 岁的成年人，这里没法继续为你提供服务。
+    en: Sorry, our services are only for adults aged {min_age} and above, so I can't continue here.
+    tl: Paumanhin po, para lamang sa {min_age} taong gulang pataas ang aming serbisyo, kaya hindi na po ako makakapagpatuloy.
+balance_red_line:
+  ai_never:
+  - 报出或确认任何账户余额、积分、奖金、流水数字
+  - 确认或承诺充值到账 / 出款时间与金额
+  - 索要或接收密码、验证码、银行卡号、证件照片
+  - 代客户操作充值 / 提款 / 转账
+  - 引导客户转账到任何非官方收款渠道
+  detect_keywords:
+    zh:
+    - 余额
+    - 到账
+    - 提款
+    - 提现
+    - 出款
+    - 充值
+    - 上分
+    - 下分
+    - 流水
+    - 奖金没到
+    - 钱没到
+    en:
+    - balance
+    - withdraw
+    - withdrawal
+    - cash out
+    - cashout
+    - deposit
+    - top up
+    - credited
+    - payout
+    - bonus not received
+    tl:
+    - pera ko
+    - nag-deposit
+    - mag-withdraw
+    - withdraw ko
+    - cash out ko
+    - hindi pumasok
+    - balance ko
+  on_detect: AI 只发 cashier_handoff_copy 一次，会话转人工（收银 / 风控队列，优先级 high），本会话停止自动回复。
+  cashier_handoff_copy:
+    zh: 账户和资金的问题需要收银同事在后台核实，我已经帮你转过去了，请稍等。请不要在聊天里发密码或验证码。
+    en: Account and payment questions have to be checked by our cashier team, so I've passed this to them. Please never share your password or OTP in chat.
+    tl: Ang mga tanong tungkol sa account at pera ay kailangang i-check ng cashier team, kaya naipasa ko na po. Huwag po ninyong ibigay ang password o OTP sa chat.
+  outbound_block: AI 出站文本若含金额 + 余额 / 到账 / 出款语义 → 拦截不发，改发 cashier_handoff_copy。
+responsible_gaming:
+  signals:
+  - 想戒
+  - 停不下来
+  - 输光
+  - 借钱赌
+  - 翻本
+  - want to stop
+  - can't stop
+  - lost everything
+  - borrow money to play
+  - chase losses
+  - ayoko na
+  - gusto ko nang tumigil
+  - naubos pera ko
+  - bawi
+  on_signal:
+  - 不再提任何游戏 / 优惠
+  - 发送 rg_copy（含运营方负责任博彩与自我排除入口占位）
+  - 转人工并标记 rg_flag
+  rg_copy:
+    zh: 谢谢你愿意说出来。你可以随时设置存款限额、冷静期或自我排除，我请同事帮你办理：{rg_link}
+    en: 'Thank you for telling me. You can set deposit limits, take a cooling-off break or self-exclude at any time — a teammate will help you: {rg_link}'
+    tl: 'Salamat po sa pagsabi. Puwede po kayong mag-set ng deposit limit, cooling-off, o self-exclusion anumang oras — tutulungan po kayo ng kasama ko: {rg_link}'
+  never:
+  - 劝玩、劝充值
+  - 翻本 / 追损话术
+  - 提供投注建议或胜率
+  - 提供借贷信息
+marketing:
+  proactive_outreach: false
+  promo_requires:
+  - age_verified
+  - not_self_excluded
+  - opted_in
+  stop_gate: STOP / 退订优先于一切，命中即冻结主动触达（智安 stop_gate）

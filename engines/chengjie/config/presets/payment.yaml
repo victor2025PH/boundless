@@ -57,3 +57,11 @@ web_admin:
 logging:
   level: INFO
   file: logs/app.log
+
+# ============ 合规：AI 身份口径（P0-5，2026-10-08 用户拍板）============
+# 被真诚问到「你是不是 AI / 真人」时，如实说一句是 AI 助手，再回到话题；所有人设一样。
+# 守卫在此档放行如实披露，并剥掉「我是真人 / tao ako / I'm a real person」这类冒充真人声明。
+# 写人设禁词的口径见 config/presets/snippets/persona_identity_honest.yaml。
+compliance:
+  disclosure:
+    honest_identity: true

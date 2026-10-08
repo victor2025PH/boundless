@@ -934,83 +934,42 @@ def register_kb_routes(app, ctx):
         与 ``ai_client.embed`` 同源：优先用独立嵌入端点 ``ai.embedding_base_url``
         （+ ``embedding_api_key`` / ``embedding_model``，如 LAN bge-m3 / 本机 Ollama），
         使 KB 向量与情景记忆向量落在**同一向量空间**；未配独立端点才回落对话端点。
-        历史坑：曾固定读 ``ai.base_url``（DeepSeek 对话端点、无 embedding 能力）→ KB
-        embed-all 打错端点。
+        端点选择与请求体收在 ``src.utils.kb_embed_job.call_embedding_api``（CLI 共用）。
         """
-        import httpx as _httpx
-        ai_cfg = config_manager.config.get("ai", {})
-        if not texts:
-            return []
-        emb_base = (ai_cfg.get("embedding_base_url") or "").strip().rstrip("/")
-        if emb_base:
-            base_url = emb_base if emb_base.endswith("/v1") else emb_base + "/v1"
-            api_key = (ai_cfg.get("embedding_api_key") or ai_cfg.get("api_key") or "ollama").strip()
-            model = ai_cfg.get("embedding_model", "bge-m3")
-        else:
-            base_url = (ai_cfg.get("base_url", "https://api.deepseek.com")).rstrip("/")
-            api_key = ai_cfg.get("api_key", "")
-            model = ai_cfg.get("embedding_model", "text-embedding-v2")
-        if not api_key:
-            api_key = "ollama"  # 本地 Ollama 无需鉴权，占位即可
-        try:
-            async with _httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{base_url}/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}",
-                             "Content-Type": "application/json"},
-                    json={"model": model, "input": texts},
-                )
-                data = resp.json()
-                items = sorted(data["data"], key=lambda x: x["index"])
-                return [item["embedding"] for item in items]
-        except Exception as _e:
-            logger.warning("Embedding API 调用失败: %s", _e)
-            return []
+        from src.utils.kb_embed_job import call_embedding_api
+        return await call_embedding_api(config_manager.config.get("ai", {}) or {}, texts)
 
     def _build_embed_text(entry: dict) -> str:
-        """将条目字段拼接成用于向量化的文本（字段权重体现在顺序与重复）"""
-        triggers = entry.get("triggers", "[]")
-        if isinstance(triggers, str):
-            try:
-                triggers = " ".join(json.loads(triggers))
-            except Exception:
-                pass
-        parts = [
-            str(triggers) * 2,              # 触发词权重加倍
-            entry.get("title", "") * 1,
-            entry.get("scenario", ""),
-            entry.get("steps", ""),
-            entry.get("example_reply_zh", ""),
-        ]
-        return " ".join(p for p in parts if p).strip()[:800]  # 截断防超 token
+        """条目 → 向量化文本；唯一口径在 ``kb_embed_job.build_embed_text``（预热 / CLI 共用）。"""
+        from src.utils.kb_embed_job import build_embed_text
+        return build_embed_text(entry)
 
     async def _run_embed_all():
-        """后台任务：增量向量化所有未处理条目（批量 20 条/次）"""
-        pending = _kb_store.get_entries_without_embedding()
+        """后台任务：增量向量化所有「启用且无向量」的条目（批 20，批失败逐条重试）。"""
+        from src.utils.kb_embed_job import embed_pending_entries
+        pending_n = len(_kb_store.get_entries_without_embedding())
         _embed_progress.update({
-            "running": True, "total": len(pending),
-            "done": 0, "failed": 0, "msg": f"开始向量化 {len(pending)} 条…"
+            "running": True, "total": pending_n,
+            "done": 0, "failed": 0, "msg": f"开始向量化 {pending_n} 条…"
         })
-        batch_size = 20
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i: i + batch_size]
-            texts  = [_build_embed_text(e) for e in batch]
-            vectors = await _call_embed_api(texts)
-            if not vectors or len(vectors) != len(batch):
-                _embed_progress["failed"] += len(batch)
-                _embed_progress["msg"] = f"第 {i} 批 Embedding API 调用失败"
-            else:
-                for entry, vec in zip(batch, vectors):
-                    _kb_store.set_single_embedding(entry["id"], vec)
-                _embed_progress["done"] += len(batch)
-                _embed_progress["msg"] = (
-                    f"已完成 {_embed_progress['done']}/{_embed_progress['total']}"
-                )
-        _embed_progress["running"] = False
-        _embed_progress["msg"] = (
-            f"完成！成功 {_embed_progress['done']} 条，"
-            f"失败 {_embed_progress['failed']} 条"
-        )
+
+        def _on_progress(st: dict) -> None:
+            _embed_progress["done"] = st.get("done", 0)
+            _embed_progress["failed"] = st.get("failed", 0)
+            _embed_progress["msg"] = f"已完成 {st.get('done', 0)}/{pending_n}"
+
+        try:
+            st = await embed_pending_entries(_kb_store, _call_embed_api, progress=_on_progress)
+            _embed_progress["done"] = st["done"]
+            _embed_progress["failed"] = st["failed"]
+            _embed_progress["msg"] = (
+                f"完成！成功 {st['done']} 条，失败 {st['failed']} 条"
+            )
+        except Exception as _e:
+            logger.warning("[kb] embed-all 任务异常: %s", _e)
+            _embed_progress["msg"] = f"向量化异常：{type(_e).__name__}"
+        finally:
+            _embed_progress["running"] = False
 
     @app.post("/api/kb/embed-all")
     async def api_kb_embed_all(request: Request, background_tasks: BackgroundTasks):
