@@ -32,6 +32,12 @@ def _aside(html: str) -> str:
     return m.group(0)
 
 
+def _enable_matrix_nav(config_manager) -> None:
+    """真机矩阵导航缺省隐藏（ui_visibility.matrix_nav）。渠道高亮只在打开时成立。"""
+    vis = config_manager.config.setdefault("ui_visibility", {})
+    vis["matrix_nav"] = True
+
+
 # ── 1) 渠道中心：侧栏在场 + 当前渠道高亮 ────────────────────────────────
 @pytest.mark.parametrize(
     "channel,path",
@@ -40,7 +46,8 @@ def _aside(html: str) -> str:
      ("messenger", "/workspace/channels/messenger"),
      ("whatsapp", "/workspace/channels/whatsapp")],
 )
-def test_channel_center_renders_sidebar(auth_client, channel, path):
+def test_channel_center_renders_sidebar(auth_client, config_manager, channel, path):
+    _enable_matrix_nav(config_manager)
     r = auth_client.get(path)
     assert r.status_code == 200, (channel, r.status_code)
     html = r.text
@@ -68,13 +75,14 @@ def test_inbox_has_no_sidebar(auth_client):
 
 
 # ── 3) 菜单单一事实源＝nav_schema ───────────────────────────────────────
-def test_sidebar_items_come_from_nav_schema(auth_client):
+def test_sidebar_items_come_from_nav_schema(auth_client, config_manager):
     """每条菜单都得自报来源，且 schema 来源的 href 必须真在 NAV_ITEMS 里。
 
     来源标记（data-nav）三档：schema=nav_schema 菜单项 / domain=域 manifest 动态页
     （如 payment 域的 /channels）/ locked=档位锁定项跳会员中心。没有标记的 <a>
     就是有人手写进来的第二份菜单事实源。
     """
+    _enable_matrix_nav(config_manager)
     from src.web.nav_schema import NAV_ITEMS
 
     body = _aside(auth_client.get("/workspace/channels/telegram").text)

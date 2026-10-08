@@ -4,7 +4,7 @@
 - 日常 Taglish / 宿务入站判 tl（宿务带 variant=ceb），英文、印尼文、中文夹英文词不误判；
 - 「OK 翻语言」护栏不变（极短英文 / 客套词仍 unknown），但「po」「Sige po」算证据；
 - 新入站带可信语种、会话还是 unknown → 实时补写；已有值不覆写；
-- 回填脚本只读打开 inbox.db，只出计划和带护栏的 SQL。
+- 回填脚本默认只读打开 inbox.db。``--apply`` 才补 unknown/空语言，不改已有的 en→tl 建议。
 """
 from __future__ import annotations
 
@@ -269,4 +269,8 @@ def test_backfill_opens_db_read_only(store, tmp_path):
         conn.execute("UPDATE conversations SET language='x'")
     conn.close()
     src = (ENGINE / "scripts" / "backfill_conversation_language.py").read_text(encoding="utf-8")
-    assert "--apply" not in src
+    # 计划阶段仍是 mode=ro。--apply 是另开的读写路径，只补 unknown（见 test_session_lang_apply_zhiyu.py）。
+    assert "mode=ro" in src
+    build_body = src.split("def build_plan", 1)[1].split("def apply_unknown_fills", 1)[0]
+    assert "_open_ro" in build_body and "commit(" not in build_body
+    assert "--apply" in src and "tl_upgrade_suggestions" in src

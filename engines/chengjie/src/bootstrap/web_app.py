@@ -910,6 +910,9 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         _cfg_root, domain_files=_domain_files, overrides=_gloss_overrides,
                     )
                     _engines = build_engines(_tr_cfg, assistant.ai_client)
+                    from src.ai.translation_engines import free_tier_guard_enabled
+                    _free_tier_guard = free_tier_guard_enabled(
+                        _tr_cfg.get("free_tier_zero_cost", "legacy"))
                     # K：引擎置信度智能切换（默认关 → min_confidence=0 行为不变）
                     _conf_sw = (_tr_cfg.get("engines") or {}).get("confidence_switch") or {}
                     _min_conf = (
@@ -945,13 +948,15 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         per_lang_order=_per_lang,
                         semantic_embed_fn=_sem_fn,
                         semantic_min_similarity=_sem_min,
+                        free_tier_zero_cost=_free_tier_guard,
                     )
                     assistant.logger.info(
-                        "Phase C/P56 服务已预置（意图LLM=%s, 翻译记忆=%s, 引擎=%s, 术语=%d, 保护词=%d）",
+                        "Phase C/P56 服务已预置（意图LLM=%s, 翻译记忆=%s, 引擎=%s, 术语=%d, 保护词=%d, 免费档零成本=%s）",
                         bool(_ia_cfg.get("use_llm", False)),
                         _tm_store is not None,
                         "→".join(e.name for e in _engines),
                         len(_glossary.terms), len(_glossary.protect),
+                        _free_tier_guard,
                     )
 
                     # ── Phase B：可选统计语种检测（缺库自动跳过，仅精修含糊拉丁） ──
