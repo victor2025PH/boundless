@@ -155,3 +155,15 @@ engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
 engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
 website/lib/seo.ts:generic-api-key:79
 website\lib\seo.ts:generic-api-key:79
+
+# 2026-10-08 智核 ci-baseline：集成分支合入 #66-#76 后行号漂移/新增的 4 处误报（已人工核对）：
+#   workspace_base.html 4335 = localStorage 键名 LS_KEY；test_deferred_outbox_routes 64 = 假回复文本 fixture；
+#   test_diagnostic_bundle 16 = 测脱敏用的假 sk- 串；test_official_webhook_stats 302 = 假 verify token fixture。只登记指纹，规则不动。
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4335
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4335
+engines/chengjie/tests/test_deferred_outbox_routes.py:generic-api-key:64
+engines\chengjie\tests\test_deferred_outbox_routes.py:generic-api-key:64
+engines/chengjie/tests/test_diagnostic_bundle.py:generic-api-key:16
+engines\chengjie\tests\test_diagnostic_bundle.py:generic-api-key:16
+engines/chengjie/tests/test_official_webhook_stats.py:generic-api-key:302
+engines\chengjie\tests\test_official_webhook_stats.py:generic-api-key:302
