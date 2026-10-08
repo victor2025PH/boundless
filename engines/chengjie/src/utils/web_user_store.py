@@ -305,6 +305,13 @@ def _hash_pw(password: str, salt: bytes = None) -> tuple:
     return salt, dk
 
 
+def _user_dict(row) -> Dict:
+    """web_users 行 → dict。代运营工作区第一段：不带新加的 home_workspace_id（不改现有输出）。"""
+    d = dict(row)
+    d.pop("home_workspace_id", None)
+    return d
+
+
 class WebUserStore:
     _DDL = """
     CREATE TABLE IF NOT EXISTS web_users (
@@ -376,7 +383,27 @@ class WebUserStore:
             )
         except sqlite3.OperationalError:
             pass  # 列已存在
+        self._migrate_agency_ws()
         self._conn.commit()
+
+    def _migrate_agency_ws(self) -> None:
+        """代运营工作区第一段（2026-10-08）：登录默认进入的工作区 + 成员表（第三段才启用）。
+        verify / get_user 对外 dict 不带 home_workspace_id（不改现有输出）。幂等。"""
+        try:
+            self._conn.execute(
+                "ALTER TABLE web_users ADD COLUMN home_workspace_id TEXT NOT NULL DEFAULT 'default'"
+            )
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS workspace_members ("
+            " username TEXT NOT NULL,"
+            " workspace_id TEXT NOT NULL,"
+            " ws_role TEXT NOT NULL DEFAULT 'agent',"
+            " perms_json TEXT NOT NULL DEFAULT '',"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " PRIMARY KEY (username, workspace_id))"
+        )
 
     # ── Session 管理 ──────────────────────────────────────────
     # #186（2026-09-05）僵尸会话：桌面壳每次启动走 auth_token 直登 → 每次 INSERT 一行、
@@ -672,14 +699,14 @@ class WebUserStore:
                 (time.strftime("%Y-%m-%d %H:%M:%S"), row["id"])
             )
             self._conn.commit()
-            return dict(row)
+            return _user_dict(row)
 
     def get_user(self, username: str) -> Optional[Dict]:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM web_users WHERE username=?", (username,)
             ).fetchone()
-        return dict(row) if row else None
+        return _user_dict(row) if row else None
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         with self._lock:

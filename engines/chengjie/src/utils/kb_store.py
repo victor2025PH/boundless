@@ -435,6 +435,13 @@ class _LRUCache:
         self._order.clear()
 
 
+def _kb_dict(row) -> Dict:
+    """kb_entries 行 → 对外 dict。代运营工作区第一段：剥掉新加的 workspace_id（导出 / API 不变）。"""
+    d = dict(row)
+    d.pop("workspace_id", None)
+    return d
+
+
 class KnowledgeBaseStore:
     """知识库主类，线程安全（每次操作独立 connection）"""
 
@@ -645,7 +652,21 @@ class KnowledgeBaseStore:
                 c.execute("CREATE INDEX IF NOT EXISTS idx_kb_source ON kb_entries(source)")
             except sqlite3.OperationalError:
                 pass
+            self._migrate_agency_ws(c)
             self._backfill_sources(c)
+
+    @staticmethod
+    def _migrate_agency_ws(c) -> None:
+        """代运营工作区第一段（2026-10-08）：条目归属列，旧行=default；对外 dict 剥掉（_kb_dict）。幂等。"""
+        try:
+            c.execute("ALTER TABLE kb_entries ADD COLUMN workspace_id "
+                      "TEXT NOT NULL DEFAULT 'default'")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS idx_kb_workspace ON kb_entries(workspace_id)")
+        except sqlite3.OperationalError:
+            pass
 
     def _backfill_sources(self, c) -> None:
         """一次性回填存量条目的 source（kb_meta 打标，幂等）。
@@ -902,7 +923,7 @@ class KnowledgeBaseStore:
                     f"{_vendor_sql}",
                     entry_ids,
                 ).fetchall()
-                row_map = {r["id"]: dict(r) for r in rows}
+                row_map = {r["id"]: _kb_dict(r) for r in rows}
                 for doc_id, score in ranked:
                     if doc_id in row_map:
                         entry = row_map[doc_id]
@@ -1263,7 +1284,7 @@ class KnowledgeBaseStore:
             row = c.execute("SELECT * FROM kb_entries WHERE id=?", (entry_id,)).fetchone()
             if not row:
                 return None
-            entry = dict(row)
+            entry = _kb_dict(row)
             trans = c.execute(
                 "SELECT * FROM kb_translations WHERE entry_id=?", (entry_id,)
             ).fetchall()
@@ -1291,7 +1312,7 @@ class KnowledgeBaseStore:
                 f"SELECT * FROM kb_entries {where} ORDER BY category, title",
                 params
             ).fetchall()
-        entries = [dict(r) for r in rows]
+        entries = [_kb_dict(r) for r in rows]
         if search:
             q_toks = set(_tokenize(search))
             needle = search.strip().lower()
@@ -1784,7 +1805,7 @@ class KnowledgeBaseStore:
                 "ORDER BY created_at ASC",
                 (days,)
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_kb_dict(r) for r in rows]
 
     def bulk_disable(self, entry_ids: List[str]) -> int:
         with self._conn() as c:
@@ -1990,7 +2011,7 @@ class KnowledgeBaseStore:
         """
         where = "" if include_disabled else "WHERE enabled=1 "
         with self._conn() as c:
-            entries = [dict(r) for r in c.execute(
+            entries = [_kb_dict(r) for r in c.execute(
                 f"SELECT * FROM kb_entries {where}ORDER BY category, created_at"
             ).fetchall()]
             error_codes = [dict(r) for r in c.execute(

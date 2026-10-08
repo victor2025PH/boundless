@@ -476,7 +476,8 @@ def _read_conversations_ro(db_path: Path, limit: int) -> List[Dict[str, Any]]:
             "SELECT * FROM conversations ORDER BY last_ts DESC LIMIT ?",
             (max(1, int(limit)),),
         ).fetchall()
-        return [dict(r) for r in rows]
+        # 代运营工作区第一段：conversations.workspace_id 不进现有输出
+        return [{k: r[k] for k in r.keys() if k != "workspace_id"} for r in rows]
     finally:
         conn.close()
 
