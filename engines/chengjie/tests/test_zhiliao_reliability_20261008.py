@@ -388,3 +388,18 @@ def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
                                       text="关闭后", ts=t + 9))
     assert {r["platform_msg_id"]: r for r in store.list_recent_messages(cid, limit=20)}["d5"]["sent_by"] == "phone"
     store.close()
+
+
+def test_orchestrator_mirror_follows_send_rate_gate_script_scope():
+    """与智安 X-Send-Origin: script / in_script_scope() 对齐：脚本链镜像出站归 script。"""
+    from src.compliance.send_rate_gate import reset_script_scope, set_script_scope
+    from src.integrations.account_orchestrator import _sent_by_for_origin
+    assert _sent_by_for_origin("auto") == "ai" and _sent_by_for_origin("manual") == "agent"
+    tok = set_script_scope(True)
+    try:
+        assert _sent_by_for_origin("auto") == "script"
+        assert _sent_by_for_origin("manual") == "script"
+        assert _sent_by_for_origin("system") == "system"
+    finally:
+        reset_script_scope(tok)
+    assert _sent_by_for_origin("auto") == "ai"
