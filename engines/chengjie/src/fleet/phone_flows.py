@@ -96,6 +96,9 @@ _FB_FEED_OPEN_BUDGET_SEC = 9.0
 _FB_FEED_OPEN_QUIET_SEC = 3.0
 _FB_FEED_TOP_SWIPES = 2
 _FB_FEED_TOP_SETTLE_SEC = 3.0
+# After a feed swipe, let the fling finish before the same-frame pair.
+_FB_LIKE_SWIPE_SETTLE_SEC = 1.75
+_FB_LIKE_FRAME_TRIES = 3
 # am start on these MIUI phones returns success while the old app is still in
 # front. One read at 0.5s is not a decision. Poll, then fall back to Home+icon.
 _FB_FOREGROUND_POLL_SEC = 9.0
@@ -1001,6 +1004,54 @@ class PhoneFlows:
 
         return vision_stack_ready(ocr=self._ocr)
 
+    def _read_hierarchy(self, ops: Any, serial: str, *, settle: bool, recover: bool) -> Tuple[str, Any]:
+        reader = getattr(ops, "read_ui_hierarchy", None)
+        if not callable(reader):
+            return "", None
+        try:
+            try:
+                got = reader(serial, settle=settle, recover=recover)
+            except TypeError:
+                got = reader(serial)
+        except Exception:
+            return "", None
+        if isinstance(got, dict):
+            return str(got.get("xml") or ""), got
+        if isinstance(got, str):
+            return got, None
+        return "", None
+
+    def _same_frame(self, ops: Any, run: Any, serial: str, width: int, height: int):
+        """Dump, screenshot, dump again. Keep the frame only when the bar holds still.
+
+        A drifting pair is retried. After the retries the screenshot stays and
+        the hierarchy is dropped, so a moved navigation row cannot confirm a tap.
+        """
+        from .like_locate import SAME_FRAME_MAX_PX, action_bar_delta_px
+
+        raw = b""
+        hierarchy = ""
+        meta = None
+        skew_ms = 0
+        delta = 0
+        for grab in range(_FB_LIKE_FRAME_TRIES):
+            before_xml, _before_meta = self._read_hierarchy(
+                ops, serial, settle=True, recover=False,
+            )
+            run(TASK_PHONE_SCREENSHOT, {})
+            shot_at = ops._clock()
+            raw = ops.last_raw(serial)
+            after_xml, after_meta = self._read_hierarchy(
+                ops, serial, settle=False, recover=True,
+            )
+            skew_ms = int(max(0.0, ops._clock() - shot_at) * 1000)
+            delta = action_bar_delta_px(before_xml, after_xml, width, height)
+            if delta <= SAME_FRAME_MAX_PX:
+                return raw, self._text_boxes(raw), after_xml, after_meta, skew_ms, delta
+            hierarchy = ""
+            meta = after_meta
+        return raw, self._text_boxes(raw), hierarchy, meta, skew_ms, delta
+
     def _execute_facebook_like(self, serial: str, p: Dict[str, Any], ui: Dict[str, Any],
                                ops: Any) -> Tuple[str, Dict[str, Any], str]:
         """Launch Facebook, scroll the feed, tap Like only when sure.
@@ -1100,27 +1151,16 @@ class PhoneFlows:
                 last_diag: Optional[Dict[str, Any]] = None
                 boxes: List[Dict[str, Any]] = []
                 for attempt in range(budget + 1):
-                    run(TASK_PHONE_SCREENSHOT, {})
-                    raw = ops.last_raw(serial)
-                    boxes = self._text_boxes(raw)
-                    # Dump is read-only. A phone that refuses it still has the
-                    # screenshot signals (structure + template / silhouette).
-                    hierarchy = ""
-                    dump_meta = None
-                    reader = getattr(ops, "read_ui_hierarchy", None)
-                    if callable(reader):
-                        try:
-                            got = reader(serial)
-                        except Exception:
-                            got = ""
-                        if isinstance(got, dict):
-                            hierarchy = str(got.get("xml") or "")
-                            dump_meta = got
-                        elif isinstance(got, str):
-                            hierarchy = got
+                    if attempt > 0:
+                        ops.add_dwell(serial, _FB_LIKE_SWIPE_SETTLE_SEC)
+                    raw, boxes, hierarchy, dump_meta, skew_ms, bar_delta = self._same_frame(
+                        ops, run, serial, width, height,
+                    )
                     loc = locate_like_row(raw, boxes, hierarchy)
                     if isinstance(loc.get("diag"), dict):
                         last_diag = loc["diag"]
+                        last_diag["capture_skew_ms"] = int(skew_ms)
+                        last_diag["action_bar_delta_px"] = int(bar_delta)
                         _merge_dump_meta(last_diag, dump_meta)
                     if loc.get("post"):
                         saw_post = True

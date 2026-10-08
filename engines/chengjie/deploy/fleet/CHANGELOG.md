@@ -1,5 +1,16 @@
 # 智拓群控节点更新日志
 
+## 0.3.29
+点赞找按钮改成和截图同一时刻。滑动之后先停 1.75 秒，再按「抓结构 → 截图 → 再抓结构」。两次动作条（Comment / Share / Send 那一行）的位置差不超过 8 像素才用这一帧，否则重抓，最多 3 次。用尽了就丢掉这份结构，只留截图，避免滑动惯性和自动播放把导航栏送进来凑成两路。
+
+结构只在那一行上下 40 像素里找赞，顶部快拍栏和底部导航栏排除。图标旁边带文字的按钮可以和它的字并成一个槽。Send（以及 Ipadala / 发送 / 傳送）和 Share 一样算动作条成员，所以只有 Comment+Send、没有 Share 的时候，仍能按等距把 Like 推到 Comment 左边。
+
+模板增加一组方形线框（和实心）拇指，尺寸按屏幕宽度从 20 到 72，720 宽对应大约 40。推断位置的 ±40 像素窗口里做多尺度匹配。模板仍打进安装包，运行时不读节点上的外部图。
+
+`like_diag` 在有推断位置时报告窗口内的模板分和 `template_offset_px`，另外带 `capture_skew_ms`（截图到所用那次结构抓取结束的毫秒）和 `action_bar_delta_px`。不再把全屏最高分或最上面那一行当成这次的结果。
+
+点赞仍要两路独立信号一致（窗口内截图对上 + 结构/推断位置一致）或高模板分，点完仍要复核。±40 像素、频率上限（like 6/时 40/日，comment 3/时 15/日，follow 3/时 15/日，post 1/时 4/日）、08:00–22:00（菲律宾时间）、`dry_run` 不碰手机、日志只写壁纸号或 `[redacted]` 都不变。0.3.25 的自动派发排除和 0.3.13 的 `push_config` 不变。公开下载页的 latest 仍是 0.3.7。
+
 ## 0.3.28
 Facebook 是否安装改看 `pm path` 的真实输出。真机打印的是安装路径，例如 `package:/data/app/~~.../com.facebook.katana-.../base.apk`，不是字面量 `package:com.facebook.katana`。0.3.27 用后者判断，每台都被当成没装，回执 `fb_not_installed_or_store_redirect`，不亮屏、不 `am start`、也不退回点图标。现在要返回码是 0，并且去掉空白后的输出以 `package:` 开头、后面还有路径。`com.facebook.katana` 和 `com.facebook.lite` 都这样认。两个都没有（空输出，或返回码不是 0，哪怕文本看起来像路径）才回执 `fb_not_installed_or_store_redirect`。
 

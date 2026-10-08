@@ -448,25 +448,30 @@ class PhoneOps:
     def last_raw(self, serial: str) -> bytes:
         return self._last_raw.get(serial, b"")
 
-    def read_ui_hierarchy(self, serial: str) -> Dict[str, Any]:
-        """Read a window hierarchy, settling autoplay first.
+    def read_ui_hierarchy(self, serial: str, settle: bool = True, recover: bool = True) -> Dict[str, Any]:
+        """Read a window hierarchy. Autoplay is settled first unless ``settle`` is false.
 
         The caller is already inside ``session`` and holds this phone's lock.
         A failure is not an error: the Like search then uses the screenshot.
         The dict is ``xml`` (parseable document, or the last raw text when
         nothing parsed), ``error`` (first dump-error line, not yet scrubbed),
         ``attempts``, ``via`` (``file`` or ``stdout``), and ``compressed``.
+        ``settle=False`` skips the media pause so a second dump can sit
+        immediately after a screenshot. ``recover=False`` skips the Back
+        press so that check can wait until the paired dump finishes.
         """
         blank = {"xml": "", "error": "", "attempts": 0, "via": "", "compressed": False}
         try:
             adb = self._ready_adb()
         except PhoneOpError:
             return dict(blank)
-        self._settle_autoplay(adb, serial)
+        if settle:
+            self._settle_autoplay(adb, serial)
         try:
             return self._dump_plan(adb, serial)
         finally:
-            self._recover_off_feed(adb, serial)
+            if recover:
+                self._recover_off_feed(adb, serial)
 
     def _dump_plan(self, adb: str, serial: str) -> Dict[str, Any]:
         plan = (

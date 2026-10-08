@@ -28,6 +28,7 @@
     0.3.26 打开 Facebook 按包名 am start，前台已是 Facebook 时不回桌面；点进 Telegram、Play 商店或空位报 wrong_app_launched / fb_not_installed_or_store_redirect，不再报未登录。推断出来的 Like 只在 ±40px 且动作条行内接受截图落点。现场面板计划任务以交互用户运行；服务在会话 0 时用活动控制台会话拉起，会话 0 里启动成功不算已显示。已领取过期未回执的任务记 failed/timeout。横屏先尝试锁竖屏，否则报 landscape_orientation。公开 latest 仍是 0.3.7。
     0.3.27 am start 之后轮询前台约 9 秒，启动前先亮屏并划开锁屏；超时前台仍不是 Facebook 时回退到 Home 再点图标，两种都失败才回执。解析不到包名回执 fb_not_installed_or_store_redirect，不再报 adb_exit_1。force-stop 复探只对 app_not_ready 和超时，已经在信息流里（含 like_row_not_found）不重启；主控和节点用同一条判断。面板启动时若锁被会话 0 的旧进程占着，结束该进程并在当前控制台会话拉起；Run 键读写都走 64 位注册表视图，32 位视图里已有的键也算存在。公开 latest 仍是 0.3.7。
     0.3.28 `pm path` 以返回码 0 且输出以 package: 开头认定已安装（真机打印的是安装路径，不是 package:包名）。katana 和 lite 都认，两个都没有才回执 fb_not_installed_or_store_redirect。登录计划任务拉起的面板把自己的会话号写进 panel_session.json，诊断不再一直是 -1。Run 键改由注册表 API 写入 64 位视图并读回，服务启动时补写一次（直播机和 173 不写）；诊断仍只报告真实查询结果。公开 latest 仍是 0.3.7。
+    0.3.29 点赞同帧：滑动后停 1.75 秒，再按「抓结构→截图→再抓结构」，两次动作条位置差不超过 8px 才用这一帧。结构只在 Comment/Share/Send 那一行的 ±40px 内找赞，排除顶栏和底栏。Send 与 Share 一样算动作条成员。方形线框模板按屏幕宽度多尺度内置匹配。like_diag 报窗口内模板分、偏移和截图与结构的时间差。两信号门槛、±40、频率、dry_run、0.3.25 派发门、0.3.13 push_config 不变。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -110,7 +111,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.28"
+AGENT_VERSION = "0.3.29"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).

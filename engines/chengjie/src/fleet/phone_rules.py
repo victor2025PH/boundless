@@ -271,6 +271,23 @@ def _diag_list(value: Any) -> list:
     return out
 
 
+def _diag_bounded_int(value: Any, hi: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, min(hi, value))
+
+
+def _diag_offset(value: Any) -> list:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return [0, 0]
+    out = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            return [0, 0]
+        out.append(max(-80, min(80, item)))
+    return out
+
+
 def _clamp_count(value: Any, hi: int = 100000) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
@@ -463,7 +480,10 @@ def _sanitize_like_diag(raw: Any) -> Any:
             "resource_ids": _diag_list(bar_in.get("resource_ids")),
         },
         "template_score": score_out,
+        "template_offset_px": _diag_offset(raw.get("template_offset_px")),
         "template_matched": raw.get("template_matched") is True,
+        "capture_skew_ms": _diag_bounded_int(raw.get("capture_skew_ms"), 120_000),
+        "action_bar_delta_px": _diag_bounded_int(raw.get("action_bar_delta_px"), 9999),
         "structure_matched": raw.get("structure_matched") is True,
         "structure_bounds": bounds_row if _BOUNDS_RE.fullmatch(bounds_row) else "",
         "shape_matched": raw.get("shape_matched") is True,
