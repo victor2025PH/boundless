@@ -615,8 +615,12 @@ class TelegramSenderMixin:
                                     msg_id: Any = "",
                                     media_type: str = "",
                                     media_ref: str = "",
-                                    mirror_text: Optional[str] = None) -> None:
+                                    mirror_text: Optional[str] = None,
+                                    sent_by: str = "") -> None:
         """发送成功后：出站镜像到坐席台（N4b）+ 记入 contacts 的外发互动（Q3）。
+
+        ``sent_by``（P0-4，2026-10-08）：镜像行发送方（A 线自动回复传 ``ai``）；空＝不透传，
+        由收件箱落库缺省 phone / 编排器镜像 / 坐席打点认领决定。
 
         文本回复与富媒体（照片/语音）共用。两步各自 best-effort，绝不阻断发送；
         实现拆在 ``_mirror_out_row`` / ``_record_contact_out``（2026-08-02，分条语音
@@ -649,14 +653,15 @@ class TelegramSenderMixin:
                     _led.pop(_k, None)
         except Exception:
             pass
+        _mkw = {"sent_by": str(sent_by)} if sent_by else {}
         self._mirror_out_row(
             chat_id, preview if mirror_text is None else mirror_text,
-            msg_id=msg_id, media_type=media_type, media_ref=media_ref)
+            msg_id=msg_id, media_type=media_type, media_ref=media_ref, **_mkw)
         self._record_contact_out(chat_id, preview)
 
     def _mirror_out_row(self, chat_id: Any, text: str, *, msg_id: Any = "",
                         media_type: str = "", media_ref: str = "",
-                        sender_name: str = "") -> None:
+                        sender_name: str = "", sent_by: str = "") -> None:
         """出站镜像**单行**进收件箱（含「已发送」回执），不记 contacts；best-effort。
 
         分条语音（2026-08-02）逐条调用：客户收到 N 条独立语音，收件箱就该有 N 行
@@ -669,6 +674,8 @@ class TelegramSenderMixin:
             _emit = getattr(self, "_emit_inbox", None)
             if _emit is not None:
                 _kw = {"sender_name": str(sender_name)} if sender_name else {}
+                if sent_by:   # P0-4：非空才透传（emit 形状对旧调用方零变化）
+                    _kw["sent_by"] = str(sent_by)
                 _emit(chat_id=chat_id, text=text, direction="out",
                       msg_id=str(msg_id or ""),
                       media_type=media_type or "", media_ref=media_ref or "",
@@ -904,7 +911,7 @@ class TelegramSenderMixin:
             # 带回真实 message.id 作幂等键，乐观镜像行与回显共用主键 → 精确去重。
             self._postsend_mirror_and_record(
                 original_message.chat.id, _out_text,
-                msg_id=getattr(_sent, "id", "") or "")
+                msg_id=getattr(_sent, "id", "") or "", sent_by="ai")
             if getattr(original_message, 'from_user', None) and getattr(original_message.from_user, 'id', None):
                 self._record_session_reply(original_message.chat.id, original_message.from_user.id)
                 self._record_auto_reply(original_message.chat.id, original_message.from_user.id)
@@ -1924,7 +1931,7 @@ class TelegramSenderMixin:
                         self._mirror_out_row(
                             original_message.chat.id, _vclean, msg_id=_vmid,
                             media_type=_vmt or "voice", media_ref=_vref,
-                            sender_name=_vwho)
+                            sender_name=_vwho, sent_by="ai")
                         # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
                         # （语音+文本=确有 2 条外发，各记一次属正确口径）。
                         await self._send_reply(original_message, _split_text or reply_text)
@@ -1934,7 +1941,7 @@ class TelegramSenderMixin:
                         self._mirror_out_row(
                             original_message.chat.id, _vclean, msg_id=_vmid,
                             media_type=_vmt or "voice", media_ref=_vref,
-                            sender_name=_vwho)
+                            sender_name=_vwho, sent_by="ai")
                         self._record_contact_out(
                             original_message.chat.id,
                             self._voice_mirror_preview(reply_text))
@@ -2438,7 +2445,7 @@ class TelegramSenderMixin:
                 chat_id, " ".join(str(list(parts)[i]).split()),
                 msg_id=getattr(sent_msg, "id", "") or "",
                 media_type=_pmt or "voice", media_ref=_pref,
-                sender_name=_v_sender)
+                sender_name=_v_sender, sent_by="ai")
 
         if sent_n:
             self.logger.info(
