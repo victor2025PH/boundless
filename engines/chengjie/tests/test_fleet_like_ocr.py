@@ -11,10 +11,12 @@ import struct
 import pytest
 
 from src.fleet.like_locate import (
-    TEMPLATE_HIGH, TEMPLATE_MED, empty_phrase, extract_blobs, fuse_signals, like_state_changed,
-    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, position_hits, region_hits,
-    render_thumb, render_thumb_icon,
-    structure_hits, template_hits, templates_available, text_hits, write_default_templates,
+    TEMPLATE_HIGH, TEMPLATE_MED, action_bar_delta_px, action_bar_ys, empty_phrase, extract_blobs,
+    fuse_signals, hierarchy_diag, like_state_changed, label_hits, load_templates, locate_like_row,
+    normalize_ocr_boxes,
+    post_evidence, position_hits, region_hits, render_square_thumb, render_thumb, render_thumb_icon,
+    same_frame_ok, square_sizes_for_width, structure_hits, template_hits, templates_available, text_hits,
+    write_default_templates,
 )
 from src.fleet.phone_flow_rules import validate_flow_payload
 from src.fleet.phone_flows import PhoneFlows, bundled_ui_map
@@ -183,6 +185,9 @@ def test_templates_cover_light_dark_and_three_scales():
         for style in ("outline", "filled"):
             for scale in ("s", "m", "l", "xl", "xxl", "xxxl"):
                 assert f"like_{theme}_{style}_{scale}" in names
+        for size in (20, 40, 72):
+            assert f"like_{theme}_square_{size}" in names
+            assert f"like_{theme}_square_filled_{size}" in names
 
 
 def test_text_row_languages_and_exact_tokens():
@@ -1519,3 +1524,311 @@ def test_wp03_sparse_hierarchy_does_not_invent_a_like():
     nodes = [("", "", "", f"[{20 + i * 40},100][{50 + i * 40},140]") for i in range(6)]
     assert position_hits(_hierarchy(nodes), 1080, 1920) == []
     assert position_hits(_wp_bar(comment=False, share=False), 1080, 1920) == []
+
+
+def _bar_xml(y, right="Share", width_note=""):
+    """Comment plus Share or Send on one row. No Like node."""
+    del width_note
+    return _hierarchy([
+        ("", "Comment", "", f"[480,{y}][600,{y + 80}]"),
+        ("", right, "", f"[720,{y}][840,{y + 80}]"),
+    ])
+
+
+def test_same_frame_accepts_four_pixels_and_rejects_a_1170px_slide():
+    """Real uiautomator text. The bar, not the whole dump, is what has to hold still."""
+    width, height = 1080, 1920
+    held = _bar_xml(900, "Send")
+    nudged = _bar_xml(904, "Send")
+    assert action_bar_ys(held, width, height) == action_bar_ys(nudged, width, height) or (
+        abs(action_bar_ys(held, width, height)[0] - action_bar_ys(nudged, width, height)[0]) <= 8
+    )
+    assert action_bar_delta_px(held, nudged, width, height) <= 8
+    assert same_frame_ok(held, nudged, width, height) is True
+    slid = _bar_xml(1370, "Send")
+    # Row centers 240px apart from a bar at y=200 would be too small.
+    # 200 → center 240, 1370 → center 1410, about the 1170px wp11 slide.
+    high = _bar_xml(200, "Send")
+    assert action_bar_delta_px(high, slid, width, height) >= 1100
+    assert same_frame_ok(held, slid, width, height) is False
+    assert action_bar_delta_px("", "", width, height) == 0
+    assert action_bar_delta_px(held, "", width, height) == 9999
+    assert action_bar_delta_px("not xml", held, width, height) == 9999
+
+
+def test_same_frame_ignores_a_drifting_navigation_row():
+    width, height = 720, 1600
+    def doc(bar_y, nav_y):
+        return _hierarchy([
+            ("", "Comment", "", f"[220,{bar_y}][340,{bar_y + 48}]"),
+            ("", "Send", "", f"[400,{bar_y}][520,{bar_y + 48}]"),
+            ("", "Home", "", f"[20,{nav_y}][80,{nav_y + 48}]"),
+            ("", "Reels", "", f"[180,{nav_y}][260,{nav_y + 48}]"),
+            ("", "Friends", "", f"[360,{nav_y}][460,{nav_y + 48}]"),
+            ("", "Menu", "", f"[560,{nav_y}][660,{nav_y + 48}]"),
+        ])
+    assert action_bar_delta_px(doc(880, 1520), doc(884, 400), width, height) <= 8
+    assert same_frame_ok(doc(880, 1520), doc(884, 400), width, height) is True
+
+
+def test_comment_and_send_infer_like_on_the_action_row():
+    xml = _hierarchy([
+        ("", "Alice", "", "[40,180][220,260]"),
+        ("", "Follow", "", "[400,180][560,260]"),
+        ("", "Comment", "", "[480,900][600,980]"),
+        ("", "Send", "", "[720,900][840,980]"),
+    ])
+    hits = position_hits(xml, 1080, 1920)
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["inferred"] is True
+    assert hit["y"] > 260
+    assert 900 <= hit["y"] <= 980
+    assert hit["x"] < 480
+    assert fuse_signals([], [], [], [], [], [hit]) is None
+    far = {
+        "source": "structure", "x_pm": hit["x_pm"], "y_pm": hit["y_pm"], "score": 1.0,
+        "label": "structure", "full": True, "x": hit["x"] + 600, "y": hit["y"],
+    }
+    assert fuse_signals([], [], [far], [], [], [hit]) is None
+    near = {
+        "source": "template", "x_pm": hit["x_pm"], "y_pm": hit["y_pm"], "score": 0.62,
+        "label": "square", "full": True, "x": hit["x"] + 12, "y": hit["y"],
+    }
+    agreed = fuse_signals([], [near], [], [], [], [hit])
+    assert agreed is not None
+    assert "position" in agreed["signals"] and "template" in agreed["signals"]
+    ipadala = position_hits(_hierarchy([
+        ("", "Komento", "", "[480,900][600,980]"),
+        ("", "Ipadala", "", "[720,900][840,980]"),
+    ]), 1080, 1920)
+    assert len(ipadala) == 1 and ipadala[0]["inferred"] is True
+    assert position_hits(_hierarchy([
+        ("", "评论", "", "[480,900][600,980]"),
+        ("", "发送", "", "[720,900][840,980]"),
+    ]), 1080, 1920)[0]["inferred"] is True
+
+
+def test_mixed_icon_and_text_still_finds_the_action_bar_not_the_nav():
+    """Icons plus their words are one slot. The top and bottom icon rows are not."""
+    xml = _hierarchy([
+        ("", "", "", "[24,96][64,136]"),
+        ("", "", "", "[120,96][160,136]"),
+        ("", "", "", "[216,96][256,136]"),
+        ("", "", "", "[40,780][80,820]"),
+        ("", "", "", "[180,780][220,820]"),
+        ("Comment", "", "", "[228,788][360,816]"),
+        ("", "", "", "[400,780][440,820]"),
+        ("Send", "", "", "[448,788][560,816]"),
+        ("", "Home", "", "[24,1524][72,1572]"),
+        ("", "Watch", "", "[180,1524][240,1572]"),
+        ("", "Menu", "", "[360,1524][420,1572]"),
+    ])
+    hits = position_hits(xml, 720, 1600)
+    assert len(hits) == 1
+    assert hits[0]["inferred"] is False
+    assert 760 <= hits[0]["y"] <= 840
+    assert hits[0]["x"] < 120
+    shown = hierarchy_diag(xml, 720, 1600)
+    texts = shown["action_bar"]["texts"] + shown["action_bar"]["content_descs"]
+    assert "Comment" in texts and "Send" in texts
+    assert "Home" not in texts and "Menu" not in texts
+
+
+def _rgba(w, h, color=(246, 246, 248)):
+    raw = bytearray(struct.pack("<III", w, h, 1))
+    raw += bytes((color[0], color[1], color[2], 255)) * (w * h)
+    return raw
+
+
+def _stamp(raw, rgb, tw, th, x, y, w, h):
+    for yy in range(th):
+        for xx in range(tw):
+            px, py = x + xx, y + yy
+            if not (0 <= px < w and 0 <= py < h):
+                continue
+            off = 12 + (py * w + px) * 4
+            i = (yy * tw + xx) * 3
+            raw[off:off + 3] = rgb[i:i + 3]
+
+
+def _solid(raw, x, y, side, w, h, color=(55, 58, 64)):
+    rgb = bytes(color) * (side * side)
+    _stamp(raw, rgb, side, side, x, y, w, h)
+
+
+def test_structure_hits_the_action_bar_and_skips_nav_rows():
+    width, height = 720, 1600
+    blobs = []
+    for x in (24, 120, 216, 312):
+        blobs.append({"x0": x, "y0": 100, "x1": x + 40, "y1": 140})
+        blobs.append({"x0": x, "y0": 1520, "x1": x + 40, "y1": 1560})
+    for x in (280, 420, 560):
+        blobs.append({"x0": x, "y0": 780, "x1": x + 40, "y1": 820})
+    boxes = [
+        _box("12k", 24, 40, 80, 58),
+        _box("3k", 120, 40, 170, 58),
+        _box("9k", 24, 1460, 80, 1478),
+        _box("1k", 120, 1460, 170, 1478),
+    ]
+    bare = structure_hits(blobs, boxes, width, height, composer_ys=[860])
+    assert bare
+    assert all(700 <= hit["y"] <= 900 for hit in bare)
+    assert all(hit["y"] < 1400 for hit in bare)
+    anchored = structure_hits(blobs, boxes, width, height, anchor_ys=[800])
+    assert anchored
+    assert all(abs(hit["y"] - 800) <= 40 for hit in anchored)
+    only_nav = [b for b in blobs if b["y0"] >= 1500]
+    assert structure_hits(only_nav, boxes, width, height) == []
+    only_top = [b for b in blobs if b["y0"] < 200]
+    kept = structure_hits(only_top, boxes, width, height)
+    assert kept and kept[0]["y"] < 200
+
+
+def test_window_square_template_reports_the_in_window_score_not_the_corner():
+    width, height = 720, 1600
+    xml = _hierarchy([
+        ("", "Comment", "", "[280,880][400,960]"),
+        ("", "Send", "", "[480,880][600,960]"),
+    ])
+    slot = position_hits(xml, width, height)[0]
+    assert slot["inferred"] is True
+    pack = {item["name"]: item for item in load_templates()}
+    square = pack["like_light_square_40"]
+    glyph = render_square_thumb(square["w"], dark=False, filled=False)
+    assert pack["like_light_square_40"]["w"] == 40
+    raw = _rgba(width, height)
+    # Six pixels to the right of the inferred center, still inside ±40.
+    left = int(slot["x"]) + 6 - square["w"] // 2
+    top = int(slot["y"]) - square["h"] // 2
+    _stamp(raw, glyph, square["w"], square["h"], left, top, width, height)
+    decoy = pack["like_light_s"]
+    decoy_rgb = render_thumb(decoy["w"], decoy["h"], dark=False)
+    _stamp(raw, decoy_rgb, decoy["w"], decoy["h"], 16, 24, width, height)
+    corner = _rgba(width, height)
+    _stamp(corner, decoy_rgb, decoy["w"], decoy["h"], 16, 24, width, height)
+    corner_loc = locate_like_row(bytes(corner), [])
+    loc = locate_like_row(bytes(raw), [], xml)
+    diag = loc["diag"]
+    assert diag["position_inferred"] is True
+    assert diag["template_matched"] is True
+    assert diag["template_score"] >= TEMPLATE_MED
+    # The corner glyph outscores the window on a full-screen scan. The
+    # reported score stays on the inferred slot (about +6px), not that corner.
+    assert corner_loc["diag"]["template_score"] >= TEMPLATE_MED
+    dx, dy = diag["template_offset_px"]
+    assert abs(dx) <= 40 and abs(dy) <= 40
+    assert abs(dx - 6) <= 10
+    assert abs(dy) <= 10
+    assert loc["target"] is not None
+    assert "position" in loc["target"]["signals"] and "template" in loc["target"]["signals"]
+    assert loc["target"]["y"] > 400
+    assert diag["screenshot_outside"] is True
+    assert square_sizes_for_width(720)[len(square_sizes_for_width(720)) // 2] == 40
+    assert 20 in square_sizes_for_width(180)
+    clean = sanitize_phone_result(TASK_PHONE_LIKE, {
+        "like_probe": True,
+        "like_diag": {**diag, "serial": "3B1FABCDEF", "png_b64": "iVBORw0KGgoAAA"},
+    })
+    blob = json.dumps(clean["like_diag"])
+    assert "3B1F" not in blob and "png" not in blob
+    assert clean["like_diag"]["template_offset_px"] == [dx, dy]
+    assert clean["like_diag"]["capture_skew_ms"] == 0
+    assert clean["like_diag"]["action_bar_delta_px"] == 0
+
+
+class _XmlSteps(FakeAdb):
+    """Each uiautomator dump serves the next document. Pull returns that document."""
+
+    def __init__(self, frame, steps):
+        super().__init__(frame=frame)
+        self.steps = [s.encode("utf-8") if isinstance(s, str) else s for s in steps]
+        self.n = 0
+        self.pending = b""
+
+    def __call__(self, cmd, **kw):
+        args = tuple(cmd[1:])
+        if len(args) >= 5 and args[2:5] == ("shell", "uiautomator", "dump"):
+            self.calls.append(args)
+            self.pending = self.steps[min(self.n, len(self.steps) - 1)]
+            self.n += 1
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"UI hierchary dumped to: /sdcard/chatx_like_hierarchy.xml\n",
+                stderr=b"",
+            )
+        if len(args) >= 5 and args[2] == "pull" and args[3] == _HIERARCHY_REMOTE:
+            self.calls.append(args)
+            from pathlib import Path
+            from types import SimpleNamespace
+            Path(args[4]).write_bytes(self.pending)
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        return FakeAdb.__call__(self, cmd, **kw)
+
+
+def _feed_bar(y, right="Send"):
+    return _hierarchy([
+        ("", "Comment", "", f"[70,{y}][110,{y + 28}]"),
+        ("", right, "", f"[120,{y}][160,{y + 28}]"),
+    ])
+
+
+def test_like_probe_keeps_a_frame_when_the_action_bar_holds_still():
+    frame = bytes(_logged(bytearray(_frame())))
+    xml = _feed_bar(200)
+    adb = _XmlSteps(frame, [xml, xml])
+    ops, _fake, slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "empty_feed"), detail
+    diag = result["like_diag"]
+    assert diag["action_bar_delta_px"] <= 8
+    assert diag["capture_skew_ms"] > 0
+    assert diag["position_inferred"] is True
+    assert diag["uiautomator"]["attempts"] == 1
+    dumps = [c for c in adb.calls if len(c) >= 5 and c[2:5] == ("shell", "uiautomator", "dump")]
+    assert len(dumps) == 2
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 1
+    assert 1.75 not in slept
+
+
+def test_like_probe_drops_a_hierarchy_that_slides_between_the_dumps():
+    frame = bytes(_logged(bytearray(_frame())))
+    steps = []
+    for _ in range(3):
+        steps.extend([_feed_bar(120), _feed_bar(280)])
+    adb = _XmlSteps(frame, steps)
+    ops, _fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "empty_feed"), detail
+    diag = result["like_diag"]
+    assert diag["action_bar_delta_px"] >= 100
+    assert diag["position_matched"] is False
+    assert diag["position_inferred"] is False
+    dumps = [c for c in adb.calls if len(c) >= 5 and c[2:5] == ("shell", "uiautomator", "dump")]
+    assert len(dumps) == 6
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 3
+
+
+def test_feed_swipe_waits_before_the_same_frame_pair():
+    empty = bytes(_logged(bytearray(_frame())))
+    found, _tmpl, _x, _y = _with_thumb()
+    painted = bytearray(found)
+    _square(painted, 28, 250, 24, _BLUE)
+    frames = [empty, empty, empty, found, bytes(painted)]
+    adb = SeqAdb(frames)
+    ops, fake, slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=3),
+        {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_DONE, "ok"), detail
+    assert result["swipes"] == 1
+    assert _feed_dirs(fake.actions()) == ["top", "top", "feed"]
+    assert any(abs(item - 1.75) < 1e-9 for item in slept)

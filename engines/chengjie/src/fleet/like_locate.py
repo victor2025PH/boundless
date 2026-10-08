@@ -17,12 +17,14 @@ Signals
                 at the same place has to agree. Optional. A dump that fails or
                 comes back empty leaves this signal empty.
     position    Leftmost button of a hierarchy row whose other buttons are
-                Comment / Share (Komento / Ibahagi, 评论 / 分享). When that
-                row has Comment and Share but no Like node, the missing Like
-                slot is one equal gap to the left of Comment, on the same
-                row. A post-header row is not a slot. The point agrees with
-                a screenshot signal (template, action bar, or silhouette),
-                not with a label from the same dump. Not a tap by itself.
+                Comment / Share / Send (Komento / Ibahagi / Ipadala,
+                评论 / 分享 / 发送). Send is a share-slot member, so a
+                Comment+Send bar still yields a Like slot one equal gap to
+                the left of Comment. A post-header row, the top chrome, and
+                the bottom navigation bar are not slots. The point agrees
+                with a screenshot signal (template, action bar, or
+                silhouette), not with a label from the same dump. Not a tap
+                by itself.
     region      Nodes whose centers fall inside the screenshot action-bar
                 rectangle (``structure_bounds``), including nodes the button
                 size filter dropped. A Like / Comment / Share label, or 3–4
@@ -32,11 +34,14 @@ Signals
     text        Like / Gusto / I-like / 赞 on a row that also has Comment and Share
                 (Komento / Ibahagi, 评论 / 分享). Liked / Nagustuhan / 已赞 is not a target.
                 Optional. The default build does not import rapidocr, cv2, or onnx.
-    template    Bundled thumbs-up rasters: the original light/dark blocks plus
-                outline and filled glyphs at phone scales. Matched by normalized
-                edge correlation. Stdlib only. A window is tried only when the
-                template is close to the blob size, so a small block is not
-                scored against the empty center of a large outline icon.
+    template    Bundled thumbs-up rasters: the original light/dark blocks,
+                outline and filled glyphs at phone scales, plus square
+                outline/filled glyphs near the live icon's aspect (about
+                40px on a 720-wide screen). Matched by normalized edge
+                correlation. Stdlib only. Packed in the module directory,
+                never loaded from a node-supplied path. A blob window is
+                tried only when the template is close to the blob size. An
+                inferred Like also searches square templates inside ±40px.
     structure   Leftmost slot of a row of 2–4 evenly spaced icons. The row is
                 anchored either under a reaction-count line (OCR tokens such as
                 92k / 1.5k, or a shorter glyph row) or, with no text at all,
@@ -109,6 +114,7 @@ _LIKE = {"like", "gusto", "i-like", "i like", "赞"}
 _LIKED = {"liked", "nagustuhan", "已赞"}
 _COMMENT = {"comment", "komento", "评论"}
 _SHARE = {"share", "ibahagi", "分享"}
+_SEND = {"send", "ipadala", "发送", "传送", "傳送"}
 # Huoke's feed scan (facebook.py, the Like-button bounds pass) plus the
 # icon-only content-desc "React" and the Tagalog / Chinese labels seen on
 # icon-only bars. Longer needles come first so 点赞 is not recorded as 赞.
@@ -131,10 +137,13 @@ _LABEL_EXCLUDE = (
     "liked", "unlike", "nagustuhan", "已赞", "取消",
     "comment", "komento", "评论", "コメント", "magkomento",
     "share", "ibahagi", "分享", "シェア",
+    "send", "ipadala", "发送", "传送", "傳送",
     "love", "haha", "wow", "sad", "angry", "reactions",
 )
 _COMMENT_NEEDLE = ("comment", "komento", "评论", "コメント", "magkomento")
 _SHARE_NEEDLE = ("share", "ibahagi", "分享", "シェア")
+# Send occupies the share slot on newer bars (Comment+Send, no Share word).
+_SEND_NEEDLE = ("send", "ipadala", "发送", "传送", "傳送")
 _LIKED_NEEDLE = ("liked", "unlike", "nagustuhan", "已赞", "取消")
 _REACTION_NEEDLE = ("love", "haha", "wow", "sad", "angry", "care")
 _DIAG_NODES = 24
@@ -158,6 +167,11 @@ _ICON_SCALES = (
     ("xxl", 56, 68),
     ("xxxl", 72, 88),
 )
+# Square outline icons. 40px is the live glyph on a 720-wide feed.
+_SQUARE_SIZES = (20, 24, 28, 32, 36, 40, 44, 48, 56, 64, 72)
+# Two hierarchy reads around one screenshot. The action bar may move at most this far.
+SAME_FRAME_MAX_PX = 8
+_ACTION_ROLES = ("comment", "share", "send")
 
 
 def _norm_token(text: Any) -> str:
@@ -452,6 +466,8 @@ def _bar_role(desc: str, text: str, resource_id: str) -> str:
         return "comment"
     if any(needle in blob for needle in _SHARE_NEEDLE):
         return "share"
+    if any(needle in blob for needle in _SEND_NEEDLE):
+        return "send"
     if any(needle in blob for needle in _REACTION_NEEDLE):
         return "reaction"
     return ""
@@ -527,6 +543,96 @@ def _button_rows(nodes: Sequence[Dict[str, Any]], height: int) -> List[List[Dict
     return rows
 
 
+def _bottom_nav_min_y(height: int) -> int:
+    """Y where the bottom navigation band starts. The post bar sits above it."""
+    band = max(72, min(160, int(round(height * 0.08))))
+    return max(0, height - band)
+
+
+def _top_chrome_max_y(height: int) -> int:
+    """Rows at or above this Y are top chrome when a lower row also exists."""
+    return max(36, min(220, int(round(height * 0.12))))
+
+
+def _row_center_y(group: Sequence[Dict[str, Any]]) -> float:
+    return sum(int(n["y"]) for n in group) / float(len(group))
+
+
+def _in_bottom_nav(y: float, height: int) -> bool:
+    return height > 0 and y >= _bottom_nav_min_y(height)
+
+
+def _is_text_chip(node: Dict[str, Any]) -> bool:
+    """A wide word sitting on an icon, not the icon itself."""
+    bw = int(node["x1"]) - int(node["x0"])
+    bh = int(node["y1"]) - int(node["y0"])
+    if bw < 24 or bh <= 0 or bw < int(bh * 1.45):
+        return False
+    return bool(
+        node.get("role")
+        or str(node.get("text") or "").strip()
+        or str(node.get("content_desc") or "").strip()
+    )
+
+
+def _merge_label_chips(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold a text word into the icon it labels so a mixed bar stays 2–4 slots.
+
+    A Comment button that is its own node stays a slot. Only a wider chip
+    sitting on or just to the right of an icon is absorbed.
+    """
+    items = [dict(n) for n in nodes]
+    icons = [n for n in items if not _is_text_chip(n)]
+    chips = [n for n in items if _is_text_chip(n)]
+    if not icons or not chips:
+        return items
+    used = set()
+    for icon in icons:
+        ibw = max(1, int(icon["x1"]) - int(icon["x0"]))
+        best_i = None
+        best_gap = 10 ** 9
+        for i, chip in enumerate(chips):
+            if i in used:
+                continue
+            if abs(int(icon["y"]) - int(chip["y"])) > 28:
+                continue
+            gap = int(chip["x0"]) - int(icon["x1"])
+            overlap = not (int(chip["x1"]) < int(icon["x0"]) or int(icon["x1"]) < int(chip["x0"]))
+            if gap > 36 and not overlap:
+                continue
+            if int(chip["x"]) + 4 < int(icon["x"]):
+                continue
+            chip_role = str(chip.get("role") or "")
+            icon_role = str(icon.get("role") or "")
+            if icon_role and chip_role and icon_role != chip_role:
+                continue
+            cbw = int(chip["x1"]) - int(chip["x0"])
+            if cbw < int(ibw * 1.2) and not overlap:
+                continue
+            if gap < best_gap:
+                best_gap = gap
+                best_i = i
+        if best_i is None:
+            continue
+        chip = chips[best_i]
+        used.add(best_i)
+        if not icon.get("role") and chip.get("role"):
+            icon["role"] = chip["role"]
+        if not icon.get("label") and chip.get("label"):
+            icon["label"] = chip["label"]
+            icon["by"] = chip.get("by") or ""
+        if chip.get("text") and not icon.get("text"):
+            icon["text"] = chip["text"]
+        if chip.get("content_desc") and not icon.get("content_desc"):
+            icon["content_desc"] = chip["content_desc"]
+    kept = list(icons)
+    for i, chip in enumerate(chips):
+        if i not in used:
+            kept.append(chip)
+    kept.sort(key=lambda n: int(n["x0"]))
+    return kept
+
+
 def _hit_from_button(node: Dict[str, Any], source: str, width: int, height: int,
                      label: str) -> Dict[str, Any]:
     return {
@@ -565,7 +671,7 @@ def _infer_missing_like(group: Sequence[Dict[str, Any]], buttons: Sequence[Dict[
         return None
     if any(n.get("role") in ("like", "liked") for n in group):
         return None
-    if not any(n.get("role") == "share" and n["x"] > group[0]["x"] for n in group):
+    if not any(n.get("role") in ("share", "send") and n["x"] > group[0]["x"] for n in group):
         return None
     comment = group[0]
     right = next((n for n in group if n["x"] > comment["x"] + 8), None)
@@ -625,7 +731,7 @@ def _position_row(group: Sequence[Dict[str, Any]], width: int) -> bool:
     for prev, nxt in zip(centers, centers[1:]):
         if nxt - prev < 8:
             return False
-    if not any(n.get("role") in ("comment", "share") for n in group):
+    if not any(n.get("role") in _ACTION_ROLES for n in group):
         return False
     left = group[0].get("role") or ""
     return left in ("", "like")
@@ -641,8 +747,10 @@ def position_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any
     A reaction picker (Love / Haha / Wow) is not a row.
     """
     hits = []
-    buttons = _drop_containers(_hierarchy_buttons(hierarchy, width, height))
+    buttons = _merge_label_chips(_drop_containers(_hierarchy_buttons(hierarchy, width, height)))
     for group in _button_rows(buttons, height):
+        if _in_bottom_nav(_row_center_y(group), height):
+            continue
         row_y0 = min(int(n["y0"]) for n in group)
         row_y1 = max(int(n["y1"]) for n in group)
         inferred = _infer_missing_like(group, buttons, width, height)
@@ -666,6 +774,51 @@ def position_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any
         hits.append(hit)
     hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
     return hits
+
+
+def action_bar_ys(hierarchy: Any, width: int, height: int) -> Optional[List[int]]:
+    """Y centers of Comment/Share/Send rows.
+
+    ``None`` when the dump does not parse. An empty list is a parsed dump
+    with no action bar (bottom navigation is not an action bar).
+    """
+    if _dump_status(hierarchy) == "bad":
+        return None
+    if not hierarchy_text_ok(hierarchy) or width <= 0 or height <= 0:
+        return []
+    buttons = _merge_label_chips(_drop_containers(_hierarchy_buttons(hierarchy, width, height)))
+    ys: List[int] = []
+    for group in _button_rows(buttons, height):
+        cy = _row_center_y(group)
+        if _in_bottom_nav(cy, height):
+            continue
+        if not any(n.get("role") in _ACTION_ROLES for n in group):
+            continue
+        ys.append(int(round(cy)))
+    return ys
+
+
+def action_bar_delta_px(before: Any, after: Any, width: int, height: int) -> int:
+    """Largest action-bar shift between two dumps. 9999 when they disagree.
+
+    Both sides empty is a stable empty frame (0). A parse failure, or a bar
+    that exists on only one side, is not stable.
+    """
+    before_ys = action_bar_ys(before, width, height)
+    after_ys = action_bar_ys(after, width, height)
+    if before_ys is None or after_ys is None:
+        return 9999
+    if not before_ys and not after_ys:
+        return 0
+    if len(before_ys) != len(after_ys):
+        return 9999
+    return max(abs(int(a) - int(b)) for a, b in zip(before_ys, after_ys))
+
+
+def same_frame_ok(before: Any, after: Any, width: int, height: int,
+                  limit: int = SAME_FRAME_MAX_PX) -> bool:
+    """True when the two dumps describe the same action bar within ``limit`` px."""
+    return action_bar_delta_px(before, after, width, height) <= int(limit)
 
 
 def _diag_node(node: Dict[str, Any]) -> Dict[str, str]:
@@ -692,15 +845,19 @@ def _unique_attrs(nodes: Sequence[Dict[str, Any]], key: str) -> List[str]:
 def _candidate_row(buttons: Sequence[Dict[str, Any]], height: int,
                    like: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = [group for group in _button_rows(buttons, height) if 1 <= len(group) <= 8]
+    rows = [group for group in rows if not _in_bottom_nav(_row_center_y(group), height)]
     if like is not None:
         for group in rows:
             if any(n["bounds"] == like.get("bounds") for n in group):
                 return list(group)[:_DIAG_NODES]
-    for group in rows:
-        # A comment/share sibling is enough to show the operator this row,
-        # even when the span is too short to count as a position hit.
-        if 2 <= len(group) <= 4 and any(n.get("role") in ("comment", "share") for n in group):
-            return list(group)[:_DIAG_NODES]
+    anchored = [
+        group for group in rows
+        if any(n.get("role") in _ACTION_ROLES for n in group)
+    ]
+    if anchored:
+        body = [group for group in anchored if _row_center_y(group) > _top_chrome_max_y(height)]
+        chosen = (body or anchored)[0]
+        return list(chosen)[:_DIAG_NODES]
     ranked = sorted(rows, key=lambda group: sum(1 for n in group if n.get("content_desc") or n.get("text") or n.get("resource_id")), reverse=True)
     for group in ranked:
         if 2 <= len(group) <= 4:
@@ -854,7 +1011,7 @@ def region_hits(hierarchy: Any, row_bounds: str, width: int, height: int) -> Lis
             likes.sort(key=lambda n: (n["y"], n["x"]))
             chosen = likes[0]
         else:
-            roles = [n for n in inside if n.get("role") in ("comment", "share")]
+            roles = [n for n in inside if n.get("role") in _ACTION_ROLES]
             pool = clickable or roles
             if roles and pool:
                 left = min(pool, key=lambda n: (n["x"], n["y"]))
@@ -869,7 +1026,8 @@ def region_hits(hierarchy: Any, row_bounds: str, width: int, height: int) -> Lis
 def hierarchy_diag(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
     """Compact action-bar attributes. No pixels, no device identity."""
     status = _dump_status(hierarchy)
-    buttons = _hierarchy_buttons(hierarchy, width, height) if status == "ok" else []
+    buttons = _merge_label_chips(_drop_containers(
+        _hierarchy_buttons(hierarchy, width, height))) if status == "ok" else []
     likes = [n for n in buttons if n.get("label")]
     likes.sort(key=lambda n: (n["y"], n["x"]))
     like = likes[0] if likes else None
@@ -1156,21 +1314,55 @@ def composer_centers(raw: bytes) -> List[float]:
     return centers
 
 
+def _blobs_near_anchors(blobs: Sequence[Dict[str, int]],
+                        anchor_ys: Sequence[int]) -> List[Dict[str, int]]:
+    """Icon blobs within ±40px of a Comment/Share/Send row. Wide text is left out."""
+    kept: List[Dict[str, int]] = []
+    for blob in blobs:
+        cy = (int(blob["y0"]) + int(blob["y1"])) / 2.0
+        if not any(abs(cy - int(ay)) <= INFERRED_WINDOW_PX for ay in anchor_ys):
+            continue
+        bw = int(blob["x1"]) - int(blob["x0"])
+        bh = int(blob["y1"]) - int(blob["y0"])
+        if bh <= 0 or bw > max(int(bh * 1.85), bh + 12):
+            continue
+        kept.append(blob)
+    return kept
+
+
+def _drop_nav_icon_rows(rows: Sequence[Sequence[Dict[str, int]]],
+                        height: int) -> List[List[Dict[str, int]]]:
+    """Drop the bottom navigation band. Drop top chrome when a lower row exists."""
+    def _cy(group: Sequence[Dict[str, int]]) -> float:
+        return sum((int(b["y0"]) + int(b["y1"])) / 2.0 for b in group) / float(len(group))
+
+    kept = [list(group) for group in rows if group and not _in_bottom_nav(_cy(group), height)]
+    body = [group for group in kept if _cy(group) > _top_chrome_max_y(height)]
+    return body or kept
+
+
 def structure_hits(blobs: Sequence[Dict[str, int]], boxes: Sequence[Dict[str, Any]],
-                   width: int, height: int, composer_ys: Optional[Sequence[float]] = None) -> List[Dict[str, Any]]:
+                   width: int, height: int, composer_ys: Optional[Sequence[float]] = None,
+                   anchor_ys: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
     """Leftmost slot of each action bar.
 
     The bar is a row of 2–4 even icons under a reaction-count line, or a row
     of 3–4 even icons sitting just above the comment composer. The leftmost
-    slot is the Like / reaction control.
+    slot is the Like / reaction control. When ``anchor_ys`` names a
+    Comment/Share/Send row, only icons in that ±40px band are eligible, and
+    the band itself is the bar (a count line is not required).
     """
+    anchors = [int(y) for y in (anchor_ys or ())]
+    source = _blobs_near_anchors(blobs, anchors) if anchors else list(blobs)
     count_ys = _count_row_ys(boxes, height)
-    rows = _rows_of(blobs, height)
+    rows = _rows_of(source, height)
     icon_rows = []
     for group in rows:
         pruned = _prune_icon_row(group)
         if _even_icon_row(pruned):
             icon_rows.append(pruned)
+    if not anchors:
+        icon_rows = _drop_nav_icon_rows(icon_rows, height)
     hits = []
     lo = max(8.0, height * 0.012)
     hi = height * 0.14
@@ -1202,7 +1394,10 @@ def structure_hits(blobs: Sequence[Dict[str, int]], boxes: Sequence[Dict[str, An
             span = centers[-1] - centers[0]
             if span >= width * 0.18:
                 composer_ok = any(comp_lo <= (ay - cy) <= comp_hi for ay in composers)
-        if not count_ok and not composer_ok:
+        anchored = bool(anchors) and any(abs(cy - ay) <= INFERRED_WINDOW_PX for ay in anchors)
+        if not count_ok and not composer_ok and not anchored:
+            continue
+        if anchors and not anchored:
             continue
         if not all(_fully_inside(b["x0"], b["y0"], b["x1"], b["y1"], width, height) for b in group):
             continue
@@ -1354,6 +1549,89 @@ def render_thumb_icon(width: int, height: int, *, dark: bool, filled: bool) -> b
     return bytes(out)
 
 
+def _square_thumb_mask(size: int) -> List[List[bool]]:
+    """Thumbs-up whose ink box is nearly square, matching the live outline icon.
+
+    The tall bundled glyph spans about 0.90 of its height and 0.72 of its
+    width. This one spans about 0.72 on both axes so a 40×40 window matches
+    a 40×40 line icon instead of a portrait stamp.
+    """
+    grid = [[False] * size for _ in range(size)]
+    for y in range(size):
+        ny = (y + 0.5) / size
+        row = grid[y]
+        for x in range(size):
+            nx = (x + 0.5) / size
+            on = False
+            if 0.20 <= nx <= 0.46 and 0.18 <= ny <= 0.50:
+                on = True
+            if 0.14 <= nx <= 0.86 and 0.40 <= ny <= 0.66:
+                on = True
+            if 0.28 <= nx <= 0.74 and 0.60 <= ny <= 0.86:
+                on = True
+            row[x] = on
+    return grid
+
+
+def render_square_thumb(size: int, *, dark: bool, filled: bool) -> bytes:
+    """Square outline or filled thumbs-up. ``size`` is both width and height."""
+    bg = (28, 30, 34) if dark else (246, 246, 248)
+    ink = (232, 234, 238) if dark else (55, 58, 64)
+    grid = _square_thumb_mask(size)
+    stroke = max(2, int(round(size * 0.075)))
+    if filled:
+        mask = grid
+    else:
+        bound = [[False] * size for _ in range(size)]
+        for y in range(size):
+            for x in range(size):
+                if not grid[y][x]:
+                    continue
+                edge = False
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    yy, xx = y + dy, x + dx
+                    if yy < 0 or xx < 0 or yy >= size or xx >= size or not grid[yy][xx]:
+                        edge = True
+                        break
+                bound[y][x] = edge
+        mask = [row[:] for row in bound]
+        radius = stroke - 1
+        if radius > 0:
+            for y in range(size):
+                for x in range(size):
+                    if not bound[y][x]:
+                        continue
+                    for dy in range(-radius, radius + 1):
+                        for dx in range(-radius, radius + 1):
+                            if max(abs(dx), abs(dy)) > radius:
+                                continue
+                            yy, xx = y + dy, x + dx
+                            if 0 <= yy < size and 0 <= xx < size and grid[yy][xx]:
+                                mask[yy][xx] = True
+    out = bytearray()
+    for y in range(size):
+        for x in range(size):
+            out += bytes(ink if mask[y][x] else bg)
+    return bytes(out)
+
+
+def square_sizes_for_width(width: int) -> List[int]:
+    """Square template sizes within ±25% of the 40px-at-720px glyph."""
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
+        return [40]
+    base = int(round(40.0 * float(width) / 720.0))
+    if base < 20:
+        base = 20
+    if base > 72:
+        base = 72
+    lo = base * 0.75
+    hi = base * 1.25
+    sizes = [s for s in _SQUARE_SIZES if lo <= s <= hi]
+    if sizes:
+        return sizes
+    return [min(_SQUARE_SIZES, key=lambda s: abs(s - base))]
+
+
 def write_default_templates(dest: Optional[Path] = None) -> Path:
     folder = dest or _TEMPLATE_DIR
     folder.mkdir(parents=True, exist_ok=True)
@@ -1367,6 +1645,11 @@ def write_default_templates(dest: Optional[Path] = None) -> Path:
                        render_thumb_icon(w, h, dark=dark, filled=False))
             _write_png(folder / f"like_{theme}_filled_{name}.png", w, h,
                        render_thumb_icon(w, h, dark=dark, filled=True))
+        for size in _SQUARE_SIZES:
+            _write_png(folder / f"like_{theme}_square_{size}.png", size, size,
+                       render_square_thumb(size, dark=dark, filled=False))
+            _write_png(folder / f"like_{theme}_square_filled_{size}.png", size, size,
+                       render_square_thumb(size, dark=dark, filled=True))
     return folder
 
 
@@ -1392,6 +1675,10 @@ def templates_available(folder: Optional[Path] = None) -> bool:
         for theme in ("light", "dark"):
             for name, _w, _h in _ICON_SCALES:
                 need.add(f"like_{theme}_{style}_{name}")
+    for size in _SQUARE_SIZES:
+        for theme in ("light", "dark"):
+            need.add(f"like_{theme}_square_{size}")
+            need.add(f"like_{theme}_square_filled_{size}")
     return need <= names
 
 
@@ -1889,6 +2176,126 @@ def _like_slot_blobs(blobs: Sequence[Dict[str, int]], height: int) -> List[Dict[
     return chosen
 
 
+def _window_square_scan(raw: bytes, slots: Sequence[Dict[str, Any]],
+                        templates: Optional[Sequence[Dict[str, Any]]] = None,
+                        ) -> Tuple[float, List[int], List[Dict[str, Any]]]:
+    """Best square-template score inside the inferred Like window.
+
+    The score is reported even under TEMPLATE_MED. The offset is the match
+    center minus the inferred center, in pixels.
+    """
+    decoded = _gray(raw)
+    if decoded is None or not slots:
+        return 0.0, [0, 0], []
+    width, height, _hdr, _order, luma = decoded
+    center = _hit_xy(slots[0])
+    if center is None:
+        return 0.0, [0, 0], []
+    sx, sy = center
+    pack = list(templates) if templates is not None else load_templates()
+    sizes = square_sizes_for_width(width)
+    names = set()
+    for size in sizes:
+        for theme in ("light", "dark"):
+            names.add(f"like_{theme}_square_{size}")
+            names.add(f"like_{theme}_square_filled_{size}")
+    chosen = [item for item in pack if str(item.get("name") or "") in names]
+    if not chosen:
+        return 0.0, [0, 0], []
+    sample = nsample = 0
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            xx, yy = sx + dx, sy + dy
+            if 0 <= xx < width and 0 <= yy < height:
+                sample += int(luma[yy * width + xx])
+                nsample += 1
+    theme = "light" if (sample / nsample if nsample else 128) >= 140 else "dark"
+    themed = [item for item in chosen if theme in str(item["name"])] or chosen
+    base_mid = sizes[len(sizes) // 2]
+
+    def _rank(item: Dict[str, Any]) -> Tuple[int, int, str]:
+        name = str(item["name"])
+        return (1 if "filled" in name else 0, abs(int(item["w"]) - base_mid), name)
+
+    themed.sort(key=_rank)
+    best = 0.0
+    best_xy = (float(sx), float(sy))
+
+    def _score_at(tmpl: Dict[str, Any], dx: int, dy: int) -> float:
+        tw, th = int(tmpl["w"]), int(tmpl["h"])
+        left = int(round(sx - tw / 2.0)) + dx
+        top = int(round(sy - th / 2.0)) + dy
+        if left < 0 or top < 0 or left + tw > width or top + th > height:
+            return -1.0
+        patch = [luma[(top + yy) * width + (left + xx)] for yy in range(th) for xx in range(tw)]
+        return _ncc(_edge_map(patch, tw, th), tmpl["edge"])
+
+    for tmpl in themed:
+        tw, th = int(tmpl["w"]), int(tmpl["h"])
+        local = 0.0
+        local_xy = (float(sx), float(sy))
+        found = False
+        for dy in range(-8, 9):
+            for dx in range(-8, 9):
+                score = _score_at(tmpl, dx, dy)
+                if score > local:
+                    local = score
+                    local_xy = (int(round(sx - tw / 2.0)) + dx + tw / 2.0,
+                                int(round(sy - th / 2.0)) + dy + th / 2.0)
+                    found = True
+                if local >= 0.97:
+                    break
+            if local >= 0.97:
+                break
+        if local < TEMPLATE_MED:
+            seed: Optional[Tuple[int, int]] = None
+            for dy in range(-INFERRED_WINDOW_PX, INFERRED_WINDOW_PX + 1, 4):
+                for dx in range(-INFERRED_WINDOW_PX, INFERRED_WINDOW_PX + 1, 4):
+                    if max(abs(dx), abs(dy)) <= 8:
+                        continue
+                    score = _score_at(tmpl, dx, dy)
+                    if score > local:
+                        local = score
+                        local_xy = (int(round(sx - tw / 2.0)) + dx + tw / 2.0,
+                                    int(round(sy - th / 2.0)) + dy + th / 2.0)
+                        seed = (dx, dy)
+                        found = True
+            if seed is not None:
+                cdx, cdy = seed
+                for dy in range(cdy - 3, cdy + 4):
+                    if abs(dy) > INFERRED_WINDOW_PX:
+                        continue
+                    for dx in range(cdx - 3, cdx + 4):
+                        if abs(dx) > INFERRED_WINDOW_PX:
+                            continue
+                        score = _score_at(tmpl, dx, dy)
+                        if score > local:
+                            local = score
+                            local_xy = (int(round(sx - tw / 2.0)) + dx + tw / 2.0,
+                                        int(round(sy - th / 2.0)) + dy + th / 2.0)
+                            found = True
+        if found and local > best:
+            best = local
+            best_xy = local_xy
+        if best >= 0.97:
+            break
+    off = [int(round(best_xy[0] - sx)), int(round(best_xy[1] - sy))]
+    hits: List[Dict[str, Any]] = []
+    if best >= TEMPLATE_MED:
+        hx, hy = best_xy
+        hits.append({
+            "source": "template",
+            "x_pm": _pm(hx, width),
+            "y_pm": _pm(hy, height),
+            "score": best,
+            "label": "square",
+            "full": _fully_inside(int(hx - 2), int(hy - 2), int(hx + 2), int(hy + 2), width, height),
+            "x": hx,
+            "y": hy,
+        })
+    return best, off, hits
+
+
 def _blank_diag(dump: str) -> Dict[str, Any]:
     return {
         "uiautomator": {
@@ -1897,7 +2304,10 @@ def _blank_diag(dump: str) -> Dict[str, Any]:
         },
         "action_bar": {"content_descs": [], "texts": [], "resource_ids": []},
         "template_score": 0.0,
+        "template_offset_px": [0, 0],
         "template_matched": False,
+        "capture_skew_ms": 0,
+        "action_bar_delta_px": 0,
         "structure_matched": False,
         "structure_bounds": "",
         "shape_matched": False,
@@ -1936,11 +2346,15 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         }
     blobs = extract_blobs(raw)
     text = text_hits(norm, width, height)
-    structure = structure_hits(blobs, norm, width, height, composer_centers(raw))
+    bar_ys = action_bar_ys(hierarchy, width, height) or []
+    structure = structure_hits(
+        blobs, norm, width, height, composer_centers(raw), anchor_ys=bar_ys or None,
+    )
     templ, template_score = _template_scan(raw, _like_slot_blobs(blobs, height))
     shapes, shape_records = shape_report(raw, blobs)
     labels = label_hits(hierarchy, width, height)
     positions = position_hits(hierarchy, width, height)
+    template_offset = [0, 0]
     row_bounds = str(structure[0].get("row_bounds") or "") if structure else ""
     regions = region_hits(hierarchy, row_bounds, width, height)
     # Drop a candidate whose center is already the liked blue.
@@ -1965,12 +2379,36 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         labels = [h for h in labels if not _blue_hit(h)]
         positions = [h for h in positions if not _blue_hit(h)]
         regions = [h for h in regions if not _blue_hit(h)]
+    slots = _inferred_slots(positions)
+    seen_templ = list(templ)
+    seen_structure = list(structure)
+    seen_shapes = list(shapes)
+    if slots:
+        # The reported score is the best hit inside the inferred window.
+        # A fullscreen peak on the nav chrome is not that score.
+        in_window = [hit for hit in templ if any(_in_inferred_window(hit, slot) for slot in slots)]
+        window_score, template_offset, window_hits = _window_square_scan(raw, slots)
+        blob_score = max((float(hit["score"]) for hit in in_window), default=0.0)
+        if blob_score > window_score and in_window:
+            best_blob = max(in_window, key=lambda hit: float(hit["score"]))
+            slot_xy = _hit_xy(slots[0])
+            if slot_xy is not None:
+                template_offset = [
+                    int(round(float(best_blob["x"]) - slot_xy[0])),
+                    int(round(float(best_blob["y"]) - slot_xy[1])),
+                ]
+            window_score = blob_score
+        template_score = window_score
+        templ = in_window + window_hits
     target = fuse_signals(text, templ, structure, shapes, labels, positions, regions)
     if target is not None:
         target = {k: target[k] for k in ("x", "y", "signals", "label", "score")}
     diag = hierarchy_diag(hierarchy, width, height)
     diag["template_score"] = round(float(template_score), 3)
+    diag["template_offset_px"] = [int(template_offset[0]), int(template_offset[1])]
     diag["template_matched"] = bool(templ)
+    diag["capture_skew_ms"] = 0
+    diag["action_bar_delta_px"] = 0
     diag["structure_matched"] = bool(structure)
     diag["structure_bounds"] = str(structure[0].get("row_bounds") or "") if structure else ""
     diag["shape_matched"] = bool(shapes)
@@ -1982,7 +2420,7 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         diag["shape_score"] = 0.0
     diag["position_matched"] = bool(positions)
     diag["position_inferred"] = any(bool(h.get("inferred")) for h in positions)
-    diag["screenshot_outside"] = _screenshot_outside(positions, templ, structure, shapes)
+    diag["screenshot_outside"] = _screenshot_outside(positions, seen_templ, seen_structure, seen_shapes)
     diag["screenshot_window_px"] = INFERRED_WINDOW_PX if diag["position_inferred"] else 0
     diag["region_matched"] = bool(regions)
     return {
@@ -2107,8 +2545,10 @@ __all__ = [
     "TEMPLATE_HIGH", "TEMPLATE_MED", "composer_centers", "empty_phrase", "extract_blobs",
     "fuse_signals", "hierarchy_census", "hierarchy_diag", "label_hits", "like_state_changed",
     "load_rapidocr", "load_templates",
+    "INFERRED_WINDOW_PX", "SAME_FRAME_MAX_PX", "action_bar_delta_px", "action_bar_ys",
     "locate_like_row", "normalize_ocr_boxes", "position_hits", "post_evidence", "rapidocr_available",
     "region_hits",
-    "read_text_boxes", "render_thumb", "render_thumb_icon", "shape_hits", "structure_hits", "template_hits",
+    "read_text_boxes", "render_square_thumb", "render_thumb", "render_thumb_icon", "same_frame_ok",
+    "shape_hits", "square_sizes_for_width", "structure_hits", "template_hits",
     "templates_available", "text_hits", "vision_stack_ready", "write_default_templates",
 ]
