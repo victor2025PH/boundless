@@ -15,6 +15,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from src.ai.translation_service import detect_language
+from src.inbox.session_lang import refine_latin_language
 
 #: 极短拉丁客套词（小写）：语言证据不足，不参与会话语言投票
 _TRIVIAL_LATIN = frozenset({
@@ -39,8 +40,12 @@ def detect_inbound_language(raw: str) -> str:
         low = t.lower().rstrip(".!?~ ")
         letters = sum(1 for c in low if c.isalpha())
         if low in _TRIVIAL_LATIN or letters < 4:
-            return "unknown"
-    return detect_language(t)
+            # P1-5（2026-10-08）：「po」「Sige」这类他加禄短词是明确证据，不按「OK」处理；
+            # 其余极短 ASCII 仍 unknown（「OK」翻会话语言的护栏不变）。
+            lang, _ = refine_latin_language(t, "unknown")
+            return "tl" if lang == "tl" else "unknown"
+    # tl / Taglish / 宿务补强 + 「中文夹英文词」判 zh（session_lang 单一实现）
+    return refine_latin_language(t, detect_language(t))[0]
 
 # 统一收件箱草稿/审批的 4 档自动化模式（与 unified_inbox 前端一致）
 SEND_MODES = ["manual", "review", "multi_choice", "auto_ai"]
