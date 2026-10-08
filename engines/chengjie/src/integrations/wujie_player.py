@@ -187,6 +187,36 @@ def redact_financials(text: Any) -> Tuple[str, int]:
     return s, n
 
 
+def redaction_required(user_context: Any, config: Any = None) -> bool:
+    """出站是否必须做金额脱敏（红线「博彩召回回述真人余额」）。
+
+    本轮注入过玩家网关事实（``_player_data_block``）**或**本实例开了 ``player_gateway.enabled``
+    （前几轮的事实可能还在对话历史里被模型复述）→ True。与任何守卫跳过开关无关。绝不抛。"""
+    try:
+        if isinstance(user_context, dict) and user_context.get("_player_data_block"):
+            return True
+        return bool(_truthy(player_gateway_cfg(config).get("enabled")))
+    except Exception:
+        return False
+
+
+def enforce_outbound_redaction(reply: Any, user_context: Any = None, config: Any = None,
+                               *, path: str = "") -> Tuple[str, int]:
+    """出站金额脱敏的**唯一**执法入口（A/B 两线都在守卫跳过开关之外调用）。
+
+    命中即替换为 ``***`` 并留痕（WARNING ``[player-gateway] action=redact``，不记原文）；
+    返回 ``(文本, 替换次数)``。不要求脱敏 / 无命中 → 原样返回。绝不抛。"""
+    s = str(reply or "")
+    if not s or not redaction_required(user_context, config):
+        return s, 0
+    red, n = redact_financials(s)
+    if n:
+        logger.warning("[player-gateway] action=redact path=%s count=%d platform=%s",
+                       path or "-", n, str((user_context or {}).get("platform") or "-")
+                       if isinstance(user_context, dict) else "-")
+    return red, n
+
+
 _FACTS_RULE = (
     "【玩家后台资料 · 只读】身份已由 WhatsApp 本人号核实。金额类信息（余额 / 充值 / 提现 / 打码 / 流水）"
     "一律不在对话里复述，已打码为 ***；玩家问到时请引导到官方 App 内查看。"
@@ -232,4 +262,5 @@ def inject_player_block(user_context: Dict[str, Any], text: str, config: Any) ->
 __all__ = [
     "player_gateway_cfg", "gateway_ready", "visible_facts_enabled", "verified_phone",
     "should_lookup", "fetch_lookup", "redact_financials", "inject_player_block", "MASK",
+    "redaction_required", "enforce_outbound_redaction",
 ]

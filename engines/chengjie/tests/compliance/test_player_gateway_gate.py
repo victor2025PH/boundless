@@ -115,3 +115,78 @@ def test_outbound_guard_redacts_when_player_block_present():
     out2 = SkillManager._apply_outbound_text_guard(
         sm, "Sige po, balance mo ay ₱5,000 ngayon.", user_context={})
     assert "5,000" in out2
+
+
+# ── 红线无条件（蛋博士 2026-10-08 拍板）：脱敏不得受 outbound_text_guard 跳过开关控制 ──
+
+def _bare_sm(cfg=None):
+    import logging
+    from src.skills.skill_manager import SkillManager
+
+    class _SM(SkillManager):
+        logger = logging.getLogger("t")
+
+    sm = _SM.__new__(_SM)
+    sm.config = cfg
+    return sm
+
+
+_REPLY = "Sige po, balance mo ay ₱5,000 ngayon, deposit 2000 php kahapon."
+
+
+def test_enforce_redaction_ignores_skip_switches(monkeypatch):
+    """关掉（跳过）全部守卫层后仍脱敏：skip_guard 恒 True 也不影响执法入口。"""
+    from src.ai import conv_route
+    monkeypatch.setattr(conv_route, "skip_guard", lambda *a, **k: True)
+    sm = _bare_sm()
+    out = sm._enforce_player_redaction(_REPLY, {"_player_data_block": "x"}, path="b_line")
+    assert "5,000" not in out and "2000" not in out and "***" in out
+
+
+def test_enforce_redaction_when_gateway_enabled_without_block_this_turn():
+    """前几轮注入过的余额可能还在历史里：实例开了 player_gateway 就一律打码。"""
+    sm = _bare_sm({"player_gateway": {"enabled": True}})
+    out = sm._enforce_player_redaction(_REPLY, {}, path="a_line")
+    assert "5,000" not in out
+    # 没开网关、本轮也没注入 → 普通业务文本不动
+    sm2 = _bare_sm({})
+    assert sm2._enforce_player_redaction(_REPLY, {}, path="a_line") == _REPLY
+
+
+def test_enforce_redaction_leaves_trace_without_raw_text(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="src.integrations.wujie_player"):
+        red, n = wp.enforce_outbound_redaction(_REPLY, {"_player_data_block": "x", "platform": "whatsapp"},
+                                               None, path="b_line")
+    assert n >= 2 and "5,000" not in red
+    msgs = [r.getMessage() for r in caplog.records if "action=redact" in r.getMessage()]
+    assert msgs and "5,000" not in msgs[0] and "path=b_line" in msgs[0]
+
+
+def test_b_line_redaction_is_outside_outbound_text_guard_skip():
+    """结构钉：B 线 generate_inbox_draft 里脱敏调用不嵌在 ``not _skipg(...)`` 条件下；A 线同样无条件。"""
+    import ast
+    import inspect
+    import textwrap
+    from src.skills.skill_manager import SkillManager
+
+    def _calls_outside_skip(fn):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        hits = []
+
+        def walk(node, guarded):
+            for child in ast.iter_child_nodes(node):
+                g = guarded
+                if isinstance(child, ast.If) and "_skipg" in ast.unparse(child.test):
+                    g = True
+                if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                        and child.func.attr == "_enforce_player_redaction"):
+                    hits.append(g)
+                walk(child, g)
+        walk(tree, False)
+        return hits
+
+    b = _calls_outside_skip(SkillManager.generate_inbox_draft)
+    assert b and not any(b), "B 线脱敏必须有调用且全部不在 _skipg 条件内"
+    a = _calls_outside_skip(SkillManager._handle_message_guarded)
+    assert a and not any(a)
