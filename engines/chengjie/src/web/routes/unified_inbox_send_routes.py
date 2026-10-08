@@ -469,6 +469,16 @@ def _send_blocked_exc(
     return HTTPException(int(status_code or 409), detail)  # TK-3：真机离线可 503
 
 
+def _mark_script_send(request: Request, body: Any = None) -> bool:
+    """智安发送限速闸：请求头 ``X-Send-Origin: script``（或 body ``origin: "script"``）→
+    本请求后续出站都按 ``script`` 计数 / 受脚本日上限约束。绝不抛。"""
+    try:
+        from src.compliance.send_rate_gate import mark_script_from_request
+        return mark_script_from_request(request, body if isinstance(body, dict) else None)
+    except Exception:
+        return False
+
+
 def _send_gate_exc(
     request: Request, platform: str, account_id: str, chat_key: str,
     *, owned: Any = None,
@@ -968,6 +978,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         返回额外字段 original_text / sent_text / translation 供前端展示「发出的实际译文」。
         """
         body = await request.json()
+        _mark_script_send(request, body)
         platform = str(body.get("platform") or "").lower()
         account_id = str(body.get("account_id") or "default")
         chat_key = str(body.get("chat_key") or "")
@@ -1609,6 +1620,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         仅 protocol 账号（编排器接管、在线）支持；其它平台返回 501（走各自 RPA 发送）。
         发送成功后媒体以 /static URL 回写线程，坐席侧立即可见。
         """
+        _mark_script_send(request)
         _t0 = time.perf_counter()
         _ctype = str(request.headers.get("content-type") or "").lower()
         _meta_keys = ("platform", "account_id", "chat_key", "caption", "client_msg_id")
@@ -1681,6 +1693,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         仅 protocol 账号（编排器接管、在线）支持；其它平台返回 501（走各自 RPA voice_output）。
         """
         body = await request.json()
+        _mark_script_send(request, body)
         platform = str(body.get("platform") or "").lower()
         account_id = str(body.get("account_id") or "default")
         chat_key = str(body.get("chat_key") or "")
