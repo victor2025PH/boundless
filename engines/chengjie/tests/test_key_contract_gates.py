@@ -86,6 +86,20 @@ def _producer_keys() -> set:
     # 合并层入口判定键（_merge_voice_profile 的占位过滤表）
     keys.update({"enabled", "backend", "voice", "speaker_id",
                  "reference_audio_path"})
+    # 人设编辑器也是生产者：personas.html 的 _vxCollectPatch 把「表现力/回复形态」
+    # 键写进保存体 voice_profile（_vmCollectPatch → body.voice_profile）。只认该函数
+    # 体内的 ``into.<key> =`` 显式写入，不扫整页（防注释/读取误算成生产者）。
+    keys.update(_persona_editor_vp_writes())
+    return keys
+
+
+def _persona_editor_vp_writes() -> set:
+    tpl = ENGINE / "src" / "web" / "templates" / "personas.html"
+    text = tpl.read_text(encoding="utf-8")
+    m = re.search(r"function _vxCollectPatch\(into\)\s*\{(.*?)\n\}", text, re.S)
+    assert m, "personas.html 未找到 _vxCollectPatch（人设编辑器 voice_profile 写入口改名需同步本门禁）"
+    keys = set(re.findall(r"\binto\.([a-z_]+)\s*=(?!=)", m.group(1)))
+    assert keys, "_vxCollectPatch 体内未扫到 into.<key>= 写入（扫描器疑似失效）"
     return keys
 
 
