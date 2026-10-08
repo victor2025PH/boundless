@@ -259,8 +259,23 @@ def is_locked(category: str, cfg: Any = None) -> bool:
 IMPLIED_LOCKED_WHEN_ADULT_OPEN: Tuple[str, ...] = ("minor",)
 
 
-def implied_locked(cfg: Any = None, persona: Any = None) -> List[str]:
-    """按有效成人政策推出的隐含锁定类别（当前只有 open → minor）。绝不抛。"""
+#: 智安 P0-2（2026-10-08）：STOP 硬闸默认生效 ⇒ ``stop_contact`` **恒隐含锁定**——用户说了
+#: STOP 还继续发是法律 / 伦理红线，不依赖运营去「敏感话题」卡勾锁定。只有显式
+#: ``compliance.stop_gate.enabled: false``（应急开关）才回到 R88「只记录」。
+IMPLIED_LOCKED_BY_STOP_GATE: Tuple[str, ...] = ("stop_contact",)
+
+
+def stop_gate_locked(cfg: Any = None) -> List[str]:
+    """STOP 硬闸带来的隐含锁定类别（默认 ``[stop_contact]``；开关显式关 → 空）。绝不抛。"""
+    try:
+        from src.compliance.stop_gate import enforced
+        on = enforced(cfg)
+    except Exception:
+        on = True        # 判定异常按「生效」：红线闸宁严勿松
+    return [c for c in IMPLIED_LOCKED_BY_STOP_GATE if c in LOCKABLE] if on else []
+
+
+def _adult_implied(cfg: Any = None, persona: Any = None) -> List[str]:
     try:
         from src.inbox.adult_grader import adult_open
         if adult_open(persona, cfg):
@@ -268,6 +283,24 @@ def implied_locked(cfg: Any = None, persona: Any = None) -> List[str]:
     except Exception:
         pass
     return []
+
+
+def implied_locked(cfg: Any = None, persona: Any = None) -> List[str]:
+    """按有效成人政策推出的隐含锁定类别（当前只有 open → minor）。绝不抛。
+
+    STOP 硬闸的 stop_contact 隐含锁定**不在这里**（它不随成人政策变，见 :func:`stop_gate_locked`），
+    由 :func:`is_locked_effective` / :func:`public_table` 一并考虑。"""
+    return _adult_implied(cfg, persona)
+
+
+def implied_locked_by(category: str, cfg: Any = None, persona: Any = None) -> str:
+    """隐含锁定的来源码：``stop_gate`` / ``adult_open`` / ``""``。"""
+    cid = str(category or "").strip().lower()
+    if cid in stop_gate_locked(cfg):
+        return "stop_gate"
+    if cid in _adult_implied(cfg, persona):
+        return "adult_open"
+    return ""
 
 
 def is_locked_effective(category: str, cfg: Any = None, persona: Any = None) -> Tuple[bool, str]:
@@ -278,8 +311,9 @@ def is_locked_effective(category: str, cfg: Any = None, persona: Any = None) -> 
         return False, ""
     if is_locked(cid, cfg):
         return True, "config"
-    if cid in implied_locked(cfg, persona):
-        return True, "adult_open"
+    by = implied_locked_by(cid, cfg, persona)
+    if by:
+        return True, by
     return False, ""
 
 
@@ -308,7 +342,7 @@ def public_table(persona: Any = None, cfg: Any = None) -> List[Dict[str, Any]]:
     + R88 ``lockable`` / ``locked`` / ``outcome``。"""
     ov = risk_overrides_of(persona)
     locked = set(locked_categories(cfg))
-    implied = set(implied_locked(cfg, persona))
+    implied = set(implied_locked(cfg, persona)) | set(stop_gate_locked(cfg))
     out: List[Dict[str, Any]] = []
     for c in CATEGORIES:
         row = dict(c)
@@ -319,7 +353,8 @@ def public_table(persona: Any = None, cfg: Any = None) -> List[Dict[str, Any]]:
         # ``locked`` = 运营显式勾的那份（开关状态）；``locked_by`` 说明真正让它停的来源——
         # 成人不设限隐含锁定的类别开关显示为「强制锁定」，chip 按会停 AI 画。
         row["locked"] = c["id"] in locked
-        row["locked_by"] = "config" if c["id"] in locked else ("adult_open" if c["id"] in implied else "")
+        row["locked_by"] = ("config" if c["id"] in locked
+                            else (implied_locked_by(c["id"], cfg, persona) if c["id"] in implied else ""))
         row["outcome"] = outcome_of(c["id"], locked=bool(row["locked_by"]))
         out.append(row)
     return out
@@ -650,7 +685,8 @@ def rename_unlocked_hard_reasons(reasons: Sequence[str], cfg: Any = None) -> Tup
         for r in reasons:
             s = str(r)
             cat = _HARD_REASON_CATEGORY.get(s)
-            if cat and not is_locked(cat, cfg):
+            # 智安 P0-2：stop_contact 由 STOP 硬闸隐含锁定（默认），不改名、照旧硬停
+            if cat and not is_locked(cat, cfg) and cat not in stop_gate_locked(cfg):
                 out.append(s + RECORDED_SUFFIX)
                 renamed.append(s)
             else:
@@ -799,6 +835,7 @@ __all__ = [
     "CATEGORIES", "OVERRIDABLE", "LOCKABLE", "category_def", "public_table", "normalize_level",
     "normalize_locked", "locked_categories", "is_locked", "outcome_of", "first_locked_hit",
     "IMPLIED_LOCKED_WHEN_ADULT_OPEN", "implied_locked", "is_locked_effective",
+    "IMPLIED_LOCKED_BY_STOP_GATE", "stop_gate_locked", "implied_locked_by",
     "rename_unlocked_hard_reasons",
     "risk_overrides_of", "resolve_persona", "grade", "classify_reason", "regrade_inbound",
     "release_hold_on_low",

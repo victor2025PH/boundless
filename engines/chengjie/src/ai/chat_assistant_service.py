@@ -374,7 +374,17 @@ def _stop_contact_hit(text: str) -> str:
         return m.group(0)
     scrubbed = _STOP_CONTACT_NEGATED.sub(" ", t)
     m = _STOP_CONTACT_EN.search(scrubbed)
-    return _norm_hit(m.group(0)) if m else ""
+    if m:
+        return _norm_hit(m.group(0))
+    # 智安 P0-2（2026-10-08）：多语补充词表（单独 STOP / Stop po / tigil na / ayoko na /
+    # huwag mo na akong i-chat / Bisaya / 印地语 / 退订……）。同一入口，不造第二套：
+    # quick_analyze / stop_contact_hits / hard_stop_reason 看到的都是这里的结果。
+    # 否定式片段已挖掉（「can't stop messaging you」不算）。
+    try:
+        from src.compliance.stop_gate import match_lexicon
+        return _norm_hit(match_lexicon(scrubbed))
+    except Exception:
+        return ""
 
 
 def _detect_risk_detailed(

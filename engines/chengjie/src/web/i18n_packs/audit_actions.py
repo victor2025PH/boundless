@@ -17,6 +17,8 @@ ZH = {
     "aud_act_change_password": "修改密码",
     "aud_act_revoke_session": "注销单个会话",
     "aud_act_revoke_all_sessions": "注销全部会话",
+    "aud_act_session_expire_sweep": "会话过期清扫",
+    "aud_act_admin_cap_blocked": "拦截超额管理员",
     "aud_act_web_body_oversize_rejected": "拦截超大请求 (413)",
     # ── 人设 / 档案 ─────────────────────────────────────────────────
     "aud_act_persona_bind": "绑定人设到会话",
@@ -219,6 +221,8 @@ EN = {
     "aud_act_change_password": "Change password",
     "aud_act_revoke_session": "Revoke one session",
     "aud_act_revoke_all_sessions": "Revoke all sessions",
+    "aud_act_session_expire_sweep": "Session expiry sweep",
+    "aud_act_admin_cap_blocked": "Admin cap blocked",
     "aud_act_web_body_oversize_rejected": "Oversize request rejected (413)",
     # ── Personas / profiles ────────────────────────────────────────
     "aud_act_persona_bind": "Bind persona to chat",
