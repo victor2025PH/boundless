@@ -656,6 +656,35 @@ class SkillManager(LoggerMixin):
         except Exception:
             return KbDecision()
 
+    def _kb_route_miss(self, user_context: Dict[str, Any], kb_store: Any, text: str, *,
+                       hit_q: bool, why: str, conversation_id: str, lang: str,
+                       log_prefix: str = "") -> bool:
+        """KB 未命中（新口径 judge_kb_hit）后的统一处理（智语 2026-10-08）。
+
+        - 进 miss_log、后台生成 kb_drafts 待审（``kb_miss_route.record_kb_miss``；must 档
+          已由 ``_kb_after_search`` 入池的不重复记）；
+        - must 档已注入查无固定话术时，撤掉弱命中的 kb_context——ai_client 只在没有
+          kb_context 时才注入查无块，规则 / 示例撑起来的非空上下文会把兜底话术挡掉。
+        返回 True = 本轮按查无兜底（调用方据此清空知识依据 chips）。绝不抛。
+        """
+        if hit_q:
+            return False
+        nohit = bool((user_context or {}).get("_kb_nohit_block"))
+        try:
+            from src.utils.kb_miss_route import record_kb_miss
+            res = record_kb_miss(
+                kb_store, text, conversation_id=conversation_id, lang=lang, reason=why,
+                already_logged=nohit, config=self.config,
+                ai_client=getattr(self, "ai_client", None))
+            self.logger.info("%sKB 未命中路由: why=%s logged=%s draft=%s",
+                             log_prefix, why, res.get("logged"), res.get("draft"))
+        except Exception:
+            self.logger.debug("%sKB 未命中路由异常（忽略）", log_prefix, exc_info=True)
+        if nohit and (user_context or {}).get("kb_context"):
+            user_context.pop("kb_context", None)
+            self.logger.info("%sKB 弱命中按查无兜底：撤下 kb_context（%s）", log_prefix, why)
+        return nohit
+
     def _kb_after_search(self, user_context: Dict[str, Any], decision: Any, kb_store: Any,
                          text: str, *, hit: bool, refs: int, conversation_id: str,
                          lang: str, log_prefix: str = "") -> None:
@@ -2491,9 +2520,10 @@ class SkillManager(LoggerMixin):
 
                     _kb_ctx = _kb.build_ai_context_from_result(_search_result, lang=_lang)
                     _hit = bool(_kb_ctx)
-                    # 命中率口径（2026-10-08）：_hit 仍决定注入 / 直出流程（行为不变）；
-                    # 查询日志与 _EMBED_STATS 改记 _hit_q——首条实词重叠或向量余弦达标才算，
-                    # 规则 / 示例撑起来的非空 kb_ctx 不再算命中（此前 hits 恒等于 queries）。
+                    # 命中口径（2026-10-08 智语）：_hit（kb_ctx 非空）只决定要不要注入上下文；
+                    # 直出、must 档查无兜底、学习池 / 待审草稿、查询日志与 _EMBED_STATS 一律按
+                    # _hit_q——首条实词重叠或向量余弦达标才算，规则 / 示例撑起来的非空 kb_ctx
+                    # 不再算命中（此前 hits 恒等于 queries，must 档兜底在真实库上从不触发）。
                     try:
                         _vec_min = float(
                             ((getattr(self.config, "config", None) or {}).get("knowledge_base") or {})
@@ -2543,6 +2573,14 @@ class SkillManager(LoggerMixin):
                             self.logger.info(
                                 "%sKB direct 降级 ai_guided（非中文 lang=%s）: '%s'",
                                 log_prefix, _lang, _top_title,
+                            )
+                            _top_reply_mode = "ai_guided"
+
+                        # 弱命中（kb_ctx 非空但 judge_kb_hit 不认）不许直出（2026-10-08 智语）
+                        if _top_reply_mode == "direct" and not _hit_q:
+                            self.logger.info(
+                                "%sKB direct 降级 ai_guided（弱命中 %s）: '%s'",
+                                log_prefix, _hit_why, _top_title,
                             )
                             _top_reply_mode = "ai_guided"
 
@@ -2655,22 +2693,25 @@ class SkillManager(LoggerMixin):
                                 pass
                     else:
                         # 学习漏斗入池守门：占位符/闲聊不进池（2026-08-02，
-                        # 陪聊语句 cnt 恒 1 灌爆 top_k、占位符生成荒谬草稿的复盘）
-                        if should_log_kb_miss(text):
-                            _kb.log_miss(text)
+                        # 陪聊语句 cnt 恒 1 灌爆 top_k、占位符生成荒谬草稿的复盘）。
+                        # 2026-10-08：入池 + 待审草稿统一在 _kb_after_search 之后按 _hit_q 走 record_kb_miss。
                         self.logger.info(
                             "%sKB 未命中 (BM25=%.3f) msg='%s'",
                             log_prefix, _top_bm25_score, text[:30]
                         )
                     # P0-4 / P0-5：决策回填命中态；客服 / 销售 must 档查无 → 固定话术 / 二次转人工
+                    _kb_conv_id = str(
+                        (user_context or {}).get("conversation_id")
+                        or f"{(user_context or {}).get('platform') or 'bot'}:{_chat_id}")
                     self._kb_after_search(
-                        user_context, _kb_decision, _kb, text, hit=_hit,
-                        refs=len((_search_result or {}).get("entries") or []),
-                        conversation_id=str(
-                            (user_context or {}).get("conversation_id")
-                            or f"{(user_context or {}).get('platform') or 'bot'}:{_chat_id}"),
+                        user_context, _kb_decision, _kb, text, hit=_hit_q,
+                        refs=len((_search_result or {}).get("entries") or []) if _hit_q else 0,
+                        conversation_id=_kb_conv_id,
                         lang=_lang, log_prefix=log_prefix,
                     )
+                    self._kb_route_miss(
+                        user_context, _kb, text, hit_q=_hit_q, why=_hit_why,
+                        conversation_id=_kb_conv_id, lang=_lang, log_prefix=log_prefix)
 
                     #写入查�日志（含分数 + 匹配条目ID，用于弱命中分析�?
                     try:
@@ -3858,6 +3899,8 @@ class SkillManager(LoggerMixin):
                     _lang = (user_context or {}).get("reply_lang", "zh")
                     _res = _kb.search(text, top_k=3, lang=_lang)
                     _kbc = _kb.build_ai_context_from_result(_res, lang=_lang)
+                    from src.utils.kb_miss_route import kb_hit_for_reply
+                    _hit_q, _hit_why = kb_hit_for_reply(text, _res, self.config)
                     if _kbc:
                         user_context["kb_context"] = _kbc
                         # P2 证据链：留住本稿引用的条目（title/snippet），随返回
@@ -3877,17 +3920,18 @@ class SkillManager(LoggerMixin):
                         # 上线后 A 线整体跳过 KB，学习队列断粮。只收「问题样式」
                         # 文本（占位符/闲聊不进池，防陪伴域灌爆）；must 档在
                         # _kb_after_search 里一律入池。
-                        try:
-                            from src.utils.kb_gate import should_log_kb_miss
-                            if should_log_kb_miss(text) and not getattr(_kb_decision, "must", False):
-                                _kb.log_miss(text)
-                        except Exception:
-                            pass
+                        # 2026-10-08：入池 + 待审草稿统一在下方按 _hit_q 走 record_kb_miss。
+                        pass
+                    _kb_conv_id = str(conversation_id or f"{platform}:{_acct_id}:{chat_key}")
                     self._kb_after_search(
-                        user_context, _kb_decision, _kb, text, hit=bool(_kbc),
-                        refs=len((_res or {}).get("entries") or []) if _kbc else 0,
-                        conversation_id=str(conversation_id or f"{platform}:{_acct_id}:{chat_key}"),
+                        user_context, _kb_decision, _kb, text, hit=_hit_q,
+                        refs=len((_res or {}).get("entries") or []) if _hit_q else 0,
+                        conversation_id=_kb_conv_id,
                         lang=_lang, log_prefix=log_prefix)
+                    if self._kb_route_miss(
+                            user_context, _kb, text, hit_q=_hit_q, why=_hit_why,
+                            conversation_id=_kb_conv_id, lang=_lang, log_prefix=log_prefix):
+                        _kb_refs = []
                 if _kb_decision is not None:
                     from src.utils.kb_policy import note_decision
                     note_decision(str(conversation_id or f"{platform}:{_acct_id}:{chat_key}"), _kb_decision)
