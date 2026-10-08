@@ -1,5 +1,18 @@
 # 智拓群控节点更新日志
 
+## 0.3.30
+Facebook 带图发帖不再盲点右上角的 `media_next`。有的版本选完相册就没有单独的「下一步」，那个点和「发布」几乎重合（原来大约 860,120 和 880,120，千分比）。点下去会在文案写上之前把帖子发出去。
+
+打包的 `phone_ui_map.json` 里，Facebook 的 `post_media` 不再包含 `media_next` 这一步。坐标仍留着，但挪到 `[860, 420]`，和 `post_submit` `[880, 120]` 拉开，避免旧读法点到发布。编译时也会丢掉名为 `media_next` 的点击，以及文案之前、落在 `post_submit` 分离半径里的其它点击；如果坐标文件把发布排在文案前面，文案（和紧挨在前面的输入框点击）会挪到发布之前。
+
+真机发带图帖时，写文案之前只做一次 `uiautomator dump /dev/tty`。不暂停视频，不按返回，不写点赞用的 `/sdcard/chatx_like_hierarchy.xml`。只有节点文字明确是 Next / Continue / 下一步 / 继续，并且不是 Post / Share / Publish，也没有和发布控件叠在一起，才点这个点。没有信号、是发布按钮、或两种标签叠在同一控件上，就跳过，先写文案再点 `post_submit`。
+
+`phone_post` 可以带 `verify_publish: true`。发完再读一次窗口。看到成功文案（例如 “Post shared” / 发布成功），并且可点的发布按钮已经不在，回执才带 `publish_verified: true`。窗口是空的、发布按钮还在、或只有画面变了，回执 `failed` / `post_not_confirmed`。不带这个开关时不额外证明已发布。`robust.verify` 仍只看截图有没有变、登录色在不在，不证明帖子已发出。`dry_run` 带这个开关也不碰手机，不会报已发布。非布尔值是 `bad_verify_publish`，帖子不会发。
+
+文案仍是 `phone_text` 那套 ASCII，最长 200。中文仍是 `text_non_ascii_unsupported`，这一版不加输入法。
+
+点赞、评论、关注、`like_probe`、频率上限、`dry_run` 不碰手机都不变。0.3.25 的自动派发排除和 0.3.13 的 `push_config` 不变。公开下载页的 latest 仍是 0.3.7。Instagram / TikTok 的 `post_media` 这一版不动。
+
 ## 0.3.29
 点赞找按钮改成和截图同一时刻。滑动之后先停 1.75 秒，再按「抓结构 → 截图 → 再抓结构」。两次动作条（Comment / Share / Send 那一行）的位置差不超过 8 像素才用这一帧，否则重抓，最多 3 次。用尽了就丢掉这份结构，只留截图，避免滑动惯性和自动播放把导航栏送进来凑成两路。
 

@@ -359,7 +359,18 @@ def test_execute_post_with_gallery_slot(app):
     compiled = compile_flow(app, "post_media", {"text": "hello fleet", "media": 1, "media_slot": 2}, W, H, ui)
     plain = compile_flow(app, "post", {"text": "hello fleet", "media_slot": 0}, W, H, ui)
     assert len(compiled) > len(plain)
-    _assert_actions(fake.actions(), compiled)
+    actions = fake.actions()
+    if app == "facebook":
+        dumps = [i for i, args in enumerate(actions) if args[2:6] == ("shell", "uiautomator", "dump", "/dev/tty")]
+        text_at = next(i for i, args in enumerate(actions) if len(args) > 4 and args[4] == "text")
+        assert len(dumps) == 1 and dumps[0] < text_at
+        assert not any("chatx_like_hierarchy" in " ".join(args) for args in actions)
+        assert not any(args[2:6] == ("shell", "input", "keyevent", "4") for args in actions)
+        assert not any("media_session" in " ".join(args) for args in actions)
+        actions = [args for args in actions if args[2:5] != ("shell", "uiautomator", "dump")]
+    else:
+        assert not any(args[2:5] == ("shell", "uiautomator", "dump") for args in actions)
+    _assert_actions(actions, compiled)
 
 
 @pytest.mark.parametrize("serial", ["3B1F4KE5MS140P4X", "192.168.0.148:5555"])
@@ -596,7 +607,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.29"
+    assert AGENT_VERSION == "0.3.30"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

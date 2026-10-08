@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Anchors are permille of the screen (0-1000). Each app has its own anchors and step list. Tune this file, or point agent.json phone_ui_map at another file. Opening an app is the home key plus that app's app_icon anchor. Facebook feed_tab is the top Home icon. Facebook like_button is deprecated for real phone_like (the agent finds the button on a screenshot). dry_run, warmup, and watch still compile that coordinate.",
+  "note": "Anchors are permille of the screen (0-1000). Each app has its own anchors and step list. Tune this file, or point agent.json phone_ui_map at another file. Opening an app is the home key plus that app's app_icon anchor. Facebook feed_tab is the top Home icon. Facebook like_button is deprecated for real phone_like (the agent finds the button on a screenshot). dry_run, warmup, and watch still compile that coordinate. Facebook post_media does not tap media_next: that control can occupy the same corner as Publish, so a blind tap sends the post before the caption. The stored media_next anchor is kept far from post_submit. A live Facebook post taps Next only when the window says Next and not Post, Share, or Publish, and only before the caption.",
   "apps": {
     "facebook": {
       "anchors": {
@@ -12,7 +12,7 @@
         "photo_button": [200, 700],
         "gallery_0": [160, 300],
         "gallery_stride": [180, 0],
-        "media_next": [860, 120],
+        "media_next": [860, 420],
         "like_button": [900, 560],
         "feed_swipe_from": [500, 750],
         "feed_swipe_to": [500, 280],
@@ -47,7 +47,6 @@
           {"op": "tap", "anchor": "composer_open", "expect": "change"},
           {"op": "tap", "anchor": "photo_button", "expect": "change"},
           {"op": "tap", "anchor": "gallery_0", "slot_field": "media_slot", "slot_stride": "gallery_stride"},
-          {"op": "tap", "anchor": "media_next"},
           {"op": "tap", "anchor": "composer_field"},
           {"op": "text", "field": "text"},
           {"op": "tap", "anchor": "post_submit"}
