@@ -627,3 +627,15 @@ def viewer_client(app, config_dir):
             follow_redirects=True,
         )
         yield c
+
+@pytest.fixture(autouse=True)
+def _reset_account_blocklist_singleton():
+    """智安 P0-2：account_blocklist 是进程级单例（无 _db_path 的假 store 回落到「首个真库」那份）。
+    CI 用 xdist ``-n auto``（按用例分发，不按文件），别的用例记下的停联（如 telegram u1）会漏进
+    同 worker 后续用例的 STOP 硬闸判定 → 每个用例后清掉，保证用例间互不串名单。"""
+    yield
+    try:
+        from src.inbox import account_blocklist as _ab
+        _ab.reset_for_tests()
+    except Exception:
+        pass
