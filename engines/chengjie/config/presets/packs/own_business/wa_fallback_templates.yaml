@@ -1,0 +1,41 @@
+# 自有业务 · WhatsApp Cloud API 24h 窗口回退模板（公开包，中性 UTILITY）
+# 门店 / 服务 / 小店的客服跟进，不是活动通知。审核通过后再启用。
+
+schema: zhiliao.wa_fallback_templates.v1
+pack: own_business
+edition: public
+category: UTILITY
+purpose: window_expired_service_followup
+default_language: zh
+opt_out:
+  zh: 退订
+  en: STOP
+  tl: STOP
+templates:
+  - name: own_svc_followup_zh
+    category: UTILITY
+    lang: zh
+    language: zh_CN
+    text_param: true
+    param_max_chars: 80
+    body: "您好，关于您之前说的{{1}}，我们先记下了。请直接回复本消息，我们就能继续为您安排。如不需要再收到消息，请回复「退订」。"
+    samples:
+      "1": "预约时间"
+  - name: own_svc_followup_en
+    category: UTILITY
+    lang: en
+    language: en
+    text_param: true
+    param_max_chars: 80
+    body: "Hello, we noted your earlier request about {{1}}. Please reply to this message so we can continue assisting you. Reply STOP to opt out."
+    samples:
+      "1": "your appointment"
+  - name: own_svc_followup_fil
+    category: UTILITY
+    lang: tl
+    language: fil
+    text_param: true
+    param_max_chars: 80
+    body: "Kumusta po. Naitala po namin ang hiling ninyo tungkol sa {{1}}. Paki-reply po sa mensaheng ito para maipagpatuloy ang tulong. Kung ayaw na po tumanggap ng mensahe, i-reply ang STOP."
+    samples:
+      "1": "appointment"

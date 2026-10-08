@@ -14,7 +14,9 @@
 - echo/status（delivered/read）事件直接 ack，不喂 SkillManager（防自答）。
 - 发送前查 Kill-Switch（global/platform:whatsapp/account:whatsapp:<phone_id>）→ 冻结即跳过。
 - **24h 客服窗口**：窗口内可发自由文本；窗口外需用模板消息（template）——``wa_send_template``
-  发模板；自由文本命中 ``window_expired`` 且配置了 ``window_fallback_template`` → 自动改发模板。
+  发模板；自由文本命中 ``window_expired`` 且配置了回退模板 → 自动改发模板。
+  会话语言 zh/en/tl（Taglish 归 tl）从 ``by_language`` 里挑；只配顶层 ``name`` 时不分流。
+  没有定时「沉默满 24h」外发，只在这次发送被拒之后回退。
 - **STOP 硬闸**（2026-10-08）：入站命中 STOP → 冻结（需人工 + 名单），本条不自答；之后
   ``wa_send_text`` / ``wa_send_media`` / ``wa_send_template`` 对该客户一律不真发
   （``shared/official_stop_gate``）。
@@ -33,7 +35,12 @@ config.yaml 示例：
     verify_token: "your-verify-token"  # GET 校验口令
     webhook_path: "/wa/webhook"
     unsupported_type_reply: "目前仅支持文字消息。"
-    window_fallback_template: {name: "", language: "zh_CN", text_param: true}   # 可选
+    window_fallback_template:                  # 可选；name 空且 by_language 无名 = 不回退
+      name: ""                                 # 旧形状单模板（不按语言分流）
+      language: "zh_CN"
+      text_param: true
+      default_language: zh
+      by_language: {}                          # zh/en/tl → {name, language, text_param}
     stop_gate: {allow_farewell: false, extra_keywords: []}
     handoff: {on_human_request: true, on_media: true, on_empty_reply: true}
     pricing: {currency: USD, rates: {default: {marketing: 0.0, utility: 0.0}}}
@@ -250,6 +257,21 @@ def verify_wa_signature(body: bytes, signature_header: str, app_secret: str) -> 
     return hmac.compare_digest(expected, sig[len("sha256="):])
 
 
+def _lookup_wa_conv_lang(to: str, phone_number_id: str) -> str:
+    """收件箱里该客户的会话语言（``conversations.language``）。没有就空串。"""
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None or not hasattr(store, "get_conversation"):
+            return ""
+        cid = f"whatsapp:{phone_number_id}:wa:user:{to}"
+        row = store.get_conversation(cid) or {}
+        return str(row.get("language") or "")
+    except Exception:
+        logger.debug("[wa_cloud] 会话语言读取失败", exc_info=True)
+        return ""
+
+
 async def wa_send_text(
     to: str,
     text: str,
@@ -258,12 +280,16 @@ async def wa_send_text(
     *,
     check_kill_switch: bool = True,
     window_fallback: bool = True,
+    lang: str = "",
 ) -> Dict[str, Any]:
     """通过 Cloud API 发文字消息。返回 {ok, data} 或 {ok:False, error}；永不抛。
 
     ``check_kill_switch``：发送前查全局/平台/账号冻结（account_id=phone_number_id）。
     STOP 硬闸恒查（客户已停联 → ``{ok:False, error:"stop_gate:<reason>", blocked:"stop_contact"}``）。
-    ``window_fallback``：命中 24h 窗口过期且配置了 ``window_fallback_template`` → 改发模板。
+    模板回退同样先过 STOP 闸（``wa_send_template``），停联客户不会收到窗口外模板。
+    ``window_fallback``：命中 24h 窗口过期且配置了回退模板 → 改发模板。
+    ``lang``：会话语言（zh/en/tl，Taglish 归 tl）。空则读收件箱 ``conversations.language``。
+    只有旧的单模板配置时忽略语言。
     """
     text = _truncate(text)
     if not text:
@@ -287,19 +313,29 @@ async def wa_send_text(
     out = await _wa_post_text(to, text, phone_number_id, access_token)
     _record_send("text", out)
     if (not out.get("ok")) and window_fallback and out.get("error_kind") == "window_expired":
-        tpl = _rt("window_fallback_template", {}) or {}
-        if isinstance(tpl, dict) and str(tpl.get("name") or "").strip():
-            params = [text] if tpl.get("text_param", True) else []
+        from src.integrations.wa_fallback_templates import (
+            prepare_text_param, runtime_edition, select_window_fallback,
+        )
+        block = _rt("window_fallback_template", {}) or {}
+        conv_lang = str(lang or "").strip() or _lookup_wa_conv_lang(to, phone_number_id)
+        chosen = select_window_fallback(block, conv_lang, edition=runtime_edition())
+        if chosen.get("name"):
+            params: List[str] = []
+            if chosen.get("text_param", True):
+                params = [prepare_text_param(text, max_chars=chosen.get("param_max_chars"))]
             fb = await wa_send_template(
-                to, str(tpl["name"]).strip(), str(tpl.get("language") or "en_US"),
+                to, str(chosen["name"]), str(chosen.get("language") or "en_US"),
                 phone_number_id, access_token, body_params=params,
                 check_kill_switch=False)
             if fb.get("ok"):
                 with _stats_lock:
                     _send_stats["window_fallback"] = int(_send_stats.get("window_fallback") or 0) + 1
                 fb["window_fallback"] = True
+                fb["fallback_lang"] = chosen.get("resolved_lang") or ""
+                fb["fallback_source"] = chosen.get("source") or ""
                 return fb
             out["window_fallback_error"] = str(fb.get("error") or "")[:200]
+            out["window_fallback_template_name"] = str(chosen.get("name") or "")
     return out
 
 
@@ -1047,7 +1083,18 @@ def wa_cloud_health(config: Dict[str, Any], *, app_state: Any = None) -> Dict[st
     with _probe_lock:
         out["probe"] = dict(_last_probe)
     tpl = cfg.get("window_fallback_template") or {}
-    out["window_fallback_template"] = bool(isinstance(tpl, dict) and str(tpl.get("name") or "").strip())
+    try:
+        from src.integrations.wa_fallback_templates import (
+            configured_languages, fallback_configured, runtime_edition,
+        )
+        edition = runtime_edition()
+        out["window_fallback_template"] = fallback_configured(tpl, edition=edition)
+        out["window_fallback_languages"] = configured_languages(tpl, edition=edition)
+    except Exception:
+        logger.debug("[wa_cloud] 回退模板配置读取失败", exc_info=True)
+        out["window_fallback_template"] = bool(
+            isinstance(tpl, dict) and str(tpl.get("name") or "").strip())
+        out["window_fallback_languages"] = []
 
     alerts: List[str] = out["alerts"]
     now = time.time()
