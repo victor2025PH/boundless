@@ -189,3 +189,93 @@ def test_after_pack_enforces_edition_gate():
     js = (BUILD / "after-pack.js").read_text(encoding="utf-8")
     assert "editions.json" in js and "editionLeaks" in js
     assert 'mf.edition === "public"' in js
+
+# ── ⑤ 内部专属行业模板（博彩运营商 gambling_operator，config/presets/internal）────────────
+
+PRESETS_INTERNAL = "config/presets/internal"
+
+
+def test_presets_internal_is_internal_only_and_omitted_from_public():
+    assert PRESETS_INTERNAL in IO["seed_paths"]
+    assert PRESETS_INTERNAL in PUB["omitted"]
+    assert edition_gate.check_policy(POLICY) == []
+
+
+def test_policy_rejects_presets_internal_not_omitted():
+    import copy
+    pol = copy.deepcopy(POLICY)
+    pol["editions"]["public"]["omitted"] = [p for p in pol["editions"]["public"]["omitted"]
+                                           if p != PRESETS_INTERNAL]
+    assert any(PRESETS_INTERNAL in p for p in edition_gate.check_policy(pol))
+
+
+def test_public_seed_tree_with_presets_internal_is_red(tmp_path):
+    seed = tmp_path / "seed-data"
+    (seed / "config" / "presets" / "internal" / "gambling_operator").mkdir(parents=True)
+    (seed / "config" / "presets" / "internal" / "gambling_operator" / "pack.yaml").write_text("id: x\n", encoding="utf-8")
+    bad = edition_gate.scan_seed_tree(seed, POLICY, edition="public")
+    assert any(PRESETS_INTERNAL in b for b in bad)
+    assert edition_gate.scan_seed_tree(seed, POLICY, edition="internal") == []
+
+
+def test_public_manifest_listing_presets_internal_is_red():
+    mf = {"edition": "public", "personas": [], "voices": [], "switches": [],
+          "files": ["config/presets/internal/gambling_operator/persona.yaml"]}
+    assert any(PRESETS_INTERNAL in b for b in edition_gate.check_manifest(mf, POLICY, edition="public"))
+
+
+@pytest.mark.parametrize("rel", ["config/presets/internal/gambling_operator/pack.yaml",
+                                 "_internal/config/presets/internal/gambling_operator/pack.yaml"])
+def test_public_backend_tree_with_presets_internal_is_red(tmp_path, rel):
+    be = tmp_path / "backend-dist"
+    f = be / rel
+    f.parent.mkdir(parents=True)
+    f.write_text("id: x\n", encoding="utf-8")
+    assert any(PRESETS_INTERNAL in b for b in edition_gate.scan_backend_tree(be, POLICY, edition="public"))
+    assert edition_gate.scan_backend_tree(be, POLICY, edition="internal") == []
+    assert edition_gate.run("public", None, backend=be)  # CLI 路径同样拦
+
+
+def test_public_backend_tree_with_public_presets_only_is_green(tmp_path):
+    be = tmp_path / "backend-dist"
+    (be / "_internal" / "config" / "presets" / "packs" / "agency").mkdir(parents=True)
+    assert edition_gate.scan_backend_tree(be, POLICY, edition="public") == []
+
+
+@pytest.mark.parametrize("dest,red", [
+    ("config/presets", True),            # 整目录打包会连带 internal/
+    ("config/presets/internal", True),
+    ("config/presets/internal/gambling_operator", True),
+    ("config/presets/packs", False),
+    ("config/profiles", False),
+])
+def test_backend_datas_gate(dest, red):
+    bad = edition_gate.check_backend_datas([(ENGINE / dest, dest)], POLICY, repo=ENGINE)
+    assert bool(bad) is red
+
+
+def test_build_backend_datas_do_not_ship_presets_internal():
+    """当前 build_backend.DATAS 不得把内部专属目录（含 config/presets/internal）打进后端代码包。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_bb_edition", BUILD / "build_backend.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert edition_gate.check_backend_datas(m.DATAS, POLICY, repo=m.REPO) == []
+
+
+def test_after_pack_checks_backend_for_internal_dirs():
+    js = (BUILD / "after-pack.js").read_text(encoding="utf-8")
+    assert '"_internal"' in js and "公开包后端含内部专属目录" in js
+
+
+def test_public_stage_never_copies_presets_internal(tmp_path):
+    """公开包暂存是白名单拷贝：数据根里即使有 config/presets/internal，产物种子也不带。"""
+    src = tmp_path / "src"
+    (src / "config" / "presets" / "internal" / "gambling_operator").mkdir(parents=True)
+    (src / "config" / "presets" / "internal" / "gambling_operator" / "pack.yaml").write_text("id: x\n", encoding="utf-8")
+    (src / "config" / "profiles_runtime.yaml").write_text("profiles: {}\n", encoding="utf-8")
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text("brand: {}\n", encoding="utf-8")
+    out = tmp_path / "out"
+    stage_edition_assets.stage_public(src, out, POLICY, overlay)
+    assert not (out / "config" / "presets" / "internal").exists()
