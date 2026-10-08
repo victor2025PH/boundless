@@ -556,10 +556,13 @@ def _try_refresh_token(api: Any) -> bool:
     冷却防 refresh token 已死时每条媒体都白打一次 tokenRefresh。
     """
     now = time.monotonic()
+    # 从未刷过＝-inf（不是 0.0）：monotonic≈开机秒数，客户机重启后 600s 内 ``now - 0.0`` 恒小于
+    # 冷却 → 首次 401 也不刷、媒体整段下载失败（CI 新开 runner 上的偶发红即此）。
     try:
-        last = float(getattr(api, "_lm_refresh_ts", 0.0) or 0.0)
+        _raw = getattr(api, "_lm_refresh_ts", None)
+        last = float(_raw) if _raw is not None else float("-inf")
     except (TypeError, ValueError):
-        last = 0.0
+        last = float("-inf")
     if (now - last) < _OBS_REFRESH_COOLDOWN_SEC:
         return False
     try:

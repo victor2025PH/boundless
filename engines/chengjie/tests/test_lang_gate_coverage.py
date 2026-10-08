@@ -215,7 +215,10 @@ def test_scan_db_by_day_buckets(tmp_path):
                 " display_name TEXT)")
     con.execute("CREATE TABLE messages (conversation_id TEXT, direction TEXT,"
                 " text TEXT, ts REAL)")
-    now = time.time()
+    # 锚在昨天本地 12:00：三行落在 11:00–11:27 同一本地日。用 time.time() 时，跑在
+    # 00:00–01:00（CI runner UTC 午夜≈北京 08:00）会把两条出站拆进两个日桶＝偶发红。
+    _y = time.localtime(time.time() - 86400)
+    now = time.mktime((_y.tm_year, _y.tm_mon, _y.tm_mday, 12, 0, 0, 0, 0, -1))
     con.execute("INSERT INTO conversations VALUES ('c1','telegram','Yasmin')")
     rows = [
         ("c1", "in", "good morning! how are you today", now - 3600),

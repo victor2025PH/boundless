@@ -111,6 +111,8 @@ def test_convert_to_ogg_opus_does_not_trust_ogg_suffix(tmp_path, monkeypatch):
         return _R()
 
     monkeypatch.setattr(vs, "_ffmpeg_available", lambda: True)
+    # convert 走 _ffmpeg_exe() 找可执行文件——宿主机无 ffmpeg（CI runner）时直接跳过转换
+    monkeypatch.setattr(vs, "_ffmpeg_exe", lambda: "ffmpeg")
     monkeypatch.setattr(vs.subprocess, "run", _fake_run)
     out = vs.convert_to_ogg_opus(str(fake))
     assert called["n"] == 1

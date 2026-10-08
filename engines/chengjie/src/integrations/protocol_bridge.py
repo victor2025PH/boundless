@@ -597,7 +597,9 @@ def get_inbox_store() -> Any:
 
 
 _SINK_FAIL_WARN_GAP_SEC = 600.0
-_sink_fail_last_warn = 0.0
+# 哨兵用 -inf 而不是 0.0：monotonic() 在 Linux 上≈开机秒数，新开的机器 / CI runner 开机
+# 不足 GAP 秒时 ``now - 0.0 < GAP`` 会把**首条**失败也节流成 debug（智安 NOTES 7.3 定位）。
+_sink_fail_last_warn = float("-inf")
 _sink_fail_total = 0
 
 

@@ -80,6 +80,8 @@ async def test_ffmpeg_unavailable_soft_fail(monkeypatch, tmp_path):
 
 async def test_too_long_rejected(monkeypatch, tmp_path):
     monkeypatch.setattr(vt, "probe_duration_sec", lambda _p: 16 * 60.0)
+    # 不依赖宿主机装没装 ffmpeg（CI runner 无 ffmpeg 时先命中 ffmpeg_unavailable）
+    monkeypatch.setattr(vt, "ffmpeg_available", lambda: True)
     stub = _StubVoice()
     svc = VideoTranslateService(stub, max_minutes=15)
     out = await svc.translate_video(str(tmp_path / "v.mp4"), target_lang="zh")

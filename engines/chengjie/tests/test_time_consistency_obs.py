@@ -8,11 +8,30 @@
 """
 import time
 
+import pytest
+
 from src.companion.persona_location import resolve_persona_place
 from tools.time_consistency_obs import judge_rows, local_hour_for
 
 VAN = resolve_persona_place({"location": "vancouver"})
 TPE = resolve_persona_place({"location": "taipei"})
+
+
+@pytest.fixture(autouse=True)
+def _server_clock_utc8(monkeypatch):
+    """用例按「服务器＝UTC+8」写死（见各用例注释）；CI runner 是 UTC → 服务器钟回落那条
+    读成 19 点而不是 3 点、台北凌晨书店也判不出。posix 上把进程时区钉成 UTC+8 并在结束后
+    还原；Windows 无 tzset（117/客户机本身就是 UTC+8）则不动。"""
+    if not hasattr(time, "tzset"):
+        yield
+        return
+    monkeypatch.setenv("TZ", "CST-8")
+    time.tzset()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def _ts(y, mo, d, h, mi=0):

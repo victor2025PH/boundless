@@ -30,7 +30,13 @@ from src.companion.goals.store import GoalStore, get_goal_store, reset_goal_stor
 
 CONV = "whatsapp:17345893506:13308422244"
 PLAT, ACCT, CK = "whatsapp", "17345893506", "13308422244"
-NOW = time.time()
+# today 档 cap 按**本地日历日**计数（pace.count_beats_for_cap），_fill_cap 往前铺 NOW-1h/-2h、
+# 目标建在 NOW-3h：跑在本地 00:00–03:00 时这几拍落到昨天 → cap 未满 → 偶发红（CI runner 为
+# UTC，北京 08:00–11:00 正好撞上）。凌晨时段把 NOW 挪到当天 04:00（其余用例全走显式 now=）。
+_T0 = time.time()
+_LT0 = time.localtime(_T0)
+NOW = _T0 if _LT0.tm_hour >= 4 else time.mktime(
+    (_LT0.tm_year, _LT0.tm_mon, _LT0.tm_mday, 4, 0, 0, 0, 0, -1))
 
 
 def _cfg(goals_cfg=None):

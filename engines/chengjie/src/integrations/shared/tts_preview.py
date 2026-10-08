@@ -34,7 +34,9 @@ AILANGS_TO_XTTS: dict[str, str] = {
 _TTS_DIR = Path("tmp_tts_preview")
 _CLEANUP_INTERVAL_SEC: float = 3 * 3600      # run at most once per 3 hours
 _DEFAULT_MAX_AGE_SEC: float = 24 * 3600      # keep files up to 24 hours
-_last_cleanup_ts: float = 0.0
+# 哨兵用 -inf 而不是 0.0：monotonic() 在 Linux 上≈开机秒数，新开的机器 / CI runner 开机
+# 不足 GAP 秒时 ``now - 0.0 < GAP`` 会把**首条**清理也跳过（智安 NOTES 7.3 定位）。
+_last_cleanup_ts: float = float("-inf")
 _SYNTHESIZE_TIMEOUT_SEC: float = 120.0       # P15-B: hard timeout per synthesis
 
 # ── #59 交互式克隆合成预算（2026-08-30）：按字数动态，试听=发送同口径 ─────────

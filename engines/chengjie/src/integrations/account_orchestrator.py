@@ -54,7 +54,8 @@ def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: st
     _mirror_fail_total += 1
     now = time.monotonic()
     key = str(platform or "?")
-    last = _mirror_fail_last_warn.get(key, 0.0)
+    # 缺省 -inf：首条失败必出 WARNING（0.0 哨兵在开机 <600s 的机器上会被 monotonic 节流吞掉）
+    last = _mirror_fail_last_warn.get(key, float("-inf"))
     if now - last < _MIRROR_FAIL_WARN_GAP_SEC:
         logger.debug("[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s（节流）",
                      platform, account_id, chat_key, kind, exc_info=True)

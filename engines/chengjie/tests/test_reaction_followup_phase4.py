@@ -106,6 +106,11 @@ def test_build_followup_text_deterministic():
 
 
 def test_schedule_reaction_followup_enqueues(tmp_path):
+    import time as _time
+    # now 取本地正午：静默时段（缺省 23–8 点）按**服务器本地钟**顺延。原先 now=1000.0（纪元
+    # 1970-01-01 00:16 UTC）只在 UTC+8 机器上是 08:16；CI runner 为 UTC → 落在静默段被顺延到
+    # 08:00 → drain(2000) 取不到＝偶发红。
+    noon = _time.mktime((2026, 1, 15, 12, 0, 0, 0, 0, -1))
     store = InboxStore(tmp_path / "inbox.db")
     cid = ingest_incoming(
         store, platform="whatsapp", account_id="wa1", chat_key="639111",
@@ -129,10 +134,10 @@ def test_schedule_reaction_followup_enqueues(tmp_path):
         target_id="MID1",
         emoji="❤️",
         sender="639111",
-        now=1000.0,
+        now=noon,
     )
     assert row_id > 0
-    due = outbox.drain_due(now=2000.0, limit=5)
+    due = outbox.drain_due(now=noon + 1000.0, limit=5)
     assert len(due) == 1
     assert "reaction_followup" in due[0]["reason"]
     assert cid == "whatsapp:wa1:639111"

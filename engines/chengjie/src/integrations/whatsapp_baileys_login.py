@@ -51,7 +51,9 @@ SIDECAR_TOKEN_ENV = "WA_SIDECAR_TOKEN"
 SIDECAR_TOKEN_FILE_ENV = "WA_SIDECAR_TOKEN_FILE"
 SIDECAR_TOKEN_FILENAME = "wa_sidecar_token.key"
 _token_cache: Dict[str, Any] = {"path": None, "mtime": None, "token": ""}
-_last_401_warn = 0.0
+# 哨兵用 -inf 而不是 0.0：monotonic() 在 Linux 上≈开机秒数，新开的机器 / CI runner 开机
+# 不足 GAP 秒时 ``now - 0.0 < GAP`` 会把**首条**失败也节流成 debug（智安 NOTES 7.3 定位）。
+_last_401_warn = float("-inf")
 
 
 def _config_dir() -> Path:

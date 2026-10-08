@@ -82,7 +82,9 @@ def test_capability_skip_not_counted_as_outage():
 
 def test_skip_voice_warns_once_then_debug(caplog):
     rv = _rv()
-    with caplog.at_level(logging.DEBUG):
+    # 显式钉 tts_pipeline logger 的级别：只设 root 时，同进程别的用例若给 ``src`` 留下
+    # INFO 级别（生产日志装配复刻），DEBUG 那条就被吞掉＝xdist 次序偶发红。
+    with caplog.at_level(logging.DEBUG), caplog.at_level(logging.DEBUG, logger=tp.logger.name):
         assert log_skip_voice(rv, conv=CID) == "clone_unavailable"
         assert log_skip_voice(rv, conv=CID) == "clone_unavailable"
     warns = [r for r in caplog.records if r.levelno >= logging.WARNING and "skip_voice" in r.getMessage()]

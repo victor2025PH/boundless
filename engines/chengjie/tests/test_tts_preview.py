@@ -87,7 +87,7 @@ def test_cleanup_keeps_recent_files(tmp_path: Path):
 def _reset_cleanup_ts():
     """Reset lazy cleanup timestamp so tests are independent."""
     orig = _mod._last_cleanup_ts
-    _mod._last_cleanup_ts = 0.0
+    _mod._last_cleanup_ts = float("-inf")
     yield
     _mod._last_cleanup_ts = orig
 

@@ -34,7 +34,7 @@ def _isolate_token(monkeypatch, tmp_path):
     monkeypatch.delenv(wbl.SIDECAR_TOKEN_ENV, raising=False)
     monkeypatch.setenv(wbl.SIDECAR_TOKEN_FILE_ENV, str(tmp_path / "wa_sidecar_token.key"))
     wbl._token_cache.update(path=None, mtime=None, token="")
-    wbl._last_401_warn = 0.0
+    wbl._last_401_warn = float("-inf")
     yield
 
 
