@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -42,6 +43,11 @@ BOARD_NUDGE_PATH = Path(r"D:\chengjie-instances\.ops\compute_pusher.nudge")
 def nudge_compute_board() -> bool:
     """通知官网推送器下一圈重读档位（best-effort，失败返回 False，绝不抛）。"""
     try:
+        # 盘符路径只在 Windows 有意义：非 Windows（CI / Linux 部署）上 Path("D:\\...") 是个
+        # 相对文件名，会在当前目录凭空建一个叫「D:\\chengjie-instances\\.ops\\…」的文件
+        # （CI 基线 2026-10-08 实测：跑测试把它写进了仓库工作区）。推送器只跑在 Windows 节点。
+        if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", str(BOARD_NUDGE_PATH)):
+            return False
         BOARD_NUDGE_PATH.parent.mkdir(parents=True, exist_ok=True)
         BOARD_NUDGE_PATH.write_text(str(time.time()), encoding="utf-8")
         return True

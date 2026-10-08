@@ -17,6 +17,9 @@ _FP_SCRIPT = _BUILD / "backend_source_fingerprint.py"
 _CHECK_SCRIPT = _BUILD / "check_backend_freshness.py"
 _PKG = _ENGINE / "desktop" / "package.json"
 _INBOX = _ENGINE / "src" / "web" / "templates" / "unified_inbox.html"
+# verify_stamp 按宿主平台找可执行名（nt→backend.exe，其余→backend）；夹具只写 backend.exe
+# 时在 Linux CI 上会先撞「backend-dist missing」分支，走不到被测的 stamp 判据。
+_EXE = "backend.exe" if __import__("os").name == "nt" else "backend"
 
 
 def _load(name: str, path: Path):
@@ -50,7 +53,7 @@ def test_fingerprint_stable_and_content_sensitive(fp_mod, tmp_path):
 def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
     dist = tmp_path / "backend-dist"
     dist.mkdir()
-    (dist / "backend.exe").write_bytes(b"MZ")
+    (dist / _EXE).write_bytes(b"MZ")
     ok, reason, _, _ = fp_mod.verify_stamp(_ENGINE, dist)
     assert ok is False
     assert "source-fingerprint" in reason or "unstamped" in reason
@@ -59,7 +62,7 @@ def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
 def test_verify_rejects_stale_stamp(fp_mod, tmp_path):
     dist = tmp_path / "backend-dist"
     dist.mkdir()
-    (dist / "backend.exe").write_bytes(b"MZ")
+    (dist / _EXE).write_bytes(b"MZ")
     fp_mod.write_stamp(dist, {
         "version": 1,
         "algorithm": "sha256",

@@ -81,6 +81,11 @@ def exports_dir(ops_base: str = DEFAULT_OPS_BASE) -> Path:
 def tenant_card_path(data_dir: str) -> Path:
     """交付卡落数据根同级（D:\\chengjie-instances\\<iid>\\tenant_card.json）——
     开通守护（下一阶段对接官网订单）直接读这张卡回填订单。"""
+    # 数据根常以 Windows 形态（D:\\...\\data）出现在计划/卡片里；在非 Windows 主机上
+    # Path 不拆反斜杠，.parent 会退化成 "."——按反斜杠形态用 ntpath 求父目录。
+    if "\\" in str(data_dir or ""):
+        import ntpath
+        return Path(ntpath.dirname(str(data_dir).rstrip("\\"))) / "tenant_card.json"
     return Path(data_dir).parent / "tenant_card.json"
 
 
@@ -105,7 +110,8 @@ def web_port_of_service(svc: Dict[str, Any]) -> Optional[int]:
 
 # ────────────────────────── 纯函数：materialize 计划 ──────────────────────────
 
-SKELETON_SUBDIRS = ("config", "sessions", "logs", "events\\spool", "ledger_outbox")
+# 正斜杠：Windows 的 Path 同样接受；反斜杠在非 Windows 上会建出名为 "events\\spool" 的单层目录。
+SKELETON_SUBDIRS = ("config", "sessions", "logs", "events/spool", "ledger_outbox")
 
 
 def materialize(

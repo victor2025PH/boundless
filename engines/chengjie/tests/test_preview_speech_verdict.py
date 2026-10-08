@@ -252,11 +252,12 @@ def test_garbled_wired_into_preview_route_and_frontend():
     assert "_redispatch_garbled_to_edge" in vr
     assert 'clone_lang_garbled:' in vr
     for tree in ("shared", "desktop/renderer/shared"):
-        js = (repo / tree.replace("/", "\\") / "copilot" / "components"
+        # pathlib 自行处理分隔符；原 tree.replace("/", "\\") 只在 Windows 成立。
+        js = (repo / tree / "copilot" / "components"
               / "cp-voice.js").read_text(encoding="utf-8")
         assert "blockNoteKey" in js, tree
         assert '"garbled"' in js, tree
-        i18n = (repo / tree.replace("/", "\\") / "copilot" / "i18n"
+        i18n = (repo / tree / "copilot" / "i18n"
                 / "cp-i18n.js").read_text(encoding="utf-8")
         for k in ("cp.voice.garbled_note", "cp.voice.garbled_block_t",
                   "cp.voice.std_voice_note"):

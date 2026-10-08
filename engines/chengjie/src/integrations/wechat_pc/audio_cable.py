@@ -27,19 +27,30 @@ import json
 import logging
 import os
 import time
-from ctypes import HRESULT, POINTER, c_int, c_void_p, c_wchar_p, wintypes
+from ctypes import POINTER, c_int, c_void_p, c_wchar_p, wintypes
+
+try:  # ctypes.HRESULT 只在 Windows 构建里有；非 Windows 导入本模块须不抛（见模块说明：
+    # 缺依赖只让 available() 为 False）。同宽替身仅用于让 COM 声明在导入期成形。
+    from ctypes import HRESULT
+except ImportError:  # pragma: no cover - 平台相关
+    HRESULT = ctypes.c_long  # type: ignore[misc,assignment]
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - 环境相关
+    # numpy 单独导入：trim_silence / normalize_loudness 等纯 DSP 只依赖它，不该因
+    # 声卡库（sounddevice/soundfile，仅 Windows 装）缺失而一并变成 None。
     import numpy as _np
+except Exception:  # pragma: no cover
+    _np = None
+try:  # pragma: no cover - 环境相关
     import sounddevice as _sd
     import soundfile as _sf
-    _AUDIO_OK = True
+    _AUDIO_OK = _np is not None
 except Exception:  # pragma: no cover
-    _np = _sd = _sf = None
+    _sd = _sf = None
     _AUDIO_OK = False
 
 try:  # pragma: no cover - 环境相关

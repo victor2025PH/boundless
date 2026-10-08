@@ -395,6 +395,10 @@ class ConfigManager:
                 p = str(fp or "")
                 if not p or Path(p).is_absolute():
                     continue
+                # 种子在 Windows 暂存时相对路径是反斜杠（config\persona_albums\...）；
+                # 非 Windows 落地时 Path 不认 \ 为分隔符 → 拼出一个带反斜杠的单段
+                # 文件名，相册全挂。统一成正斜杠（Windows 同样接受）。
+                p = p.replace("\\", "/")
                 con.execute(
                     "UPDATE persona_media SET file_path = ? WHERE id = ?",
                     (str((data_root / p).resolve()), mid))

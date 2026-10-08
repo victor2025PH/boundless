@@ -1988,6 +1988,12 @@ def test_driver_is_not_ready_across_sessions(monkeypatch):
     monkeypatch.setattr(E.os, "name", "nt")
     monkeypatch.setattr(E, "session_isolation",
                         lambda: {"engine_session": 0, "console_session": 1, "isolated": True})
+    # 场景前提＝「包装了、只是跨会话」。uiautomation 仅 Windows 依赖（requirements 带
+    # sys_platform 标记），Linux CI 上不存在——把探测钉成「已装」，只验会话这一条判据。
+    import importlib.util as _iu
+    _real_find = _iu.find_spec
+    monkeypatch.setattr(_iu, "find_spec",
+                        lambda name, *a, **k: object() if name == "uiautomation" else _real_find(name, *a, **k))
     d = E.driver_ready()
     assert d["ok"] is False and d["reason"] == "engine_not_interactive"
     assert d["uiautomation"] is True, "包是装了的——别让人去查 uiautomation"
