@@ -2338,6 +2338,17 @@ _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS = """
 """
 _BASELINE += _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS
 
+# 2026-10-08 把 feat-zhiliao-dm-integration 合并进 KB 自动向量化分支后，基线要对上
+# 集成支上已经合入的端点（Telegram 官方号设 webhook、群脉向导号、停联解冻）。
+# KB 自己的 /api/kb/embed-health 与 /api/kb/embed-retry 仍留在上面的主基线里。
+_ADDITIONS_2026_10_08_DM_INTEGRATION = """
+/api/admin/telegram-bot/set-webhook	POST
+/api/group-show/guide-account	GET
+/api/group-show/guide-account	POST
+/api/workspace/conv/{conversation_id}/stop-contact/unfreeze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_DM_INTEGRATION
+
 
 def _parse_baseline():
     expected = set()
