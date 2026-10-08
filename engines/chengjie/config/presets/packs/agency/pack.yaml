@@ -17,6 +17,7 @@ files:
   kb_seed: kb_seed.yaml
   stop_confirm: stop_confirm.yaml
   handoff_sop: handoff_sop.yaml
+  wa_fallback_templates: wa_fallback_templates.yaml
 isolation:
   one_persona_per_brand: true
   kb_scope: per_brand
