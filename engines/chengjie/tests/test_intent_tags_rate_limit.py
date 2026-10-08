@@ -22,10 +22,21 @@ def _yaml_with_intent_tags(tmp_path, monkeypatch):
 # ────────────────────────────────────────────────────────────────────────
 
 
-def test_diff_rate_limit_kicks_in(auth_client, _yaml_with_intent_tags) -> None:
-    """Bombard /diff > capacity → 429."""
+def test_diff_rate_limit_kicks_in(auth_client, _yaml_with_intent_tags, config_manager, app) -> None:
+    """Bombard /diff > capacity → 429.
+
+    Default cap is 20 and refill is 2/s. A slow shard spends long enough on
+    each call that the bucket refills, so 25 requests never 429 (3.13 shard 2).
+    Pin a small bucket and clear it first, same as the XFF case below.
+    """
+    config_manager.config.setdefault("rpa", {})
+    config_manager.config["rpa"].setdefault("rate_limits", {})["diff"] = {
+        "capacity": 3, "refill_per_sec": 0.1,
+    }
+    reset = getattr(app.state, "intent_tags_rate_limit_reset", None)
+    if callable(reset):
+        reset()
     body = {"content": "purchase:\n  - kw\n"}
-    # Default capacity = 20 → 21st request must 429
     got_429 = False
     for _ in range(25):
         r = auth_client.post("/api/rpa/intent-tags/diff", json=body)

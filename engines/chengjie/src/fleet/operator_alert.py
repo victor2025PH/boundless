@@ -157,6 +157,19 @@ try {
   exit 0
 }
 
+try {
+  $panelSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+  if ($panelSessionId -ge 0 -and $panelSessionId -le 10000000) {
+    $panelSessionPath = Join-Path (Split-Path -Parent $Snapshot) 'panel_session.json'
+    $panelSessionTemp = $panelSessionPath + '.tmp'
+    $panelSessionBody = '{"session_id": ' + $panelSessionId + '}'
+    [System.IO.File]::WriteAllText($panelSessionTemp, $panelSessionBody, (New-Object System.Text.UTF8Encoding $false))
+    [System.IO.File]::Copy($panelSessionTemp, $panelSessionPath, $true)
+    Remove-Item -LiteralPath $panelSessionTemp -Force -ErrorAction SilentlyContinue
+  }
+} catch {
+}
+
 $script:quitting = $false
 $script:lastSeq = -1
 $script:lang = 'zh'
@@ -1445,9 +1458,10 @@ def _query_panel_task_text() -> str:
 def run_key_probe_commands() -> List[List[str]]:
     """Read the Run value in the 64-bit view and in Wow6432Node.
 
-    Writes use ``/reg:64``. A 32-bit query of the same path would miss that
-    value, so the probe names the view explicitly and also checks the
-    32-bit node where an older write may have landed.
+    The value is written with ``KEY_WOW64_64KEY``. A 32-bit query of the
+    same path would miss it, so the probe names the 64-bit view and also
+    checks Wow6432Node where an older write may have landed. This does not
+    invent a hit: a missing value stays missing.
     """
     wow = r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
     return [

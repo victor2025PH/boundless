@@ -94,6 +94,22 @@ def check_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
 
 
 _FB_PACKAGES = ("com.facebook.katana", "com.facebook.lite")
+
+
+def pm_path_present(text: str, returncode: int) -> bool:
+    """True when ``pm path`` printed a ``package:`` path and exited 0.
+
+    A device prints ``package:/data/app/.../base.apk`` (sometimes several
+    split lines). It does not print the literal ``package:<name>``. A
+    non-zero status does not count, even when the text looks like a path.
+    Empty output does not count.
+    """
+    if isinstance(returncode, bool) or not isinstance(returncode, int) or returncode != 0:
+        return False
+    body = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not body.startswith("package:"):
+        return False
+    return len(body) > len("package:")
 _OFF_FEED = (
     "permalink", "immersive", "fullscreen", "fbchrome",
     "storyviewer", "videoplayer", "fbshorts", "watchandbrowse",
@@ -529,19 +545,19 @@ class PhoneOps:
         self._last_like_detail[serial] = text[:80]
 
     def facebook_package(self, serial: str) -> str:
-        """Katana or lite when ``pm path`` names it. Empty when neither package is present.
+        """Katana or lite when ``pm path`` exits 0 with a ``package:`` path.
 
-        Does not take the phone lock. An empty answer means the package could
-        not be resolved. The caller reports that as a store redirect and does
-        not ``am start`` (that failure used to surface as ``adb_exit_1``).
+        Does not take the phone lock. An empty answer means neither package
+        was found. The caller reports that as a store redirect and does
+        not ``am start``, wake, or fall back to the icon.
         """
         adb = self._ready_adb()
         for package in _FB_PACKAGES:
-            _rc, out, err = self._paced_capture(
+            rc, out, err = self._paced_capture(
                 adb, serial, ("-s", serial, "shell", "pm", "path", package), 8.0,
             )
             text = _hierarchy_text(out) or _hierarchy_text(err)
-            if ("package:" + package) in text:
+            if pm_path_present(text, rc):
                 return package
         return ""
 

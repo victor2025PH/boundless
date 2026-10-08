@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.27"
+  #define AppVersion "0.3.28"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -440,7 +440,7 @@ begin
   WizardForm.FinishedLabel.Caption := body;
 end;
 
-procedure InstallSiteTodoPanel();
+function InstallSiteTodoPanel(): Boolean;
 var
   ResultCode: Integer;
   dir: String;
@@ -449,14 +449,17 @@ begin
     install-panel writes operator_alert_panel.ps1 and panel_task.xml, then registers:
       schtasks "ChatX Fleet Panel" from that XML
         principal GroupId S-1-5-4 (INTERACTIVE), LogonTrigger, not SYSTEM
-      HKLM\...\Run  ChatXFleetPanel
-    A session-0 start is not treated as shown. The panel process is started
-    in the active console session and reads the snapshot.
-    zh/en stays in the panel. A failure here does not roll back the service. }
+      HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run  ChatXFleetPanel
+        (64-bit view, read back before install-panel returns 0)
+    A session-0 start is not treated as shown. The panel script records its
+    own session id after it takes the lock. zh/en stays in the panel.
+    A non-zero exit means the Run value was not written. }
   dir := ExpandConstant('{commonappdata}\ChatX\fleet');
-  Exec(ExpandConstant('{app}\chatx-agent.exe'),
+  if not Exec(ExpandConstant('{app}\chatx-agent.exe'),
     '--state-dir "' + dir + '" install-panel',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    ResultCode := 1;
+  Result := ResultCode = 0;
 end;
 
 procedure OpenLocalPanel();
@@ -569,7 +572,14 @@ begin
     WizardForm.FinishedLabel.Caption := '文件已复制，但没有连上主控，计划任务没有安装。请用管理员身份重新运行安装程序。';
     Exit;
   end;
-  InstallSiteTodoPanel();
+  if not InstallSiteTodoPanel() then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := '安装未完成';
+    WizardForm.FinishedLabel.Caption := '服务已安装，但没有写上桌面面板的 Run 键。请用管理员身份重新运行安装程序。';
+    if WizardSilent then
+      ExitProcess(1);
+    Exit;
+  end;
   pair := '';
   pairText := '';
   { LoadStringFromFile's second parameter is AnsiString on Inno Setup 6.3. Pairing codes are ASCII. }
@@ -591,7 +601,7 @@ begin
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ChatX Fleet Agent Upgrade" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ChatX Fleet Panel" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(ExpandConstant('{sys}\reg.exe'),
-      'delete HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v ChatXFleetPanel /f',
+      'delete HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v ChatXFleetPanel /f /reg:64',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     DeleteFile(ExpandConstant('{commonappdata}\ChatX\fleet\panel_task.xml'));
   end;

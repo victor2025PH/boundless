@@ -72,13 +72,43 @@ def test_install_service_windows_runs_create_then_run(monkeypatch, tmp_path):
         calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, stdout="SUCCESS", stderr="")
 
-    res = svc.install_service(tmp_path, run=run)
+    class _Key:
+        HKEY_LOCAL_MACHINE = object()
+        KEY_SET_VALUE = 0x2
+        KEY_QUERY_VALUE = 0x1
+        KEY_WOW64_64KEY = 0x100
+        REG_SZ = 1
+
+        def __init__(self):
+            self.values = {}
+
+        def CreateKeyEx(self, _hive, _path, _reserved, _access):
+            return self
+
+        def SetValueEx(self, _key, name, _reserved, typ, value):
+            self.values[name] = (typ, value)
+
+        def QueryValueEx(self, _key, name):
+            typ, value = self.values[name]
+            return value, typ
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    reg = _Key()
+    res = svc.install_service(tmp_path, run=run, registry=reg)
     assert res["ok"] and res["kind"] == "schtasks"
     # /End first: /Create /F on a running task detaches the old process (issue g3).
-    # Then the agent task, then the interactive panel (ONLOGON + Run key + kick).
-    assert [c[1] for c in calls] == ["/End", "/Create", "/End", "/Create", "add", "/Run", "/Run"]
+    # Then the agent task, then the interactive panel (ONLOGON + registry Run key + kick).
+    # reg.exe add is not in this list: that command never created ChatXFleetPanel.
+    assert [c[1] for c in calls] == ["/End", "/Create", "/End", "/Create", "/Run", "/Run"]
     assert calls[2][3] == svc.PANEL_TASK_NAME
-    assert calls[4][0] == "reg"
+    assert all(c[0] != "reg" for c in calls)
+    assert reg.values["ChatXFleetPanel"][0] == reg.REG_SZ
+    assert "operator_alert.json" in reg.values["ChatXFleetPanel"][1]
     assert res["command"][-2:] == ["run", "--service"]
 
 

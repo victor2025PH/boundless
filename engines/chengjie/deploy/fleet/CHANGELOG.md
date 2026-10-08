@@ -1,5 +1,14 @@
 # 智拓群控节点更新日志
 
+## 0.3.28
+Facebook 是否安装改看 `pm path` 的真实输出。真机打印的是安装路径，例如 `package:/data/app/~~.../com.facebook.katana-.../base.apk`，不是字面量 `package:com.facebook.katana`。0.3.27 用后者判断，每台都被当成没装，回执 `fb_not_installed_or_store_redirect`，不亮屏、不 `am start`、也不退回点图标。现在要返回码是 0，并且去掉空白后的输出以 `package:` 开头、后面还有路径。`com.facebook.katana` 和 `com.facebook.lite` 都这样认。两个都没有（空输出，或返回码不是 0，哪怕文本看起来像路径）才回执 `fb_not_installed_or_store_redirect`。
+
+登录计划任务启动的面板脚本在拿到锁之后，把当前进程的会话号写进 `panel_session.json`。诊断能读到大于 0 的会话号，不再一直是 -1 / headless。没拿到锁就退出，不覆盖别人的会话文件。会话 0 的锁接管不变，仍然只结束会话号是 0 的 powershell，不结束桌面上的面板。
+
+Run 键 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\ChatXFleetPanel`：0.3.27 用 `reg add /d <面板命令> /f /reg:64`。`reg.exe` 自己解析命令行，`/d` 是一长段带空格的引用字符串，`/reg:64` 排在后面，真机上 64 位视图和 `Wow6432Node` 都没有这个值。安装改为用注册表 API 写入 64 位视图（`KEY_WOW64_64KEY`），写完立刻读回，对不上就让 `install-panel` / `install-service` 失败。只换 exe 不会重跑安装，服务启动时再写一次；直播机和坐席机 173 不写。诊断仍是真实查询，没有键就报不存在。安装包不再忽略 `install-panel` 的退出码。
+
+点赞仍要两路信号一致（截图窗口内对上 + 推断位置）或高模板分，点完仍要复核。±40 像素、频率上限、08:00–22:00（菲律宾时间）、`dry_run` 不碰手机、日志只写壁纸号或 `[redacted]` 都不变。0.3.25 的自动派发排除和 0.3.13 的 `push_config` 不变。公开下载页的 latest 仍是 0.3.7。
+
 ## 0.3.27
 打开 Facebook：`am start` 之后轮询前台大约 9 秒，不再隔 0.5 秒就判定。启动前如果屏幕是灭的就发 KEYCODE_WAKEUP（224，不使用会来回切换的电源键 26），锁屏则从下往上滑开。轮询结束前台仍是别的应用时，回退到按 Home 再点 Facebook 图标；两种都进不去才回执失败。前台已经是 Facebook 时仍然不回桌面。`pm path` 解析不到 `com.facebook.katana` / `com.facebook.lite` 时回执 `fb_not_installed_or_store_redirect`，不再发 `am start`，因此也不会再把这件事报成 `adb_exit_1`。点进 Play 商店仍是 `fb_not_installed_or_store_redirect`；点进别的应用仍是 `wrong_app_launched:<包名>`。
 

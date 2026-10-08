@@ -697,8 +697,10 @@ def test_wrong_app_and_store_are_not_reported_as_logged_out():
             if len(args) >= 5 and args[2:5] == ("shell", "pm", "path"):
                 self.calls.append(args)
                 name = args[5] if len(args) > 5 else ""
-                body = f"package:{name}\n".encode() if name in ("com.facebook.katana", "com.facebook.lite") else b""
-                return SimpleNamespace(returncode=0, stdout=body, stderr=b"")
+                if name in ("com.facebook.katana", "com.facebook.lite"):
+                    body = f"package:/data/app/~~x==/{name}-y==/base.apk\n".encode()
+                    return SimpleNamespace(returncode=0, stdout=body, stderr=b"")
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"")
             return FakeAdb.__call__(self, cmd, **kw)
 
     for package, code in (
@@ -747,6 +749,65 @@ def test_missing_facebook_package_is_not_adb_exit():
     assert adb.started is False
     assert not any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
     assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+
+
+def test_pm_path_real_format_recognizes_katana_lite_and_rejects_errors():
+    """Devices print ``package:/data/app/.../base.apk``, not ``package:<name>``."""
+    from types import SimpleNamespace
+
+    from src.fleet.phone_ops import pm_path_present
+
+    katana = "package:/data/app/~~x==/com.facebook.katana-y==/base.apk\n"
+    lite = "package:/data/app/com.facebook.lite-1/base.apk\r\n"
+    net_health = "package:/data/app/com.facebook.katana-1/base.apk\n"
+    for sample, package in ((katana, "com.facebook.katana"), (lite, "com.facebook.lite"), (net_health, "com.facebook.katana")):
+        assert ("package:" + package) not in sample
+        assert pm_path_present(sample, 0)
+        assert not pm_path_present(sample, 1)
+    assert not pm_path_present("", 0)
+    assert not pm_path_present("package:", 0)
+    assert not pm_path_present("package:\n", 0)
+    assert not pm_path_present("Error: package not found\n", 0)
+
+    class _Pm(FakeAdb):
+        def __init__(self, answers):
+            super().__init__(frame=_frame())
+            self.answers = answers
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 6 and args[2:5] == ("shell", "pm", "path"):
+                self.calls.append(args)
+                text, rc = self.answers.get(args[5], ("", 1))
+                return SimpleNamespace(returncode=rc, stdout=text.encode(), stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Pm({"com.facebook.katana": (katana, 0)}))
+    assert ops.facebook_package("S1") == "com.facebook.katana"
+    assert not any(len(a) > 4 and a[3] == "am" for a in fake.actions())
+
+    ops, _fake, _slept = _ops(adb=_Pm({"com.facebook.lite": (lite, 0)}))
+    assert ops.facebook_package("S1") == "com.facebook.lite"
+
+    ops, fake, _slept = _ops(adb=_Pm({}))
+    assert ops.facebook_package("S1") == ""
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "fb_not_installed_or_store_redirect")
+    assert not any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
+
+    ops, fake, _slept = _ops(adb=_Pm({
+        "com.facebook.katana": (katana, 1),
+        "com.facebook.lite": (lite, 2),
+    }))
+    assert ops.facebook_package("S1") == ""
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "fb_not_installed_or_store_redirect")
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+    assert not any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
 
 
 def test_facebook_that_appears_during_the_poll_does_not_go_home():
