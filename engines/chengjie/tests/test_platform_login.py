@@ -14,7 +14,10 @@ def test_list_modes_defaults():
     # 2026-08-11：web 占位从默认清单摘除——protocol 本就是官方关联设备扫码
     # （ExportLoginToken，二维码在本窗口显示），再挂一张永不可用的「网页扫码」
     # 重复卡只会引人点进死胡同（桌面种子早已同款摘除）。
-    assert set(tg) == {"protocol", "device"}
+    # 2026-10-08：official = Telegram Bot API 合规第二路（凭证经向导「Telegram 机器人」卡），
+    # 不改默认方式；bot worker 未注册（Webhook 未挂载）时不可用
+    assert set(tg) == {"protocol", "device", "official"}
+    assert tg["official"]["available"] is False
     assert tg["device"]["available"] is True          # device 内置可用
     assert tg["protocol"]["recommended"] is True       # TG 默认 protocol
     # 未注册 provider 的 protocol 默认不可用

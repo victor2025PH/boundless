@@ -83,6 +83,10 @@ class Channel:
     #: 单一事实源＝与 /modes 的 notice 同键，保证「弹窗」与「向导」两处话术一致。
     #: 空＝不渲染（官方渠道等无需建议的形态）。
     login_notice_key: str = ""
+    #: official 账号 id 由 **token 推导**时的 token 配置键（Telegram Bot：``<bot_id>:<secret>``，
+    #: account_id＝冒号前的数字 id，与 webhook 入站镜像 / worker 校验同一口径）。非空时优先于
+    #: ``official_account_id_key``，推不出 id（token 格式不对）就**不开通**账号行（不回落 official）。
+    official_account_id_from_token: str = ""
 
 
 CHANNELS: List[Channel] = [
@@ -106,6 +110,35 @@ CHANNELS: List[Channel] = [
                   help="同 my.telegram.org 页面，与 API ID 配对"),
             Field("telegram.phone_number", "手机号", required=False,
                   help="可选；登录账号时也可现填，格式 +8613800000000"),
+        ],
+    ),
+    Channel(
+        id="telegram_bot",
+        name="Telegram 机器人",
+        # 官方 Bot API 轨（与上面「用你自己的 Telegram 账号」并列、互不影响）：platform=telegram，
+        # mode=official，account_id＝bot 数字 id。与 QQ / QQ 机器人同构，单独一张卡。
+        enable_key="telegram_bot.enabled",
+        official_platform="telegram",
+        official_account_id_from_token="telegram_bot.bot_token",
+        console_url="https://t.me/BotFather",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入 Telegram 官方机器人（Bot API）：客户私聊你的 bot 即进统一收件箱，"
+            "AI / 坐席都能回复，支持发图片、语音、视频和文件。与「Telegram」个人号是两个独立渠道。"
+        ),
+        api_intro=(
+            "在 @BotFather 建 bot 拿 Bot Token，自拟一个回调密钥；保存后再点下方「设置 Webhook」"
+            "把回调指到 https://<你的域名>/tg/bot/webhook（只在你点按钮时才会改 Telegram 侧设置）。"
+        ),
+        fields=[
+            Field("telegram_bot.bot_token", "Bot Token", secret=True,
+                  help="@BotFather → /newbot 后给的 token（形如 123456:ABC…）"),
+            Field("telegram_bot.webhook_secret", "回调密钥", secret=True,
+                  help="自拟 1-256 位字母、数字、_ 或 -；设置 Webhook 时同值传给 Telegram，回调不带它一律拒收"),
+            Field("telegram_bot.webhook_path", "Webhook 路径", required=False,
+                  help="默认 /tg/bot/webhook；改了要重启后再点「设置 Webhook」"),
+            Field("telegram_bot.start_reply", "/start 欢迎语", required=False,
+                  help="可选；客户首次点「开始」时回这句（留空＝交给 AI 打招呼）"),
         ],
     ),
     Channel(
