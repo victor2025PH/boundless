@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.25"
+  #define AppVersion "0.3.26"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -446,10 +446,12 @@ var
   dir: String;
 begin
   { The agent service runs as SYSTEM in session 0 and cannot paint a window.
-    install-panel writes operator_alert_panel.ps1 and registers:
-      schtasks ONLOGON "ChatX Fleet Panel"  (interactive user, not SYSTEM)
+    install-panel writes operator_alert_panel.ps1 and panel_task.xml, then registers:
+      schtasks "ChatX Fleet Panel" from that XML
+        principal GroupId S-1-5-4 (INTERACTIVE), LogonTrigger, not SYSTEM
       HKLM\...\Run  ChatXFleetPanel
-    That process lives on the logged-on desktop and reads the snapshot.
+    A session-0 start is not treated as shown. The panel process is started
+    in the active console session and reads the snapshot.
     zh/en stays in the panel. A failure here does not roll back the service. }
   dir := ExpandConstant('{commonappdata}\ChatX\fleet');
   Exec(ExpandConstant('{app}\chatx-agent.exe'),
@@ -591,6 +593,7 @@ begin
     Exec(ExpandConstant('{sys}\reg.exe'),
       'delete HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v ChatXFleetPanel /f',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    DeleteFile(ExpandConstant('{commonappdata}\ChatX\fleet\panel_task.xml'));
   end;
   { State dir is kept unless the uninstall is started with /REMOVESTATE=1. }
   if (CurUninstallStep = usPostUninstall) and (CmdParam('/REMOVESTATE=') = '1') then

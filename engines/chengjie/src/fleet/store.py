@@ -3,7 +3,7 @@
 范式沿用 ``domains/player_care/commandbus.py``（线程锁 + 单连接 + 幂等 ack），扩展点：
 * 节点鉴权：``node_key`` 只存 sha256，明文只在注册响应里出现一次；``rotate_key`` / ``revoke``。
 * 注册幂等：同一 ``machine_id`` 再次注册（重装 Agent）→ 同一 ``node_id``、换新 key，不产生分身。
-* 任务 TTL：``pull`` / ``list`` 前把过期 queued 标 ``expired``；stop 类优先级最高。
+* 任务 TTL：``pull`` / ``list`` 前把过期 queued 标 ``expired``。已经领取、过了 ``expires_at`` 仍没有回执的标 ``failed`` / ``timeout``。stop 类优先级最高。
 * 心跳历史每节点只保留最近 ``HEARTBEAT_KEEP`` 条，最新一条同时冗余在 nodes.last_heartbeat_json。
 """
 
@@ -31,7 +31,7 @@ from .protocol import (
     ACK_STATUSES, DEFAULT_OFFLINE_AFTER_SEC, DEFAULT_TASK_TTL_SEC, FINAL_STATUSES, LEGACY_ALLOWED_KINDS,
     MAX_PULL_LIMIT, NODE_OFFLINE, NODE_ONLINE, NODE_REVOKED, STATUS_CANCELLED, STATUS_EXPIRED,
     PRUNED_RESULT, REMOTE_PHONE_KINDS, SCREENSHOT_RESULT_KEEP_SEC, STATUS_PULLED, STATUS_QUEUED,
-    STATUS_REJECTED, TASK_KINDS,
+    STATUS_FAILED, STATUS_REJECTED, TASK_KINDS,
     TASK_PHONE_SCREENSHOT, TASK_PRIORITY, TASK_RESULT_KEEP_SEC, TASK_STOP_ACCOUNT, bound_result, clamp_ttl,
     missing_cap, proto_compatible, sanitize_caps, sanitize_heartbeat, task_envelope,
 )
@@ -1143,6 +1143,19 @@ class FleetStore:
         self._conn.execute("UPDATE node_tasks SET status=?, detail='ttl_expired', acked_at=? WHERE status=? AND expires_at<?",
                            (STATUS_EXPIRED, ts, STATUS_QUEUED, ts))
 
+    def _timeout_pulled_locked(self, ts: float) -> None:
+        """Claimed tasks with no receipt past ``expires_at`` become failed/timeout.
+
+        Queued rows stay on ``ttl_expired``. A pulled row is not left at
+        ``pulled`` after its deadline. The receipt is this row: status
+        ``failed``, detail ``timeout``.
+        """
+        self._conn.execute(
+            "UPDATE node_tasks SET status=?, detail='timeout', acked_at=? "
+            "WHERE status=? AND expires_at<?",
+            (STATUS_FAILED, ts, STATUS_PULLED, ts),
+        )
+
     def pull(self, node_id: str, *, limit: int = MAX_PULL_LIMIT, node_proto: Any = None,
              now: Optional[float] = None) -> List[Dict[str, Any]]:
         """节点领任务（stop 最先），标 pulled。协议不兼容的节点只给 LEGACY_ALLOWED_KINDS。"""
@@ -1154,6 +1167,7 @@ class FleetStore:
         legacy = node_proto is not None and not proto_compatible(node_proto)
         with self._lock:
             self._expire_locked(ts)
+            self._timeout_pulled_locked(ts)
             rows = self._conn.execute(
                 "SELECT * FROM node_tasks WHERE node_id=? AND status=? ORDER BY priority ASC, created_at ASC LIMIT ?",
                 (str(node_id), STATUS_QUEUED, limit * 3 if legacy else limit),
@@ -1235,8 +1249,12 @@ class FleetStore:
             self._conn.commit()
         return cur.rowcount > 0
 
-    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(self, task_id: str, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        ts = float(now if now is not None else time.time())
         with self._lock:
+            self._expire_locked(ts)
+            self._timeout_pulled_locked(ts)
+            self._conn.commit()
             row = self._conn.execute("SELECT * FROM node_tasks WHERE task_id=?", (str(task_id),)).fetchone()
         return self._task_record(row) if row is not None else None
 
@@ -1254,6 +1272,7 @@ class FleetStore:
         args.append(max(1, min(1000, int(limit))))
         with self._lock:
             self._expire_locked(ts)
+            self._timeout_pulled_locked(ts)
             self._conn.commit()
             rows = self._conn.execute(sql, args).fetchall()
         return [self._task_record(r) for r in rows]
@@ -1299,6 +1318,7 @@ class FleetStore:
                 health_sum[str(k)] = health_sum.get(str(k), 0) + _int(v)
         with self._lock:
             self._expire_locked(ts)
+            self._timeout_pulled_locked(ts)
             self._conn.commit()
             trows = self._conn.execute("SELECT status, COUNT(*) AS n FROM node_tasks GROUP BY status").fetchall()
             recent_fail = self._conn.execute(

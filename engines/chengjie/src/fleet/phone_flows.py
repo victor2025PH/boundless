@@ -2,8 +2,9 @@
 
 坐标在 ``phone_ui_map.json``（或 agent.json ``phone_ui_map`` 指向的文件）里，按应用分开，
 单位是屏幕千分比。agent.json 里的路径优先；路径为空时用本模块旁边的那份，那份不在时再用
-fleet 状态目录里的 ``phone_ui_map.json``。每次动作先截一张图量屏幕，再把千分比换成像素。不新增 adb 动词：
-打开应用是 HOME 再点该应用的 ``app_icon`` 锚点；带图是点相册里已经在手机上的那一格。
+fleet 状态目录里的 ``phone_ui_map.json``。每次动作先截一张图量屏幕，再把千分比换成像素。
+Facebook 点赞按包名 ``am start`` 打开，前台已经是 Facebook 时不回桌面。其它应用仍是 HOME
+再点 ``app_icon``。带图是点相册里已经在手机上的那一格。
 停留（dwell）只在本机睡一会儿，不发 adb。
 
 ``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1 / phone_flows_v2，执行直接拒绝，不碰 adb。
@@ -648,12 +649,106 @@ def _merge_dump_meta(diag: Dict[str, Any], meta: Any) -> None:
     uia["error"] = error if isinstance(error, str) else ""
 
 
+_FB_PACKAGES = ("com.facebook.katana", "com.facebook.lite")
+_STORE_PACKAGES = frozenset({
+    "com.android.vending",
+    "com.google.android.finsky",
+    "com.android.market",
+})
+_PKG_RE = re.compile(r"[A-Za-z][\w.]*\Z")
+
+
+def classify_facebook_open(package: str) -> str:
+    """Failure code after an open attempt. Empty when Facebook is in front or unknown.
+
+    An empty package is unknown (dumpsys missed), so the caller keeps the pixel
+    probes. Play Store and a different app are explicit codes, never ``not_logged_in``.
+    """
+    pkg = str(package or "").strip()
+    if not pkg or pkg in _FB_PACKAGES:
+        return ""
+    if not _PKG_RE.fullmatch(pkg) or len(pkg) > 80:
+        return "wrong_app_launched:unknown"
+    if pkg in _STORE_PACKAGES or "finsky" in pkg or pkg.endswith(".vending"):
+        return "fb_not_installed_or_store_redirect"
+    return "wrong_app_launched:" + pkg
+
+
+def _foreground_package(ops: Any, serial: str) -> str:
+    reader = getattr(ops, "read_foreground", None)
+    if not callable(reader):
+        return ""
+    try:
+        found = reader(serial)
+    except Exception:
+        logger.debug("foreground unread", exc_info=True)
+        return ""
+    if not isinstance(found, dict):
+        return ""
+    return str(found.get("package") or "")
+
+
+def _open_facebook(ops: Any, serial: str) -> str:
+    """Launch Facebook by package unless it is already in front.
+
+    Returns a failure code, or "" when the foreground is Facebook or unknown.
+    Does not press Home and does not tap the wallpaper icon.
+    """
+    package = _foreground_package(ops, serial)
+    if package in _FB_PACKAGES:
+        return ""
+    launcher = getattr(ops, "launch_facebook", None)
+    if not callable(launcher):
+        return "app_not_ready"
+    target = ""
+    finder = getattr(ops, "facebook_package", None)
+    if callable(finder):
+        try:
+            target = str(finder(serial) or "")
+        except Exception:
+            logger.debug("facebook package probe failed", exc_info=True)
+            target = ""
+    if target not in _FB_PACKAGES:
+        target = _FB_PACKAGES[0]
+    launcher(serial, target)
+    return classify_facebook_open(_foreground_package(ops, serial))
+
+
+def _coerce_portrait(ops: Any, run: Any, serial: str, width: int, height: int) -> Tuple[int, int, str]:
+    """When the shot is landscape, lock portrait and shoot again.
+
+    Returns ``(width, height, code)``. ``code`` is empty on a portrait frame,
+    ``landscape_orientation`` when the second shot is still landscape, or
+    ``screencap_bad_frame`` when the second shot has no size.
+    """
+    if width <= height:
+        return width, height, ""
+    restorer = getattr(ops, "restore_portrait", None)
+    if callable(restorer):
+        try:
+            restorer(serial)
+        except PhoneOpError:
+            logger.debug("portrait restore was rejected", exc_info=True)
+        except Exception:
+            logger.debug("portrait restore failed", exc_info=True)
+    shot = run(TASK_PHONE_SCREENSHOT, {})
+    w, h = shot.get("device_width"), shot.get("device_height")
+    if isinstance(w, bool) or not isinstance(w, int) or isinstance(h, bool) or not isinstance(h, int):
+        return width, height, "screencap_bad_frame"
+    if w > h:
+        return w, h, "landscape_orientation"
+    return w, h, ""
+
+
 def _attach_foreground(ops: Any, serial: str, result: Dict[str, Any], code: str) -> None:
-    """On a login or readiness miss, record the resumed package and activity.
+    """On a login, readiness, or wrong-app miss, record the resumed package and activity.
 
     The text is scrubbed later. A reader that fails leaves the result unchanged.
     """
-    if code not in ("not_logged_in", "app_not_ready") or not isinstance(result, dict):
+    tracked = code in (
+        "not_logged_in", "app_not_ready", "fb_not_installed_or_store_redirect", "landscape_orientation",
+    ) or str(code).startswith("wrong_app_launched:")
+    if not tracked or not isinstance(result, dict):
         return
     reader = getattr(ops, "read_foreground", None)
     if not callable(reader):
@@ -853,12 +948,14 @@ class PhoneFlows:
 
     def _execute_facebook_like(self, serial: str, p: Dict[str, Any], ui: Dict[str, Any],
                                ops: Any) -> Tuple[str, Dict[str, Any], str]:
-        """Launch Facebook, scroll the feed, tap Like only when the locator is sure.
+        """Launch Facebook by package, scroll the feed, tap Like only when sure.
 
-        After the icon tap, poll the feed for about 9 seconds. A hidden tab
-        bar is scrolled back into view during that window. The search then
-        starts at the top of the feed. ``like_probe`` returns the row and
-        does not tap it.
+        If Facebook is already in front, this does not press Home. Otherwise
+        it ``am start``s katana or lite. Landing on Telegram, the launcher, or
+        the Play Store is an explicit code, not ``not_logged_in``. A landscape
+        frame is locked back to portrait first. After a successful open, poll
+        the feed for about 9 seconds. ``like_probe`` returns the row and does
+        not tap it.
         """
         from .like_locate import DEFAULT_LIKE_SWIPES, like_state_changed, locate_like_row
 
@@ -887,9 +984,16 @@ class PhoneFlows:
                 if (isinstance(width, bool) or not isinstance(width, int)
                         or isinstance(height, bool) or not isinstance(height, int)):
                     return STATUS_FAILED, _result(serial, "facebook", "like", completed=1), "screencap_bad_frame"
-                run(TASK_PHONE_KEY, {"key": "home"})
-                ax, ay = _point("app_icon", anchors, overrides, width, height)
-                run(TASK_PHONE_TAP, {"x": ax, "y": ay})
+                width, height, orient = _coerce_portrait(ops, run, serial, width, height)
+                if orient:
+                    return STATUS_FAILED, _result(
+                        serial, "facebook", "like", completed=1, width=width, height=height,
+                    ), orient
+                opened = _open_facebook(ops, serial)
+                if opened:
+                    err = PhoneOpError(opened, failed=True)
+                    err.stderr = "foreground"  # type: ignore[attr-defined]
+                    raise err
                 up_x, up_y = _point(dst_name, anchors, overrides, width, height)
                 down_x, down_y = _point(src_name, anchors, overrides, width, height)
 
@@ -1083,6 +1187,9 @@ class PhoneFlows:
                 w, h = shot.get("device_width"), shot.get("device_height")
                 if isinstance(w, bool) or not isinstance(w, int) or isinstance(h, bool) or not isinstance(h, int):
                     return STATUS_FAILED, _result(serial, app, flow, completed=1), "screencap_bad_frame"
+                w, h, orient = _coerce_portrait(ops, run, serial, w, h)
+                if orient:
+                    return STATUS_FAILED, _result(serial, app, flow, completed=1, width=w, height=h), orient
                 prog.update(done=1, w=w, h=h)
                 verify_on, jitter, retries = resolve_policy(ui, self._verify, self._jitter)
                 try:

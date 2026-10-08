@@ -142,6 +142,22 @@ def _settings_get(args: Tuple[str, ...]) -> bool:
             and args[2] in _NS and bool(_KEY.fullmatch(args[3])))
 
 
+def _portrait_lock(args: Tuple[str, ...]) -> bool:
+    """Lock the phone to portrait. Any other settings write stays closed."""
+    return args in {
+        ("settings", "put", "system", "accelerometer_rotation", "0"),
+        ("settings", "put", "system", "user_rotation", "0"),
+    }
+
+
+def portrait_lock_args() -> Tuple[Tuple[str, ...], ...]:
+    """The only settings writes a flow may send to leave landscape."""
+    return (
+        ("settings", "put", "system", "accelerometer_rotation", "0"),
+        ("settings", "put", "system", "user_rotation", "0"),
+    )
+
+
 def _settings_write(args: Tuple[str, ...]) -> bool:
     if len(args) == 4 and args[0] == "settings" and args[1] == "delete" and args[2] in _NS:
         return bool(_KEY.fullmatch(args[3]))
@@ -352,6 +368,8 @@ def _classify_shell(args: Tuple[str, ...]) -> AdbClass:
     """Classify the argv that follows ``adb -s SERIAL shell``."""
     if not args:
         return _DENIED
+    if _portrait_lock(args):
+        return AdbClass("phone_control", "portrait_lock")
     if _settings_write(args):
         return AdbClass("guarded_write", "settings_put")
     if args in _SVC:
@@ -698,6 +716,12 @@ CATALOG: Tuple[Dict[str, Any], ...] = (
     {"since": "0.3.23", "category": "app_restart", "family": "facebook_force_stop",
      "example": ("-s", "S1", "shell", "cmd", "activity", "force-stop", "com.facebook.lite"),
      "note": "Force-stop of Facebook Lite via cmd activity. Same closed app_restart door. Other packages stay guarded_write."},
+    {"since": "0.3.26", "category": "phone_control", "family": "portrait_lock",
+     "example": ("-s", "S1", "shell", "settings", "put", "system", "accelerometer_rotation", "0"),
+     "note": "Turns off auto-rotate. Only this value. Other settings writes stay guarded_write."},
+    {"since": "0.3.26", "category": "phone_control", "family": "portrait_lock",
+     "example": ("-s", "S1", "shell", "settings", "put", "system", "user_rotation", "0"),
+     "note": "Locks the user rotation to portrait (0). user_rotation 1, 2, and 3 stay closed."},
     {"since": "0.3.18", "category": "guarded_write", "family": "airplane_mode",
      "example": ("-s", "S1", "shell", "cmd", "connectivity", "airplane-mode", "enable"),
      "note": "Turns airplane mode on. The no-argument query is read-only; enable and disable are this closed family."},

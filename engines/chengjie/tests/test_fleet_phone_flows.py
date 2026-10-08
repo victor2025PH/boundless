@@ -306,16 +306,22 @@ def test_execute_each_app_and_flow(app, flow):
     flows = PhoneFlows(enabled=True)
     status, result, detail = flows.execute(KIND[flow], dict(payload, evil="rm"), {"serial": "S1"}, ops=ops)
     if app == "facebook" and flow == "like":
-        # Blank frames are not signed in, and the fixed like_button is not a tap target.
+        # Blank frames are not signed in. Facebook is opened by package, not the wallpaper icon.
         assert (status, detail) == (STATUS_FAILED, "app_not_ready"), detail
         assert result["flow"] == "like"
         ui_fb = bundled_ui_map()["apps"]["facebook"]["anchors"]
         banned = []
-        for name in ("like_button", "feed_tab"):
+        for name in ("like_button", "feed_tab", "app_icon"):
             ax, ay = ui_fb[name]
             banned.append((str(min(W - 1, ax * W // 1000)), str(min(H - 1, ay * H // 1000))))
         taps = [a for a in fake.actions() if len(a) > 4 and a[4] == "tap"]
-        assert taps and all((a[-2], a[-1]) not in banned for a in taps)
+        assert all((a[-2], a[-1]) not in banned for a in taps)
+        assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+        assert any(
+            a[2:8] == ("shell", "am", "start", "-a", "android.intent.action.MAIN", "-c")
+            and a[-1] == "com.facebook.katana"
+            for a in fake.actions()
+        )
         return
     assert (status, detail) == (STATUS_DONE, "ok"), (app, flow, detail)
     assert result["app"] == app and result["flow"] == flow
@@ -580,7 +586,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.25"
+    assert AGENT_VERSION == "0.3.26"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})
@@ -866,5 +872,6 @@ def test_new_modules_have_no_dangerous_adb_tokens():
     root = Path(__file__).resolve().parents[1] / "src" / "fleet"
     for name in ("phone_flows.py", "phone_flow_rules.py", "phone_flow_robust.py", "phone_ui_map.json"):
         text = (root / name).read_text(encoding="utf-8")
+        text = text.replace("fb_not_installed_or_store_redirect", "")
         for bad in ("kill-server", "start-server", "tcpip", "reboot", "9000", "connect", "install", "\"usb\"", "root"):
             assert bad not in text, (name, bad)

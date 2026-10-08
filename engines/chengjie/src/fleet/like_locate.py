@@ -86,6 +86,9 @@ TEMPLATE_HIGH = 0.82
 TEMPLATE_MED = 0.50
 AGREE_X_PM = 72
 AGREE_Y_PM = 56
+# Inferred Like (Comment/Share row, no Like node) only accepts a screenshot
+# landing inside this many pixels of that point, and inside the action-bar row.
+INFERRED_WINDOW_PX = 40
 DEFAULT_LIKE_SWIPES = 3
 FB_BLUE = (24, 119, 242)
 FB_BLUE_TOL = 48
@@ -1683,7 +1686,67 @@ def shape_hits(raw: bytes, blobs: Sequence[Dict[str, int]]) -> List[Dict[str, An
     return hits
 
 
+def _hit_xy(hit: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    x, y = hit.get("x"), hit.get("y")
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    return int(x), int(y)
+
+
+def _inferred_slots(positions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [hit for hit in positions if hit.get("inferred")]
+
+
+def _in_inferred_window(hit: Dict[str, Any], slot: Dict[str, Any]) -> bool:
+    """True when ``hit`` lands within ±40px of an inferred Like and on that row."""
+    point = _hit_xy(hit)
+    center = _hit_xy(slot)
+    if point is None or center is None:
+        return False
+    x, y = point
+    sx, sy = center
+    if abs(x - sx) > INFERRED_WINDOW_PX or abs(y - sy) > INFERRED_WINDOW_PX:
+        return False
+    try:
+        y0, y1 = int(slot["row_y0"]), int(slot["row_y1"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return y0 <= y <= y1
+
+
+def _window_screenshot(positions: Sequence[Dict[str, Any]],
+                       hits: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop screenshot landings outside the inferred Like window.
+
+    When the hierarchy had to invent the Like slot, a template, structure, or
+    shape hit counts only inside ±40px of that point and inside the action-bar
+    row. A landing hundreds of pixels away is not a signal.
+    """
+    slots = _inferred_slots(positions)
+    if not slots:
+        return list(hits)
+    return [hit for hit in hits if any(_in_inferred_window(hit, slot) for slot in slots)]
+
+
+def _screenshot_outside(positions: Sequence[Dict[str, Any]],
+                        *groups: Sequence[Dict[str, Any]]) -> bool:
+    slots = _inferred_slots(positions)
+    if not slots:
+        return False
+    for group in groups:
+        for hit in group:
+            if not any(_in_inferred_window(hit, slot) for slot in slots):
+                return True
+    return False
+
+
 def _agree(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    if a.get("inferred") and _in_inferred_window(b, a):
+        return True
+    if b.get("inferred") and _in_inferred_window(a, b):
+        return True
     return abs(int(a["x_pm"]) - int(b["x_pm"])) <= AGREE_X_PM and abs(int(a["y_pm"]) - int(b["y_pm"])) <= AGREE_Y_PM
 
 
@@ -1749,6 +1812,10 @@ def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, A
     agrees with a screenshot signal. Nodes found inside that bar agree with
     a screenshot signal the same way, and do not tap on their own.
     """
+    if _inferred_slots(positions):
+        templates = _window_screenshot(positions, templates)
+        structure = _window_screenshot(positions, structure)
+        shapes = _window_screenshot(positions, shapes)
     pool = [h for h in (
         list(text) + list(templates) + list(structure) + list(shapes)
         + list(labels) + list(positions) + list(regions)
@@ -1837,6 +1904,8 @@ def _blank_diag(dump: str) -> Dict[str, Any]:
         "shape_score": 0.0,
         "position_matched": False,
         "position_inferred": False,
+        "screenshot_outside": False,
+        "screenshot_window_px": 0,
         "region_matched": False,
         "nodes": [],
         "hierarchy": {
@@ -1913,6 +1982,8 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         diag["shape_score"] = 0.0
     diag["position_matched"] = bool(positions)
     diag["position_inferred"] = any(bool(h.get("inferred")) for h in positions)
+    diag["screenshot_outside"] = _screenshot_outside(positions, templ, structure, shapes)
+    diag["screenshot_window_px"] = INFERRED_WINDOW_PX if diag["position_inferred"] else 0
     diag["region_matched"] = bool(regions)
     return {
         "target": target,

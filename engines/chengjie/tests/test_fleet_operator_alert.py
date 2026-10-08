@@ -332,7 +332,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.25"
+    assert agent_mod.AGENT_VERSION == "0.3.26"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -547,15 +547,19 @@ def test_operator_alert_diag_redacts_snapshot_serials(tmp_path, monkeypatch):
     assert TASK_OPERATOR_ALERT_DIAG not in LEGACY_ALLOWED_KINDS
 
 
-def test_session0_asks_the_logon_task_to_show_the_panel(monkeypatch, tmp_path):
-    from src.fleet.service import PANEL_TASK_NAME, build_panel_logon_create, build_panel_run_key
+def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypatch, tmp_path):
+    from src.fleet.service import (
+        PANEL_INTERACTIVE_SID, PANEL_TASK_NAME, build_panel_logon_create, build_panel_run_key, build_panel_task_xml,
+    )
 
     iss = Path(__file__).resolve().parents[1] / "fleet_agent" / "setup" / "ChatXAgent.iss"
     text = iss.read_text(encoding="utf-8")
-    assert 'AppVersion "0.3.25"' in text
+    assert 'AppVersion "0.3.26"' in text
     assert "install-panel" in text
     assert "ChatX Fleet Panel" in text
     assert "ChatXFleetPanel" in text
+    assert "panel_task.xml" in text
+    assert "S-1-5-4" in text
     monkeypatch.setattr(oa.os, "name", "nt")
     monkeypatch.setattr(oa, "_current_session_id", lambda: 0)
     monkeypatch.setattr(oa, "_powershell", lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
@@ -566,21 +570,49 @@ def test_session0_asks_the_logon_task_to_show_the_panel(monkeypatch, tmp_path):
 
         class _Proc:
             returncode = 0
+            stdout = b""
 
         return _Proc()
 
     monkeypatch.setattr(oa.subprocess, "run", run)
     spawned = []
-    monkeypatch.setattr(oa, "_spawn_as_user", lambda args: spawned.append(args) or False)
+    monkeypatch.setattr(oa, "_spawn_as_user", lambda args: spawned.append(list(args)) or True)
+    monkeypatch.setattr(oa, "_active_console_session_id", lambda: 2)
     assert oa._spawn_interactive(tmp_path / "p.ps1", tmp_path / "s.json", tmp_path / "l.json", tmp_path / "k.lock")
+    assert spawned and calls == []
+    remembered = json.loads((tmp_path / oa.PANEL_SESSION_NAME).read_text(encoding="utf-8"))
+    assert remembered == {"session_id": 2}
+
+    calls.clear()
+    spawned.clear()
+    real_panel_session = oa._stored_panel_session
+    monkeypatch.setattr(oa, "_spawn_as_user", lambda args: spawned.append(list(args)) or False)
+    monkeypatch.setattr(oa, "_stored_panel_session", lambda _root: -1)
+    assert oa._spawn_interactive(tmp_path / "p.ps1", tmp_path / "s.json", tmp_path / "l.json", tmp_path / "k.lock") is False
+    monkeypatch.setattr(oa, "_stored_panel_session", real_panel_session)
+    assert spawned
     assert calls and calls[0][:4] == ["schtasks", "/Run", "/TN", PANEL_TASK_NAME]
-    assert spawned == []
+
+    xml = build_panel_task_xml(tmp_path)
+    assert f"<GroupId>{PANEL_INTERACTIVE_SID}</GroupId>" in xml
+    assert "<LogonTrigger>" in xml
+    assert "SYSTEM" not in xml
+    assert "operator_alert.json" in xml
     create = build_panel_logon_create(tmp_path)
-    assert create[create.index("/SC") + 1] == "ONLOGON"
-    assert "SYSTEM" not in create
-    assert "/IT" in create
-    assert "-Snapshot" in create[create.index("/TR") + 1]
+    assert create[1] == "/Create" and "/XML" in create and "SYSTEM" not in create
     run_key = build_panel_run_key(tmp_path)
     assert run_key[0] == "reg" and "ChatXFleetPanel" in run_key
     assert "operator_alert.json" in run_key[run_key.index("/d") + 1]
     assert "zh" in oa.PANEL_SCRIPT and "en" in oa.PANEL_SCRIPT
+    (tmp_path / "panel_task.xml").write_text(xml, encoding="utf-8")
+    (tmp_path / oa.LOCK_NAME).write_bytes(b"\0")
+    monkeypatch.setattr(oa, "_run_key_present", lambda: True)
+    monkeypatch.setattr(oa, "_lock_held", lambda _path: True)
+    monkeypatch.setattr(oa, "_query_panel_task_text", lambda: "Run As User:                           NT AUTHORITY\\SYSTEM\n")
+    assert oa.panel_runtime_diag(tmp_path)["task_account"] == "SYSTEM"
+    monkeypatch.setattr(oa, "_query_panel_task_text", lambda: "")
+    diag = oa.panel_runtime_diag(tmp_path)
+    assert diag["task_account"] == "INTERACTIVE"
+    assert diag["run_key_present"] is True
+    assert diag["panel_session_id"] == 2
+    assert "serial" not in json.dumps(diag)

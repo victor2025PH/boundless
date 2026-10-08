@@ -166,6 +166,28 @@ def test_enqueue_pull_ack_priority_and_idempotent(st):
     assert st.ack(t_ov["task_id"], node_id=nid, status=STATUS_REJECTED, detail="no_instance")["status"] == STATUS_REJECTED
 
 
+def test_pulled_task_without_a_receipt_times_out(st):
+    a = _enroll(st)
+    nid = a["node_id"]
+    first = st.enqueue(nid, TASK_PING, ttl_sec=30, now=T0)
+    second = st.enqueue(nid, TASK_PING, ttl_sec=30, now=T0)
+    pulled = st.pull(nid, now=T0 + 1)
+    assert {row["task_id"] for row in pulled} == {first["task_id"], second["task_id"]}
+    assert st.get_task(second["task_id"], now=T0 + 10)["status"] == STATUS_PULLED
+    stale = st.get_task(second["task_id"], now=T0 + 31)
+    assert stale["status"] == STATUS_FAILED and stale["detail"] == "timeout"
+    assert stale["acked_at"] == T0 + 31
+    listed = st.list_tasks(node_id=nid, now=T0 + 31)
+    assert {row["task_id"]: row["detail"] for row in listed if row["status"] == STATUS_FAILED} == {
+        first["task_id"]: "timeout", second["task_id"]: "timeout",
+    }
+    done = st.enqueue(nid, TASK_PING, ttl_sec=30, now=T0 + 40)
+    st.pull(nid, now=T0 + 41)
+    st.ack(done["task_id"], node_id=nid, status=STATUS_DONE, result={"pong": True}, detail="pong", now=T0 + 42)
+    assert st.get_task(done["task_id"], now=T0 + 90)["status"] == STATUS_DONE
+    assert st.overview(now=T0 + 90)["tasks"]["by_status"].get(STATUS_PULLED, 0) == 0
+
+
 def test_task_ttl_expires_and_cancel(st):
     a = _enroll(st)
     nid = a["node_id"]

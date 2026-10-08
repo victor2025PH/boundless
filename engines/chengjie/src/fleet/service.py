@@ -29,6 +29,10 @@ logger = logging.getLogger("fleet.service")
 
 TASK_NAME = "ChatX Fleet Agent"
 PANEL_TASK_NAME = "ChatX Fleet Panel"
+PANEL_TASK_XML_NAME = "panel_task.xml"
+# INTERACTIVE well-known SID. The panel task runs as a logged-on member of
+# this group, not as SYSTEM and not in session 0.
+PANEL_INTERACTIVE_SID = "S-1-5-4"
 SYSTEMD_UNIT = "chatx-agent"
 RETRY_UNENROLLED_SEC = 30      # 未注册：等安装器 / 人工 enroll 写入 node_key
 PENDING_POLL_SEC = 15          # 已提交待批准：隔一会儿问主控是否已批准
@@ -71,16 +75,73 @@ def build_schtasks_query(*, task_name: str = TASK_NAME) -> List[str]:
     return ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"]
 
 
-def build_panel_logon_create(state_dir: Path, *, task_name: str = PANEL_TASK_NAME) -> List[str]:
-    """ONLOGON task that starts the site-todo panel in the logged-on user session.
+def _xml_text(value: str) -> str:
+    return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
 
-    Not SYSTEM and not session 0. ``/IT`` runs only while that user is logged on,
-    on the interactive desktop. The panel reads the snapshot the service wrote.
+
+def panel_task_xml_path(state_dir: Path) -> Path:
+    """Keep a path object the caller already built.
+
+    ``Path()`` follows ``os.name``. A Linux test that only flips ``os.name``
+    cannot construct a ``WindowsPath``.
+    """
+    root = state_dir if isinstance(state_dir, Path) else Path(state_dir)
+    return root / PANEL_TASK_XML_NAME
+
+
+def build_panel_task_xml(state_dir: Path) -> str:
+    """Task Scheduler XML: ONLOGON, interactive group, least privilege.
+
+    GroupId S-1-5-4 is INTERACTIVE. The task does not name SYSTEM and does
+    not store a password. ``schtasks /Create /XML`` registers this document.
     """
     from .operator_alert import panel_process_args
 
-    return ["schtasks", "/Create", "/TN", task_name, "/TR", _win_quote(panel_process_args(state_dir)),
-            "/SC", "ONLOGON", "/RL", "LIMITED", "/IT", "/F"]
+    args = panel_process_args(state_dir)
+    command = _xml_text(args[0])
+    rest = _xml_text(subprocess.list2cmdline(args[1:]))
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+        "  <Principals>\n"
+        '    <Principal id="Interactive">\n'
+        f"      <GroupId>{PANEL_INTERACTIVE_SID}</GroupId>\n"
+        "      <RunLevel>LeastPrivilege</RunLevel>\n"
+        "    </Principal>\n"
+        "  </Principals>\n"
+        "  <Triggers>\n"
+        "    <LogonTrigger>\n"
+        "      <Enabled>true</Enabled>\n"
+        "    </LogonTrigger>\n"
+        "  </Triggers>\n"
+        "  <Settings>\n"
+        "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
+        "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
+        "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
+        "    <AllowHardTerminate>true</AllowHardTerminate>\n"
+        "    <StartWhenAvailable>true</StartWhenAvailable>\n"
+        "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n"
+        "    <AllowStartOnDemand>true</AllowStartOnDemand>\n"
+        "    <Enabled>true</Enabled>\n"
+        "  </Settings>\n"
+        "  <Actions>\n"
+        '    <Exec>\n'
+        f"      <Command>{command}</Command>\n"
+        f"      <Arguments>{rest}</Arguments>\n"
+        "    </Exec>\n"
+        "  </Actions>\n"
+        "</Task>\n"
+    )
+
+
+def build_panel_logon_create(state_dir: Path, *, task_name: str = PANEL_TASK_NAME) -> List[str]:
+    """Register the interactive logon task from the XML written beside the snapshot.
+
+    The principal is the INTERACTIVE group (S-1-5-4), not SYSTEM. A session-0
+    service that only creates this task does not itself display the panel.
+    """
+    return ["schtasks", "/Create", "/TN", task_name, "/XML", str(panel_task_xml_path(state_dir)), "/F"]
 
 
 def build_panel_run_key(state_dir: Path) -> List[str]:
@@ -155,9 +216,10 @@ def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
         return {"ok": True, "kind": "skipped", "task_name": task_name, "steps": []}
     try:
         _ensure_panel_script(state_dir)
+        panel_task_xml_path(state_dir).write_text(build_panel_task_xml(state_dir), encoding="utf-8")
     except Exception as e:
-        logger.warning("[service] panel script was not written: %s", e)
-        return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": [], "out": str(e)[:300]}
+        logger.warning("[service] panel script was not written: %s", type(e).__name__)
+        return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": [], "out": type(e).__name__}
     try:
         run(["schtasks", "/End", "/TN", task_name])
     except Exception as e:
@@ -560,7 +622,7 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 __all__ = [
     "TASK_NAME", "PANEL_TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command",
     "build_schtasks_create", "build_schtasks_run", "build_schtasks_delete", "build_schtasks_query",
-    "build_panel_logon_create", "build_panel_run_key", "build_panel_run_key_delete",
+    "build_panel_logon_create", "build_panel_task_xml", "build_panel_run_key", "build_panel_run_key_delete",
     "build_task_state_query", "build_systemd_unit", "install_service", "install_panel_logon", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
     "onefile_parent_pid", "start_parent_watch",

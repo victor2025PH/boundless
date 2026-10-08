@@ -409,6 +409,8 @@ def _sanitize_like_diag(raw: Any) -> Any:
         "shape_score": shape_out,
         "position_matched": raw.get("position_matched") is True,
         "position_inferred": raw.get("position_inferred") is True,
+        "screenshot_outside": raw.get("screenshot_outside") is True,
+        "screenshot_window_px": 40 if raw.get("screenshot_window_px") == 40 else 0,
         "region_matched": raw.get("region_matched") is True,
         "nodes": nodes,
         "hierarchy": _sanitize_hierarchy(raw.get("hierarchy")),

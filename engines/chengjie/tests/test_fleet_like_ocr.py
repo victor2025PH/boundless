@@ -649,6 +649,114 @@ def test_logged_out_frame_does_not_tap_like():
     assert sum(1 for a in fake.actions() if a[2:] == ("exec-out", "screencap")) > 4
 
 
+def test_facebook_already_open_does_not_go_home():
+    from types import SimpleNamespace
+
+    class _Front(FakeAdb):
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                text = b"mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.FbMainTabActivity t1}\n"
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    adb = _Front(frame=bytes(_logged(bytearray(_frame()))))
+    ops, fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert detail != "not_logged_in"
+    assert status == STATUS_FAILED
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+    assert not any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
+
+
+def test_wrong_app_and_store_are_not_reported_as_logged_out():
+    from types import SimpleNamespace
+
+    from src.fleet.phone_flows import classify_facebook_open
+
+    assert classify_facebook_open("com.facebook.katana") == ""
+    assert classify_facebook_open("") == ""
+    assert classify_facebook_open("org.telegram.messenger") == "wrong_app_launched:org.telegram.messenger"
+    assert classify_facebook_open("com.android.vending") == "fb_not_installed_or_store_redirect"
+    assert classify_facebook_open("com.miui.home") == "wrong_app_launched:com.miui.home"
+
+    class _Stuck(FakeAdb):
+        def __init__(self, package):
+            super().__init__(frame=_frame())
+            self.package = package
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                text = f"mResumedActivity: ActivityRecord{{abc u0 {self.package}/.Main t1}}\n".encode()
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            if len(args) >= 5 and args[2:5] == ("shell", "pm", "path"):
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    for package, code in (
+        ("org.telegram.messenger", "wrong_app_launched:org.telegram.messenger"),
+        ("com.android.vending", "fb_not_installed_or_store_redirect"),
+        ("com.android.launcher3", "wrong_app_launched:com.android.launcher3"),
+    ):
+        adb = _Stuck(package)
+        ops, fake, _slept = _ops(adb=adb)
+        flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+        status, result, detail = flows.execute(
+            TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+        assert (status, detail) == (STATUS_FAILED, code), (package, detail)
+        assert detail != "not_logged_in"
+        assert result["foreground"]["package"] == package
+        assert "S1" not in json.dumps(result["foreground"])
+        assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+
+
+def test_landscape_locks_portrait_or_reports_the_orientation():
+    wide = _frame(400, 180)
+    tall = _frame(180, 400)
+
+    class _Wide(FakeAdb):
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            self.frame = wide
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Wide(frame=wide))
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "landscape_orientation")
+    assert result["device_width"] > result["device_height"]
+    puts = [a for a in fake.actions() if len(a) > 6 and a[3:6] == ("settings", "put", "system")]
+    assert ("user_rotation", "0") == (puts[-1][-2], puts[-1][-1])
+    assert any(a[-2:] == ("accelerometer_rotation", "0") for a in puts)
+
+    class _Recover(FakeAdb):
+        def __init__(self):
+            super().__init__(frame=wide)
+            self.shots = 0
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 4 and args[2:] == ("exec-out", "screencap"):
+                self.shots += 1
+                self.frame = tall if self.shots >= 2 else wide
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Recover())
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert detail != "landscape_orientation"
+    assert detail == "app_not_ready"
+    assert status == STATUS_FAILED
+
+
 def test_login_wall_stops_before_the_feed():
     wall = _paint(3, [(*_px("login_mark"), _WALL)])
     status, result, detail, fake = _run(wall, payload=_body("facebook", "like", like_swipes=0))
@@ -1135,17 +1243,52 @@ def test_wp11_infers_like_left_of_comment_and_needs_a_screenshot():
     assert fuse_signals([], [], [], [], [], [hit]) is None
     header = _hit("structure", hit["x_pm"], 115)
     assert fuse_signals([], [], [header], [], [], [hit]) is None
-    agreed = fuse_signals([], [], [_hit("structure", hit["x_pm"], hit["y_pm"])], [], [], [hit])
+    near = {
+        "source": "structure", "x_pm": hit["x_pm"], "y_pm": hit["y_pm"], "score": 1.0,
+        "label": "structure", "full": True, "x": hit["x"], "y": hit["y"],
+    }
+    agreed = fuse_signals([], [], [near], [], [], [hit])
     assert agreed is not None
     assert "position" in agreed["signals"] and "structure" in agreed["signals"]
     assert abs(agreed["y"] - hit["y_pm"]) <= 2
     assert agreed["y"] > 400
+    # wp11: a screenshot landing ~600px off the inferred slot must not count,
+    # even when its permille matches the slot. An in-window hit whose permille
+    # would miss still makes two signals, and it stays on the action-bar row.
+    far = {
+        "source": "structure", "x_pm": hit["x_pm"], "y_pm": hit["y_pm"], "score": 1.0,
+        "label": "structure", "full": True, "x": hit["x"] + 600, "y": hit["y"],
+    }
+    assert fuse_signals([], [], [far], [], [], [hit]) is None
+    slot = dict(hit)
+    slot["row_y0"] = int(hit["y"])
+    slot["row_y1"] = int(hit["y"]) + 20
+    off_row = {
+        "source": "template", "x_pm": hit["x_pm"] + 400, "y_pm": hit["y_pm"] + 400,
+        "score": 0.5, "label": "template", "full": True,
+        "x": int(slot["x"]), "y": int(slot["y"]) - 5,
+    }
+    assert fuse_signals([], [off_row], [], [], [], [slot]) is None
+    inside = {
+        "source": "template", "x_pm": hit["x_pm"] + 400, "y_pm": hit["y_pm"] + 400,
+        "score": 0.5, "label": "template", "full": True,
+        "x": hit["x"] + 30, "y": hit["y"],
+    }
+    paired = fuse_signals([], [inside], [], [], [], [hit])
+    assert paired is not None
+    assert paired["signals"].count("+") == 1
+    assert "position" in paired["signals"] and "template" in paired["signals"]
     kept = sanitize_phone_result(TASK_PHONE_LIKE, {
         "like_probe": True,
-        "like_diag": {"position_inferred": True, "position_matched": True, "serial": "3B1FABCDEF"},
+        "like_diag": {
+            "position_inferred": True, "position_matched": True, "serial": "3B1FABCDEF",
+            "screenshot_outside": True, "screenshot_window_px": 40,
+        },
     })
     blob = json.dumps(kept["like_diag"])
     assert kept["like_diag"]["position_inferred"] is True
+    assert kept["like_diag"]["screenshot_outside"] is True
+    assert kept["like_diag"]["screenshot_window_px"] == 40
     assert "3B1FABCDEF" not in blob and "serial" not in kept["like_diag"]
 
 
