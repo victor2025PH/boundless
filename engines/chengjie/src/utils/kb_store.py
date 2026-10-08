@@ -871,10 +871,13 @@ class KnowledgeBaseStore:
 
         # ── 向量检索（有向量索引且有查询向量时）───────────
         search_mode = "bm25"
+        vec_sim_map: Dict[str, float] = {}
         if query_vec and self._vindex.count() > 0:
             vec_results = self._vindex.search(query_vec, top_k=_fetch_k)
             if vendor_ids:
                 vec_results = [(d, s) for d, s in vec_results if d not in vendor_ids]
+            # 命中口径（kb_gate.judge_kb_hit）要看首条的真实余弦，RRF 分数只表名次
+            vec_sim_map = {str(d): float(v) for d, v in vec_results}
             if vec_results:
                 merged = _rrf_merge(bm25_results, vec_results)
                 ranked = merged[:top_k]
@@ -905,6 +908,8 @@ class KnowledgeBaseStore:
                         entry = row_map[doc_id]
                         entry["_score"] = round(score, 4)
                         entry["_mode"] = search_mode
+                        if doc_id in vec_sim_map:
+                            entry["_vec_sim"] = round(vec_sim_map[doc_id], 4)
                         if lang != "zh":
                             trans = c.execute(
                                 "SELECT * FROM kb_translations WHERE entry_id=? AND lang=?",
@@ -1615,9 +1620,10 @@ class KnowledgeBaseStore:
     def health(self, days: int = 7) -> Dict:
         """KB 自检快照（J-9 #184：「用户机上 KB 是不是空的 / 检索到底有没有在用」）。
 
-        hits_7d / last_hit_ts 取自 kb_query_log——skill_manager 在 kb_gate 真把
-        kb_context 注入 prompt 时才 ``log_query(hit=True)``（L2308），所以这里的命中
-        数就是「进过 prompt 的次数」，不是「搜到过东西」。query_log 只滚动保留 7 天，
+        hits_7d / last_hit_ts 取自 kb_query_log 的 hit 列。2026-10-08 起 hit 按
+        ``kb_gate.judge_kb_hit`` 记：首条条目与查询实词重叠够，或向量余弦 ≥ 阈值才算命中；
+        此前记的是 ``bool(kb_ctx)``（全局规则 / 示例让它恒真），hits 恒等于 queries。
+        改口径前写入的旧行仍是旧口径，7 天滚动后自然洗掉。query_log 只滚动保留 7 天，
         days>7 也只能看到 7 天。
         """
         st = self.stats()
@@ -1650,6 +1656,7 @@ class KnowledgeBaseStore:
             "embedded": embedded,
             "queries_7d": queries,
             "hits_7d": hits,
+            "hit_rate_7d": round(hits / queries, 4) if queries else 0.0,
             "last_hit_ts": last_hit_ts,
             "vendor_excluded": st["vendor_excluded"],
             "feedback": st["feedback"],
