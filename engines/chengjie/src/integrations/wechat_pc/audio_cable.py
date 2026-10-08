@@ -27,7 +27,12 @@ import json
 import logging
 import os
 import time
-from ctypes import HRESULT, POINTER, c_int, c_void_p, c_wchar_p, wintypes
+from ctypes import POINTER, c_int, c_void_p, c_wchar_p, wintypes
+
+try:
+    from ctypes import HRESULT
+except ImportError:  # Linux ctypes 没有 HRESULT；COM 类只在 _COM_OK 时定义
+    HRESULT = None  # type: ignore[misc, assignment]
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -35,11 +40,17 @@ logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - 环境相关
     import numpy as _np
+except Exception:  # pragma: no cover
+    _np = None
+
+try:  # pragma: no cover - 环境相关
     import sounddevice as _sd
     import soundfile as _sf
-    _AUDIO_OK = True
+    _AUDIO_OK = _np is not None
 except Exception:  # pragma: no cover
-    _np = _sd = _sf = None
+    # 播放链路缺 sounddevice/soundfile 时只关 available()。
+    # 静音裁剪和响度归一只依赖 numpy，不能跟着被置空（CI 有 numpy、没有这两包）。
+    _sd = _sf = None
     _AUDIO_OK = False
 
 try:  # pragma: no cover - 环境相关
