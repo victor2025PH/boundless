@@ -88,6 +88,7 @@ NAV_ICONS = {
     "key": _STROKE % '<circle cx="7.5" cy="15.5" r="3.5"/><path d="M10.2 13.2L21 3"/><path d="M16 3h5v5"/>',
     # 2026-08-28 实施81：报障工单处置台（bug_tickets）专属图标（可见项图标去重门禁）
     "bug": _STROKE % '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M8 9H4M8 13H4M8 17H5M16 9h4M16 13h4M16 17h3M9 6a3 3 0 016 0"/>',
+    "extract": _STROKE % '<path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/>',
 }
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
@@ -99,6 +100,11 @@ NAV_ITEMS = {
                       external=True, label_key="workspace_inbox", label_zh="坐席工作台",
                       help="nav_unified_inbox",
                       cmd_keys="unified inbox 统一 收件箱 消息 聊天 多平台 坐席 工作台 workspace"),
+    # 群成员提取：所有登录用户的左侧菜单项。不进 SIMPLE_MORE 常量（≤7 棘轮），
+    # 由 _with_simple_tg_members 在渲染时塞进简洁「更多」。
+    "tg_members": dict(key="tg_members", path="/tools/tg-members", icon="extract",
+                       simple=True, label_key="gm_nav", label_zh="群成员提取",
+                       cmd_keys="telegram tg members 群成员 提取 拉群 成员库 extract"),
     "cases": dict(key="cases", path="/cases", icon="file-text", badge="badge-cases",
                   label_key="cases", label_zh="案例跟进", help="nav_cases",
                   cmd_keys="cases 案例 待处理 待处理案例 跟进 case"),
@@ -148,7 +154,10 @@ NAV_ITEMS = {
                          cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心 "
                                   "真机矩阵 matrix"),
     # 群脉 CrowdX 导播台：多号群戏剧本库 + 离线排练（dry-run，不发真消息）
+    # simple=True：简洁模式 Ctrl+K 能搜到。侧栏「更多」不写进 SIMPLE_MORE
+    # （那张表有 ≤7 棘轮），由 _with_simple_group_show 在开关打开时再塞一行。
     "group_show": dict(key="group_show", path="/group-show", icon="film",
+                       simple=True,
                        label_key="gs_nav", label_zh="群脉导播台",
                        cmd_keys="group show crowdx 群脉 导播 导播台 群戏 剧本 排练 炒群"),
     # ai_studio 已解散（2026-08-01）：5 个 tab 中 3 个是兄弟页面套壳，独有能力
@@ -374,7 +383,8 @@ NAV_GROUPS_FULL = [
     # 单独成组——无域包的部署会渲染出空分组标题。
     dict(label_key="section_workbench", label_zh="工作台",
          note_key="section_note_workbench", note_zh="今天要处理的事",
-         items=["workspace", "cases", "care", "relations_health", DOMAIN_SENTINEL]),
+         items=["workspace", "cases", "care", "relations_health", "tg_members",
+                DOMAIN_SENTINEL]),
     # 真机矩阵（原「渠道自动化」，2026-08-03 更名）：矩阵总览 + 四渠道 + 群脉导播
     # ——群脉指挥的就是同一批矩阵账号，归组随矩阵。
     dict(label_key="section_channels", label_zh="真机矩阵",
@@ -574,6 +584,30 @@ def _partner_paths():
     return {CMD_EXTRA_ITEMS[i]["path"] for i in PARTNER_ONLY_ITEM_IDS}
 
 
+def _with_simple_tg_members(ctx: dict) -> dict:
+    """群成员提取始终出现在简洁「更多」。不写进 SIMPLE_MORE 常量。"""
+    more = list(ctx.get("nav_simple_more") or [])
+    if any(isinstance(it, dict) and it.get("key") == "tg_members" for it in more):
+        return ctx
+    item = dict(NAV_ITEMS["tg_members"])
+    item["simple"] = True
+    more.append(item)
+    return dict(ctx, nav_simple_more=more)
+
+
+def _with_simple_group_show(ctx: dict, enabled: bool) -> dict:
+    """开关打开才把群脉塞进简洁「更多」。关着时不出现，也不改 SIMPLE_MORE 常量。"""
+    if not enabled:
+        return ctx
+    more = list(ctx.get("nav_simple_more") or [])
+    if any(isinstance(it, dict) and it.get("key") == "group_show" for it in more):
+        return ctx
+    item = dict(NAV_ITEMS["group_show"])
+    item["simple"] = True
+    more.append(item)
+    return dict(ctx, nav_simple_more=more)
+
+
 def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) -> dict:
     """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
 
@@ -625,14 +659,15 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
             hidden_paths |= _partner_paths()
     if not flags.get("matrix_nav", False):
         hidden_ids |= set(MATRIX_ITEM_IDS)
-    if not flags.get("group_show", False):
+    show_gs = bool(flags.get("group_show", False))
+    if not show_gs:
         hidden_ids.add("group_show")
     if not flags.get("ai_settings", False):
         hidden_paths.add(NAV_ITEMS["escalation"]["path"])
     if not _monetization_product_on(config):
         hidden_paths.add(NAV_ITEMS["monetization"]["path"])
     if not (hidden_ids or hidden_paths or tier_ids or tier_paths):
-        return ctx
+        return _with_simple_tg_members(_with_simple_group_show(ctx, show_gs))
 
     _mo_path = NAV_ITEMS["monetization"]["path"]
 
@@ -662,7 +697,7 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
         kept = _drop_hidden(g["items"])
         if any(i for i in kept if i != DOMAIN_SENTINEL):
             groups.append(dict(g, items=kept))
-    return dict(
+    return _with_simple_tg_members(_with_simple_group_show(dict(
         ctx,
         nav_groups=groups,
         nav_simple_core=_drop_hidden(ctx["nav_simple_core"]),
@@ -670,7 +705,7 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
         nav_matrix_items=([] if set(MATRIX_ITEM_IDS) & hidden_ids
                           else ctx["nav_matrix_items"]),
         nav_cmd_items=_drop_hidden(ctx["nav_cmd_items"]),
-    )
+    ), show_gs and "group_show" not in hidden_ids))
 
 
 def get_nav_context(config: dict = None, developer_mode: bool = False) -> dict:

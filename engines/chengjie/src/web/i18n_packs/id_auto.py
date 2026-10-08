@@ -475,7 +475,7 @@ ID = {
     # ── brand ──
     'brand.product': 'Obrolan Cerdas',
     # ── ck ──
-    'ck.nav': 'kabin pilot',
+    'ck.nav': 'Perlu orang',
     # ── cs2_inbox_entry_go ──
     'cs2_inbox_entry_go': 'Pasang rasa peduli →',
     # ── cs2_inbox_entry_label ──

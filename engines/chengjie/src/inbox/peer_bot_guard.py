@@ -524,6 +524,595 @@ def instant_echo_count(
     return count
 
 
+# 对面也是智聊（2026-10-07）：菜单机器人计分打不中「对聊型」智聊。
+# 身份用握手指纹 + 可选跨实例 id 名单；空转用「入站在改写我方上一句」的连续次数。
+# 两者都在 peer_bot_guard.enabled 之前生效，和同事硬名单同一层。
+_CHATX_SELF_BITS = (
+    "我就是智聊的ai",
+    "我是智聊的ai",
+    "我也是智聊的ai",
+    "imchatx",
+    "iamchatx",
+)
+_ECHO_RATIO = 0.26
+_ECHO_STREAK_N = 3
+_CHATX_HOLD_PREFIX = "chatx_peer_hold:"
+
+
+def chatx_handshake_kind(text: Any) -> str:
+    """就绪条 / 自报「我是智聊的 AI」→ ``ready`` / ``self_id``；否则 ``""``。
+
+    刻意收窄：只认产品就绪条，以及「智聊的 AI」这种自报。
+    「我也是智聊的客户 / 用户」不算。"""
+    compact = re.sub(r"\s+", "", str(text or "").strip().lower())
+    if not compact:
+        return ""
+    if "系统运行正常" in compact and "已就绪" in compact:
+        return "ready"
+    for bit in _CHATX_SELF_BITS:
+        if bit in compact:
+            return "self_id"
+    if "我也是智聊" in compact and "智聊的客户" not in compact and "智聊的用户" not in compact:
+        return "self_id"
+    return ""
+
+
+def _bigrams(text: str) -> "set[str]":
+    if len(text) < 2:
+        return set()
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def paraphrase_ratio(a: Any, b: Any) -> float:
+    """两句有多像在互相改写。短句（不足 8 字）直接 0，避免「好的」误伤。"""
+    from difflib import SequenceMatcher
+    na, nb = normalize_text(a), normalize_text(b)
+    if len(na) < 8 or len(nb) < 8:
+        return 0.0
+    seq = SequenceMatcher(None, na, nb).ratio()
+    ga, gb = _bigrams(na), _bigrams(nb)
+    jac = (len(ga & gb) / len(ga | gb)) if ga and gb else 0.0
+    return max(seq, jac)
+
+
+def _timeline_rows(messages: List[Dict[str, Any]]) -> List[tuple]:
+    out: List[tuple] = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        d = str(m.get("direction") or "")
+        if not d:
+            role = str(m.get("role") or "")
+            d = "in" if role == "user" else ("out" if role == "assistant" else "")
+        if d not in ("in", "out"):
+            continue
+        raw = m.get("original_text") or m.get("text") or m.get("content") or ""
+        if is_media_placeholder(raw):
+            continue
+        out.append((d, str(raw)))
+    return out
+
+
+def echo_pair_streak(messages: List[Dict[str, Any]], *, threshold: float = _ECHO_RATIO) -> int:
+    """从最新一条往回数：入站在改写紧挨着的上一条出站，连续几轮。"""
+    rows = _timeline_rows(messages)
+    streak = 0
+    for i in range(len(rows) - 1, -1, -1):
+        direction, text = rows[i]
+        if direction != "in":
+            continue
+        prev_out = ""
+        for j in range(i - 1, -1, -1):
+            if rows[j][0] == "out":
+                prev_out = rows[j][1]
+                break
+        if not prev_out or paraphrase_ratio(text, prev_out) < threshold:
+            break
+        streak += 1
+    return streak
+
+
+def chatx_peer_ids(config: Optional[Dict[str, Any]]) -> "frozenset[str]":
+    """跨实例同事号（``inbox.peer_bot_guard.chatx_peers``）。本租户账号走同事硬名单，不在这里。"""
+    node = (((config or {}).get("inbox") or {}).get("peer_bot_guard") or {})
+    raw = node.get("chatx_peers") if isinstance(node, dict) else None
+    if isinstance(raw, str):
+        raw = [t for t in raw.split(",") if t.strip()]
+    if not isinstance(raw, (list, tuple, set)):
+        return frozenset()
+    return frozenset(str(x or "").strip() for x in raw if str(x or "").strip())
+
+
+def _saw_chatx_handshake(messages: Optional[List[Dict[str, Any]]], text: str = "") -> bool:
+    rows = list(messages or [])
+    if text:
+        rows = rows + [{"direction": "in", "text": str(text)}]
+    for direction, blob in _timeline_rows(rows):
+        if direction == "in" and chatx_handshake_kind(blob):
+            return True
+    return False
+
+
+def chatx_draft_hint(text: Any, history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """拟稿前的一句方向。空串＝不注入。"""
+    if _saw_chatx_handshake(history, str(text or "")):
+        return (
+            "【对方身份】对面这台也是智聊。只回一句短握手：说明你是谁、问清对方这次要办的事。"
+            "不闲聊、不接饭局、不把对方的话换个说法还回去。"
+        )
+    rows = list(history or [])
+    if text:
+        rows = rows + [{"direction": "in", "text": str(text)}]
+    if echo_pair_streak(rows) >= 1:
+        return (
+            "【对话空转】对方在把你上一句换个说法还回来。这一句只确认一件正事，"
+            "不要再接闲聊，不要复述对方刚说的饭、等、路上。"
+        )
+    return ""
+
+
+def _chatx_hold_key(conversation_id: str) -> str:
+    return _CHATX_HOLD_PREFIX + str(conversation_id or "").strip()
+
+
+def _chatx_hold_get(store: Any, conversation_id: str) -> str:
+    if store is None or not conversation_id or not hasattr(store, "get_app_setting"):
+        return ""
+    try:
+        return str(store.get_app_setting(_chatx_hold_key(conversation_id), "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _chatx_hold_set(store: Any, conversation_id: str, reason: str) -> None:
+    if store is None or not conversation_id or not hasattr(store, "set_app_setting"):
+        return
+    try:
+        store.set_app_setting(_chatx_hold_key(conversation_id), str(reason or "")[:64],
+                              updated_by="chatx_peer")
+    except TypeError:
+        try:
+            store.set_app_setting(_chatx_hold_key(conversation_id), str(reason or "")[:64])
+        except Exception:
+            return
+    except Exception:
+        return
+
+
+def _chatx_hold_clear(store: Any, conversation_id: str) -> None:
+    if not _chatx_hold_get(store, conversation_id):
+        return
+    _chatx_hold_set(store, conversation_id, "")
+
+
+def _conversation_has_active_goal(conversation_id: str) -> bool:
+    """有进行中的工作目标就不把空转粘住。目标库没起来或查询失败 → 当没有。"""
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        return False
+    try:
+        from src.companion.goals.store import peek_goal_store
+        gs = peek_goal_store()
+        if gs is None:
+            return False
+        return int(gs.count_active_for_conversation(cid) or 0) >= 1
+    except Exception:
+        return False
+
+
+def _seat_echo_release(store: Any, conversation_id: str) -> str:
+    """坐席亲手改档才解除空转。返回 ``manual`` / ``auto`` / ``""``。
+
+    启动扫描写成的 review（source=chatx_sweep）不算解除，否则扫完当轮就把粘性清掉。
+    ``auto`` 只在档位写入晚于空转粘性时成立：人已经在全自动上、后来才形成的空转仍要粘住。
+    """
+    fn = getattr(store, "get_automation_mode_meta", None)
+    if not callable(fn) or not conversation_id:
+        return ""
+    try:
+        meta = fn(conversation_id) or {}
+    except Exception:
+        return ""
+    if str(meta.get("source") or "") != "human":
+        return ""
+    mode = str(meta.get("mode") or "")
+    if mode == "manual":
+        return "manual"
+    if mode != "auto_ai":
+        return ""
+    try:
+        mode_ts = float(meta.get("updated_at") or 0.0)
+    except (TypeError, ValueError):
+        mode_ts = 0.0
+    if mode_ts > _chatx_hold_ts(store, conversation_id):
+        return "auto"
+    return ""
+
+
+def _chatx_hold_ts(store: Any, conversation_id: str) -> float:
+    fn = getattr(store, "list_app_settings", None)
+    if not callable(fn):
+        return 0.0
+    key = _chatx_hold_key(conversation_id)
+    try:
+        rows = fn(_CHATX_HOLD_PREFIX) or []
+    except Exception:
+        return 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("key") or "") != key:
+            continue
+        try:
+            return float(row.get("updated_at") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _handshake_past_the_window(
+    store: Any, conversation_id: str, messages: Optional[List[Dict[str, Any]]],
+) -> bool:
+    """短窗里看不见开场握手时，再往前翻到 400 条。窗本身不满 40 条就不必翻。"""
+    rows = list(messages or [])
+    if len(rows) < 40 or len(rows) >= 400:
+        return False
+    if store is None or not conversation_id or not hasattr(store, "list_recent_messages"):
+        return False
+    try:
+        deep = store.list_recent_messages(conversation_id, limit=400) or []
+    except Exception:
+        return False
+    return bool(deep) and bool(_saw_chatx_handshake(deep, ""))
+
+
+def clear_echo_hold(store: Any, conversation_id: str) -> bool:
+    """这场已经有目标：清掉空转粘性和豁免。握手指纹不动。"""
+    cid = str(conversation_id or "").strip()
+    if store is None or not cid:
+        return False
+    try:
+        if _chatx_hold_get(store, cid) not in ("echo_loop", "echo_waived"):
+            return False
+        _chatx_hold_clear(store, cid)
+        return True
+    except Exception:
+        logger.debug("[peer-guard] 清空转粘性失败", exc_info=True)
+        return False
+
+
+def release_chatx_handshake_hold(store: Any, conversation_id: str) -> bool:
+    """坐席确认是真人：清握手指纹粘性。回声粘性留着。
+
+    若当前拟稿人审是启动扫描写的，改回全自动。坐席自己选的档位不动。
+    """
+    cid = str(conversation_id or "").strip()
+    if store is None or not cid:
+        return False
+    cleared = False
+    try:
+        if _chatx_hold_get(store, cid) == "chatx_handshake":
+            _chatx_hold_clear(store, cid)
+            cleared = True
+    except Exception:
+        logger.debug("[peer-guard] 清握手粘性失败", exc_info=True)
+    if not cleared:
+        return False
+    try:
+        meta_fn = getattr(store, "get_automation_mode_meta", None)
+        if callable(meta_fn) and hasattr(store, "set_automation_mode"):
+            meta = meta_fn(cid) or {}
+            if (str(meta.get("mode") or "") == "review"
+                    and str(meta.get("source") or "") == "chatx_sweep"):
+                store.set_automation_mode(cid, "auto_ai", source="human")
+    except Exception:
+        logger.debug("[peer-guard] 握手解除后回全自动失败", exc_info=True)
+    return True
+
+
+def chatx_or_echo_hold(
+    config: Optional[Dict[str, Any]],
+    *,
+    platform: str = "",
+    account_id: str = "",
+    chat_key: Any = "",
+    text: str = "",
+    store: Any = None,
+    conversation_id: str = "",
+    messages: Optional[List[Dict[str, Any]]] = None,
+    peer_override: int = 0,
+    chat_type: str = "",
+) -> "tuple[str, bool]":
+    """对面是智聊，或这场已经在互相改写。
+
+    返回 ``(reason, soft)``。reason 空＝放行。
+    ``chatx_peer:<id>`` 硬停（不拟稿）。
+    ``chatx_handshake`` / ``echo_loop`` 软停（拟稿转人审，不自动发）。
+    群聊不判。登记在 chatx_peers 里的号不受「标成真人」影响。
+    握手指纹粘到运营把对端覆写为真人（peer_is_bot=-1）。
+    空转粘到这场有进行中的目标，或坐席亲手改成手动 / 全自动。
+    改成全自动时若最近仍在改写，先记 echo_waived，等连续改写掉到 3 轮以下再允许重新粘住。
+    """
+    try:
+        ck = str(chat_key or "").strip()
+        if str(chat_type or "").lower() in ("group", "supergroup", "channel") or ck.startswith("-"):
+            return "", False
+        cid = str(conversation_id or "").strip()
+        if not cid and platform and account_id and ck:
+            cid = f"{platform}:{account_id}:{ck}"
+        if store is None and cid:
+            try:
+                from src.integrations.protocol_bridge import get_inbox_store as _cx_inbox
+                store = _cx_inbox()
+            except Exception:
+                store = None
+        if messages is None and store is not None and cid:
+            messages = _recent(store, cid)
+        if store is not None and cid and int(peer_override or 0) == 0:
+            try:
+                _row = store.get_conversation(cid) or {}
+                peer_override = _peer_override(_row)
+                if not chat_type:
+                    chat_type = str(_row.get("chat_type") or "")
+            except Exception:
+                pass
+        if str(chat_type or "").lower() in ("group", "supergroup", "channel") or ck.startswith("-"):
+            return "", False
+        if ck and ck in chatx_peer_ids(config):
+            return f"chatx_peer:{ck}", False
+        if int(peer_override or 0) == -1:
+            _chatx_hold_clear(store, cid)
+            return "", False
+        held = _chatx_hold_get(store, cid)
+        if held == "chatx_handshake":
+            return "chatx_handshake", True
+        rows = list(messages or [])
+        if text:
+            rows = rows + [{"direction": "in", "text": text}]
+        rel = _seat_echo_release(store, cid)
+        has_goal = _conversation_has_active_goal(cid)
+        if held == "echo_loop" and (has_goal or rel == "manual"):
+            _chatx_hold_clear(store, cid)
+            held = ""
+        elif held == "echo_loop" and rel == "auto":
+            if echo_pair_streak(rows) >= _ECHO_STREAK_N:
+                _chatx_hold_set(store, cid, "echo_waived")
+                held = "echo_waived"
+            else:
+                _chatx_hold_clear(store, cid)
+                held = ""
+        elif held not in ("", "echo_loop", "echo_waived"):
+            # 旧值一律按握手粘性读，避免把别的原因误放行
+            return "chatx_handshake", True
+        if _saw_chatx_handshake(messages, text):
+            _chatx_hold_set(store, cid, "chatx_handshake")
+            return "chatx_handshake", True
+        if _handshake_past_the_window(store, cid, messages):
+            _chatx_hold_set(store, cid, "chatx_handshake")
+            return "chatx_handshake", True
+        if held == "echo_waived":
+            if echo_pair_streak(rows) < _ECHO_STREAK_N:
+                _chatx_hold_clear(store, cid)
+            return "", False
+        if held == "echo_loop":
+            return "echo_loop", True
+        if has_goal or rel == "manual":
+            return "", False
+        if echo_pair_streak(rows) >= _ECHO_STREAK_N:
+            _chatx_hold_set(store, cid, "echo_loop")
+            return "echo_loop", True
+        return "", False
+    except Exception:
+        logger.debug("[peer-guard] chatx/echo 判定失败（放行）", exc_info=True)
+        return "", False
+
+
+_SWEEP_PAGE = 60
+_SWEEP_MAX = 400
+_SWEEP_MAX_AGE_SEC = 45 * 86400
+
+
+def _sweep_page(store: Any, *, limit: int, before_ts: Optional[float]):
+    kwargs = {"limit": limit, "chat_type": "private"}
+    if before_ts:
+        kwargs["before_ts"] = before_ts
+    try:
+        return store.list_conversations(**kwargs) or []
+    except TypeError:
+        if before_ts:
+            return []
+        return store.list_conversations(limit=limit, chat_type="private") or []
+
+
+def _sweep_held_index(store: Any) -> Dict[str, str]:
+    """已经写过握手 / 空转粘性的会话。没有批量读取接口时返回空，扫描退回逐场读消息。"""
+    fn = getattr(store, "list_app_settings", None)
+    if not callable(fn):
+        return {}
+    try:
+        rows = fn(_CHATX_HOLD_PREFIX) or []
+    except Exception:
+        return {}
+    out: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "")
+        if not key.startswith(_CHATX_HOLD_PREFIX):
+            continue
+        val = str(row.get("value") or "").strip()
+        if val in ("chatx_handshake", "echo_loop"):
+            out[key[len(_CHATX_HOLD_PREFIX):]] = val
+    return out
+
+
+def sweep_live_chatx_holds(
+    store: Any,
+    *,
+    config: Optional[Dict[str, Any]] = None,
+    limit: int = _SWEEP_MAX,
+    message_limit: int = 40,
+) -> Dict[str, Any]:
+    """启动时按最近私聊往前翻。历史里已有智聊握手或改写空转的，把档位收成人审。
+
+    一页 60，最多新查 400 场，停在 45 天前。不等对方再来一句。
+    已经粘住的会话不占这 400 场名额，也不再读消息；只补一次人审档和状态带。
+    已是 manual / review 的不改档。群、自聊、标成真人的跳过。
+    坐席已经亲手定过档的（source=human）不再收，避免「改回全自动」在下次开机被扫回去。
+    返回 ``{checked, held:[{conversation_id, reason, soft}]}``。绝不抛。
+    """
+    out: Dict[str, Any] = {"checked": 0, "held": []}
+    if store is None or not hasattr(store, "list_conversations"):
+        return out
+    budget = max(1, min(int(limit or _SWEEP_MAX), 800))
+    held_index = _sweep_held_index(store)
+    before: Optional[float] = None
+    seen = set()
+    now = time.time()
+    while out["checked"] < budget:
+        try:
+            rows = _sweep_page(store, limit=_SWEEP_PAGE, before_ts=before)
+        except Exception:
+            logger.debug("[peer-guard] 存量扫描列会话失败", exc_info=True)
+            break
+        if not rows:
+            break
+        fresh = 0
+        oldest: Optional[float] = None
+        aged_out = False
+        for conv in rows:
+            if not isinstance(conv, dict):
+                continue
+            cid = str(conv.get("conversation_id") or "").strip()
+            if cid and cid in seen:
+                continue
+            if cid:
+                seen.add(cid)
+            fresh += 1
+            try:
+                ts = float(conv.get("last_ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            if ts > 0 and (oldest is None or ts < oldest):
+                oldest = ts
+            if ts > 0 and now - ts > _SWEEP_MAX_AGE_SEC:
+                aged_out = True
+                continue
+            if out["checked"] >= budget:
+                break
+            if _sweep_replay_held(out, store, conv, held_index):
+                continue
+            _sweep_one(out, store, conv, config=config, message_limit=message_limit)
+        if fresh == 0 or oldest is None or oldest == before or aged_out:
+            break
+        before = oldest
+    return out
+
+
+def _seat_already_chose(store: Any, conversation_id: str) -> bool:
+    fn = getattr(store, "get_automation_mode_meta", None)
+    if not callable(fn):
+        return False
+    try:
+        meta = fn(conversation_id) or {}
+    except Exception:
+        return False
+    return str(meta.get("source") or "") == "human"
+
+
+def _sweep_quiet(store: Any, conv: Dict[str, Any]) -> bool:
+    """群、自聊、标成真人、坐席亲手定过档：不计数、不读消息、不补停发。"""
+    ck = str(conv.get("chat_key") or "").strip()
+    cid = str(conv.get("conversation_id") or "").strip()
+    if not cid or not ck or ck.startswith("-") or ck.lower() == "me":
+        return True
+    try:
+        override = int(conv.get("peer_is_bot") or 0)
+    except (TypeError, ValueError):
+        override = 0
+    return override == -1 or _seat_already_chose(store, cid)
+
+
+def _park_review_if_open(store: Any, conversation_id: str) -> bool:
+    if not hasattr(store, "get_automation_mode_if_set") or not hasattr(store, "set_automation_mode"):
+        return False
+    try:
+        cur = store.get_automation_mode_if_set(conversation_id)
+    except Exception:
+        cur = None
+    if cur not in (None, "", "auto_ai"):
+        return False
+    try:
+        store.set_automation_mode(conversation_id, "review", source="chatx_sweep")
+        return True
+    except TypeError:
+        try:
+            store.set_automation_mode(conversation_id, "review")
+            return True
+        except Exception:
+            logger.debug("[peer-guard] 存量收档失败 cid=%s", conversation_id, exc_info=True)
+    except Exception:
+        logger.debug("[peer-guard] 存量收档失败 cid=%s", conversation_id, exc_info=True)
+    return False
+
+
+def _sweep_replay_held(
+    out: Dict[str, Any], store: Any, conv: Dict[str, Any], held_index: Dict[str, str],
+) -> bool:
+    """粘性已在：不读消息、不占名额，把人审档和状态带补上。"""
+    cid = str(conv.get("conversation_id") or "").strip()
+    reason = held_index.get(cid) or ""
+    if reason not in ("chatx_handshake", "echo_loop"):
+        return False
+    if _sweep_quiet(store, conv):
+        return True
+    out["held"].append({
+        "conversation_id": cid, "reason": reason, "soft": True,
+        "mode_changed": _park_review_if_open(store, cid),
+    })
+    return True
+
+
+def _sweep_one(
+    out: Dict[str, Any], store: Any, conv: Dict[str, Any], *,
+    config: Optional[Dict[str, Any]], message_limit: int,
+) -> None:
+    if _sweep_quiet(store, conv):
+        return
+    ck = str(conv.get("chat_key") or "").strip()
+    cid = str(conv.get("conversation_id") or "").strip()
+    try:
+        override = int(conv.get("peer_is_bot") or 0)
+    except (TypeError, ValueError):
+        override = 0
+    out["checked"] += 1
+    try:
+        msgs = store.list_recent_messages(cid, limit=message_limit) or []
+    except Exception:
+        return
+    reason, soft = chatx_or_echo_hold(
+        config, platform=str(conv.get("platform") or ""),
+        account_id=str(conv.get("account_id") or ""),
+        chat_key=ck, text="", store=store, conversation_id=cid,
+        messages=msgs, peer_override=override, chat_type="private")
+    # 握手常在开场，长会话的最近几十条里已经看不见。回声只看最近一轮，
+    # 握手指纹再往前翻一截；翻到了就粘住，下一句入站不用重扫全文。
+    if not reason and len(msgs) >= int(message_limit or 40):
+        try:
+            deep = store.list_recent_messages(cid, limit=400) or []
+        except Exception:
+            deep = []
+        if _saw_chatx_handshake(deep, ""):
+            _chatx_hold_set(store, cid, "chatx_handshake")
+            reason, soft = "chatx_handshake", True
+    if not reason:
+        return
+    out["held"].append({
+        "conversation_id": cid, "reason": reason, "soft": bool(soft),
+        "mode_changed": _park_review_if_open(store, cid),
+    })
+
+
 def daily_out_count(
     messages: List[Dict[str, Any]],
     *,
@@ -1166,6 +1755,23 @@ def guard_a_line_should_skip(
         logger.info("[peer-guard] skip reason=%s cid=telegram:%s:%s line=a",
                     _never, account_id or "default", chat_id)
         return _never
+    # 对面也是智聊 / 互相改写：先于 enabled。A 线无论软硬都不直发。
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store as _cx_inbox
+        from src.inbox.normalizer import conv_id as _cx_conv
+        _cx_store = _cx_inbox()
+        _cx_cid = _cx_conv("telegram", str(account_id or "default"), str(chat_id))
+    except Exception:
+        _cx_store, _cx_cid = None, ""
+    _cx_reason, _cx_soft = _live_chatx_hold(
+        config, platform="telegram", account_id=str(account_id or ""),
+        chat_key=chat_id, text=str(current_text or ""), store=_cx_store,
+        conversation_id=_cx_cid)
+    if _cx_reason:
+        _bump("suppressed", "chatx_soft" if _cx_soft else "chatx_peer")
+        logger.info("[peer-guard] skip reason=%s soft=%s cid=%s line=a",
+                    _cx_reason, int(_cx_soft), _cx_cid or "-")
+        return _cx_reason
     cfg = parse_cfg(config)
     if not cfg.get("enabled"):
         return ""
@@ -1274,16 +1880,41 @@ def guard_a_line_should_skip(
     return v.reason
 
 
+def _live_chatx_hold(
+    config: Optional[Dict[str, Any]],
+    *,
+    platform: str,
+    account_id: str,
+    chat_key: Any,
+    text: str,
+    store: Any,
+    conversation_id: str,
+) -> "tuple[str, bool]":
+    row: Dict[str, Any] = {}
+    if store is not None and conversation_id:
+        try:
+            row = dict(store.get_conversation(conversation_id) or {})
+        except Exception:
+            row = {}
+    recent = _recent(store, conversation_id) if store is not None and conversation_id else []
+    return chatx_or_echo_hold(
+        config, platform=platform, account_id=account_id, chat_key=chat_key,
+        text=text, store=store, conversation_id=conversation_id, messages=recent,
+        peer_override=_peer_override(row),
+        chat_type=str(row.get("chat_type") or ""))
+
+
 def guard_auto_draft_action(
     *,
     conv: Dict[str, Any],
     store: Any,
     config: Optional[Dict[str, Any]],
+    current_text: str = "",
 ) -> "tuple[str, bool]":
     """B 线（System Z 自动拟稿）闸——在 LLM 拟稿**之前**判，才真省钱。
 
-    返回 ``(reason, soft)``：reason 空串＝放行；soft=True（仅
-    daily_budget 真人软停）＝**不要跳过**，改为强制 review 拟稿人审
+    返回 ``(reason, soft)``：reason 空串＝放行；soft=True（daily_budget 真人软停，
+    以及 chatx_handshake / echo_loop）＝**不要跳过**，改为强制 review 拟稿人审
     （调用方封顶档位）；soft=False 且 reason 非空＝照旧跳过拟稿。
     全平台生效：Telegram 走行级 Tier0（username/chat_type，来自会话表），
     其余平台只有内容信号（复读/秒回/预算）。
@@ -1297,6 +1928,17 @@ def guard_auto_draft_action(
         _bump("suppressed", "never_auto_reply")
         logger.info("[peer-guard] skip reason=%s cid=%s line=b", _never, conversation_id or "-")
         return _never, False
+    _cx_reason, _cx_soft = _live_chatx_hold(
+        config, platform=str(conv.get("platform") or ""),
+        account_id=str(conv.get("account_id") or ""),
+        chat_key=conv.get("chat_key") or "",
+        text=str(current_text or conv.get("text") or ""),
+        store=store, conversation_id=conversation_id)
+    if _cx_reason:
+        _bump("suppressed", "chatx_soft" if _cx_soft else "chatx_peer")
+        logger.info("[peer-guard] skip reason=%s soft=%s cid=%s line=b",
+                    _cx_reason, int(_cx_soft), conversation_id or "-")
+        return _cx_reason, _cx_soft
     cfg = parse_cfg(config)
     if not cfg.get("enabled"):
         return "", False
@@ -1438,6 +2080,14 @@ __all__ = [
     "stats_snapshot",
     "evidence_reason",
     "record_override",
+    "chatx_handshake_kind",
+    "paraphrase_ratio",
+    "echo_pair_streak",
+    "chatx_peer_ids",
+    "chatx_draft_hint",
+    "chatx_or_echo_hold",
+    "release_chatx_handshake_hold",
+    "clear_echo_hold",
     "draft_awareness_hint",
     "guard_a_line_should_skip",
     "guard_auto_draft_should_skip",

@@ -455,7 +455,7 @@ VI = {
     # ── brand ──
     'brand.product': 'Trò chuyện thông minh',
     # ── ck ──
-    'ck.nav': 'Buồng lái',
+    'ck.nav': 'Cần người',
     # ── cs2_inbox_entry_go ──
     'cs2_inbox_entry_go': 'Gửi một lời quan tâm →',
     # ── cs2_inbox_entry_label ──

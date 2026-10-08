@@ -906,6 +906,10 @@ def note_inbound_reply(msg: Dict[str, Any], store: Any = None) -> int:
         return 0
 
 
+_NOTE_CAP = 80
+_ASKED_QUOTE_MAX = 48
+
+
 def outreach_context_note(account_id: str, user_id: str, store: Any = None) -> str:
     """同群开口来的会话 → 一句目标背景（目标块【背景】只留 80 字）：在哪个群认识、TA在群里说过什么、
     我们先开的口。让回复链知道「我们怎么认识的」，别装老熟人也别一上来推销。非开口会话 → ""。"""
@@ -933,13 +937,35 @@ def outreach_context_note(account_id: str, user_id: str, store: Any = None) -> s
             first = "你先私聊打了招呼、TA回了"
         title = " ".join(str(row.get("group_title") or "").split())[:16]
         where = f"你们同在「{title}」群" if title else "你们在同一个群"
-        said = " ".join(str(row.get("last_msg_text") or "").split())[:18]
         tail = f"；{first}，先接话熟络，别急着推"
-        # 目标块【背景】只留 80 字：超了先缩 TA 的原话，不丢「怎么认识的」
-        room = 80 - len(f"同群开口：{where}，TA在群里说过「」{tail}")
+        # 私聊里没有群窗记忆时，优先带上我方在群里问过的原话（阿龙：「你为啥问我」）。
+        # 【背景】仍只留 80 字。装不下时先丢掉「别急着推」这句套话，保住引语和怎么认识的。
+        asked = " ".join(str(row.get("gtouch_text") or "").split())
+        show_asked = bool(asked) and (
+            err == "gtouch_inbound" or (touched and err == "inbound_first"))
+        if not asked and touched and hasattr(store, "gtouch_by_user"):
+            hit = store.gtouch_by_user(str(account_id), [str(user_id)]).get(str(user_id)) or {}
+            asked = " ".join(str(hit.get("gtouch_text") or "").split())
+            show_asked = bool(asked) and (
+                err == "gtouch_inbound" or (touched and err == "inbound_first"))
+        if show_asked:
+            asked = asked[:_ASKED_QUOTE_MAX]
+            heard = f"，你在群里问过「{asked}」" if asked else ""
+            note = f"同群开口：{where}{heard}{tail}"
+            if len(note) > _NOTE_CAP:
+                note = f"同群开口：{where}{heard}"
+            if len(note) > _NOTE_CAP:
+                room = _NOTE_CAP - len(f"同群开口：{where}，你在群里问过「」")
+                asked = asked[:max(0, room)]
+                heard = f"，你在群里问过「{asked}」" if asked else ""
+                note = f"同群开口：{where}{heard}"
+            return note[:_NOTE_CAP]
+        said = " ".join(str(row.get("last_msg_text") or "").split())[:18]
+        room = _NOTE_CAP - len(f"同群开口：{where}，TA在群里说过「」{tail}")
         said = said[:max(0, room)]
         heard = f"，TA在群里说过「{said}」" if said else ""
-        return f"同群开口：{where}{heard}{tail}"
+        note = f"同群开口：{where}{heard}{tail}"
+        return note[:_NOTE_CAP]
     except Exception:
         logger.debug("[gm_outreach] 开口背景生成失败", exc_info=True)
         return ""

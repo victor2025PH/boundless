@@ -12,6 +12,7 @@
 - ``GET  /api/goals/agenda``           —— 今日工作清单（P17：把计数变成点名单；
   ``?names=1`` 时信封顶层附 {conversation_id: 客户展示名} 映射）
 - ``GET  /api/goals``                  —— 目标列表 + 状态聚合（看板；逐条 settle）
+- ``POST /api/goals/adopt-sibling``     —— 把同一对端在别的号上的进行中目标抄到本会话
 - ``POST /api/goals``                  —— 建目标（viewer 只读拦截；每会话活跃数上限）
 - ``GET  /api/goals/{goal_id}``        —— 详情（视图 + 拍时间线 + 事件台账）
 - ``POST /api/goals/{goal_id}/update`` —— 改字段（title/autonomy/priority/deadline/params）
@@ -833,6 +834,20 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 logger.debug("buying signal hint skipped", exc_info=True)
             out["discovery_paused"] = svc.discovery_paused(_inbox_store())
             out["default_goal"] = _default_goal_view(platform, account_id, _lang(request))
+            # 本窗口没有目标时，告诉坐席同一人在别的号上已经有进行中的目标。不自动套用。
+            try:
+                from src.companion.goals.defaults import _is_support_account
+                from src.companion.goals.templates import describe_sibling
+                _support = _is_support_account(_cfg_root(), account_id)
+                _lang_now = _lang(request)
+                out["sibling_goals"] = [
+                    describe_sibling(row, support_account=_support, lang=_lang_now)
+                    for row in store.list_active_on_other_accounts(
+                        platform=platform, chat_key=chat_key, account_id=account_id)
+                ]
+            except Exception:
+                logger.debug("sibling goals skipped", exc_info=True)
+                out["sibling_goals"] = []
             # Q-8 B（#264）：无目标会话也有「阶段 · 今日主线」（不建目标行）
             out["stage_plan"] = _stage_plan_view(conv, platform, account_id, chat_key,
                                                  lang=_lang(request))
@@ -893,7 +908,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         store = _store(svc)
         import time as _t
         d = max(1, min(int(days or 30), 180))
-        report = store.outcome_report(_t.time() - d * 86400.0)
+        from src.inbox.customer_metrics import (
+            excluded_internal_view, omit_internal_peers,
+        )
+        since = _t.time() - d * 86400.0
+        with omit_internal_peers(_cfg_root(), _inbox_store()):
+            report = store.outcome_report(since)
+            report["excluded_internal"] = excluded_internal_view(store, since)
         report["window_days"] = d
         return report
 
@@ -908,7 +929,14 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         store = _store(svc)
         from src.companion.goals.report import matrix_report
         d = max(1, min(int(days or 30), 365))
-        out = matrix_report(store, days=d, lang=_lang(request))
+        from src.inbox.customer_metrics import (
+            excluded_internal_view, omit_internal_peers,
+        )
+        import time as _t
+        since = _t.time() - d * 86400.0
+        with omit_internal_peers(_cfg_root(), _inbox_store()):
+            out = matrix_report(store, days=d, lang=_lang(request))
+            out["excluded_internal"] = excluded_internal_view(store, since)
         out["ok"] = True
         # N-3 #241（VAQGZY ④）：报表页按域收起金额口径（陪伴域没有「赢单金额」）
         out["business_domain"] = _business_domain()
@@ -943,11 +971,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if st and st not in ("done", "active", "failed", "expired",
                              "cancelled", "ended", "all"):
             raise HTTPException(400, tr(request, "err.goals.bad_state"))
-        out = contacts_report(
-            store, _inbox_store(),
-            days=days, status="" if st == "all" else st,
-            platform=platform, account_id=account_id, template=template,
-            page=page, page_size=page_size, lang=_lang(request))
+        from src.inbox.customer_metrics import omit_internal_peers
+        with omit_internal_peers(_cfg_root(), _inbox_store()):
+            out = contacts_report(
+                store, _inbox_store(),
+                days=days, status="" if st == "all" else st,
+                platform=platform, account_id=account_id, template=template,
+                page=page, page_size=page_size, lang=_lang(request))
         out["ok"] = True
         return out
 
@@ -980,8 +1010,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         try:
             if (snap.get("checks") or {}).get("goals_enabled"):
                 import time as _t
-                report = _store(_svc()).outcome_report(
-                    _t.time() - 30 * 86400.0)
+                from src.inbox.customer_metrics import omit_internal_peers
+                with omit_internal_peers(_cfg_root(), _inbox_store()):
+                    report = _store(_svc()).outcome_report(
+                        _t.time() - 30 * 86400.0)
         except Exception:
             report = None
         stats_dump: Dict[str, Any] = {}
@@ -1829,6 +1861,35 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 views.append(_attach_tier(svc.goal_view(g, lang=lang), request))
         return {"goals": views, "summary": store.summary()}
 
+    @app.post("/api/goals/adopt-sibling")
+    async def goals_adopt_sibling(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """把同一对端在别的号上的进行中目标抄到本会话。坐席点一下才抄，不自动套用。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        body = payload or {}
+        conv = str(body.get("conversation_id") or "").strip()
+        gid = str(body.get("goal_id") or "").strip()
+        if not conv or not gid:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        platform, account_id, chat_key = _split_conversation_id(conv)
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        goal = _store(svc).adopt_into_conversation(
+            gid, conversation_id=conv, platform=platform, account_id=account_id,
+            chat_key=chat_key)
+        if goal is None:
+            raise HTTPException(409, tr(request, "err.goals.create_failed"))
+        try:
+            from src.companion.goals.defaults import on_conversation_goal
+            on_conversation_goal(
+                _store(svc), _inbox_store(), conversation_id=conv,
+                platform=platform, account_id=account_id, chat_key=chat_key)
+        except Exception:
+            logger.debug("adopt goal follow-up skipped", exc_info=True)
+        return {"ok": True, "goal_id": str(goal.get("goal_id") or "")}
+
     @app.post("/api/goals")
     async def goals_create(
         request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
@@ -1951,6 +2012,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     "chain_started", str(attached.get("name") or ""))
         except Exception:
             logger.debug("goal auto-attach skipped", exc_info=True)
+        try:
+            from src.companion.goals.defaults import on_conversation_goal
+            on_conversation_goal(
+                store, _inbox_store(),
+                conversation_id=str(goal.get("conversation_id") or conv),
+                platform=str(goal.get("platform") or platform),
+                account_id=str(goal.get("account_id") or account_id),
+                chat_key=str(goal.get("chat_key") or chat_key))
+        except Exception:
+            logger.debug("goal create follow-up skipped", exc_info=True)
         out = {"ok": True,
                "goal": _attach_tier(
                    _refreshed_view(svc, store, goal, lang=_lang(request)),

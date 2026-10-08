@@ -5,6 +5,7 @@
 """
 
 ZH = {
+    "gm_nav": "群成员提取",
     "err.gm.disabled": "群成员提取未开启：在开发者工具「内部功能显隐」勾选「群成员提取」",
     "err.gm.store_unavailable": "群成员库未就绪",
     "err.gm.readonly": "只读角色不可发起提取",
@@ -49,11 +50,12 @@ ZH = {
     "ov2_gm_outreach": "同群开口（发出/回了）",
     # ── 收件箱工具箱入口卡（unified_inbox tools tab）──
     "inbox.tgm.title": "群成员提取",
-    "inbox.tgm.desc": "多号进群 → 限速拉「发言且非管理员」的人入库 → 每日控量。只读提取；私聊触达是独立步骤。",
+    "inbox.tgm.desc": "先在群里接有意向的人的话。提取只是把人放进库，不发消息。",
     "inbox.tgm.open": "🧲 打开管理台",
 }
 
 EN = {
+    "gm_nav": "Group members",
     "err.gm.disabled": "Group member extraction is off. Tick it under Developer Tools → Internal feature visibility",
     "err.gm.store_unavailable": "Group member store is not ready",
     "err.gm.readonly": "Read-only role cannot start extraction",
@@ -98,6 +100,6 @@ EN = {
     "ov2_gm_outreach": "Outreach (sent / replied)",
     # -- inbox toolbox entry card --
     "inbox.tgm.title": "Group member extraction",
-    "inbox.tgm.desc": "Multi-account join -> rate-limited pull of active non-admins -> daily cap. Read-only; outreach is a separate step.",
+    "inbox.tgm.desc": "Reply in the group first. Extraction only puts people in the library and sends nothing.",
     "inbox.tgm.open": "🧲 Open console",
 }

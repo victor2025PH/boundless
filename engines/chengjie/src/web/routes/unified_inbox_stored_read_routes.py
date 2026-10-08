@@ -727,6 +727,19 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             store.set_peer_bot_verdict(
                 cid, is_bot=-1, score=0.0,
                 evidence=f"operator:{operator} 确认为真人")
+            try:
+                from src.inbox.peer_bot_guard import release_chatx_handshake_hold
+                release_chatx_handshake_hold(store, cid)
+            except Exception:
+                logger.debug("[bot-flag] 清握手粘性失败（忽略）", exc_info=True)
+            try:
+                from src.inbox import peer_guard_marker as _pgm
+                _rec = _pgm.get(store, cid) or {}
+                _head, _ = _pgm.split_reason(str(_rec.get("reason") or ""))
+                if _head == "chatx_handshake":
+                    _pgm.clear(store, cid)
+            except Exception:
+                logger.debug("[bot-flag] 清握手状态带失败（忽略）", exc_info=True)
         else:
             store.set_peer_bot_verdict(cid, is_bot=0, score=0.0, evidence="")
         row = store.get_conversation(cid) or {}

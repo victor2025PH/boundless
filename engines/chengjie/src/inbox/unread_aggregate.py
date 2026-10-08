@@ -57,6 +57,10 @@ _GROUP_ONLY = (
 )
 _CHANNEL_ONLY = "c.chat_type = 'channel'"
 
+#: 合成演练号段（990001000–990001999）。不进客户未读徽标，也不进点数字打开的清单。
+#: 双向演练对和登记的智聊同事不在这里剔：那些会话坐席还要看。
+_NOT_SYNTHETIC_DRILL = "AND NOT (c.chat_key GLOB '990001[0-9][0-9][0-9]')"
+
 #: 视图 scope → WHERE。键与前端 ``_convScope``（private | group | channel）同名：
 #: 角标数字 = 当前列表 scope 内的未读，浮层 ``/account-unread?scope=`` 同一份 WHERE。
 SCOPE_WHERE: Dict[str, str] = {
@@ -161,7 +165,8 @@ def unread_maps(
         f"COALESCE(SUM({_EFFECTIVE_UNREAD}), 0) AS n "
         "FROM conversations c "
         "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-        f"WHERE {SCOPE_WHERE[normalize_scope(scope)]} AND {_LISTABLE}"
+        f"WHERE {SCOPE_WHERE[normalize_scope(scope)]} AND {_LISTABLE} "
+        f"{_NOT_SYNTHETIC_DRILL}"
     )
     if not include_archived:
         sql += " AND COALESCE(m.archived, 0) = 0"
@@ -212,6 +217,7 @@ def unread_conversations(
         "FROM conversations c "
         "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
         f"WHERE {SCOPE_WHERE[normalize_scope(scope)]} AND {_LISTABLE} "
+        f"{_NOT_SYNTHETIC_DRILL} "
         "AND c.platform = ?"
     )
     params: List[Any] = [p]
@@ -272,7 +278,8 @@ def unread_breakdown(store: Any) -> Optional[Dict[str, Dict[str, int]]]:
         ])
         + " FROM conversations c "
         "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-        f"WHERE {_LISTABLE} GROUP BY c.platform, c.account_id "
+        f"WHERE {_LISTABLE} {_NOT_SYNTHETIC_DRILL} "
+        "GROUP BY c.platform, c.account_id "
         "HAVING n_private > 0 OR n_group > 0 OR n_channel > 0 OR n_archived > 0"
     )
     try:
@@ -322,7 +329,8 @@ def buried_conversations(
         f"{_EFFECTIVE_UNREAD} AS eff, m.archived_at, m.auto_archived_at "
         "FROM conversations c "
         "JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-        f"WHERE {_PRIVATE_ONLY} AND {_LISTABLE} AND COALESCE(m.archived, 0) = 1"
+        f"WHERE {_PRIVATE_ONLY} AND {_LISTABLE} {_NOT_SYNTHETIC_DRILL} "
+        "AND COALESCE(m.archived, 0) = 1"
     )
     params: List[Any] = []
     p = str(platform or "").strip().lower()

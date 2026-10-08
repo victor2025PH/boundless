@@ -1139,6 +1139,16 @@ async def _generate_persona_reply_impl(
     except Exception:
         logger.debug("[persona_reply] peer_bot hint 注入跳过", exc_info=True)
 
+    # 对面是智聊，或上一句已经在互相改写：拟稿只握手 / 只确认正事，不把闲聊还回去。
+    try:
+        from src.inbox.effective_mood import merge_agent_instruction as _cx_merge
+        from src.inbox.peer_bot_guard import chatx_draft_hint
+        _cx_hint = chatx_draft_hint(last_inbound, history)
+        if _cx_hint:
+            agent_instruction = _cx_merge(agent_instruction, _cx_hint)
+    except Exception:
+        logger.debug("[persona_reply] chatx hint 注入跳过", exc_info=True)
+
     reply = None
     used_persona = ""
     used_intent = ""
