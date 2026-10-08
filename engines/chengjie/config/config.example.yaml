@@ -305,6 +305,7 @@ whatsapp_cloud:
   stop_gate:
     allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
     extra_keywords: []             # 追加整句退订词
+    allow_resubscribe: true        # 已停联客户本人整句发 START / UNSTOP / 重新订阅 → 记为本人重新同意并解冻（审计 resubscribed）
   # 自答路径进待人工的触发项（AI 异常 / 发送失败 恒进）
   handoff:
     on_human_request: true         # 客户点名要真人
@@ -332,6 +333,7 @@ telegram_bot:
   stop_gate:
     allow_farewell: false
     extra_keywords: []
+    allow_resubscribe: true        # 已停联客户本人发 /start → 记为本人重新同意并解冻（Telegram 解除拉黑后点「开始」即发 /start）
   handoff:
     on_human_request: true
     on_media: true

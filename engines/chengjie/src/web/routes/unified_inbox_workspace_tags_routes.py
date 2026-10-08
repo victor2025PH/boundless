@@ -201,6 +201,21 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                     store.set_handoff_meta(conversation_id, None)
         except Exception:
             logger.debug("handoff_meta 清除失败（忽略）", exc_info=True)
+        # 手摘「客户要求停联」标签＝坐席动了停联状态（名单行不变，仍拦发）→ 统一闸审计留痕
+        try:
+            from src.inbox.stop_contact import STOP_CONTACT_TAG
+            if STOP_CONTACT_TAG not in tags and STOP_CONTACT_TAG in (store.get_conv_tags(conversation_id) or []):
+                from src.compliance import stop_gate as _sg
+                try:
+                    _who = str(request.session.get("username") or "")
+                except Exception:
+                    _who = ""
+                _p, _a, _k = (str(conversation_id).split(":", 2) + ["", "", ""])[:3]
+                _sg.audit(store, path=f"agent_tag_remove:{_who}"[:40], action="tag_removed",
+                          platform=_p.lower(), account_id=_a, peer=_k,
+                          conversation_id=conversation_id, reason="stop_contact", hit="tags_put")
+        except Exception:
+            logger.debug("停联标签摘除审计失败（忽略）", exc_info=True)
         ok = store.set_conv_tags(conversation_id, tags)
         # P28：广播标签变更事件
         if ok:
@@ -255,6 +270,44 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                 "tags": store.get_conv_tags(conversation_id), "archived": bool(out.get("archived")),
                 "stop_contact_at": float(out.get("stop_contact_at") or 0),
                 "frozen": bool(out.get("stop_contact_at") or 0)}
+
+    @app.post("/api/workspace/conv/{conversation_id}/stop-contact/unfreeze")
+    async def api_conv_stop_contact_unfreeze(
+        conversation_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """坐席手动解冻停联会话（必须填理由）：``compliance.resubscribe.agent_unfreeze``。
+
+        复用 ``stop_contact.unfreeze_conversation``（摘标 / 清停联时间 / 摘需人工 / 档位还原 /
+        名单 ``mark_unfrozen``），并在统一闸审计表 ``stop_gate_audit`` 记 ``action=unfrozen``
+        （操作人 + 理由前 40 字，不记客户原文）。别的账号 / 同手机号的停联记录不动，
+        ``still_stopped`` 非空表示出站仍会被拦。
+        """
+        store = _inbox_store(request)
+        if store is None:
+            return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            _user = str(request.session.get("username") or "")
+        except Exception:
+            _user = ""
+        from src.compliance.resubscribe import agent_unfreeze
+        out = agent_unfreeze(store, conversation_id, actor=f"agent:{_user or 'api'}",
+                             note=str((body or {}).get("note") or ""))
+        if out.get("ok"):
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                import time as _t
+                get_event_bus().publish("conv_tagged", {"conversation_id": conversation_id,
+                                                        "tags": store.get_conv_tags(conversation_id),
+                                                        "ts": _t.time()})
+            except Exception:
+                pass
+        return {"ok": bool(out.get("ok")), "error": out.get("error", ""), "was": out.get("was", ""),
+                "still_stopped": out.get("still_stopped", ""),
+                "mode_restored": (out.get("detail") or {}).get("mode_restored", "")}
 
     @app.patch("/api/workspace/conv/{conversation_id}/archive")
     async def api_conv_archive(

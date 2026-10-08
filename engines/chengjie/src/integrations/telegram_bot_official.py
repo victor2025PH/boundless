@@ -448,7 +448,7 @@ async def _handle_update(update: Dict[str, Any], *, sm: Any, token: str, bot_id:
         apply_stop(PLATFORM, bot_id, chat_key, hits=["blocked_bot"])
         return
     if kind == "unblocked":
-        return   # 解冻只走人工
+        return   # 解除拉黑≠重新同意：客户点「开始」发 /start 才解冻（inbound_gate → resubscribed）
     name = str(ev.get("name") or "")
     msg_id = str(ev.get("msg_id") or "")
     if kind == "media":
@@ -483,7 +483,8 @@ async def _handle_update(update: Dict[str, Any], *, sm: Any, token: str, bot_id:
     if sg_cfg.get("extra_keywords"):
         from src.integrations.shared.official_stop_gate import DEFAULT_STOP_KEYWORDS
         kws = list(DEFAULT_STOP_KEYWORDS) + [str(k) for k in sg_cfg.get("extra_keywords") or []]
-    gate = inbound_gate(PLATFORM, bot_id, chat_key, text, name=name, keywords=kws)
+    gate = inbound_gate(PLATFORM, bot_id, chat_key, text, name=name, keywords=kws,
+                        allow_resubscribe=bool(sg_cfg.get("allow_resubscribe", True)))
     if gate.get("action") != "pass":
         logger.info("[tg_bot] STOP 闸 action=%s，本条不自答", gate.get("action"))
         return
