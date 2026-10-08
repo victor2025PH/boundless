@@ -6034,6 +6034,35 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         from src.integrations.official_webhook_stats import collect_status
         return collect_status(cfg, app_state=app.state)
 
+    @app.get("/api/admin/whatsapp-cloud/health")
+    async def api_whatsapp_cloud_health(request: Request, probe: int = 0):
+        """WhatsApp 官方 Cloud API 通道健康（只读，零密钥字段；2026-10-08 智聊双轨）。
+
+        汇总：凭证齐否（只给布尔）/ 回调可达判词 / 发送成败与 error_kind / 投递失败 /
+        STOP 硬闸计数 / 转人工计数 / **Meta 按条费用单列**（近 30 天，按类别·按日）。
+        ``?probe=1`` 额外只读探 ``GET /{phone_number_id}``（不发消息、不计费）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.whatsapp_cloud import wa_cloud_health, wa_cloud_probe
+        if probe and bool((cfg.get("whatsapp_cloud") or {}).get("enabled")):
+            await wa_cloud_probe(cfg)
+        return wa_cloud_health(cfg, app_state=app.state)
+
+    @app.get("/api/admin/telegram-bot/health")
+    async def api_telegram_bot_health(request: Request, probe: int = 0):
+        """Telegram Bot API 官方通道健康（只读，零密钥字段；2026-10-08 智聊双轨）。
+
+        凭证布尔 / 路由挂载 / 回调到达·secret 失败·重投去重 / 发送成败与 error_kind /
+        STOP 硬闸与转人工计数。``?probe=1`` 额外只读调 ``getMe`` + ``getWebhookInfo``。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.telegram_bot_official import tg_bot_health, tg_bot_probe
+        if probe and bool((cfg.get("telegram_bot") or {}).get("enabled")):
+            await tg_bot_probe(cfg)
+        return tg_bot_health(cfg, app_state=app.state)
+
     @app.get("/api/admin/buried-conversations")
     async def api_buried_conversations(request: Request):
         """被埋会话体检（只读）：归档着、却有未读入站——客户在等而工作台看不见（P0-198）。

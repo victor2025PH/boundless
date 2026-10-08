@@ -113,16 +113,14 @@ website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:93
 website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:129
 website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:129
 
-#
-# ── 2026-10-08 发版分支 devin/** 首次纳入门禁（feat-zhiliao-reliability）扫出的存量（19 条）
-#   逐条看过、均非凭据（同上：只描述不复刻原值）：
-#   config.example.yaml 第 264/272 行   已注释的多账号示例块，同块 api_id 为 12345678/87654321 一眼占位
-#   cp-nurture.js 第 49 行（两份副本）、cockpit.html 561、workspace_base.html 2496/4338、
-#   unified_inbox.html 13235/20809/21374/21741   前端 localStorage 存储键名常量（*_KEY），不是密钥
-#   backend-launcher.test.js 130、test_model_routes_api 52、test_vision_failure_reason_213 38、
-#   test_unified_inbox_stage1 1997、test_reply_settings 1102（chat_key 测试值）、
-#   test_qq_official 42、test_wechat_kf_client 107   单测夹具常量，非真实凭据
-#   seo.ts 第 79 行   即上方第 73 行登记的 IndexNow 公开 key，文件新增内容后行号下移
+# ======================================================================
+# 2026-10-08 智聊集成线（基线 devin/1789968548-wechat-pc-multi-account，1.0.109）：
+# 发版分支从没跑过 CI，secrets 门禁在这条基线上报 17 条既有命中。和 fleet 线
+# 2026-09-24 登记过的是同一批（逐行比对内容完全相同，只是行号不同），都不是
+# 生产凭据：config.example.yaml 注释里的十六进制 api_hash 样例、模板里的
+# localStorage 键名、测试夹具里的假 key、QQ/微信官方文档公开的示例向量、
+# IndexNow 公网验证 key。这里只补这条基线上的当前指纹，不关规则。
+# ======================================================================
 engines/chengjie/config/config.example.yaml:generic-api-key:264
 engines\chengjie\config\config.example.yaml:generic-api-key:264
 engines/chengjie/config/config.example.yaml:generic-api-key:272
@@ -133,20 +131,16 @@ engines/chengjie/shared/copilot/components/cp-nurture.js:generic-api-key:49
 engines\chengjie\shared\copilot\components\cp-nurture.js:generic-api-key:49
 engines/chengjie/desktop/test/backend-launcher.test.js:generic-api-key:130
 engines\chengjie\desktop\test\backend-launcher.test.js:generic-api-key:130
-engines/chengjie/src/web/templates/cockpit.html:generic-api-key:561
-engines\chengjie\src\web\templates\cockpit.html:generic-api-key:561
 engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2496
 engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2496
-engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4338
-engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4338
 engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:13235
 engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:13235
-engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:20809
-engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:20809
-engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21374
-engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21374
-engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21741
-engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21741
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:20777
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:20777
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21342
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21342
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21706
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21706
 engines/chengjie/tests/test_model_routes_api.py:generic-api-key:52
 engines\chengjie\tests\test_model_routes_api.py:generic-api-key:52
 engines/chengjie/tests/test_qq_official.py:generic-api-key:42
@@ -161,3 +155,75 @@ engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
 engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
 website/lib/seo.ts:generic-api-key:79
 website\lib\seo.ts:generic-api-key:79
+# workspace_base.html:4335 = localStorage 键名常量（ws_notify_prefs_v1），非凭据；本地 gitleaks 8.21.2 归档扫描命中，CI 未报，预登记防行号漂移后翻红
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4335
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4335
+# gitleaks 忽略清单（2026-08-27 P0：把密钥扫描从「装饰」变成真门禁时建立）
+#
+# 背景：`.pre-commit-config.yaml` 里的 gitleaks 钩子入口是 `gitleaks protect --staged`，
+# 只扫**暂存区差异**且 pass_filenames:false —— 在 CI 里暂存区为空，于是它**永远通过**。
+# 换句话说，把那个钩子直接搬进 CI 得到的是一个零鉴别力的绿灯。CI 改用 `gitleaks dir`
+# （真扫工作树内容），本文件登记它在**已入库文件**上的既有命中。
+#
+# 每条都逐行看过原文并给出判据；不确定是否机密的一律不写进来（宁可让门禁红，
+# 也不要用忽略清单把真问题掩盖掉）。Windows 与 Linux 的指纹分隔符不同，两种都登记。
+#
+# ── 1/2 Telegram api_hash 占位值 ────────────────────────────────────────
+# config.example.yaml L224/L232 位于**被 # 注释掉的多账号示例块**内，值是
+# "abcdef1234567890" / "fedcba0987654321" —— 顺序十六进制的占位样例，非真凭据。
+#
+# ── 2/2 IndexNow 公开验证 key ───────────────────────────────────────────
+# seo.ts L77。IndexNow 协议**要求**该 key 可被公网匿名读取（站点根放 /<key>.txt
+# 供搜索引擎校验），按设计就不是机密；源码注释已写明轮换方式。
+
+# ══════════════════════════════════════════════════════════════════════
+# 2026-08-28 第二批：CI 首次真跑 gitleaks dir . 扫全仓，报 30 处。
+# 我此前只扫了几个目录就下结论「只有 3 处」—— 验证面不够，这批是补齐。
+# 其中 **5 处是真凭据**（docs/P0实施记录.md 与 docs/维护窗口执行手册.md 里
+# 上次安全加固轮换出的新密钥值，文档自己写着「用后删除」但没删），已按行脱敏，
+# **不列入本忽略清单** —— 那几个值必须视为已泄露并再次轮换。
+# 下面 29 条是逐条看过的误报，按类分组；指纹带行号，行变了会自动失效需重看。
+# ══════════════════════════════════════════════════════════════════════
+#
+# ── 前端 localStorage / sessionStorage 键名常量（值是 'aitr.*' 之类的键路径，非凭据）（8 条）
+#
+# ── 测试夹具里的合成 api_hash / chat_key / token（值是 'abc123'、'test-*' 之类）（8 条）
+#
+# ── 字符集 / 哈希常量（_TOKEN_ALPHABET 是 ID 字母表；_LEAKED_SECRET_SHA256 是被泄露值的哈希，用于检测而非凭据本身）（2 条）
+#
+# ── 文档/示例里的占位 app_secret、api_hash（讲解用，非真值）（7 条）
+#
+# ── 按协议必须公开的 key（IndexNow 要求 /<key>.txt 可匿名读取）（1 条）
+
+#    ('engines/avatarhub/tools/claims_lint.py', 'generic-api-key', 54, 'TED_MODEL_TOKEN = "REDACTED"')
+#    ('engines/chengjie/src/integrations/facebook_webhook.py', 'generic-api-key', 24, 'app_secret: "REDACTED"')
+#    ('website/scripts/assert-realtime-link-testdata.mjs', 'generic-api-key', 93, "source_key='REDACTED'")
+#    ('website/scripts/assert-realtime-link-testdata.mjs', 'generic-api-key', 129, "source_key='REDACTED'")
+#
+# ── 逐条看过的其余误报（4 条）
+#   （下面刻意只描述不复刻原值：注释里原样引用被豁免的字符串，会让本文件自己被扫中——
+#     首版就这么中过一次，与仓库规则「注释里不能出现你正要禁掉的那个字面序列」同一个坑。）
+#   claims_lint.py 第 54 行     常量名带 MODEL_TOKEN，值是一个被禁用的模型名，属检测词不是凭据
+#   facebook_webhook.py 第 24 行 docstring 里的配置格式示例，值是连续字母数字的一眼占位
+#   assert-realtime-link 第 93/129 行  冒烟测试用的订单业务编号，非凭据
+
+#
+# ── 2026-10-08 发版分支 devin/** 首次纳入门禁（feat-zhiliao-reliability）扫出的存量（19 条）
+#   逐条看过、均非凭据（同上：只描述不复刻原值）：
+#   config.example.yaml 第 264/272 行   已注释的多账号示例块，同块 api_id 为 12345678/87654321 一眼占位
+#   cp-nurture.js 第 49 行（两份副本）、cockpit.html 561、workspace_base.html 2496/4338、
+#   unified_inbox.html 13235/20809/21374/21741   前端 localStorage 存储键名常量（*_KEY），不是密钥
+#   backend-launcher.test.js 130、test_model_routes_api 52、test_vision_failure_reason_213 38、
+#   test_unified_inbox_stage1 1997、test_reply_settings 1102（chat_key 测试值）、
+#   test_qq_official 42、test_wechat_kf_client 107   单测夹具常量，非真实凭据
+#   seo.ts 第 79 行   即上方第 73 行登记的 IndexNow 公开 key，文件新增内容后行号下移
+engines/chengjie/src/web/templates/cockpit.html:generic-api-key:561
+engines\chengjie\src\web\templates\cockpit.html:generic-api-key:561
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4338
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4338
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:20809
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:20809
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21374
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21374
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21741
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21741

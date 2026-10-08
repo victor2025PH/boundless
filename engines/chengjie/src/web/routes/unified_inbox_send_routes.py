@@ -421,6 +421,20 @@ def _log_send_fail(platform: str, account_id: str, chat_key: str,
                    _conv_id(platform, account_id, chat_key), _fail_raw[:200], _fail_kind or "-")
 
 
+def _rate_resume_text(request: Request, frees_at: Any) -> str:
+    """限速闸恢复时刻人话（服务端本地时间；跨天带日期）；算不出 → 通用「滚动 24h 自动恢复」。"""
+    try:
+        fa = float(frees_at or 0)
+    except (TypeError, ValueError):
+        fa = 0.0
+    if fa <= 0:
+        return tr(request, "err.inbox.send_rate_resume_unknown")
+    import time as _time
+    lt = _time.localtime(fa)
+    fmt = "%H:%M" if _time.strftime("%Y-%m-%d", lt) == _time.strftime("%Y-%m-%d") else "%m-%d %H:%M"
+    return tr(request, "err.inbox.send_rate_resume_at", time=_time.strftime(fmt, lt))
+
+
 def _send_blocked_exc(
     request: Request, platform: str, account_id: str, chat_key: str,
     reason: str = "", snap: Any = None, status_code: int = 409,
@@ -447,8 +461,15 @@ def _send_blocked_exc(
     cap = int(quota.get("cap") or 0)
     frees_at = snap.get("frees_at")
     fam = blocked_reason_key(reason)
+    rate = snap.get("rate") if isinstance(snap.get("rate"), dict) else None
     if fam == "quota" and cap > 0:
         message = tr(request, "err.inbox.send_blocked_quota", used=used, cap=cap)
+    elif fam in ("rate_warmup", "rate_script"):
+        # 智安发送限速闸：说清「已发/上限 + 几点恢复」（滚动 24h，不许承诺「明天零点」）
+        _r = rate or {}
+        message = tr(request, f"err.inbox.send_blocked_{fam}",
+                     used=int(_r.get("used") or 0), cap=int(_r.get("cap") or 0),
+                     resume=_rate_resume_text(request, frees_at or _r.get("frees_at")))
     else:
         message = tr(request, f"err.inbox.send_blocked_{fam}", reason=reason)
     detail: Dict[str, Any] = {
@@ -463,6 +484,8 @@ def _send_blocked_exc(
     _kill = snap.get("kill") if isinstance(snap.get("kill"), dict) else None
     if _kill:
         detail["kill"] = _kill
+    if rate:
+        detail["rate"] = rate
     logger.warning(
         "[send] guard=send_blocked 护栏拦截已显式回执 conv=%s reason=%s used=%s cap=%s",
         _conv_id(platform, account_id, chat_key), reason, used, cap)

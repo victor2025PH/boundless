@@ -1,0 +1,82 @@
+# 自有业务 · 知识库种子（{占位} 替换成自己的真实信息）
+
+version: 1
+entries:
+- category: 价格与支付
+  title: 价格表
+  triggers:
+  - 价格
+  - 多少钱
+  - 价目
+  - price list
+  - how much
+  - magkano
+  scenario: 客户问价格
+  steps: 按价目表回复；特殊需求转老板
+  principles: 不私自让价
+  example_reply_zh: '{service} 是 {price}，{package_note}。要帮你约个时间吗？'
+- category: 账户会员
+  title: 营业时间与地址
+  triggers:
+  - 营业时间
+  - 地址
+  - 在哪
+  - hours
+  - location
+  - saan kayo
+  scenario: 客户问时间地址
+  steps: 给营业时间、地址、交通 / 停车提示
+  principles: 只给公开信息
+  example_reply_zh: 我们 {hours} 营业，地址 {address}，{parking_note}。
+- category: 下单流程
+  title: 预约
+  triggers:
+  - 预约
+  - 订位
+  - 约时间
+  - book
+  - appointment
+  - reserve
+  - pa-reserve
+  scenario: 客户要预约
+  steps: 确认日期时间、人数 / 项目、称呼，回复确认；冲突时转老板
+  principles: 确认前不承诺档期
+  example_reply_zh: 好的～你想约哪天几点？留个称呼，我帮你登记，老板确认后回你。
+- category: 价格与支付
+  title: 付款方式
+  triggers:
+  - 付款
+  - 转账
+  - GCash
+  - Maya
+  - cash
+  - card
+  - bayad
+  scenario: 客户问付款方式
+  steps: 列出接受的付款方式
+  principles: 不让客户转私人账户以外的未知账户
+  example_reply_zh: 可以 {payment_methods}，到店或线上都行。
+- category: 常见故障
+  title: 售后与意见
+  triggers:
+  - 不满意
+  - 投诉
+  - 退款
+  - complaint
+  - refund
+  - reklamo
+  scenario: 客户不满意
+  steps: 致歉 + 记录 + 转老板
+  principles: 投诉一律老板亲自处理
+  example_reply_zh: 很抱歉没让你满意，我马上告诉老板，他会亲自联系你。
+- category: 规则条款
+  title: 退订
+  triggers:
+  - 退订
+  - 别再发
+  - unsubscribe
+  - stop
+  scenario: 客户不想再收消息
+  steps: 按 STOP 流程确认一次
+  principles: 不挽留
+  example_reply_zh: 收到，回复 STOP 我们就不会再发消息给你。

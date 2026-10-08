@@ -1697,6 +1697,24 @@ class InboxStore:
             )
             self._conn.commit()
 
+    def _fill_unknown_language_locked(self, conversation_id: str, lang: str) -> None:
+        """P1-5（2026-10-08）：新入站消息带可信语种、而会话语言还是 unknown → 补上。
+
+        此前会话语言只看「采集时末条」：末条是出站 / 表情 / 图片的会话一直 unknown（173 占
+        46%）。这里只补 unknown，不覆写已有值（覆写仍走 upsert 的末条入站规则），所以
+        「OK 翻语言」护栏不受影响。调用方已持锁、同一事务。
+        """
+        lg = str(lang or "").strip().lower()
+        if not conversation_id or lg in ("", "unknown", "auto"):
+            return
+        try:
+            self._conn.execute(
+                "UPDATE conversations SET language=? "
+                "WHERE conversation_id=? AND language IN ('unknown', '')",
+                (lg[:16], conversation_id))
+        except sqlite3.Error:
+            logger.debug("[InboxStore] 会话语言补写失败（忽略）", exc_info=True)
+
     def ingest_message(self, msg: InboxMessage) -> bool:
         """INSERT OR IGNORE，返回是否新插入。"""
         if not msg.conversation_id:
@@ -1746,6 +1764,7 @@ class InboxStore:
                     "UPDATE conversations SET last_in_ts=? "
                     "WHERE conversation_id=? AND last_in_ts < ?",
                     (float(msg.ts or 0), msg.conversation_id, float(msg.ts or 0)))
+                self._fill_unknown_language_locked(msg.conversation_id, msg.source_lang)
             # 回复即接受：任何**新插入的出站**落库即撤「陌生人消息请求」标记——
             # worker 发送时会自动点官方「接受」按钮（messenger-web clickAcceptRequest），
             # 这里同步撤前端徽章/引导条。WHERE is_request=1 自守卫，非请求会话零成本。
@@ -1931,6 +1950,8 @@ class InboxStore:
                     inserted += 1
                     if msg.direction == "in":
                         _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
+                        self._fill_unknown_language_locked(
+                            msg.conversation_id, msg.source_lang)
                     else:
                         if _twin_mids:
                             # 孪生已被打点认领过 → 认领指针挪到权威行（免得打点悬空又被下一条误认）

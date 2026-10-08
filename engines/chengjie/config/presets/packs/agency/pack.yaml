@@ -1,0 +1,30 @@
+# 垂直模板包：代运营（agency）
+# 适用：代运营公司同时替多个客户品牌承接私信。一品牌一人设一知识库，品牌之间严格隔离：
+# 不提代运营公司，不提其他客户品牌，不跨品牌引用知识库。
+# 开局：python main.py --init 选 agency；每接一个品牌，复制 persona.yaml / kb_seed.yaml 改 {brand_name} 等占位。
+
+schema: zhiliao.vertical_pack.v1
+id: agency
+name: 代运营
+edition: public
+preset: agency
+langs:
+- zh
+- en
+- tl
+files:
+  persona: persona.yaml
+  kb_seed: kb_seed.yaml
+  stop_confirm: stop_confirm.yaml
+  handoff_sop: handoff_sop.yaml
+isolation:
+  one_persona_per_brand: true
+  kb_scope: per_brand
+  never_mention:
+  - '{agency_name}'
+  - 代运营
+  - outsourced
+  - our other clients
+compliance:
+  disclosure:
+    honest_identity: true

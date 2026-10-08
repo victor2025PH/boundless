@@ -111,10 +111,20 @@ _HONEST_MODE_GOLDEN: List[Dict[str, Any]] = [
     {"reply": "有什么可以帮您的吗？", "deny_ai": True,
      "forbidden": ["有什么可以帮您"],
      "expect_default": True, "expect_honest": True, "note": "客服腔两模式都抓"},
-    # 正常陪聊：两种模式都干净（含否定句豁免——「我才不是AI啦」不算自曝）
+    # 否认是 AI：默认（回避）档不算自曝、放行；诚实档＝冒充真人，必须剥
+    # （P0-5，2026-10-08 用户拍板「被真诚问到时如实说是 AI 助手」，human_claim 家族）
     {"reply": "哈哈我才不是AI啦，我就是打字快而已。", "deny_ai": True,
      "forbidden": [],
-     "expect_default": False, "expect_honest": False, "note": "否定句两模式都放行"},
+     "expect_default": False, "expect_honest": True,
+     "note": "否认 AI：默认档放行，诚实档按冒充真人剥"},
+    {"reply": "Totoong tao ako, promise. Kumain ka na?", "deny_ai": False,
+     "forbidden": ["AI", "bot", "real person"],
+     "expect_default": False, "expect_honest": True,
+     "note": "他加禄冒充真人：诚实档内置拦截（不依赖禁词表）"},
+    {"reply": "Honest lang: AI assistant ako ng team. Kailangan mo ba ng tulong?",
+     "deny_ai": False, "forbidden": ["AI", "bot", "human", "real person"],
+     "expect_default": True, "expect_honest": False,
+     "note": "单个 AI 禁词：默认档按词剥；诚实档如实披露保留；kailangan 不误伤"},
     {"reply": "今天加班到九点，累瘫了，你吃了吗？", "deny_ai": True,
      "forbidden": ["有什么可以帮您"],
      "expect_default": False, "expect_honest": False, "note": "日常闲聊两模式都干净"},

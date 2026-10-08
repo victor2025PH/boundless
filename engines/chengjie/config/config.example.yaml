@@ -296,6 +296,47 @@ whatsapp_cloud:
   verify_token: ""               # GET 校验自定义口令（控制台填同值）
   webhook_path: "/wa/webhook"
   unsupported_type_reply: "目前仅支持文字消息。"
+  # 24h 客服窗口外回退模板（需先在 Meta 后台审核通过）；name 留空 = 不回退（窗口外失败→进待人工）
+  window_fallback_template:
+    name: ""
+    language: "zh_CN"
+    text_param: true               # 把原回复文本作为正文 {{1}} 参数
+  # STOP 硬闸：客户发 STOP/UNSUBSCRIBE/退订… 或停联短语 → 冻结（需人工+名单），之后一律不真发
+  stop_gate:
+    allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
+    extra_keywords: []             # 追加整句退订词
+  # 自答路径进待人工的触发项（AI 异常 / 发送失败 恒进）
+  handoff:
+    on_human_request: true         # 客户点名要真人
+    on_media: true                 # 入站图片/语音/视频/文件（贴纸/表情回应不进）
+    on_empty_reply: true
+    on_delivery_failed: true       # status webhook = failed
+  # Meta 按条计费单价（PMP；价格随国家×类别变动，仓内不写死；未配置 = 只计条数不计金额）
+  pricing:
+    currency: "USD"
+    rates:
+      default: {}                  # 例：{marketing: 0.0, utility: 0.0, authentication: 0.0}
+  graph_base: ""                   # 仅测试/回环：留空 = Meta 官方 Graph
+
+# Telegram Bot API（官方 bot 轨；与 Telegram 个人号协议轨并列，platform=telegram mode=official，
+# account_id = bot 数字 id）。默认关。上线步骤：@BotFather 建 bot → 填 bot_token → 自拟 webhook_secret →
+# 调 setWebhook(url=<公网>/tg/bot/webhook, secret_token=<同值>)。健康：/api/admin/telegram-bot/health
+telegram_bot:
+  enabled: false
+  bot_token: ""                    # @BotFather 发的 token
+  webhook_secret: ""               # setWebhook 的 secret_token（A-Za-z0-9_-，1-256 字符）
+  webhook_path: "/tg/bot/webhook"
+  unsupported_type_reply: "目前仅支持文字消息。"
+  start_reply: ""                  # /start 欢迎语；空 = 交给 AI 打招呼
+  auto_account: true               # 启动时登记账号行（坐席可在收件箱接管回复）
+  stop_gate:
+    allow_farewell: false
+    extra_keywords: []
+  handoff:
+    on_human_request: true
+    on_media: true
+    on_empty_reply: true
+  api_base: ""                     # 仅测试/回环：留空 = api.telegram.org
 
 # Instagram Messaging（官方，Graph API；与 Messenger 同体系，Phase H）。默认关。
 # webhook object=instagram；收件人是 IGSID；发送端点用 IG 账号 id + 关联 Page token。
@@ -1765,6 +1806,20 @@ ai:
   #       api_key: xxxx.yyyy
   #       base_url: https://open.bigmodel.cn/api/paas/v4
   #       model: glm-4-flash
+
+  # 备用链顺序（可选，P1-2 2026-10-08）：主链失败 / 熔断开路 / 欠费冷却后先试谁。
+  # lane：key_pool（上面的云端备用池）/ local（上面的 ai.fallback，第二推理端）。
+  # 缺省 [key_pool, local]（历史行为不变）。漏写的 lane 自动补在末尾（不会悄悄丢备用链；
+  # 真要不出云请用 ai.primary: local_only）。
+  # 智聊私信承接推荐（主模型 = 自建 chatx，第二推理端 = 另一台 LAN GPU，云池最后兜）：
+  #   base_url: http://192.168.0.173:8001     # 主：chatx（vLLM）
+  #   fallback: { enabled: true, base_url: http://<第二推理端>:11434, model: <模型名>, timeout: 60 }
+  #   key_pool: { keys: [ { name: cloud-1, api_key: <从环境/私有 overlay 注入>, base_url: ..., model: ... } ] }
+  #   fallback_order: [local, key_pool]
+  # 启动后后台探针对第二推理端只打 GET /v1/models（不生成），云池读巡检 ping 快照；
+  # 结果见 /health 的 ai_stats.backup（redundancy: ok / unknown / down / none）。
+  # 已配置的备用全部不可达 → ERROR 日志 + 主机告警「备用模型全部不可达」（30 分钟去抖）。
+  # fallback_order: [local, key_pool]
 
   # ── 多模型路由（像 Cursor 按任务挑模型；可选，默认空=不启用，行为不变）──────────
   # 与 key_pool（主 key 失效才顶班）正交：这里**主动按任务/调用方挑模型或端点**。

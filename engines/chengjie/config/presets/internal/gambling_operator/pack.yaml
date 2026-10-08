@@ -1,0 +1,31 @@
+# 垂直模板包：持牌博彩运营商会员服务（internal_only，只进内部包）
+# ⚠ 不进公开包：不在 config/presets 顶层（--init 列表看不到），目录在 internal/ 下；
+#   公开包白名单（desktop/build/editions.json）应把 config/presets/internal 列入 internal_only.seed_paths。
+# 定位：持牌运营商的会员客服与合规承接，不是营销投放包：不推送下注、不给投注建议、不追损。
+# 两条硬红线：① 年龄核实（未核实前不谈任何游戏 / 优惠）② 余额红线（AI 不报、不确认、不承诺任何金额与出款）。
+# 运营方须自行确认牌照辖区、法定年龄、自我排除名单接口与当地广告法规，再启用本包。
+
+schema: zhiliao.vertical_pack.v1
+id: gambling_operator
+name: 博彩运营商（持牌）
+edition: internal_only
+preset: null
+langs:
+- zh
+- en
+- tl
+files:
+  persona: persona.yaml
+  kb_seed: kb_seed.yaml
+  stop_confirm: stop_confirm.yaml
+  handoff_sop: handoff_sop.yaml
+  compliance: compliance.yaml
+requires:
+- licensed_operator
+- age_verification
+- balance_red_line
+- responsible_gaming
+- stop_gate
+compliance:
+  disclosure:
+    honest_identity: true

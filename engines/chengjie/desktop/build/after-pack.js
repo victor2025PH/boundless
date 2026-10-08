@@ -353,9 +353,17 @@ function editionLeaks(res) {
       else if (!allow.has(String(x))) out.push(`  · 公开包 manifest.${key} 超出公开白名单 ${x}`);
     }
   }
+  const backend = path.join(res, "backend");
   for (const sp of io.seed_paths || []) {
-    if (fs.existsSync(path.join(seed, ...String(sp).split("/")))) {
+    const parts = String(sp).split("/");
+    if (fs.existsSync(path.join(seed, ...parts))) {
       out.push(`  · 公开包含内部专属种子 seed-data/${sp}`);
+    }
+    // 后端代码包（PyInstaller onedir datas 落在根或 _internal/）：如 config/presets/internal 博彩运营商模板
+    for (const base of [backend, path.join(backend, "_internal")]) {
+      if (fs.existsSync(path.join(base, ...parts))) {
+        out.push(`  · 公开包后端含内部专属目录 ${path.relative(res, path.join(base, ...parts)).split(path.sep).join("/")}`);
+      }
     }
   }
   const badVoices = asSet(io.voices);
