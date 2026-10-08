@@ -92,8 +92,12 @@ def _client():
 
 
 def _goal(gs, slots="occupation,age,location"):
+    # 种子时刻仍钉 T0（注入链按 T0 回放）。路由读卡走 settle-on-read，refresh_goal
+    # 用挂钟：deadline 停在 T0+3 天时，首个 GET 会把目标结算成 expired，下一个 GET
+    # 的 goal 就是 None。期限盖过「现在」，回放时钟不变。
+    horizon = max(3, int((time.time() - T0) / 86400) + 2)
     return gs.create_goal(conversation_id=CONV, platform=PLAT, account_id=ACCT, chat_key=CK,
-                          template="profile_discovery", autonomy="auto", deadline_days=3,
+                          template="profile_discovery", autonomy="auto", deadline_days=horizon,
                           params={"slots": slots}, now=T0) or {}
 
 
