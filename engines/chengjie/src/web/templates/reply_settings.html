@@ -1919,8 +1919,8 @@ function rpsFieldHost(def){
    数据 = /api/reply-settings 的 platform_caps（capability_matrix 现算，与编排器
    运行时 hasattr 判据同源）。字段缺席（旧进程未装载新路由）→ 整块隐藏——
    宁可少说，绝不再手写平台名（旧 hint「当前 Telegram 协议号支持」已实证烂掉）。 */
-var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger", zalo: "Zalo", instagram: "Instagram", qq: "QQ", douyin: "抖音", tiktok: "TikTok"};
-var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq", "douyin", "tiktok"];
+var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger", zalo: "Zalo", instagram: "Instagram", qq: "QQ"};
+var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq"];
 /* 只有语音触发列可编辑的桌面桥平台（微信电脑副驾）：后端 meta[voice.platform_triggers].keys 含该平台才渲染
    （老后端白名单不认 wechat → 不出这一行，避免提交被拒）。其余列按「跟随全局」禁用。 */
 var RPS_PLAT_VOICE_ONLY = ["wechat"];

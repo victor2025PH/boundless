@@ -59,12 +59,11 @@ SEAT_MODE_CHOICES = ("", "single", "multi")
 # 校验约束——两平台无 mark_read/typing，开了会被如实提示不支持）。
 # 2026-09-07：qq（协议登录个人号，Milky）进能力矩阵 → 键域同步扩（typing 是协议层硬限制，
 # 开了会被 validate_platform_flags_caps 如实提示不支持）。
-# 2026-09-08：抖音官方 / TikTok 官方（含 Shop 同行）进能力矩阵 → 键域同步扩。
-# 两平台无已读回执 / 正在输入，拟人开关开了会被能力护栏如实拒绝。
-PLATFORMS = (
-    "telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq",
-    "douyin", "tiktok",
-)
+# 抖音 / TikTok 已有 worker，但 platform_registry 仍是 implemented=False，
+# 且不在 platform_login.SUPPORTED_PLATFORMS。节奏白名单只收已支持平台
+# （test_platforms_match_worker_registry = WORKERS ∩ SUPPORTED），
+# 翻 implemented 之前不进本表，避免节奏页放出还不能登录的端。
+PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq")
 # 只对「语音触发覆写」额外放行的桌面桥平台（2026-09-19 P1）：微信 PC 副驾经虚拟声卡发语音，
 # 与协议 worker 无关，不进 PLATFORMS（那张表与能力矩阵 WORKERS 钉死），但运营要能单独关掉
 # 微信的语音（微信语音一旦发错人/发错内容没法撤回文字那样快）。其余平台表（档位封顶/延迟/拟人）

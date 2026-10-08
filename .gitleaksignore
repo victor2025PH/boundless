@@ -135,6 +135,9 @@ engines/chengjie/tests/test_vision_failure_reason_213.py:generic-api-key:38
 engines\chengjie\tests\test_vision_failure_reason_213.py:generic-api-key:38
 engines/chengjie/tests/test_unified_inbox_stage1.py:generic-api-key:1997
 engines\chengjie\tests\test_unified_inbox_stage1.py:generic-api-key:1997
+# #122 收件箱契约改动把同一条测试夹具（顺序十六进制 api_hash 占位，非真凭据）从 1997 推到 2004
+engines/chengjie/tests/test_unified_inbox_stage1.py:generic-api-key:2004
+engines\chengjie\tests\test_unified_inbox_stage1.py:generic-api-key:2004
 engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
 engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
 website/lib/seo.ts:generic-api-key:79
