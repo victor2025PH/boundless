@@ -338,7 +338,7 @@ def test_local_status_shows_hostname_and_short_machine_id(tmp_path):
                               service_status_fn=lambda: {"installed": False})
     assert snap["machine_id_short"] == "m-763f4c43"
     assert snap["node_display"] == "PC-20240123AORY · m-763f4c43"
-    assert snap["agent_version"] == "0.3.28"
+    assert snap["agent_version"] == "0.3.30"
     assert "本机标识" in PAGE_HTML and "node_display" in PAGE_HTML
 
 

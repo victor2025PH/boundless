@@ -109,6 +109,11 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
     dry_run / predict_only: only JSON true is kept, normalized to dry_run true.
     JSON false or a missing flag is omitted (real execution). A non-bool, or the
     two flags disagreeing, is bad_dry_run.
+
+    verify_publish (post only): JSON true is kept. JSON false or a missing flag
+    is omitted. A non-bool is bad_verify_publish and does not run the post.
+    Caption text stays the ASCII phone_text subset (at most 200). Chinese is
+    text_non_ascii_unsupported; this does not add an IME.
     """
     p = payload if isinstance(payload, dict) else {}
     app = str(p.get("app") or "").strip().lower() if isinstance(p.get("app"), str) else ""
@@ -124,6 +129,12 @@ def validate_flow_payload(kind: str, payload: Any) -> Dict[str, Any]:
         out["text"] = _caption(p)
         out["media"] = _media(p)
         out["media_slot"] = _int_field(p, "media_slot", 0, MAX_MEDIA_SLOT, "bad_media_slot") if "media_slot" in p else 0
+        if "verify_publish" in p:
+            flag = p.get("verify_publish")
+            if not isinstance(flag, bool):
+                raise PhoneOpError("bad_verify_publish")
+            if flag:
+                out["verify_publish"] = True
     elif flow == "like":
         out["scrolls"] = _int_field(p, "scrolls", 0, MAX_SCROLLS, "bad_scrolls") if "scrolls" in p else 0
         # like_swipes / like_probe are the Facebook scan. Other apps keep the fixed coordinate.
