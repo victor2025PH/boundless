@@ -52,7 +52,8 @@ def test_mark_agent_sent_nearest_one_to_one_within_window(tmp_path):
     by = {m["text"]: m for m in msgs}
     assert by["人工第一句"]["sent_by"] == "agent" and by["人工第一句"]["agent_name"] == "小王"
     assert by["人工第二句"]["sent_by"] == "agent"
-    assert not by["AI 说的"].get("sent_by") and not by["AI 又说"].get("sent_by")
+    # P0-4（2026-10-08）：未带发送方的出站行落库缺省 phone（不再是 ''），未被打点认领
+    assert by["AI 说的"].get("sent_by") == "phone" and by["AI 又说"].get("sent_by") == "phone"
     assert not by["客户"].get("sent_by")                    # 入站永不标
     # 幂等 / 无打点会话 / 空输入 / 无 store 全部软处理
     assert _mark_agent_sent(_req(store), CID, msgs) == 2
@@ -79,12 +80,12 @@ def test_sent_by_claim_mirror_first_then_send_record(tmp_path):
     _ing(store, "h1", "out", "你好呀", t)
     store.record_agent_send(CID, "a1", agent_name="小王", ts=t + 2, text="你好呀 ")   # 空白归一化
     rows = _rows(store)
-    assert rows["h1"]["sent_by"] == "agent" and rows["ai0"]["sent_by"] == ""
+    assert rows["h1"]["sent_by"] == "agent" and rows["ai0"]["sent_by"] == "phone"
     sends = store.list_agent_sends(CID)
     assert sends[0]["claimed_mid"] == rows["h1"]["message_id"] and sends[0]["text_hash"]
     # 同文本再来一条（AI 复读）→ 打点已认领，不再认
     _ing(store, "ai1", "out", "你好呀", t + 5)
-    assert _rows(store)["ai1"]["sent_by"] == ""
+    assert _rows(store)["ai1"]["sent_by"] == "phone"
     store.close()
 
 
@@ -97,11 +98,11 @@ def test_sent_by_claim_send_record_first_then_mirror(tmp_path):
     _ing(store, "h1", "out", "Good  night", t + 40)              # 镜像 40s 后到、空白略不同
     _ing(store, "ai1", "out", "Sleep well", t + 41)
     rows = _rows(store)
-    assert rows["h1"]["sent_by"] == "agent" and rows["ai1"]["sent_by"] == ""
+    assert rows["h1"]["sent_by"] == "agent" and rows["ai1"]["sent_by"] == "phone"
     # 窗口外的镜像不认
     store.record_agent_send(CID, "a1", agent_name="小王", ts=t + 1000, text="late")
     _ing(store, "h2", "out", "late", t + 1000 + 300)
-    assert _rows(store)["h2"]["sent_by"] == ""
+    assert _rows(store)["h2"]["sent_by"] == "phone"
     store.close()
 
 
@@ -145,7 +146,7 @@ def test_mark_agent_sent_trusts_column_and_fills_name(tmp_path):
     assert n == 1                                                # 只有老行是本次新标
     assert by["人工精确认领"]["agent_name"] == "小王"              # 认领打点的坐席名补上
     assert by["老行只能时间匹配"]["sent_by"] == "agent" and by["老行只能时间匹配"]["agent_name"] == "老李"
-    assert "sent_by" not in by["AI 说的"] or by["AI 说的"]["sent_by"] == ""
+    assert by["AI 说的"].get("sent_by", "") in ("", "phone")
     store.close()
 
 
@@ -165,7 +166,7 @@ def test_sent_by_tagged_rows_from_orchestrator_mirror(tmp_path):
                                       text="非法值", ts=t + 3, sent_by="robot"))
     rows = _rows(store)
     assert rows["ai1"]["sent_by"] == "ai" and rows["h1"]["sent_by"] == "agent"
-    assert rows["c1"]["sent_by"] == "" and rows["x1"]["sent_by"] == ""
+    assert rows["c1"]["sent_by"] == "" and rows["x1"]["sent_by"] == "phone"   # 非法值 → 出站缺省
     # 路由随后打点（同文本）：反向认领必须连到 agent 行 h1，而不是 ai1
     store.record_agent_send(CID, "a1", agent_name="小王", ts=t + 2, text="同一句")
     sends = store.list_agent_sends(CID)
@@ -230,7 +231,7 @@ def test_split_send_each_part_claims_its_own_row(tmp_path):
         store.record_agent_send(CID, "a1", agent_name="小王", ts=t + 3, text=p)
     rows = _rows(store)
     assert all(rows[f"p{i}"]["sent_by"] == "agent" for i in range(3))
-    assert rows["ai"]["sent_by"] == ""
+    assert rows["ai"]["sent_by"] == "phone"
     assert sorted(s["claimed_mid"] for s in store.list_agent_sends(CID)) == \
         sorted(rows[f"p{i}"]["message_id"] for i in range(3))
     store.close()
