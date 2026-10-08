@@ -332,7 +332,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.27"
+    assert agent_mod.AGENT_VERSION == "0.3.28"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -554,7 +554,7 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
 
     iss = Path(__file__).resolve().parents[1] / "fleet_agent" / "setup" / "ChatXAgent.iss"
     text = iss.read_text(encoding="utf-8")
-    assert 'AppVersion "0.3.27"' in text
+    assert 'AppVersion "0.3.28"' in text
     assert "install-panel" in text
     assert "ChatX Fleet Panel" in text
     assert "ChatXFleetPanel" in text
@@ -600,10 +600,13 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
     assert "operator_alert.json" in xml
     create = build_panel_logon_create(tmp_path)
     assert create[1] == "/Create" and "/XML" in create and "SYSTEM" not in create
-    run_key = build_panel_run_key(tmp_path)
-    assert run_key[0] == "reg" and "ChatXFleetPanel" in run_key and "/reg:64" in run_key
-    assert "operator_alert.json" in run_key[run_key.index("/d") + 1]
+    legacy = build_panel_run_key(tmp_path)
+    assert legacy[0] == "reg" and "/reg:64" in legacy
     assert "zh" in oa.PANEL_SCRIPT and "en" in oa.PANEL_SCRIPT
+    lock_give_up = oa.PANEL_SCRIPT.index("exit 0")
+    session_write = oa.PANEL_SCRIPT.index("panel_session.json")
+    assert session_write > lock_give_up
+    assert "GetCurrentProcess().SessionId" in oa.PANEL_SCRIPT
     (tmp_path / "panel_task.xml").write_text(xml, encoding="utf-8")
     (tmp_path / oa.LOCK_NAME).write_bytes(b"\0")
     monkeypatch.setattr(oa, "_run_key_present", lambda: True)
@@ -668,3 +671,111 @@ def test_session0_lock_holder_is_replaced_and_a_desktop_holder_is_not(monkeypatc
     monkeypatch.setattr(oa, "_end_session0_panel", lambda _root: False)
     stuck = oa.launch_panel(tmp_path)
     assert stuck["mode"] == "headless" and stuck["shown"] is False
+
+
+class _RunKey:
+    HKEY_LOCAL_MACHINE = object()
+    KEY_SET_VALUE = 0x2
+    KEY_QUERY_VALUE = 0x1
+    KEY_WOW64_64KEY = 0x100
+    KEY_WOW64_32KEY = 0x200
+    REG_SZ = 1
+
+    def __init__(self, *, stored=None):
+        self.access = 0
+        self.path = ""
+        self.name = ""
+        self.saved = None
+        self.stored = stored
+        self.deleted = []
+
+    def CreateKeyEx(self, hive, path, _reserved, access):
+        assert hive is self.HKEY_LOCAL_MACHINE
+        self.path = path
+        self.access = access
+        return self
+
+    def SetValueEx(self, _key, name, _reserved, typ, value):
+        self.name = name
+        self.saved = (typ, value)
+
+    def QueryValueEx(self, _key, name):
+        if self.stored is not None:
+            return self.stored
+        assert name == self.name
+        return self.saved[1], self.saved[0]
+
+    def OpenKey(self, hive, path, _reserved, access):
+        self.deleted.append((path, access))
+        return self
+
+    def DeleteValue(self, _key, name):
+        self.deleted.append(name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def test_install_panel_writes_the_64bit_run_key_and_reads_it_back(monkeypatch, tmp_path):
+    from src.fleet import service as service_mod
+    from src.fleet.service import ensure_panel_run_key, install_panel_logon, write_panel_run_key
+
+    reg = _RunKey()
+    written = write_panel_run_key(tmp_path, registry=reg)
+    assert reg.path == r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    assert reg.name == "ChatXFleetPanel"
+    assert reg.access == (reg.KEY_SET_VALUE | reg.KEY_QUERY_VALUE | reg.KEY_WOW64_64KEY)
+    assert "operator_alert.json" in written
+    assert "powershell" in written.lower()
+    assert "ChatXFleetPanel" not in written
+
+    monkeypatch.setattr(service_mod.os, "name", "nt")
+    calls = []
+
+    def run(cmd):
+        calls.append(list(cmd))
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Proc()
+
+    fresh = _RunKey()
+    res = install_panel_logon(tmp_path / "fleet", run=run, registry=fresh)
+    assert res["ok"] is True
+    assert fresh.name == "ChatXFleetPanel"
+    assert not any(cmd and cmd[0] == "reg" for cmd in calls)
+    assert any(cmd[:2] == ["schtasks", "/Create"] for cmd in calls)
+    assert any(step.get("cmd") == ["winreg", "Run"] and step.get("rc") == 0 for step in res["steps"])
+    assert "operator_alert.json" not in json.dumps(res)
+
+    bad = _RunKey(stored=("other", _RunKey.REG_SZ))
+    failed = install_panel_logon(tmp_path / "fleet2", run=run, registry=bad)
+    assert failed["ok"] is False
+    assert any(step.get("rc") == 1 and step.get("out") == "OSError" for step in failed["steps"])
+
+    monkeypatch.setattr(service_mod.os, "name", "nt")
+    live = _RunKey()
+
+    def _live(_state_dir=None):
+        return True
+
+    monkeypatch.setattr("src.fleet.detect.is_live_stream_host", _live)
+    assert ensure_panel_run_key(tmp_path / "live", registry=live) is False
+    assert live.saved is None
+
+    monkeypatch.setattr("src.fleet.detect.is_live_stream_host", lambda _state_dir=None: False)
+    monkeypatch.setattr("src.fleet.detect.is_seat_173", lambda *_a, **_k: True)
+    seat = _RunKey()
+    assert ensure_panel_run_key(tmp_path / "seat", registry=seat) is False
+    assert seat.saved is None
+
+    monkeypatch.setattr("src.fleet.detect.is_seat_173", lambda *_a, **_k: False)
+    again = _RunKey()
+    assert ensure_panel_run_key(tmp_path / "room", registry=again) is True
+    assert again.name == "ChatXFleetPanel"

@@ -13,7 +13,7 @@ $stateDir = Join-Path $env:ProgramData "ChatX\fleet"
 if (Test-Path -LiteralPath $target) { & $target --state-dir $stateDir uninstall-service | Out-Null }
 schtasks /Delete /TN "ChatX Fleet Agent" /F 2>$null | Out-Null
 schtasks /Delete /TN "ChatX Fleet Panel" /F 2>$null | Out-Null
-reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v ChatXFleetPanel /f 2>$null | Out-Null
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v ChatXFleetPanel /f /reg:64 2>$null | Out-Null
 Get-Process -Name chatx-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 if (Test-Path -LiteralPath $InstallDir) { Remove-Item -LiteralPath $InstallDir -Recurse -Force; Say "removed $InstallDir" }

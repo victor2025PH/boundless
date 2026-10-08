@@ -145,11 +145,91 @@ def build_panel_logon_create(state_dir: Path, *, task_name: str = PANEL_TASK_NAM
 
 
 def build_panel_run_key(state_dir: Path) -> List[str]:
-    """HKLM Run value. Windows starts it in every logged-on user's session."""
+    """Legacy ``reg add`` argv. Install does not run this.
+
+    ``reg.exe`` re-reads the raw command line. The panel command is a long
+    quoted ``/d`` value and ``/reg:64`` follows it, so on the room PCs the
+    value was never created in the 64-bit Run key or in Wow6432Node.
+    ``write_panel_run_key`` writes that 64-bit view and reads it back.
+    """
     from .operator_alert import PANEL_RUN_KEY, PANEL_RUN_VALUE, panel_process_args
 
     value = subprocess.list2cmdline(panel_process_args(state_dir))
     return ["reg", "add", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/t", "REG_SZ", "/d", value, "/f", "/reg:64"]
+
+
+def write_panel_run_key(state_dir: Path, *, registry=None) -> str:
+    """Create ``ChatXFleetPanel`` in the 64-bit HKLM Run key and read it back.
+
+    Raises ``OSError`` when the stored string is not the panel command.
+    The command line is not included in the exception. ``registry`` is a
+    ``winreg``-shaped module for tests.
+    """
+    from .operator_alert import PANEL_RUN_VALUE, panel_process_args
+
+    command = subprocess.list2cmdline(panel_process_args(state_dir))
+    if not command or len(command) > 2048 or "\n" in command or "\x00" in command:
+        raise OSError("panel run command rejected")
+    reg = registry
+    if reg is None:
+        if os.name != "nt":
+            raise OSError("panel run key is windows-only")
+        import winreg as reg
+    access = reg.KEY_SET_VALUE | reg.KEY_QUERY_VALUE | reg.KEY_WOW64_64KEY
+    with reg.CreateKeyEx(
+        reg.HKEY_LOCAL_MACHINE,
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+        0,
+        access,
+    ) as key:
+        reg.SetValueEx(key, PANEL_RUN_VALUE, 0, reg.REG_SZ, command)
+        stored, typ = reg.QueryValueEx(key, PANEL_RUN_VALUE)
+    if typ != reg.REG_SZ or stored != command:
+        raise OSError("panel run key readback mismatch")
+    return command
+
+
+def ensure_panel_run_key(state_dir: Path, *, registry=None) -> bool:
+    """Rewrite the Run value when this Windows service starts.
+
+    An exe-only upgrade does not run install-panel, so a missing key would
+    stay missing. A live-stream host and seat 173 are left alone. Failure is
+    the exception type only and does not stop the service.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        from .detect import is_live_stream_host, is_seat_173
+        from .identity import host_name
+
+        if is_live_stream_host(state_dir) or is_seat_173(host_name()):
+            return False
+        write_panel_run_key(state_dir, registry=registry)
+        return True
+    except Exception as e:
+        logger.warning("[service] panel run key was not written: %s", type(e).__name__)
+        return False
+
+
+def _delete_panel_run_key_views(*, registry=None) -> None:
+    """Drop ``ChatXFleetPanel`` from the 64-bit view and from Wow6432Node."""
+    from .operator_alert import PANEL_RUN_VALUE
+
+    reg = registry
+    if reg is None:
+        if os.name != "nt":
+            return
+        try:
+            import winreg as reg
+        except Exception:
+            return
+    path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    for flag in (getattr(reg, "KEY_WOW64_64KEY", 0), getattr(reg, "KEY_WOW64_32KEY", 0)):
+        try:
+            with reg.OpenKey(reg.HKEY_LOCAL_MACHINE, path, 0, reg.KEY_SET_VALUE | flag) as key:
+                reg.DeleteValue(key, PANEL_RUN_VALUE)
+        except OSError:
+            pass
 
 
 def build_panel_run_key_delete() -> List[str]:
@@ -206,11 +286,13 @@ def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess:
 
 
 def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
-                        task_name: str = PANEL_TASK_NAME) -> Dict[str, object]:
+                        task_name: str = PANEL_TASK_NAME, registry=None) -> Dict[str, object]:
     """Write the panel script and register the logon task plus the Run key.
 
     On non-Windows this is a no-op success: there is no session-0 service desktop.
     A missing task's ``/End`` is ignored. Creating the task or the Run key must succeed.
+    The Run value is written with the registry API into the 64-bit view and read
+    back. A mismatch fails this step. The command line is not returned.
     """
     if os.name != "nt":
         return {"ok": True, "kind": "skipped", "task_name": task_name, "steps": []}
@@ -226,7 +308,6 @@ def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
         logger.debug("[service] panel schtasks /End failed: %s", e)
     required = [
         build_panel_logon_create(state_dir, task_name=task_name),
-        build_panel_run_key(state_dir),
     ]
     outs = []
     for s in required:
@@ -234,6 +315,13 @@ def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
         outs.append({"cmd": s[:2], "rc": p.returncode, "out": (p.stdout or p.stderr or "")[-300:]})
         if p.returncode != 0:
             return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
+    try:
+        write_panel_run_key(state_dir, registry=registry)
+    except Exception as e:
+        logger.warning("[service] panel run key was not written: %s", type(e).__name__)
+        outs.append({"cmd": ["winreg", "Run"], "rc": 1, "out": type(e).__name__})
+        return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
+    outs.append({"cmd": ["winreg", "Run"], "rc": 0, "out": ""})
     # Best effort: nobody logged on yet makes /Run fail, and the logon task still fires later.
     kick = build_schtasks_run(task_name=task_name)
     try:
@@ -286,6 +374,7 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
 
 def uninstall_service(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
     if os.name == "nt":
+        _delete_panel_run_key_views()
         cmds = build_schtasks_delete(task_name=task_name) + build_schtasks_delete(task_name=PANEL_TASK_NAME)
         cmds.append(build_panel_run_key_delete())
         outs = [{"rc": run(s).returncode} for s in cmds]
@@ -623,6 +712,7 @@ __all__ = [
     "TASK_NAME", "PANEL_TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command",
     "build_schtasks_create", "build_schtasks_run", "build_schtasks_delete", "build_schtasks_query",
     "build_panel_logon_create", "build_panel_task_xml", "build_panel_run_key", "build_panel_run_key_delete",
+    "write_panel_run_key", "ensure_panel_run_key",
     "build_task_state_query", "build_systemd_unit", "install_service", "install_panel_logon", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
     "onefile_parent_pid", "start_parent_watch",
