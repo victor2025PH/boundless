@@ -228,7 +228,9 @@ def apply_stop(platform: str, account_id: str, chat_key: str, *, hits: Iterable[
         out["blocklisted"] = True
     except Exception:
         logger.debug("[stop-gate] 名单写入失败", exc_info=True)
-    if st is not None and not out.get("compliance"):
+    # 统一闸 record_stop 在会话尚未入库时只进名单、不造会话（frozen=False）。
+    # 官方轨的对端一定是本实例真实入站客户 → 统一闸没冻结时回落本地冻结（需人工 + 停联标签 + 档位 manual）。
+    if st is not None and not out.get("frozen"):
         try:
             from src.inbox.stop_contact import freeze_conversation
             r = freeze_conversation(st, platform=plat, account_id=acct, chat_key=ck,
