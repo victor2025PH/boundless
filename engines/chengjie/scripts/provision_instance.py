@@ -98,7 +98,7 @@ def main(argv=None) -> int:
     # ── apply：建骨架 + 写配置 + 登记 stack（幂等）──
     data_dir = Path(plan.data_dir)
     cfg_dir = data_dir / "config"
-    for sub in ("config", "sessions", "logs", "events\\spool", "ledger_outbox"):
+    for sub in ("config", "sessions", "logs", "events/spool", "ledger_outbox"):
         (data_dir / sub).mkdir(parents=True, exist_ok=True)
     cfg_yaml = cfg_dir / "config.yaml"
     if not cfg_yaml.exists():

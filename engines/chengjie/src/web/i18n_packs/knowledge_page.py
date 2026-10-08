@@ -362,6 +362,16 @@ ZH = {
     "kb_s162": "运行",
     "kb_s163": "通道, 成功率, EP, channel",
     "kb_s164": "排除词1, 排除词2",
+    "kb_emb_title": "向量覆盖率（启用条目）",
+    "kb_emb_ok": "启用条目已全部向量化",
+    "kb_emb_pending": "条启用条目还没有向量，语义检索找不到它们",
+    "kb_emb_failed": "上次自动向量化有失败（已自动重试），可点「重试」",
+    "kb_emb_retrying": "向量化失败，正在自动重试",
+    "kb_emb_running": "正在后台向量化…",
+    "kb_emb_unconfigured": "未配置嵌入端点，无法自动向量化",
+    "kb_emb_retry": "重试",
+    "kb_emb_queued": "已在后台开始向量化",
+    "kb_emb_last_fail": "上次失败条数",
 }
 
 EN = {
@@ -725,4 +735,14 @@ EN = {
     "kb_s162": "Run",
     "kb_s163": "channel, success rate, EP, channel",
     "kb_s164": "exclude word 1, exclude word 2",
+    "kb_emb_title": "Vector coverage (enabled entries)",
+    "kb_emb_ok": "All enabled entries are vectorized",
+    "kb_emb_pending": "enabled entries have no vector yet; semantic search can't find them",
+    "kb_emb_failed": "Auto-vectorization failed (auto-retries used up); click Retry",
+    "kb_emb_retrying": "Vectorization failed, retrying automatically",
+    "kb_emb_running": "Vectorizing in the background…",
+    "kb_emb_unconfigured": "No embedding endpoint configured; auto-vectorization is off",
+    "kb_emb_retry": "Retry",
+    "kb_emb_queued": "Vectorization started in the background",
+    "kb_emb_last_fail": "Last failed",
 }
