@@ -9,7 +9,11 @@ from src.integrations import platform_login as pl
 from src.integrations.account_registry import AccountRegistry
 
 
-def test_list_modes_defaults():
+def test_list_modes_defaults(monkeypatch):
+    # 隔离：同进程先跑的 Bot webhook 用例会注册 telegram:official worker 工厂（全局表），
+    # 这里断言的是「未注册时」的默认清单，故按键摘除（monkeypatch 用后自动还原）
+    from src.integrations import account_orchestrator as _ao
+    monkeypatch.delitem(_ao._WORKER_FACTORIES, "telegram:official", raising=False)
     tg = {m["mode"]: m for m in pl.list_modes("telegram")}
     # 2026-08-11：web 占位从默认清单摘除——protocol 本就是官方关联设备扫码
     # （ExportLoginToken，二维码在本窗口显示），再挂一张永不可用的「网页扫码」
