@@ -1,0 +1,19 @@
+# gitleaks 仓库配置（CI secrets job 与 pre-commit 都从仓库根自动加载本文件）。
+# 必须保留默认规则集：useDefault = true，只在其上加最小范围的按内容豁免。
+title = "boundless gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "前端 localStorage 键名常量（非密钥）：按内容豁免，不随行号漂移"
+# 只对 generic-api-key 命中的「secret」值做整串锚定匹配（regexTarget 默认 = secret）：
+#   形如 ws_<小写单词>[_<小写单词>…]_v<1-2 位版本号>，例如
+#   ws_kb_suggest_pref_v1 / ws_dpick_lat_v1 / ws_voice_persona_v1 / ws_xlate_prefs_v1
+#   （unified_inbox.html 里 _KB_SUGGEST_KEY/_DPICK_LAT_KEY/_VOICE_KEY/_XL_KEY 的值）。
+# 范围说明：全小写字母+下划线、固定 ws_ 前缀、_vN 结尾，没有数字/大写/符号混排，
+#   熵极低，任何真实 token/API key 都不会整串满足；不放宽到路径级或规则级豁免。
+# 若新增的键名不符合本形状，请改键名或在这里加整串锚定的精确值，不要放宽正则。
+regexes = [
+  '''^ws_[a-z]+(?:_[a-z]+){0,5}_v[0-9]{1,2}$''',
+]
