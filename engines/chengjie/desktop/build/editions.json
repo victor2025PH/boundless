@@ -1,0 +1,55 @@
+{
+  "_doc": [
+    "智聊桌面安装包 · 公开包 / 内部包 白名单清单（智安 2026-10-08，Morgan 定向：公开包与内部包长期分开）。",
+    "public  = 对外发行（跨境私域团队 / 代运营公司 / 自有业务）：只带 editions.public 白名单里的人设、声音、开关；",
+    "internal = 内部 / 持牌运营商定制：全量种子（stage_internal_assets.py 标准档）。",
+    "internal_only = 内部清单：博彩 / 陪伴 / 成人向 / 克隆音色 / 内网端点类。任何一项出现在公开包 manifest 或种子树 → 门禁红（edition_gate.py + tests/compliance/test_edition_split_gate.py + after-pack.js）。",
+    "改公开白名单 = 改对外产品形态：须 Morgan 确认后再动；人设分类待业务复核（见 NOTES_zhian.md）。"
+  ],
+  "version": 1,
+  "internal_only": {
+    "personas": ["chen_mo", "zhang_jingguang", "lin_jiaxin", "marcus_wei", "claire_brennan"],
+    "voices": ["chen_mo", "zhang_jingguang", "lin_jiaxin", "marcus_wei", "claire_brennan"],
+    "persona_tags": ["陪伴", "成人", "成人向", "博彩", "赌场", "离异", "单亲妈妈", "反诈劝阻", "companion", "adult", "gambling", "casino", "betting"],
+    "switches": [
+      "business_domain", "companion", "avatar_voice", "voice_clone_lan", "speech_emotion",
+      "platform_login", "contacts", "player_gateway", "fatex", "ops", "licensing", "ai",
+      "audio_pipeline", "vision", "voice_recognition", "translation", "surface_fusion",
+      "telegram", "protocol_autoreply", "web_chat", "skills", "intent", "usage"
+    ],
+    "seed_paths": [
+      "config/persona_albums",
+      "config/persona_media.db",
+      "config/persona_bio.db",
+      "config/knowledge_base.db"
+    ]
+  },
+  "editions": {
+    "public": {
+      "flavor": "public",
+      "personas": ["lin_xiaoyu", "chen_meiling", "su_wan", "zhao_laoshi", "haruko_traveler"],
+      "voices": ["lin_xiaoyu", "chen_meiling", "su_wan", "zhao_laoshi", "haruko_traveler"],
+      "switches": [
+        "brand", "web_admin", "inbox", "workspace", "reply", "memory", "lang_prior",
+        "ui_visibility", "voice_lang_route", "media", "line_rpa", "accounts",
+        "health_watchdog", "personas", "assistant"
+      ],
+      "omitted": [
+        "config/persona_albums",
+        "config/persona_media.db",
+        "config/persona_bio.db",
+        "config/knowledge_base.db"
+      ],
+      "output_dir": "dist-public",
+      "publish_channel": "latest"
+    },
+    "internal": {
+      "flavor": "internal",
+      "personas": "*",
+      "voices": "*",
+      "switches": "*",
+      "output_dir": "dist-internal",
+      "publish_channel": "latest-internal"
+    }
+  }
+}

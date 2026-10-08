@@ -168,6 +168,21 @@ def send_blocked(
                     return True, _reason
     except Exception:
         pass
+    # 4) 智安发送限速闸（缺省开；compliance.send_rate_gate）：预热期号滚动 24h 超建议上限 →
+    #    AI 与坐席一律拦；标成 script 的测试流量另受每号日上限。放在最后一道：前面任何
+    #    一道拦了都不计数；本道放行才记一条（真发送路径 notify=True；预判 notify=False 只算不写）。
+    try:
+        from src.compliance.send_rate_gate import check as _rate_check
+        _rd = _rate_check(p, a, origin=str(origin or "auto"), chat_key=str(chat_key or ""),
+                          config=config, registry=registry, record=bool(notify))
+        if not _rd.get("allowed", True):
+            _reason = f"send_rate_gate:{_rd.get('reason') or 'blocked'}"
+            if notify:
+                _record_block(p, a, f"{_reason}|{_rd.get('origin') or origin}")
+                notify_send_blocked(p, a, _reason)
+            return True, _reason
+    except Exception:
+        pass
     return False, ""
 
 

@@ -13,7 +13,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 # 服务监听端口（须与主进程 platform_login.whatsapp.baileys_url 一致）
 $env:PORT = "8790"
-$env:BIND_HOST = "127.0.0.1"   # 入站无鉴权，只许本机引擎调；放开前先加鉴权（server.js 同注）
+$env:BIND_HOST = "127.0.0.1"   # 只许本机引擎调；入站另有 SIDECAR_TOKEN 鉴权（见下方与 sidecar-auth.js）
 # 入站桥：Baileys 收到的消息 push 进统一收件箱（web 后台 18799）
 $env:PY_INGEST_URL = "http://127.0.0.1:18799/api/internal/protocol/ingest"
 # 会话健康桥：连上/被登出/重连放弃等状态转移主动 push（不配则由 PY_INGEST_URL 自动推导）
@@ -31,20 +31,55 @@ if ($env:AITR_DATA_DIR) {
   $cfgMain = Join-Path $root "config\config.yaml"
   $cfgOverlay = Join-Path $root "config\config.local.yaml"
 }
-function Get-CfgToken([string[]]$files) {
+function Get-CfgKey([string[]]$files, [string]$key) {
   foreach ($f in $files) {
     if (Test-Path $f) {
-      $m = Select-String -Path $f -Pattern '^\s*auth_token:\s*(\S+)' | Select-Object -Last 1
-      if ($m) { return $m.Matches[0].Groups[1].Value }
+      $m = Select-String -Path $f -Pattern ('^\s*' + $key + ':\s*(\S+)') | Select-Object -Last 1
+      if ($m) { return $m.Matches[0].Groups[1].Value.Trim('"').Trim("'") }
     }
   }
   return ""
 }
-$env:PY_API_TOKEN = Get-CfgToken @($cfgOverlay, $cfgMain)
+# 边车 → 引擎（PY_INGEST_URL / PY_STATUS_URL）用的令牌：优先 web_admin.worker_token
+# （引擎只对它放行 /api/internal/*，见 src/web/admin.py worker_token 注释块），没配才回落
+# auth_token（管理员级，告警）。顺序不可颠倒：引擎先装载 worker_token 并重启，再切这边。
+$env:PY_API_TOKEN = Get-CfgKey @($cfgOverlay, $cfgMain) "worker_token"
 if ($env:PY_API_TOKEN) {
-  Write-Host ("[wa-baileys] auth_token resolved from " + $cfgOverlay + " / " + $cfgMain)
+  Write-Host ("[wa-baileys] ingest token = web_admin.worker_token (" + $cfgOverlay + " / " + $cfgMain + ")")
 } else {
-  Write-Host "[wa-baileys] WARN: auth_token not found — inbound pushes may be 401-rejected"
+  $env:PY_API_TOKEN = Get-CfgKey @($cfgOverlay, $cfgMain) "auth_token"
+  if ($env:PY_API_TOKEN) {
+    Write-Host "[wa-baileys] WARN: web_admin.worker_token not set - ingest falls back to admin auth_token (configure worker_token to isolate)"
+  } else {
+    Write-Host "[wa-baileys] WARN: auth_token not found — inbound pushes may be 401-rejected"
+  }
+}
+# 引擎 → 边车（入站鉴权，P0-1）：**独立**令牌，不再复用 web_admin 管理 token。
+# 优先环境变量 WA_SIDECAR_TOKEN；否则读实例 config 目录的 wa_sidecar_token.key，不存在就生成
+# 32 字节随机值写入（*.key 已被 .gitignore 忽略；引擎 whatsapp_baileys_login.sidecar_token()
+# 按同一路径读取，故两侧无需手工同步）。令牌值绝不打印。
+$sidecarTokenFile = Join-Path (Split-Path -Parent $cfgMain) "wa_sidecar_token.key"
+if ($env:WA_SIDECAR_TOKEN) {
+  $env:SIDECAR_TOKEN = $env:WA_SIDECAR_TOKEN.Trim()
+  Write-Host "[wa-baileys] sidecar token from env WA_SIDECAR_TOKEN"
+} else {
+  $tok = ""
+  if (Test-Path -LiteralPath $sidecarTokenFile) {
+    $tok = ((Get-Content -LiteralPath $sidecarTokenFile -Raw -ErrorAction SilentlyContinue) + "").Trim()
+  }
+  if ($tok.Length -lt 24) {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes); $rng.Dispose()
+    $tok = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $sidecarTokenFile) | Out-Null
+    # 无 BOM ASCII：Python 侧 utf-8-sig 读也兼容，但不给别的读者添麻烦
+    [System.IO.File]::WriteAllText($sidecarTokenFile, $tok, [System.Text.Encoding]::ASCII)
+    Write-Host ("[wa-baileys] generated new sidecar token -> " + $sidecarTokenFile)
+  } else {
+    Write-Host ("[wa-baileys] sidecar token from " + $sidecarTokenFile)
+  }
+  $env:SIDECAR_TOKEN = $tok
 }
 # 首连历史回填条数（0 关闭）
 $env:WA_BACKFILL = "20"

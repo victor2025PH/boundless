@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS account_blocklist (
     PRIMARY KEY (platform, account_id, peer)
 );
 CREATE INDEX IF NOT EXISTS idx_ab_account ON account_blocklist(platform, account_id);
+CREATE INDEX IF NOT EXISTS idx_ab_peer ON account_blocklist(platform, peer);
+-- 智安 P0-2（2026-10-08）：STOP 硬闸审计（只记元数据与命中词，不记消息原文）
+CREATE TABLE IF NOT EXISTS stop_gate_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              REAL NOT NULL DEFAULT 0,
+    path            TEXT NOT NULL DEFAULT '',
+    action          TEXT NOT NULL DEFAULT '',
+    platform        TEXT NOT NULL DEFAULT '',
+    account_id      TEXT NOT NULL DEFAULT '',
+    peer            TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    hit             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sga_ts ON stop_gate_audit(ts);
 """
 
 
@@ -141,6 +156,86 @@ class AccountBlocklist:
         except Exception:
             return False
         return bool(row) and float(row.get("unfrozen_ts") or 0) <= 0
+
+    def is_peer_blocked_any_account(self, platform: str, peer: str) -> bool:
+        """同平台同 external_id 在**任一**账号名单上且未解冻 → True（STOP 硬闸跨账号视角）。绝不抛。"""
+        plat, pr = _norm(platform).lower(), _norm(peer)
+        if not plat or not pr:
+            return False
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT 1 FROM account_blocklist WHERE platform=? AND peer=? AND unfrozen_ts<=0 LIMIT 1",
+                    (plat, pr)).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def is_phone_blocked(self, phone_key: str) -> bool:
+        """末 10 位手机号（``stop_gate.phone_key``）在任一平台 / 账号名单上且未解冻 → True。绝不抛。
+
+        peer 形态各异（``6391…@s.whatsapp.net`` / ``phone:91…`` / 纯数字），按「去非数字后以
+        phone_key 结尾」比；名单规模是「要求停联的人」，量级小，全表扫可接受。
+        """
+        pk = "".join(ch for ch in str(phone_key or "") if ch.isdigit())
+        if len(pk) < 7:
+            return False
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT peer FROM account_blocklist WHERE unfrozen_ts<=0 AND peer LIKE ?",
+                    (f"%{pk[-4:]}%",)).fetchall()
+            for r in rows:
+                raw = str(r["peer"] or "")
+                head = raw.split("@", 1)[0]
+                if ":" in head and head.split(":", 1)[0].isalpha():
+                    head = head.split(":", 1)[1]
+                head = head.split(":", 1)[0]
+                d = "".join(ch for ch in head if ch.isdigit())
+                if len(d) >= 7 and d[-10:].endswith(pk[-10:]) and len(pk[-10:]) <= len(d[-10:]):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def audit(self, *, ts: Optional[float] = None, path: str = "", action: str = "",
+              platform: str = "", account_id: str = "", peer: str = "",
+              conversation_id: str = "", reason: str = "", hit: str = "") -> bool:
+        """STOP 硬闸审计一行（``stop_gate_audit``）。只记元数据 + 命中词（≤40 字），不记原文。"""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO stop_gate_audit(ts, path, action, platform, account_id, peer,"
+                    " conversation_id, reason, hit) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (float(ts if ts is not None else time.time()), _norm(path)[:40], _norm(action)[:20],
+                     _norm(platform).lower()[:20], _norm(account_id)[:80], _norm(peer)[:120],
+                     _norm(conversation_id)[:200], _norm(reason)[:40], _norm(hit)[:40]))
+                self._conn.commit()
+            return True
+        except Exception:
+            logger.debug("[blocklist] stop_gate_audit 写入失败", exc_info=True)
+            return False
+
+    def audit_rows(self, *, limit: int = 200, path: str = "", action: str = "",
+                   conversation_id: str = "") -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM stop_gate_audit WHERE 1=1"
+        args: List[Any] = []
+        if path:
+            sql += " AND path=?"
+            args.append(path)
+        if action:
+            sql += " AND action=?"
+            args.append(action)
+        if conversation_id:
+            sql += " AND conversation_id=?"
+            args.append(conversation_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(int(limit))
+        try:
+            with self._lock:
+                return [dict(r) for r in self._conn.execute(sql, args).fetchall()]
+        except Exception:
+            return []
 
     def list_for_account(self, platform: str, account_id: str, *,
                          include_unfrozen: bool = True, limit: int = 5000) -> List[Dict[str, Any]]:

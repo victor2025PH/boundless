@@ -2947,6 +2947,10 @@ class SkillManager(LoggerMixin):
             if reply:
                 reply = self._apply_outbound_text_guard(
                     reply, log_prefix=log_prefix, user_context=user_context)
+            # 5c1c. 红线：玩家金额脱敏（无条件，不受任何守卫跳过开关影响）
+            if reply:
+                reply = self._enforce_player_redaction(
+                    reply, user_context, log_prefix=log_prefix, path="a_line")
 
             # 5c2. 出站媒体承诺守卫：走到这=本轮没有真发媒体（Stage 全未短路），
             # 回复却承诺「等我拍/发你照片/发条语音」→ 异步兑现（Phase18，预检过
@@ -4005,6 +4009,10 @@ class SkillManager(LoggerMixin):
                 )
             if reply != _before_guard:
                 _metric("persona_guard_intercept")
+            # 9a1. 红线：玩家金额脱敏（智安 P0-3）——在 outbound_text_guard 跳过开关**之外**，无条件执法
+            if reply:
+                reply = self._enforce_player_redaction(
+                    reply, user_context, log_prefix=log_prefix, path="b_line")
             # 9a2. 出站文本形态守卫（实施74：B118/B121/B104，与 A 线 5c1b 同口径同序）
             if reply and not _skipg("outbound_text_guard"):
                 _before_otg = reply
@@ -4118,6 +4126,10 @@ class SkillManager(LoggerMixin):
                 )
             if user_context.get("_wellbeing_safety_override"):
                 _metric("crisis_override")
+            # 9z. 红线终检：玩家金额脱敏（幂等；防 9a1 之后的守卫改写重新带出金额）
+            if reply:
+                reply = self._enforce_player_redaction(
+                    reply, user_context, log_prefix=log_prefix, path="b_line_final")
             # #152 F1：守卫链把稿剥空（退化循环整条截空等）→ 不产出草稿。此前空稿
             # 会继续走状态推进/记忆写回并以 reply="" 返回给 autodraft——上游按
             # 「有稿」处理就把空/坏稿送进了发送队列。B 线空稿的正确终局是「无稿」，
@@ -5543,6 +5555,38 @@ class SkillManager(LoggerMixin):
                               exc_info=True)
         return out
 
+    def _enforce_player_redaction(
+        self, reply: str, user_context: Optional[Dict[str, Any]] = None, *,
+        log_prefix: str = "", path: str = "",
+    ) -> str:
+        """红线（智安 P0-3，2026-10-08）：博彩召回不得回述真人余额 / 充提 / 流水。
+
+        **无条件**执法：不看 conv_route.skip_guard / 无限制会话 / 任何守卫开关；只要本轮注入过
+        玩家网关事实或实例开了 player_gateway，就对出站文本金额打码并留痕。异常 → 保守再打一次码。"""
+        if not reply:
+            return reply
+        try:
+            from src.integrations.wujie_player import enforce_outbound_redaction
+            cfg = None
+            try:
+                _c = getattr(self, "config", None)
+                cfg = _c.config if hasattr(_c, "config") else _c
+            except Exception:
+                cfg = None
+            red, n = enforce_outbound_redaction(reply, user_context, cfg, path=path)
+            if n:
+                self.logger.info("%s[player-gateway] 出站金额脱敏 %d 处（path=%s）", log_prefix, n, path or "-")
+            return red
+        except Exception:
+            self.logger.debug("[player-gateway] 出站脱敏异常", exc_info=True)
+            try:
+                from src.integrations.wujie_player import redact_financials
+                if isinstance(user_context, dict) and user_context.get("_player_data_block"):
+                    return redact_financials(reply)[0]
+            except Exception:
+                pass
+            return reply
+
     def _apply_outbound_text_guard(
         self, reply: str, log_prefix: str = "",
         user_context: Optional[Dict[str, Any]] = None,
@@ -5561,6 +5605,10 @@ class SkillManager(LoggerMixin):
         """
         if not reply:
             return reply
+        # 智安 P0-3：金额脱敏已移出本守卫（本守卫在 B 线受 outbound_text_guard 跳过开关控制），
+        # 改由 _enforce_player_redaction 在两条线上无条件执法；这里再兜一次（幂等，*** 不会再命中）。
+        reply = self._enforce_player_redaction(reply, user_context, log_prefix=log_prefix,
+                                               path="outbound_text_guard")
         # #32② / #145⑤：出站不得主动提起对方已撤回的内容（对方本轮又说了则不剥）
         try:
             from src.inbox.withdrawn_cite import apply_to_reply
