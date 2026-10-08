@@ -157,8 +157,14 @@ def build_llm_extract_fn(
         # 召回假性掉到 50%（2026-07-26 实锤，逐条单跑全过而 harness 批跑随机漏）。
         loop = asyncio.new_event_loop()
         try:
-            _ = loop.run_until_complete(_probe())
+            _probe_out = loop.run_until_complete(_probe())
         except Exception:
+            loop.close()
+            return None
+        # extract_memory_bullets 无 key / 端点不通时吞错返回 []，不抛异常——探针句
+        # 「我叫小明，住在大阪」必有可抽事实，空结果＝LLM 不可用，按契约返回 None
+        # 让门禁跳过，而不是拿一个恒空的 extract_fn 去跑出 0% 召回的假红。
+        if not _probe_out:
             loop.close()
             return None
 

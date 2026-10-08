@@ -30757,6 +30757,9 @@ Object.assign(window, {
   _onImgXlatePick, _onVoiceXlatePick, _onDocFilePick, _onDocxFilePick,
   // P17 Phase2: 右栏收起时的「工作目标」快捷入口（窄屏可达性）
   _openGoalQuick,
+  // CI 基线 2026-10-08：账号卡 PC 微信副驾「启动 / 聚焦」+ 时间线展开、接入方式失败重试
+  //（innerHTML 生成的 onclick；层② 门禁扫出——此前点下去抛 ReferenceError＝哑按钮）
+  startPcCopilot, focusPcWechat, togglePcTimeline, loadConnectModes,
 });
 
 /* 兜底：内联 onclick 调到未暴露函数会抛 ReferenceError，过去表现为「点击无响应」

@@ -316,7 +316,8 @@ def test_repo_config_ships_sync_block_default_off():
 
     import yaml
     root = Path(__file__).resolve().parent.parent
-    with open(root / "config" / "config.yaml", "r", encoding="utf-8") as f:
+    # 2026-10-08 CI 基线：config/config.yaml 已 gitignore（本机配置），仓库基线＝config.example.yaml。
+    with open(root / "config" / "config.example.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     sync = directory_sync_cfg(cfg)
     assert sync.get("enabled") is False

@@ -736,9 +736,15 @@ def ensure_ops_sweeper(app: Any, config_getter: Callable[[], Dict[str, Any]], *,
         _start()
     except RuntimeError:
         try:
-            app.add_event_handler("startup", _start)
+            # starlette>=1.0 的 FastAPI 实例已无 add_event_handler（旧写法在此抛错后只记
+            # debug → 巡检永远起不来、真机离线判不出）。与全仓其余 startup 钩子同口径走
+            # app.on_event；更老的 starlette 无 on_event 时退回 add_event_handler。
+            if hasattr(app, "on_event"):
+                app.on_event("startup")(_start)
+            else:
+                app.add_event_handler("startup", _start)
         except Exception:
-            logger.debug("[tiktok-huoke] startup 钩子挂载失败", exc_info=True)
+            logger.warning("[tiktok-huoke] startup 钩子挂载失败，运维巡检未启用", exc_info=True)
     return True
 
 

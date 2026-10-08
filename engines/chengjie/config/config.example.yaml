@@ -1509,6 +1509,10 @@ personas:
         enabled: false
         backend: edge_tts
         voice: zh-CN-XiaoxiaoNeural
+  # 文档导入生成人设（/api/personas/import-doc/*，persona_import_routes）。基线默认关，
+  # 本机 overlay 显式开启；关时端点 403。
+  doc_import:
+    enabled: false
 
 # 人工客服转接：同问多次追加 @ 人工；值班状态存 SQLite human_escalation.db
 human_escalation:

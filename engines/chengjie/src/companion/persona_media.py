@@ -314,6 +314,26 @@ _MEDIA_REQ_RE = re.compile(
     r"show\s+me|send\s+(?:me\s+)?(?:a\s+)?(?:pic|photo|video|selfie)|"
     r"can\s+i\s+see|got\s+any",
     re.IGNORECASE)
+# 光杆催讨（「X照片呢」）的反例：同一分句里先有「以为/当是/原来」＝回指已发的图、
+# 在说「我还以为是 X 的照片呢」——是陈述/追问，不是催图（18:41 实录：「我以为是抹茶
+# 拿铁的照片呢，这是哪里拍的呢」被当要图又甩一张）。只豁免以「呢/咧/勒」收尾的光杆
+# 催讨命中，看看/发张/给我看这类显式动词照常算求图。
+_BARE_DEMAND_TAIL = ("呢", "咧", "勒")
+_RECALL_CTX_RE = re.compile(r"以[为為]|[当當]是|原[来來]|[还還][当當]")
+_CLAUSE_SPLIT_RE = re.compile(r"[，,。.!！？?；;\n]")
+
+
+def has_media_request(text: Any) -> bool:
+    """显式求图（``_MEDIA_REQ_RE``），扣除「以为是…的照片呢」这类回指陈述的光杆命中。"""
+    t = str(text or "")
+    for m in _MEDIA_REQ_RE.finditer(t):
+        hit = m.group(0)
+        if hit and hit[-1] in _BARE_DEMAND_TAIL:
+            clause = _CLAUSE_SPLIT_RE.split(t[:m.start()])[-1]
+            if _RECALL_CTX_RE.search(clause):
+                continue
+        return True
+    return False
 
 
 def is_info_question(text: Any) -> bool:
@@ -323,7 +343,7 @@ def is_info_question(text: Any) -> bool:
         return False
     if not _QUESTION_RE.search(t):
         return False
-    return not _MEDIA_REQ_RE.search(t)
+    return not has_media_request(t)
 
 
 # ── 邀约/否定守卫（2026-08-12 实锤）─────────────────────────────────────────
@@ -360,7 +380,7 @@ def is_invite_or_decline(text: Any) -> bool:
         return False
     if _MEDIA_DECLINE_RE.search(t):
         return True
-    if _MEDIA_REQ_RE.search(t):
+    if has_media_request(t):
         return False
     return bool(_INVITE_RE.search(t))
 

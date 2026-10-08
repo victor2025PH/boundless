@@ -183,8 +183,8 @@ def has_ask_verb(text: str) -> bool:
     if _ASK_VERB_RE.search(t):
         return True
     try:
-        from src.companion.persona_media import _MEDIA_REQ_RE
-        return bool(_MEDIA_REQ_RE.search(t))
+        from src.companion.persona_media import has_media_request
+        return has_media_request(t)
     except Exception:
         return False
 

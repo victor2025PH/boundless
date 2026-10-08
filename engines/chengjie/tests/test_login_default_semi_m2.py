@@ -52,7 +52,8 @@ def test_config_yaml_default_is_semi():
     import yaml
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
-    for name in ("config/config.yaml", "config/config.desktop.min.yaml",
+    # 2026-10-08 CI 基线：config/config.yaml 已 gitignore（本机配置），仓库基线＝config.example.yaml。
+    for name in ("config/config.example.yaml", "config/config.desktop.min.yaml",
                  "config/config.desktop.internal.yaml"):
         cfg = yaml.safe_load((root / name).read_text("utf-8")) or {}
         ad = ((cfg.get("inbox") or {}).get("auto_draft") or {})
