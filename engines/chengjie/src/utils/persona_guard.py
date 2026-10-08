@@ -499,13 +499,13 @@ def _matches_retired_claims(text: str, terms: List[str]) -> List[str]:
 # 「Missed you! My assistant will … minutes. Anyway, how was your run?」整段到「?」
 # 才算一句 → 剥框架句连带吞掉「how was your run」；小数「3.5」/域名无空白不切）。
 _SENTENCE_SPLIT_RE = re.compile(
-    r"[^。！？!?\n]*?(?:[。！？!?\n]|\.(?=\s|$))|[^。！？!?\n]+")
+    r"[^。！？!?\n\u0964]*?(?:[。！？!?\n\u0964]|\.(?=\s|$))|[^。！？!?\n\u0964]+")
 
 # 无句末标点的中文口语流用空格当子句边界（拟人人设常用风格：「行 那再给你发一条
 # 你听听」）。子句 = 非空白串 + 其尾随空白（保留空白，剔除违规子句后无缝重组）。
 _WS_CLAUSE_RE = re.compile(r"\S+\s*")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
+_SENT_PUNCT_RE = re.compile(r"[。！？!?\n\u0964]")
 
 
 def collect_forbidden(
@@ -542,7 +542,12 @@ def collect_forbidden(
         if str(p).strip()
     ]
     if honest_identity:
-        phrases = [p for p in phrases if not _matches_ai_self_id(p)]
+        # P0-5（2026-10-08）：除「作为AI/as an AI」这类整句身份短语外，单个身份名词
+        # （AI / bot / human / real person / totoong tao / 机器人…）也一并豁免——否则
+        # 「AI assistant ako ng team」这类如实披露句会被单词条剥掉。冒充真人的声明
+        # 改由内置 ``_HUMAN_CLAIM_PATTERNS``（human_claim 家族）无条件拦截。
+        phrases = [p for p in phrases
+                   if not _matches_ai_self_id(p) and not _is_bare_identity_term(p)]
     try:
         from src.utils.persona_retired import retired_guard_terms
         retired = retired_guard_terms(persona)
@@ -557,6 +562,7 @@ def collect_forbidden(
     return {"phrases": phrases, "deny_ai": deny_ai,
             "retired_terms": retired,
             "peer_leak": not honest_identity,
+            "human_claim": bool(honest_identity),
             "service_frame": bool(service_frame),
             "foreign_products": _foreign_products_for(persona, foreign_products)}
 
@@ -620,13 +626,257 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s or "").lower()
 
 
-def _matches_phrase(haystack_norm: str, phrases: List[str]) -> List[str]:
+# ── 禁词匹配：拉丁字母按词边界、CJK 等按子串（P0-5，2026-10-08 智聊他加禄误删）──
+# 事故：人设禁词 ``AI`` 按子串命中 kailangan / kaibigan / kumain / mainit，``bot``
+# 命中 abot，``human`` 命中 humanap；退化路径再 ``re.sub`` 在词中间挖字母
+# （Kailangan→Klangan）。新口径：
+#   - 含拉丁字母的禁词：边缘是拉丁字母/数字时要求相邻字符不是拉丁字母/数字
+#     （连字符、撇号、空白、标点、CJK 都算边界：mag-AI、AI'ng、是AI的 照样命中）；
+#     词内多个 token 之间容忍空白/连字符变体（real person / real-person / realperson）；
+#     词尾容许少量屈折：所有词 ``s`` / ``'s`` / 他加禄连接词 ``-ng``，≥4 字母的词再加
+#     ``es/d/ed/ing/al/er/ers``（bots、promos、withdrawal、deposited）。
+#   - ``http`` / ``https`` / ``www`` 视作前缀（https://… 照拦）；配置里写 ``foo*``
+#     ＝前缀匹配、``*foo``＝后缀匹配（显式通配，供运营自定）。
+#   - 不含拉丁字母的禁词（中文/日文/天城文/泰文…）保持旧的去空白子串匹配，逐字节同旧版。
+_LATIN_CLS = "0-9A-Za-z\u00C0-\u024F\u1E00-\u1EFF"
+_LATIN_LETTER_RE = re.compile("[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]")
+_LATIN_WORDCH_RE = re.compile("[" + _LATIN_CLS + "]")
+_WIDE_CH_RE = re.compile("[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")
+_PHRASE_TOKEN_SEP_RE = re.compile(r"[\s\-\u2010\u2011\u2012\u2013_]+")
+_PHRASE_JOIN = r"[\s\-\u2010\u2011\u2012\u2013_]*"
+_URL_PREFIX_TERMS = frozenset({"http", "https", "www", "www."})
+_SHORT_SUFFIX = r"(?:s|ng|['\u2019](?:s|ng))?"
+_LONG_SUFFIX = r"(?:es|s|d|ed|ing|al|ers|er|ng|['\u2019](?:s|ng))?"
+_PHRASE_RE_CACHE: Dict[str, Any] = {}
+
+
+def _phrase_char_re(prev: str, ch: str) -> str:
+    """单字符 → 正则片段；与前一字符之间按旧口径容忍空白（宽字符/CJK 两侧）。"""
+    if ch in "'\u2019`":
+        piece = "['\u2019`]?"
+    else:
+        piece = re.escape(ch)
+    if prev and (_WIDE_CH_RE.match(prev) or _WIDE_CH_RE.match(ch)):
+        return r"\s*" + piece
+    return piece
+
+
+def _phrase_regex(phrase: str) -> Any:
+    """禁词 → 编译好的词边界正则；不含拉丁字母 → ``None``（走子串）；空 → ``False``。"""
+    key = str(phrase or "")
+    if key in _PHRASE_RE_CACHE:
+        return _PHRASE_RE_CACHE[key]
+    rx: Any = False
+    try:
+        p = key.strip()
+        prefix_wild = p.endswith("*") and len(p) > 1
+        suffix_wild = p.startswith("*") and len(p) > 1
+        p = p.strip("*").strip()
+        if not p:
+            rx = False
+        elif not _LATIN_LETTER_RE.search(p):
+            rx = None
+        else:
+            tokens = [t for t in _PHRASE_TOKEN_SEP_RE.split(p) if t]
+            parts: List[str] = []
+            for tok in tokens:
+                buf, prev = [], ""
+                for ch in tok:
+                    buf.append(_phrase_char_re(prev, ch))
+                    prev = ch
+                parts.append("".join(buf))
+            body = _PHRASE_JOIN.join(parts)
+            first, last = p[0], p[-1]
+            left = ("(?<![" + _LATIN_CLS + "])"
+                    if _LATIN_WORDCH_RE.match(first) and not suffix_wild else "")
+            if suffix_wild:
+                # 「*foo」：命中整词（前面的字母一并吃掉，退化抹词不留半截词）
+                left = "(?<![" + _LATIN_CLS + "])[" + _LATIN_CLS + "]*"
+            right = ""
+            if p.lower() in _URL_PREFIX_TERMS:
+                # URL 片段：吃掉整个链接 token（https://… / www.…），抹词不留「s://x.y」
+                right = r"[^\s<>\"'，。！？]*"
+            elif prefix_wild:
+                right = "[" + _LATIN_CLS + "]*"
+            elif _LATIN_WORDCH_RE.match(last):
+                suffix = ""
+                if _LATIN_LETTER_RE.match(last):
+                    last_tok = tokens[-1] if tokens else p
+                    suffix = _LONG_SUFFIX if len(last_tok) >= 4 else _SHORT_SUFFIX
+                right = suffix + "(?![" + _LATIN_CLS + "])"
+            rx = re.compile(left + body + right, re.I)
+    except Exception:
+        rx = None   # 编译失败退回旧子串口径（宁可多拦不可漏拦）
+    if len(_PHRASE_RE_CACHE) < 4096:
+        _PHRASE_RE_CACHE[key] = rx
+    return rx
+
+
+def _phrase_hits(text: str, phrases: List[str]) -> List[str]:
+    """``text``（原文，不预先归一化）中命中的禁词清单。"""
     out: List[str] = []
-    for p in phrases:
-        np = _norm(p)
-        if np and np in haystack_norm:
+    s = str(text or "")
+    if not s:
+        return out
+    norm: Optional[str] = None
+    for p in phrases or []:
+        rx = _phrase_regex(p)
+        if rx is False:
+            continue
+        if rx is None:
+            if norm is None:
+                norm = _norm(s)
+            np = _norm(p)
+            if np and np in norm:
+                out.append(p)
+        elif rx.search(s):
             out.append(p)
     return out
+
+
+def match_forbidden_phrases(text: str, phrases: List[str]) -> List[str]:
+    """公共入口：按本模块口径（拉丁词边界 / CJK 子串）返回命中的禁词。
+
+    供 player_care / story_matrix 等域、监控与评测复用同一实现，防第二套匹配漂移。
+    """
+    try:
+        return _phrase_hits(text, [str(p) for p in (phrases or []) if str(p).strip()])
+    except Exception:
+        return []
+
+
+def _strip_phrase_inline(text: str, phrase: str) -> str:
+    """退化路径的行内抹词：拉丁禁词只删整词（绝不在词中间挖字母），CJK 同旧版。"""
+    rx = _phrase_regex(phrase)
+    if rx is False:
+        return text
+    if rx is None:
+        return re.sub(re.escape(phrase), "", text, flags=re.I)
+    out = rx.sub("", text)
+    if out != text:
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r"[ \t]+([,.!?;:，。！？；：])", r"\1", out)
+    return out
+
+
+# honest_identity 模式下豁免的「单个身份名词」（归一化：去空白/句点、小写）。
+# 只收名词本身；「tao ako / I'm a real person」这类声明式短语不在此列，照常生效。
+_BARE_IDENTITY_TERMS = frozenset({
+    "ai", "ais", "artificialintelligence", "bot", "bots", "robot", "robots",
+    "chatbot", "chatbots", "languagemodel", "llm", "assistant", "aiassistant",
+    "virtualassistant", "machine", "program", "automated", "automation",
+    "human", "humans", "humanbeing", "person", "realperson", "realhuman",
+    "realpeople", "actualperson", "totoongtao", "tunaynatao", "tao", "tawo",
+    "tinuodngatawo", "makina",
+    "机器人", "人工智能", "智能助手", "ai助手", "ai助理", "语言模型", "大模型",
+    "聊天机器人", "真人", "活人", "程序", "機器人", "語言模型", "聊天機器人",
+    "बॉट", "रोबोट", "एआई", "इंसान",
+})
+
+
+# 诚实档下同样豁免的「如实自认」短语（人设包里常见的 "I'm a bot"、"AI ako"）——
+# 它们说的是真话，留着只会剥掉如实回答。否定式（I'm not a bot）不在此列。
+_HONEST_SELF_ADMISSION_RE = re.compile(
+    r"^\s*(?:i(?:['\u2019]?m|\s+am)\s+(?:just\s+)?(?:a|an)\s+(?:bot|chatbot|robot|"
+    r"ai(?:\s+assistant)?|virtual\s+assistant|assistant)|(?:ai|bot|robot|chatbot)"
+    r"(?:\s+assistant)?\s+(?:lang\s+)?ako|我是(?:个|一个)?(?:机器人|聊天机器人|AI助手|AI助理))"
+    r"\s*[.!。！]?\s*$", re.I)
+
+
+def _is_bare_identity_term(phrase: str) -> bool:
+    k = re.sub(r"[\s.\-_'\u2019]+", "", str(phrase or "")).lower()
+    if bool(k) and k in _BARE_IDENTITY_TERMS:
+        return True
+    return bool(_HONEST_SELF_ADMISSION_RE.match(str(phrase or "")))
+
+
+# ── 冒充真人声明（P0-5，honest_identity 合规模式专用，无条件生效）──────────────
+# 诚实档里「被真诚问到时如实说是 AI 助手」是硬口径；与之矛盾的「我是真人 / tao ako /
+# I'm a real person / I'm not a bot / hindi ako bot」必须剥——不依赖人设禁词配置。
+# 否定（「hindi ako totoong tao」「I'm not a real person」）是如实披露，不命中。
+_HUMAN_CLAIM_PATTERNS = [
+    re.compile(r"\bi(?:['\u2019]?m|\s+am)\s+(?:(?:just|really|totally|definitely|actually|"
+               r"also|still|literally)\s+)?(?:(?:a|an)\s+)?(?:real|actual|genuine|living|"
+               r"flesh[- ]and[- ]blood|normal)\s+(?:person|human(?:\s+being)?|guy|girl|man|"
+               r"woman|people)\b", re.I),
+    re.compile(r"\bi(?:['\u2019]?m|\s+am)\s+(?:(?:just|only|also|still|totally|definitely|"
+               r"really|actually)\s+)?(?:a\s+)?human(?:\s+being)?\b"
+               r"(?!\s+(?:assistant|support|team|agent|staff|operator))", re.I),
+    re.compile(r"\bi(?:['\u2019]?m|\s+am)\s+(?:definitely\s+|really\s+|totally\s+)?not\s+"
+               r"(?:a\s+|an\s+)?(?:bot|robot|ai|a\.i\.?|chatbot|machine|program|computer|"
+               r"language\s+model|artificial\s+intelligence)\b", re.I),
+    re.compile(r"\byou(?:['\u2019]re|\s+are)\s+(?:talking|chatting|speaking)\s+(?:to|with)\s+"
+               r"(?:a\s+)?(?:real|actual)\s+(?:person|human)\b", re.I),
+    # Tagalog / Taglish
+    re.compile(r"\b(?:totoong|tunay\s+na|real)\s+(?:tao|person|human)\s+(?:po\s+|naman\s+|"
+               r"talaga\s+|lang\s+)?(?:ako|'?to|ito)\b", re.I),
+    re.compile(r"\b(?:tao|human)\s+(?:po\s+|naman\s+|talaga\s+|lang\s+)?ako\b", re.I),
+    re.compile(r"(?<![A-Za-z])(?:hindi|di|'di)\s+(?:po\s+|naman\s+)?ako\s+(?:isang\s+)?"
+               r"(?:bot|robot|ai|a\.i\.?|chatbot|makina|machine|program)\b", re.I),
+    # Bisaya / Cebuano
+    re.compile(r"\b(?:tinuod\s+nga\s+)?tawo\s+(?:ra\s+|lang\s+|gyud\s+)?(?:ko|ako)\b", re.I),
+    re.compile(r"\bdili\s+(?:ko|ako)\s+(?:usa\s+ka\s+)?(?:bot|robot|ai|chatbot|makina)\b", re.I),
+    # 中文
+    re.compile(r"我(?:是|就是|可是|真的是|确实是|確實是)(?:个|一个|個|一個)?"
+               r"(?:真人|活人|真实的人|真實的人|真正的人)"),
+    re.compile(r"我(?:不是|才不是|并不是|並不是|又不是)(?:什么|什麼)?\s*(?:AI|ＡＩ|人工智能|"
+               r"机器人|機器人|聊天机器人|聊天機器人|机器|機器|程序|bot|语言模型|語言模型)", re.I),
+    # हिन्दी
+    re.compile(r"मैं\s*(?:एक\s*)?(?:असली\s*|सच्चा\s*|सच्ची\s*)?(?:इंसान|इन्सान|मनुष्य)\s*"
+               r"(?:हूँ|हूं|हु)"),
+    re.compile(r"मैं\s*(?:कोई\s*)?(?:बॉट|बोट|रोबोट|एआई|AI)\s*नहीं\s*(?:हूँ|हूं)", re.I),
+]
+_HUMAN_CLAIM_NEG_PREFIX_RE = re.compile(
+    r"(?:\b(?:hindi|di|dili|indi)\s+(?:po\s+|naman\s+|man\s+)?|不|没|沒)$", re.I)
+
+_HONEST_FALLBACK = {
+    "zh": "老实说我是 AI 助手，不过咱们可以接着聊～",
+    "hi": "सच कहूँ तो मैं एक AI सहायक हूँ — पर हम बात जारी रख सकते हैं।",
+    "tl": "Totoo lang, AI assistant ako ng team — pero kwentuhan pa rin tayo!",
+    "ceb": "Tinuod lang, AI assistant ko sa team — pero padayon ta sa istorya!",
+    "en": "Honestly, I'm an AI assistant for the team — but I'm happy to keep chatting!",
+}
+_TL_MARK_RE = re.compile(r"\b(?:ako|ka|ba|po|lang|ang|ng|mo|yung|naman|sige|tayo|kasi|"
+                         r"hindi|talaga|niyo|natin)\b", re.I)
+_CEB_MARK_RE = re.compile(r"\b(?:unsa|dili|kaayo|nimo|imong|gyud|lagi|diay|karon|"
+                          r"ikaw|tawo|nako)\b", re.I)
+
+
+def matches_human_claim(text: str) -> List[str]:
+    """文本中「冒充真人」声明片段（honest_identity 模式启用）；纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _HUMAN_CLAIM_PATTERNS:
+            for m in pat.finditer(s):
+                before = s[:m.start()]
+                if _HUMAN_CLAIM_NEG_PREFIX_RE.search(before):
+                    continue
+                if (_PERCEPTION_PREFIX_RE.search(before)
+                        or _EN_PERCEPTION_PREFIX_RE.search(before.rstrip())):
+                    continue
+                out.append(m.group(0))
+                break
+    except Exception:
+        return []
+    return out
+
+
+def _honest_identity_fallback(text: str) -> str:
+    s = str(text or "")
+    if _CJK_RE.search(s):
+        return _HONEST_FALLBACK["zh"]
+    if re.search("[\u0900-\u097f]", s):
+        return _HONEST_FALLBACK["hi"]
+    ceb = len(_CEB_MARK_RE.findall(s))
+    tl = len(_TL_MARK_RE.findall(s))
+    if ceb and ceb >= tl:
+        return _HONEST_FALLBACK["ceb"]
+    if tl:
+        return _HONEST_FALLBACK["tl"]
+    return _HONEST_FALLBACK["en"]
 
 
 def _matches_ai_self_id(text: str) -> List[str]:
@@ -661,7 +911,7 @@ def find_violations(
     fb = collect_forbidden(
         persona, honest_identity=honest_identity,
         foreign_products=foreign_products, service_frame=service_frame)
-    hits = _matches_phrase(_norm(text), fb["phrases"])
+    hits = _phrase_hits(text, fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
         hits.extend(matches_capability_leak(text))
@@ -672,7 +922,9 @@ def find_violations(
     if fb.get("service_frame"):
         hits.extend(matches_service_frame(text))
     if fb.get("foreign_products"):
-        hits.extend(_matches_phrase(_norm(text), fb["foreign_products"]))
+        hits.extend(_phrase_hits(text, fb["foreign_products"]))
+    if fb.get("human_claim"):
+        hits.extend(matches_human_claim(text))
     return hits
 
 
@@ -688,7 +940,7 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
-    if _matches_phrase(_norm(sentence), fb["phrases"]):
+    if _phrase_hits(sentence, fb["phrases"]):
         return True
     if fb["deny_ai"] and (_matches_ai_self_id(sentence)
                           or matches_capability_leak(sentence)):
@@ -700,8 +952,10 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
         return True
     if fb.get("service_frame") and matches_service_frame(sentence):
         return True
-    if fb.get("foreign_products") and _matches_phrase(
-            _norm(sentence), fb["foreign_products"]):
+    if fb.get("foreign_products") and _phrase_hits(
+            sentence, fb["foreign_products"]):
+        return True
+    if fb.get("human_claim") and matches_human_claim(sentence):
         return True
     return False
 
@@ -728,6 +982,7 @@ def sanitize(
     if (not fb["phrases"] and not fb["deny_ai"]
             and not fb.get("retired_terms") and not fb.get("peer_leak")
             and not fb.get("service_frame")
+            and not fb.get("human_claim")
             and not fb.get("foreign_products")):
         return text, []
     violations = find_violations(
@@ -744,10 +999,13 @@ def sanitize(
         # 「my assistant will」「account details」剩下的是残句）。
         if fb.get("service_frame") and matches_service_frame(text):
             return _service_frame_fallback(text), violations
+        # P0-5：诚实档整段都是冒充真人声明 → 如实披露兜底，绝不回退原文（回退＝冒充出站）。
+        if fb.get("human_claim") and matches_human_claim(text):
+            return _honest_identity_fallback(text), violations
         cleaned = text
         for p in list(fb["phrases"]) + list(fb.get("foreign_products") or []):
             if p:
-                cleaned = re.sub(re.escape(p), "", cleaned, flags=re.I)
+                cleaned = _strip_phrase_inline(cleaned, p)
         cleaned = cleaned.strip()
         # 子句级降级（2026-08-04 真机实测缺口）：单句回复（只有逗号）里
         # 「刚下课～我家猫特别黏人，你吃了吗？」——句级剥离把整段删光 →
@@ -762,12 +1020,12 @@ def sanitize(
                 cleaned = c2
         if not cleaned:
             # #145③：他人设产品名剥空不得回退原文（回退＝串味出站）。
-            if fb.get("foreign_products") and _matches_phrase(
-                    _norm(text), fb["foreign_products"]):
+            if fb.get("foreign_products") and _phrase_hits(
+                    text, fb["foreign_products"]):
                 return _foreign_product_fallback(text), violations
             return text, violations
     if (fb.get("foreign_products")
-            and _matches_phrase(_norm(text), fb["foreign_products"])
+            and _phrase_hits(text, fb["foreign_products"])
             and not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", cleaned or "")):
         return _foreign_product_fallback(text), violations
     return cleaned, violations
