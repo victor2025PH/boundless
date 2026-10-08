@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any, Dict, List
 
@@ -306,24 +307,70 @@ def _notif_content_ok(evt: dict, config: dict | None = None) -> bool:
 
 
 #: 同一会话 unclaimed 升级告警的冷却（P1-1，2026-10-08）：落库（store.record_escalation
-#: dedup_sec）与每条 SSE 连接的推帧都按它节流——1 小时内同会话最多 1 条。
+#: dedup_sec）与 SSE 推帧都按它节流——1 小时内同会话最多 1 次告警。
 UNCLAIMED_ALERT_COOLDOWN_SEC = 3600.0
 
 
-def _esc_alert_allowed(last_emit: dict, cid: str, reason: str, now: float,
-                       cooldown_sec: float = UNCLAIMED_ALERT_COOLDOWN_SEC) -> bool:
-    """本连接是否推这条升级帧（纯函数，原地记账）：unclaimed 同会话冷却期内只推一次；
-    其他原因（holder_offline / holder_quiet）不节流，保持原语义。"""
-    if str(reason or "") != "unclaimed":
+class EscalationAlertLedger:
+    """进程级升级告警账本（二批④，2026-10-08）：unclaimed 告警**全局**每会话每小时只发生一次。
+
+    之前每条 SSE 连接各记各的账：开 N 个标签页/N 个坐席各自在自己的 30s 心跳上判边沿、
+    各推一次；断线重连后账清零，同一会话在冷却期内又被推一遍。现在：
+
+    - 第一条判到边沿的连接在账本里**开一次告警**（cid → (发生时刻, 序号)）；冷却期内
+      其他连接判到同一会话不再开新告警；
+    - 告警发生时**已在线**的连接各收一份（每连接每次告警至多一份，按序号去重）——
+      铃铛/定向指派（assigned_to）要靠在线坐席看到，不能只推给碰巧先判到的那一条；
+    - 告警发生**之后**才建立的连接（重连、新开标签页）不补推：别处已经推过了；
+    - holder_offline / holder_quiet 不节流，保持原语义。
+
+    单进程内存账本；跨进程/重启的去重由 store.record_escalation(dedup_sec) 落库兜底。
+    """
+
+    def __init__(self, cooldown_sec: float = UNCLAIMED_ALERT_COOLDOWN_SEC, cap: int = 4096):
+        self.cooldown_sec = float(cooldown_sec)
+        self.cap = int(cap)
+        self._lock = threading.Lock()
+        self._events: Dict[str, tuple] = {}
+        self._seq = 0
+
+    def allow(self, cid: str, reason: str, now: float, *, conn_started: float,
+              delivered: Dict[str, int]) -> bool:
+        """本连接是否推这条升级帧。``delivered`` 是本连接的「已推序号」小账（原地记）。"""
+        if str(reason or "") != "unclaimed":
+            return True
+        now = float(now)
+        with self._lock:
+            ev = self._events.get(cid)
+            if ev is None or now - ev[0] >= self.cooldown_sec:
+                self._seq += 1
+                ev = (now, self._seq)
+                self._events[cid] = ev
+                if len(self._events) > self.cap:
+                    cutoff = now - self.cooldown_sec
+                    for k in [k for k, v in self._events.items() if v[0] < cutoff]:
+                        self._events.pop(k, None)
+                    if len(self._events) > self.cap:
+                        for k in sorted(self._events, key=lambda k: self._events[k][0])[: len(self._events) - self.cap]:
+                            self._events.pop(k, None)
+        ts, seq = ev
+        if delivered.get(cid) == seq:
+            return False
+        if ts < float(conn_started):
+            return False
+        delivered[cid] = seq
+        if len(delivered) > 2048:  # 软上限：长连接不无限涨
+            for k in list(delivered)[:1024]:
+                delivered.pop(k, None)
         return True
-    last = float(last_emit.get(cid) or 0.0)
-    if last and now - last < float(cooldown_sec):
-        return False
-    last_emit[cid] = float(now)
-    if len(last_emit) > 2048:  # 软上限：长连接不无限涨
-        for _k in sorted(last_emit, key=last_emit.get)[:1024]:
-            last_emit.pop(_k, None)
-    return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._events.clear()
+
+
+#: 进程内唯一账本，所有 SSE 连接共用。
+ESC_ALERT_LEDGER = EscalationAlertLedger()
 
 
 def _edge_pick(items: list, seen: set) -> list:
@@ -428,7 +475,8 @@ def register_realtime_routes(app, *, api_auth) -> None:
             return frames
 
         _esc_seen: set = set()
-        _esc_last_emit: Dict[str, float] = {}
+        _esc_delivered: Dict[str, int] = {}
+        _conn_started = time.time()
 
         def _pick_assigned_supervisor(inbox) -> str:
             """负载均衡：从在线主管中选当前指派数最少的那个。
@@ -507,9 +555,10 @@ def register_realtime_routes(app, *, api_auth) -> None:
                         except Exception:
                             logger.debug("升级审计落库失败（已忽略）", exc_info=True)
                     if emit:
-                        if not _esc_alert_allowed(
-                                _esc_last_emit, cid, str(it.get("reason") or ""), time.time()):
-                            continue  # P1-1：unclaimed 同会话 1 小时内本连接只推一次
+                        if not ESC_ALERT_LEDGER.allow(
+                                cid, str(it.get("reason") or ""), time.time(),
+                                conn_started=_conn_started, delivered=_esc_delivered):
+                            continue  # unclaimed 同会话 1 小时全局一次告警；告警前已在线的连接各一份
                         payload = dict(it)
                         payload["assigned_to"] = assigned_to
                         frames.append(
