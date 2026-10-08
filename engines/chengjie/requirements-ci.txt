@@ -30,3 +30,13 @@ pytest-timeout>=2.1.0  # CI 挂起保护。本地 scripts/regression.ps1 一直�
 numpy>=1.26  # tests/test_reference_audit.py 顶层 import numpy。本机开发环境自带，CI 精简环境没有
              # → 2026-08-28 CI 首次真跑即 collect 中断（1 error），整个回归一条都没跑。
              # 这正是「工作流放错目录、从未执行」被掩盖住的那类缺口。
+# 2026-10-08 CI 基线转绿（智核）：以下均为 requirements.txt 已声明的运行时依赖，CI 精简环境漏装
+# → 相关测试在 CI 恒红（约 60 条）。都是纯 Python / 有 wheel 的小包，不含 torch/whisper 级大件。
+pyrogram>=2.0.0  # tests/test_telegram_*：TG 协议轨 import pyrogram.raw / errors
+okline>=2.7.0  # tests/test_line_*：LINE 协议登录/同步
+ruamel.yaml>=0.18.0  # config_manager 保注释写入 / deploy/compute；缺失时 tenant_lifecycle 拒绝降级整写
+emoji>=2.12.0  # tests/test_reaction_followup_phase4.py 纯表情 demojize
+brotli>=1.1.0  # tests/test_compression_middleware.py br 优先
+opencc-python-reimplemented>=0.1.7  # 繁简归一 CER（test_asr_eval / test_synth_verify）
+websockets>=12.0  # uvicorn 无 WS 库时把 /ws/device 升级请求当 404（test_relay_client / test_wechat_e2e_parity）
+qrcode>=7.4  # 扫码二维码渲染（wechat_kf/line/assistant_pair/translate 共 5 处）；见 requirements.txt 补声明
