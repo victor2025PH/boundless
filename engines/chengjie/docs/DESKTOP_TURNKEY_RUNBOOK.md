@@ -130,10 +130,13 @@ npm run build:backend     # PyInstaller + 安装版后端烟测（约 9 分钟�
 npm run dist:win          # electron-builder；afterPack 会核对随包交付物
 ```
 
-两道门禁会拦住漏件，不必靠人 review：
+三道门禁会拦住漏件，不必靠人 review：
 
-- `tests/test_desktop_seed_deliverable.py`（源码侧）：种子里开了的每个方式必须①本系统
-  真实现了②依赖真在包里；另钉住端口漂移、随包浏览器缺失、明文令牌、托管链被关。
+- `tests/test_desktop_seed_deliverable.py`（源码侧，CI 常驻）：种子里开了的每个方式必须①本系统
+  真实现了②依赖已声明随包（源码/lock 在仓、extraResources、requirements）；另钉住端口漂移、
+  明文令牌、托管链被关，以及下一条门禁确实接进了每条打包链。
+- `desktop/build/seed_deliverable_gate.py`（构建机侧，`predist*` 里紧跟 edition 门禁）：
+  `services/*/node_modules` 与随包 headed Chromium 必须真在构建机上，缺件即**打包中止**。
 - `desktop/build/after-pack.js`（产物侧）：装包打完核对 `resources/` 真有边车与 Chromium，
   缺件即**打包失败**；同时拦住把本机生产号的 `sessions/`、`logs/` 打进公开安装包。
 

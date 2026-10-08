@@ -15,7 +15,14 @@ Messenger」，每一种扫码方式都灰着显示「未启用 / 需运维配�
   以为是自己没配对。
 
 故本门禁钉住一条不变量：**种子里出现的每一个非 device 方式，都必须 ①本系统真的
-实现了 ②它的运行时依赖真的在安装包里**。纯文件读取，不需要先打包，CI 常驻。
+实现了 ②它的运行时依赖真的在安装包里**。
+
+分工（2026-10-08 蛋博士定，CI 基线 R7）：「依赖真在构建机上」（services/*/node_modules、
+随包兜底 Chromium）只有打包流水线才有意义——CI 检出里天然没有，在 CI 查只会恒红。
+该判据整体迁到 ``desktop/build/seed_deliverable_gate.py``，在每个 ``predist*`` 里紧跟
+edition 门禁以 bundle 档执行（缺件 → 退出码 1，打包中止；产物侧 after-pack.js 再核一遍）。
+本文件 CI 常驻部分只查**声明与清单**（同一张判据表的 declared 档），并钉住
+「门禁真接进了每条打包链」「bundle 档缺件真的会拦」，保证迁移不削弱拦截力度。
 """
 
 from __future__ import annotations
@@ -36,91 +43,17 @@ SIDECAR_LAUNCHER = ENGINE_ROOT / "desktop" / "sidecar-launcher.js"
 REQUIREMENTS = ENGINE_ROOT / "requirements.txt"
 BUILD_BACKEND = ENGINE_ROOT / "desktop" / "build" / "build_backend.py"
 
-#: 每个非 device 方式的「运行时依赖在不在包里」判据。
-#: 值 = (人话描述, 判定函数)。判定函数返回空串＝依赖齐备，否则返回缺什么。
-#:
-#: 刻意按「安装包里有没有」判，而不是按「本机装了没有」——本机装了不代表客户装了，
-#: 那正是这类事故能长期潜伏的原因。
+GATE_PATH = ENGINE_ROOT / "desktop" / "build" / "seed_deliverable_gate.py"
 
 
-def _wa_baileys_bundled() -> str:
-    """WhatsApp 协议边车：源码 + 依赖在仓库里，且 electron-builder 声明随包。"""
-    svc = ENGINE_ROOT / "services" / "whatsapp-baileys"
-    if not (svc / "server.js").is_file():
-        return "services/whatsapp-baileys/server.js 不存在"
-    if not (svc / "node_modules").is_dir():
-        return ("services/whatsapp-baileys/node_modules 不存在——打包前须先 "
-                "`cd services/whatsapp-baileys && npm ci`，否则边车随包后必 MODULE_NOT_FOUND")
-    pkg = json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))
-    extra = ((pkg.get("build") or {}).get("extraResources") or [])
-    declared = any("whatsapp-baileys" in str(e.get("to") or e.get("from") or "")
-                   for e in extra if isinstance(e, dict))
-    if not declared:
-        return "desktop/package.json 的 build.extraResources 没声明 whatsapp-baileys（不会进安装包）"
-    return ""
+def _gate():
+    """按路径加载打包门禁模块（desktop/build 不是包）。"""
+    import importlib.util
 
-
-def _messenger_web_bundled() -> str:
-    """Messenger 托管登录：边车源码 + 依赖 + **兜底浏览器**齐备，且声明随包。
-
-    浏览器这一项单独查：服务默认走系统真 Chrome，客户机没装 Chrome 时才回落随包
-    Chromium。若连随包 Chromium 都没有（`playwright install` 没在构建机跑过），
-    那些没装 Chrome 的机器就是「点了登录、浏览器起不来」——而这在我们这台装了
-    Chrome 的开发机上永远复现不出来。
-    """
-    svc = ENGINE_ROOT / "services" / "messenger-web"
-    if not (svc / "server.js").is_file():
-        return "services/messenger-web/server.js 不存在"
-    if not (svc / "node_modules").is_dir():
-        return ("services/messenger-web/node_modules 不存在——打包前须先 "
-                "`cd services/messenger-web && npm ci`")
-    browsers = svc / "node_modules" / "playwright-core" / ".local-browsers"
-    # `chromium-*` 只匹配完整（可 headed）构建；headless shell 是 chromium_headless_shell-*
-    # （下划线），刻意不算——桌面登录是人工交互，要的是能显示窗口的那个。
-    if not browsers.is_dir() or not any(browsers.glob("chromium-*")):
-        return ("随包兜底 Chromium 缺失——打包前须在构建机跑 "
-                "`cd services/messenger-web && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright "
-                "install chromium`（Windows 用 `$env:PLAYWRIGHT_BROWSERS_PATH='0'`）。"
-                "缺了它，没装 Chrome 的客户机点登录后浏览器起不来")
-    pkg = json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))
-    extra = ((pkg.get("build") or {}).get("extraResources") or [])
-    declared = any("messenger-web" in str(e.get("to") or e.get("from") or "")
-                   for e in extra if isinstance(e, dict))
-    if not declared:
-        return "desktop/package.json 的 build.extraResources 没声明 messenger-web（不会进安装包）"
-    return ""
-
-
-def _line_okline_bundled() -> str:
-    """LINE 协议需 okline；它在 requirements.txt 里是**注释掉的**可选项。"""
-    txt = REQUIREMENTS.read_text(encoding="utf-8", errors="replace")
-    active = [ln for ln in txt.splitlines()
-              if re.match(r"^\s*okline\b", ln)]
-    if not active:
-        return ("okline 未在 requirements.txt 启用（当前是注释行）→ 不会装进打包环境，"
-                "LINE 协议方式在安装版恒不可用。它是逆向库、违反 LINE ToS 且有封号风险，"
-                "是否随包分发属产品/法务决策")
-    return ""
-
-
-def _telegram_protocol_bundled() -> str:
-    """Telegram 协议：pyrogram 随包 + 中央凭据池瘦客户端随包（否则用户被逼自己申请 api_id）。"""
-    txt = REQUIREMENTS.read_text(encoding="utf-8", errors="replace")
-    if not any(re.match(r"^\s*pyrogram\b", ln) for ln in txt.splitlines()):
-        return "pyrogram 未在 requirements.txt 启用"
-    build = BUILD_BACKEND.read_text(encoding="utf-8", errors="replace")
-    if "credpool" not in build:
-        return ("desktop/build/build_backend.py 没把 platform/credpool 打进包 → 中央池静默失效，"
-                "用户被逼去 my.telegram.org 自己申请 api_id")
-    return ""
-
-
-DELIVERABILITY = {
-    ("telegram", "protocol"): _telegram_protocol_bundled,
-    ("whatsapp", "protocol"): _wa_baileys_bundled,
-    ("messenger", "web"): _messenger_web_bundled,
-    ("line", "protocol"): _line_okline_bundled,
-}
+    spec = importlib.util.spec_from_file_location("seed_deliverable_gate", GATE_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _seed() -> dict:
@@ -166,27 +99,93 @@ def test_seed_modes_are_implemented():
         "而不是留给用户猜是不是自己没配对")
 
 
-def test_seed_modes_dependencies_are_bundled():
-    """种子列出的每个非 device 方式，其运行时依赖必须真在安装包里。"""
-    problems = []
-    for platform, pcfg in _seed_platform_login().items():
-        if not isinstance(pcfg, dict):
-            continue
-        for mode in (pcfg.get("modes") or []):
-            if mode == "device":
-                continue
-            checker = DELIVERABILITY.get((platform, mode))
-            if checker is None:
-                problems.append(
-                    f"{platform}/{mode}：本门禁没有它的「依赖在不在包里」判据，"
-                    "请在 DELIVERABILITY 里补一条（新方式进种子必须同时补判据）")
-                continue
-            why = checker()
-            if why:
-                problems.append(f"{platform}/{mode}：{why}")
+def test_seed_modes_dependencies_are_declared():
+    """种子列出的每个非 device 方式：有判据、源码在仓、随包已声明、Python 依赖已启用。
+
+    （「依赖真装在构建机上」由打包门禁 bundle 档在 predist 里拦，见下两条。）
+    """
+    problems = _gate().check("declared")
     assert not problems, (
-        "种子开了方式但交付物不在安装包里（用户点下去会等来 service_down）：\n  - "
+        "种子开了方式但交付物声明不全（用户点下去会等来 service_down）：\n  - "
         + "\n  - ".join(problems))
+
+
+#: 产出安装包的打包链（mac 链目前不跑任何 python 门禁，产物侧由 after-pack.js 兜）
+_PACKAGING_PREDIST = ("predist", "predist:win", "predist:win:clean", "predist:win:lite",
+                      "predist:win:public", "predist:win:internal")
+
+
+def test_bundle_gate_wired_into_every_packaging_chain():
+    """每条 Windows 打包链的 predist 都必须以 bundle 档（默认档）跑本门禁，且排在
+    electron-builder 之前、紧跟 edition 门禁（无 edition 门禁的链紧跟后端新鲜度检查）。"""
+    scripts = (json.loads(DESKTOP_PKG.read_text(encoding="utf-8")).get("scripts") or {})
+    bad = []
+    for name in _PACKAGING_PREDIST:
+        cmd = str(scripts.get(name) or "")
+        steps = [x.strip() for x in cmd.split("&&")]
+        hit = [k for k, st in enumerate(steps) if "build/seed_deliverable_gate.py" in st]
+        if len(hit) != 1:
+            bad.append(f"{name}：应恰好调用一次 build/seed_deliverable_gate.py（现 {len(hit)} 次）")
+            continue
+        st = steps[hit[0]]
+        if "--declared" in st:
+            bad.append(f"{name}：打包链不得用 --declared（那是 CI 档，会放过缺 node_modules/Chromium）")
+        anchor = [k for k, x in enumerate(steps) if "build/edition_gate.py" in x] or \
+                 [k for k, x in enumerate(steps) if "build/check_backend_freshness.py" in x]
+        if not anchor or hit[0] != anchor[-1] + 1:
+            bad.append(f"{name}：门禁应紧跟 edition 门禁/后端新鲜度检查之后")
+    assert not bad, "打包门禁接线不全：\n  - " + "\n  - ".join(bad)
+
+
+def test_bundle_gate_blocks_missing_node_modules_and_chromium(tmp_path):
+    """bundle 档拦截力度不低于迁移前的 CI 判据：缺 node_modules / 缺 headed Chromium 必拦，
+    齐备才放行；declared 档对同一棵树放行（CI 不因构建产物缺席恒红）。"""
+    import shutil
+
+    gate = _gate()
+    root = tmp_path / "eng"
+    (root / "config").mkdir(parents=True)
+    (root / "desktop" / "build").mkdir(parents=True)
+    shutil.copy(SEED, root / "config" / SEED.name)
+    shutil.copy(DESKTOP_PKG, root / "desktop" / "package.json")
+    shutil.copy(REQUIREMENTS, root / "requirements.txt")
+    shutil.copy(BUILD_BACKEND, root / "desktop" / "build" / "build_backend.py")
+    for name in ("whatsapp-baileys", "messenger-web"):
+        svc = root / "services" / name
+        svc.mkdir(parents=True)
+        (svc / "server.js").write_text("//", encoding="utf-8")
+        (svc / "package-lock.json").write_text("{}", encoding="utf-8")
+    pl = {"enabled": True,
+          "whatsapp": {"modes": ["device", "protocol"]},
+          "messenger": {"modes": ["device", "web"]}}
+
+    assert gate.check("declared", root=root, platform_login=pl) == []
+    miss = gate.check("bundle", root=root, platform_login=pl)
+    assert any("whatsapp-baileys/node_modules" in x for x in miss), miss
+    assert any("messenger-web/node_modules" in x for x in miss), miss
+
+    for name in ("whatsapp-baileys", "messenger-web"):
+        (root / "services" / name / "node_modules").mkdir()
+    browsers = root / "services" / "messenger-web" / "node_modules" / "playwright-core" / ".local-browsers"
+    browsers.mkdir(parents=True)
+    (browsers / "chromium_headless_shell-1200").mkdir()   # 无头版不算
+    miss = gate.check("bundle", root=root, platform_login=pl)
+    assert len(miss) == 1 and "Chromium" in miss[0], miss
+
+    (browsers / "chromium-1200").mkdir()
+    assert gate.check("bundle", root=root, platform_login=pl) == []
+    assert gate.main(["--root", str(root)]) in (0, 1)   # CLI 可跑（真树结果取决于种子）
+
+
+def test_gate_has_checker_for_every_seed_mode():
+    """新方式进种子必须同时在门禁判据表里补一条（否则 bundle 档会报「无判据」中止打包）。"""
+    gate = _gate()
+    missing = sorted(
+        f"{plat}/{mode}"
+        for plat, pcfg in _seed_platform_login().items() if isinstance(pcfg, dict)
+        for mode in (pcfg.get("modes") or [])
+        if mode != "device" and (plat, mode) not in gate.DELIVERABILITY)
+    assert not missing, f"门禁 DELIVERABILITY 缺判据：{missing}"
 
 
 def test_protocol_enabled_implies_mode_listed():
