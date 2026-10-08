@@ -466,7 +466,8 @@ class VoiceCloneClient:
         返回 True 表示本次已发起触发；False 表示处于冷却中（已有一次在途）。
         """
         now = time.monotonic()
-        last = _LOAD_TRIGGER.get(self.base_url, 0.0)
+        # -inf 哨兵：monotonic 从开机起算，0.0 会让开机 <cooldown 秒内的第一次触发被当成冷却中
+        last = _LOAD_TRIGGER.get(self.base_url, float("-inf"))
         if now - last < self.load_cooldown_sec:
             return False
         _LOAD_TRIGGER[self.base_url] = now

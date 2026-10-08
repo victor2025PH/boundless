@@ -10547,7 +10547,8 @@ class MessengerRpaRunner:
         _mr_interval = float(
             self._cfg.get("message_request_check_interval_sec", 300) or 300
         )
-        _mr_last = self._mr_last_navigate.get(serial, 0.0)
+        # -inf 哨兵：monotonic 从开机起算，0.0 会让开机 <interval 秒内的首次检查被当成冷却中
+        _mr_last = self._mr_last_navigate.get(serial, float("-inf"))
         if now - _mr_last < _mr_interval:
             logger.info(
                 "[messenger_rpa] MR 冷却中 %.0fs 剩余 serial=%s",

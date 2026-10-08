@@ -1794,7 +1794,8 @@ class AvatarVoiceClient:
         if not task_name:
             return False
         now = time.monotonic()
-        last = _BOOT_TRIGGER.get(task_name, 0.0)
+        # -inf 哨兵：monotonic 从开机起算，0.0 会让刚开机时的第一次拉起被当成冷却中
+        last = _BOOT_TRIGGER.get(task_name, float("-inf"))
         if now - last < self.boot_cooldown_sec:
             return False
         _BOOT_TRIGGER[task_name] = now

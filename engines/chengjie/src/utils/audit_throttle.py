@@ -64,7 +64,9 @@ class AuditThrottle:
         if now is None:
             now = time.monotonic()
         with self._lock:
-            last = self._data.get(key, 0.0)
+            # 哨兵用 -inf 而非 0.0：monotonic 从开机起算，开机不足 window 秒时 0.0 会把
+            # 第一条也判成「窗口内」吞掉（智安 NOTES §7.3，CI 新 runner / 刚开机客户机必现）
+            last = self._data.get(key, float("-inf"))
             if now - last < self._window:
                 return False
             self._data[key] = now
@@ -91,7 +93,7 @@ class AuditThrottle:
         if now is None:
             now = time.monotonic()
         with self._lock:
-            last = self._data.get(key, 0.0)
+            last = self._data.get(key, float("-inf"))
             return (now - last) >= self._window
 
     def remaining_sec(self, key: Hashable, now: float | None = None) -> float:
@@ -102,8 +104,8 @@ class AuditThrottle:
         if now is None:
             now = time.monotonic()
         with self._lock:
-            last = self._data.get(key, 0.0)
-            if last <= 0.0:
+            last = self._data.get(key)
+            if last is None:
                 return 0.0
             remaining = self._window - (now - last)
             return max(0.0, remaining)
