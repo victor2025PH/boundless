@@ -135,3 +135,74 @@ def test_main_cli_with_instance_root(tmp_path, capsys):
     assert mod.main(["--instance-root", str(root), "--json", "--window", "60"]) == 0
     out = capsys.readouterr().out
     assert "R4_autoreply_audit" in out and "SECRET-BODY" not in out
+
+# ── 名单读法与限速闸统一（2026-10-08）────────────────────────────────────
+
+GATE_CASES = [
+    (["7000000001"], "telegram", "7000000001", True),
+    (["telegram:7000000001"], "telegram", "7000000001", True),
+    (["whatsapp:7000000001"], "telegram", "7000000001", True),   # 闸的子串口径：裸 id ≥5 位也命中
+    (["telegram:<SCRIPT_TEST_ACCOUNT_ID>"], "telegram", "7000000001", False),  # 占位不匹配任何号
+    (["111"], "telegram", "111", True),
+    (["11"], "telegram", "111", False),
+    ([], "telegram", "7000000001", False),
+    (["telegram:7000000001"], "telegram", "", False),
+]
+
+
+@pytest.mark.parametrize("items,plat,acct,want", GATE_CASES)
+def test_matching_same_as_send_rate_gate(items, plat, acct, want):
+    mod = _load()
+    from src.compliance import send_rate_gate as g
+    assert mod.is_script_conversation(plat, acct, items) is want
+    assert mod.is_script_conversation(plat, acct, items, mod._builtin_match_list) is want
+    gate = bool(acct) and g._match_list(items, f"{plat}:{acct}", acct)
+    assert gate is want
+
+
+@pytest.mark.parametrize("entry", ["7000000001", "telegram:7000000001"])
+def test_r2_accepts_bare_and_platform_prefixed(tmp_path, entry):
+    mod = _load()
+    db, _ = _mk(tmp_path)
+    conn = mod.open_ro(str(db))
+    r = mod.preview(conn, window=60, script_accounts=[entry])
+    conn.close()
+    assert r["by_rule"]["R2_script_account"]["count"] == 1
+    assert r["script_accounts_n"] == 1 and "7000000001" not in mod._fmt("x", r)
+
+
+def test_resolve_order_same_as_gate(monkeypatch):
+    mod = _load()
+    from src.compliance import send_rate_gate as g
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:7000000001"]}}}
+    monkeypatch.delenv(mod.SCRIPT_ACCOUNTS_ENV, raising=False)
+    assert mod.resolve_script_accounts(None, cfg) == (["telegram:7000000001"], "config")
+    assert mod.resolve_script_accounts(None, cfg)[0] == g.script_accounts(cfg)
+    assert mod._builtin_script_accounts(cfg) == g.script_accounts(cfg)
+    assert mod.resolve_script_accounts(None, {}) == ([], "none")
+    monkeypatch.setenv(mod.SCRIPT_ACCOUNTS_ENV, "a2, telegram:7000000001")
+    assert mod.resolve_script_accounts(None, cfg) == (["a2", "telegram:7000000001"], "env")
+    assert mod._builtin_script_accounts(cfg) == g.script_accounts(cfg)
+    monkeypatch.setenv(mod.SCRIPT_ACCOUNTS_ENV, "")                     # 空串＝清空
+    assert mod.resolve_script_accounts(None, cfg) == ([], "env")
+    assert mod.resolve_script_accounts("7000000001", cfg) == (["7000000001"], "cli")
+
+
+def test_main_reads_script_accounts_from_config_overlay(tmp_path, capsys, monkeypatch):
+    mod = _load()
+    monkeypatch.delenv(mod.SCRIPT_ACCOUNTS_ENV, raising=False)
+    root = tmp_path / "inst"
+    (root / "data" / "config").mkdir(parents=True)
+    _mk(root / "data" / "config")
+    base = tmp_path / "config.yaml"
+    base.write_text("compliance:\n  send_rate_gate:\n    script_daily_cap: 20\n", encoding="utf-8")
+    overlay = tmp_path / "config.local.yaml"
+    overlay.write_text('compliance:\n  send_rate_gate:\n    script_accounts: ["telegram:7000000001"]\n',
+                       encoding="utf-8")
+    assert mod.main(["--instance-root", str(root), "--json", "--window", "60",
+                     "--config", str(base), "--config", str(overlay)]) == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    (r,) = out.values()
+    assert r["by_rule"]["R2_script_account"]["count"] == 1
+    assert r["script_accounts_source"] == "config" and r["matcher"] == "send_rate_gate"
