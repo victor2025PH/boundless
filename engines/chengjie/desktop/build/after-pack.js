@@ -319,6 +319,57 @@ const SEED_REQUIRED = [
   [path.join("assets", "voices"), "预渲染语音成品"],
 ];
 
+/** 公开包 / 内部包拆分门禁（智安 2026-10-08，editions.json 为单一清单源；Python 侧同逻辑在
+ *  build/edition_gate.py，CI 由 tests/compliance/test_edition_split_gate.py 钉住）。
+ *  · CHATX_FLAVOR=public 或 manifest.edition=public → 产物 seed-data 不得含内部清单项；
+ *  · CHATX_FLAVOR=public 但 manifest 不是 public（1.0.109「公开安装包带内部种子」形态）→ 拒；
+ *  · 内部包不受限。返回泄漏描述列表（并入 FORBIDDEN 同一出口，打包中止）。 */
+function editionLeaks(res) {
+  const out = [];
+  let policy = null;
+  try {
+    policy = JSON.parse(fs.readFileSync(path.join(__dirname, "editions.json"), "utf8"));
+  } catch (e) {
+    return ["  · build/editions.json 缺失或不可解析（公开/内部包清单源）"];
+  }
+  const seed = path.join(res, "seed-data");
+  let mf = null;
+  try { mf = JSON.parse(fs.readFileSync(path.join(seed, "seed-manifest.json"), "utf8")); } catch (e) { mf = null; }
+  const flavor = String(process.env.CHATX_FLAVOR || "");
+  const isPublic = flavor === "public" || (mf && mf.edition === "public");
+  if (!isPublic) return out;
+  if (flavor === "public" && fs.existsSync(seed) && !(mf && mf.edition === "public")) {
+    out.push("  · CHATX_FLAVOR=public 但 seed-data 不是公开包种子（先跑 npm run stage:public）");
+    return out;
+  }
+  const io = policy.internal_only || {};
+  const pub = (policy.editions || {}).public || {};
+  const asSet = (v) => new Set(Array.isArray(v) ? v.map(String) : []);
+  for (const key of ["personas", "voices", "switches"]) {
+    const bad = asSet(io[key]);
+    const allow = asSet(pub[key]);
+    for (const x of (mf && Array.isArray(mf[key]) ? mf[key] : [])) {
+      if (bad.has(String(x))) out.push(`  · 公开包 manifest.${key} 含内部清单项 ${x}`);
+      else if (!allow.has(String(x))) out.push(`  · 公开包 manifest.${key} 超出公开白名单 ${x}`);
+    }
+  }
+  for (const sp of io.seed_paths || []) {
+    if (fs.existsSync(path.join(seed, ...String(sp).split("/")))) {
+      out.push(`  · 公开包含内部专属种子 seed-data/${sp}`);
+    }
+  }
+  const badVoices = asSet(io.voices);
+  for (const sub of [["config", "voice_refs"], ["assets", "voices"]]) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(seed, ...sub)); } catch (e) { names = []; }
+    for (const n of names) {
+      if (badVoices.has(n.split(".")[0])) out.push(`  · 公开包含内部声音 seed-data/${sub.join("/")}/${n}`);
+    }
+  }
+  return out;
+}
+exports.editionLeaks = editionLeaks;
+
 exports.default = async function afterPack(context) {
   const res = resourcesDir(context);
   const missing = [];
@@ -368,7 +419,8 @@ exports.default = async function afterPack(context) {
     try {
       const mf = JSON.parse(fs.readFileSync(
         path.join(__dirname, "seed-data", "seed-manifest.json"), "utf8"));
-      if (mf && mf.profile === "lite" && Array.isArray(mf.omitted)) {
+      // 公开包（stage_edition_assets --edition public）同样显式声明 omitted（相册 / 资料库 / KB 不随包）
+      if (mf && (mf.profile === "lite" || mf.edition === "public") && Array.isArray(mf.omitted)) {
         omitted = new Set(mf.omitted.map((s) => String(s).replace(/\\/g, "/")));
       }
     } catch (e) { /* manifest 缺失/坏 → 按标准档全量断言（SEED_REQUIRED 自会点名） */ }
@@ -389,7 +441,7 @@ exports.default = async function afterPack(context) {
       missing.push(`  · 缺 ${dir}/${prefix}*（${what}）→ ${impact}`);
     }
   }
-  const leaked = [];
+  const leaked = editionLeaks(res);
   for (const [rel, what] of FORBIDDEN) {
     if (fs.existsSync(path.join(res, rel))) {
       leaked.push(`  · ${rel}（${what}）`);
