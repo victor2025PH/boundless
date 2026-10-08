@@ -305,6 +305,27 @@ def _notif_content_ok(evt: dict, config: dict | None = None) -> bool:
     return str(data.get("reason") or "") == "daily_budget"
 
 
+#: 同一会话 unclaimed 升级告警的冷却（P1-1，2026-10-08）：落库（store.record_escalation
+#: dedup_sec）与每条 SSE 连接的推帧都按它节流——1 小时内同会话最多 1 条。
+UNCLAIMED_ALERT_COOLDOWN_SEC = 3600.0
+
+
+def _esc_alert_allowed(last_emit: dict, cid: str, reason: str, now: float,
+                       cooldown_sec: float = UNCLAIMED_ALERT_COOLDOWN_SEC) -> bool:
+    """本连接是否推这条升级帧（纯函数，原地记账）：unclaimed 同会话冷却期内只推一次；
+    其他原因（holder_offline / holder_quiet）不节流，保持原语义。"""
+    if str(reason or "") != "unclaimed":
+        return True
+    last = float(last_emit.get(cid) or 0.0)
+    if last and now - last < float(cooldown_sec):
+        return False
+    last_emit[cid] = float(now)
+    if len(last_emit) > 2048:  # 软上限：长连接不无限涨
+        for _k in sorted(last_emit, key=last_emit.get)[:1024]:
+            last_emit.pop(_k, None)
+    return True
+
+
 def _edge_pick(items: list, seen: set) -> list:
     """SLA/升级边沿判定的单一口径：返回本轮「新转入」的 items，并原地维护 seen 集
     （补新边沿 + 剔除已恢复者——恢复后再次越线可再报）。
@@ -407,6 +428,7 @@ def register_realtime_routes(app, *, api_auth) -> None:
             return frames
 
         _esc_seen: set = set()
+        _esc_last_emit: Dict[str, float] = {}
 
         def _pick_assigned_supervisor(inbox) -> str:
             """负载均衡：从在线主管中选当前指派数最少的那个。
@@ -453,7 +475,8 @@ def register_realtime_routes(app, *, api_auth) -> None:
                                 cid, reason=it.get("reason", ""),
                                 agent_id=it.get("agent_id", ""),
                                 agent_name=it.get("agent_name", ""),
-                                wait_sec=it.get("wait_sec", 0))
+                                wait_sec=it.get("wait_sec", 0),
+                                dedup_sec=UNCLAIMED_ALERT_COOLDOWN_SEC)
                             if is_new:
                                 assigned_to = _pick_assigned_supervisor(inbox)
                                 if assigned_to:
@@ -484,6 +507,9 @@ def register_realtime_routes(app, *, api_auth) -> None:
                         except Exception:
                             logger.debug("升级审计落库失败（已忽略）", exc_info=True)
                     if emit:
+                        if not _esc_alert_allowed(
+                                _esc_last_emit, cid, str(it.get("reason") or ""), time.time()):
+                            continue  # P1-1：unclaimed 同会话 1 小时内本连接只推一次
                         payload = dict(it)
                         payload["assigned_to"] = assigned_to
                         frames.append(
