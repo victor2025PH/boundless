@@ -43,6 +43,9 @@ _MODE_WRITER_ALLOWLIST = {
     "src/web/routes/cases_routes.py":                      "工单结案勾「转人工」（显式勾选）",
     "src/web/routes/web_chat_routes.py":                   "网站访客会话默认档（新会话预建）",
     "src/inbox/stop_contact.py":                           "O-1 A（#252 #253 · D-O1）客户要求停联 / 自伤硬停守卫：冻结 → manual（guard:stop_contact_from:<原档>），人工解冻还原——守卫类，与 peer_bot_guard 同族",
+    "src/assistant/actions.py":                            "AI 助手「全局切档」确认卡执行后的存量对齐（align_conversation_modes：仅坐席点确认后、逐行写 source=assistant，带撤销快照）+ 撤销回写（apply_undo，source=assistant_undo）——显式操作",
+    "src/inbox/commitment_guard.py":                       "承诺守卫：客户二次坚持索要无法兑现的承诺（second_insist）时全自动→review（source=guard:commitment）——守卫类，与 peer_bot_guard 同族，只降不升",
+    "src/inbox/dormant_review.py":                         "沉睡会话复盘面板「转人工」按钮（apply_action manual，source=dormant:<坐席>）——显式操作",
 }
 
 # ── 允许清单：调 record_agent_takeover（接管即静音）的文件 ─────────────────────
