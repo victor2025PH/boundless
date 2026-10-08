@@ -153,10 +153,16 @@ def test_desktop_build_does_not_ship_presets():
     src = (ENGINE / "desktop" / "build" / "build_backend.py").read_text(encoding="utf-8")
     assert '"presets"' not in src and "config/presets" not in src
     pol = ENGINE / "desktop" / "build" / "editions.json"
-    if pol.exists():  # 智安的公开 / 内部包白名单落地后：公开包不得包含内部模板目录
+    if pol.exists():  # 智安的公开 / 内部包白名单落地后：公开包任何白名单都不得带内部模板目录
         import json
-        public = json.loads(pol.read_text(encoding="utf-8"))["editions"]["public"]
-        assert "config/presets/internal" not in json.dumps(public)
+        data = json.loads(pol.read_text(encoding="utf-8"))
+        public = data["editions"]["public"]
+        omitted = {str(p).replace("\\", "/").strip("/") for p in public.get("omitted") or []}
+        whitelists = {k: v for k, v in public.items() if k != "omitted"}
+        assert "config/presets/internal" not in json.dumps(whitelists)
+        # 登记为内部专属后，公开包 omitted 必须显式声明（edition_gate.check_policy 同口径）
+        if "config/presets/internal" in json.dumps(data.get("internal_only") or {}):
+            assert "config/presets/internal" in omitted
 
 
 def test_gambling_age_verification():
