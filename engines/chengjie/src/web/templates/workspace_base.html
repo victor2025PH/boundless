@@ -4923,7 +4923,7 @@ window.__wsMultiWin = (function(){
   }
   function probe(){
     if(done) return;
-    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+    window.apiFetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
       return r.ok ? r.json() : null;
     }).then(function(b){
       if(b&&b.ok&&b.enabled){ inject(b); return; }

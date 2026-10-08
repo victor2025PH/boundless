@@ -406,7 +406,7 @@
         var u=job[0], el=job[1];
         var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
         var tmo=ctl?setTimeout(function(){ try{ctl.abort();}catch(e){} },5000):0;
-        fetch(u,{signal:ctl?ctl.signal:undefined}).then(function(r){
+        window.apiFetch(u,{signal:ctl?ctl.signal:undefined}).then(function(r){
           if(!r.ok) throw new Error('http');
           return r.blob();
         }).then(function(b){

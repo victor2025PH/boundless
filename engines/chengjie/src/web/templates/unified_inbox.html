@@ -2348,7 +2348,7 @@ function avatarInitial(name){ return (name||'?').trim().charAt(0).toUpperCase();
 var _PREG = {};
 (function(){
   try {
-    fetch('/static/platform_registry.json', {cache:'no-store'})
+    window.apiFetch('/static/platform_registry.json', {cache:'no-store'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
         if (!j || !Array.isArray(j.platforms)) return;
@@ -4116,7 +4116,7 @@ function buildAcctDock(){
   // 账号视角失效自愈（rail 同语义的 dock 版）：选中号已不在册 → 回落全部
   if(accountFilter!=='all' && platFilter!=='all'){
     const g=groups.find(x=>x.plat===platFilter);
-    if(!g || !g.accts.some(a=>String(a.account_id)===String(accountFilter))) accountFilter='all';
+    if(!g || !g.accts.some(a=>String(a.account_id)===String(accountFilter))) setAccountFilter('all');
   }
   const gridIc='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
   const allActive=(accountFilter==='all');
@@ -7953,7 +7953,7 @@ function _connDiagnose(){
     return new Promise(function(res, rej){
       let ctl=null; try{ ctl=new AbortController(); }catch(_){}
       const t=setTimeout(function(){ try{ if(ctl) ctl.abort(); }catch(_){} rej(new Error('timeout')); }, 4000);
-      fetch(url, {mode:'no-cors', cache:'no-store', signal:ctl?ctl.signal:undefined})
+      window.apiFetch(url, {mode:'no-cors', cache:'no-store', signal:ctl?ctl.signal:undefined})
         .then(function(){ clearTimeout(t); res(true); }, function(e){ clearTimeout(t); rej(e); });
     });
   };
@@ -7974,7 +7974,7 @@ let _wsAltEntrances=[];
   try{ _wsAltEntrances=JSON.parse(localStorage.getItem('ws_alt_entrances')||'[]')||[]; }catch(_){}
   setTimeout(function(){
     try{
-      fetch('/api/workspace/entrances',{cache:'no-store'})
+      window.apiFetch('/api/workspace/entrances',{cache:'no-store'})
         .then(function(r){ return r.ok?r.json():null; })
         .then(function(d){
           if(d&&Array.isArray(d.entrances)){
@@ -30663,7 +30663,8 @@ Object.assign(window, {
   loadMoreChats,   // 十期：列表游标分页「加载更早的会话」
   loadChats,       // 十期：CmdK @转派成功后即时刷新列表（assignment 富集）
   // P0 账号顶部状态栏 Account Dock（2026-08-16）：条内全部 innerHTML 生成 onclick/onkeydown
-  _adkPick, _adkAll, _adkKey, _adkNudge, buildAcctDock,
+  _adkPick, _adkAll, _adkKey, _adkNudge,   buildAcctDock,
+  focusPcWechat, loadConnectModes, startPcCopilot, togglePcTimeline,
   // Dock P5（2026-08-17）：「历史 N」治理面板（chip 内联 onclick；面板内部走事件委托零内联）
   toggleAdkHistPanel, closeAdkHistPanel,
   // 列表头 / 筛选 / 视图
