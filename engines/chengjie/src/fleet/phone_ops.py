@@ -96,13 +96,13 @@ def check_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
 _FB_PACKAGES = ("com.facebook.katana", "com.facebook.lite")
 
 
-def pm_path_installed(text: str, returncode: int) -> bool:
-    """True when ``pm path`` printed an install path and exited 0.
+def pm_path_present(text: str, returncode: int) -> bool:
+    """True when ``pm path`` printed a ``package:`` path and exited 0.
 
     A device prints ``package:/data/app/.../base.apk`` (sometimes several
     split lines). It does not print the literal ``package:<name>``. A
-    non-zero status is not installed, even when the text looks like a path.
-    Empty output is not installed.
+    non-zero status does not count, even when the text looks like a path.
+    Empty output does not count.
     """
     if isinstance(returncode, bool) or not isinstance(returncode, int) or returncode != 0:
         return False
@@ -548,7 +548,7 @@ class PhoneOps:
         """Katana or lite when ``pm path`` exits 0 with a ``package:`` path.
 
         Does not take the phone lock. An empty answer means neither package
-        is installed. The caller reports that as a store redirect and does
+        was found. The caller reports that as a store redirect and does
         not ``am start``, wake, or fall back to the icon.
         """
         adb = self._ready_adb()
@@ -557,7 +557,7 @@ class PhoneOps:
                 adb, serial, ("-s", serial, "shell", "pm", "path", package), 8.0,
             )
             text = _hierarchy_text(out) or _hierarchy_text(err)
-            if pm_path_installed(text, rc):
+            if pm_path_present(text, rc):
                 return package
         return ""
 

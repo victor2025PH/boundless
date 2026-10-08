@@ -755,19 +755,19 @@ def test_pm_path_real_format_recognizes_katana_lite_and_rejects_errors():
     """Devices print ``package:/data/app/.../base.apk``, not ``package:<name>``."""
     from types import SimpleNamespace
 
-    from src.fleet.phone_ops import pm_path_installed
+    from src.fleet.phone_ops import pm_path_present
 
     katana = "package:/data/app/~~x==/com.facebook.katana-y==/base.apk\n"
     lite = "package:/data/app/com.facebook.lite-1/base.apk\r\n"
     net_health = "package:/data/app/com.facebook.katana-1/base.apk\n"
     for sample, package in ((katana, "com.facebook.katana"), (lite, "com.facebook.lite"), (net_health, "com.facebook.katana")):
         assert ("package:" + package) not in sample
-        assert pm_path_installed(sample, 0)
-        assert not pm_path_installed(sample, 1)
-    assert not pm_path_installed("", 0)
-    assert not pm_path_installed("package:", 0)
-    assert not pm_path_installed("package:\n", 0)
-    assert not pm_path_installed("Error: package not found\n", 0)
+        assert pm_path_present(sample, 0)
+        assert not pm_path_present(sample, 1)
+    assert not pm_path_present("", 0)
+    assert not pm_path_present("package:", 0)
+    assert not pm_path_present("package:\n", 0)
+    assert not pm_path_present("Error: package not found\n", 0)
 
     class _Pm(FakeAdb):
         def __init__(self, answers):

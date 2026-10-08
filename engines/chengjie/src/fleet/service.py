@@ -222,6 +222,7 @@ def _delete_panel_run_key_views(*, registry=None) -> None:
         try:
             import winreg as reg
         except Exception:
+            logger.debug("[service] panel run key delete skipped", exc_info=True)
             return
     path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
     for flag in (getattr(reg, "KEY_WOW64_64KEY", 0), getattr(reg, "KEY_WOW64_32KEY", 0)):
@@ -229,7 +230,7 @@ def _delete_panel_run_key_views(*, registry=None) -> None:
             with reg.OpenKey(reg.HKEY_LOCAL_MACHINE, path, 0, reg.KEY_SET_VALUE | flag) as key:
                 reg.DeleteValue(key, PANEL_RUN_VALUE)
         except OSError:
-            pass
+            logger.debug("[service] panel run key was already absent")
 
 
 def build_panel_run_key_delete() -> List[str]:
@@ -332,7 +333,8 @@ def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
     return {"ok": True, "kind": "schtasks", "task_name": task_name, "steps": outs}
 
 
-def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
+def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK_NAME,
+                    registry=None) -> Dict[str, object]:
     cmd = agent_command(state_dir) + ["run", "--service"]
     if os.name == "nt":
         # End a running instance first: /Create /F on a running task leaves the old
@@ -348,7 +350,7 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
             outs.append({"cmd": s[:2], "rc": p.returncode, "out": (p.stdout or p.stderr or "")[-300:]})
             if p.returncode != 0:
                 return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
-        panel = install_panel_logon(state_dir, run=run)
+        panel = install_panel_logon(state_dir, run=run, registry=registry)
         if not panel.get("ok"):
             return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs + list(panel.get("steps") or [])}
         p = run(build_schtasks_run(task_name=task_name))
