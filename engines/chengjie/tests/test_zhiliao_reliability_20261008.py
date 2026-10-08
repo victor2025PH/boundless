@@ -352,3 +352,39 @@ def test_aline_mirror_rows_tagged_ai():
     assert src.count('sent_by="ai"') >= 4                          # 文本回复 + 3 处语音镜像
     tc = (_ENGINE / "src" / "client" / "telegram_client.py").read_text(encoding="utf-8")
     assert 'sent_by="phone",' in tc and '_src["sent_by"] = str(sent_by)' in tc
+
+
+def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
+    """Morgan 2026-10-08：报障群支持号 6834964252 的出站是脚本测试 → sent_by=script。"""
+    from src.inbox.store import script_sender_accounts
+    monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
+    assert "6834964252" in script_sender_accounts()
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:6834964252:-1001234567890"
+    t = 1_757_000_000.0
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d1", direction="out",
+                                      text="值守播报", ts=t))
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d2", direction="out",
+                                      text="自动链", ts=t + 1, sent_by="ai"))
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d3", direction="out",
+                                      text="坐席亲手", ts=t + 2, sent_by="agent"))
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="c1", direction="in",
+                                      text="收到", ts=t + 3))
+    conv = InboxConversation(conversation_id=cid, platform="telegram", account_id="6834964252",
+                             chat_key="-1001234567890")
+    store.ingest_batch(conv, [InboxMessage(conversation_id=cid, platform_msg_id="d4", direction="out",
+                                           text="批量播报", ts=t + 4)])
+    rows = {r["platform_msg_id"]: r for r in store.list_recent_messages(cid, limit=20)}
+    assert rows["d1"]["sent_by"] == "script" and rows["d2"]["sent_by"] == "script"
+    assert rows["d4"]["sent_by"] == "script"
+    assert rows["d3"]["sent_by"] == "agent" and rows["c1"]["sent_by"] == ""
+    # 其他账号不受影响；环境变量可覆盖 / 关闭
+    store.ingest_message(InboxMessage(conversation_id=CID, platform_msg_id="n1", direction="out",
+                                      text="普通号", ts=t))
+    assert _rows(store)["n1"]["sent_by"] == "phone"
+    monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "")
+    assert script_sender_accounts() == frozenset()
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d5", direction="out",
+                                      text="关闭后", ts=t + 9))
+    assert {r["platform_msg_id"]: r for r in store.list_recent_messages(cid, limit=20)}["d5"]["sent_by"] == "phone"
+    store.close()

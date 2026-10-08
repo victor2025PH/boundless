@@ -1214,12 +1214,41 @@ def _explicit_sent_by(msg: Any) -> str:
     return normalize_sent_by(getattr(msg, "sent_by", ""))
 
 
-def _sent_by_of(msg: Any) -> str:
-    """落库用发送方：入站 ''；出站＝显式值，缺省 ``phone``（非本系统打标链路发出）。
-    坐席打点认领（_claim_agent_send_locked）随后可把 phone 改判为 agent。"""
+#: 脚本测试号（2026-10-08 Morgan 确认）：这些**我方账号**发出的出站流量是脚本 / 值守工具
+#: 驱动的测试，归因 ``script``（坐席在工作台亲手发的仍记 agent）。默认含报障群支持号
+#: 6834964252（tools/duty_alert、duty_reply 的发送账号）；环境变量
+#: ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``（逗号分隔）可整体覆盖，设为空串即关闭。
+_SCRIPT_SENDER_ACCOUNTS_DEFAULT = ("6834964252",)
+
+
+def script_sender_accounts() -> frozenset:
+    import os as _os
+    raw = _os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS")
+    if raw is None:
+        return frozenset(_SCRIPT_SENDER_ACCOUNTS_DEFAULT)
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def _is_script_sender_conv(conversation_id: Any) -> bool:
+    """会话主键 ``platform:account_id:chat_key`` 的账号段是否脚本测试号。"""
+    parts = str(conversation_id or "").split(":", 2)
+    return len(parts) >= 2 and parts[1] in script_sender_accounts()
+
+
+def _resolve_sent_by(msg: Any, inherited: str = "") -> str:
+    """落库用发送方：入站 ''；出站＝显式值 → 继承值（被删 hash 孪生）→ 缺省 ``phone``。
+    脚本测试号的出站一律 ``script``（显式 agent 除外）。坐席打点认领随后可把 phone 改判为 agent。"""
     if str(getattr(msg, "direction", "") or "") != "out":
         return ""
-    return _explicit_sent_by(msg) or SENT_BY_DEFAULT_OUT
+    sb = _explicit_sent_by(msg) or normalize_sent_by(inherited)
+    if sb != "agent" and _is_script_sender_conv(getattr(msg, "conversation_id", "")):
+        return "script"
+    return sb or SENT_BY_DEFAULT_OUT
+
+
+def _sent_by_of(msg: Any) -> str:
+    """落库用发送方（见 :func:`_resolve_sent_by`）。"""
+    return _resolve_sent_by(msg)
 
 
 def agent_send_text_hash(text: str) -> str:
@@ -1861,7 +1890,7 @@ class InboxStore:
                     if (_cur.rowcount or 0) > 0:
                         self._dedup_counts["deleted_hash"] += int(_cur.rowcount)
                 mid = _message_pk(msg.conversation_id, msg.platform_msg_id, msg.text, msg.ts)
-                _sb_row = (_explicit_sent_by(msg) or _twin_sent_by) if msg.direction == "out" else ""
+                _sb_row = _resolve_sent_by(msg, _twin_sent_by)
                 if _twin_sent_by and not _explicit_sent_by(msg):
                     try:
                         msg.sent_by = _twin_sent_by   # 让随后的认领 / 冲突升级看到同一口径
@@ -1886,7 +1915,7 @@ class InboxStore:
                         str(msg.reply_to_sender or ""), str(msg.mentions_json or "[]"),
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
                         int(getattr(msg, "approx_ts", 0) or 0),
-                        (_sb_row or SENT_BY_DEFAULT_OUT) if msg.direction == "out" else "",
+                        _sb_row,
                     ),
                 )
                 if cur.rowcount > 0:
@@ -4306,6 +4335,8 @@ class InboxStore:
             # 下一条被它误认）；缺省 phone 行可被坐席打点改判为 agent（P0-4）
             if _explicit_sent_by(msg) in ("ai", "script", "system"):
                 return
+            if _is_script_sender_conv(getattr(msg, "conversation_id", "")):
+                return   # 脚本测试号：同文本的坐席打点不把脚本发言认成人工
             cid = str(getattr(msg, "conversation_id", "") or "")
             th = agent_send_text_hash(getattr(msg, "text", "") or "")
             ref = str(getattr(msg, "media_ref", "") or "").strip()
