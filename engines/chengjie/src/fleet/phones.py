@@ -136,15 +136,42 @@ def normalize_excludes(entries: Any) -> Tuple[str, ...]:
     return tuple(out)
 
 
+_PROTECTED_PREFIX = "3B1F"
+
+
+def _serial_bodies(serial: str) -> Tuple[str, ...]:
+    """Serial tokens only. The full string, a host:port host, and an mDNS ``adb-<serial>-`` body."""
+    s = str(serial or "").strip().upper()
+    if not s:
+        return ()
+    found = [s]
+    host = s.rsplit(":", 1)[0] if ":" in s else s
+    host = host.strip("[]")
+    if host and host not in found:
+        found.append(host)
+    if s.startswith("ADB-"):
+        body = s[4:].split("-", 1)[0].split(".", 1)[0]
+        if body and body not in found:
+            found.append(body)
+    return tuple(found)
+
+
 def is_protected(serial: str) -> bool:
-    """Hard-coded live-stream phone: its serial anywhere in the name (mDNS too), or its LAN address on any port."""
+    """Hard-coded live-stream phone.
+
+    The known serial anywhere in the name (mDNS too), any serial whose body
+    starts with ``3B1F``, or the LAN address on any port. The serial is not
+    logged by this check.
+    """
     s = str(serial or "").strip().upper()
     if not s:
         return False
     if any(p.upper() in s for p in PROTECTED_SERIALS):
         return True
     host = s.rsplit(":", 1)[0] if ":" in s else s
-    return host.strip("[]") in PROTECTED_ADDRESSES
+    if host.strip("[]") in PROTECTED_ADDRESSES:
+        return True
+    return any(body.startswith(_PROTECTED_PREFIX) for body in _serial_bodies(s))
 
 
 def is_excluded(serial: str, excludes: Iterable[str], model: str = "") -> bool:

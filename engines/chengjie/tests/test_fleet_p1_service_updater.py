@@ -75,7 +75,10 @@ def test_install_service_windows_runs_create_then_run(monkeypatch, tmp_path):
     res = svc.install_service(tmp_path, run=run)
     assert res["ok"] and res["kind"] == "schtasks"
     # /End first: /Create /F on a running task detaches the old process (issue g3).
-    assert [c[1] for c in calls] == ["/End", "/Create", "/Run"]
+    # Then the agent task, then the interactive panel (ONLOGON + Run key + kick).
+    assert [c[1] for c in calls] == ["/End", "/Create", "/End", "/Create", "add", "/Run", "/Run"]
+    assert calls[2][3] == svc.PANEL_TASK_NAME
+    assert calls[4][0] == "reg"
     assert res["command"][-2:] == ["run", "--service"]
 
 

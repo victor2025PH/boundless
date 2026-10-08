@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from src.fleet import agent as agent_mod
 from src.fleet import operator_alert as oa
@@ -331,7 +332,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.24"
+    assert agent_mod.AGENT_VERSION == "0.3.25"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -544,3 +545,42 @@ def test_operator_alert_diag_redacts_snapshot_serials(tmp_path, monkeypatch):
     assert TASK_OPERATOR_ALERT_DIAG in TASK_KINDS
     assert TASK_OPERATOR_ALERT_DIAG not in REMOTE_PHONE_KINDS
     assert TASK_OPERATOR_ALERT_DIAG not in LEGACY_ALLOWED_KINDS
+
+
+def test_session0_asks_the_logon_task_to_show_the_panel(monkeypatch, tmp_path):
+    from src.fleet.service import PANEL_TASK_NAME, build_panel_logon_create, build_panel_run_key
+
+    iss = Path(__file__).resolve().parents[1] / "fleet_agent" / "setup" / "ChatXAgent.iss"
+    text = iss.read_text(encoding="utf-8")
+    assert 'AppVersion "0.3.25"' in text
+    assert "install-panel" in text
+    assert "ChatX Fleet Panel" in text
+    assert "ChatXFleetPanel" in text
+    monkeypatch.setattr(oa.os, "name", "nt")
+    monkeypatch.setattr(oa, "_current_session_id", lambda: 0)
+    monkeypatch.setattr(oa, "_powershell", lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    calls = []
+
+    def run(cmd, **_kw):
+        calls.append(list(cmd))
+
+        class _Proc:
+            returncode = 0
+
+        return _Proc()
+
+    monkeypatch.setattr(oa.subprocess, "run", run)
+    spawned = []
+    monkeypatch.setattr(oa, "_spawn_as_user", lambda args: spawned.append(args) or False)
+    assert oa._spawn_interactive(tmp_path / "p.ps1", tmp_path / "s.json", tmp_path / "l.json", tmp_path / "k.lock")
+    assert calls and calls[0][:4] == ["schtasks", "/Run", "/TN", PANEL_TASK_NAME]
+    assert spawned == []
+    create = build_panel_logon_create(tmp_path)
+    assert create[create.index("/SC") + 1] == "ONLOGON"
+    assert "SYSTEM" not in create
+    assert "/IT" in create
+    assert "-Snapshot" in create[create.index("/TR") + 1]
+    run_key = build_panel_run_key(tmp_path)
+    assert run_key[0] == "reg" and "ChatXFleetPanel" in run_key
+    assert "operator_alert.json" in run_key[run_key.index("/d") + 1]
+    assert "zh" in oa.PANEL_SCRIPT and "en" in oa.PANEL_SCRIPT

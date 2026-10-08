@@ -313,20 +313,23 @@ def _sanitize_foreground(raw: Any) -> Any:
     return {"package": package, "activity": activity}
 
 
-def app_restart_host_block(node: Any) -> str:
-    """Refuse app_restart on the seat machine or a live-stream node. "" = ok.
+def app_restart_host_block(node: Any, *, exclude: Any = None) -> str:
+    """Refuse app_restart on a live-stream node, seat 173, or an excluded node.
 
+    Reasons stay ``live_stream_host`` and ``seat_173`` for the existing endpoint.
+    An explicit exclude hit is ``excluded``. An unreadable node is ``uncertain``.
     Operable-pool and protected-phone checks stay with the caller.
     """
-    from .detect import is_seat_173
+    from .dispatch_guard import auto_dispatch_block
 
-    src = node if isinstance(node, dict) else {}
-    if is_seat_173(src.get("host_name"), src.get("label"), src.get("group_name")):
-        return "seat_173"
-    blob = " ".join(str(src.get(key) or "") for key in ("host_name", "label", "group_name")).casefold()
-    if any(token in blob for token in ("live-stream", "live_stream", "livestream", "直播")):
+    reason = auto_dispatch_block(node, exclude=exclude)
+    if reason == "live_stream":
         return "live_stream_host"
-    return ""
+    if reason == "node_173":
+        return "seat_173"
+    if reason == "protected_phone":
+        return ""
+    return reason
 
 
 def _sanitize_like_diag(raw: Any) -> Any:
@@ -405,6 +408,7 @@ def _sanitize_like_diag(raw: Any) -> Any:
         "shape_matched": raw.get("shape_matched") is True,
         "shape_score": shape_out,
         "position_matched": raw.get("position_matched") is True,
+        "position_inferred": raw.get("position_inferred") is True,
         "region_matched": raw.get("region_matched") is True,
         "nodes": nodes,
         "hierarchy": _sanitize_hierarchy(raw.get("hierarchy")),

@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.24"
+  #define AppVersion "0.3.25"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -194,9 +194,10 @@ var
   ResultCode: Integer;
   exe, cmd: String;
 begin
-  { End both tasks. Kill only the process whose image is this install path. }
+  { End the service, the upgrade task, and the interactive site-todo panel. }
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Agent Upgrade"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "ChatX Fleet Panel"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   exe := PsLiteral(ExpandConstant('{app}\chatx-agent.exe'));
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix + 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''chatx-agent.exe'' -and $_.ExecutablePath -eq ''' + exe + ''' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -439,6 +440,23 @@ begin
   WizardForm.FinishedLabel.Caption := body;
 end;
 
+procedure InstallSiteTodoPanel();
+var
+  ResultCode: Integer;
+  dir: String;
+begin
+  { The agent service runs as SYSTEM in session 0 and cannot paint a window.
+    install-panel writes operator_alert_panel.ps1 and registers:
+      schtasks ONLOGON "ChatX Fleet Panel"  (interactive user, not SYSTEM)
+      HKLM\...\Run  ChatXFleetPanel
+    That process lives on the logged-on desktop and reads the snapshot.
+    zh/en stays in the panel. A failure here does not roll back the service. }
+  dir := ExpandConstant('{commonappdata}\ChatX\fleet');
+  Exec(ExpandConstant('{app}\chatx-agent.exe'),
+    '--state-dir "' + dir + '" install-panel',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure OpenLocalPanel();
 var
   ResultCode: Integer;
@@ -549,6 +567,7 @@ begin
     WizardForm.FinishedLabel.Caption := '文件已复制，但没有连上主控，计划任务没有安装。请用管理员身份重新运行安装程序。';
     Exit;
   end;
+  InstallSiteTodoPanel();
   pair := '';
   pairText := '';
   { LoadStringFromFile's second parameter is AnsiString on Inno Setup 6.3. Pairing codes are ASCII. }
@@ -568,6 +587,10 @@ begin
   begin
     StopOurAgent();
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ChatX Fleet Agent Upgrade" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ChatX Fleet Panel" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\reg.exe'),
+      'delete HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v ChatXFleetPanel /f',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
   { State dir is kept unless the uninstall is started with /REMOVESTATE=1. }
   if (CurUninstallStep = usPostUninstall) and (CmdParam('/REMOVESTATE=') = '1') then

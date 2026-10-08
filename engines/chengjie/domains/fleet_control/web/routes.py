@@ -55,6 +55,7 @@ from src.fleet.site_todo import (
 )
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.social_pace import read_optional_labels
+from src.fleet.dispatch_guard import auto_dispatch_block
 from src.fleet.phone_rules import (
     PhoneOpError, app_restart_host_block, check_target, kind_for_op, sanitize_phone_result,
     scrub_phone_error_text, strip_png, validate_payload,
@@ -196,6 +197,18 @@ def _actor(request: Request) -> str:
         pass
     via = _ACTOR_UNSAFE.sub("", str(request.headers.get("x-fleet-actor") or ""))[:40]
     return f"{base[:36]} via {via}" if via else base
+
+
+def _refuse_auto_dispatch(node: Dict[str, Any], serial: str, store: Any, *, app_restart: bool = False) -> None:
+    """HTTP refusal for a live-stream node, seat 173, a protected phone, or an exclude hit."""
+    exclude = getattr(store, "dispatch_exclude", None)
+    if app_restart:
+        reason = app_restart_host_block(node, exclude=exclude)
+    else:
+        reason = auto_dispatch_block(node, serial=serial, exclude=exclude)
+    if not reason:
+        return
+    raise HTTPException(status_code=403 if reason == "protected_phone" else 409, detail=reason)
 
 
 def phone_op_block_reason(node: Dict[str, Any], serial: str) -> str:
@@ -513,7 +526,7 @@ def register_routes(app, ctx) -> None:
             target_node = st.get_node(node_id)
             if target_node is None:
                 raise HTTPException(status_code=409, detail="节点不存在 / 已吊销")
-            skip = site_skip_reason(target_node)
+            skip = site_skip_reason(target_node, exclude=getattr(st, "dispatch_exclude", None))
             if skip:
                 raise HTTPException(status_code=409, detail=skip)
             payload = sanitize_site_todo_payload(payload)
@@ -554,10 +567,7 @@ def register_routes(app, ctx) -> None:
         reason = phone_op_block_reason(node, target_serial)
         if reason:
             raise HTTPException(status_code=409, detail=reason)
-        if kind == TASK_PHONE_APP_RESTART:
-            host_block = app_restart_host_block(node)
-            if host_block:
-                raise HTTPException(status_code=409, detail=host_block)
+        _refuse_auto_dispatch(node, target_serial, st, app_restart=(kind == TASK_PHONE_APP_RESTART))
         rec = st.enqueue(node_id, kind, payload=payload, target={"serial": target_serial},
                          ttl_sec=PHONE_TASK_TTL_SEC, created_by=_actor(request))
         if kind == TASK_PHONE_APP_RESTART and rec is not None:
@@ -566,7 +576,8 @@ def register_routes(app, ctx) -> None:
                 rec.get("created_by") or "", "[redacted]", payload.get("package") or "", rec.get("task_id") or "",
             )
         if rec is None:
-            raise HTTPException(status_code=409, detail="enqueue_refused")
+            guard = st.take_dispatch_block()
+            raise HTTPException(status_code=409, detail=guard or "enqueue_refused")
         return {"ok": True, "task": rec}
 
     # ── 社交动作：发帖 / 点赞 / 评论 / 关注，以及养号 / 私信 / 看短视频 ──
@@ -591,6 +602,7 @@ def register_routes(app, ctx) -> None:
         reason = phone_op_block_reason(node, target_serial)
         if reason:
             raise HTTPException(status_code=409, detail=reason)
+        _refuse_auto_dispatch(node, target_serial, st)
         target = {"serial": target_serial}
         if account:
             target["account"] = account
@@ -599,8 +611,9 @@ def register_routes(app, ctx) -> None:
         rec = st.enqueue(node_id, kind, payload=payload, target=target,
                          ttl_sec=PHONE_FLOW_TTL_SEC, created_by=_actor(request))
         if rec is None:
+            guard = st.take_dispatch_block()
             pace = st.take_social_pace_refusal()
-            raise HTTPException(status_code=409, detail=pace or "enqueue_refused")
+            raise HTTPException(status_code=409, detail=guard or pace or "enqueue_refused")
         return {"ok": True, "task": rec}
 
     # ── 集中扫码（docs/FLEET_CONSOLE_QR_LOGIN.md）──────────────────────────
