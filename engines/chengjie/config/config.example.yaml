@@ -296,6 +296,27 @@ whatsapp_cloud:
   verify_token: ""               # GET 校验自定义口令（控制台填同值）
   webhook_path: "/wa/webhook"
   unsupported_type_reply: "目前仅支持文字消息。"
+  # 24h 客服窗口外回退模板（需先在 Meta 后台审核通过）；name 留空 = 不回退（窗口外失败→进待人工）
+  window_fallback_template:
+    name: ""
+    language: "zh_CN"
+    text_param: true               # 把原回复文本作为正文 {{1}} 参数
+  # STOP 硬闸：客户发 STOP/UNSUBSCRIBE/退订… 或停联短语 → 冻结（需人工+名单），之后一律不真发
+  stop_gate:
+    allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
+    extra_keywords: []             # 追加整句退订词
+  # 自答路径进待人工的触发项（AI 异常 / 发送失败 恒进）
+  handoff:
+    on_human_request: true         # 客户点名要真人
+    on_media: true                 # 入站图片/语音/视频/文件（贴纸/表情回应不进）
+    on_empty_reply: true
+    on_delivery_failed: true       # status webhook = failed
+  # Meta 按条计费单价（PMP；价格随国家×类别变动，仓内不写死；未配置 = 只计条数不计金额）
+  pricing:
+    currency: "USD"
+    rates:
+      default: {}                  # 例：{marketing: 0.0, utility: 0.0, authentication: 0.0}
+  graph_base: ""                   # 仅测试/回环：留空 = Meta 官方 Graph
 
 # Instagram Messaging（官方，Graph API；与 Messenger 同体系，Phase H）。默认关。
 # webhook object=instagram；收件人是 IGSID；发送端点用 IG 账号 id + 关联 Page token。
