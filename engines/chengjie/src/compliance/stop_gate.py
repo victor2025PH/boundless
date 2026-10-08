@@ -22,7 +22,9 @@
 
 接入点（出站前都查名单，拦下只留痕）：
 - ``replybus decide`` 入口：入站命中 → 冻结 + 进名单 + ``silent`` / ``reason=stop``，只附一条
-  模板确认（``confirm_text``，``stop_contact.farewell_text``，不走 LLM，且每个停联只给一次）；
+  模板确认（``confirm_text``。默认 ``stop_contact.farewell_text``；只有
+  ``compliance.stop_gate.multilingual_confirm`` 显式打开时，tl / ceb / hi 才改用
+  snippets 里的 persona 句，en / zh 仍用 farewell。不走 LLM，且每个停联只给一次）；
   已停联的对端 → ``silent`` / ``reason=stop``。
 - ``protocol_autoreply.run_autoreply``：生成前查名单；入站命中停联按隐含锁定硬停。
 - 收件箱自动发送：``drafts.auto_generate_draft`` 起草前查名单；``autosend_policy`` 经词表 + 隐含锁定硬停。
@@ -37,6 +39,7 @@ import logging
 import re
 import time
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -592,7 +595,11 @@ def confirm_text(lang: Any = "") -> str:
 
 
 def guess_lang(text: Any) -> str:
-    """模板确认的语言粗判（只看文字系统 + 他加禄 / 宿务常见词）；默认 en。纯函数。"""
+    """模板确认的语言粗判（只看文字系统）；默认 en。纯函数。
+
+    他加禄 / 宿务不在这里改判：默认确认文案仍走 farewell（没有 tl 时回英文）。
+    打开 ``multilingual_confirm`` 后由 :func:`confirm_lang` 再细分。
+    """
     s = str(text or "")
     if re.search(r"[\u0900-\u097f]", s):
         return "hi"
@@ -601,8 +608,96 @@ def guess_lang(text: Any) -> str:
     return "en"
 
 
+# 显式打开才用 snippets。缺省 / false / legacy / off 都保持今天的 farewell 路径。
+_CONFIRM_ON = frozenset({"1", "true", "yes", "on", "enforce", "enabled"})
+_SNIPPET_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "config" / "presets" / "snippets" / "stop_confirm_templates.yaml"
+)
+
+
+def multilingual_confirm_enabled(config: Any = None) -> bool:
+    """``compliance.stop_gate.multilingual_confirm`` 是否打开。默认关。"""
+    value = gate_cfg(config).get("multilingual_confirm", False)
+    if isinstance(value, bool):
+        return value is True
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in _CONFIRM_ON
+    return False
+
+
+def confirm_lang(text: Any) -> str:
+    """打开多语确认后，这条 STOP 用哪种模板。
+
+    天城文 → hi，含汉字 → zh，否则用 ``refine_latin_language``：
+    variant ``ceb`` → ceb，lang ``tl`` → tl，其余 → en。
+    """
+    s = str(text or "")
+    if re.search(r"[\u0900-\u097f]", s):
+        return "hi"
+    if re.search(r"[\u3400-\u9fff]", s):
+        return "zh"
+    try:
+        from src.inbox.session_lang import refine_latin_language
+        lang, variant = refine_latin_language(s, "en")
+    except Exception:
+        return "en"
+    if variant == "ceb":
+        return "ceb"
+    if lang == "tl":
+        return "tl"
+    if not lang or lang in ("en", "unknown"):
+        return "en"
+    return str(lang)
+
+
+def _farewell_covers(lang: str) -> bool:
+    """farewell 表里已经有这门语言时，继续用那句，不用 snippets（en/zh 文案不同）。"""
+    try:
+        from src.inbox.stop_contact import farewell_languages
+        key = str(lang or "").strip().lower().replace("_", "-")
+        return key in set(farewell_languages())
+    except Exception:
+        return lang in ("en", "zh")
+
+
+def _snippet_persona(lang: str) -> str:
+    try:
+        import yaml
+        if not _SNIPPET_PATH.is_file():
+            return ""
+        data = yaml.safe_load(_SNIPPET_PATH.read_text(encoding="utf-8")) or {}
+        node = (data.get("templates") or {}).get(lang) or {}
+        if isinstance(node, dict):
+            return str(node.get("persona") or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def resolve_confirm_text(text: Any = "", config: Any = None) -> str:
+    """STOP 确认句。开关关闭时与 ``confirm_text(guess_lang(text))`` 相同。
+
+    开关打开后，farewell 已覆盖的语言（含 en / zh）仍用 farewell；
+    tl / ceb / hi 用 snippets 的 persona 句。Taglish 被判成 tl，走 tl 那句。
+    文件缺失则回退 farewell。
+    """
+    if not multilingual_confirm_enabled(config):
+        return confirm_text(guess_lang(text))
+    lang = confirm_lang(text)
+    if _farewell_covers(lang):
+        return confirm_text(lang)
+    snippet = _snippet_persona(lang)
+    if snippet:
+        return snippet
+    return confirm_text(lang)
+
+
 __all__ = [
     "STOP_REASON", "FREEZE_REASON", "LOCKED_BY", "normalize", "match_lexicon", "detect",
     "is_stop_message", "gate_cfg", "enforced", "phone_key", "contact_stopped", "record_stop",
     "audit", "outbound_check", "confirm_text", "guess_lang",
+    "multilingual_confirm_enabled", "confirm_lang", "resolve_confirm_text",
 ]

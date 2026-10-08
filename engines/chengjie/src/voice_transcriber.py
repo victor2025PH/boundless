@@ -734,11 +734,10 @@ class FasterWhisperTranscriber(VoiceTranscriber):
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
         """使用Faster-Whisper转录"""
         try:
-            # 延迟导入
-            from faster_whisper import WhisperModel
-
-            # 加载模型
+            # 已注入模型（单测 / 预加载）时不再 import。包没装且 model 仍空
+            # → 走下面的 ImportError，行为与以前一致。
             if self.model is None:
+                from faster_whisper import WhisperModel
                 self.logger.info(f"加载Faster-Whisper模型: {self.model_size}")
                 self.model = WhisperModel(
                     model_size_or_path=self.model_size,

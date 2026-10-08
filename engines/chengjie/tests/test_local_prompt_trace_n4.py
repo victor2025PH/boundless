@@ -36,9 +36,11 @@ class _FakeChatClient:
             cached_tokens = cached
 
         class _Usage:
-            prompt_tokens = prompt_tokens
+            # 类体不看外层函数的局部变量；prompt_tokens = prompt_tokens 在 3.12 是 NameError。
             completion_tokens = 30
             prompt_tokens_details = _Det()
+
+        _Usage.prompt_tokens = prompt_tokens
 
         class _Resp:
             def __init__(self, content):
