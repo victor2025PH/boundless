@@ -38,6 +38,46 @@ _STOPWORDS = frozenset({
 # 不 import kb_store（避免循环依赖），口径一致性由单测锚定。
 _WORD_RE = re.compile(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]")
 
+# 英文 / 他加禄 / 宿务功能词（2026-10-08 智语 · KB 可用化）：此前只有中文停用词，
+# 于是 "how / you / po / paano / ang" 都算实词——"paano"(5) 还够「强词」，一个疑问词就
+# 让任意含 paano 的条目放行；"po" 又按子串命中 deposit / promo。宁少勿多：只收功能词，
+# "much / magkano / presyo / refund" 这类真信息词不收。
+_LATIN_STOPWORDS = frozenset({
+    # en
+    "how", "what", "when", "where", "why", "who", "which", "can", "could", "would",
+    "should", "will", "me", "you", "we", "they", "he", "she", "him", "her", "our",
+    "us", "them", "have", "has", "had", "get", "got", "please", "pls", "hi", "hello",
+    "hey", "thanks", "thank", "ok", "okay", "yes", "no", "not", "so", "just", "with",
+    "from", "about", "any", "there", "here", "if", "then", "than", "also", "too",
+    "very", "know", "want", "need", "like", "dont", "don", "im", "its", "is", "are",
+    "the", "an", "and", "or", "but", "to", "of", "in", "on", "at", "for", "it", "my",
+    "your", "this", "that", "do", "does", "did", "be", "am", "was", "were",
+    # tl / taglish
+    "ang", "ng", "mga", "sa", "si", "ni", "na", "at", "ay", "po", "opo", "ho", "ba",
+    "naman", "lang", "din", "rin", "pa", "ko", "mo", "ka", "ako", "ikaw", "siya",
+    "kami", "tayo", "kayo", "sila", "ito", "iyan", "yan", "yun", "iyon", "dito",
+    "diyan", "doon", "paano", "pano", "ano", "anong", "saan", "kailan", "bakit",
+    "sino", "may", "meron", "wala", "hindi", "di", "oo", "sige", "salamat", "nga",
+    "kasi", "pero", "kung", "kapag", "pag", "para", "yung", "nang", "gusto",
+    "kailangan", "pwede", "puwede", "talaga", "ha", "eh", "sir", "maam", "mag", "nag",
+    # ceb
+    "unsa", "asa", "ngano", "kinsa", "ug", "nimo", "nako", "kita", "kini", "kana",
+    "dili", "naa", "adto", "diri", "ra", "pud", "sad", "man", "gyud", "palihug",
+    "unsaon",
+})
+
+_LATIN_TOKEN_RE = re.compile(r"^[a-z0-9]+$")
+_BLOB_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _latin_overlaps(token: str, blob_words: "set") -> bool:
+    """拉丁实词按整词比对（容忍单复数 s），不再按子串（po ⊂ deposit 的误放行）。"""
+    if token in blob_words:
+        return True
+    if token.endswith("s") and token[:-1] in blob_words:
+        return True
+    return (token + "s") in blob_words
+
 
 def _tokenize_query(text: str) -> List[str]:
     """查询侧分词：英数整词 + 中文相邻二元组（与 BM25 索引口径对齐）。"""
@@ -69,7 +109,7 @@ def content_tokens(text: str) -> List[str]:
     """提取"实词"token：剔除停用词与单字。"""
     return [
         t for t in _tokenize_query(text)
-        if len(t) >= 2 and t not in _STOPWORDS
+        if len(t) >= 2 and t not in _STOPWORDS and t not in _LATIN_STOPWORDS
     ]
 
 
@@ -108,13 +148,57 @@ def lexical_overlap_ok(
         return False, "query_no_content_tokens"
     blob = entry_blob(entry)
     blob_low = blob.lower()
-    overlap = [t for t in q_tokens if t in blob_low]
+    blob_words = set(_BLOB_WORD_RE.findall(blob_low))
+    overlap = [
+        t for t in q_tokens
+        if (_latin_overlaps(t, blob_words) if _LATIN_TOKEN_RE.match(t) else t in blob_low)
+    ]
     for t in overlap:
         if len(t) >= strong_token_len:
             return True, f"strong:{t}"
     if len(overlap) >= min_content_overlap:
         return True, f"overlap={len(overlap)}"
     return False, (f"weak_overlap={len(overlap)}" if overlap else "no_overlap")
+
+
+# 命中口径（2026-10-08 智语 · KB 可用化）。此前 skill_manager 用 ``hit = bool(kb_ctx)``：
+# kb_ctx 里总带全局硬规则 / 对话示例，而且向量检索永远返回最近邻，于是只要库不空，
+# hits 就恒等于 queries（173：241/241），命中率失去意义。新口径只看首条条目本身：
+# 首条和查询有足够实词重叠，或者首条的向量余弦相似度 ≥ vec_min_sim，才算真命中。
+DEFAULT_VEC_HIT_MIN_SIM = 0.55
+
+
+def judge_kb_hit(
+    query: str,
+    result: Dict[str, Any],
+    *,
+    vec_min_sim: float = DEFAULT_VEC_HIT_MIN_SIM,
+) -> Tuple[bool, str]:
+    """按检索结果的首条判定这次 KB 检索算不算真命中。
+
+    - 没有条目 → ``(False, "no_entries")``（只剩规则 / 示例不算命中）；
+    - 首条实词重叠够（``lexical_overlap_ok``）→ ``(True, "lexical:<why>")``；
+    - 首条带 ``_vec_sim``（kb_store 混合检索时回填的余弦）且 ≥ 阈值 → ``(True, "vector:<sim>")``；
+    - 否则 ``(False, "weak:<why>[,sim=..]")``。
+
+    纯函数：skill_manager 的查询日志、``_EMBED_STATS``、评测 ``src.eval.kb_hit_eval``
+    都走这一处，不让两套口径漂移。
+    """
+    entries = (result or {}).get("entries") or []
+    if not entries or not isinstance(entries[0], dict):
+        return False, "no_entries"
+    top = entries[0]
+    ok, why = lexical_overlap_ok(query, top)
+    if ok:
+        return True, f"lexical:{why}"
+    sim = top.get("_vec_sim")
+    try:
+        sim_f = float(sim) if sim is not None else None
+    except (TypeError, ValueError):
+        sim_f = None
+    if sim_f is not None and sim_f >= float(vec_min_sim):
+        return True, f"vector:{sim_f:.3f}"
+    return False, f"weak:{why}" + (f",sim={sim_f:.3f}" if sim_f is not None else "")
 
 
 def is_media_desc_text(text: str) -> bool:
