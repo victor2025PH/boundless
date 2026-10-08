@@ -110,6 +110,8 @@ def _stop_gate_decision(*, platform: str, account_id: str, external_id: str, tex
       ``{"action": "silent", "reason": "stop", "confirm_text": …, "confirm_once": true}``：
       ``confirm_text`` 是**唯一允许**的那条模板确认（``stop_contact.farewell_text``，不走 LLM），
       只在首次登记时给；执行层可选择发或不发，之后同一对端永远 silent。审计 ``detected``。
+    - 本条只是**含糊**停联信号（``stop_gate.review_hint``）→ ``{"action": "silent", "reason": "stop_review"}``：
+      不登记、不确认，只是不自动回，留给人工确认。审计 ``review``。
     - 开关 ``compliance.stop_gate.enabled: false`` → 只查会话冻结（O-1 A 既有），不做词表登记。
 
     隐私：不记入站原文，审计 / 日志只有平台、对端 id 与命中词（≤40 字）。
@@ -131,6 +133,13 @@ def _stop_gate_decision(*, platform: str, account_id: str, external_id: str, tex
             return None
         hit = sg.detect(text)
         if not hit:
+            # 智语 2026-10-08：含糊停联（CANCEL / END / QUIT 单独一条、「stop it」、「取消」……）→
+            # 不登记停联、不发确认，但本条不自动回复，留给人工确认（宁可多拦）。
+            rv = sg.review_hint(text)
+            if rv:
+                sg.audit(store, path="replybus_decide", action="review", platform=platform,
+                         account_id=acct, peer=external_id, hit=rv)
+                return {"action": _ACTION_SILENT, "reason": sg.REVIEW_REASON}
             return None
         rec = sg.record_stop(store, platform=platform, account_id=acct, peer=external_id,
                              hit=hit, source="replybus")

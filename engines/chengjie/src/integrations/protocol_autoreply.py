@@ -710,6 +710,18 @@ async def run_autoreply(
         except Exception:
             logger.debug("[protocol-autoreply] 锁定类别读取异常（放行）", exc_info=True)
             _lock_cat = ""
+    # 智语 2026-10-08：含糊停联信号（CANCEL / END / QUIT 单独一条、「stop it」、「取消」……）→
+    # 不硬停不冻结，但本直发链不回，按需人工提醒坐席确认（宁可多拦）。
+    if not _lock_cat and text:
+        try:
+            from src.compliance import stop_gate as _sg_rv
+            if _sg_rv.enforced(cfg):
+                _rv_hit = _sg_rv.review_hint(text)
+                if _rv_hit:
+                    _lock_cat = _sg_rv.REVIEW_REASON
+                    _hard_hits = [_rv_hit]
+        except Exception:
+            logger.debug("[protocol-autoreply] 含糊停联判定异常（放行）", exc_info=True)
     if _lock_cat:
         try:
             from src.integrations.protocol_bridge import get_inbox_store as _gis2

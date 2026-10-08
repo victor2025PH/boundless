@@ -57,6 +57,41 @@ from fastapi import FastAPI, Request, Response
 
 logger = logging.getLogger(__name__)
 
+#: Bot token 形态 ``<bot 数字 id>:<密文段>``；Bot API URL 里以 ``/bot<token>/``、``/file/bot<token>/`` 出现。
+_TOKEN_RE = re.compile(r"(?<![0-9])([0-9]{5,16}):[A-Za-z0-9_-]{20,}")
+
+
+def redact_token(text: Any) -> str:
+    """把文本里的 Bot token 打码成 ``<bot_id>:***``（bot 数字 id 公开可见，保留便于排障）。"""
+    return _TOKEN_RE.sub(lambda m: m.group(1) + ":***", "" if text is None else str(text))
+
+
+class _TokenRedactFilter(logging.Filter):
+    """本模块 logger 的兜底（智安 2026-10-08）：消息、参数、异常 traceback 里的 Bot token 一律打码。
+
+    aiohttp / 解析异常的 ``str(e)`` 常带完整请求 URL（含 token）；``logger.exception`` 会把它连同
+    traceback 写进日志文件。这里在记录落地前改写 ``msg`` / ``exc_text``，任何 handler 都只看到打码版。
+    绝不抛、绝不丢记录。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            msg = record.getMessage()
+            exc = record.exc_text or ""
+            if record.exc_info and not exc:
+                exc = logging.Formatter().formatException(record.exc_info)
+            if _TOKEN_RE.search(msg) or (exc and _TOKEN_RE.search(exc)):
+                record.msg, record.args = redact_token(msg), ()
+                if exc:
+                    record.exc_text = redact_token(exc)
+                    record.exc_info = None   # 只留打码后的文本，防 handler 重新格式化出原文
+        except Exception:
+            pass
+        return True
+
+
+logger.addFilter(_TokenRedactFilter())
+
 PLATFORM = "telegram"
 TG_API_BASE = "https://api.telegram.org"
 TG_TEXT_MAX = 4000   # 官方 4096

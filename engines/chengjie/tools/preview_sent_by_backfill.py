@@ -12,7 +12,7 @@
 
 推断规则（按优先级，先命中者为准；每条事件最多认领 1 条消息，取同会话时间最近的）：
   R1 agent_claimed   agent_sends.claimed_mid 精确指向该消息                → agent（强）
-  R2 script_account  会话所属账号在脚本测试号名单里（默认 6834964252）       → script（强）
+  R2 script_account  会话所属账号在脚本测试号名单里（--script-accounts 或环境变量 CHENGJIE_SCRIPT_SENDER_ACCOUNTS）       → script（强）
   R3 draft_sent      reply_drafts.sent_at 与消息同会话、时间差 ≤ 窗口：
                      decided_by 为空或含 auto/ai/pilot/system → ai；否则（坐席 id）→ agent
   R4 autoreply_audit autoreply_audit 同会话、时间差 ≤ 窗口、decision 属发送类    → ai
@@ -38,7 +38,7 @@ import time
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-DEFAULT_SCRIPT_ACCOUNTS = ("6834964252",)
+DEFAULT_SCRIPT_ACCOUNTS: tuple = ()   # 真实号不入库：命令行或环境变量给
 DEFAULT_WINDOW_SEC = 180.0
 
 # 正文/可识别内容列：任何 SQL 引用即拒绝（防手滑把正文读出来）。
@@ -243,7 +243,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--db", action="append", default=[], help="收件箱库（可多次）")
     ap.add_argument("--instance-root", default="", help="实例根目录，自动找 data/**/*inbox*.db")
     ap.add_argument("--audit-db", default="", help="autoreply_audit.db；缺省在 <root>/data/config/ 下找")
-    ap.add_argument("--script-accounts", default=",".join(DEFAULT_SCRIPT_ACCOUNTS))
+    ap.add_argument("--script-accounts", default=os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", ""))
     ap.add_argument("--window", type=float, default=DEFAULT_WINDOW_SEC)
     ap.add_argument("--days", type=float, default=0.0, help="只看最近 N 天（0=全量）")
     ap.add_argument("--json", action="store_true")
