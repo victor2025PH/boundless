@@ -287,7 +287,8 @@ line:
 # WhatsApp Cloud API（官方 Business 通道：合规/高送达/不封号，根治 RPA 封号）
 # 控制台 Webhook URL 填: https://你的域名/wa/webhook（与 webhook_path 一致）。
 # 与 WhatsApp RPA(mode=device)/Baileys(mode=protocol) 可按账号并存；官方走 mode=official。
-# ⚠️ 24h 客服窗口：窗口外需用模板消息（本版先发自由文本，模板回退待补）。
+# ⚠️ 24h 客服窗口：窗口内自由文本；窗口外（客户超过 24 小时没回复）只能发已审核模板。
+# 回退是被动的：发送被官方拒为 window_expired 时才改发模板。没有「沉默满 24h」的定时外发。
 whatsapp_cloud:
   enabled: false
   phone_number_id: ""            # Cloud API 的 Phone Number ID（非手机号）
@@ -296,11 +297,23 @@ whatsapp_cloud:
   verify_token: ""               # GET 校验自定义口令（控制台填同值）
   webhook_path: "/wa/webhook"
   unsupported_type_reply: "目前仅支持文字消息。"
-  # 24h 客服窗口外回退模板（需先在 Meta 后台审核通过）；name 留空 = 不回退（窗口外失败→进待人工）
+  # 24h 窗口外回退模板（须先在 Meta 审核通过）。name 留空且 by_language 无 name = 不回退
+  # （窗口外失败 → 进待人工）。会话语言 zh/en/tl（Taglish、fil、ceb 归 tl）命中 by_language；
+  # 对不上用 default_language。只填顶层 name/language（旧形状）时不按语言分流。
+  # 正文与提交清单：config/presets/packs/<包>/wa_fallback_templates.yaml
+  # 与 docs/wa_cloud_window_fallback_templates.md。博彩模板只在 config/presets/internal/，
+  # 名字前缀 wa_fb_gamble_，公开包打不进去，公开形态也不会选中。
   window_fallback_template:
-    name: ""
+    name: ""                       # 旧形状：单模板。与 by_language 同时存在时只作最后回落
     language: "zh_CN"
-    text_param: true               # 把原回复文本作为正文 {{1}} 参数
+    text_param: true               # 把事项文本作为正文 {{1}}（by_language 可再限 param_max_chars）
+    default_language: zh           # 会话语言未知或不在 zh/en/tl 时用哪一档
+    by_language: {}
+    # 审核通过后按所选行业包填名字（示例为跨境私域中性模板，勿填 wa_fb_gamble_*）：
+    # by_language:
+    #   zh: {name: cbp_svc_followup_zh, language: zh_CN, text_param: true, param_max_chars: 80}
+    #   en: {name: cbp_svc_followup_en, language: en, text_param: true, param_max_chars: 80}
+    #   tl: {name: cbp_svc_followup_fil, language: fil, text_param: true, param_max_chars: 80}
   # STOP 硬闸：客户发 STOP/UNSUBSCRIBE/退订… 或停联短语 → 冻结（需人工+名单），之后一律不真发
   stop_gate:
     allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
