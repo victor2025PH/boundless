@@ -793,15 +793,33 @@ def register_kb_routes(app, ctx):
         """KB 冷启动现状 + 可选起步包列表（供向导渲染）。"""
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, list_starter_packs
+        from src.utils.vertical_pack import list_packs
         return {"ok": True, "readiness": kb_readiness(_kb_store),
-                "packs": list_starter_packs()}
+                "packs": list_starter_packs(),
+                "vertical_packs": list_packs(include_internal=None)}
 
     @app.post("/api/kb/seed-pack")
     async def api_kb_seed_pack(request: Request):
-        """播种某场景起步包到 KB（按标题去重）。Body: {domain, dedup?}"""
+        """播种某场景起步包到 KB（按标题去重）。
+
+        Body: {domain, dedup?} 走原起步包（未知域仍回落 general）。
+        Body 另带 vertical_pack 时改种垂直模板包（dry_run 预览；占位符未填的条目不写入）。
+        """
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, seed_starter_pack
         body = await request.json()
+        if str(body.get("vertical_pack") or "").strip():
+            from src.utils.vertical_pack import handle_seed_request
+            report = handle_seed_request(_kb_store, body)
+            actor = request.session.get("username", "web_admin")
+            if audit_store and report.get("ok") and report.get("apply"):
+                audit_store.log(
+                    actor, "kb_seed_pack",
+                    "vertical_pack=%s,added=%s,skipped=%s" % (
+                        report.get("pack_id"), report.get("added"), report.get("skipped")))
+            if report.get("ok"):
+                report["readiness"] = kb_readiness(_kb_store)
+            return report
         domain = str(body.get("domain") or "general")
         dedup = bool(body.get("dedup", True))
         try:
