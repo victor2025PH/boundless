@@ -126,7 +126,8 @@ def _truthy(res):
 
 # 2026-10-08 合入 dm-integration（智安 stop_gate #66）后实测：正例 109 漏 32、反例 53 误中 2，曾做棘轮。
 # 同日智语按蛋博士拍板修 stop_gate 词表（PR feat-zhiliao-stop-gate-fix-20261008）：漏判 / 误判清零，
-# CANCEL / END / QUIT 移入 ambiguous（expect=review → 不硬停、转待人工）。从此**严格**：
+# 蛋博士同日拍板：整条只有 CANCEL / END / QUIT（可带标点/空格、大小写不限）按 CTIA 硬停，回到正例；
+# 「please cancel」「cancel po」等非裸词进 ambiguous（expect=review）。从此**严格**：
 # 任何正例漏判、反例误判都红；ambiguous 里 expect=review 的必须 review_hint 命中且不硬停。
 
 
@@ -146,10 +147,15 @@ def test_stop_gate_against_corpus():
 def test_ambiguous_review_rows_go_to_human():
     sg = pytest.importorskip("src.compliance.stop_gate")
     rows = [r for r in _corpus()["ambiguous"] if r["expect"] == "review"]
-    assert {"CANCEL", "END", "QUIT"} <= {r["text"] for r in rows}
+    assert {"please cancel", "取消"} <= {r["text"] for r in rows}
     for r in rows:
         assert not sg.is_stop_message(r["text"]), r["text"]
         assert sg.review_hint(r["text"]), r["text"]
+
+
+@pytest.mark.parametrize("text", ["CANCEL", "END", "QUIT"])
+def test_bare_ctia_words_are_positive_keywords(text):
+    assert text in {r["text"] for r in _corpus()["positive"]}
 
 
 def test_negatives_not_sent_to_review():

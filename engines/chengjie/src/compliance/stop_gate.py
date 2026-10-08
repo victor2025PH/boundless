@@ -77,8 +77,7 @@ _WHOLE: Tuple[str, ...] = (
     "stop sending", "stop the messages", "no more messages", "no more msgs",
     "unsubscribe", "unsub", "unsubscribe me", "opt out", "opt-out", "optout", "opt me out",
     "remove me", "stop contacting", "dont message", "don't message", "dont text", "don't text",
-    # 智语 2026-10-08：enough 单独成句按停联；CANCEL / END / QUIT 在聊天里含糊（取消订单？结束话题？）
-    # 不硬停，走 review_hint → 待人工确认（宁可多拦，但不误冻结）
+    # 智语 2026-10-08：enough 单独成句按停联（CANCEL / END / QUIT 见下方 _STRICT_WHOLE：只认裸词）
     "enough",
     # tl / Taglish
     "tigil", "tigil na", "tigilan", "tigilan mo na", "tigilan mo na ako", "tigilan nyo na ako",
@@ -97,6 +96,22 @@ _WHOLE: Tuple[str, ...] = (
     "停止发送", "停发", "别再发送", "不要再发送",
 )
 _WHOLE_SET = frozenset(_WHOLE)
+
+# 蛋博士 2026-10-08 拍板：整条消息**只有**一个 CANCEL / END / QUIT（大小写不限，前后只允许标点 / 空格）
+# → 按短信行业惯例（CTIA）硬停，与 STOP / UNSUBSCRIBE / STOPALL 同等；「STOP 后继续发」是红线，宁可多拦。
+# 不剥礼貌词（「please cancel」「cancel po」不在此列，走句中规则 / review_hint）；句中出现（cancel my order、
+# the end）同样不在此列。
+_STRICT_WHOLE = frozenset({"cancel", "end", "quit"})
+_STRICT_STRIP = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
+
+
+def _strict_whole_hit(text: Any) -> str:
+    try:
+        t = unicodedata.normalize("NFKC", str(text or "")).strip()
+        t = _STRICT_STRIP.sub("", t).lower()
+        return t if t in _STRICT_WHOLE else ""
+    except Exception:
+        return ""
 
 _MSG = (r"(?:i-?)?(?:chat|message|msg|mesg|text|txt|pm|dm|kontakin|kontakon|contactin|kontak|contact"
         r"|tawagan|tawag|istorbohin|guluhin|spam)")
@@ -238,6 +253,9 @@ def match_lexicon(text: Any) -> str:
     直接调用也可（测试 / 审计）。
     """
     try:
+        strict = _strict_whole_hit(text)
+        if strict:
+            return strict
         s = normalize(text)
         if not s:
             return ""
@@ -310,7 +328,8 @@ _REVIEW_BENIGN = re.compile(
 
 
 #: 整句（剥礼貌词后）恰好是这些 → 含糊停联（短信行业 STOP 同义词，聊天里可能指取消订单 / 结束话题）
-_REVIEW_WHOLE = frozenset({"cancel", "end", "quit", "stop it", "end it", "cancel na", "quit na", "取消", "算了别发"})
+_REVIEW_WHOLE = frozenset({"cancel", "end", "quit", "stop it", "end it", "cancel na", "quit na", "please cancel",
+                           "cancel po", "end po", "quit po", "取消", "算了别发"})
 
 
 def review_hint(text: Any) -> str:

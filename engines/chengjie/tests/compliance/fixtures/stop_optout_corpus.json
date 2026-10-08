@@ -11,16 +11,34 @@
   "matching_hint": "大小写、首尾空白、句末标点和 emoji 不影响判定；positive 里的 note 说明只在整条消息时才算的关键词"
  },
  "counts": {
-  "positive": 106,
-  "negative": 59,
-  "ambiguous": 18
+  "positive": 113,
+  "negative": 61,
+  "ambiguous": 17
  },
  "positive": [
   {
    "text": "STOP",
    "lang": "en",
    "kind": "keyword",
-   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE）；CANCEL/END/QUIT 聊天里含糊，2026-10-08 移入 ambiguous（expect=review，转人工确认）"
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词（可带标点/空格）时算"
+  },
+  {
+   "text": "CANCEL",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
+  },
+  {
+   "text": "END",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
+  },
+  {
+   "text": "QUIT",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
   },
   {
    "text": "stop",
@@ -554,6 +572,30 @@
    "text": "我要退订",
    "lang": "zh",
    "kind": "unsubscribe"
+  },
+  {
+   "text": "cancel.",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "  Quit!! ",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "END?",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "Cancel",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
   }
  ],
  "negative": [
@@ -851,6 +893,16 @@
    "text": "pa-cancel po ng order ko",
    "lang": "taglish",
    "why": "cancel order, not opt-out"
+  },
+  {
+   "text": "the end",
+   "lang": "en",
+   "why": "句中 end，不是退订"
+  },
+  {
+   "text": "that's the end of the story",
+   "lang": "en",
+   "why": "句中 end"
   }
  ],
  "ambiguous": [
@@ -927,24 +979,6 @@
    "why": "暂时不方便，不是永久停联"
   },
   {
-   "text": "CANCEL",
-   "lang": "en",
-   "expect": "review",
-   "why": "短信 STOP 同义词，但聊天里可能指取消订单 / 结束话题：不硬停，转待人工确认"
-  },
-  {
-   "text": "END",
-   "lang": "en",
-   "expect": "review",
-   "why": "短信 STOP 同义词，但聊天里可能指取消订单 / 结束话题：不硬停，转待人工确认"
-  },
-  {
-   "text": "QUIT",
-   "lang": "en",
-   "expect": "review",
-   "why": "短信 STOP 同义词，但聊天里可能指取消订单 / 结束话题：不硬停，转待人工确认"
-  },
-  {
    "text": "stop it 😂",
    "lang": "en",
    "expect": "review",
@@ -961,6 +995,18 @@
    "lang": "zh",
    "expect": "review",
    "why": "单独「取消」含糊（订单？订阅？）：转人工确认"
+  },
+  {
+   "text": "please cancel",
+   "lang": "en",
+   "expect": "review",
+   "why": "带礼貌词的 cancel：不是裸词，转人工确认"
+  },
+  {
+   "text": "I want to cancel my subscription to the gym",
+   "lang": "en",
+   "expect": "review",
+   "why": "cancel my subscription 可能指对我们的订阅：转人工确认（宁可多拦）"
   }
  ]
 }

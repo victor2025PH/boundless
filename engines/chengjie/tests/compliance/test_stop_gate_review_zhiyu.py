@@ -43,7 +43,8 @@ def store(tmp_path):
 @pytest.mark.parametrize("text", [
     "我想退订单可以吗", "我要退款", "退订单怎么操作", "退订的酒店钱什么时候退", "这个订单能取消吗",
     "不要再发呆了", "你别发愁了", "别再发烧了吧", "cancel my order please", "I want a refund",
-    "pa-cancel po ng order ko", "can I cancel the booking?",
+    "pa-cancel po ng order ko", "can I cancel the booking?", "the end", "that's the end of the story",
+    "endless love", "cancelled na yung flight",
 ])
 def test_refund_and_order_talk_is_not_stop_nor_review(text):
     assert not sg.is_stop_message(text), text
@@ -55,13 +56,15 @@ def test_refund_and_order_talk_is_not_stop_nor_review(text):
     "alisin mo na ako sa listahan", "stop na, di ako interested", "Hunong na palihug.",
     "ayaw na ko hasola", "band karo messages", "quit messaging me", "I don't want these messages",
     "Stop it, I'm not interested.", "enough",
+    # 蛋博士 10-08：裸 CANCEL / END / QUIT（大小写不限、前后可带标点空格）= CTIA 硬停
+    "CANCEL", "cancel", "End", "END?", "  Quit!! ", "...end...", "cancel.",
 ])
 def test_previous_misses_now_stop(text):
     assert sg.is_stop_message(text), text
 
 
-@pytest.mark.parametrize("text", ["CANCEL", "End", "quit", "stop it", "stop it 😂", "取消", "Cancel na lang",
-                                  "omg stop", "should I stop playing?"])
+@pytest.mark.parametrize("text", ["stop it", "stop it 😂", "取消", "Cancel na lang", "please cancel", "cancel po",
+                                  "cancel cancel", "omg stop", "should I stop playing?"])
 def test_ambiguous_goes_to_review_not_hard_stop(text):
     assert not sg.is_stop_message(text), text
     assert sg.review_hint(text), text
@@ -101,7 +104,7 @@ def _msg(text, ext):
 
 def test_replybus_ambiguous_silent_review_without_stop_record(monkeypatch, store):
     client, calls = _replybus_client(monkeypatch, store)
-    r = client.post("/api/replybus/decide", json=_msg("CANCEL", "tg:4440001")).json()
+    r = client.post("/api/replybus/decide", json=_msg("please cancel", "tg:4440001")).json()
     assert r == {"action": "silent", "reason": "stop_review"}, r          # 不确认、不走 LLM
     assert calls == []
     acts = [x["action"] for x in abl.get_blocklist(store).audit_rows(path="replybus_decide")]
@@ -142,7 +145,7 @@ async def test_protocol_autoreply_ambiguous_not_sent_not_frozen(store, monkeypat
         sent.append(kw.get("text"))
 
     payload = {"direction": "in", "platform": "whatsapp", "account_id": "wa9",
-               "chat_key": "639170000009", "text": "QUIT"}
+               "chat_key": "639170000009", "text": "stop it"}
     res = await pa.run_autoreply(payload, registry=_Reg(), cfg={"protocol_autoreply": {"enabled": True}},
                                  generate=_gen, send=_send, now=1000.0)
     assert res.get("sent") is not True and res["reason"] == "stop_review", res
@@ -160,7 +163,7 @@ def test_inbox_autodraft_ambiguous_becomes_l1_review(store):
     store.set_automation_mode(cid, "auto_ai", source="human")
     conv = {"conversation_id": cid, "platform": "telegram", "account_id": "acct9",
             "chat_key": "u9", "display_name": "Lea"}
-    svc.auto_generate_draft(conv, "CANCEL", automation_mode="auto_ai", enrich=False)
+    svc.auto_generate_draft(conv, "please cancel", automation_mode="auto_ai", enrich=False)
     assert sc.frozen_reason(store, cid) == ""                              # 不冻结
     drafts = [d for d in store.list_drafts(conversation_id=cid, limit=20)
               if d.get("status") in ("pending", "enriching")]
@@ -176,3 +179,15 @@ def test_inbox_autodraft_ambiguous_becomes_l1_review(store):
 ])
 def test_negated_stop_not_review(text):
     assert sg.review_hint(text) == "", text
+
+
+@pytest.mark.parametrize("text", ["CANCEL", "end.", " Quit "])
+def test_replybus_bare_ctia_word_hard_stops_with_single_confirm(monkeypatch, store, text):
+    client, calls = _replybus_client(monkeypatch, store)
+    ext = "tg:" + str(abs(hash(text)) % 10 ** 9)
+    r1 = client.post("/api/replybus/decide", json=_msg(text, ext)).json()
+    assert r1["action"] == "silent" and r1["reason"] == "stop", r1
+    assert r1.get("confirm_text") and r1.get("confirm_once") is True
+    r2 = client.post("/api/replybus/decide", json=_msg("hello?", ext)).json()
+    assert r2 == {"action": "silent", "reason": "stop"}, r2
+    assert calls == []
