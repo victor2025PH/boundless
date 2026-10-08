@@ -610,10 +610,15 @@ def test_wiring_kb_gate_bug_group_exempt():
     d = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
                           config=cfg, chat_id="-100777")
     assert d.mode == "optional" and d.reason == "bug_group"
-    # 非报障群同句仍走闲聊闸（旧行为不变）
+    # P1-1：人设没表态 kind，且句子是在问一件事 → 不按闲聊跳过（查到就注）。
+    # 报障群豁免仍然先命中（上面），非报障群走 info_query 而不是整句丢弃。
     d2 = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
                            config=cfg, chat_id="-100888")
-    assert d2.mode == "skip" and d2.reason == "companion_chat"
+    assert d2.mode == "optional" and d2.reason == "info_query"
+    # 非报障群的闲聊句仍走闲聊闸
+    d3 = resolve_kb_policy(persona=None, intent="direct_chat", text="哈哈好的",
+                           config=cfg, chat_id="-100888")
+    assert d3.mode == "skip" and d3.reason == "companion_chat"
 
 
 def test_wiring_photo_and_pending_routes():

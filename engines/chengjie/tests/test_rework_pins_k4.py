@@ -55,8 +55,9 @@ def test_61_status_enum_merges_runtime_registry_and_never_renders_placeholder():
     assert '_registry_rows("whatsapp")' in seg and '_registry_rows("messenger")' in seg
     # #78-②：messenger_rpa 未启用且未配 accounts 时不凭空回退 default 占位
     assert re.search(r'if _mrpa_cfg\.get\("enabled"\) or _mrpa_cfg\.get\("accounts"\):', seg)
-    # 绑定计数循环四路都算（LINE 行不能是「看得见指不了」）
-    assert "for acc in tg_accounts + mrpa_accounts + wa_accounts + line_accounts:" in seg
+    # 绑定计数循环四路都算，再加运行时注册表里的其它平台（LINE 行不能是「看得见指不了」）
+    assert "for acc in (tg_accounts + mrpa_accounts + wa_accounts + line_accounts" in seg
+    assert "+ other_accounts):" in seg
 
 
 def test_61_placeholder_judgement_keeps_real_accounts():
@@ -181,13 +182,14 @@ def test_67_upload_route_validates_content_before_write_and_uses_data_root():
     assert "sniff_media_bytes as _sniff_media" in src
     seg = _between(src, '@app.post("/api/personas/{pid}/media")',
                    'url = f"/static/persona_albums/')
-    # ② magic bytes 不过 = 当场 400，绝不静默存坏；校验必须在落盘之前
+    # ② magic bytes 不过 = 当场 400，绝不静默存坏；校验必须在落盘之前。
+    # 拒绝走 _reject（带原因码），落盘走线程池，回读比对的是落盘前记下的 verify_head。
     assert re.search(
-        r"_bad = _sniff_media\(data, ext\)\s*\n\s*if _bad:\s*\n\s*raise HTTPException\(400", seg)
+        r"_bad = _sniff_media\(data, ext\)\s*\n\s*if _bad:\s*\n\s*raise _reject\(request, 400", seg)
     assert '"err.pmedia.bad_content"' in seg
-    assert seg.index("_sniff_media(data, ext)") < seg.index("fpath.write_bytes(data)")
+    assert seg.index("_sniff_media(data, ext)") < seg.index("fpath.write_bytes")
     # ② 落盘后回读验证（写成功 ≠ 内容对）
-    assert "_head != bytes(data[:16])" in seg
+    assert "_head != verify_head" in seg
     # 落盘目录来自 _album_root()（不再 Path(__file__) 推安装目录）
     assert "d = _album_root() / safe" in seg
 

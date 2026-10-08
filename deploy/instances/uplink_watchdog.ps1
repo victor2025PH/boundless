@@ -1,4 +1,4 @@
-# uplink_watchdog.ps1 - per-broadband-line health monitor for the office multi-WAN.
+﻿# uplink_watchdog.ps1 - per-broadband-line health monitor for the office multi-WAN.
 #
 # WHY (2026-08-12 reliability review P1-6): the office egresses through 4
 #   load-balanced broadband uplinks. When ONE line stalls (13:41 that day: PLDT
