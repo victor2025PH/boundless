@@ -285,7 +285,10 @@ def resolve_exe_from_registry_value(value: Any, exe_name: str) -> str:
     if s.lower().endswith(",0"):
         s = s[:-2].strip().strip('"')
     if exe_name and not s.lower().endswith(".exe"):
-        s = os.path.join(s, exe_name)
+        # 注册表路径在 Windows 上以反斜杠结尾。Linux 的 os.path.join 不认 ``\``，
+        # 会在尾随反斜杠后再插一个 ``/``，得到 Weixin//Weixin.exe。
+        sep = "\\" if "\\" in s else "/"
+        s = s.rstrip("\\/") + sep + exe_name
     return s
 
 

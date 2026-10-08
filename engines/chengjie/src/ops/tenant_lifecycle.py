@@ -80,8 +80,15 @@ def exports_dir(ops_base: str = DEFAULT_OPS_BASE) -> Path:
 
 def tenant_card_path(data_dir: str) -> Path:
     """交付卡落数据根同级（D:\\chengjie-instances\\<iid>\\tenant_card.json）——
-    开通守护（下一阶段对接官网订单）直接读这张卡回填订单。"""
-    return Path(data_dir).parent / "tenant_card.json"
+    开通守护（下一阶段对接官网订单）直接读这张卡回填订单。
+
+    数据根在 Windows 上是反斜杠。Linux 的 Path 不把 ``\\`` 当分隔符，
+    ``Path(r"D:\\...\\data").parent`` 会变成 ``.``，卡被写到进程 cwd。
+    两种分隔符都先归一再取父目录；Windows 上正斜杠 Path 与原反斜杠路径相等。
+    """
+    raw = str(data_dir or "").replace("\\", "/").rstrip("/")
+    parent = raw.rsplit("/", 1)[0] if "/" in raw else raw
+    return Path(parent) / "tenant_card.json"
 
 
 def data_dir_of_service(svc: Dict[str, Any], data_base: str = r"D:\chengjie-instances") -> str:
@@ -105,7 +112,9 @@ def web_port_of_service(svc: Dict[str, Any]) -> Optional[int]:
 
 # ────────────────────────── 纯函数：materialize 计划 ──────────────────────────
 
-SKELETON_SUBDIRS = ("config", "sessions", "logs", "events\\spool", "ledger_outbox")
+# 用正斜杠：Path 在 Windows 上同样把它当成分隔符。写成 events\\spool 时，
+# Linux 会建出一个名字里带反斜杠的目录，events/spool 并不存在。
+SKELETON_SUBDIRS = ("config", "sessions", "logs", "events/spool", "ledger_outbox")
 
 
 def materialize(
