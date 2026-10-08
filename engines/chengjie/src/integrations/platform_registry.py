@@ -117,7 +117,7 @@ class PlatformSpec:
 _SPECS: Tuple[PlatformSpec, ...] = (
     PlatformSpec(
         id="telegram", name="Telegram", name_zh="Telegram", family="telegram",
-        color="#229ED9", modes=("protocol", "device", "phone"), default_mode="protocol",
+        color="#229ED9", modes=("protocol", "device", "phone", "official"), default_mode="protocol",
         compliance=COMPLIANCE_MAIN, implemented=True,
         msg_id_fields=("id", "message_id"), console_url="https://my.telegram.org/",
         sort=10, aliases=("tg",),

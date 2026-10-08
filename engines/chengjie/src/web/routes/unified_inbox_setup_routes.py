@@ -373,7 +373,14 @@ def _provision_official_account(channel_id: str, config: Dict[str, Any]) -> str:
         if not _required_ready(ch, {}, config):
             return ""
         account_id = ""
-        if ch.official_account_id_key:
+        if ch.official_account_id_from_token:
+            # Telegram Bot：account_id＝token 冒号前的 bot 数字 id（webhook / worker 同口径）；
+            # 推不出就不开通（回落 "official" 会和入站镜像对不上号）
+            from src.integrations.telegram_bot_official import bot_id_from_token
+            account_id = bot_id_from_token(_dig(config, ch.official_account_id_from_token))
+            if not account_id:
+                return ""
+        elif ch.official_account_id_key:
             account_id = str(_dig(config, ch.official_account_id_key) or "").strip()
         account_id = account_id or "official"
         from src.integrations.account_registry import get_account_registry

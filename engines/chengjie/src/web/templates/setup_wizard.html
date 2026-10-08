@@ -223,7 +223,34 @@ function apiPathHtml(ch){
     +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>'
     +_swProbeHtml(ch.id)
     +reach
+    +(ch.id==='telegram_bot'?_swTgHookHtml():'')
     +'</details>';
+}
+
+/* Telegram 机器人：setWebhook 只在人点按钮时调用（改 Telegram 侧回调是对外可见动作）。
+   后端 POST /api/admin/telegram-bot/set-webhook 只回主机名/路径/错误归类，不回 token。 */
+function _swTgHookHtml(){
+  return '<div class="sw-field" style="margin-top:12px;">'
+    +'<label>'+esc(window.T('sw_tg_hook_title'))+'</label>'
+    +'<input id="sw-tghook-url" type="url" placeholder="'+esc(window.T('sw_tg_hook_ph'))+'">'
+    +'<div class="hint">'+esc(window.T('sw_tg_hook_hint'))+'</div>'
+    +'<div class="sw-actions"><button class="sw-btn" onclick="swTgSetWebhook(this)">'+esc(window.T('sw_tg_hook_btn'))+'</button>'
+    +'<span class="sw-msg" id="sw-tghook-msg"></span></div></div>';
+}
+function swTgSetWebhook(btn){
+  var inp=document.getElementById('sw-tghook-url'), msg=document.getElementById('sw-tghook-msg');
+  var base=String((inp&&inp.value)||'').trim();
+  if(!/^https:\/\/[^\s/?#]+/i.test(base)){ msg.className='sw-msg err'; msg.textContent=window.T('sw_tg_hook_bad_url'); return; }
+  btn.disabled=true; msg.className='sw-msg'; msg.textContent=window.T('sw_tg_hook_running');
+  apiFetch('/api/admin/telegram-bot/set-webhook',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({public_base_url:base})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d&&d.ok){ msg.className='sw-msg ok'; msg.textContent=window.Tf('sw_tg_hook_ok',{host:d.host||'',path:d.path||''}); }
+      else { msg.className='sw-msg err'; msg.textContent=window.Tf('sw_tg_hook_fail',{kind:(d&&d.error_kind)||'unknown'}); }
+    })
+    .catch(function(){ msg.className='sw-msg err'; msg.textContent=window.Tf('sw_tg_hook_fail',{kind:'network'}); })
+    .finally(function(){ btn.disabled=false; });
 }
 
 /* 既无账号形态也无凭据的渠道（网页客服）：服务端原生，开启即用。 */
@@ -341,7 +368,7 @@ function _swDeepLink(){
 
 /* 官方渠道开通漏斗埋点（unavail_shown → wizard_open → saved → online；
    经 /api/telemetry/ui-event 通用通道，ops 侧按 prefix=official_setup_ 查趋势） */
-var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1,qqbot:1,wechat_kf:1};
+var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1,qqbot:1,wechat_kf:1,telegram_bot:1};
 function _swBeacon(action){
   try{
     var body=JSON.stringify({page:'/workspace/setup', action:String(action||'')});
