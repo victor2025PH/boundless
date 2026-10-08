@@ -331,7 +331,7 @@ def test_caps_coexist_on_one_agent(tmp_path, monkeypatch):
     })
     ag = agent_mod.NodeAgent(cfg, http=lambda *_a, **_k: (200, {}), app_version="t")
     hb = ag.build_heartbeat()
-    assert AGENT_VERSION == "0.3.25"
+    assert AGENT_VERSION == "0.3.26"
     assert hb["caps"] == [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2]
     assert ag.phones.manage_server is True and ag.phone_ops.manage_server is True
     assert ag.phone_flows.enabled is True and ag.phone_flows._verify is True

@@ -675,7 +675,8 @@ def test_new_modules_have_no_dangerous_adb_or_live_port_tokens():
         code = (root / name).read_text(encoding="utf-8")
         body = code.split('"""', 2)[2]          # skip the module docstring
         for bad in ("kill-server", "start-server", "tcpip", "reboot", "9000", "connect", "install", "\"usb\"", "root"):
-            assert bad not in body.replace("adb_args_not_allowed", ""), (name, bad)
+            assert bad not in body.replace("adb_args_not_allowed", "").replace(
+                "fb_not_installed_or_store_redirect", ""), (name, bad)
 
 
 # ── 3b) 主控手机操作端点 + 节点端到端 ──────────────────────────────────────────

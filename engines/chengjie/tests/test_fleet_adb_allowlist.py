@@ -20,13 +20,13 @@ def test_catalog_examples_match_their_category():
     for row in CATALOG:
         found = classify_adb_args(row["example"])
         assert (found.category, found.family) == (row["category"], row["family"]), row["example"]
-        assert row["note"] and row["since"] in {"0.3.7", "0.3.18", "0.3.21", "0.3.23"}
+        assert row["note"] and row["since"] in {"0.3.7", "0.3.18", "0.3.21", "0.3.23", "0.3.26"}
         families.add(row["family"])
     for required in (
         "dumpsys", "uiautomator", "media_pause", "cmd_connectivity", "cmd_activity", "cmd_package", "settings_get",
         "pm_query", "ping", "connectivity_204", "getprop", "ip", "ifconfig", "wm",
         "am_start_facebook", "ussd_dial", "settings_put", "svc_radio", "reboot",
-        "pm_mutate", "force_stop", "facebook_force_stop", "airplane_mode",
+        "pm_mutate", "force_stop", "facebook_force_stop", "airplane_mode", "portrait_lock",
     ):
         assert required in families
 
@@ -59,6 +59,20 @@ def test_flags_do_not_open_unlisted_forms(args):
         check_adb_args(args, allow_guarded_writes=True, allow_experimental_ussd=True,
                        allow_app_restart=True)
     assert err.value.code == "adb_args_not_allowed"
+
+
+def test_portrait_lock_is_only_rotation_zero():
+    check_adb_args(("-s", "S1", "shell", "settings", "put", "system", "user_rotation", "0"))
+    check_adb_args(("-s", "S1", "shell", "settings", "put", "system", "accelerometer_rotation", "0"))
+    for args in (
+        ("-s", "S1", "shell", "settings", "put", "system", "user_rotation", "1"),
+        ("-s", "S1", "shell", "settings", "put", "system", "accelerometer_rotation", "1"),
+        ("-s", "S1", "shell", "settings", "put", "global", "user_rotation", "0"),
+        ("-s", "S1", "shell", "settings", "put", "system", "screen_brightness", "0"),
+    ):
+        assert classify_adb_args(args).category == "guarded_write"
+        with pytest.raises(PhoneOpError):
+            check_adb_args(args)
 
 
 def test_settings_get_namespaces_and_package_queries_are_read_only():

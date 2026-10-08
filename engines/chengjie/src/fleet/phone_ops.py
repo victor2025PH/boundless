@@ -493,6 +493,54 @@ class PhoneOps:
                 HIERARCHY_PAUSE_TIMEOUT_SEC,
             )
 
+    def facebook_package(self, serial: str) -> str:
+        """Katana or lite when ``pm path`` names it. Empty when the answer is missing.
+
+        Does not take the phone lock. An empty answer is not proof the app is
+        absent: the caller still launches and then reads the foreground.
+        """
+        try:
+            adb = self._ready_adb()
+        except PhoneOpError:
+            return ""
+        for package in _FB_PACKAGES:
+            _rc, out, err = self._paced_capture(
+                adb, serial, ("-s", serial, "shell", "pm", "path", package), 8.0,
+            )
+            text = _hierarchy_text(out) or _hierarchy_text(err)
+            if ("package:" + package) in text:
+                return package
+        return ""
+
+    def launch_facebook(self, serial: str, package: str) -> None:
+        """Foreground one Facebook package with ``am start``. Does not take the lock.
+
+        Does not force-stop. The caller already holds the phone session.
+        """
+        from .adb_allowlist import facebook_launch_args
+
+        adb = self._ready_adb()
+        self._pace(serial)
+        try:
+            self._adb(adb, ("-s", serial, "shell") + facebook_launch_args(package), INPUT_TIMEOUT_SEC)
+        finally:
+            self._last_op[serial] = self._clock()
+
+    def restore_portrait(self, serial: str) -> None:
+        """Turn off auto-rotate and set user rotation 0. Does not take the lock.
+
+        Other ``settings put`` forms stay denied. A failure raises ``PhoneOpError``.
+        """
+        from .adb_allowlist import portrait_lock_args
+
+        adb = self._ready_adb()
+        for argv in portrait_lock_args():
+            self._pace(serial)
+            try:
+                self._adb(adb, ("-s", serial, "shell") + argv, INPUT_TIMEOUT_SEC)
+            finally:
+                self._last_op[serial] = self._clock()
+
     def read_foreground(self, serial: str) -> Dict[str, str]:
         """Resumed package and activity. Empty strings on failure.
 

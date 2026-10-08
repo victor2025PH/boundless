@@ -25,6 +25,7 @@
     0.3.23 去掉 dump 前的上半部轻点，只留媒体暂停。dump 之后如果前台已经离开信息流，按一次返回。like_diag 增加层级计数，并用截图动作条里的节点作为第二路信号；两信号一致才点、点完复核、like_probe 只定位、dry_run 不碰手机都不变。新增 phone_app_restart：只对可操作池里的手机 force-stop 再打开 Facebook，直播机、173 和受保护手机拒绝。登录检查失败时回执带前台包名和 activity。公开 latest 仍是 0.3.7。
     0.3.24 金丝雀把 0.3.21 的 dump 加固、0.3.22 的机房弹窗、0.3.23 的找赞定位和 phone_app_restart 收成同一份安装包。点赞仍要两信号一致并复核，like_probe 只定位，dry_run 不碰手机。公开 latest 仍是 0.3.7。
     0.3.25 直播机、173、受保护手机（序列号前缀 3B1F）和显式排除名单走同一个 fail-closed 判断，自动派发和手机操作都过这一关。现场待办面板由登录计划任务和 Run 键在交互桌面启动，服务进程只写快照。动作条有 Comment/Share 但没有 Like 时，按等距推出 Like 位置，再和截图对上才算两路。公开 latest 仍是 0.3.7。
+    0.3.26 打开 Facebook 按包名 am start，前台已是 Facebook 时不回桌面；点进 Telegram、Play 商店或空位报 wrong_app_launched / fb_not_installed_or_store_redirect，不再报未登录。推断出来的 Like 只在 ±40px 且动作条行内接受截图落点。现场面板计划任务以交互用户运行；服务在会话 0 时用活动控制台会话拉起，会话 0 里启动成功不算已显示。已领取过期未回执的任务记 failed/timeout。横屏先尝试锁竖屏，否则报 landscape_orientation。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -107,7 +108,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.25"
+AGENT_VERSION = "0.3.26"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -1471,8 +1472,28 @@ class NodeAgent:
                     next_hb = now + self.cfg.heartbeat_sec
                 tasks = self.pull(wait=min(MAX_LONGPOLL_WAIT_SEC, max(1, int(next_hb - self.clock()))))
                 for t in tasks:
-                    status, result, detail = self.execute(t)
-                    self.ack(str(t.get("task_id")), status, result, detail)
+                    # One task's ack must not abandon the rest of this batch.
+                    # A claimed probe with no receipt is closed by the controller
+                    # as failed/timeout; if this process already sees the deadline,
+                    # it sends that receipt itself and does not start the phone.
+                    try:
+                        exp = float(t.get("expires_at") or 0)
+                    except (TypeError, ValueError):
+                        exp = 0.0
+                    if exp and self.clock() > exp:
+                        status, result, detail = STATUS_FAILED, {}, "timeout"
+                    else:
+                        try:
+                            status, result, detail = self.execute(t)
+                        except Exception as exc:
+                            logger.warning("[agent] task %s failed: %s", t.get("task_id"), type(exc).__name__)
+                            status, result, detail = STATUS_FAILED, {}, "timeout"
+                    try:
+                        self.ack(str(t.get("task_id")), status, result, detail)
+                    except Unauthorized:
+                        raise
+                    except Exception as exc:
+                        logger.warning("[agent] ack %s failed: %s", t.get("task_id"), type(exc).__name__)
                     if self.exit_requested:
                         logger.info("[agent] 升级就位，退出让服务层重启")
                         return

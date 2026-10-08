@@ -38,6 +38,7 @@ SNAP_NAME = "operator_alert.json"
 LANG_NAME = "operator_alert_lang.json"
 LOCK_NAME = "operator_alert.lock"
 SCRIPT_NAME = "operator_alert_panel.ps1"
+PANEL_SESSION_NAME = "panel_session.json"
 PANEL_TASK_NAME = "ChatX Fleet Panel"
 PANEL_RUN_VALUE = "ChatXFleetPanel"
 PANEL_RUN_KEY = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
@@ -502,6 +503,12 @@ def operator_alert_diag(state_dir: Path, cfg_data: Any, *, live_stream: bool = F
         "last_present": _present_view(None if live_stream else snap),
         "session_id": -1 if live_stream else _session_view(snap),
     }
+    panel = {"task_account": "", "run_key_present": False, "panel_session_id": -1}
+    if not live_stream:
+        panel = panel_runtime_diag(root)
+    out["task_account"] = panel["task_account"]
+    out["run_key_present"] = panel["run_key_present"]
+    out["panel_session_id"] = panel["panel_session_id"]
     if network:
         out["network"] = network
     if pc_reason:
@@ -1207,14 +1214,21 @@ def _spawn_interactive(script: Path, snapshot: Path, lang: Path, lock: Path) -> 
             "-WindowStyle", "Hidden", "-File", str(script),
             "-Snapshot", str(snapshot), "-Lang", str(lang), "-Lock", str(lock),
         ]
-        if _current_session_id() > 0:
+        session_id = _current_session_id()
+        if session_id > 0:
             subprocess.Popen(args, creationflags=0x08000000)
+            _remember_panel_session(snapshot, session_id)
             return True
-        # Session 0 cannot paint on the logged-on desktop. The logon task
-        # (and the Run key) already live in that session and poll the snapshot.
-        if _kick_logon_panel():
+        # Session 0 cannot paint. CreateProcessAsUser on the active console
+        # is the launch that counts. schtasks /Run returning 0 from session 0
+        # is not proof the panel is on a desktop.
+        if _spawn_as_user(args):
+            console = _active_console_session_id()
+            if console > 0:
+                _remember_panel_session(snapshot, console)
             return True
-        return _spawn_as_user(args)
+        _kick_logon_panel()
+        return _stored_panel_session(snapshot.parent) > 0
     except Exception:
         logger.warning("[operator_alert] panel launch failed", exc_info=True)
         return False
@@ -1243,6 +1257,165 @@ def _powershell() -> str:
     if os.path.isfile(candidate):
         return candidate
     return "powershell.exe"
+
+
+def _remember_panel_session(snapshot: Path, session_id: int) -> None:
+    """Record the console session the panel was started in. An integer only."""
+    if isinstance(session_id, bool) or not isinstance(session_id, int):
+        return
+    if not 0 <= session_id <= 10_000_000:
+        return
+    try:
+        parent = snapshot.parent if isinstance(snapshot, Path) else Path(snapshot).parent
+        _atomic_write(parent / PANEL_SESSION_NAME, json.dumps({"session_id": session_id}))
+    except OSError:
+        logger.debug("[operator_alert] panel session was not recorded", exc_info=True)
+
+
+def _stored_panel_session(state_dir: Path) -> int:
+    """Panel process session, or -1 when the panel is not holding the lock.
+
+    Session 0 is returned as 0 so a diagnostic can show it. Callers that
+    decide ``shown`` treat only a session above 0 as a desktop.
+    """
+    root = state_dir if isinstance(state_dir, Path) else Path(state_dir)
+    lock = root / LOCK_NAME
+    if not (lock.is_file() and _lock_held(lock)):
+        return -1
+    try:
+        raw = json.loads((root / PANEL_SESSION_NAME).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return -1
+    if not isinstance(raw, dict):
+        return -1
+    sid = raw.get("session_id")
+    if isinstance(sid, bool) or not isinstance(sid, int) or not 0 <= sid <= 10_000_000:
+        return -1
+    return sid
+
+
+def _safe_task_account(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    if not text or len(text) > 80:
+        return ""
+    folded = text.casefold()
+    if folded in {"system", "nt authority\\system"} or text == "S-1-5-18":
+        return "SYSTEM"
+    if folded in {"interactive", "nt authority\\interactive"} or "s-1-5-4" in folded:
+        return "INTERACTIVE"
+    if not re.fullmatch(r"[A-Za-z0-9_.\\ @-]{1,80}", text):
+        return ""
+    # A long token with no domain separator is treated as a serial, not an account.
+    if "\\" not in text and len(text) >= 8 and text.isalnum():
+        return ""
+    return text
+
+
+def parse_panel_task_account(xml: str) -> str:
+    """INTERACTIVE when the task principal is group S-1-5-4, else SYSTEM or ""."""
+    if not isinstance(xml, str) or not xml:
+        return ""
+    if "S-1-5-4" in xml and "GroupId" in xml:
+        return "INTERACTIVE"
+    if ">SYSTEM<" in xml or "S-1-5-18" in xml:
+        return "SYSTEM"
+    return ""
+
+
+def parse_schtasks_account(text: str) -> str:
+    """Run-as account from ``schtasks /Query /FO LIST /V``. No other fields."""
+    for line in (text or "").splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        if key.strip().casefold() not in {"run as user", "作为用户运行"}:
+            continue
+        return _safe_task_account(val.strip())
+    return ""
+
+
+def _panel_task_account(state_dir: Path) -> str:
+    xml_account = ""
+    try:
+        from .service import PANEL_TASK_XML_NAME
+
+        xml_account = parse_panel_task_account(
+            (state_dir / PANEL_TASK_XML_NAME).read_text(encoding="utf-8")
+            if isinstance(state_dir, Path) else (Path(state_dir) / PANEL_TASK_XML_NAME).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError):
+        xml_account = ""
+    queried = ""
+    if os.name == "nt":
+        queried = parse_schtasks_account(_query_panel_task_text())
+    if queried == "SYSTEM":
+        return "SYSTEM"
+    if queried:
+        return queried
+    return xml_account
+
+
+def _query_panel_task_text() -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        from .service import PANEL_TASK_NAME, build_schtasks_query
+
+        proc = subprocess.run(
+            build_schtasks_query(task_name=PANEL_TASK_NAME),
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        logger.debug("[operator_alert] panel task query failed", exc_info=True)
+        return ""
+    raw = getattr(proc, "stdout", b"") or b""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", "replace")
+    return str(raw)
+
+
+def _run_key_present() -> bool:
+    """True when the HKLM Run value exists. The command line is not returned."""
+    if os.name != "nt":
+        return False
+    try:
+        proc = subprocess.run(
+            ["reg", "query", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE],
+            capture_output=True, timeout=10,
+        )
+        return int(getattr(proc, "returncode", 1) or 0) == 0
+    except Exception:
+        logger.debug("[operator_alert] run key query failed", exc_info=True)
+        return False
+
+
+def panel_runtime_diag(state_dir: Path) -> Dict[str, Any]:
+    """Task account, Run key, and the panel's session. No serials and no secrets."""
+    root = state_dir if isinstance(state_dir, Path) else Path(state_dir)
+    account = _panel_task_account(root)
+    if account not in {"INTERACTIVE", "SYSTEM", ""}:
+        account = _safe_task_account(account)
+    return {
+        "task_account": account if isinstance(account, str) else "",
+        "run_key_present": _run_key_present() is True,
+        "panel_session_id": _stored_panel_session(root),
+    }
+
+
+def _active_console_session_id() -> int:
+    if os.name != "nt":
+        return 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
+        sid = int(kernel32.WTSGetActiveConsoleSessionId() or 0)
+        if sid == 0xFFFFFFFF:
+            return 0
+        return sid
+    except Exception:
+        return 0
 
 
 def _current_session_id() -> int:
