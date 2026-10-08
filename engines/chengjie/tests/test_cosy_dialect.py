@@ -1,6 +1,8 @@
 """方言出货闸门：仅粤语可调用；未出货档不得改声学、不得进 UI。"""
 from pathlib import Path
 
+import pytest
+
 from src.ai.cosy_dialect import (
     COSY3_DIALECT_INSTRUCT,
     SHIPPED_DIALECT_FLAVORS,
@@ -81,6 +83,13 @@ def test_normalize_profile_strips_unshipped_dialect():
     assert keep["voice_profile"]["dialect_flavor"] == "cantonese"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=("xfail 台账 X-1（2026-10-08 蛋博士定）：人设页方言下拉在本代码线从未存在"
+            "（personas.html 全历史无 dialect 选项，用例来自另一条线）；后端 dialect_flavor"
+            " 归一化仍由本文件其余用例守住。补 UI（仅粤语）后本条会 XPASS→strict 转红提醒摘标。"
+            "登记：CI_BASELINE.md「xfail 台账」"),
+)
 def test_personas_html_dialect_select_only_cantonese():
     html = (Path(__file__).resolve().parents[1]
             / "src" / "web" / "templates" / "personas.html").read_text(
