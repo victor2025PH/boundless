@@ -56,7 +56,15 @@ DNS_FAIL = ("ping: unknown host connectivitycheck.gstatic.com\n", 2)
 PM_YES = ("package:/data/app/com.facebook.katana-1/base.apk\n", 0)
 PM_NO = ("", 1)
 ACT_APP = "mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.FbMainTabActivity t9}\n"
-ACT_LOGIN = "mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.LoginActivity t9}\n"
+ACT_LOGIN = (
+    "mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.LoginActivity t9}\n"
+    "mCurrentFocus=Window{abc u0 com.facebook.katana/com.facebook.katana.LoginActivity}\n"
+)
+ACT_LOGIN_ONCE = "mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.LoginActivity t9}\n"
+ACT_FEED_INTENT = (
+    "mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.FbMainTabActivity t9}"
+    " Intent { cmp=com.facebook.katana/.LoginActivity }\n"
+)
 ACT_HOME = "mResumedActivity: ActivityRecord{abc u0 com.android.launcher3/.Launcher t2}\n"
 WM = ("Physical size: 1080x1920\n", 0)
 _CURL = ("curl", "-sS", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "8")
@@ -202,6 +210,7 @@ def test_airplane_and_logged_out_and_not_installed():
     login = _table({("dumpsys", "activity", "activities"): (ACT_LOGIN, 0)})
     row = _run(login)[1]["phones"][0]
     assert row["fb_screen"] == "login"
+    assert row["fb_confirm"] == "login"
     assert row["status_zh"] == "Facebook未登录"
     assert row["reachable"] is True and row["transport"] == "wifi"
 
@@ -209,6 +218,59 @@ def test_airplane_and_logged_out_and_not_installed():
     row = _run(missing)[1]["phones"][0]
     assert row["fb_installed"] is False
     assert row["status_zh"] == "Facebook未安装"
+
+
+def test_feed_intent_and_single_login_are_not_logged_out():
+    feed = _table({("dumpsys", "activity", "activities"): (ACT_FEED_INTENT, 0)})
+    row = _run(feed)[1]["phones"][0]
+    assert row["fb_screen"] == "app"
+    assert row["fb_confirm"] != "login"
+    assert row["status_zh"] != "Facebook未登录"
+    assert "LoginActivity" not in row["status_zh"]
+
+    once = _table({("dumpsys", "activity", "activities"): (ACT_LOGIN_ONCE, 0)})
+    row = _run(once)[1]["phones"][0]
+    assert row["fb_screen"] == "app"
+    assert row["fb_confirm"] == ""
+    assert row["status_zh"] == "网络✓ wifi"
+
+
+def test_numeric_sim_and_operator_property_count_as_present():
+    ready = _table({("dumpsys", "telephony.registry"): ("mSimState=5\nmAirplaneMode=false\nCellSignalStrengthLte: level=3\n", 0)})
+    row = _run(ready)[1]["phones"][0]
+    assert row["sim"] == "present"
+
+    unknown = _table({
+        ("dumpsys", "telephony.registry"): ("mSimState=UNKNOWN\nmAirplaneMode=false\nCellSignalStrengthLte: level=3\n", 0),
+        ("getprop", "gsm.sim.state"): ("UNKNOWN,UNKNOWN\n", 0),
+        ("getprop", "gsm.sim.operator.numeric"): ("51502\n", 0),
+    })
+    row = _run(unknown)[1]["phones"][0]
+    assert row["sim"] == "present"
+    assert "51502" not in _blob(row)
+    card = _table({("dumpsys", "telephony.registry"): ("CARDSTATE_PRESENT\n", 0)})
+    assert _run(card)[1]["phones"][0]["sim"] == "present"
+
+
+def test_no_signal_status_does_not_cover_wifi():
+    mobile = _table({
+        ("dumpsys", "connectivity"): (MOBILE_CONN, 0),
+        ("dumpsys", "telephony.registry"): (
+            "mSimState=READY\nmAirplaneMode=false\nCellSignalStrengthLte: rssi=-120 level=0\n", 0),
+    })
+    row = _run(mobile)[1]["phones"][0]
+    assert row["signal"] == "none"
+    assert row["status_zh"] == "网络✗ 没信号"
+    assert row["status_en"] == "net no signal"
+    assert row["alert"] is True
+
+    wifi = _table({
+        ("dumpsys", "telephony.registry"): (
+            "mSimState=READY\nmAirplaneMode=false\nCellSignalStrengthLte: rssi=-120 level=0\n", 0),
+    })
+    row = _run(wifi)[1]["phones"][0]
+    assert row["transport"] == "wifi"
+    assert row["status_zh"] == "网络✓ wifi"
 
 
 def test_denied_command_is_unavailable_not_a_failure():

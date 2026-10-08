@@ -1,12 +1,12 @@
 """节点长时间离线告警（P1-7）。
 
 - ``long_offline``：纯函数，挑出离线超过 N 分钟的节点（吊销的不算）。
-- ``OfflineAlerter``：每次离线只告警一次；报过离线的节点恢复在线时推一条「已恢复在线」
-  （带离线时长，同一节点 10 分钟内只推一次），并清除状态，下次离线再告警。
-  通道：控制器现有的 ``src.ops.ops_alert.notify``（配了 EVENT_INGEST_KEY 才会推 TG，
-  没配时只写日志）；另外始终 ``logger.warning`` 一行，方便 journalctl 检索：
-  ``fleet node_offline_alert node=... offline_min=...``。
+- ``OfflineAlerter``：每次离线只记一次；报过离线的节点恢复在线时记一条「已恢复在线」
+  （带离线时长，同一节点 10 分钟内只记一次），并清除状态，下次离线再记。
+  现场离线只写主控日志和控制台，不调用 ``src.ops.ops_alert.notify``，也不推到外部。
+  检索：``fleet node_offline_alert node=... offline_min=...``。
 - 控制台另外通过 ``/api/fleet/overview`` 的 ``offline_alert`` 字段做醒目标记。
+  注入的 ``notify`` 回调仍会调用（测试和自定义通道）；缺省通道不外推。
 """
 
 from __future__ import annotations
@@ -62,15 +62,15 @@ def long_offline(nodes: Iterable[Dict[str, Any]], *, now: float, after_min: int)
 
 
 def _default_notify(text: str, node_id: str, debounce_sec: float) -> None:
-    from src.ops.ops_alert import notify
-    notify("fleet_node_offline", text, account_id=str(node_id), reason="offline",
-           source="fleet-controller", debounce_sec=debounce_sec, audit=False)
+    """现场离线留在主控日志里。不调用 ops_alert，不推给运营者或外部。"""
+    del text, debounce_sec
+    logger.warning("fleet node_offline_local node=%s", node_id)
 
 
 def _default_recover_notify(text: str, node_id: str, debounce_sec: float) -> None:
-    from src.ops.ops_alert import notify
-    notify("fleet_node_recovered", text, account_id=str(node_id), reason="recovered",
-           source="fleet-controller", debounce_sec=debounce_sec, audit=False)
+    """现场恢复同样只留在主控日志里。"""
+    del text, debounce_sec
+    logger.info("fleet node_recovered_local node=%s", node_id)
 
 
 class OfflineAlerter:

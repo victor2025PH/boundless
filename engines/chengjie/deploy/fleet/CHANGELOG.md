@@ -1,5 +1,8 @@
 # 智拓群控节点更新日志
 
+## 0.3.24
+把已经分开验证过的三版收成一个金丝雀。机房电脑装这一份就同时有：0.3.21 的层次 dump 加固（先停自动播放，写固定文件再拉回，失败短退避重试）、0.3.22 的机房现场待办弹窗（按问题类别分组，中英文怎么做，序列号打成壁纸号或 `[redacted]`，直播机、173 和受保护手机排除）、0.3.23 的找赞定位（不再点截图上半部，离开信息流才按一次返回，`like_diag` 带层级计数和动作条区域信号，两路信号一致才点）以及 `phone_app_restart`（只对心跳里 `state=device` 的可操作手机 force-stop 再打开 Facebook，包名只许 `com.facebook.katana` / `com.facebook.lite`，单独的 `app_restart` 白名单门，直播机、173 和受保护手机拒绝，审计不写序列号）。登录检查失败仍带回前台包名和 activity。`like_probe` 仍只定位。`dry_run` 仍不碰手机。点完仍要复核。公开下载页的 latest 仍是 0.3.7。
+
 ## 0.3.23
 找赞前不再点上一张截图的上半部。0.3.21 那一下轻点会把 Facebook 点进帖子或全屏，下一轮探测看不到顶栏，登录检查就报 `app_not_ready`。现在只发媒体暂停（`cmd media_session dispatch pause` 和 `input keyevent 127`）。dump 结束之后读一次前台：包名是 Facebook，页面又明确不是信息流（帖子详情、全屏、沉浸、故事、播放器），才按一次返回。主页、看不清的页面、别的应用都不按。公开下载页的 latest 仍是 0.3.7。
 
@@ -10,6 +13,9 @@
 新增手机任务 `phone_app_restart`（端点 `.../phones/{serial}/app_restart`）。它只对心跳里 `state=device` 的可操作手机执行，先 `am force-stop` 再打开 Facebook 启动器。包名只允许 `com.facebook.katana` 和 `com.facebook.lite`。白名单把它单独放在 `app_restart` 门里，要 `allow_app_restart` 才放行；`allow_guarded_writes` 开了也不放行 Facebook 的 force-stop，这个标志也不放行别的包。没有别的任务会带 `allow_guarded_writes`。直播机、坐席机 173（`YUYAN-173` / `192.168.0.173`）、受保护手机 `3B1F4KE5MS140P4X` 在动手前拒绝。审计记谁下发的、壁纸号或 `[redacted]`、包名和结果，日志不写序列号。
 
 登录检查失败（`not_logged_in` / `app_not_ready`）时，回执多一个 `foreground`：前台包名和 activity。序列号按原来的规则换成壁纸号或 `[redacted]`。不看截图也能分清是登出、弹窗还是点错图标。
+
+## 0.3.22
+机房现场待办。主控用每台电脑最新的网络体检、心跳里的手机状态和壁纸号台账，算出分类待办，只下发给这一台：没网、没信号、未授权、补壁纸号、USB 掉线、台账冲突、Facebook 未登录。Facebook 未登录要两个信号一致才报。每一项只有壁纸号或占位符，没有序列号。本机弹窗按类别分组，并写上怎么做（开流量或连 WiFi、点允许 USB 调试并贴号、补号、重插或换线、查 SIM 或摆位）；中英文切换还在。直播机和 173 不下发。受保护手机不进名单。离线节点在控制台显示「需重装 agent」。节点重启后从本机快照恢复网络行和待办。离线告警只留在主控日志和控制台，不推到外部。公开下载页的 latest 不因这一版改掉，仍是 0.3.7。
 
 ## 0.3.21
 Facebook 信息流在播视频时，`uiautomator dump` 经常拿不到 idle，输出有字但解析不出层次。0.3.20 靠 dump 的三路信号（无障碍标签、resource-id、Comment/Share 同行最左按钮）因此一起落空。这一版不改「两个信号一致才点」，也不改 `like_probe` 只定位、`dry_run` 不碰手机。

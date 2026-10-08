@@ -255,7 +255,7 @@
     if(lo.length){
       box.innerHTML='⚠ '+lo.length+' 台节点离线超过 '+esc(alertMin)+' 分钟：'+lo.map(function(x){
         return esc(x.label||x.node_id)+(x.group_name?'（'+esc(x.group_name)+'）':'')+' 已离线 '+esc(x.offline_min)+' 分钟';}).join('；')+
-        '<div class="s">'+(oa.channel==='ops_alert'?'已通过运维告警通道推送（每次离线推一次）。':'未配置推送通道：只在这里标红，并写入主控日志（fleet node_offline_alert）。')+
+        '<div class="s">离线只在这里标红，并写入主控日志（fleet node_offline_alert），不推到外部。'+
         ' 请检查那台电脑是否开机、联网，Agent 服务是否在运行。</div>';
       box.style.display='';
     }else{box.innerHTML='';box.style.display='none';}
