@@ -448,6 +448,30 @@ class PhoneOps:
     def last_raw(self, serial: str) -> bytes:
         return self._last_raw.get(serial, b"")
 
+    def read_window_xml(self, serial: str) -> str:
+        """One ``uiautomator dump /dev/tty``. No media pause, no Back, no like file.
+
+        The caller already holds this phone's lock. Empty when the output has
+        no hierarchy. Does not retry and does not import the like locator.
+        """
+        try:
+            adb = self._ready_adb()
+        except PhoneOpError:
+            return ""
+        try:
+            _rc, out, err = self._paced_capture(
+                adb, serial,
+                ("-s", serial, "shell", "uiautomator", "dump", "/dev/tty"),
+                HIERARCHY_DUMP_TIMEOUT_SEC,
+            )
+        except Exception:
+            logger.debug("window dump failed", exc_info=True)
+            return ""
+        text = _hierarchy_text(out) or _hierarchy_text(err)
+        if "<hierarchy" not in text and "<node" not in text:
+            return ""
+        return text
+
     def read_ui_hierarchy(self, serial: str, settle: bool = True, recover: bool = True) -> Dict[str, Any]:
         """Read a window hierarchy. Autoplay is settled first unless ``settle`` is false.
 
