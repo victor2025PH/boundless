@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
-from src.fleet.phone_flows import PhoneFlows, bundled_ui_map, compile_flow, validate_ui_map
+from src.fleet.phone_flows import PhoneFlows, _attach_foreground, bundled_ui_map, compile_flow, validate_ui_map
 from src.fleet.phone_ops import MIN_INTERVAL_SEC, PhoneOps
 from src.fleet.phone_rules import PhoneOpError, escape_input_text, sanitize_phone_result
 from src.fleet.protocol import (
@@ -230,6 +230,42 @@ def test_post_comment_follow_text_and_gallery_slot(app):
     assert sum(1 for k, _ in comment if k == TASK_PHONE_SWIPE) == 2
     follow = compile_flow(app, "follow", {"handle": "some.user"}, 720, 1600, ui)
     assert [p["text"] for k, p in follow if k == TASK_PHONE_TEXT] == ["some.user"]
+
+
+def test_login_miss_reports_the_foreground_component():
+    class _Screen:
+        def read_foreground(self, _serial):
+            return {"package": "com.instagram.android", "activity": ".MainActivity"}
+
+    missed = {}
+    _attach_foreground(_Screen(), "S1", missed, "not_logged_in")
+    assert missed["foreground"] == {"package": "com.instagram.android", "activity": ".MainActivity"}
+    other = {"foreground": {"package": "keep"}}
+    _attach_foreground(_Screen(), "S1", other, "empty_feed")
+    assert other["foreground"] == {"package": "keep"}
+
+    class _Fg(FakeAdb):
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                text = b"mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.LoginActivity t1}\n"
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Fg())
+    flows = PhoneFlows(enabled=True)
+    status, result, detail = flows.execute(TASK_PHONE_LIKE, _body("facebook", "like"), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "app_not_ready")
+    assert result["foreground"] == {"package": "com.facebook.katana", "activity": ".LoginActivity"}
+    assert any(a[2:6] == ("shell", "dumpsys", "activity", "activities") for a in fake.actions())
+    serial = "TESTSERIAL01"
+    clean = sanitize_phone_result(TASK_PHONE_LIKE, {
+        "foreground": {"package": "com.facebook.katana", "activity": f".Page{serial}"},
+        "serial": serial,
+    }, wallpaper="09")
+    assert clean["foreground"]["package"] == "com.facebook.katana"
+    assert serial not in clean["foreground"]["activity"] and "09" in clean["foreground"]["activity"]
 
 
 def test_anchor_override_wins_and_unknown_name_is_rejected():
@@ -544,7 +580,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.21"
+    assert AGENT_VERSION == "0.3.23"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

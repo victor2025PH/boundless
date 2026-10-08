@@ -1,5 +1,16 @@
 # 智拓群控节点更新日志
 
+## 0.3.23
+找赞前不再点上一张截图的上半部。0.3.21 那一下轻点会把 Facebook 点进帖子或全屏，下一轮探测看不到顶栏，登录检查就报 `app_not_ready`。现在只发媒体暂停（`cmd media_session dispatch pause` 和 `input keyevent 127`）。dump 结束之后读一次前台：包名是 Facebook，页面又明确不是信息流（帖子详情、全屏、沉浸、故事、播放器），才按一次返回。主页、看不清的页面、别的应用都不按。公开下载页的 latest 仍是 0.3.7。
+
+`like_diag.hierarchy` 只用于诊断，不参与点不点：`node_count`（全部节点）、`button_count`（过了尺寸的按钮）、`clickable_count`（可点节点，不看尺寸）、`row_counts`（每一行有几个过尺寸的按钮）、`top_package`（层级里第一个包名，信息流应是 `com.facebook.katana`）、`classes`（最常见的控件类型）。一次探测就能分开「层次里没有按钮」和「有按钮但被尺寸滤掉了」。
+
+截图已经圈出动作条（`structure_bounds`）时，再在层次里找落在这个矩形里的节点，不看按钮尺寸。找到 Like / Comment / Share，或者 3 到 4 个间距差不多的可点节点，就和动作条结构合成两路信号。仍然要两路一致才点，点完仍要复核。单独这一路不点。`like_probe` 仍只定位。`dry_run` 仍不碰手机。
+
+新增手机任务 `phone_app_restart`（端点 `.../phones/{serial}/app_restart`）。它只对心跳里 `state=device` 的可操作手机执行，先 `am force-stop` 再打开 Facebook 启动器。包名只允许 `com.facebook.katana` 和 `com.facebook.lite`。白名单把它单独放在 `app_restart` 门里，要 `allow_app_restart` 才放行；`allow_guarded_writes` 开了也不放行 Facebook 的 force-stop，这个标志也不放行别的包。没有别的任务会带 `allow_guarded_writes`。直播机、坐席机 173（`YUYAN-173` / `192.168.0.173`）、受保护手机 `3B1F4KE5MS140P4X` 在动手前拒绝。审计记谁下发的、壁纸号或 `[redacted]`、包名和结果，日志不写序列号。
+
+登录检查失败（`not_logged_in` / `app_not_ready`）时，回执多一个 `foreground`：前台包名和 activity。序列号按原来的规则换成壁纸号或 `[redacted]`。不看截图也能分清是登出、弹窗还是点错图标。
+
 ## 0.3.21
 Facebook 信息流在播视频时，`uiautomator dump` 经常拿不到 idle，输出有字但解析不出层次。0.3.20 靠 dump 的三路信号（无障碍标签、resource-id、Comment/Share 同行最左按钮）因此一起落空。这一版不改「两个信号一致才点」，也不改 `like_probe` 只定位、`dry_run` 不碰手机。
 

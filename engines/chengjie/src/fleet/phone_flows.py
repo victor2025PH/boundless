@@ -44,6 +44,7 @@ TikTok are unchanged. Warmup and watch are unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import subprocess
@@ -63,6 +64,8 @@ from .protocol import (
     STATUS_REJECTED, TASK_PHONE_KEY, TASK_PHONE_POST, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP,
     TASK_PHONE_TEXT,
 )
+
+logger = logging.getLogger("fleet.phone_flows")
 
 _BUNDLED = Path(__file__).with_name("phone_ui_map.json")
 _MAX_MAP_BYTES = 256 * 1024
@@ -645,6 +648,29 @@ def _merge_dump_meta(diag: Dict[str, Any], meta: Any) -> None:
     uia["error"] = error if isinstance(error, str) else ""
 
 
+def _attach_foreground(ops: Any, serial: str, result: Dict[str, Any], code: str) -> None:
+    """On a login or readiness miss, record the resumed package and activity.
+
+    The text is scrubbed later. A reader that fails leaves the result unchanged.
+    """
+    if code not in ("not_logged_in", "app_not_ready") or not isinstance(result, dict):
+        return
+    reader = getattr(ops, "read_foreground", None)
+    if not callable(reader):
+        return
+    try:
+        found = reader(serial)
+    except Exception:
+        logger.debug("foreground unread after login check", exc_info=True)
+        return
+    if not isinstance(found, dict):
+        return
+    package = str(found.get("package") or "")[:80]
+    activity = str(found.get("activity") or "")[:120]
+    if package or activity:
+        result["foreground"] = {"package": package, "activity": activity}
+
+
 def _result(serial: str, app: str, flow: str, *, completed: Optional[int] = None,
             failed_step: Optional[int] = None, width: Optional[int] = None, height: Optional[int] = None,
             err: Optional[PhoneOpError] = None) -> Dict[str, Any]:
@@ -978,6 +1004,7 @@ class PhoneFlows:
         except PhoneOpError as e:
             res = _result(serial, "facebook", "like", width=width, height=height, err=e)
             res["swipes"] = swipes
+            _attach_foreground(ops, serial, res, e.code)
             return _status(e), res, e.code
         except subprocess.TimeoutExpired:
             return STATUS_FAILED, _result(serial, "facebook", "like", width=width, height=height), "adb_timeout"
@@ -1050,7 +1077,9 @@ class PhoneFlows:
                 try:
                     shot = run(TASK_PHONE_SCREENSHOT, {})
                 except PhoneOpError as e:
-                    return _status(e), _result(serial, app, flow, completed=0, err=e), e.code
+                    res = _result(serial, app, flow, completed=0, err=e)
+                    _attach_foreground(ops, serial, res, e.code)
+                    return _status(e), res, e.code
                 w, h = shot.get("device_width"), shot.get("device_height")
                 if isinstance(w, bool) or not isinstance(w, int) or isinstance(h, bool) or not isinstance(h, int):
                     return STATUS_FAILED, _result(serial, app, flow, completed=1), "screencap_bad_frame"
@@ -1091,9 +1120,11 @@ class PhoneFlows:
                             else:
                                 res = run(sk, sp)
                         except PhoneOpError as e:
-                            return _status(e), _result(
+                            res = _result(
                                 serial, app, flow, completed=prog["done"], failed_step=i, width=w, height=h, err=e,
-                            ), e.code
+                            )
+                            _attach_foreground(ops, serial, res, e.code)
+                            return _status(e), res, e.code
                         if check is None:
                             break
                         try:
@@ -1101,10 +1132,12 @@ class PhoneFlows:
                             break
                         except PhoneOpError as e:
                             if e.code not in _CHECK_FAILS or attempt + 1 >= tries:
-                                return _status(e), _result(
+                                res = _result(
                                     serial, app, flow, completed=prog["done"], failed_step=i,
                                     width=w, height=h, err=e,
-                                ), e.code
+                                )
+                                _attach_foreground(ops, serial, res, e.code)
+                                return _status(e), res, e.code
                     prog["done"] = int(prog["done"]) + 1
                     if sk == TASK_PHONE_TEXT and isinstance(res, dict):
                         chars += int(res.get("chars") or 0)
@@ -1122,10 +1155,12 @@ class PhoneFlows:
                 out["dwells"] = sum(1 for sk, _sp in steps if sk == _DWELL_KIND)
             return STATUS_DONE, out, "ok"
         except PhoneOpError as e:
-            return _status(e), _result(
+            res = _result(
                 serial, app, flow, completed=int(prog["done"]), failed_step=prog["step"],
                 width=prog["w"], height=prog["h"], err=e,
-            ), e.code
+            )
+            _attach_foreground(ops, serial, res, e.code)
+            return _status(e), res, e.code
         except subprocess.TimeoutExpired:
             return STATUS_FAILED, _result(
                 serial, app, flow, completed=int(prog["done"]), failed_step=prog["step"],

@@ -17,12 +17,19 @@ import re
 from typing import Any, Dict
 
 from .phones import is_protected
-from .protocol import TASK_PHONE_KEY, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT
+from .protocol import (
+    TASK_PHONE_APP_RESTART, TASK_PHONE_KEY, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP,
+    TASK_PHONE_TEXT,
+)
 
 OPS: Dict[str, str] = {
     "screenshot": TASK_PHONE_SCREENSHOT, "tap": TASK_PHONE_TAP, "swipe": TASK_PHONE_SWIPE,
-    "text": TASK_PHONE_TEXT, "key": TASK_PHONE_KEY,
+    "text": TASK_PHONE_TEXT, "key": TASK_PHONE_KEY, "app_restart": TASK_PHONE_APP_RESTART,
 }
+_FB_PACKAGES = ("com.facebook.katana", "com.facebook.lite")
+_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$")
+_ACT_RE = re.compile(r"^[A-Za-z0-9_$.]{1,120}$")
+_CLASS_RE = re.compile(r"^[A-Za-z0-9_.$]{1,80}$")
 MAX_COORD = 10000
 TEXT_MAX = 200
 SWIPE_MS_MIN, SWIPE_MS_MAX, SWIPE_MS_DEFAULT = 50, 3000, 300
@@ -103,6 +110,14 @@ def validate_payload(kind: str, payload: Any) -> Dict[str, Any]:
         if k not in KEYCODES:
             raise PhoneOpError("bad_key")
         return {"key": k}
+    if kind == TASK_PHONE_APP_RESTART:
+        raw = p.get("package", "com.facebook.katana")
+        if raw is None or raw == "":
+            raw = "com.facebook.katana"
+        pkg = str(raw).strip() if isinstance(raw, str) else ""
+        if pkg not in _FB_PACKAGES:
+            raise PhoneOpError("bad_package")
+        return {"package": pkg}
     raise PhoneOpError("bad_kind")
 
 
@@ -246,6 +261,74 @@ def _diag_list(value: Any) -> list:
     return out
 
 
+def _clamp_count(value: Any, hi: int = 100000) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, min(hi, value))
+
+
+def _sanitize_hierarchy(raw: Any) -> Dict[str, Any]:
+    """Census only. Unknown keys and non-integers are dropped."""
+    src = raw if isinstance(raw, dict) else {}
+    rows = []
+    if isinstance(src.get("row_counts"), list):
+        for item in src["row_counts"]:
+            if isinstance(item, bool) or not isinstance(item, int):
+                continue
+            rows.append(max(0, min(64, item)))
+            if len(rows) >= 12:
+                break
+    package = _diag_str(src.get("top_package"), 80)
+    if not _PKG_RE.fullmatch(package or ""):
+        package = ""
+    classes = []
+    if isinstance(src.get("classes"), list):
+        for item in src["classes"]:
+            text = _diag_str(item, 80)
+            if text and _CLASS_RE.fullmatch(text) and text not in classes:
+                classes.append(text)
+            if len(classes) >= 6:
+                break
+    return {
+        "node_count": _clamp_count(src.get("node_count")),
+        "button_count": _clamp_count(src.get("button_count")),
+        "clickable_count": _clamp_count(src.get("clickable_count")),
+        "row_counts": rows,
+        "top_package": package,
+        "classes": classes,
+    }
+
+
+def _sanitize_foreground(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return None
+    package = _diag_str(raw.get("package"), 80)
+    activity = _diag_str(raw.get("activity"), 120)
+    if not _PKG_RE.fullmatch(package or ""):
+        package = ""
+    if not _ACT_RE.fullmatch(activity or ""):
+        activity = ""
+    if not package and not activity:
+        return None
+    return {"package": package, "activity": activity}
+
+
+def app_restart_host_block(node: Any) -> str:
+    """Refuse app_restart on the seat machine or a live-stream node. "" = ok.
+
+    Operable-pool and protected-phone checks stay with the caller.
+    """
+    from .detect import is_seat_173
+
+    src = node if isinstance(node, dict) else {}
+    if is_seat_173(src.get("host_name"), src.get("label"), src.get("group_name")):
+        return "seat_173"
+    blob = " ".join(str(src.get(key) or "") for key in ("host_name", "label", "group_name")).casefold()
+    if any(token in blob for token in ("live-stream", "live_stream", "livestream", "直播")):
+        return "live_stream_host"
+    return ""
+
+
 def _sanitize_like_diag(raw: Any) -> Any:
     """Keep the probe's per-signal report. Drop pixels, unknown keys, and long text."""
     if not isinstance(raw, dict):
@@ -322,7 +405,9 @@ def _sanitize_like_diag(raw: Any) -> Any:
         "shape_matched": raw.get("shape_matched") is True,
         "shape_score": shape_out,
         "position_matched": raw.get("position_matched") is True,
+        "region_matched": raw.get("region_matched") is True,
         "nodes": nodes,
+        "hierarchy": _sanitize_hierarchy(raw.get("hierarchy")),
     }
 
 
@@ -375,6 +460,17 @@ def sanitize_phone_result(kind: str, result: Any, *, serial: str = "", wallpaper
             out["like_diag"] = scrub_phone_tree(diag, serial=known_serial, wallpaper=wall)
     if r.get("like_button_deprecated") is True:
         out["like_button_deprecated"] = True
+    if kind == TASK_PHONE_APP_RESTART:
+        pkg = _diag_str(r.get("package"), 80)
+        if pkg in _FB_PACKAGES:
+            out["package"] = pkg
+        if r.get("stopped") is True:
+            out["stopped"] = True
+        if r.get("launched") is True:
+            out["launched"] = True
+    foreground = _sanitize_foreground(r.get("foreground"))
+    if foreground is not None:
+        out["foreground"] = scrub_phone_tree(foreground, serial=known_serial, wallpaper=wall)
     return out
 
 
@@ -391,5 +487,5 @@ def strip_png(result: Any) -> Dict[str, Any]:
 __all__ = [
     "OPS", "MAX_COORD", "TEXT_MAX", "KEYCODES", "TEXT_ALLOWED", "MAX_PNG_B64", "PhoneOpError", "valid_serial",
     "kind_for_op", "validate_payload", "check_target", "escape_input_text", "sanitize_phone_result",
-    "scrub_phone_error_text", "scrub_phone_tree", "strip_png",
+    "scrub_phone_error_text", "scrub_phone_tree", "strip_png", "app_restart_host_block",
 ]

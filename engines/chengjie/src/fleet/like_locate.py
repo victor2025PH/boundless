@@ -22,6 +22,12 @@ Signals
                 agrees with a screenshot signal (template, action bar, or
                 silhouette), not with a label from the same dump. Not a tap
                 by itself.
+    region      Nodes whose centers fall inside the screenshot action-bar
+                rectangle (``structure_bounds``), including nodes the button
+                size filter dropped. A Like / Comment / Share label, or 3–4
+                evenly spaced clickable nodes, is a hit. It agrees only with
+                a screenshot signal, the same way position does. Not a tap
+                by itself. The hierarchy census in ``diag`` is not a signal.
     text        Like / Gusto / I-like / 赞 on a row that also has Comment and Share
                 (Komento / Ibahagi, 评论 / 分享). Liked / Nagustuhan / 已赞 is not a target.
                 Optional. The default build does not import rapidocr, cv2, or onnx.
@@ -45,9 +51,11 @@ centers agree. Shape and template describe the same glyph, so those two alone
 do not agree — the bar (structure) or the Like word (text) has to take part.
 A hierarchy label agrees only with a template, not with the bar or the
 silhouette by itself. A label without a template does not cancel a separate
-position+screenshot pair. Otherwise no target (never the deprecated
-like_button). ``locate_like_row`` also returns ``diag`` for ``like_probe``.
-The diagnostic does not change the tap.
+position+screenshot pair. A region hit agrees only with a screenshot signal,
+so structure plus the nodes inside that bar can confirm, and the region
+alone cannot. Otherwise no target (never the deprecated like_button).
+``locate_like_row`` also returns ``diag`` for ``like_probe``. The diagnostic,
+including the hierarchy census, does not change the tap.
 
 Text engine: optional ``rapidocr-onnxruntime`` (PP-OCRv4 reads Latin and CJK,
 so Tagalog and 赞 do not need a Windows OCR language pack). Windows.Media.Ocr
@@ -633,6 +641,151 @@ def _like_match_record(node: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def _pkg_name(value: str) -> str:
+    text = "".join(ch for ch in str(value or "") if ch.isprintable() and ch not in "<>")
+    if len(text) > 80 or "." not in text:
+        return ""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", text):
+        return ""
+    return text
+
+
+def hierarchy_census(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
+    """Counts for one dump. Not a tap signal.
+
+    ``node_count`` is every element under the hierarchy. ``button_count`` is
+    the size-qualified buttons the locator already uses. ``clickable_count``
+    ignores that size filter. ``row_counts`` is how many size-qualified
+    buttons sit on each row, longest first. ``top_package`` is the first
+    package attribute (Facebook feed is ``com.facebook.katana``). ``classes``
+    are the most common control types.
+    """
+    blank: Dict[str, Any] = {
+        "node_count": 0, "button_count": 0, "clickable_count": 0,
+        "row_counts": [], "top_package": "", "classes": [],
+    }
+    root = _parse_hierarchy(hierarchy)
+    if root is None:
+        return blank
+    classes: Dict[str, int] = {}
+    node_count = 0
+    clickable_count = 0
+    top_package = ""
+    for node in root.iter():
+        if node.tag == "hierarchy":
+            continue
+        node_count += 1
+        if not top_package:
+            top_package = _pkg_name(str(node.attrib.get("package") or ""))
+        cls = _clip_diag(node.attrib.get("class") or "")
+        if cls:
+            classes[cls] = classes.get(cls, 0) + 1
+        if str(node.attrib.get("clickable") or "").lower() == "true":
+            clickable_count += 1
+    buttons = _hierarchy_buttons(hierarchy, width, height) if width > 0 and height > 0 else []
+    rows = _button_rows(_drop_containers(buttons), height) if buttons else []
+    counts = sorted((len(group) for group in rows if group), reverse=True)
+    top = sorted(classes.items(), key=lambda item: (-item[1], item[0]))[:6]
+    return {
+        "node_count": node_count,
+        "button_count": len(buttons),
+        "clickable_count": clickable_count,
+        "row_counts": list(counts)[:12],
+        "top_package": top_package,
+        "classes": [name for name, _n in top],
+    }
+
+
+def _even_region_row(group: Sequence[Dict[str, Any]], width: int) -> bool:
+    """3–4 clickable nodes with roughly equal gaps. Not a size filter."""
+    if not 3 <= len(group) <= 4:
+        return False
+    centers = [int(n["x"]) for n in group]
+    gaps = [b - a for a, b in zip(centers, centers[1:])]
+    if not gaps or min(gaps) < 8:
+        return False
+    if max(gaps) / float(min(gaps)) > 1.8:
+        return False
+    return centers[-1] - centers[0] >= max(24, int(width * 0.12))
+
+
+def region_hits(hierarchy: Any, row_bounds: str, width: int, height: int) -> List[Dict[str, Any]]:
+    """Nodes inside the screenshot action bar, ignoring the button size cap.
+
+    A hit exists when a Like / Comment / Share node is in the rectangle, or
+    when 3–4 clickable nodes there are roughly evenly spaced. The point is
+    the leftmost of that even row when one exists, otherwise a Like node, so
+    it can agree with the structure slot. A node that dwarfs the bar is
+    skipped. Not a tap by itself.
+    """
+    match = _BOUNDS_RE.fullmatch(str(row_bounds or "").strip())
+    if match is None or width <= 0 or height <= 0:
+        return []
+    bx0, by0, bx1, by1 = (int(v) for v in match.groups())
+    if bx1 <= bx0 or by1 <= by0:
+        return []
+    root = _parse_hierarchy(hierarchy)
+    if root is None:
+        return []
+    pad = 12
+    bar_area = (bx1 - bx0) * (by1 - by0)
+    inside: List[Dict[str, Any]] = []
+    for node in root.iter():
+        if node.tag == "hierarchy":
+            continue
+        bounds = str(node.attrib.get("bounds") or "").strip()
+        found = _BOUNDS_RE.fullmatch(bounds)
+        if found is None:
+            continue
+        x0, y0, x1, y1 = (int(v) for v in found.groups())
+        bw, bh = x1 - x0, y1 - y0
+        if bw <= 0 or bh <= 0:
+            continue
+        cx, cy = _center(x0, y0, x1, y1)
+        if not (bx0 - pad <= cx <= bx1 + pad and by0 - pad <= cy <= by1 + pad):
+            continue
+        area = bw * bh
+        if area > max(bar_area * 4, 1):
+            continue
+        if bw > (bx1 - bx0) * 1.15 and bh > (by1 - by0) * 2:
+            continue
+        desc = str(node.attrib.get("content-desc") or "")
+        text = str(node.attrib.get("text") or "")
+        rid = str(node.attrib.get("resource-id") or "")
+        token, by = _like_label_match(desc, text, rid)
+        inside.append({
+            "bounds": bounds, "class": str(node.attrib.get("class") or ""),
+            "content_desc": desc, "resource_id": rid, "text": text,
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1, "x": cx, "y": cy,
+            "label": token, "by": by, "role": _bar_role(desc, text, rid),
+            "clickable": str(node.attrib.get("clickable") or "").lower() == "true",
+        })
+    if not inside:
+        return []
+    clickable = _drop_containers([n for n in inside if n["clickable"]])
+    chosen: Optional[Dict[str, Any]] = None
+    for group in _button_rows(clickable, height):
+        if _even_region_row(group, width):
+            chosen = group[0]
+            break
+    if chosen is None:
+        likes = [n for n in inside if n.get("role") == "like"]
+        if likes:
+            likes.sort(key=lambda n: (n["y"], n["x"]))
+            chosen = likes[0]
+        else:
+            roles = [n for n in inside if n.get("role") in ("comment", "share")]
+            pool = clickable or roles
+            if roles and pool:
+                left = min(pool, key=lambda n: (n["x"], n["y"]))
+                if left["x"] <= bx0 + (bx1 - bx0) * 0.4:
+                    chosen = left
+    if chosen is None:
+        return []
+    label = str(chosen.get("label") or "icon")
+    return [_hit_from_button(chosen, "region", width, height, label)]
+
+
 def hierarchy_diag(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
     """Compact action-bar attributes. No pixels, no device identity."""
     status = _dump_status(hierarchy)
@@ -655,6 +808,10 @@ def hierarchy_diag(hierarchy: Any, width: int, height: int) -> Dict[str, Any]:
             "resource_ids": _unique_attrs(row, "resource_id"),
         },
         "nodes": [_diag_node(n) for n in row[:_DIAG_NODES]],
+        "hierarchy": hierarchy_census(hierarchy, width, height) if status == "ok" else {
+            "node_count": 0, "button_count": 0, "clickable_count": 0,
+            "row_counts": [], "top_package": "", "classes": [],
+        },
     }
 
 
@@ -1481,6 +1638,8 @@ def _signals_confirm(sources: set) -> bool:
         got.discard("label")
     if "position" in got and not (got & {"template", "structure", "shape"}):
         got.discard("position")
+    if "region" in got and not (got & {"template", "structure", "shape"}):
+        got.discard("region")
     if len(got) < 2 or got <= {"shape", "template"}:
         return False
     return True
@@ -1494,23 +1653,28 @@ def _confirming_hits(group: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         drop.add("label")
     if "position" in sources and not ((sources - drop) & {"template", "structure", "shape"}):
         drop.add("position")
+    if "region" in sources and not ((sources - drop) & {"template", "structure", "shape"}):
+        drop.add("region")
     return [h for h in group if h["source"] not in drop]
 
 
 def fuse_signals(text: Sequence[Dict[str, Any]], templates: Sequence[Dict[str, Any]],
                  structure: Sequence[Dict[str, Any]], shapes: Sequence[Dict[str, Any]] = (),
                  labels: Sequence[Dict[str, Any]] = (),
-                 positions: Sequence[Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
+                 positions: Sequence[Dict[str, Any]] = (),
+                 regions: Sequence[Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
     """Topmost fully visible target. High template, or two agreeing signals.
 
     Shape and template describe the same glyph, so those two alone do not
     agree. A hierarchy label agrees only with a thumbs-up template. The
     action bar or the Like word can still confirm a template or a silhouette
     when the dump is missing. The leftmost button of a comment/share row
-    agrees with a screenshot signal.
+    agrees with a screenshot signal. Nodes found inside that bar agree with
+    a screenshot signal the same way, and do not tap on their own.
     """
     pool = [h for h in (
-        list(text) + list(templates) + list(structure) + list(shapes) + list(labels) + list(positions)
+        list(text) + list(templates) + list(structure) + list(shapes)
+        + list(labels) + list(positions) + list(regions)
     ) if h.get("full")]
     candidates = []
     for hit in pool:
@@ -1595,7 +1759,12 @@ def _blank_diag(dump: str) -> Dict[str, Any]:
         "shape_matched": False,
         "shape_score": 0.0,
         "position_matched": False,
+        "region_matched": False,
         "nodes": [],
+        "hierarchy": {
+            "node_count": 0, "button_count": 0, "clickable_count": 0,
+            "row_counts": [], "top_package": "", "classes": [],
+        },
     }
 
 
@@ -1625,6 +1794,8 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     shapes, shape_records = shape_report(raw, blobs)
     labels = label_hits(hierarchy, width, height)
     positions = position_hits(hierarchy, width, height)
+    row_bounds = str(structure[0].get("row_bounds") or "") if structure else ""
+    regions = region_hits(hierarchy, row_bounds, width, height)
     # Drop a candidate whose center is already the liked blue.
     decoded = _gray(raw)
     if decoded is not None:
@@ -1646,7 +1817,8 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
         shape_records = [h for h in shape_records if not _blue_hit(h)]
         labels = [h for h in labels if not _blue_hit(h)]
         positions = [h for h in positions if not _blue_hit(h)]
-    target = fuse_signals(text, templ, structure, shapes, labels, positions)
+        regions = [h for h in regions if not _blue_hit(h)]
+    target = fuse_signals(text, templ, structure, shapes, labels, positions, regions)
     if target is not None:
         target = {k: target[k] for k in ("x", "y", "signals", "label", "score")}
     diag = hierarchy_diag(hierarchy, width, height)
@@ -1662,6 +1834,7 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     else:
         diag["shape_score"] = 0.0
     diag["position_matched"] = bool(positions)
+    diag["region_matched"] = bool(regions)
     return {
         "target": target,
         "post": post_evidence(norm, blobs, width, height),
@@ -1782,8 +1955,10 @@ def vision_stack_ready(*, ocr: Any = None, template_dir: Optional[Path] = None) 
 __all__ = [
     "AGREE_X_PM", "AGREE_Y_PM", "DEFAULT_LIKE_SWIPES", "FB_BLUE", "FB_BLUE_TOL",
     "TEMPLATE_HIGH", "TEMPLATE_MED", "composer_centers", "empty_phrase", "extract_blobs",
-    "fuse_signals", "hierarchy_diag", "label_hits", "like_state_changed", "load_rapidocr", "load_templates",
+    "fuse_signals", "hierarchy_census", "hierarchy_diag", "label_hits", "like_state_changed",
+    "load_rapidocr", "load_templates",
     "locate_like_row", "normalize_ocr_boxes", "position_hits", "post_evidence", "rapidocr_available",
+    "region_hits",
     "read_text_boxes", "render_thumb", "render_thumb_icon", "shape_hits", "structure_hits", "template_hits",
     "templates_available", "text_hits", "vision_stack_ready", "write_default_templates",
 ]
