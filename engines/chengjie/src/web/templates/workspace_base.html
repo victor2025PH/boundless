@@ -247,6 +247,8 @@
     /* 文字专用语义色（WCAG：亮底用更深值保证对比度；fills/圆点仍用上方高亮 accent）*/
     --tk-ok-ink:#15803d;
     --tk-warn-ink:#b45309;
+    /* 微信系平台角标（两主题同值的品牌色常量；unified_inbox 平台图标角标 / 状态点消费） */
+    --wx-kf:#1b6df5; --wx-badge:#4b5563; --wx-on-badge:#fff; --wx-warn:#f59e0b; --wx-muted:#9ca3af;
     /* 兼容别名：存量代码写了 --tk-amber-ink（从未定义，恒走亮色回落值 → 暗色下
        ≈3:1 不可读，2026-08-10 接入弹窗实锤）。别名让所有旧引用点吃到正确的日夜双档；
        新代码一律直接写 --tk-warn-ink（见 .cursor/rules/frontend-theme.mdc）。 */
@@ -2493,7 +2495,7 @@ document.addEventListener('click',function(e){
   // 打回在线（旧 init 无条件 setPresence('online')）；② 多窗口各按本窗值心跳互相覆盖
   // （待机窗现在传 status:'' → 服务端保留现状，last_seen 照常刷新）；③ 关任一窗口即
   // 全局置离线（待机窗关闭不再置离线）；④ 席位满 403 被静默吞掉（现在回退+显式提示）。
-  var PR_KEY='aitr.ws.presence.v1';
+  var PR_KEY='aitr.ws.presence.v1';  // localStorage key name, not a credential gitleaks:allow
   var PR_RESTORE_MS=4*3600*1000;   // 手选忙碌的跨会话恢复窗：4h 内重开页面仍是忙碌
   var PR_TOAST={online:'base.presence.switched_online',busy:'base.presence.switched_busy',offline:'base.presence.switched_offline'};
   var _prSt='online';
@@ -4335,7 +4337,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
 // 私聊新消息通知引擎：提示音（WebAudio 合成）+ 弹窗（系统通知/应用内提示）。
 // 偏好存 localStorage（本机级、跨设备不同步），群组默认不打扰（改走「群组动态」）。
 window.__wsNotify = (function(){
-  var LS_KEY='ws_notify_prefs_v1';
+  var LS_KEY='ws_notify_prefs_v1';  // localStorage key name, not a credential gitleaks:allow
   // impl85 阶段5（工单#30 值守承诺）：客户消息弹窗默认关——弹窗带消息内容预览，
   // 客户拍板「不再弹系统通知」（隐私 + 打扰）；提示音保留默认开（无内容、保回复
   // 及时性）。想开回弹窗：铃铛面板「提示设置」→ 新消息弹窗（坐席显式保存过的

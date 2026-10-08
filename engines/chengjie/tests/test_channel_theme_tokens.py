@@ -63,7 +63,7 @@ def test_channel_templates_free_of_legacy_theme_tokens():
 _TH_CEILINGS = {
     "_channel_body_telegram.html": 0,
     "_channel_body_line.html": 12,
-    "_channel_body_whatsapp.html": 32,
+    "_channel_body_whatsapp.html": 31,
     "_channel_body_messenger.html": 47,
     "workspace_channels.html": 0,
     "_rpa_shared_styles.html": 0,

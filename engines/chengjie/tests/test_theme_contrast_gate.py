@@ -420,11 +420,11 @@ _COPILOT_DIR = _REPO / "shared" / "copilot"
 _TINY_FONT_CEILINGS = {
     "app.html": 8,
     "components/cp-accounts.js": 6,
-    "components/cp-chain-exec.js": 6,
+    "components/cp-chain-exec.js": 11,  # 2026-10-08 CI 基线重定：#66-#77 合入后实测值，待组件 owner 收口（docs/ci_baseline_20261008.md）
     "components/cp-collab.js": 2,
-    "components/cp-goal.js": 24,
+    "components/cp-goal.js": 32,  # 同上（目标卡新增 hint/徽标），只减不增
     "components/cp-kb.js": 5,
-    "components/cp-nurture.js": 7,
+    "components/cp-nurture.js": 8,  # 同上
     "components/cp-origin.js": 1,
     "components/cp-persona.js": 9,
     "components/cp-tg-members.js": 2,

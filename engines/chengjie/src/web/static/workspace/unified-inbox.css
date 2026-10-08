@@ -1380,7 +1380,7 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .cp-hero-goal .hg-fb{color:var(--accent);text-decoration:underline;text-underline-offset:2px;font-weight:600;}
 .cp-hero-goal .hg-hold{color:var(--text-tiny);font-style:italic;}
 /* #152 F2：上轮目标未注入原因胶囊（琥珀提示，不抢主行） */
-.cp-hero-goal .hg-skip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:11px;line-height:16px;color:var(--warn-fg,#a15c00);background:var(--warn-bg,rgba(255,170,0,.14));white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;}
+.cp-hero-goal .hg-skip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:11px;line-height:16px;color:var(--tk-warn-ink,#a15c00);background:var(--warn-bg,rgba(255,170,0,.14));white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;}
 .cp-hero-goal.cta{color:var(--text-tiny);font-weight:500;opacity:.85;}
 .cp-hero-goal.cta:hover{opacity:1;color:var(--accent);}
 .cp-hero-goal .hg-draft{flex:0 0 auto;margin-left:auto;font:inherit;font-size:11px;font-weight:600;
@@ -2179,13 +2179,13 @@ button.fleet-cell:disabled{cursor:default;}
    青色这条**不会**自己接回，只能显式恢复，配色差异就是那句提醒。 */
 .tko-pill.hold{color:var(--th-ink-teal8,#115e59);
   background:color-mix(in srgb,var(--th-bg-teal100,#ccfbf1) 60%,transparent);
-  border-color:var(--th-bd-teal30,rgba(20,184,166,.35));}
+  border-color:var(--th-bd-teal35,rgba(20,184,166,.35));}
 .tko-pill.hold .tko-resume{background:#0f766e;}
 /* 接力记忆三期「AI 已接力」态：绿色系＝AI 已回来、并记着人工阶段（与蓝＝AI 停着、
    青＝搁置着 三态互斥同位）。× 是轻按钮：只隐藏提示，不动服务端。 */
 .tko-pill.handoff{color:var(--th-ink-green8,#166534);
   background:color-mix(in srgb,var(--th-bg-green100,#dcfce7) 60%,transparent);
-  border-color:var(--th-bd-green30,rgba(34,197,94,.35));}
+  border-color:var(--th-bd-green35,rgba(34,197,94,.35));}
 .tko-pill.handoff .tko-resume{background:#15803d;}
 .tko-pill.handoff .tko-resume.tko-x{background:transparent;color:inherit;opacity:.6;padding:2px 6px;font-weight:400;}
 .tko-pill.handoff .tko-resume.tko-x:hover{opacity:1;}
@@ -3653,19 +3653,19 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 /* 每账号 24h 日报 + 时间线（PC 副驾卡） */
 .acct-report{margin:6px 0 0;font-size:11.5px;line-height:1.45;}
 .acct-rep-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.acct-rep-line.muted{color:var(--tk-ink-3,#6b7280);font-size:11px;}
-.acct-rep-stat{font-variant-numeric:tabular-nums;color:var(--tk-ink-2,#374151);}
+.acct-rep-line.muted{color:var(--tk-text-muted,#6b7280);font-size:11px;}
+.acct-rep-stat{font-variant-numeric:tabular-nums;color:var(--tk-text,#374151);}
 .acct-rep-pending{color:var(--tk-warn-ink,#b45309);background:rgba(245,158,11,.12);border-radius:999px;padding:0 7px;font-size:10.5px;}
 .acct-rep-toggle{margin-left:auto;border:0;background:none;color:var(--acct-accent,#16a34a);font-size:11px;cursor:pointer;padding:0 2px;}
 .acct-rep-toggle:hover{text-decoration:underline;}
-.acct-timeline{list-style:none;margin:6px 0 0;padding:6px 0 0;border-top:1px dashed var(--tk-line,#e5e7eb);max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:3px;}
+.acct-timeline{list-style:none;margin:6px 0 0;padding:6px 0 0;border-top:1px dashed var(--tk-border,#e5e7eb);max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:3px;}
 .acct-timeline li{display:grid;grid-template-columns:56px 12px minmax(48px,88px) 1fr;gap:6px;align-items:baseline;font-size:11px;min-width:0;}
-.acct-timeline .tl-ago{color:var(--tk-ink-3,#6b7280);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.acct-timeline .tl-dir{text-align:center;color:var(--tk-ink-3,#6b7280);}
+.acct-timeline .tl-ago{color:var(--tk-text-muted,#6b7280);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.acct-timeline .tl-dir{text-align:center;color:var(--tk-text-muted,#6b7280);}
 .acct-timeline li.out .tl-dir{color:var(--acct-accent,#16a34a);}
-.acct-timeline .tl-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-ink-2,#374151);}
-.acct-timeline .tl-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-ink,#111827);}
-.acct-timeline li.out .tl-txt{color:var(--tk-ink-2,#374151);}
+.acct-timeline .tl-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-text,#374151);}
+.acct-timeline .tl-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tk-text,#111827);}
+.acct-timeline li.out .tl-txt{color:var(--tk-text,#374151);}
 
 /* ===== 只读历史视角横幅（会话列表顶部，进入视角时点亮）===== */
 .hist-view-banner{display:none;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--warn,#f59e0b) 9%,var(--bg-panel));color:var(--text-main);font-size:12px;line-height:1.45;}
@@ -3924,11 +3924,11 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .buried-hint .bh-read{background:transparent;color:#b45309;}
 .buried-hint .bh-read:hover{background:color-mix(in srgb,#d97706 15%,transparent);color:#92400e;border-color:#b45309;}
 /* #222 群/频道视图说明条：复用被埋横幅骨架，但它是说明不是提醒——灰基调、不可点、悬停不亮。 */
-.buried-hint.scope-note{cursor:default;color:var(--text-muted,#6b7280);border-color:var(--border);background:var(--bg-soft,transparent);user-select:text;}
+.buried-hint.scope-note{cursor:default;color:var(--tk-text-muted,#6b7280);border-color:var(--border);background:var(--bg-soft,transparent);user-select:text;}
 .buried-hint.scope-note:hover{border-color:var(--border);background:var(--bg-soft,transparent);}
 .buried-hint.scope-note .bh-txt{font-weight:500;white-space:normal;}
 /* #222 角标浮层「另有 群 N / 频道 N / 归档 N」明细行 */
-.ac-unread-pop .acup-bdl{margin:0 8px 6px;font-size:11px;line-height:1.4;color:var(--text-muted,#6b7280);}
+.ac-unread-pop .acup-bdl{margin:0 8px 6px;font-size:11px;line-height:1.4;color:var(--tk-text-muted,#6b7280);}
 
 /* 当前会话钉住（实施49 P0-1）：被补回列表的那一行——它不属于当前筛选口径，
    用虚线左沿 + 轻微降饱和标出「特意为你留着的」，同时保证选中态高亮仍压得住

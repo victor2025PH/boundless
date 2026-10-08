@@ -60,7 +60,7 @@ _INLINE_COLOR_CEILINGS = {
     # 未提交在途设计）——横幅刻意用固定暖棕/奶油色（跨主题恒定的告警视觉），
     # token 化归属其 owner 线；先登记保 sweep 绿 + 债务可见（台账语义与 _PENDING_* 同）。
     # 2026-08-27 实施75 batch2：未接通横幅（暖棕渐变+奶油字）随顶部退役摘除，6→3。
-    "_alertlink_connect.html": 3,
+    "_alertlink_connect.html": 2,
     # 2026-08-18 暗色适配整页 pass 后收紧 6→2（goal-push 线）：剩 2 处=图表系列
     # 常量（趋势图「赢单」金 #ca8a04 图例圆点×1 + 热力格 JS 拼 rgba 渐变、深格
     # 白字×1）——数据可视化系列色两主题恒定属刻意常量（与 SVG stroke 同色一体），
@@ -93,7 +93,7 @@ _INLINE_COLOR_CEILINGS = {
     "_channel_body_messenger.html": 8,
     "ops/contacts.html": 1,
     "ops/mobile_handoffs.html": 1,
-    "ops_overview.html": 2,
+    "ops_overview.html": 1,
     # personas.html：2026-07-30 品牌收口把最后一个内联硬编码色转成 color-mix(var(--p)) → 0，除名
     # queue_monitor.html：2026-08-18 整页随主题令牌化（老板拍板废弃恒暗大屏语义），
     # 刷新按钮描边/虚拟坐席头像底/负载条轨三处全部 token 化 → 0，除名。
@@ -109,7 +109,7 @@ _INLINE_COLOR_CEILINGS = {
     # 弹层 #ai-diag-overlay 的遮罩 rgba(15,23,42,.45) + 卡片 box-shadow rgba(0,0,0,.25)
     # ——与本台账既有「阴影/遮罩主题无关，刻意豁免角色映射但仍计数」同类；该线
     # .py 尚待重启装载属在途批次，token 化（或换 --th-bg-scrim* 族）归 owner。
-    "unified_inbox.html": 11,
+    "unified_inbox.html": 10,
     # P3-1（2026-08-02）图标 SVG 化把 7 处内联色图标盒归一标准色类 → 13→8
     "_channel_body_whatsapp.html": 8,
     # workflows.html：2026-08-09 暗色收口（页内 --wf-* 变量 + 双开关暗段）随手清掉
@@ -136,7 +136,7 @@ _INLINE_COLOR_CEILINGS = {
     # 随 DOM 摘除，4→3；batch3 通道离线红条与 .stale 琥珀降色 CSS 再摘 2 处，
     # 3→1；余 1 处＝gs-panel 阴影（box-shadow 主题无关，工具方针豁免映射）。
     "workspace_base.html": 1,
-    "workspace_dashboard.html": 4,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
+    "workspace_dashboard.html": 3,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
     # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }
 

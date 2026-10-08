@@ -5604,7 +5604,7 @@ async function loadAlertLink(){
       // P4：CTA 从纯文案升级为真按钮（共享接通弹窗 _alertlink_connect.html；
       // 无写权限/部件未装载时回落纯文案，不给点不动的按钮）。
       var ctaBtn=(typeof CAN_MANAGE_OPS!=='undefined'&&CAN_MANAGE_OPS&&typeof window.wsAlertlinkOpen==='function')
-        ?' <button type="button" onclick="wsAlertlinkOpen()" style="border:none;background:var(--tk-brand,#2563eb);color:#fff;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;margin-left:6px;">'+esc(window.T('ov2_al_connect_btn'))+'</button>':'';
+        ?' <button type="button" onclick="wsAlertlinkOpen()" style="border:none;background:var(--tk-brand,#2563eb);color:var(--th-ink-inverse,#ffffff);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;margin-left:6px;">'+esc(window.T('ov2_al_connect_btn'))+'</button>':'';
       parts.push('<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;">'+esc(window.T('ov2_al_cta'))+ctaBtn+'</div>');
     }
     if(a.uncovered && a.uncovered.length){
@@ -5665,11 +5665,11 @@ async function loadKsGuard(){
         : window.T('ov2_ks_ttl_perm');
       var lift=(typeof CAN_MANAGE_OPS!=='undefined'&&CAN_MANAGE_OPS)
         ? ' <button type="button" class="ks-lift-btn" data-scope="'+esc(it.scope||'')+'"'
-          +' style="border:1px solid var(--tk-line,#e5e7eb);background:transparent;color:inherit;'
+          +' style="border:1px solid var(--tk-border,#e5e7eb);background:transparent;color:inherit;'
           +'border-radius:6px;padding:1px 10px;font-size:12px;cursor:pointer;margin-left:8px;">'
           +esc(window.T('ov2_ks_lift_btn'))+'</button>'
         : '';
-      return '<div style="border-top:1px solid var(--tk-line,#e5e7eb);padding:4px 0;font-size:12px;">'
+      return '<div style="border-top:1px solid var(--tk-border,#e5e7eb);padding:4px 0;font-size:12px;">'
         +'<code>'+esc(it.scope||'')+'</code> · '+esc(srcTag)
         +(it.reason?(' · '+esc(it.reason)):'')
         +(it.actor?(' · '+esc(it.actor)):'')
@@ -7079,7 +7079,7 @@ async function loadKbHealth(){
     }
     if(vendor){
       var vk = d.vendor_excluded ? 'ov2_kbh_vendor_excluded' : 'ov2_kbh_vendor_included';
-      var vc = d.vendor_excluded ? 'var(--tk-fg-muted,#6b7280)' : 'var(--tk-amber-ink,#d97706)';
+      var vc = d.vendor_excluded ? 'var(--tk-text-muted,#6b7280)' : 'var(--tk-amber-ink,#d97706)';
       parts.push('<div style="color:'+vc+';font-size:12px;margin-top:6px;">'+esc(window.Tf(vk, {n:vendor}))+' <a href="/knowledge?source=vendor" style="margin-left:4px;">/knowledge →</a></div>');
     }
     var fb = Number(d.feedback)||0;

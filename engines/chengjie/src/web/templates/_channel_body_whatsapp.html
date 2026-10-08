@@ -690,7 +690,7 @@
       </div>
       <div id="cfg-wa-tts-test-result" style="grid-column:1/-1;margin-top:2px;font-size:12px;display:flex;align-items:center;gap:8px;min-height:18px"></div>
     </div>
-    <div id="wa-voice-metrics" style="margin-top:.6rem;padding:.5rem .7rem;background:var(--th-bg-grn06,rgba(16,185,129,.06));border-radius:6px;font-size:.82rem;color:var(--th-ink-gray5,#6b7280);display:none">
+    <div id="wa-voice-metrics" style="margin-top:.6rem;padding:.5rem .7rem;background:var(--th-bg-grn06,rgba(16,185,129,.06));border-radius:6px;font-size:.82rem;color:var(--tk-text-muted,#6b7280);display:none">
       <b>{{ (i18n or {}).get('wa_s117', "语音统计") }}</b>（{{ (i18n or {}).get('wa_s118', "本次启动）：") }}<span id="wa-vm-txt">{{ (i18n or {}).get('msg_js_1047', "加载中") }}...</span>
     </div>
   </div>
@@ -721,7 +721,7 @@
       <label class="f-lbl">Vision {{ (i18n or {}).get('wa_s124', "超时 (秒") }})</label>
       <input class="f-inp" type="number" id="cfg-wa-media-timeout" min="5" max="120" step="5" value="30" oninput="rpa.markDirty('wa-tab-settings')">
     </div>
-    <div id="wa-media-metrics" style="margin-top:.6rem;padding:.5rem .7rem;background:var(--th-bg-vio06,rgba(139,92,246,.06));border-radius:6px;font-size:.82rem;color:var(--th-ink-gray5,#6b7280);display:none">
+    <div id="wa-media-metrics" style="margin-top:.6rem;padding:.5rem .7rem;background:var(--th-bg-vio06,rgba(139,92,246,.06));border-radius:6px;font-size:.82rem;color:var(--tk-text-muted,#6b7280);display:none">
       <b>{{ (i18n or {}).get('wa_s125', "媒体统计") }}</b>（{{ (i18n or {}).get('wa_s118', "本次启动）：") }}<span id="wa-mm-txt">{{ (i18n or {}).get('msg_js_1047', "加载中") }}...</span>
     </div>
   </div>
@@ -769,7 +769,7 @@
         <span class="f-hint">{{ (i18n or {}).get('wa_s135', "超过此数后强制跳过表情（防刷屏）") }}</span>
       </div>
     </div>
-    <div style="margin-top:.6rem;padding:.5rem .7rem;background:rgba(251,191,36,.06);border-radius:6px;font-size:.78rem;color:var(--th-ink-gray5,#6b7280)">
+    <div style="margin-top:.6rem;padding:.5rem .7rem;background:rgba(251,191,36,.06);border-radius:6px;font-size:.78rem;color:var(--tk-text-muted,#6b7280)">
       💡 <b>{{ (i18n or {}).get('wa_s136', "减少表情建议") }}</b>：{{ (i18n or {}).get('wa_s137', "将") }}"{{ (i18n or {}).get('wa_s138', "跳过概率") }}"{{ (i18n or {}).get('wa_s139', "提高到 70-85%，") }}"{{ (i18n or {}).get('wa_s140', "最大连续") }}"{{ (i18n or {}).get('wa_s141', "设为") }} 1
     </div>
   </div>

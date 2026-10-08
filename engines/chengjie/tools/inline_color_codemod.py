@@ -126,6 +126,8 @@ _E = [
     ("ink", "#a855f7", "--th-ink-purple5", "#c084fc", "#7e22ce"),
     # 陈旧页横幅（ws-uibuild）：深青底上的浅青文字，两主题同值（底恒深）
     ("ink", "#ccfbf1", "--th-ink-teal1", None),
+    # 2026-10-08 CI 基线补登：以下 token 已被模板/CSS 以 var(--x,亮值) 引用但表里没有 → 全站零定义、暗色恒走亮值。
+    ("ink", "#115e59", "--th-ink-teal8", "#5eead4"),   # unified-inbox 目标卡青色标题
     # ── bg：表面/软底/实底 ──
     ("bg", "#fff", "--th-bg-surface", "#1e2026"),
     ("bg", "#ffffff", "--th-bg-surface", "#1e2026"),
@@ -143,6 +145,11 @@ _E = [
     ("bg", "#0d9488", "--th-bg-teal6", None),   # 同族渐变起点（与 teal8 配对，两主题同值）
     ("bg", "#0f766e", "--th-bg-teal8", None),   # 陈旧页横幅渐变（深青，两主题同值）
     ("bg", "#134e4a", "--th-bg-teal9", None),
+    # 2026-10-08 CI 基线补登：以下 token 已被模板/CSS 以 var(--x,亮值) 引用但表里没有 → 全站零定义、暗色恒走亮值。
+    ("bg", "#ccfbf1", "--th-bg-teal100", "rgba(45,212,191,.15)"),   # unified-inbox 目标卡青色软底
+    ("bg", "#b45309", "--th-bg-amber7", "#c98f2f"),   # settings 卡图标渐变终点
+    ("bg", "#64748b", "--th-bg-slate5", None),   # settings 卡图标渐变（深底部件，两主题同值）
+    ("bg", "#334155", "--th-bg-slate7", None),
     ("bg", "#dc2626", "--th-bg-red6", "#e0524a"),
     ("bg", "#ef4444", "--th-bg-red5", "#e0524a"),
     ("bg", "#991b1b", "--th-bg-red8", None),
@@ -256,6 +263,11 @@ _E = [
     ("bd", "rgba(91,124,246,.22)", "--th-bd-brand22", "rgba(88,166,255,.25)"),
     ("bd", "rgba(139,92,246,.15)", "--th-bd-vio15", None),
     ("bd", "rgba(245,158,11,.28)", "--th-bd-amber28", "rgba(227,179,65,.3)"),
+    # 2026-10-08 CI 基线补登：以下 token 已被模板/CSS 以 var(--x,亮值) 引用但表里没有 → 全站零定义、暗色恒走亮值。
+    ("bd", "rgba(245,158,11,.35)", "--th-bd-amber35", "rgba(227,179,65,.4)"),
+    ("bd", "rgba(34,197,94,.35)", "--th-bd-green35", "rgba(63,185,80,.4)"),
+    ("bd", "rgba(20,184,166,.35)", "--th-bd-teal35", "rgba(45,212,191,.4)"),
+    ("bd", "rgba(239,68,68,.3)", "--th-bd-red30", "rgba(248,81,73,.35)"),
     ("bd", "#fca5a5", "--th-bd-red3", "rgba(248,81,73,.4)"),
     ("bd", "#c4b5fd", "--th-bd-violet3", "rgba(167,139,250,.4)"),
     ("bd", "#2d6cdf", "--th-bd-blue2d", "#58a6ff"),
