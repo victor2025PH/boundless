@@ -1,0 +1,918 @@
+{
+ "schema": "zhiliao.stop_corpus.v1",
+ "updated": "2026-10-08",
+ "owner": "智语（对话/话术/多语）",
+ "consumer": "src/compliance/stop_gate.py（智安）",
+ "contract": {
+  "positive": "每条都必须判为 STOP（停联/退订）。kind: keyword=整条只有关键词；stop_request=要求别再发；unsubscribe=要求移出名单",
+  "negative": "每条都必须判为非 STOP（易误判反例）",
+  "ambiguous": "gate 可自定，但要留痕；expect 给推荐口径：not_stop / not_stop+rg_flag / stop_if_alone",
+  "lang": "en / tl(Tagalog) / taglish / ceb(Bisaya/Cebuano) / hi(Hindi，含罗马化 Hinglish) / zh",
+  "matching_hint": "大小写、首尾空白、句末标点和 emoji 不影响判定；positive 里的 note 说明只在整条消息时才算的关键词"
+ },
+ "counts": {
+  "positive": 109,
+  "negative": 53,
+  "ambiguous": 12
+ },
+ "positive": [
+  {
+   "text": "STOP",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "stop",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "Stop.",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "STOP!!",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "Stop!",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": " stop ",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "STOPALL",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "UNSUBSCRIBE",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "unsubscribe",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "CANCEL",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "END",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "QUIT",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+  },
+  {
+   "text": "stop please",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "please stop",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "pls stop",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "plz stop",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Stop it, I'm not interested.",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop messaging me",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Stop messaging me.",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop texting me",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop sending me messages",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop contacting me",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "quit messaging me",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "no more messages please",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "don't message me again",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "do not contact me again",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "please don't text me anymore",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "I don't want these messages",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "leave me alone, stop messaging",
+   "lang": "en",
+   "kind": "stop_request"
+  },
+  {
+   "text": "unsubscribe me",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "Unsubscribe me please",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "opt out",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "opt-out",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "I want to opt out",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "remove me from this list",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "remove me from your list",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "take me off your list",
+   "lang": "en",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "Stop po",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop na po",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Stop na",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "tigil na",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Tigil na po.",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "tigilan mo na ako",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "itigil mo na",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "pakitigil na po",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayoko na",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Ayoko na po.",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "huwag mo na akong i-chat",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag mo na ako i-message",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag mo na akong i-text",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "huwag na po kayong mag-message",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "tama na, wag ka na mag-message",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayaw ko na makatanggap ng message",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag na kayong mag-chat sakin",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "huwag mo na akong kontakin",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag mo na ako guluhin",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Stop na, ayoko na",
+   "lang": "tl",
+   "kind": "stop_request"
+  },
+  {
+   "text": "i-unsubscribe mo na ako",
+   "lang": "tl",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "alisin mo na ako sa listahan",
+   "lang": "tl",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "pakitanggal na po ako sa listahan",
+   "lang": "tl",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "stop mo na pag-message sakin",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "pls stop na po sa pag text",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop na sa chat please",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayoko na ng messages niyo",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag niyo na ako i-PM",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "no more messages na po please",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "stop na, di ako interested",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "wag na po kayo mag-send ng messages",
+   "lang": "taglish",
+   "kind": "stop_request"
+  },
+  {
+   "text": "unsubscribe na ako",
+   "lang": "taglish",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "pa-unsubscribe po",
+   "lang": "taglish",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "opt out na ako",
+   "lang": "taglish",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "hunong na",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "hunonga na",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "Hunong na palihug.",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "pahunong na palihug",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "undang na",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayaw na ko i-message",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayaw na ko pag-chat",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayaw na mo pag-text nako",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "di na ko ganahan ma-message",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ayaw na ko hasola",
+   "lang": "ceb",
+   "kind": "stop_request"
+  },
+  {
+   "text": "अब मैसेज मत करो",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "मुझे मैसेज मत भेजो",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "मैसेज भेजना बंद करो",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "बंद करो",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "मुझे परेशान मत करो",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "अब और मैसेज नहीं चाहिए",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "ab message mat karo",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "mujhe message mat bhejo",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "band karo messages",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "message bhejna band karo",
+   "lang": "hi",
+   "kind": "stop_request"
+  },
+  {
+   "text": "अनसब्सक्राइब",
+   "lang": "hi",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "मुझे लिस्ट से हटाओ",
+   "lang": "hi",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "别再发了",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "不要再发了",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "别发了",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "别再给我发消息",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "不要再联系我",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "请停止发送",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "停止发送",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "别烦我了，别再发",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "以后别给我发了",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "不要再发消息给我了",
+   "lang": "zh",
+   "kind": "stop_request"
+  },
+  {
+   "text": "退订",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "TD",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "td",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "取消订阅",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "退订谢谢",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  },
+  {
+   "text": "我要退订",
+   "lang": "zh",
+   "kind": "unsubscribe"
+  }
+ ],
+ "negative": [
+  {
+   "text": "don't stop",
+   "lang": "en",
+   "why": "否定 stop＝希望继续"
+  },
+  {
+   "text": "Don't stop talking to me",
+   "lang": "en",
+   "why": "否定 stop＝希望继续"
+  },
+  {
+   "text": "please don't stop messaging me",
+   "lang": "en",
+   "why": "否定 stop＝希望继续"
+  },
+  {
+   "text": "never stop",
+   "lang": "en",
+   "why": "否定 stop＝希望继续"
+  },
+  {
+   "text": "stop by later",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "I'll stop by the store",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "bus stop",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "I'm at the bus stop",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "stop sign",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "full stop.",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "unstoppable",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "nonstop work today",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "can't stop laughing",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "the rain won't stop",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "I need to stop eating junk food",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "I stopped playing for a week",
+   "lang": "en",
+   "why": "stop 作动词短语 / 名词"
+  },
+  {
+   "text": "can I cancel my order?",
+   "lang": "en",
+   "why": "cancel/end/quit 带宾语或上下文，不是退订关键词"
+  },
+  {
+   "text": "the end of the movie was sad",
+   "lang": "en",
+   "why": "cancel/end/quit 带宾语或上下文，不是退订关键词"
+  },
+  {
+   "text": "end of my shift na",
+   "lang": "en",
+   "why": "cancel/end/quit 带宾语或上下文，不是退订关键词"
+  },
+  {
+   "text": "I want to quit my job",
+   "lang": "en",
+   "why": "cancel/end/quit 带宾语或上下文，不是退订关键词"
+  },
+  {
+   "text": "subscribe to your channel?",
+   "lang": "en",
+   "why": "cancel/end/quit 带宾语或上下文，不是退订关键词"
+  },
+  {
+   "text": "pit stop muna sa Tagaytay",
+   "lang": "taglish",
+   "why": "stop 作名词"
+  },
+  {
+   "text": "hindi ako titigil sa paglalaro",
+   "lang": "tl",
+   "why": "titigil/tigil 指别的事"
+  },
+  {
+   "text": "tigil-pasada daw bukas",
+   "lang": "tl",
+   "why": "titigil/tigil 指别的事"
+  },
+  {
+   "text": "tumigil na yung ulan",
+   "lang": "tl",
+   "why": "titigil/tigil 指别的事"
+  },
+  {
+   "text": "huminto yung jeep sa kanto",
+   "lang": "tl",
+   "why": "titigil/tigil 指别的事"
+  },
+  {
+   "text": "di ako titigil hangga't di ko natatapos",
+   "lang": "tl",
+   "why": "titigil/tigil 指别的事"
+  },
+  {
+   "text": "ayoko na sa trabaho ko",
+   "lang": "tl",
+   "why": "ayoko na + 别的宾语"
+  },
+  {
+   "text": "ayoko na ng kanin, busog na",
+   "lang": "tl",
+   "why": "ayoko na + 别的宾语"
+  },
+  {
+   "text": "ayoko na manood ng horror",
+   "lang": "tl",
+   "why": "ayoko na + 别的宾语"
+  },
+  {
+   "text": "wag mo akong kalimutan i-message ha",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "wag kang mag-alala",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "huwag ka nang mahiya, message ka lang",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "wag ka munang umalis",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "message mo ako mamaya",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "sa bus stop na lang tayo magkita",
+   "lang": "tl",
+   "why": "wag/huwag + 不是停联"
+  },
+  {
+   "text": "nihunong na ang ulan",
+   "lang": "ceb",
+   "why": "hunong/ayaw 指别的事"
+  },
+  {
+   "text": "ayaw kalimti ko i-message ha",
+   "lang": "ceb",
+   "why": "hunong/ayaw 指别的事"
+  },
+  {
+   "text": "ayaw kabalaka",
+   "lang": "ceb",
+   "why": "hunong/ayaw 指别的事"
+  },
+  {
+   "text": "मैसेज करते रहना",
+   "lang": "hi",
+   "why": "बंद/मत 指别的事"
+  },
+  {
+   "text": "बस स्टॉप पर मिलो",
+   "lang": "hi",
+   "why": "बंद/मत 指别的事"
+  },
+  {
+   "text": "रुको मत",
+   "lang": "hi",
+   "why": "बंद/मत 指别的事"
+  },
+  {
+   "text": "दुकान बंद हो गई",
+   "lang": "hi",
+   "why": "बंद/मत 指别的事"
+  },
+  {
+   "text": "चिंता मत करो",
+   "lang": "hi",
+   "why": "बंद/मत 指别的事"
+  },
+  {
+   "text": "别停",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "继续发吧",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "公交站见",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "雨停了",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "你别发愁了",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "别发脾气嘛",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "不要再发呆了",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "我想退订单可以吗",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "停车场在哪",
+   "lang": "zh",
+   "why": "别发＋别的词 / 停＋别的义"
+  }
+ ],
+ "ambiguous": [
+  {
+   "text": "stop it haha",
+   "lang": "en",
+   "expect": "not_stop",
+   "why": "撒娇/玩笑语气的 stop"
+  },
+  {
+   "text": "stop, you're so funny",
+   "lang": "en",
+   "expect": "not_stop",
+   "why": "撒娇/玩笑语气的 stop"
+  },
+  {
+   "text": "omg stop 😂",
+   "lang": "en",
+   "expect": "not_stop",
+   "why": "撒娇/玩笑语气的 stop"
+  },
+  {
+   "text": "should I stop playing?",
+   "lang": "en",
+   "expect": "not_stop+rg_flag",
+   "why": "想停玩（责任博彩信号，不是停联）"
+  },
+  {
+   "text": "I think I should stop gambling",
+   "lang": "en",
+   "expect": "not_stop+rg_flag",
+   "why": "想停玩（责任博彩信号，不是停联）"
+  },
+  {
+   "text": "ayoko na maglaro, talo na naman",
+   "lang": "tl",
+   "expect": "not_stop+rg_flag",
+   "why": "ayoko na maglaro＝不想玩了（责任博彩信号）"
+  },
+  {
+   "text": "tigil na ako sa sugal",
+   "lang": "tl",
+   "expect": "not_stop+rg_flag",
+   "why": "ayoko na maglaro＝不想玩了（责任博彩信号）"
+  },
+  {
+   "text": "tama na",
+   "lang": "tl",
+   "expect": "stop_if_alone",
+   "why": "tama na / enough：单独成句时按停联，带上下文按普通"
+  },
+  {
+   "text": "enough",
+   "lang": "tl",
+   "expect": "stop_if_alone",
+   "why": "tama na / enough：单独成句时按停联，带上下文按普通"
+  },
+  {
+   "text": "busy ako, later na lang",
+   "lang": "taglish",
+   "expect": "not_stop",
+   "why": "暂时不方便，不是永久停联"
+  },
+  {
+   "text": "wag muna ngayon",
+   "lang": "taglish",
+   "expect": "not_stop",
+   "why": "暂时不方便，不是永久停联"
+  },
+  {
+   "text": "ok bye",
+   "lang": "taglish",
+   "expect": "not_stop",
+   "why": "暂时不方便，不是永久停联"
+  }
+ ]
+}
