@@ -143,6 +143,13 @@ def _analyze_file(path: Path) -> Tuple[List[Tuple[int, str]], List[str], Set[str
                         and re.search(r"ALTER\s+TABLE\s*$", piece.value, re.I)
                         and isinstance(vals[i + 1], ast.FormattedValue)):
                     table_driven_alter = True
+    # 同形状的 %-格式化写法：``"ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl)``
+    # （group_members_store._adds 实锤：gtouch_* 迁移列被判幽灵，2026-10-08 ci-baseline）。
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod)
+                and isinstance(node.left, ast.Constant) and isinstance(node.left.value, str)
+                and re.search(r"ALTER\s+TABLE\s+%s\s+ADD\s+COLUMN", node.left.value, re.I)):
+            table_driven_alter = True
     dml: List[Tuple[int, str]] = []
     ddl: List[str] = []
     if table_driven_alter:
