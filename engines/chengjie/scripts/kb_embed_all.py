@@ -32,6 +32,41 @@ def _load_ai_cfg(config_path: Path) -> dict:
     return dict(data.get("ai") or {})
 
 
+_COV_SQL_TOTAL = "SELECT COUNT(*) FROM kb_entries WHERE enabled=1"
+_HAS_VEC = ("embedding IS NOT NULL AND TRIM(IFNULL(embedding, '')) != '' "
+            "AND TRIM(IFNULL(embedding, '')) != '[]'")
+
+
+def ro_coverage(db: Path) -> dict:
+    """dry-run 专用：sqlite ``mode=ro`` 只读打开，口径与 KnowledgeBaseStore.embedding_coverage 一致。
+
+    不实例化 KnowledgeBaseStore（它会建表 / 迁移 / 开 WAL，属于写操作），线上库预演只走这里。
+    只返回计数，不返回条目正文。
+    """
+    import sqlite3
+    uri = "file:" + Path(db).resolve().as_posix() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        total = conn.execute(_COV_SQL_TOTAL).fetchone()[0]
+        done = conn.execute(_COV_SQL_TOTAL + " AND " + _HAS_VEC).fetchone()[0]
+        all_rows = conn.execute("SELECT COUNT(*) FROM kb_entries").fetchone()[0]
+        by_cat = {}
+        try:
+            for cat, n_all, n_done in conn.execute(
+                "SELECT IFNULL(category,''), COUNT(*), SUM(CASE WHEN " + _HAS_VEC + " THEN 1 ELSE 0 END) "
+                "FROM kb_entries WHERE enabled=1 GROUP BY IFNULL(category,'')"
+            ):
+                by_cat[cat or "(none)"] = {"total": int(n_all), "done": int(n_done or 0)}
+        except sqlite3.OperationalError:
+            pass
+    finally:
+        conn.close()
+    return {"total": int(total), "done": int(done), "pending": int(total - done),
+            "pct": round(done / total * 100, 1) if total else 0,
+            "all_entries": int(all_rows), "disabled": int(all_rows - total),
+            "by_category": by_cat, "opened": "mode=ro"}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", default="config/config.yaml", help="智聊 config.yaml（读 ai.* 嵌入端点）")
@@ -40,6 +75,7 @@ def main(argv=None) -> int:
     ap.add_argument("--batch-size", type=int, default=20)
     ap.add_argument("--limit", type=int, default=None, help="本次最多处理多少条（试跑用）")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出报告")
+    ap.add_argument("--summary", action="store_true", help="只出计数，不列待向量化条目标题")
     a = ap.parse_args(argv)
 
     cfg_path = Path(a.config)
@@ -48,21 +84,36 @@ def main(argv=None) -> int:
         print(f"knowledge_base.db 不存在: {db}", file=sys.stderr)
         return 1
 
-    from src.utils.kb_embed_job import (
-        call_embedding_api, describe_embedding_endpoint, embed_pending_entries,
-    )
-    from src.utils.kb_store import KnowledgeBaseStore
+    from src.utils.kb_embed_job import describe_embedding_endpoint
 
     ai_cfg = _load_ai_cfg(cfg_path)
-    kb = KnowledgeBaseStore(db)
-    pending = kb.get_entries_without_embedding()
-    report = {
-        "mode": "apply" if a.apply else "dry-run",
-        "db": str(db),
-        "endpoint": describe_embedding_endpoint(ai_cfg),
-        "coverage": kb.embedding_coverage(),
-        "pending": [{"id": e["id"], "title": (e.get("title") or "")[:40]} for e in pending],
-    }
+    if not a.apply:
+        # dry-run：只读打开，不碰 KnowledgeBaseStore
+        cov = ro_coverage(db)
+        report = {"mode": "dry-run", "db": str(db),
+                  "endpoint": describe_embedding_endpoint(ai_cfg), "coverage": cov, "pending": []}
+        if not a.summary:
+            import sqlite3
+            conn = sqlite3.connect("file:" + db.resolve().as_posix() + "?mode=ro", uri=True)
+            try:
+                rows = conn.execute("SELECT id, title FROM kb_entries WHERE enabled=1 AND NOT ("
+                                    + _HAS_VEC + ")").fetchall()
+            finally:
+                conn.close()
+            report["pending"] = [{"id": r[0], "title": (r[1] or "")[:40]} for r in rows]
+        pending = report["pending"] if not a.summary else [None] * cov["pending"]
+    else:
+        from src.utils.kb_embed_job import call_embedding_api, embed_pending_entries
+        from src.utils.kb_store import KnowledgeBaseStore
+        kb = KnowledgeBaseStore(db)
+        pending = kb.get_entries_without_embedding()
+        report = {
+            "mode": "apply",
+            "db": str(db),
+            "endpoint": describe_embedding_endpoint(ai_cfg),
+            "coverage": kb.embedding_coverage(),
+            "pending": [{"id": e["id"], "title": (e.get("title") or "")[:40]} for e in pending],
+        }
     if a.apply and pending:
         async def _embed(texts):
             return await call_embedding_api(ai_cfg, texts)

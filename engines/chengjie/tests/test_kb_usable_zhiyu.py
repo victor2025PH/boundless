@@ -250,6 +250,38 @@ def test_cli_dry_run_does_not_write_and_apply_fills(tmp_path, monkeypatch, capsy
     assert cli.main(["--config", str(cfg_dir / "config.yaml"), "--apply"]) == 2
 
 
+def test_cli_dry_run_opens_db_read_only(tmp_path, capsys):
+    """线上库预演：dry-run 只读打开（mode=ro），不实例化 KnowledgeBaseStore，库文件字节不变。"""
+    import hashlib
+    import os
+    import stat
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    db = cfg_dir / "knowledge_base.db"
+    kb = KnowledgeBaseStore(db)
+    _seed(kb, 3)
+    kb.set_single_embedding(kb.get_entries_without_embedding()[0]["id"], [0.3, 0.7])
+    expect = kb.embedding_coverage()
+    del kb
+    cli = _load_cli()
+    before = hashlib.sha256(db.read_bytes()).hexdigest()
+    os.chmod(db, stat.S_IREAD)
+    try:
+        cov = cli.ro_coverage(db)
+        assert (cov["total"], cov["done"], cov["pending"]) == (expect["total"], expect["done"], expect["pending"])
+        assert cov["opened"] == "mode=ro"
+        assert cli.main(["--config", str(cfg_dir / "missing.yaml"), "--db", str(db), "--json", "--summary"]) == 0
+        rep = json.loads(capsys.readouterr().out)
+        assert rep["mode"] == "dry-run" and rep["pending"] == []
+        assert rep["coverage"]["done"] == 1 and rep["coverage"]["total"] == 3
+    finally:
+        os.chmod(db, stat.S_IREAD | stat.S_IWRITE)
+    assert hashlib.sha256(db.read_bytes()).hexdigest() == before
+    src = (ENGINE / "scripts" / "kb_embed_all.py").read_text(encoding="utf-8")
+    dry = src.split("if not a.apply:", 1)[1].split("else:", 1)[0]
+    assert "KnowledgeBaseStore(" not in dry
+
+
 # ── 三语评测集与基线 ──────────────────────────────────────────────────────
 
 # 基线（2026-10-08，BM25-only，无嵌入端点）：accuracy 0.86；应命中 top1 0.85 / 召回 0.875；
