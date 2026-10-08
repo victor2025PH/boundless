@@ -1,0 +1,42 @@
+# 代运营 · WhatsApp Cloud API 24h 窗口回退模板（公开包，中性 UTILITY）
+# 不提代运营公司、不提其他客户品牌。正文按该品牌的客服跟进口吻写。
+# 审核通过后再把 name 填进该品牌号的 window_fallback_template.by_language。
+
+schema: zhiliao.wa_fallback_templates.v1
+pack: agency
+edition: public
+category: UTILITY
+purpose: window_expired_service_followup
+default_language: zh
+opt_out:
+  zh: 退订
+  en: STOP
+  tl: STOP
+templates:
+  - name: agy_svc_followup_zh
+    category: UTILITY
+    lang: zh
+    language: zh_CN
+    text_param: true
+    param_max_chars: 80
+    body: "您好，关于您咨询的{{1}}，客服需要您回复后才能继续协助。请直接回复本消息。如不需要再收到消息，请回复「退订」。"
+    samples:
+      "1": "售后问题"
+  - name: agy_svc_followup_en
+    category: UTILITY
+    lang: en
+    language: en
+    text_param: true
+    param_max_chars: 80
+    body: "Hello, regarding {{1}} from your last message, we can keep helping only after you reply. Please reply to this message. Reply STOP to opt out."
+    samples:
+      "1": "your support request"
+  - name: agy_svc_followup_fil
+    category: UTILITY
+    lang: tl
+    language: fil
+    text_param: true
+    param_max_chars: 80
+    body: "Kumusta po. Tungkol sa {{1}} na tinanong ninyo, magpapatuloy lang po kami kapag sumagot kayo. Paki-reply po sa mensaheng ito. Kung ayaw na po ng mensahe, i-reply ang STOP."
+    samples:
+      "1": "support request"
