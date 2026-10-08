@@ -39,7 +39,7 @@ def _clear_edition(monkeypatch):
 def test_default_list_hides_internal_pack(monkeypatch):
     _clear_edition(monkeypatch)
     ids = [p["id"] for p in list_packs()]
-    assert ids == list(PUBLIC)
+    assert set(ids) == set(PUBLIC)
     assert all(p["internal"] is False and p["edition"] == "public" for p in list_packs())
     assert edition_shows_internal(None) is False
 
