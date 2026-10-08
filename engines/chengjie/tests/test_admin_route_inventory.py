@@ -47,6 +47,8 @@ _BASELINE = """
 /api/admin/ai-safety-overview	GET
 /api/admin/alert-link-status	GET
 /api/admin/official-webhook-status	GET
+/api/admin/whatsapp-cloud/health	GET
+/api/admin/telegram-bot/health	GET
 /api/admin/buried-conversations	GET
 /api/admin/bug-intake	GET
 /api/admin/bug-intake/notify-pending	POST
@@ -1647,6 +1649,19 @@ _ADDITIONS_2026_08_14_COCKPIT_RESOLVE = """
 /api/cockpit/resolve	POST
 """
 _BASELINE += _ADDITIONS_2026_08_14_COCKPIT_RESOLVE
+
+# 2026-10-08 待人工：「先不回」换浏览器仍在，客户新的一句自动回来。
+_ADDITIONS_2026_10_08_COCKPIT_SNOOZE = """
+/api/cockpit/snooze	POST
+/api/cockpit/unsnooze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_SNOOZE
+
+# 2026-10-08 待人工：页内回一句成功后计入「今天清掉」。发送仍走统一收件箱。
+_ADDITIONS_2026_10_08_COCKPIT_CLEARED = """
+/api/cockpit/cleared	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_CLEARED
 
 # 2026-08-16 会话删除（boss 直接需求）：工作台删除单会话全部本地数据（全表硬删
 # + 防复活墓碑，真实新消息自动解除回显；拒 agent/viewer）。账号删除的连带清库

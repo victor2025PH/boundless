@@ -4339,6 +4339,26 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         basic = str(request.query_params.get("fields", "")).lower() == "basic"
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         merged: Dict[tuple, Dict[str, Any]] = {}
+        # P0-5（2026-10-08）：桥接（mode=desktop）账号的注册表 meta，用于「状态以心跳为准」
+        bridge_meta: Dict[tuple, Dict[str, Any]] = {}
+
+        def _apply_heartbeat_status() -> None:
+            """心跳过期的桥接账号不再显示 online（注册表 status 是登录时写的，驱动挂了没人改）。"""
+            try:
+                from src.web.desktop_bridge_presence import heartbeat_display_status
+                for _k, _meta in bridge_meta.items():
+                    _row = merged.get(_k)
+                    if _row is None:
+                        continue
+                    _ov = heartbeat_display_status(
+                        _meta, status=str(_row.get("status") or ""),
+                        running=bool(_row.get("running")))
+                    if _ov:
+                        if "status" in _ov and "registry_status" not in _row:
+                            _row["registry_status"] = _row.get("status")
+                        _row.update(_ov)
+            except Exception:
+                logger.debug("[accounts] 心跳状态合成失败", exc_info=True)
 
         def _ensure(platform: str, account_id: str) -> Dict[str, Any]:
             k = (str(platform or "").lower(), str(account_id or ""))
@@ -4361,6 +4381,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 r["proxy_id"] = row.get("proxy_id") or r["proxy_id"]
                 r["fingerprint_id"] = row.get("fingerprint_id") or r["fingerprint_id"]
                 meta = row.get("meta") or {}
+                if isinstance(meta, dict) and isinstance(meta.get("bridge_heartbeat"), dict):
+                    bridge_meta[(r["platform"], r["account_id"])] = meta
                 r["auto_reply"] = bool(meta.get("auto_reply"))
                 r["auto_reply_override"] = dict(meta.get("autoreply_override") or {})
                 # P1 身份化：透出自身昵称/用户名/头像（缺失即空串，前端回落占位头像）
@@ -4402,6 +4424,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         if basic:
             for a in merged.values():
                 a["running"] = str(a.get("status") or "").lower() in ("online", "running")
+            _apply_heartbeat_status()
             accounts = sorted(merged.values(),
                               key=lambda x: (x["platform"], x["account_id"]))
             mask_phone = bool(
@@ -4475,6 +4498,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     r["health_detail"] = str(hv.get("detail"))
         except Exception:
             logger.debug("[accounts] 会话健康读取失败", exc_info=True)
+
+        # 3.7) 状态以心跳为准（P0-5）：放在运行时/编排器合并之后，桥接账号的心跳是最终事实源
+        _apply_heartbeat_status()
 
         # 4) 自动回复配额/熔断快照（Phase 5，仅协议号或已开自动回复的号）
         try:
@@ -6007,6 +6033,35 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.official_webhook_stats import collect_status
         return collect_status(cfg, app_state=app.state)
+
+    @app.get("/api/admin/whatsapp-cloud/health")
+    async def api_whatsapp_cloud_health(request: Request, probe: int = 0):
+        """WhatsApp 官方 Cloud API 通道健康（只读，零密钥字段；2026-10-08 智聊双轨）。
+
+        汇总：凭证齐否（只给布尔）/ 回调可达判词 / 发送成败与 error_kind / 投递失败 /
+        STOP 硬闸计数 / 转人工计数 / **Meta 按条费用单列**（近 30 天，按类别·按日）。
+        ``?probe=1`` 额外只读探 ``GET /{phone_number_id}``（不发消息、不计费）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.whatsapp_cloud import wa_cloud_health, wa_cloud_probe
+        if probe and bool((cfg.get("whatsapp_cloud") or {}).get("enabled")):
+            await wa_cloud_probe(cfg)
+        return wa_cloud_health(cfg, app_state=app.state)
+
+    @app.get("/api/admin/telegram-bot/health")
+    async def api_telegram_bot_health(request: Request, probe: int = 0):
+        """Telegram Bot API 官方通道健康（只读，零密钥字段；2026-10-08 智聊双轨）。
+
+        凭证布尔 / 路由挂载 / 回调到达·secret 失败·重投去重 / 发送成败与 error_kind /
+        STOP 硬闸与转人工计数。``?probe=1`` 额外只读调 ``getMe`` + ``getWebhookInfo``。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.telegram_bot_official import tg_bot_health, tg_bot_probe
+        if probe and bool((cfg.get("telegram_bot") or {}).get("enabled")):
+            await tg_bot_probe(cfg)
+        return tg_bot_health(cfg, app_state=app.state)
 
     @app.get("/api/admin/buried-conversations")
     async def api_buried_conversations(request: Request):

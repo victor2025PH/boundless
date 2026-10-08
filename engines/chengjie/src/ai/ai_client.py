@@ -118,6 +118,49 @@ def build_time_context_line(now: Any = None, *, place_label: str = "") -> str:
     return line
 
 
+#: 主链失败后的备用链顺序（ai.fallback_order）。lane 名：
+#:   ``key_pool``＝云端备用 Key 池（ai.key_pool）；``local``＝第二推理端（ai.fallback，
+#:   LAN vLLM/Ollama，如 198:11434 或 176 本机 ollama）。
+#: 缺省保持历史顺序「池 → 本地」（逐字节兼容存量部署与门禁）；智聊私信承接这类
+#: 「主模型=自建 chatx」的部署推荐 ``[local, key_pool]``：chatx → 第二推理端 → 云端池。
+DEFAULT_FALLBACK_ORDER: Tuple[str, ...] = ("key_pool", "local")
+_FALLBACK_LANE_ALIASES = {
+    "key_pool": "key_pool", "pool": "key_pool", "cloud_pool": "key_pool", "cloud": "key_pool",
+    "local": "local", "lan": "local", "fallback": "local", "second": "local",
+    "secondary": "local", "second_endpoint": "local",
+}
+
+
+def parse_fallback_order(raw: Any) -> Tuple[List[str], List[str]]:
+    """解析 ``ai.fallback_order``（纯函数）→ ``(order, unknown)``。
+
+    - 接受 list 或逗号/空白分隔字符串；大小写、别名归一（pool/cloud→key_pool，lan/second→local）；
+    - 去重；未知 lane 收进 ``unknown`` 由调用方告警（不抛）；
+    - **配置里漏掉的 lane 按缺省顺序补在末尾**：顺序可配，但不会因为少写一项就悄悄丢掉
+      一条能用的备用链（真要禁云端用 ``ai.primary=local_only``，那才是隐私开关）。
+    """
+    if raw is None or raw == "" or raw == []:
+        return list(DEFAULT_FALLBACK_ORDER), []
+    if isinstance(raw, str):
+        items = [x for x in raw.replace(",", " ").split() if x]
+    elif isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        return list(DEFAULT_FALLBACK_ORDER), [repr(raw)]
+    order: List[str] = []
+    unknown: List[str] = []
+    for it in items:
+        lane = _FALLBACK_LANE_ALIASES.get(str(it).strip().lower())
+        if lane is None:
+            unknown.append(str(it))
+        elif lane not in order:
+            order.append(lane)
+    for lane in DEFAULT_FALLBACK_ORDER:
+        if lane not in order:
+            order.append(lane)
+    return order, unknown
+
+
 def order_pool_entries(entries: List[Dict[str, Any]],
                        ping_state: Optional[Dict[str, Dict[str, Any]]] = None,
                        *, now: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -215,6 +258,9 @@ class AIClient(LoggerMixin):
         # 备用云 Key（云质量优于本地兜底），全池失败才落 LAN 本地模型。entries 元素：
         # {name, client, model, label, bad_until}（bad_until=失败冷却，冷却期内跳过）。
         self._pool_entries: List[Dict[str, Any]] = []
+        # 备用链顺序（ai.fallback_order，真实解析在 initialize()）与启动探针结果（backup_status 用）
+        self._fallback_order: List[str] = list(DEFAULT_FALLBACK_ORDER)
+        self._backup_probe: Dict[str, Any] = {}
         self._pool_calls = 0
         self._pool_ok = 0
         self._pool_last_key = ""
@@ -752,6 +798,19 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
+        # 备用链顺序（P1-2，2026-10-08）：chatx 主链失败后先试谁。缺省「池 → 本地」不变。
+        self._fallback_order, _fo_unknown = parse_fallback_order(ai_config.get("fallback_order"))
+        if _fo_unknown:
+            self.logger.warning(
+                "ai.fallback_order 含未知项 %s（可用：key_pool / local），已忽略", _fo_unknown)
+        _lanes_on = [ln for ln in self._fallback_order if self._backup_lane_configured(ln)]
+        if _lanes_on:
+            self.logger.info("主链备用顺序: %s（已配置: %s）",
+                             " → ".join(["primary"] + self._fallback_order), ", ".join(_lanes_on))
+        elif self._primary_mode == "cloud":
+            self.logger.warning(
+                "主链无任何备用（ai.fallback 与 ai.key_pool 都未配置）：主模型一挂本轮即不回复")
+
         # 多模型路由（ai.models + ai.task_routes）：主动按任务挑端点/模型（与 key_pool 正交）
         self._build_route_clients(ai_config, api_key)
 
@@ -826,6 +885,19 @@ class AIClient(LoggerMixin):
                     "运行时降级链「重试→备用池→本地兜底→canned」不受影响）")
         except Exception:
             self.logger.debug("后台启动探针异常（忽略）", exc_info=True)
+        finally:
+            await self._boot_probe_backups()
+
+    async def _boot_probe_backups(self) -> None:
+        """启动后探一次备用链（不生成，只 /v1/models）；结果进 /health。任何异常吞掉。"""
+        try:
+            await self.probe_backup_lanes()
+            snap = self.backup_status()
+            self.logger.info(
+                "AI 启动探针（后台）：备用链 %s redundancy=%s",
+                " → ".join(snap["order"]), snap["redundancy"])
+        except Exception:
+            self.logger.debug("备用链启动探针异常（忽略）", exc_info=True)
 
     async def _run_boot_probe(self, probe_coro) -> bool:
         """给启动连接探针套一个短上限（self._boot_probe_timeout）。
@@ -1209,16 +1281,9 @@ class AIClient(LoggerMixin):
         if _cb_blocked:
             # 熔断开路：主模型免打扰（保住冷却窗口语义）。降级链＝备用云 Key（质量同级）
             # → 本地兜底，逐级尝试；全灭＝本轮不回复。
-            pool_reply = await self._try_key_pool_chat(
+            fb_reply = await self._run_fallback_chain(
                 messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-            )
-            if pool_reply:
-                return pool_reply
-            fb_reply = await self._try_local_fallback_chat(
-                messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-                model_override=use_local_model,
+                skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
             )
             return fb_reply if fb_reply else self._fallback_reply(_fb_lang)
         if _token_degraded:
@@ -1243,20 +1308,12 @@ class AIClient(LoggerMixin):
             self.logger.warning(
                 "云端主链欠费/失效冷却中 → 先试备用池/本地 request_id=%s",
                 request_id or "n/a")
-            pool_reply = await self._try_key_pool_chat(
+            fb_reply = await self._run_fallback_chain(
                 messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-            )
-            if pool_reply:
-                self._lane_note_ok("pool")
-                return pool_reply
-            fb_reply = await self._try_local_fallback_chat(
-                messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-                model_override=use_local_model,
+                skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
+                note_lanes=True,
             )
             if fb_reply:
-                self._lane_note_ok("local")
                 return fb_reply
         last_error = None
         start_time = time.time()
@@ -1455,20 +1512,225 @@ class AIClient(LoggerMixin):
         self._lane_note_fail("cloud", _fail_reason if last_error is not None else "empty",
                              last_error)
         self._alert_key_failure_if_matches(last_error)
-        pool_reply = await self._try_key_pool_chat(
+        fb_reply = await self._run_fallback_chain(
             messages, use_temperature, use_max_tokens, context, request_id,
-            skip_quality_check=_skip_quality_check,
-        )
-        if pool_reply:
-            return pool_reply
-        fb_reply = await self._try_local_fallback_chat(
-            messages, use_temperature, use_max_tokens, context, request_id,
-            skip_quality_check=_skip_quality_check,
-            model_override=use_local_model,
+            skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
         )
         if fb_reply:
             return fb_reply
         return self._fallback_reply(_fb_lang)
+
+    async def _run_fallback_chain(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        context: Optional[Dict[str, Any]],
+        request_id: str,
+        *,
+        skip_quality_check: bool = False,
+        use_local_model: str = "",
+        note_lanes: bool = False,
+    ) -> Optional[str]:
+        """主链失败/熔断/冷却后的备用链：按 ``self._fallback_order`` 逐条试，首个出话即返回。
+
+        每条 lane 内部语义不变（池：逐 key 一次 + 120s 冷却；本地：无兜底纪律闸、语言钉子、
+        成本记账）。全灭返回 None，由调用方走 ``_fallback_reply``（=本轮不回复）。
+        ``note_lanes``：仅「云端冷却中」入口记 compute_lanes 的成功（与改动前同口径）。
+        """
+        order = list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER)
+        for lane in order:
+            if lane == "key_pool":
+                reply = await self._try_key_pool_chat(
+                    messages, temperature, max_tokens, context, request_id,
+                    skip_quality_check=skip_quality_check,
+                )
+                if reply:
+                    if note_lanes:
+                        self._lane_note_ok("pool")
+                    return reply
+            elif lane == "local":
+                reply = await self._try_local_fallback_chat(
+                    messages, temperature, max_tokens, context, request_id,
+                    skip_quality_check=skip_quality_check,
+                    model_override=use_local_model,
+                )
+                if reply:
+                    if note_lanes:
+                        self._lane_note_ok("local")
+                    return reply
+        return None
+
+    # ── 备用链可观测（P1-2，2026-10-08）────────────────────────────────────────
+
+    def _backup_lane_configured(self, lane: str) -> bool:
+        if lane == "key_pool":
+            return bool(self._pool_entries)
+        if lane == "local":
+            return bool(self._fb_client and self._fb_model)
+        return False
+
+    async def probe_backup_lanes(self, *, timeout: float = 5.0, alert: bool = True) -> Dict[str, Any]:
+        """启动探针：只做**不生成**的探活（``GET /v1/models``），绝不向任何端点发 chat。
+
+        - ``local``（第二推理端）：``models.list()``，``timeout`` 秒上限；
+        - ``key_pool``：不主动打云端（计费/限流面），读 ``cloud_credentials`` 已有的
+          ping 快照 + 运行态冷却/最近成功作证据；
+        结果缓存进 ``self._backup_probe`` 供 :meth:`backup_status` / ``/health`` 读。
+        ``alert``：备用全部已配置却全部不可达 → ERROR 日志 + host_alert 告警（30 分钟去抖）；
+        一条都没配 → WARNING（主模型单点）。绝不抛异常。
+        """
+        res: Dict[str, Any] = {"ts": time.time(), "lanes": {}}
+        mode = str(getattr(self, "_primary_mode", "cloud") or "cloud")
+        if mode != "cloud":
+            # local/local_only：ai.fallback 本身就是主链（启动探针已探过），这里不重复打；
+            # 本地主链的回落是云端主链 + 池，由各自链路自证。
+            res["skipped"] = f"primary_mode={mode}"
+            self._backup_probe = res
+            return res
+        try:
+            if self._backup_lane_configured("local"):
+                ok: Optional[bool] = None
+                err = ""
+                t0 = time.time()
+                models_api = getattr(self._fb_client, "models", None)
+                lister = getattr(models_api, "list", None)
+                if callable(lister):
+                    try:
+                        await asyncio.wait_for(lister(), timeout=timeout)
+                        ok = True
+                    except asyncio.TimeoutError:
+                        ok, err = False, f"timeout>{timeout:.0f}s"
+                    except Exception as e:  # noqa: BLE001
+                        ok, err = False, type(e).__name__
+                res["lanes"]["local"] = {
+                    "configured": True, "reachable": ok, "error": err,
+                    "latency_ms": int((time.time() - t0) * 1000) if ok else None,
+                }
+            else:
+                res["lanes"]["local"] = {"configured": False, "reachable": None}
+            if self._backup_lane_configured("key_pool"):
+                try:
+                    from src.utils.cloud_credentials import ping_state_snapshot
+                    pings = ping_state_snapshot() or {}
+                except Exception:
+                    pings = {}
+                now = time.time()
+                states = []
+                for e in self._pool_entries:
+                    p = pings.get(str(e.get("name") or ""))
+                    cooling = float(e.get("bad_until") or 0.0) > now
+                    if cooling:
+                        states.append(False)
+                    elif p is not None:
+                        states.append(bool(p.get("ok")))
+                    else:
+                        states.append(None)
+                if any(x is True for x in states):
+                    pool_ok: Optional[bool] = True
+                elif states and all(x is False for x in states):
+                    pool_ok = False
+                else:
+                    pool_ok = None
+                res["lanes"]["key_pool"] = {"configured": True, "reachable": pool_ok,
+                                            "size": len(self._pool_entries)}
+            else:
+                res["lanes"]["key_pool"] = {"configured": False, "reachable": None}
+        except Exception:
+            self.logger.debug("备用链探针异常（忽略）", exc_info=True)
+        self._backup_probe = res
+        if alert:
+            self._alert_backup_redundancy()
+        return res
+
+    def backup_status(self) -> Dict[str, Any]:
+        """备用链状态快照（``/health`` 与看板用）：只含 lane 名/布尔/计数/时间，不含地址与密钥。
+
+        ``redundancy``：
+          - ``ok``：至少一条已配置的备用链探活通过或 10 分钟内真出过话；
+          - ``unknown``：已配置但尚无证据（未探/探针不支持）；
+          - ``down``：已配置的备用链全部探活失败且近期无成功——主模型一挂即静默；
+          - ``none``：一条备用都没配（单点）；``local_only`` 档按设计为 ``none``；
+          - ``n/a``：``ai.primary=local``（本地即主链，回落是云端，不在本表）。
+        """
+        now = time.time()
+        probe = dict(getattr(self, "_backup_probe", None) or {})
+        planes = probe.get("lanes") or {}
+        recent = {
+            "key_pool": float(getattr(self, "_last_pool_ok_ts", 0.0) or 0.0),
+            "local": float(getattr(self, "_last_fb_ok_ts", 0.0) or 0.0),
+        }
+        order = list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER)
+        lanes: List[Dict[str, Any]] = []
+        any_ok = any_cfg = any_unknown = False
+        for lane in order:
+            cfg = self._backup_lane_configured(lane)
+            pl = planes.get(lane) or {}
+            last_ok = recent.get(lane, 0.0)
+            ok_recent = bool(last_ok) and (now - last_ok) < self._DEGRADE_RECENT_SEC
+            reachable = pl.get("reachable") if cfg else None
+            item: Dict[str, Any] = {
+                "lane": lane, "configured": cfg, "reachable": reachable,
+                "last_ok_age_sec": int(now - last_ok) if last_ok else None,
+            }
+            if lane == "key_pool" and cfg:
+                item["size"] = len(self._pool_entries)
+                item["cooling"] = sum(1 for e in self._pool_entries
+                                      if float(e.get("bad_until") or 0.0) > now)
+            if pl.get("error"):
+                item["error"] = pl.get("error")
+            lanes.append(item)
+            if cfg:
+                any_cfg = True
+                if reachable is True or ok_recent:
+                    any_ok = True
+                elif reachable is None:
+                    any_unknown = True
+        mode = str(getattr(self, "_primary_mode", "cloud") or "cloud")
+        if mode == "local":
+            # 本地即主链：回落是云端主链/池（不在本 lane 表里），这里不下结论
+            redundancy = "n/a"
+        elif mode == "local_only" or not any_cfg:
+            redundancy = "none"
+        elif any_ok:
+            redundancy = "ok"
+        elif any_unknown:
+            redundancy = "unknown"
+        else:
+            redundancy = "down"
+        return {
+            "order": ["primary"] + order,
+            "primary_mode": mode,
+            "redundancy": redundancy,
+            "lanes": lanes,
+            "probed_at": int(probe["ts"]) if probe.get("ts") else None,
+            "chat_fallback_enabled": bool(getattr(self, "_fb_chat_fallback_enabled", True)),
+        }
+
+    def _alert_backup_redundancy(self) -> None:
+        try:
+            st = self.backup_status()
+            red = st.get("redundancy")
+            if red == "down":
+                bad = [f"{ln['lane']}({ln.get('error') or 'unreachable'})"
+                       for ln in st["lanes"] if ln.get("configured")]
+                self.logger.error(
+                    "AI 备用链全部不可达：%s —— 主模型一旦不可用本轮将不回复；"
+                    "请检查 ai.fallback 端点 / ai.key_pool", ", ".join(bad))
+                try:
+                    from src.utils import host_alert
+                    host_alert.notify_host(
+                        f"{self._alert_label()} 备用模型全部不可达",
+                        "主模型目前是唯一能出话的链路（" + ", ".join(bad)
+                        + "）。主模型一挂，自动回复会静默。请检查第二推理端 / 云端备用 Key。",
+                        key="ai_backup_down", cooldown_sec=1800.0)
+                except Exception:
+                    self.logger.debug("备用链告警发送失败（忽略）", exc_info=True)
+            elif red == "none" and st.get("primary_mode") == "cloud":
+                self.logger.warning(
+                    "AI 主链无备用（ai.fallback / ai.key_pool 都未配置）：主模型单点")
+        except Exception:
+            self.logger.debug("备用链告警判定异常（忽略）", exc_info=True)
 
     def _lane_should_skip(self, lane: str) -> bool:
         try:
@@ -6023,6 +6285,7 @@ class AIClient(LoggerMixin):
             "key_pool_calls": self._pool_calls,
             "key_pool_ok": self._pool_ok,
             "key_pool_last_key": self._pool_last_key or None,
+            "fallback_order": list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER),
         }
 
     _DEGRADE_RECENT_SEC = 600.0   # 「最近出过话」窗口：10 分钟内该链有成功即视为活跃
