@@ -89,7 +89,9 @@ def test_api_playbooks_lists_with_validation(auth_client, _books):
 
 
 def test_api_playbook_detail_returns_beat_sheet(auth_client, _books):
-    pid = sorted(_books)[0]
+    # sorted 首位现在是 duo_matrixx：只有目标、没有 beats（「没有剧本，只按目标聊天」）。
+    # 逐拍契约要挑一本真有节拍的。
+    pid = next(p for p in sorted(_books) if getattr(_books[p], "beats", None))
     r = auth_client.get(f"/api/group-show/playbooks/{pid}")
     assert r.status_code == 200
     pb = r.json()["playbook"]
@@ -251,8 +253,10 @@ def test_api_attendance_plans_a_roster_with_metrics_and_roles(auth_client):
     r = auth_client.post("/api/group-show/attendance",
                          json={"group_count": 12, "seats": 3})
     assert r.status_code == 200
-    plan = r.json()["plan"]
-    if plan is None:
+    d = r.json()
+    plan = d["plan"]
+    # 空号池仍返回一份空排班（plan 不是 None）。没在线号时跳过，断言只在有号时生效。
+    if plan is None or int((d.get("capacity") or {}).get("pool_size") or 0) == 0:
         pytest.skip("本机注册表没有在线号，排班走空态分支")
     assert len(plan["assignments"]) == 12
     assert {"max_pair_co", "clique_ratio", "verdict"} <= set(plan["metrics"])
@@ -274,8 +278,9 @@ def test_api_attendance_accepts_a_pasted_group_list(auth_client):
     r = auth_client.post("/api/group-show/attendance",
                          json={"groups": "群A\n群B\n群A\n\n群C", "seats": 2})
     assert r.status_code == 200
-    plan = r.json()["plan"]
-    if plan is None:
+    d = r.json()
+    plan = d["plan"]
+    if plan is None or int((d.get("capacity") or {}).get("pool_size") or 0) == 0:
         pytest.skip("本机注册表没有在线号")
     assert list(plan["assignments"]) == ["群A", "群B", "群C"]   # 去重且保序
 
@@ -411,8 +416,17 @@ def _stock_shows(st, *, groups, speakers, ts):
             st.record_membership(f"gg{g}", a, source="manual")
 
 
+def _pin_show_store(monkeypatch, st):
+    """路由 `_store()` 按实例 config 目录重配单例。测试刚灌进 tmp 的台账
+    会被换成空库，预算读成 0，压角/越界/容量断言全部失真。"""
+    monkeypatch.setattr(
+        "src.web.routes.group_show_routes._store",
+        lambda *_a, **_k: st,
+    )
+
+
 def test_rehearsal_is_capped_to_the_budget_so_the_preview_matches_a_live_run(
-        auth_client, tmp_path, _books):
+        auth_client, tmp_path, _books, monkeypatch):
     """排练的用处是**预览真发的样子**。它演 4 个人而真发只允许 2 人，这个预览就在骗人。"""
     import time as _t
 
@@ -421,6 +435,7 @@ def test_rehearsal_is_capped_to_the_budget_so_the_preview_matches_a_live_run(
     st = configure_group_show_store(tmp_path / "group_show.db")
     if not getattr(st, "available", False):
         pytest.skip("本机场次库不可用")
+    _pin_show_store(monkeypatch, st)
     _stock_shows(st, groups=40, speakers=3, ts=_t.time() - 3600)
 
     # 要一本**角色数超过预算**的剧本，压角才会真的发生：duo_matrixx（2 角）入库后
@@ -444,7 +459,8 @@ def test_rehearsal_is_capped_to_the_budget_so_the_preview_matches_a_live_run(
 
 
 def test_rehearsal_over_budget_needs_an_explicit_flag_and_is_audited(auth_client,
-                                                                    tmp_path, _books):
+                                                                    tmp_path, _books,
+                                                                    monkeypatch):
     """越界是运营的权力，但要他**主动按**，且这一按必须留痕。"""
     import time as _t
 
@@ -453,6 +469,7 @@ def test_rehearsal_over_budget_needs_an_explicit_flag_and_is_audited(auth_client
     st = configure_group_show_store(tmp_path / "group_show.db")
     if not getattr(st, "available", False):
         pytest.skip("本机场次库不可用")
+    _pin_show_store(monkeypatch, st)
     _stock_shows(st, groups=40, speakers=3, ts=_t.time() - 3600)
 
     r = auth_client.post("/api/group-show/rehearse", json={
@@ -585,7 +602,8 @@ def test_api_exposure_drills_the_number_down_to_a_pair_and_its_groups(auth_clien
 
 
 def test_api_exposure_never_tells_the_operator_that_solo_is_unlimited(auth_client,
-                                                                     tmp_path):
+                                                                     tmp_path,
+                                                                     monkeypatch):
     """每场只有一个号开口时，预算会如实报「无上限」——那只是发言轴。
 
     这是这张卡最容易骗死人的地方：运营记得住的就一个数，而最显眼的那个偏偏最乐观。
@@ -596,6 +614,7 @@ def test_api_exposure_never_tells_the_operator_that_solo_is_unlimited(auth_clien
     st = configure_group_show_store(tmp_path / "group_show.db")
     if not getattr(st, "available", False):
         pytest.skip("本机场次库不可用")
+    _pin_show_store(monkeypatch, st)
     # 每群一个号、每场都带货 —— 号对轴（成员+发言）双双归零，只剩单号自曝
     _stock_shows(st, groups=40, speakers=1, ts=1000.0)
 
