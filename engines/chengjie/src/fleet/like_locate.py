@@ -17,11 +17,12 @@ Signals
                 at the same place has to agree. Optional. A dump that fails or
                 comes back empty leaves this signal empty.
     position    Leftmost button of a hierarchy row whose other buttons are
-                Comment / Share (Komento / Ibahagi, 评论 / 分享). This is the
-                icon-only bar when the Like glyph itself has no label. It
-                agrees with a screenshot signal (template, action bar, or
-                silhouette), not with a label from the same dump. Not a tap
-                by itself.
+                Comment / Share (Komento / Ibahagi, 评论 / 分享). When that
+                row has Comment and Share but no Like node, the missing Like
+                slot is one equal gap to the left of Comment, on the same
+                row. A post-header row is not a slot. The point agrees with
+                a screenshot signal (template, action bar, or silhouette),
+                not with a label from the same dump. Not a tap by itself.
     region      Nodes whose centers fall inside the screenshot action-bar
                 rectangle (``structure_bounds``), including nodes the button
                 size filter dropped. A Like / Comment / Share label, or 3–4
@@ -550,6 +551,64 @@ def label_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
     return hits
 
 
+def _infer_missing_like(group: Sequence[Dict[str, Any]], buttons: Sequence[Dict[str, Any]],
+                        width: int, height: int) -> Optional[Dict[str, Any]]:
+    """Like slot one equal gap left of Comment when the row has no Like node.
+
+    The point stays inside the Comment/Share row. A center that lands on a
+    node above that row (the post header) is dropped.
+    """
+    if not group or group[0].get("role") != "comment":
+        return None
+    if any(n.get("role") in ("like", "liked") for n in group):
+        return None
+    if not any(n.get("role") == "share" and n["x"] > group[0]["x"] for n in group):
+        return None
+    comment = group[0]
+    right = next((n for n in group if n["x"] > comment["x"] + 8), None)
+    if right is None:
+        return None
+    gap = int(right["x"]) - int(comment["x"])
+    if gap < 8:
+        return None
+    bw = int(comment["x1"]) - int(comment["x0"])
+    bh = int(comment["y1"]) - int(comment["y0"])
+    if bw < 20 or bh < 20:
+        return None
+    cx = int(comment["x"]) - gap
+    cy = int(comment["y"])
+    x0 = int(round(cx - bw / 2))
+    y0 = int(comment["y0"])
+    x1 = x0 + bw
+    y1 = y0 + bh
+    row_y0 = min(int(n["y0"]) for n in group)
+    row_y1 = max(int(n["y1"]) for n in group)
+    if not (row_y0 <= cy <= row_y1):
+        return None
+    if not _fully_inside(x0, y0, x1, y1, width, height):
+        return None
+    if not _button_box_ok(x1 - x0, y1 - y0, width, height):
+        return None
+    group_ids = {id(n) for n in group}
+    for other in buttons:
+        if id(other) in group_ids:
+            continue
+        if int(other["y"]) >= row_y0:
+            continue
+        if int(other["x0"]) <= cx <= int(other["x1"]) and int(other["y0"]) <= cy <= int(other["y1"]):
+            return None
+    for node in group:
+        if int(node["x0"]) <= cx <= int(node["x1"]) and int(node["y0"]) <= cy <= int(node["y1"]):
+            return None
+    return {
+        "bounds": f"[{x0},{y0}][{x1},{y1}]", "class": "",
+        "content_desc": "", "resource_id": "", "text": "",
+        "x0": x0, "y0": y0, "x1": x1, "y1": y1, "x": cx, "y": cy,
+        "label": "icon", "by": "inferred", "role": "like", "inferred": True,
+        "row_y0": row_y0, "row_y1": row_y1,
+    }
+
+
 def _position_row(group: Sequence[Dict[str, Any]], width: int) -> bool:
     """True when this row is an action bar and the leftmost slot can be Like."""
     if not 2 <= len(group) <= 4:
@@ -570,20 +629,38 @@ def _position_row(group: Sequence[Dict[str, Any]], width: int) -> bool:
 
 
 def position_hits(hierarchy: Any, width: int, height: int) -> List[Dict[str, Any]]:
-    """Leftmost button of a Comment/Share action bar. Not a tap by itself.
+    """Like slot of a Comment/Share action bar. Not a tap by itself.
 
     The Like glyph on an icon-only bar often has no word. The row still has
     a comment button and a share button. The leftmost slot of that row is
-    the candidate. A reaction picker (Love / Haha / Wow) is not a row.
+    the candidate. When Comment is the leftmost node, the slot is one equal
+    gap to its left, on the same row. A post-header row is not a candidate.
+    A reaction picker (Love / Haha / Wow) is not a row.
     """
     hits = []
     buttons = _drop_containers(_hierarchy_buttons(hierarchy, width, height))
     for group in _button_rows(buttons, height):
+        row_y0 = min(int(n["y0"]) for n in group)
+        row_y1 = max(int(n["y1"]) for n in group)
+        inferred = _infer_missing_like(group, buttons, width, height)
+        if inferred is not None:
+            hit = _hit_from_button(inferred, "position", width, height, "icon")
+            hit["inferred"] = True
+            hit["row_y0"] = int(inferred["row_y0"])
+            hit["row_y1"] = int(inferred["row_y1"])
+            hits.append(hit)
+            continue
         if not _position_row(group, width):
             continue
         left = group[0]
+        if not (row_y0 <= int(left["y"]) <= row_y1):
+            continue
         label = str(left.get("label") or "icon")
-        hits.append(_hit_from_button(left, "position", width, height, label))
+        hit = _hit_from_button(left, "position", width, height, label)
+        hit["inferred"] = False
+        hit["row_y0"] = row_y0
+        hit["row_y1"] = row_y1
+        hits.append(hit)
     hits.sort(key=lambda h: (h["y_pm"], h["x_pm"]))
     return hits
 
@@ -1759,6 +1836,7 @@ def _blank_diag(dump: str) -> Dict[str, Any]:
         "shape_matched": False,
         "shape_score": 0.0,
         "position_matched": False,
+        "position_inferred": False,
         "region_matched": False,
         "nodes": [],
         "hierarchy": {
@@ -1834,6 +1912,7 @@ def locate_like_row(raw: bytes, boxes: Any = (), hierarchy: Any = None) -> Dict[
     else:
         diag["shape_score"] = 0.0
     diag["position_matched"] = bool(positions)
+    diag["position_inferred"] = any(bool(h.get("inferred")) for h in positions)
     diag["region_matched"] = bool(regions)
     return {
         "target": target,

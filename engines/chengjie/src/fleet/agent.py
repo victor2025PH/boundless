@@ -24,6 +24,7 @@
     0.3.22 机房现场待办：主控按类别下发 site_todo，只在这台电脑弹窗（中英文）。直播机拒绝。公开 latest 仍是 0.3.7。
     0.3.23 去掉 dump 前的上半部轻点，只留媒体暂停。dump 之后如果前台已经离开信息流，按一次返回。like_diag 增加层级计数，并用截图动作条里的节点作为第二路信号；两信号一致才点、点完复核、like_probe 只定位、dry_run 不碰手机都不变。新增 phone_app_restart：只对可操作池里的手机 force-stop 再打开 Facebook，直播机、173 和受保护手机拒绝。登录检查失败时回执带前台包名和 activity。公开 latest 仍是 0.3.7。
     0.3.24 金丝雀把 0.3.21 的 dump 加固、0.3.22 的机房弹窗、0.3.23 的找赞定位和 phone_app_restart 收成同一份安装包。点赞仍要两信号一致并复核，like_probe 只定位，dry_run 不碰手机。公开 latest 仍是 0.3.7。
+    0.3.25 直播机、173、受保护手机（序列号前缀 3B1F）和显式排除名单走同一个 fail-closed 判断，自动派发和手机操作都过这一关。现场待办面板由登录计划任务和 Run 键在交互桌面启动，服务进程只写快照。动作条有 Comment/Share 但没有 Like 时，按等距推出 Like 位置，再和截图对上才算两路。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -76,7 +77,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
 from .detect import (
     LIVE_STREAM_PORTS, detect_instances, is_blocked_live_port, is_live_port_url, is_live_stream_host, is_loopback_url,
-    is_seat_173, sanitize_instances, url_port,
+    sanitize_instances, url_port,
 )
 from .identity import (
     ORIGIN_GENERATED, StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
@@ -91,7 +92,8 @@ from .phone_flows import PhoneFlows, _MAX_MAP_BYTES, validate_ui_map
 from .phone_rules import PhoneOpError, scrub_phone_error_text, scrub_phone_tree
 from .phone_ops import PHONE_TASK_KINDS, PhoneOps
 from .service import (
-    acquire_single_instance, install_service, service_status, start_parent_watch, supervise, uninstall_service,
+    acquire_single_instance, install_panel_logon, install_service, service_status, start_parent_watch, supervise,
+    uninstall_service,
 )
 from .updater import apply_upgrade
 from .protocol import (
@@ -105,7 +107,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.24"
+AGENT_VERSION = "0.3.25"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -1124,13 +1126,13 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
+            if kind in PHONE_APP_KINDS or kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS or kind in PHONE_TASK_KINDS:
+                blocked = self._room_dispatch_block(target)
+                if blocked:
+                    if kind in PHONE_APP_KINDS:
+                        self._audit_app_restart(target, payload, {}, blocked)
+                    return STATUS_REJECTED, {}, blocked
             if kind in PHONE_APP_KINDS:
-                if is_live_stream_host(self.cfg.state_dir):
-                    self._audit_app_restart(target, payload, {}, "live_stream_host")
-                    return STATUS_REJECTED, {}, "live_stream_host"
-                if is_seat_173(host_name()):
-                    self._audit_app_restart(target, payload, {}, "seat_173")
-                    return STATUS_REJECTED, {}, "seat_173"
                 status, result, detail = self.phone_ops.execute_app_restart(payload, target)
                 self._note_phone_action(target, result, status)
                 result, detail = self._scrub_phone_report(target, result, detail)
@@ -1264,10 +1266,25 @@ class NodeAgent:
             logger.warning("[agent] net_health alert skipped", exc_info=True)
         return status, result, detail
 
+    def _room_dispatch_block(self, target: Dict[str, Any]) -> str:
+        """Local copy of the controller gate. Empty means this PC may run the task."""
+        from .dispatch_guard import agent_host_block
+
+        serial = ""
+        if isinstance(target, dict):
+            serial = str(target.get("serial") or "")
+        return agent_host_block(
+            host_name(),
+            live_flag=bool(is_live_stream_host(self.cfg.state_dir) or self.operator_alert.live_stream),
+            serial=serial or None,
+            node_id=str(self.cfg.data.get("node_id") or ""),
+        )
+
     def _site_todo(self, payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
         """Write this PC's site list and show the local panel. A live-stream host is refused first."""
-        if self.operator_alert.live_stream:
-            return STATUS_REJECTED, {}, "live_stream_host"
+        blocked = self._room_dispatch_block({})
+        if blocked:
+            return STATUS_REJECTED, {}, blocked
         from .site_todo import sanitize_site_todo_payload, sanitize_site_todo_result
 
         clean = sanitize_site_todo_payload(payload)
@@ -1845,6 +1862,7 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
     sub.add_parser("enable-phone-adb",
                    help="机房节点：允许用安装目录里自带的 adb 在没有 server 时把它拉起来（直播机拒绝）")
     sub.add_parser("install-service", help="开机自启 + 立即启动（Windows 计划任务 SYSTEM / Linux systemd）")
+    sub.add_parser("install-panel", help="登录时在交互桌面启动现场待办面板（计划任务 + Run 键）")
     sub.add_parser("uninstall-service")
     sub.add_parser("service-status")
     sub.add_parser("status")
@@ -1934,6 +1952,10 @@ def _main(argv: Optional[List[str]], held: List[Any]) -> int:
         return 0
     if args.cmd == "install-service":
         res = install_service(cfg.state_dir)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0 if res.get("ok") else 1
+    if args.cmd == "install-panel":
+        res = install_panel_logon(cfg.state_dir)
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return 0 if res.get("ok") else 1
     if args.cmd == "uninstall-service":

@@ -425,9 +425,10 @@ def test_hierarchy_falls_back_to_stdout_then_reports_a_scrubbable_error():
 
 def test_protected_phone_is_hard_coded():
     for s in ("3B1F4KE5MS140P4X", "3b1f4ke5ms140p4x", "adb-3B1F4KE5MS140P4X-abc._adb-tls-connect._tcp",
-              "192.168.0.148:5555", "192.168.0.148:37123", "192.168.0.148"):
+              "192.168.0.148:5555", "192.168.0.148:37123", "192.168.0.148",
+              "3B1FABCDEF", "adb-3B1FABCDEF-x._adb-tls-connect._tcp"):
         assert is_protected(s), s
-    for s in ("S1", "192.168.0.14:5555", "192.168.0.1480:5555", "E6FYKRHYS48HZLAM"):
+    for s in ("S1", "192.168.0.14:5555", "192.168.0.1480:5555", "E6FYKRHYS48HZLAM", "XX3B1FYY"):
         assert not is_protected(s), s
 
 

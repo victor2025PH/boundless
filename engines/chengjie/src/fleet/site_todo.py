@@ -6,9 +6,10 @@ It enqueues one ``site_todo`` task for that node only. The agent writes the
 list into the local operator-alert snapshot; the panel groups it by category.
 
 Items carry a category and a wallpaper number or an unnumbered slot. They do
-not carry adb serials or free text. Live-stream hosts and node 173 are not
-queued. The protected phone is dropped before a category is chosen. Offline
-nodes are not queued; the console says they need the agent reinstalled.
+not carry adb serials or free text. Live-stream hosts, node 173, an explicit
+exclude list, and any node the guard cannot identify are not queued. The
+protected phone is dropped before a category is chosen. Offline nodes are not
+queued; the console says they need the agent reinstalled.
 
 Facebook logged-out is reported only when ``fb_screen`` and ``fb_confirm`` are
 both ``login``.
@@ -32,7 +33,6 @@ DEBOUNCE_SEC = 25
 CONSOLE_REINSTALL = "需重装 agent"
 _MAX_ITEMS = 64
 _WALL_RE = re.compile(r"^\d{1,4}$")
-_LIVE_TOKENS = frozenset({"mnlwin", "aory", "livestream"})
 _CATEGORIES = (
     "no_network",
     "no_signal",
@@ -46,51 +46,20 @@ _CATEGORY_SET = frozenset(_CATEGORIES)
 _ORDER = {name: index for index, name in enumerate(_CATEGORIES)}
 
 
-def site_skip_reason(node: Any) -> str:
-    """``live_stream`` / ``node_173`` / ``""``.
+def site_skip_reason(node: Any, *, exclude: Any = None) -> str:
+    """``live_stream`` / ``node_173`` / ``excluded`` / ``uncertain`` / ``""``.
 
-    Live-stream markers are whole tokens (``MNLWIN``, ``AORY``, ``live-stream``)
-    on the host, label, node id, or group, or ``meta.live_stream``. Node 173 is
-    the host, label, or node id equal to ``173`` or ending in ``-173`` / ``_173``.
-    A serial that merely contains those characters is not a node identity.
+    Delegates to ``auto_dispatch_block``. A live-stream display name, group, or
+    hostname, node 173, and the explicit exclude list all skip the node. Room
+    hosts CHINAMI, CHINAMI-B, AORY-A, and AORY-B are not live. A serial that
+    merely contains those characters is not a node identity.
     """
-    src = node if isinstance(node, dict) else {}
-    meta = src.get("meta") if isinstance(src.get("meta"), dict) else {}
-    if meta.get("live_stream") is True:
-        return "live_stream"
-    fields = (
-        str(src.get("host_name") or ""),
-        str(src.get("label") or ""),
-        str(src.get("node_id") or ""),
-        str(src.get("group_name") or ""),
-    )
-    tags = meta.get("tags") if isinstance(meta.get("tags"), (list, tuple)) else []
-    blob = " ".join(fields + tuple(str(tag) for tag in tags))
-    if "live-stream" in blob.lower() or "live_stream" in blob.lower():
-        return "live_stream"
-    for field in fields:
-        if _tokens(field) & _LIVE_TOKENS:
-            return "live_stream"
-    for tag in tags:
-        if _tokens(str(tag)) & _LIVE_TOKENS:
-            return "live_stream"
-    for field in (src.get("host_name"), src.get("label"), src.get("node_id")):
-        if _is_node_173(field):
-            return "node_173"
-    return ""
+    from .dispatch_guard import auto_dispatch_block
 
-
-def _tokens(value: str) -> set:
-    return {part for part in re.split(r"[^a-z0-9]+", str(value or "").lower()) if part}
-
-
-def _is_node_173(value: Any) -> bool:
-    text = str(value or "").strip().lower()
-    if not text:
-        return False
-    if text == "173" or text.endswith("-173") or text.endswith("_173"):
-        return True
-    return False
+    reason = auto_dispatch_block(node, exclude=exclude)
+    if reason == "protected_phone":
+        return ""
+    return reason
 
 
 def phone_signature(phones: Any) -> str:
@@ -413,7 +382,7 @@ def _latest_net_rows(store: Any, node_id: str) -> List[Dict[str, Any]]:
 
 
 def todos_for_node(store: Any, node: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if site_skip_reason(node):
+    if site_skip_reason(node, exclude=getattr(store, "dispatch_exclude", None)):
         return []
     return build_site_todos(
         phones=node.get("phones"),
@@ -443,7 +412,7 @@ def console_site_todos(store: Any, *, now: Optional[float] = None) -> List[Dict[
     for node in store.list_nodes(include_revoked=False, now=now) or []:
         if not isinstance(node, dict):
             continue
-        skip = site_skip_reason(node)
+        skip = site_skip_reason(node, exclude=getattr(store, "dispatch_exclude", None))
         wall = parse_wallpaper_map(_latest_wallpaper(store, str(node.get("node_id") or "")))
         offline = node.get("state") != "online"
         rows.append({
@@ -479,7 +448,7 @@ def _dispatch(store: Any, node_id: str, state: Dict[str, Dict[str, Any]],
     node = store.get_node(node_id)
     if not isinstance(node, dict) or node.get("state") != "online":
         return None
-    if site_skip_reason(node):
+    if site_skip_reason(node, exclude=getattr(store, "dispatch_exclude", None)):
         return None
     todos = todos_for_node(store, node)
     sig = site_todo_signature(todos)

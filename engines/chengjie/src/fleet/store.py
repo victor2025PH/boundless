@@ -282,7 +282,7 @@ def _dumps(d: Any) -> str:
 
 class FleetStore:
     def __init__(self, db_path: Any, *, offline_after_sec: int = DEFAULT_OFFLINE_AFTER_SEC,
-                 pace_policy: Optional[FacebookPace] = None) -> None:
+                 pace_policy: Optional[FacebookPace] = None, dispatch_exclude: Any = None) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.offline_after_sec = max(15, int(offline_after_sec or DEFAULT_OFFLINE_AFTER_SEC))
@@ -301,6 +301,9 @@ class FleetStore:
         self._lock = threading.RLock()
         self._pace_local = threading.local()
         self.pace_policy = pace_policy if isinstance(pace_policy, FacebookPace) else load_facebook_policy()
+        # Node ids / hostnames that must never receive auto phone work. None = none.
+        # A bad shape fail-closes inside auto_dispatch_block.
+        self.dispatch_exclude = dispatch_exclude
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
@@ -964,6 +967,12 @@ class FleetStore:
         self._pace_local.reason = ""
         return reason
 
+    def take_dispatch_block(self) -> str:
+        """Live / 173 / protected / exclude reason from the last ``enqueue``, or ""."""
+        reason = str(getattr(self._pace_local, "guard", "") or "")
+        self._pace_local.guard = ""
+        return reason
+
     def enqueue(self, node_id: str, kind: str, *, payload: Optional[Dict[str, Any]] = None,
                 target: Optional[Dict[str, Any]] = None, ttl_sec: Any = DEFAULT_TASK_TTL_SEC,
                 created_by: str = "", now: Optional[float] = None) -> Optional[Dict[str, Any]]:
@@ -974,6 +983,7 @@ class FleetStore:
         ``like_probe`` and ``dry_run`` are not reserved.
         """
         self._pace_local.reason = ""
+        self._pace_local.guard = ""
         kind = str(kind or "").strip().lower()
         if kind not in TASK_KINDS:
             return None
@@ -981,8 +991,9 @@ class FleetStore:
         pace_ts = float(now if now is not None else social_pace.clock())
         ttl = clamp_ttl(ttl_sec)
         with self._lock:
-            node = self._conn.execute("SELECT status, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
-                                      (str(node_id),)).fetchone()
+            node = self._conn.execute(
+                "SELECT status, host_name, label, group_name, last_heartbeat_json, meta_json FROM nodes WHERE node_id=?",
+                (str(node_id),)).fetchone()
             if node is None or node["status"] != NODE_ACTIVE:
                 return None
             if missing_cap(kind, _loads(node["last_heartbeat_json"]).get("caps")):
@@ -991,6 +1002,8 @@ class FleetStore:
                 return None
             payload = dict(payload or {})
             target = dict(target or {})
+            if self._dispatch_blocked_locked(str(node_id), node, kind, payload, target):
+                return None
             tid = f"t_{uuid.uuid4().hex[:16]}"
             pace_reason = self._reserve_social_pace_locked(
                 str(node_id), kind, payload, target, pace_ts, tid)
@@ -1012,6 +1025,31 @@ class FleetStore:
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM node_tasks WHERE task_id=?", (tid,)).fetchone()
         return self._task_record(row)
+
+    def _dispatch_blocked_locked(self, node_id: str, node: sqlite3.Row, kind: str,
+                                 payload: Dict[str, Any], target: Dict[str, Any]) -> bool:
+        """Caller holds ``_lock``. True when this task must not be queued.
+
+        Site todos and phone operations go through ``auto_dispatch_block``.
+        The reason is stored for ``take_dispatch_block``. Ping and login stay open.
+        """
+        from .dispatch_guard import auto_dispatch_block, is_guarded_kind
+
+        if not is_guarded_kind(kind):
+            return False
+        ident = {
+            "node_id": node_id,
+            "host_name": node["host_name"] or "",
+            "label": node["label"] or "",
+            "group_name": node["group_name"] or "",
+            "meta": _loads(node["meta_json"]),
+        }
+        serial = str(target.get("serial") or payload.get("serial") or "")
+        reason = auto_dispatch_block(ident, serial=serial or None, exclude=self.dispatch_exclude)
+        if not reason:
+            return False
+        self._pace_local.guard = reason
+        return True
 
     def _reserve_social_pace_locked(self, node_id: str, kind: str, payload: Dict[str, Any],
                                     target: Dict[str, Any], ts: float, task_id: str) -> str:
@@ -1397,6 +1435,8 @@ def resolve_fleet_cfg(cfg_root: Any) -> Dict[str, Any]:
         "heartbeat_sec": _int(fc.get("heartbeat_sec")) or 30,
         # 节点离线超过 N 分钟推送告警（缺省 10；0 = 不推送，控制台仍按 10 分钟标记）
         "offline_alert_min": fc.get("offline_alert_min"),
+        # Node ids or hostnames that never receive auto phone work. Missing = none.
+        "dispatch_exclude": fc.get("dispatch_exclude") if "dispatch_exclude" in fc else None,
         "enroll_code_ttl_min": _int(fc.get("enroll_code_ttl_min")) or ENROLL_CODE_TTL_MIN,
         "pending_ttl_sec": _int(fc.get("pending_ttl_sec")) or PENDING_TTL_SEC,
         "public_url": str(fc.get("public_url") or ""),
@@ -1482,7 +1522,8 @@ def get_store(cfg_root: Any) -> Optional[FleetStore]:
     sig = str(db_path)
     if _store is None or sig != _store_sig:
         try:
-            _store = FleetStore(db_path, offline_after_sec=cfg["offline_after_sec"])
+            _store = FleetStore(db_path, offline_after_sec=cfg["offline_after_sec"],
+                                dispatch_exclude=cfg.get("dispatch_exclude"))
         except Exception:
             logger.warning("[fleet] 主控库打不开 %s", db_path, exc_info=True)
             return None

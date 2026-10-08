@@ -60,9 +60,20 @@ def test_xff_respected_when_direct_ip_is_trusted(auth_client, _yaml_with_intent_
 
 
 def test_xff_ignored_when_direct_ip_not_trusted(auth_client, _yaml_with_intent_tags,
-                                                  config_manager) -> None:
-    """trusted_proxies empty → XFF is ignored, all requests share testclient bucket."""
+                                                  config_manager, app) -> None:
+    """trusted_proxies empty → XFF is ignored, all requests share testclient bucket.
+
+    默认 diff 桶 cap=20/refill=2。``-n auto`` 把这一片拖慢时，30 次突发每请求
+    耗时一长，令牌补得回来，共享桶也打不出 429（3.13 shard 2 实挂过）。
+    钉成 cap=3/refill=0.1，并先清桶。config_manager 是 function scope。
+    """
     config_manager.config.setdefault("rpa", {})["trusted_proxies"] = []
+    config_manager.config["rpa"].setdefault("rate_limits", {})["diff"] = {
+        "capacity": 3, "refill_per_sec": 0.1,
+    }
+    reset = getattr(app.state, "intent_tags_rate_limit_reset", None)
+    if callable(reset):
+        reset()
     body = {"content": "purchase:\n  - kw\n"}
     # Spam from "different" XFF should still hit same bucket
     got_429 = False

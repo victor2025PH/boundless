@@ -125,8 +125,10 @@ def test_skip_live_stream_and_173_only():
     assert site_skip_reason({"node_id": "173"}) == "node_173"
     assert site_skip_reason({"node_id": "n_aa173bb0cc1"}) == ""
     assert site_skip_reason({"host_name": "MNLWIN"}) == "live_stream"
-    assert site_skip_reason({"label": "AORY"}) == "live_stream"
-    assert site_skip_reason({"meta": {"live_stream": True}}) == "live_stream"
+    assert site_skip_reason({"label": "AORY"}) == ""
+    assert site_skip_reason({"host_name": "AORY-A", "label": "AORY-A", "node_id": "n_aory_a"}) == ""
+    assert site_skip_reason({"host_name": "AORY-B", "node_id": "n_aory_b"}) == ""
+    assert site_skip_reason({"meta": {"live_stream": True}, "host_name": "PC", "node_id": "n_pc"}) == "live_stream"
     assert site_skip_reason({"host_name": "PC-20240123AORY"}) == ""
     assert site_skip_reason({"host_name": "CHINAMI-B", "label": "机房"}) == ""
 

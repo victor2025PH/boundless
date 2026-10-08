@@ -580,7 +580,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.24"
+    assert AGENT_VERSION == "0.3.25"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

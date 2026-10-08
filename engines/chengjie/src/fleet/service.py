@@ -28,6 +28,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 logger = logging.getLogger("fleet.service")
 
 TASK_NAME = "ChatX Fleet Agent"
+PANEL_TASK_NAME = "ChatX Fleet Panel"
 SYSTEMD_UNIT = "chatx-agent"
 RETRY_UNENROLLED_SEC = 30      # 未注册：等安装器 / 人工 enroll 写入 node_key
 PENDING_POLL_SEC = 15          # 已提交待批准：隔一会儿问主控是否已批准
@@ -68,6 +69,38 @@ def build_schtasks_delete(*, task_name: str = TASK_NAME) -> List[List[str]]:
 
 def build_schtasks_query(*, task_name: str = TASK_NAME) -> List[str]:
     return ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"]
+
+
+def build_panel_logon_create(state_dir: Path, *, task_name: str = PANEL_TASK_NAME) -> List[str]:
+    """ONLOGON task that starts the site-todo panel in the logged-on user session.
+
+    Not SYSTEM and not session 0. ``/IT`` runs only while that user is logged on,
+    on the interactive desktop. The panel reads the snapshot the service wrote.
+    """
+    from .operator_alert import panel_process_args
+
+    return ["schtasks", "/Create", "/TN", task_name, "/TR", _win_quote(panel_process_args(state_dir)),
+            "/SC", "ONLOGON", "/RL", "LIMITED", "/IT", "/F"]
+
+
+def build_panel_run_key(state_dir: Path) -> List[str]:
+    """HKLM Run value. Windows starts it in every logged-on user's session."""
+    from .operator_alert import PANEL_RUN_KEY, PANEL_RUN_VALUE, panel_process_args
+
+    value = subprocess.list2cmdline(panel_process_args(state_dir))
+    return ["reg", "add", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/t", "REG_SZ", "/d", value, "/f"]
+
+
+def build_panel_run_key_delete() -> List[str]:
+    from .operator_alert import PANEL_RUN_KEY, PANEL_RUN_VALUE
+
+    return ["reg", "delete", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/f"]
+
+
+def _ensure_panel_script(state_dir: Path) -> None:
+    from .operator_alert import SCRIPT_NAME, _ensure_script, _state_path
+
+    _ensure_script(_state_path(state_dir) / SCRIPT_NAME)
 
 
 def service_workdir() -> Optional[Path]:
@@ -111,6 +144,44 @@ def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(p.args, p.returncode, decode_console_bytes(p.stdout), decode_console_bytes(p.stderr))
 
 
+def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
+                        task_name: str = PANEL_TASK_NAME) -> Dict[str, object]:
+    """Write the panel script and register the logon task plus the Run key.
+
+    On non-Windows this is a no-op success: there is no session-0 service desktop.
+    A missing task's ``/End`` is ignored. Creating the task or the Run key must succeed.
+    """
+    if os.name != "nt":
+        return {"ok": True, "kind": "skipped", "task_name": task_name, "steps": []}
+    try:
+        _ensure_panel_script(state_dir)
+    except Exception as e:
+        logger.warning("[service] panel script was not written: %s", e)
+        return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": [], "out": str(e)[:300]}
+    try:
+        run(["schtasks", "/End", "/TN", task_name])
+    except Exception as e:
+        logger.debug("[service] panel schtasks /End failed: %s", e)
+    required = [
+        build_panel_logon_create(state_dir, task_name=task_name),
+        build_panel_run_key(state_dir),
+    ]
+    outs = []
+    for s in required:
+        p = run(s)
+        outs.append({"cmd": s[:2], "rc": p.returncode, "out": (p.stdout or p.stderr or "")[-300:]})
+        if p.returncode != 0:
+            return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
+    # Best effort: nobody logged on yet makes /Run fail, and the logon task still fires later.
+    kick = build_schtasks_run(task_name=task_name)
+    try:
+        p = run(kick)
+        outs.append({"cmd": kick[:2], "rc": p.returncode, "out": (p.stdout or p.stderr or "")[-300:]})
+    except Exception as e:
+        logger.debug("[service] panel schtasks /Run failed: %s", e)
+    return {"ok": True, "kind": "schtasks", "task_name": task_name, "steps": outs}
+
+
 def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
     cmd = agent_command(state_dir) + ["run", "--service"]
     if os.name == "nt":
@@ -120,14 +191,23 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
             run(["schtasks", "/End", "/TN", task_name])
         except Exception as e:
             logger.debug("[service] schtasks /End failed: %s", e)
-        steps = [build_schtasks_create(cmd, task_name=task_name), build_schtasks_run(task_name=task_name)]
+        steps = [build_schtasks_create(cmd, task_name=task_name)]
         outs = []
         for s in steps:
             p = run(s)
             outs.append({"cmd": s[:2], "rc": p.returncode, "out": (p.stdout or p.stderr or "")[-300:]})
             if p.returncode != 0:
                 return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
-        return {"ok": True, "kind": "schtasks", "task_name": task_name, "command": cmd, "steps": outs}
+        panel = install_panel_logon(state_dir, run=run)
+        if not panel.get("ok"):
+            return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs + list(panel.get("steps") or [])}
+        p = run(build_schtasks_run(task_name=task_name))
+        outs.append({"cmd": build_schtasks_run(task_name=task_name)[:2], "rc": p.returncode,
+                     "out": (p.stdout or p.stderr or "")[-300:]})
+        if p.returncode != 0:
+            return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": outs}
+        return {"ok": True, "kind": "schtasks", "task_name": task_name, "command": cmd, "steps": outs,
+                "panel": panel}
     unit = systemd_unit_path()
     unit.write_text(
         build_systemd_unit(cmd, state_dir=state_dir, working_dir=service_workdir()),
@@ -144,8 +224,10 @@ def install_service(state_dir: Path, *, run: RunFn = _run, task_name: str = TASK
 
 def uninstall_service(*, run: RunFn = _run, task_name: str = TASK_NAME) -> Dict[str, object]:
     if os.name == "nt":
-        outs = [{"rc": run(s).returncode} for s in build_schtasks_delete(task_name=task_name)]
-        return {"ok": outs[-1]["rc"] == 0, "kind": "schtasks", "task_name": task_name, "steps": outs}
+        cmds = build_schtasks_delete(task_name=task_name) + build_schtasks_delete(task_name=PANEL_TASK_NAME)
+        cmds.append(build_panel_run_key_delete())
+        outs = [{"rc": run(s).returncode} for s in cmds]
+        return {"ok": outs[1]["rc"] == 0, "kind": "schtasks", "task_name": task_name, "steps": outs}
     outs = [{"rc": run(s).returncode} for s in (["systemctl", "disable", "--now", SYSTEMD_UNIT],)]
     try:
         systemd_unit_path().unlink()
@@ -476,8 +558,10 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 
 
 __all__ = [
-    "TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command", "build_schtasks_create", "build_schtasks_run",
-    "build_schtasks_delete", "build_schtasks_query", "build_task_state_query", "build_systemd_unit", "install_service", "uninstall_service",
+    "TASK_NAME", "PANEL_TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command",
+    "build_schtasks_create", "build_schtasks_run", "build_schtasks_delete", "build_schtasks_query",
+    "build_panel_logon_create", "build_panel_run_key", "build_panel_run_key_delete",
+    "build_task_state_query", "build_systemd_unit", "install_service", "install_panel_logon", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",
     "onefile_parent_pid", "start_parent_watch",
 ]

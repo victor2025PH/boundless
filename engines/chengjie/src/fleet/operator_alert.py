@@ -10,8 +10,12 @@ adb serial is never written into the snapshot, the log line, or the window.
 
 The WinForms panel is a separate process on the interactive desktop. The
 service often runs as SYSTEM in session 0, which cannot show UI on its own.
-If that launch is impossible the agent keeps running and only writes the
-snapshot.
+Session 0 only writes the snapshot. A logon scheduled task (``ChatX Fleet
+Panel``, ONLOGON, interactive) and an HKLM Run value (``ChatXFleetPanel``)
+start the same panel inside the logged-on user's session; that process
+reads the snapshot. The service asks the logon task to run when a todo
+arrives. Chinese / English stays on the panel. If that launch is impossible
+the agent keeps running and only writes the snapshot.
 """
 
 from __future__ import annotations
@@ -34,6 +38,9 @@ SNAP_NAME = "operator_alert.json"
 LANG_NAME = "operator_alert_lang.json"
 LOCK_NAME = "operator_alert.lock"
 SCRIPT_NAME = "operator_alert_panel.ps1"
+PANEL_TASK_NAME = "ChatX Fleet Panel"
+PANEL_RUN_VALUE = "ChatXFleetPanel"
+PANEL_RUN_KEY = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 
 _HEADLESS_ENV = "CHATX_OPERATOR_ALERT_HEADLESS"
 _LANGS = ("zh", "en")
@@ -1169,6 +1176,28 @@ def _lock_held(lock: Path) -> bool:
         handle.close()
 
 
+def _state_path(state_dir: Path) -> Path:
+    """Keep the caller's path object.
+
+    ``Path()`` follows ``os.name``. A Linux test that only flips ``os.name``
+    to exercise schtasks cannot construct a ``WindowsPath``.
+    """
+    if isinstance(state_dir, Path):
+        return state_dir
+    return Path(state_dir)
+
+
+def panel_process_args(state_dir: Path) -> List[str]:
+    """PowerShell argv that reads the snapshot on the interactive desktop."""
+    root = _state_path(state_dir)
+    return [
+        _powershell(), "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+        "-WindowStyle", "Hidden", "-File", str(root / SCRIPT_NAME),
+        "-Snapshot", str(root / SNAP_NAME), "-Lang", str(root / LANG_NAME),
+        "-Lock", str(root / LOCK_NAME),
+    ]
+
+
 def _spawn_interactive(script: Path, snapshot: Path, lang: Path, lock: Path) -> bool:
     if os.name != "nt":
         return False
@@ -1181,9 +1210,30 @@ def _spawn_interactive(script: Path, snapshot: Path, lang: Path, lock: Path) -> 
         if _current_session_id() > 0:
             subprocess.Popen(args, creationflags=0x08000000)
             return True
+        # Session 0 cannot paint on the logged-on desktop. The logon task
+        # (and the Run key) already live in that session and poll the snapshot.
+        if _kick_logon_panel():
+            return True
         return _spawn_as_user(args)
     except Exception:
         logger.warning("[operator_alert] panel launch failed", exc_info=True)
+        return False
+
+
+def _kick_logon_panel() -> bool:
+    """Ask the user-session logon task to start. Does not create a process here."""
+    if os.name != "nt":
+        return False
+    try:
+        from .service import PANEL_TASK_NAME, build_schtasks_run
+
+        proc = subprocess.run(
+            build_schtasks_run(task_name=PANEL_TASK_NAME),
+            capture_output=True, timeout=30,
+        )
+        return proc.returncode == 0
+    except Exception:
+        logger.warning("[operator_alert] logon panel kick failed", exc_info=True)
         return False
 
 

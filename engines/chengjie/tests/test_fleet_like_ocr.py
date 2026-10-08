@@ -12,7 +12,7 @@ import pytest
 
 from src.fleet.like_locate import (
     TEMPLATE_HIGH, TEMPLATE_MED, empty_phrase, extract_blobs, fuse_signals, like_state_changed,
-    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, region_hits,
+    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, position_hits, region_hits,
     render_thumb, render_thumb_icon,
     structure_hits, template_hits, templates_available, text_hits, write_default_templates,
 )
@@ -1104,3 +1104,65 @@ def test_build_bundles_templates_without_requiring_rapidocr():
     assert Path(src_s).is_dir() and any(Path(src_s).glob("like_*.png"))
     text = path.read_text(encoding="utf-8")
     assert "ocr_collect_flags" in text and "rapidocr_onnxruntime" in text
+
+
+def _wp_bar(header=True, like=False, comment=True, share=True):
+    """Synthetic feed: optional post-header row, then Comment/Share (wp11 has no Like)."""
+    nodes = []
+    if header:
+        nodes.append(("", "Alice", "", "[40,180][220,260]"))
+        nodes.append(("", "2h", "", "[240,180][360,260]"))
+        nodes.append(("", "Follow", "", "[400,180][560,260]"))
+    if like:
+        nodes.append(("", "Like", "", "[240,900][360,980]"))
+    if comment:
+        nodes.append(("", "Comment", "", "[480,900][600,980]"))
+    if share:
+        nodes.append(("", "Share", "", "[720,900][840,980]"))
+    return _hierarchy(nodes)
+
+
+def test_wp11_infers_like_left_of_comment_and_needs_a_screenshot():
+    xml = _wp_bar()
+    hits = position_hits(xml, 1080, 1920)
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["source"] == "position" and hit["inferred"] is True
+    assert hit["row_y0"] <= hit["y"] <= hit["row_y1"]
+    assert 900 <= hit["y"] <= 980
+    assert hit["x"] < 540
+    assert hit["y"] > 260
+    assert fuse_signals([], [], [], [], [], [hit]) is None
+    header = _hit("structure", hit["x_pm"], 115)
+    assert fuse_signals([], [], [header], [], [], [hit]) is None
+    agreed = fuse_signals([], [], [_hit("structure", hit["x_pm"], hit["y_pm"])], [], [], [hit])
+    assert agreed is not None
+    assert "position" in agreed["signals"] and "structure" in agreed["signals"]
+    assert abs(agreed["y"] - hit["y_pm"]) <= 2
+    assert agreed["y"] > 400
+    kept = sanitize_phone_result(TASK_PHONE_LIKE, {
+        "like_probe": True,
+        "like_diag": {"position_inferred": True, "position_matched": True, "serial": "3B1FABCDEF"},
+    })
+    blob = json.dumps(kept["like_diag"])
+    assert kept["like_diag"]["position_inferred"] is True
+    assert "3B1FABCDEF" not in blob and "serial" not in kept["like_diag"]
+
+
+def test_wp02_header_row_is_not_the_like_slot():
+    xml = _wp_bar()
+    hits = position_hits(xml, 1080, 1920)
+    assert hits and all(h["y"] >= 900 for h in hits)
+    assert all(h["row_y0"] >= 900 for h in hits)
+    lone_header = position_hits(_hierarchy([
+        ("", "Alice", "", "[40,180][220,260]"),
+        ("", "Follow", "", "[240,180][400,260]"),
+        ("", "Menu", "", "[420,180][540,260]"),
+    ]), 1080, 1920)
+    assert lone_header == []
+
+
+def test_wp03_sparse_hierarchy_does_not_invent_a_like():
+    nodes = [("", "", "", f"[{20 + i * 40},100][{50 + i * 40},140]") for i in range(6)]
+    assert position_hits(_hierarchy(nodes), 1080, 1920) == []
+    assert position_hits(_wp_bar(comment=False, share=False), 1080, 1920) == []

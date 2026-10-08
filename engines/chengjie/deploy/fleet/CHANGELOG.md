@@ -1,5 +1,12 @@
 # 智拓群控节点更新日志
 
+## 0.3.25
+直播机、坐席机 173、受保护手机不再靠各自一段关键词。主控用同一个判断：显示名里有「直播」、分组或标签是 `live`、主机名里有 `176` 或 `GANZHI-176`、节点 173、配置里的排除名单（节点 id 或主机名，精确匹配）命中任意一条就排除。拿不准（节点不是一份正常记录、排除名单格式不对、检查本身出错）也排除。`site_todo`、`phone_app_restart`、点赞和其它手机操作、以及任务队列里的批量下发都走这一关。机房节点 CHINAMI、CHINAMI-B、AORY-A、AORY-B 照常下发。受保护手机除了原来的整条序列号，序列号以 `3B1F` 开头的也拒绝。日志和审计仍只写壁纸号或 `[redacted]`。
+
+现场待办弹窗改到当前登录用户的桌面上。节点服务在 session 0，只把名单写进 `%ProgramData%\ChatX\fleet\operator_alert.json`。安装包注册两个用户会话入口：计划任务 `ChatX Fleet Panel`（`ONLOGON`，交互用户，不是 SYSTEM），以及 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` 的 `ChatXFleetPanel`。两者都在用户登录时启动面板进程，面板自己读快照，中英文切换不变。服务收到待办后会再 `schtasks /Run` 一次，让已经登录的桌面马上显示；任务还没装上时才退回原来的跨会话启动。公开下载页的 latest 仍是 0.3.7。
+
+找赞：层次里同一行有 Comment 和 Share、但没有 Like 时，按动作条等距（Like 在 Comment 左侧、间距与 Comment 到下一个按钮相同）推出一个位置信号。这个点必须落在动作条这一行里，不能落在帖子头部那一行。它要和截图信号（模板、轮廓或动作条结构）对上才算两路，单独这一路不点。`like_diag` 增加 `position_inferred`，主控脱敏白名单保留这个字段以及原来的 hierarchy、attempts/via/error、shape_score、structure_bounds、template_score。`like_probe` 仍只定位。`dry_run` 仍不碰手机。点完仍要复核。
+
 ## 0.3.24
 把已经分开验证过的三版收成一个金丝雀。机房电脑装这一份就同时有：0.3.21 的层次 dump 加固（先停自动播放，写固定文件再拉回，失败短退避重试）、0.3.22 的机房现场待办弹窗（按问题类别分组，中英文怎么做，序列号打成壁纸号或 `[redacted]`，直播机、173 和受保护手机排除）、0.3.23 的找赞定位（不再点截图上半部，离开信息流才按一次返回，`like_diag` 带层级计数和动作条区域信号，两路信号一致才点）以及 `phone_app_restart`（只对心跳里 `state=device` 的可操作手机 force-stop 再打开 Facebook，包名只许 `com.facebook.katana` / `com.facebook.lite`，单独的 `app_restart` 白名单门，直播机、173 和受保护手机拒绝，审计不写序列号）。登录检查失败仍带回前台包名和 activity。`like_probe` 仍只定位。`dry_run` 仍不碰手机。点完仍要复核。公开下载页的 latest 仍是 0.3.7。
 
