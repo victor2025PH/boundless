@@ -1,14 +1,18 @@
 #!/usr/bin/env python
-"""会话语言历史回填 —— 只做 dry-run（2026-10-08 智语 · P1-5）。
+"""会话语言历史回填（2026-10-08 智语 · P1-5）。
 
 按会话的**入站**消息文本重新投票（``src.inbox.session_lang.vote_session_language``，与实时
 路径同一实现），报告回填后的语言分布、unknown 占比、仍判不出的原因，并可导出回填计划。
-**不写 inbox.db**：库以只读方式打开（sqlite ``mode=ro``）；``--sql-out`` 只生成带护栏的
-UPDATE 语句文件（``WHERE language='unknown'``），由负责人审过后另行执行。
+
+默认 **dry-run，不写 inbox.db**：计划阶段以只读方式打开（sqlite ``mode=ro``）。
+``--sql-out`` 只生成带护栏的 UPDATE 语句文件。``--apply`` 才真正写入，并且只更新
+``fill_unknown``（当前 ``language`` 为 ``unknown`` 或空）的行；``tl_upgrade_suggestions``
+（例如已标 en 的 Taglish）保持建议，不改已有语言。
 
     python scripts/backfill_conversation_language.py --db config/inbox.db
     python scripts/backfill_conversation_language.py --db config/inbox.db --recheck en,id \
         --plan-out lang_plan.json --sql-out lang_plan.sql
+    python scripts/backfill_conversation_language.py --db config/inbox.db --apply
 
 ``--recheck en,id``：额外列出当前是 en / id、但入站证据显示是他加禄（Taglish）的会话（只列建议）。
 """
@@ -93,6 +97,40 @@ def build_plan(db: Path, *, recheck: List[str] = (), per_conv: int = 40,
     }
 
 
+def apply_unknown_fills(db: Path, plan: Dict[str, Any]) -> Dict[str, int]:
+    """把 ``fill_unknown`` 写入库。只改 ``language IN ('unknown','')`` 的行。
+
+    不读取 ``tl_upgrade_suggestions``。同一计划再跑一遍时，已经写过的行不再命中
+    WHERE，``updated`` 为 0。读计划仍走 ``build_plan`` 的只读连接；本函数才读写打开。
+    """
+    conn = sqlite3.connect(str(db))
+    updated = skipped = 0
+    try:
+        conn.execute("BEGIN")
+        for row in plan.get("fill_unknown") or []:
+            new_lang = str(row.get("to") or "").strip().lower()
+            cid = str(row.get("conversation_id") or "")
+            if not cid or not new_lang or new_lang == "unknown":
+                skipped += 1
+                continue
+            cur = conn.execute(
+                "UPDATE conversations SET language=? "
+                "WHERE conversation_id=? AND language IN ('unknown','')",
+                (new_lang, cid),
+            )
+            if cur.rowcount == 1:
+                updated += 1
+            else:
+                skipped += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"updated": updated, "skipped": skipped}
+
+
 def plan_sql(plan: Dict[str, Any]) -> str:
     lines = ["-- 会话语言回填计划（dry-run 生成，未执行）。审过后在停机窗口执行；",
              "-- 每条都带 language='unknown' 护栏，重复执行无副作用。",
@@ -107,8 +145,10 @@ def plan_sql(plan: Dict[str, Any]) -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="会话语言历史回填（只做 dry-run，不写库）")
+    ap = argparse.ArgumentParser(description="会话语言历史回填（默认 dry-run；--apply 只补 unknown）")
     ap.add_argument("--db", default="config/inbox.db")
+    ap.add_argument("--apply", action="store_true",
+                    help="写入 fill_unknown。不改已有语言，也不执行 tl 改判建议")
     ap.add_argument("--recheck", default="", help="逗号分隔：额外复核这些现有语言（如 en,id）是否其实是 tl")
     ap.add_argument("--per-conv", type=int, default=40, help="每个会话最多取多少条入站消息投票")
     ap.add_argument("--private-only", action="store_true", help="只看私聊")
@@ -133,7 +173,9 @@ def main(argv=None) -> int:
                             "tl_upgrade_n": len(plan["tl_upgrade_suggestions"])},
                          ensure_ascii=False, indent=2))
     else:
-        print(f"[dry-run] {db}  会话 {plan['total']} 个（未写库）")
+        tag = "[dry-run]" if not a.apply else "[plan]"
+        tail = "未写库" if not a.apply else "随后只补 unknown"
+        print(f"{tag} {db}  会话 {plan['total']} 个（{tail}）")
         print(f"  现状: {plan['before']}")
         print(f"  回填后: {plan['after']}")
         print(f"  unknown: {plan['unknown_pct_before']}% → {plan['unknown_pct_after']}%")
@@ -143,6 +185,10 @@ def main(argv=None) -> int:
         by = Counter(c["to"] for c in plan["fill_unknown"])
         if by:
             print(f"  补写分布: {dict(by)}")
+    if a.apply:
+        result = apply_unknown_fills(db, plan)
+        print(f"[apply] updated={result['updated']} skipped={result['skipped']} "
+              f"(tl suggestions not written)")
     return 0
 
 
