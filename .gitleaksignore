@@ -112,3 +112,49 @@ website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:93
 website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:93
 website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:129
 website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:129
+
+# ======================================================================
+# 2026-10-08 智聊集成线（基线 devin/1789968548-wechat-pc-multi-account，1.0.109）：
+# 发版分支从没跑过 CI，secrets 门禁在这条基线上报 17 条既有命中。和 fleet 线
+# 2026-09-24 登记过的是同一批（逐行比对内容完全相同，只是行号不同），都不是
+# 生产凭据：config.example.yaml 注释里的十六进制 api_hash 样例、模板里的
+# localStorage 键名、测试夹具里的假 key、QQ/微信官方文档公开的示例向量、
+# IndexNow 公网验证 key。这里只补这条基线上的当前指纹，不关规则。
+# ======================================================================
+engines/chengjie/config/config.example.yaml:generic-api-key:264
+engines\chengjie\config\config.example.yaml:generic-api-key:264
+engines/chengjie/config/config.example.yaml:generic-api-key:272
+engines\chengjie\config\config.example.yaml:generic-api-key:272
+engines/chengjie/desktop/renderer/shared/copilot/components/cp-nurture.js:generic-api-key:49
+engines\chengjie\desktop\renderer\shared\copilot\components\cp-nurture.js:generic-api-key:49
+engines/chengjie/shared/copilot/components/cp-nurture.js:generic-api-key:49
+engines\chengjie\shared\copilot\components\cp-nurture.js:generic-api-key:49
+engines/chengjie/desktop/test/backend-launcher.test.js:generic-api-key:130
+engines\chengjie\desktop\test\backend-launcher.test.js:generic-api-key:130
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2496
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2496
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:13235
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:13235
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:20777
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:20777
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21342
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21342
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:21706
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:21706
+engines/chengjie/tests/test_model_routes_api.py:generic-api-key:52
+engines\chengjie\tests\test_model_routes_api.py:generic-api-key:52
+engines/chengjie/tests/test_qq_official.py:generic-api-key:42
+engines\chengjie\tests\test_qq_official.py:generic-api-key:42
+engines/chengjie/tests/test_reply_settings.py:generic-api-key:1102
+engines\chengjie\tests\test_reply_settings.py:generic-api-key:1102
+engines/chengjie/tests/test_vision_failure_reason_213.py:generic-api-key:38
+engines\chengjie\tests\test_vision_failure_reason_213.py:generic-api-key:38
+engines/chengjie/tests/test_unified_inbox_stage1.py:generic-api-key:1997
+engines\chengjie\tests\test_unified_inbox_stage1.py:generic-api-key:1997
+engines/chengjie/tests/test_wechat_kf_client.py:generic-api-key:107
+engines\chengjie\tests\test_wechat_kf_client.py:generic-api-key:107
+website/lib/seo.ts:generic-api-key:79
+website\lib\seo.ts:generic-api-key:79
+# workspace_base.html:4335 = localStorage 键名常量（ws_notify_prefs_v1），非凭据；本地 gitleaks 8.21.2 归档扫描命中，CI 未报，预登记防行号漂移后翻红
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:4335
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:4335
