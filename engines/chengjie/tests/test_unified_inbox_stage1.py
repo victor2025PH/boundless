@@ -1226,28 +1226,35 @@ def test_unified_inbox_routes_slice39_orchestrator_surface():
 
 
 def test_unified_inbox_routes_slice38b_register_order_unchanged():
-    """slice 38b：分组注释后 register_* 调用顺序与拆分前一致（startup/路由时序守卫）。"""
+    """slice 38b 之后的挂载顺序（startup/路由时序守卫）。
+
+    38b 当时是 34 个子域。其后四次有意挂载插进既有顺序，不是把计数从 34 抬到 38：
+    msgops（读路径后，消息置顶/软删）、asr_correction（账号后，转写改正）、
+    vision（翻译后，问这张图）、tg_join（发送后，加群）。少一个或插错位置仍红。
+    """
     import inspect
     import re
     from src.web.routes import unified_inbox_routes as mod
     src = inspect.getsource(mod.register_unified_inbox_routes)
     names = re.findall(r"^\s+register_(\w+)_routes\(", src, re.MULTILINE)
-    assert len(names) == 34, f"orchestrator 应挂载 34 个子域，实际 {len(names)}"
-    assert names == [
+    expected = [
         "workspace_pages",
-        "realtime", "read",
+        "realtime", "read", "msgops",
         "platform_login", "setup", "proxy_fingerprint", "account",
+        "asr_correction",
         "workspace_presence", "workspace_contacts",
         "workspace_escalation", "workspace_prefs",
         "workspace_dashboard", "roi", "quality", "usage", "workspace_tags",
-        "aux_read", "translate", "desktop",
+        "aux_read", "translate", "vision", "desktop",
         "conversion_outreach", "analyze",
-        "stored_read", "send",
+        "stored_read", "send", "tg_join",
         "intel_profile", "template", "batch_notif",
         "queue_webhook", "collab_mention", "collab_context",
         "relationship_stage", "copilot", "workflow",
         "routing_search", "qa_churn",
     ]
+    assert names == expected, (
+        f"orchestrator 挂载顺序漂移：实际 {len(names)} 个 {names}")
 
 
 def test_contacts_export_csv_slice17_归并入_contacts_module():
@@ -2332,9 +2339,14 @@ def test_unified_inbox_template_contains_oneclick_outbound_translation():
     # P1：服务端持久出向原文副行（跨刷新/重启）优先于会话级内存映射
     assert "agent_original" in html
     assert "agent_xlate" in html
-    # P1-2：'auto' 交服务端统一解析（预览与一击同源），前端读 resolved_target 回落
+    # P1-2：'auto' 交服务端统一解析（预览与一击同源），前端读 resolved_target 回落。
+    # 2026-08-09 起会话标识恒传，不再用 lang==='auto' 包一层——旧分支让「记住的引擎」
+    # 对入站显示翻译永不生效。守卫改钉：目标语原样上送、空 resolved_target 不译、
+    # 有会话就带定位。
     assert "resolved_target" in html
-    assert "lang==='auto'" in html
+    assert "const body={text,target_lang:lang};" in html
+    assert "if(d && d.resolved_target==='') return null;" in html
+    assert "if(selectedChat){" in html and "body.platform=selectedChat.platform;" in html
 
 
 def test_unified_inbox_translation_tokens_no_theme_drift():
@@ -2511,13 +2523,21 @@ def test_send_has_inflight_guard_and_idempotency_key():
 
 
 def test_unified_inbox_template_contains_assign_suggestion():
-    """自动派单：会话列表「建议你接管」徽章 + 判定逻辑入模板。"""
-    path = Path(__file__).resolve().parent.parent / "src" / "web" / "templates" / "unified_inbox.html"
-    html = path.read_text(encoding="utf-8")
+    """自动派单：会话列表「建议你接管」徽章 + 判定逻辑入模板。
+
+    徽章文案已收口到 i18n（与 send-caps 同口径）：模板钉键，词表钉中文，
+    避免本地化后再在 HTML 里搜死中文。
+    """
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "src" / "web" / "templates" / "unified_inbox.html").read_text(
+        encoding="utf-8")
     assert "_convSuggestMine" in html          # 判定函数
     assert "conv-suggest-chip" in html          # 徽章样式类
-    assert "建议你接管" in html                 # 徽章文案
+    assert "window.T('inbox.conv.suggest')" in html
     assert "suggested_agent" in html            # 读取后端字段
+    pack = (root / "src" / "web" / "i18n_packs" / "inbox_workspace.py").read_text(
+        encoding="utf-8")
+    assert '"inbox.conv.suggest": "⚡ 建议你接管"' in pack
 
 
 def test_send_caps_endpoint_returns_flags():

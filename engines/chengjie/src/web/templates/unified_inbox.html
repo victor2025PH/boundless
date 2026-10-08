@@ -3243,7 +3243,7 @@ async function cleanupStaleHistAccounts(btn){
     {title:window.T('inbox.acct.hist_purge_title'),iconName:'trash',tone:'danger',okText:window.T('inbox.acct.hist_purge_btn2')});
   if(!ok2) return;
   _acctBtnBusy(btn,true);
-  let done=0, failed=0;
+  let purged=0, failed=0;
   for(const h of targets){
     let res=null;
     try{
@@ -3251,14 +3251,14 @@ async function cleanupStaleHistAccounts(btn){
       // 旧后端未装载：整批止步一次性提示（别对着 404 连轰 N 个失败 toast）
       if(res.status===404){ _toast(window.T('inbox.acct.hist_purge_unready'),'#d97706'); _acctBtnBusy(btn,false); return; }
       if(res.okHttp&&res.data&&res.data.ok){
-        done++;
+        purged++;
         if(_histView && _histView.aid===String(h.account_id) && _histView.pl===String(h.platform)) exitAcctHistView();
       } else failed++;
     }catch(_){ failed++; }
   }
   _uiBeacon('acct_hist_cleanup');
-  if(failed) _toast(window.Tf('inbox.acct.hist_cleanup_part',{n:done,f:failed}),'#d97706');
-  else _toast(window.Tf('inbox.acct.hist_cleanup_done',{n:done}),'#16a34a');
+  if(failed) _toast(window.Tf('inbox.acct.hist_cleanup_part',{n:purged,f:failed}),'#d97706');
+  else _toast(window.Tf('inbox.acct.hist_cleanup_done',{n:purged}),'#16a34a');
   _acctBtnBusy(btn,false);
   await loadChats();
   renderDrawerAccounts();
