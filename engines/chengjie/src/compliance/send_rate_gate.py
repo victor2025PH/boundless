@@ -280,6 +280,19 @@ class SendRateStore:
                                          float(since), *orig)).fetchone()
         return int(row[0] or 0) if row else 0
 
+    def times(self, platform: str, account_id: str, *, since: float,
+              origins: Iterable[str] = SYSTEM_ORIGINS) -> list:
+        """窗口内计数事件时间戳（升序）——算「几点恢复」用。"""
+        orig = [str(o) for o in origins]
+        if not orig:
+            return []
+        q = ("SELECT ts FROM send_rate_events WHERE platform=? AND account_id=? AND ts>=? "
+             f"AND origin IN ({','.join('?' * len(orig))}) ORDER BY ts ASC")
+        with self._lock:
+            rows = self._conn.execute(q, (str(platform or ""), str(account_id or ""),
+                                          float(since), *orig)).fetchall()
+        return [float(r[0]) for r in rows]
+
     def counts_by_origin(self, platform: str, account_id: str, *, since: float) -> Dict[str, int]:
         with self._lock:
             rows = self._conn.execute(
@@ -444,6 +457,49 @@ def check(
         logger.warning("[send-rate-gate] 判定异常（放行）%s:%s", p, a, exc_info=True)
         return {"allowed": True, "reason": "error", "origin": res.get("origin") or "",
                 "used": 0, "cap": 0, "age_days": None, "in_warmup": False}
+
+
+def frees_at(platform: str, account_id: str, *, reason: str, cap: int, config: Any = None,
+             now: Optional[float] = None, store: Optional[SendRateStore] = None) -> Optional[float]:
+    """被本闸拦下后**预计恢复时刻**（epoch 秒）：滚动 24h 窗里最早的那几条过期、计数回落到
+    上限以下的时刻。预热期上限还会随号龄增长提前放宽，所以这是「最晚」口径。算不出 → None。"""
+    try:
+        c = int(cap)
+        if c <= 0:
+            return None
+        ts = float(now if now is not None else time.time())
+        origins = (ORIGIN_SCRIPT,) if str(reason) == REASON_SCRIPT else SYSTEM_ORIGINS
+        st = store or get_store(config)
+        times = st.times(str(platform or ""), str(account_id or "default"), since=ts - _DAY,
+                         origins=origins)
+        idx = len(times) - c
+        if idx < 0:
+            return None
+        return float(times[idx]) + _DAY
+    except Exception:
+        logger.debug("[send-rate-gate] frees_at 计算失败", exc_info=True)
+        return None
+
+
+def block_info(platform: str, account_id: str, *, origin: str = "manual", chat_key: str = "",
+               config: Any = None, registry: Any = None, now: Optional[float] = None,
+               store: Optional[SendRateStore] = None) -> Optional[Dict[str, Any]]:
+    """前端 / 409 用：当前是否被本闸拦 + ``{reason, used, cap, frees_at, origin}``。只读、绝不抛。"""
+    try:
+        r = check(platform, account_id, origin=origin, chat_key=chat_key, config=config,
+                  registry=registry, now=now, record=False, store=store)
+        if r.get("allowed", True):
+            return None
+        return {
+            "reason": str(r.get("reason") or ""),
+            "origin": str(r.get("origin") or ""),
+            "used": int(r.get("used") or 0),
+            "cap": int(r.get("cap") or 0),
+            "frees_at": frees_at(platform, account_id, reason=str(r.get("reason") or ""),
+                                 cap=int(r.get("cap") or 0), config=config, now=now, store=store),
+        }
+    except Exception:
+        return None
 
 
 def record_external(platform: str, account_id: str, *, origin: str = ORIGIN_PHONE,
