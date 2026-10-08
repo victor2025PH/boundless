@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """公开包 / 内部包拆分门禁（智安 2026-10-08）。
 
-三层检查，任一不过 → 退出码 1（打包中止）：
+四层检查，任一不过 → 退出码 1（打包中止）：
 
 1. **清单自洽**（``check_policy``）：``editions.json`` 里公开白名单与内部清单不得相交
    （人设 / 声音 / 开关 / 种子路径），公开包必须显式列白名单（不许 ``"*"``）。
@@ -11,6 +11,8 @@
 3. **种子树门禁**（``scan_seed_tree``）：不信 manifest 自述，直接扫暂存 / 产物里的
    ``seed-data``——profiles_runtime 的人设 id 与 tags、voice_refs / assets/voices 的
    文件名、overlay 种子的顶层开关、内部专属种子路径。
+4. **后端代码包门禁**（``check_backend_datas`` / ``scan_backend_tree``）：内部专属目录
+   （如 ``config/presets/internal`` 博彩运营商模板）不得经 build_backend.DATAS 打进公开包。
 
 用法（desktop/ 下）::
 
@@ -181,7 +183,63 @@ def scan_seed_tree(seed: Path, policy: Dict[str, Any], *, edition: str = "public
     return bad
 
 
-def run(edition: str, seed: Optional[Path], policy_path: Optional[Path] = None) -> List[str]:
+def check_backend_datas(datas: Iterable[Any], policy: Dict[str, Any], *, repo: Optional[Path] = None,
+                        edition: str = "public") -> List[str]:
+    """后端代码包（build_backend.DATAS：``(源路径, 包内落点)``）不得把内部专属目录打进公开包。
+
+    源路径（相对引擎根）或包内落点 落在 ``internal_only.seed_paths`` 之内，或整目录打包而目录含它 → 红
+    （例：整目录打 ``config/presets`` 会把 ``config/presets/internal`` 一起带进去）。internal → 恒 []。
+    """
+    if edition != "public":
+        return []
+    io = policy.get("internal_only") or {}
+    bad: List[str] = []
+    for item in datas or []:
+        try:
+            src, dest = item[0], item[1]
+        except Exception:
+            continue
+        is_file = Path(src).is_file()
+        # 文件：落点 = dest/文件名；目录：内容整体落在 dest 下（目录可能连带内部子目录）
+        cands = [_norm(str(dest)) + "/" + Path(src).name if is_file else _norm(str(dest))]
+        if repo is not None:
+            try:
+                cands.append(Path(src).resolve().relative_to(Path(repo).resolve()).as_posix())
+            except Exception:
+                pass
+
+        def _hit(c: str, sp: str) -> bool:
+            c, sp = _norm(c), _norm(sp)
+            if not c or not sp:
+                return False
+            if c == sp or c.startswith(sp + "/"):
+                return True
+            return (not is_file) and sp.startswith(c + "/")
+
+        for sp in io.get("seed_paths") or []:
+            if any(_hit(c, sp) for c in cands):
+                bad.append(f"后端代码包 datas 会带入内部专属目录 {sp}: {src} -> {dest}")
+                break
+    return bad
+
+
+def scan_backend_tree(backend: Path, policy: Dict[str, Any], *, edition: str = "public") -> List[str]:
+    """直接扫后端代码包产物（PyInstaller onedir：datas 在根或 ``_internal/`` 下）。internal → 恒 []。"""
+    backend = Path(backend)
+    if edition != "public" or not backend.exists():
+        return []
+    io = policy.get("internal_only") or {}
+    bad: List[str] = []
+    for sp in io.get("seed_paths") or []:
+        for base in (backend, backend / "_internal"):
+            if (base / _norm(sp)).exists():
+                rel = "" if base == backend else "_internal/"
+                bad.append(f"后端代码包含内部专属目录 {rel}{_norm(sp)}")
+    return bad
+
+
+def run(edition: str, seed: Optional[Path], policy_path: Optional[Path] = None,
+        backend: Optional[Path] = None) -> List[str]:
     policy = load_policy(policy_path)
     problems = check_policy(policy)
     if seed is not None and edition == "public":
@@ -193,6 +251,8 @@ def run(edition: str, seed: Optional[Path], policy_path: Optional[Path] = None) 
                 problems += check_manifest(json.loads(mf_path.read_text(encoding="utf-8")),
                                            policy, edition=edition)
         problems += scan_seed_tree(Path(seed), policy, edition=edition)
+    if backend is not None and edition == "public":
+        problems += scan_backend_tree(Path(backend), policy, edition=edition)
     return problems
 
 
@@ -202,8 +262,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--seed", default=str(HERE / "seed-data"))
     ap.add_argument("--policy", default=str(POLICY_PATH))
     ap.add_argument("--policy-only", action="store_true")
+    ap.add_argument("--backend", default="", help="后端代码包目录（build/backend-dist）；给了就一并扫")
     a = ap.parse_args(list(argv) if argv is not None else None)
-    problems = run(a.edition, None if a.policy_only else Path(a.seed), Path(a.policy))
+    problems = run(a.edition, None if a.policy_only else Path(a.seed), Path(a.policy),
+                   backend=(Path(a.backend) if (a.backend and not a.policy_only) else None))
     if problems:
         print(f"✗ 公开/内部包拆分门禁 {len(problems)} 项未过（edition={a.edition}）：", file=sys.stderr)
         for p in problems:

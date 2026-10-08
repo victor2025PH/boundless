@@ -4,7 +4,8 @@
     "public  = 对外发行（跨境私域团队 / 代运营公司 / 自有业务）：只带 editions.public 白名单里的人设、声音、开关；",
     "internal = 内部 / 持牌运营商定制：全量种子（stage_internal_assets.py 标准档）。",
     "internal_only = 内部清单：博彩 / 陪伴 / 成人向 / 克隆音色 / 内网端点类。任何一项出现在公开包 manifest 或种子树 → 门禁红（edition_gate.py + tests/compliance/test_edition_split_gate.py + after-pack.js）。",
-    "改公开白名单 = 改对外产品形态：须 Morgan 确认后再动；人设分类待业务复核（见 NOTES_zhian.md）。"
+    "改公开白名单 = 改对外产品形态：须 Morgan 确认后再动；人设分类待业务复核（见 NOTES_zhian.md）。",
+    "seed_paths 相对引擎根 engines/chengjie（= 种子树根 = 后端代码包 datas 落点）；config/presets/internal = 仅内部包的行业模板（博彩运营商 gambling_operator，智语 vertical-packs），公开包的种子树与后端代码包都不得出现（edition_gate.scan_seed_tree / scan_backend_tree / check_backend_datas + after-pack.js）。"
   ],
   "version": 1,
   "internal_only": {
@@ -21,7 +22,8 @@
       "config/persona_albums",
       "config/persona_media.db",
       "config/persona_bio.db",
-      "config/knowledge_base.db"
+      "config/knowledge_base.db",
+      "config/presets/internal"
     ]
   },
   "editions": {
@@ -38,7 +40,8 @@
         "config/persona_albums",
         "config/persona_media.db",
         "config/persona_bio.db",
-        "config/knowledge_base.db"
+        "config/knowledge_base.db",
+        "config/presets/internal"
       ],
       "output_dir": "dist-public",
       "publish_channel": "latest"
