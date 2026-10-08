@@ -1,0 +1,21 @@
+# 垂直模板包：自有业务（own business）
+# 适用：老板自己的生意（门店 / 服务 / 线上小店），AI 帮忙答常见问题、约时间、收集需求，老板随时接管。
+# 开局：python main.py --init 选 own_business，再导入本目录的人设 / 知识库种子 / STOP 文案 / 待人工 SOP。
+
+schema: zhiliao.vertical_pack.v1
+id: own_business
+name: 自有业务
+edition: public
+preset: own_business
+langs:
+- zh
+- en
+- tl
+files:
+  persona: persona.yaml
+  kb_seed: kb_seed.yaml
+  stop_confirm: stop_confirm.yaml
+  handoff_sop: handoff_sop.yaml
+compliance:
+  disclosure:
+    honest_identity: true
