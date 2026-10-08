@@ -161,5 +161,36 @@ def bridge_driver_problems(rows: List[Dict[str, Any]], now: Optional[float] = No
     return out
 
 
-__all__ = ["ALIVE_WITHIN_SEC", "FAIL_AFTER_SEC", "TIERS", "heartbeat_meta", "bridge_presence",
-           "bridge_voice_ready", "bridge_driver_problems"]
+#: ``/api/accounts`` 展示态：桥接驱动心跳过期 → ``stale``（2026-10-08 P0-5）。
+STATUS_STALE = "stale"
+#: 运营明确设定、心跳不该推翻的注册表状态（登出 / 移除 / 待接入）
+_STATUS_KEEP = ("offline", "removed", "pending")
+
+
+def heartbeat_display_status(meta: Optional[Dict[str, Any]], *, status: str = "", running: bool = False,
+                             now: Optional[float] = None,
+                             alive_within_sec: float = ALIVE_WITHIN_SEC) -> Optional[Dict[str, Any]]:
+    """账号清单行的状态以心跳为准（纯函数）：返回要覆盖到行上的字段，``None`` = 不动。
+
+    2026-10-08 实锤：173 两个个人微信 PC 号心跳停了约 16 天，``/api/accounts`` 仍显示 ``online``
+    ——注册表 ``status`` 是登录那一刻写下的，驱动挂了没人改它。规则：
+
+    - 没有过心跳（普通桌面壳镜像 / 非桥接账号）→ ``None``，沿用原口径；
+    - 心跳新鲜 → 只补 ``heartbeat_age_sec``，状态不动；
+    - 心跳过期 → ``status=stale``、``running=False``、``status_reason=heartbeat_stale``，并带上
+      ``heartbeat_age_sec``；注册表里运营明确设的 offline / removed / pending 保持原样。
+    """
+    pres = bridge_presence(meta, now=now, alive_within_sec=alive_within_sec)
+    if not pres:
+        return None
+    out: Dict[str, Any] = {"heartbeat_age_sec": int(pres["age_sec"])}
+    if pres["alive"]:
+        return out
+    if str(status or "").lower() in _STATUS_KEEP:
+        return out
+    out.update({"status": STATUS_STALE, "running": False, "status_reason": "heartbeat_stale"})
+    return out
+
+
+__all__ = ["ALIVE_WITHIN_SEC", "FAIL_AFTER_SEC", "TIERS", "STATUS_STALE", "heartbeat_meta", "bridge_presence",
+           "bridge_voice_ready", "bridge_driver_problems", "heartbeat_display_status"]

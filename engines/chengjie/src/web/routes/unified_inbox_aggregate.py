@@ -697,7 +697,7 @@ def _mark_agent_sent(
     sends = [s for s in all_sends if not str(s.get("claimed_mid") or "")]
     # 回落池＝除「列上精确认领」以外的全部出站行（同一列表重复调用结果一致＝幂等）
     outs = [m for m in all_outs if str(m.get("message_id") or "") not in by_mid
-            and str(m.get("sent_by") or "") != "ai"]          # 四期：AI 自动链行永不回落成「人工」
+            and str(m.get("sent_by") or "") not in ("ai", "script", "system")]  # AI/脚本/系统行永不回落成「人工」
     if not sends or not outs:
         return 0
     outs.sort(key=lambda m: float(m.get("ts") or 0))

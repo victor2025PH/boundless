@@ -1,5 +1,5 @@
 {% extends "workspace_base.html" %}
-{% block title %}{{ (i18n or {}).get('ck.title', "驾驶舱") }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('ck.title', "待人工") }}{% endblock %}
 {% block head %}
 <style>
   /* 令牌驱动（--tk-*，日/夜自适配）。三色语言：红=需介入 / 黄=人工接管中 / 蓝=AI 在跑。 */
@@ -37,7 +37,7 @@
   .ck-fchip{border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text-muted);border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;}
   .ck-fchip:hover{border-color:var(--tk-brand);color:var(--tk-text);}
   .ck-fchip.on{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
-  .ck-q-list{flex:1;overflow-y:auto;padding:10px 12px;}
+  .ck-q-list{flex:1;overflow-y:auto;padding:10px 12px 84px;}   /* 底部让开右下浮动按钮（问小智） */
   .ck-card{border:1px solid var(--tk-border);border-left-width:4px;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--tk-surface);display:flex;gap:12px;align-items:stretch;}
   .ck-card.p1{border-left-color:var(--tk-danger);}
   .ck-card.p2{border-left-color:var(--tk-orange);}
@@ -48,7 +48,18 @@
   .ck-card .nm{font-weight:700;font-size:13.5px;color:var(--tk-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px;}
   .ck-card .why{font-size:12px;color:var(--tk-text-muted);margin-top:5px;line-height:1.5;}
   /* 客户原话引用（身份卡 P3）：正体+气泡感，比斜体灰线更像「他说了这句」 */
-  .ck-card .dt{font-size:12px;color:var(--tk-text);margin-top:5px;padding:5px 9px;border-radius:8px;background:var(--tk-surface-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+  .ck-card .dt{font-size:12px;color:var(--tk-text);margin-top:5px;padding:5px 9px;border-radius:8px;background:var(--tk-surface-2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.45;max-width:100%;}
+  .ck-lead{padding:12px 18px 0;font-size:15px;font-weight:700;color:var(--tk-text);line-height:1.45;}
+  .ck-lead .n{font-size:22px;font-weight:800;}
+  .ck-lead .roi{font-weight:500;font-size:12px;color:var(--tk-text-muted);margin-left:8px;}
+  .ck-meta{padding:4px 18px 0;font-size:12px;color:var(--tk-text-muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .ck-meta button{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;}
+  .ck-meta button:hover{color:var(--tk-text);}
+  .ck-meta .ck-why-btn{margin-left:auto;text-decoration:underline dotted;text-underline-offset:3px;}
+  .ck-why{margin:6px 18px 0;padding:8px 12px;border-radius:10px;background:var(--tk-surface-2);font-size:12px;line-height:1.65;color:var(--tk-text-muted);}
+  .ck-why p{margin:0;}
+  .ck-why b{color:var(--tk-text);font-weight:600;}
+  .ck-grp-h{font-size:12px;font-weight:700;color:var(--tk-text-muted);padding:10px 4px 2px;}
   .ck-card .dt .pv{color:var(--tk-text-muted);margin-right:4px;}
   /* 头像：真头像盖在字母底上，加载失败自动露底（onerror 移除 img） */
   .ck-ava{position:relative;width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;overflow:hidden;user-select:none;}
@@ -69,6 +80,19 @@
   .ck-unread{display:inline-block;font-size:10px;font-weight:700;border-radius:5px;padding:1px 6px;background:color-mix(in srgb, var(--tk-danger) 12%, transparent);color:var(--tk-danger-ink);}
   .ck-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
   .ck-acts a{text-decoration:none;}
+  .ck-reply{display:flex;gap:6px;align-items:center;margin-top:8px;}
+  .ck-reply-in{flex:1;min-width:120px;border:1px solid var(--tk-border);border-radius:8px;padding:6px 8px;font-size:13px;background:var(--tk-surface);color:var(--tk-text);}
+  .ck-reply-err{font-size:11px;color:var(--tk-danger-ink);}
+  .ck-reply-in:disabled,.ck-send:disabled{opacity:.6;cursor:progress;}
+  /* 一张卡只留一个实心按钮：没打字时「去回」实心；打了字「发送」实心、「去回」退成描边 */
+  .ck-card.has-draft .ck-send{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
+  .ck-card.has-draft a.ck-btn.primary[data-ck-open]{background:var(--tk-surface);border-color:var(--tk-border);color:var(--tk-text);}
+  /* 从完整对话回来落到的那张：描边闪一下 */
+  .ck-card.ck-landed{box-shadow:0 0 0 2px var(--tk-brand);animation:ckLand 1.6s ease-out 1;}
+  @keyframes ckLand{0%{box-shadow:0 0 0 0 transparent;}25%{box-shadow:0 0 0 5px color-mix(in srgb, var(--tk-brand) 45%, transparent);}100%{box-shadow:0 0 0 2px var(--tk-brand);}}
+  .ck-acct{display:inline-block;font-size:10px;font-weight:600;border-radius:5px;padding:1px 6px;background:var(--tk-surface-2);color:var(--tk-text-muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}
+  .ck-more{font-size:12px;color:var(--tk-text-muted);}
+  .ck-more summary{cursor:pointer;}
   .ck-empty{padding:36px 16px;text-align:center;color:var(--tk-text-muted);}
   .ck-empty .big{font-size:15px;font-weight:700;color:var(--tk-ok-ink);margin-bottom:6px;}
   /* 历史积压折叠区 */
@@ -78,10 +102,25 @@
   .ck-stale-h.open .ar{transform:rotate(90deg);}
   .ck-stale-sub{font-size:11px;color:var(--tk-text-muted);padding:0 4px 8px;}
   #ck-stale-list .ck-card{opacity:.82;}
+  /* 等待时长三档（P1-10）：<1h 中性 / 1–24h 琥珀 / >24h 红，左边框跟着走；接管超时仍是 p1 红 */
+  .ck-card.t0{border-left-color:var(--tk-border);}
+  .ck-card.t1{border-left-color:var(--tk-amber);}
+  .ck-card.t2{border-left-color:var(--tk-danger);}
+  .ck-card.t0 .wait .wn{color:var(--tk-text);}
+  .ck-card.t1 .wait .wn{color:var(--tk-warn-ink);}
+  .ck-card.t2 .wait .wn{color:var(--tk-danger-ink);}
+  /* 积压紧凑行（P1-7）：一行一人，不带输入框 */
+  .ck-card.ck-row{align-items:center;gap:8px;padding:6px 10px;margin-bottom:4px;border-left-width:3px;border-left-color:var(--tk-border);}
+  .ck-row .nm{font-weight:700;font-size:12.5px;color:var(--tk-text);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;}
+  .ck-row-q{flex:1;min-width:0;font-size:12px;color:var(--tk-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ck-row-age{flex-shrink:0;font-size:11px;color:var(--tk-text-muted);white-space:nowrap;}
+  .ck-row .ck-acts{flex-shrink:0;flex-wrap:nowrap;}
+  .ck-row .ck-btn{padding:2px 9px;font-size:11px;}
+  .ck-meta button.ck-tk-tog[aria-expanded="true"]{color:var(--tk-text);}
   /* 加载骨架屏 */
   .ck-skel{border:1px solid var(--tk-border);border-radius:10px;height:64px;margin-bottom:8px;background:linear-gradient(90deg,var(--tk-surface) 25%,var(--tk-surface-2) 42%,var(--tk-surface) 60%);background-size:220% 100%;animation:ckSkel 1.1s linear infinite;}
   @keyframes ckSkel{from{background-position:180% 0;}to{background-position:-40% 0;}}
-  @media (prefers-reduced-motion:reduce){.ck-skel{animation:none;background:var(--tk-surface-2);}.ck-stale-h .ar{transition:none;}}
+  @media (prefers-reduced-motion:reduce){.ck-skel{animation:none;background:var(--tk-surface-2);}.ck-stale-h .ar{transition:none;}.ck-card.ck-landed{animation:none;}}
   /* 右栏 */
   .ck-rail{width:290px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;}
   .ck-box{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;}
@@ -97,47 +136,87 @@
   .ck-dot.ok{background:var(--tk-emerald);} .ck-dot.warn{background:var(--tk-amber);} .ck-dot.bad{background:var(--tk-danger);}
   .ck-muted{font-size:12px;color:var(--tk-text-muted);}
   .ck-srcwarn{font-size:11px;color:var(--tk-warn-ink);padding:4px 18px;}
-  @media (max-width:900px){ .ck-rail{display:none;} }
+  .ck-srcwarn.ck-quiet{color:var(--tk-text-muted);}
+  @media (max-width:900px){
+    .ck-rail{display:none;}
+    /* 右栏收起时，接管名单从顶部「接管中 N」展开到列表上方 */
+    .ck-main{flex-direction:column;}
+    .ck-main.tk-open .ck-rail{display:flex !important;width:auto;max-height:38vh;flex-shrink:0;}
+  }
+  /* 手机（P1-1）：卡片上下排，等待时长挪到名字行右侧，按钮整行排开 */
+  @media (max-width:640px){
+    .ck-bar{padding:10px 12px;gap:8px;}
+    .ck-bar .sub{display:none;}
+    .ck-lead{padding:10px 12px 0;}
+    .ck-meta{padding:4px 12px 0;}
+    .ck-why{margin:6px 12px 0;}
+    .ck-main{padding:8px 6px 10px;}
+    .ck-q-list{padding:8px 8px 84px;}
+    .ck-card{flex-wrap:wrap;position:relative;gap:10px;}
+    .ck-card .body{flex:1 1 calc(100% - 46px);}
+    .ck-card .row1{padding-right:64px;}
+    .ck-card .nm{max-width:100%;}
+    .ck-card .side{flex:1 1 100%;flex-direction:row;align-items:center;justify-content:flex-start;}
+    .ck-card .wait{position:absolute;top:9px;right:12px;}
+    .ck-card .wait .wn{font-size:14px;}
+    .ck-acts{justify-content:flex-start;width:100%;}
+    .ck-reply-in{min-width:0;}
+    .ck-card.ck-row{flex-wrap:wrap;}
+    .ck-row-q{flex:1 1 100%;order:5;}
+    .ck-row .ck-acts{width:auto;margin-left:auto;}
+  }
 </style>
 {% endblock %}
 {% block content %}
 <div class="ck-wrap">
   <div class="ck-bar">
     <a class="back" href="/workspace">← {{ (i18n or {}).get('ck.back', "工作台") }}</a>
-    <span class="t">{{ (i18n or {}).get('ck.title', "驾驶舱") }}</span>
-    <span class="sub">{{ (i18n or {}).get('ck.sub', "谁需要人、按优先级排好——处理完一个划掉一个") }}</span>
+    <span class="t">{{ (i18n or {}).get('ck.title', "待人工") }}</span>
+    <span class="sub">{{ (i18n or {}).get('ck.sub', "按急的排在前面。点「接管」会让 AI 对这个客户停手。") }}</span>
     <span style="margin-left:auto;" class="ck-muted" id="ck-age"></span>
     <button class="ck-btn" onclick="CK.load(true)">{{ (i18n or {}).get('ck.refresh', "刷新") }}</button>
   </div>
-  <div class="ck-hint" id="ck-hint" style="display:none;">
-    <span>💡</span>
-    <span class="tx">{{ (i18n or {}).get('ck.hint', "AI 正在自动接待所有会话，这页只列需要真人的：「接管」＝AI 停手你来聊，「交还 AI」＝你聊完 AI 继续，「去处理」＝打开完整对话。") }}</span>
-    <button class="ck-btn" onclick="CK.dismissHint()">{{ (i18n or {}).get('ck.hint.dismiss', "知道了") }}</button>
+  <div class="ck-lead" id="ck-lead">
+    {{ (i18n or {}).get('ck.lead.pre', "还有") }}
+    <span class="n" id="ck-k-queue">–</span>
+    <span id="ck-lead-post">{{ (i18n or {}).get('ck.lead.post', "条要你回，其余 AI 在回。") }}</span>
+    <span id="ck-lead-extra"></span>
+    <span class="roi" id="ck-roi-line"></span>
+    <span class="roi" id="ck-cleared"></span>
   </div>
-  <div class="ck-kpis">
-    <div class="ck-kpi hot click" onclick="CK.setFilter('')"><div class="n" id="ck-k-queue">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.queue', "需介入") }}</div></div>
-    <div class="ck-kpi warm"><div class="n" id="ck-k-takeover">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.takeover', "接管中") }}</div></div>
-    <div class="ck-kpi"><div class="n" id="ck-k-oldest">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.oldest', "最久等待") }}</div></div>
-    <div class="ck-kpi dim click" onclick="CK.toggleStale()"><div class="n" id="ck-k-stale">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.stale', "历史积压") }}</div></div>
+  <div class="ck-meta" id="ck-meta">
+    <span>{{ (i18n or {}).get('ck.oldest.pre', "最久已等") }} <span id="ck-k-oldest">–</span></span>
+    <span id="ck-k-takeover-wrap"><button type="button" class="ck-tk-tog" id="ck-tk-tog" aria-expanded="false" onclick="CK.toggleTk()">· {{ (i18n or {}).get('ck.takeover.inline', "接管中") }} <span id="ck-k-takeover">0</span></button></span>
+    <span id="ck-k-stale-wrap"><button type="button" onclick="CK.toggleStale()">· <span id="ck-k-stale">0</span> {{ (i18n or {}).get('ck.stale.inline', "条超过 3 天，收在下面") }}</button></span>
+    <button type="button" class="ck-why-btn" id="ck-why-btn" aria-expanded="false" aria-controls="ck-why" onclick="CK.toggleWhy()">{{ (i18n or {}).get('ck.counts.toggle', "这些数怎么算？") }}</button>
+  </div>
+  <div class="ck-why" id="ck-why" style="display:none;">
+    <p>{{ (i18n or {}).get('ck.counts.lead', "「要你回」只数近 3 天里客户在等、或标了需人工的人；草稿待审、接管超时另外写在后面。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.stale', "超过 3 天没人回的收进下面的「历史积压」，不算进上面的数；人多时先列最近的 40 位，总数照实写。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.pill', "顶栏带时钟的提醒是另一个口径：全站末条是客户、超过提醒线的会话都算，不分新旧，草稿待审和接管中的也算，最多列 50 条，所以通常比这里大。点它能看到名单。") }}</p>
+    <p>{{ (i18n or {}).get('ck.counts.cleared', "「今天清掉」＝今天在这页摘掉需人工、交还接管，或回了正在等的客户（同一轮等待只算一次）。") }}</p>
   </div>
   <div class="ck-srcwarn" id="ck-srcwarn" style="display:none;"></div>
+  <div class="ck-srcwarn" id="ck-load-warn" style="display:none;"></div>
+  <div class="ck-srcwarn" id="ck-acct-alert" style="display:none;"></div>
+  <div class="ck-srcwarn ck-quiet" id="ck-scan-note" style="display:none;">{{ (i18n or {}).get('ck.scan.note', "更早的客户可能没列全") }}</div>
   <div class="ck-main">
     <div class="ck-q">
       <div class="ck-q-h">
-        <div class="tt">{{ (i18n or {}).get('ck.q.title', "介入队列") }} <span class="ck-muted" id="ck-q-n"></span>
-          <span style="margin-left:auto;font-weight:500;" class="ck-muted">{{ (i18n or {}).get('ck.auto_note', "每 30 秒自动刷新") }}</span></div>
+        <div class="tt"><button type="button" class="ck-btn" onclick="CK.toggleChips()">{{ (i18n or {}).get('ck.filter.toggle', "筛选") }}</button> <span class="ck-muted" id="ck-q-n"></span>
+</div>
         <div class="ck-fchips" id="ck-fchips" style="display:none;"></div>
       </div>
       <div class="ck-q-list">
         <div id="ck-q-list"><div class="ck-skel"></div><div class="ck-skel"></div><div class="ck-skel"></div></div>
+        <div class="ck-stale-sub" id="ck-snooze-bar" style="display:none;"></div>
         <div class="ck-stale-h" id="ck-stale-h" style="display:none;" onclick="CK.toggleStale()"><span class="ar">▸</span><span id="ck-stale-t"></span></div>
-        <div class="ck-stale-sub" id="ck-stale-sub" style="display:none;">{{ (i18n or {}).get('ck.stale.sub', "超过 3 天的旧信号——处理完点「已处理」清掉，别让它一直占屏") }}</div>
+        <div class="ck-stale-sub" id="ck-stale-sub" style="display:none;">{{ (i18n or {}).get('ck.stale.hint', "这些客户 3 天以上没人回。能回的点「去回」，不打算回的点「先不回」。") }}</div>
         <div id="ck-stale-list" style="display:none;"></div>
       </div>
     </div>
     <div class="ck-rail">
-      <div class="ck-box"><div class="h">{{ (i18n or {}).get('ck.rail.takeover', "接管在场") }}</div><div id="ck-rail-tk" class="ck-muted">…</div></div>
-      <div class="ck-box"><div class="h">{{ (i18n or {}).get('ck.rail.acct', "账号健康") }}<span class="hs" id="ck-acct-sum"></span></div><div id="ck-rail-acct" class="ck-muted">…</div></div>
+      <div class="ck-box" id="ck-box-tk" style="display:none;"><div class="h">{{ (i18n or {}).get('ck.rail.takeover', "接管在场") }}</div><div id="ck-rail-tk" class="ck-muted">…</div></div>
     </div>
   </div>
 </div>
@@ -146,7 +225,7 @@
   /* 服务端渲染 i18n 注入本地词表（不依赖 window.T——本页自足） */
   var L={
     qEmpty: {{ (i18n or {}).get('ck.q.empty', "一切正常，AI 在岗 ✓")|tojson }},
-    qEmptySub: {{ (i18n or {}).get('ck.q.empty_sub', "没有需要人工介入的会话；有红点会第一时间排到这里")|tojson }},
+    qEmptySub: {{ (i18n or {}).get('ck.q.empty_sub', "没有需要人来处理的会话；有红点会第一时间排到这里")|tojson }},
     emptyRoi: {{ (i18n or {}).get('ck.empty.roi', "本周 AI 已替你自动发出 {n} 条回复")|tojson }},
     emptyLearner: {{ (i18n or {}).get('ck.empty.learner', "学习队列有 {n} 条 AI 知识草稿等你审核")|tojson }},
     emptyLearnerGo: {{ (i18n or {}).get('ck.empty.learner_go', "去审核 →")|tojson }},
@@ -170,7 +249,22 @@
     qFail: {{ (i18n or {}).get('ck.q.fail', "队列加载失败，稍后自动重试")|tojson }},
     qFilterEmpty: {{ (i18n or {}).get('ck.q.filter_empty', "这一类当前没有卡")|tojson }},
     filterAll: {{ (i18n or {}).get('ck.filter.all', "全部")|tojson }},
-    srcErr: {{ (i18n or {}).get('ck.src.error', "部分信号源异常（{list}）——队列可能不全")|tojson }},
+    srcErr: {{ (i18n or {}).get('ck.src.error', "这份名单这次没取全：{list}")|tojson }},
+    reasons: {
+      high_risk: {{ (i18n or {}).get('ck.reason.high_risk', "客户消息命中高风险，要人看")|tojson }},
+      empty_reply: {{ (i18n or {}).get('ck.reason.empty_reply', "AI 生成了空回复")|tojson }},
+      generate_error: {{ (i18n or {}).get('ck.reason.generate_error', "AI 生成出错")|tojson }},
+      send_error: {{ (i18n or {}).get('ck.reason.send_error', "AI 回复发送失败")|tojson }},
+      quota_hour: {{ (i18n or {}).get('ck.reason.quota_hour', "这个号这一小时的自动回复额度用完了")|tojson }},
+      quota_day: {{ (i18n or {}).get('ck.reason.quota_day', "这个号今天的自动回复额度用完了")|tojson }},
+      circuit_open: {{ (i18n or {}).get('ck.reason.circuit_open', "AI 服务在熔断保护，暂时出不了话")|tojson }},
+      off_hours: {{ (i18n or {}).get('ck.reason.off_hours', "现在不在自动回复时段")|tojson }},
+      dup_guard_blocked: {{ (i18n or {}).get('ck.reason.dup_guard_blocked', "AI 的回复和刚发过的太像，没发出去")|tojson }},
+      fact_gate_blocked: {{ (i18n or {}).get('ck.reason.fact_gate_blocked', "AI 提到了客户没说过的事，没发出去")|tojson }},
+      outreach_stalled: {{ (i18n or {}).get('ck.reason.outreach_stalled', "同群开口之后对方在等，超过两天没人接")|tojson }},
+      crisis: {{ (i18n or {}).get('ck.reason.crisis', "客户消息触发了危机，要人看一眼")|tojson }},
+      manual: {{ (i18n or {}).get('ck.reason.manual', "被标成要人处理，没有记下具体原因")|tojson }}
+    },
     kinds: {
       takeover_overdue: {{ (i18n or {}).get('ck.kind.takeover_overdue', "接管超时")|tojson }},
       needs_human: {{ (i18n or {}).get('ck.kind.needs_human', "需人工")|tojson }},
@@ -178,18 +272,45 @@
       draft_pending: {{ (i18n or {}).get('ck.kind.draft_pending', "草稿待审")|tojson }}
     },
     why: {
-      takeover_overdue: {{ (i18n or {}).get('ck.why.takeover_overdue', "人工接管已 {age} 未交还——完成后记得交还 AI")|tojson }},
-      needs_human: {{ (i18n or {}).get('ck.why.needs_human', "AI 判断需要真人处理（高风险 / 生成失败 / 配额触顶等）")|tojson }},
-      waiting: {{ (i18n or {}).get('ck.why.waiting', "客户说了最后一句，已等 {age} 没人回")|tojson }},
-      draft_pending: {{ (i18n or {}).get('ck.why.draft_pending', "AI 草稿已拟好，等人审核 {age}")|tojson }}
+      takeover_overdue: {{ (i18n or {}).get('ck.why.takeover_overdue', "接手后还没交还，这段时间 AI 是停的")|tojson }},
+      needs_human: {{ (i18n or {}).get('ck.why.needs_human', "AI 交了出来，要人看一眼")|tojson }},
+      waiting: {{ (i18n or {}).get('ck.why.waiting', "客户说了最后一句，还没人回")|tojson }},
+      draft_pending: {{ (i18n or {}).get('ck.why.draft_pending', "AI 草稿写好了，等人看过再发")|tojson }}
     },
     anon: {{ (i18n or {}).get('ck.card.anon', "客户（尾号 {tail}）")|tojson }},
     waitLabel: {{ (i18n or {}).get('ck.wait.label', "已持续")|tojson }},
+    waitWait: {{ (i18n or {}).get('ck.wait.wait', "等了")|tojson }},
+    waitDraft: {{ (i18n or {}).get('ck.wait.draft', "稿子放了")|tojson }},
+    waitHold: {{ (i18n or {}).get('ck.wait.hold', "接手了")|tojson }},
+    leadAlso: {{ (i18n or {}).get('ck.lead.also', "另有")|tojson }},
+    leadDraft: {{ (i18n or {}).get('ck.lead.draft', "{n} 条稿待审")|tojson }},
+    leadHold: {{ (i18n or {}).get('ck.lead.hold', "{n} 条忘了交还")|tojson }},
+    replyPh: {{ (i18n or {}).get('ck.reply.ph', "回一句")|tojson }},
+    replySend: {{ (i18n or {}).get('ck.reply.send', "发送")|tojson }},
+    replyFail: {{ (i18n or {}).get('ck.reply.fail', "没发出去，还在这张卡上")|tojson }},
+    loadStale: {{ (i18n or {}).get('ck.load.stale', "刚才没刷新成功，显示的是 {t} 的数据")|tojson }},
+    acctTail: {{ (i18n or {}).get('ck.acct.tail', "号 …{tail}")|tojson }},
+    more: {{ (i18n or {}).get('ck.more', "更多")|tojson }},
     staleTitle: {{ (i18n or {}).get('ck.stale.title', "历史积压（{n}）")|tojson }},
+    leadPost: {{ (i18n or {}).get('ck.lead.post', "条要你回，其余 AI 在回。")|tojson }},
+    leadPostOne: {{ (i18n or {}).get('ck.lead.post_one', "条要你回，其余 AI 在回。")|tojson }},
+    ageAuto: {{ (i18n or {}).get('ck.age.auto', "{t} 更新 · 自动刷新")|tojson }},
+    staleTitleCap: {{ (i18n or {}).get('ck.stale.title_cap', "历史积压（{total}，先列最近的 {n}）")|tojson }},
     flagMore: {{ (i18n or {}).get('ck.flag.more', "同时命中")|tojson }},
     actOpen: {{ (i18n or {}).get('ck.act.open', "去处理")|tojson }},
+    actOpenWait: {{ (i18n or {}).get('ck.act.open_wait', "去回")|tojson }},
+    actOpenDraft: {{ (i18n or {}).get('ck.act.open_draft', "去审这稿")|tojson }},
+    actSnooze: {{ (i18n or {}).get('ck.act.snooze', "先不回")|tojson }},
+    snoozeBar: {{ (i18n or {}).get('ck.snooze.bar', "先不回 {n} 条")|tojson }},
+    snoozeBack: {{ (i18n or {}).get('ck.snooze.back', "收回")|tojson }},
     unread: {{ (i18n or {}).get('ck.unread', "未读")|tojson }},
     actTake: {{ (i18n or {}).get('ck.act.take', "接管")|tojson }},
+    actTakeHint: {{ (i18n or {}).get('ck.act.take_hint', "接管，AI 将停手")|tojson }},
+    acctBad: {{ (i18n or {}).get('ck.acct.bad', "{n} 个号异常（封禁或掉线）")|tojson }},
+    grpReply: {{ (i18n or {}).get('ck.grp.reply', "要回的")|tojson }},
+    grpDraft: {{ (i18n or {}).get('ck.grp.draft', "要审的稿")|tojson }},
+    grpHold: {{ (i18n or {}).get('ck.grp.hold', "接手后忘了交还")|tojson }},
+    cleared: {{ (i18n or {}).get('ck.cleared', "今天清掉 {n} 条")|tojson }},
     actBack: {{ (i18n or {}).get('ck.act.back', "交还 AI")|tojson }},
     actResolve: {{ (i18n or {}).get('ck.act.resolve', "已处理")|tojson }},
     resolveConfirm: {{ (i18n or {}).get('ck.resolve.confirm', "把「需人工」标记从该会话摘掉？表示你已处理完或不需要再跟进。")|tojson }},
@@ -211,7 +332,6 @@
     }
   };
   var STALE_SEC=72*3600;                       /* 与 waiting 源 72h 窗同刻度：超过即归「历史积压」 */
-  var HINT_KEY='aitr.ck.hint.v1';
   var KIND_ORDER=['takeover_overdue','needs_human','waiting','draft_pending'];
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   function fmt(tpl,vars){ return String(tpl).replace(/\{(\w+)\}/g, function(_,k){ return (vars&&vars[k]!=null)?vars[k]:''; }); }
@@ -377,7 +497,7 @@
   function paintLearnerLink(){
     var el=document.getElementById('ck-empty-learn');
     if(el && _learn.available && _learn.pending>0){
-      el.innerHTML='📚 '+esc(fmt(L.emptyLearner,{n:_learn.pending}))
+      el.innerHTML=esc(fmt(L.emptyLearner,{n:_learn.pending}))
         +' <a href="/learner" style="color:var(--tk-brand);">'+esc(L.emptyLearnerGo)+'</a>';
     }
   }
@@ -395,8 +515,10 @@
     }).catch(function(){ _roiN=-1; });
   }
   function paintRoi(){
+    var line=document.getElementById('ck-roi-line');
+    if(line) line.textContent=_roiN>0?fmt(L.emptyRoi,{n:_roiN}):'';
     var el=document.getElementById('ck-empty-roi');
-    if(el&&_roiN>0) el.innerHTML='🤖 '+esc(fmt(L.emptyRoi,{n:_roiN}));
+    if(el&&_roiN>0) el.textContent=fmt(L.emptyRoi,{n:_roiN});
   }
 
   function kindChip(k){
@@ -407,51 +529,180 @@
     /* takeover_overdue 永远算新鲜：接管 3 天没交还是最该炸的漏球，不是积压 */
     return it.kind!=='takeover_overdue' && Number(it.age_sec||0)>STALE_SEC;
   }
-  function card(it){
-    var p='p'+(it.priority||4);
+  /* onclick 里的会话 id：转义引号与反斜杠，避免拼进属性后断句 */
+  function cidJs(cid){
+    return String(cid||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\x22');
+  }
+  function btn(cls, fn, cid, label){
+    return '<button class="ck-btn'+cls+'" onclick="CK.'+fn+'(\''+cidJs(cid)+'\')">'+esc(label)+'</button>';
+  }
+  function openLink(cid, label, primary){
+    return '<a class="ck-btn'+(primary?' primary':'')+'" data-ck-open="'+esc(cid)+'" href="/workspace?conv='+encodeURIComponent(cid)+'">'+esc(label)+'</a>';
+  }
+  function moreTake(cid){
+    return '<details class="ck-more"><summary>'+esc(L.more)+'</summary>'
+      +btn('', 'take', cid, L.actTakeHint)+'</details>';
+  }
+  function replyBox(it){
+    var cid=String(it.conversation_id||'');
+    var busy=!!_sending[cid];
+    return '<div class="ck-reply">'
+      +'<input class="ck-reply-in" maxlength="500" placeholder="'+esc(L.replyPh)+'" data-cid="'+esc(cid)+'"'
+      +' value="'+esc(_drafts[cid]||'')+'"'+(busy?' disabled':'')
+      +' onkeydown="if(event.key===\'Enter\'&&!event.isComposing&&event.keyCode!==229){event.preventDefault();CK.sendReply(this);}">'
+      +'<button type="button" class="ck-btn ck-send"'+(busy?' disabled':'')+' onclick="CK.sendReply(this)">'+esc(L.replySend)+'</button>'
+      +'<span class="ck-reply-err" style="display:none;"></span></div>';
+  }
+  function waitWord(kind){
+    if(kind==='draft_pending') return L.waitDraft;
+    if(kind==='takeover_overdue') return L.waitHold;
+    return L.waitWait;
+  }
+  var SNOOZE_KEY='aitr.ck.snooze.v1';
+  var NEXT_KEY='aitr.ck.next';
+  /* 回程记录（跨标签页/窗口）：打开完整对话时记下刚才那条和它的下一张；收件箱
+     发出回复后在同一条记录上打 sent。localStorage 同源各窗口共用，收件箱多半
+     开在另一个窗口里，sessionStorage 看不到。 */
+  var RET_KEY='aitr.ck.ret.v1';
+  var RET_TTL=3*3600*1000;
+  var _retArmed=false, _retAway=false;
+  var _acctNames={};
+  var _chipsOpen=false;
+  var _snoozeOpen=false;
+  var _sent={};
+  var _paintKey='';
+  /* 页内回复：每张卡打到一半的字（按会话存，重画后回填）、在途发送、上次失败那次的键 */
+  var _drafts={}, _sending={}, _lastCmid={};
+  var _paintPending=false, _composing=false;
+  function snoozeMap(){
+    try{ var m=JSON.parse(localStorage.getItem(SNOOZE_KEY)||'{}'); return (m&&typeof m==='object')?m:{}; }
+    catch(e){ return {}; }
+  }
+  function itemFp(it){
+    return [it.kind||'', it.detail||'', it.last_text||'', it.quote_media||''].join('|');
+  }
+  function serverSnooze(){ return !!(_caps && _caps.snooze); }
+  function isSnoozed(it){
+    if(serverSnooze()) return false;
+    if(!it || it.kind!=='waiting') return false;
+    var rec=snoozeMap()[String(it.conversation_id||'')];
+    return !!(rec && rec.fp===itemFp(it));
+  }
+  function acctChip(it){
+    var id=String(it.account_id||'');
+    if(!id){
+      var parts=String(it.conversation_id||'').split(':');
+      if(parts.length>=3) id=parts[1];
+    }
+    if(!id) return '';
+    var plat=String(it.platform||'').toLowerCase();
+    var label=_acctNames[plat+'|'+id]||_acctNames[id]||'';
+    if(!label) label=/^\d{6,}$/.test(id)?fmt(L.acctTail,{tail:id.slice(-4)}):id;
+    if(label.length>16) label='…'+label.slice(-6);
+    return '<span class="ck-acct" title="'+esc(id)+'">'+esc(label)+'</span>';
+  }
+  function whyFor(it){
+    if(it.kind==='needs_human'){
+      var r=String(it.handoff_reason||'');
+      if(r.indexOf('crisis')===0) r='crisis';
+      if(r && L.reasons && L.reasons[r]) return L.reasons[r];
+    }
+    return fmt(L.why[it.kind]||'',{age:fmtAge(it.age_sec)});
+  }
+  /* 等待时长三档；需人工至少琥珀（人家点名要人），接管超时保持原来的红 */
+  function tierCls(it){
+    if(it.kind==='takeover_overdue') return 'p1';
+    var a=Number(it.age_sec||0);
+    var t=a<3600?0:(a<86400?1:2);
+    if(it.kind==='needs_human' && t<1) t=1;
+    return 't'+t;
+  }
+  function quoteText(it){
+    var q=(it.kind==='takeover_overdue')?String(it.last_text||''):String(it.detail||'');
+    if(q) return '“'+q+'”';
+    if(it.quote_media){
+      var mk=MEDIA_KIND[String(it.quote_media).toLowerCase()]||'other';
+      return L.media[mk]||L.media.other;
+    }
+    return '';
+  }
+  /* 积压紧凑行：名字、平台、一句原话、等了多久、去回（客户在等的再给「先不回」） */
+  function rowCompact(it){
+    var cid=String(it.conversation_id||'');
+    var acts=openLink(cid, it.kind==='draft_pending'?L.actOpenDraft:(it.kind==='waiting'?L.actOpenWait:L.actOpen), false);
+    if(it.kind==='waiting') acts+=btn('', 'snooze', cid, L.actSnooze);
+    else if(it.kind==='needs_human' && _caps.resolve) acts+=btn('', 'resolve', cid, L.actResolve);
+    var q=it.kind==='draft_pending'?(it.detail?(L.draftPrefix+' '+it.detail):''):quoteText(it);
+    return '<div class="ck-card ck-row" data-cid="'+esc(cid)+'" data-kind="'+esc(it.kind||'')+'">'
+      +'<span class="nm">'+esc(displayName(it.name, cid, it.username))+'</span>'
+      +platChip(it.platform)
+      +'<span class="ck-row-q" title="'+esc(q)+'">'+esc(q)+'</span>'
+      +'<span class="ck-row-age">'+esc(fmtAge(it.age_sec))+'</span>'
+      +'<span class="ck-acts">'+acts+'</span>'
+      +'</div>';
+  }
+  function card(it, grouped){
+    grouped=(grouped===true);
+    var p=tierCls(it);
     var extra=(it.flags||[]).filter(function(f){return f!==it.kind;});
     var extraHtml=extra.length?('<span class="ck-muted" style="font-size:10px;">'+esc(L.flagMore)+': '+extra.map(function(f){return esc(L.kinds[f]||f);}).join(' / ')+'</span>'):'';
     var cid=String(it.conversation_id||'');
     var isTk=!!_activeTk[cid];
-    var tkBtn=isTk
-      ? '<button class="ck-btn" onclick="CK.handback(\''+esc(cid)+'\')">'+esc(L.actBack)+'</button>'
-      : '<button class="ck-btn" onclick="CK.take(\''+esc(cid)+'\')">'+esc(L.actTake)+'</button>';
-    var resolveBtn=(_caps.resolve && (it.flags||[]).indexOf('needs_human')>=0)
-      ? '<button class="ck-btn" onclick="CK.resolve(\''+esc(cid)+'\')">✓ '+esc(L.actResolve)+'</button>':'';
     var age=fmtAge(it.age_sec);
-    /* 原话引用（P3 身份卡）：客户末条 💬 / AI 草稿 🤖，接管卡的 detail 是接管人
-       ——原话另走 last_text，接管人并进 why 行 */
     var quote='';
     if(it.kind==='draft_pending'){
-      if(it.detail) quote='<div class="dt"><span class="pv">🤖 '+esc(L.draftPrefix)+'</span>'+esc(it.detail)+'</div>';
+      if(it.detail) quote='<div class="dt"><span class="pv">'+esc(L.draftPrefix)+'</span>'+esc(it.detail)+'</div>';
     }else{
       var q=(it.kind==='takeover_overdue')?String(it.last_text||''):String(it.detail||'');
-      if(q){ quote='<div class="dt"><span class="pv">💬 '+esc(L.said)+'</span>“'+esc(q)+'”</div>'; }
+      if(q){ quote='<div class="dt"><span class="pv">'+esc(L.said)+'</span>“'+esc(q)+'”</div>'; }
       else if(it.quote_media){
-        /* 纯媒体末条（P5 引用补齐）：本地化占位，不带引号——不是原话 */
         var mk=MEDIA_KIND[String(it.quote_media).toLowerCase()]||'other';
-        quote='<div class="dt"><span class="pv">💬 '+esc(L.said)+'</span>'+esc(L.media[mk]||L.media.other)+'</div>';
+        quote='<div class="dt"><span class="pv">'+esc(L.said)+'</span>'+esc(L.media[mk]||L.media.other)+'</div>';
       }
     }
-    var why=fmt(L.why[it.kind]||'',{age:age});
+    /* why 行只留有具体内容的：需人工（原因）和接管超时（谁接的）；客户在等/草稿待审的 why 和分组头、引用重复 */
+    var why=(it.kind==='needs_human'||it.kind==='takeover_overdue')?whyFor(it):'';
     if(it.kind==='takeover_overdue' && it.detail) why+=' · '+L.tkBy+it.detail;
-    return '<div class="ck-card '+p+'">'
+    var acts='';
+    var hand=isTk || it.kind==='takeover_overdue';
+    if(hand){
+      acts+=btn(' primary', 'handback', cid, L.actBack);
+      acts+=openLink(cid, L.actOpen, false);
+    }else if(it.kind==='draft_pending'){
+      acts+=openLink(cid, L.actOpenDraft, true);
+      acts+=moreTake(cid);
+    }else if(it.kind==='waiting'){
+      acts+=openLink(cid, L.actOpenWait, true);
+      acts+=btn('', 'snooze', cid, L.actSnooze);
+      acts+=moreTake(cid);
+    }else{
+      acts+=openLink(cid, L.actOpen, true);
+      if(_caps.resolve && (it.flags||[]).indexOf('needs_human')>=0){
+        acts+=btn('', 'resolve', cid, L.actResolve);
+      }
+      acts+=moreTake(cid);
+    }
+    var reply=(it.kind==='waiting' && !hand)?replyBox(it):'';
+    var hasDraft=it.kind==='waiting' && !hand && !!String(_drafts[cid]||'').trim();
+    /* 分组头已经写了类别：单一类别的组（客户在等/稿待审/忘了交还）卡上不再重复；需人工照留，和客户在等区分 */
+    var showKind=!(grouped && it.kind!=='needs_human');
+    return '<div class="ck-card '+p+(hasDraft?' has-draft':'')+'" data-cid="'+esc(cid)+'" data-kind="'+esc(it.kind||'')+'">'
       +avaHtml(it)
       +'<div class="body">'
         +'<div class="row1">'
           +'<span class="nm">'+esc(displayName(it.name, cid, it.username))+'</span>'
           +platChip(it.platform)
-          +kindChip(it.kind)
+          +acctChip(it)
+          +(showKind?kindChip(it.kind):'')
           +((it.unread|0)>0?('<span class="ck-unread">'+esc(L.unread)+' '+(it.unread|0)+'</span>'):'')
           +extraHtml+'</div>'
         +quote
-        +'<div class="why">'+esc(why)+'</div>'
+        +(why?'<div class="why">'+esc(why)+'</div>':'')
+        +reply
       +'</div>'
       +'<div class="side">'
-        +'<div class="wait"><span class="wn">'+esc(age)+'</span><span class="wl">'+esc(L.waitLabel)+'</span></div>'
-        +'<div class="ck-acts">'+resolveBtn+tkBtn
-          +'<a class="ck-btn primary" href="/workspace?conv='+encodeURIComponent(cid)+'">'+esc(L.actOpen)+'</a>'
-        +'</div>'
+        +'<div class="wait"><span class="wn">'+esc(age)+'</span><span class="wl">'+esc(waitWord(it.kind))+'</span></div>'
+        +'<div class="ck-acts">'+acts+'</div>'
       +'</div></div>';
   }
   function renderChips(fresh){
@@ -466,23 +717,125 @@
       if(!counts[k]) return;
       html+='<span class="ck-fchip'+(_filter===k?' on':'')+'" onclick="CK.setFilter(\''+k+'\')">'+esc(L.kinds[k])+' '+counts[k]+'</span>';
     });
-    el.innerHTML=html; el.style.display='';
+    el.innerHTML=html; el.style.display=(_chipsOpen && fresh.length)?'':'none';
+  }
+  function groupHtml(shown){
+    if(_filter) return shown.map(function(it){ return card(it); }).join('');
+    var defs=[
+      {t:L.grpReply, ks:{waiting:1, needs_human:1}},
+      {t:L.grpDraft, ks:{draft_pending:1}},
+      {t:L.grpHold, ks:{takeover_overdue:1}}
+    ];
+    var html='', used={};
+    defs.forEach(function(g){
+      var rows=shown.filter(function(it){return g.ks[it.kind];});
+      rows.forEach(function(it){ used[it.conversation_id]=1; });
+      if(!rows.length) return;
+      html+='<div class="ck-grp-h">'+esc(g.t)+' '+rows.length+'</div>'+rows.map(function(it){ return card(it, true); }).join('');
+    });
+    var rest=shown.filter(function(it){return !used[it.conversation_id];});
+    if(rest.length) html+=rest.map(function(it){ return card(it); }).join('');
+    return html || shown.map(function(it){ return card(it); }).join('');
+  }
+  function renderSnooze(items){
+    var bar=document.getElementById('ck-snooze-bar');
+    if(!bar) return;
+    var held=serverSnooze()?((_data&&_data.snoozed)||[]):(items||[]).filter(isSnoozed);
+    if(!held.length){ bar.style.display='none'; bar.innerHTML=''; return; }
+    bar.style.display='';
+    var people=held.map(function(it){
+      var cid=String(it.conversation_id||'');
+      return '<button class="ck-btn" style="margin:0 6px 6px 0;" onclick="CK.unsnooze(\''+cidJs(cid)+'\')">'
+        +esc(displayName(it.name, cid, it.username))+' · '+esc(L.snoozeBack)+'</button>';
+    }).join('');
+    bar.innerHTML='<button type="button" class="ck-btn" onclick="CK.toggleSnooze()">'
+      +esc(fmt(L.snoozeBar,{n:held.length}))+'</button>'
+      +'<div style="margin-top:6px;display:'+(_snoozeOpen?'':'none')+'">'+people+'</div>';
+  }
+  function readRet(){
+    try{
+      var r=JSON.parse(localStorage.getItem(RET_KEY)||'null');
+      if(r && r.cid && (Date.now()-Number(r.ts||0))<RET_TTL) return r;
+    }catch(e){}
+    return null;
+  }
+  function absorbRet(){
+    /* 收件箱已经回过这位：先收起这张卡（同页内发送的 2 分钟收起口径） */
+    var r=readRet();
+    if(r && r.sent && !_sent[String(r.cid)]) _sent[String(r.cid)]=Number(r.sent)||Date.now();
   }
   function render(){
     var d=_data||{};
     var items=d.items||[];
-    var fresh=items.filter(function(it){return !isStale(it);});
-    var stale=items.filter(isStale);
-    /* KPI（单口径：全部由本快照推导，不再拉 dashboard 的第二套账） */
-    document.getElementById('ck-k-queue').textContent=String(fresh.length);
+    absorbRet();
+    function recentlySent(it){
+      var t=_sent[String(it.conversation_id||'')];
+      return !!(t && (Date.now()-t)<120000);
+    }
+    var live=items.filter(function(it){return !isSnoozed(it) && !recentlySent(it);});
+    var fresh=live.filter(function(it){return !isStale(it);});
+    var stale=live.filter(isStale);
+    /* 积压只列最近的 40 条；服务端给了真实总数（stale_total）就照实写，刚回过收起的扣掉 */
+    var staleTotal=stale.length;
+    if(typeof d.stale_total==='number'){
+      var sentStale=items.filter(function(it){return !isSnoozed(it) && isStale(it) && recentlySent(it);}).length;
+      staleTotal=Math.max(stale.length, d.stale_total-sentStale);
+    }
+    var note=document.getElementById('ck-scan-note');
+    if(note) note.style.display=d.scan_truncated?'':'none';
+    var sw=document.getElementById('ck-k-stale-wrap');
+    if(sw) sw.style.display=stale.length?'':'none';
+    /* 同一分钟内快照没变就别重画，避免 30 秒轮询把滚动位置打掉 */
+    var key='';
+    try{
+      key=JSON.stringify({
+        rows:(items||[]).map(function(it){
+          return [it.conversation_id, it.kind, Math.floor(Number(it.age_sec||0)/60), it.detail||'', it.last_text||'', it.unread|0, it.handoff_reason||''];
+        }),
+        f:_filter, o:_staleOpen,
+        z:serverSnooze()?((_data&&_data.snoozed)||[]).map(function(it){return it.conversation_id;}):snoozeMap(),
+        n:_acctNames, s:d.sources||{}, t:!!d.scan_truncated, c:d.cleared_today|0, st:d.stale_total,
+        chips:_chipsOpen, snooze:_snoozeOpen, sent:_sent
+      });
+    }catch(e){ key=''; }
+    if(key && key===_paintKey){ renderSnooze(items); revealNext(); return; }
+    _paintKey=key;
+    var scroller=document.querySelector('.ck-q-list');
+    var keep=scroller?scroller.scrollTop:0;
+    /* 有人正在卡上打字：数字照常更新，列表本轮不重建（重建会冲掉字和输入法），
+       停手（失焦）后或下一轮再画。只是聚焦着空框：照常重建，回填焦点。 */
+    var typing=_typingNow();
+    var refocus=typing?null:_focusSnap();
+    if(typing){ _paintPending=true; _paintKey=''; }
+    var clearedEl=document.getElementById('ck-cleared');
+    if(clearedEl){
+      var cn=d.cleared_today|0;
+      clearedEl.textContent=cn>0?fmt(L.cleared,{n:cn}):'';
+    }
+    var nReply=0, nDraft=0, nHold=0;
+    fresh.forEach(function(it){
+      if(it.kind==='waiting'||it.kind==='needs_human') nReply++;
+      else if(it.kind==='draft_pending') nDraft++;
+      else if(it.kind==='takeover_overdue') nHold++;
+    });
+    document.getElementById('ck-k-queue').textContent=String(nReply);
+    var lp=document.getElementById('ck-lead-post');
+    if(lp) lp.textContent=(nReply===1)?L.leadPostOne:L.leadPost;
+    var bits=[];
+    if(nDraft) bits.push(fmt(L.leadDraft,{n:nDraft}));
+    if(nHold) bits.push(fmt(L.leadHold,{n:nHold}));
+    var ex=document.getElementById('ck-lead-extra');
+    if(ex) ex.textContent=bits.length?(' '+L.leadAlso+' '+bits.join('、')):'';
     var oldest=0; fresh.forEach(function(it){ oldest=Math.max(oldest, Number(it.age_sec||0)); });
     document.getElementById('ck-k-oldest').textContent=fresh.length?fmtAge(oldest):'–';
-    document.getElementById('ck-k-stale').textContent=String(stale.length);
-    document.getElementById('ck-q-n').textContent=fresh.length?('('+fresh.length+')'):'';
+    document.getElementById('ck-k-stale').textContent=String(staleTotal);
+    document.getElementById('ck-q-n').textContent='';
     renderChips(fresh);
     var el=document.getElementById('ck-q-list');
     var shown=_filter?fresh.filter(function(it){return it.kind===_filter;}):fresh;
-    if(!fresh.length){
+    if(typing){
+      /* 本轮不动列表 */
+    }else if(!fresh.length){
       el.innerHTML='<div class="ck-empty"><div class="big">'+esc(L.qEmpty)+'</div><div>'+esc(L.qEmptySub)+'</div>'
         +'<div id="ck-empty-roi" style="margin-top:10px;font-size:12px;color:var(--tk-ok-ink);"></div>'
         +'<div id="ck-empty-learn" style="margin-top:6px;font-size:12px;"></div></div>';
@@ -491,69 +844,160 @@
     }else if(!shown.length){
       el.innerHTML='<div class="ck-empty">'+esc(L.qFilterEmpty)+'</div>';
     }else{
-      el.innerHTML=shown.map(card).join('');
+      el.innerHTML=groupHtml(shown);
     }
-    /* 历史积压折叠区（>3 天旧信号：可见但不占主屏） */
+    renderSnooze(items);
+    if(scroller && !typing) scroller.scrollTop=keep;
     var sh=document.getElementById('ck-stale-h'), ss=document.getElementById('ck-stale-sub'), sl=document.getElementById('ck-stale-list');
     if(stale.length){
       sh.style.display=''; sh.classList.toggle('open', _staleOpen);
-      document.getElementById('ck-stale-t').textContent=fmt(L.staleTitle,{n:stale.length});
+      document.getElementById('ck-stale-t').textContent=staleTotal>stale.length
+        ? fmt(L.staleTitleCap,{total:staleTotal, n:stale.length})
+        : fmt(L.staleTitle,{n:stale.length});
       ss.style.display=_staleOpen?'':'none';
       sl.style.display=_staleOpen?'':'none';
-      if(_staleOpen) sl.innerHTML=stale.map(card).join('');
+      if(_staleOpen && !typing) sl.innerHTML=stale.map(rowCompact).join('');
     }else{
       sh.style.display='none'; ss.style.display='none'; sl.style.display='none'; _staleOpen=false;
     }
-    /* 信号源健康（空队列时也要报——「队列是空的」和「源挂了看不见」必须可区分） */
     var bad=Object.keys(d.sources||{}).filter(function(k){return d.sources[k]!=='ok';});
     var w=document.getElementById('ck-srcwarn');
-    if(bad.length){ w.textContent=fmt(L.srcErr,{list:bad.join(', ')}); w.style.display=''; }
-    else w.style.display='none';
+    if(bad.length){
+      w.textContent=fmt(L.srcErr,{list:bad.map(function(k){return (L.kinds&&L.kinds[k])||k;}).join('、')});
+      w.style.display='';
+    }else w.style.display='none';
+    paintRoi();
+    if(!typing){ _paintPending=false; _focusRestore(refocus); }
+    revealNext();
+  }
+  function _focusedReply(){
+    var ae=document.activeElement, q=document.querySelector('.ck-q-list');
+    return (ae && ae.classList && ae.classList.contains('ck-reply-in') && q && q.contains(ae))?ae:null;
+  }
+  function _typingNow(){
+    var f=_focusedReply();
+    return !!(f && (_composing || String(f.value||'').trim()));
+  }
+  function _focusSnap(){
+    var f=_focusedReply();
+    if(!f) return null;
+    return {cid:f.getAttribute('data-cid')||'', s:f.selectionStart, e:f.selectionEnd};
+  }
+  function _replyInput(cid){
+    var all=document.querySelectorAll('.ck-q-list .ck-reply-in');
+    for(var i=0;i<all.length;i++){ if(all[i].getAttribute('data-cid')===cid) return all[i]; }
+    return null;
+  }
+  function _focusRestore(snap){
+    if(!snap || !snap.cid) return;
+    var inp=_replyInput(snap.cid);
+    if(!inp || inp===document.activeElement || inp.disabled) return;
+    try{ inp.focus({preventScroll:true}); if(snap.s!=null) inp.setSelectionRange(snap.s, snap.e); }catch(e){}
+  }
+  function revealNext(){
+    /* 只在「从完整对话回来」之后定位一次：离开过本页（切走/失焦）、收件箱发出
+       回复、或回程记录带着重新打开本页。人还在本页时的轮询不消费记录。 */
+    if(!_retArmed) return;
+    _retArmed=false;
+    var rec=readRet(), nxt='';
+    try{ nxt=sessionStorage.getItem(NEXT_KEY)||''; }catch(e){}
+    try{ sessionStorage.removeItem(NEXT_KEY); }catch(e){}
+    try{ localStorage.removeItem(RET_KEY); }catch(e){}
+    var cards=[].slice.call(document.querySelectorAll('.ck-card[data-cid]'));
+    var ids=cards.map(function(c){ return c.getAttribute('data-cid')||''; });
+    var target='';
+    if(rec){
+      var at=ids.indexOf(String(rec.cid||''));
+      if(at>=0) target=ids[at+1]||ids[at];
+      else if(rec.next && ids.indexOf(String(rec.next))>=0) target=String(rec.next);
+    }
+    if(!target && nxt && ids.indexOf(nxt)>=0) target=nxt;
+    if(!target) return;
+    var el=cards[ids.indexOf(target)];
+    if(el && el.scrollIntoView) el.scrollIntoView({block:'center'});
+    if(el){
+      el.classList.add('ck-landed');
+      setTimeout(function(){ try{ el.classList.remove('ck-landed'); }catch(e){} }, 2600);
+      var inp=el.querySelector('.ck-reply-in');
+      if(inp && !inp.disabled){ try{ inp.focus({preventScroll:true}); }catch(e){} }
+    }
+  }
+  function retAway(){ if(readRet()) _retAway=true; }
+  function retBack(){
+    if(!_retAway) return;
+    _retAway=false;
+    if(!readRet()) return;
+    _retArmed=true;
+    _paintKey='';
+    CK.load(false);
   }
   function renderTakeover(tk){
     tk=tk||{}; var act=tk.active||[]; var st=tk.stats||{};
     _activeTk={};
     act.forEach(function(e){ _activeTk[String(e.conversation_id||'')]=true; });
     document.getElementById('ck-k-takeover').textContent=String(act.length);
+    var wrap=document.getElementById('ck-k-takeover-wrap');
+    if(wrap) wrap.style.display=act.length?'':'none';
+    if(!act.length){
+      var mn=document.querySelector('.ck-main'); if(mn) mn.classList.remove('tk-open');
+      var tg=document.getElementById('ck-tk-tog'); if(tg) tg.setAttribute('aria-expanded','false');
+    }
+    var box=document.getElementById('ck-box-tk');
+    if(box) box.style.display=act.length?'':'none';
+    var rail=document.querySelector('.ck-rail');
+    if(rail) rail.style.display=act.length?'':'none';
     var el=document.getElementById('ck-rail-tk');
-    /* 零流量不摆「累计 0 次 · 平均 0 分钟」——空数字比没有更显眼地说「没人用」 */
+    if(!el) return;
+    var byId={};
+    ((_data&&_data.items)||[]).forEach(function(it){ byId[String(it.conversation_id||'')]=it; });
     var stats=(st.started|0)>0?('<div class="ck-muted" style="margin-top:6px;">'+esc(fmt(L.tkStats,{n:st.started||0,min:Math.round((st.avg_duration_sec||0)/60)}))+'</div>'):'';
-    if(!act.length){ el.innerHTML=esc(L.tkNone)+stats; return; }
+    if(!act.length){ el.innerHTML=''; return; }
     el.innerHTML=act.map(function(e){
       var cid=String(e.conversation_id||'');
-      var plat=cid.split(':',1)[0]||'';
+      var info=byId[cid]||{};
+      var plat=String(info.platform||cid.split(':',1)[0]||'');
       return '<div class="ck-tk-row"><span class="ck-dot warn"></span>'
         +platChip(plat)
-        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cid)+'">'+esc(displayName('', cid))+'</span>'
+        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cid)+'">'+esc(displayName(info.name, cid, info.username))+'</span>'
         +'<span class="who">'+esc(e.by||'')+' · '+fmtAge(e.elapsed_sec)+'</span>'
         +'<a class="ck-btn" style="padding:1px 7px;font-size:11px;" href="/workspace?conv='+encodeURIComponent(cid)+'">→</a>'
       +'</div>';
     }).join('')+stats;
   }
-  function renderAccounts(d){
-    var el=document.getElementById('ck-rail-acct');
-    var sum=document.getElementById('ck-acct-sum');
+  var _acctBad=-1;
+  function renderAcctAlert(d){
     var rows=(d&&(d.accounts||d.fleet||[]))||[];
-    if(!rows.length){ el.innerHTML=esc(L.acctEmpty); sum.textContent=''; return; }
-    var nOk=0, nBad=0, main=[], unknown=[];
-    rows.slice(0,40).forEach(function(a){
-      var st=String(a.status||a.lifecycle||'').toLowerCase();
-      var cls=(st==='active'||st==='online'||st==='ok')?'ok':((st==='banned'||st==='restricted'||st==='offline')?'bad':'warn');
-      if(cls==='ok') nOk++; else if(cls==='bad') nBad++;
-      var row='<div class="ck-acct-row"><span class="ck-dot '+cls+'"></span>'
-        +platChip(a.platform)
-        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(a.account_id||'')+'">'+esc(a.label||a.account_id||'')+'</span>'
-        +'<span class="ck-muted" title="'+esc(st)+'">'+esc(L.st[cls]||'')+'</span></div>';
-      /* 「状态未知」折叠成一行（满屏灰点没有信息量还制造焦虑）；在线/异常永远直列 */
-      if(cls==='warn') unknown.push(row); else main.push(row);
+    var nBad=0;
+    rows.forEach(function(a){
+      var st=String(a.stage||a.status||a.lifecycle||'').toLowerCase();
+      if(st==='banned'||st==='restricted'||st==='offline') nBad++;
     });
-    var html=main.slice(0,20).join('');
-    if(unknown.length){
-      html+='<div class="ck-acct-more" onclick="CK.toggleAcctUnknown()">'+esc(fmt(L.acctUnknown,{n:unknown.length}))+' <span id="ck-acct-un-ar">▸</span></div>'
-        +'<div id="ck-acct-un" style="display:none;">'+unknown.join('')+'</div>';
+    if(nBad===_acctBad) return;
+    _acctBad=nBad;
+    var el=document.getElementById('ck-acct-alert');
+    if(el){
+      if(nBad>0){ el.textContent=fmt(L.acctBad,{n:nBad}); el.style.display=''; }
+      else{ el.style.display='none'; el.textContent=''; }
     }
-    el.innerHTML=html;
-    sum.textContent=fmt(L.acctSum,{ok:nOk,bad:nBad});
+  }
+  function loadAcctNames(){
+    apiFetch('/api/accounts').then(function(r){return r.json();}).then(function(d){
+      var names={};
+      ((d&&d.accounts)||[]).forEach(function(a){
+        var id=String(a.account_id||'');
+        var plat=String(a.platform||'').toLowerCase();
+        var label=String(a.label||'').trim();
+        if(!id || !label) return;
+        names[plat+'|'+id]=label;
+        if(!names[id]) names[id]=label;
+      });
+      var same=false;
+      try{ same=JSON.stringify(names)===JSON.stringify(_acctNames); }catch(e){ same=false; }
+      if(same) return;
+      _acctNames=names;
+      _paintKey='';
+      if(_data) render();
+    }).catch(function(){});
   }
   var CK={
     load: function(force){
@@ -562,18 +1006,121 @@
         _data=d; _caps=(d.caps&&typeof d.caps==='object')?d.caps:{};
         renderTakeover(d.takeover);   /* 先建接管集，卡片动作才判得对 */
         render();
+        var lw=document.getElementById('ck-load-warn');
+        if(lw) lw.style.display='none';
         var age=document.getElementById('ck-age');
-        if(age&&d.generated_at&&typeof window.wsFmtTime==='function'){ age.textContent=window.wsFmtTime(d.generated_at); }
+        if(age&&d.generated_at&&typeof window.wsFmtTime==='function'){ age.textContent=fmt(L.ageAuto,{t:window.wsFmtTime(d.generated_at)}); }
       }).catch(function(){
+        /* 已有一份在屏：留着卡片，只出一行提示（后端重启那几秒卡片别消失） */
+        var lw=document.getElementById('ck-load-warn');
+        if(_data && lw){
+          var at=(_data.generated_at&&typeof window.wsFmtTime==='function')?window.wsFmtTime(_data.generated_at):'';
+          lw.textContent=fmt(L.loadStale,{t:at||'–'});
+          lw.style.display='';
+          return;
+        }
         document.getElementById('ck-q-list').innerHTML='<div class="ck-empty">'+esc(L.qFail)+'</div>';
       });
-      apiFetch('/api/accounts/fleet-health').then(function(r){return r.json();}).then(renderAccounts)
-        .catch(function(){ document.getElementById('ck-rail-acct').innerHTML=esc(L.acctFail); });
+      apiFetch('/api/accounts/fleet-health').then(function(r){return r.json();}).then(renderAcctAlert)
+        .catch(function(){});
+      loadAcctNames();
+    },
+    toggleChips: function(){
+      _chipsOpen=!_chipsOpen;
+      _paintKey='';
+      if(_data) render();
+      beacon('ck_chips_'+(_chipsOpen?'open':'close'));
+    },
+    toggleSnooze: function(){
+      _snoozeOpen=!_snoozeOpen;
+      _paintKey='';
+      if(_data) render();
+    },
+    sendReply: function(el){
+      var box=el&&el.closest?el.closest('.ck-reply'):null;
+      if(!box) return;
+      var inp=box.querySelector('.ck-reply-in');
+      var err=box.querySelector('.ck-reply-err');
+      var text=String((inp&&inp.value)||'').trim();
+      if(!text) return;
+      var cid=inp.getAttribute('data-cid')||'';
+      /* 在途锁：回车/连点/重画都不会再发第二条 */
+      if(!cid || _sending[cid]) return;
+      var it=null;
+      ((_data&&_data.items)||[]).some(function(x){
+        if(String(x.conversation_id||'')===cid){ it=x; return true; }
+        return false;
+      });
+      it=it||{};
+      var platform=String(it.platform||'');
+      var account=String(it.account_id||'');
+      var chat=String(it.chat_key||'');
+      if(!chat){
+        var parts=cid.split(':');
+        if(parts.length>=3){
+          if(!platform) platform=parts[0];
+          if(!account) account=parts[1];
+          chat=parts.slice(2).join(':');
+        }
+      }
+      var cmid='ckreply-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+      var body={platform:platform, account_id:account, chat_key:chat, text:text, client_msg_id:cmid};
+      /* 上次同一句「没发出去」可能其实发出去了：带上原件的键，由服务端判断要不要压住这次 */
+      var prior=_lastCmid[cid];
+      if(prior && prior.text===text) body.resend_of_cmid=prior.cmid;
+      _sending[cid]=1;
+      var btn=box.querySelector('button');
+      if(btn) btn.disabled=true;
+      if(inp) inp.disabled=true;
+      if(err) err.style.display='none';
+      function _live(sel){
+        var cur=_replyInput(cid);
+        return cur?(sel?cur.closest('.ck-reply').querySelector(sel):cur):null;
+      }
+      apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)
+      }).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(d){
+          if(!r.ok || (d && d.ok===false)) throw new Error('send');
+        });
+      }).then(function(){
+        delete _sending[cid]; delete _drafts[cid]; delete _lastCmid[cid];
+        _sent[cid]=Date.now();
+        return apiFetch('/api/cockpit/cleared',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid, how:'reply'})}).catch(function(){});
+      }).then(function(){
+        beacon('ck_reply');
+        _paintKey='';
+        CK.load(true);
+      }).catch(function(){
+        delete _sending[cid];
+        _lastCmid[cid]={text:text, cmid:(prior && prior.text===text)?prior.cmid:cmid};
+        var i2=_live(''), b2=_live('button'), e2=_live('.ck-reply-err');
+        if(b2) b2.disabled=false;
+        if(i2){ i2.disabled=false; try{ i2.focus({preventScroll:true}); }catch(e){} }
+        if(e2){ e2.style.display=''; e2.textContent=L.replyFail; }
+      });
     },
     setFilter: function(k){
       _filter=String(k||'');
       if(_data) render();
       beacon('ck_filter_'+(_filter||'all'));
+    },
+    toggleTk: function(){
+      var mn=document.querySelector('.ck-main'), tg=document.getElementById('ck-tk-tog');
+      if(!mn) return;
+      var open=!mn.classList.contains('tk-open');
+      mn.classList.toggle('tk-open', open);
+      if(tg) tg.setAttribute('aria-expanded', open?'true':'false');
+      if(open){ var r=document.querySelector('.ck-rail'); if(r && r.scrollIntoView) try{ r.scrollIntoView({block:'nearest'}); }catch(e){} }
+    },
+    toggleWhy: function(){
+      var w=document.getElementById('ck-why'), b=document.getElementById('ck-why-btn');
+      if(!w) return;
+      var open=w.style.display==='none';
+      w.style.display=open?'':'none';
+      if(b) b.setAttribute('aria-expanded', open?'true':'false');
+      beacon('ck_why_'+(open?'open':'close'));
     },
     toggleStale: function(){
       _staleOpen=!_staleOpen;
@@ -585,9 +1132,45 @@
       beacon('ck_stale_'+(_staleOpen?'open':'close'));
     },
     dismissHint: function(){
-      try{ localStorage.setItem(HINT_KEY,'1'); }catch(_){}
-      var h=document.getElementById('ck-hint'); if(h) h.style.display='none';
       beacon('ck_hint_dismiss');
+    },
+    snooze: function(cid){
+      if(serverSnooze()){
+        apiFetch('/api/cockpit/snooze',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid})}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            beacon('ck_snooze'); _paintKey=''; CK.load(true);
+          }).catch(function(){ notify(L.opFail, false); });
+        return;
+      }
+      var it=null;
+      ((_data&&_data.items)||[]).some(function(x){
+        if(String(x.conversation_id||'')===String(cid)){ it=x; return true; }
+        return false;
+      });
+      if(!it || it.kind!=='waiting') return;
+      var m=snoozeMap();
+      m[String(cid)]={fp:itemFp(it), at:Date.now()};
+      try{ localStorage.setItem(SNOOZE_KEY, JSON.stringify(m)); }catch(e){}
+      _paintKey='';
+      beacon('ck_snooze');
+      if(_data) render();
+    },
+    unsnooze: function(cid){
+      if(serverSnooze()){
+        apiFetch('/api/cockpit/unsnooze',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid})}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            beacon('ck_snooze_back'); _paintKey=''; CK.load(true);
+          }).catch(function(){ notify(L.opFail, false); });
+        return;
+      }
+      var m=snoozeMap();
+      delete m[String(cid)];
+      try{ localStorage.setItem(SNOOZE_KEY, JSON.stringify(m)); }catch(e){}
+      _paintKey='';
+      beacon('ck_snooze_back');
+      if(_data) render();
     },
     take: function(cid){
       cfm(L.confirmTake, L.actTake).then(function(ok){
@@ -661,9 +1244,58 @@
     }
   };
   window.CK=CK;
-  try{ if(!localStorage.getItem(HINT_KEY)){ document.getElementById('ck-hint').style.display=''; } }catch(_){}
+  var qroot=document.querySelector('.ck-q-list');
+  if(qroot) qroot.addEventListener('click', function(ev){
+    var t=ev.target;
+    var a=(t&&t.closest)?t.closest('[data-ck-open]'):null;
+    if(!a) return;
+    var cid=a.getAttribute('data-ck-open')||'';
+    var cards=[].slice.call(qroot.querySelectorAll('.ck-card[data-cid]'));
+    var i=-1;
+    for(var n=0;n<cards.length;n++){
+      if(cards[n].getAttribute('data-cid')===cid){ i=n; break; }
+    }
+    var next=(i>=0 && cards[i+1])?cards[i+1].getAttribute('data-cid'):cid;
+    try{ sessionStorage.setItem(NEXT_KEY, next||cid); }catch(e){}
+    try{ localStorage.setItem(RET_KEY, JSON.stringify({cid:cid, next:next||cid, ts:Date.now()})); }catch(e){}
+  });
+  if(qroot){
+    qroot.addEventListener('input', function(ev){
+      var t=ev.target;
+      if(!t || !t.classList || !t.classList.contains('ck-reply-in')) return;
+      var cid=t.getAttribute('data-cid')||'';
+      var v=String(t.value||'');
+      if(v.trim()) _drafts[cid]=v; else delete _drafts[cid];
+      var c=t.closest('.ck-card');
+      if(c) c.classList.toggle('has-draft', !!v.trim());
+    });
+    qroot.addEventListener('compositionstart', function(){ _composing=true; });
+    qroot.addEventListener('compositionend', function(){ _composing=false; });
+    qroot.addEventListener('focusout', function(ev){
+      /* 停手了补画一次；焦点挪到本区里的按钮（例如「发送」）就不画，免得把按钮换掉、点击落空 */
+      var to=ev.relatedTarget;
+      if(to && qroot.contains(to)) return;
+      setTimeout(function(){
+        if(_paintPending && !_typingNow() && _data){ _paintKey=''; render(); }
+      }, 0);
+    });
+  }
+  document.addEventListener('visibilitychange', function(){ if(document.hidden) retAway(); else retBack(); });
+  window.addEventListener('blur', retAway);
+  window.addEventListener('focus', retBack);
+  window.addEventListener('pageshow', function(ev){ if(ev && ev.persisted && readRet()){ _retArmed=true; _paintKey=''; CK.load(false); } });
+  window.addEventListener('storage', function(ev){
+    if(!ev || ev.key!==RET_KEY || !ev.newValue) return;
+    var r=readRet();
+    if(!r || !r.sent) return;
+    _retArmed=true;
+    _paintKey='';
+    if(!document.hidden) CK.load(false);
+  });
+  try{ if(readRet() || sessionStorage.getItem(NEXT_KEY)) _retArmed=true; }catch(e){}
   beacon('ck_open');
   CK.load(false);
+  loadRoi();
   loadLearner();   /* 预取学习队列可用性：首次点「已处理」时喂料判定已就绪 */
   setInterval(function(){ if(!document.hidden) CK.load(false); }, 30000);
 })();
